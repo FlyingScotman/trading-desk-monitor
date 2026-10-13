@@ -161,6 +161,13 @@ CREATE TABLE IF NOT EXISTS position (
   counterparty TEXT,
   new_today    INTEGER NOT NULL DEFAULT 0 CHECK (new_today IN (0, 1)),
   extra_json   TEXT,                        -- любые доп. атрибуты (UI их игнорирует)
+  -- облигации, v4 (контракт 1.2): таблица облигаций и история выпуска
+  instrument_id TEXT,                       -- ключ ref_instrument / md_bond_quote (NULL -> ищется по isin)
+  accrued      REAL,                        -- НКД, % номинала
+  coupon_freq  INTEGER,                     -- купонов в год
+  yield_date   TEXT,                        -- дата, к которой посчитаны ytm/спред (оферта/колл); NULL = погашение
+  spread_type  TEXT,                        -- 'Z' | 'G' | 'I' | 'DM' | 'OAS' | 'ASW' — что лежит в spread_bp
+  spread_curve TEXT,                        -- кривая, к которой посчитан spread_bp (DM — кривая индекса)
   PRIMARY KEY (run_id, position_id),
   FOREIGN KEY (run_id, book_id) REFERENCES run_book (run_id, book_id) ON DELETE CASCADE
 );

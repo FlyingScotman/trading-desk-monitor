@@ -161,7 +161,8 @@ scenario_def ──< scenario_result        desk_history        data_load       
 | `GET /market/fixings?as_of=` | последние фиксинги на дату |
 | `GET /market/fixings?index=RUONIA&from=&to=` | ряд |
 | `GET /market/bonds?as_of=` | котировки бумаг за день |
-| `GET /market/bonds?instrument_id=&from=&to=` | ряд по бумаге |
+| `GET /market/bonds?instrument_id=&from=&to=` | ряд котировок бумаги как есть |
+| `GET /bonds/history?instrument_id=\|isin=&curve=&from=&to=&wal=` | **история выпуска для мониторов**: котировки + ставка кривой `curve` на сроке выпуска в каждую дату (до оферты, пока она впереди, иначе до погашения; ИЦБ — `wal` + прошедшее время) + спред к ней + номинал позиции по снэпшотам. Формат — `docs/DATA_CONTRACT.md` §6 |
 | `GET /market/issuer-spreads?as_of=` | `{issuers:{id:{spread_bp, move_bp}}, rating_moves_bp:{rating:bp}}` |
 | `GET /market/cds?as_of=` | котировки CDS |
 
@@ -192,6 +193,7 @@ scenario_def ──< scenario_result        desk_history        data_load       
 | **KPI-лента**: DV01, CS01, ОВП, PnL дня, MV | `position`, `position_fx`, `position_pnl`, `funding_*` | `desk_history` (спарклайны, «vs вчера») |
 | **Сводка**: DV01 по кривым и бакетам, сегменты, топ эмитентов, PnL за период | `position_risk`, `position` | `ref_issuer` (группы), `desk_history` |
 | **Позиции**: таблица и карточка | `position`, `position_risk`, `position_pnl` | `ref_issuer` (имя, группа, рейтинг на дату); условия бумаг и сделок, количество и цена покупки — через `/instruments`, `/otc-deals`, `/positions` (в карточку UI пока не выведены) |
+| **Облигации**: таблица по выпускам, карта доходностей, история выпуска | `position` облигаций: `ytm`, `price`, `accrued`, `mdur`, `spr_dur`, `convexity`, `spread_bp` / `spread_type` / `spread_curve`, `yield_date`, MV, DV01, CS01 | `md_bond_quote` (Δ за день в `quote`, ряды — `/bonds/history`), `md_curve_point` (спред к выбранной кривой сегодня и в истории), `ref_instrument.offer_date`, `pos_snapshot` (позиция в истории) |
 | **Риски по кривым**: теплокарта, лестница, кривая сегодня/вчера | `position_risk` | `md_curve_point` → пилларсы и изменения |
 | **Экспозиции**: эмитент, сектор, рейтинг, валюта, класс; концентрации; ОВП | `position`, `position_fx` | `ref_issuer`, `ref_issuer_rating` (рейтинг на дату), `fund_snapshot` |
 | **Фондирование**: лестница, стоимость против бенчмарка, разрывы | `funding_deal`, `funding_pnl` | `md_fixing` (бенчмарки RUONIA, SOFR, RUSFAR CNY, €STR) |
@@ -202,7 +204,7 @@ scenario_def ──< scenario_result        desk_history        data_load       
 
 ---
 
-Сейчас страницы получают данные одним объектом (`/desk-data.js`): результаты прогона плюс снимок статики и рынка из входного слоя (`run.add_reference_data()`). Эндпойнты §4.1–4.3 доступны другим потребителям и следующим версиям экранов (графики рядов, карточка инструмента, история позиции).
+Сейчас страницы получают данные одним объектом (`/desk-data.js`): результаты прогона плюс снимок статики и рынка из входного слоя (`run.add_reference_data()`). Исключение — история выпуска: годовые ряды не кладутся в `/desk-data.js`, страница запрашивает `/bonds/history` по выбранному выпуску. Остальные эндпойнты §4.1–4.3 доступны другим потребителям и следующим версиям экранов (карточка инструмента, графики рядов кривых и курсов).
 
 ## 6. Потоки данных
 

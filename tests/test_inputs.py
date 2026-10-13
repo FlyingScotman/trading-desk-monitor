@@ -260,13 +260,16 @@ class Migration(unittest.TestCase):
             con = sqlite3.connect(db)
             con.execute("CREATE TABLE run_issuer (run_id INTEGER, issuer TEXT, issuer_group TEXT, sector TEXT, rating TEXT, is_gov INTEGER, is_quasi INTEGER)")
             con.execute("CREATE TABLE scenario_def (scenario_id TEXT PRIMARY KEY, name TEXT, ord INTEGER, definition_json TEXT, active INTEGER, updated_at TEXT)")
+            con.execute("CREATE TABLE position (run_id INTEGER, position_id TEXT, book_id TEXT)")   # до v4: без полей облигаций
             con.commit()
             con.close()
             con = init_db(db)
             cols = {r[1] for r in con.execute("PRAGMA table_info(run_issuer)")}
             self.assertIn("name", cols)
             self.assertIn("kind", {r[1] for r in con.execute("PRAGMA table_info(scenario_def)")})
-            self.assertEqual(con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], "3")
+            self.assertLessEqual({"instrument_id", "accrued", "coupon_freq", "yield_date", "spread_type", "spread_curve"},
+                                 {r[1] for r in con.execute("PRAGMA table_info(position)")})
+            self.assertEqual(con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], "4")
 
 
 if __name__ == "__main__":

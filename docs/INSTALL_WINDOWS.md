@@ -162,7 +162,7 @@ python -m tdm --db C:\tdm\data\tdm.sqlite import C:\exchange\run_2026-10-13.json
 | `python -m tdm build-hist-scenarios --horizon 1 10 --top 5` | исторические сценарии: `--horizon` — окна в рабочих днях, `--top` — сколько худших окон каждой длины |
 | `daily.bat` | ежедневная загрузка: всё из папки `inbox\` → база, файлы переносятся в `inbox\done\`, затем пересборка исторических сценариев |
 | `python -m tdm runs` | последние 20 прогонов: дата, тип, статус, ошибка. `--limit 50` — показать 50 |
-| `python -m tdm demo` | загрузить демо-прогон из `fixtures\demo_bundle.json` |
+| `python -m tdm demo` | загрузить демо-прогон из `fixtures\demo_bundle.json` и историю рынка за год (`fixtures\demo_market.json.gz`) |
 | `python -m tdm init-db` | создать пустую базу (если её нет) |
 | `python -m tdm purge --keep-days 90 --keep-eod` | удалить прогоны старше 90 последних дат; `--keep-eod` — по старым датам оставить последний EOD |
 | `python -m unittest discover -s tests` | прогнать тесты: `-m unittest` — встроенный тест-раннер; `discover -s tests` — найти тесты в папке `tests` |

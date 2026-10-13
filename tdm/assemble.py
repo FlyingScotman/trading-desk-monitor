@@ -49,6 +49,29 @@ def gamma_summary(rows, mv_rub, convexity, cs01):
     return {"gammaIr": ir, "gammaCs": cs, "gammaIrCs": ircs, "gammaSource": src}
 
 
+def bond_quotes(con, as_of):
+    """Котировки облигаций на дату среза и на предыдущую дату с котировками: {instrument_id: (cur, prev)}.
+    Если на as_of котировок нет — берётся последняя дата до неё (quote.date это покажет)."""
+    d = con.execute("SELECT MAX(date) FROM md_bond_quote WHERE date <= ?", (as_of,)).fetchone()[0]
+    if not d:
+        return {}
+    p = con.execute("SELECT MAX(date) FROM md_bond_quote WHERE date < ?", (d,)).fetchone()[0]
+    cur = {r["instrument_id"]: r for r in con.execute("SELECT * FROM md_bond_quote WHERE date=?", (d,))}
+    prev = {r["instrument_id"]: r for r in con.execute("SELECT * FROM md_bond_quote WHERE date=?", (p,))} if p else {}
+    return {k: (v, prev.get(k)) for k, v in cur.items()}
+
+
+def _quote(q):
+    if not q:
+        return None
+    c, p = q
+    out = {"date": c["date"], "price": c["clean_price"], "ytm": c["ytm"], "zSpread": c["z_spread_bp"], "gSpread": c["g_spread_bp"], "volume": c["volume_rub"],
+           "prevDate": None, "prevPrice": None, "prevYtm": None, "prevZSpread": None, "prevGSpread": None}
+    if p:
+        out.update(prevDate=p["date"], prevPrice=p["clean_price"], prevYtm=p["ytm"], prevZSpread=p["z_spread_bp"], prevGSpread=p["g_spread_bp"])
+    return out
+
+
 def assemble(con, run):
     rid, as_of = run["run_id"], run["as_of"]
     rows = lambda sql, *a: con.execute(sql, (rid,) + a).fetchall()  # noqa: E731
@@ -91,6 +114,9 @@ def assemble(con, run):
     for r in rows("SELECT position_id, factor_1, factor_2, gamma FROM position_gamma WHERE run_id=? ORDER BY position_id, factor_1, factor_2"):
         gamma.setdefault(r[0], []).append([r[1], r[2], r[3]])
 
+    quotes = bond_quotes(con, as_of)
+    iid_by_isin = {r[0]: r[1] for r in con.execute("SELECT isin, instrument_id FROM ref_instrument WHERE isin IS NOT NULL")}
+
     positions = []
     for p in rows("SELECT * FROM position WHERE run_id=? ORDER BY rowid"):
         pid, iname = p["position_id"], disp.get(p["issuer"], p["issuer"]) if p["issuer"] else None
@@ -119,6 +145,10 @@ def assemble(con, run):
                 "breakNote": q["break_note"] if q else None,
             },
         }
+        if p["instr_type"] == "BOND":
+            iid = p["instrument_id"] or iid_by_isin.get(p["isin"]) or p["isin"]
+            pos.update({"instrumentId": iid, "accrued": p["accrued"], "couponFreq": p["coupon_freq"], "yieldDate": p["yield_date"],
+                        "spreadType": p["spread_type"], "spreadCurve": p["spread_curve"], "quote": _quote(quotes.get(iid))})
         if p["extra_json"]:
             pos["extra"] = json.loads(p["extra_json"])
         positions.append(pos)

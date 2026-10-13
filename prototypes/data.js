@@ -23,6 +23,8 @@
   const AS_OF = '2026-10-13';
   const asOf = new Date(AS_OF + 'T00:00:00');
   function yearsTo(d) { return (new Date(d + 'T00:00:00') - asOf) / (365.25 * 864e5); }
+  // дата по местному времени (toISOString сдвинул бы её на день в часовых поясах восточнее UTC)
+  const isoDay = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 
   // ---------- рынок ----------
   const BUCKETS = ['1M', '3M', '6M', '1Y', '2Y', '3Y', '5Y', '7Y', '10Y', '15Y', '20Y+'];
@@ -83,6 +85,11 @@
     return v;
   }
 
+  // доля купонного периода, прошедшая с последней выплаты (график от даты погашения назад)
+  function accruedFrac(T, freq) {
+    const n = Math.max(1, Math.ceil(T * freq - 1e-9));
+    return Math.max(0, 1 / freq - (T - (n - 1) / freq));
+  }
   function bondMath(T, cpn, freq, y) {
     const n = Math.max(1, Math.ceil(T * freq - 1e-9));
     const first = T - (n - 1) / freq; // время до первого купона
@@ -161,6 +168,8 @@
   function bond(book, assetClass, name, issuer, ccy, maturity, cpn, freq, notional, opts) {
     opts = opts || {};
     const T = Math.max(0.05, yearsTo(maturity));
+    // оферта (put): доходность, спред и риск считаются к дате оферты
+    const Ty = opts.offer && yearsTo(opts.offer) > 0 ? Math.max(0.05, yearsTo(opts.offer)) : T;
     const iss = ISSUERS[issuer];
     const isFloat = !!opts.index;
     const curve = isFloat ? (opts.index === 'КС' ? 'RUB KEY' : 'RUB RUONIA') : (ccy === 'RUB' ? 'RUB OFZ' : CCY_CURVE[ccy]);
@@ -176,9 +185,9 @@
       mdur = rateDur;
       ytm = INDICES[opts.index] + dm / 100;
     } else {
-      const base = curveRate(curve, opts.wal || T);
+      const base = curveRate(curve, opts.wal || Ty);
       ytm = base + spreadBp / 100;
-      const effT = opts.wal ? opts.wal * 1.15 : T;
+      const effT = opts.wal ? opts.wal * 1.15 : Ty;
       const m = bondMath(effT, cpn, freq, ytm / 100);
       price = m.price; mdur = opts.wal ? m.mdur * 0.9 : m.mdur; convexity = m.convexity;
       rateDur = mdur; sprDur = mdur;
@@ -188,7 +197,7 @@
     const dv01Total = -mvRub * rateDur * 1e-4;
     // ОФЗ-ПД сами задают кривую ОФЗ: спредового риска к ней нет
     const cs01 = (iss.gov && ccy === 'RUB' && !isFloat) ? 0 : -mvRub * sprDur * 1e-4;
-    const bucketT = isFloat ? (opts.index === 'КС' ? 1 / 12 : 0.25) : (opts.wal || T);
+    const bucketT = isFloat ? (opts.index === 'КС' ? 1 / 12 : 0.25) : (opts.wal || Ty);
     const risk = {}; risk[curve] = allocate(bucketT, dv01Total, isFloat ? 0 : 0.2);
     const fxDelta = {}; if (ccy !== 'RUB') fxDelta[ccy] = mv;
     const segment = iss.gov ? 'Гос' : (assetClass === 'Секьюритизация' ? 'Секьюритизация' : 'Корп');
@@ -197,6 +206,9 @@
       issuer, issuerGroup: iss.group, sector: iss.sector, rating: iss.rating, ccy, maturity, tenorY: T,
       couponType: isFloat ? 'float' : 'fix', coupon: isFloat ? null : cpn, index: opts.index || null, margin: isFloat ? cpn : null,
       notional, price, mv, mvRub, ytm, spreadBp, mdur, sprDur, convexity,
+      // НКД, % номинала; дата, к которой считается доходность (оферта; null = погашение); тип и кривая спреда
+      accrued: +((isFloat ? INDICES[opts.index] + cpn : cpn) * accruedFrac(T, freq)).toFixed(4), couponFreq: freq,
+      yieldDate: Ty < T ? opts.offer : null, spreadType: isFloat ? 'DM' : ccy === 'RUB' ? 'G' : 'Z', spreadCurve: curve,
       dv01: dv01Total, cs01, risk, fxDelta, jtd: mvRub * (1 - 0.35),
       wal: opts.wal || null, cpr: opts.cpr || null, newToday: !!opts.newToday,
       gamma: gammaRows(risk, mvRub * convexity * 1e-8, cs01 !== 0, ccy !== 'RUB' ? ccy : null, cs01),
@@ -255,15 +267,15 @@
   cf('Газпром Капитал БО-07', 'Газпром', '2030-02-11', 13.10, 2, 1.2 * bn);
   cf('Сбербанк 001Р-SBER44', 'Сбербанк', '2028-06-02', 14.20, 2, 0.9 * bn);
   cf('Роснефть 002Р-13', 'Роснефть', '2031-09-30', 12.80, 2, 1.1 * bn);
-  cf('МТС 002Р-08', 'МТС', '2029-11-20', 14.90, 4, 0.75 * bn);
+  cf('МТС 002Р-08', 'МТС', '2029-11-20', 14.90, 4, 0.75 * bn, { offer: '2027-11-24' });
   cf('Ростелеком 002Р-17R', 'Ростелеком', '2028-03-14', 15.20, 4, 0.6 * bn);
   cf('Магнит БО-004Р-05', 'Магнит', '2028-09-08', 14.40, 4, 0.8 * bn);
   cf('X5 Финанс 003Р-04', 'X5', '2029-05-25', 14.10, 4, 0.7 * bn, { newToday: true });
   cf('Норникель БО-001Р-09', 'Норникель', '2030-07-19', 13.60, 2, 0.95 * bn);
-  cf('Сибур Холдинг ПБО-10', 'Сибур', '2029-10-03', 13.90, 2, 0.5 * bn);
+  cf('Сибур Холдинг ПБО-10', 'Сибур', '2029-10-03', 13.90, 2, 0.5 * bn, { offer: '2027-10-07' });
   cf('Самолёт БО-П15', 'Самолёт', '2027-12-15', 17.50, 12, 0.42 * bn);
   cf('Сегежа 003Р-02R', 'Сегежа', '2027-06-20', 19.50, 12, 0.28 * bn);
-  cf('ГТЛК 002Р-04', 'ГТЛК', '2031-02-27', 15.40, 12, 0.65 * bn);
+  cf('ГТЛК 002Р-04', 'ГТЛК', '2031-02-27', 15.40, 12, 0.65 * bn, { offer: '2028-03-02' });
   cf('Атомэнергопром 001Р-07', 'Атомэнергопром', '2032-04-09', 12.90, 2, 0.85 * bn);
   cf('Россети ФСК 002Р-03', 'Россети', '2030-08-21', 13.30, 2, -0.4 * bn);
   // Корпы RUB флоатеры (КС+)
@@ -561,13 +573,123 @@
       const exp = last ? expPnl0 : off - rndn() * 1.4e6;
       cum += off;
       history.push({
-        date: dt.toISOString().slice(0, 10),
+        date: isoDay(dt),
         pnlOfficial: off, pnlExplained: exp, pnlCum: cum,
         dv01: last ? dv0 : dv0 * (1 + 0.18 * Math.sin(i / 3) + rndn() * 0.05),
         cs01: last ? cs0 : cs0 * (1 + 0.08 * Math.cos(i / 4) + rndn() * 0.03),
       });
     });
   })();
+
+  // ---------- рыночная история за год (демо) ----------
+  // В базе это md_curve_point, md_bond_quote и pos_snapshot; сервер отдаёт ряды выпуска через
+  // /api/v1/bonds/history (docs/SERVICE_DATA_MODEL.md). Здесь — синтетика той же формы.
+  // Свой ГПСЧ (основной набор выше не меняется). Первый шаг назад — изменения за день из PnL explain
+  // (CURVE_MOVES, SPREAD_MOVES), поэтому «вчера» в истории сходится с объяснением PnL.
+  const HIST_DAYS = 261; // ≈ 1 год рабочих дней
+  const histDates = (function () {
+    const out = [], d = new Date(asOf);
+    while (out.length < HIST_DAYS) { if (d.getDay() % 6) out.unshift(isoDay(d)); d.setDate(d.getDate() - 1); }
+    return out;
+  })();
+  const histAge = histDates.map(d => (asOf - new Date(d + 'T00:00:00')) / (365.25 * 864e5)); // лет назад
+  function prng(s0) { let x = s0 >>> 0; return () => { x = (Math.imul(x, 1664525) + 1013904223) >>> 0; return x / 4294967296; }; }
+  const nrm = r => (r() + r() + r() + r() - 2) / 0.8165;
+  function hashStr(str) { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+  const r4 = v => +v.toFixed(4), r2 = v => +v.toFixed(2);
+
+  // кривые: [день (старые → новые)][11 пилларов], %; RUB год назад выше (цикл снижения ставки)
+  const CURVE_VOL = { RUB: 5, USD: 3, CNY: 2.5, EUR: 2.5 };
+  const curveHist = {};
+  Object.keys(CURVES).forEach(c => {
+    const r = prng(hashStr('curve|' + c)), ccy = CURVES[c].ccy, vol = CURVE_VOL[ccy] || 3;
+    let cur = CURVES[c].pts.slice();
+    const back = [cur];
+    for (let k = 1; k < HIST_DAYS; k++) {
+      let mv = CURVE_MOVES[c];
+      if (k > 1) {
+        const lvl = nrm(r) * vol, slope = nrm(r) * vol * 0.5;
+        mv = cur.map((_, i) => lvl * (1 - i / 14) + slope * (i / 10 - 0.5) + nrm(r) * vol * 0.25 - (ccy === 'RUB' ? (260 - 12 * i) / HIST_DAYS : 0));
+      }
+      cur = cur.map((v, i) => Math.max(0.25, v - mv[i] / 100));
+      back.push(cur);
+    }
+    curveHist[c] = back.reverse().map(a => a.map(r4));
+  });
+  function curveAt(k, c, t) {
+    const pts = curveHist[c][k];
+    if (t <= PILLARS[0]) return pts[0];
+    for (let i = 1; i < PILLARS.length; i++) {
+      if (t <= PILLARS[i]) { const w = (t - PILLARS[i - 1]) / (PILLARS[i] - PILLARS[i - 1]); return pts[i - 1] * (1 - w) + pts[i] * w; }
+    }
+    return pts[pts.length - 1];
+  }
+  function cleanPrice(T, cpn, freq, y) { return bondMath(T, cpn, freq, y).price - cpn * accruedFrac(T, freq); }
+
+  // котировки выпуска: строки в форме md_bond_quote (+ face_amount из pos_snapshot), старые → новые
+  const SPREAD_VOL = { AAA: 1.5, 'AA+': 2, AA: 2.5, 'AA-': 3, 'A+': 4, A: 5, BB: 12 };
+  const STRESSED = { 'Самолёт': 1, 'Сегежа': 1 };
+  const quoteCache = {};
+  function bondQuotes(p) {
+    if (quoteCache[p.isin]) return quoteCache[p.isin];
+    const r = prng(hashStr('bond|' + p.isin)), n = HIST_DAYS, isFloat = p.couponType === 'float';
+    const vol = ISSUERS[p.issuer].gov ? 1 : (SPREAD_VOL[p.rating] || 3);
+    const anchor = p.spreadBp * (STRESSED[p.issuer] ? 0.55 : 1.12);
+    const sm = SPREAD_MOVES[p.issuer] != null ? SPREAD_MOVES[p.issuer] : SPREAD_MOVES._default;
+    const s = new Array(n); s[n - 1] = p.spreadBp; s[n - 2] = p.spreadBp - sm;
+    for (let k = n - 3; k >= 0; k--) s[k] = s[k + 1] + 0.02 * (anchor - s[k + 1]) + nrm(r) * vol;
+    const face = new Array(n).fill(p.notional);
+    if (p.newToday) for (let k = 0; k < n - 1; k++) face[k] = 0;
+    else {
+      const cuts = [0, 1, 2].map(() => 5 + Math.floor(r() * (n - 10))).slice(0, Math.floor(r() * 3));
+      cuts.forEach(c => { const f = 0.6 + r() * 0.6; for (let k = 0; k < c; k++) face[k] = Math.round(face[k] * f / 1e6) * 1e6; });
+    }
+    const Ty = p.yieldDate ? yearsTo(p.yieldDate) : p.tenorY, freq = p.couponFreq;
+    const idxCurve = p.index === 'КС' ? 'RUB KEY' : 'RUB RUONIA';
+    const effT0 = p.wal ? p.wal * 1.15 : Ty;
+    const clean0 = isFloat ? 0 : cleanPrice(effT0, p.coupon, freq, p.ytm / 100);
+    const volBase = p.segment === 'Гос' ? 2e9 : 2.5e8;
+    const rows = histDates.map((date, k) => {
+      const a = histAge[k];
+      let ytm, price, g = null, accr;
+      if (isFloat) {
+        const idx = curveAt(k, idxCurve, PILLARS[0]) - curveAt(n - 1, idxCurve, PILLARS[0]);
+        ytm = p.ytm + idx + (s[k] - s[n - 1]) / 100;
+        price = p.price - p.sprDur * (s[k] - s[n - 1]) / 100;
+        accr = (curveAt(k, idxCurve, PILLARS[0]) + p.margin) * accruedFrac(p.tenorY + a, freq);
+      } else {
+        const tY = (p.wal || Ty) + a;
+        ytm = curveAt(k, p.spreadCurve, tY) + s[k] / 100;
+        price = p.price + cleanPrice(effT0 + a, p.coupon, freq, ytm / 100) - clean0;
+        if (p.ccy === 'RUB') g = (ytm - curveAt(k, 'RUB OFZ', tY)) * 100;
+        accr = p.coupon * accruedFrac(p.tenorY + a, freq);
+      }
+      if (k === n - 1) { ytm = p.ytm; price = p.price; }
+      return { date, clean_price: r4(price), ytm: r4(ytm), z_spread_bp: r2(s[k]), g_spread_bp: g == null ? null : r2(g),
+        accrued: r4(accr), volume_rub: Math.round(volBase * Math.exp(nrm(r) * 0.6) / 1e5) * 1e5, face_amount: face[k] };
+    });
+    return (quoteCache[p.isin] = rows);
+  }
+  // история выпуска в форме ответа /api/v1/bonds/history: котировки + ставка кривой на сроке доходности и спред к ней
+  function bondHistory(p, curve) {
+    const c = CURVES[curve] ? curve : p.spreadCurve, okCcy = CURVES[c].ccy === p.ccy, isFloat = p.couponType === 'float';
+    const Ty = p.wal || (p.yieldDate ? yearsTo(p.yieldDate) : p.tenorY);
+    return {
+      instrument_id: p.instrumentId, isin: p.isin, name: p.name, ccy: p.ccy, curve: c,
+      spread_to_curve_note: isFloat ? 'флоатер: спред к индексу (DM), не к кривой' : okCcy ? null : 'валюта кривой не совпадает с валютой выпуска',
+      series: bondQuotes(p).map((q, k) => {
+        const t = Ty + histAge[k], cr = !isFloat && okCcy ? curveAt(k, c, t) : null;
+        return Object.assign({}, q, { tenor_y: r4(t), curve_rate: cr == null ? null : r4(cr), spread_to_curve_bp: cr == null ? null : r2((q.ytm - cr) * 100) });
+      }),
+    };
+  }
+  positions.forEach(p => {
+    if (p.instrType !== 'BOND') return;
+    p.instrumentId = p.isin;
+    const q = bondQuotes(p), a = q[q.length - 1], b = q[q.length - 2];
+    p.quote = { date: a.date, price: a.clean_price, ytm: a.ytm, zSpread: a.z_spread_bp, gSpread: a.g_spread_bp, volume: a.volume_rub,
+      prevDate: b.date, prevPrice: b.clean_price, prevYtm: b.ytm, prevZSpread: b.z_spread_bp, prevGSpread: b.g_spread_bp };
+  });
 
   // ---------- сценарии (пресеты) ----------
   // shocks: curves (б.п. по бакетам или скаляр), fx (% к RUB), spreads (б.п. по рейтингу/_all), issuers
@@ -587,6 +709,8 @@
     BUCKETS, PILLARS, CURVES, CURVE_MOVES, FX, FX_MOVE_PCT, INDICES, ISSUERS, RATING_ORDER, BOOKS, SCENARIOS,
     positions, funding, fundingPnl, fundingPnlByBook, history,
     source: { kind: 'demo', runId: null, runType: 'DEMO', publishedAt: null },
+    // только демо: ряды за год (в режиме базы — /api/v1/bonds/history); функции не попадают в JSON
+    demo: { histDates, curveHist, bondQuotes, bondHistory },
   };
   // DESK.util добавляет desk-util.js
 })();

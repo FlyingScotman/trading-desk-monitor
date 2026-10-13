@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-SCHEMA_VERSION = "3"
+SCHEMA_VERSION = "4"
 DEFAULT_DB = os.environ.get("TDM_DB", str(Path.cwd() / "data" / "tdm.sqlite"))
 
 BUCKETS = [("1M", 1 / 12), ("3M", 0.25), ("6M", 0.5), ("1Y", 1.0), ("2Y", 2.0), ("3Y", 3.0),
@@ -62,3 +62,8 @@ def _migrate(con):
         con.execute("ALTER TABLE scenario_def ADD COLUMN description TEXT")
     if "fx_cross" not in _columns(con, "scenario_result"):
         con.execute("ALTER TABLE scenario_result ADD COLUMN fx_cross REAL NOT NULL DEFAULT 0")
+    cols = _columns(con, "position")   # v4: атрибуты облигаций для таблицы и истории выпуска
+    for c, t in (("instrument_id", "TEXT"), ("accrued", "REAL"), ("coupon_freq", "INTEGER"), ("yield_date", "TEXT"),
+                 ("spread_type", "TEXT"), ("spread_curve", "TEXT")):
+        if c not in cols:
+            con.execute(f"ALTER TABLE position ADD COLUMN {c} {t}")

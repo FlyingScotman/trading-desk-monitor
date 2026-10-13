@@ -41,7 +41,8 @@ def load_market(as_of):
 
 # ---------------------------------------------------------------- расчёт
 def calc_positions(as_of, curves, fx):
-    """Для каждой позиции: атрибуты, PV, DV01/CS01, key-rate DV01 (risk), FX-дельта и PnL explain.
+    """Для каждой позиции: атрибуты, PV, DV01/CS01, key-rate DV01 (risk), FX-дельта и PnL explain;
+    облигациям — ещё instrument_id, accrued, yield_date (оферта), spread_type / spread_curve (DATA_CONTRACT §4.3.5).
     Генератор/список словарей; можно отдавать порциями по несколько тысяч."""
     for p in DEMO["positions"]:
         yield p

@@ -2,6 +2,7 @@
 Описание — docs/SERVICE_DATA_MODEL.md, раздел «API»."""
 import json
 import re
+from datetime import date
 
 from . import market as M
 from .datasets import DATASETS
@@ -163,6 +164,8 @@ def handle(con, route, q):
                                                                             ["clean_price", "ytm", "z_spread_bp", "g_spread_bp", "accrued", "volume_rub", "source"], q)}
         d = _latest(con, "md_bond_quote", "date", q)
         return {"as_of": d, "quotes": _rows(con, "SELECT * FROM md_bond_quote WHERE date=? ORDER BY instrument_id", (d,))}
+    if route == "bonds/history":
+        return bond_history(con, q)
     if route == "market/issuer-spreads":
         d = _latest(con, "md_bond_quote", "date", q)
         prev = M.prev_date(con, d, "md_bond_quote") if d else None
@@ -188,6 +191,83 @@ def handle(con, route, q):
     if route == "loads":
         return {"loads": _rows(con, "SELECT * FROM data_load ORDER BY load_id DESC LIMIT 200")}
     return None
+
+
+def _years(d0, d1):
+    return (date.fromisoformat(d1) - date.fromisoformat(d0)).days / 365.25
+
+
+def bond_history(con, q):
+    """История выпуска: котировки md_bond_quote + ставка кривой `curve` на сроке доходности в каждую дату
+    + спред к ней + номинал позиции по снэпшотам. Срок: до оферты (ref_instrument.offer_date, пока она впереди),
+    иначе до погашения; для ИЦБ — wal (текущий WAL на дату `to`) + прошедшее время."""
+    iid, isin = q.get("instrument_id"), q.get("isin")
+    inst = None
+    if iid:
+        inst = con.execute("SELECT * FROM ref_instrument WHERE instrument_id=?", (iid,)).fetchone()
+    elif isin:
+        inst = con.execute("SELECT * FROM ref_instrument WHERE isin=?", (isin,)).fetchone()
+        iid = inst["instrument_id"] if inst else isin
+    if not iid:
+        raise ValueError("нужен instrument_id или isin")
+    f, t = _d(q, "from"), _d(q, "to")
+    sql, args = "SELECT * FROM md_bond_quote WHERE instrument_id=?", [iid]
+    if f:
+        sql += " AND date >= ?"; args.append(f)
+    if t:
+        sql += " AND date <= ?"; args.append(t)
+    quotes = _rows(con, sql + " ORDER BY date", args)
+    curve = q.get("curve") or None
+    try:
+        wal = float(q["wal"]) if q.get("wal") else None
+    except ValueError:
+        raise ValueError("wal: ожидалось число лет")
+    ccy = inst["ccy"] if inst else None
+    c_ccy = None
+    if curve:
+        r = con.execute("SELECT ccy FROM ref_curve WHERE curve_id=?", (curve,)).fetchone() or \
+            con.execute("SELECT ccy FROM run_curve WHERE curve_id=? ORDER BY run_id DESC LIMIT 1", (curve,)).fetchone()
+        c_ccy = r[0] if r else None
+    is_float = bool(inst and inst["coupon_type"] == "float")
+    note = None
+    if not inst:
+        note = "выпуска нет в ref_instrument: срок доходности неизвестен"
+    elif is_float:
+        note = "флоатер: спред к индексу (DM), не к кривой"
+    elif curve and c_ccy and ccy and c_ccy != ccy:
+        note = "валюта кривой не совпадает с валютой выпуска"
+    elif curve and not c_ccy:
+        note = f"кривая {curve} не найдена"
+    use_curve = bool(curve and inst and not note)
+    pts = {}
+    if use_curve and quotes:
+        for d, ten, rate in con.execute("SELECT date, tenor_years, rate FROM md_curve_point WHERE curve_id=? AND date BETWEEN ? AND ?"
+                                        " ORDER BY date, tenor_years", (curve, quotes[0]["date"], quotes[-1]["date"])):
+            pts.setdefault(d, ([], []))
+            pts[d][0].append(ten)
+            pts[d][1].append(rate)
+    face = {r[0]: r[1] for r in con.execute("SELECT as_of, SUM(COALESCE(face_amount, quantity)) FROM pos_snapshot WHERE instrument_id=? GROUP BY as_of", (iid,))}
+    if quotes:   # снэпшот на дату есть, а выпуска в нём нет — позиция 0; снэпшота нет — неизвестно (null)
+        snap_days = {r[0] for r in con.execute("SELECT DISTINCT as_of FROM pos_snapshot WHERE as_of BETWEEN ? AND ?", (quotes[0]["date"], quotes[-1]["date"]))}
+        face.update({d: 0 for d in snap_days if d not in face})
+    end = t or (quotes[-1]["date"] if quotes else None)
+    series = []
+    for x in quotes:
+        d = x["date"]
+        if wal is not None and end:
+            ten = wal + _years(d, end)
+        elif inst:
+            target = inst["offer_date"] if inst["offer_date"] and inst["offer_date"] > d else inst["maturity"]
+            ten = _years(d, target)
+        else:
+            ten = None
+        cr = M.interp(pts[d][0], pts[d][1], ten) if use_curve and ten is not None and d in pts else None
+        row = {k: x[k] for k in ("date", "clean_price", "ytm", "z_spread_bp", "g_spread_bp", "accrued", "volume_rub", "source")}
+        row.update(face_amount=face.get(d), tenor_y=None if ten is None else round(ten, 4), curve_rate=None if cr is None else round(cr, 4),
+                   spread_to_curve_bp=None if cr is None or x["ytm"] is None else round((x["ytm"] - cr) * 100, 2))
+        series.append(row)
+    return {"instrument_id": iid, "isin": inst["isin"] if inst else isin, "name": inst["name"] if inst else None, "ccy": ccy,
+            "curve": curve, "spread_to_curve_note": note, "series": series}
 
 
 COVER = [(d.name, d.table, d.date_col) for d in DATASETS if d.date_col and d.name != "issuer_ratings"]

@@ -1,4 +1,4 @@
-# Trading Desk Monitor — контракт данных (версия 1.1)
+# Trading Desk Monitor — контракт данных (версия 1.2)
 
 Документ описывает, **что** должен посчитать расчётный сервис, **куда** он это кладёт и **как** интерфейс это забирает.
 Это договор между двумя независимыми частями:
@@ -187,9 +187,9 @@
 | `notional_rub` | рублёвая нога | — | — | ● | — | — |
 | `price` | чистая цена, % от номинала; для FX — курс сделки | ● | — | — | — | ● |
 | `mv` / `mv_rub` | PV в валюте / в RUB (для деривативов — MtM) | ● | ● | ● | ● | ● |
-| `ytm` | доходность, %; для IRS — par rate | ● | ○ | — | — | — |
-| `spread_bp` | спред облигации к своей кривой (Z/G); рыночный спред CDS | ● | — | — | ● | — |
-| `mdur` | модифицированная дюрация, лет | ● | — | — | — | — |
+| `ytm` | доходность, %; для облигации с офертой — к оферте, пока она впереди (см. `yield_date`); для IRS — par rate | ● | ○ | — | — | — |
+| `spread_bp` | спред облигации к своей кривой (тип — `spread_type`, кривая — `spread_curve`); рыночный спред CDS | ● | — | — | ● | — |
+| `mdur` | модифицированная дюрация, лет (к той же дате, что `ytm`) | ● | — | — | — | — |
 | `spr_dur` | спред-дюрация, лет | ○ | — | — | — | — |
 | `convexity` | выпуклость к доходности, лет² (½·C·Δy² — относительное изменение цены). Используется для второго порядка в сценариях, **если нет матрицы `gamma`** (4.3.3) | ● | — | — | — | — |
 | `dv01` | **итого** DV01 по всем кривым = Σ `risk` | ● | ● | ● | 0 | ● |
@@ -199,6 +199,12 @@
 | `counterparty` | контрагент | — | ● | ● | ● | ● |
 | `new_today` | сделка заключена сегодня (UI подсвечивает её, PnL идёт в `new_trades`) | ○ | ○ | ○ | ○ | ○ |
 | `extra` | любые доп. атрибуты (JSON). UI их не показывает, но они доступны в `/api/v1/desk` | ○ | ○ | ○ | ○ | ○ |
+| `instrument_id` | *1.2.* Ключ бумаги в `ref_instrument` и `md_bond_quote`. Если пусто — ищется по `isin`, затем `isin` используется как ключ. Нужен для изменений за день и истории выпуска (4.3.5) | ○ | — | — | — | — |
+| `accrued` | *1.2.* НКД, % номинала | ○ | — | — | — | — |
+| `coupon_freq` | *1.2.* купонов в год | ○ | — | — | — | — |
+| `yield_date` | *1.2.* дата, к которой посчитаны `ytm`, `spread_bp`, `mdur` (оферта / колл). Пусто — к погашению | ● (если есть оферта) | — | — | — | — |
+| `spread_type` | *1.2.* что лежит в `spread_bp`: `Z`, `G`, `I`, `DM` (флоатер, к индексу), `OAS`, `ASW` | ○ | — | — | — | — |
+| `spread_curve` | *1.2.* кривая, к которой посчитан `spread_bp` (для `DM` — кривая индекса) | ○ | — | — | — | — |
 
 **`issuer_group`, `sector` и `rating` в позицию не пишутся** — UI подтягивает их из `run_issuer`.
 
@@ -283,6 +289,28 @@ PnL₂ = Σ_a ½·Γ_aa·Δa²  +  Σ_{a<b} Γ_ab·Δa·Δb
 - `fx` = `fx_gross + fx_funding`.
 
 Пороги «разрыва», которые подсвечивает UI: |unexplained| ≥ 0,5 млн (внимание) и ≥ 2 млн (крит.) по книге. В Scenario Lab порог равен max(2 млн, 5 % от |official|).
+
+#### 4.3.5 Облигации: таблица и история выпуска (с версии 1.2)
+
+Вкладка «Облигации» в Desk Monitor, виджеты «Облигации» и «История выпуска» в Widget Board и меры по облигациям в Pivot Studio.
+Почти всё для них уже есть в `position`. Отдельно расчётному сервису ничего считать не нужно.
+
+| Что видно | Откуда |
+|---|---|
+| цена, НКД, доходность, мод. и спред-дюрация, выпуклость | `position.price`, `accrued`, `ytm`, `mdur`, `spr_dur`, `convexity` |
+| расчётный спред и его тип | `position.spread_bp`, `spread_type`, `spread_curve` |
+| позиция и риск | `position.notional`, `mv_rub`, `dv01`, `cs01`, PnL дня; по выпуску (ISIN) суммируются позиции всех книг |
+| срок до оферты / погашения | `yield_date` (или `wal` у ИЦБ), иначе `maturity` |
+| **спред к выбранной кривой** | считает монитор: `ytm − ставка кривой на сроке`, б.п. Срок — WAL, иначе до `yield_date`, иначе до погашения. Ставка — линейная интерполяция по 11 пилларам `mkt_curve_point`. Только фикс. купон и кривая той же валюты. У флоатера — `—`, его спред к индексу — расчётный `DM` |
+| изменения за день: Δ цены, Δ доходности, Δ спреда | котировки `md_bond_quote` на дату прогона и на предыдущую дату с котировками. Δ спреда к кривой — ещё и кривая «вчера» (`rate − move_bp`) |
+| **история выпуска** за 1М…1Г: цена, доходность, ставка кривой на сроке, спред к ней, расчётный спред, позиция | `GET /api/v1/bonds/history` (§6): ряды `md_bond_quote`, `md_curve_point`, `pos_snapshot` |
+
+В `window.DESK` у облигаций дополнительно `instrumentId`, `accrued`, `couponFreq`, `yieldDate`, `spreadType`, `spreadCurve`.
+Ещё есть `quote{date, price, ytm, zSpread, gSpread, volume, prevDate, prevPrice, prevYtm, prevZSpread, prevGSpread}` — его сервер собирает из `md_bond_quote` (входной слой, `docs/DATA_REQUIREMENTS.md`). Если котировок нет, `quote = null` и колонки Δ пустые.
+
+**Согласованность.**
+- `ytm` и `spread_bp` в прогоне и `ytm` / `z_spread_bp` в котировках должны быть на одной базе: к оферте, пока она впереди, и того же типа спреда. Иначе в день перехода базы история покажет ложный скачок.
+- Котировки на дату прогона должны совпадать с ценой прогона: монитор берёт уровень из прогона, а изменение — из котировок.
 
 ### 4.4 Фондирование — `funding_deal`, `funding_pnl`
 
@@ -454,6 +482,8 @@ print(run.run_id, run.status, run.warnings)
 | `GET /api/v1/runs?as_of=&status=complete\|failed\|loading\|all&limit=` | список прогонов |
 | `GET /api/v1/runs/<run_id>` | прогон, число строк по таблицам, лог (предупреждения и ошибки) |
 | `GET /api/v1/health` | `{"status":"ok","latest_run":{…}}` — для мониторинга |
+| `GET /api/v1/bonds/history?instrument_id=\|isin=&curve=&from=&to=&wal=` | *1.2.* История выпуска: `{instrument_id, isin, name, ccy, curve, spread_to_curve_note, series:[{date, clean_price, ytm, z_spread_bp, g_spread_bp, accrued, volume_rub, source, face_amount, tenor_y, curve_rate, spread_to_curve_bp}]}`. Срок на каждую дату — до оферты (пока она впереди) или погашения, для ИЦБ — `wal` + прошедшее время. `curve_rate` — ставка `curve` на этом сроке. `face_amount` — номинал по `pos_snapshot` (0, если в снэпшоте дня бумаги нет; `null`, если снэпшота нет). Флоатер или кривая другой валюты: `curve_rate = null`, причина — в `spread_to_curve_note` |
+| `GET /api/v1/…` | справочники, срезы, рынок, покрытие — `docs/SERVICE_DATA_MODEL.md` §4 |
 
 Выбор прогона: `run_id` → последний опубликованный на `as_of` → самый последний опубликованный. Если опубликованного прогона нет, страницы показывают демо-данные с плашкой «ДЕМО-данные» и причиной.
 
@@ -469,6 +499,8 @@ positions[{id,book,assetClass,segment,instrType,name,isin,issuer,issuerGroup,sec
            couponType,coupon,index,margin,side,notional,notionalRub,price,mv,mvRub,ytm,spreadBp,mdur,sprDur,convexity,
            dv01,cs01,risk{curve:[11]},fxDelta{ccy:amt},jtd,wal,cpr,counterparty,newToday,
            gamma[[f1,f2,d2PV]],gammaIr,gammaCs,gammaIrCs,gammaSource,
+           BOND: instrumentId,accrued,couponFreq,yieldDate,spreadType,spreadCurve,
+                 quote{date,price,ytm,zSpread,gSpread,volume,prevDate,prevPrice,prevYtm,prevZSpread,prevGSpread}|null,
            pnl{carry,rolldown,rates,spread,fx,fxGross,fxFunding,convexity,newTrades,other,explained,unexplained,official,breakNote}}]
 funding[{id,book,type,ccy,amount,amountRub,rateExpr,rate,start,maturity,tenorY,counterparty,collateral,fxDelta,
          pnl{carry,fx,fxGross,fxAllocated}}]
@@ -483,13 +515,14 @@ source{kind:'db'|'demo',runId,runType,publishedAt,libVersion,marketSnapshot,cont
 |---|---|
 | Desk Monitor → Сводка | `risk` (DV01 по кривым и бакетам), `segment` + `mv_rub`, эмитентская экспозиция (BOND `mv_rub` + CDS ± `notional`), `desk_history` |
 | → Позиции | все поля `position`, карточка: `risk` по бакетам, `pnl`, фондирование книги |
+| → Облигации | `position` облигаций (4.3.5), `mkt_curve_point` (спред к выбранной кривой), `quote` из `md_bond_quote` (Δ за день), `/api/v1/bonds/history` (история выпуска) |
 | → Риски по кривым | `position_risk`, `mkt_curve_point.rate/move_bp` |
 | → Экспозиции | `issuer_group`, `sector`, `rating`, `ccy`, `asset_class` × MV / номинал / CS01 / JTD; ОВП = `position_fx` + валютное фондирование |
 | → Фондирование | `funding_deal` (лестница по `maturity`, ставки против `mkt_index`), `funding_pnl.carry` |
 | → Сценарии | `scenario_def` + чувствительности или `scenario_result` |
 | → PnL | `position_pnl`, `funding_pnl`, `break_note` |
-| Widget Board | те же данные; KPI-спарклайны — `desk_history` |
-| Pivot Studio | любые разрезы × меры (DV01 с раскладкой по кривой и бакету, CS01, JTD, MV, ОВП, PnL, сценарий, фондирование) |
+| Widget Board | те же данные; KPI-спарклайны — `desk_history`; виджеты «Облигации» и «История выпуска» — как вкладка «Облигации» |
+| Pivot Studio | любые разрезы × меры (DV01 с раскладкой по кривой и бакету, CS01, JTD, MV, ОВП, PnL, сценарий, фондирование; облигации — доходность, спред к базовой кривой, расчётный спред, дюрация, Δ доходности, средние по \|MV\|) |
 | Scenario Lab | `scenario_def`, чувствительности, `scenario_result`; PnL explain — `position_pnl`, `CURVE_MOVES`, `desk_history` |
 
 ---
@@ -510,6 +543,8 @@ source{kind:'db'|'demo',runId,runType,publishedAt,libVersion,marketSnapshot,cont
 - **Объёмы:** ~10 000 позиций × ~4 точки риска ≈ 50 000 строк на прогон, порядка 10–20 МБ. SQLite спокойно держит годы таких данных.
 
 **Версии контракта.** `contract_version` пишется в каждый прогон.
+- 1.1 — вторые производные (`position_gamma`), `fx_cross` в сценариях.
+- 1.2 — поля облигаций: `instrument_id`, `accrued`, `coupon_freq`, `yield_date`, `spread_type`, `spread_curve`; `quote` в `window.DESK`; `/api/v1/bonds/history`. Все поля необязательные, прогоны 1.0–1.1 загружаются как раньше.
 - Добавление необязательных полей не меняет мажорную версию: новые колонки получают `NULL`, старые UI их игнорируют.
 - Переименование или смена смысла — новая мажорная версия: сервер будет поддерживать обе на переходный период.
 
@@ -536,6 +571,8 @@ source{kind:'db'|'demo',runId,runType,publishedAt,libVersion,marketSnapshot,cont
 - [ ] `rates` в PnL = Σ (key-rate DV01 × `move_bp`) — с теми же сдвигами, что в `mkt_curve_point`.
 - [ ] Курсы на все используемые валюты.
 - [ ] Эмитенты всех облигаций и CDS — в `issuers`, с `issuer_group`.
+- [ ] Облигации с офертой: `ytm`, `spread_bp`, `mdur` — к оферте, и `yield_date` заполнена; `spread_type` / `spread_curve` указаны.
+- [ ] `instrument_id` (или ISIN) облигаций совпадает с ключом в `md_bond_quote` — иначе нет изменений за день и истории выпуска.
 - [ ] Разнесение FX-фондирования: Σ `fx_funding` = Σ `fx_allocated` по книге.
 - [ ] `official` PnL — из официальной системы (или `NULL`, если ещё нет).
 - [ ] EOD-прогон раз в день; при сбое — повтор (старые данные остаются видны).

@@ -423,13 +423,21 @@ const MEASURES = {
   famt:  { label: 'Фондирование: объём', unit: '₽', signed: true, src: 'fund', val: r => r.f.amountRub },
   fcarry:{ label: 'Фондирование: кэрри за день', unit: '₽', signed: true, src: 'fund', val: r => r.f.pnl.carry },
   frate: { label: 'Фондирование: ставка ср.-взв.', unit: '%', signed: false, src: 'fund', agg: 'wavg', val: r => r.f.rate, w: r => Math.abs(r.f.amountRub) },
+  // облигации: средние, взвешенные по |MV| (прочие инструменты не участвуют)
+  bytm:  { label: 'Доходность ср.-взв.', unit: '%', wunit: '%', wcol: 'Доходность, %', signed: false, src: 'pos', agg: 'wavg', val: r => bondVal(r, p => p.ytm), w: r => Math.abs(r.p.mvRub) },
+  bspr:  { label: 'Спред к баз. кривой ср.-взв.', unit: 'б.п.', wunit: 'б.п.', wcol: 'Спред, б.п.', dec: 0, signed: false, src: 'pos', agg: 'wavg', val: r => bondVal(r, p => U.spreadTo(p, 'base')), w: r => Math.abs(r.p.mvRub) },
+  bown:  { label: 'Расчётный спред ср.-взв.', unit: 'б.п.', wunit: 'б.п.', wcol: 'Спред, б.п.', dec: 0, signed: false, src: 'pos', agg: 'wavg', val: r => bondVal(r, p => p.spreadBp), w: r => Math.abs(r.p.mvRub) },
+  bdur:  { label: 'Мод. дюрация ср.-взв.', unit: 'лет', wunit: 'лет', wcol: 'Дюрация, лет', signed: false, src: 'pos', agg: 'wavg', val: r => bondVal(r, p => p.mdur), w: r => Math.abs(r.p.mvRub) },
+  bdy:   { label: 'Δ доходности за день ср.-взв.', unit: 'б.п.', wunit: 'б.п.', wcol: 'Δ, б.п.', dec: 1, signed: true, src: 'pos', agg: 'wavg', val: r => bondVal(r, p => p.quote && p.quote.prevYtm != null ? (p.quote.ytm - p.quote.prevYtm) * 100 : null), w: r => Math.abs(r.p.mvRub) },
 };
+function bondVal(r, f) { return r.p && r.p.instrType === 'BOND' ? f(r.p) : null; }
 const MEASURE_GROUPS = [
   ['Риск', ['dv01', 'cs01', 'jtd']],
   ['Экспозиция', ['mv', 'notional', 'ocp', 'count']],
   ['PnL за день', ['pnl', 'unexp']],
   ['Сценарий (util.runScenario)', ['scen']],
   ['Фондирование', ['famt', 'fcarry', 'frate']],
+  ['Облигации (ср.-взв. по |MV|)', ['bytm', 'bspr', 'bown', 'bdur', 'bdy']],
 ];
 const aggOf = m => m.agg || 'sum';
 const measureLabel = (m, v) => v.measure === 'scen' ? 'Сценарий «' + (SC_SHORT[v.scen] || v.scen) + '»' : m.label;
@@ -442,14 +450,14 @@ const unitsScale = v => v.opts.units === 'th' ? 1e3 : 1e6;
 const unitsDec = v => v.opts.units === 'th' ? 0 : 2;
 function unitLabel(m, v) {
   if (aggOf(m) === 'count') return 'шт.';
-  if (aggOf(m) === 'wavg') return '% годовых';
+  if (aggOf(m) === 'wavg') return m.wunit || '% годовых';
   return (v.opts.units === 'th' ? 'тыс ' : 'млн ') + m.unit;
 }
 function fmtM(x, m, v) {
   if (x == null) return '—';
   const a = aggOf(m);
   if (a === 'count') return fmtNum(x, 0);
-  if (a === 'wavg') return fmtNum(x, 2);
+  if (a === 'wavg') return fmtNum(x, m.dec != null ? m.dec : 2);
   return fmtNum(x / unitsScale(v), unitsDec(v));
 }
 function fmtAxis(x, m, v) {
@@ -562,8 +570,9 @@ function getFacts(v, dimsOverride) {
         facts.push({ r, d, num: x, den: 0 });
       }));
     } else if (agg === 'wavg') {
-      const w = m.w(r);
-      facts.push({ r, d: base, num: m.val(r, v) * w, den: w });
+      const w = m.w(r), x = m.val(r, v);
+      if (x == null || !isFinite(x) || !w) return;   // нет значения (например, не облигация) — не участвует в среднем
+      facts.push({ r, d: base, num: x * w, den: w });
     } else {
       facts.push({ r, d: base, num: agg === 'count' ? 1 : m.val(r, v), den: 0 });
     }
@@ -898,7 +907,7 @@ function renderHints(v, m) {
   if (m.src === 'fund') hs.push('Для мер фондирования доступны измерения книга, деск, трейдер, валюта, кривая, бакет, срок, тип фондирования и контрагент; фильтры по сегменту, рейтингу и классу актива не применяются.');
   if (v.viz === 'treemap' && v.col) hs.push('Treemap не использует столбцы: площадь — |значение| по строкам, цвет — знак и величина.');
   if (v.viz === 'heatmap' && !v.col && !v.rows[1]) hs.push('Для тепловой карты добавьте второе измерение — строки 2 или столбцы.');
-  if (aggOf(m) === 'wavg' && (v.viz === 'treemap')) hs.push('Ставка — средневзвешенная величина, площадь treemap для неё условна.');
+  if (aggOf(m) === 'wavg' && (v.viz === 'treemap')) hs.push('Средневзвешенная величина: площадь treemap для неё условна.');
   $('#hints').innerHTML = hs.map(t => `<div class="hint">${ICON.info}<span>${esc(t)}</span></div>`).join('');
 }
 function renderPivot(v, m) {
@@ -956,7 +965,7 @@ function renderPivot(v, m) {
   wrap.innerHTML = h;
   wrap._cons = cons;
   const nLeaf = P.rows.reduce((s, n) => s + (n.kids.length || 1), 0);
-  $('#pvMeta').textContent = P.rows.length + (P.d2 ? ' групп · ' + nLeaf + ' строк' : ' строк') + (hasCol ? ' × ' + P.cols.length + ' столбцов' : '') + ' · ' + unitLabel(m, v) + (wavg ? ' (ср.-взв. по объёму)' : '');
+  $('#pvMeta').textContent = P.rows.length + (P.d2 ? ' групп · ' + nLeaf + ' строк' : ' строк') + (hasCol ? ' × ' + P.cols.length + ' столбцов' : '') + ' · ' + unitLabel(m, v) + (wavg ? ' (ср.-взв. по ' + (m.src === 'fund' ? 'объёму' : '|MV|') + ')' : '');
   $('#pvTools').innerHTML = P.d2 ? `<button type="button" class="lnk" data-pv="expand">Развернуть все</button><button type="button" class="lnk" data-pv="collapse">Свернуть все</button>` : '<span class="legend-note">Клик по ячейке — позиции</span>';
 }
 $('#pvWrap').addEventListener('click', e => {
@@ -1193,7 +1202,7 @@ function renderDrill() {
   ];
   if (a === 'wavg') {
     cols.push({ k: 'w', l: 'Объём, млн ₽', r: 1, get: e => e.den, fmt: e => fmtNum(e.den / 1e6, 1) });
-    cols.push({ k: 'val', l: 'Ставка, %', r: 1, get: e => e.num / e.den, fmt: e => fmtNum(e.num / e.den, 2) });
+    cols.push({ k: 'val', l: m.wcol || 'Ставка, %', r: 1, get: e => e.num / e.den, fmt: e => fmtNum(e.num / e.den, m.dec != null ? m.dec : 2) });
   } else if (a === 'count') {
     cols.push({ k: 'val', l: 'MV, млн ₽', r: 1, get: e => isPos(e.r) ? e.r.p.mvRub : 0, fmt: e => isPos(e.r) ? fmtNum(e.r.p.mvRub / 1e6, 1) : '—' });
   } else {
@@ -1212,7 +1221,7 @@ function renderDrill() {
   const nPos = list.filter(e => isPos(e.r)).length, nF = list.length - nPos;
   let h = `<div class="dr-h"><div class="dr-k">Позиции ячейки · ${esc(measureLabel(m, v))}</div><button type="button" class="dr-close" id="drClose" aria-label="Закрыть панель">${ICON.x}</button>` +
     `<h2 class="dr-t" id="drTitle">${esc(consTitle(cons))}</h2><div class="dr-sub">${Object.keys(cons).map(k => esc(DIMS[k].label) + ': ' + esc(cons[k].length > 6 ? cons[k].slice(0, 6).join(', ') + ' …' : cons[k].join(', '))).join(' · ') || 'без ограничений по измерениям'}</div></div>`;
-  h += `<div class="dr-stats"><div><span>${a === 'wavg' ? 'Ставка ср.-взв.' : 'Итого по ячейке'}</span><b class="num">${fmtM(tot, m, v)} <small style="font-size:12px;color:var(--muted);font-family:var(--font-ui)">${esc(unitLabel(m, v))}</small></b></div><div><span>Записей</span><b class="num">${nPos}${nF ? ' + ' + nF + ' фонд.' : ''}</b></div></div>`;
+  h += `<div class="dr-stats"><div><span>${a === 'wavg' ? 'Среднее взвешенное' : 'Итого по ячейке'}</span><b class="num">${fmtM(tot, m, v)} <small style="font-size:12px;color:var(--muted);font-family:var(--font-ui)">${esc(unitLabel(m, v))}</small></b></div><div><span>Записей</span><b class="num">${nPos}${nF ? ' + ' + nF + ' фонд.' : ''}</b></div></div>`;
   h += '<div class="dr-body"><table class="dt"><thead><tr>' + cols.map(c => `<th class="${c.r ? 'r' : ''}" scope="col" aria-sort="${c.k === sCol.k ? (dir < 0 ? 'descending' : 'ascending') : 'none'}"><button type="button" data-sk="${c.k}">${esc(c.l)}${c.k === sCol.k ? `<span class="ar">${dir < 0 ? '▼' : '▲'}</span>` : ''}</button></th>`).join('') + '</tr></thead><tbody>';
   sorted.forEach(e => {
     h += '<tr>' + cols.map(c => {

@@ -230,5 +230,87 @@
   }
   D.positions.forEach(p => { if (p.gammaIr === undefined) Object.assign(p, gammaSummary(p)); });
 
-  D.util = { sum, groupBy, bucketMatrix, netFx, runScenario, curveRate, allocateFundingFx, ACCURACY_BP };
+  // ---------- облигации: спред к выбранной кривой, агрегаты по выпуску, история ----------
+  // Базовая кривая валюты: гос. кривая ('bond'), иначе первая кривая этой валюты.
+  function baseCurve(ccy) {
+    const ids = Object.keys(CURVES).filter(c => CURVES[c].ccy === ccy);
+    return ids.find(c => CURVES[c].kind === 'bond') || ids[0] || null;
+  }
+  // Срок, на котором берётся ставка кривой: WAL (ИЦБ), иначе до даты доходности (оферта), иначе до погашения.
+  function yieldTenor(p) {
+    if (p.wal) return p.wal;
+    if (p.yieldDate) { const t = (new Date(p.yieldDate + 'T00:00:00') - new Date(D.asOf + 'T00:00:00')) / (365.25 * 864e5); if (t > 0) return t; }
+    return p.tenorY;
+  }
+  function curveRatePrev(curve, t) {   // кривая вчера = сегодня − изменение за день
+    const mv = D.CURVE_MOVES && D.CURVE_MOVES[curve];
+    if (!mv) return null;
+    const saved = CURVES[curve].pts;
+    try { CURVES[curve].pts = saved.map((v, i) => v - (mv[i] || 0) / 100); return curveRate(curve, t); } finally { CURVES[curve].pts = saved; }
+  }
+  // Спред доходности облигации к кривой, б.п. curve: 'own' — расчётный спред (p.spreadBp, тип p.spreadType),
+  // 'base' — базовая кривая валюты бумаги, иначе id кривой. null — не применимо (флоатер, другая валюта, нет доходности).
+  function spreadTo(p, curve, prev) {
+    if (p.instrType !== 'BOND') return null;
+    if (curve === 'own') return prev ? (p.quote && p.quote.prevZSpread != null ? p.quote.prevZSpread : null) : p.spreadBp;
+    if (p.couponType === 'float') return null;
+    const c = curve === 'base' ? baseCurve(p.ccy) : curve;
+    if (!c || !CURVES[c] || CURVES[c].ccy !== p.ccy) return null;
+    const t = yieldTenor(p);
+    if (prev) {
+      const y = p.quote && p.quote.prevYtm, r = curveRatePrev(c, t + 1 / 365.25);
+      return y == null || r == null ? null : (y - r) * 100;
+    }
+    return p.ytm == null ? null : (p.ytm - curveRate(c, t)) * 100;
+  }
+  // Строки таблицы облигаций: позиции BOND, объединённые по выпуску (ISIN) или по (ключ группы, ISIN).
+  function bondRows(list, keyFn) {
+    const by = {};
+    list.filter(p => p.instrType === 'BOND').forEach(p => {
+      const k = (keyFn ? keyFn(p) + '|' : '') + (p.isin || p.id);
+      (by[k] = by[k] || []).push(p);
+    });
+    return Object.keys(by).map(k => {
+      const ps = by[k], p = ps[0];
+      return { key: k, p, positions: ps, books: [...new Set(ps.map(x => x.book))],
+        notional: sum(ps, x => x.notional), mvRub: sum(ps, x => x.mvRub), dv01: sum(ps, x => x.dv01), cs01: sum(ps, x => x.cs01),
+        gammaIr: sum(ps, x => x.gammaIr || 0), pnl: sum(ps, x => x.pnl ? x.pnl.official : 0), newToday: ps.some(x => x.newToday) };
+    });
+  }
+  // Средневзвешенное (веса по |MV|), пропуская null.
+  function wavg(list, val, w) {
+    let n = 0, d = 0;
+    list.forEach(x => { const v = val(x), ww = Math.abs(w ? w(x) : x.mvRub); if (v != null && isFinite(v) && ww) { n += v * ww; d += ww; } });
+    return d ? n / d : null;
+  }
+  // История выпуска за период: демо — синтетика из data.js, база — /api/v1/bonds/history.
+  // Ответ нормализуется в столбцы: dates, price, ytm, z, g, accrued, volume, face, tenor, curveRate, curveSpread.
+  function normHistory(h) {
+    const s = h.series || [], col = k => s.map(r => r[k] == null ? null : r[k]);
+    return { instrumentId: h.instrument_id, isin: h.isin, curve: h.curve, note: h.spread_to_curve_note || null, error: h.error || null,
+      dates: col('date'), price: col('clean_price'), ytm: col('ytm'), z: col('z_spread_bp'), g: col('g_spread_bp'), accrued: col('accrued'),
+      volume: col('volume_rub'), face: col('face_amount'), tenor: col('tenor_y'), curveRate: col('curve_rate'), curveSpread: col('spread_to_curve_bp') };
+  }
+  const histCache = {};
+  function bondHistory(p, curve, from) {
+    const c = curve === 'own' || !curve ? p.spreadCurve : curve === 'base' ? baseCurve(p.ccy) : curve;
+    const key = [p.isin || p.id, c, from || ''].join('|');
+    if (histCache[key]) return histCache[key];
+    let pr;
+    if (D.demo && D.demo.bondHistory) pr = Promise.resolve(D.demo.bondHistory(p, c));
+    else {
+      const q = new URLSearchParams();
+      if (p.instrumentId) q.set('instrument_id', p.instrumentId); else q.set('isin', p.isin || '');
+      if (c) q.set('curve', c);
+      if (p.wal) q.set('wal', p.wal);
+      if (from) q.set('from', from);
+      if (D.asOf) q.set('to', D.asOf);
+      pr = fetch('/api/v1/bonds/history?' + q).then(r => r.json().then(j => (r.ok ? j : Object.assign({ series: [] }, j, { error: j.error || ('HTTP ' + r.status) }))))
+        .catch(e => ({ series: [], error: 'нет связи с сервером: ' + e.message }));
+    }
+    return (histCache[key] = pr.then(normHistory));
+  }
+
+  D.util = { sum, groupBy, bucketMatrix, netFx, runScenario, curveRate, allocateFundingFx, ACCURACY_BP,
+    baseCurve, yieldTenor, spreadTo, bondRows, wavg, bondHistory, normHistory };
 })();

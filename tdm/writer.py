@@ -30,7 +30,9 @@ POSITION_COLS = [
     "maturity", "tenor_y", "coupon_type", "coupon", "index_name", "margin", "side", "notional", "notional_rub",
     "price", "mv", "mv_rub", "ytm", "spread_bp", "mdur", "spr_dur", "convexity", "dv01", "cs01", "jtd",
     "wal", "cpr", "counterparty", "new_today", "extra_json",
+    "instrument_id", "accrued", "coupon_freq", "yield_date", "spread_type", "spread_curve",
 ]
+SPREAD_TYPES = ("Z", "G", "I", "DM", "OAS", "ASW")
 PNL_COLS = ["carry", "rolldown", "rates", "spread", "fx_gross", "fx_funding", "convexity", "new_trades", "other", "official", "break_note"]
 FUNDING_COLS = ["deal_id", "book_id", "type", "ccy", "amount", "rate_expr", "rate", "start_date", "maturity", "counterparty", "collateral"]
 SCEN_COLS = ["rates", "spread", "fx_gross", "fx_funding", "convexity", "fx_cross", "total"]
@@ -276,7 +278,16 @@ class Run:
                 err.append(f"гамма: фактор '{f}' — нет такой кривой в прогоне или бакета")
             elif f.startswith("FX|") and f[3:] not in have:
                 err.append(f"гамма: фактор '{f}' — нет курса валюты")
+        for r in q("SELECT position_id, spread_type FROM position WHERE run_id=? AND spread_type IS NOT NULL"):
+            if r[1] not in SPREAD_TYPES:
+                err.append(f"позиция {r[0]}: spread_type='{r[1]}', ожидается одно из {', '.join(SPREAD_TYPES)}")
+        for r in q("SELECT position_id, yield_date FROM position WHERE run_id=? AND yield_date IS NOT NULL"):
+            if not _DATE.match(str(r[1])):
+                err.append(f"позиция {r[0]}: yield_date='{r[1]}', ожидается YYYY-MM-DD")
         # предупреждения
+        for r in q("SELECT position_id, spread_curve FROM position WHERE run_id=? AND spread_curve IS NOT NULL"
+                   " AND spread_curve NOT IN (SELECT curve_id FROM run_curve WHERE run_id=?)", rid):
+            self.log("WARN", f"позиция {r[0]}: spread_curve '{r[1]}' нет среди кривых прогона")
         for r in q("SELECT p.position_id, p.dv01, COALESCE(SUM(r.dv01),0) FROM position p LEFT JOIN position_risk r"
                    " ON r.run_id=p.run_id AND r.position_id=p.position_id WHERE p.run_id=? GROUP BY p.position_id"):
             if abs(r[1] - r[2]) > max(100.0, 1e-3 * abs(r[1])):

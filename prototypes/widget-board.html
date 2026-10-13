@@ -159,6 +159,7 @@ button{font:inherit;color:inherit}
 .tbl .m{color:var(--muted);font-size:11px}
 .tbl .grp td{font:600 10px var(--font-cond);letter-spacing:.07em;text-transform:uppercase;color:var(--muted);background:var(--panel);padding-top:8px}
 .tbl .dim td{opacity:.4}
+.tbl .n.neg{color:var(--neg)}.tbl tr.sel td{background:var(--panel-2);box-shadow:inset 0 -1px 0 var(--accent)}.tbl tr.sel td:first-child{box-shadow:inset 3px 0 0 var(--accent),inset 0 -1px 0 var(--accent)}
 .sortb{all:unset;cursor:pointer;display:inline-flex;gap:3px;align-items:center}
 .sortb:hover{color:var(--fg)}
 .sortb:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
@@ -343,7 +344,7 @@ function disposeW(wid) {
 /* ---------------- state ---------------- */
 const LS = 'dwb.boards.v1', LS_THEME = 'dwb.theme';
 const filters = {};          // boardId -> {book, issuer, ccy}
-const ui = { edit: false, sorts: {}, cfgOpen: null };
+const ui = { edit: false, sorts: {}, cfgOpen: null, bondSel: null };
 let state;
 let uidN = 0;
 const nid = () => 'w' + Date.now().toString(36) + (uidN++).toString(36);
@@ -914,7 +915,85 @@ WT.watch = {
   }
 };
 
-const GALLERY_ORDER = ['kpi', 'ladder', 'heatmap', 'conc', 'treemap', 'ocp', 'funding', 'scenario', 'explain', 'history', 'blotter', 'curves', 'watch'];
+/* ---- bonds: table and issue history ---- */
+const BD_CURVE_OPTS = () => [['base', 'Базовая кривая валюты (ОФЗ для RUB)'], ['own', 'Расчётный спред (Z / G / DM)']].concat(CURVE_KEYS.map(c => [c, c + ' — ' + D.CURVES[c].name]));
+const BD_SORT = { mv: '|MV|', ytm: 'доходности', spr: 'спреду', dspr: '|Δ спреда| за день', dur: 'дюрации', cs01: '|CS01|' };
+const bdCurveShort = c => c === 'base' ? 'баз. кривой' : c === 'own' ? 'расч.' : c;
+const bdSprD = (r, c) => { const a = U.spreadTo(r.p, c), b = U.spreadTo(r.p, c, true); return a == null || b == null ? null : a - b; };
+const BD_RANK = { mv: r => Math.abs(r.mvRub), ytm: r => r.p.ytm, spr: (r, c) => U.spreadTo(r.p, c), dspr: (r, c) => Math.abs(bdSprD(r, c) || 0), dur: r => r.p.mdur, cs01: r => Math.abs(r.cs01) };
+function bdDefaultIsin(l) { const rows = U.bondRows(l).sort((a, b) => Math.abs(b.mvRub) - Math.abs(a.mvRub)); return rows.length ? rows[0].p.isin : null; }
+WT.bonds = {
+  name: 'Облигации', glyph: 'table', desc: 'Выпуски под фильтр: доходность, спред к выбранной кривой, изменения за день, дюрация, позиция и риск. Клик по строке — история выпуска в виджете «История выпуска».',
+  def: { w: 8, h: 3, cfg: { curve: 'base', sort: 'mv', topN: '20', book: 'all', segment: 'all', ccy: 'all' } },
+  fields: [{ key: 'curve', label: 'Спред к', type: 'select', opts: BD_CURVE_OPTS }, { key: 'sort', label: 'Сортировка по', type: 'select', opts: () => Object.entries(BD_SORT) },
+    { key: 'topN', label: 'Топ-N', type: 'select', opts: topNOpts }].concat(FILT),
+  title: c => 'Облигации · спред к ' + bdCurveShort(c.curve),
+  render(b, cfg, w) {
+    const all = U.bondRows(scope(cfg)), c = cfg.curve || 'base', rk = BD_RANK[cfg.sort] || BD_RANK.mv;
+    let rows = all.slice().sort((a, z) => { const x = rk(a, c), y = rk(z, c); return (y == null ? -Infinity : y) - (x == null ? -Infinity : x); });
+    if (+cfg.topN) rows = rows.slice(0, +cfg.topN);
+    if (!rows.length) { b.innerHTML = '<div class="empty">Нет облигаций под фильтр</div>'; return ''; }
+    const sel = ui.bondSel || bdDefaultIsin(scope({}));
+    const d = (v, k) => `<td class="n${v != null && Math.abs(v) >= 0.05 ? (v < 0 ? ' neg' : '') : ''}">${num(v, k, true)}</td>`;
+    b.innerHTML = `<div class="tw"><table class="tbl"><thead><tr><th>Выпуск</th><th>Рейт.</th><th>Вал.</th><th class="n">Срок</th><th class="n">Дох., %</th><th class="n">Δ, б.п.</th><th class="n">Спред к ${esc(bdCurveShort(c))}</th><th class="n">Δ, б.п.</th><th class="n">Дюр.</th><th class="n">MV, млн ₽</th><th class="n">DV01, тыс</th><th class="n">CS01, тыс</th></tr></thead><tbody>${
+      rows.map(r => { const p = r.p, q = p.quote;
+        return `<tr class="${p.isin === sel ? 'sel' : ''}"><td><button class="xf" data-bond="${esc(p.isin)}" title="История выпуска · ${esc(p.isin)}">${esc(p.name)}</button>${p.yieldDate ? '<span class="tag" title="к оферте">оф.</span>' : ''}</td>
+        <td>${esc(p.rating || '—')}</td><td><button class="xf" data-xf="ccy" data-v="${p.ccy}">${p.ccy}</button></td><td class="n">${num(U.yieldTenor(p), 1)}</td>
+        <td class="n">${num(p.ytm, 2)}</td>${d(q && q.prevYtm != null ? (q.ytm - q.prevYtm) * 100 : null, 1)}<td class="n">${num(U.spreadTo(p, c), 0)}</td>${d(bdSprD(r, c), 1)}
+        <td class="n">${num(p.mdur, 2)}</td><td class="n">${mln(r.mvRub, 1)}</td><td class="n">${ths(r.dv01, 0)}</td><td class="n">${ths(r.cs01, 0)}</td></tr>`; }).join('')}</tbody></table></div>`;
+    b.querySelectorAll('[data-bond]').forEach(btn => btn.addEventListener('click', () => {
+      ui.bondSel = btn.dataset.bond;
+      board().widgets.filter(x => x.type === 'bonds' || (x.type === 'bondhist' && !x.cfg.isin)).forEach(renderWidget);
+      live('История выпуска: ' + btn.textContent);
+    }));
+    const ws = U.wavg(all, r => U.spreadTo(r.p, c), r => r.mvRub), wy = U.wavg(all, r => r.p.ytm, r => r.mvRub);
+    return `${rows.length} из ${all.length} выпусков · дох. ${num(wy, 2)} % · спред ${num(ws, 0)} б.п. (ср.-взв. по |MV|)` + (tags(cfg).length ? ' · ' + tags(cfg).join(' · ') : '');
+  }
+};
+const BD_RANGES = { '1M': 21, '3M': 63, '6M': 126, '1Y': 261 };
+WT.bondhist = {
+  name: 'История выпуска', glyph: 'line', desc: 'Цена, доходность и спред к выбранной кривой по дням за 1М…1Г, плюс позиция по снэпшотам. Выпуск — из настроек или по клику в виджете «Облигации».',
+  def: { w: 4, h: 3, cfg: { isin: '', curve: 'base', range: '6M' } },
+  fields: [{ key: 'isin', label: 'Выпуск', type: 'select', opts: () => [['', 'Выбранный в таблице облигаций']].concat(D.positions.filter(p => p.instrType === 'BOND').sort((a, z) => a.name.localeCompare(z.name, 'ru')).map(p => [p.isin, p.name])) },
+    { key: 'curve', label: 'Спред к', type: 'select', opts: BD_CURVE_OPTS }, { key: 'range', label: 'Период', type: 'select', opts: () => Object.keys(BD_RANGES).map(k => [k, k]) }],
+  title: c => { const p = D.positions.find(x => x.isin === (c.isin || ui.bondSel)); return 'История · ' + (p ? p.name : 'выпуск'); },
+  render(b, cfg, w) {
+    const isin = cfg.isin || ui.bondSel || bdDefaultIsin(scope({})), p = D.positions.find(x => x.isin === isin && x.instrType === 'BOND');
+    if (!p) { b.innerHTML = '<div class="empty">Выберите выпуск в настройках или кликните облигацию в виджете «Облигации»</div>'; return ''; }
+    const c = cfg.curve || 'base', own = c === 'own', tok = (w._tok = (w._tok || 0) + 1);
+    b.innerHTML = '<div class="ch"><div class="empty">Загрузка…</div></div>';
+    U.bondHistory(p, c).then(h => {
+      if (w._tok !== tok || !b.isConnected) return;
+      if (h.error || !h.dates.length) { b.innerHTML = `<div class="empty">Нет истории котировок${h.error ? ': ' + esc(h.error) : ''}</div>`; return; }
+      const i0 = Math.max(0, h.dates.length - (BD_RANGES[cfg.range] || 126)), W = a => a.slice(i0);
+      const useOwn = own || !h.curveSpread.some(v => v != null);   // флоатер / другая валюта — показываем расчётный спред (DM, Z)
+      const spr = useOwn ? h.z : h.curveSpread, sprName = useOwn ? 'Расч. спред' + (p.spreadType ? ' (' + p.spreadType + ')' : '') : 'Спред к ' + h.curve;
+      const grids = [{ top: 30, height: '24%' }, { top: '44%', height: '22%' }, { top: '74%', bottom: 4 }].map(g => Object.assign({ left: 6, right: 14, containLabel: true }, g));
+      const xa = i => cAxis(W(h.dates).map(ddmm), { gridIndex: i, boundaryGap: false, axisLabel: { show: i === 2, color: TK.fg2, fontSize: 10, hideOverlap: true } });
+      const ya = (i, n, f) => vAxis(f, { gridIndex: i, scale: true, splitNumber: 2, name: n, nameLocation: 'end', nameGap: 5, nameTextStyle: { color: TK.muted, fontSize: 10, align: 'left' } });
+      const ln = (n, i, data, col, x) => Object.assign({ name: n, type: 'line', xAxisIndex: i, yAxisIndex: i, data, showSymbol: false, lineStyle: { width: 1.5, color: col }, itemStyle: { color: col } }, x || {});
+      const series = [ln('Цена', 0, W(h.price), TK.cat[0]), ln('Доходность', 1, W(h.ytm), TK.cat[0])];
+      if (W(h.curveRate).some(v => v != null)) series.push(ln('Кривая на сроке', 1, W(h.curveRate), TK.muted, { lineStyle: { width: 1.1, type: [4, 3], color: TK.muted } }));
+      if (spr.some(v => v != null)) series.push(ln(sprName, 2, W(spr), TK.cat[1]));
+      b.innerHTML = '<div class="ch"></div>';
+      mk(b.firstChild, w.id, base({
+        legend: legend({ data: series.map(x => x.name) }), grid: grids, xAxis: [0, 1, 2].map(xa),
+        yAxis: [ya(0, 'цена', v => num(v, 1)), ya(1, 'дох., %', v => num(v, 1)), ya(2, 'спред, б.п.', v => num(v, 0))], series,
+        axisPointer: { link: [{ xAxisIndex: 'all' }] },
+        tooltip: axisTT({ axisPointer: { type: 'line', lineStyle: { color: TK.line2 } }, formatter: ps => { const i = ps[0].dataIndex + i0;
+          return `<div class="tth">${h.dates[i].split('-').reverse().join('.')}</div>` + ttr(TK.cat[0], 'Цена', num(h.price[i], 2)) + ttr(TK.cat[0], 'Доходность', num(h.ytm[i], 2) + ' %') +
+            (h.curveRate[i] != null ? ttr(TK.muted, 'Кривая', num(h.curveRate[i], 2) + ' %') : '') + (spr[i] != null ? ttr(TK.cat[1], sprName, num(spr[i], 0) + ' б.п.') : '') +
+            (h.face[i] != null ? ttr(TK.cat[3], 'Позиция', mln(h.face[i], 1) + ' млн ' + p.ccy) : ''); } })
+      }));
+      const last = h.dates.length - 1, ds = spr[last] != null && spr[i0] != null ? spr[last] - spr[i0] : null;
+      const s = b.closest('.wg') && b.closest('.wg').querySelector('.wg-s');
+      if (s) s.textContent = `${p.isin} · дох. ${num(h.ytm[last], 2)} % · спред ${num(spr[last], 0)} б.п.` + (ds != null ? ` (${num(ds, 0, true)} за ${cfg.range})` : '') + (h.note ? ' · ' + h.note : '');
+    });
+    return p.isin;
+  }
+};
+
+const GALLERY_ORDER = ['kpi', 'ladder', 'heatmap', 'conc', 'treemap', 'ocp', 'funding', 'scenario', 'explain', 'history', 'blotter', 'bonds', 'bondhist', 'curves', 'watch'];
 
 /* ================= defaults & persistence ================= */
 const clone = o => JSON.parse(JSON.stringify(o));
@@ -935,6 +1014,7 @@ function defaults() {
       W('kpi', 4, 1, { metric: 'cs01' }), W('kpi', 4, 1, { metric: 'mv', segment: 'Корп' }), W('kpi', 4, 1, { metric: 'pnl', book: 'CORP_RUB' }),
       W('conc', 8, 3), W('watch', 4, 3, { items: ['g:Самолёт', 'g:АФК Система', 'g:ГТЛК', 'g:Газпром', 'g:ДОМ.РФ', 'g:Совкомбанк', 'p:Европлан Авто ABS 2025-1'] }),
       W('treemap', 6, 2, { dim: 'rating' }), W('scenario', 6, 2, { scenarios: ['credit', 'keyhike', 'stress22'] }),
+      W('bonds', 8, 3, { segment: 'Корп', sort: 'cs01', topN: '20' }), W('bondhist', 4, 3, { range: '1Y' }),
       W('blotter', 12, 3, { segment: 'Корп', measure: 'cs01', topN: '20' })] },
     { id: 'fx', name: 'FX и фондирование', widgets: [
       W('kpi', 4, 1, { metric: 'ocpUSD' }), W('kpi', 4, 1, { metric: 'ocpCNY' }), W('kpi', 4, 1, { metric: 'ocpEUR' }),

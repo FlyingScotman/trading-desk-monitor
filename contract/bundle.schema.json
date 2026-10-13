@@ -16,7 +16,8 @@
   "contract_version": {
    "enum": [
     "1.0",
-    "1.1"
+    "1.1",
+    "1.2"
    ]
   },
   "run": {
@@ -491,6 +492,54 @@
      },
      "new_today": {
       "type": "boolean"
+     },
+     "instrument_id": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "BOND: ключ ref_instrument / md_bond_quote (NULL — ищется по isin, затем isin как ключ). Нужен для изменений за день и истории выпуска"
+     },
+     "accrued": {
+      "type": [
+       "number",
+       "null"
+      ],
+      "description": "BOND: НКД, % номинала"
+     },
+     "coupon_freq": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "description": "BOND: купонов в год"
+     },
+     "yield_date": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "description": "BOND: дата, к которой посчитаны ytm и spread_bp (оферта/колл); NULL — погашение"
+     },
+     "spread_type": {
+      "enum": [
+       "Z",
+       "G",
+       "I",
+       "DM",
+       "OAS",
+       "ASW",
+       null
+      ],
+      "description": "BOND: что лежит в spread_bp"
+     },
+     "spread_curve": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "BOND: кривая, к которой посчитан spread_bp (для DM — кривая индекса)"
      },
      "extra": {
       "type": "object"

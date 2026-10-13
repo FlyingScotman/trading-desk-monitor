@@ -17,9 +17,11 @@ _cache, _cache_lock = {}, threading.Lock()  # (run_id, версия сценар
 
 
 def _desk_json(con, run):
-    # прогон неизменяем, но к нему можно приложить сценарии и пересобрать исторические — учитываем их в ключе
+    # прогон неизменяем, но к нему можно приложить сценарии, пересобрать исторические и догрузить котировки облигаций
+    # (quote в позициях) — учитываем их в ключе
     ver = con.execute("SELECT (SELECT COUNT(*) FROM scenario_result WHERE run_id=?) || ':' ||"
-                      " (SELECT COALESCE(MAX(updated_at), '') FROM scenario_def)", (run["run_id"],)).fetchone()[0]
+                      " (SELECT COALESCE(MAX(updated_at), '') FROM scenario_def) || ':' ||"
+                      " (SELECT COALESCE(MAX(updated_at), '') FROM md_bond_quote WHERE date <= ?)", (run["run_id"], run["as_of"])).fetchone()[0]
     rid = (run["run_id"], ver)
     with _cache_lock:
         if rid in _cache:

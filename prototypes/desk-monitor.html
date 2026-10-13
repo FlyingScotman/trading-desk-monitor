@@ -128,7 +128,16 @@ select{background:var(--panel-2);border:1px solid var(--line-2);border-radius:2p
 .pb{padding:10px 12px;min-width:0}
 .pb.flush{padding:0}
 .ch{width:100%;height:260px}
-.ch.h200{height:200px}.ch.h300{height:300px}.ch.h340{height:340px}.ch.h380{height:380px}
+.ch.h200{height:200px}.ch.h300{height:300px}.ch.h340{height:340px}.ch.h380{height:380px}.ch.h440{height:440px}
+/* bonds */
+.bd-sum{display:flex;flex-wrap:wrap;gap:6px 22px;margin:-4px 0 12px;font-size:12px;color:var(--fg-3)}
+.bd-sum b{font-family:var(--font-mono);color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums;margin-left:5px}
+.t .sp{font-size:10px;color:var(--fg-3);margin-left:3px}
+.tag.ofr{border-color:var(--accent);color:var(--accent-ink)}
+.bd-st{margin-bottom:8px}
+.bd-st .t th,.bd-st .t td{padding:3px 7px;position:static}
+.bd-h-head{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:baseline;margin:0 0 8px;font-size:12px;color:var(--fg-3)}
+.bd-h-head b{color:var(--fg);font-size:13px}
 .note{font-size:11.5px;color:var(--fg-3);margin:0}
 .toolbar{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;margin-bottom:12px}
 .seg{display:inline-flex;border:1px solid var(--line-2);border-radius:2px;overflow:hidden;flex-wrap:wrap}
@@ -311,6 +320,23 @@ details.pop summary::-webkit-details-marker{display:none}
     <div class="pnl"><div class="tw scroll" id="pos-tw"></div></div>
   </section>
 
+  <!-- 2а. Облигации -->
+  <section class="tab" id="tab-bonds" role="tabpanel" aria-label="Облигации" hidden>
+    <div class="toolbar">
+      <input class="srch" id="bd-q" type="search" placeholder="Поиск: выпуск, ISIN, эмитент…" aria-label="Поиск облигаций">
+      <div class="ctl"><label class="fl" for="bd-curve">Спред к</label><select id="bd-curve"></select></div>
+      <div class="ctl"><label class="fl" for="bd-group">Группировка</label><select id="bd-group"></select></div>
+      <span class="cnt" id="bd-cnt"></span>
+    </div>
+    <div class="bd-sum" id="bd-sum" aria-label="Сводка по облигациям"></div>
+    <div class="grid">
+      <div class="pnl s12"><div class="ph"><h3>Облигации по выпускам</h3><span class="u">клик по строке — история выпуска · Δ — изменение за день · средние — взвешенные по |MV|</span></div><div class="tw scroll" id="bd-tw" style="max-height:460px;min-height:200px"></div></div>
+      <div class="pnl s5"><div class="ph"><h3 id="bd-map-title">Карта доходностей</h3><span class="u">доходность, % · срок до погашения / оферты, лет</span></div><div class="pb"><div class="ch h440" id="c-bd-map"></div><p class="note" id="bd-map-note"></p></div></div>
+      <div class="pnl s7"><div class="ph"><h3 id="bd-h-title">История выпуска</h3><div class="ctl"><span class="fl">Период</span><div class="seg" id="bd-range"></div></div></div>
+        <div class="pb"><div class="bd-h-head" id="bd-h-head"></div><div class="bd-st tw" id="bd-h-stats"></div><div class="ch h440" id="c-bd-hist"></div><p class="note" id="bd-h-note"></p></div></div>
+    </div>
+  </section>
+
   <!-- 3. Риски по кривым -->
   <section class="tab" id="tab-risk" role="tabpanel" aria-label="Риски по кривым" hidden>
     <div class="toolbar">
@@ -449,6 +475,8 @@ const COLS = [
   {k:'price', t:'Цена', n:1, d:2, def:1},
   {k:'ytm', t:'Дох., %', n:1, d:2, def:1},
   {k:'spreadBp', t:'Спред, б.п.', n:1, d:0, def:1},
+  {k:'accrued', t:'НКД, %', n:1, d:2},
+  {k:'yieldDate', t:'Оферта', f:dt, mono:1},
   {k:'mdur', t:'Мод. дюр.', n:1, d:2},
   {k:'mvRub', t:'MV, млн ₽', n:1, d:1, v:p => p.mvRub/1e6, sum:1, def:1, sg:1},
   {k:'dv01', t:'DV01, тыс ₽/б.п.', n:1, d:0, v:p => p.dv01/1e3, sum:1, def:1, sg:1},
@@ -463,7 +491,7 @@ const COLS = [
   {k:'pnlUnx', t:'Break, тыс ₽', n:1, d:0, v:p => p.pnl.unexplained/1e3, sum:1, sg:1},
   {k:'counterparty', t:'Контрагент'}
 ];
-const TABS = [['summary','Сводка'],['positions','Позиции'],['risk','Риски по кривым'],['expo','Экспозиции'],['funding','Фондирование'],['scen','Сценарии'],['pnl','PnL']];
+const TABS = [['summary','Сводка'],['positions','Позиции'],['bonds','Облигации'],['risk','Риски по кривым'],['expo','Экспозиции'],['funding','Фондирование'],['scen','Сценарии'],['pnl','PnL']];
 
 const S = {
   tab:'summary', books:new Set(ALL_BOOKS), ccy:'ALL', segs:new Set(SEGS), withFunding:true,
@@ -472,11 +500,13 @@ const S = {
   risk:{mode:'curves', curve:'RUB OFZ', cell:null},
   expo:{dim:'issuerGroup', meas:'mv', chart:'treemap'},
   fund:{stack:'type'},
-  scen:{sel:['keyhike','par+100'], focus:'keyhike'}
+  scen:{sel:['keyhike','par+100'], focus:'keyhike'},
+  bd:{q:'', curve:'base', group:'none', sort:{k:'mvRub', dir:-1}, sel:null, range:'6M'}
 };
 (function restore(){
   const t = store.get('fidm.tab'); if (t && TABS.some(x => x[0] === t)) S.tab = t;
   const c = store.get('fidm.cols'); if (c) { try { const a = JSON.parse(c); if (Array.isArray(a) && a.length) S.pos.cols = new Set(a.filter(k => COLS.some(x => x.k === k))); } catch(e){} }
+  const bc = store.get('fidm.bdcurve'); if (bc && (bc === 'own' || bc === 'base' || D.CURVES[bc])) S.bd.curve = bc;
   const th = store.get('fidm.theme'); if (th === 'light' || th === 'dark') document.documentElement.setAttribute('data-theme', th);
 })();
 
@@ -609,7 +639,7 @@ function setTab(t){
 }
 function renderTab(){
   TABS.forEach(t => { $('tab-' + t[0]).hidden = t[0] !== S.tab; });
-  ({summary:rSummary, positions:rPositions, risk:rRisk, expo:rExpo, funding:rFunding, scen:rScen, pnl:rPnl})[S.tab]();
+  ({summary:rSummary, positions:rPositions, bonds:rBonds, risk:rRisk, expo:rExpo, funding:rFunding, scen:rScen, pnl:rPnl})[S.tab]();
 }
 
 /* ======================= 1. Сводка ======================= */
@@ -727,6 +757,200 @@ function renderColPop(){
   $('colpop-b').innerHTML = COLS.map(c => `<label><input type="checkbox" data-col="${c.k}"${S.pos.cols.has(c.k) ? ' checked' : ''}>${esc(c.t)}</label>`).join('');
 }
 
+/* ======================= 2а. Облигации ======================= */
+const BD_GROUPS = [['none','нет'],['book','книга'],['issuerGroup','группа эмитента'],['rating','рейтинг'],['ccy','валюта'],['assetClass','класс актива']];
+const BD_RANGES = [['1M',21],['3M',63],['6M',126],['1Y',261]];
+const ratingIdx = r => { const i = D.RATING_ORDER.indexOf(r); return i < 0 ? 99 : i; };
+const curveName = c => c === 'own' ? 'расчётному спреду' : c === 'base' ? 'базовой кривой валюты' : (D.CURVES[c] ? D.CURVES[c].name : c);
+const cpnTxt = p => p.couponType === 'float' ? (p.index || 'плав.') + (p.margin != null ? ' + ' + num(p.margin,2) + '%' : '') : p.coupon != null ? num(p.coupon,2) + '%' : '—';
+const bdSpr = (r, prev) => U.spreadTo(r.p, S.bd.curve, prev);
+const bdQ = r => r.p.quote || null;
+const BD_COLS = [
+  {k:'name', t:'Выпуск', v:r => r.p.name, h:r => `<td class="nm" title="${esc(r.p.name + ' · ' + (r.p.isin || ''))}">${esc(r.p.name)}${r.newToday ? '<span class="tag">NEW</span>' : ''}${r.p.yieldDate ? '<span class="tag ofr" title="Доходность и спред — к оферте">ОФ</span>' : ''}</td>`},
+  {k:'isin', t:'ISIN', v:r => r.p.isin, mono:1},
+  {k:'issuer', t:'Эмитент', v:r => r.p.issuer},
+  {k:'rating', t:'Рейт.', v:r => ratingIdx(r.p.rating), h:r => `<td>${esc(r.p.rating || '—')}</td>`},
+  {k:'ccy', t:'Вал.', v:r => r.p.ccy},
+  {k:'cpn', t:'Купон', v:r => r.p.coupon, h:r => `<td class="mono">${esc(cpnTxt(r.p))}</td>`},
+  {k:'mat', t:'Погашение', v:r => r.p.maturity, f:dt, mono:1},
+  {k:'ydate', t:'Оферта', v:r => r.p.yieldDate || null, f:dt, mono:1},
+  {k:'ty', t:'Срок, лет', n:1, d:2, v:r => U.yieldTenor(r.p), w:1},
+  {k:'price', t:'Цена', n:1, d:2, v:r => r.p.price},
+  {k:'dprice', t:'Δ цены', n:1, d:2, sg:1, pl:1, v:r => { const q = bdQ(r); return q && q.prevPrice != null ? q.price - q.prevPrice : null; }},
+  {k:'accrued', t:'НКД', n:1, d:2, v:r => r.p.accrued},
+  {k:'ytm', t:'Дох., %', n:1, d:2, v:r => r.p.ytm, w:1},
+  {k:'dytm', t:'Δ дох., б.п.', n:1, d:1, sg:1, pl:1, v:r => { const q = bdQ(r); return q && q.prevYtm != null ? (q.ytm - q.prevYtm) * 100 : null; }},
+  {k:'spr', t:'Спред, б.п.', n:1, d:0, v:r => bdSpr(r), w:1, h:r => { const v = bdSpr(r); return `<td class="n"${v == null ? ` title="${r.p.couponType === 'float' ? 'Флоатер: спред к индексу (DM) — см. расчётный спред' : 'Валюта кривой не совпадает с валютой выпуска'}"` : ''}>${num(v,0)}</td>`; }},
+  {k:'dspr', t:'Δ спреда, б.п.', n:1, d:1, sg:1, pl:1, v:r => { const a = bdSpr(r), b = bdSpr(r, true); return a == null || b == null ? null : a - b; }},
+  {k:'own', t:'Расч. спред, б.п.', n:1, d:0, v:r => r.p.spreadBp, w:1, h:r => `<td class="n" title="${esc((r.p.spreadType || '') + ' к ' + (r.p.spreadCurve || '—'))}">${num(r.p.spreadBp,0)}<span class="sp">${esc(r.p.spreadType || '')}</span></td>`},
+  {k:'mdur', t:'Мод. дюр.', n:1, d:2, v:r => r.p.mdur, w:1},
+  {k:'sdur', t:'Спред-дюр.', n:1, d:2, v:r => r.p.sprDur, w:1},
+  {k:'conv', t:'Выпукл.', n:1, d:1, v:r => r.p.convexity || null, w:1},
+  {k:'notional', t:'Номинал, млн', n:1, d:1, sg:1, v:r => r.notional / 1e6},
+  {k:'mvRub', t:'MV, млн ₽', n:1, d:1, sg:1, v:r => r.mvRub / 1e6, sum:1},
+  {k:'dv01', t:'DV01, тыс ₽/б.п.', n:1, d:0, sg:1, v:r => r.dv01 / 1e3, sum:1},
+  {k:'cs01', t:'CS01, тыс ₽/б.п.', n:1, d:0, sg:1, v:r => r.cs01 / 1e3, sum:1},
+  {k:'pnl', t:'PnL дня, тыс ₽', n:1, d:0, sg:1, v:r => r.pnl / 1e3, sum:1},
+  {k:'books', t:'Книга', v:r => r.books.map(b => D.BOOKS[b].name).join(', ')},
+  {k:'card', t:'', v:() => null, h:r => `<td><button type="button" class="lnk" data-act="pos" data-v="${esc(r.positions[0].id)}" title="Карточка позиции">карточка</button></td>`}
+];
+function bdRowsFiltered(){
+  const q = S.bd.q.trim().toLowerCase();
+  const l = P().filter(p => p.instrType === 'BOND' && (!q || [p.name, p.isin, p.issuer, p.issuerGroup].some(x => x && String(x).toLowerCase().includes(q))));
+  const g = S.bd.group;
+  return U.bondRows(l, g === 'book' ? (p => p.book) : null);
+}
+function bdGroupKey(r){
+  const g = S.bd.group;
+  if (g === 'book') return D.BOOKS[r.p.book].name;
+  return r.p[g] || '—';
+}
+const bdW = r => r.mvRub;
+function bdAgg(c, list){
+  if (c.sum) return sum(list, r => c.v(r) || 0);
+  if (c.w) return U.wavg(list, c.v, bdW);
+  if (c.k === 'notional') { const cc = new Set(list.map(r => r.p.ccy)); return cc.size === 1 ? sum(list, r => c.v(r)) : null; }
+  return undefined;
+}
+function rBonds(){
+  const cs = $('bd-curve');
+  cs.innerHTML = [['base','Базовая кривая валюты (ОФЗ для RUB)'],['own','Расчётный спред (Z / G / DM)']].concat(CURVES.map(c => [c, D.CURVES[c].name + ' · ' + D.CURVES[c].ccy]))
+    .map(o => `<option value="${esc(o[0])}"${S.bd.curve === o[0] ? ' selected' : ''}>${esc(o[1])}</option>`).join('');
+  $('bd-group').innerHTML = BD_GROUPS.map(o => `<option value="${o[0]}"${S.bd.group === o[0] ? ' selected' : ''}>${o[1]}</option>`).join('');
+  $('bd-range').innerHTML = BD_RANGES.map(o => `<button type="button" data-v="${o[0]}" aria-pressed="${S.bd.range === o[0]}">${o[0]}</button>`).join('');
+  if ($('bd-q').value !== S.bd.q) $('bd-q').value = S.bd.q;
+  const rows = bdRowsFiltered();
+  const sc = BD_COLS.find(c => c.k === S.bd.sort.k) || BD_COLS[0], dir = S.bd.sort.dir;
+  rows.sort((a,b) => {
+    const x = sc.v(a), y = sc.v(b);
+    if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1;
+    return (typeof x === 'number' ? x - y : String(x).localeCompare(String(y), 'ru')) * dir;
+  });
+  if (!rows.some(r => r.p.isin === S.bd.sel)) S.bd.sel = rows.length ? rows.slice().sort((a,b) => Math.abs(b.mvRub) - Math.abs(a.mvRub))[0].p.isin : null;
+  const sprT = S.bd.curve === 'own' ? 'Спред расч., б.п.' : 'Спред к ' + (S.bd.curve === 'base' ? 'баз. кривой' : S.bd.curve) + ', б.п.';
+  const cols = BD_COLS.filter(c => !(c.k === 'own' && S.bd.curve === 'own'));
+  const cell = (c, r) => {
+    if (c.h) return c.h(r);
+    const v = c.v(r);
+    if (c.n) return `<td class="n${c.sg && v != null && Math.abs(v) >= 0.5 * Math.pow(10, -c.d) ? nc(v) : ''}">${num(v, c.d, c.pl)}</td>`;
+    return `<td${c.mono ? ' class="mono"' : ''}>${esc(c.f ? c.f(v) : (v == null || v === '' ? '—' : v))}</td>`;
+  };
+  const aggRow = (cls, label, list, attrs) => `<tr class="${cls}"${attrs || ''}><td colspan="${cols.findIndex(c => c.k === 'ty')}">${label}</td>` + cols.slice(cols.findIndex(c => c.k === 'ty')).map(c => {
+    const v = bdAgg(c, list); return v === undefined ? '<td></td>' : `<td class="n${c.sg ? nc(v) : ''}">${num(v, c.d)}</td>`; }).join('') + '</tr>';
+  const rowHtml = r => `<tr class="click${r.newToday ? ' new' : ''}${r.p.isin === S.bd.sel ? ' sel' : ''}" tabindex="0" data-act="bdsel" data-v="${esc(r.p.isin)}">${cols.map(c => cell(c, r)).join('')}</tr>`;
+  let body = '';
+  if (S.bd.group === 'none') body = rows.map(rowHtml).join('');
+  else {
+    const gr = U.groupBy(rows, bdGroupKey);
+    Object.keys(gr).sort((a,b) => S.bd.group === 'rating' ? ratingIdx(a) - ratingIdx(b) : Math.abs(sum(gr[b], r => r.mvRub)) - Math.abs(sum(gr[a], r => r.mvRub)))
+      .forEach(k => { body += aggRow('grp', `${esc(k)} <span class="muted">· ${gr[k].length}</span>`, gr[k]) + gr[k].map(rowHtml).join(''); });
+  }
+  const head = '<tr>' + cols.map(c => {
+    const on = S.bd.sort.k === c.k, t = c.k === 'spr' ? sprT : c.t;
+    return c.k === 'card' ? '<th></th>' : `<th class="sortable${c.n ? ' n' : ''}" data-act="bdsort" data-v="${c.k}" tabindex="0"${on ? ` aria-sort="${dir > 0 ? 'ascending' : 'descending'}"` : ''}>${esc(t)}${on ? `<span class="ar"> ${dir > 0 ? '▲' : '▼'}</span>` : ''}</th>`;
+  }).join('') + '</tr>';
+  $('bd-tw').innerHTML = `<table class="t"><thead>${head}</thead><tbody>${body || `<tr><td colspan="${cols.length}" class="muted" style="padding:16px 8px">Нет облигаций по текущему фильтру и поиску.</td></tr>`}</tbody><tfoot>${aggRow('tot', 'Итого · ' + rows.length + ' ' + plural(rows.length,'выпуск','выпуска','выпусков'), rows)}</tfoot></table>`;
+  $('bd-cnt').textContent = rows.length + ' ' + plural(rows.length,'выпуск','выпуска','выпусков') + ' · ' + sum(rows, r => r.positions.length) + ' поз.';
+  const wy = U.wavg(rows, r => r.p.ytm, bdW), ws = U.wavg(rows, r => bdSpr(r), bdW), wd = U.wavg(rows, r => r.p.mdur, bdW), wsd = U.wavg(rows, r => r.p.sprDur, bdW);
+  $('bd-sum').innerHTML = [['MV', BN(sum(rows, r => r.mvRub),2) + ' млрд ₽'], ['Доходность', wy == null ? '—' : num(wy,2) + '%'],
+    [S.bd.curve === 'own' ? 'Расч. спред' : 'Спред к ' + (S.bd.curve === 'base' ? 'баз. кривой' : S.bd.curve), ws == null ? '—' : num(ws,0) + ' б.п.'],
+    ['Мод. дюрация', num(wd,2)], ['Спред-дюрация', num(wsd,2)], ['DV01', K(sum(rows, r => r.dv01),0) + ' тыс ₽/б.п.'], ['CS01', K(sum(rows, r => r.cs01),0) + ' тыс ₽/б.п.'],
+    ['PnL дня', M(sum(rows, r => r.pnl),1,true) + ' млн ₽']].map(x => `<span>${x[0]}<b>${x[1]}</b></span>`).join('') + '<span class="muted">средние — по |MV|</span>';
+  rBondMap(rows);
+  rBondHist(rows);
+}
+// карта доходностей: бумаги одной валюты с фикс. купоном против кривой
+function bdMapCurve(){
+  if (D.CURVES[S.bd.curve]) return S.bd.curve;
+  return U.baseCurve(S.ccy !== 'ALL' ? S.ccy : 'RUB') || CURVES[0];
+}
+function rBondMap(rows){
+  const cc = bdMapCurve(), ccy = D.CURVES[cc].ccy;
+  const pts = rows.filter(r => r.p.ccy === ccy && r.p.couponType !== 'float' && r.p.ytm != null);
+  const nFl = rows.filter(r => r.p.ccy === ccy && r.p.couponType === 'float').length, nOther = rows.filter(r => r.p.ccy !== ccy).length;
+  $('bd-map-title').textContent = 'Карта доходностей · ' + D.CURVES[cc].name;
+  $('bd-map-note').textContent = [nFl ? `флоатеры (${nFl}) не показаны — их доходность задаёт индекс` : '', nOther ? `бумаги в других валютах (${nOther}) — выберите их кривую в «Спред к» или валюту в фильтре` : '', 'размер — |MV|, пустой кружок — короткая позиция']
+    .filter(Boolean).join(' · ');
+  const cats = [...new Set(pts.map(r => r.p.segment === 'Гос' ? 'Гос' : (r.p.rating || 'н/р')))].sort((a,b) => (a === 'Гос' ? -1 : b === 'Гос' ? 1 : ratingIdx(a) - ratingIdx(b)));
+  const mx = Math.max(1, ...pts.map(r => Math.abs(r.mvRub)));
+  const colOf = k => k === 'Гос' ? TK.fg_2 : TK.cat[(ratingIdx(k) + 1) % 8];
+  const maxT = Math.max(5, ...pts.map(r => U.yieldTenor(r.p)));
+  const series = cats.map(k => ({type:'scatter', name:k, data:pts.filter(r => (r.p.segment === 'Гос' ? 'Гос' : (r.p.rating || 'н/р')) === k).map(r => {
+    const on = r.p.isin === S.bd.sel, c = colOf(k), short = r.mvRub < 0;
+    return {value:[+U.yieldTenor(r.p).toFixed(3), +r.p.ytm.toFixed(3)], isin:r.p.isin, r, symbolSize:6 + 20 * Math.sqrt(Math.abs(r.mvRub) / mx),
+      itemStyle:{color:short ? 'transparent' : c, borderColor:on ? TK.fg : c, borderWidth:on ? 2.5 : short ? 1.5 : 0, opacity:.9}};
+  }), itemStyle:{color:colOf(k)}, emphasis:{scale:1.2}}));
+  series.push({type:'line', name:D.CURVES[cc].name, data:D.PILLARS.map((t,i) => [t, D.CURVES[cc].pts[i]]).filter(x => x[0] <= maxT + 2), smooth:.3, symbol:'none', z:1,
+    lineStyle:{width:1.5, color:TK.fg_3, type:[5,3]}, itemStyle:{color:TK.fg_3}, tooltip:{show:false}});
+  const c = chart('c-bd-map', opt({
+    legend:legend({data:cats.concat([D.CURVES[cc].name])}),
+    grid:{left:6, right:30, top:34, bottom:6},
+    tooltip:{trigger:'item', formatter:pp => { const r = pp.data && pp.data.r; if (!r) return ''; const sp = U.spreadTo(r.p, cc);
+      return `<b>${esc(r.p.name)}</b><br>${esc(r.p.issuer)} · ${esc(r.p.rating || 'н/р')}<br>Срок ${num(U.yieldTenor(r.p),2)} г.${r.p.yieldDate ? ' (оферта)' : ''} · дох. ${num(r.p.ytm,2)}%<br>Спред к кривой ${num(sp,0)} б.п. · MV ${M(r.mvRub,0)} млн ₽`; }},
+    xAxis:{type:'value', min:0, max:Math.ceil(maxT + 1), name:'лет', nameGap:4, nameTextStyle:{color:TK.fg_3, fontSize:10}, splitLine:{lineStyle:{color:TK.grid}}, axisLine:{lineStyle:{color:TK.line_2}}, axisLabel:{color:TK.fg_3, fontSize:10.5, fontFamily:TK.mono}},
+    yAxis:yVal(v => num(v,1), {scale:true}),
+    series
+  }));
+  if (c) c.on('click', pp => { if (pp.data && pp.data.isin) { S.bd.sel = pp.data.isin; rBonds(); } });
+}
+// история выпуска (асинхронно: демо — сразу, база — /api/v1/bonds/history)
+let bdTok = 0;
+function rBondHist(rows){
+  const r = rows.find(x => x.p.isin === S.bd.sel);
+  const tok = ++bdTok;
+  if (!r) { $('bd-h-title').textContent = 'История выпуска'; $('bd-h-head').innerHTML = ''; $('bd-h-stats').innerHTML = ''; $('bd-h-note').textContent = 'Выберите выпуск в таблице или на карте.'; chart('c-bd-hist', {}); return; }
+  $('bd-h-title').textContent = 'История выпуска · ' + r.p.name;
+  $('bd-h-note').textContent = 'Загрузка…';
+  U.bondHistory(r.p, S.bd.curve).then(h => { if (tok === bdTok && S.tab === 'bonds') drawBondHist(r, h); });
+}
+function drawBondHist(r, h){
+  const p = r.p;
+  $('bd-h-head').innerHTML = `<b>${esc(p.name)}</b><span class="mono">${esc(p.isin || '')}</span><span>${esc(p.issuer || '')} · ${esc(p.rating || 'н/р')} · ${esc(p.ccy)}</span><span>купон ${esc(cpnTxt(p))}</span><span>погашение ${dt(p.maturity)}${p.yieldDate ? ' · оферта ' + dt(p.yieldDate) : ''}</span><span>${esc(r.books.map(b => D.BOOKS[b].name).join(', '))}</span>`;
+  if (h.error || !h.dates.length) {
+    $('bd-h-stats').innerHTML = ''; chart('c-bd-hist', {});
+    $('bd-h-note').textContent = 'Нет истории котировок по выпуску' + (h.error ? ': ' + h.error : '') + '. Источник — md_bond_quote (docs/DATA_REQUIREMENTS.md, набор bond_quotes).';
+    return;
+  }
+  const own = S.bd.curve === 'own', N = h.dates.length, n = BD_RANGES.find(x => x[0] === S.bd.range)[1], i0 = Math.max(0, N - n);
+  const spr = own ? h.z : h.curveSpread, sprName = own ? 'Расч. спред (' + (p.spreadType || 'Z') + ')' : 'Спред к ' + h.curve;
+  const W = a => a.slice(i0);
+  // статистика: сейчас, изменения за 1Д/1Н/1М, за период, мин/макс, перцентиль текущего значения в окне
+  const stat = (lbl, a, d, k) => {
+    const last = a[N-1], ch = j => (N-1-j >= 0 && a[N-1-j] != null && last != null ? (last - a[N-1-j]) * k : null);
+    const w = W(a).filter(v => v != null), mn = w.length ? Math.min(...w) : null, mxv = w.length ? Math.max(...w) : null;
+    const pc = w.length && last != null ? w.filter(v => v <= last).length / w.length : null;
+    const dd = k === 100 ? 0 : d;
+    return `<tr><td>${lbl}</td><td class="n"><b>${num(last,d)}</b></td>${[1,5,21,N-1-i0].map(j => { const v = ch(j); return `<td class="n${nc(v)}">${num(v,dd,true)}</td>`; }).join('')}<td class="n">${num(mn,d)}</td><td class="n">${num(mxv,d)}</td><td class="n">${pc == null ? '—' : pct(pc)}</td></tr>`;
+  };
+  const hasSpr = spr.some(v => v != null);
+  $('bd-h-stats').innerHTML = `<table class="t"><thead><tr><th></th><th class="n">Сейчас</th><th class="n">1Д</th><th class="n">1Н</th><th class="n">1М</th><th class="n">${S.bd.range}</th><th class="n">Мин</th><th class="n">Макс</th><th class="n" title="Доля дней периода, когда значение было не выше текущего">Перц.</th></tr></thead><tbody>` +
+    stat('Цена', h.price, 2, 1) + stat('Доходность, % (Δ в б.п.)', h.ytm, 2, 100) + (hasSpr ? stat(sprName + ', б.п.', spr, 0, 1) : '') +
+    (!own && h.z.some(v => v != null) ? stat('Расч. спред (' + (p.spreadType || 'Z') + '), б.п.', h.z, 0, 1) : '') + '</tbody></table>';
+  $('bd-h-note').textContent = [h.note ? 'Спред к кривой: ' + h.note + '.' : '', 'Ставка кривой — на сроке до ' + (p.wal ? 'WAL' : p.yieldDate ? 'оферты' : 'погашения') + ' в каждую дату. Позиция — номинал по снэпшотам.'].filter(Boolean).join(' ');
+  const dates = W(h.dates).map(d => dt(d)), face = W(h.face).map(v => v == null ? null : v / 1e6);
+  const G = [{top:30, height:78}, {top:134, height:92}, {top:252, height:84}, {top:362, height:44}].map(g => Object.assign({left:6, right:26, containLabel:true}, g));
+  const xa = i => xCat(dates, {gridIndex:i, boundaryGap:false, axisLabel:{show:i === 3, color:TK.fg_3, fontSize:10, fontFamily:TK.mono, hideOverlap:true, formatter:v => v.slice(0,6) + v.slice(8)}});
+  const ya = (i, name, fmt) => yVal(fmt, {gridIndex:i, scale:true, splitNumber:2, name, nameLocation:'end', nameGap:6, nameTextStyle:{color:TK.fg_3, fontSize:10, align:'left'}});
+  const ln = (name, gi, data, color, extra) => Object.assign({type:'line', name, xAxisIndex:gi, yAxisIndex:gi, data, showSymbol:false, symbol:'circle', connectNulls:false, lineStyle:{width:1.6, color}, itemStyle:{color}}, extra || {});
+  const series = [ln('Цена', 0, W(h.price), TK.cat[0]), ln('Доходность, %', 1, W(h.ytm), TK.cat[0])];
+  if (W(h.curveRate).some(v => v != null)) series.push(ln('Кривая ' + h.curve + ' на сроке', 1, W(h.curveRate), TK.fg_3, {lineStyle:{width:1.2, color:TK.fg_3, type:[4,3]}}));
+  if (hasSpr) series.push(ln(sprName, 2, W(spr), TK.cat[1]));
+  if (!own && h.z.some(v => v != null)) series.push(ln('Расч. спред', 2, W(h.z), TK.cat[2], {lineStyle:{width:1.1, color:TK.cat[2]}}));
+  series.push(ln('Позиция, млн ' + p.ccy, 3, face, TK.cat[3], {step:'end', areaStyle:{color:TK.cat[3], opacity:.12}}));
+  chart('c-bd-hist', opt({
+    legend:legend({data:series.map(x => x.name)}),
+    axisPointer:{link:[{xAxisIndex:'all'}]},
+    tooltip:{trigger:'axis', axisPointer:{type:'line'}, formatter:ps => {
+      const i = ps[0].dataIndex + i0, f = (v, d) => v == null ? '—' : num(v, d);
+      return `<b>${dt(h.dates[i])}</b><br>Цена ${f(h.price[i],2)} · НКД ${f(h.accrued[i],2)}<br>Доходность ${f(h.ytm[i],2)}%` + (h.curveRate[i] != null ? ` · кривая ${f(h.curveRate[i],2)}%` : '') +
+        (spr[i] != null ? `<br>${esc(sprName)}: ${f(spr[i],0)} б.п.` : '') + (!own && h.z[i] != null ? `<br>Расч. спред ${f(h.z[i],0)} б.п.` : '') +
+        `<br>Позиция ${f(h.face[i] == null ? null : h.face[i] / 1e6, 1)} млн ${esc(p.ccy)}` + (h.volume[i] ? ` · оборот ${f(h.volume[i] / 1e6, 0)} млн ₽` : ''); }},
+    grid:G, xAxis:[0,1,2,3].map(xa),
+    yAxis:[ya(0, 'цена', v => num(v,1)), ya(1, 'доходность, %', v => num(v,1)), ya(2, 'спред, б.п.', v => num(v,0)), ya(3, 'позиция', v => num(v,0))],
+    series
+  }));
+}
+
 /* ---------- drawer ---------- */
 let lastFocus = null;
 function bucketSvg(vals){
@@ -753,7 +977,9 @@ function openDrawer(id){
     ['Индекс', p.couponType === 'fix' ? p.index : null], ['Сторона', p.side],
     ['Номинал', num(p.notional/1e6,2) + ' млн ' + p.ccy], ['Цена', p.price != null ? num(p.price,2) : null],
     ['MV', num(p.mv/1e6,2) + ' млн ' + p.ccy], ['MV, ₽', M(p.mvRub,1) + ' млн'],
-    ['Доходность', p.ytm != null ? num(p.ytm,2) + '%' : null], ['Спред', p.spreadBp != null ? num(p.spreadBp,0) + ' б.п.' : null],
+    ['Доходность', p.ytm != null ? num(p.ytm,2) + '%' + (p.yieldDate ? ' к оферте' : '') : null], ['Спред', p.spreadBp != null ? num(p.spreadBp,0) + ' б.п.' + (p.spreadType ? ' (' + p.spreadType + (p.spreadCurve ? ' к ' + p.spreadCurve : '') + ')' : '') : null],
+    ['Спред к баз. кривой', p.instrType === 'BOND' && U.spreadTo(p, 'base') != null ? num(U.spreadTo(p, 'base'),0) + ' б.п. (' + U.baseCurve(p.ccy) + ')' : null],
+    ['Оферта', p.yieldDate ? dt(p.yieldDate) : null], ['НКД', p.accrued != null ? num(p.accrued,2) + '%' : null],
     ['Мод. дюрация', p.mdur != null ? num(p.mdur,2) : null], ['DV01', K(p.dv01,1) + ' тыс ₽/б.п.'], ['CS01', K(p.cs01,1) + ' тыс ₽/б.п.'],
     ['Гамма ставок', p.gammaIr ? num(p.gammaIr,0,true) + ' ₽/б.п.²' : null], ['Гамма спреда', p.gammaCs ? num(p.gammaCs,0,true) + ' ₽/б.п.²' : null],
     ['Гамма ставки×спред', p.gammaIrCs ? num(p.gammaIrCs,0,true) + ' ₽/б.п.²' : null],
@@ -771,6 +997,7 @@ function openDrawer(id){
   $('drawer').innerHTML = `
     <div class="dr-h"><div><h2>${esc(p.name)}</h2><div class="dr-sub"><span class="pill">${esc(bk.name)}</span><span class="pill">${esc(p.assetClass)}</span><span class="pill">${esc(p.ccy)}</span>${p.rating ? `<span class="pill">${esc(p.rating)}</span>` : ''}${p.newToday ? '<span class="tag" style="margin:0">NEW · сделка сегодня</span>' : ''}</div></div>
       <button type="button" class="ibtn" id="dr-close" aria-label="Закрыть карточку">Закрыть ✕</button></div>
+    ${p.instrType === 'BOND' ? `<div class="dr-s"><button type="button" class="lnk" data-act="bdhist" data-v="${esc(p.isin)}">История цены, доходности и спреда выпуска →</button></div>` : ''}
     <div class="dr-s"><h4>Параметры</h4><dl class="kvl">${F.map(x => `<div><dt>${esc(x[0])}</dt><dd title="${esc(x[1])}">${esc(x[1])}</dd></div>`).join('')}</dl></div>
     <div class="dr-s bk"><h4>DV01 по бакетам, тыс ₽/б.п.</h4>${curves.length ? curves.map(c => `<div class="cap"><span>${esc(D.CURVES[c].name)}</span><span class="mono">${K(sum(p.risk[c]),1)}</span></div>${bucketSvg(p.risk[c])}`).join('') : '<p class="note">Нет процентного риска по кривым (CDS / спот FX).</p>'}</div>
     <div class="dr-s"><h4>PnL за день, тыс ₽</h4><div class="pnl-b">${PNL_KEYS.map(k => pr(k[1], e[k[0]])).join('')}${pr('Explained', e.explained, 'sum')}${pr('Unexplained', e.unexplained)}${pr('Официальный', e.official, 'sum')}</div>
@@ -1140,6 +1367,9 @@ document.addEventListener('click', e => {
     if (a === 'sort') { if (S.pos.sort.k === v) S.pos.sort.dir *= -1; else { const c = COLS.find(x => x.k === v); S.pos.sort = {k:v, dir:c.n ? -1 : 1}; } return rPositions(); }
     if (a === 'grp') { if (S.pos.collapsed.has(v)) S.pos.collapsed.delete(v); else S.pos.collapsed.add(v); rPositions(); const r = document.querySelector(`tr[data-act="grp"][data-v="${CSS.escape(v)}"]`); if (r) r.focus(); return; }
     if (a === 'pos') { lastFocus = t; return openDrawer(v); }
+    if (a === 'bdsel') { if (e.target.closest('button')) return; S.bd.sel = v; return rBonds(); }
+    if (a === 'bdsort') { if (S.bd.sort.k === v) S.bd.sort.dir *= -1; else { const c = BD_COLS.find(x => x.k === v); S.bd.sort = {k:v, dir:c.n ? -1 : 1}; } return rBonds(); }
+    if (a === 'bdhist') { S.bd.sel = v; closeDrawer(); if (S.tab === 'bonds') return rBonds(); return setTab('bonds'); }
     if (a === 'rcurve') { S.risk.curve = v; if (S.risk.mode === 'books') S.risk.cell = null; return rRisk(); }
     if (a === 'cell') {
       const r = t.dataset.r, bi = +t.dataset.b;
@@ -1159,6 +1389,7 @@ document.addEventListener('click', e => {
     if (id === 'ex-meas') { S.expo.meas = v; return rExpo(); }
     if (id === 'ex-chart') { S.expo.chart = v; return rExpo(); }
     if (id === 'fu-stack') { S.fund.stack = v; return rFunding(); }
+    if (id === 'bd-range') { S.bd.range = v; return rBonds(); }
   }
   if (e.target.id === 'pos-collapse') {
     if (S.pos.collapsed.size) S.pos.collapsed.clear();
@@ -1173,18 +1404,21 @@ document.addEventListener('change', e => {
   if (t.id === 'f-ccy') { S.ccy = t.value; return rerender(); }
   if (t.id === 'f-fund') { S.withFunding = t.checked; renderKpi(); return renderTab(); }
   if (t.id === 'sum-bview') { S.sum.bview = t.value; return rSummary(); }
+  if (t.id === 'bd-curve') { S.bd.curve = t.value; store.set('fidm.bdcurve', t.value); return rBonds(); }
+  if (t.id === 'bd-group') { S.bd.group = t.value; return rBonds(); }
   if (t.id === 'pos-group') { S.pos.group = t.value; S.pos.collapsed.clear(); return rPositions(); }
   if (t.dataset && t.dataset.col) {
     if (t.checked) S.pos.cols.add(t.dataset.col); else if (S.pos.cols.size > 1) S.pos.cols.delete(t.dataset.col); else t.checked = true;
     store.set('fidm.cols', JSON.stringify([...S.pos.cols])); return rPositions();
   }
 });
+let bqT; $('bd-q').addEventListener('input', e => { clearTimeout(bqT); bqT = setTimeout(() => { S.bd.q = e.target.value; rBonds(); }, 120); });
 let qT; $('pos-q').addEventListener('input', e => { clearTimeout(qT); qT = setTimeout(() => { S.pos.q = e.target.value; rPositions(); }, 120); });
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') { if (!$('drawer').hidden) return closeDrawer(); if ($('colpop').open) { $('colpop').open = false; return; } }
   const tag = (e.target.tagName || '').toLowerCase();
   const typing = tag === 'input' || tag === 'select' || tag === 'textarea' || e.target.isContentEditable;
-  if (!typing && !e.ctrlKey && !e.metaKey && !e.altKey && /^[1-7]$/.test(e.key)) { e.preventDefault(); return setTab(TABS[+e.key - 1][0]); }
+  if (!typing && !e.ctrlKey && !e.metaKey && !e.altKey && /^[1-9]$/.test(e.key) && +e.key <= TABS.length) { e.preventDefault(); return setTab(TABS[+e.key - 1][0]); }
   if ((e.key === 'Enter' || e.key === ' ') && !typing) {
     const t = e.target.closest && e.target.closest('tr[data-act], th[data-act]');
     if (t) { e.preventDefault(); t.click(); }

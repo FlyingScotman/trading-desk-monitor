@@ -9,8 +9,8 @@
 
 | Экран | Для чего |
 |---|---|
-| **Desk Monitor** | сводка, позиции с карточкой, риски по кривым, экспозиции, фондирование, сценарии, PnL |
-| **Widget Board** | свои доски из виджетов (утро / rates / credit / FX) |
+| **Desk Monitor** | сводка, позиции с карточкой, **облигации** (доходность, спред к выбранной кривой, дюрация, позиция, риск; карта доходностей; история цены/доходности/спреда выпуска за год), риски по кривым, экспозиции, фондирование, сценарии, PnL |
+| **Widget Board** | свои доски из виджетов (утро / rates / credit / FX), в т.ч. «Облигации» и «История выпуска» |
 | **Pivot Studio** | сводные таблицы и тепловые карты по любым разрезам |
 | **Scenario & PnL Lab** | конструктор сценариев, разбор PnL explain |
 
@@ -19,7 +19,7 @@
 ## Быстрый старт
 
 ```bash
-python -m tdm demo                 # создать базу и загрузить демо-прогон
+python -m tdm demo                 # создать базу, загрузить демо-прогон и историю рынка за год
 python -m tdm serve --port 8080    # открыть http://localhost:8080/
 python -m unittest discover -s tests
 ```
@@ -57,7 +57,7 @@ prototypes/   страницы UI, desk-loader.js (откуда брать да�
 tdm/          schema.sql, datasets.py (спецификация входных наборов), loader.py (CSV), market.py, histscen.py,
               writer.py (SDK), importer.py, assemble.py (БД → window.DESK), api.py, server.py, cli.py
 contract/     JSON Schema пакета прогона, csv/ — шаблоны входных наборов
-fixtures/     демо-пакет (выгружен из data.js: tools/export_demo_bundle.js)
+fixtures/     демо-пакет и история рынка за год (выгружены из data.js: tools/export_demo_bundle.js)
 examples/     шаблон расчётного сервиса
 docs/         контракт данных, установка на Windows
 tests/        тесты (unittest)

@@ -28,3 +28,34 @@ def import_bundle(db_path, bundle):
         for s in bundle.get("scenario_results", []):
             run.add_scenario_results(s["scenario_id"], s["positions"], s.get("funding_residual"))
     return run.run_id, run.status, run.warnings
+
+
+def load_demo_market(db_path, path):
+    """Демо-история рынка за год (fixtures/demo_market.json.gz, выгружена из prototypes/data.js):
+    md_curve_point, md_bond_quote, ref_instrument и pos_snapshot облигаций. Повторная загрузка заменяет строки."""
+    import gzip
+
+    from .db import init_db, now_iso
+    m = json.loads(gzip.decompress(Path(path).read_bytes()).decode("utf-8"))
+    dates, ts = m["dates"], now_iso()
+    con = init_db(db_path)
+    try:
+        with con:
+            con.executemany("INSERT OR REPLACE INTO md_curve_point (date, curve_id, tenor_years, rate, source, updated_at) VALUES (?,?,?,?,?,?)",
+                            [(d, c, t, r, "demo", ts) for c, days in m["curves"].items() for d, pts in zip(dates, days) for t, r in zip(m["pillars"], pts)])
+            cols = ["instrument_id", "isin", "name", "issuer_id", "asset_class", "segment", "ccy", "face_value", "maturity", "coupon_type",
+                    "coupon_rate", "coupon_freq", "index_name", "margin", "offer_date", "is_mbs"]
+            con.executemany(f"INSERT OR REPLACE INTO ref_instrument ({', '.join(cols)}, updated_at) VALUES ({', '.join('?' * len(cols))}, ?)",
+                            [[i.get(c) for c in cols] + [ts] for i in m["instruments"]])
+            q, snap = [], []
+            for iid, s in m["quotes"].items():
+                for k, d in enumerate(dates):
+                    q.append((d, iid, s["clean_price"][k], s["ytm"][k], s["z_spread_bp"][k], s["g_spread_bp"][k], s["accrued"][k], s["volume_rub"][k], "demo", ts))
+                    if s["face_amount"][k]:
+                        snap.append((d, s["book_id"], s["position_id"], iid, s["face_amount"][k], ts))
+            con.executemany("INSERT OR REPLACE INTO md_bond_quote (date, instrument_id, clean_price, ytm, z_spread_bp, g_spread_bp, accrued, volume_rub, source, updated_at)"
+                            " VALUES (?,?,?,?,?,?,?,?,?,?)", q)
+            con.executemany("INSERT OR REPLACE INTO pos_snapshot (as_of, book_id, position_id, instrument_id, face_amount, updated_at) VALUES (?,?,?,?,?,?)", snap)
+        return {"dates": len(dates), "curve_points": len(dates) * len(m["curves"]) * len(m["pillars"]), "bond_quotes": len(q), "pos_snapshot": len(snap)}
+    finally:
+        con.close()

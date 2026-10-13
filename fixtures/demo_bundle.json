@@ -1,5 +1,5 @@
 {
- "contract_version": "1.1",
+ "contract_version": "1.2",
  "run": {
   "as_of": "2026-10-13",
   "run_type": "EOD",
@@ -1065,6 +1065,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "SU26242RMFS0",
+   "accrued": 1.1027,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -4014.2604229162853,
@@ -1181,6 +1187,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "SU26239RMFS6",
+   "accrued": 1.5538,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -1893.2979779636094,
@@ -1308,6 +1320,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "SU26241RMFS2",
+   "accrued": 3.8267,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -1625.926248858809,
@@ -1446,6 +1464,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "SU26244RMFS6",
+   "accrued": 0.9048,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -2051.1310928459015,
@@ -1595,6 +1619,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "SU26245RMFS3",
+   "accrued": 0.5667,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -1655.7876644197222,
@@ -1744,6 +1774,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "SU26246RMFS1",
+   "accrued": 1.0472,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": 823.0198281685867,
@@ -1893,6 +1929,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "SU26243RMFS8",
+   "accrued": 3.9441,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -615.1916818446274,
@@ -2053,6 +2095,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": true,
+   "instrument_id": "SU26247RMFS5",
+   "accrued": 5.2069,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -487.08572362982386,
@@ -2213,6 +2261,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "SU26248RMFS3",
+   "accrued": 5.014,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": 796.9169162491373,
@@ -2373,6 +2427,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "SU26238RMFS4",
+   "accrued": 2.9304,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -442.9077141876051,
@@ -2533,6 +2593,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "SU29010RMFS4",
+   "accrued": 1.4629,
+   "coupon_freq": 4,
+   "yield_date": null,
+   "spread_type": "DM",
+   "spread_curve": "RUB RUONIA",
    "risk": {
     "RUB RUONIA": {
      "3M": -57624.59123268464
@@ -2588,6 +2654,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "SU29022RMFS0",
+   "accrued": 0.2548,
+   "coupon_freq": 4,
+   "yield_date": null,
+   "spread_type": "DM",
+   "spread_curve": "RUB RUONIA",
    "risk": {
     "RUB RUONIA": {
      "3M": -88801.14792072836
@@ -2643,6 +2715,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "SU29024RMFS6",
+   "accrued": 0.0539,
+   "coupon_freq": 4,
+   "yield_date": null,
+   "spread_type": "DM",
+   "spread_curve": "RUB RUONIA",
    "risk": {
     "RUB RUONIA": {
      "3M": -38573.4670095725
@@ -2698,6 +2776,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "SU29025RMFS3",
+   "accrued": 2.421,
+   "coupon_freq": 4,
+   "yield_date": null,
+   "spread_type": "DM",
+   "spread_curve": "RUB RUONIA",
    "risk": {
     "RUB RUONIA": {
      "3M": -22556.895694989274
@@ -2753,6 +2837,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000ATF0LXW",
+   "accrued": 6.1174,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -1405.3293950540967,
@@ -2904,6 +2994,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000A6JRPKH",
+   "accrued": 2.2013,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -754.7651936107515,
@@ -3071,6 +3167,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000AW3B5FH",
+   "accrued": 5.1513,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -1163.136870214678,
@@ -3206,6 +3308,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000AD638RP",
+   "accrued": 0.4643,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -915.439910356757,
@@ -3358,30 +3466,34 @@
    "side": null,
    "notional": 750000000,
    "notional_rub": null,
-   "price": 104.47833342763221,
-   "mv": 783587500.7072415,
-   "mv_rub": 783587500.7072415,
-   "ytm": 13.962618069815196,
+   "price": 102.49155854620156,
+   "mv": 768686689.0965117,
+   "mv_rub": 768686689.0965117,
+   "ytm": 14.419993155373032,
    "spread_bp": 91,
-   "mdur": 2.413191814037357,
-   "spr_dur": 2.413191814037357,
-   "convexity": 7.283768524662157,
-   "dv01": -189094.6942288707,
-   "cs01": -189094.6942288707,
-   "jtd": 509331875.459707,
+   "mdur": 0.9921921017923891,
+   "spr_dur": 0.9921921017923891,
+   "convexity": 1.2779515136978008,
+   "dv01": -76268.48616745007,
+   "cs01": -76268.48616745007,
+   "jtd": 499646347.91273266,
    "wal": null,
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000A6GFL7P",
+   "accrued": 2.1646,
+   "coupon_freq": 4,
+   "yield_date": "2027-11-24",
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
-     "1M": -461.2065712899286,
-     "3M": -1383.6197138697858,
-     "6M": -2767.2394277395715,
-     "1Y": -5534.478855479143,
-     "2Y": -11068.957710958286,
-     "3Y": -159958.18217074763,
-     "5Y": -7921.009778786359
+     "1M": -693.349874249546,
+     "3M": -2080.0496227486383,
+     "6M": -4160.099245497277,
+     "1Y": -62360.67547973125,
+     "2Y": -6974.311945223357
     }
    },
    "fx_delta": {},
@@ -3389,120 +3501,90 @@
     [
      "CS",
      "CS",
-     57.0747
+     9.82344
     ],
     [
      "CS",
      "IR|RUB OFZ|1M",
-     0.139207
+     0.089304
     ],
     [
      "CS",
      "IR|RUB OFZ|1Y",
-     1.67048
+     8.03211
     ],
     [
      "CS",
      "IR|RUB OFZ|2Y",
-     3.34096
+     0.898297
     ],
     [
      "CS",
      "IR|RUB OFZ|3M",
-     0.41762
-    ],
-    [
-     "CS",
-     "IR|RUB OFZ|3Y",
-     48.2804
-    ],
-    [
-     "CS",
-     "IR|RUB OFZ|5Y",
-     2.39081
+     0.267912
     ],
     [
      "CS",
      "IR|RUB OFZ|6M",
-     0.83524
+     0.535824
     ],
     [
      "IR|RUB OFZ|1M",
      "IR|RUB OFZ|1M",
-     0.000378802
+     0.000879662
     ],
     [
      "IR|RUB OFZ|1M",
      "IR|RUB OFZ|3M",
-     0.00113641
+     0.00263899
     ],
     [
      "IR|RUB OFZ|1Y",
      "IR|RUB OFZ|1Y",
-     0.0545475
+     7.11594
     ],
     [
      "IR|RUB OFZ|1Y",
      "IR|RUB OFZ|2Y",
-     0.109095
+     0.795835
     ],
     [
      "IR|RUB OFZ|1Y",
      "IR|RUB OFZ|6M",
-     0.0272737
+     0.474707
     ],
     [
      "IR|RUB OFZ|2Y",
      "IR|RUB OFZ|2Y",
-     0.21819
-    ],
-    [
-     "IR|RUB OFZ|2Y",
-     "IR|RUB OFZ|3Y",
-     3.15308
+     0.0890048
     ],
     [
      "IR|RUB OFZ|3M",
      "IR|RUB OFZ|3M",
-     0.00340922
+     0.00791696
     ],
     [
      "IR|RUB OFZ|3M",
      "IR|RUB OFZ|6M",
-     0.00681843
-    ],
-    [
-     "IR|RUB OFZ|3Y",
-     "IR|RUB OFZ|3Y",
-     45.5653
-    ],
-    [
-     "IR|RUB OFZ|3Y",
-     "IR|RUB OFZ|5Y",
-     2.25636
-    ],
-    [
-     "IR|RUB OFZ|5Y",
-     "IR|RUB OFZ|5Y",
-     0.111733
+     0.0158339
     ],
     [
      "IR|RUB OFZ|6M",
      "IR|RUB OFZ|6M",
-     0.0136369
+     0.0316678
     ]
    ],
    "pnl": {
-    "carry": 299751.5889494865,
-    "rolldown": 3781.893884577414,
-    "rates": -1545342.2242588354,
-    "spread": -378189.3884577414,
+    "carry": 303683.74781912484,
+    "rolldown": 1525.3697233490016,
+    "rates": -835404.9720652472,
+    "spread": -152536.97233490014,
     "fx_gross": 0,
     "fx_funding": 0,
-    "convexity": 1826.3903916704292,
+    "convexity": 314.35018172487617,
     "new_trades": 0,
     "other": 0,
-    "official": -1670954.871333294,
+    "official": -715037.4691810705,
     "break_note": null
    }
   },
@@ -3540,6 +3622,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000A5TWRNU",
+   "accrued": 1.2433,
+   "coupon_freq": 4,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -690.3799955771524,
@@ -3675,6 +3763,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000AA6SF70",
+   "accrued": 1.3602,
+   "coupon_freq": 4,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -1199.5829081265376,
@@ -3810,6 +3904,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": true,
+   "instrument_id": "RU000AK4GE6W",
+   "accrued": 1.9085,
+   "coupon_freq": 4,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -656.5797353267085,
@@ -3961,6 +4061,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000AVZ06HM",
+   "accrued": 3.2022,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -657.3980766918232,
@@ -4113,29 +4219,33 @@
    "side": null,
    "notional": 500000000,
    "notional_rub": null,
-   "price": 100.06597415040005,
-   "mv": 500329870.7520003,
-   "mv_rub": 500329870.7520003,
-   "ytm": 14.024004106776182,
+   "price": 99.67277378499843,
+   "mv": 498363868.92499214,
+   "mv_rub": 498363868.92499214,
+   "ytm": 14.52855578370979,
    "spread_bp": 97,
-   "mdur": 2.359928596246061,
-   "spr_dur": 2.359928596246061,
-   "convexity": 7.233874897106517,
-   "dv01": -118074.27695437413,
-   "cs01": -118074.27695437413,
-   "jtd": 325214415.98880017,
+   "mdur": 0.8859495252407907,
+   "spr_dur": 0.8859495252407907,
+   "convexity": 1.211117762595404,
+   "dv01": -44152.523307126045,
+   "cs01": -44152.523307126045,
+   "jtd": 323936514.8012449,
    "wal": null,
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000A1B29ZA",
+   "accrued": 0.371,
+   "coupon_freq": 2,
+   "yield_date": "2027-10-07",
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
-     "1M": -513.3664215407572,
-     "3M": -1540.0992646222717,
-     "6M": -3080.1985292445434,
-     "1Y": -6160.397058489087,
-     "2Y": -14842.298183354942,
-     "3Y": -91937.91749712254
+     "1M": -883.050466142521,
+     "3M": -2649.151398427563,
+     "6M": -6507.133003757962,
+     "1Y": -34113.188438798
     }
    },
    "fx_delta": {},
@@ -4143,105 +4253,75 @@
     [
      "CS",
      "CS",
-     36.1932
+     6.03577
     ],
     [
      "CS",
      "IR|RUB OFZ|1M",
-     0.157362
+     0.120715
     ],
     [
      "CS",
      "IR|RUB OFZ|1Y",
-     1.88834
-    ],
-    [
-     "CS",
-     "IR|RUB OFZ|2Y",
-     4.5496
+     4.66337
     ],
     [
      "CS",
      "IR|RUB OFZ|3M",
-     0.472086
-    ],
-    [
-     "CS",
-     "IR|RUB OFZ|3Y",
-     28.1817
+     0.362146
     ],
     [
      "CS",
      "IR|RUB OFZ|6M",
-     0.944171
+     0.889543
     ],
     [
      "IR|RUB OFZ|1M",
      "IR|RUB OFZ|1M",
-     0.000816379
+     0.00277352
     ],
     [
      "IR|RUB OFZ|1M",
      "IR|RUB OFZ|3M",
-     0.00244914
+     0.00832056
     ],
     [
      "IR|RUB OFZ|1Y",
      "IR|RUB OFZ|1Y",
-     0.117559
-    ],
-    [
-     "IR|RUB OFZ|1Y",
-     "IR|RUB OFZ|2Y",
-     0.283235
+     4.13909
     ],
     [
      "IR|RUB OFZ|1Y",
      "IR|RUB OFZ|6M",
-     0.0587793
-    ],
-    [
-     "IR|RUB OFZ|2Y",
-     "IR|RUB OFZ|2Y",
-     0.6824
-    ],
-    [
-     "IR|RUB OFZ|2Y",
-     "IR|RUB OFZ|3Y",
-     4.227
+     0.789537
     ],
     [
      "IR|RUB OFZ|3M",
      "IR|RUB OFZ|3M",
-     0.00734741
+     0.0249617
     ],
     [
      "IR|RUB OFZ|3M",
      "IR|RUB OFZ|6M",
-     0.0146948
-    ],
-    [
-     "IR|RUB OFZ|3Y",
-     "IR|RUB OFZ|3Y",
-     26.1834
+     0.0613136
     ],
     [
      "IR|RUB OFZ|6M",
      "IR|RUB OFZ|6M",
-     0.0293896
+     0.150605
     ]
    ],
    "pnl": {
-    "carry": 192236.38800462597,
-    "rolldown": 2361.4855390874827,
-    "rates": -1001019.1939631494,
-    "spread": -236148.55390874826,
+    "carry": 198370.0621989639,
+    "rolldown": 883.0504661425209,
+    "rates": -500132.3435774272,
+    "spread": -88305.04661425209,
     "fx_gross": 0,
     "fx_funding": 0,
-    "convexity": 1158.1835815377417,
+    "convexity": 193.14474684506422,
     "new_trades": 0,
     "other": 0,
-    "official": -1051709.5543284826,
+    "official": -398879.5022625528,
     "break_note": null
    }
   },
@@ -4279,6 +4359,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000AJA7FCB",
+   "accrued": 1.3685,
+   "coupon_freq": 12,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -400.3637530432642,
@@ -4414,6 +4500,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000AK6BAVK",
+   "accrued": 1.278,
+   "coupon_freq": 12,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -347.62837972760957,
@@ -4518,30 +4610,34 @@
    "side": null,
    "notional": 650000000,
    "notional_rub": null,
-   "price": 101.2446745690057,
-   "mv": 658090384.698537,
-   "mv_rub": 658090384.698537,
-   "ytm": 15.209377138945928,
+   "price": 100.30665727662576,
+   "mv": 651993272.2980675,
+   "mv_rub": 651993272.2980675,
+   "ytm": 15.540126625598905,
    "spread_bp": 212.5,
-   "mdur": 3.1536608522684233,
-   "spr_dur": 3.1536608522684233,
-   "convexity": 12.380639251380513,
-   "dv01": -207539.38834780428,
-   "cs01": -207539.38834780428,
-   "jtd": 427758750.0540491,
+   "mdur": 1.2343245870086677,
+   "spr_dur": 1.2343245870086677,
+   "convexity": 1.7300599049036558,
+   "dv01": -80477.1326561742,
+   "cs01": -80477.1326561742,
+   "jtd": 423795626.99374384,
    "wal": null,
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000AKKSL2R",
+   "accrued": 0.6403,
+   "coupon_freq": 12,
+   "yield_date": "2028-03-02",
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
-     "1M": -506.1936301165959,
-     "3M": -1518.5808903497878,
-     "6M": -3037.1617806995755,
-     "1Y": -6074.323561399151,
-     "2Y": -12148.647122798302,
-     "3Y": -70100.71512267667,
-     "5Y": -114153.76623976421
+     "1M": -731.610296874311,
+     "3M": -2194.830890622933,
+     "6M": -4389.661781245866,
+     "1Y": -48351.3783880876,
+     "2Y": -24809.651299343503
     }
    },
    "fx_delta": {},
@@ -4549,120 +4645,90 @@
     [
      "CS",
      "CS",
-     81.4758
+     11.2799
     ],
     [
      "CS",
      "IR|RUB OFZ|1M",
-     0.198721
+     0.102544
     ],
     [
      "CS",
      "IR|RUB OFZ|1Y",
-     2.38466
+     6.77705
     ],
     [
      "CS",
      "IR|RUB OFZ|2Y",
-     4.76931
+     3.47738
     ],
     [
      "CS",
      "IR|RUB OFZ|3M",
-     0.596164
-    ],
-    [
-     "CS",
-     "IR|RUB OFZ|3Y",
-     27.5201
-    ],
-    [
-     "CS",
-     "IR|RUB OFZ|5Y",
-     44.8145
+     0.307633
     ],
     [
      "CS",
      "IR|RUB OFZ|6M",
-     1.19233
+     0.615266
     ],
     [
      "IR|RUB OFZ|1M",
      "IR|RUB OFZ|1M",
-     0.000579193
+     0.00103665
     ],
     [
      "IR|RUB OFZ|1M",
      "IR|RUB OFZ|3M",
-     0.00173758
+     0.00310995
     ],
     [
      "IR|RUB OFZ|1Y",
      "IR|RUB OFZ|1Y",
-     0.0834037
+     4.52784
     ],
     [
      "IR|RUB OFZ|1Y",
      "IR|RUB OFZ|2Y",
-     0.166807
+     2.32329
     ],
     [
      "IR|RUB OFZ|1Y",
      "IR|RUB OFZ|6M",
-     0.0417019
+     0.411067
     ],
     [
      "IR|RUB OFZ|2Y",
      "IR|RUB OFZ|2Y",
-     0.333615
-    ],
-    [
-     "IR|RUB OFZ|2Y",
-     "IR|RUB OFZ|3Y",
-     1.92504
+     1.1921
     ],
     [
      "IR|RUB OFZ|3M",
      "IR|RUB OFZ|3M",
-     0.00521273
+     0.00932986
     ],
     [
      "IR|RUB OFZ|3M",
      "IR|RUB OFZ|6M",
-     0.0104255
-    ],
-    [
-     "IR|RUB OFZ|3Y",
-     "IR|RUB OFZ|3Y",
-     11.108
-    ],
-    [
-     "IR|RUB OFZ|3Y",
-     "IR|RUB OFZ|5Y",
-     18.0885
-    ],
-    [
-     "IR|RUB OFZ|5Y",
-     "IR|RUB OFZ|5Y",
-     29.4558
+     0.0186597
     ],
     [
      "IR|RUB OFZ|6M",
      "IR|RUB OFZ|6M",
-     0.0208509
+     0.0373195
     ]
    ],
    "pnl": {
-    "carry": 274223.1466409332,
-    "rolldown": 4150.787766956086,
-    "rates": -1485157.9054651484,
-    "spread": -1245236.3300868256,
+    "carry": 277590.6304260426,
+    "rolldown": 1609.5426531234841,
+    "rates": -846603.311072344,
+    "spread": -482862.79593704524,
     "fx_gross": 0,
     "fx_funding": 0,
-    "convexity": 2607.2254872815392,
+    "convexity": 360.95597397434176,
     "new_trades": 0,
     "other": 0,
-    "official": -2525955.453828039,
+    "official": -1082713.7453565947,
     "break_note": null
    }
   },
@@ -4700,6 +4766,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000A5DRGNC",
+   "accrued": 0.1369,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -439.91768662666095,
@@ -4883,6 +4955,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000A2PRV65",
+   "accrued": 1.9299,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": 281.7643614522966,
@@ -5050,6 +5128,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000ARSX9KU",
+   "accrued": 1.2279,
+   "coupon_freq": 12,
+   "yield_date": null,
+   "spread_type": "DM",
+   "spread_curve": "RUB KEY",
    "risk": {
     "RUB KEY": {
      "1M": -11201.904717075939
@@ -5105,6 +5189,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000AWJL4DS",
+   "accrued": 0.3866,
+   "coupon_freq": 12,
+   "yield_date": null,
+   "spread_type": "DM",
+   "spread_curve": "RUB KEY",
    "risk": {
     "RUB KEY": {
      "1M": -8027.202588776607
@@ -5160,6 +5250,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000A101RT2",
+   "accrued": 0.6233,
+   "coupon_freq": 12,
+   "yield_date": null,
+   "spread_type": "DM",
+   "spread_curve": "RUB KEY",
    "risk": {
     "RUB KEY": {
      "1M": -14415.68402750614
@@ -5215,6 +5311,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000AUAT97G",
+   "accrued": 1.1068,
+   "coupon_freq": 12,
+   "yield_date": null,
+   "spread_type": "DM",
+   "spread_curve": "RUB KEY",
    "risk": {
     "RUB KEY": {
      "1M": -10362.194028780945
@@ -5270,6 +5372,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000AD4JJMD",
+   "accrued": 0.1068,
+   "coupon_freq": 12,
+   "yield_date": null,
+   "spread_type": "DM",
+   "spread_curve": "RUB KEY",
    "risk": {
     "RUB KEY": {
      "1M": -5571.514676876876
@@ -5325,6 +5433,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000AC05DNF",
+   "accrued": 0.9684,
+   "coupon_freq": 12,
+   "yield_date": null,
+   "spread_type": "DM",
+   "spread_curve": "RUB KEY",
    "risk": {
     "RUB KEY": {
      "1M": -3966.959966650543
@@ -5380,6 +5494,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000AZSP4RK",
+   "accrued": 0.5865,
+   "coupon_freq": 12,
+   "yield_date": null,
+   "spread_type": "DM",
+   "spread_curve": "RUB KEY",
    "risk": {
     "RUB KEY": {
      "1M": -3594.107830192667
@@ -5435,6 +5555,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000AHCYL1V",
+   "accrued": 0.3684,
+   "coupon_freq": 12,
+   "yield_date": null,
+   "spread_type": "DM",
+   "spread_curve": "RUB KEY",
    "risk": {
     "RUB KEY": {
      "1M": -4812.452363795552
@@ -5490,6 +5616,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000ANFRVUY",
+   "accrued": 2.2937,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "Z",
+   "spread_curve": "USD SOFR",
    "risk": {
     "USD SOFR": {
      "1M": -1503.813383729699,
@@ -5636,6 +5768,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000AM2TR3M",
+   "accrued": 1.8313,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "Z",
+   "spread_curve": "USD SOFR",
    "risk": {
     "USD SOFR": {
      "1M": -812.9081374245243,
@@ -5824,6 +5962,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000AT0BLV3",
+   "accrued": 2.3511,
+   "coupon_freq": 1,
+   "yield_date": null,
+   "spread_type": "Z",
+   "spread_curve": "EUR ESTR",
    "risk": {
     "EUR ESTR": {
      "1M": -758.9101260926848,
@@ -5991,6 +6135,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000A4N5N31",
+   "accrued": 1.8059,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "Z",
+   "spread_curve": "USD SOFR",
    "risk": {
     "USD SOFR": {
      "1M": -814.5565814154147,
@@ -6200,6 +6350,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000A9GM38K",
+   "accrued": 1.7455,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "Z",
+   "spread_curve": "USD SOFR",
    "risk": {
     "USD SOFR": {
      "1M": -674.1973250526253,
@@ -6367,6 +6523,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000AJCH8XG",
+   "accrued": 1.6021,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "Z",
+   "spread_curve": "USD SOFR",
    "risk": {
     "USD SOFR": {
      "1M": -314.278971004529,
@@ -6555,6 +6717,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000APEPT8T",
+   "accrued": 0.4509,
+   "coupon_freq": 4,
+   "yield_date": null,
+   "spread_type": "Z",
+   "spread_curve": "CNY",
    "risk": {
     "CNY": {
      "1M": -3036.9082507844637,
@@ -6722,6 +6890,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000AB4CNZS",
+   "accrued": 0.6085,
+   "coupon_freq": 4,
+   "yield_date": null,
+   "spread_type": "Z",
+   "spread_curve": "CNY",
    "risk": {
     "CNY": {
      "1M": -1850.0067235310967,
@@ -6910,6 +7084,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000AE614JF",
+   "accrued": 0.2993,
+   "coupon_freq": 4,
+   "yield_date": null,
+   "spread_type": "Z",
+   "spread_curve": "CNY",
    "risk": {
     "CNY": {
      "1M": -2880.6778351499406,
@@ -7056,6 +7236,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": true,
+   "instrument_id": "RU000A7UKF59",
+   "accrued": 0.6243,
+   "coupon_freq": 4,
+   "yield_date": null,
+   "spread_type": "Z",
+   "spread_curve": "CNY",
    "risk": {
     "CNY": {
      "1M": -1057.8758937704165,
@@ -7244,6 +7430,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000A5LR0J4",
+   "accrued": 1.2392,
+   "coupon_freq": 4,
+   "yield_date": null,
+   "spread_type": "Z",
+   "spread_curve": "CNY",
    "risk": {
     "CNY": {
      "1M": -2559.7925955969627,
@@ -7432,6 +7624,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000A9JUXC3",
+   "accrued": 1.1214,
+   "coupon_freq": 4,
+   "yield_date": null,
+   "spread_type": "Z",
+   "spread_curve": "CNY",
    "risk": {
     "CNY": {
      "1M": -1521.1548577521817,
@@ -7641,6 +7839,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000A9EPWUT",
+   "accrued": 1.3498,
+   "coupon_freq": 4,
+   "yield_date": null,
+   "spread_type": "Z",
+   "spread_curve": "CNY",
    "risk": {
     "CNY": {
      "1M": -2204.459479760663,
@@ -7808,6 +8012,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000A1LSH1E",
+   "accrued": 2.0513,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "Z",
+   "spread_curve": "CNY",
    "risk": {
     "CNY": {
      "1M": -3955.030991533519,
@@ -7975,6 +8185,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000A4YECN8",
+   "accrued": 2.3693,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "Z",
+   "spread_curve": "CNY",
    "risk": {
     "CNY": {
      "1M": -4179.51339846284,
@@ -8184,6 +8400,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000AL8HMBR",
+   "accrued": 0.2746,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "Z",
+   "spread_curve": "USD SOFR",
    "risk": {
     "USD SOFR": {
      "1M": -1406.9608710752311,
@@ -8393,6 +8615,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000A54FKS8",
+   "accrued": 1.5534,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "Z",
+   "spread_curve": "USD SOFR",
    "risk": {
     "USD SOFR": {
      "1M": -713.623910927641,
@@ -8644,6 +8872,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000ACUUYHR",
+   "accrued": 0.1549,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "Z",
+   "spread_curve": "USD SOFR",
    "risk": {
     "USD SOFR": {
      "1M": -270.2759625231818,
@@ -8937,6 +9171,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000AWA8CVA",
+   "accrued": 1.6134,
+   "coupon_freq": 2,
+   "yield_date": null,
+   "spread_type": "Z",
+   "spread_curve": "USD SOFR",
    "risk": {
     "USD SOFR": {
      "1M": -243.08980711652447,
@@ -9230,6 +9470,12 @@
    "cpr": null,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000AC5GFRX",
+   "accrued": 1.098,
+   "coupon_freq": 1,
+   "yield_date": null,
+   "spread_type": "Z",
+   "spread_curve": "EUR ESTR",
    "risk": {
     "EUR ESTR": {
      "1M": -792.5820138708779,
@@ -9376,6 +9622,12 @@
    "cpr": 12.5,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000AYPAYPK",
+   "accrued": 0.4818,
+   "coupon_freq": 4,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -1465.3725504448737,
@@ -9543,6 +9795,12 @@
    "cpr": 10.8,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000A76KXR9",
+   "accrued": 1.2724,
+   "coupon_freq": 4,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -1069.1344258061804,
@@ -9710,6 +9968,12 @@
    "cpr": 14,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000A2HD1GJ",
+   "accrued": 0.7084,
+   "coupon_freq": 12,
+   "yield_date": null,
+   "spread_type": "DM",
+   "spread_curve": "RUB KEY",
    "risk": {
     "RUB KEY": {
      "1M": -15184.366790804956
@@ -9765,6 +10029,12 @@
    "cpr": 15.2,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000ANACL21",
+   "accrued": 0.6582,
+   "coupon_freq": 12,
+   "yield_date": null,
+   "spread_type": "DM",
+   "spread_curve": "RUB KEY",
    "risk": {
     "RUB KEY": {
      "1M": -8771.775746461126
@@ -9820,6 +10090,12 @@
    "cpr": 22,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000ADJKZAT",
+   "accrued": 0.6754,
+   "coupon_freq": 12,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -635.5643417206383,
@@ -9955,6 +10231,12 @@
    "cpr": 20,
    "counterparty": null,
    "new_today": false,
+   "instrument_id": "RU000A5HEY8P",
+   "accrued": 0.6098,
+   "coupon_freq": 12,
+   "yield_date": null,
+   "spread_type": "G",
+   "spread_curve": "RUB OFZ",
    "risk": {
     "RUB OFZ": {
      "1M": -657.2011696750802,
@@ -12561,148 +12843,148 @@
    "as_of": "2026-09-14",
    "pnl_official": -5271175.352501782,
    "pnl_explained": -4907540.948845934,
-   "dv01": -12128583.529415358,
-   "cs01": -22052324.726959243
+   "dv01": -11817417.235739255,
+   "cs01": -21712535.71934686
   },
   {
    "as_of": "2026-09-15",
    "pnl_official": 3755166.887333622,
    "pnl_explained": 5394401.246479918,
-   "dv01": -13091056.636619724,
-   "cs01": -21530699.931676645
+   "dv01": -12755197.501540884,
+   "cs01": -21198948.27947824
   },
   {
    "as_of": "2026-09-16",
    "pnl_official": 13588643.471640235,
    "pnl_explained": 12450515.18352263,
-   "dv01": -14083368.699490283,
-   "cs01": -22363457.939389728
+   "dv01": -13722051.186190719,
+   "cs01": -22018874.895466167
   },
   {
    "as_of": "2026-09-17",
    "pnl_official": -4222173.426051631,
    "pnl_explained": -4698200.855223919,
-   "dv01": -14593456.006527876,
-   "cs01": -22165456.20776567
+   "dv01": -14219051.888646897,
+   "cs01": -21823924.035472512
   },
   {
    "as_of": "2026-09-18",
    "pnl_official": 6521854.809919385,
    "pnl_explained": 7733778.357008485,
-   "dv01": -14661192.78410048,
-   "cs01": -20541835.105842803
+   "dv01": -14285050.837397883,
+   "cs01": -20225320.187276486
   },
   {
    "as_of": "2026-09-21",
    "pnl_official": 4796581.430854566,
    "pnl_explained": 5404490.294385489,
-   "dv01": -14697086.870528096,
-   "cs01": -21144930.895127434
+   "dv01": -14320024.038891863,
+   "cs01": -20819123.290992882
   },
   {
    "as_of": "2026-09-22",
    "pnl_official": 1160453.0744605903,
    "pnl_explained": 1937564.8989233223,
-   "dv01": -15298503.70123446,
-   "cs01": -21009759.58253597
+   "dv01": -14906011.14973758,
+   "cs01": -20686034.73959471
   },
   {
    "as_of": "2026-09-23",
    "pnl_official": 8152550.181261031,
    "pnl_explained": 7746474.427396324,
-   "dv01": -14066920.765219431,
-   "cs01": -20093456.832356755
+   "dv01": -13706025.233821817,
+   "cs01": -19783850.664249588
   },
   {
    "as_of": "2026-09-24",
    "pnl_official": 34781258.15197542,
    "pnl_explained": 35239677.358256735,
-   "dv01": -13657688.008121533,
-   "cs01": -19590056.813812107
+   "dv01": -13307291.595600262,
+   "cs01": -19288207.188148934
   },
   {
    "as_of": "2026-09-25",
    "pnl_official": 14876992.393447004,
    "pnl_explained": 15599552.868058436,
-   "dv01": -11850429.63487174,
-   "cs01": -18748638.33644918
+   "dv01": -11546399.550978651,
+   "cs01": -18459753.545693427
   },
   {
    "as_of": "2026-09-28",
    "pnl_official": -11292.189624290913,
    "pnl_explained": -1033888.207122328,
-   "dv01": -11841095.60326415,
-   "cs01": -18426263.337084074
+   "dv01": -11537304.989710968,
+   "cs01": -18142345.799553074
   },
   {
    "as_of": "2026-09-29",
    "pnl_official": -444637.63068916555,
    "pnl_explained": 1895661.6619933774,
-   "dv01": -10810839.001941895,
-   "cs01": -18654658.290282182
+   "dv01": -10533480.257154863,
+   "cs01": -18367221.573007017
   },
   {
    "as_of": "2026-09-30",
    "pnl_official": -24605411.74396991,
    "pnl_explained": -21726762.19372335,
-   "dv01": -10965338.512946919,
-   "cs01": -19948654.144447245
+   "dv01": -10684015.987880219,
+   "cs01": -19641279.140729032
   },
   {
    "as_of": "2026-10-01",
    "pnl_official": 34599201.3672726,
    "pnl_explained": 36642670.718876585,
-   "dv01": -10350906.995555013,
-   "cs01": -18628519.949691698
+   "dv01": -10085348.090165824,
+   "cs01": -18341485.980014343
   },
   {
    "as_of": "2026-10-02",
    "pnl_official": 27210195.79941009,
    "pnl_explained": 26305789.97438752,
-   "dv01": -10150702.867875934,
-   "cs01": -18605313.570163224
+   "dv01": -9890280.322906531,
+   "cs01": -18318637.17152511
   },
   {
    "as_of": "2026-10-05",
    "pnl_official": -18388277.584498674,
    "pnl_explained": -19995395.734408885,
-   "dv01": -9998706.022356516,
-   "cs01": -19969242.41844836
+   "dv01": -9742183.050239624,
+   "cs01": -19661550.184266783
   },
   {
    "as_of": "2026-10-06",
    "pnl_official": 10838498.52073616,
    "pnl_explained": 10369556.149322966,
-   "dv01": -10786709.109700225,
-   "cs01": -18802951.081502285
+   "dv01": -10509969.432186585,
+   "cs01": -18513229.423252024
   },
   {
    "as_of": "2026-10-07",
    "pnl_official": -1569936.1669582892,
    "pnl_explained": -2082927.4330130767,
-   "dv01": -10732985.21532007,
-   "cs01": -19716318.26367581
+   "dv01": -10457623.85746392,
+   "cs01": -19412523.162726916
   },
   {
    "as_of": "2026-10-08",
    "pnl_official": -10264871.69083064,
    "pnl_explained": -10358885.859670226,
-   "dv01": -11940173.373130519,
-   "cs01": -19946079.862323303
+   "dv01": -11633840.858261308,
+   "cs01": -19638744.52393648
   },
   {
    "as_of": "2026-10-09",
    "pnl_official": 10037720.33820361,
    "pnl_explained": 8994804.07529916,
-   "dv01": -12724008.691883624,
-   "cs01": -20394598.211303636
+   "dv01": -12397566.39829233,
+   "cs01": -20080351.964131325
   },
   {
    "as_of": "2026-10-12",
    "pnl_official": -7090088.212510157,
    "pnl_explained": -8469645.322340986,
-   "dv01": -13426266.609542733,
-   "cs01": -20954453.40259781
+   "dv01": -13081807.45578696,
+   "cs01": -20631580.734301563
   }
  ]
 }

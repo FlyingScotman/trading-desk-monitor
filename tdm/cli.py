@@ -20,7 +20,7 @@ def main(argv=None):
     sub.add_parser("init-db", help="создать пустую базу")
     i = sub.add_parser("import", help="загрузить JSON-пакет прогона")
     i.add_argument("bundle", nargs="+")
-    sub.add_parser("demo", help="загрузить демо-прогон (fixtures/demo_bundle.json)")
+    sub.add_parser("demo", help="загрузить демо-прогон (fixtures/demo_bundle.json) и историю рынка за год (fixtures/demo_market.json.gz)")
     ld = sub.add_parser("load", help="загрузить входные данные из CSV (файлы или папки), см. docs/DATA_REQUIREMENTS.md")
     ld.add_argument("paths", nargs="+")
     cv = sub.add_parser("coverage", help="какие наборы данных загружены на какие даты")
@@ -57,6 +57,10 @@ def main(argv=None):
             except Exception as e:  # noqa: BLE001
                 print(f"{f}: ОШИБКА — {e}", file=sys.stderr)
                 rc = 1
+        if a.cmd == "demo" and not rc:
+            from .importer import load_demo_market
+            n = load_demo_market(a.db, ROOT / "fixtures" / "demo_market.json.gz")
+            print(f"демо-история рынка: {n['dates']} дней, котировок облигаций {n['bond_quotes']}, точек кривых {n['curve_points']}")
         sys.exit(rc)
     elif a.cmd == "load":
         from .loader import load_paths
