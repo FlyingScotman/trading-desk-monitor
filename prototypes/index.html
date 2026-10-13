@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Trading Desk Monitor</title>
+<style>
+:root{--bg:#f6f7f9;--panel:#fff;--fg:#1b2129;--fg-2:#4d5866;--line:#dde2e8;--accent:#1f6feb;--ok:#1a7f37;--bad:#c62828}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1318;--panel:#171c23;--fg:#e6eaef;--fg-2:#9aa6b4;--line:#2a313b;--accent:#5b9dff;--ok:#3fb950;--bad:#ff6b6b}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:960px;margin:0 auto;padding:28px 16px}
+h1{font-size:22px;margin:0 0 4px}
+p.sub{color:var(--fg-2);margin:0 0 22px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
+a.card{display:block;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:inherit;text-decoration:none}
+a.card:hover{border-color:var(--accent)}
+a.card b{display:block;font-size:15px;margin-bottom:4px}
+a.card span{color:var(--fg-2);font-size:13px}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-2);margin:28px 0 8px}
+table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:6px;font-size:13px}
+th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--fg-2);font-weight:500}
+td.err{white-space:normal;color:var(--bad)}
+.complete{color:var(--ok)} .failed{color:var(--bad)}
+.note{color:var(--fg-2);font-size:13px}
+</style>
+<main>
+  <h1>Trading Desk Monitor</h1>
+  <p class="sub">FI-деск: риски, PnL explain, фондирование, сценарии. Данные — из базы расчётов; если прогонов нет, показываются демо-данные.</p>
+  <div class="grid">
+    <a class="card" href="desk-monitor.html"><b>Desk Monitor</b><span>Сводка, позиции, риски по кривым, экспозиции, фондирование, сценарии, PnL</span></a>
+    <a class="card" href="widget-board.html"><b>Widget Board</b><span>Свои доски из виджетов: утро, rates, credit, FX</span></a>
+    <a class="card" href="pivot-studio.html"><b>Pivot Studio</b><span>Сводные таблицы и тепловые карты по любым разрезам</span></a>
+    <a class="card" href="scenario-lab.html"><b>Scenario &amp; PnL Lab</b><span>Конструктор сценариев и разбор PnL explain</span></a>
+  </div>
+  <h2>Последние прогоны</h2>
+  <div id="runs"><p class="note">Загрузка…</p></div>
+</main>
+<script>
+(function () {
+  var box = document.getElementById('runs');
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  if (!/^https?:$/.test(location.protocol)) { box.innerHTML = '<p class="note">Открыто как файл: страницы работают на демо-данных. Запустите сервер (run.bat), чтобы видеть данные из базы.</p>'; return; }
+  fetch('api/v1/runs?status=all&limit=15').then(function (r) { return r.json(); }).then(function (j) {
+    if (!j.runs.length) { box.innerHTML = '<p class="note">В базе пока нет прогонов — страницы показывают демо-данные. Загрузить демо в базу: <code>python -m tdm demo</code>.</p>'; return; }
+    box.innerHTML = '<table><thead><tr><th>#</th><th>Дата</th><th>Тип</th><th>Статус</th><th>Опубликован</th><th>Источник</th><th>Ошибка</th></tr></thead><tbody>' +
+      j.runs.map(function (r) {
+        var link = r.status === 'complete' ? '<a href="desk-monitor.html?run_id=' + r.run_id + '">' + r.run_id + '</a>' : r.run_id;
+        return '<tr><td>' + link + '</td><td>' + esc(r.as_of) + '</td><td>' + esc(r.run_type) + '</td><td class="' + esc(r.status) + '">' + esc(r.status) +
+          '</td><td>' + esc((r.published_at || '').replace('T', ' ')) + '</td><td>' + esc(r.source) + '</td><td class="err">' + esc(r.error) + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  }).catch(function (e) { box.innerHTML = '<p class="note">API недоступно: ' + esc(e) + '</p>'; });
+})();
+</script>

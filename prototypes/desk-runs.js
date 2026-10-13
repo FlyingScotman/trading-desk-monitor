@@ -38,7 +38,7 @@
       if (src.publishedAt) box.appendChild(el('span', {}, 'опубл. ' + src.publishedAt.replace('T', ' ').slice(0, 16)));
     } else {
       box.appendChild(el('b', { 'class': 'demo' }, 'ДЕМО-данные'));
-      if (src.reason) box.appendChild(el('span', {}, src.reason));
+      if (window.DESK_MISSING) box.appendChild(el('span', {}, '(' + window.DESK_MISSING + ')'));
     }
     document.body.appendChild(box);
     if (!http) return;
