@@ -144,6 +144,23 @@ class FromReference(Base):
         self.assertEqual(d["ISSUERS"]["Сегежа"]["rating"], "BB")                 # рейтинг на дату
         self.assertEqual(d["positions"][0]["issuer"], "Минфин РФ")
 
+    def test_official_pnl_from_store(self):
+        w(self.inp / "pnl_official.csv", ["as_of", "book_id", "position_id", "pnl_rub"],
+          [[DATES[-1], "CORP", "CORP|X5-01", 777], [DATES[-1], "OFZ", "OFZ|SU26242", 555], [DATES[-1], "OFZ", "", 1000]])
+        load_paths(self.db, [self.inp / "pnl_official.csv"])
+        with Run(self.db, as_of=DATES[-1]) as run:
+            run.add_reference_data()
+            run.add_positions([
+                {"position_id": "CORP|X5-01", "book_id": "CORP", "instr_type": "BOND", "asset_class": "Корп", "segment": "Корп", "name": "X5",
+                 "issuer": "X5", "ccy": "RUB", "notional": 1, "mv": 1, "mv_rub": 1, "dv01": 0, "pnl": {"rates": 700}},
+                {"position_id": "OFZ|SU26242", "book_id": "OFZ", "instr_type": "BOND", "asset_class": "ОФЗ", "segment": "Гос", "name": "ОФЗ",
+                 "issuer": "MINFIN", "ccy": "RUB", "notional": 1, "mv": 1, "mv_rub": 1, "dv01": 0, "pnl": {"rates": 500, "official": 510}}])
+        con = connect(self.db, readonly=True)
+        p = {x["id"]: x["pnl"] for x in assemble(con, resolve_run(con))["positions"]}
+        self.assertEqual(p["CORP|X5-01"]["official"], 777)      # из pnl_official
+        self.assertEqual(p["CORP|X5-01"]["unexplained"], 77)
+        self.assertEqual(p["OFZ|SU26242"]["official"], 510)     # расчётный сервис важнее
+
     def test_shock_day_move(self):
         publish_run(self.db, SHOCK_DAY)
         con = connect(self.db, readonly=True)
@@ -169,6 +186,19 @@ class Historical(Base):
         # и попадают в монитор
         d = assemble(connect(self.db, readonly=True), resolve_run(connect(self.db, readonly=True)))
         self.assertIn(f"hist1d-{SHOCK_DAY}", [s["id"] for s in d["SCENARIOS"]])
+
+    def test_attach_full_reval_to_published_run(self):
+        from tdm.writer import attach_scenario_results
+        run = publish_run(self.db, DATES[-1])
+        build(self.db, horizons=(1,), top=1)
+        sid = f"hist1d-{SHOCK_DAY}"
+        attach_scenario_results(self.db, run.run_id, sid, [{"position_id": "OFZ|SU26242", "rates": -5e6, "total": -5.1e6}])
+        attach_scenario_results(self.db, run.run_id, sid, [{"position_id": "OFZ|SU26242", "rates": -4e6, "total": -4.1e6}])
+        con = connect(self.db, readonly=True)
+        r = assemble(con, resolve_run(con))["scenarioResults"][sid]["byPosition"]
+        self.assertEqual(r["OFZ|SU26242"]["total"], -4.1e6)
+        with self.assertRaises(ValueError):
+            attach_scenario_results(self.db, 999, sid, [])
 
     def test_rebuild_replaces(self):
         build(self.db, horizons=(1,), top=3)

@@ -26,7 +26,24 @@ python -m unittest discover -s tests
 
 На Windows — `install.bat`, затем `run.bat`. Подробно: [docs/INSTALL_WINDOWS.md](docs/INSTALL_WINDOWS.md).
 
-## Данные
+## Центральный сервис данных
+
+`tdm` хранит входные данные (справочники, ежедневные срезы позиций и фондирования, рыночные ряды, официальный PnL), результаты расчётов (риски, PnL explain, полная переоценка сценариев) и производные (пилларсы и изменения кривых, спреды по рейтингам, исторические сценарии) и отдаёт их по HTTP (`/api/v1/*`).
+
+| Документ | О чём |
+|---|---|
+| [docs/SERVICE_DATA_MODEL.md](docs/SERVICE_DATA_MODEL.md) | что сервис хранит и отдаёт: слои, сущности, ключи, API, какие данные нужны каждому экрану |
+| [docs/DATA_REQUIREMENTS.md](docs/DATA_REQUIREMENTS.md) | **список данных к сбору** (19 наборов, поля, источники, приоритеты) + шаблоны `contract/csv/` |
+| [docs/SCENARIOS.md](docs/SCENARIOS.md) | сценарии: греки в мониторе / полная переоценка заранее / по запросу; исторические сценарии |
+| [docs/DATA_CONTRACT.md](docs/DATA_CONTRACT.md) | как расчётный сервис выкладывает результаты (прогоны) |
+
+```bash
+python -m tdm load C:\history\                 # загрузить CSV (справочники, срезы, рынок)
+python -m tdm coverage                          # что загружено на какие даты
+python -m tdm build-hist-scenarios              # исторические сценарии из рядов
+```
+
+## Результаты расчётов
 
 Что считать, куда класть и как это отдаётся — [docs/DATA_CONTRACT.md](docs/DATA_CONTRACT.md).
 Загрузка: Python-SDK `tdm.writer.Run` (шаблон — `examples/calc_service_stub.py`) или JSON-пакет (`contract/bundle.schema.json`, пример — `fixtures/demo_bundle.json`) через `python -m tdm import`.
@@ -37,8 +54,9 @@ python -m unittest discover -s tests
 
 ```
 prototypes/   страницы UI, desk-loader.js (откуда брать данные), desk-util.js (расчёты в браузере), data.js (демо)
-tdm/          schema.sql, writer.py (SDK), importer.py, assemble.py (БД → window.DESK), server.py, cli.py
-contract/     JSON Schema пакета прогона
+tdm/          schema.sql, datasets.py (спецификация входных наборов), loader.py (CSV), market.py, histscen.py,
+              writer.py (SDK), importer.py, assemble.py (БД → window.DESK), api.py, server.py, cli.py
+contract/     JSON Schema пакета прогона, csv/ — шаблоны входных наборов
 fixtures/     демо-пакет (выгружен из data.js: tools/export_demo_bundle.js)
 examples/     шаблон расчётного сервиса
 docs/         контракт данных, установка на Windows

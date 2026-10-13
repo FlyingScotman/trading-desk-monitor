@@ -273,7 +273,19 @@ class Run:
         if err:
             raise ValidationError("; ".join(err[:50]) + (f" ... и ещё {len(err) - 50}" if len(err) > 50 else ""))
 
+    def fill_official_pnl(self):
+        """Где расчётный сервис не дал official, взять PnL позиции из загруженного pnl_official (тот же position_id)."""
+        with self.con:
+            n = self.con.execute(
+                "UPDATE position_pnl SET official = (SELECT o.pnl_rub FROM pnl_official o WHERE o.as_of=? AND o.position_id=position_pnl.position_id)"
+                " WHERE run_id=? AND official IS NULL AND EXISTS (SELECT 1 FROM pnl_official o WHERE o.as_of=? AND o.position_id=position_pnl.position_id)",
+                (self.as_of, self.run_id, self.as_of)).rowcount
+        if n:
+            self.log("INFO", f"официальный PnL взят из pnl_official для {n} позиций")
+        return n
+
     def publish(self):
+        self.fill_official_pnl()
         try:
             self.validate()
         except ValidationError as e:
@@ -338,3 +350,28 @@ def load_history(db_path, rows):
                         " dv01=excluded.dv01, cs01=excluded.cs01, updated_at=excluded.updated_at WHERE desk_history.run_id IS NULL",
                         (r["as_of"], r["pnl_official"], r["pnl_explained"], r["dv01"], r["cs01"], now_iso()))
     con.close()
+
+
+def attach_scenario_results(db_path, run_id, scenario_id, positions, funding_residual=None, replace=True):
+    """Приложить полную переоценку сценария к УЖЕ опубликованному прогону (уровень 2, если пересчёт
+    сценариев идёт после публикации рисков). Риски и PnL прогона не меняются; монитор подхватит
+    результат при следующем открытии страницы. replace=True — заменить прежний результат этого сценария."""
+    con = init_db(db_path)
+    try:
+        run = con.execute("SELECT status FROM calc_run WHERE run_id=?", (run_id,)).fetchone()
+        if not run or run[0] != "complete":
+            raise ValueError(f"прогон {run_id} не найден или не опубликован")
+        if not con.execute("SELECT 1 FROM scenario_def WHERE scenario_id=?", (scenario_id,)).fetchone():
+            raise ValueError(f"сценарий {scenario_id} не определён (upsert_scenarios / build-hist-scenarios)")
+        with con:
+            if replace:
+                con.execute("DELETE FROM scenario_result WHERE run_id=? AND scenario_id=?", (run_id, scenario_id))
+                con.execute("DELETE FROM scenario_funding_result WHERE run_id=? AND scenario_id=?", (run_id, scenario_id))
+            _ins(con, "scenario_result", ["run_id", "scenario_id", "position_id"] + SCEN_COLS,
+                 [[run_id, scenario_id, r["position_id"]] + [r.get(c, 0) or 0 for c in SCEN_COLS] for r in positions])
+            _ins(con, "scenario_funding_result", ["run_id", "scenario_id", "book_id", "fx_residual"],
+                 [(run_id, scenario_id, b, v) for b, v in (funding_residual or {}).items()])
+            con.execute("INSERT INTO calc_run_log (run_id, ts, level, message) VALUES (?,?,?,?)",
+                        (run_id, now_iso(), "INFO", f"приложена полная переоценка сценария {scenario_id}: {len(positions)} позиций"))
+    finally:
+        con.close()

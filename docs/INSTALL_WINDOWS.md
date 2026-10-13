@@ -157,6 +157,10 @@ python -m tdm --db C:\tdm\data\tdm.sqlite import C:\exchange\run_2026-10-13.json
 
 | Команда | Что делает |
 |---|---|
+| `python -m tdm load C:\tdm_data\` | загрузить входные данные из CSV: все `*.csv` в папке и подпапках; набор определяется по имени файла (`docs/DATA_REQUIREMENTS.md`) |
+| `python -m tdm coverage --from 2025-10-13` | таблица «дата × набор данных»: сколько строк загружено, есть ли EOD-прогон; `--from`/`--to` — период |
+| `python -m tdm build-hist-scenarios --horizon 1 10 --top 5` | исторические сценарии: `--horizon` — окна в рабочих днях, `--top` — сколько худших окон каждой длины |
+| `daily.bat` | ежедневная загрузка: всё из папки `inbox\` → база, файлы переносятся в `inbox\done\`, затем пересборка исторических сценариев |
 | `python -m tdm runs` | последние 20 прогонов: дата, тип, статус, ошибка. `--limit 50` — показать 50 |
 | `python -m tdm demo` | загрузить демо-прогон из `fixtures\demo_bundle.json` |
 | `python -m tdm init-db` | создать пустую базу (если её нет) |

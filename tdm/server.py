@@ -13,11 +13,14 @@ from .assemble import assemble, resolve_run
 from .db import connect, init_db
 
 STATIC_EXT = {".html", ".js", ".css", ".json", ".png", ".svg", ".ico", ".woff2"}
-_cache, _cache_lock = {}, threading.Lock()  # run_id -> JSON (опубликованный прогон неизменяем)
+_cache, _cache_lock = {}, threading.Lock()  # (run_id, версия сценариев) -> JSON
 
 
 def _desk_json(con, run):
-    rid = run["run_id"]
+    # прогон неизменяем, но к нему можно приложить сценарии и пересобрать исторические — учитываем их в ключе
+    ver = con.execute("SELECT (SELECT COUNT(*) FROM scenario_result WHERE run_id=?) || ':' ||"
+                      " (SELECT COALESCE(MAX(updated_at), '') FROM scenario_def)", (run["run_id"],)).fetchone()[0]
+    rid = (run["run_id"], ver)
     with _cache_lock:
         if rid in _cache:
             return _cache[rid]
