@@ -33,21 +33,23 @@ python -m unittest discover -s tests
 | Документ | О чём |
 |---|---|
 | [docs/SERVICE_DATA_MODEL.md](docs/SERVICE_DATA_MODEL.md) | что сервис хранит и отдаёт: слои, сущности, ключи, API, какие данные нужны каждому экрану |
-| [docs/DATA_REQUIREMENTS.md](docs/DATA_REQUIREMENTS.md) | **список данных к сбору** (19 наборов, поля, источники, приоритеты) + шаблоны `contract/csv/` |
+| [docs/DATA_REQUIREMENTS.md](docs/DATA_REQUIREMENTS.md) | **список данных к сбору** (23 набора, поля, источники, приоритеты) + шаблоны `contract/csv/` |
 | [docs/SCENARIOS.md](docs/SCENARIOS.md) | сценарии: греки в мониторе / полная переоценка заранее / по запросу; исторические сценарии |
 | [docs/DATA_CONTRACT.md](docs/DATA_CONTRACT.md) | как расчётный сервис выкладывает результаты (прогоны) |
-| [docs/ORG_CONVENTIONS.md](docs/ORG_CONVENTIONS.md) | **конвенции организации**: фондирование, FX, PnL — основа расчётов; открытые вопросы. Прототипы уже по ним; бэкенд — по контракту 1.3 (`DATA_CONTRACT.md` §0) |
+| [docs/ORG_CONVENTIONS.md](docs/ORG_CONVENTIONS.md) | **конвенции организации**: фондирование, FX, PnL — основа расчётов; открытые вопросы. Прототипы и бэкенд работают по ним (контракт 1.3, `DATA_CONTRACT.md` §0) |
 
 ```bash
 python -m tdm load C:\history\                 # загрузить CSV (справочники, срезы, рынок)
 python -m tdm coverage                          # что загружено на какие даты
 python -m tdm build-hist-scenarios              # исторические сценарии из рядов
+python -m tdm attach-official --as-of 2026-10-13   # T+1: официальный PnL (pnl_official) → опубликованный EOD-прогон
 ```
 
 ## Результаты расчётов
 
 Что считать, куда класть и как это отдаётся — [docs/DATA_CONTRACT.md](docs/DATA_CONTRACT.md).
-Загрузка: Python-SDK `tdm.writer.Run` (шаблон — `examples/calc_service_stub.py`) или JSON-пакет (`contract/bundle.schema.json`, пример — `fixtures/demo_bundle.json`) через `python -m tdm import`.
+Загрузка: Python-SDK `tdm.writer.Run` (шаблон — `examples/calc_service_stub.py`) или JSON-пакет (`contract/bundle.schema.json`, пример — `fixtures/demo_bundle.json`, контракт 1.3) через `python -m tdm import`.
+Фондирование, которого расчётный сервис не выложил, строит `tdm`: `run.derive_funding()` (`DATA_CONTRACT.md` §0.9).
 
 Страницы можно открыть и просто как файлы (`prototypes/*.html`): тогда они работают на демо-наборе `prototypes/data.js`.
 

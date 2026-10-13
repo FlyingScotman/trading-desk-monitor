@@ -47,7 +47,7 @@
 
 > **Контракт 1.3** (`docs/DATA_CONTRACT.md` §0, `docs/ORG_CONVENTIONS.md`): режимы книг и юрлица, строки фондирования по позициям и остаткам ДС,
 > справочник ставок фондирования, курсы ЦБ рядом с рыночными, официальный PnL на T+1, график заседаний ЦБ и сценарии кэрри.
-> Ниже новые сущности помечены *1.3* — это спецификация для бэкенда; прототипы уже работают в этой форме.
+> Новые сущности помечены *1.3*. Бэкенд их реализует (схема v5, `docs/DATA_CONTRACT.md` §0.9); страницы получают ту же форму, что в прототипах.
 
 ## 2. Сущности и ключи
 
@@ -63,7 +63,8 @@ ref_curve ──< md_curve_point     md_fx     md_fixing     ref_calendar
 ref_funding_rate (1.3)   cash_snapshot (1.3, ref_book × валюта)   md_fx_cbr (1.3)   ref_cbr_meeting (1.3)   carry_scenario_def (1.3)
 
 calc_run ──< position ──< position_risk / position_fx / position_gamma / position_pnl / scenario_result
-         ──< funding_deal ──< funding_pnl
+         ──< funding_deal ──< funding_pnl                     (строки POS / HTM ссылаются на position)
+         ──< funding_rule, run_ocp_transfer                    (1.3: снимок справочника ставок, сводка передачи ОВП)
          ──< run_book / run_issuer / run_curve / mkt_*        (снимок статики и рынка, на котором считали)
 scenario_def ──< scenario_result        desk_history        data_load        scenario_job
 ```
@@ -124,10 +125,12 @@ scenario_def ──< scenario_result        desk_history        data_load       
 | Спред эмитента и его изменение | среднее Z-спреда (иначе G-спреда) бумаг эмитента | `/market/issuer-spreads` |
 | Изменение спредов по рейтингам | медиана изменений по эмитентам корзины, без суверена | `/market/issuer-spreads`, исторические сценарии |
 | Исторические сценарии | `build-hist-scenarios`, `docs/SCENARIOS.md` §4 | `/scenarios`, все экраны со сценариями |
-| *1.3* Фондирование облигаций торговых книг | если расчётный сервис его не выложил: −чистая MV × ставка по справочнику `ref_funding_rate` (КС / RUSFAR CNY по дням, календарные дни с прошлого рабочего дня, процент в RUB по курсу ЦБ) | строки `POS` прогона |
-| *1.3* Фондирование книг деривативов | остатки `cash_snapshot` × O/N валюты по дням | строки `CASH` прогона |
-| *1.3* Передача ОВП | ОВП книг `TRADING` по `ref_book.ocp_to`, курс `md_fx_cbr` на завтра; проверка против проведённых сделок (`otc_deals.purpose = OCP_TRANSFER`) | `OCP_TRANSFERS`, ОВП по книгам |
-| *1.3* Официальный PnL на T+1 | загрузка `pnl_official` за T прикрепляет его к опубликованному EOD-прогону за T (`attach_official_pnl`) | вкладка PnL, сверка |
+| *1.3* Курсы ЦБ на дату | курс, действующий на дату (последняя запись `md_fx_cbr` не позже); курс на завтра — первая запись после даты; изменение — к прошлому рабочему дню | `/market/fx-cbr`, `FX_CBR*` в прогоне (`add_reference_data`) |
+| *1.3* Фондирование облигаций торговых книг | если расчётный сервис его не выложил — `run.derive_funding()`: −чистая MV × ставка по справочнику (снимок `ref_funding_rate` в прогоне; КС / RUSFAR CNY по каждому календарному дню с прошлого рабочего дня; процент в RUB по курсу ЦБ) | строки `POS` прогона, `position_pnl.funding` и `fx_funding` |
+| *1.3* Фондирование HTM | −цена покупки × номинал × контрактная ставка | строки `HTM` |
+| *1.3* Фондирование книг деривативов | остатки `cash_snapshot` × O/N валюты по дням (RUB, CNY — 365; USD, EUR, CHF — 360) | строки `CASH` прогона |
+| *1.3* Передача ОВП | `run.add_ocp_transfers()`: по сделкам передачи в прогоне (книги `TRADING` → `ocp_to`), курс ЦБ на завтра; при публикации — остаток ОВП и сверка с `otc_deals.purpose = OCP_TRANSFER` | `OCP_TRANSFERS`, ОВП по книгам |
+| *1.3* Официальный PnL на T+1 | загрузка `pnl_official` за T, затем `python -m tdm attach-official --as-of T` (`tdm.writer.attach_official_pnl`): официальный PnL прикрепляется к опубликованному EOD-прогону за T, строка `desk_history` пересчитывается | вкладка PnL, сверка |
 | Новые позиции дня | нет в предыдущем срезе | `/positions` → `new_today` |
 | История итогов деска | автоматически из EOD-прогонов, либо загружается (`desk_history.csv`) | графики PnL и спарклайны DV01 / CS01 |
 | Покрытие данных | сколько строк в каждом наборе на каждую дату, есть ли EOD-прогон | `/coverage`, `python -m tdm coverage` |
@@ -150,13 +153,17 @@ scenario_def ──< scenario_result        desk_history        data_load       
 | `GET /instruments?as_of=&issuer_id=&q=` | бумаги; `as_of` — непогашенные на дату; `q` — поиск по имени или ISIN |
 | `GET /instruments/<id>` | `{instrument, cashflows:[…], last_quote}` |
 | `GET /otc-deals?as_of=&book=` | условия OTC-сделок; `as_of` — живые на дату |
+| `GET /funding-rules` | *1.3* справочник ставок фондирования: `{rules:[{book_type,desk,book_id,entity,instrument_id,ccy,index_name,spread_bp,fixed_rate,note}]}`; пустое поле — `null` («любое») |
+| `GET /cbr-meetings?from=` | *1.3* заседания ЦБ: `{meetings:[{date, effective}]}`; `effective` по умолчанию — следующий рабочий день |
+| `GET /carry-scenarios` | *1.3* сценарии кэрри и фондирования: `{scenarios:[{scenario_id,name,ord,active,definition:{ks,on,fundSpread,hardCcy}}]}` |
 
 ### 4.2 Срезы
 
 | Запрос | Ответ |
 |---|---|
 | `GET /positions?as_of=&book=` | `{as_of, prev_as_of, positions:[{…pos_snapshot, name, ccy, instr_type, isin, issuer_id, asset_class, segment, maturity, side, counterparty_id, new_today}]}` |
-| `GET /funding?as_of=&book=` | срез фондирования |
+| `GET /funding?as_of=&book=` | срез фондирования (с 1.3 — РЕПО и особые сделки) |
+| `GET /cash-balances?as_of=&book=` | *1.3* остатки ДС книг деривативов: `{as_of, balances:[{as_of,book_id,ccy,balance}]}` |
 | `GET /trades?date=` | сделки дня |
 | `GET /pnl/official?as_of=` | официальный PnL по позициям и книгам за день |
 | `GET /pnl/official?from=&to=` | ряд по книгам: строка книги, а если её нет — сумма позиций |
@@ -169,6 +176,8 @@ scenario_def ──< scenario_result        desk_history        data_load       
 | `GET /market/curves?curve=RUB%20OFZ&from=&to=` | ряд: `{buckets, series:[{date, rates[11]}]}` |
 | `GET /market/fx?as_of=` | `{fx:{ccy:{rate, move_pct}}}` |
 | `GET /market/fx?ccy=USD&from=&to=` | ряд |
+| `GET /market/fx-cbr?as_of=` | *1.3* курсы ЦБ: `{as_of, prev, fx:{ccy:{rate, move_pct, next}}}` — действующий на дату, изменение к прошлому рабочему дню, курс на завтра |
+| `GET /market/fx-cbr?ccy=USD&from=&to=` | *1.3* ряд по дате действия: `{series:[{date, rate, set_date}]}` |
 | `GET /market/fixings?as_of=` | последние фиксинги на дату |
 | `GET /market/fixings?index=RUONIA&from=&to=` | ряд |
 | `GET /market/bonds?as_of=` | котировки бумаг за день |
@@ -191,7 +200,7 @@ scenario_def ──< scenario_result        desk_history        data_load       
 
 | Запрос | Ответ |
 |---|---|
-| `GET /coverage?from=&to=` | `{datasets, required, days:[{date, eod_run, positions, funding, md_curves, …}], days_with_gaps}` |
+| `GET /coverage?from=&to=` | `{datasets, required, days:[{date, eod_run, positions, funding, cash_balances, md_curves, md_fx_cbr, …}], days_with_gaps}`. Даты `md_fx_cbr` (есть и выходные) дней не добавляют |
 | `GET /loads` | последние 200 загрузок файлов: статус, строки, ошибки |
 | `GET /health` | `{status, version, latest_run}` |
 
@@ -207,7 +216,7 @@ scenario_def ──< scenario_result        desk_history        data_load       
 | **Облигации**: таблица по выпускам, карта доходностей, история выпуска | `position` облигаций: `ytm`, `price`, `accrued`, `mdur`, `spr_dur`, `convexity`, `spread_bp` / `spread_type` / `spread_curve`, `yield_date`, MV, DV01, CS01 | `md_bond_quote` (Δ за день в `quote`, ряды — `/bonds/history`), `md_curve_point` (спред к выбранной кривой сегодня и в истории), `ref_instrument.offer_date`, `pos_snapshot` (позиция в истории) |
 | **Риски по кривым**: теплокарта, лестница, кривая сегодня/вчера | `position_risk` | `md_curve_point` → пилларсы и изменения |
 | **Экспозиции**: эмитент, сектор, рейтинг, валюта, класс; концентрации; ОВП | `position`, `position_fx` | `ref_issuer`, `ref_issuer_rating` (рейтинг на дату), `fund_snapshot` |
-| **Фондирование**: лестница, стоимость против бенчмарка, разрывы | `funding_deal`, `funding_pnl` | `md_fixing` (бенчмарки RUONIA, SOFR, RUSFAR CNY, €STR) |
+| **Фондирование**: строки по бумагам и остаткам, стоимость против бенчмарка, разрывы, справочник ставок, сценарии кэрри | `funding_deal`, `funding_pnl`, `funding_rule`, `run_ocp_transfer` | `md_fixing` (бенчмарки КС, RUONIA, SOFR, RUSFAR CNY, €STR, SARON), `ref_cbr_meeting`, `carry_scenario_def` |
 | **Сценарии** | `position_risk`, CS01, FX-дельта, `position_gamma` / `convexity` (второй порядок), `scenario_result` | `scenario_def` (пресеты и исторические) |
 | **PnL explain** | `position_pnl`, `funding_pnl` | `pnl_official`: если расчётный сервис не передал `official`, он берётся отсюда при публикации прогона (по `position_id`); `md_*` — сдвиги для матрицы rates explain |
 | **Pivot Studio**: любые разрезы и меры | всё из прогона | справочники как измерения |
@@ -226,8 +235,9 @@ scenario_def ──< scenario_result        desk_history        data_load       
 2. python -m tdm load C:\tdm_inbox\                     # срезы, рынок, официальный PnL, изменения справочников
 3. python -m tdm coverage --from <сегодня>              # всё ли пришло
 4. расчётный сервис: with Run(as_of=сегодня, run_type="EOD") as run:
-       run.add_reference_data()                         # статика и рынок из tdm
+       run.add_reference_data()                         # статика, рынок (+ курсы ЦБ), справочник ставок из tdm
        run.add_positions(...); run.add_funding(...)     # риски и PnL explain из либы
+       run.derive_funding(); run.add_ocp_transfers()    # 1.3: недостающие строки фондирования, сводка передачи ОВП
        run.add_scenario_results(...)                    # полная переоценка (или позже: attach_scenario_results)
 5. python -m tdm build-hist-scenarios                   # худшие исторические окна для нового портфеля
 → мониторы видят новый день (флэш по рыночным курсам) при обновлении страницы

@@ -639,6 +639,8 @@ class Run:
             raise
         with self.con:
             self.con.execute("UPDATE calc_run SET status='complete', published_at=? WHERE run_id=?", (now_iso(), self.run_id))
+            self.con.execute("UPDATE calc_run SET official_at=published_at WHERE run_id=? AND official_at IS NULL AND EXISTS"
+                             " (SELECT 1 FROM position_pnl WHERE run_id=? AND official IS NOT NULL)", (self.run_id, self.run_id))
             if self.run_type == "EOD":
                 _store_history(self.con, self.run_id, self.as_of)
         self.status = "complete"
