@@ -49,7 +49,7 @@ class Bonds(unittest.TestCase):
     def test_fields_and_day_quote(self):
         p = self.bonds["МТС 002Р-08"]
         self.assertEqual(p["yieldDate"], "2027-11-24")
-        self.assertEqual((p["spreadType"], p["spreadCurve"], p["couponFreq"]), ("G", "RUB OFZ", 4))
+        self.assertEqual((p["spreadType"], p["spreadCurve"], p["couponFreq"]), ("Z", "RUB RUONIA", 4))   # 1.3: спред RUB-корпоратов к RUONIA
         q = p["quote"]
         self.assertEqual(q["date"], self.desk["asOf"])
         self.assertAlmostEqual(q["ytm"], round(p["ytm"], 4), places=6)          # котировка дня = уровень прогона

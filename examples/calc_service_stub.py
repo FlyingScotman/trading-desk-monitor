@@ -17,15 +17,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from tdm.writer import Run, upsert_scenarios  # noqa: E402
+from tdm.writer import Run, upsert_carry_scenarios, upsert_cbr_meetings, upsert_scenarios  # noqa: E402
 
 DEMO = json.loads((ROOT / "fixtures" / "demo_bundle.json").read_text(encoding="utf-8"))
 
 
 # ---------------------------------------------------------------- статика
 def load_books():
-    """[{book_id, name, desk, trader}] — из вашей системы учёта книг."""
+    """[{book_id, name, desk, trader, book_type: TRADING|HTM|DERIVS, entity, ocp_to}] — из вашей системы учёта книг."""
     return DEMO["books"]
+
+
+def load_funding_rules():
+    """Справочник ставок фондирования (казначейство): [{book_type?, desk?, book_id?, entity?, instrument_id?, ccy,
+    index_name + spread_bp | fixed_rate, note?}]. Если он загружен в tdm (funding_rates.csv) — run.add_reference_data()."""
+    return DEMO["funding_rules"]
 
 
 def load_issuers():
@@ -35,7 +41,7 @@ def load_issuers():
 
 # ---------------------------------------------------------------- рынок
 def load_market(as_of):
-    """Кривые (по всем 11 бакетам: уровень % и изменение за день б.п.), курсы, индексы."""
+    """Кривые (по всем 11 бакетам: уровень % и изменение за день б.п.), курсы (рыночный и ЦБ), индексы."""
     return DEMO["curves"], DEMO["fx"], DEMO["indices"]
 
 
@@ -49,7 +55,14 @@ def calc_positions(as_of, curves, fx):
 
 
 def calc_funding(as_of, fx):
+    """Строки фондирования POS / HTM / CASH / REPO с кэрри и FX-переоценкой (DATA_CONTRACT §0.4).
+    Если расчётный сервис их не считает — не вызывайте add_funding, а вызовите run.derive_funding()."""
     return DEMO["funding"]
+
+
+def calc_ocp_transfers(as_of):
+    """Сводка вечерней передачи ОВП; None — построить из сделок передачи в позициях (run.add_ocp_transfers())."""
+    return DEMO["ocp_transfers"]
 
 
 def calc_scenarios(as_of):
@@ -65,9 +78,12 @@ def main():
     a = ap.parse_args()
 
     upsert_scenarios(a.db, DEMO["scenarios"])  # пресеты сценариев: при изменении списка
+    upsert_carry_scenarios(a.db, DEMO["carry_scenarios"])   # сценарии кэрри и фондирования
+    upsert_cbr_meetings(a.db, DEMO["cbr_meetings"])         # график заседаний ЦБ (или cbr_meetings.csv)
     curves, fx, indices = load_market(a.as_of)
-    with Run(a.db, as_of=a.as_of, run_type=a.run_type, source="calc_service_stub", lib_version="demo") as run:
+    with Run(a.db, as_of=a.as_of, run_type=a.run_type, source="calc_service_stub", lib_version="demo", jtd_recovery=0.0) as run:
         run.add_books(load_books())
+        run.add_funding_rules(load_funding_rules())
         run.add_issuers(load_issuers())
         run.add_curves(curves)
         run.add_fx(fx)
@@ -80,6 +96,7 @@ def main():
                 batch = []
         run.add_positions(batch)
         run.add_funding(calc_funding(a.as_of, fx))
+        run.add_ocp_transfers(calc_ocp_transfers(a.as_of))
         for sid, (pos, resid) in calc_scenarios(a.as_of).items():
             run.add_scenario_results(sid, pos, resid)
         run.log("INFO", "расчёт завершён")

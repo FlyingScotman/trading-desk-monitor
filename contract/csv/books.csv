@@ -1,2 +1,2 @@
-﻿book_id;name;desk;trader;active;ord
-OFZ;ОФЗ;Rates;А. Иванов;1;1
+﻿book_id;name;desk;trader;active;ord;book_type;entity;ocp_to
+OFZ;ОФЗ;Rates;А. Иванов;1;1;TRADING;Головной банк;

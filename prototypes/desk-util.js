@@ -8,6 +8,42 @@
   if (!D) { document.title = 'Нет данных'; throw new Error('window.DESK не загружен'); }
   const { BUCKETS, PILLARS, CURVES, FX } = D;
 
+  // ---------- совместимость: данные сервера в форме контракта 1.2 (до docs/ORG_CONVENTIONS.md) ----------
+  // Недостающие поля заполняются так, чтобы страницы работали: режим книги по составу позиций, курсы ЦБ = рыночные,
+  // фондирование-сделки — строки уровня книги без привязки к позициям.
+  (function compat() {
+    if (!D.BOOKS) D.BOOKS = {};
+    Object.keys(D.BOOKS).forEach(b => {
+      const x = D.BOOKS[b];
+      if (!x.bookType) x.bookType = D.positions.some(p => p.book === b && p.instrType === 'BOND') ? 'TRADING' : 'DERIVS';
+      if (!x.entity) x.entity = '—';
+    });
+    if (!D.FX_CBR) D.FX_CBR = Object.assign({}, FX);
+    if (!D.FX_CBR_MOVE_PCT) D.FX_CBR_MOVE_PCT = Object.assign({}, D.FX_MOVE_PCT || {});
+    if (!D.INDICES) D.INDICES = {};
+    if (!D.CBR_MEETINGS) D.CBR_MEETINGS = [];
+    if (!D.CARRY_SCENARIOS) D.CARRY_SCENARIOS = [{ id: 'flat', name: 'КС без изменений', ks: { mode: 'flat' } }];
+    if (!D.CARRY_HORIZONS) D.CARRY_HORIZONS = [['1M', 1], ['3M', 3], ['6M', 6], ['1Y', 12]];
+    if (D.accrualDays == null) D.accrualDays = 1;
+    if (!D.official) D.official = { asOf: D.asOf, received: D.positions.some(p => p.pnl && p.pnl.official != null), basis: 'CBR' };
+    D.positions.forEach(p => {
+      if (p.ofzSpr01 == null) p.ofzSpr01 = 0;
+      if (!p.entity) p.entity = (D.BOOKS[p.book] || {}).entity || '—';
+      const e = p.pnl;
+      if (!e) return;
+      if (e.funding == null) e.funding = 0;
+      if (e.fxBasis == null) e.fxBasis = 0;
+      if (e.explainedCbr == null) e.explainedCbr = e.explained + e.fxBasis;
+    });
+    (D.funding || []).forEach(f => {
+      if (!f.kind) f.kind = 'DEAL';
+      if (f.positionId == null) f.positionId = null;
+      if (f.pnl && f.pnl.inPosition == null) f.pnl.inPosition = false;
+      if (f.pnl && f.pnl.fxCbr == null) f.pnl.fxCbr = f.pnl.fx || 0;
+    });
+    if (D.fundingPnl && D.fundingPnl.fxCbr == null) D.fundingPnl.fxCbr = D.fundingPnl.fx;
+  })();
+
   function sum(arr, f) { return arr.reduce((s, x) => s + (f ? f(x) : x), 0); }
   function groupBy(arr, key) {
     const out = {};
@@ -41,21 +77,19 @@
     }
     return out;
   }
-  // FX-переоценка валютного фондирования относится к позициям книги, которые оно фондирует
-  // (pro-rata по валютной дельте противоположного знака); остаток — строка фондирования книги.
-  function allocateFundingFx(shockFn, list) {
-    list = list || D.positions;
-    const toPos = {}, residualByBook = {}, byBook = {}, residualByDeal = {};
-    D.funding.forEach(f => {
-      if (f.ccy === 'RUB') return;
-      const x = shockFn(f.ccy, f.amount);
-      if (!x) return;
-      byBook[f.book] = (byBook[f.book] || 0) + x;
-      const sgn = -Math.sign(f.amount);
-      const cands = list.filter(p => p.book === f.book && Math.sign(p.fxDelta[f.ccy] || 0) === sgn);
-      const w = cands.reduce((a, p) => a + Math.abs(p.fxDelta[f.ccy]), 0);
-      if (!w) { residualByBook[f.book] = (residualByBook[f.book] || 0) + x; residualByDeal[f.id] = x; return; }
-      cands.forEach(p => { toPos[p.id] = (toPos[p.id] || 0) + x * Math.abs(p.fxDelta[f.ccy]) / w; });
+  // FX-переоценка тела фондирования: строка, привязанная к бумаге (positionId), — в PnL этой бумаги
+  // (облигация торговой книги фондируется в своей валюте, поэтому FX гасится внутри позиции);
+  // остальные строки (остатки ДС деривативов, РЕПО, сделки старого формата) — на уровне книги.
+  function fundingFx(shockFn) {
+    const toPos = {}, byBook = {}, residualByBook = {}, residualByDeal = {};
+    (D.funding || []).forEach(f => {
+      Object.keys(f.fxDelta || {}).forEach(c => {
+        const x = shockFn(c, f.fxDelta[c]);
+        if (!x) return;
+        byBook[f.book] = (byBook[f.book] || 0) + x;
+        if (f.positionId != null) toPos[f.positionId] = (toPos[f.positionId] || 0) + x;
+        else { residualByBook[f.book] = (residualByBook[f.book] || 0) + x; residualByDeal[f.id] = (residualByDeal[f.id] || 0) + x; }
+      });
     });
     return { toPos, residualByBook, byBook, residualByDeal };
   }
@@ -109,7 +143,7 @@
     if (g && g.ir) src = 'gamma';
     else if (p.convexity && p.mvRub) {
       const dy = effRateMove(p, curveShock);
-      const dsEff = p.cs01 ? ds : 0;
+      const dsEff = ownSpr01(p) ? ds : 0;
       conv = 0.5 * p.mvRub * p.convexity * Math.pow((dy + dsEff) * 1e-4, 2);   // Δy — DV01-взвешенный сдвиг кривой
       src = 'convexity';
       if (p.ccy !== 'RUB') convFx = conv * (fxShock[p.ccy] || 0) / 100;
@@ -123,12 +157,12 @@
     // (член 3-го порядка Γ·Δr²·Δfx, точный для пересчёта в рубли; включаем в fxCross).
     cross += convFx;
     // эффективный сдвиг доходности позиции, б.п. — для оценки, в пределах ли шок области точности разложения
-    const dyEff = effRateMove(p, curveShock) + (p.cs01 ? ds : 0);
+    const dyEff = effRateMove(p, curveShock) + (ownSpr01(p) ? ds : 0);
     return { convexity: conv, fxCross: cross, src, dyEff };
   }
 
   // Полная переоценка из расчётного сервиса (scenario_result) — только для неизменённых пресетов.
-  const shockKey = sc => JSON.stringify([sc.curves || null, sc.fx || null, sc.spreads || null]);
+  const shockKey = sc => JSON.stringify([sc.curves || null, sc.fx || null, sc.spreads || null, sc.ofzSpread || 0]);
   function storedResult(sc, list) {
     const R = D.scenarioResults && D.scenarioResults[sc.id];
     const preset = D.SCENARIOS.find(s => s.id === sc.id);
@@ -151,21 +185,33 @@
   let posIndex = null;
   const byIdPos = id => { if (!posIndex) { posIndex = {}; D.positions.forEach(p => { posIndex[p.id] = p; }); } return posIndex[id]; };
 
-  // Спред-шок позиции, б.п.
+  // Собственный спред позиции: кредитный (CS01, у RUB-корпоратов — к RUONIA) или спред ОФЗ к RUONIA (ofzSpr01).
+  // Это фактор 'CS' матрицы гамм.
+  const ownSpr01 = p => p.cs01 || p.ofzSpr01 || 0;
+  // Кредитный спред-шок позиции, б.п. Правила аддитивны: _all + rating[r] + sector[s] + issuer[i] + (_mult − 1) × спред.
+  // Совместимость: рейтинг или эмитент ключом верхнего уровня ({AA: 50, 'Самолёт': 300}); includeGov игнорируется.
   function spreadShock(sc, p) {
+    const sp = sc.spreads;
+    if (!sp) return 0;
     let ds = 0;
-    if (sc.spreads) {
-      if (sc.spreads._mult) ds += (sc.spreads._mult - 1) * (p.spreadBp || 100);
-      if (sc.spreads._all) ds += sc.spreads._all;
-      if (p.rating && sc.spreads[p.rating]) ds += sc.spreads[p.rating];
-      if (p.issuer && sc.spreads[p.issuer]) ds += sc.spreads[p.issuer];
-      if (p.segment === 'Гос' && !sc.spreads.includeGov) ds *= 0.35;
-    }
+    if (sp._mult) ds += (sp._mult - 1) * (p.spreadBp || 100);
+    if (sp._all) ds += sp._all;
+    const pick = (grp, k) => k != null && ((sp[grp] && sp[grp][k]) || 0);
+    ds += pick('rating', p.rating) + pick('sector', p.sector) + pick('issuer', p.issuer);
+    if (p.rating && typeof sp[p.rating] === 'number') ds += sp[p.rating];
+    if (p.issuer && typeof sp[p.issuer] === 'number') ds += sp[p.issuer];
     return ds;
+  }
+  // Сдвиг собственного спреда позиции в сценарии: ОФЗ — спред ОФЗ к RUONIA, остальные — кредитный.
+  function ownSpreadShock(sc, p) {
+    if (p.cs01) return spreadShock(sc, p);
+    if (p.ofzSpr01) return sc.ofzSpread || 0;
+    return gammaOf(p) ? spreadShock(sc, p) : 0;
   }
 
   // Сценарий: полная переоценка, если её посчитал расчётный сервис, иначе разложение Тейлора до 2-го порядка:
-  //   rates  = Σ key-rate DV01 × Δr;   spread = CS01 × Δs;   fx = FX-дельта × курс × Δfx (+ доля фондирования)
+  //   rates  = Σ key-rate DV01 × Δr;   spread = CS01 × Δs (ОФЗ: ofzSpr01 × ofzSpread);
+  //   fx = FX-дельта × курс × Δfx (+ переоценка тела фондирования самой бумаги)
   //   convexity = 2-й порядок по ставкам/спредам (матрица гамм или выпуклость); fxCross = кросс FX × ставки/спреды.
   // Компоненты по позиции включают разнесённую FX-переоценку фондирования (fxFunding);
   // fundingFxByBook — нераспределённый остаток фондирования. Без фондирования: total − fxFunding, без остатка.
@@ -180,8 +226,8 @@
     });
     const fxShock = sc.fx || {};
     const alloc = sc.fx
-      ? allocateFundingFx((ccy, amt) => amt * FX[ccy] * (sc.fx[ccy] || 0) / 100, D.positions)
-      : { toPos: {}, residualByBook: {}, byBook: {} };
+      ? fundingFx((ccy, amt) => amt * FX[ccy] * (sc.fx[ccy] || 0) / 100)
+      : { toPos: {}, residualByBook: {}, byBook: {}, residualByDeal: {} };
     const booksInList = new Set(list.map(p => p.book));
     Object.keys(alloc.residualByBook).forEach(b => { if (!booksInList.has(b)) delete alloc.residualByBook[b]; });
     const res = list.map(p => {
@@ -192,8 +238,8 @@
         if (curveShock[c]) p.risk[c].forEach((dv, i) => { x += dv * curveShock[c][i]; });
         ratesByCurve[c] = x; rates += x;
       });
-      const ds = p.cs01 || gammaOf(p) ? spreadShock(sc, p) : 0;
-      const spread = p.cs01 ? p.cs01 * ds : 0;
+      const ds = ownSpreadShock(sc, p);
+      const spread = ownSpr01(p) * ds;
       let fxGross = 0;
       if (sc.fx) Object.keys(p.fxDelta || {}).forEach(c => { fxGross += p.fxDelta[c] * FX[c] * (sc.fx[c] || 0) / 100; });
       const fxFunding = alloc.toPos[p.id] || 0;
@@ -274,7 +320,8 @@
       const ps = by[k], p = ps[0];
       return { key: k, p, positions: ps, books: [...new Set(ps.map(x => x.book))],
         notional: sum(ps, x => x.notional), mvRub: sum(ps, x => x.mvRub), dv01: sum(ps, x => x.dv01), cs01: sum(ps, x => x.cs01),
-        gammaIr: sum(ps, x => x.gammaIr || 0), pnl: sum(ps, x => x.pnl ? x.pnl.official : 0), newToday: ps.some(x => x.newToday) };
+        ofzSpr01: sum(ps, x => x.ofzSpr01 || 0), gammaIr: sum(ps, x => x.gammaIr || 0), pnl: sum(ps, x => x.pnl ? x.pnl.explained : 0),
+        newToday: ps.some(x => x.newToday) };
     });
   }
   // Средневзвешенное (веса по |MV|), пропуская null.
@@ -311,6 +358,183 @@
     return (histCache[key] = pr.then(normHistory));
   }
 
-  D.util = { sum, groupBy, bucketMatrix, netFx, runScenario, curveRate, allocateFundingFx, ACCURACY_BP,
+  // ================== Кэрри и фондирование на горизонте ==================
+  // Позиции постоянны (MV и остатки ДС не меняются); бумага выбывает в дату оферты / погашения (yieldDate, иначе maturity):
+  // после неё нет ни дохода, ни фондирования (денежные потоки уходят казначейству). Шаг — календарный день,
+  // начисление дня t идёт по ставкам, действующим в день t (выходные — по ставке пятницы).
+  //   income  — доход облигаций по доходности: грязная MV × y(t) / 365; у флоатеров y следует за своим индексом;
+  //             HTM — по доходности покупки на цену покупки;
+  //   funding — фондирование облигаций: тело (чистая MV, HTM — цена покупки) × ставка(t) / 365, процент в RUB по курсу ЦБ;
+  //   derivs  — кэрри деривативов: IRS (плавающий индекс(t) − фикс), CDS (running-купон), XCCY (сегодняшний кэрри, постоянно);
+  //   cash    — остатки ДС книг деривативов и РЕПО: остаток × O/N(t) / база;
+  //   rolldown (по желанию) — сдвиг по кривой к горизонту: DV01 × (r(T − h) − r(T)), б.п.
+  // Индексы: КС — траектория сценария; RUONIA и RUSFAR O/N — КС + сегодняшний базис + сдвиг; прочие — сегодня + сдвиг.
+  const isoD = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + n); return isoD(d); };
+  function monthsAdd(iso, m) {
+    const d = new Date(iso + 'T00:00:00'), day = d.getDate();
+    d.setDate(1); d.setMonth(d.getMonth() + m);
+    d.setDate(Math.min(day, new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()));
+    return isoD(d);
+  }
+  const daysBetween = (a, b) => Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 864e5);
+  // конец горизонта: '1M' / '3M' / '6M' / '1Y' / число месяцев / дата YYYY-MM-DD
+  function carryEnd(h) {
+    if (typeof h === 'number') return monthsAdd(D.asOf, h);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(h)) return h;
+    const m = /^(\d+)([MY])$/.exec(h || '3M');
+    return monthsAdd(D.asOf, m ? (+m[1]) * (m[2] === 'Y' ? 12 : 1) : 3);
+  }
+  const KS0 = () => D.INDICES['КС'] != null ? D.INDICES['КС'] : 0;
+  // Траектория КС: [{date — с какого дня действует, ks — %, meeting — дата решения}]
+  function ksPath(cfg, end) {
+    const k = (cfg && cfg.ks) || { mode: 'flat' }, ks0 = KS0();
+    const out = [{ date: D.asOf, ks: ks0, meeting: null }];
+    if (k.mode === 'path' && k.path) {
+      k.path.filter(x => x.date > D.asOf).sort((a, b) => a.date < b.date ? -1 : 1).forEach(x => out.push({ date: x.date, ks: x.ks, meeting: x.meeting || null }));
+      return out;
+    }
+    const ms = (D.CBR_MEETINGS || []).filter(m => m.effective > D.asOf && (!end || m.effective <= end));
+    let cur = ks0;
+    ms.forEach((m, i) => {
+      if (k.mode === 'steps') cur = Math.max(0, cur + ((k.steps && k.steps[i]) || 0) / 100);
+      else if (k.mode === 'implied' && CURVES['RUB KEY']) {
+        // средний форвард кривой RUB KEY до следующего заседания (до +3 мес., если заседаний дальше нет), шаг 0.25 п.п.
+        const t1 = daysBetween(D.asOf, m.effective) / 365.25;
+        const nx = ms[i + 1] ? daysBetween(D.asOf, ms[i + 1].effective) / 365.25 : t1 + 0.25;
+        const r1 = curveRate('RUB KEY', t1), r2 = curveRate('RUB KEY', nx);
+        cur = Math.round(((r2 * nx - r1 * t1) / (nx - t1)) * 4) / 4;
+      }
+      if (k.mode !== 'flat') out.push({ date: m.effective, ks: cur, meeting: m.date });
+    });
+    return out;
+  }
+  // значение индекса на дату при траектории КС (path) и сдвигах cfg.on, %
+  function indexAt(name, iso, path, cfg) {
+    const on = ((cfg && cfg.on) || {})[name] || 0;
+    let ks = path[0].ks;
+    for (let i = 1; i < path.length && path[i].date <= iso; i++) ks = path[i].ks;
+    if (name === 'КС') return ks + on / 100;
+    const today = D.INDICES[name] != null ? D.INDICES[name] : null;
+    if (name === 'RUONIA' || name === 'RUSFAR O/N') return ks + ((today != null ? today : KS0()) - KS0()) + on / 100;
+    return (today != null ? today : 0) + on / 100;
+  }
+  const HARD = { USD: 1, EUR: 1, CHF: 1 };
+  function lineRate(f, iso, path, cfg) {
+    if (f.kind === 'HTM' || f.fixed != null) {
+      if (f.kind === 'POS' && HARD[f.ccy] && cfg.hardCcy != null) return cfg.hardCcy;
+      return f.fixed != null ? f.fixed : f.rate;
+    }
+    if (!f.index) return f.rate;                       // старый формат: ставка как есть
+    const sh = f.kind === 'POS' ? (((cfg.fundSpread || {})[f.ccy]) || 0) : 0;
+    return indexAt(f.index, iso, path, cfg) + ((f.spreadBp || 0) + sh) / 100;
+  }
+  function runCarry(cfg, opts) {
+    cfg = cfg || {}; opts = opts || {};
+    const list = opts.positions || D.positions;
+    const books = new Set(list.map(p => p.book));
+    const end = carryEnd(opts.horizon || cfg.horizon || '3M');
+    const N = Math.max(1, daysBetween(D.asOf, end));
+    const path = ksPath(cfg, end);
+    const days = []; for (let k = 0; k < N; k++) days.push(addDays(D.asOf, k));
+    const memo = {};
+    const idxSeries = name => memo[name] || (memo[name] = days.map(d => indexAt(name, d, path, cfg)));
+    const FXC = D.FX_CBR || FX;
+    // контрольные точки: опции (даты) + конец; накопленные суммы по компонентам
+    const marks = (opts.marks || []).map(carryEnd).filter(d => d > D.asOf && d <= end);
+    if (!marks.includes(end)) marks.push(end);
+    marks.sort();
+    const markIdx = marks.map(d => daysBetween(D.asOf, d));   // число дней до точки
+    const step = opts.step || 7;
+    const sampleIdx = []; for (let k = step; k < N; k += step) sampleIdx.push(k); sampleIdx.push(N);
+    const KEYS = ['income', 'funding', 'derivs', 'cash'];
+    const daily = {}; KEYS.forEach(k => { daily[k] = new Float64Array(N); });
+    const byPos = {}, byBook = {};
+    const blank = () => ({ income: 0, funding: 0, derivs: 0, cash: 0, rolldown: 0, net: 0 });
+    books.forEach(b => { byBook[b] = blank(); });
+    const add = (k, b, id, arr) => {
+      let tot = 0;
+      for (let i = 0; i < N; i++) { daily[k][i] += arr[i]; tot += arr[i]; }
+      byBook[b][k] += tot;
+      if (id != null) { const r = byPos[id] || (byPos[id] = blank()); r[k] += tot; }
+    };
+    const until = p => p.yieldDate && p.yieldDate > D.asOf ? p.yieldDate : p.maturity;
+    const aliveN = p => { const u = until(p); return u ? Math.max(0, Math.min(N, daysBetween(D.asOf, u))) : N; };
+    const fundOf = {}; (D.funding || []).forEach(f => { if (f.positionId != null) fundOf[f.positionId] = f; });
+    const matures = [];
+    list.forEach(p => {
+      const n = aliveN(p), arr = new Float64Array(N);
+      if (n < N && p.instrType !== 'FX') matures.push({ id: p.id, date: until(p) });
+      if (p.instrType === 'BOND') {
+        if (p.accrualOnly) {
+          const v = p.notional * (p.purchasePrice || p.price) / 100 * FX[p.ccy] * (p.purchaseYield || p.ytm) / 100 / 365;
+          for (let i = 0; i < n; i++) arr[i] = v;
+        } else {
+          const fl = p.couponType === 'float' && p.index && D.INDICES[p.index] != null ? idxSeries(p.index) : null;
+          for (let i = 0; i < n; i++) arr[i] = p.mvRub * (p.ytm + (fl ? fl[i] - D.INDICES[p.index] : 0)) / 100 / 365;
+        }
+        add('income', p.book, p.id, arr);
+        const f = fundOf[p.id];
+        if (f) {
+          const fa = new Float64Array(N), conv = FXC[f.ccy] || FX[f.ccy];
+          for (let i = 0; i < n; i++) fa[i] = f.amount * conv * lineRate(f, days[i], path, cfg) / 100 / (f.dayBasis || 365);
+          add('funding', p.book, p.id, fa);
+        }
+      } else if (p.instrType === 'IRS') {
+        const sgn = p.side === 'PAY' ? 1 : -1, ix = p.index && (D.INDICES[p.index] != null) ? idxSeries(p.index) : null;
+        for (let i = 0; i < n; i++) arr[i] = sgn * p.notional * FX[p.ccy] * ((ix ? ix[i] : p.coupon) - p.coupon) / 100 / 365;
+        add('derivs', p.book, p.id, arr);
+      } else if (p.instrType === 'CDS') {
+        const v = (p.side === 'BUY' ? -1 : 1) * p.notional * FX[p.ccy] * (p.coupon || 0) / 100 / 365;
+        for (let i = 0; i < n; i++) arr[i] = v;
+        add('derivs', p.book, p.id, arr);
+      } else if (p.instrType === 'XCCY') {
+        const v = p.pnl ? p.pnl.carry / (D.accrualDays || 1) : 0;
+        for (let i = 0; i < n; i++) arr[i] = v;
+        add('derivs', p.book, p.id, arr);
+      }
+      // rolldown к горизонту (по желанию): фикс. облигации и IRS, пока живы
+      if (cfg.rolldown && n === N && !p.accrualOnly && ((p.instrType === 'BOND' && p.couponType === 'fix') || p.instrType === 'IRS')) {
+        const h = N / 365.25, T = p.instrType === 'BOND' ? yieldTenor(p) : p.tenorY;
+        let rd = 0;
+        Object.keys(p.risk || {}).forEach(c => {
+          if (!CURVES[c]) return;
+          const dv = p.risk[c].reduce((a, b) => a + b, 0);
+          rd += dv * (curveRate(c, Math.max(0, T - h)) - curveRate(c, T)) * 100;
+        });
+        byBook[p.book].rolldown += rd;
+        (byPos[p.id] || (byPos[p.id] = blank())).rolldown += rd;
+      }
+    });
+    // строки фондирования уровня книги: остатки ДС, РЕПО, сделки старого формата
+    (D.funding || []).forEach(f => {
+      if (f.positionId != null || !books.has(f.book)) return;
+      const arr = new Float64Array(N), conv = FX[f.ccy];
+      const n = f.kind === 'CASH' || f.kind === 'REPO' ? N : Math.min(N, Math.max(0, daysBetween(D.asOf, f.maturity)));
+      for (let i = 0; i < n; i++) arr[i] = f.amount * conv * lineRate(f, days[i], path, cfg) / 100 / (f.dayBasis || 365);
+      add('cash', f.book, null, arr);
+    });
+    Object.values(byBook).forEach(r => { r.net = r.income + r.funding + r.derivs + r.cash + r.rolldown; });
+    Object.values(byPos).forEach(r => { r.net = r.income + r.funding + r.derivs + r.cash + r.rolldown; });
+    const total = blank();
+    Object.values(byBook).forEach(r => Object.keys(total).forEach(k => { total[k] += r[k]; }));
+    const cum = idx => { const o = {}; KEYS.forEach(k => { let s = 0; for (let i = 0; i < idx; i++) s += daily[k][i]; o[k] = s; }); o.rolldown = total.rolldown * idx / N; o.net = o.income + o.funding + o.derivs + o.cash + o.rolldown; return o; };
+    const series = sampleIdx.map(k => Object.assign({ date: addDays(D.asOf, k), day: k }, cum(k)));
+    const atMarks = marks.map((d, j) => Object.assign({ date: d, day: markIdx[j] }, cum(markIdx[j])));
+    // средние ставки фондирования облигаций по валютам за горизонт (взвешенно по телу)
+    const avgRate = {};
+    (D.funding || []).filter(f => f.kind === 'POS' && books.has(f.book)).forEach(f => {
+      const a = avgRate[f.ccy] || (avgRate[f.ccy] = { w: 0, x: 0 });
+      const n = Math.min(N, Math.max(1, daysBetween(D.asOf, until(list.find(p => p.id === f.positionId) || {}) || end)));
+      let r = 0; for (let i = 0; i < n; i++) r += lineRate(f, days[i], path, cfg);
+      a.w += Math.abs(f.amountRub) * n; a.x += Math.abs(f.amountRub) * r;
+    });
+    Object.keys(avgRate).forEach(c => { avgRate[c] = avgRate[c].w ? avgRate[c].x / avgRate[c].w : null; });
+    return { end, days: N, path, total, byBook, byPosition: byPos, series, marks: atMarks, matures, avgFundingRate: avgRate,
+      ksAvg: idxSeries('КС').reduce((a, b) => a + b, 0) / N, ksEnd: idxSeries('КС')[N - 1] };
+  }
+
+  D.util = { sum, groupBy, bucketMatrix, netFx, runScenario, curveRate, fundingFx, spreadShock, ownSpr01, ACCURACY_BP,
+    runCarry, ksPath, carryEnd, indexAt, addDays, monthsAdd,
     baseCurve, yieldTenor, spreadTo, bondRows, wavg, bondHistory, normHistory };
 })();

@@ -343,6 +343,7 @@ details.pop summary::-webkit-details-marker{display:none}
       <div class="ctl"><span class="fl">Строки</span><div class="seg" id="risk-mode"><button type="button" data-v="curves">по кривым</button><button type="button" data-v="books">по книгам</button></div></div>
       <div class="ctl"><span class="fl">Кривая</span><div class="seg" id="risk-curves"></div></div>
       <div class="legend-div" id="risk-legend"></div>
+      <span class="cnt" id="risk-extra"></span>
     </div>
     <div class="grid">
       <div class="pnl s12"><div class="ph"><h3 id="risk-hm-title">DV01: кривая × бакет</h3><span class="u">тыс ₽/б.п. · нажмите ячейку</span></div><div class="pb"><div class="tw" id="risk-hm"></div></div></div>
@@ -364,6 +365,7 @@ details.pop summary::-webkit-details-marker{display:none}
       <div class="pnl s5"><div class="ph"><h3>Таблица</h3><span class="u" id="ex-tunit"></span></div><div class="tw" id="ex-table" style="max-height:430px;overflow:auto"></div></div>
       <div class="pnl s6"><div class="ph"><h3>Концентрация по группам эмитентов</h3><span class="u">MV облигаций + продажа защиты CDS, млрд ₽</span></div><div class="tw" id="ex-conc" style="max-height:420px;overflow:auto"></div></div>
       <div class="pnl s6"><div class="ph"><h3>Валютная позиция (ОВП)</h3><span class="u" id="ex-ocp-u"></span></div><div class="pb"><div class="ch h200" id="c-ex-ocp"></div></div><div class="tw" id="ex-ocp"></div></div>
+      <div class="pnl s12"><div class="ph"><h3>ОВП по книгам</h3><span class="u">млн вал. · книги облигаций передают ОВП в книгу деривативов вечером (T+1); остаток в книге облигаций — НКД и округление</span></div><div class="tw" id="ex-ocp-books"></div></div>
     </div>
   </section>
 
@@ -371,10 +373,13 @@ details.pop summary::-webkit-details-marker{display:none}
   <section class="tab" id="tab-funding" role="tabpanel" aria-label="Фондирование" hidden>
     <div class="grid">
       <div class="pnl s8"><div class="ph"><h3>Лестница фондирования</h3><div class="ctl"><span class="fl">Стек</span><div class="seg" id="fu-stack"><button type="button" data-v="type">по типу</button><button type="button" data-v="ccy">по валюте</button></div><span class="u">млрд ₽ экв. · привлечение +</span></div></div><div class="pb"><div class="ch h300" id="c-fu-ladder"></div></div></div>
-      <div class="pnl s4"><div class="ph"><h3>Стоимость и структура</h3><span class="u">привлечённые средства</span></div><div class="pb" id="fu-cost"></div></div>
+      <div class="pnl s4"><div class="ph"><h3>Ставки и стоимость</h3><span class="u">по режимам книг</span></div><div class="pb" id="fu-cost"></div></div>
+      <div class="pnl s12"><div class="ph"><h3>Кэрри и фондирование на горизонте</h3><div class="ctl"><label class="tgl" title="Ролл-даун фикс. облигаций и IRS по кривой к горизонту"><input type="checkbox" id="fu-roll"><span class="tgl-s"></span>с ролл-дауном</label><a class="lnk" href="scenario-lab.html#carry" id="fu-lab">Конструктор в Scenario Lab →</a></div></div>
+        <div class="pb"><p class="note" style="margin-bottom:8px">Чистый кэрри = доход бумаг по доходности − фондирование + кэрри деривативов + остатки ДС. Позиции постоянны, бумаги выбывают в дату оферты / погашения. Клик по ячейке — разбор по книгам.</p><div class="tw" id="fu-carry"></div><div class="tw" id="fu-carry-books" style="margin-top:10px"></div></div></div>
       <div class="pnl s6"><div class="ph"><h3>Активы vs фондирование по книгам</h3><span class="u">млрд ₽</span></div><div class="pb"><div class="ch h300" id="c-fu-gap"></div></div></div>
-      <div class="pnl s6"><div class="ph"><h3>Разрыв фондирования</h3><span class="u">млн ₽</span></div><div class="tw" id="fu-gap"></div></div>
-      <div class="pnl s12"><div class="ph"><h3>Сделки фондирования</h3><span class="u" id="fu-cnt"></span></div><div class="tw" id="fu-deals"></div></div>
+      <div class="pnl s6"><div class="ph"><h3>Разрыв фондирования</h3><span class="u">млн ₽ · облигации фондируются на чистую MV, разрыв ≈ НКД</span></div><div class="tw" id="fu-gap"></div></div>
+      <div class="pnl s12"><div class="ph"><h3>Ставки фондирования (справочник)</h3><span class="u">побеждает самое конкретное правило: бумага > книга > юрлицо > деск > режим книги</span></div><div class="tw" id="fu-rules"></div></div>
+      <div class="pnl s12"><div class="ph"><h3>Строки фондирования</h3><span class="u" id="fu-cnt"></span></div><div class="tw" id="fu-deals" style="max-height:460px;overflow:auto"></div></div>
     </div>
   </section>
 
@@ -391,7 +396,7 @@ details.pop summary::-webkit-details-marker{display:none}
 
   <!-- 7. PnL -->
   <section class="tab" id="tab-pnl" role="tabpanel" aria-label="PnL" hidden>
-    <div class="banner"><span class="dev-chip">в разработке</span><span>Предварительная версия PnL explain: методика и сверка с бэк-офисом ещё настраиваются.</span></div>
+    <div class="banner"><span class="dev-chip">в разработке</span><span>Флэш считается вечером по рыночным курсам; официальный PnL (курсы ЦБ) приходит на T+1 и сверяется с explain по курсам ЦБ. Методика ещё настраивается.</span><span id="pnl-off-st"></span></div>
     <div class="grid">
       <div class="pnl s8"><div class="ph"><h3>PnL explain за день</h3><span class="u">млн ₽</span></div><div class="pb"><div class="ch h340" id="c-pnl-wf"></div></div></div>
       <div class="pnl s4"><div class="ph"><h3>Итог дня</h3><span class="u">млн ₽</span></div><div class="pb" id="pnl-side"></div></div>
@@ -412,6 +417,8 @@ details.pop summary::-webkit-details-marker{display:none}
 const D = window.DESK, U = D.util, B = D.BUCKETS, CURVES = Object.keys(D.CURVES);
 const ALL_BOOKS = Object.keys(D.BOOKS);
 const DESKS = [...new Set(ALL_BOOKS.map(b => D.BOOKS[b].desk))];
+const ENTS = [...new Set(ALL_BOOKS.map(b => D.BOOKS[b].entity))];
+const BT_LABEL = {TRADING:'торговая', HTM:'HTM', DERIVS:'деривативы'};
 const SEGS = ['Гос','Корп','Секьюритизация','Деривативы','FX'];
 const SEG_LABEL = {'Секьюритизация':'Секьюр'};
 const CCYS = Object.keys(D.FX).filter(c => c !== 'RUB');
@@ -481,14 +488,17 @@ const COLS = [
   {k:'mvRub', t:'MV, млн ₽', n:1, d:1, v:p => p.mvRub/1e6, sum:1, def:1, sg:1},
   {k:'dv01', t:'DV01, тыс ₽/б.п.', n:1, d:0, v:p => p.dv01/1e3, sum:1, def:1, sg:1},
   {k:'cs01', t:'CS01, тыс ₽/б.п.', n:1, d:0, v:p => p.cs01/1e3, sum:1, def:1, sg:1},
+  {k:'ofzSpr01', t:'Спред ОФЗ01, тыс ₽/б.п.', n:1, d:0, v:p => p.ofzSpr01 ? p.ofzSpr01/1e3 : null, sum:1, sg:1},
   {k:'gammaIr', t:'Гамма ставок, ₽/б.п.²', n:1, d:0, v:p => p.gammaIr || null, sum:1, sg:1},
   {k:'gammaCs', t:'Гамма спреда, ₽/б.п.²', n:1, d:0, v:p => p.gammaCs || null, sum:1, sg:1},
   {k:'convexity', t:'Выпуклость', n:1, d:2},
   {k:'jtd', t:'JTD, млн ₽', n:1, d:1, v:p => p.jtd/1e6, sum:1, sg:1},
   {k:'fxd', t:'FX-дельта, млн вал.', n:1, d:2, v:p => { const k = Object.keys(p.fxDelta); return k.length ? p.fxDelta[k[0]]/1e6 : null; }, sg:1},
-  {k:'pnlOff', t:'PnL офиц., тыс ₽', n:1, d:0, v:p => p.pnl.official/1e3, sum:1, def:1, sg:1},
-  {k:'pnlExp', t:'PnL explained, тыс ₽', n:1, d:0, v:p => p.pnl.explained/1e3, sum:1, sg:1},
-  {k:'pnlUnx', t:'Break, тыс ₽', n:1, d:0, v:p => p.pnl.unexplained/1e3, sum:1, sg:1},
+  {k:'pnlExp', t:'PnL флэш (рынок), тыс ₽', n:1, d:0, v:p => p.pnl.explained/1e3, sum:1, def:1, sg:1},
+  {k:'pnlOff', t:'PnL офиц. (ЦБ), тыс ₽', n:1, d:0, v:p => p.pnl.official == null ? null : p.pnl.official/1e3, sum:1, def:1, sg:1},
+  {k:'pnlUnx', t:'Break vs explain ЦБ, тыс ₽', n:1, d:0, v:p => p.pnl.unexplained/1e3, sum:1, sg:1},
+  {k:'pnlFund', t:'Фондирование за день, тыс ₽', n:1, d:0, v:p => p.pnl.funding ? p.pnl.funding/1e3 : null, sum:1, sg:1},
+  {k:'entity', t:'Юрлицо', v:p => D.BOOKS[p.book].entity},
   {k:'counterparty', t:'Контрагент'}
 ];
 const TABS = [['summary','Сводка'],['positions','Позиции'],['bonds','Облигации'],['risk','Риски по кривым'],['expo','Экспозиции'],['funding','Фондирование'],['scen','Сценарии'],['pnl','PnL']];
@@ -497,9 +507,9 @@ const S = {
   tab:'summary', books:new Set(ALL_BOOKS), ccy:'ALL', segs:new Set(SEGS), withFunding:true,
   sum:{bview:'RUB'},
   pos:{q:'', group:'none', sort:{k:'mvRub', dir:-1}, cols:new Set(COLS.filter(c => c.def).map(c => c.k)), collapsed:new Set(), sel:null},
-  risk:{mode:'curves', curve:'RUB OFZ', cell:null},
+  risk:{mode:'curves', curve:'RUB RUONIA', cell:null},
   expo:{dim:'issuerGroup', meas:'mv', chart:'treemap'},
-  fund:{stack:'type'},
+  fund:{stack:'type', carry:'flat', h:'3M', roll:false},
   scen:{sel:['keyhike','par+100'], focus:'keyhike'},
   bd:{q:'', curve:'base', group:'none', sort:{k:'mvRub', dir:-1}, sel:null, range:'6M'}
 };
@@ -514,12 +524,19 @@ const S = {
 const P = () => D.positions.filter(p => S.books.has(p.book) && (S.ccy === 'ALL' || p.ccy === S.ccy) && S.segs.has(p.segment));
 const FU = () => D.funding.filter(f => S.books.has(f.book) && (S.ccy === 'ALL' || f.ccy === S.ccy));
 const byId = {}; D.positions.forEach(p => { byId[p.id] = p; });
-function fundPnl(){ const l = FU(); return {carry:sum(l, f => f.pnl.carry), fx:sum(l, f => f.pnl.fx)}; }
+// Фондирование уровня книги (остатки ДС деривативов, РЕПО). Фондирование облигаций — внутри PnL бумаг (funding, fx).
+function fundPnl(){ const l = FU().filter(f => !f.pnl.inPosition); return {carry:sum(l, f => f.pnl.carry), fx:sum(l, f => f.pnl.fx), fxCbr:sum(l, f => f.pnl.fxCbr != null ? f.pnl.fxCbr : f.pnl.fx)}; }
+// PnL позиции с учётом переключателя «с фондированием»: флэш (рыночные курсы), explain и официальный по курсам ЦБ
+const noFund = (p, cbr) => S.withFunding ? 0 : (p.pnl.funding || 0) + ((cbr ? p.pnl.fxFundingCbr : p.pnl.fxFunding) || 0);
+const flashOf = p => p.pnl.explained - noFund(p);
+const expCbrOf = p => p.pnl.explainedCbr - noFund(p, true);
+const offOf = p => p.pnl.official == null ? null : p.pnl.official - noFund(p, true);
+const offReady = () => D.official && D.official.received !== false;
 function ocpParts(list){
-  const o = {}; CCYS.forEach(c => { o[c] = {bond:0, der:0, fx:0, fund:0}; });
-  list.forEach(p => { for (const c in p.fxDelta) { if (!o[c]) continue; const k = p.instrType === 'BOND' ? 'bond' : p.instrType === 'FX' ? 'fx' : 'der'; o[c][k] += p.fxDelta[c]; } });
+  const o = {}; CCYS.forEach(c => { o[c] = {bond:0, der:0, fx:0, xfer:0, fund:0}; });
+  list.forEach(p => { for (const c in p.fxDelta) { if (!o[c]) continue; const k = p.ocpTransfer ? 'xfer' : p.instrType === 'BOND' ? 'bond' : p.instrType === 'FX' ? 'fx' : 'der'; o[c][k] += p.fxDelta[c]; } });
   FU().forEach(f => { for (const c in f.fxDelta) if (o[c]) o[c].fund += f.fxDelta[c]; });
-  CCYS.forEach(c => { const x = o[c]; x.net = x.bond + x.der + x.fx + (S.withFunding ? x.fund : 0); });
+  CCYS.forEach(c => { const x = o[c]; x.net = x.bond + x.der + x.fx + x.xfer + (S.withFunding ? x.fund : 0); });
   return o;
 }
 const issuerExp = p => p.instrType === 'BOND' ? p.mvRub : p.instrType === 'CDS' ? (p.side === 'SELL' ? p.notional : -p.notional) : 0;
@@ -583,9 +600,9 @@ function spark(vals, w, h){
   }).join('') + '</svg>';
 }
 function renderKpi(){
-  const l = P(), dv = sum(l, p => p.dv01), cs = sum(l, p => p.cs01), o = ocpParts(l), fp = fundPnl();
-  const fadd = S.withFunding ? fp.carry + fp.fx : 0;
-  const off = sum(l, p => p.pnl.official) + fadd, exp = sum(l, p => p.pnl.explained) + fadd;
+  const l = P(), dv = sum(l, p => p.dv01), cs = sum(l, p => p.cs01), ofz = sum(l, p => p.ofzSpr01 || 0), o = ocpParts(l), fp = fundPnl();
+  const fadd = S.withFunding ? fp.carry + fp.fx : 0, faddC = S.withFunding ? fp.carry + fp.fxCbr : 0;
+  const flash = sum(l, flashOf) + fadd, expC = sum(l, expCbrOf) + faddC, off = offReady() ? sum(l, p => offOf(p) || 0) + faddC : null;
   const gross = sum(l, p => Math.abs(p.mvRub)), net = sum(l, p => p.mvRub);
   const h = D.history, hp = h.length > 1 ? h[h.length-2] : null;
   const chg = (cur, k) => hp && hp[k] != null ? `<span>vs вчера <span class="num${nc(cur - hp[k])}">${M(cur - hp[k],2,true)}</span></span>` : '';
@@ -595,12 +612,12 @@ function renderKpi(){
     <div class="ks">${S.books.size === ALL_BOOKS.length && S.ccy === 'ALL' && S.segs.size === SEGS.length ? chg(dv,'dv01') : ''}${spark(h.map(x => x.dv01), 66, 18)}</div></div>
   <div class="kpi"><div class="kl"><span>CS01 итого</span><span></span></div>
     <div class="kv${nc(cs)}">${M(cs,2)}<small>млн ₽/б.п.</small></div>
-    <div class="ks">${S.books.size === ALL_BOOKS.length && S.ccy === 'ALL' && S.segs.size === SEGS.length ? chg(cs,'cs01') : ''}${spark(h.map(x => x.cs01), 66, 18)}</div></div>
+    <div class="ks">${S.books.size === ALL_BOOKS.length && S.ccy === 'ALL' && S.segs.size === SEGS.length ? chg(cs,'cs01') : ''}<span title="Чувствительность ОФЗ к спреду ОФЗ − RUONIA">спред ОФЗ <span class="num${nc(ofz)}">${M(ofz,2)}</span></span>${spark(h.map(x => x.cs01), 66, 18)}</div></div>
   <div class="kpi wide"><div class="kl"><span>ОВП ${S.withFunding ? 'с фондированием' : 'без фондирования'}</span><span>млн вал. · млн ₽ экв.</span></div>
     <div class="ocp">${CCYS.map(c => `<span>${c}</span><span class="num${nc(o[c].net)}">${M(o[c].net,1,true)}</span><span class="num muted">${num(o[c].net * D.FX[c] / 1e6,0,true)} млн ₽</span>`).join('')}</div></div>
-  <div class="kpi"><div class="kl"><span>PnL дня</span><span>офиц.</span></div>
-    <div class="kv${nc(off)}">${M(off,1,true)}<small>млн ₽</small></div>
-    <div class="ks"><span>expl. <span class="num${nc(exp)}">${M(exp,1,true)}</span></span><span>break <span class="num${nc(off-exp)}">${M(off-exp,1,true)}</span></span>${spark(h.map(x => x.pnlOfficial), 66, 18)}</div></div>
+  <div class="kpi"><div class="kl"><span>PnL дня</span><span>флэш · рынок</span></div>
+    <div class="kv${nc(flash)}">${M(flash,1,true)}<small>млн ₽</small></div>
+    <div class="ks">${off == null ? '<span class="muted">офиц. — ожидается T+1</span>' : `<span title="Официальный PnL (курсы ЦБ)">офиц. <span class="num${nc(off)}">${M(off,1,true)}</span></span><span title="Официальный − explain по курсам ЦБ">break <span class="num${nc(off-expC)}">${M(off-expC,1,true)}</span></span>`}${spark(h.map(x => x.pnlOfficial), 66, 18)}</div></div>
   <div class="kpi"><div class="kl"><span>MV брутто / нетто</span><span>${l.length} поз.</span></div>
     <div class="kv">${BN(gross,1)}<small>млрд ₽</small></div>
     <div class="ks"><span>нетто <span class="num${nc(net)}">${BN(net,1)}</span> млрд ₽</span></div></div>`;
@@ -612,9 +629,12 @@ function renderFilters(){
   const allB = S.books.size === ALL_BOOKS.length, allS = S.segs.size === SEGS.length;
   const deskBooks = d => ALL_BOOKS.filter(b => D.BOOKS[b].desk === d);
   const deskOn = d => !allB && deskBooks(d).length === S.books.size && deskBooks(d).every(b => S.books.has(b));
+  const entBooks = d => ALL_BOOKS.filter(b => D.BOOKS[b].entity === d);
+  const entOn = d => !allB && entBooks(d).length === S.books.size && entBooks(d).every(b => S.books.has(b));
   $('filters').innerHTML = `
+   ${ENTS.length > 1 ? `<div class="fg"><span class="fl">Юрлицо</span>${ENTS.map(d => `<button type="button" class="chip" data-act="ent" data-v="${esc(d)}" aria-pressed="${entOn(d)}">${esc(d)}</button>`).join('')}</div>` : ''}
    <div class="fg"><span class="fl">Деск</span>${DESKS.map(d => `<button type="button" class="chip" data-act="desk" data-v="${esc(d)}" aria-pressed="${deskOn(d)}">${esc(d)}</button>`).join('')}</div>
-   <div class="fg"><span class="fl">Книги</span><button type="button" class="chip" data-act="books-all" data-v="" aria-pressed="${allB}">Все</button>${ALL_BOOKS.map(b => `<button type="button" class="chip" data-act="book" data-v="${b}" aria-pressed="${!allB && S.books.has(b)}" title="${esc(D.BOOKS[b].desk + ' · ' + D.BOOKS[b].trader)}">${esc(D.BOOKS[b].name)}</button>`).join('')}</div>
+   <div class="fg"><span class="fl">Книги</span><button type="button" class="chip" data-act="books-all" data-v="" aria-pressed="${allB}">Все</button>${ALL_BOOKS.map(b => `<button type="button" class="chip" data-act="book" data-v="${b}" aria-pressed="${!allB && S.books.has(b)}" title="${esc(D.BOOKS[b].desk + ' · ' + D.BOOKS[b].trader + ' · ' + D.BOOKS[b].entity + ' · ' + (BT_LABEL[D.BOOKS[b].bookType] || ''))}">${esc(D.BOOKS[b].name)}</button>`).join('')}</div>
    <div class="fg"><span class="fl">Сегмент</span><button type="button" class="chip" data-act="segs-all" data-v="" aria-pressed="${allS}">Все</button>${SEGS.map(s => `<button type="button" class="chip" data-act="seg" data-v="${esc(s)}" aria-pressed="${!allS && S.segs.has(s)}">${esc(SEG_LABEL[s] || s)}</button>`).join('')}</div>
    <div class="fg"><label class="fl" for="f-ccy">Валюта</label><select id="f-ccy">${['ALL','RUB'].concat(CCYS).map(c => `<option value="${c}"${S.ccy === c ? ' selected' : ''}>${c === 'ALL' ? 'все' : c}</option>`).join('')}</select></div>
    <div class="fg"><label class="tgl" title="Учитывать фондирование в ОВП, PnL и сценариях"><input type="checkbox" id="f-fund"${S.withFunding ? ' checked' : ''}><span class="tgl-s"></span>с фондированием</label></div>
@@ -963,14 +983,17 @@ function bucketSvg(vals){
   });
   return s + '</svg>';
 }
-const PNL_KEYS = [['carry','Кэрри'],['rolldown','Ролл-даун'],['rates','Ставки'],['spread','Спред'],['fx','FX'],['convexity','Выпуклость'],['newTrades','Новые сделки'],['other','Прочее']];
-const WF_SHORT = {'Выпуклость':'Выпукл.','Новые сделки':'Новые\nсделки','Фонд. кэрри':'Фонд.\nкэрри','Фонд. FX':'Фонд.\nFX','Unexplained':'Unexpl.','Официальный':'Офиц.'};
+const PNL_KEYS = [['carry','Кэрри'],['rolldown','Ролл-даун'],['rates','Ставки'],['spread','Спред'],['fx','FX'],['funding','Фондирование'],['convexity','Выпуклость'],['newTrades','Новые сделки'],['other','Прочее']];
+const WF_SHORT = {'Выпуклость':'Выпукл.','Новые сделки':'Новые\nсделки','Фондирование':'Фондир.','Фонд. ДС/РЕПО':'Фонд.\nДС/РЕПО','Фонд. FX ДС':'Фонд.\nFX ДС',
+  'Флэш (рынок)':'Флэш\n(рынок)','Курсы ЦБ':'Курсы\nЦБ','Unexplained':'Unexpl.','Официальный (ЦБ)':'Офиц.\n(ЦБ)'};
+// значение компоненты PnL позиции с учётом переключателя «с фондированием»
+const pnlComp = (p, k) => S.withFunding ? p.pnl[k] : k === 'funding' ? 0 : k === 'fx' ? (p.pnl.fxGross != null ? p.pnl.fxGross : p.pnl.fx) : p.pnl[k];
 function openDrawer(id){
   const p = byId[id]; if (!p) return;
   S.pos.sel = id;
   const bk = D.BOOKS[p.book];
   const F = [
-    ['Книга', bk.name], ['Деск / трейдер', bk.desk + ' · ' + bk.trader], ['Класс', p.assetClass], ['Сегмент', p.segment], ['Тип', p.instrType],
+    ['Книга', bk.name + ' · ' + (BT_LABEL[bk.bookType] || '')], ['Деск / трейдер', bk.desk + ' · ' + bk.trader], ['Юрлицо', bk.entity], ['Класс', p.assetClass], ['Сегмент', p.segment], ['Тип', p.instrType],
     ['ISIN', p.isin], ['Эмитент', p.issuer], ['Группа', p.issuerGroup], ['Сектор', p.sector], ['Рейтинг', p.rating],
     ['Валюта', p.ccy], ['Погашение', dt(p.maturity)], ['Срок, лет', num(p.tenorY,2)],
     ['Купон', p.couponType === 'float' ? (p.index + ' + ' + num(p.margin,2) + '%') : p.coupon != null ? num(p.coupon,2) + '%' : null],
@@ -985,27 +1008,35 @@ function openDrawer(id){
     ['Гамма ставки×спред', p.gammaIrCs ? num(p.gammaIrCs,0,true) + ' ₽/б.п.²' : null],
     ['ΔPV ±100 б.п. (2-й пор.)', p.gammaIr ? M(0.5 * p.gammaIr * 1e4,2,true) + ' млн ₽' : null],
     ['Источник гаммы', p.gammaSource === 'matrix' ? 'матрица (' + p.gamma.length + ' эл.)' : p.gammaSource === 'convexity' ? 'из выпуклости' : null],
-    ['JTD', M(p.jtd,1) + ' млн ₽'], ['WAL', p.wal ? num(p.wal,1) + ' г.' : null], ['CPR', p.cpr ? num(p.cpr,1) + '%' : null],
+    ['Спред ОФЗ01', p.ofzSpr01 ? K(p.ofzSpr01,1) + ' тыс ₽/б.п.' : null],
+    ['JTD', M(p.jtd,1) + ' млн ₽' + (D.JTD_RECOVERY != null ? ' (R = ' + num(D.JTD_RECOVERY * 100,0) + '%)' : '')], ['WAL', p.wal ? num(p.wal,1) + ' г.' : null], ['CPR', p.cpr ? num(p.cpr,1) + '%' : null],
+    ['Учёт', p.accrualOnly ? 'HTM: по начислению, вне DV01/CS01' : null], ['Покупка', p.purchaseDate ? dt(p.purchaseDate) + ' по ' + num(p.purchasePrice,2) + ' (дох. ' + num(p.purchaseYield,2) + '%)' : null],
     ['FX-дельта', Object.keys(p.fxDelta).map(c => M(p.fxDelta[c],2,true) + ' млн ' + c).join(', ') || null],
     ['Контрагент', p.counterparty]
   ].filter(x => x[1] != null && x[1] !== '');
   const curves = Object.keys(p.risk || {});
-  const e = p.pnl, mx = Math.max(...PNL_KEYS.map(k => Math.abs(e[k[0]])), Math.abs(e.official), Math.abs(e.unexplained)) || 1;
+  const e = p.pnl, mx = Math.max(...PNL_KEYS.map(k => Math.abs(e[k[0]] || 0)), Math.abs(e.official || 0), Math.abs(e.explained), Math.abs(e.unexplained)) || 1;
   const pr = (lbl, v, cls) => `<span class="${cls || ''}">${lbl}</span><span class="${cls || ''}" style="display:flex;align-items:center"><span class="mb" style="width:100%"><i class="${v < 0 ? 'm' : 'p'}" style="width:${(Math.abs(v)/mx*50).toFixed(1)}%"></i></span></span><span class="num${nc(v)} ${cls || ''}">${K(v,0,true)}</span>`;
-  const fl = D.funding.filter(f => f.book === p.book), fpb = D.fundingPnlByBook[p.book];
-  const bookMv = sum(D.positions.filter(x => x.book === p.book && x.instrType === 'BOND'), x => x.mvRub), bookFund = -sum(fl, f => f.amountRub);
+  const own = D.funding.find(f => f.positionId === p.id), fl = D.funding.filter(f => f.book === p.book && f.positionId == null);
+  const bookMv = sum(D.positions.filter(x => x.book === p.book && x.instrType === 'BOND'), x => x.mvRub), bookFund = -sum(D.funding.filter(f => f.book === p.book), f => f.amountRub);
+  const bmk = own ? benchRate(own) : null;
   $('drawer').innerHTML = `
     <div class="dr-h"><div><h2>${esc(p.name)}</h2><div class="dr-sub"><span class="pill">${esc(bk.name)}</span><span class="pill">${esc(p.assetClass)}</span><span class="pill">${esc(p.ccy)}</span>${p.rating ? `<span class="pill">${esc(p.rating)}</span>` : ''}${p.newToday ? '<span class="tag" style="margin:0">NEW · сделка сегодня</span>' : ''}</div></div>
       <button type="button" class="ibtn" id="dr-close" aria-label="Закрыть карточку">Закрыть ✕</button></div>
     ${p.instrType === 'BOND' ? `<div class="dr-s"><button type="button" class="lnk" data-act="bdhist" data-v="${esc(p.isin)}">История цены, доходности и спреда выпуска →</button></div>` : ''}
     <div class="dr-s"><h4>Параметры</h4><dl class="kvl">${F.map(x => `<div><dt>${esc(x[0])}</dt><dd title="${esc(x[1])}">${esc(x[1])}</dd></div>`).join('')}</dl></div>
     <div class="dr-s bk"><h4>DV01 по бакетам, тыс ₽/б.п.</h4>${curves.length ? curves.map(c => `<div class="cap"><span>${esc(D.CURVES[c].name)}</span><span class="mono">${K(sum(p.risk[c]),1)}</span></div>${bucketSvg(p.risk[c])}`).join('') : '<p class="note">Нет процентного риска по кривым (CDS / спот FX).</p>'}</div>
-    <div class="dr-s"><h4>PnL за день, тыс ₽</h4><div class="pnl-b">${PNL_KEYS.map(k => pr(k[1], e[k[0]])).join('')}${pr('Explained', e.explained, 'sum')}${pr('Unexplained', e.unexplained)}${pr('Официальный', e.official, 'sum')}</div>
+    <div class="dr-s"><h4>PnL за день, тыс ₽</h4><div class="pnl-b">${PNL_KEYS.map(k => pr(k[1], e[k[0]] || 0)).join('')}${pr('Флэш (рынок)', e.explained, 'sum')}${pr('Курсы ЦБ − рынок', e.fxBasis || 0)}${pr('Explain (ЦБ)', e.explainedCbr != null ? e.explainedCbr : e.explained, 'sum')}${e.official == null ? '' : pr('Unexplained', e.unexplained) + pr('Официальный (ЦБ)', e.official, 'sum')}</div>
       ${e.breakNote ? `<div class="brk"><b>Break:</b> ${esc(e.breakNote)}</div>` : ''}</div>
-    <div class="dr-s"><h4>Фондирование книги «${esc(bk.name)}»</h4>
+    ${own ? `<div class="dr-s"><h4>Фондирование бумаги</h4>
+      <dl class="kvl"><div><dt>Тип</dt><dd>${esc(own.type)}</dd></div><div><dt>Тело</dt><dd>${M(own.amount,2)} млн ${own.ccy} (${M(own.amountRub,1)} млн ₽)</dd></div>
+      <div><dt>Ставка</dt><dd>${esc(own.rateExpr)} = ${num(own.rate,2)}%</dd></div><div><dt>К бенчмарку (${esc(own.benchmark || 'КС')})</dt><dd>${bmk != null ? num((own.rate - bmk) * 100,0,true) + ' б.п.' : '—'}</dd></div>
+      <div><dt>За день</dt><dd class="${nc(own.pnl.carry)}">${K(own.pnl.carry,0,true)} тыс ₽</dd></div><div><dt>Пересчёт</dt><dd>${own.kind === 'HTM' ? 'фикс. до ' + dt(own.maturity) : 'ежедневно к чистой MV'}</dd></div></dl>
+      <p class="note" style="margin-top:6px">${own.kind === 'HTM' ? 'Контрактная ставка зафиксирована при покупке; база — чистая цена покупки.' : 'Процент платится в RUB по курсу ЦБ' + (own.ccy !== 'RUB' ? '; тело — в ' + own.ccy + ', поэтому FX бумаги гасится её фондированием, остаток ОВП (НКД, PnL) вечером уходит в книгу деривативов.' : '.')}</p></div>` : ''}
+    <div class="dr-s"><h4>Книга «${esc(bk.name)}» · ${esc(BT_LABEL[bk.bookType] || '')}</h4>
       <dl class="kvl" style="margin-bottom:8px"><div><dt>MV облигаций книги</dt><dd>${BN(bookMv,2)} млрд ₽</dd></div><div><dt>Фондирование нетто</dt><dd>${BN(bookFund,2)} млрд ₽</dd></div>
-      <div><dt>Разрыв</dt><dd class="${nc(bookMv - bookFund)}">${BN(bookMv - bookFund,2,true)} млрд ₽</dd></div><div><dt>Кэрри / FX фонд. за день</dt><dd>${M(fpb.carry,1)} / ${M(fpb.fx,1)} млн</dd></div></dl>
-      ${fl.length ? `<div class="tw"><table class="t"><thead><tr><th>Тип</th><th>Вал.</th><th class="n">Сумма, млн</th><th>Ставка</th><th>Погаш.</th></tr></thead><tbody>${fl.map(f => `<tr><td>${esc(f.type)}</td><td>${f.ccy}</td><td class="n${nc(f.amount)}">${M(f.amount,1)}</td><td>${esc(f.rateExpr)} <span class="muted mono">${num(f.rate,2)}%</span></td><td class="mono">${dt(f.maturity)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="note">Нет сделок фондирования.</p>'}</div>`;
+      <div><dt>Разрыв</dt><dd class="${nc(bookMv - bookFund)}">${BN(bookMv - bookFund,2,true)} млрд ₽</dd></div><div><dt>Фондир. бумаг / книги за день</dt><dd>${M(D.fundingPnlByBook[p.book].inPositions || 0,2)} / ${M(D.fundingPnlByBook[p.book].carry,2)} млн</dd></div></dl>
+      ${fl.length ? `<div class="tw"><table class="t"><thead><tr><th>Строка книги</th><th>Вал.</th><th class="n">Сумма, млн</th><th>Ставка</th><th class="n">За день, тыс ₽</th></tr></thead><tbody>${fl.map(f => `<tr><td>${esc(f.type)}</td><td>${f.ccy}</td><td class="n${nc(f.amount)}">${M(f.amount,1)}</td><td>${esc(f.rateExpr)} <span class="muted mono">${num(f.rate,2)}%</span></td><td class="n${nc(f.pnl.carry)}">${K(f.pnl.carry,0)}</td></tr>`).join('')}</tbody></table></div>` : ''}</div>`;
   $('drawer').hidden = false; $('scrim').hidden = false;
   $('dr-close').focus();
   document.querySelectorAll('tr.sel').forEach(r => r.classList.remove('sel'));
@@ -1020,6 +1051,8 @@ function closeDrawer(){
 
 /* ======================= 3. Риски по кривым ======================= */
 function rRisk(){
+  { const l0 = P(), kd = sum(l0, p => sum((p.risk && p.risk['RUB KEY']) || [])), ofz = sum(l0, p => p.ofzSpr01 || 0), cs = sum(l0, p => p.cs01);
+    $('risk-extra').innerHTML = `<span title="RUB-облигации: риск ставок — на RUONIA; ОФЗ — плюс спред ОФЗ к RUONIA">спред ОФЗ01 <b class="num${nc(ofz)}">${K(ofz,0)}</b></span> · <span title="CS01 корпоратов RUB — к RUONIA">CS01 <b class="num${nc(cs)}">${K(cs,0)}</b></span> · <span title="Чувствительность к базису КС − RUONIA: DV01 на кривой RUB KEY">базис КС−RUONIA <b class="num${nc(kd)}">${K(kd,0)}</b></span> тыс ₽/б.п.`; }
   const l = P(), mode = S.risk.mode, curve = S.risk.curve;
   document.querySelectorAll('#risk-mode button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === mode));
   $('risk-curves').innerHTML = CURVES.map(c => `<button type="button" data-v="${esc(c)}" aria-pressed="${c === curve}">${esc(c)}</button>`).join('');
@@ -1156,7 +1189,7 @@ function rExpo(){
     ig.map(g => `<tr><td>${esc(g.name)}</td><td class="n${nc(g.exp)}">${BN(g.exp,2)}</td><td>${mbar(g.exp/igMx)}</td><td class="n">${pct(Math.abs(g.exp)/igGross,1)}</td><td class="n">${g.n}</td></tr>`).join('') + '</tbody></table>';
   // OCP
   const o = ocpParts(l);
-  const PARTS = [['bond','Облигации'],['der','Деривативы'],['fx','FX'],['fund','Фондирование']];
+  const PARTS = [['bond','Облигации'],['fund','Фондирование'],['xfer','Перенос ОВП'],['der','Деривативы'],['fx','FX']];
   $('ex-ocp-u').textContent = 'график: млн ₽ экв. · таблица: млн вал.';
   chart('c-ex-ocp', opt({
     legend:legend({data:PARTS.map(x => x[1]).concat(['Нетто ОВП'])}),
@@ -1169,14 +1202,26 @@ function rExpo(){
   }));
   $('ex-ocp').innerHTML = `<table class="t"><thead><tr><th>Вал.</th>${PARTS.map(x => `<th class="n">${x[1]}</th>`).join('')}<th class="n">Нетто${S.withFunding ? '' : ' (без фонд.)'}</th><th class="n">Нетто, млн ₽</th></tr></thead><tbody>` +
     CCYS.map(c => `<tr><td>${c}</td>${PARTS.map(x => `<td class="n${nc(o[c][x[0]])}${x[0] === 'fund' && !S.withFunding ? ' muted' : ''}">${M(o[c][x[0]],1,true)}</td>`).join('')}<td class="n${nc(o[c].net)}"><b>${M(o[c].net,1,true)}</b></td><td class="n${nc(o[c].net)}">${num(o[c].net * D.FX[c] / 1e6,0,true)}</td></tr>`).join('') + '</tbody></table>';
+  // по книгам: нетто ОВП с фондированием
+  const ob = {}; l.forEach(p => { for (const c in p.fxDelta) { (ob[p.book] = ob[p.book] || {})[c] = (ob[p.book][c] || 0) + p.fxDelta[c]; } });
+  if (S.withFunding) FU().forEach(f => { for (const c in f.fxDelta) { (ob[f.book] = ob[f.book] || {})[c] = (ob[f.book][c] || 0) + f.fxDelta[c]; } });
+  const obk = ALL_BOOKS.filter(b => ob[b] && CCYS.some(c => Math.abs(ob[b][c] || 0) > 1));
+  $('ex-ocp-books').innerHTML = obk.length ? `<table class="t"><thead><tr><th>Книга</th><th>Режим</th>${CCYS.map(c => `<th class="n">${c}</th>`).join('')}<th class="n">Нетто, млн ₽ экв.</th><th>Передача сегодня → T+1</th></tr></thead><tbody>` +
+    obk.map(b => { const x = ob[b], tr = (D.OCP_TRANSFERS || []).filter(t => t.from === b);
+      return `<tr><td>${esc(D.BOOKS[b].name)}</td><td class="muted">${esc(BT_LABEL[D.BOOKS[b].bookType] || '')}</td>${CCYS.map(c => `<td class="n${nc(x[c] || 0)}">${x[c] ? M(x[c],2,true) : '<span class="muted">—</span>'}</td>`).join('')}<td class="n${nc(sum(CCYS, c => (x[c] || 0) * D.FX[c]))}"><b>${M(sum(CCYS, c => (x[c] || 0) * D.FX[c]),1,true)}</b></td>` +
+        `<td class="muted">${tr.length ? tr.map(t => `${M(t.amount,2)} млн ${t.ccy} → ${esc(D.BOOKS[t.to].name)} по ${num(t.rate,2)}`).join('; ') : ''}</td></tr>`; }).join('') + '</tbody></table>'
+    : '<p class="note" style="padding:10px">Нет валютных позиций в фильтре.</p>';
 }
 
 /* ======================= 5. Фондирование ======================= */
+// Строки фондирования (docs/ORG_CONVENTIONS.md): POS — облигация торговой книги (ежедневно на чистую MV),
+// HTM — контрактная ставка, CASH — остаток ДС книги деривативов (O/N), REPO — сделка с деском РЕПО.
 const FB = ['O/N','1W','1M','3M','6M','1Y','>1Y'];
-const FTYPES = ['РЕПО с ЦК','TSY FTP','FX-своп','Обратное РЕПО','Гарантийное обеспечение'];
-const FCCY = ['RUB','USD','CNY','EUR'];
+const FTYPES = [...new Set(D.funding.map(f => f.type))];
+const FCCY = ['RUB'].concat(CCYS).filter(c => D.funding.some(f => f.ccy === c));
 function fbucket(f){ const d = (new Date(f.maturity + 'T00:00:00') - new Date(D.asOf + 'T00:00:00')) / 864e5; return d <= 1 ? 0 : d <= 7 ? 1 : d <= 31 ? 2 : d <= 92 ? 3 : d <= 183 ? 4 : d <= 366 ? 5 : 6; }
-const BENCH = {RUB:['RUONIA', D.INDICES.RUONIA], USD:['SOFR', D.INDICES.SOFR], CNY:['RUSFAR CNY', D.INDICES['RUSFAR CNY']], EUR:['€STR', D.INDICES['€STR']]};
+const benchRate = f => { const b = f.benchmark !== undefined ? f.benchmark : (D.BOOKS[f.book].bookType === 'DERIVS' ? 'RUONIA' : 'КС'); return b && D.INDICES[b] != null ? D.INDICES[b] : null; };
+const KIND_LBL = {POS:'облигации торговых книг', HTM:'HTM', CASH:'остатки ДС деривативов', REPO:'РЕПО', DEAL:'сделки'};
 function rFunding(){
   const fl = FU(), l = P();
   document.querySelectorAll('#fu-stack button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === S.fund.stack));
@@ -1186,24 +1231,24 @@ function rFunding(){
     legend:legend({data:used}),
     tooltip:{valueFormatter:v => num(v,2) + ' млрд ₽'},
     xAxis:xCat(FB), yAxis:yVal(v => num(v,0)),
-    series:used.map(k => ({type:'bar', name:k, stack:'f', barWidth:'56%', itemStyle:{color:TK.cat[keys.indexOf(k)], borderColor:TK.panel, borderWidth:1},
+    series:used.map(k => ({type:'bar', name:k, stack:'f', barWidth:'56%', itemStyle:{color:TK.cat[keys.indexOf(k) % 8], borderColor:TK.panel, borderWidth:1},
       data:FB.map((_,i) => +(-sum(fl.filter(f => kf(f) === k && fbucket(f) === i), f => f.amountRub)/1e9).toFixed(3))}))
   }));
-  // cost
-  const bor = fl.filter(f => f.amount < 0);
-  const ccyRows = FCCY.map(c => { const x = bor.filter(f => f.ccy === c); const a = sum(x, f => -f.amount); return {c, a, rub:sum(x, f => -f.amountRub), wac:a ? sum(x, f => -f.amount * f.rate)/a : null, n:x.length}; }).filter(r => r.n);
-  const totRub = sum(bor, f => -f.amountRub) || 1;
-  const shares = FTYPES.map((t,i) => ({t, i, v:sum(bor.filter(f => f.type === t), f => -f.amountRub)})).filter(x => x.v > 0);
-  $('fu-cost').innerHTML = `<div class="tw"><table class="t"><thead><tr><th>Вал.</th><th class="n">Привлечено, млн</th><th class="n">WAC</th><th>Бенчмарк</th><th class="n">Спред, б.п.</th></tr></thead><tbody>` +
-    ccyRows.map(r => `<tr><td>${r.c}</td><td class="n">${M(r.a,0)}</td><td class="n"><b>${num(r.wac,2)}%</b></td><td class="muted">${BENCH[r.c][0]} ${num(BENCH[r.c][1],2)}%</td><td class="n${nc(r.wac - BENCH[r.c][1])}">${num((r.wac - BENCH[r.c][1])*100,0,true)}</td></tr>`).join('') +
-    `</tbody></table></div>
-    <h4 class="fl" style="margin:14px 0 2px">Структура: РЕПО vs FTP</h4>
-    <div class="share" role="img" aria-label="Доли источников фондирования">${shares.map(x => `<i style="width:${(x.v/totRub*100).toFixed(2)}%;background:${TK.cat[x.i]}" title="${esc(x.t)}: ${pct(x.v/totRub,1)}"></i>`).join('')}</div>
-    <div class="share-l">${shares.map(x => `<span class="sw" style="background:${TK.cat[x.i]}"></span><span>${esc(x.t)}</span><span class="num">${BN(x.v,1)} млрд</span><span class="num"><b>${pct(x.v/totRub,1)}</b></span>`).join('')}</div>
-    <p class="note" style="margin-top:8px">Всего привлечено ${BN(totRub,1)} млрд ₽ экв.; кэрри фондирования за день ${M(sum(fl, f => f.pnl.carry),1)} млн ₽.</p>`;
-  // gap by book
+  // ставки и стоимость по режимам: тело, средняя ставка, спред к бенчмарку (КС — облигации, RUONIA — деривативы), кэрри за день
+  const grp = {};
+  fl.forEach(f => { const k = (f.kind || 'DEAL') + '|' + f.ccy; const g = grp[k] || (grp[k] = {kind:f.kind || 'DEAL', ccy:f.ccy, body:0, w:0, wr:0, wb:0, wbw:0, carry:0, n:0}); const bm = benchRate(f); g.body += f.amountRub; g.w += Math.abs(f.amountRub); g.wr += Math.abs(f.amountRub) * f.rate; if (bm != null) { g.wb += Math.abs(f.amountRub) * bm; g.wbw += Math.abs(f.amountRub); } g.carry += f.pnl.carry; g.n++; });
+  const kinds = ['POS','HTM','CASH','REPO','DEAL'].filter(k => Object.values(grp).some(g => g.kind === k));
+  const ks = D.INDICES['КС'], ruo = D.INDICES.RUONIA;
+  $('fu-cost').innerHTML = kinds.map(k => {
+    const rows = Object.values(grp).filter(g => g.kind === k).sort((a,b) => FCCY.indexOf(a.ccy) - FCCY.indexOf(b.ccy));
+    return `<h4 class="fl" style="margin:${k === kinds[0] ? 0 : 12}px 0 2px">${esc(KIND_LBL[k] || k)}</h4><div class="tw"><table class="t"><thead><tr><th>Вал.</th><th class="n">Тело, млн ₽</th><th class="n">Ставка</th><th class="n" title="Спред средней ставки к бенчмарку: облигации RUB — КС, CNY — RUSFAR CNY, hard ccy — нет; деривативы — O/N своей валюты">к бенчм., б.п.</th><th class="n">За день, тыс ₽</th></tr></thead><tbody>` +
+      rows.map(g => { const r = g.w ? g.wr / g.w : null, bm = g.wbw ? g.wb / g.wbw : null; return `<tr><td>${g.ccy}</td><td class="n${nc(g.body)}">${M(g.body,0)}</td><td class="n"><b>${num(r,2)}%</b></td><td class="n">${r != null && bm != null ? num((r - bm) * 100,0,true) : '—'}</td><td class="n${nc(g.carry)}">${K(g.carry,0,true)}</td></tr>`; }).join('') + '</tbody></table></div>';
+  }).join('') + `<p class="note" style="margin-top:8px">Бенчмарки: облигации RUB — КС ${num(ks,2)}%, деривативы RUB — RUONIA ${num(ruo,2)}%; базис КС − RUONIA ${num((ks - ruo) * 100,0,true)} б.п. ` +
+    `Процент по фондированию облигаций платится в RUB (курс ЦБ). Стоимость фондирования за день ${M(sum(fl, f => f.pnl.carry),2,true)} млн ₽` + (D.accrualDays > 1 ? ` (${D.accrualDays} дн.)` : '') + '.</p>';
+  rCarry(l);
+  // разрыв по книгам: облигации (MV) vs тело фондирования
   const books = ALL_BOOKS.filter(b => S.books.has(b));
-  const gr = books.map(b => { const a = sum(l.filter(p => p.book === b && p.instrType === 'BOND'), p => p.mvRub); const f = -sum(fl.filter(x => x.book === b), x => x.amountRub); return {b, a, f, g:a - f}; }).filter(r => Math.abs(r.a) > 1 || Math.abs(r.f) > 1);
+  const gr = books.map(b => { const a = sum(l.filter(p => p.book === b && p.instrType === 'BOND'), p => p.mvRub); const f = -sum(fl.filter(x => x.book === b), x => x.amountRub); return {b, a, f, g:a - f, c:sum(fl.filter(x => x.book === b), x => x.pnl.carry)}; }).filter(r => Math.abs(r.a) > 1 || Math.abs(r.f) > 1);
   chart('c-fu-gap', opt({
     legend:legend({data:['Активы (MV облигаций)','Фондирование нетто']}),
     tooltip:{valueFormatter:v => num(v,2) + ' млрд ₽'},
@@ -1214,21 +1259,48 @@ function rFunding(){
       {type:'bar', name:'Фондирование нетто', barWidth:'30%', itemStyle:{color:TK.cat[1], borderRadius:[2,2,0,0]}, data:gr.map(r => +(r.f/1e9).toFixed(2))}
     ]
   }));
-  $('fu-gap').innerHTML = `<table class="t"><thead><tr><th>Книга</th><th class="n">Активы</th><th class="n">Фондирование</th><th class="n">Разрыв</th><th class="n">Покрытие</th><th class="n">Кэрри фонд./день</th></tr></thead><tbody>` +
-    gr.map(r => `<tr><td>${esc(D.BOOKS[r.b].name)}</td><td class="n${nc(r.a)}">${M(r.a,0)}</td><td class="n${nc(r.f)}">${M(r.f,0)}</td><td class="n${nc(r.g)}"><b>${M(r.g,0,true)}</b></td><td class="n">${r.a > 0 ? pct(r.f/r.a) : '—'}</td><td class="n${nc(sum(fl.filter(x => x.book === r.b), x => x.pnl.carry))}">${M(sum(fl.filter(x => x.book === r.b), x => x.pnl.carry),2)}</td></tr>`).join('') +
-    `</tbody><tfoot><tr><td>Итого</td><td class="n">${M(sum(gr, r => r.a),0)}</td><td class="n">${M(sum(gr, r => r.f),0)}</td><td class="n${nc(sum(gr, r => r.g))}">${M(sum(gr, r => r.g),0,true)}</td><td class="n">${sum(gr, r => r.a) > 0 ? pct(sum(gr, r => r.f)/sum(gr, r => r.a)) : '—'}</td><td class="n">${M(sum(fl, f => f.pnl.carry),2)}</td></tr></tfoot></table>`;
-  // deals
-  const ds = fl.slice().sort((a,b) => a.maturity.localeCompare(b.maturity) || a.amountRub - b.amountRub);
-  $('fu-cnt').textContent = ds.length + ' сделок · сумма в валюте сделки, < 0 — привлечение';
-  $('fu-deals').innerHTML = `<table class="t"><thead><tr><th>Книга</th><th>Тип</th><th>Вал.</th><th class="n">Сумма, млн</th><th class="n">₽ экв., млн</th><th>Ставка</th><th class="n">%</th><th>Начало</th><th>Погашение</th><th>Бакет</th><th>Контрагент</th><th>Обеспечение</th><th class="n">Кэрри/день, тыс ₽</th></tr></thead><tbody>` +
-    ds.map(f => `<tr><td>${esc(D.BOOKS[f.book].name)}</td><td>${esc(f.type)}</td><td>${f.ccy}</td><td class="n${nc(f.amount)}">${M(f.amount,1)}</td><td class="n${nc(f.amountRub)}">${M(f.amountRub,0)}</td><td>${esc(f.rateExpr)}</td><td class="n">${num(f.rate,2)}</td><td class="mono">${dt(f.start)}</td><td class="mono">${dt(f.maturity)}</td><td class="mono">${FB[fbucket(f)]}</td><td>${esc(f.counterparty)}</td><td class="muted">${esc(f.collateral || '—')}</td><td class="n${nc(f.pnl.carry)}">${K(f.pnl.carry,0)}</td></tr>`).join('') + '</tbody></table>';
+  $('fu-gap').innerHTML = `<table class="t"><thead><tr><th>Книга</th><th>Режим</th><th class="n">Активы</th><th class="n">Фондирование</th><th class="n">Разрыв</th><th class="n">Фондир./день</th></tr></thead><tbody>` +
+    gr.map(r => `<tr><td>${esc(D.BOOKS[r.b].name)}</td><td class="muted">${esc(BT_LABEL[D.BOOKS[r.b].bookType] || '')}</td><td class="n${nc(r.a)}">${M(r.a,0)}</td><td class="n${nc(r.f)}">${M(r.f,0)}</td><td class="n${nc(r.g)}"><b>${M(r.g,0,true)}</b></td><td class="n${nc(r.c)}">${M(r.c,2,true)}</td></tr>`).join('') +
+    `</tbody><tfoot><tr><td>Итого</td><td></td><td class="n">${M(sum(gr, r => r.a),0)}</td><td class="n">${M(sum(gr, r => r.f),0)}</td><td class="n${nc(sum(gr, r => r.g))}">${M(sum(gr, r => r.g),0,true)}</td><td class="n">${M(sum(gr, r => r.c),2,true)}</td></tr></tfoot></table>`;
+  // справочник ставок
+  const RL = D.FUNDING_RULES || [];
+  $('fu-rules').innerHTML = RL.length ? `<table class="t"><thead><tr><th>Режим книги</th><th>Деск</th><th>Книга</th><th>Юрлицо</th><th>Бумага</th><th>Вал.</th><th>Ставка</th><th class="n">Сейчас, %</th><th>Комментарий</th></tr></thead><tbody>` +
+    RL.map(r => { const now = r.fixed != null ? r.fixed : (D.INDICES[r.index] || 0) + (r.spreadBp || 0) / 100;
+      return `<tr><td>${esc(r.bookType ? BT_LABEL[r.bookType] : '—')}</td><td>${esc(r.desk || '—')}</td><td>${esc(r.book ? D.BOOKS[r.book].name : '—')}</td><td>${esc(r.entity || '—')}</td><td>${esc(r.instrument || '—')}</td><td>${r.ccy || '—'}</td>` +
+        `<td>${r.fixed != null ? num(r.fixed,2) + '% фикс' : esc(r.index) + (r.spreadBp ? ' ' + num(r.spreadBp,0,true) + ' б.п.' : '')}</td><td class="n">${num(now,2)}</td><td class="muted">${esc(r.note || '')}</td></tr>`; }).join('') + '</tbody></table>'
+    : '<p class="note" style="padding:10px">Справочник ставок не загружен (данные старого формата).</p>';
+  // строки
+  const ds = fl.slice().sort((a,b) => ALL_BOOKS.indexOf(a.book) - ALL_BOOKS.indexOf(b.book) || (a.kind || '').localeCompare(b.kind || '') || a.amountRub - b.amountRub);
+  $('fu-cnt').textContent = ds.length + ' строк · сумма в валюте, < 0 — привлечение · облигации торговых книг пересчитываются к MV ежедневно';
+  $('fu-deals').innerHTML = `<table class="t"><thead><tr><th>Книга</th><th>Тип</th><th>Позиция</th><th>Вал.</th><th class="n">Сумма, млн</th><th class="n">₽ экв., млн</th><th>Ставка</th><th class="n">%</th><th class="n">к бенчм., б.п.</th><th>Начало</th><th>Погашение</th><th>Контрагент</th><th class="n">Кэрри/день, тыс ₽</th></tr></thead><tbody>` +
+    ds.map(f => { const pp = f.positionId != null ? byId[f.positionId] : null, bm = benchRate(f);
+      return `<tr${pp ? ` class="click" tabindex="0" data-act="pos" data-v="${pp.id}"` : ''}><td>${esc(D.BOOKS[f.book].name)}</td><td>${esc(f.type)}</td><td class="nm">${pp ? esc(pp.name) : `<span class="muted">${esc(f.collateral || '—')}</span>`}</td><td>${f.ccy}</td><td class="n${nc(f.amount)}">${M(f.amount,1)}</td><td class="n${nc(f.amountRub)}">${M(f.amountRub,0)}</td><td>${esc(f.rateExpr)}</td><td class="n">${num(f.rate,2)}</td><td class="n">${bm != null ? num((f.rate - bm) * 100,0,true) : '—'}</td><td class="mono">${dt(f.start)}</td><td class="mono">${dt(f.maturity)}</td><td>${esc(f.counterparty)}</td><td class="n${nc(f.pnl.carry)}">${K(f.pnl.carry,0)}</td></tr>`; }).join('') + '</tbody></table>';
+}
+// Сценарии кэрри × горизонты (desk-util runCarry): чистый кэрри и разница к «КС без изменений».
+function rCarry(l){
+  const H = D.CARRY_HORIZONS, SC = D.CARRY_SCENARIOS, opts = {positions:l, horizon:H[H.length - 1][0], marks:H.map(h => h[0])};
+  const R = {}; SC.forEach(sc => { R[sc.id] = U.runCarry(Object.assign({rolldown:S.fund.roll}, sc), opts); });
+  const base = R[SC[0].id];
+  if (!SC.some(x => x.id === S.fund.carry)) S.fund.carry = SC[0].id;
+  const cell = (sc, j) => { const v = R[sc.id].marks[j].net, d = v - base.marks[j].net, on = S.fund.carry === sc.id && S.fund.h === H[j][0];
+    return `<td class="n click${on ? ' sel' : ''}" data-act="carry" data-v="${esc(sc.id)}|${H[j][0]}" tabindex="0"><b class="num${nc(v)}">${M(v,0,true)}</b>${sc.id !== SC[0].id ? `<br><span class="muted num" style="font-size:11px">${M(d,0,true)}</span>` : ''}</td>`; };
+  $('fu-carry').innerHTML = `<table class="t"><thead><tr><th>Сценарий фондирования</th>${H.map(h => `<th class="n">${h[0]}, млн ₽</th>`).join('')}<th class="n">КС через ${H[H.length - 1][0]}</th><th class="n">Фондир. RUB, ср. %</th></tr></thead><tbody>` +
+    SC.map(sc => `<tr><td>${esc(sc.name)}</td>${H.map((_,j) => cell(sc, j)).join('')}<td class="n">${num(R[sc.id].ksEnd,2)}%</td><td class="n">${R[sc.id].avgFundingRate.RUB != null ? num(R[sc.id].avgFundingRate.RUB,2) + '%' : '—'}</td></tr>`).join('') +
+    `</tbody></table><p class="note" style="margin-top:4px">Под итогом — разница к «${esc(SC[0].name)}». Траектория КС — по графику заседаний ЦБ (ориентировочный, заменяется справочником).</p>`;
+  const r = U.runCarry(Object.assign({rolldown:S.fund.roll}, SC.find(x => x.id === S.fund.carry)), {positions:l, horizon:S.fund.h});
+  const bks = ALL_BOOKS.filter(b => r.byBook[b] && Object.values(r.byBook[b]).some(v => Math.abs(v) > 1));
+  const KEYS = [['income','Доход бумаг'],['funding','Фондирование'],['derivs','Кэрри деривативов'],['cash','Остатки ДС, РЕПО']].concat(S.fund.roll ? [['rolldown','Ролл-даун']] : []);
+  $('fu-carry-books').innerHTML = `<h4 class="fl" style="margin:0 0 4px">${esc(SC.find(x => x.id === S.fund.carry).name)} · ${esc(S.fund.h)} (до ${dt(r.end)}), млн ₽</h4><table class="t"><thead><tr><th>Книга</th>${KEYS.map(k => `<th class="n">${k[1]}</th>`).join('')}<th class="n">Чистый кэрри</th></tr></thead><tbody>` +
+    bks.map(b => `<tr><td>${esc(D.BOOKS[b].name)}</td>${KEYS.map(k => `<td class="n${nc(r.byBook[b][k[0]])}">${M(r.byBook[b][k[0]],1,true)}</td>`).join('')}<td class="n${nc(r.byBook[b].net)}"><b>${M(r.byBook[b].net,1,true)}</b></td></tr>`).join('') +
+    `</tbody><tfoot><tr><td>Итого</td>${KEYS.map(k => `<td class="n${nc(r.total[k[0]])}">${M(r.total[k[0]],1,true)}</td>`).join('')}<td class="n${nc(r.total.net)}"><b>${M(r.total.net,1,true)}</b></td></tr></tfoot></table>` +
+    (r.matures.length ? `<p class="note" style="margin-top:4px">Выбывают до горизонта (оферта / погашение): ${r.matures.length} ${plural(r.matures.length,'позиция','позиции','позиций')}.</p>` : '');
 }
 
 /* ======================= 6. Сценарии ======================= */
 const COMP = [['rates','Ставки'],['spread','Спреды'],['fx','FX'],['convexity','Выпуклость'],['fxCross','Кросс FX']];
 const scById = id => D.SCENARIOS.find(s => s.id === id);
 const scColor = id => TK.cat[D.SCENARIOS.findIndex(s => s.id === id) % 8];
-// FX фондирования: разнесённая часть уже в позициях (fxFunding), сверху — только нераспределённый остаток книг.
+// FX фондирования: тело фондирования облигации — в её позиции (fxFunding), сверху — FX остатков ДС и РЕПО книги.
 // Без фондирования обе части исключаются.
 function scRun(sc, l){
   const r = U.runScenario(sc, l), wf = S.withFunding;
@@ -1242,7 +1314,13 @@ function scDesc(sc){
   const parts = [];
   if (sc.curves) Object.keys(sc.curves).forEach(c => { const v = sc.curves[c]; parts.push(D.CURVES[c].name + ': ' + (Array.isArray(v) ? num(v[0],0,true) + '…' + num(v[v.length-1],0,true) + ' б.п. (1M…20Y+)' : num(v,0,true) + ' б.п.')); });
   if (sc.fx) parts.push('ослабление RUB: ' + Object.keys(sc.fx).map(c => c + ' +' + num(sc.fx[c],0) + '%').join(', '));
-  if (sc.spreads) { if (sc.spreads._all) parts.push('спреды +' + sc.spreads._all + ' б.п.'); if (sc.spreads._mult) parts.push('спреды ×' + num(sc.spreads._mult,1)); }
+  if (sc.ofzSpread) parts.push('спред ОФЗ к RUONIA ' + num(sc.ofzSpread,0,true) + ' б.п.');
+  const sp = sc.spreads;
+  if (sp) {
+    if (sp._all) parts.push('кредитные спреды ' + num(sp._all,0,true) + ' б.п.');
+    if (sp._mult) parts.push('спреды ×' + num(sp._mult,1));
+    ['rating','sector','issuer'].forEach(g => { if (sp[g]) parts.push(Object.keys(sp[g]).map(k => k + ' ' + num(sp[g][k],0,true)).join(', ') + ' б.п.'); });
+  }
   return parts.join(' · ');
 }
 function rScen(){
@@ -1287,7 +1365,7 @@ function rScen(){
     `</tbody><tfoot><tr><td>Итого</td>${COMP.map(c => `<td class="n${nc(fr.comp[c[0]])}">${M(fr.comp[c[0]],1)}</td>`).join('')}<td class="n${nc(fr.ff)}">${M(fr.ff,1)}</td><td class="n${nc(fr.total)}">${M(fr.total,1,true)}</td></tr></tfoot></table>`;
   $('sc-desc').innerHTML = '<b>Шоки:</b> ' + esc(scDesc(fsc)) + '. ' + (fr.fullReval ? 'Полная переоценка расчётным сервисом.'
     : 'Разложение до 2-го порядка: key-rate DV01 и CS01; выпуклость — матрица гамм (ставки, спред, ставки×спред) или выпуклость к доходности; '
-      + 'кросс FX — валютная часть PnL пересчитана по шокированному курсу. FX-переоценка фондирования разнесена на позиции книги.'
+      + 'кросс FX — валютная часть PnL пересчитана по шокированному курсу. FX облигации считается вместе с телом её фондирования; FX остатков ДС — столбец «Фонд. FX».'
       + (fr.warn ? ` <b>Сдвиг доходности до ${num(fr.maxDy,0)} б.п. у ${fr.warn.positions} поз. (${pct(fr.warn.mvShare)} MV): за пределами ±${U.ACCURACY_BP} б.п. разложение 2-го порядка неточно — нужна полная переоценка.</b>` : ''));
   const top = fr.by.slice().sort((a,b) => a.total - b.total).slice(0,10).filter(x => x.total < 0);
   $('sc-top-title').textContent = 'Топ-10 убыточных позиций · ' + fsc.name;
@@ -1297,20 +1375,24 @@ function rScen(){
 
 /* ======================= 7. PnL ======================= */
 function rPnl(){
-  const l = P(), fp = fundPnl(), wf = S.withFunding;
-  const steps = PNL_KEYS.map(k => ({n:k[1], v:sum(l, p => p.pnl[k[0]])}));
-  if (wf) { steps.push({n:'Фонд. кэрри', v:fp.carry}); steps.push({n:'Фонд. FX', v:fp.fx}); }
-  const explained = sum(steps, s => s.v), unexp = sum(l, p => p.pnl.unexplained), official = explained + unexp;
+  const l = P(), fp = fundPnl(), wf = S.withFunding, ready = offReady();
+  const keys = PNL_KEYS.filter(k => wf || k[0] !== 'funding');
+  const steps = keys.map(k => ({n:k[1], v:sum(l, p => pnlComp(p, k[0]))}));
+  if (wf) { steps.push({n:'Фонд. ДС/РЕПО', v:fp.carry}); steps.push({n:'Фонд. FX ДС', v:fp.fx}); }
+  const flash = sum(steps, s => s.v);
+  const expC = sum(l, expCbrOf) + (wf ? fp.carry + fp.fxCbr : 0), basis = expC - flash;
+  const unexp = ready ? sum(l, p => p.pnl.unexplained) : 0, official = expC + unexp;
   const bars = []; let r = 0;
   steps.forEach(s => { bars.push({n:s.n, lo:r, hi:r + s.v, v:s.v, k:'d'}); r += s.v; });
-  bars.push({n:'Explained', lo:0, hi:explained, v:explained, k:'t'});
-  bars.push({n:'Unexplained', lo:explained, hi:official, v:unexp, k:'u'});
-  bars.push({n:'Официальный', lo:0, hi:official, v:official, k:'t'});
-  const col = b => b.k === 't' ? TK.accent : b.k === 'u' ? TK.serious : (b.v < 0 ? TK.neg : TK.pos);
+  bars.push({n:'Флэш (рынок)', lo:0, hi:flash, v:flash, k:'t'});
+  bars.push({n:'Курсы ЦБ', lo:flash, hi:expC, v:basis, k:'b'});
+  if (ready) { bars.push({n:'Unexplained', lo:expC, hi:official, v:unexp, k:'u'}); bars.push({n:'Официальный (ЦБ)', lo:0, hi:official, v:official, k:'t'}); }
+  const col = b => b.k === 't' ? TK.accent : b.k === 'u' ? TK.serious : b.k === 'b' ? TK.fg_3 : (b.v < 0 ? TK.neg : TK.pos);
   const narrow = $('c-pnl-wf').clientWidth < 640;
+  $('pnl-off-st').innerHTML = ready ? chip('ok', 'Официальный PnL за ' + dt(D.official.asOf || D.asOf) + ' получен') : chip('info', 'Официальный PnL — ожидается T+1');
   chart('c-pnl-wf', opt({
     grid:{left:6, right:10, top:22, bottom:6},
-    tooltip:{trigger:'item', formatter:p => { const b = bars[p.dataIndex]; return `<b>${esc(b.n)}</b><br>${M(b.v,2,true)} млн ₽` + (b.k === 'd' ? `<br><span style="opacity:.7">накопл.: ${M(b.hi,1,true)}</span>` : ''); }},
+    tooltip:{trigger:'item', formatter:p => { const b = bars[p.dataIndex]; return `<b>${esc(b.n)}</b><br>${M(b.v,2,true)} млн ₽` + (b.k === 'd' ? `<br><span style="opacity:.7">накопл.: ${M(b.hi,1,true)}</span>` : b.k === 'b' ? '<br><span style="opacity:.7">FX-компоненты по курсам ЦБ вместо рыночных</span>' : ''); }},
     xAxis:xCat(bars.map(b => WF_SHORT[b.n] || b.n), {axisLabel:{color:TK.fg_2, fontSize:10.5, fontFamily:TK.ui, interval:0, rotate:narrow ? 40 : 0, hideOverlap:false, lineHeight:13}}),
     yAxis:yVal(v => num(v,0)),
     series:[{type:'custom', name:'PnL', encode:{x:0, y:[1,2]},
@@ -1325,30 +1407,29 @@ function rPnl(){
         return {type:'group', children:ch};
       }}]
   }));
-  const pctEx = official ? explained/official : 0;
   $('pnl-side').innerHTML = `<div class="bigs">
-     <div><span class="kl">Официальный</span><span class="kv${nc(official)}">${M(official,1,true)}</span></div>
-     <div><span class="kl">Explained</span><span class="kv${nc(explained)}">${M(explained,1,true)}</span></div>
-     <div><span class="kl">Unexplained</span><span class="kv${nc(unexp)}">${M(unexp,2,true)}</span></div>
-     <div><span class="kl">Unexplained / |офиц.|</span><span class="kv">${official ? pct(Math.abs(unexp/official),1) : '—'}</span></div></div>
-     <p class="note" style="margin-top:10px">${wf ? 'Включает фондирование: кэрри ' + M(fp.carry,1,true) + ' и FX-переоценку ' + M(fp.fx,1,true) + ' млн ₽ отдельными строками.' : 'Без фондирования: только позиционный PnL.'} Порог разбора break — 0,5 млн ₽ на позицию.</p>
-     <div class="lim" style="margin-top:6px">${PNL_KEYS.map(k => { const v = sum(l, p => p.pnl[k[0]]); return `<div class="lim-r"><span class="sw" style="background:${v < 0 ? TK.neg : TK.pos}"></span><span>${k[1]}</span><span class="num${nc(v)}">${M(v,2,true)}</span></div>`; }).join('')}</div>`;
-  void pctEx;
+     <div><span class="kl">Флэш (рынок)</span><span class="kv${nc(flash)}">${M(flash,1,true)}</span></div>
+     <div><span class="kl">Официальный (ЦБ)</span><span class="kv${nc(official)}">${ready ? M(official,1,true) : '—'}</span></div>
+     <div><span class="kl">Курсы ЦБ − рынок</span><span class="kv${nc(basis)}">${M(basis,2,true)}</span></div>
+     <div><span class="kl">Unexplained (vs ЦБ)</span><span class="kv${nc(unexp)}">${ready ? M(unexp,2,true) : '—'}</span></div></div>
+     <p class="note" style="margin-top:10px">${wf ? 'С фондированием: облигации — в компоненте «Фондирование» (' + M(sum(l, p => p.pnl.funding || 0),1,true) + ' млн), остатки ДС и РЕПО — строками книги (' + M(fp.carry,1,true) + ' млн, FX ' + M(fp.fx,1,true) + ').' : 'Без фондирования: только позиционный PnL.'} Официальный PnL приходит на T+1 и сравнивается с explain по курсам ЦБ. Порог разбора break — 0,5 млн ₽ на позицию.</p>
+     <div class="lim" style="margin-top:6px">${keys.map(k => { const v = sum(l, p => pnlComp(p, k[0])); return `<div class="lim-r"><span class="sw" style="background:${v < 0 ? TK.neg : TK.pos}"></span><span>${k[1]}</span><span class="num${nc(v)}">${M(v,2,true)}</span></div>`; }).join('')}</div>`;
   // by book
   const books = ALL_BOOKS.filter(b => S.books.has(b));
-  const br = books.map(b => { const x = l.filter(p => p.book === b), fb = FU().filter(f => f.book === b); const fadd = wf ? sum(fb, f => f.pnl.carry + f.pnl.fx) : 0;
-    const e = sum(x, p => p.pnl.explained) + fadd, o = sum(x, p => p.pnl.official) + fadd; return {b, e, o, u:o - e}; }).filter(r => Math.abs(r.o) > 1 || Math.abs(r.e) > 1);
+  const br = books.map(b => { const x = l.filter(p => p.book === b), fb = FU().filter(f => f.book === b && !f.pnl.inPosition);
+    const fa = wf ? sum(fb, f => f.pnl.carry + f.pnl.fx) : 0, faC = wf ? sum(fb, f => f.pnl.carry + (f.pnl.fxCbr != null ? f.pnl.fxCbr : f.pnl.fx)) : 0;
+    const e = sum(x, flashOf) + fa, c = sum(x, expCbrOf) + faC, o = ready ? sum(x, p => offOf(p) || 0) + faC : null; return {b, e, c, o, u:ready ? o - c : 0}; }).filter(r => Math.abs(r.o || 0) > 1 || Math.abs(r.e) > 1);
   const bst = u => Math.abs(u) >= 2e6 ? ['crit','Крупный'] : Math.abs(u) >= 0.5e6 ? ['warn','Разобрать'] : ['ok','В допуске'];
-  $('pnl-books').innerHTML = `<table class="t"><thead><tr><th>Книга</th><th class="n">Официальный</th><th class="n">Explained</th><th class="n">Break</th><th class="n">Break, %</th><th>Статус</th></tr></thead><tbody>` +
-    br.map(r => `<tr><td>${esc(D.BOOKS[r.b].name)}</td><td class="n${nc(r.o)}">${M(r.o,2,true)}</td><td class="n${nc(r.e)}">${M(r.e,2,true)}</td><td class="n${nc(r.u)}"><b>${M(r.u,2,true)}</b></td><td class="n">${r.o ? pct(Math.abs(r.u/r.o),1) : '—'}</td><td>${chip(bst(r.u)[0], bst(r.u)[1])}</td></tr>`).join('') +
-    `</tbody><tfoot><tr><td>Итого</td><td class="n${nc(official)}">${M(official,2,true)}</td><td class="n${nc(explained)}">${M(explained,2,true)}</td><td class="n${nc(unexp)}">${M(unexp,2,true)}</td><td class="n">${official ? pct(Math.abs(unexp/official),1) : '—'}</td><td></td></tr></tfoot></table>`;
+  $('pnl-books').innerHTML = `<table class="t"><thead><tr><th>Книга</th><th class="n">Флэш (рынок)</th><th class="n">Explain (ЦБ)</th><th class="n">Официальный (ЦБ)</th><th class="n">Break</th><th>Статус</th></tr></thead><tbody>` +
+    br.map(r => `<tr><td>${esc(D.BOOKS[r.b].name)}</td><td class="n${nc(r.e)}">${M(r.e,2,true)}</td><td class="n${nc(r.c)}">${M(r.c,2,true)}</td><td class="n${nc(r.o || 0)}">${ready ? M(r.o,2,true) : '—'}</td><td class="n${nc(r.u)}"><b>${ready ? M(r.u,2,true) : '—'}</b></td><td>${ready ? chip(bst(r.u)[0], bst(r.u)[1]) : chip('info','Ожидается')}</td></tr>`).join('') +
+    `</tbody><tfoot><tr><td>Итого</td><td class="n${nc(flash)}">${M(flash,2,true)}</td><td class="n${nc(expC)}">${M(expC,2,true)}</td><td class="n${nc(official)}">${ready ? M(official,2,true) : '—'}</td><td class="n${nc(unexp)}">${ready ? M(unexp,2,true) : '—'}</td><td></td></tr></tfoot></table>`;
   // breaks
-  const bl = l.filter(p => p.pnl.breakNote || Math.abs(p.pnl.unexplained) >= 0.5e6).sort((a,b) => Math.abs(b.pnl.unexplained) - Math.abs(a.pnl.unexplained));
+  const bl = ready ? l.filter(p => p.pnl.breakNote || Math.abs(p.pnl.unexplained) >= 0.5e6).sort((a,b) => Math.abs(b.pnl.unexplained) - Math.abs(a.pnl.unexplained)) : [];
   $('pnl-brk-cnt').textContent = bl.length + ' ' + plural(bl.length,'позиция','позиции','позиций') + ' · |break| ≥ 0,5 млн или с комментарием';
   $('pnl-breaks').innerHTML = bl.length ? bl.map(p => `<div class="break-it"><span class="ttl"><button type="button" class="lnk" data-act="pos" data-v="${p.id}">${esc(p.name)}</button><span class="pill">${esc(D.BOOKS[p.book].name)}</span>${p.pnl.breakNote ? chip('warn','Причина найдена') : chip('serious','Не разобран')}</span>
       <span class="num${nc(p.pnl.unexplained)}"><b>${M(p.pnl.unexplained,2,true)}</b> млн</span>
-      <span class="nt">${p.pnl.breakNote ? esc(p.pnl.breakNote) : 'Комментарий не указан.'} <span class="muted mono">офиц. ${M(p.pnl.official,2,true)} · expl. ${M(p.pnl.explained,2,true)}</span></span></div>`).join('')
-    : '<p class="note">Нет расхождений выше порога в текущем фильтре.</p>';
+      <span class="nt">${p.pnl.breakNote ? esc(p.pnl.breakNote) : 'Комментарий не указан.'} <span class="muted mono">офиц. ${M(p.pnl.official,2,true)} · explain ЦБ ${M(p.pnl.explainedCbr,2,true)} · флэш ${M(p.pnl.explained,2,true)}</span></span></div>`).join('')
+    : `<p class="note">${ready ? 'Нет расхождений выше порога в текущем фильтре.' : 'Официальный PnL ещё не пришёл (T+1).'}</p>`;
 }
 
 /* ---------- events ---------- */
@@ -1358,6 +1439,7 @@ document.addEventListener('click', e => {
   if (t) {
     const a = t.dataset.act, v = t.dataset.v;
     if (a === 'tab' || a === 'goto') return setTab(v);
+    if (a === 'ent') { const db = ALL_BOOKS.filter(b => D.BOOKS[b].entity === v); const exact = S.books.size === db.length && db.every(b => S.books.has(b)); S.books = new Set(exact ? ALL_BOOKS : db); return rerender(); }
     if (a === 'desk') { const db = ALL_BOOKS.filter(b => D.BOOKS[b].desk === v); const exact = S.books.size === db.length && db.every(b => S.books.has(b)); S.books = new Set(exact ? ALL_BOOKS : db); return rerender(); }
     if (a === 'book') { toggleIn(S.books, ALL_BOOKS, v); return rerender(); }
     if (a === 'books-all') { S.books = new Set(ALL_BOOKS); return rerender(); }
@@ -1379,6 +1461,7 @@ document.addEventListener('click', e => {
     }
     if (a === 'scen') { const s = S.scen.sel, i = s.indexOf(v); if (i >= 0) { if (s.length > 1) s.splice(i,1); } else { s.push(v); if (s.length > 4) s.shift(); S.scen.focus = v; } return rScen(); }
     if (a === 'scfocus') { S.scen.focus = v; return rScen(); }
+    if (a === 'carry') { const [id, h] = v.split('|'); S.fund.carry = id; S.fund.h = h; return rCarry(P()); }
   }
   const sb = e.target.closest('.seg button');
   if (sb) {
@@ -1403,6 +1486,7 @@ document.addEventListener('change', e => {
   const t = e.target;
   if (t.id === 'f-ccy') { S.ccy = t.value; return rerender(); }
   if (t.id === 'f-fund') { S.withFunding = t.checked; renderKpi(); return renderTab(); }
+  if (t.id === 'fu-roll') { S.fund.roll = t.checked; return rCarry(P()); }
   if (t.id === 'sum-bview') { S.sum.bview = t.value; return rSummary(); }
   if (t.id === 'bd-curve') { S.bd.curve = t.value; store.set('fidm.bdcurve', t.value); return rBonds(); }
   if (t.id === 'bd-group') { S.bd.group = t.value; return rBonds(); }
@@ -1420,7 +1504,7 @@ document.addEventListener('keydown', e => {
   const typing = tag === 'input' || tag === 'select' || tag === 'textarea' || e.target.isContentEditable;
   if (!typing && !e.ctrlKey && !e.metaKey && !e.altKey && /^[1-9]$/.test(e.key) && +e.key <= TABS.length) { e.preventDefault(); return setTab(TABS[+e.key - 1][0]); }
   if ((e.key === 'Enter' || e.key === ' ') && !typing) {
-    const t = e.target.closest && e.target.closest('tr[data-act], th[data-act]');
+    const t = e.target.closest && e.target.closest('tr[data-act], th[data-act], td[data-act]');
     if (t) { e.preventDefault(); t.click(); }
   }
   if (e.target.classList && e.target.classList.contains('tab-b') && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {

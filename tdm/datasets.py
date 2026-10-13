@@ -7,6 +7,7 @@ kind:
   ref       — справочник: актуальная версия, upsert по ключу;
   snapshot  — срез на дату: файл заменяет все строки своих дат (и книг, если есть book_id);
   series    — временной ряд: upsert по (дата, ключ).
+replace_all — справочник целиком заменяется файлом (строки, которых нет в файле, удаляются).
 priority: 1 — обязательно для работы мониторов, 2 — желательно, 3 — потом / если есть.
 """
 from dataclasses import dataclass, field
@@ -38,6 +39,7 @@ class Dataset:
     date_col: Optional[str] = None
     replace_by: Tuple[str, ...] = ()   # snapshot: колонки, по которым заменяется срез
     example2: Optional[dict] = None     # вторая строка-пример
+    replace_all: bool = False           # ref: файл заменяет справочник целиком
 
 
 def C(name, type_, required, desc, example="", default=None):
@@ -55,7 +57,30 @@ DATASETS: List[Dataset] = [
          C("desk", "str", True, "деск (Rates, Credit, FX Credit, FX, …)", "Rates"),
          C("trader", "str", False, "ответственный трейдер", "А. Иванов"),
          C("active", "bool", False, "книга используется (по умолчанию 1)", "1", 1),
-         C("ord", "int", False, "порядок на экране", "1", 0)]),
+         C("ord", "int", False, "порядок на экране", "1", 0),
+         C("book_type", "str", False, "*1.3, обязательно:* режим фондирования TRADING / HTM / DERIVS, ровно один на книгу. "
+           "Пусто — выводится из позиций прогона (есть облигации → TRADING, иначе DERIVS)", "TRADING"),
+         C("entity", "str", False, "*1.3, обязательно:* юрлицо (иерархия юрлицо → деск → книга)", "Головной банк"),
+         C("ocp_to", "str", False, "*1.3:* книга деривативов, куда вечером передаётся ОВП (для TRADING с валютными бумагами)", "")]),
+    Dataset(
+        "funding_rates", "ref_funding_rate", "ref", ("book_type", "desk", "book_id", "entity", "instrument_id", "ccy"), 1,
+        "Справочник ставок фондирования (1.3)",
+        "Ставки фондирования облигаций торговых книг (строки POS) и остатков ДС книг деривативов (CASH); "
+        "состав ставки нужен монитору для сценариев кэрри. Пустое поле — «любое значение»; побеждает самое конкретное "
+        "правило: бумага (16) > книга (8) > юрлицо (4) > деск (2) > режим книги (1). Типовой набор: TRADING — RUB КС + спред деска, "
+        "CNY RUSFAR CNY + спред, USD / EUR / CHF фикс. 5 %; DERIVS — RUB RUONIA, CNY RUSFAR CNY, USD SOFR, EUR €STR, CHF SARON, спред 0.",
+        "текущая версия (истории ставок пока нет: прошлые дни пересчитываются по текущей)", "казначейство",
+        [C("book_type", "str", False, "TRADING / HTM / DERIVS", "TRADING"),
+         C("desk", "str", False, "деск", ""),
+         C("book_id", "str", False, "особая ставка книги", ""),
+         C("entity", "str", False, "юрлицо (вместе с instrument_id — особый спред юрлица по бумаге)", ""),
+         C("instrument_id", "str", False, "бумага: instrument_id, ISIN или имя (индивидуальная корректировка — TODO)", ""),
+         C("ccy", "str", True, "валюта бумаги / остатка", "RUB"),
+         C("index_name", "str", False, "индекс: КС, RUSFAR CNY, RUONIA, SOFR, €STR, SARON", "КС"),
+         C("spread_bp", "num", False, "спред к индексу, б.п.", "30"),
+         C("fixed_rate", "num", False, "фикс. ставка, % (hard ccy); вместо индекса", ""),
+         C("note", "str", False, "комментарий", "спред деска")],
+        replace_all=True),
     Dataset(
         "issuers", "ref_issuer", "ref", ("issuer_id",), 1, "Эмитенты и группы",
         "Концентрации по группам связанных заёмщиков, секторы, сегмент «Гос», референсы CDS.",
@@ -94,7 +119,7 @@ DATASETS: List[Dataset] = [
          C("issuer_id", "str", True, "эмитент из issuers", "7710168360"),
          C("asset_class", "str", True, "ОФЗ-ПД, ОФЗ-ПК, Корп RUB фикс, Корп RUB флоатер, Корп валютные, Суверен валютный, Секьюритизация", "ОФЗ-ПД"),
          C("segment", "str", True, "Гос / Корп / Секьюритизация", "Гос"),
-         C("ccy", "str", True, "валюта номинала", "RUB"),
+         C("ccy", "str", True, "валюта номинала: RUB, USD, CNY, EUR, CHF", "RUB"),
          C("face_value", "num", True, "номинал одной бумаги, в валюте", "1000"),
          C("issue_date", "date", False, "дата размещения", "2019-05-15"),
          C("maturity", "date", True, "дата погашения", "2029-08-29"),
@@ -107,7 +132,9 @@ DATASETS: List[Dataset] = [
          C("amortizing", "bool", False, "амортизация номинала", "0"),
          C("offer_date", "date", False, "ближайшая оферта (put/call): к ней считаются доходность, спред и срок в таблице облигаций и в истории выпуска", ""),
          C("is_mbs", "bool", False, "ИЦБ / ABS", "0"),
-         C("collateral_eligible", "bool", False, "входит в ломбардный список / РЕПО с ЦК", "1")]),
+         C("collateral_eligible", "bool", False, "входит в ломбардный список / РЕПО с ЦК", "1"),
+         C("call_date", "date", False, "*1.3:* ближайший колл (бессрочные, субординированные) — для JTD и риска продления", ""),
+         C("is_subord", "bool", False, "*1.3:* субординированный выпуск", "0")]),
     Dataset(
         "bond_cashflows", "ref_cashflow", "ref", ("instrument_id", "date", "type"), 2, "График платежей облигаций",
         "Лестница денежных потоков, ближайшие купоны/погашения/оферты; нужен расчётному сервису для переоценки.",
@@ -138,12 +165,14 @@ DATASETS: List[Dataset] = [
          C("cds_spread_bp", "num", False, "CDS: контрактный спред, б.п.", ""),
          C("fx_rate", "num", False, "FX: курс сделки", ""),
          C("counterparty_id", "str", False, "контрагент", "NCC"),
-         C("cleared", "bool", False, "через ЦК", "1")]),
+         C("cleared", "bool", False, "через ЦК", "1"),
+         C("purpose", "str", False, "*1.3:* OCP_TRANSFER — вечерняя передача ОВП из книги облигаций в книгу деривативов "
+           "(fx_rate — курс ЦБ на завтра, maturity — T+1)", "")]),
     Dataset(
         "curves", "ref_curve", "ref", ("curve_id",), 1, "Определения кривых",
         "Какие кривые есть, их валюта и тип; ключи кривых используются в рисках и сценариях.",
         "один раз", "методология расчётного сервиса",
-        [C("curve_id", "str", True, "ключ: RUB OFZ, RUB RUONIA, RUB KEY, USD SOFR, CNY, EUR ESTR", "RUB OFZ"),
+        [C("curve_id", "str", True, "ключ: RUB OFZ, RUB RUONIA, RUB KEY, USD SOFR, CNY, EUR ESTR, CHF SARON", "RUB OFZ"),
          C("name", "str", True, "подпись", "ОФЗ (КБД)"),
          C("ccy", "str", True, "валюта", "RUB"),
          C("kind", "str", True, "bond / swap", "bond"),
@@ -156,6 +185,12 @@ DATASETS: List[Dataset] = [
         "год назад — год вперёд", "производственный календарь РФ / МосБиржа",
         [C("date", "date", True, "дата", "2026-10-13"),
          C("is_business_day", "bool", True, "рабочий день рынка", "1")]),
+    Dataset(
+        "cbr_meetings", "ref_cbr_meeting", "ref", ("date",), 1, "Заседания ЦБ по ключевой ставке (1.3)",
+        "Траектории КС в сценариях кэрри и фондирования (docs/SCENARIOS.md §7).",
+        "опубликованный график на год вперёд", "ЦБ",
+        [C("date", "date", True, "дата решения", "2026-10-23"),
+         C("effective_date", "date", False, "с какого дня действует новая КС (пусто — следующий рабочий день)", "2026-10-26")]),
 
     # ------------------------------------------------------------------ ежедневные срезы
     Dataset(
@@ -173,11 +208,16 @@ DATASETS: List[Dataset] = [
          C("book_value", "num", False, "балансовая стоимость, RUB", ""),
          C("mark_price", "num", False, "цена переоценки источника, % (для сверки)", "87.60"),
          C("accrued", "num", False, "НКД, в валюте", ""),
-         C("mv_rub", "num", False, "MV по данным источника, RUB (для сверки)", "3680000000")],
+         C("mv_rub", "num", False, "MV по данным источника, RUB (для сверки)", "3680000000"),
+         C("purchase_date", "date", False, "*1.3, книги HTM:* дата покупки", ""),
+         C("purchase_price", "num", False, "*1.3, HTM:* чистая цена покупки, % номинала (база фондирования)", ""),
+         C("purchase_yield", "num", False, "*1.3, HTM:* доходность покупки, % (начисление)", ""),
+         C("contract_rate", "num", False, "*1.3, HTM:* контрактная ставка фондирования, % (до погашения)", "")],
         date_col="as_of", replace_by=("as_of", "book_id")),
     Dataset(
         "funding", "fund_snapshot", "snapshot", ("as_of", "deal_id"), 1, "Фондирование (ежедневный снэпшот)",
-        "Лестница фондирования, стоимость фондирования, разрыв активы/пассивы, валютное фондирование в ОВП.",
+        "С 1.3 — только сделки, которые не выводятся из позиций и остатков: РЕПО деска РЕПО против книги (покрытие шорта), "
+        "особые сделки. Фондирование облигаций торговых книг строится из positions + funding_rates, книг деривативов — из cash_balances.",
         "каждый рабочий день за год", "казначейство (FTP), бэк-офис (РЕПО, FX-свопы)",
         [C("as_of", "date", True, "дата среза", "2026-10-13"),
          C("deal_id", "str", True, "номер сделки", "REPO-88812"),
@@ -193,6 +233,15 @@ DATASETS: List[Dataset] = [
          C("maturity", "date", True, "окончание", "2026-10-14"),
          C("counterparty_id", "str", False, "контрагент", "NCC"),
          C("collateral", "str", False, "обеспечение (ISIN или описание)", "ОФЗ-ПД")],
+        date_col="as_of", replace_by=("as_of", "book_id")),
+    Dataset(
+        "cash_balances", "cash_snapshot", "snapshot", ("as_of", "book_id", "ccy"), 1, "Остатки ДС книг деривативов (1.3)",
+        "Фондирование книг DERIVS: остаток в каждой валюте × O/N-ставка валюты (строки CASH); FX-переоценка остатков; ОВП.",
+        "каждый рабочий день за год", "выгрузка из системы, ежедневно",
+        [C("as_of", "date", True, "дата среза", "2026-10-13"),
+         C("book_id", "str", True, "книга DERIVS", "RATES"),
+         C("ccy", "str", True, "валюта", "RUB"),
+         C("balance", "num", True, "остаток в валюте: + размещён, − привлечён", "-1350000000")],
         date_col="as_of", replace_by=("as_of", "book_id")),
     Dataset(
         "trades", "trade_log", "series", ("trade_date", "trade_id"), 2, "Сделки дня",
@@ -212,13 +261,18 @@ DATASETS: List[Dataset] = [
         date_col="trade_date"),
     Dataset(
         "pnl_official", "pnl_official", "series", ("as_of", "book_id", "position_id"), 1, "Официальный PnL",
-        "Сверка «официальный vs explained», разрывы (break) по позициям и книгам, история PnL.",
+        "Сверка «официальный vs explained», разрывы (break) по позициям и книгам, история PnL. С 1.3 — управленческий PnL "
+        "по бумаге и книге, по курсам ЦБ, с фондированием; приходит на T+1 и прикрепляется к EOD-прогону за ту же дату: "
+        "python -m tdm attach-official --as-of <дата>.",
         "каждый рабочий день за год; по позициям, минимум — по книгам", "бэк-офис / управленческий учёт",
         [C("as_of", "date", True, "дата", "2026-10-13"),
          C("book_id", "str", True, "книга", "OFZ"),
          C("position_id", "str", False, "позиция; пусто = итог по книге", "OFZ|SU26242RMFS0"),
          C("pnl_rub", "num", True, "PnL за день, RUB (+ прибыль)", "-6600000"),
-         C("comment", "str", False, "комментарий", "")],
+         C("comment", "str", False, "комментарий", ""),
+         C("carry", "num", False, "*1.3:* компонента: начисление, RUB (временный состав)", ""),
+         C("funding", "num", False, "*1.3:* компонента: фондирование, RUB", ""),
+         C("fx", "num", False, "*1.3:* компонента: FX по курсам ЦБ, RUB", "")],
         date_col="as_of"),
 
     # ------------------------------------------------------------------ рынок
@@ -234,19 +288,31 @@ DATASETS: List[Dataset] = [
         date_col="date"),
     Dataset(
         "md_fx", "md_fx", "series", ("date", "ccy"), 1, "Курсы валют (история)",
-        "Переоценка в RUB, ОВП, FX-шоки, исторические сценарии по курсам.",
-        "каждый рабочий день за год", "МосБиржа (закрытие TOM) или официальный курс ЦБ — один источник на всё",
+        "Рыночные курсы на срез ~19:00 (внешние котировки USDRUB, EURRUB, CHFRUB, CNYRUB): флэш-PnL, ОВП, FX-шоки, исторические сценарии. "
+        "Официальные курсы ЦБ — отдельный набор md_fx_cbr.",
+        "каждый рабочий день за год", "внешние котировки на ~19:00, подаются изнутри; один источник на весь год",
         [C("date", "date", True, "дата", "2026-10-13"),
-         C("ccy", "str", True, "USD, CNY, EUR, …", "USD"),
+         C("ccy", "str", True, "USD, CNY, EUR, CHF", "USD"),
          C("rate", "num", True, "RUB за 1 единицу валюты", "81.45"),
-         C("source", "str", False, "источник", "MOEX TOM close")],
+         C("source", "str", False, "источник", "внутр. котировки 19:00")],
+        date_col="date"),
+    Dataset(
+        "md_fx_cbr", "md_fx_cbr", "series", ("date", "ccy"), 1, "Официальные курсы ЦБ (1.3)",
+        "Официальный PnL и сверка флэша с ним (курс, действующий на дату), курс передачи ОВП (установленный сегодня на завтра).",
+        "каждый день за год, по дате действия", "ЦБ",
+        [C("date", "date", True, "дата действия курса (курс, установленный в пятницу на субботу–понедельник, — на каждую из этих дат "
+           "или на дату начала действия)", "2026-10-13"),
+         C("ccy", "str", True, "USD, EUR, CNY, CHF", "USD"),
+         C("rate", "num", True, "RUB за 1 единицу", "81.12"),
+         C("set_date", "date", False, "дата установления", "2026-10-12")],
         date_col="date"),
     Dataset(
         "md_fixings", "md_fixing", "series", ("date", "index_name"), 1, "Фиксинги индексов (история)",
-        "Ставки флоатеров и фондирования, бенчмарк стоимости фондирования, кэрри свопов.",
-        "каждый рабочий день за год", "ЦБ (КС, RUONIA), МосБиржа (RUSFAR, RUSFAR CNY), ФРС/ЕЦБ (SOFR, €STR)",
-        [C("date", "date", True, "дата", "2026-10-13"),
-         C("index_name", "str", True, "КС, RUONIA, RUSFAR O/N, RUSFAR 1W, RUSFAR 1M, RUSFAR CNY, SOFR, €STR", "RUONIA"),
+        "Ставки флоатеров и фондирования (начисление по ставке каждого календарного дня), бенчмарк стоимости фондирования, кэрри свопов. "
+        "КС — по дате вступления в силу: значение действует с этой даты до следующей записи.",
+        "каждый рабочий день за год", "ЦБ (КС, RUONIA), МосБиржа (RUSFAR, RUSFAR CNY), ФРС / ЕЦБ / SNB (SOFR, €STR, SARON)",
+        [C("date", "date", True, "дата (для КС — дата вступления в силу)", "2026-10-13"),
+         C("index_name", "str", True, "КС, RUONIA, RUSFAR O/N, RUSFAR 1W, RUSFAR 1M, RUSFAR CNY, SOFR, €STR, SARON", "RUONIA"),
          C("value", "num", True, "значение, %", "14.32")],
         date_col="date"),
     Dataset(

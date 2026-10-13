@@ -16,3 +16,7 @@ class ScenarioEngineJs(unittest.TestCase):
     def test_bonds(self):
         r = subprocess.run(["node", str(ROOT / "tests" / "js" / "bonds.test.js")], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_funding_carry(self):
+        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "funding_carry.test.js")], capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

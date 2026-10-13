@@ -48,7 +48,13 @@ CREATE TABLE IF NOT EXISTS calc_run (
   comment          TEXT,
   started_at       TEXT NOT NULL,
   published_at     TEXT,                    -- момент перехода в 'complete'
-  error            TEXT                     -- причина 'failed'
+  error            TEXT,                    -- причина 'failed'
+  -- v5 (контракт 1.3)
+  prev_date        TEXT,                    -- прошлый рабочий день: начисления за (prev_date, as_of]
+  accrual_days     INTEGER,                 -- календарных дней начисления (в понедельник — 3)
+  jtd_recovery     REAL,                    -- recovery для JTD облигаций (параметр деска, по умолчанию 0)
+  ofz_spread_move  REAL,                    -- изменение спреда ОФЗ к RUONIA за день, б.п. (справочно)
+  official_at      TEXT                     -- когда к прогону приложен официальный PnL (T+1)
 );
 CREATE INDEX IF NOT EXISTS ix_calc_run_asof ON calc_run (as_of, status, run_id);
 
@@ -70,6 +76,9 @@ CREATE TABLE IF NOT EXISTS run_book (
   desk    TEXT NOT NULL,                    -- 'Rates' / 'Credit' / ...
   trader  TEXT,
   ord     INTEGER NOT NULL DEFAULT 0,
+  book_type TEXT,                           -- v5: режим фондирования 'TRADING' | 'HTM' | 'DERIVS'
+  entity  TEXT,                             -- v5: юрлицо (юрлицо → деск → книга)
+  ocp_to  TEXT,                             -- v5: книга деривативов, куда вечером передаётся ОВП (TRADING)
   PRIMARY KEY (run_id, book_id)
 );
 
@@ -110,8 +119,11 @@ CREATE TABLE IF NOT EXISTS mkt_curve_point (
 CREATE TABLE IF NOT EXISTS mkt_fx (
   run_id   INTEGER NOT NULL REFERENCES calc_run (run_id) ON DELETE CASCADE,
   ccy      TEXT NOT NULL,                   -- 'USD'; для 'RUB' rate = 1
-  rate     REAL NOT NULL,                   -- RUB за 1 единицу валюты
+  rate     REAL NOT NULL,                   -- RUB за 1 единицу валюты, рыночный (~19:00): флэш-PnL
   move_pct REAL NOT NULL DEFAULT 0,         -- изменение курса за день, %
+  rate_cbr      REAL,                       -- v5: курс ЦБ, действующий на as_of (официальный PnL); NULL = rate
+  move_pct_cbr  REAL,                       -- v5: изменение курса ЦБ к прошлому рабочему дню, %
+  rate_cbr_next REAL,                       -- v5: курс ЦБ, установленный в as_of на завтра (передача ОВП)
   PRIMARY KEY (run_id, ccy)
 );
 
@@ -168,6 +180,14 @@ CREATE TABLE IF NOT EXISTS position (
   yield_date   TEXT,                        -- дата, к которой посчитаны ytm/спред (оферта/колл); NULL = погашение
   spread_type  TEXT,                        -- 'Z' | 'G' | 'I' | 'DM' | 'OAS' | 'ASW' — что лежит в spread_bp
   spread_curve TEXT,                        -- кривая, к которой посчитан spread_bp (DM — кривая индекса)
+  -- v5 (контракт 1.3)
+  ofz_spr01    REAL NOT NULL DEFAULT 0,     -- ОФЗ: RUB за +1 б.п. спреда ОФЗ к RUONIA (у прочих 0)
+  accrual_only INTEGER NOT NULL DEFAULT 0,  -- HTM: учёт по начислению, вне рыночных рисков
+  purchase_date  TEXT,                      -- HTM: дата покупки
+  purchase_price REAL,                      -- HTM: чистая цена покупки, % номинала
+  purchase_yield REAL,                      -- HTM: доходность покупки, %
+  contract_rate  REAL,                      -- HTM: контрактная ставка фондирования, %
+  ocp_transfer INTEGER NOT NULL DEFAULT 0,  -- сделка вечерней передачи ОВП (extra.ocp_transfer)
   PRIMARY KEY (run_id, position_id),
   FOREIGN KEY (run_id, book_id) REFERENCES run_book (run_id, book_id) ON DELETE CASCADE
 );
@@ -211,7 +231,8 @@ CREATE TABLE IF NOT EXISTS position_gamma (
   FOREIGN KEY (run_id, position_id) REFERENCES position (run_id, position_id) ON DELETE CASCADE
 );
 
--- PnL за день и его объяснение. explained = сумма компонент; unexplained = official - explained.
+-- PnL за день и его объяснение. explained (флэш, рыночные курсы) = сумма компонент;
+-- explained_cbr = explained + (fx_gross_cbr + fx_funding_cbr) - (fx_gross + fx_funding); unexplained = official - explained_cbr.
 CREATE TABLE IF NOT EXISTS position_pnl (
   run_id      INTEGER NOT NULL,
   position_id TEXT NOT NULL,
@@ -220,18 +241,22 @@ CREATE TABLE IF NOT EXISTS position_pnl (
   rates       REAL NOT NULL DEFAULT 0,
   spread      REAL NOT NULL DEFAULT 0,
   fx_gross    REAL NOT NULL DEFAULT 0,      -- FX-переоценка самой позиции
-  fx_funding  REAL NOT NULL DEFAULT 0,      -- доля FX-переоценки валютного фондирования книги
+  fx_funding  REAL NOT NULL DEFAULT 0,      -- FX-переоценка тела фондирования самой бумаги (строка POS)
   convexity   REAL NOT NULL DEFAULT 0,
   new_trades  REAL NOT NULL DEFAULT 0,
   other       REAL NOT NULL DEFAULT 0,
-  official    REAL,                         -- официальный PnL (бэк-офис); NULL = ещё нет
+  official    REAL,                         -- официальный управленческий PnL (курсы ЦБ, T+1); NULL = ещё нет
   break_note  TEXT,                         -- комментарий к расхождению
+  funding        REAL NOT NULL DEFAULT 0,   -- v5: процент по фондированию бумаги за день (строка POS / HTM)
+  fx_gross_cbr   REAL,                      -- v5: fx_gross по курсам ЦБ; NULL = как fx_gross
+  fx_funding_cbr REAL,                      -- v5: fx_funding по курсам ЦБ; NULL = как fx_funding
   PRIMARY KEY (run_id, position_id),
   FOREIGN KEY (run_id, position_id) REFERENCES position (run_id, position_id) ON DELETE CASCADE
 );
 
 -- ---------------------------------------------------------------------------
--- Фондирование
+-- Фондирование: строки POS (облигация книги TRADING), HTM (контрактная ставка), CASH (остаток ДС книги DERIVS),
+-- REPO (сделка деска РЕПО против книги); DEAL — сделка книги в форме 1.2
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS funding_deal (
   run_id       INTEGER NOT NULL,
@@ -246,6 +271,15 @@ CREATE TABLE IF NOT EXISTS funding_deal (
   maturity     TEXT NOT NULL,
   counterparty TEXT,
   collateral   TEXT,
+  -- v5 (контракт 1.3)
+  kind         TEXT NOT NULL DEFAULT 'DEAL', -- 'POS' | 'HTM' | 'CASH' | 'REPO' | 'DEAL' (1.2)
+  position_id  TEXT,                        -- POS / HTM: бумага, которую фондирует строка
+  index_name   TEXT,                        -- индекс ставки ('КС', 'RUSFAR CNY', 'RUONIA', ...)
+  spread_bp    REAL,                        -- спред к индексу, б.п.
+  fixed_rate   REAL,                        -- фикс. ставка, %
+  benchmark    TEXT,                        -- бенчмарк стоимости фондирования
+  day_basis    INTEGER,                     -- 365 / 360
+  rule_note    TEXT,                        -- комментарий правила справочника ставок
   PRIMARY KEY (run_id, deal_id),
   FOREIGN KEY (run_id, book_id) REFERENCES run_book (run_id, book_id) ON DELETE CASCADE
 );
@@ -255,9 +289,42 @@ CREATE TABLE IF NOT EXISTS funding_pnl (
   deal_id      TEXT NOT NULL,
   carry        REAL NOT NULL DEFAULT 0,     -- стоимость фондирования за день (привлечение < 0)
   fx_gross     REAL NOT NULL DEFAULT 0,     -- FX-переоценка сделки
-  fx_allocated REAL NOT NULL DEFAULT 0,     -- часть fx_gross, разнесённая в position_pnl.fx_funding
+  fx_allocated REAL NOT NULL DEFAULT 0,     -- часть fx_gross, ушедшая в position_pnl.fx_funding бумаги (POS: = fx_gross)
+  fx_gross_cbr REAL,                        -- v5: fx_gross по курсам ЦБ; NULL = как fx_gross
   PRIMARY KEY (run_id, deal_id),
   FOREIGN KEY (run_id, deal_id) REFERENCES funding_deal (run_id, deal_id) ON DELETE CASCADE
+);
+
+-- Справочник ставок фондирования на прогон (снимок ref_funding_rate). Пустое поле = «любое значение».
+-- Побеждает самое конкретное правило: бумага 16 > книга 8 > юрлицо 4 > деск 2 > режим книги 1.
+CREATE TABLE IF NOT EXISTS funding_rule (
+  run_id        INTEGER NOT NULL REFERENCES calc_run (run_id) ON DELETE CASCADE,
+  ord           INTEGER NOT NULL,
+  book_type     TEXT,
+  desk          TEXT,
+  book_id       TEXT,
+  entity        TEXT,
+  instrument_id TEXT,                       -- instrument_id, ISIN или имя бумаги
+  ccy           TEXT,
+  index_name    TEXT,
+  spread_bp     REAL,
+  fixed_rate    REAL,
+  note          TEXT,
+  PRIMARY KEY (run_id, ord)
+);
+
+-- Передача ОВП книг TRADING в книги деривативов (сводка; сами сделки — позиции с ocp_transfer = 1)
+CREATE TABLE IF NOT EXISTS run_ocp_transfer (
+  run_id     INTEGER NOT NULL REFERENCES calc_run (run_id) ON DELETE CASCADE,
+  ord        INTEGER NOT NULL,
+  from_book  TEXT NOT NULL,
+  to_book    TEXT NOT NULL,
+  ccy        TEXT NOT NULL,
+  amount     REAL NOT NULL,                 -- передано, в валюте
+  before     REAL,                          -- ОВП книги до передачи, в валюте
+  rate       REAL,                          -- курс сделки (курс ЦБ на завтра)
+  value_date TEXT,
+  PRIMARY KEY (run_id, ord)
 );
 
 -- ---------------------------------------------------------------------------
@@ -286,13 +353,23 @@ CREATE TABLE IF NOT EXISTS scenario_funding_result (
   PRIMARY KEY (run_id, scenario_id, book_id)
 );
 
+-- Сценарии кэрри и фондирования (глобально, считаются в мониторе: docs/SCENARIOS.md §7)
+CREATE TABLE IF NOT EXISTS carry_scenario_def (
+  scenario_id     TEXT PRIMARY KEY,         -- 'flat'
+  name            TEXT NOT NULL,
+  ord             INTEGER NOT NULL DEFAULT 0,
+  definition_json TEXT NOT NULL,            -- {"ks":{"mode":...},"on":{...},"fundSpread":{...},"hardCcy":7}
+  active          INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+  updated_at      TEXT NOT NULL
+);
+
 -- ---------------------------------------------------------------------------
 -- История итогов по деску (для графиков за 22 дня)
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS desk_history (
   as_of         TEXT PRIMARY KEY,
   run_id        INTEGER REFERENCES calc_run (run_id) ON DELETE SET NULL,  -- NULL = загружено как история
-  pnl_official  REAL NOT NULL,              -- позиции + фондирование (carry + FX-остаток)
+  pnl_official  REAL NOT NULL,              -- позиции (official, курсы ЦБ) + фондирование книг (строки без position_id)
   pnl_explained REAL NOT NULL,
   dv01          REAL NOT NULL,
   cs01          REAL NOT NULL,
@@ -307,7 +384,8 @@ CREATE TABLE IF NOT EXISTS desk_history (
 -- Справочники (актуальная версия; история важных атрибутов — отдельными рядами)
 CREATE TABLE IF NOT EXISTS ref_book (
   book_id TEXT PRIMARY KEY, name TEXT NOT NULL, desk TEXT NOT NULL, trader TEXT,
-  active INTEGER NOT NULL DEFAULT 1, ord INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
+  active INTEGER NOT NULL DEFAULT 1, ord INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
+  book_type TEXT, entity TEXT, ocp_to TEXT                                   -- v5
 );
 CREATE TABLE IF NOT EXISTS ref_issuer (
   issuer_id TEXT PRIMARY KEY, name TEXT NOT NULL, issuer_group TEXT NOT NULL, sector TEXT, country TEXT,
@@ -324,7 +402,8 @@ CREATE TABLE IF NOT EXISTS ref_instrument (
   instrument_id TEXT PRIMARY KEY, isin TEXT, name TEXT NOT NULL, issuer_id TEXT NOT NULL, asset_class TEXT NOT NULL,
   segment TEXT NOT NULL, ccy TEXT NOT NULL, face_value REAL NOT NULL, issue_date TEXT, maturity TEXT NOT NULL,
   coupon_type TEXT NOT NULL, coupon_rate REAL, coupon_freq INTEGER, day_count TEXT, index_name TEXT, margin REAL,
-  amortizing INTEGER, offer_date TEXT, is_mbs INTEGER, collateral_eligible INTEGER, updated_at TEXT NOT NULL
+  amortizing INTEGER, offer_date TEXT, is_mbs INTEGER, collateral_eligible INTEGER, updated_at TEXT NOT NULL,
+  call_date TEXT, is_subord INTEGER                                          -- v5
 );
 CREATE TABLE IF NOT EXISTS ref_cashflow (
   instrument_id TEXT NOT NULL, date TEXT NOT NULL, type TEXT NOT NULL, rate REAL, amount REAL, updated_at TEXT NOT NULL,
@@ -334,7 +413,8 @@ CREATE TABLE IF NOT EXISTS ref_otc_deal (
   deal_id TEXT PRIMARY KEY, instr_type TEXT NOT NULL CHECK (instr_type IN ('IRS', 'XCCY', 'CDS', 'FX')),
   book_id TEXT NOT NULL, trade_date TEXT NOT NULL, start_date TEXT, maturity TEXT NOT NULL, ccy TEXT NOT NULL,
   notional REAL NOT NULL, side TEXT NOT NULL, fixed_rate REAL, float_index TEXT, float_spread_bp REAL, notional_rub REAL,
-  reference_issuer_id TEXT, cds_spread_bp REAL, fx_rate REAL, counterparty_id TEXT, cleared INTEGER, updated_at TEXT NOT NULL
+  reference_issuer_id TEXT, cds_spread_bp REAL, fx_rate REAL, counterparty_id TEXT, cleared INTEGER, updated_at TEXT NOT NULL,
+  purpose TEXT                                                               -- v5: 'OCP_TRANSFER' — вечерняя передача ОВП
 );
 CREATE TABLE IF NOT EXISTS ref_curve (
   curve_id TEXT PRIMARY KEY, name TEXT NOT NULL, ccy TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('bond', 'swap')),
@@ -343,12 +423,24 @@ CREATE TABLE IF NOT EXISTS ref_curve (
 CREATE TABLE IF NOT EXISTS ref_calendar (
   date TEXT PRIMARY KEY, is_business_day INTEGER NOT NULL, updated_at TEXT NOT NULL
 );
+-- v5: справочник ставок фондирования. Пустая строка '' = «любое значение» (ключ — все поля, кроме ставки).
+CREATE TABLE IF NOT EXISTS ref_funding_rate (
+  book_type TEXT NOT NULL DEFAULT '', desk TEXT NOT NULL DEFAULT '', book_id TEXT NOT NULL DEFAULT '',
+  entity TEXT NOT NULL DEFAULT '', instrument_id TEXT NOT NULL DEFAULT '', ccy TEXT NOT NULL,
+  index_name TEXT, spread_bp REAL, fixed_rate REAL, note TEXT, updated_at TEXT NOT NULL,
+  PRIMARY KEY (book_type, desk, book_id, entity, instrument_id, ccy)
+);
+-- v5: заседания ЦБ по ключевой ставке (для сценариев кэрри)
+CREATE TABLE IF NOT EXISTS ref_cbr_meeting (
+  date TEXT PRIMARY KEY, effective_date TEXT, updated_at TEXT NOT NULL
+);
 
 -- Ежедневные срезы
 CREATE TABLE IF NOT EXISTS pos_snapshot (
   as_of TEXT NOT NULL, book_id TEXT NOT NULL, position_id TEXT NOT NULL, instrument_id TEXT, deal_id TEXT,
   quantity REAL, face_amount REAL, avg_price REAL, book_value REAL, mark_price REAL, accrued REAL, mv_rub REAL,
   updated_at TEXT NOT NULL,
+  purchase_date TEXT, purchase_price REAL, purchase_yield REAL, contract_rate REAL,   -- v5: HTM
   PRIMARY KEY (as_of, position_id),
   CHECK (instrument_id IS NOT NULL OR deal_id IS NOT NULL)
 );
@@ -359,6 +451,11 @@ CREATE TABLE IF NOT EXISTS fund_snapshot (
   maturity TEXT NOT NULL, counterparty_id TEXT, collateral TEXT, updated_at TEXT NOT NULL,
   PRIMARY KEY (as_of, deal_id)
 );
+-- v5: остатки денежных средств книг деривативов по валютам
+CREATE TABLE IF NOT EXISTS cash_snapshot (
+  as_of TEXT NOT NULL, book_id TEXT NOT NULL, ccy TEXT NOT NULL, balance REAL NOT NULL, updated_at TEXT NOT NULL,
+  PRIMARY KEY (as_of, book_id, ccy)
+);
 CREATE TABLE IF NOT EXISTS trade_log (
   trade_date TEXT NOT NULL, trade_id TEXT NOT NULL, book_id TEXT NOT NULL, position_id TEXT NOT NULL, instrument_id TEXT,
   deal_id TEXT, side TEXT NOT NULL, quantity REAL, face_amount REAL, price REAL, counterparty_id TEXT, updated_at TEXT NOT NULL,
@@ -367,6 +464,7 @@ CREATE TABLE IF NOT EXISTS trade_log (
 CREATE TABLE IF NOT EXISTS pnl_official (
   as_of TEXT NOT NULL, book_id TEXT NOT NULL, position_id TEXT NOT NULL DEFAULT '',  -- '' = итог по книге
   pnl_rub REAL NOT NULL, comment TEXT, updated_at TEXT NOT NULL,
+  carry REAL, funding REAL, fx REAL,                                         -- v5: необязательные компоненты
   PRIMARY KEY (as_of, book_id, position_id)
 );
 
@@ -377,6 +475,11 @@ CREATE TABLE IF NOT EXISTS md_curve_point (
 );
 CREATE TABLE IF NOT EXISTS md_fx (
   date TEXT NOT NULL, ccy TEXT NOT NULL, rate REAL NOT NULL, source TEXT, updated_at TEXT NOT NULL,
+  PRIMARY KEY (date, ccy)
+);
+-- v5: официальные курсы ЦБ по дате действия (date — дата, на которую курс действует)
+CREATE TABLE IF NOT EXISTS md_fx_cbr (
+  date TEXT NOT NULL, ccy TEXT NOT NULL, rate REAL NOT NULL, set_date TEXT, updated_at TEXT NOT NULL,
   PRIMARY KEY (date, ccy)
 );
 CREATE TABLE IF NOT EXISTS md_fixing (

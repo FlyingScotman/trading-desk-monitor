@@ -45,6 +45,7 @@
   color-scheme:dark;
 }
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 body{background:var(--bg);color:var(--fg);font:13px/1.45 var(--font-sans);margin:0}
 button,input,select{font:inherit;color:inherit}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
@@ -190,6 +191,20 @@ table.t td.z{color:var(--fg-3)}
 .bars{display:grid;grid-template-columns:minmax(0,150px) minmax(0,1fr) 84px;gap:5px 10px;align-items:center;padding:8px 12px 12px;font-size:12px}
 .bars .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
+/* ---------- кэрри ---------- */
+.mt{width:100%;border-collapse:collapse;font-size:12px}
+.mt td,.mt th{padding:2px 4px;border-bottom:1px solid var(--line);white-space:nowrap}
+.mt th{font:600 10px var(--font-mono);text-transform:uppercase;letter-spacing:.05em;color:var(--fg-3);text-align:right}
+.mt th.l,.mt td.l{text-align:left}
+.mt td.n{text-align:right;font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+.mt input[type=number]{width:70px;border:1px solid var(--line-strong);background:var(--surface);padding:1px 4px;border-radius:3px;font-family:var(--font-mono);text-align:right}
+.quick{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0}
+.quick .btn{padding:2px 8px;font-size:12px}
+input[type=date].dt{border:1px solid var(--line-strong);background:var(--surface);padding:2px 6px;border-radius:3px;font-family:var(--font-mono)}
+.cm td.click{cursor:pointer}
+.cm td.sel{outline:2px solid var(--accent);outline-offset:-2px}
+#cy-chart{height:320px}
+
 /* ---------- explain ---------- */
 .ex{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:12px}
 .recon{display:flex;flex-wrap:wrap;gap:12px 28px;align-items:flex-end;padding:12px}
@@ -265,6 +280,7 @@ table.t td.z{color:var(--fg-3)}
   <div class="seg" role="tablist" aria-label="Режим">
     <button id="mode-scen" role="tab" aria-selected="true" aria-controls="view-scen">Сценарии</button>
     <button id="mode-expl" role="tab" aria-selected="false" aria-controls="view-expl">PnL explain</button>
+    <button id="mode-carry" role="tab" aria-selected="false" aria-controls="view-carry">Кэрри и фондирование</button>
   </div>
   <div class="spacer"></div>
   <span class="mono muted" id="asof"></span>
@@ -300,9 +316,14 @@ table.t td.z{color:var(--fg-3)}
             <button class="btn" data-shape="zero">Сброс</button>
           </div>
           <div class="row"><label for="mag">Амплитуда</label><input type="range" id="mag" min="-500" max="500" step="5" value="100"><output id="mag-o" class="num" for="mag"></output></div>
-          <label class="chk"><input type="checkbox" id="link" checked> Связать RUB-кривые (ОФЗ / RUONIA / КС двигаются вместе)</label>
+          <label class="chk"><input type="checkbox" id="link" checked> Связать RUB-кривые (RUONIA и КС двигаются вместе, базис сохраняется)</label>
           <p class="note" style="margin-bottom:10px">Перетащите маркер или кликните в колонку бакета. Клавиатура: ↑/↓ ±5 б.п., PgUp/PgDn ±25.</p>
         </div>
+      </div>
+
+      <div class="sect">
+        <div class="ph"><h2>Спред ОФЗ и базис</h2><span class="hint">б.п.</span></div>
+        <div class="pb" id="ofz-box" style="padding-top:2px"></div>
       </div>
 
       <div class="sect">
@@ -311,7 +332,7 @@ table.t td.z{color:var(--fg-3)}
       </div>
 
       <div class="sect">
-        <div class="ph"><h2>Кредитные спреды</h2><span class="hint">аддитивно, б.п.</span></div>
+        <div class="ph"><h2>Кредитные спреды</h2><span class="hint">к RUONIA · аддитивно, б.п.</span></div>
         <div class="pb" id="cr-box" style="padding-top:2px"></div>
       </div>
 
@@ -362,11 +383,69 @@ table.t td.z{color:var(--fg-3)}
     </div>
   </section>
 
+  <!-- ===================== КЭРРИ И ФОНДИРОВАНИЕ ===================== -->
+  <section id="view-carry" class="scen" role="tabpanel" aria-labelledby="mode-carry" hidden>
+    <aside class="panel builder" aria-label="Сценарий фондирования">
+      <div class="sect">
+        <div class="ph"><h2>Сценарии фондирования</h2><span class="hint" id="cy-ph">чистый кэрри, млн ₽</span></div>
+        <ul class="presets" id="cy-presets"></ul>
+      </div>
+      <div class="sect">
+        <div class="ph"><h2>Горизонт</h2><span class="hint" id="cy-end"></span></div>
+        <div class="pb" style="padding-top:2px"><div class="toolbar"><div class="seg small" id="cy-h"></div><label class="sr" for="cy-date">Дата горизонта</label><input type="date" class="dt" id="cy-date"></div></div>
+      </div>
+      <div class="sect">
+        <div class="ph"><h2>Траектория КС</h2><span class="hint">сейчас <span class="mono" id="cy-ks0"></span></span></div>
+        <div class="pb" style="padding-top:2px">
+          <div class="seg small" id="cy-mode"><button data-m="flat">без изменений</button><button data-m="implied">рынок (RUB KEY)</button><button data-m="steps">по заседаниям</button></div>
+          <div class="quick" id="cy-quick"><button class="btn" data-q="-100">−100 на каждом</button><button class="btn" data-q="-50">−50 на каждом</button><button class="btn" data-q="0">пауза</button><button class="btn" data-q="+100">+100 на ближайшем</button></div>
+          <div id="cy-meet"></div>
+          <p class="note">Решение — в пятницу, новая КС действует со следующего рабочего дня. График заседаний ориентировочный.</p>
+        </div>
+      </div>
+      <div class="sect">
+        <div class="ph"><h2>O/N-ставки и спреды</h2><span class="hint">б.п., на весь горизонт</span></div>
+        <div class="pb" id="cy-on" style="padding-top:2px"></div>
+      </div>
+      <div class="sect">
+        <div class="pb"><label class="chk"><input type="checkbox" id="cy-roll"> Ролл-даун к горизонту (фикс. облигации и IRS)</label>
+          <p class="note">Позиции постоянны; бумага выбывает в дату оферты / погашения — после неё нет ни дохода, ни фондирования. Доход — по доходности (флоатеры следуют за своим индексом), фондирование облигаций — чистая MV × ставка дня, остатки ДС деривативов — по O/N. RUONIA и RUSFAR O/N идут за КС с сегодняшним базисом.</p></div>
+      </div>
+    </aside>
+    <div class="res">
+      <div class="panel s7">
+        <div class="ph"><h2>Чистый кэрри на горизонте</h2><span class="scname" id="cy-name"></span></div>
+        <div class="hero" id="cy-hero"></div>
+        <div class="dec" id="cy-dec"></div>
+      </div>
+      <div class="panel s5">
+        <div class="ph"><h2>Ставки фондирования</h2><span class="hint">средние за горизонт, %</span></div>
+        <div class="scroll"><table class="t" id="cy-rates"></table></div>
+      </div>
+      <div class="panel s12">
+        <div class="ph"><h2>КС и накопленный кэрри</h2><span class="hint">пунктир — «КС без изменений»</span></div>
+        <div class="chart" id="cy-chart" role="img" aria-label="Траектория КС и накопленный чистый кэрри"></div>
+      </div>
+      <div class="panel s12">
+        <div class="ph"><h2>По книгам</h2><span class="hint">млн ₽ за горизонт · Δ — к «КС без изменений»</span></div>
+        <div class="scroll"><table class="t" id="cy-books"></table></div>
+      </div>
+      <div class="panel s12">
+        <div class="ph"><h2>Сценарии × горизонты</h2><span class="hint">чистый кэрри, млн ₽ · клик — загрузить сценарий и горизонт</span></div>
+        <div class="scroll"><table class="t cm" id="cy-matrix"></table></div>
+      </div>
+      <div class="panel s12">
+        <div class="ph"><h2>Позиции: чувствительность кэрри к сценарию</h2><span class="hint">топ-15 по |Δ к «КС без изменений»|, млн ₽</span></div>
+        <div class="scroll"><table class="t" id="cy-pos"></table></div>
+      </div>
+    </div>
+  </section>
+
   <!-- ===================== PnL EXPLAIN ===================== -->
   <section id="view-expl" class="ex" role="tabpanel" aria-labelledby="mode-expl" hidden>
     <div class="panel s12">
       <div class="recon" id="recon"></div>
-      <div class="wip"><b>В разработке</b><span>Официальный PnL здесь смоделирован. Следующий шаг — интеграция с официальным PnL бэк-офиса и автоматическая сверка по сделкам. Сейчас позиционная детализация есть только за текущую дату; за прошлые 21 день хранятся лишь итоги.</span></div>
+      <div class="wip"><b>В разработке</b><span>Флэш считается вечером по рыночным курсам. Официальный управленческий PnL (по бумаге и книге, курсы ЦБ, с фондированием) приходит на T+1 и сверяется с explain по курсам ЦБ; здесь он смоделирован. Позиционная детализация есть только за текущую дату; за прошлые 21 день хранятся лишь итоги.</span></div>
     </div>
     <div class="panel s7">
       <div class="ph"><h2>Водопад explain</h2><span class="hint" id="wf-hint">млн ₽</span></div>
@@ -405,11 +484,17 @@ table.t td.z{color:var(--fg-3)}
 <script>
 (function(){
 'use strict';
-const D = window.DESK, U = D.util, P = D.positions, BK = D.BUCKETS, CK = Object.keys(D.CURVES);
-const RUBC = ['RUB OFZ','RUB RUONIA','RUB KEY'];
+const D = window.DESK, U = D.util, P = D.positions, BK = D.BUCKETS;
 const RAT = D.RATING_ORDER, BOOKK = Object.keys(D.BOOKS);
 const posById = {}; P.forEach(p => posById[p.id] = p);
 const DV = U.bucketMatrix(P);
+// в редакторе — только кривые, на которых есть риск (КБД 'RUB OFZ' — рыночная кривая: риск ОФЗ на RUONIA + спред ОФЗ)
+const CK = Object.keys(D.CURVES).filter(c => DV[c] && DV[c].some(v => Math.abs(v) > 1));
+const RUBC = ['RUB RUONIA','RUB KEY'].filter(c => CK.includes(c));
+const FXC = Object.keys(D.FX).filter(c => c !== 'RUB');
+// секторы с кредитным риском, по убыванию |CS01|
+const SECT = (function(){ const m = {}; P.forEach(p => { if (p.cs01 && p.sector) m[p.sector] = (m[p.sector] || 0) + Math.abs(p.cs01); }); return Object.keys(m).sort((a, b) => m[b] - m[a]); })();
+const OFZ01 = P.reduce((s, p) => s + (p.ofzSpr01 || 0), 0);
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
@@ -453,13 +538,19 @@ const T = (title, rows) => esc(`<b>${title}</b>` + rows.map(r => `<div>${r[0]}: 
 function normalize(sc){
   const curves = {};
   CK.forEach(c => { const v = sc.curves && sc.curves[c]; curves[c] = v == null ? BK.map(() => 0) : Array.isArray(v) ? v.slice() : BK.map(() => v); });
-  const fx = {USD:0, CNY:0, EUR:0}; if (sc.fx) Object.keys(fx).forEach(k => fx[k] = sc.fx[k] || 0);
-  const sp = sc.spreads || {}; const rating = {}; RAT.forEach(r => rating[r] = (sp[r] || 0) + (sp._all || 0));
-  return {name: sc.name, curves, fx, rating, mult: sp._mult || 1, includeGov: !!sp.includeGov};
+  const fx = {}; FXC.forEach(k => fx[k] = (sc.fx && sc.fx[k]) || 0);
+  const sp = sc.spreads || {}; const rating = {}, sector = {};
+  // _all раскладывается по рейтингам (у всех бумаг с CS01 есть рейтинг); старый формат — рейтинг ключом верхнего уровня
+  RAT.forEach(r => rating[r] = (typeof sp[r] === 'number' ? sp[r] : 0) + ((sp.rating && sp.rating[r]) || 0) + (sp._all || 0));
+  SECT.forEach(k => sector[k] = (sp.sector && sp.sector[k]) || 0);
+  const basis = RUBC.length === 2 ? Math.round(curves['RUB KEY'].reduce((a, v, i) => a + v - curves['RUB RUONIA'][i], 0) / BK.length) : 0;
+  return {name: sc.name, curves, fx, rating, sector, issuer: Object.assign({}, sp.issuer || {}), mult: sp._mult || 1, ofz: sc.ofzSpread || 0, basis};
 }
 function toScenario(ed){
   const curves = {}; CK.forEach(c => curves[c] = ed.curves[c].slice());
-  return {name: ed.name, curves, fx: Object.assign({}, ed.fx), spreads: Object.assign({}, ed.rating, {_mult: ed.mult, includeGov: ed.includeGov})};
+  const nz = o => { const r = {}; Object.keys(o).forEach(k => { if (o[k]) r[k] = o[k]; }); return r; };
+  return {name: ed.name, curves, fx: Object.assign({}, ed.fx), ofzSpread: ed.ofz || 0,
+    spreads: {rating: nz(ed.rating), sector: nz(ed.sector), issuer: nz(ed.issuer), _mult: ed.mult}};
 }
 function shockOf(sc){ const m = {}; CK.forEach(c => { const v = sc.curves && sc.curves[c]; m[c] = v == null ? BK.map(() => 0) : Array.isArray(v) ? v : BK.map(() => v); }); return m; }
 function compute(sc){
@@ -484,7 +575,7 @@ const RES0 = D.SCENARIOS.map(s => ({s, res: compute(s)}));
 const S = {
   mode: LS.get('scenlab.mode', 'scen'),
   ed: null, loadedId: 'keyhike', dirty: false,
-  cur: 'RUB OFZ', scale: 250, link: true, lastShape: null, mag: 100,
+  cur: 'RUB RUONIA', scale: 250, link: true, lastShape: null, mag: 100,
   custom: LS.get('scenlab.custom', []),
   res: null,
   heatSel: null,
@@ -568,10 +659,12 @@ function renderEditor(focusI){
   svg.innerHTML = s;
   if (focusI != null) { const h = svg.querySelector(`.h[data-i="${focusI}"]`); if (h) h.focus(); }
 }
+// связанные RUB-кривые двигаются вместе, сохраняя базис КС − RUONIA (S.ed.basis)
+const linkedVal = (c, val) => c === S.cur ? val : c === 'RUB KEY' ? val + S.ed.basis : val - S.ed.basis;
 function setBucket(i, val){
   val = clamp(snap(val), -500, 500);
   const targets = S.link && RUBC.includes(S.cur) ? RUBC : [S.cur];
-  targets.forEach(c => { S.ed.curves[c][i] = val; });
+  targets.forEach(c => { S.ed.curves[c][i] = clamp(linkedVal(c, val), -600, 600); });
 }
 function svgPt(e){ const svg = $('#cedit'), pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY; return pt.matrixTransform(svg.getScreenCTM().inverse()); }
 (function(){
@@ -608,7 +701,7 @@ const SHAPES = {
 function applyShape(k){
   const arr = SHAPES[k](S.mag).map(v => clamp(snap(v), -500, 500));
   const targets = S.link && RUBC.includes(S.cur) ? RUBC : [S.cur];
-  targets.forEach(c => S.ed.curves[c] = arr.slice());
+  targets.forEach(c => S.ed.curves[c] = arr.map(v => linkedVal(c, v)));
   S.lastShape = k === 'zero' ? null : k;
   if (Math.max.apply(null, arr.map(Math.abs)) > S.scale || k !== 'zero') autoScale();
   renderShapes(); renderTabs(); renderEditor(); markDirty();
@@ -622,28 +715,42 @@ $('#mag').addEventListener('input', e => { S.mag = +e.target.value; renderShapes
 $('#link').addEventListener('change', e => { S.link = e.target.checked; renderTabs(); renderEditor(); });
 
 // ---- FX и спреды ----
+function renderOfz(){
+  const kd = RUBC.includes('RUB KEY') ? DV['RUB KEY'].reduce((a, b) => a + b, 0) : 0;
+  $('#ofz-box').innerHTML = `<div class="row"><label for="ofz-s" title="Сдвиг спреда ОФЗ к RUONIA (× спред ОФЗ01)">Спред ОФЗ − RUONIA</label><input type="range" id="ofz-s" min="-200" max="300" step="5" value="${S.ed.ofz}"><output class="num" for="ofz-s">${snum(S.ed.ofz)} б.п.</output></div>`
+    + (RUBC.length === 2 ? `<div class="row"><label for="ks-b" title="Кривая RUB KEY = RUB RUONIA + базис">Базис КС − RUONIA</label><input type="range" id="ks-b" min="-200" max="200" step="5" value="${S.ed.basis}"><output class="num" for="ks-b">${snum(S.ed.basis)} б.п.</output></div>` : '')
+    + `<p class="note">Спред ОФЗ01 портфеля ${mln(OFZ01, 2)} млн ₽/б.п.; DV01 на RUB KEY (базис) ${mln(kd, 2)} млн ₽/б.п. Базис задаёт RUB KEY = RUONIA + базис.</p>`;
+}
+$('#ofz-box').addEventListener('input', e => {
+  const t = e.target, row = t.closest('.row'); if (!row) return;
+  if (t.id === 'ofz-s') { S.ed.ofz = +t.value; row.querySelector('output').textContent = snum(S.ed.ofz) + ' б.п.'; }
+  else if (t.id === 'ks-b') { S.ed.basis = +t.value; row.querySelector('output').textContent = snum(S.ed.basis) + ' б.п.'; S.ed.curves['RUB KEY'] = S.ed.curves['RUB RUONIA'].map(v => clamp(v + S.ed.basis, -600, 600)); renderTabs(); renderEditor(); }
+  else return;
+  markDirty();
+});
 function renderFx(){
-  $('#fx-box').innerHTML = ['USD','CNY','EUR'].map(c => {
+  $('#fx-box').innerHTML = FXC.map(c => {
     const v = S.ed.fx[c], rate = D.FX[c] * (1 + v / 100);
     return `<div class="row"><label for="fx-${c}" title="${c}/RUB">${c}/RUB <span class="muted mono">${num(rate, 2)}</span></label><input type="range" id="fx-${c}" data-fx="${c}" min="-40" max="40" step="1" value="${v}"><output class="num" for="fx-${c}">${snum(v)}%</output></div>`;
-  }).join('') + '<p class="note">Шок применяется к курсу и к валютному фондированию (строка «Фонд. FX»).</p>';
+  }).join('') + '<p class="note">Облигация шокируется вместе с телом своего фондирования (в валюте бумаги); FX остатков ДС книг деривативов — столбец «Фонд. FX».</p>';
 }
 $('#fx-box').addEventListener('input', e => { const c = e.target.dataset.fx; if (!c) return; S.ed.fx[c] = +e.target.value; const row = e.target.closest('.row'); row.querySelector('output').textContent = snum(S.ed.fx[c]) + '%'; row.querySelector('label span').textContent = num(D.FX[c] * (1 + S.ed.fx[c] / 100), 2); markDirty(); });
 function renderCredit(){
   $('#cr-box').innerHTML = RAT.map(r => `<div class="row"><label for="cr-${r}">${r}</label><input type="range" id="cr-${r}" data-r="${r}" min="-100" max="600" step="5" value="${S.ed.rating[r]}"><output class="num" for="cr-${r}">${snum(S.ed.rating[r])} б.п.</output></div>`).join('')
     + `<div class="row"><label for="cr-mult">Множитель спредов</label><input type="range" id="cr-mult" min="0.5" max="3" step="0.1" value="${S.ed.mult}"><output class="num" for="cr-mult">×${num(S.ed.mult, 1)}</output></div>`
-    + `<label class="chk"><input type="checkbox" id="cr-gov"${S.ed.includeGov ? ' checked' : ''}> Полный шок для гос. эмитентов (иначе 35%)</label>`
-    + '<p class="note">Множитель расширяет текущий спред: Δ = (k − 1) × спред. ОФЗ-ПД к КБД спредового риска не несут.</p>';
+    + `<details style="margin-top:4px"><summary class="note" style="cursor:pointer">По секторам (${SECT.length})</summary>`
+    + SECT.map(k => `<div class="row"><label for="cs-${esc(k)}" title="${esc(k)}">${esc(k)}</label><input type="range" id="cs-${esc(k)}" data-sec="${esc(k)}" min="-100" max="600" step="5" value="${S.ed.sector[k]}"><output class="num">${snum(S.ed.sector[k])} б.п.</output></div>`).join('') + '</details>'
+    + (Object.keys(S.ed.issuer).length ? `<p class="note">По эмитентам (из пресета): ${esc(Object.keys(S.ed.issuer).map(k => k + ' ' + snum(S.ed.issuer[k])).join(', '))} б.п.</p>` : '')
+    + '<p class="note">Шоки складываются: рейтинг + сектор + эмитент + (k − 1) × спред. Спред RUB-корпоратов — к RUONIA. Суверенные валютные бумаги шокируются как остальные; ОФЗ — слайдером «Спред ОФЗ − RUONIA».</p>';
 }
 $('#cr-box').addEventListener('input', e => {
   const t = e.target, row = t.closest('.row');
   if (t.dataset.r) { S.ed.rating[t.dataset.r] = +t.value; row.querySelector('output').textContent = snum(+t.value) + ' б.п.'; }
   else if (t.id === 'cr-mult') { S.ed.mult = +t.value; row.querySelector('output').textContent = '×' + num(S.ed.mult, 1); }
-  else if (t.id === 'cr-gov') { S.ed.includeGov = t.checked; }
+  else if (t.dataset.sec) { S.ed.sector[t.dataset.sec] = +t.value; row.querySelector('output').textContent = snum(+t.value) + ' б.п.'; }
   else return;
   markDirty();
 });
-$('#cr-box').addEventListener('change', e => { if (e.target.id === 'cr-gov') { S.ed.includeGov = e.target.checked; markDirty(); } });
 
 $('#save-form').addEventListener('submit', e => {
   e.preventDefault();
@@ -656,12 +763,12 @@ $('#save-form').addEventListener('submit', e => {
   renderPresets(); scheduleResults();
 });
 
-function renderBuilderAll(){ renderPresets(); renderTabs(); renderEditor(); renderShapes(); renderFx(); renderCredit(); $('#link').checked = S.link; $('#mag').value = S.mag; }
+function renderBuilderAll(){ renderPresets(); renderTabs(); renderEditor(); renderShapes(); renderOfz(); renderFx(); renderCredit(); $('#link').checked = S.link; $('#mag').value = S.mag; }
 
 // ---- результаты ----
 let rq = 0;
 function scheduleResults(){ if (rq) return; rq = requestAnimationFrame(() => { rq = 0; renderResults(); }); }
-const COMPS = [['rates','Rates'],['spread','Spread'],['fx','FX'],['convexity','Convexity'],['fxCross','FX cross'],['fundFx','Фонд. FX']];
+const COMPS = [['rates','Rates'],['spread','Spread (кредит + ОФЗ)'],['fx','FX'],['convexity','Convexity'],['fxCross','FX cross'],['fundFx','Фонд. FX']];
 function renderResults(){
   const sc = toScenario(S.ed), R = compute(sc); S.res = R;
   const loaded = allScen().find(s => s.id === S.loadedId);
@@ -748,8 +855,10 @@ document.addEventListener('click', e => {
 });
 
 // ================== PnL EXPLAIN ==================
-const EXC = [['carry','Carry'],['rolldown','Rolldown'],['rates','Rates'],['spread','Spread'],['fx','FX'],['convexity','Convexity'],['newTrades','Новые сделки'],['fundCarry','Фонд. carry'],['fundFx','Фонд. FX']];
-const NUMK = EXC.map(x => x[0]).concat(['explained','official','unexplained']);
+// Флэш (explained) — по рыночным курсам; официальный PnL — по курсам ЦБ, приходит на T+1.
+// official = explained + fxBasis (курсы ЦБ − рынок) + unexplained.
+const EXC = [['carry','Carry'],['rolldown','Rolldown'],['rates','Rates'],['spread','Spread'],['fx','FX'],['funding','Фондир.'],['convexity','Convexity'],['newTrades','Новые сделки'],['fundCarry','Фонд. ДС carry'],['fundFx','Фонд. ДС FX']];
+const NUMK = EXC.map(x => x[0]).concat(['explained','fxBasis','official','unexplained']);
 const TODAY = D.history[D.history.length - 1].date;
 function status(u, o, isRow){ const tol = Math.max(2e6, 0.05 * Math.abs(o)), a = Math.abs(u); return a > tol ? 'crit' : a > tol * (isRow ? .25 : .5) ? 'warn' : 'ok'; }
 function zero(){ const o = {}; NUMK.forEach(k => o[k] = 0); return o; }
@@ -760,11 +869,12 @@ const TREE = (function(){
     const meta = D.BOOKS[b];
     const kids = P.filter(p => p.book === b).map(p => {
       const r = Object.assign({kind:'pos', key:'p' + p.id, name:p.name, sub:`${p.assetClass} · ${p.ccy}${p.newToday ? ' · новая сделка' : ''}`, note:p.pnl.breakNote}, zero());
-      ['carry','rolldown','rates','spread','fx','convexity','newTrades','explained','official','unexplained'].forEach(k => r[k] = p.pnl[k]);
+      ['carry','rolldown','rates','spread','fx','funding','convexity','newTrades','explained','fxBasis','official','unexplained'].forEach(k => r[k] = p.pnl[k] || 0);
       return r;
     });
-    const fl = D.funding.filter(f => f.book === b);
-    if (fl.length) { const f = D.fundingPnlByBook[b]; const r = Object.assign({kind:'fund', key:'f' + b, name:`Фондирование (${fl.length} ${fl.length === 1 ? 'сделка' : fl.length < 5 ? 'сделки' : 'сделок'})`, sub:[...new Set(fl.map(x => x.type))].join(', ')}, zero()); r.fundCarry = f.carry; r.fundFx = f.fx; r.explained = r.official = f.carry + f.fx; kids.push(r); }
+    // фондирование уровня книги (остатки ДС, РЕПО); фондирование облигаций — в колонке «Фондир.» позиций
+    const fl = D.funding.filter(f => f.book === b && !(f.pnl && f.pnl.inPosition));
+    if (fl.length) { const f = D.fundingPnlByBook[b], fc = f.fxCbr != null ? f.fxCbr : f.fx; const r = Object.assign({kind:'fund', key:'f' + b, name:`Фондирование книги (${fl.length} ${fl.length === 1 ? 'строка' : fl.length < 5 ? 'строки' : 'строк'})`, sub:[...new Set(fl.map(x => x.type))].join(', ')}, zero()); r.fundCarry = f.carry; r.fundFx = f.fx; r.explained = f.carry + f.fx; r.fxBasis = fc - f.fx; r.official = f.carry + fc; kids.push(r); }
     const bn = Object.assign({kind:'book', key:'b' + b, book:b, name:meta.name, sub:meta.trader, children:kids}, zero());
     kids.forEach(k => addTo(bn, k));
     let d = dmap[meta.desk]; if (!d) { d = dmap[meta.desk] = Object.assign({kind:'desk', key:'d' + meta.desk, name:meta.desk, children:[]}, zero()); desks.push(d); }
@@ -780,18 +890,19 @@ TREE.desks.forEach(d => S.open.add(d.key));
 (function(){ let best = null; TREE.desks.forEach(d => d.children.forEach(b => { if (!best || Math.abs(b.unexplained) > Math.abs(best.unexplained)) best = b; })); if (best) S.open.add(best.key); })();
 
 function dayTotals(date){
-  if (date === TODAY) { const t = TREE.tot; return {official:t.official, explained:t.explained, unexplained:t.official - t.explained, detail:true}; }
-  const h = D.history.find(x => x.date === date); return {official:h.pnlOfficial, explained:h.pnlExplained, unexplained:h.pnlOfficial - h.pnlExplained, detail:false};
+  if (date === TODAY) { const t = TREE.tot; return {official:t.official, explained:t.explained, fxBasis:t.fxBasis, unexplained:t.unexplained, detail:true}; }
+  const h = D.history.find(x => x.date === date); return {official:h.pnlOfficial, explained:h.pnlExplained, fxBasis:0, unexplained:h.pnlOfficial - h.pnlExplained, detail:false};
 }
 function renderRecon(){
   const t = dayTotals(S.date), st = status(t.unexplained, t.official, false), pct = t.official ? t.unexplained / Math.abs(t.official) * 100 : 0;
   const opts = D.history.slice().reverse().map(h => `<option value="${h.date}"${h.date === S.date ? ' selected' : ''}>${fdate(h.date)}${h.date === TODAY ? ' · детализация' : ' · только итоги'}</option>`).join('');
   $('#recon').innerHTML = `<div class="datebox"><label class="lbl mono muted" for="ex-date" style="font:600 10px var(--font-mono);letter-spacing:.08em;text-transform:uppercase">Дата</label><select id="ex-date">${opts}</select></div>
-    <div class="kpi"><span class="lbl">Official PnL</span><span class="val">${smln(t.official)}<small>млн ₽</small></span></div><span class="op">−</span>
-    <div class="kpi"><span class="lbl">Explained</span><span class="val">${smln(t.explained)}<small>млн ₽</small></span></div><span class="op">=</span>
+    <div class="kpi"><span class="lbl">Official PnL (ЦБ)</span><span class="val">${smln(t.official)}<small>млн ₽</small></span></div><span class="op">−</span>
+    <div class="kpi"><span class="lbl">Флэш (рынок)</span><span class="val">${smln(t.explained)}<small>млн ₽</small></span></div><span class="op">−</span>
+    <div class="kpi"><span class="lbl">Курсы ЦБ − рынок</span><span class="val">${smln(t.fxBasis)}<small>млн ₽</small></span></div><span class="op">=</span>
     <div class="kpi"><span class="lbl">Unexplained</span><span class="val">${smln(t.unexplained)}<small>млн ₽</small></span></div>
     <div class="kpi"><span class="lbl">% unexplained</span><span class="val">${num(Math.abs(pct), 1)}<small>%</small></span></div>
-    <div class="kpi"><span class="lbl">Статус</span>${chip(st)}<span class="muted" style="font-size:11px">порог: max(5% · |official|, 2 млн ₽)</span></div>
+    <div class="kpi"><span class="lbl">Статус</span>${chip(st)}<span class="muted" style="font-size:11px">порог условный: max(5% · |official|, 2 млн ₽)</span></div>
     ${t.detail ? '' : '<div class="kpi" style="max-width:280px"><span class="lbl">Детализация</span><span class="muted" style="font-size:12px">За эту дату хранятся только итоги. Позиции и компоненты — только за ' + fdate(TODAY) + '.</span></div>'}`;
   $('#ex-date').addEventListener('change', e => { S.date = e.target.value; renderExplain(); });
 }
@@ -807,10 +918,11 @@ function renderWaterfall(){
   if (t.detail) {
     let cum = 0; const tot = TREE.tot;
     EXC.forEach(([k, n]) => { items.push({n, s:cum, e:cum + tot[k], v:tot[k], kind:'step'}); cum += tot[k]; });
-    items.push({n:'= Explained', s:0, e:tot.explained, v:tot.explained, kind:'total'});
-    items.push({n:'Unexplained', s:tot.explained, e:tot.official, v:tot.official - tot.explained, kind:'un'});
+    items.push({n:'= Флэш', s:0, e:tot.explained, v:tot.explained, kind:'total'});
+    items.push({n:'Курсы ЦБ', s:tot.explained, e:tot.explained + tot.fxBasis, v:tot.fxBasis, kind:'step'});
+    items.push({n:'Unexplained', s:tot.explained + tot.fxBasis, e:tot.official, v:tot.unexplained, kind:'un'});
     items.push({n:'= Official', s:0, e:tot.official, v:tot.official, kind:'total'});
-    $('#wf-hint').textContent = 'млн ₽ · ' + fdate(S.date);
+    $('#wf-hint').textContent = 'млн ₽ · ' + fdate(S.date) + ' · флэш по рыночным курсам, официальный — по курсам ЦБ';
   } else {
     items.push({n:'= Explained', s:0, e:t.explained, v:t.explained, kind:'total'});
     items.push({n:'Unexplained', s:t.explained, e:t.official, v:t.unexplained, kind:'un'});
@@ -825,7 +937,7 @@ function renderWaterfall(){
     animation: !reduced, animationDuration: 300,
     grid:{left:56, right:12, top:24, bottom: narrow ? 64 : 34},
     tooltip: Object.assign({trigger:'item', formatter: p => { const it = items[p.dataIndex]; return `<b>${it.n}</b><br>${smln(it.v)} млн ₽` + (it.kind === 'step' ? `<br><span style="color:${col.fg2}">нарастающим: ${smln(it.e)} млн</span>` : ''); }}, ttStyle()),
-    xAxis:{type:'category', data: items.map(i => i.n), axisLine:{lineStyle:{color:col.line2}}, axisTick:{show:false}, axisLabel:Object.assign({}, bt, {color:col.fg2, interval:0, rotate: narrow ? 40 : 0, fontSize: narrow ? 9 : 10, formatter: v => narrow ? v : v.replace('Новые сделки', 'Новые\nсделки').replace('Фонд. carry', 'Фонд.\ncarry').replace('Фонд. FX', 'Фонд.\nFX').replace('= Explained', '=\nExplained').replace('= Official', '=\nOfficial')})},
+    xAxis:{type:'category', data: items.map(i => i.n), axisLine:{lineStyle:{color:col.line2}}, axisTick:{show:false}, axisLabel:Object.assign({}, bt, {color:col.fg2, interval:0, rotate: narrow ? 40 : 0, fontSize: narrow ? 9 : 10, formatter: v => narrow ? v : v.replace('Новые сделки', 'Новые\nсделки').replace('Фонд. ДС carry', 'Фонд. ДС\ncarry').replace('Фонд. ДС FX', 'Фонд. ДС\nFX').replace('= Флэш', '=\nФлэш').replace('Курсы ЦБ', 'Курсы\nЦБ').replace('= Official', '=\nOfficial')})},
     yAxis:{type:'value', splitLine:{lineStyle:{color:col.line}}, axisLabel:Object.assign({}, bt, {formatter: v => num(v / 1e6, 0)})},
     series:[{type:'custom', data: items.map((it, i) => [i, it.s, it.e]), encode:{x:0, y:[1, 2]},
       renderItem: (params, api) => {
@@ -868,7 +980,7 @@ function renderHistory(){
   [m, u, cu].forEach(c => { if (c.__bound) return; c.__bound = true; c.getZr().on('click', e => { const pt = [e.offsetX, e.offsetY]; if (!c.containPixel('grid', pt)) return; const i = Math.round(c.convertFromPixel({xAxisIndex:0}, pt)[0]); if (H[i]) { S.date = H[i].date; renderExplain(); } }); });
 }
 
-function cellsFor(r){ return NUMK.filter(k => k !== 'explained' && k !== 'official' && k !== 'unexplained').map(k => `<td class="n${r[k] === 0 ? ' z' : ''}">${r[k] === 0 ? '·' : smln(r[k])}</td>`).join('') + `<td class="n">${smln(r.explained)}</td><td class="n">${smln(r.official)}</td><td class="n uc">${r.kind === 'fund' ? '<span class="muted">·</span>' : smln(r.unexplained)}</td>`; }
+function cellsFor(r){ return NUMK.filter(k => k !== 'explained' && k !== 'fxBasis' && k !== 'official' && k !== 'unexplained').map(k => `<td class="n${r[k] === 0 ? ' z' : ''}">${r[k] === 0 ? '·' : smln(r[k])}</td>`).join('') + `<td class="n">${smln(r.explained)}</td><td class="n${r.fxBasis ? '' : ' z'}">${r.fxBasis ? smln(r.fxBasis) : '·'}</td><td class="n">${smln(r.official)}</td><td class="n uc">${r.kind === 'fund' ? '<span class="muted">·</span>' : smln(r.unexplained)}</td>`; }
 const CHEV = '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M3 1l5 4-5 4z"/></svg>';
 function renderHier(){
   const wrap = $('#hier-wrap');
@@ -896,9 +1008,9 @@ function renderHier(){
       });
     });
   });
-  if (!rows) rows = `<tr><td class="l" colspan="14"><div class="empty"><b>Нет позиций с |unexplained| &gt; ${num(S.fltX, 1)} млн ₽</b>Снизьте порог фильтра.</div></td></tr>`;
+  if (!rows) rows = `<tr><td class="l" colspan="17"><div class="empty"><b>Нет позиций с |unexplained| &gt; ${num(S.fltX, 1)} млн ₽</b>Снизьте порог фильтра.</div></td></tr>`;
   const t = TREE.tot;
-  wrap.innerHTML = `<table class="t hier"><thead><tr><th class="l">Позиция · млн ₽</th>${EXC.map(x => `<th>${x[1]}</th>`).join('')}<th>Explained</th><th>Official</th><th>Unexpl.</th><th class="l">Статус</th></tr></thead><tbody>${rows}</tbody>
+  wrap.innerHTML = `<table class="t hier"><thead><tr><th class="l">Позиция · млн ₽</th>${EXC.map(x => `<th>${x[1]}</th>`).join('')}<th>Флэш</th><th>Курсы ЦБ</th><th>Official</th><th>Unexpl.</th><th class="l">Статус</th></tr></thead><tbody>${rows}</tbody>
     <tfoot><tr class="tot"><td class="l">Итого деск</td>${cellsFor(t)}<td class="l">${chip(status(t.unexplained, t.official, false))}</td></tr></tfoot></table>`;
 }
 $('#hier-wrap').addEventListener('click', e => { const b = e.target.closest('.tg'); if (!b || S.fltOn) return; const k = b.dataset.key; S.open.has(k) ? S.open.delete(k) : S.open.add(k); renderHier(); const nb = $(`#hier-wrap .tg[data-key="${k}"]`); if (nb) nb.focus(); });
@@ -934,33 +1046,149 @@ $('#rx-books').addEventListener('click', e => { const b = e.target.closest('[dat
 
 function renderExplain(){ renderRecon(); renderWaterfall(); renderHistory(); renderHier(); renderRx(); }
 
-// ================== режимы, тема ==================
-function setMode(m){
-  S.mode = m; LS.set('scenlab.mode', m);
-  $('#mode-scen').setAttribute('aria-selected', m === 'scen'); $('#mode-expl').setAttribute('aria-selected', m === 'expl');
-  $('#view-scen').hidden = m !== 'scen'; $('#view-expl').hidden = m !== 'expl';
-  if (m === 'expl') renderExplain();
+
+// ================== КЭРРИ И ФОНДИРОВАНИЕ ==================
+// Расчёт — DESK.util.runCarry (prototypes/desk-util.js). Сценарий: ks {mode, steps}, on {индекс: б.п.}, fundSpread {ccy: б.п.}, hardCcy, rolldown.
+const CY = {id: D.CARRY_SCENARIOS[0].id, h: '3M', cfg: null};
+const CY_ON = [['RUONIA','RUONIA − КС (базис)', -100, 100], ['RUSFAR CNY','RUSFAR CNY', -300, 500], ['SOFR','SOFR', -200, 300], ['€STR','€STR', -200, 300], ['SARON','SARON', -100, 300]].filter(x => D.INDICES[x[0]] != null);
+const CY_FS = ['RUB','CNY'];
+const cyBase = () => ({ks:{mode:'flat'}});
+function cyLoad(id){
+  const sc = D.CARRY_SCENARIOS.find(x => x.id === id) || D.CARRY_SCENARIOS[0];
+  CY.id = sc.id;
+  CY.cfg = {name: sc.name, ks: {mode: sc.ks.mode, steps: (sc.ks.steps || []).slice()}, on: Object.assign({}, sc.on || {}), fundSpread: Object.assign({}, sc.fundSpread || {}),
+    hardCcy: sc.hardCcy != null ? sc.hardCcy : null, rolldown: CY.cfg ? CY.cfg.rolldown : false, dirty: false};
 }
-$('#mode-scen').addEventListener('click', () => setMode('scen'));
-$('#mode-expl').addEventListener('click', () => setMode('expl'));
-document.querySelector('.seg[role=tablist]').addEventListener('keydown', e => { if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { const n = S.mode === 'scen' ? 'expl' : 'scen'; setMode(n); $('#mode-' + n).focus(); } });
+const cyEnd = () => U.carryEnd(CY.h);
+const cyMeetings = () => (D.CBR_MEETINGS || []).filter(m => m.effective > D.asOf && m.effective <= cyEnd());
+const cyRun = (cfg, h, positions) => U.runCarry(cfg, {horizon: h || CY.h, marks: D.CARRY_HORIZONS.map(x => x[0]), positions});
+const cySpec = () => ({ks: CY.cfg.ks, on: CY.cfg.on, fundSpread: CY.cfg.fundSpread, hardCcy: CY.cfg.hardCcy, rolldown: CY.cfg.rolldown});
+function cyDirty(){ CY.cfg.dirty = true; cyRenderAll(); }
+function cyRenderBuilder(){
+  const res = D.CARRY_SCENARIOS.map(sc => ({sc, r: U.runCarry(Object.assign({rolldown: CY.cfg.rolldown}, sc), {horizon: CY.h})}));
+  $('#cy-ph').textContent = 'чистый кэрри за ' + CY.h + ', млн ₽';
+  $('#cy-presets').innerHTML = res.map(x => `<li><button class="preset" data-cy="${esc(x.sc.id)}" aria-current="${CY.id === x.sc.id}"><span>${esc(x.sc.name)}${CY.id === x.sc.id && CY.cfg.dirty ? ' <span class="badge edit">изменён</span>' : ''}</span><span class="v">${mln(x.r.total.net, 0)}</span></button></li>`).join('');
+  $('#cy-h').innerHTML = D.CARRY_HORIZONS.map(h => `<button data-h="${h[0]}" aria-pressed="${CY.h === h[0]}">${h[0]}</button>`).join('');
+  $('#cy-date').value = cyEnd(); $('#cy-date').min = U.addDays(D.asOf, 7); $('#cy-end').textContent = 'до ' + fdate(cyEnd());
+  $('#cy-ks0').textContent = num(D.INDICES['КС'], 2) + '%';
+  document.querySelectorAll('#cy-mode button').forEach(b => b.setAttribute('aria-pressed', b.dataset.m === CY.cfg.ks.mode));
+  $('#cy-quick').hidden = CY.cfg.ks.mode !== 'steps';
+  const ms = cyMeetings(), path = U.ksPath(cySpec(), cyEnd());
+  const ksAfter = m => { const x = path.find(q => q.meeting === m.date); return x ? x.ks : null; };
+  $('#cy-meet').innerHTML = ms.length ? `<table class="mt"><thead><tr><th class="l">Заседание</th><th class="l">Действует с</th><th>Шаг, б.п.</th><th>КС, %</th></tr></thead><tbody>` +
+    ms.map((m, i) => `<tr><td class="l mono">${fdate(m.date)}</td><td class="l mono muted">${fdate(m.effective)}</td><td class="n">${CY.cfg.ks.mode === 'steps' ? `<input type="number" step="25" min="-500" max="500" data-step="${i}" value="${CY.cfg.ks.steps[i] || 0}" aria-label="Шаг КС ${fdate(m.date)}">` : '<span class="muted">—</span>'}</td><td class="n">${ksAfter(m) != null ? num(ksAfter(m), 2) : num(D.INDICES['КС'], 2)}</td></tr>`).join('') + '</tbody></table>'
+    : '<p class="note">До горизонта заседаний нет.</p>';
+  $('#cy-on').innerHTML = CY_ON.map(([k, n, lo, hi]) => `<div class="row"><label title="${esc(k)} сейчас ${num(D.INDICES[k], 2)}%">${esc(n)}</label><input type="range" data-on="${esc(k)}" min="${lo}" max="${hi}" step="5" value="${CY.cfg.on[k] || 0}"><output class="num">${snum(CY.cfg.on[k] || 0)}</output></div>`).join('')
+    + CY_FS.map(c => `<div class="row"><label title="Спред фондирования облигаций торговых книг в ${c}">Спред фонд. ${c}</label><input type="range" data-fs="${c}" min="-100" max="300" step="5" value="${CY.cfg.fundSpread[c] || 0}"><output class="num">${snum(CY.cfg.fundSpread[c] || 0)}</output></div>`).join('')
+    + `<div class="row"><label title="Фикс. ставка фондирования облигаций в USD/EUR/CHF">Hard ccy, %</label><input type="range" id="cy-hard" min="0" max="12" step="0.25" value="${CY.cfg.hardCcy != null ? CY.cfg.hardCcy : 5}"><output class="num">${num(CY.cfg.hardCcy != null ? CY.cfg.hardCcy : 5, 2)}%</output></div>`;
+  $('#cy-roll').checked = !!CY.cfg.rolldown;
+}
+const CYK = [['income','Доход бумаг'],['funding','Фондирование бумаг'],['derivs','Кэрри деривативов'],['cash','Остатки ДС, РЕПО'],['rolldown','Ролл-даун']];
+function cyRenderResults(){
+  const R = cyRun(cySpec()), B = cyRun(Object.assign(cyBase(), {rolldown: CY.cfg.rolldown}));
+  const d = R.total.net - B.total.net, ann = R.total.net / R.days * 365;
+  $('#cy-name').innerHTML = `${esc(CY.cfg.name)}${CY.cfg.dirty ? ' <span class="badge edit">изменён в редакторе</span>' : ''}`;
+  $('#cy-hero').innerHTML = `<div><div class="lbl">Чистый кэрри · ${esc(CY.h)}</div><div class="big">${smln(R.total.net, 0)}<small>млн ₽</small></div></div>
+    <div class="side"><span>к «КС без изменений»: <b class="num">${smln(d, 0)}</b> млн ₽</span><span>${R.days} дн. до ${fdate(R.end)} · в годовом выражении ${smln(ann, 0)} млн ₽</span><span>КС: средняя ${num(R.ksAvg, 2)}%, на конец ${num(R.ksEnd, 2)}%</span></div>`;
+  const keys = CYK.filter(k => k[0] !== 'rolldown' || CY.cfg.rolldown), cmax = Math.max(1, ...keys.map(k => Math.abs(R.total[k[0]])));
+  $('#cy-dec').innerHTML = keys.map(([k, n]) => `<span>${n}</span><div data-tip="${T(n, [['Сценарий', smln(R.total[k]) + ' млн ₽'], ['Без изменений КС', smln(B.total[k]) + ' млн ₽'], ['Δ', smln(R.total[k] - B.total[k]) + ' млн ₽']])}">${dbar(R.total[k], cmax)}</div><span class="num r">${smln(R.total[k], 1)}</span>`).join('')
+    + `<span class="tot">Чистый кэрри</span><span class="tot"></span><span class="num r tot">${smln(R.total.net, 1)}</span>`;
+  // средние ставки фондирования облигаций
+  const ccys = Object.keys(R.avgFundingRate);
+  $('#cy-rates').innerHTML = `<thead><tr><th class="l">Вал.</th><th>Сегодня</th><th>Сценарий</th><th>Без изм. КС</th><th>Δ, б.п.</th></tr></thead><tbody>` +
+    ccys.map(c => { const now = D.funding.filter(f => f.kind === 'POS' && f.ccy === c), w = now.reduce((a, f) => a + Math.abs(f.amountRub), 0), r0 = w ? now.reduce((a, f) => a + Math.abs(f.amountRub) * f.rate, 0) / w : null;
+      return `<tr><td class="l">${c}</td><td class="n">${num(r0, 2)}</td><td class="n"><b>${num(R.avgFundingRate[c], 2)}</b></td><td class="n">${num(B.avgFundingRate[c], 2)}</td><td class="n">${snum((R.avgFundingRate[c] - B.avgFundingRate[c]) * 100, 0)}</td></tr>`; }).join('') +
+    `</tbody>`;
+  // график: КС ступенькой + накопленный кэрри
+  const c = ch('cy-chart'), bt = baseText();
+  const days = [D.asOf].concat(R.series.map(x => x.date));
+  const ksAt = dd => { let v = R.path[0].ks; R.path.forEach(q => { if (q.date <= dd) v = q.ks; }); return v; };
+  c.setOption({
+    animation: !reduced, grid:{left:56, right:56, top:44, bottom:28},
+    legend:{top:0, left:'center', itemWidth:14, itemHeight:2, textStyle:{color:tok('--fg-2'), fontSize:11}},
+    tooltip: Object.assign({trigger:'axis', formatter: ps => `<b>${fdate(days[ps[0].dataIndex])}</b><br>` + ps.map(p => `${p.marker}${p.seriesName}: ${p.seriesIndex === 0 ? num(p.value, 2) + '%' : smln(p.value * 1e6, 1) + ' млн'}`).join('<br>')}, ttStyle()),
+    xAxis:{type:'category', data: days.map(sdate), axisLine:{lineStyle:{color:tok('--line-strong')}}, axisTick:{show:false}, axisLabel: Object.assign({}, bt, {hideOverlap:true})},
+    yAxis:[{type:'value', name:'КС, %', nameTextStyle:bt, scale:true, splitLine:{show:false}, axisLabel: Object.assign({}, bt, {formatter: v => num(v, 1)})},
+           {type:'value', name:'млн ₽', nameTextStyle:bt, splitLine:{lineStyle:{color:tok('--line')}}, axisLabel: Object.assign({}, bt, {formatter: v => num(v, 0)})}],
+    series:[
+      {name:'КС', type:'line', step:'end', data: days.map(ksAt), symbol:'none', lineStyle:{width:2, color:tok('--c2')}, itemStyle:{color:tok('--c2')}},
+      {name:'Чистый кэрри (накопл.)', type:'line', yAxisIndex:1, data:[0].concat(R.series.map(x => x.net / 1e6)), symbol:'none', lineStyle:{width:2, color:tok('--accent')}, itemStyle:{color:tok('--accent')}, areaStyle:{color:tok('--accent'), opacity:.08}},
+      {name:'КС без изменений', type:'line', yAxisIndex:1, data:[0].concat(B.series.map(x => x.net / 1e6)), symbol:'none', lineStyle:{width:1.5, type:[4, 3], color:tok('--fg-3')}, itemStyle:{color:tok('--fg-3')}}
+    ]}, true);
+  // по книгам
+  const bks = BOOKK.filter(b => R.byBook[b] && Object.values(R.byBook[b]).some(v => Math.abs(v) > 1));
+  const bmax = Math.max(1, ...bks.map(b => Math.abs(R.byBook[b].net - B.byBook[b].net)));
+  $('#cy-books').innerHTML = `<thead><tr><th class="l">Книга</th><th class="l">Режим</th>${keys.map(k => `<th>${k[1]}</th>`).join('')}<th>Чистый кэрри</th><th>Δ к без изм.</th></tr></thead><tbody>` +
+    bks.map(b => { const x = R.byBook[b], dd = x.net - B.byBook[b].net; return `<tr><td class="l">${esc(D.BOOKS[b].name)}</td><td class="l muted">${esc({TRADING:'торговая', HTM:'HTM', DERIVS:'деривативы'}[D.BOOKS[b].bookType] || '')}</td>${keys.map(k => `<td class="n${Math.abs(x[k[0]]) < 5e3 ? ' z' : ''}">${Math.abs(x[k[0]]) < 5e3 ? '·' : smln(x[k[0]], 1)}</td>`).join('')}<td class="n"><b>${smln(x.net, 1)}</b></td><td class="n"${heatStyle(dd, bmax)}>${smln(dd, 1)}</td></tr>`; }).join('') +
+    `<tr class="tot"><td class="l">Итого</td><td></td>${keys.map(k => `<td class="n">${smln(R.total[k[0]], 1)}</td>`).join('')}<td class="n">${smln(R.total.net, 1)}</td><td class="n">${smln(d, 1)}</td></tr></tbody>`;
+  // сценарии × горизонты
+  const H = D.CARRY_HORIZONS, lastH = H[H.length - 1][0];
+  const rows = [{id:'__ed', name:'Редактор' + (CY.cfg.dirty ? ' *' : ''), r: cyRun(cySpec(), lastH)}].concat(D.CARRY_SCENARIOS.map(sc => ({id: sc.id, name: sc.name, r: cyRun(Object.assign({rolldown: CY.cfg.rolldown}, sc), lastH)})));
+  const base = rows.find(x => x.id === D.CARRY_SCENARIOS[0].id).r;
+  let mx = 1; rows.forEach(x => x.r.marks.forEach((m, j) => { mx = Math.max(mx, Math.abs(m.net - base.marks[j].net)); }));
+  $('#cy-matrix').innerHTML = `<thead><tr><th class="l">Сценарий</th>${H.map(h => `<th>${h[0]}</th>`).join('')}<th>КС через ${lastH}</th></tr></thead><tbody>` +
+    rows.map(x => `<tr><td class="l">${esc(x.name)}</td>${x.r.marks.map((m, j) => { const dd = m.net - base.marks[j].net, on = x.id !== '__ed' && x.id === CY.id && H[j][0] === CY.h && !CY.cfg.dirty;
+      return `<td class="n click${on ? ' sel' : ''}"${x.id === '__ed' ? '' : ` data-cym="${esc(x.id)}|${H[j][0]}"`}${heatStyle(dd, mx)} data-tip="${T(x.name + ' · ' + H[j][0], [['Чистый кэрри', smln(m.net) + ' млн ₽'], ['Δ к без изм. КС', smln(dd) + ' млн ₽']])}">${smln(m.net, 0)}</td>`; }).join('')}<td class="n">${num(x.r.ksEnd, 2)}%</td></tr>`).join('') + '</tbody>';
+  // позиции
+  const ids = Object.keys(R.byPosition).map(id => ({id, x: R.byPosition[id], b: B.byPosition[id] || {net:0}})).map(o => Object.assign(o, {d: o.x.net - o.b.net}))
+    .sort((a, b2) => Math.abs(b2.d) - Math.abs(a.d)).slice(0, 15);
+  const pmx = Math.max(1, ...ids.map(o => Math.abs(o.d)));
+  $('#cy-pos').innerHTML = `<thead><tr><th class="l">Позиция</th><th class="l">Книга</th><th>Доход</th><th>Фондирование</th><th>Деривативы</th><th>Чистый кэрри</th><th>Δ к без изм.</th><th class="l">Выбывает</th></tr></thead><tbody>` +
+    ids.map(o => { const p = posById[o.id] || posById[+o.id], m = R.matures.find(q => String(q.id) === String(o.id));
+      return `<tr><td class="l">${esc(p.name)} <span class="muted">${esc(p.assetClass)} · ${p.ccy}${p.couponType === 'float' && p.index ? ' · ' + esc(p.index) : ''}</span></td><td class="l">${esc(D.BOOKS[p.book].name)}</td><td class="n">${smln(o.x.income, 1)}</td><td class="n">${smln(o.x.funding, 1)}</td><td class="n">${smln(o.x.derivs, 1)}</td><td class="n"><b>${smln(o.x.net, 1)}</b></td><td class="n"${heatStyle(o.d, pmx)}>${smln(o.d, 1)}</td><td class="l mono muted">${m ? fdate(m.date) : ''}</td></tr>`; }).join('') + '</tbody>';
+}
+function cyRenderAll(){ cyRenderBuilder(); cyRenderResults(); }
+document.addEventListener('click', e => {
+  const pr = e.target.closest('[data-cy]'); if (pr) { cyLoad(pr.dataset.cy); return cyRenderAll(); }
+  const m = e.target.closest('[data-cym]'); if (m) { const [id, h] = m.dataset.cym.split('|'); cyLoad(id); CY.h = h; return cyRenderAll(); }
+  const hb = e.target.closest('#cy-h button'); if (hb) { CY.h = hb.dataset.h; return cyRenderAll(); }
+  const mb = e.target.closest('#cy-mode button'); if (mb) { CY.cfg.ks.mode = mb.dataset.m; if (mb.dataset.m === 'steps' && !CY.cfg.ks.steps.length) CY.cfg.ks.steps = (D.CBR_MEETINGS || []).map(() => 0); return cyDirty(); }
+  const q = e.target.closest('#cy-quick [data-q]');
+  if (q) { const v = q.dataset.q; CY.cfg.ks.steps = (D.CBR_MEETINGS || []).map((_, i) => v === '+100' ? (i === 0 ? 100 : 0) : +v); return cyDirty(); }
+});
+$('#view-carry').addEventListener('change', e => {
+  const t = e.target;
+  if (t.dataset.step != null) { const v = parseFloat(t.value); CY.cfg.ks.steps[+t.dataset.step] = isNaN(v) ? 0 : v; return cyDirty(); }
+  if (t.id === 'cy-date' && t.value && t.value > D.asOf) { CY.h = t.value; return cyRenderAll(); }
+  if (t.id === 'cy-roll') { CY.cfg.rolldown = t.checked; return cyRenderAll(); }
+  if (t.dataset.on || t.dataset.fs || t.id === 'cy-hard') return cyDirty();
+});
+$('#view-carry').addEventListener('input', e => {
+  const t = e.target, row = t.closest('.row'); if (!row) return;
+  if (t.dataset.on) { CY.cfg.on[t.dataset.on] = +t.value; row.querySelector('output').textContent = snum(+t.value); }
+  else if (t.dataset.fs) { CY.cfg.fundSpread[t.dataset.fs] = +t.value; row.querySelector('output').textContent = snum(+t.value); }
+  else if (t.id === 'cy-hard') { CY.cfg.hardCcy = +t.value; row.querySelector('output').textContent = num(+t.value, 2) + '%'; }
+});
+cyLoad((location.hash.match(/carry=([\w-]+)/) || [])[1] || D.CARRY_SCENARIOS[0].id);
+
+// ================== режимы, тема ==================
+const MODES = ['scen', 'expl', 'carry'];
+function setMode(m){
+  if (!MODES.includes(m)) m = 'scen';
+  S.mode = m; LS.set('scenlab.mode', m);
+  MODES.forEach(k => { $('#mode-' + k).setAttribute('aria-selected', m === k); $('#view-' + k).hidden = m !== k; });
+  if (m === 'expl') renderExplain();
+  if (m === 'carry') { cyRenderAll(); const c = echarts.getInstanceByDom(document.getElementById('cy-chart')); if (c) c.resize(); }
+}
+MODES.forEach(k => $('#mode-' + k).addEventListener('click', () => setMode(k)));
+document.querySelector('.seg[role=tablist]').addEventListener('keydown', e => { if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { const n = MODES[(MODES.indexOf(S.mode) + (e.key === 'ArrowRight' ? 1 : 2)) % 3]; setMode(n); $('#mode-' + n).focus(); } });
 
 const THEMES = ['auto', 'light', 'dark'], TL = {auto:'авто', light:'светлая', dark:'тёмная'};
 let theme = LS.get('scenlab.theme', 'auto'); if (!THEMES.includes(theme)) theme = 'auto';
 function applyTheme(){ if (theme === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', theme); $('#theme-btn').textContent = 'Тема: ' + TL[theme]; }
 $('#theme-btn').addEventListener('click', () => { theme = THEMES[(THEMES.indexOf(theme) + 1) % 3]; LS.set('scenlab.theme', theme); applyTheme(); });
-function rethemeCharts(){ if (S.mode === 'expl') { renderWaterfall(); renderHistory(); } }
+function rethemeCharts(){ if (S.mode === 'expl') { renderWaterfall(); renderHistory(); } if (S.mode === 'carry') cyRenderResults(); }
 new MutationObserver(rethemeCharts).observe(document.documentElement, {attributes:true, attributeFilter:['data-theme']});
 const mq = matchMedia('(prefers-color-scheme: dark)'); (mq.addEventListener ? mq.addEventListener('change', rethemeCharts) : mq.addListener(rethemeCharts));
 
 function setHdr(){ document.documentElement.style.setProperty('--hdr', $('#top').offsetHeight + 'px'); }
-let rz = 0; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { setHdr(); if (S.mode === 'expl') { ['wf','h-main','h-un','h-cum'].forEach(id => { const c = echarts.getInstanceByDom(document.getElementById(id)); if (c) c.resize(); }); renderWaterfall(); } }, 120); });
+let rz = 0; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { setHdr(); if (S.mode === 'expl') { ['wf','h-main','h-un','h-cum'].forEach(id => { const c = echarts.getInstanceByDom(document.getElementById(id)); if (c) c.resize(); }); renderWaterfall(); } if (S.mode === 'carry') { const c = echarts.getInstanceByDom(document.getElementById('cy-chart')); if (c) c.resize(); } }, 120); });
 
 // ---------- старт ----------
 $('#asof').textContent = 'на ' + fdate(D.asOf);
 applyTheme(); setHdr();
-S.ed = normalize(D.SCENARIOS.find(s => s.id === 'keyhike')); S.cur = 'RUB OFZ'; autoScale();
+S.ed = normalize(D.SCENARIOS.find(s => s.id === 'keyhike')); S.cur = CK.includes('RUB RUONIA') ? 'RUB RUONIA' : CK[0]; autoScale();
 renderBuilderAll(); renderResults();
-setMode(S.mode === 'expl' ? 'expl' : 'scen');
+setMode(/carry/.test(location.hash) ? 'carry' : S.mode);
 })();
 </script>

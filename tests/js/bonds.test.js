@@ -23,7 +23,8 @@ t('спред к кривой = доходность − ставка на ср�
   const p = by('Роснефть 002Р-13');
   near(U.spreadTo(p, 'RUB OFZ'), (p.ytm - U.curveRate('RUB OFZ', p.tenorY)) * 100, 1e-9, 'OFZ');
   near(U.spreadTo(p, 'base'), U.spreadTo(p, 'RUB OFZ'), 1e-12, 'base = OFZ');
-  near(U.spreadTo(p, 'RUB OFZ'), p.spreadBp, 1e-6, 'демо: спред к своей кривой');
+  near(U.spreadTo(p, 'RUB RUONIA'), p.spreadBp, 0.06, 'демо: расчётный спред RUB-корпората — к RUONIA');
+  assert.strictEqual(p.spreadCurve, 'RUB RUONIA');
   assert.strictEqual(U.spreadTo(p, 'own'), p.spreadBp);
   assert.ok(U.spreadTo(p, 'RUB RUONIA') !== U.spreadTo(p, 'RUB OFZ'));
 });
@@ -45,8 +46,8 @@ t('флоатер, другая валюта, не облигация → null',
 });
 
 t('вчера: Δ спреда к кривой согласован с изменениями дня', () => {
-  const p = by('Сегежа 003Р-02R');   // SPREAD_MOVES['Сегежа'] = 38: доходность выросла на Δкривой + 38 б.п.
-  near(U.spreadTo(p, 'RUB OFZ') - U.spreadTo(p, 'RUB OFZ', true), 38, 0.05, 'Δ спреда');
+  const p = by('Сегежа 003Р-02R');   // SPREAD_MOVES['Сегежа'] = 38: доходность выросла на Δ RUONIA + 38 б.п.
+  near(U.spreadTo(p, 'RUB RUONIA') - U.spreadTo(p, 'RUB RUONIA', true), 38, 0.05, 'Δ спреда к своей кривой (RUONIA)');
   near(p.quote.zSpread - p.quote.prevZSpread, 38, 1e-9, 'Δ расч. спреда');
 });
 

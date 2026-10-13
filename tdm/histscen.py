@@ -84,7 +84,7 @@ def portfolio_sensitivities(con):
     fx = {}
     for r in con.execute("SELECT ccy, SUM(delta) FROM position_fx WHERE run_id=? GROUP BY ccy", (rid,)):
         fx[r[0]] = fx.get(r[0], 0) + r[1]
-    for r in con.execute("SELECT ccy, SUM(amount) FROM funding_deal WHERE run_id=? AND ccy<>'RUB' GROUP BY ccy", (rid,)):
+    for r in con.execute("SELECT ccy, SUM(amount) FROM funding_deal WHERE run_id=? AND ccy<>'RUB' AND kind<>'HTM' GROUP BY ccy", (rid,)):   # HTM: тело без FX
         fx[r[0]] = fx.get(r[0], 0) + r[1]
     rates = {r[0]: r[1] for r in con.execute("SELECT ccy, rate FROM mkt_fx WHERE run_id=?", (rid,))}
     cs = {}

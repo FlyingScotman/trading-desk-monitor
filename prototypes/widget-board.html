@@ -261,9 +261,9 @@ input[type="checkbox"]{accent-color:var(--accent);margin:0}
 const D = window.DESK, U = D.util;
 const BK = Object.keys(D.BOOKS);
 const CCYS = Object.keys(D.FX).filter(c => c !== 'RUB');
-const CCY_ORDER = ['RUB','USD','CNY','EUR'];
+const CCY_ORDER = ['RUB'].concat(CCYS);
 const SEGS = ['Гос','Корп','Секьюритизация','Деривативы','FX'];
-const FTYPES = ['РЕПО с ЦК','TSY FTP','Обратное РЕПО','FX-своп','Гарантийное обеспечение'];
+const FTYPES = [...new Set(D.funding.map(f => f.type))];
 const CURVE_KEYS = Object.keys(D.CURVES);
 const H = D.history, HL = H[H.length - 1], HP = H[H.length - 2];
 const RM = matchMedia('(prefers-reduced-motion: reduce)');
@@ -378,8 +378,8 @@ function tags(cfg) {
   return t;
 }
 function ocpParts(l, fl, c) {
-  const g = t => sum(l.filter(p => p.instrType === t), p => p.fxDelta[c] || 0);
-  return { bonds: g('BOND'), derivs: g('XCCY'), fx: g('FX'), funding: sum(fl, f => f.fxDelta[c] || 0) };
+  const g = t => sum(l.filter(p => p.instrType === t && !p.ocpTransfer), p => p.fxDelta[c] || 0);
+  return { bonds: g('BOND'), derivs: g('XCCY'), fx: g('FX') + sum(l.filter(p => p.ocpTransfer), p => p.fxDelta[c] || 0), funding: sum(fl, f => f.fxDelta[c] || 0) };
 }
 function issuerExposure(l, measure) {
   const m = {};
@@ -392,9 +392,10 @@ function issuerExposure(l, measure) {
   });
   return m;
 }
-// funding PnL in scope: carry of funding rows + unallocated FX residual of the books in scope
+// фондирование уровня книги в фильтре: кэрри остатков ДС и РЕПО + их FX-переоценка.
+// Фондирование облигаций уже в PnL самих бумаг (компоненты funding и fx).
 function fundPnl(cfg) {
-  const fl = fscope(cfg), carry = sum(fl, f => f.pnl.carry);
+  const fl = fscope(cfg).filter(f => !f.pnl.inPosition), carry = sum(fl, f => f.pnl.carry);
   let fx = 0;
   if (!bf().issuer && !bf().ccy && !on(cfg.segment) && !on(cfg.ccy)) {
     const b = effBook(cfg);
@@ -419,7 +420,7 @@ function setXf(dim, val) {
 const OPT = {
   book: () => [['all', 'Все книги']].concat(BK.map(k => [k, D.BOOKS[k].name])),
   segment: () => [['all', 'Все сегменты']].concat(SEGS.map(s => [s, s])),
-  ccy: () => [['all', 'Все валюты'], ['RUB', 'RUB'], ['USD', 'USD'], ['CNY', 'CNY'], ['EUR', 'EUR'], ['nonRUB', 'Валютные (не RUB)']],
+  ccy: () => [['all', 'Все валюты'], ['RUB', 'RUB']].concat(CCYS.map(c => [c, c])).concat([['nonRUB', 'Валютные (не RUB)']]),
   curve: () => CURVE_KEYS.map(c => [c, c + ' — ' + D.CURVES[c].name]),
 };
 const FB = { key: 'book', label: 'Книга', type: 'select', opts: OPT.book };
@@ -470,11 +471,12 @@ WT.kpi = {
       sub = `≈ ${mln(net * D.FX[c], 0, true)} млн ₽ · курс ${num(D.FX[c], 2)}`;
       extra = [['обл.', pr.bonds], ['XCCY', pr.derivs], ['FX', pr.fx], ['фонд.', pr.funding]].map(([n, v]) => `<span>${n} <b>${mln(v, 1, true)}</b></span>`).join('');
     } else if (m === 'pnl') {
-      const fund = fundPnl(cfg).total, v = sum(l, p => p.pnl.official) + fund;
-      const ex = sum(l, p => p.pnl.explained) + fund, un = sum(l, p => p.pnl.unexplained);
-      val = mln(v, 1, true); unit = 'млн ₽';
-      sub = `фондирование ${mln(fund, 1, true)} млн` + (bf().issuer ? ' (не учтено)' : '');
-      extra = `<span>объяснено <b>${mln(ex, 1, true)}</b></span><span>необъясн. <b>${mln(un, 1, true)}</b></span>`;
+      // флэш по рыночным курсам — основной; официальный (курсы ЦБ) приходит на T+1
+      const fund = fundPnl(cfg).total, v = sum(l, p => p.pnl.explained) + fund;
+      const off = sum(l, p => p.pnl.official || 0) + fund, un = sum(l, p => p.pnl.unexplained);
+      val = mln(v, 1, true); unit = 'млн ₽ · флэш';
+      sub = `фондирование ${mln(sum(l, p => p.pnl.funding || 0) + fund, 1, true)} млн` + (bf().issuer ? ' (книжное не учтено)' : '');
+      extra = `<span>офиц. (ЦБ) <b>${mln(off, 1, true)}</b></span><span>необъясн. <b>${mln(un, 1, true)}</b></span>`;
       if (!filt) { sp = H.map(h => h.pnlOfficial); spKind = 'bar'; spFmt = x => mln(x, 1, true) + ' млн ₽'; }
       else extra += '<span>история — по деску</span>';
     } else if (m === 'mv') {
@@ -508,7 +510,7 @@ function sparkline(el, wid, data, kind, fmt) {
 /* ---- DV01 ladder ---- */
 WT.ladder = {
   name: 'Лестница DV01', glyph: 'bars', desc: 'DV01 по бакетам 1M…20Y+ для выбранной кривой. Можно разложить по книгам.',
-  def: { w: 4, h: 2, cfg: { curve: 'RUB OFZ', stack: 'none', book: 'all', segment: 'all', ccy: 'all' } },
+  def: { w: 4, h: 2, cfg: { curve: 'RUB RUONIA', stack: 'none', book: 'all', segment: 'all', ccy: 'all' } },
   fields: [{ key: 'curve', label: 'Кривая', type: 'select', opts: OPT.curve }, { key: 'stack', label: 'Разбивка', type: 'select', opts: () => [['none', 'Итог по бакету'], ['book', 'По книгам']] }].concat(FILT),
   title: c => 'DV01 · ' + c.curve,
   render(b, cfg, w) {
@@ -750,12 +752,12 @@ WT.explain = {
   render(b, cfg, w) {
     const l = scope(cfg), fl = fscope(cfg);
     if (!l.length) { b.innerHTML = '<div class="empty">Нет позиций под фильтр</div>'; return ''; }
-    const comps = [['Кэрри', 'carry'], ['Ролл-даун', 'rolldown'], ['Ставки', 'rates'], ['Спреды', 'spread'], ['FX', 'fx'], ['Выпуклость', 'convexity'], ['Новые сделки', 'newTrades'], ['Прочее', 'other']]
-      .map(([n, k]) => [n, sum(l, p => p.pnl[k])]);
+    const comps = [['Кэрри', 'carry'], ['Ролл-даун', 'rolldown'], ['Ставки', 'rates'], ['Спреды', 'spread'], ['FX', 'fx'], ['Фондирование бумаг', 'funding'], ['Выпуклость', 'convexity'], ['Новые сделки', 'newTrades'], ['Прочее', 'other']]
+      .map(([n, k]) => [n, sum(l, p => p.pnl[k] || 0)]);
     const fp = fundPnl(cfg);
     const fxi = comps.findIndex(c => c[0] === 'FX');
-    comps.splice(fxi, 1, ['FX позиций', sum(l, p => p.pnl.fxGross != null ? p.pnl.fxGross : p.pnl.fx)], ['FX валютн. фондир.', sum(l, p => p.pnl.fxFunding || 0)]);
-    comps.push(['Фонд.: кэрри', fp.carry], ['Фонд.: FX остаток', fp.fx], ['Необъяснённое', sum(l, p => p.pnl.unexplained)]);
+    comps.splice(fxi, 1, ['FX позиций', sum(l, p => p.pnl.fxGross != null ? p.pnl.fxGross : p.pnl.fx)], ['FX тела фондир.', sum(l, p => p.pnl.fxFunding || 0)]);
+    comps.push(['Фонд. книги: кэрри', fp.carry], ['Фонд. книги: FX', fp.fx], ['Курсы ЦБ − рынок', sum(l, p => p.pnl.fxBasis || 0)], ['Необъяснённое', sum(l, p => p.pnl.unexplained)]);
     const rows = comps.filter(c => Math.abs(c[1]) > 1);
     const total = sum(comps, c => c[1]);
     let run = 0;
@@ -1007,7 +1009,7 @@ function defaults() {
       W('watch', 6, 2), W('scenario', 6, 2, { scenarios: ['keyhike', 'rubdep', 'credit'] })] },
     { id: 'rates', name: 'Rates', widgets: [
       W('heatmap', 12, 2),
-      W('ladder', 4, 2, { curve: 'RUB OFZ' }), W('ladder', 4, 2, { curve: 'RUB RUONIA', stack: 'book' }), W('ladder', 4, 2, { curve: 'RUB KEY', stack: 'book' }),
+      W('ladder', 4, 2, { curve: 'RUB RUONIA' }), W('ladder', 4, 2, { curve: 'RUB RUONIA', stack: 'book' }), W('ladder', 4, 2, { curve: 'RUB KEY', stack: 'book' }),
       W('curves', 6, 2), W('scenario', 6, 2, { scenarios: ['par+100', 'bullsteep', 'bearflat'] }),
       W('blotter', 12, 3, { book: 'OFZ', measure: 'dv01', topN: '20' })] },
     { id: 'credit', name: 'Credit', widgets: [

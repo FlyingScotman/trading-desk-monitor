@@ -1,2 +1,2 @@
-﻿as_of;book_id;position_id;instrument_id;deal_id;quantity;face_amount;avg_price;book_value;mark_price;accrued;mv_rub
-2026-10-13;OFZ;OFZ|SU26242RMFS0;SU26242RMFS0;;4200000;4200000000;88.10;;87.60;;3680000000
+﻿as_of;book_id;position_id;instrument_id;deal_id;quantity;face_amount;avg_price;book_value;mark_price;accrued;mv_rub;purchase_date;purchase_price;purchase_yield;contract_rate
+2026-10-13;OFZ;OFZ|SU26242RMFS0;SU26242RMFS0;;4200000;4200000000;88.10;;87.60;;3680000000;;;;

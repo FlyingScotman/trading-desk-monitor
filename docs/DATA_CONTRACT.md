@@ -1,4 +1,4 @@
-# Trading Desk Monitor — контракт данных (версия 1.2)
+# Trading Desk Monitor — контракт данных (версия 1.3)
 
 Документ описывает, **что** должен посчитать расчётный сервис, **куда** он это кладёт и **как** интерфейс это забирает.
 Это договор между двумя независимыми частями:
@@ -17,15 +17,196 @@
 > - если в `pnl.official` пусто, при публикации берётся официальный PnL из `pnl_official` (тот же `position_id`);
 > - полную переоценку сценариев можно приложить к уже опубликованному прогону: `tdm.writer.attach_scenario_results(...)`.
 
+> **Версия 1.3** приводит контракт к конвенциям организации (`docs/ORG_CONVENTIONS.md`): фондирование по позициям и по остаткам ДС,
+> передача ОВП, два базиса FX, спред ОФЗ, HTM, сценарии кэрри. Сводка изменений — §0, реализация в `tdm` — §0.9.
+> Схема базы (v5), SDK, загрузчик и сборка `window.DESK` работают в форме 1.3: сервер отдаёт страницам ту же форму, что `prototypes/data.js`.
+> Прогоны и пакеты 1.0–1.2 по-прежнему загружаются и показываются: недостающие поля получают значения по умолчанию
+> (в сборке на сервере и в `desk-util.js`, блок `compat`).
+
 Связанные файлы:
 
 | Файл | Что это |
 |---|---|
 | `tdm/schema.sql` | DDL базы (SQLite) — первоисточник по таблицам и колонкам |
 | `contract/bundle.schema.json` | JSON Schema пакета прогона (для загрузки файлом) |
-| `fixtures/demo_bundle.json` | полный пример пакета: 88 позиций, 22 сделки фондирования, 8 сценариев |
+| `fixtures/demo_bundle.json` | полный пример пакета 1.3: 103 позиции (в т.ч. 2 HTM и 12 ног передачи ОВП), 74 строки фондирования, 12 правил ставок, 11 сценариев, 8 сценариев кэрри |
 | `tdm/writer.py` | Python-SDK записи (`Run`) |
 | `examples/calc_service_stub.py` | шаблон расчётного сервиса, запускается как есть |
+
+
+---
+
+## 0. Что изменилось в версии 1.3
+
+### 0.1 Книги: режим фондирования и юрлицо
+
+`run_book` (`add_books`) — новые поля:
+
+| Поле | Обяз. | Описание |
+|---|---|---|
+| `book_type` | да | режим фондирования: `TRADING` — торговая книга облигаций; `HTM` — портфель до погашения; `DERIVS` — книга деривативов. У книги ровно один режим |
+| `entity` | да | юрлицо. Иерархия: юрлицо → деск → книга |
+| `ocp_to` | для `TRADING` с валютными бумагами | книга деривативов, в которую вечером передаётся ОВП книги |
+
+### 0.2 Курсы: рыночный и ЦБ
+
+`mkt_fx` — новые поля (курс — RUB за 1 ед. валюты):
+
+| Поле | Описание |
+|---|---|
+| `rate` | рыночный курс на срез (~19:00, внешние котировки). По нему считается **флэш** — основной PnL |
+| `move_pct` | изменение рыночного курса за день, % |
+| `rate_cbr` | курс ЦБ, **действующий** на `as_of` (установлен накануне). По нему считается официальный PnL |
+| `move_pct_cbr` | изменение курса ЦБ: действующий на `as_of` к действующему на прошлый рабочий день, % |
+| `rate_cbr_next` | курс ЦБ, установленный в `as_of` на следующий день. По нему проводится передача ОВП (§0.4) |
+
+Валюты: `RUB`, `USD`, `CNY`, `EUR`, **`CHF`**. Кривая `CHF SARON`. Индексы: `КС`, `RUONIA`, `RUSFAR O/N`, `RUSFAR CNY`, `SOFR`, `€STR`, `SARON`.
+
+### 0.3 Риск рублёвых облигаций: RUONIA + спред ОФЗ
+
+- Key-rate DV01 рублёвых облигаций — на кривой **`RUB RUONIA`** (не `RUB OFZ`). `RUB OFZ` (КБД) остаётся рыночной кривой: G-спред, график, история. Риска на ней нет.
+- Флоатеры на КС — на `RUB KEY`, на RUONIA — на `RUB RUONIA`, как раньше.
+- **ОФЗ:** `cs01 = 0`. Новое поле `ofz_spr01` (RUB за +1 б.п.) — чувствительность к спреду ОФЗ к RUONIA, **одно число на бумагу**.
+  `spread_bp` — спред ОФЗ к RUONIA, `spread_curve = 'RUB RUONIA'`.
+- **Корпораты RUB:** `cs01` и `spread_bp` — к RUONIA (`spread_type = 'Z'`, `spread_curve = 'RUB RUONIA'`).
+- Фактор `CS` в `position_gamma` — собственный спред бумаги: кредитный у корпоратов, спред ОФЗ у ОФЗ.
+- **Базис КС − RUONIA** не требует нового поля: это DV01 на кривой `RUB KEY`. В сценарии — разница шоков `RUB KEY` и `RUB RUONIA`.
+- `jtd` — с recovery-параметром деска (по умолчанию **0**); параметр выкладывается в прогон: `run.jtd_recovery`.
+
+### 0.4 Фондирование: строки фондирования вместо сделок книги
+
+`funding_deal` описывает **строки фондирования** четырёх видов (`kind`):
+
+| `kind` | Что это | Тело (`amount`, в `ccy`) | Ставка | Срок |
+|---|---|---|---|---|
+| `POS` | облигация книги `TRADING` | −чистая MV бумаги в её валюте; шорт → `+` | правило из справочника ставок (§0.5): RUB — КС + спред, CNY — RUSFAR CNY + спред, USD/EUR/CHF — фикс. | O/N, пересчёт к MV каждый день |
+| `HTM` | облигация книги `HTM` | −чистая цена покупки × номинал | контрактная, фикс. до погашения | до погашения |
+| `CASH` | остаток ДС книги `DERIVS` в валюте | остаток со знаком (+ — размещён) | O/N валюты: RUONIA, RUSFAR CNY, SOFR, €STR, SARON; одна для + и − | O/N |
+| `REPO` | сделка деска РЕПО против книги (покрытие шорта) | денежная нога | ставка РЕПО (TBD: или ставка книги) | срок сделки |
+
+Новые поля строки:
+
+| Поле | Описание |
+|---|---|
+| `kind` | `POS` / `HTM` / `CASH` / `REPO` |
+| `position_id` | для `POS` и `HTM` — бумага, которую строка фондирует |
+| `index_name`, `spread_bp`, `fixed_rate` | состав ставки: индекс + спред или фикс. Нужны монитору для сценариев кэрри |
+| `benchmark` | бенчмарк: облигации RUB — `КС`, CNY — `RUSFAR CNY`, hard ccy — нет; деривативы — O/N своей валюты |
+| `day_basis` | 365 / 360 |
+
+Правила расчёта:
+- **Кэрри строки за день, RUB** = `amount × курс × Σ_по календарным дням ставка(день) / 100 / day_basis`.
+  - Дни — с прошлого рабочего дня по `as_of` (в понедельник — 3), ставка каждого дня — действующая в этот день (КС меняется с даты вступления в силу).
+  - Тело — на конец прошлого рабочего дня.
+  - `POS` / `HTM`: процент платится **в RUB по курсу ЦБ** и в ОВП не входит.
+  - `CASH` / `REPO`: по рыночному курсу.
+- **Кэрри `POS` и `HTM` входит в PnL бумаги** — новая компонента `position_pnl.funding`. В `funding_pnl.carry` строки он тоже есть, но в итог книги второй раз не добавляется: монитор суммирует только строки без `position_id`.
+- **FX-переоценка тела `POS`** (бумага в валюте фондируется в той же валюте) — в `position_pnl.fx_funding` этой же бумаги. Пропорционального разнесения (бывший §4.4.1) больше нет. Инвариант: `fx_funding` бумаги = `funding_pnl.fx_allocated` её строки.
+- FX-переоценка остатков `CASH` в валюте — `funding_pnl.fx_gross` строки, на уровне книги.
+- `fx_delta` строки: тело в валюте для `POS` и `CASH`; у `HTM` нет.
+
+**Передача ОВП.** Вечером ОВП каждой книги `TRADING` (FX-дельты бумаг по грязной MV минус тела фондирования, то есть НКД + PnL в валюте) передаётся в книгу `ocp_to` внутренней FX-сделкой со значением T+1.
+- Курс сделки — `rate_cbr_next`.
+- Сделка — две позиции `instr_type = 'FX'`, `asset_class = 'Перенос ОВП'` (в книге облигаций со знаком −, в книге деривативов +), `extra.ocp_transfer = true`, `new_today = 1`.
+- PnL дня у сделки нулевой. Небольшой остаток ОВП в книге облигаций допустим.
+- Дополнительно — сводка `run.ocp_transfers: [{from, to, ccy, amount, before, rate, value_date}]`.
+
+### 0.5 Справочник ставок фондирования
+
+`funding_rule` (на прогон, как статика): `book_type`, `desk`, `book_id`, `entity`, `instrument_id`, `ccy`, `index_name`, `spread_bp`, `fixed_rate`, `note`.
+- Пустое поле — «любое значение». `instrument_id` сравнивается с `instrument_id`, ISIN и именем бумаги.
+- Из подходящих правил побеждает самое конкретное: бумага (16) > книга (8) > юрлицо (4) > деск (2) > режим книги (1). Юрлицо × бумага = 20.
+- Истории ставок пока нет: прошлые дни пересчитываются по текущей версии (TODO).
+
+### 0.6 PnL: флэш, официальный, базис курсов
+
+`position_pnl`:
+
+| Поле | Описание |
+|---|---|
+| `funding` | **новое**: процент по фондированию бумаги за день (кэрри её строки `POS` / `HTM`) |
+| `fx_funding` | **изменено**: FX-переоценка тела фондирования **самой бумаги**, а не доля книги |
+| `fx_gross_cbr`, `fx_funding_cbr` | **новое**: те же FX-компоненты по курсам ЦБ |
+| `official` | официальный управленческий PnL по курсам ЦБ, с фондированием. Приходит на **T+1** |
+
+Монитор считает сам:
+- `explained` (флэш, по рыночным курсам) = сумма 9 компонент (`carry … other`, включая `funding`);
+- `fx_basis` = (`fx_gross_cbr` + `fx_funding_cbr`) − (`fx_gross` + `fx_funding`);
+- `explained_cbr` = `explained` + `fx_basis`;
+- `unexplained` = `official` − `explained_cbr`.
+
+Официальный PnL на T+1:
+- приходит в `pnl_official` (входной слой, по бумаге и книге);
+- прикрепляется к уже опубликованному EOD-прогону за ту же дату: `tdm.writer.attach_official_pnl(db, run_id)` или `python -m tdm attach-official --as-of <дата>`, без нового прогона;
+- до прихода `official = NULL`, монитор показывает «ожидается T+1»;
+- временный состав компонент официального PnL: итог + необязательные `carry`, `funding`, `fx`.
+
+`run.official = {as_of, received, basis: 'CBR'}`.
+
+### 0.7 HTM
+
+Позиции книги `HTM`:
+- рыночные поля — для справки;
+- `dv01 = cs01 = ofz_spr01 = 0`, `position_risk` и `position_gamma` пусты;
+- новые поля `accrual_only = 1`, `purchase_date`, `purchase_price` (% номинала, чистая), `purchase_yield`, `contract_rate`;
+- PnL: `carry` — начисление по доходности покупки на цену покупки, `funding` — контрактная ставка; прочие компоненты 0.
+
+### 0.8 Сценарии
+
+- Формат спред-шока: `spreads: {_all, _mult, rating: {AA: 50}, sector: {'Девелопмент': 300}, issuer: {'Самолёт': 300}}`, правила аддитивны.
+  Плоские ключи рейтинга и эмитента на верхнем уровне читаются для совместимости.
+- **`includeGov` и «35 % для Гос» удалены**: суверенные валютные бумаги шокируются по своим правилам.
+- Новое поле **`ofzSpread`** (б.п.) — сдвиг спреда ОФЗ к RUONIA (× `ofz_spr01`).
+- `scenario_result.fx_funding` — переоценка тела фондирования самой бумаги; `scenario_funding_result` — FX остатков ДС и РЕПО книги.
+- **Сценарии кэрри и фондирования** (`carry_scenario_def`, глобально): `{id, name, definition: {ks: {mode: flat | implied | steps | path, steps: [б.п. на заседание], path: [{date, ks}]}, on: {индекс: б.п.}, fundSpread: {ccy: б.п.}, hardCcy: %}}`.
+  - Считаются в мониторе (`docs/SCENARIOS.md` §7).
+  - Нужен график заседаний ЦБ: `cbr_meeting(date, effective_date)`.
+
+### 0.9 Реализация в `tdm`
+
+Бэкенд работает в форме 1.3. Где что сделано:
+
+| Где | Что |
+|---|---|
+| `schema.sql` / `db.py` | схема v5: `run_book.book_type, entity, ocp_to`; `mkt_fx.rate_cbr, move_pct_cbr, rate_cbr_next`; `position.ofz_spr01, accrual_only, purchase_*, contract_rate, ocp_transfer`; `position_pnl.funding, fx_gross_cbr, fx_funding_cbr`; `funding_deal.kind, position_id, index_name, spread_bp, fixed_rate, benchmark, day_basis, rule_note`; `funding_pnl.fx_gross_cbr`; `funding_rule`, `run_ocp_transfer` (на прогон); `carry_scenario_def`, `ref_cbr_meeting` (глобально); `calc_run.prev_date, accrual_days, jtd_recovery, ofz_spread_move, official_at`. База v4 мигрирует сама при первом запуске |
+| `datasets.py` / `loader.py` | наборы `funding_rates`, `cash_balances`, `md_fx_cbr`, `cbr_meetings` и новые поля `books`, `positions`, `otc_deals`, `pnl_official`, `instruments` (`docs/DATA_REQUIREMENTS.md` §4) |
+| `market.py` | курс ЦБ по дате действия (`fx_cbr_on`), курс на завтра (`fx_cbr_next`), изменение (`fx_cbr_move`), фиксинг на день (`fixing_on`, `fixings_by_day`), рабочие дни (`prev_business_day`, `next_business_day`), заседания ЦБ (`cbr_meetings`) |
+| `writer.py` | `Run(..., prev_date, accrual_days, jtd_recovery, ofz_spread_move)`; `add_books`, `add_fx` с новыми полями; `add_funding_rules`; `add_funding` со строками (сделки 1.2 — `kind = 'DEAL'`); `derive_funding()`; `add_ocp_transfers()`; `add_reference_data()` берёт курсы ЦБ, поля книг и справочник ставок из входного слоя; `attach_official_pnl()`; `upsert_carry_scenarios()`, `upsert_cbr_meetings()`; `resolve_funding_rule()` |
+| `importer.py`, `bundle.schema.json` | пакеты 1.0–1.3; в 1.3 — `funding_rules`, `ocp_transfers`, `carry_scenarios`, `cbr_meetings`, `run.derive_funding` |
+| `assemble.py` | `window.DESK` в форме `prototypes/data.js` (§6) |
+| `api.py`, `cli.py` | `/funding-rules`, `/cash-balances`, `/market/fx-cbr`, `/cbr-meetings`, `/carry-scenarios` (`docs/SERVICE_DATA_MODEL.md` §4); `python -m tdm attach-official` |
+| `tools/export_demo_bundle.js`, `fixtures/` | демо-пакет 1.3 из `prototypes/data.js`; сервер на нём отдаёт тот же `window.DESK` (проверяется тестом) |
+
+**Строки, которых нет в прогоне, строит `tdm`** — `run.derive_funding()` (или `"derive_funding": true` в `run` пакета):
+
+| Вид | Откуда | Тело | Ставка, база | Курс процента |
+|---|---|---|---|---|
+| `POS` | облигации книг `TRADING` без своей строки | −(`mv` − `notional` × `accrued` / 100) | правило §0.5 по каждому календарному дню; 365 | ЦБ (`rate_cbr`) |
+| `HTM` | облигации книг `HTM` (`accrual_only`) | −`notional` × `purchase_price` / 100 | `contract_rate`; 365 | ЦБ |
+| `CASH` | `cash_balances` на `as_of` | остаток | O/N валюты (правило `DERIVS` или RUONIA / RUSFAR CNY / SOFR / €STR / SARON); RUB, CNY — 365, USD, EUR, CHF — 360 | рыночный |
+| `REPO` | `funding` (срез) на `as_of` | сумма сделки | индекс + спред сделки или её ставка; база по валюте | рыночный |
+
+- Дни — (`prev_date`, `as_of`]; значение индекса на день — `md_fixing`, действующее в этот день (КС — по дате вступления в силу); если ряда нет — `mkt_index` прогона.
+- FX-переоценка тела: `fx_gross` по рыночным курсам, `fx_gross_cbr` — по курсам ЦБ; у `POS` `fx_allocated = fx_gross`.
+- Бумагам `POS` / `HTM` заполняются `position_pnl.funding`, `fx_funding`, `fx_funding_cbr`.
+- `CASH` и `REPO` строятся, только если строк этого вида в прогоне нет. Тело — на `as_of` (не на прошлый рабочий день, как в §0.4): так же считает прототип.
+
+`run.add_ocp_transfers()` без аргумента строит сводку из сделок передачи (позиции с `ocp_transfer`): `before` — FX-дельты бумаг книги плюс тела строк фондирования, `amount` — переданное, `rate` — `rate_cbr_next`.
+
+**Проверки при публикации** (дополняют §5.3):
+
+| Проверка | Если нарушена |
+|---|---|
+| `book_type` — `TRADING` / `HTM` / `DERIVS`; `ocp_to` — книга прогона | ошибка |
+| `kind` — `POS` / `HTM` / `CASH` / `REPO` (или `DEAL` для 1.2) | ошибка |
+| у каждой строки `POS` / `HTM` есть позиция с тем же `position_id` в книге режима `TRADING` / `HTM` | ошибка |
+| у позиций книг `HTM` нет `position_risk` и `position_gamma` | ошибка |
+| `fx_funding` бумаги = `fx_allocated` её строки (±1 ₽) | предупреждение |
+| ОВП каждой книги `TRADING` после передачи (FX-дельты позиций + тела строк фондирования) по модулю ≤ 10 млн ₽ | предупреждение |
+| у книги не задан `book_type` (пакеты 1.3) | предупреждение |
+| в `otc_deals` есть сделки `OCP_TRANSFER` за `as_of`, а в прогоне нет сделок передачи | предупреждение |
+
+**История `desk_history`.** Официальный PnL — по курсам ЦБ: Σ `official` позиций (без него — `explained_cbr`) плюс строки фондирования без `position_id` (кэрри + `fx_gross_cbr`). Explained — флэш: Σ `explained` плюс те же строки (кэрри + `fx_gross`). Фондирование бумаг второй раз не добавляется. `attach_official_pnl` пересчитывает строку истории своей даты.
 
 ---
 
@@ -94,13 +275,13 @@
 |---|---|
 | Валюта отчётности | **RUB**. Все `*_rub` и все суммы без указания валюты — в рублях |
 | Валютные суммы | `notional`, `mv`, `fx_delta`, `funding.amount` — в валюте инструмента (`ccy`) |
-| Курсы | `mkt_fx.rate` — RUB за 1 единицу валюты. `RUB` = 1 (SDK добавит сам) |
+| Курсы | `mkt_fx.rate` — рыночный, `rate_cbr` — ЦБ (действующий на `as_of`); RUB за 1 единицу валюты. `RUB` = 1 (SDK добавит сам) |
 | Ставки, доходности, купоны | в **процентах**: 14.5 значит 14.5 % |
 | Спреды и сдвиги кривых | в **базисных пунктах** |
 | DV01 / CS01 | изменение PV в **RUB** при сдвиге **+1 б.п.** Длинная облигация → DV01 < 0. Pay-fixed IRS → DV01 > 0. Покупка защиты CDS → CS01 > 0 |
 | FX-дельта | позиция в единицах валюты; **+** = длинная валюта (выигрывает от ослабления рубля) |
-| Фондирование | `amount < 0` — привлечение (РЕПО, FTP), `amount > 0` — размещение. Стоимость привлечения в `carry` получается отрицательной |
-| PnL | + = прибыль, за один день (`as_of − 1 раб. день → as_of`), в RUB |
+| Фондирование | `amount < 0` — привлечение, `amount > 0` — размещение (шорт, положительный остаток ДС). Стоимость привлечения в `carry` получается отрицательной. Строки — §0.4 |
+| PnL | + = прибыль, за один день (`as_of − 1 раб. день → as_of`), в RUB. Флэш — по рыночным курсам, официальный — по курсам ЦБ (§0.6). Начисления — за все календарные дни периода |
 | Даты | ISO `YYYY-MM-DD`; метки времени — `YYYY-MM-DDTHH:MM:SS` |
 | Идентификаторы | `position_id` и `deal_id` — **стабильны между днями** (номер сделки или позиции во фронт-системе). По ним UI помечает новые сделки и сопоставляет дни |
 
@@ -111,9 +292,9 @@
 | Что | Значения |
 |---|---|
 | Бакеты (`ref_bucket`) | `1M 3M 6M 1Y 2Y 3Y 5Y 7Y 10Y 15Y 20Y+`, пилларсы 1/12, 0.25, 0.5, 1, 2, 3, 5, 7, 10, 15, 20 лет. Каждая кривая — точка на **каждом** бакете |
-| Кривые `curve_id` | `RUB OFZ` (КБД, kind=bond), `RUB RUONIA`, `RUB KEY`, `USD SOFR`, `CNY`, `EUR ESTR` (kind=swap). Можно добавлять другие: они появятся в теплокартах и лестницах, но сценарные пресеты и часть виджетов ссылаются на эти шесть |
-| Валюты | `RUB`, `USD`, `CNY`, `EUR`. Курс любой другой валюты UI покажет, но фильтры, слайдеры Scenario Lab и Pivot Studio знают только эти четыре |
-| Индексы `mkt_index` | `КС`, `RUONIA`, `SOFR`, `RUSFAR CNY`, `€STR`. Используются как бенчмарк стоимости фондирования |
+| Кривые `curve_id` | `RUB OFZ` (КБД, kind=bond — рыночная, без риска), `RUB RUONIA`, `RUB KEY`, `USD SOFR`, `CNY`, `EUR ESTR`, `CHF SARON` (kind=swap). Можно добавлять другие: они появятся в теплокартах и лестницах, но сценарные пресеты и часть виджетов ссылаются на эти шесть |
+| Валюты | `RUB`, `USD`, `CNY`, `EUR`, `CHF`. Списки валют в UI строятся из `mkt_fx` |
+| Индексы `mkt_index` | `КС`, `RUONIA`, `RUSFAR O/N`, `RUSFAR CNY`, `SOFR`, `€STR`, `SARON`. Ставки фондирования и бенчмарки |
 | `instr_type` | `BOND`, `IRS`, `XCCY`, `CDS`, `FX` |
 | `segment` | `Гос`, `Корп`, `Секьюритизация`, `Деривативы`, `FX` |
 | Рейтинги | шкала `ref_rating` (AAA … D); новые значения из `run_issuer` добавляются в конец |
@@ -136,6 +317,9 @@
 | `name` | да | название для экрана |
 | `desk` | да | деск, к которому относится книга (фильтр «Деск») |
 | `trader` | нет | ответственный |
+| `book_type` | да (1.3) | режим фондирования: `TRADING` / `HTM` / `DERIVS` (§0.1). Без него монитор выводит режим из позиций |
+| `entity` | да (1.3) | юрлицо |
+| `ocp_to` | нет | книга деривативов для вечерней передачи ОВП |
 
 **`run_issuer`** — эмитенты и референсы CDS (`add_issuers`). Каждый `position.issuer` должен здесь быть.
 
@@ -158,7 +342,7 @@
 | `points[].rate` | уровень кривой на срез, % |
 | `points[].move_bp` | изменение за день, б.п. — **то самое**, что использовано в PnL explain (`rates`); UI показывает его рядом с кривой и строит матрицу «DV01 × сдвиг» |
 
-**`mkt_fx`** (`add_fx`): `ccy`, `rate` (RUB за 1 ед.), `move_pct` (изменение курса за день, %).
+**`mkt_fx`** (`add_fx`): `ccy`, `rate` (рыночный, RUB за 1 ед.), `move_pct` (изменение курса за день, %); с 1.3 — `rate_cbr`, `move_pct_cbr`, `rate_cbr_next` (§0.2). Без курсов ЦБ официальный базис совпадает с рыночным.
 **`mkt_index`** (`add_indices`): `index_name`, `value` в %.
 
 ### 4.3 Позиции — `position`
@@ -193,8 +377,9 @@
 | `spr_dur` | спред-дюрация, лет | ○ | — | — | — | — |
 | `convexity` | выпуклость к доходности, лет² (½·C·Δy² — относительное изменение цены). Используется для второго порядка в сценариях, **если нет матрицы `gamma`** (4.3.3) | ● | — | — | — | — |
 | `dv01` | **итого** DV01 по всем кривым = Σ `risk` | ● | ● | ● | 0 | ● |
-| `cs01` | чувствительность к спреду (для ОФЗ-ПД к КБД = 0) | ● | 0 | 0 | ● | 0 |
-| `jtd` | jump-to-default: изменение PV при дефолте эмитента, RUB. Для длинной облигации обычно `mv_rub × (1 − R)` со знаком потери. Методика (R, LGD) — ваша, но одна на весь деск | ● | 0 | 0 | ● | 0 |
+| `cs01` | чувствительность к кредитному спреду; у RUB-корпоратов — к RUONIA; у ОФЗ = 0 | ● | 0 | 0 | ● | 0 |
+| `ofz_spr01` | *1.3.* ОФЗ: чувствительность к спреду ОФЗ к RUONIA, RUB/б.п. (одно число на бумагу); прочие — 0 | ● (ОФЗ) | — | — | — | — |
+| `jtd` | jump-to-default: изменение PV при дефолте эмитента, RUB. Для длинной облигации `mv_rub × (1 − R)` со знаком потери. R — параметр деска (по умолчанию 0, `run.jtd_recovery`); 25 % у CDS — только для перевода котировки в апфронт | ● | 0 | 0 | ● | 0 |
 | `wal`, `cpr` | секьюритизация: WAL (лет), CPR (%) | ○ | — | — | — | — |
 | `counterparty` | контрагент | — | ● | ● | ● | ● |
 | `new_today` | сделка заключена сегодня (UI подсвечивает её, PnL идёт в `new_trades`) | ○ | ○ | ○ | ○ | ○ |
@@ -215,7 +400,7 @@
 - Это **главная чувствительность** монитора. На ней строятся теплокарты «кривая × бакет», лестницы DV01, PnL explain по ставкам и все сценарии без полной переоценки.
 - Методика: сдвиг на +1 б.п. одного пиллара кривой (треугольная функция между соседними пилларами), остальные пилларсы неподвижны; результат — ΔPV в RUB. Должно выполняться Σ по бакетам и кривым = `position.dv01`. При расхождении больше 0.1 % SDK пишет предупреждение.
 - Кривые по типам:
-  - фиксированные облигации → кривая своей валюты (RUB → `RUB OFZ`);
+  - фиксированные облигации → кривая своей валюты (RUB → `RUB RUONIA`; спред ОФЗ — `ofz_spr01`, §0.3);
   - флоатеры на КС → `RUB KEY`, на RUONIA → `RUB RUONIA` (короткий конец);
   - IRS → кривая своего индекса;
   - XCCY → иностранная кривая + `RUB RUONIA`;
@@ -238,7 +423,7 @@
 | Фактор | Что сдвигается | Единица |
 |---|---|---|
 | `IR\|<curve_id>\|<bucket>` | один пиллар кривой (как в key-rate DV01) | 1 б.п. |
-| `CS` | собственный кредитный спред позиции (тот, к которому считается CS01) | 1 б.п. |
+| `CS` | собственный спред позиции: кредитный (к которому считается CS01), у ОФЗ — спред ОФЗ к RUONIA (`ofz_spr01`) | 1 б.п. |
 | `FX\|<ccy>` | курс валюты к рублю | 1 % |
 
 `d2PV` = ∂²PV_RUB / (∂a ∂b), в RUB на (единица a × единица b). Вклад в PnL сценария:
@@ -276,19 +461,22 @@ PnL₂ = Σ_a ½·Γ_aa·Δa²  +  Σ_{a<b} Γ_ab·Δa·Δb
 | `rates` | Σ по `position_risk` (DV01 × `move_bp` соответствующей точки). UI сверяет это поле с `risk × move_bp` в матрице «Rates explain»: используйте те же сдвиги, что и в `mkt_curve_point.move_bp` |
 | `spread` | CS01 × изменение спреда эмитента за день |
 | `fx_gross` | переоценка самой позиции из-за изменения курса |
-| `fx_funding` | доля FX-переоценки **валютного фондирования** книги, отнесённая на эту позицию (см. 4.4.1) |
+| `fx_funding` | FX-переоценка **тела фондирования самой бумаги** (строка `POS`, §0.4) |
+| `funding` | *1.3.* процент по фондированию бумаги за день (строка `POS` / `HTM`), RUB |
 | `convexity` | эффект второго порядка за день: ½·Γ·Δ² по фактическим сдвигам дня (`move_bp` кривых, изменения спреда) — те же гаммы, что в `position_gamma` |
 | `new_trades` | PnL сделок дня (цена сделки → закрытие) |
 | `other` | всё, что объяснено, но не попадает в категории выше (купоны, амортизация, …) |
-| `official` | **официальный** PnL позиции (бэк-офис / система учёта). Если его ещё нет — `NULL`: тогда unexplained = 0, а SDK пишет предупреждение |
+| `official` | **официальный** управленческий PnL позиции: по курсам ЦБ, с фондированием, приходит на T+1 (§0.6). Если его ещё нет — `NULL`: тогда unexplained = 0 |
+| `fx_gross_cbr`, `fx_funding_cbr` | *1.3.* FX-компоненты по курсам ЦБ — для сверки с официальным |
 | `break_note` | текстовая причина расхождения, если известна |
 
 Монитор считает сам:
-- `explained` = сумма девяти компонент;
-- `unexplained` = `official − explained`;
-- `fx` = `fx_gross + fx_funding`.
+- `explained` (флэш, рыночные курсы) = сумма компонент (с 1.3 — десяти, включая `funding`);
+- `fx` = `fx_gross + fx_funding`;
+- `explained_cbr` = `explained` + (`fx_gross_cbr` + `fx_funding_cbr` − `fx`);
+- `unexplained` = `official − explained_cbr`.
 
-Пороги «разрыва», которые подсвечивает UI: |unexplained| ≥ 0,5 млн (внимание) и ≥ 2 млн (крит.) по книге. В Scenario Lab порог равен max(2 млн, 5 % от |official|).
+Пороги «разрыва», которые подсвечивает UI: |unexplained| ≥ 0,5 млн (внимание) и ≥ 2 млн (крит.) по книге. В Scenario Lab порог равен max(2 млн, 5 % от |official|). Пороги условные — деск их пока не задал.
 
 #### 4.3.5 Облигации: таблица и история выпуска (с версии 1.2)
 
@@ -314,36 +502,40 @@ PnL₂ = Σ_a ½·Γ_aa·Δa²  +  Σ_{a<b} Γ_ab·Δa·Δb
 
 ### 4.4 Фондирование — `funding_deal`, `funding_pnl`
 
+С версии 1.3 — **строки фондирования** четырёх видов (`POS`, `HTM`, `CASH`, `REPO`), полная спецификация и правила — §0.4, справочник ставок — §0.5.
+
 | Поле | Обяз. | Описание |
 |---|---|---|
-| `deal_id`, `book_id` | да | сделка и книга, которую она фондирует |
-| `type` | да | `РЕПО с ЦК`, `TSY FTP`, `Обратное РЕПО`, `FX-своп`, `Гарантийное обеспечение` (свободный текст, UI группирует) |
-| `ccy`, `amount` | да | валюта; сумма в валюте, `<0` привлечение |
-| `rate` | да | текущая эффективная ставка, % (с учётом спреда) |
-| `rate_expr` | нет | формула для показа: `RUONIA + 0.20%` |
-| `start_date`, `maturity` | да* | `maturity` обязательна (лестница сроков) |
+| `deal_id`, `book_id` | да | строка и книга |
+| `kind` | да | `POS` / `HTM` / `CASH` / `REPO` |
+| `position_id` | для `POS`, `HTM` | бумага, которую фондирует строка |
+| `type` | да | подпись для экрана: `FTP торговой книги`, `FTP HTM (контракт)`, `Остаток ДС`, `РЕПО (покрытие шорта)` |
+| `ccy`, `amount` | да | валюта; тело в валюте, `<0` привлечение |
+| `index_name`, `spread_bp`, `fixed_rate` | да | состав ставки (индекс + спред или фикс.) |
+| `rate` | да | ставка на `as_of`, % |
+| `rate_expr` | нет | для показа: `КС + 0.30%` |
+| `benchmark`, `day_basis` | да | §0.4 |
+| `start_date`, `maturity` | да | для `POS` и `CASH` — O/N (`maturity` = следующий рабочий день) |
 | `counterparty`, `collateral` | нет | |
-| `pnl.carry` | да | стоимость или доход за день, RUB (`amount_rub × rate / 365` для простых сделок) |
-| `pnl.fx_gross` | да для валютных | FX-переоценка сделки за день, RUB |
-| `pnl.fx_allocated` | да для валютных | часть `fx_gross`, разнесённая на позиции книги (= Σ их `fx_funding`) |
+| `pnl.carry` | да | кэрри строки за день, RUB (§0.4) |
+| `pnl.fx_gross` | да для валютных | FX-переоценка тела за день, RUB |
+| `pnl.fx_allocated` | да для `POS` | часть `fx_gross`, ушедшая в `position_pnl.fx_funding` бумаги (= `fx_gross`) |
 
 Монитор считает сам:
-- `amount_rub` = `amount × rate(ccy)`;
-- `fx_delta` = `amount` для нерублёвых сделок;
-- `tenor_y`;
-- нераспределённый остаток `fx = fx_gross − fx_allocated` (показывается строкой фондирования книги);
-- итоги `fundingPnl` и `fundingPnlByBook`.
+- `amount_rub` = `amount × rate(ccy)`, `fx_delta`, `tenor_y`;
+- фондирование уровня книги — строки без `position_id`: кэрри + FX;
+- итоги `fundingPnl`, `fundingPnlByBook` (только строки без `position_id`; фондирование бумаг уже в их PnL);
+- сценарии кэрри по строкам (индекс, спред, база).
 
-#### 4.4.1 Разнесение FX-переоценки валютного фондирования
+#### 4.4.1 FX-переоценка валютного фондирования
 
-Чтобы книга видела FX-риск нетто (облигация в CNY на CNY-РЕПО почти не даёт FX-PnL), переоценка валютного привлечения разносится на позиции **той же книги**:
-- берутся позиции с FX-дельтой противоположного знака в этой валюте;
-- переоценка делится пропорционально |FX-дельте|;
-- если таких позиций нет, вся сумма остаётся остатком сделки (`fx_gross − fx_allocated`).
+С 1.3 тело фондирования облигации в валюте — строка `POS` этой же бумаги, и её FX-переоценка — в `position_pnl.fx_funding` бумаги (§0.4).
+Облигация на своём фондировании даёт FX-PnL только на НКД и накопленный PnL в валюте, а их вечером забирает передача ОВП.
+Пропорциональное разнесение по книге (`allocateFundingFx` в 1.2) удалено.
 
-Эталонная реализация — `allocateFundingFx` в `prototypes/desk-util.js`. Расчётный сервис может применить свою методику, но инварианты должны сохраняться:
-- Σ `position_pnl.fx_funding` по книге = Σ `funding_pnl.fx_allocated` по книге. Иначе SDK пишет предупреждение.
-- `fx_allocated ≤ fx_gross` по модулю.
+Инварианты:
+- `position_pnl.fx_funding` бумаги = `funding_pnl.fx_allocated` её строки;
+- у строк без `position_id` `fx_allocated = 0`.
 
 ### 4.5 Сценарии
 
@@ -356,21 +548,23 @@ PnL₂ = Σ_a ½·Γ_aa·Δa²  +  Σ_{a<b} Γ_ab·Δa·Δb
   "definition": {
     "curves":  { "RUB OFZ": [200,190,170,140,100,80,60,50,40,35,30], "RUB KEY": 150 },
     "fx":      { "USD": 15, "CNY": 15, "EUR": 15 },
-    "spreads": { "_all": 25, "_mult": 2, "AA-": 50, "Самолёт": 300, "includeGov": false }
+    "ofzSpread": 10,
+    "spreads": { "_all": 25, "_mult": 2, "rating": { "AA-": 50 }, "sector": { "Девелопмент": 300 }, "issuer": { "Самолёт": 300 } }
   }
 }
 ```
 
 - **`curves`** — сдвиг в б.п.: число задаёт параллельный сдвиг, массив из 11 значений — сдвиг по бакетам.
 - **`fx`** — изменение курса в %; + значит ослабление рубля.
-- **`spreads`** — правила спред-шока:
-  - `_all` — сдвиг всех спредов, б.п.;
-  - `_mult` — множитель к текущему спреду;
-  - ключ-рейтинг или ключ-эмитент — сдвиг для этого рейтинга или эмитента, б.п.;
-  - `includeGov` — шокировать ли «Гос» полностью; по умолчанию к нему применяется 35 % шока.
+- **`ofzSpread`** — *1.3.* сдвиг спреда ОФЗ к RUONIA, б.п. (× `ofz_spr01`).
+- **`spreads`** — правила кредитного спред-шока (× CS01), аддитивно:
+  - `_all` — сдвиг всех кредитных спредов, б.п.;
+  - `_mult` — множитель к текущему спреду: Δ = (k − 1) × спред;
+  - `rating`, `sector`, `issuer` — сдвиг для рейтинга, сектора, эмитента, б.п.;
+  - старый формат (рейтинг или эмитент ключом верхнего уровня) читается; `includeGov` и «35 % для Гос» удалены.
 
 **Результаты.** Без полной переоценки (по умолчанию) UI сам считает сценарий в браузере разложением до второго порядка:
-- Σ key-rate DV01 × шок, CS01 × Δспред, FX-дельта × Δкурс (с разнесением фондирования);
+- Σ key-rate DV01 × шок, CS01 × Δспред, `ofz_spr01` × `ofzSpread`, FX-дельта × Δкурс (облигация — вместе с телом своего фондирования);
 - **второй порядок**: матрица `position_gamma` или выпуклость;
 - **кросс FX**: валютная часть PnL по шокированному курсу.
 
@@ -384,7 +578,7 @@ PnL₂ = Σ_a ½·Γ_aa·Δa²  +  Σ_{a<b} Γ_ab·Δa·Δb
 ### 4.6 История итогов — `desk_history`
 
 Графики «PnL за 22 дня», спарклайны DV01, CS01 и PnL берутся отсюда.
-- При публикации **EOD**-прогона строка за `as_of` пишется **автоматически**: Σ official и explained позиций плюс фондирование (carry + FX-остаток), Σ DV01, Σ CS01.
+- При публикации **EOD**-прогона строка за `as_of` пишется **автоматически**: Σ official (курсы ЦБ) и explained позиций плюс фондирование книг — строки без `position_id` (кэрри + FX), Σ DV01, Σ CS01 (§0.9). Официальный PnL на T+1 (`attach_official_pnl`) обновляет эту строку.
 - Для старта можно загрузить прошлые дни без детализации: `history: [{as_of, pnl_official, pnl_explained, dv01, cs01}]` в пакете или `writer.load_history()`. Дни, по которым есть опубликованный EOD, при этом не перезаписываются.
 - Для текущего прогона (в том числе интрадей) последняя точка истории всегда берётся из него самого.
 
@@ -396,21 +590,30 @@ PnL₂ = Σ_a ½·Γ_aa·Δa²  +  Σ_{a<b} Γ_ab·Δa·Δb
 
 ```python
 import sys; sys.path.insert(0, r"C:\tdm")          # или pip install --no-build-isolation C:\tdm
-from tdm.writer import Run, upsert_scenarios
+from tdm.writer import Run, upsert_scenarios, upsert_carry_scenarios, attach_official_pnl
 
 with Run(r"C:\tdm\data\tdm.sqlite", as_of="2026-10-13", run_type="EOD",
-         source="calc-svc@srv01", lib_version="fi-lib 4.2.1", market_snapshot="MOEX close") as run:
-    run.add_books(books)            # 1. статика — до позиций (внешние ключи)
+         source="calc-svc@srv01", lib_version="fi-lib 4.2.1", market_snapshot="MOEX close",
+         jtd_recovery=0.0) as run:                  # prev_date / accrual_days — по календарю, можно задать явно
+    run.add_books(books)            # 1. статика — до позиций (внешние ключи); книги с book_type, entity, ocp_to
     run.add_issuers(issuers)
     run.add_curves(curves)          # 2. рынок
-    run.add_fx(fx); run.add_indices(indices)
+    run.add_fx(fx); run.add_indices(indices)        # fx: rate + rate_cbr, move_pct_cbr, rate_cbr_next
+    run.add_funding_rules(rules)    # справочник ставок фондирования (§0.5)
     for chunk in chunks(positions, 5000):
-        run.add_positions(chunk)    # 3. позиции с risk / fx_delta / pnl, можно порциями
-    run.add_funding(deals)          # 4. фондирование
-    run.add_scenario_results("stress22", rows, funding_residual)   # 5. необязательно
+        run.add_positions(chunk)    # 3. позиции с risk / fx_delta / pnl (funding, fx_*_cbr), можно порциями
+    run.add_funding(lines)          # 4. строки POS / HTM / CASH / REPO ...
+    run.derive_funding()            #    ... или недостающие строит tdm (§0.9)
+    run.add_ocp_transfers()         # 5. сводка передачи ОВП (из сделок передачи в позициях)
+    run.add_scenario_results("stress22", rows, funding_residual)   # 6. необязательно
 # выход из with: проверки → 'complete'; исключение → 'failed' (с текстом ошибки)
 print(run.run_id, run.status, run.warnings)
+
+# T+1: официальный PnL загружен (pnl_official.csv) — приложить к опубликованному EOD-прогону
+attach_official_pnl(r"C:\tdm\data\tdm.sqlite", run_id=run.run_id)
 ```
+
+Если статика, рынок и справочник ставок уже загружены во входной слой, шаги 1–2 заменяет `run.add_reference_data()`.
 
 Словари совпадают с объектами JSON-пакета (раздел 5.2), поэтому можно собирать один и тот же dict и для SDK, и для файла. Готовый шаблон — `examples/calc_service_stub.py`.
 
@@ -420,33 +623,44 @@ print(run.run_id, run.status, run.warnings)
 
 ```json
 {
-  "contract_version": "1.0",
-  "run":       { "as_of": "2026-10-13", "run_type": "EOD", "source": "calc-svc", "lib_version": "4.2.1" },
-  "books":     [ { "book_id": "OFZ", "name": "ОФЗ", "desk": "Rates", "trader": "А. Иванов" } ],
+  "contract_version": "1.3",
+  "run":       { "as_of": "2026-10-13", "run_type": "EOD", "source": "calc-svc", "lib_version": "4.2.1",
+                 "prev_date": "2026-10-12", "accrual_days": 1, "jtd_recovery": 0 },
+  "books":     [ { "book_id": "OFZ", "name": "ОФЗ", "desk": "Rates", "trader": "А. Иванов", "book_type": "TRADING", "entity": "Головной банк" },
+                 { "book_id": "CORP_FX", "name": "Корпы валютные", "desk": "FX Credit", "book_type": "TRADING", "entity": "Головной банк", "ocp_to": "FXB" } ],
   "issuers":   [ { "issuer": "Минфин РФ", "issuer_group": "Российская Федерация", "sector": "Суверен", "rating": "AAA", "is_gov": true } ],
-  "curves":    [ { "curve_id": "RUB OFZ", "name": "ОФЗ (КБД)", "ccy": "RUB", "kind": "bond",
-                   "points": [ { "bucket": "1M", "rate": 14.10, "move_bp": 14 }, "… все 11 бакетов" ] } ],
-  "fx":        [ { "ccy": "USD", "rate": 81.45, "move_pct": 0.62 } ],
-  "indices":   [ { "index_name": "RUONIA", "value": 14.32 } ],
+  "curves":    [ { "curve_id": "RUB RUONIA", "name": "RUONIA OIS", "ccy": "RUB", "kind": "swap",
+                   "points": [ { "bucket": "1M", "rate": 14.30, "move_bp": 6 }, "… все 11 бакетов" ] } ],
+  "fx":        [ { "ccy": "USD", "rate": 81.45, "move_pct": 0.62, "rate_cbr": 81.12, "move_pct_cbr": 0.48, "rate_cbr_next": 81.47 } ],
+  "indices":   [ { "index_name": "КС", "value": 14.50 }, { "index_name": "RUONIA", "value": 14.32 } ],
+  "funding_rules": [ { "book_type": "TRADING", "ccy": "RUB", "index_name": "КС", "spread_bp": 30, "note": "спред деска" },
+                     { "book_type": "TRADING", "ccy": "USD", "fixed_rate": 5.0, "note": "hard ccy" } ],
   "positions": [ {
       "position_id": "SU26242", "book_id": "OFZ", "instr_type": "BOND", "asset_class": "ОФЗ-ПД", "segment": "Гос",
       "name": "ОФЗ 26242", "isin": "SU26242RMFS0", "issuer": "Минфин РФ", "ccy": "RUB", "maturity": "2029-08-29",
-      "coupon_type": "fix", "coupon": 9.0, "notional": 4.2e9, "price": 87.6, "mv": 3.68e9, "mv_rub": 3.68e9,
-      "ytm": 14.2, "spread_bp": 3, "mdur": 2.5, "convexity": 8.1, "dv01": -920000, "cs01": 0, "jtd": 2.39e9,
-      "risk":     { "RUB OFZ": { "1Y": -40000, "2Y": -310000, "3Y": -570000 } },
-      "gamma":    [ ["IR|RUB OFZ|2Y", "IR|RUB OFZ|2Y", 41.2], ["IR|RUB OFZ|2Y", "IR|RUB OFZ|3Y", 63.5], ["IR|RUB OFZ|3Y", "IR|RUB OFZ|3Y", 128.7] ],
+      "coupon_type": "fix", "coupon": 9.0, "notional": 4.2e9, "price": 87.6, "mv": 3.68e9, "mv_rub": 3.68e9, "accrued": 2.94,
+      "ytm": 14.2, "spread_bp": -12, "spread_type": "Z", "spread_curve": "RUB RUONIA", "mdur": 2.5, "convexity": 8.1,
+      "dv01": -920000, "cs01": 0, "ofz_spr01": -920000, "jtd": 3.68e9,
+      "risk":     { "RUB RUONIA": { "1Y": -40000, "2Y": -310000, "3Y": -570000 } },
       "fx_delta": {},
-      "pnl": { "carry": 1430000, "rolldown": 18000, "rates": -8100000, "spread": 0, "fx_gross": 0, "fx_funding": 0,
-               "convexity": 2000, "new_trades": 0, "other": 0, "official": -6600000, "break_note": null }
+      "pnl": { "carry": 1430000, "rolldown": 18000, "rates": -8100000, "spread": -1840000, "fx_gross": 0, "fx_funding": 0,
+               "funding": -1540000, "convexity": 2000, "new_trades": 0, "other": 0,
+               "fx_gross_cbr": 0, "fx_funding_cbr": 0, "official": -10100000, "break_note": null }
   } ],
-  "funding":   [ { "deal_id": "R-1001", "book_id": "OFZ", "type": "РЕПО с ЦК", "ccy": "RUB", "amount": -1.45e10,
-                   "rate_expr": "RUSFAR O/N", "rate": 14.28, "start_date": "2026-10-13", "maturity": "2026-10-14",
-                   "counterparty": "НКЦ", "pnl": { "carry": -5670000, "fx_gross": 0, "fx_allocated": 0 } } ],
+  "funding":   [ { "deal_id": "F0001", "book_id": "OFZ", "kind": "POS", "position_id": "SU26242", "type": "FTP торговой книги",
+                   "ccy": "RUB", "amount": -3.68e9, "index_name": "КС", "spread_bp": 30, "fixed_rate": null, "rate": 14.80,
+                   "rate_expr": "КС + 0.30%", "benchmark": "КС", "day_basis": 365, "start_date": "2026-10-13", "maturity": "2026-10-14",
+                   "counterparty": "Казначейство", "pnl": { "carry": -1540000, "fx_gross": 0, "fx_allocated": 0 } } ],
+  "ocp_transfers":    [ { "from": "CORP_FX", "to": "FXB", "ccy": "USD", "amount": 1100000, "before": 1070283, "rate": 81.47, "value_date": "2026-10-14" } ],
   "scenarios":        [ "… необязательно: определения пресетов" ],
+  "carry_scenarios":  [ { "scenario_id": "flat", "name": "КС без изменений", "definition": { "ks": { "mode": "flat" } } } ],
+  "cbr_meetings":     [ { "date": "2026-10-23", "effective_date": "2026-10-26" } ],
   "scenario_results": [ "… необязательно: полная переоценка" ],
   "history":          [ "… необязательно: итоги прошлых дней" ]
 }
 ```
+
+Пакеты 1.0–1.2 (книги без режима, сделки фондирования книги без `kind`, один курс) загружаются как раньше.
 
 Загрузка: `python -m tdm --db C:\tdm\data\tdm.sqlite import C:\exchange\run_2026-10-13.json`. Код возврата 0 — опубликовано, 1 — ошибка (текст в stderr и в `calc_run.error`). Удобно ставить в планировщик сразу после расчёта.
 
@@ -459,13 +673,18 @@ print(run.run_id, run.status, run.warnings)
 - нет курса для валюты, которая встречается в позициях, FX-дельтах, фондировании или кривых;
 - у кривой не все 11 точек;
 - дубликаты `position_id` или `deal_id` внутри прогона;
-- неверные перечислимые значения (`instr_type`, `segment`, `kind`, `coupon_type`, `run_type`);
-- гамма: неизвестный фактор, кривая не из прогона, неверный бакет, валюта без курса; одна пара с разными значениями.
+- неверные перечислимые значения (`instr_type`, `segment`, `kind`, `book_type`, `coupon_type`, `run_type`); `ocp_to` — не книга прогона;
+- гамма: неизвестный фактор, кривая не из прогона, неверный бакет, валюта без курса; одна пара с разными значениями;
+- *1.3:* строка `POS` / `HTM` без позиции с тем же `position_id` в книге режима `TRADING` / `HTM`;
+- *1.3:* у позиции книги `HTM` есть `position_risk` или `position_gamma`.
 
 **Предупреждения** — пишутся в лог прогона (`calc_run_log`, `/api/v1/runs/<id>`), прогон публикуется:
 - Σ `position_risk` ≠ `dv01` больше чем на 0,1 % (и больше 100 ₽);
-- у позиций нет PnL или нет официального PnL;
-- Σ `fx_funding` по книге ≠ Σ `fx_allocated` по книге.
+- у позиций нет PnL или нет официального PnL (он придёт на T+1);
+- Σ `fx_funding` по книге ≠ Σ `fx_allocated` по книге;
+- *1.3:* `fx_funding` бумаги ≠ `fx_allocated` её строки больше чем на 1 ₽;
+- *1.3:* ОВП книги `TRADING` после передачи больше 10 млн ₽ по модулю;
+- *1.3:* у книги нет `book_type`; передача ОВП есть в `otc_deals`, но не в прогоне.
 
 ---
 
@@ -490,24 +709,35 @@ print(run.run_id, run.status, run.warnings)
 **Форма `window.DESK`.** Это контракт между сервером и страницами. Его собирает `tdm/assemble.py`; эталон — `prototypes/data.js`. На демо-наборе сборка проверена на точное совпадение с моком по всем полям.
 
 ```
-asOf, reportingCcy
+asOf, prevDate, accrualDays, reportingCcy
 BUCKETS[], PILLARS[], CURVES{id:{name,ccy,kind,pts[11]}}, CURVE_MOVES{id:[11]}
-FX{ccy:rate}, FX_MOVE_PCT{ccy:%}, INDICES{name:%}
-ISSUERS{issuer:{group,sector,rating,gov?,quasi?}}, RATING_ORDER[], BOOKS{id:{name,desk,trader}}
-SCENARIOS[{id,name,curves?,fx?,spreads?}], scenarioResults{id:{byPosition{pid:{…}},fundingFxByBook{}}}
-positions[{id,book,assetClass,segment,instrType,name,isin,issuer,issuerGroup,sector,rating,ccy,maturity,tenorY,
+FX{ccy:rate}, FX_MOVE_PCT{ccy:%}, FX_CBR{ccy:rate}, FX_CBR_MOVE_PCT{ccy:%}, FX_CBR_NEXT{ccy:rate}, INDICES{name:%}
+ISSUERS{issuer:{group,sector,rating,gov?,quasi?}}, RATING_ORDER[], BOOKS{id:{name,desk,trader,bookType,entity,ocpTo?}}
+SCENARIOS[{id,name,curves?,fx?,ofzSpread?,spreads?}], scenarioResults{id:{byPosition{pid:{…}},fundingFxByBook{}}}
+OFZ_SPREAD_MOVE?, JTD_RECOVERY, FUNDING_RULES[{bookType?,desk?,book?,entity?,instrument?,ccy,index?,spreadBp?,fixed?,note?}]
+OCP_TRANSFERS[{from,to,ccy,amount,before,rate,valueDate}], CBR_MEETINGS[{date,effective}]
+CARRY_SCENARIOS[{id,name,ks{mode,steps?,path?},on?,fundSpread?,hardCcy?}], CARRY_HORIZONS[[label,months]]
+official{asOf,received,basis:'CBR',receivedAt}
+positions[{id,book,entity,assetClass,segment,instrType,name,isin,issuer,issuerGroup,sector,rating,ccy,maturity,tenorY,
            couponType,coupon,index,margin,side,notional,notionalRub,price,mv,mvRub,ytm,spreadBp,mdur,sprDur,convexity,
-           dv01,cs01,risk{curve:[11]},fxDelta{ccy:amt},jtd,wal,cpr,counterparty,newToday,
+           dv01,cs01,ofzSpr01,risk{curve:[11]},fxDelta{ccy:amt},jtd,wal,cpr,counterparty,newToday,
            gamma[[f1,f2,d2PV]],gammaIr,gammaCs,gammaIrCs,gammaSource,
            BOND: instrumentId,accrued,couponFreq,yieldDate,spreadType,spreadCurve,
                  quote{date,price,ytm,zSpread,gSpread,volume,prevDate,prevPrice,prevYtm,prevZSpread,prevGSpread}|null,
-           pnl{carry,rolldown,rates,spread,fx,fxGross,fxFunding,convexity,newTrades,other,explained,unexplained,official,breakNote}}]
-funding[{id,book,type,ccy,amount,amountRub,rateExpr,rate,start,maturity,tenorY,counterparty,collateral,fxDelta,
-         pnl{carry,fx,fxGross,fxAllocated}}]
-fundingPnl{carry,fx}, fundingPnlByBook{book:{carry,fx,fxAllocated}}
+           HTM: accrualOnly,purchaseDate,purchasePrice,purchaseYield,contractRate;  передача ОВП: ocpTransfer,
+           pnl{carry,rolldown,rates,spread,fx,funding,convexity,newTrades,other,fxGross,fxFunding,fxGrossCbr,fxFundingCbr,fxCbr,
+               explained,explainedCbr,fxBasis,unexplained,official|null,breakNote}}]
+funding[{id,book,kind,positionId,type,ccy,amount,amountRub,index,spreadBp,fixed,rate,rateExpr,ruleNote?,benchmark,dayBasis,
+         start,maturity,tenorY,counterparty,collateral,fxDelta,pnl{carry,fx,fxCbr,fxGross,fxGrossCbr,fxAllocated,inPosition}}]
+fundingPnl{carry,fx,fxCbr}, fundingPnlByBook{book:{carry,fx,fxCbr,fxAllocated,inPositions}}   (итоги — только строки без positionId)
 history[{date,pnlOfficial,pnlExplained,pnlCum,dv01,cs01}]          (22 точки, последняя — текущий прогон)
 source{kind:'db'|'demo',runId,runType,publishedAt,libVersion,marketSnapshot,contractVersion}
 ```
+
+Что сервер считает сам: `explained` = 10 компонент; `fxBasis` = (`fxGrossCbr` + `fxFundingCbr`) − (`fxGross` + `fxFunding`); `explainedCbr` = `explained` + `fxBasis`;
+`unexplained` = `official` − `explainedCbr` (0, пока `official` нет); `amountRub` — по рыночному курсу; `pnl.fx` строки = `fxGross` − `fxAllocated`.
+Для прогона 1.0–1.2: курсы ЦБ = рыночным, `bookType` — по позициям (есть облигации → `TRADING`), `entity` = «—», `kind` = `DEAL`,
+`CARRY_SCENARIOS` — только «КС без изменений».
 
 ### 6.1 Какие экраны что используют
 
@@ -545,6 +775,7 @@ source{kind:'db'|'demo',runId,runType,publishedAt,libVersion,marketSnapshot,cont
 **Версии контракта.** `contract_version` пишется в каждый прогон.
 - 1.1 — вторые производные (`position_gamma`), `fx_cross` в сценариях.
 - 1.2 — поля облигаций: `instrument_id`, `accrued`, `coupon_freq`, `yield_date`, `spread_type`, `spread_curve`; `quote` в `window.DESK`; `/api/v1/bonds/history`. Все поля необязательные, прогоны 1.0–1.1 загружаются как раньше.
+- 1.3 — конвенции организации (§0): режимы книг, строки фондирования, курсы ЦБ, спред ОФЗ, HTM, официальный PnL на T+1, сценарии кэрри. Схема базы v5. Пакеты 1.0–1.2 загружаются как раньше.
 - Добавление необязательных полей не меняет мажорную версию: новые колонки получают `NULL`, старые UI их игнорируют.
 - Переименование или смена смысла — новая мажорная версия: сервер будет поддерживать обе на переходный период.
 
@@ -573,6 +804,9 @@ source{kind:'db'|'demo',runId,runType,publishedAt,libVersion,marketSnapshot,cont
 - [ ] Эмитенты всех облигаций и CDS — в `issuers`, с `issuer_group`.
 - [ ] Облигации с офертой: `ytm`, `spread_bp`, `mdur` — к оферте, и `yield_date` заполнена; `spread_type` / `spread_curve` указаны.
 - [ ] `instrument_id` (или ISIN) облигаций совпадает с ключом в `md_bond_quote` — иначе нет изменений за день и истории выпуска.
-- [ ] Разнесение FX-фондирования: Σ `fx_funding` = Σ `fx_allocated` по книге.
-- [ ] `official` PnL — из официальной системы (или `NULL`, если ещё нет).
+- [ ] У каждой книги `book_type` и `entity`; у книг `TRADING` с валютными бумагами — `ocp_to`.
+- [ ] Строки фондирования `POS` / `HTM` привязаны к бумагам; `fx_funding` бумаги = `fx_allocated` её строки (или строки строит `derive_funding`).
+- [ ] Курсы ЦБ (`rate_cbr`, `rate_cbr_next`) рядом с рыночными; FX-компоненты PnL по курсам ЦБ — `fx_gross_cbr`, `fx_funding_cbr`.
+- [ ] У позиций книг `HTM` нет `risk` и `gamma`.
+- [ ] `official` PnL — из официальной системы (или `NULL`, если ещё нет; на T+1 — `attach_official_pnl`).
 - [ ] EOD-прогон раз в день; при сбое — повтор (старые данные остаются видны).

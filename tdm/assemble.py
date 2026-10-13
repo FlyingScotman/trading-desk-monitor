@@ -1,9 +1,14 @@
-"""Сборка объекта window.DESK (форма — как prototypes/data.js) из опубликованного прогона."""
+"""Сборка объекта window.DESK (форма — как prototypes/data.js, контракт 1.3) из опубликованного прогона.
+Прогоны 1.0–1.2 собираются в ту же форму: недостающие поля получают значения по умолчанию (как блок compat в desk-util.js)."""
 import json
 from datetime import date
 
-PNL_KEYS = ("carry", "rolldown", "rates", "spread", "fx_gross", "fx_funding", "convexity", "new_trades", "other")
+from . import market as M
+
+PNL_KEYS = ("carry", "rolldown", "rates", "spread", "fx_gross", "fx_funding", "funding", "convexity", "new_trades", "other")
 HISTORY_DAYS = 22
+CARRY_HORIZONS = [["1M", 1], ["3M", 3], ["6M", 6], ["1Y", 12]]
+DEFAULT_CARRY = [{"id": "flat", "name": "КС без изменений", "ks": {"mode": "flat"}}]
 
 
 def resolve_run(con, as_of=None, run_id=None):
@@ -88,10 +93,22 @@ def assemble(con, run):
         curves[p["curve_id"]]["pts"][bidx[p["bucket"]]] = p["rate"]
         moves[p["curve_id"]][bidx[p["bucket"]]] = p["move_bp"]
 
-    fx = {r["ccy"]: r["rate"] for r in rows("SELECT * FROM mkt_fx WHERE run_id=? ORDER BY CASE ccy WHEN 'RUB' THEN 0 ELSE 1 END, rowid")}
-    fx_move = {r["ccy"]: r["move_pct"] for r in rows("SELECT * FROM mkt_fx WHERE run_id=?")}
+    fxr = rows("SELECT * FROM mkt_fx WHERE run_id=? ORDER BY CASE ccy WHEN 'RUB' THEN 0 ELSE 1 END, rowid")
+    fx = {r["ccy"]: r["rate"] for r in fxr}
+    fx_move = {r["ccy"]: r["move_pct"] for r in fxr}
+    # курсы ЦБ: нет в прогоне (1.2) — равны рыночным, официальный базис совпадает с флэшем
+    fx_cbr = {r["ccy"]: r["rate_cbr"] if r["rate_cbr"] is not None else r["rate"] for r in fxr}
+    fx_cbr_move = {r["ccy"]: r["move_pct_cbr"] if r["move_pct_cbr"] is not None else (r["move_pct"] if r["rate_cbr"] is None else 0.0) for r in fxr}
+    fx_cbr_next = {r["ccy"]: r["rate_cbr_next"] if r["rate_cbr_next"] is not None else fx_cbr[r["ccy"]] for r in fxr}
     indices = {r["index_name"]: r["value"] for r in rows("SELECT * FROM mkt_index WHERE run_id=?")}
-    books = {r["book_id"]: {"name": r["name"], "desk": r["desk"], "trader": r["trader"]} for r in rows("SELECT * FROM run_book WHERE run_id=? ORDER BY ord")}
+    has_bonds = {r[0] for r in rows("SELECT DISTINCT book_id FROM position WHERE run_id=? AND instr_type='BOND'")}
+    books = {}
+    for r in rows("SELECT * FROM run_book WHERE run_id=? ORDER BY ord"):
+        b = {"name": r["name"], "desk": r["desk"], "trader": r["trader"],
+             "bookType": r["book_type"] or ("TRADING" if r["book_id"] in has_bonds else "DERIVS"), "entity": r["entity"] or "—"}
+        if r["ocp_to"]:
+            b["ocpTo"] = r["ocp_to"]
+        books[r["book_id"]] = b
     issuers, disp = {}, {}
     for r in rows("SELECT * FROM run_issuer WHERE run_id=?"):
         disp[r["issuer"]] = r["name"] or r["issuer"]   # монитор показывает имя; ключ может быть кодом
@@ -124,7 +141,11 @@ def assemble(con, run):
         q = pnl.get(pid)
         comp = {k: (q[k] if q else 0.0) for k in PNL_KEYS}
         explained = sum(comp.values())
-        official = q["official"] if q and q["official"] is not None else explained
+        gross_cbr = q["fx_gross_cbr"] if q and q["fx_gross_cbr"] is not None else comp["fx_gross"]
+        fund_cbr = q["fx_funding_cbr"] if q and q["fx_funding_cbr"] is not None else comp["fx_funding"]
+        fx_basis = (gross_cbr + fund_cbr) - (comp["fx_gross"] + comp["fx_funding"])
+        explained_cbr = explained + fx_basis
+        official = q["official"] if q and q["official"] is not None else None   # NULL — официальный ещё не пришёл (T+1)
         pos = {
             "id": pid, "book": p["book_id"], "assetClass": p["asset_class"], "segment": p["segment"], "instrType": p["instr_type"],
             "name": p["name"], "isin": p["isin"], "issuer": iname,
@@ -134,17 +155,25 @@ def assemble(con, run):
             "couponType": p["coupon_type"], "coupon": p["coupon"], "index": p["index_name"], "margin": p["margin"], "side": p["side"],
             "notional": p["notional"], "notionalRub": p["notional_rub"], "price": p["price"], "mv": p["mv"], "mvRub": p["mv_rub"],
             "ytm": p["ytm"], "spreadBp": p["spread_bp"], "mdur": p["mdur"], "sprDur": p["spr_dur"], "convexity": p["convexity"],
-            "dv01": p["dv01"], "cs01": p["cs01"], "risk": risk.get(pid, {}), "fxDelta": fxd.get(pid, {}), "jtd": p["jtd"],
+            "dv01": p["dv01"], "cs01": p["cs01"], "ofzSpr01": p["ofz_spr01"] or 0.0, "risk": risk.get(pid, {}), "fxDelta": fxd.get(pid, {}), "jtd": p["jtd"],
             "wal": p["wal"], "cpr": p["cpr"], "counterparty": p["counterparty"], "newToday": bool(p["new_today"]),
             "gamma": gamma.get(pid, []), **gamma_summary(gamma.get(pid), p["mv_rub"], p["convexity"], p["cs01"]),
+            "entity": books.get(p["book_id"], {}).get("entity", "—"),
             "pnl": {
                 "carry": comp["carry"], "rolldown": comp["rolldown"], "rates": comp["rates"], "spread": comp["spread"],
-                "fx": comp["fx_gross"] + comp["fx_funding"], "fxGross": comp["fx_gross"], "fxFunding": comp["fx_funding"],
+                "fx": comp["fx_gross"] + comp["fx_funding"], "funding": comp["funding"],
                 "convexity": comp["convexity"], "newTrades": comp["new_trades"], "other": comp["other"],
-                "explained": explained, "unexplained": official - explained, "official": official,
+                "fxGross": comp["fx_gross"], "fxFunding": comp["fx_funding"], "fxGrossCbr": gross_cbr, "fxFundingCbr": fund_cbr,
+                "fxCbr": gross_cbr + fund_cbr, "explained": explained, "explainedCbr": explained_cbr, "fxBasis": fx_basis,
+                "unexplained": 0.0 if official is None else official - explained_cbr, "official": official,
                 "breakNote": q["break_note"] if q else None,
             },
         }
+        if p["accrual_only"]:
+            pos.update({"accrualOnly": True, "purchaseDate": p["purchase_date"], "purchasePrice": p["purchase_price"],
+                        "purchaseYield": p["purchase_yield"], "contractRate": p["contract_rate"]})
+        if p["ocp_transfer"]:
+            pos["ocpTransfer"] = True
         if p["instr_type"] == "BOND":
             iid = p["instrument_id"] or iid_by_isin.get(p["isin"]) or p["isin"]
             pos.update({"instrumentId": iid, "accrued": p["accrued"], "couponFreq": p["coupon_freq"], "yieldDate": p["yield_date"],
@@ -153,24 +182,51 @@ def assemble(con, run):
             pos["extra"] = json.loads(p["extra_json"])
         positions.append(pos)
 
-    funding, fpnl, fbook = [], {"carry": 0.0, "fx": 0.0}, {b: {"carry": 0.0, "fx": 0.0, "fxAllocated": 0.0} for b in books}
-    for f in rows("SELECT d.*, p.carry, p.fx_gross, p.fx_allocated FROM funding_deal d LEFT JOIN funding_pnl p"
+    # строки фондирования; итоги fundingPnl / fundingPnlByBook — только строки без position_id
+    # (фондирование облигаций уже в PnL бумаг: компоненты funding и fx_funding)
+    funding, fpnl = [], {"carry": 0.0, "fx": 0.0, "fxCbr": 0.0}
+    fbook = {b: {"carry": 0.0, "fx": 0.0, "fxCbr": 0.0, "fxAllocated": 0.0, "inPositions": 0.0} for b in books}
+    for f in rows("SELECT d.*, p.carry, p.fx_gross, p.fx_allocated, p.fx_gross_cbr FROM funding_deal d LEFT JOIN funding_pnl p"
                   " ON p.run_id=d.run_id AND p.deal_id=d.deal_id WHERE d.run_id=? ORDER BY d.rowid"):
         carry, gross, alloc = f["carry"] or 0.0, f["fx_gross"] or 0.0, f["fx_allocated"] or 0.0
+        gross_cbr = f["fx_gross_cbr"] if f["fx_gross_cbr"] is not None else gross
+        in_pos = f["position_id"] is not None
+        fxv = gross - alloc
+        fx_cbr_v = fxv if in_pos else gross_cbr - alloc
         funding.append({
-            "id": f["deal_id"], "book": f["book_id"], "type": f["type"], "ccy": f["ccy"], "amount": f["amount"],
-            "amountRub": f["amount"] * fx.get(f["ccy"], 1.0), "rateExpr": f["rate_expr"], "rate": f["rate"],
+            "id": f["deal_id"], "book": f["book_id"], "kind": f["kind"] or "DEAL", "positionId": f["position_id"], "type": f["type"],
+            "ccy": f["ccy"], "amount": f["amount"], "amountRub": f["amount"] * fx.get(f["ccy"], 1.0),
+            "index": f["index_name"], "spreadBp": f["spread_bp"], "fixed": f["fixed_rate"], "rate": f["rate"], "rateExpr": f["rate_expr"],
+            "benchmark": f["benchmark"], "dayBasis": f["day_basis"] or 365,
             "start": f["start_date"], "maturity": f["maturity"], "tenorY": max(1 / 365, _years(as_of, f["maturity"]) or 0),
             "counterparty": f["counterparty"], "collateral": f["collateral"],
-            "fxDelta": {f["ccy"]: f["amount"]} if f["ccy"] != "RUB" else {},
-            "pnl": {"carry": carry, "fx": gross - alloc, "fxGross": gross, "fxAllocated": alloc},
+            "fxDelta": {f["ccy"]: f["amount"]} if f["ccy"] != "RUB" and f["kind"] != "HTM" else {},
+            "pnl": {"carry": carry, "fx": fxv, "fxCbr": fx_cbr_v, "fxGross": gross, "fxGrossCbr": gross_cbr, "fxAllocated": alloc,
+                    "inPosition": in_pos},
         })
-        fpnl["carry"] += carry
-        fpnl["fx"] += gross - alloc
-        b = fbook.setdefault(f["book_id"], {"carry": 0.0, "fx": 0.0, "fxAllocated": 0.0})
-        b["carry"] += carry
-        b["fx"] += gross - alloc
+        if f["rule_note"]:
+            funding[-1]["ruleNote"] = f["rule_note"]
+        b = fbook.setdefault(f["book_id"], {"carry": 0.0, "fx": 0.0, "fxCbr": 0.0, "fxAllocated": 0.0, "inPositions": 0.0})
         b["fxAllocated"] += alloc
+        if in_pos:
+            b["inPositions"] += carry
+            continue
+        fpnl["carry"] += carry
+        fpnl["fx"] += fxv
+        fpnl["fxCbr"] += fx_cbr_v
+        b["carry"] += carry
+        b["fx"] += fxv
+        b["fxCbr"] += fx_cbr_v
+
+    rules = []
+    for r in rows("SELECT * FROM funding_rule WHERE run_id=? ORDER BY ord"):
+        x = {"bookType": r["book_type"], "desk": r["desk"], "book": r["book_id"], "entity": r["entity"], "instrument": r["instrument_id"],
+             "ccy": r["ccy"], "index": r["index_name"], "spreadBp": r["spread_bp"], "fixed": r["fixed_rate"], "note": r["note"]}
+        rules.append({k: v for k, v in x.items() if v is not None and v != ""})
+    ocp = [{"from": r["from_book"], "to": r["to_book"], "ccy": r["ccy"], "amount": r["amount"], "before": r["before"], "rate": r["rate"],
+            "valueDate": r["value_date"]} for r in rows("SELECT * FROM run_ocp_transfer WHERE run_id=? ORDER BY ord")]
+    carry_sc = [dict({"id": s["scenario_id"], "name": s["name"]}, **json.loads(s["definition_json"]))
+                for s in con.execute("SELECT * FROM carry_scenario_def WHERE active=1 ORDER BY ord, scenario_id")] or DEFAULT_CARRY
 
     scenarios = []
     for s in con.execute("SELECT * FROM scenario_def WHERE active=1 ORDER BY ord, scenario_id"):
@@ -194,12 +250,22 @@ def assemble(con, run):
         history.append({"date": h["as_of"], "pnlOfficial": h["pnl_official"], "pnlExplained": h["pnl_explained"],
                         "pnlCum": cum, "dv01": h["dv01"], "cs01": h["cs01"]})
 
-    return {
-        "asOf": as_of, "reportingCcy": "RUB",
+    prev = run["prev_date"] or M.prev_business_day(con, as_of)
+    out = {
+        "asOf": as_of, "prevDate": prev,
+        "accrualDays": run["accrual_days"] or max(1, (date.fromisoformat(as_of) - date.fromisoformat(prev)).days), "reportingCcy": "RUB",
         "BUCKETS": B, "PILLARS": [b["pillar_years"] for b in buckets], "CURVES": curves, "CURVE_MOVES": moves,
-        "FX": fx, "FX_MOVE_PCT": fx_move, "INDICES": indices, "ISSUERS": issuers, "RATING_ORDER": rating_order,
+        "FX": fx, "FX_MOVE_PCT": fx_move, "FX_CBR": fx_cbr, "FX_CBR_MOVE_PCT": fx_cbr_move, "FX_CBR_NEXT": fx_cbr_next,
+        "INDICES": indices, "ISSUERS": issuers, "RATING_ORDER": rating_order,
         "BOOKS": books, "SCENARIOS": scenarios, "scenarioResults": scen_res,
+        "JTD_RECOVERY": run["jtd_recovery"] or 0.0, "FUNDING_RULES": rules, "OCP_TRANSFERS": ocp,
+        "CBR_MEETINGS": M.cbr_meetings(con, after=as_of), "CARRY_SCENARIOS": carry_sc, "CARRY_HORIZONS": CARRY_HORIZONS,
+        "official": {"asOf": as_of, "received": any(p["pnl"]["official"] is not None for p in positions), "basis": "CBR",
+                     "receivedAt": run["official_at"]},
         "positions": positions, "funding": funding, "fundingPnl": fpnl, "fundingPnlByBook": fbook, "history": history,
         "source": {"kind": "db", "runId": rid, "runType": run["run_type"], "publishedAt": run["published_at"],
                    "libVersion": run["lib_version"], "marketSnapshot": run["market_snapshot"], "contractVersion": run["contract_version"]},
     }
+    if run["ofz_spread_move"] is not None:
+        out["OFZ_SPREAD_MOVE"] = run["ofz_spread_move"]
+    return out

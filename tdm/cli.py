@@ -26,6 +26,10 @@ def main(argv=None):
     cv = sub.add_parser("coverage", help="какие наборы данных загружены на какие даты")
     cv.add_argument("--from", dest="date_from")
     cv.add_argument("--to", dest="date_to")
+    ao = sub.add_parser("attach-official", help="T+1: приложить официальный PnL (pnl_official) к опубликованному EOD-прогону за дату")
+    ao.add_argument("--as-of", dest="as_of", help="дата прогона YYYY-MM-DD (последний опубликованный EOD)")
+    ao.add_argument("--run-id", dest="run_id", type=int, help="или явно прогон")
+    ao.add_argument("--keep", action="store_true", help="не перезаписывать уже заполненный official")
     hs = sub.add_parser("build-hist-scenarios", help="построить исторические сценарии из рыночных рядов")
     hs.add_argument("--horizon", type=int, nargs="+", default=[1, 10], help="длины окон в рабочих днях")
     hs.add_argument("--top", type=int, default=5, help="сколько худших окон на каждую длину")
@@ -88,6 +92,17 @@ def main(argv=None):
         for d in cov["days"]:
             print(f"{d['date']}  {('#' + str(d['eod_run'])) if d['eod_run'] else '—':>4} " + " ".join(f"{d[n]:>10}" for n in names))
         print(f"дней: {len(cov['days'])}; с пропусками обязательных наборов ({', '.join(cov['required'])}): {len(cov['days_with_gaps'])}")
+    elif a.cmd == "attach-official":
+        from .writer import attach_official_pnl
+        if not a.as_of and not a.run_id:
+            ap.error("нужен --as-of или --run-id")
+        try:
+            r = attach_official_pnl(a.db, run_id=a.run_id, as_of=a.as_of, overwrite=not a.keep)
+        except ValueError as e:
+            print(f"ОШИБКА — {e}", file=sys.stderr)
+            sys.exit(1)
+        print(f"прогон {r['run_id']} ({r['as_of']}): официальный PnL приложен к {r['updated']} позициям"
+              + (f"; нет в прогоне: {len(r['missing'])} ({', '.join(r['missing'][:10])})" if r["missing"] else ""))
     elif a.cmd == "build-hist-scenarios":
         from .histscen import build
         made = build(a.db, a.horizon, a.top, a.date_from, a.date_to)

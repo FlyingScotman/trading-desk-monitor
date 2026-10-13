@@ -1,5 +1,6 @@
 """Чтение рыночных рядов и справочников из слоя входных данных (md_*, ref_*)."""
 import statistics
+from datetime import date, timedelta
 
 from .db import BUCKETS
 
@@ -56,6 +57,88 @@ def fixings_on(con, d):
     return {r[0]: r[1] for r in con.execute(
         "SELECT f.index_name, f.value FROM md_fixing f JOIN (SELECT index_name, MAX(date) AS d FROM md_fixing WHERE date <= ? GROUP BY index_name) m"
         " ON m.index_name=f.index_name AND m.d=f.date", (d,))}
+
+
+# ---------------------------------------------------------------------- календарь (контракт 1.3)
+def _shift(con, d, step):
+    """Соседний рабочий день: по ref_calendar, если он покрывает дату, иначе пн–пт."""
+    op, agg = ("<", "MAX") if step < 0 else (">", "MIN")
+    covered = con.execute("SELECT 1 FROM ref_calendar WHERE date " + (">=" if step < 0 else "<=") + " ? LIMIT 1", (d,)).fetchone()
+    if covered:
+        r = con.execute(f"SELECT {agg}(date) FROM ref_calendar WHERE is_business_day=1 AND date {op} ?", (d,)).fetchone()[0]
+        if r:
+            return r
+    x = date.fromisoformat(d) + timedelta(days=step)
+    while x.weekday() >= 5:
+        x += timedelta(days=step)
+    return x.isoformat()
+
+
+def prev_business_day(con, d):
+    return _shift(con, d, -1)
+
+
+def next_business_day(con, d):
+    return _shift(con, d, 1)
+
+
+def calendar_days(d0, d1):
+    """Календарные дни периода начисления (d0, d1]: в понедельник — сб, вс, пн."""
+    a, b = date.fromisoformat(d0), date.fromisoformat(d1)
+    return [(a + timedelta(days=i)).isoformat() for i in range(1, (b - a).days + 1)]
+
+
+# ---------------------------------------------------------------------- курсы ЦБ и фиксинги по дням (контракт 1.3)
+def fx_cbr_on(con, d):
+    """{ccy: курс ЦБ, действующий на d}: последняя запись md_fx_cbr с датой действия не позже d."""
+    return {r[0]: r[1] for r in con.execute(
+        "SELECT f.ccy, f.rate FROM md_fx_cbr f JOIN (SELECT ccy, MAX(date) AS d FROM md_fx_cbr WHERE date <= ? GROUP BY ccy) m"
+        " ON m.ccy=f.ccy AND m.d=f.date", (d,))}
+
+
+def fx_cbr_next(con, d):
+    """{ccy: курс ЦБ на следующий день}: первая запись с датой действия после d (установлен в d)."""
+    return {r[0]: r[1] for r in con.execute(
+        "SELECT f.ccy, f.rate FROM md_fx_cbr f JOIN (SELECT ccy, MIN(date) AS d FROM md_fx_cbr WHERE date > ? GROUP BY ccy) m"
+        " ON m.ccy=f.ccy AND m.d=f.date", (d,))}
+
+
+def fx_cbr_move(con, d, prev):
+    """{ccy: изменение курса ЦБ, %}: действующий на d к действующему на prev (прошлый рабочий день)."""
+    cur, old = fx_cbr_on(con, d), fx_cbr_on(con, prev) if prev else {}
+    return {k: (v / old[k] - 1) * 100 if old.get(k) else 0.0 for k, v in cur.items()}
+
+
+def fixing_on(con, index_name, d):
+    """Значение индекса, действующее в день d (последняя запись не позже d; КС — по дате вступления в силу)."""
+    r = con.execute("SELECT value FROM md_fixing WHERE index_name=? AND date <= ? ORDER BY date DESC LIMIT 1", (index_name, d)).fetchone()
+    return r[0] if r else None
+
+
+def fixings_by_day(con, index_name, d0, d1):
+    """[(день, значение)] по календарным дням (d0, d1]: в каждый день — действующее значение (None, если записей нет)."""
+    days = calendar_days(d0, d1)
+    if not days:
+        return []
+    rows = con.execute("SELECT date, value FROM md_fixing WHERE index_name=? AND date <= ? ORDER BY date", (index_name, d1)).fetchall()
+    out, i, cur = [], 0, None
+    for day in days:
+        while i < len(rows) and rows[i][0] <= day:
+            cur = rows[i][1]
+            i += 1
+        out.append((day, cur))
+    return out
+
+
+def cbr_meetings(con, after=None):
+    """[{date, effective}] — заседания ЦБ; effective по умолчанию — следующий рабочий день после решения."""
+    sql, args = "SELECT date, effective_date FROM ref_cbr_meeting", []
+    out = []
+    for d, eff in con.execute(sql + " ORDER BY date", args):
+        eff = eff or next_business_day(con, d)
+        if after is None or eff > after:
+            out.append({"date": d, "effective": eff})
+    return out
 
 
 def ratings_on(con, d, agency="COMPOSITE"):

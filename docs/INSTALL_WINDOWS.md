@@ -160,6 +160,7 @@ python -m tdm --db C:\tdm\data\tdm.sqlite import C:\exchange\run_2026-10-13.json
 | `python -m tdm load C:\tdm_data\` | загрузить входные данные из CSV: все `*.csv` в папке и подпапках; набор определяется по имени файла (`docs/DATA_REQUIREMENTS.md`) |
 | `python -m tdm coverage --from 2025-10-13` | таблица «дата × набор данных»: сколько строк загружено, есть ли EOD-прогон; `--from`/`--to` — период |
 | `python -m tdm build-hist-scenarios --horizon 1 10 --top 5` | исторические сценарии: `--horizon` — окна в рабочих днях, `--top` — сколько худших окон каждой длины |
+| `python -m tdm attach-official --as-of 2026-10-13` | T+1: приложить официальный PnL из `pnl_official` к опубликованному EOD-прогону за дату (нового прогона нет). `--run-id` — явно прогон, `--keep` — не перезаписывать уже заполненный |
 | `daily.bat` | ежедневная загрузка: всё из папки `inbox\` → база, файлы переносятся в `inbox\done\`, затем пересборка исторических сценариев |
 | `python -m tdm runs` | последние 20 прогонов: дата, тип, статус, ошибка. `--limit 50` — показать 50 |
 | `python -m tdm demo` | загрузить демо-прогон из `fixtures\demo_bundle.json` и историю рынка за год (`fixtures\demo_market.json.gz`) |

@@ -42,7 +42,8 @@ def render():
         lines.append(f"- **Зачем:** {d.purpose}")
         lines.append(f"- **Приоритет:** {PRIO[d.priority]}. **Глубина:** {d.depth}.")
         lines.append(f"- **Где брать:** {d.sources}.")
-        lines.append(f"- **Как грузится:** {KIND[d.kind].format(by=by)}; ключ `{', '.join(d.key)}` → таблица `{d.table}`. "
+        how = "справочник (файл заменяет его целиком)" if d.replace_all else KIND[d.kind].format(by=by)
+        lines.append(f"- **Как грузится:** {how}; ключ `{', '.join(d.key)}` → таблица `{d.table}`. "
                      f"Шаблон: `contract/csv/{d.name}.csv`.")
         lines += ["", "| Поле | Тип | Обяз. | Описание | Пример |", "|---|---|:-:|---|---|"]
         for c in d.cols:
