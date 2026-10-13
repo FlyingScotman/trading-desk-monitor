@@ -1,0 +1,2 @@
+﻿trade_date;trade_id;book_id;position_id;instrument_id;deal_id;side;quantity;face_amount;price;counterparty_id
+2026-10-13;T-551023;OFZ;OFZ|SU26247RMFS5;SU26247RMFS5;;BUY;1500000;;92.45;

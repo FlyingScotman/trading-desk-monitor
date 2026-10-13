@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 DEFAULT_DB = os.environ.get("TDM_DB", str(Path.cwd() / "data" / "tdm.sqlite"))
 
 BUCKETS = [("1M", 1 / 12), ("3M", 0.25), ("6M", 0.5), ("1Y", 1.0), ("2Y", 2.0), ("3Y", 3.0),
@@ -36,7 +36,8 @@ def init_db(path=None):
     con = connect(path)
     con.executescript((Path(__file__).with_name("schema.sql")).read_text(encoding="utf-8"))
     with con:
-        con.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)", (SCHEMA_VERSION,))
+        _migrate(con)
+        con.execute("INSERT INTO meta(key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (SCHEMA_VERSION,))
         con.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('created_at', ?)", (now_iso(),))
         if not con.execute("SELECT 1 FROM ref_bucket LIMIT 1").fetchone():
             con.executemany("INSERT INTO ref_bucket(bucket, ord, pillar_years) VALUES (?,?,?)",
@@ -44,3 +45,18 @@ def init_db(path=None):
         if not con.execute("SELECT 1 FROM ref_rating LIMIT 1").fetchone():
             con.executemany("INSERT INTO ref_rating(rating, ord) VALUES (?,?)", [(r, i) for i, r in enumerate(RATINGS)])
     return con
+
+
+def _columns(con, table):
+    return {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+
+
+def _migrate(con):
+    """Добавить колонки, появившиеся после v1 (таблицы создаёт schema.sql)."""
+    if "name" not in _columns(con, "run_issuer"):
+        con.execute("ALTER TABLE run_issuer ADD COLUMN name TEXT")          # отображаемое имя, если issuer — код
+    cols = _columns(con, "scenario_def")
+    if "kind" not in cols:
+        con.execute("ALTER TABLE scenario_def ADD COLUMN kind TEXT NOT NULL DEFAULT 'preset'")  # preset | historical
+    if "description" not in cols:
+        con.execute("ALTER TABLE scenario_def ADD COLUMN description TEXT")

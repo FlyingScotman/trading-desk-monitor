@@ -1,0 +1,2 @@
+﻿deal_id;instr_type;book_id;trade_date;start_date;maturity;ccy;notional;side;fixed_rate;float_index;float_spread_bp;notional_rub;reference_issuer_id;cds_spread_bp;fx_rate;counterparty_id;cleared
+IRS-000123;IRS;RATES;2026-04-01;2026-04-03;2031-04-03;RUB;3500000000;PAY;12.70;RUONIA;0;;;;;NCC;1

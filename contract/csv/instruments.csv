@@ -1,0 +1,2 @@
+﻿instrument_id;isin;name;issuer_id;asset_class;segment;ccy;face_value;issue_date;maturity;coupon_type;coupon_rate;coupon_freq;day_count;index_name;margin;amortizing;offer_date;is_mbs;collateral_eligible
+SU26242RMFS0;SU26242RMFS0;ОФЗ 26242;7710168360;ОФЗ-ПД;Гос;RUB;1000;2019-05-15;2029-08-29;fix;9.0;2;ACT/365;;;0;;0;1

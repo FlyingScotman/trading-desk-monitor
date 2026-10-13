@@ -272,3 +272,112 @@ CREATE TABLE IF NOT EXISTS desk_history (
   cs01          REAL NOT NULL,
   updated_at    TEXT NOT NULL
 );
+
+-- ===========================================================================
+-- Схема v2: слой ВХОДНЫХ данных центрального сервиса (по датам, не по прогонам).
+-- Наборы и поля — tdm/datasets.py, список к сбору — docs/DATA_REQUIREMENTS.md.
+-- ===========================================================================
+
+-- Справочники (актуальная версия; история важных атрибутов — отдельными рядами)
+CREATE TABLE IF NOT EXISTS ref_book (
+  book_id TEXT PRIMARY KEY, name TEXT NOT NULL, desk TEXT NOT NULL, trader TEXT,
+  active INTEGER NOT NULL DEFAULT 1, ord INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ref_issuer (
+  issuer_id TEXT PRIMARY KEY, name TEXT NOT NULL, issuer_group TEXT NOT NULL, sector TEXT, country TEXT,
+  is_gov INTEGER NOT NULL DEFAULT 0, is_quasi INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ref_issuer_rating (
+  issuer_id TEXT NOT NULL, agency TEXT NOT NULL, date TEXT NOT NULL, rating TEXT NOT NULL, updated_at TEXT NOT NULL,
+  PRIMARY KEY (issuer_id, agency, date)
+);
+CREATE TABLE IF NOT EXISTS ref_counterparty (
+  counterparty_id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT, issuer_id TEXT, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ref_instrument (
+  instrument_id TEXT PRIMARY KEY, isin TEXT, name TEXT NOT NULL, issuer_id TEXT NOT NULL, asset_class TEXT NOT NULL,
+  segment TEXT NOT NULL, ccy TEXT NOT NULL, face_value REAL NOT NULL, issue_date TEXT, maturity TEXT NOT NULL,
+  coupon_type TEXT NOT NULL, coupon_rate REAL, coupon_freq INTEGER, day_count TEXT, index_name TEXT, margin REAL,
+  amortizing INTEGER, offer_date TEXT, is_mbs INTEGER, collateral_eligible INTEGER, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ref_cashflow (
+  instrument_id TEXT NOT NULL, date TEXT NOT NULL, type TEXT NOT NULL, rate REAL, amount REAL, updated_at TEXT NOT NULL,
+  PRIMARY KEY (instrument_id, date, type)
+);
+CREATE TABLE IF NOT EXISTS ref_otc_deal (
+  deal_id TEXT PRIMARY KEY, instr_type TEXT NOT NULL CHECK (instr_type IN ('IRS', 'XCCY', 'CDS', 'FX')),
+  book_id TEXT NOT NULL, trade_date TEXT NOT NULL, start_date TEXT, maturity TEXT NOT NULL, ccy TEXT NOT NULL,
+  notional REAL NOT NULL, side TEXT NOT NULL, fixed_rate REAL, float_index TEXT, float_spread_bp REAL, notional_rub REAL,
+  reference_issuer_id TEXT, cds_spread_bp REAL, fx_rate REAL, counterparty_id TEXT, cleared INTEGER, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ref_curve (
+  curve_id TEXT PRIMARY KEY, name TEXT NOT NULL, ccy TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('bond', 'swap')),
+  index_name TEXT, source TEXT, ord INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ref_calendar (
+  date TEXT PRIMARY KEY, is_business_day INTEGER NOT NULL, updated_at TEXT NOT NULL
+);
+
+-- Ежедневные срезы
+CREATE TABLE IF NOT EXISTS pos_snapshot (
+  as_of TEXT NOT NULL, book_id TEXT NOT NULL, position_id TEXT NOT NULL, instrument_id TEXT, deal_id TEXT,
+  quantity REAL, face_amount REAL, avg_price REAL, book_value REAL, mark_price REAL, accrued REAL, mv_rub REAL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (as_of, position_id),
+  CHECK (instrument_id IS NOT NULL OR deal_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS ix_pos_snapshot_book ON pos_snapshot (as_of, book_id);
+CREATE TABLE IF NOT EXISTS fund_snapshot (
+  as_of TEXT NOT NULL, deal_id TEXT NOT NULL, book_id TEXT NOT NULL, type TEXT NOT NULL, ccy TEXT NOT NULL,
+  amount REAL NOT NULL, rate_type TEXT, index_name TEXT, spread_bp REAL, rate REAL NOT NULL, start_date TEXT,
+  maturity TEXT NOT NULL, counterparty_id TEXT, collateral TEXT, updated_at TEXT NOT NULL,
+  PRIMARY KEY (as_of, deal_id)
+);
+CREATE TABLE IF NOT EXISTS trade_log (
+  trade_date TEXT NOT NULL, trade_id TEXT NOT NULL, book_id TEXT NOT NULL, position_id TEXT NOT NULL, instrument_id TEXT,
+  deal_id TEXT, side TEXT NOT NULL, quantity REAL, face_amount REAL, price REAL, counterparty_id TEXT, updated_at TEXT NOT NULL,
+  PRIMARY KEY (trade_date, trade_id)
+);
+CREATE TABLE IF NOT EXISTS pnl_official (
+  as_of TEXT NOT NULL, book_id TEXT NOT NULL, position_id TEXT NOT NULL DEFAULT '',  -- '' = итог по книге
+  pnl_rub REAL NOT NULL, comment TEXT, updated_at TEXT NOT NULL,
+  PRIMARY KEY (as_of, book_id, position_id)
+);
+
+-- Рынок (временные ряды)
+CREATE TABLE IF NOT EXISTS md_curve_point (
+  date TEXT NOT NULL, curve_id TEXT NOT NULL, tenor_years REAL NOT NULL, rate REAL NOT NULL, source TEXT, updated_at TEXT NOT NULL,
+  PRIMARY KEY (date, curve_id, tenor_years)
+);
+CREATE TABLE IF NOT EXISTS md_fx (
+  date TEXT NOT NULL, ccy TEXT NOT NULL, rate REAL NOT NULL, source TEXT, updated_at TEXT NOT NULL,
+  PRIMARY KEY (date, ccy)
+);
+CREATE TABLE IF NOT EXISTS md_fixing (
+  date TEXT NOT NULL, index_name TEXT NOT NULL, value REAL NOT NULL, updated_at TEXT NOT NULL,
+  PRIMARY KEY (date, index_name)
+);
+CREATE TABLE IF NOT EXISTS md_bond_quote (
+  date TEXT NOT NULL, instrument_id TEXT NOT NULL, clean_price REAL NOT NULL, ytm REAL, z_spread_bp REAL, g_spread_bp REAL,
+  accrued REAL, volume_rub REAL, source TEXT, updated_at TEXT NOT NULL,
+  PRIMARY KEY (date, instrument_id)
+);
+CREATE INDEX IF NOT EXISTS ix_md_bond_quote_instr ON md_bond_quote (instrument_id, date);
+CREATE TABLE IF NOT EXISTS md_cds_quote (
+  date TEXT NOT NULL, issuer_id TEXT NOT NULL, tenor_years REAL NOT NULL, spread_bp REAL NOT NULL, updated_at TEXT NOT NULL,
+  PRIMARY KEY (date, issuer_id, tenor_years)
+);
+
+-- Журнал загрузок
+CREATE TABLE IF NOT EXISTS data_load (
+  load_id INTEGER PRIMARY KEY AUTOINCREMENT, dataset TEXT NOT NULL, file_name TEXT, loaded_at TEXT NOT NULL,
+  rows INTEGER NOT NULL DEFAULT 0, date_from TEXT, date_to TEXT, status TEXT NOT NULL CHECK (status IN ('ok', 'error')), error TEXT
+);
+
+-- Сценарии по запросу (уровень 3; сервер пока только хранит очередь, исполняет расчётный сервис)
+CREATE TABLE IF NOT EXISTS scenario_job (
+  job_id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, requested_by TEXT,
+  base_run_id INTEGER REFERENCES calc_run (run_id), definition_json TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'done', 'failed')),
+  started_at TEXT, finished_at TEXT, error TEXT, result_scenario_id TEXT
+);
