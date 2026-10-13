@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from . import __version__
+from .api import handle as api_handle
 from .assemble import assemble, resolve_run
 from .db import connect, init_db
 
@@ -85,6 +86,9 @@ def make_handler(db_path, static_dir):
         def api(self, route, q):
             con = connect(db_path, readonly=True)
             try:
+                res = api_handle(con, route, q)
+                if res is not None:
+                    return self._json(res, res.pop("_status", 200))
                 if route == "health":
                     last = con.execute("SELECT run_id, as_of, run_type, published_at FROM calc_run WHERE status='complete'"
                                        " ORDER BY as_of DESC, published_at DESC LIMIT 1").fetchone()

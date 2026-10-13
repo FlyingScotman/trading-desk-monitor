@@ -42,14 +42,15 @@ def assemble(con, run):
     fx_move = {r["ccy"]: r["move_pct"] for r in rows("SELECT * FROM mkt_fx WHERE run_id=?")}
     indices = {r["index_name"]: r["value"] for r in rows("SELECT * FROM mkt_index WHERE run_id=?")}
     books = {r["book_id"]: {"name": r["name"], "desk": r["desk"], "trader": r["trader"]} for r in rows("SELECT * FROM run_book WHERE run_id=? ORDER BY ord")}
-    issuers = {}
+    issuers, disp = {}, {}
     for r in rows("SELECT * FROM run_issuer WHERE run_id=?"):
+        disp[r["issuer"]] = r["name"] or r["issuer"]   # монитор показывает имя; ключ может быть кодом
         x = {"group": r["issuer_group"], "sector": r["sector"], "rating": r["rating"]}
         if r["is_gov"]:
             x["gov"] = True
         if r["is_quasi"]:
             x["quasi"] = True
-        issuers[r["issuer"]] = x
+        issuers[disp[r["issuer"]]] = x
     used_ratings = {x["rating"] for x in issuers.values() if x["rating"]}
     rating_order = [r["rating"] for r in con.execute("SELECT rating FROM ref_rating ORDER BY ord") if r["rating"] in used_ratings]
 
@@ -62,14 +63,15 @@ def assemble(con, run):
 
     positions = []
     for p in rows("SELECT * FROM position WHERE run_id=? ORDER BY rowid"):
-        pid, iss = p["position_id"], issuers.get(p["issuer"]) if p["issuer"] else None
+        pid, iname = p["position_id"], disp.get(p["issuer"], p["issuer"]) if p["issuer"] else None
+        iss = issuers.get(iname) if iname else None
         q = pnl.get(pid)
         comp = {k: (q[k] if q else 0.0) for k in PNL_KEYS}
         explained = sum(comp.values())
         official = q["official"] if q and q["official"] is not None else explained
         pos = {
             "id": pid, "book": p["book_id"], "assetClass": p["asset_class"], "segment": p["segment"], "instrType": p["instr_type"],
-            "name": p["name"], "isin": p["isin"], "issuer": p["issuer"],
+            "name": p["name"], "isin": p["isin"], "issuer": iname,
             "issuerGroup": iss["group"] if iss else None, "sector": iss["sector"] if iss else None, "rating": iss["rating"] if iss else None,
             "ccy": p["ccy"], "maturity": p["maturity"],
             "tenorY": p["tenor_y"] if p["tenor_y"] is not None else _years(as_of, p["maturity"]),
@@ -112,7 +114,7 @@ def assemble(con, run):
     scenarios = []
     for s in con.execute("SELECT * FROM scenario_def WHERE active=1 ORDER BY ord, scenario_id"):
         d = json.loads(s["definition_json"])
-        scenarios.append(dict({"id": s["scenario_id"], "name": s["name"]}, **d))
+        scenarios.append(dict({"id": s["scenario_id"], "name": s["name"], "kind": s["kind"], "description": s["description"]}, **d))
     scen_res = {}
     for r in rows("SELECT * FROM scenario_result WHERE run_id=?"):
         scen_res.setdefault(r["scenario_id"], {"byPosition": {}, "fundingFxByBook": {}})["byPosition"][r["position_id"]] = {

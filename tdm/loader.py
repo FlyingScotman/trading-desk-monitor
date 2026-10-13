@@ -11,6 +11,7 @@
 import csv
 import io
 import re
+import sqlite3
 from datetime import date
 from pathlib import Path
 
@@ -95,8 +96,12 @@ def read_rows(ds, path):
             continue
         row, bad = {}, []
         for c in ds.cols:
+            if c.name not in header:
+                continue           # колонки нет в файле: при вставке — значение по умолчанию, при обновлении — не трогаем
             try:
                 row[c.name] = _parse(rec.get(c.name), c.type, delim == ";")
+                if row[c.name] is None and c.default is not None:
+                    row[c.name] = c.default
             except ValueError as e:
                 bad.append(f"{c.name}: {e}")
                 continue
@@ -135,9 +140,26 @@ def load_file(db_path, path, dataset=None, con=None):
         if errors:
             _log(con, ds, path, report, "error")
             return report
-        cols = [c.name for c in ds.cols]
+        cols = [c.name for c in ds.cols if c.name in rows[0]] if rows else []
         ts = now_iso()
-        with con:
+        try:
+            _write(con, ds, rows, cols, ts)
+        except sqlite3.Error as e:
+            report["errors"] = [f"база отклонила данные: {e}"]
+            report["rows"] = 0
+            _log(con, ds, path, report, "error")
+            return report
+        _log(con, ds, path, report, "ok")
+        return report
+    finally:
+        if own:
+            con.close()
+
+
+def _write(con, ds, rows, cols, ts):
+    if not rows:
+        return
+    with con:
             if ds.kind == "snapshot":
                 groups = {tuple(r[c] for c in ds.replace_by) for r in rows}
                 for g in groups:
@@ -152,11 +174,6 @@ def load_file(db_path, path, dataset=None, con=None):
                 sql = (f"INSERT INTO {ds.table} ({', '.join(cols)}, updated_at) VALUES ({', '.join('?' * (len(cols) + 1))})"
                        f" ON CONFLICT({', '.join(ds.key)}) DO UPDATE SET " + ", ".join(f"{c}=excluded.{c}" for c in upd))
                 con.executemany(sql, [[r[c] for c in cols] + [ts] for r in rows])
-        _log(con, ds, path, report, "ok")
-        return report
-    finally:
-        if own:
-            con.close()
 
 
 def _log(con, ds, path, report, status):

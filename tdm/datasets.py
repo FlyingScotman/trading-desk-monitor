@@ -20,6 +20,7 @@ class Col:
     required: bool
     desc: str
     example: str = ""
+    default: object = None   # подставляется, если ячейка пуста
 
 
 @dataclass
@@ -39,8 +40,8 @@ class Dataset:
     example2: Optional[dict] = None     # вторая строка-пример
 
 
-def C(name, type_, required, desc, example=""):
-    return Col(name, type_, required, desc, example)
+def C(name, type_, required, desc, example="", default=None):
+    return Col(name, type_, required, desc, example, default)
 
 
 DATASETS: List[Dataset] = [
@@ -53,8 +54,8 @@ DATASETS: List[Dataset] = [
          C("name", "str", True, "название для экрана", "ОФЗ"),
          C("desk", "str", True, "деск (Rates, Credit, FX Credit, FX, …)", "Rates"),
          C("trader", "str", False, "ответственный трейдер", "А. Иванов"),
-         C("active", "bool", False, "книга используется (по умолчанию 1)", "1"),
-         C("ord", "int", False, "порядок на экране", "1")]),
+         C("active", "bool", False, "книга используется (по умолчанию 1)", "1", 1),
+         C("ord", "int", False, "порядок на экране", "1", 0)]),
     Dataset(
         "issuers", "ref_issuer", "ref", ("issuer_id",), 1, "Эмитенты и группы",
         "Концентрации по группам связанных заёмщиков, секторы, сегмент «Гос», референсы CDS.",
@@ -64,8 +65,8 @@ DATASETS: List[Dataset] = [
          C("issuer_group", "str", True, "группа связанных заёмщиков", "Российская Федерация"),
          C("sector", "str", False, "отрасль", "Суверен"),
          C("country", "str", False, "страна риска, ISO-2", "RU"),
-         C("is_gov", "bool", False, "суверен РФ", "1"),
-         C("is_quasi", "bool", False, "квазисуверен (госкомпания, госбанк)", "0")]),
+         C("is_gov", "bool", False, "суверен РФ", "1", 0),
+         C("is_quasi", "bool", False, "квазисуверен (госкомпания, госбанк)", "0", 0)]),
     Dataset(
         "issuer_ratings", "ref_issuer_rating", "series", ("issuer_id", "agency", "date"), 1, "Рейтинги эмитентов (история)",
         "Разрезы по рейтингу, кредитные сценарии по рейтинговым корзинам, исторические спред-шоки по рейтингам.",
@@ -148,7 +149,7 @@ DATASETS: List[Dataset] = [
          C("kind", "str", True, "bond / swap", "bond"),
          C("index_name", "str", False, "индекс, который кривая проецирует", ""),
          C("source", "str", False, "откуда берутся точки", "МосБиржа КБД"),
-         C("ord", "int", False, "порядок на экране", "1")]),
+         C("ord", "int", False, "порядок на экране", "1", 0)]),
     Dataset(
         "calendar", "ref_calendar", "ref", ("date",), 3, "Рабочие дни",
         "Окна исторических сценариев (1Д/10Д в рабочих днях), «вчера» для изменений.",

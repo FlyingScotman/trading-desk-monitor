@@ -20,7 +20,7 @@ import re
 from datetime import date
 
 from . import CONTRACT_VERSION
-from .db import connect, init_db, now_iso
+from .db import BUCKETS, connect, init_db, now_iso
 
 RUN_TYPES = ("EOD", "INTRADAY", "TEST")
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -99,13 +99,15 @@ class Run:
                  [(self.run_id, b["book_id"], b["name"], b["desk"], b.get("trader"), i) for i, b in enumerate(books)])
 
     def add_issuers(self, issuers):
-        """[{issuer, issuer_group, sector?, rating?, is_gov?, is_quasi?}]"""
+        """[{issuer, issuer_group, name?, sector?, rating?, is_gov?, is_quasi?}] — issuer: ключ (как в position.issuer),
+        name: отображаемое имя, если ключ — код (ИНН и т.п.)."""
         with self.con:
             for x in issuers:
                 if x.get("rating"):
                     self.con.execute("INSERT OR IGNORE INTO ref_rating (rating, ord) VALUES (?, (SELECT COALESCE(MAX(ord), -1) + 1 FROM ref_rating))", (x["rating"],))
-            _ins(self.con, "run_issuer", ["run_id", "issuer", "issuer_group", "sector", "rating", "is_gov", "is_quasi"],
-                 [(self.run_id, x["issuer"], x["issuer_group"], x.get("sector"), x.get("rating"), _b(x.get("is_gov")), _b(x.get("is_quasi"))) for x in issuers])
+            _ins(self.con, "run_issuer", ["run_id", "issuer", "name", "issuer_group", "sector", "rating", "is_gov", "is_quasi"],
+                 [(self.run_id, x["issuer"], x.get("name"), x["issuer_group"], x.get("sector"), x.get("rating"), _b(x.get("is_gov")), _b(x.get("is_quasi")))
+                  for x in issuers])
 
     # ------------------------------------------------------------------ рынок
     def add_curves(self, curves):
@@ -128,6 +130,50 @@ class Run:
         """[{index_name, value (%)}]"""
         with self.con:
             _ins(self.con, "mkt_index", ["run_id", "index_name", "value"], [(self.run_id, x["index_name"], x["value"]) for x in indices])
+
+    # ------------------------------------------------------------------ из слоя входных данных
+    def add_reference_data(self, books=True, issuers=True, market=True):
+        """Взять статику и рынок на as_of из центрального хранилища (ref_*, md_*), а не передавать самому.
+
+        Книги — ref_book; эмитенты — ref_issuer + рейтинг на дату; кривые — ref_curve + md_curve_point,
+        интерполированные на 11 пилларов, move_bp — к предыдущей дате с кривыми; курсы — md_fx (+ изменение, %);
+        индексы — последние фиксинги. Возвращает список того, чего не нашлось.
+        """
+        from . import market as M
+        con, d, missing = self.con, self.as_of, []
+        if books:
+            rows = [dict(r) for r in con.execute("SELECT * FROM ref_book WHERE active=1 ORDER BY ord, book_id")]
+            if not rows:
+                missing.append("ref_book пуст (загрузите books.csv)")
+            self.add_books(rows)
+        if issuers:
+            rt = M.ratings_on(con, d)
+            self.add_issuers([{"issuer": r["issuer_id"], "name": r["name"], "issuer_group": r["issuer_group"], "sector": r["sector"],
+                               "rating": rt.get(r["issuer_id"]), "is_gov": r["is_gov"], "is_quasi": r["is_quasi"]}
+                              for r in con.execute("SELECT * FROM ref_issuer")])
+        if market:
+            cur, prev_d = M.curves_on(con, d), M.prev_date(con, d)
+            prev = M.curves_on(con, prev_d) if prev_d else {}
+            curves = []
+            for c in con.execute("SELECT * FROM ref_curve ORDER BY ord, curve_id"):
+                if c["curve_id"] not in cur:
+                    missing.append(f"нет точек кривой {c['curve_id']} на {d}")
+                    continue
+                pts = cur[c["curve_id"]]
+                pp = prev.get(c["curve_id"], pts)
+                curves.append({"curve_id": c["curve_id"], "name": c["name"], "ccy": c["ccy"], "kind": c["kind"],
+                               "points": [{"bucket": b, "rate": r, "move_bp": round((r - q) * 100, 4)}
+                                          for (b, _), r, q in zip(BUCKETS, pts, pp)]})
+            self.add_curves(curves)
+            fx, fx_prev_d = M.fx_on(con, d), M.prev_date(con, d, "md_fx")
+            fx_prev = M.fx_on(con, fx_prev_d) if fx_prev_d else {}
+            if not fx:
+                missing.append(f"нет курсов на {d}")
+            self.add_fx([{"ccy": k, "rate": v, "move_pct": (v / fx_prev[k] - 1) * 100 if fx_prev.get(k) else 0} for k, v in fx.items()])
+            self.add_indices([{"index_name": k, "value": v} for k, v in M.fixings_on(con, d).items()])
+        for m in missing:
+            self.log("WARN", m)
+        return missing
 
     # ------------------------------------------------------------------ позиции
     def add_positions(self, positions):
