@@ -36,6 +36,7 @@ python -m unittest discover -s tests
 | [docs/DATA_REQUIREMENTS.md](docs/DATA_REQUIREMENTS.md) | **список данных к сбору** (19 наборов, поля, источники, приоритеты) + шаблоны `contract/csv/` |
 | [docs/SCENARIOS.md](docs/SCENARIOS.md) | сценарии: греки в мониторе / полная переоценка заранее / по запросу; исторические сценарии |
 | [docs/DATA_CONTRACT.md](docs/DATA_CONTRACT.md) | как расчётный сервис выкладывает результаты (прогоны) |
+| [docs/ORG_CONVENTIONS.md](docs/ORG_CONVENTIONS.md) | **конвенции организации**: фондирование, FX, PnL — основа расчётов; открытые вопросы |
 
 ```bash
 python -m tdm load C:\history\                 # загрузить CSV (справочники, срезы, рынок)
