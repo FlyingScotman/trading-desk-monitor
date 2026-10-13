@@ -334,14 +334,14 @@ const MAT_B = ['<1Y', '1–3Y', '3–5Y', '5–10Y', '>10Y'];
 const FUND = 'Фондирование';
 const SEG = ['Гос', 'Корп', 'Секьюритизация', 'Деривативы', 'FX'];
 const AC = ['ОФЗ-ПД', 'ОФЗ-ПК', 'Корп RUB фикс', 'Корп RUB флоатер', 'Корп валютные', 'Суверен валютный', 'Секьюритизация', 'IRS', 'XCCY', 'CDS', 'FX'];
-const CCYS = ['RUB', 'USD', 'CNY', 'EUR'];
+const CCYS = ['RUB'].concat(Object.keys(D.FX).filter(c => c !== 'RUB'));
 const BOOK_KEYS = Object.keys(D.BOOKS);
 const CURVE_KEYS = Object.keys(D.CURVES);
 const INSTR = { BOND: 'Облигации', IRS: 'IRS', XCCY: 'XCCY', CDS: 'CDS', FX: 'FX спот/форвард' };
-const CCY_CURVE = { RUB: 'RUB OFZ', USD: 'USD SOFR', CNY: 'CNY', EUR: 'EUR ESTR' };
-const FUND_CURVE = { RUB: 'RUB RUONIA', USD: 'USD SOFR', CNY: 'CNY', EUR: 'EUR ESTR' };
+const CCY_CURVE = { RUB: 'RUB RUONIA', USD: 'USD SOFR', CNY: 'CNY', EUR: 'EUR ESTR', CHF: 'CHF SARON' };
+const FUND_CURVE = { RUB: 'RUB RUONIA', USD: 'USD SOFR', CNY: 'CNY', EUR: 'EUR ESTR', CHF: 'CHF SARON' };
 const RATINGS = D.RATING_ORDER.concat(['Без рейтинга']);
-const SC_SHORT = { 'par+100': '+100 б.п. RUB', 'par-100': '−100 б.п. RUB', keyhike: 'КС +200 б.п.', bullsteep: 'Bull steepener', bearflat: 'Bear flattener', rubdep: 'Рубль −15%', credit: 'Спреды ×2', stress22: 'Стресс «2022»' };
+const SC_SHORT = { 'par+100': '+100 б.п. RUB', 'par-100': '−100 б.п. RUB', keyhike: 'КС +200 б.п.', bullsteep: 'Bull steepener', bearflat: 'Bear flattener', rubdep: 'Рубль −15%', credit: 'Спреды ×2', stress22: 'Стресс «2022»', basis: 'Базис КС−RUONIA +50', ofzwide: 'Спред ОФЗ +40', sector: 'Девелоперы и лизинг' };
 
 function nearestBucket(t) {
   let bi = 0, bd = Infinity;
@@ -397,7 +397,7 @@ function scen(id) {
     const sc = D.SCENARIOS.find(s => s.id === id) || D.SCENARIOS[0];
     const res = U.runScenario(sc);
     const pos = new Map(res.byPosition.map(x => [x.id, x.total]));
-    // по сделкам фондирования — только FX-остаток, не разнесённый на позиции (разнесённое уже в позициях)
+    // по строкам фондирования — только FX строк уровня книги (тело фондирования бумаги уже в её позиции)
     const fund = new Map(), byDeal = res.fundingFxByDeal;
     if (byDeal) D.funding.forEach(f => fund.set(f.id, byDeal[f.id] || 0));
     else {   // полная переоценка: остаток задан по книгам — делим pro-rata по |сумме| валютных сделок книги
@@ -412,12 +412,16 @@ const fxRub = o => Object.keys(o || {}).reduce((s, c) => s + o[c] * D.FX[c], 0);
 const MEASURES = {
   dv01:  { label: 'DV01', unit: '₽/б.п.', signed: true, src: 'pos', explode: true, val: r => r.p.dv01 },
   cs01:  { label: 'CS01', unit: '₽/б.п.', signed: true, src: 'pos', val: r => r.p.cs01 },
+  ofz01: { label: 'Спред ОФЗ01', unit: '₽/б.п.', signed: true, src: 'pos', val: r => r.p.ofzSpr01 || 0 },
+  pfund: { label: 'PnL: фондирование бумаг', unit: '₽', signed: true, src: 'pos', val: r => r.p.pnl.funding || 0 },
   jtd:   { label: 'JTD', unit: '₽', signed: true, src: 'pos', val: r => r.p.jtd },
   mv:    { label: 'MV', unit: '₽', signed: true, src: 'pos', val: r => r.p.mvRub },
   notional: { label: 'Номинал (брутто)', unit: '₽', signed: false, src: 'pos', val: r => Math.abs(r.p.notional) * D.FX[r.p.ccy] },
   ocp:   { label: 'ОВП', unit: '₽ экв.', signed: true, src: 'pos+fund', val: r => fxRub(isPos(r) ? r.p.fxDelta : r.f.fxDelta) },
   count: { label: 'Кол-во позиций', unit: 'шт.', signed: false, src: 'pos', agg: 'count', val: () => 1 },
-  pnl:   { label: 'PnL official', unit: '₽', signed: true, src: 'pos+fund', val: r => isPos(r) ? r.p.pnl.official : r.f.pnl.carry + r.f.pnl.fx },
+  // фондирование облигаций уже в PnL бумаг: у строк фондирования, привязанных к бумаге, PnL = 0
+  pnl:   { label: 'PnL флэш (рынок)', unit: '₽', signed: true, src: 'pos+fund', val: r => isPos(r) ? r.p.pnl.explained : (r.f.pnl.inPosition ? 0 : r.f.pnl.carry + r.f.pnl.fx) },
+  pnloff:{ label: 'PnL official (ЦБ)', unit: '₽', signed: true, src: 'pos+fund', val: r => isPos(r) ? (r.p.pnl.official || 0) : (r.f.pnl.inPosition ? 0 : r.f.pnl.carry + (r.f.pnl.fxCbr != null ? r.f.pnl.fxCbr : r.f.pnl.fx)) },
   unexp: { label: 'PnL unexplained', unit: '₽', signed: true, src: 'pos', val: r => r.p.pnl.unexplained },
   scen:  { label: 'Сценарий', unit: '₽', signed: true, src: 'pos+fund', val: (r, v) => { const s = scen(v.scen); return isPos(r) ? (s.pos.get(r.p.id) || 0) : (s.fund.get(r.f.id) || 0); } },
   famt:  { label: 'Фондирование: объём', unit: '₽', signed: true, src: 'fund', val: r => r.f.amountRub },
@@ -432,9 +436,9 @@ const MEASURES = {
 };
 function bondVal(r, f) { return r.p && r.p.instrType === 'BOND' ? f(r.p) : null; }
 const MEASURE_GROUPS = [
-  ['Риск', ['dv01', 'cs01', 'jtd']],
+  ['Риск', ['dv01', 'cs01', 'ofz01', 'jtd']],
   ['Экспозиция', ['mv', 'notional', 'ocp', 'count']],
-  ['PnL за день', ['pnl', 'unexp']],
+  ['PnL за день', ['pnl', 'pnloff', 'pfund', 'unexp']],
   ['Сценарий (util.runScenario)', ['scen']],
   ['Фондирование', ['famt', 'fcarry', 'frate']],
   ['Облигации (ср.-взв. по |MV|)', ['bytm', 'bspr', 'bown', 'bdur', 'bdy']],
@@ -688,7 +692,7 @@ const labelOn = (x, max) => max && Math.abs(x) / max > 0.55 ? '#ffffff' : null;
 $('#asof').textContent = fmtDate(D.asOf);
 (function kpis() {
   const dv = U.sum(D.positions, p => p.dv01), cs = U.sum(D.positions, p => p.cs01);
-  const pnl = U.sum(D.positions, p => p.pnl.official) + D.fundingPnl.carry + D.fundingPnl.fx;
+  const pnl = U.sum(D.positions, p => p.pnl.official || 0) + D.fundingPnl.carry + (D.fundingPnl.fxCbr != null ? D.fundingPnl.fxCbr : D.fundingPnl.fx);
   const ue = U.sum(D.positions, p => p.pnl.unexplained);
   const k = (l, v, u, cls) => `<div class="kpi ${cls || ''}"><span>${l}</span><b class="num">${fmtNum(v / 1e6, 2)} <small>${u}</small></b></div>`;
   $('#kpis').innerHTML = k('DV01 деска', dv, 'млн ₽/б.п.') + k('CS01 деска', cs, 'млн ₽/б.п.') + k('PnL official', pnl, 'млн ₽') + k('Unexplained', ue, 'млн ₽', 'opt-k') +
