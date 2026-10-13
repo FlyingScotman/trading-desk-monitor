@@ -397,8 +397,13 @@ function scen(id) {
     const sc = D.SCENARIOS.find(s => s.id === id) || D.SCENARIOS[0];
     const res = U.runScenario(sc);
     const pos = new Map(res.byPosition.map(x => [x.id, x.total]));
-    const fund = new Map();
-    D.funding.forEach(f => { let x = 0; if (sc.fx) Object.keys(f.fxDelta).forEach(c => { x += f.fxDelta[c] * D.FX[c] * (sc.fx[c] || 0) / 100; }); fund.set(f.id, x); });
+    // по сделкам фондирования — только FX-остаток, не разнесённый на позиции (разнесённое уже в позициях)
+    const fund = new Map(), byDeal = res.fundingFxByDeal;
+    if (byDeal) D.funding.forEach(f => fund.set(f.id, byDeal[f.id] || 0));
+    else {   // полная переоценка: остаток задан по книгам — делим pro-rata по |сумме| валютных сделок книги
+      const w = {}; D.funding.forEach(f => { if (f.ccy !== 'RUB') w[f.book] = (w[f.book] || 0) + Math.abs(f.amount * D.FX[f.ccy]); });
+      D.funding.forEach(f => fund.set(f.id, f.ccy !== 'RUB' && w[f.book] ? (res.fundingFxByBook[f.book] || 0) * Math.abs(f.amount * D.FX[f.ccy]) / w[f.book] : 0));
+    }
     scenCache[id] = { pos, fund, total: res.total, sc };
   }
   return scenCache[id];

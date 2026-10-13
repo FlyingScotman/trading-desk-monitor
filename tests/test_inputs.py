@@ -200,6 +200,21 @@ class Historical(Base):
         with self.assertRaises(ValueError):
             attach_scenario_results(self.db, 999, sid, [])
 
+    def test_proxy_includes_second_order(self):
+        from tdm.histscen import factor_shock, portfolio_sensitivities, proxy_pnl
+        with Run(self.db, as_of=DATES[-1]) as run:
+            run.add_reference_data()
+            run.add_positions([{"position_id": "OFZ|SU26242", "book_id": "OFZ", "instr_type": "BOND", "asset_class": "ОФЗ-ПД",
+                                "segment": "Гос", "name": "ОФЗ", "issuer": "MINFIN", "ccy": "RUB", "notional": 1e9, "mv": 1e9,
+                                "mv_rub": 1e9, "dv01": -400000, "cs01": 0, "convexity": 25,
+                                "risk": {"RUB OFZ": {"5Y": -400000}}}])
+        con = connect(self.db, readonly=True)
+        sens = portfolio_sensitivities(con)
+        shock = {"curves": {"RUB OFZ": [200.0] * 11}, "fx": {}, "spreads": {}}
+        lin = -400000 * 200
+        self.assertAlmostEqual(proxy_pnl(shock, sens) - lin, 0.5 * 1e9 * 25 * (0.02 ** 2), delta=1)   # ½·MV·C·Δy²
+        self.assertEqual(factor_shock("IR|RUB OFZ|5Y", shock), 200.0)
+
     def test_rebuild_replaces(self):
         build(self.db, horizons=(1,), top=3)
         build(self.db, horizons=(1,), top=1)
@@ -251,7 +266,7 @@ class Migration(unittest.TestCase):
             cols = {r[1] for r in con.execute("PRAGMA table_info(run_issuer)")}
             self.assertIn("name", cols)
             self.assertIn("kind", {r[1] for r in con.execute("PRAGMA table_info(scenario_def)")})
-            self.assertEqual(con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], "2")
+            self.assertEqual(con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], "3")
 
 
 if __name__ == "__main__":

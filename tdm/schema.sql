@@ -152,7 +152,7 @@ CREATE TABLE IF NOT EXISTS position (
   spread_bp    REAL,                        -- б.п.: Z/G-спред облигации, рыночный спред CDS
   mdur         REAL,                        -- модиф. дюрация, лет
   spr_dur      REAL,                        -- спред-дюрация, лет
-  convexity    REAL,
+  convexity    REAL,                        -- выпуклость к доходности, лет^2 (если нет position_gamma — из неё строится 2-й порядок)
   dv01         REAL NOT NULL,               -- RUB за +1 б.п. по всем кривым (= сумма position_risk)
   cs01         REAL NOT NULL DEFAULT 0,     -- RUB за +1 б.п. кредитного спреда
   jtd          REAL NOT NULL DEFAULT 0,     -- jump-to-default, RUB (потеря при дефолте, со знаком)
@@ -183,6 +183,24 @@ CREATE TABLE IF NOT EXISTS position_fx (
   ccy         TEXT NOT NULL,
   delta       REAL NOT NULL,                -- FX-дельта в единицах валюты, + = длинная валюта
   PRIMARY KEY (run_id, position_id, ccy),
+  FOREIGN KEY (run_id, position_id) REFERENCES position (run_id, position_id) ON DELETE CASCADE
+);
+
+-- Вторые производные (гамма, выпуклость, кросс-гамма). Разреженная симметричная матрица по факторам,
+-- хранится верхний треугольник: factor_1 <= factor_2 (сравнение строк). Факторы и единицы:
+--   'IR|<curve_id>|<bucket>' — key-rate сдвиг пиллара кривой, 1 б.п.;
+--   'CS'                    — собственный кредитный спред позиции, 1 б.п.;
+--   'FX|<ccy>'              — изменение курса валюты к рублю, 1 %.
+-- gamma = d2 PV_RUB / (d a d b) в RUB на (единица a × единица b).
+-- Вклад в PnL сценария: 0.5 * gamma * da^2 для диагонали, gamma * da * db вне диагонали.
+CREATE TABLE IF NOT EXISTS position_gamma (
+  run_id      INTEGER NOT NULL,
+  position_id TEXT NOT NULL,
+  factor_1    TEXT NOT NULL,
+  factor_2    TEXT NOT NULL,
+  gamma       REAL NOT NULL,
+  PRIMARY KEY (run_id, position_id, factor_1, factor_2),
+  CHECK (factor_1 <= factor_2),
   FOREIGN KEY (run_id, position_id) REFERENCES position (run_id, position_id) ON DELETE CASCADE
 );
 
@@ -246,7 +264,8 @@ CREATE TABLE IF NOT EXISTS scenario_result (
   spread      REAL NOT NULL DEFAULT 0,
   fx_gross    REAL NOT NULL DEFAULT 0,
   fx_funding  REAL NOT NULL DEFAULT 0,
-  convexity   REAL NOT NULL DEFAULT 0,      -- прочее нелинейное (выпуклость и т.п.)
+  convexity   REAL NOT NULL DEFAULT 0,      -- второй порядок по ставкам и спредам (выпуклость, гамма) и прочая нелинейность
+  fx_cross    REAL NOT NULL DEFAULT 0,      -- кросс-эффект FX × ставки/спреды (переоценка валютной чувствительности)
   total       REAL NOT NULL,
   PRIMARY KEY (run_id, scenario_id, position_id),
   FOREIGN KEY (run_id, position_id) REFERENCES position (run_id, position_id) ON DELETE CASCADE

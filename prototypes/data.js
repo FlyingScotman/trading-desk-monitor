@@ -199,7 +199,36 @@
       notional, price, mv, mvRub, ytm, spreadBp, mdur, sprDur, convexity,
       dv01: dv01Total, cs01, risk, fxDelta, jtd: mvRub * (1 - 0.35),
       wal: opts.wal || null, cpr: opts.cpr || null, newToday: !!opts.newToday,
+      gamma: gammaRows(risk, mvRub * convexity * 1e-8, cs01 !== 0, ccy !== 'RUB' ? ccy : null, cs01),
     });
+  }
+  // Вторые производные (формат position.gamma, docs/DATA_CONTRACT.md §4.3.3): [[f1, f2, d2PV], ...], f1 <= f2.
+  //  - ставки × ставки: трёхдиагональная матрица по пилларам (так выглядит key-rate гамма при линейной
+  //    интерполяции кривой), нормированная так, чтобы гамма к параллельному сдвигу = G = MV·C·1e-8 (RUB/б.п.²);
+  //  - ставки × спред и спред × спред: доходность = ставка + спред, поэтому те же G·w_i и G;
+  //  - курс × ставки/спред: валютная бумага, DV01 и CS01 в рублях масштабируются курсом: DV01_i/100, CS01/100.
+  const sig = x => +x.toPrecision(6);
+  function gammaRows(risk, G, withCs, fxCcy, cs01) {
+    const out = {};
+    const put = (a, b, v) => { if (!v) return; const k = a <= b ? [a, b] : [b, a]; const key = k.join('#'); out[key] = [k[0], k[1], sig((out[key] ? out[key][2] : 0) + v)]; };
+    const dvTot = Object.values(risk).reduce((s, r) => s + r.reduce((a, b) => a + b, 0), 0);
+    Object.keys(risk).forEach(c => {
+      const r = risk[c], tot = r.reduce((a, b) => a + b, 0);
+      if (!tot || !dvTot) return;
+      const w = r.map(x => x / tot), cw = tot / dvTot, f = i => `IR|${c}|${BUCKETS[i]}`;
+      if (G) {
+        const T = []; let sw = 0;
+        for (let i = 0; i < w.length; i++) for (let j = i; j <= Math.min(i + 1, w.length - 1); j++) {
+          if (w[i] && w[j]) { const v = w[i] * w[j]; T.push([i, j, v]); sw += (i === j ? 1 : 2) * v; }
+        }
+        T.forEach(([i, j, v]) => put(f(i), f(j), G * cw * cw * v / sw));
+        if (withCs) w.forEach((x, i) => put('CS', f(i), G * cw * x));
+      }
+      if (fxCcy) r.forEach((x, i) => put(`FX|${fxCcy}`, f(i), x / 100));
+    });
+    if (G && withCs) put('CS', 'CS', G);
+    if (fxCcy && cs01) put('CS', `FX|${fxCcy}`, cs01 / 100);
+    return Object.values(out).sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0);
   }
   function fakeIsin() { let s = 'RU000A'; const a = '0123456789ABCDEFGHJKLMNPRSTUVWXYZ'; for (let i = 0; i < 6; i++) s += a[Math.floor(rnd() * a.length)]; return s; }
 
@@ -302,6 +331,8 @@
       couponType: 'fix', coupon: fixed, index: idxName, side, notional, price: null,
       mv: mvCcy, mvRub: mvCcy * FX[ccy], ytm: par, spreadBp: null, mdur: null,
       dv01, cs01: 0, risk, fxDelta: {}, jtd: 0, counterparty: opts.cpty || 'НКЦ (клиринг)', newToday: !!opts.newToday,
+      // pay-fixed = короткая фиксированная облигация → отрицательная выпуклость
+      gamma: gammaRows(risk, -sgn * notional * FX[ccy] * bondMath(T, fixed, 2, par / 100).convexity * 1e-8, false, ccy !== 'RUB' ? ccy : null, 0),
     });
   }
   irs('RATES', 'RUB RUONIA', 2, 'PAY', 6.0 * bn, 12.55, { agedY: 0.3 });

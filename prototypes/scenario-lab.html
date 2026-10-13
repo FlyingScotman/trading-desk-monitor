@@ -464,16 +464,17 @@ function toScenario(ed){
 function shockOf(sc){ const m = {}; CK.forEach(c => { const v = sc.curves && sc.curves[c]; m[c] = v == null ? BK.map(() => 0) : Array.isArray(v) ? v : BK.map(() => v); }); return m; }
 function compute(sc){
   const r = U.runScenario(sc);
-  const comp = {rates:0, spread:0, fx:0, convexity:0, fundFx:r.fundingFx};
-  const book = {}; BOOKK.forEach(b => book[b] = {rates:0, spread:0, fx:0, convexity:0, fundFx:0, total:0});
+  const comp = {rates:0, spread:0, fx:0, convexity:0, fxCross:0, fundFx:r.fundingFx};
+  const book = {}; BOOKK.forEach(b => book[b] = {rates:0, spread:0, fx:0, convexity:0, fxCross:0, fundFx:0, total:0});
   const grp = {};
   r.byPosition.forEach(x => {
     const p = posById[x.id], bk = book[p.book];
-    ['rates','spread','fx','convexity'].forEach(k => { comp[k] += x[k]; bk[k] += x[k]; });
+    ['rates','spread','fx','convexity','fxCross'].forEach(k => { comp[k] += x[k]; bk[k] += x[k]; });
     bk.total += x.total;
-    if (p.issuerGroup) { const g = grp[p.issuerGroup] || (grp[p.issuerGroup] = {rates:0, spread:0, fx:0, convexity:0, total:0, n:0}); ['rates','spread','fx','convexity','total'].forEach(k => g[k] += x[k]); g.n++; }
+    if (p.issuerGroup) { const g = grp[p.issuerGroup] || (grp[p.issuerGroup] = {rates:0, spread:0, fx:0, convexity:0, fxCross:0, total:0, n:0}); ['rates','spread','fx','convexity','fxCross','total'].forEach(k => g[k] += x[k]); g.n++; }
   });
-  if (sc.fx) D.funding.forEach(f => Object.keys(f.fxDelta).forEach(c => { const v = f.fxDelta[c] * D.FX[c] * (sc.fx[c] || 0) / 100; book[f.book].fundFx += v; book[f.book].total += v; }));
+  // разнесённая на позиции FX-переоценка фондирования уже в позициях; здесь — нераспределённый остаток книг
+  Object.entries(r.fundingFxByBook || {}).forEach(([b, v]) => { if (book[b]) { book[b].fundFx += v; book[b].total += v; } });
   const sh = shockOf(sc), heat = {};
   CK.forEach(c => heat[c] = DV[c].map((dv, i) => dv * sh[c][i]));
   return {r, total: r.total, comp, book, grp, heat, shock: sh};
@@ -660,14 +661,14 @@ function renderBuilderAll(){ renderPresets(); renderTabs(); renderEditor(); rend
 // ---- результаты ----
 let rq = 0;
 function scheduleResults(){ if (rq) return; rq = requestAnimationFrame(() => { rq = 0; renderResults(); }); }
-const COMPS = [['rates','Rates'],['spread','Spread'],['fx','FX'],['convexity','Convexity'],['fundFx','Фонд. FX']];
+const COMPS = [['rates','Rates'],['spread','Spread'],['fx','FX'],['convexity','Convexity'],['fxCross','FX cross'],['fundFx','Фонд. FX']];
 function renderResults(){
   const sc = toScenario(S.ed), R = compute(sc); S.res = R;
   const loaded = allScen().find(s => s.id === S.loadedId);
   $('#sc-name').innerHTML = `${esc(loaded ? loaded.name : 'Свой сценарий')}${S.dirty ? ' <span class="badge edit">изменён в редакторе</span>' : ''}`;
   const dvRub = RUBC.reduce((s, c) => s + DV[c].reduce((a, b) => a + b, 0), 0);
   $('#hero').innerHTML = `<div><div class="lbl">PnL сценария</div><div class="big">${smln(R.total, 1)}<small>млн ₽</small></div></div>
-    <div class="side"><span>${R.r.fullReval ? 'Полная переоценка (расчётный сервис)' : 'Оценка по чувствительностям'}</span><span>${R.total < 0 ? 'Убыток' : 'Прибыль'} · ${R.r.byPosition.filter(x => x.total < -1e5).length} позиций в минусе &gt; 0,1 млн</span><span>DV01 RUB-кривых ${mln(dvRub, 2)} млн ₽/б.п.</span></div>`;
+    <div class="side"><span>${R.r.fullReval ? 'Полная переоценка (расчётный сервис)' : R.r.accuracyWarning ? `<b>Сдвиг доходности до ${num(R.r.maxDyBp, 0)} б.п.: вне области точности 2-го порядка (±${U.ACCURACY_BP} б.п.) — нужна полная переоценка</b>` : 'Греки до 2-го порядка (выпуклость, кросс FX)'}</span><span>${R.total < 0 ? 'Убыток' : 'Прибыль'} · ${R.r.byPosition.filter(x => x.total < -1e5).length} позиций в минусе &gt; 0,1 млн</span><span>DV01 RUB-кривых ${mln(dvRub, 2)} млн ₽/б.п.</span></div>`;
   const cmax = Math.max(1, ...COMPS.map(c => Math.abs(R.comp[c[0]])));
   $('#decomp').innerHTML = COMPS.map(([k, n]) => `<span>${n}</span><div data-tip="${T(n, [['PnL', smln(R.comp[k]) + ' млн ₽'], ['Доля в итоге', R.total ? num(R.comp[k] / R.total * 100, 0) + '%' : '—']])}">${dbar(R.comp[k], cmax)}</div><span class="num r">${smln(R.comp[k], 1)}</span>`).join('')
     + `<span class="tot">Итого</span><span class="tot"></span><span class="num r tot">${smln(R.total, 1)}</span>`;
@@ -703,23 +704,23 @@ function renderResults(){
 
   // by book
   const bmax = Math.max(1, ...BOOKK.map(b => Math.abs(R.book[b].total)));
-  let bt = `<thead><tr><th class="l">Книга</th><th>Rates</th><th>Spread</th><th>FX</th><th>Conv.</th><th>Фонд. FX</th><th>Итого</th></tr></thead><tbody>`;
+  let bt = `<thead><tr><th class="l">Книга</th><th>Rates</th><th>Spread</th><th>FX</th><th>Conv.</th><th>FX cross</th><th>Фонд. FX</th><th>Итого</th></tr></thead><tbody>`;
   BOOKK.slice().sort((a, b) => R.book[a].total - R.book[b].total).forEach(b => {
     const x = R.book[b];
-    bt += `<tr><td class="l" title="Деск ${esc(D.BOOKS[b].desk)}">${esc(D.BOOKS[b].name)}</td>${['rates','spread','fx','convexity','fundFx'].map(k => `<td class="n${Math.abs(x[k]) < 5e3 ? ' z' : ''}">${Math.abs(x[k]) < 5e3 ? '·' : smln(x[k], 1)}</td>`).join('')}<td class="n"${heatStyle(x.total, bmax)}><b>${smln(x.total, 1)}</b></td></tr>`;
+    bt += `<tr><td class="l" title="Деск ${esc(D.BOOKS[b].desk)}">${esc(D.BOOKS[b].name)}</td>${['rates','spread','fx','convexity','fxCross','fundFx'].map(k => `<td class="n${Math.abs(x[k]) < 5e3 ? ' z' : ''}">${Math.abs(x[k]) < 5e3 ? '·' : smln(x[k], 1)}</td>`).join('')}<td class="n"${heatStyle(x.total, bmax)}><b>${smln(x.total, 1)}</b></td></tr>`;
   });
-  bt += `<tr class="tot"><td class="l">Итого</td>${['rates','spread','fx','convexity','fundFx'].map(k => `<td class="n">${smln(R.comp[k], 1)}</td>`).join('')}<td class="n">${smln(R.total, 1)}</td></tr></tbody>`;
+  bt += `<tr class="tot"><td class="l">Итого</td>${['rates','spread','fx','convexity','fxCross','fundFx'].map(k => `<td class="n">${smln(R.comp[k], 1)}</td>`).join('')}<td class="n">${smln(R.total, 1)}</td></tr></tbody>`;
   $('#by-book').innerHTML = bt;
 
   // issuer groups
   const top = grps.slice().sort((a, b) => Math.abs(b[1].total) - Math.abs(a[1].total)).slice(0, 12).sort((a, b) => a[1].total - b[1].total);
   const gmax = Math.max(1, ...top.map(g => Math.abs(g[1].total)));
-  $('#by-issuer').innerHTML = top.map(([g, x]) => `<span class="nm" title="${esc(g)}">${esc(g)}</span><div data-tip="${T(g, [['Rates', smln(x.rates) + ' млн'], ['Spread', smln(x.spread) + ' млн'], ['FX', smln(x.fx) + ' млн'], ['Convexity', smln(x.convexity) + ' млн'], ['Итого', smln(x.total) + ' млн ₽'], ['Позиций', x.n]])}">${dbar(x.total, gmax)}</div><span class="num r">${smln(x.total, 1)}</span>`).join('');
+  $('#by-issuer').innerHTML = top.map(([g, x]) => `<span class="nm" title="${esc(g)}">${esc(g)}</span><div data-tip="${T(g, [['Rates', smln(x.rates) + ' млн'], ['Spread', smln(x.spread) + ' млн'], ['FX', smln(x.fx) + ' млн'], ['Convexity', smln(x.convexity) + ' млн'], ['FX cross', smln(x.fxCross) + ' млн'], ['Итого', smln(x.total) + ' млн ₽'], ['Позиций', x.n]])}">${dbar(x.total, gmax)}</div><span class="num r">${smln(x.total, 1)}</span>`).join('');
 
   // top-15
   const t15 = R.r.byPosition.slice().sort((a, b) => a.total - b.total).slice(0, 15);
-  let tt = `<thead><tr><th class="l">#</th><th class="l">Позиция</th><th class="l">Книга</th><th>Rates</th><th>Spread</th><th>FX</th><th>Conv.</th><th>Итого</th></tr></thead><tbody>`;
-  t15.forEach((x, k) => { const p = posById[x.id]; tt += `<tr><td class="l muted mono">${k + 1}</td><td class="l">${esc(p.name)} <span class="muted">${esc(p.assetClass)} · ${p.ccy}</span></td><td class="l">${esc(D.BOOKS[p.book].name)}</td>${['rates','spread','fx','convexity'].map(f => `<td class="n${Math.abs(x[f]) < 5e3 ? ' z' : ''}">${Math.abs(x[f]) < 5e3 ? '·' : smln(x[f], 1)}</td>`).join('')}<td class="n"${heatStyle(x.total, Math.abs(t15[0].total))}><b>${smln(x.total, 1)}</b></td></tr>`; });
+  let tt = `<thead><tr><th class="l">#</th><th class="l">Позиция</th><th class="l">Книга</th><th>Rates</th><th>Spread</th><th>FX</th><th>Conv.</th><th>FX cross</th><th>Итого</th></tr></thead><tbody>`;
+  t15.forEach((x, k) => { const p = posById[x.id]; tt += `<tr><td class="l muted mono">${k + 1}</td><td class="l">${esc(p.name)} <span class="muted">${esc(p.assetClass)} · ${p.ccy}</span></td><td class="l">${esc(D.BOOKS[p.book].name)}</td>${['rates','spread','fx','convexity','fxCross'].map(f => `<td class="n${Math.abs(x[f]) < 5e3 ? ' z' : ''}">${Math.abs(x[f]) < 5e3 ? '·' : smln(x[f], 1)}</td>`).join('')}<td class="n"${heatStyle(x.total, Math.abs(t15[0].total))}><b>${smln(x.total, 1)}</b></td></tr>`; });
   $('#top15').innerHTML = tt + '</tbody>';
 
   renderCompare(R);

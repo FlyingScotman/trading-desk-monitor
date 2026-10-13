@@ -33,7 +33,8 @@ POSITION_COLS = [
 ]
 PNL_COLS = ["carry", "rolldown", "rates", "spread", "fx_gross", "fx_funding", "convexity", "new_trades", "other", "official", "break_note"]
 FUNDING_COLS = ["deal_id", "book_id", "type", "ccy", "amount", "rate_expr", "rate", "start_date", "maturity", "counterparty", "collateral"]
-SCEN_COLS = ["rates", "spread", "fx_gross", "fx_funding", "convexity", "total"]
+SCEN_COLS = ["rates", "spread", "fx_gross", "fx_funding", "convexity", "fx_cross", "total"]
+GAMMA_FACTOR = re.compile(r"^(IR\|[^|]+\|[^|]+|CS|FX\|[A-Z]{3})$")
 
 
 class ValidationError(Exception):
@@ -177,11 +178,14 @@ class Run:
 
     # ------------------------------------------------------------------ позиции
     def add_positions(self, positions):
-        """[{...поля position..., risk: {curve_id: {bucket: dv01}}, fx_delta: {ccy: amount}, pnl: {...}}]
+        """[{...поля position..., risk: {curve_id: {bucket: dv01}}, fx_delta: {ccy: amount}, pnl: {...},
+             gamma: [[factor_1, factor_2, d2PV], ...]}]
 
+        gamma — вторые производные (docs/DATA_CONTRACT.md §4.3.3): факторы 'IR|<curve>|<bucket>' (1 б.п.),
+        'CS' (свой спред, 1 б.п.), 'FX|<ccy>' (1 %); порядок факторов в паре не важен, пара указывается один раз.
         Можно вызывать много раз (порциями). Отсутствующие необязательные поля = NULL.
         """
-        pos, risk, fx, pnl = [], [], [], []
+        pos, risk, fx, pnl, gam = [], [], [], [], {}
         for p in positions:
             row = dict(p)
             extra = row.pop("extra", None)
@@ -200,6 +204,14 @@ class Run:
             for ccy, d in (p.get("fx_delta") or {}).items():
                 if d:
                     fx.append((self.run_id, pid, ccy, d))
+            for g in p.get("gamma") or []:
+                a, b, v = g
+                if not v:
+                    continue
+                key = (pid,) + tuple(sorted((a, b)))
+                if key in gam and gam[key] != v:
+                    raise ValueError(f"позиция {pid}: пара гамма-факторов {key[1:]} задана дважды с разными значениями")
+                gam[key] = v
             if p.get("pnl") is not None:
                 q = p["pnl"]
                 pnl.append([self.run_id, pid] + [q.get(c) if c in ("official", "break_note") else (q.get(c) or 0) for c in PNL_COLS])
@@ -208,6 +220,8 @@ class Run:
             _ins(self.con, "position_risk", ["run_id", "position_id", "curve_id", "bucket", "dv01"], risk)
             _ins(self.con, "position_fx", ["run_id", "position_id", "ccy", "delta"], fx)
             _ins(self.con, "position_pnl", ["run_id", "position_id"] + PNL_COLS, pnl)
+            _ins(self.con, "position_gamma", ["run_id", "position_id", "factor_1", "factor_2", "gamma"],
+                 [(self.run_id,) + k + (v,) for k, v in gam.items()])
 
     # ------------------------------------------------------------------ фондирование
     def add_funding(self, deals):
@@ -253,6 +267,15 @@ class Run:
         for r in q("SELECT c.curve_id FROM run_curve c WHERE c.run_id=? AND NOT EXISTS"
                    " (SELECT 1 FROM mkt_curve_point m WHERE m.run_id=c.run_id AND m.curve_id=c.curve_id)"):
             err.append(f"кривая {r[0]}: нет точек")
+        curves = {r[0] for r in q("SELECT curve_id FROM run_curve WHERE run_id=?")}
+        bks = {r[0] for r in con.execute("SELECT bucket FROM ref_bucket")}
+        for (f,) in q("SELECT factor_1 FROM position_gamma WHERE run_id=? UNION SELECT factor_2 FROM position_gamma WHERE run_id=?", rid):
+            if not GAMMA_FACTOR.match(f):
+                err.append(f"гамма: неизвестный фактор '{f}' (ожидается IR|<кривая>|<бакет>, CS или FX|<валюта>)")
+            elif f.startswith("IR|") and (f.split("|")[1] not in curves or f.split("|")[2] not in bks):
+                err.append(f"гамма: фактор '{f}' — нет такой кривой в прогоне или бакета")
+            elif f.startswith("FX|") and f[3:] not in have:
+                err.append(f"гамма: фактор '{f}' — нет курса валюты")
         # предупреждения
         for r in q("SELECT p.position_id, p.dv01, COALESCE(SUM(r.dv01),0) FROM position p LEFT JOIN position_risk r"
                    " ON r.run_id=p.run_id AND r.position_id=p.position_id WHERE p.run_id=? GROUP BY p.position_id"):

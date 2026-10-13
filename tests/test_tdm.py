@@ -102,6 +102,45 @@ class Validation(Base):
         self.assertEqual(p["pnl"]["unexplained"], 0)
 
 
+class Gamma(Base):
+    def test_gamma_stored_and_summarized(self):
+        import_bundle(self.db, BUNDLE)
+        d = self.desk()
+        src = {p["position_id"]: p for p in BUNDLE["positions"]}
+        n = sum(len(p.get("gamma", [])) for p in BUNDLE["positions"])
+        self.assertGreater(n, 500)
+        self.assertEqual(sum(len(p["gamma"]) for p in d["positions"]), n)
+        bond = next(p for p in d["positions"] if p["instrType"] == "BOND" and p["gamma"] and p["convexity"] and p["cs01"])
+        # гамма к параллельному сдвигу согласована с выпуклостью: MV × C × 1e-8
+        self.assertAlmostEqual(bond["gammaIr"], bond["mvRub"] * bond["convexity"] * 1e-8, delta=abs(bond["gammaIr"]) * 1e-4)
+        self.assertEqual(bond["gammaSource"], "matrix")
+        self.assertTrue(all(a <= b for a, b, _ in bond["gamma"]))
+        irs = next(p for p in d["positions"] if p["instrType"] == "IRS" and p["side"] == "PAY")
+        self.assertLess(irs["gammaIr"], 0)                       # pay-fixed — отрицательная выпуклость
+        self.assertIn(bond["id"], src)
+
+    def test_pair_order_is_canonical(self):
+        b = copy.deepcopy(BUNDLE)
+        p = next(x for x in b["positions"] if x.get("gamma"))
+        p["gamma"] = [[y, x, v] for x, y, v in p["gamma"]]       # переставленные пары
+        import_bundle(self.db, b)
+        con = connect(self.db)
+        self.assertEqual(con.execute("SELECT COUNT(*) FROM position_gamma WHERE factor_1 > factor_2").fetchone()[0], 0)
+
+    def test_bad_factor_fails_run(self):
+        b = copy.deepcopy(BUNDLE)
+        b["positions"][0]["gamma"] = [["IR|NO CURVE|5Y", "IR|NO CURVE|5Y", 1.0], ["FOO", "CS", 1.0]]
+        with self.assertRaises(ValidationError):
+            import_bundle(self.db, b)
+        self.assertIsNone(self.desk())
+
+    def test_conflicting_duplicate_pair_rejected(self):
+        b = copy.deepcopy(BUNDLE)
+        b["positions"][0]["gamma"] = [["CS", "CS", 1.0], ["CS", "CS", 2.0]]
+        with self.assertRaises(ValueError):
+            import_bundle(self.db, b)
+
+
 class ScenarioResults(Base):
     def test_full_reval_passed_through(self):
         b = copy.deepcopy(BUNDLE)

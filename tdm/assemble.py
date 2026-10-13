@@ -22,6 +22,33 @@ def _years(d0, d1):
         return None
 
 
+def gamma_summary(rows, mv_rub, convexity, cs01):
+    """Сводные вторые производные позиции, RUB на (б.п.)^2:
+    gammaIr — к параллельному сдвигу всех кривых (сумма всех IR×IR, вне диагонали дважды),
+    gammaCs — к спреду, gammaIrCs — смешанная ставки×спред.
+    Без явной матрицы — из выпуклости: MV × C × 1e-8 (доходность = ставка + спред)."""
+    ir = cs = ircs = 0.0
+    if rows:
+        for a, b, v in rows:
+            k = 1 if a == b else 2
+            ta, tb = a.split("|")[0], b.split("|")[0]
+            if ta == "IR" and tb == "IR":
+                ir += k * v
+            elif ta == "CS" and tb == "CS":
+                cs += v
+            elif {ta, tb} == {"IR", "CS"}:
+                ircs += v
+        src = "matrix"
+    elif convexity and mv_rub:
+        ir = mv_rub * convexity * 1e-8
+        if cs01:
+            cs = ircs = ir
+        src = "convexity"
+    else:
+        src = None
+    return {"gammaIr": ir, "gammaCs": cs, "gammaIrCs": ircs, "gammaSource": src}
+
+
 def assemble(con, run):
     rid, as_of = run["run_id"], run["as_of"]
     rows = lambda sql, *a: con.execute(sql, (rid,) + a).fetchall()  # noqa: E731
@@ -60,6 +87,9 @@ def assemble(con, run):
     for r in rows("SELECT position_id, ccy, delta FROM position_fx WHERE run_id=?"):
         fxd.setdefault(r[0], {})[r[1]] = r[2]
     pnl = {r["position_id"]: r for r in rows("SELECT * FROM position_pnl WHERE run_id=?")}
+    gamma = {}
+    for r in rows("SELECT position_id, factor_1, factor_2, gamma FROM position_gamma WHERE run_id=? ORDER BY position_id, factor_1, factor_2"):
+        gamma.setdefault(r[0], []).append([r[1], r[2], r[3]])
 
     positions = []
     for p in rows("SELECT * FROM position WHERE run_id=? ORDER BY rowid"):
@@ -80,6 +110,7 @@ def assemble(con, run):
             "ytm": p["ytm"], "spreadBp": p["spread_bp"], "mdur": p["mdur"], "sprDur": p["spr_dur"], "convexity": p["convexity"],
             "dv01": p["dv01"], "cs01": p["cs01"], "risk": risk.get(pid, {}), "fxDelta": fxd.get(pid, {}), "jtd": p["jtd"],
             "wal": p["wal"], "cpr": p["cpr"], "counterparty": p["counterparty"], "newToday": bool(p["new_today"]),
+            "gamma": gamma.get(pid, []), **gamma_summary(gamma.get(pid), p["mv_rub"], p["convexity"], p["cs01"]),
             "pnl": {
                 "carry": comp["carry"], "rolldown": comp["rolldown"], "rates": comp["rates"], "spread": comp["spread"],
                 "fx": comp["fx_gross"] + comp["fx_funding"], "fxGross": comp["fx_gross"], "fxFunding": comp["fx_funding"],
@@ -119,7 +150,7 @@ def assemble(con, run):
     for r in rows("SELECT * FROM scenario_result WHERE run_id=?"):
         scen_res.setdefault(r["scenario_id"], {"byPosition": {}, "fundingFxByBook": {}})["byPosition"][r["position_id"]] = {
             "rates": r["rates"], "spread": r["spread"], "fxGross": r["fx_gross"], "fxFunding": r["fx_funding"],
-            "convexity": r["convexity"], "total": r["total"]}
+            "convexity": r["convexity"], "fxCross": r["fx_cross"], "total": r["total"]}
     for r in rows("SELECT * FROM scenario_funding_result WHERE run_id=?"):
         scen_res.setdefault(r["scenario_id"], {"byPosition": {}, "fundingFxByBook": {}})["fundingFxByBook"][r["book_id"]] = r["fx_residual"]
 

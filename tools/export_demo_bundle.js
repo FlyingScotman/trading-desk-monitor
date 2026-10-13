@@ -39,6 +39,7 @@ const bundle = {
     counterparty: p.counterparty || null, new_today: !!p.newToday,
     risk: Object.fromEntries(Object.entries(p.risk).map(([c, a]) => [c, byBucket(a)])),
     fx_delta: p.fxDelta,
+    gamma: p.gamma || [],
     pnl: { carry: p.pnl.carry, rolldown: p.pnl.rolldown, rates: p.pnl.rates, spread: p.pnl.spread, fx_gross: p.pnl.fxGross,
       fx_funding: p.pnl.fxFunding, convexity: p.pnl.convexity, new_trades: p.pnl.newTrades, other: p.pnl.other,
       official: p.pnl.official, break_note: p.pnl.breakNote },

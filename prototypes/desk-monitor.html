@@ -213,6 +213,8 @@ table.t{border-collapse:collapse;width:100%;font-size:12px}
 .sc-c .kv{font-size:20px}
 .sc-c .cm{display:grid;grid-template-columns:repeat(4,auto);gap:2px 10px;font-size:11px;color:var(--fg-3);justify-content:start}
 .sc-c .cm .num{color:var(--fg-2)}
+.sc-c .cm{grid-template-columns:repeat(5,auto)}
+.sc-q{display:flex}
 .sc-desc{font-size:11.5px;color:var(--fg-2);line-height:1.5}
 
 /* waterfall side */
@@ -451,6 +453,9 @@ const COLS = [
   {k:'mvRub', t:'MV, млн ₽', n:1, d:1, v:p => p.mvRub/1e6, sum:1, def:1, sg:1},
   {k:'dv01', t:'DV01, тыс ₽/б.п.', n:1, d:0, v:p => p.dv01/1e3, sum:1, def:1, sg:1},
   {k:'cs01', t:'CS01, тыс ₽/б.п.', n:1, d:0, v:p => p.cs01/1e3, sum:1, def:1, sg:1},
+  {k:'gammaIr', t:'Гамма ставок, ₽/б.п.²', n:1, d:0, v:p => p.gammaIr || null, sum:1, sg:1},
+  {k:'gammaCs', t:'Гамма спреда, ₽/б.п.²', n:1, d:0, v:p => p.gammaCs || null, sum:1, sg:1},
+  {k:'convexity', t:'Выпуклость', n:1, d:2},
   {k:'jtd', t:'JTD, млн ₽', n:1, d:1, v:p => p.jtd/1e6, sum:1, sg:1},
   {k:'fxd', t:'FX-дельта, млн вал.', n:1, d:2, v:p => { const k = Object.keys(p.fxDelta); return k.length ? p.fxDelta[k[0]]/1e6 : null; }, sg:1},
   {k:'pnlOff', t:'PnL офиц., тыс ₽', n:1, d:0, v:p => p.pnl.official/1e3, sum:1, def:1, sg:1},
@@ -750,6 +755,10 @@ function openDrawer(id){
     ['MV', num(p.mv/1e6,2) + ' млн ' + p.ccy], ['MV, ₽', M(p.mvRub,1) + ' млн'],
     ['Доходность', p.ytm != null ? num(p.ytm,2) + '%' : null], ['Спред', p.spreadBp != null ? num(p.spreadBp,0) + ' б.п.' : null],
     ['Мод. дюрация', p.mdur != null ? num(p.mdur,2) : null], ['DV01', K(p.dv01,1) + ' тыс ₽/б.п.'], ['CS01', K(p.cs01,1) + ' тыс ₽/б.п.'],
+    ['Гамма ставок', p.gammaIr ? num(p.gammaIr,0,true) + ' ₽/б.п.²' : null], ['Гамма спреда', p.gammaCs ? num(p.gammaCs,0,true) + ' ₽/б.п.²' : null],
+    ['Гамма ставки×спред', p.gammaIrCs ? num(p.gammaIrCs,0,true) + ' ₽/б.п.²' : null],
+    ['ΔPV ±100 б.п. (2-й пор.)', p.gammaIr ? M(0.5 * p.gammaIr * 1e4,2,true) + ' млн ₽' : null],
+    ['Источник гаммы', p.gammaSource === 'matrix' ? 'матрица (' + p.gamma.length + ' эл.)' : p.gammaSource === 'convexity' ? 'из выпуклости' : null],
     ['JTD', M(p.jtd,1) + ' млн ₽'], ['WAL', p.wal ? num(p.wal,1) + ' г.' : null], ['CPR', p.cpr ? num(p.cpr,1) + '%' : null],
     ['FX-дельта', Object.keys(p.fxDelta).map(c => M(p.fxDelta[c],2,true) + ' млн ' + c).join(', ') || null],
     ['Контрагент', p.counterparty]
@@ -989,15 +998,18 @@ function rFunding(){
 }
 
 /* ======================= 6. Сценарии ======================= */
-const COMP = [['rates','Ставки'],['spread','Спреды'],['fx','FX'],['convexity','Выпуклость']];
+const COMP = [['rates','Ставки'],['spread','Спреды'],['fx','FX'],['convexity','Выпуклость'],['fxCross','Кросс FX']];
 const scById = id => D.SCENARIOS.find(s => s.id === id);
 const scColor = id => TK.cat[D.SCENARIOS.findIndex(s => s.id === id) % 8];
+// FX фондирования: разнесённая часть уже в позициях (fxFunding), сверху — только нераспределённый остаток книг.
+// Без фондирования обе части исключаются.
 function scRun(sc, l){
-  const r = U.runScenario(sc, l);
-  let ff = 0;
-  if (sc.fx && S.withFunding) FU().forEach(f => { for (const c in f.fxDelta) ff += f.fxDelta[c] * D.FX[c] * (sc.fx[c] || 0) / 100; });
-  const comp = {}; COMP.forEach(c => { comp[c[0]] = sum(r.byPosition, x => x[c[0]]); });
-  return {by:r.byPosition, ff, comp, total:sum(r.byPosition, x => x.total) + ff};
+  const r = U.runScenario(sc, l), wf = S.withFunding;
+  const by = wf ? r.byPosition : r.byPosition.map(x => Object.assign({}, x, {fx:x.fxGross, fxFunding:0, total:x.total - x.fxFunding}));
+  const ffBook = wf ? (r.fundingFxByBook || {}) : {};
+  const ff = sum(Object.values(ffBook));
+  const comp = {}; COMP.forEach(c => { comp[c[0]] = sum(by, x => x[c[0]]); });
+  return {by, ff, ffBook, comp, total:sum(by, x => x.total) + ff, fullReval:r.fullReval, warn:r.accuracyWarning, maxDy:r.maxDyBp};
 }
 function scDesc(sc){
   const parts = [];
@@ -1014,10 +1026,11 @@ function rScen(){
   $('sc-cards').innerHTML = sel.map(id => { const r = R[id]; return `<button type="button" class="sc-c" data-act="scfocus" data-v="${esc(id)}" aria-pressed="${id === S.scen.focus}">
       <span class="nm"><span class="sw" style="background:${scColor(id)}"></span>${esc(scById(id).name)}</span>
       <span class="kv${nc(r.total)}">${M(r.total,0,true)}<small>млн ₽</small></span>
-      <span class="cm">${COMP.map(c => `<span>${c[1]}</span>`).join('')}${COMP.map(c => `<span class="num${nc(r.comp[c[0]] + (c[0] === 'fx' ? r.ff : 0))}">${M(r.comp[c[0]] + (c[0] === 'fx' ? r.ff : 0),0,true)}</span>`).join('')}</span></button>`; }).join('');
+      <span class="cm">${COMP.map(c => `<span>${c[1]}</span>`).join('')}${COMP.map(c => `<span class="num${nc(r.comp[c[0]] + (c[0] === 'fx' ? r.ff : 0))}">${M(r.comp[c[0]] + (c[0] === 'fx' ? r.ff : 0),0,true)}</span>`).join('')}</span>
+      <span class="sc-q">${r.fullReval ? chip('ok','Полная переоценка') : r.warn ? chip('warn', 'Шок ' + num(r.maxDy,0) + ' б.п. — нужна полная переоценка') : chip('info','Греки до 2-го порядка')}</span></button>`; }).join('');
   const books = ALL_BOOKS.filter(b => S.books.has(b) && l.some(p => p.book === b));
   const bookTot = (r, b, comp) => sum(r.by.filter(x => byId[x.id].book === b), x => comp ? x[comp] : x.total);
-  const bookFF = (sc, b) => { if (!sc.fx || !S.withFunding) return 0; let s = 0; FU().filter(f => f.book === b).forEach(f => { for (const c in f.fxDelta) s += f.fxDelta[c] * D.FX[c] * (sc.fx[c] || 0) / 100; }); return s; };
+  const bookFF = (sc, b) => (R[sc.id] && R[sc.id].ffBook[b]) || 0;
   const fid = S.scen.focus, fsc = scById(fid), fr = R[fid];
   if (sel.length > 1) {
     $('sc-ch-title').textContent = 'Сравнение сценариев по книгам';
@@ -1045,7 +1058,10 @@ function rScen(){
   $('sc-table').innerHTML = `<table class="t"><thead><tr><th>Книга</th>${COMP.map(c => `<th class="n">${c[1]}</th>`).join('')}<th class="n">Фонд. FX</th><th class="n">Итого</th></tr></thead><tbody>` +
     rowsT.map(r => { const t = sum(r.c) + r.ff; return `<tr><td>${esc(r.n)}</td>${r.c.map(v => `<td class="n${nc(v)}">${M(v,1)}</td>`).join('')}<td class="n${nc(r.ff)}">${M(r.ff,1)}</td><td class="n${nc(t)}"><b>${M(t,1,true)}</b></td></tr>`; }).join('') +
     `</tbody><tfoot><tr><td>Итого</td>${COMP.map(c => `<td class="n${nc(fr.comp[c[0]])}">${M(fr.comp[c[0]],1)}</td>`).join('')}<td class="n${nc(fr.ff)}">${M(fr.ff,1)}</td><td class="n${nc(fr.total)}">${M(fr.total,1,true)}</td></tr></tfoot></table>`;
-  $('sc-desc').innerHTML = '<b>Шоки:</b> ' + esc(scDesc(fsc)) + '. Переоценка упрощённая: дельта по бакетам + выпуклость, спреды через CS01, FX линейно.';
+  $('sc-desc').innerHTML = '<b>Шоки:</b> ' + esc(scDesc(fsc)) + '. ' + (fr.fullReval ? 'Полная переоценка расчётным сервисом.'
+    : 'Разложение до 2-го порядка: key-rate DV01 и CS01; выпуклость — матрица гамм (ставки, спред, ставки×спред) или выпуклость к доходности; '
+      + 'кросс FX — валютная часть PnL пересчитана по шокированному курсу. FX-переоценка фондирования разнесена на позиции книги.'
+      + (fr.warn ? ` <b>Сдвиг доходности до ${num(fr.maxDy,0)} б.п. у ${fr.warn.positions} поз. (${pct(fr.warn.mvShare)} MV): за пределами ±${U.ACCURACY_BP} б.п. разложение 2-го порядка неточно — нужна полная переоценка.</b>` : ''));
   const top = fr.by.slice().sort((a,b) => a.total - b.total).slice(0,10).filter(x => x.total < 0);
   $('sc-top-title').textContent = 'Топ-10 убыточных позиций · ' + fsc.name;
   $('sc-top').innerHTML = `<table class="t"><thead><tr><th>#</th><th>Инструмент</th><th>Книга</th><th>Класс</th>${COMP.map(c => `<th class="n">${c[1]}</th>`).join('')}<th class="n">Итого</th><th class="n">MV, млн ₽</th></tr></thead><tbody>` +
