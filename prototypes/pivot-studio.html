@@ -1,3 +1,8 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
 <title>Risk Pivot Studio</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -279,7 +284,7 @@ table.dt{border-collapse:separate;border-spacing:0;width:100%;font-size:12.5px}
 <aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drTitle" aria-hidden="true"></aside>
 <div class="toast" id="toast" role="status" hidden></div>
 
-<script src="data.js"></script>
+<script src="desk-loader.js"></script>
 <script src="echarts.min.js"></script>
 <script>
 (function(){
@@ -883,8 +888,8 @@ function renderHints(v, m) {
   else if (cb) hs.push('«Кривая» и «Бакет» раскладывают риск только для DV01. Для меры «' + measureLabel(m, v) + '» позиция целиком относится к своей основной кривой (с наибольшим |DV01|, иначе — кривой валюты) и к бакету, ближайшему к сроку погашения.');
   if (v.viz === 'ladder' && m.explode && !cb) hs.push('Линейка по бакетам раскладывает DV01 по key-rate бакетам, хотя в строках/столбцах вида бакета нет.');
   if (v.measure === 'pnl') hs.push('PnL official включает стоимость фондирования и FX-переоценку валютного фондирования — это отдельные записи «Фондирование» (тип фондирования, контрагент).');
-  if (v.measure === 'scen') hs.push('Сценарий считается через util.runScenario: дельта по key-rate бакетам + выпуклость облигаций + спреды + FX линейно. FX-переоценка валютного фондирования — отдельные записи «Фондирование».');
-  if (v.measure === 'ocp') hs.push('ОВП = FX-дельта позиций + валютное фондирование, в рублёвом эквиваленте по курсу на дату. Лимиты (в валюте): USD 25 млн, CNY 1 500 млн, EUR 10 млн.');
+  if (v.measure === 'scen') hs.push('Сценарий: полная переоценка из расчётного сервиса, если она загружена для пресета; иначе util.runScenario — дельта по key-rate бакетам + выпуклость облигаций + спреды + FX линейно. FX-переоценка валютного фондирования — отдельные записи «Фондирование».');
+  if (v.measure === 'ocp') hs.push('ОВП = FX-дельта позиций + валютное фондирование, в рублёвом эквиваленте по курсу на дату.');
   if (m.src === 'fund') hs.push('Для мер фондирования доступны измерения книга, деск, трейдер, валюта, кривая, бакет, срок, тип фондирования и контрагент; фильтры по сегменту, рейтингу и классу актива не применяются.');
   if (v.viz === 'treemap' && v.col) hs.push('Treemap не использует столбцы: площадь — |значение| по строкам, цвет — знак и величина.');
   if (v.viz === 'heatmap' && !v.col && !v.rows[1]) hs.push('Для тепловой карты добавьте второе измерение — строки 2 или столбцы.');

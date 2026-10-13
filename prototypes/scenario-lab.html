@@ -1,3 +1,8 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
 <title>Scenario &amp; PnL Lab</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -396,7 +401,7 @@ table.t td.z{color:var(--fg-3)}
 <div id="tip" hidden></div>
 
 <script src="echarts.min.js"></script>
-<script src="data.js"></script>
+<script src="desk-loader.js"></script>
 <script>
 (function(){
 'use strict';
@@ -660,10 +665,9 @@ function renderResults(){
   const sc = toScenario(S.ed), R = compute(sc); S.res = R;
   const loaded = allScen().find(s => s.id === S.loadedId);
   $('#sc-name').innerHTML = `${esc(loaded ? loaded.name : 'Свой сценарий')}${S.dirty ? ' <span class="badge edit">изменён в редакторе</span>' : ''}`;
-  const varPct = R.total / D.LIMITS.var99 * 100;
   const dvRub = RUBC.reduce((s, c) => s + DV[c].reduce((a, b) => a + b, 0), 0);
   $('#hero').innerHTML = `<div><div class="lbl">PnL сценария</div><div class="big">${smln(R.total, 1)}<small>млн ₽</small></div></div>
-    <div class="side"><span>${num(Math.abs(varPct), 0)}% от лимита VaR99 (${mln(D.LIMITS.var99, 0)} млн ₽)</span><span>${R.total < 0 ? 'Убыток' : 'Прибыль'} · ${R.r.byPosition.filter(x => x.total < -1e5).length} позиций в минусе &gt; 0,1 млн</span><span>DV01 RUB-кривых ${mln(dvRub, 2)} млн ₽/б.п.</span></div>`;
+    <div class="side"><span>${R.r.fullReval ? 'Полная переоценка (расчётный сервис)' : 'Оценка по чувствительностям'}</span><span>${R.total < 0 ? 'Убыток' : 'Прибыль'} · ${R.r.byPosition.filter(x => x.total < -1e5).length} позиций в минусе &gt; 0,1 млн</span><span>DV01 RUB-кривых ${mln(dvRub, 2)} млн ₽/б.п.</span></div>`;
   const cmax = Math.max(1, ...COMPS.map(c => Math.abs(R.comp[c[0]])));
   $('#decomp').innerHTML = COMPS.map(([k, n]) => `<span>${n}</span><div data-tip="${T(n, [['PnL', smln(R.comp[k]) + ' млн ₽'], ['Доля в итоге', R.total ? num(R.comp[k] / R.total * 100, 0) + '%' : '—']])}">${dbar(R.comp[k], cmax)}</div><span class="num r">${smln(R.comp[k], 1)}</span>`).join('')
     + `<span class="tot">Итого</span><span class="tot"></span><span class="num r tot">${smln(R.total, 1)}</span>`;

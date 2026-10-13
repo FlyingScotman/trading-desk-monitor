@@ -1,3 +1,8 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
 <title>FI Desk Monitor</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -66,7 +71,6 @@ button,select,input{font:inherit;color:inherit}
 .test{border:1px dashed var(--warn);color:var(--fg);padding:1px 7px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;border-radius:2px}
 .ibtn{background:var(--panel-2);border:1px solid var(--line-2);border-radius:2px;padding:3px 9px;cursor:pointer;color:var(--fg-2);font-size:12px}
 .ibtn:hover{color:var(--fg);border-color:var(--accent-line)}
-.alert-btn{background:none;border:0;padding:0;cursor:pointer}
 
 /* KPI tape */
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(176px,1fr));border-bottom:1px solid var(--line)}
@@ -79,12 +83,11 @@ button,select,input{font:inherit;color:inherit}
 .kv small{font-size:11px;color:var(--fg-3);font-weight:400;font-family:var(--font-ui);margin-left:4px}
 .ks{font-size:11px;color:var(--fg-2);display:flex;gap:8px;align-items:center;white-space:nowrap;flex-wrap:wrap}
 .ks .num{color:var(--fg)}
-.ocp{display:grid;grid-template-columns:auto auto 1fr auto;gap:2px 8px;align-items:center;font-size:11.5px}
+.ocp{display:grid;grid-template-columns:auto auto 1fr;gap:2px 8px;align-items:center;font-size:11.5px}
 .ocp .num{text-align:right}
 .ub{position:relative;display:inline-block;height:5px;background:var(--line);border-radius:1px;overflow:hidden;min-width:48px;flex:1;vertical-align:middle}
 .ub i{position:absolute;left:0;top:0;bottom:0;border-radius:1px}
-.ub-ok{background:var(--accent)} .ub-warn{background:var(--warn)} .ub-serious{background:var(--serious)} .ub-crit{background:var(--crit)}
-.kpi .ub{max-width:none;width:100%}
+.ub-ok{background:var(--accent)}
 
 /* filters */
 .filters{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center;padding-block:7px;border-bottom:1px solid var(--line)}
@@ -272,7 +275,6 @@ details.pop summary::-webkit-details-marker{display:none}
     <div class="meta">
       <span>срез <b class="mono" id="asof"></b> МСК · закрытие</span>
       <span class="test" title="Все цифры вымышленные">Тестовые данные</span>
-      <span id="hdr-alerts"></span>
       <button class="ibtn" id="theme-btn" type="button" title="Переключить светлую/тёмную тему">Тема</button>
     </div>
   </div>
@@ -288,8 +290,7 @@ details.pop summary::-webkit-details-marker{display:none}
       <div class="pnl s4"><div class="ph"><h3>DV01 по кривым</h3><span class="u">тыс ₽/б.п.</span></div><div class="pb"><div class="ch" id="c-sum-curve"></div></div></div>
       <div class="pnl s8"><div class="ph"><h3>DV01 по бакетам</h3><div class="ctl"><select id="sum-bview" aria-label="Кривые на графике"></select><span class="u">тыс ₽/б.п.</span></div></div><div class="pb"><div class="ch" id="c-sum-bucket"></div></div></div>
       <div class="pnl s4"><div class="ph"><h3>Экспозиция по сегментам</h3><span class="u">MV, млрд ₽</span></div><div class="pb"><div class="ch" id="c-sum-seg"></div></div></div>
-      <div class="pnl s4"><div class="ph"><h3>Топ-10 групп эмитентов</h3><span class="u">экспозиция / лимит</span></div><div class="pb" id="sum-issuers"></div></div>
-      <div class="pnl s4"><div class="ph"><h3>Лимиты: внимание</h3><span class="u" id="sum-lim-cnt"></span></div><div class="pb" id="sum-limits"></div></div>
+      <div class="pnl s8"><div class="ph"><h3>Топ-10 групп эмитентов</h3><span class="u">MV облигаций + продажа защиты CDS, млрд ₽</span></div><div class="pb" id="sum-issuers"></div></div>
       <div class="pnl s12"><div class="ph"><h3>PnL за 22 дня: официальный и explained</h3><span class="u">млн ₽ · весь деск</span></div><div class="pb"><div class="ch h200" id="c-sum-hist"></div></div></div>
     </div>
   </section>
@@ -376,7 +377,7 @@ details.pop summary::-webkit-details-marker{display:none}
 <aside class="drawer" id="drawer" hidden aria-label="Карточка позиции" role="dialog"></aside>
 
 <script src="echarts.min.js"></script>
-<script src="data.js"></script>
+<script src="desk-loader.js"></script>
 <script>
 (function(){
 'use strict';
@@ -385,7 +386,7 @@ const ALL_BOOKS = Object.keys(D.BOOKS);
 const DESKS = [...new Set(ALL_BOOKS.map(b => D.BOOKS[b].desk))];
 const SEGS = ['Гос','Корп','Секьюритизация','Деривативы','FX'];
 const SEG_LABEL = {'Секьюритизация':'Секьюр'};
-const CCYS = ['USD','CNY','EUR'];
+const CCYS = Object.keys(D.FX).filter(c => c !== 'RUB');
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const sum = U.sum;
 const $ = id => document.getElementById(id);
@@ -424,14 +425,9 @@ const ICON = {
   crit:'<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M.5.5h9v9h-9z"/></svg>',
   info:'<svg viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4"/></svg>'
 };
-function status(u){
-  if (u >= 1) return {k:'crit', l:'Нарушение'};
-  if (u >= 0.9) return {k:'serious', l:'≥ 90%'};
-  if (u >= 0.75) return {k:'warn', l:'≥ 75%'};
-  return {k:'ok', l:'В норме'};
-}
 const chip = (k,l) => `<span class="st st-${k}">${ICON[k]}${esc(l)}</span>`;
-const ubar = u => `<span class="ub" title="${pct(u)}"><i class="ub-${status(u).k}" style="width:${Math.min(100,u*100).toFixed(1)}%"></i></span>`;
+// доля от максимума в списке (не лимит)
+const mbar = f => `<span class="ub"><i class="ub-ok" style="width:${Math.min(100,Math.abs(f)*100).toFixed(1)}%"></i></span>`;
 
 /* ---------- state ---------- */
 const COLS = [
@@ -492,25 +488,9 @@ function ocpParts(list){
   return o;
 }
 const issuerExp = p => p.instrType === 'BOND' ? p.mvRub : p.instrType === 'CDS' ? (p.side === 'SELL' ? p.notional : -p.notional) : 0;
-const groupLimit = g => { const o = D.LIMITS.issuerGroupOverrides; return o[g] != null ? o[g] : D.LIMITS.issuerGroup; };
-function dv01Limit(){ if (S.books.size === ALL_BOOKS.length) return D.LIMITS.dv01Total; return Math.min(D.LIMITS.dv01Total, sum([...S.books], b => D.LIMITS.dv01ByBook[b])); }
 function issuerGroups(list){
   const g = {}; list.forEach(p => { if (!p.issuerGroup) return; const e = issuerExp(p); if (!e) return; (g[p.issuerGroup] = g[p.issuerGroup] || {name:p.issuerGroup, exp:0, n:0}); g[p.issuerGroup].exp += e; g[p.issuerGroup].n++; });
-  return Object.values(g).map(x => Object.assign(x, {lim:groupLimit(x.name), u:Math.abs(x.exp)/groupLimit(x.name)}));
-}
-function limits(list){
-  const L = D.LIMITS, out = [];
-  const dv = sum(list, p => p.dv01);
-  out.push({name:'DV01 итого', cat:'DV01', used:dv, lim:dv01Limit(), f:v => M(v,2)+' млн'});
-  const byB = U.groupBy(list, 'book');
-  ALL_BOOKS.filter(b => S.books.has(b)).forEach(b => out.push({name:'DV01 · ' + D.BOOKS[b].name, cat:'DV01', used:sum(byB[b] || [], p => p.dv01), lim:L.dv01ByBook[b], f:v => M(v,2)+' млн'}));
-  out.push({name:'CS01 итого', cat:'CS01', used:sum(list, p => p.cs01), lim:L.cs01Total, f:v => M(v,2)+' млн'});
-  const o = ocpParts(list);
-  CCYS.forEach(c => out.push({name:'ОВП ' + c, cat:'ОВП', used:o[c].net, lim:L.ocp[c], f:v => M(v,1)+' млн ' + c}));
-  issuerGroups(list).forEach(g => out.push({name:'Эмитент · ' + g.name, cat:'Эмитент', used:g.exp, lim:g.lim, f:v => BN(v,2)+' млрд'}));
-  out.push({name:'VaR 99% 1д (деск)', cat:'VaR', used:D.history[D.history.length-1].var99, lim:L.var99, f:v => M(v,0)+' млн'});
-  out.forEach(x => { x.u = Math.abs(x.used) / x.lim; x.s = status(x.u); });
-  return out;
+  return Object.values(g);
 }
 
 /* ---------- theme tokens & chart helpers ---------- */
@@ -568,32 +548,27 @@ function spark(vals, w, h){
   }).join('') + '</svg>';
 }
 function renderKpi(){
-  const l = P(), dv = sum(l, p => p.dv01), dvL = dv01Limit(), cs = sum(l, p => p.cs01), o = ocpParts(l), fp = fundPnl();
+  const l = P(), dv = sum(l, p => p.dv01), cs = sum(l, p => p.cs01), o = ocpParts(l), fp = fundPnl();
   const fadd = S.withFunding ? fp.carry + fp.fx : 0;
   const off = sum(l, p => p.pnl.official) + fadd, exp = sum(l, p => p.pnl.explained) + fadd;
   const gross = sum(l, p => Math.abs(p.mvRub)), net = sum(l, p => p.mvRub);
-  const h = D.history, v = h[h.length-1].var99;
-  const uDv = Math.abs(dv)/dvL, uCs = Math.abs(cs)/D.LIMITS.cs01Total, uV = v/D.LIMITS.var99;
+  const h = D.history, hp = h.length > 1 ? h[h.length-2] : null;
+  const chg = (cur, k) => hp && hp[k] != null ? `<span>vs вчера <span class="num${nc(cur - hp[k])}">${M(cur - hp[k],2,true)}</span></span>` : '';
   $('kpis').innerHTML = `
-  <div class="kpi"><div class="kl"><span>DV01 итого</span><span>${chip(status(uDv).k, pct(uDv))}</span></div>
+  <div class="kpi"><div class="kl"><span>DV01 итого</span><span></span></div>
     <div class="kv${nc(dv)}">${M(dv,2)}<small>млн ₽/б.п.</small></div>
-    <div class="ks">${ubar(uDv)}<span>лимит <span class="num">${M(dvL,1)}</span></span></div></div>
-  <div class="kpi"><div class="kl"><span>CS01 итого</span><span>${chip(status(uCs).k, pct(uCs))}</span></div>
+    <div class="ks">${S.books.size === ALL_BOOKS.length && S.ccy === 'ALL' && S.segs.size === SEGS.length ? chg(dv,'dv01') : ''}${spark(h.map(x => x.dv01), 66, 18)}</div></div>
+  <div class="kpi"><div class="kl"><span>CS01 итого</span><span></span></div>
     <div class="kv${nc(cs)}">${M(cs,2)}<small>млн ₽/б.п.</small></div>
-    <div class="ks">${ubar(uCs)}<span>лимит <span class="num">${M(D.LIMITS.cs01Total,1)}</span></span></div></div>
-  <div class="kpi wide"><div class="kl"><span>ОВП ${S.withFunding ? 'с фондированием' : 'без фондирования'}</span><span>млн вал. / лимит</span></div>
-    <div class="ocp">${CCYS.map(c => { const u = Math.abs(o[c].net)/D.LIMITS.ocp[c]; return `<span>${c}</span><span class="num${nc(o[c].net)}">${M(o[c].net,1,true)}</span>${ubar(u)}<span class="num muted">${num(D.LIMITS.ocp[c]/1e6,0)} · ${pct(u)}</span>`; }).join('')}</div></div>
-  <div class="kpi"><div class="kl"><span>VaR 99%, 1д</span><span>${chip(status(uV).k, pct(uV))}</span></div>
-    <div class="kv">${M(v,0)}<small>млн ₽</small></div>
-    <div class="ks">${ubar(uV)}<span>лимит <span class="num">${M(D.LIMITS.var99,0)}</span> · деск</span></div></div>
+    <div class="ks">${S.books.size === ALL_BOOKS.length && S.ccy === 'ALL' && S.segs.size === SEGS.length ? chg(cs,'cs01') : ''}${spark(h.map(x => x.cs01), 66, 18)}</div></div>
+  <div class="kpi wide"><div class="kl"><span>ОВП ${S.withFunding ? 'с фондированием' : 'без фондирования'}</span><span>млн вал. · млн ₽ экв.</span></div>
+    <div class="ocp">${CCYS.map(c => `<span>${c}</span><span class="num${nc(o[c].net)}">${M(o[c].net,1,true)}</span><span class="num muted">${num(o[c].net * D.FX[c] / 1e6,0,true)} млн ₽</span>`).join('')}</div></div>
   <div class="kpi"><div class="kl"><span>PnL дня</span><span>офиц.</span></div>
     <div class="kv${nc(off)}">${M(off,1,true)}<small>млн ₽</small></div>
     <div class="ks"><span>expl. <span class="num${nc(exp)}">${M(exp,1,true)}</span></span><span>break <span class="num${nc(off-exp)}">${M(off-exp,1,true)}</span></span>${spark(h.map(x => x.pnlOfficial), 66, 18)}</div></div>
   <div class="kpi"><div class="kl"><span>MV брутто / нетто</span><span>${l.length} поз.</span></div>
     <div class="kv">${BN(gross,1)}<small>млрд ₽</small></div>
     <div class="ks"><span>нетто <span class="num${nc(net)}">${BN(net,1)}</span> млрд ₽</span></div></div>`;
-  const lim = limits(l), br = lim.filter(x => x.u >= 1).length;
-  $('hdr-alerts').innerHTML = br ? `<button class="alert-btn" type="button" data-act="goto" data-v="summary">${chip('crit', br + ' ' + plural(br,'нарушение','нарушения','нарушений') + ' лимитов')}</button>` : chip('ok','Лимиты в норме');
 }
 
 /* ---------- header: filters ---------- */
@@ -671,17 +646,10 @@ function rSummary(){
     ]
   }));
   // issuers top10
-  const ig = issuerGroups(l).sort((a,b) => Math.abs(b.exp) - Math.abs(a.exp)).slice(0,10);
-  $('sum-issuers').innerHTML = ig.length ? `<div class="ll"><span class="h">Группа</span><span class="h">Загрузка</span><span class="h" style="text-align:right">млрд ₽</span><span class="h" style="text-align:right">лимит</span>` +
-    ig.map(g => `<span class="nm" title="${esc(g.name)}">${esc(g.name)}</span>${ubar(g.u)}<span class="num${nc(g.exp)}">${BN(g.exp,2)}</span><span class="num muted">${BN(g.lim,1)} · ${pct(g.u)}</span>`).join('') + '</div>'
+  const ig = issuerGroups(l).sort((a,b) => Math.abs(b.exp) - Math.abs(a.exp)).slice(0,10), igMx = ig.length ? Math.abs(ig[0].exp) : 1;
+  $('sum-issuers').innerHTML = ig.length ? `<div class="ll"><span class="h">Группа</span><span class="h"></span><span class="h" style="text-align:right">млрд ₽</span><span class="h" style="text-align:right">поз.</span>` +
+    ig.map(g => `<span class="nm" title="${esc(g.name)}">${esc(g.name)}</span>${mbar(g.exp/igMx)}<span class="num${nc(g.exp)}">${BN(g.exp,2)}</span><span class="num muted">${g.n}</span>`).join('') + '</div>'
     : '<p class="note">Нет эмитентского риска в выбранном фильтре.</p>';
-  // limits
-  const lim = limits(l).sort((a,b) => b.u - a.u), hot = lim.filter(x => x.u >= .75);
-  $('sum-lim-cnt').textContent = hot.length + ' из ' + lim.length;
-  $('sum-limits').innerHTML = '<div class="lim">' + (hot.length ? hot : lim.slice(0,3)).map(x =>
-    `<div class="lim-r">${chip(x.s.k, x.s.l)}<span class="nm" title="${esc(x.name)}">${esc(x.name)}</span><span class="num">${pct(x.u)}</span>
-     <span></span><span style="display:flex">${ubar(x.u)}</span><span class="num muted">${x.f(x.used)} / ${x.f(x.lim).replace(/^[−+]/,'')}</span></div>`).join('') +
-    (hot.length < lim.length ? `<div class="lim-r"><span>${chip('ok','В норме')}</span><span class="muted">ещё ${lim.length - hot.length} ${plural(lim.length - hot.length,'лимит','лимита','лимитов')}</span><span></span></div>` : '') + '</div>';
   // history
   const h = D.history;
   chart('c-sum-hist', opt({
@@ -947,9 +915,9 @@ function rExpo(){
     rows.map(r => `<tr><td>${esc(r.name)}</td><td class="n${nc(r.v)}">${fmtV(r.v)}</td><td class="n">${pct(Math.abs(r.v)/gross,1)}</td><td class="n">${r.n}</td></tr>`).join('') +
     `</tbody><tfoot><tr><td>Итого нетто</td><td class="n${nc(sum(rows, r => r.v))}">${fmtV(sum(rows, r => r.v))}</td><td class="n">100%</td><td class="n">${sum(rows, r => r.n)}</td></tr></tfoot></table>`;
   // concentration
-  const ig = issuerGroups(l).sort((a,b) => b.u - a.u);
-  $('ex-conc').innerHTML = `<table class="t"><thead><tr><th>Группа</th><th class="n">Экспозиция</th><th class="n">Лимит</th><th style="min-width:120px">Загрузка</th><th class="n">%</th><th>Статус</th></tr></thead><tbody>` +
-    ig.map(g => `<tr><td>${esc(g.name)}</td><td class="n${nc(g.exp)}">${BN(g.exp,2)}</td><td class="n muted">${BN(g.lim,1)}</td><td>${ubar(g.u)}</td><td class="n">${pct(g.u)}</td><td>${chip(status(g.u).k, status(g.u).l)}</td></tr>`).join('') + '</tbody></table>';
+  const ig = issuerGroups(l).sort((a,b) => Math.abs(b.exp) - Math.abs(a.exp)), igMx = ig.length ? Math.abs(ig[0].exp) : 1, igGross = sum(ig, g => Math.abs(g.exp)) || 1;
+  $('ex-conc').innerHTML = `<table class="t"><thead><tr><th>Группа</th><th class="n">Экспозиция</th><th style="min-width:120px"></th><th class="n">Доля</th><th class="n">Поз.</th></tr></thead><tbody>` +
+    ig.map(g => `<tr><td>${esc(g.name)}</td><td class="n${nc(g.exp)}">${BN(g.exp,2)}</td><td>${mbar(g.exp/igMx)}</td><td class="n">${pct(Math.abs(g.exp)/igGross,1)}</td><td class="n">${g.n}</td></tr>`).join('') + '</tbody></table>';
   // OCP
   const o = ocpParts(l);
   const PARTS = [['bond','Облигации'],['der','Деривативы'],['fx','FX'],['fund','Фондирование']];
@@ -963,8 +931,8 @@ function rExpo(){
     series:PARTS.map((x,i) => ({type:'bar', name:x[1], stack:'o', barWidth:'50%', itemStyle:{color:TK.cat[i], borderColor:TK.panel, borderWidth:1}, data:CCYS.map(c => +(o[c][x[0]] * D.FX[c] / 1e6).toFixed(1))}))
       .concat([{type:'scatter', name:'Нетто ОВП', symbol:'diamond', symbolSize:12, itemStyle:{color:TK.fg, borderColor:TK.panel, borderWidth:1.5}, z:5, data:CCYS.map(c => +(o[c].net * D.FX[c] / 1e6).toFixed(1))}])
   }));
-  $('ex-ocp').innerHTML = `<table class="t"><thead><tr><th>Вал.</th>${PARTS.map(x => `<th class="n">${x[1]}</th>`).join('')}<th class="n">Нетто${S.withFunding ? '' : ' (без фонд.)'}</th><th class="n">Лимит</th><th>Статус</th></tr></thead><tbody>` +
-    CCYS.map(c => { const u = Math.abs(o[c].net)/D.LIMITS.ocp[c]; return `<tr><td>${c}</td>${PARTS.map(x => `<td class="n${nc(o[c][x[0]])}${x[0] === 'fund' && !S.withFunding ? ' muted' : ''}">${M(o[c][x[0]],1,true)}</td>`).join('')}<td class="n${nc(o[c].net)}"><b>${M(o[c].net,1,true)}</b></td><td class="n muted">${num(D.LIMITS.ocp[c]/1e6,0)}</td><td>${chip(status(u).k, pct(u))}</td></tr>`; }).join('') + '</tbody></table>';
+  $('ex-ocp').innerHTML = `<table class="t"><thead><tr><th>Вал.</th>${PARTS.map(x => `<th class="n">${x[1]}</th>`).join('')}<th class="n">Нетто${S.withFunding ? '' : ' (без фонд.)'}</th><th class="n">Нетто, млн ₽</th></tr></thead><tbody>` +
+    CCYS.map(c => `<tr><td>${c}</td>${PARTS.map(x => `<td class="n${nc(o[c][x[0]])}${x[0] === 'fund' && !S.withFunding ? ' muted' : ''}">${M(o[c][x[0]],1,true)}</td>`).join('')}<td class="n${nc(o[c].net)}"><b>${M(o[c].net,1,true)}</b></td><td class="n${nc(o[c].net)}">${num(o[c].net * D.FX[c] / 1e6,0,true)}</td></tr>`).join('') + '</tbody></table>';
 }
 
 /* ======================= 5. Фондирование ======================= */
@@ -1155,7 +1123,7 @@ document.addEventListener('click', e => {
     if (a === 'reset') { S.books = new Set(ALL_BOOKS); S.segs = new Set(SEGS); S.ccy = 'ALL'; return rerender(); }
     if (a === 'sort') { if (S.pos.sort.k === v) S.pos.sort.dir *= -1; else { const c = COLS.find(x => x.k === v); S.pos.sort = {k:v, dir:c.n ? -1 : 1}; } return rPositions(); }
     if (a === 'grp') { if (S.pos.collapsed.has(v)) S.pos.collapsed.delete(v); else S.pos.collapsed.add(v); rPositions(); const r = document.querySelector(`tr[data-act="grp"][data-v="${CSS.escape(v)}"]`); if (r) r.focus(); return; }
-    if (a === 'pos') { lastFocus = t; return openDrawer(+v); }
+    if (a === 'pos') { lastFocus = t; return openDrawer(v); }
     if (a === 'rcurve') { S.risk.curve = v; if (S.risk.mode === 'books') S.risk.cell = null; return rRisk(); }
     if (a === 'cell') {
       const r = t.dataset.r, bi = +t.dataset.b;
@@ -1225,7 +1193,7 @@ window.addEventListener('resize', () => { clearTimeout(rT); rT = setTimeout(() =
 }, 150); });
 
 /* ---------- boot ---------- */
-$('asof').textContent = dt(D.asOf) + ' 18:45';
+$('asof').textContent = dt(D.asOf) + (D.source && D.source.publishedAt ? ' ' + D.source.publishedAt.slice(11, 16) : '');
 readTokens(); renderFilters(); renderKpi(); renderTabs(); renderColPop(); renderTab();
 })();
 </script>

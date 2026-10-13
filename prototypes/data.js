@@ -8,6 +8,9 @@
  *  - DV01 / CS01 — изменение PV в RUB при сдвиге на +1 б.п. (длинная облигация => отрицательный DV01);
  *  - fxDelta — позиция в единицах валюты (+ = длинная валюта);
  *  - funding.amount < 0 — привлечение, > 0 — размещение.
+ *
+ * Форма window.DESK совпадает с тем, что отдаёт сервер (/desk-data.js) из базы:
+ * см. docs/DATA_CONTRACT.md. Функции DESK.util — в desk-util.js.
  */
 (function () {
   'use strict';
@@ -511,17 +514,6 @@
     fundingPnl.fx += fundingPnlByBook[b].fx;
   });
 
-  // ---------- лимиты ----------
-  const LIMITS = {
-    dv01ByBook: { OFZ: 9e6, RATES: 6e6, CORP_RUB: 3.5e6, CORP_FX: 4.5e6, SOV_FX: 6.5e6, SECUR: 2e6, CREDIT: 0.5e6, FXB: 0.5e6 },
-    dv01Total: 14e6,
-    cs01Total: 25e6,
-    ocp: { USD: 25e6, CNY: 1500e6, EUR: 10e6 },             // в валюте
-    issuerGroup: 12e9,                                        // RUB, кроме суверена
-    issuerGroupOverrides: { 'Российская Федерация': 120e9, 'Газпром': 15e9, 'Самолёт': 0.8e9, 'АФК Система': 2.5e9 },
-    var99: 380e6,
-  };
-
   // ---------- история (22 раб. дня) ----------
   const history = [];
   (function () {
@@ -542,7 +534,6 @@
         pnlOfficial: off, pnlExplained: exp, pnlCum: cum,
         dv01: last ? dv0 : dv0 * (1 + 0.18 * Math.sin(i / 3) + rndn() * 0.05),
         cs01: last ? cs0 : cs0 * (1 + 0.08 * Math.cos(i / 4) + rndn() * 0.03),
-        var99: LIMITS.var99 * (0.55 + 0.15 * Math.sin(i / 5) + rnd() * 0.08),
       });
     });
   })();
@@ -560,76 +551,11 @@
     { id: 'stress22', name: 'Стресс «2022»', curves: { 'RUB OFZ': [900, 850, 750, 600, 450, 380, 300, 250, 220, 200, 180], 'RUB RUONIA': [1000, 950, 800, 650, 480, 400, 320, 270, 240, 220, 200], 'RUB KEY': [1050, 1000, 850, 680, 500, 410, 330, 280, 250, 230, 210] }, fx: { USD: 35, CNY: 30, EUR: 32 }, spreads: { _mult: 2.5 } },
   ];
 
-  // ---------- утилиты ----------
-  function sum(arr, f) { return arr.reduce((s, x) => s + (f ? f(x) : x), 0); }
-  function groupBy(arr, key) {
-    const out = {};
-    arr.forEach(x => { const k = typeof key === 'function' ? key(x) : x[key]; (out[k] = out[k] || []).push(x); });
-    return out;
-  }
-  function bucketMatrix(list, curves) {
-    curves = curves || Object.keys(CURVES);
-    const m = {}; curves.forEach(c => { m[c] = new Array(BUCKETS.length).fill(0); });
-    list.forEach(p => Object.keys(p.risk || {}).forEach(c => { if (m[c]) p.risk[c].forEach((v, i) => { m[c][i] += v; }); }));
-    return m;
-  }
-  function netFx(list, withFunding) {
-    const out = { USD: 0, CNY: 0, EUR: 0 };
-    list.forEach(p => Object.keys(p.fxDelta || {}).forEach(c => { out[c] = (out[c] || 0) + p.fxDelta[c]; }));
-    if (withFunding) {
-      const books = new Set(list.map(p => p.book));
-      funding.filter(f => books.has(f.book)).forEach(f => Object.keys(f.fxDelta).forEach(c => { out[c] += f.fxDelta[c]; }));
-    }
-    return out;
-  }
-  // упрощённая переоценка сценария: дельта + выпуклость по облигациям, FX — линейно
-  function runScenario(sc, list) {
-    list = list || positions;
-    const curveShock = {};
-    Object.keys(CURVES).forEach(c => {
-      const v = sc.curves && sc.curves[c];
-      curveShock[c] = v == null ? new Array(BUCKETS.length).fill(0) : (Array.isArray(v) ? v : new Array(BUCKETS.length).fill(v));
-    });
-    const alloc = sc.fx
-      ? allocateFundingFx((ccy, amt) => amt * FX[ccy] * (sc.fx[ccy] || 0) / 100, positions)
-      : { toPos: {}, residualByBook: {}, byBook: {} };
-    // при фильтре по книгам учитываем фондирование только этих книг
-    const booksInList = new Set(list.map(p => p.book));
-    Object.keys(alloc.residualByBook).forEach(b => { if (!booksInList.has(b)) delete alloc.residualByBook[b]; });
-    const res = list.map(p => {
-      let rates = 0, spread = 0, fxr = 0, conv = 0;
-      Object.keys(p.risk).forEach(c => p.risk[c].forEach((dv, i) => { rates += dv * curveShock[c][i]; }));
-      if (p.instrType === 'BOND' && p.convexity) {
-        const avg = Object.keys(p.risk).reduce((s, c) => s + curveShock[c].reduce((a, b) => a + b, 0) / BUCKETS.length, 0);
-        conv = 0.5 * p.mvRub * p.convexity * Math.pow(avg * 1e-4, 2);
-      }
-      if (p.cs01) {
-        let ds = 0;
-        if (sc.spreads) {
-          if (sc.spreads._mult) ds += (sc.spreads._mult - 1) * (p.spreadBp || 100);
-          if (sc.spreads._all) ds += sc.spreads._all;
-          if (p.rating && sc.spreads[p.rating]) ds += sc.spreads[p.rating];
-          if (p.issuer && sc.spreads[p.issuer]) ds += sc.spreads[p.issuer];
-          if (p.segment === 'Гос' && !sc.spreads.includeGov) ds *= 0.35;
-        }
-        spread = p.cs01 * ds;
-      }
-      let fxGross = 0;
-      if (sc.fx) Object.keys(p.fxDelta).forEach(c => { fxGross += p.fxDelta[c] * FX[c] * (sc.fx[c] || 0) / 100; });
-      const fxFunding = alloc.toPos[p.id] || 0;
-      fxr = fxGross + fxFunding; // FX нетто валютного фондирования книги
-      return { id: p.id, rates, spread, fx: fxr, fxGross, fxFunding, convexity: conv, total: rates + spread + fxr + conv };
-    });
-    // нераспределённый остаток FX по фондированию (по книгам и итого)
-    const fundingFxByBook = alloc.residualByBook;
-    const fundFx = sum(Object.values(fundingFxByBook));
-    return { byPosition: res, fundingFx: fundFx, fundingFxByBook, total: sum(res, r => r.total) + fundFx };
-  }
-
   window.DESK = {
     asOf: AS_OF, reportingCcy: 'RUB',
-    BUCKETS, PILLARS, CURVES, CURVE_MOVES, FX, FX_MOVE_PCT, INDICES, ISSUERS, RATING_ORDER, BOOKS, LIMITS, SCENARIOS,
+    BUCKETS, PILLARS, CURVES, CURVE_MOVES, FX, FX_MOVE_PCT, INDICES, ISSUERS, RATING_ORDER, BOOKS, SCENARIOS,
     positions, funding, fundingPnl, fundingPnlByBook, history,
-    util: { sum, groupBy, bucketMatrix, netFx, runScenario, curveRate, allocateFundingFx },
+    source: { kind: 'demo', runId: null, runType: 'DEMO', publishedAt: null },
   };
+  // DESK.util добавляет desk-util.js
 })();
