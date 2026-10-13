@@ -46,8 +46,9 @@ class RoundTrip(Base):
         self.assertEqual(len(d["funding"]), len(BUNDLE["funding"]))
         self.assertAlmostEqual(sum(p["dv01"] for p in d["positions"]), sum(p["dv01"] for p in BUNDLE["positions"]), places=3)
         self.assertAlmostEqual(sum(p["pnl"]["official"] for p in d["positions"]), sum(p["pnl"]["official"] for p in BUNDLE["positions"]), places=3)
-        for p in d["positions"]:  # инвариант explain
-            self.assertAlmostEqual(p["pnl"]["explained"] + p["pnl"]["unexplained"], p["pnl"]["official"], places=6)
+        for p in d["positions"]:  # инвариант explain (1.3: официальный — по курсам ЦБ)
+            self.assertAlmostEqual(p["pnl"]["explainedCbr"] + p["pnl"]["unexplained"], p["pnl"]["official"], places=6)
+            self.assertAlmostEqual(p["pnl"]["explained"] + p["pnl"]["fxBasis"], p["pnl"]["explainedCbr"], places=6)
             self.assertAlmostEqual(sum(sum(v) for v in p["risk"].values()), p["dv01"], delta=max(1.0, abs(p["dv01"]) * 1e-9))
         self.assertEqual(len(d["history"]), 22)
         self.assertEqual(d["history"][-1]["date"], BUNDLE["run"]["as_of"])
