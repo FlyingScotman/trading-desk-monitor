@@ -113,6 +113,15 @@ def read_rows(ds, path):
             bad.append("нужен instrument_id или deal_id")
         if ds.name == "positions" and row.get("quantity") is None and row.get("face_amount") is None:
             bad.append("нужен quantity или face_amount")
+        if ds.name == "funding_rates":   # пустое поле = «любое значение»: в ключе хранится ''
+            for x in ds.key:
+                row[x] = row.get(x) or ""
+            if row.get("index_name") is None and row.get("fixed_rate") is None:
+                bad.append("нужен index_name или fixed_rate")
+            if row["book_type"] not in ("", "TRADING", "HTM", "DERIVS"):
+                bad.append(f"book_type: {row['book_type']} (ожидается TRADING / HTM / DERIVS)")
+        if ds.name == "books" and row.get("book_type") not in (None, "TRADING", "HTM", "DERIVS"):
+            bad.append(f"book_type: {row['book_type']} (ожидается TRADING / HTM / DERIVS)")
         k = tuple(row.get(x) for x in ds.key)
         if not bad and k in seen:
             bad.append(f"дубликат ключа {k} (строка {seen[k]})")
@@ -160,6 +169,8 @@ def _write(con, ds, rows, cols, ts):
     if not rows:
         return
     with con:
+            if ds.replace_all:
+                con.execute(f"DELETE FROM {ds.table}")
             if ds.kind == "snapshot":
                 groups = {tuple(r[c] for c in ds.replace_by) for r in rows}
                 for g in groups:

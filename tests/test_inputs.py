@@ -269,7 +269,7 @@ class Migration(unittest.TestCase):
             self.assertIn("kind", {r[1] for r in con.execute("PRAGMA table_info(scenario_def)")})
             self.assertLessEqual({"instrument_id", "accrued", "coupon_freq", "yield_date", "spread_type", "spread_curve"},
                                  {r[1] for r in con.execute("PRAGMA table_info(position)")})
-            self.assertEqual(con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], "4")
+            self.assertEqual(con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], "5")
 
 
 if __name__ == "__main__":

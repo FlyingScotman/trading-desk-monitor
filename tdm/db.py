@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-SCHEMA_VERSION = "4"
+SCHEMA_VERSION = "5"
 DEFAULT_DB = os.environ.get("TDM_DB", str(Path.cwd() / "data" / "tdm.sqlite"))
 
 BUCKETS = [("1M", 1 / 12), ("3M", 0.25), ("6M", 0.5), ("1Y", 1.0), ("2Y", 2.0), ("3Y", 3.0),
@@ -51,8 +51,32 @@ def _columns(con, table):
     return {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
 
 
+# v5 (контракт 1.3): новые колонки существующих таблиц. Новые таблицы создаёт schema.sql.
+V5_COLUMNS = [
+    ("calc_run", "prev_date", "TEXT"), ("calc_run", "accrual_days", "INTEGER"), ("calc_run", "jtd_recovery", "REAL"),
+    ("calc_run", "ofz_spread_move", "REAL"), ("calc_run", "official_at", "TEXT"),
+    ("run_book", "book_type", "TEXT"), ("run_book", "entity", "TEXT"), ("run_book", "ocp_to", "TEXT"),
+    ("mkt_fx", "rate_cbr", "REAL"), ("mkt_fx", "move_pct_cbr", "REAL"), ("mkt_fx", "rate_cbr_next", "REAL"),
+    ("position", "ofz_spr01", "REAL NOT NULL DEFAULT 0"), ("position", "accrual_only", "INTEGER NOT NULL DEFAULT 0"),
+    ("position", "purchase_date", "TEXT"), ("position", "purchase_price", "REAL"), ("position", "purchase_yield", "REAL"),
+    ("position", "contract_rate", "REAL"), ("position", "ocp_transfer", "INTEGER NOT NULL DEFAULT 0"),
+    ("position_pnl", "funding", "REAL NOT NULL DEFAULT 0"), ("position_pnl", "fx_gross_cbr", "REAL"),
+    ("position_pnl", "fx_funding_cbr", "REAL"),
+    ("funding_deal", "kind", "TEXT NOT NULL DEFAULT 'DEAL'"), ("funding_deal", "position_id", "TEXT"),
+    ("funding_deal", "index_name", "TEXT"), ("funding_deal", "spread_bp", "REAL"), ("funding_deal", "fixed_rate", "REAL"),
+    ("funding_deal", "benchmark", "TEXT"), ("funding_deal", "day_basis", "INTEGER"), ("funding_deal", "rule_note", "TEXT"),
+    ("funding_pnl", "fx_gross_cbr", "REAL"),
+    ("ref_book", "book_type", "TEXT"), ("ref_book", "entity", "TEXT"), ("ref_book", "ocp_to", "TEXT"),
+    ("ref_instrument", "call_date", "TEXT"), ("ref_instrument", "is_subord", "INTEGER"),
+    ("ref_otc_deal", "purpose", "TEXT"),
+    ("pos_snapshot", "purchase_date", "TEXT"), ("pos_snapshot", "purchase_price", "REAL"),
+    ("pos_snapshot", "purchase_yield", "REAL"), ("pos_snapshot", "contract_rate", "REAL"),
+    ("pnl_official", "carry", "REAL"), ("pnl_official", "funding", "REAL"), ("pnl_official", "fx", "REAL"),
+]
+
+
 def _migrate(con):
-    """Добавить колонки, появившиеся после v1 (таблицы создаёт schema.sql)."""
+    """Добавить колонки, появившиеся после v1 (таблицы создаёт schema.sql). Идемпотентно."""
     if "name" not in _columns(con, "run_issuer"):
         con.execute("ALTER TABLE run_issuer ADD COLUMN name TEXT")          # отображаемое имя, если issuer — код
     cols = _columns(con, "scenario_def")
@@ -67,3 +91,6 @@ def _migrate(con):
                  ("spread_type", "TEXT"), ("spread_curve", "TEXT")):
         if c not in cols:
             con.execute(f"ALTER TABLE position ADD COLUMN {c} {t}")
+    for table, c, t in V5_COLUMNS:   # v5: контракт 1.3
+        if c not in _columns(con, table):
+            con.execute(f"ALTER TABLE {table} ADD COLUMN {c} {t}")
