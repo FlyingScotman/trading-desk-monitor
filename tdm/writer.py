@@ -151,11 +151,13 @@ class Run:
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        if exc_type is None:
-            self.publish()
-        else:
-            self.fail(f"{exc_type.__name__}: {exc}")
-        self.con.close()
+        try:
+            if exc_type is None:
+                self.publish()
+            else:
+                self.fail(f"{exc_type.__name__}: {exc}")
+        finally:
+            self.con.close()
         return False
 
     # ------------------------------------------------------------------ лог

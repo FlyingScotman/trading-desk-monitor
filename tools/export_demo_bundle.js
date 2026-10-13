@@ -12,7 +12,9 @@ const fs = require('fs'), path = require('path'), vm = require('vm'), zlib = req
 const src = fs.readFileSync(path.join(__dirname, '..', 'prototypes', 'data.js'), 'utf8');
 const ctx = { window: {} }; vm.createContext(ctx); vm.runInContext(src, ctx);
 const D = JSON.parse(JSON.stringify(ctx.window.DESK));
-if (process.argv.includes('--desk')) { process.stdout.write(JSON.stringify(D)); process.exit(0); }
+// process.exit сразу после stdout.write обрезает вывод в канал (pipe), поэтому вывод — синхронный
+const out = text => fs.writeSync(1, text);
+if (process.argv.includes('--desk')) { out(JSON.stringify(D)); process.exit(0); }
 const pid = p => 'P' + String(p.id).padStart(4, '0');
 const mi = process.argv.indexOf('--market');
 if (mi > 0) {
@@ -89,4 +91,4 @@ const bundle = {
   ocp_transfers: D.OCP_TRANSFERS.map(t => ({ from: t.from, to: t.to, ccy: t.ccy, amount: t.amount, before: t.before, rate: t.rate, value_date: t.valueDate })),
   history: D.history.slice(0, -1).map(h => ({ as_of: h.date, pnl_official: h.pnlOfficial, pnl_explained: h.pnlExplained, dv01: h.dv01, cs01: h.cs01 })),
 };
-process.stdout.write(JSON.stringify(bundle, null, 1) + '\n');
+out(JSON.stringify(bundle, null, 1) + '\n');
