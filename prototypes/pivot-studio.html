@@ -1,0 +1,1248 @@
+<title>Risk Pivot Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  color-scheme: light;
+  --font-ui: "Onest", "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-num: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  --bg:#f2f4f7; --surface:#ffffff; --surface-2:#f7f8fa; --surface-3:#eceff4;
+  --line:#e0e4eb; --line-strong:#c8cfda; --grid:#eceff3;
+  --text:#141c28; --text-2:#465265; --muted:#717c8e;
+  --accent:#24459e; --accent-hover:#1b3780; --accent-soft:#e7ecf8; --accent-line:#b9c6e8; --on-accent:#ffffff;
+  --focus:#2f5bd3;
+  --div-neg:#d03b3b; --div-mid:#eceef1; --div-pos:#2a78d6; --seq:#24459e;
+  --cat1:#2a78d6; --cat2:#eb6834; --cat3:#1baf7a; --cat4:#eda100; --cat5:#e87ba4; --cat6:#008300; --cat7:#6250d6; --cat8:#e34948;
+  --good:#0ca30c; --warn:#fab219; --serious:#ec835a; --critical:#d03b3b;
+  --badge-bg:#fff4dc; --badge-text:#7a5200; --badge-line:#f0d394;
+  --scrim:rgba(16,22,32,.28);
+  --shadow:0 10px 40px rgba(16,24,40,.16), 0 1px 3px rgba(16,24,40,.08);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --bg:#0c1118; --surface:#131922; --surface-2:#171e29; --surface-3:#1f2734;
+    --line:#252f3d; --line-strong:#344152; --grid:#1e2632;
+    --text:#e3e8ef; --text-2:#aab4c3; --muted:#7e8a9c;
+    --accent:#8ea8f2; --accent-hover:#a8bdf6; --accent-soft:#1b2744; --accent-line:#34497e; --on-accent:#0c1118;
+    --focus:#8ea8f2;
+    --div-neg:#e66767; --div-mid:#262d38; --div-pos:#3987e5; --seq:#5577d8;
+    --cat1:#3987e5; --cat2:#d95926; --cat3:#199e70; --cat4:#c98500; --cat5:#d55181; --cat6:#008300; --cat7:#9085e9; --cat8:#e66767;
+    --badge-bg:#33280f; --badge-text:#f1c96b; --badge-line:#5a4618;
+    --scrim:rgba(0,0,0,.5);
+    --shadow:0 10px 40px rgba(0,0,0,.5), 0 1px 3px rgba(0,0,0,.4);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --bg:#0c1118; --surface:#131922; --surface-2:#171e29; --surface-3:#1f2734;
+  --line:#252f3d; --line-strong:#344152; --grid:#1e2632;
+  --text:#e3e8ef; --text-2:#aab4c3; --muted:#7e8a9c;
+  --accent:#8ea8f2; --accent-hover:#a8bdf6; --accent-soft:#1b2744; --accent-line:#34497e; --on-accent:#0c1118;
+  --focus:#8ea8f2;
+  --div-neg:#e66767; --div-mid:#262d38; --div-pos:#3987e5; --seq:#5577d8;
+  --cat1:#3987e5; --cat2:#d95926; --cat3:#199e70; --cat4:#c98500; --cat5:#d55181; --cat6:#008300; --cat7:#9085e9; --cat8:#e66767;
+  --badge-bg:#33280f; --badge-text:#f1c96b; --badge-line:#5a4618;
+  --scrim:rgba(0,0,0,.5);
+  --shadow:0 10px 40px rgba(0,0,0,.5), 0 1px 3px rgba(0,0,0,.4);
+}
+*{box-sizing:border-box}
+html,body{overflow-x:clip}
+body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font-ui);font-size:13px;line-height:1.4;-webkit-font-smoothing:antialiased}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--focus);outline-offset:1px;border-radius:3px}
+.num,.mono{font-family:var(--font-num);font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+svg.i{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* ---------- header ---------- */
+.top{display:flex;align-items:center;gap:18px;height:52px;padding:0 20px;background:var(--surface);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:10px;font-weight:600;font-size:15px;letter-spacing:-.01em;white-space:nowrap}
+.brand-mark{width:22px;height:22px;color:var(--accent)}
+.brand-mark svg{width:22px;height:22px;display:block}
+.test-badge{font-size:11px;font-weight:500;padding:2px 7px;border-radius:3px;background:var(--badge-bg);color:var(--badge-text);border:1px solid var(--badge-line);white-space:nowrap}
+.asof{color:var(--muted);white-space:nowrap}
+.kpis{display:flex;gap:22px;margin-left:auto;align-items:center}
+.kpi{display:flex;flex-direction:column;line-height:1.15}
+.kpi span{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.kpi b{font-weight:500;font-size:13px}
+.kpi small{color:var(--muted);font-family:var(--font-ui);font-size:11px;font-weight:400}
+.theme-btn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border:1px solid var(--line-strong);border-radius:4px;background:var(--surface);color:var(--text-2);font-size:12px;white-space:nowrap}
+.theme-btn:hover{color:var(--text);border-color:var(--muted)}
+
+/* ---------- tabs ---------- */
+.tabs{display:flex;align-items:stretch;gap:2px;padding:0 20px;background:var(--surface);border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:thin}
+.tab{display:flex;align-items:center;position:relative;flex:none}
+.tab-btn{display:flex;align-items:center;gap:7px;height:40px;padding:0 10px;border:0;background:none;color:var(--text-2);font-weight:500;white-space:nowrap;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab-btn svg{width:14px;height:14px;color:var(--muted)}
+.tab-btn:hover{color:var(--text)}
+.tab.active .tab-btn{color:var(--text);border-bottom-color:var(--accent)}
+.tab.active .tab-btn svg{color:var(--accent)}
+.tab-tools{display:flex;gap:1px;padding-right:4px}
+.ib{display:inline-grid;place-items:center;width:24px;height:24px;border:0;border-radius:3px;background:none;color:var(--muted)}
+.ib:hover:not(:disabled){background:var(--surface-3);color:var(--text)}
+.ib:disabled{opacity:.35;cursor:default}
+.ib svg{width:14px;height:14px}
+.tab.editing{padding:6px 4px}
+.tab-input{height:28px;width:220px;max-width:60vw;padding:0 8px;border:1px solid var(--accent);border-radius:4px;background:var(--surface);font-weight:500}
+.tab-new,.tab-restore{display:flex;align-items:center;gap:6px;flex:none;height:40px;padding:0 10px;border:0;background:none;color:var(--accent);font-weight:500;white-space:nowrap}
+.tab-new:hover,.tab-restore:hover{color:var(--accent-hover)}
+.tab-restore{color:var(--muted);font-weight:400}
+.tabs-sp{flex:1 0 12px}
+
+/* ---------- workspace ---------- */
+.work{display:grid;grid-template-columns:304px minmax(0,1fr);align-items:start}
+.builder{position:sticky;top:0;max-height:100vh;overflow:auto;background:var(--surface);border-right:1px solid var(--line);padding:6px 16px 24px;scrollbar-width:thin;min-height:calc(100vh - 94px)}
+.b-sec{padding:12px 0;border-bottom:1px solid var(--line)}
+.b-sec:last-child{border-bottom:0}
+.b-h{display:flex;align-items:center;justify-content:space-between;margin:0 0 8px;font-size:10.5px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+.b-h .lnk{text-transform:none;letter-spacing:0;font-weight:500}
+.lnk{border:0;background:none;padding:0;color:var(--accent);font-size:12px}
+.lnk:hover{text-decoration:underline}
+.slot{display:grid;grid-template-columns:18px minmax(0,1fr) 26px;gap:6px;align-items:center;margin-bottom:6px}
+.slot-n{font-family:var(--font-num);font-size:11px;color:var(--muted);text-align:center}
+.slot.one{grid-template-columns:minmax(0,1fr)}
+.sel{position:relative;display:block;min-width:0}
+.sel select{appearance:none;-webkit-appearance:none;width:100%;height:30px;padding:0 26px 0 9px;border:1px solid var(--line-strong);border-radius:4px;background:var(--surface);color:var(--text);font-size:13px;cursor:pointer;text-overflow:ellipsis}
+.sel select:hover{border-color:var(--muted)}
+.sel::after{content:"";position:absolute;right:10px;top:50%;width:6px;height:6px;border-right:1.5px solid var(--muted);border-bottom:1.5px solid var(--muted);transform:translateY(-70%) rotate(45deg);pointer-events:none}
+.sel.sm select{height:26px;font-size:12px}
+.f-grp{margin-bottom:10px}
+.f-grp:last-child{margin-bottom:0}
+.f-top{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:5px;font-size:12px;color:var(--text-2)}
+.f-top em{font-style:normal;color:var(--muted);font-size:11px}
+.f-grp.off{opacity:.45}
+.chips{display:flex;flex-wrap:wrap;gap:4px}
+.chip{height:24px;padding:0 8px;border:1px solid var(--line-strong);border-radius:3px;background:var(--surface);color:var(--text-2);font-size:12px;white-space:nowrap}
+.chip:hover:not(:disabled){border-color:var(--muted);color:var(--text)}
+.chip[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent-line);color:var(--accent);font-weight:500}
+.chip:disabled{cursor:default}
+.viz-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:4px}
+.viz-b{display:flex;flex-direction:column;align-items:center;gap:4px;padding:7px 2px 6px;border:1px solid var(--line-strong);border-radius:4px;background:var(--surface);color:var(--text-2);font-size:10.5px;line-height:1.15;text-align:center}
+.viz-b svg{width:18px;height:18px}
+.viz-b:hover{border-color:var(--muted);color:var(--text)}
+.viz-b[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:500}
+.opt{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:30px}
+.opt>span{color:var(--text-2)}
+.seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:4px;overflow:hidden}
+.seg button{height:26px;padding:0 10px;white-space:nowrap;border:0;background:var(--surface);color:var(--text-2);font-size:12px}
+.seg button+button{border-left:1px solid var(--line-strong)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent);font-weight:500}
+.seg button:disabled{opacity:.45;cursor:default}
+.sw{position:relative;width:32px;height:18px;flex:none}
+.sw input{position:absolute;inset:0;opacity:0;margin:0;cursor:pointer}
+.sw span{position:absolute;inset:0;border-radius:9px;background:var(--line-strong);transition:background .15s;pointer-events:none}
+.sw span::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--surface);transition:transform .15s}
+.sw input:checked+span{background:var(--accent)}
+.sw input:checked+span::after{transform:translateX(14px)}
+.sw input:focus-visible+span{outline:2px solid var(--focus);outline-offset:2px}
+.b-foot{padding-top:12px;color:var(--muted);font-size:11.5px;display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.b-note{font-size:11.5px;color:var(--muted);margin-top:6px}
+
+main{min-width:0;padding:16px 20px 48px}
+.crumbbar{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.bt-toggle{display:none;align-items:center;gap:6px;height:30px;padding:0 10px;border:1px solid var(--line-strong);border-radius:4px;background:var(--surface);color:var(--text);font-weight:500}
+.crumb{flex:1 1 380px;min-width:0;font-size:14px;color:var(--text-2);line-height:1.5}
+.crumb b{color:var(--text);font-weight:600}
+.crumb .sep{color:var(--line-strong);margin:0 6px}
+.crumb .u{color:var(--text);font-weight:500}
+.grand{display:flex;align-items:baseline;gap:8px;white-space:nowrap}
+.grand span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.grand b{font-size:20px;font-weight:500;letter-spacing:-.01em}
+.grand small{color:var(--muted);font-size:12px}
+.hints{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
+.hint{display:flex;gap:7px;align-items:flex-start;font-size:12px;color:var(--text-2);padding:6px 10px;background:var(--surface-2);border:1px solid var(--line);border-left:2px solid var(--accent-line);border-radius:0 3px 3px 0}
+.hint svg{width:14px;height:14px;margin-top:1px;color:var(--accent);flex:none}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:4px;margin-bottom:14px;min-width:0}
+.card-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 14px;border-bottom:1px solid var(--line)}
+.card-h h2{margin:0;font-size:12.5px;font-weight:600}
+.card-h .meta{color:var(--muted);font-size:12px}
+.card-h .r{margin-left:auto;display:flex;gap:10px;align-items:center}
+.chart-wrap{padding:8px 10px 6px}
+#chart{width:100%;height:380px}
+.legend-note{display:flex;gap:14px;align-items:center;color:var(--muted);font-size:11.5px}
+.sw-dot{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+
+/* ---------- pivot ---------- */
+.pv-wrap{overflow:auto;max-height:72vh;scrollbar-width:thin}
+table.pv{border-collapse:separate;border-spacing:0;width:100%;font-size:12.5px}
+.pv th,.pv td{padding:0 10px;height:28px;border-bottom:1px solid var(--grid);white-space:nowrap}
+.pv thead th{position:sticky;top:0;z-index:2;background:var(--surface-2);color:var(--text-2);font-weight:500;font-size:11.5px;text-align:right;border-bottom:1px solid var(--line-strong);height:32px}
+.pv thead th.corner{text-align:left;left:0;z-index:3;color:var(--muted);font-weight:500}
+.pv tbody th{position:sticky;left:0;z-index:1;background:var(--surface);text-align:left;font-weight:400;max-width:280px;overflow:hidden;text-overflow:ellipsis;border-right:1px solid var(--line)}
+.pv thead th.corner{border-right:1px solid var(--line)}
+.pv td.num{text-align:right;cursor:pointer;color:var(--text)}
+.pv td.num:hover{box-shadow:inset 0 0 0 1px var(--accent)}
+.pv td.num:focus-visible{outline:2px solid var(--focus);outline-offset:-2px;border-radius:0}
+.pv td.empty{color:var(--line-strong);cursor:default;text-align:right}
+.pv td.empty:hover{box-shadow:none}
+.pv tr.l1 th{font-weight:500}
+.pv tr.l1.has-kids th,.pv tr.l1.has-kids td{border-top:1px solid var(--line)}
+.pv tr.l2 th{padding-left:34px;color:var(--text-2)}
+.pv tr.other th{font-style:italic;color:var(--text-2)}
+.pv .tot{font-weight:600;border-left:1px solid var(--line)}
+.pv tfoot th,.pv tfoot td{position:sticky;bottom:0;background:var(--surface-2);border-top:1px solid var(--line-strong);border-bottom:0;font-weight:600;height:32px;z-index:1}
+.pv tfoot th{left:0;z-index:2;text-align:left;border-right:1px solid var(--line)}
+.caret{display:inline-grid;place-items:center;width:18px;height:18px;margin:0 4px 0 -4px;border:0;border-radius:3px;background:none;color:var(--muted);vertical-align:-4px}
+.caret:hover{background:var(--surface-3);color:var(--text)}
+.caret svg{width:12px;height:12px;transition:transform .12s}
+.caret[aria-expanded="true"] svg{transform:rotate(90deg)}
+.empty-state{padding:40px 16px;text-align:center;color:var(--muted)}
+
+/* ---------- drill drawer ---------- */
+.scrim{position:fixed;inset:0;background:var(--scrim);opacity:0;pointer-events:none;transition:opacity .18s;z-index:40}
+.scrim.open{opacity:1;pointer-events:auto}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(640px,100vw);background:var(--surface);border-left:1px solid var(--line);box-shadow:var(--shadow);transform:translateX(100%);visibility:hidden;transition:transform .2s ease,visibility .2s;z-index:50;display:flex;flex-direction:column}
+.drawer.open{transform:none;visibility:visible}
+.dr-h{padding:14px 18px 12px;border-bottom:1px solid var(--line);display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px}
+.dr-k{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+.dr-t{font-size:15px;font-weight:600;margin:2px 0 0;overflow-wrap:anywhere}
+.dr-sub{grid-column:1/-1;color:var(--text-2);font-size:12px}
+.dr-close{grid-row:1/3;grid-column:2;align-self:start;display:inline-grid;place-items:center;width:30px;height:30px;border:1px solid var(--line-strong);border-radius:4px;background:var(--surface);color:var(--text-2)}
+.dr-close:hover{color:var(--text);border-color:var(--muted)}
+.dr-stats{display:flex;gap:24px;padding:12px 18px;border-bottom:1px solid var(--line);background:var(--surface-2);flex-wrap:wrap}
+.dr-stats div{display:flex;flex-direction:column}
+.dr-stats span{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.dr-stats b{font-size:17px;font-weight:500}
+.dr-body{overflow:auto;flex:1;min-height:0}
+table.dt{border-collapse:separate;border-spacing:0;width:100%;font-size:12.5px}
+.dt th,.dt td{padding:6px 10px;border-bottom:1px solid var(--grid);text-align:left;vertical-align:top}
+.dt th{position:sticky;top:0;background:var(--surface);z-index:1;border-bottom:1px solid var(--line-strong);padding:0}
+.dt th button{display:flex;align-items:center;gap:4px;width:100%;height:32px;padding:0 10px;border:0;background:none;color:var(--text-2);font-size:11.5px;font-weight:500;white-space:nowrap}
+.dt th.r button{justify-content:flex-end}
+.dt th button:hover{color:var(--text)}
+.dt th button .ar{color:var(--accent);font-size:10px}
+.dt td.r{text-align:right;white-space:nowrap}
+.dt .nm{font-weight:500}
+.dt .sb{color:var(--muted);font-size:11px;font-family:var(--font-num)}
+.dt tfoot td{position:sticky;bottom:0;background:var(--surface-2);border-top:1px solid var(--line-strong);font-weight:600}
+.neg{color:var(--div-neg)}
+.dr-foot{padding:10px 18px;border-top:1px solid var(--line);color:var(--muted);font-size:11.5px}
+
+.toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);display:flex;gap:14px;align-items:center;padding:9px 14px;background:var(--text);color:var(--surface);border-radius:4px;box-shadow:var(--shadow);font-size:12.5px;z-index:60;max-width:calc(100vw - 32px)}
+.toast[hidden]{display:none}
+.toast button{border:0;background:none;color:var(--surface);font-weight:600;text-decoration:underline;padding:0}
+
+@media (max-width:1180px){ .kpi.opt-k{display:none} }
+@media (max-width:960px){
+  .work{grid-template-columns:minmax(0,1fr)}
+  .builder{display:none;position:static;max-height:none;min-height:0;border-right:0;border-bottom:1px solid var(--line)}
+  .app.builder-open .builder{display:block}
+  .bt-toggle{display:inline-flex}
+  .kpis{display:none}
+  .theme-btn{margin-left:auto}
+}
+@media (max-width:600px){
+  .top,.tabs,main{padding-left:16px;padding-right:16px}
+  .builder{padding-left:16px;padding-right:16px}
+  .top{gap:10px;height:auto;min-height:52px;flex-wrap:wrap;padding-top:8px;padding-bottom:8px}
+  .asof{display:none}
+  .theme-btn .lbl{display:none}
+  .grand b{font-size:17px}
+  .tab-restore span{display:none}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="app" id="app">
+  <header class="top">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 22 22"><rect x="1.5" y="1.5" width="19" height="19" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M1.5 8h19M8 1.5v19" stroke="currentColor" stroke-width="1.5"/><rect x="10" y="10" width="4" height="4" fill="currentColor"/><rect x="15" y="15" width="4" height="4" fill="currentColor" opacity=".45"/><rect x="15" y="10" width="4" height="4" fill="currentColor" opacity=".7"/></svg></span>Risk Pivot Studio</div>
+    <span class="test-badge" title="Все цифры вымышленные">Тестовые данные</span>
+    <span class="asof">FI-деск · на <span class="mono" id="asof"></span></span>
+    <div class="kpis" id="kpis"></div>
+    <button class="theme-btn" id="themeBtn" type="button"></button>
+  </header>
+  <nav class="tabs" id="tabs" role="tablist" aria-label="Сохранённые виды"></nav>
+  <div class="work">
+    <aside class="builder" id="builder" aria-label="Конструктор вида"></aside>
+    <main>
+      <div class="crumbbar">
+        <button class="bt-toggle" id="btToggle" type="button" aria-expanded="false" aria-controls="builder"></button>
+        <div class="crumb" id="crumb"></div>
+        <div class="grand" id="grand"></div>
+      </div>
+      <div class="hints" id="hints"></div>
+      <section class="card" id="vizCard">
+        <div class="card-h"><h2 id="vizTitle"></h2><span class="meta" id="vizMeta"></span><span class="r legend-note" id="vizLegend"></span></div>
+        <div class="chart-wrap"><div id="chart" role="img" aria-label="График текущего вида"></div></div>
+      </section>
+      <section class="card">
+        <div class="card-h"><h2>Сводная таблица</h2><span class="meta" id="pvMeta"></span><span class="r" id="pvTools"></span></div>
+        <div class="pv-wrap" id="pvWrap"></div>
+      </section>
+    </main>
+  </div>
+</div>
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drTitle" aria-hidden="true"></aside>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script src="data.js"></script>
+<script src="echarts.min.js"></script>
+<script>
+(function(){
+'use strict';
+const D = window.DESK, U = D.util;
+const $ = (s, r) => (r || document).querySelector(s);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const REDUCED = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ---------- icons ---------- */
+const sv = p => `<svg class="i" viewBox="0 0 16 16" aria-hidden="true">${p}</svg>`;
+const ICON = {
+  table: sv('<rect x="2" y="2.5" width="12" height="11" rx="1"/><path d="M2 6h12M2 9.5h12M6 2.5v11"/>'),
+  heatmap: sv('<rect x="2" y="2" width="5" height="5" rx=".5" fill="currentColor" stroke="none"/><rect x="9" y="2" width="5" height="5" rx=".5" fill="currentColor" stroke="none" opacity=".4"/><rect x="2" y="9" width="5" height="5" rx=".5" fill="currentColor" stroke="none" opacity=".6"/><rect x="9" y="9" width="5" height="5" rx=".5" fill="currentColor" stroke="none" opacity=".2"/>'),
+  bars: sv('<path d="M3 13.5V8M6.5 13.5V3.5M10 13.5V6.5M13.5 13.5V10"/><path d="M1.5 13.5h13" opacity=".5"/>'),
+  treemap: sv('<rect x="2" y="2" width="12" height="12" rx="1"/><path d="M8.5 2v12M8.5 8.5H14M2 10h6.5"/>'),
+  ladder: sv('<path d="M3 13.5v-3M6 13.5v-6M9 13.5v-4M12 13.5v-7"/><path d="M2 8l3-3 3 2 3-3 3 1" opacity=".7"/>'),
+  pencil: sv('<path d="M10.5 2.5l3 3L6 13H3v-3z"/>'),
+  copy: sv('<rect x="5" y="5" width="8.5" height="8.5" rx="1"/><path d="M11 5V3a.5.5 0 0 0-.5-.5h-7a1 1 0 0 0-1 1v7a.5.5 0 0 0 .5.5h2"/>'),
+  trash: sv('<path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 9h6.6l.7-9"/>'),
+  plus: sv('<path d="M8 3v10M3 8h10"/>'),
+  restore: sv('<path d="M2.5 8a5.5 5.5 0 1 0 1.7-4"/><path d="M2.5 2.5V5.5h3"/>'),
+  x: sv('<path d="M4 4l8 8M12 4l-8 8"/>'),
+  chev: sv('<path d="M6 3.5L10.5 8 6 12.5"/>'),
+  info: sv('<circle cx="8" cy="8" r="6"/><path d="M8 7v4.2M8 4.8v.2"/>'),
+  swap: sv('<path d="M5 2.5v11M2.5 5L5 2.5 7.5 5M11 13.5v-11M8.5 11l2.5 2.5 2.5-2.5"/>'),
+  sliders: sv('<path d="M2 4.5h7M12 4.5h2M2 11.5h2M7 11.5h7"/><circle cx="10.5" cy="4.5" r="1.5"/><circle cx="5.5" cy="11.5" r="1.5"/>'),
+  sun: sv('<circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1 1M11.6 11.6l1 1M3.4 12.6l1-1M11.6 4.4l1-1"/>'),
+  moon: sv('<path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5z"/>'),
+  auto: sv('<circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11" /><path d="M8 2.5a5.5 5.5 0 0 1 0 11z" fill="currentColor" stroke="none"/>'),
+};
+
+/* ---------- formatting ---------- */
+const NF = {};
+const nf = d => NF[d] || (NF[d] = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: d, maximumFractionDigits: d }));
+function fmtNum(v, d) {
+  if (v == null || !isFinite(v)) return '—';
+  let s = nf(d).format(v).replace(/-/g, '−');
+  if (/^−0(,0+)?$/.test(s)) s = s.slice(1);
+  return s;
+}
+const fmtDate = s => s ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(0, 4) : '—';
+
+/* ---------- reference data ---------- */
+const BK = D.BUCKETS;
+const MAT_B = ['<1Y', '1–3Y', '3–5Y', '5–10Y', '>10Y'];
+const FUND = 'Фондирование';
+const SEG = ['Гос', 'Корп', 'Секьюритизация', 'Деривативы', 'FX'];
+const AC = ['ОФЗ-ПД', 'ОФЗ-ПК', 'Корп RUB фикс', 'Корп RUB флоатер', 'Корп валютные', 'Суверен валютный', 'Секьюритизация', 'IRS', 'XCCY', 'CDS', 'FX'];
+const CCYS = ['RUB', 'USD', 'CNY', 'EUR'];
+const BOOK_KEYS = Object.keys(D.BOOKS);
+const CURVE_KEYS = Object.keys(D.CURVES);
+const INSTR = { BOND: 'Облигации', IRS: 'IRS', XCCY: 'XCCY', CDS: 'CDS', FX: 'FX спот/форвард' };
+const CCY_CURVE = { RUB: 'RUB OFZ', USD: 'USD SOFR', CNY: 'CNY', EUR: 'EUR ESTR' };
+const FUND_CURVE = { RUB: 'RUB RUONIA', USD: 'USD SOFR', CNY: 'CNY', EUR: 'EUR ESTR' };
+const RATINGS = D.RATING_ORDER.concat(['Без рейтинга']);
+const SC_SHORT = { 'par+100': '+100 б.п. RUB', 'par-100': '−100 б.п. RUB', keyhike: 'КС +200 б.п.', bullsteep: 'Bull steepener', bearflat: 'Bear flattener', rubdep: 'Рубль −15%', credit: 'Спреды ×2', stress22: 'Стресс «2022»' };
+
+function nearestBucket(t) {
+  let bi = 0, bd = Infinity;
+  D.PILLARS.forEach((p, i) => { const d = Math.abs(p - t); if (d < bd) { bd = d; bi = i; } });
+  return BK[bi];
+}
+function matBucket(t) { return t < 1 ? MAT_B[0] : t < 3 ? MAT_B[1] : t < 5 ? MAT_B[2] : t < 10 ? MAT_B[3] : MAT_B[4]; }
+
+/* records: positions + funding deals in one shape */
+const POS = D.positions.map(p => {
+  let curve = CCY_CURVE[p.ccy], best = -1;
+  Object.keys(p.risk || {}).forEach(c => { const s = Math.abs(p.risk[c].reduce((a, b) => a + b, 0)); if (s > best) { best = s; curve = c; } });
+  return { kind: 'pos', id: 'p' + p.id, p, name: p.name, book: p.book, ccy: p.ccy, tenor: p.tenorY, maturity: p.maturity, curve,
+    sub: p.isin || p.counterparty || p.assetClass };
+});
+const FUNDR = D.funding.map(f => ({ kind: 'fund', id: 'f' + f.id, f, name: f.type + ' · ' + f.ccy, book: f.book, ccy: f.ccy, tenor: f.tenorY,
+  maturity: f.maturity, curve: FUND_CURVE[f.ccy], sub: f.rateExpr + ' · ' + f.counterparty + (f.collateral ? ' · ' + f.collateral : '') }));
+const POS_FUND = POS.concat(FUNDR);
+
+/* ---------- dimensions ---------- */
+const isPos = r => r.kind === 'pos';
+const DIMS = {
+  book:        { label: 'Книга', by: 'книгам', fund: true, order: BOOK_KEYS.map(k => D.BOOKS[k].name), get: r => D.BOOKS[r.book].name },
+  desk:        { label: 'Деск', by: 'дескам', fund: true, get: r => D.BOOKS[r.book].desk },
+  trader:      { label: 'Трейдер', by: 'трейдерам', fund: true, get: r => D.BOOKS[r.book].trader },
+  assetClass:  { label: 'Класс актива', by: 'классам активов', order: AC.concat([FUND]), get: r => isPos(r) ? r.p.assetClass : FUND },
+  segment:     { label: 'Сегмент', by: 'сегментам', order: SEG.concat([FUND]), get: r => isPos(r) ? r.p.segment : FUND },
+  instrType:   { label: 'Тип инструмента', by: 'типам инструментов', order: Object.values(INSTR).concat([FUND]), get: r => isPos(r) ? INSTR[r.p.instrType] : FUND },
+  couponType:  { label: 'Тип купона', by: 'типу купона', order: ['Фиксированный', 'Плавающий', 'Не облигация', FUND], get: r => !isPos(r) ? FUND : r.p.instrType !== 'BOND' ? 'Не облигация' : r.p.couponType === 'float' ? 'Плавающий' : 'Фиксированный' },
+  issuer:      { label: 'Эмитент', by: 'эмитентам', get: r => isPos(r) ? (r.p.issuer || 'Без эмитента') : FUND },
+  issuerGroup: { label: 'Группа эмитента', by: 'группам эмитентов', get: r => isPos(r) ? (r.p.issuerGroup || 'Без эмитента') : FUND },
+  sector:      { label: 'Сектор', by: 'секторам', get: r => isPos(r) ? (r.p.sector || 'Без сектора') : FUND },
+  rating:      { label: 'Рейтинг', by: 'рейтингам', ordinal: true, order: RATINGS.concat([FUND]), get: r => isPos(r) ? (r.p.rating || 'Без рейтинга') : FUND },
+  ccy:         { label: 'Валюта', by: 'валютам', fund: true, order: CCYS, get: r => r.ccy },
+  curve:       { label: 'Кривая', by: 'кривым', fund: true, order: CURVE_KEYS, get: r => r.curve },
+  bucket:      { label: 'Бакет', by: 'бакетам', fund: true, ordinal: true, order: BK, get: r => nearestBucket(r.tenor) },
+  maturityBucket: { label: 'Срок до погашения', by: 'срокам до погашения', fund: true, ordinal: true, order: MAT_B, get: r => matBucket(r.tenor) },
+  fundType:    { label: 'Тип фондирования', by: 'типам фондирования', fund: true, posOnlyNA: true, order: ['Позиции', 'РЕПО с ЦК', 'TSY FTP', 'Обратное РЕПО', 'FX-своп', 'Гарантийное обеспечение'], get: r => isPos(r) ? 'Позиции' : r.f.type },
+  counterparty:{ label: 'Контрагент', by: 'контрагентам', fund: true, get: r => isPos(r) ? (r.p.counterparty || 'Рынок (облигации)') : r.f.counterparty },
+};
+const DIM_GROUPS = [
+  ['Организация', ['book', 'desk', 'trader']],
+  ['Инструмент', ['assetClass', 'segment', 'instrType', 'couponType']],
+  ['Кредит', ['issuer', 'issuerGroup', 'sector', 'rating']],
+  ['Рынок и сроки', ['ccy', 'curve', 'bucket', 'maturityBucket']],
+  ['Фондирование', ['fundType', 'counterparty']],
+];
+
+/* ---------- measures ---------- */
+const scenCache = {};
+function scen(id) {
+  if (!scenCache[id]) {
+    const sc = D.SCENARIOS.find(s => s.id === id) || D.SCENARIOS[0];
+    const res = U.runScenario(sc);
+    const pos = new Map(res.byPosition.map(x => [x.id, x.total]));
+    const fund = new Map();
+    D.funding.forEach(f => { let x = 0; if (sc.fx) Object.keys(f.fxDelta).forEach(c => { x += f.fxDelta[c] * D.FX[c] * (sc.fx[c] || 0) / 100; }); fund.set(f.id, x); });
+    scenCache[id] = { pos, fund, total: res.total, sc };
+  }
+  return scenCache[id];
+}
+const fxRub = o => Object.keys(o || {}).reduce((s, c) => s + o[c] * D.FX[c], 0);
+const MEASURES = {
+  dv01:  { label: 'DV01', unit: '₽/б.п.', signed: true, src: 'pos', explode: true, val: r => r.p.dv01 },
+  cs01:  { label: 'CS01', unit: '₽/б.п.', signed: true, src: 'pos', val: r => r.p.cs01 },
+  jtd:   { label: 'JTD', unit: '₽', signed: true, src: 'pos', val: r => r.p.jtd },
+  mv:    { label: 'MV', unit: '₽', signed: true, src: 'pos', val: r => r.p.mvRub },
+  notional: { label: 'Номинал (брутто)', unit: '₽', signed: false, src: 'pos', val: r => Math.abs(r.p.notional) * D.FX[r.p.ccy] },
+  ocp:   { label: 'ОВП', unit: '₽ экв.', signed: true, src: 'pos+fund', val: r => fxRub(isPos(r) ? r.p.fxDelta : r.f.fxDelta) },
+  count: { label: 'Кол-во позиций', unit: 'шт.', signed: false, src: 'pos', agg: 'count', val: () => 1 },
+  pnl:   { label: 'PnL official', unit: '₽', signed: true, src: 'pos+fund', val: r => isPos(r) ? r.p.pnl.official : r.f.pnl.carry + r.f.pnl.fx },
+  unexp: { label: 'PnL unexplained', unit: '₽', signed: true, src: 'pos', val: r => r.p.pnl.unexplained },
+  scen:  { label: 'Сценарий', unit: '₽', signed: true, src: 'pos+fund', val: (r, v) => { const s = scen(v.scen); return isPos(r) ? (s.pos.get(r.p.id) || 0) : (s.fund.get(r.f.id) || 0); } },
+  famt:  { label: 'Фондирование: объём', unit: '₽', signed: true, src: 'fund', val: r => r.f.amountRub },
+  fcarry:{ label: 'Фондирование: кэрри за день', unit: '₽', signed: true, src: 'fund', val: r => r.f.pnl.carry },
+  frate: { label: 'Фондирование: ставка ср.-взв.', unit: '%', signed: false, src: 'fund', agg: 'wavg', val: r => r.f.rate, w: r => Math.abs(r.f.amountRub) },
+};
+const MEASURE_GROUPS = [
+  ['Риск', ['dv01', 'cs01', 'jtd']],
+  ['Экспозиция', ['mv', 'notional', 'ocp', 'count']],
+  ['PnL за день', ['pnl', 'unexp']],
+  ['Сценарий (util.runScenario)', ['scen']],
+  ['Фондирование', ['famt', 'fcarry', 'frate']],
+];
+const aggOf = m => m.agg || 'sum';
+const measureLabel = (m, v) => v.measure === 'scen' ? 'Сценарий «' + (SC_SHORT[v.scen] || v.scen) + '»' : m.label;
+function dimAllowed(k, m) {
+  if (m.src === 'fund') return !!DIMS[k].fund;
+  if (k === 'fundType') return m.src === 'pos+fund';
+  return true;
+}
+const unitsScale = v => v.opts.units === 'th' ? 1e3 : 1e6;
+const unitsDec = v => v.opts.units === 'th' ? 0 : 2;
+function unitLabel(m, v) {
+  if (aggOf(m) === 'count') return 'шт.';
+  if (aggOf(m) === 'wavg') return '% годовых';
+  return (v.opts.units === 'th' ? 'тыс ' : 'млн ') + m.unit;
+}
+function fmtM(x, m, v) {
+  if (x == null) return '—';
+  const a = aggOf(m);
+  if (a === 'count') return fmtNum(x, 0);
+  if (a === 'wavg') return fmtNum(x, 2);
+  return fmtNum(x / unitsScale(v), unitsDec(v));
+}
+function fmtAxis(x, m, v) {
+  const a = aggOf(m);
+  if (a !== 'sum') return fmtNum(x, a === 'wavg' ? 1 : 0);
+  const y = x / unitsScale(v);
+  const ay = Math.abs(y);
+  return fmtNum(y, v.opts.units === 'th' || ay >= 100 || ay === 0 ? 0 : 2).replace(/(,\d*?)0+$/, '$1').replace(/,$/, '');
+}
+function zeroEps(m, v) { const a = aggOf(m); return a === 'count' ? 0.5 : a === 'wavg' ? 1e-12 : 0.5 * unitsScale(v) * Math.pow(10, -unitsDec(v)); }
+
+/* ---------- filters ---------- */
+const FILTERS = [
+  { k: 'book', label: 'Книга', vals: BOOK_KEYS.map(k => [k, D.BOOKS[k].name]), get: r => r.book, fund: true },
+  { k: 'segment', label: 'Сегмент', vals: SEG.map(s => [s, s]), get: r => DIMS.segment.get(r) },
+  { k: 'ccy', label: 'Валюта', vals: CCYS.map(s => [s, s]), get: r => r.ccy, fund: true },
+  { k: 'rating', label: 'Рейтинг', vals: RATINGS.map(s => [s, s === 'Без рейтинга' ? 'б/р' : s]), get: r => DIMS.rating.get(r) },
+  { k: 'assetClass', label: 'Класс актива', vals: AC.map(s => [s, s]), get: r => DIMS.assetClass.get(r) },
+];
+const emptyFilters = () => ({ book: [], segment: [], ccy: [], rating: [], assetClass: [] });
+function passFilters(r, v, m) {
+  for (const F of FILTERS) {
+    const sel = v.filters[F.k];
+    if (!sel || !sel.length) continue;
+    if (m.src === 'fund' && !F.fund) continue;
+    if (!sel.includes(F.get(r))) return false;
+  }
+  return true;
+}
+
+/* ---------- views ---------- */
+const DEF_OPTS = { totals: true, sort: 'value', topN: 0, units: 'mln', hideZeros: true };
+const PRESETS = [
+  { pid: 'dv01cb', name: 'DV01: кривая × бакет', measure: 'dv01', rows: ['curve'], col: 'bucket', viz: 'heatmap', opts: { sort: 'name' } },
+  { pid: 'iss20', name: 'Эмитенты топ-20', measure: 'jtd', rows: ['issuer'], col: 'segment', viz: 'bars', opts: { sort: 'value', topN: 20 } },
+  { pid: 'ocp', name: 'ОВП по валютам', measure: 'ocp', rows: ['ccy'], col: 'book', viz: 'bars', opts: { sort: 'name' } },
+  { pid: 'corprt', name: 'Корпы по рейтингам и срокам', measure: 'cs01', rows: ['rating'], col: 'maturityBucket', viz: 'heatmap', filters: { segment: ['Корп'] }, opts: { sort: 'name', units: 'th' } },
+  { pid: 'gvc', name: 'Гос vs Корп vs Секьюр', measure: 'mv', rows: ['segment', 'assetClass'], col: null, viz: 'treemap', filters: { segment: ['Гос', 'Корп', 'Секьюритизация'] }, opts: { sort: 'value' } },
+  { pid: 'fund', name: 'Фондирование по срокам', measure: 'famt', rows: ['bucket'], col: 'fundType', viz: 'bars', opts: { sort: 'name' } },
+];
+const VIZ_SHORT = { table: 'Таблица', heatmap: 'Тепл. карта', bars: 'Столбцы', treemap: 'Treemap', ladder: 'Линейка' };
+const VIZ = [['table', 'Таблица'], ['heatmap', 'Тепловая карта'], ['bars', 'Столбцы'], ['treemap', 'Treemap'], ['ladder', 'Линейка по бакетам']];
+let uidN = 0;
+const uid = () => 'v' + Date.now().toString(36) + (uidN++).toString(36);
+function presetConfig(p) {
+  return { measure: p.measure, scen: 'keyhike', rows: p.rows.slice(), col: p.col || null, viz: p.viz,
+    filters: Object.assign(emptyFilters(), JSON.parse(JSON.stringify(p.filters || {}))), opts: Object.assign({}, DEF_OPTS, p.opts || {}) };
+}
+const mkPresetView = p => Object.assign({ id: uid(), pid: p.pid, name: p.name }, presetConfig(p));
+function sanitize(v) {
+  if (!v || typeof v !== 'object') return null;
+  const out = { id: typeof v.id === 'string' ? v.id : uid(), pid: typeof v.pid === 'string' ? v.pid : null, name: String(v.name || 'Вид').slice(0, 60) };
+  out.measure = MEASURES[v.measure] ? v.measure : 'dv01';
+  out.scen = D.SCENARIOS.some(s => s.id === v.scen) ? v.scen : 'keyhike';
+  out.rows = (Array.isArray(v.rows) ? v.rows : []).filter(k => DIMS[k]).slice(0, 2);
+  if (!out.rows.length) out.rows = ['book'];
+  out.col = DIMS[v.col] ? v.col : null;
+  out.viz = VIZ.some(z => z[0] === v.viz) ? v.viz : 'table';
+  out.filters = emptyFilters();
+  FILTERS.forEach(F => { const a = v.filters && v.filters[F.k]; if (Array.isArray(a)) out.filters[F.k] = a.filter(x => F.vals.some(q => q[0] === x)); });
+  out.opts = Object.assign({}, DEF_OPTS);
+  const o = v.opts || {};
+  if (typeof o.totals === 'boolean') out.opts.totals = o.totals;
+  if (typeof o.hideZeros === 'boolean') out.opts.hideZeros = o.hideZeros;
+  if (o.sort === 'name' || o.sort === 'value') out.opts.sort = o.sort;
+  if ([0, 5, 10, 20, 30].includes(o.topN)) out.opts.topN = o.topN;
+  if (o.units === 'th' || o.units === 'mln') out.opts.units = o.units;
+  normalizeDims(out);
+  return out;
+}
+function normalizeDims(v) {
+  const m = MEASURES[v.measure];
+  const changed = [];
+  v.rows = v.rows.filter(k => { if (dimAllowed(k, m)) return true; changed.push(k); return false; });
+  if (!v.rows.length) v.rows = ['book'];
+  if (v.rows[1] === v.rows[0]) v.rows.length = 1;
+  if (v.col && (!dimAllowed(v.col, m) || v.rows.includes(v.col))) { if (!dimAllowed(v.col, m)) changed.push(v.col); v.col = null; }
+  return changed;
+}
+
+const LS_KEY = 'riskPivotStudio.views.v1', LS_THEME = 'riskPivotStudio.theme';
+let views = null, activeId = null;
+try {
+  const s = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
+  if (s && Array.isArray(s.views) && s.views.length) { views = s.views.map(sanitize).filter(Boolean); activeId = s.active; }
+} catch (e) { views = null; }
+if (!views || !views.length) views = PRESETS.map(mkPresetView);
+if (!views.some(v => v.id === activeId)) activeId = views[0].id;
+function save() { try { localStorage.setItem(LS_KEY, JSON.stringify({ views, active: activeId })); } catch (e) { /* storage unavailable */ } }
+const active = () => views.find(v => v.id === activeId) || views[0];
+
+/* ---------- engine ---------- */
+const isExplode = (v, m) => !!m.explode && [v.rows[0], v.rows[1], v.col].some(k => k === 'curve' || k === 'bucket');
+function getFacts(v, dimsOverride) {
+  const m = MEASURES[v.measure];
+  const dims = dimsOverride || [v.rows[0], v.rows[1], v.col].filter(Boolean);
+  const explode = !!m.explode && dims.some(k => k === 'curve' || k === 'bucket');
+  const recs = (m.src === 'fund' ? FUNDR : m.src === 'pos' ? POS : POS_FUND).filter(r => passFilters(r, v, m));
+  const agg = aggOf(m);
+  const facts = [];
+  recs.forEach(r => {
+    const base = {};
+    dims.forEach(k => { base[k] = DIMS[k].get(r); });
+    if (explode && isPos(r)) {
+      Object.keys(r.p.risk || {}).forEach(c => r.p.risk[c].forEach((x, i) => {
+        if (!x) return;
+        const d = Object.assign({}, base);
+        if ('curve' in d) d.curve = c;
+        if ('bucket' in d) d.bucket = BK[i];
+        facts.push({ r, d, num: x, den: 0 });
+      }));
+    } else if (agg === 'wavg') {
+      const w = m.w(r);
+      facts.push({ r, d: base, num: m.val(r, v) * w, den: w });
+    } else {
+      facts.push({ r, d: base, num: agg === 'count' ? 1 : m.val(r, v), den: 0 });
+    }
+  });
+  return facts;
+}
+const newAgg = () => ({ num: 0, den: 0, recs: new Set() });
+function addTo(a, f) { a.num += f.num; a.den += f.den; a.recs.add(f.r.id); }
+function mergeAgg(a, b) { a.num += b.num; a.den += b.den; b.recs.forEach(x => a.recs.add(x)); }
+function cellOf(map, k) { let a = map.get(k); if (!a) { a = newAgg(); map.set(k, a); } return a; }
+function aval(a, m) {
+  if (!a) return null;
+  const g = aggOf(m);
+  if (g === 'count') return a.recs.size;
+  if (g === 'wavg') return a.den ? a.num / a.den : null;
+  return a.num;
+}
+const mkNode = k => ({ key: k, label: String(k), members: [k], total: newAgg(), cells: new Map(), kids: [], kmap: new Map() });
+function natCmp(dim) {
+  const ord = DIMS[dim] && DIMS[dim].order;
+  return (a, b) => {
+    const ia = ord ? ord.indexOf(a) : -1, ib = ord ? ord.indexOf(b) : -1;
+    if (ia >= 0 && ib >= 0) return ia - ib;
+    if (ia >= 0) return -1; if (ib >= 0) return 1;
+    return String(a).localeCompare(String(b), 'ru');
+  };
+}
+function magOf(a, m) { const x = aval(a, m); return x == null ? -Infinity : (m.signed ? Math.abs(x) : x); }
+function sortNodes(nodes, dim, mode, m) {
+  if (!dim) return;
+  const nc = natCmp(dim);
+  nodes.sort(mode === 'name' ? (a, b) => nc(a.key, b.key) : (a, b) => (magOf(b.total, m) - magOf(a.total, m)) || nc(a.key, b.key));
+}
+function buildPivot(v, facts) {
+  const m = MEASURES[v.measure];
+  const d1 = v.rows[0], d2 = v.rows[1] || null, dc = v.col || null;
+  const grand = newAgg(), colTot = new Map(), map1 = new Map();
+  facts.forEach(f => {
+    const k1 = f.d[d1];
+    let n1 = map1.get(k1); if (!n1) { n1 = mkNode(k1); map1.set(k1, n1); }
+    addTo(n1.total, f); if (dc) addTo(cellOf(n1.cells, f.d[dc]), f);
+    if (d2) {
+      const k2 = f.d[d2];
+      let n2 = n1.kmap.get(k2); if (!n2) { n2 = mkNode(k2); n1.kmap.set(k2, n2); }
+      addTo(n2.total, f); if (dc) addTo(cellOf(n2.cells, f.d[dc]), f);
+    }
+    addTo(grand, f); if (dc) addTo(cellOf(colTot, f.d[dc]), f);
+  });
+  const eps = zeroEps(m, v);
+  const isZero = a => { const x = aval(a, m); return x == null || Math.abs(x) < eps; };
+  let rows = [...map1.values()];
+  rows.forEach(n => { n.kids = [...n.kmap.values()]; if (v.opts.hideZeros) n.kids = n.kids.filter(k => !isZero(k.total)); });
+  if (v.opts.hideZeros) rows = rows.filter(n => !isZero(n.total));
+  let other = null;
+  const N = v.opts.topN;
+  if (N > 0 && rows.length > N) {
+    rows.sort((a, b) => magOf(b.total, m) - magOf(a.total, m));
+    const rest = rows.slice(N); rows = rows.slice(0, N);
+    other = mkNode('__other'); other.label = 'Прочие (' + rest.length + ')'; other.members = []; other.isOther = true;
+    rest.forEach(n => {
+      other.members.push(...n.members); mergeAgg(other.total, n.total);
+      n.cells.forEach((a, k) => mergeAgg(cellOf(other.cells, k), a));
+      n.kids.forEach(kd => {
+        let t = other.kmap.get(kd.key); if (!t) { t = mkNode(kd.key); other.kmap.set(kd.key, t); }
+        mergeAgg(t.total, kd.total); kd.cells.forEach((a, k) => mergeAgg(cellOf(t.cells, k), a));
+      });
+    });
+    other.kids = [...other.kmap.values()];
+  }
+  sortNodes(rows, d1, v.opts.sort, m);
+  rows.forEach(n => sortNodes(n.kids, d2, v.opts.sort, m));
+  if (other) { sortNodes(other.kids, d2, v.opts.sort, m); rows.push(other); }
+  let cols = dc ? [...colTot.keys()] : [];
+  if (dc && v.opts.hideZeros) cols = cols.filter(k => !isZero(colTot.get(k)));
+  if (dc) {
+    const nc = natCmp(dc);
+    cols.sort(DIMS[dc].order || v.opts.sort === 'name' ? nc : (a, b) => (magOf(colTot.get(b), m) - magOf(colTot.get(a), m)) || nc(a, b));
+  }
+  return { rows, cols, colTot, grand, d1, d2, dc, m };
+}
+function leaves(P) {
+  const out = [];
+  P.rows.forEach(n => {
+    if (P.d2 && n.kids.length) n.kids.forEach(k => out.push({ label: n.label + ' · ' + k.label, node: k, cons: { [P.d1]: n.members, [P.d2]: k.members } }));
+    else if (!P.d2) out.push({ label: n.label, node: n, cons: { [P.d1]: n.members } });
+  });
+  return out;
+}
+function consTitle(cons) {
+  const ks = Object.keys(cons);
+  if (!ks.length) return 'Все записи вида';
+  return ks.map(k => { const a = cons[k]; return a.length > 3 ? DIMS[k].label + ': ' + a.length + ' знач.' : a.join(', '); }).join(' × ');
+}
+
+/* ---------- tokens / colors ---------- */
+function tokens() {
+  const cs = getComputedStyle(document.documentElement), g = n => cs.getPropertyValue(n).trim();
+  return { surface: g('--surface'), s2: g('--surface-2'), s3: g('--surface-3'), line: g('--line'), lineS: g('--line-strong'), grid: g('--grid'),
+    text: g('--text'), text2: g('--text-2'), muted: g('--muted'), accent: g('--accent'), neg: g('--div-neg'), mid: g('--div-mid'),
+    pos: g('--div-pos'), seq: g('--seq'), cats: [1, 2, 3, 4, 5, 6, 7, 8].map(i => g('--cat' + i)), font: g('--font-ui'), fontNum: g('--font-num') };
+}
+function hexRgb(h) { h = h.replace('#', ''); if (h.length === 3) h = h.split('').map(c => c + c).join(''); const n = parseInt(h, 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+function lerpHex(a, b, t) { const A = hexRgb(a), B = hexRgb(b); return 'rgb(' + A.map((x, i) => Math.round(x + (B[i] - x) * t)).join(',') + ')'; }
+function scaleColor(x, max, TK, signed) {
+  if (x == null || !max) return TK.mid;
+  const t = Math.min(1, Math.abs(x) / max);
+  const tt = 0.1 + 0.9 * Math.pow(t, 0.8);
+  return lerpHex(TK.mid, signed ? (x < 0 ? TK.neg : TK.pos) : TK.seq, tt);
+}
+const labelOn = (x, max) => max && Math.abs(x) / max > 0.55 ? '#ffffff' : null;
+
+/* ---------- rendering: header ---------- */
+$('#asof').textContent = fmtDate(D.asOf);
+(function kpis() {
+  const dv = U.sum(D.positions, p => p.dv01), cs = U.sum(D.positions, p => p.cs01);
+  const pnl = U.sum(D.positions, p => p.pnl.official) + D.fundingPnl.carry + D.fundingPnl.fx;
+  const ue = U.sum(D.positions, p => p.pnl.unexplained);
+  const k = (l, v, u, cls) => `<div class="kpi ${cls || ''}"><span>${l}</span><b class="num">${fmtNum(v / 1e6, 2)} <small>${u}</small></b></div>`;
+  $('#kpis').innerHTML = k('DV01 деска', dv, 'млн ₽/б.п.') + k('CS01 деска', cs, 'млн ₽/б.п.') + k('PnL official', pnl, 'млн ₽') + k('Unexplained', ue, 'млн ₽', 'opt-k') +
+    `<div class="kpi opt-k"><span>Позиций</span><b class="num">${D.positions.length} <small>+ ${D.funding.length} фонд.</small></b></div>`;
+})();
+
+/* theme */
+let themeMode = 'auto';
+try { const t = localStorage.getItem(LS_THEME); if (t === 'light' || t === 'dark') themeMode = t; } catch (e) {}
+function applyTheme() {
+  if (themeMode === 'auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', themeMode);
+  const lbl = { auto: 'Авто', light: 'Светлая', dark: 'Тёмная' }[themeMode];
+  $('#themeBtn').innerHTML = ICON[themeMode === 'auto' ? 'auto' : themeMode === 'light' ? 'sun' : 'moon'] + '<span class="lbl">Тема: ' + lbl + '</span>';
+  $('#themeBtn').setAttribute('aria-label', 'Тема оформления: ' + lbl + '. Нажмите, чтобы переключить');
+}
+$('#themeBtn').addEventListener('click', () => {
+  themeMode = themeMode === 'auto' ? 'light' : themeMode === 'light' ? 'dark' : 'auto';
+  try { localStorage.setItem(LS_THEME, themeMode); } catch (e) {}
+  applyTheme();
+});
+applyTheme();
+
+/* ---------- tabs ---------- */
+let renaming = null, toastTimer = null;
+function renderTabs() {
+  const nav = $('#tabs');
+  let h = '';
+  views.forEach(v => {
+    const act = v.id === activeId;
+    if (renaming === v.id) { h += `<div class="tab active editing" data-id="${v.id}"><input class="tab-input" value="${esc(v.name)}" maxlength="60" aria-label="Название вида"></div>`; return; }
+    h += `<div class="tab${act ? ' active' : ''}" data-id="${v.id}"><button type="button" class="tab-btn" role="tab" aria-selected="${act}" data-act="open"${act ? ' title="Двойной клик — переименовать"' : ''}>${ICON[v.viz]}<span>${esc(v.name)}</span></button>` +
+      (act ? `<span class="tab-tools"><button type="button" class="ib" data-act="rename" aria-label="Переименовать вид" title="Переименовать">${ICON.pencil}</button><button type="button" class="ib" data-act="dup" aria-label="Дублировать вид" title="Дублировать">${ICON.copy}</button><button type="button" class="ib" data-act="del" aria-label="Удалить вид" title="Удалить"${views.length < 2 ? ' disabled' : ''}>${ICON.trash}</button></span>` : '') + '</div>';
+  });
+  h += `<button type="button" class="tab-new" data-act="new">${ICON.plus}<span>Новый вид</span></button><span class="tabs-sp"></span>` +
+    `<button type="button" class="tab-restore" data-act="restore" title="Восстановить стандартные виды (свои виды сохранятся)" aria-label="Восстановить стандартные виды">${ICON.restore}<span class="sr">Стандартные виды</span></button>`;
+  nav.innerHTML = h;
+  if (renaming) {
+    const inp = nav.querySelector('.tab-input');
+    if (inp) {
+      inp.focus(); inp.select();
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); commitRename(inp.value); } else if (e.key === 'Escape') { e.preventDefault(); renaming = null; renderTabs(); focusActiveTab(); } });
+      inp.addEventListener('blur', () => { if (renaming) commitRename(inp.value); });
+    }
+  } else {
+    const a = nav.querySelector('.tab.active');
+    if (a && a.scrollIntoView && nav.scrollWidth > nav.clientWidth) { const l = a.offsetLeft, r = l + a.offsetWidth; if (l < nav.scrollLeft || r > nav.scrollLeft + nav.clientWidth) nav.scrollLeft = l - 40; }
+  }
+}
+function focusActiveTab() { const b = $('#tabs .tab.active .tab-btn'); if (b) b.focus(); }
+function commitRename(val) {
+  const v = views.find(x => x.id === renaming);
+  renaming = null;
+  if (v) { const n = val.trim().slice(0, 60); if (n) v.name = n; }
+  save(); renderTabs(); renderMainOnly(); focusActiveTab();
+}
+function toast(msg, undo) {
+  const t = $('#toast');
+  t.innerHTML = '<span>' + esc(msg) + '</span>' + (undo ? '<button type="button">Отменить</button>' : '');
+  t.hidden = false;
+  if (undo) t.querySelector('button').addEventListener('click', () => { undo(); t.hidden = true; });
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, undo ? 8000 : 3500);
+}
+$('#tabs').addEventListener('click', e => {
+  const b = e.target.closest('[data-act]'); if (!b) return;
+  const act = b.dataset.act, tab = b.closest('.tab'), id = tab && tab.dataset.id;
+  if (act === 'open') { if (id !== activeId) { activeId = id; renaming = null; renderAll(); focusActiveTab(); } }
+  else if (act === 'rename') { renaming = activeId; renderTabs(); }
+  else if (act === 'dup') {
+    const src = active(), i = views.indexOf(src);
+    const cp = sanitize(JSON.parse(JSON.stringify(src))); cp.id = uid(); cp.pid = null; cp.name = (src.name + ' (копия)').slice(0, 60);
+    views.splice(i + 1, 0, cp); activeId = cp.id; renaming = cp.id; renderAll();
+  } else if (act === 'del') {
+    if (views.length < 2) return;
+    const i = views.findIndex(v => v.id === activeId), gone = views[i];
+    views.splice(i, 1); activeId = (views[i] || views[i - 1]).id; renderAll(); focusActiveTab();
+    toast('Вид «' + gone.name + '» удалён', () => { views.splice(i, 0, gone); activeId = gone.id; renderAll(); });
+  } else if (act === 'new') {
+    let n = 1; while (views.some(v => v.name === 'Новый вид ' + n)) n++;
+    const nv = sanitize({ name: 'Новый вид ' + n, measure: 'dv01', rows: ['book'], col: null, viz: 'bars', opts: { sort: 'value' } });
+    views.push(nv); activeId = nv.id; renaming = nv.id; renderAll();
+  } else if (act === 'restore') {
+    PRESETS.forEach((p, idx) => {
+      const ex = views.find(v => v.pid === p.pid);
+      if (ex) { Object.assign(ex, presetConfig(p)); ex.name = p.name; }
+      else views.splice(Math.min(idx, views.length), 0, mkPresetView(p));
+    });
+    if (!views.some(v => v.id === activeId)) activeId = views[0].id;
+    renderAll(); toast('Стандартные виды восстановлены');
+  }
+});
+$('#tabs').addEventListener('dblclick', e => { const b = e.target.closest('.tab.active .tab-btn'); if (b) { renaming = activeId; renderTabs(); } });
+
+/* ---------- builder ---------- */
+function dimOptions(sel, m, disabledKeys, none) {
+  let h = none ? `<option value=""${!sel ? ' selected' : ''}>— нет —</option>` : '';
+  DIM_GROUPS.forEach(([g, keys]) => {
+    h += `<optgroup label="${g}">`;
+    keys.forEach(k => {
+      const na = !dimAllowed(k, m), dis = na || (disabledKeys || []).includes(k);
+      h += `<option value="${k}"${k === sel ? ' selected' : ''}${dis ? ' disabled' : ''}>${DIMS[k].label}${na ? ' (н/п)' : ''}</option>`;
+    });
+    h += '</optgroup>';
+  });
+  return h;
+}
+function renderBuilder() {
+  const v = active(), m = MEASURES[v.measure];
+  const ae = document.activeElement, fid = ae && ae.closest && ae.closest('#builder') && ae.dataset.fid ? ae.dataset.fid : null;
+  const fsel = fid ? `[data-fid="${fid}"]` + (ae.dataset.f ? `[data-f="${CSS.escape(ae.dataset.f)}"]` : '') + (ae.dataset.v ? `[data-v="${CSS.escape(ae.dataset.v)}"]` : '') : null;
+  const sw = (fid_, on, label) => `<label class="opt"><span>${label}</span><span class="sw"><input type="checkbox" data-fid="${fid_}"${on ? ' checked' : ''}><span></span></span></label>`;
+  const unitsNA = aggOf(m) !== 'sum';
+  let h = '';
+  h += `<section class="b-sec"><h3 class="b-h">Строки <span class="lnk" style="color:var(--muted);font-weight:400">1–2, по порядку</span></h3>` +
+    `<div class="slot"><span class="slot-n">1</span><span class="sel"><select data-fid="r0" aria-label="Строки, уровень 1">${dimOptions(v.rows[0], m, [], false)}</select></span><span></span></div>` +
+    `<div class="slot"><span class="slot-n">2</span><span class="sel"><select data-fid="r1" aria-label="Строки, уровень 2">${dimOptions(v.rows[1], m, [v.rows[0]], true)}</select></span>` +
+    `<button type="button" class="ib" data-fid="swap" aria-label="Поменять уровни строк местами" title="Поменять местами"${v.rows[1] ? '' : ' disabled'}>${ICON.swap}</button></div></section>`;
+  h += `<section class="b-sec"><h3 class="b-h">Столбцы <span class="lnk" style="color:var(--muted);font-weight:400">0–1</span></h3><div class="slot one"><span class="sel"><select data-fid="col" aria-label="Столбцы">${dimOptions(v.col, m, v.rows, true)}</select></span></div></section>`;
+  h += `<section class="b-sec"><h3 class="b-h">Мера</h3><div class="slot one"><span class="sel"><select data-fid="measure" aria-label="Мера">` +
+    MEASURE_GROUPS.map(([g, ks]) => `<optgroup label="${g}">` + ks.map(k => `<option value="${k}"${k === v.measure ? ' selected' : ''}>${MEASURES[k].label}${k === 'scen' ? ': пресет…' : ''}</option>`).join('') + '</optgroup>').join('') +
+    `</select></span></div>` +
+    (v.measure === 'scen' ? `<div class="slot one"><span class="sel"><select data-fid="scen" aria-label="Сценарий">` + D.SCENARIOS.map(s => `<option value="${s.id}"${s.id === v.scen ? ' selected' : ''}>${esc(s.name)}</option>`).join('') + `</select></span></div><div class="b-note">Итог сценария по деску: <span class="num">${fmtNum(scen(v.scen).total / 1e6, 1)}</span> млн ₽</div>` : '') +
+    `</section>`;
+  h += `<section class="b-sec"><h3 class="b-h">Визуализация</h3><div class="viz-grid">` + VIZ.map(([k, l]) => `<button type="button" class="viz-b" data-fid="viz" data-v="${k}" aria-pressed="${v.viz === k}" title="${l}" aria-label="${l}">${ICON[k]}<span aria-hidden="true">${VIZ_SHORT[k]}</span></button>`).join('') + '</div></section>';
+  h += `<section class="b-sec"><h3 class="b-h">Параметры</h3>` +
+    sw('totals', v.opts.totals, 'Показывать итоги') + sw('hideZeros', v.opts.hideZeros, 'Скрывать нули') +
+    `<div class="opt"><span>Сортировка</span><span class="seg" role="group" aria-label="Сортировка"><button type="button" data-fid="sort" data-v="value" aria-pressed="${v.opts.sort === 'value'}" title="По |значению|">значение</button><button type="button" data-fid="sort" data-v="name" aria-pressed="${v.opts.sort === 'name'}" title="По названию / естественному порядку">название</button></span></div>` +
+    `<div class="opt"><span>Топ-N строк</span><span class="sel sm" style="width:118px"><select data-fid="topN" aria-label="Топ-N строк">` + [[0, 'все'], [5, 'топ-5'], [10, 'топ-10'], [20, 'топ-20'], [30, 'топ-30']].map(([n, l]) => `<option value="${n}"${v.opts.topN === n ? ' selected' : ''}>${l}${n ? ' + Прочие' : ''}</option>`).join('') + `</select></span></div>` +
+    `<div class="opt"><span>Единицы</span><span class="seg" role="group" aria-label="Единицы"><button type="button" data-fid="units" data-v="mln" aria-pressed="${v.opts.units === 'mln'}"${unitsNA ? ' disabled' : ''}>млн</button><button type="button" data-fid="units" data-v="th" aria-pressed="${v.opts.units === 'th'}"${unitsNA ? ' disabled' : ''}>тыс</button></span></div>` +
+    `</section>`;
+  h += `<section class="b-sec"><h3 class="b-h">Фильтры${FILTERS.some(F => v.filters[F.k].length) ? '<button type="button" class="lnk" data-fid="fclear">Сбросить все</button>' : ''}</h3>`;
+  FILTERS.forEach(F => {
+    const off = m.src === 'fund' && !F.fund, sel = v.filters[F.k];
+    h += `<div class="f-grp${off ? ' off' : ''}" role="group" aria-label="Фильтр: ${F.label}"><div class="f-top"><span>${F.label}</span>` +
+      (off ? '<em>не применяется к фондированию</em>' : sel.length ? `<button type="button" class="lnk" data-fid="fall" data-f="${F.k}">все (${sel.length} выбр.)</button>` : '<em>все</em>') +
+      `</div><div class="chips">` + F.vals.map(([val, lab]) => `<button type="button" class="chip" data-fid="chip" data-f="${F.k}" data-v="${esc(val)}" aria-pressed="${sel.includes(val)}"${off ? ' disabled' : ''}>${esc(lab)}</button>`).join('') + '</div></div>';
+  });
+  h += '</section>';
+  h += `<div class="b-foot"><span>Изменения сохраняются в вид «${esc(v.name)}» автоматически.</span>` + (v.pid ? `<button type="button" class="lnk" data-fid="reset">Вернуть исходную настройку вида</button>` : '') + '</div>';
+  const b = $('#builder');
+  b.innerHTML = h;
+  if (fsel) { const el = b.querySelector(fsel) || b.querySelector(`[data-fid="${fid}"]`); if (el && !el.disabled) el.focus(); }
+}
+function update(fn) {
+  const v = active();
+  fn(v);
+  const lost = normalizeDims(v);
+  if (lost.length) toast('Измерение «' + lost.map(k => DIMS[k].label).join('», «') + '» недоступно для этой меры и убрано из вида');
+  save(); renderBuilder(); renderMainOnly();
+  if (fnTouchesTabs) { renderTabs(); fnTouchesTabs = false; }
+}
+let fnTouchesTabs = false;
+const builderEl = $('#builder');
+builderEl.addEventListener('change', e => {
+  const t = e.target, f = t.dataset.fid; if (!f) return;
+  if (f === 'measure') update(v => { v.measure = t.value; });
+  else if (f === 'scen') update(v => { v.scen = t.value; });
+  else if (f === 'r0') update(v => { const old = v.rows[0], k = t.value; if (v.rows[1] === k) v.rows[1] = old; v.rows[0] = k; if (v.col === k) v.col = null; });
+  else if (f === 'r1') update(v => { if (t.value) { v.rows[1] = t.value; if (v.col === t.value) v.col = null; } else v.rows.length = 1; });
+  else if (f === 'col') update(v => { v.col = t.value || null; });
+  else if (f === 'topN') update(v => { v.opts.topN = +t.value; });
+  else if (f === 'totals' || f === 'hideZeros') update(v => { v.opts[f] = t.checked; });
+});
+builderEl.addEventListener('click', e => {
+  const t = e.target.closest('[data-fid]'); if (!t || t.tagName === 'SELECT' || t.tagName === 'INPUT') return;
+  const f = t.dataset.fid;
+  if (f === 'chip') update(v => { const a = v.filters[t.dataset.f], val = t.dataset.v, i = a.indexOf(val); if (i >= 0) a.splice(i, 1); else a.push(val); });
+  else if (f === 'fall') update(v => { v.filters[t.dataset.f] = []; });
+  else if (f === 'fclear') update(v => { v.filters = emptyFilters(); });
+  else if (f === 'viz') { fnTouchesTabs = true; update(v => { v.viz = t.dataset.v; }); }
+  else if (f === 'sort') update(v => { v.opts.sort = t.dataset.v; });
+  else if (f === 'units') update(v => { v.opts.units = t.dataset.v; });
+  else if (f === 'swap') update(v => { if (v.rows[1]) v.rows = [v.rows[1], v.rows[0]]; });
+  else if (f === 'reset') { const v = active(), p = PRESETS.find(x => x.pid === v.pid); if (p) { fnTouchesTabs = true; update(x => { Object.assign(x, presetConfig(p)); }); toast('Вид возвращён к исходной настройке'); } }
+});
+$('#btToggle').addEventListener('click', () => {
+  const app = $('#app'), on = !app.classList.contains('builder-open');
+  app.classList.toggle('builder-open', on); renderToggle();
+});
+function renderToggle() {
+  const on = $('#app').classList.contains('builder-open');
+  $('#btToggle').innerHTML = ICON.sliders + '<span>' + (on ? 'Скрыть конструктор' : 'Конструктор вида') + '</span>';
+  $('#btToggle').setAttribute('aria-expanded', on);
+}
+
+/* ---------- main ---------- */
+let curFacts = [], ladderFacts = [], P = null, chart = null;
+const collapsed = new Set();
+function renderSummary(v, m) {
+  const rowsPh = v.rows.map(k => DIMS[k].by).join(' → ') + (v.col ? ' × ' + DIMS[v.col].by : '');
+  const parts = [];
+  const fb = v.filters.book;
+  parts.push('книги: ' + (fb.length ? fb.map(k => D.BOOKS[k].name).join(', ') : 'все'));
+  FILTERS.forEach(F => {
+    if (F.k === 'book' || !v.filters[F.k].length) return;
+    if (m.src === 'fund' && !F.fund) return;
+    const nm = { segment: 'сегменты', ccy: 'валюты', rating: 'рейтинги', assetClass: 'классы' }[F.k];
+    parts.push(nm + ': ' + v.filters[F.k].join(', '));
+  });
+  if (v.opts.topN) parts.push('топ-' + v.opts.topN);
+  $('#crumb').innerHTML = `<b>${esc(measureLabel(m, v))}</b> по ${esc(rowsPh)}` + parts.map(p => `<span class="sep">·</span>${esc(p)}`).join('') + `<span class="sep">·</span><span class="u">${esc(unitLabel(m, v))}</span>`;
+  const g = aval(P.grand, m);
+  $('#grand').innerHTML = `<span>Итого</span><b class="num${m.signed && g < 0 ? '' : ''}">${fmtM(g, m, v)}</b><small>${esc(unitLabel(m, v))}</small>`;
+}
+function renderHints(v, m) {
+  const hs = [];
+  const dims = [v.rows[0], v.rows[1], v.col];
+  const cb = dims.some(k => k === 'curve' || k === 'bucket');
+  if (cb && m.explode) hs.push('DV01 разложен по key-rate бакетам кривых (position.risk): одна позиция может попадать в несколько ячеек; сумма ячеек равна DV01 позиции.');
+  else if (cb && m.src === 'fund') hs.push('Для фондирования «Бакет» — пиллар, ближайший к сроку сделки, «Кривая» — кривая ставки фондирования в её валюте.');
+  else if (cb) hs.push('«Кривая» и «Бакет» раскладывают риск только для DV01. Для меры «' + measureLabel(m, v) + '» позиция целиком относится к своей основной кривой (с наибольшим |DV01|, иначе — кривой валюты) и к бакету, ближайшему к сроку погашения.');
+  if (v.viz === 'ladder' && m.explode && !cb) hs.push('Линейка по бакетам раскладывает DV01 по key-rate бакетам, хотя в строках/столбцах вида бакета нет.');
+  if (v.measure === 'pnl') hs.push('PnL official включает стоимость фондирования и FX-переоценку валютного фондирования — это отдельные записи «Фондирование» (тип фондирования, контрагент).');
+  if (v.measure === 'scen') hs.push('Сценарий считается через util.runScenario: дельта по key-rate бакетам + выпуклость облигаций + спреды + FX линейно. FX-переоценка валютного фондирования — отдельные записи «Фондирование».');
+  if (v.measure === 'ocp') hs.push('ОВП = FX-дельта позиций + валютное фондирование, в рублёвом эквиваленте по курсу на дату. Лимиты (в валюте): USD 25 млн, CNY 1 500 млн, EUR 10 млн.');
+  if (m.src === 'fund') hs.push('Для мер фондирования доступны измерения книга, деск, трейдер, валюта, кривая, бакет, срок, тип фондирования и контрагент; фильтры по сегменту, рейтингу и классу актива не применяются.');
+  if (v.viz === 'treemap' && v.col) hs.push('Treemap не использует столбцы: площадь — |значение| по строкам, цвет — знак и величина.');
+  if (v.viz === 'heatmap' && !v.col && !v.rows[1]) hs.push('Для тепловой карты добавьте второе измерение — строки 2 или столбцы.');
+  if (aggOf(m) === 'wavg' && (v.viz === 'treemap')) hs.push('Ставка — средневзвешенная величина, площадь treemap для неё условна.');
+  $('#hints').innerHTML = hs.map(t => `<div class="hint">${ICON.info}<span>${esc(t)}</span></div>`).join('');
+}
+function renderPivot(v, m) {
+  const showTot = v.opts.totals, hasCol = !!P.dc, wavg = aggOf(m) === 'wavg';
+  const cons = [];
+  const max = [0, 0];
+  const bump = (lvl, x) => { if (x != null) max[lvl] = Math.max(max[lvl], Math.abs(x)); };
+  P.rows.forEach(n => {
+    if (hasCol) P.cols.forEach(c => bump(0, aval(n.cells.get(c), m))); else bump(0, aval(n.total, m));
+    n.kids.forEach(k => { if (hasCol) P.cols.forEach(c => bump(1, aval(k.cells.get(c), m))); else bump(1, aval(k.total, m)); });
+  });
+  const shade = (x, lvl) => {
+    if (x == null || !max[lvl] || x === 0) return '';
+    const t = Math.min(1, Math.abs(x) / max[lvl]), a = Math.round(6 + 46 * Math.pow(t, 0.8));
+    const col = m.signed ? (x < 0 ? 'var(--div-neg)' : 'var(--div-pos)') : 'var(--seq)';
+    return ` style="background:color-mix(in srgb, ${col} ${a}%, transparent)"`;
+  };
+  const cell = (agg, c, lvl, cls) => {
+    const x = aval(agg, m);
+    if (!agg || x == null) return `<td class="empty${cls ? ' ' + cls : ''}">·</td>`;
+    cons.push(c);
+    return `<td class="num${cls ? ' ' + cls : ''}" tabindex="0" data-i="${cons.length - 1}"${lvl >= 0 ? shade(x, lvl) : ''}>${fmtM(x, m, v)}</td>`;
+  };
+  const corner = DIMS[P.d1].label + (P.d2 ? ' → ' + DIMS[P.d2].label : '') + (hasCol ? ' ╲ ' + DIMS[P.dc].label : '');
+  let h = `<table class="pv"><thead><tr><th class="corner" scope="col">${esc(corner)}</th>`;
+  if (hasCol) { P.cols.forEach(c => { h += `<th scope="col">${esc(c)}</th>`; }); if (showTot) h += '<th scope="col" class="tot">Итого</th>'; }
+  else h += `<th scope="col">${esc(measureLabel(m, v))}, ${esc(unitLabel(m, v))}</th>`;
+  h += '</tr></thead><tbody>';
+  P.rows.forEach(n => {
+    const ck = activeId + '|' + n.key, isCol = collapsed.has(ck), hasK = P.d2 && n.kids.length;
+    const base = { [P.d1]: n.members };
+    h += `<tr class="l1${hasK ? ' has-kids' : ''}${n.isOther ? ' other' : ''}"><th scope="row" title="${esc(n.label)}">` +
+      (hasK ? `<button type="button" class="caret" data-ck="${esc(ck)}" aria-expanded="${!isCol}" aria-label="${isCol ? 'Развернуть' : 'Свернуть'} ${esc(n.label)}">${ICON.chev}</button>` : '') + esc(n.label) + '</th>';
+    if (hasCol) { P.cols.forEach(c => { h += cell(n.cells.get(c), Object.assign({ [P.dc]: [c] }, base), hasK ? -1 : 0); }); if (showTot) h += cell(n.total, base, -1, 'tot'); }
+    else h += cell(n.total, base, hasK ? -1 : 0);
+    h += '</tr>';
+    if (hasK && !isCol) n.kids.forEach(k => {
+      const kb = Object.assign({}, base, { [P.d2]: k.members });
+      h += `<tr class="l2"><th scope="row" title="${esc(k.label)}">${esc(k.label)}</th>`;
+      if (hasCol) { P.cols.forEach(c => { h += cell(k.cells.get(c), Object.assign({ [P.dc]: [c] }, kb), 1); }); if (showTot) h += cell(k.total, kb, -1, 'tot'); }
+      else h += cell(k.total, kb, 1);
+      h += '</tr>';
+    });
+  });
+  h += '</tbody>';
+  if (showTot) {
+    h += '<tfoot><tr><th scope="row">Итого</th>';
+    if (hasCol) { P.cols.forEach(c => { h += cell(P.colTot.get(c), { [P.dc]: [c] }, -1); }); h += cell(P.grand, {}, -1, 'tot'); }
+    else h += cell(P.grand, {}, -1);
+    h += '</tr></tfoot>';
+  }
+  h += '</table>';
+  if (!P.rows.length) h = '<div class="empty-state">Нет данных для выбранных фильтров. Ослабьте фильтры или выключите «Скрывать нули».</div>';
+  const wrap = $('#pvWrap');
+  wrap.innerHTML = h;
+  wrap._cons = cons;
+  const nLeaf = P.rows.reduce((s, n) => s + (n.kids.length || 1), 0);
+  $('#pvMeta').textContent = P.rows.length + (P.d2 ? ' групп · ' + nLeaf + ' строк' : ' строк') + (hasCol ? ' × ' + P.cols.length + ' столбцов' : '') + ' · ' + unitLabel(m, v) + (wavg ? ' (ср.-взв. по объёму)' : '');
+  $('#pvTools').innerHTML = P.d2 ? `<button type="button" class="lnk" data-pv="expand">Развернуть все</button><button type="button" class="lnk" data-pv="collapse">Свернуть все</button>` : '<span class="legend-note">Клик по ячейке — позиции</span>';
+}
+$('#pvWrap').addEventListener('click', e => {
+  const c = e.target.closest('.caret');
+  if (c) { const k = c.dataset.ck; if (collapsed.has(k)) collapsed.delete(k); else collapsed.add(k); renderPivot(active(), MEASURES[active().measure]); const nb = $(`#pvWrap .caret[data-ck="${CSS.escape(k)}"]`); if (nb) nb.focus(); return; }
+  const td = e.target.closest('td[data-i]');
+  if (td) { const cs = $('#pvWrap')._cons[+td.dataset.i]; openDrill(cs, curFacts, td); }
+});
+$('#pvWrap').addEventListener('keydown', e => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const td = e.target.closest('td[data-i]'); if (!td) return;
+  e.preventDefault(); openDrill($('#pvWrap')._cons[+td.dataset.i], curFacts, td);
+});
+$('#pvTools').addEventListener('click', e => {
+  const b = e.target.closest('[data-pv]'); if (!b) return;
+  P.rows.forEach(n => { const k = activeId + '|' + n.key; if (b.dataset.pv === 'collapse') collapsed.add(k); else collapsed.delete(k); });
+  renderPivot(active(), MEASURES[active().measure]);
+});
+
+/* ---------- charts ---------- */
+function baseOpt(TK) {
+  return {
+    animation: !REDUCED, animationDuration: 250,
+    textStyle: { fontFamily: TK.font, color: TK.text2, fontSize: 11.5 },
+    tooltip: { confine: true, backgroundColor: TK.surface, borderColor: TK.lineS, borderWidth: 1, padding: [7, 10], textStyle: { color: TK.text, fontSize: 12, fontFamily: TK.font }, extraCssText: 'box-shadow:0 4px 16px rgba(0,0,0,.14);border-radius:4px;' },
+  };
+}
+const ttRow = (dot, name, val, unit) => `<div style="display:flex;gap:14px;justify-content:space-between;align-items:center"><span>${dot ? `<span class="sw-dot" style="background:${dot}"></span>` : ''}${esc(name)}</span><b style="font-family:var(--font-num);font-weight:500">${val}</b></div>` + (unit ? `<div style="color:var(--muted);font-size:11px;text-align:right">${esc(unit)}</div>` : '');
+function limitKeys(keys, magFn, n) {
+  if (keys.length <= n) return { keep: keys, other: [] };
+  const s = keys.slice().sort((a, b) => magFn(b) - magFn(a));
+  const keepSet = new Set(s.slice(0, n - 1));
+  return { keep: keys.filter(k => keepSet.has(k)), other: keys.filter(k => !keepSet.has(k)) };
+}
+function axisCommon(TK) {
+  return { splitNumber: window.innerWidth < 700 ? 3 : 5, axisLine: { lineStyle: { color: TK.lineS } }, axisTick: { show: false }, axisLabel: { color: TK.muted, fontSize: 11, hideOverlap: true }, splitLine: { lineStyle: { color: TK.grid } } };
+}
+function heatOption(v, m, TK) {
+  const xs = [], ys = [], data = [];
+  const narrow = window.innerWidth < 700;
+  if (P.dc) {
+    P.cols.forEach(c => xs.push(c));
+    leaves(P).forEach(l => ys.push(l));
+    ys.forEach((l, yi) => xs.forEach((c, xi) => { const x = aval(l.node.cells.get(c), m); if (x != null) data.push({ xi, yi, x, cons: Object.assign({ [P.dc]: [c] }, l.cons), title: l.label + ' × ' + c }); }));
+  } else if (P.d2) {
+    const set = new Set(); P.rows.forEach(n => n.kids.forEach(k => set.add(k.key)));
+    [...set].sort(natCmp(P.d2)).forEach(k => xs.push(k));
+    P.rows.forEach(n => ys.push({ label: n.label, node: n, cons: { [P.d1]: n.members } }));
+    ys.forEach((l, yi) => xs.forEach((k, xi) => { const kd = l.node.kids.find(q => q.key === k); const x = kd ? aval(kd.total, m) : null; if (x != null) data.push({ xi, yi, x, cons: Object.assign({ [P.d2]: [k] }, l.cons), title: l.label + ' × ' + k }); }));
+  } else {
+    xs.push('Итого');
+    P.rows.forEach(n => ys.push({ label: n.label, node: n, cons: { [P.d1]: n.members } }));
+    ys.forEach((l, yi) => { const x = aval(l.node.total, m); if (x != null) data.push({ xi: 0, yi, x, cons: l.cons, title: l.label }); });
+  }
+  const mx = data.reduce((s, d) => Math.max(s, Math.abs(d.x)), 0) || 1;
+  const showLbl = xs.length * ys.length <= 360 && !(narrow && xs.length > 6);
+  const items = data.map(d => ({ value: [d.xi, d.yi, d.x], cons: d.cons, title: d.title, label: { color: labelOn(d.x, mx) || TK.text } }));
+  const height = Math.max(240, ys.length * (narrow ? 24 : 30) + 80);
+  const AX = axisCommon(TK);
+  return { height, opt: Object.assign(baseOpt(TK), {
+    tooltip: Object.assign(baseOpt(TK).tooltip, { formatter: p => '<div style="font-weight:600;margin-bottom:4px">' + esc(p.data.title) + '</div>' + ttRow(null, measureLabel(m, v), fmtM(p.data.value[2], m, v), unitLabel(m, v)) }),
+    grid: { left: 8, right: 16, top: 26, bottom: 44, containLabel: true },
+    xAxis: { type: 'category', data: xs, position: 'top', axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: TK.text2, fontSize: 11, interval: 0, rotate: narrow && xs.length > 5 ? 45 : 0 }, splitArea: { show: false } },
+    yAxis: { type: 'category', data: ys.map(l => l.label), inverse: true, axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: TK.text2, fontSize: 11, width: narrow ? 90 : 190, overflow: 'truncate' } },
+    visualMap: { show: true, type: 'continuous', min: m.signed ? -mx : 0, max: mx, dimension: 2, orient: 'horizontal', left: 'center', bottom: 4, itemHeight: 180, itemWidth: 10, calculable: false,
+      inRange: { color: m.signed ? [TK.neg, TK.mid, TK.pos] : [TK.mid, TK.seq] }, textStyle: { color: TK.muted, fontSize: 11 }, formatter: x => fmtAxis(x, m, v), text: [fmtAxis(mx, m, v), fmtAxis(m.signed ? -mx : 0, m, v)] },
+    series: [{ type: 'heatmap', data: items, itemStyle: { borderColor: TK.surface, borderWidth: 2 }, label: { show: showLbl, fontFamily: TK.fontNum, fontSize: 10.5, formatter: p => fmtM(p.data.value[2], m, v) }, emphasis: { itemStyle: { borderColor: TK.text, borderWidth: 1 } } }],
+  }) };
+}
+function barOption(v, m, TK) {
+  const narrow = window.innerWidth < 700;
+  let cats, series = [], catDim;
+  const stack = aggOf(m) !== 'wavg';
+  if (P.dc) {
+    cats = leaves(P); catDim = P.d2 ? P.d2 : P.d1;
+    const { keep, other } = limitKeys(P.cols, k => magOf(P.colTot.get(k), m), 8);
+    keep.forEach((k, i) => series.push({ name: k, color: TK.cats[i % 8], data: cats.map(c => { const x = aval(c.node.cells.get(k), m); return { value: x == null ? 0 : x, cons: Object.assign({ [P.dc]: [k] }, c.cons), title: c.label + ' × ' + k }; }) }));
+    if (other.length) series.push({ name: 'Прочие (' + other.length + ')', color: TK.muted, data: cats.map(c => ({ value: other.reduce((s, k) => s + (aval(c.node.cells.get(k), m) || 0), 0), cons: Object.assign({ [P.dc]: other }, c.cons), title: c.label + ' × прочие' })) });
+  } else if (P.d2) {
+    cats = P.rows.map(n => ({ label: n.label, node: n, cons: { [P.d1]: n.members } })); catDim = P.d1;
+    const tot = new Map(); P.rows.forEach(n => n.kids.forEach(k => tot.set(k.key, (tot.get(k.key) || 0) + Math.abs(aval(k.total, m) || 0))));
+    const keys = [...tot.keys()].sort(natCmp(P.d2));
+    const { keep, other } = limitKeys(keys, k => tot.get(k), 8);
+    keep.forEach((k, i) => series.push({ name: k, color: TK.cats[i % 8], data: cats.map(c => { const kd = c.node.kids.find(q => q.key === k); return { value: kd ? aval(kd.total, m) : 0, cons: Object.assign({ [P.d2]: [k] }, c.cons), title: c.label + ' · ' + k }; }) }));
+    if (other.length) series.push({ name: 'Прочие (' + other.length + ')', color: TK.muted, data: cats.map(c => ({ value: c.node.kids.filter(q => other.includes(q.key)).reduce((s, q) => s + (aval(q.total, m) || 0), 0), cons: Object.assign({ [P.d2]: other }, c.cons), title: c.label + ' · прочие' })) });
+  } else {
+    cats = P.rows.map(n => ({ label: n.label, node: n, cons: { [P.d1]: n.members } })); catDim = P.d1;
+    series.push({ name: measureLabel(m, v), single: true, data: cats.map(c => { const x = aval(c.node.total, m); return { value: x, cons: c.cons, title: c.label, itemStyle: { color: m.signed ? (x < 0 ? TK.neg : TK.pos) : TK.seq } }; }) });
+  }
+  const horiz = !DIMS[catDim].ordinal;
+  const AX = axisCommon(TK);
+  const valAxis = Object.assign({ type: 'value' }, AX, { axisLine: { show: false }, axisLabel: Object.assign({}, AX.axisLabel, { formatter: x => fmtAxis(x, m, v) }) });
+  const catAxis = { type: 'category', data: cats.map(c => c.label), inverse: horiz, axisLine: { lineStyle: { color: TK.lineS } }, axisTick: { show: false },
+    axisLabel: { color: TK.text2, fontSize: 11, interval: 0, width: horiz ? (narrow ? 96 : 180) : undefined, overflow: horiz ? 'truncate' : undefined, rotate: !horiz && cats.length > 8 && narrow ? 45 : 0 } };
+  const legend = series.length >= 2;
+  const height = horiz ? Math.max(220, cats.length * 26 + (legend ? 90 : 56)) : 360;
+  const ser = series.map(s => ({ type: 'bar', name: s.name, stack: stack && series.length > 1 ? 'a' : undefined, data: s.data, itemStyle: s.single ? undefined : { color: s.color }, color: s.color,
+    barMaxWidth: horiz ? 18 : 34, barCategoryGap: '30%', emphasis: { focus: 'series' }, cursor: 'pointer' }));
+  return { height, opt: Object.assign(baseOpt(TK), {
+    legend: legend ? { type: 'scroll', top: 0, left: 0, itemWidth: 10, itemHeight: 10, icon: 'rect', textStyle: { color: TK.text2, fontSize: 11.5 }, pageTextStyle: { color: TK.muted } } : undefined,
+    tooltip: Object.assign(baseOpt(TK).tooltip, { trigger: 'axis', axisPointer: { type: 'shadow', shadowStyle: { color: TK.grid, opacity: .6 } },
+      formatter: ps => { const t = ps[0] ? ps[0].axisValueLabel : ''; let tot = 0; const rows = ps.filter(p => p.value != null && p.value !== 0).map(p => { tot += +p.value; return ttRow(p.color && typeof p.color === 'string' ? p.color : null, p.seriesName, fmtM(p.value, m, v)); }).join('');
+        return '<div style="font-weight:600;margin-bottom:4px">' + esc(t) + '</div>' + (rows || '<span style="color:var(--muted)">нет данных</span>') + (ps.length > 1 && stack ? '<div style="border-top:1px solid var(--line);margin-top:4px;padding-top:4px">' + ttRow(null, 'Итого', fmtM(tot, m, v)) + '</div>' : '') + '<div style="color:var(--muted);font-size:11px;margin-top:3px">' + esc(unitLabel(m, v)) + ' · клик — позиции</div>'; } }),
+    grid: { left: 8, right: 20, top: legend ? 34 : 12, bottom: 8, containLabel: true },
+    xAxis: horiz ? valAxis : catAxis, yAxis: horiz ? catAxis : valAxis,
+    series: ser,
+  }) };
+}
+function treemapOption(v, m, TK) {
+  const all = [];
+  P.rows.forEach(n => { all.push(aval(n.total, m) || 0); n.kids.forEach(k => all.push(aval(k.total, m) || 0)); });
+  const leafVals = P.d2 ? P.rows.flatMap(n => n.kids.map(k => aval(k.total, m) || 0)) : P.rows.map(n => aval(n.total, m) || 0);
+  const mx = leafVals.reduce((s, x) => Math.max(s, Math.abs(x)), 0) || 1;
+  const node = (n, cons, title, x) => ({ name: n.label, value: Math.abs(x), raw: x, cons, title, itemStyle: { color: scaleColor(x, mx, TK, m.signed) }, label: { color: labelOn(x, mx) || TK.text } });
+  const data = P.rows.map(n => {
+    const x = aval(n.total, m) || 0, cons = { [P.d1]: n.members };
+    if (P.d2 && n.kids.length) {
+      return { name: n.label, value: n.kids.reduce((s, k) => s + Math.abs(aval(k.total, m) || 0), 0), raw: x, cons, title: n.label, itemStyle: { color: TK.s3, borderColor: TK.s3 },
+        children: n.kids.map(k => node(k, Object.assign({ [P.d2]: k.members }, cons), n.label + ' · ' + k.label, aval(k.total, m) || 0)) };
+    }
+    return node(n, cons, n.label, x);
+  }).filter(d => d.value > 0);
+  return { height: window.innerWidth < 700 ? 360 : 460, opt: Object.assign(baseOpt(TK), {
+    tooltip: Object.assign(baseOpt(TK).tooltip, { formatter: p => '<div style="font-weight:600;margin-bottom:4px">' + esc(p.data.title || p.name) + '</div>' + ttRow(null, measureLabel(m, v), fmtM(p.data.raw, m, v), unitLabel(m, v)) }),
+    series: [{ type: 'treemap', data, roam: false, nodeClick: false, breadcrumb: { show: false }, left: 0, right: 0, top: 0, bottom: 0, squareRatio: 1.2,
+      label: { show: true, fontSize: 11.5, lineHeight: 15, overflow: 'truncate', formatter: p => p.name + '\n{n|' + fmtM(p.data.raw, m, v) + '}', rich: { n: { fontFamily: TK.fontNum, fontSize: 11 } } },
+      upperLabel: { show: true, height: 22, color: TK.text, fontWeight: 600, fontSize: 11.5, formatter: p => p.data.raw == null ? '' : p.name + '   ' + fmtM(p.data.raw, m, v) },
+      itemStyle: { borderColor: TK.surface, borderWidth: 1, gapWidth: 1 },
+      levels: [{ upperLabel: { show: false }, itemStyle: { borderColor: TK.surface, borderWidth: 0, gapWidth: 3 } }, { itemStyle: { borderColor: TK.surface, borderWidth: 2, gapWidth: 1 } }, { itemStyle: { borderColor: TK.surface, borderWidth: 1, gapWidth: 1 } }],
+      emphasis: { itemStyle: { borderColor: TK.text } } }],
+  }) };
+}
+function ladderOption(v, m, TK) {
+  const sDim = v.rows[0] !== 'bucket' ? v.rows[0] : (v.rows[1] || (v.col && v.col !== 'bucket' ? v.col : null));
+  const lv = Object.assign({}, v, { rows: sDim ? [sDim] : ['bucket'], col: sDim ? 'bucket' : null });
+  ladderFacts = getFacts(v, sDim ? [sDim, 'bucket'] : ['bucket']);
+  const LP = buildPivot(Object.assign({}, lv, { opts: Object.assign({}, v.opts, { topN: 0, hideZeros: true }) }), ladderFacts);
+  const series = [];
+  const bAgg = b => { if (!sDim) { const n = LP.rows.find(r => r.key === b); return n ? n.total : null; } return LP.colTot.get(b); };
+  if (sDim) {
+    const keys = LP.rows.map(n => n.key);
+    const { keep, other } = limitKeys(keys, k => magOf(LP.rows.find(n => n.key === k).total, m), 8);
+    keep.forEach((k, i) => { const n = LP.rows.find(r => r.key === k); series.push({ type: 'bar', stack: aggOf(m) === 'wavg' ? undefined : 'a', name: n.label, color: TK.cats[i % 8], itemStyle: { color: TK.cats[i % 8] }, barMaxWidth: 34,
+      data: BK.map(b => { const x = aval(n.cells.get(b), m); return { value: x == null ? 0 : x, cons: { [sDim]: [k], bucket: [b] }, title: n.label + ' × ' + b }; }) }); });
+    if (other.length) series.push({ type: 'bar', stack: 'a', name: 'Прочие (' + other.length + ')', color: TK.muted, itemStyle: { color: TK.muted }, barMaxWidth: 34,
+      data: BK.map(b => ({ value: LP.rows.filter(n => other.includes(n.key)).reduce((s, n) => s + (aval(n.cells.get(b), m) || 0), 0), cons: { [sDim]: other, bucket: [b] }, title: 'Прочие × ' + b })) });
+  }
+  series.push({ type: 'line', name: 'Итого по бакету', color: TK.text2, symbol: 'circle', symbolSize: 5, lineStyle: { width: 1.5, color: TK.text2 }, itemStyle: { color: TK.text2 }, z: 5,
+    data: BK.map(b => { const x = aval(bAgg(b), m); return { value: x == null ? 0 : x, cons: { bucket: [b] }, title: 'Бакет ' + b + ' · все' }; }) });
+  const AX = axisCommon(TK);
+  const legend = series.length >= 2;
+  return { height: 380, opt: Object.assign(baseOpt(TK), {
+    legend: legend ? { type: 'scroll', top: 0, left: 0, itemWidth: 10, itemHeight: 10, textStyle: { color: TK.text2, fontSize: 11.5 }, pageTextStyle: { color: TK.muted } } : undefined,
+    tooltip: Object.assign(baseOpt(TK).tooltip, { trigger: 'axis', axisPointer: { type: 'shadow', shadowStyle: { color: TK.grid, opacity: .6 } },
+      formatter: ps => '<div style="font-weight:600;margin-bottom:4px">Бакет ' + esc(ps[0].axisValueLabel) + '</div>' + ps.filter(p => p.value).map(p => ttRow(typeof p.color === 'string' ? p.color : null, p.seriesName, fmtM(p.value, m, v))).join('') + '<div style="color:var(--muted);font-size:11px;margin-top:3px">' + esc(unitLabel(m, v)) + ' · клик — позиции</div>' }),
+    grid: { left: 8, right: 20, top: legend ? 34 : 12, bottom: 8, containLabel: true },
+    xAxis: { type: 'category', data: BK, axisLine: { lineStyle: { color: TK.lineS } }, axisTick: { show: false }, axisLabel: { color: TK.text2, fontSize: 11 } },
+    yAxis: Object.assign({ type: 'value' }, AX, { axisLine: { show: false }, axisLabel: Object.assign({}, AX.axisLabel, { formatter: x => fmtAxis(x, m, v) }) }),
+    series,
+  }), seriesDim: sDim };
+}
+function renderViz(v, m) {
+  const card = $('#vizCard');
+  const name = (VIZ.find(z => z[0] === v.viz) || [])[1];
+  if (v.viz === 'table' || typeof echarts === 'undefined') { card.hidden = true; return; }
+  card.hidden = false;
+  if (!P.rows.length) { card.hidden = true; return; }
+  const TK = tokens();
+  let res;
+  if (v.viz === 'heatmap') res = heatOption(v, m, TK);
+  else if (v.viz === 'bars') res = barOption(v, m, TK);
+  else if (v.viz === 'treemap') res = treemapOption(v, m, TK);
+  else res = ladderOption(v, m, TK);
+  $('#vizTitle').textContent = name;
+  let meta = '';
+  if (v.viz === 'ladder') meta = (res.seriesDim ? 'по ' + DIMS[res.seriesDim].by + ' · ' : '') + BK.length + ' бакетов';
+  else if (v.viz === 'treemap') meta = 'площадь — |значение|, цвет — знак';
+  $('#vizMeta').textContent = meta;
+  $('#vizLegend').innerHTML = m.signed && (v.viz === 'heatmap' || v.viz === 'treemap' || (v.viz === 'bars' && !P.dc && !P.d2))
+    ? `<span><span class="sw-dot" style="background:var(--div-neg)"></span>отрицательные</span><span><span class="sw-dot" style="background:var(--div-pos)"></span>положительные</span><span>клик — позиции</span>`
+    : '<span>клик — позиции</span>';
+  const el = $('#chart');
+  el.style.height = res.height + 'px';
+  if (!chart) {
+    chart = echarts.init(el, null, { renderer: 'canvas' });
+    chart.on('click', p => { const d = p.data; if (d && d.cons) openDrill(d.cons, active().viz === 'ladder' ? ladderFacts : curFacts, null); });
+    if (window.ResizeObserver) new ResizeObserver(() => chart && chart.resize()).observe(el);
+  }
+  chart.resize();
+  chart.setOption(res.opt, true);
+  el.setAttribute('aria-label', name + ': ' + measureLabel(m, v) + ', ' + unitLabel(m, v));
+}
+function renderMainOnly() {
+  const v = active(), m = MEASURES[v.measure];
+  curFacts = getFacts(v);
+  P = buildPivot(v, curFacts);
+  renderSummary(v, m); renderHints(v, m); renderPivot(v, m); renderViz(v, m);
+}
+function renderAll() { save(); renderTabs(); renderBuilder(); renderMainOnly(); }
+
+/* ---------- drill-down ---------- */
+let drill = null, drillReturn = null;
+function openDrill(cons, facts, from) {
+  const v = active(), m = MEASURES[v.measure];
+  const ks = Object.keys(cons);
+  const by = new Map();
+  facts.forEach(f => {
+    if (!ks.every(k => cons[k].includes(f.d[k]))) return;
+    let e = by.get(f.r.id); if (!e) { e = { r: f.r, num: 0, den: 0 }; by.set(f.r.id, e); }
+    e.num += f.num; e.den += f.den;
+  });
+  let list = [...by.values()];
+  if (aggOf(m) === 'sum') list = list.filter(e => Math.abs(e.num) > 1e-6);
+  drill = { cons, list, v, m, explode: facts === ladderFacts ? !!m.explode : isExplode(v, m), sort: { k: 'val', dir: -1 } };
+  drillReturn = from || document.activeElement;
+  renderDrill();
+  $('#drawer').classList.add('open'); $('#drawer').setAttribute('aria-hidden', 'false'); $('#scrim').classList.add('open');
+  $('#drClose').focus();
+}
+function closeDrill() {
+  $('#drawer').classList.remove('open'); $('#drawer').setAttribute('aria-hidden', 'true'); $('#scrim').classList.remove('open');
+  if (drillReturn && drillReturn.isConnected) drillReturn.focus();
+  drill = null;
+}
+function renderDrill() {
+  const { list, v, m, cons } = drill;
+  const a = aggOf(m), sc = unitsScale(v);
+  const tot = a === 'count' ? list.length : a === 'wavg' ? (list.reduce((s, e) => s + e.den, 0) ? list.reduce((s, e) => s + e.num, 0) / list.reduce((s, e) => s + e.den, 0) : null) : list.reduce((s, e) => s + e.num, 0);
+  const cols = [
+    { k: 'name', l: 'Позиция', get: e => e.r.name, s: 1 },
+    { k: 'book', l: 'Книга', get: e => D.BOOKS[e.r.book].name, s: 1 },
+    { k: 'ccy', l: 'Вал.', get: e => e.r.ccy, s: 1 },
+    { k: 'mat', l: 'Погашение', get: e => e.r.maturity || '', r: 1, fmt: e => fmtDate(e.r.maturity) },
+  ];
+  if (a === 'wavg') {
+    cols.push({ k: 'w', l: 'Объём, млн ₽', r: 1, get: e => e.den, fmt: e => fmtNum(e.den / 1e6, 1) });
+    cols.push({ k: 'val', l: 'Ставка, %', r: 1, get: e => e.num / e.den, fmt: e => fmtNum(e.num / e.den, 2) });
+  } else if (a === 'count') {
+    cols.push({ k: 'val', l: 'MV, млн ₽', r: 1, get: e => isPos(e.r) ? e.r.p.mvRub : 0, fmt: e => isPos(e.r) ? fmtNum(e.r.p.mvRub / 1e6, 1) : '—' });
+  } else {
+    if (drill.explode) cols.push({ k: 'full', l: 'DV01 позиции', r: 1, get: e => e.r.p.dv01, fmt: e => fmtM(e.r.p.dv01, m, v) });
+    cols.push({ k: 'val', l: drill.explode ? 'Вклад в ячейку' : measureLabel(m, v), r: 1, get: e => e.num, fmt: e => fmtM(e.num, m, v), sgn: 1 });
+    cols.push({ k: 'share', l: 'Доля', r: 1, get: e => tot ? e.num / tot : 0, fmt: e => tot ? fmtNum(e.num / tot * 100, 1) + '%' : '—' });
+  }
+  const sCol = cols.find(c => c.k === drill.sort.k) || cols[cols.length - 1];
+  const dir = drill.sort.dir;
+  const sorted = list.slice().sort((x, y) => {
+    const A = sCol.get(x), B = sCol.get(y);
+    if (sCol.s) return dir * String(A).localeCompare(String(B), 'ru');
+    if (sCol.k === 'val' || sCol.k === 'share' || sCol.k === 'full') return dir * (Math.abs(A) - Math.abs(B)) || dir * (A - B);
+    return dir * (A < B ? -1 : A > B ? 1 : 0);
+  });
+  const nPos = list.filter(e => isPos(e.r)).length, nF = list.length - nPos;
+  let h = `<div class="dr-h"><div class="dr-k">Позиции ячейки · ${esc(measureLabel(m, v))}</div><button type="button" class="dr-close" id="drClose" aria-label="Закрыть панель">${ICON.x}</button>` +
+    `<h2 class="dr-t" id="drTitle">${esc(consTitle(cons))}</h2><div class="dr-sub">${Object.keys(cons).map(k => esc(DIMS[k].label) + ': ' + esc(cons[k].length > 6 ? cons[k].slice(0, 6).join(', ') + ' …' : cons[k].join(', '))).join(' · ') || 'без ограничений по измерениям'}</div></div>`;
+  h += `<div class="dr-stats"><div><span>${a === 'wavg' ? 'Ставка ср.-взв.' : 'Итого по ячейке'}</span><b class="num">${fmtM(tot, m, v)} <small style="font-size:12px;color:var(--muted);font-family:var(--font-ui)">${esc(unitLabel(m, v))}</small></b></div><div><span>Записей</span><b class="num">${nPos}${nF ? ' + ' + nF + ' фонд.' : ''}</b></div></div>`;
+  h += '<div class="dr-body"><table class="dt"><thead><tr>' + cols.map(c => `<th class="${c.r ? 'r' : ''}" scope="col" aria-sort="${c.k === sCol.k ? (dir < 0 ? 'descending' : 'ascending') : 'none'}"><button type="button" data-sk="${c.k}">${esc(c.l)}${c.k === sCol.k ? `<span class="ar">${dir < 0 ? '▼' : '▲'}</span>` : ''}</button></th>`).join('') + '</tr></thead><tbody>';
+  sorted.forEach(e => {
+    h += '<tr>' + cols.map(c => {
+      if (c.k === 'name') return `<td><div class="nm">${esc(e.r.name)}</div><div class="sb">${esc(e.r.sub || '')}</div></td>`;
+      if (c.r) { const val = c.fmt ? c.fmt(e) : c.get(e); return `<td class="r num${c.sgn && e.num < 0 ? '' : ''}">${val}</td>`; }
+      return `<td>${esc(c.get(e))}</td>`;
+    }).join('') + '</tr>';
+  });
+  if (!sorted.length) h += `<tr><td colspan="${cols.length}" style="color:var(--muted);padding:20px 10px">Нет записей с ненулевым вкладом.</td></tr>`;
+  h += '</tbody><tfoot><tr>' + cols.map((c, i) => i === 0 ? `<td>Подытог · ${list.length}</td>` : c.k === 'val' ? `<td class="r num">${fmtM(tot, m, v)}</td>` : c.k === 'share' ? '<td class="r num">100,0%</td>' : '<td></td>').join('') + '</tr></tfoot></table></div>';
+  h += `<div class="dr-foot">Esc — закрыть · сортировка по клику на заголовок · ${esc(unitLabel(m, v))}</div>`;
+  const dr = $('#drawer');
+  dr.innerHTML = h;
+  $('#drClose').addEventListener('click', closeDrill);
+}
+$('#drawer').addEventListener('click', e => {
+  const b = e.target.closest('[data-sk]'); if (!b || !drill) return;
+  const k = b.dataset.sk;
+  if (drill.sort.k === k) drill.sort.dir *= -1; else drill.sort = { k, dir: ['name', 'book', 'ccy', 'mat'].includes(k) ? 1 : -1 };
+  renderDrill();
+  const nb = $(`#drawer [data-sk="${k}"]`); if (nb) nb.focus();
+});
+$('#scrim').addEventListener('click', closeDrill);
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && drill) { e.preventDefault(); closeDrill(); }
+  if (e.key === 'Tab' && drill) {
+    const f = [...$('#drawer').querySelectorAll('button')]; if (!f.length) return;
+    if (e.shiftKey && document.activeElement === f[0]) { e.preventDefault(); f[f.length - 1].focus(); }
+    else if (!e.shiftKey && document.activeElement === f[f.length - 1]) { e.preventDefault(); f[0].focus(); }
+  }
+});
+
+/* ---------- theme reactivity ---------- */
+const rerenderChart = () => { const v = active(); renderViz(v, MEASURES[v.measure]); };
+if (window.matchMedia) { const mq = matchMedia('(prefers-color-scheme: dark)'); (mq.addEventListener ? mq.addEventListener('change', rerenderChart) : mq.addListener(rerenderChart)); }
+new MutationObserver(rerenderChart).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+let rzT = null, lastNarrow = window.innerWidth < 700;
+window.addEventListener('resize', () => { clearTimeout(rzT); rzT = setTimeout(() => { const n = window.innerWidth < 700; if (n !== lastNarrow) { lastNarrow = n; rerenderChart(); } }, 150); });
+
+renderToggle();
+renderAll();
+})();
+</script>

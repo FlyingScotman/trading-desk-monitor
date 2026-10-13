@@ -1,0 +1,961 @@
+<title>Scenario &amp; PnL Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: инструментальный верстак — шапка с переключателем режимов; «Сценарии» = узкий пульт-редактор слева + живые результаты справа;
+   «PnL explain» = строка сверки, водопад + история, иерархия, матрица rates explain. */
+:root{
+  --font-sans:"IBM Plex Sans","PT Sans","Segoe UI",Roboto,Arial,sans-serif;
+  --font-mono:"IBM Plex Mono","PT Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
+  --bg:#eaefee; --surface:#f8faf9; --surface-2:#e1e8e7; --line:#cfd9d8; --line-strong:#a9b9b8;
+  --fg:#11201f; --fg-2:#43585a; --fg-3:#6d8183;
+  --accent:#0c5a60; --accent-hover:#08474c; --accent-soft:#d3e6e5; --on-accent:#ffffff;
+  --pos:#2a6fcf; --neg:#cf3a3a; --heat-0:#eef1f1; --on-strong:#ffffff;
+  --c1:#2a78d6; --c2:#eb6834; --c3:#1baf7a; --c4:#eda100;
+  --good:#0ca30c; --warn:#fab219; --serious:#ec835a; --crit:#d03b3b;
+  --shadow:0 1px 0 rgba(17,32,31,.04);
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0b1315; --surface:#111c1f; --surface-2:#18262a; --line:#223338; --line-strong:#364b51;
+    --fg:#d9e5e5; --fg-2:#9db1b3; --fg-3:#6d8487;
+    --accent:#4fb6b4; --accent-hover:#6ccac8; --accent-soft:#163a3c; --on-accent:#041617;
+    --pos:#4d8fe6; --neg:#e36262; --heat-0:#172327; --on-strong:#ffffff;
+    --c1:#3987e5; --c2:#d95926; --c3:#199e70; --c4:#c98500;
+    --good:#0ca30c; --warn:#fab219; --serious:#ec835a; --crit:#d03b3b;
+    --shadow:none;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0b1315; --surface:#111c1f; --surface-2:#18262a; --line:#223338; --line-strong:#364b51;
+  --fg:#d9e5e5; --fg-2:#9db1b3; --fg-3:#6d8487;
+  --accent:#4fb6b4; --accent-hover:#6ccac8; --accent-soft:#163a3c; --on-accent:#041617;
+  --pos:#4d8fe6; --neg:#e36262; --heat-0:#172327; --on-strong:#ffffff;
+  --c1:#3987e5; --c2:#d95926; --c3:#199e70; --c4:#c98500;
+  --good:#0ca30c; --warn:#fab219; --serious:#ec835a; --crit:#d03b3b;
+  --shadow:none;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font:13px/1.45 var(--font-sans);margin:0}
+button,input,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.num,.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+.muted{color:var(--fg-3)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+
+/* ---------- шапка ---------- */
+.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:30;background:var(--surface);border-bottom:1px solid var(--line);
+  display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;padding:8px 16px}
+.brand{display:flex;align-items:baseline;gap:10px;min-width:0;flex-wrap:wrap}
+.brand b{font-family:var(--font-mono);font-weight:600;font-size:14px;letter-spacing:.02em}
+.brand b i{font-style:normal;color:var(--accent)}
+.brand span{color:var(--fg-3);font-size:12px}
+.tag{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-family:var(--font-mono);border:1px dashed var(--line-strong);
+  color:var(--fg-2);padding:1px 6px;border-radius:2px;white-space:nowrap}
+.seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:3px;overflow:hidden;background:var(--surface-2)}
+.seg button{border:0;background:transparent;padding:5px 14px;cursor:pointer;font-weight:500;color:var(--fg-2)}
+.seg button+button{border-left:1px solid var(--line-strong)}
+.seg button[aria-selected="true"],.seg button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.seg.small button{padding:2px 8px;font-size:11px;font-family:var(--font-mono)}
+.top .spacer{flex:1}
+.btn{border:1px solid var(--line-strong);background:var(--surface);padding:4px 10px;border-radius:3px;cursor:pointer;color:var(--fg)}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.btn.primary:hover{background:var(--accent-hover)}
+.btn.ghost{background:transparent}
+
+main{padding:16px 16px 40px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:3px;box-shadow:var(--shadow);min-width:0}
+.ph{display:flex;align-items:baseline;justify-content:space-between;gap:8px 12px;flex-wrap:wrap;padding:8px 12px;border-bottom:1px solid var(--line)}
+.ph h2,.ph h3{margin:0;font:600 11px/1.3 var(--font-mono);text-transform:uppercase;letter-spacing:.07em;color:var(--fg-2)}
+.ph .hint{font-size:11px;color:var(--fg-3)}
+.pb{padding:10px 12px}
+.scroll{overflow-x:auto;max-width:100%}
+
+/* ---------- сценарии ---------- */
+.scen{display:grid;grid-template-columns:minmax(0,430px) minmax(0,1fr);gap:16px;align-items:start}
+.builder{position:sticky;top:calc(env(safe-area-inset-top,0px) + var(--hdr,52px) + 12px);max-height:calc(100vh - var(--hdr,52px) - 28px);overflow-y:auto;overscroll-behavior:contain}
+.sect{border-bottom:1px solid var(--line)}
+.sect:last-child{border-bottom:0}
+.sect>.ph{border-bottom:0;padding-bottom:4px}
+.presets{list-style:none;margin:0;padding:0 8px 8px;display:grid;gap:1px}
+.preset{width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:baseline;text-align:left;border:1px solid transparent;
+  background:transparent;padding:4px 6px;border-radius:2px;cursor:pointer}
+.preset:hover{background:var(--surface-2)}
+.preset[aria-current="true"]{border-color:var(--accent);background:var(--accent-soft)}
+.preset .v{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:12px;color:var(--fg-2)}
+.preset-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px}
+.del{border:0;background:transparent;color:var(--fg-3);cursor:pointer;padding:2px 6px;font-size:14px;line-height:1}
+.del:hover{color:var(--crit)}
+.subcap{font:600 10px/1 var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--fg-3);padding:8px 14px 4px}
+
+.ctabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:0 12px 8px}
+.ctab{border:1px solid var(--line);background:var(--surface);border-radius:2px;padding:4px 6px;text-align:left;cursor:pointer;display:grid;gap:1px;min-width:0}
+.ctab .n{font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ctab .m{font:11px var(--font-mono);color:var(--fg-3);display:flex;justify-content:space-between;align-items:center;gap:4px}
+.ctab svg{width:52px;height:14px;flex:none}
+.ctab[aria-selected="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.ctab.linked:not([aria-selected="true"]){border-style:dashed;border-color:var(--accent)}
+.editor-wrap{padding:0 12px}
+.editor-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px}
+.editor-head .cn{font-weight:600}
+.editor-head .cn small{font-weight:400;color:var(--fg-3);margin-left:6px}
+#cedit{width:100%;height:auto;display:block;touch-action:none;user-select:none;-webkit-user-select:none;cursor:ns-resize;background:var(--surface)}
+#cedit .g{stroke:var(--line);stroke-width:1}
+#cedit .g0{stroke:var(--line-strong);stroke-width:1.2}
+#cedit text{fill:var(--fg-3);font:9px var(--font-mono)}
+#cedit text.val{fill:var(--fg);font:600 9px var(--font-mono)}
+#cedit text.bk{fill:var(--fg-2);font:10px var(--font-mono)}
+#cedit .bp{fill:color-mix(in oklab,var(--pos) 55%,transparent)}
+#cedit .bn{fill:color-mix(in oklab,var(--neg) 55%,transparent)}
+#cedit .line{fill:none;stroke:var(--accent);stroke-width:1.6}
+#cedit .other{fill:none;stroke:var(--fg-3);stroke-width:1;opacity:.45}
+#cedit .peer{fill:none;stroke:var(--accent);stroke-width:1;stroke-dasharray:3 3;opacity:.7}
+#cedit .h circle{fill:var(--surface);stroke:var(--accent);stroke-width:2}
+#cedit .h:hover circle,#cedit .h.act circle{fill:var(--accent)}
+#cedit .h:focus{outline:none}
+#cedit .h:focus-visible circle{stroke:var(--fg);stroke-width:3}
+#cedit .hit{fill:transparent}
+.shapes{display:flex;flex-wrap:wrap;gap:4px;margin:8px 0 6px}
+.shapes .btn{padding:3px 8px;font-size:12px}
+.shapes .btn[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft)}
+.row{display:grid;grid-template-columns:118px minmax(0,1fr) 70px;align-items:center;gap:8px;padding:2px 0}
+.row label{font-size:12px;color:var(--fg-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row output{font:12px var(--font-mono);font-variant-numeric:tabular-nums;text-align:right}
+input[type=range]{width:100%;accent-color:var(--accent);margin:0;height:18px}
+.chk{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--fg-2);cursor:pointer;padding:4px 0}
+.chk input{accent-color:var(--accent);margin:0}
+.note{font-size:11px;color:var(--fg-3);margin:4px 0 0}
+.save{display:flex;gap:6px;flex-wrap:wrap}
+.save input{flex:1;min-width:140px;border:1px solid var(--line-strong);background:var(--surface);padding:4px 8px;border-radius:3px}
+
+.res{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:12px}
+.s12{grid-column:span 12}.s7{grid-column:span 7}.s5{grid-column:span 5}.s6{grid-column:span 6}
+@media (max-width:1320px){.s7,.s5,.s6{grid-column:span 12}}
+@media (max-width:1100px){.scen{grid-template-columns:minmax(0,1fr)}.builder{position:static;max-height:none;overflow:visible}}
+.hero{display:flex;flex-wrap:wrap;gap:6px 22px;align-items:flex-end;padding:12px}
+.hero .lbl{font:600 10px var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--fg-3)}
+.hero .big{font:600 34px/1.05 var(--font-mono);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.hero .big small{font-size:15px;font-weight:500;color:var(--fg-2);margin-left:4px}
+.hero .side{display:grid;gap:2px;font-size:12px;color:var(--fg-2)}
+.scname{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-weight:600}
+.badge{font:500 10px var(--font-mono);padding:1px 5px;border-radius:2px;background:var(--surface-2);color:var(--fg-2);border:1px solid var(--line)}
+.badge.edit{background:var(--accent-soft);border-color:var(--accent);color:var(--fg)}
+
+.dec{display:grid;grid-template-columns:110px minmax(0,1fr) 92px;gap:4px 10px;align-items:center;padding:4px 12px 12px;font-size:12px}
+.dec .tot{font-weight:600;border-top:1px solid var(--line);padding-top:5px}
+.dbar{position:relative;height:12px}
+.dbar::before{content:"";position:absolute;left:50%;top:-3px;bottom:-3px;border-left:1px solid var(--line-strong)}
+.dbar span{position:absolute;top:0;bottom:0;border-radius:2px}
+.dbar span.p{background:var(--pos)}
+.dbar span.n{background:var(--neg)}
+.r{text-align:right}
+
+table.t{border-collapse:collapse;width:100%;font-size:12px}
+table.t th,table.t td{padding:3px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+table.t thead th{font:600 10px/1.25 var(--font-mono);text-transform:uppercase;letter-spacing:.05em;color:var(--fg-3);text-align:right;vertical-align:bottom;background:var(--surface)}
+table.t thead th.l,table.t td.l{text-align:left}
+table.t td.n{text-align:right;font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+table.t tr.tot td{font-weight:600;border-top:1px solid var(--line-strong)}
+table.t tbody tr:hover td{background:color-mix(in oklab,var(--surface-2) 70%,transparent)}
+table.t td.z{color:var(--fg-3)}
+.heat td.n{min-width:58px}
+.heat td.cell{cursor:pointer}
+.heat td.cell:hover{outline:1px solid var(--fg);outline-offset:-1px}
+.heat td.sel{outline:2px solid var(--accent);outline-offset:-2px}
+.cmp th button{border:0;background:transparent;cursor:pointer;font:inherit;color:inherit;text-transform:inherit;letter-spacing:inherit;text-align:right;white-space:normal;max-width:112px;padding:0}
+.cmp th button:hover{color:var(--accent)}
+.cmp th.cur{color:var(--fg);box-shadow:inset 0 -2px 0 var(--accent)}
+.cmp th.cur button{color:var(--fg)}
+
+.rev{list-style:none;margin:0;padding:6px 12px 10px;display:grid;gap:6px}
+.rev li{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:8px;align-items:baseline}
+.rev .k{font:600 11px var(--font-mono);color:var(--fg-3)}
+.rev .v{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:12px}
+.rev .sh{font-size:11px;color:var(--fg-3)}
+.rev button.lnk{border:0;background:none;padding:0;color:var(--fg);cursor:pointer;text-decoration:underline;text-decoration-color:var(--line-strong);text-underline-offset:2px;text-align:left}
+.rev button.lnk:hover{text-decoration-color:var(--accent)}
+.revfoot{border-top:1px solid var(--line);padding:8px 12px;font-size:12px;color:var(--fg-2)}
+
+.bars{display:grid;grid-template-columns:minmax(0,150px) minmax(0,1fr) 84px;gap:5px 10px;align-items:center;padding:8px 12px 12px;font-size:12px}
+.bars .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ---------- explain ---------- */
+.ex{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:12px}
+.recon{display:flex;flex-wrap:wrap;gap:12px 28px;align-items:flex-end;padding:12px}
+.recon .kpi{display:grid;gap:2px;justify-items:start}
+.recon .kpi .lbl{font:600 10px var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--fg-3)}
+.recon .kpi .val{font:600 24px/1.1 var(--font-mono);font-variant-numeric:tabular-nums}
+.recon .kpi .val small{font-size:12px;color:var(--fg-2);font-weight:500;margin-left:3px}
+.recon .op{font:400 20px var(--font-mono);color:var(--fg-3);align-self:center}
+.datebox{display:grid;gap:4px}
+.datebox select{border:1px solid var(--line-strong);background:var(--surface);padding:4px 6px;border-radius:3px;font-family:var(--font-mono)}
+.wip{display:flex;gap:8px;align-items:flex-start;padding:8px 12px;border-top:1px dashed var(--line-strong);font-size:12px;color:var(--fg-2);background:color-mix(in oklab,var(--accent-soft) 45%,transparent)}
+.wip b{font:600 10px var(--font-mono);letter-spacing:.07em;text-transform:uppercase;color:var(--accent);white-space:nowrap;padding-top:1px}
+.chip{display:inline-flex;align-items:center;gap:4px;font:500 11px/1 var(--font-sans);padding:3px 7px 3px 5px;border-radius:2px;border:1px solid;white-space:nowrap}
+.chip svg{width:11px;height:11px;flex:none}
+.chip.ok{border-color:color-mix(in oklab,var(--good) 60%,transparent);background:color-mix(in oklab,var(--good) 12%,transparent)}
+.chip.warn{border-color:color-mix(in oklab,var(--warn) 70%,transparent);background:color-mix(in oklab,var(--warn) 16%,transparent)}
+.chip.crit{border-color:color-mix(in oklab,var(--crit) 70%,transparent);background:color-mix(in oklab,var(--crit) 14%,transparent)}
+.chip.info{border-color:var(--line-strong);background:var(--surface-2)}
+.chip.ok svg{fill:var(--good)}.chip.warn svg{fill:var(--warn)}.chip.crit svg{fill:var(--crit)}.chip.info svg{fill:var(--fg-3)}
+.chart{width:100%;height:300px}
+#wf{height:440px}
+@media (max-width:1320px){#wf{height:340px}}
+.chart.sm{height:120px}
+.chart.md{height:150px}
+.cap{font:600 10px var(--font-mono);letter-spacing:.07em;text-transform:uppercase;color:var(--fg-3);padding:6px 12px 0}
+.histnote{font-size:11px;color:var(--fg-3);padding:0 12px 8px}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}
+.toolbar input[type=number]{width:64px;border:1px solid var(--line-strong);background:var(--surface);padding:2px 6px;border-radius:3px;font-family:var(--font-mono)}
+.hier td.l{position:sticky;left:0;background:var(--surface);z-index:1;min-width:260px;max-width:360px;white-space:normal}
+.hier thead th.l{position:sticky;left:0;z-index:2}
+.hier tr.desk td{background:var(--surface-2);font-weight:600}
+.hier tr.desk td.l{background:var(--surface-2)}
+.hier tr.book td{font-weight:600}
+.hier tr.fund td.l{color:var(--fg-2);font-style:italic}
+.hier td.uc{font-weight:600}
+.tg{border:0;background:transparent;cursor:pointer;padding:0 4px 0 0;color:var(--fg-2);font:inherit;display:inline-flex;align-items:center;gap:4px;text-align:left}
+.tg svg{width:9px;height:9px;fill:currentColor;transition:transform .12s;flex:none}
+.tg[aria-expanded="true"] svg{transform:rotate(90deg)}
+.ind1{padding-left:14px}.ind2{padding-left:30px}
+.bnote{display:flex;gap:4px;align-items:flex-start;font-size:11px;color:var(--fg-2);font-weight:400;margin-top:2px}
+.bnote svg{width:10px;height:10px;fill:var(--warn);flex:none;margin-top:2px}
+.psub{font-size:11px;color:var(--fg-3);font-weight:400}
+.chips{display:flex;flex-wrap:wrap;gap:4px}
+.chips button{border:1px solid var(--line);background:var(--surface);border-radius:2px;padding:2px 8px;font-size:12px;cursor:pointer}
+.chips button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.rx th.cv{text-align:left}
+.rx tr.mv td{color:var(--fg-2)}
+.rx tr.dv td{color:var(--fg-3)}
+.rx tr.pl td{font-weight:600}
+.rx tr.pl td,.rx tr.first td{border-top:0}
+.rx tr.cvsep td{border-bottom:1px solid var(--line-strong)}
+.rx td.rl{font:10px var(--font-mono);text-transform:uppercase;letter-spacing:.05em;color:var(--fg-3);text-align:left}
+.empty{padding:28px 16px;text-align:center;color:var(--fg-2);font-size:13px}
+.empty b{display:block;color:var(--fg);margin-bottom:4px}
+
+#tip{position:fixed;z-index:50;pointer-events:none;background:var(--surface);color:var(--fg);border:1px solid var(--line-strong);
+  border-radius:3px;padding:6px 8px;font-size:12px;max-width:300px;box-shadow:0 4px 14px rgba(0,0,0,.18)}
+#tip .tn{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+@media (max-width:640px){
+  .row{grid-template-columns:92px minmax(0,1fr) 62px}
+  .hero .big{font-size:28px}
+  .recon .op{display:none}
+  .bars{grid-template-columns:minmax(0,110px) minmax(0,1fr) 72px}
+  .dec{grid-template-columns:90px minmax(0,1fr) 80px}
+  .ctabs{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .brand span{display:none}
+  .hier td.l{min-width:170px;max-width:200px}
+}
+</style>
+
+<header class="top" id="top">
+  <div class="brand"><b>Scenario <i>&amp;</i> PnL Lab</b><span>FI-деск · сценарии и explain</span><span class="tag" title="Все цифры вымышленные">Тестовые данные</span></div>
+  <div class="seg" role="tablist" aria-label="Режим">
+    <button id="mode-scen" role="tab" aria-selected="true" aria-controls="view-scen">Сценарии</button>
+    <button id="mode-expl" role="tab" aria-selected="false" aria-controls="view-expl">PnL explain</button>
+  </div>
+  <div class="spacer"></div>
+  <span class="mono muted" id="asof"></span>
+  <button class="btn ghost" id="theme-btn" title="Тема оформления">Тема: авто</button>
+</header>
+
+<main>
+  <!-- ===================== СЦЕНАРИИ ===================== -->
+  <section id="view-scen" class="scen" role="tabpanel" aria-labelledby="mode-scen">
+    <aside class="panel builder" aria-label="Конструктор сценария">
+      <div class="sect">
+        <div class="ph"><h2>Сценарии</h2><span class="hint">PnL, млн ₽</span></div>
+        <ul class="presets" id="preset-list"></ul>
+        <div id="custom-wrap" hidden><div class="subcap">Свои</div><ul class="presets" id="custom-list"></ul></div>
+      </div>
+
+      <div class="sect">
+        <div class="ph"><h2>Кривые · шок по бакетам</h2><span class="hint">б.п., шаг 5</span></div>
+        <div class="ctabs" id="ctabs" role="tablist" aria-label="Кривая"></div>
+        <div class="editor-wrap">
+          <div class="editor-head">
+            <div class="cn" id="cur-name"></div>
+            <div class="seg small" id="scale-seg" aria-label="Шкала редактора">
+              <button data-d="100" aria-pressed="false">±100</button><button data-d="250" aria-pressed="false">±250</button><button data-d="500" aria-pressed="false">±500</button>
+            </div>
+          </div>
+          <svg id="cedit" viewBox="0 0 400 200" aria-label="Редактор формы шока: перетащите маркеры по бакетам"></svg>
+          <div class="shapes" id="shapes">
+            <button class="btn" data-shape="par">Параллельный</button>
+            <button class="btn" data-shape="steep">Steepener</button>
+            <button class="btn" data-shape="flat">Flattener</button>
+            <button class="btn" data-shape="fly">Butterfly</button>
+            <button class="btn" data-shape="zero">Сброс</button>
+          </div>
+          <div class="row"><label for="mag">Амплитуда</label><input type="range" id="mag" min="-500" max="500" step="5" value="100"><output id="mag-o" class="num" for="mag"></output></div>
+          <label class="chk"><input type="checkbox" id="link" checked> Связать RUB-кривые (ОФЗ / RUONIA / КС двигаются вместе)</label>
+          <p class="note" style="margin-bottom:10px">Перетащите маркер или кликните в колонку бакета. Клавиатура: ↑/↓ ±5 б.п., PgUp/PgDn ±25.</p>
+        </div>
+      </div>
+
+      <div class="sect">
+        <div class="ph"><h2>FX-шок</h2><span class="hint">+ = ослабление рубля</span></div>
+        <div class="pb" id="fx-box" style="padding-top:2px"></div>
+      </div>
+
+      <div class="sect">
+        <div class="ph"><h2>Кредитные спреды</h2><span class="hint">аддитивно, б.п.</span></div>
+        <div class="pb" id="cr-box" style="padding-top:2px"></div>
+      </div>
+
+      <div class="sect">
+        <div class="ph"><h2>Сохранить</h2></div>
+        <div class="pb">
+          <form class="save" id="save-form">
+            <label class="sr" for="save-name">Название сценария</label>
+            <input id="save-name" placeholder="Название сценария" maxlength="60">
+            <button class="btn primary" type="submit">Сохранить как свой сценарий</button>
+          </form>
+          <p class="note" id="save-note">Хранится в этом браузере.</p>
+        </div>
+      </div>
+    </aside>
+
+    <div class="res" id="results">
+      <div class="panel s7">
+        <div class="ph"><h2>Итог сценария</h2><span class="scname" id="sc-name"></span></div>
+        <div class="hero" id="hero"></div>
+        <div class="dec" id="decomp"></div>
+      </div>
+      <div class="panel s5">
+        <div class="ph"><h2>Обратный разбор · откуда убыток</h2><span class="hint">клик → в редактор</span></div>
+        <ol class="rev" id="reverse"></ol>
+        <div class="revfoot" id="revfoot"></div>
+      </div>
+      <div class="panel s12">
+        <div class="ph"><h2>Rates PnL · кривая × бакет</h2><span class="hint">DV01<sub>ij</sub> × шок<sub>ij</sub>, млн ₽ · клик по ячейке открывает бакет в редакторе</span></div>
+        <div class="scroll"><table class="t heat" id="heat"></table></div>
+      </div>
+      <div class="panel s7">
+        <div class="ph"><h2>По книгам</h2><span class="hint">млн ₽</span></div>
+        <div class="scroll"><table class="t" id="by-book"></table></div>
+      </div>
+      <div class="panel s5">
+        <div class="ph"><h2>По группам эмитентов</h2><span class="hint">топ-12 по |PnL|, млн ₽</span></div>
+        <div class="bars" id="by-issuer"></div>
+      </div>
+      <div class="panel s12">
+        <div class="ph"><h2>Топ-15 позиций по убытку</h2><span class="hint">млн ₽</span></div>
+        <div class="scroll"><table class="t" id="top15"></table></div>
+      </div>
+      <div class="panel s12">
+        <div class="ph"><h2>Сравнение сценариев по книгам</h2><span class="hint">млн ₽ · клик по заголовку загружает сценарий</span></div>
+        <div class="scroll"><table class="t cmp" id="cmp"></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== PnL EXPLAIN ===================== -->
+  <section id="view-expl" class="ex" role="tabpanel" aria-labelledby="mode-expl" hidden>
+    <div class="panel s12">
+      <div class="recon" id="recon"></div>
+      <div class="wip"><b>В разработке</b><span>Официальный PnL здесь смоделирован. Следующий шаг — интеграция с официальным PnL бэк-офиса и автоматическая сверка по сделкам. Сейчас позиционная детализация есть только за текущую дату; за прошлые 21 день хранятся лишь итоги.</span></div>
+    </div>
+    <div class="panel s7">
+      <div class="ph"><h2>Водопад explain</h2><span class="hint" id="wf-hint">млн ₽</span></div>
+      <div class="chart" id="wf" role="img" aria-label="Водопад: от carry к официальному PnL"></div>
+    </div>
+    <div class="panel s5">
+      <div class="ph"><h2>История · 22 дня</h2><span class="hint">клик по дню выбирает дату</span></div>
+      <div class="cap">Official vs explained, млн ₽</div>
+      <div class="chart md" id="h-main"></div>
+      <div class="cap">Unexplained, млн ₽ · порог ±2 млн</div>
+      <div class="chart sm" id="h-un"></div>
+      <div class="cap">Накопленный official PnL, млн ₽</div>
+      <div class="chart sm" id="h-cum"></div>
+    </div>
+    <div class="panel s12">
+      <div class="ph">
+        <h2>Иерархия: деск → книга → позиция</h2>
+        <div class="toolbar">
+          <label class="chk"><input type="checkbox" id="flt-on"> только расхождения &gt;</label>
+          <label class="sr" for="flt-x">Порог, млн</label><input type="number" id="flt-x" min="0" step="0.1" value="0.5"><span class="muted">млн ₽ (|unexplained|)</span>
+          <button class="btn" id="exp-all">Раскрыть всё</button><button class="btn" id="col-all">Свернуть</button>
+        </div>
+      </div>
+      <div id="hier-wrap" class="scroll"></div>
+    </div>
+    <div class="panel s12">
+      <div class="ph"><h2>Rates explain · DV01 × движение кривой</h2><div class="chips" id="rx-books" aria-label="Книга"></div></div>
+      <div id="rx-wrap" class="scroll"></div>
+    </div>
+  </section>
+</main>
+<div id="tip" hidden></div>
+
+<script src="echarts.min.js"></script>
+<script src="data.js"></script>
+<script>
+(function(){
+'use strict';
+const D = window.DESK, U = D.util, P = D.positions, BK = D.BUCKETS, CK = Object.keys(D.CURVES);
+const RUBC = ['RUB OFZ','RUB RUONIA','RUB KEY'];
+const RAT = D.RATING_ORDER, BOOKK = Object.keys(D.BOOKS);
+const posById = {}; P.forEach(p => posById[p.id] = p);
+const DV = U.bucketMatrix(P);
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+// ---------- формат ----------
+const NF = {}; const nf = d => NF[d] || (NF[d] = new Intl.NumberFormat('ru-RU', {minimumFractionDigits:d, maximumFractionDigits:d}));
+function num(x, d){ d = d || 0; const f = Math.pow(10, d); if (Math.round(Math.abs(x) * f) === 0) x = 0; return nf(d).format(x).replace(/-/g, '−'); }
+function snum(x, d){ const s = num(x, d); return x > 0 && s !== num(0, d) ? '+' + s : s; }
+const mln = (x, d) => num(x / 1e6, d == null ? 2 : d);
+const smln = (x, d) => snum(x / 1e6, d == null ? 2 : d);
+const fdate = s => s.slice(8,10) + '.' + s.slice(5,7) + '.' + s.slice(0,4);
+const sdate = s => s.slice(8,10) + '.' + s.slice(5,7);
+const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const LS = {
+  get(k, d){ try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } }
+};
+function heatStyle(v, max){
+  if (!max || !v || Math.abs(v) < max * 0.015) return '';
+  const t = Math.min(1, Math.abs(v) / max), pct = Math.round(10 + t * 72);
+  return ` style="background:color-mix(in oklab,var(${v < 0 ? '--neg' : '--pos'}) ${pct}%,var(--heat-0));${t > 0.62 ? 'color:var(--on-strong)' : ''}"`;
+}
+function dbar(v, max){ const w = max ? Math.min(50, Math.abs(v) / max * 50) : 0; return `<div class="dbar"><span class="${v < 0 ? 'n' : 'p'}" style="${v < 0 ? 'right' : 'left'}:50%;width:${w.toFixed(2)}%"></span></div>`; }
+const ICON = {
+  ok: '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4.6 9.4 1.5 6.3l1.2-1.2 1.9 1.9 4.7-4.7 1.2 1.2z"/></svg>',
+  warn: '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1 11.5 11H.5z"/></svg>',
+  crit: '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 .5 11.5 6 6 11.5.5 6z"/></svg>',
+  info: '<svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.5"/></svg>'
+};
+const ST_LBL = {ok:'В допуске', warn:'Внимание', crit:'Расхождение'};
+const chip = (st, txt) => `<span class="chip ${st}">${ICON[st]}${esc(txt || ST_LBL[st])}</span>`;
+
+// ---------- тултип для HTML-графиков ----------
+const tip = $('#tip');
+document.addEventListener('mouseover', e => { const el = e.target.closest('[data-tip]'); if (!el) { tip.hidden = true; return; } tip.innerHTML = el.getAttribute('data-tip'); tip.hidden = false; });
+document.addEventListener('mousemove', e => { if (tip.hidden) return; const w = tip.offsetWidth, h = tip.offsetHeight; let x = e.clientX + 14, y = e.clientY + 14; if (x + w > innerWidth - 8) x = e.clientX - w - 14; if (y + h > innerHeight - 8) y = e.clientY - h - 14; tip.style.left = x + 'px'; tip.style.top = y + 'px'; });
+document.addEventListener('scroll', () => { tip.hidden = true; }, true);
+const T = (title, rows) => esc(`<b>${title}</b>` + rows.map(r => `<div>${r[0]}: <span class="tn">${r[1]}</span></div>`).join(''));
+
+// ================== СЦЕНАРИИ ==================
+function normalize(sc){
+  const curves = {};
+  CK.forEach(c => { const v = sc.curves && sc.curves[c]; curves[c] = v == null ? BK.map(() => 0) : Array.isArray(v) ? v.slice() : BK.map(() => v); });
+  const fx = {USD:0, CNY:0, EUR:0}; if (sc.fx) Object.keys(fx).forEach(k => fx[k] = sc.fx[k] || 0);
+  const sp = sc.spreads || {}; const rating = {}; RAT.forEach(r => rating[r] = (sp[r] || 0) + (sp._all || 0));
+  return {name: sc.name, curves, fx, rating, mult: sp._mult || 1, includeGov: !!sp.includeGov};
+}
+function toScenario(ed){
+  const curves = {}; CK.forEach(c => curves[c] = ed.curves[c].slice());
+  return {name: ed.name, curves, fx: Object.assign({}, ed.fx), spreads: Object.assign({}, ed.rating, {_mult: ed.mult, includeGov: ed.includeGov})};
+}
+function shockOf(sc){ const m = {}; CK.forEach(c => { const v = sc.curves && sc.curves[c]; m[c] = v == null ? BK.map(() => 0) : Array.isArray(v) ? v : BK.map(() => v); }); return m; }
+function compute(sc){
+  const r = U.runScenario(sc);
+  const comp = {rates:0, spread:0, fx:0, convexity:0, fundFx:r.fundingFx};
+  const book = {}; BOOKK.forEach(b => book[b] = {rates:0, spread:0, fx:0, convexity:0, fundFx:0, total:0});
+  const grp = {};
+  r.byPosition.forEach(x => {
+    const p = posById[x.id], bk = book[p.book];
+    ['rates','spread','fx','convexity'].forEach(k => { comp[k] += x[k]; bk[k] += x[k]; });
+    bk.total += x.total;
+    if (p.issuerGroup) { const g = grp[p.issuerGroup] || (grp[p.issuerGroup] = {rates:0, spread:0, fx:0, convexity:0, total:0, n:0}); ['rates','spread','fx','convexity','total'].forEach(k => g[k] += x[k]); g.n++; }
+  });
+  if (sc.fx) D.funding.forEach(f => Object.keys(f.fxDelta).forEach(c => { const v = f.fxDelta[c] * D.FX[c] * (sc.fx[c] || 0) / 100; book[f.book].fundFx += v; book[f.book].total += v; }));
+  const sh = shockOf(sc), heat = {};
+  CK.forEach(c => heat[c] = DV[c].map((dv, i) => dv * sh[c][i]));
+  return {r, total: r.total, comp, book, grp, heat, shock: sh};
+}
+
+const RES0 = D.SCENARIOS.map(s => ({s, res: compute(s)}));
+const S = {
+  mode: LS.get('scenlab.mode', 'scen'),
+  ed: null, loadedId: 'keyhike', dirty: false,
+  cur: 'RUB OFZ', scale: 250, link: true, lastShape: null, mag: 100,
+  custom: LS.get('scenlab.custom', []),
+  res: null,
+  heatSel: null,
+  // explain
+  date: D.history[D.history.length - 1].date, rxBook: null, fltOn: false, fltX: 0.5, open: new Set()
+};
+if (!Array.isArray(S.custom)) S.custom = [];
+const allScen = () => D.SCENARIOS.concat(S.custom);
+
+function loadScenario(id){
+  const sc = allScen().find(s => s.id === id); if (!sc) return;
+  S.ed = normalize(sc); S.loadedId = id; S.dirty = false; S.lastShape = null;
+  // выбрать кривую с наибольшим шоком
+  let best = S.cur, bm = -1; CK.forEach(c => { const m = Math.max.apply(null, S.ed.curves[c].map(Math.abs)); if (m > bm + 1e-9) { bm = m; best = c; } });
+  if (Math.max.apply(null, S.ed.curves[S.cur].map(Math.abs)) === 0) S.cur = best;
+  autoScale();
+  $('#save-name').value = '';
+  renderBuilderAll(); scheduleResults();
+}
+function autoScale(){ const m = Math.max.apply(null, S.ed.curves[S.cur].map(Math.abs)); S.scale = m <= 100 ? 100 : m <= 250 ? 250 : 500; }
+function markDirty(){ if (!S.dirty) { S.dirty = true; renderPresets(); } scheduleResults(); }
+
+// ---- пресеты ----
+function renderPresets(){
+  const row = (s, res, custom) => `<li class="${custom ? 'preset-row' : ''}"><button class="preset" data-id="${esc(s.id)}" aria-current="${S.loadedId === s.id}"><span>${esc(s.name)}${S.loadedId === s.id && S.dirty ? ' <span class="badge edit">изменён</span>' : ''}</span><span class="v">${mln(res.total, 0)}</span></button>${custom ? `<button class="del" data-del="${esc(s.id)}" title="Удалить сценарий «${esc(s.name)}»" aria-label="Удалить">×</button>` : ''}</li>`;
+  $('#preset-list').innerHTML = RES0.map(x => row(x.s, x.res, false)).join('');
+  $('#custom-wrap').hidden = !S.custom.length;
+  $('#custom-list').innerHTML = S.custom.map(s => row(s, compute(s), true)).join('');
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('.preset'); if (b) { loadScenario(b.dataset.id); return; }
+  const d = e.target.closest('[data-del]');
+  if (d) { S.custom = S.custom.filter(s => s.id !== d.dataset.del); LS.set('scenlab.custom', S.custom); if (S.loadedId === d.dataset.del) { S.loadedId = null; S.dirty = true; } renderPresets(); scheduleResults(); }
+});
+
+// ---- вкладки кривых ----
+function spark(arr){
+  const m = Math.max(50, Math.max.apply(null, arr.map(Math.abs)));
+  const pts = arr.map((v, i) => `${(2 + i * 4.8).toFixed(1)},${(7 - v / m * 6).toFixed(1)}`).join(' ');
+  return `<svg viewBox="0 0 52 14" aria-hidden="true"><line x1="0" x2="52" y1="7" y2="7" stroke="var(--line-strong)" stroke-width="1"/><polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="1.4"/></svg>`;
+}
+function renderTabs(){
+  $('#ctabs').innerHTML = CK.map(c => {
+    const a = S.ed.curves[c], mx = a.reduce((m, v) => Math.abs(v) > Math.abs(m) ? v : m, 0);
+    const linked = S.link && RUBC.includes(S.cur) && RUBC.includes(c) && c !== S.cur;
+    return `<button class="ctab${linked ? ' linked' : ''}" role="tab" data-c="${esc(c)}" aria-selected="${c === S.cur}" title="${esc(D.CURVES[c].name)}"><span class="n">${esc(c)}</span><span class="m">${spark(a)}<span>${snum(mx)}</span></span></button>`;
+  }).join('');
+  const cv = D.CURVES[S.cur];
+  $('#cur-name').innerHTML = `${esc(S.cur)}<small>${esc(cv.name)} · ${cv.ccy}</small>`;
+  document.querySelectorAll('#scale-seg button').forEach(b => b.setAttribute('aria-pressed', +b.dataset.d === S.scale));
+}
+$('#ctabs').addEventListener('click', e => { const b = e.target.closest('.ctab'); if (!b) return; S.cur = b.dataset.c; S.lastShape = null; S.heatSel = null; autoScale(); renderTabs(); renderEditor(); renderShapes(); });
+$('#scale-seg').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; S.scale = +b.dataset.d; renderTabs(); renderEditor(); });
+
+// ---- SVG-редактор формы ----
+const G = {W:400, H:200, L:38, R:8, T:16, B:22};
+G.pw = G.W - G.L - G.R; G.ph = G.H - G.T - G.B; G.cw = G.pw / BK.length;
+const gx = i => G.L + G.cw * (i + .5);
+const gy = v => G.T + (S.scale - v) / (2 * S.scale) * G.ph;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const snap = v => Math.round(v / 5) * 5;
+function renderEditor(focusI){
+  const svg = $('#cedit'), c = S.cur, v = S.ed.curves[c], d = S.scale;
+  let s = '';
+  [d, d / 2, 0, -d / 2, -d].forEach(g => { s += `<line class="${g === 0 ? 'g0' : 'g'}" x1="${G.L}" x2="${G.W - G.R}" y1="${gy(g)}" y2="${gy(g)}"/><text x="${G.L - 5}" y="${gy(g) + 3}" text-anchor="end">${snum(g)}</text>`; });
+  BK.forEach((b, i) => { s += `<rect class="hit" x="${G.L + G.cw * i}" y="${G.T}" width="${G.cw}" height="${G.ph}"/><text class="bk" x="${gx(i)}" y="${G.H - 6}" text-anchor="middle">${b}</text>`; });
+  CK.forEach(k => {
+    if (k === c) return; const a = S.ed.curves[k]; if (a.every(x => x === 0)) return;
+    const peer = S.link && RUBC.includes(c) && RUBC.includes(k);
+    s += `<polyline class="${peer ? 'peer' : 'other'}" points="${a.map((x, i) => gx(i).toFixed(1) + ',' + gy(clamp(x, -d, d)).toFixed(1)).join(' ')}"/>`;
+  });
+  v.forEach((x, i) => { const y0 = gy(0), y1 = gy(clamp(x, -d, d)); s += `<rect class="${x < 0 ? 'bn' : 'bp'}" x="${(gx(i) - G.cw * .26).toFixed(1)}" width="${(G.cw * .52).toFixed(1)}" y="${Math.min(y0, y1).toFixed(1)}" height="${Math.max(.6, Math.abs(y1 - y0)).toFixed(1)}" rx="1"/>`; });
+  s += `<polyline class="line" points="${v.map((x, i) => gx(i).toFixed(1) + ',' + gy(clamp(x, -d, d)).toFixed(1)).join(' ')}"/>`;
+  v.forEach((x, i) => {
+    const y = gy(clamp(x, -d, d)), out = Math.abs(x) > d;
+    const ly = x >= 0 ? Math.max(9, y - 9) : Math.min(G.T + G.ph - 2, y + 15);
+    const hs = S.heatSel && S.heatSel[0] === c && S.heatSel[1] === i;
+    s += `<g class="h${S.drag === i || hs ? ' act' : ''}" tabindex="0" role="slider" data-i="${i}" aria-label="${esc(c)} ${BK[i]}" aria-valuemin="-500" aria-valuemax="500" aria-valuenow="${x}" aria-valuetext="${snum(x)} б.п."><circle cx="${gx(i).toFixed(1)}" cy="${y.toFixed(1)}" r="${out ? 4 : 6}"/></g>`;
+    if (x !== 0) s += `<text class="val" x="${gx(i).toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle">${snum(x)}${out ? (x > 0 ? '↑' : '↓') : ''}</text>`;
+  });
+  svg.innerHTML = s;
+  if (focusI != null) { const h = svg.querySelector(`.h[data-i="${focusI}"]`); if (h) h.focus(); }
+}
+function setBucket(i, val){
+  val = clamp(snap(val), -500, 500);
+  const targets = S.link && RUBC.includes(S.cur) ? RUBC : [S.cur];
+  targets.forEach(c => { S.ed.curves[c][i] = val; });
+}
+function svgPt(e){ const svg = $('#cedit'), pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY; return pt.matrixTransform(svg.getScreenCTM().inverse()); }
+(function(){
+  const svg = $('#cedit');
+  const valAt = y => clamp(S.scale - (y - G.T) / G.ph * 2 * S.scale, -S.scale, S.scale);
+  svg.addEventListener('pointerdown', e => {
+    const p = svgPt(e); const i = Math.floor((p.x - G.L) / G.cw); if (i < 0 || i >= BK.length) return;
+    e.preventDefault(); S.drag = i; S.lastShape = null; S.heatSel = null; renderShapes();
+    try { svg.setPointerCapture(e.pointerId); } catch (_) {}
+    setBucket(i, valAt(p.y)); afterEdit();
+  });
+  svg.addEventListener('pointermove', e => { if (S.drag == null) return; const p = svgPt(e); const nv = clamp(snap(valAt(p.y)), -500, 500); if (nv !== S.ed.curves[S.cur][S.drag]) { setBucket(S.drag, nv); afterEdit(); } });
+  const end = () => { if (S.drag == null) return; S.drag = null; renderEditor(); };
+  svg.addEventListener('pointerup', end); svg.addEventListener('pointercancel', end);
+  svg.addEventListener('keydown', e => {
+    const h = e.target.closest('.h'); if (!h) return; const i = +h.dataset.i;
+    const st = {ArrowUp:5, ArrowRight:5, ArrowDown:-5, ArrowLeft:-5, PageUp:25, PageDown:-25}[e.key];
+    if (e.key === 'Home') { setBucket(i, 0); } else if (st != null) { setBucket(i, S.ed.curves[S.cur][i] + st); } else return;
+    e.preventDefault(); S.lastShape = null; renderShapes(); afterEdit(i);
+  });
+})();
+function afterEdit(focusI){ renderEditor(focusI); renderTabs(); markDirty(); }
+
+// ---- формы ----
+const LX = D.PILLARS.map(p => Math.log(p)); const lx0 = LX[0], lx1 = LX[LX.length - 1];
+const XN = LX.map(v => (v - lx0) / (lx1 - lx0));
+const SHAPES = {
+  par: m => XN.map(() => m),
+  steep: m => XN.map(x => m * (x - .5)),
+  flat: m => XN.map(x => -m * (x - .5)),
+  fly: m => XN.map(x => m * (.5 - 2 * Math.abs(x - .5))),
+  zero: () => XN.map(() => 0)
+};
+function applyShape(k){
+  const arr = SHAPES[k](S.mag).map(v => clamp(snap(v), -500, 500));
+  const targets = S.link && RUBC.includes(S.cur) ? RUBC : [S.cur];
+  targets.forEach(c => S.ed.curves[c] = arr.slice());
+  S.lastShape = k === 'zero' ? null : k;
+  if (Math.max.apply(null, arr.map(Math.abs)) > S.scale || k !== 'zero') autoScale();
+  renderShapes(); renderTabs(); renderEditor(); markDirty();
+}
+function renderShapes(){
+  document.querySelectorAll('#shapes [data-shape]').forEach(b => b.setAttribute('aria-pressed', b.dataset.shape === S.lastShape));
+  $('#mag-o').textContent = snum(S.mag) + ' б.п.';
+}
+$('#shapes').addEventListener('click', e => { const b = e.target.closest('[data-shape]'); if (b) applyShape(b.dataset.shape); });
+$('#mag').addEventListener('input', e => { S.mag = +e.target.value; renderShapes(); if (S.lastShape) applyShape(S.lastShape); });
+$('#link').addEventListener('change', e => { S.link = e.target.checked; renderTabs(); renderEditor(); });
+
+// ---- FX и спреды ----
+function renderFx(){
+  $('#fx-box').innerHTML = ['USD','CNY','EUR'].map(c => {
+    const v = S.ed.fx[c], rate = D.FX[c] * (1 + v / 100);
+    return `<div class="row"><label for="fx-${c}" title="${c}/RUB">${c}/RUB <span class="muted mono">${num(rate, 2)}</span></label><input type="range" id="fx-${c}" data-fx="${c}" min="-40" max="40" step="1" value="${v}"><output class="num" for="fx-${c}">${snum(v)}%</output></div>`;
+  }).join('') + '<p class="note">Шок применяется к курсу и к валютному фондированию (строка «Фонд. FX»).</p>';
+}
+$('#fx-box').addEventListener('input', e => { const c = e.target.dataset.fx; if (!c) return; S.ed.fx[c] = +e.target.value; const row = e.target.closest('.row'); row.querySelector('output').textContent = snum(S.ed.fx[c]) + '%'; row.querySelector('label span').textContent = num(D.FX[c] * (1 + S.ed.fx[c] / 100), 2); markDirty(); });
+function renderCredit(){
+  $('#cr-box').innerHTML = RAT.map(r => `<div class="row"><label for="cr-${r}">${r}</label><input type="range" id="cr-${r}" data-r="${r}" min="-100" max="600" step="5" value="${S.ed.rating[r]}"><output class="num" for="cr-${r}">${snum(S.ed.rating[r])} б.п.</output></div>`).join('')
+    + `<div class="row"><label for="cr-mult">Множитель спредов</label><input type="range" id="cr-mult" min="0.5" max="3" step="0.1" value="${S.ed.mult}"><output class="num" for="cr-mult">×${num(S.ed.mult, 1)}</output></div>`
+    + `<label class="chk"><input type="checkbox" id="cr-gov"${S.ed.includeGov ? ' checked' : ''}> Полный шок для гос. эмитентов (иначе 35%)</label>`
+    + '<p class="note">Множитель расширяет текущий спред: Δ = (k − 1) × спред. ОФЗ-ПД к КБД спредового риска не несут.</p>';
+}
+$('#cr-box').addEventListener('input', e => {
+  const t = e.target, row = t.closest('.row');
+  if (t.dataset.r) { S.ed.rating[t.dataset.r] = +t.value; row.querySelector('output').textContent = snum(+t.value) + ' б.п.'; }
+  else if (t.id === 'cr-mult') { S.ed.mult = +t.value; row.querySelector('output').textContent = '×' + num(S.ed.mult, 1); }
+  else if (t.id === 'cr-gov') { S.ed.includeGov = t.checked; }
+  else return;
+  markDirty();
+});
+$('#cr-box').addEventListener('change', e => { if (e.target.id === 'cr-gov') { S.ed.includeGov = e.target.checked; markDirty(); } });
+
+$('#save-form').addEventListener('submit', e => {
+  e.preventDefault();
+  const name = $('#save-name').value.trim() || ('Свой сценарий ' + (S.custom.length + 1));
+  const sc = toScenario(S.ed); sc.name = name; sc.id = 'c' + Date.now().toString(36); sc.custom = true;
+  S.custom.push(sc);
+  const ok = LS.set('scenlab.custom', S.custom);
+  S.ed.name = name; S.loadedId = sc.id; S.dirty = false; $('#save-name').value = '';
+  $('#save-note').textContent = ok ? `Сохранено: «${name}». Хранится в этом браузере.` : `Добавлено в список: «${name}». Хранилище браузера недоступно — сценарий пропадёт после перезагрузки.`;
+  renderPresets(); scheduleResults();
+});
+
+function renderBuilderAll(){ renderPresets(); renderTabs(); renderEditor(); renderShapes(); renderFx(); renderCredit(); $('#link').checked = S.link; $('#mag').value = S.mag; }
+
+// ---- результаты ----
+let rq = 0;
+function scheduleResults(){ if (rq) return; rq = requestAnimationFrame(() => { rq = 0; renderResults(); }); }
+const COMPS = [['rates','Rates'],['spread','Spread'],['fx','FX'],['convexity','Convexity'],['fundFx','Фонд. FX']];
+function renderResults(){
+  const sc = toScenario(S.ed), R = compute(sc); S.res = R;
+  const loaded = allScen().find(s => s.id === S.loadedId);
+  $('#sc-name').innerHTML = `${esc(loaded ? loaded.name : 'Свой сценарий')}${S.dirty ? ' <span class="badge edit">изменён в редакторе</span>' : ''}`;
+  const varPct = R.total / D.LIMITS.var99 * 100;
+  const dvRub = RUBC.reduce((s, c) => s + DV[c].reduce((a, b) => a + b, 0), 0);
+  $('#hero').innerHTML = `<div><div class="lbl">PnL сценария</div><div class="big">${smln(R.total, 1)}<small>млн ₽</small></div></div>
+    <div class="side"><span>${num(Math.abs(varPct), 0)}% от лимита VaR99 (${mln(D.LIMITS.var99, 0)} млн ₽)</span><span>${R.total < 0 ? 'Убыток' : 'Прибыль'} · ${R.r.byPosition.filter(x => x.total < -1e5).length} позиций в минусе &gt; 0,1 млн</span><span>DV01 RUB-кривых ${mln(dvRub, 2)} млн ₽/б.п.</span></div>`;
+  const cmax = Math.max(1, ...COMPS.map(c => Math.abs(R.comp[c[0]])));
+  $('#decomp').innerHTML = COMPS.map(([k, n]) => `<span>${n}</span><div data-tip="${T(n, [['PnL', smln(R.comp[k]) + ' млн ₽'], ['Доля в итоге', R.total ? num(R.comp[k] / R.total * 100, 0) + '%' : '—']])}">${dbar(R.comp[k], cmax)}</div><span class="num r">${smln(R.comp[k], 1)}</span>`).join('')
+    + `<span class="tot">Итого</span><span class="tot"></span><span class="num r tot">${smln(R.total, 1)}</span>`;
+
+  // heatmap
+  let hmax = 0; CK.forEach(c => R.heat[c].forEach(v => hmax = Math.max(hmax, Math.abs(v))));
+  const colTot = BK.map((_, i) => CK.reduce((s, c) => s + R.heat[c][i], 0));
+  let h = `<thead><tr><th class="l">Кривая</th>${BK.map(b => `<th>${b}</th>`).join('')}<th>Σ</th></tr></thead><tbody>`;
+  CK.forEach(c => {
+    const rs = R.heat[c].reduce((a, b) => a + b, 0);
+    h += `<tr><td class="l">${esc(c)}</td>${R.heat[c].map((v, i) => {
+      const sel = S.heatSel && S.heatSel[0] === c && S.heatSel[1] === i;
+      return `<td class="n cell${sel ? ' sel' : ''}" data-c="${esc(c)}" data-i="${i}"${heatStyle(v, hmax)} data-tip="${T(c + ' · ' + BK[i], [['DV01', num(DV[c][i] / 1e3, 0) + ' тыс ₽/б.п.'], ['Шок', snum(R.shock[c][i]) + ' б.п.'], ['PnL', smln(v) + ' млн ₽']])}">${Math.abs(v) < 5e3 ? '<span class="muted">·</span>' : smln(v, 1)}</td>`;
+    }).join('')}<td class="n"><b>${smln(rs, 1)}</b></td></tr>`;
+  });
+  h += `<tr class="tot"><td class="l">Итого rates</td>${colTot.map(v => `<td class="n">${Math.abs(v) < 5e3 ? '·' : smln(v, 1)}</td>`).join('')}<td class="n">${smln(R.comp.rates, 1)}</td></tr></tbody>`;
+  $('#heat').innerHTML = h;
+
+  // reverse helper
+  const cells = []; CK.forEach(c => R.heat[c].forEach((v, i) => cells.push({c, i, v})));
+  const loss = cells.filter(x => x.v < 0).sort((a, b) => a.v - b.v).slice(0, 5);
+  const lossTot = cells.filter(x => x.v < 0).reduce((s, x) => s + x.v, 0);
+  const comps = COMPS.map(([k, n]) => ({n, v: R.comp[k]})).sort((a, b) => a.v - b.v);
+  const books = BOOKK.map(b => ({b, v: R.book[b].total})).sort((a, b) => a.v - b.v);
+  const grps = Object.entries(R.grp).sort((a, b) => a[1].total - b[1].total);
+  let rv = '';
+  if (loss.length) loss.forEach((x, k) => { rv += `<li><span class="k">${k + 1}</span><span><button class="lnk" data-jump="${esc(x.c)}|${x.i}">${esc(x.c)} · ${BK[x.i]}</button> <span class="sh">${snum(R.shock[x.c][x.i])} б.п. × ${num(DV[x.c][x.i] / 1e3, 0)} тыс/б.п.</span></span><span class="v">${smln(x.v, 1)} <span class="sh">${num(x.v / lossTot * 100, 0)}%</span></span></li>`; });
+  else rv = '<li><span class="k">—</span><span class="muted">Ставочный шок не даёт убытка ни в одной ячейке.</span><span></span></li>';
+  $('#reverse').innerHTML = rv;
+  const worst = comps[0], wb = books[0], wg = grps[0];
+  $('#revfoot').innerHTML = `Худший компонент: <b>${worst.n}</b> ${smln(worst.v, 1)} · книга: <b>${esc(D.BOOKS[wb.b].name)}</b> ${smln(wb.v, 1)}${wg && wg[1].total < 0 ? ` · группа: <b>${esc(wg[0])}</b> ${smln(wg[1].total, 1)}` : ''} млн ₽.<br>`
+    + `<span class="muted">Ориентир: −1 млрд ₽ даёт параллельный сдвиг RUB-кривых на ${snum(-1e9 / dvRub, 0)} б.п. (линейно по DV01 ${mln(dvRub, 2)} млн/б.п.)</span>`;
+
+  // by book
+  const bmax = Math.max(1, ...BOOKK.map(b => Math.abs(R.book[b].total)));
+  let bt = `<thead><tr><th class="l">Книга</th><th>Rates</th><th>Spread</th><th>FX</th><th>Conv.</th><th>Фонд. FX</th><th>Итого</th></tr></thead><tbody>`;
+  BOOKK.slice().sort((a, b) => R.book[a].total - R.book[b].total).forEach(b => {
+    const x = R.book[b];
+    bt += `<tr><td class="l" title="Деск ${esc(D.BOOKS[b].desk)}">${esc(D.BOOKS[b].name)}</td>${['rates','spread','fx','convexity','fundFx'].map(k => `<td class="n${Math.abs(x[k]) < 5e3 ? ' z' : ''}">${Math.abs(x[k]) < 5e3 ? '·' : smln(x[k], 1)}</td>`).join('')}<td class="n"${heatStyle(x.total, bmax)}><b>${smln(x.total, 1)}</b></td></tr>`;
+  });
+  bt += `<tr class="tot"><td class="l">Итого</td>${['rates','spread','fx','convexity','fundFx'].map(k => `<td class="n">${smln(R.comp[k], 1)}</td>`).join('')}<td class="n">${smln(R.total, 1)}</td></tr></tbody>`;
+  $('#by-book').innerHTML = bt;
+
+  // issuer groups
+  const top = grps.slice().sort((a, b) => Math.abs(b[1].total) - Math.abs(a[1].total)).slice(0, 12).sort((a, b) => a[1].total - b[1].total);
+  const gmax = Math.max(1, ...top.map(g => Math.abs(g[1].total)));
+  $('#by-issuer').innerHTML = top.map(([g, x]) => `<span class="nm" title="${esc(g)}">${esc(g)}</span><div data-tip="${T(g, [['Rates', smln(x.rates) + ' млн'], ['Spread', smln(x.spread) + ' млн'], ['FX', smln(x.fx) + ' млн'], ['Convexity', smln(x.convexity) + ' млн'], ['Итого', smln(x.total) + ' млн ₽'], ['Позиций', x.n]])}">${dbar(x.total, gmax)}</div><span class="num r">${smln(x.total, 1)}</span>`).join('');
+
+  // top-15
+  const t15 = R.r.byPosition.slice().sort((a, b) => a.total - b.total).slice(0, 15);
+  let tt = `<thead><tr><th class="l">#</th><th class="l">Позиция</th><th class="l">Книга</th><th>Rates</th><th>Spread</th><th>FX</th><th>Conv.</th><th>Итого</th></tr></thead><tbody>`;
+  t15.forEach((x, k) => { const p = posById[x.id]; tt += `<tr><td class="l muted mono">${k + 1}</td><td class="l">${esc(p.name)} <span class="muted">${esc(p.assetClass)} · ${p.ccy}</span></td><td class="l">${esc(D.BOOKS[p.book].name)}</td>${['rates','spread','fx','convexity'].map(f => `<td class="n${Math.abs(x[f]) < 5e3 ? ' z' : ''}">${Math.abs(x[f]) < 5e3 ? '·' : smln(x[f], 1)}</td>`).join('')}<td class="n"${heatStyle(x.total, Math.abs(t15[0].total))}><b>${smln(x.total, 1)}</b></td></tr>`; });
+  $('#top15').innerHTML = tt + '</tbody>';
+
+  renderCompare(R);
+}
+function renderCompare(R){
+  const cols = [{id:'__ed', name:'Редактор' + (S.dirty ? ' *' : ''), res:R}].concat(RES0.map(x => ({id:x.s.id, name:x.s.name, res:x.res}))).concat(S.custom.map(s => ({id:s.id, name:s.name, res:compute(s)})));
+  let mx = 1; cols.forEach(c => BOOKK.forEach(b => mx = Math.max(mx, Math.abs(c.res.book[b].total))));
+  const tmx = Math.max(1, ...cols.map(c => Math.abs(c.res.total)));
+  let h = `<thead><tr><th class="l">Книга</th>${cols.map(c => `<th class="${c.id === '__ed' || (c.id === S.loadedId && !S.dirty) ? 'cur' : ''}">${c.id === '__ed' ? esc(c.name) : `<button data-load="${esc(c.id)}">${esc(c.name)}</button>`}</th>`).join('')}</tr></thead><tbody>`;
+  BOOKK.forEach(b => { h += `<tr><td class="l">${esc(D.BOOKS[b].name)}</td>${cols.map(c => { const v = c.res.book[b].total; return `<td class="n"${heatStyle(v, mx)} data-tip="${T(D.BOOKS[b].name + ' · ' + c.name, [['PnL', smln(v) + ' млн ₽']])}">${Math.abs(v) < 5e3 ? '·' : smln(v, 0)}</td>`; }).join('')}</tr>`; });
+  h += `<tr><td class="l muted">в т.ч. фонд. FX</td>${cols.map(c => { const v = c.res.comp.fundFx; return `<td class="n z">${Math.abs(v) < 5e3 ? '·' : smln(v, 0)}</td>`; }).join('')}</tr>`;
+  h += `<tr class="tot"><td class="l">Итого</td>${cols.map(c => `<td class="n"${heatStyle(c.res.total, tmx)}>${smln(c.res.total, 0)}</td>`).join('')}</tr></tbody>`;
+  $('#cmp').innerHTML = h;
+}
+document.addEventListener('click', e => {
+  const l = e.target.closest('[data-load]'); if (l) { loadScenario(l.dataset.load); return; }
+  const cell = e.target.closest('#heat td.cell') || e.target.closest('[data-jump]');
+  if (cell) {
+    let c, i; if (cell.dataset.jump) { [c, i] = cell.dataset.jump.split('|'); } else { c = cell.dataset.c; i = cell.dataset.i; }
+    i = +i; S.cur = c; S.heatSel = [c, i]; S.lastShape = null;
+    const m = Math.abs(S.ed.curves[c][i]); if (m > S.scale) autoScale(); else autoScale();
+    renderTabs(); renderShapes(); renderEditor(i); scheduleResults();
+    if (innerWidth <= 1100) $('#cedit').scrollIntoView({block:'center', behavior: reduced ? 'auto' : 'smooth'});
+  }
+});
+
+// ================== PnL EXPLAIN ==================
+const EXC = [['carry','Carry'],['rolldown','Rolldown'],['rates','Rates'],['spread','Spread'],['fx','FX'],['convexity','Convexity'],['newTrades','Новые сделки'],['fundCarry','Фонд. carry'],['fundFx','Фонд. FX']];
+const NUMK = EXC.map(x => x[0]).concat(['explained','official','unexplained']);
+const TODAY = D.history[D.history.length - 1].date;
+function status(u, o, isRow){ const tol = Math.max(2e6, 0.05 * Math.abs(o)), a = Math.abs(u); return a > tol ? 'crit' : a > tol * (isRow ? .25 : .5) ? 'warn' : 'ok'; }
+function zero(){ const o = {}; NUMK.forEach(k => o[k] = 0); return o; }
+function addTo(a, b){ NUMK.forEach(k => a[k] += b[k]); }
+const TREE = (function(){
+  const desks = [], dmap = {};
+  BOOKK.forEach(b => {
+    const meta = D.BOOKS[b];
+    const kids = P.filter(p => p.book === b).map(p => {
+      const r = Object.assign({kind:'pos', key:'p' + p.id, name:p.name, sub:`${p.assetClass} · ${p.ccy}${p.newToday ? ' · новая сделка' : ''}`, note:p.pnl.breakNote}, zero());
+      ['carry','rolldown','rates','spread','fx','convexity','newTrades','explained','official','unexplained'].forEach(k => r[k] = p.pnl[k]);
+      return r;
+    });
+    const fl = D.funding.filter(f => f.book === b);
+    if (fl.length) { const f = D.fundingPnlByBook[b]; const r = Object.assign({kind:'fund', key:'f' + b, name:`Фондирование (${fl.length} ${fl.length === 1 ? 'сделка' : fl.length < 5 ? 'сделки' : 'сделок'})`, sub:[...new Set(fl.map(x => x.type))].join(', ')}, zero()); r.fundCarry = f.carry; r.fundFx = f.fx; r.explained = r.official = f.carry + f.fx; kids.push(r); }
+    const bn = Object.assign({kind:'book', key:'b' + b, book:b, name:meta.name, sub:meta.trader, children:kids}, zero());
+    kids.forEach(k => addTo(bn, k));
+    let d = dmap[meta.desk]; if (!d) { d = dmap[meta.desk] = Object.assign({kind:'desk', key:'d' + meta.desk, name:meta.desk, children:[]}, zero()); desks.push(d); }
+    d.children.push(bn); addTo(d, bn);
+  });
+  const tot = zero(); desks.forEach(d => addTo(tot, d));
+  const byU = (a, b) => (a.kind === 'fund') - (b.kind === 'fund') || Math.abs(b.unexplained) - Math.abs(a.unexplained);
+  desks.sort(byU); desks.forEach(d => { d.children.sort(byU); d.children.forEach(b => b.children.sort(byU)); });
+  return {desks, tot};
+})();
+// по умолчанию: дески раскрыты, раскрыта книга с наибольшим |unexplained|
+TREE.desks.forEach(d => S.open.add(d.key));
+(function(){ let best = null; TREE.desks.forEach(d => d.children.forEach(b => { if (!best || Math.abs(b.unexplained) > Math.abs(best.unexplained)) best = b; })); if (best) S.open.add(best.key); })();
+
+function dayTotals(date){
+  if (date === TODAY) { const t = TREE.tot; return {official:t.official, explained:t.explained, unexplained:t.official - t.explained, detail:true}; }
+  const h = D.history.find(x => x.date === date); return {official:h.pnlOfficial, explained:h.pnlExplained, unexplained:h.pnlOfficial - h.pnlExplained, detail:false};
+}
+function renderRecon(){
+  const t = dayTotals(S.date), st = status(t.unexplained, t.official, false), pct = t.official ? t.unexplained / Math.abs(t.official) * 100 : 0;
+  const opts = D.history.slice().reverse().map(h => `<option value="${h.date}"${h.date === S.date ? ' selected' : ''}>${fdate(h.date)}${h.date === TODAY ? ' · детализация' : ' · только итоги'}</option>`).join('');
+  $('#recon').innerHTML = `<div class="datebox"><label class="lbl mono muted" for="ex-date" style="font:600 10px var(--font-mono);letter-spacing:.08em;text-transform:uppercase">Дата</label><select id="ex-date">${opts}</select></div>
+    <div class="kpi"><span class="lbl">Official PnL</span><span class="val">${smln(t.official)}<small>млн ₽</small></span></div><span class="op">−</span>
+    <div class="kpi"><span class="lbl">Explained</span><span class="val">${smln(t.explained)}<small>млн ₽</small></span></div><span class="op">=</span>
+    <div class="kpi"><span class="lbl">Unexplained</span><span class="val">${smln(t.unexplained)}<small>млн ₽</small></span></div>
+    <div class="kpi"><span class="lbl">% unexplained</span><span class="val">${num(Math.abs(pct), 1)}<small>%</small></span></div>
+    <div class="kpi"><span class="lbl">Статус</span>${chip(st)}<span class="muted" style="font-size:11px">порог: max(5% · |official|, 2 млн ₽)</span></div>
+    ${t.detail ? '' : '<div class="kpi" style="max-width:280px"><span class="lbl">Детализация</span><span class="muted" style="font-size:12px">За эту дату хранятся только итоги. Позиции и компоненты — только за ' + fdate(TODAY) + '.</span></div>'}`;
+  $('#ex-date').addEventListener('change', e => { S.date = e.target.value; renderExplain(); });
+}
+
+let charts = {};
+function ch(id){ const el = document.getElementById(id); let c = echarts.getInstanceByDom(el); if (!c) c = echarts.init(el, null, {renderer:'canvas'}); return c; }
+function baseText(){ return {fontFamily: tok('--font-mono').split(',')[0].replace(/"/g, '') + ', monospace', color: tok('--fg-3'), fontSize: 10}; }
+function ttStyle(){ return {backgroundColor: tok('--surface'), borderColor: tok('--line-strong'), textStyle:{color: tok('--fg'), fontSize: 12}, extraCssText:'box-shadow:0 4px 14px rgba(0,0,0,.18);border-radius:3px'}; }
+
+function renderWaterfall(){
+  const t = dayTotals(S.date), c = ch('wf');
+  const items = [];
+  if (t.detail) {
+    let cum = 0; const tot = TREE.tot;
+    EXC.forEach(([k, n]) => { items.push({n, s:cum, e:cum + tot[k], v:tot[k], kind:'step'}); cum += tot[k]; });
+    items.push({n:'= Explained', s:0, e:tot.explained, v:tot.explained, kind:'total'});
+    items.push({n:'Unexplained', s:tot.explained, e:tot.official, v:tot.official - tot.explained, kind:'un'});
+    items.push({n:'= Official', s:0, e:tot.official, v:tot.official, kind:'total'});
+    $('#wf-hint').textContent = 'млн ₽ · ' + fdate(S.date);
+  } else {
+    items.push({n:'= Explained', s:0, e:t.explained, v:t.explained, kind:'total'});
+    items.push({n:'Unexplained', s:t.explained, e:t.official, v:t.unexplained, kind:'un'});
+    items.push({n:'= Official', s:0, e:t.official, v:t.official, kind:'total'});
+    $('#wf-hint').textContent = 'млн ₽ · ' + fdate(S.date) + ' · только итоги, компонентов нет';
+  }
+  const col = {pos:tok('--pos'), neg:tok('--neg'), tot:tok('--accent'), fg:tok('--fg'), fg2:tok('--fg-2'), line:tok('--line'), line2:tok('--line-strong')};
+  const narrow = c.getWidth() < 640;
+  const vmax = Math.max(...items.map(it => Math.abs(it.v)));
+  const bt = baseText();
+  c.setOption({
+    animation: !reduced, animationDuration: 300,
+    grid:{left:56, right:12, top:24, bottom: narrow ? 64 : 34},
+    tooltip: Object.assign({trigger:'item', formatter: p => { const it = items[p.dataIndex]; return `<b>${it.n}</b><br>${smln(it.v)} млн ₽` + (it.kind === 'step' ? `<br><span style="color:${col.fg2}">нарастающим: ${smln(it.e)} млн</span>` : ''); }}, ttStyle()),
+    xAxis:{type:'category', data: items.map(i => i.n), axisLine:{lineStyle:{color:col.line2}}, axisTick:{show:false}, axisLabel:Object.assign({}, bt, {color:col.fg2, interval:0, rotate: narrow ? 40 : 0, fontSize: narrow ? 9 : 10, formatter: v => narrow ? v : v.replace('Новые сделки', 'Новые\nсделки').replace('Фонд. carry', 'Фонд.\ncarry').replace('Фонд. FX', 'Фонд.\nFX').replace('= Explained', '=\nExplained').replace('= Official', '=\nOfficial')})},
+    yAxis:{type:'value', splitLine:{lineStyle:{color:col.line}}, axisLabel:Object.assign({}, bt, {formatter: v => num(v / 1e6, 0)})},
+    series:[{type:'custom', data: items.map((it, i) => [i, it.s, it.e]), encode:{x:0, y:[1, 2]},
+      renderItem: (params, api) => {
+        const i = api.value(0), it = items[i], a = api.coord([i, it.s]), b = api.coord([i, it.e]), w = api.size([1, 0])[0] * .58;
+        const top = Math.min(a[1], b[1]), h = Math.max(1, Math.abs(a[1] - b[1]));
+        const fill = it.kind === 'total' ? col.tot : it.v < 0 ? col.neg : col.pos;
+        const above = it.v >= 0 || it.kind === 'total' && it.v >= 0;
+        return {type:'group', children:[
+          {type:'rect', shape:{x:a[0] - w / 2, y:top, width:w, height:h, r:1}, style:{fill, opacity: it.kind === 'un' ? .75 : 1}},
+          {type:'text', invisible: narrow && it.kind === 'step' && Math.abs(it.v) < vmax * .08, style:{text: smln(it.v, 1), x:a[0], y: above ? top - 3 : top + h + 3, align:'center', verticalAlign: above ? 'bottom' : 'top', fill: col.fg, font:`500 ${narrow ? 9 : 10}px ${bt.fontFamily}`}}
+        ]};
+      }}]
+  }, true);
+}
+
+function renderHistory(){
+  const H = D.history, dates = H.map(h => sdate(h.date)), selI = H.findIndex(h => h.date === S.date);
+  const bt = baseText(), line = tok('--line'), line2 = tok('--line-strong'), fg2 = tok('--fg-2');
+  const ax = (show) => ({type:'category', data:dates, boundaryGap: true, axisLine:{lineStyle:{color:line2}}, axisTick:{show:false}, axisLabel:Object.assign({}, bt, {show, interval: 'auto'})});
+  const ya = () => ({type:'value', splitNumber:3, splitLine:{lineStyle:{color:line}}, axisLabel:Object.assign({}, bt, {formatter: v => num(v / 1e6, 0)})});
+  const mark = {silent:true, symbol:'none', lineStyle:{color:tok('--accent'), type:'solid', width:1}, label:{show:false}, data:[{xAxis:selI}]};
+  const tt = Object.assign({trigger:'axis', axisPointer:{type:'line', lineStyle:{color:line2}}}, ttStyle());
+  const m = ch('h-main'), u = ch('h-un'), cu = ch('h-cum');
+  m.setOption({animation:!reduced, grid:{left:46, right:10, top:26, bottom:18}, legend:{top:0, right:6, itemWidth:14, itemHeight:2, textStyle:{color:fg2, fontSize:11}, data:['Official','Explained']},
+    tooltip: Object.assign({}, tt, {formatter: ps => `<b>${fdate(H[ps[0].dataIndex].date)}</b><br>` + ps.map(p => `${p.marker}${p.seriesName}: ${smln(p.value)} млн`).join('<br>') + `<br>Unexplained: ${smln(H[ps[0].dataIndex].pnlOfficial - H[ps[0].dataIndex].pnlExplained)} млн`}),
+    xAxis: ax(false), yAxis: ya(),
+    series:[{name:'Official', type:'line', data:H.map(h => h.pnlOfficial), symbol:'circle', symbolSize:5, lineStyle:{width:2, color:tok('--c1')}, itemStyle:{color:tok('--c1')}, markLine:mark},
+            {name:'Explained', type:'line', data:H.map(h => h.pnlExplained), symbol:'circle', symbolSize:5, lineStyle:{width:2, color:tok('--c2'), type:[4, 3]}, itemStyle:{color:tok('--c2')}}]}, true);
+  u.setOption({animation:!reduced, grid:{left:46, right:10, top:8, bottom:18},
+    tooltip: Object.assign({}, tt, {axisPointer:{type:'shadow', shadowStyle:{color:'rgba(127,127,127,.12)'}}, formatter: ps => { const h = H[ps[0].dataIndex], v = h.pnlOfficial - h.pnlExplained, st = status(v, h.pnlOfficial, false); return `<b>${fdate(h.date)}</b><br>Unexplained: ${smln(v)} млн<br>Статус: ${ST_LBL[st]}`; }}),
+    xAxis: ax(false), yAxis: ya(),
+    series:[{type:'bar', barWidth:'55%', data: H.map(h => { const v = h.pnlOfficial - h.pnlExplained, st = status(v, h.pnlOfficial, false); return {value:v, itemStyle:{color: st === 'crit' ? tok('--crit') : st === 'warn' ? tok('--warn') : tok('--fg-3'), borderRadius:1}}; }),
+      markLine:{silent:true, symbol:'none', lineStyle:{color:line2, type:'dashed'}, label:{show:false}, data:[{yAxis:2e6}, {yAxis:-2e6}, {xAxis:selI, lineStyle:{color:tok('--accent'), type:'solid'}}]}}]}, true);
+  cu.setOption({animation:!reduced, grid:{left:46, right:10, top:8, bottom:22},
+    tooltip: Object.assign({}, tt, {formatter: ps => `<b>${fdate(H[ps[0].dataIndex].date)}</b><br>Накопленный: ${smln(ps[0].value)} млн<br>За день: ${smln(H[ps[0].dataIndex].pnlOfficial)} млн`}),
+    xAxis: ax(true), yAxis: ya(),
+    series:[{type:'line', data:H.map(h => h.pnlCum), symbol:'none', lineStyle:{width:2, color:tok('--accent')}, areaStyle:{color:tok('--accent'), opacity:.12}, markLine:mark}]}, true);
+  [m, u, cu].forEach(c => { c.group = 'hist'; });
+  echarts.connect('hist');
+  [m, u, cu].forEach(c => { if (c.__bound) return; c.__bound = true; c.getZr().on('click', e => { const pt = [e.offsetX, e.offsetY]; if (!c.containPixel('grid', pt)) return; const i = Math.round(c.convertFromPixel({xAxisIndex:0}, pt)[0]); if (H[i]) { S.date = H[i].date; renderExplain(); } }); });
+}
+
+function cellsFor(r){ return NUMK.filter(k => k !== 'explained' && k !== 'official' && k !== 'unexplained').map(k => `<td class="n${r[k] === 0 ? ' z' : ''}">${r[k] === 0 ? '·' : smln(r[k])}</td>`).join('') + `<td class="n">${smln(r.explained)}</td><td class="n">${smln(r.official)}</td><td class="n uc">${r.kind === 'fund' ? '<span class="muted">·</span>' : smln(r.unexplained)}</td>`; }
+const CHEV = '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M3 1l5 4-5 4z"/></svg>';
+function renderHier(){
+  const wrap = $('#hier-wrap');
+  if (S.date !== TODAY) { wrap.innerHTML = `<div class="empty"><b>Позиционной детализации за ${fdate(S.date)} нет</b>Хранятся только итоги дня: official ${smln(dayTotals(S.date).official)} млн, explained ${smln(dayTotals(S.date).explained)} млн. Выберите ${fdate(TODAY)}, чтобы увидеть дерево деск → книга → позиция.</div>`; return; }
+  const X = S.fltX * 1e6, fOn = S.fltOn;
+  const match = r => Math.abs(r.unexplained) > X;
+  let rows = '', shown = 0;
+  TREE.desks.forEach(d => {
+    const dMatch = !fOn || d.children.some(b => match(b) || b.children.some(match));
+    if (!dMatch) return;
+    const dOpen = fOn || S.open.has(d.key);
+    rows += `<tr class="desk"><td class="l"><button class="tg" data-key="${d.key}" aria-expanded="${dOpen}">${CHEV}Деск ${esc(d.name)}</button></td>${cellsFor(d)}<td class="l">${chip(status(d.unexplained, d.official, true))}</td></tr>`;
+    if (!dOpen) return;
+    d.children.forEach(b => {
+      const kids = fOn ? b.children.filter(match) : b.children;
+      if (fOn && !kids.length && !match(b)) return;
+      const bOpen = fOn ? kids.length > 0 : S.open.has(b.key);
+      const nb = b.children.filter(k => k.note).length;
+      rows += `<tr class="book"><td class="l ind1"><button class="tg" data-key="${b.key}" aria-expanded="${bOpen}">${CHEV}${esc(b.name)}</button> <span class="psub">${esc(b.sub)} · ${b.children.length}${nb ? ` · пояснений: ${nb}` : ''}</span></td>${cellsFor(b)}<td class="l">${chip(status(b.unexplained, b.official, true))}</td></tr>`;
+      if (!bOpen) return;
+      kids.forEach(r => {
+        shown++;
+        let st = r.kind === 'fund' ? 'ok' : status(r.unexplained, r.official, true); if (r.note && st === 'ok') st = 'warn';
+        rows += `<tr class="${r.kind}"><td class="l ind2">${esc(r.name)} <span class="psub">${esc(r.sub)}</span>${r.note ? `<div class="bnote"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1 11.5 11H.5z"/></svg>${esc(r.note)}</div>` : ''}</td>${cellsFor(r)}<td class="l">${r.kind === 'fund' ? chip('info', 'Без explain') : chip(st)}</td></tr>`;
+      });
+    });
+  });
+  if (!rows) rows = `<tr><td class="l" colspan="14"><div class="empty"><b>Нет позиций с |unexplained| &gt; ${num(S.fltX, 1)} млн ₽</b>Снизьте порог фильтра.</div></td></tr>`;
+  const t = TREE.tot;
+  wrap.innerHTML = `<table class="t hier"><thead><tr><th class="l">Позиция · млн ₽</th>${EXC.map(x => `<th>${x[1]}</th>`).join('')}<th>Explained</th><th>Official</th><th>Unexpl.</th><th class="l">Статус</th></tr></thead><tbody>${rows}</tbody>
+    <tfoot><tr class="tot"><td class="l">Итого деск</td>${cellsFor(t)}<td class="l">${chip(status(t.unexplained, t.official, false))}</td></tr></tfoot></table>`;
+}
+$('#hier-wrap').addEventListener('click', e => { const b = e.target.closest('.tg'); if (!b || S.fltOn) return; const k = b.dataset.key; S.open.has(k) ? S.open.delete(k) : S.open.add(k); renderHier(); const nb = $(`#hier-wrap .tg[data-key="${k}"]`); if (nb) nb.focus(); });
+$('#flt-on').addEventListener('change', e => { S.fltOn = e.target.checked; renderHier(); });
+$('#flt-x').addEventListener('input', e => { const v = parseFloat(String(e.target.value).replace(',', '.')); if (!isNaN(v) && v >= 0) { S.fltX = v; if (S.fltOn) renderHier(); } });
+$('#exp-all').addEventListener('click', () => { TREE.desks.forEach(d => { S.open.add(d.key); d.children.forEach(b => S.open.add(b.key)); }); renderHier(); });
+$('#col-all').addEventListener('click', () => { S.open.clear(); TREE.desks.forEach(d => S.open.add(d.key)); renderHier(); });
+
+const RX_BOOKS = BOOKK.filter(b => P.some(p => p.book === b && Object.keys(p.risk).length));
+if (!S.rxBook) { let best = RX_BOOKS[0], bv = 0; RX_BOOKS.forEach(b => { const v = Math.abs(P.filter(p => p.book === b).reduce((s, p) => s + p.pnl.rates, 0)); if (v > bv) { bv = v; best = b; } }); S.rxBook = best; }
+function renderRx(){
+  $('#rx-books').innerHTML = RX_BOOKS.concat(['__all']).map(b => `<button data-rx="${b}" aria-pressed="${S.rxBook === b}">${b === '__all' ? 'Все книги' : esc(D.BOOKS[b].name)}</button>`).join('');
+  const wrap = $('#rx-wrap');
+  if (S.date !== TODAY) { wrap.innerHTML = `<div class="empty"><b>Движения кривых и DV01 хранятся только за ${fdate(TODAY)}</b>За ${fdate(S.date)} разложение rates недоступно.</div>`; return; }
+  const list = S.rxBook === '__all' ? P : P.filter(p => p.book === S.rxBook);
+  const M = U.bucketMatrix(list), curves = CK.filter(c => M[c].some(v => Math.abs(v) > 1));
+  const pnl = {}; curves.forEach(c => pnl[c] = M[c].map((v, i) => v * D.CURVE_MOVES[c][i]));
+  let mx = 0; curves.forEach(c => pnl[c].forEach(v => mx = Math.max(mx, Math.abs(v))));
+  const check = list.reduce((s, p) => s + p.pnl.rates, 0);
+  let h = `<table class="t rx"><thead><tr><th class="l cv">Кривая</th><th class="l">Строка</th>${BK.map(b => `<th>${b}</th>`).join('')}<th>Σ</th></tr></thead><tbody>`;
+  curves.forEach(c => {
+    const dvs = M[c].reduce((a, b) => a + b, 0), ps = pnl[c].reduce((a, b) => a + b, 0);
+    h += `<tr class="dv first"><td class="l" rowspan="3"><b>${esc(c)}</b><div class="psub">${esc(D.CURVES[c].name)}</div></td><td class="rl">DV01, тыс ₽/б.п.</td>${M[c].map(v => `<td class="n">${Math.abs(v) < 500 ? '·' : num(v / 1e3, 0)}</td>`).join('')}<td class="n">${num(dvs / 1e3, 0)}</td></tr>`;
+    h += `<tr class="mv"><td class="rl">Δ кривой, б.п.</td>${D.CURVE_MOVES[c].map(v => `<td class="n">${snum(v)}</td>`).join('')}<td class="n muted">—</td></tr>`;
+    h += `<tr class="pl cvsep"><td class="rl">PnL, млн ₽</td>${pnl[c].map((v, i) => `<td class="n"${heatStyle(v, mx)} data-tip="${T(c + ' · ' + BK[i], [['DV01', num(M[c][i] / 1e3, 1) + ' тыс ₽/б.п.'], ['Δ', snum(D.CURVE_MOVES[c][i]) + ' б.п.'], ['PnL', smln(v, 3) + ' млн ₽']])}">${Math.abs(v) < 5e3 ? '·' : smln(v)}</td>`).join('')}<td class="n"><b>${smln(ps)}</b></td></tr>`;
+  });
+  const tot = curves.reduce((s, c) => s + pnl[c].reduce((a, b) => a + b, 0), 0);
+  h += `<tr class="tot"><td class="l" colspan="2">Rates PnL · ${S.rxBook === '__all' ? 'все книги' : esc(D.BOOKS[S.rxBook].name)}</td>${BK.map((_, i) => `<td class="n">${smln(curves.reduce((s, c) => s + pnl[c][i], 0))}</td>`).join('')}<td class="n">${smln(tot)}</td></tr></tbody></table>
+    <p class="note" style="padding:0 12px 10px">Сверка: сумма матрицы ${smln(tot)} млн = колонка Rates в иерархии ${smln(check)} млн ${Math.abs(tot - check) < 1 ? chip('ok', 'сходится') : chip('warn', 'расхождение')}. Положительный DV01 — выигрыш при росте ставок.</p>`;
+  wrap.innerHTML = h;
+}
+$('#rx-books').addEventListener('click', e => { const b = e.target.closest('[data-rx]'); if (!b) return; S.rxBook = b.dataset.rx; renderRx(); });
+
+function renderExplain(){ renderRecon(); renderWaterfall(); renderHistory(); renderHier(); renderRx(); }
+
+// ================== режимы, тема ==================
+function setMode(m){
+  S.mode = m; LS.set('scenlab.mode', m);
+  $('#mode-scen').setAttribute('aria-selected', m === 'scen'); $('#mode-expl').setAttribute('aria-selected', m === 'expl');
+  $('#view-scen').hidden = m !== 'scen'; $('#view-expl').hidden = m !== 'expl';
+  if (m === 'expl') renderExplain();
+}
+$('#mode-scen').addEventListener('click', () => setMode('scen'));
+$('#mode-expl').addEventListener('click', () => setMode('expl'));
+document.querySelector('.seg[role=tablist]').addEventListener('keydown', e => { if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { const n = S.mode === 'scen' ? 'expl' : 'scen'; setMode(n); $('#mode-' + n).focus(); } });
+
+const THEMES = ['auto', 'light', 'dark'], TL = {auto:'авто', light:'светлая', dark:'тёмная'};
+let theme = LS.get('scenlab.theme', 'auto'); if (!THEMES.includes(theme)) theme = 'auto';
+function applyTheme(){ if (theme === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', theme); $('#theme-btn').textContent = 'Тема: ' + TL[theme]; }
+$('#theme-btn').addEventListener('click', () => { theme = THEMES[(THEMES.indexOf(theme) + 1) % 3]; LS.set('scenlab.theme', theme); applyTheme(); });
+function rethemeCharts(){ if (S.mode === 'expl') { renderWaterfall(); renderHistory(); } }
+new MutationObserver(rethemeCharts).observe(document.documentElement, {attributes:true, attributeFilter:['data-theme']});
+const mq = matchMedia('(prefers-color-scheme: dark)'); (mq.addEventListener ? mq.addEventListener('change', rethemeCharts) : mq.addListener(rethemeCharts));
+
+function setHdr(){ document.documentElement.style.setProperty('--hdr', $('#top').offsetHeight + 'px'); }
+let rz = 0; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { setHdr(); if (S.mode === 'expl') { ['wf','h-main','h-un','h-cum'].forEach(id => { const c = echarts.getInstanceByDom(document.getElementById(id)); if (c) c.resize(); }); renderWaterfall(); } }, 120); });
+
+// ---------- старт ----------
+$('#asof').textContent = 'на ' + fdate(D.asOf);
+applyTheme(); setHdr();
+S.ed = normalize(D.SCENARIOS.find(s => s.id === 'keyhike')); S.cur = 'RUB OFZ'; autoScale();
+renderBuilderAll(); renderResults();
+setMode(S.mode === 'expl' ? 'expl' : 'scen');
+})();
+</script>

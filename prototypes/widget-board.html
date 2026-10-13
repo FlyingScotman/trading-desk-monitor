@@ -1,0 +1,1329 @@
+<title>Desk Widget Board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{
+  /* Layout: a 12-column launchpad grid of crisp, square-cornered panels on a slate-blue workspace; 148px row unit */
+  --font-sans:"IBM Plex Sans",system-ui,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --font-cond:"IBM Plex Sans Condensed","IBM Plex Sans","Arial Narrow",sans-serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
+  --row:148px; --gap:10px;
+  color-scheme:dark;
+  --bg:#151c28; --dot:rgba(143,176,255,.07); --panel:#1e2737; --panel-2:#263145; --line:#2d394d; --line-2:#435270;
+  --fg:#e5eaf2; --fg-2:#b8c2d3; --muted:#8996ac; --accent:#8fb0ff; --accent-ink:#0f1830; --focus:#b9ccff;
+  --chart-grid:#2a3446; --track:#2f3a4f; --scrim:rgba(6,10,18,.62); --shadow:0 12px 32px rgba(3,8,18,.5);
+  --pos:#3987e5; --neg:#e66767; --mid:#3a4457; --total:#c3ccdb;
+  --ok:#0ca30c; --warn:#fab219; --serious:#ec835a; --crit:#d03b3b;
+  --c1:#3987e5; --c2:#d95926; --c3:#199e70; --c4:#c98500; --c5:#d55181; --c6:#008300; --c7:#9085e9; --c8:#e66767;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    color-scheme:light;
+    --bg:#e6eaf0; --dot:rgba(40,62,110,.08); --panel:#ffffff; --panel-2:#f1f4f8; --line:#d4dae4; --line-2:#b4bece;
+    --fg:#141c2a; --fg-2:#38445a; --muted:#5b687e; --accent:#2c4fc4; --accent-ink:#ffffff; --focus:#2c4fc4;
+    --chart-grid:#e9edf3; --track:#e1e6ee; --scrim:rgba(20,28,42,.42); --shadow:0 12px 30px rgba(20,30,50,.18);
+    --pos:#2a78d6; --neg:#e34948; --mid:#e4e7ed; --total:#3a4558;
+    --c1:#2a78d6; --c2:#eb6834; --c3:#1baf7a; --c4:#eda100; --c5:#e87ba4; --c6:#008300; --c7:#6250d6; --c8:#e34948;
+  }
+}
+:root[data-theme="light"]{
+  color-scheme:light;
+  --bg:#e6eaf0; --dot:rgba(40,62,110,.08); --panel:#ffffff; --panel-2:#f1f4f8; --line:#d4dae4; --line-2:#b4bece;
+  --fg:#141c2a; --fg-2:#38445a; --muted:#5b687e; --accent:#2c4fc4; --accent-ink:#ffffff; --focus:#2c4fc4;
+  --chart-grid:#e9edf3; --track:#e1e6ee; --scrim:rgba(20,28,42,.42); --shadow:0 12px 30px rgba(20,30,50,.18);
+  --pos:#2a78d6; --neg:#e34948; --mid:#e4e7ed; --total:#3a4558;
+  --c1:#2a78d6; --c2:#eb6834; --c3:#1baf7a; --c4:#eda100; --c5:#e87ba4; --c6:#008300; --c7:#6250d6; --c8:#e34948;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{background:var(--bg);background-image:radial-gradient(var(--dot) 1px,transparent 1.2px);background-size:18px 18px;color:var(--fg);font:13px/1.4 var(--font-sans);font-variant-numeric:tabular-nums}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.app{max-width:1720px;margin:0 auto;padding-inline:20px;padding-block:0 40px}
+
+/* ---------- top ---------- */
+.top{display:flex;align-items:center;gap:10px 18px;flex-wrap:wrap;padding-block:12px 8px}
+.brand{display:flex;align-items:center;gap:10px;min-width:0}
+.brand svg{flex:none}
+.brand b{font:600 16px var(--font-sans);letter-spacing:-.01em}
+.brand span{font:500 12px var(--font-cond);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font:12px var(--font-mono);color:var(--fg-2)}
+.test{font:500 10.5px var(--font-sans);letter-spacing:.05em;text-transform:uppercase;color:var(--fg);border:1px dashed var(--warn);padding:1px 6px;border-radius:2px}
+.top .actions{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
+.btn{height:28px;padding:0 10px;border:1px solid var(--line-2);background:var(--panel);color:var(--fg);border-radius:3px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font:500 12px var(--font-sans);white-space:nowrap}
+.btn:hover{border-color:var(--accent)}
+.btn.primary,.btn[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn.ghost{background:transparent}
+.btn.armed{border-color:var(--crit);background:color-mix(in srgb,var(--crit) 18%,var(--panel))}
+.btn svg{flex:none}
+
+/* ---------- dock: tabs + edit bar + filter ---------- */
+.dock{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:var(--bg);margin-inline:-20px;padding-inline:20px}
+.tabsrow{display:flex;align-items:flex-end;gap:8px;border-bottom:1px solid var(--line)}
+.tabs{display:flex;gap:2px;overflow-x:auto;min-width:0;flex:1;scrollbar-width:thin}
+.tab{flex:none;border:0;background:transparent;color:var(--fg-2);padding:9px 14px 8px;border-bottom:2px solid transparent;cursor:pointer;font:500 13px var(--font-sans);display:inline-flex;gap:7px;align-items:baseline;white-space:nowrap}
+.tab:hover{color:var(--fg)}
+.tab[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--accent)}
+.tab .cnt{font:11px var(--font-mono);color:var(--muted)}
+.tab.add{color:var(--muted)}
+.tabsrow .reset{flex:none;margin-bottom:5px}
+.editbar{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;margin-top:8px;padding:7px 10px;border:1px dashed var(--accent);background:color-mix(in srgb,var(--accent) 9%,var(--bg));border-radius:3px}
+.editbar label{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--fg-2)}
+.editbar input{height:28px;width:220px;max-width:100%}
+.editbar .hint{font-size:12px;color:var(--fg-2);flex:1 1 220px;min-width:0}
+.filterbar{display:flex;align-items:center;gap:6px 8px;flex-wrap:wrap;min-height:36px;padding-block:6px}
+.filterbar .lbl{font:500 10.5px var(--font-cond);letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.filterbar .hint{font-size:12px;color:var(--muted)}
+.fchip{display:inline-flex;align-items:center;gap:7px;height:24px;padding:0 8px;border:1px solid var(--accent);background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--fg);border-radius:2px;cursor:pointer;font-size:12px}
+.fchip small{color:var(--fg-2);font-size:11px}
+.fchip .x{font:12px var(--font-mono);color:var(--fg-2)}
+.fchip:hover .x{color:var(--fg)}
+.linkbtn{border:0;background:none;color:var(--fg-2);text-decoration:underline dotted;cursor:pointer;font-size:12px;padding:0 2px}
+
+/* ---------- grid ---------- */
+.grid{position:relative;display:grid;grid-template-columns:repeat(12,minmax(0,1fr));grid-auto-rows:var(--row);gap:var(--gap);margin-top:4px}
+.guides{position:absolute;inset:0;display:none;grid-template-columns:repeat(12,minmax(0,1fr));gap:var(--gap);pointer-events:none;z-index:0}
+.editing .guides{display:grid}
+.guides span{background:color-mix(in srgb,var(--accent) 5%,transparent);border-inline:1px dashed color-mix(in srgb,var(--accent) 28%,transparent)}
+.wg{grid-column:span var(--w);grid-row:span var(--h);position:relative;z-index:1;min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:3px;overflow:hidden}
+.editing .wg{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.wg.dragging{opacity:.38;outline:2px dashed var(--accent);outline-offset:-2px}
+.wg.flash{animation:flash 1.4s ease-out}
+@keyframes flash{0%{box-shadow:0 0 0 3px var(--accent)}100%{box-shadow:0 0 0 0 transparent}}
+.wg-h{display:flex;align-items:center;gap:8px;height:32px;flex:none;padding:0 4px 0 10px;border-bottom:1px solid var(--line)}
+.wg-t{font:600 12px var(--font-cond);letter-spacing:.04em;text-transform:uppercase;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:0 1 auto}
+.wg-s{font:11px var(--font-mono);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1 1 0}
+.wg-tools{display:flex;gap:2px;flex:none}
+.ib{width:26px;height:26px;border:1px solid transparent;background:transparent;color:var(--fg-2);border-radius:2px;cursor:pointer;display:inline-grid;place-items:center;padding:0}
+.ib:hover{background:var(--panel-2);border-color:var(--line-2);color:var(--fg)}
+.handle{cursor:grab;touch-action:none;margin-left:-6px}
+.handle:active{cursor:grabbing}
+.app:not(.editing) .edit-only{display:none!important}
+.wg-b{flex:1;min-height:0;position:relative;container-type:inline-size}
+.editing .wg-b{margin-bottom:31px}
+.editing .wg[data-h="1"] .kpi-s,.editing .wg[data-h="1"] .kpi-x{display:none}
+.wg-e{position:absolute;left:0;right:0;bottom:0;z-index:4;display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;padding:5px 6px;background:color-mix(in srgb,var(--panel-2) 95%,transparent);border-top:1px dashed var(--line-2)}
+.seg{display:inline-flex;border:1px solid var(--line-2);border-radius:2px;overflow:hidden}
+.seg button{font:500 10.5px var(--font-mono);padding:2px 6px;border:0;background:transparent;color:var(--fg-2);cursor:pointer;min-width:22px}
+.seg button+button{border-left:1px solid var(--line-2)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+.wg-e .lab{font:10px var(--font-cond);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.dragghost{position:fixed;left:0;top:0;z-index:100;pointer-events:none;background:var(--panel-2);border:1px solid var(--accent);box-shadow:var(--shadow);opacity:.94;padding:9px 12px;font:600 12px var(--font-cond);letter-spacing:.04em;text-transform:uppercase;border-radius:3px}
+.dragghost small{display:block;font:11px var(--font-mono);color:var(--muted);text-transform:none;letter-spacing:0;margin-top:4px}
+.empty-board{grid-column:1/-1;grid-row:span 2;display:grid;place-content:center;justify-items:center;gap:10px;border:1px dashed var(--line-2);border-radius:3px;color:var(--fg-2);text-align:center;padding:16px;z-index:1;background:color-mix(in srgb,var(--panel) 60%,transparent)}
+.empty{position:absolute;inset:0;display:grid;place-content:center;color:var(--muted);font-size:12px;text-align:center;padding:10px}
+
+/* chart hosts */
+.ch{position:absolute;inset:4px 6px 4px 4px}
+.col{position:absolute;inset:0;display:flex;flex-direction:column}
+.chf{flex:1;min-height:0;position:relative}
+.foot{flex:none;padding:4px 10px 6px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;gap:4px 14px;font-size:11.5px;color:var(--fg-2)}
+.foot .sw{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.foot i{width:9px;height:9px;display:inline-block;flex:none}
+.foot b{font:500 11.5px var(--font-mono);color:var(--fg)}
+
+/* KPI */
+.kpi{position:absolute;inset:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(70px,44%);grid-template-rows:auto auto 1fr auto;grid-template-areas:"v sp" "s sp" "x sp" "l l";gap:2px 10px;padding:8px 10px 9px}
+.kpi.nosp{grid-template-columns:minmax(0,1fr);grid-template-areas:"v" "s" "x" "l"}
+.kpi-v{grid-area:v;display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;min-width:0}
+.kpi-v .num{font:500 25px/1.05 var(--font-mono);letter-spacing:-.02em;white-space:nowrap}
+.kpi-v .u{font-size:11px;color:var(--muted);white-space:nowrap}
+.kpi-s{grid-area:s;font:11px var(--font-mono);color:var(--fg-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kpi-sp{grid-area:sp;position:relative;min-height:0}
+.kpi-x{grid-area:x;align-self:end;display:flex;flex-wrap:wrap;gap:0 10px;font:10.5px var(--font-mono);color:var(--muted);min-width:0}
+.kpi-x b{font-weight:500;color:var(--fg-2)}
+.kpi-l{grid-area:l;display:flex;flex-direction:column;gap:4px;min-width:0}
+.kpi-l .row{display:flex;justify-content:space-between;align-items:center;gap:8px;font:10.5px var(--font-mono);color:var(--fg-2);white-space:nowrap;min-width:0}
+.kpi-l .row span:first-child{overflow:hidden;text-overflow:ellipsis}
+@container (max-width:250px){.kpi-v .num{font-size:21px}.kpi{grid-template-columns:minmax(0,1fr) 34%}}
+.ubar{position:relative;height:5px;background:var(--track);border-radius:1px;overflow:hidden}
+.ubar i{position:absolute;left:0;top:0;bottom:0;background:var(--s)}
+.st{--s:var(--ok);display:inline-flex;align-items:center;gap:4px;font:500 10.5px var(--font-sans);padding:1px 6px 1px 4px;border-radius:2px;color:var(--fg);background:color-mix(in srgb,var(--s) 17%,transparent);white-space:nowrap;line-height:16px}
+.st b{color:var(--s);font-weight:700;width:11px;text-align:center}
+.st-ok{--s:var(--ok)}.st-warn{--s:var(--warn)}.st-serious{--s:var(--serious)}.st-crit{--s:var(--crit)}
+.s-ok{--s:var(--ok)}.s-warn{--s:var(--warn)}.s-serious{--s:var(--serious)}.s-crit{--s:var(--crit)}
+
+/* tables */
+.tw{position:absolute;inset:0;overflow:auto}
+.tbl{width:100%;border-collapse:collapse;font-size:12px}
+.tbl th{position:sticky;top:0;z-index:1;background:var(--panel);font:500 10.5px var(--font-sans);color:var(--muted);text-align:left;padding:6px 8px 5px;border-bottom:1px solid var(--line-2);white-space:nowrap}
+.tbl th.n{text-align:right}
+.tbl td{padding:4px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+.tbl tr:hover td{background:var(--panel-2)}
+.tbl .n{text-align:right;font:11.5px var(--font-mono)}
+.tbl .m{color:var(--muted);font-size:11px}
+.tbl .grp td{font:600 10px var(--font-cond);letter-spacing:.07em;text-transform:uppercase;color:var(--muted);background:var(--panel);padding-top:8px}
+.tbl .dim td{opacity:.4}
+.sortb{all:unset;cursor:pointer;display:inline-flex;gap:3px;align-items:center}
+.sortb:hover{color:var(--fg)}
+.sortb:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+.xf{all:unset;cursor:pointer;color:var(--fg);border-bottom:1px dotted var(--muted)}
+.xf:hover{color:var(--accent);border-bottom-color:var(--accent)}
+.xf:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+.tag{display:inline-block;font:500 9.5px var(--font-sans);letter-spacing:.04em;text-transform:uppercase;padding:0 4px;border-radius:2px;border:1px solid var(--line-2);color:var(--fg-2);margin-left:6px;vertical-align:1px}
+.tag.brk{border-color:var(--warn);color:var(--fg)}
+.ucell{display:flex;align-items:center;gap:6px;min-width:110px}
+.ucell .ubar{flex:1;min-width:50px}
+.ucell span{font:11px var(--font-mono);width:44px;text-align:right}
+
+/* tooltips (ECharts html) */
+.ttr{display:flex;align-items:center;gap:6px;font-size:12px;line-height:18px}
+.ttr i{width:8px;height:8px;display:inline-block;flex:none}
+.ttr b{margin-left:auto;padding-left:14px;font:500 12px var(--font-mono)}
+.tth{font:600 11px var(--font-cond);letter-spacing:.05em;text-transform:uppercase;margin-bottom:3px}
+.ttn{font-size:11px;opacity:.8;max-width:280px;white-space:normal;margin-top:4px}
+
+/* overlay: gallery + drawer */
+.overlay{position:fixed;inset:0;background:var(--scrim);z-index:50;display:flex;align-items:flex-start;justify-content:center;padding:6vh 16px 24px;overflow:auto}
+.modal{background:var(--panel);border:1px solid var(--line-2);width:min(1040px,100%);box-shadow:var(--shadow);border-radius:4px}
+.mh{display:flex;align-items:center;gap:12px;padding:12px 14px;border-bottom:1px solid var(--line)}
+.mh h2{margin:0;font:600 15px var(--font-sans)}
+.mh p{margin:0;color:var(--muted);font-size:12px;flex:1}
+.gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px;padding:14px}
+.gcard{text-align:left;display:grid;grid-template-columns:46px minmax(0,1fr);gap:3px 12px;padding:10px;border:1px solid var(--line);background:var(--panel-2);color:var(--fg);border-radius:3px;cursor:pointer}
+.gcard:hover{border-color:var(--accent)}
+.gcard svg{grid-row:span 3;color:var(--accent);width:46px;height:34px}
+.gcard b{font:600 12.5px var(--font-sans)}
+.gcard span{font-size:11.5px;color:var(--fg-2);line-height:1.35}
+.gcard small{font:10.5px var(--font-mono);color:var(--muted)}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(370px,100%);z-index:45;background:var(--panel);border-left:1px solid var(--line-2);box-shadow:var(--shadow);display:flex;flex-direction:column;padding-top:env(safe-area-inset-top,0px)}
+.drawer .mh h2{font-size:14px}
+.dbody{flex:1;overflow:auto;padding:12px 14px;display:flex;flex-direction:column;gap:12px}
+.fld{display:flex;flex-direction:column;gap:5px}
+.fld>label,.fld>.fl{font:500 10.5px var(--font-cond);letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.fld .help{font-size:11px;color:var(--muted)}
+select,input[type="text"],input[type="search"]{font:13px var(--font-sans);background:var(--panel-2);color:var(--fg);border:1px solid var(--line-2);border-radius:3px;height:30px;padding:0 8px;width:100%}
+.chk{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:3px;max-height:320px;overflow:auto;padding:3px}
+.chk label{display:flex;gap:8px;align-items:center;padding:3px 5px;font-size:12px;cursor:pointer;border-radius:2px}
+.chk label:hover{background:var(--panel-2)}
+.chk .h{font:600 10px var(--font-cond);letter-spacing:.07em;text-transform:uppercase;color:var(--muted);padding:6px 5px 2px}
+input[type="checkbox"]{accent-color:var(--accent);margin:0}
+.dfoot{padding:10px 14px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:8px}
+.toast{position:fixed;left:50%;bottom:calc(18px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:60;background:var(--panel-2);border:1px solid var(--line-2);box-shadow:var(--shadow);padding:8px 10px 8px 14px;border-radius:3px;display:flex;gap:12px;align-items:center;font-size:12.5px;max-width:calc(100vw - 32px)}
+
+@media (max-width:1100px){
+  .grid{grid-template-columns:repeat(6,minmax(0,1fr))}
+  .wg[data-w="3"],.wg[data-w="4"]{grid-column:span 3}
+  .wg[data-w="6"],.wg[data-w="8"],.wg[data-w="12"]{grid-column:span 6}
+  .guides{grid-template-columns:repeat(6,minmax(0,1fr))}
+  .guides span:nth-child(n+7){display:none}
+}
+@media (max-width:640px){
+  .app{padding-inline:16px}
+  .dock{position:static;margin-inline:-16px;padding-inline:16px}
+  .grid{grid-template-columns:minmax(0,1fr)}
+  .wg[data-w]{grid-column:1/-1}
+  .editing .guides{display:none}
+  .top .actions{margin-left:0}
+  .tabsrow{flex-wrap:wrap}
+}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+</style>
+
+<div class="app" id="app">
+  <header class="top">
+    <div class="brand">
+      <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><rect x="1" y="1" width="11" height="7" fill="var(--accent)"/><rect x="14" y="1" width="11" height="7" fill="none" stroke="var(--fg-2)" stroke-width="1.2"/><rect x="1" y="10" width="7" height="15" fill="none" stroke="var(--fg-2)" stroke-width="1.2"/><rect x="10" y="10" width="15" height="15" fill="none" stroke="var(--fg-2)" stroke-width="1.2"/></svg>
+      <b>Widget Board</b><span>FI-деск</span>
+    </div>
+    <div class="meta"><span id="asof"></span><span class="test" title="Все цифры вымышленные">Тестовые данные</span></div>
+    <div class="actions">
+      <button class="btn" id="editBtn" aria-pressed="false" type="button"><svg width="13" height="13" viewBox="0 0 13 13" aria-hidden="true"><path d="M1 12V9.5L8.6 1.9l2.5 2.5L3.5 12z" fill="none" stroke="currentColor" stroke-width="1.3"/></svg><span>Редактировать доску</span></button>
+      <button class="btn ghost" id="themeBtn" type="button" title="Переключить тему"><svg width="13" height="13" viewBox="0 0 13 13" aria-hidden="true"><circle cx="6.5" cy="6.5" r="5.3" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6.5 1.2a5.3 5.3 0 0 1 0 10.6z" fill="currentColor"/></svg><span>Тема</span></button>
+    </div>
+  </header>
+  <div class="dock">
+    <div class="tabsrow">
+      <nav class="tabs" id="tabs" role="tablist" aria-label="Доски"></nav>
+      <button class="btn ghost reset" id="resetBtn" type="button">Сбросить к стандартным</button>
+    </div>
+    <div class="editbar edit-only" id="editbar">
+      <button class="btn primary" id="addWBtn" type="button">+ Виджет</button>
+      <label for="boardName">Название <input type="text" id="boardName" maxlength="40"></label>
+      <button class="btn ghost" id="delBoardBtn" type="button">Удалить доску</button>
+      <span class="hint">Тяните за ⠿, чтобы переставить. Размер — внизу виджета, настройки — шестерёнка. Стрелки на ⠿ двигают виджет с клавиатуры.</span>
+      <button class="btn" id="doneBtn" type="button">Готово</button>
+    </div>
+    <div class="filterbar" id="filterbar"></div>
+  </div>
+  <main class="grid" id="grid" aria-label="Виджеты доски"></main>
+</div>
+<div class="sr" aria-live="polite" id="live"></div>
+
+<script src="data.js"></script>
+<script src="echarts.min.js"></script>
+<script>
+(function(){
+'use strict';
+const D = window.DESK, U = D.util;
+const BK = Object.keys(D.BOOKS);
+const CCYS = ['USD','CNY','EUR'];
+const CCY_ORDER = ['RUB','USD','CNY','EUR'];
+const SEGS = ['Гос','Корп','Секьюритизация','Деривативы','FX'];
+const FTYPES = ['РЕПО с ЦК','TSY FTP','Обратное РЕПО','FX-своп','Гарантийное обеспечение'];
+const CURVE_KEYS = Object.keys(D.CURVES);
+const H = D.history, HL = H[H.length - 1], HP = H[H.length - 2];
+const RM = matchMedia('(prefers-reduced-motion: reduce)');
+const sum = U.sum;
+const $ = s => document.querySelector(s);
+
+/* ---------------- formatting ---------------- */
+const NF = {};
+const nf = d => NF[d] || (NF[d] = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: d, maximumFractionDigits: d }));
+function num(x, d = 1, sign = false) {
+  if (x == null || !isFinite(x)) return '—';
+  let s = nf(d).format(x).replace(/ /g, ' ');
+  const zero = /^-?0(,0+)?$/.test(s);
+  if (zero) s = s.replace('-', '');
+  s = s.replace('-', '−');
+  if (sign && x > 0 && !zero) s = '+' + s;
+  return s;
+}
+const mln = (x, d = 1, s) => num(x / 1e6, d, s);
+const bln = (x, d = 1, s) => num(x / 1e9, d, s);
+const ths = (x, d = 0, s) => num(x / 1e3, d, s);
+const pct = (x, d = 0) => num(x * 100, d) + ' %';
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const ddmm = d => d.slice(8, 10) + '.' + d.slice(5, 7);
+$('#asof').textContent = 'Срез ' + D.asOf.split('-').reverse().join('.');
+
+function status(u) {
+  if (u >= 1) return { k: 'crit', i: '✕', t: 'нарушение' };
+  if (u >= 0.9) return { k: 'serious', i: '▲', t: 'у лимита' };
+  if (u >= 0.75) return { k: 'warn', i: '!', t: 'внимание' };
+  return { k: 'ok', i: '✓', t: 'в норме' };
+}
+const chip = u => { const s = status(u); return `<span class="st st-${s.k}"><b aria-hidden="true">${s.i}</b>${s.t}</span>`; };
+const ubar = u => `<div class="ubar s-${status(u).k}" role="img" aria-label="Загрузка ${pct(u)}"><i style="width:${Math.min(100, u * 100).toFixed(1)}%"></i></div>`;
+
+/* ---------------- theme tokens ---------------- */
+let TK = {};
+function readTK() {
+  const cs = getComputedStyle(document.documentElement), g = n => cs.getPropertyValue('--' + n).trim();
+  TK = { panel: g('panel'), panel2: g('panel-2'), line: g('line'), line2: g('line-2'), fg: g('fg'), fg2: g('fg-2'), muted: g('muted'),
+    grid: g('chart-grid'), accent: g('accent'), pos: g('pos'), neg: g('neg'), mid: g('mid'), total: g('total'),
+    ok: g('ok'), warn: g('warn'), serious: g('serious'), crit: g('crit'),
+    cat: [1, 2, 3, 4, 5, 6, 7, 8].map(i => g('c' + i)), mono: g('font-mono'), sans: g('font-sans') };
+}
+function ink(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || ''); if (!m) return '#ffffff';
+  const n = parseInt(m[1], 16), ch = [n >> 16, (n >> 8) & 255, n & 255].map(v => { v /= 255; return v <= .03928 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); });
+  const L = .2126 * ch[0] + .7152 * ch[1] + .0722 * ch[2];
+  return L > .3 ? '#111822' : '#ffffff';
+}
+const bookCol = b => TK.cat[BK.indexOf(b) % 8];
+const ccyCol = c => TK.cat[Math.max(0, CCY_ORDER.indexOf(c))];
+const ftCol = t => TK.cat[FTYPES.indexOf(t) % 8];
+const scCol = id => TK.cat[D.SCENARIOS.findIndex(s => s.id === id) % 8];
+const curveCol = c => TK.cat[CURVE_KEYS.indexOf(c) % 8];
+const signCol = v => v < 0 ? TK.neg : TK.pos;
+
+/* ---------------- ECharts helpers ---------------- */
+const tt = x => Object.assign({ confine: true, backgroundColor: TK.panel2, borderColor: TK.line2, borderWidth: 1, padding: [6, 9],
+  textStyle: { color: TK.fg, fontSize: 12, fontFamily: TK.sans }, extraCssText: 'border-radius:3px;box-shadow:0 6px 18px rgba(0,0,0,.22)' }, x || {});
+const axisTT = x => tt(Object.assign({ trigger: 'axis', axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(128,140,160,.12)' } } }, x || {}));
+const base = o => Object.assign({ animation: !RM.matches, animationDuration: 260, textStyle: { fontFamily: TK.sans, color: TK.fg2, fontSize: 11 },
+  grid: { left: 6, right: 14, top: 12, bottom: 4, containLabel: true } }, o);
+const vAxis = (fmt, x) => Object.assign({ type: 'value', axisLabel: { color: TK.muted, fontSize: 10, fontFamily: TK.mono, formatter: fmt, hideOverlap: true },
+  splitLine: { lineStyle: { color: TK.grid } }, axisLine: { show: false }, axisTick: { show: false } }, x || {});
+const cAxis = (data, x) => Object.assign({ type: 'category', data, axisLabel: { color: TK.fg2, fontSize: 10 }, axisLine: { lineStyle: { color: TK.line2 } }, axisTick: { show: false } }, x || {});
+const legend = x => Object.assign({ type: 'scroll', top: 0, left: 0, right: 0, itemWidth: 10, itemHeight: 8, icon: 'rect', itemGap: 12,
+  textStyle: { color: TK.fg2, fontSize: 11 }, pageTextStyle: { color: TK.muted }, pageIconColor: TK.fg2, pageIconInactiveColor: TK.line2, pageIconSize: 10 }, x || {});
+const ttr = (c, n, v) => `<div class="ttr"><i style="background:${c}"></i>${esc(n)}<b>${v}</b></div>`;
+
+const charts = new Map();
+const ro = new ResizeObserver(es => requestAnimationFrame(() => es.forEach(e => { const c = e.target._ec; if (c && !c.isDisposed()) c.resize(); })));
+function mk(el, wid, opt, onClick) {
+  const c = echarts.init(el, null, { renderer: 'canvas' });
+  c.setOption(opt); el._ec = c; ro.observe(el);
+  if (!charts.has(wid)) charts.set(wid, []);
+  charts.get(wid).push(c);
+  if (onClick) c.on('click', onClick);
+  return c;
+}
+function disposeW(wid) {
+  (charts.get(wid) || []).forEach(c => { try { ro.unobserve(c.getDom()); c.dispose(); } catch (e) {} });
+  charts.delete(wid);
+}
+
+/* ---------------- state ---------------- */
+const LS = 'dwb.boards.v1', LS_THEME = 'dwb.theme';
+const filters = {};          // boardId -> {book, issuer, ccy}
+const ui = { edit: false, sorts: {}, cfgOpen: null };
+let state;
+let uidN = 0;
+const nid = () => 'w' + Date.now().toString(36) + (uidN++).toString(36);
+const bf = () => filters[state.active] || (filters[state.active] = {});
+const board = () => state.boards.find(b => b.id === state.active) || state.boards[0];
+function save() { try { localStorage.setItem(LS, JSON.stringify(state)); } catch (e) {} }
+const live = t => { $('#live').textContent = t; };
+
+/* ---------------- scoping ---------------- */
+const on = v => v && v !== 'all';
+function ccyMatch(x, c) { if (!on(c)) return true; return c === 'nonRUB' ? x.ccy !== 'RUB' : x.ccy === c; }
+function scope(cfg) {
+  cfg = cfg || {}; const f = bf();
+  return D.positions.filter(p => (!f.book || p.book === f.book) && (!f.issuer || p.issuerGroup === f.issuer) && (!f.ccy || p.ccy === f.ccy) &&
+    (!on(cfg.book) || p.book === cfg.book) && (!on(cfg.segment) || p.segment === cfg.segment) && ccyMatch(p, cfg.ccy));
+}
+function fscope(cfg) {
+  cfg = cfg || {}; const f = bf();
+  if (f.issuer) return [];
+  if (on(cfg.segment)) return [];
+  return D.funding.filter(x => (!f.book || x.book === f.book) && (!f.ccy || x.ccy === f.ccy) && (!on(cfg.book) || x.book === cfg.book) && ccyMatch(x, cfg.ccy));
+}
+const effBook = cfg => bf().book || (on(cfg.book) ? cfg.book : null);
+const anyBoardFilter = () => Object.keys(bf()).length > 0;
+const isFiltered = cfg => anyBoardFilter() || on(cfg.book) || on(cfg.segment) || on(cfg.ccy);
+function tags(cfg) {
+  const t = [];
+  if (on(cfg.book)) t.push(D.BOOKS[cfg.book].name);
+  if (on(cfg.segment)) t.push(cfg.segment);
+  if (on(cfg.ccy)) t.push(cfg.ccy === 'nonRUB' ? 'валютные' : cfg.ccy);
+  return t;
+}
+function ocpParts(l, fl, c) {
+  const g = t => sum(l.filter(p => p.instrType === t), p => p.fxDelta[c] || 0);
+  return { bonds: g('BOND'), derivs: g('XCCY'), fx: g('FX'), funding: sum(fl, f => f.fxDelta[c] || 0) };
+}
+function issuerExposure(l, measure) {
+  const m = {};
+  l.forEach(p => {
+    if (!p.issuerGroup) return;
+    let v;
+    if (measure === 'jtd') v = p.jtd; else if (measure === 'cs01') v = p.cs01;
+    else v = p.instrType === 'CDS' ? (p.side === 'SELL' ? 1 : -1) * p.notional : p.mvRub;
+    m[p.issuerGroup] = (m[p.issuerGroup] || 0) + v;
+  });
+  return m;
+}
+// funding PnL in scope: carry of funding rows + unallocated FX residual of the books in scope
+function fundPnl(cfg) {
+  const fl = fscope(cfg), carry = sum(fl, f => f.pnl.carry);
+  let fx = 0;
+  if (!bf().issuer && !bf().ccy && !on(cfg.segment) && !on(cfg.ccy)) {
+    const b = effBook(cfg);
+    fx = sum(b ? [b] : BK, k => (D.fundingPnlByBook[k] && D.fundingPnlByBook[k].fx) || 0);
+  }
+  return { carry, fx, total: carry + fx };
+}
+const groupLimit = g => D.LIMITS.issuerGroupOverrides[g] != null ? D.LIMITS.issuerGroupOverrides[g] : D.LIMITS.issuerGroup;
+const spreadMove = p => p.cs01 ? p.pnl.spread / p.cs01 : null;
+
+/* ---------------- cross-filter ---------------- */
+const DIM_LABEL = { book: 'Книга', issuer: 'Эмитент', ccy: 'Валюта' };
+const dimValLabel = (dim, v) => dim === 'book' ? D.BOOKS[v].name : v;
+function setXf(dim, val) {
+  if (!val) return;
+  const f = bf();
+  if (f[dim] === val) delete f[dim]; else f[dim] = val;
+  renderFilterBar(); renderBodies();
+  live(f[dim] ? `Фильтр доски: ${DIM_LABEL[dim]} ${dimValLabel(dim, val)}` : 'Фильтр снят');
+}
+
+/* ---------------- field definitions ---------------- */
+const OPT = {
+  book: () => [['all', 'Все книги']].concat(BK.map(k => [k, D.BOOKS[k].name])),
+  segment: () => [['all', 'Все сегменты']].concat(SEGS.map(s => [s, s])),
+  ccy: () => [['all', 'Все валюты'], ['RUB', 'RUB'], ['USD', 'USD'], ['CNY', 'CNY'], ['EUR', 'EUR'], ['nonRUB', 'Валютные (не RUB)']],
+  curve: () => CURVE_KEYS.map(c => [c, c + ' — ' + D.CURVES[c].name]),
+};
+const FB = { key: 'book', label: 'Книга', type: 'select', opts: OPT.book };
+const FS = { key: 'segment', label: 'Сегмент', type: 'select', opts: OPT.segment };
+const FC = { key: 'ccy', label: 'Валюта', type: 'select', opts: OPT.ccy };
+const FILT = [FB, FS, FC];
+const METRICS = { dv01: 'DV01', cs01: 'CS01', ocpUSD: 'ОВП USD', ocpCNY: 'ОВП CNY', ocpEUR: 'ОВП EUR', var: 'VaR 99 %', pnl: 'PnL дня', mv: 'MV нетто' };
+const TREE_DIMS = { book: 'книгам', segment: 'сегментам', sector: 'секторам', rating: 'рейтингам', ccy: 'валютам', assetClass: 'классам активов' };
+const BL_MEAS = { mv: '|MV|', dv01: '|DV01|', cs01: '|CS01|', pnl: '|PnL дня|', jtd: 'JTD', fx: 'FX-дельта' };
+const topNOpts = () => [['5', '5'], ['8', '8'], ['10', '10'], ['12', '12'], ['15', '15'], ['20', '20'], ['50', '50'], ['0', 'Все']];
+
+/* ---------------- glyphs for gallery ---------------- */
+const GLY = {
+  kpi: '<svg viewBox="0 0 46 34" aria-hidden="true"><rect x="3" y="5" width="18" height="7" fill="currentColor"/><polyline points="25,15 30,10 35,13 43,5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="25" width="40" height="3" fill="currentColor" opacity=".3"/><rect x="3" y="25" width="29" height="3" fill="currentColor"/></svg>',
+  bars: '<svg viewBox="0 0 46 34" aria-hidden="true"><rect x="4" y="17" width="5" height="6" fill="currentColor"/><rect x="11" y="17" width="5" height="12" fill="currentColor"/><rect x="18" y="9" width="5" height="8" fill="currentColor" opacity=".55"/><rect x="25" y="17" width="5" height="14" fill="currentColor"/><rect x="32" y="5" width="5" height="12" fill="currentColor" opacity=".55"/><rect x="39" y="17" width="4" height="5" fill="currentColor"/><rect x="2" y="16.5" width="42" height="1" fill="currentColor" opacity=".4"/></svg>',
+  heat: '<svg viewBox="0 0 46 34" aria-hidden="true">' + [0, 1, 2, 3].map(r => [0, 1, 2, 3, 4, 5].map(c => `<rect x="${3 + c * 7}" y="${3 + r * 7.5}" width="6" height="6.5" fill="currentColor" opacity="${(0.15 + ((r * 5 + c * 3) % 7) / 8).toFixed(2)}"/>`).join('')).join('') + '</svg>',
+  hbars: '<svg viewBox="0 0 46 34" aria-hidden="true"><rect x="3" y="4" width="34" height="5" fill="currentColor"/><rect x="3" y="12" width="26" height="5" fill="currentColor"/><rect x="3" y="20" width="18" height="5" fill="currentColor"/><rect x="3" y="28" width="11" height="4" fill="currentColor"/><rect x="40" y="2" width="1.6" height="9" fill="currentColor" opacity=".6"/><rect x="33" y="10" width="1.6" height="9" fill="currentColor" opacity=".6"/></svg>',
+  tree: '<svg viewBox="0 0 46 34" aria-hidden="true"><rect x="2" y="2" width="24" height="30" fill="currentColor"/><rect x="28" y="2" width="16" height="17" fill="currentColor" opacity=".6"/><rect x="28" y="21" width="9" height="11" fill="currentColor" opacity=".4"/><rect x="39" y="21" width="5" height="11" fill="currentColor" opacity=".25"/></svg>',
+  stack: '<svg viewBox="0 0 46 34" aria-hidden="true"><rect x="4" y="6" width="7" height="10" fill="currentColor"/><rect x="4" y="16" width="7" height="6" fill="currentColor" opacity=".5"/><rect x="15" y="10" width="7" height="12" fill="currentColor"/><rect x="26" y="14" width="7" height="8" fill="currentColor"/><rect x="26" y="22" width="7" height="8" fill="currentColor" opacity=".5"/><rect x="37" y="18" width="6" height="4" fill="currentColor"/></svg>',
+  water: '<svg viewBox="0 0 46 34" aria-hidden="true"><rect x="3" y="4" width="14" height="4" fill="currentColor"/><rect x="17" y="10" width="8" height="4" fill="currentColor" opacity=".55"/><rect x="12" y="16" width="5" height="4" fill="currentColor" opacity=".55"/><rect x="12" y="22" width="12" height="4" fill="currentColor"/><rect x="3" y="28" width="21" height="4" fill="currentColor" opacity=".8"/></svg>',
+  line: '<svg viewBox="0 0 46 34" aria-hidden="true"><polyline points="3,24 10,18 17,21 24,11 31,14 38,7 43,9" fill="none" stroke="currentColor" stroke-width="1.6"/><polyline points="3,27 10,20 17,24 24,15 31,15 38,10 43,13" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="2 2" opacity=".7"/></svg>',
+  table: '<svg viewBox="0 0 46 34" aria-hidden="true"><rect x="3" y="3" width="40" height="5" fill="currentColor"/>' + [11, 17, 23, 29].map(y => `<rect x="3" y="${y}" width="22" height="3" fill="currentColor" opacity=".45"/><rect x="30" y="${y}" width="13" height="3" fill="currentColor" opacity=".7"/>`).join('') + '</svg>',
+  curve: '<svg viewBox="0 0 46 34" aria-hidden="true"><path d="M3 8 C 12 16, 20 19, 43 17" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M3 12 C 12 18, 22 22, 43 21" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".6"/>' + [0, 1, 2, 3, 4, 5].map(i => `<rect x="${4 + i * 7}" y="${27 - (6 - i)}" width="4" height="${6 - i}" fill="currentColor" opacity=".55"/>`).join('') + '</svg>',
+  star: '<svg viewBox="0 0 46 34" aria-hidden="true"><path d="M8 4 l2 4.5 4.8.4-3.7 3.1 1.2 4.7L8 14.2 3.7 16.7l1.2-4.7L1.2 8.9 6 8.5z" fill="currentColor"/><rect x="18" y="6" width="25" height="3" fill="currentColor" opacity=".7"/><rect x="18" y="16" width="25" height="3" fill="currentColor" opacity=".45"/><rect x="18" y="26" width="25" height="3" fill="currentColor" opacity=".45"/><rect x="3" y="22" width="10" height="3" fill="currentColor" opacity=".45"/></svg>',
+};
+
+/* ================= WIDGET TYPES ================= */
+const WT = {};
+
+/* ---- KPI tile ---- */
+WT.kpi = {
+  name: 'KPI-плитка', glyph: 'kpi', desc: 'Одна метрика крупно: DV01, CS01, ОВП, VaR, PnL дня или MV. Загрузка лимита и спарклайн из истории.',
+  def: { w: 3, h: 1, cfg: { metric: 'dv01', book: 'all', segment: 'all', ccy: 'all' } },
+  fields: [{ key: 'metric', label: 'Метрика', type: 'select', opts: () => Object.entries(METRICS) }].concat(FILT),
+  title: c => METRICS[c.metric] || 'KPI',
+  render(b, cfg, w) {
+    const l = scope(cfg), fl = fscope(cfg), m = cfg.metric, book = effBook(cfg), filt = isFiltered(cfg);
+    let val = '—', unit = '', sub = '', lim = null, limLabel = '', util = 0, sp = null, spKind = 'line', spFmt = null, extra = '';
+    if (m === 'dv01' || m === 'cs01') {
+      const v = sum(l, p => p[m]);
+      val = mln(v, 2); unit = 'млн ₽/б.п.';
+      if (m === 'dv01') { lim = book ? D.LIMITS.dv01ByBook[book] : D.LIMITS.dv01Total; limLabel = book ? 'лимит книги' : 'лимит деска'; }
+      else { lim = D.LIMITS.cs01Total; limLabel = 'лимит деска'; }
+      util = Math.abs(v) / lim;
+      const k = HL[m] ? v / HL[m] : 0;
+      sp = H.map(h => h[m] * k); spFmt = x => mln(x, 2) + ' млн ₽/б.п.';
+      sub = `за день ${mln(v - HP[m] * k, 2, true)}` + (filt ? ' · история ∝ доле' : '');
+    } else if (m.startsWith('ocp')) {
+      const c = m.slice(3), pr = ocpParts(l, fl, c), net = pr.bonds + pr.derivs + pr.fx + pr.funding;
+      val = mln(net, 1, true); unit = 'млн ' + c; lim = D.LIMITS.ocp[c]; limLabel = 'лимит ' + mln(lim, 0) + ' млн'; util = Math.abs(net) / lim;
+      sub = `≈ ${mln(net * D.FX[c], 0, true)} млн ₽ · курс ${num(D.FX[c], 2)}`;
+      extra = [['обл.', pr.bonds], ['XCCY', pr.derivs], ['FX', pr.fx], ['фонд.', pr.funding]].map(([n, v]) => `<span>${n} <b>${mln(v, 1, true)}</b></span>`).join('');
+      limLabel = 'от лимита ' + mln(lim, 0) + ' млн ' + c;
+    } else if (m === 'var') {
+      const v = HL.var99; val = mln(v, 0); unit = 'млн ₽'; lim = D.LIMITS.var99; limLabel = 'лимит деска'; util = v / lim;
+      sp = H.map(h => h.var99); spFmt = x => mln(x, 0) + ' млн ₽';
+      sub = '99 %, 1 день' + (anyBoardFilter() ? ' · деск целиком' : ` · вчера ${mln(HP.var99, 0)}`);
+    } else if (m === 'pnl') {
+      const fund = fundPnl(cfg).total, v = sum(l, p => p.pnl.official) + fund;
+      const ex = sum(l, p => p.pnl.explained) + fund, un = sum(l, p => p.pnl.unexplained);
+      val = mln(v, 1, true); unit = 'млн ₽';
+      sub = `фондирование ${mln(fund, 1, true)} млн` + (bf().issuer ? ' (не учтено)' : '');
+      extra = `<span>объяснено <b>${mln(ex, 1, true)}</b></span><span>необъясн. <b>${mln(un, 1, true)}</b></span>`;
+      if (!filt) { sp = H.map(h => h.pnlOfficial); spKind = 'bar'; spFmt = x => mln(x, 1, true) + ' млн ₽'; }
+      else extra += '<span>история — по деску</span>';
+    } else if (m === 'mv') {
+      const v = sum(l, p => p.mvRub), g = sum(l, p => Math.abs(p.mvRub));
+      val = bln(v, 1, true); unit = 'млрд ₽'; sub = `брутто ${bln(g, 1)} млрд · ${l.length} поз.`;
+      const bySeg = U.groupBy(l, 'segment');
+      extra = SEGS.filter(s => bySeg[s]).map(s => `<span>${s} <b>${pct(sum(bySeg[s], p => Math.abs(p.mvRub)) / (g || 1))}</b></span>`).join('');
+    }
+    if (!l.length && m !== 'var') { b.innerHTML = '<div class="empty">Нет позиций под фильтр</div>'; return 'нет данных'; }
+    const limHtml = lim ? `${ubar(util)}<div class="row"><span>${pct(util)} · ${limLabel}${m === 'dv01' || m === 'cs01' || m === 'var' ? ' ' + mln(lim, m === 'var' ? 0 : 1) + ' млн' : ''}</span>${chip(util)}</div>` : '';
+    b.innerHTML = `<div class="kpi${sp ? '' : ' nosp'}"><div class="kpi-v"><span class="num">${val}</span><span class="u">${unit}</span></div>
+      <div class="kpi-s">${sub}</div>${sp ? '<div class="kpi-sp"></div>' : ''}<div class="kpi-x">${extra}</div><div class="kpi-l">${limHtml}</div></div>`;
+    if (sp) sparkline(b.querySelector('.kpi-sp'), w.id, sp, spKind, spFmt);
+    return tags(cfg).join(' · ') || (m === 'var' ? 'исторический' : anyBoardFilter() ? 'фильтр доски' : 'деск');
+  }
+};
+function sparkline(el, wid, data, kind, fmt) {
+  const dates = H.map(h => ddmm(h.date)), last = data.length - 1;
+  mk(el, wid, base({
+    grid: { left: 2, right: 6, top: 6, bottom: 4, containLabel: false },
+    tooltip: axisTT({ axisPointer: { type: kind === 'bar' ? 'shadow' : 'line', lineStyle: { color: TK.line2 } }, formatter: ps => `<div class="tth">${ps[0].axisValue}</div><b style="font-family:${TK.mono}">${fmt(ps[0].value)}</b>` }),
+    xAxis: { type: 'category', data: dates, show: false, boundaryGap: kind === 'bar' },
+    yAxis: { type: 'value', show: false, scale: kind !== 'bar' },
+    series: [kind === 'bar'
+      ? { type: 'bar', data: data.map(v => ({ value: v, itemStyle: { color: signCol(v), opacity: .85 } })), barWidth: '62%' }
+      : { type: 'line', data, showSymbol: false, symbol: 'circle', lineStyle: { width: 1.5, color: TK.accent }, itemStyle: { color: TK.accent },
+          areaStyle: { color: TK.accent, opacity: .1 },
+          markPoint: { symbol: 'circle', symbolSize: 6, label: { show: false }, itemStyle: { color: TK.accent, borderColor: TK.panel, borderWidth: 1.5 }, data: [{ coord: [last, data[last]] }] } }]
+  }));
+}
+
+/* ---- DV01 ladder ---- */
+WT.ladder = {
+  name: 'Лестница DV01', glyph: 'bars', desc: 'DV01 по бакетам 1M…20Y+ для выбранной кривой. Можно разложить по книгам.',
+  def: { w: 4, h: 2, cfg: { curve: 'RUB OFZ', stack: 'none', book: 'all', segment: 'all', ccy: 'all' } },
+  fields: [{ key: 'curve', label: 'Кривая', type: 'select', opts: OPT.curve }, { key: 'stack', label: 'Разбивка', type: 'select', opts: () => [['none', 'Итог по бакету'], ['book', 'По книгам']] }].concat(FILT),
+  title: c => 'DV01 · ' + c.curve,
+  render(b, cfg, w) {
+    const l = scope(cfg), c = cfg.curve;
+    const tot = U.bucketMatrix(l, [c])[c];
+    if (!tot.some(v => Math.abs(v) > 1)) { b.innerHTML = '<div class="empty">Нет риска по кривой ' + esc(c) + ' под фильтр</div>'; return 'тыс ₽/б.п.'; }
+    let series;
+    if (cfg.stack === 'book') {
+      const byB = U.groupBy(l, 'book');
+      series = BK.filter(k => byB[k]).map(k => ({ name: D.BOOKS[k].name, key: k, type: 'bar', stack: 's', barMaxWidth: 26,
+        data: U.bucketMatrix(byB[k], [c])[c].map(v => v / 1e3), itemStyle: { color: bookCol(k) } })).filter(s => s.data.some(v => Math.abs(v) > .05));
+    } else {
+      series = [{ name: 'DV01', type: 'bar', barMaxWidth: 26, data: tot.map(v => ({ value: v / 1e3, itemStyle: { color: signCol(v) } })) }];
+    }
+    b.innerHTML = '<div class="ch"></div>';
+    mk(b.firstChild, w.id, base({
+      legend: series.length > 1 ? legend() : undefined,
+      grid: { left: 6, right: 10, top: series.length > 1 ? 26 : 12, bottom: 4, containLabel: true },
+      tooltip: axisTT({ formatter: ps => `<div class="tth">${esc(c)} · ${ps[0].axisValue}</div>` + ps.filter(p => Math.abs(p.value) > .05).map(p => ttr(series.length > 1 ? p.color : signCol(p.value), p.seriesName, num(p.value, 0) + ' тыс')).join('') +
+        (series.length > 1 ? ttr(TK.total, 'Итого', num(tot[ps[0].dataIndex] / 1e3, 0) + ' тыс') : '') }),
+      xAxis: cAxis(D.BUCKETS, { axisLabel: { color: TK.fg2, fontSize: 10, interval: 0, hideOverlap: true } }),
+      yAxis: vAxis(v => num(v, 0)),
+      series
+    }), p => { const s = series[p.seriesIndex]; if (s && s.key) setXf('book', s.key); });
+    return `тыс ₽/б.п. · Σ ${mln(sum(tot), 2)} млн` + (tags(cfg).length ? ' · ' + tags(cfg).join(' · ') : '');
+  }
+};
+
+/* ---- heatmap ---- */
+WT.heatmap = {
+  name: 'Тепловая карта DV01', glyph: 'heat', desc: 'Матрица кривая × бакет (или книга × бакет). Диверг. шкала: красный — длинный риск ставок, синий — короткий.',
+  def: { w: 12, h: 2, cfg: { rows: 'curve', curve: 'all', book: 'all', segment: 'all', ccy: 'all' } },
+  fields: [{ key: 'rows', label: 'Строки', type: 'select', opts: () => [['curve', 'Кривые'], ['book', 'Книги']] },
+    { key: 'curve', label: 'Кривая (для строк-книг)', type: 'select', opts: () => [['all', 'Все кривые']].concat(OPT.curve()) }].concat(FILT),
+  title: c => c.rows === 'book' ? 'DV01: книга × бакет' : 'DV01: кривая × бакет',
+  render(b, cfg, w) {
+    const l = scope(cfg);
+    let rows = [];
+    if (cfg.rows === 'book') {
+      const curves = on(cfg.curve) ? [cfg.curve] : CURVE_KEYS, byB = U.groupBy(l, 'book');
+      BK.filter(k => byB[k]).forEach(k => {
+        const m = U.bucketMatrix(byB[k], curves), v = D.BUCKETS.map((_, i) => sum(curves, c => m[c][i]));
+        if (v.some(x => Math.abs(x) > 1)) rows.push({ key: k, name: D.BOOKS[k].name, v, dim: 'book' });
+      });
+    } else {
+      const m = U.bucketMatrix(l);
+      CURVE_KEYS.forEach(c => { if (m[c].some(x => Math.abs(x) > 1)) rows.push({ key: D.CURVES[c].ccy, name: c, v: m[c], dim: 'ccy' }); });
+    }
+    if (!rows.length) { b.innerHTML = '<div class="empty">Нет риска ставок под фильтр</div>'; return 'тыс ₽/б.п.'; }
+    const max = Math.max(1, ...rows.flatMap(r => r.v.map(x => Math.abs(x / 1e3))));
+    const data = [];
+    rows.forEach((r, y) => r.v.forEach((x, i) => { const v = x / 1e3; data.push({ value: [i, y, v], label: { color: Math.abs(v) > .5 * max ? '#ffffff' : TK.fg } }); }));
+    b.innerHTML = '<div class="ch"></div>';
+    const showLab = b.clientWidth / (D.BUCKETS.length + 2) > 40 && b.clientHeight / rows.length > 16;
+    mk(b.firstChild, w.id, base({
+      grid: { left: 6, right: 70, top: 6, bottom: 4, containLabel: true },
+      tooltip: tt({ trigger: 'item', formatter: p => `<div class="tth">${esc(rows[p.value[1]].name)} · ${D.BUCKETS[p.value[0]]}</div>` +
+        ttr(signCol(p.value[2]), 'DV01', num(p.value[2], 0) + ' тыс ₽/б.п.') + ttr(TK.total, 'Итого по строке', mln(sum(rows[p.value[1]].v), 2) + ' млн') +
+        `<div class="ttn">Клик — фильтр доски: ${rows[p.value[1]].dim === 'book' ? 'книга' : 'валюта ' + rows[p.value[1]].key}</div>` }),
+      xAxis: cAxis(D.BUCKETS, { position: 'top', splitArea: { show: false }, axisLine: { show: false } }),
+      yAxis: cAxis(rows.map(r => r.name), { inverse: true, axisLine: { show: false } }),
+      visualMap: { min: -max, max, calculable: false, orient: 'vertical', right: 4, top: 'middle', itemWidth: 10, itemHeight: Math.max(60, Math.min(160, b.clientHeight - 60)),
+        inRange: { color: [TK.neg, TK.mid, TK.pos] }, text: ['+' + num(max, 0), '−' + num(max, 0)], textStyle: { color: TK.muted, fontSize: 10, fontFamily: TK.mono }, textGap: 4 },
+      series: [{ type: 'heatmap', data, itemStyle: { borderColor: TK.panel, borderWidth: 2 },
+        label: { show: showLab, fontSize: 10, fontFamily: TK.mono, formatter: p => Math.abs(p.value[2]) < .5 ? '' : num(p.value[2], 0) },
+        emphasis: { itemStyle: { borderColor: TK.fg, borderWidth: 1 } } }]
+    }), p => { const r = rows[p.value[1]]; if (r) setXf(r.dim, r.key); });
+    return `тыс ₽/б.п. · Σ ${mln(sum(rows, r => sum(r.v)), 2)} млн` + (tags(cfg).length ? ' · ' + tags(cfg).join(' · ') : '');
+  }
+};
+
+/* ---- issuer concentration ---- */
+WT.conc = {
+  name: 'Концентрация по эмитентам', glyph: 'hbars', desc: 'Топ-N групп эмитентов по экспозиции (облигации + CDS), JTD или CS01. Отметки лимитов на группу.',
+  def: { w: 8, h: 3, cfg: { measure: 'exp', topN: '12', exGov: 'yes', book: 'all', segment: 'all', ccy: 'all' } },
+  fields: [{ key: 'measure', label: 'Мера', type: 'select', opts: () => [['exp', 'Экспозиция (MV + CDS)'], ['jtd', 'JTD'], ['cs01', 'CS01']] },
+    { key: 'topN', label: 'Топ-N', type: 'select', opts: topNOpts }, { key: 'exGov', label: 'Суверен', type: 'select', opts: () => [['yes', 'Без РФ'], ['no', 'Включая РФ']] }].concat(FILT),
+  title: c => 'Эмитенты · топ-' + (+c.topN || 'все'),
+  render(b, cfg, w) {
+    const ex = issuerExposure(scope(cfg), cfg.measure), cs = cfg.measure === 'cs01';
+    let rows = Object.entries(ex).filter(([g]) => cfg.exGov !== 'yes' || g !== 'Российская Федерация').sort((a, b2) => Math.abs(b2[1]) - Math.abs(a[1]));
+    if (+cfg.topN) rows = rows.slice(0, +cfg.topN);
+    if (!rows.length) { b.innerHTML = '<div class="empty">Нет эмитентов под фильтр</div>'; return ''; }
+    const sc = cs ? 1e3 : 1e9, fmt = v => num(v / sc, cs ? 0 : 2);
+    const withLim = cfg.measure === 'exp';
+    const items = rows.map(([g, v]) => { const u = withLim ? Math.abs(v) / groupLimit(g) : 0, s = status(u);
+      return { name: g, value: v / sc, u, s, itemStyle: { color: withLim ? TK.cat[0] : signCol(cs ? -v : v) } }; });
+    const series = [{ name: cfg.measure === 'exp' ? 'Экспозиция' : cfg.measure === 'jtd' ? 'JTD' : 'CS01', type: 'bar', data: items, barMaxWidth: 14,
+      label: { show: true, position: 'right', fontSize: 10, fontFamily: TK.mono, color: TK.fg2,
+        formatter: p => withLim ? `{v|${num(p.value, 2)}}  {i${items[p.dataIndex].s.k}|${items[p.dataIndex].s.i}} {u|${pct(items[p.dataIndex].u)}}` : num(p.value, cs ? 0 : 2),
+        rich: { v: { color: TK.fg2, fontFamily: TK.mono, fontSize: 10 }, u: { color: TK.muted, fontFamily: TK.mono, fontSize: 10 },
+          iok: { color: TK.ok, fontWeight: 700 }, iwarn: { color: TK.warn, fontWeight: 700 }, iserious: { color: TK.serious, fontWeight: 700 }, icrit: { color: TK.crit, fontWeight: 700 } } } }];
+    if (withLim) series.push({ name: 'Лимит на группу', type: 'scatter', symbol: 'rect', symbolSize: [2.5, 16], itemStyle: { color: TK.fg }, z: 5,
+      data: rows.map(([g]) => [groupLimit(g) / sc, g]) });
+    b.innerHTML = '<div class="ch"></div>';
+    mk(b.firstChild, w.id, base({
+      legend: withLim ? legend({ data: [{ name: series[0].name, itemStyle: { color: TK.cat[0] } }, { name: 'Лимит на группу', icon: 'rect', itemStyle: { color: TK.fg } }] }) : undefined,
+      grid: { left: 6, right: withLim ? 96 : 50, top: withLim ? 26 : 8, bottom: 4, containLabel: true },
+      tooltip: axisTT({ formatter: ps => { const i = items[ps[0].dataIndex], g = i.name;
+        const pos = scope(cfg).filter(p => p.issuerGroup === g);
+        return `<div class="tth">${esc(g)}</div>` + ttr(TK.cat[0], series[0].name, fmt(i.value * sc) + (cs ? ' тыс ₽/б.п.' : ' млрд ₽')) +
+          (withLim ? ttr(TK.fg, 'Лимит', fmt(groupLimit(g)) + ' млрд ₽') + ttr(TK[i.s.k], 'Загрузка', pct(i.u) + ' · ' + i.s.t) : '') +
+          `<div class="ttn">${pos.length} поз.: ${esc(pos.slice(0, 4).map(p => p.name).join(', '))}${pos.length > 4 ? '…' : ''}</div><div class="ttn">Клик — фильтр доски по эмитенту</div>`; } }),
+      xAxis: vAxis(v => num(v, cs ? 0 : 1)),
+      yAxis: cAxis(rows.map(r => r[0]), { inverse: true, axisLabel: { color: TK.fg2, fontSize: 11, width: 120, overflow: 'truncate' } }),
+      series
+    }), p => setXf('issuer', p.name || (p.value && p.value[1])));
+    return (cs ? 'тыс ₽/б.п.' : 'млрд ₽') + (tags(cfg).length ? ' · ' + tags(cfg).join(' · ') : '');
+  }
+};
+
+/* ---- treemap ---- */
+WT.treemap = {
+  name: 'Карта экспозиций', glyph: 'tree', desc: 'Treemap по выбранному разрезу (книга, сегмент, сектор, рейтинг, валюта, класс актива) с группами эмитентов внутри.',
+  def: { w: 6, h: 2, cfg: { dim: 'segment', measure: 'mv', book: 'all', segment: 'all', ccy: 'all' } },
+  fields: [{ key: 'dim', label: 'Разрез', type: 'select', opts: () => Object.entries(TREE_DIMS).map(([k, v]) => [k, 'По ' + v]) },
+    { key: 'measure', label: 'Мера', type: 'select', opts: () => [['mv', '|MV|, млрд ₽'], ['dv01', '|DV01|'], ['cs01', '|CS01|'], ['jtd', '|JTD|']] }].concat(FILT),
+  title: c => 'Экспозиция по ' + TREE_DIMS[c.dim],
+  render(b, cfg, w) {
+    const l = scope(cfg);
+    const dimF = { book: p => p.book, segment: p => p.segment, sector: p => p.sector || 'Деривативы и FX', rating: p => p.rating || 'Без рейтинга', ccy: p => p.ccy, assetClass: p => p.assetClass }[cfg.dim];
+    const mF = { mv: p => Math.abs(p.mvRub), dv01: p => Math.abs(p.dv01), cs01: p => Math.abs(p.cs01), jtd: p => Math.abs(p.jtd) }[cfg.measure];
+    const sc = cfg.measure === 'mv' || cfg.measure === 'jtd' ? 1e9 : 1e3, unit = sc === 1e9 ? 'млрд ₽' : 'тыс ₽/б.п.';
+    const top = {};
+    l.forEach(p => { const v = mF(p); if (!v) return; const k = dimF(p), leaf = p.issuerGroup || p.assetClass;
+      const t = top[k] || (top[k] = { key: k, value: 0, kids: {} }); t.value += v; t.kids[leaf] = (t.kids[leaf] || 0) + v; });
+    let groups = Object.values(top).sort((a, b2) => b2.value - a.value);
+    if (!groups.length) { b.innerHTML = '<div class="empty">Нет данных под фильтр</div>'; return unit; }
+    if (cfg.dim === 'rating') groups.sort((a, b2) => (D.RATING_ORDER.indexOf(a.key) + 99) % 99 - (D.RATING_ORDER.indexOf(b2.key) + 99) % 99);
+    if (groups.length > 8) { const rest = groups.slice(7), o = { key: '__other', value: sum(rest, g => g.value), kids: {} }; rest.forEach(g => Object.entries(g.kids).forEach(([k, v]) => { o.kids[k] = (o.kids[k] || 0) + v; })); groups = groups.slice(0, 7).concat([o]); }
+    const total = sum(groups, g => g.value);
+    const name = k => k === '__other' ? 'Прочие' : cfg.dim === 'book' ? D.BOOKS[k].name : k;
+    const colOf = (g, i) => g.key === '__other' ? TK.muted : cfg.dim === 'book' ? bookCol(g.key) : cfg.dim === 'ccy' ? ccyCol(g.key) : TK.cat[i % 8];
+    const data = groups.map((g, i) => { const c = colOf(g, i), ik = ink(c);
+      return { name: name(g.key), value: g.value / sc, ent: g.key === '__other' ? null : (cfg.dim === 'book' ? ['book', g.key] : cfg.dim === 'ccy' ? ['ccy', g.key] : null),
+        itemStyle: { color: c }, upperLabel: { color: ik }, label: { color: ik },
+        children: Object.entries(g.kids).sort((a, b2) => b2[1] - a[1]).map(([k, v]) => ({ name: k, value: v / sc, ent: D.positions.some(p => p.issuerGroup === k) ? ['issuer', k] : null,
+          itemStyle: { color: c }, label: { color: ik } })) }; });
+    b.innerHTML = '<div class="ch"></div>';
+    mk(b.firstChild, w.id, base({
+      tooltip: tt({ trigger: 'item', formatter: p => { const path = (p.treePathInfo || []).slice(1).map(x => x.name).join(' › ');
+        return `<div class="tth">${esc(path)}</div>` + ttr(p.color, 'Значение', num(p.value, sc === 1e9 ? 2 : 0) + ' ' + unit) + ttr(TK.total, 'Доля', pct(p.value * sc / total, 1)) +
+          (p.data && p.data.ent ? `<div class="ttn">Клик — фильтр доски</div>` : ''); } }),
+      series: [{ type: 'treemap', roam: false, nodeClick: false, breadcrumb: { show: false }, top: 0, left: 0, right: 0, bottom: 0, data,
+        label: { fontSize: 10, fontFamily: TK.sans, overflow: 'truncate', formatter: p => `${p.name}\n${num(p.value, sc === 1e9 ? 1 : 0)}` },
+        upperLabel: { show: true, height: 18, fontSize: 11, fontWeight: 600, fontFamily: TK.sans, formatter: p => (p.treePathInfo || []).length <= 1 ? `Всего ${num(total / sc, sc === 1e9 ? 1 : 0)} ${unit}` : `${p.name}  ${pct(p.value * sc / total)}` },
+        levels: [{ upperLabel: { color: TK.fg2 }, itemStyle: { color: TK.panel, borderColor: TK.panel, borderWidth: 0, gapWidth: 2 } },
+          { itemStyle: { borderColor: TK.panel, borderWidth: 2, gapWidth: 1 }, colorAlpha: [.95, .55] }] }]
+    }), p => { if (p.data && p.data.ent) setXf(p.data.ent[0], p.data.ent[1]); });
+    return unit + ' · Σ ' + num(total / sc, sc === 1e9 ? 1 : 0) + (tags(cfg).length ? ' · ' + tags(cfg).join(' · ') : '');
+  }
+};
+
+/* ---- OCP by currency ---- */
+WT.ocp = {
+  name: 'ОВП по валютам', glyph: 'stack', desc: 'Открытая валютная позиция USD/CNY/EUR с разложением: облигации, XCCY, FX спот/форварды, фондирование.',
+  def: { w: 6, h: 2, cfg: { book: 'all' } },
+  fields: [FB],
+  title: () => 'ОВП по валютам',
+  render(b, cfg, w) {
+    const l = scope(cfg), fl = fscope(cfg);
+    const P = CCYS.map(c => ({ c, ...ocpParts(l, fl, c) })).map(r => Object.assign(r, { net: r.bonds + r.derivs + r.fx + r.funding }));
+    const comps = [['bonds', 'Облигации'], ['derivs', 'XCCY'], ['fx', 'FX спот/форв.'], ['funding', 'Фондирование']];
+    const series = comps.map(([k, n], i) => ({ name: n, type: 'bar', stack: 'o', barMaxWidth: 16, itemStyle: { color: TK.cat[[0, 6, 3, 2][i]] },
+      data: P.map(r => r[k] * D.FX[r.c] / 1e6) }));
+    series.push({ name: 'Нетто', type: 'scatter', symbol: 'diamond', symbolSize: 12, z: 5, itemStyle: { color: TK.fg, borderColor: TK.panel, borderWidth: 1 }, data: P.map(r => r.net * D.FX[r.c] / 1e6) });
+    b.innerHTML = `<div class="col"><div class="chf"><div class="ch"></div></div><div class="tw" style="position:relative;flex:none;overflow:visible"><table class="tbl"><thead><tr><th>Вал.</th><th class="n">Нетто</th><th class="n">≈ млн ₽</th><th class="n">Лимит</th><th>Загрузка</th><th>Статус</th></tr></thead><tbody>${
+      P.map(r => { const u = Math.abs(r.net) / D.LIMITS.ocp[r.c]; return `<tr><td><button class="xf" data-xf="ccy" data-v="${r.c}">${r.c}</button></td><td class="n">${mln(r.net, 1, true)} млн</td><td class="n">${mln(r.net * D.FX[r.c], 0, true)}</td><td class="n">${mln(D.LIMITS.ocp[r.c], 0)} млн</td><td><div class="ucell">${ubar(u)}<span>${pct(u)}</span></div></td><td>${chip(u)}</td></tr>`; }).join('')}</tbody></table></div></div>`;
+    mk(b.querySelector('.ch'), w.id, base({
+      legend: legend(), grid: { left: 6, right: 14, top: 26, bottom: 2, containLabel: true },
+      tooltip: axisTT({ formatter: ps => { const r = P[ps[0].dataIndex]; return `<div class="tth">ОВП ${r.c} · курс ${num(D.FX[r.c], 2)}</div>` +
+        comps.map(([k, n], i) => ttr(TK.cat[[0, 6, 3, 2][i]], n, `${mln(r[k], 1, true)} млн ${r.c}`)).join('') + ttr(TK.fg, 'Нетто', `${mln(r.net, 1, true)} млн ${r.c}`) + '<div class="ttn">Клик — фильтр доски по валюте</div>'; } }),
+      xAxis: vAxis(v => num(v, 0)), yAxis: cAxis(CCYS, { inverse: true }), series
+    }), p => setXf('ccy', CCYS[p.dataIndex]));
+    return 'млн ₽ экв. · с фондированием' + (bf().issuer ? ' · без фонд. (фильтр эмитента)' : '') + (tags(cfg).length ? ' · ' + tags(cfg).join(' · ') : '');
+  }
+};
+
+/* ---- funding ladder ---- */
+const FBK = [['O/N', 1], ['≤ 1 нед', 7], ['≤ 1 мес', 31], ['≤ 3 мес', 92], ['≤ 6 мес', 183], ['≤ 1 года', 366], ['> 1 года', 1e9]];
+const fBucket = f => { const d = (new Date(f.maturity + 'T00:00:00') - new Date(D.asOf + 'T00:00:00')) / 864e5; return FBK.findIndex(b => d <= b[1]); };
+WT.funding = {
+  name: 'Лестница фондирования', glyph: 'stack', desc: 'Привлечение и размещение по срокам погашения: РЕПО с ЦК, TSY FTP, FX-свопы. Стек по типу или валюте.',
+  def: { w: 6, h: 2, cfg: { stack: 'type', book: 'all', ccy: 'all' } },
+  fields: [{ key: 'stack', label: 'Стек', type: 'select', opts: () => [['type', 'По типу'], ['ccy', 'По валюте']] }, FB, FC],
+  title: c => 'Фондирование · ' + (c.stack === 'ccy' ? 'по валютам' : 'по типам'),
+  render(b, cfg, w) {
+    const fl = fscope(cfg);
+    if (!fl.length) { b.innerHTML = `<div class="empty">${bf().issuer ? 'Фондирование не распределяется по эмитентам' : 'Нет сделок фондирования под фильтр'}</div>`; return 'млрд ₽'; }
+    const keys = cfg.stack === 'ccy' ? CCY_ORDER : FTYPES;
+    const series = keys.map(k => { const arr = FBK.map(() => 0); fl.filter(f => (cfg.stack === 'ccy' ? f.ccy : f.type) === k).forEach(f => { arr[fBucket(f)] += f.amountRub / 1e9; });
+      return { name: k, key: k, type: 'bar', stack: 'f', barMaxWidth: 28, data: arr, itemStyle: { color: cfg.stack === 'ccy' ? ccyCol(k) : ftCol(k) } }; }).filter(s => s.data.some(v => Math.abs(v) > 1e-6));
+    const borrowed = sum(fl.filter(f => f.amount < 0), f => f.amountRub), placed = sum(fl.filter(f => f.amount > 0), f => f.amountRub);
+    const cost = sum(fl, f => f.pnl.carry);
+    b.innerHTML = '<div class="ch"></div>';
+    mk(b.firstChild, w.id, base({
+      legend: legend(), grid: { left: 6, right: 12, top: 26, bottom: 4, containLabel: true },
+      tooltip: axisTT({ formatter: ps => `<div class="tth">${ps[0].axisValue}</div>` + ps.filter(p => Math.abs(p.value) > 1e-6).map(p => ttr(p.color, p.seriesName, bln(p.value * 1e9, 2, true) + ' млрд ₽')).join('') +
+        `<div class="ttn">${fl.filter(f => fBucket(f) === ps[0].dataIndex).map(f => `${f.type} ${f.ccy} ${f.rateExpr}`).slice(0, 4).map(esc).join('<br>')}</div>` }),
+      xAxis: cAxis(FBK.map(x => x[0]), { axisLabel: { color: TK.fg2, fontSize: 10, interval: 0, hideOverlap: true } }),
+      yAxis: vAxis(v => num(v, 0)),
+      series
+    }), p => { if (cfg.stack === 'ccy') setXf('ccy', series[p.seriesIndex].key); });
+    return `млрд ₽ · привл. ${bln(borrowed, 1)} · разм. ${bln(placed, 1, true)} · стоимость ${mln(cost, 1, true)} млн/день`;
+  }
+};
+
+/* ---- scenario impact ---- */
+function scenarioByBook(sc, l, fl) {
+  const r = U.runScenario(sc, l), byId = new Map(l.map(p => [p.id, p])), agg = {};
+  r.byPosition.forEach(x => { const bk = byId.get(x.id).book; agg[bk] = (agg[bk] || 0) + x.total; });
+  // нераспределённый FX-остаток фондирования — только если фильтр не режет по эмитенту/сегменту/валюте
+  if (fl.length && !bf().ccy) Object.entries(r.fundingFxByBook || {}).forEach(([bk, v]) => { if (fl.some(f => f.book === bk)) agg[bk] = (agg[bk] || 0) + v; });
+  return agg;
+}
+WT.scenario = {
+  name: 'Сценарии', glyph: 'hbars', desc: 'Влияние пресетов (сдвиги кривых, FX, спреды) на PV по книгам. Можно выбрать несколько сценариев.',
+  def: { w: 6, h: 2, cfg: { scenarios: ['par+100', 'keyhike'], book: 'all', segment: 'all', ccy: 'all' } },
+  fields: [{ key: 'scenarios', label: 'Сценарии', type: 'multi', opts: () => D.SCENARIOS.map(s => [s.id, s.name]) }].concat(FILT),
+  title: c => 'Сценарии · ' + (c.scenarios || []).length,
+  render(b, cfg, w) {
+    const l = scope(cfg), fl = fscope(cfg);
+    const scs = D.SCENARIOS.filter(s => (cfg.scenarios || []).includes(s.id));
+    if (!scs.length) { b.innerHTML = '<div class="empty">Выберите сценарии в настройках виджета</div>'; return ''; }
+    const res = scs.map(sc => ({ sc, agg: scenarioByBook(sc, l, fl) }));
+    const books = BK.filter(k => res.some(r => Math.abs(r.agg[k] || 0) > 1));
+    if (!books.length) { b.innerHTML = '<div class="empty">Нет позиций под фильтр</div>'; return ''; }
+    const series = res.map(r => ({ name: r.sc.name, type: 'bar', barMaxWidth: 10, barGap: '15%', itemStyle: { color: scCol(r.sc.id) }, data: books.map(k => (r.agg[k] || 0) / 1e6) }));
+    b.innerHTML = `<div class="col"><div class="chf"><div class="ch"></div></div><div class="foot">${res.map(r => `<span class="sw"><i style="background:${scCol(r.sc.id)}"></i>${esc(r.sc.name)} <b>${mln(sum(Object.values(r.agg)), 0, true)}</b></span>`).join('')}</div></div>`;
+    mk(b.querySelector('.ch'), w.id, base({
+      grid: { left: 6, right: 16, top: 8, bottom: 2, containLabel: true },
+      tooltip: axisTT({ formatter: ps => `<div class="tth">${esc(ps[0].axisValue)}</div>` + ps.map(p => ttr(p.color, p.seriesName, mln(p.value * 1e6, 1, true) + ' млн ₽')).join('') + '<div class="ttn">Клик — фильтр доски по книге</div>' }),
+      xAxis: vAxis(v => num(v, 0)),
+      yAxis: cAxis(books.map(k => D.BOOKS[k].name), { inverse: true, axisLabel: { color: TK.fg2, fontSize: 10.5 } }),
+      series
+    }), p => setXf('book', books[p.dataIndex]));
+    return 'ΔPV, млн ₽ · итог в легенде' + (tags(cfg).length ? ' · ' + tags(cfg).join(' · ') : '');
+  }
+};
+
+/* ---- PnL explain waterfall ---- */
+WT.explain = {
+  name: 'PnL explain', glyph: 'water', desc: 'Мини-водопад дня: кэрри, ролл-даун, ставки, спреды, FX, выпуклость, новые сделки, фондирование, необъяснённое → официальный PnL.',
+  def: { w: 6, h: 2, cfg: { book: 'all', segment: 'all', ccy: 'all' } },
+  fields: FILT,
+  title: () => 'PnL explain за день',
+  render(b, cfg, w) {
+    const l = scope(cfg), fl = fscope(cfg);
+    if (!l.length) { b.innerHTML = '<div class="empty">Нет позиций под фильтр</div>'; return ''; }
+    const comps = [['Кэрри', 'carry'], ['Ролл-даун', 'rolldown'], ['Ставки', 'rates'], ['Спреды', 'spread'], ['FX', 'fx'], ['Выпуклость', 'convexity'], ['Новые сделки', 'newTrades'], ['Прочее', 'other']]
+      .map(([n, k]) => [n, sum(l, p => p.pnl[k])]);
+    const fp = fundPnl(cfg);
+    const fxi = comps.findIndex(c => c[0] === 'FX');
+    comps.splice(fxi, 1, ['FX позиций', sum(l, p => p.pnl.fxGross != null ? p.pnl.fxGross : p.pnl.fx)], ['FX валютн. фондир.', sum(l, p => p.pnl.fxFunding || 0)]);
+    comps.push(['Фонд.: кэрри', fp.carry], ['Фонд.: FX остаток', fp.fx], ['Необъяснённое', sum(l, p => p.pnl.unexplained)]);
+    const rows = comps.filter(c => Math.abs(c[1]) > 1);
+    const total = sum(comps, c => c[1]);
+    let run = 0;
+    const items = rows.map(([n, v], i) => { const s = run; run += v; return { name: n, value: [i, s / 1e6, run / 1e6, v / 1e6], col: n === 'Необъяснённое' ? TK.warn : signCol(v) }; });
+    items.push({ name: 'Официальный PnL', value: [items.length, 0, total / 1e6, total / 1e6], col: TK.total });
+    const breaks = l.filter(p => p.pnl.breakNote);
+    b.innerHTML = '<div class="ch"></div>';
+    mk(b.firstChild, w.id, base({
+      grid: { left: 6, right: 52, top: 6, bottom: 4, containLabel: true },
+      tooltip: tt({ trigger: 'item', formatter: p => { const it = items[p.dataIndex];
+        let s = `<div class="tth">${esc(it.name)}</div>` + ttr(it.col, 'Вклад', mln(it.value[3] * 1e6, 2, true) + ' млн ₽') + ttr(TK.muted, 'Нарастающим', mln(it.value[2] * 1e6, 1, true) + ' млн ₽');
+        if (it.name === 'Необъяснённое' && breaks.length) s += breaks.map(x => `<div class="ttn"><b>${esc(x.name)}</b> ${mln(x.pnl.unexplained, 2, true)} млн — ${esc(x.pnl.breakNote)}</div>`).join('');
+        return s; } }),
+      xAxis: vAxis(v => num(v, 0)),
+      yAxis: cAxis(items.map(i => i.name), { inverse: true, axisLabel: { color: TK.fg2, fontSize: 10.5 } }),
+      series: [{ type: 'custom', encode: { x: [1, 2], y: 0 }, data: items.map(i => ({ name: i.name, value: i.value })),
+        renderItem: (params, api) => {
+          const i = api.value(0), s = api.value(1), e = api.value(2), v = api.value(3);
+          const p0 = api.coord([s, i]), p1 = api.coord([e, i]), h = api.size([0, 1])[1] * .62;
+          const x = Math.min(p0[0], p1[0]), wd = Math.max(1.5, Math.abs(p1[0] - p0[0]));
+          return { type: 'group', children: [
+            { type: 'rect', shape: { x, y: p0[1] - h / 2, width: wd, height: h }, style: { fill: items[i].col } },
+            { type: 'text', style: { text: num(v, 1, true), x: x + wd + 4, y: p0[1], verticalAlign: 'middle', fill: TK.fg2, font: `10px ${TK.mono}` } }] };
+        } }]
+    }));
+    const offic = total, un = comps[comps.length - 1][1];
+    return `млн ₽ · официальный ${mln(offic, 1, true)} · необъясн. ${pct(Math.abs(un) / (Math.abs(offic) || 1))}` + (tags(cfg).length ? ' · ' + tags(cfg).join(' · ') : '');
+  }
+};
+
+/* ---- PnL history ---- */
+WT.history = {
+  name: 'История PnL', glyph: 'line', desc: 'Официальный и explain PnL за 22 рабочих дня: по дням или нарастающим итогом.',
+  def: { w: 6, h: 2, cfg: { mode: 'daily' } },
+  fields: [{ key: 'mode', label: 'Режим', type: 'select', opts: () => [['daily', 'По дням'], ['cum', 'Нарастающим итогом']] }],
+  title: c => 'PnL: официальный vs explain' + (c.mode === 'cum' ? ' · Σ' : ''),
+  render(b, cfg, w) {
+    const dates = H.map(h => ddmm(h.date));
+    let off = H.map(h => h.pnlOfficial / 1e6), exp = H.map(h => h.pnlExplained / 1e6);
+    if (cfg.mode === 'cum') { let a = 0, c = 0; off = off.map(v => (a += v)); exp = exp.map(v => (c += v)); }
+    b.innerHTML = '<div class="ch"></div>';
+    mk(b.firstChild, w.id, base({
+      legend: legend(), grid: { left: 6, right: 14, top: 26, bottom: 4, containLabel: true },
+      tooltip: axisTT({ axisPointer: { type: 'line', lineStyle: { color: TK.line2 } }, formatter: ps => `<div class="tth">${ps[0].axisValue}</div>` + ps.map(p => ttr(p.color, p.seriesName, mln(p.value * 1e6, 1, true) + ' млн ₽')).join('') +
+        ttr(TK.warn, 'Разница', mln((ps[0].value - (ps[1] ? ps[1].value : 0)) * 1e6, 2, true) + ' млн ₽') }),
+      xAxis: cAxis(dates, { boundaryGap: false, axisLabel: { color: TK.fg2, fontSize: 10, hideOverlap: true } }),
+      yAxis: vAxis(v => num(v, 0)),
+      series: [
+        { name: 'Официальный', type: 'line', data: off, symbol: 'circle', symbolSize: 4, showSymbol: false, lineStyle: { width: 1.8, color: TK.cat[0] }, itemStyle: { color: TK.cat[0] },
+          markLine: { silent: true, symbol: 'none', label: { show: false }, lineStyle: { color: TK.line2, type: 'solid', width: 1 }, data: [{ yAxis: 0 }] },
+          endLabel: { show: false } },
+        { name: 'Explain', type: 'line', data: exp, symbol: 'circle', symbolSize: 4, showSymbol: false, lineStyle: { width: 1.5, type: [4, 3], color: TK.cat[1] }, itemStyle: { color: TK.cat[1] } }]
+    }));
+    return 'млн ₽, вкл. фондирование' + (anyBoardFilter() ? ' · деск целиком (без фильтра)' : '');
+  }
+};
+
+/* ---- positions blotter ---- */
+const fxRub = p => sum(Object.keys(p.fxDelta || {}), c => p.fxDelta[c] * D.FX[c]);
+const BL_RANK = { mv: p => Math.abs(p.mvRub), dv01: p => Math.abs(p.dv01), cs01: p => Math.abs(p.cs01), pnl: p => Math.abs(p.pnl.official), jtd: p => Math.abs(p.jtd), fx: p => Math.abs(fxRub(p)) };
+WT.blotter = {
+  name: 'Мини-блоттер позиций', glyph: 'table', desc: 'Таблица позиций под фильтр, топ-N по выбранной мере. Сортировка по заголовкам, клик по книге/эмитенту/валюте — фильтр доски.',
+  def: { w: 12, h: 3, cfg: { measure: 'mv', topN: '20', book: 'all', segment: 'all', ccy: 'all' } },
+  fields: [{ key: 'measure', label: 'Топ по мере', type: 'select', opts: () => Object.entries(BL_MEAS) }, { key: 'topN', label: 'Топ-N', type: 'select', opts: topNOpts }].concat(FILT),
+  title: c => 'Позиции · топ-' + (+c.topN || 'все') + ' по ' + BL_MEAS[c.measure],
+  render(b, cfg, w) {
+    const all = scope(cfg).filter(p => BL_RANK[cfg.measure](p) > 0 || cfg.measure === 'mv');
+    let rows = all.slice().sort((a, c) => BL_RANK[cfg.measure](c) - BL_RANK[cfg.measure](a));
+    if (+cfg.topN) rows = rows.slice(0, +cfg.topN);
+    if (!rows.length) { b.innerHTML = '<div class="empty">Нет позиций под фильтр</div>'; return ''; }
+    const cols = [
+      { k: 'name', t: 'Инструмент', v: p => p.name, h: p => `${p.issuerGroup ? `<button class="xf" data-xf="issuer" data-v="${esc(p.issuerGroup)}" title="Фильтр по эмитенту ${esc(p.issuerGroup)}">${esc(p.name)}</button>` : esc(p.name)}${p.newToday ? '<span class="tag">нов.</span>' : ''}${p.pnl.breakNote ? `<span class="tag brk" title="${esc(p.pnl.breakNote)}">! разрыв</span>` : ''}` },
+      { k: 'book', t: 'Книга', v: p => D.BOOKS[p.book].name, h: p => `<button class="xf" data-xf="book" data-v="${p.book}">${esc(D.BOOKS[p.book].name)}</button>` },
+      { k: 'ac', t: 'Класс', v: p => p.assetClass, h: p => `<span class="m">${esc(p.assetClass)}</span>` },
+      { k: 'ccy', t: 'Вал.', v: p => p.ccy, h: p => `<button class="xf" data-xf="ccy" data-v="${p.ccy}">${p.ccy}</button>` },
+      { k: 'mv', t: 'MV, млн ₽', n: 1, v: p => p.mvRub, h: p => mln(p.mvRub, 1) },
+      { k: 'dv01', t: 'DV01, тыс', n: 1, v: p => p.dv01, h: p => ths(p.dv01, 0) },
+      { k: 'cs01', t: 'CS01, тыс', n: 1, v: p => p.cs01, h: p => ths(p.cs01, 0) },
+    ];
+    if (cfg.measure === 'jtd') cols.push({ k: 'jtd', t: 'JTD, млн ₽', n: 1, v: p => p.jtd, h: p => mln(p.jtd, 0) });
+    if (cfg.measure === 'fx') cols.push({ k: 'fx', t: 'FX-дельта, млн ₽', n: 1, v: fxRub, h: p => mln(fxRub(p), 0, true) });
+    cols.push({ k: 'pnl', t: 'PnL дня, тыс ₽', n: 1, v: p => p.pnl.official, h: p => ths(p.pnl.official, 0, true) },
+      { k: 'ytm', t: 'Дох., %', n: 1, v: p => p.ytm, h: p => p.ytm == null ? '—' : num(p.ytm, 2) },
+      { k: 'mat', t: 'Погашение', v: p => p.maturity, h: p => `<span class="m">${p.maturity.split('-').reverse().join('.')}</span>` });
+    const s = ui.sorts[w.id];
+    if (s) { const c = cols.find(x => x.k === s.k); if (c) rows.sort((a, z) => { const va = c.v(a), vz = c.v(z); const r = typeof va === 'number' ? (va || 0) - (vz || 0) : String(va).localeCompare(String(vz), 'ru'); return s.dir * r; }); }
+    b.innerHTML = `<div class="tw"><table class="tbl"><thead><tr>${cols.map(c => `<th class="${c.n ? 'n' : ''}" aria-sort="${s && s.k === c.k ? (s.dir > 0 ? 'ascending' : 'descending') : 'none'}"><button class="sortb" data-sort="${c.k}">${c.t}${s && s.k === c.k ? (s.dir > 0 ? ' ↑' : ' ↓') : ''}</button></th>`).join('')}</tr></thead><tbody>${
+      rows.map(p => `<tr>${cols.map(c => `<td class="${c.n ? 'n' : ''}">${c.h(p)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+    b.querySelectorAll('[data-sort]').forEach(btn => btn.addEventListener('click', () => {
+      const k = btn.dataset.sort, cur = ui.sorts[w.id];
+      ui.sorts[w.id] = cur && cur.k === k ? (cur.dir < 0 ? { k, dir: 1 } : null) : { k, dir: -1 };
+      if (!ui.sorts[w.id]) delete ui.sorts[w.id];
+      renderWidget(w);
+    }));
+    return `${rows.length} из ${all.length} · Σ MV ${bln(sum(rows, p => p.mvRub), 1)} млрд` + (tags(cfg).length ? ' · ' + tags(cfg).join(' · ') : '');
+  }
+};
+
+/* ---- limits monitor ---- */
+WT.limits = {
+  name: 'Монитор лимитов', glyph: 'table', desc: 'DV01 деска и книг, CS01, ОВП, VaR и топ групп эмитентов: факт, лимит, загрузка, статус.',
+  def: { w: 6, h: 2, cfg: { show: 'all', sort: 'group', issuers: '5' } },
+  fields: [{ key: 'show', label: 'Показывать', type: 'select', opts: () => [['all', 'Все лимиты'], ['warn', 'Только загрузка ≥ 75 %']] },
+    { key: 'sort', label: 'Порядок', type: 'select', opts: () => [['group', 'По группам'], ['util', 'По загрузке']] },
+    { key: 'issuers', label: 'Эмитентов в списке', type: 'select', opts: () => [['3', '3'], ['5', '5'], ['8', '8'], ['12', '12']] }],
+  title: () => 'Монитор лимитов',
+  render(b, cfg, w) {
+    const P = D.positions, f = bf(), rows = [];
+    const dv = sum(P, p => p.dv01);
+    rows.push({ g: 'Ставки', n: 'DV01 деск', fact: dv, lim: D.LIMITS.dv01Total, fmt: v => mln(v, 2) + ' млн' });
+    BK.forEach(k => { if (f.book && f.book !== k) return; rows.push({ g: 'Ставки', n: 'DV01 · ' + D.BOOKS[k].name, fact: sum(P.filter(p => p.book === k), p => p.dv01), lim: D.LIMITS.dv01ByBook[k], fmt: v => mln(v, 2) + ' млн', xf: ['book', k] }); });
+    rows.push({ g: 'Кредит', n: 'CS01 деск', fact: sum(P, p => p.cs01), lim: D.LIMITS.cs01Total, fmt: v => mln(v, 2) + ' млн' });
+    CCYS.forEach(c => { if (f.ccy && f.ccy !== c) return; const pr = ocpParts(P, D.funding, c); rows.push({ g: 'ОВП', n: 'ОВП ' + c, fact: pr.bonds + pr.derivs + pr.fx + pr.funding, lim: D.LIMITS.ocp[c], fmt: v => mln(v, 1, true) + ' млн ' + c, xf: ['ccy', c] }); });
+    rows.push({ g: 'Рыночный риск', n: 'VaR 99 %, 1 день', fact: HL.var99, lim: D.LIMITS.var99, fmt: v => mln(v, 0) + ' млн' });
+    const ex = issuerExposure(P, 'exp');
+    let iss = Object.entries(ex).filter(([g]) => g !== 'Российская Федерация').map(([g, v]) => ({ g: 'Эмитенты', n: g, fact: v, lim: groupLimit(g), fmt: x => bln(x, 2) + ' млрд', xf: ['issuer', g] }))
+      .sort((a, z) => Math.abs(z.fact) / z.lim - Math.abs(a.fact) / a.lim);
+    if (f.issuer) iss = iss.filter(r => r.n === f.issuer); else iss = iss.slice(0, +cfg.issuers || 5);
+    rows.push(...iss);
+    rows.forEach(r => { r.u = Math.abs(r.fact) / r.lim; });
+    let vis = cfg.show === 'warn' ? rows.filter(r => r.u >= .75) : rows;
+    if (cfg.sort === 'util') vis = vis.slice().sort((a, z) => z.u - a.u);
+    const nBad = rows.filter(r => r.u >= .75).length;
+    if (!vis.length) { b.innerHTML = '<div class="empty">Все лимиты загружены менее чем на 75 %</div>'; return 'всё в норме'; }
+    let lastG = null;
+    b.innerHTML = `<div class="tw"><table class="tbl"><thead><tr><th>Лимит</th><th class="n">Факт</th><th class="n">Лимит</th><th>Загрузка</th><th>Статус</th></tr></thead><tbody>${vis.map(r => {
+      const gh = cfg.sort === 'group' && r.g !== lastG ? `<tr class="grp"><td colspan="5">${r.g}</td></tr>` : ''; lastG = r.g;
+      return gh + `<tr><td>${r.xf ? `<button class="xf" data-xf="${r.xf[0]}" data-v="${esc(r.xf[1])}">${esc(r.n)}</button>` : esc(r.n)}</td><td class="n">${r.fmt(r.fact)}</td><td class="n">${r.fmt(r.lim).replace('+', '')}</td><td><div class="ucell">${ubar(r.u)}<span>${pct(r.u)}</span></div></td><td>${chip(r.u)}</td></tr>`; }).join('')}</tbody></table></div>`;
+    return `${nBad} с загрузкой ≥ 75 % · лимиты деска`;
+  }
+};
+
+/* ---- curve chart ---- */
+WT.curves = {
+  name: 'Кривые', glyph: 'curve', desc: 'Уровни кривых по пилларам и изменение за день в б.п. (две панели, без второй оси).',
+  def: { w: 6, h: 2, cfg: { curves: ['RUB OFZ', 'RUB RUONIA', 'RUB KEY'], view: 'both' } },
+  fields: [{ key: 'curves', label: 'Кривые', type: 'multi', opts: OPT.curve },
+    { key: 'view', label: 'Вид', type: 'select', opts: () => [['both', 'Уровни + изменение'], ['levels', 'Только уровни'], ['move', 'Только изменение']] }],
+  title: c => 'Кривые · ' + (c.curves || []).map(x => x.replace('RUB ', '')).join(', '),
+  render(b, cfg, w) {
+    const cs = CURVE_KEYS.filter(c => (cfg.curves || []).includes(c));
+    if (!cs.length) { b.innerHTML = '<div class="empty">Выберите кривые в настройках</div>'; return ''; }
+    const both = cfg.view === 'both', lv = cfg.view !== 'move', mv = cfg.view !== 'levels';
+    const grids = [], xA = [], yA = [], series = [], gfx = [];
+    let gi = 0;
+    if (lv) { grids.push({ left: 6, right: 14, top: 46, bottom: both ? '47%' : 4, containLabel: true });
+      xA.push(cAxis(D.BUCKETS, { gridIndex: gi, boundaryGap: false, axisLabel: { show: !both, color: TK.fg2, fontSize: 10 } }));
+      yA.push(vAxis(v => num(v, 1), { gridIndex: gi, scale: true, name: 'уровень, %', nameTextStyle: { color: TK.muted, fontSize: 10, align: 'left' }, nameGap: 6 }));
+      cs.forEach(c => series.push({ name: c, type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: D.CURVES[c].pts, symbol: 'circle', symbolSize: 4, lineStyle: { width: 1.6, color: curveCol(c) }, itemStyle: { color: curveCol(c) } }));
+      gi++; }
+    if (mv) { grids.push({ left: 6, right: 14, top: both ? '66%' : 46, bottom: 4, containLabel: true });
+      xA.push(cAxis(D.BUCKETS, { gridIndex: gi, axisLabel: { color: TK.fg2, fontSize: 10, hideOverlap: true } }));
+      yA.push(vAxis(v => num(v, 0), { gridIndex: gi, name: 'за день, б.п.', nameTextStyle: { color: TK.muted, fontSize: 10, align: 'left' }, nameGap: 6, splitNumber: 3 }));
+      cs.forEach(c => series.push({ name: c, type: 'bar', xAxisIndex: gi, yAxisIndex: gi, data: D.CURVE_MOVES[c], barMaxWidth: 6, itemStyle: { color: curveCol(c) } })); }
+    b.innerHTML = '<div class="ch"></div>';
+    mk(b.firstChild, w.id, base({
+      legend: legend({ data: cs }), grid: grids, xAxis: xA, yAxis: yA, series, graphic: gfx,
+      axisPointer: { link: [{ xAxisIndex: 'all' }] },
+      tooltip: tt({ trigger: 'axis', axisPointer: { type: 'line', lineStyle: { color: TK.line2 } }, formatter: ps => { const i = ps[0].dataIndex;
+        return `<div class="tth">${D.BUCKETS[i]}</div>` + cs.map(c => ttr(curveCol(c), c, `${num(D.CURVES[c].pts[i], 2)} % · ${num(D.CURVE_MOVES[c][i], 0, true)} б.п.`)).join(''); } })
+    }));
+    return 'рыночные данные' + (anyBoardFilter() ? ' · фильтр не применяется' : '');
+  }
+};
+
+/* ---- watchlist ---- */
+WT.watch = {
+  name: 'Watchlist', glyph: 'star', desc: 'Избранные эмитенты и позиции: MV, DV01/CS01, PnL дня, движение спреда, разрывы PnL.',
+  def: { w: 6, h: 2, cfg: { items: ['g:Самолёт', 'g:АФК Система', 'p:ОФЗ 26247', 'p:ИЦБ ДОМ.РФ 2Р-12R', 'p:XCCY USD/RUB 3Y pay USD', 'g:ГТЛК'] } },
+  fields: [{ key: 'items', label: 'Состав', type: 'pick' }],
+  title: () => 'Watchlist',
+  render(b, cfg, w) {
+    const l = scope({});
+    let hidden = 0;
+    const rows = (cfg.items || []).map(it => {
+      const kind = it.slice(0, 1), key = it.slice(2);
+      const ps = kind === 'g' ? l.filter(p => p.issuerGroup === key) : l.filter(p => p.name === key);
+      if (!ps.length) { hidden++; return null; }
+      const cs = sum(ps, p => p.cs01), spr = cs ? sum(ps, p => p.pnl.spread) / cs : null;
+      const brk = ps.filter(p => p.pnl.breakNote);
+      const grp = kind === 'g' ? key : ps[0].issuerGroup;
+      return { kind, key, grp, n: ps.length, mv: sum(ps, p => p.mvRub), dv: sum(ps, p => p.dv01), cs, pnl: sum(ps, p => p.pnl.official), spr, brk, ccy: ps[0].ccy };
+    }).filter(Boolean);
+    if (!rows.length) { b.innerHTML = `<div class="empty">${(cfg.items || []).length ? 'Все элементы скрыты фильтром доски' : 'Добавьте эмитентов или позиции в настройках'}</div>`; return ''; }
+    b.innerHTML = `<div class="tw"><table class="tbl"><thead><tr><th>Объект</th><th class="n">MV, млн ₽</th><th class="n">DV01, тыс</th><th class="n">CS01, тыс</th><th class="n">PnL дня, тыс ₽</th><th class="n">Δ спреда, б.п.</th><th>Флаги</th></tr></thead><tbody>${rows.map(r => `<tr>
+      <td>${r.grp ? `<button class="xf" data-xf="issuer" data-v="${esc(r.grp)}">${esc(r.key)}</button>` : `<button class="xf" data-xf="ccy" data-v="${r.ccy}">${esc(r.key)}</button>`}<span class="tag">${r.kind === 'g' ? 'группа · ' + r.n : 'позиция'}</span></td>
+      <td class="n">${mln(r.mv, 1)}</td><td class="n">${ths(r.dv, 0)}</td><td class="n">${ths(r.cs, 0)}</td><td class="n">${ths(r.pnl, 0, true)}</td>
+      <td class="n">${r.spr == null ? '—' : num(r.spr, 0, true)}</td>
+      <td>${r.brk.length ? `<span class="st st-warn" title="${esc(r.brk.map(x => x.pnl.breakNote).join('; '))}"><b aria-hidden="true">!</b>разрыв ${mln(sum(r.brk, x => x.pnl.unexplained), 1, true)} млн</span>` : (r.spr != null && r.spr >= 10 ? `<span class="st st-serious"><b aria-hidden="true">▲</b>спред +${num(r.spr, 0)} б.п.</span>` : '<span class="m">—</span>')}</td></tr>`).join('')}</tbody></table></div>`;
+    return `${rows.length} объектов` + (hidden ? ` · ${hidden} скрыто фильтром` : '');
+  }
+};
+
+const GALLERY_ORDER = ['kpi', 'ladder', 'heatmap', 'conc', 'treemap', 'ocp', 'funding', 'scenario', 'explain', 'history', 'blotter', 'limits', 'curves', 'watch'];
+
+/* ================= defaults & persistence ================= */
+const clone = o => JSON.parse(JSON.stringify(o));
+const W = (type, w, h, cfg) => ({ id: nid(), type, w, h, cfg: Object.assign(clone(WT[type].def.cfg), cfg || {}) });
+function defaults() {
+  return { v: 1, active: 'morning', boards: [
+    { id: 'morning', name: 'Утро', widgets: [
+      W('kpi', 3, 1, { metric: 'dv01' }), W('kpi', 3, 1, { metric: 'cs01' }), W('kpi', 3, 1, { metric: 'pnl' }), W('kpi', 3, 1, { metric: 'var' }),
+      W('explain', 8, 2), W('kpi', 4, 1, { metric: 'ocpUSD' }), W('kpi', 4, 1, { metric: 'ocpCNY' }),
+      W('limits', 6, 2), W('history', 6, 2),
+      W('watch', 6, 2), W('scenario', 6, 2, { scenarios: ['keyhike', 'rubdep', 'credit'] })] },
+    { id: 'rates', name: 'Rates', widgets: [
+      W('heatmap', 12, 2),
+      W('ladder', 4, 2, { curve: 'RUB OFZ' }), W('ladder', 4, 2, { curve: 'RUB RUONIA', stack: 'book' }), W('ladder', 4, 2, { curve: 'RUB KEY', stack: 'book' }),
+      W('curves', 6, 2), W('scenario', 6, 2, { scenarios: ['par+100', 'bullsteep', 'bearflat'] }),
+      W('blotter', 12, 3, { book: 'OFZ', measure: 'dv01', topN: '20' })] },
+    { id: 'credit', name: 'Credit', widgets: [
+      W('kpi', 4, 1, { metric: 'cs01' }), W('kpi', 4, 1, { metric: 'mv', segment: 'Корп' }), W('kpi', 4, 1, { metric: 'pnl', book: 'CORP_RUB' }),
+      W('conc', 8, 3), W('watch', 4, 3, { items: ['g:Самолёт', 'g:АФК Система', 'g:ГТЛК', 'g:Газпром', 'g:ДОМ.РФ', 'g:Совкомбанк', 'p:Европлан Авто ABS 2025-1'] }),
+      W('treemap', 6, 2, { dim: 'rating' }), W('scenario', 6, 2, { scenarios: ['credit', 'keyhike', 'stress22'] }),
+      W('blotter', 12, 3, { segment: 'Корп', measure: 'cs01', topN: '20' })] },
+    { id: 'fx', name: 'FX и фондирование', widgets: [
+      W('kpi', 4, 1, { metric: 'ocpUSD' }), W('kpi', 4, 1, { metric: 'ocpCNY' }), W('kpi', 4, 1, { metric: 'ocpEUR' }),
+      W('ocp', 6, 2), W('funding', 6, 2, { stack: 'type' }),
+      W('funding', 6, 2, { stack: 'ccy' }), W('scenario', 6, 2, { scenarios: ['rubdep', 'stress22'] }),
+      W('curves', 6, 2, { curves: ['USD SOFR', 'CNY', 'EUR ESTR'] }), W('blotter', 6, 2, { ccy: 'nonRUB', measure: 'fx', topN: '15' })] },
+  ] };
+}
+function valid(s) {
+  return s && Array.isArray(s.boards) && s.boards.length && s.boards.every(b => b && b.id && typeof b.name === 'string' && Array.isArray(b.widgets) &&
+    b.widgets.every(w => w && w.id && WT[w.type] && [3, 4, 6, 8, 12].includes(w.w) && [1, 2, 3].includes(w.h) && w.cfg && typeof w.cfg === 'object'));
+}
+function load() {
+  try { const raw = localStorage.getItem(LS); if (raw) { const s = JSON.parse(raw); if (valid(s)) { if (!s.boards.some(b => b.id === s.active)) s.active = s.boards[0].id; return s; } } } catch (e) {}
+  return defaults();
+}
+
+/* ================= rendering ================= */
+const grid = $('#grid');
+const SIZES = [['S', 3], ['M', 4], ['M6', 6], ['L', 8], ['XL', 12]];
+const ICON = {
+  grip: '<svg width="12" height="14" viewBox="0 0 12 14" aria-hidden="true">' + [2, 7, 12].map(y => `<circle cx="3.5" cy="${y}" r="1.3" fill="currentColor"/><circle cx="8.5" cy="${y}" r="1.3" fill="currentColor"/>`).join('') + '</svg>',
+  gear: '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M7 4.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7 .8v2M7 11.2v2M.8 7h2M11.2 7h2M2.6 2.6 4 4M10 10l1.4 1.4M2.6 11.4 4 10M10 4l1.4-1.4" stroke="currentColor" stroke-width="1.3" fill="none"/></svg>',
+  x: '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 2l8 8M10 2 2 10" stroke="currentColor" stroke-width="1.4" fill="none"/></svg>',
+};
+function buildWidget(w) {
+  const el = document.createElement('section');
+  el.className = 'wg'; el.dataset.id = w.id; el.dataset.w = w.w; el.dataset.h = w.h;
+  el.style.setProperty('--w', w.w); el.style.setProperty('--h', w.h);
+  el.setAttribute('aria-label', 'Виджет');
+  el.innerHTML = `<header class="wg-h">
+      <button class="ib handle edit-only" type="button" aria-label="Перетащить виджет (стрелки — переместить)" title="Перетащить">${ICON.grip}</button>
+      <h3 class="wg-t"></h3><span class="wg-s"></span>
+      <div class="wg-tools edit-only"><button class="ib" type="button" data-act="gear" aria-label="Настроить виджет" title="Настроить">${ICON.gear}</button><button class="ib" type="button" data-act="remove" aria-label="Удалить виджет" title="Удалить">${ICON.x}</button></div>
+    </header>
+    <div class="wg-b"></div>
+    <div class="wg-e edit-only"><span class="lab">Ширина</span><span class="seg" role="group" aria-label="Ширина">${SIZES.map(([n, v]) => `<button type="button" data-act="w" data-v="${v}" title="${v} колонок" aria-pressed="${w.w === v}">${n}</button>`).join('')}</span>
+      <span class="lab">Высота</span><span class="seg" role="group" aria-label="Высота">${[1, 2, 3].map(v => `<button type="button" data-act="h" data-v="${v}" aria-pressed="${w.h === v}">${v}</button>`).join('')}</span></div>`;
+  const h = el.querySelector('.handle');
+  h.addEventListener('pointerdown', dragStart);
+  h.addEventListener('keydown', e => {
+    const d = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[e.key]; if (!d) return;
+    e.preventDefault(); moveBy(w.id, d);
+  });
+  return el;
+}
+function renderWidget(w) {
+  const el = grid.querySelector(`.wg[data-id="${w.id}"]`); if (!el) return;
+  disposeW(w.id);
+  const t = WT[w.type], body = el.querySelector('.wg-b');
+  const title = (w.cfg.title && w.cfg.title.trim()) || t.title(w.cfg);
+  el.querySelector('.wg-t').textContent = title;
+  el.setAttribute('aria-label', title);
+  let sub = '';
+  try { sub = t.render(body, w.cfg, w) || ''; } catch (err) { console.error(err); body.innerHTML = `<div class="empty">Не удалось построить виджет: ${esc(err.message)}</div>`; }
+  const s = el.querySelector('.wg-s'); s.textContent = sub; s.title = sub;
+}
+function renderBodies() { board().widgets.forEach(renderWidget); }
+function renderBoard() {
+  [...charts.keys()].forEach(disposeW);
+  grid.innerHTML = '<div class="guides" aria-hidden="true">' + '<span></span>'.repeat(12) + '</div>';
+  const b = board();
+  if (!b.widgets.length) {
+    const e = document.createElement('div'); e.className = 'empty-board';
+    e.innerHTML = `<b>На доске «${esc(b.name)}» пока нет виджетов</b><span>Соберите её из галереи: KPI, лестницы DV01, сценарии, блоттер и другие.</span><button class="btn primary" type="button" data-act="gallery">+ Виджет</button>`;
+    grid.appendChild(e);
+  }
+  b.widgets.forEach(w => grid.appendChild(buildWidget(w)));
+  renderBodies();
+  $('#boardName').value = b.name;
+}
+function renderTabs() {
+  const t = $('#tabs');
+  t.innerHTML = state.boards.map(b => `<button class="tab" role="tab" type="button" data-board="${esc(b.id)}" aria-selected="${b.id === state.active}">${esc(b.name)}<span class="cnt">${b.widgets.length}</span></button>`).join('') +
+    '<button class="tab add" type="button" id="addBoard">+ Доска</button>';
+}
+function renderFilterBar() {
+  const f = bf(), keys = Object.keys(f), fb = $('#filterbar');
+  fb.innerHTML = '<span class="lbl">Фильтр доски</span>' + (keys.length
+    ? keys.map(k => `<button class="fchip" type="button" data-clear="${k}" title="Снять фильтр"><small>${DIM_LABEL[k]}</small>${esc(dimValLabel(k, f[k]))}<span class="x" aria-hidden="true">✕</span></button>`).join('') + (keys.length > 1 ? '<button class="linkbtn" type="button" data-clear="*">снять все</button>' : '')
+    : '<span class="hint">нет — кликните книгу, эмитента или валюту в любом виджете, чтобы отфильтровать всю доску</span>');
+}
+function switchBoard(id) {
+  if (id === state.active) return;
+  closeDrawer();
+  state.active = id; save(); renderTabs(); renderFilterBar(); renderBoard();
+  live('Доска ' + board().name);
+}
+function setEdit(on) {
+  ui.edit = on;
+  $('#app').classList.toggle('editing', on);
+  const b = $('#editBtn'); b.setAttribute('aria-pressed', String(on));
+  b.querySelector('span').textContent = on ? 'Завершить правку' : 'Редактировать доску';
+  if (!on) closeDrawer();
+  live(on ? 'Режим редактирования доски' : 'Правка завершена');
+}
+
+/* ---------- grid interactions ---------- */
+grid.addEventListener('click', e => {
+  const xf = e.target.closest('[data-xf]');
+  if (xf) { setXf(xf.dataset.xf, xf.dataset.v); return; }
+  const a = e.target.closest('[data-act]'); if (!a) return;
+  const act = a.dataset.act;
+  if (act === 'gallery') { openGallery(); return; }
+  const el = a.closest('.wg'); if (!el) return;
+  const w = board().widgets.find(x => x.id === el.dataset.id); if (!w) return;
+  if (act === 'w' || act === 'h') {
+    w[act] = +a.dataset.v; el.dataset[act] = w[act]; el.style.setProperty('--' + act, w[act]);
+    el.querySelectorAll(`[data-act="${act}"]`).forEach(x => x.setAttribute('aria-pressed', String(+x.dataset.v === w[act])));
+    save(); requestAnimationFrame(() => renderWidget(w));
+  } else if (act === 'gear') openDrawer(w);
+  else if (act === 'remove') removeWidget(w);
+});
+function removeWidget(w) {
+  const b = board(), i = b.widgets.indexOf(w);
+  b.widgets.splice(i, 1); disposeW(w.id);
+  const el = grid.querySelector(`.wg[data-id="${w.id}"]`); if (el) el.remove();
+  if (ui.cfgOpen === w.id) closeDrawer();
+  if (!b.widgets.length) renderBoard();
+  save(); renderTabs();
+  toast(`Виджет «${(w.cfg.title || WT[w.type].title(w.cfg))}» удалён`, 'Вернуть', () => {
+    if (!state.boards.includes(b)) return;
+    b.widgets.splice(Math.min(i, b.widgets.length), 0, w); save(); renderTabs();
+    if (state.active === b.id) renderBoard();
+  });
+}
+function moveBy(id, d) {
+  const ws = board().widgets, i = ws.findIndex(x => x.id === id), j = i + d;
+  if (j < 0 || j >= ws.length) return;
+  const [w] = ws.splice(i, 1); ws.splice(j, 0, w); save();
+  const el = grid.querySelector(`.wg[data-id="${id}"]`), sib = grid.querySelector(`.wg[data-id="${ws[d > 0 ? j - 1 : j + 1].id}"]`);
+  grid.insertBefore(el, d > 0 ? sib.nextSibling : sib);
+  el.querySelector('.handle').focus();
+  live(`Виджет перемещён на позицию ${j + 1} из ${ws.length}`);
+}
+
+/* ---------- pointer drag & drop ---------- */
+let drag = null;
+function dragStart(e) {
+  if (!ui.edit || e.button !== 0) return;
+  const wg = e.currentTarget.closest('.wg'), r = wg.getBoundingClientRect();
+  e.preventDefault();
+  const g = document.createElement('div'); g.className = 'dragghost';
+  g.style.width = Math.min(r.width, 420) + 'px';
+  g.innerHTML = `${esc(wg.querySelector('.wg-t').textContent)}<small>${wg.dataset.w} кол. × ${wg.dataset.h} ряд.</small>`;
+  document.body.appendChild(g);
+  drag = { wg, g, dx: Math.min(e.clientX - r.left, Math.min(r.width, 420) - 20), dy: e.clientY - r.top > 40 ? 16 : e.clientY - r.top, last: 0, handle: e.currentTarget, moved: false };
+  wg.classList.add('dragging');
+  try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
+  // слушаем window: перенос узла в DOM снимает pointer capture с ручки
+  window.addEventListener('pointermove', dragMove);
+  window.addEventListener('pointerup', dragEnd);
+  window.addEventListener('pointercancel', dragEnd);
+  placeGhost(e);
+}
+function placeGhost(e) { drag.g.style.transform = `translate(${e.clientX - drag.dx}px, ${e.clientY - drag.dy}px)`; }
+function dragMove(e) {
+  if (!drag) return;
+  placeGhost(e);
+  if (e.clientY < 60) window.scrollBy(0, -16); else if (e.clientY > innerHeight - 50) window.scrollBy(0, 16);
+  const now = performance.now(); if (now - drag.last < 110) return;
+  const hit = document.elementFromPoint(e.clientX, e.clientY), t = hit && hit.closest('.wg');
+  if (!t || t === drag.wg || t.parentNode !== grid) return;
+  const r = t.getBoundingClientRect(), before = e.clientX < r.left + r.width / 2;
+  if (before ? t.previousElementSibling === drag.wg : t.nextElementSibling === drag.wg) return;
+  grid.insertBefore(drag.wg, before ? t : t.nextElementSibling);
+  drag.last = now; drag.moved = true;
+}
+function dragEnd() {
+  if (!drag) return;
+  const { wg, g, handle, moved } = drag; drag = null;
+  window.removeEventListener('pointermove', dragMove); window.removeEventListener('pointerup', dragEnd); window.removeEventListener('pointercancel', dragEnd);
+  g.remove(); wg.classList.remove('dragging');
+  try { handle.focus({ preventScroll: true }); } catch (_) {}
+  if (moved) {
+    const order = [...grid.querySelectorAll(':scope > .wg')].map(n => n.dataset.id), b = board();
+    b.widgets.sort((a, z) => order.indexOf(a.id) - order.indexOf(z.id)); save();
+    live(`Виджет перемещён на позицию ${order.indexOf(wg.dataset.id) + 1}`);
+  }
+}
+
+/* ---------- gallery ---------- */
+let overlay = null;
+function openGallery() {
+  closeGallery();
+  overlay = document.createElement('div'); overlay.className = 'overlay';
+  overlay.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="galT"><div class="mh"><h2 id="galT">Галерея виджетов</h2><p>Выберите тип — виджет появится в конце доски «${esc(board().name)}». Настройки — через шестерёнку.</p><button class="ib" type="button" data-close aria-label="Закрыть">${ICON.x}</button></div>
+    <div class="gal">${GALLERY_ORDER.map(k => { const t = WT[k]; return `<button class="gcard" type="button" data-type="${k}">${GLY[t.glyph]}<b>${t.name}</b><span>${t.desc}</span><small>по умолчанию ${t.def.w}×${t.def.h}</small></button>`; }).join('')}</div></div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => {
+    if (e.target === overlay || e.target.closest('[data-close]')) { closeGallery(); return; }
+    const c = e.target.closest('[data-type]'); if (!c) return;
+    const t = WT[c.dataset.type], w = W(c.dataset.type, t.def.w, t.def.h);
+    const b = board(); b.widgets.push(w); save(); closeGallery();
+    if (b.widgets.length === 1) renderBoard(); else { grid.appendChild(buildWidget(w)); renderWidget(w); }
+    renderTabs();
+    const el = grid.querySelector(`.wg[data-id="${w.id}"]`);
+    el.classList.add('flash'); el.scrollIntoView({ block: 'nearest', behavior: RM.matches ? 'auto' : 'smooth' });
+    setTimeout(() => el.classList.remove('flash'), 1500);
+    live(`Добавлен виджет ${t.name}`);
+  });
+  overlay.querySelector('.gcard').focus();
+}
+function closeGallery() { if (overlay) { overlay.remove(); overlay = null; $('#addWBtn').focus({ preventScroll: true }); } }
+
+/* ---------- config drawer ---------- */
+let drawer = null;
+function pickOptions() {
+  const groups = [...new Set(D.positions.map(p => p.issuerGroup).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ru'));
+  return { groups, positions: D.positions.map(p => p.name) };
+}
+function openDrawer(w) {
+  closeDrawer();
+  ui.cfgOpen = w.id;
+  const t = WT[w.type];
+  drawer = document.createElement('aside'); drawer.className = 'drawer'; drawer.setAttribute('aria-label', 'Настройки виджета');
+  const fields = [{ key: 'title', label: 'Заголовок', type: 'text' }].concat(t.fields);
+  drawer.innerHTML = `<div class="mh"><h2>${esc(t.name)}</h2><p></p><button class="ib" type="button" data-close aria-label="Закрыть">${ICON.x}</button></div>
+    <div class="dbody">${fields.map(f => fieldHtml(f, w)).join('')}<p class="help" style="font-size:11.5px;color:var(--muted);margin:0">Изменения применяются сразу и сохраняются в этом браузере. Фильтры виджета действуют вместе с фильтром доски.</p></div>
+    <div class="dfoot"><button class="btn ghost" type="button" data-reset>Настройки по умолчанию</button><button class="btn primary" type="button" data-close>Готово</button></div>`;
+  document.body.appendChild(drawer);
+  const apply = () => { save(); renderWidget(w); };
+  drawer.addEventListener('change', e => {
+    const el = e.target, key = el.dataset.key; if (!key) return;
+    const f = fields.find(x => x.key === key);
+    if (f.type === 'multi' || f.type === 'pick') w.cfg[key] = [...drawer.querySelectorAll(`input[data-key="${key}"]:checked`)].map(x => x.value);
+    else w.cfg[key] = el.value;
+    apply();
+  });
+  drawer.addEventListener('input', e => {
+    if (e.target.dataset.key === 'title') { w.cfg.title = e.target.value; apply(); }
+    if (e.target.dataset.search != null) { const q = e.target.value.trim().toLowerCase(); drawer.querySelectorAll('.chk label').forEach(lb => { lb.hidden = q && !lb.textContent.toLowerCase().includes(q); }); }
+  });
+  drawer.addEventListener('click', e => {
+    if (e.target.closest('[data-close]')) closeDrawer();
+    if (e.target.closest('[data-reset]')) { w.cfg = clone(t.def.cfg); apply(); openDrawer(w); }
+  });
+  const first = drawer.querySelector('.dbody input, .dbody select'); if (first) first.focus();
+}
+function fieldHtml(f, w) {
+  const id = `cfg-${f.key}`, v = w.cfg[f.key];
+  if (f.type === 'text') return `<div class="fld"><label for="${id}">${f.label}</label><input type="text" id="${id}" data-key="${f.key}" value="${esc(v || '')}" placeholder="${esc(WT[w.type].title(w.cfg))}"></div>`;
+  if (f.type === 'select') return `<div class="fld"><label for="${id}">${f.label}</label><select id="${id}" data-key="${f.key}">${f.opts().map(([k, n]) => `<option value="${esc(k)}"${String(v) === String(k) ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select></div>`;
+  if (f.type === 'multi') return `<div class="fld"><span class="fl">${f.label}</span><div class="chk">${f.opts().map(([k, n], i) => `<label><input type="checkbox" id="${id}-${i}" data-key="${f.key}" value="${esc(k)}"${(v || []).includes(k) ? ' checked' : ''}>${esc(n)}</label>`).join('')}</div></div>`;
+  if (f.type === 'pick') { const o = pickOptions(), sel = new Set(v || []);
+    return `<div class="fld"><label for="${id}-q">${f.label}</label><input type="search" id="${id}-q" data-search placeholder="Поиск эмитента или позиции"><div class="chk"><div class="h">Группы эмитентов</div>${o.groups.map((g, i) => `<label><input type="checkbox" id="${id}-g${i}" data-key="${f.key}" value="g:${esc(g)}"${sel.has('g:' + g) ? ' checked' : ''}>${esc(g)}</label>`).join('')}<div class="h">Позиции</div>${o.positions.map((n, i) => `<label><input type="checkbox" id="${id}-p${i}" data-key="${f.key}" value="p:${esc(n)}"${sel.has('p:' + n) ? ' checked' : ''}>${esc(n)}</label>`).join('')}</div><span class="help">Отмечено: ${sel.size}</span></div>`; }
+  return '';
+}
+function closeDrawer() { if (drawer) { drawer.remove(); drawer = null; ui.cfgOpen = null; } }
+
+/* ---------- toast ---------- */
+let toastEl = null, toastT = 0;
+function toast(msg, actLabel, act) {
+  if (toastEl) toastEl.remove(); clearTimeout(toastT);
+  toastEl = document.createElement('div'); toastEl.className = 'toast'; toastEl.setAttribute('role', 'status');
+  toastEl.innerHTML = `<span>${esc(msg)}</span>${actLabel ? `<button class="btn" type="button">${esc(actLabel)}</button>` : ''}`;
+  document.body.appendChild(toastEl);
+  if (actLabel) toastEl.querySelector('button').addEventListener('click', () => { act(); toastEl.remove(); toastEl = null; });
+  toastT = setTimeout(() => { if (toastEl) { toastEl.remove(); toastEl = null; } }, 6500);
+}
+
+/* ---------- two-step confirm buttons ---------- */
+function armed(btn, label, armedLabel, fn) {
+  let t = 0;
+  btn.addEventListener('click', () => {
+    if (btn.classList.contains('armed')) { clearTimeout(t); btn.classList.remove('armed'); btn.textContent = label; fn(); return; }
+    btn.classList.add('armed'); btn.textContent = armedLabel;
+    t = setTimeout(() => { btn.classList.remove('armed'); btn.textContent = label; }, 4000);
+  });
+}
+
+/* ---------- chrome wiring ---------- */
+$('#tabs').addEventListener('click', e => {
+  if (e.target.closest('#addBoard')) {
+    const id = 'b' + Date.now().toString(36);
+    state.boards.push({ id, name: 'Новая доска ' + (state.boards.length + 1), widgets: [] });
+    switchBoard(id); setEdit(true);
+    const inp = $('#boardName'); inp.focus(); inp.select();
+    return;
+  }
+  const t = e.target.closest('[data-board]'); if (t) switchBoard(t.dataset.board);
+});
+$('#tabs').addEventListener('keydown', e => {
+  const d = { ArrowLeft: -1, ArrowRight: 1 }[e.key]; if (!d || !e.target.dataset.board) return;
+  const i = state.boards.findIndex(b => b.id === e.target.dataset.board), n = state.boards[(i + d + state.boards.length) % state.boards.length];
+  switchBoard(n.id); $(`#tabs [data-board="${n.id}"]`).focus();
+});
+$('#filterbar').addEventListener('click', e => {
+  const c = e.target.closest('[data-clear]'); if (!c) return;
+  const f = bf();
+  if (c.dataset.clear === '*') Object.keys(f).forEach(k => delete f[k]); else delete f[c.dataset.clear];
+  renderFilterBar(); renderBodies(); live('Фильтр снят');
+});
+$('#editBtn').addEventListener('click', () => setEdit(!ui.edit));
+$('#doneBtn').addEventListener('click', () => setEdit(false));
+$('#addWBtn').addEventListener('click', openGallery);
+$('#boardName').addEventListener('input', e => { board().name = e.target.value.trim() || 'Без названия'; save(); renderTabs(); });
+armed($('#delBoardBtn'), 'Удалить доску', 'Нажмите ещё раз — удалить', () => {
+  if (state.boards.length < 2) { toast('Нельзя удалить единственную доску'); return; }
+  const b = board(); state.boards = state.boards.filter(x => x !== b); delete filters[b.id];
+  state.active = state.boards[0].id; save(); renderTabs(); renderFilterBar(); renderBoard();
+  toast(`Доска «${b.name}» удалена`);
+});
+armed($('#resetBtn'), 'Сбросить к стандартным', 'Подтвердить сброс досок', () => {
+  closeDrawer(); state = defaults(); Object.keys(filters).forEach(k => delete filters[k]);
+  try { localStorage.removeItem(LS); } catch (e) {}
+  renderTabs(); renderFilterBar(); renderBoard(); toast('Доски сброшены к стандартному набору');
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { if (overlay) closeGallery(); else if (drawer) closeDrawer(); } });
+
+/* ---------- theme ---------- */
+function applyThemePref() { try { const t = localStorage.getItem(LS_THEME); if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t); } catch (e) {} }
+$('#themeBtn').addEventListener('click', () => {
+  const cur = document.documentElement.getAttribute('data-theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  const next = cur === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  try { localStorage.setItem(LS_THEME, next); } catch (e) {}
+});
+let themeT = 0;
+const rethemeSoon = () => { clearTimeout(themeT); themeT = setTimeout(() => { readTK(); renderBodies(); }, 30); };
+new MutationObserver(rethemeSoon).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+const mq = matchMedia('(prefers-color-scheme: dark)');
+if (mq.addEventListener) mq.addEventListener('change', rethemeSoon); else if (mq.addListener) mq.addListener(rethemeSoon);
+
+/* ---------- boot ---------- */
+applyThemePref();
+readTK();
+state = load();
+renderTabs(); renderFilterBar(); renderBoard();
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { readTK(); renderBodies(); });
+})();
+</script>

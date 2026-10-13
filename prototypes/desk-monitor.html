@@ -1,0 +1,1231 @@
+<title>FI Desk Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: terminal shell. Sticky header (desk line, KPI tape, global filters, tab bar) over a 12-column grid of flat
+   hairline panels. Graphite-navy ground, muted steel-cyan accent, mono figures, Cyrillic grotesk for UI. Dark-first. */
+:root{
+  --bg:#0c1117; --panel:#111820; --panel-2:#151d27; --raise:#1b2530; --line:#212b37; --line-2:#2e3a48; --grid:#1d2631;
+  --fg:#d4dbe3; --fg-2:#97a4b3; --fg-3:#677587;
+  --accent:#5aaec4; --accent-ink:#8fd0e1; --accent-weak:rgba(90,174,196,.13); --accent-line:rgba(90,174,196,.45);
+  --pos:#3987e5; --neg:#e66767; --mid:#28303a; --neg-tx:#f08a86; --pos-tx:#d4dbe3;
+  --good:#0ca30c; --warn:#fab219; --serious:#ec835a; --crit:#d03b3b;
+  --c1:#3987e5; --c2:#d95926; --c3:#199e70; --c4:#c98500; --c5:#d55181; --c6:#008300; --c7:#9085e9; --c8:#e66767;
+  --ink-dark:#111820; --ink-light:#f2f6fa;
+  --shadow:0 12px 40px rgba(0,0,0,.45);
+  --font-ui:"Golos Text","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --font-mono:"JetBrains Mono","IBM Plex Mono",ui-monospace,"SFMono-Regular",Consolas,"Liberation Mono",monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#edf0f3; --panel:#ffffff; --panel-2:#f5f7f9; --raise:#ffffff; --line:#dbe1e7; --line-2:#c5ced8; --grid:#e7ebef;
+    --fg:#141d27; --fg-2:#465464; --fg-3:#738192;
+    --accent:#1c748c; --accent-ink:#155e72; --accent-weak:rgba(28,116,140,.10); --accent-line:rgba(28,116,140,.45);
+    --pos:#2a78d6; --neg:#d03b3b; --mid:#eceff2; --neg-tx:#b8302f; --pos-tx:#141d27;
+    --c1:#2a78d6; --c2:#eb6834; --c3:#1baf7a; --c4:#eda100; --c5:#e87ba4; --c6:#008300; --c7:#6250d6; --c8:#e34948;
+    --ink-dark:#141d27; --ink-light:#ffffff;
+    --shadow:0 12px 40px rgba(20,29,39,.18);
+    color-scheme:light;
+  }
+}
+:root[data-theme="light"]{
+  --bg:#edf0f3; --panel:#ffffff; --panel-2:#f5f7f9; --raise:#ffffff; --line:#dbe1e7; --line-2:#c5ced8; --grid:#e7ebef;
+  --fg:#141d27; --fg-2:#465464; --fg-3:#738192;
+  --accent:#1c748c; --accent-ink:#155e72; --accent-weak:rgba(28,116,140,.10); --accent-line:rgba(28,116,140,.45);
+  --pos:#2a78d6; --neg:#d03b3b; --mid:#eceff2; --neg-tx:#b8302f; --pos-tx:#141d27;
+  --c1:#2a78d6; --c2:#eb6834; --c3:#1baf7a; --c4:#eda100; --c5:#e87ba4; --c6:#008300; --c7:#6250d6; --c8:#e34948;
+  --ink-dark:#141d27; --ink-light:#ffffff;
+  --shadow:0 12px 40px rgba(20,29,39,.18);
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--font-ui);font-size:13px;line-height:1.4;-webkit-font-smoothing:antialiased}
+button,select,input{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.mono,.n,.kv,.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+.wrap{padding-inline:16px}
+@media (min-width:1200px){.wrap{padding-inline:20px}}
+.neg-v{color:var(--neg-tx)}
+.muted{color:var(--fg-3)}
+
+/* ---------- header ---------- */
+.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:30;background:var(--bg);border-bottom:1px solid var(--line)}
+@media (max-width:960px),(max-height:700px){.top{position:static}}
+.bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding-block:8px;border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:8px;min-width:0}
+.brand b{font-weight:700;letter-spacing:.02em;font-size:14px}
+.brand .sep{color:var(--fg-3)}
+.brand .desk{color:var(--fg-2)}
+.logo{width:22px;height:16px;flex:none}
+.logo path{fill:none;stroke:var(--accent);stroke-width:1.8}
+.logo rect{fill:var(--fg-3)}
+.meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:var(--fg-2);font-size:12px}
+.meta b{color:var(--fg);font-weight:500}
+.test{border:1px dashed var(--warn);color:var(--fg);padding:1px 7px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;border-radius:2px}
+.ibtn{background:var(--panel-2);border:1px solid var(--line-2);border-radius:2px;padding:3px 9px;cursor:pointer;color:var(--fg-2);font-size:12px}
+.ibtn:hover{color:var(--fg);border-color:var(--accent-line)}
+.alert-btn{background:none;border:0;padding:0;cursor:pointer}
+
+/* KPI tape */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(176px,1fr));border-bottom:1px solid var(--line)}
+.kpi{padding:8px 14px 9px 0;min-width:0;display:flex;flex-direction:column;gap:3px}
+.kpi + .kpi{padding-left:14px;border-left:1px solid var(--line)}
+.kpi.wide{grid-column:span 2}
+@media (max-width:760px){.kpis{grid-template-columns:1fr 1fr}.kpi{padding-left:10px!important;border-left:0!important;border-top:1px solid var(--line)}.kpi.wide{grid-column:span 2}}
+.kl{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--fg-3);display:flex;justify-content:space-between;gap:6px}
+.kv{font-size:19px;font-weight:600;letter-spacing:-.01em;white-space:nowrap}
+.kv small{font-size:11px;color:var(--fg-3);font-weight:400;font-family:var(--font-ui);margin-left:4px}
+.ks{font-size:11px;color:var(--fg-2);display:flex;gap:8px;align-items:center;white-space:nowrap;flex-wrap:wrap}
+.ks .num{color:var(--fg)}
+.ocp{display:grid;grid-template-columns:auto auto 1fr auto;gap:2px 8px;align-items:center;font-size:11.5px}
+.ocp .num{text-align:right}
+.ub{position:relative;display:inline-block;height:5px;background:var(--line);border-radius:1px;overflow:hidden;min-width:48px;flex:1;vertical-align:middle}
+.ub i{position:absolute;left:0;top:0;bottom:0;border-radius:1px}
+.ub-ok{background:var(--accent)} .ub-warn{background:var(--warn)} .ub-serious{background:var(--serious)} .ub-crit{background:var(--crit)}
+.kpi .ub{max-width:none;width:100%}
+
+/* filters */
+.filters{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center;padding-block:7px;border-bottom:1px solid var(--line)}
+.fg{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.fl{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--fg-3);margin-right:4px}
+.chip{border:1px solid var(--line-2);background:transparent;border-radius:2px;padding:2px 8px;font-size:12px;cursor:pointer;color:var(--fg-2);white-space:nowrap}
+.chip:hover{color:var(--fg);border-color:var(--accent-line)}
+.chip[aria-pressed="true"]{background:var(--accent-weak);border-color:var(--accent);color:var(--accent-ink)}
+select{background:var(--panel-2);border:1px solid var(--line-2);border-radius:2px;padding:2px 6px;font-size:12px}
+.tgl{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--fg-2);cursor:pointer;user-select:none}
+.tgl input{position:absolute;opacity:0;width:1px;height:1px}
+.tgl-s{width:28px;height:15px;border-radius:8px;background:var(--line-2);position:relative;transition:background .15s}
+.tgl-s::after{content:"";position:absolute;left:2px;top:2px;width:11px;height:11px;border-radius:50%;background:var(--fg-2);transition:transform .15s}
+.tgl input:checked + .tgl-s{background:var(--accent)}
+.tgl input:checked + .tgl-s::after{transform:translateX(13px);background:var(--ink-light)}
+.tgl input:focus-visible + .tgl-s{outline:2px solid var(--accent);outline-offset:2px}
+.lnk{background:none;border:0;color:var(--accent-ink);cursor:pointer;font-size:12px;padding:2px 0;text-decoration:underline;text-underline-offset:2px}
+
+/* tabs */
+.tabs{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab-b{background:none;border:0;border-bottom:2px solid transparent;padding:8px 12px 7px;cursor:pointer;color:var(--fg-2);font-size:13px;white-space:nowrap;display:flex;gap:7px;align-items:baseline}
+.tab-b kbd{font-family:var(--font-mono);font-size:10px;color:var(--fg-3);border:1px solid var(--line-2);border-radius:2px;padding:0 4px}
+.tab-b:hover{color:var(--fg)}
+.tab-b[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--accent);font-weight:600}
+.tab-b .dev{font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-3)}
+
+/* ---------- main ---------- */
+.main{padding-block:14px 40px}
+.grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:12px}
+.s3{grid-column:span 3}.s4{grid-column:span 4}.s5{grid-column:span 5}.s6{grid-column:span 6}.s7{grid-column:span 7}.s8{grid-column:span 8}.s12{grid-column:span 12}
+@media (max-width:1180px){.s3,.s4{grid-column:span 6}.s5,.s7,.s8{grid-column:span 12}}
+@media (max-width:760px){.s3,.s4,.s5,.s6,.s7,.s8{grid-column:span 12}}
+.pnl{background:var(--panel);border:1px solid var(--line);border-radius:2px;min-width:0;display:flex;flex-direction:column}
+.ph{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:8px 12px;border-bottom:1px solid var(--line)}
+.ph h3{margin:0;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-2)}
+.ph .u{font-size:11px;color:var(--fg-3);font-family:var(--font-mono)}
+.pb{padding:10px 12px;min-width:0}
+.pb.flush{padding:0}
+.ch{width:100%;height:260px}
+.ch.h200{height:200px}.ch.h300{height:300px}.ch.h340{height:340px}.ch.h380{height:380px}
+.note{font-size:11.5px;color:var(--fg-3);margin:0}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;margin-bottom:12px}
+.seg{display:inline-flex;border:1px solid var(--line-2);border-radius:2px;overflow:hidden;flex-wrap:wrap}
+.seg button{background:transparent;border:0;border-right:1px solid var(--line-2);padding:3px 9px;font-size:12px;cursor:pointer;color:var(--fg-2)}
+.seg button:last-child{border-right:0}
+.seg button:hover{color:var(--fg)}
+.seg button[aria-pressed="true"]{background:var(--accent-weak);color:var(--accent-ink)}
+.ctl{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+
+/* tables */
+.tw{overflow-x:auto;min-width:0}
+.tw.scroll{overflow:auto;max-height:calc(100vh - 310px);min-height:320px}
+@media (max-width:960px){.tw.scroll{max-height:none}}
+table.t{border-collapse:collapse;width:100%;font-size:12px}
+.t th,.t td{padding:4px 8px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+.t th{font-weight:500;color:var(--fg-3);font-size:11px;background:var(--panel-2);position:sticky;top:0;z-index:1}
+.t .n{text-align:right}
+.t tbody tr:hover td{background:var(--accent-weak)}
+.t tr.click{cursor:pointer}
+.t tfoot td{font-weight:600;background:var(--panel-2);border-top:1px solid var(--line-2)}
+.t th.sortable{cursor:pointer;user-select:none}
+.t th.sortable:hover{color:var(--fg)}
+.t th[aria-sort] .ar{color:var(--accent-ink)}
+.t td.nm{max-width:260px;overflow:hidden;text-overflow:ellipsis}
+.t tr.new td:first-child{box-shadow:inset 3px 0 0 var(--warn)}
+.t tr.sel td{background:var(--accent-weak)}
+.tag{display:inline-block;font-size:9.5px;font-weight:600;letter-spacing:.05em;padding:0 4px;border-radius:2px;border:1px solid var(--warn);color:var(--fg);margin-left:6px;vertical-align:1px}
+.t tr.grp td{background:var(--panel-2);font-weight:600;cursor:pointer}
+.t tr.grp td:first-child{color:var(--fg)}
+.caret{display:inline-block;width:12px;color:var(--fg-3);transition:transform .12s}
+.t tr.grp[aria-expanded="false"] .caret{transform:rotate(-90deg)}
+.t tr.tot td{font-weight:600;background:var(--panel-2)}
+
+/* status chip */
+.st{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:1px 6px 1px 5px;border-radius:2px;white-space:nowrap;color:var(--fg)}
+.st svg{width:9px;height:9px;flex:none}
+.st-ok{background:color-mix(in srgb,var(--good) 14%,transparent)} .st-ok svg{fill:var(--good)}
+.st-warn{background:color-mix(in srgb,var(--warn) 18%,transparent)} .st-warn svg{fill:var(--warn)}
+.st-serious{background:color-mix(in srgb,var(--serious) 20%,transparent)} .st-serious svg{fill:var(--serious)}
+.st-crit{background:color-mix(in srgb,var(--crit) 22%,transparent)} .st-crit svg{fill:var(--crit)}
+.st-info{background:var(--accent-weak)} .st-info svg{fill:var(--accent)}
+
+/* lists */
+.ll{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(60px,1fr) auto auto;gap:6px 10px;align-items:center;font-size:12px}
+.ll .h{font-size:10.5px;color:var(--fg-3);text-transform:uppercase;letter-spacing:.06em}
+.ll .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ll .num{text-align:right;white-space:nowrap}
+.lim{display:flex;flex-direction:column}
+.lim-r{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:4px 10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);font-size:12px}
+.lim-r:last-child{border-bottom:0}
+.lim-r .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lim-r .num{text-align:right;color:var(--fg-2);white-space:nowrap}
+
+/* heatmap */
+.hm{border-collapse:separate;border-spacing:2px;font-size:12px;width:100%}
+.hm th{font-weight:500;color:var(--fg-3);font-size:11px;padding:3px 6px;text-align:right;white-space:nowrap}
+.hm th.rl{text-align:left}
+.hm td{padding:0;min-width:58px}
+.hm .cb{display:block;width:100%;border:0;border-radius:1px;padding:7px 6px;text-align:right;font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:12px;cursor:pointer;outline-offset:-2px}
+.hm .cb.zero{color:var(--fg-3)}
+.hm .cb.on{box-shadow:inset 0 0 0 2px var(--fg)}
+.hm .tot{font-family:var(--font-mono);font-variant-numeric:tabular-nums;text-align:right;padding:7px 8px;font-weight:600;background:var(--panel-2);white-space:nowrap}
+.hm .rb{background:none;border:0;cursor:pointer;color:var(--fg);text-align:left;padding:7px 6px;font-size:12px;white-space:nowrap;width:100%;display:flex;gap:8px;align-items:center}
+.hm .rb small{color:var(--fg-3);font-family:var(--font-mono);font-size:10.5px}
+.hm .rb[aria-pressed="true"]{color:var(--accent-ink);font-weight:600}
+.hm .rb[aria-pressed="true"]::before{content:"";width:3px;align-self:stretch;background:var(--accent)}
+.legend-div{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--fg-3);flex-wrap:wrap}
+.legend-div .gr{width:140px;height:8px;border-radius:1px}
+
+/* mini bar for contribution */
+.mb{position:relative;display:inline-block;width:120px;height:8px;background:transparent;vertical-align:middle}
+.mb::before{content:"";position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:var(--line-2)}
+.mb i{position:absolute;top:0;bottom:0;border-radius:1px}
+.mb i.p{left:50%;background:var(--pos)} .mb i.m{right:50%;background:var(--neg)}
+
+/* scenario cards */
+.sc-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:12px}
+.sc-c{background:var(--panel);border:1px solid var(--line);border-radius:2px;padding:10px 12px;cursor:pointer;text-align:left;display:flex;flex-direction:column;gap:6px}
+.sc-c[aria-pressed="true"]{border-color:var(--accent);box-shadow:inset 0 2px 0 var(--accent)}
+.sc-c .nm{font-size:12px;color:var(--fg-2);display:flex;gap:8px;align-items:center}
+.sc-c .sw{width:9px;height:9px;border-radius:1px;flex:none}
+.sc-c .kv{font-size:20px}
+.sc-c .cm{display:grid;grid-template-columns:repeat(4,auto);gap:2px 10px;font-size:11px;color:var(--fg-3);justify-content:start}
+.sc-c .cm .num{color:var(--fg-2)}
+.sc-desc{font-size:11.5px;color:var(--fg-2);line-height:1.5}
+
+/* waterfall side */
+.bigs{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.bigs > div{display:flex;flex-direction:column;gap:2px;padding:8px 0;border-top:1px solid var(--line)}
+.dev-chip{display:inline-flex;align-items:center;gap:6px;font-size:11px;border:1px dashed var(--accent-line);color:var(--accent-ink);padding:1px 7px;border-radius:2px;letter-spacing:.03em}
+.banner{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px;font-size:12px;color:var(--fg-2)}
+.break-it{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;padding:9px 0;border-bottom:1px solid var(--line);font-size:12px}
+.break-it:last-child{border-bottom:0}
+.break-it .ttl{font-weight:600;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.break-it .nt{color:var(--fg-2);grid-column:1/-1}
+.break-it .num{text-align:right;white-space:nowrap}
+.share{display:flex;height:14px;border-radius:1px;overflow:hidden;gap:2px;margin-block:4px 8px}
+.share i{display:block;height:100%}
+.share-l{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:3px 10px;font-size:12px;align-items:center}
+.sw{display:inline-block;width:9px;height:9px;border-radius:1px}
+
+/* positions toolbar */
+.srch{background:var(--panel-2);border:1px solid var(--line-2);border-radius:2px;padding:4px 8px;width:320px;max-width:100%;font-size:12px}
+.srch::placeholder{color:var(--fg-3)}
+details.pop{position:relative}
+details.pop summary{list-style:none;cursor:pointer}
+details.pop summary::-webkit-details-marker{display:none}
+.pop-b{position:absolute;z-index:25;top:calc(100% + 4px);left:0;background:var(--raise);border:1px solid var(--line-2);box-shadow:var(--shadow);padding:8px 10px;display:grid;grid-template-columns:repeat(2,minmax(150px,auto));gap:3px 14px;font-size:12px;max-width:calc(100vw - 32px)}
+@media (max-width:600px){.pop-b{grid-template-columns:1fr}}
+.pop-b label{display:flex;gap:6px;align-items:center;cursor:pointer;white-space:nowrap}
+.cnt{font-size:11.5px;color:var(--fg-3)}
+
+/* drawer */
+.scrim{position:fixed;inset:0;background:rgba(5,9,14,.45);z-index:40}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(540px,100vw);background:var(--panel);border-left:1px solid var(--line-2);box-shadow:var(--shadow);z-index:41;overflow-y:auto;padding:calc(env(safe-area-inset-top,0px) + 14px) 18px 30px}
+@media (prefers-reduced-motion:no-preference){.drawer:not([hidden]){animation:slin .18s ease-out}@keyframes slin{from{transform:translateX(24px);opacity:.6}}}
+.dr-h{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:10px}
+.dr-h h2{margin:0;font-size:17px;font-weight:600;text-wrap:balance}
+.dr-sub{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.pill{font-size:11px;border:1px solid var(--line-2);border-radius:2px;padding:0 6px;color:var(--fg-2)}
+.dr-s{margin-top:16px}
+.dr-s h4{margin:0 0 6px;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-3);font-weight:600}
+.kvl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 18px}
+.kvl div{display:flex;justify-content:space-between;gap:10px;padding:4px 0;border-bottom:1px solid var(--line);font-size:12px;min-width:0}
+.kvl dt{color:var(--fg-3);white-space:nowrap}
+.kvl dd{margin:0;text-align:right;font-family:var(--font-mono);font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:480px){.kvl{grid-template-columns:1fr}}
+.bk svg{width:100%;height:auto;display:block}
+.bk .bp{fill:var(--pos)} .bk .bn{fill:var(--neg)} .bk .ax{stroke:var(--line-2)} .bk text{fill:var(--fg-3);font-family:var(--font-mono);font-size:8px}
+.bk .cap{font-size:11.5px;color:var(--fg-2);display:flex;justify-content:space-between;margin-bottom:2px}
+.pnl-b{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:3px 10px;align-items:center;font-size:12px}
+.pnl-b .num{text-align:right}
+.pnl-b .sum{font-weight:600;border-top:1px solid var(--line-2);padding-top:3px}
+.brk{margin-top:8px;font-size:12px;padding:7px 9px;background:color-mix(in srgb,var(--serious) 12%,transparent);border-left:3px solid var(--serious)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<header class="top" id="top">
+  <div class="bar wrap">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 22 16" aria-hidden="true"><rect x="1" y="11" width="2" height="4"/><rect x="5" y="9" width="2" height="6"/><rect x="9" y="8" width="2" height="7"/><rect x="13" y="7.5" width="2" height="7.5"/><rect x="17" y="7" width="2" height="8"/><path d="M1 9 C5 4 9 3 21 2"/></svg>
+      <b>FI Desk Monitor</b><span class="sep">/</span><span class="desk">Деск долгового рынка</span>
+    </div>
+    <div class="meta">
+      <span>срез <b class="mono" id="asof"></b> МСК · закрытие</span>
+      <span class="test" title="Все цифры вымышленные">Тестовые данные</span>
+      <span id="hdr-alerts"></span>
+      <button class="ibtn" id="theme-btn" type="button" title="Переключить светлую/тёмную тему">Тема</button>
+    </div>
+  </div>
+  <div class="kpis wrap" id="kpis" aria-label="Ключевые показатели"></div>
+  <div class="filters wrap" id="filters" aria-label="Глобальные фильтры"></div>
+  <nav class="tabs wrap" role="tablist" id="tabs" aria-label="Разделы"></nav>
+</header>
+
+<main class="main wrap">
+  <!-- 1. Сводка -->
+  <section class="tab" id="tab-summary" role="tabpanel" aria-label="Сводка">
+    <div class="grid">
+      <div class="pnl s4"><div class="ph"><h3>DV01 по кривым</h3><span class="u">тыс ₽/б.п.</span></div><div class="pb"><div class="ch" id="c-sum-curve"></div></div></div>
+      <div class="pnl s8"><div class="ph"><h3>DV01 по бакетам</h3><div class="ctl"><select id="sum-bview" aria-label="Кривые на графике"></select><span class="u">тыс ₽/б.п.</span></div></div><div class="pb"><div class="ch" id="c-sum-bucket"></div></div></div>
+      <div class="pnl s4"><div class="ph"><h3>Экспозиция по сегментам</h3><span class="u">MV, млрд ₽</span></div><div class="pb"><div class="ch" id="c-sum-seg"></div></div></div>
+      <div class="pnl s4"><div class="ph"><h3>Топ-10 групп эмитентов</h3><span class="u">экспозиция / лимит</span></div><div class="pb" id="sum-issuers"></div></div>
+      <div class="pnl s4"><div class="ph"><h3>Лимиты: внимание</h3><span class="u" id="sum-lim-cnt"></span></div><div class="pb" id="sum-limits"></div></div>
+      <div class="pnl s12"><div class="ph"><h3>PnL за 22 дня: официальный и explained</h3><span class="u">млн ₽ · весь деск</span></div><div class="pb"><div class="ch h200" id="c-sum-hist"></div></div></div>
+    </div>
+  </section>
+
+  <!-- 2. Позиции -->
+  <section class="tab" id="tab-positions" role="tabpanel" aria-label="Позиции" hidden>
+    <div class="toolbar">
+      <input class="srch" id="pos-q" type="search" placeholder="Поиск: инструмент, ISIN, эмитент, книга…" aria-label="Поиск позиций">
+      <div class="ctl"><label class="fl" for="pos-group">Группировка</label>
+        <select id="pos-group"><option value="none">нет</option><option value="book">книга</option><option value="issuer">эмитент</option><option value="assetClass">класс актива</option><option value="ccy">валюта</option></select></div>
+      <details class="pop" id="colpop"><summary class="ibtn">Колонки</summary><div class="pop-b" id="colpop-b"></div></details>
+      <button class="lnk" type="button" id="pos-collapse" hidden>Свернуть все группы</button>
+      <span class="cnt" id="pos-cnt"></span>
+      <span class="cnt"><span class="tag" style="margin:0 4px 0 0">NEW</span>сделки сегодня</span>
+    </div>
+    <div class="pnl"><div class="tw scroll" id="pos-tw"></div></div>
+  </section>
+
+  <!-- 3. Риски по кривым -->
+  <section class="tab" id="tab-risk" role="tabpanel" aria-label="Риски по кривым" hidden>
+    <div class="toolbar">
+      <div class="ctl"><span class="fl">Строки</span><div class="seg" id="risk-mode"><button type="button" data-v="curves">по кривым</button><button type="button" data-v="books">по книгам</button></div></div>
+      <div class="ctl"><span class="fl">Кривая</span><div class="seg" id="risk-curves"></div></div>
+      <div class="legend-div" id="risk-legend"></div>
+    </div>
+    <div class="grid">
+      <div class="pnl s12"><div class="ph"><h3 id="risk-hm-title">DV01: кривая × бакет</h3><span class="u">тыс ₽/б.п. · нажмите ячейку</span></div><div class="pb"><div class="tw" id="risk-hm"></div></div></div>
+      <div class="pnl s12"><div class="ph"><h3 id="risk-ct-title">Вклад позиций</h3><span class="u" id="risk-ct-sub"></span></div><div class="tw" id="risk-ct" style="max-height:340px;overflow:auto"></div></div>
+      <div class="pnl s6"><div class="ph"><h3 id="risk-lad-title">Лестница DV01</h3><span class="u">тыс ₽/б.п.</span></div><div class="pb"><div class="ch h300" id="c-risk-ladder"></div></div></div>
+      <div class="pnl s6"><div class="ph"><h3 id="risk-crv-title">Кривая и изменение за день</h3><span class="u">% · б.п.</span></div><div class="pb"><div class="ch h300" id="c-risk-curve"></div></div></div>
+    </div>
+  </section>
+
+  <!-- 4. Экспозиции -->
+  <section class="tab" id="tab-expo" role="tabpanel" aria-label="Экспозиции" hidden>
+    <div class="toolbar">
+      <div class="ctl"><span class="fl">Разрез</span><div class="seg" id="ex-dim"></div></div>
+      <div class="ctl"><span class="fl">Мера</span><div class="seg" id="ex-meas"></div></div>
+      <div class="ctl"><span class="fl">Вид</span><div class="seg" id="ex-chart"><button type="button" data-v="treemap">treemap</button><button type="button" data-v="bars">бары</button></div></div>
+    </div>
+    <div class="grid">
+      <div class="pnl s7"><div class="ph"><h3 id="ex-title">Экспозиция</h3><span class="u" id="ex-unit"></span></div><div class="pb"><div class="ch h380" id="c-ex"></div><p class="note" id="ex-note"></p></div></div>
+      <div class="pnl s5"><div class="ph"><h3>Таблица</h3><span class="u" id="ex-tunit"></span></div><div class="tw" id="ex-table" style="max-height:430px;overflow:auto"></div></div>
+      <div class="pnl s6"><div class="ph"><h3>Концентрация по группам эмитентов</h3><span class="u">MV облигаций + продажа защиты CDS, млрд ₽</span></div><div class="tw" id="ex-conc" style="max-height:420px;overflow:auto"></div></div>
+      <div class="pnl s6"><div class="ph"><h3>Валютная позиция (ОВП)</h3><span class="u" id="ex-ocp-u"></span></div><div class="pb"><div class="ch h200" id="c-ex-ocp"></div></div><div class="tw" id="ex-ocp"></div></div>
+    </div>
+  </section>
+
+  <!-- 5. Фондирование -->
+  <section class="tab" id="tab-funding" role="tabpanel" aria-label="Фондирование" hidden>
+    <div class="grid">
+      <div class="pnl s8"><div class="ph"><h3>Лестница фондирования</h3><div class="ctl"><span class="fl">Стек</span><div class="seg" id="fu-stack"><button type="button" data-v="type">по типу</button><button type="button" data-v="ccy">по валюте</button></div><span class="u">млрд ₽ экв. · привлечение +</span></div></div><div class="pb"><div class="ch h300" id="c-fu-ladder"></div></div></div>
+      <div class="pnl s4"><div class="ph"><h3>Стоимость и структура</h3><span class="u">привлечённые средства</span></div><div class="pb" id="fu-cost"></div></div>
+      <div class="pnl s6"><div class="ph"><h3>Активы vs фондирование по книгам</h3><span class="u">млрд ₽</span></div><div class="pb"><div class="ch h300" id="c-fu-gap"></div></div></div>
+      <div class="pnl s6"><div class="ph"><h3>Разрыв фондирования</h3><span class="u">млн ₽</span></div><div class="tw" id="fu-gap"></div></div>
+      <div class="pnl s12"><div class="ph"><h3>Сделки фондирования</h3><span class="u" id="fu-cnt"></span></div><div class="tw" id="fu-deals"></div></div>
+    </div>
+  </section>
+
+  <!-- 6. Сценарии -->
+  <section class="tab" id="tab-scen" role="tabpanel" aria-label="Сценарии" hidden>
+    <div class="toolbar"><div class="ctl"><span class="fl">Сценарии (до 4)</span><div class="ctl" id="sc-chips"></div></div></div>
+    <div class="sc-row" id="sc-cards"></div>
+    <div class="grid">
+      <div class="pnl s7"><div class="ph"><h3 id="sc-ch-title">Результат по книгам</h3><span class="u">млн ₽</span></div><div class="pb"><div class="ch h340" id="c-sc"></div></div></div>
+      <div class="pnl s5"><div class="ph"><h3 id="sc-t-title">Книга × компонент</h3><span class="u">млн ₽</span></div><div class="tw" id="sc-table"></div><div class="pb"><p class="sc-desc" id="sc-desc"></p></div></div>
+      <div class="pnl s12"><div class="ph"><h3 id="sc-top-title">Топ-10 убыточных позиций</h3><span class="u">млн ₽</span></div><div class="tw" id="sc-top"></div></div>
+    </div>
+  </section>
+
+  <!-- 7. PnL -->
+  <section class="tab" id="tab-pnl" role="tabpanel" aria-label="PnL" hidden>
+    <div class="banner"><span class="dev-chip">в разработке</span><span>Предварительная версия PnL explain: методика и сверка с бэк-офисом ещё настраиваются.</span></div>
+    <div class="grid">
+      <div class="pnl s8"><div class="ph"><h3>PnL explain за день</h3><span class="u">млн ₽</span></div><div class="pb"><div class="ch h340" id="c-pnl-wf"></div></div></div>
+      <div class="pnl s4"><div class="ph"><h3>Итог дня</h3><span class="u">млн ₽</span></div><div class="pb" id="pnl-side"></div></div>
+      <div class="pnl s6"><div class="ph"><h3>По книгам: официальный vs explained</h3><span class="u">млн ₽</span></div><div class="tw" id="pnl-books"></div></div>
+      <div class="pnl s6"><div class="ph"><h3>Расхождения (breaks)</h3><span class="u" id="pnl-brk-cnt"></span></div><div class="pb" id="pnl-breaks"></div></div>
+    </div>
+  </section>
+</main>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" hidden aria-label="Карточка позиции" role="dialog"></aside>
+
+<script src="echarts.min.js"></script>
+<script src="data.js"></script>
+<script>
+(function(){
+'use strict';
+const D = window.DESK, U = D.util, B = D.BUCKETS, CURVES = Object.keys(D.CURVES);
+const ALL_BOOKS = Object.keys(D.BOOKS);
+const DESKS = [...new Set(ALL_BOOKS.map(b => D.BOOKS[b].desk))];
+const SEGS = ['Гос','Корп','Секьюритизация','Деривативы','FX'];
+const SEG_LABEL = {'Секьюритизация':'Секьюр'};
+const CCYS = ['USD','CNY','EUR'];
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const sum = U.sum;
+const $ = id => document.getElementById(id);
+
+/* ---------- storage ---------- */
+const store = {
+  get(k){ try { return localStorage.getItem(k); } catch(e){ return null; } },
+  set(k,v){ try { localStorage.setItem(k,v); } catch(e){} }
+};
+
+/* ---------- formatting ---------- */
+const nfc = {};
+function nf(d){ return nfc[d] || (nfc[d] = new Intl.NumberFormat('ru-RU',{minimumFractionDigits:d,maximumFractionDigits:d})); }
+function num(v,d,sign){
+  if (v == null || !isFinite(v)) return '—';
+  d = d || 0;
+  if (Math.abs(v) < 0.5 * Math.pow(10,-d)) v = 0;
+  let s = nf(d).format(v).replace('-', '−');
+  if (sign && v > 0) s = '+' + s;
+  return s;
+}
+const M = (v,d,s) => num(v/1e6, d==null?1:d, s);
+const K = (v,d,s) => num(v/1e3, d||0, s);
+const BN = (v,d,s) => num(v/1e9, d==null?1:d, s);
+const pct = (v,d) => num(v*100, d||0) + '%';
+function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function dt(s){ if (!s) return '—'; const a = s.split('-'); return a[2]+'.'+a[1]+'.'+a[0]; }
+const nc = v => v < -1e-9 ? ' neg-v' : '';
+function plural(n, a, b, c){ const m10=n%10, m100=n%100; if (m10===1 && m100!==11) return a; if (m10>=2 && m10<=4 && (m100<10||m100>=20)) return b; return c; }
+
+/* ---------- status ---------- */
+const ICON = {
+  ok:'<svg viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4"/></svg>',
+  warn:'<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .6 9.6 9.2H.4z"/></svg>',
+  serious:'<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .3 9.7 5 5 9.7.3 5z"/></svg>',
+  crit:'<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M.5.5h9v9h-9z"/></svg>',
+  info:'<svg viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4"/></svg>'
+};
+function status(u){
+  if (u >= 1) return {k:'crit', l:'Нарушение'};
+  if (u >= 0.9) return {k:'serious', l:'≥ 90%'};
+  if (u >= 0.75) return {k:'warn', l:'≥ 75%'};
+  return {k:'ok', l:'В норме'};
+}
+const chip = (k,l) => `<span class="st st-${k}">${ICON[k]}${esc(l)}</span>`;
+const ubar = u => `<span class="ub" title="${pct(u)}"><i class="ub-${status(u).k}" style="width:${Math.min(100,u*100).toFixed(1)}%"></i></span>`;
+
+/* ---------- state ---------- */
+const COLS = [
+  {k:'book', t:'Книга', v:p => D.BOOKS[p.book].name, def:1},
+  {k:'name', t:'Инструмент', def:1, nm:1},
+  {k:'isin', t:'ISIN', mono:1},
+  {k:'assetClass', t:'Класс', def:1},
+  {k:'issuer', t:'Эмитент'},
+  {k:'issuerGroup', t:'Группа эмитента', def:1},
+  {k:'sector', t:'Сектор'},
+  {k:'rating', t:'Рейтинг', def:1},
+  {k:'ccy', t:'Вал.', def:1},
+  {k:'maturity', t:'Погашение', f:dt, def:1, mono:1},
+  {k:'tenorY', t:'Срок, лет', n:1, d:1},
+  {k:'side', t:'Сторона'},
+  {k:'notional', t:'Номинал, млн вал.', n:1, d:1, v:p => p.notional/1e6, def:1, sg:1},
+  {k:'price', t:'Цена', n:1, d:2, def:1},
+  {k:'ytm', t:'Дох., %', n:1, d:2, def:1},
+  {k:'spreadBp', t:'Спред, б.п.', n:1, d:0, def:1},
+  {k:'mdur', t:'Мод. дюр.', n:1, d:2},
+  {k:'mvRub', t:'MV, млн ₽', n:1, d:1, v:p => p.mvRub/1e6, sum:1, def:1, sg:1},
+  {k:'dv01', t:'DV01, тыс ₽/б.п.', n:1, d:0, v:p => p.dv01/1e3, sum:1, def:1, sg:1},
+  {k:'cs01', t:'CS01, тыс ₽/б.п.', n:1, d:0, v:p => p.cs01/1e3, sum:1, def:1, sg:1},
+  {k:'jtd', t:'JTD, млн ₽', n:1, d:1, v:p => p.jtd/1e6, sum:1, sg:1},
+  {k:'fxd', t:'FX-дельта, млн вал.', n:1, d:2, v:p => { const k = Object.keys(p.fxDelta); return k.length ? p.fxDelta[k[0]]/1e6 : null; }, sg:1},
+  {k:'pnlOff', t:'PnL офиц., тыс ₽', n:1, d:0, v:p => p.pnl.official/1e3, sum:1, def:1, sg:1},
+  {k:'pnlExp', t:'PnL explained, тыс ₽', n:1, d:0, v:p => p.pnl.explained/1e3, sum:1, sg:1},
+  {k:'pnlUnx', t:'Break, тыс ₽', n:1, d:0, v:p => p.pnl.unexplained/1e3, sum:1, sg:1},
+  {k:'counterparty', t:'Контрагент'}
+];
+const TABS = [['summary','Сводка'],['positions','Позиции'],['risk','Риски по кривым'],['expo','Экспозиции'],['funding','Фондирование'],['scen','Сценарии'],['pnl','PnL']];
+
+const S = {
+  tab:'summary', books:new Set(ALL_BOOKS), ccy:'ALL', segs:new Set(SEGS), withFunding:true,
+  sum:{bview:'RUB'},
+  pos:{q:'', group:'none', sort:{k:'mvRub', dir:-1}, cols:new Set(COLS.filter(c => c.def).map(c => c.k)), collapsed:new Set(), sel:null},
+  risk:{mode:'curves', curve:'RUB OFZ', cell:null},
+  expo:{dim:'issuerGroup', meas:'mv', chart:'treemap'},
+  fund:{stack:'type'},
+  scen:{sel:['keyhike','par+100'], focus:'keyhike'}
+};
+(function restore(){
+  const t = store.get('fidm.tab'); if (t && TABS.some(x => x[0] === t)) S.tab = t;
+  const c = store.get('fidm.cols'); if (c) { try { const a = JSON.parse(c); if (Array.isArray(a) && a.length) S.pos.cols = new Set(a.filter(k => COLS.some(x => x.k === k))); } catch(e){} }
+  const th = store.get('fidm.theme'); if (th === 'light' || th === 'dark') document.documentElement.setAttribute('data-theme', th);
+})();
+
+/* ---------- data selectors ---------- */
+const P = () => D.positions.filter(p => S.books.has(p.book) && (S.ccy === 'ALL' || p.ccy === S.ccy) && S.segs.has(p.segment));
+const FU = () => D.funding.filter(f => S.books.has(f.book) && (S.ccy === 'ALL' || f.ccy === S.ccy));
+const byId = {}; D.positions.forEach(p => { byId[p.id] = p; });
+function fundPnl(){ const l = FU(); return {carry:sum(l, f => f.pnl.carry), fx:sum(l, f => f.pnl.fx)}; }
+function ocpParts(list){
+  const o = {}; CCYS.forEach(c => { o[c] = {bond:0, der:0, fx:0, fund:0}; });
+  list.forEach(p => { for (const c in p.fxDelta) { if (!o[c]) continue; const k = p.instrType === 'BOND' ? 'bond' : p.instrType === 'FX' ? 'fx' : 'der'; o[c][k] += p.fxDelta[c]; } });
+  FU().forEach(f => { for (const c in f.fxDelta) if (o[c]) o[c].fund += f.fxDelta[c]; });
+  CCYS.forEach(c => { const x = o[c]; x.net = x.bond + x.der + x.fx + (S.withFunding ? x.fund : 0); });
+  return o;
+}
+const issuerExp = p => p.instrType === 'BOND' ? p.mvRub : p.instrType === 'CDS' ? (p.side === 'SELL' ? p.notional : -p.notional) : 0;
+const groupLimit = g => { const o = D.LIMITS.issuerGroupOverrides; return o[g] != null ? o[g] : D.LIMITS.issuerGroup; };
+function dv01Limit(){ if (S.books.size === ALL_BOOKS.length) return D.LIMITS.dv01Total; return Math.min(D.LIMITS.dv01Total, sum([...S.books], b => D.LIMITS.dv01ByBook[b])); }
+function issuerGroups(list){
+  const g = {}; list.forEach(p => { if (!p.issuerGroup) return; const e = issuerExp(p); if (!e) return; (g[p.issuerGroup] = g[p.issuerGroup] || {name:p.issuerGroup, exp:0, n:0}); g[p.issuerGroup].exp += e; g[p.issuerGroup].n++; });
+  return Object.values(g).map(x => Object.assign(x, {lim:groupLimit(x.name), u:Math.abs(x.exp)/groupLimit(x.name)}));
+}
+function limits(list){
+  const L = D.LIMITS, out = [];
+  const dv = sum(list, p => p.dv01);
+  out.push({name:'DV01 итого', cat:'DV01', used:dv, lim:dv01Limit(), f:v => M(v,2)+' млн'});
+  const byB = U.groupBy(list, 'book');
+  ALL_BOOKS.filter(b => S.books.has(b)).forEach(b => out.push({name:'DV01 · ' + D.BOOKS[b].name, cat:'DV01', used:sum(byB[b] || [], p => p.dv01), lim:L.dv01ByBook[b], f:v => M(v,2)+' млн'}));
+  out.push({name:'CS01 итого', cat:'CS01', used:sum(list, p => p.cs01), lim:L.cs01Total, f:v => M(v,2)+' млн'});
+  const o = ocpParts(list);
+  CCYS.forEach(c => out.push({name:'ОВП ' + c, cat:'ОВП', used:o[c].net, lim:L.ocp[c], f:v => M(v,1)+' млн ' + c}));
+  issuerGroups(list).forEach(g => out.push({name:'Эмитент · ' + g.name, cat:'Эмитент', used:g.exp, lim:g.lim, f:v => BN(v,2)+' млрд'}));
+  out.push({name:'VaR 99% 1д (деск)', cat:'VaR', used:D.history[D.history.length-1].var99, lim:L.var99, f:v => M(v,0)+' млн'});
+  out.forEach(x => { x.u = Math.abs(x.used) / x.lim; x.s = status(x.u); });
+  return out;
+}
+
+/* ---------- theme tokens & chart helpers ---------- */
+let TK = {};
+function readTokens(){
+  const cs = getComputedStyle(document.documentElement), g = n => cs.getPropertyValue('--' + n).trim();
+  ['bg','panel','panel-2','raise','line','line-2','grid','fg','fg-2','fg-3','accent','pos','neg','mid','good','warn','serious','crit','ink-dark','ink-light'].forEach(k => { TK[k.replace('-','_')] = g(k); });
+  TK.cat = [1,2,3,4,5,6,7,8].map(i => g('c' + i));
+  TK.ui = g('font-ui'); TK.mono = g('font-mono');
+}
+function hex2rgb(h){ h = h.replace('#',''); if (h.length === 3) h = h.split('').map(c => c + c).join(''); const n = parseInt(h,16); return [(n>>16)&255,(n>>8)&255,n&255]; }
+function mixArr(a,b,t){ const A = hex2rgb(a), C = hex2rgb(b); return A.map((v,i) => Math.round(v + (C[i]-v)*t)); }
+function lum(rgb){ const f = v => { v/=255; return v <= .03928 ? v/12.92 : Math.pow((v+.055)/1.055, 2.4); }; return .2126*f(rgb[0]) + .7152*f(rgb[1]) + .0722*f(rgb[2]); }
+function divCell(v, max){
+  const t = max ? Math.pow(Math.min(1, Math.abs(v)/max), .65) : 0;
+  const rgb = mixArr(TK.mid, v < 0 ? TK.neg : TK.pos, t * .92);
+  return {bg:'rgb(' + rgb.join(',') + ')', fg: lum(rgb) > .32 ? TK.ink_dark : TK.ink_light};
+}
+const onColor = hex => lum(hex2rgb(hex)) > .32 ? TK.ink_dark : TK.ink_light;
+const curveColor = c => TK.cat[CURVES.indexOf(c) % 8];
+
+function opt(o){
+  const b = {
+    animation:!reduced, animationDuration:280, animationDurationUpdate:280,
+    textStyle:{fontFamily:TK.ui, color:TK.fg_2, fontSize:11},
+    grid:{left:6, right:14, top:30, bottom:6, containLabel:true},
+    tooltip:{trigger:'axis', confine:true, backgroundColor:TK.raise, borderColor:TK.line_2, borderWidth:1, padding:[6,9],
+      textStyle:{color:TK.fg, fontSize:12, fontFamily:TK.ui}, extraCssText:'box-shadow:none;border-radius:2px',
+      axisPointer:{type:'shadow', shadowStyle:{color:'rgba(128,140,160,.12)'}, lineStyle:{color:TK.line_2}}}
+  };
+  Object.keys(o).forEach(k => {
+    if (k === 'tooltip') Object.assign(b.tooltip, o.tooltip);
+    else if (k === 'grid' && !Array.isArray(o.grid)) Object.assign(b.grid, o.grid);
+    else b[k] = o[k];
+  });
+  return b;
+}
+const xCat = (data, extra) => Object.assign({type:'category', data, axisLine:{lineStyle:{color:TK.line_2}}, axisTick:{show:false},
+  axisLabel:{color:TK.fg_2, fontSize:11, fontFamily:TK.mono}}, extra || {});
+const yVal = (fmt, extra) => Object.assign({type:'value', splitLine:{lineStyle:{color:TK.grid}}, axisLine:{show:false}, axisTick:{show:false},
+  axisLabel:{color:TK.fg_3, fontSize:10.5, fontFamily:TK.mono, hideOverlap:true, formatter:fmt || (v => num(v,0))}}, extra || {});
+const legend = extra => Object.assign({top:0, left:0, itemWidth:10, itemHeight:8, icon:'rect', itemGap:12, textStyle:{color:TK.fg_2, fontSize:11}, inactiveColor:TK.fg_3}, extra || {});
+function chart(id, o){
+  const el = $(id); if (!el || !window.echarts) return null;
+  let c = echarts.getInstanceByDom(el); if (!c) c = echarts.init(el);
+  c.off('click'); c.setOption(o, true); return c;
+}
+
+/* ---------- header: KPI ---------- */
+function spark(vals, w, h){
+  const mx = Math.max(...vals.map(Math.abs)) || 1, bw = w / vals.length;
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true" style="flex:none">` + vals.map((v,i) => {
+    const hh = Math.max(1, Math.abs(v)/mx * (h/2 - 1)); const y = v >= 0 ? h/2 - hh : h/2;
+    return `<rect x="${(i*bw+.5).toFixed(1)}" y="${y.toFixed(1)}" width="${(bw-1).toFixed(1)}" height="${hh.toFixed(1)}" style="fill:var(${v < 0 ? '--neg' : '--pos'});opacity:${i === vals.length-1 ? 1 : .55}"/>`;
+  }).join('') + '</svg>';
+}
+function renderKpi(){
+  const l = P(), dv = sum(l, p => p.dv01), dvL = dv01Limit(), cs = sum(l, p => p.cs01), o = ocpParts(l), fp = fundPnl();
+  const fadd = S.withFunding ? fp.carry + fp.fx : 0;
+  const off = sum(l, p => p.pnl.official) + fadd, exp = sum(l, p => p.pnl.explained) + fadd;
+  const gross = sum(l, p => Math.abs(p.mvRub)), net = sum(l, p => p.mvRub);
+  const h = D.history, v = h[h.length-1].var99;
+  const uDv = Math.abs(dv)/dvL, uCs = Math.abs(cs)/D.LIMITS.cs01Total, uV = v/D.LIMITS.var99;
+  $('kpis').innerHTML = `
+  <div class="kpi"><div class="kl"><span>DV01 итого</span><span>${chip(status(uDv).k, pct(uDv))}</span></div>
+    <div class="kv${nc(dv)}">${M(dv,2)}<small>млн ₽/б.п.</small></div>
+    <div class="ks">${ubar(uDv)}<span>лимит <span class="num">${M(dvL,1)}</span></span></div></div>
+  <div class="kpi"><div class="kl"><span>CS01 итого</span><span>${chip(status(uCs).k, pct(uCs))}</span></div>
+    <div class="kv${nc(cs)}">${M(cs,2)}<small>млн ₽/б.п.</small></div>
+    <div class="ks">${ubar(uCs)}<span>лимит <span class="num">${M(D.LIMITS.cs01Total,1)}</span></span></div></div>
+  <div class="kpi wide"><div class="kl"><span>ОВП ${S.withFunding ? 'с фондированием' : 'без фондирования'}</span><span>млн вал. / лимит</span></div>
+    <div class="ocp">${CCYS.map(c => { const u = Math.abs(o[c].net)/D.LIMITS.ocp[c]; return `<span>${c}</span><span class="num${nc(o[c].net)}">${M(o[c].net,1,true)}</span>${ubar(u)}<span class="num muted">${num(D.LIMITS.ocp[c]/1e6,0)} · ${pct(u)}</span>`; }).join('')}</div></div>
+  <div class="kpi"><div class="kl"><span>VaR 99%, 1д</span><span>${chip(status(uV).k, pct(uV))}</span></div>
+    <div class="kv">${M(v,0)}<small>млн ₽</small></div>
+    <div class="ks">${ubar(uV)}<span>лимит <span class="num">${M(D.LIMITS.var99,0)}</span> · деск</span></div></div>
+  <div class="kpi"><div class="kl"><span>PnL дня</span><span>офиц.</span></div>
+    <div class="kv${nc(off)}">${M(off,1,true)}<small>млн ₽</small></div>
+    <div class="ks"><span>expl. <span class="num${nc(exp)}">${M(exp,1,true)}</span></span><span>break <span class="num${nc(off-exp)}">${M(off-exp,1,true)}</span></span>${spark(h.map(x => x.pnlOfficial), 66, 18)}</div></div>
+  <div class="kpi"><div class="kl"><span>MV брутто / нетто</span><span>${l.length} поз.</span></div>
+    <div class="kv">${BN(gross,1)}<small>млрд ₽</small></div>
+    <div class="ks"><span>нетто <span class="num${nc(net)}">${BN(net,1)}</span> млрд ₽</span></div></div>`;
+  const lim = limits(l), br = lim.filter(x => x.u >= 1).length;
+  $('hdr-alerts').innerHTML = br ? `<button class="alert-btn" type="button" data-act="goto" data-v="summary">${chip('crit', br + ' ' + plural(br,'нарушение','нарушения','нарушений') + ' лимитов')}</button>` : chip('ok','Лимиты в норме');
+}
+
+/* ---------- header: filters ---------- */
+function renderFilters(){
+  const ae = document.activeElement, keep = ae && ae.dataset && ae.dataset.act ? [ae.dataset.act, ae.dataset.v] : null;
+  const allB = S.books.size === ALL_BOOKS.length, allS = S.segs.size === SEGS.length;
+  const deskBooks = d => ALL_BOOKS.filter(b => D.BOOKS[b].desk === d);
+  const deskOn = d => !allB && deskBooks(d).length === S.books.size && deskBooks(d).every(b => S.books.has(b));
+  $('filters').innerHTML = `
+   <div class="fg"><span class="fl">Деск</span>${DESKS.map(d => `<button type="button" class="chip" data-act="desk" data-v="${esc(d)}" aria-pressed="${deskOn(d)}">${esc(d)}</button>`).join('')}</div>
+   <div class="fg"><span class="fl">Книги</span><button type="button" class="chip" data-act="books-all" data-v="" aria-pressed="${allB}">Все</button>${ALL_BOOKS.map(b => `<button type="button" class="chip" data-act="book" data-v="${b}" aria-pressed="${!allB && S.books.has(b)}" title="${esc(D.BOOKS[b].desk + ' · ' + D.BOOKS[b].trader)}">${esc(D.BOOKS[b].name)}</button>`).join('')}</div>
+   <div class="fg"><span class="fl">Сегмент</span><button type="button" class="chip" data-act="segs-all" data-v="" aria-pressed="${allS}">Все</button>${SEGS.map(s => `<button type="button" class="chip" data-act="seg" data-v="${esc(s)}" aria-pressed="${!allS && S.segs.has(s)}">${esc(SEG_LABEL[s] || s)}</button>`).join('')}</div>
+   <div class="fg"><label class="fl" for="f-ccy">Валюта</label><select id="f-ccy">${['ALL','RUB'].concat(CCYS).map(c => `<option value="${c}"${S.ccy === c ? ' selected' : ''}>${c === 'ALL' ? 'все' : c}</option>`).join('')}</select></div>
+   <div class="fg"><label class="tgl" title="Учитывать фондирование в ОВП, PnL и сценариях"><input type="checkbox" id="f-fund"${S.withFunding ? ' checked' : ''}><span class="tgl-s"></span>с фондированием</label></div>
+   ${(!allB || !allS || S.ccy !== 'ALL') ? '<button type="button" class="lnk" data-act="reset" data-v="">Сбросить фильтры</button>' : ''}`;
+  if (keep) { const el = $('filters').querySelector(`[data-act="${keep[0]}"][data-v="${CSS.escape(keep[1] || '')}"]`); if (el) el.focus(); }
+}
+function toggleIn(set, all, v){
+  if (set.size === all.length) { set.clear(); set.add(v); return; }
+  if (set.has(v)) set.delete(v); else set.add(v);
+  if (!set.size) all.forEach(x => set.add(x));
+}
+
+/* ---------- tabs ---------- */
+function renderTabs(){
+  $('tabs').innerHTML = TABS.map((t,i) => `<button type="button" class="tab-b" role="tab" id="tb-${t[0]}" aria-controls="tab-${t[0]}" aria-selected="${S.tab === t[0]}" tabindex="${S.tab === t[0] ? 0 : -1}" data-act="tab" data-v="${t[0]}"><kbd>${i+1}</kbd>${t[1]}${t[0] === 'pnl' ? '<span class="dev">β</span>' : ''}</button>`).join('');
+}
+function setTab(t){
+  if (S.tab === t) return;
+  S.tab = t; store.set('fidm.tab', t); closeDrawer();
+  renderTabs(); renderTab();
+  const top = $('top'); if (top && getComputedStyle(top).position === 'sticky') window.scrollTo({top:0, behavior:'auto'});
+}
+function renderTab(){
+  TABS.forEach(t => { $('tab-' + t[0]).hidden = t[0] !== S.tab; });
+  ({summary:rSummary, positions:rPositions, risk:rRisk, expo:rExpo, funding:rFunding, scen:rScen, pnl:rPnl})[S.tab]();
+}
+
+/* ======================= 1. Сводка ======================= */
+function rSummary(){
+  const l = P(), m = U.bucketMatrix(l);
+  // DV01 by curve
+  const cv = CURVES.map(c => sum(m[c]) / 1e3);
+  chart('c-sum-curve', opt({
+    grid:{left:6, right:24, top:6, bottom:4},
+    tooltip:{valueFormatter:v => num(v,0) + ' тыс ₽/б.п.'},
+    yAxis:xCat(CURVES.map(c => D.CURVES[c].name), {inverse:true, axisLabel:{color:TK.fg_2, fontSize:11, fontFamily:TK.ui}}),
+    xAxis:yVal(v => num(v,0), {splitNumber:3, min:v => v.min < 0 ? -Math.ceil((-v.min + (v.max - v.min) * .5) / 1000) * 1000 : 0, max:v => v.max > 0 ? Math.ceil((v.max + (v.max - v.min) * .28) / 1000) * 1000 : 0}),
+    series:[{type:'bar', name:'DV01', barWidth:'52%', data:cv.map(v => ({value:v, itemStyle:{color:v < 0 ? TK.neg : TK.pos, borderRadius:v < 0 ? [2,0,0,2] : [0,2,2,0]},
+      label:{show:true, position:v < 0 ? 'left' : 'right', color:TK.fg_2, fontFamily:TK.mono, fontSize:10.5, formatter:() => num(v,0)}}))}]
+  }));
+  // DV01 by bucket
+  const sel = $('sum-bview');
+  sel.innerHTML = [['RUB','RUB-кривые (стек)'],['ALL','Все кривые (стек)']].concat(CURVES.map(c => [c, D.CURVES[c].name])).map(o => `<option value="${esc(o[0])}"${S.sum.bview === o[0] ? ' selected' : ''}>${esc(o[1])}</option>`).join('');
+  const show = S.sum.bview === 'RUB' ? CURVES.filter(c => D.CURVES[c].ccy === 'RUB') : S.sum.bview === 'ALL' ? CURVES : [S.sum.bview];
+  chart('c-sum-bucket', opt({
+    legend:legend({data:show.map(c => D.CURVES[c].name)}),
+    tooltip:{valueFormatter:v => num(v,0) + ' тыс ₽/б.п.'},
+    xAxis:xCat(B), yAxis:yVal(),
+    series:show.map(c => ({type:'bar', name:D.CURVES[c].name, stack:'dv', barWidth:'58%', itemStyle:{color:curveColor(c), borderColor:TK.panel, borderWidth:show.length > 1 ? 1 : 0},
+      emphasis:{focus:'series'}, data:m[c].map(v => +(v/1e3).toFixed(1))}))
+  }));
+  // segments
+  const segL = SEGS.map(s => sum(l.filter(p => p.segment === s && p.mvRub > 0), p => p.mvRub)/1e9);
+  const segS = SEGS.map(s => sum(l.filter(p => p.segment === s && p.mvRub < 0), p => p.mvRub)/1e9);
+  chart('c-sum-seg', opt({
+    legend:legend({data:['Длинные','Короткие']}),
+    grid:{left:6, right:20, top:28, bottom:4},
+    tooltip:{valueFormatter:v => num(v,2) + ' млрд ₽'},
+    yAxis:xCat(SEGS, {inverse:true, axisLabel:{color:TK.fg_2, fontSize:11, fontFamily:TK.ui}}),
+    xAxis:yVal(v => num(v,0)),
+    series:[
+      {type:'bar', name:'Длинные', stack:'s', barWidth:'50%', itemStyle:{color:TK.cat[0]}, data:segL},
+      {type:'bar', name:'Короткие', stack:'s', barWidth:'50%', itemStyle:{color:TK.cat[1]}, data:segS}
+    ]
+  }));
+  // issuers top10
+  const ig = issuerGroups(l).sort((a,b) => Math.abs(b.exp) - Math.abs(a.exp)).slice(0,10);
+  $('sum-issuers').innerHTML = ig.length ? `<div class="ll"><span class="h">Группа</span><span class="h">Загрузка</span><span class="h" style="text-align:right">млрд ₽</span><span class="h" style="text-align:right">лимит</span>` +
+    ig.map(g => `<span class="nm" title="${esc(g.name)}">${esc(g.name)}</span>${ubar(g.u)}<span class="num${nc(g.exp)}">${BN(g.exp,2)}</span><span class="num muted">${BN(g.lim,1)} · ${pct(g.u)}</span>`).join('') + '</div>'
+    : '<p class="note">Нет эмитентского риска в выбранном фильтре.</p>';
+  // limits
+  const lim = limits(l).sort((a,b) => b.u - a.u), hot = lim.filter(x => x.u >= .75);
+  $('sum-lim-cnt').textContent = hot.length + ' из ' + lim.length;
+  $('sum-limits').innerHTML = '<div class="lim">' + (hot.length ? hot : lim.slice(0,3)).map(x =>
+    `<div class="lim-r">${chip(x.s.k, x.s.l)}<span class="nm" title="${esc(x.name)}">${esc(x.name)}</span><span class="num">${pct(x.u)}</span>
+     <span></span><span style="display:flex">${ubar(x.u)}</span><span class="num muted">${x.f(x.used)} / ${x.f(x.lim).replace(/^[−+]/,'')}</span></div>`).join('') +
+    (hot.length < lim.length ? `<div class="lim-r"><span>${chip('ok','В норме')}</span><span class="muted">ещё ${lim.length - hot.length} ${plural(lim.length - hot.length,'лимит','лимита','лимитов')}</span><span></span></div>` : '') + '</div>';
+  // history
+  const h = D.history;
+  chart('c-sum-hist', opt({
+    legend:legend({data:['Официальный','Explained']}),
+    grid:{right:26},
+    tooltip:{trigger:'axis', axisPointer:{type:'line'}, valueFormatter:v => num(v,1,true) + ' млн ₽'},
+    xAxis:xCat(h.map(x => dt(x.date).slice(0,5)), {boundaryGap:false}),
+    yAxis:yVal(v => num(v,0)),
+    series:[
+      {type:'line', name:'Официальный', data:h.map(x => +(x.pnlOfficial/1e6).toFixed(2)), symbol:'circle', symbolSize:(v,p) => p.dataIndex === h.length-1 ? 8 : 0, showSymbol:true,
+        lineStyle:{width:2, color:TK.cat[0]}, itemStyle:{color:TK.cat[0], borderColor:TK.panel, borderWidth:2},
+        areaStyle:{color:TK.cat[0], opacity:.07}, markLine:{silent:true, symbol:'none', label:{show:false}, lineStyle:{color:TK.line_2, type:'solid'}, data:[{yAxis:0}]}},
+      {type:'line', name:'Explained', data:h.map(x => +(x.pnlExplained/1e6).toFixed(2)), symbol:'circle', symbolSize:(v,p) => p.dataIndex === h.length-1 ? 8 : 0,
+        lineStyle:{width:2, color:TK.cat[1], type:[5,3]}, itemStyle:{color:TK.cat[1], borderColor:TK.panel, borderWidth:2}}
+    ]
+  }));
+}
+
+/* ======================= 2. Позиции ======================= */
+const colVal = (c,p) => c.v ? c.v(p) : p[c.k];
+function cellHtml(c,p){
+  const v = colVal(c,p);
+  if (c.n) return `<td class="n${c.sg ? nc(v) : ''}">${num(v, c.d)}</td>`;
+  if (c.k === 'name') return `<td class="nm" title="${esc(p.name)}">${esc(p.name)}${p.newToday ? '<span class="tag">NEW</span>' : ''}</td>`;
+  const s = c.f ? c.f(v) : (v == null || v === '' ? '—' : v);
+  return `<td${c.mono ? ' class="mono"' : ''}>${esc(s)}</td>`;
+}
+function groupKey(p){
+  const g = S.pos.group;
+  if (g === 'book') return D.BOOKS[p.book].name;
+  if (g === 'issuer') return p.issuer || '— без эмитента';
+  return p[g] || '—';
+}
+function rPositions(){
+  const q = S.pos.q.trim().toLowerCase();
+  let l = P().filter(p => !q || [p.name, p.isin, p.issuer, p.issuerGroup, p.assetClass, D.BOOKS[p.book].name, p.ccy, p.counterparty, p.sector].some(x => x && String(x).toLowerCase().includes(q)));
+  const cols = COLS.filter(c => S.pos.cols.has(c.k));
+  const sc = COLS.find(c => c.k === S.pos.sort.k) || COLS[0], dir = S.pos.sort.dir;
+  l.sort((a,b) => {
+    const x = colVal(sc,a), y = colVal(sc,b);
+    if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1;
+    return (typeof x === 'number' ? x - y : String(x).localeCompare(String(y), 'ru')) * dir;
+  });
+  const lead = Math.max(1, cols.findIndex(c => c.sum) === -1 ? cols.length : cols.findIndex(c => c.sum));
+  const aggRow = (cls, label, list, attrs) => `<tr class="${cls}"${attrs || ''}><td colspan="${lead}">${label}</td>` + cols.slice(lead).map(c => c.sum ? `<td class="n${nc(sum(list, p => colVal(c,p) || 0))}">${num(sum(list, p => colVal(c,p) || 0), c.d)}</td>` : '<td></td>').join('') + '</tr>';
+  const rowHtml = p => `<tr class="click${p.newToday ? ' new' : ''}${S.pos.sel === p.id ? ' sel' : ''}" tabindex="0" data-act="pos" data-v="${p.id}">${cols.map(c => cellHtml(c,p)).join('')}</tr>`;
+  let body = '';
+  if (S.pos.group === 'none') body = l.map(rowHtml).join('');
+  else {
+    const gr = U.groupBy(l, groupKey);
+    Object.keys(gr).sort((a,b) => Math.abs(sum(gr[b], p => p.mvRub)) - Math.abs(sum(gr[a], p => p.mvRub))).forEach(k => {
+      const open = !S.pos.collapsed.has(k);
+      body += aggRow('grp', `<span class="caret">▾</span>${esc(k)} <span class="muted">· ${gr[k].length}</span>`, gr[k], ` tabindex="0" data-act="grp" data-v="${esc(k)}" aria-expanded="${open}"`);
+      if (open) body += gr[k].map(rowHtml).join('');
+    });
+  }
+  const head = '<tr>' + cols.map(c => {
+    const on = S.pos.sort.k === c.k;
+    return `<th class="sortable${c.n ? ' n' : ''}" data-act="sort" data-v="${c.k}" tabindex="0"${on ? ` aria-sort="${dir > 0 ? 'ascending' : 'descending'}"` : ''}>${esc(c.t)}${on ? `<span class="ar"> ${dir > 0 ? '▲' : '▼'}</span>` : ''}</th>`;
+  }).join('') + '</tr>';
+  $('pos-tw').innerHTML = `<table class="t"><thead>${head}</thead><tbody>${body || `<tr><td colspan="${cols.length}" class="muted" style="padding:16px 8px">Нет позиций по текущему фильтру и поиску.</td></tr>`}</tbody><tfoot>${aggRow('tot', 'Итого · ' + l.length + ' поз.', l)}</tfoot></table>`;
+  $('pos-cnt').textContent = l.length + ' из ' + D.positions.length + ' позиций';
+  $('pos-collapse').hidden = S.pos.group === 'none';
+  $('pos-collapse').textContent = S.pos.collapsed.size ? 'Развернуть все группы' : 'Свернуть все группы';
+  $('pos-group').value = S.pos.group;
+  if ($('pos-q').value !== S.pos.q) $('pos-q').value = S.pos.q;
+  $('colpop').querySelector('summary').textContent = 'Колонки · ' + cols.length + '/' + COLS.length;
+}
+function renderColPop(){
+  $('colpop-b').innerHTML = COLS.map(c => `<label><input type="checkbox" data-col="${c.k}"${S.pos.cols.has(c.k) ? ' checked' : ''}>${esc(c.t)}</label>`).join('');
+}
+
+/* ---------- drawer ---------- */
+let lastFocus = null;
+function bucketSvg(vals){
+  const w = 330, h = 74, pad = 12, bw = (w - 4) / vals.length, mx = Math.max(...vals.map(Math.abs)) || 1, mid = (h - pad) / 2;
+  let s = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="DV01 по бакетам"><line class="ax" x1="0" x2="${w}" y1="${mid}" y2="${mid}"/>`;
+  vals.forEach((v,i) => {
+    const hh = Math.abs(v)/mx * (mid - 3), x = 2 + i*bw + bw*.18;
+    if (Math.abs(v) > 1) s += `<rect class="${v < 0 ? 'bn' : 'bp'}" x="${x.toFixed(1)}" y="${(v < 0 ? mid : mid - hh).toFixed(1)}" width="${(bw*.64).toFixed(1)}" height="${Math.max(1,hh).toFixed(1)}" rx="1"><title>${B[i]}: ${K(v,1)} тыс ₽/б.п.</title></rect>`;
+    s += `<text x="${(2 + i*bw + bw/2).toFixed(1)}" y="${h - 1}" text-anchor="middle">${B[i]}</text>`;
+  });
+  return s + '</svg>';
+}
+const PNL_KEYS = [['carry','Кэрри'],['rolldown','Ролл-даун'],['rates','Ставки'],['spread','Спред'],['fx','FX'],['convexity','Выпуклость'],['newTrades','Новые сделки'],['other','Прочее']];
+const WF_SHORT = {'Выпуклость':'Выпукл.','Новые сделки':'Новые\nсделки','Фонд. кэрри':'Фонд.\nкэрри','Фонд. FX':'Фонд.\nFX','Unexplained':'Unexpl.','Официальный':'Офиц.'};
+function openDrawer(id){
+  const p = byId[id]; if (!p) return;
+  S.pos.sel = id;
+  const bk = D.BOOKS[p.book];
+  const F = [
+    ['Книга', bk.name], ['Деск / трейдер', bk.desk + ' · ' + bk.trader], ['Класс', p.assetClass], ['Сегмент', p.segment], ['Тип', p.instrType],
+    ['ISIN', p.isin], ['Эмитент', p.issuer], ['Группа', p.issuerGroup], ['Сектор', p.sector], ['Рейтинг', p.rating],
+    ['Валюта', p.ccy], ['Погашение', dt(p.maturity)], ['Срок, лет', num(p.tenorY,2)],
+    ['Купон', p.couponType === 'float' ? (p.index + ' + ' + num(p.margin,2) + '%') : p.coupon != null ? num(p.coupon,2) + '%' : null],
+    ['Индекс', p.couponType === 'fix' ? p.index : null], ['Сторона', p.side],
+    ['Номинал', num(p.notional/1e6,2) + ' млн ' + p.ccy], ['Цена', p.price != null ? num(p.price,2) : null],
+    ['MV', num(p.mv/1e6,2) + ' млн ' + p.ccy], ['MV, ₽', M(p.mvRub,1) + ' млн'],
+    ['Доходность', p.ytm != null ? num(p.ytm,2) + '%' : null], ['Спред', p.spreadBp != null ? num(p.spreadBp,0) + ' б.п.' : null],
+    ['Мод. дюрация', p.mdur != null ? num(p.mdur,2) : null], ['DV01', K(p.dv01,1) + ' тыс ₽/б.п.'], ['CS01', K(p.cs01,1) + ' тыс ₽/б.п.'],
+    ['JTD', M(p.jtd,1) + ' млн ₽'], ['WAL', p.wal ? num(p.wal,1) + ' г.' : null], ['CPR', p.cpr ? num(p.cpr,1) + '%' : null],
+    ['FX-дельта', Object.keys(p.fxDelta).map(c => M(p.fxDelta[c],2,true) + ' млн ' + c).join(', ') || null],
+    ['Контрагент', p.counterparty]
+  ].filter(x => x[1] != null && x[1] !== '');
+  const curves = Object.keys(p.risk || {});
+  const e = p.pnl, mx = Math.max(...PNL_KEYS.map(k => Math.abs(e[k[0]])), Math.abs(e.official), Math.abs(e.unexplained)) || 1;
+  const pr = (lbl, v, cls) => `<span class="${cls || ''}">${lbl}</span><span class="${cls || ''}" style="display:flex;align-items:center"><span class="mb" style="width:100%"><i class="${v < 0 ? 'm' : 'p'}" style="width:${(Math.abs(v)/mx*50).toFixed(1)}%"></i></span></span><span class="num${nc(v)} ${cls || ''}">${K(v,0,true)}</span>`;
+  const fl = D.funding.filter(f => f.book === p.book), fpb = D.fundingPnlByBook[p.book];
+  const bookMv = sum(D.positions.filter(x => x.book === p.book && x.instrType === 'BOND'), x => x.mvRub), bookFund = -sum(fl, f => f.amountRub);
+  $('drawer').innerHTML = `
+    <div class="dr-h"><div><h2>${esc(p.name)}</h2><div class="dr-sub"><span class="pill">${esc(bk.name)}</span><span class="pill">${esc(p.assetClass)}</span><span class="pill">${esc(p.ccy)}</span>${p.rating ? `<span class="pill">${esc(p.rating)}</span>` : ''}${p.newToday ? '<span class="tag" style="margin:0">NEW · сделка сегодня</span>' : ''}</div></div>
+      <button type="button" class="ibtn" id="dr-close" aria-label="Закрыть карточку">Закрыть ✕</button></div>
+    <div class="dr-s"><h4>Параметры</h4><dl class="kvl">${F.map(x => `<div><dt>${esc(x[0])}</dt><dd title="${esc(x[1])}">${esc(x[1])}</dd></div>`).join('')}</dl></div>
+    <div class="dr-s bk"><h4>DV01 по бакетам, тыс ₽/б.п.</h4>${curves.length ? curves.map(c => `<div class="cap"><span>${esc(D.CURVES[c].name)}</span><span class="mono">${K(sum(p.risk[c]),1)}</span></div>${bucketSvg(p.risk[c])}`).join('') : '<p class="note">Нет процентного риска по кривым (CDS / спот FX).</p>'}</div>
+    <div class="dr-s"><h4>PnL за день, тыс ₽</h4><div class="pnl-b">${PNL_KEYS.map(k => pr(k[1], e[k[0]])).join('')}${pr('Explained', e.explained, 'sum')}${pr('Unexplained', e.unexplained)}${pr('Официальный', e.official, 'sum')}</div>
+      ${e.breakNote ? `<div class="brk"><b>Break:</b> ${esc(e.breakNote)}</div>` : ''}</div>
+    <div class="dr-s"><h4>Фондирование книги «${esc(bk.name)}»</h4>
+      <dl class="kvl" style="margin-bottom:8px"><div><dt>MV облигаций книги</dt><dd>${BN(bookMv,2)} млрд ₽</dd></div><div><dt>Фондирование нетто</dt><dd>${BN(bookFund,2)} млрд ₽</dd></div>
+      <div><dt>Разрыв</dt><dd class="${nc(bookMv - bookFund)}">${BN(bookMv - bookFund,2,true)} млрд ₽</dd></div><div><dt>Кэрри / FX фонд. за день</dt><dd>${M(fpb.carry,1)} / ${M(fpb.fx,1)} млн</dd></div></dl>
+      ${fl.length ? `<div class="tw"><table class="t"><thead><tr><th>Тип</th><th>Вал.</th><th class="n">Сумма, млн</th><th>Ставка</th><th>Погаш.</th></tr></thead><tbody>${fl.map(f => `<tr><td>${esc(f.type)}</td><td>${f.ccy}</td><td class="n${nc(f.amount)}">${M(f.amount,1)}</td><td>${esc(f.rateExpr)} <span class="muted mono">${num(f.rate,2)}%</span></td><td class="mono">${dt(f.maturity)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="note">Нет сделок фондирования.</p>'}</div>`;
+  $('drawer').hidden = false; $('scrim').hidden = false;
+  $('dr-close').focus();
+  document.querySelectorAll('tr.sel').forEach(r => r.classList.remove('sel'));
+  document.querySelectorAll(`tr[data-act="pos"][data-v="${id}"]`).forEach(r => r.classList.add('sel'));
+}
+function closeDrawer(){
+  if ($('drawer').hidden) return;
+  $('drawer').hidden = true; $('scrim').hidden = true; S.pos.sel = null;
+  document.querySelectorAll('tr.sel').forEach(r => r.classList.remove('sel'));
+  if (lastFocus && document.body.contains(lastFocus)) lastFocus.focus();
+}
+
+/* ======================= 3. Риски по кривым ======================= */
+function rRisk(){
+  const l = P(), mode = S.risk.mode, curve = S.risk.curve;
+  document.querySelectorAll('#risk-mode button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === mode));
+  $('risk-curves').innerHTML = CURVES.map(c => `<button type="button" data-v="${esc(c)}" aria-pressed="${c === curve}">${esc(c)}</button>`).join('');
+  let rows;
+  if (mode === 'curves') { const m = U.bucketMatrix(l); rows = CURVES.map(c => ({key:c, label:D.CURVES[c].name, sub:D.CURVES[c].ccy, vals:m[c]})); }
+  else {
+    const by = U.groupBy(l.filter(p => p.risk[curve]), 'book');
+    rows = ALL_BOOKS.filter(b => by[b]).map(b => ({key:b, label:D.BOOKS[b].name, sub:D.BOOKS[b].desk, vals:U.bucketMatrix(by[b], [curve])[curve]}));
+  }
+  let mx = 0; rows.forEach(r => r.vals.forEach(v => { mx = Math.max(mx, Math.abs(v)); }));
+  // default/validate selected cell
+  const c0 = S.risk.cell;
+  const valid = c0 && (mode === 'curves' ? (!c0.book && rows.some(r => r.key === c0.curve)) : (c0.curve === curve && rows.some(r => r.key === c0.book)));
+  if (!valid) {
+    let best = null;
+    rows.forEach(r => r.vals.forEach((v,i) => { if (!best || Math.abs(v) > Math.abs(best.v)) best = {r, i, v}; }));
+    S.risk.cell = best ? (mode === 'curves' ? {curve:best.r.key, bucket:best.i, book:null} : {curve, bucket:best.i, book:best.r.key}) : null;
+  }
+  const cell = S.risk.cell;
+  $('risk-hm-title').textContent = mode === 'curves' ? 'DV01: кривая × бакет' : 'DV01: книга × бакет · ' + D.CURVES[curve].name;
+  const colT = B.map((_,i) => sum(rows, r => r.vals[i])), tot = sum(colT);
+  const isOn = (r,i) => cell && cell.bucket === i && (mode === 'curves' ? cell.curve === r.key : cell.book === r.key);
+  let h = `<table class="hm"><thead><tr><th class="rl">${mode === 'curves' ? 'Кривая' : 'Книга'}</th>${B.map(b => `<th>${b}</th>`).join('')}<th>Итого</th></tr></thead><tbody>`;
+  rows.forEach(r => {
+    const rowSel = mode === 'curves' && r.key === curve;
+    h += `<tr><th class="rl">${mode === 'curves' ? `<button type="button" class="rb" data-act="rcurve" data-v="${esc(r.key)}" aria-pressed="${rowSel}">${esc(r.label)} <small>${esc(r.sub)}</small></button>` : `<span class="rb" style="cursor:default">${esc(r.label)} <small>${esc(r.sub)}</small></span>`}</th>`;
+    r.vals.forEach((v,i) => {
+      const z = Math.abs(v) < 500, c = divCell(v, mx);
+      h += `<td><button type="button" class="cb${z ? ' zero' : ''}${isOn(r,i) ? ' on' : ''}" data-act="cell" data-r="${esc(r.key)}" data-b="${i}" style="${z ? 'background:transparent' : `background:${c.bg};color:${c.fg}`}" title="${esc(r.label)} × ${B[i]}: ${K(v,1)} тыс ₽/б.п.">${z ? '·' : K(v,0)}</button></td>`;
+    });
+    const rt = sum(r.vals);
+    h += `<td class="tot${nc(rt)}">${K(rt,0)}</td></tr>`;
+  });
+  h += `</tbody><tfoot><tr><th class="rl">Итого</th>${colT.map(v => `<td class="tot${nc(v)}">${K(v,0)}</td>`).join('')}<td class="tot${nc(tot)}">${K(tot,0)}</td></tr></tfoot></table>`;
+  $('risk-hm').innerHTML = rows.length ? h : '<p class="note">Нет процентного риска по выбранной кривой в текущем фильтре.</p>';
+  const cl = divCell(-mx, mx), cr = divCell(mx, mx), cm = divCell(0, mx);
+  $('risk-legend').innerHTML = `<span>− теряет при росте ставок</span><span class="gr" style="background:linear-gradient(90deg,${cl.bg},${cm.bg},${cr.bg})"></span><span>+ выигрывает</span><span class="mono">±${K(mx,0)}</span>`;
+
+  // contributions
+  if (cell) {
+    const list = l.filter(p => p.risk[cell.curve] && (!cell.book || p.book === cell.book))
+      .map(p => ({p, v:p.risk[cell.curve][cell.bucket]})).filter(x => Math.abs(x.v) > .5).sort((a,b) => Math.abs(b.v) - Math.abs(a.v));
+    const tv = sum(list, x => x.v), cmx = Math.max(...list.map(x => Math.abs(x.v)), 1);
+    $('risk-ct-title').textContent = 'Вклад позиций · ' + D.CURVES[cell.curve].name + ' × ' + B[cell.bucket] + (cell.book ? ' · ' + D.BOOKS[cell.book].name : '');
+    $('risk-ct-sub').textContent = K(tv,0) + ' тыс ₽/б.п. · ' + list.length + ' поз.';
+    $('risk-ct').innerHTML = list.length ? `<table class="t"><thead><tr><th>Инструмент</th><th>Книга</th><th>Класс</th><th class="n">Вклад, тыс ₽/б.п.</th><th class="n">Доля</th><th></th><th class="n">DV01 по кривой</th><th class="n">DV01 позиции</th></tr></thead><tbody>` +
+      list.map(x => `<tr class="click${x.p.newToday ? ' new' : ''}" tabindex="0" data-act="pos" data-v="${x.p.id}"><td class="nm">${esc(x.p.name)}${x.p.newToday ? '<span class="tag">NEW</span>' : ''}</td><td>${esc(D.BOOKS[x.p.book].name)}</td><td>${esc(x.p.assetClass)}</td>
+        <td class="n${nc(x.v)}">${K(x.v,1)}</td><td class="n">${tv ? pct(x.v/tv) : '—'}</td><td><span class="mb"><i class="${x.v < 0 ? 'm' : 'p'}" style="width:${(Math.abs(x.v)/cmx*50).toFixed(1)}%"></i></span></td>
+        <td class="n${nc(sum(x.p.risk[cell.curve]))}">${K(sum(x.p.risk[cell.curve]),0)}</td><td class="n${nc(x.p.dv01)}">${K(x.p.dv01,0)}</td></tr>`).join('') + '</tbody></table>'
+      : '<p class="note pb">В ячейке нет позиций.</p>';
+  }
+
+  // ladder
+  const lv = U.bucketMatrix(l, [curve])[curve].map(v => v/1e3);
+  let cum = 0; const cumv = lv.map(v => (cum += v));
+  $('risk-lad-title').textContent = 'Лестница DV01 · ' + D.CURVES[curve].name;
+  chart('c-risk-ladder', opt({
+    legend:legend({data:['DV01 бакета','Накопленный']}),
+    tooltip:{valueFormatter:v => num(v,0) + ' тыс ₽/б.п.'},
+    xAxis:xCat(B), yAxis:yVal(),
+    series:[
+      {type:'bar', name:'DV01 бакета', barWidth:'55%', data:lv.map(v => ({value:+v.toFixed(1), itemStyle:{color:v < 0 ? TK.neg : TK.pos, borderRadius:v < 0 ? [0,0,2,2] : [2,2,0,0]}})), itemStyle:{color:TK.neg}},
+      {type:'line', name:'Накопленный', data:cumv.map(v => +v.toFixed(1)), symbol:'circle', symbolSize:5, lineStyle:{width:2, color:TK.fg_2}, itemStyle:{color:TK.fg_2}}
+    ]
+  }));
+  // curve + move (two stacked grids, two separate y axes — no dual axis on a single plot)
+  const cvd = D.CURVES[curve], mv = D.CURVE_MOVES[curve];
+  $('risk-crv-title').textContent = cvd.name + ': уровень и изменение за день';
+  chart('c-risk-curve', opt({
+    legend:legend({data:['Сегодня','Вчера','Изменение, б.п.']}),
+    axisPointer:{link:[{xAxisIndex:'all'}]},
+    tooltip:{trigger:'axis', axisPointer:{type:'line'}, formatter:ps => {
+      const i = ps[0].dataIndex; return `<b>${B[i]}</b><br>Сегодня: ${num(cvd.pts[i],2)}%<br>Вчера: ${num(cvd.pts[i] - mv[i]/100,2)}%<br>Изменение: ${num(mv[i],0,true)} б.п.`; }},
+    grid:[{left:6, right:14, top:30, height:'46%', containLabel:true}, {left:6, right:14, top:'69%', bottom:6, containLabel:true}],
+    xAxis:[xCat(B, {gridIndex:0, axisLabel:{show:false}, boundaryGap:true}), xCat(B, {gridIndex:1})],
+    yAxis:[yVal(v => num(v,2), {gridIndex:0, scale:true, splitNumber:3}), yVal(v => num(v,0), {gridIndex:1, splitNumber:2})],
+    series:[
+      {type:'line', name:'Сегодня', xAxisIndex:0, yAxisIndex:0, data:cvd.pts, symbol:'circle', symbolSize:5, lineStyle:{width:2, color:TK.cat[0]}, itemStyle:{color:TK.cat[0]}},
+      {type:'line', name:'Вчера', xAxisIndex:0, yAxisIndex:0, data:cvd.pts.map((v,i) => +(v - mv[i]/100).toFixed(4)), symbol:'none', lineStyle:{width:1.5, type:[4,3], color:TK.fg_3}, itemStyle:{color:TK.fg_3}},
+      {type:'bar', name:'Изменение, б.п.', xAxisIndex:1, yAxisIndex:1, barWidth:'50%', itemStyle:{color:TK.cat[1]}, data:mv.map(v => ({value:v, itemStyle:{color:v < 0 ? TK.pos : TK.cat[1]}}))}
+    ]
+  }));
+}
+
+/* ======================= 4. Экспозиции ======================= */
+const DIMS = [['issuerGroup','Эмитент-группа'],['sector','Сектор'],['rating','Рейтинг'],['ccy','Валюта'],['assetClass','Класс актива'],['segment','Сегмент']];
+const MEAS = {
+  mv:{t:'MV', f:p => p.mvRub, unit:'млрд ₽', s:1e9, d:2},
+  notional:{t:'Номинал', f:p => p.notional * D.FX[p.ccy], unit:'млрд ₽', s:1e9, d:2},
+  cs01:{t:'CS01', f:p => p.cs01, unit:'тыс ₽/б.п.', s:1e3, d:0},
+  jtd:{t:'JTD', f:p => p.jtd, unit:'млрд ₽', s:1e9, d:2}
+};
+const NONE_LBL = {issuerGroup:'— без эмитента', sector:'— без сектора', rating:'н/р'};
+function rExpo(){
+  const l = P(), E = S.expo, me = MEAS[E.meas];
+  $('ex-dim').innerHTML = DIMS.map(d => `<button type="button" data-v="${d[0]}" aria-pressed="${E.dim === d[0]}">${d[1]}</button>`).join('');
+  $('ex-meas').innerHTML = Object.keys(MEAS).map(k => `<button type="button" data-v="${k}" aria-pressed="${E.meas === k}">${MEAS[k].t}</button>`).join('');
+  document.querySelectorAll('#ex-chart button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === E.chart));
+  const g = U.groupBy(l, p => p[E.dim] || NONE_LBL[E.dim] || '—');
+  let rows = Object.keys(g).map(k => ({name:k, v:sum(g[k], me.f), n:g[k].length})).filter(r => Math.abs(r.v) > 1);
+  if (E.dim === 'rating') rows.sort((a,b) => (D.RATING_ORDER.indexOf(a.name) + 99) % 99 - (D.RATING_ORDER.indexOf(b.name) + 99) % 99 || 0);
+  else rows.sort((a,b) => Math.abs(b.v) - Math.abs(a.v));
+  if (E.dim === 'rating') { const i = rows.findIndex(r => r.name === 'н/р'); if (i >= 0) rows.push(rows.splice(i,1)[0]); }
+  const gross = sum(rows, r => Math.abs(r.v)) || 1;
+  const dimName = DIMS.find(d => d[0] === E.dim)[1];
+  $('ex-title').textContent = me.t + ' по разрезу «' + dimName.toLowerCase() + '»';
+  $('ex-unit').textContent = me.unit; $('ex-tunit').textContent = me.unit;
+  $('ex-note').textContent = E.chart === 'treemap' ? 'Площадь — модуль величины. Синий — положительная (длинная) экспозиция, оранжевый — отрицательная (короткая).' : 'Показаны 25 крупнейших по модулю.';
+  const fmtV = v => num(v / me.s, me.d);
+  if (E.chart === 'treemap') {
+    chart('c-ex', opt({
+      tooltip:{trigger:'item', formatter:p => `<b>${esc(p.name)}</b><br>${me.t}: ${fmtV(p.data.raw)} ${me.unit}<br>Доля брутто: ${pct(Math.abs(p.data.raw)/gross,1)} · ${p.data.n} поз.`},
+      series:[{type:'treemap', left:0, right:0, top:0, bottom:0, roam:false, nodeClick:false, breadcrumb:{show:false},
+        itemStyle:{borderColor:TK.panel, borderWidth:2, gapWidth:2},
+        label:{show:true, fontFamily:TK.ui, fontSize:11, overflow:'truncate', formatter:p => Math.abs(p.data.raw)/gross < .012 ? '' : p.name + '\n' + fmtV(p.data.raw)},
+        data:rows.map(r => { const col = r.v >= 0 ? TK.cat[0] : TK.cat[1]; return {name:r.name, value:Math.abs(r.v), raw:r.v, n:r.n, itemStyle:{color:col}, label:{color:onColor(col)}}; })}]
+    }));
+  } else {
+    const top = rows.slice(0,25);
+    chart('c-ex', opt({
+      grid:{left:6, right:60, top:6, bottom:6},
+      tooltip:{valueFormatter:v => num(v, me.d) + ' ' + me.unit},
+      yAxis:xCat(top.map(r => r.name), {inverse:true, axisLabel:{color:TK.fg_2, fontSize:11, fontFamily:TK.ui, width:150, overflow:'truncate', interval:0}}),
+      xAxis:yVal(v => num(v, me.d ? 1 : 0)),
+      series:[{type:'bar', name:me.t, barWidth:'60%', data:top.map(r => { const v = +(r.v/me.s).toFixed(4); return {value:v, itemStyle:{color:v >= 0 ? TK.cat[0] : TK.cat[1], borderRadius:v < 0 ? [2,0,0,2] : [0,2,2,0]}, label:{show:true, position:v < 0 ? 'left' : 'right', color:TK.fg_2, fontFamily:TK.mono, fontSize:10.5, formatter:() => num(v, me.d)}}; })}]
+    }));
+  }
+  $('ex-table').innerHTML = `<table class="t"><thead><tr><th>${esc(dimName)}</th><th class="n">${esc(me.t)}</th><th class="n">Доля брутто</th><th class="n">Поз.</th></tr></thead><tbody>` +
+    rows.map(r => `<tr><td>${esc(r.name)}</td><td class="n${nc(r.v)}">${fmtV(r.v)}</td><td class="n">${pct(Math.abs(r.v)/gross,1)}</td><td class="n">${r.n}</td></tr>`).join('') +
+    `</tbody><tfoot><tr><td>Итого нетто</td><td class="n${nc(sum(rows, r => r.v))}">${fmtV(sum(rows, r => r.v))}</td><td class="n">100%</td><td class="n">${sum(rows, r => r.n)}</td></tr></tfoot></table>`;
+  // concentration
+  const ig = issuerGroups(l).sort((a,b) => b.u - a.u);
+  $('ex-conc').innerHTML = `<table class="t"><thead><tr><th>Группа</th><th class="n">Экспозиция</th><th class="n">Лимит</th><th style="min-width:120px">Загрузка</th><th class="n">%</th><th>Статус</th></tr></thead><tbody>` +
+    ig.map(g => `<tr><td>${esc(g.name)}</td><td class="n${nc(g.exp)}">${BN(g.exp,2)}</td><td class="n muted">${BN(g.lim,1)}</td><td>${ubar(g.u)}</td><td class="n">${pct(g.u)}</td><td>${chip(status(g.u).k, status(g.u).l)}</td></tr>`).join('') + '</tbody></table>';
+  // OCP
+  const o = ocpParts(l);
+  const PARTS = [['bond','Облигации'],['der','Деривативы'],['fx','FX'],['fund','Фондирование']];
+  $('ex-ocp-u').textContent = 'график: млн ₽ экв. · таблица: млн вал.';
+  chart('c-ex-ocp', opt({
+    legend:legend({data:PARTS.map(x => x[1]).concat(['Нетто ОВП'])}),
+    grid:{left:6, right:16, top:30, bottom:4},
+    tooltip:{valueFormatter:v => num(v,0) + ' млн ₽'},
+    yAxis:xCat(CCYS, {inverse:true}),
+    xAxis:yVal(v => num(v,0)),
+    series:PARTS.map((x,i) => ({type:'bar', name:x[1], stack:'o', barWidth:'50%', itemStyle:{color:TK.cat[i], borderColor:TK.panel, borderWidth:1}, data:CCYS.map(c => +(o[c][x[0]] * D.FX[c] / 1e6).toFixed(1))}))
+      .concat([{type:'scatter', name:'Нетто ОВП', symbol:'diamond', symbolSize:12, itemStyle:{color:TK.fg, borderColor:TK.panel, borderWidth:1.5}, z:5, data:CCYS.map(c => +(o[c].net * D.FX[c] / 1e6).toFixed(1))}])
+  }));
+  $('ex-ocp').innerHTML = `<table class="t"><thead><tr><th>Вал.</th>${PARTS.map(x => `<th class="n">${x[1]}</th>`).join('')}<th class="n">Нетто${S.withFunding ? '' : ' (без фонд.)'}</th><th class="n">Лимит</th><th>Статус</th></tr></thead><tbody>` +
+    CCYS.map(c => { const u = Math.abs(o[c].net)/D.LIMITS.ocp[c]; return `<tr><td>${c}</td>${PARTS.map(x => `<td class="n${nc(o[c][x[0]])}${x[0] === 'fund' && !S.withFunding ? ' muted' : ''}">${M(o[c][x[0]],1,true)}</td>`).join('')}<td class="n${nc(o[c].net)}"><b>${M(o[c].net,1,true)}</b></td><td class="n muted">${num(D.LIMITS.ocp[c]/1e6,0)}</td><td>${chip(status(u).k, pct(u))}</td></tr>`; }).join('') + '</tbody></table>';
+}
+
+/* ======================= 5. Фондирование ======================= */
+const FB = ['O/N','1W','1M','3M','6M','1Y','>1Y'];
+const FTYPES = ['РЕПО с ЦК','TSY FTP','FX-своп','Обратное РЕПО','Гарантийное обеспечение'];
+const FCCY = ['RUB','USD','CNY','EUR'];
+function fbucket(f){ const d = (new Date(f.maturity + 'T00:00:00') - new Date(D.asOf + 'T00:00:00')) / 864e5; return d <= 1 ? 0 : d <= 7 ? 1 : d <= 31 ? 2 : d <= 92 ? 3 : d <= 183 ? 4 : d <= 366 ? 5 : 6; }
+const BENCH = {RUB:['RUONIA', D.INDICES.RUONIA], USD:['SOFR', D.INDICES.SOFR], CNY:['RUSFAR CNY', D.INDICES['RUSFAR CNY']], EUR:['€STR', D.INDICES['€STR']]};
+function rFunding(){
+  const fl = FU(), l = P();
+  document.querySelectorAll('#fu-stack button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === S.fund.stack));
+  const keys = S.fund.stack === 'type' ? FTYPES : FCCY, kf = S.fund.stack === 'type' ? (f => f.type) : (f => f.ccy);
+  const used = keys.filter(k => fl.some(f => kf(f) === k));
+  chart('c-fu-ladder', opt({
+    legend:legend({data:used}),
+    tooltip:{valueFormatter:v => num(v,2) + ' млрд ₽'},
+    xAxis:xCat(FB), yAxis:yVal(v => num(v,0)),
+    series:used.map(k => ({type:'bar', name:k, stack:'f', barWidth:'56%', itemStyle:{color:TK.cat[keys.indexOf(k)], borderColor:TK.panel, borderWidth:1},
+      data:FB.map((_,i) => +(-sum(fl.filter(f => kf(f) === k && fbucket(f) === i), f => f.amountRub)/1e9).toFixed(3))}))
+  }));
+  // cost
+  const bor = fl.filter(f => f.amount < 0);
+  const ccyRows = FCCY.map(c => { const x = bor.filter(f => f.ccy === c); const a = sum(x, f => -f.amount); return {c, a, rub:sum(x, f => -f.amountRub), wac:a ? sum(x, f => -f.amount * f.rate)/a : null, n:x.length}; }).filter(r => r.n);
+  const totRub = sum(bor, f => -f.amountRub) || 1;
+  const shares = FTYPES.map((t,i) => ({t, i, v:sum(bor.filter(f => f.type === t), f => -f.amountRub)})).filter(x => x.v > 0);
+  $('fu-cost').innerHTML = `<div class="tw"><table class="t"><thead><tr><th>Вал.</th><th class="n">Привлечено, млн</th><th class="n">WAC</th><th>Бенчмарк</th><th class="n">Спред, б.п.</th></tr></thead><tbody>` +
+    ccyRows.map(r => `<tr><td>${r.c}</td><td class="n">${M(r.a,0)}</td><td class="n"><b>${num(r.wac,2)}%</b></td><td class="muted">${BENCH[r.c][0]} ${num(BENCH[r.c][1],2)}%</td><td class="n${nc(r.wac - BENCH[r.c][1])}">${num((r.wac - BENCH[r.c][1])*100,0,true)}</td></tr>`).join('') +
+    `</tbody></table></div>
+    <h4 class="fl" style="margin:14px 0 2px">Структура: РЕПО vs FTP</h4>
+    <div class="share" role="img" aria-label="Доли источников фондирования">${shares.map(x => `<i style="width:${(x.v/totRub*100).toFixed(2)}%;background:${TK.cat[x.i]}" title="${esc(x.t)}: ${pct(x.v/totRub,1)}"></i>`).join('')}</div>
+    <div class="share-l">${shares.map(x => `<span class="sw" style="background:${TK.cat[x.i]}"></span><span>${esc(x.t)}</span><span class="num">${BN(x.v,1)} млрд</span><span class="num"><b>${pct(x.v/totRub,1)}</b></span>`).join('')}</div>
+    <p class="note" style="margin-top:8px">Всего привлечено ${BN(totRub,1)} млрд ₽ экв.; кэрри фондирования за день ${M(sum(fl, f => f.pnl.carry),1)} млн ₽.</p>`;
+  // gap by book
+  const books = ALL_BOOKS.filter(b => S.books.has(b));
+  const gr = books.map(b => { const a = sum(l.filter(p => p.book === b && p.instrType === 'BOND'), p => p.mvRub); const f = -sum(fl.filter(x => x.book === b), x => x.amountRub); return {b, a, f, g:a - f}; }).filter(r => Math.abs(r.a) > 1 || Math.abs(r.f) > 1);
+  chart('c-fu-gap', opt({
+    legend:legend({data:['Активы (MV облигаций)','Фондирование нетто']}),
+    tooltip:{valueFormatter:v => num(v,2) + ' млрд ₽'},
+    xAxis:xCat(gr.map(r => D.BOOKS[r.b].name), {axisLabel:{color:TK.fg_2, fontSize:10.5, fontFamily:TK.ui, interval:0, rotate:$('c-fu-gap').clientWidth < 820 ? 30 : 0}}),
+    yAxis:yVal(v => num(v,0)),
+    series:[
+      {type:'bar', name:'Активы (MV облигаций)', barGap:'15%', barWidth:'30%', itemStyle:{color:TK.cat[0], borderRadius:[2,2,0,0]}, data:gr.map(r => +(r.a/1e9).toFixed(2))},
+      {type:'bar', name:'Фондирование нетто', barWidth:'30%', itemStyle:{color:TK.cat[1], borderRadius:[2,2,0,0]}, data:gr.map(r => +(r.f/1e9).toFixed(2))}
+    ]
+  }));
+  $('fu-gap').innerHTML = `<table class="t"><thead><tr><th>Книга</th><th class="n">Активы</th><th class="n">Фондирование</th><th class="n">Разрыв</th><th class="n">Покрытие</th><th class="n">Кэрри фонд./день</th></tr></thead><tbody>` +
+    gr.map(r => `<tr><td>${esc(D.BOOKS[r.b].name)}</td><td class="n${nc(r.a)}">${M(r.a,0)}</td><td class="n${nc(r.f)}">${M(r.f,0)}</td><td class="n${nc(r.g)}"><b>${M(r.g,0,true)}</b></td><td class="n">${r.a > 0 ? pct(r.f/r.a) : '—'}</td><td class="n${nc(sum(fl.filter(x => x.book === r.b), x => x.pnl.carry))}">${M(sum(fl.filter(x => x.book === r.b), x => x.pnl.carry),2)}</td></tr>`).join('') +
+    `</tbody><tfoot><tr><td>Итого</td><td class="n">${M(sum(gr, r => r.a),0)}</td><td class="n">${M(sum(gr, r => r.f),0)}</td><td class="n${nc(sum(gr, r => r.g))}">${M(sum(gr, r => r.g),0,true)}</td><td class="n">${sum(gr, r => r.a) > 0 ? pct(sum(gr, r => r.f)/sum(gr, r => r.a)) : '—'}</td><td class="n">${M(sum(fl, f => f.pnl.carry),2)}</td></tr></tfoot></table>`;
+  // deals
+  const ds = fl.slice().sort((a,b) => a.maturity.localeCompare(b.maturity) || a.amountRub - b.amountRub);
+  $('fu-cnt').textContent = ds.length + ' сделок · сумма в валюте сделки, < 0 — привлечение';
+  $('fu-deals').innerHTML = `<table class="t"><thead><tr><th>Книга</th><th>Тип</th><th>Вал.</th><th class="n">Сумма, млн</th><th class="n">₽ экв., млн</th><th>Ставка</th><th class="n">%</th><th>Начало</th><th>Погашение</th><th>Бакет</th><th>Контрагент</th><th>Обеспечение</th><th class="n">Кэрри/день, тыс ₽</th></tr></thead><tbody>` +
+    ds.map(f => `<tr><td>${esc(D.BOOKS[f.book].name)}</td><td>${esc(f.type)}</td><td>${f.ccy}</td><td class="n${nc(f.amount)}">${M(f.amount,1)}</td><td class="n${nc(f.amountRub)}">${M(f.amountRub,0)}</td><td>${esc(f.rateExpr)}</td><td class="n">${num(f.rate,2)}</td><td class="mono">${dt(f.start)}</td><td class="mono">${dt(f.maturity)}</td><td class="mono">${FB[fbucket(f)]}</td><td>${esc(f.counterparty)}</td><td class="muted">${esc(f.collateral || '—')}</td><td class="n${nc(f.pnl.carry)}">${K(f.pnl.carry,0)}</td></tr>`).join('') + '</tbody></table>';
+}
+
+/* ======================= 6. Сценарии ======================= */
+const COMP = [['rates','Ставки'],['spread','Спреды'],['fx','FX'],['convexity','Выпуклость']];
+const scById = id => D.SCENARIOS.find(s => s.id === id);
+const scColor = id => TK.cat[D.SCENARIOS.findIndex(s => s.id === id) % 8];
+function scRun(sc, l){
+  const r = U.runScenario(sc, l);
+  let ff = 0;
+  if (sc.fx && S.withFunding) FU().forEach(f => { for (const c in f.fxDelta) ff += f.fxDelta[c] * D.FX[c] * (sc.fx[c] || 0) / 100; });
+  const comp = {}; COMP.forEach(c => { comp[c[0]] = sum(r.byPosition, x => x[c[0]]); });
+  return {by:r.byPosition, ff, comp, total:sum(r.byPosition, x => x.total) + ff};
+}
+function scDesc(sc){
+  const parts = [];
+  if (sc.curves) Object.keys(sc.curves).forEach(c => { const v = sc.curves[c]; parts.push(D.CURVES[c].name + ': ' + (Array.isArray(v) ? num(v[0],0,true) + '…' + num(v[v.length-1],0,true) + ' б.п. (1M…20Y+)' : num(v,0,true) + ' б.п.')); });
+  if (sc.fx) parts.push('ослабление RUB: ' + Object.keys(sc.fx).map(c => c + ' +' + num(sc.fx[c],0) + '%').join(', '));
+  if (sc.spreads) { if (sc.spreads._all) parts.push('спреды +' + sc.spreads._all + ' б.п.'); if (sc.spreads._mult) parts.push('спреды ×' + num(sc.spreads._mult,1)); }
+  return parts.join(' · ');
+}
+function rScen(){
+  const l = P(), sel = S.scen.sel.filter(scById);
+  if (!sel.includes(S.scen.focus)) S.scen.focus = sel[0];
+  $('sc-chips').innerHTML = D.SCENARIOS.map(s => `<button type="button" class="chip" data-act="scen" data-v="${esc(s.id)}" aria-pressed="${sel.includes(s.id)}">${esc(s.name)}</button>`).join('');
+  const R = {}; sel.forEach(id => { R[id] = scRun(scById(id), l); });
+  $('sc-cards').innerHTML = sel.map(id => { const r = R[id]; return `<button type="button" class="sc-c" data-act="scfocus" data-v="${esc(id)}" aria-pressed="${id === S.scen.focus}">
+      <span class="nm"><span class="sw" style="background:${scColor(id)}"></span>${esc(scById(id).name)}</span>
+      <span class="kv${nc(r.total)}">${M(r.total,0,true)}<small>млн ₽</small></span>
+      <span class="cm">${COMP.map(c => `<span>${c[1]}</span>`).join('')}${COMP.map(c => `<span class="num${nc(r.comp[c[0]] + (c[0] === 'fx' ? r.ff : 0))}">${M(r.comp[c[0]] + (c[0] === 'fx' ? r.ff : 0),0,true)}</span>`).join('')}</span></button>`; }).join('');
+  const books = ALL_BOOKS.filter(b => S.books.has(b) && l.some(p => p.book === b));
+  const bookTot = (r, b, comp) => sum(r.by.filter(x => byId[x.id].book === b), x => comp ? x[comp] : x.total);
+  const bookFF = (sc, b) => { if (!sc.fx || !S.withFunding) return 0; let s = 0; FU().filter(f => f.book === b).forEach(f => { for (const c in f.fxDelta) s += f.fxDelta[c] * D.FX[c] * (sc.fx[c] || 0) / 100; }); return s; };
+  const fid = S.scen.focus, fsc = scById(fid), fr = R[fid];
+  if (sel.length > 1) {
+    $('sc-ch-title').textContent = 'Сравнение сценариев по книгам';
+    chart('c-sc', opt({
+      legend:legend({data:sel.map(id => scById(id).name)}),
+      tooltip:{valueFormatter:v => num(v,1,true) + ' млн ₽'},
+      grid:{top:sel.length > 2 ? 50 : 30},
+      xAxis:xCat(books.map(b => D.BOOKS[b].name), {axisLabel:{color:TK.fg_2, fontSize:10.5, fontFamily:TK.ui, interval:0, rotate:$('c-sc').clientWidth < 820 ? 30 : 0}}),
+      yAxis:yVal(v => num(v,0)),
+      series:sel.map(id => ({type:'bar', name:scById(id).name, barMaxWidth:18, itemStyle:{color:scColor(id)}, data:books.map(b => +((bookTot(R[id], b) + bookFF(scById(id), b))/1e6).toFixed(2))}))
+    }));
+  } else {
+    $('sc-ch-title').textContent = 'Результат по книгам и компонентам · ' + fsc.name;
+    chart('c-sc', opt({
+      legend:legend({data:COMP.map(c => c[1])}),
+      tooltip:{valueFormatter:v => num(v,1,true) + ' млн ₽'},
+      xAxis:xCat(books.map(b => D.BOOKS[b].name), {axisLabel:{color:TK.fg_2, fontSize:10.5, fontFamily:TK.ui, interval:0, rotate:$('c-sc').clientWidth < 820 ? 30 : 0}}),
+      yAxis:yVal(v => num(v,0)),
+      series:COMP.map((c,i) => ({type:'bar', name:c[1], stack:'c', barWidth:'50%', itemStyle:{color:TK.cat[i], borderColor:TK.panel, borderWidth:1},
+        data:books.map(b => +((bookTot(fr, b, c[0]) + (c[0] === 'fx' ? bookFF(fsc, b) : 0))/1e6).toFixed(2))}))
+    }));
+  }
+  $('sc-t-title').textContent = 'Книга × компонент · ' + fsc.name;
+  const rowsT = books.map(b => ({n:D.BOOKS[b].name, c:COMP.map(c => bookTot(fr, b, c[0])), ff:bookFF(fsc, b)}));
+  $('sc-table').innerHTML = `<table class="t"><thead><tr><th>Книга</th>${COMP.map(c => `<th class="n">${c[1]}</th>`).join('')}<th class="n">Фонд. FX</th><th class="n">Итого</th></tr></thead><tbody>` +
+    rowsT.map(r => { const t = sum(r.c) + r.ff; return `<tr><td>${esc(r.n)}</td>${r.c.map(v => `<td class="n${nc(v)}">${M(v,1)}</td>`).join('')}<td class="n${nc(r.ff)}">${M(r.ff,1)}</td><td class="n${nc(t)}"><b>${M(t,1,true)}</b></td></tr>`; }).join('') +
+    `</tbody><tfoot><tr><td>Итого</td>${COMP.map(c => `<td class="n${nc(fr.comp[c[0]])}">${M(fr.comp[c[0]],1)}</td>`).join('')}<td class="n${nc(fr.ff)}">${M(fr.ff,1)}</td><td class="n${nc(fr.total)}">${M(fr.total,1,true)}</td></tr></tfoot></table>`;
+  $('sc-desc').innerHTML = '<b>Шоки:</b> ' + esc(scDesc(fsc)) + '. Переоценка упрощённая: дельта по бакетам + выпуклость, спреды через CS01, FX линейно.';
+  const top = fr.by.slice().sort((a,b) => a.total - b.total).slice(0,10).filter(x => x.total < 0);
+  $('sc-top-title').textContent = 'Топ-10 убыточных позиций · ' + fsc.name;
+  $('sc-top').innerHTML = `<table class="t"><thead><tr><th>#</th><th>Инструмент</th><th>Книга</th><th>Класс</th>${COMP.map(c => `<th class="n">${c[1]}</th>`).join('')}<th class="n">Итого</th><th class="n">MV, млн ₽</th></tr></thead><tbody>` +
+    top.map((x,i) => { const p = byId[x.id]; return `<tr class="click" tabindex="0" data-act="pos" data-v="${p.id}"><td class="muted mono">${i+1}</td><td class="nm">${esc(p.name)}</td><td>${esc(D.BOOKS[p.book].name)}</td><td>${esc(p.assetClass)}</td>${COMP.map(c => `<td class="n${nc(x[c[0]])}">${M(x[c[0]],1)}</td>`).join('')}<td class="n${nc(x.total)}"><b>${M(x.total,1)}</b></td><td class="n${nc(p.mvRub)}">${M(p.mvRub,0)}</td></tr>`; }).join('') + '</tbody></table>';
+}
+
+/* ======================= 7. PnL ======================= */
+function rPnl(){
+  const l = P(), fp = fundPnl(), wf = S.withFunding;
+  const steps = PNL_KEYS.map(k => ({n:k[1], v:sum(l, p => p.pnl[k[0]])}));
+  if (wf) { steps.push({n:'Фонд. кэрри', v:fp.carry}); steps.push({n:'Фонд. FX', v:fp.fx}); }
+  const explained = sum(steps, s => s.v), unexp = sum(l, p => p.pnl.unexplained), official = explained + unexp;
+  const bars = []; let r = 0;
+  steps.forEach(s => { bars.push({n:s.n, lo:r, hi:r + s.v, v:s.v, k:'d'}); r += s.v; });
+  bars.push({n:'Explained', lo:0, hi:explained, v:explained, k:'t'});
+  bars.push({n:'Unexplained', lo:explained, hi:official, v:unexp, k:'u'});
+  bars.push({n:'Официальный', lo:0, hi:official, v:official, k:'t'});
+  const col = b => b.k === 't' ? TK.accent : b.k === 'u' ? TK.serious : (b.v < 0 ? TK.neg : TK.pos);
+  const narrow = $('c-pnl-wf').clientWidth < 640;
+  chart('c-pnl-wf', opt({
+    grid:{left:6, right:10, top:22, bottom:6},
+    tooltip:{trigger:'item', formatter:p => { const b = bars[p.dataIndex]; return `<b>${esc(b.n)}</b><br>${M(b.v,2,true)} млн ₽` + (b.k === 'd' ? `<br><span style="opacity:.7">накопл.: ${M(b.hi,1,true)}</span>` : ''); }},
+    xAxis:xCat(bars.map(b => WF_SHORT[b.n] || b.n), {axisLabel:{color:TK.fg_2, fontSize:10.5, fontFamily:TK.ui, interval:0, rotate:narrow ? 40 : 0, hideOverlap:false, lineHeight:13}}),
+    yAxis:yVal(v => num(v,0)),
+    series:[{type:'custom', name:'PnL', encode:{x:0, y:[1,2]},
+      data:bars.map((b,i) => [i, b.lo/1e6, b.hi/1e6, b.v/1e6]),
+      renderItem:(params, api) => {
+        const i = api.value(0), lo = api.value(1), hi = api.value(2), b = bars[i];
+        const a = api.coord([i, lo]), c = api.coord([i, hi]), w = api.size([1,0])[0] * .62;
+        const y = Math.min(a[1], c[1]), h = Math.max(1, Math.abs(a[1] - c[1]));
+        const ch = [{type:'rect', shape:{x:a[0] - w/2, y, width:w, height:h, r:1}, style:{fill:col(b)}},
+          {type:'text', invisible:narrow && b.k !== 't', style:{text:num(b.v/1e6,1,true), x:a[0], y:b.v >= 0 ? y - 4 : y + h + 4, align:'center', verticalAlign:b.v >= 0 ? 'bottom' : 'top', fill:TK.fg_2, font:'10.5px ' + TK.mono}}];
+        if (i < bars.length - 1) { const nx = api.coord([i + 1, hi]); ch.push({type:'line', shape:{x1:a[0] + w/2, y1:c[1], x2:nx[0] - w/2, y2:c[1]}, style:{stroke:TK.fg_3, lineWidth:1, lineDash:[2,2]}}); }
+        return {type:'group', children:ch};
+      }}]
+  }));
+  const pctEx = official ? explained/official : 0;
+  $('pnl-side').innerHTML = `<div class="bigs">
+     <div><span class="kl">Официальный</span><span class="kv${nc(official)}">${M(official,1,true)}</span></div>
+     <div><span class="kl">Explained</span><span class="kv${nc(explained)}">${M(explained,1,true)}</span></div>
+     <div><span class="kl">Unexplained</span><span class="kv${nc(unexp)}">${M(unexp,2,true)}</span></div>
+     <div><span class="kl">Unexplained / |офиц.|</span><span class="kv">${official ? pct(Math.abs(unexp/official),1) : '—'}</span></div></div>
+     <p class="note" style="margin-top:10px">${wf ? 'Включает фондирование: кэрри ' + M(fp.carry,1,true) + ' и FX-переоценку ' + M(fp.fx,1,true) + ' млн ₽ отдельными строками.' : 'Без фондирования: только позиционный PnL.'} Порог разбора break — 0,5 млн ₽ на позицию.</p>
+     <div class="lim" style="margin-top:6px">${PNL_KEYS.map(k => { const v = sum(l, p => p.pnl[k[0]]); return `<div class="lim-r"><span class="sw" style="background:${v < 0 ? TK.neg : TK.pos}"></span><span>${k[1]}</span><span class="num${nc(v)}">${M(v,2,true)}</span></div>`; }).join('')}</div>`;
+  void pctEx;
+  // by book
+  const books = ALL_BOOKS.filter(b => S.books.has(b));
+  const br = books.map(b => { const x = l.filter(p => p.book === b), fb = FU().filter(f => f.book === b); const fadd = wf ? sum(fb, f => f.pnl.carry + f.pnl.fx) : 0;
+    const e = sum(x, p => p.pnl.explained) + fadd, o = sum(x, p => p.pnl.official) + fadd; return {b, e, o, u:o - e}; }).filter(r => Math.abs(r.o) > 1 || Math.abs(r.e) > 1);
+  const bst = u => Math.abs(u) >= 2e6 ? ['crit','Крупный'] : Math.abs(u) >= 0.5e6 ? ['warn','Разобрать'] : ['ok','В допуске'];
+  $('pnl-books').innerHTML = `<table class="t"><thead><tr><th>Книга</th><th class="n">Официальный</th><th class="n">Explained</th><th class="n">Break</th><th class="n">Break, %</th><th>Статус</th></tr></thead><tbody>` +
+    br.map(r => `<tr><td>${esc(D.BOOKS[r.b].name)}</td><td class="n${nc(r.o)}">${M(r.o,2,true)}</td><td class="n${nc(r.e)}">${M(r.e,2,true)}</td><td class="n${nc(r.u)}"><b>${M(r.u,2,true)}</b></td><td class="n">${r.o ? pct(Math.abs(r.u/r.o),1) : '—'}</td><td>${chip(bst(r.u)[0], bst(r.u)[1])}</td></tr>`).join('') +
+    `</tbody><tfoot><tr><td>Итого</td><td class="n${nc(official)}">${M(official,2,true)}</td><td class="n${nc(explained)}">${M(explained,2,true)}</td><td class="n${nc(unexp)}">${M(unexp,2,true)}</td><td class="n">${official ? pct(Math.abs(unexp/official),1) : '—'}</td><td></td></tr></tfoot></table>`;
+  // breaks
+  const bl = l.filter(p => p.pnl.breakNote || Math.abs(p.pnl.unexplained) >= 0.5e6).sort((a,b) => Math.abs(b.pnl.unexplained) - Math.abs(a.pnl.unexplained));
+  $('pnl-brk-cnt').textContent = bl.length + ' ' + plural(bl.length,'позиция','позиции','позиций') + ' · |break| ≥ 0,5 млн или с комментарием';
+  $('pnl-breaks').innerHTML = bl.length ? bl.map(p => `<div class="break-it"><span class="ttl"><button type="button" class="lnk" data-act="pos" data-v="${p.id}">${esc(p.name)}</button><span class="pill">${esc(D.BOOKS[p.book].name)}</span>${p.pnl.breakNote ? chip('warn','Причина найдена') : chip('serious','Не разобран')}</span>
+      <span class="num${nc(p.pnl.unexplained)}"><b>${M(p.pnl.unexplained,2,true)}</b> млн</span>
+      <span class="nt">${p.pnl.breakNote ? esc(p.pnl.breakNote) : 'Комментарий не указан.'} <span class="muted mono">офиц. ${M(p.pnl.official,2,true)} · expl. ${M(p.pnl.explained,2,true)}</span></span></div>`).join('')
+    : '<p class="note">Нет расхождений выше порога в текущем фильтре.</p>';
+}
+
+/* ---------- events ---------- */
+function rerender(){ renderFilters(); renderKpi(); renderTab(); }
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-act]');
+  if (t) {
+    const a = t.dataset.act, v = t.dataset.v;
+    if (a === 'tab' || a === 'goto') return setTab(v);
+    if (a === 'desk') { const db = ALL_BOOKS.filter(b => D.BOOKS[b].desk === v); const exact = S.books.size === db.length && db.every(b => S.books.has(b)); S.books = new Set(exact ? ALL_BOOKS : db); return rerender(); }
+    if (a === 'book') { toggleIn(S.books, ALL_BOOKS, v); return rerender(); }
+    if (a === 'books-all') { S.books = new Set(ALL_BOOKS); return rerender(); }
+    if (a === 'seg') { toggleIn(S.segs, SEGS, v); return rerender(); }
+    if (a === 'segs-all') { S.segs = new Set(SEGS); return rerender(); }
+    if (a === 'reset') { S.books = new Set(ALL_BOOKS); S.segs = new Set(SEGS); S.ccy = 'ALL'; return rerender(); }
+    if (a === 'sort') { if (S.pos.sort.k === v) S.pos.sort.dir *= -1; else { const c = COLS.find(x => x.k === v); S.pos.sort = {k:v, dir:c.n ? -1 : 1}; } return rPositions(); }
+    if (a === 'grp') { if (S.pos.collapsed.has(v)) S.pos.collapsed.delete(v); else S.pos.collapsed.add(v); rPositions(); const r = document.querySelector(`tr[data-act="grp"][data-v="${CSS.escape(v)}"]`); if (r) r.focus(); return; }
+    if (a === 'pos') { lastFocus = t; return openDrawer(+v); }
+    if (a === 'rcurve') { S.risk.curve = v; if (S.risk.mode === 'books') S.risk.cell = null; return rRisk(); }
+    if (a === 'cell') {
+      const r = t.dataset.r, bi = +t.dataset.b;
+      S.risk.cell = S.risk.mode === 'curves' ? {curve:r, bucket:bi, book:null} : {curve:S.risk.curve, bucket:bi, book:r};
+      if (S.risk.mode === 'curves') S.risk.curve = r;
+      rRisk(); const nb = document.querySelector(`#risk-hm .cb[data-r="${CSS.escape(r)}"][data-b="${bi}"]`); if (nb) nb.focus(); return;
+    }
+    if (a === 'scen') { const s = S.scen.sel, i = s.indexOf(v); if (i >= 0) { if (s.length > 1) s.splice(i,1); } else { s.push(v); if (s.length > 4) s.shift(); S.scen.focus = v; } return rScen(); }
+    if (a === 'scfocus') { S.scen.focus = v; return rScen(); }
+  }
+  const sb = e.target.closest('.seg button');
+  if (sb) {
+    const id = sb.parentElement.id, v = sb.dataset.v;
+    if (id === 'risk-mode') { S.risk.mode = v; S.risk.cell = null; return rRisk(); }
+    if (id === 'risk-curves') { S.risk.curve = v; if (S.risk.mode === 'books') S.risk.cell = null; return rRisk(); }
+    if (id === 'ex-dim') { S.expo.dim = v; return rExpo(); }
+    if (id === 'ex-meas') { S.expo.meas = v; return rExpo(); }
+    if (id === 'ex-chart') { S.expo.chart = v; return rExpo(); }
+    if (id === 'fu-stack') { S.fund.stack = v; return rFunding(); }
+  }
+  if (e.target.id === 'pos-collapse') {
+    if (S.pos.collapsed.size) S.pos.collapsed.clear();
+    else { const gr = U.groupBy(P(), groupKey); Object.keys(gr).forEach(k => S.pos.collapsed.add(k)); }
+    return rPositions();
+  }
+  if (e.target.id === 'scrim' || e.target.id === 'dr-close') return closeDrawer();
+  const pop = $('colpop'); if (pop.open && !pop.contains(e.target)) pop.open = false;
+});
+document.addEventListener('change', e => {
+  const t = e.target;
+  if (t.id === 'f-ccy') { S.ccy = t.value; return rerender(); }
+  if (t.id === 'f-fund') { S.withFunding = t.checked; renderKpi(); return renderTab(); }
+  if (t.id === 'sum-bview') { S.sum.bview = t.value; return rSummary(); }
+  if (t.id === 'pos-group') { S.pos.group = t.value; S.pos.collapsed.clear(); return rPositions(); }
+  if (t.dataset && t.dataset.col) {
+    if (t.checked) S.pos.cols.add(t.dataset.col); else if (S.pos.cols.size > 1) S.pos.cols.delete(t.dataset.col); else t.checked = true;
+    store.set('fidm.cols', JSON.stringify([...S.pos.cols])); return rPositions();
+  }
+});
+let qT; $('pos-q').addEventListener('input', e => { clearTimeout(qT); qT = setTimeout(() => { S.pos.q = e.target.value; rPositions(); }, 120); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { if (!$('drawer').hidden) return closeDrawer(); if ($('colpop').open) { $('colpop').open = false; return; } }
+  const tag = (e.target.tagName || '').toLowerCase();
+  const typing = tag === 'input' || tag === 'select' || tag === 'textarea' || e.target.isContentEditable;
+  if (!typing && !e.ctrlKey && !e.metaKey && !e.altKey && /^[1-7]$/.test(e.key)) { e.preventDefault(); return setTab(TABS[+e.key - 1][0]); }
+  if ((e.key === 'Enter' || e.key === ' ') && !typing) {
+    const t = e.target.closest && e.target.closest('tr[data-act], th[data-act]');
+    if (t) { e.preventDefault(); t.click(); }
+  }
+  if (e.target.classList && e.target.classList.contains('tab-b') && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
+    const i = TABS.findIndex(x => x[0] === S.tab), n = (i + (e.key === 'ArrowRight' ? 1 : TABS.length - 1)) % TABS.length;
+    setTab(TABS[n][0]); const b = $('tb-' + TABS[n][0]); if (b) b.focus();
+  }
+});
+$('theme-btn').addEventListener('click', () => {
+  const root = document.documentElement, cur = root.getAttribute('data-theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  const nx = cur === 'dark' ? 'light' : 'dark'; root.setAttribute('data-theme', nx); store.set('fidm.theme', nx);
+});
+function onTheme(){ readTokens(); renderKpi(); renderTab(); }
+const mq = matchMedia('(prefers-color-scheme: dark)');
+if (mq.addEventListener) mq.addEventListener('change', onTheme); else if (mq.addListener) mq.addListener(onTheme);
+new MutationObserver(onTheme).observe(document.documentElement, {attributes:true, attributeFilter:['data-theme']});
+let rT, lastW = window.innerWidth;
+window.addEventListener('resize', () => { clearTimeout(rT); rT = setTimeout(() => {
+  document.querySelectorAll('.tab:not([hidden]) .ch').forEach(el => { const c = window.echarts && echarts.getInstanceByDom(el); if (c) c.resize(); });
+  if (Math.abs(window.innerWidth - lastW) > 80) { lastW = window.innerWidth; renderTab(); }
+}, 150); });
+
+/* ---------- boot ---------- */
+$('asof').textContent = dt(D.asOf) + ' 18:45';
+readTokens(); renderFilters(); renderKpi(); renderTabs(); renderColPop(); renderTab();
+})();
+</script>
