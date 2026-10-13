@@ -97,6 +97,23 @@ check('ключевые ставки: шок только на чужом пил
   assert.strictEqual(r.total, 0);
 });
 
+check('предупреждение о точности не срабатывает на позициях с ногами разного знака (XCCY, FX-форвард)', () => {
+  const p = { id: 'XC', book: 'B', instrType: 'XCCY', segment: 'Деривативы', ccy: 'USD', mvRub: 1e6, dv01: 10, cs01: 0,
+    risk: { 'USD SOFR': BUCKETS.map((_, i) => i === I5 ? -50000 : 0), 'RUB OFZ': BUCKETS.map((_, i) => i === I5 ? 50010 : 0) }, fxDelta: {} };
+  const D = load([p], { RUB: 1, USD: 80 });
+  const r = D.util.runScenario({ curves: { 'RUB OFZ': 200 } });
+  assert.strictEqual(r.accuracyWarning, null, `ложное предупреждение: сдвиг ${r.maxDyBp}`);
+  assert(r.maxDyBp <= 200 + 1e-9);
+});
+
+check('демо-набор: умеренные пресеты без предупреждения, «2022» — с предупреждением', () => {
+  const ctx = { window: {} }; vm.createContext(ctx);
+  for (const f of ['data.js', 'desk-util.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '..', '..', 'prototypes', f), 'utf8'), ctx);
+  const D = ctx.window.DESK, run = id => D.util.runScenario(D.SCENARIOS.find(s => s.id === id));
+  for (const id of ['par+100', 'par-100', 'keyhike', 'bullsteep', 'bearflat', 'rubdep']) assert.strictEqual(run(id).accuracyWarning, null, id + ': ' + run(id).maxDyBp);
+  assert(run('stress22').accuracyWarning, 'stress22 должен быть помечен');
+});
+
 check('FX-позиция линейна: кросс-эффекта нет, итог точный', () => {
   const p = { id: 'F', book: 'B', instrType: 'FX', segment: 'FX', ccy: 'USD', mvRub: 0, dv01: 0, cs01: 0, risk: {}, fxDelta: { USD: 1e6 } };
   const D = load([p], { RUB: 1, USD: 80 });

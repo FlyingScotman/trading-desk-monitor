@@ -1027,7 +1027,7 @@ function rScen(){
       <span class="nm"><span class="sw" style="background:${scColor(id)}"></span>${esc(scById(id).name)}</span>
       <span class="kv${nc(r.total)}">${M(r.total,0,true)}<small>млн ₽</small></span>
       <span class="cm">${COMP.map(c => `<span>${c[1]}</span>`).join('')}${COMP.map(c => `<span class="num${nc(r.comp[c[0]] + (c[0] === 'fx' ? r.ff : 0))}">${M(r.comp[c[0]] + (c[0] === 'fx' ? r.ff : 0),0,true)}</span>`).join('')}</span>
-      <span class="sc-q">${r.fullReval ? chip('ok','Полная переоценка') : r.warn ? chip('warn', 'Шок ' + num(r.maxDy,0) + ' б.п. — нужна полная переоценка') : chip('info','Греки до 2-го порядка')}</span></button>`; }).join('');
+      <span class="sc-q">${r.fullReval ? chip('ok','Полная переоценка') : r.warn ? chip('warn', 'Сдвиг до ' + num(r.maxDy,0) + ' б.п. у ' + pct(r.warn.mvShare,0) + ' MV — нужна полная переоценка') : chip('info','Греки до 2-го порядка')}</span></button>`; }).join('');
   const books = ALL_BOOKS.filter(b => S.books.has(b) && l.some(p => p.book === b));
   const bookTot = (r, b, comp) => sum(r.by.filter(x => byId[x.id].book === b), x => comp ? x[comp] : x.total);
   const bookFF = (sc, b) => (R[sc.id] && R[sc.id].ffBook[b]) || 0;

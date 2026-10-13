@@ -17,7 +17,7 @@ const pid = p => 'P' + String(p.id).padStart(4, '0');
 const fid = f => 'F' + String(f.id).padStart(4, '0');
 
 const bundle = {
-  contract_version: '1.0',
+  contract_version: '1.1',
   run: { as_of: D.asOf, run_type: 'EOD', source: 'demo (prototypes/data.js)', lib_version: null, market_snapshot: 'demo', comment: 'Демо-набор: все цифры вымышленные' },
   buckets: B.map((b, i) => ({ bucket: b, pillar_years: D.PILLARS[i] })),
   ratings: D.RATING_ORDER,

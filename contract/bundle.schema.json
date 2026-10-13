@@ -1,7 +1,7 @@
 {
  "$schema": "https://json-schema.org/draft/2020-12/schema",
- "$id": "trading-desk-monitor/bundle-1.0",
- "title": "Trading Desk Monitor — пакет расчётного прогона (contract 1.0)",
+ "$id": "trading-desk-monitor/bundle-1.1",
+ "title": "Trading Desk Monitor — пакет расчётного прогона (contract 1.1)",
  "description": "Один прогон = один файл. Описание полей и методик: docs/DATA_CONTRACT.md. Суммы в RUB, если не указано иное.",
  "type": "object",
  "required": [
@@ -14,7 +14,10 @@
  ],
  "properties": {
   "contract_version": {
-   "const": "1.0"
+   "enum": [
+    "1.0",
+    "1.1"
+   ]
   },
   "run": {
    "type": "object",
@@ -450,7 +453,8 @@
       "type": [
        "number",
        "null"
-      ]
+      ],
+      "description": "выпуклость к доходности, лет²; второй порядок для сценариев, если нет gamma"
      },
      "dv01": {
       "type": "number"
@@ -565,6 +569,28 @@
          "null"
         ]
        }
+      }
+     },
+     "gamma": {
+      "type": "array",
+      "description": "Вторые производные PV_RUB: [[factor_1, factor_2, d2PV]]; факторы 'IR|<curve>|<bucket>' (1 б.п.), 'CS' (свой спред, 1 б.п.), 'FX|<ccy>' (1 %). Пара один раз; вклад ½Γ·Δa² (диагональ), Γ·Δa·Δb (вне диагонали). См. DATA_CONTRACT §4.3.3",
+      "items": {
+       "type": "array",
+       "prefixItems": [
+        {
+         "type": "string",
+         "pattern": "^(IR\\|[^|]+\\|[^|]+|CS|FX\\|[A-Z]{3})$"
+        },
+        {
+         "type": "string",
+         "pattern": "^(IR\\|[^|]+\\|[^|]+|CS|FX\\|[A-Z]{3})$"
+        },
+        {
+         "type": "number"
+        }
+       ],
+       "minItems": 3,
+       "maxItems": 3
       }
      }
     }
@@ -689,6 +715,9 @@
         },
         "position_id": {
          "type": "string"
+        },
+        "fx_cross": {
+         "type": "number"
         }
        }
       }

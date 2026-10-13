@@ -57,7 +57,7 @@ ref_book ─┬─< pos_snapshot >─── ref_instrument ──< ref_cashflow
                                            └──< md_bond_quote (через инструмент), md_cds_quote
 ref_curve ──< md_curve_point     md_fx     md_fixing     ref_calendar
 
-calc_run ──< position ──< position_risk / position_fx / position_pnl / scenario_result
+calc_run ──< position ──< position_risk / position_fx / position_gamma / position_pnl / scenario_result
          ──< funding_deal ──< funding_pnl
          ──< run_book / run_issuer / run_curve / mkt_*        (снимок статики и рынка, на котором считали)
 scenario_def ──< scenario_result        desk_history        data_load        scenario_job
@@ -99,6 +99,7 @@ scenario_def ──< scenario_result        desk_history        data_load       
 | Позиция с оценкой | `position`: MV, доходность, спред, дюрации, DV01, CS01, JTD | все экраны |
 | Key-rate DV01 | `position_risk`: кривая × 11 бакетов | теплокарты, лестницы, сценарии, explain по ставкам |
 | FX-дельта | `position_fx` | ОВП, FX-сценарии |
+| Вторые производные: гамма, выпуклость, кросс-гамма | `position_gamma` — разреженная матрица по факторам `IR\|кривая\|бакет`, `CS`, `FX\|валюта` | второй порядок в сценариях («Выпуклость», «Кросс FX»), ранжирование исторических окон, колонки гамм |
 | PnL explain | `position_pnl`: carry, rolldown, rates, spread, fx, convexity, new trades, official | вкладка PnL, Scenario Lab → explain |
 | Фондирование | `funding_deal`, `funding_pnl` | вкладка «Фондирование», ОВП |
 | Полная переоценка сценариев | `scenario_result`, `scenario_funding_result` | вкладка «Сценарии», Scenario Lab |
@@ -194,7 +195,7 @@ scenario_def ──< scenario_result        desk_history        data_load       
 | **Риски по кривым**: теплокарта, лестница, кривая сегодня/вчера | `position_risk` | `md_curve_point` → пилларсы и изменения |
 | **Экспозиции**: эмитент, сектор, рейтинг, валюта, класс; концентрации; ОВП | `position`, `position_fx` | `ref_issuer`, `ref_issuer_rating` (рейтинг на дату), `fund_snapshot` |
 | **Фондирование**: лестница, стоимость против бенчмарка, разрывы | `funding_deal`, `funding_pnl` | `md_fixing` (бенчмарки RUONIA, SOFR, RUSFAR CNY, €STR) |
-| **Сценарии** | `position_risk`, CS01, FX-дельта, `scenario_result` | `scenario_def` (пресеты и исторические) |
+| **Сценарии** | `position_risk`, CS01, FX-дельта, `position_gamma` / `convexity` (второй порядок), `scenario_result` | `scenario_def` (пресеты и исторические) |
 | **PnL explain** | `position_pnl`, `funding_pnl` | `pnl_official`: если расчётный сервис не передал `official`, он берётся отсюда при публикации прогона (по `position_id`); `md_*` — сдвиги для матрицы rates explain |
 | **Pivot Studio**: любые разрезы и меры | всё из прогона | справочники как измерения |
 | **Scenario Lab**: конструктор, история explain | чувствительности, `desk_history` | `/market/curves` (уровни), исторические сценарии |

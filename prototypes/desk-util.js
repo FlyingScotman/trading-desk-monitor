@@ -88,6 +88,13 @@
   //    DV01-взвешенный сдвиг кривой (доходность = ставка + спред, поэтому кросс ставки×спред учтён);
   //  - есть FX-элементы → по ним; иначе точный кросс первых порядков: чувствительность к иностранной кривой
   //    и спреду валютной бумаги выражена в рублях по текущему курсу, при шоке курса она масштабируется на (1 + Δfx).
+  // Эффективный сдвиг ставок позиции, б.п.: среднее по key-rate с весами |DV01| (ограничено фактическими сдвигами;
+  // у позиций с ногами разного знака — XCCY, FX-форварды — rates/DV01 не имеет смысла).
+  function effRateMove(p, curveShock) {
+    let w = 0, x = 0;
+    Object.keys(p.risk || {}).forEach(c => { if (curveShock[c]) p.risk[c].forEach((dv, i) => { w += Math.abs(dv); x += Math.abs(dv) * curveShock[c][i]; }); });
+    return w ? x / w : 0;
+  }
   function secondOrder(p, curveShock, ds, fxShock, ratesByCurve, spreadPnl) {
     const g = gammaOf(p);
     const d = f => f.t === 'IR' ? ((curveShock[f.c] && f.i != null) ? curveShock[f.c][f.i] : 0) : f.t === 'CS' ? ds : (fxShock[f.c] || 0);
@@ -101,10 +108,9 @@
     });
     if (g && g.ir) src = 'gamma';
     else if (p.convexity && p.mvRub) {
-      const rates = Object.values(ratesByCurve).reduce((a, b) => a + b, 0);
-      const dy = p.dv01 ? rates / p.dv01 : 0;
+      const dy = effRateMove(p, curveShock);
       const dsEff = p.cs01 ? ds : 0;
-      conv = 0.5 * p.mvRub * p.convexity * Math.pow((dy + dsEff) * 1e-4, 2);
+      conv = 0.5 * p.mvRub * p.convexity * Math.pow((dy + dsEff) * 1e-4, 2);   // Δy — DV01-взвешенный сдвиг кривой
       src = 'convexity';
       if (p.ccy !== 'RUB') convFx = conv * (fxShock[p.ccy] || 0) / 100;
     }
@@ -117,8 +123,7 @@
     // (член 3-го порядка Γ·Δr²·Δfx, точный для пересчёта в рубли; включаем в fxCross).
     cross += convFx;
     // эффективный сдвиг доходности позиции, б.п. — для оценки, в пределах ли шок области точности разложения
-    const ratesTot = Object.values(ratesByCurve).reduce((a, b) => a + b, 0);
-    const dyEff = (p.dv01 ? ratesTot / p.dv01 : 0) + (p.cs01 ? ds : 0);
+    const dyEff = effRateMove(p, curveShock) + (p.cs01 ? ds : 0);
     return { convexity: conv, fxCross: cross, src, dyEff };
   }
 
