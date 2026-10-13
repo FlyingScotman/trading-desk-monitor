@@ -19,9 +19,14 @@ _cache, _cache_lock = {}, threading.Lock()  # (run_id, версия сценар
 def _desk_json(con, run):
     # прогон неизменяем, но к нему можно приложить сценарии, пересобрать исторические и догрузить котировки облигаций
     # (quote в позициях) — учитываем их в ключе
+    # (1.3) — официальный PnL на T+1 (official_at), сценарии кэрри и график заседаний ЦБ
     ver = con.execute("SELECT (SELECT COUNT(*) FROM scenario_result WHERE run_id=?) || ':' ||"
                       " (SELECT COALESCE(MAX(updated_at), '') FROM scenario_def) || ':' ||"
-                      " (SELECT COALESCE(MAX(updated_at), '') FROM md_bond_quote WHERE date <= ?)", (run["run_id"], run["as_of"])).fetchone()[0]
+                      " (SELECT COALESCE(MAX(updated_at), '') FROM md_bond_quote WHERE date <= ?) || ':' ||"
+                      " (SELECT COALESCE(official_at, '') FROM calc_run WHERE run_id=?) || ':' ||"
+                      " (SELECT COALESCE(MAX(updated_at), '') FROM carry_scenario_def) || ':' ||"
+                      " (SELECT COALESCE(MAX(updated_at), '') FROM ref_cbr_meeting)",
+                      (run["run_id"], run["as_of"], run["run_id"])).fetchone()[0]
     rid = (run["run_id"], ver)
     with _cache_lock:
         if rid in _cache:
@@ -117,7 +122,7 @@ def make_handler(db_path, static_dir):
                         return self._json({"error": "not found"}, 404)
                     log = con.execute("SELECT ts, level, message FROM calc_run_log WHERE run_id=? ORDER BY rowid", (rid,)).fetchall()
                     cnt = {t: con.execute(f"SELECT COUNT(*) FROM {t} WHERE run_id=?", (rid,)).fetchone()[0]
-                           for t in ("position", "position_risk", "position_pnl", "funding_deal", "scenario_result")}
+                           for t in ("position", "position_risk", "position_pnl", "funding_deal", "funding_rule", "run_ocp_transfer", "scenario_result")}
                     return self._json({"run": dict(run), "counts": cnt, "log": [dict(r) for r in log]})
                 if route == "desk":
                     run = resolve_run(con, q.get("as_of"), _int(q.get("run_id")))

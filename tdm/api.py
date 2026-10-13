@@ -79,6 +79,21 @@ def handle(con, route, q):
         cf = _rows(con, "SELECT date, type, rate, amount FROM ref_cashflow WHERE instrument_id=? ORDER BY date", (iid,))
         last = con.execute("SELECT * FROM md_bond_quote WHERE instrument_id=? ORDER BY date DESC LIMIT 1", (iid,)).fetchone()
         return {"instrument": dict(r), "cashflows": cf, "last_quote": dict(last) if last else None}
+    if route == "funding-rules":   # 1.3: справочник ставок фондирования ('' в ключе = «любое значение»)
+        out = _rows(con, "SELECT * FROM ref_funding_rate ORDER BY book_type, desk, book_id, entity, instrument_id, ccy")
+        for x in out:
+            x.update({k: None for k in ("book_type", "desk", "book_id", "entity", "instrument_id") if x[k] == ""})
+        return {"rules": out}
+    if route == "cbr-meetings":    # 1.3: заседания ЦБ; effective — дата действия новой КС
+        f = _d(q, "from")
+        return {"meetings": [m for m in M.cbr_meetings(con) if not f or m["date"] >= f]}
+    if route == "carry-scenarios":
+        out = []
+        for r in con.execute("SELECT * FROM carry_scenario_def ORDER BY ord, scenario_id"):
+            x = dict(r)
+            x["definition"] = json.loads(x.pop("definition_json"))
+            out.append(x)
+        return {"scenarios": out}
     if route == "otc-deals":
         sql, args, w = "SELECT * FROM ref_otc_deal", [], []
         if _d(q, "as_of"):
@@ -112,6 +127,12 @@ def handle(con, route, q):
         if q.get("book"):
             sql += " AND book_id=?"; args.append(q["book"])
         return {"as_of": d, "funding": _rows(con, sql + " ORDER BY book_id, maturity", args)}
+    if route == "cash-balances":   # 1.3: остатки ДС книг деривативов
+        d = _latest(con, "cash_snapshot", "as_of", q)
+        sql, args = "SELECT * FROM cash_snapshot WHERE as_of=?", [d]
+        if q.get("book"):
+            sql += " AND book_id=?"; args.append(q["book"])
+        return {"as_of": d, "balances": _rows(con, sql + " ORDER BY book_id, ccy", args)}
     if route == "trades":
         d = _latest(con, "trade_log", "trade_date", q, key="date")
         return {"date": d, "trades": _rows(con, "SELECT * FROM trade_log WHERE trade_date=? ORDER BY trade_id", (d,))}
@@ -153,6 +174,15 @@ def handle(con, route, q):
         prev = M.prev_date(con, d, "md_fx") if d else None
         cur, pv = M.fx_on(con, d) if d else {}, M.fx_on(con, prev) if prev else {}
         return {"as_of": d, "prev": prev, "fx": {k: {"rate": v, "move_pct": (v / pv[k] - 1) * 100 if pv.get(k) else None} for k, v in cur.items()}}
+    if route == "market/fx-cbr":   # 1.3: курсы ЦБ по дате действия
+        if q.get("ccy"):
+            return {"ccy": q["ccy"], "series": _series(con, "md_fx_cbr", "ccy", q["ccy"], ["rate", "set_date"], q)}
+        d = _latest(con, "md_fx_cbr", "date", q)
+        if not d:
+            return {"as_of": None, "prev": None, "fx": {}}
+        prev = M.prev_business_day(con, d)
+        cur, nxt, mv = M.fx_cbr_on(con, d), M.fx_cbr_next(con, d), M.fx_cbr_move(con, d, prev)
+        return {"as_of": d, "prev": prev, "fx": {k: {"rate": v, "move_pct": mv.get(k), "next": nxt.get(k)} for k, v in cur.items()}}
     if route == "market/fixings":
         if q.get("index"):
             return {"index_name": q["index"], "series": _series(con, "md_fixing", "index_name", q["index"], ["value"], q)}
@@ -271,12 +301,15 @@ def bond_history(con, q):
 
 
 COVER = [(d.name, d.table, d.date_col) for d in DATASETS if d.date_col and d.name != "issuer_ratings"]
+NO_DAYS = {"md_fx_cbr"}   # ряд по дате действия (есть и выходные): дни покрытия не добавляет
 
 
 def coverage(con, date_from=None, date_to=None):
     """По каждому рабочему дню — сколько строк в каждом датированном наборе и есть ли EOD-прогон."""
     dates = set(M.market_dates(con, date_from, date_to))
-    for _, table, col in COVER:   # плюс даты, на которые есть хоть какие-то срезы
+    for name, table, col in COVER:   # плюс даты, на которые есть хоть какие-то срезы
+        if name in NO_DAYS:
+            continue
         sql, args = f"SELECT DISTINCT {col} FROM {table} WHERE 1=1", []
         if date_from:
             sql += f" AND {col} >= ?"; args.append(date_from)
