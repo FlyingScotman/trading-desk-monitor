@@ -9,6 +9,15 @@
  *  - fxDelta — позиция в единицах валюты (+ = длинная валюта);
  *  - funding.amount < 0 — привлечение, > 0 — размещение.
  *
+ * Модель организации (docs/ORG_CONVENTIONS.md):
+ *  - книги TRADING: каждая облигация фондируется ежедневно на чистую MV в своей валюте
+ *    (RUB — КС + спред, CNY — RUSFAR CNY + спред, USD/EUR/CHF — фикс. 5 %), процент платится в RUB;
+ *    вечером ОВП книги облигаций передаётся в книгу деривативов (FXB) сделкой T+1;
+ *  - книги DERIVS: фондирование по остаткам денежных средств в каждой валюте по O/N-ставке;
+ *  - книга HTM: контрактная ставка на чистую цену покупки, PnL — только начисление, вне DV01;
+ *  - два PnL: по рыночным курсам (флэш, основной) и по курсам ЦБ (как официальный, приходит на T+1);
+ *  - RUB-облигации: риск ставок на RUONIA; ОФЗ — плюс спред ОФЗ к RUONIA (ofzSpr01), корпораты — CS01 к RUONIA.
+ *
  * Форма window.DESK совпадает с тем, что отдаёт сервер (/desk-data.js) из базы:
  * см. docs/DATA_CONTRACT.md. Функции DESK.util — в desk-util.js.
  */
@@ -37,6 +46,7 @@
     'USD SOFR':    { name: 'USD SOFR',            ccy: 'USD', kind: 'swap',  pts: [4.05, 3.98, 3.90, 3.78, 3.62, 3.58, 3.62, 3.70, 3.82, 3.95, 4.02] },
     'CNY':         { name: 'CNY (RUSFAR CNY)',    ccy: 'CNY', kind: 'swap',  pts: [5.40, 5.30, 5.20, 5.05, 4.90, 4.85, 4.95, 5.10, 5.25, 5.35, 5.40] },
     'EUR ESTR':    { name: 'EUR €STR',            ccy: 'EUR', kind: 'swap',  pts: [2.15, 2.12, 2.08, 2.05, 2.10, 2.18, 2.32, 2.45, 2.60, 2.72, 2.78] },
+    'CHF SARON':   { name: 'CHF SARON',           ccy: 'CHF', kind: 'swap',  pts: [0.05, 0.06, 0.08, 0.10, 0.18, 0.25, 0.38, 0.48, 0.60, 0.68, 0.72] },
   };
   // изменения за день (б.п.) — для PnL explain
   const CURVE_MOVES = {
@@ -46,10 +56,21 @@
     'USD SOFR':   [0, -1, -1, -2, -3, -3, -3, -2, -2, -2, -2],
     'CNY':        [1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0],
     'EUR ESTR':   [0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 2],
+    'CHF SARON':  [0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1],
   };
-  const FX = { RUB: 1, USD: 81.45, EUR: 94.62, CNY: 11.38 };
-  const FX_MOVE_PCT = { RUB: 0, USD: 0.62, EUR: 0.21, CNY: 0.44 };
-  const INDICES = { 'КС': 14.50, 'RUONIA': 14.32, 'SOFR': 4.08, 'RUSFAR CNY': 5.45, '€STR': 2.15 };
+  // Курсы: FX — рыночные (внешние котировки на ~19:00), основной флэш-PnL;
+  // FX_CBR — курс ЦБ, действующий на дату среза (установлен накануне); официальный PnL считается по нему;
+  // FX_CBR_NEXT — курс ЦБ, установленный сегодня на завтра: по нему вечером передаётся ОВП книг облигаций.
+  const FX = { RUB: 1, USD: 81.45, EUR: 94.62, CNY: 11.38, CHF: 101.80 };
+  const FX_MOVE_PCT = { RUB: 0, USD: 0.62, EUR: 0.21, CNY: 0.44, CHF: 0.35 };
+  const FX_CBR = { RUB: 1, USD: 81.12, EUR: 94.38, CNY: 11.33, CHF: 101.42 };
+  const FX_CBR_MOVE_PCT = { RUB: 0, USD: 0.48, EUR: 0.30, CNY: 0.36, CHF: 0.24 };
+  const FX_CBR_NEXT = { RUB: 1, USD: 81.47, EUR: 94.60, CNY: 11.39, CHF: 101.76 };
+  const INDICES = { 'КС': 14.50, 'RUONIA': 14.32, 'RUSFAR O/N': 14.28, 'SOFR': 4.08, 'RUSFAR CNY': 5.45, '€STR': 2.15, 'SARON': 0.05 };
+  // начисление за день: календарные дни с прошлого рабочего дня (в понедельник — 3)
+  const PREV_DATE = '2026-10-12', ACCRUAL_DAYS = 1, NEXT_DATE = '2026-10-14';
+  // jump-to-default: recovery — параметр (по умолчанию 0)
+  const JTD_RECOVERY = 0;
 
   function curveRate(curve, t) {
     const pts = CURVES[curve].pts;
@@ -145,20 +166,26 @@
 
   // спред-шоки за день по эмитентам (б.п.), прочим — общий
   const SPREAD_MOVES = { _default: 2, 'Самолёт': 24, 'Сегежа': 38, 'ГТЛК': 6, 'Минфин РФ': 0, 'ДОМ.РФ': 3 };
+  const OFZ_SPREAD_MOVE = 2;   // изменение спреда ОФЗ к RUONIA за день, б.п.
 
   // ---------- книги ----------
+  // bookType — режим фондирования: TRADING (облигации, ежедневно на MV), HTM (контрактная ставка), DERIVS (остатки ДС).
+  // ocpTo — книга деривативов, в которую вечером передаётся ОВП книги облигаций.
+  const E1 = 'Головной банк', E2 = 'Дочерний банк';
   const BOOKS = {
-    OFZ:      { name: 'ОФЗ',               desk: 'Rates',  trader: 'А. Иванов' },
-    RATES:    { name: 'Свопы RUB',         desk: 'Rates',  trader: 'А. Иванов' },
-    CORP_RUB: { name: 'Корпы RUB',         desk: 'Credit', trader: 'Е. Петрова' },
-    CREDIT:   { name: 'CDS',               desk: 'Credit', trader: 'Е. Петрова' },
-    CORP_FX:  { name: 'Корпы валютные',    desk: 'FX Credit', trader: 'Д. Сидоров' },
-    SOV_FX:   { name: 'Суверен валютный',  desk: 'FX Credit', trader: 'Д. Сидоров' },
-    SECUR:    { name: 'Секьюритизация',    desk: 'Credit', trader: 'М. Козлова' },
-    FXB:      { name: 'FX',                desk: 'FX',     trader: 'И. Морозов' },
+    OFZ:      { name: 'ОФЗ',               desk: 'Rates',  trader: 'А. Иванов',  bookType: 'TRADING', entity: E1 },
+    RATES:    { name: 'Свопы RUB',         desk: 'Rates',  trader: 'А. Иванов',  bookType: 'DERIVS',  entity: E1 },
+    CORP_RUB: { name: 'Корпы RUB',         desk: 'Credit', trader: 'Е. Петрова', bookType: 'TRADING', entity: E1 },
+    CREDIT:   { name: 'CDS',               desk: 'Credit', trader: 'Е. Петрова', bookType: 'DERIVS',  entity: E1 },
+    CORP_FX:  { name: 'Корпы валютные',    desk: 'FX Credit', trader: 'Д. Сидоров', bookType: 'TRADING', entity: E1, ocpTo: 'FXB' },
+    SOV_FX:   { name: 'Суверен валютный',  desk: 'FX Credit', trader: 'Д. Сидоров', bookType: 'TRADING', entity: E1, ocpTo: 'FXB' },
+    SECUR:    { name: 'Секьюритизация',    desk: 'Credit', trader: 'М. Козлова', bookType: 'TRADING', entity: E2 },
+    FXB:      { name: 'FX',                desk: 'FX',     trader: 'И. Морозов', bookType: 'DERIVS',  entity: E1 },
+    HTM:      { name: 'Инвест. портфель (HTM)', desk: 'Rates', trader: 'А. Иванов', bookType: 'HTM', entity: E2 },
   };
 
-  const CCY_CURVE = { RUB: 'RUB OFZ', USD: 'USD SOFR', CNY: 'CNY', EUR: 'EUR ESTR' };
+  // кривая риска ставок по валюте: RUB — RUONIA (ОФЗ = RUONIA + спред ОФЗ, корпораты — CS01 к RUONIA)
+  const CCY_CURVE = { RUB: 'RUB RUONIA', USD: 'USD SOFR', CNY: 'CNY', EUR: 'EUR ESTR', CHF: 'CHF SARON' };
 
   const positions = [];
   let nextId = 1;
@@ -172,7 +199,7 @@
     const Ty = opts.offer && yearsTo(opts.offer) > 0 ? Math.max(0.05, yearsTo(opts.offer)) : T;
     const iss = ISSUERS[issuer];
     const isFloat = !!opts.index;
-    const curve = isFloat ? (opts.index === 'КС' ? 'RUB KEY' : 'RUB RUONIA') : (ccy === 'RUB' ? 'RUB OFZ' : CCY_CURVE[ccy]);
+    const curve = isFloat ? (opts.index === 'КС' ? 'RUB KEY' : 'RUB RUONIA') : CCY_CURVE[ccy];
     let spreadBp = opts.spread != null ? opts.spread : (iss.gov && ccy === 'RUB' ? 0 : RATING_SPREAD[iss.rating] * (iss.quasi ? 0.85 : 1));
     if (ccy !== 'RUB' && opts.spread == null) spreadBp = (iss.gov ? 180 : 260 + RATING_SPREAD[iss.rating] * 0.6);
     spreadBp += Math.round(rndn() * 12);
@@ -185,8 +212,10 @@
       mdur = rateDur;
       ytm = INDICES[opts.index] + dm / 100;
     } else {
-      const base = curveRate(curve, opts.wal || Ty);
+      // рублёвая доходность строится от КБД (спред к ОФЗ), а спред показывается к RUONIA — кривой риска
+      const base = curveRate(ccy === 'RUB' ? 'RUB OFZ' : curve, opts.wal || Ty);
       ytm = base + spreadBp / 100;
+      if (ccy === 'RUB') spreadBp = Math.round((ytm - curveRate(curve, opts.wal || Ty)) * 100 * 10) / 10;
       const effT = opts.wal ? opts.wal * 1.15 : Ty;
       const m = bondMath(effT, cpn, freq, ytm / 100);
       price = m.price; mdur = opts.wal ? m.mdur * 0.9 : m.mdur; convexity = m.convexity;
@@ -195,8 +224,11 @@
     const mv = notional * price / 100;
     const mvRub = mv * FX[ccy];
     const dv01Total = -mvRub * rateDur * 1e-4;
-    // ОФЗ-ПД сами задают кривую ОФЗ: спредового риска к ней нет
-    const cs01 = (iss.gov && ccy === 'RUB' && !isFloat) ? 0 : -mvRub * sprDur * 1e-4;
+    // ОФЗ: спред к RUONIA — отдельный фактор «спред ОФЗ» (одно число на бумагу), кредитного CS01 нет;
+    // корпораты RUB — CS01 к RUONIA; валютные бумаги — CS01 к кривой своей валюты
+    const ofz = iss.gov && ccy === 'RUB';
+    const spr01 = -mvRub * sprDur * 1e-4;
+    const cs01 = ofz ? 0 : spr01, ofzSpr01 = ofz ? spr01 : 0;
     const bucketT = isFloat ? (opts.index === 'КС' ? 1 / 12 : 0.25) : (opts.wal || Ty);
     const risk = {}; risk[curve] = allocate(bucketT, dv01Total, isFloat ? 0 : 0.2);
     const fxDelta = {}; if (ccy !== 'RUB') fxDelta[ccy] = mv;
@@ -208,10 +240,12 @@
       notional, price, mv, mvRub, ytm, spreadBp, mdur, sprDur, convexity,
       // НКД, % номинала; дата, к которой считается доходность (оферта; null = погашение); тип и кривая спреда
       accrued: +((isFloat ? INDICES[opts.index] + cpn : cpn) * accruedFrac(T, freq)).toFixed(4), couponFreq: freq,
-      yieldDate: Ty < T ? opts.offer : null, spreadType: isFloat ? 'DM' : ccy === 'RUB' ? 'G' : 'Z', spreadCurve: curve,
-      dv01: dv01Total, cs01, risk, fxDelta, jtd: mvRub * (1 - 0.35),
+      yieldDate: Ty < T ? opts.offer : null, spreadType: isFloat ? 'DM' : 'Z', spreadCurve: curve,
+      dv01: dv01Total, cs01, ofzSpr01, risk, fxDelta, jtd: mvRub * (1 - JTD_RECOVERY),
       wal: opts.wal || null, cpr: opts.cpr || null, newToday: !!opts.newToday,
-      gamma: gammaRows(risk, mvRub * convexity * 1e-8, cs01 !== 0, ccy !== 'RUB' ? ccy : null, cs01),
+      // фактор 'CS' — собственный спред бумаги: кредитный (CS01) или спред ОФЗ к RUONIA (ofzSpr01)
+      gamma: gammaRows(risk, mvRub * convexity * 1e-8, spr01 !== 0, ccy !== 'RUB' ? ccy : null, cs01),
+      entity: BOOKS[book].entity,
     });
   }
   // Вторые производные (формат position.gamma, docs/DATA_CONTRACT.md §4.3.3): [[f1, f2, d2PV], ...], f1 <= f2.
@@ -303,6 +337,7 @@
   cx('Газпром Капитал БО-003Р-02-CNY', 'Газпром', 'CNY', '2029-02-07', 6.95, 4, 250 * mm);
   cx('Роснефть 002Р-14-CNY', 'Роснефть', 'CNY', '2030-05-17', 7.10, 4, 180 * mm);
   cx('Новатэк 001Р-03-CNY', 'Новатэк', 'CNY', '2028-08-01', 6.80, 4, 130 * mm);
+  cx('Газпром ЗО27-1-Ш', 'Газпром', 'CHF', '2027-06-15', 1.54, 1, 6 * mm);
   // Суверен валютный: ОФЗ в CNY и РФ ЗО
   const sx = (n, c, m, cpn, f, nt, o) => bond('SOV_FX', 'Суверен валютный', n, 'Минфин РФ', c, m, cpn, f, nt, o);
   sx('ОФЗ-CNY 2027', 'CNY', '2027-12-10', 6.00, 2, 350 * mm);
@@ -320,6 +355,16 @@
   sc('Сбер ИЦБ 2024-1', 'Сбербанк', '2049-08-28', 1.20, 12, 1.1 * bn, { index: 'КС', wal: 2.6, cpr: 15.2, spread: 150 });
   sc('Европлан Авто ABS 2025-1', 'Европлан', '2030-04-28', 15.60, 12, 0.55 * bn, { wal: 1.4, cpr: 22.0, spread: 230 });
   sc('ВТБ Лизинг Авто ABS 2026-1', 'ВТБ Лизинг', '2031-01-28', 15.10, 12, 0.48 * bn, { wal: 1.7, cpr: 20.0, spread: 215 });
+  // HTM: учёт по начислению. Рыночные атрибуты (цена, доходность) — для справки; рыночных рисков нет (вне DV01/CS01),
+  // фондирование — контрактная ставка, зафиксированная при покупке, на чистую цену покупки.
+  function htm(name, issuer, maturity, cpn, freq, notional, purchaseDate, purchasePrice, purchaseYield, contractRate, opts) {
+    bond('HTM', 'HTM', name, issuer, 'RUB', maturity, cpn, freq, notional, opts);
+    const p = positions[positions.length - 1];
+    Object.assign(p, { dv01: 0, cs01: 0, ofzSpr01: 0, risk: {}, gamma: [], convexity: 0, accrualOnly: true,
+      purchaseDate, purchasePrice, purchaseYield, contractRate });
+  }
+  htm('ОФЗ 26240', 'Минфин РФ', '2036-07-30', 7.00, 2, 3.0 * bn, '2024-03-12', 74.20, 12.10, 11.85, { isin: 'SU26240RMFS0' });
+  htm('РЖД 001Р-19R', 'РЖД', '2030-11-05', 8.10, 2, 1.2 * bn, '2023-11-20', 86.50, 11.70, 11.40);
 
   // ---------- IRS ----------
   function annuity(curve, T) { let a = 0; for (let t = 0.5; t <= T + 1e-9; t += 0.5) a += 0.5 * Math.pow(1 + curveRate(curve, t) / 100, -t); return a; }
@@ -404,7 +449,7 @@
       issuer: ref, issuerGroup: iss.group, sector: iss.sector, rating: iss.rating, ccy: 'RUB', maturity, tenorY: T,
       couponType: 'fix', coupon: sprBp / 100, index: null, side, notional, price: null,
       mv: mvRub, mvRub, ytm: null, spreadBp: mktSpr, mdur: null,
-      dv01: 0, cs01, risk: {}, fxDelta: {}, jtd: -s * notional * (1 - 0.35), counterparty: opts.cpty || 'Банк-контрагент А', newToday: !!opts.newToday,
+      dv01: 0, cs01, risk: {}, fxDelta: {}, jtd: -s * notional * (1 - JTD_RECOVERY), counterparty: opts.cpty || 'Банк-контрагент А', newToday: !!opts.newToday,
     });
   }
   cds('CREDIT', 'Минфин РФ', 5, 'BUY', 3.0 * bn, 95, { agedY: 0.7 });
@@ -442,119 +487,200 @@
   fx('FXB', 'CNYRUB', 'FWD 6M', 260 * mm, 11.70, '2027-04-13', { cpty: 'Банк-контрагент А' });
   fx('FXB', 'USDRUB', 'FWD 1M', -6 * mm, 81.90, '2026-11-13', { newToday: true });
 
-  // ---------- фондирование ----------
+  positions.forEach(p => { if (!p.entity) p.entity = BOOKS[p.book].entity; if (p.ofzSpr01 == null) p.ofzSpr01 = 0; });
+  const cleanMv = p => p.mv - p.notional * (p.accrued || 0) / 100;   // чистая MV в валюте бумаги
+
+  // ---------- ставки фондирования (справочник funding_rates, docs/DATA_REQUIREMENTS.md) ----------
+  // Правило подходит, если все заданные поля совпали; побеждает самое конкретное:
+  // бумага (16) > книга (8) > юрлицо (4) > деск (2) > режим книги (1). Ставка = индекс + спред или фикс.
+  const FUNDING_RULES = [
+    { bookType: 'TRADING', ccy: 'RUB', index: 'КС', spreadBp: 30, note: 'спред деска' },
+    { bookType: 'TRADING', ccy: 'CNY', index: 'RUSFAR CNY', spreadBp: 60, note: 'спред деска' },
+    { bookType: 'TRADING', ccy: 'USD', fixed: 5.00, note: 'hard ccy' },
+    { bookType: 'TRADING', ccy: 'EUR', fixed: 5.00, note: 'hard ccy' },
+    { bookType: 'TRADING', ccy: 'CHF', fixed: 5.00, note: 'hard ccy' },
+    { book: 'SECUR', ccy: 'RUB', index: 'КС', spreadBp: 50, note: 'особая ставка книги' },
+    { entity: E2, instrument: 'ИЦБ ДОМ.РФ 2Р-12R', ccy: 'RUB', index: 'КС', spreadBp: 20, note: 'особый спред юрлица по бумаге' },
+    { bookType: 'DERIVS', ccy: 'RUB', index: 'RUONIA', spreadBp: 0 },
+    { bookType: 'DERIVS', ccy: 'CNY', index: 'RUSFAR CNY', spreadBp: 0 },
+    { bookType: 'DERIVS', ccy: 'USD', index: 'SOFR', spreadBp: 0 },
+    { bookType: 'DERIVS', ccy: 'EUR', index: '€STR', spreadBp: 0 },
+    { bookType: 'DERIVS', ccy: 'CHF', index: 'SARON', spreadBp: 0 },
+  ];
+  function fundingRule(book, ccy, p) {
+    const b = BOOKS[book]; let best = null, bw = -1;
+    FUNDING_RULES.forEach(r => {
+      if (r.ccy && r.ccy !== ccy) return;
+      if (r.bookType && r.bookType !== b.bookType) return;
+      if (r.desk && r.desk !== b.desk) return;
+      if (r.book && r.book !== book) return;
+      if (r.entity && r.entity !== b.entity) return;
+      if (r.instrument && !(p && (p.isin === r.instrument || p.name === r.instrument))) return;
+      const w = (r.instrument ? 16 : 0) + (r.book ? 8 : 0) + (r.entity ? 4 : 0) + (r.desk ? 2 : 0) + (r.bookType ? 1 : 0);
+      if (w > bw) { best = r; bw = w; }
+    });
+    return best;
+  }
+  const pctTxt = x => x.toFixed(2) + '%';
+  const ruleExpr = r => r.fixed != null ? pctTxt(r.fixed) + ' фикс' : r.index + (r.spreadBp ? (r.spreadBp > 0 ? ' + ' : ' − ') + pctTxt(Math.abs(r.spreadBp) / 100) : '');
+  const ruleRate = r => r.fixed != null ? r.fixed : INDICES[r.index] + r.spreadBp / 100;
+  // базы начисления (предположение, docs/ORG_CONVENTIONS.md §1.6): процент по облигациям платится в RUB → 365;
+  // остатки ДС деривативов — по валюте
+  const DAY_BASIS = { RUB: 365, CNY: 365, USD: 360, EUR: 360, CHF: 360 };
+  // бенчмарк стоимости фондирования: облигации RUB — КС, CNY — RUSFAR CNY, hard ccy — нет (фикс. ставка); деривативы — O/N своей валюты (RUB — RUONIA)
+  const BENCH_POS = { RUB: 'КС', CNY: 'RUSFAR CNY' };
+
+  // ---------- передача ОВП книг облигаций в книгу деривативов (сделка вечером, T+1) ----------
+  // ОВП книги облигаций до передачи = Σ FX-дельт бумаг (грязная MV) − фондирование (чистая MV) = НКД + PnL дня в валюте.
+  // Передаётся округлённо (0.1 млн), поэтому в книге облигаций остаётся небольшой остаток.
+  const OCP_TRANSFERS = [];
+  Object.keys(BOOKS).filter(b => BOOKS[b].ocpTo).forEach(b => {
+    const ocp = {};
+    positions.filter(p => p.book === b && p.instrType === 'BOND').forEach(p => {
+      if (p.ccy === 'RUB') return;
+      ocp[p.ccy] = (ocp[p.ccy] || 0) + p.fxDelta[p.ccy] - cleanMv(p);
+    });
+    Object.keys(ocp).forEach(ccy => {
+      const amt = Math.round(ocp[ccy] / 1e5) * 1e5;
+      if (!amt) return;
+      const to = BOOKS[b].ocpTo, rate = FX_CBR_NEXT[ccy];
+      [[b, -amt, `Перенос ОВП → ${BOOKS[to].name} (${ccy})`, BOOKS[to].name], [to, amt, `Перенос ОВП ← ${BOOKS[b].name} (${ccy})`, BOOKS[b].name]].forEach(([bk, a, name, cp]) => {
+        const fxDelta = {}; fxDelta[ccy] = a;
+        positions.push({
+          id: nextId++, book: bk, assetClass: 'Перенос ОВП', segment: 'FX', instrType: 'FX', name,
+          issuer: null, issuerGroup: null, sector: null, rating: null, ccy, maturity: NEXT_DATE, tenorY: 1 / 365,
+          couponType: null, coupon: null, index: null, side: a > 0 ? 'BUY' : 'SELL', notional: a, price: rate,
+          mv: 0, mvRub: 0, ytm: null, spreadBp: null, mdur: null, dv01: 0, cs01: 0, ofzSpr01: 0, risk: {}, fxDelta, jtd: 0,
+          counterparty: 'Книга «' + cp + '» (внутр.)', newToday: true, ocpTransfer: true, entity: BOOKS[bk].entity,
+        });
+      });
+      OCP_TRANSFERS.push({ from: b, to: BOOKS[b].ocpTo, ccy, amount: amt, before: ocp[ccy], rate, valueDate: NEXT_DATE });
+    });
+  });
+
+  // ---------- фондирование: строки ----------
+  // kind: POS — облигация торговой книги (ежедневно на чистую MV, индекс + спред); HTM — контрактная ставка на цену покупки;
+  //       CASH — остаток ДС книги деривативов по O/N; REPO — сделка с деском РЕПО против книги (покрытие шорта).
+  // Процент по POS/HTM платится в RUB (курс ЦБ) и в ОВП не входит; тело фондирования POS — в валюте бумаги (входит в ОВП).
   const funding = [];
   let fid = 1;
-  function fund(book, type, ccy, amount, rateExpr, rate, start, maturity, cpty, collateral) {
-    const T = Math.max(1 / 365, yearsTo(maturity));
-    funding.push({ id: fid++, book, type, ccy, amount, amountRub: amount * FX[ccy], rateExpr, rate, start, maturity, tenorY: T, counterparty: cpty, collateral: collateral || null });
+  function fline(o) {
+    const T = Math.max(1 / 365, yearsTo(o.maturity));
+    const f = Object.assign({ id: fid++, start: AS_OF, tenorY: T, collateral: null, positionId: null }, o);
+    f.amountRub = f.amount * FX[f.ccy];
+    f.fxDelta = {}; if (f.ccy !== 'RUB' && f.kind !== 'HTM') f.fxDelta[f.ccy] = f.amount;
+    funding.push(f);
+    return f;
   }
-  fund('OFZ', 'РЕПО с ЦК', 'RUB', -14.5 * bn, 'RUSFAR O/N', 14.28, '2026-10-13', '2026-10-14', 'НКЦ', 'ОФЗ-ПД, ОФЗ-ПК');
-  fund('OFZ', 'РЕПО с ЦК', 'RUB', -6.0 * bn, 'RUSFAR 1W', 14.35, '2026-10-09', '2026-10-16', 'НКЦ', 'ОФЗ-ПД');
-  fund('OFZ', 'TSY FTP', 'RUB', -9.0 * bn, 'RUONIA + 0.20%', 14.52, '2026-07-01', '2027-01-15', 'Казначейство', null);
-  fund('OFZ', 'Обратное РЕПО', 'RUB', 2.1 * bn, 'RUSFAR O/N − 0.10%', 14.18, '2026-10-13', '2026-10-14', 'НКЦ', 'шорт ОФЗ 26246/26248');
-  fund('CORP_RUB', 'РЕПО с ЦК', 'RUB', -7.5 * bn, 'RUSFAR O/N + 0.05%', 14.33, '2026-10-13', '2026-10-14', 'НКЦ', 'корп. облигации');
-  fund('CORP_RUB', 'TSY FTP', 'RUB', -6.0 * bn, 'КС + 0.35%', 14.85, '2026-04-01', '2027-04-01', 'Казначейство', null);
-  fund('CORP_RUB', 'TSY FTP', 'RUB', -4.2 * bn, '15.10% фикс', 15.10, '2026-02-15', '2027-08-15', 'Казначейство', null);
-  fund('CORP_FX', 'TSY FTP', 'USD', -42 * mm, 'SOFR + 1.80%', 5.88, '2026-05-10', '2027-05-10', 'Казначейство', null);
-  fund('CORP_FX', 'РЕПО с ЦК', 'CNY', -720 * mm, 'RUSFAR CNY O/N', 5.42, '2026-10-13', '2026-10-14', 'НКЦ', 'облигации в CNY');
-  fund('CORP_FX', 'TSY FTP', 'CNY', -350 * mm, 'RUSFAR CNY + 0.60%', 6.05, '2026-08-01', '2027-02-01', 'Казначейство', null);
-  fund('CORP_FX', 'TSY FTP', 'EUR', -8 * mm, '€STR + 2.00%', 4.15, '2026-03-01', '2027-09-01', 'Казначейство', null);
-  fund('SOV_FX', 'РЕПО с ЦК', 'CNY', -600 * mm, 'RUSFAR CNY 1W', 5.48, '2026-10-08', '2026-10-15', 'НКЦ', 'ОФЗ-CNY');
-  fund('SOV_FX', 'TSY FTP', 'CNY', -170 * mm, 'RUSFAR CNY + 0.55%', 6.00, '2026-09-01', '2027-03-01', 'Казначейство', null);
-  fund('SOV_FX', 'TSY FTP', 'USD', -50 * mm, 'SOFR + 1.60%', 5.68, '2026-06-01', '2027-06-01', 'Казначейство', null);
-  fund('SOV_FX', 'TSY FTP', 'EUR', -6 * mm, '€STR + 1.90%', 4.05, '2026-03-01', '2027-03-01', 'Казначейство', null);
-  fund('SECUR', 'TSY FTP', 'RUB', -5.5 * bn, 'КС + 0.40%', 14.90, '2026-01-20', '2027-07-20', 'Казначейство', null);
-  fund('SECUR', 'РЕПО с ЦК', 'RUB', -2.4 * bn, 'RUSFAR 1M', 14.45, '2026-09-29', '2026-10-29', 'НКЦ', 'ИЦБ ДОМ.РФ');
-  fund('FXB', 'FX-своп', 'USD', 5 * mm, 'SOFR − 0.20%', 3.88, '2026-10-13', '2026-10-20', 'Мосбиржа', null);
-  fund('FXB', 'FX-своп', 'CNY', -120 * mm, 'RUSFAR CNY', 5.45, '2026-10-13', '2026-11-13', 'Мосбиржа', null);
-  fund('FXB', 'TSY FTP', 'RUB', 3.0 * bn, 'RUONIA − 0.15%', 14.17, '2026-10-01', '2026-11-01', 'Казначейство', null);
-  fund('RATES', 'Гарантийное обеспечение', 'RUB', 1.4 * bn, 'RUONIA − 0.50%', 13.82, '2026-01-01', '2026-10-14', 'НКЦ', 'ВМ/ГО по свопам');
-  fund('CREDIT', 'TSY FTP', 'RUB', 0.4 * bn, 'RUONIA', 14.32, '2026-10-01', '2026-10-14', 'Казначейство', null);
-  // финансирование валютной ликвидности — влияет на OCP
-  funding.forEach(f => { f.fxDelta = {}; if (f.ccy !== 'RUB') f.fxDelta[f.ccy] = f.amount; });
+  positions.forEach(p => {
+    const bt = BOOKS[p.book].bookType;
+    if (p.instrType !== 'BOND' || (bt !== 'TRADING' && bt !== 'HTM')) return;
+    if (bt === 'HTM') {
+      fline({ kind: 'HTM', type: 'FTP HTM (контракт)', book: p.book, positionId: p.id, ccy: p.ccy,
+        amount: -p.notional * p.purchasePrice / 100, index: null, spreadBp: 0, fixed: p.contractRate, rate: p.contractRate,
+        rateExpr: pctTxt(p.contractRate) + ' фикс до погашения', benchmark: 'КС', dayBasis: 365, start: p.purchaseDate,
+        maturity: p.maturity, counterparty: 'Казначейство' });
+      return;
+    }
+    const r = fundingRule(p.book, p.ccy, p);
+    fline({ kind: 'POS', type: 'FTP торговой книги', book: p.book, positionId: p.id, ccy: p.ccy, amount: -cleanMv(p),
+      index: r.fixed != null ? null : r.index, spreadBp: r.fixed != null ? 0 : r.spreadBp, fixed: r.fixed != null ? r.fixed : null,
+      rate: ruleRate(r), rateExpr: ruleExpr(r), ruleNote: r.note, benchmark: BENCH_POS[p.ccy] || null, dayBasis: 365, maturity: NEXT_DATE, counterparty: 'Казначейство' });
+  });
+  // остатки ДС книг деривативов (выгрузка из системы): купонные платежи по свопам, премии CDS, ближние ноги FX-свопов, расчёты по FX
+  [['RATES', 'RUB', -1.35 * bn], ['RATES', 'CNY', 42 * mm], ['CREDIT', 'RUB', 0.18 * bn],
+   ['FXB', 'RUB', 3.0 * bn], ['FXB', 'USD', 5 * mm], ['FXB', 'CNY', -120 * mm], ['FXB', 'EUR', -1.5 * mm]].forEach(([b, ccy, amt]) => {
+    const r = fundingRule(b, ccy);
+    fline({ kind: 'CASH', type: 'Остаток ДС', book: b, ccy, amount: amt, index: r.index, spreadBp: r.spreadBp, fixed: null,
+      rate: ruleRate(r), rateExpr: ruleExpr(r), benchmark: r.index, dayBasis: DAY_BASIS[ccy], maturity: NEXT_DATE, counterparty: 'Казначейство' });
+  });
+  // РЕПО с деском РЕПО против книги ОФЗ: покрытие шортов 26246/26248 (деньги размещены, бумаги получены).
+  // TBD: денежная нога фондируется по ставке РЕПО (кэрри сделки — ставка РЕПО) — принято здесь; альтернатива — по ставке книги.
+  fline({ kind: 'REPO', type: 'РЕПО (покрытие шорта)', book: 'OFZ', ccy: 'RUB', amount: 2.1 * bn, index: 'RUSFAR O/N', spreadBp: -10, fixed: null,
+    rate: INDICES['RUSFAR O/N'] - 0.10, rateExpr: 'RUSFAR O/N − 0.10%', benchmark: 'КС', dayBasis: 365, start: '2026-10-09', maturity: '2026-10-16',
+    counterparty: 'Деск РЕПО', collateral: 'ОФЗ 26246, ОФЗ 26248' });
+
+  // кэрри строки за день, RUB: тело × ставка × дни / база. POS/HTM — процент платится в RUB по курсу ЦБ.
+  funding.forEach(f => {
+    const conv = f.kind === 'CASH' || f.kind === 'REPO' ? FX[f.ccy] : FX_CBR[f.ccy];
+    f.pnl = { carry: f.amount * conv * f.rate / 100 * ACCRUAL_DAYS / f.dayBasis, fx: 0, fxCbr: 0, fxGross: 0, fxAllocated: 0, inPosition: !!f.positionId };
+    if (f.ccy !== 'RUB' && f.kind !== 'HTM') {
+      f.pnl.fxGross = f.amount * FX[f.ccy] * FX_MOVE_PCT[f.ccy] / 100 / (1 + FX_MOVE_PCT[f.ccy] / 100);
+      f.pnl.fxGrossCbr = f.amount * FX_CBR[f.ccy] * FX_CBR_MOVE_PCT[f.ccy] / 100 / (1 + FX_CBR_MOVE_PCT[f.ccy] / 100);
+      // переоценка тела фондирования бумаги — в PnL самой бумаги (fxFunding); остатки ДС — на книгу
+      if (f.positionId) f.pnl.fxAllocated = f.pnl.fxGross;
+      else { f.pnl.fx = f.pnl.fxGross; f.pnl.fxCbr = f.pnl.fxGrossCbr; }
+    }
+  });
+  const fundByPos = {}; funding.forEach(f => { if (f.positionId) fundByPos[f.positionId] = f; });
 
   // ---------- PnL за день и explain ----------
-
+  // Компоненты: carry (по доходности, валовый), rolldown, rates, spread (кредит и спред ОФЗ), fx (позиция + тело её фондирования),
+  // funding (процент по фондированию бумаги), convexity, newTrades, other.
+  // Два базиса FX: explained — по рыночным курсам (флэш), explainedCbr — по курсам ЦБ (как официальный PnL).
+  // official приходит на T+1 и сравнивается с explainedCbr: unexplained = official − explainedCbr;
+  // fxBasis = explainedCbr − explained — разница из-за источника курсов.
+  const D_ = ACCRUAL_DAYS;
+  const fxMove = (amt, c, cbr) => cbr ? amt * FX_CBR[c] * FX_CBR_MOVE_PCT[c] / 100 / (1 + FX_CBR_MOVE_PCT[c] / 100)
+                                      : amt * FX[c] * FX_MOVE_PCT[c] / 100 / (1 + FX_MOVE_PCT[c] / 100);
   positions.forEach(p => {
-    const e = { carry: 0, rolldown: 0, rates: 0, spread: 0, fx: 0, convexity: 0, newTrades: 0, other: 0 };
-    if (p.instrType === 'BOND') {
-      e.carry = p.mvRub * p.ytm / 100 / 365; // валовый купонный/доходностный кэрри; фондирование — отдельной строкой
+    const e = { carry: 0, rolldown: 0, rates: 0, spread: 0, fx: 0, funding: 0, convexity: 0, newTrades: 0, other: 0 };
+    let fxCbr = 0;
+    if (p.accrualOnly) {
+      // HTM: начисление по доходности покупки на балансовую (чистую) стоимость покупки, минус контрактное фондирование
+      e.carry = p.notional * p.purchasePrice / 100 * p.purchaseYield / 100 / 365 * D_;
+    } else if (p.instrType === 'BOND') {
+      e.carry = p.mvRub * p.ytm / 100 / 365 * D_; // валовый кэрри по доходности; фондирование — компонента funding
       e.rolldown = p.couponType === 'fix' ? Math.abs(p.dv01) * 0.02 * Math.sign(p.mvRub) : 0;
       const sm = SPREAD_MOVES[p.issuer] != null ? SPREAD_MOVES[p.issuer] : SPREAD_MOVES._default;
-      e.spread = p.cs01 * sm;
+      e.spread = p.cs01 * sm + p.ofzSpr01 * OFZ_SPREAD_MOVE;
       e.convexity = 0.5 * p.mvRub * (p.convexity || 0) * Math.pow(8e-4, 2);
     } else if (p.instrType === 'IRS') {
       const fl = p.index === 'КС' ? INDICES['КС'] : p.index === 'RUONIA' ? INDICES.RUONIA : INDICES['RUSFAR CNY'];
       const sgn = p.side === 'PAY' ? 1 : -1;
-      e.carry = sgn * p.notional * FX[p.ccy] * (fl - p.coupon) / 100 / 365;
+      e.carry = sgn * p.notional * FX[p.ccy] * (fl - p.coupon) / 100 / 365 * D_;
       e.rolldown = -Math.abs(p.dv01) * 0.015 * sgn;
     } else if (p.instrType === 'XCCY') {
-      e.carry = (p.side === 'RECFX' ? -1 : 1) * p.notional * FX[p.ccy] * 0.065 / 365;
+      e.carry = (p.side === 'RECFX' ? -1 : 1) * p.notional * FX[p.ccy] * 0.065 / 365 * D_;
     } else if (p.instrType === 'CDS') {
       const sgn = p.side === 'BUY' ? -1 : 1;
-      e.carry = sgn * p.notional * (p.coupon / 100) / 365;
+      e.carry = sgn * p.notional * (p.coupon / 100) / 365 * D_;
       const sm = SPREAD_MOVES[p.issuer] != null ? SPREAD_MOVES[p.issuer] : SPREAD_MOVES._default;
       e.spread = p.cs01 * sm;
-    } else if (p.instrType === 'FX') {
-      e.carry = 0;
     }
     Object.keys(p.risk).forEach(c => { p.risk[c].forEach((dv, i) => { e.rates += dv * CURVE_MOVES[c][i]; }); });
-    Object.keys(p.fxDelta).forEach(c => { e.fx += p.fxDelta[c] * FX[c] * FX_MOVE_PCT[c] / 100 / (1 + FX_MOVE_PCT[c] / 100); });
-    if (p.newToday) { e.newTrades = Math.abs(p.mvRub) * (0.0004 + rnd() * 0.0012) * (rnd() < 0.25 ? -1 : 1); }
+    // сделка передачи ОВП заключена вечером по курсу ЦБ на завтра — переоценки за день нет
+    if (!p.ocpTransfer) Object.keys(p.fxDelta).forEach(c => { e.fx += fxMove(p.fxDelta[c], c); fxCbr += fxMove(p.fxDelta[c], c, true); });
+    const fl = fundByPos[p.id];
+    const fxGross = e.fx, fxGrossCbr = fxCbr;
+    const fxFunding = fl ? fl.pnl.fxAllocated : 0, fxFundingCbr = fl && fl.pnl.fxGrossCbr ? fl.pnl.fxGrossCbr : 0;
+    if (fl) e.funding = fl.pnl.carry;
+    e.fx += fxFunding;
+    if (p.newToday && !p.ocpTransfer) { e.newTrades = Math.abs(p.mvRub) * (0.0004 + rnd() * 0.0012) * (rnd() < 0.25 ? -1 : 1); }
     const explained = Object.values(e).reduce((a, b) => a + b, 0);
-    let unexplained = rndn() * Math.max(40000, Math.abs(explained) * 0.04);
+    const fxBasis = (fxGrossCbr + fxFundingCbr) - (fxGross + fxFunding);
+    const explainedCbr = explained + fxBasis;
+    let unexplained = p.ocpTransfer ? 0 : rndn() * Math.max(40000, Math.abs(explained) * 0.04);
     let breakNote = null;
     if (p.name === 'Сегежа 003Р-02R') { unexplained = -4.6e6; breakNote = 'Расхождение котировки: фронт — оценочная цена, бэк — BVAL Мосбиржи'; }
     if (p.name === 'ИЦБ ДОМ.РФ 2Р-12R') { unexplained = 2.1e6; breakNote = 'Обновлён CPR (12.5% → 13.4%) в бэк-офисной модели, фронт не перезагрузил'; }
     if (p.name.startsWith('XCCY USD/RUB 3Y')) { unexplained = -1.35e6; breakNote = 'Фиксинг SOFR не загружен во фронт-систему'; }
     if (p.name === 'ОФЗ 26247') { unexplained = 0.85e6; breakNote = 'Сделка дня: цена сделки vs закрытие — разные время среза'; }
-    p.pnl = Object.assign({}, e, { explained, unexplained, official: explained + unexplained, breakNote });
-  });
-  // Валютное фондирование: FX-переоценка привлечения в валюте относится к тем позициям книги,
-  // которые оно фондирует (pro-rata по валютной дельте позиций противоположного знака).
-  // Так книга видит FX-риск нетто: облигация в CNY на CNY-РЕПО почти не даёт FX-PnL.
-  // Остаток (если в книге нечего фондировать в этой валюте) остаётся строкой фондирования книги.
-  function allocateFundingFx(shockFn, list) {
-    list = list || positions;
-    const toPos = {}, residualByBook = {}, byBook = {}, residualByDeal = {};
-    funding.forEach(f => {
-      if (f.ccy === 'RUB') return;
-      const x = shockFn(f.ccy, f.amount);
-      if (!x) return;
-      byBook[f.book] = (byBook[f.book] || 0) + x;
-      const sgn = -Math.sign(f.amount); // привлечение (−) фондирует длинные (+) позиции
-      const cands = list.filter(p => p.book === f.book && Math.sign(p.fxDelta[f.ccy] || 0) === sgn);
-      const w = cands.reduce((a, p) => a + Math.abs(p.fxDelta[f.ccy]), 0);
-      if (!w) { residualByBook[f.book] = (residualByBook[f.book] || 0) + x; residualByDeal[f.id] = x; return; }
-      cands.forEach(p => { toPos[p.id] = (toPos[p.id] || 0) + x * Math.abs(p.fxDelta[f.ccy]) / w; });
-    });
-    return { toPos, residualByBook, byBook, residualByDeal };
-  }
-  const dayFxShock = (ccy, amt) => amt * FX[ccy] * FX_MOVE_PCT[ccy] / 100 / (1 + FX_MOVE_PCT[ccy] / 100);
-  const dayAlloc = allocateFundingFx(dayFxShock);
-  positions.forEach(p => {
-    const ff = dayAlloc.toPos[p.id] || 0;
-    p.pnl.fxGross = p.pnl.fx; p.pnl.fxFunding = ff; p.pnl.fx += ff;
-    p.pnl.explained += ff; p.pnl.official += ff;
+    if (p.name === 'Газпром ЗО27-1-Д') { unexplained = 0.62e6; breakNote = 'Финансы: спред фондирования по бумаге (особая корректировка) — в нашем расчёте не учтён (TODO)'; }
+    p.pnl = Object.assign({}, e, { fxGross, fxFunding, fxGrossCbr, fxFundingCbr, fxCbr: fxGrossCbr + fxFundingCbr,
+      explained, explainedCbr, fxBasis, unexplained, official: explainedCbr + unexplained, breakNote });
   });
 
-  // стоимость фондирования (кэрри) — отдельной строкой по книге; FX — только нераспределённый остаток
-  const fundingPnl = { carry: 0, fx: 0 };
+  // фондирование книги, не привязанное к позициям (остатки ДС деривативов, РЕПО): кэрри и FX-переоценка остатков.
+  // Фондирование облигаций уже в PnL самих бумаг (компоненты funding и fx).
+  const fundingPnl = { carry: 0, fx: 0, fxCbr: 0 };
   const fundingPnlByBook = {};
-  Object.keys(BOOKS).forEach(b => { fundingPnlByBook[b] = { carry: 0, fx: dayAlloc.residualByBook[b] || 0, fxAllocated: 0 }; });
+  Object.keys(BOOKS).forEach(b => { fundingPnlByBook[b] = { carry: 0, fx: 0, fxCbr: 0, fxAllocated: 0, inPositions: 0 }; });
   funding.forEach(f => {
-    const c = f.amountRub * f.rate / 100 / 365;
-    const x = f.ccy !== 'RUB' ? dayFxShock(f.ccy, f.amount) : 0;
-    // fx — нераспределённый остаток (обычно 0), fxAllocated — ушло в позиции книги
-    const xr = dayAlloc.residualByDeal[f.id] || 0;
-    f.pnl = { carry: c, fx: xr, fxGross: x, fxAllocated: x - xr };
-    fundingPnl.carry += c;
-    fundingPnlByBook[f.book].carry += c;
-  });
-  Object.keys(BOOKS).forEach(b => {
-    fundingPnlByBook[b].fxAllocated = (dayAlloc.byBook[b] || 0) - fundingPnlByBook[b].fx;
-    fundingPnl.fx += fundingPnlByBook[b].fx;
+    const fb = fundingPnlByBook[f.book];
+    if (f.pnl.inPosition) { fb.inPositions += f.pnl.carry; fb.fxAllocated += f.pnl.fxAllocated; return; }
+    fb.carry += f.pnl.carry; fb.fx += f.pnl.fx; fb.fxCbr += f.pnl.fxCbr;
+    fundingPnl.carry += f.pnl.carry; fundingPnl.fx += f.pnl.fx; fundingPnl.fxCbr += f.pnl.fxCbr;
   });
 
   // ---------- история (22 раб. дня) ----------
@@ -564,7 +690,7 @@
     while (days.length < 22) { if (d.getDay() !== 0 && d.getDay() !== 6) days.unshift(new Date(d)); d.setDate(d.getDate() - 1); }
     const dv0 = positions.reduce((s, p) => s + p.dv01, 0);
     const cs0 = positions.reduce((s, p) => s + p.cs01, 0);
-    const offPnl0 = positions.reduce((s, p) => s + p.pnl.official, 0) + fundingPnl.carry + fundingPnl.fx;
+    const offPnl0 = positions.reduce((s, p) => s + p.pnl.official, 0) + fundingPnl.carry + fundingPnl.fxCbr;
     const expPnl0 = positions.reduce((s, p) => s + p.pnl.explained, 0) + fundingPnl.carry + fundingPnl.fx;
     let cum = 0;
     days.forEach((dt, i) => {
@@ -692,21 +818,53 @@
   });
 
   // ---------- сценарии (пресеты) ----------
-  // shocks: curves (б.п. по бакетам или скаляр), fx (% к RUB), spreads (б.п. по рейтингу/_all), issuers
+  // curves — б.п. по бакетам или скаляр; fx — % к RUB (+ = ослабление рубля);
+  // ofzSpread — сдвиг спреда ОФЗ к RUONIA, б.п. (× ofzSpr01);
+  // spreads — кредитные спреды (× CS01), аддитивно: _all, rating {AA: 50}, sector {'Девелопмент': 300}, issuer {'Самолёт': 300};
+  //           _mult — множитель к текущему спреду. Гос не получает «35 % шока»: суверенные бумаги шокируются как все.
+  // Базис КС − RUONIA = разница шоков кривых 'RUB KEY' и 'RUB RUONIA'.
+  const ruo = (a, k) => a.map(x => x + k);
   const SCENARIOS = [
-    { id: 'par+100', name: 'Параллельный +100 б.п. (RUB)', curves: { 'RUB OFZ': 100, 'RUB RUONIA': 100, 'RUB KEY': 100 } },
-    { id: 'par-100', name: 'Параллельный −100 б.п. (RUB)', curves: { 'RUB OFZ': -100, 'RUB RUONIA': -100, 'RUB KEY': -100 } },
-    { id: 'keyhike', name: 'Повышение КС +200 б.п.', curves: { 'RUB OFZ': [200, 190, 170, 140, 100, 80, 60, 50, 40, 35, 30], 'RUB RUONIA': [200, 195, 180, 150, 105, 85, 65, 55, 45, 40, 35], 'RUB KEY': [200, 195, 180, 150, 105, 85, 65, 55, 45, 40, 35] }, spreads: { _all: 25 } },
-    { id: 'bullsteep', name: 'Bull steepener (смягчение ДКП)', curves: { 'RUB OFZ': [-150, -140, -120, -100, -70, -55, -40, -30, -20, -15, -10], 'RUB RUONIA': [-160, -150, -130, -105, -75, -60, -45, -35, -25, -20, -15], 'RUB KEY': [-160, -150, -130, -105, -75, -60, -45, -35, -25, -20, -15] } },
-    { id: 'bearflat', name: 'Bear flattener', curves: { 'RUB OFZ': [120, 110, 95, 80, 55, 40, 25, 15, 10, 5, 5], 'RUB RUONIA': [110, 100, 90, 75, 50, 35, 20, 12, 8, 5, 5], 'RUB KEY': [110, 100, 90, 75, 50, 35, 20, 12, 8, 5, 5] } },
-    { id: 'rubdep', name: 'Ослабление рубля −15%', fx: { USD: 15, CNY: 15, EUR: 15 }, curves: { 'RUB OFZ': 60, 'RUB RUONIA': 50, 'RUB KEY': 50 } },
-    { id: 'credit', name: 'Кредитный стресс: спреды ×2', spreads: { _mult: 2 }, curves: { 'RUB OFZ': 40 } },
-    { id: 'stress22', name: 'Стресс «2022»', curves: { 'RUB OFZ': [900, 850, 750, 600, 450, 380, 300, 250, 220, 200, 180], 'RUB RUONIA': [1000, 950, 800, 650, 480, 400, 320, 270, 240, 220, 200], 'RUB KEY': [1050, 1000, 850, 680, 500, 410, 330, 280, 250, 230, 210] }, fx: { USD: 35, CNY: 30, EUR: 32 }, spreads: { _mult: 2.5 } },
+    { id: 'par+100', name: 'Параллельный +100 б.п. (RUB)', curves: { 'RUB RUONIA': 100, 'RUB KEY': 100 } },
+    { id: 'par-100', name: 'Параллельный −100 б.п. (RUB)', curves: { 'RUB RUONIA': -100, 'RUB KEY': -100 } },
+    { id: 'keyhike', name: 'Повышение КС +200 б.п.', curves: { 'RUB RUONIA': [200, 195, 180, 150, 105, 85, 65, 55, 45, 40, 35], 'RUB KEY': [200, 195, 180, 150, 105, 85, 65, 55, 45, 40, 35] }, ofzSpread: 10, spreads: { _all: 25 } },
+    { id: 'bullsteep', name: 'Bull steepener (смягчение ДКП)', curves: { 'RUB RUONIA': [-160, -150, -130, -105, -75, -60, -45, -35, -25, -20, -15], 'RUB KEY': [-160, -150, -130, -105, -75, -60, -45, -35, -25, -20, -15] }, ofzSpread: 5 },
+    { id: 'bearflat', name: 'Bear flattener', curves: { 'RUB RUONIA': [110, 100, 90, 75, 50, 35, 20, 12, 8, 5, 5], 'RUB KEY': [110, 100, 90, 75, 50, 35, 20, 12, 8, 5, 5] }, ofzSpread: 5 },
+    { id: 'basis', name: 'Базис КС − RUONIA +50 б.п.', curves: { 'RUB KEY': [50, 50, 45, 40, 30, 25, 20, 15, 10, 10, 10] } },
+    { id: 'ofzwide', name: 'Спред ОФЗ к RUONIA +40 б.п.', ofzSpread: 40 },
+    { id: 'rubdep', name: 'Ослабление рубля −15%', fx: { USD: 15, CNY: 15, EUR: 15, CHF: 15 }, curves: { 'RUB RUONIA': 50, 'RUB KEY': 50 }, ofzSpread: 10 },
+    { id: 'credit', name: 'Кредитный стресс: спреды ×2', spreads: { _mult: 2 }, ofzSpread: 40 },
+    { id: 'sector', name: 'Стресс девелоперов и лизинга', spreads: { sector: { 'Девелопмент': 300, 'Лизинг': 150 }, rating: { 'A': 80, 'BB': 250 } } },
+    { id: 'stress22', name: 'Стресс «2022»', curves: { 'RUB RUONIA': [1000, 950, 800, 650, 480, 400, 320, 270, 240, 220, 200], 'RUB KEY': [1050, 1000, 850, 680, 500, 410, 330, 280, 250, 230, 210] }, ofzSpread: -20, fx: { USD: 35, CNY: 30, EUR: 32, CHF: 32 }, spreads: { _mult: 2.5 } },
   ];
 
+  // ---------- сценарии кэрри и фондирования (горизонт; позиции постоянны, погашения и оферты учтены) ----------
+  // Заседания ЦБ по ключевой ставке: решение в пятницу, новая КС действует со следующего рабочего дня.
+  // ОРИЕНТИРОВОЧНЫЙ график — заменить официальным (набор cbr_meetings).
+  const CBR_MEETINGS = ['2026-10-23', '2026-12-18', '2027-02-12', '2027-03-19', '2027-04-23', '2027-06-04', '2027-07-23', '2027-09-10', '2027-10-22', '2027-12-17']
+    .map(d => { const x = new Date(d + 'T00:00:00'); x.setDate(x.getDate() + 3); return { date: d, effective: isoDay(x) }; });
+  // ks.mode: flat — КС не меняется; implied — траектория по форвардам кривой RUB KEY; steps — шаги на заседаниях, б.п.
+  // on — сдвиг O/N-индексов (б.п., параллельно на весь горизонт): RUSFAR CNY, SOFR, €STR, SARON;
+  //      RUB-индексы (RUONIA, RUSFAR O/N) идут за КС с сегодняшним базисом, плюс сдвиг из on;
+  // fundSpread — изменение спреда фондирования торговых книг по валюте, б.п.; hardCcy — ставка hard ccy, %.
+  const CARRY_SCENARIOS = [
+    { id: 'flat', name: 'КС без изменений', ks: { mode: 'flat' } },
+    { id: 'implied', name: 'Рынок: КС по форвардам RUB KEY', ks: { mode: 'implied' } },
+    { id: 'cut100', name: 'Смягчение: −100 б.п. на каждом заседании', ks: { mode: 'steps', steps: [-100, -100, -100, -100, -100, -100, -100, -100, -100, -100] } },
+    { id: 'cut200', name: 'Быстрое смягчение: 3 × −200 б.п., затем пауза', ks: { mode: 'steps', steps: [-200, -200, -200] } },
+    { id: 'hike', name: 'Ужесточение: +200 б.п., затем пауза', ks: { mode: 'steps', steps: [200] } },
+    { id: 'fundwide', name: 'Спред фондирования +50 б.п.', ks: { mode: 'flat' }, fundSpread: { RUB: 50, CNY: 50 } },
+    { id: 'cny', name: 'Дефицит юаней: RUSFAR CNY +300 б.п.', ks: { mode: 'flat' }, on: { 'RUSFAR CNY': 300 } },
+    { id: 'hard7', name: 'Hard ccy фондирование 7 %', ks: { mode: 'flat' }, hardCcy: 7 },
+  ];
+  const CARRY_HORIZONS = [['1M', 1], ['3M', 3], ['6M', 6], ['1Y', 12]];
+
   window.DESK = {
-    asOf: AS_OF, reportingCcy: 'RUB',
-    BUCKETS, PILLARS, CURVES, CURVE_MOVES, FX, FX_MOVE_PCT, INDICES, ISSUERS, RATING_ORDER, BOOKS, SCENARIOS,
+    asOf: AS_OF, prevDate: PREV_DATE, accrualDays: ACCRUAL_DAYS, reportingCcy: 'RUB',
+    BUCKETS, PILLARS, CURVES, CURVE_MOVES, FX, FX_MOVE_PCT, FX_CBR, FX_CBR_MOVE_PCT, FX_CBR_NEXT, INDICES, ISSUERS, RATING_ORDER, BOOKS, SCENARIOS,
+    OFZ_SPREAD_MOVE, JTD_RECOVERY, FUNDING_RULES, OCP_TRANSFERS, CBR_MEETINGS, CARRY_SCENARIOS, CARRY_HORIZONS,
+    // официальный PnL за as_of приходит на T+1 (курсы ЦБ); пока его нет — official = null и сверка «ожидается»
+    official: { asOf: AS_OF, received: true, basis: 'CBR' },
     positions, funding, fundingPnl, fundingPnlByBook, history,
     source: { kind: 'demo', runId: null, runType: 'DEMO', publishedAt: null },
     // только демо: ряды за год (в режиме базы — /api/v1/bonds/history); функции не попадают в JSON
