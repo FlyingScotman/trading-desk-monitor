@@ -1,0 +1,891 @@
+{
+  "schema_version": "1.0",
+  "plan_revision": "0.2",
+  "as_of": "2026-10-15",
+  "baseline_commit": "a6ba30bf5573ada869a9594c3e69f73faf741ed2",
+  "state_authority": "backlog.json",
+  "status_values": [
+    "todo",
+    "in_progress",
+    "review",
+    "done",
+    "blocked"
+  ],
+  "tasks": [
+    {
+      "id": "CTRL-01",
+      "title": "Establish the canonical project control files",
+      "phase": 0,
+      "owner_role": "coordinator",
+      "status": "todo",
+      "depends_on": [],
+      "requirement_ids": [
+        "S12"
+      ],
+      "deliverables": [
+        "docs/program pack imported to the private repository",
+        "Dependency and requirement validator",
+        "Initial project issue index"
+      ],
+      "acceptance": [
+        "Pin baseline commit and plan revision; preserve existing repository layout",
+        "Validate task IDs dependencies requirement references and DAG",
+        "Set task state from actual evidence and link reviewed changes; no secrets or work data in project files"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "EXPORT-01",
+      "title": "Export the candidate library and existing collectors",
+      "phase": 0,
+      "owner_role": "existing_vps_operator",
+      "status": "todo",
+      "depends_on": [],
+      "requirement_ids": [],
+      "deliverables": [
+        "Sanitized source archive or private code repository",
+        "Export manifest with checksums dependencies ownership public fixtures and current schedules"
+      ],
+      "acceptance": [
+        "Do not modify or interrupt existing production workflows",
+        "Exclude Hermes memory histories sessions credentials private keys live databases and confidential inputs",
+        "Scan archive for secrets; list exclusions and unresolved provenance without printing secret values",
+        "Record versions and distinguish synthetic/public fixtures from any unexportable data"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "AUDIT-01",
+      "title": "Audit the financial library against all requirements",
+      "phase": 1,
+      "owner_role": "quant_auditor",
+      "status": "todo",
+      "depends_on": [
+        "CTRL-01",
+        "EXPORT-01"
+      ],
+      "requirement_ids": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C11",
+        "C12",
+        "C14",
+        "C15",
+        "C24",
+        "C25",
+        "C26"
+      ],
+      "deliverables": [
+        "docs/program/library_audit.md",
+        "Completed calculation capability matrix",
+        "Independent benchmark inventory and measured performance"
+      ],
+      "acceptance": [
+        "Inspect actual functions dependencies coupling and numerical conventions",
+        "Classify every calculation requirement verified partial missing unverified or owner-deferred with code/test references",
+        "Run existing tests in a controlled environment and distinguish pre-existing failures",
+        "Identify Windows risks before choosing a refactor; propose bounded extensions"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "DESIGN-01",
+      "title": "Freeze provider contracts and source ownership",
+      "phase": 1,
+      "owner_role": "data_architect",
+      "status": "todo",
+      "depends_on": [
+        "CTRL-01"
+      ],
+      "requirement_ids": [
+        "D01",
+        "D02",
+        "D03",
+        "D04",
+        "D05",
+        "D06",
+        "D07",
+        "D08",
+        "D09",
+        "D10",
+        "D11",
+        "D12",
+        "D13",
+        "D14",
+        "D15",
+        "D16",
+        "D17",
+        "D18",
+        "D19",
+        "D20",
+        "D21",
+        "D22",
+        "D23",
+        "S01",
+        "S11"
+      ],
+      "deliverables": [
+        "Versioned public snapshot schema and example",
+        "Private calculation context schema with synthetic example",
+        "Source Registry and API OpenAPI draft",
+        "Accepted VPS and credential plan"
+      ],
+      "acceptance": [
+        "Map all 23 datasets to external internal or merged ownership",
+        "Document source rights cuts conventions availability history and LLM permission; unselected sources remain explicit gaps",
+        "Define effective/known dates revisions quality states overrides and immutable snapshot hashes",
+        "Confirm actual VPS/domain budget/access and work connectivity test procedure"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "METHOD-01",
+      "title": "Resolve initial financial conventions and tolerances",
+      "phase": 1,
+      "owner_role": "desk_owner_with_quant_reviewer",
+      "status": "todo",
+      "depends_on": [
+        "AUDIT-01",
+        "DESIGN-01"
+      ],
+      "requirement_ids": [
+        "C10",
+        "C11",
+        "C12",
+        "C13",
+        "C14",
+        "C16",
+        "C17",
+        "C18",
+        "C19"
+      ],
+      "deliverables": [
+        "Accepted DEC01 DEC02 DEC04 DEC05 DEC07 DEC08 DEC09 and relevant other decisions",
+        "Golden synthetic two-day attribution example",
+        "Explicit release coverage"
+      ],
+      "acceptance": [
+        "Resolve current versus prior funding base and trade/cashflow timing",
+        "Specify official scope funding inclusion risk date bump semantics and tolerances",
+        "Do not treat open conventions or special-product proposals as accepted",
+        "Only unresolved out-of-wave choices may remain deferred"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "INFRA-01",
+      "title": "Provision the new VPS and HTTPS foundation",
+      "phase": 2,
+      "owner_role": "deployment_operator",
+      "status": "todo",
+      "depends_on": [
+        "DESIGN-01"
+      ],
+      "requirement_ids": [],
+      "deliverables": [
+        "Versioned host/service configuration",
+        "Fresh separate service identities and secure secret locations",
+        "HTTPS domain and private PostgreSQL instance"
+      ],
+      "acceptance": [
+        "Purchase only within explicit owner authorization",
+        "Pin supported OS/runtime versions restrict administration and expose only intended listeners",
+        "Verify corporate-proxy/work access without disabling TLS checks",
+        "Separate temporary provisioning privileges from persistent agent permissions"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "CORE-01",
+      "title": "Package the financial core for Linux and Windows",
+      "phase": 2,
+      "owner_role": "quant_implementer",
+      "status": "todo",
+      "depends_on": [
+        "AUDIT-01"
+      ],
+      "requirement_ids": [
+        "S08"
+      ],
+      "deliverables": [
+        "Pinned installable Python package and dependency manifests",
+        "Pure valuation interfaces and explicit market context",
+        "Linux and Windows installation/test evidence"
+      ],
+      "acceptance": [
+        "Remove or adapt network/filesystem/global-state coupling from the local pricing path",
+        "Preserve financially accepted behavior and provenance",
+        "Verify compiled dependencies and offline install on the actual supported Windows/Python target",
+        "Document any unsupported dependency before further integration"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "CORE-02",
+      "title": "Implement and verify the first bond and vanilla pricing capabilities",
+      "phase": 3,
+      "owner_role": "quant_implementer",
+      "status": "todo",
+      "depends_on": [
+        "CORE-01",
+        "METHOD-01"
+      ],
+      "requirement_ids": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C11",
+        "C12",
+        "C14"
+      ],
+      "deliverables": [
+        "R0/R1 bond and curve implementation",
+        "Independent financial test vectors",
+        "Versioned core release and supported product inventory"
+      ],
+      "acceptance": [
+        "Verify schedules accrued clean/dirty PV YTM/spread inversion and accepted curve repricing",
+        "Verify KRD CS01 OFZ spread JTD signs and accepted numerical conventions",
+        "Freeze calibrated spread correctly under shocks",
+        "Meet declared instrument-specific tolerances and publish measured runtime"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "DATA-01",
+      "title": "Implement deterministic market collectors and snapshots",
+      "phase": 3,
+      "owner_role": "data_implementer",
+      "status": "todo",
+      "depends_on": [
+        "DESIGN-01"
+      ],
+      "requirement_ids": [
+        "D09",
+        "D10",
+        "D11",
+        "D17",
+        "D18",
+        "D19",
+        "D20",
+        "D21",
+        "D22"
+      ],
+      "deliverables": [
+        "Quote curve FX fixing and calendar connectors",
+        "Raw archive normalized records snapshot publisher",
+        "Coverage/freshness tests"
+      ],
+      "acceptance": [
+        "One source adapter per licensed/approved provider with cut and units",
+        "Preserve raw swap inputs curve configuration and all rate date semantics",
+        "Retries quotas locks corrections and idempotency are tested",
+        "Never publish missing factors as zero or stale data as current",
+        "P0: validate required RUONIA observation coverage against an official calendar; do not silently carry stale values across missing business days; distinguish key-rate change history."
+      ],
+      "evidence": [
+        "../../../rub-fixed-income-core/implementation/risk-worker/FIXING_AUDIT.md — confirmed missing-weekday RUONIA carry and absence of known-at filtering."
+      ],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "DATA-02",
+      "title": "Implement versioned static collection and quarantine",
+      "phase": 3,
+      "owner_role": "data_implementer",
+      "status": "todo",
+      "depends_on": [
+        "DESIGN-01",
+        "EXPORT-01"
+      ],
+      "requirement_ids": [
+        "D03",
+        "D04",
+        "D06",
+        "D07",
+        "S03"
+      ],
+      "deliverables": [
+        "Audited migration of reusable existing collector code",
+        "Versioned issuer/instrument/cashflow store",
+        "Source evidence and static exception queue"
+      ],
+      "acceptance": [
+        "Reproduce current public collector behavior before replacing it",
+        "Validate face amounts currencies schedules coupons offers calls and amortization",
+        "Retain effective/known history and reject guessed missing economic terms",
+        "Routine updates work without an LLM; difficult records are quarantined"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "API-01",
+      "title": "Implement the public data API and desktop client contract",
+      "phase": 3,
+      "owner_role": "api_implementer",
+      "status": "todo",
+      "depends_on": [
+        "DESIGN-01"
+      ],
+      "requirement_ids": [
+        "S01",
+        "S11"
+      ],
+      "deliverables": [
+        "Versioned read API and OpenAPI",
+        "Immutable manifest/bulk endpoints",
+        "Typed client and bounded query tests"
+      ],
+      "acceptance": [
+        "Snapshot by ID remains unchanged after new ingestion",
+        "Validate checksums pagination errors request IDs and quality metadata",
+        "External endpoints accept no portfolio or private scenario payload",
+        "Provide readiness based on data availability not only process liveness"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "AUTH-01",
+      "title": "Implement identity authorization and audit",
+      "phase": 3,
+      "owner_role": "api_implementer",
+      "status": "todo",
+      "depends_on": [
+        "API-01"
+      ],
+      "requirement_ids": [
+        "S02"
+      ],
+      "deliverables": [
+        "Named user roles and scoped client tokens",
+        "Login and action audit records",
+        "Credential rotation/revocation procedure"
+      ],
+      "acceptance": [
+        "Use maintained authentication components and hashed credentials",
+        "Anonymous denied reader cannot mutate curator cannot change security",
+        "Credentials absent from URLs logs errors and fixtures",
+        "Audit successful/failed logins downloads revisions token administration and agent actions"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "DESK-01",
+      "title": "Build internal file adapters and broad snapshot downloader",
+      "phase": 3,
+      "owner_role": "desk_implementer",
+      "status": "todo",
+      "depends_on": [
+        "DESIGN-01",
+        "API-01"
+      ],
+      "requirement_ids": [
+        "D01",
+        "D02",
+        "D05",
+        "D08",
+        "D12",
+        "D13",
+        "D14",
+        "D15",
+        "D16",
+        "S07",
+        "S11"
+      ],
+      "deliverables": [
+        "Configurable input mappers and synthetic file pack",
+        "Public snapshot cache and integrity verifier",
+        "Private input manifest",
+        "Local setup/mapping workflow with preview and validation; no Python edits required for routine column mapping"
+      ],
+      "acceptance": [
+        "Map units keys quantity/face clean/dirty data and complete/empty snapshots",
+        "Preserve internal overrides and actual OTC/OCP inputs",
+        "Download broad universe only with scoped credentials and corporate trust",
+        "Offline replay produces no external requests; no work logs or file uploads exist"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "R0-01",
+      "title": "Prove one authenticated public snapshot through the local monitor",
+      "phase": 3,
+      "owner_role": "integration_implementer",
+      "status": "todo",
+      "depends_on": [
+        "INFRA-01",
+        "CORE-02",
+        "DATA-01",
+        "DATA-02",
+        "AUTH-01",
+        "DESK-01"
+      ],
+      "requirement_ids": [
+        "S01",
+        "S08",
+        "S11"
+      ],
+      "deliverables": [
+        "Deployed public bond/curve snapshot",
+        "Synthetic local tdm run and four-screen smoke evidence"
+      ],
+      "acceptance": [
+        "Trace a public instrument term and market value from source to local calculation and screen",
+        "Pin core contract and input snapshot IDs",
+        "No private or portfolio input is sent to the VPS",
+        "Demonstrate stale/missing-source and invalid-credential behavior"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "HIST-01",
+      "title": "Backfill and validate historical market and static data",
+      "phase": 4,
+      "owner_role": "data_implementer",
+      "status": "todo",
+      "depends_on": [
+        "DATA-01",
+        "DATA-02",
+        "R0-01"
+      ],
+      "requirement_ids": [
+        "S04",
+        "D04",
+        "D06",
+        "D07",
+        "D17",
+        "D18",
+        "D19",
+        "D20",
+        "D21",
+        "D22"
+      ],
+      "deliverables": [
+        "Resumable one-year backfill",
+        "Coverage matrix and gap ledger",
+        "Correction/as-known replay tests"
+      ],
+      "acceptance": [
+        "Use bounded chunks checkpoints quotas and repeatable loads",
+        "Retain real missing dates; do not fabricate historic terms or last prices",
+        "Validate expected business-day windows across required factors",
+        "Record longer stress history as optional separately entitled source",
+        "P0: select fixing revisions by explicit decision/known-at time as well as fixing date; exclude future-known observations and corrections; bind immutable fixing snapshots to calculations."
+      ],
+      "evidence": [
+        "../../../rub-fixed-income-core/implementation/risk-worker/FIXING_AUDIT.md — a future-ingested fixing is visible to the current historical query."
+      ],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "CORE-03",
+      "title": "Extend remaining required product and nonlinear risk coverage",
+      "phase": 4,
+      "owner_role": "quant_implementer",
+      "status": "todo",
+      "depends_on": [
+        "CORE-02"
+      ],
+      "requirement_ids": [
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C15",
+        "C24",
+        "C25",
+        "C26"
+      ],
+      "deliverables": [
+        "R2 product and gamma extensions",
+        "Explicit special-product decisions",
+        "Independent product/shock validation and performance report"
+      ],
+      "acceptance": [
+        "Implement only accepted gaps from the audit with full economics",
+        "Test float resets IRS/OIS FX/XCCY CDS and nonlinear risks per actual required inventory",
+        "No assumed sparse Hessian or universal shock accuracy guarantee",
+        "R3 inflation MBS and extension support is verified or explicitly owner-deferred",
+        "Unify fixing-aware floater APIs: distinguish known full coupon from benchmark fixing; combine realized and future accrual, freeze known fixings under curve shocks, validate contractual lag/day count/rounding and fail on missing history (C05; P1)."
+      ],
+      "evidence": [
+        "../../../rub-fixed-income-core/implementation/risk-worker/FIXING_AUDIT.md — 9 characterization cases; service already uses known RUONIA/key-rate history, low-level floater API lacks history input."
+      ],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "DESK-02",
+      "title": "Build local valuation run orchestration and lineage",
+      "phase": 4,
+      "owner_role": "desk_implementer",
+      "status": "todo",
+      "depends_on": [
+        "DESK-01",
+        "CORE-02",
+        "R0-01"
+      ],
+      "requirement_ids": [
+        "C16",
+        "D23",
+        "S09"
+      ],
+      "deliverables": [
+        "Deterministic local input bundle and calculation runner",
+        "Published contract 1.3 integration",
+        "Run validation and local diagnostics"
+      ],
+      "acceptance": [
+        "Pin current/prior positions public snapshot private terms rules model and scenario versions",
+        "Publish atomically with explicit stale/missing/estimated states",
+        "Retain closed/traded positions needed for PnL",
+        "Repeat identical frozen inputs deterministically; corrections create new valuation runs"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "DESK-03",
+      "title": "Implement organizational funding FX OCP HTM and official PnL",
+      "phase": 5,
+      "owner_role": "desk_implementer",
+      "status": "todo",
+      "depends_on": [
+        "DESK-02",
+        "METHOD-01"
+      ],
+      "requirement_ids": [
+        "C10",
+        "C13",
+        "C16",
+        "C17",
+        "C18",
+        "C19",
+        "D02",
+        "D13",
+        "D14",
+        "D15",
+        "D16",
+        "D23"
+      ],
+      "deliverables": [
+        "Funding and PnL calculations using accepted conventions",
+        "Actual OCP transfer importer and reconciliation",
+        "Versioned T+1 official attachment"
+      ],
+      "acceptance": [
+        "Friday-to-Monday rate-change test and distinct CBR announcement/effective dates pass",
+        "Funding of paper and book lines counted once with accepted prior/current bases",
+        "HTM risk excluded and DERIVS cash/REPO use accepted bases",
+        "Official book/position/component coverage and corrections stay explicit; OCP trades are never fabricated"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "SCEN-01",
+      "title": "Implement local exact scenarios and tested carry approximations",
+      "phase": 5,
+      "owner_role": "desk_implementer_with_quant_reviewer",
+      "status": "in_progress",
+      "depends_on": [
+        "DESK-03",
+        "CORE-02"
+      ],
+      "requirement_ids": [
+        "C20",
+        "C21",
+        "C22",
+        "C23"
+      ],
+      "deliverables": [
+        "Local scenario worker and versioned job contract",
+        "Complete preset/exact result handling",
+        "Historical window and carry parity tests"
+      ],
+      "acceptance": [
+        "Bind result to base run snapshot model definition hash and explicit supported coverage",
+        "Implement queued running done failed cancellation/timeouts locally",
+        "Missing result is not zero; replacing same-count results invalidates caches",
+        "Historical windows enforce coverage; carry is labelled frozen-portfolio approximation; broader R2 test coverage follows CORE-03"
+      ],
+      "evidence": [
+        "../../../rub-fixed-income-core/implementation/risk-worker/HANDOFF.md — local fixed-RUB worker and actual market-data-store response bridge; core main fdc7fd5198e6b0e1bf19b2a6e4f64cc29d86243e; 436 tests on fresh frozen Python 3.11; monitor wiring, queue/cancellation, funding/carry and Windows remain open."
+      ],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "UI-01",
+      "title": "Reconcile all four screens with the new backend",
+      "phase": 5,
+      "owner_role": "frontend_implementer",
+      "status": "todo",
+      "depends_on": [
+        "DESK-03",
+        "SCEN-01"
+      ],
+      "requirement_ids": [
+        "S10",
+        "C20",
+        "C23"
+      ],
+      "deliverables": [
+        "Cross-screen aggregation fixtures",
+        "Coverage/pending/stale/demo/source displays",
+        "Local exact-scenario UI integration"
+      ],
+      "acceptance": [
+        "Desk Monitor Widget Board Pivot Studio and Scenario Lab agree under matching filters",
+        "No double counting funding OCP or official totals",
+        "Pending official data is not shown as official zero and demo requires explicit selection",
+        "No remote fonts scripts analytics or error upload in work operational mode"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "OPS-01",
+      "title": "Deploy reproducibly and prove backup restore and rollback",
+      "phase": 5,
+      "owner_role": "deployment_operator",
+      "status": "todo",
+      "depends_on": [
+        "INFRA-01",
+        "R0-01"
+      ],
+      "requirement_ids": [
+        "S06"
+      ],
+      "deliverables": [
+        "Versioned deployed release and service/timer configuration",
+        "Off-host encrypted backups and restore evidence",
+        "Operations runbook"
+      ],
+      "acceptance": [
+        "Restore database raw archive snapshots configuration and credentials procedure onto clean environment",
+        "Record measured recovery point/time and rollback to previous code/data snapshot",
+        "Source/database permissions and secret redaction match design",
+        "Independent watchdog and deterministic recovery operate without Hermes",
+        "Read-only monitoring from another host detects total VPS/network loss"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "AGENT-01",
+      "title": "Install Hermes with enforced production boundaries",
+      "phase": 5,
+      "owner_role": "deployment_operator",
+      "status": "todo",
+      "depends_on": [
+        "INFRA-01",
+        "OPS-01"
+      ],
+      "requirement_ids": [
+        "S05"
+      ],
+      "deliverables": [
+        "Pinned Hermes runtime and dedicated identity",
+        "Sandbox and typed operations interface",
+        "Model budget credential and escalation configuration"
+      ],
+      "acceptance": [
+        "No root host socket administrator DB access or broad environment forwarding",
+        "Use official install source and verified persisted configuration",
+        "Agent cannot modify core production data/security directly",
+        "No credentials or budget configured means agent workflow disabled while collectors work"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "AGENT-02",
+      "title": "Enable bounded public-data exception workflows",
+      "phase": 6,
+      "owner_role": "agent_workflow_implementer",
+      "status": "todo",
+      "depends_on": [
+        "AGENT-01",
+        "DATA-01",
+        "DATA-02",
+        "OPS-01"
+      ],
+      "requirement_ids": [
+        "S03",
+        "S05"
+      ],
+      "deliverables": [
+        "Incident queue and typed static correction proposals",
+        "Approved deterministic recovery actions",
+        "Failure/cost/LLM-outage evidence"
+      ],
+      "acceptance": [
+        "Source evidence old/new values actor approval and verification retained",
+        "Routine retry limits and daily spend cap enforced",
+        "Ambiguous economic term changes require owner acceptance",
+        "Test prompt injection provider outage repeated failures and agent unavailable; collection remains independent"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "QA-01",
+      "title": "Produce and verify the Windows release candidate",
+      "phase": 6,
+      "owner_role": "independent_reviewer",
+      "status": "todo",
+      "depends_on": [
+        "UI-01",
+        "OPS-01",
+        "HIST-01"
+      ],
+      "requirement_ids": [
+        "S08",
+        "S09",
+        "S10",
+        "S11"
+      ],
+      "deliverables": [
+        "Offline Windows release artifact and manifest",
+        "Independent synthetic two-day/T+1 and network test report",
+        "Install/update/rollback guide"
+      ],
+      "acceptance": [
+        "Fresh supported Windows/Python environment installs without fetching dependencies at runtime",
+        "Local pricing and screens work without internet after cache download",
+        "Observe only authorized broad-data download and no private telemetry",
+        "All R1 requirements meet explicit tolerances; no real work data in evidence"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "PILOT-01",
+      "title": "Validate the selected book inside the organization",
+      "phase": 7,
+      "owner_role": "desk_owner_or_internal_operator",
+      "status": "todo",
+      "depends_on": [
+        "QA-01"
+      ],
+      "requirement_ids": [
+        "C16",
+        "C17",
+        "C19",
+        "S11"
+      ],
+      "deliverables": [
+        "Internal-only mapping configuration and acceptance report",
+        "Permitted non-sensitive acceptance status"
+      ],
+      "acceptance": [
+        "Real files terms outputs and comparisons remain inside perimeter",
+        "Compare supported outputs to trusted internal sources for five business days",
+        "Investigate every material difference internally and retain coverage gaps",
+        "Include configured missing/stale failure path and T+1 correction behavior"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "RELEASE-01",
+      "title": "Release R1 and hand over operations",
+      "phase": 8,
+      "owner_role": "coordinator_with_deployment_operator",
+      "status": "todo",
+      "depends_on": [
+        "PILOT-01",
+        "AGENT-02"
+      ],
+      "requirement_ids": [],
+      "deliverables": [
+        "Tagged code/core/schema/data/deployment manifest",
+        "Seven-day VPS soak evidence and operator handover",
+        "Accepted R1 limitations and recovery ownership"
+      ],
+      "acceptance": [
+        "Runtime agent permissions and costs are bounded",
+        "Restore rollback Windows install and data-freshness gates have evidence",
+        "Every R1 requirement verified or owner-accepted as explicitly deferred",
+        "No broad rollout beyond accepted instrument coverage"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
+      "id": "ACCEPT-01",
+      "title": "Close remaining contract 1.3 scope and traceability",
+      "phase": 9,
+      "owner_role": "coordinator_with_independent_reviewer",
+      "status": "todo",
+      "depends_on": [
+        "RELEASE-01",
+        "CORE-03",
+        "SCEN-01"
+      ],
+      "requirement_ids": [
+        "S12"
+      ],
+      "deliverables": [
+        "Final requirement-by-requirement acceptance matrix",
+        "Reviewed R2 release and accepted R3 decisions"
+      ],
+      "acceptance": [
+        "Every target requirement has evidence or a dated owner-approved deferral",
+        "Re-run relevant integration tests for R2 products without invalidating accepted R1 behavior",
+        "Close material baseline reconciliation items and update release manifest",
+        "Do not describe partial coverage as full completion"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    }
+  ]
+}

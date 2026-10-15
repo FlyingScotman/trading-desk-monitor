@@ -1,0 +1,23 @@
+{
+  "validated_at": "2026-10-14",
+  "plan_revision": "0.1",
+  "baseline_commit": "a6ba30bf5573ada869a9594c3e69f73faf741ed2",
+  "checks": {
+    "unique_task_ids": true,
+    "known_dependencies": true,
+    "acyclic_dependencies": true,
+    "known_requirement_references": true,
+    "known_matrix_task_references": true,
+    "dataset_count": 23,
+    "calculation_count": 26,
+    "system_count": 12
+  },
+  "task_count": 27,
+  "requirement_count": 61,
+  "ready_tasks": [
+    "CTRL-01",
+    "EXPORT-01"
+  ],
+  "errors": [],
+  "scope": "Planning files and cross references only. No financial library or repository runtime tests performed."
+}
