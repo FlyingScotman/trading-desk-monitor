@@ -24,7 +24,7 @@ Revision 1, 16 October 2026. This folder is the system-level architecture of the
 | **Desk backend** | `trading_desk_monitor` (this repo) | The heart of the system. Orchestrates runs, prices with core, applies desk conventions, stores results, serves the desk API | Documents and contract 1.3; `tdm/` is a prototype of the store |
 | **Frontend** | `trading_desk_monitor` (`prototypes/` today) | Screens for risk, PnL explain, scenarios, bonds | Visual mockups that define how the tool should look |
 | **Market data hub** | `market-data-server` (package `mdhub`) | Collects, validates, versions and serves public market and static data | Under active development; collection is mature, dispatch is minimal |
-| **Calculation core** | `rub-fixed-income-core` (package `rub_fixed_income`) | Pure pricing and risk library, with no I/O | v0.6.0: fixed-coupon RUB bonds only |
+| **Calculation core** | `rub-fixed-income-core` (package `rub_fixed_income`) | Pure pricing and risk library, with no I/O | v0.8.1: fixed-coupon and floating (RUONIA / key-rate) RUB bonds; FX futures; shared shocked OIS curves per job |
 | **PnL tool** | `pnl_tool` (local, no git) | Standalone accounting-PnL dashboard over the bank's TradeLevel report | Standalone by design; to be connected later as the official-PnL source |
 
 ## Where documents live
@@ -63,7 +63,7 @@ Every boundary between components is listed here with its owner and the version 
 | Market Snapshot Contract | hub → backend adapter | market-data-server | JSON Schema + golden fixtures | v1 | **To be created** ([02](02_MARKET_DATA_AND_CORE_CONTRACT.md)) |
 | Snapshot replication | hub VPS → hub inside | market-data-server | Snapshot list/manifest/bundle endpoints, sha256-verified | v1 | **To be created** ([06](06_DEPLOYMENT_AND_OPERATIONS.md) §1) |
 | Hub read API (`/v1/...`) | hub → backend (market proxy, research) | market-data-server | HTTP JSON | unversioned | Exists; raw rows, no response models |
-| Core domain model and API | core → backend | rub-fixed-income-core | Python package | 0.6.0 today | Needs domain types ([07](07_CORE_PRODUCT_COVERAGE.md) package 0) |
+| Core domain model and API | core → backend | rub-fixed-income-core | Python package; worker results as `rub-local-portfolio-risk-result.v1` (hash-verified JSON) | 0.8.1 today | Domain types still needed (core `docs/PRODUCT_ROADMAP.md` package 0) |
 | Run bundle and desk store contract | valuation engine → store | trading_desk_monitor | `contract/bundle.schema.json`, `docs/DATA_CONTRACT.md` | 1.3 | Exists |
 | Private input files (positions, trades, OTC, funding, official PnL) | bank systems → backend | trading_desk_monitor | `contract/csv/*.csv` | 1.3 | Exists as templates |
 | Imported risk for products core cannot price | bank systems → backend | trading_desk_monitor | contract 1.3 CSV / bundle | 1.3 | Interim path ([ADR-001](adr/ADR-001-hosting-topology.md), [07](07_CORE_PRODUCT_COVERAGE.md)) |

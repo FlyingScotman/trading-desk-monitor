@@ -1,6 +1,6 @@
 # 07 Core product coverage: development plan for rub-fixed-income-core
 
-> **Dispatched 16 October 2026.** The maintained copy is `rub-fixed-income-core/docs/PRODUCT_ROADMAP.md`. This file is a frozen snapshot; update the core copy instead.
+> **Dispatched 16 October 2026.** The maintained copy is `rub-fixed-income-core/docs/PRODUCT_ROADMAP.md`. This file is a frozen snapshot of the 0.6.0 baseline; update the core copy instead. Since then, core 0.7.0–0.8.1 delivered shared shocked curves per job, RUONIA / key-rate floaters and FX futures; the core copy has the current status table.
 
 **This is a dispatchable work plan.** It is self-contained so it can be copied into the `rub-fixed-income-core` repository (for example as `docs/PRODUCT_ROADMAP.md`) and handed to the core development project. It is written against core v0.6.0 (HEAD `454a78c`, 16 October 2026).
 

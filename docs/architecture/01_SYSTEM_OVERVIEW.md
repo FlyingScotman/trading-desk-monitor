@@ -72,7 +72,7 @@ Key structural decisions:
 
 ## 3 Hybrid valuation
 
-Core prices fixed-coupon RUB bonds today. The book will also contain floaters, swaps, FX, XCCY, CDS and possibly linkers ([07](07_CORE_PRODUCT_COVERAGE.md)). The backend therefore runs a **hybrid valuation**:
+Core 0.8.1 prices fixed-coupon RUB bonds, RUONIA / key-rate floaters (single-curve, without caps or floors) and FX futures. The book holds all products ([ROADMAP](ROADMAP.md) Q6): swaps, FX forwards, XCCY, CDS, linkers and more. The core development plan is `rub-fixed-income-core/docs/PRODUCT_ROADMAP.md`. The backend therefore runs a **hybrid valuation**:
 
 | Product state | Source of PV and risk | Shown as |
 |---|---|---|
@@ -130,7 +130,13 @@ Official PnL arrives the next day from the bank (via pnl_tool's reader later). I
 |---|---|---|
 | Hub collection | Mature: hundreds of tests (451 at `74ed84f`; growing); raw-first, fail-closed, never forward-fills | Build dispatch on top; do not redesign collection |
 | Hub dispatch | `/v1` raw-row JSON and a TDM CSV export only. No snapshot IDs, no response models, no as-known reads for static data | [02](02_MARKET_DATA_AND_CORE_CONTRACT.md) work items |
-| Core | Clean pure kernel for fixed RUB bonds and their risk. No domain snapshot or instrument model, no holiday data, no floaters or other products | [07](07_CORE_PRODUCT_COVERAGE.md) |
+| Core (0.8.1) | Clean pure kernel:
+- fixed and floating RUB bonds: RUONIA / key-rate, point-in-time fixings, single curve, no caps/floors;
+- FX futures;
+- shared shocked OIS curves within a job;
+- a versioned, hash-verified worker result contract.
+
+Still missing: a domain snapshot / instrument model, holiday data, IRS on positions, FX forwards, XCCY, CDS, linkers | Core `docs/PRODUCT_ROADMAP.md` (from [07](07_CORE_PRODUCT_COVERAGE.md)) |
 | Core ↔ hub | **No dependency.** Core's only bridge (`public_schedule.py`) targets the retired market-data-store | Replace with the adapter in the backend ([ADR-003](adr/ADR-003-adapter-in-backend.md)) |
 | Backend | Contracts and conventions documented (contract 1.3). `tdm/` is a prototype store and read API with no calculation engine | [04](04_BACKEND.md) |
 | Frontend | Mockups that define the screens; the calculations inside them are illustrative | [05](05_FRONTEND_INTEGRATION.md) |

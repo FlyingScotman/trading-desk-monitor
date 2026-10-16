@@ -126,14 +126,16 @@ Q1 is **deferred** by the owner ([ROADMAP](ROADMAP.md) §3). Until it is decided
 
 | Product | Today | Path to `computed` |
 |---|---|---|
-| Fixed-coupon RUB bonds (bullet, amortizing, puts) | Core (with package 0 fixes) | Package 0 |
-| RUONIA / key-rate floaters, OFZ-PK | Imported | Package 1 |
+| Fixed-coupon RUB bonds (bullet, amortizing, puts) | **Core 0.8.1** (package 0 still needed: calendars, cashflow split, domain types) | Package 0 |
+| RUONIA / key-rate floaters, OFZ-PK, without caps or floors | **Core 0.8.0+** (`floating`): point-in-time fixings, single curve with the spread as a discount margin | Remaining package 1: separate projection and discount curves; MOEX coupon reproduction tests |
+| Floaters with caps/floors, payment-lag shifts, in-arrears key-rate fixings | Imported | Package 1 (remaining) |
 | IRS (RUONIA OIS, key-rate swaps) | Imported | Package 2 |
 | Non-RUB bonds, FX delta | Imported | Package 3 |
 | FX spot/forwards/swaps | Imported | Package 4 |
-| Futures, REPO, XCCY, CDS, linkers, callables/perpetuals | Imported | Packages 5–9 |
+| FX futures (FORTS) | **Core 0.8.1** (`fx_futures`): covered parity with a frozen calibrated basis, both curves, basis01, FX delta, Hessian | Package 5 (FX part) |
+| OFZ / RUONIA / key-rate futures, REPO, XCCY, CDS, linkers, callables/perpetuals | Imported | Packages 5–9 |
 
-Packages are defined in [07](07_CORE_PRODUCT_COVERAGE.md). Imported records use contract 1.3 (`DATA_CONTRACT.md` position, risk and gamma sections). While a product is migrating, run both paths and publish the difference.
+Packages are defined in `rub-fixed-income-core/docs/PRODUCT_ROADMAP.md` (from [07](07_CORE_PRODUCT_COVERAGE.md)). Core's worker returns results in the versioned, hash-verified `rub-local-portfolio-risk-result.v1` format (0.7.0). The backend stores and verifies these rather than inventing its own result shape for core output. Imported records use contract 1.3 (`DATA_CONTRACT.md` position, risk and gamma sections). While a product is migrating, run both paths and publish the difference.
 
 ## 8 Reuse from the `tdm` prototype
 

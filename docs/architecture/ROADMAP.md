@@ -9,10 +9,10 @@ Revision 1, 16 October 2026. This is a sequencing view. Each repository keeps it
 | **M0 Foundations** | Contracts written and pinned; Windows/VPS topology and proxy facts known | Q4 answered (§3) |
 | **M1 Vertical slice (R0)** | Synthetic fixed-coupon OFZ book discounted on the KBD/ZCYC curve: hub snapshot → backend adapter → core → desk store → desk API → one migrated screen (Desk Monitor summary and positions). Run lineage recorded; coverage shown; **flash PnL only** | Hub snapshots; core packages 0.1–0.4 and 0.6 (KBD evaluator), plus a minimal 0.5 registry entry `rub_ofz_kbd_v1`; backend skeleton; React + TypeScript frontend scaffold |
 | **M2 Desk EOD** | Real EOD run on the server for supported bonds plus imported risk for the rest; desk rules (funding, OCP, dual FX, HTM); T3 presets and historical scenarios; carry endpoint; flash PnL | Position files: Q1 is deferred, so M2 runs on contract 1.3 position files prepared by hand or from a synthetic book until the source is decided; DEC01, DEC02, DEC03, DEC04, DEC06; core 0.5–0.8 |
-| **M3 Interactive scenarios** | T1 parity-tested Taylor engine in the browser; T2 job worker; Scenario Lab migrated | Core 0.7 (shared shocked curves) plus the backend's persistent curve cache |
+| **M3 Interactive scenarios** | T1 parity-tested Taylor engine in the browser; T2 job worker; Scenario Lab migrated | Shared shocked curves: delivered in core 0.7.0 within a job; core still needs to accept prebuilt curves for the backend's persistent cache |
 | **M4 Intraday** | Intraday hub snapshots; intraday flash runs (PV, first-order risk, flash PnL); SSE live updates | Positions feed decision (Q1); otherwise intraday reprices the opening book |
 | **M5 PnL explain and official** | `backend/pnl` explain, EOD and intraday, with attribution greeks per DEC05; pnl_tool reader feeding `pnl_official` as append-only revisions; break register | DEC05, DEC11, DEC12; official PnL = TradeLevel IFRS (Q8, answered) |
-| **M6 Coverage waves** | Core packages 1–4 move floaters, IRS, non-RUB and FX from `imported` to `computed` | [07](07_CORE_PRODUCT_COVERAGE.md) |
+| **M6 Coverage waves** | Core packages move products from `imported` to `computed`. Already in core 0.8.1: plain floaters and FX futures. Next: floater caps/floors and two-curve, IRS, non-RUB bonds, FX forwards/swaps | Core `docs/PRODUCT_ROADMAP.md` |
 | **M7 Operate** | Alerting, off-host backups, restore drill, runbooks, remaining screens migrated, `window.DESK` adapter removed | — |
 
 ## 2 Work by repository
@@ -41,7 +41,7 @@ These items are for the session or project working on the hub. They are also lis
 
 The plan is dispatched: `rub-fixed-income-core/docs/PRODUCT_ROADMAP.md` (from [07](07_CORE_PRODUCT_COVERAGE.md)); the core's role is in its `docs/SYSTEM_CONTEXT.md`. Housekeeping first:
 - commit the pending `.gitignore` that ignores `audit/` and `implementation/`, and move those 3 GB evidence folders out of the checkout;
-- tag 0.4.0–0.6.0;
+- tag the releases since 0.3.0 (only `v0.3.0` exists remotely; 0.4.0–0.8.1 are untagged);
 - remove the proprietary reconciliation probe from the sdist;
 - refresh `API.md`, `ARCHITECTURE.md` and `CONSUMERS.md`.
 

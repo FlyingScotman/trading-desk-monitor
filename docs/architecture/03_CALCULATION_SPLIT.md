@@ -109,7 +109,10 @@ Functions in `prototypes/desk-util.js` and where they go:
 
 ## 8 Performance prerequisites
 
-- **Core:** a pure API that builds each shocked curve once per call and shares it across positions, and that accepts prebuilt curves. Core holds no global state. Today OIS-quote mode re-bootstraps the same shocked curves for every position, about 500 ms per position with a Hessian (measured in the [module review](reviews/2026-10-16_module_review.md), CORE-E). Sharing should give around 100×. Run positions in a process pool.
+- **Core:** builds each shocked curve once per job and shares it across positions, holding no global state.
+  - **Delivered in 0.7.0** (`ShockedCurveCache`). On the core's synthetic 10-position OIS job with Hessian, time fell from about 27 s to 2.2 s. Before that, about 500 ms per position ([module review](reviews/2026-10-16_module_review.md), CORE-E).
+  - **Remaining:** accept prebuilt base and shocked curves from the caller, so the backend's persistent cache spans jobs; a benchmark at 2k positions on Windows / Python 3.11.
+  - Run positions in a process pool.
 - **Backend:**
   - own the persistent curve cache ([ADR-004](adr/ADR-004-curves-built-in-backend.md)) and keep it warm after each publish;
   - run T2 jobs in a dedicated worker process;
