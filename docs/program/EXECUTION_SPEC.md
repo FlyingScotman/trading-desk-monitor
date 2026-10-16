@@ -1,5 +1,8 @@
 # Trading Desk Monitor implementation specification
 
+> **Superseded in part (16 October 2026).** Per [ADR-001](../architecture/adr/ADR-001-single-in-network-server.md), the market-data hub, backend and frontend run on **one server inside the work network**. The external VPS, Hermes runtime agent, work-PC-only backend and data-perimeter parts of this pack no longer apply. The current architecture is in [docs/architecture/](../architecture/README.md). `DECISIONS.md` DEC01–DEC12 remain valid.
+
+
 Revision 0.1, 14 October 2026. Baseline: trading_desk_monitor commit a6ba30bf5573ada869a9594c3e69f73faf741ed2, contract 1.3. Decisions marked proposed remain defaults for planning; financial choices marked open need the desk owner before the affected feature is released.
 
 Build an external service that collects, validates, versions, and serves market and public reference data. Use the existing financial Python library as the candidate calculation core, after audit and any necessary extensions. Run that core and all portfolio calculations locally on the Windows work PC. Preserve and extend the current frontend and tdm publication contract.

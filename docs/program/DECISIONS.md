@@ -27,6 +27,8 @@ The user wants the external server to collect and serve market/static data and h
 
 ## Proposed engineering defaults
 
+> 16 October 2026: ADR02, ADR03, ADR05 and ADR06 below are **superseded** by [ADR-001](../architecture/adr/ADR-001-single-in-network-server.md) (single in-network server, no Hermes runtime). ADR01 is refined by [ADR-007](../architecture/adr/ADR-007-repo-and-doc-layout.md). ADR04, ADR07 and ADR08 still apply.
+
 | ID | Default | Validation before adoption |
 |---|---|---|
 | ADR01 | Existing private repository is the control center; preserve tdm/prototypes paths. Keep the financial library a pinned reusable package. | Confirm library ownership and whether it already has a repository. |

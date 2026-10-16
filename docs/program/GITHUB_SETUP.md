@@ -22,3 +22,9 @@ On this Mac, core Git uses the FiveLimaGolf account and TDM Git uses FlyingScotm
 For GitHub CLI operations, `gh fs` selects FlyingScotman and `gh flg` selects FiveLimaGolf for that invocation; append the usual gh subcommand and its arguments. Here `gh` is GitHub CLI; `fs` and `flg` are local account aliases. They do not change the global active account. Ordinary `gh` uses FlyingScotman by default. A new computer needs its own authentication setup.
 
 The unrelated pi_test folder is outside this setup.
+
+## Update — 16 October 2026
+
+trading_desk_monitor is also pushed to the private repository https://github.com/FiveLimaGolf/trading-desk-monitor (git remote `flg`; default branch `claude/clever-ramanujan-s4k3ed`). `origin` still points to FlyingScotman. Which account is canonical is open question Q5 in [../architecture/ROADMAP.md](../architecture/ROADMAP.md).
+
+For pushes to `flg`, the remote URL carries the `FiveLimaGolf` username, and the local repository config has a second credential helper entry for the FiveLimaGolf account. The FlyingScotman helper declines requests for other usernames, so git then falls through to the FiveLimaGolf helper.

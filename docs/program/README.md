@@ -1,5 +1,8 @@
 # Trading Desk Monitor execution pack
 
+> **Superseded in part (16 October 2026).** Per [ADR-001](../architecture/adr/ADR-001-single-in-network-server.md), the market-data hub, backend and frontend run on **one server inside the work network**. The external VPS, Hermes runtime agent, work-PC-only backend and data-perimeter parts of this pack no longer apply. The current architecture is in [docs/architecture/](../architecture/README.md). `DECISIONS.md` DEC01–DEC12 remain valid.
+
+
 This pack specifies how to build a public market and reference data service on a new VPS, reuse and extend the existing financial Python library, and deliver a local Windows calculation backend for Trading Desk Monitor. Work positions, private deal terms, funding rules, cash balances, PnL, and portfolio results stay inside the organization.
 
 Prepared 14 October 2026, Europe/Moscow. Plan revision 0.1. The reviewed monitor baseline is commit a6ba30bf5573ada869a9594c3e69f73faf741ed2 on claude/clever-ramanujan-s4k3ed, data contract 1.3. The financial library and current Hermes collectors still require export and audit.

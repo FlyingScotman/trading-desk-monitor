@@ -32,6 +32,7 @@ python -m unittest discover -s tests
 
 | Документ | О чём |
 |---|---|
+| [docs/architecture/](docs/architecture/README.md) | **архитектура системы** (с 16.10.2026): компоненты, контракт рыночных данных ↔ core, разделение расчётов бэкенд/фронтенд, бэкенд, интеграция фронтенда, развёртывание, план развития core, roadmap, ADR |
 | [docs/SERVICE_DATA_MODEL.md](docs/SERVICE_DATA_MODEL.md) | что сервис хранит и отдаёт: слои, сущности, ключи, API, какие данные нужны каждому экрану |
 | [docs/DATA_REQUIREMENTS.md](docs/DATA_REQUIREMENTS.md) | **список данных к сбору** (23 набора, поля, источники, приоритеты) + шаблоны `contract/csv/` |
 | [docs/SCENARIOS.md](docs/SCENARIOS.md) | сценарии: греки в мониторе / полная переоценка заранее / по запросу; исторические сценарии |
