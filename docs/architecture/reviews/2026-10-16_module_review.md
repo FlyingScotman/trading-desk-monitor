@@ -6,7 +6,7 @@
 > - The backend is mostly documents (contracts, conventions); `tdm/` is a prototype store.
 > - No integration between components was expected at this stage.
 >
-> The owner also decided that all components run on one server inside the work network ([ADR-001](../adr/ADR-001-single-in-network-server.md)). The findings on code quality and correctness (MD-*, CORE-*, BE-*, FE-*, PNL-*) remain valid as checklists. The architecture and plan sections are superseded by the documents in [docs/architecture/](../README.md).
+> The owner also decided that all components run on one server inside the work network ([ADR-001](../adr/ADR-001-hosting-topology.md)). The findings on code quality and correctness (MD-*, CORE-*, BE-*, FE-*, PNL-*) remain valid as checklists. The architecture and plan sections are superseded by the documents in [docs/architecture/](../README.md).
 
 
 16 October 2026. This review covers all five components as they exist on disk today:

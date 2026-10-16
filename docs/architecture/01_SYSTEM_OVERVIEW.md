@@ -32,14 +32,18 @@ flowchart LR
     RISKIMP[risk for products core cannot price]
     MARKS[internal 19:00 FX mark, trader marks]
   end
-  subgraph SRV["Single server inside the work network"]
-    HUB[market-data hub<br/>collect, validate, version,<br/>materialize snapshots]
+  subgraph VPS["Linux VPS (outside; public data only)"]
+    HUBV[hub: public collectors<br/>+ snapshot publisher]
+  end
+  subgraph SRV["Windows server inside the work network"]
+    HUB[hub inside<br/>replica of VPS snapshots<br/>+ inside-only collectors]
     PG[(PostgreSQL<br/>db: mdhub | db: desk)]
     BE[desk backend<br/>orchestrator, adapters,<br/>valuation on core, desk rules,<br/>store, desk API, job worker]
     CORE[[rub-fixed-income-core<br/>Python package, in-process]]
     FE[frontend<br/>static assets served by backend]
   end
-  MOEX & CBR & OTHER --> HUB
+  MOEX & CBR & OTHER --> HUBV
+  HUBV -- immutable snapshots via proxy --> HUB
   HUB <--> PG
   BE <--> PG
   HUB -- snapshots, localhost only --> BE
@@ -58,7 +62,7 @@ flowchart LR
 | **PnL tool** | Parsing and analysing the bank's accounting PnL report | (Later) feeding official PnL to the backend through the `pnl_official` contract |
 
 Key structural decisions:
-- [ADR-001](adr/ADR-001-single-in-network-server.md): one server inside the work network.
+- [ADR-001](adr/ADR-001-hosting-topology.md): desk on a Windows server inside the work network; hub possibly split between a Linux VPS and the inside server.
 - [ADR-002](adr/ADR-002-materialized-market-snapshots.md): materialized market snapshots.
 - [ADR-003](adr/ADR-003-adapter-in-backend.md): the wire → domain adapter sits in the backend.
 - [ADR-004](adr/ADR-004-curves-built-in-backend.md): curves are built in the backend with core.
@@ -146,4 +150,4 @@ Official PnL arrives the next day from the bank (via pnl_tool's reader later). I
 2. **Every run is reproducible.** A run records the snapshot IDs, input hashes, override version, code versions and the run its greeks came from ([04](04_BACKEND.md) §3).
 3. **Nothing is overwritten.** Corrections append revisions, for public data (hub), private data and attachments (backend) alike.
 4. **One implementation per concept.** Desk conventions live once, in the backend. Pricing math lives once, in core. The browser approximation is a tested port, never a second source of truth.
-5. **Develop outside, run inside.** Development uses public and synthetic data. Real positions and results exist only on the in-network server ([06](06_DEPLOYMENT_AND_OPERATIONS.md)).
+5. **Develop outside, run inside.** Development uses public and synthetic data. Real positions and results exist only on the inside Windows server, never on the VPS ([06](06_DEPLOYMENT_AND_OPERATIONS.md)).

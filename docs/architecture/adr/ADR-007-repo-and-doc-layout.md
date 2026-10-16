@@ -6,7 +6,7 @@ Status: proposed (16 October 2026).
 
 Current state:
 - **trading_desk_monitor:** documents (the program pack), contract 1.3, the `tdm` prototype store and the UI mockups.
-- **market-data-server** and **rub-fixed-income-core:** separate repositories under a different GitHub account.
+- **market-data-server** and **rub-fixed-income-core:** separate repositories.
 - **pnl_tool:** standalone and not under git.
 - **desk_monitor_backend:** a linked worktree of trading_desk_monitor that showed only the program documents.
 
@@ -31,8 +31,7 @@ The owner sees the backend as the heart of the project.
    The system repo keeps the **interface catalogue** ([README](../README.md)) with the pinned version of each.
 3. **Component internals stay in the component repos.** The hub keeps `DESIGN.md` and `STATUS.md`; core keeps `ARCHITECTURE.md`, `CONVENTIONS.md` and its numerical docs. They link to this folder for system context instead of repeating it.
 4. Hub and core stay separate repositories: different release cycles, and core is reusable. The backend pins exact released versions of core, and a schema version of the hub contract.
-5. **Hosting:** the system repository is mirrored to `FiveLimaGolf/trading-desk-monitor`, alongside `FiveLimaGolf/rub-fixed-income-core` and `FiveLimaGolf/market-data-hub`. Which account becomes canonical is open question Q5 in [ROADMAP](../ROADMAP.md).
-6. The `desk_monitor_backend` worktree has served its purpose (its branch is merged) and can be removed.
+5. The `desk_monitor_backend` worktree has served its purpose (its branch is merged) and can be removed.
 
 ## Consequences
 

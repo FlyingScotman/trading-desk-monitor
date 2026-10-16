@@ -27,7 +27,7 @@ The user wants the external server to collect and serve market/static data and h
 
 ## Proposed engineering defaults
 
-> 16 October 2026: ADR02, ADR03, ADR05 and ADR06 below are **superseded** by [ADR-001](../architecture/adr/ADR-001-single-in-network-server.md) (single in-network server, no Hermes runtime). ADR01 is refined by [ADR-007](../architecture/adr/ADR-007-repo-and-doc-layout.md). ADR04, ADR07 and ADR08 still apply.
+> 16 October 2026: ADR03, ADR05 and ADR06 below, and the roles in ADR04, are **superseded** by [ADR-001](../architecture/adr/ADR-001-hosting-topology.md): desk on a Windows server inside, hub possibly split with a Linux VPS, no Hermes runtime. ADR02 applies to the VPS part of the hub. ADR01 is refined by [ADR-007](../architecture/adr/ADR-007-repo-and-doc-layout.md). ADR07 and ADR08 still apply.
 
 | ID | Default | Validation before adoption |
 |---|---|---|

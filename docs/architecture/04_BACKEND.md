@@ -17,7 +17,7 @@ Today it exists as:
 | `backend/valuation` | Builds the per-run domain `MarketSnapshot` (curves, projections) through the curve cache; prices supported products with core; merges imported PV and risk for unsupported products; emits greeks in the desk factor format (`IR\|curve\|bucket`, `CS`, `FX\|ccy`). |
 | `backend/desk_rules` | Desk conventions from `ORG_CONVENTIONS.md`: TRADING/HTM/DERIVS funding, CASH/REPO, OCP transfers, dual FX basis (market vs CBR), HTM treatment, carry/funding projections. **The only implementation of these rules in the system.** Open decisions (DEC01, DEC03, DEC06) are configuration, not code forks. |
 | `backend/scenarios` | Scenario definitions (presets, historical, per-user), canonical hashing, T3 batch scenarios, the T2 job worker, and the reference Taylor engine ([03](03_CALCULATION_SPLIT.md)). |
-| `backend/pnl` (later, M5) | PnL explain from runs T−1 and T, trades and cash events. The default uses attribution greeks frozen at T−1 EOD and a frozen attribution order; both are pending DEC05. Until M5, runs carry only flash PnL (change in value plus cash flows). Official PnL comparison and a break register (DEC12). Fed later by pnl_tool's TradeLevel reader. |
+| `backend/pnl` (later, M5) | PnL explain from runs T−1 and T, trades and cash events. The default uses attribution greeks frozen at T−1 EOD and a frozen attribution order; both are pending DEC05. Until M5, runs carry only flash PnL (change in value plus cash flows). Official PnL comparison and a break register (DEC12). Official PnL is the TradeLevel IFRS figure on the CBR basis, including funding (owner answer, Q8), fed by pnl_tool's TradeLevel reader. |
 | `backend/store` | PostgreSQL `desk` database: runs, positions, results, attachments, private revisions, curve cache, jobs ([ADR-006](adr/ADR-006-desk-store-postgres-bitemporal.md)). The backend owns the schema, with versioned migrations (for example Alembic) in this repository. |
 | `backend/api` | Desk API and event stream for the frontend ([05](05_FRONTEND_INTEGRATION.md)). The only client of the hub's API. |
 
@@ -120,7 +120,7 @@ Consequences:
 - **Intraday trade feed:** positions roll forward intraday (T−1 position + trades = current position), and new-trade PnL is attributed.
 - **In every case:** reconcile the positions roll-forward at EOD (T−1 position + trades = T position) and report breaks.
 
-This is open question Q1 in [ROADMAP](ROADMAP.md).
+Q1 is **deferred** by the owner ([ROADMAP](ROADMAP.md) §3). Until it is decided, the backend accepts contract 1.3 position and trade files only, and treats intraday as "opening book repriced".
 
 ## 7 Hybrid valuation
 

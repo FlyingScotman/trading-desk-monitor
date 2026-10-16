@@ -1,6 +1,6 @@
 # Trading Desk Monitor implementation specification
 
-> **Superseded in part (16 October 2026).** Per [ADR-001](../architecture/adr/ADR-001-single-in-network-server.md), the market-data hub, backend and frontend run on **one server inside the work network**. The external VPS, Hermes runtime agent, work-PC-only backend and data-perimeter parts of this pack no longer apply. The current architecture is in [docs/architecture/](../architecture/README.md). `DECISIONS.md` DEC01–DEC12 remain valid.
+> **Superseded in part (16 October 2026).** Per [ADR-001](../architecture/adr/ADR-001-hosting-topology.md), the backend and frontend run on a **Windows server inside the work network**. The hub may be split between a Linux VPS (public collection) and the inside server, linked by immutable snapshots. The Hermes runtime agent, the work-PC-only backend and the bulk-download parts of this pack no longer apply. The current architecture is in [docs/architecture/](../architecture/README.md). `DECISIONS.md` DEC01–DEC12 remain valid.
 
 
 Revision 0.1, 14 October 2026. Baseline: trading_desk_monitor commit a6ba30bf5573ada869a9594c3e69f73faf741ed2, contract 1.3. Decisions marked proposed remain defaults for planning; financial choices marked open need the desk owner before the affected feature is released.

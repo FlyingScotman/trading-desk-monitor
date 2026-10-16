@@ -11,7 +11,7 @@ They are not the working application, and the calculations inside them are illus
 
 ## 1 Principles
 
-1. **The backend is the only data source.** The frontend calls the desk API only. The hub is reachable only from the backend, bound to localhost; bond and market views go through a backend proxy.
+1. **The backend is the only data source.** The frontend calls the desk API only. The inside hub is reachable only from the backend, bound to localhost; bond and market views go through a backend proxy.
 2. **The frontend never computes a record.** It filters, sums, formats and charts backend fields. The only calculation it runs is the T1 Taylor approximation, labelled ≈ ([03](03_CALCULATION_SPLIT.md)).
 3. **Every number shows its provenance:** run (EOD/intraday, cut time, age), coverage (`partial n/N`), valuation source (`computed` / `imported`), estimate vs official.
 4. **One definition per metric.** All screens use the same selectors module, so the same filter gives the same total on every screen.
@@ -58,7 +58,7 @@ Notes:
 | `theme/` | One design system: tokens, **locally bundled fonts**, light/dark |
 
 - **Build:** TypeScript + Vite.
-- **Framework:** React with a virtualised grid (AG Grid Community or TanStack Table) and ECharts is the default recommendation. The deciding factors are large grids, filter state shared across screens, live updates and the size of the talent pool. The decision is open (Q9 in [ROADMAP](ROADMAP.md)) and is needed before M1, because M1 migrates the first screen. Migrate screen by screen; no big-bang rewrite.
+- **Framework: React + TypeScript** (owner, 16 October 2026), with a virtualised grid (AG Grid Community or TanStack Table) and ECharts. The deciding factors were large grids, filter state shared across screens, live updates and the size of the talent pool. Migrate screen by screen; no big-bang rewrite. Migrate screen by screen; no big-bang rewrite.
 - **Serving:** the backend (or the reverse proxy) serves the built assets. There are no external CDN or font calls, so the frontend works without internet.
 
 ## 4 Transition from the mockups
@@ -88,7 +88,7 @@ Notes:
 
 ## 6 Users and access
 
-- **Few users, on the in-network server:** the reverse proxy does authentication. Windows Integrated Authentication (Kerberos/NTLM) if IT allows it; otherwise named accounts with an established session library.
+- **Few users, on the inside Windows server:** the reverse proxy (IIS or Caddy) does authentication. Windows Integrated Authentication (Kerberos/NTLM) if IT allows it; otherwise named accounts with an established session library.
 - **Roles:**
   - `viewer`: read;
   - `trader`: plus custom scenarios and T2 jobs;

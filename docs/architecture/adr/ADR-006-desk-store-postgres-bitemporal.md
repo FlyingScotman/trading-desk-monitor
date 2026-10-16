@@ -9,11 +9,11 @@ The `tdm` prototype uses SQLite with the standard library only, which suited a l
 - official PnL and scenario results mutate published runs in place;
 - assembly reads current global definitions, so old runs are not reproducible.
 
-The system now runs on a server that already hosts PostgreSQL for the hub.
+The desk now runs on a Windows server inside the network, where PostgreSQL is also used by the inside part of the hub.
 
 ## Decision
 
-1. The desk store is a separate PostgreSQL database `desk` on the same instance as `mdhub`. The two databases are never joined directly. The backend reads market data only through snapshots ([ADR-002](ADR-002-materialized-market-snapshots.md)).
+1. The desk store is a PostgreSQL database `desk` on the inside Windows server. If the inside hub instance exists, its `mdhub` database is a separate database on the same PostgreSQL instance. The two databases are never joined directly. The backend reads market data only through snapshots ([ADR-002](ADR-002-materialized-market-snapshots.md)).
 2. **Private data is bitemporal and append-only.** Positions, trades, OTC terms, funding rules, cash balances, trader marks, the internal FX mark and official PnL each carry:
    - `valid_date` (business date the record describes);
    - `recorded_at` (when the desk learned it);
@@ -28,4 +28,4 @@ The system now runs on a server that already hosts PostgreSQL for the hub.
 
 - Replay of any past run, T+1 restatements and break investigations become possible (DEC11).
 - The backend gains a Postgres dependency (psycopg) and migrations.
-- The stdlib-only constraint is dropped; the server Python environment is pinned and installed offline ([06](../06_DEPLOYMENT_AND_OPERATIONS.md)).
+- The stdlib-only constraint is dropped. The Windows Python 3.11 environment is pinned and installed offline from a wheelhouse ([06](../06_DEPLOYMENT_AND_OPERATIONS.md) §7).

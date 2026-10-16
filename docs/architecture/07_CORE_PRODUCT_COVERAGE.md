@@ -44,7 +44,9 @@ Until a work package lands, the desk backend imports that product's PV and risk 
 
 ## 3 Work packages
 
-The order below is the default. **Re-order by the actual book mix** (open question Q6 in the system roadmap). Packages 1–4 assume package 0.
+The book holds **all** the products below (owner, 16 October 2026), so packages 1–8 are all required and package 9 is gated by DEC10. The order below is the default; re-order only if MV weights in the book argue for it. Packages 1–4 assume package 0.
+
+**Runtime constraint:** the desk runs core on Windows with **Python 3.11**. Keep `requires-python >= 3.11`, and test on Windows 3.11 in CI.
 
 ### Package 0: foundations (prerequisite for everything)
 
