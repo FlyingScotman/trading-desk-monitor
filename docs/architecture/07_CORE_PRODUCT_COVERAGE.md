@@ -1,5 +1,7 @@
 # 07 Core product coverage: development plan for rub-fixed-income-core
 
+> **Dispatched 16 October 2026.** The maintained copy is `rub-fixed-income-core/docs/PRODUCT_ROADMAP.md`. This file is a frozen snapshot; update the core copy instead.
+
 **This is a dispatchable work plan.** It is self-contained so it can be copied into the `rub-fixed-income-core` repository (for example as `docs/PRODUCT_ROADMAP.md`) and handed to the core development project. It is written against core v0.6.0 (HEAD `454a78c`, 16 October 2026).
 
 System context: core is the pure pricing and risk library of the Trading Desk Monitor. A desk backend calls it in-process. Market and static data arrive as **core domain objects** built by the backend's adapter from the market-data hub's snapshots. Core never parses hub payloads and never does I/O. See the system architecture in `trading_desk_monitor/docs/architecture/` (documents 02 and 03, ADR-003 and ADR-004).

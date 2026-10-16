@@ -19,7 +19,7 @@ Revision 1, 16 October 2026. This is a sequencing view. Each repository keeps it
 
 ### market-data-server (hub)
 
-These items are for the session or project working on the hub. Do not interrupt work in progress; queue them after the current seed and backfill checkpoint.
+These items are for the session or project working on the hub. They are also listed in `market-data-server/docs/SYSTEM_CONTEXT.md`. Do not interrupt work in progress; queue them after the current seed and backfill checkpoint.
 
 1. **Market Snapshot Contract v1:** `schemas/market_snapshot/v1/` plus golden fixtures ([02](02_MARKET_DATA_AND_CORE_CONTRACT.md) §3, §6).
 2. **As-known-at readers for static data:** `ref.*` over `ops.row_history`, deletes versioned.
@@ -39,7 +39,7 @@ These items are for the session or project working on the hub. Do not interrupt 
 
 ### rub-fixed-income-core
 
-Dispatch [07_CORE_PRODUCT_COVERAGE.md](07_CORE_PRODUCT_COVERAGE.md) as written. Housekeeping first:
+The plan is dispatched: `rub-fixed-income-core/docs/PRODUCT_ROADMAP.md` (from [07](07_CORE_PRODUCT_COVERAGE.md)); the core's role is in its `docs/SYSTEM_CONTEXT.md`. Housekeeping first:
 - commit the pending `.gitignore` that ignores `audit/` and `implementation/`, and move those 3 GB evidence folders out of the checkout;
 - tag 0.4.0–0.6.0;
 - remove the proprietary reconciliation probe from the sdist;

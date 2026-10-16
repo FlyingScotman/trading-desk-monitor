@@ -41,7 +41,18 @@ Revision 1, 16 October 2026. This folder is the system-level architecture of the
 | Market Snapshot Contract (schema plus golden fixtures) | `market-data-server` (`schemas/market_snapshot/v1/`, to be created) | Produced by the hub, pinned by the backend |
 | Market-data internals: sources, schema, jobs, quality | `market-data-server/docs/` | `DESIGN.md`, `STATUS.md` |
 | Core domain model, conventions, API, numerical methods | `rub-fixed-income-core/docs/` | `ARCHITECTURE.md`, `CONVENTIONS.md`, `risk.md` |
-| Core product development plan | Written here as [07](07_CORE_PRODUCT_COVERAGE.md); copy into the core repo when dispatched | — |
+| Core product development plan | **`rub-fixed-income-core/docs/PRODUCT_ROADMAP.md`** (maintained there); [07](07_CORE_PRODUCT_COVERAGE.md) is the frozen snapshot it came from | — |
+
+### Entry points in each repository
+
+Each repository has a short system-context file that states its role, its obligations and links back here. Paths are relative to the parent folder in the usual side-by-side checkout.
+
+| Repository | Entry point | Also |
+|---|---|---|
+| trading_desk_monitor | `docs/architecture/README.md` (this file) | `docs/architecture/ROADMAP.md` |
+| rub-fixed-income-core | `docs/SYSTEM_CONTEXT.md` (linked from its README) | `docs/PRODUCT_ROADMAP.md`: the core development plan |
+| market-data-server | `docs/SYSTEM_CONTEXT.md` (linked from its README) | System work list for the hub: snapshot contract, replica, Windows part |
+| pnl_tool (local, no git) | `SYSTEM_CONTEXT.md` | Planned role at M5 |
 
 ### Interface catalogue
 
