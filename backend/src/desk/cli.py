@@ -1,7 +1,10 @@
-"""``desk`` command line (slice S1).
+"""``desk`` command line (slices S1, S2).
 
     desk eod --snapshots .devdata/snapshots --date 2026-10-15 --book examples/demo_book.csv \\
              --db ../.devdata/tdm.sqlite --report-dir ../.devdata/reports
+
+``desk eod`` attaches the day-over-day flash PnL when the folder has a snapshot of an earlier
+date (``--no-pnl`` turns it off).
     desk demo-book --snapshots .devdata/snapshots --date 2026-10-15 --out examples/demo_book.csv
 """
 
@@ -15,7 +18,7 @@ from pathlib import Path
 
 from .marketdata.adapter import MarketView
 from .marketdata.bundle import SnapshotDir
-from .orchestrator import prepare, value
+from .orchestrator import attach_pnl, prepare, value
 from .publish import tdm_run
 from .report import validation
 
@@ -47,7 +50,15 @@ def cmd_eod(a: argparse.Namespace) -> int:
 
     if a.book:
         book = read_book(Path(a.book))
-        outcomes = value(ctx, [(secid, qty) for _, _, secid, qty in book], second_order=not a.no_gamma)
+        requests = [(secid, qty) for _, _, secid, qty in book]
+        outcomes = value(ctx, requests, second_order=not a.no_gamma)
+        if prev_date and not a.no_pnl:
+            prev_ctx = prepare(sd, prev_date)
+            attach_pnl(prev_ctx, value(prev_ctx, requests), ctx, outcomes)
+            flash = [o.pnl for o in outcomes if o.pnl]
+            print(f"flash PnL {prev_date} -> {a.date}: {len(flash)}/{sum(o.valuation is not None for o in outcomes)} "
+                  f"priced positions, total {sum(p.total for p in flash):,.0f} RUB, "
+                  f"max identity error {max((abs(p.identity_error) for p in flash), default=0):.2e} RUB")
         positions = [(pid, bk, o) for (pid, bk, _, _), o in zip(book, outcomes)]
         run_id, status, warnings = tdm_run.publish(a.db, ctx, positions, prev=prev)
         ok = sum(o.valuation is not None for o in outcomes)
@@ -106,6 +117,7 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("--db", default=str(Path(__file__).resolve().parents[3] / "data" / "tdm.sqlite"))
     e.add_argument("--report-dir", help="write the validation report of the whole universe here")
     e.add_argument("--no-gamma", action="store_true", help="skip the Hessian")
+    e.add_argument("--no-pnl", action="store_true", help="skip the flash PnL against the previous date")
     e.set_defaults(fn=cmd_eod)
     d = sub.add_parser("demo-book", help="generate the synthetic demo book")
     d.add_argument("--snapshots", required=True)

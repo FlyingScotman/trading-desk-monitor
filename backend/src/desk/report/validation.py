@@ -12,9 +12,8 @@ and close prices and compares it with ``source_analytics``:
 Differences point at a convention gap or a data problem in the hub, the adapter or core.
 
 MOEX convention (found in S1): MOEX effective yields and durations are measured from the
-**trade date**, not from the T+1 settlement date, with the same dirty price. The comparison
-therefore recomputes yield and duration from the trade date; the desk valuation itself stays
-at settlement.
+**trade date**, not from the T+1 settlement date, with the same dirty price. Since S2 the desk
+valuation itself is at the trade date too (``valuation.bonds``), because the MOEX accrued is.
 """
 
 from __future__ import annotations
@@ -61,9 +60,9 @@ def compare(ctx: EodContext, o: Outcome) -> dict[str, Any]:
     if v is None or q is None:
         return row
     sa = q.source_analytics
-    ydate = q.trade_date  # MOEX measures yields from the trade date (see module docstring)
-    flows = [(c.payment_date, c.amount) for c in v.cashflows if c.payment_date > ydate]
-    days = (v.horizon_date - v.settlement).days
+    ydate = v.valuation_date  # the trade date, as MOEX measures yields (see module docstring)
+    flows = [(c.payment_date, c.amount) for c in v.cashflows]
+    days = (v.horizon_date - ydate).days
     row.update(
         horizon=v.horizon_date.isoformat(), horizon_kind=v.horizon_kind, horizon_days=days,
         moex_horizon=sa.get("yield_date"), moex_horizon_type=sa.get("yield_date_type"),
@@ -97,10 +96,10 @@ def compare(ctx: EodContext, o: Outcome) -> dict[str, Any]:
         dirty_wap = float(q.prices_pct["waprice"]) * v.face_rub / 100.0 + v.accrued_rub
         cf = [(c.payment_date, c.amount) for c in v.cashflows]
         try:
-            row["z_annual_wap_bp"] = solve_z_spread(cf, dirty_wap, ctx.curve, settlement_date=v.settlement,
+            row["z_annual_wap_bp"] = solve_z_spread(cf, dirty_wap, ctx.curve, settlement_date=ydate,
                                                     convention=SPREAD_CONVENTION) * 1e4
             row["z_cont_wap_bp"] = solve_continuous_z_spread(cf, dirty_wap, ctx.curve,
-                                                             settlement_date=v.settlement) * 1e4
+                                                             settlement_date=ydate) * 1e4
         except (ValueError, RuntimeError):
             pass
         row["moex_z_spread_bp"] = _f(sa.get("zspread_bp"))

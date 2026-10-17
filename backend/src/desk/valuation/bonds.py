@@ -10,6 +10,12 @@ Steps per instrument:
    ``BondRiskEngine`` calibrates the Z-spread to it (annual, ACT/365F) and computes bucket DV01,
    KRD, CS01 or OFZ spread risk and, optionally, the full Hessian; core ``compatibility`` gives
    the effective yield and duration.
+
+Valuation date (found in S2, to be fixed by a DEC entry): the MOEX price and the MOEX accrued
+are both measured at the **trade date**, and the bond trades cum-coupon through the record
+date. So the cashflows are those paid after the trade date, and core values them at the trade
+date. The T+1 settlement date is kept on the valuation for information only. Valuing at T+1
+dropped a coupon paid on the settlement date while the price still contained its accrued.
 """
 
 from __future__ import annotations
@@ -156,6 +162,8 @@ def settlement_date(trade_date: date, lag_days: int | None, calendar: BusinessCa
 class BondValuation:
     secid: str
     quantity: float
+    valuation_date: date
+    """The trade date of the quote: cashflows after it, PV and yield as of it."""
     settlement: date
     horizon_date: date
     horizon_kind: str
@@ -188,9 +196,10 @@ def value_bond(
     terms: BondTerms,
     quote: BondQuote,
     schedule: FixedSchedule,
-    settlement: date,
+    valuation_date: date,
     curve: DiscountCurve,
     *,
+    settlement: date | None = None,
     quantity: float = 1.0,
     second_order: bool = False,
     cache: ShockedCurveCache | None = None,
@@ -206,11 +215,11 @@ def value_bond(
     spread_kind = "ofz" if terms.bond_class in OFZ_CLASSES else "credit"
     flows = tuple((cf.payment_date, cf.amount) for cf in schedule.cashflows)
     try:
-        ytm = solve_nominal_annual_yield(dirty_price=dirty, settlement_date=settlement, cashflows=flows)
-        dur = bond_duration(annual_yield=ytm, settlement_date=settlement, cashflows=flows)
+        ytm = solve_nominal_annual_yield(dirty_price=dirty, settlement_date=valuation_date, cashflows=flows)
+        dur = bond_duration(annual_yield=ytm, settlement_date=valuation_date, cashflows=flows)
         engine = BondRiskEngine(
             BondRiskRequest(
-                cashflows=schedule.cashflows, settlement_date=settlement, curve=curve,
+                cashflows=schedule.cashflows, settlement_date=valuation_date, curve=curve,
                 spread_convention=SPREAD_CONVENTION, spread_kind=spread_kind,  # type: ignore[arg-type]
                 dirty_price_rub=dirty, quantity=quantity,
             ),
@@ -220,7 +229,8 @@ def value_bond(
     except (ValueError, RuntimeError) as e:
         raise Rejected("core_error", str(e)) from e
     out = BondValuation(
-        secid=terms.secid, quantity=quantity, settlement=settlement,
+        secid=terms.secid, quantity=quantity, valuation_date=valuation_date,
+        settlement=settlement or valuation_date,
         horizon_date=schedule.horizon_date, horizon_kind=schedule.horizon_kind,
         price_basis=basis, clean_pct=clean, accrued_rub=accrued, face_rub=face,
         current_coupon_pct=schedule.current_coupon_pct, dirty_rub=dirty, pv_rub=risk.pv_rub,

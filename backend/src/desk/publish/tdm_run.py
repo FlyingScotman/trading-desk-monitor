@@ -1,9 +1,10 @@
-"""Write an S1 EOD run into the ``tdm`` store through its writer SDK (``tdm.writer.Run``).
+"""Write an EOD run into the ``tdm`` store through its writer SDK (``tdm.writer.Run``).
 
 The store and the Desk Monitor prototype then show it through ``tdm serve`` and
 ``window.DESK``. This is the slice shortcut for the desk store and desk API (VERTICAL_SLICES.md).
 Positions that were not priced are not written with zeros: each one is logged as a WARN line
-in the run log with its reason.
+in the run log with its reason. The same holds for the flash PnL of slice S2: a priced position
+without PnL gets no ``pnl`` dict and a WARN line with the reason.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from .. import __version__ as BACKEND_VERSION
 from ..curves import kbd
 from ..marketdata.adapter import MarketView
 from ..orchestrator import EodContext, Outcome
+from ..pnl.flash import METHOD
 
 CURVE_ID = "RUB OFZ"
 ASSET_CLASS = {"ofz_pd": "ОФЗ-ПД", "ofz_ad": "ОФЗ-АД", "ofz_pk": "ОФЗ-ПК", "ofz_in": "ОФЗ-ИН",
@@ -99,12 +101,15 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str) 
         "yield_date": v.horizon_date.isoformat() if v.horizon_kind != "maturity" else None,
         "spread_type": "Z", "spread_curve": CURVE_ID, "new_today": False,
         "risk": {CURVE_ID: v.buckets},
+        **({"pnl": o.pnl.as_tdm()} if o.pnl else {}),
         "gamma": [[_factor(a), _factor(b), g] for a, b, g in v.hessian],
         "extra": {
-            "price_basis": v.price_basis, "horizon_kind": v.horizon_kind, "settlement": v.settlement.isoformat(),
+            "price_basis": v.price_basis, "horizon_kind": v.horizon_kind, "valuation_date": v.valuation_date.isoformat(),
+            "settlement": v.settlement.isoformat(),
             "quantity_bonds": v.quantity, "base_id": v.base_id, "core_version": v.core_version,
             "moex_yield_close_pct": sa.get("yield_close_pct"), "moex_duration_days": sa.get("duration_days"),
             "valuation": "computed",
+            **({"pnl": o.pnl.extra()} if o.pnl else {}),
         },
     }
 
@@ -119,11 +124,15 @@ def publish(db: str, ctx: EodContext, positions: list[tuple[str, str, Outcome]],
     lineage = {**ctx.lineage(), "backend_version": BACKEND_VERSION, "core_version": CORE_VERSION,
                "prev_market_snapshot_id": prev.snapshot.id if prev else None}
     issuers: dict[str, dict[str, Any]] = {}
-    rows, skipped = [], []
+    rows, skipped, no_pnl = [], [], []
     for pid, book, o in positions:
         if o.valuation is None or o.terms is None:
             skipped.append(f"{pid} {o.secid}: не посчитано ({o.reason}{': ' + o.detail if o.detail else ''})")
             continue
+        if o.pnl is None and prev is not None:
+            e = o.no_pnl
+            no_pnl.append(f"{pid} {o.secid}: нет PnL ({e.reason}{': ' + e.detail if e.detail else ''})" if e
+                          else f"{pid} {o.secid}: нет PnL (флэш-PnL не считался)")
         key, rec = _issuer_key(ctx, o)
         issuers[key] = rec
         rows.append(position_row(ctx, book, pid, o, key))
@@ -134,7 +143,7 @@ def publish(db: str, ctx: EodContext, positions: list[tuple[str, str, Outcome]],
         if fx:
             indices.append({"index_name": name, "value": fx[1]})
     with Run(db, as_of=ctx.business_date.isoformat(), run_type="EOD",
-             source=f"desk-backend {BACKEND_VERSION} (slice S1)",
+             source=f"desk-backend {BACKEND_VERSION} (slice {'S2' if any(o.pnl for _, _, o in positions) else 'S1'})",
              lib_version=f"rub-fixed-income-core {CORE_VERSION}",
              market_snapshot=ctx.market.snapshot.id, comment=comment or json.dumps(lineage, ensure_ascii=False),
              prev_date=prev.business_date.isoformat() if prev else None, jtd_recovery=0.0) as run:
@@ -146,8 +155,15 @@ def publish(db: str, ctx: EodContext, positions: list[tuple[str, str, Outcome]],
         run.add_indices(indices)
         run.add_positions(rows)
         run.log("INFO", "lineage " + json.dumps(lineage, ensure_ascii=False))
-        for s in skipped:
+        for s in skipped + no_pnl:
             run.log("WARN", s)
+        with_pnl = [o.pnl for _, _, o in positions if o.pnl]
+        if with_pnl:
+            tot = {k: sum(getattr(x, k) for x in with_pnl) for k in ("carry", "rolldown", "rates", "spread", "other")}
+            worst = max(abs(x.identity_error) for x in with_pnl)
+            run.log("INFO", f"флэш-PnL {with_pnl[0].prev_date} -> {with_pnl[0].as_of} ({METHOD}), позиций {len(with_pnl)}: "
+                    + ", ".join(f"{k} {v:,.0f}" for k, v in tot.items())
+                    + f"; итог {sum(x.total for x in with_pnl):,.0f} ₽, макс. ошибка тождества {worst:.2e} ₽")
         run.log("WARN", "JTD не считается в слайсе S1 (нет решения по recovery): поле jtd = 0")
         run.log("INFO", f"посчитано позиций: {len(rows)}, не посчитано: {len(skipped)}")
     return run.run_id, run.status, run.warnings

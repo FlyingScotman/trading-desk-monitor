@@ -1,8 +1,9 @@
-"""EOD valuation of one business date from hub snapshots (slice S1).
+"""EOD valuation of one business date from hub snapshots (slices S1, S2).
 
 ``prepare`` loads the market snapshot of the date and the static snapshot it names, builds the
 KBD curve and the settlement calendar. ``value`` prices a list of (secid, quantity) requests and
-returns one ``Outcome`` per request: a valuation or a rejection with its reason.
+returns one ``Outcome`` per request: a valuation or a rejection with its reason. ``attach_pnl``
+adds the day-over-day flash PnL against the valuations of the previous date (``desk.pnl.flash``).
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from rub_fixed_income import BusinessCalendar, DiscountCurve, ShockedCurveCache
 from .curves import kbd
 from .marketdata.adapter import BondQuote, BondTerms, MarketView, StaticView
 from .marketdata.bundle import SnapshotDir
+from .pnl.flash import FlashCurves, FlashPnl, NoPnl, explain
 from .valuation.bonds import BondValuation, Rejected, fixed_schedule, settlement_date, value_bond
 
 KBD_TOLERANCE_BP = 0.05
@@ -28,6 +30,8 @@ class Outcome:
     valuation: BondValuation | None = None
     reason: str | None = None
     detail: str = ""
+    pnl: FlashPnl | None = None
+    no_pnl: NoPnl | None = None
 
 
 @dataclass
@@ -85,10 +89,30 @@ def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: b
             if quote is None:
                 raise Rejected("no_quote")
             settle = settlement_date(quote.trade_date, terms.settle_lag_days, ctx.calendar, *ctx.calendar_window)
-            sched = fixed_schedule(terms, settle)
-            o.valuation = value_bond(terms, quote, sched, settle, ctx.curve, quantity=qty,
+            sched = fixed_schedule(terms, quote.trade_date)  # see valuation.bonds: valuation date
+            o.valuation = value_bond(terms, quote, sched, quote.trade_date, ctx.curve, settlement=settle, quantity=qty,
                                      second_order=second_order, cache=ctx.cache)
         except Rejected as e:
             o.reason, o.detail = e.reason, e.detail
         out.append(o)
     return out
+
+
+def attach_pnl(prev: EodContext, prev_outcomes: list[Outcome], ctx: EodContext, outcomes: list[Outcome]) -> None:
+    """Set ``pnl`` or ``no_pnl`` on every outcome of ``ctx`` priced today. Both lists are in request order."""
+    if len(prev_outcomes) != len(outcomes):
+        raise ValueError("previous and current requests differ")
+    curves = FlashCurves.build(prev.kbd, ctx.kbd, prev.curve, ctx.curve)
+    cache = ShockedCurveCache()
+    for p, o in zip(prev_outcomes, outcomes):
+        if o.valuation is None:
+            continue
+        if p.secid != o.secid:
+            raise ValueError(f"request order differs: {p.secid} vs {o.secid}")
+        if p.valuation is None:
+            o.no_pnl = NoPnl("not_priced_prev", f"{prev.business_date}: {p.reason}{': ' + p.detail if p.detail else ''}")
+            continue
+        try:
+            o.pnl = explain(p.valuation, o.valuation, curves, cache)
+        except NoPnl as e:
+            o.no_pnl = e

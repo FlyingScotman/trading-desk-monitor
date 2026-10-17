@@ -1,6 +1,6 @@
 # Desk backend (`desk`)
 
-The Trading Desk Monitor backend. Design: [`docs/architecture/04_BACKEND.md`](../docs/architecture/04_BACKEND.md). Current state: **slice S1** of [`docs/architecture/VERTICAL_SLICES.md`](../docs/architecture/VERTICAL_SLICES.md). It values fixed-coupon RUB bonds from real hub snapshots with core 0.8.1 and publishes EOD runs that the Desk Monitor prototype shows.
+The Trading Desk Monitor backend. Design: [`docs/architecture/04_BACKEND.md`](../docs/architecture/04_BACKEND.md). Current state: **slices S1 and S2** of [`docs/architecture/VERTICAL_SLICES.md`](../docs/architecture/VERTICAL_SLICES.md). It values fixed-coupon RUB bonds from real hub snapshots with core 0.8.1, explains the day-over-day flash PnL by exact repricing, and publishes EOD runs that the Desk Monitor prototype shows.
 
 ```
 hub snapshot files ──► desk.marketdata (bundle + adapter mdhub_v1)
@@ -8,6 +8,8 @@ hub snapshot files ──► desk.marketdata (bundle + adapter mdhub_v1)
                           ├─► desk.curves.kbd ──► core DiscountCurve
                           ▼
                        desk.valuation.bonds ──► core BondRiskEngine (Z-spread, KRD DV01, CS01, Hessian)
+                          │
+                          ├─► desk.pnl.flash ──► previous date revalued, PnL by carry / rolldown / rates / spread
                           │
                           ├─► desk.publish.tdm_run ──► tdm SQLite store ──► tdm serve ──► Desk Monitor
                           └─► desk.report.validation ──► HTML/CSV: our analytics vs MOEX
@@ -39,7 +41,7 @@ Then open:
 - http://127.0.0.1:8765/desk-monitor.html for the Desk Monitor on the real run;
 - `.devdata/reports/validation_<date>.html` for the comparison with MOEX analytics over the whole bond universe.
 
-Run `desk eod` for an earlier date first if you want the previous-day curve moves and a date picker with history.
+Run `desk eod` for an earlier date first if you want the previous-day curve moves and a date picker with history. When the snapshot folder holds an earlier date, `desk eod` also attaches the flash PnL against it (slice S2; `--no-pnl` turns it off).
 
 `examples/demo_book.csv` is synthetic: real public instruments, invented quantities. Regenerate it with `desk demo-book`.
 
@@ -49,7 +51,7 @@ Run `desk eod` for an earlier date first if you want the previous-day curve move
 cd backend && .venv/bin/pytest -q
 ```
 
-The tests run slice S1 on the hub's golden fixtures, vendored in `tests/fixtures/mdhub_v1/` (ten public bonds of 2026-10-15). Snapshots of the whole universe are local only.
+The tests run slices S1 and S2 on the hub's golden fixtures, vendored in `tests/fixtures/mdhub_v1/` (ten public bonds of 2026-10-15). The fixtures hold one date, so the S2 tests build the previous date by shifting the KBD parameters. Snapshots of the whole universe are local only.
 
 ## Layout
 
@@ -58,7 +60,8 @@ The tests run slice S1 on the hub's golden fixtures, vendored in `tests/fixtures
 | `marketdata/bundle.py` | Reads `<snapshot_id>.json.gz` bundles, verifies sha256 | ADR-002 |
 | `marketdata/adapter.py` | Contract v1 → `BondTerms`, `BondQuote`, core `BusinessCalendar`; the only module that knows the wire format | ADR-003 |
 | `curves/kbd.py` | KBD/ZCYC → core `DiscountCurve` (**temporary**, belongs to core package 0.6) | ADR-004 |
-| `valuation/bonds.py` | Eligibility with reason codes, fixed schedule with put/call horizon, core pricing and risk | 04 §1, 01 §3 |
-| `orchestrator.py` | One EOD date: prepare snapshots and curve, value requests | 04 §1 |
+| `valuation/bonds.py` | Eligibility with reason codes, fixed schedule with put/call horizon, core pricing and risk at the trade date | 04 §1, 01 §3 |
+| `pnl/flash.py` | Day-over-day flash PnL by exact repricing: carry, rolldown, rates, spread, other, with the identity check | VERTICAL_SLICES S2 |
+| `orchestrator.py` | One EOD date: prepare snapshots and curve, value requests, attach the flash PnL | 04 §1 |
 | `publish/tdm_run.py` | Writes the run through `tdm.writer.Run` (**slice shortcut** for the desk store) | ADR-006 later |
 | `report/validation.py` | Universe-wide comparison with MOEX analytics | VERTICAL_SLICES S1 |
