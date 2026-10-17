@@ -4,6 +4,8 @@ Revision 1, 16 October 2026. This is a sequencing view. Each repository keeps it
 
 ## 1 Milestones
 
+The order of work is set by [VERTICAL_SLICES.md](VERTICAL_SLICES.md): thin slices on real data that reach these milestones step by step. Slice S1 (17.10.2026) covers most of M1, with shortcuts listed there.
+
 | Milestone | Outcome | Needs |
 |---|---|---|
 | **M0 Foundations** | Contracts written and pinned; Windows/VPS topology and proxy facts known | Q4 answered (§3) |

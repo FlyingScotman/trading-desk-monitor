@@ -6,3 +6,8 @@ __pycache__/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+/.devdata/
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/

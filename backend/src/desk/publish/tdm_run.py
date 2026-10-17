@@ -1,0 +1,153 @@
+"""Write an S1 EOD run into the ``tdm`` store through its writer SDK (``tdm.writer.Run``).
+
+The store and the Desk Monitor prototype then show it through ``tdm serve`` and
+``window.DESK``. This is the slice shortcut for the desk store and desk API (VERTICAL_SLICES.md).
+Positions that were not priced are not written with zeros: each one is logged as a WARN line
+in the run log with its reason.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
+from rub_fixed_income import __version__ as CORE_VERSION
+from tdm.writer import Run
+
+from .. import __version__ as BACKEND_VERSION
+from ..curves import kbd
+from ..marketdata.adapter import MarketView
+from ..orchestrator import EodContext, Outcome
+
+CURVE_ID = "RUB OFZ"
+ASSET_CLASS = {"ofz_pd": "ОФЗ-ПД", "ofz_ad": "ОФЗ-АД", "ofz_pk": "ОФЗ-ПК", "ofz_in": "ОФЗ-ИН",
+               "subfederal": "Субфедеральные", "municipal": "Муниципальные", "corporate": "Корпоративные"}
+SEGMENT = {"ofz_pd": "Гос", "ofz_ad": "Гос", "ofz_pk": "Гос", "ofz_in": "Гос",
+           "subfederal": "Суб", "municipal": "Суб"}
+BOOKS = {
+    "OFZ": {"book_id": "OFZ", "name": "ОФЗ (демо)", "desk": "Rates", "trader": None, "book_type": "TRADING",
+            "entity": "Демо", "ocp_to": None},
+    "CORP": {"book_id": "CORP", "name": "Корпоративные (демо)", "desk": "Credit", "trader": None,
+             "book_type": "TRADING", "entity": "Демо", "ocp_to": None},
+}
+FX_CCYS = ("USD", "EUR", "CNY")
+INDICES = (("KEY_RATE", "КС"), ("RUONIA", "RUONIA"))
+
+
+def _issuer_key(ctx: EodContext, o: Outcome) -> tuple[str, dict[str, Any]]:
+    assert o.terms is not None
+    iss = ctx.static.issuer_of(o.terms)
+    is_gov = o.terms.bond_class.startswith("ofz") or bool(iss and iss.is_sovereign)
+    if iss is None:
+        key = f"issuer:{o.terms.issuer_id or o.secid}"
+        return key, {"issuer": key, "name": None, "issuer_group": key, "is_gov": is_gov, "is_quasi": False}
+    key = iss.short_name or iss.name
+    return key, {"issuer": key, "name": iss.name, "issuer_group": iss.name, "sector": iss.sector,
+                 "rating": None, "is_gov": is_gov, "is_quasi": False}
+
+
+def curve_points(ctx: EodContext, prev: MarketView | None) -> list[dict[str, Any]]:
+    prev_curve = kbd.from_zcyc(prev.business_date, prev.zcyc_params()) if prev else None
+    pts = []
+    for b, t in zip(RISK_BUCKETS, RISK_PILLARS):
+        r = ctx.kbd.yield_pct(t)
+        move = (r - prev_curve.yield_pct(t)) * 100 if prev_curve else 0.0
+        pts.append({"bucket": b, "rate": round(r, 4), "move_bp": round(move, 2)})
+    return pts
+
+
+def _fx_rows(ctx: EodContext, prev: MarketView | None) -> list[dict[str, Any]]:
+    rows = []
+    for ccy in FX_CCYS:
+        now = ctx.market.fx(ccy)
+        rate = now["moex_tom"] or now["cbr"]
+        if rate is None:
+            continue
+        old = prev.fx(ccy) if prev else {}
+        old_rate = (old.get("moex_tom") or old.get("cbr")) if old else None
+        rows.append({
+            "ccy": ccy, "rate": rate,
+            "move_pct": (rate / old_rate - 1) * 100 if old_rate else 0.0,
+            "rate_cbr": now["cbr"],
+            "move_pct_cbr": (now["cbr"] / old["cbr"] - 1) * 100 if now["cbr"] and old.get("cbr") else None,
+            "rate_cbr_next": now["cbr_next"],
+        })
+    return rows
+
+
+def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str) -> dict[str, Any]:
+    t, q, v = o.terms, o.quote, o.valuation
+    assert t is not None and q is not None and v is not None
+    as_of = ctx.business_date
+    spread_dur = -v.spread01_rub / v.pv_rub * 1e4 if v.pv_rub else None
+    sa = q.source_analytics
+    return {
+        "position_id": pid, "book_id": book, "instr_type": "BOND",
+        "asset_class": ASSET_CLASS.get(t.bond_class, t.bond_class), "segment": SEGMENT.get(t.bond_class, "Корп"),
+        "name": t.short_name or t.name, "isin": t.isin, "issuer": issuer, "ccy": "RUB",
+        "maturity": t.maturity_date.isoformat() if t.maturity_date else None,
+        "tenor_y": (t.maturity_date - as_of).days / 365.25 if t.maturity_date else None,
+        "coupon_type": "fix", "coupon": v.current_coupon_pct, "side": "long" if v.quantity >= 0 else "short",
+        "notional": v.quantity * v.face_rub, "notional_rub": v.quantity * v.face_rub,
+        "price": v.clean_pct, "mv": v.pv_rub, "mv_rub": v.pv_rub, "ytm": v.ytm_pct, "spread_bp": v.z_spread_bp,
+        "mdur": v.modified_duration, "spr_dur": spread_dur, "convexity": v.curve_convexity,
+        "dv01": v.dv01_rub,
+        "cs01": v.spread01_rub if v.spread_kind == "credit" else 0.0,
+        "ofz_spr01": v.spread01_rub if v.spread_kind == "ofz" else 0.0,
+        "instrument_id": t.secid, "accrued": v.accrued_rub, "coupon_freq": t.coupon_frequency,
+        "yield_date": v.horizon_date.isoformat() if v.horizon_kind != "maturity" else None,
+        "spread_type": "Z", "spread_curve": CURVE_ID, "new_today": False,
+        "risk": {CURVE_ID: v.buckets},
+        "gamma": [[_factor(a), _factor(b), g] for a, b, g in v.hessian],
+        "extra": {
+            "price_basis": v.price_basis, "horizon_kind": v.horizon_kind, "settlement": v.settlement.isoformat(),
+            "quantity_bonds": v.quantity, "base_id": v.base_id, "core_version": v.core_version,
+            "moex_yield_close_pct": sa.get("yield_close_pct"), "moex_duration_days": sa.get("duration_days"),
+            "valuation": "computed",
+        },
+    }
+
+
+def _factor(name: str) -> str:
+    return f"IR|{CURVE_ID}|{name[3:]}" if name.startswith("IR|") else name
+
+
+def publish(db: str, ctx: EodContext, positions: list[tuple[str, str, Outcome]], *,
+            prev: MarketView | None, comment: str | None = None) -> tuple[int, str, list[str]]:
+    """positions: (position_id, book_id, outcome). Returns (run_id, status, warnings)."""
+    lineage = {**ctx.lineage(), "backend_version": BACKEND_VERSION, "core_version": CORE_VERSION,
+               "prev_market_snapshot_id": prev.snapshot.id if prev else None}
+    issuers: dict[str, dict[str, Any]] = {}
+    rows, skipped = [], []
+    for pid, book, o in positions:
+        if o.valuation is None or o.terms is None:
+            skipped.append(f"{pid} {o.secid}: не посчитано ({o.reason}{': ' + o.detail if o.detail else ''})")
+            continue
+        key, rec = _issuer_key(ctx, o)
+        issuers[key] = rec
+        rows.append(position_row(ctx, book, pid, o, key))
+    used_books = [BOOKS[b] for b in BOOKS if any(r["book_id"] == b for r in rows)]
+    indices = []
+    for code, name in INDICES:
+        fx = ctx.market.latest_fixing(code)
+        if fx:
+            indices.append({"index_name": name, "value": fx[1]})
+    with Run(db, as_of=ctx.business_date.isoformat(), run_type="EOD",
+             source=f"desk-backend {BACKEND_VERSION} (slice S1)",
+             lib_version=f"rub-fixed-income-core {CORE_VERSION}",
+             market_snapshot=ctx.market.snapshot.id, comment=comment or json.dumps(lineage, ensure_ascii=False),
+             prev_date=prev.business_date.isoformat() if prev else None, jtd_recovery=0.0) as run:
+        run.add_books(used_books)
+        run.add_issuers(list(issuers.values()))
+        run.add_curves([{"curve_id": CURVE_ID, "name": "ОФЗ (КБД MOEX)", "ccy": "RUB", "kind": "bond",
+                         "points": curve_points(ctx, prev)}])
+        run.add_fx(_fx_rows(ctx, prev))
+        run.add_indices(indices)
+        run.add_positions(rows)
+        run.log("INFO", "lineage " + json.dumps(lineage, ensure_ascii=False))
+        for s in skipped:
+            run.log("WARN", s)
+        run.log("WARN", "JTD не считается в слайсе S1 (нет решения по recovery): поле jtd = 0")
+        run.log("INFO", f"посчитано позиций: {len(rows)}, не посчитано: {len(skipped)}")
+    return run.run_id, run.status, run.warnings

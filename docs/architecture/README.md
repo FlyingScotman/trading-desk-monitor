@@ -14,6 +14,7 @@ Revision 1, 16 October 2026. This folder is the system-level architecture of the
 | 6 | [06_DEPLOYMENT_AND_OPERATIONS.md](06_DEPLOYMENT_AND_OPERATIONS.md) | Windows server inside, hub split with a Linux VPS: snapshot replication, proxy, offline install on Python 3.11, time zones, backups, monitoring |
 | 7 | [07_CORE_PRODUCT_COVERAGE.md](07_CORE_PRODUCT_COVERAGE.md) | The development plan for products the core library cannot price yet. It is self-contained so it can be handed to the core project |
 | 8 | [ROADMAP.md](ROADMAP.md) | Work by repository, sequencing, and open questions for the owner |
+| 9 | [VERTICAL_SLICES.md](VERTICAL_SLICES.md) | **Current way of working:** thin end-to-end slices on real data (S1–S7), their shortcuts, results and findings |
 | — | [adr/](adr/) | Architecture decision records: one decision per file |
 | — | [reviews/](reviews/) | Point-in-time reviews; not maintained |
 
