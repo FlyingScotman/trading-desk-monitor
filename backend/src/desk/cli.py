@@ -1,7 +1,9 @@
 """``desk`` command line (slices S1, S2).
 
-    desk eod --snapshots .devdata/snapshots --date 2026-10-15 --book examples/demo_book.csv \\
-             --db ../.devdata/tdm.sqlite --report-dir ../.devdata/reports
+    desk eod --date 2026-10-15 --book examples/demo_book.csv --report-dir ../.devdata/reports
+
+Defaults for the snapshot folder, the run store and the report folder come from
+:mod:`desk.settings` (``DESK_*`` variables or ``backend/.env``); ``desk config`` prints them.
 
 ``desk eod`` attaches the day-over-day flash PnL when the folder has a snapshot of an earlier
 date (``--no-pnl`` turns it off).
@@ -21,6 +23,7 @@ from .marketdata.bundle import SnapshotDir
 from .orchestrator import attach_pnl, prepare, value
 from .publish import tdm_run
 from .report import validation
+from .settings import Settings, SettingsError, load
 
 
 def read_book(path: Path) -> list[tuple[str, str, str, float]]:
@@ -107,23 +110,39 @@ def cmd_demo_book(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_config(a: argparse.Namespace) -> int:
+    for key, shown in a.settings.describe():
+        print(f"{key:<15} {shown}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
+    try:
+        settings: Settings = load()
+    except SettingsError as e:
+        print(f"desk: {e}", file=sys.stderr)
+        return 2
     ap = argparse.ArgumentParser(prog="desk")
+    ap.set_defaults(settings=settings)
     sub = ap.add_subparsers(dest="cmd", required=True)
     e = sub.add_parser("eod", help="EOD run of one date from hub snapshot files")
-    e.add_argument("--snapshots", required=True, help="folder with <snapshot_id>.json.gz bundles")
+    e.add_argument("--snapshots", default=str(settings.snapshot_cache),
+                   help="folder with <snapshot_id>.json.gz bundles (default: DESK_SNAPSHOT_CACHE)")
     e.add_argument("--date", required=True)
     e.add_argument("--book", help="positions CSV (position_id, book_id, secid, quantity_bonds)")
-    e.add_argument("--db", default=str(Path(__file__).resolve().parents[3] / "data" / "tdm.sqlite"))
-    e.add_argument("--report-dir", help="write the validation report of the whole universe here")
+    e.add_argument("--db", default=str(settings.db), help="tdm SQLite store (default: DESK_DB)")
+    e.add_argument("--report-dir", default=settings.report_dir and str(settings.report_dir),
+                   help="write the validation report of the whole universe here (default: DESK_REPORT_DIR)")
     e.add_argument("--no-gamma", action="store_true", help="skip the Hessian")
     e.add_argument("--no-pnl", action="store_true", help="skip the flash PnL against the previous date")
     e.set_defaults(fn=cmd_eod)
     d = sub.add_parser("demo-book", help="generate the synthetic demo book")
-    d.add_argument("--snapshots", required=True)
+    d.add_argument("--snapshots", default=str(settings.snapshot_cache))
     d.add_argument("--date", required=True)
     d.add_argument("--out", required=True)
     d.set_defaults(fn=cmd_demo_book)
+    c = sub.add_parser("config", help="print the effective settings (token masked)")
+    c.set_defaults(fn=cmd_config)
     a = ap.parse_args(argv)
     return int(a.fn(a))
 

@@ -53,6 +53,8 @@ flowchart LR
 
 ## 3 Linux VPS layout (outside)
 
+**Deployed 18 October 2026**, hub 0.1.0. The address is not kept in the repository: each consumer sets it in its own settings (`DESK_HUB_URL` for the backend). The snapshot layer and consumer tokens are still to come ([VERTICAL_SLICES](VERTICAL_SLICES.md) S3, H1–H5).
+
 - Reuse the hub's existing deploy (`market-data-server/deploy/README_DEPLOY.md`): docker compose (or systemd), PostgreSQL 16, Python 3.12, Caddy for TLS.
 - Sizing: the deploy guide's minimum is 4 GB RAM and an 80 GB SSD. The seed database is already 3.4 GB, so leave headroom (8 GB RAM, 100 GB or more).
 - Firewall: only 22 and 443 open (80 for the HTTP certificate challenge). PostgreSQL and the API bind to 127.0.0.1; Caddy proxies only `/v1/*` and `/health/*`.

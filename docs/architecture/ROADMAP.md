@@ -1,6 +1,6 @@
 # Roadmap
 
-Revision 1, 16 October 2026. This is a sequencing view. Each repository keeps its own detailed task state in its own `STATUS.md`. `docs/program/backlog.json` is historical and is not reconciled with this file.
+Revision 2, 18 October 2026. This is a sequencing view. Each repository keeps its own detailed task state in its own `STATUS.md`. `docs/program/backlog.json` is historical and is not reconciled with this file.
 
 ## 1 Milestones
 
@@ -32,7 +32,7 @@ These items are for the session or project working on the hub. They are also lis
    - floater benchmarks with formula status.
 5. **One calendar version and fingerprint per snapshot.**
 6. **Alerting** (failed or missed jobs, stale data, unfillable gaps, missed snapshot) and **backups off the database disk**.
-7. **First VPS deployment for several consumers** ([ADR-001](adr/ADR-001-hosting-topology.md), hub `deploy/README_DEPLOY.md`):
+7. **First VPS deployment for several consumers** ([ADR-001](adr/ADR-001-hosting-topology.md), hub `deploy/README_DEPLOY.md`). **Deployed 18 October 2026** (hub 0.1.0) without the snapshot layer; the remaining steps are H1–H5 of slice S3 ([VERTICAL_SLICES](VERTICAL_SLICES.md)):
    - the snapshot layer merged and deployed, with read grants for the API's database role;
    - a provider and region from which every public source answers (source probes first);
    - TLS, firewall, service database roles, off-site backups;
@@ -51,7 +51,7 @@ The plan is dispatched: `rub-fixed-income-core/docs/PRODUCT_ROADMAP.md` (from [0
 
 1. Skeleton `backend/` package: FastAPI app, Postgres `desk` migrations, orchestrator CLI, worker ([04](04_BACKEND.md)).
 2. Store: runs with lineage, bitemporal private revisions, attachments, curve cache, jobs ([ADR-006](adr/ADR-006-desk-store-postgres-bitemporal.md)).
-3. `marketdata`: hub client and `adapters/mdhub_v1`, conformance tests on the hub fixtures.
+3. `marketdata`: hub client, snapshot cache and drop-folder import (slice S3); `adapters/mdhub_v1` and conformance tests on the hub fixtures (done in S1). Settings: `desk.settings`, `backend/.env.example`.
 4. `private_inputs`: declarative CSV/XLSX adapters for contract 1.3 datasets, including imported risk.
 5. `valuation`: core integration, hybrid merge, factor emission.
 6. `desk_rules`: funding/OCP/FX/HTM/carry from `ORG_CONVENTIONS.md`, configured by the DEC entries.

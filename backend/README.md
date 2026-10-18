@@ -1,6 +1,6 @@
 # Desk backend (`desk`)
 
-The Trading Desk Monitor backend. Design: [`docs/architecture/04_BACKEND.md`](../docs/architecture/04_BACKEND.md). Current state: **slices S1 and S2** of [`docs/architecture/VERTICAL_SLICES.md`](../docs/architecture/VERTICAL_SLICES.md). It values fixed-coupon RUB bonds from real hub snapshots with core 0.8.1, explains the day-over-day flash PnL by exact repricing, and publishes EOD runs that the Desk Monitor prototype shows.
+The Trading Desk Monitor backend. Design: [`docs/architecture/04_BACKEND.md`](../docs/architecture/04_BACKEND.md). Current state: **slices S1 and S2** (next: S3, snapshots from the VPS hub) of [`docs/architecture/VERTICAL_SLICES.md`](../docs/architecture/VERTICAL_SLICES.md). It values fixed-coupon RUB bonds from real hub snapshots with core 0.8.1, explains the day-over-day flash PnL by exact repricing, and publishes EOD runs that the Desk Monitor prototype shows.
 
 ```
 hub snapshot files ──► desk.marketdata (bundle + adapter mdhub_v1)
@@ -44,6 +44,22 @@ Then open:
 Run `desk eod` for an earlier date first if you want the previous-day curve moves and a date picker with history. When the snapshot folder holds an earlier date, `desk eod` also attaches the flash PnL against it (slice S2; `--no-pnl` turns it off).
 
 `examples/demo_book.csv` is synthetic: real public instruments, invented quantities. Regenerate it with `desk demo-book`.
+
+## Settings
+
+`desk.settings` reads `DESK_*` environment variables, then `backend/.env`. Copy [`.env.example`](.env.example) to `.env`; it is git-ignored. `desk config` prints the effective values, with the token masked.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DESK_HUB_URL` | not set | The VPS hub, set per installation (the address is not kept in the repository); HTTPS only |
+| `DESK_HUB_TOKEN_FILE` / `DESK_HUB_TOKEN` | not set | Bearer token of this consumer, scope `snapshots`. Keep it in a file outside the repository; the repository is public |
+| `DESK_HUB_CA_BUNDLE`, `HTTPS_PROXY` | system | Corporate proxy and its TLS-inspection CA (inside the work network) |
+| `DESK_SNAPSHOT_CACHE` | `.devdata/snapshots` | Verified bundles; `desk eod` and `desk demo-book` read here unless `--snapshots` is given |
+| `DESK_SNAPSHOT_DROP` | not set | Folder an operator fills by hand when the hub is unreachable |
+| `DESK_DB` | `.devdata/tdm.sqlite` | Run store (`--db`) |
+| `DESK_REPORT_DIR` | not set | Validation reports (`--report-dir`) |
+
+Pulling snapshots from the hub (`desk hub-check`, `desk sync`) is slice S3, which is not built yet. Until then the cache is filled by the dev export below. Plan: [VERTICAL_SLICES S3](../docs/architecture/VERTICAL_SLICES.md#s3-brief-live-hub-and-a-test-book).
 
 ## Tests
 

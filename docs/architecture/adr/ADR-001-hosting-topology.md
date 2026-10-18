@@ -70,7 +70,7 @@ The hub already has what a shared, internet-facing service needs (`market-data-s
 
 - **The hub stays Linux-only.** No replica mode, no Windows port, no Python 3.11 requirement for the hub. The VPS keeps Python 3.12.
 - **Python on the Windows side** is pinned to 3.11. Core (≥3.11) and the desk backend fit.
-- **The hub's snapshot endpoints are on the desk's critical path.** The snapshot layer must be merged and deployed before the backend can switch from snapshot files to the HTTP client (slice S4, [VERTICAL_SLICES](../VERTICAL_SLICES.md)).
+- **The hub's snapshot endpoints are on the desk's critical path.** The snapshot layer must be merged and deployed before the backend can switch from snapshot files to the HTTP client (slice S3, [VERTICAL_SLICES](../VERTICAL_SLICES.md)).
 - **One outside dependency for the desk.** A VPS outage delays new snapshots but never blocks a run on cached ones. Alerting covers a snapshot not published at the cut ([06](../06_DEPLOYMENT_AND_OPERATIONS.md) §9).
 - **The VPS is internet-facing.** It needs a firewall (22 and 443 only), TLS, token rotation, off-site backups and monitoring.
 - **VPS location.** Some Russian public sources (cbr.ru, Rosstat, MOEX) restrict foreign IP addresses at times. Sources with an IP allow-list (Cbonds) need the VPS address registered. Choose the provider and region with the hub's source probes, before the seed restore.
