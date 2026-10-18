@@ -1,10 +1,10 @@
-# ADR-001 Desk inside the work network on Windows; the hub may span a Linux VPS and the inside server
+# ADR-001 Desk inside the work network on Windows; one hub on a Linux VPS serves every consumer
 
-Status: accepted (owner, 16 October 2026; hosting detail amended the same day). The hub split between VPS and inside remains open.
+Status: accepted (owner, 16 October 2026; hosting detail amended the same day). **Amended 18 October 2026:** the hub runs as one instance on a Linux VPS and serves several consumers. The split of the hub between the VPS and an inside instance, left open on 16 October, is dropped (see History).
 
 **Supersedes:**
 - `docs/program/DECISIONS.md`:
-  - ADR03 (work-PC download of a broad VPS bundle), which is replaced by snapshot replication (below);
+  - ADR03 (work-PC download of a broad VPS bundle), which is replaced by the backend's snapshot cache (below);
   - ADR05 (Hermes runtime);
   - ADR06 (localhost on a work PC);
   - the roles in ADR04 (reader/curator/admin, replaced by viewer/trader/admin in [05](../05_FRONTEND_INTEGRATION.md) §6). ADR04's authentication principles still apply.
@@ -14,7 +14,7 @@ Status: accepted (owner, 16 October 2026; hosting detail amended the same day). 
   - the §11 API-role gate;
   - the §11 provisional performance targets (replaced by [03](../03_CALCULATION_SPLIT.md) §2, also provisional).
 
-ADR02 (Linux VPS with PostgreSQL) still applies to the VPS part of the hub. ADR08 (Linux and Windows release artifacts) still applies.
+ADR02 (Linux VPS with PostgreSQL) applies to the hub. ADR08 (Linux and Windows release artifacts) still applies.
 
 ## Context
 
@@ -25,44 +25,61 @@ The execution pack of 14 October assumed:
 
 The owner has since decided:
 1. The **desk backend and frontend run on a Windows server inside the work network.** That machine has Python 3.11.
-2. The **market-data hub may be split** between a Linux VPS outside and the Windows server inside. The exact split is not final.
+2. The **market-data hub runs on a Linux VPS** and must be usable from several places, not only from the desk: the desk backend inside the work network, the owner's development machines, and other tools of the owner (18 October 2026).
 3. All market data is properly licensed.
 4. Target scale is a few users and at most about 2k positions, with intraday refresh.
 
+The hub already has what a shared, internet-facing service needs (`market-data-server/deploy/README_DEPLOY.md`):
+- a docker compose deploy with PostgreSQL bound to localhost and a TLS reverse proxy (Caddy);
+- named bearer tokens per consumer with scopes (`read`, `snapshots`, `export`), revocable;
+- a request log;
+- an admin console behind an IP allow-list.
+
 ## Decision
 
-1. **Inside (Windows server):**
+1. **Outside (Linux VPS): one hub instance.**
+   - It runs every public collector (MOEX ISS/APIM, CBR, ECB, Rosstat, Ratescalcs, OTC Monitor and the rest), the quality and backfill jobs, and the snapshot publisher ([ADR-002](ADR-002-materialized-market-snapshots.md)).
+   - It is the single authoritative location for every series it collects.
+   - It uses the hub's existing deploy (docker compose, Python 3.12, PostgreSQL 16).
+   - **No private data ever goes to the VPS.** Consumers only read from the hub; no consumer writes to it.
+2. **Access for many consumers.**
+   - Every consumer gets its own named token with the narrowest scope it needs. The desk backend gets `snapshots`. A development machine gets `read` or `snapshots`.
+   - Access is HTTPS only, through the reverse proxy, to `/v1/*` and `/health/*`.
+   - PostgreSQL is never exposed. The read-only role is reachable only over an SSH tunnel, for administration.
+   - The admin console sits behind the IP allow-list.
+   - Tokens go only to the owner's own consumers, within the licence scope of each source.
+3. **Inside (Windows server):**
    - the desk backend (API, orchestrator, job worker);
    - the frontend static assets;
-   - PostgreSQL with the `desk` database;
-   - optionally an inside hub instance with its own `mdhub` database.
+   - PostgreSQL with the `desk` database only;
+   - a **snapshot cache** in the backend.
 
-   Services run as Windows services.
-2. **Outside (Linux VPS):** the hub's public collectors and its snapshot publisher, using the existing hub deploy (docker compose / systemd). **No private data ever goes to the VPS.**
-3. **The unit that crosses the boundary is the immutable snapshot** ([ADR-002](ADR-002-materialized-market-snapshots.md)).
-   - Whichever hub instance collects a dataset publishes snapshots.
-   - The inside side pulls VPS snapshots over HTTPS through the corporate proxy and verifies their sha256.
-   - The backend always reads snapshots from the inside endpoint (a local hub instance or a local snapshot cache). It never depends on live VPS availability for a run.
-4. **Where each collector runs** is decided per source, not per system:
-
-   | Collector kind | Runs |
-   |---|---|
-   | Sources reachable only from inside (bank-internal feeds, the internal FX mark, any vendor feed licensed to the bank network) | Inside |
-   | Public sources the proxy blocks or throttles | VPS |
-   | Everything else | Either; prefer one authoritative location per series |
-
-5. **No LLM runtime agent** is part of the architecture. Deterministic jobs, quality checks and alerting cover operations.
-6. **Products core cannot price yet** are imported from bank systems through contract 1.3 CSVs ("hybrid valuation", [01](../01_SYSTEM_OVERVIEW.md) §3).
+   Services run as Windows services. There is no hub instance inside.
+4. **The unit that crosses the boundary is the immutable snapshot** ([ADR-002](ADR-002-materialized-market-snapshots.md)).
+   - The backend pulls snapshots from the hub's `/v1/snapshots`, `/v1/snapshots/{id}/manifest` and `/v1/snapshots/{id}/bundle` endpoints over HTTPS through the corporate proxy.
+   - It verifies the sha256 against the snapshot ID and keeps the bundle in its cache.
+   - A run reads only from the cache, so it never depends on live VPS availability. The age of the snapshot used is shown.
+   - **Fallback when the proxy blocks the VPS:** an operator copies bundle files into the cache's drop folder. They get the same verification. The backend's `SnapshotDir` already reads such a folder (slice S1).
+5. **Inside-only data is not hub data.**
+   - The internal 19:00 FX mark, bank market-data feeds, trader marks, positions and official PnL enter through the backend's adapters for private inputs ([04](../04_BACKEND.md)).
+   - They are applied as versioned overrides on top of a hub snapshot, and never sent to the hub.
+6. **No LLM runtime agent** is part of the architecture. Deterministic jobs, quality checks and alerting cover operations.
+7. **Products core cannot price yet** are imported from bank systems through contract 1.3 CSVs ("hybrid valuation", [01](../01_SYSTEM_OVERVIEW.md) §3).
 
 ## Consequences
 
-- **Hub on two hosts.** The hub must run on both Linux and Windows, and must support a "replica" mode: ingest published snapshots from another instance, verify them, and serve them unchanged. Snapshot IDs are content hashes, so replication is idempotent.
-- **Python version.**
-  - The Windows side is pinned to Python 3.11. Core (≥3.11) fits.
-  - The hub currently requires ≥3.12. Its Windows part either lowers the requirement to 3.11 or ships its own embedded 3.12 runtime.
-  - The VPS keeps 3.12.
-- **Development.** It happens outside on public and synthetic data ("develop outside, run inside", [06](../06_DEPLOYMENT_AND_OPERATIONS.md)).
+- **The hub stays Linux-only.** No replica mode, no Windows port, no Python 3.11 requirement for the hub. The VPS keeps Python 3.12.
+- **Python on the Windows side** is pinned to 3.11. Core (≥3.11) and the desk backend fit.
+- **The hub's snapshot endpoints are on the desk's critical path.** The snapshot layer must be merged and deployed before the backend can switch from snapshot files to the HTTP client (slice S4, [VERTICAL_SLICES](../VERTICAL_SLICES.md)).
+- **One outside dependency for the desk.** A VPS outage delays new snapshots but never blocks a run on cached ones. Alerting covers a snapshot not published at the cut ([06](../06_DEPLOYMENT_AND_OPERATIONS.md) §9).
+- **The VPS is internet-facing.** It needs a firewall (22 and 443 only), TLS, token rotation, off-site backups and monitoring.
+- **VPS location.** Some Russian public sources (cbr.ru, Rosstat, MOEX) restrict foreign IP addresses at times. Sources with an IP allow-list (Cbonds) need the VPS address registered. Choose the provider and region with the hub's source probes, before the seed restore.
+- **Development.** It happens outside on public and synthetic data ("develop outside, run inside", [06](../06_DEPLOYMENT_AND_OPERATIONS.md)). Development machines read the same VPS hub with their own tokens.
 - **Open items:**
-  - proxy behaviour (TLS inspection, authentication);
-  - the final collector placement;
+  - proxy behaviour: TLS inspection, authentication, the allowlist entry for the hub's hostname (Q4);
   - Windows service tooling.
+
+## History
+
+- 16 October 2026: the hub "may be split" between the VPS and an inside instance that replicates VPS snapshots and runs inside-only collectors.
+- 18 October 2026: the owner chose one hub on the VPS for all consumers. Inside-only data moved to the backend's private-input adapters; the inside replica and the hub's Windows part were dropped.

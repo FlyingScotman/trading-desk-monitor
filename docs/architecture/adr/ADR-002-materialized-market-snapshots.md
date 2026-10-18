@@ -24,5 +24,5 @@ Today the hub serves raw table rows over `/v1` and builds the TDM CSV export on 
   - as-known-at readers for static tables (`ref.*`) over `ops.row_history`, and versioned changes instead of the hard deletes in `ref.calendar_day` and `ref.weekend_session`;
   - list/manifest/bundle endpoints;
   - retention rules.
-- Snapshots are the replication unit between the hub on the VPS and the hub inside ([ADR-001](ADR-001-hosting-topology.md)). The hub needs a replica mode that ingests snapshots, verifies them and serves them unchanged; content-hash IDs make this idempotent.
+- Snapshots are the unit that crosses from the hub on the VPS into the work network ([ADR-001](ADR-001-hosting-topology.md)). The desk backend pulls them into its snapshot cache and verifies the sha256 against the ID; content-hash IDs make the pull idempotent. Other consumers of the hub read the same snapshots with their own tokens.
 - Storage grows with intraday cuts. Keep intraday market snapshots small by referencing the static snapshot rather than embedding it.

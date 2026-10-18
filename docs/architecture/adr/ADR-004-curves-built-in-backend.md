@@ -4,7 +4,7 @@ Status: proposed (16 October 2026). Resolves open question A5 of the module revi
 
 ## Context
 
-The retired market-data-store built curves and projected floater cashflows inside the data service. The new hub's `DESIGN.md` explicitly lists curve bootstrapping, projection, spreads and pricing as non-goals. Curves are needed where the valuation runs, which is the inside server, and the hub may be split across hosts. So there is no reason to build curves in the hub. Projection depends on curves, so both must live in the same place.
+The retired market-data-store built curves and projected floater cashflows inside the data service. The new hub's `DESIGN.md` explicitly lists curve bootstrapping, projection, spreads and pricing as non-goals. Curves are needed where the valuation runs, which is the inside server, while the hub runs on a VPS and serves other consumers too. So there is no reason to build curves in the hub. Projection depends on curves, so both must live in the same place.
 
 ## Decision
 

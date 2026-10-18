@@ -13,7 +13,7 @@ The desk now runs on a Windows server inside the network, where PostgreSQL is al
 
 ## Decision
 
-1. The desk store is a PostgreSQL database `desk` on the inside Windows server. If the inside hub instance exists, its `mdhub` database is a separate database on the same PostgreSQL instance. The two databases are never joined directly. The backend reads market data only through snapshots ([ADR-002](ADR-002-materialized-market-snapshots.md)).
+1. The desk store is a PostgreSQL database `desk` on the inside Windows server. The hub's `mdhub` database lives on the VPS ([ADR-001](ADR-001-hosting-topology.md)); the two are never joined. The backend reads market data only through snapshots ([ADR-002](ADR-002-materialized-market-snapshots.md)).
 2. **Private data is bitemporal and append-only.** Positions, trades, OTC terms, funding rules, cash balances, trader marks, the internal FX mark and official PnL each carry:
    - `valid_date` (business date the record describes);
    - `recorded_at` (when the desk learned it);

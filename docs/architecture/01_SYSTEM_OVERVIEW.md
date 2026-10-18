@@ -33,20 +33,21 @@ flowchart LR
     MARKS[internal 19:00 FX mark, trader marks]
   end
   subgraph VPS["Linux VPS (outside; public data only)"]
-    HUBV[hub: public collectors<br/>+ snapshot publisher]
+    HUBV[hub: public collectors<br/>+ snapshot publisher + API]
   end
+  DEV((owner's dev machines,<br/>other tools))
   subgraph SRV["Windows server inside the work network"]
-    HUB[hub inside<br/>replica of VPS snapshots<br/>+ inside-only collectors]
-    PG[(PostgreSQL<br/>db: mdhub | db: desk)]
+    CACHE[(snapshot cache<br/>+ drop folder)]
+    PG[(PostgreSQL<br/>db: desk)]
     BE[desk backend<br/>orchestrator, adapters,<br/>valuation on core, desk rules,<br/>store, desk API, job worker]
     CORE[[rub-fixed-income-core<br/>Python package, in-process]]
     FE[frontend<br/>static assets served by backend]
   end
   MOEX & CBR & OTHER --> HUBV
-  HUBV -- immutable snapshots via proxy --> HUB
-  HUB <--> PG
+  HUBV -- immutable snapshots, HTTPS via proxy, pulled by the backend --> CACHE
+  HUBV -- HTTPS, own tokens --> DEV
   BE <--> PG
-  HUB -- snapshots, localhost only --> BE
+  CACHE --> BE
   CORE -. imported library .- BE
   BOOK & OFF & RISKIMP & MARKS -- files / internal paths --> BE
   BE -- desk API + events --> FE
@@ -62,7 +63,7 @@ flowchart LR
 | **PnL tool** | Parsing and analysing the bank's accounting PnL report | (Later) feeding official PnL to the backend through the `pnl_official` contract |
 
 Key structural decisions:
-- [ADR-001](adr/ADR-001-hosting-topology.md): desk on a Windows server inside the work network; hub possibly split between a Linux VPS and the inside server.
+- [ADR-001](adr/ADR-001-hosting-topology.md): desk on a Windows server inside the work network; one hub on a Linux VPS serves the desk and the owner's other consumers, each with its own token.
 - [ADR-002](adr/ADR-002-materialized-market-snapshots.md): materialized market snapshots.
 - [ADR-003](adr/ADR-003-adapter-in-backend.md): the wire → domain adapter sits in the backend.
 - [ADR-004](adr/ADR-004-curves-built-in-backend.md): curves are built in the backend with core.

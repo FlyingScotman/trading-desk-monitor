@@ -11,7 +11,7 @@ Revision 1, 16 October 2026. This folder is the system-level architecture of the
 | 3 | [03_CALCULATION_SPLIT.md](03_CALCULATION_SPLIT.md) | Which calculations run in the backend and which in the browser, including interactive stress scenarios and intraday |
 | 4 | [04_BACKEND.md](04_BACKEND.md) | What the desk backend is made of: orchestration, valuation, desk conventions, store, run lineage, jobs |
 | 5 | [05_FRONTEND_INTEGRATION.md](05_FRONTEND_INTEGRATION.md) | How the frontend is fed by the backend: the desk API, events, types, auth, the transition from the mockups |
-| 6 | [06_DEPLOYMENT_AND_OPERATIONS.md](06_DEPLOYMENT_AND_OPERATIONS.md) | Windows server inside, hub split with a Linux VPS: snapshot replication, proxy, offline install on Python 3.11, time zones, backups, monitoring |
+| 6 | [06_DEPLOYMENT_AND_OPERATIONS.md](06_DEPLOYMENT_AND_OPERATIONS.md) | Windows server inside, one hub on a Linux VPS for several consumers: snapshot cache, proxy, offline install on Python 3.11, time zones, backups, monitoring |
 | 7 | [07_CORE_PRODUCT_COVERAGE.md](07_CORE_PRODUCT_COVERAGE.md) | The development plan for products the core library cannot price yet. It is self-contained so it can be handed to the core project |
 | 8 | [ROADMAP.md](ROADMAP.md) | Work by repository, sequencing, and open questions for the owner |
 | 9 | [VERTICAL_SLICES.md](VERTICAL_SLICES.md) | **Current way of working:** thin end-to-end slices on real data (S1–S7), their shortcuts, results and findings |
@@ -52,7 +52,7 @@ Each repository has a short system-context file that states its role, its obliga
 |---|---|---|
 | trading_desk_monitor | `docs/architecture/README.md` (this file) | `docs/architecture/ROADMAP.md` |
 | rub-fixed-income-core | `docs/SYSTEM_CONTEXT.md` (linked from its README) | `docs/PRODUCT_ROADMAP.md`: the core development plan |
-| market-data-server | `docs/SYSTEM_CONTEXT.md` (linked from its README) | System work list for the hub: snapshot contract, replica, Windows part |
+| market-data-server | `docs/SYSTEM_CONTEXT.md` (linked from its README) | System work list for the hub: snapshot contract, VPS deploy for several consumers |
 | pnl_tool (local, no git) | `SYSTEM_CONTEXT.md` | Planned role at M5 |
 
 ### Interface catalogue
@@ -62,7 +62,7 @@ Every boundary between components is listed here with its owner and the version 
 | Interface | Producer → consumer | Owner | Format | Pinned version | Status |
 |---|---|---|---|---|---|
 | Market Snapshot Contract | hub → backend adapter | market-data-server | JSON Schema + golden fixtures | v1 | **To be created** ([02](02_MARKET_DATA_AND_CORE_CONTRACT.md)) |
-| Snapshot replication | hub VPS → hub inside | market-data-server | Snapshot list/manifest/bundle endpoints, sha256-verified | v1 | **To be created** ([06](06_DEPLOYMENT_AND_OPERATIONS.md) §1) |
+| Snapshot endpoints (`/v1/snapshots`, manifest, bundle) | hub on the VPS → backend snapshot cache, other consumers | market-data-server | HTTPS with a scoped bearer token; sha256-verified bundles | v1 | Built in a hub branch, not merged or deployed yet ([06](06_DEPLOYMENT_AND_OPERATIONS.md) §1) |
 | Hub read API (`/v1/...`) | hub → backend (market proxy, research) | market-data-server | HTTP JSON | unversioned | Exists; raw rows, no response models |
 | Core domain model and API | core → backend | rub-fixed-income-core | Python package; worker results as `rub-local-portfolio-risk-result.v1` (hash-verified JSON) | 0.8.1 today | Domain types still needed (core `docs/PRODUCT_ROADMAP.md` package 0) |
 | Run bundle and desk store contract | valuation engine → store | trading_desk_monitor | `contract/bundle.schema.json`, `docs/DATA_CONTRACT.md` | 1.3 | Exists |
@@ -75,7 +75,7 @@ Every boundary between components is listed here with its owner and the version 
 
 ## Relation to older documents
 
-- `docs/program/`: the execution pack of 14 October 2026. It assumed an external VPS for market data and a Windows work PC for calculations, with an LLM data curator. [ADR-001](adr/ADR-001-hosting-topology.md) supersedes the work-PC, Hermes and bulk-download parts. The Linux VPS remains for public collection, now linked to the inside server by snapshot replication. `DECISIONS.md` DEC01–DEC12 remain valid and authoritative for financial choices.
+- `docs/program/`: the execution pack of 14 October 2026. It assumed an external VPS for market data and a Windows work PC for calculations, with an LLM data curator. [ADR-001](adr/ADR-001-hosting-topology.md) supersedes the work-PC, Hermes and bulk-download parts. The Linux VPS remains for public collection: one hub there serves the inside backend, which pulls snapshots into its cache, and the owner's other consumers (amended 18 October 2026). `DECISIONS.md` DEC01–DEC12 remain valid and authoritative for financial choices.
 - `docs/DATA_CONTRACT.md`, `ORG_CONVENTIONS.md`, `SCENARIOS.md`, `DATA_REQUIREMENTS.md`, `SERVICE_DATA_MODEL.md`: remain the detailed desk specifications. Where this folder changes a design, for example the scenario levels or gamma sparsity, the change is stated explicitly and those files get a pointer.
 - [reviews/2026-10-16_module_review.md](reviews/2026-10-16_module_review.md): the module-by-module review that preceded this folder. Read its header note first.
 

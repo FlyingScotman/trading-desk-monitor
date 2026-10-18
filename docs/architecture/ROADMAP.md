@@ -32,12 +32,12 @@ These items are for the session or project working on the hub. They are also lis
    - floater benchmarks with formula status.
 5. **One calendar version and fingerprint per snapshot.**
 6. **Alerting** (failed or missed jobs, stale data, unfillable gaps, missed snapshot) and **backups off the database disk**.
-7. **Proxy-ready HTTP client:** custom CA bundle, proxy settings; a manual file-drop ingest path ([06](06_DEPLOYMENT_AND_OPERATIONS.md) §3).
-8. **Two-host operation** ([ADR-001](adr/ADR-001-hosting-topology.md)):
-   - a replica mode that pulls snapshots from the VPS instance, verifies sha256 and serves them unchanged;
-   - Windows service packaging;
-   - Python 3.11 support for the Windows part, or a bundled runtime.
-9. Later: an intraday API for bonds and FX; internal bank sources as inside collectors; SOFR/€STR/CPI series as needed by core packages 3 and 9.
+7. **First VPS deployment for several consumers** ([ADR-001](adr/ADR-001-hosting-topology.md), hub `deploy/README_DEPLOY.md`):
+   - the snapshot layer merged and deployed, with read grants for the API's database role;
+   - a provider and region from which every public source answers (source probes first);
+   - TLS, firewall, service database roles, off-site backups;
+   - one named token per consumer with the narrowest scope (`snapshots` for the desk backend).
+8. Later: an intraday API for bonds and FX; SOFR/€STR series as needed by core package 3. Bank-internal sources are not hub work: they enter through the backend's private-input adapters.
 
 ### rub-fixed-income-core
 
@@ -75,12 +75,12 @@ No changes for now. At M5 extract its XLSX reader and snapshot-revision logic in
 | ID | Question | Status (16 October 2026) | Consequence |
 |---|---|---|---|
 | Q1 | Where do positions and trades come from? Is there an intraday trade feed? | **Deferred** (to be decided later) | Backend designs a contract 1.3 file interface only; intraday reprices the opening book until a feed exists |
-| Q2 | Server OS and tooling | **Answered:** Windows inside the work network; Linux on the VPS | [ADR-001](adr/ADR-001-hosting-topology.md), [06](06_DEPLOYMENT_AND_OPERATIONS.md): Windows services, snapshot replication VPS → inside |
-| Q2a | Final split of hub collectors between VPS and inside | **Open** ("possibly split") | Decide per source ([06](06_DEPLOYMENT_AND_OPERATIONS.md) §4) once proxy facts are known |
+| Q2 | Server OS and tooling | **Answered:** Windows inside the work network; Linux on the VPS | [ADR-001](adr/ADR-001-hosting-topology.md), [06](06_DEPLOYMENT_AND_OPERATIONS.md): Windows services; the backend pulls snapshots from the VPS hub into its cache |
+| Q2a | Final split of hub collectors between VPS and inside | **Answered (18 October 2026):** one hub on the VPS, no inside instance; it serves several consumers | Inside-only data enters through the backend's private-input adapters ([06](06_DEPLOYMENT_AND_OPERATIONS.md) §4) |
 | Q3 | Data licensing | **Answered:** all sources properly licensed | Record licence scope per source in the hub's source registry |
-| Q4 | Proxy facts: TLS inspection CA, authentication type, allowlist process | **Open** | Blocks inside collection and replication tests |
+| Q4 | Proxy facts: TLS inspection CA, authentication type, allowlist process | **Open** | Blocks the snapshot pull from inside; the drop folder is the fallback |
 | Q6 | Book mix by product | **Answered:** all listed products are present (fixed, floaters, OFZ-PK, IRS, FX, XCCY, CDS, linkers, perpetuals, non-RUB) | All core packages 1–8 are required; package 9 per DEC10; default order in [07](07_CORE_PRODUCT_COVERAGE.md) stands unless MV weights say otherwise |
-| Q7 | Python version | **Answered:** 3.11 on the work machine | Windows side pinned to 3.11; core fits; the hub's Windows part must support 3.11 or bundle its own runtime |
+| Q7 | Python version | **Answered:** 3.11 on the work machine | Windows side pinned to 3.11; core and the backend fit; the hub runs only on the VPS (Python 3.12) |
 | Q8 | Is TradeLevel IFRS the official PnL (CBR basis, including funding)? | **Answered: yes** | `pnl_official` is fed from TradeLevel IFRS via pnl_tool's reader at M5; explain reconciles to it on the CBR basis, including funding |
 | Q9 | Frontend framework | **Answered:** React + TypeScript (recommended stack) | [05](05_FRONTEND_INTEGRATION.md) §3 |
 

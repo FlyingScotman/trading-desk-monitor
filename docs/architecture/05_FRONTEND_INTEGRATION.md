@@ -11,7 +11,7 @@ They are not the working application, and the calculations inside them are illus
 
 ## 1 Principles
 
-1. **The backend is the only data source.** The frontend calls the desk API only. The inside hub is reachable only from the backend, bound to localhost; bond and market views go through a backend proxy.
+1. **The backend is the only data source.** The frontend calls the desk API only. The browser never calls the hub on the VPS; bond and market views go through a backend proxy that reads the snapshot cache.
 2. **The frontend never computes a record.** It filters, sums, formats and charts backend fields. The only calculation it runs is the T1 Taylor approximation, labelled ≈ ([03](03_CALCULATION_SPLIT.md)).
 3. **Every number shows its provenance:** run (EOD/intraday, cut time, age), coverage (`partial n/N`), valuation source (`computed` / `imported`), estimate vs official.
 4. **One definition per metric.** All screens use the same selectors module, so the same filter gives the same total on every screen.
