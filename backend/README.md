@@ -1,6 +1,6 @@
 # Desk backend (`desk`)
 
-The Trading Desk Monitor backend. Design: [`docs/architecture/04_BACKEND.md`](../docs/architecture/04_BACKEND.md). Current state: **slices S1 and S2** (next: S3, snapshots from the VPS hub) of [`docs/architecture/VERTICAL_SLICES.md`](../docs/architecture/VERTICAL_SLICES.md). It values fixed-coupon RUB bonds from real hub snapshots with core 0.8.1, explains the day-over-day flash PnL by exact repricing, and publishes EOD runs that the Desk Monitor prototype shows.
+The Trading Desk Monitor backend. Design: [`docs/architecture/04_BACKEND.md`](../docs/architecture/04_BACKEND.md). Current state: **slices S1 and S2** (next: S3, snapshots from the VPS hub) of [`docs/architecture/VERTICAL_SLICES.md`](../docs/architecture/VERTICAL_SLICES.md). It values fixed-coupon RUB bonds from real hub snapshots with core 0.32.0 (pinned by commit from its GitHub repository), explains the day-over-day flash PnL by exact repricing, and publishes EOD runs that the Desk Monitor prototype shows.
 
 ```
 hub snapshot files ──► desk.marketdata (bundle + adapter mdhub_v1)
@@ -17,7 +17,10 @@ hub snapshot files ──► desk.marketdata (bundle + adapter mdhub_v1)
 
 ## Run it locally
 
-Requirements: [uv](https://docs.astral.sh/uv/), the sibling checkouts `../rub-fixed-income-core` and `../market-data-server` (with the hub's release bundle in `dist/` and its snapshot-layer worktree).
+Requirements:
+- [uv](https://docs.astral.sh/uv/). `uv sync` fetches core from its GitHub repository at the commit pinned in `pyproject.toml`; no core checkout is needed.
+- For the real-data runs below, until S3 lands: the sibling checkout `../market-data-server`, with the hub's release bundle in `dist/` and its snapshot-layer worktree. The tests need none of this; they run on vendored fixtures.
+- To develop core and the backend together, install your core checkout over the pin: `uv pip install -e ../../rub-fixed-income-core`. Do not commit that.
 
 ```bash
 tools/devdata/build_dev_snapshots.sh
@@ -75,7 +78,7 @@ The tests run slices S1 and S2 on the hub's golden fixtures, vendored in `tests/
 |---|---|---|
 | `marketdata/bundle.py` | Reads `<snapshot_id>.json.gz` bundles, verifies sha256 | ADR-002 |
 | `marketdata/adapter.py` | Contract v1 → `BondTerms`, `BondQuote`, core `BusinessCalendar`; the only module that knows the wire format | ADR-003 |
-| `curves/kbd.py` | KBD/ZCYC → core `DiscountCurve` (**temporary**, belongs to core package 0.6) | ADR-004 |
+| `curves/kbd.py` | KBD/ZCYC → core `DiscountCurve` (**temporary**: core 0.11 has the evaluator; replaced in S4) | ADR-004 |
 | `valuation/bonds.py` | Eligibility with reason codes, fixed schedule with put/call horizon, core pricing and risk at the trade date | 04 §1, 01 §3 |
 | `pnl/flash.py` | Day-over-day flash PnL by exact repricing: carry, rolldown, rates, spread, other, with the identity check | VERTICAL_SLICES S2 |
 | `orchestrator.py` | One EOD date: prepare snapshots and curve, value requests, attach the flash PnL | 04 §1 |

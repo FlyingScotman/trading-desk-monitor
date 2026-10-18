@@ -27,16 +27,19 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from rub_fixed_income import __version__ as CORE_VERSION
 from rub_fixed_income import (
+    CONTINUOUS,
+    ZSpreadConvention,
     bond_duration,
-    solve_continuous_z_spread,
     solve_nominal_annual_yield,
     solve_z_spread,
 )
+from rub_fixed_income import __version__ as CORE_VERSION
 
 from ..orchestrator import EodContext, Outcome
 from ..valuation.bonds import SPREAD_CONVENTION
+
+Z_CONTINUOUS = ZSpreadConvention(compounding=CONTINUOUS)
 
 SHORT_DAYS = 30
 OK_BP, WARN_BP = 1.0, 10.0
@@ -98,8 +101,8 @@ def compare(ctx: EodContext, o: Outcome) -> dict[str, Any]:
         try:
             row["z_annual_wap_bp"] = solve_z_spread(cf, dirty_wap, ctx.curve, settlement_date=ydate,
                                                     convention=SPREAD_CONVENTION) * 1e4
-            row["z_cont_wap_bp"] = solve_continuous_z_spread(cf, dirty_wap, ctx.curve,
-                                                             settlement_date=ydate) * 1e4
+            row["z_cont_wap_bp"] = solve_z_spread(cf, dirty_wap, ctx.curve, settlement_date=ydate,
+                                                  convention=Z_CONTINUOUS) * 1e4
         except (ValueError, RuntimeError):
             pass
         row["moex_z_spread_bp"] = _f(sa.get("zspread_bp"))

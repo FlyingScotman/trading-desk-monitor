@@ -33,7 +33,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "rub-fixed-income-core", editable = "../../rub-fixed-income-core" },
+    { name = "rub-fixed-income-core", git = "https://github.com/FlyingScotman/rub-fixed-income-core.git?rev=c0af38875e24f4bc8ccceab1b4fbb9eca1b5683b" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "trading-desk-monitor", editable = "../" },
 ]
@@ -251,21 +251,12 @@ wheels = [
 
 [[package]]
 name = "rub-fixed-income-core"
-version = "0.8.1"
-source = { editable = "../../rub-fixed-income-core" }
+version = "0.32.0"
+source = { git = "https://github.com/FlyingScotman/rub-fixed-income-core.git?rev=c0af38875e24f4bc8ccceab1b4fbb9eca1b5683b#c0af38875e24f4bc8ccceab1b4fbb9eca1b5683b" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
-    { name = "numpy", specifier = ">=2.0,<3" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
-]
-provides-extras = ["dev"]
 
 [[package]]
 name = "ruff"

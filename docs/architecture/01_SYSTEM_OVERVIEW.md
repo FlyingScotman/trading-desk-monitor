@@ -73,12 +73,12 @@ Key structural decisions:
 
 ## 3 Hybrid valuation
 
-Core 0.8.1 prices fixed-coupon RUB bonds, RUONIA / key-rate floaters (single-curve, without caps or floors) and FX futures. The book holds all products ([ROADMAP](ROADMAP.md) Q6): swaps, FX forwards, XCCY, CDS, linkers and more. The core development plan is `rub-fixed-income-core/docs/PRODUCT_ROADMAP.md`. The backend therefore runs a **hybrid valuation**:
+Core 0.32.0 (18 October 2026) has engines for every product the book holds ([ROADMAP](ROADMAP.md) Q6): bonds, floaters, linkers, callables and perpetuals, IRS, FX forwards and swaps, futures, REPO, XCCY, CDS. A product is `computed` only when the backend can also supply its inputs: hub snapshot data and trade terms. CDS has no data source yet. Status by product: [04](04_BACKEND.md) §7; the core plan: `rub-fixed-income-core/docs/PRODUCT_ROADMAP.md`. The backend therefore still runs a **hybrid valuation**:
 
 | Product state | Source of PV and risk | Shown as |
 |---|---|---|
 | Supported by core | Computed by the backend with core | `computed` |
-| Not yet supported by core | Imported from bank systems through contract 1.3 CSV or bundle | `imported`, with source and timestamp |
+| Not yet computable (no core engine, or inputs missing) | Imported from bank systems through contract 1.3 CSV or bundle | `imported`, with source and timestamp |
 | Neither | Absent | `not covered`. Never a zero: totals show partial coverage `n/N` |
 
 As core gains products, each one moves from `imported` to `computed`. For a transition period run both and reconcile them.
@@ -125,15 +125,15 @@ Official PnL arrives the next day from the bank (via pnl_tool's reader later). I
 3. The backend queues a job keyed by `hash(definition, run_id)`, revalues the base run exactly with core, stores the result, and emits an event.
 4. The UI shows the exact number and its residual against the Taylor estimate. See [03](03_CALCULATION_SPLIT.md).
 
-## 5 Honest current state (16 October 2026)
+## 5 Honest current state (16 October 2026, updated 18 October)
 
 | Area | State | What it means for the plan |
 |---|---|---|
 | Hub collection | Mature: hundreds of tests (451 at `74ed84f`; growing); raw-first, fail-closed, never forward-fills | Build dispatch on top; do not redesign collection |
-| Hub dispatch | `/v1` raw-row JSON and a TDM CSV export only. No snapshot IDs, no response models, no as-known reads for static data | [02](02_MARKET_DATA_AND_CORE_CONTRACT.md) work items |
-| Core (0.8.1) | Clean pure kernel: fixed and floating RUB bonds (RUONIA / key-rate, point-in-time fixings, single curve, no caps/floors); FX futures; shared shocked OIS curves within a job; a versioned, hash-verified worker result contract.<br>Still missing: a domain snapshot / instrument model, holiday data, IRS on positions, FX forwards, XCCY, CDS, linkers | Core `docs/PRODUCT_ROADMAP.md` (from [07](07_CORE_PRODUCT_COVERAGE.md)) |
+| Hub dispatch | 16 October: `/v1` raw-row JSON and a TDM CSV export only.<br>18 October: deployed on the VPS behind tokens. The snapshot layer (contract v1, `/v1/snapshots`) is built in a hub branch that is on one development machine only: not on GitHub, not merged, not deployed | [briefs/HUB.md](briefs/HUB.md) |
+| Core (0.8.1 on 16 October; **0.32.0** on 18 October) | 16 October: fixed and floating RUB bonds, FX futures, shared shocked OIS curves.<br>18 October: domain model (`Instrument`, `MarketSnapshot`, `Position`), KBD evaluator, curve-spec registry, `value_portfolio` with result contracts v2/v3, horizon PnL explain, and engines for all products in [04](04_BACKEND.md) §7. Only tag `v0.3.0` exists, so the backend pins a commit | Core `docs/PRODUCT_ROADMAP.md`; [briefs/CORE.md](briefs/CORE.md) |
 | Core ↔ hub | **No dependency.** Core's only bridge (`public_schedule.py`) targets the retired market-data-store | Replace with the adapter in the backend ([ADR-003](adr/ADR-003-adapter-in-backend.md)) |
-| Backend | Contracts and conventions documented (contract 1.3). `tdm/` is a prototype store and read API with no calculation engine | [04](04_BACKEND.md) |
+| Backend | 16 October: contracts and conventions documented (contract 1.3); `tdm/` a prototype store.<br>18 October: slices S1–S2 run real snapshots through core into the Desk Monitor (fixed bonds, flash PnL); settings for the VPS hub. No desk store or API yet | [VERTICAL_SLICES](VERTICAL_SLICES.md), [04](04_BACKEND.md) |
 | Frontend | Mockups that define the screens; the calculations inside them are illustrative | [05](05_FRONTEND_INTEGRATION.md) |
 | PnL | Standalone accounting-PnL tool | Connect later as the official-PnL source |
 

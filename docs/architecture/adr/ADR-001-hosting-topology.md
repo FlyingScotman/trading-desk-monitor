@@ -64,7 +64,7 @@ The hub already has what a shared, internet-facing service needs (`market-data-s
    - The internal 19:00 FX mark, bank market-data feeds, trader marks, positions and official PnL enter through the backend's adapters for private inputs ([04](../04_BACKEND.md)).
    - They are applied as versioned overrides on top of a hub snapshot, and never sent to the hub.
 6. **No LLM runtime agent** is part of the architecture. Deterministic jobs, quality checks and alerting cover operations.
-7. **Products core cannot price yet** are imported from bank systems through contract 1.3 CSVs ("hybrid valuation", [01](../01_SYSTEM_OVERVIEW.md) §3).
+7. **Products the backend cannot compute yet** (no core engine, or inputs missing) are imported from bank systems through contract 1.3 CSVs ("hybrid valuation", [01](../01_SYSTEM_OVERVIEW.md) §3).
 
 ## Consequences
 

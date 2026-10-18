@@ -25,7 +25,7 @@
 **Вариант А — git (если есть):**
 
 ```bat
-git clone -b claude/clever-ramanujan-s4k3ed https://github.com/FlyingScotman/trading_desk_monitor.git C:\tdm
+git clone -b claude/clever-ramanujan-s4k3ed https://github.com/FlyingScotman/trading-desk-monitor.git C:\tdm
 ```
 
 - `git clone` — скачать репозиторий целиком;

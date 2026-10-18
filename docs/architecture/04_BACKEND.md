@@ -124,18 +124,30 @@ Q1 is **deferred** by the owner ([ROADMAP](ROADMAP.md) §3). Until it is decided
 
 ## 7 Hybrid valuation
 
-| Product | Today | Path to `computed` |
-|---|---|---|
-| Fixed-coupon RUB bonds (bullet, amortizing, puts) | **Core 0.8.1** (package 0 still needed: calendars, cashflow split, domain types) | Package 0 |
-| RUONIA / key-rate floaters, OFZ-PK, without caps or floors | **Core 0.8.0+** (`floating`): point-in-time fixings, single curve with the spread as a discount margin | Remaining package 1: separate projection and discount curves; MOEX coupon reproduction tests |
-| Floaters with caps/floors, payment-lag shifts, in-arrears key-rate fixings | Imported | Package 1 (remaining) |
-| IRS (RUONIA OIS, key-rate swaps) | Imported | Package 2 |
-| Non-RUB bonds, FX delta | Imported | Package 3 |
-| FX spot/forwards/swaps | Imported | Package 4 |
-| FX futures (FORTS) | **Core 0.8.1** (`fx_futures`): covered parity with a frozen calibrated basis, both curves, basis01, FX delta, Hessian | Package 5 (FX part) |
-| OFZ / RUONIA / key-rate futures, REPO, XCCY, CDS, linkers, callables/perpetuals | Imported | Packages 5–9 |
+Core **0.32.0** (18 October 2026) has an engine for every product the book holds (Q6). What is missing is mostly on the data side: hub snapshot inputs, and term files for OTC products. The backend still uses only the bond engine (slices S1–S3). It moves to core's portfolio path in S4.
 
-Packages are defined in `rub-fixed-income-core/docs/PRODUCT_ROADMAP.md` (from [07](07_CORE_PRODUCT_COVERAGE.md)). Core's worker returns results in the versioned, hash-verified `rub-local-portfolio-risk-result.v1` format (0.7.0). The backend stores and verifies these rather than inventing its own result shape for core output. Imported records use contract 1.3 (`DATA_CONTRACT.md` position, risk and gamma sections). While a product is migrating, run both paths and publish the difference.
+| Product | Core engine (release) | Inputs still missing | Backend status |
+|---|---|---|---|
+| Fixed-coupon RUB bonds (bullet, amortizing, puts) | `value_portfolio` over `Instrument`/`MarketSnapshot`/`Position` (0.10–0.11); KBD evaluator and G-spread (0.11); corporate accrual `RateAccrualCouponLeg` RATE_ACT_365 (0.17); MOEX goldens (0.15, 0.17) | none | `computed` since S1, via `BondRiskEngine` and the backend's own KBD module; moves to `value_portfolio` in S4 |
+| Floaters (RUONIA, key rate, OFZ-PK), caps/floors, two curves | `floating` (0.8, 0.26) | Projection curves and fixings are in the snapshot; formula status per bond | S4 |
+| Seasoned IRS (RUONIA OIS, key-rate swaps) | `swaps` (0.21); exchange OIS spec `rub_ruonia_ois_moex_v2` (0.22) | Trade terms (contract 1.3 OTC files) | S8 |
+| Non-RUB bonds, FX delta | 0.18 | Foreign discount curves; FX spots with value dates | S8 |
+| FX forwards and FX swaps | `fx_forwards` (0.19) | Trade terms; swap points or outrights | S8 |
+| FX, RUONIA, key-rate and OFZ futures | `fx_futures` (0.8.1), `rate_futures`, `ofz_futures` (0.27) | Futures settlement prices and RUONIA index values in the snapshot | S8 |
+| REPO | `repo` (0.28) | Trade terms; RUSFAR fixings (in the snapshot) | S8 |
+| XCCY CNY/RUB vs RUONIA | `xccy` (0.25) | Trade terms; XCCY quotes (quote sets) | S8 |
+| CDS | `cds` (0.24) | **No data source** for par spreads or upfronts | `imported` until a source exists |
+| OFZ-IN linkers | `linkers` (0.23) | CPI series in the snapshot | S4 |
+| Callables, perpetuals, constant-CPR pass-throughs | `callables`, `pass_through` (0.20), with explicit exercise or CPR assumptions | The desk's assumptions (DEC10) | S4 for perpetuals to call; the rest per DEC10 |
+| Structured notes and other bonds without a usable schedule | none | — | `not covered`, or `imported` |
+
+Carry, rolldown and theta of the whole mixed book: `horizon_portfolio` (0.14, 0.30–0.32). Derivatives return `rub-portfolio-risk-result.v3`; bond-only jobs keep v2 byte for byte (core `docs/portfolio-v3.md`). The backend stores and verifies these hash-verified results rather than inventing its own result shape for core output.
+
+The `imported` path (contract 1.3 position, risk and gamma sections) stays for:
+- products whose inputs are missing;
+- the reconciliation period of each product. While a product is migrating, run both paths and publish the difference.
+
+Status by package: `rub-fixed-income-core/docs/PRODUCT_ROADMAP.md`. Briefs: [briefs/CORE.md](briefs/CORE.md), [briefs/HUB.md](briefs/HUB.md).
 
 ## 8 Reuse from the `tdm` prototype
 

@@ -1,6 +1,6 @@
 # Vertical slices
 
-As of 18 October 2026. Status: working plan, owned by the backend. **Next slice: S3, brief below.**
+As of 18 October 2026. Status: working plan, owned by the backend. **Next slices: S3 and S4, briefs below.** Work for the hub and core: [briefs/HUB.md](briefs/HUB.md), [briefs/CORE.md](briefs/CORE.md).
 
 ## Why
 
@@ -21,7 +21,9 @@ Each slice keeps whatever it built that matches the architecture. Where it takes
 | Backend reads snapshots from the hub API (`/v1/snapshots`) | Reads bundle files that the hub's own builder produced from a copy of the seed database (`tools/devdata/build_dev_snapshots.sh`) | S3. The dev export stays as the offline fallback |
 | Desk Postgres store with run lineage (ADR-006) | The `tdm` SQLite store through its writer SDK (`tdm.writer.Run`); lineage goes into the run log and `lib_version` | S5 |
 | Desk API v1 + React screens (05) | `tdm serve` and the existing Desk Monitor prototype through `window.DESK` | S5 (API), S6 (first React screen) |
-| KBD/ZCYC evaluator in core (core package 0.6) | Backend module `desk.curves.kbd`, which builds a core `DiscountCurve` from the published ZCYC parameters | When core delivers 0.6 |
+| KBD/ZCYC evaluator in core (delivered in core 0.11) | Backend module `desk.curves.kbd`, which builds a core `DiscountCurve` from the published ZCYC parameters | S4 |
+| Core's portfolio path: `value_portfolio` over `Instrument`/`MarketSnapshot`/`Position` (core 0.10–0.11) | The adapter builds `BondCashflow` totals and calls `BondRiskEngine` per position | S4 |
+| Horizon PnL explain in core: `explain_horizon_pnl`, `horizon_portfolio` (core 0.14) | `desk.pnl.flash`, the backend's own stepwise repricing | S4: run both and compare; one stays |
 | Real positions (Q1 deferred) | A synthetic book over real instruments (`backend/examples/demo_book.csv`; S3 adds `test_book.csv` with several books and coverage cases) plus a "universe" run: one bond of every priceable instrument | When Q1 is answered |
 
 ## Slices
@@ -31,11 +33,11 @@ Each slice keeps whatever it built that matches the architecture. Where it takes
 | **S1 EOD fixed bonds on KBD** | Desk Monitor with a real 15.10.2026 run: PV, yield, Z-spread, DV01 by bucket, CS01, gamma for fixed-coupon OFZ and corporates of the demo book. A **validation report** per bond: our yield, duration, G-spread and accrued vs MOEX analytics from the same snapshot; coverage list with a reason for every bond not priced | Hub snapshot contract on the full universe; adapter; core 0.8.1 fixed-cashflow engine; KBD curve; writer SDK; prototype data path | **Done 17.10.2026** (see below) |
 | **S2 Day-over-day flash PnL** | Second run on the next date with PnL by factor: carry, rates, spread, residual, using two snapshots and exact repricing | Snapshot history; core `reprice`; run-to-run linking | **Done 17.10.2026** (see below) |
 | **S3 Live hub and a test book** | Desk Monitor on runs of the last five business dates, valued from snapshots **pulled from the VPS hub** into the backend's cache. A synthetic test book with several books, shorts and coverage cases. Snapshot age on every run | Hub snapshot endpoints and token scopes; backend HTTP client, cache and verification; reproducibility by snapshot ID; the run never depends on the hub being up | **Next.** Live acceptance waits for the hub's snapshot layer (H1–H5 below) |
-| **S4 Floaters and the RUONIA curve** | OFZ-PK and key-rate floaters priced with fixings and projection; a RUONIA OIS curve from the hub's quote sets in the curves panel | Hub fixings and quote sets; core `FloatingLeg`, OIS bootstrap; curve-spec mapping `dataset` → spec | |
+| **S4 Core portfolio path and the whole bond universe** | The same screens, valued through core 0.32 `value_portfolio`. Also priced now: floaters (OFZ-PK, key-rate, RUONIA), perpetuals to an explicit call and, once the hub carries CPI, OFZ-IN. A RUONIA OIS curve (`rub_ruonia_ois_moex_v2`) in the curves panel. Coverage grows from about 1034 bonds to every bond with a usable schedule | Adapter to core domain types; curve-spec mapping `dataset` → spec; core KBD; core horizon explain against `desk.pnl.flash` | Brief below; can start in parallel with S3 |
 | **S5 Desk backend proper** | Same screens, now served by the desk API from the desk Postgres store, with run lineage | ADR-006, 04, 05 §2 | |
 | **S6 Interactive scenario** | Scenario slider with instant Taylor (≈) and an "exact" button that reprices on the backend; residual shown | 03 T1/T2, parity fixtures; first React + TypeScript screen | |
 | **S7 Intraday** | Intraday run every N minutes on intraday cuts; badge with age | Hub intraday cuts; scheduler | |
-| **S8 Hybrid book** | IRS, FX and other products imported from contract 1.3 files next to computed bonds, with coverage states | `private_inputs`, hybrid merge | |
+| **S8 Derivatives and the hybrid book** | IRS, FX forwards and swaps, XCCY, futures and REPO from contract 1.3 term files, valued by core (result v3) next to bonds; CDS and whatever still lacks inputs imported, with coverage states | `private_inputs`; snapshot inputs from [briefs/HUB.md](briefs/HUB.md) (futures prices, FX value dates, RUONIA index); hybrid merge | |
 
 Each slice ends with:
 - a short note in this file: what works, what was found, what moved to the backlog of which repo;
@@ -177,6 +179,52 @@ If the prototype has a place for it in `window.DESK` meta, show the snapshot age
 - floaters (S4);
 - intraday cuts (S7).
 
+## S4 brief: core portfolio path and the whole bond universe
+
+**Goal.** Bonds are valued through core 0.32's `value_portfolio`, the entry point core built for the desk (core `docs/CONSUMERS.md`, "Desk backend"). The backend's own bond plumbing goes away, and coverage grows to every bond with a usable schedule. S4 needs no hub change beyond what the snapshot already carries, except CPI for OFZ-IN. It can run in parallel with S3, because both sides read the same `SnapshotDir`.
+
+**Work.**
+1. **Adapter to core domain types** (`marketdata/adapter.py`): snapshot → core `Instrument`, `MarketSnapshot` and `Position`, in this one module (ADR-003).
+   - Coupon legs per core `CONSUMERS.md`:
+     - OFZ: `FixedCouponLeg`;
+     - corporates: `RateAccrualCouponLeg` with `AccrualBasis.RATE_ACT_365` and each coupon's `valueprc / 100`;
+     - ACT/360 and 30/360 issues: the matching basis.
+   - Offers mapped to `Offer`. The open-window rule of F2 stays in the backend until core C1 lands.
+   - Floaters through the snapshot's `floater_formulas`, used only with status `curated` (or `inferred`, if the owner accepts it). Otherwise the bond is rejected, never priced on guessed coupons (ADR-004).
+2. **Curves through core** (ADR-004):
+   - KBD by core's evaluator under `rub_ofz_kbd_v1`. Delete `desk.curves.kbd` once the curves agree to 0.01 bp on the dev snapshots.
+   - RUONIA OIS by `rub_ruonia_ois_moex_v2` from the hub's quote sets.
+   - The key-rate projection curve `rub_key_rate_projection_v1`.
+   - The mapping hub `dataset` → core spec ID lives in the backend as a versioned table (README interface catalogue).
+3. **Valuation** (`valuation/bonds.py`): one `value_portfolio` call per run.
+   - `ValuationPolicy` holds the trade-date valuation (F9), the spread convention and the cap/floor guard.
+   - Perpetuals and callables carry explicit `exercise_assumptions` per DEC10; without one they are rejected.
+   - Store the hash-verified result (`rub-portfolio-risk-result.v2`) with the run.
+4. **PnL.** Compute the flash PnL both ways: `desk.pnl.flash` and core `explain_horizon_pnl` / `horizon_portfolio`. Report the difference per component. Keep one implementation once they agree, or record why they differ.
+5. **Tests.** The S1/S2 tests keep their tolerances on the vendored fixtures. Add new fixture cases for the floater, the OFZ-IN and the perpetual already in `tests/fixtures/mdhub_v1/`.
+
+**Acceptance.**
+- On the dev snapshots of 09–15.10, fixed-coupon results match S1/S2:
+  - PV within 1 RUB per position;
+  - Z-spread within 0.1 bp;
+  - flash PnL total within 0.01 %.
+
+  Otherwise each difference is explained as a finding.
+- OFZ-PK and corporate floaters are priced, with their coupons checked against MOEX accrued (core 0.26 goldens).
+- The validation report covers the new classes, and the "not priced" list shrinks to bonds without a usable schedule or formula. Each one has a reason.
+- `desk.curves.kbd` is deleted.
+
+**Out of scope:**
+- derivatives (S8);
+- OFZ-IN, until the hub carries a CPI series ([briefs/HUB.md](briefs/HUB.md) H10).
+
+## Core 0.32.0 recheck (18 October 2026)
+
+The backend moved from a local core 0.8.1 checkout to core 0.32.0, pinned by commit from its GitHub repository (`backend/pyproject.toml`). Without code changes beyond one deprecated call (`solve_continuous_z_spread` → `solve_z_spread` with a continuous `ZSpreadConvention`):
+- the tests pass, also with `DeprecationWarning` as an error;
+- the validation report of 15.10 over 4033 instruments is byte-identical to the one on 0.8.1;
+- the flash PnL of 14→15.10 is unchanged: +34.776 m RUB, 28/28 positions.
+
 ## S1 detail
 
 **Flow.**
@@ -236,9 +284,9 @@ Most mismatches are bonds 1–3 months from their horizon. There a price differe
 | # | Finding | Goes to |
 |---|---|---|
 | F1 | MOEX measures effective yield and duration from the **trade date**, not the T+1 settlement date. With T+1 the bias was +0.9 bp (OFZ) and +4 bp (corporates); with the trade date it is −0.2 / −0.1 bp | Done in the report. A DEC entry must fix which date the desk shows yields from |
-| F2 | The yield horizon is the next offer **whose exercise window is still open**, including issuer calls; MOEX skips puts whose window has closed | Done in `valuation/bonds.py`. Core's future `Instrument` (package 0.1) needs `window_end` and the call/put type |
-| F3 | 314 instruments have a quote without accrued interest, and 130 have no price (no trades). Every instrument carries `day_count_not_published`, so neither the backend nor core can compute accrued itself | Hub: publish MOEX accrued for every instrument (securities board data), not only for traded ones. Core: accrued from the schedule needs the day count |
-| F4 | Some `known` coupon amounts contradict MOEX accrued. Example: RU000A101M04, next coupon 30.21 RUB against accrued 36.45 RUB | Hub: bond static verification (hub STATUS, remaining step 3) |
+| F2 | The yield horizon is the next offer **whose exercise window is still open**, including issuer calls; MOEX skips puts whose window has closed | Done in `valuation/bonds.py`. Core 0.32 `Offer` has a date, a type and `confirmed`, but no exercise window, and its horizon uses confirmed puts only: [briefs/CORE.md](briefs/CORE.md) C1 |
+| F3 | 314 instruments have a quote without accrued interest, and 130 have no price (no trades). Every instrument carries `day_count_not_published`, so neither the backend nor core can compute accrued itself | Hub: publish MOEX accrued for every instrument, [briefs/HUB.md](briefs/HUB.md) H7. The coupon rate (`valueprc`) is already in the static snapshot, so core 0.17 can compute accrued from the schedule with the rate basis (S4) |
+| F4 | Some `known` coupon amounts contradict MOEX accrued. Example: RU000A101M04, next coupon 30.21 RUB against accrued 36.45 RUB | Hub: bond static verification, [briefs/HUB.md](briefs/HUB.md) H8 |
 | F5 | For bonds close to their horizon, comparing yields is not meaningful | Backend: compare in price space next |
 | F6 | The dev export builds every historical cut with today's `known_at` | Accepted for development. Real runs read published snapshots (S3) |
 | F7 | The hub's snapshot layer sits in a worktree based on an older main (migrations 0423/0424 missing there) | Hub: merge the snapshot layer (S3, H1) |

@@ -14,7 +14,8 @@ Revision 1, 16 October 2026. This folder is the system-level architecture of the
 | 6 | [06_DEPLOYMENT_AND_OPERATIONS.md](06_DEPLOYMENT_AND_OPERATIONS.md) | Windows server inside, one hub on a Linux VPS for several consumers: snapshot cache, proxy, offline install on Python 3.11, time zones, backups, monitoring |
 | 7 | [07_CORE_PRODUCT_COVERAGE.md](07_CORE_PRODUCT_COVERAGE.md) | The development plan for products the core library cannot price yet. It is self-contained so it can be handed to the core project |
 | 8 | [ROADMAP.md](ROADMAP.md) | Work by repository, sequencing, and open questions for the owner |
-| 9 | [VERTICAL_SLICES.md](VERTICAL_SLICES.md) | **Current way of working:** thin end-to-end slices on real data (S1–S8; next S3), their shortcuts, results and findings |
+| 9 | [VERTICAL_SLICES.md](VERTICAL_SLICES.md) | **Current way of working:** thin end-to-end slices on real data (S1–S8; next S3 and S4), their shortcuts, results and findings |
+| 10 | [briefs/HUB.md](briefs/HUB.md), [briefs/CORE.md](briefs/CORE.md) | Work orders from the desk to the hub and to core: what blocks the desk, findings on real data, inputs core can use |
 | — | [adr/](adr/) | Architecture decision records: one decision per file |
 | — | [reviews/](reviews/) | Point-in-time reviews; not maintained |
 
@@ -25,7 +26,7 @@ Revision 1, 16 October 2026. This folder is the system-level architecture of the
 | **Desk backend** | `trading_desk_monitor` (this repo) | The heart of the system. Orchestrates runs, prices with core, applies desk conventions, stores results, serves the desk API | Documents and contract 1.3; `tdm/` is a prototype of the store |
 | **Frontend** | `trading_desk_monitor` (`prototypes/` today) | Screens for risk, PnL explain, scenarios, bonds | Visual mockups that define how the tool should look |
 | **Market data hub** | `market-data-server` (package `mdhub`) | Collects, validates, versions and serves public market and static data | Deployed on the VPS (hub 0.1.0, 18 October 2026). Collection is mature; the snapshot layer is not merged or deployed yet |
-| **Calculation core** | `rub-fixed-income-core` (package `rub_fixed_income`) | Pure pricing and risk library, with no I/O | v0.8.1: fixed-coupon and floating (RUONIA / key-rate) RUB bonds; FX futures; shared shocked OIS curves per job |
+| **Calculation core** | `rub-fixed-income-core` (package `rub_fixed_income`) | Pure pricing and risk library, with no I/O | v0.32.0 (18 October 2026): domain model, KBD, `value_portfolio`, horizon explain, and engines for every product of the book ([04](04_BACKEND.md) §7) |
 | **PnL tool** | `pnl_tool` (local, no git) | Standalone accounting-PnL dashboard over the bank's TradeLevel report | Standalone by design; to be connected later as the official-PnL source |
 
 ## Where documents live
@@ -64,10 +65,10 @@ Every boundary between components is listed here with its owner and the version 
 | Market Snapshot Contract | hub → backend adapter | market-data-server | JSON Schema + golden fixtures | v1 | Built in a hub branch; the backend vendors the golden fixtures ([02](02_MARKET_DATA_AND_CORE_CONTRACT.md)) |
 | Snapshot endpoints (`/v1/snapshots`, manifest, bundle) | hub on the VPS → backend snapshot cache, other consumers | market-data-server | HTTPS with a scoped bearer token; sha256-verified bundles | v1 | Built in a hub branch, not merged or deployed yet: the VPS hub answers 404 on `/v1/snapshots`. The backend client is slice S3 ([VERTICAL_SLICES](VERTICAL_SLICES.md)) |
 | Hub read API (`/v1/...`) | hub → backend (market proxy, research) | market-data-server | HTTP JSON | unversioned | Exists; raw rows, no response models |
-| Core domain model and API | core → backend | rub-fixed-income-core | Python package; worker results as `rub-local-portfolio-risk-result.v1` (hash-verified JSON) | 0.8.1 today | Domain types still needed (core `docs/PRODUCT_ROADMAP.md` package 0) |
+| Core domain model and API | core → backend | rub-fixed-income-core | Python package; results `rub-portfolio-risk-result.v2` (bonds) / `.v3` (with derivatives), hash-verified JSON | 0.32.0, pinned by commit `c0af388` in `backend/pyproject.toml` (no release tags after `v0.3.0`) | The backend uses only `BondRiskEngine` so far; it moves to `value_portfolio` in S4 ([briefs/CORE.md](briefs/CORE.md)) |
 | Run bundle and desk store contract | valuation engine → store | trading_desk_monitor | `contract/bundle.schema.json`, `docs/DATA_CONTRACT.md` | 1.3 | Exists |
 | Private input files (positions, trades, OTC, funding, official PnL) | bank systems → backend | trading_desk_monitor | `contract/csv/*.csv` | 1.3 | Exists as templates |
-| Imported risk for products core cannot price | bank systems → backend | trading_desk_monitor | contract 1.3 CSV / bundle | 1.3 | Interim path ([ADR-001](adr/ADR-001-hosting-topology.md), [07](07_CORE_PRODUCT_COVERAGE.md)) |
+| Imported risk for products not yet computable | bank systems → backend | trading_desk_monitor | contract 1.3 CSV / bundle | 1.3 | Interim path ([ADR-001](adr/ADR-001-hosting-topology.md), [07](07_CORE_PRODUCT_COVERAGE.md)) |
 | Desk API | backend → frontend | trading_desk_monitor | OpenAPI + generated TypeScript types | v1 | **To be created** ([05](05_FRONTEND_INTEGRATION.md)) |
 | Official PnL feed | pnl_tool reader → backend | trading_desk_monitor | `pnl_official` dataset | — | Later |
 | Hub `dataset` → core curve-spec mapping | backend adapter → core | trading_desk_monitor | Versioned mapping table | — | **To be created** ([02](02_MARKET_DATA_AND_CORE_CONTRACT.md) §4) |
