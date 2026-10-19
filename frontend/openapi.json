@@ -1,0 +1,2669 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Desk API",
+    "description": "Desk API v1 (docs/architecture/05 §2)",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health/live": {
+      "get": {
+        "summary": "Live",
+        "operationId": "live_health_live_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Live Health Live Get"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "summary": "Ready",
+        "operationId": "ready_health_ready_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ready"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs": {
+      "get": {
+        "summary": "Runs",
+        "operationId": "runs_api_v1_runs_get",
+        "parameters": [
+          {
+            "name": "business_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Business Date"
+            }
+          },
+          {
+            "name": "run_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "EOD",
+                    "INTRADAY",
+                    "TEST",
+                    "REPLAY"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Run Type"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "loading",
+                    "complete",
+                    "failed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "next_cursor of the previous page",
+              "title": "Cursor"
+            },
+            "description": "next_cursor of the previous page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunList"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/default": {
+      "get": {
+        "summary": "Default Run",
+        "operationId": "default_run_api_v1_runs_default_get",
+        "parameters": [
+          {
+            "name": "business_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Business Date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunHeader"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run_id}": {
+      "get": {
+        "summary": "Run Detail",
+        "operationId": "run_detail_api_v1_runs__run_id__get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run_id}/positions": {
+      "get": {
+        "summary": "Positions",
+        "operationId": "positions_api_v1_runs__run_id__positions_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "book",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Book"
+            }
+          },
+          {
+            "name": "quality",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "exact, assumed, market_value, ...",
+              "title": "Quality"
+            },
+            "description": "exact, assumed, market_value, ..."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PositionList"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run_id}/pnl": {
+      "get": {
+        "summary": "Pnl",
+        "operationId": "pnl_api_v1_runs__run_id__pnl_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunPnl"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run_id}/aggregates": {
+      "get": {
+        "summary": "Aggregates",
+        "operationId": "aggregates_api_v1_runs__run_id__aggregates_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "dims",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Comma-separated: book, quality, asset_class, segment, issuer, ccy",
+              "default": "book",
+              "title": "Dims"
+            },
+            "description": "Comma-separated: book, quality, asset_class, segment, issuer, ccy"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Aggregates"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run_id}/risk": {
+      "get": {
+        "summary": "Risk",
+        "operationId": "risk_api_v1_runs__run_id__risk_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskPayload"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/scenario-defs": {
+      "get": {
+        "summary": "Scenario Defs",
+        "operationId": "scenario_defs_api_v1_scenario_defs_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScenarioDefList"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/scenario-jobs": {
+      "post": {
+        "summary": "Submit Job",
+        "description": "202: a new job, queued; 200: the live or done job of an equivalent definition",
+        "operationId": "submit_job_api_v1_scenario_jobs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScenarioJob"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/scenario-jobs/{job_id}": {
+      "get": {
+        "summary": "Get Job",
+        "operationId": "get_job_api_v1_scenario_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScenarioJob"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/compat/desk": {
+      "get": {
+        "summary": "Compat Desk",
+        "description": "window.DESK as JSON; compat, removed with window.DESK (M7)",
+        "operationId": "compat_desk_api_v1_compat_desk_get",
+        "parameters": [
+          {
+            "name": "as_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As Of"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Compat Desk Api V1 Compat Desk Get"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AggregateRow": {
+        "properties": {
+          "key": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Key"
+          },
+          "n_positions": {
+            "type": "integer",
+            "title": "N Positions"
+          },
+          "n_valued": {
+            "type": "integer",
+            "title": "N Valued"
+          },
+          "n_pnl": {
+            "type": "integer",
+            "title": "N Pnl"
+          },
+          "pv_rub": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pv Rub"
+          },
+          "dv01_rub": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dv01 Rub"
+          },
+          "cs01_rub": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cs01 Rub"
+          },
+          "pnl": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Pnl",
+            "description": "Sums of the PnL components and total; null if none"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "n_positions",
+          "n_valued",
+          "n_pnl",
+          "pv_rub",
+          "dv01_rub",
+          "cs01_rub",
+          "pnl"
+        ],
+        "title": "AggregateRow"
+      },
+      "Aggregates": {
+        "properties": {
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "dims": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Dims"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/AggregateRow"
+            },
+            "type": "array",
+            "title": "Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "dims",
+          "rows"
+        ],
+        "title": "Aggregates"
+      },
+      "ErrorOut": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "not_found",
+              "invalid_parameter",
+              "store_unavailable",
+              "internal"
+            ],
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "details": {
+            "title": "Details"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "request_id"
+        ],
+        "title": "ErrorOut"
+      },
+      "JobIn": {
+        "properties": {
+          "base_run_id": {
+            "type": "integer",
+            "title": "Base Run Id"
+          },
+          "definition": {
+            "$ref": "#/components/schemas/ScenarioDefinition"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "base_run_id",
+          "definition"
+        ],
+        "title": "JobIn"
+      },
+      "LatestRun": {
+        "properties": {
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "business_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Business Date"
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Completed At"
+          },
+          "age_seconds": {
+            "type": "number",
+            "title": "Age Seconds"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "business_date",
+          "completed_at",
+          "age_seconds"
+        ],
+        "title": "LatestRun"
+      },
+      "LogLine": {
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "title": "Seq"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "INFO",
+              "WARN",
+              "ERROR"
+            ],
+            "title": "Level"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "seq",
+          "level",
+          "message"
+        ],
+        "title": "LogLine"
+      },
+      "MissingPosition": {
+        "properties": {
+          "position_id": {
+            "type": "string",
+            "title": "Position Id"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "position_id",
+          "reason"
+        ],
+        "title": "MissingPosition"
+      },
+      "PnlSums": {
+        "properties": {
+          "carry": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Carry"
+          },
+          "rolldown": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rolldown"
+          },
+          "rates": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rates"
+          },
+          "spread": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spread"
+          },
+          "fx_gross": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fx Gross"
+          },
+          "fx_funding": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fx Funding"
+          },
+          "funding": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Funding"
+          },
+          "convexity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Convexity"
+          },
+          "new_trades": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Trades"
+          },
+          "other": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Other"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          },
+          "n_positions": {
+            "type": "integer",
+            "title": "N Positions",
+            "description": "Valued positions"
+          },
+          "n_pnl": {
+            "type": "integer",
+            "title": "N Pnl",
+            "description": "Of those, with a flash PnL"
+          }
+        },
+        "type": "object",
+        "required": [
+          "carry",
+          "rolldown",
+          "rates",
+          "spread",
+          "fx_gross",
+          "fx_funding",
+          "funding",
+          "convexity",
+          "new_trades",
+          "other",
+          "total",
+          "n_positions",
+          "n_pnl"
+        ],
+        "title": "PnlSums",
+        "description": "Sums over the positions with a flash PnL; null when none has one."
+      },
+      "Position": {
+        "properties": {
+          "position_id": {
+            "type": "string",
+            "title": "Position Id"
+          },
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "secid": {
+            "type": "string",
+            "title": "Secid"
+          },
+          "quantity": {
+            "type": "number",
+            "title": "Quantity"
+          },
+          "quality": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quality",
+            "description": "null: not valued (no data at all); reason says why"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "pv_rub": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pv Rub"
+          },
+          "dv01_rub": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dv01 Rub"
+          },
+          "cs01_rub": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cs01 Rub"
+          },
+          "fact": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fact",
+            "description": "The published position record (tdm position row format)"
+          },
+          "pnl": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pnl",
+            "description": "Flash PnL components plus extra; null without PnL"
+          },
+          "no_pnl": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "No Pnl",
+            "description": "{reason, detail} when priced but without PnL"
+          }
+        },
+        "type": "object",
+        "required": [
+          "position_id",
+          "book_id",
+          "secid",
+          "quantity",
+          "quality",
+          "reason",
+          "pv_rub",
+          "dv01_rub",
+          "cs01_rub",
+          "fact",
+          "pnl",
+          "no_pnl"
+        ],
+        "title": "Position"
+      },
+      "PositionList": {
+        "properties": {
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "positions": {
+            "items": {
+              "$ref": "#/components/schemas/Position"
+            },
+            "type": "array",
+            "title": "Positions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "positions"
+        ],
+        "title": "PositionList"
+      },
+      "PositionPnl": {
+        "properties": {
+          "position_id": {
+            "type": "string",
+            "title": "Position Id"
+          },
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "components": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Components",
+            "description": "Flash PnL components (as_tdm); null without PnL"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          },
+          "extra": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extra",
+            "description": "Method, flags and checks of the flash PnL"
+          },
+          "no_pnl": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "No Pnl"
+          }
+        },
+        "type": "object",
+        "required": [
+          "position_id",
+          "book_id",
+          "components",
+          "total",
+          "extra",
+          "no_pnl"
+        ],
+        "title": "PositionPnl"
+      },
+      "Ready": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status"
+          },
+          "schema_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schema Version"
+          },
+          "latest_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LatestRun"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "schema_version",
+          "latest_run"
+        ],
+        "title": "Ready"
+      },
+      "ResultCoverage": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "complete",
+              "partial"
+            ],
+            "title": "Status"
+          },
+          "n_positions": {
+            "type": "integer",
+            "title": "N Positions"
+          },
+          "n_exact": {
+            "type": "integer",
+            "title": "N Exact"
+          },
+          "missing": {
+            "items": {
+              "$ref": "#/components/schemas/MissingPosition"
+            },
+            "type": "array",
+            "title": "Missing"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "n_positions",
+          "n_exact",
+          "missing"
+        ],
+        "title": "ResultCoverage"
+      },
+      "ResultPosition": {
+        "properties": {
+          "position_id": {
+            "type": "string",
+            "title": "Position Id"
+          },
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "quality": {
+            "type": "string",
+            "title": "Quality"
+          },
+          "taylor": {
+            "$ref": "#/components/schemas/TaylorParts"
+          },
+          "exact": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exact",
+            "description": "Exact repricing PnL, RUB; null when not covered"
+          },
+          "residual": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Residual",
+            "description": "exact - taylor.total"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code",
+            "description": "Why not covered: the fallback quality, core_<code>, base_mismatch"
+          }
+        },
+        "type": "object",
+        "required": [
+          "position_id",
+          "book_id",
+          "quality",
+          "taylor",
+          "exact",
+          "residual",
+          "code"
+        ],
+        "title": "ResultPosition"
+      },
+      "ResultTotals": {
+        "properties": {
+          "taylor": {
+            "type": "number",
+            "title": "Taylor"
+          },
+          "taylor_covered": {
+            "type": "number",
+            "title": "Taylor Covered",
+            "description": "Taylor total of the positions with an exact value"
+          },
+          "exact": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exact"
+          },
+          "residual": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Residual"
+          },
+          "blended": {
+            "type": "number",
+            "title": "Blended",
+            "description": "exact of the covered positions + taylor of the others"
+          },
+          "n_positions": {
+            "type": "integer",
+            "title": "N Positions"
+          },
+          "n_exact": {
+            "type": "integer",
+            "title": "N Exact"
+          }
+        },
+        "type": "object",
+        "required": [
+          "taylor",
+          "taylor_covered",
+          "exact",
+          "residual",
+          "blended",
+          "n_positions",
+          "n_exact"
+        ],
+        "title": "ResultTotals"
+      },
+      "RiskPayload": {
+        "properties": {
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "business_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Business Date"
+          },
+          "buckets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Buckets"
+          },
+          "curves": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Curves"
+          },
+          "factors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Factors",
+            "description": "IR|<curve>|<bucket>, then CS, then FX|<ccy>"
+          },
+          "positions": {
+            "items": {
+              "$ref": "#/components/schemas/RiskPosition"
+            },
+            "type": "array",
+            "title": "Positions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "business_date",
+          "buckets",
+          "curves",
+          "factors",
+          "positions"
+        ],
+        "title": "RiskPayload",
+        "description": "First-order and Hessian sensitivities of a run's valued positions, for the Taylor (T1) scenario\nestimate: x_i shock per factor, total = sum delta x + sum_(i<=j) (i == j ? 1/2 : 1) gamma x_i x_j."
+      },
+      "RiskPosition": {
+        "properties": {
+          "position_id": {
+            "type": "string",
+            "title": "Position Id"
+          },
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "secid": {
+            "type": "string",
+            "title": "Secid"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "quality": {
+            "type": "string",
+            "title": "Quality"
+          },
+          "issuer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issuer"
+          },
+          "sector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sector"
+          },
+          "rating": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rating"
+          },
+          "spread_kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ofz",
+                  "credit"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spread Kind"
+          },
+          "spread_bp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spread Bp"
+          },
+          "pv_rub": {
+            "type": "number",
+            "title": "Pv Rub"
+          },
+          "delta": {
+            "items": {
+              "prefixItems": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array",
+              "maxItems": 2,
+              "minItems": 2
+            },
+            "type": "array",
+            "title": "Delta",
+            "description": "[factor index, RUB per unit]: IR and CS per bp, FX per 1 %; nonzero only"
+          },
+          "gamma": {
+            "items": {
+              "prefixItems": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array",
+              "maxItems": 3,
+              "minItems": 3
+            },
+            "type": "array",
+            "title": "Gamma",
+            "description": "[i, j, RUB per unit_i x unit_j], i <= j"
+          }
+        },
+        "type": "object",
+        "required": [
+          "position_id",
+          "book_id",
+          "secid",
+          "name",
+          "quality",
+          "issuer",
+          "sector",
+          "rating",
+          "spread_kind",
+          "spread_bp",
+          "pv_rub",
+          "delta",
+          "gamma"
+        ],
+        "title": "RiskPosition"
+      },
+      "RunDetail": {
+        "properties": {
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "run_type": {
+            "type": "string",
+            "enum": [
+              "EOD",
+              "INTRADAY",
+              "TEST",
+              "REPLAY"
+            ],
+            "title": "Run Type"
+          },
+          "business_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Business Date"
+          },
+          "prev_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prev Date"
+          },
+          "cut_type": {
+            "type": "string",
+            "title": "Cut Type",
+            "description": "eod_preliminary / eod_final / intraday"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "loading",
+              "complete",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "supersedes_run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Run Id"
+          },
+          "is_default": {
+            "type": "boolean",
+            "title": "Is Default",
+            "description": "The default run of its date: the latest complete EOD run on eod_final, otherwise on eod_preliminary (04 §3)"
+          },
+          "market_snapshot_id": {
+            "type": "string",
+            "title": "Market Snapshot Id"
+          },
+          "static_snapshot_id": {
+            "type": "string",
+            "title": "Static Snapshot Id"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage",
+            "description": "{book: {quality: n}, _total: {...}}"
+          },
+          "totals": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Totals",
+            "description": "{book: {pv_rub, dv01_rub, cs01_rub, pnl}, _total}"
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date",
+            "title": "As Of",
+            "description": "= business_date; compat, removed with window.DESK (M7)"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At",
+            "description": "= completed_at; compat, removed with window.DESK (M7)"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "lineage": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Lineage",
+            "description": "EodContext.lineage() plus the run's lineage columns (04 §3)"
+          },
+          "log": {
+            "items": {
+              "$ref": "#/components/schemas/LogLine"
+            },
+            "type": "array",
+            "title": "Log"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "run_type",
+          "business_date",
+          "prev_date",
+          "cut_type",
+          "status",
+          "started_at",
+          "completed_at",
+          "supersedes_run_id",
+          "is_default",
+          "market_snapshot_id",
+          "static_snapshot_id",
+          "coverage",
+          "totals",
+          "as_of",
+          "published_at",
+          "error",
+          "lineage",
+          "log"
+        ],
+        "title": "RunDetail"
+      },
+      "RunHeader": {
+        "properties": {
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "run_type": {
+            "type": "string",
+            "enum": [
+              "EOD",
+              "INTRADAY",
+              "TEST",
+              "REPLAY"
+            ],
+            "title": "Run Type"
+          },
+          "business_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Business Date"
+          },
+          "prev_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prev Date"
+          },
+          "cut_type": {
+            "type": "string",
+            "title": "Cut Type",
+            "description": "eod_preliminary / eod_final / intraday"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "loading",
+              "complete",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "supersedes_run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Run Id"
+          },
+          "is_default": {
+            "type": "boolean",
+            "title": "Is Default",
+            "description": "The default run of its date: the latest complete EOD run on eod_final, otherwise on eod_preliminary (04 §3)"
+          },
+          "market_snapshot_id": {
+            "type": "string",
+            "title": "Market Snapshot Id"
+          },
+          "static_snapshot_id": {
+            "type": "string",
+            "title": "Static Snapshot Id"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage",
+            "description": "{book: {quality: n}, _total: {...}}"
+          },
+          "totals": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Totals",
+            "description": "{book: {pv_rub, dv01_rub, cs01_rub, pnl}, _total}"
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date",
+            "title": "As Of",
+            "description": "= business_date; compat, removed with window.DESK (M7)"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At",
+            "description": "= completed_at; compat, removed with window.DESK (M7)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "run_type",
+          "business_date",
+          "prev_date",
+          "cut_type",
+          "status",
+          "started_at",
+          "completed_at",
+          "supersedes_run_id",
+          "is_default",
+          "market_snapshot_id",
+          "static_snapshot_id",
+          "coverage",
+          "totals",
+          "as_of",
+          "published_at"
+        ],
+        "title": "RunHeader"
+      },
+      "RunList": {
+        "properties": {
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/RunHeader"
+            },
+            "type": "array",
+            "title": "Runs"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor",
+            "description": "Pass as cursor for the next page; null on the last page"
+          }
+        },
+        "type": "object",
+        "required": [
+          "runs",
+          "next_cursor"
+        ],
+        "title": "RunList"
+      },
+      "RunPnl": {
+        "properties": {
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "positions": {
+            "items": {
+              "$ref": "#/components/schemas/PositionPnl"
+            },
+            "type": "array",
+            "title": "Positions"
+          },
+          "totals": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PnlSums"
+            },
+            "type": "object",
+            "title": "Totals",
+            "description": "Per book and _total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "positions",
+          "totals"
+        ],
+        "title": "RunPnl"
+      },
+      "ScenarioDefList": {
+        "properties": {
+          "scenarios": {
+            "items": {
+              "$ref": "#/components/schemas/ScenarioDefOut"
+            },
+            "type": "array",
+            "title": "Scenarios"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scenarios"
+        ],
+        "title": "ScenarioDefList"
+      },
+      "ScenarioDefOut": {
+        "properties": {
+          "scenario_id": {
+            "type": "string",
+            "title": "Scenario Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "preset",
+              "historical",
+              "custom"
+            ],
+            "title": "Kind"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "ord": {
+            "type": "integer",
+            "title": "Ord"
+          },
+          "definition": {
+            "$ref": "#/components/schemas/ScenarioDefinition"
+          },
+          "definition_hash": {
+            "type": "string",
+            "title": "Definition Hash"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scenario_id",
+          "name",
+          "kind",
+          "description",
+          "ord",
+          "definition",
+          "definition_hash"
+        ],
+        "title": "ScenarioDefOut"
+      },
+      "ScenarioDefinition": {
+        "properties": {
+          "curves": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "items": {
+                    "type": "number"
+                  },
+                  "type": "array"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Curves",
+            "default": {}
+          },
+          "ofzSpread": {
+            "type": "number",
+            "title": "Ofzspread",
+            "default": 0
+          },
+          "spreads": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SpreadRules"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fx": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Fx",
+            "default": {}
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ScenarioDefinition",
+        "description": "The prototype scenario shape. curves: bp per RISK_BUCKETS pillar (11) or one number for all, per\npublished curve (\"RUB OFZ\"); ofzSpread: OFZ Z-spread to the KBD, bp; fx: % against RUB (+ = weaker\nrouble). Returned normalized: 11-pillar lists, zeros and empty entries left out."
+      },
+      "ScenarioJob": {
+        "properties": {
+          "job_id": {
+            "type": "integer",
+            "title": "Job Id"
+          },
+          "base_run_id": {
+            "type": "integer",
+            "title": "Base Run Id"
+          },
+          "definition_hash": {
+            "type": "string",
+            "title": "Definition Hash"
+          },
+          "definition": {
+            "$ref": "#/components/schemas/ScenarioDefinition"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "done",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Requested At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScenarioResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "base_run_id",
+          "definition_hash",
+          "definition",
+          "status",
+          "requested_at",
+          "started_at",
+          "finished_at",
+          "error",
+          "result"
+        ],
+        "title": "ScenarioJob"
+      },
+      "ScenarioResult": {
+        "properties": {
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "definition_hash": {
+            "type": "string",
+            "title": "Definition Hash"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/ResultCoverage"
+          },
+          "totals": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ResultTotals"
+            },
+            "type": "object",
+            "title": "Totals",
+            "description": "Per book and _total"
+          },
+          "positions": {
+            "items": {
+              "$ref": "#/components/schemas/ResultPosition"
+            },
+            "type": "array",
+            "title": "Positions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "method",
+          "definition_hash",
+          "coverage",
+          "totals",
+          "positions"
+        ],
+        "title": "ScenarioResult"
+      },
+      "SpreadRules": {
+        "properties": {
+          "_all": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "All"
+          },
+          "_mult": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mult"
+          },
+          "sector": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Sector",
+            "default": {}
+          },
+          "issuer": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Issuer",
+            "default": {}
+          },
+          "rating": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Rating",
+            "default": {}
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SpreadRules",
+        "description": "Credit spread shocks in bp, additive; mult scales the position's own spread (factor > 0)."
+      },
+      "TaylorParts": {
+        "properties": {
+          "rates": {
+            "type": "number",
+            "title": "Rates"
+          },
+          "spread": {
+            "type": "number",
+            "title": "Spread"
+          },
+          "fx": {
+            "type": "number",
+            "title": "Fx"
+          },
+          "convexity": {
+            "type": "number",
+            "title": "Convexity"
+          },
+          "total": {
+            "type": "number",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rates",
+          "spread",
+          "fx",
+          "convexity",
+          "total"
+        ],
+        "title": "TaylorParts"
+      }
+    }
+  }
+}

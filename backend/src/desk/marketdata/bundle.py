@@ -62,6 +62,12 @@ class SnapshotDir:
     def get(self, snapshot_id: str) -> Snapshot:
         return read_bundle(self.root / f"{snapshot_id}.json.gz")
 
+    def provenance(self, snapshot_id: str) -> dict[str, Any] | None:
+        """Hub facts written by ``desk sync`` beside the bundle (host, published_at); None for files
+        from a dev export or a drop."""
+        p = self.root / f"{snapshot_id}.hub.json"
+        return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else None
+
     def market_dates(self, cut_type: str = "eod_final") -> list[str]:
         return sorted({m["business_date"] for m in self._manifests.values()
                        if m["kind"] == "market" and m["cut_type"] == cut_type})

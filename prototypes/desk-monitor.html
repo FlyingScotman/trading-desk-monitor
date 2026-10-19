@@ -479,6 +479,7 @@ const COLS = [
   {k:'tenorY', t:'Срок, лет', n:1, d:1},
   {k:'side', t:'Сторона'},
   {k:'notional', t:'Номинал, млн вал.', n:1, d:1, v:p => p.notional/1e6, def:1, sg:1},
+  {k:'quality', t:'Оценка', v:p => p.extra ? p.extra.quality : null, def:1},
   {k:'price', t:'Цена', n:1, d:2, def:1},
   {k:'ytm', t:'Дох., %', n:1, d:2, def:1},
   {k:'spreadBp', t:'Спред, б.п.', n:1, d:0, def:1},

@@ -1,4 +1,4 @@
-"""Day-over-day flash PnL of a bond position by exact repricing with core 0.8.1 (slice S2).
+"""Day-over-day flash PnL of a bond position by exact repricing with core (slices S2, S4).
 
 The position of ``D-1`` (its cashflows, quantity and calibrated Z-spread ``z0``) is repriced
 step by step until it reaches the market of ``D``. Each step changes one thing, so the
@@ -44,9 +44,11 @@ from rub_fixed_income import (
     BondRiskRequest,
     DiscountCurve,
     ShockedCurveCache,
+    ZcycParameters,
+    kbd_discount_curve,
+    kbd_zero_rate_bp,
 )
 
-from ..curves import kbd
 from ..valuation.bonds import SPREAD_CONVENTION, BondValuation
 
 METHOD = "desk-flash-exact-v1"
@@ -57,24 +59,25 @@ IDENTITY_TOLERANCE_RUB = 0.01
 class FlashCurves:
     """The three curves of the steps: D-1, D-1 parameters dated D, and D."""
 
-    prev: kbd.KbdCurve
-    cur: kbd.KbdCurve
+    prev: ZcycParameters
+    cur: ZcycParameters
     prev_curve: DiscountCurve
     roll_curve: DiscountCurve
     cur_curve: DiscountCurve
 
     @classmethod
-    def build(cls, prev: kbd.KbdCurve, cur: kbd.KbdCurve,
+    def build(cls, prev: ZcycParameters, cur: ZcycParameters,
               prev_curve: DiscountCurve | None = None, cur_curve: DiscountCurve | None = None) -> FlashCurves:
-        if prev.curve_date >= cur.curve_date:
-            raise ValueError(f"previous curve {prev.curve_date} is not before {cur.curve_date}")
-        roll = kbd.from_zcyc(cur.curve_date, prev.params)
-        return cls(prev, cur, prev_curve or prev.discount_curve(), roll.discount_curve(),
-                   cur_curve or cur.discount_curve())
+        """The curves are core's KBD (``kbd_discount_curve``), as in the valuations."""
+        if prev.trade_date >= cur.trade_date:
+            raise ValueError(f"previous curve {prev.trade_date} is not before {cur.trade_date}")
+        return cls(prev, cur, prev_curve or kbd_discount_curve(prev), kbd_discount_curve(prev, cur.trade_date),
+                   cur_curve or kbd_discount_curve(cur))
 
     def zero_move_bp(self) -> dict[str, float]:
         """Continuously compounded zero-rate move per risk pillar at the same tenor."""
-        return {b: self.cur.g_bp(t) - self.prev.g_bp(t) for b, t in zip(RISK_BUCKETS, RISK_PILLARS)}
+        return {b: kbd_zero_rate_bp(self.cur, t) - kbd_zero_rate_bp(self.prev, t)
+                for b, t in zip(RISK_BUCKETS, RISK_PILLARS)}
 
 
 @dataclass(frozen=True)
@@ -172,7 +175,7 @@ def explain(prev: BondValuation, cur: BondValuation, curves: FlashCurves,
     v1 = q * cur.dirty_rub + received
     total = q * (cur.dirty_rub - prev.dirty_rub) + received
     out = FlashPnl(
-        secid=prev.secid, quantity=q, prev_date=curves.prev.curve_date, as_of=curves.cur.curve_date,
+        secid=prev.secid, quantity=q, prev_date=curves.prev.trade_date, as_of=curves.cur.trade_date,
         prev_valuation_date=s0, valuation_date=s1, z0_bp=prev.z_spread_bp, z1_bp=cur.z_spread_bp,
         v0=v0, v_carry=v_carry, v_roll=v_roll, v_rates=v_rates, v_spread=v_spread, v1=v1,
         received_rub=received,

@@ -1,6 +1,6 @@
 # Brief for the calculation core
 
-As of 18 October 2026, against core **0.32.0** (commit `c0af388`). From the desk system (this repository) to the work on `rub-fixed-income-core`. The core's own `docs/PRODUCT_ROADMAP.md` and `docs/BACKLOG.md` remain the place where core tracks its plan; copy the items you accept there.
+As of 18 October 2026 (S4 items added 19 October), against core **0.32.0** (commit `c0af388`). From the desk system (this repository) to the work on `rub-fixed-income-core`. The core's own `docs/PRODUCT_ROADMAP.md` and `docs/BACKLOG.md` remain the place where core tracks its plan; copy the items you accept there.
 
 The items come from:
 - the backend's slices S1–S2 on real snapshots ([VERTICAL_SLICES](../VERTICAL_SLICES.md), findings F1–F14);
@@ -10,7 +10,7 @@ The items come from:
 
 - `backend/pyproject.toml` pins core by commit from its GitHub repository: tags stop at `v0.3.0`.
 - Tests, the validation report (4033 instruments) and the flash PnL are identical to 0.8.1. The only change was one deprecated call ([VERTICAL_SLICES](../VERTICAL_SLICES.md), "Core 0.32.0 recheck").
-- The backend still uses `BondRiskEngine` with `BondCashflow` totals. In slice S4 it moves to `value_portfolio` over `Instrument`/`MarketSnapshot`/`Position`, core's KBD evaluator, and `explain_horizon_pnl`.
+- Since slice S4 (19 October) fixed-coupon bonds are valued by `value_portfolio` over `Instrument`/`MarketSnapshot`/`Position` on core's KBD (`rub_ofz_kbd_v1`). PV and the flash PnL are unchanged against S1/S2; the old backend KBD curve was off by up to 6 bp at the short end, core's by at most 0.003 bp. Instruments are built with `settlement_lag_days=0` (C2): Z then matches the trade-date valuation to 0.003 bp, against 0.5–2.8 bp off with the default lag.
 
 ## Items
 
@@ -22,6 +22,8 @@ The items come from:
 | C4 | **`docs/SYSTEM_CONTEXT.md`** still says "written at 0.8.1" and describes the 16 October hosting | Since 18 October one hub on a VPS serves every consumer (ADR-001 amended); the backend pulls snapshots into its own cache. The Windows / Python 3.11 runtime target is unchanged | Refreshed against ADR-001 and this brief |
 | C5 | **Horizon explain vs the backend's flash PnL.** The backend explains day-over-day PnL by stepwise exact repricing (V0 → carry → rolldown → rates → spread → other), with an identity check per position ([VERTICAL_SLICES](../VERTICAL_SLICES.md), S2 method). Core 0.14 has `explain_horizon_pnl` for the same split | S4 runs both on the same positions. Points to align: <br>• rolldown as "ZCYC parameters of D−1, dated D" in the backend vs "constant curve shape" in core; <br>• coupons and redemptions paid in (D−1, D]; <br>• an `other` component when the schedule changed between the two dates (an offer passed, a coupon newly fixed: F13) | Per-component differences on the dev snapshots of 09–15.10 below 1 RUB per position, or each difference explained |
 | C6 | **Corporate accrual basis in the field.** Core 0.17 reproduces MOEX accrued with `RATE_ACT_365` on 18 golden bonds | F9: 1014 of 7675 quotes in coupon periods match neither accrued to the trade date nor to T+1 under a plain day count. S4 rechecks them with core's rate basis | After S4, the backend lists any remaining mismatches with ISINs; core decides whether they are conventions (BACKLOG) or data errors (hub brief H8) |
+| C7 | **Unknown coupons on the fixed path.** `Instrument.cashflows` uses whatever periods it is given; nothing checks that coupons are known up to the horizon (the callable path does, `_check_coupons`) | RU000A0JXQ44 has unknown coupons after 2028-04-13: valued to maturity without them, it is under-priced with no error. The backend checks this itself before building the instrument | `value_portfolio` rejects (or flags, with an assumption entry like `ExerciseAssumption`'s `assumed_coupons`) a fixed bond whose coupons are not known up to the horizon |
+| C8 | **Spread kind per position.** `ValuationPolicy.spread_kind` is one value per call | A mixed book (OFZ and corporates) needs one `value_portfolio` call per spread kind, so one run yields two results and two hashes | `spread_kind` per instrument or position (or a policy map), so one call values the whole book |
 
 ## Inputs core needs from the hub
 

@@ -1,8 +1,10 @@
 """Validation report: our analytics vs MOEX analytics carried in the same snapshot.
 
-For every active instrument of the static snapshot it records whether the backend priced it
-or why not. For priced bonds it recomputes the effective yield at the MOEX weighted-average
-and close prices and compares it with ``source_analytics``:
+For every active instrument of the static snapshot it records the quality of its valuation
+(exact, assumed, a fallback rung of ``valuation.fallback``, or not valued) and why it is not
+exact; the counts per quality and class are in the summary. For exact and assumed bonds it
+recomputes the effective yield at the MOEX weighted-average and close prices and compares it
+with ``source_analytics``:
 - yields (MOEX ``effective_yield_waprice_pct`` has 4 decimals, ``yield_close_pct`` 2);
 - Macaulay duration in days;
 - the yield horizon date;
@@ -31,6 +33,7 @@ from rub_fixed_income import (
     CONTINUOUS,
     ZSpreadConvention,
     bond_duration,
+    kbd_effective_yield,
     solve_nominal_annual_yield,
     solve_z_spread,
 )
@@ -38,9 +41,12 @@ from rub_fixed_income import __version__ as CORE_VERSION
 
 from ..orchestrator import EodContext, Outcome
 from ..valuation.bonds import SPREAD_CONVENTION
+from ..valuation.fallback import QUALITIES
 
 Z_CONTINUOUS = ZSpreadConvention(compounding=CONTINUOUS)
 
+COMPARED = ("exact", "assumed")
+"""Qualities with a full schedule, compared with MOEX; the fallback rungs are only counted."""
 SHORT_DAYS = 30
 OK_BP, WARN_BP = 1.0, 10.0
 
@@ -56,11 +62,15 @@ def compare(ctx: EodContext, o: Outcome) -> dict[str, Any]:
         "name": t.short_name if t else None,
         "class": t.bond_class if t else None,
         "coupon_type": t.coupon_type if t else None,
-        "status": "rejected" if v is None else "priced",
+        "status": "rejected" if v is None else "priced" if v.quality in COMPARED else "approximated",
+        "quality": v.quality if v else "not_valued",
         "reason": o.reason,
         "detail": o.detail,
     }
-    if v is None or q is None:
+    if v is not None and row["status"] == "approximated":
+        row.update(price_basis=v.price_basis, clean_pct=v.clean_pct, pv_per_bond_rub=v.dirty_rub,
+                   dv01_rub=v.dv01_rub, assumptions="; ".join(v.assumptions))
+    if row["status"] != "priced" or q is None:
         return row
     sa = q.source_analytics
     ydate = v.valuation_date  # the trade date, as MOEX measures yields (see module docstring)
@@ -94,7 +104,7 @@ def compare(ctx: EodContext, o: Outcome) -> dict[str, Any]:
     row["d_dur_days"] = mac * 365 - m_dur if m_dur is not None else None
     row["horizon_match"] = sa.get("yield_date") == v.horizon_date.isoformat() if sa.get("yield_date") else None
     if y_wap is not None:
-        row["g_spread_bp"] = (y_wap - ctx.kbd.yield_pct(mac)) * 100
+        row["g_spread_bp"] = (y_wap - kbd_effective_yield(ctx.kbd, mac) * 100) * 100
         row["moex_g_spread_bp"] = _f(sa.get("gspread_bp"))
         dirty_wap = float(q.prices_pct["waprice"]) * v.face_rub / 100.0 + v.accrued_rub
         cf = [(c.payment_date, c.amount) for c in v.cashflows]
@@ -132,6 +142,7 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         by_class[cls] = {
             "instruments": len(rs),
             "priced": len(priced),
+            "quality": dict(Counter(r["quality"] for r in rs)),
             "comparable": len(comparable),
             "ok": sum(r["check"] == "ok" for r in comparable),
             "warn": sum(r["check"] == "warn" for r in comparable),
@@ -139,8 +150,8 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "median_d_y_bp": round(statistics.median(dys), 2) if dys else None,
             "median_abs_d_y_bp": round(statistics.median(abs(x) for x in dys), 2) if dys else None,
         }
-    reasons = Counter(r["reason"] for r in rows if r["status"] == "rejected")
-    return {"by_class": by_class, "reasons": reasons.most_common()}
+    reasons = Counter(r["reason"] for r in rows if r["status"] != "priced")
+    return {"by_class": by_class, "reasons": reasons.most_common(), "qualities": [*QUALITIES, "not_valued"]}
 
 
 def build(ctx: EodContext, outcomes: list[Outcome]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -194,7 +205,9 @@ select,input{background:var(--card);color:var(--fg);border:1px solid var(--line)
 <h2>По классам бумаг</h2><div class="wrap"><table id="cls"></table></div>
 <p class="muted">Δy — наша эффективная доходность по средневзвешенной цене минус MOEX <span class="mono">effective_yield_waprice_pct</span>, обе от даты сделки (так считает MOEX; оценка позиций — от даты расчётов T+1).
 ok: |Δy| ≤ 1 б.п. и тот же горизонт; warn: ≤ 10 б.п.; mismatch: больше. Горизонт короче 30 дней — short (не сравнивается).</p>
-<h2>Почему не посчитано</h2><div class="wrap"><table id="rej"></table></div>
+<h2>Качество оценки по классам</h2><div class="wrap"><table id="qual"></table></div>
+<p class="muted">exact / assumed сравниваются с MOEX; market_value, stale_price, model_price, par_proxy — запасные ступени (цена без полного расписания, прошлая цена, модельная цена по медианному Z, номинал), not_valued — данных нет совсем.</p>
+<h2>Почему не точно</h2><div class="wrap"><table id="rej"></table></div>
 <h2>Бумаги</h2>
 <div class="bar"><select id="fcls"></select><select id="fchk"></select><input id="fq" placeholder="поиск: secid / имя"></div>
 <div class="wrap" style="max-height:70vh"><table id="det"></table></div>
@@ -204,19 +217,21 @@ const D=__DATA__;
 const $=s=>document.querySelector(s), fmt=(v,d=2)=>v==null||v===''?'':(typeof v==='number'?v.toFixed(d):v);
 const m=D.meta; $('#meta').textContent=`market ${m.market_snapshot_id.slice(0,12)} · static ${m.static_snapshot_id.slice(0,12)} · кривая ${m.curve_spec} (сверка с опубликованными точками ${m.kbd_check_bp} б.п.) · ${m.calendar} · core ${m.core_version}`;
 const rows=D.rows, pr=rows.filter(r=>r.status==='priced'), cmp=pr.filter(r=>['ok','warn','mismatch'].includes(r.check));
-const kp=[['Инструментов',rows.length],['Посчитано',pr.length],['Сравнимо с MOEX',cmp.length],['ok',cmp.filter(r=>r.check==='ok').length],['warn',cmp.filter(r=>r.check==='warn').length],['mismatch',cmp.filter(r=>r.check==='mismatch').length]];
+const kp=[['Инструментов',rows.length],['Посчитано',pr.length],['Приближённо',rows.filter(r=>r.status==='approximated').length],['Не оценено',rows.filter(r=>r.status==='rejected').length],['Сравнимо с MOEX',cmp.length],['ok',cmp.filter(r=>r.check==='ok').length],['warn',cmp.filter(r=>r.check==='warn').length],['mismatch',cmp.filter(r=>r.check==='mismatch').length]];
 $('#kpis').innerHTML=kp.map(([k,v])=>`<div class="kpi"><span class="muted">${k}</span><b>${v}</b></div>`).join('');
 const C=D.summary.by_class;
 $('#cls').innerHTML='<tr><th class="l">класс</th><th>всего</th><th>посчитано</th><th>сравнимо</th><th>ok</th><th>warn</th><th>mismatch</th><th>медиана Δy</th><th>медиана |Δy|</th></tr>'+
  Object.entries(C).map(([k,c])=>`<tr><td class="l">${k}</td><td>${c.instruments}</td><td>${c.priced}</td><td>${c.comparable}</td><td class="ok">${c.ok}</td><td class="warn">${c.warn}</td><td class="mismatch">${c.mismatch}</td><td>${fmt(c.median_d_y_bp)}</td><td>${fmt(c.median_abs_d_y_bp)}</td></tr>`).join('');
+const Q=D.summary.qualities;
+$('#qual').innerHTML='<tr><th class="l">класс</th>'+Q.map(q=>`<th>${q}</th>`).join('')+'</tr>'+Object.entries(C).map(([k,c])=>`<tr><td class="l">${k}</td>`+Q.map(q=>`<td>${c.quality[q]||''}</td>`).join('')+'</tr>').join('');
 $('#rej').innerHTML='<tr><th class="l">причина</th><th>бумаг</th></tr>'+D.summary.reasons.map(([r,n])=>`<tr><td class="l mono">${r}</td><td>${n}</td></tr>`).join('');
-const cols=[['secid','secid','l'],['name','имя','l'],['class','класс','l'],['check','сверка','l'],['reason','причина','l'],['horizon','горизонт','l'],['moex_horizon','горизонт MOEX','l'],['ytm_pct','YTM (legal close)',4],['d_y_wap_bp','Δy wap, б.п.',2],['d_y_close_bp','Δy close, б.п.',2],['mac_days','дюр., дн',0],['d_dur_days','Δдюр., дн',1],['g_spread_bp','G, б.п.',1],['moex_g_spread_bp','G MOEX',0],['z_annual_wap_bp','Z годовой',1],['z_cont_wap_bp','Z непр.',1],['moex_z_spread_bp','Z MOEX',0],['detail','детали','l']];
+const cols=[['secid','secid','l'],['name','имя','l'],['class','класс','l'],['check','сверка','l'],['quality','качество','l'],['reason','причина','l'],['horizon','горизонт','l'],['moex_horizon','горизонт MOEX','l'],['ytm_pct','YTM (legal close)',4],['d_y_wap_bp','Δy wap, б.п.',2],['d_y_close_bp','Δy close, б.п.',2],['mac_days','дюр., дн',0],['d_dur_days','Δдюр., дн',1],['g_spread_bp','G, б.п.',1],['moex_g_spread_bp','G MOEX',0],['z_annual_wap_bp','Z годовой',1],['z_cont_wap_bp','Z непр.',1],['moex_z_spread_bp','Z MOEX',0],['detail','детали','l'],['assumptions','допущения','l']];
 const fc=$('#fcls'), fk=$('#fchk');
 fc.innerHTML='<option value="">все классы</option>'+Object.keys(C).map(k=>`<option>${k}</option>`).join('');
-fk.innerHTML='<option value="">все статусы</option>'+['ok','warn','mismatch','short','no_moex','rejected'].map(k=>`<option>${k}</option>`).join('');
+fk.innerHTML='<option value="">все статусы</option>'+['ok','warn','mismatch','short','no_moex','approximated','rejected'].map(k=>`<option>${k}</option>`).join('');
 let sortK='d_y_wap_bp', sortDir=-1;
 function render(){const c=fc.value,k=fk.value,q=$('#fq').value.toLowerCase();
- let rs=rows.filter(r=>(!c||r.class===c)&&(!k||(k==='rejected'?r.status==='rejected':r.check===k))&&(!q||(r.secid+' '+(r.name||'')).toLowerCase().includes(q)));
+ let rs=rows.filter(r=>(!c||r.class===c)&&(!k||(['rejected','approximated'].includes(k)?r.status===k:r.check===k))&&(!q||(r.secid+' '+(r.name||'')).toLowerCase().includes(q)));
  rs.sort((a,b)=>{let x=a[sortK],y=b[sortK];if(typeof x==='number'||typeof y==='number'){x=Math.abs(x??-1e9);y=Math.abs(y??-1e9)}return (x>y?1:x<y?-1:0)*sortDir});
  $('#det').innerHTML='<tr>'+cols.map(([k,t,d])=>`<th class="${d==='l'?'l':''}" data-k="${k}">${t}</th>`).join('')+'</tr>'+
   rs.slice(0,1500).map(r=>'<tr>'+cols.map(([k,t,d])=>`<td class="${d==='l'?'l ':''}${k==='check'?r.check:''}">${d==='l'?(r[k]??''):fmt(r[k],d)}</td>`).join('')+'</tr>').join('');

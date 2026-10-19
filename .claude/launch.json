@@ -2,6 +2,16 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "desk-api",
+      "runtimeExecutable": "backend/.venv/bin/desk",
+      "runtimeArgs": [
+        "serve",
+        "--port",
+        "8767"
+      ],
+      "port": 8767
+    },
+    {
       "name": "desk-monitor-dev",
       "runtimeExecutable": "backend/.venv/bin/python",
       "runtimeArgs": [

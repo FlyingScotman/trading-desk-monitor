@@ -43,7 +43,7 @@
     document.body.appendChild(box);
     if (!http) return;
 
-    fetch('api/v1/runs?limit=200').then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+    fetch('api/v1/runs?limit=200&status=complete').then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
       if (!j || !j.runs || !j.runs.length) return;
       var sel = el('select', { 'aria-label': 'Дата и прогон' });
       sel.appendChild(el('option', { value: '' }, 'последний прогон'));

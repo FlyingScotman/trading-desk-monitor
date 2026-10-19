@@ -13,10 +13,10 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from rub_fixed_income import kbd_zero_rate_bp
 
-from desk.curves import kbd
 from desk.marketdata.bundle import SnapshotDir, SnapshotError, read_bundle
-from desk.orchestrator import prepare, value
+from desk.orchestrator import check_against_standard_yields, prepare, value
 from desk.publish import tdm_run
 from desk.report import validation
 
@@ -44,22 +44,24 @@ def test_bundle_identity_is_verified(tmp_path):
 
 
 def test_kbd_reproduces_published_standard_yields(ctx):
-    assert kbd.check_against_standard_yields(ctx.kbd, ctx.market.zcyc["standard_yields"]) < 0.01
+    assert check_against_standard_yields(ctx.kbd, ctx.market.zcyc["standard_yields"]) < 0.01
     # the core curve built from it agrees with the formula between nodes
     t = 3.3
     d = ctx.business_date.toordinal() + round(t * 365)
     df = ctx.curve.discount_factor(date.fromordinal(d))
     t_act = (date.fromordinal(d) - ctx.business_date).days / 365.0
-    assert abs(-1e4 * math.log(df) / t_act - ctx.kbd.g_bp(t_act)) < 0.01
+    assert abs(-1e4 * math.log(df) / t_act - kbd_zero_rate_bp(ctx.kbd, t_act)) < 0.01
 
 
 def test_coverage_reasons(outcomes):
-    reasons = {s: o.reason for s, o in outcomes.items()}
-    assert reasons["SU26238RMFS4"] is None  # OFZ-PD bullet: priced
-    assert reasons["SU29008RMFS8"] == "coupon_floating"
-    assert reasons["SU52005RMFS4"] == "face_indexed"
-    assert reasons["RU000A1034P7"] == "perpetual"
-    assert all(o.valuation is not None or o.reason for o in outcomes.values())  # nothing silently dropped
+    q = {s: (o.valuation.quality if o.valuation else None, o.reason) for s, o in outcomes.items()}
+    assert q["SU26238RMFS4"] == ("exact", None)  # OFZ-PD bullet
+    assert q["SU29008RMFS8"] == ("assumed", None)  # OFZ-PK on an inferred formula (S4)
+    assert q["RU000A1034P7"] == ("assumed", None)  # perpetual to an assumed call (S4)
+    assert q["SU52005RMFS4"] == ("market_value", "face_indexed")  # OFZ-IN: no CPI series yet
+    # the owner's rule: every bond is valued, and every non-exact one says why
+    assert all(o.valuation is not None for o in outcomes.values())
+    assert all(o.valuation.assumptions for o in outcomes.values() if o.valuation.quality != "exact")
 
 
 def test_ofz_matches_moex_analytics(ctx, outcomes):
@@ -78,17 +80,16 @@ def test_put_offer_is_the_horizon(outcomes):
 def test_risk_is_consistent(outcomes):
     v = outcomes["SU26238RMFS4"].valuation
     assert v.spread_kind == "ofz" and v.dv01_rub < 0 and v.spread01_rub < 0
-    assert abs(sum(v.buckets.values()) - v.dv01_rub) < 1e-9
-    assert abs(v.dv01_rub - v.parallel_dv01_rub) / abs(v.dv01_rub) < 1e-3
+    assert abs(sum(v.buckets.values()) - v.dv01_rub) < 1e-9  # core reports no separate parallel DV01
     assert v.hessian and v.curve_convexity and v.curve_convexity > 0
 
 
 def test_publish_to_tdm(ctx, outcomes, tmp_path):
     db = tmp_path / "tdm.sqlite"
-    positions = [("P1", "OFZ", outcomes["SU26238RMFS4"]), ("P2", "OFZ", outcomes["SU29008RMFS8"])]
+    positions = [("P1", "OFZ", outcomes["SU26238RMFS4"]), ("P2", "OFZ", outcomes["SU52005RMFS4"])]
     run_id, status, warnings = tdm_run.publish(str(db), ctx, positions, prev=None)
     assert status == "complete"
     con = sqlite3.connect(db)
-    assert con.execute("SELECT COUNT(*) FROM position WHERE run_id=?", (run_id,)).fetchone()[0] == 1
+    assert con.execute("SELECT COUNT(*) FROM position WHERE run_id=?", (run_id,)).fetchone()[0] == 2
     assert con.execute("SELECT COUNT(*) FROM position_gamma WHERE run_id=?", (run_id,)).fetchone()[0] > 0
-    assert any("SU29008RMFS8" in w for w in warnings)  # the floater is reported, not zeroed
+    assert any("SU52005RMFS4" in w for w in warnings)  # the market-value OFZ-IN is published and flagged

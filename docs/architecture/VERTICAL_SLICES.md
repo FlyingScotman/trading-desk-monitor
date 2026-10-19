@@ -1,6 +1,6 @@
 # Vertical slices
 
-As of 18 October 2026. Status: working plan, owned by the backend. **Next slices: S3 and S4, briefs below.** Work for the hub and core: [briefs/HUB.md](briefs/HUB.md), [briefs/CORE.md](briefs/CORE.md).
+As of 18 October 2026. Status: working plan, owned by the backend. **S3, S4, S5 and S6 are built (19 October; the S3 live acceptance waits for the hub's snapshot layer). Next: S7.** Work for the hub and core: [briefs/HUB.md](briefs/HUB.md), [briefs/CORE.md](briefs/CORE.md).
 
 ## Why
 
@@ -19,11 +19,11 @@ Each slice keeps whatever it built that matches the architecture. Where it takes
 | Architecture target | Slice 1 shortcut | Replaced in |
 |---|---|---|
 | Backend reads snapshots from the hub API (`/v1/snapshots`) | Reads bundle files that the hub's own builder produced from a copy of the seed database (`tools/devdata/build_dev_snapshots.sh`) | S3. The dev export stays as the offline fallback |
-| Desk Postgres store with run lineage (ADR-006) | The `tdm` SQLite store through its writer SDK (`tdm.writer.Run`); lineage goes into the run log and `lib_version` | S5 |
-| Desk API v1 + React screens (05) | `tdm serve` and the existing Desk Monitor prototype through `window.DESK` | S5 (API), S6 (first React screen) |
-| KBD/ZCYC evaluator in core (delivered in core 0.11) | Backend module `desk.curves.kbd`, which builds a core `DiscountCurve` from the published ZCYC parameters | S4 |
-| Core's portfolio path: `value_portfolio` over `Instrument`/`MarketSnapshot`/`Position` (core 0.10–0.11) | The adapter builds `BondCashflow` totals and calls `BondRiskEngine` per position | S4 |
-| Horizon PnL explain in core: `explain_horizon_pnl`, `horizon_portfolio` (core 0.14) | `desk.pnl.flash`, the backend's own stepwise repricing | S4: run both and compare; one stays |
+| Desk Postgres store with run lineage (ADR-006) | The `tdm` SQLite store through its writer SDK (`tdm.writer.Run`); lineage goes into the run log and `lib_version` | **Replaced in S5** (`desk eod --tdm` still writes it for `tdm serve`) |
+| Desk API v1 + React screens (05) | `tdm serve` and the existing Desk Monitor prototype through `window.DESK` | **API built in S5** (`desk serve`; the prototype reads `window.DESK` from the store through the compatibility adapter). **First React screen built in S6** (`/app/`, Scenario Lab); the other screens are still the prototypes through `window.DESK` |
+| KBD/ZCYC evaluator in core (delivered in core 0.11) | Backend module `desk.curves.kbd`, which builds a core `DiscountCurve` from the published ZCYC parameters | **Replaced in S4** (core `rub_ofz_kbd_v1`) |
+| Core's portfolio path: `value_portfolio` over `Instrument`/`MarketSnapshot`/`Position` (core 0.10–0.11) | The adapter builds `BondCashflow` totals and calls `BondRiskEngine` per position | **Replaced in S4**. The fallback rungs below core still reprice with `BondRiskEngine` |
+| Horizon PnL explain in core: `explain_horizon_pnl`, `horizon_portfolio` (core 0.14) | `desk.pnl.flash`, the backend's own stepwise repricing | **Compared in S4: `desk.pnl.flash` stays** (S4 result); `pnl/compare.py` is the regression check |
 | Real positions (Q1 deferred) | A synthetic book over real instruments (`backend/examples/demo_book.csv`; S3 adds `test_book.csv` with several books and coverage cases) plus a "universe" run: one bond of every priceable instrument | When Q1 is answered |
 
 ## Slices
@@ -32,10 +32,10 @@ Each slice keeps whatever it built that matches the architecture. Where it takes
 |---|---|---|---|
 | **S1 EOD fixed bonds on KBD** | Desk Monitor with a real 15.10.2026 run: PV, yield, Z-spread, DV01 by bucket, CS01, gamma for fixed-coupon OFZ and corporates of the demo book. A **validation report** per bond: our yield, duration, G-spread and accrued vs MOEX analytics from the same snapshot; coverage list with a reason for every bond not priced | Hub snapshot contract on the full universe; adapter; core 0.8.1 fixed-cashflow engine; KBD curve; writer SDK; prototype data path | **Done 17.10.2026** (see below) |
 | **S2 Day-over-day flash PnL** | Second run on the next date with PnL by factor: carry, rates, spread, residual, using two snapshots and exact repricing | Snapshot history; core `reprice`; run-to-run linking | **Done 17.10.2026** (see below) |
-| **S3 Live hub and a test book** | Desk Monitor on runs of the last five business dates, valued from snapshots **pulled from the VPS hub** into the backend's cache. A synthetic test book with several books, shorts and coverage cases. Snapshot age on every run | Hub snapshot endpoints and token scopes; backend HTTP client, cache and verification; reproducibility by snapshot ID; the run never depends on the hub being up | **Next.** Live acceptance waits for the hub's snapshot layer (H1–H5 below) |
-| **S4 Core portfolio path and the whole bond universe** | The same screens, valued through core 0.32 `value_portfolio`. Also priced now: floaters (OFZ-PK, key-rate, RUONIA), perpetuals to an explicit call and, once the hub carries CPI, OFZ-IN. A RUONIA OIS curve (`rub_ruonia_ois_moex_v2`) in the curves panel. Coverage grows from about 1034 bonds to every bond with a usable schedule | Adapter to core domain types; curve-spec mapping `dataset` → spec; core KBD; core horizon explain against `desk.pnl.flash` | Brief below; can start in parallel with S3 |
-| **S5 Desk backend proper** | Same screens, now served by the desk API from the desk Postgres store, with run lineage | ADR-006, 04, 05 §2 | |
-| **S6 Interactive scenario** | Scenario slider with instant Taylor (≈) and an "exact" button that reprices on the backend; residual shown | 03 T1/T2, parity fixtures; first React + TypeScript screen | |
+| **S3 Live hub and a test book** | Desk Monitor on runs of the last five business dates, valued from snapshots **pulled from the VPS hub** into the backend's cache. A synthetic test book with several books, shorts and coverage cases. Snapshot age on every run | Hub snapshot endpoints and token scopes; backend HTTP client, cache and verification; reproducibility by snapshot ID; the run never depends on the hub being up | **Built** 19 October ([result](#s3-result-19-october-2026)). Live acceptance waits for the hub's snapshot layer (H1–H4 below) |
+| **S4 Core portfolio path and the whole bond universe** | The same screens, valued through core 0.32 `value_portfolio`. Also priced now: floaters (OFZ-PK, key-rate, RUONIA), perpetuals to an explicit call and, once the hub carries CPI, OFZ-IN. A RUONIA OIS curve (`rub_ruonia_ois_moex_v2`) in the curves panel. Coverage grows from about 1034 bonds to every bond with a usable schedule | Adapter to core domain types; curve-spec mapping `dataset` → spec; core KBD; core horizon explain against `desk.pnl.flash` | **Built** 19 October ([result](#s4-result-19-october-2026)) |
+| **S5 Desk backend proper** | Same screens, now served by the desk API from the desk Postgres store, with run lineage | ADR-006, 04, 05 §2 | **Built** 19 October ([result](#s5-result-19-october-2026)) |
+| **S6 Interactive scenario** | Scenario slider with instant Taylor (≈) and an "exact" button that reprices on the backend; residual shown | 03 T1/T2, parity fixtures; first React + TypeScript screen | **Built** 19 October ([result](#s6-result-19-october-2026)) |
 | **S7 Intraday** | Intraday run every N minutes on intraday cuts; badge with age | Hub intraday cuts; scheduler | |
 | **S8 Derivatives and the hybrid book** | IRS, FX forwards and swaps, XCCY, futures and REPO from contract 1.3 term files, valued by core (result v3) next to bonds; CDS and whatever still lacks inputs imported, with coverage states | `private_inputs`; snapshot inputs from [briefs/HUB.md](briefs/HUB.md) (futures prices, FX value dates, RUONIA index); hybrid merge | |
 
@@ -78,7 +78,7 @@ The backend work B1–B6 does not wait for H1–H5: it is built and tested again
   - `list_snapshots(kind, cut_type, business_date, latest)` → `/v1/snapshots`, following `meta.next_offset`;
   - `manifest(id)`;
   - `bundle(id) -> bytes`.
-- Transport is `httpx` (add it to the dependencies; it is a pure-Python wheel and fits the Windows wheelhouse). It honours `HTTPS_PROXY`/`NO_PROXY`, `DESK_HUB_CA_BUNDLE` and `DESK_HUB_TIMEOUT_S`.
+- Transport: the standard library (`urllib`; the brief first named `httpx`, see the S3 result). It honours `HTTPS_PROXY`/`NO_PROXY`, `DESK_HUB_CA_BUNDLE` and `DESK_HUB_TIMEOUT_S`.
 - The bearer token is sent only in the header. It is never logged, printed, put in a URL or written to the run.
 - Errors and what the user is told:
 
@@ -197,7 +197,7 @@ If the prototype has a place for it in `window.DESK` meta, show the snapshot age
    - The key-rate projection curve `rub_key_rate_projection_v1`.
    - The mapping hub `dataset` → core spec ID lives in the backend as a versioned table (README interface catalogue).
 3. **Valuation** (`valuation/bonds.py`): one `value_portfolio` call per run.
-   - `ValuationPolicy` holds the trade-date valuation (F9), the spread convention and the cap/floor guard.
+   - `ValuationPolicy` holds the spread convention and the cap/floor guard. The trade-date valuation (F9) is not a policy field in core 0.32: the backend builds instruments with `settlement_lag_days=0` (S4 result).
    - Perpetuals and callables carry explicit `exercise_assumptions` per DEC10; without one they are rejected.
    - Store the hash-verified result (`rub-portfolio-risk-result.v2`) with the run.
 4. **PnL.** Compute the flash PnL both ways: `desk.pnl.flash` and core `explain_horizon_pnl` / `horizon_portfolio`. Report the difference per component. Keep one implementation once they agree, or record why they differ.
@@ -351,3 +351,199 @@ CRP-05 has no PnL on 14.10: it had no quote on 13.10.
 | F13 | `other` was 0 on every position: no schedule changed between two dates of the demo book. A position whose offer passes, or with a newly fixed coupon, will show it here | Check again on the real book |
 | F14 | Rolldown on the KBD is 30–40 % of carry on these dates | Information |
 
+## S3 result (19 October 2026)
+
+**Built** (backend B1–B7):
+- `desk/marketdata/hub.py`: the hub client. It uses the standard library rather than `httpx`: `urllib` honours `HTTPS_PROXY`/`NO_PROXY`, and on Windows Python trusts the system certificate store, where a TLS-inspecting proxy's CA usually sits; `httpx` would need `DESK_HUB_CA_BUNDLE` for that. No new dependency. The error table of B1 is implemented as written; the 404 message names the hub version from `/health/ready`.
+- `desk/marketdata/cache.py`: `sync`, `hub_dates`, `import_drop`. Each bundle is checked (`gzip`, `sha256 == id`, `X-Snapshot-Sha256`, schema version) before an atomic write; the cache is append-only. Beside a downloaded bundle, `<id>.hub.json` keeps the hub host, `published_at` and the fetch time, because the bundle cannot carry its own publication facts.
+- Commands `desk hub-check`, `desk sync --date | --from --to | --last N`, `desk eod --sync`, `desk import-drop`. Every `desk eod` prints the market snapshot ID, its origin (hub and `published_at` with age, or "local file" with `known_at`).
+- Lineage in the run log: `cut_type`, `hub`, `published_at`, `backend_git_sha` next to the snapshot IDs and the core version. The snapshot age is in the run log; the prototype's `window.DESK` meta has no field for it (S5/S6).
+- `backend/examples/test_book.csv`, generated by `desk demo-book --profile test`: 40 positions in `OFZ`, `CORP`, `MIXED`, long and short.
+- `tests/test_slice_s3.py`: 14 tests against an in-process stub hub, and `pytest -m live` for the real hub (the default run deselects it).
+
+**Not built:** `If-None-Match`/304 in the client. The cache never downloads a bundle it has, so it never needs to ask.
+
+**Run on the cached dev-export dates 9–15 October** (the hub publishes none yet), test book:
+- Priced 35 of 40 positions (36 from 14.10). Listed with a reason: OFZ-PK and a key-rate corporate floater (`coupon_floating`, S4), OFZ-IN (`face_indexed`), a perpetual (`perpetual`), and on 9–13.10 a corporate with no quote (`no_quote`; on 14.10 it is priced and gets `not_priced_prev` instead of PnL).
+- Coupons paid inside the window show as cash received: CRP-03, CRP-12 and MIX-05 on 12.10, MIX-04 on 14.10, MIX-02 on 15.10.
+- The flash PnL identity holds on every position: the largest error is 2.5·10⁻⁴ RUB.
+
+| Date | OFZ | CORP | MIXED | Total, m RUB |
+|---|---|---|---|---|
+| 12.10 (3 days) | 44.72 | 7.33 | −3.75 | 48.31 |
+| 13.10 | 15.54 | 3.35 | −0.34 | 18.55 |
+| 14.10 | 20.57 | −0.63 | −5.42 | 14.52 |
+| 15.10 | 13.44 | 2.45 | −2.65 | 13.24 |
+
+**Live state on 19 October.** `desk config` reads the hub address and the token file from `backend/.env`. The token is accepted: `/v1/coverage` and `/v1/bonds` answer 200. `desk hub-check` and `pytest -m live` stop at "hub (version 0.1.0) has no snapshot layer: /v1/snapshots answers 404", as expected before H1. The hub's snapshot layer is still only in its local branch, not on GitHub.
+
+**Open for the live acceptance**, once the hub has done H1–H4:
+- `desk hub-check`, `desk sync --last 5`, then `desk eod` over those dates with the test book;
+- `pytest -m live`;
+- compare VPS-published and dev-export snapshots of the same dates (F6);
+- regenerate `test_book.csv` from the published dates if the window cases (no quote, coupon inside the window) no longer fall inside it.
+
+## S4 result (19 October 2026)
+
+Built by the orchestrating session with subagents: two research passes (core 0.32 API, snapshot inputs), then five implementation pieces, each checked against a baseline by the session before integration.
+
+**The owner's rule, set during S4.** "A bond is valued somehow rather than not at all." It replaces the S1–S3 habit of rejecting with a reason code. Every valuation carries `quality` (`exact`, `assumed`, `market_value`, `stale_price`, `model_price`, `par_proxy`) and `assumptions`; the ladder is in `backend/README.md`, "Valuation quality". The owner also approved pricing floaters on `inferred` formulas with default conventions, checked against MOEX accrued.
+
+**Universe on 15.10** (4033 active instruments):
+
+| Quality | Before (S3) | S4 |
+|---|---|---|
+| exact | 1034 | 1032 |
+| assumed | – | 869 |
+| market_value | – | 863 |
+| model_price | – | 159 |
+| par_proxy | – | 1110 |
+| not valued | 2999 | 0 |
+
+Two bonds moved from exact to assumed (an accrued mismatch or a coupon amount computed from the rate). On 09.10: exact 1028, assumed 863, market value 858, model price 166, par proxy 1118. Par proxies are bonds with no price in the cache and no usable schedule, 96 % of them structured notes with unknown coupons.
+
+**Fixed-coupon bonds through `value_portfolio`.**
+- Against S3 on 09–15.10, both books: PV within 0.0004 RUB per position, flash PnL totals identical, YTM and duration identical, the same bonds priced, the validation checks unchanged (ok 502, warn 298, mismatch 77).
+- Z moves only on short horizons, up to 4.3 bp on a bond 193 days from its horizon. The cause is the old backend KBD curve (weekly first nodes, off by up to 6.1 bp at the short end against the formula); core's KBD is off by at most 0.003 bp. The brief's "agree to 0.01 bp" therefore holds at every pillar except 1M (0.19–0.31 bp), where the old curve was wrong. `desk.curves.kbd` is deleted.
+- **F9:** core 0.32 has no trade-date knob in `ValuationPolicy`. With the default `settlement_lag_days=1` and MOEX accrued (measured to the trade date), Z is off by 0.5–2.8 bp; with `settlement_lag_days=0` it matches to 0.003 bp. The backend builds every instrument with lag 0 (core brief C2).
+- DV01 and CS01 differ from S3 by up to 4·10⁻⁴ relative: core bumps centrally, the old code forward.
+- Each run stores the hash-verified `rub-portfolio-risk-result.v2` (one per spread kind, core brief C8) under `<dir of --db>/results/`, named with the book's position IDs; the run lineage lists their hashes.
+
+**Curves and fixings** (`curves/rates.py`): RUONIA OIS under `rub_ruonia_ois_moex_v2` and the key-rate projection under `rub_key_rate_projection_v1`, built on every dev date and repricing their quotes to 10⁻¹⁰ bp. The hub's calendars end 2027-12-31, which would cut both curves at 1Y; the backend extends every calendar provisionally to 2079 (weekends and fixed public holidays, TARGET by its own rules) and records `provisional_from` in the lineage (hub brief H16). Quote-set choice: business-date sets, not stale before stale, bid/ask before mid-only, then the latest; `ratescalcs` on 09, 12 (OIS) and 15.10, `otc_monitor` otherwise.
+
+**Floaters** (core 0.26 `FloatingCouponLeg`). Default conventions come from a study of the published coupons since 20.09.2025, reproduced to the kopeck:
+- corporate KEY_RATE: arithmetic average shifted 6 calendar days reproduces 2277 of 3755 coupons (single fixing 5 business days before: 1803; compounded: 9);
+- corporate RUONIA: the same rule, 247 of 380;
+- OFZ-PK: core's Minfin rule, 39 of 44 (the hub's curated `lag_days 7` for SU29015 reproduces 4); the in-advance issues 29007–29010 on their 6-month window; RUONIA_3M and RUONIA_INDEX compounded with a 7-day shift (14/14, 19/20);
+- RUONIA_6M (0 of 24 under every candidate), ZCYC, CPI and OTHER go to the market-value rung.
+
+Accrued against MOEX agrees on 454 of 468 corporate floaters, 1004 of 1013 fixed corporates and all OFZ-PD; a mismatch keeps the valuation and flags it. OFZ-PK in-advance issues match MOEX (SU29007: yield 14.781 % vs 14.768 %); in-arrears issues differ by up to 0.6 pp in yield and 50 bp in Z, because MOEX holds the current coupon flat while the backend projects it on the RUONIA OIS curve.
+
+**Perpetuals.** No call dates in the data (hub brief H19), and DEC10 sets no default. The backend assumes a call on the first coupon date at least 5 years after the business date, coupons past the schedule at the current rate, flagged; 18 perpetuals are valued so, called 2031–2032. Five years after issue, the alternative, would call most of them within months and give deep-discount perpetuals yields in the thousands of percent.
+
+**Flash PnL, both ways** (`pnl/compare.py`). Carry, rolldown and rates agree to 2·10⁻⁷ RUB per position, and the totals to 7·10⁻¹¹ relative. The methods differ in where the spread × curve cross term goes: flash measures spread on the D curve (the frame of the published CS01) and has no residual; core measures it on the rolled curve and reports the cross term as `residual` (up to 0.38 m RUB a day on the OFZ demo book). Core's explain also cannot show a schedule change (`other`), exercise assumptions or floaters. **`desk.pnl.flash` stays**; `compare.py` is its regression check (core brief C5).
+
+**Test book, 09–15.10:** 40 of 40 positions valued on every date (exact 35–36, assumed 3, market value 1, model price 1 on 9–13.10). The 35–36 exact positions have the same flash PnL as in S3 to 3·10⁻⁴ RUB.
+
+| Date | Exact | Assumed | Market value | Model price | Total, m RUB |
+|---|---|---|---|---|---|
+| 12.10 (3 days) | 48.31 | 1.81 | 0.43 | −6.64 | 43.90 |
+| 13.10 | 18.55 | 0.96 | 1.38 | 7.95 | 28.85 |
+| 14.10 | 9.86 | 1.40 | 0.20 | – | 11.46 |
+| 15.10 | 13.24 | −0.12 | −0.09 | – | 13.03 |
+
+On 14.10 the exact column includes −4.66 m RUB from MIX-08, whose first price after three model-price days replaces the model value (simple PnL).
+
+**Review and fixes.** An independent review of the integrated diff found six defects, all fixed with regression tests before this note:
+- a MOEX yield of −100 % (RU000A10FSB7 on 09.10) crashed the universe run; such yields now count as missing, and an unexpected error for one bond sends it to `par_proxy` with the error named, instead of stopping the run;
+- a bond past maturity kept its value while its redemption was counted as received (PnL ≈ q × face on the maturity day); a matured or fully redeemed bond is now valued 0;
+- a stale price was applied to the face of the old quote after an amortization (PV and PnL overstated by the amortized principal); the face is now the one outstanding on the business date;
+- PnL was published against a par proxy; a position at par on either date now gets no PnL with reason `par_proxy`, and PnL across a model price carries a flag ("price discovery: model -> market", "model price on both dates");
+- the dev market snapshots name a static snapshot of a later date (17.10); the run now warns about it, and the redemption check uses the face on the trade date from the schedule (`redemption_incomplete` 27 → 0 on 09.10);
+- `pnl/compare.py` compared fallback rungs; it now takes exact and assumed bonds only, on the schedule the valuation used.
+
+**Open after S4.**
+- **Model prices are noisy.** MIX-08 moved ±3 % a day on the model price, because the issuer's traded bonds (and so its median Z) change from day to day. S5: keep a model position's spread from the previous run in the desk store, so only the curve moves it.
+- The Desk Monitor has no quality column yet; the flags are in `extra` and the run log (S6).
+- FX-face bonds now publish `fx_delta` and so enter the open currency position. The exposure is real; the desk should confirm it wants them there.
+- The class median Z for model prices is crude (p90 error 29 % on a back-test); the snapshot has no ratings to bucket by.
+- The hub dataset → core spec mapping lives as constants in `curves/rates.py` and the adapter; a versioned table in the interface catalogue is still to write.
+- OFZ-IN waits for CPI (hub brief H10); until then they are market-value rungs.
+- Timing: `desk eod` of one date with the universe report takes about 13 s, a book run 6–12 s (the model-price medians value the universe once per run).
+
+## S5 result (19 October 2026)
+
+Built by the orchestrating session with three agents in one checkout and strict file ownership (store and publisher; carried model spread; desk API), against a schema and interfaces fixed first. Integrated, checked on the dev snapshots and in the browser, then reviewed independently.
+
+**Desk store** (`desk.store`, `migrations/0001_init.sql`; ADR-006, 04 §2–§3). PostgreSQL through psycopg 3, plain SQL.
+- Positions are append-only and bitemporal: a loaded file gives one `position_set` per book and valid date, a correction is the next revision, an identical load adds nothing. `positions_for(D, known_at=T)` takes per book the set with the latest valid date ≤ D recorded by T, so a book loaded once is carried forward (the run's lineage says from when). `private_inputs_hash` covers the content, not set ids or load times.
+- Runs are immutable: inserted as `loading`, written in one transaction that ends `complete`, or marked `failed` with the error; triggers reject any later change to the run or its rows. Orphaned `loading` runs are reaped. A run stores per position the same fact row the tdm store gets (`tdm_run.position_row`; non-finite numbers as null), the PnL with its flags or the reason it has none, the run reference data (books, issuers, curves, FX, indices), the log, the hash-verified core results, the model spreads it used, coverage by book and quality, totals, and its lineage (snapshot ids, position sets and their valid dates, `known_at`, versions and git sha, core result hashes, carried vs new model spreads).
+- Default run of a date: the latest complete EOD run on `eod_final`, otherwise `eod_preliminary`; TEST and REPLAY never. A final run supersedes the preliminary one and keeps it.
+- Development: `DESK_STORE_URL` unset means an embedded PostgreSQL 16 (`pgserver`, wheels for macOS, Linux and Windows) in `.devdata/desk_pg`. It must not share `.devdata/pg`, the hub seed cluster of the dev export.
+
+**Carried model spread** (the S4 open item). A model-price bond is priced at the Z-spread of the latest earlier default run (TEST, INTRADAY and superseded runs never supply one): the spread its model price used, or its last market Z if that is newer. The spread keeps its origin text ("issuer median Z 281 bp (3 bonds) on 2026-10-09"), and both dates of the flash PnL use the same carried set, so a model price moves with the curve only. Without a carried spread the median is used as before; a carried spread outside the median band is still used (it is the bond's own evidence). Shortcut: a carried spread is not refreshed until the bond trades again.
+
+**Desk API** (`desk.api`, `desk serve`; 05 §2 subset). `/api/v1/runs` (filters, cursor), `/runs/default`, `/runs/{id}` with lineage and log, `/positions`, `/pnl`, `/aggregates?dims=` (book, quality, asset class, segment, issuer, currency), `/health/live|ready`; one error shape with a request id; ETag on complete runs; typed OpenAPI for the S6 TypeScript types. The compatibility adapter serves `/desk-data.js` (`window.DESK`) from the store, and a test checks it equals `tdm.assemble` for the same runs of two dates in every key, `history` included, except the run id and publication time. `history` is the default runs of up to 21 earlier dates (tdm: the latest published EOD run of each date). The prototypes are served at `/`. Not in S5: authentication (the reverse proxy, 05 §6), SSE (S7), scenarios, views, exports, the market proxy.
+
+**Test book, 09–15.10, from the store** (one load on 09.10, carried forward):
+
+| Date | Run | Quality | Model price, m RUB | Total, m RUB | S4 total |
+|---|---|---|---|---|---|
+| 09.10 | 1 | exact 35, assumed 3, model 1, market value 1 | – | – | – |
+| 12.10 | 2 | same | +0.45 | 50.99 | 43.90 (model −6.64) |
+| 13.10 | 3 | same | +0.24 | 21.14 | 28.85 (model +7.95) |
+| 14.10 | 4 | exact 36, assumed 3, market value 1 | – | 12.09 | 11.46 |
+| 15.10 | 5 | same | – | 13.03 | 13.03 |
+
+Every other position is unchanged from S4. MIX-08 now keeps Z 281 bp from 09.10; its model swings fall from ±7 m to 0.2–0.5 m RUB a day, and its 12–14.10 PnL still sums to the same −3.35 m, now recognised when the first real price arrives (−4.04 m on 14.10): the 09.10 issuer median was below the bond's real Z of 390 bp. Carrying makes a model price steady, not right. A book run takes about 1.5 s (2.2 s wall); the first date, without carried spreads, 5 s because of the universe medians. The Desk Monitor on `desk serve` shows the five runs in its picker, and run 3 shows MIX-08 with its "model price on both dates" flag in the API.
+
+**Review and fixes.** An independent review found nine issues, fixed before the commit, each with a test:
+`desk eod --books` gives a TEST run (a partial EOD run would have become the default run and hidden the other books; `--run-type EOD` with `--books` is refused); a load declares the books it covers (`load-positions --books`; default the file's books) and closes a covered book without rows with an empty set, so a dropped or closed book is no longer carried forward forever (an earlier `known_at` still sees it); a position id twice in the file (identical lines too) or already in another book's latest set is rejected with nothing written (`desk: ...`, exit 1); a run or book without flash PnL has null PnL totals, not 0 (`totals`, `/pnl`, `desk runs`); the adapter's `history` comes from the default runs of earlier dates with tdm's `run_totals` quantities and a cumulative `pnlCum`; `TRUNCATE` is rejected on every store table but `schema_migration`; `position_set.recorded_at` is the insert's clock time, and a run's `position_set_ids` are the source of truth for its inputs (`known_at` is a horizon); carried spreads come from default runs only (INTRADAY dropped); the token test no longer needs PostgreSQL, and a test checks the previous date's revaluation gets the same carried spreads.
+
+**Open after S5.**
+- The store has no bond quotes, official PnL, funding, scenarios or CBR meetings yet; the adapter renders them as tdm renders a run without them. Scenario & PnL Lab therefore fails on real runs (it expects the preset `keyhike`), as it did under `tdm serve` with an empty `scenario_def`; scenario definitions come with S6.
+- `coverage` and `totals` formats are defined in code only; they go into the interface catalogue with the API's OpenAPI.
+- A carried spread can be far from the bond's real level (MIX-08: 281 vs 390 bp). Upgrade: move it with its group's median change.
+
+## S6 result (19 October 2026)
+
+Built by the orchestrating session with three agents (scenario engine; store, jobs and API; frontend), against a plan with frozen interfaces. Integrated, then reviewed independently; the findings are fixed (below).
+
+**Scenario definitions** (`desk.scenario.definition`, `migrations/0002_scenarios.sql`). Table `scenario_def` with ten presets on the curve "RUB OFZ": `par+100`, `par-100`, `keyhike`, `bullsteep`, `bearflat`, `ofzwide`, `rubdep`, `credit`, `sector`, `stress22`.
+- The definition keeps the prototype shape, so the prototype's `runScenario` reads it. `basis` is dropped: runs publish only the KBD curve. `ofzSpread` is the OFZ Z-spread to the KBD.
+- A definition has a normalized form and a sha256 hash of it.
+- The own spread shock of a position: an OFZ gets `ofzSpread`; a credit gets `_all` + (`_mult` − 1) · `spread_bp` + sector + issuer + rating. A null `spread_bp` adds 0.
+
+**T1, Taylor in the browser.** `GET /api/v1/runs/{id}/risk` gives per position a sparse delta (IR per bucket in RUB/bp, CS in RUB/bp, FX in RUB per 1 %) and the upper triangle of gamma (the joint discount and projection Hessian). Taylor = Σ d·x + ½ diagonal + cross terms.
+- Python reference `desk.scenario.taylor`; TypeScript port `frontend/src/taylor`.
+- Parity fixture `backend/tests/fixtures/taylor_parity.json`: five cases from the golden snapshots plus synthetic FX and credit rows. Vitest checks the port against it to 1e-9 relative. The pytest fails if the committed fixture differs from a regeneration (`DESK_REGEN_FIXTURES=1` rewrites it).
+
+**T2, exact on the backend.** `POST /api/v1/scenario-jobs` `{base_run_id, definition}` returns a job; `GET /api/v1/scenario-jobs/{id}` polls it. `GET /api/v1/scenario-defs` lists the presets.
+- `desk.scenario.exact.reprice_run` revalues the run's exact and assumed positions from the run's own market snapshot id, through core `value_portfolio(scenarios=...)`: one core call per distinct spread shock. It checks the base PV against the run (`base_mismatch`).
+- Fallback rungs get Taylor only and are listed as missing (coverage n/N).
+- The result holds per position the Taylor parts, exact and residual; per book and in total: Taylor, Taylor covered, exact, residual, and blended (exact for covered positions plus Taylor for the rest).
+- Results are append-only (`scenario_result`), keyed by run, definition hash, method and core version, so a change of code or core recomputes.
+- Worker: a daemon thread in `desk serve` (`--no-worker` turns it off; jobs stay queued). One worker per store, by a PostgreSQL advisory lock; it claims jobs with `FOR UPDATE SKIP LOCKED` and marks orphaned jobs failed. Shortcut: core work holds the GIL, so the worker slows the API while it runs; upgrade: a separate `desk worker` process.
+- T2 needs the run's bundles in `DESK_SNAPSHOT_CACHE`.
+- FX shocks are passed to core, but FX-face bonds are not core-valued yet (`not_rub`, market value rung), so FX is Taylor only.
+
+**Frontend** (`frontend/`, Vite 5, React 18, TypeScript, vitest; [`frontend/README.md`](../../frontend/README.md)).
+- `desk serve` serves it at `/app/` from the committed `frontend/dist`. Shortcut: the inside server has no Node; upgrade: CI builds it into the release.
+- Types are generated from the API's OpenAPI (`desk openapi --out ../frontend/openapi.json`, then `npm run gen:api`). A pytest checks the committed `openapi.json` has not drifted.
+- One screen, Scenario Lab: run picker, preset, sliders (parallel, OFZ spread, credit), the 11-bucket curve, and a live Taylor table per book marked ≈. Chips: "first order only X % MV", "> 500 bp", "partial n/N".
+- "Посчитать точно" posts only the definition and polls the job. Exact is compared like for like: covered Taylor against exact, blended against the Taylor total. The result greys out when the definition or the run changes. The table shows the top 20 positions by |residual|.
+- Numbers computed in the browser are never persisted.
+
+**Also in S6.**
+- The compatibility adapter fills `window.DESK` `SCENARIOS` from the store. The prototype Scenario & PnL Lab and Pivot Studio now work on real runs, and their preset numbers equal the backend Taylor. This closes the S5 open item (Scenario Lab failing on real runs).
+- The Desk Monitor has an «Оценка» column with the valuation quality. This closes the S4 open item (no quality column).
+
+**Test book, run 5 (15.10, 40 positions).** 39 covered; OFZ-15 (market value) is Taylor only. m RUB:
+
+| Preset | Taylor, all | Taylor, covered | Exact | Residual | Largest position residual |
+|---|---|---|---|---|---|
+| par+100 | −389.85 | −379.25 | −379.57 | −0.32 | OFZ-11 −0.13 |
+| par-100 | 413.45 | 402.85 | 403.18 | +0.34 | OFZ-11 +0.14 |
+| keyhike | −338.03 | −323.46 | −323.55 | −0.09 | OFZ-11 −0.02 |
+| bullsteep | 189.96 | 179.72 | 179.73 | +0.01 | |
+| bearflat | −123.39 | −116.18 | −116.18 | −0.00 | |
+| ofzwide | −117.48 | −117.48 | −117.50 | −0.02 | |
+| rubdep | −226.42 | −221.12 | −221.19 | −0.07 | |
+| credit | −271.21 | −271.21 | −272.52 | −1.31 | MIX-07 −0.61 |
+| sector | 0 | 0 | 0 | 0 | (sector data is empty, see below) |
+| stress22 | −1476.18 | −1412.30 | −1428.41 | −16.11 (1.1 %) | MIX-07 −4.37 |
+
+With the run's context cached, the first job of a run takes 0.5 s and each later job 0.1–0.2 s. Run 3 (13.10), `keyhike`: 38 of 40 covered (MIX-08 at a model price, and OFZ-15), residual −0.1 m. On the golden fixtures the review measured residuals up to 0.23 % for parallel, key-rate and spread shocks, up to 2.2 % for credit spreads ×2, and 9.7 % for `stress22` on wide-spread credits (higher-order terms).
+
+**Review and fixes.** An independent review found these issues, fixed before this note: one worker per store (advisory lock; a job becomes done or failed only from running); the result cache is keyed by method and core version; FX shocks are passed to core; `/app` redirects to `/app/`; an overflow in normalization raises `DefinitionError`; only the `_all` and `_mult` aliases are accepted; in the frontend, polling retries after a failed poll, the races on switching runs are closed, exact is compared like for like, the types are generated from the OpenAPI, and a missing parity fixture fails the test.
+
+**Open after S6.**
+- `sector` and `rating` are empty in the hub's issuer data, so the `sector` preset and the rating rules move nothing. They need a source; ratings also block better buckets for model prices.
+- One curve only (RUB OFZ, the KBD). RUONIA and key-rate curve shocks need the runs to publish those curves' deltas.
+- T2 for 2000 positions with `_mult` is one core call per credit position. Measure it; if it is slow, ask core for a per-position spread shift ([briefs/CORE.md](briefs/CORE.md)).
+- The worker shares the API process (GIL).
+- Queued jobs of an old method or core version are never cleaned up.
+- Not built: custom scenario CRUD, historical scenarios, T3 (nightly preset results), SSE, job cancel.
+- The exact P&L cannot be split into rates and spread on the portfolio path.
+- Windows developers need an npm mirror to rebuild the frontend; running it needs no Node.
+- Fonts load from Google Fonts, as in the prototypes; offline, the screen falls back to system fonts.
