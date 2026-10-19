@@ -262,7 +262,8 @@ const D = window.DESK, U = D.util;
 const BK = Object.keys(D.BOOKS);
 const CCYS = Object.keys(D.FX).filter(c => c !== 'RUB');
 const CCY_ORDER = ['RUB'].concat(CCYS);
-const SEGS = ['Гос','Корп','Секьюритизация','Деривативы','FX'];
+// Сегменты: известные, затем встретившиеся в данных (иначе позиция с новым сегментом не попала бы в фильтр).
+const SEGS = ['Гос','Корп','Секьюритизация','Деривативы','FX'].concat([...new Set(D.positions.map(p => p.segment))].filter(s => s && !['Гос','Корп','Секьюритизация','Деривативы','FX'].includes(s)));
 const FTYPES = [...new Set(D.funding.map(f => f.type))];
 const CURVE_KEYS = Object.keys(D.CURVES);
 const H = D.history, HL = H[H.length - 1], HP = H[H.length - 2];
@@ -841,7 +842,7 @@ WT.blotter = {
     if (cfg.measure === 'fx') cols.push({ k: 'fx', t: 'FX-дельта, млн ₽', n: 1, v: fxRub, h: p => mln(fxRub(p), 0, true) });
     cols.push({ k: 'pnl', t: 'PnL дня, тыс ₽', n: 1, v: p => p.pnl.official, h: p => ths(p.pnl.official, 0, true) },
       { k: 'ytm', t: 'Дох., %', n: 1, v: p => p.ytm, h: p => p.ytm == null ? '—' : num(p.ytm, 2) },
-      { k: 'mat', t: 'Погашение', v: p => p.maturity, h: p => `<span class="m">${p.maturity.split('-').reverse().join('.')}</span>` });
+      { k: 'mat', t: 'Погашение', v: p => p.maturity, h: p => `<span class="m">${p.maturity ? p.maturity.split('-').reverse().join('.') : '—'}</span>` });
     const s = ui.sorts[w.id];
     if (s) { const c = cols.find(x => x.k === s.k); if (c) rows.sort((a, z) => { const va = c.v(a), vz = c.v(z); const r = typeof va === 'number' ? (va || 0) - (vz || 0) : String(va).localeCompare(String(vz), 'ru'); return s.dir * r; }); }
     b.innerHTML = `<div class="tw"><table class="tbl"><thead><tr>${cols.map(c => `<th class="${c.n ? 'n' : ''}" aria-sort="${s && s.k === c.k ? (s.dir > 0 ? 'ascending' : 'descending') : 'none'}"><button class="sortb" data-sort="${c.k}">${c.t}${s && s.k === c.k ? (s.dir > 0 ? ' ↑' : ' ↓') : ''}</button></th>`).join('')}</tr></thead><tbody>${
