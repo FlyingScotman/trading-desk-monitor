@@ -64,3 +64,22 @@ def test_store_url_is_masked_and_checked(tmp_path: Path) -> None:
     assert dict(s.describe())["store_url"] == "postgresql://desk:***@db.internal:5432/desk"
     with pytest.raises(SettingsError):
         load({"DESK_ENV_FILE": str(tmp_path / "none"), "DESK_STORE_URL": "sqlite:///x.db"})
+
+
+def test_inbox_and_adapter_settings(tmp_path: Path) -> None:
+    s = load({"DESK_ENV_FILE": str(tmp_path / "none")})
+    assert s.private_adapter is None and s.inbox_dirs == () and s.inbox_archive == REPO_ROOT / ".devdata" / "inbox"
+    assert (s.inbox_poll_seconds, s.adapter_match_timeout_s, s.adapter_read_timeout_s, s.inbox_max_file_mb) == \
+        (60, 10, 600, 500)
+    s = load({"DESK_ENV_FILE": str(tmp_path / "none"), "DESK_PRIVATE_ADAPTER": "adapters/tda",
+              "DESK_PRIVATE_ADAPTER_CONFIG": "/cfg", "DESK_PRIVATE_ADAPTER_SHA256": "ab" * 32,
+              "DESK_INBOX_DIRS": "/in/a; in/b/** ;", "DESK_INBOX_POLL_SECONDS": "5", "DESK_INBOX_MAX_FILE_MB": "1.5"})
+    assert s.private_adapter == str(REPO_ROOT / "adapters" / "tda") and s.private_adapter_config == Path("/cfg")
+    assert s.inbox_dirs == (Path("/in/a"), REPO_ROOT / "in" / "b" / "**")  # the recursive marker is kept
+    assert str(s.inbox_dirs[1]).endswith("**") and s.inbox_poll_seconds == 5 and s.inbox_max_file_mb == 1.5
+    assert load({"DESK_ENV_FILE": str(tmp_path / "none"), "DESK_PRIVATE_ADAPTER": "tda"}).private_adapter == "tda"
+    shown = dict(s.describe())
+    assert shown["inbox_dirs"].count(";") == 1 and shown["private_adapter_sha256"] == "ab" * 32
+    assert dict(load({"DESK_ENV_FILE": str(tmp_path / "none")}).describe())["private_adapter"].startswith("reference")
+    with pytest.raises(SettingsError, match="DESK_ADAPTER_READ_TIMEOUT_S"):
+        load({"DESK_ENV_FILE": str(tmp_path / "none"), "DESK_ADAPTER_READ_TIMEOUT_S": "ten"})

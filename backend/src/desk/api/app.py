@@ -12,7 +12,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Any
@@ -123,8 +123,11 @@ Con = Annotated[psycopg.Connection, Depends(db)]
 ConRW = Annotated[psycopg.Connection, Depends(db_rw)]
 
 
-def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | None = None) -> FastAPI:
-    """No scenario worker here (``serve`` starts one): jobs submitted to this app stay queued."""
+def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | None = None,
+               adapter_status: Callable[[], str] | None = None) -> FastAPI:
+    """No scenario worker here (``serve`` starts one): jobs submitted to this app stay queued.
+    ``adapter_status``: the private adapter's ``ok <name> <version> <fp>`` or ``error <reason>`` for
+    ``/health/ready`` (``desk.inbox.scan.adapter_line``, loaded once per process); None: not reported."""
     app = FastAPI(title="Desk API", version=__version__, description="Desk API v1 (docs/architecture/05 §2)",
                   responses={404: {"model": ErrorOut}, 422: {"model": ErrorOut}, 503: {"model": ErrorOut}})
 
@@ -179,7 +182,8 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         last = con.execute("SELECT run_id, business_date, completed_at,"
                            " extract(epoch FROM now() - completed_at)::float8 AS age_seconds FROM run"
                            " WHERE status = 'complete' ORDER BY completed_at DESC LIMIT 1").fetchone()
-        return {"status": "ok", "schema_version": ver, "latest_run": last}
+        return {"status": "ok", "schema_version": ver, "latest_run": last,
+                "adapter": adapter_status() if adapter_status else None}
 
     # ---- runs
     @app.get("/api/v1/runs", response_model=RunList)
@@ -362,7 +366,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
 
 def serve(store_url: str, host: str = "127.0.0.1", port: int = 8000, static_dir: Path | None = None,
-          snapshots: Path | None = None) -> None:
+          snapshots: Path | None = None, adapter_status: Callable[[], str] | None = None) -> None:
     """``snapshots``: the snapshot cache the scenario worker reprices from; None runs no worker."""
     import uvicorn
 
@@ -372,4 +376,4 @@ def serve(store_url: str, host: str = "127.0.0.1", port: int = 8000, static_dir:
     if snapshots is not None:
         jobs.Worker(store_url, SnapshotDir(snapshots)).start()
     # the desk.api logger logs every request with its request id, so no uvicorn access log
-    uvicorn.run(create_app(store_url, static_dir), host=host, port=port, access_log=False)
+    uvicorn.run(create_app(store_url, static_dir, adapter_status=adapter_status), host=host, port=port, access_log=False)

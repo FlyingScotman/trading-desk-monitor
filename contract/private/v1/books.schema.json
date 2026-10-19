@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "private/1.0/books",
+  "title": "books row (reference())",
+  "description": "Private input contract v1 (docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md §10). One row as the adapter emits it. An optional field may be absent or null (the same thing); the empty string is invalid everywhere. Raw firm values go in x_* keys; _src is the row's location in the report, without sheet names.",
+  "type": "object",
+  "required": [
+    "_src",
+    "book_id",
+    "name",
+    "desk",
+    "book_type",
+    "entity"
+  ],
+  "properties": {
+    "_src": {
+      "$ref": "#/$defs/str"
+    },
+    "book_id": {
+      "$ref": "#/$defs/str"
+    },
+    "name": {
+      "$ref": "#/$defs/str"
+    },
+    "desk": {
+      "$ref": "#/$defs/str"
+    },
+    "book_type": {
+      "enum": [
+        "TRADING",
+        "HTM",
+        "DERIVS"
+      ]
+    },
+    "entity": {
+      "$ref": "#/$defs/str"
+    },
+    "ocp_to": {
+      "$ref": "#/$defs/str"
+    },
+    "trader": {
+      "$ref": "#/$defs/str"
+    },
+    "active": {
+      "type": "boolean",
+      "default": true
+    },
+    "valid_from": {
+      "$ref": "#/$defs/date"
+    }
+  },
+  "patternProperties": {
+    "^x_": {}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "str": {
+      "type": "string",
+      "minLength": 1
+    },
+    "amount": {
+      "type": [
+        "number",
+        "string"
+      ],
+      "pattern": "^-?[0-9]+(\\.[0-9]+)?$",
+      "description": "a finite JSON number or a decimal string; no NaN, exponents in strings, separators or commas"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    }
+  }
+}

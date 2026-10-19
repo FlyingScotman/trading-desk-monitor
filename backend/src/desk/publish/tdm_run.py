@@ -7,6 +7,9 @@ Every valued position is written, also those on a fallback rung (``valuation.fal
 ``extra`` carries ``quality`` and ``assumptions``, and the run log counts the qualities and lists
 each non-exact position with its reasons as a WARN line (the prototype has no quality column).
 A position with no data at all is not written with zeros: it gets a WARN line with its reason.
+Rows of the private contract v1 (S7a, ``valuation.positions``) carry the report's row as it came in
+``extra.reported`` (reconciliation figures, ``src``, ``x``) next to ours; a row valued without core (an FX row,
+an unmapped bond) is written by ``direct_row`` with its currency and the report's instrument name.
 The same holds for the flash PnL of slice S2: a priced position without PnL gets no ``pnl`` dict
 and a WARN line with the reason; a simple PnL (all in ``other``) is counted in its own WARN line.
 """
@@ -18,6 +21,7 @@ import math
 import subprocess
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -30,8 +34,10 @@ from ..marketdata.adapter import MarketView
 from ..orchestrator import EodContext, Outcome
 from ..pnl.flash import METHOD
 from ..settings import REPO_ROOT
+from ..store import PositionInputs
 from ..valuation.fallback import METHOD as SIMPLE_METHOD
 from ..valuation.fallback import QUALITIES, SimplePnl, fx_rate
+from ..valuation.positions import normalised
 
 CURVE_ID = "RUB OFZ"
 ASSET_CLASS = {"ofz_pd": "ОФЗ-ПД", "ofz_ad": "ОФЗ-АД", "ofz_pk": "ОФЗ-ПК", "ofz_in": "ОФЗ-ИН",
@@ -46,6 +52,11 @@ BOOKS = {
     "MIXED": {"book_id": "MIXED", "name": "Смешанная (тест)", "desk": "Rates", "trader": None,
               "book_type": "TRADING", "entity": "Демо", "ocp_to": None},
 }
+DEFAULT_BOOK = {"desk": "—", "trader": None, "book_type": None, "entity": "Демо", "ocp_to": None}
+"""A book outside ``BOOKS`` (a real book of the private inputs): named by its id."""
+UNMAPPED_ISSUER = {"issuer": "Не сопоставлено", "name": None, "issuer_group": "Не сопоставлено", "is_gov": False,
+                   "is_quasi": False}
+"""The issuer of the unmapped bonds (an instrument the static snapshot does not know)."""
 FX_CCYS = ("USD", "EUR", "CNY")
 INDICES = (("KEY_RATE", "КС"), ("RUONIA", "RUONIA"))
 
@@ -110,7 +121,54 @@ def _num(x: float | None) -> float | None:
     return None if x is None or math.isnan(x) else x
 
 
-def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str) -> dict[str, Any]:
+def reported(x: dict[str, Any] | None) -> dict[str, Any]:
+    """The report's row (``PositionInputs.extra``) as JSON: ``{"reported": {...}}``, or nothing for a legacy row."""
+    if not x:
+        return {}
+    return {"reported": {k: v.isoformat() if isinstance(v, date) else v for k, v in x.items() if v is not None}}
+
+
+def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, Any], qty: float | None
+               ) -> dict[str, Any]:
+    """An FX row or an unmapped bond (``valuation.positions``): PV, FX delta in currency, no rates risk. Fields
+    the tdm schema requires and the report does not give: the notional of a bond without a face is its MV, an
+    amount without a rate of the day is in RUB (both said in the assumptions)."""
+    v = o.valuation
+    assert v is not None
+    x = normalised(x)
+    fx = x.get("asset_class") == "fx"
+    why = list(v.assumptions)
+    ccy = x.get("ccy") or "RUB"
+    rate = v.face_rub if fx else (r[0] if (r := fx_rate(ctx, ccy)) else None)
+    amount = v.quantity if fx else next((x[f] for f in ("face_outstanding_ccy", "face_amount_ccy")
+                                         if x.get(f) is not None), None)
+    if rate is None:
+        why.append(f"no {ccy} rate on {ctx.business_date}: shown in RUB")
+        ccy, rate, amount = "RUB", 1.0, None  # the face is in the foreign currency: the notional is the MV
+    if amount is None:
+        amount = v.pv_rub / rate
+        why.append("notional unknown: the market value is shown")
+    vd = x.get("value_date")
+    return {
+        "position_id": pid, "book_id": book, "instr_type": "FX" if fx else "BOND",
+        "asset_class": "Валюта" if fx else "Не сопоставлено", "segment": "FX" if fx else "Корп",
+        "name": x.get("source_instrument_name") or (f"{ccy} {vd or 'spot'}" if fx else x.get("source_instrument_id"))
+        or pid, "isin": x.get("isin"), "issuer": None, "ccy": ccy, "maturity": vd.isoformat() if vd else None,
+        "side": ("BUY" if amount >= 0 else "SELL") if fx else "long" if amount >= 0 else "short",
+        "notional": amount, "notional_rub": amount * rate, "price": _num(v.clean_pct), "mv": v.pv_rub / rate,
+        "mv_rub": v.pv_rub, "dv01": 0.0, "cs01": 0.0, "ofz_spr01": 0.0, "risk": {}, "gamma": [],
+        "instrument_id": x.get("moex_secid") or x.get("source_instrument_id"), "new_today": False,
+        **({"fx_delta": {ccy: v.pv_rub / rate}} if ccy != "RUB" else {}),
+        "extra": {
+            "valuation": "reported" if v.quality == "reported_value" else "approximated", "quality": v.quality,
+            "assumptions": why, "quantity_bonds": qty, **({"not_exact_reason": o.reason} if o.reason else {}),
+            **({"fx_rate": rate} if ccy != "RUB" else {}), **reported(x),
+        },
+    }
+
+
+def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
+                 x: dict[str, Any] | None = None) -> dict[str, Any]:
     t, q, v = o.terms, o.quote, o.valuation
     assert t is not None and v is not None
     as_of = ctx.business_date
@@ -149,6 +207,7 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str) 
             **({"not_exact_reason": o.reason} if o.reason else {}),
             **({"fx_rate": fx[0], "fx_source": fx[1]} if fx else {}),
             **({"pnl": o.pnl.extra()} if o.pnl else {}),
+            **reported(x),
         },
     }
 
@@ -193,20 +252,32 @@ class RunContent:
 
 
 def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev: MarketView | None,
-                lineage: dict[str, Any]) -> RunContent:
-    """positions: (position_id, book_id, outcome). The log counts the qualities and says, per position,
-    why it is not exact, not valued, or without PnL."""
+                lineage: dict[str, Any], inputs: PositionInputs | None = None) -> RunContent:
+    """positions: (position_id, book_id, outcome) of ``inputs`` (needed for the v1 rows of S7a). The log counts
+    the qualities and says, per position, why it is not exact, not valued, or without PnL."""
+    extra = inputs.extra if inputs else {}
+    quantities = {pid: q for pid, _, _, q in inputs.rows} if inputs else {}
     issuers: dict[str, dict[str, Any]] = {}
     rows, skipped, no_pnl, approx = [], [], [], []
     quality: Counter[str] = Counter()
     for pid, book, o in positions:
-        if o.valuation is None or o.terms is None:
-            skipped.append(f"{pid} {o.secid}: не посчитано, нет данных "
+        x = extra.get(pid)
+        label = o.secid or (x and (x.get("source_instrument_id") or x.get("ccy"))) or "—"
+        if o.valuation is None:
+            skipped.append(f"{pid} {label}: не посчитано, нет данных "
                            f"({o.reason}{': ' + o.detail if o.detail else ''})")
             continue
         quality[o.valuation.quality] += 1
         if o.valuation.quality != "exact":
-            approx.append(f"{pid} {o.secid}: оценка {o.valuation.quality}: " + "; ".join(o.valuation.assumptions))
+            approx.append(f"{pid} {label}: оценка {o.valuation.quality}: " + "; ".join(o.valuation.assumptions))
+        if o.terms is None:  # valued without core (valuation.positions): no flash PnL in S7a
+            if prev is not None:
+                no_pnl.append(f"{pid} {label}: нет PnL (оценка без инструмента, S7a)")
+            rows.append(row := direct_row(ctx, book, pid, o, x or {}, quantities.get(pid)))
+            if row["instr_type"] == "BOND":  # tdm needs an issuer for a bond
+                row["issuer"] = UNMAPPED_ISSUER["issuer"]
+                issuers[row["issuer"]] = UNMAPPED_ISSUER
+            continue
         if o.pnl is None and prev is not None:
             e = o.no_pnl
             no_pnl.append(f"{pid} {o.secid}: нет PnL ({e.reason}{': ' + e.detail if e.detail else ''})" if e
@@ -215,21 +286,23 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
             no_pnl.append(f"{pid} {o.secid}: PnL {o.pnl.total:,.0f} ₽ с модельной ценой ({o.pnl.flag})")
         key, rec = _issuer_key(ctx, o)
         issuers[key] = rec
-        rows.append(position_row(ctx, book, pid, o, key))
+        rows.append(position_row(ctx, book, pid, o, key, x))
+    used = list(dict.fromkeys(r["book_id"] for r in rows))
     indices = []
     for code, name in INDICES:
         fx = ctx.market.latest_fixing(code)
         if fx:
             indices.append({"index_name": name, "value": fx[1]})
     reference = {
-        "books": [BOOKS[b] for b in BOOKS if any(r["book_id"] == b for r in rows)],
+        "books": [BOOKS[b] for b in BOOKS if b in used]
+        + [{"book_id": b, "name": b, **DEFAULT_BOOK} for b in used if b not in BOOKS],
         "issuers": list(issuers.values()),
         "curves": [{"curve_id": CURVE_ID, "name": "ОФЗ (КБД MOEX)", "ccy": "RUB", "kind": "bond",
                     "points": curve_points(ctx, prev)}],
         "fx": _fx_rows(ctx, prev),
         "indices": indices,
     }
-    log = [("INFO", "lineage " + json.dumps(lineage, ensure_ascii=False))]
+    log = [("INFO", "lineage " + json.dumps(lineage, ensure_ascii=False, default=str))]
     if ctx.point_in_time_warning:
         log.append(("WARN", "статика не на дату рынка: " + ctx.point_in_time_warning))
     log.append(("INFO", "качество оценки: " + ", ".join(f"{k} {quality[k]}" for k in QUALITIES if quality[k])
@@ -253,13 +326,14 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
 
 
 def publish(db: str, ctx: EodContext, positions: list[tuple[str, str, Outcome]], *,
-            prev: MarketView | None, comment: str | None = None) -> tuple[int, str, list[str]]:
-    """positions: (position_id, book_id, outcome). Returns (run_id, status, warnings)."""
+            prev: MarketView | None, comment: str | None = None,
+            inputs: PositionInputs | None = None) -> tuple[int, str, list[str]]:
+    """positions: (position_id, book_id, outcome) of ``inputs``. Returns (run_id, status, warnings)."""
     lineage = {**ctx.lineage(), "backend_version": BACKEND_VERSION, "backend_git_sha": git_sha(),
                "core_version": CORE_VERSION,
                "prev_market_snapshot_id": prev.snapshot.id if prev else None,
                "core_results": store_core_results(db, [o for _, _, o in positions])}
-    c = run_content(ctx, positions, prev, lineage)
+    c = run_content(ctx, positions, prev, lineage, inputs)
     with Run(db, as_of=ctx.business_date.isoformat(), run_type="EOD",
              source=f"desk-backend {BACKEND_VERSION} (slice {'S2' if any(o.pnl for _, _, o in positions) else 'S1'})",
              lib_version=f"rub-fixed-income-core {CORE_VERSION}",

@@ -4,8 +4,8 @@
 and assumed positions through core ``value_portfolio`` scenarios, one ``value`` call per distinct own
 spread shock (core takes one spread shift per scenario). A position is covered when its base PV
 reproduces the run's within ``BASE_TOLERANCE_RUB`` and core repriced it; its residual is exact minus
-the Taylor total the browser shows. Fallback rungs have no cashflows: they stay Taylor only, with
-``code`` = their quality. ``blended`` = exact of the covered positions + Taylor of the rest.
+the Taylor total the browser shows. Fallback rungs and rows without a bond (an FX forward, ``assumed``) have no
+cashflows: they stay Taylor only, with ``code`` = their quality. ``blended`` = exact of the covered positions + Taylor of the rest.
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ def reprice_run(snapshots: SnapshotDir, run: Mapping[str, Any], rows: list[Mappi
     code: dict[str, str] = {}
     groups: dict[float, list[Mapping[str, Any]]] = {}
     for p in payload["positions"]:
-        if p["quality"] in REPRICED:
+        if p["quality"] in REPRICED and p["secid"] is not None:  # an FX forward is assumed but has no bond
             groups.setdefault(own_spread_shock(norm, p), []).append(p)
         else:
             code[p["position_id"]] = p["quality"]

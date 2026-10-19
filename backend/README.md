@@ -25,6 +25,8 @@ hub snapshot files ──► desk.marketdata (bundle + adapter mdhub_v1)
 
 ## Run it locally
 
+Install on Windows (the work PC, offline bundle built at home): [`docs/INSTALL_BACKEND_WINDOWS.md`](../docs/INSTALL_BACKEND_WINDOWS.md).
+
 Requirements:
 - [uv](https://docs.astral.sh/uv/). `uv sync` fetches core from its GitHub repository at the commit pinned in `pyproject.toml`; no core checkout is needed.
 - The hub's address and a token of scope `snapshots` (see Settings). The tests need neither; they run on vendored fixtures and a local stub hub.
@@ -91,6 +93,19 @@ Books, all synthetic (real public instruments, invented quantities; real desk po
 - `examples/test_book.csv`: the S3 test book. Three books (`OFZ`, `CORP`, `MIXED`), long and short, with the coverage cases (OFZ-PK, a key-rate floater, OFZ-IN, a perpetual, a bond without quotes on some dates), each valued with its quality flag. Regenerate it with `desk demo-book --profile test --date D --out examples/test_book.csv`;
 - `examples/demo_book.csv`: the S1 demo book (`desk demo-book`).
 
+### Bank reports (slice S7a)
+
+Positions arrive as bank reports read by the private adapter (`docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md`; unset, the reference adapter over canonical CSV). Set `DESK_INBOX_DIRS` (and `DESK_PRIVATE_ADAPTER`, `DESK_PRIVATE_ADAPTER_CONFIG`), then:
+
+```bash
+desk adapter check                 # the conformance kit over the inbox folders, without the store
+desk inbox scan                    # new files into the ledger and the store; prints counts by status
+desk inbox status --date 2026-10-15   # files, units and issues per source and business date; book ages
+desk eod --date 2026-10-15         # values the inbox positions; prints each book's source and age
+```
+
+`desk inbox retry --status failed,rejected` offers files again; `desk inbox replay --source S --from D1 --to D2` re-reads archived accepted files and stores a new revision only where the rows changed. When the adapter fails to load, ingestion is off with the reason (`desk inbox status`, `/health/ready`), and runs and the API keep working.
+
 ### Offline fallback
 
 When the hub is unreachable (the proxy blocks it), an operator copies `<snapshot_id>.json.gz` bundles into `DESK_SNAPSHOT_DROP` and runs `desk import-drop`. Each file is verified like a download; a bad file is rejected with its reason and not copied.
@@ -133,6 +148,14 @@ Exact and assumed bonds get the flash PnL by exact repricing. Market value and s
 | `DESK_STORE_URL` | not set | The desk store, a `postgresql://` URI (ADR-006). Unset: the embedded dev server in `.devdata/desk_pg` (never the hub's `.devdata/pg`) |
 | `DESK_DB` | `.devdata/tdm.sqlite` | The tdm SQLite prototype store, written only with `desk eod --tdm` (`tdm serve`, until window.DESK is retired) |
 | `DESK_REPORT_DIR` | not set | Validation reports (`--report-dir`) |
+| `DESK_PRIVATE_ADAPTER` | not set | The private adapter (08 §2): a package directory (imported by path, not installed) or a module name. Unset: the reference adapter `desk.inbox.reference` (canonical CSV) |
+| `DESK_PRIVATE_ADAPTER_CONFIG` | not set | The adapter's local configuration folder (`ctx.config_dir`); part of the fingerprint |
+| `DESK_PRIVATE_ADAPTER_SHA256` | not set | The expected adapter fingerprint; loading fails (ingestion off) on a mismatch |
+| `DESK_INBOX_DIRS` | not set | Report folders, separated by `;`; one ending in `\**` (or `/**`) is scanned recursively |
+| `DESK_INBOX_ARCHIVE` | `.devdata/inbox` | A copy of every matched file, under `<sha256>/<name>`, for `retry` and `replay` |
+| `DESK_INBOX_POLL_SECONDS` | 60 | Watcher period; a file is offered when unchanged since the previous scan or older than this |
+| `DESK_ADAPTER_MATCH_TIMEOUT_S` / `DESK_ADAPTER_READ_TIMEOUT_S` | 10 / 600 | Per batch of up to 50 `match` calls / per `read` |
+| `DESK_INBOX_MAX_FILE_MB` | 500 | Larger files are not offered |
 
 ## Tests
 

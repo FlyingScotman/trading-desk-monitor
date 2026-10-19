@@ -1,0 +1,5 @@
+﻿book_id;name;desk;book_type;entity;ocp_to;trader;active;valid_from
+B1;Rates trading;Rates;TRADING;ENT1;;Trader A;1;
+B2;Rates banking book;Rates;HTM;ENT1;;Trader B;1;
+B3;Credit trading;Credit;TRADING;ENT1;;Trader A;1;
+B9;Old book;Rates;TRADING;ENT1;;;0;

@@ -16,6 +16,10 @@ model_price     no price, a usable fixed schedule: priced on the KBD at the Z-sp
                 median Z of today's traded exact-priced bonds of the issuer, else of the bond
                 class, else of the kind (computed only when a bond needs it)
 par_proxy       nothing else: q * (current face + accrued if known), no risk
+reported_value  an instrument the static snapshot does not know (an unmapped bank-report row,
+                ``valuation.positions``): the report's own mv_rub or mark price x face, no risk.
+                Last: every rung above is our valuation of a bond we know; this is a figure we
+                cannot check against terms or the market
 ==============  ==============================================================================
 
 Risk of the priced rungs: with a usable fixed schedule, core ``BondRiskEngine`` calibrated to the
@@ -79,9 +83,9 @@ Z_BAND_BP = (-100.0, 2000.0)
 MIN_HORIZON_DAYS = 30
 """Bonds closer to their horizon stay out of the medians: there a kopeck of price is many bp of Z."""
 METHOD = "desk-flash-simple-v1"
-QUALITIES = ("exact", "assumed", "market_value", "stale_price", "model_price", "par_proxy")
+QUALITIES = ("exact", "assumed", "market_value", "stale_price", "model_price", "par_proxy", "reported_value")
 RUNGS = QUALITIES[2:]
-"""The qualities of this module: no cashflows on the valuation, flash PnL by ``simple_pnl``."""
+"""The qualities without cashflows on the valuation: flash PnL by ``simple_pnl`` (``reported_value`` has none)."""
 
 
 @dataclass(frozen=True)

@@ -209,7 +209,7 @@ Read-only; the backend builds it. An adapter must work when every lookup returns
 
 Because the adapter runs in a child process, `ctx.instruments` is served from a read-only index file that the backend writes before the call. The adapter cannot tell the difference.
 
-`reference(ctx)` returns reference rows the adapter owns: `{"books": [...]}` (§10). It is **required** when any source emits `book_id`. The backend calls it at load time and on `desk inbox scan`, and stores a new revision only when the content changed. Each book row may carry `valid_from`; without it, a change applies from its `known_at`, so a later change of `book_type` does not rewrite history. A `book_id` that is not in `books` gets a unit-scoped `unknown_book` error, raised by the backend.
+`reference(ctx)` returns reference rows the adapter owns: `{"books": [...]}` (§10), optionally with `"issues": [...]` shaped as in §6.3 (for example a malformed line of its mapping file); an `error` there fails the reference call. It is **required** when any source emits `book_id`. The backend calls it at load time and on `desk inbox scan`, and stores a new revision only when the content changed. Each book row may carry `valid_from`; without it, a change applies from its `known_at`, so a later change of `book_type` does not rewrite history. A `book_id` that is not in `books` gets a unit-scoped `unknown_book` error, raised by the backend.
 
 ## 8 Conformance kit
 
@@ -424,12 +424,13 @@ Each point is done when the kit passes on the synthetic fixtures **and** the own
 So both sides read the same rules:
 
 - `DESK_INBOX_DIRS`: folders separated by `;` (Windows paths), each resolved like other path settings. A folder ending in `\**` (or `/**`) is scanned recursively.
-- `DESK_INBOX_POLL_SECONDS` (default 60). A file is offered to `match` once its size and modification time are unchanged across two scans. Names `~$*`, `*.tmp`, `*.part` and hidden files are skipped.
-- **One scan at a time**: a scan holds a Postgres advisory lock, so `desk serve`'s watcher and a manual `desk inbox scan` never process a file twice. Ledger inserts are idempotent on the file hash.
-- **Ledger.** One file row, keyed by SHA-256, plus one row per (dataset, `valid_date`, scope unit) it touched. Statuses: `waiting`, `waiting_calendar`, `ignored`, `match_failed`, `accepted`, `partially_accepted`, `rejected`, `failed`, `timed_out`, `duplicate`, `stale_copy`, `superseded`.
+- `DESK_INBOX_POLL_SECONDS` (default 60). A file is offered to `match` once its size and modification time are unchanged since the previous scan of the same process, or its modification time is older than `DESK_INBOX_POLL_SECONDS`. So a one-shot `desk inbox scan` takes files copied earlier. A known (path, size, modification time) is not hashed again. Names `~$*`, `*.tmp`, `*.part` and dot-files are skipped (Windows hidden attributes: S7b).
+- **One scan at a time**: a scan holds a Postgres advisory try-lock (a second scan reports "busy" and does nothing), so `desk serve`'s watcher and a manual `desk inbox scan` never process a file twice. Ledger inserts are idempotent on the file hash.
+- **Ledger.** One file row, keyed by SHA-256; an append-only status history; one row per (dataset, `valid_date`, scope unit) it touched. A unit that sorts below the current revision, or whose content equals it, stores no new position set. Statuses: `waiting_calendar`, `ignored`, `match_failed`, `accepted`, `partially_accepted`, `rejected`, `failed`, `timed_out`, `duplicate`, `stale_copy`, `superseded`.
   - The same content again with the same (source, `report_date`) is `duplicate`, and nothing is loaded.
   - The same content with a different (source, `report_date`) is `stale_copy`: yesterday's file re-sent under today's name. It is shown on day status, because today is then missing.
-- **Archive.** Every matched file, whatever its status, is copied to `DESK_INBOX_ARCHIVE` (default `.devdata/inbox`) under its hash. So `replay` and `retry` work after the bank cleans its folder. The archive stays on the work machine, like the store.
+  - Duplicates and stale copies are recorded per sighting (path, size, time), not as a status of the content, so they never overwrite the original file's status. A match result is stored per attempt, because it depends on the adapter version.
+- **Archive.** Every matched file, whatever its status, is copied to `DESK_INBOX_ARCHIVE` (default `.devdata/inbox`) as `<sha256>/<original name>`; the name is kept because adapters match by name. So `replay` and `retry` work after the bank cleans its folder. The archive stays on the work machine, like the store.
 - **Re-offering.** When the adapter fingerprint changes (a new release or new mappings), files in `ignored`, `match_failed`, `failed`, `timed_out` and `rejected` are offered again on the next scan.
   - `desk inbox retry --status S` does it by hand.
   - `desk inbox replay --source S --from D1 --to D2` re-reads accepted files; a new revision is stored only where canonical rows changed (§6.6).

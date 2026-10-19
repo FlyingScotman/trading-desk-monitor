@@ -62,12 +62,13 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
         "core_version": CORE_VERSION, "prev_market_snapshot_id": prev.snapshot.id if prev else None,
         "positions": {"set_ids": inputs.set_ids, "valid_dates": {b: d.isoformat() for b, d in inputs.valid_dates.items()},
                       "carried_from": {b: d.isoformat() for b, d in inputs.valid_dates.items() if d < bd},
-                      "known_at": inputs.known_at.isoformat(), "private_inputs_hash": inputs.private_inputs_hash},
+                      "known_at": inputs.known_at.isoformat(), "private_inputs_hash": inputs.private_inputs_hash,
+                      "sources": inputs.sources},
         "core_results": [{"result_sha256": sha, "schema": r.schema_version, "label": r.run_id.rsplit("-", 1)[-1]}
                          for sha, r in results.items()],
         "model_spreads": {"carried": carried, "new": len(spreads) - carried},
     }
-    content = run_content(ctx, positions, prev, lineage)
+    content = run_content(ctx, positions, prev, lineage, inputs)
     run_id = con.execute(
         "INSERT INTO run (run_type, business_date, prev_date, cut_type, supersedes_run_id, market_snapshot_id,"
         " static_snapshot_id, prev_market_snapshot_id, private_inputs_hash, position_set_ids, positions_known_at,"
@@ -104,7 +105,8 @@ def _write(cur: psycopg.Cursor, run_id: int, positions: list[tuple[str, str, Out
         why = f"{o.reason}{': ' + o.detail if o.detail else ''}" if o.reason else None
         pv, dv01, cs01 = (f["mv_rub"], f["dv01"], f["cs01"]) if f else (None, None, None)
         pnl = {**o.pnl.as_tdm(), "extra": o.pnl.extra()} if o.pnl else None
-        rows.append((run_id, pid, i, book, o.secid, qty[pid], v.quality if v else None, why, pv, dv01, cs01,
+        q = v.quantity if v and o.terms else qty[pid]  # a bond given by face: the number of bonds valued
+        rows.append((run_id, pid, i, book, o.secid, q, v.quality if v else None, why, pv, dv01, cs01,
                      _jsonb(f) if f else None, _jsonb(pnl) if pnl else None,
                      _jsonb({"reason": o.no_pnl.reason, "detail": o.no_pnl.detail}) if o.no_pnl else None))
         for b in (book, "_total"):

@@ -17,6 +17,15 @@ path in ``DESK_ENV_FILE``); the environment wins. ``backend/.env.example`` lists
 * ``DESK_DB``              the ``tdm`` SQLite prototype store (default ``.devdata/tdm.sqlite``),
                            written by ``desk eod --tdm`` during the transition
 * ``DESK_REPORT_DIR``      validation reports (none by default)
+* ``DESK_PRIVATE_ADAPTER`` the private adapter (08 §2): a package directory or a module name; unset: the
+                           reference adapter ``desk.inbox.reference``
+* ``DESK_PRIVATE_ADAPTER_CONFIG``  the adapter's config folder (``ctx.config_dir``; fingerprinted)
+* ``DESK_PRIVATE_ADAPTER_SHA256``  the expected adapter fingerprint; loading fails on a mismatch
+* ``DESK_INBOX_DIRS``      report folders separated by ``;``; one ending in ``\\**`` or ``/**`` is recursive
+* ``DESK_INBOX_ARCHIVE``   copies of every matched file under its hash (default ``.devdata/inbox``)
+* ``DESK_INBOX_POLL_SECONDS``, ``DESK_ADAPTER_MATCH_TIMEOUT_S``, ``DESK_ADAPTER_READ_TIMEOUT_S``,
+  ``DESK_INBOX_MAX_FILE_MB``  watcher period (60), adapter timeouts (10 per match batch, 600 per read) and
+                           the largest file offered (500)
 
 The proxy itself comes from the standard ``HTTPS_PROXY`` / ``NO_PROXY`` variables.
 """
@@ -28,6 +37,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from .inbox.runner import is_path_spec
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BACKEND_ROOT = REPO_ROOT / "backend"
@@ -50,6 +61,15 @@ class Settings:
     store_url: str | None = field(default=None, repr=False)
     db: Path = REPO_ROOT / ".devdata" / "tdm.sqlite"
     report_dir: Path | None = None
+    private_adapter: str | None = None
+    private_adapter_config: Path | None = None
+    private_adapter_sha256: str | None = None
+    inbox_dirs: tuple[Path, ...] = ()
+    inbox_archive: Path = REPO_ROOT / ".devdata" / "inbox"
+    inbox_poll_seconds: float = 60.0
+    adapter_match_timeout_s: float = 10.0
+    adapter_read_timeout_s: float = 600.0
+    inbox_max_file_mb: float = 500.0
 
     def describe(self) -> list[tuple[str, str]]:
         """Effective settings for ``desk config``; the token and the store password are masked."""
@@ -66,6 +86,15 @@ class Settings:
             ("store_url", mask_url(self.store_url) if self.store_url else "not set: embedded dev store (.devdata/desk_pg)"),
             ("db", str(self.db)),
             ("report_dir", str(self.report_dir or "none")),
+            ("private_adapter", self.private_adapter or "reference (desk.inbox.reference)"),
+            ("private_adapter_config", str(self.private_adapter_config or "none")),
+            ("private_adapter_sha256", self.private_adapter_sha256 or "not pinned"),
+            ("inbox_dirs", "; ".join(map(str, self.inbox_dirs)) or "none"),
+            ("inbox_archive", str(self.inbox_archive)),
+            ("inbox_poll_seconds", f"{self.inbox_poll_seconds:g}"),
+            ("adapter_match_timeout_s", f"{self.adapter_match_timeout_s:g}"),
+            ("adapter_read_timeout_s", f"{self.adapter_read_timeout_s:g}"),
+            ("inbox_max_file_mb", f"{self.inbox_max_file_mb:g}"),
         ]
 
 
@@ -123,10 +152,16 @@ def load(environ: dict[str, str] | None = None) -> Settings:
             source = f"not set: {token_file} does not exist"
 
     defaults = Settings()
-    try:
-        timeout = float(get("DESK_HUB_TIMEOUT_S") or defaults.hub_timeout_s)
-    except ValueError as e:
-        raise SettingsError(f"DESK_HUB_TIMEOUT_S: {e}") from None
+
+    def num(key: str, default: float) -> float:
+        try:
+            return float(get(key) or default)
+        except ValueError as e:
+            raise SettingsError(f"{key}: {e}") from None
+
+    adapter = get("DESK_PRIVATE_ADAPTER")
+    if adapter is not None and is_path_spec(adapter):
+        adapter = str(_path(adapter))
     store_url = get("DESK_STORE_URL")
     if store_url is not None and urlsplit(store_url).scheme not in ("postgresql", "postgres"):
         raise SettingsError("DESK_STORE_URL must be a postgresql:// URI")
@@ -135,10 +170,19 @@ def load(environ: dict[str, str] | None = None) -> Settings:
         hub_token=token,
         hub_token_source=source if token else (source if source.startswith("not set") else "not set"),
         hub_ca_bundle=_path(get("DESK_HUB_CA_BUNDLE")),
-        hub_timeout_s=timeout,
+        hub_timeout_s=num("DESK_HUB_TIMEOUT_S", defaults.hub_timeout_s),
         snapshot_cache=_path(get("DESK_SNAPSHOT_CACHE")) or defaults.snapshot_cache,
         snapshot_drop=_path(get("DESK_SNAPSHOT_DROP")),
         store_url=store_url,
         db=_path(get("DESK_DB")) or defaults.db,
         report_dir=_path(get("DESK_REPORT_DIR")),
+        private_adapter=adapter,
+        private_adapter_config=_path(get("DESK_PRIVATE_ADAPTER_CONFIG")),
+        private_adapter_sha256=get("DESK_PRIVATE_ADAPTER_SHA256"),
+        inbox_dirs=tuple(p for d in (get("DESK_INBOX_DIRS") or "").split(";") if (p := _path(d.strip()))),
+        inbox_archive=_path(get("DESK_INBOX_ARCHIVE")) or defaults.inbox_archive,
+        inbox_poll_seconds=num("DESK_INBOX_POLL_SECONDS", defaults.inbox_poll_seconds),
+        adapter_match_timeout_s=num("DESK_ADAPTER_MATCH_TIMEOUT_S", defaults.adapter_match_timeout_s),
+        adapter_read_timeout_s=num("DESK_ADAPTER_READ_TIMEOUT_S", defaults.adapter_read_timeout_s),
+        inbox_max_file_mb=num("DESK_INBOX_MAX_FILE_MB", defaults.inbox_max_file_mb),
     )

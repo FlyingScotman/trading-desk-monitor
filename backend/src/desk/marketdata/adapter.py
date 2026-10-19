@@ -118,6 +118,8 @@ class BondTerms:
     floater_formula: dict[str, Any] | None
     face_date: date | None = None
     """The static snapshot's business date: ``face_value`` is the face outstanding then."""
+    initial_face_value: Decimal | None = None
+    """The face at issue (static ``initial_face_value``), before amortization and indexation."""
 
 
 @dataclass(frozen=True)
@@ -246,6 +248,7 @@ class StaticView:
                 redemptions=tuple(sorted(reds.get(sid, ()), key=lambda r: r.date)),
                 offers=tuple(offers.get(sid, ())),
                 floater_formula=formulas.get(sid), face_date=as_of,
+                initial_face_value=_d(i.get("initial_face_value")),
             )
 
     def business_calendar(self, name: str) -> tuple[BusinessCalendar, date, date]:

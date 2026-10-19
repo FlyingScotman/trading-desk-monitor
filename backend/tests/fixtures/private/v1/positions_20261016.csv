@@ -1,0 +1,7 @@
+﻿book_id;position_id;asset_class;source_instrument_id;source_instrument_name;isin;ccy;quantity;face_amount_ccy;face_outstanding_ccy;amount_ccy;value_date;mark_price_pct;x_desk_note
+B1;B1|SEC-26238;bond;SEC-26238;OFZ 26238;RU000A1038V6;RUB;12000;12000000;;;;61.25;
+B1;B1|SEC-JXQ44;bond;SEC-JXQ44;Corp put bond;RU000A0JXQ44;RUB;;5000000;;;;;
+B1;B1|USD;fx;USD;;;USD;;;;1000000;;;spot
+B2;B2|SEC-29008;bond;SEC-29008;OFZ 29008;RU000A0JV4P3;RUB;20000;;;;;;
+B2;B2|SEC-XR1;bond;SEC-XR1;Amortizer;RU000A109XR1;RUB;;3000000;2400000;;;;
+B3;;;;;;;;;;;;;

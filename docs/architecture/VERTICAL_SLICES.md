@@ -1,6 +1,6 @@
 # Vertical slices
 
-As of 18 October 2026. Status: working plan, owned by the backend. **S3, S4, S5 and S6 are built (19 October; the S3 live acceptance waits for the hub's snapshot layer). Next: S7a, real positions and real risks, first priority (order and reasons: [ROADMAP](ROADMAP.md) §0).** Work for the hub and core: [briefs/HUB.md](briefs/HUB.md), [briefs/CORE.md](briefs/CORE.md).
+As of 18 October 2026. Status: working plan, owned by the backend. **S3, S4, S5 and S6 are built (19 October; the S3 live acceptance waits for the hub's snapshot layer). S7a (real positions through the private adapter) is built on 19 October; the first real run waits for the adapter and the install at work ([ROADMAP](ROADMAP.md) §0).** Work for the hub and core: [briefs/HUB.md](briefs/HUB.md), [briefs/CORE.md](briefs/CORE.md).
 
 ## Why
 
@@ -36,7 +36,7 @@ Each slice keeps whatever it built that matches the architecture. Where it takes
 | **S4 Core portfolio path and the whole bond universe** | The same screens, valued through core 0.32 `value_portfolio`. Also priced now: floaters (OFZ-PK, key-rate, RUONIA), perpetuals to an explicit call and, once the hub carries CPI, OFZ-IN. A RUONIA OIS curve (`rub_ruonia_ois_moex_v2`) in the curves panel. Coverage grows from about 1034 bonds to every bond with a usable schedule | Adapter to core domain types; curve-spec mapping `dataset` → spec; core KBD; core horizon explain against `desk.pnl.flash` | **Built** 19 October ([result](#s4-result-19-october-2026)) |
 | **S5 Desk backend proper** | Same screens, now served by the desk API from the desk Postgres store, with run lineage | ADR-006, 04, 05 §2 | **Built** 19 October ([result](#s5-result-19-october-2026)) |
 | **S6 Interactive scenario** | Scenario slider with instant Taylor (≈) and an "exact" button that reprices on the backend; residual shown | 03 T1/T2, parity fixtures; first React + TypeScript screen | **Built** 19 October ([result](#s6-result-19-october-2026)) |
-| **S7a Real positions, real risks** | The Desk Monitor on the desk's real books at work: PV, DV01 by bucket, CS01, coverage; unmapped bonds listed, not dropped | [08](08_PRIVATE_ADAPTER_INTERFACE.md) for `positions` and `books`: loader and child-process runner, reference adapter, inbox, ledger, revisions, conformance kit; adapter A0 + A2; Windows install (ROADMAP §0 F2) | **Next, first priority** (owner, 19 October) |
+| **S7a Real positions, real risks** | The Desk Monitor on the desk's real books at work: PV, DV01 by bucket, CS01, coverage; unmapped bonds listed, not dropped | [08](08_PRIVATE_ADAPTER_INTERFACE.md) for `positions` and `books`: loader and child-process runner, reference adapter, inbox, ledger, revisions, conformance kit; adapter A0 + A2; Windows install (ROADMAP §0 F2) | **Built** 19 October ([result](#s7a-result-19-october-2026)); I2 waits for the adapter (A0 + A2) and the first run at work |
 | **S7b Day status** | A "Day status" screen: what arrived, what was rejected and why, which runs superseded which; events API; the remaining private-contract schemas | `/api/v1/inbox`, `/api/v1/events`; React screen | |
 | **S8 YTD backfill and official PnL** | Runs and flash PnL for every date since 2026-01-01; official PnL loaded; YTD ours vs official by book and day | `desk backfill`; `pnl_official` revisions; adapter A3; hub H26 (or the dev export) | |
 | **S9 OCP, cash and funding** | OCP and cash per book; reported vs derived OCP; FX positions and funding in PnL | Adapter A4; `desk_rules`; DEC01, DEC03, DEC06 | |
@@ -602,3 +602,44 @@ With the run's context cached, the first job of a run takes 0.5 s and each later
 - The exact P&L cannot be split into rates and spread on the portfolio path.
 - Windows developers need an npm mirror to rebuild the frontend; running it needs no Node.
 - Fonts load from Google Fonts, as in the prototypes; offline, the screen falls back to system fonts.
+
+## S7a result (19 October 2026)
+
+Built by the orchestrating session with four agents:
+- A: the standard-library inbox core;
+- B: the store, scanner and CLI;
+- C: the valuation of v1 positions;
+- D: the Windows install.
+
+Interfaces were frozen before the agents started. An independent review found 23 defects in A, C and D, and they are fixed (below). Suite: 180 passed.
+
+**Built.**
+- `desk.inbox` (08 §2–§9):
+  - the loader and child-process runner: the backend never imports adapter code; stripped environment; timeouts with a process-tree kill; fingerprint;
+  - stdlib schema validation of `contract/private/v1` (shipped as package data, a test keeps the copies equal);
+  - time semantics on the `RU_PRODUCTION` calendar of the cached static snapshots;
+  - the reference adapter and the conformance kit (`desk adapter check`, `python -m desk.inbox.conformance`).
+- `desk.inbox.scan` and migration `0004_inbox`:
+  - an append-only ledger (file, sightings, status history, units, issues, events), archive, and `book_rev`;
+  - revision order by report key, not arrival; scope conflicts across sources;
+  - unit-scoped rejections, books closed by omission, stale copies, re-offering on a new adapter fingerprint.
+- `positions_for` returns the v1 fields (`extra`) and each book's source.
+- Commands `desk inbox scan|status|retry|replay` and `desk adapter check`. `/health/ready` reports the adapter.
+- `desk.valuation.positions` (`plan`/`merge`) and migration `0003_positions_v1`:
+  - isin/regnum re-resolution on the run's static snapshot;
+  - the number of bonds from the initial face (the static `initial_face_value`) or the outstanding face;
+  - FX rows into the open currency position;
+  - a last rung `reported_value` (the bank's own MV or mark) for bonds we cannot identify, so no bond with data is left unvalued.
+- Windows: `backend/tools/build_windows_bundle.py` builds an offline zip (33.8 MB, cp311 win_amd64 wheels incl. `pgserver`, core from the pinned commit, the built frontend). It also builds `backend/windows/*.bat` and [INSTALL_BACKEND_WINDOWS](../INSTALL_BACKEND_WINDOWS.md).
+
+**Review fixes worth knowing.**
+- An adapter error on a book left out of `scopes` now rejects that book instead of closing it.
+- OFZ-IN given by face no longer comes out 23 % low.
+- The schemas were missing from the Windows bundle.
+
+**Open after S7a.**
+- Not run on Windows or on real reports: that is I2 (the owner's first run).
+- Day-status screen, `/api/v1/inbox` and `/events`, the `desk serve` watcher: S7b.
+- Multi-date datasets, scopes without `book_id`, retiring books by omission (`shortcut:` comments).
+- Direct rows (FX, `reported_value`) have no flash PnL yet. FX forwards are valued at today's rate without discounting (quality `assumed`).
+- The install relies on the install folder being the venv root (`REPO_ROOT`); a `DESK_HOME` setting would make it robust.

@@ -59,8 +59,8 @@ class RunDetail(RunHeader):
 class Position(BaseModel):
     position_id: str
     book_id: str
-    secid: str
-    quantity: float
+    secid: str | None = Field(description="null: no instrument (an FX, OTC or unmapped row; fact says what)")
+    quantity: float | None = Field(description="Number of bonds; null for an FX row or a bond given by face only")
     quality: str | None = Field(description="null: not valued (no data at all); reason says why")
     reason: str | None
     pv_rub: float | None
@@ -137,6 +137,8 @@ class Ready(BaseModel):
     status: Literal["ok"]
     schema_version: str | None
     latest_run: LatestRun | None
+    adapter: str | None = Field(None, description="the private adapter: 'ok <name> <version> <fingerprint[:12]>' "
+                                "or 'error <reason>' (ingestion off); null when not reported")
 
 
 # ---- scenarios (S6)
@@ -181,7 +183,7 @@ class ScenarioDefList(BaseModel):
 class RiskPosition(BaseModel):
     position_id: str
     book_id: str
-    secid: str
+    secid: str | None
     name: str | None
     quality: str
     issuer: str | None

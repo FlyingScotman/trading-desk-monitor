@@ -370,10 +370,16 @@ export interface components {
             position_id: string;
             /** Book Id */
             book_id: string;
-            /** Secid */
-            secid: string;
-            /** Quantity */
-            quantity: number;
+            /**
+             * Secid
+             * @description null: no instrument (an FX, OTC or unmapped row; fact says what)
+             */
+            secid: string | null;
+            /**
+             * Quantity
+             * @description Number of bonds; null for an FX row or a bond given by face only
+             */
+            quantity: number | null;
             /**
              * Quality
              * @description null: not valued (no data at all); reason says why
@@ -453,6 +459,11 @@ export interface components {
             /** Schema Version */
             schema_version: string | null;
             latest_run: components["schemas"]["LatestRun"] | null;
+            /**
+             * Adapter
+             * @description the private adapter: 'ok <name> <version> <fingerprint[:12]>' or 'error <reason>' (ingestion off); null when not reported
+             */
+            adapter?: string | null;
         };
         /** ResultCoverage */
         ResultCoverage: {
@@ -548,7 +559,7 @@ export interface components {
             /** Book Id */
             book_id: string;
             /** Secid */
-            secid: string;
+            secid: string | null;
             /** Name */
             name: string | null;
             /** Quality */

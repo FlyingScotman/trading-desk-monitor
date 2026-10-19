@@ -1,4 +1,4 @@
-"""``desk`` command line (slices S1-S6).
+"""``desk`` command line (slices S1-S7a).
 
     desk hub-check                       hub version, token, latest eod_final and its age
     desk sync --last 5                   pull verified snapshots into the cache (also --date, --from/--to)
@@ -8,6 +8,11 @@
     desk db-migrate                      create or update the desk store (DESK_STORE_URL, else embedded)
     desk load-positions examples/test_book.csv --date 2026-10-15 [--books OFZ,CORP]
     desk runs --date 2026-10-15          the store's runs: status, positions, qualities, PnL
+    desk inbox scan                      bank reports of DESK_INBOX_DIRS through the adapter into the store
+    desk inbox status [--date D] [--json]          files, units, issues per source and date; book ages
+    desk inbox retry [--status failed,rejected]    offer files in these statuses again
+    desk inbox replay --source S --from D1 --to D2 read archived accepted files again (new revisions if changed)
+    desk adapter check [--adapter SPEC] [--dir D] [--stub-ctx] [--json]   the conformance kit (08 §8)
     desk serve                           desk API + Desk Monitor on http://127.0.0.1:8000, scenario worker
     desk openapi --out ../frontend/openapi.json   the API's OpenAPI document (stdout without --out)
 
@@ -15,7 +20,8 @@ Defaults for the snapshot folder, the run store and the report folder come from
 :mod:`desk.settings` (``DESK_*`` variables or ``backend/.env``); ``desk config`` prints them.
 
 ``desk eod`` values the books of the desk store for the date (positions carried from the latest
-earlier set; ``--book FILE`` loads the file for the date first, an identical file adds nothing),
+earlier set, from ``desk inbox scan`` or ``desk load-positions``; ``--book FILE`` loads the file for the date
+first, an identical file adds nothing; each book's source and age is printed),
 attaches the day-over-day flash PnL when the folder has a snapshot of an earlier date (``--no-pnl``
 turns it off) and publishes the run into the store; ``--tdm`` also into the tdm SQLite store.
 ``--books A,B`` values only those books, as a TEST run (never the default run of the date). A load
@@ -48,6 +54,7 @@ from .orchestrator import attach_pnl, prepare, value
 from .publish import desk_run, tdm_run
 from .report import validation
 from .settings import Settings, SettingsError, load, mask_url
+from .valuation import positions as pv1
 
 
 def read_book(path: Path) -> list[tuple[str, str, str, float]]:
@@ -130,34 +137,69 @@ def cmd_eod(a: argparse.Namespace) -> int:
             print(f"no positions in the store for {a.date}" + (f" (books {','.join(a.books)})" if a.books else ""))
             print(f"done in {time.perf_counter() - t0:.1f} s")
             return 0
-        old = {b: d for b, d in inputs.valid_dates.items() if d < ctx.business_date}
-        if old:
-            print("positions carried from " + ", ".join(f"{b} {d}" for b, d in sorted(old.items())))
-        book = inputs.rows
+        for b, d in sorted(inputs.valid_dates.items()):
+            src = inputs.sources.get(b) or {}
+            age = (ctx.business_date - d).days
+            print(f"  {b}: {src.get('source')} {src.get('file_name')}"
+                  + (f", report {src['report_date']}" if src.get("report_date") else "")
+                  + f", valid {d}" + (f", carried {age} days" if age else ""))
         carried = store.carried_spreads(con, before=ctx.business_date)
-        requests = [(secid, qty) for _, _, secid, qty in book]
-        pids = [pid for pid, *_ in book]
-        outcomes = value(ctx, requests, second_order=not a.no_gamma, position_ids=pids, carried_spreads=carried)
+        bp = pv1.plan(ctx, inputs)
+        outcomes = value(ctx, bp.requests, second_order=not a.no_gamma, position_ids=bp.position_ids,
+                         carried_spreads=carried)
         if prev_date and not a.no_pnl:
             prev_ctx = prepare(sd, prev_date)
-            attach_pnl(prev_ctx, value(prev_ctx, requests, position_ids=pids, carried_spreads=carried), ctx, outcomes)
+            attach_pnl(prev_ctx, value(prev_ctx, bp.requests, position_ids=bp.position_ids, carried_spreads=carried),
+                       ctx, outcomes)
             flash = [o.pnl for o in outcomes if o.pnl]
             print(f"flash PnL {prev_date} -> {a.date}: {len(flash)}/{sum(o.valuation is not None for o in outcomes)} "
                   f"priced positions, total {sum(p.total for p in flash):,.0f} RUB, "
                   f"max identity error {max((abs(p.identity_error) for p in flash), default=0):.2e} RUB")
-        positions = [(pid, bk, o) for (pid, bk, _, _), o in zip(book, outcomes)]
-        ok = sum(o.valuation is not None for o in outcomes)
-        by_q = Counter(o.valuation.quality if o.valuation else "not_valued" for o in outcomes)
-        print(f"book: {ok}/{len(book)} positions valued (" + ", ".join(f"{q} {n}" for q, n in by_q.most_common())
+        positions = pv1.merge(bp, outcomes)
+        ok = sum(o.valuation is not None for _, _, o in positions)
+        by_q = Counter(o.valuation.quality if o.valuation else "not_valued" for _, _, o in positions)
+        print(f"book: {ok}/{len(positions)} positions valued (" + ", ".join(f"{q} {n}" for q, n in by_q.most_common())
               + f"), {len(carried)} carried spreads")
         run_id, status, warnings = desk_run.publish(con, ctx, positions, prev=prev, run_type=run_type,
                                                     inputs=inputs, carried_from=carried)
         print(f"desk run {run_id}: {status}, {len(warnings)} warnings")
     if a.tdm:
-        run_id, status, warnings = tdm_run.publish(a.db, ctx, positions, prev=prev)
+        run_id, status, warnings = tdm_run.publish(a.db, ctx, positions, prev=prev, inputs=inputs)
         print(f"tdm run {run_id}: {status}, {len(warnings)} warnings")
     print(f"done in {time.perf_counter() - t0:.1f} s")
     return 0
+
+
+def cmd_inbox(a: argparse.Namespace) -> int:
+    from .inbox import scan
+
+    with _store(a) as con:
+        if a.inbox_cmd == "status":
+            st = scan.status(con, a.settings, date.fromisoformat(a.date) if a.date else None)
+            print(json.dumps(st, indent=2) if a.json else scan.status_text(st))
+            return 0 if st["adapter"].startswith("ok") else 1
+        if a.inbox_cmd == "scan":
+            res = scan.scan(con, a.settings)
+        elif a.inbox_cmd == "retry":
+            res = scan.retry(con, a.settings, tuple(a.status) if a.status else (*scan.REOFFER, "waiting_calendar"))
+        else:
+            res = scan.replay(con, a.settings, a.source, date.fromisoformat(a.date_from),
+                              date.fromisoformat(a.date_to))
+    print(res.text())
+    return 0 if res.ok else 1
+
+
+def cmd_adapter_check(a: argparse.Namespace) -> int:
+    from .inbox import conformance
+
+    st = a.settings
+    rep = conformance.check(
+        a.adapter or st.private_adapter, a.dir or [str(d) for d in st.inbox_dirs], stub_ctx=a.stub_ctx,
+        snapshot_dir=str(st.snapshot_cache), config_dir=str(st.private_adapter_config) if st.private_adapter_config
+        else None, expected_sha256=None if a.adapter else st.private_adapter_sha256,
+        match_timeout_s=st.adapter_match_timeout_s, read_timeout_s=st.adapter_read_timeout_s)
+    print(json.dumps(rep.to_json(), indent=2, ensure_ascii=False) if a.json else rep.text())
+    return 0 if rep.ok else 1
 
 
 def cmd_load_positions(a: argparse.Namespace) -> int:
@@ -372,7 +414,10 @@ def cmd_serve(a: argparse.Namespace) -> int:
     url = store.resolve_url(a.settings)
     store.migrate(url)
     print(f"desk API on http://{a.host}:{a.port}/desk-monitor.html, store {mask_url(url)}")
-    serve(url, host=a.host, port=a.port, snapshots=None if a.no_worker else a.settings.snapshot_cache)
+    from .inbox import scan
+
+    serve(url, host=a.host, port=a.port, snapshots=None if a.no_worker else a.settings.snapshot_cache,
+          adapter_status=lambda: scan.adapter_line(scan.adapter(a.settings)))
     return 0
 
 
@@ -389,7 +434,7 @@ def cmd_openapi(a: argparse.Namespace) -> int:
 
 def cmd_config(a: argparse.Namespace) -> int:
     for key, shown in a.settings.describe():
-        print(f"{key:<15} {shown}")
+        print(f"{key:<24} {shown}")
     return 0
 
 
@@ -425,6 +470,30 @@ def main(argv: list[str] | None = None) -> int:
     lp.add_argument("--books", type=_list, help="the books the file covers (A,B; default: the file's books); "
                     "a covered book without rows in the file is closed for the date")
     lp.set_defaults(fn=cmd_load_positions)
+    ib = sub.add_parser("inbox", help="bank reports through the private adapter (08 §13)")
+    isub = ib.add_subparsers(dest="inbox_cmd", required=True)
+    isub.add_parser("scan", help="take in the new stable files of DESK_INBOX_DIRS").set_defaults(fn=cmd_inbox)
+    ist = isub.add_parser("status", help="files, units and issues per source and business date; book ages")
+    ist.add_argument("--date", type=_iso, help="business date (default: today's positions)")
+    ist.add_argument("--json", action="store_true")
+    ist.set_defaults(fn=cmd_inbox)
+    irt = isub.add_parser("retry", help="offer files in these statuses again, whatever the adapter fingerprint")
+    irt.add_argument("--status", type=_list, help="statuses (default ignored,match_failed,failed,timed_out,"
+                     "rejected,waiting_calendar)")
+    irt.set_defaults(fn=cmd_inbox)
+    irp = isub.add_parser("replay", help="read the archived accepted files of a source again")
+    irp.add_argument("--source", required=True)
+    irp.add_argument("--from", dest="date_from", required=True, type=_iso, help="first business date")
+    irp.add_argument("--to", dest="date_to", required=True, type=_iso, help="last business date")
+    irp.set_defaults(fn=cmd_inbox)
+    ad = sub.add_parser("adapter", help="the private adapter")
+    asub = ad.add_subparsers(dest="adapter_cmd", required=True)
+    ack = asub.add_parser("check", help="the conformance kit over report folders, without the store (08 §8)")
+    ack.add_argument("--adapter", help="package directory or module (default: DESK_PRIVATE_ADAPTER)")
+    ack.add_argument("--dir", action="append", default=[], help="a report folder (repeatable; default: DESK_INBOX_DIRS)")
+    ack.add_argument("--stub-ctx", action="store_true", help="every ctx.instruments lookup returns None")
+    ack.add_argument("--json", action="store_true")
+    ack.set_defaults(fn=cmd_adapter_check)
     m = sub.add_parser("db-migrate", help="apply the desk store migrations")
     m.set_defaults(fn=cmd_db_migrate)
     r = sub.add_parser("runs", help="list the runs of the desk store")

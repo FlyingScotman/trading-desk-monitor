@@ -22,6 +22,7 @@ from desk.marketdata.adapter import MarketView
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import Outcome, attach_pnl, prepare, value
 from desk.publish import tdm_run
+from desk.store import MIGRATIONS
 
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1"
 DATE = "2026-10-15"
@@ -188,7 +189,7 @@ def test_errors_etag_and_health(store_url, book, client):
     assert_error(client.post("/api/v1/runs"), 405, "invalid_parameter")
     assert client.get("/health/live").json() == {"status": "ok"}
     h = client.get("/health/ready").json()
-    assert h["schema_version"] == "0002_scenarios" and h["latest_run"] is None
+    assert h["schema_version"] == max(f.stem for f in MIGRATIONS.glob("*.sql")) and h["latest_run"] is None
     rid = run(store_url, book)
     h = client.get("/health/ready").json()["latest_run"]
     assert h["run_id"] == rid and h["business_date"] == DATE and h["age_seconds"] >= 0

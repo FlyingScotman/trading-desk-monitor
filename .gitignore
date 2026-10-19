@@ -21,3 +21,6 @@ __pycache__/
 
 # Frontend dependencies (frontend/dist is committed: the inside server has no Node)
 frontend/node_modules/
+
+# Windows bundle (backend/tools/build_windows_bundle.py)
+/dist/

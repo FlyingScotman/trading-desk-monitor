@@ -1318,12 +1318,28 @@
             "title": "Book Id"
           },
           "secid": {
-            "type": "string",
-            "title": "Secid"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secid",
+            "description": "null: no instrument (an FX, OTC or unmapped row; fact says what)"
           },
           "quantity": {
-            "type": "number",
-            "title": "Quantity"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity",
+            "description": "Number of bonds; null for an FX row or a bond given by face only"
           },
           "quality": {
             "anyOf": [
@@ -1557,6 +1573,18 @@
                 "type": "null"
               }
             ]
+          },
+          "adapter": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adapter",
+            "description": "the private adapter: 'ok <name> <version> <fingerprint[:12]>' or 'error <reason>' (ingestion off); null when not reported"
           }
         },
         "type": "object",
@@ -1791,7 +1819,14 @@
             "title": "Book Id"
           },
           "secid": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Secid"
           },
           "name": {

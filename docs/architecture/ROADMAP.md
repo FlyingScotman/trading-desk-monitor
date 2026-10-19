@@ -18,6 +18,8 @@ The owner asked (19 October 2026) to put the positions loader first: six slices 
 | F4 Positions adapter | adapter, A0 + A2 | Package by SPI v1. The positions report mapped from **the field list the owner gives**; the full profiler (A1) is not on this path | The kit passes on synthetic files of that layout |
 | F5 First real run | owner at work | `desk adapter check --dir <positions>` (counts and codes only), then `desk inbox scan`, `desk eod`, `desk serve` | The Desk Monitor shows the real books; unmapped bonds are a known, small list |
 
+**Status 19 October:** F2 and F3 are built (VERTICAL_SLICES, S7a result); F1 (token) and F4 (adapter A0 + A2) are next, then F5 at work.
+
 F2, F3 and F4 run in parallel. After F5 the order below resumes, starting with the YTD backfill and the official PnL (S8).
 
 ## 1 The desk's day
