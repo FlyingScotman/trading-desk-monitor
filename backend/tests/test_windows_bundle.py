@@ -63,6 +63,18 @@ def test_bats_are_ascii_crlf_and_quote_their_paths():
         assert b'"%~dp0app\\deskctl.py"' in data
 
 
+def test_owner_guides_are_russian_text_the_builder_ships():
+    src = (REPO / "backend/tools/build_windows_bundle.py").read_text(encoding="utf-8")
+    for name in ("START_HERE.txt", "INSTALL.txt"):
+        text = (REPO / "backend/windows" / name).read_text(encoding="utf-8")
+        assert name.isascii() and f'"{name}"' in src and "start.bat" in text and "Распакуйте" in text
+    guide = (REPO / "backend/windows/START_HERE.txt").read_text(encoding="utf-8")
+    for must in ("C:\\DeskMonitor", "Разблокировать", "Проверить связь", "snapshots", "Позиции", "books.json",
+                 "patterns.json", "report_risk", "Обновить", "%LOCALAPPDATA%\\DeskMonitor", "adapter check --dir",
+                 "hub-check", "stop.bat"):
+        assert must in guide, must
+
+
 def test_desk_environ_sets_defaults_only(monkeypatch, tmp_path):
     adapter = tmp_path / "adapter" / "pkg"
     adapter.mkdir(parents=True)

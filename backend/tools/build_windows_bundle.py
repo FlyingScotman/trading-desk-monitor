@@ -16,8 +16,8 @@ Needs uv, git, network to PyPI and GitHub, and a Python with pip (``python3.11 -
 * ``app/``        ``deskctl.py`` (the launcher the .bat files call), ``prototypes/``, ``frontend/dist/``,
                   ``examples/test_book.csv``, ``INSTALL_BACKEND_WINDOWS.md``
 * ``adapter/``    the private adapter's package from ``--adapter-zip`` (never in this repository)
-* ``start.bat``, ``stop.bat``, ``update_daily.bat``, ``desk.bat``, ``INSTALL.txt``, ``VERSION``,
-  ``MANIFEST.sha256``
+* ``START_HERE.txt`` (the owner's short guide), ``start.bat``, ``stop.bat``, ``update_daily.bat``, ``desk.bat``,
+  ``INSTALL.txt``, ``VERSION``, ``MANIFEST.sha256``
 
 start.bat makes the venv ``env/`` from ``python/`` and the wheelhouse, offline, on the first start and whenever
 the version or the folder changes; data and settings live in DESK_HOME (see backend/windows/deskctl.py).
@@ -249,7 +249,8 @@ def main() -> int:
             data = (src / "backend/windows" / bat).read_bytes()
             assert data.isascii(), f"{bat}: keep .bat files ASCII (the console code page is not UTF-8)"
             (stage / bat).write_bytes(crlf(data))
-        (stage / "INSTALL.txt").write_bytes(crlf((src / "backend/windows/INSTALL.txt").read_bytes(), bom=True))
+        for txt in ("START_HERE.txt", "INSTALL.txt"):  # UTF-8 with a BOM and CRLF: Notepad shows the Russian right
+            (stage / txt).write_bytes(crlf((src / "backend/windows" / txt).read_bytes(), bom=True))
         (stage / "VERSION").write_text(version + "\n")
 
         listing = sorted(p for p in stage.rglob("*") if p.is_file())
