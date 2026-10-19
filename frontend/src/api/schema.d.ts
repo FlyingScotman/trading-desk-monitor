@@ -231,6 +231,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/autopilot/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Autopilot Status */
+        get: operations["autopilot_status_api_v1_autopilot_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/autopilot/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Autopilot Run */
+        post: operations["autopilot_run_api_v1_autopilot_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -269,6 +303,48 @@ export interface components {
             dims: string[];
             /** Rows */
             rows: components["schemas"]["AggregateRow"][];
+        };
+        /** AutopilotRun */
+        AutopilotRun: {
+            /** Run Id */
+            run_id: string;
+            /** As Of */
+            as_of: string;
+            /** Created At */
+            created_at: string | null;
+        };
+        /** AutopilotStatus */
+        AutopilotStatus: {
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "idle" | "running" | "error";
+            /** Last Cycle At */
+            last_cycle_at: string | null;
+            /** Last Ok At */
+            last_ok_at: string | null;
+            /** Message */
+            message: string;
+            /** Steps */
+            steps: components["schemas"]["AutopilotStep"][];
+            latest_run: components["schemas"]["AutopilotRun"] | null;
+        };
+        /** AutopilotStep */
+        AutopilotStep: {
+            /** Name */
+            name: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "skipped" | "error";
+            /** Detail */
+            detail: string;
+            /** At */
+            at: string;
         };
         /** ErrorOut */
         ErrorOut: {
@@ -448,6 +524,11 @@ export interface components {
             no_pnl: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** Queued */
+        Queued: {
+            /** Queued */
+            queued: boolean;
         };
         /** Ready */
         Ready: {
@@ -1537,6 +1618,100 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    autopilot_status_api_v1_autopilot_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutopilotStatus"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    autopilot_run_api_v1_autopilot_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Queued"];
                 };
             };
             /** @description Not Found */
