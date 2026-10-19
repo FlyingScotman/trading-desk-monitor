@@ -412,6 +412,8 @@ class BondValuation:
     """exact | assumed | market_value | stale_price | model_price | par_proxy (the owner's rule: a bond is
     valued on the best rung available, never left out; every rung below exact says why in ``assumptions``)."""
     assumptions: tuple[str, ...] = ()
+    model_spread_source: str | None = None
+    """Set on a ``model_price``: where its ``z_spread_bp`` comes from (stored and carried by the desk store)."""
 
 
 @dataclass

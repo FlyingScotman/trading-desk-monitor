@@ -1,6 +1,6 @@
 # Desk backend (`desk`)
 
-The Trading Desk Monitor backend. Design: [`docs/architecture/04_BACKEND.md`](../docs/architecture/04_BACKEND.md). Current state: **slices S1–S4** (next: S5, the desk store and API) of [`docs/architecture/VERTICAL_SLICES.md`](../docs/architecture/VERTICAL_SLICES.md). It pulls verified snapshots from the VPS hub into a local cache, values every bond of a book through core 0.32.0 (pinned by commit from its GitHub repository) or, where core cannot, by a flagged approximation (see "Valuation quality"), explains the day-over-day flash PnL by exact repricing, and publishes EOD runs that the Desk Monitor prototype shows.
+The Trading Desk Monitor backend. Design: [`docs/architecture/04_BACKEND.md`](../docs/architecture/04_BACKEND.md). Current state: **slices S1–S5** (next: S6, the interactive scenario and the first React screen) of [`docs/architecture/VERTICAL_SLICES.md`](../docs/architecture/VERTICAL_SLICES.md). It pulls verified snapshots from the VPS hub into a local cache, values every bond of a book through core 0.32.0 (pinned by commit from its GitHub repository) or, where core cannot, by a flagged approximation (see "Valuation quality"), explains the day-over-day flash PnL by exact repricing, and publishes immutable EOD runs into the desk store (PostgreSQL), which the desk API serves to the Desk Monitor prototype.
 
 ```
 VPS hub ──► desk.marketdata.hub + cache (desk sync) ──► snapshot cache (or a hand-filled drop folder)
@@ -11,12 +11,13 @@ hub snapshot files ──► desk.marketdata (bundle + adapter mdhub_v1)
                           │   key-rate projection rub_key_rate_projection_v1, fixings (desk.curves.rates)
                           ▼
                        desk.valuation.bonds ──► core value_portfolio (fixed, floaters, perpetuals to an assumed call)
-                          │                     hash-verified result in <dir of --db>/results/
+                          │                     hash-verified result in the store   
                           ├─► desk.valuation.fallback ──► market value, stale or model price, par proxy (flagged)
                           │
                           ├─► desk.pnl.flash ──► previous date revalued, PnL by carry / rolldown / rates / spread
                           │
-                          ├─► desk.publish.tdm_run ──► tdm SQLite store ──► tdm serve ──► Desk Monitor
+                          ├─► desk.publish.desk_run ──► desk store (PostgreSQL) ──► desk.api (desk serve) ──► Desk Monitor
+                          │        positions as of D known at T; carried model spreads ◄──┘
                           └─► desk.report.validation ──► HTML/CSV: our analytics vs MOEX
 ```
 
@@ -43,18 +44,26 @@ Pull the five latest published dates into the cache (`--date D` or `--from D1 --
 cd backend && .venv/bin/desk sync --last 5
 ```
 
-Run EOD for each date, oldest first:
+Create the desk store (`DESK_STORE_URL`; unset, an embedded PostgreSQL in `.devdata/desk_pg` from the `pgserver` dev package, which keeps running for later commands):
+
+```bash
+cd backend && .venv/bin/desk db-migrate
+```
+
+Run EOD for each date, oldest first. `--book` loads the file into the store for that date first (an identical file adds nothing); without it the run values the books already in the store, carried forward from their latest earlier date. A load covers the books of its file only, the other books are kept; `desk load-positions FILE --date D --books OFZ,CORP` declares the books it covers, and a covered book without rows in the file is closed for the date (an empty set, carried forward). A position id twice in the file, or already in another book, rejects the whole file. `desk eod --books OFZ` values only those books as a TEST run, never the default run of the date (`--run-type EOD` with `--books` is refused):
 
 ```bash
 cd backend && .venv/bin/desk eod --date 2026-10-15 --book examples/test_book.csv --report-dir ../.devdata/reports
 ```
 
+`desk runs` lists the store's runs. Serve the desk API and the Desk Monitor on the store:
+
 ```bash
-backend/.venv/bin/python -m tdm --db .devdata/tdm.sqlite serve --host 127.0.0.1 --port 8765
+cd backend && .venv/bin/desk serve
 ```
 
 Then open:
-- http://127.0.0.1:8765/desk-monitor.html for the Desk Monitor on the real run;
+- http://127.0.0.1:8000/desk-monitor.html for the Desk Monitor on the latest default run (the picker at the bottom left switches runs); the API is under `/api/v1` (`/docs` for the OpenAPI);
 - `.devdata/reports/validation_<date>.html` for the comparison with MOEX analytics over the whole bond universe.
 
 `desk eod` reads only the cache, so a run never depends on the hub being up; `desk eod --sync` pulls the date and the business date before it first. Every run prints the market snapshot ID, where it came from, its `published_at` and age, and records them in the run log lineage. When the cache holds an earlier date, `desk eod` attaches the flash PnL against it (slice S2; `--no-pnl` turns it off).
@@ -83,7 +92,7 @@ The owner's rule (19 October 2026): a bond is valued somehow rather than not at 
 | `assumed` | core, with stated assumptions | floater formula `inferred` with the default convention; perpetual to an assumed call; future coupons at the current rate; accrued computed; accrued mismatch vs MOEX |
 | `market_value` | today's price × face + accrued (× FX for a foreign face); risk from core calibrated to the price, else from the duration | the reason core could not value it |
 | `stale_price` | the same with the last price of the previous 30 days | price date and age |
-| `model_price` | the bond's schedule on the KBD at the median Z of its issuer, class or kind (traded bonds, Z within −100…2000 bp) | the median used |
+| `model_price` | the bond's schedule on the KBD at the Z-spread carried from the latest earlier run in the store (the spread its model price used, or its last market Z if newer), so only the curve moves it; without one, the median Z of its issuer, class or kind (traded bonds, Z within −100…2000 bp) | where the spread comes from and since when |
 | `par_proxy` | current face (+ accrued if known), no risk | no price, no usable schedule |
 
 A bond past its final redemption, or fully amortized, is valued 0. The face is the one outstanding on the business date from the redemption schedule. Only a bond with no data at all (no terms, no face) stays without a valuation, and an unexpected error for one bond sends it to `par_proxy` with the error named.
@@ -102,7 +111,8 @@ Exact and assumed bonds get the flash PnL by exact repricing. Market value and s
 | `DESK_HUB_TIMEOUT_S` | 60 | Per-request timeout; 5xx and connection errors are retried three times with backoff |
 | `DESK_SNAPSHOT_CACHE` | `.devdata/snapshots` | Verified bundles, append-only; `desk sync` writes here, `desk eod` and `desk demo-book` read here unless `--snapshots` is given |
 | `DESK_SNAPSHOT_DROP` | not set | Folder an operator fills by hand when the hub is unreachable (`desk import-drop`) |
-| `DESK_DB` | `.devdata/tdm.sqlite` | Run store (`--db`) |
+| `DESK_STORE_URL` | not set | The desk store, a `postgresql://` URI (ADR-006). Unset: the embedded dev server in `.devdata/desk_pg` (never the hub's `.devdata/pg`) |
+| `DESK_DB` | `.devdata/tdm.sqlite` | The tdm SQLite prototype store, written only with `desk eod --tdm` (`tdm serve`, until window.DESK is retired) |
 | `DESK_REPORT_DIR` | not set | Validation reports (`--report-dir`) |
 
 ## Tests
@@ -111,7 +121,7 @@ Exact and assumed bonds get the flash PnL by exact repricing. Market value and s
 cd backend && .venv/bin/pytest -q
 ```
 
-The tests run slices S1–S3 on the hub's golden fixtures, vendored in `tests/fixtures/mdhub_v1/` (ten public bonds of 2026-10-15). The fixtures hold one date, so the S2 tests build the previous date by shifting the KBD parameters. The S3 tests serve the same fixtures from an in-process stub hub on `127.0.0.1` (paging, 401/403/404, retries, corrupt bodies, the drop folder, the token never printed). The S4 tests cover the core mapping (`test_slice_s4.py`), floaters, perpetuals and calendars (`test_slice_s4_floaters.py`), the RUONIA OIS and key-rate curves (`test_curves_rates.py`), the fallback rungs (`test_fallback.py`) and the flash PnL against core's `explain_horizon_pnl` (`test_pnl_compare.py`). Snapshots of the whole universe are local only.
+The tests run slices S1–S3 on the hub's golden fixtures, vendored in `tests/fixtures/mdhub_v1/` (ten public bonds of 2026-10-15). The fixtures hold one date, so the S2 tests build the previous date by shifting the KBD parameters. The S3 tests serve the same fixtures from an in-process stub hub on `127.0.0.1` (paging, 401/403/404, retries, corrupt bodies, the drop folder, the token never printed). The S4 tests cover the core mapping (`test_slice_s4.py`), floaters, perpetuals and calendars (`test_slice_s4_floaters.py`), the RUONIA OIS and key-rate curves (`test_curves_rates.py`), the fallback rungs (`test_fallback.py`) and the flash PnL against core's `explain_horizon_pnl` (`test_pnl_compare.py`). The S5 tests run on an embedded PostgreSQL per test session (`pgserver`, a fresh migrated database per test): the bitemporal positions and immutability triggers (`test_store.py`), a run published into the store (`test_slice_s5.py`), the carried model spread (`test_model_spread.py`), and the desk API with the parity of its `window.DESK` adapter against `tdm.assemble` (`test_api.py`). Snapshots of the whole universe are local only.
 
 `pytest -m live` checks the real hub in `DESK_HUB_URL` (hub-check and a sync of its latest date); the default run never touches the network.
 
@@ -130,5 +140,8 @@ The tests run slices S1–S3 on the hub's golden fixtures, vendored in `tests/fi
 | `pnl/compare.py` | Regression check: the flash PnL against core `explain_horizon_pnl` | VERTICAL_SLICES S4 |
 | `pnl/flash.py` | Day-over-day flash PnL by exact repricing: carry, rolldown, rates, spread, other, with the identity check | VERTICAL_SLICES S2 |
 | `orchestrator.py` | One EOD date: prepare snapshots and curve, value requests, attach the flash PnL | 04 §1 |
-| `publish/tdm_run.py` | Writes the run through `tdm.writer.Run` (**slice shortcut** for the desk store) | ADR-006 later |
+| `store/` | The desk store: migrations, bitemporal positions (`load_positions`, `positions_for`), carried spreads, orphan reaping | ADR-006, 04 §2 |
+| `publish/desk_run.py` | Writes an immutable run with its lineage, core results, model spreads, coverage and totals | 04 §3 |
+| `publish/tdm_run.py` | The run content both stores share; writes it through `tdm.writer.Run` with `--tdm` (transition) | 05 §4 |
+| `api/` | Desk API v1 (FastAPI): runs, default run, positions, PnL, aggregates, health; the `window.DESK` adapter and the prototypes | 05 §2, §4 |
 | `report/validation.py` | Universe-wide comparison with MOEX analytics | VERTICAL_SLICES S1 |

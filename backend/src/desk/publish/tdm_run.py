@@ -1,7 +1,8 @@
 """Write an EOD run into the ``tdm`` store through its writer SDK (``tdm.writer.Run``).
 
 The store and the Desk Monitor prototype then show it through ``tdm serve`` and
-``window.DESK``. This is the slice shortcut for the desk store and desk API (VERTICAL_SLICES.md).
+``window.DESK``. This was the slice shortcut until the desk store of S5 (``desk_run``), which publishes
+the same ``run_content``; ``desk eod --tdm`` keeps writing here during the transition.
 Every valued position is written, also those on a fallback rung (``valuation.fallback``): its
 ``extra`` carries ``quality`` and ``assumptions``, and the run log counts the qualities and lists
 each non-exact position with its reasons as a WARN line (the prototype has no quality column).
@@ -16,6 +17,7 @@ import json
 import math
 import subprocess
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -175,13 +177,25 @@ def git_sha() -> str | None:
     return out.stdout.strip() or None
 
 
-def publish(db: str, ctx: EodContext, positions: list[tuple[str, str, Outcome]], *,
-            prev: MarketView | None, comment: str | None = None) -> tuple[int, str, list[str]]:
-    """positions: (position_id, book_id, outcome). Returns (run_id, status, warnings)."""
-    lineage = {**ctx.lineage(), "backend_version": BACKEND_VERSION, "backend_git_sha": git_sha(),
-               "core_version": CORE_VERSION,
-               "prev_market_snapshot_id": prev.snapshot.id if prev else None,
-               "core_results": store_core_results(db, [o for _, _, o in positions])}
+REFERENCE_KINDS = ("books", "issuers", "curves", "fx", "indices")
+
+
+@dataclass
+class RunContent:
+    """What a run publishes, in one format for both stores (tdm SQLite and the desk store)."""
+
+    rows: list[dict[str, Any]]
+    """``position_row`` of each valued position, in book order."""
+    reference: dict[str, list[dict[str, Any]]]
+    """By ``REFERENCE_KINDS``."""
+    log: list[tuple[str, str]]
+    """(level, message) of the run log, in order."""
+
+
+def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev: MarketView | None,
+                lineage: dict[str, Any]) -> RunContent:
+    """positions: (position_id, book_id, outcome). The log counts the qualities and says, per position,
+    why it is not exact, not valued, or without PnL."""
     issuers: dict[str, dict[str, Any]] = {}
     rows, skipped, no_pnl, approx = [], [], [], []
     quality: Counter[str] = Counter()
@@ -202,43 +216,58 @@ def publish(db: str, ctx: EodContext, positions: list[tuple[str, str, Outcome]],
         key, rec = _issuer_key(ctx, o)
         issuers[key] = rec
         rows.append(position_row(ctx, book, pid, o, key))
-    used_books = [BOOKS[b] for b in BOOKS if any(r["book_id"] == b for r in rows)]
     indices = []
     for code, name in INDICES:
         fx = ctx.market.latest_fixing(code)
         if fx:
             indices.append({"index_name": name, "value": fx[1]})
+    reference = {
+        "books": [BOOKS[b] for b in BOOKS if any(r["book_id"] == b for r in rows)],
+        "issuers": list(issuers.values()),
+        "curves": [{"curve_id": CURVE_ID, "name": "ОФЗ (КБД MOEX)", "ccy": "RUB", "kind": "bond",
+                    "points": curve_points(ctx, prev)}],
+        "fx": _fx_rows(ctx, prev),
+        "indices": indices,
+    }
+    log = [("INFO", "lineage " + json.dumps(lineage, ensure_ascii=False))]
+    if ctx.point_in_time_warning:
+        log.append(("WARN", "статика не на дату рынка: " + ctx.point_in_time_warning))
+    log.append(("INFO", "качество оценки: " + ", ".join(f"{k} {quality[k]}" for k in QUALITIES if quality[k])
+                + (f", не посчитано {len(skipped)}" if skipped else "")))
+    log += [("WARN", s) for s in skipped + approx + no_pnl]
+    with_pnl = [o.pnl for _, _, o in positions if o.pnl]
+    simple = [x for x in with_pnl if isinstance(x, SimplePnl)]
+    if simple:
+        log.append(("WARN", (f"флэш-PnL без разложения ({SIMPLE_METHOD}: q x Δdirty + выплаты, всё в other) "
+                             f"у {len(simple)} поз.: {sum(x.total for x in simple):,.0f} ₽")))
+    if with_pnl:
+        tot = {k: sum(getattr(x, k) for x in with_pnl) for k in ("carry", "rolldown", "rates", "spread", "other")}
+        worst = max(abs(x.identity_error) for x in with_pnl)
+        log.append(("INFO", f"флэш-PnL {with_pnl[0].prev_date} -> {with_pnl[0].as_of} ({METHOD}), "
+                    f"позиций {len(with_pnl)} (без разложения {len(simple)}): "
+                    + ", ".join(f"{k} {v:,.0f}" for k, v in tot.items())
+                    + f"; итог {sum(x.total for x in with_pnl):,.0f} ₽, макс. ошибка тождества {worst:.2e} ₽"))
+    log.append(("WARN", "JTD не считается в слайсе S1 (нет решения по recovery): поле jtd = 0"))
+    log.append(("INFO", f"опубликовано позиций: {len(rows)} (точно {quality['exact']}), не посчитано: {len(skipped)}"))
+    return RunContent(rows, reference, log)
+
+
+def publish(db: str, ctx: EodContext, positions: list[tuple[str, str, Outcome]], *,
+            prev: MarketView | None, comment: str | None = None) -> tuple[int, str, list[str]]:
+    """positions: (position_id, book_id, outcome). Returns (run_id, status, warnings)."""
+    lineage = {**ctx.lineage(), "backend_version": BACKEND_VERSION, "backend_git_sha": git_sha(),
+               "core_version": CORE_VERSION,
+               "prev_market_snapshot_id": prev.snapshot.id if prev else None,
+               "core_results": store_core_results(db, [o for _, _, o in positions])}
+    c = run_content(ctx, positions, prev, lineage)
     with Run(db, as_of=ctx.business_date.isoformat(), run_type="EOD",
              source=f"desk-backend {BACKEND_VERSION} (slice {'S2' if any(o.pnl for _, _, o in positions) else 'S1'})",
              lib_version=f"rub-fixed-income-core {CORE_VERSION}",
              market_snapshot=ctx.market.snapshot.id, comment=comment or json.dumps(lineage, ensure_ascii=False),
              prev_date=prev.business_date.isoformat() if prev else None, jtd_recovery=0.0) as run:
-        run.add_books(used_books)
-        run.add_issuers(list(issuers.values()))
-        run.add_curves([{"curve_id": CURVE_ID, "name": "ОФЗ (КБД MOEX)", "ccy": "RUB", "kind": "bond",
-                         "points": curve_points(ctx, prev)}])
-        run.add_fx(_fx_rows(ctx, prev))
-        run.add_indices(indices)
-        run.add_positions(rows)
-        run.log("INFO", "lineage " + json.dumps(lineage, ensure_ascii=False))
-        if ctx.point_in_time_warning:
-            run.log("WARN", "статика не на дату рынка: " + ctx.point_in_time_warning)
-        run.log("INFO", "качество оценки: " + ", ".join(f"{k} {quality[k]}" for k in QUALITIES if quality[k])
-                + (f", не посчитано {len(skipped)}" if skipped else ""))
-        for s in skipped + approx + no_pnl:
-            run.log("WARN", s)
-        with_pnl = [o.pnl for _, _, o in positions if o.pnl]
-        simple = [x for x in with_pnl if isinstance(x, SimplePnl)]
-        if simple:
-            run.log("WARN", f"флэш-PnL без разложения ({SIMPLE_METHOD}: q x Δdirty + выплаты, всё в other) "
-                    f"у {len(simple)} поз.: {sum(x.total for x in simple):,.0f} ₽")
-        if with_pnl:
-            tot = {k: sum(getattr(x, k) for x in with_pnl) for k in ("carry", "rolldown", "rates", "spread", "other")}
-            worst = max(abs(x.identity_error) for x in with_pnl)
-            run.log("INFO", f"флэш-PnL {with_pnl[0].prev_date} -> {with_pnl[0].as_of} ({METHOD}), "
-                    f"позиций {len(with_pnl)} (без разложения {len(simple)}): "
-                    + ", ".join(f"{k} {v:,.0f}" for k, v in tot.items())
-                    + f"; итог {sum(x.total for x in with_pnl):,.0f} ₽, макс. ошибка тождества {worst:.2e} ₽")
-        run.log("WARN", "JTD не считается в слайсе S1 (нет решения по recovery): поле jtd = 0")
-        run.log("INFO", f"опубликовано позиций: {len(rows)} (точно {quality['exact']}), не посчитано: {len(skipped)}")
+        for kind in REFERENCE_KINDS:
+            getattr(run, f"add_{kind}")(c.reference[kind])
+        run.add_positions(c.rows)
+        for level, message in c.log:
+            run.log(level, message)
     return run.run_id, run.status, run.warnings

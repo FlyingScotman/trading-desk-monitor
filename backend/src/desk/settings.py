@@ -12,7 +12,10 @@ path in ``DESK_ENV_FILE``); the environment wins. ``backend/.env.example`` lists
 * ``DESK_HUB_TIMEOUT_S``   per-request timeout (default 60)
 * ``DESK_SNAPSHOT_CACHE``  verified ``<snapshot_id>.json.gz`` bundles (default ``.devdata/snapshots``)
 * ``DESK_SNAPSHOT_DROP``   folder an operator fills by hand when the hub is unreachable (ADR-001)
-* ``DESK_DB``              run store (default ``.devdata/tdm.sqlite``; Postgres ``desk`` from S5)
+* ``DESK_STORE_URL``       desk store, a libpq URI ``postgresql://user:password@host:5432/desk``
+                           (slice S5). Unset: an embedded dev server in ``.devdata/desk_pg`` (pgserver)
+* ``DESK_DB``              the ``tdm`` SQLite prototype store (default ``.devdata/tdm.sqlite``),
+                           written by ``desk eod --tdm`` during the transition
 * ``DESK_REPORT_DIR``      validation reports (none by default)
 
 The proxy itself comes from the standard ``HTTPS_PROXY`` / ``NO_PROXY`` variables.
@@ -21,6 +24,7 @@ The proxy itself comes from the standard ``HTTPS_PROXY`` / ``NO_PROXY`` variable
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -43,11 +47,12 @@ class Settings:
     hub_timeout_s: float = 60.0
     snapshot_cache: Path = REPO_ROOT / ".devdata" / "snapshots"
     snapshot_drop: Path | None = None
+    store_url: str | None = field(default=None, repr=False)
     db: Path = REPO_ROOT / ".devdata" / "tdm.sqlite"
     report_dir: Path | None = None
 
     def describe(self) -> list[tuple[str, str]]:
-        """Effective settings for ``desk config``; the token is masked."""
+        """Effective settings for ``desk config``; the token and the store password are masked."""
         token = (f"{self.hub_token[:4]}…{self.hub_token[-4:]} ({self.hub_token_source})" if self.hub_token
                  else self.hub_token_source)
         return [
@@ -58,9 +63,15 @@ class Settings:
             ("https_proxy", os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or "none"),
             ("snapshot_cache", str(self.snapshot_cache)),
             ("snapshot_drop", str(self.snapshot_drop or "none")),
+            ("store_url", mask_url(self.store_url) if self.store_url else "not set: embedded dev store (.devdata/desk_pg)"),
             ("db", str(self.db)),
             ("report_dir", str(self.report_dir or "none")),
         ]
+
+
+def mask_url(url: str) -> str:
+    """The URL without its password, for printing."""
+    return re.sub(r"(password=)\S+", r"\1***", re.sub(r"(://[^:/@?]*:)[^@]*@", r"\1***@", url))
 
 
 def read_env_file(path: Path) -> dict[str, str]:
@@ -116,6 +127,9 @@ def load(environ: dict[str, str] | None = None) -> Settings:
         timeout = float(get("DESK_HUB_TIMEOUT_S") or defaults.hub_timeout_s)
     except ValueError as e:
         raise SettingsError(f"DESK_HUB_TIMEOUT_S: {e}") from None
+    store_url = get("DESK_STORE_URL")
+    if store_url is not None and urlsplit(store_url).scheme not in ("postgresql", "postgres"):
+        raise SettingsError("DESK_STORE_URL must be a postgresql:// URI")
     return Settings(
         hub_url=hub_url,
         hub_token=token,
@@ -124,6 +138,7 @@ def load(environ: dict[str, str] | None = None) -> Settings:
         hub_timeout_s=timeout,
         snapshot_cache=_path(get("DESK_SNAPSHOT_CACHE")) or defaults.snapshot_cache,
         snapshot_drop=_path(get("DESK_SNAPSHOT_DROP")),
+        store_url=store_url,
         db=_path(get("DESK_DB")) or defaults.db,
         report_dir=_path(get("DESK_REPORT_DIR")),
     )

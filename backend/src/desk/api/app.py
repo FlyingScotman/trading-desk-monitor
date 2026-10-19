@@ -1,0 +1,304 @@
+"""Desk API v1 (05 §2, the S5 subset) over the desk store (0001 schema), read-only, plus the window.DESK
+compatibility adapter (05 §4) and the prototypes as static files.
+
+shortcut: no authentication in S5; the reverse proxy authenticates (05 §6), bind 127.0.0.1 until then.
+shortcut: one psycopg connection per request, no pool; fine for a few users, pool it if latency shows."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import re
+import time
+import uuid
+from collections.abc import Iterator
+from datetime import date
+from pathlib import Path
+from typing import Annotated, Any
+
+import psycopg
+from fastapi import Depends, FastAPI, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
+from psycopg.rows import dict_row
+from starlette.exceptions import HTTPException
+
+from .. import __version__
+from ..settings import REPO_ROOT
+from . import compat
+from .models import (
+    COMPAT,
+    AggregateRow,
+    Aggregates,
+    ErrorOut,
+    PnlSums,
+    Position,
+    PositionList,
+    PositionPnl,
+    Ready,
+    RunDetail,
+    RunHeader,
+    RunList,
+    RunPnl,
+    RunStatus,
+    RunType,
+)
+
+log = logging.getLogger("desk.api")
+STATIC_DIR = REPO_ROOT / "prototypes"
+REQUEST_ID = re.compile(r"[\w.:-]{1,128}")
+HEADER_SQL = f"SELECT r.*, r.run_id IN ({compat.DEFAULT_RUNS}) AS is_default FROM run r"
+DIMS = {"book": "book_id", "quality": "quality", "asset_class": "fact->>'asset_class'",
+        "segment": "fact->>'segment'", "issuer": "fact->>'issuer'", "ccy": "fact->>'ccy'"}
+PNL_KEYS = compat.PNL_KEYS
+JS = "text/javascript; charset=utf-8"
+NO_STORE = {"Cache-Control": "no-store"}
+
+
+class ApiError(Exception):
+    def __init__(self, status: int, code: str, message: str, details: Any = None) -> None:
+        super().__init__(message)
+        self.status, self.code, self.message, self.details = status, code, message, details
+
+
+def _error(request: Request, status: int, code: str, message: str, details: Any = None) -> JSONResponse:
+    rid = getattr(request.state, "request_id", None) or uuid.uuid4().hex
+    body = ErrorOut(code=code, message=message, request_id=rid,  # type: ignore[arg-type]
+                    details=jsonable_encoder(details))
+    return JSONResponse(body.model_dump(), status_code=status, headers={"X-Request-ID": rid})
+
+
+def _header(row: dict[str, Any]) -> dict[str, Any]:
+    return {**row, "as_of": row["business_date"], "published_at": row["completed_at"]}
+
+
+def _run_or_404(con, run_id: int) -> dict[str, Any]:
+    row = con.execute(HEADER_SQL + " WHERE r.run_id = %s", (run_id,)).fetchone()
+    if row is None:
+        raise ApiError(404, "not_found", f"run {run_id} not found")
+    return row
+
+
+def _cached(request: Request, run: dict[str, Any], model) -> Response:
+    """A complete run never changes, but its header's is_default can, so the ETag is the body's hash."""
+    body = model.model_dump_json().encode()
+    if run["status"] != "complete":
+        return Response(body, media_type="application/json")
+    tag = '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
+    headers = {"ETag": tag, "Cache-Control": "no-cache"}
+    if tag in [t.strip() for t in request.headers.get("if-none-match", "").split(",")]:
+        return Response(status_code=304, headers=headers)
+    return Response(body, media_type="application/json", headers=headers)
+
+
+def _total(components: dict[str, Any] | None) -> float | None:
+    return sum(components.get(k) or 0.0 for k in PNL_KEYS) if components else None
+
+
+def db(request: Request) -> Iterator[psycopg.Connection]:
+    with psycopg.connect(request.app.state.store_url, row_factory=dict_row, autocommit=True,
+                         connect_timeout=5, options="-c default_transaction_read_only=on") as con:
+        yield con
+
+
+Con = Annotated[psycopg.Connection, Depends(db)]
+
+
+def create_app(store_url: str, static_dir: Path | None = None) -> FastAPI:
+    app = FastAPI(title="Desk API", version=__version__, description="Desk API v1 (docs/architecture/05 §2)",
+                  responses={404: {"model": ErrorOut}, 422: {"model": ErrorOut}, 503: {"model": ErrorOut}})
+
+    app.state.store_url = store_url
+
+    @app.middleware("http")
+    async def request_id(request: Request, call_next):
+        h = request.headers.get("x-request-id")
+        rid = h if h and REQUEST_ID.fullmatch(h) else uuid.uuid4().hex
+        request.state.request_id = rid
+        t0 = time.perf_counter()
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = rid
+        log.info("%s %s %s %s %.0fms", rid, request.method, request.url.path, response.status_code,
+                 (time.perf_counter() - t0) * 1e3)
+        return response
+
+    @app.exception_handler(ApiError)
+    def api_error(request: Request, exc: ApiError):
+        return _error(request, exc.status, exc.code, exc.message, exc.details)
+
+    @app.exception_handler(HTTPException)
+    def http_error(request: Request, exc: HTTPException):
+        code = ("not_found" if exc.status_code == 404 else "internal" if exc.status_code >= 500
+                else "invalid_parameter")
+        return _error(request, exc.status_code, code, str(exc.detail))
+
+    @app.exception_handler(RequestValidationError)
+    def validation_error(request: Request, exc: RequestValidationError):
+        return _error(request, 422, "invalid_parameter", "invalid request parameters", exc.errors())
+
+    @app.exception_handler(psycopg.OperationalError)
+    def store_error(request: Request, exc: psycopg.OperationalError):
+        log.error("store unavailable: %s", exc)
+        return _error(request, 503, "store_unavailable", "desk store unavailable")
+
+    @app.exception_handler(Exception)
+    def internal_error(request: Request, exc: Exception):
+        log.exception("internal error", exc_info=exc)
+        return _error(request, 500, "internal", "internal error")
+
+    # ---- health
+    @app.get("/health/live")
+    def live() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/health/ready", response_model=Ready)
+    def ready(con: Con):
+        ver = con.execute("SELECT max(version) AS v FROM schema_migration").fetchone()["v"]
+        last = con.execute("SELECT run_id, business_date, completed_at,"
+                           " extract(epoch FROM now() - completed_at)::float8 AS age_seconds FROM run"
+                           " WHERE status = 'complete' ORDER BY completed_at DESC LIMIT 1").fetchone()
+        return {"status": "ok", "schema_version": ver, "latest_run": last}
+
+    # ---- runs
+    @app.get("/api/v1/runs", response_model=RunList)
+    def runs(con: Con, business_date: date | None = None, run_type: RunType | None = None,
+             status: RunStatus | None = None, limit: int = Query(50, ge=1, le=500),
+             cursor: int | None = Query(None, description="next_cursor of the previous page")):
+        where, args = [], []
+        for sql, v in (("r.business_date = %s", business_date), ("r.run_type = %s", run_type),
+                       ("r.status = %s", status), ("r.run_id < %s", cursor)):
+            if v is not None:
+                where.append(sql)
+                args.append(v)
+        rows = con.execute(HEADER_SQL + (" WHERE " + " AND ".join(where) if where else "")
+                           + " ORDER BY r.run_id DESC LIMIT %s", (*args, limit + 1)).fetchall()
+        return {"runs": [_header(r) for r in rows[:limit]],
+                "next_cursor": rows[limit - 1]["run_id"] if len(rows) > limit else None}
+
+    @app.get("/api/v1/runs/default", response_model=RunHeader)
+    def default_run(con: Con, business_date: date | None = None):
+        sql = HEADER_SQL + f" WHERE r.run_id IN ({compat.DEFAULT_RUNS})"
+        if business_date:
+            row = con.execute(sql + " AND r.business_date = %s", (business_date,)).fetchone()
+        else:
+            row = con.execute(sql + " ORDER BY r.business_date DESC LIMIT 1").fetchone()
+        if row is None:
+            raise ApiError(404, "not_found", f"no default run on {business_date}" if business_date
+                           else "no default run")
+        return _header(row)
+
+    @app.get("/api/v1/runs/{run_id}", response_model=RunDetail)
+    def run_detail(con: Con, run_id: int, request: Request):
+        run = _run_or_404(con, run_id)
+        lineage = {**run["lineage"], **{k: run[k] for k in (
+            "prev_market_snapshot_id", "private_inputs_hash", "position_set_ids", "positions_known_at",
+            "core_version", "backend_version", "backend_git_sha")}}
+        lines = con.execute("SELECT seq, level, message FROM run_log WHERE run_id = %s ORDER BY seq",
+                            (run_id,)).fetchall()
+        detail = RunDetail(**{**_header(run), "lineage": jsonable_encoder(lineage)}, log=lines)
+        return _cached(request, run, detail)
+
+    @app.get("/api/v1/runs/{run_id}/positions", response_model=PositionList)
+    def positions(con: Con, run_id: int, request: Request, book: str | None = None,
+                  quality: str | None = Query(None, description="exact, assumed, market_value, ...")):
+        run = _run_or_404(con, run_id)
+        sql, args = "SELECT * FROM run_position WHERE run_id = %s", [run_id]
+        for col, v in (("book_id", book), ("quality", quality)):
+            if v is not None:
+                sql += f" AND {col} = %s"
+                args.append(v)
+        rows = con.execute(sql + " ORDER BY ord", args).fetchall()  # whole: a book is <= 2k positions
+        return _cached(request, run, PositionList(run_id=run_id, positions=[Position(**r) for r in rows]))
+
+    @app.get("/api/v1/runs/{run_id}/pnl", response_model=RunPnl)
+    def pnl(con: Con, run_id: int, request: Request):
+        run = _run_or_404(con, run_id)
+        rows = con.execute("SELECT position_id, book_id, pnl, no_pnl FROM run_position WHERE run_id = %s"
+                           " AND quality IS NOT NULL ORDER BY ord", (run_id,)).fetchall()
+        out, totals = [], {}
+        for r in rows:
+            comp = {k: v for k, v in r["pnl"].items() if k != "extra"} if r["pnl"] else None
+            out.append(PositionPnl(position_id=r["position_id"], book_id=r["book_id"], components=comp,
+                                   total=_total(comp), extra=(r["pnl"] or {}).get("extra"),
+                                   no_pnl=r["no_pnl"]))
+            for key in (r["book_id"], "_total"):
+                t = totals.setdefault(key, {**dict.fromkeys((*PNL_KEYS, "total")), "n_positions": 0, "n_pnl": 0})
+                t["n_positions"] += 1
+                if comp:  # sums stay null, not 0, while no position of the key has a PnL
+                    t["n_pnl"] += 1
+                    for k, x in {**{k: comp.get(k) or 0.0 for k in PNL_KEYS}, "total": _total(comp)}.items():
+                        t[k] = (t[k] or 0.0) + x
+        return _cached(request, run, RunPnl(run_id=run_id, positions=out,
+                                            totals={k: PnlSums(**v) for k, v in totals.items()}))
+
+    @app.get("/api/v1/runs/{run_id}/aggregates", response_model=Aggregates)
+    def aggregates(con: Con, run_id: int, request: Request,
+                   dims: str = Query("book", description="Comma-separated: " + ", ".join(DIMS))):
+        names = [d.strip() for d in dims.split(",") if d.strip()]
+        bad = [d for d in names if d not in DIMS]
+        if bad or not names:
+            raise ApiError(422, "invalid_parameter", f"unknown dims: {', '.join(bad) or '(none)'}",
+                           {"allowed": list(DIMS)})
+        names = list(dict.fromkeys(names))
+        run = _run_or_404(con, run_id)
+        cols = [DIMS[d] for d in names]  # whitelisted: safe to format into the SQL
+        sums = ", ".join(f"sum((pnl->>'{k}')::float8) AS {k}" for k in PNL_KEYS)
+        rows = con.execute(
+            f"SELECT {', '.join(f'{c} AS k{i}' for i, c in enumerate(cols))}, count(*) AS n_positions,"
+            f" count(fact) AS n_valued, count(pnl) AS n_pnl, sum(pv_rub) AS pv_rub,"
+            f" sum(dv01_rub) AS dv01_rub, sum(cs01_rub) AS cs01_rub, {sums}"
+            f" FROM run_position WHERE run_id = %s"
+            f" GROUP BY {', '.join(cols)} ORDER BY {', '.join(cols)}", (run_id,)).fetchall()
+        out = []
+        for r in rows:
+            p = {k: r[k] for k in PNL_KEYS}
+            have = [v for v in p.values() if v is not None]
+            out.append(AggregateRow(key={d: r[f"k{i}"] for i, d in enumerate(names)},
+                                    **{k: r[k] for k in ("n_positions", "n_valued", "n_pnl", "pv_rub",
+                                                         "dv01_rub", "cs01_rub")},
+                                    pnl=p | {"total": sum(have) if have else None}))
+        return _cached(request, run, Aggregates(run_id=run_id, dims=names, rows=out))
+
+    # ---- compatibility adapter (05 §4)
+    def _compat(con, as_of: date | None, run_id: int | None) -> tuple[dict | None, str]:
+        run = compat.resolve_run(con, as_of, run_id)
+        if run is None:
+            return None, (f"прогон {run_id} не найден" if run_id else
+                          "нет опубликованных прогонов" + (f" на {as_of}" if as_of else ""))
+        return compat.assemble(con, run), ""
+
+    @app.get("/desk-data.js", include_in_schema=False)
+    def desk_js(con: Con, as_of: date | None = None, run_id: int | None = None, demo: str | None = None):
+        # as tdm/server.py: no run gives DESK_MISSING and no window.DESK, so desk-fallback.js loads data.js
+        if demo:
+            return Response("/* demo requested: data.js */\n", media_type=JS, headers=NO_STORE)
+        desk, missing = _compat(con, as_of, run_id)
+        if desk is None:
+            msg = json.dumps(missing, ensure_ascii=False)
+            body = f"/* {missing}: demo data.js */\nwindow.DESK_MISSING = {msg};\n"
+        else:
+            body = "window.DESK = " + json.dumps(desk, ensure_ascii=False, separators=(",", ":")) + ";\n"
+        return Response(body, media_type=JS, headers=NO_STORE)
+
+    @app.get("/api/v1/compat/desk", description=f"window.DESK as JSON; {COMPAT}")
+    def compat_desk(con: Con, as_of: date | None = None, run_id: int | None = None) -> dict[str, Any]:
+        desk, missing = _compat(con, as_of, run_id)
+        if desk is None:
+            raise ApiError(404, "not_found", missing)
+        return desk
+
+    static = Path(static_dir) if static_dir else STATIC_DIR
+    if static.is_dir():  # an installed wheel has no prototypes/
+        app.mount("/", StaticFiles(directory=static, html=True), name="static")
+    return app
+
+
+def serve(store_url: str, host: str = "127.0.0.1", port: int = 8000, static_dir: Path | None = None) -> None:
+    import uvicorn
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    # the desk.api logger logs every request with its request id, so no uvicorn access log
+    uvicorn.run(create_app(store_url, static_dir), host=host, port=port, access_log=False)

@@ -42,7 +42,7 @@ td.err{white-space:normal;color:var(--bad)}
   var box = document.getElementById('runs');
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   if (!/^https?:$/.test(location.protocol)) { box.innerHTML = '<p class="note">Открыто как файл: страницы работают на демо-данных. Запустите сервер (run.bat), чтобы видеть данные из базы.</p>'; return; }
-  fetch('api/v1/runs?status=all&limit=15').then(function (r) { return r.json(); }).then(function (j) {
+  fetch('api/v1/runs?limit=15').then(function (r) { return r.json(); }).then(function (j) {
     if (!j.runs.length) { box.innerHTML = '<p class="note">В базе пока нет прогонов — страницы показывают демо-данные. Загрузить демо в базу: <code>python -m tdm demo</code>.</p>'; return; }
     box.innerHTML = '<table><thead><tr><th>#</th><th>Дата</th><th>Тип</th><th>Статус</th><th>Опубликован</th><th>Источник</th><th>Ошибка</th></tr></thead><tbody>' +
       j.runs.map(function (r) {

@@ -206,21 +206,37 @@ def test_import_drop(tmp_path):
     assert sorted(p.name for p in dest.iterdir()) == [f"{MARKET}.json.gz"]
 
 
-def test_cli_commands_never_print_the_token(stub, tmp_path, monkeypatch, capsys):
+def _token_env(stub, tmp_path, monkeypatch) -> str:
     monkeypatch.setenv("DESK_HUB_URL", f"http://127.0.0.1:{stub.server_address[1]}")
     monkeypatch.setenv("DESK_HUB_TOKEN", TOKEN)
     monkeypatch.setenv("DESK_ENV_FILE", str(tmp_path / "none.env"))
-    snaps = str(tmp_path / "cache")
+    return str(tmp_path / "cache")
+
+
+def _no_token(out) -> None:
+    assert TOKEN not in out.out + out.err and TOKEN[4:-4] not in out.out + out.err
+
+
+def test_cli_commands_never_print_the_token(stub, tmp_path, monkeypatch, capsys):
+    snaps = _token_env(stub, tmp_path, monkeypatch)
     assert cli.main(["config"]) == 0
     assert cli.main(["hub-check"]) == 0
     assert cli.main(["sync", "--last", "5", "--snapshots", snaps]) == 0
-    assert cli.main(["eod", "--date", "2026-10-15", "--snapshots", snaps, "--no-pnl"]) == 0
     monkeypatch.setenv("DESK_HUB_TOKEN", "mdh_wrong")
     assert cli.main(["sync", "--date", "2026-10-15", "--snapshots", snaps]) == 1
     out = capsys.readouterr()
     assert "token rejected" in out.err
     assert "published 2026-10-16T15:50:00+00:00" in out.out
-    assert TOKEN not in out.out + out.err and TOKEN[4:-4] not in out.out + out.err
+    _no_token(out)
+
+
+def test_cli_eod_never_prints_the_token(stub, tmp_path, monkeypatch, capsys, store_url):
+    snaps = _token_env(stub, tmp_path, monkeypatch)
+    monkeypatch.setenv("DESK_STORE_URL", store_url)  # eod reads the books of the desk store (S5)
+    assert cli.main(["eod", "--date", "2026-10-15", "--snapshots", snaps, "--sync", "--no-pnl"]) == 0
+    out = capsys.readouterr()
+    assert "published 2026-10-16T15:50:00+00:00" in out.out and "no positions in the store" in out.out
+    _no_token(out)
 
 
 @pytest.mark.live

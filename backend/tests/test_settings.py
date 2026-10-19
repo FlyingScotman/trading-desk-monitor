@@ -55,3 +55,12 @@ def test_https_only(tmp_path: Path, url: str) -> None:
 def test_plain_http_allowed_for_localhost(tmp_path: Path) -> None:
     assert load({"DESK_ENV_FILE": str(tmp_path / "none"), "DESK_HUB_URL": "http://127.0.0.1:9000"}).hub_url \
         == "http://127.0.0.1:9000"
+
+
+def test_store_url_is_masked_and_checked(tmp_path: Path) -> None:
+    url = "postgresql://desk:s3cret@db.internal:5432/desk"
+    s = load({"DESK_ENV_FILE": str(tmp_path / "none"), "DESK_STORE_URL": url})
+    assert s.store_url == url and "s3cret" not in repr(s)
+    assert dict(s.describe())["store_url"] == "postgresql://desk:***@db.internal:5432/desk"
+    with pytest.raises(SettingsError):
+        load({"DESK_ENV_FILE": str(tmp_path / "none"), "DESK_STORE_URL": "sqlite:///x.db"})

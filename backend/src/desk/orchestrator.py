@@ -34,7 +34,7 @@ from .marketdata.adapter import KBD_SPEC, BondQuote, BondTerms, MarketView, Stat
 from .marketdata.bundle import SnapshotDir, SnapshotError
 from .pnl.flash import FlashCurves, FlashPnl, NoPnl, explain
 from .valuation.bonds import BondRequest, BondValuation, Rejected, bond_request, settlement_date, value_bonds
-from .valuation.fallback import RUNGS, FallbackContext, approximate, par_proxy, simple_pnl
+from .valuation.fallback import RUNGS, CarriedSpread, FallbackContext, approximate, par_proxy, simple_pnl
 
 KBD_TOLERANCE_BP = 0.05
 log = logging.getLogger(__name__)
@@ -143,13 +143,15 @@ def prepare(snapshots: SnapshotDir, business_date: str, cut_type: str = "eod_fin
 
 
 def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: bool = False,
-          position_ids: list[str] | None = None, fallback: bool = True) -> list[Outcome]:
+          position_ids: list[str] | None = None, fallback: bool = True,
+          carried_spreads: dict[str, CarriedSpread] | None = None) -> list[Outcome]:
     """``position_ids`` (the book's, unique) name the positions in the core results; default the request index.
 
     With ``fallback`` (the owner's rule: a bond is valued somehow rather than not at all) every outcome
     core cannot value gets a ``valuation.fallback`` rung (market value, stale or model price, par proxy)
     with its quality flag; ``reason``/``detail`` keep why it is not exact. Only a bond with no data at
-    all stays without a valuation."""
+    all stays without a valuation. ``carried_spreads`` (from the desk store) are the model spreads of
+    the latest earlier run: a model price reuses its bond's spread instead of the day's median."""
     pids = [str(i) for i in range(len(requests))] if position_ids is None else position_ids
     if len(pids) != len(requests) or len(set(pids)) != len(pids):
         raise ValueError("position_ids must be unique, one per request")
@@ -180,7 +182,7 @@ def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: b
         else:
             o.valuation, o.core_result = v, by_pid[pid]
     if fallback:
-        fb = FallbackContext.build(ctx)
+        fb = FallbackContext.build(ctx, carried_spreads)
         for o, (_, qty) in zip(out, requests):
             if o.valuation is None and o.terms is not None:
                 try:

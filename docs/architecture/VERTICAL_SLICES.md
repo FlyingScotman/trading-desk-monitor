@@ -1,6 +1,6 @@
 # Vertical slices
 
-As of 18 October 2026. Status: working plan, owned by the backend. **S3 and S4 are built (19 October; the S3 live acceptance waits for the hub's snapshot layer). Next: S5.** Work for the hub and core: [briefs/HUB.md](briefs/HUB.md), [briefs/CORE.md](briefs/CORE.md).
+As of 18 October 2026. Status: working plan, owned by the backend. **S3, S4 and S5 are built (19 October; the S3 live acceptance waits for the hub's snapshot layer). Next: S6.** Work for the hub and core: [briefs/HUB.md](briefs/HUB.md), [briefs/CORE.md](briefs/CORE.md).
 
 ## Why
 
@@ -19,8 +19,8 @@ Each slice keeps whatever it built that matches the architecture. Where it takes
 | Architecture target | Slice 1 shortcut | Replaced in |
 |---|---|---|
 | Backend reads snapshots from the hub API (`/v1/snapshots`) | Reads bundle files that the hub's own builder produced from a copy of the seed database (`tools/devdata/build_dev_snapshots.sh`) | S3. The dev export stays as the offline fallback |
-| Desk Postgres store with run lineage (ADR-006) | The `tdm` SQLite store through its writer SDK (`tdm.writer.Run`); lineage goes into the run log and `lib_version` | S5 |
-| Desk API v1 + React screens (05) | `tdm serve` and the existing Desk Monitor prototype through `window.DESK` | S5 (API), S6 (first React screen) |
+| Desk Postgres store with run lineage (ADR-006) | The `tdm` SQLite store through its writer SDK (`tdm.writer.Run`); lineage goes into the run log and `lib_version` | **Replaced in S5** (`desk eod --tdm` still writes it for `tdm serve`) |
+| Desk API v1 + React screens (05) | `tdm serve` and the existing Desk Monitor prototype through `window.DESK` | **API built in S5** (`desk serve`; the prototype reads `window.DESK` from the store through the compatibility adapter); S6 (first React screen) |
 | KBD/ZCYC evaluator in core (delivered in core 0.11) | Backend module `desk.curves.kbd`, which builds a core `DiscountCurve` from the published ZCYC parameters | **Replaced in S4** (core `rub_ofz_kbd_v1`) |
 | Core's portfolio path: `value_portfolio` over `Instrument`/`MarketSnapshot`/`Position` (core 0.10–0.11) | The adapter builds `BondCashflow` totals and calls `BondRiskEngine` per position | **Replaced in S4**. The fallback rungs below core still reprice with `BondRiskEngine` |
 | Horizon PnL explain in core: `explain_horizon_pnl`, `horizon_portfolio` (core 0.14) | `desk.pnl.flash`, the backend's own stepwise repricing | **Compared in S4: `desk.pnl.flash` stays** (S4 result); `pnl/compare.py` is the regression check |
@@ -34,7 +34,7 @@ Each slice keeps whatever it built that matches the architecture. Where it takes
 | **S2 Day-over-day flash PnL** | Second run on the next date with PnL by factor: carry, rates, spread, residual, using two snapshots and exact repricing | Snapshot history; core `reprice`; run-to-run linking | **Done 17.10.2026** (see below) |
 | **S3 Live hub and a test book** | Desk Monitor on runs of the last five business dates, valued from snapshots **pulled from the VPS hub** into the backend's cache. A synthetic test book with several books, shorts and coverage cases. Snapshot age on every run | Hub snapshot endpoints and token scopes; backend HTTP client, cache and verification; reproducibility by snapshot ID; the run never depends on the hub being up | **Built** 19 October ([result](#s3-result-19-october-2026)). Live acceptance waits for the hub's snapshot layer (H1–H4 below) |
 | **S4 Core portfolio path and the whole bond universe** | The same screens, valued through core 0.32 `value_portfolio`. Also priced now: floaters (OFZ-PK, key-rate, RUONIA), perpetuals to an explicit call and, once the hub carries CPI, OFZ-IN. A RUONIA OIS curve (`rub_ruonia_ois_moex_v2`) in the curves panel. Coverage grows from about 1034 bonds to every bond with a usable schedule | Adapter to core domain types; curve-spec mapping `dataset` → spec; core KBD; core horizon explain against `desk.pnl.flash` | **Built** 19 October ([result](#s4-result-19-october-2026)) |
-| **S5 Desk backend proper** | Same screens, now served by the desk API from the desk Postgres store, with run lineage | ADR-006, 04, 05 §2 | |
+| **S5 Desk backend proper** | Same screens, now served by the desk API from the desk Postgres store, with run lineage | ADR-006, 04, 05 §2 | **Built** 19 October ([result](#s5-result-19-october-2026)) |
 | **S6 Interactive scenario** | Scenario slider with instant Taylor (≈) and an "exact" button that reprices on the backend; residual shown | 03 T1/T2, parity fixtures; first React + TypeScript screen | |
 | **S7 Intraday** | Intraday run every N minutes on intraday cuts; badge with age | Hub intraday cuts; scheduler | |
 | **S8 Derivatives and the hybrid book** | IRS, FX forwards and swaps, XCCY, futures and REPO from contract 1.3 term files, valued by core (result v3) next to bonds; CDS and whatever still lacks inputs imported, with coverage states | `private_inputs`; snapshot inputs from [briefs/HUB.md](briefs/HUB.md) (futures prices, FX value dates, RUONIA index); hybrid merge | |
@@ -450,3 +450,38 @@ On 14.10 the exact column includes −4.66 m RUB from MIX-08, whose first price 
 - The hub dataset → core spec mapping lives as constants in `curves/rates.py` and the adapter; a versioned table in the interface catalogue is still to write.
 - OFZ-IN waits for CPI (hub brief H10); until then they are market-value rungs.
 - Timing: `desk eod` of one date with the universe report takes about 13 s, a book run 6–12 s (the model-price medians value the universe once per run).
+
+## S5 result (19 October 2026)
+
+Built by the orchestrating session with three agents in one checkout and strict file ownership (store and publisher; carried model spread; desk API), against a schema and interfaces fixed first. Integrated, checked on the dev snapshots and in the browser, then reviewed independently.
+
+**Desk store** (`desk.store`, `migrations/0001_init.sql`; ADR-006, 04 §2–§3). PostgreSQL through psycopg 3, plain SQL.
+- Positions are append-only and bitemporal: a loaded file gives one `position_set` per book and valid date, a correction is the next revision, an identical load adds nothing. `positions_for(D, known_at=T)` takes per book the set with the latest valid date ≤ D recorded by T, so a book loaded once is carried forward (the run's lineage says from when). `private_inputs_hash` covers the content, not set ids or load times.
+- Runs are immutable: inserted as `loading`, written in one transaction that ends `complete`, or marked `failed` with the error; triggers reject any later change to the run or its rows. Orphaned `loading` runs are reaped. A run stores per position the same fact row the tdm store gets (`tdm_run.position_row`; non-finite numbers as null), the PnL with its flags or the reason it has none, the run reference data (books, issuers, curves, FX, indices), the log, the hash-verified core results, the model spreads it used, coverage by book and quality, totals, and its lineage (snapshot ids, position sets and their valid dates, `known_at`, versions and git sha, core result hashes, carried vs new model spreads).
+- Default run of a date: the latest complete EOD run on `eod_final`, otherwise `eod_preliminary`; TEST and REPLAY never. A final run supersedes the preliminary one and keeps it.
+- Development: `DESK_STORE_URL` unset means an embedded PostgreSQL 16 (`pgserver`, wheels for macOS, Linux and Windows) in `.devdata/desk_pg`. It must not share `.devdata/pg`, the hub seed cluster of the dev export.
+
+**Carried model spread** (the S4 open item). A model-price bond is priced at the Z-spread of the latest earlier default run (TEST, INTRADAY and superseded runs never supply one): the spread its model price used, or its last market Z if that is newer. The spread keeps its origin text ("issuer median Z 281 bp (3 bonds) on 2026-10-09"), and both dates of the flash PnL use the same carried set, so a model price moves with the curve only. Without a carried spread the median is used as before; a carried spread outside the median band is still used (it is the bond's own evidence). Shortcut: a carried spread is not refreshed until the bond trades again.
+
+**Desk API** (`desk.api`, `desk serve`; 05 §2 subset). `/api/v1/runs` (filters, cursor), `/runs/default`, `/runs/{id}` with lineage and log, `/positions`, `/pnl`, `/aggregates?dims=` (book, quality, asset class, segment, issuer, currency), `/health/live|ready`; one error shape with a request id; ETag on complete runs; typed OpenAPI for the S6 TypeScript types. The compatibility adapter serves `/desk-data.js` (`window.DESK`) from the store, and a test checks it equals `tdm.assemble` for the same runs of two dates in every key, `history` included, except the run id and publication time. `history` is the default runs of up to 21 earlier dates (tdm: the latest published EOD run of each date). The prototypes are served at `/`. Not in S5: authentication (the reverse proxy, 05 §6), SSE (S7), scenarios, views, exports, the market proxy.
+
+**Test book, 09–15.10, from the store** (one load on 09.10, carried forward):
+
+| Date | Run | Quality | Model price, m RUB | Total, m RUB | S4 total |
+|---|---|---|---|---|---|
+| 09.10 | 1 | exact 35, assumed 3, model 1, market value 1 | – | – | – |
+| 12.10 | 2 | same | +0.45 | 50.99 | 43.90 (model −6.64) |
+| 13.10 | 3 | same | +0.24 | 21.14 | 28.85 (model +7.95) |
+| 14.10 | 4 | exact 36, assumed 3, market value 1 | – | 12.09 | 11.46 |
+| 15.10 | 5 | same | – | 13.03 | 13.03 |
+
+Every other position is unchanged from S4. MIX-08 now keeps Z 281 bp from 09.10; its model swings fall from ±7 m to 0.2–0.5 m RUB a day, and its 12–14.10 PnL still sums to the same −3.35 m, now recognised when the first real price arrives (−4.04 m on 14.10): the 09.10 issuer median was below the bond's real Z of 390 bp. Carrying makes a model price steady, not right. A book run takes about 1.5 s (2.2 s wall); the first date, without carried spreads, 5 s because of the universe medians. The Desk Monitor on `desk serve` shows the five runs in its picker, and run 3 shows MIX-08 with its "model price on both dates" flag in the API.
+
+**Review and fixes.** An independent review found nine issues, fixed before the commit, each with a test:
+`desk eod --books` gives a TEST run (a partial EOD run would have become the default run and hidden the other books; `--run-type EOD` with `--books` is refused); a load declares the books it covers (`load-positions --books`; default the file's books) and closes a covered book without rows with an empty set, so a dropped or closed book is no longer carried forward forever (an earlier `known_at` still sees it); a position id twice in the file (identical lines too) or already in another book's latest set is rejected with nothing written (`desk: ...`, exit 1); a run or book without flash PnL has null PnL totals, not 0 (`totals`, `/pnl`, `desk runs`); the adapter's `history` comes from the default runs of earlier dates with tdm's `run_totals` quantities and a cumulative `pnlCum`; `TRUNCATE` is rejected on every store table but `schema_migration`; `position_set.recorded_at` is the insert's clock time, and a run's `position_set_ids` are the source of truth for its inputs (`known_at` is a horizon); carried spreads come from default runs only (INTRADAY dropped); the token test no longer needs PostgreSQL, and a test checks the previous date's revaluation gets the same carried spreads.
+
+**Open after S5.**
+- The store has no bond quotes, official PnL, funding, scenarios or CBR meetings yet; the adapter renders them as tdm renders a run without them. Scenario & PnL Lab therefore fails on real runs (it expects the preset `keyhike`), as it did under `tdm serve` with an empty `scenario_def`; scenario definitions come with S6.
+- `coverage` and `totals` formats are defined in code only; they go into the interface catalogue with the API's OpenAPI.
+- A carried spread can be far from the bond's real level (MIX-08: 281 vs 390 bp). Upgrade: move it with its group's median change.
+

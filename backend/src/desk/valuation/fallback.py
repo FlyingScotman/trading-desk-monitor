@@ -10,8 +10,11 @@ Rung            Value
 market_value    a price today: q * (clean % * face / 100 + accrued). Accrued from the quote,
                 else from the current coupon (rate * face * days / 365), else 0
 stale_price     the same with the last price of the previous ``LOOKBACK_DAYS`` calendar days
-model_price     no price, a usable fixed schedule: priced on the KBD at the median Z-spread of
-                the exact-priced bonds of the issuer, else of the bond class, else of the kind
+model_price     no price, a usable fixed schedule: priced on the KBD at the Z-spread carried from
+                the latest earlier run (its model spread, or the bond's last market Z if newer;
+                desk store, S5), so the price moves with the curve only; without one at the
+                median Z of today's traded exact-priced bonds of the issuer, else of the bond
+                class, else of the kind (computed only when a bond needs it)
 par_proxy       nothing else: q * (current face + accrued if known), no risk
 ==============  ==============================================================================
 
@@ -35,7 +38,7 @@ import statistics
 from bisect import bisect_left
 from collections import defaultdict
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
 from itertools import chain
@@ -81,6 +84,25 @@ RUNGS = QUALITIES[2:]
 """The qualities of this module: no cashflows on the valuation, flash PnL by ``simple_pnl``."""
 
 
+@dataclass(frozen=True)
+class CarriedSpread:
+    """The Z-spread a model price used in the run of ``business_date`` (desk store ``model_spread``,
+    slice S5). A later run carries it, so the model price moves with the curve, not the day's median."""
+
+    secid: str
+    z_spread_bp: float
+    business_date: date
+    source: str
+
+
+def used_model_spreads(outcomes: list[Outcome]) -> list[CarriedSpread]:
+    """The spreads the model-price valuations of ``outcomes`` used, one per secid, for the store."""
+    out = {o.secid: CarriedSpread(o.secid, v.z_spread_bp, v.valuation_date, v.model_spread_source)
+           for o in outcomes if (v := o.valuation) and v.quality == "model_price" and v.model_spread_source
+           and math.isfinite(v.z_spread_bp)}
+    return list(out.values())
+
+
 @dataclass
 class FallbackContext:
     """Per-run inputs of the ladder, computed on first need: earlier market snapshots and the
@@ -90,10 +112,12 @@ class FallbackContext:
     history: list[MarketView] | None = None
     """Market snapshots of the previous ``LOOKBACK_DAYS`` calendar days, newest first."""
     medians: dict[tuple[str, Any], tuple[float, int]] | None = None
+    carried: dict[str, CarriedSpread] = field(default_factory=dict)
+    """Model spreads of the latest earlier run, by secid (empty without a desk store)."""
 
     @classmethod
-    def build(cls, ctx: EodContext) -> FallbackContext:
-        return cls(ctx)
+    def build(cls, ctx: EodContext, carried: dict[str, CarriedSpread] | None = None) -> FallbackContext:
+        return cls(ctx, carried=dict(carried or {}))
 
     def past_quotes(self, terms: BondTerms) -> Iterator[BondQuote]:
         if self.history is None:
@@ -356,25 +380,36 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
                     buckets=_split(rate_t, dv01) if rate_t else zero,
                     spread01_rub=s01 if kind == "credit" else 0.0)
 
-    med = fb.median_z(t, kind) if sched is not None else None
-    if sched is not None and med is not None:
+    priced = None  # ((engine, risk), Z, model_spread_source, assumption text)
+    if sched is not None and (c := fb.carried.get(t.secid)) is not None and math.isfinite(c.z_spread_bp):
+        # used even outside Z_BAND_BP: the band keeps outliers out of a group median, but the bond's own wide Z
+        # is evidence (a distressed name), and a median would price it near par
+        # shortcut: a carried spread never refreshes from better information (new issuer peers, a market-wide
+        # spread move) until the bond trades again, upgrade by moving it with its group's median change
         try:
-            e, r = _engine(ctx, sched[1], kind, q, spread_bp=med[0])
+            priced = (_engine(ctx, sched[1], kind, q, spread_bp=c.z_spread_bp), c.z_spread_bp, c.source,
+                      f"Z {c.z_spread_bp:.0f} bp carried from {c.business_date} ({c.source})")
+        except (ValueError, RuntimeError) as err:
+            why.append(f"carried Z {c.z_spread_bp:.0f} bp from {c.business_date} failed ({err}): the day's median")
+    if sched is not None and priced is None and (med := fb.median_z(t, kind)) is not None:
+        try:
+            priced = _engine(ctx, sched[1], kind, q, spread_bp=med[0]), med[0], f"{med[1]} on {bd}", med[1]
         except (ValueError, RuntimeError):
-            e = None
-        if e is not None:
-            dirty = e.base_price_rub
-            try:
-                acc = sched[2].accrued(bd)
-            except (ValueError, CoreRejection):
-                acc = accrued_rub(None)
-            why.append(f"model price: KBD + {med[1]}, no price in {LOOKBACK_DAYS} days")
-            mdur = -r.dv01_rub / r.pv_rub * 1e4 if r.pv_rub else math.nan
-            return make("model_price", price_basis="model", clean_pct=(dirty - acc) / face * 100,
-                        accrued_rub=acc, face_rub=face, dirty_rub=dirty, pv_rub=q * dirty, ytm_pct=math.nan,
-                        macaulay_years=mdur, modified_duration=mdur, z_spread_bp=med[0],
-                        buckets={b.bucket: b.dv01_rub for b in r.buckets}, dv01_rub=r.dv01_rub,
-                        spread01_rub=r.cs01_rub if kind == "credit" else r.ofz_spr01_rub)
+            pass
+    if sched is not None and priced is not None:
+        (e, r), z, source, label = priced
+        dirty = e.base_price_rub
+        try:
+            acc = sched[2].accrued(bd)
+        except (ValueError, CoreRejection):
+            acc = accrued_rub(None)
+        why.append(f"model price: KBD + {label}, no price in {LOOKBACK_DAYS} days")
+        mdur = -r.dv01_rub / r.pv_rub * 1e4 if r.pv_rub else math.nan
+        return make("model_price", price_basis="model", clean_pct=(dirty - acc) / face * 100,
+                    accrued_rub=acc, face_rub=face, dirty_rub=dirty, pv_rub=q * dirty, ytm_pct=math.nan,
+                    macaulay_years=mdur, modified_duration=mdur, z_spread_bp=z, model_spread_source=source,
+                    buckets={b.bucket: b.dv01_rub for b in r.buckets}, dv01_rub=r.dv01_rub,
+                    spread01_rub=r.cs01_rub if kind == "credit" else r.ofz_spr01_rub)
 
     acc = accrued_rub(outcome.quote)
     why.append(f"par proxy: no price in {LOOKBACK_DAYS} days, "
