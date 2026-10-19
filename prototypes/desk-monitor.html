@@ -1144,6 +1144,7 @@ function closeDrawer(){
 function rRisk(){
   { const l0 = P(), kd = sum(l0, p => sum((p.risk && p.risk['RUB KEY']) || [])), ofz = sum(l0, p => p.ofzSpr01 || 0), cs = sum(l0, p => p.cs01);
     $('risk-extra').innerHTML = `<span title="RUB-облигации: риск ставок — на RUONIA; ОФЗ — плюс спред ОФЗ к RUONIA">спред ОФЗ01 <b class="num${nc(ofz)}">${K(ofz,0)}</b></span> · <span title="CS01 корпоратов RUB — к RUONIA">CS01 <b class="num${nc(cs)}">${K(cs,0)}</b></span> · <span title="Чувствительность к базису КС − RUONIA: DV01 на кривой RUB KEY">базис КС−RUONIA <b class="num${nc(kd)}">${K(kd,0)}</b></span> тыс ₽/б.п.`; }
+  if (!D.CURVES[S.risk.curve] && CURVES.length) { S.risk.curve = CURVES[0]; S.risk.cell = null; }  // the default (RUB RUONIA) is the demo's: a run may publish other curves only
   const l = P(), mode = S.risk.mode, curve = S.risk.curve;
   document.querySelectorAll('#risk-mode button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === mode));
   $('risk-curves').innerHTML = CURVES.map(c => `<button type="button" data-v="${esc(c)}" aria-pressed="${c === curve}">${esc(c)}</button>`).join('');
