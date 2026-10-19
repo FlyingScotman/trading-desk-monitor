@@ -10,6 +10,7 @@ without PnL gets no ``pnl`` dict and a WARN line with the reason.
 from __future__ import annotations
 
 import json
+import subprocess
 from typing import Any
 
 from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
@@ -21,6 +22,7 @@ from ..curves import kbd
 from ..marketdata.adapter import MarketView
 from ..orchestrator import EodContext, Outcome
 from ..pnl.flash import METHOD
+from ..settings import REPO_ROOT
 
 CURVE_ID = "RUB OFZ"
 ASSET_CLASS = {"ofz_pd": "ОФЗ-ПД", "ofz_ad": "ОФЗ-АД", "ofz_pk": "ОФЗ-ПК", "ofz_in": "ОФЗ-ИН",
@@ -32,6 +34,8 @@ BOOKS = {
             "entity": "Демо", "ocp_to": None},
     "CORP": {"book_id": "CORP", "name": "Корпоративные (демо)", "desk": "Credit", "trader": None,
              "book_type": "TRADING", "entity": "Демо", "ocp_to": None},
+    "MIXED": {"book_id": "MIXED", "name": "Смешанная (тест)", "desk": "Rates", "trader": None,
+              "book_type": "TRADING", "entity": "Демо", "ocp_to": None},
 }
 FX_CCYS = ("USD", "EUR", "CNY")
 INDICES = (("KEY_RATE", "КС"), ("RUONIA", "RUONIA"))
@@ -118,10 +122,21 @@ def _factor(name: str) -> str:
     return f"IR|{CURVE_ID}|{name[3:]}" if name.startswith("IR|") else name
 
 
+def git_sha() -> str | None:
+    """Backend commit of a source checkout (None for an installed wheel)."""
+    try:
+        out = subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "--short=12", "HEAD"],
+                             check=False, capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() or None
+
+
 def publish(db: str, ctx: EodContext, positions: list[tuple[str, str, Outcome]], *,
             prev: MarketView | None, comment: str | None = None) -> tuple[int, str, list[str]]:
     """positions: (position_id, book_id, outcome). Returns (run_id, status, warnings)."""
-    lineage = {**ctx.lineage(), "backend_version": BACKEND_VERSION, "core_version": CORE_VERSION,
+    lineage = {**ctx.lineage(), "backend_version": BACKEND_VERSION, "backend_git_sha": git_sha(),
+               "core_version": CORE_VERSION,
                "prev_market_snapshot_id": prev.snapshot.id if prev else None}
     issuers: dict[str, dict[str, Any]] = {}
     rows, skipped, no_pnl = [], [], []

@@ -31,6 +31,9 @@ packages = ["src/desk"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# `pytest -m live` checks the real hub in DESK_HUB_URL; the default run never touches the network.
+addopts = "-m 'not live'"
+markers = ["live: needs DESK_HUB_URL and a hub token"]
 
 [tool.ruff]
 line-length = 110

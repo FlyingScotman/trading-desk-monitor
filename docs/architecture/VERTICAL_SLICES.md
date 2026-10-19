@@ -1,6 +1,6 @@
 # Vertical slices
 
-As of 18 October 2026. Status: working plan, owned by the backend. **Next slices: S3 and S4, briefs below.** Work for the hub and core: [briefs/HUB.md](briefs/HUB.md), [briefs/CORE.md](briefs/CORE.md).
+As of 18 October 2026. Status: working plan, owned by the backend. **S3 is built (19 October; live acceptance waits for the hub's snapshot layer). Next: S4, brief below.** Work for the hub and core: [briefs/HUB.md](briefs/HUB.md), [briefs/CORE.md](briefs/CORE.md).
 
 ## Why
 
@@ -32,7 +32,7 @@ Each slice keeps whatever it built that matches the architecture. Where it takes
 |---|---|---|---|
 | **S1 EOD fixed bonds on KBD** | Desk Monitor with a real 15.10.2026 run: PV, yield, Z-spread, DV01 by bucket, CS01, gamma for fixed-coupon OFZ and corporates of the demo book. A **validation report** per bond: our yield, duration, G-spread and accrued vs MOEX analytics from the same snapshot; coverage list with a reason for every bond not priced | Hub snapshot contract on the full universe; adapter; core 0.8.1 fixed-cashflow engine; KBD curve; writer SDK; prototype data path | **Done 17.10.2026** (see below) |
 | **S2 Day-over-day flash PnL** | Second run on the next date with PnL by factor: carry, rates, spread, residual, using two snapshots and exact repricing | Snapshot history; core `reprice`; run-to-run linking | **Done 17.10.2026** (see below) |
-| **S3 Live hub and a test book** | Desk Monitor on runs of the last five business dates, valued from snapshots **pulled from the VPS hub** into the backend's cache. A synthetic test book with several books, shorts and coverage cases. Snapshot age on every run | Hub snapshot endpoints and token scopes; backend HTTP client, cache and verification; reproducibility by snapshot ID; the run never depends on the hub being up | **Next.** Live acceptance waits for the hub's snapshot layer (H1–H5 below) |
+| **S3 Live hub and a test book** | Desk Monitor on runs of the last five business dates, valued from snapshots **pulled from the VPS hub** into the backend's cache. A synthetic test book with several books, shorts and coverage cases. Snapshot age on every run | Hub snapshot endpoints and token scopes; backend HTTP client, cache and verification; reproducibility by snapshot ID; the run never depends on the hub being up | **Built** 19 October ([result](#s3-result-19-october-2026)). Live acceptance waits for the hub's snapshot layer (H1–H4 below) |
 | **S4 Core portfolio path and the whole bond universe** | The same screens, valued through core 0.32 `value_portfolio`. Also priced now: floaters (OFZ-PK, key-rate, RUONIA), perpetuals to an explicit call and, once the hub carries CPI, OFZ-IN. A RUONIA OIS curve (`rub_ruonia_ois_moex_v2`) in the curves panel. Coverage grows from about 1034 bonds to every bond with a usable schedule | Adapter to core domain types; curve-spec mapping `dataset` → spec; core KBD; core horizon explain against `desk.pnl.flash` | Brief below; can start in parallel with S3 |
 | **S5 Desk backend proper** | Same screens, now served by the desk API from the desk Postgres store, with run lineage | ADR-006, 04, 05 §2 | |
 | **S6 Interactive scenario** | Scenario slider with instant Taylor (≈) and an "exact" button that reprices on the backend; residual shown | 03 T1/T2, parity fixtures; first React + TypeScript screen | |
@@ -78,7 +78,7 @@ The backend work B1–B6 does not wait for H1–H5: it is built and tested again
   - `list_snapshots(kind, cut_type, business_date, latest)` → `/v1/snapshots`, following `meta.next_offset`;
   - `manifest(id)`;
   - `bundle(id) -> bytes`.
-- Transport is `httpx` (add it to the dependencies; it is a pure-Python wheel and fits the Windows wheelhouse). It honours `HTTPS_PROXY`/`NO_PROXY`, `DESK_HUB_CA_BUNDLE` and `DESK_HUB_TIMEOUT_S`.
+- Transport: the standard library (`urllib`; the brief first named `httpx`, see the S3 result). It honours `HTTPS_PROXY`/`NO_PROXY`, `DESK_HUB_CA_BUNDLE` and `DESK_HUB_TIMEOUT_S`.
 - The bearer token is sent only in the header. It is never logged, printed, put in a URL or written to the run.
 - Errors and what the user is told:
 
@@ -351,3 +351,34 @@ CRP-05 has no PnL on 14.10: it had no quote on 13.10.
 | F13 | `other` was 0 on every position: no schedule changed between two dates of the demo book. A position whose offer passes, or with a newly fixed coupon, will show it here | Check again on the real book |
 | F14 | Rolldown on the KBD is 30–40 % of carry on these dates | Information |
 
+## S3 result (19 October 2026)
+
+**Built** (backend B1–B7):
+- `desk/marketdata/hub.py`: the hub client. It uses the standard library rather than `httpx`: `urllib` honours `HTTPS_PROXY`/`NO_PROXY`, and on Windows Python trusts the system certificate store, where a TLS-inspecting proxy's CA usually sits; `httpx` would need `DESK_HUB_CA_BUNDLE` for that. No new dependency. The error table of B1 is implemented as written; the 404 message names the hub version from `/health/ready`.
+- `desk/marketdata/cache.py`: `sync`, `hub_dates`, `import_drop`. Each bundle is checked (`gzip`, `sha256 == id`, `X-Snapshot-Sha256`, schema version) before an atomic write; the cache is append-only. Beside a downloaded bundle, `<id>.hub.json` keeps the hub host, `published_at` and the fetch time, because the bundle cannot carry its own publication facts.
+- Commands `desk hub-check`, `desk sync --date | --from --to | --last N`, `desk eod --sync`, `desk import-drop`. Every `desk eod` prints the market snapshot ID, its origin (hub and `published_at` with age, or "local file" with `known_at`).
+- Lineage in the run log: `cut_type`, `hub`, `published_at`, `backend_git_sha` next to the snapshot IDs and the core version. The snapshot age is in the run log; the prototype's `window.DESK` meta has no field for it (S5/S6).
+- `backend/examples/test_book.csv`, generated by `desk demo-book --profile test`: 40 positions in `OFZ`, `CORP`, `MIXED`, long and short.
+- `tests/test_slice_s3.py`: 14 tests against an in-process stub hub, and `pytest -m live` for the real hub (the default run deselects it).
+
+**Not built:** `If-None-Match`/304 in the client. The cache never downloads a bundle it has, so it never needs to ask.
+
+**Run on the cached dev-export dates 9–15 October** (the hub publishes none yet), test book:
+- Priced 35 of 40 positions (36 from 14.10). Listed with a reason: OFZ-PK and a key-rate corporate floater (`coupon_floating`, S4), OFZ-IN (`face_indexed`), a perpetual (`perpetual`), and on 9–13.10 a corporate with no quote (`no_quote`; on 14.10 it is priced and gets `not_priced_prev` instead of PnL).
+- Coupons paid inside the window show as cash received: CRP-03, CRP-12 and MIX-05 on 12.10, MIX-04 on 14.10, MIX-02 on 15.10.
+- The flash PnL identity holds on every position: the largest error is 2.5·10⁻⁴ RUB.
+
+| Date | OFZ | CORP | MIXED | Total, m RUB |
+|---|---|---|---|---|
+| 12.10 (3 days) | 44.72 | 7.33 | −3.75 | 48.31 |
+| 13.10 | 15.54 | 3.35 | −0.34 | 18.55 |
+| 14.10 | 20.57 | −0.63 | −5.42 | 14.52 |
+| 15.10 | 13.44 | 2.45 | −2.65 | 13.24 |
+
+**Live state on 19 October.** `desk config` reads the hub address and the token file from `backend/.env`. The token is accepted: `/v1/coverage` and `/v1/bonds` answer 200. `desk hub-check` and `pytest -m live` stop at "hub (version 0.1.0) has no snapshot layer: /v1/snapshots answers 404", as expected before H1. The hub's snapshot layer is still only in its local branch, not on GitHub.
+
+**Open for the live acceptance**, once the hub has done H1–H4:
+- `desk hub-check`, `desk sync --last 5`, then `desk eod` over those dates with the test book;
+- `pytest -m live`;
+- compare VPS-published and dev-export snapshots of the same dates (F6);
+- regenerate `test_book.csv` from the published dates if the window cases (no quote, coupon inside the window) no longer fall inside it.

@@ -51,9 +51,13 @@ class EodContext:
         return self.market.business_date
 
     def lineage(self) -> dict[str, object]:
+        prov = self.snapshots.provenance(self.market.snapshot.id) or {}
         return {
             "market_snapshot_id": self.market.snapshot.id,
             "static_snapshot_id": self.static.snapshot.id,
+            "cut_type": self.market.snapshot.cut_type,
+            "hub": prov.get("hub"),
+            "published_at": prov.get("published_at"),
             "curve_spec": kbd.SPEC_ID,
             "curve_model": kbd.MODEL_VERSION,
             "kbd_check_bp": round(self.kbd_check_bp, 6),

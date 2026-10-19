@@ -77,7 +77,7 @@ def eligibility(terms: BondTerms) -> None:
     if terms.is_fx_face:
         raise Rejected("fx_face")
     if terms.coupon_type not in SUPPORTED_COUPON_TYPES:
-        raise Rejected(f"coupon_{terms.coupon_type}", "floaters arrive in slice S3")
+        raise Rejected(f"coupon_{terms.coupon_type}", "floaters arrive in slice S4")
     if terms.bond_class in ("mbs", "securitization"):
         raise Rejected("securitized", "amortization is prepayment-driven")
 
