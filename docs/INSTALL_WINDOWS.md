@@ -25,11 +25,10 @@
 **Вариант А — git (если есть):**
 
 ```bat
-git clone -b claude/clever-ramanujan-s4k3ed https://github.com/FlyingScotman/trading-desk-monitor.git C:\tdm
+git clone https://github.com/FlyingScotman/trading-desk-monitor.git C:\tdm
 ```
 
 - `git clone` — скачать репозиторий целиком;
-- `-b claude/clever-ramanujan-s4k3ed` — сразу переключиться на эту ветку (после слияния в `main` флаг можно не указывать);
 - `https://github.com/...git` — адрес репозитория;
 - `C:\tdm` — папка, куда положить код.
 
