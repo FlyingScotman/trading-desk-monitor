@@ -113,13 +113,13 @@ schtasks /create /tn "Desk Monitor daily" /sc weekly /d MON,TUE,WED,THU,FRI /st 
 | Что | Где |
 |---|---|
 | программа | папка, куда распакован архив (`start.bat`, `python\`, `env\`, …) |
-| данные и настройки (`DESK_HOME`) | `%LOCALAPPDATA%\DeskMonitor` = `C:\Users\<имя>\AppData\Local\DeskMonitor` |
+| данные и настройки (`DESK_HOME`) | `%LOCALAPPDATA%\DeskMonitor` = `C:\Users\<имя>\AppData\Local\DeskMonitor`; если в этом пути есть русские буквы (имя пользователя кириллицей) — `C:\DeskMonitorData`, доступная только вам: встроенный PostgreSQL не работает с такими путями |
 | настройки | `settings.json`, токен `hub_token`, файлы адаптера `adapter-config\` |
 | база (встроенный PostgreSQL) | `pg\` |
 | снапшоты, копии отчётов, отчёты сверки | `snapshots\`, `inbox-archive\`, `reports\` |
 | журналы | `logs\serve.log` (сервер), `logs\cycle.log` (`update_daily.bat`): при 20 МБ прежний журнал становится `*.log.1`; `logs\autopilot.log` — шаги каждого цикла автопилота (до 2 МБ, плюс три прежних `*.log.1`–`*.log.3`) |
 
-Другое место для данных — переменная `DESK_HOME` (например, если в пути профиля пробелы или русские буквы и PostgreSQL на них спотыкается):
+Другое место для данных — переменная `DESK_HOME`, путь латиницей (с русскими буквами `start.bat` откажется запускаться: PostgreSQL на них спотыкается). Папка программы тоже должна быть латиницей и **без пробелов**, иначе `start.bat` попросит её перенести:
 
 ```bat
 setx DESK_HOME D:\DeskData

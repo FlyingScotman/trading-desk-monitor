@@ -105,3 +105,28 @@ def test_ensure_env_keeps_a_venv_of_this_version_and_folder(monkeypatch, tmp_pat
     with pytest.raises(deskctl.Fail):  # a new version, but a desk process of this folder still runs
         deskctl.ensure_env({"DESK_HOME": str(tmp_path / "home")})
     assert env_dir.is_dir()
+
+
+def test_desk_home_falls_back_to_ascii_and_odd_paths_are_refused(monkeypatch, tmp_path):
+    # PostgreSQL writes its paths in the ANSI code page and pgserver reads them as UTF-8; its psql runs unquoted
+    monkeypatch.setattr(deskctl, "WIN", True)
+    env = {"LOCALAPPDATA": "C:\\Users\\Иванов\\AppData\\Local", "SystemDrive": "C:"}
+    home = deskctl.default_home(env)  # C:\DeskMonitorData (a posix Path here)
+    assert str(home).startswith("C:\\") and home.name == "DeskMonitorData"
+    env = {"LOCALAPPDATA": "C:\\Users\\ivanov\\AppData\\Local"}
+    assert deskctl.default_home(env) == Path("C:\\Users\\ivanov\\AppData\\Local") / "DeskMonitor"
+    monkeypatch.setattr(deskctl, "ROOT", Path("/x/Desk Monitor"))
+    with pytest.raises(deskctl.Fail):
+        deskctl.check_paths({"DESK_HOME": "C:\\DeskMonitorData"})
+    deskctl.check_paths({"DESK_HOME": "C:\\DeskMonitorData", "DESK_STORE_URL": "postgresql://h/desk"})
+    monkeypatch.setattr(deskctl, "ROOT", Path("/x/DeskMonitor"))
+    deskctl.check_paths({"DESK_HOME": "C:\\DeskMonitorData"})
+    with pytest.raises(deskctl.Fail):
+        deskctl.check_paths({"DESK_HOME": "C:\\Users\\Иванов\\DeskMonitor"})
+
+
+def test_desk_environ_drops_this_machines_pip_settings(monkeypatch):
+    monkeypatch.setenv("PIP_USER", "1")
+    monkeypatch.setenv("PIP_INDEX_URL", "https://mirror.example/simple")
+    env = deskctl.desk_environ()
+    assert "PIP_USER" not in env and "PIP_INDEX_URL" not in env and env["PIP_NO_INPUT"] == "1"

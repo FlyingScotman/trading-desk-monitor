@@ -9,7 +9,8 @@ The bundle folder (``DeskMonitor\\``, anywhere): ``python\\`` the runtime, ``whe
 ``requirements.txt``, ``app\\`` this file, the prototypes and the built frontend, ``adapter\\`` the private adapter
 when the build had one, ``VERSION``. The venv ``env\\`` is made from the runtime and the wheelhouse, offline,
 whenever ``env\\desk-bundle.json`` does not name this version and this folder (a venv cannot move). Data and
-settings live in DESK_HOME (default ``%LOCALAPPDATA%\\DeskMonitor``), outside the bundle, so they survive updates.
+settings live in DESK_HOME (default ``%LOCALAPPDATA%\\DeskMonitor``, or ``C:\\DeskMonitorData`` when that path is not
+plain ASCII, see ``default_home``), outside the bundle, so they survive updates.
 The .bat files only find a Python and call this; the logic is here, away from cmd.exe quoting.
 """
 
@@ -18,6 +19,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -67,13 +69,25 @@ def adapter_package() -> Path | None:
     return pkgs[0] if pkgs else None
 
 
+def default_home(env: dict[str, str]) -> Path:
+    """``%LOCALAPPDATA%\\DeskMonitor``; ``C:\\DeskMonitorData`` instead when that path is not plain ASCII (a Cyrillic
+    user name). PostgreSQL writes its paths in the ANSI code page (``postmaster.pid``, initdb's output) and pgserver
+    reads them as UTF-8 (PYTHONUTF8), so the embedded store cannot live under a non-ASCII path."""
+    local = env.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    home = Path(local) / "DeskMonitor"
+    if WIN and not str(home).isascii():
+        return Path((env.get("SystemDrive") or "C:") + "\\") / "DeskMonitorData"
+    return home
+
+
 def desk_environ() -> dict[str, str]:
     """The environment of every desk process: defaults only where the variable is not already set."""
     env = dict(os.environ)
     for k in ("PYTHONHOME", "PYTHONPATH"):  # a machine-wide Python must not leak into the bundle's
         env.pop(k, None)
-    local = env.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    env.setdefault("DESK_HOME", str(Path(local) / "DeskMonitor"))
+    for k in [k for k in env if k.upper().startswith("PIP_")]:  # nor this machine's pip settings (PIP_USER, ...)
+        env.pop(k)
+    env.setdefault("DESK_HOME", str(default_home(env)))
     home = Path(env["DESK_HOME"])
     env.setdefault("DESK_STATIC_ROOT", str(APP))  # prototypes\ and frontend\dist\ that desk serve serves
     pkg = adapter_package()
@@ -91,8 +105,46 @@ def desk_environ() -> dict[str, str]:
 
 def home_dir(env: dict[str, str]) -> Path:
     home = Path(env["DESK_HOME"])
-    (home / "logs").mkdir(parents=True, exist_ok=True)
+    fresh = not home.exists()
+    try:
+        (home / "logs").mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise Fail(f"Не удалось создать папку данных {home}: {e}\nЗадайте другую (латиницей): в командной строке  "
+                   "setx DESK_HOME D:\\DeskData  , затем снова start.bat.") from e
+    if fresh and WIN and not _under(str(home), Path(env.get("USERPROFILE") or Path.home())):
+        _private(home)  # e.g. C:\DeskMonitorData: it would inherit the drive root's "Authenticated Users: Modify"
     return home
+
+
+def _private(folder: Path) -> None:
+    """Best effort: only this user, SYSTEM and Administrators may open ``folder`` (it holds the hub token)."""
+    try:
+        out = subprocess.run(["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, timeout=30,
+                             check=False).stdout.decode("latin-1")  # the OEM code page: only the SID matters
+        sid = re.search(r"S-1-[0-9-]+", out)
+        if sid and not subprocess.run(["icacls", str(folder), "/inheritance:r", "/grant:r",
+                                       f"*{sid.group(0)}:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"],
+                                      capture_output=True, timeout=60, check=False).returncode:
+            return
+    except (OSError, subprocess.SubprocessError):
+        pass
+    say(f"  ВНИМАНИЕ: не удалось закрыть папку {folder} от других пользователей этого компьютера (в ней токен хаба).")
+
+
+def check_paths(env: dict[str, str]) -> None:
+    """The embedded PostgreSQL (pgserver) on Windows needs plain paths: its ``psql`` runs through cmd.exe unquoted
+    (a space in the program folder breaks it), and it decodes PostgreSQL's ANSI output as UTF-8 (non-ASCII folders)."""
+    if not WIN or env.get("DESK_STORE_URL"):
+        return
+    if " " in str(ROOT) or not str(ROOT).isascii():
+        raise Fail(f"В пути к папке программы есть пробел или не латинские буквы: {ROOT}\n"
+                   "Встроенный PostgreSQL в такой папке не работает. Перенесите папку целиком (вместе с python\\, "
+                   "wheelhouse\\, app\\) в короткий путь латиницей без пробелов, например C:\\DeskMonitor, "
+                   "и запустите start.bat оттуда.")
+    if not env["DESK_HOME"].isascii():
+        raise Fail(f"В пути к папке данных (DESK_HOME) есть не латинские буквы: {env['DESK_HOME']}\n"
+                   "Встроенный PostgreSQL там не работает. Задайте другую: в командной строке  "
+                   "setx DESK_HOME C:\\DeskMonitorData  , закройте это окно и снова start.bat.")
 
 
 def desk_exe() -> Path:
@@ -208,6 +260,7 @@ def _rmtree(p: Path) -> None:
 
 def ensure_env(env: dict[str, str], *, force: bool = False) -> None:
     """Create ``env\\`` from the bundled runtime and the wheelhouse unless it already belongs to this bundle."""
+    check_paths(env)
     want = {"version": version(), "root": str(ROOT)}
     try:
         have = json.loads(MARKER.read_text(encoding="utf-8"))
@@ -325,9 +378,6 @@ def cmd_start(args: list[str]) -> int:
     say(f"Desk Monitor {version()}")
     say(f"  программа: {ROOT}")
     say(f"  данные и настройки (DESK_HOME): {home}")
-    if not str(ROOT).isascii() or " " in str(ROOT):
-        say("  ВНИМАНИЕ: в пути к папке программы пробелы или не латинские буквы; если PostgreSQL не запустится, "
-            "перенесите папку, например в C:\\DeskMonitor.")
     ensure_env(env)
     page = "desk-monitor.html" if (home / "settings.json").is_file() else "settings.html"
     url = f"http://127.0.0.1:{port}/{page}"
@@ -341,7 +391,8 @@ def cmd_start(args: list[str]) -> int:
             raise Fail(f"Порт {port} занят другим экземпляром Desk Monitor (старая версия из другой папки?). "
                        "Закройте его окно или запустите stop.bat в его папке, затем снова start.bat.")
         raise Fail(f"Порт {port} занят другой программой. Кто занял: netstat -ano | findstr :{port} "
-                   f"(последняя колонка - PID в Диспетчере задач). Другой порт: в командной строке "
+                   f"(последняя колонка - PID в Диспетчере задач); если там пусто, порт зарезервирован Windows: "
+                   f"netsh interface ipv4 show excludedportrange protocol=tcp. Другой порт: в командной строке "
                    f"set DESK_PORT=8001, затем start.bat из того же окна.")
     log = home / "logs" / "serve.log"
     say(f"  журнал: {log}")
