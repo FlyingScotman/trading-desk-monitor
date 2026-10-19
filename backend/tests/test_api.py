@@ -251,6 +251,10 @@ def test_compat_parity_with_tdm_assemble(store_url, book, client, tmp_path):
     for k in want:
         if k != "positions":
             assert got[k] == want[k], k
+    nv = [p for p in got["positions"] if p.get("notValued")]  # compat lists the unvalued position, tdm does not
+    assert len(nv) == 1 and nv[0]["mvRub"] is None and nv[0]["extra"]["quality"] == "not_valued"
+    assert nv[0]["extra"]["reason"] and not nv[0]["risk"] and nv[0]["dv01"] == 0 and got["positions"][-1] is nv[0]
+    got["positions"] = got["positions"][:-1]
     assert [p["id"] for p in got["positions"]] == [p["id"] for p in want["positions"]]
     for a, b in zip(got["positions"], want["positions"], strict=True):
         assert a == b, (a["id"], {f: (a.get(f), b.get(f)) for f in set(a) | set(b) if a.get(f) != b.get(f)})

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "private/1.0/positions",
+  "$id": "private/1.1/positions",
   "title": "positions row",
   "description": "Private input contract v1 (docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md §10). One row as the adapter emits it. An optional field may be absent or null (the same thing); the empty string is invalid everywhere. Raw firm values go in x_* keys; _src is the row's location in the report, without sheet names.",
   "type": "object",
@@ -96,6 +96,15 @@
       "$ref": "#/$defs/amount"
     },
     "contract_rate_pct": {
+      "$ref": "#/$defs/amount"
+    },
+    "maturity_date": {
+      "$ref": "#/$defs/date"
+    },
+    "risk_dv01_rub": {
+      "$ref": "#/$defs/amount"
+    },
+    "risk_cs01_rub": {
       "$ref": "#/$defs/amount"
     }
   },

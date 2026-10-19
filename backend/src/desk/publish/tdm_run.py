@@ -9,7 +9,9 @@ each non-exact position with its reasons as a WARN line (the prototype has no qu
 A position with no data at all is not written with zeros: it gets a WARN line with its reason.
 Rows of the private contract v1 (S7a, ``valuation.positions``) carry the report's row as it came in
 ``extra.reported`` (reconciliation figures, ``src``, ``x``) next to ours; a row valued without core (an FX row,
-an unmapped bond) is written by ``direct_row`` with its currency and the report's instrument name.
+an unmapped bond, an OTC or other row at the report's value) is written by ``direct_row`` with its currency, the
+report's instrument name and the report's risk when it gave one. Books: the store's metadata in force
+(``PositionInputs.books``: name, desk, entity, book_type); the demo ``BOOKS`` only for a book without it.
 The same holds for the flash PnL of slice S2: a priced position without PnL gets no ``pnl`` dict
 and a WARN line with the reason; a simple PnL (all in ``other``) is counted in its own WARN line.
 """
@@ -44,6 +46,13 @@ ASSET_CLASS = {"ofz_pd": "ОФЗ-ПД", "ofz_ad": "ОФЗ-АД", "ofz_pk": "ОФ
                "subfederal": "Субфедеральные", "municipal": "Муниципальные", "corporate": "Корпоративные"}
 SEGMENT = {"ofz_pd": "Гос", "ofz_ad": "Гос", "ofz_pk": "Гос", "ofz_in": "Гос",
            "subfederal": "Суб", "municipal": "Суб"}
+"""Segment of a bond (default ``Корп``). The Desk Monitor builds its segment chips from the data, so a segment
+outside its known list (``Суб``) gets a chip of its own and is never filtered out silently."""
+DIRECT_KIND = {"fx": ("FX", "Валюта", "FX"), "otc": ("OTC", "OTC-деривативы", "Деривативы"),
+               "other": ("OTHER", "Прочее", "Прочее"), "bond": ("BOND", "Не сопоставлено", "Корп")}
+"""asset_class of a direct row -> (instr_type, asset class, segment); an unknown one is treated as ``other``.
+``OTC`` and ``OTHER`` are desk-store types: the legacy tdm store has no such instrument type (``publish``)."""
+TDM_INSTR_TYPES = ("BOND", "IRS", "XCCY", "CDS", "FX")
 BOOKS = {
     "OFZ": {"book_id": "OFZ", "name": "ОФЗ (демо)", "desk": "Rates", "trader": None, "book_type": "TRADING",
             "entity": "Демо", "ocp_to": None},
@@ -52,8 +61,8 @@ BOOKS = {
     "MIXED": {"book_id": "MIXED", "name": "Смешанная (тест)", "desk": "Rates", "trader": None,
               "book_type": "TRADING", "entity": "Демо", "ocp_to": None},
 }
-DEFAULT_BOOK = {"desk": "—", "trader": None, "book_type": None, "entity": "Демо", "ocp_to": None}
-"""A book outside ``BOOKS`` (a real book of the private inputs): named by its id."""
+DEFAULT_BOOK = {"desk": "—", "trader": None, "book_type": None, "entity": "—", "ocp_to": None}
+"""A book with no store metadata and outside the demo ``BOOKS``: named by its id."""
 UNMAPPED_ISSUER = {"issuer": "Не сопоставлено", "name": None, "issuer_group": "Не сопоставлено", "is_gov": False,
                    "is_quasi": False}
 """The issuer of the unmapped bonds (an instrument the static snapshot does not know)."""
@@ -128,15 +137,29 @@ def reported(x: dict[str, Any] | None) -> dict[str, Any]:
     return {"reported": {k: v.isoformat() if isinstance(v, date) else v for k, v in x.items() if v is not None}}
 
 
+def book_rows(used: list[str], meta: dict[str, dict]) -> list[dict[str, Any]]:
+    """Reference rows of the books used: the store's metadata (``current_books``) where a book has it, else the
+    demo ``BOOKS`` (the synthetic demo and test books), else ``DEFAULT_BOOK``. Demo books first, as before."""
+    def row(b: str) -> dict[str, Any]:
+        if (m := meta.get(b)) is not None:
+            return {"book_id": b, "name": m.get("name") or b, "desk": m.get("desk") or "—", "trader": m.get("trader"),
+                    "book_type": m.get("book_type"), "entity": m.get("entity") or "—", "ocp_to": m.get("ocp_to")}
+        return BOOKS[b] if b in BOOKS else {"book_id": b, "name": b, **DEFAULT_BOOK}
+    return [row(b) for b in BOOKS if b in used] + [row(b) for b in used if b not in BOOKS]
+
+
 def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, Any], qty: float | None
                ) -> dict[str, Any]:
-    """An FX row or an unmapped bond (``valuation.positions``): PV, FX delta in currency, no rates risk. Fields
-    the tdm schema requires and the report does not give: the notional of a bond without a face is its MV, an
-    amount without a rate of the day is in RUB (both said in the assumptions)."""
+    """An FX row, an unmapped bond or an OTC/other row (``valuation.positions``): PV, FX delta in currency, and
+    the report's own risk (``reported_risk``) if any, else none. Fields the tdm schema requires and the report does
+    not give: the notional of a bond without a face is its MV, an amount without a rate of the day is in RUB
+    (both said in the assumptions)."""
     v = o.valuation
     assert v is not None
     x = normalised(x)
-    fx = x.get("asset_class") == "fx"
+    kind = (x.get("asset_class") or "bond").lower()
+    fx = kind == "fx"
+    itype, aclass, segment = DIRECT_KIND.get(kind, DIRECT_KIND["other"])
     why = list(v.assumptions)
     ccy = x.get("ccy") or "RUB"
     rate = v.face_rub if fx else (r[0] if (r := fx_rate(ctx, ccy)) else None)
@@ -149,14 +172,16 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
         amount = v.pv_rub / rate
         why.append("notional unknown: the market value is shown")
     vd = x.get("value_date")
+    mat = x.get("maturity_date") or vd
     return {
-        "position_id": pid, "book_id": book, "instr_type": "FX" if fx else "BOND",
-        "asset_class": "Валюта" if fx else "Не сопоставлено", "segment": "FX" if fx else "Корп",
+        "position_id": pid, "book_id": book, "instr_type": itype, "asset_class": aclass, "segment": segment,
         "name": x.get("source_instrument_name") or (f"{ccy} {vd or 'spot'}" if fx else x.get("source_instrument_id"))
-        or pid, "isin": x.get("isin"), "issuer": None, "ccy": ccy, "maturity": vd.isoformat() if vd else None,
+        or pid, "isin": x.get("isin"), "issuer": None, "ccy": ccy, "maturity": mat.isoformat() if mat else None,
+        "tenor_y": (mat - ctx.business_date).days / 365.25 if mat and not fx else None,
         "side": ("BUY" if amount >= 0 else "SELL") if fx else "long" if amount >= 0 else "short",
         "notional": amount, "notional_rub": amount * rate, "price": _num(v.clean_pct), "mv": v.pv_rub / rate,
-        "mv_rub": v.pv_rub, "dv01": 0.0, "cs01": 0.0, "ofz_spr01": 0.0, "risk": {}, "gamma": [],
+        "mv_rub": v.pv_rub, "dv01": v.dv01_rub, "cs01": v.spread01_rub, "ofz_spr01": 0.0,
+        "risk": {CURVE_ID: v.buckets} if any(v.buckets.values()) else {}, "gamma": [],
         "instrument_id": x.get("moex_secid") or x.get("source_instrument_id"), "new_today": False,
         **({"fx_delta": {ccy: v.pv_rub / rate}} if ccy != "RUB" else {}),
         "extra": {
@@ -294,8 +319,7 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
         if fx:
             indices.append({"index_name": name, "value": fx[1]})
     reference = {
-        "books": [BOOKS[b] for b in BOOKS if b in used]
-        + [{"book_id": b, "name": b, **DEFAULT_BOOK} for b in used if b not in BOOKS],
+        "books": book_rows(used, inputs.books if inputs else {}),
         "issuers": list(issuers.values()),
         "curves": [{"curve_id": CURVE_ID, "name": "ОФЗ (КБД MOEX)", "ccy": "RUB", "kind": "bond",
                     "points": curve_points(ctx, prev)}],
@@ -334,6 +358,10 @@ def publish(db: str, ctx: EodContext, positions: list[tuple[str, str, Outcome]],
                "prev_market_snapshot_id": prev.snapshot.id if prev else None,
                "core_results": store_core_results(db, [o for _, _, o in positions])}
     c = run_content(ctx, positions, prev, lineage, inputs)
+    rows = [r for r in c.rows if r["instr_type"] in TDM_INSTR_TYPES]
+    if len(rows) < len(c.rows):  # the desk store holds them; the legacy tdm store has no such instrument type
+        c.log.append(("WARN", "в tdm не записаны позиции без типа инструмента tdm (OTC/прочее): "
+                      + ", ".join(r["position_id"] for r in c.rows if r["instr_type"] not in TDM_INSTR_TYPES)))
     with Run(db, as_of=ctx.business_date.isoformat(), run_type="EOD",
              source=f"desk-backend {BACKEND_VERSION} (slice {'S2' if any(o.pnl for _, _, o in positions) else 'S1'})",
              lib_version=f"rub-fixed-income-core {CORE_VERSION}",
@@ -341,7 +369,7 @@ def publish(db: str, ctx: EodContext, positions: list[tuple[str, str, Outcome]],
              prev_date=prev.business_date.isoformat() if prev else None, jtd_recovery=0.0) as run:
         for kind in REFERENCE_KINDS:
             getattr(run, f"add_{kind}")(c.reference[kind])
-        run.add_positions(c.rows)
+        run.add_positions(rows)
         for level, message in c.log:
             run.log(level, message)
     return run.run_id, run.status, run.warnings

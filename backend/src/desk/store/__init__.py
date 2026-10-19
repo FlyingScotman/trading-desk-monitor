@@ -161,19 +161,23 @@ class PositionInputs:
     """S7a: per position_id the private contract v1 fields beyond ``rows`` (08 §10 ``positions``) that the row has:
     asset_class, ccy, face_amount_ccy, face_outstanding_ccy, amount_ccy, value_date, deal_id, source_instrument_id,
     source_instrument_name, isin, regnum, moex_secid, mark_price_pct, accrued_ccy, mv_rub, book_value_rub,
-    purchase_*, contract_rate_pct, src, x (amounts as float, dates as date). A position loaded by
+    purchase_*, contract_rate_pct, maturity_date, risk_dv01_rub, risk_cs01_rub, src, x (amounts as float, dates as
+    date). A position loaded by
     ``desk load-positions`` has no entry (a bond with secid and quantity). In ``rows`` secid and quantity are None
     when the inbox row has no resolved instrument or gives only a face amount."""
     sources: dict[str, dict] = field(default_factory=dict)
     """S7a: per book the set's origin for lineage: {source, report_date, inbox_file_sha256, file_name}
     (``load-positions`` sets: no report date and no inbox file)."""
+    books: dict[str, dict] = field(default_factory=dict)
+    """Per book of the sets that has one, its ``book_rev`` in force on the valid date as known at ``known_at``
+    (``current_books``: name, desk, book_type, entity, ...): what the run publishes as the book's reference."""
 
 
 LEGACY_SOURCE = "load-positions"
 V1_COLUMNS = ("asset_class", "ccy", "face_amount_ccy", "face_outstanding_ccy", "amount_ccy", "value_date", "deal_id",
               "source_instrument_id", "source_instrument_name", "isin", "regnum", "moex_secid", "mark_price_pct",
               "accrued_ccy", "mv_rub", "book_value_rub", "purchase_date", "purchase_price_pct", "purchase_yield_pct",
-              "contract_rate_pct")
+              "contract_rate_pct", "maturity_date", "risk_dv01_rub", "risk_cs01_rub")
 """position_input columns of the private contract v1 beyond secid (instrument_id) and quantity."""
 CURRENT_SET = ("valid_date DESC, coalesce(priority, 0) DESC, report_date DESC NULLS LAST, report_ts DESC NULLS LAST,"
                " seq DESC NULLS LAST, generated_at DESC NULLS LAST, file_mtime DESC NULLS LAST, recorded_at DESC,"
@@ -211,10 +215,12 @@ def positions_for(con: psycopg.Connection, valid_date: date, *, known_at: dateti
     # legacy inputs hash as before S7a; inbox rows add their canonical v1 fields (not src, not x: 08 §6.6)
     canon = json.dumps([rows, canon_extra] if canon_extra else rows, separators=(",", ":"), ensure_ascii=False,
                        sort_keys=True)
+    used = {b for _, b, *_ in sets}
     return PositionInputs(rows, ids, {b: d for _, b, d, *_ in sets}, known_at,  # type: ignore[arg-type]
                           hashlib.sha256(canon.encode()).hexdigest(), extra,
                           {b: {"source": src, "report_date": rd, "inbox_file_sha256": sha, "file_name": name}
-                           for _, b, _, src, rd, sha, name in sets})
+                           for _, b, _, src, rd, sha, name in sets},
+                          {b["book_id"]: b for b in current_books(con, valid_date, known_at) if b["book_id"] in used})
 
 
 def current_sets(con: psycopg.Connection, valid_date: date) -> tuple[list[int], int]:
@@ -271,7 +277,8 @@ def store_inbox_set(con: psycopg.Connection, *, book_id: str, valid_date: date, 
 
 
 _NUMERIC = {"face_amount_ccy", "face_outstanding_ccy", "amount_ccy", "mark_price_pct", "accrued_ccy", "mv_rub",
-            "book_value_rub", "purchase_price_pct", "purchase_yield_pct", "contract_rate_pct"}
+            "book_value_rub", "purchase_price_pct", "purchase_yield_pct", "contract_rate_pct", "risk_dv01_rub",
+            "risk_cs01_rub"}
 
 
 # --- books (08 §7, §10 books) --------------------------------------------------------------------------

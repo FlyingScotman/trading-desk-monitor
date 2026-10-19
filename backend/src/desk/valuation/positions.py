@@ -10,12 +10,15 @@ core (``direct``). ``merge`` puts the two back in the inputs' order for ``desk_r
   outstanding on the business date (``bonds.face_on``). Two figures more than half a bond apart: the quantity wins,
   with a ``quantity_face_mismatch`` note in the published assumptions.
 - Unmapped bond (no instrument, or no number of bonds): rung ``reported_value``, the bank's own figure: ``mv_rub``,
-  else ``mark_price_pct`` x face (+ ``accrued_ccy``) at the CBR rate; no risk (DV01 and CS01 0). Nothing at all:
-  not valued, reason ``unmapped_instrument``.
+  else ``mark_price_pct`` x face (+ ``accrued_ccy``) at the CBR rate; the report's risk (``reported_risk``) when it
+  gives one, else none (DV01 and CS01 0). Nothing at all: not valued, reason ``unmapped_instrument``.
 - FX row: ``amount_ccy`` x the rate of the business date (``fallback.fx_rate``; RUB at 1); its FX delta is the amount
   in currency, as a foreign-face bond's (``position_row``), no rates risk. ``value_date`` is shown, not discounted
   (S7a): quality ``market_value`` up to spot (T+2 business days), ``assumed`` for a forward.
-- OTC and other rows: not valued, reason ``asset_class_not_supported_s7a``.
+- OTC and other rows (and any asset class this module does not know): rung ``reported_value`` at the report's
+  ``mv_rub``, with its risk (``reported_risk``): ``risk_dv01_rub`` in the rates bucket of ``RISK_BUCKETS`` whose pillar
+  is nearest ``maturity_date`` (no maturity, or one already past: the shortest bucket, said in the assumptions),
+  ``risk_cs01_rub`` as CS01. Without ``mv_rub``: not valued, reason ``no_reported_value`` (in coverage, no fact).
 """
 
 from __future__ import annotations
@@ -26,7 +29,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import Any
 
-from rub_fixed_income import RISK_BUCKETS
+from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
 
 from ..inbox.schema import load_schema, norm_ccy
 from ..orchestrator import EodContext, Outcome
@@ -99,17 +102,41 @@ def _bonds(ctx: EodContext, secid: str, qty: float | None, x: dict[str, Any]) ->
     return n, notes
 
 
+def reported_risk(ctx: EodContext, x: dict[str, Any]) -> tuple[dict[str, float], float, list[str]]:
+    """The report's own risk of a row valued without core: (bucket DV01, CS01, notes). ``risk_dv01_rub`` goes whole
+    into the bucket whose pillar is nearest the years to ``maturity_date``; no maturity or a past one: the
+    shortest bucket. Both are the bank's figures (approximate), so said in the notes."""
+    buckets, notes = dict.fromkeys(RISK_BUCKETS, 0.0), []
+    dv01, cs01 = x.get("risk_dv01_rub"), x.get("risk_cs01_rub")
+    if dv01:
+        mat = x.get("maturity_date")
+        t = (mat - ctx.business_date).days / 365.25 if mat else None
+        i = 0 if t is None or t <= 0 else min(range(len(RISK_PILLARS)), key=lambda k: abs(RISK_PILLARS[k] - t))
+        buckets[RISK_BUCKETS[i]] = dv01
+        where = (f"maturity {mat}" if t is not None and t > 0 else
+                 f"maturity {mat} not after {ctx.business_date}: shortest bucket" if mat else
+                 "no maturity_date: shortest bucket")
+        notes.append(f"reported_risk: DV01 {dv01:g} RUB/bp of the report in bucket {RISK_BUCKETS[i]} ({where}),"
+                     " approximate")
+    if cs01:
+        notes.append(f"reported_risk: CS01 {cs01:g} RUB/bp of the report")
+    return buckets, cs01 or 0.0, notes
+
+
 def _valuation(ctx: EodContext, kind: str, qty: float, pv: float, quality: str, why: list[str], *,
                price: float = math.nan, accrued: float = 0.0, face: float = math.nan,
-               horizon: date | None = None) -> BondValuation:
-    """A valuation without core: PV only, no risk."""
+               horizon: date | None = None, buckets: dict[str, float] | None = None,
+               cs01: float = 0.0) -> BondValuation:
+    """A valuation without core: PV, and only the risk given (``reported_risk``)."""
     bd = ctx.business_date
+    buckets = buckets or dict.fromkeys(RISK_BUCKETS, 0.0)
     return BondValuation(
         secid="", quantity=qty, valuation_date=bd, settlement=bd, horizon_date=horizon or bd,
         horizon_kind="value_date" if horizon else "unknown", price_basis=kind, clean_pct=price, accrued_rub=accrued,
         face_rub=face, current_coupon_pct=None, dirty_rub=pv / qty if qty else math.nan, pv_rub=pv, ytm_pct=math.nan,
-        macaulay_years=math.nan, modified_duration=math.nan, z_spread_bp=math.nan, spread_kind=kind, dv01_rub=0.0,
-        buckets=dict.fromkeys(RISK_BUCKETS, 0.0), spread01_rub=0.0, calculation_id=f"desk-{kind}:{bd}",
+        macaulay_years=math.nan, modified_duration=math.nan, z_spread_bp=math.nan,
+        spread_kind="credit" if cs01 else kind, dv01_rub=math.fsum(buckets.values()), buckets=buckets,
+        spread01_rub=cs01, calculation_id=f"desk-{kind}:{bd}",
         quality=quality, assumptions=tuple(why))
 
 
@@ -122,10 +149,11 @@ def _reported(ctx: EodContext, qty: float | None, x: dict[str, Any], reason: str
     """Rung ``reported_value``: the bank's figure for a bond we cannot value ourselves."""
     o = Outcome(None, None, None, reason=reason)  # type: ignore[arg-type]
     q = qty if qty is not None else 1.0
+    buckets, cs01, risk = reported_risk(ctx, x)
     if x.get("mv_rub") is not None:
         o.valuation = _valuation(ctx, "reported", q, x["mv_rub"], "reported_value",
-                                 [*why, "reported_value: PV = the report's mv_rub, no risk"],
-                                 price=x.get("mark_price_pct") or math.nan)
+                                 [*why, "reported_value: PV = the report's mv_rub" + ("" if risk else ", no risk"),
+                                  *risk], price=x.get("mark_price_pct") or math.nan, buckets=buckets, cs01=cs01)
         return o
     f = next((f for f in ("face_outstanding_ccy", "face_amount_ccy") if x.get(f) is not None), None)
     ccy = x.get("ccy") or "RUB"
@@ -139,10 +167,10 @@ def _reported(ctx: EodContext, qty: float | None, x: dict[str, Any], reason: str
         acc = x.get("accrued_ccy")
         why += [f"reported_value: PV = mark {x['mark_price_pct']:g}% x face {face:g} {ccy}"
                 + (f" + accrued {acc:g}" if acc is not None else ", accrued unknown: 0")
-                + (f", x {fx[1]} {fx[0]:g}" if ccy != "RUB" else "") + ", no risk"]
+                + (f", x {fx[1]} {fx[0]:g}" if ccy != "RUB" else "") + ("" if risk else ", no risk"), *risk]
         pv = (x["mark_price_pct"] / 100 * face + (acc or 0.0)) * fx[0]
         o.valuation = _valuation(ctx, "reported", q, pv, "reported_value", why, price=x["mark_price_pct"],
-                                 accrued=(acc or 0.0) * fx[0], face=face * fx[0])
+                                 accrued=(acc or 0.0) * fx[0], face=face * fx[0], buckets=buckets, cs01=cs01)
         return o
     o.reason, o.detail = reason.split(":")[0], f"{_source_id(x)}: no mv_rub, no mark price with a face"
     return o
@@ -163,6 +191,19 @@ def _fx(ctx: EodContext, x: dict[str, Any]) -> Outcome:
         why.append(f"forward to {vd}: today's rate, not discounted (S7a)")
     o.valuation = _valuation(ctx, "fx", amount, amount * fx[0], "assumed" if forward else "market_value", why,
                              face=fx[0], horizon=vd)
+    return o
+
+
+def _otc(ctx: EodContext, qty: float | None, x: dict[str, Any], kind: str) -> Outcome:
+    """An otc/other row: the report's mv_rub and risk (rung ``reported_value``), else not valued."""
+    if x.get("mv_rub") is None:
+        return Outcome(None, None, None, reason="no_reported_value",  # type: ignore[arg-type]
+                       detail=f"{kind} {_source_id(x)}: no mv_rub")
+    o = Outcome(None, None, None)  # type: ignore[arg-type]
+    buckets, cs01, risk = reported_risk(ctx, x)
+    o.valuation = _valuation(ctx, "reported", qty if qty is not None else 1.0, x["mv_rub"], "reported_value",
+                             [f"{kind}: PV = the report's mv_rub" + ("" if risk else ", no risk reported"), *risk],
+                             buckets=buckets, cs01=cs01)
     return o
 
 
@@ -203,8 +244,7 @@ def plan(ctx: EodContext, inputs: PositionInputs) -> BookPlan:
             p.direct[pid] = _fx(ctx, x)
             continue
         if kind != "bond":
-            p.direct[pid] = Outcome(None, None, None, reason="asset_class_not_supported_s7a",  # type: ignore[arg-type]
-                                    detail=kind)
+            p.direct[pid] = _otc(ctx, qty, x, kind)
             continue
         notes = []
         if secid is None or secid not in ctx.static.bonds:

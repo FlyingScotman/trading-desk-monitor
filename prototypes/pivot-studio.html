@@ -332,7 +332,10 @@ const fmtDate = s => s ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(0,
 const BK = D.BUCKETS;
 const MAT_B = ['<1Y', '1–3Y', '3–5Y', '5–10Y', '>10Y'];
 const FUND = 'Фондирование';
-const SEG = ['Гос', 'Корп', 'Секьюритизация', 'Деривативы', 'FX'];
+// Сегменты: известные, затем встретившиеся в данных (иначе позиция с новым сегментом не попала бы в фильтр).
+const SEG_KNOWN = ['Гос', 'Суб', 'Корп', 'Секьюритизация', 'Деривативы', 'FX'];
+const SEG = SEG_KNOWN.filter(s => s !== 'Суб' || D.positions.some(p => p.segment === s))
+  .concat([...new Set(D.positions.map(p => p.segment))].filter(s => s && !SEG_KNOWN.includes(s)));
 const AC = ['ОФЗ-ПД', 'ОФЗ-ПК', 'Корп RUB фикс', 'Корп RUB флоатер', 'Корп валютные', 'Суверен валютный', 'Секьюритизация', 'IRS', 'XCCY', 'CDS', 'FX'];
 const CCYS = ['RUB'].concat(Object.keys(D.FX).filter(c => c !== 'RUB'));
 const BOOK_KEYS = Object.keys(D.BOOKS);

@@ -3,13 +3,17 @@ produces. A port of that function onto the store's rows (run_position.fact/pnl, 
 writer's defaults (zero cs01/jtd, nonzero risk/FX/gamma only, RUB at 1) are applied here. What the store
 does not hold yet (funding, OCP, scenario results, official PnL, CBR meetings, bond quotes) is rendered as the tdm
 assembler renders a run without it. ``history`` is the default runs of the earlier dates, where tdm's
-desk_history holds the latest published EOD run of each date (any cut). compat, removed with window.DESK (M7);
-never extended."""
+desk_history holds the latest published EOD run of each date (any cut). A position the run did not value (no
+fact: no data at all, an OTC row without the report's value) is listed after the valued ones with ``notValued``,
+no PV (``mvRub`` null), zero risk and PnL and its reason in ``extra``, so the positions list shows it and no total
+moves; it has no segment and no instrument type (the one addition beyond tdm's assembler, which drops such a
+position). compat, removed with window.DESK (M7); never extended otherwise."""
 
 from __future__ import annotations
 
 import math
 from datetime import date, timedelta
+from decimal import Decimal
 from typing import Any
 
 from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
@@ -107,6 +111,43 @@ def run_totals(rows) -> tuple[float, float, float, float]:
     facts = [r["fact"] for r in rows]  # SQLite SUM is compensated too
     return (math.fsum(off), math.fsum(exp), math.fsum(p.get("dv01") or 0.0 for p in facts),
             math.fsum(p.get("cs01") or 0.0 for p in facts))
+
+
+NOT_VALUED_KIND = {"otc": ("OTC-деривативы", "Деривативы"), "other": ("Прочее", "Прочее"), "fx": ("Валюта", "FX")}
+"""asset_class of an unvalued report row -> (asset class, segment), as ``tdm_run.DIRECT_KIND`` names a valued one;
+a bond and a legacy row get none (segment ``—`` in the Desk Monitor)."""
+INPUT_FIELDS = ("asset_class", "ccy", "source_instrument_id", "source_instrument_name", "isin", "deal_id",
+                "value_date", "maturity_date", "amount_ccy", "face_amount_ccy", "face_outstanding_ccy",
+                "mark_price_pct", "mv_rub", "risk_dv01_rub", "risk_cs01_rub", "src", "x")
+"""What an unvalued position shows of its report row (position_input of the run's position sets)."""
+
+
+def _json(v: Any) -> Any:
+    return v.isoformat() if isinstance(v, date) else float(v) if isinstance(v, Decimal) else v
+
+
+def _not_valued(r: dict[str, Any], books: dict[str, dict], x: dict[str, Any] | None) -> dict[str, Any]:
+    """A run_position without fact as a Desk Monitor position: visible, PV empty, nothing in any total. ``x``: its
+    report row (``INPUT_FIELDS``, None for a legacy row): name, currency, maturity and the raw x_* fields."""
+    x = {k: _json(v) for k, v in (x or {}).items() if v is not None}
+    kind = (x.get("asset_class") or "").lower()
+    aclass, segment = (None, None) if kind in ("", "bond") else NOT_VALUED_KIND.get(kind, NOT_VALUED_KIND["other"])
+    zero = dict.fromkeys(("carry", "rolldown", "rates", "spread", "fx", "funding", "convexity", "newTrades", "other",
+                          "fxGross", "fxFunding", "fxGrossCbr", "fxFundingCbr", "fxCbr", "explained", "explainedCbr",
+                          "fxBasis", "unexplained"), 0.0)
+    return {
+        "id": r["position_id"], "book": r["book_id"], "assetClass": aclass, "segment": segment, "instrType": None,
+        "name": x.get("source_instrument_name") or x.get("source_instrument_id") or r["secid"] or r["position_id"],
+        "isin": x.get("isin"), "issuer": None, "issuerGroup": None, "sector": None, "rating": None,
+        "ccy": x.get("ccy"), "maturity": x.get("maturity_date") or x.get("value_date"), "tenorY": None, "side": None,
+        "notional": None,
+        "notionalRub": None, "price": None, "mv": None, "mvRub": None, "dv01": 0.0, "cs01": 0.0, "ofzSpr01": 0.0,
+        "risk": {}, "fxDelta": {}, "jtd": 0.0, "gamma": [], **gamma_summary([], None, None, 0.0),
+        "entity": books.get(r["book_id"], {}).get("entity", "—"), "newToday": False, "notValued": True,
+        "pnl": {**zero, "official": None, "breakNote": None},
+        "extra": {"quality": "not_valued", "valuation": "not_valued", "reason": r["reason"],
+                  "quantity": r["quantity"], **({"reported": x} if x else {})},
+    }
 
 
 def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
@@ -222,6 +263,15 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         if p.get("extra") is not None:
             pos["extra"] = p["extra"]
         positions.append(pos)
+    unvalued = con.execute("SELECT position_id, book_id, secid, quantity, reason FROM run_position WHERE run_id = %s"
+                           " AND fact IS NULL ORDER BY ord", (rid,)).fetchall()
+    inputs = {i["position_id"]: i for i in con.execute(
+        f"SELECT position_id, {', '.join(INPUT_FIELDS)} FROM position_input WHERE set_id = ANY(%s)"
+        " AND position_id = ANY(%s)", (run["position_set_ids"], [r["position_id"] for r in unvalued]))} \
+        if unvalued else {}
+    for r in unvalued:
+        i = inputs.get(r["position_id"])
+        positions.append(_not_valued(r, books, {k: v for k, v in i.items() if k != "position_id"} if i else None))
 
     scenarios = [{"id": s["scenario_id"], "name": s["name"], "kind": s["kind"], "description": s["description"],
                   **s["definition"]} for s in con.execute(

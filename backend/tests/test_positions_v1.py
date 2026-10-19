@@ -143,15 +143,55 @@ def test_fx_spot_forward_and_rub(ctx):
     assert (r.quality, r.pv_rub) == ("market_value", 5e6)
 
 
-def test_otc_not_valued(ctx):
-    o = one(ctx, {"asset_class": "otc", "source_instrument_id": "IRS-1"})
-    assert o.valuation is None and o.reason == "asset_class_not_supported_s7a"
+def test_otc_without_mv_rub_not_valued(ctx):
+    o = one(ctx, {"asset_class": "otc", "source_instrument_id": "IRS-1", "ccy": "RUB", "risk_dv01_rub": -5.0})
+    assert o.valuation is None and o.reason == "no_reported_value" and "IRS-1" in o.detail
+
+
+def test_otc_at_reported_value_with_bucketed_risk(ctx):
+    """I3: mv_rub is the PV (reported_value), risk_dv01_rub whole in the bucket nearest maturity_date, CS01 as is."""
+    o = one(ctx, {"asset_class": "otc", "source_instrument_id": "IRS-2", "ccy": "RUB", "mv_rub": "125000.5",
+                  "maturity_date": "2031-01-10", "risk_dv01_rub": "-850.25", "risk_cs01_rub": -12.0})
+    v = o.valuation
+    assert (v.quality, v.pv_rub, v.dv01_rub, v.spread01_rub, v.spread_kind) == (
+        "reported_value", 125000.5, -850.25, -12.0, "credit")  # 4.24 years: the 5Y pillar is nearest
+    assert v.buckets["5Y"] == -850.25 and sum(1 for x in v.buckets.values() if x) == 1
+    assert any("bucket 5Y" in a and "approximate" in a for a in v.assumptions)
+    short = one(ctx, {"asset_class": "other", "source_instrument_id": "X", "ccy": "RUB", "mv_rub": 1.0,
+                      "risk_dv01_rub": 3.0})  # no maturity: the shortest bucket, flagged
+    assert short.valuation.buckets["1M"] == 3.0 and any("no maturity_date" in a for a in short.valuation.assumptions)
+    past = one(ctx, {"asset_class": "otc", "source_instrument_id": "Y", "ccy": "RUB", "mv_rub": 1.0,
+                     "maturity_date": date(2026, 1, 1), "risk_dv01_rub": 3.0})
+    assert past.valuation.buckets["1M"] == 3.0
+    near = one(ctx, {"asset_class": "otc", "source_instrument_id": "Z", "ccy": "RUB", "mv_rub": 1.0,
+                     "maturity_date": date(2027, 1, 20), "risk_dv01_rub": 3.0})  # 0.27 years: 3M
+    assert near.valuation.buckets["3M"] == 3.0
+    bare = one(ctx, {"asset_class": "otc", "source_instrument_id": "W", "ccy": "RUB", "mv_rub": -7.0})
+    assert bare.valuation.dv01_rub == 0.0 and bare.valuation.spread01_rub == 0.0
+    weird = one(ctx, {"asset_class": "swaption", "source_instrument_id": "V", "ccy": "RUB", "mv_rub": 2.0})
+    assert weird.valuation.quality == "reported_value"  # an asset class nobody knows: valued as other, no crash
+
+
+def test_unmapped_bond_takes_the_reported_risk(ctx):
+    o = one(ctx, bond(source_instrument_id="XS009", mv_rub=1e6, maturity_date=date(2036, 3, 1), risk_dv01_rub=-900.0,
+                      risk_cs01_rub=-800.0))
+    v = o.valuation
+    assert v.quality == "reported_value" and v.buckets["10Y"] == -900.0 and v.spread01_rub == -800.0
+
+
+def test_subfederal_segment_is_published(ctx):
+    """A subfederal or municipal bond has segment Суб (the Desk Monitor gives it a chip from the data)."""
+    _, [(pid, book, o)] = run(ctx, inputs([("P1", "CORP", FLOATER, 10.0)]))
+    o.terms = dataclasses.replace(o.terms, bond_class="subfederal")
+    row = tdm_run.run_content(ctx, [(pid, book, o)], None, {}).rows[0]
+    assert (row["segment"], row["asset_class"]) == ("Суб", "Субфедеральные")
 
 
 def test_publish_api_and_compat(ctx, store_url, tmp_path):
     rows = [("L1", "OFZ", "SU26238RMFS4", 10.0), ("B1", "CORP", None, None), ("B2", "CORP", None, 10.0),
             ("B3", "CORP", None, None), ("B4", "CORP", None, None), ("FX1", "TSY", None, None),
-            ("FX2", "CORP", None, None), ("FX3", "CORP", None, None), ("O1", "CORP", None, None)]
+            ("FX2", "CORP", None, None), ("FX3", "CORP", None, None), ("O1", "CORP", None, None),
+            ("O2", "CORP", None, None)]
     inp = inputs(rows, {
         "B1": bond(source_instrument_id="RU000A109XR1", isin=FLOATER, face_outstanding_ccy=8_000.0,
                    mark_price_pct=99.0, mv_rub=8000.0, src="R12", x={"x_desk": "a"}),
@@ -161,7 +201,9 @@ def test_publish_api_and_compat(ctx, store_url, tmp_path):
         "FX1": {"asset_class": "fx", "ccy": "USD", "amount_ccy": 1000.0},
         "FX2": {"asset_class": "fx", "ccy": "USD", "amount_ccy": -400.0, "value_date": date(2027, 1, 15)},
         "FX3": {"asset_class": "fx", "ccy": "RUB", "amount_ccy": 5e6},
-        "O1": {"asset_class": "otc", "source_instrument_id": "IRS-1"}})
+        "O1": {"asset_class": "otc", "source_instrument_id": "IRS-1"},
+        "O2": {"asset_class": "otc", "source_instrument_id": "IRS-2", "source_instrument_name": "IRS 5Y", "ccy": "RUB",
+               "mv_rub": 5e5, "maturity_date": date(2031, 1, 10), "risk_dv01_rub": -850.0}})
     _, positions = run(ctx, inp)
     with store.connect(store_url) as con:
         rid, status, warnings = desk_run.publish(con, ctx, positions, prev=None, inputs=inp)
@@ -171,7 +213,8 @@ def test_publish_api_and_compat(ctx, store_url, tmp_path):
     c = TestClient(create_app(store_url))
     got = {p["position_id"]: p for p in c.get(f"/api/v1/runs/{rid}/positions").json()["positions"]}
     assert [got[k]["quality"] for k, *_ in rows] == ["exact", "assumed", "reported_value", "reported_value", None,
-                                                     "market_value", "assumed", "market_value", None]
+                                                     "market_value", "assumed", "market_value", None,
+                                                     "reported_value"]
     assert (got["B1"]["secid"], got["B1"]["quantity"]) == (FLOATER, pytest.approx(10.0))
     b1 = got["B1"]["fact"]["extra"]
     assert b1["reported"] == {"asset_class": "bond", "ccy": "RUB", "source_instrument_id": FLOATER, "isin": FLOATER,
@@ -180,10 +223,21 @@ def test_publish_api_and_compat(ctx, store_url, tmp_path):
     assert got["FX1"]["secid"] is None and got["FX1"]["fact"]["fx_delta"] == {"USD": pytest.approx(1000.0)}
     assert got["FX3"]["fact"].get("fx_delta") is None and got["FX2"]["fact"]["maturity"] == "2027-01-15"
     assert got["B2"]["fact"]["name"] == "Bond abroad" and got["B2"]["dv01_rub"] == 0.0
-    assert got["O1"]["reason"] == "asset_class_not_supported_s7a: otc" and got["O1"]["fact"] is None
+    assert got["O1"]["reason"] == "no_reported_value: otc IRS-1: no mv_rub" and got["O1"]["fact"] is None
+    o2 = got["O2"]["fact"]
+    assert (got["O2"]["pv_rub"], got["O2"]["dv01_rub"], o2["instr_type"], o2["segment"]) == (5e5, -850.0, "OTC",
+                                                                                           "Деривативы")
+    assert o2["risk"] == {"RUB OFZ": {**dict.fromkeys(o2["risk"]["RUB OFZ"], 0.0), "5Y": -850.0}}
+    assert o2["extra"]["quality"] == "reported_value" and o2["maturity"] == "2031-01-10" and o2["name"] == "IRS 5Y"
+    desk = c.get(f"/api/v1/compat/desk?run_id={rid}").json()  # the Desk Monitor: O2 valued, O1 listed without PV
+    dp = {p["id"]: p for p in desk["positions"]}
+    assert dp["O2"]["mvRub"] == 5e5 and dp["O2"]["risk"]["RUB OFZ"][6] == -850.0 and dp["O2"]["segment"] == "Деривативы"
+    assert dp["O1"]["notValued"] and dp["O1"]["mvRub"] is None and dp["O1"]["extra"]["quality"] == "not_valued"
+    assert dp["FX1"]["instrType"] == "FX" and dp["FX1"]["mvRub"] == pytest.approx(1000 * USD)
+    assert desk["history"][-1]["dv01"] == pytest.approx(sum(p["fact"]["dv01"] for p in got.values() if p["fact"]))
     detail = c.get(f"/api/v1/runs/{rid}").json()
     assert detail["lineage"]["positions"]["sources"]["CORP"]["report_date"] == "2026-10-16"
-    assert detail["coverage"]["_total"]["reported_value"] == 2 and detail["coverage"]["_total"]["not_valued"] == 2
+    assert detail["coverage"]["_total"]["reported_value"] == 3 and detail["coverage"]["_total"]["not_valued"] == 2
     assert c.get(f"/api/v1/runs/{rid}/risk").status_code == 200
     with store.connect(store_url) as conn:  # T2: an FX forward is assumed but has no bond to reprice
         con = conn.cursor(row_factory=dict_row)
@@ -201,8 +255,67 @@ def test_publish_api_and_compat(ctx, store_url, tmp_path):
     js = c.get("/desk-data.js").text
     desk = json.loads(js[len("window.DESK = "):-2])
     pos = {p["id"]: p for p in desk["positions"]}
-    assert set(pos) == {k for k, *_ in rows} - {"B4", "O1"}
+    assert set(pos) == {k for k, *_ in rows}  # B4 and O1 are not valued: listed after the rest, without PV
+    assert [k for k in pos if pos[k].get("notValued")] == ["B4", "O1"] and pos["B4"]["mvRub"] is None
     assert (pos["FX1"]["instrType"], pos["FX1"]["ccy"], pos["FX1"]["fxDelta"]) == ("FX", "USD",
                                                                                   {"USD": pytest.approx(1000.0)})
     assert pos["B2"]["name"] == "Bond abroad" and pos["B2"]["instrumentId"] == "XS000"
     assert set(desk["BOOKS"]) == {"OFZ", "CORP", "TSY"} and desk["BOOKS"]["TSY"]["bookType"] == "DERIVS"
+
+
+def test_books_from_the_store_and_risk_fields_round_trip(ctx, store_url, tmp_path):
+    """The run's book reference is the store's book_rev (name, desk, entity, book_type), not the demo BOOKS; the
+    demo books keep theirs. The new v1 fields survive the store (position_input) into the valuation."""
+    d = date.fromisoformat(DATE)
+    with store.connect(store_url) as con:
+        store.store_books(con, [
+            {"book_id": "RATES1", "name": "Ставки 1", "desk": "Rates", "book_type": "TRADING", "entity": "ENT-A",
+             "active": True},
+            {"book_id": "DER1", "name": "Деривативы 1", "desk": "Derivs", "book_type": "DERIVS", "entity": "ENT-B",
+             "active": True, "trader": "T1"}], "fp")
+        con.execute("INSERT INTO inbox_file (sha256, path, name, size_bytes, mtime) VALUES (%s, 'p.csv', 'p.csv', 1,"
+                    " now())", ("a" * 64,))
+        store.store_inbox_set(
+            con, book_id="DER1", valid_date=d, source="positions_csv", priority=None, report_date=d, report_ts=None,
+            seq=None, generated_at=None, file_mtime=datetime.now(UTC), file_name="p.csv", sha256="a" * 64,
+            adapter_fingerprint="fp", unit_hash="u", rows=[
+                {"_src": "L2", "book_id": "DER1", "position_id": "DER1|IRS-7", "asset_class": "otc",
+                 "source_instrument_id": "IRS-7", "ccy": "RUB", "mv_rub": "125000.5", "maturity_date": "2031-01-10",
+                 "risk_dv01_rub": "-850.25", "risk_cs01_rub": "-12"},
+                {"_src": "L3", "book_id": "DER1", "position_id": "DER1|IRS-8", "asset_class": "otc",
+                 "source_instrument_id": "IRS-8", "source_instrument_name": "IRS 8", "ccy": "USD",
+                 "maturity_date": "2029-03-01", "x_notional": "1000000", "x_kind": "IRS"}])
+        store.load_positions(con, [("L1", "RATES1", "SU26238RMFS4", 10.0), ("L2", "OFZ", "SU26238RMFS4", 5.0)],
+                             valid_date=d, source_name="tests", source_sha256="-")
+        inp = store.positions_for(con, d)
+        assert set(inp.books) == {"RATES1", "DER1"} and inp.books["DER1"]["entity"] == "ENT-B"
+        x = inp.extra["DER1|IRS-7"]
+        assert (x["maturity_date"], x["risk_dv01_rub"], x["risk_cs01_rub"]) == (date(2031, 1, 10), -850.25, -12.0)
+        _, positions = run(ctx, inp)
+        rid, status, _ = desk_run.publish(con, ctx, positions, prev=None, inputs=inp)
+        books = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'books'", (rid,)).fetchone()[0]
+    assert status == "complete"
+    by = {b["book_id"]: b for b in books}
+    assert (by["DER1"]["name"], by["DER1"]["desk"], by["DER1"]["entity"], by["DER1"]["book_type"],
+            by["DER1"]["trader"]) == ("Деривативы 1", "Derivs", "ENT-B", "DERIVS", "T1")
+    assert (by["RATES1"]["entity"], by["OFZ"]["entity"], by["OFZ"]["name"]) == ("ENT-A", "Демо", "ОФЗ (демо)")
+    desk = TestClient(create_app(store_url)).get(f"/api/v1/compat/desk?run_id={rid}").json()
+    assert {b["entity"] for b in desk["BOOKS"].values()} == {"ENT-A", "ENT-B", "Демо"}
+    pos = {p["id"]: p for p in desk["positions"]}
+    assert pos["DER1|IRS-7"]["dv01"] == -850.25 and pos["DER1|IRS-7"]["entity"] == "ENT-B"
+    nv = pos["DER1|IRS-8"]  # only x_* fields, as an adapter sends a derivative whose units are unconfirmed
+    assert nv["notValued"] and nv["entity"] == "ENT-B" and nv["mvRub"] is None and nv["dv01"] == 0
+    assert (nv["name"], nv["ccy"], nv["maturity"], nv["segment"], nv["assetClass"]) == (
+        "IRS 8", "USD", "2029-03-01", "Деривативы", "OTC-деривативы")
+    assert nv["extra"]["reported"]["x"] == {"x_notional": "1000000", "x_kind": "IRS"} and nv["extra"]["reported"]["src"] == "L3"
+    # the legacy tdm store has no OTC type: the row is left out there with a WARN, nothing fails
+    _, st, warns = tdm_run.publish(str(tmp_path / "tdm.db"), ctx, positions, prev=None, inputs=inp)
+    assert st == "complete" and any("DER1|IRS-7" in w for w in warns)
+
+
+def test_book_rows_fallbacks():
+    rows = tdm_run.book_rows(["OFZ", "REAL", "META"], {"META": {"book_id": "META", "name": "M", "desk": "D",
+                                                                 "book_type": "HTM", "entity": "E"}})
+    assert [r["book_id"] for r in rows] == ["OFZ", "REAL", "META"]
+    assert rows[0]["entity"] == "Демо" and (rows[1]["name"], rows[1]["entity"]) == ("REAL", "—")
+    assert (rows[2]["name"], rows[2]["desk"], rows[2]["entity"], rows[2]["book_type"]) == ("M", "D", "E", "HTM")
