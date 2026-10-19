@@ -32,6 +32,7 @@ from ..scenario.definition import definition_hash, normalize
 from ..scenario.taylor import risk_payload
 from ..settings import REPO_ROOT
 from . import compat
+from .autopilot_routes import router as autopilot_router
 from .models import (
     COMPAT,
     AggregateRow,
@@ -352,6 +353,8 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
             raise ApiError(404, "not_found", missing)
         return desk
 
+    app.include_router(autopilot_router)
+
     built = Path(app_dir) if app_dir else APP_DIR
     if built.is_dir():  # before "/": the frontend build, absent until npm run build
         @app.get("/app", include_in_schema=False)
@@ -366,8 +369,10 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
 
 def serve(store_url: str, host: str = "127.0.0.1", port: int = 8000, static_dir: Path | None = None,
-          snapshots: Path | None = None, adapter_status: Callable[[], str] | None = None) -> None:
-    """``snapshots``: the snapshot cache the scenario worker reprices from; None runs no worker."""
+          snapshots: Path | None = None, adapter_status: Callable[[], str] | None = None,
+          autopilot: Any = None) -> None:
+    """``snapshots``: the snapshot cache the scenario worker reprices from; None runs no worker.
+    ``autopilot``: a ``desk.autopilot.Autopilot``, started here and shown by ``/api/v1/autopilot/*``."""
     import uvicorn
 
     from ..marketdata.bundle import SnapshotDir
@@ -375,5 +380,9 @@ def serve(store_url: str, host: str = "127.0.0.1", port: int = 8000, static_dir:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     if snapshots is not None:
         jobs.Worker(store_url, SnapshotDir(snapshots)).start()
+    app = create_app(store_url, static_dir, adapter_status=adapter_status)
+    if autopilot is not None:
+        app.state.autopilot = autopilot
+        autopilot.start()
     # the desk.api logger logs every request with its request id, so no uvicorn access log
-    uvicorn.run(create_app(store_url, static_dir, adapter_status=adapter_status), host=host, port=port, access_log=False)
+    uvicorn.run(app, host=host, port=port, access_log=False)

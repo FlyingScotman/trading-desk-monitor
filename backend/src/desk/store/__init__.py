@@ -215,6 +215,24 @@ def positions_for(con: psycopg.Connection, valid_date: date, *, known_at: dateti
                            for _, b, _, src, rd, sha, name in sets})
 
 
+def current_sets(con: psycopg.Connection, valid_date: date) -> tuple[list[int], int]:
+    """The set ids ``positions_for(valid_date)`` reads now (sorted) and their number of rows, without the rows:
+    the autopilot compares them with a run's ``position_set_ids`` every cycle."""
+    ids, n = con.execute(
+        "WITH s AS (SELECT DISTINCT ON (book_id) set_id FROM position_set WHERE valid_date <= %s"
+        f" ORDER BY book_id, {CURRENT_SET}) SELECT coalesce(array_agg(set_id ORDER BY set_id), '{{}}'),"
+        " (SELECT count(*) FROM position_input WHERE set_id IN (SELECT set_id FROM s)) FROM s",
+        (valid_date,)).fetchone()
+    return list(ids), n
+
+
+def position_dates(con: psycopg.Connection, since: date) -> list[date]:
+    """Valid dates of the position sets from ``since`` on, plus the latest one before it (carried forward)."""
+    return [d for (d,) in con.execute(
+        "SELECT DISTINCT valid_date FROM position_set WHERE valid_date >= %(d)s UNION"
+        " SELECT max(valid_date) FROM position_set WHERE valid_date < %(d)s ORDER BY 1", {"d": since}) if d]
+
+
 def store_inbox_set(con: psycopg.Connection, *, book_id: str, valid_date: date, rows: list[dict], source: str,
                     priority: int | None, report_date: date, report_ts: datetime | None, seq: int | None,
                     generated_at: datetime | None, file_mtime: datetime, file_name: str, sha256: str,
@@ -301,6 +319,16 @@ DEFAULT_RUNS = ("SELECT DISTINCT ON (business_date) run_id FROM run"
                 " WHERE status = 'complete' AND run_type = 'EOD'"
                 " AND cut_type IN ('eod_final', 'eod_preliminary')"
                 " ORDER BY business_date, cut_type = 'eod_final' DESC, completed_at DESC, run_id DESC")
+
+
+def default_runs(con: psycopg.Connection, since: date) -> dict[date, dict]:
+    """The default run of each business date from ``since`` on: run_id, its snapshots, position sets (sorted) and
+    completed_at."""
+    return {r[0]: {"run_id": r[1], "market_snapshot_id": r[2], "prev_market_snapshot_id": r[3],
+                   "position_set_ids": sorted(r[4]), "completed_at": r[5]}
+            for r in con.execute(
+                "SELECT business_date, run_id, market_snapshot_id, prev_market_snapshot_id, position_set_ids,"
+                f" completed_at FROM run WHERE run_id IN ({DEFAULT_RUNS}) AND business_date >= %s", (since,))}
 
 
 def carried_spreads(con: psycopg.Connection, before: date) -> dict[str, CarriedSpread]:

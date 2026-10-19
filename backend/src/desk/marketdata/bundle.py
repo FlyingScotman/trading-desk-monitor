@@ -47,6 +47,22 @@ def read_bundle(path: Path) -> Snapshot:
     return Snapshot(sid, doc["kind"], doc["cut_type"], doc["business_date"], doc.get("static_snapshot_id"), doc)
 
 
+_MANIFESTS: dict[tuple[str, int, int], dict[str, Any]] = {}
+
+
+def _manifest(path: Path) -> dict[str, Any]:
+    """The envelope fields ``SnapshotDir`` lists. A bundle is content-addressed and the cache append-only, so it
+    is parsed once per process (an autopilot cycle builds a ``SnapshotDir`` every minute)."""
+    st = path.stat()
+    key = (str(path), st.st_size, st.st_mtime_ns)
+    if key not in _MANIFESTS:
+        with gzip.open(path) as f:
+            doc = json.load(f)
+        _MANIFESTS[key] = {k: doc.get(k) for k in ("kind", "cut_type", "business_date", "static_snapshot_id",
+                                                   "supersedes")}
+    return _MANIFESTS[key]
+
+
 class SnapshotDir:
     """A folder of bundle files (dev export, file drop or a local mirror of the hub)."""
 
@@ -54,10 +70,7 @@ class SnapshotDir:
         self.root = Path(root)
         self._manifests: dict[str, dict[str, Any]] = {}
         for p in sorted(self.root.glob("*.json.gz")):
-            sid = p.name.split(".")[0]
-            with gzip.open(p) as f:
-                doc = json.load(f)
-            self._manifests[sid] = {k: doc.get(k) for k in ("kind", "cut_type", "business_date", "static_snapshot_id")}
+            self._manifests[p.name.split(".")[0]] = _manifest(p)
 
     def get(self, snapshot_id: str) -> Snapshot:
         return read_bundle(self.root / f"{snapshot_id}.json.gz")
@@ -79,7 +92,7 @@ class SnapshotDir:
             raise SnapshotError(f"no {cut_type} market snapshot for {business_date} in {self.root}")
         if len(ids) > 1:
             # Corrections supersede; pick the one no other snapshot supersedes.
-            superseded = {self.get(i).doc.get("supersedes") for i in ids}
+            superseded = {self._manifests[i]["supersedes"] for i in ids}
             ids = [i for i in ids if i not in superseded]
         return self.get(ids[0])
 

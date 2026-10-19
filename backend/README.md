@@ -106,6 +106,16 @@ desk eod --date 2026-10-15         # values the inbox positions; prints each boo
 
 `desk inbox retry --status failed,rejected` offers files again; `desk inbox replay --source S --from D1 --to D2` re-reads archived accepted files and stores a new revision only where the rows changed. When the adapter fails to load, ingestion is off with the reason (`desk inbox status`, `/health/ready`), and runs and the API keep working.
 
+### Daily flow (autopilot)
+
+`desk serve` runs the autopilot (`desk/autopilot.py`), a thread that every `DESK_INBOX_POLL_SECONDS` (60), and at once on `POST /api/v1/autopilot/run`, runs one cycle in this order:
+
+1. **sync**: the `autopilot_sync_last` (5) latest hub dates, every business date with positions in the last two weeks and the hub date before it (flash PnL), and a snapshot whose calendar covers each inbox file still waiting for one; cached dates are skipped (asked again once an hour, for corrections). The drop folder, when set, is imported too. A hub error is shown and the cycle goes on with the cache.
+2. **scan**: `desk inbox scan`. It comes after the sync because a start-of-day report needs a cached calendar covering its date and the day before (otherwise the file waits, `waiting_calendar`, and is retried next cycle).
+3. **eod**: for each cached `eod_final` date of the last two weeks (at least the latest date with positions) that has positions, the `desk eod` run when the date has no default run, or its default run read other position sets (a new revision), another market snapshot or another previous snapshot. Oldest first; a date that failed is retried only when its inputs change.
+
+Settings are read again every cycle. `GET /api/v1/autopilot/status` gives the state, the steps of the last cycle and the latest default run; errors are also logged to `<home>/logs/autopilot.log`. `desk serve --no-autopilot` starts no thread; `--autopilot` runs cycles even when the settings turn it off. `desk cycle` runs one cycle in the foreground and prints it (exit 1 when a step failed; `--date D` also keeps D current, `--no-hub` skips the hub); `windows/daily_backend.bat [hub|drop] [D]` calls it.
+
 ### Offline fallback
 
 When the hub is unreachable (the proxy blocks it), an operator copies `<snapshot_id>.json.gz` bundles into `DESK_SNAPSHOT_DROP` and runs `desk import-drop`. Each file is verified like a download; a bad file is rejected with its reason and not copied.

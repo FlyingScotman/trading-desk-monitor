@@ -1,9 +1,11 @@
 @echo off
-rem Desk backend - daily EOD: snapshots into the cache, then a run of the books in the store.
+rem Desk backend - one autopilot cycle in the foreground (desk cycle): hub snapshots into the cache, the inbox
+rem scan through the private adapter, then the EOD run of every recent business date whose inputs changed.
+rem desk serve runs the same cycle by itself every minute; this file is for a scheduled task or a manual check.
 rem Usage: daily_backend.bat [hub|drop] [YYYY-MM-DD]
-rem   hub  (default) desk eod --sync: pulls the date and the business date before it from the hub
-rem   drop           desk import-drop first: bundles copied by hand into DESK_SNAPSHOT_DROP
-rem The default date is the previous weekday; holidays are not known here, pass the date then.
+rem   hub  (default) pull from the hub; a drop folder (DESK_SNAPSHOT_DROP), when set, is imported too
+rem   drop           no hub: only the bundles copied by hand into DESK_SNAPSHOT_DROP
+rem   YYYY-MM-DD     also sync and keep current this business date (the dates are found by themselves otherwise)
 chcp 65001 >nul
 set "PYTHONUTF8=1"
 cd /d "%~dp0"
@@ -14,12 +16,8 @@ if /i not "%MODE%"=="hub" if /i not "%MODE%"=="drop" (
   echo Usage: daily_backend.bat [hub^|drop] [YYYY-MM-DD]
   exit /b 2
 )
-set "D=%~2"
-if "%D%"=="" for /f "usebackq delims=" %%d in (`Scripts\python.exe -c "import datetime as t; d = t.date.today(); print(d - t.timedelta(days={0: 3, 6: 2}.get(d.weekday(), 1)))"`) do set "D=%%d"
-set "SYNC=--sync"
-if /i "%MODE%"=="drop" (
-  Scripts\desk.exe import-drop || (echo IMPORT FAILED - see errors above & exit /b 1)
-  set "SYNC="
-)
-echo EOD %D% (%MODE%)
-Scripts\desk.exe eod --date %D% %SYNC% || (echo EOD FAILED - see errors above & exit /b 1)
+set "ARGS="
+if /i "%MODE%"=="drop" set "ARGS=--no-hub"
+if not "%~2"=="" set "ARGS=%ARGS% --date %~2"
+echo desk cycle (%MODE%) %~2
+Scripts\desk.exe cycle %ARGS% || (echo CYCLE FAILED - see errors above & exit /b 1)

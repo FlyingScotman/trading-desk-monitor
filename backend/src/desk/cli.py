@@ -13,7 +13,8 @@
     desk inbox retry [--status failed,rejected]    offer files in these statuses again
     desk inbox replay --source S --from D1 --to D2 read archived accepted files again (new revisions if changed)
     desk adapter check [--adapter SPEC] [--dir D] [--stub-ctx] [--json]   the conformance kit (08 §8)
-    desk serve                           desk API + Desk Monitor on http://127.0.0.1:8000, scenario worker
+    desk serve                           desk API + Desk Monitor on http://127.0.0.1:8000, scenario worker, autopilot
+    desk cycle [--date D] [--no-hub]     one autopilot cycle: hub sync -> inbox scan -> EOD of changed dates
     desk openapi --out ../frontend/openapi.json   the API's OpenAPI document (stdout without --out)
 
 Defaults for the snapshot folder, the run store and the report folder come from
@@ -39,6 +40,7 @@ import json
 import sys
 import time
 from collections import Counter
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from itertools import islice
 from pathlib import Path
@@ -84,12 +86,13 @@ def _store(a: argparse.Namespace) -> psycopg.Connection:
     return store.connect(store.resolve_url(a.settings))
 
 
-def _load(con: psycopg.Connection, path: Path, d: str, books: list[str] | None = None) -> None:
+def _load(con: psycopg.Connection, path: Path, d: str, books: list[str] | None = None,
+          out: Callable[[str], None] = print) -> None:
     rows = read_book(path)
     loaded = store.load_positions(con, rows, valid_date=date.fromisoformat(d), source_name=path.name,
                                   source_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
                                   recorded_by=getpass.getuser(), books=books)
-    print(f"positions {path.name} for {d}: " + ", ".join(
+    out(f"positions {path.name} for {d}: " + ", ".join(
         f"{x.book_id} rev {x.revision}" + ("" if x.changed else " unchanged") for x in loaded))
 
 
@@ -103,71 +106,84 @@ def cmd_eod(a: argparse.Namespace) -> int:
         client = HubClient(a.settings)
         dates = [a.date] + list(islice((d for d in cache.hub_dates(client, a.cut) if d < a.date), 1))
         _print_synced(cache.sync(client, Path(a.snapshots), dates, a.cut))
-    sd = SnapshotDir(Path(a.snapshots))
+    eod_run(a.settings, a.date, snapshots=a.snapshots, book=a.book, books=a.books, run_type=run_type,
+            report_dir=a.report_dir, tdm=a.tdm, db=a.db, no_gamma=a.no_gamma, no_pnl=a.no_pnl)
+    return 0
+
+
+def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, store_url: str | None = None,
+            book: str | None = None, books: list[str] | None = None, run_type: str = "EOD",
+            report_dir: str | Path | None = None, tdm: bool = False, db: str | Path | None = None,
+            no_gamma: bool = False, no_pnl: bool = False, out: Callable[[str], None] = print) -> int | None:
+    """The EOD run of date ``d`` (``desk eod`` without its hub pull; the autopilot calls it too): values the
+    books of the store on the cached snapshot of ``d`` and publishes the run. Returns the desk run id, None when
+    the store has no positions for the date. Raises on a missing snapshot or a failed publication."""
+    snapshots = snapshots or settings.snapshot_cache
+    sd = SnapshotDir(Path(snapshots))
     t0 = time.perf_counter()
-    ctx = prepare(sd, a.date)
-    prev_date = sd.previous_market_date(a.date)
+    ctx = prepare(sd, d)
+    prev_date = sd.previous_market_date(d)
     prev = MarketView(sd.market(prev_date)) if prev_date else None
     prov = sd.provenance(ctx.market.snapshot.id)
     origin = (f"hub {prov['hub']}, published {prov['published_at']} ({_age(prov['published_at'])})" if prov
               else f"local file, known_at {ctx.market.snapshot.doc.get('known_at')}")
-    print(f"market {ctx.market.snapshot.id[:12]} ({origin})  static {ctx.static.snapshot.id[:12]}  "
-          f"KBD check {ctx.kbd_check_bp:.4f} bp  previous {prev_date}")
+    out(f"market {ctx.market.snapshot.id[:12]} ({origin})  static {ctx.static.snapshot.id[:12]}  "
+        f"KBD check {ctx.kbd_check_bp:.4f} bp  previous {prev_date}")
     if ctx.point_in_time_warning:
-        print(f"WARN {ctx.point_in_time_warning}")
+        out(f"WARN {ctx.point_in_time_warning}")
 
-    if a.report_dir:
+    if report_dir:
         universe = [(s, 1.0) for s, t in ctx.static.bonds.items() if t.status == "active"]
         rows, summary = validation.build(ctx, value(ctx, universe))
-        path = validation.write(Path(a.report_dir), ctx, rows, summary)
+        path = validation.write(Path(report_dir), ctx, rows, summary)
         by_q = Counter(r["quality"] for r in rows)
-        print(f"universe: {len(rows)} instruments; " + ", ".join(f"{q} {n}" for q, n in by_q.most_common())
-              + f"; report {path}")
+        out(f"universe: {len(rows)} instruments; " + ", ".join(f"{q} {n}" for q, n in by_q.most_common())
+            + f"; report {path}")
         for cls, c in list(summary["by_class"].items())[:8]:
-            print(f"  {cls:<18} priced {c['priced']:>5}/{c['instruments']:<5} ok {c['ok']:>4} warn {c['warn']:>4} "
-                  f"mismatch {c['mismatch']:>4}  median |dy| {c['median_abs_d_y_bp']} bp")
+            out(f"  {cls:<18} priced {c['priced']:>5}/{c['instruments']:<5} ok {c['ok']:>4} warn {c['warn']:>4} "
+                f"mismatch {c['mismatch']:>4}  median |dy| {c['median_abs_d_y_bp']} bp")
 
-    with _store(a) as con:
+    with store.connect(store_url or store.resolve_url(settings)) as con:
         for rid in store.reap_orphans(con):
-            print(f"WARN run {rid} was still loading: marked failed")
-        if a.book:
-            _load(con, Path(a.book), a.date)
-        inputs = store.positions_for(con, date.fromisoformat(a.date), books=a.books)
+            out(f"WARN run {rid} was still loading: marked failed")
+        if book:
+            _load(con, Path(book), d, out=out)
+        inputs = store.positions_for(con, date.fromisoformat(d), books=books)
         if not inputs.rows:
-            print(f"no positions in the store for {a.date}" + (f" (books {','.join(a.books)})" if a.books else ""))
-            print(f"done in {time.perf_counter() - t0:.1f} s")
-            return 0
-        for b, d in sorted(inputs.valid_dates.items()):
+            out(f"no positions in the store for {d}" + (f" (books {','.join(books)})" if books else ""))
+            out(f"done in {time.perf_counter() - t0:.1f} s")
+            return None
+        for b, vd in sorted(inputs.valid_dates.items()):
             src = inputs.sources.get(b) or {}
-            age = (ctx.business_date - d).days
-            print(f"  {b}: {src.get('source')} {src.get('file_name')}"
-                  + (f", report {src['report_date']}" if src.get("report_date") else "")
-                  + f", valid {d}" + (f", carried {age} days" if age else ""))
+            age = (ctx.business_date - vd).days
+            out(f"  {b}: {src.get('source')} {src.get('file_name')}"
+                + (f", report {src['report_date']}" if src.get("report_date") else "")
+                + f", valid {vd}" + (f", carried {age} days" if age else ""))
         carried = store.carried_spreads(con, before=ctx.business_date)
         bp = pv1.plan(ctx, inputs)
-        outcomes = value(ctx, bp.requests, second_order=not a.no_gamma, position_ids=bp.position_ids,
+        outcomes = value(ctx, bp.requests, second_order=not no_gamma, position_ids=bp.position_ids,
                          carried_spreads=carried)
-        if prev_date and not a.no_pnl:
+        if prev_date and not no_pnl:
             prev_ctx = prepare(sd, prev_date)
             attach_pnl(prev_ctx, value(prev_ctx, bp.requests, position_ids=bp.position_ids, carried_spreads=carried),
                        ctx, outcomes)
             flash = [o.pnl for o in outcomes if o.pnl]
-            print(f"flash PnL {prev_date} -> {a.date}: {len(flash)}/{sum(o.valuation is not None for o in outcomes)} "
-                  f"priced positions, total {sum(p.total for p in flash):,.0f} RUB, "
-                  f"max identity error {max((abs(p.identity_error) for p in flash), default=0):.2e} RUB")
+            out(f"flash PnL {prev_date} -> {d}: {len(flash)}/{sum(o.valuation is not None for o in outcomes)} "
+                f"priced positions, total {sum(p.total for p in flash):,.0f} RUB, "
+                f"max identity error {max((abs(p.identity_error) for p in flash), default=0):.2e} RUB")
         positions = pv1.merge(bp, outcomes)
         ok = sum(o.valuation is not None for _, _, o in positions)
         by_q = Counter(o.valuation.quality if o.valuation else "not_valued" for _, _, o in positions)
-        print(f"book: {ok}/{len(positions)} positions valued (" + ", ".join(f"{q} {n}" for q, n in by_q.most_common())
-              + f"), {len(carried)} carried spreads")
+        out(f"book: {ok}/{len(positions)} positions valued (" + ", ".join(f"{q} {n}" for q, n in by_q.most_common())
+            + f"), {len(carried)} carried spreads")
         run_id, status, warnings = desk_run.publish(con, ctx, positions, prev=prev, run_type=run_type,
                                                     inputs=inputs, carried_from=carried)
-        print(f"desk run {run_id}: {status}, {len(warnings)} warnings")
-    if a.tdm:
-        run_id, status, warnings = tdm_run.publish(a.db, ctx, positions, prev=prev, inputs=inputs)
-        print(f"tdm run {run_id}: {status}, {len(warnings)} warnings")
-    print(f"done in {time.perf_counter() - t0:.1f} s")
-    return 0
+        out(f"desk run {run_id}: {status}, {len(warnings)} warnings")
+    if tdm:
+        tdm_id, status, warnings = tdm_run.publish(db or settings.db, ctx, positions, prev=prev, inputs=inputs)
+        out(f"tdm run {tdm_id}: {status}, {len(warnings)} warnings")
+    out(f"done in {time.perf_counter() - t0:.1f} s")
+    return run_id
 
 
 def cmd_inbox(a: argparse.Namespace) -> int:
@@ -414,11 +430,30 @@ def cmd_serve(a: argparse.Namespace) -> int:
     url = store.resolve_url(a.settings)
     store.migrate(url)
     print(f"desk API on http://{a.host}:{a.port}/desk-monitor.html, store {mask_url(url)}")
+    from .autopilot import Autopilot
     from .inbox import scan
 
+    # default: the thread runs and follows the settings' autopilot flag every cycle; --autopilot runs cycles
+    # whatever the settings say; --no-autopilot starts no thread
+    ap = None if a.autopilot is False else Autopilot(store_url=url, force=bool(a.autopilot))
+    if ap is not None:
+        on = a.autopilot or getattr(a.settings, "autopilot", True)
+        print(f"autopilot: {'on' if on else 'off in the settings'}, every {a.settings.inbox_poll_seconds:g} s")
     serve(url, host=a.host, port=a.port, snapshots=None if a.no_worker else a.settings.snapshot_cache,
-          adapter_status=lambda: scan.adapter_line(scan.adapter(a.settings)))
+          adapter_status=lambda: scan.adapter_line(scan.adapter(a.settings)), autopilot=ap)
     return 0
+
+
+def cmd_cycle(a: argparse.Namespace) -> int:
+    from .autopilot import Autopilot
+
+    url = store.resolve_url(a.settings)
+    store.migrate(url)
+    st = Autopilot(store_url=url, force=True, out=print).run_cycle(a.date or (), hub=not a.no_hub)
+    lr = st["latest_run"]
+    print(f"{st['message']}; latest default run: "
+          + (f"{lr['run_id']} of {lr['as_of']}, {lr['created_at']}" if lr else "none"))
+    return 1 if st["state"] == "error" else 0
 
 
 def cmd_openapi(a: argparse.Namespace) -> int:
@@ -527,7 +562,16 @@ def main(argv: list[str] | None = None) -> int:
     sv.add_argument("--port", type=int, default=8000)
     sv.add_argument("--no-worker", action="store_true",
                     help="no exact scenario worker (jobs stay queued); it reprices from DESK_SNAPSHOT_CACHE")
+    sv.add_argument("--autopilot", action=argparse.BooleanOptionalAction, default=None,
+                    help="the autopilot thread (sync, inbox scan, EOD; desk cycle): default on, following the "
+                    "settings' autopilot flag; --autopilot ignores the flag, --no-autopilot starts no thread")
     sv.set_defaults(fn=cmd_serve)
+    cy = sub.add_parser("cycle", help="one autopilot cycle in the foreground: hub sync, inbox scan, EOD of the "
+                        "dates whose inputs changed")
+    cy.add_argument("--date", action="append", type=_iso, help="also sync and keep current this business date "
+                    "(repeatable)")
+    cy.add_argument("--no-hub", action="store_true", help="no hub sync (the drop folder is still imported)")
+    cy.set_defaults(fn=cmd_cycle)
     oa = sub.add_parser("openapi", help="print or write the desk API's OpenAPI document")
     oa.add_argument("--out", help="write it to this file")
     oa.set_defaults(fn=cmd_openapi)
