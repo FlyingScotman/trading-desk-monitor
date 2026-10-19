@@ -1,6 +1,6 @@
 # Brief for the market-data hub
 
-As of 18 October 2026. From the desk system (this repository) to the work on `market-data-server`. Each item has an ID, the reason, and a check. The hub's own `docs/STATUS.md` and `docs/SYSTEM_CONTEXT.md` remain the place where the hub tracks its state; copy the items you accept there.
+As of 18 October 2026 (S4 items H16–H25 added 19 October). From the desk system (this repository) to the work on `market-data-server`. Each item has an ID, the reason, and a check. The hub's own `docs/STATUS.md` and `docs/SYSTEM_CONTEXT.md` remain the place where the hub tracks its state; copy the items you accept there.
 
 Sources of the items:
 - [ADR-001](../adr/ADR-001-hosting-topology.md) as amended on 18 October: one hub on the VPS serves every consumer;
@@ -52,6 +52,23 @@ Core has engines for these products. The desk can only compute them when the mar
 | H13 | FX spots with value date and settlement calendar (TOM), swap points or outrights | FX forwards and swaps, XCCY (core `fx_forwards`, `xccy`) | `fx_rates` has CBR and MOEX values without value dates |
 | H14 | Foreign overnight fixings (SOFR, €STR, CNY index) as needed | Floating foreign legs of XCCY | Not collected |
 | H15 | CDS par spreads or upfronts with recovery | CDS (core `cds`) | **No source.** Until one exists, CDS stays `imported` |
+
+## Found in slice S4 (19 October 2026)
+
+Evidence is from the dev snapshots of 09–15.10. Until each item lands, the backend works around it and flags the affected positions (the owner's rule: a bond is valued somehow rather than not at all).
+
+| ID | Item | Evidence and the backend's workaround |
+|---|---|---|
+| H16 | **Calendars to at least 2037**, rule-based beyond the official lists, with `provisional_from` | Every calendar ends 2027-12-31, so the RUONIA OIS and key-rate curves lose 2Y–10Y (core refuses dates outside a calendar). The backend extends calendars provisionally (weekends and fixed public holidays) and records it in the lineage |
+| H17 | **Publish the SPFI (MOEX derivatives settlement) and RUONIA publication calendars** explicitly, and give the fixture calendars the same history as the snapshots | MOEX OIS RUONIA uses the joint SPFI + Moscow + RUONIA calendar. The backend maps SPFI to `MOEX_FORTS` and RUONIA to `RU_PRODUCTION` plus year-end days. `RU_PRODUCTION` follows the observed RUONIA days in past years, which is wrong for Moscow business days. The vendored fixture calendars start 2026-01-01, shorter than the 400-day fixing lookback |
+| H18 | **Floater conventions from the issue terms** (`status: curated`): fixing lag or lookback, averaging or compounding, fixing day, floor, cap, multiplier | 644 of 647 formulas are `inferred`; `lag_days` is set on 3, `averaging` on 1, floor/cap/multiplier/fixing day on none. The backend prices them on default conventions, checks against MOEX accrued, and flags "formula inferred" |
+| H19 | **Call schedules of perpetuals** (and of callables generally) | All 62 perpetuals carry `perpetual_no_call_date`; none has a scheduled call offer. The backend assumes a call date per DEC10 and flags it |
+| H20 | **Fixings with a publication time** (`published_at`), for every index, and dev snapshots that are point in time | Only RUONIA has `published_on`, a date without a time; `published_at` is always null. The dev snapshots carry `known_at` 2026-10-17 and rows dated after their business date (F6). The backend counts a same-day publication as not yet known |
+| H21 | **EOD swap marks with bid and ask** for RUONIA OIS and key-rate swaps | `ratescalcs` is a 09:00Z mark and is missing on 12–14.10; `otc_monitor` is mid-only and flagged stale "off-hours mark". On 15.10 the two sets have identical mids: check whether they are one feed. The backend prefers a set not flagged stale, then bid/ask, then the latest, and records the choice |
+| H22 | **Units of `RUSFARIND`** | Labelled `pct`, value 2521.53: looks like an index level |
+| H23 | **`known` coupons without an amount** | 6164 future `known` periods have a rate but no amount, mostly MBS and securitizations; RU000A1043Q6, RU000A1043S2 and RU000A10FEC5 end with a one-day 0.01 % stub without an amount. The backend computes the amount from the rate (RATE_ACT_365) and flags it |
+| H24 | **Price basis of amortized MBS** | RU000A0JV755 is quoted at 474 % of its current face of 48.64 RUB: the price looks like a percentage of the original face. The backend uses it as given |
+| H25 | **Static snapshots point in time, and the face on the static's own date** | Every dev market snapshot of 09–15.10 names a static snapshot of 17.10 (F6). On the dev data a static face still includes redemptions dated on the static's own date, and MOEX keeps the pre-final face on matured bonds (180 of 181). The backend now derives the face on the trade date from the redemption schedule and relies on that rule; please confirm it, or state the rule in the contract. If a same-day static already excludes them, payment-day amortizers drop from exact to market value |
 
 ## Not hub work
 

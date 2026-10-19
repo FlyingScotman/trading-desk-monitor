@@ -20,6 +20,7 @@ import argparse
 import csv
 import sys
 import time
+from collections import Counter
 from datetime import UTC, date, datetime
 from itertools import islice
 from pathlib import Path
@@ -72,13 +73,16 @@ def cmd_eod(a: argparse.Namespace) -> int:
               else f"local file, known_at {ctx.market.snapshot.doc.get('known_at')}")
     print(f"market {ctx.market.snapshot.id[:12]} ({origin})  static {ctx.static.snapshot.id[:12]}  "
           f"KBD check {ctx.kbd_check_bp:.4f} bp  previous {prev_date}")
+    if ctx.point_in_time_warning:
+        print(f"WARN {ctx.point_in_time_warning}")
 
     if a.report_dir:
         universe = [(s, 1.0) for s, t in ctx.static.bonds.items() if t.status == "active"]
         rows, summary = validation.build(ctx, value(ctx, universe))
         path = validation.write(Path(a.report_dir), ctx, rows, summary)
-        priced = sum(r["status"] == "priced" for r in rows)
-        print(f"universe: {len(rows)} instruments, {priced} priced; report {path}")
+        by_q = Counter(r["quality"] for r in rows)
+        print(f"universe: {len(rows)} instruments; " + ", ".join(f"{q} {n}" for q, n in by_q.most_common())
+              + f"; report {path}")
         for cls, c in list(summary["by_class"].items())[:8]:
             print(f"  {cls:<18} priced {c['priced']:>5}/{c['instruments']:<5} ok {c['ok']:>4} warn {c['warn']:>4} "
                   f"mismatch {c['mismatch']:>4}  median |dy| {c['median_abs_d_y_bp']} bp")
@@ -86,10 +90,11 @@ def cmd_eod(a: argparse.Namespace) -> int:
     if a.book:
         book = read_book(Path(a.book))
         requests = [(secid, qty) for _, _, secid, qty in book]
-        outcomes = value(ctx, requests, second_order=not a.no_gamma)
+        pids = [pid for pid, *_ in book]
+        outcomes = value(ctx, requests, second_order=not a.no_gamma, position_ids=pids)
         if prev_date and not a.no_pnl:
             prev_ctx = prepare(sd, prev_date)
-            attach_pnl(prev_ctx, value(prev_ctx, requests), ctx, outcomes)
+            attach_pnl(prev_ctx, value(prev_ctx, requests, position_ids=pids), ctx, outcomes)
             flash = [o.pnl for o in outcomes if o.pnl]
             print(f"flash PnL {prev_date} -> {a.date}: {len(flash)}/{sum(o.valuation is not None for o in outcomes)} "
                   f"priced positions, total {sum(p.total for p in flash):,.0f} RUB, "
@@ -127,7 +132,7 @@ def cmd_demo_book(a: argparse.Namespace) -> int:
         return _write_book(Path(a.out), note, rows)
     ofz = traded("ofz_pd", ("fixed",))[:12]
     corp_all = traded("corporate", ("fixed", "variable_known"))
-    corp = [s for s, o in zip(corp_all, value(ctx, [(s, 1.0) for s in corp_all])) if o.valuation][:16]
+    corp = [s for s, o in zip(corp_all, value(ctx, [(s, 1.0) for s in corp_all], fallback=False)) if o.valuation][:16]
     extra = traded("ofz_pk", ("floating",))[:2] + traded("ofz_in", ("indexed_face", "fixed"))[:1] \
         + traded("corporate", ("floating",))[:2]
     rows = []
@@ -172,7 +177,7 @@ def _test_rows(sd: SnapshotDir, ctx) -> list[tuple[str, str, str, float]]:
     window = _window(sd, d.isoformat())
     views = [MarketView(sd.market(x)) for x in window]
     act = [t for t in ctx.static.bonds.values() if t.status == "active" and t.currency in (None, "RUB")]
-    outcome = {o.secid: o for o in value(ctx, [(t.secid, 1.0) for t in act])}
+    outcome = {o.secid: o for o in value(ctx, [(t.secid, 1.0) for t in act], fallback=False)}
 
     def turnover(t) -> float:
         q = ctx.market.quote(t)
@@ -187,7 +192,8 @@ def _test_rows(sd: SnapshotDir, ctx) -> list[tuple[str, str, str, float]]:
 
     def priced(t) -> bool:
         o = outcome[t.secid]
-        return o.valuation is not None and (t.bond_class != "corporate" or 0 < o.valuation.z_spread_bp < 1500)
+        return (o.valuation is not None and o.valuation.quality == "exact"
+                and (t.bond_class != "corporate" or 0 < o.valuation.z_spread_bp < 1500))
 
     used: set[str] = set()
 

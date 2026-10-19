@@ -15,15 +15,14 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from rub_fixed_income import ShockedCurveCache
+from rub_fixed_income import CurveEntry, ShockedCurveCache, kbd_discount_curve
 
-from desk.curves import kbd
-from desk.marketdata.adapter import MarketView
+from desk.marketdata.adapter import KBD_CURVE_ID, KBD_SPEC, MarketView
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import EodContext, Outcome, attach_pnl, prepare, value
 from desk.pnl.flash import FlashCurves, explain
 from desk.publish import tdm_run
-from desk.valuation.bonds import fixed_schedule, value_bond
+from desk.valuation.bonds import BondValuation, bond_request, value_bonds
 
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1"
 DATE = "2026-10-15"
@@ -43,13 +42,19 @@ def secids(ctx) -> list[str]:
 
 @pytest.fixture(scope="module")
 def outcomes(ctx, secids) -> list[Outcome]:
-    return value(ctx, [(s, QTY) for s in secids])
+    # The exact repricing method: bonds valued without assumptions. The synthetic previous date keeps
+    # the fixture's fixings, which core refuses for floaters on another date; the fallback rungs get
+    # the simple PnL (test_fallback).
+    return [o for o in value(ctx, [(s, QTY) for s in secids], fallback=False)
+            if o.valuation and o.valuation.quality == "exact"]
 
 
 def shifted_prev(ctx: EodContext, prev_date: date, shift_bp: float = SHIFT_BP) -> EodContext:
-    params = dict(ctx.kbd.params, B1=ctx.kbd.params["B1"] - shift_bp)
-    curve = kbd.from_zcyc(prev_date, params)
-    return dataclasses.replace(ctx, kbd=curve, curve=curve.discount_curve(), cache=ShockedCurveCache())
+    params = dataclasses.replace(ctx.kbd, trade_date=prev_date, b1=ctx.kbd.b1 - shift_bp)
+    market = dataclasses.replace(ctx.core_market, business_date=prev_date,
+                                 curves=(CurveEntry(KBD_CURVE_ID, KBD_SPEC, params),))
+    return dataclasses.replace(ctx, kbd=params, curve=kbd_discount_curve(params), core_market=market,
+                               cache=ShockedCurveCache())
 
 
 def prev_outcome(prev: EodContext, o: Outcome, price_move_pct: float = 0.05) -> Outcome:
@@ -58,13 +63,14 @@ def prev_outcome(prev: EodContext, o: Outcome, price_move_pct: float = 0.05) -> 
     if o.valuation is None:
         return o
     assert o.terms is not None and o.quote is not None and o.quote.accrued_per_bond is not None
-    d = prev.kbd.curve_date  # the market view stays the fixture's; only the curve and quote move
+    d = prev.kbd.trade_date  # the market view stays the fixture's; only the curve and quote move
     paid = sum((c.amount_per_bond or Decimal(0) for c in o.terms.coupons if d < c.pay_date <= o.quote.trade_date),
                Decimal(0))
     q = dataclasses.replace(o.quote, trade_date=d, accrued_per_bond=o.quote.accrued_per_bond + paid, prices_pct={
         k: v + Decimal(str(price_move_pct)) for k, v in o.quote.prices_pct.items()})
-    v = value_bond(o.terms, q, fixed_schedule(o.terms, d), d, prev.curve, quantity=o.valuation.quantity)
-    return Outcome(o.secid, o.terms, q, valuation=v)
+    valued, _ = value_bonds(prev.core_market, [bond_request("p", o.terms, q, d, o.valuation.quantity)])
+    assert isinstance(valued["p"], BondValuation), valued["p"]
+    return Outcome(o.secid, o.terms, q, valuation=valued["p"])
 
 
 def test_valuation_date_is_the_trade_date(outcomes):
@@ -139,7 +145,7 @@ def test_not_priced_previous_day_gets_no_pnl_and_a_warning(ctx, outcomes, tmp_pa
     db = tmp_path / "tdm.sqlite"
     positions = [(f"P{i}", "OFZ" if o.secid.startswith("SU") else "CORP", o) for i, o in enumerate(cur)]
     prev_view = MarketView(ctx.market.snapshot)
-    prev_view.business_date = prev.kbd.curve_date
+    prev_view.business_date = prev.kbd.trade_date
     run_id, status, warnings = tdm_run.publish(str(db), ctx, positions, prev=prev_view)
     assert status == "complete"
     con = sqlite3.connect(db)
