@@ -19,13 +19,18 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
 4. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``).
 
 Settings are read again at the start of every cycle (``desk.settings.load``), so edits apply without a restart.
-Errors are caught per step, logged (``desk.autopilot``; ``<home>/logs/autopilot.log`` when the home folder exists)
-and shown in the status; they never stop the thread.
+Errors are caught per step, logged (``desk.autopilot`` and ``<home>/logs/autopilot.log``) and shown in the status;
+they never stop the thread.
+
+One cycle at a time per home folder, across processes: a cycle holds ``<home>/cycle.lock`` (``cycle_lock``), so a
+``desk cycle`` (``daily_backend.bat``) started while the ``desk serve`` thread is in a cycle, or the other way round,
+does nothing (step ``cycle``: ``skipped``, "another cycle running") instead of publishing the same date twice.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from collections.abc import Callable, Iterable
@@ -50,6 +55,7 @@ MAX_EOD_DATES = 10
 RECHECK_S = 3600.0      # cached dates are asked of the hub again this often (corrections)
 MAX_HUB_DATES = 400     # how far back the hub's date list is read at most
 MIN_SLEEP_S = 1.0
+LOCK_FILE = "cycle.lock"
 
 LATEST_RUN = (f"SELECT run_id, business_date, completed_at FROM run WHERE run_id IN ({store.DEFAULT_RUNS})"
               " ORDER BY business_date DESC LIMIT 1")
@@ -66,6 +72,59 @@ def latest_run(con: psycopg.Connection) -> dict[str, str] | None:
         return None
     rid, d, done = row
     return {"run_id": str(rid), "as_of": d.isoformat(), "created_at": _iso(done)}
+
+
+class CycleLock:
+    """The inter-process cycle lock ``<home>/cycle.lock``, non-blocking. ``msvcrt.locking`` on Windows,
+    ``fcntl.flock`` elsewhere; the operating system releases it when the process dies, so a crashed cycle leaves
+    no stale lock. Two opens of the file exclude each other within one process too."""
+
+    def __init__(self, home: Path) -> None:
+        self.path = Path(home) / LOCK_FILE
+        self._f: Any = None
+
+    def acquire(self) -> bool:
+        """True when taken, False when held elsewhere; OSError when the file cannot be created."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        f = open(self.path, "a+b")  # noqa: SIM115 - kept open while held
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            f.close()
+            return False
+        self._f = f
+        return True
+
+    def release(self) -> None:
+        f, self._f = self._f, None
+        if f is None:
+            return
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        finally:
+            f.close()
+
+    def __enter__(self) -> bool:
+        return self.acquire()
+
+    def __exit__(self, *exc: object) -> None:
+        self.release()
 
 
 def idle_status(enabled: bool = False, message: str = "Автопилот не запущен") -> dict[str, Any]:
@@ -145,36 +204,54 @@ class Autopilot:
             except Exception as e:  # noqa: BLE001 - a broken settings file is this cycle's error
                 steps.append(self._step("settings", "error", f"{type(e).__name__}: {e}"))
                 return self._finish(started, steps, [])
-            self._interval = float(getattr(settings, "inbox_poll_seconds", 60.0) or 0.0)
-            self._on = bool(getattr(settings, "autopilot", True))
+            self._interval = float(settings.inbox_poll_seconds or 0.0)
+            self._on = bool(settings.autopilot)
             self._setup_log(settings)
             if not (self.force or self._on):
                 with self._lock:
                     self._status.update(state="idle", message="Автопилот выключен в настройках", steps=[])
                 return self.status()
-            extra = sorted({date.fromisoformat(d).isoformat() for d in extra_dates})
-            con, url = None, None
+            lock = CycleLock(settings.home)
             try:
-                url = self._store_url or store.resolve_url(settings)
-                con = store.connect(url)
-            except Exception as e:  # noqa: BLE001 - no store: the hub sync still runs
-                steps.append(self._step("store", "error", f"{type(e).__name__}: {e}"))
-            ran: list[str] = []
+                held = lock.acquire()
+            except OSError as e:  # no lock file (the home folder is not writable): no cycle
+                steps.append(self._step("lock", "error", f"{type(e).__name__}: {e}"))
+                return self._finish(started, steps, [])
+            if not held:
+                steps.append(self._step("cycle", "skipped", "another cycle running"))
+                self._update(state="idle", last_cycle_at=_iso(started),
+                             message="Пропущено: выполняется другой цикл (desk cycle или desk serve)")
+                return self.status()
             try:
-                steps.append(self._guard("sync", lambda: self._sync(settings, con, extra, hub)))
-                if con is not None:
-                    steps.append(self._guard("scan", lambda: self._scan(settings, con)))
-                    steps.append(self._guard("eod", lambda: self._eod(settings, con, url, extra, ran)))
-                    try:
-                        latest = latest_run(con)
-                    except psycopg.Error:
-                        latest = None
-                    with self._lock:
-                        self._status["latest_run"] = latest
+                return self._locked_cycle(settings, started, steps, extra_dates, hub)
             finally:
-                if con is not None:
-                    con.close()
-            return self._finish(started, steps, ran)
+                lock.release()
+
+    def _locked_cycle(self, settings: Settings, started: datetime, steps: list[dict[str, Any]],
+                      extra_dates: Iterable[str], hub: bool) -> dict[str, Any]:
+        extra = sorted({date.fromisoformat(d).isoformat() for d in extra_dates})
+        con, url = None, None
+        try:
+            url = self._store_url or store.resolve_url(settings)
+            con = store.connect(url)
+        except Exception as e:  # noqa: BLE001 - no store: the hub sync still runs
+            steps.append(self._step("store", "error", f"{type(e).__name__}: {e}"))
+        ran: list[str] = []
+        try:
+            steps.append(self._guard("sync", lambda: self._sync(settings, con, extra, hub)))
+            if con is not None:
+                steps.append(self._guard("scan", lambda: self._scan(settings, con)))
+                steps.append(self._guard("eod", lambda: self._eod(settings, con, url, extra, ran)))
+                try:
+                    latest = latest_run(con)
+                except psycopg.Error:
+                    latest = None
+                with self._lock:
+                    self._status["latest_run"] = latest
+        finally:
+            if con is not None:
+                con.close()
+        return self._finish(started, steps, ran)
 
     def _finish(self, started: datetime, steps: list[dict], ran: list[str]) -> dict[str, Any]:
         errors = [s["name"] for s in steps if s["status"] == "error"]
@@ -217,14 +294,11 @@ class Autopilot:
             self._out(line)
 
     def _setup_log(self, settings: Settings) -> None:
-        home = getattr(settings, "home", None)
-        if not home or not Path(home).is_dir():
-            return
-        path = Path(home) / "logs" / "autopilot.log"
+        path = Path(settings.logs_dir) / "autopilot.log"
         if self._log_handler is not None and Path(self._log_handler.baseFilename) == path.resolve():
             return
         try:
-            path.parent.mkdir(exist_ok=True)
+            path.parent.mkdir(parents=True, exist_ok=True)
             handler = RotatingFileHandler(path, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
         except OSError as e:
             log.warning("autopilot: no log file %s: %s", path, e)

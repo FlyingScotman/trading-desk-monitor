@@ -4,6 +4,8 @@ the stub hub of slice S3, the reference adapter and the canonical inbox fixtures
 from __future__ import annotations
 
 import shutil
+import subprocess
+import sys
 import time
 from datetime import date
 from pathlib import Path
@@ -15,7 +17,7 @@ from test_slice_s3 import TOKEN
 
 from desk import cli, store
 from desk.api import create_app
-from desk.autopilot import Autopilot
+from desk.autopilot import LOCK_FILE, Autopilot, CycleLock
 from desk.inbox import scan
 from desk.settings import Settings
 
@@ -38,8 +40,9 @@ def _fresh_process():
 def cfg(tmp_path: Path, store_url: str, hub=None, **kw) -> Settings:
     hub_kw = {"hub_url": f"http://127.0.0.1:{hub.server_address[1]}", "hub_token": TOKEN, "hub_timeout_s": 5} \
         if hub is not None else {}
-    return Settings(**hub_kw, snapshot_cache=tmp_path / "cache", store_url=store_url, inbox_dirs=(tmp_path / "in",),
-                    inbox_archive=tmp_path / "archive", private_adapter_config=CONFIG, inbox_poll_seconds=0, **kw)
+    return Settings(**hub_kw, home=tmp_path / "home", snapshot_cache=tmp_path / "cache", store_url=store_url,
+                    inbox_dirs=(tmp_path / "in",), inbox_archive=tmp_path / "archive", private_adapter_config=CONFIG,
+                    inbox_poll_seconds=0, **kw)
 
 
 def put(tmp_path: Path, *names: str) -> None:
@@ -96,7 +99,8 @@ def test_hub_down_still_scans_and_runs_on_the_cache(stub, tmp_path, store_url, m
         shutil.copy(p, tmp_path / "cache" / p.name)
     put(tmp_path, "positions_20261016.csv")
     stub.fail = 100  # 503 on every request
-    for k, v in {"DESK_ENV_FILE": str(tmp_path / "none.env"), "DESK_STORE_URL": store_url,
+    for k, v in {"DESK_HOME": str(tmp_path / "home"), "DESK_ENV_FILE": str(tmp_path / "none.env"),
+                 "DESK_STORE_URL": store_url,
                  "DESK_HUB_URL": f"http://127.0.0.1:{stub.server_address[1]}", "DESK_HUB_TOKEN": TOKEN,
                  "DESK_SNAPSHOT_CACHE": str(tmp_path / "cache"), "DESK_INBOX_DIRS": str(tmp_path / "in"),
                  "DESK_INBOX_ARCHIVE": str(tmp_path / "archive"), "DESK_PRIVATE_ADAPTER_CONFIG": str(CONFIG),
@@ -138,18 +142,17 @@ def test_failed_eod_is_not_retried_until_inputs_change(tmp_path, store_url, monk
 
 
 def test_settings_switch_and_errors_in_status(tmp_path, store_url):
-    s = {"v": Settings(store_url=store_url, snapshot_cache=tmp_path / "cache", autopilot=False)
-         if "autopilot" in Settings.__dataclass_fields__ else None}
-    if s["v"] is not None:  # WS-A's settings flag: a thread that follows it does nothing while it is off
-        st = Autopilot(settings_loader=lambda: s["v"]).run_cycle()
-        assert st["message"] == "Автопилот выключен в настройках" and not st["steps"]
+    off = Settings(home=tmp_path / "home", store_url=store_url, snapshot_cache=tmp_path / "cache", autopilot=False)
+    st = Autopilot(settings_loader=lambda: off).run_cycle()  # a thread that follows the flag does nothing while off
+    assert st["message"] == "Автопилот выключен в настройках" and not st["steps"]
+    assert Autopilot(settings_loader=lambda: off, force=True).run_cycle()["steps"]  # desk cycle: runs anyway
 
     def bad():
         raise RuntimeError("settings.json: bad JSON")
 
     st = Autopilot(settings_loader=bad).run_cycle()
     assert st["state"] == "error" and steps(st) == {"settings": ("error", "RuntimeError: settings.json: bad JSON")}
-    st = Autopilot(settings_loader=lambda: Settings(store_url="postgresql://127.0.0.1:1/none",
+    st = Autopilot(settings_loader=lambda: Settings(home=tmp_path / "home", store_url="postgresql://127.0.0.1:1/none",
                                                     snapshot_cache=tmp_path / "cache")).run_cycle()
     assert st["state"] == "error" and steps(st)["store"][0] == "error" and steps(st)["sync"][0] == "skipped"
     assert set(st) == {"enabled", "state", "last_cycle_at", "last_ok_at", "message", "steps", "latest_run"}
@@ -169,7 +172,8 @@ def test_api_status_and_run(tmp_path, store_url):
 
     def settings() -> Settings:
         loads.append(1)
-        return Settings(store_url=store_url, snapshot_cache=tmp_path / "cache", inbox_poll_seconds=3600)
+        return Settings(home=tmp_path / "home", store_url=store_url, snapshot_cache=tmp_path / "cache",
+                        inbox_poll_seconds=3600)
 
     ap = Autopilot(settings_loader=settings, store_url=store_url)
     app.state.autopilot = ap
@@ -188,6 +192,48 @@ def test_api_status_and_run(tmp_path, store_url):
         ap.stop()
     assert not ap.running and c.get("/api/v1/autopilot/status").json()["enabled"] is False
     assert "/api/v1/autopilot/status" in c.get("/openapi.json").json()["paths"]
+
+
+HOLDER = """
+import sys
+from pathlib import Path
+from desk.autopilot import CycleLock
+lock = CycleLock(Path(sys.argv[1]))
+print("held" if lock.acquire() else "busy", flush=True)
+sys.stdin.readline()
+"""
+
+
+def test_cycle_lock_across_processes(tmp_path, store_url):
+    """A desk cycle while another process (desk serve's thread, another daily_backend.bat) is in a cycle does
+    nothing: no second EOD of the same date."""
+    (tmp_path / "cache").mkdir()
+    for p in SNAPS.glob("*.json.gz"):
+        shutil.copy(p, tmp_path / "cache" / p.name)
+    put(tmp_path, "positions_20261016.csv")
+    s = cfg(tmp_path, store_url)
+    home = s.home
+    holder = subprocess.Popen([sys.executable, "-c", HOLDER, str(home)], stdin=subprocess.PIPE,
+                              stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout.readline().strip() == "held"
+        assert (home / LOCK_FILE).is_file()
+        with CycleLock(home) as held:  # another open of the file: taken
+            assert held is False
+        ap = Autopilot(settings_loader=lambda: s, today=lambda: TODAY)
+        st = ap.run_cycle()
+        assert st["state"] == "idle" and steps(st) == {"cycle": ("skipped", "another cycle running")}, st
+        assert st["message"].startswith("Пропущено") and st["last_ok_at"] is None and st["last_cycle_at"]
+        assert runs(store_url) == []
+    finally:
+        holder.communicate("\n", timeout=30)
+    st = ap.run_cycle()  # released when the holder exits
+    assert steps(st)["eod"] == ("ok", "2026-10-15 run 1 (no default run)")
+    with CycleLock(home) as held:  # and released by the cycle
+        assert held is True
+        assert steps(ap.run_cycle()) == {"cycle": ("skipped", "another cycle running")}
+    assert runs(store_url) == [(1, date(2026, 10, 15), "EOD", "complete")]
+    assert (s.logs_dir / "autopilot.log").is_file()  # the log goes to <home>/logs, created on demand
 
 
 def _wait(cond, timeout: float = 30.0) -> None:

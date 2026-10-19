@@ -436,7 +436,7 @@ def cmd_serve(a: argparse.Namespace) -> int:
     # whatever the settings say; --no-autopilot starts no thread
     ap = None if a.autopilot is False else Autopilot(store_url=url, force=bool(a.autopilot))
     if ap is not None:
-        on = a.autopilot or getattr(a.settings, "autopilot", True)
+        on = a.autopilot or a.settings.autopilot
         print(f"autopilot: {'on' if on else 'off in the settings'}, every {a.settings.inbox_poll_seconds:g} s")
     serve(url, host=a.host, port=a.port, snapshots=None if a.no_worker else a.settings.snapshot_cache,
           adapter_status=lambda: scan.adapter_line(scan.adapter(a.settings)), autopilot=ap)
