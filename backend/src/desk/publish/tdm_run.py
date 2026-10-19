@@ -312,7 +312,9 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
         key, rec = _issuer_key(ctx, o)
         issuers[key] = rec
         rows.append(position_row(ctx, book, pid, o, key, x))
-    used = list(dict.fromkeys(r["book_id"] for r in rows))
+    # every book of the run, also one whose positions are all unvalued (an OTC-only book): the Desk Monitor shows
+    # only the positions of the reference books, so a book missing here would hide its rows from coverage
+    used = list(dict.fromkeys([r["book_id"] for r in rows] + [book for _, book, _ in positions]))
     indices = []
     for code, name in INDICES:
         fx = ctx.market.latest_fixing(code)

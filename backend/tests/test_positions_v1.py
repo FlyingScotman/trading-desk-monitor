@@ -263,6 +263,20 @@ def test_publish_api_and_compat(ctx, store_url, tmp_path):
     assert set(desk["BOOKS"]) == {"OFZ", "CORP", "TSY"} and desk["BOOKS"]["TSY"]["bookType"] == "DERIVS"
 
 
+def test_book_with_only_unvalued_positions_is_in_the_reference(ctx, store_url):
+    """A derivatives book whose rows all lack mv_rub is still a book of the run: the Desk Monitor shows only the
+    positions of window.DESK.BOOKS, so without it the book's rows would vanish from coverage."""
+    inp = inputs([("L1", "OFZ", "SU26238RMFS4", 10.0), ("O1", "DERONLY", None, None)],
+                 {"O1": {"asset_class": "otc", "source_instrument_id": "IRS-1", "ccy": "RUB"}})
+    _, positions = run(ctx, inp)
+    with store.connect(store_url) as con:
+        rid, status, _ = desk_run.publish(con, ctx, positions, prev=None, inputs=inp)
+    assert status == "complete"
+    desk = TestClient(create_app(store_url)).get(f"/api/v1/compat/desk?run_id={rid}").json()
+    assert set(desk["BOOKS"]) == {"OFZ", "DERONLY"}
+    assert [p["id"] for p in desk["positions"] if p["book"] == "DERONLY" and p.get("notValued")] == ["O1"]
+
+
 def test_books_from_the_store_and_risk_fields_round_trip(ctx, store_url, tmp_path):
     """The run's book reference is the store's book_rev (name, desk, entity, book_type), not the demo BOOKS; the
     demo books keep theirs. The new v1 fields survive the store (position_input) into the valuation."""
