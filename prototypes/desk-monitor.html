@@ -465,6 +465,11 @@ function num(v,d,sign){
   if (sign && v > 0) s = '+' + s;
   return s;
 }
+// подпись оси: столько знаков, сколько нужно делению (0 · 0,25 · 0,5 …, а не 0 · 0 · 1), не больше трёх
+const axN = v => { let d = 0; while (d < 3 && Math.abs(v * 10 ** d - Math.round(v * 10 ** d)) > 1e-6) d++; return num(v, d); };
+// «круглая» граница оси не меньше x: 1, 2, 2,5, 5 × 10^k
+const span = v => Math.max(v.max - v.min, Math.abs(v.min), Math.abs(v.max));  // одна кривая: место под подпись столбца
+const niceCeil = x => { if (!(x > 0)) return 0; const p = 10 ** Math.floor(Math.log10(x)); return [1, 2, 2.5, 5, 10].map(m => m * p).find(m => m >= x * (1 - 1e-9)); };
 const M = (v,d,s) => num(v/1e6, d==null?1:d, s);
 const K = (v,d,s) => num(v/1e3, d||0, s);
 const BN = (v,d,s) => num(v/1e9, d==null?1:d, s);
@@ -655,7 +660,7 @@ function opt(o){
 const xCat = (data, extra) => Object.assign({type:'category', data, axisLine:{lineStyle:{color:TK.line_2}}, axisTick:{show:false},
   axisLabel:{color:TK.fg_2, fontSize:11, fontFamily:TK.mono}}, extra || {});
 const yVal = (fmt, extra) => Object.assign({type:'value', splitLine:{lineStyle:{color:TK.grid}}, axisLine:{show:false}, axisTick:{show:false},
-  axisLabel:{color:TK.fg_3, fontSize:10.5, fontFamily:TK.mono, hideOverlap:true, formatter:fmt || (v => num(v,0))}}, extra || {});
+  axisLabel:{color:TK.fg_3, fontSize:10.5, fontFamily:TK.mono, hideOverlap:true, formatter:fmt || axN}}, extra || {});
 const legend = extra => Object.assign({top:0, left:0, itemWidth:10, itemHeight:8, icon:'rect', itemGap:12, textStyle:{color:TK.fg_2, fontSize:11}, inactiveColor:TK.fg_3}, extra || {});
 function chart(id, o){
   const el = $(id); if (!el || !window.echarts) return null;
@@ -744,7 +749,7 @@ function rSummary(){
     grid:{left:6, right:24, top:6, bottom:4},
     tooltip:{valueFormatter:v => num(v,0) + ' тыс ₽/б.п.'},
     yAxis:xCat(CURVES.map(c => D.CURVES[c].name), {inverse:true, axisLabel:{color:TK.fg_2, fontSize:11, fontFamily:TK.ui}}),
-    xAxis:yVal(v => num(v,0), {splitNumber:3, min:v => v.min < 0 ? -Math.ceil((-v.min + (v.max - v.min) * .5) / 1000) * 1000 : 0, max:v => v.max > 0 ? Math.ceil((v.max + (v.max - v.min) * .28) / 1000) * 1000 : 0}),
+    xAxis:yVal(axN, {splitNumber:3, min:v => v.min < 0 ? -niceCeil(-v.min + span(v) * .5) : 0, max:v => v.max > 0 ? niceCeil(v.max + span(v) * .28) : 0}),
     series:[{type:'bar', name:'DV01', barWidth:'52%', data:cv.map(v => ({value:v, itemStyle:{color:v < 0 ? TK.neg : TK.pos, borderRadius:v < 0 ? [2,0,0,2] : [0,2,2,0]},
       label:{show:true, position:v < 0 ? 'left' : 'right', color:TK.fg_2, fontFamily:TK.mono, fontSize:10.5, formatter:() => num(v,0)}}))}]
   }));
@@ -767,7 +772,7 @@ function rSummary(){
     grid:{left:6, right:20, top:28, bottom:4},
     tooltip:{valueFormatter:v => num(v,2) + ' млрд ₽'},
     yAxis:xCat(SEGS.map(s => SEG_LABEL[s] || s), {inverse:true, axisLabel:{color:TK.fg_2, fontSize:11, fontFamily:TK.ui}}),
-    xAxis:yVal(v => num(v,0)),
+    xAxis:yVal(axN),
     series:[
       {type:'bar', name:'Длинные', stack:'s', barWidth:'50%', itemStyle:{color:TK.cat[0]}, data:segL},
       {type:'bar', name:'Короткие', stack:'s', barWidth:'50%', itemStyle:{color:TK.cat[1]}, data:segS}
@@ -785,7 +790,7 @@ function rSummary(){
     grid:{right:26},
     tooltip:{trigger:'axis', axisPointer:{type:'line'}, valueFormatter:v => num(v,1,true) + ' млн ₽'},
     xAxis:xCat(h.map(x => dt(x.date).slice(0,5)), {boundaryGap:false}),
-    yAxis:yVal(v => num(v,0)),
+    yAxis:yVal(axN),
     series:[
       {type:'line', name:'Официальный', data:h.map(x => +(x.pnlOfficial/1e6).toFixed(2)), symbol:'circle', symbolSize:(v,p) => p.dataIndex === h.length-1 ? 8 : 0, showSymbol:true,
         lineStyle:{width:2, color:TK.cat[0]}, itemStyle:{color:TK.cat[0], borderColor:TK.panel, borderWidth:2},
@@ -1220,7 +1225,7 @@ function rRisk(){
       const i = ps[0].dataIndex; return `<b>${B[i]}</b><br>Сегодня: ${num(cvd.pts[i],2)}%<br>Вчера: ${num(cvd.pts[i] - mv[i]/100,2)}%<br>Изменение: ${num(mv[i],0,true)} б.п.`; }},
     grid:[{left:6, right:14, top:30, height:'46%', containLabel:true}, {left:6, right:14, top:'69%', bottom:6, containLabel:true}],
     xAxis:[xCat(B, {gridIndex:0, axisLabel:{show:false}, boundaryGap:true}), xCat(B, {gridIndex:1})],
-    yAxis:[yVal(v => num(v,2), {gridIndex:0, scale:true, splitNumber:3}), yVal(v => num(v,0), {gridIndex:1, splitNumber:2})],
+    yAxis:[yVal(v => num(v,2), {gridIndex:0, scale:true, splitNumber:3}), yVal(axN, {gridIndex:1, splitNumber:2})],
     series:[
       {type:'line', name:'Сегодня', xAxisIndex:0, yAxisIndex:0, data:cvd.pts, symbol:'circle', symbolSize:5, lineStyle:{width:2, color:TK.cat[0]}, itemStyle:{color:TK.cat[0]}},
       {type:'line', name:'Вчера', xAxisIndex:0, yAxisIndex:0, data:cvd.pts.map((v,i) => +(v - mv[i]/100).toFixed(4)), symbol:'none', lineStyle:{width:1.5, type:[4,3], color:TK.fg_3}, itemStyle:{color:TK.fg_3}},
@@ -1288,7 +1293,7 @@ function rExpo(){
     grid:{left:6, right:16, top:30, bottom:4},
     tooltip:{valueFormatter:v => num(v,0) + ' млн ₽'},
     yAxis:xCat(CCYS, {inverse:true}),
-    xAxis:yVal(v => num(v,0)),
+    xAxis:yVal(axN),
     series:PARTS.map((x,i) => ({type:'bar', name:x[1], stack:'o', barWidth:'50%', itemStyle:{color:TK.cat[i], borderColor:TK.panel, borderWidth:1}, data:CCYS.map(c => +(o[c][x[0]] * D.FX[c] / 1e6).toFixed(1))}))
       .concat([{type:'scatter', name:'Нетто ОВП', symbol:'diamond', symbolSize:12, itemStyle:{color:TK.fg, borderColor:TK.panel, borderWidth:1.5}, z:5, data:CCYS.map(c => +(o[c].net * D.FX[c] / 1e6).toFixed(1))}])
   }));
@@ -1322,7 +1327,7 @@ function rFunding(){
   chart('c-fu-ladder', opt({
     legend:legend({data:used}),
     tooltip:{valueFormatter:v => num(v,2) + ' млрд ₽'},
-    xAxis:xCat(FB), yAxis:yVal(v => num(v,0)),
+    xAxis:xCat(FB), yAxis:yVal(axN),
     series:used.map(k => ({type:'bar', name:k, stack:'f', barWidth:'56%', itemStyle:{color:TK.cat[keys.indexOf(k) % 8], borderColor:TK.panel, borderWidth:1},
       data:FB.map((_,i) => +(-sum(fl.filter(f => kf(f) === k && fbucket(f) === i), f => f.amountRub)/1e9).toFixed(3))}))
   }));
@@ -1345,7 +1350,7 @@ function rFunding(){
     legend:legend({data:['Активы (MV облигаций)','Фондирование нетто']}),
     tooltip:{valueFormatter:v => num(v,2) + ' млрд ₽'},
     xAxis:xCat(gr.map(r => D.BOOKS[r.b].name), {axisLabel:{color:TK.fg_2, fontSize:10.5, fontFamily:TK.ui, interval:0, rotate:$('c-fu-gap').clientWidth < 820 ? 30 : 0}}),
-    yAxis:yVal(v => num(v,0)),
+    yAxis:yVal(axN),
     series:[
       {type:'bar', name:'Активы (MV облигаций)', barGap:'15%', barWidth:'30%', itemStyle:{color:TK.cat[0], borderRadius:[2,2,0,0]}, data:gr.map(r => +(r.a/1e9).toFixed(2))},
       {type:'bar', name:'Фондирование нетто', barWidth:'30%', itemStyle:{color:TK.cat[1], borderRadius:[2,2,0,0]}, data:gr.map(r => +(r.f/1e9).toFixed(2))}
@@ -1436,7 +1441,7 @@ function rScen(){
       tooltip:{valueFormatter:v => num(v,1,true) + ' млн ₽'},
       grid:{top:sel.length > 2 ? 50 : 30},
       xAxis:xCat(books.map(b => D.BOOKS[b].name), {axisLabel:{color:TK.fg_2, fontSize:10.5, fontFamily:TK.ui, interval:0, rotate:$('c-sc').clientWidth < 820 ? 30 : 0}}),
-      yAxis:yVal(v => num(v,0)),
+      yAxis:yVal(axN),
       series:sel.map(id => ({type:'bar', name:scById(id).name, barMaxWidth:18, itemStyle:{color:scColor(id)}, data:books.map(b => +((bookTot(R[id], b) + bookFF(scById(id), b))/1e6).toFixed(2))}))
     }));
   } else {
@@ -1445,7 +1450,7 @@ function rScen(){
       legend:legend({data:COMP.map(c => c[1])}),
       tooltip:{valueFormatter:v => num(v,1,true) + ' млн ₽'},
       xAxis:xCat(books.map(b => D.BOOKS[b].name), {axisLabel:{color:TK.fg_2, fontSize:10.5, fontFamily:TK.ui, interval:0, rotate:$('c-sc').clientWidth < 820 ? 30 : 0}}),
-      yAxis:yVal(v => num(v,0)),
+      yAxis:yVal(axN),
       series:COMP.map((c,i) => ({type:'bar', name:c[1], stack:'c', barWidth:'50%', itemStyle:{color:TK.cat[i], borderColor:TK.panel, borderWidth:1},
         data:books.map(b => +((bookTot(fr, b, c[0]) + (c[0] === 'fx' ? bookFF(fsc, b) : 0))/1e6).toFixed(2))}))
     }));
@@ -1486,7 +1491,7 @@ function rPnl(){
     grid:{left:6, right:10, top:22, bottom:6},
     tooltip:{trigger:'item', formatter:p => { const b = bars[p.dataIndex]; return `<b>${esc(b.n)}</b><br>${M(b.v,2,true)} млн ₽` + (b.k === 'd' ? `<br><span style="opacity:.7">накопл.: ${M(b.hi,1,true)}</span>` : b.k === 'b' ? '<br><span style="opacity:.7">FX-компоненты по курсам ЦБ вместо рыночных</span>' : ''); }},
     xAxis:xCat(bars.map(b => WF_SHORT[b.n] || b.n), {axisLabel:{color:TK.fg_2, fontSize:10.5, fontFamily:TK.ui, interval:0, rotate:narrow ? 40 : 0, hideOverlap:false, lineHeight:13}}),
-    yAxis:yVal(v => num(v,0)),
+    yAxis:yVal(axN),
     series:[{type:'custom', name:'PnL', encode:{x:0, y:[1,2]},
       data:bars.map((b,i) => [i, b.lo/1e6, b.hi/1e6, b.v/1e6]),
       renderItem:(params, api) => {
