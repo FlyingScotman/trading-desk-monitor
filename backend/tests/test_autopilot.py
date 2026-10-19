@@ -157,6 +157,11 @@ def test_settings_switch_and_errors_in_status(tmp_path, store_url):
     assert st["state"] == "error" and steps(st)["store"][0] == "error" and steps(st)["sync"][0] == "skipped"
     assert set(st) == {"enabled", "state", "last_cycle_at", "last_ok_at", "message", "steps", "latest_run"}
     assert all(set(x) == STEP_KEYS for x in st["steps"])
+    (tmp_path / "drop").mkdir()
+    half = Settings(home=tmp_path / "home", store_url=store_url, snapshot_cache=tmp_path / "cache",
+                    snapshot_drop=tmp_path / "drop")  # market data from a drop folder, no report folders
+    assert Autopilot(settings_loader=lambda: half).run_cycle()["message"] == (
+        "Данные актуальны (не настроено: папки с отчётами)")
 
 
 def test_api_status_and_run(tmp_path, store_url):
@@ -181,7 +186,8 @@ def test_api_status_and_run(tmp_path, store_url):
     try:
         _wait(lambda: len(loads) == 1 and c.get("/api/v1/autopilot/status").json()["last_cycle_at"])
         st = c.get("/api/v1/autopilot/status").json()
-        assert st["enabled"] is True and st["state"] == "idle" and st["message"] == "Данные актуальны"
+        assert st["enabled"] is True and st["state"] == "idle"
+        assert st["message"] == "Не настроено: укажите маркет-дата сервер и папки с отчётами в Настройках"
         assert [(x["name"], x["status"]) for x in st["steps"]] == [("sync", "skipped"), ("scan", "skipped"),
                                                                     ("eod", "skipped")]
         assert st["steps"][2]["detail"] == "no positions in the store"
@@ -231,7 +237,10 @@ def test_cycle_lock_across_processes(tmp_path, store_url):
     assert steps(st)["eod"] == ("ok", "2026-10-15 run 1 (no default run)")
     with CycleLock(home) as held:  # and released by the cycle
         assert held is True
-        assert steps(ap.run_cycle()) == {"cycle": ("skipped", "another cycle running")}
+        fresh = Autopilot(settings_loader=lambda: s, today=lambda: TODAY)  # a desk cycle process: knows no run yet
+        st = fresh.run_cycle()
+        assert steps(st) == {"cycle": ("skipped", "another cycle running")}
+        assert st["latest_run"]["run_id"] == "1"  # the store's latest default run, not "none"
     assert runs(store_url) == [(1, date(2026, 10, 15), "EOD", "complete")]
     assert (s.logs_dir / "autopilot.log").is_file()  # the log goes to <home>/logs, created on demand
 

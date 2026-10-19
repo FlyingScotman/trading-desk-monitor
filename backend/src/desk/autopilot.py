@@ -219,7 +219,7 @@ class Autopilot:
                 return self._finish(started, steps, [])
             if not held:
                 steps.append(self._step("cycle", "skipped", "another cycle running"))
-                self._update(state="idle", last_cycle_at=_iso(started),
+                self._update(state="idle", last_cycle_at=_iso(started), latest_run=self._latest(settings),
                              message="Пропущено: выполняется другой цикл (desk cycle или desk serve)")
                 return self.status()
             try:
@@ -251,14 +251,31 @@ class Autopilot:
         finally:
             if con is not None:
                 con.close()
-        return self._finish(started, steps, ran)
+        return self._finish(started, steps, ran, settings)
 
-    def _finish(self, started: datetime, steps: list[dict], ran: list[str]) -> dict[str, Any]:
+    def _latest(self, settings: Settings) -> dict[str, str] | None:
+        """The latest default run read on a connection of its own (a skipped cycle has none); the last known one
+        when the store cannot be read."""
+        try:
+            with store.connect(self._store_url or store.resolve_url(settings)) as con:
+                return latest_run(con)
+        except Exception:  # noqa: BLE001 - only for the status line
+            return self.status().get("latest_run")
+
+    def _finish(self, started: datetime, steps: list[dict], ran: list[str],
+                settings: Settings | None = None) -> dict[str, Any]:
         errors = [s["name"] for s in steps if s["status"] == "error"]
+        missing = [] if settings is None else [
+            what for what, ok in (("маркет-дата сервер", settings.hub_url or settings.snapshot_drop),
+                                  ("папки с отчётами", settings.inbox_dirs)) if not ok]
         if errors:
             msg = "Ошибки: " + ", ".join(errors)
         elif ran:
             msg = "Пересчитано: " + ", ".join(ran)
+        elif len(missing) == 2:  # first launch: say what to do, not that all is well
+            msg = "Не настроено: укажите маркет-дата сервер и папки с отчётами в Настройках"
+        elif missing:
+            msg = f"Данные актуальны (не настроено: {missing[0]})"
         else:
             msg = "Данные актуальны"
         upd: dict[str, Any] = {"state": "error" if errors else "idle", "last_cycle_at": _iso(started),
