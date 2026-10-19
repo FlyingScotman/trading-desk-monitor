@@ -97,6 +97,15 @@
     },
     "contract_rate_pct": {
       "$ref": "#/$defs/amount"
+    },
+    "maturity_date": {
+      "$ref": "#/$defs/date"
+    },
+    "risk_dv01_rub": {
+      "$ref": "#/$defs/amount"
+    },
+    "risk_cs01_rub": {
+      "$ref": "#/$defs/amount"
     }
   },
   "patternProperties": {

@@ -3,8 +3,11 @@ produces. A port of that function onto the store's rows (run_position.fact/pnl, 
 writer's defaults (zero cs01/jtd, nonzero risk/FX/gamma only, RUB at 1) are applied here. What the store
 does not hold yet (funding, OCP, scenario results, official PnL, CBR meetings, bond quotes) is rendered as the tdm
 assembler renders a run without it. ``history`` is the default runs of the earlier dates, where tdm's
-desk_history holds the latest published EOD run of each date (any cut). compat, removed with window.DESK (M7);
-never extended."""
+desk_history holds the latest published EOD run of each date (any cut). A position the run did not value (no
+fact: no data at all, an OTC row without the report's value) is listed after the valued ones with ``notValued``,
+no PV (``mvRub`` null), zero risk and PnL and its reason in ``extra``, so the positions list shows it and no total
+moves; it has no segment and no instrument type (the one addition beyond tdm's assembler, which drops such a
+position). compat, removed with window.DESK (M7); never extended otherwise."""
 
 from __future__ import annotations
 
@@ -107,6 +110,24 @@ def run_totals(rows) -> tuple[float, float, float, float]:
     facts = [r["fact"] for r in rows]  # SQLite SUM is compensated too
     return (math.fsum(off), math.fsum(exp), math.fsum(p.get("dv01") or 0.0 for p in facts),
             math.fsum(p.get("cs01") or 0.0 for p in facts))
+
+
+def _not_valued(r: dict[str, Any], books: dict[str, dict]) -> dict[str, Any]:
+    """A run_position without fact as a Desk Monitor position: visible, PV empty, nothing in any total."""
+    zero = dict.fromkeys(("carry", "rolldown", "rates", "spread", "fx", "funding", "convexity", "newTrades", "other",
+                          "fxGross", "fxFunding", "fxGrossCbr", "fxFundingCbr", "fxCbr", "explained", "explainedCbr",
+                          "fxBasis", "unexplained"), 0.0)
+    return {
+        "id": r["position_id"], "book": r["book_id"], "assetClass": None, "segment": None, "instrType": None,
+        "name": r["secid"] or r["position_id"], "isin": None, "issuer": None, "issuerGroup": None, "sector": None,
+        "rating": None, "ccy": None, "maturity": None, "tenorY": None, "side": None, "notional": None,
+        "notionalRub": None, "price": None, "mv": None, "mvRub": None, "dv01": 0.0, "cs01": 0.0, "ofzSpr01": 0.0,
+        "risk": {}, "fxDelta": {}, "jtd": 0.0, "gamma": [], **gamma_summary([], None, None, 0.0),
+        "entity": books.get(r["book_id"], {}).get("entity", "—"), "newToday": False, "notValued": True,
+        "pnl": {**zero, "official": None, "breakNote": None},
+        "extra": {"quality": "not_valued", "valuation": "not_valued", "reason": r["reason"],
+                  "quantity": r["quantity"]},
+    }
 
 
 def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
@@ -222,6 +243,9 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         if p.get("extra") is not None:
             pos["extra"] = p["extra"]
         positions.append(pos)
+    for r in con.execute("SELECT position_id, book_id, secid, quantity, reason FROM run_position WHERE run_id = %s"
+                         " AND fact IS NULL ORDER BY ord", (rid,)):
+        positions.append(_not_valued(r, books))
 
     scenarios = [{"id": s["scenario_id"], "name": s["name"], "kind": s["kind"], "description": s["description"],
                   **s["definition"]} for s in con.execute(

@@ -275,8 +275,12 @@ Key: (`book_id`, `position_id`).
 | `deal_id` | str | OTC |
 | `mark_price_pct`, `accrued_ccy`, `mv_rub`, `book_value_rub` | num | Reconciliation |
 | `purchase_date`, `purchase_price_pct`, `purchase_yield_pct`, `contract_rate_pct` | | HTM, as in 1.3 |
+| `maturity_date` | date | OTC and other rows: final maturity, for the bucket of `risk_dv01_rub` |
+| `risk_dv01_rub`, `risk_cs01_rub` | num | The report's own risk of a row the backend does not value itself (OTC, other, an unmapped bond): RUB PV change for +1 bp parallel rates, resp. credit spread |
 
 A bond row needs one of `quantity`, `face_amount_ccy`, `face_outstanding_ccy`. The backend derives the number of bonds with the instrument's initial or current face. When two are given and disagree by more than half a bond, the row gets a `quantity_face_mismatch` warning.
+
+An `otc` or `other` row is valued at its `mv_rub` (quality `reported_value`; without `mv_rub` it is not valued: it shows in coverage and, without a PV, in the Desk Monitor positions list). Its `risk_dv01_rub` goes whole into the RUB rates bucket whose pillar is nearest `maturity_date` (none, or past: the shortest bucket, flagged), `risk_cs01_rub` into CS01. The same risk fields are used for an unmapped bond on the `reported_value` rung; a bond the backend values itself ignores them. The adapter fills them only when the report's figure is reliable.
 
 ### `ocp` — stock; `full_snapshot`, scope `["entity"]` or `["entity", "book_id"]`
 

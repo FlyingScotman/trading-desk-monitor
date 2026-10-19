@@ -60,7 +60,7 @@ def _doc_table(heading: str) -> list[tuple[str, bool]]:
     for line in block.splitlines():
         if line.startswith("| `"):
             cell = line.split("|")[1]
-            out += [(f, "●" in cell) for f in re.findall(r"`([a-z_]+)`", cell)]
+            out += [(f, "●" in cell) for f in re.findall(r"`([a-z0-9_]+)`", cell)]
     return out
 
 
@@ -70,7 +70,7 @@ def test_schema_fields_equal_the_08_tables() -> None:
     text = (REPO / "docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md").read_text(encoding="utf-8")
     line = text.split("### `books`", 1)[1].split("\n\n")[1].split(": ", 1)[1].split(". ", 1)[0]
     line = re.sub(r"\(`[A-Z][^)]*\)", "", line)  # the book_type enum
-    names, required = re.findall(r"`([a-z_]+)`", line), re.findall(r"`([a-z_]+)` ●", line)
+    names, required = re.findall(r"`([a-z0-9_]+)`", line), re.findall(r"`([a-z0-9_]+)` ●", line)
     fields, req = schema_fields("books")
     assert sorted(fields) == sorted(names) and sorted(req) == sorted(required)
     for name in ("positions", "books"):  # the CSV templates: header only, BOM, ;
