@@ -1,7 +1,7 @@
 """Compatibility adapter (05 §4): ``window.DESK`` from the desk store, in the shape ``tdm.assemble.assemble``
 produces. A port of that function onto the store's rows (run_position.fact/pnl, run_reference); the tdm
 writer's defaults (zero cs01/jtd, nonzero risk/FX/gamma only, RUB at 1) are applied here. What the store
-does not hold yet (funding, OCP, scenarios, official PnL, CBR meetings, bond quotes) is rendered as the tdm
+does not hold yet (funding, OCP, scenario results, official PnL, CBR meetings, bond quotes) is rendered as the tdm
 assembler renders a run without it. ``history`` is the default runs of the earlier dates, where tdm's
 desk_history holds the latest published EOD run of each date (any cut). compat, removed with window.DESK (M7);
 never extended."""
@@ -223,6 +223,9 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
             pos["extra"] = p["extra"]
         positions.append(pos)
 
+    scenarios = [{"id": s["scenario_id"], "name": s["name"], "kind": s["kind"], "description": s["description"],
+                  **s["definition"]} for s in con.execute(
+        "SELECT * FROM scenario_def WHERE active ORDER BY ord, scenario_id")]
     hist = con.execute(f"SELECT run_id, business_date FROM run WHERE run_id IN ({DEFAULT_RUNS})"
                        " AND business_date < %s ORDER BY business_date DESC LIMIT %s",
                        (run["business_date"], HISTORY_DAYS - 1)).fetchall()[::-1]
@@ -244,7 +247,7 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         "FX": fx, "FX_MOVE_PCT": fx_move, "FX_CBR": fx_cbr, "FX_CBR_MOVE_PCT": fx_cbr_move,
         "FX_CBR_NEXT": fx_cbr_next,
         "INDICES": indices, "ISSUERS": issuers, "RATING_ORDER": rating_order,
-        "BOOKS": books, "SCENARIOS": [], "scenarioResults": {},
+        "BOOKS": books, "SCENARIOS": scenarios, "scenarioResults": {},
         "JTD_RECOVERY": 0.0, "FUNDING_RULES": [], "OCP_TRANSFERS": [],
         "CBR_MEETINGS": [], "CARRY_SCENARIOS": DEFAULT_CARRY, "CARRY_HORIZONS": CARRY_HORIZONS,
         "official": {"asOf": as_of, "received": any(p["pnl"]["official"] is not None for p in positions),

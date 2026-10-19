@@ -487,11 +487,11 @@ def _prepare(r: BondRequest, market: MarketSnapshot) -> _Prepared:
 
 
 def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_order: bool = False,
-                cache: ShockedCurveCache | None = None
+                cache: ShockedCurveCache | None = None, scenarios: tuple = ()
                 ) -> tuple[dict[str, BondValuation | Rejected], list[PortfolioRiskResult]]:
     """Value ``requests`` on ``market`` (a core snapshot without quotes, with the curves and fixings
     floaters need), one core call per spread kind. Returns the valuation or the rejection per
-    position ID, and the core results."""
+    position ID, and the core results. ``scenarios`` (core ``PortfolioScenario``) go to every core call."""
     out: dict[str, BondValuation | Rejected] = {}
     results = []
     for r in requests:  # core values at the business date; the MOEX accrued is as of the trade date
@@ -539,7 +539,7 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
         result = value_portfolio(run_id=f"desk-eod-{market.business_date}-{kind}", as_of=market.known_at,
                                  snapshot=replace(snap, quotes=tuple(quotes.values())),
                                  instruments=list(instruments.values()), positions=positions, policy=policy,
-                                 curve_cache=cache)
+                                 scenarios=scenarios, curve_cache=cache)
         results.append(result)
         for rej in result.coverage.rejections:
             out[rej.position_id] = Rejected(f"core_{rej.code.lower()}", rej.message)

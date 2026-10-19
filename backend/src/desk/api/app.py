@@ -1,5 +1,5 @@
-"""Desk API v1 (05 §2, the S5 subset) over the desk store (0001 schema), read-only, plus the window.DESK
-compatibility adapter (05 §4) and the prototypes as static files.
+"""Desk API v1 (05 §2, the S5 subset) over the desk store, read-only but for scenario job submission (S6),
+plus the window.DESK compatibility adapter (05 §4), the S6 app at /app/ and the prototypes as static files.
 
 shortcut: no authentication in S5; the reverse proxy authenticates (05 §6), bind 127.0.0.1 until then.
 shortcut: one psycopg connection per request, no pool; fine for a few users, pool it if latency shows."""
@@ -18,15 +18,18 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import psycopg
-from fastapi import Depends, FastAPI, Query, Request
+from fastapi import Depends, FastAPI, Query, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from psycopg.rows import dict_row
 from starlette.exceptions import HTTPException
 
 from .. import __version__
+from ..scenario import jobs
+from ..scenario.definition import definition_hash, normalize
+from ..scenario.taylor import risk_payload
 from ..settings import REPO_ROOT
 from . import compat
 from .models import (
@@ -34,21 +37,26 @@ from .models import (
     AggregateRow,
     Aggregates,
     ErrorOut,
+    JobIn,
     PnlSums,
     Position,
     PositionList,
     PositionPnl,
     Ready,
+    RiskPayload,
     RunDetail,
     RunHeader,
     RunList,
     RunPnl,
     RunStatus,
     RunType,
+    ScenarioDefList,
+    ScenarioJob,
 )
 
 log = logging.getLogger("desk.api")
 STATIC_DIR = REPO_ROOT / "prototypes"
+APP_DIR = REPO_ROOT / "frontend" / "dist"
 REQUEST_ID = re.compile(r"[\w.:-]{1,128}")
 HEADER_SQL = f"SELECT r.*, r.run_id IN ({compat.DEFAULT_RUNS}) AS is_default FROM run r"
 DIMS = {"book": "book_id", "quality": "quality", "asset_class": "fact->>'asset_class'",
@@ -104,10 +112,19 @@ def db(request: Request) -> Iterator[psycopg.Connection]:
         yield con
 
 
+def db_rw(request: Request) -> Iterator[psycopg.Connection]:
+    """Read-write: only for submitting scenario jobs."""
+    with psycopg.connect(request.app.state.store_url, row_factory=dict_row, autocommit=True,
+                         connect_timeout=5) as con:
+        yield con
+
+
 Con = Annotated[psycopg.Connection, Depends(db)]
+ConRW = Annotated[psycopg.Connection, Depends(db_rw)]
 
 
-def create_app(store_url: str, static_dir: Path | None = None) -> FastAPI:
+def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | None = None) -> FastAPI:
+    """No scenario worker here (``serve`` starts one): jobs submitted to this app stay queued."""
     app = FastAPI(title="Desk API", version=__version__, description="Desk API v1 (docs/architecture/05 §2)",
                   responses={404: {"model": ErrorOut}, 422: {"model": ErrorOut}, 503: {"model": ErrorOut}})
 
@@ -137,7 +154,9 @@ def create_app(store_url: str, static_dir: Path | None = None) -> FastAPI:
 
     @app.exception_handler(RequestValidationError)
     def validation_error(request: Request, exc: RequestValidationError):
-        return _error(request, 422, "invalid_parameter", "invalid request parameters", exc.errors())
+        # without the input: the client sent it, and a NaN in it would break the JSON of the error
+        errors = [{k: v for k, v in e.items() if k != "input"} for e in exc.errors()]
+        return _error(request, 422, "invalid_parameter", "invalid request parameters", errors)
 
     @app.exception_handler(psycopg.OperationalError)
     def store_error(request: Request, exc: psycopg.OperationalError):
@@ -262,6 +281,45 @@ def create_app(store_url: str, static_dir: Path | None = None) -> FastAPI:
                                     pnl=p | {"total": sum(have) if have else None}))
         return _cached(request, run, Aggregates(run_id=run_id, dims=names, rows=out))
 
+    @app.get("/api/v1/runs/{run_id}/risk", response_model=RiskPayload)
+    def risk(con: Con, run_id: int, request: Request):
+        run = _run_or_404(con, run_id)
+        rows = con.execute("SELECT * FROM run_position WHERE run_id = %s AND fact IS NOT NULL ORDER BY ord",
+                           (run_id,)).fetchall()
+        ref = {r["kind"]: r["data"] for r in con.execute("SELECT kind, data FROM run_reference WHERE run_id = %s",
+                                                         (run_id,))}
+        return _cached(request, run, RiskPayload(**risk_payload(run, rows, ref)))
+
+    # ---- scenarios (S6)
+    @app.get("/api/v1/scenario-defs", response_model=ScenarioDefList, response_model_exclude_unset=True)
+    def scenario_defs(con: Con):
+        rows = con.execute("SELECT scenario_id, name, kind, description, ord, definition FROM scenario_def"
+                           " WHERE active ORDER BY ord, scenario_id").fetchall()
+        return {"scenarios": [{**r, "definition_hash": definition_hash(normalize(r["definition"]))}
+                              for r in rows]}
+
+    @app.post("/api/v1/scenario-jobs", response_model=ScenarioJob, response_model_exclude_unset=True,
+              status_code=status.HTTP_202_ACCEPTED,
+              description="202: a new job, queued; 200: the live or done job of an equivalent definition")
+    def submit_job(con: ConRW, body: JobIn, response: Response):
+        try:
+            job, created = jobs.submit(con, body.base_run_id,
+                                       body.definition.model_dump(by_alias=True, exclude_none=True))
+        except LookupError as e:
+            raise ApiError(404, "not_found", str(e)) from None
+        except ValueError as e:
+            raise ApiError(422, "invalid_parameter", str(e)) from None
+        if not created:
+            response.status_code = status.HTTP_200_OK
+        return job
+
+    @app.get("/api/v1/scenario-jobs/{job_id}", response_model=ScenarioJob, response_model_exclude_unset=True)
+    def get_job(con: Con, job_id: int):
+        job = jobs.get(con, job_id)
+        if job is None:
+            raise ApiError(404, "not_found", f"scenario job {job_id} not found")
+        return job
+
     # ---- compatibility adapter (05 §4)
     def _compat(con, as_of: date | None, run_id: int | None) -> tuple[dict | None, str]:
         run = compat.resolve_run(con, as_of, run_id)
@@ -290,15 +348,28 @@ def create_app(store_url: str, static_dir: Path | None = None) -> FastAPI:
             raise ApiError(404, "not_found", missing)
         return desk
 
+    built = Path(app_dir) if app_dir else APP_DIR
+    if built.is_dir():  # before "/": the frontend build, absent until npm run build
+        @app.get("/app", include_in_schema=False)
+        def app_slash(request: Request):  # the "/" mount would 404 it
+            return RedirectResponse("/app/" + (f"?{request.url.query}" if request.url.query else ""))
+
+        app.mount("/app", StaticFiles(directory=built, html=True), name="app")
     static = Path(static_dir) if static_dir else STATIC_DIR
     if static.is_dir():  # an installed wheel has no prototypes/
         app.mount("/", StaticFiles(directory=static, html=True), name="static")
     return app
 
 
-def serve(store_url: str, host: str = "127.0.0.1", port: int = 8000, static_dir: Path | None = None) -> None:
+def serve(store_url: str, host: str = "127.0.0.1", port: int = 8000, static_dir: Path | None = None,
+          snapshots: Path | None = None) -> None:
+    """``snapshots``: the snapshot cache the scenario worker reprices from; None runs no worker."""
     import uvicorn
 
+    from ..marketdata.bundle import SnapshotDir
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    if snapshots is not None:
+        jobs.Worker(store_url, SnapshotDir(snapshots)).start()
     # the desk.api logger logs every request with its request id, so no uvicorn access log
     uvicorn.run(create_app(store_url, static_dir), host=host, port=port, access_log=False)

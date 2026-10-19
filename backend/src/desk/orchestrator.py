@@ -127,8 +127,19 @@ def with_rates(market: MarketView, static: StaticView, core: MarketSnapshot) -> 
     return replace(core, curves=tuple(curves), fixings=fixings), lineage
 
 
-def prepare(snapshots: SnapshotDir, business_date: str, cut_type: str = "eod_final") -> EodContext:
-    snap = snapshots.market(business_date, cut_type)
+def prepare(snapshots: SnapshotDir, business_date: str, cut_type: str = "eod_final",
+            market_snapshot_id: str | None = None) -> EodContext:
+    """``market_snapshot_id`` (a stored run's own snapshot) instead of the latest of (date, cut): a later
+    correction or a relabelled cut must not change what a run is repriced on."""
+    if market_snapshot_id is None:
+        snap = snapshots.market(business_date, cut_type)
+    else:
+        if not (snapshots.root / f"{market_snapshot_id}.json.gz").is_file():
+            raise SnapshotError(f"market snapshot {market_snapshot_id} is not in {snapshots.root}")
+        snap = snapshots.get(market_snapshot_id)
+        if (snap.kind, snap.business_date) != ("market", business_date):
+            raise SnapshotError(f"snapshot {market_snapshot_id} is {snap.kind} of {snap.business_date}, "
+                                f"not the market of {business_date}")
     market = MarketView(snap)
     assert snap.static_snapshot_id
     static = StaticView(snapshots.get(snap.static_snapshot_id))
@@ -144,14 +155,15 @@ def prepare(snapshots: SnapshotDir, business_date: str, cut_type: str = "eod_fin
 
 def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: bool = False,
           position_ids: list[str] | None = None, fallback: bool = True,
-          carried_spreads: dict[str, CarriedSpread] | None = None) -> list[Outcome]:
+          carried_spreads: dict[str, CarriedSpread] | None = None, scenarios: tuple = ()) -> list[Outcome]:
     """``position_ids`` (the book's, unique) name the positions in the core results; default the request index.
 
     With ``fallback`` (the owner's rule: a bond is valued somehow rather than not at all) every outcome
     core cannot value gets a ``valuation.fallback`` rung (market value, stale or model price, par proxy)
     with its quality flag; ``reason``/``detail`` keep why it is not exact. Only a bond with no data at
     all stays without a valuation. ``carried_spreads`` (from the desk store) are the model spreads of
-    the latest earlier run: a model price reuses its bond's spread instead of the day's median."""
+    the latest earlier run: a model price reuses its bond's spread instead of the day's median.
+    ``scenarios`` (core ``PortfolioScenario``) are repriced by core: ``core_result.scenarios``."""
     pids = [str(i) for i in range(len(requests))] if position_ids is None else position_ids
     if len(pids) != len(requests) or len(set(pids)) != len(pids):
         raise ValueError("position_ids must be unique, one per request")
@@ -173,7 +185,8 @@ def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: b
             todo.append(bond_request(pid, terms, quote, settle, qty))
         except Rejected as e:
             o.reason, o.detail = e.reason, e.detail
-    valued, results = value_bonds(ctx.core_market, todo, second_order=second_order, cache=ctx.cache)
+    valued, results = value_bonds(ctx.core_market, todo, second_order=second_order, cache=ctx.cache,
+                                  scenarios=scenarios)
     by_pid = {p.position_id: r for r in results for p in r.positions}
     for pid, v in valued.items():
         o = out[index[pid]]

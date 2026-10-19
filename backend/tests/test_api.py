@@ -9,6 +9,7 @@ import json
 from datetime import timedelta
 from pathlib import Path
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from store_rows import insert_run
@@ -187,7 +188,7 @@ def test_errors_etag_and_health(store_url, book, client):
     assert_error(client.post("/api/v1/runs"), 405, "invalid_parameter")
     assert client.get("/health/live").json() == {"status": "ok"}
     h = client.get("/health/ready").json()
-    assert h["schema_version"] == "0001_init" and h["latest_run"] is None
+    assert h["schema_version"] == "0002_scenarios" and h["latest_run"] is None
     rid = run(store_url, book)
     h = client.get("/health/ready").json()["latest_run"]
     assert h["run_id"] == rid and h["business_date"] == DATE and h["age_seconds"] >= 0
@@ -226,6 +227,12 @@ def test_compat_parity_with_tdm_assemble(store_url, book, client, tmp_path):
     insert_run(store_url, early, positions, None)
     tdm_id, status, _ = tdm_run.publish(str(db), ctx, [p[:3] for p in positions], prev=view)
     assert status == "complete"
+    with psycopg.connect(store_url) as pg, connect(db) as con:  # the presets, as the tdm store would hold them
+        con.executemany("INSERT INTO scenario_def (scenario_id, name, ord, definition_json, active, updated_at,"
+                        " kind, description) VALUES (?, ?, ?, ?, ?, '-', ?, ?)",
+                        [(i, n, o, json.dumps(d, ensure_ascii=False), int(a), k, desc) for i, n, o, d, a, k, desc in
+                         pg.execute("SELECT scenario_id, name, ord, definition, active, kind, description"
+                                    " FROM scenario_def")])
     con = connect(db, readonly=True)
     want = json.loads(json.dumps(assemble(con, resolve_run(con))))
     con.close()
@@ -254,4 +261,5 @@ def test_compat_parity_with_tdm_assemble(store_url, book, client, tmp_path):
     h = want["history"]
     assert [x["date"] for x in h] == [view.business_date.isoformat(), DATE] and h[0]["pnlOfficial"]
     assert h[1]["pnlCum"] == h[0]["pnlOfficial"] + h[1]["pnlOfficial"] and h[0]["dv01"] and h[0]["cs01"]
+    assert "keyhike" in [x["id"] for x in want["SCENARIOS"]]
     assert want["CURVES"] and want["ISSUERS"] and len(want["FX"]) > 1 and want["INDICES"] and want["BOOKS"]

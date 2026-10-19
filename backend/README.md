@@ -1,6 +1,6 @@
 # Desk backend (`desk`)
 
-The Trading Desk Monitor backend. Design: [`docs/architecture/04_BACKEND.md`](../docs/architecture/04_BACKEND.md). Current state: **slices S1–S5** (next: S6, the interactive scenario and the first React screen) of [`docs/architecture/VERTICAL_SLICES.md`](../docs/architecture/VERTICAL_SLICES.md). It pulls verified snapshots from the VPS hub into a local cache, values every bond of a book through core 0.32.0 (pinned by commit from its GitHub repository) or, where core cannot, by a flagged approximation (see "Valuation quality"), explains the day-over-day flash PnL by exact repricing, and publishes immutable EOD runs into the desk store (PostgreSQL), which the desk API serves to the Desk Monitor prototype.
+The Trading Desk Monitor backend. Design: [`docs/architecture/04_BACKEND.md`](../docs/architecture/04_BACKEND.md). Current state: **slices S1–S6** (next: S7, intraday) of [`docs/architecture/VERTICAL_SLICES.md`](../docs/architecture/VERTICAL_SLICES.md). It pulls verified snapshots from the VPS hub into a local cache, values every bond of a book through core 0.32.0 (pinned by commit from its GitHub repository) or, where core cannot, by a flagged approximation (see "Valuation quality"), explains the day-over-day flash PnL by exact repricing, and publishes immutable EOD runs into the desk store (PostgreSQL), which the desk API serves to the Desk Monitor prototype and to the Scenario Lab, the first React screen (`frontend/`). A scenario is estimated by Taylor in the browser from the run's stored risk and repriced exactly by core on the run's own snapshot.
 
 ```
 VPS hub ──► desk.marketdata.hub + cache (desk sync) ──► snapshot cache (or a hand-filled drop folder)
@@ -17,7 +17,9 @@ hub snapshot files ──► desk.marketdata (bundle + adapter mdhub_v1)
                           ├─► desk.pnl.flash ──► previous date revalued, PnL by carry / rolldown / rates / spread
                           │
                           ├─► desk.publish.desk_run ──► desk store (PostgreSQL) ──► desk.api (desk serve) ──► Desk Monitor
-                          │        positions as of D known at T; carried model spreads ◄──┘
+                          │        positions as of D known at T; carried model spreads ◄──┘      │      Scenario Lab (/app/)
+                          │                                                                       ▼
+                          ├─► desk.scenario: Taylor (T1, from the run's risk) and exact jobs (T2, core value_portfolio scenarios)
                           └─► desk.report.validation ──► HTML/CSV: our analytics vs MOEX
 ```
 
@@ -64,7 +66,24 @@ cd backend && .venv/bin/desk serve
 
 Then open:
 - http://127.0.0.1:8000/desk-monitor.html for the Desk Monitor on the latest default run (the picker at the bottom left switches runs); the API is under `/api/v1` (`/docs` for the OpenAPI);
+- http://127.0.0.1:8000/app/ for the Scenario Lab (slice S6): pick a run and a preset or move the sliders, read the Taylor estimate (≈), then "Посчитать точно" for the exact repricing and its residual;
 - `.devdata/reports/validation_<date>.html` for the comparison with MOEX analytics over the whole bond universe.
+
+`desk serve` also runs the exact scenario worker, a thread that reprices queued jobs from the run's bundles in `DESK_SNAPSHOT_CACHE` (one worker per store); `desk serve --no-worker` leaves jobs queued. The scenario routes:
+
+| Route | What |
+|---|---|
+| `GET /api/v1/runs/{id}/risk` | The run's stored risk per position (sparse delta, gamma upper triangle), for the Taylor in the browser (T1) |
+| `GET /api/v1/scenario-defs` | The preset scenario definitions |
+| `POST /api/v1/scenario-jobs` | `{base_run_id, definition}`: queue an exact repricing (T2); an equivalent definition gets the existing job |
+| `GET /api/v1/scenario-jobs/{id}` | The job and, when done, Taylor, exact and residual per position, book and total, with coverage |
+
+`desk openapi --out ../frontend/openapi.json` writes the API's OpenAPI document, which the frontend types are generated from; a test fails when the committed copy is stale. The Scenario Lab is served from the committed `frontend/dist`, so running it needs no Node. To rebuild it after a change in `frontend/` (Node 18 or later, see [`frontend/README.md`](../frontend/README.md)):
+
+```bash
+cd backend && .venv/bin/desk openapi --out ../frontend/openapi.json
+cd ../frontend && npm ci && npm run gen:api && npm test && npm run build
+```
 
 `desk eod` reads only the cache, so a run never depends on the hub being up; `desk eod --sync` pulls the date and the business date before it first. Every run prints the market snapshot ID, where it came from, its `published_at` and age, and records them in the run log lineage. When the cache holds an earlier date, `desk eod` attaches the flash PnL against it (slice S2; `--no-pnl` turns it off).
 
@@ -121,7 +140,7 @@ Exact and assumed bonds get the flash PnL by exact repricing. Market value and s
 cd backend && .venv/bin/pytest -q
 ```
 
-The tests run slices S1–S3 on the hub's golden fixtures, vendored in `tests/fixtures/mdhub_v1/` (ten public bonds of 2026-10-15). The fixtures hold one date, so the S2 tests build the previous date by shifting the KBD parameters. The S3 tests serve the same fixtures from an in-process stub hub on `127.0.0.1` (paging, 401/403/404, retries, corrupt bodies, the drop folder, the token never printed). The S4 tests cover the core mapping (`test_slice_s4.py`), floaters, perpetuals and calendars (`test_slice_s4_floaters.py`), the RUONIA OIS and key-rate curves (`test_curves_rates.py`), the fallback rungs (`test_fallback.py`) and the flash PnL against core's `explain_horizon_pnl` (`test_pnl_compare.py`). The S5 tests run on an embedded PostgreSQL per test session (`pgserver`, a fresh migrated database per test): the bitemporal positions and immutability triggers (`test_store.py`), a run published into the store (`test_slice_s5.py`), the carried model spread (`test_model_spread.py`), and the desk API with the parity of its `window.DESK` adapter against `tdm.assemble` (`test_api.py`). Snapshots of the whole universe are local only.
+The tests run slices S1–S3 on the hub's golden fixtures, vendored in `tests/fixtures/mdhub_v1/` (ten public bonds of 2026-10-15). The fixtures hold one date, so the S2 tests build the previous date by shifting the KBD parameters. The S3 tests serve the same fixtures from an in-process stub hub on `127.0.0.1` (paging, 401/403/404, retries, corrupt bodies, the drop folder, the token never printed). The S4 tests cover the core mapping (`test_slice_s4.py`), floaters, perpetuals and calendars (`test_slice_s4_floaters.py`), the RUONIA OIS and key-rate curves (`test_curves_rates.py`), the fallback rungs (`test_fallback.py`) and the flash PnL against core's `explain_horizon_pnl` (`test_pnl_compare.py`). The S5 tests run on an embedded PostgreSQL per test session (`pgserver`, a fresh migrated database per test): the bitemporal positions and immutability triggers (`test_store.py`), a run published into the store (`test_slice_s5.py`), the carried model spread (`test_model_spread.py`), and the desk API with the parity of its `window.DESK` adapter against `tdm.assemble` (`test_api.py`). The S6 tests cover the scenario definition and hash, the Taylor against core and the exact repricing of a golden run (`test_slice_s6.py`, which also checks the committed parity fixture `tests/fixtures/taylor_parity.json`; `DESK_REGEN_FIXTURES=1` regenerates it), and the scenario store, jobs, worker and routes with the committed `frontend/openapi.json` (`test_scenario_api.py`). Snapshots of the whole universe are local only.
 
 `pytest -m live` checks the real hub in `DESK_HUB_URL` (hub-check and a sync of its latest date); the default run never touches the network.
 
@@ -143,5 +162,6 @@ The tests run slices S1–S3 on the hub's golden fixtures, vendored in `tests/fi
 | `store/` | The desk store: migrations, bitemporal positions (`load_positions`, `positions_for`), carried spreads, orphan reaping | ADR-006, 04 §2 |
 | `publish/desk_run.py` | Writes an immutable run with its lineage, core results, model spreads, coverage and totals | 04 §3 |
 | `publish/tdm_run.py` | The run content both stores share; writes it through `tdm.writer.Run` with `--tdm` (transition) | 05 §4 |
-| `api/` | Desk API v1 (FastAPI): runs, default run, positions, PnL, aggregates, health; the `window.DESK` adapter and the prototypes | 05 §2, §4 |
+| `api/` | Desk API v1 (FastAPI): runs, default run, positions, PnL, aggregates, risk, scenario definitions and jobs, health; the `window.DESK` adapter (with `SCENARIOS` from the store), the prototypes and the React app at `/app/` | 05 §2, §4 |
+| `scenario/` | Scenarios: the definition, its normalized form and hash (`definition.py`); the run's risk payload and the Taylor sum (`taylor.py`, the reference for the browser's port); exact repricing of a run through core (`exact.py`); the job store and worker (`jobs.py`) | 03 T1/T2, VERTICAL_SLICES S6 |
 | `report/validation.py` | Universe-wide comparison with MOEX analytics | VERTICAL_SLICES S1 |

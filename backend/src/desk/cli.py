@@ -1,4 +1,4 @@
-"""``desk`` command line (slices S1-S5).
+"""``desk`` command line (slices S1-S6).
 
     desk hub-check                       hub version, token, latest eod_final and its age
     desk sync --last 5                   pull verified snapshots into the cache (also --date, --from/--to)
@@ -8,7 +8,8 @@
     desk db-migrate                      create or update the desk store (DESK_STORE_URL, else embedded)
     desk load-positions examples/test_book.csv --date 2026-10-15 [--books OFZ,CORP]
     desk runs --date 2026-10-15          the store's runs: status, positions, qualities, PnL
-    desk serve                           desk API + Desk Monitor on http://127.0.0.1:8000
+    desk serve                           desk API + Desk Monitor on http://127.0.0.1:8000, scenario worker
+    desk openapi --out ../frontend/openapi.json   the API's OpenAPI document (stdout without --out)
 
 Defaults for the snapshot folder, the run store and the report folder come from
 :mod:`desk.settings` (``DESK_*`` variables or ``backend/.env``); ``desk config`` prints them.
@@ -28,6 +29,7 @@ import argparse
 import csv
 import getpass
 import hashlib
+import json
 import sys
 import time
 from collections import Counter
@@ -370,7 +372,18 @@ def cmd_serve(a: argparse.Namespace) -> int:
     url = store.resolve_url(a.settings)
     store.migrate(url)
     print(f"desk API on http://{a.host}:{a.port}/desk-monitor.html, store {mask_url(url)}")
-    serve(url, host=a.host, port=a.port)
+    serve(url, host=a.host, port=a.port, snapshots=None if a.no_worker else a.settings.snapshot_cache)
+    return 0
+
+
+def cmd_openapi(a: argparse.Namespace) -> int:
+    from .api import create_app
+
+    text = json.dumps(create_app("postgresql://unused").openapi(), indent=2, ensure_ascii=False) + "\n"
+    if a.out:
+        Path(a.out).write_text(text, encoding="utf-8")
+    else:
+        sys.stdout.write(text)
     return 0
 
 
@@ -443,7 +456,12 @@ def main(argv: list[str] | None = None) -> int:
     sv = sub.add_parser("serve", help="the desk API and the Desk Monitor prototype on the store")
     sv.add_argument("--host", default="127.0.0.1")
     sv.add_argument("--port", type=int, default=8000)
+    sv.add_argument("--no-worker", action="store_true",
+                    help="no exact scenario worker (jobs stay queued); it reprices from DESK_SNAPSHOT_CACHE")
     sv.set_defaults(fn=cmd_serve)
+    oa = sub.add_parser("openapi", help="print or write the desk API's OpenAPI document")
+    oa.add_argument("--out", help="write it to this file")
+    oa.set_defaults(fn=cmd_openapi)
     c = sub.add_parser("config", help="print the effective settings (token masked)")
     c.set_defaults(fn=cmd_config)
     a = ap.parse_args(argv)

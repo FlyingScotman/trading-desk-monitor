@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 RunType = Literal["EOD", "INTRADAY", "TEST", "REPLAY"]
 RunStatus = Literal["loading", "complete", "failed"]
@@ -137,3 +137,138 @@ class Ready(BaseModel):
     status: Literal["ok"]
     schema_version: str | None
     latest_run: LatestRun | None
+
+
+# ---- scenarios (S6)
+
+class SpreadRules(BaseModel):
+    """Credit spread shocks in bp, additive; mult scales the position's own spread (factor > 0)."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)  # "_all"/"_mult" only, not the names
+    all: float | None = Field(None, alias="_all")
+    mult: float | None = Field(None, alias="_mult")
+    sector: dict[str, float] = {}
+    issuer: dict[str, float] = {}
+    rating: dict[str, float] = {}
+
+
+class ScenarioDefinition(BaseModel):
+    """The prototype scenario shape. curves: bp per RISK_BUCKETS pillar (11) or one number for all, per
+    published curve ("RUB OFZ"); ofzSpread: OFZ Z-spread to the KBD, bp; fx: % against RUB (+ = weaker
+    rouble). Returned normalized: 11-pillar lists, zeros and empty entries left out."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    curves: dict[str, float | list[float]] = {}
+    ofzSpread: float = 0
+    spreads: SpreadRules | None = None
+    fx: dict[str, float] = {}
+
+
+class ScenarioDefOut(BaseModel):
+    scenario_id: str
+    name: str
+    kind: Literal["preset", "historical", "custom"]
+    description: str | None
+    ord: int
+    definition: ScenarioDefinition
+    definition_hash: str
+
+
+class ScenarioDefList(BaseModel):
+    scenarios: list[ScenarioDefOut]
+
+
+class RiskPosition(BaseModel):
+    position_id: str
+    book_id: str
+    secid: str
+    name: str | None
+    quality: str
+    issuer: str | None
+    sector: str | None
+    rating: str | None
+    spread_kind: Literal["ofz", "credit"] | None
+    spread_bp: float | None
+    pv_rub: float
+    delta: list[tuple[int, float]] = Field(description="[factor index, RUB per unit]: IR and CS per bp, "
+                                                       "FX per 1 %; nonzero only")
+    gamma: list[tuple[int, int, float]] = Field(description="[i, j, RUB per unit_i x unit_j], i <= j")
+
+
+class RiskPayload(BaseModel):
+    """First-order and Hessian sensitivities of a run's valued positions, for the Taylor (T1) scenario
+    estimate: x_i shock per factor, total = sum delta x + sum_(i<=j) (i == j ? 1/2 : 1) gamma x_i x_j."""
+
+    run_id: int
+    business_date: date
+    buckets: list[str]
+    curves: list[str]
+    factors: list[str] = Field(description="IR|<curve>|<bucket>, then CS, then FX|<ccy>")
+    positions: list[RiskPosition]
+
+
+class JobIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    base_run_id: int
+    definition: ScenarioDefinition
+
+
+class TaylorParts(BaseModel):
+    rates: float
+    spread: float
+    fx: float
+    convexity: float
+    total: float
+
+
+class ResultPosition(BaseModel):
+    position_id: str
+    book_id: str
+    quality: str
+    taylor: TaylorParts
+    exact: float | None = Field(description="Exact repricing PnL, RUB; null when not covered")
+    residual: float | None = Field(description="exact - taylor.total")
+    code: str | None = Field(description="Why not covered: the fallback quality, core_<code>, base_mismatch")
+
+
+class ResultTotals(BaseModel):
+    taylor: float
+    taylor_covered: float = Field(description="Taylor total of the positions with an exact value")
+    exact: float | None
+    residual: float | None
+    blended: float = Field(description="exact of the covered positions + taylor of the others")
+    n_positions: int
+    n_exact: int
+
+
+class MissingPosition(BaseModel):
+    position_id: str
+    reason: str
+
+
+class ResultCoverage(BaseModel):
+    status: Literal["complete", "partial"]
+    n_positions: int
+    n_exact: int
+    missing: list[MissingPosition]
+
+
+class ScenarioResult(BaseModel):
+    method: str
+    definition_hash: str
+    coverage: ResultCoverage
+    totals: dict[str, ResultTotals] = Field(description="Per book and _total")
+    positions: list[ResultPosition]
+
+
+class ScenarioJob(BaseModel):
+    job_id: int
+    base_run_id: int
+    definition_hash: str
+    definition: ScenarioDefinition
+    status: Literal["queued", "running", "done", "failed"]
+    requested_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    error: str | None
+    result: ScenarioResult | None

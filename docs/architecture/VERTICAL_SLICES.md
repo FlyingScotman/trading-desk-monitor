@@ -1,6 +1,6 @@
 # Vertical slices
 
-As of 18 October 2026. Status: working plan, owned by the backend. **S3, S4 and S5 are built (19 October; the S3 live acceptance waits for the hub's snapshot layer). Next: S6.** Work for the hub and core: [briefs/HUB.md](briefs/HUB.md), [briefs/CORE.md](briefs/CORE.md).
+As of 18 October 2026. Status: working plan, owned by the backend. **S3, S4, S5 and S6 are built (19 October; the S3 live acceptance waits for the hub's snapshot layer). Next: S7.** Work for the hub and core: [briefs/HUB.md](briefs/HUB.md), [briefs/CORE.md](briefs/CORE.md).
 
 ## Why
 
@@ -20,7 +20,7 @@ Each slice keeps whatever it built that matches the architecture. Where it takes
 |---|---|---|
 | Backend reads snapshots from the hub API (`/v1/snapshots`) | Reads bundle files that the hub's own builder produced from a copy of the seed database (`tools/devdata/build_dev_snapshots.sh`) | S3. The dev export stays as the offline fallback |
 | Desk Postgres store with run lineage (ADR-006) | The `tdm` SQLite store through its writer SDK (`tdm.writer.Run`); lineage goes into the run log and `lib_version` | **Replaced in S5** (`desk eod --tdm` still writes it for `tdm serve`) |
-| Desk API v1 + React screens (05) | `tdm serve` and the existing Desk Monitor prototype through `window.DESK` | **API built in S5** (`desk serve`; the prototype reads `window.DESK` from the store through the compatibility adapter); S6 (first React screen) |
+| Desk API v1 + React screens (05) | `tdm serve` and the existing Desk Monitor prototype through `window.DESK` | **API built in S5** (`desk serve`; the prototype reads `window.DESK` from the store through the compatibility adapter). **First React screen built in S6** (`/app/`, Scenario Lab); the other screens are still the prototypes through `window.DESK` |
 | KBD/ZCYC evaluator in core (delivered in core 0.11) | Backend module `desk.curves.kbd`, which builds a core `DiscountCurve` from the published ZCYC parameters | **Replaced in S4** (core `rub_ofz_kbd_v1`) |
 | Core's portfolio path: `value_portfolio` over `Instrument`/`MarketSnapshot`/`Position` (core 0.10–0.11) | The adapter builds `BondCashflow` totals and calls `BondRiskEngine` per position | **Replaced in S4**. The fallback rungs below core still reprice with `BondRiskEngine` |
 | Horizon PnL explain in core: `explain_horizon_pnl`, `horizon_portfolio` (core 0.14) | `desk.pnl.flash`, the backend's own stepwise repricing | **Compared in S4: `desk.pnl.flash` stays** (S4 result); `pnl/compare.py` is the regression check |
@@ -35,7 +35,7 @@ Each slice keeps whatever it built that matches the architecture. Where it takes
 | **S3 Live hub and a test book** | Desk Monitor on runs of the last five business dates, valued from snapshots **pulled from the VPS hub** into the backend's cache. A synthetic test book with several books, shorts and coverage cases. Snapshot age on every run | Hub snapshot endpoints and token scopes; backend HTTP client, cache and verification; reproducibility by snapshot ID; the run never depends on the hub being up | **Built** 19 October ([result](#s3-result-19-october-2026)). Live acceptance waits for the hub's snapshot layer (H1–H4 below) |
 | **S4 Core portfolio path and the whole bond universe** | The same screens, valued through core 0.32 `value_portfolio`. Also priced now: floaters (OFZ-PK, key-rate, RUONIA), perpetuals to an explicit call and, once the hub carries CPI, OFZ-IN. A RUONIA OIS curve (`rub_ruonia_ois_moex_v2`) in the curves panel. Coverage grows from about 1034 bonds to every bond with a usable schedule | Adapter to core domain types; curve-spec mapping `dataset` → spec; core KBD; core horizon explain against `desk.pnl.flash` | **Built** 19 October ([result](#s4-result-19-october-2026)) |
 | **S5 Desk backend proper** | Same screens, now served by the desk API from the desk Postgres store, with run lineage | ADR-006, 04, 05 §2 | **Built** 19 October ([result](#s5-result-19-october-2026)) |
-| **S6 Interactive scenario** | Scenario slider with instant Taylor (≈) and an "exact" button that reprices on the backend; residual shown | 03 T1/T2, parity fixtures; first React + TypeScript screen | |
+| **S6 Interactive scenario** | Scenario slider with instant Taylor (≈) and an "exact" button that reprices on the backend; residual shown | 03 T1/T2, parity fixtures; first React + TypeScript screen | **Built** 19 October ([result](#s6-result-19-october-2026)) |
 | **S7 Intraday** | Intraday run every N minutes on intraday cuts; badge with age | Hub intraday cuts; scheduler | |
 | **S8 Derivatives and the hybrid book** | IRS, FX forwards and swaps, XCCY, futures and REPO from contract 1.3 term files, valued by core (result v3) next to bonds; CDS and whatever still lacks inputs imported, with coverage states | `private_inputs`; snapshot inputs from [briefs/HUB.md](briefs/HUB.md) (futures prices, FX value dates, RUONIA index); hybrid merge | |
 
@@ -485,3 +485,65 @@ Every other position is unchanged from S4. MIX-08 now keeps Z 281 bp from 09.10;
 - `coverage` and `totals` formats are defined in code only; they go into the interface catalogue with the API's OpenAPI.
 - A carried spread can be far from the bond's real level (MIX-08: 281 vs 390 bp). Upgrade: move it with its group's median change.
 
+## S6 result (19 October 2026)
+
+Built by the orchestrating session with three agents (scenario engine; store, jobs and API; frontend), against a plan with frozen interfaces. Integrated, then reviewed independently; the findings are fixed (below).
+
+**Scenario definitions** (`desk.scenario.definition`, `migrations/0002_scenarios.sql`). Table `scenario_def` with ten presets on the curve "RUB OFZ": `par+100`, `par-100`, `keyhike`, `bullsteep`, `bearflat`, `ofzwide`, `rubdep`, `credit`, `sector`, `stress22`.
+- The definition keeps the prototype shape, so the prototype's `runScenario` reads it. `basis` is dropped: runs publish only the KBD curve. `ofzSpread` is the OFZ Z-spread to the KBD.
+- A definition has a normalized form and a sha256 hash of it.
+- The own spread shock of a position: an OFZ gets `ofzSpread`; a credit gets `_all` + (`_mult` − 1) · `spread_bp` + sector + issuer + rating. A null `spread_bp` adds 0.
+
+**T1, Taylor in the browser.** `GET /api/v1/runs/{id}/risk` gives per position a sparse delta (IR per bucket in RUB/bp, CS in RUB/bp, FX in RUB per 1 %) and the upper triangle of gamma (the joint discount and projection Hessian). Taylor = Σ d·x + ½ diagonal + cross terms.
+- Python reference `desk.scenario.taylor`; TypeScript port `frontend/src/taylor`.
+- Parity fixture `backend/tests/fixtures/taylor_parity.json`: five cases from the golden snapshots plus synthetic FX and credit rows. Vitest checks the port against it to 1e-9 relative. The pytest fails if the committed fixture differs from a regeneration (`DESK_REGEN_FIXTURES=1` rewrites it).
+
+**T2, exact on the backend.** `POST /api/v1/scenario-jobs` `{base_run_id, definition}` returns a job; `GET /api/v1/scenario-jobs/{id}` polls it. `GET /api/v1/scenario-defs` lists the presets.
+- `desk.scenario.exact.reprice_run` revalues the run's exact and assumed positions from the run's own market snapshot id, through core `value_portfolio(scenarios=...)`: one core call per distinct spread shock. It checks the base PV against the run (`base_mismatch`).
+- Fallback rungs get Taylor only and are listed as missing (coverage n/N).
+- The result holds per position the Taylor parts, exact and residual; per book and in total: Taylor, Taylor covered, exact, residual, and blended (exact for covered positions plus Taylor for the rest).
+- Results are append-only (`scenario_result`), keyed by run, definition hash, method and core version, so a change of code or core recomputes.
+- Worker: a daemon thread in `desk serve` (`--no-worker` turns it off; jobs stay queued). One worker per store, by a PostgreSQL advisory lock; it claims jobs with `FOR UPDATE SKIP LOCKED` and marks orphaned jobs failed. Shortcut: core work holds the GIL, so the worker slows the API while it runs; upgrade: a separate `desk worker` process.
+- T2 needs the run's bundles in `DESK_SNAPSHOT_CACHE`.
+- FX shocks are passed to core, but FX-face bonds are not core-valued yet (`not_rub`, market value rung), so FX is Taylor only.
+
+**Frontend** (`frontend/`, Vite 5, React 18, TypeScript, vitest; [`frontend/README.md`](../../frontend/README.md)).
+- `desk serve` serves it at `/app/` from the committed `frontend/dist`. Shortcut: the inside server has no Node; upgrade: CI builds it into the release.
+- Types are generated from the API's OpenAPI (`desk openapi --out ../frontend/openapi.json`, then `npm run gen:api`). A pytest checks the committed `openapi.json` has not drifted.
+- One screen, Scenario Lab: run picker, preset, sliders (parallel, OFZ spread, credit), the 11-bucket curve, and a live Taylor table per book marked ≈. Chips: "first order only X % MV", "> 500 bp", "partial n/N".
+- "Посчитать точно" posts only the definition and polls the job. Exact is compared like for like: covered Taylor against exact, blended against the Taylor total. The result greys out when the definition or the run changes. The table shows the top 20 positions by |residual|.
+- Numbers computed in the browser are never persisted.
+
+**Also in S6.**
+- The compatibility adapter fills `window.DESK` `SCENARIOS` from the store. The prototype Scenario & PnL Lab and Pivot Studio now work on real runs, and their preset numbers equal the backend Taylor. This closes the S5 open item (Scenario Lab failing on real runs).
+- The Desk Monitor has an «Оценка» column with the valuation quality. This closes the S4 open item (no quality column).
+
+**Test book, run 5 (15.10, 40 positions).** 39 covered; OFZ-15 (market value) is Taylor only. m RUB:
+
+| Preset | Taylor, all | Taylor, covered | Exact | Residual | Largest position residual |
+|---|---|---|---|---|---|
+| par+100 | −389.85 | −379.25 | −379.57 | −0.32 | OFZ-11 −0.13 |
+| par-100 | 413.45 | 402.85 | 403.18 | +0.34 | OFZ-11 +0.14 |
+| keyhike | −338.03 | −323.46 | −323.55 | −0.09 | OFZ-11 −0.02 |
+| bullsteep | 189.96 | 179.72 | 179.73 | +0.01 | |
+| bearflat | −123.39 | −116.18 | −116.18 | −0.00 | |
+| ofzwide | −117.48 | −117.48 | −117.50 | −0.02 | |
+| rubdep | −226.42 | −221.12 | −221.19 | −0.07 | |
+| credit | −271.21 | −271.21 | −272.52 | −1.31 | MIX-07 −0.61 |
+| sector | 0 | 0 | 0 | 0 | (sector data is empty, see below) |
+| stress22 | −1476.18 | −1412.30 | −1428.41 | −16.11 (1.1 %) | MIX-07 −4.37 |
+
+With the run's context cached, the first job of a run takes 0.5 s and each later job 0.1–0.2 s. Run 3 (13.10), `keyhike`: 38 of 40 covered (MIX-08 at a model price, and OFZ-15), residual −0.1 m. On the golden fixtures the review measured residuals up to 0.23 % for parallel, key-rate and spread shocks, up to 2.2 % for credit spreads ×2, and 9.7 % for `stress22` on wide-spread credits (higher-order terms).
+
+**Review and fixes.** An independent review found these issues, fixed before this note: one worker per store (advisory lock; a job becomes done or failed only from running); the result cache is keyed by method and core version; FX shocks are passed to core; `/app` redirects to `/app/`; an overflow in normalization raises `DefinitionError`; only the `_all` and `_mult` aliases are accepted; in the frontend, polling retries after a failed poll, the races on switching runs are closed, exact is compared like for like, the types are generated from the OpenAPI, and a missing parity fixture fails the test.
+
+**Open after S6.**
+- `sector` and `rating` are empty in the hub's issuer data, so the `sector` preset and the rating rules move nothing. They need a source; ratings also block better buckets for model prices.
+- One curve only (RUB OFZ, the KBD). RUONIA and key-rate curve shocks need the runs to publish those curves' deltas.
+- T2 for 2000 positions with `_mult` is one core call per credit position. Measure it; if it is slow, ask core for a per-position spread shift ([briefs/CORE.md](briefs/CORE.md)).
+- The worker shares the API process (GIL).
+- Queued jobs of an old method or core version are never cleaned up.
+- Not built: custom scenario CRUD, historical scenarios, T3 (nightly preset results), SSE, job cancel.
+- The exact P&L cannot be split into rates and spread on the portfolio path.
+- Windows developers need an npm mirror to rebuild the frontend; running it needs no Node.
+- Fonts load from Google Fonts, as in the prototypes; offline, the screen falls back to system fonts.
