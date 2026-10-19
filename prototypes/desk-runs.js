@@ -47,9 +47,18 @@
       if (!j || !j.runs || !j.runs.length) return;
       var sel = el('select', { 'aria-label': 'Дата и прогон' });
       sel.appendChild(el('option', { value: '' }, 'последний прогон'));
-      j.runs.forEach(function (r) {
-        var day = r.business_date || r.as_of, done = r.completed_at || r.published_at;  // as_of / published_at: compat aliases
-        var o = el('option', { value: r.run_id }, day + ' · ' + r.run_type + ' #' + r.run_id + (done ? ' · ' + String(done).slice(11, 16) : ''));
+      // по датам (новые сверху), в дате основной (default) прогон первым; прочие — по убыванию номера.
+      // «заменён»: не основной прогон даты, для которой есть более новый основной.
+      var dayOf = function (r) { return r.business_date || r.as_of; };  // as_of: compat alias
+      var newestDefault = {};
+      j.runs.forEach(function (r) { if (r.is_default) newestDefault[dayOf(r)] = Math.max(newestDefault[dayOf(r)] || 0, +r.run_id); });
+      var runs = j.runs.slice().sort(function (a, b) {
+        return dayOf(a) < dayOf(b) ? 1 : dayOf(a) > dayOf(b) ? -1 : (b.is_default ? 1 : 0) - (a.is_default ? 1 : 0) || +b.run_id - +a.run_id;
+      });
+      runs.forEach(function (r) {
+        var day = dayOf(r), done = r.completed_at || r.published_at;  // published_at: compat alias
+        var old = !r.is_default && newestDefault[day] > +r.run_id;
+        var o = el('option', { value: r.run_id }, day + ' · ' + r.run_type + ' #' + r.run_id + (done ? ' · ' + String(done).slice(11, 16) : '') + (old ? ' (заменён)' : ''));
         if (src.kind === 'db' && String(r.run_id) === String(src.runId) && new URL(location.href).searchParams.get('run_id')) o.selected = true;
         sel.appendChild(o);
       });
