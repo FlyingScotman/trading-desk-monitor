@@ -150,7 +150,8 @@ def book_rows(used: list[str], meta: dict[str, dict]) -> list[dict[str, Any]]:
 
 def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, Any], qty: float | None
                ) -> dict[str, Any]:
-    """An FX row, an unmapped bond or an OTC/other row (``valuation.positions``): PV, FX delta in currency, and
+    """An FX row, an unmapped bond or an OTC/other row (``valuation.positions``): PV, FX delta in currency (an FX
+    row's is its amount, also for a forward whose PV is only its mv_rub or 0), and
     the report's own risk (``reported_risk``) if any, else none. Fields the tdm schema requires and the report does
     not give: the notional of a bond without a face is its MV, an amount without a rate of the day is in RUB
     (both said in the assumptions)."""
@@ -183,7 +184,7 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
         "mv_rub": v.pv_rub, "dv01": v.dv01_rub, "cs01": v.spread01_rub, "ofz_spr01": 0.0,
         "risk": {CURVE_ID: v.buckets} if any(v.buckets.values()) else {}, "gamma": [],
         "instrument_id": x.get("moex_secid") or x.get("source_instrument_id"), "new_today": False,
-        **({"fx_delta": {ccy: v.pv_rub / rate}} if ccy != "RUB" else {}),
+        **({"fx_delta": {ccy: amount if fx else v.pv_rub / rate}} if ccy != "RUB" else {}),
         "extra": {
             "valuation": "reported" if v.quality == "reported_value" else "approximated", "quality": v.quality,
             "assumptions": why, "quantity_bonds": qty, **({"not_exact_reason": o.reason} if o.reason else {}),

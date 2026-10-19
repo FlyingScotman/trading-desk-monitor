@@ -641,5 +641,5 @@ Interfaces were frozen before the agents started. An independent review found 23
 - Not run on Windows or on real reports: that is I2 (the owner's first run).
 - Day-status screen, `/api/v1/inbox` and `/events`, the `desk serve` watcher: S7b.
 - Multi-date datasets, scopes without `book_id`, retiring books by omission (`shortcut:` comments).
-- Direct rows (FX, `reported_value`) have no flash PnL yet. FX forwards are valued at today's rate without discounting (quality `assumed`).
+- Direct rows (FX, `reported_value`) have no flash PnL yet. An FX row whose `value_date` is after the business date is a forward (NDF, FX future, unsettled leg): PV is the report's `mv_rub` (`reported_value`), else 0 (`assumed`); its amount is FX delta only (the open currency position), never MV.
 - The install relies on the install folder being the venv root (`REPO_ROOT`); a `DESK_HOME` setting would make it robust.

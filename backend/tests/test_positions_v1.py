@@ -86,7 +86,7 @@ def test_decimal_and_string_inputs(ctx):
     for v in (Decimal(10000), "10000"):
         assert one(ctx, bond(face_amount_ccy=v, ccy="rub"), FLOATER).valuation.quantity == pytest.approx(10.0)
     o = one(ctx, {"asset_class": "fx", "ccy": "usd", "amount_ccy": Decimal(-1000), "value_date": "2027-01-15"})
-    assert o.valuation.quality == "assumed" and o.valuation.pv_rub == pytest.approx(-1000 * USD)
+    assert (o.valuation.quality, o.valuation.pv_rub, o.valuation.quantity) == ("assumed", 0.0, -1000.0)
     o = one(ctx, bond(source_instrument_id="XS1", mv_rub="5000", mark_price_pct=Decimal("98.5")), None, Decimal(3))
     assert o.valuation.pv_rub == 5000.0 and o.valuation.quantity == 3.0
 
@@ -132,15 +132,24 @@ def test_unmapped_with_nothing_is_not_valued(ctx):
 
 
 def test_fx_spot_forward_and_rub(ctx):
-    p, out = run(ctx, inputs([("S", "FX", None, None), ("F", "FX", None, None), ("R", "FX", None, None)], {
+    """A spot or cash row is worth its amount at the rate of the day; a forward (value_date after the business date)
+    only its reported mv_rub, else 0: its amount is FX exposure (the OCP), never MV."""
+    p, out = run(ctx, inputs([("S", "FX", None, None), ("F", "FX", None, None), ("R", "FX", None, None),
+                              ("T", "FX", None, None), ("N", "FX", None, None)], {
         "S": {"asset_class": "fx", "ccy": "USD", "amount_ccy": 1000.0},
         "F": {"asset_class": "fx", "ccy": "USD", "amount_ccy": -1000.0, "value_date": date(2027, 1, 15)},
-        "R": {"asset_class": "fx", "ccy": "RUB", "amount_ccy": 5e6, "value_date": date(2026, 10, 16)}}))
+        "R": {"asset_class": "fx", "ccy": "RUB", "amount_ccy": 5e6, "value_date": date(2026, 10, 15)},
+        "T": {"asset_class": "fx", "ccy": "USD", "amount_ccy": 5e6, "value_date": date(2026, 10, 16)},
+        "N": {"asset_class": "fx", "ccy": "USD", "amount_ccy": 5e6, "value_date": "2027-04-15", "mv_rub": "-1250000"}}))
     assert not p.requests
-    s, f, r = (o.valuation for _, _, o in out)
+    s, f, r, t, n = (o.valuation for _, _, o in out)
     assert (s.quality, s.pv_rub, s.dv01_rub) == ("market_value", pytest.approx(1000 * USD), 0.0)
-    assert f.quality == "assumed" and f.pv_rub == pytest.approx(-1000 * USD) and "not discounted" in f.assumptions[-1]
-    assert (r.quality, r.pv_rub) == ("market_value", 5e6)
+    assert (f.quality, f.pv_rub, f.quantity) == ("assumed", 0.0, -1000.0)
+    assert "PV assumed 0" in f.assumptions[-1] and "not in MV" in f.assumptions[-1]
+    assert (r.quality, r.pv_rub) == ("market_value", 5e6)  # value date = business date: cash
+    assert (t.quality, t.pv_rub) == ("assumed", 0.0)  # T+1 is after the business date: a forward
+    assert (n.quality, n.pv_rub, n.quantity, n.face_rub) == ("reported_value", -1.25e6, 5e6, USD)
+    assert "mv_rub" in n.assumptions[-1]
 
 
 def test_otc_without_mv_rub_not_valued(ctx):
@@ -222,6 +231,9 @@ def test_publish_api_and_compat(ctx, store_url, tmp_path):
                               "x": {"x_desk": "a"}}
     assert got["FX1"]["secid"] is None and got["FX1"]["fact"]["fx_delta"] == {"USD": pytest.approx(1000.0)}
     assert got["FX3"]["fact"].get("fx_delta") is None and got["FX2"]["fact"]["maturity"] == "2027-01-15"
+    fx2 = got["FX2"]["fact"]  # a forward: no MV, its amount only in the FX delta (the OCP) and the notional
+    assert (got["FX2"]["pv_rub"], fx2["mv_rub"], fx2["fx_delta"], fx2["notional"]) == (0.0, 0.0, {"USD": -400.0},
+                                                                                      -400.0)
     assert got["B2"]["fact"]["name"] == "Bond abroad" and got["B2"]["dv01_rub"] == 0.0
     assert got["O1"]["reason"] == "no_reported_value: otc IRS-1: no mv_rub" and got["O1"]["fact"] is None
     o2 = got["O2"]["fact"]
@@ -234,6 +246,7 @@ def test_publish_api_and_compat(ctx, store_url, tmp_path):
     assert dp["O2"]["mvRub"] == 5e5 and dp["O2"]["risk"]["RUB OFZ"][6] == -850.0 and dp["O2"]["segment"] == "Деривативы"
     assert dp["O1"]["notValued"] and dp["O1"]["mvRub"] is None and dp["O1"]["extra"]["quality"] == "not_valued"
     assert dp["FX1"]["instrType"] == "FX" and dp["FX1"]["mvRub"] == pytest.approx(1000 * USD)
+    assert (dp["FX2"]["mvRub"], dp["FX2"]["fxDelta"]) == (0.0, {"USD": -400.0})
     assert desk["history"][-1]["dv01"] == pytest.approx(sum(p["fact"]["dv01"] for p in got.values() if p["fact"]))
     detail = c.get(f"/api/v1/runs/{rid}").json()
     assert detail["lineage"]["positions"]["sources"]["CORP"]["report_date"] == "2026-10-16"

@@ -284,7 +284,7 @@ Key: (`book_id`, `position_id`).
 | `face_amount_ccy` | num | Bonds: number of bonds × **initial** face, signed |
 | `face_outstanding_ccy` | num | Bonds: number of bonds × current (amortized) face, signed |
 | `amount_ccy` | num | FX and cash-like rows: amount, signed; required for `fx` |
-| `value_date` | date | FX forwards and other dated rows |
+| `value_date` | date | FX forwards and other dated rows. An `fx` row with a `value_date` after the business date is a forward (NDF, FX future, unsettled leg): its PV is `mv_rub` if given, else 0, and `amount_ccy` counts only in the FX delta (open currency position). Without it, or with one not after the business date, the row is cash: PV = amount × the rate of the day |
 | `deal_id` | str | OTC |
 | `mark_price_pct`, `accrued_ccy`, `mv_rub`, `book_value_rub` | num | Reconciliation |
 | `purchase_date`, `purchase_price_pct`, `purchase_yield_pct`, `contract_rate_pct` | | HTM, as in 1.3 |

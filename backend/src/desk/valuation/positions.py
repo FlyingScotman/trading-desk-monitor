@@ -12,9 +12,11 @@ core (``direct``). ``merge`` puts the two back in the inputs' order for ``desk_r
 - Unmapped bond (no instrument, or no number of bonds): rung ``reported_value``, the bank's own figure: ``mv_rub``,
   else ``mark_price_pct`` x face (+ ``accrued_ccy``) at the CBR rate; the report's risk (``reported_risk``) when it
   gives one, else none (DV01 and CS01 0). Nothing at all: not valued, reason ``unmapped_instrument``.
-- FX row: ``amount_ccy`` x the rate of the business date (``fallback.fx_rate``; RUB at 1); its FX delta is the amount
-  in currency, as a foreign-face bond's (``position_row``), no rates risk. ``value_date`` is shown, not discounted
-  (S7a): quality ``market_value`` up to spot (T+2 business days), ``assumed`` for a forward.
+- FX row: its FX delta is always the amount in currency (``tdm_run.direct_row``), no rates risk. Spot or cash (no
+  ``value_date``, or one not after the business date): PV = ``amount_ccy`` x the rate of the business date
+  (``fallback.fx_rate``; RUB at 1), quality ``market_value``. A forward (``value_date`` after the business date: an
+  NDF, an FX future, an unsettled leg): PV = the report's ``mv_rub`` (``reported_value``), else 0 (``assumed``, said
+  in the assumptions); its amount counts in the open currency position, never in MV.
 - OTC and other rows (and any asset class this module does not know): rung ``reported_value`` at the report's
   ``mv_rub``, with its risk (``reported_risk``): ``risk_dv01_rub`` in the rates bucket of ``RISK_BUCKETS`` whose pillar
   is nearest ``maturity_date`` (no maturity, or one already past: the shortest bucket, said in the assumptions),
@@ -38,7 +40,6 @@ from .bonds import BondValuation, face_on
 from .fallback import fx_rate
 
 MISMATCH_BONDS = 0.5
-SPOT_DAYS = 2
 RESOLVE_KEYS = (("moex_secid", "secid"), ("isin", "isin"), ("regnum", "regnumber"))
 """(field of the row, field of the static instrument), in the order tried."""
 
@@ -185,12 +186,21 @@ def _fx(ctx: EodContext, x: dict[str, Any]) -> Outcome:
     if (fx := fx_rate(ctx, ccy)) is None:
         o.reason, o.detail = "no_fx_rate", f"{ccy} on {ctx.business_date}"
         return o
-    forward = vd is not None and vd > ctx.calendar.add_business_days(ctx.business_date, SPOT_DAYS)
-    why = [f"{amount:g} {ccy} x {fx[1]} {fx[0]:g}"] if ccy != "RUB" else []
-    if forward:
-        why.append(f"forward to {vd}: today's rate, not discounted (S7a)")
-    o.valuation = _valuation(ctx, "fx", amount, amount * fx[0], "assumed" if forward else "market_value", why,
-                             face=fx[0], horizon=vd)
+    leg = f"{amount:g} {ccy}" + (f" x {fx[1]} {fx[0]:g}" if ccy != "RUB" else "")
+    if vd is not None and vd > ctx.business_date:
+        # A forward (NDF, FX future, an unsettled leg): the amount is an exposure, not a value. PV is the report's
+        # mv_rub, else 0; the amount goes only into the FX delta (OCP) through ``tdm_run.direct_row``.
+        if x.get("mv_rub") is not None:
+            pv, quality = x["mv_rub"], "reported_value"
+            why = [f"forward to {vd}: PV = the report's mv_rub; the amount {leg} is FX exposure only"]
+        else:
+            pv, quality = 0.0, "assumed"
+            why = [f"forward to {vd}: no mv_rub in the report, PV assumed 0;"
+                   + f" the amount {leg} is FX exposure only, not in MV"]
+    else:
+        pv, quality = amount * fx[0], "market_value"
+        why = [leg] if ccy != "RUB" else []
+    o.valuation = _valuation(ctx, "fx", amount, pv, quality, why, face=fx[0], horizon=vd)
     return o
 
 
