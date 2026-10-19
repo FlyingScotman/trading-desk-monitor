@@ -183,7 +183,7 @@ def _notional(row: dict, rec: dict | None) -> tuple[str, Decimal] | None:
 def check(adapter_spec: str | None, dirs: list[str], *, stub_ctx: bool = False, snapshot_dir: str | None = None,
           config_dir: str | None = None, expected_sha256: str | None = None, match_timeout_s: float = 10.0,
           read_timeout_s: float = 600.0) -> Report:
-    handle = load_adapter(adapter_spec, config_dir, expected_sha256)
+    handle = load_adapter(adapter_spec, config_dir, expected_sha256, inbox_dirs=dirs)
     desc = handle.describe
     spec = adapter_spec or runner.REFERENCE_ADAPTER  # a folder by its name only: the path can name the user
     report = Report({"adapter": Path(spec.rstrip("/\\")).name if runner.is_path_spec(spec) else spec,

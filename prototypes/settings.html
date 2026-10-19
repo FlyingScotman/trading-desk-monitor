@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Настройки · FI Desk Monitor</title>
+<style>
+/* Same tokens as desk-monitor.html (graphite-navy, steel-cyan accent, dark-first); no external fonts or scripts:
+   this page must work on a machine without internet. Data: /api/v1/settings, /api/v1/adapter (desk serve). */
+:root{
+  --bg:#0c1117; --panel:#111820; --panel-2:#151d27; --raise:#1b2530; --line:#212b37; --line-2:#2e3a48;
+  --fg:#d4dbe3; --fg-2:#97a4b3; --fg-3:#677587;
+  --accent:#5aaec4; --accent-ink:#8fd0e1; --accent-weak:rgba(90,174,196,.13); --accent-line:rgba(90,174,196,.45);
+  --neg-tx:#f08a86; --good:#0ca30c; --good-tx:#57c46a; --warn:#fab219; --crit:#d03b3b;
+  --ink-light:#f2f6fa;
+  --font-ui:"Golos Text","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --font-mono:"JetBrains Mono","IBM Plex Mono",ui-monospace,"SFMono-Regular",Consolas,"Liberation Mono",monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#edf0f3; --panel:#ffffff; --panel-2:#f5f7f9; --raise:#ffffff; --line:#dbe1e7; --line-2:#c5ced8;
+    --fg:#141d27; --fg-2:#465464; --fg-3:#738192;
+    --accent:#1c748c; --accent-ink:#155e72; --accent-weak:rgba(28,116,140,.10); --accent-line:rgba(28,116,140,.45);
+    --neg-tx:#b8302f; --good-tx:#18792a; --ink-light:#ffffff;
+    color-scheme:light;
+  }
+}
+:root[data-theme="light"]{
+  --bg:#edf0f3; --panel:#ffffff; --panel-2:#f5f7f9; --raise:#ffffff; --line:#dbe1e7; --line-2:#c5ced8;
+  --fg:#141d27; --fg-2:#465464; --fg-3:#738192;
+  --accent:#1c748c; --accent-ink:#155e72; --accent-weak:rgba(28,116,140,.10); --accent-line:rgba(28,116,140,.45);
+  --neg-tx:#b8302f; --good-tx:#18792a; --ink-light:#ffffff;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-ui);font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
+button,select,input,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+.muted{color:var(--fg-3)}
+.wrap{padding-inline:16px;max-width:1040px;margin-inline:auto}
+a{color:var(--accent-ink)}
+
+/* header */
+.top{position:sticky;top:0;z-index:30;background:var(--bg);border-bottom:1px solid var(--line)}
+.bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding-block:8px}
+.brand{display:flex;align-items:center;gap:8px;min-width:0}
+.brand b{font-weight:700;letter-spacing:.02em;font-size:14px}
+.brand .sep{color:var(--fg-3)}
+.brand .desk{color:var(--fg-2)}
+.logo{width:22px;height:16px;flex:none}
+.logo path{fill:none;stroke:var(--accent);stroke-width:1.8}
+.logo rect{fill:var(--fg-3)}
+.meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px}
+.ibtn{background:var(--panel-2);border:1px solid var(--line-2);border-radius:2px;padding:3px 9px;cursor:pointer;color:var(--fg-2);font-size:12px;text-decoration:none;display:inline-block}
+.ibtn:hover{color:var(--fg);border-color:var(--accent-line)}
+.btn{background:var(--accent);border:1px solid var(--accent);color:var(--ink-light);border-radius:2px;padding:5px 14px;cursor:pointer;font-weight:600;font-size:12.5px}
+.btn:hover{filter:brightness(1.08)}
+.btn[disabled],.ibtn[disabled]{opacity:.5;cursor:default;filter:none}
+
+/* panels */
+.main{padding-block:14px 90px;display:flex;flex-direction:column;gap:12px}
+.pnl{background:var(--panel);border:1px solid var(--line);border-radius:2px;min-width:0}
+.ph{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:8px 12px;border-bottom:1px solid var(--line)}
+.ph h2{margin:0;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-2)}
+.pb{padding:12px}
+.note{border:1px solid var(--accent-line);background:var(--accent-weak);border-radius:2px;padding:9px 12px;color:var(--fg)}
+.note.warn{border-color:var(--warn);background:transparent}
+.note.err{border-color:var(--crit);background:transparent;color:var(--neg-tx)}
+.hint{font-size:12px;color:var(--fg-3);margin:4px 0 0}
+
+/* forms */
+.form{display:grid;grid-template-columns:minmax(150px,220px) minmax(0,1fr);gap:10px 14px;align-items:start}
+@media (max-width:700px){.form{grid-template-columns:1fr}}
+.form > label{padding-top:5px;color:var(--fg-2)}
+.inp,.ta{width:100%;background:var(--panel-2);border:1px solid var(--line-2);border-radius:2px;padding:5px 8px;font-size:12.5px}
+.inp:focus,.ta:focus{border-color:var(--accent)}
+.inp.mono,.ta{font-family:var(--font-mono)}
+.inp.num{width:120px}
+.ta{min-height:160px;resize:vertical;line-height:1.4;tab-size:2;white-space:pre}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.row > .inp{flex:1;min-width:180px}
+.tag{display:inline-block;font-size:10px;font-weight:600;letter-spacing:.04em;padding:0 5px;border-radius:2px;border:1px solid var(--line-2);color:var(--fg-2);vertical-align:1px;white-space:nowrap}
+.tag.req{border-color:var(--warn);color:var(--fg)}
+.tag.env{border-color:var(--warn);color:var(--warn)}
+.st{display:inline-flex;align-items:center;gap:6px;font-size:12px;white-space:nowrap}
+.st::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--fg-3)}
+.st.ok::before{background:var(--good)}
+.st.bad::before{background:var(--crit)}
+.st.wait::before{background:var(--warn)}
+.res{margin-top:10px;padding:8px 10px;border-radius:2px;border:1px solid var(--line-2);background:var(--panel-2);font-size:12.5px}
+.res.ok{border-color:var(--good)}
+.res.bad{border-color:var(--crit)}
+.res .err{color:var(--neg-tx)}
+.err{color:var(--neg-tx);font-size:12px}
+.okmsg{color:var(--good-tx);font-size:12px}
+
+/* tables */
+table.t{border-collapse:collapse;width:100%;font-size:12.5px}
+.t th,.t td{padding:5px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
+.t th{font-weight:500;color:var(--fg-3);font-size:11px;background:var(--panel-2)}
+.t td.k{color:var(--fg-2);white-space:nowrap;width:1%}
+.t td.v{font-family:var(--font-mono);word-break:break-all}
+.t .inp{min-width:120px}
+@media (max-width:700px){
+  .dirs-t thead{display:none}
+  .dirs-t tr{display:grid;grid-template-columns:minmax(0,1fr) auto;border-bottom:1px solid var(--line);padding-block:4px}
+  .dirs-t td{border:0;width:auto!important}
+  .dirs-t td:nth-child(-n+2){grid-column:1/-1}
+}
+.chk{display:inline-flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;color:var(--fg-2)}
+.x{background:none;border:1px solid transparent;color:var(--fg-3);cursor:pointer;font-size:15px;line-height:1;padding:2px 6px;border-radius:2px}
+.x:hover{color:var(--neg-tx);border-color:var(--line-2)}
+.lnk{background:none;border:0;color:var(--accent-ink);cursor:pointer;font-size:12px;padding:2px 0;text-decoration:underline;text-underline-offset:2px}
+
+/* toggle (as desk-monitor) */
+.tgl{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none;color:var(--fg)}
+.tgl input{position:absolute;opacity:0;width:1px;height:1px}
+.tgl-s{width:30px;height:16px;border-radius:8px;background:var(--line-2);position:relative;transition:background .15s;flex:none}
+.tgl-s::after{content:"";position:absolute;left:2px;top:2px;width:12px;height:12px;border-radius:50%;background:var(--fg-2);transition:transform .15s}
+.tgl input:checked + .tgl-s{background:var(--accent)}
+.tgl input:checked + .tgl-s::after{transform:translateX(14px);background:var(--ink-light)}
+.tgl input:focus-visible + .tgl-s{outline:2px solid var(--accent);outline-offset:2px}
+
+/* adapter config files */
+.cf{border:1px solid var(--line);border-radius:2px;padding:10px 12px;background:var(--panel-2)}
+.cf + .cf{margin-top:10px}
+.cf h3{margin:0;font-size:13px;font-weight:600}
+.cf .help{margin:4px 0 8px;color:var(--fg-2);white-space:pre-wrap}
+.src{margin:6px 0 0;padding-left:18px}
+.src li{margin:2px 0}
+
+/* save bar */
+.savebar{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--panel);border-top:1px solid var(--line-2);box-shadow:0 -8px 24px rgba(0,0,0,.25)}
+.savebar .wrap{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-block:9px;flex-wrap:wrap}
+.dirty{color:var(--warn);font-size:12px}
+</style>
+
+<header class="top">
+  <div class="bar wrap">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 22 16" aria-hidden="true"><rect x="1" y="11" width="2" height="4"/><rect x="5" y="9" width="2" height="6"/><rect x="9" y="8" width="2" height="7"/><rect x="13" y="7.5" width="2" height="7.5"/><rect x="17" y="7" width="2" height="8"/><path d="M1 9 C5 4 9 3 21 2"/></svg>
+      <b>FI Desk Monitor</b><span class="sep">/</span><span class="desk">Настройки</span>
+    </div>
+    <div class="meta">
+      <a class="ibtn" href="/desk-monitor.html">← Desk Monitor</a>
+      <button class="ibtn" id="theme-btn" type="button" title="Переключить светлую/тёмную тему">Тема</button>
+    </div>
+  </div>
+</header>
+
+<main class="main wrap">
+  <div class="note" id="home-note">Загрузка настроек…</div>
+  <div class="note err" id="load-err" hidden></div>
+  <div class="note warn" id="env-note" hidden></div>
+
+  <!-- 1. Маркет-дата сервер -->
+  <section class="pnl" aria-labelledby="h-hub">
+    <div class="ph"><h2 id="h-hub">Маркет-дата сервер</h2><span class="st" id="token-st">токен …</span></div>
+    <div class="pb form">
+      <label for="hub_url">Адрес сервера</label>
+      <div><input class="inp mono" id="hub_url" data-key="hub_url" placeholder="https://…" autocomplete="off">
+        <p class="hint">Только https:// (http — лишь для 127.0.0.1).</p></div>
+      <label for="token">Токен</label>
+      <div>
+        <div class="row">
+          <input class="inp mono" id="token" type="password" placeholder="вставьте токен сервера (scope snapshots)" autocomplete="new-password">
+          <button class="ibtn" id="token-save" type="button">Сохранить токен</button>
+          <button class="lnk" id="token-clear" type="button">удалить</button>
+        </div>
+        <p class="hint">Токен хранится отдельно в файле <span class="mono" id="token-file">hub_token</span> и никогда не показывается. <span id="token-msg"></span></p>
+      </div>
+      <label for="https_proxy">Прокси</label>
+      <div><input class="inp mono" id="https_proxy" data-key="https_proxy" placeholder="http://proxy:3128 — пусто: без прокси или из системы" autocomplete="off"></div>
+      <label for="no_proxy">Без прокси для</label>
+      <div><input class="inp mono" id="no_proxy" data-key="no_proxy" placeholder="localhost,127.0.0.1" autocomplete="off"></div>
+      <label for="hub_ca_bundle">Сертификат CA (PEM)</label>
+      <div><input class="inp mono" id="hub_ca_bundle" data-key="hub_ca_bundle" placeholder="пусто — системное хранилище сертификатов" autocomplete="off">
+        <p class="hint">Нужен, только если корпоративный прокси подменяет сертификаты и система их не знает.</p></div>
+      <label></label>
+      <div>
+        <button class="ibtn" id="test-hub" type="button">Проверить связь</button>
+        <div class="res" id="hub-res" hidden></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. Папки с отчётами -->
+  <section class="pnl" aria-labelledby="h-dirs">
+    <div class="ph"><h2 id="h-dirs">Папки с отчётами</h2><span class="tag env" id="dirs-env" hidden>задано переменной окружения</span></div>
+    <div class="pb">
+      <table class="t dirs-t">
+        <thead><tr><th>Папка</th><th>Подпись</th><th>Подпапки</th><th></th></tr></thead>
+        <tbody id="dirs"></tbody>
+      </table>
+      <div class="row" style="margin-top:8px"><button class="ibtn" id="dir-add" type="button">+ Добавить папку</button></div>
+      <p class="hint">Сервер просматривает эти папки и передаёт новые файлы адаптеру. Подпись — только заметка для вас (например, «Позиции», «PnL»).</p>
+    </div>
+  </section>
+
+  <!-- 3. Адаптер -->
+  <section class="pnl" aria-labelledby="h-ad">
+    <div class="ph"><h2 id="h-ad">Адаптер</h2><span class="st wait" id="ad-st">проверка…</span></div>
+    <div class="pb">
+      <div class="form">
+        <label for="private_adapter">Папка адаптера</label>
+        <div><input class="inp mono" id="private_adapter" data-key="private_adapter" placeholder="пусто — эталонный адаптер (CSV)" autocomplete="off">
+          <p class="hint">Папка пакета приватного адаптера (с файлом __init__.py).</p>
+          <p class="hint" id="ad-default" hidden></p></div>
+        <label for="private_adapter_config">Папка настроек адаптера</label>
+        <div><input class="inp mono" id="private_adapter_config" data-key="private_adapter_config" autocomplete="off">
+          <p class="hint">Пусто — <span class="mono" id="cfg-default"></span> (создаётся сама).</p></div>
+      </div>
+      <div class="res" id="ad-res" hidden></div>
+      <div class="row" style="margin-top:8px"><button class="ibtn" id="ad-refresh" type="button">Обновить статус</button></div>
+    </div>
+  </section>
+
+  <!-- 4. Файлы настроек адаптера -->
+  <section class="pnl" aria-labelledby="h-cf">
+    <div class="ph"><h2 id="h-cf">Файлы настроек адаптера</h2></div>
+    <div class="pb" id="cf-list"><p class="muted">Загрузка…</p></div>
+  </section>
+
+  <!-- 5. Автообновление -->
+  <section class="pnl" aria-labelledby="h-ap">
+    <div class="ph"><h2 id="h-ap">Автообновление</h2></div>
+    <div class="pb form">
+      <label for="autopilot">Автообновление</label>
+      <div><label class="tgl"><input type="checkbox" id="autopilot" data-key="autopilot"><span class="tgl-s"></span><span id="ap-lbl">включено</span></label>
+        <p class="hint">Сервер сам загружает срезы с маркет-дата сервера, забирает новые отчёты из папок и пересчитывает риски.</p></div>
+      <label for="inbox_poll_seconds">Период опроса, сек</label>
+      <div><input class="inp mono num" id="inbox_poll_seconds" data-key="inbox_poll_seconds" inputmode="decimal" placeholder="60"></div>
+      <label for="autopilot_sync_last">Загружать последних дат</label>
+      <div><input class="inp mono num" id="autopilot_sync_last" data-key="autopilot_sync_last" inputmode="numeric" placeholder="5">
+        <p class="hint">Включение и выключение автообновления может потребовать перезапуска сервера.</p></div>
+    </div>
+  </section>
+
+  <!-- 6. Где лежат данные -->
+  <section class="pnl" aria-labelledby="h-where">
+    <div class="ph"><h2 id="h-where">Где лежат данные</h2><span class="muted">только чтение · действующие значения</span></div>
+    <div class="pb"><table class="t"><tbody id="eff"></tbody></table></div>
+  </section>
+</main>
+
+<div class="savebar">
+  <div class="wrap">
+    <span id="save-msg" class="muted">Изменения сохраняются в settings.json.</span>
+    <button class="btn" id="save" type="button">Сохранить настройки</button>
+  </div>
+</div>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const store = { get(k){ try { return localStorage.getItem(k); } catch(e){ return null; } },
+                set(k, v){ try { localStorage.setItem(k, v); } catch(e){} } };
+(function theme(){
+  const th = store.get('fidm.theme'); if (th === 'light' || th === 'dark') document.documentElement.setAttribute('data-theme', th);
+  $('theme-btn').addEventListener('click', () => {
+    const root = document.documentElement, cur = root.getAttribute('data-theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+    const nx = cur === 'dark' ? 'light' : 'dark'; root.setAttribute('data-theme', nx); store.set('fidm.theme', nx);
+  });
+})();
+
+function h(tag, attrs, ...kids){
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === 'class') el.className = v; else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (k === 'value') el.value = v; else if (k === 'checked') el.checked = !!v; else el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const c of kids.flat()) if (c != null && c !== false) el.append(c.nodeType ? c : String(c));
+  return el;
+}
+
+async function api(method, url, body){
+  const opt = {method, headers:{'Accept':'application/json'}};
+  if (body !== undefined) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
+  let r;
+  try { r = await fetch(url, opt); } catch(e) { throw new Error('сервер недоступен: ' + e.message); }
+  let j = null; try { j = await r.json(); } catch(e) {}
+  if (!r.ok) { const err = new Error((j && j.message) || ('HTTP ' + r.status)); err.details = j && j.details; err.status = r.status; throw err; }
+  return j;
+}
+
+const S = {data:null, dirs:[], dirty:false, adapter:null};
+const KEYS = ['hub_url','https_proxy','no_proxy','hub_ca_bundle','private_adapter','private_adapter_config','inbox_poll_seconds','autopilot_sync_last'];
+
+function setDirty(v){
+  S.dirty = v;
+  $('save-msg').className = v ? 'dirty' : 'muted';
+  $('save-msg').textContent = v ? 'Есть несохранённые изменения' : 'Изменения сохраняются в settings.json.';
+}
+document.addEventListener('input', e => { if (e.target.closest('[data-key], #dirs')) setDirty(true); });
+document.addEventListener('change', e => { if (e.target.closest('[data-key], #dirs')) setDirty(true); });
+window.addEventListener('beforeunload', e => { if (S.dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+/* ---------- render ---------- */
+function render(d){
+  S.data = d;
+  const eff = d.effective || {};
+  $('home-note').textContent = '';
+  $('home-note').append('Настройки хранятся в папке ', h('b', {class:'mono'}, d.home),
+    ' и сохраняются при обновлении программы: новую версию можно распаковать в любую папку — настройки и данные останутся на месте.');
+  $('load-err').hidden = !d.error; $('load-err').textContent = d.error ? 'Ошибка в настройках: ' + d.error : '';
+  const env = d.env_overrides || [];
+  $('env-note').hidden = !env.length;
+  $('env-note').textContent = env.length ? 'Заданы переменными окружения и имеют приоритет над этой страницей: ' + env.join(', ') : '';
+  document.querySelectorAll('[data-key]').forEach(el => {
+    const k = el.dataset.key, v = d[k];
+    if (el.type === 'checkbox') el.checked = v == null ? true : !!v; else el.value = v == null ? '' : v;
+    const lbl = el.closest('div'); const old = lbl && lbl.querySelector('.tag.env[data-for]'); if (old) old.remove();
+    if (env.includes(k) && lbl) lbl.prepend(h('span', {class:'tag env', 'data-for':k, style:'margin-bottom:4px'}, 'задано переменной окружения'));
+  });
+  $('ap-lbl').textContent = $('autopilot').checked ? 'включено' : 'выключено';
+  $('cfg-default').textContent = (d.home || '') + (d.home && d.home.includes('\\') ? '\\' : '/') + 'adapter-config';
+  $('token-file').textContent = eff.token_file || 'hub_token';
+  const byDefault = !!eff.private_adapter_default && !d.private_adapter && !env.includes('private_adapter');
+  $('private_adapter').placeholder = byDefault ? 'пусто — адаптер из комплекта программы' : 'пусто — эталонный адаптер (CSV)';
+  $('ad-default').hidden = !byDefault; $('ad-default').textContent = '';
+  if (byDefault) $('ad-default').append('Сейчас используется адаптер из комплекта программы: ', h('span', {class:'mono'}, eff.private_adapter),
+    '. Укажите другую папку, только если нужно его заменить.');
+  tokenState(d.hub_token_set, eff.hub_token_source);
+  S.dirs = (Array.isArray(d.inbox_dirs) ? d.inbox_dirs : []).map(x => ({path:x.path || '', label:x.label || '', recursive:!!x.recursive}));
+  $('dirs-env').hidden = !env.includes('inbox_dirs');
+  renderDirs();
+  renderEffective(eff);
+  setDirty(false);
+}
+$('autopilot').addEventListener('change', () => { $('ap-lbl').textContent = $('autopilot').checked ? 'включено' : 'выключено'; });
+
+function tokenState(set, source){
+  const st = $('token-st');
+  st.className = 'st ' + (set ? 'ok' : 'bad');
+  st.textContent = set ? 'токен задан' : 'токен не задан';
+  st.title = source || '';
+}
+
+function renderDirs(){
+  const tb = $('dirs'); tb.textContent = '';
+  if (!S.dirs.length) tb.append(h('tr', {}, h('td', {colspan:4, class:'muted'}, 'Папки не заданы.')));
+  S.dirs.forEach((d, i) => tb.append(h('tr', {},
+    h('td', {style:'width:55%'}, h('input', {class:'inp mono', value:d.path, placeholder:'C:\\Отчёты\\Позиции', 'aria-label':'Папка',
+      oninput:e => { d.path = e.target.value; }})),
+    h('td', {}, h('input', {class:'inp', value:d.label, placeholder:'Позиции', 'aria-label':'Подпись', oninput:e => { d.label = e.target.value; }})),
+    h('td', {}, h('label', {class:'chk'}, h('input', {type:'checkbox', checked:d.recursive, onchange:e => { d.recursive = e.target.checked; }}), 'включая подпапки')),
+    h('td', {style:'width:1%'}, h('button', {class:'x', type:'button', title:'Убрать папку', 'aria-label':'Убрать папку',
+      onclick:() => { S.dirs.splice(i, 1); renderDirs(); setDirty(true); }}, '×')))));
+}
+$('dir-add').addEventListener('click', () => { S.dirs.push({path:'', label:'', recursive:false}); renderDirs(); setDirty(true);
+  const ins = $('dirs').querySelectorAll('input.inp.mono'); if (ins.length) ins[ins.length - 1].focus(); });
+
+const EFF = [
+  ['home','Папка данных'], ['settings_file','Файл настроек'], ['token_file','Файл токена'], ['hub_url','Маркет-дата сервер'],
+  ['hub_token_source','Источник токена'], ['hub_ca_bundle','Сертификат CA'], ['hub_timeout_s','Таймаут запроса, сек'],
+  ['https_proxy','Прокси'], ['no_proxy','Без прокси для'], ['snapshot_cache','Срезы маркет-даты'], ['snapshot_drop','Папка ручной загрузки срезов'],
+  ['store','Хранилище'], ['pg_dir','Встроенная PostgreSQL'], ['db','SQLite (прототип)'], ['report_dir','Отчёты валидации'],
+  ['private_adapter','Адаптер'], ['private_adapter_default','Адаптер из комплекта'], ['private_adapter_config','Папка настроек адаптера'], ['private_adapter_sha256','Закреплённый отпечаток адаптера'],
+  ['inbox_dirs','Папки с отчётами'], ['inbox_archive','Архив принятых файлов'], ['inbox_poll_seconds','Период опроса, сек'],
+  ['autopilot','Автообновление'], ['autopilot_sync_last','Загружать последних дат'], ['logs_dir','Журналы']];
+function renderEffective(eff){
+  const tb = $('eff'); tb.textContent = '';
+  EFF.forEach(([k, label]) => {
+    let v = eff[k];
+    if (Array.isArray(v)) v = v.length ? v.join('\n') : '—';
+    else if (typeof v === 'boolean') v = k === 'autopilot' ? (v ? 'включено' : 'выключено') : (v ? 'да' : 'нет');
+    else if (v == null || v === '') v = '—';
+    tb.append(h('tr', {}, h('td', {class:'k'}, label), h('td', {class:'v', style:'white-space:pre-wrap'}, String(v))));
+  });
+}
+
+/* ---------- save ---------- */
+function collect(){
+  const body = {};
+  for (const k of KEYS) {
+    const el = document.querySelector('[data-key="' + k + '"]'), v = el.value.trim();
+    if (k === 'inbox_poll_seconds' || k === 'autopilot_sync_last') {
+      if (!v) { body[k] = null; continue; }
+      const n = Number(v.replace(',', '.'));
+      if (!isFinite(n) || n <= 0 || (k === 'autopilot_sync_last' && !Number.isInteger(n))) throw new Error((k === 'inbox_poll_seconds' ? 'Период опроса' : 'Число дат') + ': нужно положительное число');
+      body[k] = n;
+    } else body[k] = v || null;
+  }
+  body.autopilot = $('autopilot').checked;
+  const dirs = S.dirs.map(d => ({path:d.path.trim(), label:d.label.trim(), recursive:!!d.recursive})).filter(d => d.path);
+  body.inbox_dirs = dirs.length ? dirs : null;
+  return body;
+}
+async function save(){
+  let body;
+  try { body = collect(); } catch(e) { $('save-msg').className = 'err'; $('save-msg').textContent = e.message; return false; }
+  $('save').disabled = true;
+  try {
+    const d = await api('PUT', '/api/v1/settings', body);
+    render(d);
+    $('save-msg').className = 'okmsg'; $('save-msg').textContent = 'Сохранено ' + new Date().toLocaleTimeString('ru-RU');
+    loadAdapter();
+    return true;
+  } catch(e) {
+    $('save-msg').className = 'err'; $('save-msg').textContent = 'Не сохранено: ' + e.message;
+    return false;
+  } finally { $('save').disabled = false; }
+}
+$('save').addEventListener('click', save);
+
+/* ---------- token ---------- */
+async function putToken(token){
+  $('token-msg').className = ''; $('token-msg').textContent = '';
+  try {
+    const r = await api('PUT', '/api/v1/settings/hub-token', {token});
+    tokenState(r.hub_token_set, r.hub_token_source);
+    $('token').value = '';
+    $('token-msg').className = 'okmsg'; $('token-msg').textContent = token ? 'Токен сохранён.' : 'Токен удалён.';
+    api('GET', '/api/v1/settings').then(d => { if (d.effective) renderEffective(d.effective); }).catch(() => {});
+  } catch(e) { $('token-msg').className = 'err'; $('token-msg').textContent = e.message; }
+}
+$('token-save').addEventListener('click', () => {
+  const t = $('token').value.trim();
+  if (!t) { $('token-msg').className = 'err'; $('token-msg').textContent = 'Введите токен.'; return; }
+  putToken(t);
+});
+$('token').addEventListener('keydown', e => { if (e.key === 'Enter') $('token-save').click(); });
+$('token-clear').addEventListener('click', () => { if (confirm('Удалить сохранённый токен?')) putToken(''); });
+
+/* ---------- hub test ---------- */
+function age(hours){ if (hours == null) return ''; return hours < 48 ? hours.toFixed(1).replace('.', ',') + ' ч назад' : (hours / 24).toFixed(1).replace('.', ',') + ' дн назад'; }
+$('test-hub').addEventListener('click', async () => {
+  const box = $('hub-res'), btn = $('test-hub');
+  if (S.dirty && !(await save())) return;  // the check uses the saved settings
+  btn.disabled = true; box.hidden = false; box.className = 'res'; box.textContent = 'Проверяем связь…';
+  try {
+    const r = await api('POST', '/api/v1/settings/test-hub', {});
+    box.textContent = ''; box.className = 'res ' + (r.ok ? 'ok' : 'bad');
+    const lines = [];
+    if (r.health) lines.push(h('div', {}, 'Сервер ', h('b', {class:'mono'}, r.host || ''), ': ', r.health.status || '?', ', версия ', h('span', {class:'mono'}, r.health.version || '?')));
+    if (r.token_accepted) lines.push(h('div', {}, 'Токен принят.'));
+    if (r.latest) lines.push(h('div', {}, 'Последний срез ', h('span', {class:'mono'}, r.latest.cut + ' ' + r.latest.business_date),
+      ', опубликован ', h('span', {class:'mono'}, r.latest.published_at || '?'), r.latest.age_hours != null ? ' (' + age(r.latest.age_hours) + ')' : ''));
+    if (r.error) lines.push(h('div', {class:'err'}, 'Ошибка: ' + r.error));
+    if (r.ok) lines.unshift(h('div', {class:'okmsg'}, 'Связь есть.'));
+    box.append(...lines);
+  } catch(e) { box.className = 'res bad'; box.textContent = 'Ошибка: ' + e.message; }
+  finally { btn.disabled = false; }
+});
+
+/* ---------- adapter ---------- */
+async function loadAdapter(){
+  const st = $('ad-st'), box = $('ad-res');
+  st.className = 'st wait'; st.textContent = 'проверка…';
+  let a;
+  try { a = await api('GET', '/api/v1/adapter'); }
+  catch(e) { st.className = 'st bad'; st.textContent = 'ошибка'; box.hidden = false; box.className = 'res bad'; box.textContent = e.message; renderConfigFiles(null); return; }
+  S.adapter = a;
+  st.className = 'st ' + (a.loaded ? 'ok' : 'bad');
+  st.textContent = a.loaded ? 'загружен' : 'ошибка загрузки';
+  box.hidden = false; box.className = 'res ' + (a.loaded ? 'ok' : 'bad'); box.textContent = '';
+  box.append(h('div', {}, a.reference ? 'Эталонный адаптер (CSV) ' : a.default ? 'Адаптер из комплекта ' : 'Адаптер ', h('b', {}, a.name || ''), ' ', h('span', {class:'mono'}, a.version || ''),
+    a.fingerprint ? h('span', {class:'muted'}, ' · отпечаток ', h('span', {class:'mono'}, a.fingerprint.slice(0, 12))) : null));
+  box.append(h('div', {class:'muted mono', style:'word-break:break-all'}, a.path));
+  if (a.error) box.append(h('div', {class:'err'}, 'Ошибка: ' + a.error));
+  const srcs = (a.describe && Array.isArray(a.describe.sources)) ? a.describe.sources : [];
+  if (srcs.length) box.append(h('div', {style:'margin-top:6px'}, 'Источники:'),
+    h('ul', {class:'src'}, srcs.map(s => h('li', {}, h('span', {class:'mono'}, s.source), ' — ',
+      (s.datasets || [s.dataset]).join(', '), h('span', {class:'muted'}, ' · ' + (s.time_basis || '') + ' · ' + (s.completeness || ''))))));
+  (a.warnings || []).forEach(w => box.append(h('div', {class:'err'}, 'Предупреждение: ' + w)));
+  renderConfigFiles(a);
+}
+$('ad-refresh').addEventListener('click', loadAdapter);
+
+function jsonError(text){
+  try { JSON.parse(text); return null; }
+  catch(e) {
+    const m = /position (\d+)/.exec(e.message); let where = '';
+    if (m) { const pos = +m[1], before = text.slice(0, pos).split('\n'); where = ' (строка ' + before.length + ', позиция ' + (before[before.length - 1].length + 1) + ')'; }
+    return 'Ошибка JSON' + where + ': ' + e.message;
+  }
+}
+
+async function renderConfigFiles(a){
+  const list = $('cf-list'); list.textContent = '';
+  if (!a) { list.append(h('p', {class:'muted'}, 'Статус адаптера недоступен.')); return; }
+  const files = a.config_files || [];
+  if (!files.length) {
+    list.append(h('p', {class:'muted'}, a.loaded ? 'Адаптер не объявляет файлов настроек.' : 'Адаптер не загружен.'));
+    return;
+  }
+  if (a.config_dir) list.append(h('p', {class:'hint', style:'margin:0 0 10px'}, 'Папка: ', h('span', {class:'mono'}, a.config_dir)));
+  for (const f of files) {
+    const isJson = /\.json$/i.test(f.name);
+    const ta = h('textarea', {class:'ta', spellcheck:'false', 'aria-label':f.title || f.name});
+    const msg = h('span', {class:'muted'});
+    const state = h('span', {class:'tag'}, f.exists ? 'файл есть' : 'файла нет');
+    const card = h('div', {class:'cf'},
+      h('div', {class:'row', style:'justify-content:space-between'},
+        h('div', {}, h('h3', {style:'display:inline'}, f.title || f.name), ' ', h('span', {class:'mono muted'}, f.name)),
+        h('div', {class:'row'}, f.required ? h('span', {class:'tag req'}, 'обязательный') : h('span', {class:'tag'}, 'необязательный'), state)),
+      f.help ? h('p', {class:'help'}, f.help) : h('div', {style:'height:8px'}),
+      ta,
+      h('div', {class:'row', style:'margin-top:8px'},
+        h('button', {class:'btn', type:'button', onclick: async () => {
+          if (isJson) { const err = jsonError(ta.value); if (err) { msg.className = 'err'; msg.textContent = err; return; } }
+          try {
+            const r = await api('PUT', '/api/v1/adapter/config/' + encodeURIComponent(f.name), {text: ta.value});
+            msg.className = 'okmsg'; msg.textContent = 'Сохранено ' + new Date().toLocaleTimeString('ru-RU');
+            state.textContent = r.exists ? 'файл есть' : 'файла нет'; f.exists = r.exists;
+          } catch(e) {
+            const d = e.details || {};
+            msg.className = 'err'; msg.textContent = e.message + (d.line ? ' (строка ' + d.line + ', позиция ' + d.column + ')' : '');
+          }
+        }}, 'Сохранить'),
+        isJson ? h('button', {class:'ibtn', type:'button', onclick: () => {
+          const err = jsonError(ta.value); if (err) { msg.className = 'err'; msg.textContent = err; return; }
+          ta.value = JSON.stringify(JSON.parse(ta.value), null, 2) + '\n'; msg.className = 'muted'; msg.textContent = '';
+        }}, 'Форматировать') : null,
+        msg));
+    if (isJson) ta.addEventListener('input', () => { const err = jsonError(ta.value); msg.className = err ? 'err' : 'muted'; msg.textContent = err || ''; });
+    list.append(card);
+    try {
+      const r = await api('GET', '/api/v1/adapter/config/' + encodeURIComponent(f.name));
+      if (r.exists) ta.value = r.text;
+      else {
+        ta.value = f.template == null ? '' : (typeof f.template === 'string' && !isJson ? f.template : JSON.stringify(f.template, null, 2) + '\n');
+        msg.className = 'muted'; msg.textContent = 'Файла ещё нет: показан шаблон, нажмите «Сохранить».';
+      }
+    } catch(e) { msg.className = 'err'; msg.textContent = e.message; }
+  }
+}
+
+/* ---------- start ---------- */
+(async function start(){
+  try { render(await api('GET', '/api/v1/settings')); }
+  catch(e) { $('home-note').hidden = true; $('load-err').hidden = false; $('load-err').textContent = 'Не удалось загрузить настройки: ' + e.message; }
+  loadAdapter();
+})();
+</script>
