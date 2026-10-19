@@ -151,6 +151,30 @@ def test_proxy_exported_from_settings_json(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HTTPS_PROXY", "http://real:1")  # the real environment wins
     load()
     assert os.environ["HTTPS_PROXY"] == "http://real:1"
+    monkeypatch.delenv("HTTPS_PROXY")
+    write_json(tmp_path, {"no_proxy": "localhost"})  # alone it would hide the Windows proxy from urllib: not set
+    load()
+    assert "NO_PROXY" not in os.environ and "HTTPS_PROXY" not in os.environ
+    monkeypatch.setenv("https_proxy", "http://real:2")  # with a proxy of the real environment it is
+    load()
+    assert os.environ["NO_PROXY"] == "localhost"
+    monkeypatch.delenv("https_proxy")
+    load()
+    assert "NO_PROXY" not in os.environ
+
+
+def test_proxy_password_is_masked(tmp_path: Path, monkeypatch) -> None:
+    from desk.settings import mask_proxy
+
+    assert mask_proxy("http://ivanov:S3cr:et@proxy.corp:3128") == "http://ivanov:***@proxy.corp:3128"
+    assert mask_proxy("ivanov:pw@proxy:8080") == "ivanov:***@proxy:8080"
+    assert mask_proxy("http://proxy:8080") == "http://proxy:8080" and mask_proxy(None) is None
+    for v in ("HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(v, raising=False)
+    monkeypatch.setenv("DESK_HOME", str(tmp_path))
+    monkeypatch.setenv("DESK_ENV_FILE", str(tmp_path / "none.env"))
+    write_json(tmp_path, {"https_proxy": "http://ivanov:pw123@proxy.corp:3128"})
+    assert dict(load().describe())["https_proxy"] == "http://ivanov:***@proxy.corp:3128"  # desk config
 
 
 def test_bundle_default_adapter_is_the_lowest_layer(tmp_path: Path) -> None:
@@ -278,6 +302,19 @@ def test_api_settings_round_trip(client: TestClient, home: Path) -> None:
     assert r.status_code == 422 and "hub_timeout_s" in r.json()["message"]
     assert client.put("/api/v1/settings", json={"hub_token": TOKEN}).status_code == 422
     assert "/api/v1/settings" not in client.get("/openapi.json").json()["paths"]  # local admin routes
+
+
+def test_api_proxy_password_masked_and_kept(client: TestClient, home: Path, monkeypatch) -> None:
+    for v in ("HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(v, raising=False)
+    j = client.put("/api/v1/settings", json={"https_proxy": "http://ivanov:pw123@proxy.corp:3128"}).json()
+    assert "pw123" not in json.dumps(j) and j["https_proxy"] == "http://ivanov:***@proxy.corp:3128"
+    assert j["effective"]["https_proxy"] == "http://ivanov:***@proxy.corp:3128"
+    j = client.put("/api/v1/settings", json={**j, "hub_url": "https://hub.example"}).json()  # the page saves all
+    stored = json.loads((home / "settings.json").read_text(encoding="utf-8"))
+    assert stored["https_proxy"] == "http://ivanov:pw123@proxy.corp:3128" and stored["hub_url"] == "https://hub.example"
+    client.put("/api/v1/settings", json={"https_proxy": "http://ivanov:new@proxy.corp:3128"})  # a new one is saved
+    assert json.loads((home / "settings.json").read_text(encoding="utf-8"))["https_proxy"].endswith(":new@proxy.corp:3128")
 
 
 def test_api_token_never_returned(client: TestClient, home: Path) -> None:

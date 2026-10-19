@@ -177,7 +177,7 @@ class Settings:
             ("hub_token", token),
             ("hub_ca_bundle", str(self.hub_ca_bundle or "system default")),
             ("hub_timeout_s", f"{self.hub_timeout_s:g}"),
-            ("https_proxy", os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or "none"),
+            ("https_proxy", mask_proxy(os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or "none")),
             ("snapshot_cache", str(self.snapshot_cache)),
             ("snapshot_drop", str(self.snapshot_drop or "none")),
             ("store_url", mask_url(self.store_url) if self.store_url else f"not set: embedded store ({self.pg_dir})"),
@@ -201,6 +201,11 @@ class Settings:
 def mask_url(url: str) -> str:
     """The URL without its password, for printing."""
     return re.sub(r"(password=)\S+", r"\1***", re.sub(r"(://[^:/@?]*:)[^@]*@", r"\1***@", url))
+
+
+def mask_proxy(url: str | None) -> str | None:
+    """A proxy address without the password of its ``user:password@`` (with or without a scheme)."""
+    return re.sub(r"^((?:[A-Za-z][A-Za-z0-9+.-]*://)?[^:/@]*:)[^@/]*@", r"\1***@", url) if url else url
 
 
 def read_env_file(path: Path) -> dict[str, str]:
@@ -316,8 +321,13 @@ _exported: dict[str, str] = {}  # proxy variables load() set itself, so it can u
 
 
 def _export_proxy(doc: dict[str, Any]) -> None:
-    for key, var in PROXY_KEYS.items():
+    """``https_proxy`` / ``no_proxy`` of settings.json into the environment unless the real environment sets them.
+    ``NO_PROXY`` only together with an HTTPS proxy in the environment: on Windows any ``*_PROXY`` variable, even
+    ``NO_PROXY`` alone, makes urllib ignore the proxy set in the Windows (Internet Options) settings."""
+    for key, var in PROXY_KEYS.items():  # https_proxy first
         want = doc.get(key).strip() if isinstance(doc.get(key), str) else ""
+        if var == "NO_PROXY" and not (os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")):
+            want = ""
         ours = var in _exported and os.environ.get(var) == _exported[var]
         if not ours and (os.environ.get(var) or os.environ.get(var.lower())):
             continue  # the real environment wins

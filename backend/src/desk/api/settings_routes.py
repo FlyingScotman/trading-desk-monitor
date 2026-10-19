@@ -33,6 +33,7 @@ from ..settings import (
     desk_home,
     env_overrides,
     load,
+    mask_proxy,
     mask_url,
     read_settings_json,
     update_settings_json,
@@ -87,7 +88,7 @@ def _effective(st: Settings) -> dict[str, Any]:
         "home": str(st.home), "settings_file": str(st.settings_file), "token_file": str(st.token_file),
         "hub_url": st.hub_url, "hub_token_source": st.hub_token_source,
         "hub_ca_bundle": str(st.hub_ca_bundle) if st.hub_ca_bundle else None, "hub_timeout_s": st.hub_timeout_s,
-        "https_proxy": os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or None,
+        "https_proxy": mask_proxy(os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or None),
         "no_proxy": os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or None,
         "snapshot_cache": str(st.snapshot_cache), "snapshot_drop": str(st.snapshot_drop) if st.snapshot_drop else None,
         "store": mask_url(st.store_url) if st.store_url else f"embedded: {st.pg_dir}",
@@ -115,8 +116,10 @@ def settings_payload() -> dict[str, Any]:
         st: Settings | None = load()
     except SettingsError as e:
         st, error = None, error or str(e)
-    return {**{k: v for k, v in doc.items() if k not in READ_ONLY_KEYS},
-            "hub_token_set": bool(st and st.hub_token), "home": str(home),
+    stored = {k: v for k, v in doc.items() if k not in READ_ONLY_KEYS}
+    if isinstance(stored.get("https_proxy"), str):  # its password, like the token's, is never sent back
+        stored["https_proxy"] = mask_proxy(stored["https_proxy"])
+    return {**stored, "hub_token_set": bool(st and st.hub_token), "home": str(home),
             "effective": _effective(st) if st else None, "env_overrides": env_overrides(), "error": error}
 
 
@@ -131,6 +134,9 @@ def put_settings(body: JsonBody) -> dict[str, Any]:
     if "hub_token" in body:
         raise ApiError(422, "invalid_parameter", "the token is not a setting: PUT /api/v1/settings/hub-token")
     try:
+        stored = read_settings_json(desk_home()).get("https_proxy")
+        if isinstance(stored, str) and body.get("https_proxy") == mask_proxy(stored) != stored:
+            del body["https_proxy"]  # the masked value of GET sent back unchanged: keep the stored password
         update_settings_json(body, desk_home())
     except SettingsError as e:
         raise ApiError(422, "invalid_parameter", str(e)) from None
