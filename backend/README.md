@@ -153,7 +153,7 @@ The settings page `http://127.0.0.1:8000/settings.html` (`desk serve`) edits `se
 |---|---|---|
 | `DESK_HUB_URL` | not set | The VPS hub, set per installation (the address is not kept in the repository); HTTPS only |
 | `DESK_HUB_TOKEN_FILE` / `DESK_HUB_TOKEN` | `<home>/hub_token` | Bearer token of this consumer, scope `snapshots`. Keep it in a file outside the repository; the repository is public |
-| `DESK_HUB_CA_BUNDLE`, `HTTPS_PROXY` | system | Corporate proxy and its TLS-inspection CA (inside the work network). The client uses the standard library, so on Windows the system certificate store is trusted |
+| `DESK_HUB_CA_BUNDLE`, `HTTPS_PROXY` | system | Corporate proxy and its TLS-inspection CA (inside the work network). The client uses the standard library with the OS verifier through `truststore` (on Windows the certificate store, including roots Windows downloads on demand and those a group policy installs; else the `ssl` default). `DESK_HUB_CA_BUNDLE` replaces it |
 | `DESK_HUB_TIMEOUT_S` | 60 | Per-request timeout; 5xx and connection errors are retried three times with backoff |
 | `DESK_SNAPSHOT_CACHE` | `<home>/snapshots` | Verified bundles, append-only; `desk sync` writes here, `desk eod` and `desk demo-book` read here unless `--snapshots` is given |
 | `DESK_SNAPSHOT_DROP` | not set | Folder an operator fills by hand when the hub is unreachable (`desk import-drop`) |

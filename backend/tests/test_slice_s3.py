@@ -10,6 +10,9 @@ from __future__ import annotations
 import gzip
 import json
 import shutil
+import ssl
+import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,7 +23,7 @@ import pytest
 from desk import cli
 from desk.marketdata import cache
 from desk.marketdata.bundle import SnapshotDir, SnapshotError
-from desk.marketdata.hub import HubClient, HubError
+from desk.marketdata.hub import HubClient, HubError, tls_context
 from desk.settings import Settings, load
 
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1"
@@ -117,6 +120,45 @@ def settings(stub: Stub, token: str | None = TOKEN) -> Settings:
 def test_no_hub_address_makes_no_request():
     with pytest.raises(HubError, match="DESK_HUB_URL"):
         HubClient(Settings())
+
+
+def test_tls_context_os_store_bundle_and_fallback(monkeypatch, tmp_path):
+    import truststore
+
+    assert isinstance(tls_context(None), truststore.SSLContext)  # the OS trust store (Windows: root auto-download)
+    monkeypatch.setitem(sys.modules, "truststore", None)  # not installed: the stdlib default, silently
+    ctx = tls_context(None)
+    assert type(ctx) is ssl.SSLContext and ctx.verify_mode == ssl.CERT_REQUIRED
+
+
+@pytest.mark.skipif(shutil.which("openssl") is None, reason="needs the openssl command for a test certificate")
+def test_https_hub_with_ca_bundle_and_os_store(tmp_path, monkeypatch):
+    """The client over TLS: a CA bundle (hub_ca_bundle) replaces the trust store and works; without it the OS
+    store (truststore) does not know a self-signed certificate, and the error is a HubError, not a crash."""
+    cert, key = tmp_path / "hub.pem", tmp_path / "hub.key"
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj",
+                    "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1", "-keyout", str(key), "-out",
+                    str(cert)], check=True, capture_output=True)
+    for k in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(HubClient, "backoff_s", 0.0)
+    srv = Stub(("127.0.0.1", 0), Handler)
+    srv.reset()
+    server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_ctx.load_cert_chain(cert, key)
+    srv.socket = server_ctx.wrap_socket(srv.socket, server_side=True)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        url = f"https://127.0.0.1:{srv.server_address[1]}"
+        ok = HubClient(Settings(hub_url=url, hub_token=TOKEN, hub_timeout_s=5, hub_ca_bundle=cert))
+        assert [r["snapshot_id"] for r in ok.list_snapshots(kind="market", latest=True)] == [MARKET]
+        c = HubClient(Settings(hub_url=url, hub_token=TOKEN, hub_timeout_s=5))
+        c.retries = 0
+        with pytest.raises(HubError, match="(?i)certificate"):
+            c.health()
+    finally:
+        srv.shutdown()
+        srv.server_close()
 
 
 def test_list_pages_and_latest(stub):

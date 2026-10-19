@@ -5,9 +5,10 @@
 * ``GET /v1/snapshots/{id}/manifest``                envelope
 * ``GET /v1/snapshots/{id}/bundle``                  gzipped canonical JSON, ``X-Snapshot-Sha256``
 
-Transport is the standard library: ``urllib`` honours ``HTTPS_PROXY``/``NO_PROXY`` and, on Windows,
-the system certificate store (a TLS-inspecting proxy's CA is usually there); ``DESK_HUB_CA_BUNDLE``
-replaces the default trust. The token goes only into the ``Authorization`` header and never into
+Transport is the standard library: ``urllib`` honours ``HTTPS_PROXY``/``NO_PROXY``. TLS trust is the operating
+system's verifier through ``truststore`` when it is installed (on Windows: the certificate store with the automatic
+root download and the corporate roots a policy pushes, where a TLS-inspecting proxy's CA usually is), else the
+``ssl`` default; ``DESK_HUB_CA_BUNDLE`` replaces either (``tls_context``). The token goes only into the ``Authorization`` header and never into
 a message, a URL or a log line.
 """
 
@@ -28,6 +29,19 @@ from ..settings import Settings
 USER_AGENT = "desk-backend"
 
 
+def tls_context(ca_bundle: Any = None) -> ssl.SSLContext:
+    """The hub's TLS context: the given CA bundle alone; without one the OS trust store (``truststore``), falling
+    back silently to ``ssl.create_default_context()`` when truststore is missing or cannot be used."""
+    if ca_bundle:
+        return ssl.create_default_context(cafile=str(ca_bundle))
+    try:
+        import truststore
+
+        return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    except Exception:  # noqa: BLE001 - not installed, or an OS it does not support: the stdlib default
+        return ssl.create_default_context()
+
+
 class HubError(RuntimeError):
     def __init__(self, message: str, status: int | None = None) -> None:
         super().__init__(message)
@@ -45,7 +59,7 @@ class HubClient:
         self.host = urllib.parse.urlsplit(self.url).hostname or ""
         self._token = settings.hub_token
         self._timeout = settings.hub_timeout_s
-        ctx = ssl.create_default_context(cafile=str(settings.hub_ca_bundle) if settings.hub_ca_bundle else None)
+        ctx = tls_context(settings.hub_ca_bundle)
         self._opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
 
     # -- transport -------------------------------------------------------------------------
