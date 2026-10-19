@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import types
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -105,6 +106,22 @@ def test_ensure_env_keeps_a_venv_of_this_version_and_folder(monkeypatch, tmp_pat
     with pytest.raises(deskctl.Fail):  # a new version, but a desk process of this folder still runs
         deskctl.ensure_env({"DESK_HOME": str(tmp_path / "home")})
     assert env_dir.is_dir()
+
+
+def test_db_migrate_is_retried_when_postgres_starts_slowly(monkeypatch, tmp_path):
+    """pgserver gives pg_ctl 10 s; an antivirus on the first start can take longer: up to 3 tries, then Fail."""
+    codes, calls, said = [1, 1, 0], [], []
+    monkeypatch.setattr(deskctl.subprocess, "run",
+                        lambda cmd, **k: calls.append(cmd) or types.SimpleNamespace(returncode=codes.pop(0)))
+    monkeypatch.setattr(deskctl.time, "sleep", lambda s: None)
+    monkeypatch.setattr(deskctl, "say", said.append)
+    env = {"DESK_HOME": str(tmp_path / "home")}
+    deskctl.migrate_store(env)
+    assert [c[-1] for c in calls] == ["db-migrate"] * 3
+    assert sum("Повтор" in x for x in said) == 2 and "Повтор 3 из 3" in said[-1]
+    codes[:] = [1, 1, 1]
+    with pytest.raises(deskctl.Fail, match="3 попытки"):
+        deskctl.migrate_store(env)
 
 
 def test_desk_home_falls_back_to_ascii_and_odd_paths_are_refused(monkeypatch, tmp_path):

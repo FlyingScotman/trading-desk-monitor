@@ -44,6 +44,10 @@ MARKER = ENV / "desk-bundle.json"
 STOPPED = (0, 130, 15, -15, 0xC000013A, -1073741510)
 LOG_MAX_BYTES = 20_000_000
 DEFAULT_PORT = 8000
+# pgserver gives pg_ctl 10 s to start PostgreSQL; on the first start an antivirus scanning postgres.exe can take
+# longer, and the next try usually finds the files already checked
+MIGRATE_TRIES = 3
+MIGRATE_PAUSE_S = 5.0
 
 
 def say(msg: str = "") -> None:
@@ -303,12 +307,26 @@ def ensure_env(env: dict[str, str], *, force: bool = False) -> None:
     if r.returncode:
         raise Fail(f"Установленный пакет desk не импортируется:\n{r.stderr}")
     MARKER.write_text(json.dumps(want, ensure_ascii=False), encoding="utf-8")
-    say("Создаю или обновляю базу (desk db-migrate); при первом запуске PostgreSQL создаёт кластер, до минуты ...")
-    if subprocess.run([str(desk_exe()), "db-migrate"], env=env, cwd=str(home_dir(env)), check=False).returncode:
-        raise Fail(f"desk db-migrate не прошёл (сообщения выше). Журнал PostgreSQL: "
-                   f"{Path(env['DESK_HOME']) / 'pg' / 'log'}; частые причины и решения: "
-                   "app\\INSTALL_BACKEND_WINDOWS.md, раздел «Если что-то не так».")
+    migrate_store(env)
     say("Установка завершена.")
+
+
+def migrate_store(env: dict[str, str]) -> None:
+    """``desk db-migrate``, up to ``MIGRATE_TRIES`` times: a first start of the embedded PostgreSQL can exceed
+    pgserver's 10 s while an antivirus checks its files."""
+    say("Создаю или обновляю базу (desk db-migrate); при первом запуске PostgreSQL создаёт кластер, до минуты ...")
+    for n in range(1, MIGRATE_TRIES + 1):
+        if not subprocess.run([str(desk_exe()), "db-migrate"], env=env, cwd=str(home_dir(env)),
+                              check=False).returncode:
+            return
+        if n < MIGRATE_TRIES:
+            say(f"PostgreSQL не успел запуститься (при первом запуске его файлы может проверять антивирус). "
+                f"Повтор {n + 1} из {MIGRATE_TRIES} через {MIGRATE_PAUSE_S:g} с ...")
+            time.sleep(MIGRATE_PAUSE_S)
+    raise Fail(f"desk db-migrate не прошёл за {MIGRATE_TRIES} попытки (сообщения выше). Журнал PostgreSQL: "
+               f"{Path(env['DESK_HOME']) / 'pg' / 'log'}; частые причины и решения: "
+               "app\\INSTALL_BACKEND_WINDOWS.md, раздел «Если что-то не так». "
+               "Часто помогает просто запустить ещё раз.")
 
 
 # ---- running desk with a log
