@@ -90,7 +90,7 @@ python3.11 backend/tools/build_windows_bundle.py --adapter-zip ~/private/adapter
 
 Ничего делать не нужно, пока открыт `start.bat`. Чтобы Desk Monitor запускался сам после входа в Windows, положите ярлык на `start.bat` в папку автозагрузки (`Win+R` → `shell:startup`).
 
-`update_daily.bat` — один цикл автопилота прямо сейчас (`desk cycle`: хаб → отчёты → EOD), без сервера; журнал `logs\cycle.log`. Нужен, если сервер не держат открытым. По расписанию через Планировщик заданий (обычные права):
+`update_daily.bat` — один цикл автопилота прямо сейчас (`desk cycle`: хаб → отчёты → EOD), без сервера; журнал `logs\cycle.log`. Нужен, если сервер не держат открытым. Параметры передаются в `desk cycle`: `update_daily.bat --date 2026-10-16` — конкретная дата, `update_daily.bat --no-hub` — без обращения к хабу. По расписанию через Планировщик заданий (обычные права):
 
 ```bat
 schtasks /create /tn "Desk Monitor daily" /sc weekly /d MON,TUE,WED,THU,FRI /st 08:30 /tr "\"C:\DeskMonitor\update_daily.bat\""
