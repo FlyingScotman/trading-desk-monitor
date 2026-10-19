@@ -27,7 +27,7 @@ from ..settings import REPO_ROOT, Settings, SettingsError
 from ..valuation.fallback import CarriedSpread
 
 MIGRATIONS = Path(__file__).parent / "migrations"
-DEV_PGDATA = REPO_ROOT / ".devdata" / "desk_pg"  # not .devdata/pg: the hub seed cluster (ADR-006)
+DEV_PGDATA = REPO_ROOT / ".devdata" / "desk_pg"  # the dev checkout's Settings.pg_dir (.devdata/pg: hub seed, ADR-006)
 _LOCK = 0x6465736B  # "desk": one migrator at a time
 
 
@@ -36,8 +36,9 @@ def connect(url: str) -> psycopg.Connection:
 
 
 def resolve_url(settings: Settings) -> str:
-    """``DESK_STORE_URL``, else the embedded dev server in ``.devdata/desk_pg`` (pgserver), database ``desk``.
-    The dev server keeps running after the process exits, so later commands share it."""
+    """``DESK_STORE_URL``, else the embedded server in ``settings.pg_dir`` (pgserver; ``<home>/pg``, in the dev
+    checkout ``.devdata/desk_pg``), database ``desk``. It keeps running after the process exits, so later
+    commands share it."""
     if settings.store_url:
         return settings.store_url
     try:
@@ -45,7 +46,8 @@ def resolve_url(settings: Settings) -> str:
     except ImportError:
         raise SettingsError("set DESK_STORE_URL (postgresql://...): the embedded dev store needs pgserver, "
                             "which is not installed (uv sync --extra dev)") from None
-    server = pgserver.get_server(DEV_PGDATA, cleanup_mode=None)
+    settings.pg_dir.parent.mkdir(parents=True, exist_ok=True)
+    server = pgserver.get_server(settings.pg_dir, cleanup_mode=None)
     if "1 row" not in server.psql("SELECT 1 FROM pg_database WHERE datname = 'desk';"):
         server.psql("CREATE DATABASE desk ENCODING 'UTF8' TEMPLATE template0;")
     return server.get_uri("desk")

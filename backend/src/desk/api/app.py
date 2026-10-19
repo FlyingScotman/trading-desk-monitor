@@ -352,6 +352,10 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
             raise ApiError(404, "not_found", missing)
         return desk
 
+    from .settings_routes import router as settings_router  # here: it imports ApiError from this module
+
+    app.include_router(settings_router, include_in_schema=False)  # local admin routes (/settings.html)
+
     built = Path(app_dir) if app_dir else APP_DIR
     if built.is_dir():  # before "/": the frontend build, absent until npm run build
         @app.get("/app", include_in_schema=False)

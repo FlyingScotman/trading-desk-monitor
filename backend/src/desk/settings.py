@@ -1,52 +1,118 @@
 """Backend settings: where the hub is, how to authenticate, where local files live.
 
-Read from ``DESK_*`` environment variables, then from an env file (``backend/.env`` or the
-path in ``DESK_ENV_FILE``); the environment wins. ``backend/.env.example`` lists every key.
+Layers, the first that sets a key wins: process environment ``DESK_*`` > ``<home>/settings.json``
+(written by the settings page, ``/settings.html``) > an env file (``backend/.env`` or the path in
+``DESK_ENV_FILE``) > defaults. ``load()`` re-reads ``settings.json`` on every call, so a long-running
+server picks up edits without a restart. ``backend/.env.example`` lists every variable.
+
+``<home>`` (``desk_home()``) is the per-user data folder, outside the install folder so that a new
+version unpacked anywhere finds the same settings and data: ``DESK_HOME`` (environment or env file),
+else ``%LOCALAPPDATA%\\DeskMonitor`` on Windows, else ``<repo>/.devdata`` in a git checkout (the dev
+layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub_token``,
+``adapter-config/``, ``snapshots/``, ``inbox-archive/``, ``pg/`` (embedded store), ``tdm.sqlite`` and
+``logs/``; the dev checkout keeps its old names ``.devdata/inbox`` and ``.devdata/desk_pg``.
 
 * ``DESK_HUB_URL``         hub base URL, set per installation (no default: the address is
                            never kept in the repository); HTTPS only, plain HTTP is
                            accepted for localhost (test stubs)
 * ``DESK_HUB_TOKEN``       bearer token of this consumer (scope ``snapshots``), or
-  ``DESK_HUB_TOKEN_FILE``  a file holding it. Never commit either; the repository is public
+  ``DESK_HUB_TOKEN_FILE``  a file holding it; else ``<home>/hub_token`` (written by the settings page).
+                           Never commit either; the repository is public
 * ``DESK_HUB_CA_BUNDLE``   PEM bundle for a TLS-inspecting proxy (inside the work network)
 * ``DESK_HUB_TIMEOUT_S``   per-request timeout (default 60)
-* ``DESK_SNAPSHOT_CACHE``  verified ``<snapshot_id>.json.gz`` bundles (default ``.devdata/snapshots``)
+* ``DESK_SNAPSHOT_CACHE``  verified ``<snapshot_id>.json.gz`` bundles (default ``<home>/snapshots``)
 * ``DESK_SNAPSHOT_DROP``   folder an operator fills by hand when the hub is unreachable (ADR-001)
 * ``DESK_STORE_URL``       desk store, a libpq URI ``postgresql://user:password@host:5432/desk``
-                           (slice S5). Unset: an embedded dev server in ``.devdata/desk_pg`` (pgserver)
-* ``DESK_DB``              the ``tdm`` SQLite prototype store (default ``.devdata/tdm.sqlite``),
+                           (slice S5). Unset: an embedded server in ``<home>/pg`` (pgserver)
+* ``DESK_DB``              the ``tdm`` SQLite prototype store (default ``<home>/tdm.sqlite``),
                            written by ``desk eod --tdm`` during the transition
-* ``DESK_REPORT_DIR``      validation reports (none by default)
+* ``DESK_REPORT_DIR``      validation reports (none by default; ``<home>/reports`` is the usual place)
 * ``DESK_PRIVATE_ADAPTER`` the private adapter (08 §2): a package directory or a module name; unset: the
-                           reference adapter ``desk.inbox.reference``
-* ``DESK_PRIVATE_ADAPTER_CONFIG``  the adapter's config folder (``ctx.config_dir``; fingerprinted)
+                           folder in ``DESK_DEFAULT_PRIVATE_ADAPTER`` (process environment only, set by the
+                           Windows bundle's start script) if it exists, else the reference adapter
+                           ``desk.inbox.reference``
+* ``DESK_PRIVATE_ADAPTER_CONFIG``  the adapter's config folder (``ctx.config_dir``; fingerprinted; default
+                           ``<home>/adapter-config``, created on demand)
 * ``DESK_PRIVATE_ADAPTER_SHA256``  the expected adapter fingerprint; loading fails on a mismatch
 * ``DESK_INBOX_DIRS``      report folders separated by ``;``; one ending in ``\\**`` or ``/**`` is recursive
-* ``DESK_INBOX_ARCHIVE``   copies of every matched file under its hash (default ``.devdata/inbox``)
+* ``DESK_INBOX_ARCHIVE``   copies of every matched file under its hash (default ``<home>/inbox-archive``)
 * ``DESK_INBOX_POLL_SECONDS``, ``DESK_ADAPTER_MATCH_TIMEOUT_S``, ``DESK_ADAPTER_READ_TIMEOUT_S``,
   ``DESK_INBOX_MAX_FILE_MB``  watcher period (60), adapter timeouts (10 per match batch, 600 per read) and
                            the largest file offered (500)
+* ``DESK_AUTOPILOT``, ``DESK_AUTOPILOT_SYNC_LAST``  the ``desk serve`` autopilot (on) and the number of
+                           latest hub dates it keeps in sync (5)
 
-The proxy itself comes from the standard ``HTTPS_PROXY`` / ``NO_PROXY`` variables.
+Relative paths resolve against the repository (install) root, those of ``settings.json`` against
+``<home>``. The proxy comes from the standard ``HTTPS_PROXY`` / ``NO_PROXY`` variables; ``settings.json``
+keys ``https_proxy`` / ``no_proxy`` are exported to them by ``load()`` when the real environment has none.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 from .inbox.runner import is_path_spec
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BACKEND_ROOT = REPO_ROOT / "backend"
+DEV_HOME = REPO_ROOT / ".devdata"
+SETTINGS_FILE = "settings.json"
+TOKEN_FILE = "hub_token"
+ADAPTER_CONFIG_DIR = "adapter-config"
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+# settings.json key -> (DESK_* variable, kind); kinds are checked by check_settings_doc
+JSON_KEYS: dict[str, tuple[str, str]] = {
+    "hub_url": ("DESK_HUB_URL", "str"),
+    "hub_ca_bundle": ("DESK_HUB_CA_BUNDLE", "path"),
+    "hub_timeout_s": ("DESK_HUB_TIMEOUT_S", "num"),
+    "snapshot_drop": ("DESK_SNAPSHOT_DROP", "path"),
+    "store_url": ("DESK_STORE_URL", "str"),
+    "private_adapter": ("DESK_PRIVATE_ADAPTER", "adapter"),
+    "private_adapter_config": ("DESK_PRIVATE_ADAPTER_CONFIG", "path"),
+    "inbox_dirs": ("DESK_INBOX_DIRS", "dirs"),
+    "inbox_poll_seconds": ("DESK_INBOX_POLL_SECONDS", "num"),
+    "autopilot": ("DESK_AUTOPILOT", "bool"),
+    "autopilot_sync_last": ("DESK_AUTOPILOT_SYNC_LAST", "int"),
+}
+PROXY_KEYS = {"https_proxy": "HTTPS_PROXY", "no_proxy": "NO_PROXY"}
+READ_ONLY_KEYS = ("hub_token", "hub_token_set", "home", "effective", "env_overrides", "error")
+_TRUE, _FALSE = ("1", "true", "yes", "on"), ("0", "false", "no", "off")
 
 
 class SettingsError(ValueError):
     pass
+
+
+def in_checkout() -> bool:
+    """Running from a git checkout (``.git`` is a folder, or a file in a worktree)."""
+    return (REPO_ROOT / ".git").exists()
+
+
+def desk_home(environ: dict[str, str] | None = None, *, windows: bool | None = None) -> Path:
+    """The per-user data folder (see the module doc); not created here. ``windows`` overrides the platform
+    check (tests)."""
+    env = os.environ if environ is None else environ
+    value = env.get("DESK_HOME")
+    if not value:
+        env_file = _env_file(env)
+        value = read_env_file(env_file).get("DESK_HOME") if env_file.is_file() else None
+    if value:
+        p = Path(value).expanduser()
+        return p if p.is_absolute() else REPO_ROOT / p
+    if os.name == "nt" if windows is None else windows:
+        base = env.get("LOCALAPPDATA")
+        return (Path(base) if base else Path.home() / "AppData" / "Local") / "DeskMonitor"
+    if in_checkout():
+        return DEV_HOME
+    return Path.home() / ".local" / "share" / "desk-monitor"
 
 
 @dataclass(frozen=True)
@@ -56,26 +122,57 @@ class Settings:
     hub_token_source: str = "not set"
     hub_ca_bundle: Path | None = None
     hub_timeout_s: float = 60.0
-    snapshot_cache: Path = REPO_ROOT / ".devdata" / "snapshots"
+    snapshot_cache: Path = None  # type: ignore[assignment]  # None: <home>/snapshots
     snapshot_drop: Path | None = None
     store_url: str | None = field(default=None, repr=False)
-    db: Path = REPO_ROOT / ".devdata" / "tdm.sqlite"
+    db: Path = None  # type: ignore[assignment]  # None: <home>/tdm.sqlite
     report_dir: Path | None = None
     private_adapter: str | None = None
-    private_adapter_config: Path | None = None
+    private_adapter_config: Path | None = None  # load() defaults it to <home>/adapter-config
     private_adapter_sha256: str | None = None
     inbox_dirs: tuple[Path, ...] = ()
-    inbox_archive: Path = REPO_ROOT / ".devdata" / "inbox"
+    inbox_archive: Path = None  # type: ignore[assignment]  # None: <home>/inbox-archive
     inbox_poll_seconds: float = 60.0
     adapter_match_timeout_s: float = 10.0
     adapter_read_timeout_s: float = 600.0
     inbox_max_file_mb: float = 500.0
+    home: Path = None  # type: ignore[assignment]  # None: desk_home()
+    autopilot: bool = True
+    autopilot_sync_last: int = 5
+    private_adapter_default: bool = False  # private_adapter came from DESK_DEFAULT_PRIVATE_ADAPTER
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "home", Path(self.home) if self.home is not None else desk_home())
+        dev = self.home == DEV_HOME  # the dev checkout keeps its old folder names
+        for name, leaf in (("snapshot_cache", "snapshots"), ("db", "tdm.sqlite"),
+                           ("inbox_archive", "inbox" if dev else "inbox-archive")):
+            if getattr(self, name) is None:
+                object.__setattr__(self, name, self.home / leaf)
+
+    @property
+    def settings_file(self) -> Path:
+        return self.home / SETTINGS_FILE
+
+    @property
+    def token_file(self) -> Path:
+        return self.home / TOKEN_FILE
+
+    @property
+    def pg_dir(self) -> Path:
+        """The embedded store's cluster (no DESK_STORE_URL). The dev checkout keeps ``.devdata/desk_pg``:
+        ``.devdata/pg`` is the hub seed cluster there (ADR-006)."""
+        return self.home / ("desk_pg" if self.home == DEV_HOME else "pg")
+
+    @property
+    def logs_dir(self) -> Path:
+        return self.home / "logs"
 
     def describe(self) -> list[tuple[str, str]]:
         """Effective settings for ``desk config``; the token and the store password are masked."""
         token = (f"{self.hub_token[:4]}…{self.hub_token[-4:]} ({self.hub_token_source})" if self.hub_token
                  else self.hub_token_source)
         return [
+            ("home", str(self.home)),
             ("hub_url", self.hub_url or "not set (DESK_HUB_URL)"),
             ("hub_token", token),
             ("hub_ca_bundle", str(self.hub_ca_bundle or "system default")),
@@ -83,10 +180,11 @@ class Settings:
             ("https_proxy", os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or "none"),
             ("snapshot_cache", str(self.snapshot_cache)),
             ("snapshot_drop", str(self.snapshot_drop or "none")),
-            ("store_url", mask_url(self.store_url) if self.store_url else "not set: embedded dev store (.devdata/desk_pg)"),
+            ("store_url", mask_url(self.store_url) if self.store_url else f"not set: embedded store ({self.pg_dir})"),
             ("db", str(self.db)),
             ("report_dir", str(self.report_dir or "none")),
-            ("private_adapter", self.private_adapter or "reference (desk.inbox.reference)"),
+            ("private_adapter", (self.private_adapter + (" (bundle default)" if self.private_adapter_default else ""))
+             if self.private_adapter else "reference (desk.inbox.reference)"),
             ("private_adapter_config", str(self.private_adapter_config or "none")),
             ("private_adapter_sha256", self.private_adapter_sha256 or "not pinned"),
             ("inbox_dirs", "; ".join(map(str, self.inbox_dirs)) or "none"),
@@ -95,6 +193,8 @@ class Settings:
             ("adapter_match_timeout_s", f"{self.adapter_match_timeout_s:g}"),
             ("adapter_read_timeout_s", f"{self.adapter_read_timeout_s:g}"),
             ("inbox_max_file_mb", f"{self.inbox_max_file_mb:g}"),
+            ("autopilot", "on" if self.autopilot else "off"),
+            ("autopilot_sync_last", str(self.autopilot_sync_last)),
         ]
 
 
@@ -121,18 +221,155 @@ def read_env_file(path: Path) -> dict[str, str]:
     return out
 
 
-def _path(value: str | None) -> Path | None:
+def _path(value: str | None, base: Path = REPO_ROOT) -> Path | None:
     if not value:
         return None
     p = Path(value).expanduser()
-    return p if p.is_absolute() else REPO_ROOT / p
+    return p if p.is_absolute() else base / p
+
+
+def _env_file(env: Any) -> Path:
+    return _path(env.get("DESK_ENV_FILE")) or BACKEND_ROOT / ".env"
+
+
+# ---- settings.json -------------------------------------------------------------------------------------------
+
+
+def read_settings_json(home: Path | None = None) -> dict[str, Any]:
+    """``<home>/settings.json`` as a dict ({} when missing); SettingsError when it is not a JSON object."""
+    path = (home or desk_home()) / SETTINGS_FILE
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
+        return {}
+    except OSError as e:
+        raise SettingsError(f"{path}: {e}") from None
+    try:
+        doc = json.loads(text) if text.strip() else {}
+    except ValueError as e:
+        raise SettingsError(f"{path}: invalid JSON: {e}") from None
+    if not isinstance(doc, dict):
+        raise SettingsError(f"{path}: must be a JSON object")
+    return doc
+
+
+def check_settings_doc(doc: object) -> list[str]:
+    """Shape errors of a settings.json document (unknown keys are kept and ignored; null means unset)."""
+    if not isinstance(doc, dict):
+        return ["settings must be a JSON object"]
+    errors = []
+    for key, (_, kind) in {**JSON_KEYS, **{k: (v, "str") for k, v in PROXY_KEYS.items()}}.items():
+        v = doc.get(key)
+        if v is None:
+            continue
+        number = isinstance(v, (int, float)) and not isinstance(v, bool)
+        if kind in ("str", "path", "adapter") and not isinstance(v, str):
+            errors.append(f"{key}: must be a string")
+        elif kind == "num" and not (number and v > 0):
+            errors.append(f"{key}: must be a positive number")
+        elif kind == "int" and not (number and v == int(v) and v >= 1):
+            errors.append(f"{key}: must be a whole number >= 1")
+        elif kind == "bool" and not isinstance(v, bool):
+            errors.append(f"{key}: must be true or false")
+        elif kind == "dirs":
+            if not isinstance(v, list):
+                errors.append(f"{key}: must be a list of {{path, label, recursive}}")
+                continue
+            for i, d in enumerate(v):
+                if not (isinstance(d, dict) and isinstance(d.get("path"), str) and d["path"].strip()):
+                    errors.append(f"{key}[{i}]: path must be a non-empty string")
+                elif not isinstance(d.get("label"), (str, type(None))):
+                    errors.append(f"{key}[{i}]: label must be a string")
+                elif not isinstance(d.get("recursive"), (bool, type(None))):
+                    errors.append(f"{key}[{i}]: recursive must be true or false")
+    return errors
+
+
+def _json_layer(doc: dict[str, Any], home: Path) -> dict[str, str]:
+    """settings.json as ``DESK_*`` strings, relative paths made absolute against ``home`` (inbox_dirs apart)."""
+    out = {}
+    for key, (var, kind) in JSON_KEYS.items():
+        v = doc.get(key)
+        if v is None or kind == "dirs" or (isinstance(v, str) and not v.strip()):
+            continue
+        if kind == "path" or (kind == "adapter" and is_path_spec(v.strip())):
+            out[var] = str(_path(v.strip(), home))
+        elif kind == "bool":
+            out[var] = "1" if v else "0"
+        elif kind == "int":
+            out[var] = str(int(v))
+        else:
+            out[var] = v.strip() if isinstance(v, str) else repr(v)
+    return out
+
+
+def _json_dirs(entries: list[dict], home: Path) -> tuple[Path, ...]:
+    out = []
+    for d in entries:
+        p = _path(str(d.get("path") or "").strip(), home)
+        if p is not None:
+            out.append(p / "**" if d.get("recursive") else p)  # the marker desk.inbox's list_files reads
+    return tuple(out)
+
+
+_exported: dict[str, str] = {}  # proxy variables load() set itself, so it can update or remove them
+
+
+def _export_proxy(doc: dict[str, Any]) -> None:
+    for key, var in PROXY_KEYS.items():
+        want = doc.get(key).strip() if isinstance(doc.get(key), str) else ""
+        ours = var in _exported and os.environ.get(var) == _exported[var]
+        if not ours and (os.environ.get(var) or os.environ.get(var.lower())):
+            continue  # the real environment wins
+        if want:
+            os.environ[var] = _exported[var] = want
+        elif ours:
+            del os.environ[var]
+            del _exported[var]
+
+
+# ---- load ----------------------------------------------------------------------------------------------------
 
 
 def load(environ: dict[str, str] | None = None) -> Settings:
-    env = dict(os.environ if environ is None else environ)
-    env_file = _path(env.get("DESK_ENV_FILE")) or BACKEND_ROOT / ".env"
-    if env_file.is_file():
-        env = {**read_env_file(env_file), **env}
+    """The effective settings. ``environ`` stands for the process environment (default ``os.environ``); only
+    with the real environment are the proxy keys of settings.json exported."""
+    proc = dict(os.environ if environ is None else environ)
+    home = desk_home(proc)
+    env_file = _env_file(proc)
+    file_env = read_env_file(env_file) if env_file.is_file() else {}
+    doc = read_settings_json(home)
+    errors = check_settings_doc(doc)
+    if errors:
+        raise SettingsError(f"{home / SETTINGS_FILE}: " + "; ".join(errors))
+    if environ is None:
+        _export_proxy(doc)
+    return _build(proc, doc, file_env, home)
+
+
+def _token(proc: dict[str, str], file_env: dict[str, str], home: Path) -> tuple[str | None, str]:
+    """DESK_HUB_TOKEN, then DESK_HUB_TOKEN_FILE of the environment, then <home>/hub_token, then the env file's."""
+    for layer in (proc, None, file_env):
+        if layer is None:
+            f = home / TOKEN_FILE
+            if f.is_file() and (t := f.read_text(encoding="utf-8-sig").strip()):
+                return t, f"file {f}"
+            continue
+        if layer.get("DESK_HUB_TOKEN"):
+            return layer["DESK_HUB_TOKEN"], "DESK_HUB_TOKEN"
+        if layer.get("DESK_HUB_TOKEN_FILE"):
+            f = _path(layer["DESK_HUB_TOKEN_FILE"])
+            assert f is not None
+            if not f.is_file():
+                return None, f"not set: {f} does not exist"
+            return f.read_text(encoding="utf-8-sig").strip() or None, f"file {f}"
+    return None, "not set"
+
+
+def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], home: Path) -> Settings:
+    env: dict[str, str] = {}
+    for layer in (file_env, _json_layer(doc, home), proc):  # lowest first
+        env.update({k: v for k, v in layer.items() if v})  # empty means unset: it never hides a lower layer
     get = lambda k: env.get(k) or None  # empty means unset
 
     hub_url = get("DESK_HUB_URL")
@@ -142,16 +379,8 @@ def load(environ: dict[str, str] | None = None) -> Settings:
         if not (u.scheme == "https" or (u.scheme == "http" and u.hostname in _LOCAL_HOSTS)) or not u.hostname:
             raise SettingsError(f"DESK_HUB_URL must be an https:// URL (http only for localhost): {hub_url!r}")
 
-    token, source = get("DESK_HUB_TOKEN"), "DESK_HUB_TOKEN"
-    if token is None and get("DESK_HUB_TOKEN_FILE"):
-        token_file = _path(get("DESK_HUB_TOKEN_FILE"))
-        assert token_file is not None
-        if token_file.is_file():
-            token, source = token_file.read_text(encoding="utf-8").strip() or None, f"file {token_file}"
-        else:
-            source = f"not set: {token_file} does not exist"
-
-    defaults = Settings()
+    token, source = _token(proc, file_env, home)
+    defaults = Settings(home=home)
 
     def num(key: str, default: float) -> float:
         try:
@@ -159,9 +388,36 @@ def load(environ: dict[str, str] | None = None) -> Settings:
         except ValueError as e:
             raise SettingsError(f"{key}: {e}") from None
 
-    adapter = get("DESK_PRIVATE_ADAPTER")
+    def flag(key: str, default: bool) -> bool:
+        v = (get(key) or "").strip().lower()
+        if v and v not in _TRUE + _FALSE:
+            raise SettingsError(f"{key}: expected 1/0, true/false, yes/no or on/off, not {v!r}")
+        return v in _TRUE if v else default
+
+    def count(key: str, default: int) -> int:
+        try:
+            n = int(get(key) or default)
+        except ValueError as e:
+            raise SettingsError(f"{key}: {e}") from None
+        if n < 1:
+            raise SettingsError(f"{key}: must be >= 1")
+        return n
+
+    def dirs(value: str | None) -> tuple[Path, ...]:
+        return tuple(p for d in (value or "").split(";") if (p := _path(d.strip())))
+
+    if proc.get("DESK_INBOX_DIRS"):
+        inbox_dirs = dirs(proc["DESK_INBOX_DIRS"])
+    elif isinstance(doc.get("inbox_dirs"), list):
+        inbox_dirs = _json_dirs(doc["inbox_dirs"], home)
+    else:
+        inbox_dirs = dirs(file_env.get("DESK_INBOX_DIRS"))
+
+    adapter, adapter_default = get("DESK_PRIVATE_ADAPTER"), False
     if adapter is not None and is_path_spec(adapter):
         adapter = str(_path(adapter))
+    elif adapter is None and (fallback := _path(proc.get("DESK_DEFAULT_PRIVATE_ADAPTER"))) and fallback.is_dir():
+        adapter, adapter_default = str(fallback), True  # the bundle's adapter, below every other layer
     store_url = get("DESK_STORE_URL")
     if store_url is not None and urlsplit(store_url).scheme not in ("postgresql", "postgres"):
         raise SettingsError("DESK_STORE_URL must be a postgresql:// URI")
@@ -177,12 +433,99 @@ def load(environ: dict[str, str] | None = None) -> Settings:
         db=_path(get("DESK_DB")) or defaults.db,
         report_dir=_path(get("DESK_REPORT_DIR")),
         private_adapter=adapter,
-        private_adapter_config=_path(get("DESK_PRIVATE_ADAPTER_CONFIG")),
+        private_adapter_config=_path(get("DESK_PRIVATE_ADAPTER_CONFIG")) or home / ADAPTER_CONFIG_DIR,
         private_adapter_sha256=get("DESK_PRIVATE_ADAPTER_SHA256"),
-        inbox_dirs=tuple(p for d in (get("DESK_INBOX_DIRS") or "").split(";") if (p := _path(d.strip()))),
+        inbox_dirs=inbox_dirs,
         inbox_archive=_path(get("DESK_INBOX_ARCHIVE")) or defaults.inbox_archive,
         inbox_poll_seconds=num("DESK_INBOX_POLL_SECONDS", defaults.inbox_poll_seconds),
         adapter_match_timeout_s=num("DESK_ADAPTER_MATCH_TIMEOUT_S", defaults.adapter_match_timeout_s),
         adapter_read_timeout_s=num("DESK_ADAPTER_READ_TIMEOUT_S", defaults.adapter_read_timeout_s),
         inbox_max_file_mb=num("DESK_INBOX_MAX_FILE_MB", defaults.inbox_max_file_mb),
+        home=home,
+        autopilot=flag("DESK_AUTOPILOT", defaults.autopilot),
+        autopilot_sync_last=count("DESK_AUTOPILOT_SYNC_LAST", defaults.autopilot_sync_last),
+        private_adapter_default=adapter_default,
     )
+
+
+def env_overrides(environ: dict[str, str] | None = None) -> list[str]:
+    """The settings.json keys the process environment overrides (editing them in settings.json has no effect)."""
+    env = os.environ if environ is None else environ
+    out = [k for k, (var, _) in JSON_KEYS.items() if env.get(var)]
+    return out + [k for k, var in PROXY_KEYS.items() if (env.get(var) or env.get(var.lower()))
+                  and not (var in _exported and env.get(var) == _exported[var])]
+
+
+# ---- writing -------------------------------------------------------------------------------------------------
+
+
+def atomic_write_text(path: Path, text: str, *, private: bool = False) -> Path:
+    """UTF-8 text via a temporary file in the same folder and ``os.replace``: readers never see half a file.
+    ``private``: mode 0600 on POSIX (on Windows the per-user profile folder already restricts access)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        if private and os.name != "nt":
+            os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return path
+
+
+def update_settings_json(changes: dict[str, Any], home: Path | None = None) -> dict[str, Any]:
+    """Merge ``changes`` into ``<home>/settings.json`` (null removes a key, unknown keys are kept), check the
+    result and write it atomically; returns the new document. Nothing is written on a SettingsError. The token
+    is never stored here (``write_hub_token``). A broken file on disk is kept as ``settings.json.broken``."""
+    home = home or desk_home()
+    if not isinstance(changes, dict):
+        raise SettingsError("settings must be a JSON object")
+    path = home / SETTINGS_FILE
+    try:
+        doc, broken = read_settings_json(home), False
+    except SettingsError:
+        doc, broken = {}, True
+    for k, v in changes.items():
+        if k in READ_ONLY_KEYS:
+            continue  # read-only or secret: never stored
+        if v is None:
+            doc.pop(k, None)
+        else:
+            doc[k] = v
+    errors = check_settings_doc(doc)
+    if errors:
+        raise SettingsError("; ".join(errors))
+    _build({}, doc, {}, home)  # the values themselves (URL schemes, numbers)
+    if broken:
+        os.replace(path, path.with_name(SETTINGS_FILE + ".broken"))
+    atomic_write_text(path, json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
+    return doc
+
+
+def write_hub_token(token: str | None, home: Path | None = None) -> Path | None:
+    """Store the hub token in ``<home>/hub_token`` (0600 on POSIX); empty or None removes the file."""
+    path = (home or desk_home()) / TOKEN_FILE
+    token = (token or "").strip()
+    if not token:
+        path.unlink(missing_ok=True)
+        return None
+    if not token.isprintable() or any(c.isspace() for c in token):
+        raise SettingsError("the token must be one line without spaces")
+    return atomic_write_text(path, token + "\n", private=True)
+
+
+def adapter_config_dir(settings: Settings, create: bool = True) -> Path | None:
+    """The adapter's config folder; the default ``<home>/adapter-config`` is created on demand (a folder set
+    explicitly is not: a typo should fail loading, not start an empty config)."""
+    cfg = settings.private_adapter_config
+    if cfg is not None and create and cfg == settings.home / ADAPTER_CONFIG_DIR:
+        cfg.mkdir(parents=True, exist_ok=True)
+    return cfg

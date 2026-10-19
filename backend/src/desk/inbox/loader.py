@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import importlib.machinery
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from desk.inbox.spi import (
 )
 
 DESCRIBE_TIMEOUT_S = 30.0
+CONFIG_NAME_RE = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,99}")  # a plain file name: no folder, no dot first
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,8 @@ class AdapterHandle:
     describe: dict = field(default_factory=dict)
     error: str | None = None     # "<code>[: detail]" when loading failed; then ingestion is off
     config_dir: str | None = None
+    warnings: tuple[str, ...] = ()  # optional describe() keys of a bad shape, ignored (config_files)
+    inbox_dirs: tuple[str, ...] = ()  # passed to the adapter as ctx.inbox_dirs (08 §7)
 
     @property
     def ok(self) -> bool:
@@ -129,6 +133,34 @@ def check_describe(desc: object, spi_version: object, has_reference: bool) -> st
     return None
 
 
+def check_config_files(desc: object) -> tuple[list[dict], list[str]]:
+    """The optional ``describe()["config_files"]`` (08 §4): the usable entries ``{name, title, help, required,
+    template}`` and warnings for the rest. Never fatal: a bad entry is left out, a bad key ignored."""
+    raw = desc.get("config_files") if isinstance(desc, dict) else None
+    if raw is None:
+        return [], []
+    if not isinstance(raw, list):
+        return [], ["config_files: not a list, ignored"]
+    out: list[dict] = []
+    warnings: list[str] = []
+    for i, e in enumerate(raw):
+        name = e.get("name") if isinstance(e, dict) else None
+        if not (isinstance(name, str) and CONFIG_NAME_RE.fullmatch(name)):
+            warnings.append(f"config_files[{i}]: name must be a plain file name, ignored")
+            continue
+        if any(o["name"] == name for o in out):
+            warnings.append(f"config_files[{i}]: {name} declared twice, ignored")
+            continue
+        entry = {"name": name, "title": e.get("title") if isinstance(e.get("title"), str) else name,
+                 "help": e.get("help") if isinstance(e.get("help"), str) else "",
+                 "required": e.get("required") is True, "template": e.get("template")}
+        for key, want in (("title", str), ("help", str), ("required", bool)):
+            if e.get(key) is not None and not isinstance(e[key], want):
+                warnings.append(f"config_files[{i}]: {key} must be {want.__name__}")
+        out.append(entry)  # the template crossed the runner as JSON: plain data already
+    return out, warnings
+
+
 def _check_source(s: object) -> str | None:
     if not isinstance(s, dict) or not isinstance(s.get("source"), str) or not CODE_RE.match(s["source"]):
         return "source must be an id matching ^[a-z][a-z0-9_]{1,40}$"
@@ -168,10 +200,12 @@ def _check_source(s: object) -> str | None:
 
 
 def load_adapter(spec: str | None, config_dir: str | None, expected_sha256: str | None,
-                 timeout_s: float = DESCRIBE_TIMEOUT_S) -> AdapterHandle:
-    """The adapter of ``DESK_PRIVATE_ADAPTER`` (None or "": the reference adapter). Never raises."""
+                 timeout_s: float = DESCRIBE_TIMEOUT_S, inbox_dirs: list[str] | tuple[str, ...] = ()) -> AdapterHandle:
+    """The adapter of ``DESK_PRIVATE_ADAPTER`` (None or "": the reference adapter). Never raises. ``inbox_dirs``:
+    the report folders, given to every call as ``ctx.inbox_dirs``."""
     spec = spec or ""
-    base = AdapterHandle(spec, None, None, None, {}, None, config_dir)
+    inbox_dirs = tuple(str(d) for d in inbox_dirs)
+    base = AdapterHandle(spec, None, None, None, {}, None, config_dir, inbox_dirs=inbox_dirs)
 
     def fail(reason: str, **kw) -> AdapterHandle:
         return dataclasses.replace(base, error=reason, **kw)
@@ -196,7 +230,7 @@ def load_adapter(spec: str | None, config_dir: str | None, expected_sha256: str 
     if fp and expected_sha256 and expected_sha256.lower() != fp:
         return fail("fingerprint_mismatch: DESK_PRIVATE_ADAPTER_SHA256 differs", fingerprint=fp)
     try:
-        resp = runner.call_describe(spec or None, config_dir, timeout_s)
+        resp = runner.call_describe(spec or None, config_dir, timeout_s, inbox_dirs)
     except AdapterFailure as f:
         return fail(f"describe_{f.kind}: {f.type}", fingerprint=fp or fp_of())
     if not resp.get("ok"):
@@ -216,4 +250,5 @@ def load_adapter(spec: str | None, config_dir: str | None, expected_sha256: str 
         why = f"bad_describe: {type(e).__name__}"
     if why:
         return fail(why, fingerprint=fp, describe=desc if isinstance(desc, dict) else {})
-    return AdapterHandle(spec, desc["name"], desc["version"], fp, desc, None, config_dir)
+    return AdapterHandle(spec, desc["name"], desc["version"], fp, desc, None, config_dir,
+                         tuple(check_config_files(desc)[1]), inbox_dirs)

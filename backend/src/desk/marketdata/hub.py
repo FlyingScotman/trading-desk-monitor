@@ -20,6 +20,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from typing import Any
 
 from ..settings import Settings
@@ -116,3 +117,38 @@ def _message(e: urllib.error.HTTPError) -> str:
         return json.loads(e.read())["error"]["message"]
     except (ValueError, KeyError, TypeError):
         return e.reason or ""
+
+
+def hub_check(settings: Settings, cut: str = "eod_final", retries: int | None = None) -> dict[str, Any]:
+    """``desk hub-check`` as data (the CLI and the settings page): ``{"ok", "host", "health": {status, version,
+    migrations} | None, "token_accepted", "latest": {cut, business_date, snapshot_id, published_at, age_hours} |
+    None, "error": str | None}``. Never raises; the token is never part of the result."""
+    out: dict[str, Any] = {"ok": False, "host": None, "health": None, "token_accepted": False, "latest": None,
+                           "error": None}
+    try:
+        client = HubClient(settings)
+        if retries is not None:
+            client.retries = retries
+        out["host"] = client.host
+        h = client.health()
+        out["health"] = {k: h.get(k) for k in ("status", "version", "migrations")}
+        latest = next(client.list_snapshots(kind="market", cut_type=cut, latest=True), None)
+        out["token_accepted"] = True
+        if latest is None:
+            out["error"] = f"the hub has published no {cut} market snapshot yet"
+            return out
+        age = None
+        try:
+            age = round((datetime.now(UTC) - datetime.fromisoformat(latest["published_at"])).total_seconds() / 3600, 1)
+        except (TypeError, ValueError, KeyError):
+            pass
+        out["latest"] = {"cut": cut, **{k: latest.get(k) for k in ("business_date", "snapshot_id", "published_at")},
+                         "age_hours": age}
+        out["ok"] = h.get("status") == "ok"
+        if not out["ok"]:
+            out["error"] = f"hub status {h.get('status')!r}"
+    except HubError as e:
+        out["error"] = str(e)
+    except (OSError, ValueError) as e:  # a missing CA bundle, TLS (ssl.SSLError is an OSError), a body not JSON
+        out["error"] = f"{type(e).__name__}: {e}"
+    return out

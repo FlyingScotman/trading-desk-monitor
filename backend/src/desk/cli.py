@@ -49,11 +49,11 @@ from . import store
 from .marketdata import cache
 from .marketdata.adapter import MarketView
 from .marketdata.bundle import SnapshotDir, SnapshotError
-from .marketdata.hub import HubClient, HubError
+from .marketdata.hub import HubClient, HubError, hub_check
 from .orchestrator import attach_pnl, prepare, value
 from .publish import desk_run, tdm_run
 from .report import validation
-from .settings import Settings, SettingsError, load, mask_url
+from .settings import Settings, SettingsError, adapter_config_dir, load, mask_url
 from .valuation import positions as pv1
 
 
@@ -195,8 +195,7 @@ def cmd_adapter_check(a: argparse.Namespace) -> int:
     st = a.settings
     rep = conformance.check(
         a.adapter or st.private_adapter, a.dir or [str(d) for d in st.inbox_dirs], stub_ctx=a.stub_ctx,
-        snapshot_dir=str(st.snapshot_cache), config_dir=str(st.private_adapter_config) if st.private_adapter_config
-        else None, expected_sha256=None if a.adapter else st.private_adapter_sha256,
+        snapshot_dir=str(st.snapshot_cache), config_dir=str(cfg) if (cfg := adapter_config_dir(st)) else None, expected_sha256=None if a.adapter else st.private_adapter_sha256,
         match_timeout_s=st.adapter_match_timeout_s, read_timeout_s=st.adapter_read_timeout_s)
     print(json.dumps(rep.to_json(), indent=2, ensure_ascii=False) if a.json else rep.text())
     return 0 if rep.ok else 1
@@ -360,19 +359,19 @@ def _test_rows(sd: SnapshotDir, ctx) -> list[tuple[str, str, str, float]]:
 
 
 def cmd_hub_check(a: argparse.Namespace) -> int:
-    client = HubClient(a.settings)
-    h = client.health()
-    m = h.get("migrations", {})
-    print(f"hub      {client.host}: {h.get('status')}, version {h.get('version')}, "
-          f"migrations {m.get('applied')}/{m.get('known')} applied, {m.get('pending')} pending")
-    latest = next(client.list_snapshots(kind="market", cut_type=a.cut, latest=True), None)
-    print("token    accepted")
-    if latest is None:
-        print(f"desk: the hub has published no {a.cut} market snapshot yet", file=sys.stderr)
-        return 1
-    print(f"latest   {a.cut} {latest['business_date']}  {latest['snapshot_id'][:12]}  "
-          f"published {latest['published_at']} ({_age(latest['published_at'])})")
-    return 0 if h.get("status") == "ok" else 1
+    r = hub_check(a.settings, a.cut)
+    if h := r["health"]:
+        m = h.get("migrations") or {}
+        print(f"hub      {r['host']}: {h.get('status')}, version {h.get('version')}, "
+              f"migrations {m.get('applied')}/{m.get('known')} applied, {m.get('pending')} pending")
+    if r["token_accepted"]:
+        print("token    accepted")
+    if latest := r["latest"]:
+        print(f"latest   {a.cut} {latest['business_date']}  {(latest['snapshot_id'] or '')[:12]}  "
+              f"published {latest['published_at']} ({_age(latest['published_at'])})")
+    if r["error"]:
+        print(f"desk: {r['error']}", file=sys.stderr)
+    return 0 if r["ok"] else 1
 
 
 def cmd_sync(a: argparse.Namespace) -> int:

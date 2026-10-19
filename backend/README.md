@@ -135,27 +135,31 @@ Exact and assumed bonds get the flash PnL by exact repricing. Market value and s
 
 ## Settings
 
-`desk.settings` reads `DESK_*` environment variables, then `backend/.env`. Copy [`.env.example`](.env.example) to `.env`; it is git-ignored. `desk config` prints the effective values, with the token masked.
+`desk.settings` reads, the first that sets a key winning: `DESK_*` environment variables, then `<home>/settings.json`, then `backend/.env` (or `DESK_ENV_FILE`), then the defaults. `<home>` is the per-user data folder, outside the install folder so that a new version unpacked anywhere keeps the settings and the data: `DESK_HOME`, else `%LOCALAPPDATA%\DeskMonitor` on Windows, else `<repo>/.devdata` in a git checkout (today's dev layout, unchanged), else `~/.local/share/desk-monitor`. It holds `settings.json`, `hub_token`, `adapter-config/`, `snapshots/`, `inbox-archive/`, `pg/` (embedded store), `tdm.sqlite` and `logs/` (the dev checkout keeps `.devdata/inbox` and `.devdata/desk_pg`).
+
+The settings page `http://127.0.0.1:8000/settings.html` (`desk serve`) edits `settings.json` (keys in lower case: `hub_url`, `hub_ca_bundle`, `hub_timeout_s`, `https_proxy`, `no_proxy`, `inbox_dirs` as `[{"path", "label", "recursive"}]`, `private_adapter`, `private_adapter_config`, `inbox_poll_seconds`, `autopilot`, `autopilot_sync_last`, `snapshot_drop`, `store_url`; relative paths against `<home>`), stores the hub token in `<home>/hub_token` (mode 0600; never returned by the API), checks the hub, shows the adapter's status and edits the config files it declares (`describe()["config_files"]`, 08 §4). `load()` re-reads `settings.json` on every call, so the running server picks up edits. Its routes (`/api/v1/settings`, `/api/v1/settings/hub-token`, `/api/v1/settings/test-hub`, `/api/v1/adapter`, `/api/v1/adapter/config/{name}`) answer loopback clients only and are left out of the OpenAPI document. `backend/.env` remains for development: copy [`.env.example`](.env.example) to `.env`; it is git-ignored. `desk config` prints the effective values, with the token masked.
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `DESK_HUB_URL` | not set | The VPS hub, set per installation (the address is not kept in the repository); HTTPS only |
-| `DESK_HUB_TOKEN_FILE` / `DESK_HUB_TOKEN` | not set | Bearer token of this consumer, scope `snapshots`. Keep it in a file outside the repository; the repository is public |
+| `DESK_HUB_TOKEN_FILE` / `DESK_HUB_TOKEN` | `<home>/hub_token` | Bearer token of this consumer, scope `snapshots`. Keep it in a file outside the repository; the repository is public |
 | `DESK_HUB_CA_BUNDLE`, `HTTPS_PROXY` | system | Corporate proxy and its TLS-inspection CA (inside the work network). The client uses the standard library, so on Windows the system certificate store is trusted |
 | `DESK_HUB_TIMEOUT_S` | 60 | Per-request timeout; 5xx and connection errors are retried three times with backoff |
-| `DESK_SNAPSHOT_CACHE` | `.devdata/snapshots` | Verified bundles, append-only; `desk sync` writes here, `desk eod` and `desk demo-book` read here unless `--snapshots` is given |
+| `DESK_SNAPSHOT_CACHE` | `<home>/snapshots` | Verified bundles, append-only; `desk sync` writes here, `desk eod` and `desk demo-book` read here unless `--snapshots` is given |
 | `DESK_SNAPSHOT_DROP` | not set | Folder an operator fills by hand when the hub is unreachable (`desk import-drop`) |
-| `DESK_STORE_URL` | not set | The desk store, a `postgresql://` URI (ADR-006). Unset: the embedded dev server in `.devdata/desk_pg` (never the hub's `.devdata/pg`) |
-| `DESK_DB` | `.devdata/tdm.sqlite` | The tdm SQLite prototype store, written only with `desk eod --tdm` (`tdm serve`, until window.DESK is retired) |
+| `DESK_STORE_URL` | not set | The desk store, a `postgresql://` URI (ADR-006). Unset: the embedded server in `<home>/pg` (in the dev checkout `.devdata/desk_pg`, never the hub's `.devdata/pg`) |
+| `DESK_DB` | `<home>/tdm.sqlite` | The tdm SQLite prototype store, written only with `desk eod --tdm` (`tdm serve`, until window.DESK is retired) |
 | `DESK_REPORT_DIR` | not set | Validation reports (`--report-dir`) |
 | `DESK_PRIVATE_ADAPTER` | not set | The private adapter (08 §2): a package directory (imported by path, not installed) or a module name. Unset: the reference adapter `desk.inbox.reference` (canonical CSV) |
-| `DESK_PRIVATE_ADAPTER_CONFIG` | not set | The adapter's local configuration folder (`ctx.config_dir`); part of the fingerprint |
+| `DESK_PRIVATE_ADAPTER_CONFIG` | `<home>/adapter-config` | The adapter's local configuration folder (`ctx.config_dir`, created on demand); part of the fingerprint |
 | `DESK_PRIVATE_ADAPTER_SHA256` | not set | The expected adapter fingerprint; loading fails (ingestion off) on a mismatch |
 | `DESK_INBOX_DIRS` | not set | Report folders, separated by `;`; one ending in `\**` (or `/**`) is scanned recursively |
-| `DESK_INBOX_ARCHIVE` | `.devdata/inbox` | A copy of every matched file, under `<sha256>/<name>`, for `retry` and `replay` |
+| `DESK_INBOX_ARCHIVE` | `<home>/inbox-archive` | A copy of every matched file, under `<sha256>/<name>`, for `retry` and `replay` |
 | `DESK_INBOX_POLL_SECONDS` | 60 | Watcher period; a file is offered when unchanged since the previous scan or older than this |
 | `DESK_ADAPTER_MATCH_TIMEOUT_S` / `DESK_ADAPTER_READ_TIMEOUT_S` | 10 / 600 | Per batch of up to 50 `match` calls / per `read` |
 | `DESK_INBOX_MAX_FILE_MB` | 500 | Larger files are not offered |
+| `DESK_AUTOPILOT` / `DESK_AUTOPILOT_SYNC_LAST` | on / 5 | The `desk serve` autopilot and the number of latest hub dates it keeps in sync |
+| `DESK_HOME` | see above | The per-user data folder (environment or env file only) |
 
 ## Tests
 

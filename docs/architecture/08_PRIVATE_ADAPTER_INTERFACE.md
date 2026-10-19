@@ -19,7 +19,7 @@ The backend never waits for the adapter: it develops on the reference adapter, w
 
 ## 2 Plugging the adapter in
 
-Setting `DESK_PRIVATE_ADAPTER` (environment or `backend/.env`, like every `DESK_*` setting):
+Setting `DESK_PRIVATE_ADAPTER` (environment, the settings page or `backend/.env`, like every `DESK_*` setting):
 
 | Value | Meaning |
 |---|---|
@@ -27,7 +27,7 @@ Setting `DESK_PRIVATE_ADAPTER` (environment or `backend/.env`, like every `DESK_
 | a path to a package directory, e.g. `C:\desk\trades-data-adapter\src\tda` | the directory is imported as a package named after it: `importlib.util.spec_from_file_location(<name>, <dir>/__init__.py, submodule_search_locations=[<dir>])`, registered in `sys.modules` so the package's own imports work. `sys.path` is not changed. Loading fails if `<name>` is already in `sys.modules` or importable from `sys.path` (no shadowing either way) |
 | a dotted module name, e.g. `tda` | `importlib.import_module`, for an adapter installed into the backend's environment |
 
-`DESK_PRIVATE_ADAPTER_CONFIG` (optional): a folder on the work machine with the adapter's local configuration (mapping overrides, file-name patterns). It is passed to the adapter as `ctx.config_dir`; the backend reads it only to fingerprint it.
+`DESK_PRIVATE_ADAPTER_CONFIG` (optional): a folder on the work machine with the adapter's local configuration (mapping overrides, file-name patterns). It is passed to the adapter as `ctx.config_dir`; default `<home>/adapter-config` (the per-user data folder, created on demand). The backend reads it to fingerprint it, and the settings page edits the files the adapter declares in `config_files` (§4); the backend never interprets them.
 
 **Where it runs.** The backend calls the adapter in a **child process**: `<python> -I -m desk.inbox.runner`, with the environment stripped to `DESK_PRIVATE_ADAPTER*`, `PATH`, `SYSTEMROOT` and `TEMP`. Requests and results cross as JSON on stdin and stdout. So:
 - a hung or crashing adapter cannot stop the watcher or the API: `DESK_ADAPTER_MATCH_TIMEOUT_S` (default 10, for one batch of `match` calls) and `DESK_ADAPTER_READ_TIMEOUT_S` (default 600, per file); a file over `DESK_INBOX_MAX_FILE_MB` (default 500) is not offered;
@@ -93,6 +93,17 @@ def reference(ctx) -> dict: ...                      # §7; required when any so
   - `all_active_books`: the report always lists every active book. Every `active` book of `reference()["books"]` missing from `scopes` is treated as listed and empty, and gets a `book_closed_by_omission` warning;
   - `listed`: only the units in `scopes` are touched.
 - `priority` (int, optional): see §6.6 on two sources for one unit.
+- `config_files` (list, optional): the files the adapter reads from `ctx.config_dir`, for the settings page
+  (`/settings.html`), which lists them and edits each one as JSON, pre-filled with `template` while the file
+  is missing:
+
+  ```python
+  "config_files": [{"name": "books.json", "title": "Books", "help": "...", "required": True, "template": {}}]
+  ```
+
+  `name` is a plain file name (no folder). The backend tolerates the key's absence; an entry of a bad shape
+  is ignored with a warning, never a load error. The files are part of the fingerprint (§2) like the rest of
+  the config folder.
 
 ## 5 `match(path, ctx)`
 
@@ -204,6 +215,7 @@ Read-only; the backend builds it. An adapter must work when every lookup returns
 |---|---|
 | `ctx.spi` | `1` |
 | `ctx.config_dir` | `DESK_PRIVATE_ADAPTER_CONFIG` as a string, or `None` |
+| `ctx.inbox_dirs` | the report folders (`DESK_INBOX_DIRS` or the settings page) as a list of absolute path strings, same syntax (a recursive folder ends in `\**` or `/**`); `[]` when none. Optional member (§9): read it with `getattr(ctx, "inbox_dirs", [])`. For `reference()` that discovers books in the newest reports, say; the backend still offers files only through `match` |
 | `ctx.instruments.lookup(kind, value, on=None)` | `kind` ∈ `isin`, `regnum`, `moex_secid`; `on` is a date (default: the latest). Returns `{"instrument_id", "isin", "regnum", "moex_secid", "name", "currency", "kind", "initial_face"}` from the cached static snapshot covering `on`, or `None` |
 | `ctx.instruments.snapshot_id` | the static snapshot used, recorded in lineage |
 

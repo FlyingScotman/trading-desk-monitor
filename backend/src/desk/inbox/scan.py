@@ -45,7 +45,7 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from .. import store
-from ..settings import Settings
+from ..settings import Settings, adapter_config_dir
 from . import runner
 from .conformance import list_files
 from .loader import AdapterHandle, load_adapter
@@ -67,13 +67,20 @@ _last_seen: dict[str, tuple[int, int]] = {}  # path -> (size, mtime_ns) at this 
 
 
 def adapter(settings: Settings) -> AdapterHandle:
-    """The adapter of the settings, loaded once per process (08 §2); never raises."""
-    cfg = settings.private_adapter_config
-    key = (settings.private_adapter, cfg, settings.private_adapter_sha256)
+    """The adapter of the settings, loaded once per process (08 §2; ``forget_adapters`` after a settings edit);
+    never raises."""
+    cfg = adapter_config_dir(settings)
+    dirs = tuple(str(d) for d in settings.inbox_dirs)
+    key = (settings.private_adapter, cfg, settings.private_adapter_sha256, dirs)
     if key not in _handles:
         _handles[key] = load_adapter(settings.private_adapter, str(cfg) if cfg else None,
-                                     settings.private_adapter_sha256)
+                                     settings.private_adapter_sha256, inbox_dirs=dirs)
     return _handles[key]
+
+
+def forget_adapters() -> None:
+    """Drop the loaded handles: the next ``adapter()`` loads again (the adapter or its config files changed)."""
+    _handles.clear()
 
 
 def adapter_line(h: AdapterHandle) -> str:

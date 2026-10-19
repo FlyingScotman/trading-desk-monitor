@@ -22,7 +22,7 @@ import signal
 import subprocess
 import sys
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +52,7 @@ class Ctx:
     spi: int
     config_dir: str | None
     instruments: Instruments
+    inbox_dirs: list[str] = field(default_factory=list)  # optional member (08 §7, §9): the report folders
 
 
 class _LoadError(Exception):
@@ -123,7 +124,8 @@ def _handle(req: dict) -> dict:
         return {"ok": True, "result": {"describe": desc, "spi_version": getattr(mod, "SPI_VERSION", None),
                                        "has_reference": callable(getattr(mod, "reference", None)),
                                        "location": location}}
-    ctx = Ctx(SPI_VERSION, req.get("config_dir"), Instruments.from_file(req.get("instruments_index")))
+    ctx = Ctx(SPI_VERSION, req.get("config_dir"), Instruments.from_file(req.get("instruments_index")),
+              [str(d) for d in req.get("inbox_dirs") or []])
     if op == "match":
         out: dict[str, Any] = {}
         for path in req["paths"]:
@@ -210,6 +212,7 @@ def _request(handle: Any, op: str, instruments_index: str | Path | None, **extra
     if handle.error:
         raise AdapterFailure("failed", "adapter_not_loaded")
     return {"op": op, "adapter": handle.spec, "config_dir": handle.config_dir,
+            "inbox_dirs": list(getattr(handle, "inbox_dirs", ())),
             "instruments_index": str(instruments_index) if instruments_index else None, **extra}
 
 
@@ -220,10 +223,12 @@ def _result(resp: dict) -> Any:
     raise AdapterFailure("failed", err["type"] or "error", err.get("frames", []))
 
 
-def call_describe(spec: str | None, config_dir: str | None, timeout_s: float) -> dict:
+def call_describe(spec: str | None, config_dir: str | None, timeout_s: float,
+                  inbox_dirs: list[str] | tuple[str, ...] = ()) -> dict:
     """The child's raw describe response: ``{"ok": True, "result": {describe, spi_version, has_reference}}`` or
     ``{"ok": False, "load_error": code, "type": ..., "frames": [...]}``."""
-    return run({"op": "describe", "adapter": spec, "config_dir": config_dir}, timeout_s)
+    return run({"op": "describe", "adapter": spec, "config_dir": config_dir, "inbox_dirs": list(inbox_dirs)},
+               timeout_s)
 
 
 def call_match(handle: Any, paths: list[str], instruments_index: str | Path | None,
