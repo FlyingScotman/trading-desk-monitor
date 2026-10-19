@@ -157,6 +157,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/bonds/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Bond History
+         * @description The issue's points from the default runs (price, yield, Z-spread, accrued, the desk's face); ``wal``
+         *     is accepted for the contract and not used yet.
+         */
+        get: operations["bond_history_api_v1_bonds_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/scenario-defs": {
         parameters: {
             query?: never;
@@ -345,6 +366,64 @@ export interface components {
             detail: string;
             /** At */
             at: string;
+        };
+        /**
+         * BondHistory
+         * @description The history of an issue for the monitors (DATA_CONTRACT §6). Today: the desk's own default runs, one point
+         *     per business date the desk held it; no curve rate yet (``spread_to_curve_note`` says so). Empty, not 404,
+         *     when the issue is unknown.
+         */
+        BondHistory: {
+            /** Instrument Id */
+            instrument_id: string | null;
+            /** Isin */
+            isin: string | null;
+            /** Name */
+            name: string | null;
+            /** Ccy */
+            ccy: string | null;
+            /** Curve */
+            curve: string | null;
+            /** Spread To Curve Note */
+            spread_to_curve_note: string | null;
+            /** Series */
+            series: components["schemas"]["BondHistoryPoint"][];
+        };
+        /** BondHistoryPoint */
+        BondHistoryPoint: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** Clean Price */
+            clean_price?: number | null;
+            /**
+             * Ytm
+             * @description %
+             */
+            ytm?: number | null;
+            /** Z Spread Bp */
+            z_spread_bp?: number | null;
+            /** G Spread Bp */
+            g_spread_bp?: number | null;
+            /** Accrued */
+            accrued?: number | null;
+            /** Volume Rub */
+            volume_rub?: number | null;
+            /** Source */
+            source?: string | null;
+            /**
+             * Face Amount
+             * @description the desk's face in the bond's currency, all books
+             */
+            face_amount?: number | null;
+            /** Tenor Y */
+            tenor_y?: number | null;
+            /** Curve Rate */
+            curve_rate?: number | null;
+            /** Spread To Curve Bp */
+            spread_to_curve_bp?: number | null;
         };
         /** ErrorOut */
         ErrorOut: {
@@ -1419,6 +1498,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RiskPayload"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    bond_history_api_v1_bonds_history_get: {
+        parameters: {
+            query?: {
+                instrument_id?: string | null;
+                isin?: string | null;
+                curve?: string | null;
+                wal?: number | null;
+                from?: string | null;
+                to?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BondHistory"];
                 };
             };
             /** @description Not Found */

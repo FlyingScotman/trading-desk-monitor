@@ -76,6 +76,7 @@ Then open:
 | Route | What |
 |---|---|
 | `GET /api/v1/runs/{id}/risk` | The run's stored risk per position (sparse delta, gamma upper triangle), for the Taylor in the browser (T1) |
+| `GET /api/v1/bonds/history?instrument_id=\|isin=` | An issue's history for the «Облигации» tab (DATA_CONTRACT §6): today one point per default run that holds it (price, yield, Z-spread, accrued, the desk's face), no curve rate yet; an unknown issue gives an empty series, not 404 |
 | `GET /api/v1/scenario-defs` | The preset scenario definitions |
 | `POST /api/v1/scenario-jobs` | `{base_run_id, definition}`: queue an exact repricing (T2); an equivalent definition gets the existing job |
 | `GET /api/v1/scenario-jobs/{id}` | The job and, when done, Taylor, exact and residual per position, book and total, with coverage |

@@ -274,3 +274,32 @@ class ScenarioJob(BaseModel):
     finished_at: datetime | None
     error: str | None
     result: ScenarioResult | None
+
+
+class BondHistoryPoint(BaseModel):
+    date: date
+    clean_price: float | None = None
+    ytm: float | None = Field(None, description="%")
+    z_spread_bp: float | None = None
+    g_spread_bp: float | None = None
+    accrued: float | None = None
+    volume_rub: float | None = None
+    source: str | None = None
+    face_amount: float | None = Field(None, description="the desk's face in the bond's currency, all books")
+    tenor_y: float | None = None
+    curve_rate: float | None = None
+    spread_to_curve_bp: float | None = None
+
+
+class BondHistory(BaseModel):
+    """The history of an issue for the monitors (DATA_CONTRACT §6). Today: the desk's own default runs, one point
+    per business date the desk held it; no curve rate yet (``spread_to_curve_note`` says so). Empty, not 404,
+    when the issue is unknown."""
+
+    instrument_id: str | None
+    isin: str | None
+    name: str | None
+    ccy: str | None
+    curve: str | None
+    spread_to_curve_note: str | None
+    series: list[BondHistoryPoint]

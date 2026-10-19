@@ -264,6 +264,11 @@ def test_publish_api_and_compat(ctx, store_url, tmp_path):
           ["positions"]}
     assert t2["FX2"]["code"] == "assumed" and t2["FX2"]["exact"] is None and t2["L1"]["exact"] is not None
     assert c.get(f"/api/v1/runs/{rid}/aggregates?dims=quality,ccy").status_code == 200
+    h = c.get("/api/v1/bonds/history?instrument_id=SU26238RMFS4&curve=own").json()  # the Bonds tab: no 404
+    assert [p["date"] for p in h["series"]] == [DATE] and h["series"][0]["face_amount"] == pytest.approx(10_000.0)
+    assert h["series"][0]["clean_price"] == got["L1"]["fact"]["price"] and h["isin"] == got["L1"]["fact"]["isin"]
+    assert c.get("/api/v1/bonds/history?isin=XS999&from=2026-01-01").json()["series"] == []
+    assert c.get("/api/v1/bonds/history").status_code == 422
 
     js = c.get("/desk-data.js").text
     desk = json.loads(js[len("window.DESK = "):-2])
