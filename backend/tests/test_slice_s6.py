@@ -167,6 +167,34 @@ def _sig(x):
     return x
 
 
+GAMMA_EPS = 1e-8
+"""RUB/bp^2: a Hessian entry below it is numerical noise of core's second order (2^-35-sized entries that
+come and go between platforms), not risk (1e-8 x 500 bp x 500 bp = 2.5e-3 RUB); dropped from the payload."""
+RTOL, ATOL = 1e-6, 1e-8
+"""How far a payload number may move between platforms (core's last bits, then ``_sig``)."""
+
+
+def _denoise(payload):
+    return {**payload, "positions": [{**p, "gamma": [g for g in p["gamma"] if abs(g[2]) >= GAMMA_EPS]}
+                                     for p in payload["positions"]]}
+
+
+def _same(a, b, path="", rtol=RTOL, atol=ATOL) -> list[str]:
+    """Structural comparison: same keys, lengths, strings and None; numbers to rtol/atol."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        if set(a) != set(b):
+            return [f"{path}: keys {sorted(set(a) ^ set(b))}"]
+        return [d for k in a for d in _same(a[k], b[k], f"{path}/{k}", rtol, atol)]
+    if isinstance(a, list) and isinstance(b, list):
+        if len(a) != len(b):
+            return [f"{path}: length {len(a)} != {len(b)}"]
+        return [d for i, (x, y) in enumerate(zip(a, b)) for d in _same(x, y, f"{path}[{i}]", rtol, atol)]
+    num = (int, float)
+    if isinstance(a, num) and isinstance(b, num) and not isinstance(a, bool) and not isinstance(b, bool):
+        return [] if abs(a - b) <= rtol * max(abs(a), abs(b)) + atol else [f"{path}: {a!r} != {b!r}"]
+    return [] if a == b else [f"{path}: {a!r} != {b!r}"]
+
+
 def _parity(golden) -> str:
     _, _, run, rows, reference = golden
     risk = {"RUB OFZ": dict.fromkeys(["1M", "3M", "6M", "1Y", "2Y", "3Y", "5Y", "7Y", "10Y", "15Y", "20Y+"], 0.0)}
@@ -191,7 +219,7 @@ def _parity(golden) -> str:
     ref = {**reference, "issuers": [*reference["issuers"],
                                     {"issuer": "ООО Синтетик", "sector": "Девелопмент", "rating": None},
                                     {"issuer": "АО Лизинг-Синт", "sector": "Лизинг", "rating": "BB"}]}
-    payload = _sig(risk_payload(run, rows + synth, ref))
+    payload = _denoise(_sig(risk_payload(run, rows + synth, ref)))
     cases = []
     for name, d in CASES.items():
         norm = normalize(d, payload["curves"])
@@ -201,12 +229,22 @@ def _parity(golden) -> str:
 
 
 def test_parity_fixture_is_current(golden):
+    """Structural, not textual: the committed fixture's definitions and payloads (Hessian noise dropped on both
+    sides) equal a fresh generation to RTOL/ATOL, and its expected results are ``run_taylor`` of its own payload
+    (what the TS port is checked against). A textual compare broke on the last bits of core's second order."""
     fresh = _parity(golden)
     if os.environ.get("DESK_REGEN_FIXTURES") == "1":
         PARITY.write_text(fresh, encoding="utf-8")
-    assert PARITY.read_text(encoding="utf-8") == fresh, \
-        "taylor_parity.json is stale: DESK_REGEN_FIXTURES=1 pytest tests/test_slice_s6.py -k parity"
-    doc = json.loads(fresh)
+    stale = "taylor_parity.json is stale: DESK_REGEN_FIXTURES=1 pytest tests/test_slice_s6.py -k parity"
+    doc, new = json.loads(PARITY.read_text(encoding="utf-8")), json.loads(fresh)
+    assert {k: v for k, v in doc.items() if k != "cases"} == {k: v for k, v in new.items() if k != "cases"}, stale
+    assert [c["name"] for c in doc["cases"]] == [c["name"] for c in new["cases"]], stale
+    for c, n in zip(doc["cases"], new["cases"]):
+        assert c["definition"] == n["definition"], stale
+        diff = _same(_denoise(c["payload"]), n["payload"], c["name"])
+        assert not diff, stale + "\n" + "\n".join(diff[:20])
+        diff = _same(c["expected"], run_taylor(c["payload"], c["definition"]), c["name"], doc["tolerance_rel"], 1e-12)
+        assert not diff, stale + "\n" + "\n".join(diff[:20])
     keyhike = next(c for c in doc["cases"] if c["name"] == "keyhike")
     p = keyhike["payload"]
     assert p["factors"][-3:] == ["CS", "FX|CNY", "FX|USD"] and p["curves"] == ["RUB OFZ"]
