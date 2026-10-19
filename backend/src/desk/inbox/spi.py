@@ -8,7 +8,7 @@ from importlib.resources import files
 
 SPI_VERSION = 1
 SPI_MAJORS = frozenset({1})            # majors this backend can call (08 §9)
-CONTRACT_MAJOR, CONTRACT_MINOR = 1, 0  # private/1.0
+CONTRACT_MAJOR, CONTRACT_MINOR = 1, 1  # private/1.1 (1.1: positions maturity_date, risk_dv01_rub, risk_cs01_rub)
 CONTRACT = f"private/{CONTRACT_MAJOR}.{CONTRACT_MINOR}"
 _CONTRACT_RE = re.compile(r"^private/([0-9]+)\.([0-9]+)$")
 

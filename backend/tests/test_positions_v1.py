@@ -283,7 +283,8 @@ def test_books_from_the_store_and_risk_fields_round_trip(ctx, store_url, tmp_pat
                  "source_instrument_id": "IRS-7", "ccy": "RUB", "mv_rub": "125000.5", "maturity_date": "2031-01-10",
                  "risk_dv01_rub": "-850.25", "risk_cs01_rub": "-12"},
                 {"_src": "L3", "book_id": "DER1", "position_id": "DER1|IRS-8", "asset_class": "otc",
-                 "source_instrument_id": "IRS-8", "ccy": "RUB"}])
+                 "source_instrument_id": "IRS-8", "source_instrument_name": "IRS 8", "ccy": "USD",
+                 "maturity_date": "2029-03-01", "x_notional": "1000000", "x_kind": "IRS"}])
         store.load_positions(con, [("L1", "RATES1", "SU26238RMFS4", 10.0), ("L2", "OFZ", "SU26238RMFS4", 5.0)],
                              valid_date=d, source_name="tests", source_sha256="-")
         inp = store.positions_for(con, d)
@@ -302,7 +303,11 @@ def test_books_from_the_store_and_risk_fields_round_trip(ctx, store_url, tmp_pat
     assert {b["entity"] for b in desk["BOOKS"].values()} == {"ENT-A", "ENT-B", "Демо"}
     pos = {p["id"]: p for p in desk["positions"]}
     assert pos["DER1|IRS-7"]["dv01"] == -850.25 and pos["DER1|IRS-7"]["entity"] == "ENT-B"
-    assert pos["DER1|IRS-8"]["notValued"] and pos["DER1|IRS-8"]["entity"] == "ENT-B"
+    nv = pos["DER1|IRS-8"]  # only x_* fields, as an adapter sends a derivative whose units are unconfirmed
+    assert nv["notValued"] and nv["entity"] == "ENT-B" and nv["mvRub"] is None and nv["dv01"] == 0
+    assert (nv["name"], nv["ccy"], nv["maturity"], nv["segment"], nv["assetClass"]) == (
+        "IRS 8", "USD", "2029-03-01", "Деривативы", "OTC-деривативы")
+    assert nv["extra"]["reported"]["x"] == {"x_notional": "1000000", "x_kind": "IRS"} and nv["extra"]["reported"]["src"] == "L3"
     # the legacy tdm store has no OTC type: the row is left out there with a WARN, nothing fails
     _, st, warns = tdm_run.publish(str(tmp_path / "tdm.db"), ctx, positions, prev=None, inputs=inp)
     assert st == "complete" and any("DER1|IRS-7" in w for w in warns)

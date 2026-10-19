@@ -367,10 +367,27 @@ def test_controls_are_resummed_with_tolerance() -> None:
 
 def test_newer_minor_fields_are_dropped_with_a_warning() -> None:
     result = read([{**bond("B1", "S1"), "future_field": "1"}])
-    assert check_read(POS, HIT, result, books=BOOKS).status == "rejected"  # unknown in 1.0
-    c = check_read(POS, HIT, result, books=BOOKS, contract="private/1.1")
+    assert check_read(POS, HIT, result, books=BOOKS).status == "rejected"  # unknown in 1.1
+    c = check_read(POS, HIT, result, books=BOOKS, contract="private/1.2")
     assert c.status == "accepted" and [i["code"] for i in c.issues] == ["field_from_newer_contract"]
     assert "future_field" not in c.units[0]["rows"][0]
+
+
+def test_contract_1_1_fields_accepted_and_1_0_adapters_too() -> None:
+    """1.1 adds maturity_date, risk_dv01_rub, risk_cs01_rub: kept without a warning; a 1.0 adapter is accepted."""
+    otc = {"_src": "R9", "book_id": "B1", "position_id": "B1|IRS-1", "asset_class": "otc",
+           "source_instrument_id": "IRS-1", "ccy": "RUB", "maturity_date": "2031-01-10", "x_kind": "IRS"}
+    rows = [{**bond("B1", "S1"), "maturity_date": "2030-06-01"}, otc,
+            {**otc, "position_id": "B1|IRS-2", "mv_rub": "1.5", "risk_dv01_rub": "-2", "risk_cs01_rub": "0.5"}]
+    for contract in ("private/1.1", "private/1.0"):
+        c = check_read(POS, HIT, read(rows), books=BOOKS, contract=contract)
+        assert c.status == "accepted" and c.issues == [], (contract, c.issues)
+        got = {r["position_id"]: r for r in c.units[0]["rows"]}
+        assert got["B1|IRS-1"]["maturity_date"] == "2031-01-10" and got["B1|IRS-1"]["x_kind"] == "IRS"
+        assert got["B1|IRS-2"]["risk_dv01_rub"] == "-2"
+    d = {"name": "a", "version": "1", "spi": 1, "sources": [dict(POS)]}
+    assert check_describe({**d, "contract": "private/1.1"}, 1, True) is None
+    assert check_describe({**d, "contract": "private/1.0"}, 1, True) is None
 
 
 def test_unit_hash_ignores_src_x_and_order() -> None:
