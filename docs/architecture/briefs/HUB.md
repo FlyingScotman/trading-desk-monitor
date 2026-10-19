@@ -69,6 +69,7 @@ Evidence is from the dev snapshots of 09–15.10. Until each item lands, the bac
 | H23 | **`known` coupons without an amount** | 6164 future `known` periods have a rate but no amount, mostly MBS and securitizations; RU000A1043Q6, RU000A1043S2 and RU000A10FEC5 end with a one-day 0.01 % stub without an amount. The backend computes the amount from the rate (RATE_ACT_365) and flags it |
 | H24 | **Price basis of amortized MBS** | RU000A0JV755 is quoted at 474 % of its current face of 48.64 RUB: the price looks like a percentage of the original face. The backend uses it as given |
 | H25 | **Static snapshots point in time, and the face on the static's own date** | Every dev market snapshot of 09–15.10 names a static snapshot of 17.10 (F6). On the dev data a static face still includes redemptions dated on the static's own date, and MOEX keeps the pre-final face on matured bonds (180 of 181). The backend now derives the face on the trade date from the redemption schedule and relies on that rule; please confirm it, or state the rule in the contract. If a same-day static already excludes them, payment-day amortizers drop from exact to market value |
+| H26 | **Published EOD snapshots back to 2026-01-01** | The desk backfills YTD runs and reconciles them with the official PnL from 1 January (ROADMAP rev. 3, slice S8). Each past date needs a published `eod_final` snapshot built as known at that date. Until then the backend backfills from the dev export |
 
 ## Not hub work
 

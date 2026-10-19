@@ -1,6 +1,6 @@
 # Vertical slices
 
-As of 18 October 2026. Status: working plan, owned by the backend. **S3, S4, S5 and S6 are built (19 October; the S3 live acceptance waits for the hub's snapshot layer). Next: S7.** Work for the hub and core: [briefs/HUB.md](briefs/HUB.md), [briefs/CORE.md](briefs/CORE.md).
+As of 18 October 2026. Status: working plan, owned by the backend. **S3, S4, S5 and S6 are built (19 October; the S3 live acceptance waits for the hub's snapshot layer). Next: S7a, real positions and real risks, first priority (order and reasons: [ROADMAP](ROADMAP.md) §0).** Work for the hub and core: [briefs/HUB.md](briefs/HUB.md), [briefs/CORE.md](briefs/CORE.md).
 
 ## Why
 
@@ -24,7 +24,7 @@ Each slice keeps whatever it built that matches the architecture. Where it takes
 | KBD/ZCYC evaluator in core (delivered in core 0.11) | Backend module `desk.curves.kbd`, which builds a core `DiscountCurve` from the published ZCYC parameters | **Replaced in S4** (core `rub_ofz_kbd_v1`) |
 | Core's portfolio path: `value_portfolio` over `Instrument`/`MarketSnapshot`/`Position` (core 0.10–0.11) | The adapter builds `BondCashflow` totals and calls `BondRiskEngine` per position | **Replaced in S4**. The fallback rungs below core still reprice with `BondRiskEngine` |
 | Horizon PnL explain in core: `explain_horizon_pnl`, `horizon_portfolio` (core 0.14) | `desk.pnl.flash`, the backend's own stepwise repricing | **Compared in S4: `desk.pnl.flash` stays** (S4 result); `pnl/compare.py` is the regression check |
-| Real positions (Q1 deferred) | A synthetic book over real instruments (`backend/examples/demo_book.csv`; S3 adds `test_book.csv` with several books and coverage cases) plus a "universe" run: one bond of every priceable instrument | When Q1 is answered |
+| Real positions (Q1 deferred) | A synthetic book over real instruments (`backend/examples/demo_book.csv`; S3 adds `test_book.csv` with several books and coverage cases) plus a "universe" run: one bond of every priceable instrument | S7 (Q1 answered 19 October: folder reports through the private adapter, ADR-008) |
 
 ## Slices
 
@@ -36,12 +36,67 @@ Each slice keeps whatever it built that matches the architecture. Where it takes
 | **S4 Core portfolio path and the whole bond universe** | The same screens, valued through core 0.32 `value_portfolio`. Also priced now: floaters (OFZ-PK, key-rate, RUONIA), perpetuals to an explicit call and, once the hub carries CPI, OFZ-IN. A RUONIA OIS curve (`rub_ruonia_ois_moex_v2`) in the curves panel. Coverage grows from about 1034 bonds to every bond with a usable schedule | Adapter to core domain types; curve-spec mapping `dataset` → spec; core KBD; core horizon explain against `desk.pnl.flash` | **Built** 19 October ([result](#s4-result-19-october-2026)) |
 | **S5 Desk backend proper** | Same screens, now served by the desk API from the desk Postgres store, with run lineage | ADR-006, 04, 05 §2 | **Built** 19 October ([result](#s5-result-19-october-2026)) |
 | **S6 Interactive scenario** | Scenario slider with instant Taylor (≈) and an "exact" button that reprices on the backend; residual shown | 03 T1/T2, parity fixtures; first React + TypeScript screen | **Built** 19 October ([result](#s6-result-19-october-2026)) |
-| **S7 Intraday** | Intraday run every N minutes on intraday cuts; badge with age | Hub intraday cuts; scheduler | |
-| **S8 Derivatives and the hybrid book** | IRS, FX forwards and swaps, XCCY, futures and REPO from contract 1.3 term files, valued by core (result v3) next to bonds; CDS and whatever still lacks inputs imported, with coverage states | `private_inputs`; snapshot inputs from [briefs/HUB.md](briefs/HUB.md) (futures prices, FX value dates, RUONIA index); hybrid merge | |
+| **S7a Real positions, real risks** | The Desk Monitor on the desk's real books at work: PV, DV01 by bucket, CS01, coverage; unmapped bonds listed, not dropped | [08](08_PRIVATE_ADAPTER_INTERFACE.md) for `positions` and `books`: loader and child-process runner, reference adapter, inbox, ledger, revisions, conformance kit; adapter A0 + A2; Windows install (ROADMAP §0 F2) | **Next, first priority** (owner, 19 October) |
+| **S7b Day status** | A "Day status" screen: what arrived, what was rejected and why, which runs superseded which; events API; the remaining private-contract schemas | `/api/v1/inbox`, `/api/v1/events`; React screen | |
+| **S8 YTD backfill and official PnL** | Runs and flash PnL for every date since 2026-01-01; official PnL loaded; YTD ours vs official by book and day | `desk backfill`; `pnl_official` revisions; adapter A3; hub H26 (or the dev export) | |
+| **S9 OCP, cash and funding** | OCP and cash per book; reported vs derived OCP; FX positions and funding in PnL | Adapter A4; `desk_rules`; DEC01, DEC03, DEC06 | |
+| **S10 Internal market data** | A second EOD run on the internal overlay, a notification, and a hub vs internal diff with PnL impact | `internal_market` overlay; adapter A5 | |
+| **S11 Break analysis** | Each morning, breaks of D−1 with causes (positions, market data, FX basis, carry, new trades, unexplained), confidence and a status the user sets | `desk.pnl.reconcile` waterfall; break register; DEC05, DEC12 | |
+| **S12 Intraday** | Intraday runs every N minutes on intraday cuts with explain on every snapshot; badge with age; SSE | Hub intraday cuts; scheduler | |
+| **S13 Intraday trades** | Book = opening positions + trades of the day; new-trade PnL from trade prices | Adapter A6, once the export exists | |
+| **S14 Derivatives and the hybrid book** | IRS, FX forwards and swaps, XCCY, futures and REPO from contract 1.3 term files, valued by core (result v3) next to bonds; CDS and whatever still lacks inputs imported, with coverage states | `private_inputs`; snapshot inputs from [briefs/HUB.md](briefs/HUB.md) (futures prices, FX value dates, RUONIA index); hybrid merge | |
 
 Each slice ends with:
 - a short note in this file: what works, what was found, what moved to the backlog of which repo;
 - a test that runs the slice on the hub's golden fixtures in CI. Real-data runs stay local, because the snapshots are not committed.
+
+## S7a brief: real positions, real risks
+
+Work order for the backend session. **First priority** ([ROADMAP](ROADMAP.md) §0): the owner sees risks on the desk's real books as soon as possible. The interface is [08](08_PRIVATE_ADAPTER_INTERFACE.md); read it whole first. The private adapter is built in parallel in its own repository, so this slice uses **only the reference adapter and synthetic canonical files** until integration point I2. Only `positions` and `books` are in scope; the other datasets come with their slices.
+
+**Backend work.**
+- B1 `contract/private/v1/positions.schema.json` and `books.schema.json` per 08 §10, canonical CSV templates beside them, and a test that the schema field lists equal the tables in 08 §10. The validator is standard library only (08 §8).
+- B2 `desk.inbox.loader` and `desk.inbox.runner` (08 §2):
+  - path or module loading with the collision check;
+  - the child process with the stripped environment and timeouts;
+  - the fingerprint; SPI and contract checks;
+  - ingestion off with a reason on any failure.
+
+  Settings follow `desk.settings`: `DESK_PRIVATE_ADAPTER`, `DESK_PRIVATE_ADAPTER_CONFIG`, `DESK_PRIVATE_ADAPTER_SHA256`, `DESK_INBOX_DIRS` (split on `;`, each through `_path`), `DESK_INBOX_ARCHIVE`, `DESK_INBOX_POLL_SECONDS`, `DESK_ADAPTER_*_TIMEOUT_S`, `DESK_INBOX_MAX_FILE_MB`. `desk config` shows them.
+- B3 `desk.inbox.reference`: the reference adapter over canonical CSV (`;`, UTF-8 with BOM, as `contract/csv/`), date from the file name, `reference()` from a `books.csv`.
+- B4 Store migration `0003_inbox.sql`:
+  - `inbox_file`, `inbox_unit` (per dataset, `valid_date` and scope unit), `inbox_issue`, `event`;
+  - `position_set` gains `source`, `report_date`, `report_ts`, `generated_at`, `adapter_fingerprint`, `inbox_file_id`;
+  - `position_input` gains the v1 columns (`asset_class`, `source_instrument_id`, `isin`, `ccy`, `face_amount_ccy`, `amount_ccy`, `value_date`, `x` jsonb, `src`);
+  - books as bitemporal `book_rev`.
+
+  `positions_for` orders revisions by 08 §6.6, not by `recorded_at`, and returns each book's age. `desk load-positions` keeps working as source priority 0.
+- B5 `desk inbox scan|status|retry|replay` per 08 §6 and §13: stability, skips, size limit, SHA-256, duplicate and stale copy, archive, `scopes` and `covers`, unit-scoped errors, control re-sum, time semantics with the static snapshot's calendar (`waiting_calendar`), plausibility, supersession order, advisory lock, events.
+- B6 `desk.inbox.conformance` and `desk adapter check` (08 §8), standard library only, with `--stub-ctx` and the real cache otherwise.
+- B7 Valuation of v1 positions:
+  - re-resolve null `instrument_id` on the business date's static snapshot;
+  - derive the number of bonds from the initial or current face;
+  - an unmapped bond goes down the ladder (market value from `mark_price_pct` or `mv_rub`, flagged), else "not valued" with the reason `unmapped_instrument`;
+  - FX rows enter the open currency position;
+  - the run lineage names the inbox files and each book's `valid_date`.
+- B8 `desk inbox status` prints per source and date: files, statuses, issues by code, book ages. A screen comes in S7b.
+
+**Acceptance.**
+- A test adapter loaded from a temporary path (not installed) passes the kit.
+- Broken adapters leave ingestion off with the reason, and the API still serves runs: an import error, a wrong SPI, `match` raising, `read` hanging past the timeout, a name collision.
+- Synthetic canonical files over four dates:
+  - one with a unit-scoped error;
+  - one correction arriving before the original;
+  - one book closed by omission under `all_active_books`;
+  - a stale copy;
+  - a Saturday report.
+
+  `positions_for` gives the expected books, ages and revisions per date and `known_at`.
+- `desk eod --date D` on inbox positions writes a run whose lineage names the inbox files.
+- I2 at work (with ROADMAP §0 F2 and F4):
+  1. The owner sets `DESK_PRIVATE_ADAPTER` and `DESK_INBOX_DIRS`.
+  2. `desk adapter check --dir <positions folder>`.
+  3. `desk inbox scan`, `desk eod`, `desk serve`: the Desk Monitor shows the real books.
 
 ## S3 brief: live hub and a test book
 
@@ -177,7 +232,7 @@ If the prototype has a place for it in `window.DESK` meta, show the snapshot age
 - the desk Postgres store and API (S5);
 - Windows services and the corporate proxy (Q4). The settings already carry `DESK_HUB_CA_BUNDLE` and `HTTPS_PROXY`;
 - floaters (S4);
-- intraday cuts (S7).
+- intraday cuts (S12).
 
 ## S4 brief: core portfolio path and the whole bond universe
 

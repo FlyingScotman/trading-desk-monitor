@@ -13,7 +13,7 @@ Today it exists as:
 |---|---|
 | `backend/orchestrator` | Schedules and runs the pipelines: EOD, intraday flash, T+1 official attach, historical scenario rebuild. One entry point per pipeline, with logs, a non-zero exit on failure, and notifications. |
 | `backend/marketdata` | Hub client (list/fetch/verify/cache snapshots) and `adapters/mdhub_v1` (wire → core domain) per [02](02_MARKET_DATA_AND_CORE_CONTRACT.md). |
-| `backend/private_inputs` | Declarative adapters for bank files: positions, trades, OTC terms, funding, cash, official PnL, imported risk, internal FX mark, trader marks. Column maps, units, encodings, and validation previews. Each loaded file is hashed and stored as a bitemporal revision (§2). |
+| `backend/inbox` (was `private_inputs`) | Ingestion of bank files ([ADR-008](adr/ADR-008-private-adapter-boundary.md), [08](08_PRIVATE_ADAPTER_INTERFACE.md)): folder watcher, SHA-256 ledger and archive, adapter loader (`DESK_PRIVATE_ADAPTER`), validation against contract 1.4 private schemas, bitemporal revisions (§2), events. Firm-specific parsing lives in the private adapter, not here; the reference adapter reads canonical CSV. |
 | `backend/valuation` | Builds the per-run domain `MarketSnapshot` (curves, projections) through the curve cache; prices supported products with core; merges imported PV and risk for unsupported products; emits greeks in the desk factor format (`IR\|curve\|bucket`, `CS`, `FX\|ccy`). |
 | `backend/desk_rules` | Desk conventions from `ORG_CONVENTIONS.md`: TRADING/HTM/DERIVS funding, CASH/REPO, OCP transfers, dual FX basis (market vs CBR), HTM treatment, carry/funding projections. **The only implementation of these rules in the system.** Open decisions (DEC01, DEC03, DEC06) are configuration, not code forks. |
 | `backend/scenarios` | Scenario definitions (presets, historical, per-user), canonical hashing, T3 batch scenarios, the T2 job worker, and the reference Taylor engine ([03](03_CALCULATION_SPLIT.md)). |
@@ -120,7 +120,7 @@ Consequences:
 - **Intraday trade feed:** positions roll forward intraday (T−1 position + trades = current position), and new-trade PnL is attributed.
 - **In every case:** reconcile the positions roll-forward at EOD (T−1 position + trades = T position) and report breaks.
 
-Q1 is **deferred** by the owner ([ROADMAP](ROADMAP.md) §3). Until it is decided, the backend accepts contract 1.3 position and trade files only, and treats intraday as "opening book repriced".
+Q1 is answered for the daily book (19 October 2026, [ROADMAP](ROADMAP.md) §4): a morning positions report as of 00:00, an OCP and cash report, the official PnL at T+1, and later trade exports every 1–2 hours, all through the private adapter ([08](08_PRIVATE_ADAPTER_INTERFACE.md)). Until the trade export exists, intraday is "opening book repriced".
 
 ## 7 Hybrid valuation
 
