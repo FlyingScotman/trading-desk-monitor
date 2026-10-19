@@ -144,7 +144,7 @@ def book_rows(used: list[str], meta: dict[str, dict]) -> list[dict[str, Any]]:
         if (m := meta.get(b)) is not None:
             return {"book_id": b, "name": m.get("name") or b, "desk": m.get("desk") or "—", "trader": m.get("trader"),
                     "book_type": m.get("book_type"), "entity": m.get("entity") or "—", "ocp_to": m.get("ocp_to")}
-        return BOOKS[b] if b in BOOKS else {"book_id": b, "name": b, **DEFAULT_BOOK}
+        return BOOKS.get(b, {"book_id": b, "name": b, **DEFAULT_BOOK})
     return [row(b) for b in BOOKS if b in used] + [row(b) for b in used if b not in BOOKS]
 
 

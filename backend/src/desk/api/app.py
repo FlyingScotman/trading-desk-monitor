@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 import uuid
@@ -56,8 +57,14 @@ from .models import (
 )
 
 log = logging.getLogger("desk.api")
-STATIC_DIR = REPO_ROOT / "prototypes"
-APP_DIR = REPO_ROOT / "frontend" / "dist"
+
+
+def static_root() -> Path:
+    """Where ``prototypes/`` and ``frontend/dist/`` are: ``DESK_STATIC_ROOT`` (the Windows bundle's ``app\\``, set
+    by start.bat) or the repository root (a checkout; an installed wheel without it serves no pages)."""
+    return Path(os.environ.get("DESK_STATIC_ROOT") or REPO_ROOT)
+
+
 REQUEST_ID = re.compile(r"[\w.:-]{1,128}")
 HEADER_SQL = f"SELECT r.*, r.run_id IN ({compat.DEFAULT_RUNS}) AS is_default FROM run r"
 DIMS = {"book": "book_id", "quality": "quality", "asset_class": "fact->>'asset_class'",
@@ -358,14 +365,14 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     app.include_router(settings_router, include_in_schema=False)  # local admin routes (/settings.html)
     app.include_router(autopilot_router)
 
-    built = Path(app_dir) if app_dir else APP_DIR
+    built = Path(app_dir) if app_dir else static_root() / "frontend" / "dist"
     if built.is_dir():  # before "/": the frontend build, absent until npm run build
         @app.get("/app", include_in_schema=False)
         def app_slash(request: Request):  # the "/" mount would 404 it
             return RedirectResponse("/app/" + (f"?{request.url.query}" if request.url.query else ""))
 
         app.mount("/app", StaticFiles(directory=built, html=True), name="app")
-    static = Path(static_dir) if static_dir else STATIC_DIR
+    static = Path(static_dir) if static_dir else static_root() / "prototypes"
     if static.is_dir():  # an installed wheel has no prototypes/
         app.mount("/", StaticFiles(directory=static, html=True), name="static")
     return app

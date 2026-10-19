@@ -384,3 +384,19 @@ def test_api_local_only(home: Path) -> None:
 def test_settings_page_is_served(client: TestClient) -> None:
     r = client.get("/settings.html")
     assert r.status_code == 200 and "Настройки" in r.text and "/api/v1/settings" in r.text
+
+
+def test_static_root_from_environment(home: Path, tmp_path: Path, monkeypatch) -> None:
+    """The Windows bundle serves app\\prototypes and app\\frontend\\dist through DESK_STATIC_ROOT (start.bat)."""
+    root = tmp_path / "app"
+    (root / "prototypes").mkdir(parents=True)
+    (root / "prototypes" / "only-here.html").write_text("<p>bundle page</p>", encoding="utf-8")
+    (root / "frontend" / "dist").mkdir(parents=True)
+    (root / "frontend" / "dist" / "index.html").write_text("<p>bundle app</p>", encoding="utf-8")
+    monkeypatch.setenv("DESK_STATIC_ROOT", str(root))
+    c = TestClient(create_app("postgresql://unused"))
+    assert c.get("/only-here.html").text == "<p>bundle page</p>"
+    assert c.get("/app/").text == "<p>bundle app</p>"
+    assert c.get("/settings.html").status_code == 404  # not the checkout's prototypes
+    monkeypatch.delenv("DESK_STATIC_ROOT")
+    assert TestClient(create_app("postgresql://unused")).get("/settings.html").status_code == 200

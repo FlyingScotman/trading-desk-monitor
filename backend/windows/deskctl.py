@@ -38,7 +38,6 @@ WIN = os.name == "nt"  # elsewhere only to test the launcher
 SCRIPTS = ENV / ("Scripts" if WIN else "bin")
 EXE = ".exe" if WIN else ""
 MARKER = ENV / "desk-bundle.json"
-STATIC = ("prototypes", "frontend/dist")  # what desk serve looks for in its root (the venv on Windows)
 # exit codes of a server that was stopped, not failed: Ctrl+C (ours, STATUS_CONTROL_C_EXIT), stop.bat (15)
 STOPPED = (0, 130, 15, -15, 0xC000013A, -1073741510)
 LOG_MAX_BYTES = 20_000_000
@@ -76,7 +75,7 @@ def desk_environ() -> dict[str, str]:
     local = env.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
     env.setdefault("DESK_HOME", str(Path(local) / "DeskMonitor"))
     home = Path(env["DESK_HOME"])
-    env.setdefault("DESK_STATIC_ROOT", str(APP))  # prototypes\ and frontend\dist\ (the server may honour it)
+    env.setdefault("DESK_STATIC_ROOT", str(APP))  # prototypes\ and frontend\dist\ that desk serve serves
     pkg = adapter_package()
     if pkg is not None:  # a fallback: DESK_PRIVATE_ADAPTER and settings.json private_adapter win over it
         env.setdefault("DESK_DEFAULT_PRIVATE_ADAPTER", str(pkg))
@@ -245,20 +244,11 @@ def ensure_env(env: dict[str, str], *, force: bool = False) -> None:
                        env=env, check=False)
     if r.returncode or not desk_exe().is_file():
         raise Fail("pip не смог установить пакеты из wheelhouse (сообщения выше). Архив распакован целиком?")
-    # desk serve finds prototypes\ and frontend\dist\ in its root (desk.settings.REPO_ROOT: the venv on Windows)
-    # until it honours DESK_STATIC_ROOT; ask the installed package where that root is
-    r = subprocess.run([str(py), "-c", "import desk.settings as s; print(s.REPO_ROOT)"], env=env,
-                       capture_output=True, text=True, check=False)
+    # desk serve finds prototypes\ and frontend\dist\ through DESK_STATIC_ROOT (app\, desk_environ); check
+    # that the installed package imports
+    r = subprocess.run([str(py), "-c", "import desk.api"], env=env, capture_output=True, text=True, check=False)
     if r.returncode:
         raise Fail(f"Установленный пакет desk не импортируется:\n{r.stderr}")
-    static_root = Path(r.stdout.strip())
-    for d in STATIC:
-        if not (APP / d).is_dir():
-            continue
-        if _under(str(static_root / d), ENV):
-            shutil.copytree(APP / d, static_root / d, dirs_exist_ok=True)
-        else:
-            say(f"  ВНИМАНИЕ: корень desk {static_root} вне {ENV}: {d} не скопирован, страницы могут не открыться")
     MARKER.write_text(json.dumps(want, ensure_ascii=False), encoding="utf-8")
     say("Создаю или обновляю базу (desk db-migrate); при первом запуске PostgreSQL создаёт кластер, до минуты ...")
     if subprocess.run([str(desk_exe()), "db-migrate"], env=env, cwd=str(home_dir(env)), check=False).returncode:

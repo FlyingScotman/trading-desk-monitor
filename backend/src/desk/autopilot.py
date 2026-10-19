@@ -23,7 +23,7 @@ Errors are caught per step, logged (``desk.autopilot`` and ``<home>/logs/autopil
 they never stop the thread.
 
 One cycle at a time per home folder, across processes: a cycle holds ``<home>/cycle.lock`` (``cycle_lock``), so a
-``desk cycle`` (``daily_backend.bat``) started while the ``desk serve`` thread is in a cycle, or the other way round,
+``desk cycle`` (``update_daily.bat``) started while the ``desk serve`` thread is in a cycle, or the other way round,
 does nothing (step ``cycle``: ``skipped``, "another cycle running") instead of publishing the same date twice.
 """
 

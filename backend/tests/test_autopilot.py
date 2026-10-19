@@ -205,7 +205,7 @@ sys.stdin.readline()
 
 
 def test_cycle_lock_across_processes(tmp_path, store_url):
-    """A desk cycle while another process (desk serve's thread, another daily_backend.bat) is in a cycle does
+    """A desk cycle while another process (desk serve's thread, another update_daily.bat) is in a cycle does
     nothing: no second EOD of the same date."""
     (tmp_path / "cache").mkdir()
     for p in SNAPS.glob("*.json.gz"):

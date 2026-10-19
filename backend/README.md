@@ -114,7 +114,7 @@ desk eod --date 2026-10-15         # values the inbox positions; prints each boo
 2. **scan**: `desk inbox scan`. It comes after the sync because a start-of-day report needs a cached calendar covering its date and the day before (otherwise the file waits, `waiting_calendar`, and is retried next cycle).
 3. **eod**: for each cached `eod_final` date of the last two weeks (at least the latest date with positions) that has positions, the `desk eod` run when the date has no default run, or its default run read other position sets (a new revision), another market snapshot or another previous snapshot. Oldest first; a date that failed is retried only when its inputs change.
 
-Settings are read again every cycle. `GET /api/v1/autopilot/status` gives the state, the steps of the last cycle and the latest default run; errors are also logged to `<home>/logs/autopilot.log`. `desk serve --no-autopilot` starts no thread; `--autopilot` runs cycles even when the settings turn it off. `desk cycle` runs one cycle in the foreground and prints it (exit 1 when a step failed; `--date D` also keeps D current, `--no-hub` skips the hub); `windows/daily_backend.bat [hub|drop] [D]` calls it. One cycle at a time per home folder, across processes: a cycle holds `<home>/cycle.lock` (`msvcrt.locking` / `fcntl.flock`, released by the OS if the process dies); a cycle that finds it taken does nothing and reports the step `cycle: skipped` (another cycle running).
+Settings are read again every cycle. `GET /api/v1/autopilot/status` gives the state, the steps of the last cycle and the latest default run; errors are also logged to `<home>/logs/autopilot.log`. `desk serve --no-autopilot` starts no thread; `--autopilot` runs cycles even when the settings turn it off. `desk cycle` runs one cycle in the foreground and prints it (exit 1 when a step failed; `--date D` also keeps D current, `--no-hub` skips the hub); the Windows bundle's `update_daily.bat` calls it (its arguments go to `desk cycle`). One cycle at a time per home folder, across processes: a cycle holds `<home>/cycle.lock` (`msvcrt.locking` / `fcntl.flock`, released by the OS if the process dies); a cycle that finds it taken does nothing and reports the step `cycle: skipped` (another cycle running).
 
 ### Offline fallback
 
@@ -170,6 +170,8 @@ The settings page `http://127.0.0.1:8000/settings.html` (`desk serve`) edits `se
 | `DESK_INBOX_MAX_FILE_MB` | 500 | Larger files are not offered |
 | `DESK_AUTOPILOT` / `DESK_AUTOPILOT_SYNC_LAST` | on / 5 | The `desk serve` autopilot and the number of latest hub dates it keeps in sync |
 | `DESK_HOME` | see above | The per-user data folder (environment or env file only) |
+| `DESK_STATIC_ROOT` | the repository root | Where `desk serve` finds `prototypes/` and `frontend/dist/` (process environment only); the Windows bundle's `start.bat` sets it to its `app\` folder |
+| `DESK_DEFAULT_PRIVATE_ADAPTER` | not set | The lowest-priority adapter (process environment only): `start.bat` sets it to the package in the bundle's `adapter\` folder |
 
 ## Tests
 

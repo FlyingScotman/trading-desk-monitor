@@ -48,7 +48,8 @@
       var sel = el('select', { 'aria-label': 'Дата и прогон' });
       sel.appendChild(el('option', { value: '' }, 'последний прогон'));
       j.runs.forEach(function (r) {
-        var o = el('option', { value: r.run_id }, r.as_of + ' · ' + r.run_type + ' #' + r.run_id + (r.published_at ? ' · ' + r.published_at.slice(11, 16) : ''));
+        var day = r.business_date || r.as_of, done = r.completed_at || r.published_at;  // as_of / published_at: compat aliases
+        var o = el('option', { value: r.run_id }, day + ' · ' + r.run_type + ' #' + r.run_id + (done ? ' · ' + String(done).slice(11, 16) : ''));
         if (src.kind === 'db' && String(r.run_id) === String(src.runId) && new URL(location.href).searchParams.get('run_id')) o.selected = true;
         sel.appendChild(o);
       });
