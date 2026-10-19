@@ -23,6 +23,7 @@ from rub_fixed_income import __version__ as CORE_VERSION
 from rub_fixed_income import portfolio_result_to_json
 
 from .. import __version__ as BACKEND_VERSION
+from .. import logic_version
 from ..marketdata.adapter import MarketView
 from ..orchestrator import EodContext, Outcome
 from ..store import PositionInputs
@@ -59,7 +60,8 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
     bd = ctx.business_date
     lineage = {
         **ctx.lineage(), "backend_version": BACKEND_VERSION, "backend_git_sha": git_sha(),
-        "core_version": CORE_VERSION, "prev_market_snapshot_id": prev.snapshot.id if prev else None,
+        "core_version": CORE_VERSION, "logic_version": logic_version(),
+        "prev_market_snapshot_id": prev.snapshot.id if prev else None,
         "positions": {"set_ids": inputs.set_ids, "valid_dates": {b: d.isoformat() for b, d in inputs.valid_dates.items()},
                       "carried_from": {b: d.isoformat() for b, d in inputs.valid_dates.items() if d < bd},
                       "known_at": inputs.known_at.isoformat(), "private_inputs_hash": inputs.private_inputs_hash,

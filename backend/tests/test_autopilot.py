@@ -141,6 +141,76 @@ def test_failed_eod_is_not_retried_until_inputs_change(tmp_path, store_url, monk
     assert calls == ["2026-10-15", "2026-10-15"]
 
 
+def test_upgrade_recomputes_the_latest_positions_date_once(tmp_path, store_url, monkeypatch):
+    """Runs record ``desk.logic_version()``; after an upgrade (another bundle VERSION, a bumped VALUATION_VERSION) the
+    latest positions date is recomputed once."""
+    import desk
+
+    (tmp_path / "cache").mkdir()
+    for p in SNAPS.glob("*.json.gz"):
+        shutil.copy(p, tmp_path / "cache" / p.name)
+    put(tmp_path, "positions_20261016.csv")
+    monkeypatch.delenv("DESK_BUNDLE_VERSION", raising=False)
+    ap = Autopilot(settings_loader=lambda: cfg(tmp_path, store_url), today=lambda: TODAY)
+    assert steps(ap.run_cycle())["eod"] == ("ok", "2026-10-15 run 1 (no default run)")
+    with store.connect(store_url) as con:
+        lin = con.execute("SELECT lineage FROM run WHERE run_id = 1").fetchone()[0]
+    assert lin["logic_version"] == desk.logic_version() and "+build" not in lin["logic_version"]
+    assert steps(ap.run_cycle())["eod"][0] == "skipped"
+
+    monkeypatch.setenv("DESK_BUNDLE_VERSION", "0.1.0-20261020-abc")  # a new bundle (deskctl sets it)
+    assert desk.logic_version().endswith("+build0.1.0-20261020-abc")
+    assert steps(ap.run_cycle())["eod"] == ("ok", "2026-10-15 run 2 (program updated)")
+    assert steps(ap.run_cycle())["eod"][0] == "skipped"  # once
+    monkeypatch.setattr(desk, "VALUATION_VERSION", desk.VALUATION_VERSION + 1)  # a hand-bumped logic version
+    assert steps(ap.run_cycle())["eod"] == ("ok", "2026-10-15 run 3 (program updated)")
+    assert steps(ap.run_cycle())["eod"][0] == "skipped"
+    with store.connect(store_url) as con:
+        assert store.default_runs(con, date(2026, 10, 1))[date(2026, 10, 15)]["logic_version"] == desk.logic_version()
+
+
+def test_upgrade_leaves_older_dates_alone(tmp_path, monkeypatch):
+    """Only the latest positions date is recomputed for a logic version change (also for a run of a version that
+    recorded none); an older date only when its inputs change. The store and the snapshot cache are stubs here (the
+    fixtures hold one market date; runs are immutable)."""
+    import desk.autopilot as ap_mod
+
+    d14, d15 = date(2026, 10, 14), date(2026, 10, 15)
+
+    class Snap:
+        def __init__(self, d: str) -> None:
+            self.id = "m" + d
+
+    class Dir:
+        def __init__(self, *_: object) -> None:
+            pass
+
+        def market_dates(self) -> list[str]:
+            return ["2026-10-14", "2026-10-15"]
+
+        def market(self, d: str) -> Snap:
+            return Snap(d)
+
+        def previous_market_date(self, d: str) -> str | None:
+            return "2026-10-14" if d == "2026-10-15" else None
+
+    old = "0.0.9+v0+core0"
+    default = {d14: {"run_id": 1, "market_snapshot_id": "m2026-10-14", "prev_market_snapshot_id": None,
+                     "position_set_ids": [1], "logic_version": old},
+               d15: {"run_id": 2, "market_snapshot_id": "m2026-10-15", "prev_market_snapshot_id": "m2026-10-14",
+                     "position_set_ids": [2], "logic_version": None}}
+    monkeypatch.setattr(ap_mod, "SnapshotDir", Dir)
+    monkeypatch.setattr(ap_mod.store, "position_dates", lambda con, since: [d14, d15])
+    monkeypatch.setattr(ap_mod.store, "current_sets", lambda con, d: ([1] if d == d14 else [2], 1))
+    monkeypatch.setattr(ap_mod.store, "default_runs", lambda con, since: default)
+    calls: list[str] = []
+    monkeypatch.setattr(cli, "eod_run", lambda settings, d, **kw: calls.append(d) or len(calls) + 2)
+    ap = Autopilot(settings_loader=lambda: Settings(home=tmp_path), today=lambda: TODAY)
+    ran: list[str] = []
+    st = ap._eod(Settings(home=tmp_path, snapshot_cache=tmp_path), None, None, [], ran)
+    assert st == ("ok", "2026-10-15 run 3 (program updated)") and calls == ["2026-10-15"] == ran
+
+
 def test_settings_switch_and_errors_in_status(tmp_path, store_url):
     off = Settings(home=tmp_path / "home", store_url=store_url, snapshot_cache=tmp_path / "cache", autopilot=False)
     st = Autopilot(settings_loader=lambda: off).run_cycle()  # a thread that follows the flag does nothing while off

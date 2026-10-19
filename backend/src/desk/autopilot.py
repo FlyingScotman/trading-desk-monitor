@@ -14,8 +14,9 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
 3. **eod**: for each cached ``eod_final`` business date from ``min(today - WINDOW_DAYS, latest positions date)``
    on (at most ``MAX_EOD_DATES``, the latest positions date always) that has positions in the store, the EOD run of
    ``desk eod`` when the date has no default run, or its default run read other position sets (a new revision of a
-   book), another market snapshot (a correction) or another previous snapshot (the flash PnL). Oldest first. A
-   date that failed is not retried until its inputs change.
+   book), another market snapshot (a correction) or another previous snapshot (the flash PnL); the latest positions
+   date also when its default run was made by another ``desk.logic_version()`` (an upgrade: older dates are not
+   recomputed, to keep it cheap). Oldest first. A date that failed is not retried until its inputs change.
 4. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``).
 
 Settings are read again at the start of every cycle (``desk.settings.load``), so edits apply without a restart.
@@ -41,7 +42,7 @@ from typing import Any
 
 import psycopg
 
-from . import store
+from . import logic_version, store
 from .inbox.timesem import MSK
 from .marketdata import cache
 from .marketdata.bundle import SnapshotDir, SnapshotError
@@ -418,6 +419,7 @@ class Autopilot:
         if not dates:
             return "skipped", f"no cached eod_final snapshot from {max(start, first)} on"
         runs = store.default_runs(con, date.fromisoformat(dates[0]))
+        logic = logic_version()
         done, failed, notes = [], [], []
         for d in dates:
             ids, n = store.current_sets(con, date.fromisoformat(d))
@@ -429,10 +431,11 @@ class Autopilot:
             run = runs.get(date.fromisoformat(d))
             why = ("no default run" if run is None else "positions changed" if run["position_set_ids"] != ids
                    else "market snapshot changed" if run["market_snapshot_id"] != snap
-                   else "previous snapshot changed" if run["prev_market_snapshot_id"] != prev else None)
+                   else "previous snapshot changed" if run["prev_market_snapshot_id"] != prev
+                   else "program updated" if d == latest_valid and run.get("logic_version") != logic else None)
             if why is None:
                 continue
-            sig = (tuple(ids), snap, prev)
+            sig = (tuple(ids), snap, prev, logic)
             if self._failed.get(d) == sig:
                 notes.append(f"{d} failed before on the same inputs, not retried")
                 continue

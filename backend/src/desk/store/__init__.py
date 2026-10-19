@@ -331,13 +331,15 @@ DEFAULT_RUNS = ("SELECT DISTINCT ON (business_date) run_id FROM run"
 
 
 def default_runs(con: psycopg.Connection, since: date) -> dict[date, dict]:
-    """The default run of each business date from ``since`` on: run_id, its snapshots, position sets (sorted) and
-    completed_at."""
+    """The default run of each business date from ``since`` on: run_id, its snapshots, position sets (sorted),
+    completed_at and the ``logic_version`` of the code that made it (lineage; None for a run made before it was
+    recorded)."""
     return {r[0]: {"run_id": r[1], "market_snapshot_id": r[2], "prev_market_snapshot_id": r[3],
-                   "position_set_ids": sorted(r[4]), "completed_at": r[5]}
+                   "position_set_ids": sorted(r[4]), "completed_at": r[5], "logic_version": r[6]}
             for r in con.execute(
                 "SELECT business_date, run_id, market_snapshot_id, prev_market_snapshot_id, position_set_ids,"
-                f" completed_at FROM run WHERE run_id IN ({DEFAULT_RUNS}) AND business_date >= %s", (since,))}
+                " completed_at, lineage->>'logic_version' FROM run"
+                f" WHERE run_id IN ({DEFAULT_RUNS}) AND business_date >= %s", (since,))}
 
 
 def carried_spreads(con: psycopg.Connection, before: date) -> dict[str, CarriedSpread]:

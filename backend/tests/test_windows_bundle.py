@@ -77,6 +77,7 @@ def test_desk_environ_sets_defaults_only(monkeypatch, tmp_path):
     assert env["DESK_HOME"] == str(tmp_path / "local" / "DeskMonitor")
     assert env["DESK_DEFAULT_PRIVATE_ADAPTER"] == str(adapter)
     assert env["DESK_STATIC_ROOT"] == str(deskctl.APP)
+    assert env["DESK_BUNDLE_VERSION"] == deskctl.version()  # in each run's lineage (desk.logic_version)
     assert "PYTHONPATH" not in env and "DESK_ENV_FILE" not in env
     monkeypatch.setenv("DESK_HOME", str(tmp_path / "mine"))
     monkeypatch.setenv("DESK_DEFAULT_PRIVATE_ADAPTER", "other")

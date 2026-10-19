@@ -93,6 +93,7 @@ def desk_environ() -> dict[str, str]:
         env.pop(k)
     env.setdefault("DESK_HOME", str(default_home(env)))
     home = Path(env["DESK_HOME"])
+    env["DESK_BUNDLE_VERSION"] = version()  # in each run's lineage: a new bundle recomputes the latest date
     env.setdefault("DESK_STATIC_ROOT", str(APP))  # prototypes\ and frontend\dist\ that desk serve serves
     pkg = adapter_package()
     if pkg is not None:  # a fallback: DESK_PRIVATE_ADAPTER and settings.json private_adapter win over it
