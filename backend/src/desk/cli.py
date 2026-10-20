@@ -13,7 +13,7 @@
     desk inbox retry [--status failed,rejected]    offer files in these statuses again
     desk inbox replay --source S --from D1 --to D2 read archived accepted files again (new revisions if changed)
     desk adapter check [--adapter SPEC] [--dir D] [--stub-ctx] [--json]   the conformance kit (08 §8)
-    desk serve                           desk API + Desk Monitor on http://127.0.0.1:8000, scenario worker, autopilot
+    desk serve                           desk API + Desk Monitor on http://127.0.0.1:8100, scenario worker, autopilot
     desk cycle [--date D] [--no-hub]     one autopilot cycle: hub sync -> inbox scan -> EOD of changed dates
     desk openapi --out ../frontend/openapi.json   the API's OpenAPI document (stdout without --out)
 
@@ -53,6 +53,7 @@ from .marketdata.adapter import MarketView
 from .marketdata.bundle import SnapshotDir, SnapshotError
 from .marketdata.hub import HubClient, HubError, hub_check
 from .orchestrator import attach_pnl, prepare, value
+from .pnl.flash import NoPnl
 from .publish import desk_run, tdm_run
 from .report import validation
 from .settings import Settings, SettingsError, adapter_config_dir, load, mask_url
@@ -167,10 +168,15 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             prev_ctx = prepare(sd, prev_date)
             attach_pnl(prev_ctx, value(prev_ctx, bp.requests, position_ids=bp.position_ids, carried_spreads=carried),
                        ctx, outcomes)
+            for o in bp.direct.values():  # fx, otc, unmapped bonds: the reason in run_position.no_pnl, not a bare null
+                if o.valuation is not None:
+                    o.no_pnl = NoPnl("valued_without_core", f"{o.valuation.quality}: no day-over-day PnL yet (S7a)")
             flash = [o.pnl for o in outcomes if o.pnl]
             out(f"flash PnL {prev_date} -> {d}: {len(flash)}/{sum(o.valuation is not None for o in outcomes)} "
                 f"priced positions, total {sum(p.total for p in flash):,.0f} RUB, "
                 f"max identity error {max((abs(p.identity_error) for p in flash), default=0):.2e} RUB")
+        if not prev_date:
+            out(f"WARN no flash PnL: no eod_final market snapshot before {d} in {snapshots}")
         positions = pv1.merge(bp, outcomes)
         ok = sum(o.valuation is not None for _, _, o in positions)
         by_q = Counter(o.valuation.quality if o.valuation else "not_valued" for _, _, o in positions)
@@ -558,7 +564,7 @@ def main(argv: list[str] | None = None) -> int:
     d.set_defaults(fn=cmd_demo_book)
     sv = sub.add_parser("serve", help="the desk API and the Desk Monitor prototype on the store")
     sv.add_argument("--host", default="127.0.0.1")
-    sv.add_argument("--port", type=int, default=8000)
+    sv.add_argument("--port", type=int, default=8100)
     sv.add_argument("--no-worker", action="store_true",
                     help="no exact scenario worker (jobs stay queued); it reprices from DESK_SNAPSHOT_CACHE")
     sv.add_argument("--autopilot", action=argparse.BooleanOptionalAction, default=None,
