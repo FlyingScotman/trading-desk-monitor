@@ -20,6 +20,11 @@ layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub
                            Never commit either; the repository is public
 * ``DESK_HUB_CA_BUNDLE``   PEM bundle for a TLS-inspecting proxy (inside the work network)
 * ``DESK_HUB_TIMEOUT_S``   per-request timeout (default 60)
+* ``DESK_HUB_TRANSPORT``   ``auto`` (default: Python, switching to curl when the proxy wants authentication),
+                           ``python`` or ``curl`` (the system curl; on Windows SSPI logs in to the proxy as the
+                           current Windows user), see ``desk.marketdata.hub``
+* ``DESK_PROXY_USER``      proxy login (``DOMAIN\\user``); its password in ``DESK_PROXY_PASSWORD`` or
+                           ``<home>/proxy_password`` (written by the settings page, never returned)
 * ``DESK_SNAPSHOT_CACHE``  verified ``<snapshot_id>.json.gz`` bundles (default ``<home>/snapshots``)
 * ``DESK_SNAPSHOT_DROP``   folder an operator fills by hand when the hub is unreachable (ADR-001)
 * ``DESK_STORE_URL``       desk store, a libpq URI ``postgresql://user:password@host:5432/desk``
@@ -65,6 +70,8 @@ BACKEND_ROOT = REPO_ROOT / "backend"
 DEV_HOME = REPO_ROOT / ".devdata"
 SETTINGS_FILE = "settings.json"
 TOKEN_FILE = "hub_token"
+PROXY_PASSWORD_FILE = "proxy_password"
+HUB_TRANSPORTS = ("auto", "python", "curl")
 ADAPTER_CONFIG_DIR = "adapter-config"
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 
@@ -73,6 +80,8 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "hub_url": ("DESK_HUB_URL", "str"),
     "hub_ca_bundle": ("DESK_HUB_CA_BUNDLE", "path"),
     "hub_timeout_s": ("DESK_HUB_TIMEOUT_S", "num"),
+    "hub_transport": ("DESK_HUB_TRANSPORT", "str"),
+    "proxy_user": ("DESK_PROXY_USER", "str"),
     "snapshot_drop": ("DESK_SNAPSHOT_DROP", "path"),
     "store_url": ("DESK_STORE_URL", "str"),
     "private_adapter": ("DESK_PRIVATE_ADAPTER", "adapter"),
@@ -83,7 +92,8 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "autopilot_sync_last": ("DESK_AUTOPILOT_SYNC_LAST", "int"),
 }
 PROXY_KEYS = {"https_proxy": "HTTPS_PROXY", "no_proxy": "NO_PROXY"}
-READ_ONLY_KEYS = ("hub_token", "hub_token_set", "home", "effective", "env_overrides", "error")
+READ_ONLY_KEYS = ("hub_token", "hub_token_set", "proxy_password", "proxy_password_set", "home", "effective",
+                  "env_overrides", "error")
 _TRUE, _FALSE = ("1", "true", "yes", "on"), ("0", "false", "no", "off")
 
 
@@ -122,6 +132,9 @@ class Settings:
     hub_token_source: str = "not set"
     hub_ca_bundle: Path | None = None
     hub_timeout_s: float = 60.0
+    hub_transport: str = "auto"
+    proxy_user: str | None = None
+    proxy_password: str | None = field(default=None, repr=False)
     snapshot_cache: Path = None  # type: ignore[assignment]  # None: <home>/snapshots
     snapshot_drop: Path | None = None
     store_url: str | None = field(default=None, repr=False)
@@ -178,6 +191,9 @@ class Settings:
             ("hub_ca_bundle", str(self.hub_ca_bundle or "system default")),
             ("hub_timeout_s", f"{self.hub_timeout_s:g}"),
             ("https_proxy", mask_proxy(os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or "none")),
+            ("hub_transport", self.hub_transport),
+            ("proxy_user", self.proxy_user or "none"),
+            ("proxy_password", "set" if self.proxy_password else "not set"),
             ("snapshot_cache", str(self.snapshot_cache)),
             ("snapshot_drop", str(self.snapshot_drop or "none")),
             ("store_url", mask_url(self.store_url) if self.store_url else f"not set: embedded store ({self.pg_dir})"),
@@ -390,6 +406,13 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
             raise SettingsError(f"DESK_HUB_URL must be an https:// URL (http only for localhost): {hub_url!r}")
 
     token, source = _token(proc, file_env, home)
+    transport = (get("DESK_HUB_TRANSPORT") or "auto").strip().lower()
+    if transport not in HUB_TRANSPORTS:
+        raise SettingsError(f"DESK_HUB_TRANSPORT (hub_transport) must be one of {', '.join(HUB_TRANSPORTS)}, "
+                            f"not {transport!r}")
+    proxy_password = proc.get("DESK_PROXY_PASSWORD") or file_env.get("DESK_PROXY_PASSWORD") or None
+    if proxy_password is None and (pf := home / PROXY_PASSWORD_FILE).is_file():
+        proxy_password = pf.read_text(encoding="utf-8-sig").rstrip("\r\n") or None
     defaults = Settings(home=home)
 
     def num(key: str, default: float) -> float:
@@ -437,6 +460,9 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         hub_token_source=source if token else (source if source.startswith("not set") else "not set"),
         hub_ca_bundle=_path(get("DESK_HUB_CA_BUNDLE")),
         hub_timeout_s=num("DESK_HUB_TIMEOUT_S", defaults.hub_timeout_s),
+        hub_transport=transport,
+        proxy_user=(get("DESK_PROXY_USER") or "").strip() or None,
+        proxy_password=proxy_password,
         snapshot_cache=_path(get("DESK_SNAPSHOT_CACHE")) or defaults.snapshot_cache,
         snapshot_drop=_path(get("DESK_SNAPSHOT_DROP")),
         store_url=store_url,
@@ -530,6 +556,17 @@ def write_hub_token(token: str | None, home: Path | None = None) -> Path | None:
     if not token.isprintable() or any(c.isspace() for c in token):
         raise SettingsError("the token must be one line without spaces")
     return atomic_write_text(path, token + "\n", private=True)
+
+
+def write_proxy_password(password: str | None, home: Path | None = None) -> Path | None:
+    """Store the proxy password in ``<home>/proxy_password`` (0600 on POSIX); empty or None removes the file."""
+    path = (home or desk_home()) / PROXY_PASSWORD_FILE
+    if not password:
+        path.unlink(missing_ok=True)
+        return None
+    if "\n" in password or "\r" in password or not password.isprintable():
+        raise SettingsError("the proxy password must be one line of printable characters")
+    return atomic_write_text(path, password + "\n", private=True)
 
 
 def adapter_config_dir(settings: Settings, create: bool = True) -> Path | None:

@@ -437,3 +437,24 @@ def test_static_root_from_environment(home: Path, tmp_path: Path, monkeypatch) -
     assert c.get("/settings.html").status_code == 404  # not the checkout's prototypes
     monkeypatch.delenv("DESK_STATIC_ROOT")
     assert TestClient(create_app("postgresql://unused")).get("/settings.html").status_code == 200
+
+
+def test_api_proxy_login_password_and_transport(client: TestClient, home: Path) -> None:
+    pw = "Pr0xy-secret pw"
+    j = client.put("/api/v1/settings", json={"proxy_user": "CORP\\ivanov", "hub_transport": "curl"}).json()
+    assert j["proxy_user"] == "CORP\\ivanov" and j["effective"]["hub_transport"] == "curl"
+    assert j["proxy_password_set"] is False
+    r = client.put("/api/v1/settings/proxy-password", json={"password": pw})
+    assert r.status_code == 200 and r.json() == {"proxy_password_set": True}
+    assert (home / "proxy_password").read_text(encoding="utf-8") == pw + "\n"
+    j = client.get("/api/v1/settings").json()
+    assert j["proxy_password_set"] is True and j["effective"]["proxy_password_set"] is True and pw not in json.dumps(j)
+    st = load(env(home))
+    assert st.proxy_password == pw and st.proxy_user == "CORP\\ivanov" and pw not in repr(st)
+    assert pw not in str(st.describe())
+    assert client.put("/api/v1/settings", json={"proxy_password": pw}).status_code == 422
+    r = client.put("/api/v1/settings", json={"hub_transport": "wget"})
+    assert r.status_code == 422 and "hub_transport" in r.json()["message"]
+    assert client.put("/api/v1/settings/proxy-password", json={"password": ""}).json()["proxy_password_set"] is False
+    assert not (home / "proxy_password").exists()
+    assert load(env(home)).hub_transport == "curl" and Settings().hub_transport == "auto"  # default

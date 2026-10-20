@@ -38,6 +38,7 @@ from ..settings import (
     read_settings_json,
     update_settings_json,
     write_hub_token,
+    write_proxy_password,
 )
 from .app import ApiError
 
@@ -90,6 +91,7 @@ def _effective(st: Settings) -> dict[str, Any]:
         "hub_ca_bundle": str(st.hub_ca_bundle) if st.hub_ca_bundle else None, "hub_timeout_s": st.hub_timeout_s,
         "https_proxy": mask_proxy(os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or None),
         "no_proxy": os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or None,
+        "hub_transport": st.hub_transport, "proxy_user": st.proxy_user, "proxy_password_set": bool(st.proxy_password),
         "snapshot_cache": str(st.snapshot_cache), "snapshot_drop": str(st.snapshot_drop) if st.snapshot_drop else None,
         "store": mask_url(st.store_url) if st.store_url else f"embedded: {st.pg_dir}",
         "pg_dir": str(st.pg_dir), "db": str(st.db), "report_dir": str(st.report_dir) if st.report_dir else None,
@@ -119,7 +121,8 @@ def settings_payload() -> dict[str, Any]:
     stored = {k: v for k, v in doc.items() if k not in READ_ONLY_KEYS}
     if isinstance(stored.get("https_proxy"), str):  # its password, like the token's, is never sent back
         stored["https_proxy"] = mask_proxy(stored["https_proxy"])
-    return {**stored, "hub_token_set": bool(st and st.hub_token), "home": str(home),
+    return {**stored, "hub_token_set": bool(st and st.hub_token), "proxy_password_set": bool(st and st.proxy_password),
+            "home": str(home),
             "effective": _effective(st) if st else None, "env_overrides": env_overrides(), "error": error}
 
 
@@ -133,6 +136,8 @@ def put_settings(body: JsonBody) -> dict[str, Any]:
     """Merge into settings.json: a key with null is removed, absent keys and unknown keys are kept."""
     if "hub_token" in body:
         raise ApiError(422, "invalid_parameter", "the token is not a setting: PUT /api/v1/settings/hub-token")
+    if "proxy_password" in body:
+        raise ApiError(422, "invalid_parameter", "the proxy password is not a setting: PUT /api/v1/settings/proxy-password")
     try:
         stored = read_settings_json(desk_home()).get("https_proxy")
         if isinstance(stored, str) and body.get("https_proxy") == mask_proxy(stored) != stored:
@@ -158,13 +163,28 @@ def put_hub_token(body: JsonBody) -> dict[str, Any]:
     return {"hub_token_set": bool(st.hub_token), "hub_token_source": st.hub_token_source}
 
 
+@router.put("/api/v1/settings/proxy-password")
+def put_proxy_password(body: JsonBody) -> dict[str, Any]:
+    """Store the proxy password in ``<home>/proxy_password``; empty removes the file. Never returned."""
+    password = body.get("password")
+    if password is not None and not isinstance(password, str):
+        raise ApiError(422, "invalid_parameter", "password must be a string")
+    try:
+        write_proxy_password(password, desk_home())
+        st = load()
+    except SettingsError as e:
+        raise ApiError(422, "invalid_parameter", str(e)) from None
+    return {"proxy_password_set": bool(st.proxy_password)}
+
+
 @router.post("/api/v1/settings/test-hub")
 def test_hub() -> dict[str, Any]:
     """``desk hub-check`` with the current settings, one retry."""
     try:
         st = load()
     except SettingsError as e:
-        return {"ok": False, "host": None, "health": None, "token_accepted": False, "latest": None, "error": str(e)}
+        return {"ok": False, "host": None, "health": None, "token_accepted": False, "latest": None, "error": str(e),
+                "transport": None}
     return hub_check(st, retries=1)
 
 
