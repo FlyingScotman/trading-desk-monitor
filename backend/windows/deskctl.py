@@ -59,7 +59,7 @@ UPDATE_TIMEOUT_S = 300  # the new version answers /health/live within this after
 IDLE_WAIT_S = 600  # how long an update waits for the other desk processes of this folder (a desk cycle)
 KEEP_BACKUPS = 3
 LOG_MAX_BYTES = 20_000_000
-DEFAULT_PORT = 8000
+DEFAULT_PORT = 8100
 # pgserver gives pg_ctl 10 s to start PostgreSQL; on the first start an antivirus scanning postgres.exe can take
 # longer, and the next try usually finds the files already checked
 MIGRATE_TRIES = 3

@@ -414,7 +414,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     return app
 
 
-def serve(store_url: str, host: str = "127.0.0.1", port: int = 8000, static_dir: Path | None = None,
+def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir: Path | None = None,
           snapshots: Path | None = None, adapter_status: Callable[[], str] | None = None,
           autopilot: Any = None) -> int:
     """``snapshots``: the snapshot cache the scenario worker reprices from; None runs no worker.

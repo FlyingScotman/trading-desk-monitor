@@ -1,6 +1,6 @@
 @echo off
 rem Desk Monitor - install on first run (offline), then the server and the browser. Close the window to stop.
-rem Usage: start.bat [--port N]   default port 8000, or the DESK_PORT variable
+rem Usage: start.bat [--port N]   default port 8100, or the DESK_PORT variable
 rem The logic is in app\deskctl.py, run by the Python bundled in python\ (or by "py -3.11" when absent).
 setlocal
 set "DM_PY=%~dp0python\python.exe"
