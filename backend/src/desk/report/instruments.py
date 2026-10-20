@@ -125,7 +125,8 @@ COLUMNS: tuple[tuple[str, str], ...] = (
     ("has_quote", "Есть котировка в рыночном снапшоте даты"),
     ("price_pct", "Цена, % (legal_close, close, waprice)"),
     ("num_trades", "Сделок за день"),
-    ("core_market", "--value: оценка ядром с котировкой: ok или код причины"),
+    ("core_market", "--value: оценка ядром с котировкой: exact / assumed или код причины"),
+    ("core_market_detail", "--value: подробности причины или допущения"),
     ("dq_flags", "Флаги качества данных (коды, через ;)"),
 )
 
@@ -319,7 +320,7 @@ def instrument_row(raw: dict[str, Any], t: BondTerms, view: StaticView, as_of: d
         "listing_level": raw.get("listing_level"), "issue_size": raw.get("issue_size"),
         "primary_board": t.primary_board, "day_count": raw.get("day_count"), "labels": list(t.labels),
         "core_static": core, "core_static_detail": detail, "core_assumptions": assumptions,
-        "has_quote": None, "price_pct": None, "num_trades": None, "core_market": None,
+        "has_quote": None, "price_pct": None, "num_trades": None, "core_market": None, "core_market_detail": None,
     }
     row["dq_flags"] = flags(row, t, raw, as_of, shared_isins, no_value, cur)
     return row
@@ -418,6 +419,7 @@ def _core_market(rows: list[dict[str, Any]], snapshots: Path, market: Snapshot) 
     act = [r for r in rows if r["status"] == "active"]
     for r, o in zip(act, value(ctx, [(r["secid"], 1.0) for r in act], fallback=False), strict=True):
         r["core_market"] = (o.valuation.quality if o.valuation else o.reason) or "not_valued"
+        r["core_market_detail"] = ("; ".join(o.valuation.assumptions) if o.valuation else o.detail)[:300] or None
 
 
 def build(static: Snapshot, market: Snapshot | None = None, *, active_only: bool = False,

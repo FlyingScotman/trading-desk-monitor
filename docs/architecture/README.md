@@ -15,7 +15,7 @@ Revision 1, 16 October 2026. This folder is the system-level architecture of the
 | 7 | [07_CORE_PRODUCT_COVERAGE.md](07_CORE_PRODUCT_COVERAGE.md) | The development plan for products the core library cannot price yet. It is self-contained so it can be handed to the core project |
 | 8 | [ROADMAP.md](ROADMAP.md) | Work by repository, sequencing, and open questions for the owner |
 | 9 | [VERTICAL_SLICES.md](VERTICAL_SLICES.md) | **Current way of working:** thin end-to-end slices on real data (S1–S8; next S3 and S4), their shortcuts, results and findings |
-| 10 | [briefs/HUB.md](briefs/HUB.md), [briefs/CORE.md](briefs/CORE.md) | Work orders from the desk to the hub and to core: what blocks the desk, findings on real data, inputs core can use |
+| 10 | [briefs/HUB.md](briefs/HUB.md), [briefs/HUB_STATIC_DATA_REQUESTS.md](briefs/HUB_STATIC_DATA_REQUESTS.md), [briefs/CORE.md](briefs/CORE.md) | Work orders from the desk to the hub and to core: what blocks the desk, findings on real data, inputs core can use; static data requests (issuers, groups, sectors, ratings) from the R9 audit |
 | — | [adr/](adr/) | Architecture decision records: one decision per file |
 | — | [reviews/](reviews/) | Point-in-time reviews; not maintained |
 
@@ -79,6 +79,7 @@ Every boundary between components is listed here with its owner and the version 
 - `docs/program/`: the execution pack of 14 October 2026. It assumed an external VPS for market data and a Windows work PC for calculations, with an LLM data curator. [ADR-001](adr/ADR-001-hosting-topology.md) supersedes the work-PC, Hermes and bulk-download parts. The Linux VPS remains for public collection: one hub there serves the inside backend, which pulls snapshots into its cache, and the owner's other consumers (amended 18 October 2026). `DECISIONS.md` DEC01–DEC12 remain valid and authoritative for financial choices.
 - `docs/DATA_CONTRACT.md`, `ORG_CONVENTIONS.md`, `SCENARIOS.md`, `DATA_REQUIREMENTS.md`, `SERVICE_DATA_MODEL.md`: remain the detailed desk specifications. Where this folder changes a design, for example the scenario levels or gamma sparsity, the change is stated explicitly and those files get a pointer.
 - [reviews/2026-10-16_module_review.md](reviews/2026-10-16_module_review.md): the module-by-module review that preceded this folder. Read its header note first.
+- [reviews/STATIC_DATA_AUDIT_2026-10-20.md](reviews/STATIC_DATA_AUDIT_2026-10-20.md): audit of the bond static data as the desk sees it (R9), with `desk instruments export`.
 
 ## Precedence
 
