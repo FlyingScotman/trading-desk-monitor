@@ -2,15 +2,16 @@
  * Экран «Прогонов ещё нет» (desk-fallback.js подключает его, когда сервер ответил window.DESK_EMPTY).
  * Вместо демо-данных — что делает автопилот сейчас (GET api/v1/autopilot/status: раз в 5 с во время цикла,
  * иначе раз в 30 с) и ссылка на Настройки. Появился прогон — страница перезагружается сама.
- * Код страницы под экраном работает на демо-наборе, но скрыт целиком; явное демо — ?demo=1.
+ * Код страницы под экраном работает на демо-наборе, но скрыт целиком (кроме строки навигации desk-nav.js);
+ * явное демо — ?demo=1.
  */
 (function () {
   'use strict';
   var E = window.DESK_EMPTY || {}, noRuns = E.reason !== 'not_found';
   document.documentElement.classList.add('desk-empty');
-  var css = 'html.desk-empty body>*:not(#desk-empty){display:none!important}' +
+  var css = 'html.desk-empty body>*:not(#desk-empty):not(#desk-nav){display:none!important}' +
     '#desk-empty{--e-bg:#f6f7f9;--e-card:#fff;--e-fg:#1b2129;--e-fg2:#5a6573;--e-line:#d9dee5;--e-acc:#2f6fd6;' +
-    'min-height:100vh;box-sizing:border-box;display:flex;align-items:center;justify-content:center;padding:24px 16px;' +
+    'min-height:calc(100vh - 32px);box-sizing:border-box;display:flex;align-items:center;justify-content:center;padding:24px 16px;' +
     'background:var(--e-bg);color:var(--e-fg);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}' +
     '@media (prefers-color-scheme:dark){html:not([data-theme="light"]) #desk-empty{--e-bg:#0f1318;--e-card:#171c23;' +
     '--e-fg:#e8ecf1;--e-fg2:#9aa6b4;--e-line:#2a323d;--e-acc:#6ea0ff}}' +

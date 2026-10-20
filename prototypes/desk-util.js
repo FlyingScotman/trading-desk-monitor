@@ -310,10 +310,12 @@
     return p.ytm == null ? null : (p.ytm - curveRate(c, t)) * 100;
   }
   // Строки таблицы облигаций: позиции BOND, объединённые по выпуску (ISIN) или по (ключ группы, ISIN).
+  // Ключ выпуска: ISIN, у бумаги без него — instrumentId (код источника), иначе id позиции.
+  const bondKey = p => p.isin || p.instrumentId || String(p.id);
   function bondRows(list, keyFn) {
     const by = {};
     list.filter(p => p.instrType === 'BOND').forEach(p => {
-      const k = (keyFn ? keyFn(p) + '|' : '') + (p.isin || p.id);
+      const k = (keyFn ? keyFn(p) + '|' : '') + bondKey(p);
       (by[k] = by[k] || []).push(p);
     });
     return Object.keys(by).map(k => {
@@ -341,7 +343,7 @@
   const histCache = {};
   function bondHistory(p, curve, from) {
     const c = curve === 'own' || !curve ? p.spreadCurve : curve === 'base' ? baseCurve(p.ccy) : curve;
-    const key = [p.isin || p.id, c, from || ''].join('|');
+    const key = [bondKey(p), c, from || ''].join('|');
     if (histCache[key]) return histCache[key];
     let pr;
     if (D.demo && D.demo.bondHistory) pr = Promise.resolve(D.demo.bondHistory(p, c));
@@ -352,7 +354,7 @@
       if (p.wal) q.set('wal', p.wal);
       if (from) q.set('from', from);
       if (D.asOf) q.set('to', D.asOf);
-      pr = fetch('/api/v1/bonds/history?' + q).then(r => r.json().then(j => (r.ok ? j : Object.assign({ series: [] }, j, { error: j.error || ('HTTP ' + r.status) }))))
+      pr = fetch('/api/v1/bonds/history?' + q).then(r => r.json().then(j => (r.ok ? j : Object.assign({ series: [] }, j, { error: j.error || j.message || ('HTTP ' + r.status) }))))
         .catch(e => ({ series: [], error: 'нет связи с сервером: ' + e.message }));
     }
     return (histCache[key] = pr.then(normHistory));
@@ -536,5 +538,5 @@
 
   D.util = { sum, groupBy, bucketMatrix, netFx, runScenario, curveRate, fundingFx, spreadShock, ownSpr01, ACCURACY_BP,
     runCarry, ksPath, carryEnd, indexAt, addDays, monthsAdd,
-    baseCurve, yieldTenor, spreadTo, bondRows, wavg, bondHistory, normHistory };
+    baseCurve, yieldTenor, spreadTo, bondKey, bondRows, wavg, bondHistory, normHistory };
 })();

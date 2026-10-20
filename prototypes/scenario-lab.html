@@ -61,8 +61,6 @@ button,input,select{font:inherit;color:inherit}
 .brand b{font-family:var(--font-mono);font-weight:600;font-size:14px;letter-spacing:.02em}
 .brand b i{font-style:normal;color:var(--accent)}
 .brand span{color:var(--fg-3);font-size:12px}
-.tag{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-family:var(--font-mono);border:1px dashed var(--line-strong);
-  color:var(--fg-2);padding:1px 6px;border-radius:2px;white-space:nowrap}
 .seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:3px;overflow:hidden;background:var(--surface-2)}
 .seg button{border:0;background:transparent;padding:5px 14px;cursor:pointer;font-weight:500;color:var(--fg-2)}
 .seg button+button{border-left:1px solid var(--line-strong)}
@@ -276,7 +274,7 @@ input[type=date].dt{border:1px solid var(--line-strong);background:var(--surface
 </style>
 
 <header class="top" id="top">
-  <div class="brand"><b>Scenario <i>&amp;</i> PnL Lab</b><span>FI-деск · сценарии и explain</span><span class="tag" title="Все цифры вымышленные">Тестовые данные</span></div>
+  <div class="brand"><b>Scenario <i>&amp;</i> PnL Lab</b><span>FI-деск · сценарии и explain</span></div>
   <div class="seg" role="tablist" aria-label="Режим">
     <button id="mode-scen" role="tab" aria-selected="true" aria-controls="view-scen">Сценарии</button>
     <button id="mode-expl" role="tab" aria-selected="false" aria-controls="view-expl">PnL explain</button>
@@ -479,11 +477,13 @@ input[type=date].dt{border:1px solid var(--line-strong);background:var(--surface
 </main>
 <div id="tip" hidden></div>
 
+<script src="desk-nav.js"></script>
 <script src="echarts.min.js"></script>
 <script src="desk-loader.js"></script>
 <script>
 (function(){
 'use strict';
+DESK.scope.apply();  // фильтр Desk Monitor (юрлицо, деск, портфель, книги…): только его позиции (desk-scope.js)
 const D = window.DESK, U = D.util, P = D.positions, BK = D.BUCKETS;
 const RAT = D.RATING_ORDER, BOOKK = Object.keys(D.BOOKS);
 const posById = {}; P.forEach(p => posById[p.id] = p);

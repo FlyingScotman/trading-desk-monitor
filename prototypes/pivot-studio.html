@@ -67,7 +67,6 @@ svg.i{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-widt
 .brand{display:flex;align-items:center;gap:10px;font-weight:600;font-size:15px;letter-spacing:-.01em;white-space:nowrap}
 .brand-mark{width:22px;height:22px;color:var(--accent)}
 .brand-mark svg{width:22px;height:22px;display:block}
-.test-badge{font-size:11px;font-weight:500;padding:2px 7px;border-radius:3px;background:var(--badge-bg);color:var(--badge-text);border:1px solid var(--badge-line);white-space:nowrap}
 .asof{color:var(--muted);white-space:nowrap}
 .kpis{display:flex;gap:22px;margin-left:auto;align-items:center}
 .kpi{display:flex;flex-direction:column;line-height:1.15}
@@ -254,7 +253,6 @@ table.dt{border-collapse:separate;border-spacing:0;width:100%;font-size:12.5px}
 <div class="app" id="app">
   <header class="top">
     <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 22 22"><rect x="1.5" y="1.5" width="19" height="19" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M1.5 8h19M8 1.5v19" stroke="currentColor" stroke-width="1.5"/><rect x="10" y="10" width="4" height="4" fill="currentColor"/><rect x="15" y="15" width="4" height="4" fill="currentColor" opacity=".45"/><rect x="15" y="10" width="4" height="4" fill="currentColor" opacity=".7"/></svg></span>Risk Pivot Studio</div>
-    <span class="test-badge" title="Все цифры вымышленные">Тестовые данные</span>
     <span class="asof">FI-деск · на <span class="mono" id="asof"></span></span>
     <div class="kpis" id="kpis"></div>
     <button class="theme-btn" id="themeBtn" type="button"></button>
@@ -284,11 +282,13 @@ table.dt{border-collapse:separate;border-spacing:0;width:100%;font-size:12.5px}
 <aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drTitle" aria-hidden="true"></aside>
 <div class="toast" id="toast" role="status" hidden></div>
 
+<script src="desk-nav.js"></script>
 <script src="desk-loader.js"></script>
 <script src="echarts.min.js"></script>
 <script>
 (function(){
 'use strict';
+DESK.scope.apply();  // фильтр Desk Monitor (юрлицо, деск, портфель, книги…): только его позиции (desk-scope.js)
 const D = window.DESK, U = D.util;
 const $ = (s, r) => (r || document).querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
