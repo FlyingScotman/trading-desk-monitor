@@ -1,21 +1,26 @@
 import type { ScenarioDefOut, ScenarioDefinition } from '../api/types';
 import { snum } from '../format';
-import { N_BUCKETS } from '../taylor/taylor';
+import { N_BUCKETS, RUB_CURVES } from '../taylor/taylor';
 
-/** What the user edits: a base definition (from a preset) plus a parallel add-on to the curve. */
+/** What the user edits: a base definition (from a preset) plus a parallel add-on to every RUB curve. */
 export interface EditorState {
   base: ScenarioDefinition;
   add: number;
 }
+
+/** The parallel add-on of a curve: every RUB curve moves with it (all rates), a currency's curve does not. */
+const addOf = (add: number, curve: string) => (RUB_CURVES.includes(curve) ? add : 0);
 
 export const baseCurve = (def: ScenarioDefinition, curve: string): number[] => {
   const v = def.curves?.[curve] ?? 0;
   return Array.isArray(v) ? v : new Array<number>(N_BUCKETS).fill(v);
 };
 
-/** The definition sent to Taylor and to the exact job. */
-export function effective({ base, add }: EditorState, curve: string): ScenarioDefinition {
-  return { ...base, curves: { ...base.curves, [curve]: baseCurve(base, curve).map(x => x + add) } };
+/** The definition sent to Taylor and to the exact job: the add-on on each RUB curve (an all-zero curve drops out). */
+export function effective({ base, add }: EditorState): ScenarioDefinition {
+  const curves = { ...base.curves };
+  for (const c of RUB_CURVES) curves[c] = baseCurve(base, c).map(x => x + add);
+  return { ...base, curves };
 }
 
 interface Props {
@@ -23,7 +28,9 @@ interface Props {
   presetId: string;
   onPreset: (id: string) => void;
   buckets: string[];
+  curves: string[];
   curve: string;
+  onCurve: (curve: string) => void;
   ed: EditorState;
   onChange: (ed: EditorState) => void;
 }
@@ -40,12 +47,12 @@ function Slider({ id, label, min, max, value, onChange, title }: {
   );
 }
 
-export function ScenarioEditor({ presets, presetId, onPreset, buckets, curve, ed, onChange }: Props) {
+export function ScenarioEditor({ presets, presetId, onPreset, buckets, curves, curve, onCurve, ed, onChange }: Props) {
   const { base, add } = ed;
-  const curveNow = baseCurve(base, curve).map(x => x + add);
+  const curveNow = baseCurve(base, curve).map(x => x + addOf(add, curve));
   const setBucket = (i: number, v: number) => {
     const c = baseCurve(base, curve).slice();
-    c[i] = v - add;
+    c[i] = v - addOf(add, curve);
     onChange({ add, base: { ...base, curves: { ...base.curves, [curve]: c } } });
   };
   const setSpreads = (k: '_all', v: number) => onChange({ add, base: { ...base, spreads: { ...base.spreads, [k]: v } } });
@@ -72,10 +79,13 @@ export function ScenarioEditor({ presets, presetId, onPreset, buckets, curve, ed
       </div>
 
       <div className="sect">
-        <div className="ph"><h2>Кривая {curve}</h2><span className="hint">б.п., шаг 5</span></div>
+        <div className="ph"><h2>Кривые</h2><span className="hint">б.п., шаг 5</span></div>
         <div className="pb">
           <Slider id="add" label="Параллельно" min={-500} max={500} value={add} onChange={v => onChange({ base, add: v })}
-            title="Параллельная надбавка ко всем бакетам" />
+            title={`Параллельная надбавка ко всем бакетам рублёвых кривых (${RUB_CURVES.join(', ')})`} />
+          <select className="sel" value={curve} onChange={e => onCurve(e.target.value)} aria-label="Кривая">
+            {curves.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
           <div className="buckets" role="group" aria-label="Шок по бакетам, б.п.">
             {buckets.map((b, i) => (
               <label key={b}>
@@ -86,7 +96,8 @@ export function ScenarioEditor({ presets, presetId, onPreset, buckets, curve, ed
               </label>
             ))}
           </div>
-          <p className="note">Итоговый вектор шока; правка бакета — Enter или уход из поля.</p>
+          <p className="note">Итоговый вектор шока кривой {curve}; каждая кривая сдвигается только своим вектором
+            (флоатер видит базис). Правка бакета — Enter или уход из поля.</p>
         </div>
       </div>
 

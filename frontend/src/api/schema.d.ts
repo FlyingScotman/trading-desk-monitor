@@ -717,7 +717,10 @@ export interface components {
             business_date: string;
             /** Buckets */
             buckets: string[];
-            /** Curves */
+            /**
+             * Curves
+             * @description The curves a scenario may shock: the run's, those of the risk and the RUB curves core reprices (sorted)
+             */
             curves: string[];
             /**
              * Factors
@@ -971,8 +974,9 @@ export interface components {
         /**
          * ScenarioDefinition
          * @description The prototype scenario shape. curves: bp per RISK_BUCKETS pillar (11) or one number for all, per
-         *     published curve ("RUB OFZ"); ofzSpread: OFZ Z-spread to the KBD, bp; fx: % against RUB (+ = weaker
-         *     rouble). Returned normalized: 11-pillar lists, zeros and empty entries left out.
+         *     published curve ("RUB OFZ" the KBD, "RUB RUONIA", "RUB KEY", a currency's "USD"...), each moving only by
+         *     its own vector; ofzSpread: OFZ Z-spread to the KBD, bp; fx: % against RUB (+ = weaker rouble). Returned
+         *     normalized: 11-pillar lists, zeros and empty entries left out.
          */
         ScenarioDefinition: {
             /**

@@ -18,6 +18,7 @@ export function ScenarioLab() {
   const [presets, setPresets] = useState<ScenarioDefOut[]>([]);
   const [presetId, setPresetId] = useState('');
   const [ed, setEd] = useState<EditorState>({ base: { curves: {} }, add: 0 });
+  const [curvePick, setCurvePick] = useState('RUB OFZ');
   const [job, setJob] = useState<ScenarioJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
@@ -55,10 +56,11 @@ export function ScenarioLab() {
     return () => { alive = false; clearTimeout(t); };
   }, [job, pollTick]);
 
-  const curve = payload?.curves[0] ?? 'RUB OFZ';
+  const curves = payload?.curves ?? ['RUB OFZ'];
+  const curve = curves.includes(curvePick) ? curvePick : curves.includes('RUB OFZ') ? 'RUB OFZ' : curves[0];
   const norm = useMemo((): NormDef | string => {
-    try { return normalize(effective(ed, curve), payload?.curves); } catch (e) { return (e as Error).message; }
-  }, [ed, curve, payload]);
+    try { return normalize(effective(ed), payload?.curves); } catch (e) { return (e as Error).message; }
+  }, [ed, payload]);
   const taylor = useMemo(() => (payload && typeof norm !== 'string' ? runTaylor(payload, norm) : null), [payload, norm]);
 
   const stale = useMemo(() => {
@@ -113,7 +115,7 @@ export function ScenarioLab() {
 
       <main className="scen">
         <ScenarioEditor presets={presets} presetId={presetId} onPreset={pickPreset} buckets={payload?.buckets ?? []}
-          curve={curve} ed={ed} onChange={setEd} />
+          curves={curves} curve={curve} onCurve={setCurvePick} ed={ed} onChange={setEd} />
 
         <section className="res">
           {error && <div className="panel err" role="alert">{error}</div>}

@@ -38,8 +38,10 @@ describe('normalize', () => {
     expect(() => normalize({ curves: {}, spreads: { _mult: 0 } })).toThrow();
     expect(() => normalize({ curves: {}, fx: { USD: -100 } })).toThrow();
     expect(() => normalize({ curves: {}, basis: 5 } as never)).toThrow();
-    expect(() => normalize({ curves: { 'RUB KEY': 10 } }, ['RUB OFZ'])).toThrow();
-    expect(normalize({ curves: { 'RUB KEY': 0 } }, ['RUB OFZ'])).toEqual({});
+    expect(() => normalize({ curves: { USD: 10 } }, ['RUB OFZ'])).toThrow();
+    expect(normalize({ curves: { USD: 0 } }, ['RUB OFZ'])).toEqual({});
+    // the RUB curves core reprices are valid for every run (as in Python)
+    expect(normalize({ curves: { 'RUB KEY': 10 } }, ['RUB OFZ'])).toEqual({ curves: { 'RUB KEY': new Array(11).fill(10) } });
     expect(() => normalize({ curves: {}, ofzSpread: true } as never)).toThrow();
   });
 });
