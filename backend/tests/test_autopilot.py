@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import sys
 import time
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -15,10 +15,11 @@ import test_slice_s3
 from fastapi.testclient import TestClient
 from test_slice_s3 import TOKEN
 
-from desk import cli, store
+from desk import autopilot, cli, store
 from desk.api import create_app
-from desk.autopilot import LOCK_FILE, Autopilot, CycleLock
+from desk.autopilot import LOCK_FILE, Autopilot, CycleLock, progress_text
 from desk.inbox import scan
+from desk.marketdata import cache
 from desk.settings import Settings
 
 FIX = Path(__file__).parent / "fixtures"
@@ -42,7 +43,7 @@ def cfg(tmp_path: Path, store_url: str, hub=None, **kw) -> Settings:
         if hub is not None else {}
     return Settings(**hub_kw, home=tmp_path / "home", snapshot_cache=tmp_path / "cache", store_url=store_url,
                     inbox_dirs=(tmp_path / "in",), inbox_archive=tmp_path / "archive", private_adapter_config=CONFIG,
-                    inbox_poll_seconds=0, **kw)
+                    inbox_poll_seconds=0, **{"inbox_lookback_days": 0, **kw})  # fixed fixture dates: no lookback
 
 
 def put(tmp_path: Path, *names: str) -> None:
@@ -104,7 +105,7 @@ def test_hub_down_still_scans_and_runs_on_the_cache(stub, tmp_path, store_url, m
                  "DESK_HUB_URL": f"http://127.0.0.1:{stub.server_address[1]}", "DESK_HUB_TOKEN": TOKEN,
                  "DESK_SNAPSHOT_CACHE": str(tmp_path / "cache"), "DESK_INBOX_DIRS": str(tmp_path / "in"),
                  "DESK_INBOX_ARCHIVE": str(tmp_path / "archive"), "DESK_PRIVATE_ADAPTER_CONFIG": str(CONFIG),
-                 "DESK_INBOX_POLL_SECONDS": "0"}.items():
+                 "DESK_INBOX_POLL_SECONDS": "0", "DESK_INBOX_LOOKBACK_DAYS": "0"}.items():
         monkeypatch.setenv(k, v)
     assert cli.main(["cycle"]) == 1  # desk cycle: the step error is the exit code
     out = capsys.readouterr().out
@@ -225,7 +226,8 @@ def test_settings_switch_and_errors_in_status(tmp_path, store_url):
     st = Autopilot(settings_loader=lambda: Settings(home=tmp_path / "home", store_url="postgresql://127.0.0.1:1/none",
                                                     snapshot_cache=tmp_path / "cache")).run_cycle()
     assert st["state"] == "error" and steps(st)["store"][0] == "error" and steps(st)["sync"][0] == "skipped"
-    assert set(st) == {"enabled", "state", "last_cycle_at", "last_ok_at", "message", "steps", "latest_run"}
+    assert set(st) == {"enabled", "state", "last_cycle_at", "last_ok_at", "message", "steps", "latest_run", "progress"}
+    assert st["progress"] is None  # only while a cycle runs
     assert all(set(x) == STEP_KEYS for x in st["steps"])
     (tmp_path / "drop").mkdir()
     half = Settings(home=tmp_path / "home", store_url=store_url, snapshot_cache=tmp_path / "cache",
@@ -239,7 +241,7 @@ def test_api_status_and_run(tmp_path, store_url):
     c = TestClient(app)
     st = c.get("/api/v1/autopilot/status").json()
     assert st == {"enabled": False, "state": "idle", "last_cycle_at": None, "last_ok_at": None,
-                  "message": "Автопилот не запущен", "steps": [], "latest_run": None}
+                  "message": "Автопилот не запущен", "steps": [], "latest_run": None, "progress": None}
     r = c.post("/api/v1/autopilot/run")
     assert r.status_code == 409 and r.json()["code"] == "invalid_parameter"
 
@@ -268,6 +270,91 @@ def test_api_status_and_run(tmp_path, store_url):
         ap.stop()
     assert not ap.running and c.get("/api/v1/autopilot/status").json()["enabled"] is False
     assert "/api/v1/autopilot/status" in c.get("/openapi.json").json()["paths"]
+
+
+def test_status_shows_live_progress_of_a_running_cycle(tmp_path, store_url, monkeypatch):
+    app = create_app(store_url)
+    c = TestClient(app)
+    seen: list[dict] = []
+
+    def fake_scan(con, settings, *, progress=None, now=None):
+        progress(0, None, "просмотр папок")
+        seen.append(c.get("/api/v1/autopilot/status").json())
+        progress(37, 412, "positions_20261016.csv")
+        seen.append(c.get("/api/v1/autopilot/status").json())
+        return scan.ScanResult("ok fake 1 abc")
+
+    monkeypatch.setattr(scan, "scan", fake_scan)
+    ap = Autopilot(settings_loader=lambda: cfg(tmp_path, store_url), today=lambda: TODAY)
+    app.state.autopilot = ap
+    st = ap.run_cycle()
+    assert seen[0]["state"] == "running" and seen[0]["message"] == "Скан отчётов: просмотрено файлов 0"
+    assert seen[1]["progress"] == {"step": "scan", "done": 37, "total": 412, "detail": "positions_20261016.csv"}
+    assert seen[1]["message"] == "Скан отчётов: 37 из 412" and seen[1]["state"] == "running"
+    assert [x["name"] for x in seen[1]["steps"]] == ["sync"]  # the steps done so far
+    assert st["progress"] is None and st["state"] == "idle"  # cleared when the cycle ends
+    assert c.get("/api/v1/autopilot/status").json()["progress"] is None
+    assert progress_text({"step": "sync", "done": 2, "total": 5, "detail": ""}) == "Загрузка снимков: 2 из 5"
+    assert progress_text({"step": "eod", "done": 1, "total": 3, "detail": "2026-10-16"}) == "EOD 16.10: 1 из 3"
+
+
+def test_hub_sync_stays_within_the_lookback_caps_and_remembers_missing_dates(tmp_path, store_url, monkeypatch):
+    days = []  # the hub's history: every weekday back to 2024
+    d = TODAY
+    while d >= date(2024, 1, 1):
+        if d.weekday() < 5:
+            days.append(d.isoformat())
+        d -= timedelta(days=1)
+    listed, asked, cached = [], [], set()
+
+    def hub_dates(client):
+        for x in days:
+            listed.append(x)
+            yield x
+
+    def sync(client, folder, dates):
+        (x,) = dates
+        asked.append(x)
+        if x == "2026-10-12":
+            return [cache.Synced(x)]  # no snapshot for this date on the hub
+        cached.add(x)
+        return [cache.Synced(x, market_id="m" + x, downloaded=["m" + x])]
+
+    class Client:
+        host = "hub.test"
+
+        def __init__(self, settings):
+            pass
+
+    class Dir:
+        def __init__(self, folder):
+            pass
+
+        def market_dates(self):
+            return sorted(cached)
+
+    monkeypatch.setattr(autopilot, "HubClient", Client)
+    monkeypatch.setattr(autopilot, "SnapshotDir", Dir)
+    monkeypatch.setattr(autopilot.cache, "hub_dates", hub_dates)
+    monkeypatch.setattr(autopilot.cache, "sync", sync)
+    with store.connect(store_url) as con:  # files waiting for a calendar: years old, and of last week
+        for i, rd in enumerate(("2019-05-06", "2023-01-10", "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15")):
+            sha = f"{i:064x}"
+            con.execute("INSERT INTO inbox_file (sha256, path, name, size_bytes, mtime) VALUES (%s, %s, %s, 1, now())",
+                        (sha, f"/in/{i}", f"{i}.csv"))
+            con.execute("INSERT INTO inbox_file_status (sha256, status, adapter_fingerprint, path, report_date)"
+                        " VALUES (%s, 'waiting_calendar', 'fp', %s, %s)", (sha, f"/in/{i}", rd))
+        s = cfg(tmp_path, store_url, hub_url="https://hub.test", hub_token=TOKEN, autopilot_sync_last=2,
+                inbox_lookback_days=10)
+        ap = Autopilot(settings_loader=lambda: s, today=lambda: TODAY)
+        detail = ap._hub_sync(s, con, [])
+        assert asked == ["2026-10-19", "2026-10-16", "2026-10-15", "2026-10-14", "2026-10-13"], asked  # 2 + 3
+        assert "1 next cycle" in detail and len(listed) < 20  # the hub's list read only down to the lookback
+        detail = ap._hub_sync(s, con, [])
+        assert asked[5:] == ["2026-10-12"] and "no snapshot for 2026-10-12" in detail
+        ap._hub_sync(s, con, [])
+        assert len(asked) == 6  # the missing date is remembered, the others are cached
+    assert min(asked) >= "2026-10-09"  # never a date behind the lookback (today - 10 days)
 
 
 HOLDER = """

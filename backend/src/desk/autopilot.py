@@ -6,7 +6,10 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
 1. **sync**: from the hub (when its address and token are set) the ``autopilot_sync_last`` latest business dates,
    each business date with positions in the last ``WINDOW_DAYS`` (and the latest one before) with the hub date
    before it (flash PnL), and for each inbox file waiting for a calendar the newest hub date on or before its
-   report date; dates already cached are skipped, but rechecked once per ``RECHECK_S`` (a hub correction). The
+   report date; dates already cached are skipped, but rechecked once per ``RECHECK_S`` (a hub correction). Never
+   a date older than the inbox lookback (``inbox_lookback_days``, less ``PREV_MARGIN_DAYS`` for the date before
+   the first one; ``desk cycle --date`` apart), at most ``autopilot_sync_last + SYNC_EXTRA`` dates per cycle (the
+   rest next cycle), and a date the hub has no snapshot for is not asked again for ``MISSING_TTL_S``. The
    snapshot drop folder, when set, is imported too. A hub error is the step's error: the cycle goes on with the
    cache.
 2. **scan**: ``desk inbox scan`` (when inbox folders are set). Sync comes first: a ``start_of_day`` report needs a
@@ -17,7 +20,9 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    book), another market snapshot (a correction) or another previous snapshot (the flash PnL); the latest positions
    date also when its default run was made by another ``desk.logic_version()`` (an upgrade: older dates are not
    recomputed, to keep it cheap). Oldest first. A date that failed is not retried until its inputs change.
-4. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``).
+4. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
+   ``progress`` ({"step": "sync"|"scan"|"eod", "done": int, "total": int|null, "detail": str}) follow it live:
+   hub dates fetched of those to fetch, report files done of those offered, EOD dates run of those to run.
 
 Settings are read again at the start of every cycle (``desk.settings.load``), so edits apply without a restart.
 Errors are caught per step, logged (``desk.autopilot`` and ``<home>/logs/autopilot.log``) and shown in the status;
@@ -55,6 +60,9 @@ WINDOW_DAYS = 14        # calendar days back from today that the EOD runs are ke
 MAX_EOD_DATES = 10
 RECHECK_S = 3600.0      # cached dates are asked of the hub again this often (corrections)
 MAX_HUB_DATES = 400     # how far back the hub's date list is read at most
+SYNC_EXTRA = 3          # hub dates per cycle beyond autopilot_sync_last; the rest wait for the next cycle
+MISSING_TTL_S = 6 * 3600.0  # a date the hub has no snapshot for is not asked again for this long (per process)
+PREV_MARGIN_DAYS = 7    # below the lookback: the hub date before its first day (flash PnL, a start-of-day calendar)
 MIN_SLEEP_S = 1.0
 LOCK_FILE = "cycle.lock"
 
@@ -130,7 +138,20 @@ class CycleLock:
 
 def idle_status(enabled: bool = False, message: str = "Автопилот не запущен") -> dict[str, Any]:
     return {"enabled": enabled, "state": "idle", "last_cycle_at": None, "last_ok_at": None, "message": message,
-            "steps": [], "latest_run": None}
+            "steps": [], "latest_run": None, "progress": None}
+
+
+def progress_text(p: dict[str, Any]) -> str:
+    """The status line of a running step (the Desk Monitor badge says the same)."""
+    done, total, detail = p["done"], p["total"], p.get("detail") or ""
+    if p["step"] == "scan":
+        return f"Скан отчётов: {done} из {total}" if total is not None else f"Скан отчётов: просмотрено файлов {done}"
+    if p["step"] == "sync":
+        return f"Загрузка снимков: {done} из {total}" if total is not None else "Загрузка снимков: список дат"
+    if p["step"] == "eod":
+        day = f" {detail[8:10]}.{detail[5:7]}" if len(detail) == 10 else ""
+        return f"EOD{day}: {done} из {total}"
+    return f"{p['step']}: {done}" + (f" из {total}" if total is not None else "")
 
 
 class Autopilot:
@@ -147,7 +168,8 @@ class Autopilot:
         self._wake, self._stop = threading.Event(), threading.Event()
         self._thread: threading.Thread | None = None
         self._failed: dict[str, tuple] = {}
-        self._rechecked = float("-inf")
+        self._checked: dict[str, float] = {}   # hub date -> monotonic time it was last asked of the hub
+        self._missing: dict[str, float] = {}   # hub date -> monotonic time the hub had no snapshot for it
         self._interval = 60.0
         self._on = True
         self._log_handler: RotatingFileHandler | None = None
@@ -188,6 +210,8 @@ class Autopilot:
     def status(self) -> dict[str, Any]:
         with self._lock:
             st = {**self._status, "steps": [dict(s) for s in self._status["steps"]]}
+            if st.get("progress") is not None:
+                st["progress"] = dict(st["progress"])
         st["enabled"] = self.running and (self.force or self._on)
         return st
 
@@ -198,7 +222,7 @@ class Autopilot:
         besides the automatic ones (``desk cycle --date``); ``hub=False`` skips the hub (the drop is imported)."""
         with self._cycle:
             started = datetime.now(UTC)
-            self._update(state="running", message="Цикл выполняется", steps=[])
+            self._update(state="running", message="Цикл выполняется", steps=[], progress=None)
             steps: list[dict[str, Any]] = []
             try:
                 settings = self._load()
@@ -210,7 +234,8 @@ class Autopilot:
             self._setup_log(settings)
             if not (self.force or self._on):
                 with self._lock:
-                    self._status.update(state="idle", message="Автопилот выключен в настройках", steps=[])
+                    self._status.update(state="idle", message="Автопилот выключен в настройках", steps=[],
+                                        progress=None)
                 return self.status()
             lock = CycleLock(settings.home)
             try:
@@ -221,7 +246,7 @@ class Autopilot:
             if not held:
                 steps.append(self._step("cycle", "skipped", "another cycle running"))
                 self._update(state="idle", last_cycle_at=_iso(started), latest_run=self._latest(settings),
-                             message="Пропущено: выполняется другой цикл (desk cycle или desk serve)")
+                             message="Пропущено: выполняется другой цикл (desk cycle или desk serve)", progress=None)
                 return self.status()
             try:
                 return self._locked_cycle(settings, started, steps, extra_dates, hub)
@@ -280,7 +305,7 @@ class Autopilot:
         else:
             msg = "Данные актуальны"
         upd: dict[str, Any] = {"state": "error" if errors else "idle", "last_cycle_at": _iso(started),
-                               "message": msg, "steps": steps}
+                               "message": msg, "steps": steps, "progress": None}
         if not errors:
             upd["last_ok_at"] = _iso(started)
         self._update(**upd)
@@ -290,6 +315,11 @@ class Autopilot:
     def _update(self, **kw: Any) -> None:
         with self._lock:
             self._status.update(kw)
+
+    def _progress(self, step: str, done: int, total: int | None, detail: str = "") -> None:
+        """The live ``progress`` of the running step and its ``message``."""
+        p = {"step": step, "done": int(done), "total": None if total is None else int(total), "detail": detail}
+        self._update(progress=p, message=progress_text(p))
 
     def _step(self, name: str, status: str, detail: str) -> dict[str, Any]:
         s = {"name": name, "status": status, "detail": detail, "at": _iso(datetime.now(UTC))}
@@ -359,43 +389,74 @@ class Autopilot:
         client = HubClient(settings)  # raises HubError without a token on the first request
         n = int(getattr(settings, "autopilot_sync_last", 5) or 0)
         today = self._today()
-        pos, cover = list(extra), []
+        lookback = int(getattr(settings, "inbox_lookback_days", 0) or 0)
+        cutoff = (today - timedelta(days=min(lookback, 36500))).isoformat() if lookback > 0 else None
+        oldest = (date.fromisoformat(cutoff) - timedelta(days=PREV_MARGIN_DAYS)).isoformat() if cutoff else ""
+        pos, cover = [], []
         if con is not None:
             pos += [d.isoformat() for d in store.position_dates(con, today - timedelta(days=WINDOW_DAYS))]
             cover = [d.isoformat() for (d,) in con.execute(
                 "SELECT DISTINCT report_date FROM (SELECT DISTINCT ON (sha256) status, report_date"
                 " FROM inbox_file_status ORDER BY sha256, status_id DESC) s"
                 " WHERE status = 'waiting_calendar' AND report_date IS NOT NULL")]
-        floor = min(pos + cover, default=None)
+        pos = [d for d in pos if cutoff is None or d >= cutoff]  # never older than the lookback
+        cover = [d for d in cover if cutoff is None or d >= cutoff]
+        floor = min(pos + cover + extra, default=None)
+        self._progress("sync", 0, None, "список дат хаба")
         hub_dates: list[str] = []  # newest first
         for d in cache.hub_dates(client):
+            if len(hub_dates) >= n and d < oldest:
+                break
             hub_dates.append(d)
             if (len(hub_dates) >= n and (floor is None or d < floor)) or len(hub_dates) >= MAX_HUB_DATES:
                 break
         wanted = set(hub_dates[:n])
-        for d in pos:  # the date and the hub date before it (flash PnL)
+        for d in pos + extra:  # the date and the hub date before it (flash PnL)
             wanted.add(d)
             wanted.add(next((x for x in hub_dates if x < d), d))
         for r in cover:  # a cached calendar covering the report date (an older snapshot when none is earlier)
             wanted.add(next((x for x in hub_dates if x <= r), hub_dates[-1] if hub_dates else r))
         wanted &= set(hub_dates)
-        recheck = time.monotonic() - self._rechecked >= RECHECK_S
+        wanted = {d for d in wanted if d >= oldest or d in extra}
+        now = time.monotonic()
+        for d in [d for d, t in self._missing.items() if now - t >= MISSING_TTL_S]:
+            del self._missing[d]
         cached = set(SnapshotDir(Path(settings.snapshot_cache)).market_dates())
-        todo = sorted(d for d in wanted if recheck or d not in cached)
-        rows = cache.sync(client, Path(settings.snapshot_cache), todo)
-        if recheck:
-            self._rechecked = time.monotonic()
-        pulled = [s.business_date for s in rows if s.downloaded]
+        due = [d for d in wanted if d not in self._missing
+               and (d not in cached or now - self._checked.get(d, float("-inf")) >= RECHECK_S)]
+        due.sort(reverse=True)  # newest first, then those not cached yet and those asked for (stable sort)
+        due.sort(key=lambda d: (d in cached, d not in extra))
+        limit = max(n, 1) + SYNC_EXTRA
+        todo, later = due[:limit], len(due) - min(len(due), limit)
+        pulled, missing = [], []
+        for i, d in enumerate(todo):
+            self._progress("sync", i, len(todo), d)
+            try:
+                rows = cache.sync(client, Path(settings.snapshot_cache), [d])
+            except HubError as e:
+                if e.status != 404:
+                    raise
+                rows = []
+            self._checked[d] = time.monotonic()
+            if not rows or not rows[0].market_id:  # no snapshot for this date on the hub: not asked again soon
+                self._missing[d] = time.monotonic()
+                missing.append(d)
+                continue
+            pulled += [rows[0].business_date] if rows[0].downloaded else []
+        if todo:
+            self._progress("sync", len(todo), len(todo), "")
         latest = hub_dates[0] if hub_dates else "none"
         return (f"hub {client.host}: latest {latest}; " + (f"pulled {', '.join(pulled)}" if pulled else "up to date")
-                + f" ({len(wanted)} dates wanted, {len(todo)} asked)")
+                + (f"; no snapshot for {', '.join(missing)}" if missing else "")
+                + f" ({len(wanted)} dates wanted, {len(todo)} asked"
+                + (f", {later} next cycle" if later else "") + ")")
 
     def _scan(self, settings: Settings, con: psycopg.Connection) -> tuple[str, str]:
         from .inbox import scan
 
         if not settings.inbox_dirs:
             return "skipped", "no inbox folders (inbox_dirs)"
-        res = scan.scan(con, settings)
+        res = scan.scan(con, settings, progress=lambda done, total, detail: self._progress("scan", done, total, detail))
         detail = "; ".join(res.text().splitlines())
         if res.busy:
             return "skipped", detail
@@ -421,6 +482,7 @@ class Autopilot:
         runs = store.default_runs(con, date.fromisoformat(dates[0]))
         logic = logic_version()
         done, failed, notes = [], [], []
+        todo: list[tuple[str, str, tuple]] = []
         for d in dates:
             ids, n = store.current_sets(con, date.fromisoformat(d))
             if not n:
@@ -439,6 +501,9 @@ class Autopilot:
             if self._failed.get(d) == sig:
                 notes.append(f"{d} failed before on the same inputs, not retried")
                 continue
+            todo.append((d, why, sig))
+        for i, (d, why, sig) in enumerate(todo):
+            self._progress("eod", i + 1, len(todo), d)
             self._emit(f"eod {d}: {why}")
             log.info("autopilot: eod %s (%s)", d, why)
             try:

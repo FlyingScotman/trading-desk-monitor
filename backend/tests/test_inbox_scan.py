@@ -4,6 +4,7 @@ inbox revisions, books, broken adapters, the CLI and an EOD run on inbox positio
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -41,7 +42,8 @@ def con(store_url):
 
 def cfg(tmp_path: Path, inbox: Path, adapter: str | None = None, config: Path | None = CONFIG, **kw) -> Settings:
     return Settings(snapshot_cache=SNAPS, inbox_dirs=(inbox,), inbox_archive=tmp_path / "archive",
-                    private_adapter=adapter, private_adapter_config=config, **{"inbox_poll_seconds": 0, **kw})
+                    private_adapter=adapter, private_adapter_config=config,
+                    **{"inbox_poll_seconds": 0, "inbox_lookback_days": 0, **kw})  # fixed fixture dates: no lookback
 
 
 def put(inbox: Path, *names: str, src: Path = PRIV) -> None:
@@ -241,6 +243,105 @@ def test_waiting_calendar_is_retried(con, tmp_path):
     assert con.execute("SELECT count(*) FROM inbox_file_status").fetchone()[0] == 1
 
 
+def _counting(monkeypatch) -> dict[str, list[str]]:
+    """Count the files hashed and read by the scanner."""
+    calls: dict[str, list[str]] = {"hash": [], "read": []}
+    sha, read = scan._sha256, scan.runner.call_read
+
+    def counted_sha(path):
+        calls["hash"].append(Path(path).name)
+        return sha(path)
+
+    def counted_read(h, path, *a, **kw):
+        calls["read"].append(Path(path).name)
+        return read(h, path, *a, **kw)
+
+    monkeypatch.setattr(scan, "_sha256", counted_sha)
+    monkeypatch.setattr(scan.runner, "call_read", counted_read)
+    return calls
+
+
+def test_lookback_skips_old_files_unhashed_and_ignores_old_report_dates_once(con, tmp_path, monkeypatch):
+    inbox = tmp_path / "in"
+    now = datetime(2026, 10, 27, 9, tzinfo=UTC)  # lookback 10 days: report dates from 2026-10-17 on
+    put(inbox, "positions_20261014.csv", "positions_20261015.csv", "positions_20261017.csv", "README.md")
+    years = []
+    for y in range(2015, 2025):  # years of daily reports: modified long ago
+        f = inbox / "archive" / f"positions_{y}0110.csv"
+        f.parent.mkdir(exist_ok=True)
+        shutil.copy(PRIV / "positions_20261014.csv", f)
+        t = datetime(y, 1, 10, 20, tzinfo=UTC).timestamp()
+        os.utime(f, (t, t))
+        years.append(f.name)
+    fresh = datetime(2026, 10, 26, 8, tzinfo=UTC).timestamp()  # copied recently, whatever their report date
+    for n in ("positions_20261014.csv", "positions_20261015.csv", "positions_20261017.csv", "README.md"):
+        os.utime(inbox / n, (fresh, fresh))
+    s = cfg(tmp_path, Path(f"{inbox}/**"), inbox_lookback_days=10)
+    calls = _counting(monkeypatch)
+    r = scan.scan(con, s, now=now)
+    assert r.skipped == {"too_old": len(years)}, r.text()
+    assert not set(calls["hash"]) & set(years)  # a stat only: never hashed, matched or read
+    assert r.files == {"ignored_too_old": 2, "accepted": 1, "ignored": 1}, r.text()
+    assert calls["read"] == ["positions_20261017.csv"]
+    rows = dict(con.execute("SELECT report_date, archive_path FROM inbox_file_status"
+                            " WHERE status = 'ignored_too_old'").fetchall())
+    assert set(rows) == {D("2026-10-14"), D("2026-10-15")} and set(rows.values()) == {None}  # not archived
+    assert not con.execute("SELECT 1 FROM event WHERE type LIKE '%too_old%'").fetchone()  # no event flood
+
+    calls["hash"].clear()
+    r = scan.scan(con, s, now=now)  # the second scan: nothing again, nothing hashed
+    assert r.files == {} and calls == {"hash": [], "read": ["positions_20261017.csv"]}, r.text()
+    scan._handles.clear()  # a new process (an adapter update reloads the same way): still too old, still quiet
+    assert scan.scan(con, s, now=now + timedelta(days=1)).files == {}
+    assert calls["read"] == ["positions_20261017.csv"]
+
+    r = scan.scan(con, cfg(tmp_path, Path(f"{inbox}/**"), inbox_lookback_days=30), now=now)  # a longer lookback
+    assert calls["read"][1:] and set(calls["read"][1:]) == {"positions_20261014.csv", "positions_20261015.csv"}
+    assert r.files.get("ignored_too_old", 0) == 0 and r.skipped == {"too_old": len(years)}, r.text()
+
+
+def test_waiting_calendar_behind_the_lookback_becomes_terminal(con, tmp_path):
+    inbox = tmp_path / "in"
+    inbox.mkdir()
+    shutil.copy(PRIV / "positions_20261014.csv", inbox / "positions_20280110.csv")  # beyond the calendar
+    s = cfg(tmp_path, inbox, inbox_lookback_days=10)
+    assert scan.scan(con, s).files == {"waiting_calendar": 1}
+    later = datetime(2028, 3, 1, 9, tzinfo=UTC)  # the report date is now behind the lookback
+    assert scan.scan(con, s, now=later).files == {"ignored_too_old": 1}
+    assert scan.scan(con, s, now=later).files == {}  # terminal: not offered again
+    assert con.execute("SELECT status, report_date, archive_path IS NOT NULL FROM inbox_file_status"
+                       " ORDER BY status_id DESC LIMIT 1").fetchone() == ("ignored_too_old", D("2028-01-10"), True)
+    assert scan.retry(con, s).files == {}  # not a retry status either
+
+
+def test_interrupted_scan_resumes_without_redoing_finished_files(con, tmp_path, monkeypatch):
+    inbox = tmp_path / "in"
+    put(inbox, "positions_20261015.csv", "positions_20261016.csv", "positions_20261017.csv")
+    s = cfg(tmp_path, inbox)
+    calls = _counting(monkeypatch)
+    read = scan.runner.call_read  # the counting one
+
+    def stop_on_second(h, path, *a, **kw):
+        if len(calls["read"]) == 1:
+            raise KeyboardInterrupt  # stop.bat in the middle of the second read
+        return read(h, path, *a, **kw)
+
+    monkeypatch.setattr(scan.runner, "call_read", stop_on_second)
+    seen: list[tuple] = []
+    with pytest.raises(KeyboardInterrupt):
+        scan.scan(con, s, progress=lambda done, total, detail: seen.append((done, total)))
+    assert seen[0] == (0, None) and (0, 3) in seen and (1, 3) in seen  # listing, then files done of offered
+    assert con.execute("SELECT count(*) FROM inbox_file_status").fetchone()[0] == 1  # the second rolled back
+    assert con.execute("SELECT pg_try_advisory_lock(%s)", (scan.SCAN_LOCK,)).fetchone()[0]  # lock released
+    con.execute("SELECT pg_advisory_unlock(%s)", (scan.SCAN_LOCK,))
+    done = calls["read"][0]
+    monkeypatch.setattr(scan.runner, "call_read", read)
+    r = scan.scan(con, s)  # resumes: the finished file is not read again
+    assert calls["read"][0] == done and sorted(calls["read"][1:]) == sorted(
+        {"positions_20261015.csv", "positions_20261016.csv", "positions_20261017.csv"} - {done}), calls
+    assert sum(r.files.values()) == 2, r.text()
+
+
 def test_end_to_end_scan_then_eod(store_url, tmp_path, monkeypatch, capsys):
     inbox = tmp_path / "in"
     inbox.mkdir()
@@ -250,7 +351,7 @@ def test_end_to_end_scan_then_eod(store_url, tmp_path, monkeypatch, capsys):
     for k, v in {"DESK_ENV_FILE": str(tmp_path / "none.env"), "DESK_STORE_URL": store_url,
                  "DESK_INBOX_DIRS": f"{inbox};{tmp_path / 'missing'}", "DESK_INBOX_ARCHIVE": str(tmp_path / "arch"),
                  "DESK_SNAPSHOT_CACHE": str(SNAPS), "DESK_PRIVATE_ADAPTER_CONFIG": str(CONFIG),
-                 "DESK_INBOX_POLL_SECONDS": "0"}.items():
+                 "DESK_INBOX_POLL_SECONDS": "0", "DESK_INBOX_LOOKBACK_DAYS": "0"}.items():
         monkeypatch.setenv(k, v)
     assert cli.main(["inbox", "scan"]) == 0
     assert cli.main(["eod", "--date", "2026-10-15", "--snapshots", str(SNAPS)]) == 0

@@ -46,6 +46,10 @@ layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub
                            the largest file offered (500)
 * ``DESK_AUTOPILOT``, ``DESK_AUTOPILOT_SYNC_LAST``  the ``desk serve`` autopilot (on) and the number of
                            latest hub dates it keeps in sync (5)
+* ``DESK_INBOX_LOOKBACK_DAYS``  the inbox scan and the autopilot's hub sync take report files (by modification
+                           time, then by the report date ``match`` gives) and hub dates at most this many days old
+                           (10; 0: no limit); a folder holding years of reports is not read. A backfill of older
+                           dates (S8) gets its own explicit date range.
 
 Relative paths resolve against the repository (install) root, those of ``settings.json`` against
 ``<home>``. The proxy comes from the standard ``HTTPS_PROXY`` / ``NO_PROXY`` variables; ``settings.json``
@@ -90,6 +94,7 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "inbox_poll_seconds": ("DESK_INBOX_POLL_SECONDS", "num"),
     "autopilot": ("DESK_AUTOPILOT", "bool"),
     "autopilot_sync_last": ("DESK_AUTOPILOT_SYNC_LAST", "int"),
+    "inbox_lookback_days": ("DESK_INBOX_LOOKBACK_DAYS", "int0"),
 }
 PROXY_KEYS = {"https_proxy": "HTTPS_PROXY", "no_proxy": "NO_PROXY"}
 READ_ONLY_KEYS = ("hub_token", "hub_token_set", "proxy_password", "proxy_password_set", "home", "effective",
@@ -152,6 +157,7 @@ class Settings:
     home: Path = None  # type: ignore[assignment]  # None: desk_home()
     autopilot: bool = True
     autopilot_sync_last: int = 5
+    inbox_lookback_days: int = 10  # the inbox takes report files at most this many days old; 0: no limit
     private_adapter_default: bool = False  # private_adapter came from DESK_DEFAULT_PRIVATE_ADAPTER
 
     def __post_init__(self) -> None:
@@ -211,6 +217,7 @@ class Settings:
             ("inbox_max_file_mb", f"{self.inbox_max_file_mb:g}"),
             ("autopilot", "on" if self.autopilot else "off"),
             ("autopilot_sync_last", str(self.autopilot_sync_last)),
+            ("inbox_lookback_days", str(self.inbox_lookback_days) if self.inbox_lookback_days else "0 (no limit)"),
         ]
 
 
@@ -290,6 +297,8 @@ def check_settings_doc(doc: object) -> list[str]:
             errors.append(f"{key}: must be a positive number")
         elif kind == "int" and not (number and v == int(v) and v >= 1):
             errors.append(f"{key}: must be a whole number >= 1")
+        elif kind == "int0" and not (number and v == int(v) and v >= 0):
+            errors.append(f"{key}: must be a whole number >= 0")
         elif kind == "bool" and not isinstance(v, bool):
             errors.append(f"{key}: must be true or false")
         elif kind == "dirs":
@@ -317,7 +326,7 @@ def _json_layer(doc: dict[str, Any], home: Path) -> dict[str, str]:
             out[var] = str(_path(v.strip(), home))
         elif kind == "bool":
             out[var] = "1" if v else "0"
-        elif kind == "int":
+        elif kind in ("int", "int0"):
             out[var] = str(int(v))
         else:
             out[var] = v.strip() if isinstance(v, str) else repr(v)
@@ -427,13 +436,14 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
             raise SettingsError(f"{key}: expected 1/0, true/false, yes/no or on/off, not {v!r}")
         return v in _TRUE if v else default
 
-    def count(key: str, default: int) -> int:
+    def count(key: str, default: int, least: int = 1) -> int:
+        v = env.get(key)  # "0" is a value here (no limit), not unset
         try:
-            n = int(get(key) or default)
+            n = int(v) if v not in (None, "") else default
         except ValueError as e:
             raise SettingsError(f"{key}: {e}") from None
-        if n < 1:
-            raise SettingsError(f"{key}: must be >= 1")
+        if n < least:
+            raise SettingsError(f"{key}: must be >= {least}")
         return n
 
     def dirs(value: str | None) -> tuple[Path, ...]:
@@ -480,6 +490,7 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         home=home,
         autopilot=flag("DESK_AUTOPILOT", defaults.autopilot),
         autopilot_sync_last=count("DESK_AUTOPILOT_SYNC_LAST", defaults.autopilot_sync_last),
+        inbox_lookback_days=count("DESK_INBOX_LOOKBACK_DAYS", defaults.inbox_lookback_days, 0),
         private_adapter_default=adapter_default,
     )
 

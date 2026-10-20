@@ -325,6 +325,20 @@ export interface components {
             /** Rows */
             rows: components["schemas"]["AggregateRow"][];
         };
+        /** AutopilotProgress */
+        AutopilotProgress: {
+            /**
+             * Step
+             * @enum {string}
+             */
+            step: "sync" | "scan" | "eod";
+            /** Done */
+            done: number;
+            /** Total */
+            total: number | null;
+            /** Detail */
+            detail: string;
+        };
         /** AutopilotRun */
         AutopilotRun: {
             /** Run Id */
@@ -352,6 +366,7 @@ export interface components {
             /** Steps */
             steps: components["schemas"]["AutopilotStep"][];
             latest_run: components["schemas"]["AutopilotRun"] | null;
+            progress?: components["schemas"]["AutopilotProgress"] | null;
         };
         /** AutopilotStep */
         AutopilotStep: {

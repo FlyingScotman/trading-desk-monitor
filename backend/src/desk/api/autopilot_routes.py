@@ -30,6 +30,13 @@ class AutopilotRun(BaseModel):
     created_at: str | None
 
 
+class AutopilotProgress(BaseModel):
+    step: Literal["sync", "scan", "eod"]
+    done: int
+    total: int | None
+    detail: str
+
+
 class AutopilotStatus(BaseModel):
     enabled: bool
     state: Literal["idle", "running", "error"]
@@ -38,6 +45,7 @@ class AutopilotStatus(BaseModel):
     message: str
     steps: list[AutopilotStep]
     latest_run: AutopilotRun | None
+    progress: AutopilotProgress | None = None  # while a cycle runs: its step, done of total, detail
 
 
 class Queued(BaseModel):

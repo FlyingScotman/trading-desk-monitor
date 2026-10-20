@@ -101,7 +101,8 @@ def _effective(st: Settings) -> dict[str, Any]:
         "private_adapter_sha256": st.private_adapter_sha256,
         "inbox_dirs": [str(d) for d in st.inbox_dirs], "inbox_archive": str(st.inbox_archive),
         "inbox_poll_seconds": st.inbox_poll_seconds, "autopilot": st.autopilot,
-        "autopilot_sync_last": st.autopilot_sync_last, "logs_dir": str(st.logs_dir),
+        "autopilot_sync_last": st.autopilot_sync_last, "inbox_lookback_days": st.inbox_lookback_days,
+        "logs_dir": str(st.logs_dir),
     }
 
 

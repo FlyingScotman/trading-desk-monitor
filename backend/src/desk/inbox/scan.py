@@ -22,6 +22,17 @@ with the size and time already taken in is not hashed again. Then, per file:
   new position set unless its ``unit_hash`` equals the current revision's;
 * the file: ``accepted``, ``partially_accepted``, ``rejected`` or ``superseded`` (all its units).
 
+The lookback (``inbox_lookback_days``, ``scan`` only; ``retry`` and ``replay`` are explicit and take any date): a
+file modified before ``today - lookback`` is not even hashed (``skipped: too_old``, a stat only); a file whose
+report date (from ``match``) is older is ledgered once as ``ignored_too_old`` (terminal, not an error, no event)
+and never archived or read; a file ``waiting_calendar`` whose report date falls behind gets that status too, so it
+stops driving hub syncs. None of them is offered again while still too old, fingerprint change or not; after the
+lookback grows they are. A backfill of older dates (S8) will take its own explicit date range.
+
+Files are hashed, matched and processed ``MATCH_BATCH`` at a time, each file in its own transaction: an
+interrupted scan (``stop.bat``, a crash) keeps every file done so far (its sighting), and the next scan goes on
+with the rest. ``progress(done, total, detail)`` is called as it goes (the autopilot status).
+
 Every status change is a new ``inbox_file_status`` row and an event. When the adapter fingerprint differs from
 the one that set it, a file in ``ignored``, ``match_failed``, ``failed``, ``timed_out`` or ``rejected`` is offered
 again (from the archive when its path is gone). Logs and results carry codes, counts and row numbers, never
@@ -37,7 +48,7 @@ import shutil
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -58,12 +69,22 @@ log = logging.getLogger(__name__)
 
 SCAN_LOCK = 0x6465736C  # one scan at a time; the store migrator holds 0x6465736B
 REOFFER = ("ignored", "match_failed", "failed", "timed_out", "rejected")
+TOO_OLD = "ignored_too_old"
+QUIET = (TOO_OLD,)  # statuses without an event (thousands of old files would flood the event log)
 READ_DONE = ("accepted", "partially_accepted", "superseded")
 MATCH_BATCH = 50
 EVENTS = {"stale_copy": "input.stale", "timed_out": "input.failed"}
 
 _handles: dict[tuple, AdapterHandle] = {}
 _last_seen: dict[str, tuple[int, int]] = {}  # path -> (size, mtime_ns) at this process's previous scan
+LIST_TICK = 500  # progress while listing the folders, every this many files
+Progress = Callable[[int, int | None, str], None]
+
+
+def lookback_cutoff(settings: Settings, today: date) -> date | None:
+    """The oldest report date (and file modification date) the inbox scan takes; None: no limit."""
+    days = int(getattr(settings, "inbox_lookback_days", 0) or 0)
+    return today - timedelta(days=min(days, 36500)) if days > 0 else None
 
 
 def adapter(settings: Settings) -> AdapterHandle:
@@ -94,7 +115,7 @@ class ScanResult:
     busy: bool = False
     files: Counter = field(default_factory=Counter)     # status of each file processed
     copies: Counter = field(default_factory=Counter)    # duplicate, stale_copy
-    skipped: Counter = field(default_factory=Counter)   # waiting (not stable yet), too_large, gone
+    skipped: Counter = field(default_factory=Counter)   # waiting (not stable yet), too_large, too_old, gone, unreadable
     units: Counter = field(default_factory=Counter)
     revisions: int = 0
     books_revised: int = 0
@@ -119,7 +140,7 @@ class ScanResult:
 
 @dataclass(frozen=True)
 class Offer:
-    sha256: str
+    sha256: str        # "" for a new file: hashed when its batch comes up
     path: str          # what match and read get: the inbox path, or the archive copy
     name: str          # the file name as delivered
     size: int
@@ -148,8 +169,9 @@ def _key(report_date: date, report_ts: datetime | None, seq: int | None, generat
 
 class _Scan:
     def __init__(self, con: psycopg.Connection, settings: Settings, h: AdapterHandle, res: ScanResult,
-                 now: datetime) -> None:
+                 now: datetime, cutoff: date | None = None, progress: Progress | None = None) -> None:
         self.con, self.settings, self.h, self.res, self.now = con, settings, h, res, now
+        self.cutoff, self._progress = cutoff, progress
         self.cache = settings.snapshot_cache
         self.archive = Path(settings.inbox_archive)
         self.archive.mkdir(parents=True, exist_ok=True)
@@ -157,6 +179,19 @@ class _Scan:
         build_index(self.cache, self.index)
         self.calendars: dict[str, Any] = {}
         self.books = self._books()
+        self._indexed: set[str] = set()   # report dates the instruments index covers beyond the newest snapshot
+
+    def progress(self, done: int, total: int | None, detail: str) -> None:
+        if self._progress is not None:
+            try:
+                self._progress(done, total, detail)
+            except Exception:
+                log.debug("inbox: progress callback failed", exc_info=True)
+
+    def too_old(self, report_date: str | date | None) -> bool:
+        if self.cutoff is None or report_date is None:
+            return False
+        return (report_date if isinstance(report_date, str) else report_date.isoformat()) < self.cutoff.isoformat()
 
     # ---- books and calendar
 
@@ -197,11 +232,20 @@ class _Scan:
     # ---- what is offered
 
     def new_files(self) -> list[Offer]:
+        """New stable files, not hashed yet (``run`` hashes them batch by batch). Files modified before the
+        lookback are skipped on their ``stat`` alone."""
         out, limit = [], self.settings.inbox_max_file_mb * 2**20
-        for p in list_files([str(d) for d in self.settings.inbox_dirs]):
+        oldest = datetime.combine(self.cutoff, datetime.min.time(), MSK).timestamp() if self.cutoff else None
+        self.progress(0, None, "просмотр папок")
+        for n, p in enumerate(list_files([str(d) for d in self.settings.inbox_dirs]), 1):
+            if n % LIST_TICK == 0:
+                self.progress(n, None, "просмотр папок")
             try:
                 st = os.stat(p)
             except OSError:
+                continue
+            if oldest is not None and st.st_mtime < oldest:
+                self.res.skipped["too_old"] += 1
                 continue
             if st.st_size > limit:
                 self.res.skipped["too_large"] += 1
@@ -216,20 +260,23 @@ class _Scan:
             if self.con.execute("SELECT 1 FROM inbox_sighting WHERE path = %s AND size_bytes = %s AND mtime = %s",
                                 (p, st.st_size, mtime)).fetchone():
                 continue
-            out.append(Offer(_sha256(p), p, os.path.basename(p), st.st_size, mtime, True))
+            out.append(Offer("", p, os.path.basename(p), st.st_size, mtime, True))
         return out
 
     def known(self, want: Callable[[str, str], bool], source: str | None = None,
-              between: tuple[date, date] | None = None) -> list[Offer]:
+              between: tuple[date, date] | None = None, *, fresh: bool = False) -> list[Offer]:
         """Files whose current status and adapter fingerprint pass ``want``: from the archive, else from the
-        path they were read at when it still holds the same content."""
+        path they were read at when it still holds the same content. ``fresh``: only those within the lookback
+        (by report date, else by modification time)."""
         out = []
-        for sha, status, fp, path, arch, src, vd, name, size, mtime in self.con.execute(
+        for sha, status, fp, path, arch, src, vd, rd, name, size, mtime in self.con.execute(
                 "SELECT DISTINCT ON (s.sha256) s.sha256, s.status, s.adapter_fingerprint, s.path, s.archive_path,"
-                " s.source, s.valid_date, f.name, f.size_bytes, f.mtime FROM inbox_file_status s"
+                " s.source, s.valid_date, s.report_date, f.name, f.size_bytes, f.mtime FROM inbox_file_status s"
                 " JOIN inbox_file f USING (sha256) ORDER BY s.sha256, s.status_id DESC").fetchall():
             if not want(status, fp) or (source is not None and src != source) \
                     or (between and not (vd and between[0] <= vd <= between[1])):
+                continue
+            if fresh and self.too_old(rd if rd is not None else mtime.astimezone(MSK).date()):
                 continue
             p = arch if arch and os.path.isfile(arch) else \
                 path if os.path.isfile(path) and _sha256(path) == sha else None
@@ -239,24 +286,64 @@ class _Scan:
             out.append(Offer(sha, p, name, size, mtime, False))
         return out
 
+    def retire_too_old(self) -> None:
+        """Files waiting for a calendar whose report date fell behind the lookback: ``ignored_too_old`` (no file
+        access, the ledger only)."""
+        if self.cutoff is None:
+            return
+        rows = self.con.execute(
+            "SELECT l.sha256, l.path, l.archive_path, l.source, l.report_date, f.name, f.size_bytes, f.mtime"
+            " FROM (SELECT DISTINCT ON (sha256) * FROM inbox_file_status ORDER BY sha256, status_id DESC) l"
+            " JOIN inbox_file f USING (sha256) WHERE l.status = 'waiting_calendar' AND l.report_date < %s",
+            (self.cutoff,)).fetchall()
+        with self.con.transaction():
+            for sha, path, arch, src, rd, name, size, mtime in rows:
+                self._status(Offer(sha, path, name, size, mtime, False), TOO_OLD, None, source=src,
+                             report_date=rd, archive_path=arch)
+
     # ---- processing
 
     def run(self, offers: list[Offer]) -> None:
+        """Hash (new files), match and process the offers ``MATCH_BATCH`` at a time (one match timeout per batch,
+        not per folder); every file is its own transaction, so an interrupted run keeps what it finished."""
         offers = list({o.path: o for o in reversed(offers)}.values())[::-1]  # one offer per path, first wins
-        if not offers:
+        total, done = len(offers), 0
+        self.progress(0, total, "")
+        for i in range(0, total, MATCH_BATCH):
+            batch = []
+            for o in offers[i:i + MATCH_BATCH]:
+                if not o.sha256:
+                    try:
+                        o = Offer(_sha256(o.path), o.path, o.name, o.size, o.mtime, o.sighting)
+                    except OSError:  # gone, or locked by another program: the next scan tries again
+                        self.res.skipped["unreadable"] += 1
+                        _last_seen.pop(o.path, None)
+                        continue
+                batch.append(o)
+            hits = runner.call_match(self.h, [o.path for o in batch], self.index,
+                                     self.settings.adapter_match_timeout_s) if batch else {}
+            self._index_for(hits.values())
+            for o in batch:
+                with self.con.transaction():
+                    self.process(o, hits.get(o.path))
+                done += 1
+                self.progress(done, total, o.name)
+            done = min(i + MATCH_BATCH, total)
+            self.progress(done, total, "")
+
+    def _index_for(self, hits: Any) -> None:
+        """The instruments index covering the report dates of these hits too (lookups on older business dates);
+        rebuilt only when a date needs a snapshot it lacks."""
+        dates = {h["report_date"] for h in hits if isinstance(h, dict) and isinstance(h.get("report_date"), str)
+                 and not self.too_old(h["report_date"])}
+        if not dates - self._indexed:
             return
-        hits: dict[str, Any] = {}
-        for i in range(0, len(offers), MATCH_BATCH):  # one timeout per batch, not per folder
-            hits.update(runner.call_match(self.h, [o.path for o in offers[i:i + MATCH_BATCH]], self.index,
-                                          self.settings.adapter_match_timeout_s))
-        dates = sorted({h["report_date"] for h in hits.values()
-                        if isinstance(h, dict) and isinstance(h.get("report_date"), str)})
         refs = static_snapshots(self.cache)
-        if refs and {covering(refs, d).id for d in dates} - {refs[-1].id}:  # lookups on older business dates
-            build_index(self.cache, self.index, dates)
-        for o in offers:
-            with self.con.transaction():
-                self.process(o, hits.get(o.path))
+        need = {covering(refs, d).id for d in dates} if refs else set()
+        have = {covering(refs, d).id for d in self._indexed} | {refs[-1].id} if refs else set()
+        self._indexed |= dates
+        if need - have:
+            build_index(self.cache, self.index, sorted(self._indexed))
 
     def process(self, o: Offer, hit: Any) -> None:
         con = self.con
@@ -303,6 +390,9 @@ class _Scan:
             self._status(o, "match_failed", error_code="bad_hit")
             return
         assert decl is not None
+        if self.too_old(hit["report_date"]):  # behind the lookback: ledgered once, never archived or read
+            self._status(o, TOO_OLD, decl, source=hit["source"], report_date=hit["report_date"])
+            return
         cols = {"source": hit["source"], "report_date": hit["report_date"], "report_ts": parse_ts(hit.get("report_ts")),
                 "seq": hit.get("seq"), "date_from": hit.get("date_from"), "archive_path": self._archive(o)}
         try:
@@ -423,6 +513,9 @@ class _Scan:
              cols.get("date_from"), cols.get("valid_date"), cols.get("error_code"), cols.get("error_type"),
              Jsonb(error_frames) if error_frames else None)).fetchone()[0]
         self.res.files[status] += 1
+        if status in QUIET:
+            log.debug("inbox %s %s %s", o.sha256[:12], cols.get("source") or "-", status)
+            return sid
         self._event(EVENTS.get(status, f"input.{status}"), source=cols.get("source"), dataset=self._dataset(decl),
                     valid_date=cols.get("valid_date"), sha256=o.sha256, counts=counts)
         log.info("inbox %s %s %s %s", o.sha256[:12], cols.get("source") or "-", status, counts or "")
@@ -436,7 +529,8 @@ class _Scan:
 
 
 def _session(con: psycopg.Connection, settings: Settings, now: datetime | None,
-             offers: Callable[[_Scan], list[Offer]]) -> ScanResult:
+             offers: Callable[[_Scan], list[Offer]], *, lookback: bool = False,
+             progress: Progress | None = None) -> ScanResult:
     h = adapter(settings)
     res = ScanResult(adapter_line(h))
     if not h.ok:
@@ -446,18 +540,24 @@ def _session(con: psycopg.Connection, settings: Settings, now: datetime | None,
         res.busy = True
         return res
     try:
-        s = _Scan(con, settings, h, res, now or datetime.now(UTC))
+        now = now or datetime.now(UTC)
+        cutoff = lookback_cutoff(settings, now.astimezone(MSK).date()) if lookback else None
+        s = _Scan(con, settings, h, res, now, cutoff, progress)
         s.run(offers(s))
     finally:
         con.execute("SELECT pg_advisory_unlock(%s)", (SCAN_LOCK,))
     return res
 
 
-def scan(con: psycopg.Connection, settings: Settings, *, now: datetime | None = None) -> ScanResult:
+def scan(con: psycopg.Connection, settings: Settings, *, now: datetime | None = None,
+         progress: Progress | None = None) -> ScanResult:
     """New stable files of the folders, files to re-offer after a fingerprint change, and those waiting for a
-    calendar."""
-    return _session(con, settings, now, lambda s: s.new_files() + s.known(
-        lambda st, fp: (st in REOFFER and fp != s.h.fingerprint) or st == "waiting_calendar"))
+    calendar; within the lookback only (``ignored_too_old`` files again once the lookback covers them)."""
+    def offers(s: _Scan) -> list[Offer]:
+        s.retire_too_old()
+        return s.new_files() + s.known(lambda st, fp: (st in REOFFER and fp != s.h.fingerprint)
+                                       or st in ("waiting_calendar", TOO_OLD), fresh=True)
+    return _session(con, settings, now, offers, lookback=True, progress=progress)
 
 
 def retry(con: psycopg.Connection, settings: Settings, statuses: tuple[str, ...] = (*REOFFER, "waiting_calendar"),

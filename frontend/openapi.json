@@ -1279,6 +1279,46 @@
         ],
         "title": "Aggregates"
       },
+      "AutopilotProgress": {
+        "properties": {
+          "step": {
+            "type": "string",
+            "enum": [
+              "sync",
+              "scan",
+              "eod"
+            ],
+            "title": "Step"
+          },
+          "done": {
+            "type": "integer",
+            "title": "Done"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "step",
+          "done",
+          "total",
+          "detail"
+        ],
+        "title": "AutopilotProgress"
+      },
       "AutopilotRun": {
         "properties": {
           "run_id": {
@@ -1361,6 +1401,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/AutopilotRun"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AutopilotProgress"
               },
               {
                 "type": "null"
