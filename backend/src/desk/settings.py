@@ -46,6 +46,8 @@ layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub
                            the largest file offered (500)
 * ``DESK_AUTOPILOT``, ``DESK_AUTOPILOT_SYNC_LAST``  the ``desk serve`` autopilot (on) and the number of
                            latest hub dates it keeps in sync (5)
+* ``DESK_INTRADAY``        the autopilot's intraday step (on): today's book on the hub's intraday cuts every half
+                           hour, from 19:45 on the preliminary close (R11)
 * ``DESK_INBOX_LOOKBACK_DAYS``  the inbox scan and the autopilot's hub sync take report files (by modification
                            time, then by the report date ``match`` gives) and hub dates at most this many days old
                            (10; 0: no limit); a folder holding years of reports is not read. A backfill of older
@@ -96,6 +98,7 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "inbox_poll_seconds": ("DESK_INBOX_POLL_SECONDS", "num"),
     "autopilot": ("DESK_AUTOPILOT", "bool"),
     "autopilot_sync_last": ("DESK_AUTOPILOT_SYNC_LAST", "int"),
+    "intraday": ("DESK_INTRADAY", "bool"),
     "inbox_lookback_days": ("DESK_INBOX_LOOKBACK_DAYS", "int0"),
     "update_dir": ("DESK_UPDATE_DIR", "path"),
     "history_days": ("DESK_HISTORY_DAYS", "int0"),
@@ -161,6 +164,7 @@ class Settings:
     home: Path = None  # type: ignore[assignment]  # None: desk_home()
     autopilot: bool = True
     autopilot_sync_last: int = 5
+    intraday: bool = True  # the autopilot values today's book on the hub's intraday / preliminary cuts (R11)
     inbox_lookback_days: int = 10  # the inbox takes report files at most this many days old; 0: no limit
     history_days: int = 260  # hub business dates of market history for the bond charts (~1 year); 0: the cache only
     private_adapter_default: bool = False  # private_adapter came from DESK_DEFAULT_PRIVATE_ADAPTER
@@ -223,6 +227,7 @@ class Settings:
             ("inbox_max_file_mb", f"{self.inbox_max_file_mb:g}"),
             ("autopilot", "on" if self.autopilot else "off"),
             ("autopilot_sync_last", str(self.autopilot_sync_last)),
+            ("intraday", "on" if self.intraday else "off"),
             ("inbox_lookback_days", str(self.inbox_lookback_days) if self.inbox_lookback_days else "0 (no limit)"),
             ("update_dir", str(self.update_dir or "none")),
             ("history_days", str(self.history_days) if self.history_days else "0 (off: the cached dates only)"),
@@ -498,6 +503,7 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         home=home,
         autopilot=flag("DESK_AUTOPILOT", defaults.autopilot),
         autopilot_sync_last=count("DESK_AUTOPILOT_SYNC_LAST", defaults.autopilot_sync_last),
+        intraday=flag("DESK_INTRADAY", defaults.intraday),
         inbox_lookback_days=count("DESK_INBOX_LOOKBACK_DAYS", defaults.inbox_lookback_days, 0),
         history_days=count("DESK_HISTORY_DAYS", defaults.history_days, 0),
         private_adapter_default=adapter_default,

@@ -25,13 +25,20 @@ class AutopilotStep(BaseModel):
 
 
 class AutopilotRun(BaseModel):
+    """The newest run shown (R11: today's intraday run when there is one) and its market slice."""
+
     run_id: str
     as_of: str
     created_at: str | None
+    run_type: str | None = None
+    cut_type: str | None = None
+    cut_ts: str | None = None
+    label: str | None = None
+    pnl_basis: str | None = None
 
 
 class AutopilotProgress(BaseModel):
-    step: Literal["sync", "scan", "eod", "history"]
+    step: Literal["sync", "scan", "eod", "intraday", "history"]
     done: int
     total: int | None
     detail: str

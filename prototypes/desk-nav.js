@@ -11,6 +11,9 @@
  * Новый прогон после цикла автопилота (GET api/v1/autopilot/status: раз в 30 с, во время цикла раз в 5 с):
  * страница на последнем прогоне перезагружается сама, если вкладка скрыта, иначе — кнопка «Новый прогон — показать»;
  * страница без данных деска (Настройки, главная) только обновляет список прогонов и шлёт событие desk-nav:new-run.
+ * Прогон назван своим срезом рынка (R11): «20.10 14:30 МСК · внутри дня» (портфель дня на внутридневном срезе
+ * хаба), «19.10 · закрытие предв.», «19.10 · закрытие»; «последний прогон» — самый новый показываемый (днём —
+ * внутридневной). Если PnL посчитан не к закрытию предыдущего рабочего дня, это сказано в подсказке.
  * Фильтр Desk Monitor, который страница применила к своим данным (DESK.scope, desk-scope.js), виден здесь же:
  * что выбрано, сколько позиций, «изменить» (Desk Monitor) и ✕ (снять на всех страницах).
  * window.DESK_NAV: { sel, pinned, href(page), select(sel) }.
@@ -76,6 +79,15 @@
     return e;
   }
   var dt = function (d) { return d ? String(d).slice(0, 10).split('-').reverse().join('.') : ''; };
+  var CUTS = { intraday: 'внутри дня', eod_preliminary: 'закрытие предв.', eod_final: 'закрытие' };
+  var msk = function (ts) { var t = new Date(ts).getTime(); return isNaN(t) ? '' : new Date(t + 3 * 3600e3).toISOString().slice(11, 16) + ' МСК'; };
+  // срез прогона: дата, для внутридневного — время среза по Москве, и вид среза (сервер присылает его же в label)
+  function sliceLabel(day, cut, cutTs, type) {
+    return dt(day) + (cut === 'intraday' && cutTs ? ' ' + msk(cutTs) : '') + ' · ' + (CUTS[cut] || cut || type || '') +
+      (type === 'TEST' || type === 'REPLAY' ? ' · ' + type : '');
+  }
+  function runLabel(r) { return r.label || sliceLabel(r.business_date || r.as_of, r.cut_type, r.cut_ts, r.run_type); }
+  function isCurrent(r) { return r.is_current != null ? r.is_current : r.is_default; }
   var hm = function (s) { var d = new Date(s); return isNaN(d) ? '' : d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); };
 
   // Цвета — переменные страницы (у страниц разные имена: --panel/--surface, --fg/--text, --fg-3/--muted),
@@ -168,10 +180,11 @@
       st.appendChild(f);
     }
     var run = el('span', { 'class': 'dn-run' });
-    var label = db ? dt(D.asOf) + ' · ' + (src.runType || '') + ' #' + src.runId
+    var label = db ? (src.slice || (src.cutType ? sliceLabel(D.asOf, src.cutType, src.cutTs, src.runType) : dt(D.asOf) + ' · ' + (src.runType || ''))) + ' #' + src.runId
       : D && !empty ? 'демо-данные' : sel.run_id ? 'прогон #' + sel.run_id : sel.as_of ? dt(sel.as_of) : sel.demo ? 'демо-данные' : 'последний прогон';
     run.appendChild(el('span', {}, 'Прогон'));
-    var cur = el('b', { title: db && src.publishedAt ? 'опубликован ' + src.publishedAt.replace('T', ' ').slice(0, 16) : '' }, label);
+    var tip = db ? [src.publishedAt ? 'опубликован ' + src.publishedAt.replace('T', ' ').slice(0, 16) : '', src.pnlBasis || ''].filter(Boolean).join('; ') : '';
+    var cur = el('b', { title: tip }, label);
     run.appendChild(cur);
     st.appendChild(run);
     if (!http) return;
@@ -183,23 +196,23 @@
           var box = el('select', { 'aria-label': 'Дата и прогон (для всех страниц)', title: 'Прогон для всех страниц' });
           var latest = el('option', { value: '' }, 'последний прогон');
           box.appendChild(latest);
-          // по датам (новые сверху), в дате основной (default) прогон первым; прочие — по убыванию номера.
-          // «заменён»: не основной прогон даты, для которой есть более новый основной.
+          // по датам (новые сверху), в дате показываемый прогон (is_current: закрытие, иначе внутридневной) первым;
+          // прочие — по убыванию номера. «заменён»: не показываемый прогон даты, у которой есть более новый показываемый.
           var dayOf = function (r) { return r.business_date || r.as_of; };  // as_of: compat alias
-          var newestDefault = {};
-          j.runs.forEach(function (r) { if (r.is_default) newestDefault[dayOf(r)] = Math.max(newestDefault[dayOf(r)] || 0, +r.run_id); });
+          var newestCurrent = {};
+          j.runs.forEach(function (r) { if (isCurrent(r)) newestCurrent[dayOf(r)] = Math.max(newestCurrent[dayOf(r)] || 0, +r.run_id); });
           var runs = j.runs.slice().sort(function (a, b) {
-            return dayOf(a) < dayOf(b) ? 1 : dayOf(a) > dayOf(b) ? -1 : (b.is_default ? 1 : 0) - (a.is_default ? 1 : 0) || +b.run_id - +a.run_id;
+            return dayOf(a) < dayOf(b) ? 1 : dayOf(a) > dayOf(b) ? -1 : (isCurrent(b) ? 1 : 0) - (isCurrent(a) ? 1 : 0) || +b.run_id - +a.run_id;
           });
           if (!pinned && runs.length) {
-            var top = runs.filter(function (r) { return r.is_default; })[0] || runs[0];
-            latest.textContent = 'последний: ' + dt(dayOf(top)) + ' · ' + top.run_type + ' #' + (db ? src.runId : top.run_id);
+            var top = runs.filter(isCurrent)[0] || runs[0];
+            latest.textContent = 'последний: ' + (db && src.slice ? src.slice : runLabel(top)) + ' #' + (db ? src.runId : top.run_id);
           }
           var shown = db ? String(src.runId) : sel.run_id;
           runs.forEach(function (r) {
             var day = dayOf(r), done = r.completed_at || r.published_at;  // published_at: compat alias
-            var old = !r.is_default && newestDefault[day] > +r.run_id;
-            var o = el('option', { value: r.run_id }, dt(day) + ' · ' + r.run_type + ' #' + r.run_id + (done ? ' · ' + String(done).slice(11, 16) : '') + (old ? ' (заменён)' : ''));
+            var old = !isCurrent(r) && newestCurrent[day] > +r.run_id;
+            var o = el('option', { value: r.run_id, title: r.pnl_basis || '' }, runLabel(r) + ' #' + r.run_id + (done && r.cut_type !== 'intraday' ? ' · ' + String(done).slice(11, 16) : '') + (old ? ' (заменён)' : ''));
             if (pinned && String(r.run_id) === shown) o.selected = true;
             box.appendChild(o);
           });
@@ -259,7 +272,7 @@
       if (fresh) {
         box.appendChild(el('button', { type: 'button', 'class': 'dn-new', 'data-act': 'load',
           title: pinned ? 'Перейти на последний прогон (на всех страницах)' : 'Загрузить новый прогон; фильтры и доски сохранятся' },
-          'Новый прогон ' + dt(lr.as_of) + ' — показать'));
+          'Новый прогон ' + (lr.label || dt(lr.as_of)) + ' — показать'));
       }
       var b = el('button', { type: 'button', 'data-act': 'run', title: 'Запустить цикл автопилота сейчас: хаб, папки отчётов, EOD' }, 'Обновить');
       if (busy || s === 'running') b.disabled = true;

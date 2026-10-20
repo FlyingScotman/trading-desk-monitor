@@ -30,7 +30,9 @@ DATE = "2026-10-15"
 QTY = 1000.0
 # Keys of window.DESK.source the parity test leaves out; everything else must be equal.
 EXCLUDED = {"runId": "the two stores number their runs independently",
-            "publishedAt": "publication time of each store's run"}
+            "publishedAt": "publication time of each store's run",
+            **dict.fromkeys(("cutType", "cutTs", "slice", "prevCutType", "pnlBasis"),
+                            "the run's market slice (R11): the desk store's only")}
 
 
 @pytest.fixture(scope="module")
@@ -254,7 +256,7 @@ def test_compat_parity_with_tdm_assemble(store_url, book, client, tmp_path):
         client.get(f"/api/v1/compat/desk?run_id={rid}").json()
     assert got["source"]["runId"] == rid and want["source"]["runId"] == tdm_id
     for key in EXCLUDED:
-        got["source"].pop(key), want["source"].pop(key)
+        got["source"].pop(key), want["source"].pop(key, None)
     assert set(got) == set(want)
     for k in want:
         if k != "positions":

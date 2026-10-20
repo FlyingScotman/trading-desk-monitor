@@ -5,7 +5,8 @@ Positions are bitemporal and append-only: a load adds a ``position_set`` per boo
 sets also come from the inbox (``desk.inbox.scan``, ``store_inbox_set``), ordered by their report key (08 §6.6),
 and books from the adapter's ``reference()`` (``store_books``, ``current_books``).
 Runs are immutable once complete or failed (``desk.publish.desk_run`` writes them); the triggers of
-``migrations/0001_init.sql`` reject any update or delete. Every function here runs its own
+``migrations/0001_init.sql`` reject any update or delete, except (0010, R11) the delete of an INTRADAY run that is
+no longer the latest of its date, with its rows (``prune_intraday``). Every function here runs its own
 transactions: pass a connection from ``connect`` (autocommit).
 """
 
@@ -16,7 +17,7 @@ import json
 import math
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from ..valuation.fallback import CarriedSpread
 
 MIGRATIONS = Path(__file__).parent / "migrations"
 DEV_PGDATA = REPO_ROOT / ".devdata" / "desk_pg"  # the dev checkout's Settings.pg_dir (.devdata/pg: hub seed, ADR-006)
+MSK = timezone(timedelta(hours=3), "MSK")
 _LOCK = 0x6465736B  # "desk": one migrator at a time
 
 
@@ -328,6 +330,48 @@ DEFAULT_RUNS = ("SELECT DISTINCT ON (business_date) run_id FROM run"
                 " WHERE status = 'complete' AND run_type = 'EOD'"
                 " AND cut_type IN ('eod_final', 'eod_preliminary')"
                 " ORDER BY business_date, cut_type = 'eod_final' DESC, completed_at DESC, run_id DESC")
+
+
+# The run shown for a date (R11): its default run, otherwise its latest complete INTRADAY run (today's book on the
+# hub's latest intraday cut until the evening's preliminary close). The newest of these is the run pages open on.
+CURRENT_RUNS = ("SELECT DISTINCT ON (business_date) run_id FROM run"
+                " WHERE status = 'complete' AND (run_type = 'EOD' AND cut_type IN ('eod_final', 'eod_preliminary')"
+                " OR run_type = 'INTRADAY')"
+                " ORDER BY business_date, run_type = 'EOD' DESC, cut_type = 'eod_final' DESC, completed_at DESC,"
+                " run_id DESC")
+
+CUT_LABELS = {"intraday": "внутри дня", "eod_preliminary": "закрытие предв.", "eod_final": "закрытие"}
+
+
+def slice_label(business_date: date | str, cut_type: str | None, cut_ts: datetime | str | None = None,
+                run_type: str | None = None) -> str:
+    """The run's market slice as the pages name it: «20.10 14:30 МСК · внутри дня», «19.10 · закрытие предв.»,
+    «19.10 · закрытие»; a TEST or REPLAY run adds its type."""
+    d = date.fromisoformat(business_date) if isinstance(business_date, str) else business_date
+    day = f"{d:%d.%m}"
+    if cut_type == "intraday" and cut_ts:
+        ts = datetime.fromisoformat(cut_ts) if isinstance(cut_ts, str) else cut_ts
+        day += f" {ts.astimezone(MSK):%H:%M} МСК"
+    label = f"{day} · {CUT_LABELS.get(cut_type or '', cut_type or '?')}"
+    return label + (f" · {run_type}" if run_type in ("TEST", "REPLAY") else "")
+
+
+RUN_ROW_TABLES = ("run_position", "run_reference", "run_log", "run_core_result", "model_spread")
+
+
+def prune_intraday(con: psycopg.Connection, business_date: date, keep_run_id: int) -> list[int]:
+    """Delete the INTRADAY runs of ``business_date`` other than ``keep_run_id`` (complete or failed) with their rows:
+    one intraday run per date stays (R11). A run a scenario job was submitted on is kept. Returns the ids deleted."""
+    with con.transaction():
+        ids = [r for (r,) in con.execute(
+            "SELECT run_id FROM run r WHERE run_type = 'INTRADAY' AND business_date = %s AND run_id <> %s"
+            " AND status <> 'loading' AND NOT EXISTS (SELECT 1 FROM scenario_job j WHERE j.base_run_id = r.run_id)"
+            " ORDER BY run_id", (business_date, keep_run_id))]
+        if ids:
+            for table in RUN_ROW_TABLES:
+                con.execute("DELETE FROM " + table + " WHERE run_id = ANY(%s)", (ids,))
+            con.execute("DELETE FROM run WHERE run_id = ANY(%s)", (ids,))
+    return ids
 
 
 def default_runs(con: psycopg.Connection, since: date) -> dict[date, dict]:

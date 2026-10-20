@@ -111,7 +111,7 @@ def test_hub_down_still_scans_and_runs_on_the_cache(stub, tmp_path, store_url, m
     out = capsys.readouterr().out
     assert "sync: error - hub: 127.0.0.1 unreachable after 4 attempts" in out and "cached snapshots are used" in out
     assert "scan: ok" in out and "eod: ok - 2026-10-15 run 1 (no default run)" in out
-    assert "Ошибки: sync; latest default run: 1 of 2026-10-15" in out
+    assert "Ошибки: sync; latest run: 1 of 2026-10-15 (15.10 · закрытие)" in out
     assert TOKEN not in out
     assert runs(store_url) == [(1, date(2026, 10, 15), "EOD", "complete")]
     assert cli.main(["cycle", "--no-hub"]) == 0  # the hub skipped: nothing else to do
@@ -189,11 +189,14 @@ def test_upgrade_leaves_older_dates_alone(tmp_path, monkeypatch):
         def market_dates(self) -> list[str]:
             return ["2026-10-14", "2026-10-15"]
 
-        def market(self, d: str) -> Snap:
+        def market(self, d: str, cut: str = "eod_final") -> Snap:
             return Snap(d)
 
-        def previous_market_date(self, d: str) -> str | None:
-            return "2026-10-14" if d == "2026-10-15" else None
+        def market_id(self, d: str, cut: str = "eod_final") -> str:
+            return Snap(d).id
+
+        def previous_market_date(self, d: str, cut: str = "eod_final") -> str | None:
+            return "2026-10-14" if d == "2026-10-15" and cut == "eod_final" else None
 
     old = "0.0.9+v0+core0"
     default = {d14: {"run_id": 1, "market_snapshot_id": "m2026-10-14", "prev_market_snapshot_id": None,

@@ -249,6 +249,7 @@
     "/api/v1/runs/default": {
       "get": {
         "summary": "Default Run",
+        "description": "The run shown (R11): of business_date, its default run, otherwise its latest intraday run; without business_date, the newest such run (today's intraday run when there is one)",
         "operationId": "default_run_api_v1_runs_default_get",
         "parameters": [
           {
@@ -1287,6 +1288,7 @@
               "sync",
               "scan",
               "eod",
+              "intraday",
               "history"
             ],
             "title": "Step"
@@ -1340,6 +1342,61 @@
               }
             ],
             "title": "Created At"
+          },
+          "run_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Type"
+          },
+          "cut_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cut Type"
+          },
+          "cut_ts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cut Ts"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "pnl_basis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pnl Basis"
           }
         },
         "type": "object",
@@ -1348,7 +1405,8 @@
           "as_of",
           "created_at"
         ],
-        "title": "AutopilotRun"
+        "title": "AutopilotRun",
+        "description": "The newest run shown (R11: today's intraday run when there is one) and its market slice."
       },
       "AutopilotStatus": {
         "properties": {
@@ -2753,6 +2811,55 @@
             "title": "Is Default",
             "description": "The default run of its date: the latest complete EOD run on eod_final, otherwise on eod_preliminary (04 §3)"
           },
+          "is_current": {
+            "type": "boolean",
+            "title": "Is Current",
+            "description": "The run shown for its date (R11): its default run, otherwise its latest complete INTRADAY run (today's book on the latest intraday cut). Only the latest INTRADAY run of a date is kept",
+            "default": false
+          },
+          "cut_ts": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cut Ts",
+            "description": "Nominal UTC instant of the market cut (the intraday cut time); null for runs made before R11"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "description": "The run's market slice as the pages show it: «20.10 14:30 МСК · внутри дня», «19.10 · закрытие предв.», «19.10 · закрытие»",
+            "default": ""
+          },
+          "prev_cut_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prev Cut Type",
+            "description": "Cut of the snapshot the flash PnL is measured against (eod_final, else eod_preliminary); null without one"
+          },
+          "pnl_basis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pnl Basis",
+            "description": "Set when the flash PnL is not against the previous business day's eod_final: what it is against («PnL от 15.10 (закрытие): нет закрытия 16.10»)"
+          },
           "market_snapshot_id": {
             "type": "string",
             "title": "Market Snapshot Id"
@@ -2934,6 +3041,55 @@
             "type": "boolean",
             "title": "Is Default",
             "description": "The default run of its date: the latest complete EOD run on eod_final, otherwise on eod_preliminary (04 §3)"
+          },
+          "is_current": {
+            "type": "boolean",
+            "title": "Is Current",
+            "description": "The run shown for its date (R11): its default run, otherwise its latest complete INTRADAY run (today's book on the latest intraday cut). Only the latest INTRADAY run of a date is kept",
+            "default": false
+          },
+          "cut_ts": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cut Ts",
+            "description": "Nominal UTC instant of the market cut (the intraday cut time); null for runs made before R11"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "description": "The run's market slice as the pages show it: «20.10 14:30 МСК · внутри дня», «19.10 · закрытие предв.», «19.10 · закрытие»",
+            "default": ""
+          },
+          "prev_cut_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prev Cut Type",
+            "description": "Cut of the snapshot the flash PnL is measured against (eod_final, else eod_preliminary); null without one"
+          },
+          "pnl_basis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pnl Basis",
+            "description": "Set when the flash PnL is not against the previous business day's eod_final: what it is against («PnL от 15.10 (закрытие): нет закрытия 16.10»)"
           },
           "market_snapshot_id": {
             "type": "string",

@@ -31,6 +31,18 @@ class RunHeader(BaseModel):
     supersedes_run_id: int | None
     is_default: bool = Field(description="The default run of its date: the latest complete EOD run on "
                                          "eod_final, otherwise on eod_preliminary (04 §3)")
+    is_current: bool = Field(False, description="The run shown for its date (R11): its default run, otherwise its "
+                                                "latest complete INTRADAY run (today's book on the latest intraday "
+                                                "cut). Only the latest INTRADAY run of a date is kept")
+    cut_ts: datetime | None = Field(None, description="Nominal UTC instant of the market cut (the intraday cut "
+                                                      "time); null for runs made before R11")
+    label: str = Field("", description="The run's market slice as the pages show it: «20.10 14:30 МСК · внутри "
+                                       "дня», «19.10 · закрытие предв.», «19.10 · закрытие»")
+    prev_cut_type: str | None = Field(None, description="Cut of the snapshot the flash PnL is measured against "
+                                                        "(eod_final, else eod_preliminary); null without one")
+    pnl_basis: str | None = Field(None, description="Set when the flash PnL is not against the previous business "
+                                                    "day's eod_final: what it is against («PnL от 15.10 (закрытие): "
+                                                    "нет закрытия 16.10»)")
     market_snapshot_id: str
     static_snapshot_id: str
     coverage: dict[str, Any] | None = Field(description="{book: {quality: n}, _total: {...}}")

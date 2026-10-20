@@ -18,7 +18,7 @@ from typing import Any
 
 from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
 
-from ..store import DEFAULT_RUNS
+from ..store import CURRENT_RUNS, DEFAULT_RUNS, slice_label
 
 PNL_KEYS = ("carry", "rolldown", "rates", "spread", "fx_gross", "fx_funding", "funding", "convexity",
             "new_trades", "other")
@@ -31,16 +31,26 @@ CONTRACT_VERSION = "1.3"
 HISTORY_DAYS = 22  # tdm.assemble.HISTORY_DAYS
 
 def resolve_run(con, as_of: date | None = None, run_id: int | None = None) -> dict[str, Any] | None:
-    """As tdm.assemble.resolve_run: the complete run run_id, else the default run of as_of, else the latest
-    default run."""
+    """As tdm.assemble.resolve_run: the complete run run_id, else the run shown for as_of, else the newest run shown
+    (``CURRENT_RUNS``, R11: a date's default run, otherwise its intraday run: today's book on the latest cut)."""
     if run_id:
         return con.execute("SELECT * FROM run WHERE run_id = %s AND status = 'complete'",
                            (run_id,)).fetchone()
     if as_of:
-        return con.execute(f"SELECT * FROM run WHERE run_id IN ({DEFAULT_RUNS}) AND business_date = %s",
+        return con.execute(f"SELECT * FROM run WHERE run_id IN ({CURRENT_RUNS}) AND business_date = %s",
                            (as_of,)).fetchone()
-    return con.execute(f"SELECT * FROM run WHERE run_id IN ({DEFAULT_RUNS})"
+    return con.execute(f"SELECT * FROM run WHERE run_id IN ({CURRENT_RUNS})"
                        " ORDER BY business_date DESC LIMIT 1").fetchone()
+
+
+def run_slice(run: dict[str, Any]) -> dict[str, Any]:
+    """The run's market slice for ``source`` (R11): cut type and time, the label the pages show, and what the flash
+    PnL is measured against when it is not the previous business day's close."""
+    basis = (run.get("lineage") or {}).get("pnl_basis") or {}
+    cut_ts = run.get("cut_ts")
+    return {"cutType": run["cut_type"], "cutTs": cut_ts.isoformat() if cut_ts else None,
+            "slice": slice_label(run["business_date"], run["cut_type"], cut_ts, run["run_type"]),
+            "prevCutType": run.get("prev_cut_type"), "pnlBasis": basis.get("label")}
 
 
 def _years(d0: str, d1: str | None) -> float | None:
@@ -320,5 +330,6 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         "source": {"kind": "db", "runId": rid, "runType": run["run_type"],
                    "publishedAt": completed.isoformat() if completed else None,
                    "libVersion": f"rub-fixed-income-core {run['core_version']}",
-                   "marketSnapshot": run["market_snapshot_id"], "contractVersion": CONTRACT_VERSION},
+                   "marketSnapshot": run["market_snapshot_id"], "contractVersion": CONTRACT_VERSION,
+                   **run_slice(run)},
     }
