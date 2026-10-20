@@ -67,7 +67,14 @@ from ..pnl.flash import METHOD
 from ..pnl.reasons import FX_METHOD, NO_PNL_TEXT, REPORTED_METHOD, RUN_NO_PREV_MARKET
 from ..settings import REPO_ROOT
 from ..store import PositionInputs
-from ..valuation.bonds import OFZ_CURVE, RISK_CURVES, BondValuation, coupon_view, implied_frequency
+from ..valuation.bonds import (
+    BASIS_CURVE,
+    OFZ_CURVE,
+    RISK_CURVES,
+    BondValuation,
+    coupon_view,
+    implied_frequency,
+)
 from ..valuation.fallback import METHOD as SIMPLE_METHOD
 from ..valuation.fallback import QUALITIES, SimplePnl, fx_rate
 from ..valuation.positions import normalised
@@ -178,6 +185,9 @@ RATES_CURVES = {rates.RUONIA_OIS_CURVE_ID: "RUONIA OIS (MOEX)",
                 rates.KEY_RATE_CURVE_ID: "Ключевая ставка (IRS KEYRATE)"}
 """The rates curves of ``orchestrator.with_rates`` the run publishes (under ``RISK_CURVES``), with their names."""
 CCY_CURVE_NAME = "{ccy}: кривой нет, риск по дюрации"
+BASIS_NAME = "Базис ОФЗ–RUONIA"
+"""R18: ``BASIS_CURVE``, the OFZ curve (KBD) less RUONIA OIS: points are the difference of their rates (%), the move
+the difference of their moves (bp). A spread factor: an OFZ's risk on it is its KBD DV01, left out of ``dv01``."""
 """A currency's curve (``bonds.ccy_curve``): no points, only the risk booked on it."""
 
 
@@ -225,6 +235,12 @@ def curves_reference(ctx: EodContext, prev: MarketView | None, rows: list[dict[s
         if cid in built:
             out.append({"curve_id": RISK_CURVES[cid], "name": name, "ccy": "RUB", "kind": "swap",
                         "points": _zero_points(built[cid], old.get(cid))})
+    if rates.RUONIA_OIS_CURVE_ID in built:  # R18: the OFZ curve less RUONIA, per pillar, and its move of the day
+        ofz, ruonia = out[0]["points"], out[1]["points"]
+        out.append({"curve_id": BASIS_CURVE, "name": BASIS_NAME, "ccy": "RUB", "kind": "basis", "points": [
+            {"bucket": a["bucket"], "rate": round(a["rate"] - b["rate"], 4),
+             "move_bp": round(a["move_bp"] - b["move_bp"], 2) if old.get(rates.RUONIA_OIS_CURVE_ID) else 0.0}
+            for a, b in zip(ofz, ruonia)]})
     have = {c["curve_id"] for c in out}
     for c in dict.fromkeys(c for r in rows for c in r.get("risk") or {}):
         if c not in have:  # a currency's curve; a RUB curve core did not build keeps its risk, without points
@@ -529,6 +545,11 @@ def rates_log(ctx: EodContext, positions: list[tuple[str, str, Outcome]], rows: 
         key = (v.quality if v and v.quality in ("exact", "assumed") else
                f"{v.quality if v else 'не посчитано'} ({o.reason or 'нет причины'})")
         floaters.setdefault(bench, Counter())[key] += 1
+    ofz = [o.pnl for _, _, o in positions if getattr(o.pnl, "rates_basis", None) is not None]
+    if ofz:  # R18: the OFZ rates PnL by factor
+        basis = sum(x.rates_basis for x in ofz)  # type: ignore[union-attr]
+        ruonia = sum(x.rates for x in ofz) - basis  # type: ignore[union-attr]
+        out.append(("INFO", f"PnL ставок ОФЗ ({len(ofz)} поз.): RUONIA {ruonia:,.0f} ₽, базис ОФЗ–RUONIA {basis:,.0f} ₽"))
     if floaters:
         out.append(("INFO", "флоатеры по индексам: " + "; ".join(
             f"{b}: " + ", ".join(f"{k} {n}" for k, n in sorted(c.items())) for b, c in sorted(floaters.items()))))
@@ -556,7 +577,10 @@ def publish(db: str, ctx: EodContext, positions: list[tuple[str, str, Outcome]],
              market_snapshot=ctx.market.snapshot.id, comment=comment or json.dumps(lineage, ensure_ascii=False),
              prev_date=prev.business_date.isoformat() if prev else None, jtd_recovery=0.0) as run:
         for kind in REFERENCE_KINDS:
-            getattr(run, f"add_{kind}")(c.reference[kind])
+            ref = c.reference[kind]
+            if kind == "curves":  # the legacy store knows bond and swap curves only: the basis (R18) as a swap curve
+                ref = [{**x, "kind": "swap"} if x["kind"] == "basis" else x for x in ref]
+            getattr(run, f"add_{kind}")(ref)
         run.add_positions(rows)
         for level, message in c.log:
             run.log(level, message)

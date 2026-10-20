@@ -605,7 +605,7 @@ WT.heatmap = {
     const l = scope(cfg);
     let rows = [];
     if (cfg.rows === 'book') {
-      const curves = on(cfg.curve) ? [cfg.curve] : CURVE_KEYS, byB = U.groupBy(l, 'book');
+      const curves = on(cfg.curve) ? [cfg.curve] : U.rateCurves(CURVE_KEYS), byB = U.groupBy(l, 'book');  // без базиса ОФЗ (R18)
       BK.filter(k => byB[k]).forEach(k => {
         const m = U.bucketMatrix(byB[k], curves), v = D.BUCKETS.map((_, i) => sum(curves, c => m[c][i]));
         if (v.some(x => Math.abs(x) > 1)) rows.push({ key: k, name: D.BOOKS[k].name, v, dim: 'book' });

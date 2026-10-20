@@ -168,9 +168,11 @@ class SpreadRules(BaseModel):
 
 class ScenarioDefinition(BaseModel):
     """The prototype scenario shape. curves: bp per RISK_BUCKETS pillar (11) or one number for all, per
-    published curve ("RUB RUONIA" the RUB bonds' discount curve, "RUB KEY", "RUB OFZ" the KBD, a currency's
-    "USD"...), each moving only by its own vector; ofzSpread: OFZ Z-spread to RUONIA, bp; fx: % against RUB (+ = weaker rouble). Returned
-    normalized: 11-pillar lists, zeros and empty entries left out."""
+    published curve ("RUB RUONIA" the corporates' discount curve, "RUB KEY", "RUB OFZ" the OFZ curve (the KBD),
+    "RUB OFZ-RUONIA" the OFZ-RUONIA basis, a currency's "USD"...); the OFZ curve and the basis move together (OFZ
+    curve = RUONIA + basis; basis = its own vector, else RUB OFZ less RUB RUONIA when RUB OFZ is given, else 0), every
+    other curve by its own vector; ofzSpread: an OFZ's own Z-spread to the OFZ curve, bp; fx: % against RUB (+ =
+    weaker rouble). Returned normalized: 11-pillar lists, zeros and empty entries left out."""
 
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     curves: dict[str, float | list[float]] = {}

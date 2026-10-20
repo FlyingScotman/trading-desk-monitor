@@ -105,9 +105,12 @@ def test_fx_bond_in_rub_at_cbr(ctx, exact):
 
     """R8 phase 1: an OFZ-IN keeps a nominal DV01 from its duration on the RUB discount curve (RUONIA), a proxy."""
 def test_ofz_in_nominal_proxy_is_flagged(exact):
-    """R8 phase 1: an OFZ-IN keeps a nominal DV01 from its duration on the RUB discount curve (RUONIA), said to be a proxy."""
+    """R8 phase 1: an OFZ-IN keeps a nominal DV01 from its duration on its discount curve, said to be a proxy; an OFZ's
+    curve is the KBD, RUONIA + the OFZ-RUONIA basis (R18): the same buckets on both, the DV01 counts RUONIA only."""
     v = exact["SU52005RMFS4"].valuation
-    assert v.quality == "market_value" and set(v.risk()) == {"RUB RUONIA"} and v.dv01_rub < 0
+    r = v.risk()
+    assert v.quality == "market_value" and set(r) == {"RUB RUONIA", "RUB OFZ-RUONIA"} and v.dv01_rub < 0
+    assert r["RUB RUONIA"] == r["RUB OFZ-RUONIA"] == v.buckets
     assert any("indexed face: a nominal-rate proxy" in a for a in v.assumptions)
 
 
@@ -170,7 +173,7 @@ def test_every_position_published_with_quality(ctx, exact, tmp_path):
     # every curve of the risk is a run curve (tdm requires it): the USD bond's on a USD curve without points
     assert {r[0] for r in con.execute("SELECT DISTINCT curve_id FROM position_risk WHERE run_id=?", (run_id,))} \
         <= {r[0] for r in con.execute("SELECT curve_id FROM run_curve WHERE run_id=?", (run_id,))} \
-        == {"RUB OFZ", "RUB RUONIA", "RUB KEY", "USD"}
+        == {"RUB OFZ", "RUB RUONIA", "RUB KEY", "RUB OFZ-RUONIA", "USD"}
     assert all(not isinstance(r[1], float) or math.isfinite(r[1]) for r in rows)
     assert sum("оценка market_value" in w for w in warnings) == want["market_value"]
     log = [m for (m,) in con.execute("SELECT message FROM calc_run_log WHERE run_id=?", (run_id,))]

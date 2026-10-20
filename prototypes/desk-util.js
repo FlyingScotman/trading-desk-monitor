@@ -112,6 +112,11 @@
   const NO_RATING = 'нет данных', NO_RATING_LABEL = 'без рейтинга';
   const isRated = r => !!r && r !== NO_RATING;
   const ratingLabel = r => isRated(r) ? r : NO_RATING_LABEL;
+  // R18: базис ОФЗ–RUONIA (кривая ОФЗ = RUONIA + базис) — спред, а не ставка: риск ОФЗ на нём равен её DV01 по RUONIA,
+  // поэтому в суммах по кривым ставок (DV01, стеки, параллельный сдвиг) он не участвует.
+  const BASIS_CURVE = 'RUB OFZ-RUONIA';
+  const isBasis = c => c === BASIS_CURVE || !!(CURVES[c] && CURVES[c].kind === 'basis');
+  const rateCurves = curves => (curves || Object.keys(CURVES)).filter(c => !isBasis(c));
   function bucketMatrix(list, curves) {
     curves = curves || Object.keys(CURVES);
     const m = {}; curves.forEach(c => { m[c] = new Array(BUCKETS.length).fill(0); });
@@ -177,7 +182,8 @@
   // у позиций с ногами разного знака — XCCY, FX-форварды — rates/DV01 не имеет смысла).
   function effRateMove(p, curveShock) {
     let w = 0, x = 0;
-    Object.keys(p.risk || {}).forEach(c => { if (curveShock[c]) p.risk[c].forEach((dv, i) => { w += Math.abs(dv); x += Math.abs(dv) * curveShock[c][i]; }); });
+    // базис: только сдвиг (вес — у RUONIA), иначе сдвиг ОФЗ усреднился бы вдвое
+    Object.keys(p.risk || {}).forEach(c => { if (curveShock[c]) p.risk[c].forEach((dv, i) => { if (!isBasis(c)) w += Math.abs(dv); x += Math.abs(dv) * curveShock[c][i]; }); });
     return w ? x / w : 0;
   }
   function secondOrder(p, curveShock, ds, fxShock, ratesByCurve, spreadPnl) {
@@ -260,6 +266,21 @@
     return gammaOf(p) ? spreadShock(sc, p) : 0;
   }
 
+  // Сдвиги факторов сценария (как desk.scenario.definition.curve_moves, R18): кривые как заданы; кривая ОФЗ и базис
+  // вместе — базис = свой вектор, иначе RUB OFZ − RUB RUONIA (если задана RUB OFZ), иначе 0; кривая ОФЗ = RUB OFZ
+  // (если задана), иначе RUB RUONIA + базис. Сдвиг одной RUONIA двигает и кривую ОФЗ; сдвиг одной RUB OFZ — это базис.
+  function curveMoves(sc) {
+    const vec = v => v == null ? null : Array.isArray(v) ? v : new Array(BUCKETS.length).fill(v);
+    const given = sc.curves || {}, out = {};
+    Object.keys(CURVES).concat(Object.keys(given)).forEach(c => { out[c] = vec(given[c]) || new Array(BUCKETS.length).fill(0); });
+    const r = out['RUB RUONIA'] || new Array(BUCKETS.length).fill(0);
+    const b = vec(given[BASIS_CURVE]), o = vec(given['RUB OFZ']);
+    if (b) { out[BASIS_CURVE] = b; out['RUB OFZ'] = r.map((x, i) => x + b[i]); }
+    else if (o) { out['RUB OFZ'] = o; out[BASIS_CURVE] = o.map((x, i) => x - r[i]); }
+    else { out[BASIS_CURVE] = new Array(BUCKETS.length).fill(0); out['RUB OFZ'] = r.slice(); }
+    return out;
+  }
+
   // Сценарий: полная переоценка, если её посчитал расчётный сервис, иначе разложение Тейлора до 2-го порядка:
   //   rates  = Σ key-rate DV01 × Δr;   spread = CS01 × Δs (ОФЗ: ofzSpr01 × ofzSpread);
   //   fx = FX-дельта × курс × Δfx (+ переоценка тела фондирования самой бумаги)
@@ -270,11 +291,7 @@
     list = list || D.positions;
     const stored = storedResult(sc, list);
     if (stored) return stored;
-    const curveShock = {};
-    Object.keys(CURVES).forEach(c => {
-      const v = sc.curves && sc.curves[c];
-      curveShock[c] = v == null ? new Array(BUCKETS.length).fill(0) : (Array.isArray(v) ? v : new Array(BUCKETS.length).fill(v));
-    });
+    const curveShock = curveMoves(sc);
     const fxShock = sc.fx || {};
     const alloc = sc.fx
       ? fundingFx((ccy, amt) => amt * FX[ccy] * (sc.fx[ccy] || 0) / 100)
@@ -314,6 +331,7 @@
     let ir = 0, cs = 0, ircs = 0, src = null;
     if (p.gamma && p.gamma.length) {
       p.gamma.forEach(([a, b, v]) => {
+        if (isBasis(a.split('|')[1]) || isBasis(b.split('|')[1])) return;  // параллельный сдвиг ставок базис не меняет
         const ta = a.split('|')[0], tb = b.split('|')[0];
         if (ta === 'IR' && tb === 'IR') ir += (a === b ? 1 : 2) * v;
         else if (ta === 'CS' && tb === 'CS') cs += v;
@@ -633,7 +651,7 @@
   const PNL_PART = {}; PNL_PARTS.forEach(x => { PNL_PART[x.k] = x; });
   PNL_PART.other = { k: 'other', label: 'Прочее', tip: '«Без разложения» + «Невязка цены»: то, что не разложено на кэрри, ставки, спред и FX.' };
 
-  D.util = { sum, PNL_PARTS, PNL_PART, groupBy, bucketMatrix, netFx, runScenario, curveRate, hasPoints, pnlOk, pnlCover, pnlSum, pnlPartText, pnlNaHtml, pnlPartHtml,
+  D.util = { sum, PNL_PARTS, PNL_PART, groupBy, bucketMatrix, netFx, runScenario, curveMoves, BASIS_CURVE, isBasis, rateCurves, curveRate, hasPoints, pnlOk, pnlCover, pnlSum, pnlPartText, pnlNaHtml, pnlPartHtml,
     NO_RATING, NO_RATING_LABEL, isRated, ratingLabel, fundingFx, spreadShock, ownSpr01, ACCURACY_BP,
     runCarry, ksPath, carryEnd, indexAt, addDays, monthsAdd,
     baseCurve, yieldTenor, spreadTo, bondKey, bondRows, wavg, bondHistory, normHistory, couponView, couponText };

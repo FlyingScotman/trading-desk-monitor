@@ -10,7 +10,9 @@ cashflows: they stay Taylor only, with ``code`` = their quality. ``blended`` = e
 Curves (R8): ``RUB RUONIA`` and ``RUB KEY`` move the RUONIA OIS curve (every RUB bond's discount curve, a RUONIA
 floater's projection) and the key-rate projection by name (``curve_shifts_bp``), each only by its own vector, as
 the Taylor moves each curve's factors: a floater sees the basis when one curve moves without the other. The shock
-of ``RUB OFZ`` is the shock's own curve: it moves the KBD of a bond discounted on it (a date without RUONIA). Another curve (a
+of ``RUB OFZ`` is the shock's own curve: it moves the KBD of a bond discounted on it, an OFZ (and every bond on a date
+without RUONIA), by the OFZ curve's move of ``definition.curve_moves``: RUONIA plus the basis (R18), as the Taylor
+moves the OFZ's RUONIA and basis factors. Another curve (a
 currency's, ``bonds.ccy_curve``) has no core curve; only Taylor positions carry risk on it.
 """
 
@@ -24,7 +26,7 @@ from rub_fixed_income import RISK_BUCKETS, BondScenario, PortfolioScenario
 from ..marketdata.bundle import SnapshotDir
 from ..orchestrator import EodContext, prepare, value
 from ..valuation.bonds import OFZ_CURVE, RISK_CURVES
-from .definition import definition_hash, normalize, own_spread_shock
+from .definition import curve_moves, definition_hash, normalize, own_spread_shock
 from .taylor import PARTS, risk_payload, run_taylor
 
 METHOD = "desk-scenario-exact-v2"
@@ -40,7 +42,7 @@ is named moves it by its name)."""
 def core_scenario(name: str, norm: Mapping[str, Any], ds: float) -> PortfolioScenario:
     """The core scenario of a normalized definition for an own spread shock ``ds``: every curve core values with
     moves by its published curve's shifts only (0 when the definition has none)."""
-    curves, zero = norm.get("curves", {}), (0.0,) * len(RISK_BUCKETS)
+    curves, zero = curve_moves(norm), (0.0,) * len(RISK_BUCKETS)  # the KBD (an OFZ's curve) = RUONIA + basis, R18
     return PortfolioScenario(name=name, shock=BondScenario(tuple(curves.get(OFZ_CURVE, zero)), ds),
                              fx_shocks_pct=tuple(norm.get("fx", {}).items()),
                              curve_shifts_bp=tuple((core, tuple(curves.get(c, zero))) for core, c in NAMED_CURVES))

@@ -500,7 +500,7 @@ const NORAT_POS = P.filter(p => p.rating === U.NO_RATING && p.cs01), NORAT_CS = 
 const RAT_KEYS = RAT_G.concat(NORAT ? [U.NO_RATING] : []);
 const posById = {}; P.forEach(p => posById[p.id] = p);
 const DV = U.bucketMatrix(P);
-// в редакторе — только кривые, на которых есть риск (КБД 'RUB OFZ' — рыночная кривая: риск ОФЗ на RUONIA + спред ОФЗ)
+// в редакторе — только кривые, на которых есть риск (КБД 'RUB OFZ' — рыночная кривая: риск ОФЗ на RUONIA + базис ОФЗ–RUONIA, R18)
 const CK = Object.keys(D.CURVES).filter(c => DV[c] && DV[c].some(v => Math.abs(v) > 1));
 const RUBC = ['RUB RUONIA','RUB KEY'].filter(c => CK.includes(c));
 const FXC = Object.keys(D.FX).filter(c => c !== 'RUB');
@@ -562,8 +562,8 @@ const T = (title, rows) => esc(`<b>${title}</b>` + rows.map(r => `<div>${r[0]}: 
 
 // ================== СЦЕНАРИИ ==================
 function normalize(sc){
-  const curves = {};
-  CK.forEach(c => { const v = sc.curves && sc.curves[c]; curves[c] = v == null ? BK.map(() => 0) : Array.isArray(v) ? v.slice() : BK.map(() => v); });
+  const curves = {}, mv = U.curveMoves(sc);  // R18: сдвиг RUB OFZ без своей кривой ОФЗ в редакторе — это сдвиг базиса ОФЗ–RUONIA
+  CK.forEach(c => { const v = sc.curves && sc.curves[c]; curves[c] = U.isBasis(c) ? mv[c].slice() : v == null ? BK.map(() => 0) : Array.isArray(v) ? v.slice() : BK.map(() => v); });
   const fx = {}; FXC.forEach(k => fx[k] = (sc.fx && sc.fx[k]) || 0);
   const sp = sc.spreads || {}; const rating = {}, sector = {};
   // _all раскладывается по рейтингам (у всех бумаг с CS01 есть рейтинг); старый формат — рейтинг ключом верхнего уровня

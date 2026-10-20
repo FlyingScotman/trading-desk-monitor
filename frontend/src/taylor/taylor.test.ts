@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { RiskPayload, RiskPosition } from '../api/types';
-import { canon, normalize, ownSpreadShock, runTaylor } from './taylor';
+import { BASIS_CURVE, canon, curveMoves, normalize, ownSpreadShock, runTaylor } from './taylor';
 
 const B = ['1M', '3M', '6M', '1Y', '2Y', '3Y', '5Y', '7Y', '10Y', '15Y', '20Y+'];
 
@@ -71,6 +71,19 @@ describe('runTaylor (hand-computed)', () => {
     expect(r.totals.B2.total).toBe(-128 + 95);
     expect(r.totals._total.total).toBe(-300 - 128 + 95);
   });
+});
+
+describe('curveMoves (R18: OFZ curve = RUONIA + basis)', () => {
+  const v = (x: number) => new Array<number>(11).fill(x);
+  it('RUONIA alone moves the OFZ curve with it, the basis stays', () =>
+    expect(curveMoves(normalize({ curves: { 'RUB RUONIA': 10 } }))).toEqual({ 'RUB RUONIA': v(10), 'RUB OFZ': v(10) }));
+  it('the OFZ curve alone is a basis move', () =>
+    expect(curveMoves(normalize({ curves: { 'RUB OFZ': 30, 'RUB RUONIA': 10 } })))
+      .toEqual({ 'RUB RUONIA': v(10), 'RUB OFZ': v(30), [BASIS_CURVE]: v(20) }));
+  it('the basis wins over RUB OFZ', () =>
+    expect(curveMoves(normalize({ curves: { [BASIS_CURVE]: 5, 'RUB OFZ': 99 } }))).toEqual({ [BASIS_CURVE]: v(5), 'RUB OFZ': v(5) }));
+  it('all rate curves alike: no basis', () =>
+    expect(curveMoves(normalize({ curves: { 'RUB OFZ': 7, 'RUB RUONIA': 7, 'RUB KEY': 7 } }))[BASIS_CURVE]).toBeUndefined());
 });
 
 // Parity with the Python reference (S6 plan §3); the fixture is written by the backend agent.

@@ -363,7 +363,7 @@ function matBucket(t) { return t < 1 ? MAT_B[0] : t < 3 ? MAT_B[1] : t < 5 ? MAT
 /* records: positions + funding deals in one shape */
 const POS = D.positions.map(p => {
   let curve = CCY_CURVE[p.ccy], best = -1;
-  Object.keys(p.risk || {}).forEach(c => { const s = Math.abs(p.risk[c].reduce((a, b) => a + b, 0)); if (s > best) { best = s; curve = c; } });
+  Object.keys(p.risk || {}).forEach(c => { if (U.isBasis(c)) return; const s = Math.abs(p.risk[c].reduce((a, b) => a + b, 0)); if (s > best) { best = s; curve = c; } });
   return { kind: 'pos', id: 'p' + p.id, p, name: p.name, book: p.book, ccy: p.ccy, tenor: p.tenorY, maturity: p.maturity, curve,
     sub: p.isin || p.counterparty || p.assetClass };
 });
@@ -582,7 +582,7 @@ function getFacts(v, dimsOverride) {
     dims.forEach(k => { base[k] = DIMS[k].get(r); });
     if (explode && isPos(r)) {
       Object.keys(r.p.risk || {}).forEach(c => r.p.risk[c].forEach((x, i) => {
-        if (!x) return;
+        if (!x || (U.isBasis(c) && !('curve' in base))) return;  // базис ОФЗ (R18) повторяет DV01 по RUONIA: только в разрезе по кривым
         const d = Object.assign({}, base);
         if ('curve' in d) d.curve = c;
         if ('bucket' in d) d.bucket = BK[i];

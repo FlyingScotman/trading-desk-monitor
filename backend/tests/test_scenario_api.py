@@ -17,15 +17,15 @@ from desk import store
 from desk.api import create_app
 from desk.marketdata.bundle import SnapshotDir
 from desk.scenario import jobs
-from desk.scenario.definition import RUB_CURVES, definition_hash, normalize
+from desk.scenario.definition import RUB_RATE_CURVES, definition_hash, normalize
 from desk.settings import REPO_ROOT
 
 book = test_api.book  # the module fixture: every fixture bond, valued
-PRESETS = ["par+100", "par-100", "keyhike", "bullsteep", "bearflat", "basis", "ofzwide", "rubdep", "credit",
+PRESETS = ["par+100", "par-100", "keyhike", "bullsteep", "bearflat", "basis", "ofzbasis", "ofzwide", "rubdep", "credit",
            "sector", "stress22"]
 KEYHIKE = {"curves": {"RUB RUONIA": [200, 195, 180, 150, 105, 85, 65, 55, 45, 40, 35]}, "ofzSpread": 10,
            "spreads": {"_all": 25}}
-KEYHIKE_PRESET = {**KEYHIKE, "curves": dict.fromkeys(RUB_CURVES, KEYHIKE["curves"]["RUB RUONIA"])}
+KEYHIKE_PRESET = {**KEYHIKE, "curves": dict.fromkeys(RUB_RATE_CURVES, KEYHIKE["curves"]["RUB RUONIA"])}
 """R8: a move of all rates shifts the three RUB curves alike."""
 
 
@@ -47,8 +47,9 @@ def test_presets_listed_normalized(client):
     assert kh["definition"] == normalize(KEYHIKE_PRESET)
     assert next(s for s in sc if s["scenario_id"] == "ofzwide")["definition"] == {"ofzSpread": 40.0}
     for s in sc:  # every curve preset moves the three RUB curves, except the basis (the key rate only)
-        assert set(s["definition"].get("curves", RUB_CURVES)) == ({"RUB KEY"} if s["scenario_id"] == "basis"
-                                                                  else set(RUB_CURVES))
+        assert set(s["definition"].get("curves", RUB_RATE_CURVES)) == (
+            {"RUB KEY"} if s["scenario_id"] == "basis" else {"RUB OFZ-RUONIA"} if s["scenario_id"] == "ofzbasis"
+            else set(RUB_RATE_CURVES))
 
 
 def test_risk_payload_and_compat_scenarios(store_url, book, client):
@@ -58,8 +59,8 @@ def test_risk_payload_and_compat_scenarios(store_url, book, client):
     p = r.json()
     ps = client.get(f"/api/v1/runs/{rid}/positions").json()["positions"]
     assert p["run_id"] == rid and len(p["buckets"]) == 11
-    assert p["curves"] == ["RUB KEY", "RUB OFZ", "RUB RUONIA", "USD"]  # the floaters' and the USD bond's too
-    # no bond is discounted on the KBD (RUB OFZ): it is a scenario curve without risk
+    assert p["curves"] == ["RUB KEY", "RUB OFZ", "RUB OFZ-RUONIA", "RUB RUONIA", "USD"]  # the floaters', USD bond's too
+    # an OFZ's KBD risk is on RUONIA + the basis (R18): RUB OFZ is a scenario curve without risk
     assert {f.split("|")[1] for f in p["factors"] if f.startswith("IR|")} == set(p["curves"]) - {"RUB OFZ"}
     assert "CS" in p["factors"]
     assert [x["position_id"] for x in p["positions"]] == [x["position_id"] for x in ps if x["fact"]]

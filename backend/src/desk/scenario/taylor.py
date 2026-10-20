@@ -20,7 +20,7 @@ from typing import Any
 
 from rub_fixed_income import RISK_BUCKETS
 
-from .definition import RUB_CURVES, own_spread_shock
+from .definition import RUB_CURVES, curve_moves, own_spread_shock
 
 PARTS = ("rates", "spread", "fx", "convexity", "total")
 
@@ -67,8 +67,9 @@ def run_taylor(payload: Mapping[str, Any], norm: Mapping[str, Any]) -> dict[str,
     """Per position ``rates``, ``spread``, ``fx``, ``convexity``, ``total`` (RUB), ``second_order`` (has
     gamma) and ``max_move_bp`` (largest |x| over the IR factors and the own spread shock); ``totals`` by
     ``book_id`` and ``_total``, each part summed over the positions in order. Shock vector: x[IR|c|b] =
-    curves[c][b] (0 without the curve), x[CS] = ``own_spread_shock``, x[FX|c] = fx[c] (0 when absent)."""
-    curves, fx = norm.get("curves", {}), norm.get("fx", {})
+    ``curve_moves(norm)[c][b]`` (0 without the curve; the OFZ curve and the basis set together, R18),
+    x[CS] = ``own_spread_shock``, x[FX|c] = fx[c] (0 when absent)."""
+    curves, fx = curve_moves(norm), norm.get("fx", {})  # R18: the OFZ curve and the basis set together
     base = []
     for k in payload["factors"]:
         kind, _, rest = k.partition("|")

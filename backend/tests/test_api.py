@@ -264,6 +264,9 @@ def test_compat_parity_with_tdm_assemble(store_url, book, client, tmp_path):
         got["source"].pop(key), want["source"].pop(key, None)
     assert set(got) - R10_RUN == set(want)
     assert got["pnlAvailable"] and got["pnlReason"] is None and got["pnlCoverage"]["withPnl"] > 0
+    for c in got["CURVES"].values():  # the legacy tdm store has bond and swap curves only: the basis (R18) as a swap
+        if c["kind"] == "basis":
+            c["kind"] = "swap"
     for k in want:
         if k != "positions":
             assert got[k] == want[k], k

@@ -17,7 +17,13 @@ from desk.marketdata.bundle import SnapshotDir, SnapshotError
 from desk.orchestrator import prepare, value
 from desk.publish import desk_run, tdm_run
 from desk.scenario import exact
-from desk.scenario.definition import RUB_CURVES, DefinitionError, definition_hash, normalize, own_spread_shock
+from desk.scenario.definition import (
+    RUB_RATE_CURVES,
+    DefinitionError,
+    definition_hash,
+    normalize,
+    own_spread_shock,
+)
 from desk.scenario.exact import reprice_run
 from desk.scenario.taylor import risk_payload, run_taylor
 from desk.valuation.bonds import SPREAD_CONVENTION
@@ -37,11 +43,16 @@ CASES = {
                            "issuer": {"ООО Синтетик": 40}, "_mult": 1.5}},
     "rubdep": {"curves": {"RUB RUONIA": 50}, "ofzSpread": 10, "fx": {"USD": 15, "CNY": 15, "EUR": 15, "CHF": 15}},
     # R8: every RUB curve, the key-rate basis alone, a currency's curve with its FX
-    "rub+50": {"curves": dict.fromkeys(RUB_CURVES, 50)},
+    "rub+50": {"curves": dict.fromkeys(RUB_RATE_CURVES, 50)},
     "basis": {"curves": {"RUB KEY": [50, 50, 45, 40, 30, 25, 20, 15, 10, 10, 10]}},
     "usd": {"curves": {"USD": [30, 30, 30, 25, 20, 20, 15, 15, 10, 10, 10]}, "fx": {"USD": 10}},
-    # RUONIA discounting (20.10): the KBD alone moves no bond
+    # R18: the OFZ curve (KBD) = RUONIA + basis: the KBD alone widens the basis (the OFZ move, no corporate), the
+    # basis alone, and a KBD and RUONIA move (basis = their difference); the synthetic rows have their risk on RUB OFZ
+    # (a run before R8 or without RUONIA): they move by the OFZ curve's move, RUONIA plus the basis
     "kbd": {"curves": {"RUB OFZ": 100}},
+    "ofzbasis": {"curves": {"RUB OFZ-RUONIA": [50, 50, 45, 40, 35, 30, 25, 20, 15, 10, 5]}},
+    "ofz+ruonia": {"curves": {"RUB OFZ": [30, 30, 30, 25, 20, 20, 15, 15, 10, 10, 10.5],
+                              "RUB RUONIA": [10, 10.25, 10, 10, 10, 10, 10, 10, 10, 10, 10]}},
 }
 
 
@@ -102,8 +113,10 @@ def test_taylor_matches_core_approximation(golden):
     t = run_taylor(payload, norm)["positions"][0]
     (o,) = value(ctx, [(OFZ, row["quantity"])], second_order=True)
     v = o.valuation
-    engine = BondRiskEngine(BondRiskRequest(v.cashflows, v.valuation_date, ctx.discount[1], SPREAD_CONVENTION, "ofz",
-                                            dirty_price_rub=v.dirty_rub, quantity=row["quantity"]))
+    # R18: an OFZ on the KBD; a RUONIA move with the basis unchanged moves its curve by as much
+    engine = BondRiskEngine(BondRiskRequest(v.cashflows, v.valuation_date, ctx.discount_for("ofz")[1],
+                                            SPREAD_CONVENTION, "ofz", dirty_price_rub=v.dirty_rub,
+                                            quantity=row["quantity"]))
     core = engine.approximate(BondScenario(tuple(norm["curves"]["RUB RUONIA"]), norm["ofzSpread"]))
     assert t["total"] == pytest.approx(core.approximate_pnl_rub, rel=1e-6)
     assert t["convexity"] == pytest.approx(core.rates_gamma_pnl_rub + core.spread_gamma_pnl_rub
@@ -149,15 +162,17 @@ def test_reprice_run_keyhike(golden):
 def test_reprice_run_moves_each_curve_by_its_own_shifts(golden):
     """R8: core moves the RUONIA and key-rate curves by name and the KBD by RUB OFZ, each by its own vector only, as
     the Taylor moves each curve's factors: one bp on every RUB curve, and one curve alone, reprice the bonds as their
-    per-curve risk says. With RUONIA discounting (20.10) the KBD alone moves no bond, in Taylor and in core."""
+    per-curve risk says. R18: the KBD (RUB OFZ) alone widens the OFZ-RUONIA basis: it moves the OFZ (on the KBD,
+    risk on RUONIA + basis), in Taylor and in core, and no corporate."""
     snaps, _, run, rows, reference = golden
-    sc = exact.core_scenario("x", normalize({"curves": {"RUB KEY": 2, "RUB OFZ": 1}}), 3.0)
+    sc = exact.core_scenario("x", normalize({"curves": {"RUB KEY": 2, "RUB OFZ": 1}}), 3.0)  # basis +1
     assert sc.shock.curve_shifts_bp == (1.0,) * 11 and sc.shock.spread_shift_bp == 3.0
     assert dict(sc.curve_shifts_bp) == {"RUB_KEY_RATE_PROJ": (2.0,) * 11, "RUB_RUONIA_OIS": (0.0,) * 11}
     floaters = {r["position_id"] for r in rows if r["secid"] in ("SU29008RMFS8", FLOATER)}
     assert len(floaters) == 2  # the OFZ-PK on RUONIA, the corporate on the key rate
     assert not any("RUB OFZ" in r["fact"]["risk"] for r in rows)
-    for d in ({"curves": dict.fromkeys(RUB_CURVES, 1)}, {"curves": {"RUB KEY": 1}}, {"curves": {"RUB RUONIA": -1}}):
+    for d in ({"curves": dict.fromkeys(RUB_RATE_CURVES, 1)}, {"curves": {"RUB KEY": 1}}, {"curves": {"RUB RUONIA": -1}},
+              {"curves": {"RUB OFZ-RUONIA": 1}}, {"curves": {"RUB OFZ": 1, "RUB RUONIA": -1}}):
         res = reprice_run(snaps, run, rows, reference, d)
         moved = [p for p in res["positions"] if p["position_id"] in floaters and p["taylor"]["rates"]]
         assert moved and all(p["exact"] is not None for p in moved)
@@ -166,10 +181,18 @@ def test_reprice_run_moves_each_curve_by_its_own_shifts(golden):
                 assert abs(p["residual"]) <= 1e-3 * abs(p["taylor"]["total"]) + 1e-6, (d, p)
     kbd = reprice_run(snaps, run, rows, reference, {"curves": {"RUB OFZ": 100}})
     assert kbd["coverage"]["n_exact"] >= 8
-    assert all(p["taylor"]["total"] == 0 and (p["exact"] is None or abs(p["exact"]) < 1e-6) for p in kbd["positions"])
+    ofz = {r["position_id"] for r in rows if "RUB OFZ-RUONIA" in r["fact"]["risk"]}
+    assert ofz
+    for p in kbd["positions"]:
+        if p["position_id"] in ofz:
+            assert p["taylor"]["rates"] < 0
+            if p["quality"] in ("exact", "assumed"):  # a fallback rung (the OFZ-IN) stays Taylor only
+                assert p["exact"] is not None and abs(p["residual"]) <= 2e-2 * abs(p["taylor"]["total"]), p
+        else:
+            assert p["taylor"]["total"] == 0 and (p["exact"] is None or abs(p["exact"]) < 1e-6)
     # a move of all RUB curves alike: the same total as the RUONIA move for a fixed bond (its only curve)
     par = {p["position_id"]: p for p in reprice_run(snaps, run, rows, reference,
-                                                    {"curves": dict.fromkeys(RUB_CURVES, 1)})["positions"]}
+                                                    {"curves": dict.fromkeys(RUB_RATE_CURVES, 1)})["positions"]}
     ruonia = reprice_run(snaps, run, rows, reference, {"curves": {"RUB RUONIA": 1}})["positions"]
     for p in ruonia:
         if p["exact"] is not None and p["position_id"] not in floaters:
@@ -286,10 +309,22 @@ def test_parity_fixture_is_current(golden):
     keyhike = next(c for c in doc["cases"] if c["name"] == "keyhike")
     p = keyhike["payload"]
     assert p["factors"][-3:] == ["CS", "FX|CNY", "FX|USD"]
-    assert p["curves"] == ["RUB KEY", "RUB OFZ", "RUB RUONIA", "USD"]
+    assert p["curves"] == ["RUB KEY", "RUB OFZ", "RUB OFZ-RUONIA", "RUB RUONIA", "USD"]
     assert {f.rsplit("|", 1)[0] for f in p["factors"] if f.startswith("IR|")} == {f"IR|{c}" for c in p["curves"]}
     basis = next(c for c in doc["cases"] if c["name"] == "basis")["expected"]["positions"]
     assert sum(1 for x in basis if x["rates"]) == 1  # only the key-rate floater has risk on RUB KEY
+    # R18: the OFZ basis moves only the OFZ (their risk on it) and the rows on RUB OFZ (the OFZ curve), never a
+    # corporate; the KBD alone moves them as much as the same basis move does
+    on_basis = {i for i, f in enumerate(p["factors"]) if f.startswith("IR|RUB OFZ-RUONIA|")}
+    ofz = {x["position_id"] for x in p["positions"] if on_basis & {i for i, _ in x["delta"]}} | {"S01", "S02", "S03"}
+    assert len(ofz) > 3 and all(x["spread_kind"] != "credit" for x in p["positions"] if x["position_id"] in ofz
+                                and x["position_id"][0] == "P")
+    cases = {c["name"]: {x["position_id"]: x for x in c["expected"]["positions"]} for c in doc["cases"]}
+    assert {pid for pid, x in cases["ofzbasis"].items() if x["rates"]} == ofz
+    kbd100 = normalize({"curves": {"RUB OFZ-RUONIA": 100}}, p["curves"])
+    for x in run_taylor(p, kbd100)["positions"]:
+        pid = x["position_id"]
+        assert x["total"] == pytest.approx(cases["kbd"][pid]["total"], rel=1e-12, abs=1e-9)
     by = {x["position_id"]: x for x in p["positions"]}
     assert (by["S02"]["sector"], by["S03"]["rating"], by["S03"]["spread_bp"]) == ("Девелопмент", "BB", None)
     assert all(i <= j for x in p["positions"] for i, j, _ in x["gamma"])

@@ -125,15 +125,18 @@ def test_floater_formula_fields_override_the_defaults(ctx):
 
 
 def test_floater_risk_stays_per_curve(ctx):
-    """R8 with RUONIA discounting (20.10): a fixed OFZ has its DV01 on RUB RUONIA; an OFZ-PK on RUONIA projects and
-    discounts on the same curve (one factor: a short rate risk to its next reset); a key-rate floater's discount
+    """R8 with RUONIA discounting (20.10) and the OFZ basis (R18): a fixed OFZ has its DV01 on RUB RUONIA and the
+    same on the OFZ-RUONIA basis; an OFZ-PK projects on RUONIA and discounts on the KBD (RUONIA + basis): a short net
+    rate risk to its next reset on RUONIA, its full discounting on the basis; a key-rate floater's discount
     (RUONIA) and projection (KEY) curves are separate factors, with their own buckets and their cross terms in the
     Hessian; the totals are their sums."""
     o_ofz, o_pk, o_key = value(ctx, [(s, 1000.0) for s in (OFZ, OFZ_PK, KEY)], second_order=True)
-    assert set(o_ofz.valuation.risk()) == {"RUB RUONIA"}
+    assert set(o_ofz.valuation.risk()) == {"RUB RUONIA", "RUB OFZ-RUONIA"}
     pk = o_pk.valuation
-    assert set(pk.risk()) == {"RUB RUONIA"} and abs(pk.dv01_rub) < 0.5 * abs(pk.spread01_rub)
-    assert {f.split("|")[1] for a, b, _ in pk.hessian for f in (a, b) if f.startswith("IR|")} == {"RUB RUONIA"}
+    assert set(pk.risk()) == {"RUB RUONIA", "RUB OFZ-RUONIA"} and abs(pk.dv01_rub) < 0.5 * abs(pk.spread01_rub)
+    assert sum(pk.risk()["RUB OFZ-RUONIA"].values()) < 2 * pk.dv01_rub < 0  # all its discounting, the net is short
+    assert {f.split("|")[1] for a, b, _ in pk.hessian for f in (a, b) if f.startswith("IR|")} == {
+        "RUB RUONIA", "RUB OFZ-RUONIA"}
     v = o_key.valuation
     risk = v.risk()
     assert set(risk) == {"RUB RUONIA", "RUB KEY"}
@@ -152,7 +155,11 @@ def test_run_publishes_the_rates_curves(ctx):
     outs = value(ctx, [(s, 1000.0) for s in (OFZ, OFZ_PK, KEY)], second_order=True)
     c = tdm_run.run_content(ctx, [(f"P{i}", "OFZ", o) for i, o in enumerate(outs)], None, {})
     curves = {x["curve_id"]: x for x in c.reference["curves"]}
-    assert list(curves) == ["RUB OFZ", "RUB RUONIA", "RUB KEY"]  # the KBD stays a market curve, without risk
+    assert list(curves) == ["RUB OFZ", "RUB RUONIA", "RUB KEY", "RUB OFZ-RUONIA"]  # the KBD: no risk on it
+    basis = curves["RUB OFZ-RUONIA"]  # R18: the KBD less RUONIA per pillar
+    assert (basis["kind"], basis["name"]) == ("basis", "Базис ОФЗ–RUONIA")
+    assert all(p["rate"] == pytest.approx(o["rate"] - r["rate"], abs=2e-4) for p, o, r in zip(
+        basis["points"], curves["RUB OFZ"]["points"], curves["RUB RUONIA"]["points"]))
     for cid in ("RUB RUONIA", "RUB KEY"):
         x = curves[cid]
         assert (x["ccy"], x["kind"], len(x["points"])) == ("RUB", "swap", 11)
@@ -162,8 +169,10 @@ def test_run_publishes_the_rates_curves(ctx):
     again = tdm_run.run_content(ctx, [(f"P{i}", "OFZ", o) for i, o in enumerate(outs)], ctx.market, {})
     assert again.reference["curves"][1]["points"] == curves["RUB RUONIA"]["points"]
     ofz, pk, key = c.rows
-    assert all(r["spread_type"] == "Z" and r["spread_curve"] == "RUB RUONIA" for r in c.rows)
-    assert set(ofz["risk"]) == set(pk["risk"]) == {"RUB RUONIA"} and set(key["risk"]) == {"RUB RUONIA", "RUB KEY"}
-    assert ofz["cs01"] == 0.0 and ofz["ofz_spr01"] < 0  # the OFZ spread to RUONIA, one number per bond
+    assert [(r["spread_type"], r["spread_curve"]) for r in c.rows] == [("Z", "RUB OFZ")] * 2 + [("Z", "RUB RUONIA")]
+    assert set(ofz["risk"]) == set(pk["risk"]) == {"RUB RUONIA", "RUB OFZ-RUONIA"}
+    assert set(key["risk"]) == {"RUB RUONIA", "RUB KEY"}
+    assert ofz["dv01"] == pytest.approx(sum(ofz["risk"]["RUB RUONIA"].values()))  # the basis is not in the DV01
+    assert ofz["cs01"] == 0.0 and ofz["ofz_spr01"] < 0  # the OFZ's own spread to the OFZ curve, one number per bond
     assert key["dv01"] == pytest.approx(sum(sum(b.values()) for b in key["risk"].values()))
     assert {f.split("|")[1] for g in key["gamma"] for f in g[:2] if f.startswith("IR|")} == {"RUB RUONIA", "RUB KEY"}

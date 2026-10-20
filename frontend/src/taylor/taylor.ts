@@ -4,8 +4,11 @@ import type { RiskPayload, RiskPosition, ScenarioDefinition, SpreadRules, Taylor
 
 export const N_BUCKETS = 11;
 const MAX_BP = 5000;
-/** The curves core reprices (Python RUB_CURVES): a shock on them is valid for every run, even one without them. */
-export const RUB_CURVES: readonly string[] = ['RUB OFZ', 'RUB RUONIA', 'RUB KEY'];
+export const OFZ_CURVE = 'RUB OFZ', RUONIA_CURVE = 'RUB RUONIA', BASIS_CURVE = 'RUB OFZ-RUONIA';
+/** The rate curves core reprices (Python RUB_RATE_CURVES): a parallel move of the rates moves these. */
+export const RUB_RATE_CURVES: readonly string[] = [OFZ_CURVE, RUONIA_CURVE, 'RUB KEY'];
+/** Valid in every run (Python RUB_CURVES): the rate curves and the OFZ–RUONIA basis (R18). */
+export const RUB_CURVES: readonly string[] = [...RUB_RATE_CURVES, BASIS_CURVE];
 
 export interface NormSpreads {
   _all?: number;
@@ -124,15 +127,34 @@ function parseFactors(payload: RiskPayload): Factor[] {
   });
 }
 
-/** Shock x over payload.factors: IR = curve bp, CS = ds, FX = %; missing = 0. */
-export function shockVector(payload: RiskPayload, def: NormDef, p: RiskPosition, factors = parseFactors(payload)): Float64Array {
-  const ds = ownSpreadShock(def, p);
-  return Float64Array.from(factors, f =>
-    f.kind === 'IR' ? def.curves?.[f.curve]?.[f.bucket] ?? 0 : f.kind === 'CS' ? ds : def.fx?.[f.ccy] ?? 0);
+/** The move of every shocked factor (Python curve_moves, R18): the curves as given, the OFZ curve and the basis set
+ *  together: basis = its own vector, else RUB OFZ − RUB RUONIA when RUB OFZ is given, else 0; OFZ curve = RUB OFZ when
+ *  given (exactly), else RUB RUONIA + basis. Both are listed only when nonzero. */
+export function curveMoves(def: NormDef): Record<string, number[]> {
+  const curves: Record<string, number[]> = { ...(def.curves ?? {}) };
+  const zero = new Array<number>(N_BUCKETS).fill(0);
+  const r = curves[RUONIA_CURVE] ?? zero;
+  let basis: number[], ofz: number[];
+  if (curves[BASIS_CURVE]) { basis = curves[BASIS_CURVE]; ofz = r.map((x, i) => x + basis[i]); }
+  else if (curves[OFZ_CURVE]) { ofz = curves[OFZ_CURVE]; basis = ofz.map((o, i) => o - r[i]); }
+  else { basis = zero; ofz = r; }
+  for (const [c, v] of [[BASIS_CURVE, basis], [OFZ_CURVE, ofz]] as const) {
+    if (v.some(x => x !== 0)) curves[c] = v; else delete curves[c];
+  }
+  return curves;
 }
 
-export function positionTaylor(payload: RiskPayload, def: NormDef, p: RiskPosition, factors = parseFactors(payload)): TaylorRow {
-  const x = shockVector(payload, def, p, factors);
+/** Shock x over payload.factors: IR = the factor's move (curveMoves), CS = ds, FX = %; missing = 0. */
+export function shockVector(payload: RiskPayload, def: NormDef, p: RiskPosition, factors = parseFactors(payload),
+                            moves = curveMoves(def)): Float64Array {
+  const ds = ownSpreadShock(def, p);
+  return Float64Array.from(factors, f =>
+    f.kind === 'IR' ? moves[f.curve]?.[f.bucket] ?? 0 : f.kind === 'CS' ? ds : def.fx?.[f.ccy] ?? 0);
+}
+
+export function positionTaylor(payload: RiskPayload, def: NormDef, p: RiskPosition, factors = parseFactors(payload),
+                               moves = curveMoves(def)): TaylorRow {
+  const x = shockVector(payload, def, p, factors, moves);
   let rates = 0, spread = 0, fx = 0, convexity = 0, maxMove = Math.abs(ownSpreadShock(def, p));
   for (const [i, d] of p.delta) {
     const k = factors[i].kind;
@@ -154,7 +176,8 @@ const PARTS = ['rates', 'spread', 'fx', 'convexity', 'total'] as const;
 /** Per-position rows plus totals per book_id and `_total`, summed in position order. */
 export function runTaylor(payload: RiskPayload, def: NormDef): TaylorRun {
   const factors = parseFactors(payload);
-  const positions = payload.positions.map(p => positionTaylor(payload, def, p, factors));
+  const moves = curveMoves(def);
+  const positions = payload.positions.map(p => positionTaylor(payload, def, p, factors, moves));
   const totals: Record<string, TaylorParts> = {};
   const zero = (): TaylorParts => ({ rates: 0, spread: 0, fx: 0, convexity: 0, total: 0 });
   for (const r of positions) {
