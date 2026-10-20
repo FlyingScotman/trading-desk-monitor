@@ -121,6 +121,22 @@ The run pages open on is the newest run shown (`store.CURRENT_RUNS`): per date i
 
 Settings are read again every cycle. `GET /api/v1/autopilot/status` gives the state, the steps of the last cycle and the latest run shown with its slice; errors are also logged to `<home>/logs/autopilot.log`. `desk serve --no-autopilot` starts no thread; `--autopilot` runs cycles even when the settings turn it off. `desk cycle` runs one cycle in the foreground and prints it (exit 1 when a step failed; `--date D` also keeps D current, `--no-hub` skips the hub); the Windows bundle's `update_daily.bat` calls it (its arguments go to `desk cycle`). One cycle at a time per home folder, across processes: a cycle holds `<home>/cycle.lock` (`msvcrt.locking` / `fcntl.flock`, released by the OS if the process dies); a cycle that finds it taken does nothing and reports the step `cycle: skipped` (another cycle running).
 
+### Diagnostics for the agent (R13)
+
+The owner's desk runs on real positions the agent never sees; the diagnostics export is how a problem there is read remotely. The settings page's «Диагностика» («Собрать диагностику», then «Скачать» or «Скопировать»), `GET /api/v1/diagnostics` (`?hub=0` skips the hub, `?download=1` returns it as `desk-diagnostics-<UTC>.json`; this computer only, like the settings routes) and `desk diagnostics [--out FILE] [--no-hub]` (Windows: `desk.bat diagnostics --out diag.json`) build one JSON document, `schema: "desk-diagnostics/1"` (`desk/diagnostics.py`):
+
+| Section | What |
+|---|---|
+| `app`, `clock` | versions (bundle, backend, logic, core), Python and OS family, uptime, `DESK_*` variables (values only of flags and numbers); UTC, Moscow and local time |
+| `settings` | flags, numbers and enums as they are; paths, URLs, names and secrets only `set`/`unset` (folders: whether they exist) |
+| `autopilot` | state, the last cycles with each step's status, duration and detail; the intraday window, next hub slot and what the hub answered; from `autopilot.log` the cycles of any process and per day each step's outcomes by kind |
+| `hub`, `snapshots`, `static` | a live hub check and its newest snapshots of every cut (cached or not); per cached market snapshot the curve quote sets per `source/dataset` with their quote counts, the expected curves missing, ZCYC and quote counts, whether the RUONIA OIS and key-rate curves build from it; static snapshots by status, class and coupon type |
+| `inbox`, `positions` | adapter name and version, files by status, source and error code, issue codes, file extensions; position sets per date and today's book in counts |
+| `runs` | the last 20 runs: date, type, cut, times, versions, positions by quality and reason code, discount curve, curves built, risk per curve (positions contributing), floaters by index, coupon display counts, PnL availability, basis and reason codes |
+| `logs`, `db` | log records by day, level and logger, the most frequent warning and error kinds, the last error lines; migrations and table row counts |
+
+No ISIN or SECID, book, portfolio, trader or counterparty, amount, price or PnL value, file path, user or host name or token: sections hold codes, dates, counts and snapshot id prefixes, and every free text (step details, errors, log lines) and finally the whole document are scrubbed of ISIN-like tokens, paths, URLs, addresses, amounts and every sensitive value the settings and the store know (`tests/test_diagnostics.py` checks it on a fixture run).
+
 ### Offline fallback
 
 When the hub is unreachable (the proxy blocks it), an operator copies `<snapshot_id>.json.gz` bundles into `DESK_SNAPSHOT_DROP` and runs `desk import-drop`. Each file is verified like a download; a bad file is rejected with its reason and not copied.

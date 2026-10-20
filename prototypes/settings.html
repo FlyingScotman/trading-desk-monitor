@@ -312,6 +312,25 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
       <div class="res" id="up-last" hidden></div>
     </div>
   </section>
+
+  <!-- 8. Диагностика (R13; self-contained: its style and script are here; data: /api/v1/diagnostics) -->
+  <section class="pnl" id="dg" aria-labelledby="h-dg">
+    <style>
+      #dg pre{margin:10px 0 0;max-height:440px;overflow:auto;background:var(--panel-2);border:1px solid var(--line-2);border-radius:2px;padding:8px 10px;font-family:var(--font-mono);font-size:11.5px;line-height:1.4;white-space:pre;tab-size:2}
+    </style>
+    <div class="ph"><h2 id="h-dg">Диагностика</h2><span class="muted" id="dg-size"></span></div>
+    <div class="pb">
+      <div class="note">Без позиций, книг, ISIN и сумм — можно передать агенту. Файл описывает работу программы: версию, настройки (без путей и паролей), шаги автообновления, срезы рынка и наличие кривых, счётчики отчётов и прогонов, ошибки журналов по видам.</div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn" id="dg-run" type="button">Собрать диагностику</button>
+        <button class="ibtn" id="dg-save" type="button" disabled>Скачать</button>
+        <button class="ibtn" id="dg-copy" type="button" disabled>Скопировать</button>
+        <label class="chk"><input type="checkbox" id="dg-hub" checked> проверить маркет-дата сервер</label>
+        <span id="dg-msg" class="muted"></span>
+      </div>
+      <pre id="dg-out" hidden></pre>
+    </div>
+  </section>
 </main>
 
 <div class="savebar">
@@ -781,5 +800,57 @@ async function renderConfigFiles(a){
   });
   $('up-dir').addEventListener('keydown', e => { if (e.key === 'Enter') $('up-dir-save').click(); });
   load();
+})();
+</script>
+<script>
+'use strict';
+/* ---------- 8. Диагностика (R13): /api/v1/diagnostics builds a JSON of how the desk works here, without private
+   data; the preview shows it as it will be saved, «Скачать» saves exactly that text, «Скопировать» copies it ---------- */
+(function diagnostics(){
+  const D = {text:null, name:null};
+  const kb = n => Math.max(1, Math.round(n / 1024)) + ' КБ';
+  function msg(text, cls){ $('dg-msg').className = cls || 'muted'; $('dg-msg').textContent = text || ''; }
+
+  $('dg-run').addEventListener('click', async () => {
+    const btn = $('dg-run');
+    btn.disabled = true; msg('Собираю… (до минуты, если сервер недоступен)');
+    try {
+      const r = await fetch('/api/v1/diagnostics?hub=' + ($('dg-hub').checked ? 1 : 0), {headers:{'Accept':'application/json'}, cache:'no-store'});
+      const text = await r.text();
+      if (!r.ok) { let m = 'HTTP ' + r.status; try { m = JSON.parse(text).message || m; } catch(e) {} throw new Error(m); }
+      const doc = JSON.parse(text);
+      D.text = JSON.stringify(doc, null, 1) + '\n';
+      const ts = (doc.generated_at || new Date().toISOString()).replace(/[-:]/g, '').replace(/\..*$/, '').replace(/\+.*$/, '');
+      D.name = 'desk-diagnostics-' + ts + 'Z.json';
+      $('dg-out').hidden = false; $('dg-out').textContent = D.text;
+      $('dg-save').disabled = $('dg-copy').disabled = false;
+      $('dg-size').textContent = kb(new Blob([D.text]).size);
+      const b = doc.build || {};
+      msg('Готово' + (b.duration_s != null ? ' за ' + String(b.duration_s).replace('.', ',') + ' с' : '') + '. Проверьте и передайте агенту.', 'okmsg');
+    } catch(e) { msg('Не удалось собрать: ' + (e.message || e), 'err'); }
+    finally { btn.disabled = false; }
+  });
+
+  $('dg-save').addEventListener('click', () => {
+    if (!D.text) return;
+    const url = URL.createObjectURL(new Blob([D.text], {type:'application/json'}));
+    const a = h('a', {href:url, download:D.name});
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    msg('Сохранено как ' + D.name, 'okmsg');
+  });
+
+  $('dg-copy').addEventListener('click', async () => {
+    if (!D.text) return;
+    try {
+      if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(D.text);
+      else {
+        const ta = h('textarea', {style:'position:fixed;left:-9999px;top:0', readonly:true}); ta.value = D.text;
+        document.body.append(ta); ta.select(); const ok = document.execCommand('copy'); ta.remove();
+        if (!ok) throw new Error('буфер обмена недоступен');
+      }
+      msg('Скопировано в буфер обмена.', 'okmsg');
+    } catch(e) { msg('Не скопировано: ' + (e.message || e) + '. Используйте «Скачать».', 'err'); }
+  });
 })();
 </script>

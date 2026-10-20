@@ -16,6 +16,7 @@
     desk serve                           desk API + Desk Monitor on http://127.0.0.1:8100, scenario worker, autopilot
     desk cycle [--date D] [--no-hub]     one autopilot cycle: hub sync -> inbox scan -> EOD of changed dates
     desk openapi --out ../frontend/openapi.json   the API's OpenAPI document (stdout without --out)
+    desk diagnostics [--out FILE] [--no-hub]       how the desk works here, without private data (R13)
 
 Defaults for the snapshot folder, the run store and the report folder come from
 :mod:`desk.settings` (``DESK_*`` variables or ``backend/.env``); ``desk config`` prints them.
@@ -556,6 +557,20 @@ def cmd_openapi(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_diagnostics(a: argparse.Namespace) -> int:
+    from . import diagnostics
+
+    doc = diagnostics.build(a.settings, hub=not a.no_hub)
+    text = diagnostics.dumps(doc)
+    if a.out:
+        Path(a.out).write_text(text, encoding="utf-8")
+        print(f"diagnostics written to {a.out} ({len(text.encode()) // 1024 + 1} KB): no positions, books, ISINs "
+              "or amounts; send this file to the agent")
+    else:
+        sys.stdout.write(text)
+    return 0
+
+
 def cmd_config(a: argparse.Namespace) -> int:
     for key, shown in a.settings.describe():
         print(f"{key:<24} {shown}")
@@ -678,6 +693,11 @@ def main(argv: list[str] | None = None) -> int:
     oa = sub.add_parser("openapi", help="print or write the desk API's OpenAPI document")
     oa.add_argument("--out", help="write it to this file")
     oa.set_defaults(fn=cmd_openapi)
+    dg = sub.add_parser("diagnostics", help="how the desk works here as JSON, without private data (positions, "
+                        "books, ISINs, amounts, paths, tokens): for the agent")
+    dg.add_argument("--out", help="write it to this file (stdout without --out)")
+    dg.add_argument("--no-hub", action="store_true", help="do not ask the hub (no live check, no snapshot list)")
+    dg.set_defaults(fn=cmd_diagnostics)
     c = sub.add_parser("config", help="print the effective settings (token masked)")
     c.set_defaults(fn=cmd_config)
     a = ap.parse_args(argv)
