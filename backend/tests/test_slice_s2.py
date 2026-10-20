@@ -1,8 +1,8 @@
 """Slice S2 (day-over-day flash PnL) on the hub's golden fixtures.
 
 The fixtures hold one date (2026-10-15). The previous date is synthetic: the same instruments a
-day earlier, on a KBD whose level is 10 bp lower (B1 - 10, a parallel move of the zero curve),
-with slightly different prices. Real two-date runs use the local snapshots (VERTICAL_SLICES S2).
+day earlier, on curves 10 bp lower (the KBD's B1 - 10; RUONIA OIS and the key-rate projection in parallel), the
+fixings known then, with slightly different prices. Real two-date runs use the local snapshots (VERTICAL_SLICES S2).
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from rub_fixed_income import CurveEntry, ShockedCurveCache, kbd_discount_curve
+from rub_fixed_income import CurveEntry, DiscountCurve, FixingEntry, ShockedCurveCache, kbd_discount_curve
 
 from desk.marketdata.adapter import KBD_CURVE_ID, KBD_SPEC, MarketView
 from desk.marketdata.bundle import SnapshotDir
@@ -42,19 +42,42 @@ def secids(ctx) -> list[str]:
 
 @pytest.fixture(scope="module")
 def outcomes(ctx, secids) -> list[Outcome]:
-    # The exact repricing method: bonds valued without assumptions. The synthetic previous date keeps
-    # the fixture's fixings, which core refuses for floaters on another date; the fallback rungs get
-    # the simple PnL (test_fallback).
+    # The exact repricing method: bonds valued without assumptions (the floaters, ``assumed``, are in
+    # test_floater_rates_on_both_curves); the fallback rungs get the simple PnL (test_fallback).
     return [o for o in value(ctx, [(s, QTY) for s in secids], fallback=False)
             if o.valuation and o.valuation.quality == "exact"]
 
 
-def shifted_prev(ctx: EodContext, prev_date: date, shift_bp: float = SHIFT_BP) -> EodContext:
+def shifted_curve(c: DiscountCurve, prev_date: date, shift_bp: float) -> DiscountCurve:
+    """``c`` dated ``prev_date`` with its shape in days kept (``roll_curve`` of it is ``c``) and every continuous
+    zero rate ``shift_bp`` lower."""
+    days = c.curve_date - prev_date
+    return dataclasses.replace(c, curve_date=prev_date, nodes=tuple(
+        (n - days, df * math.exp(shift_bp * 1e-4 * c.convention.time_day_count.year_fraction(c.curve_date, n)))
+        for n, df in c.nodes))
+
+
+def shifted_prev(ctx: EodContext, prev_date: date, shift_bp: float = SHIFT_BP, *, kbd_only: bool = False
+                 ) -> EodContext:
+    """The fixture's market on ``prev_date``: the KBD's level ``shift_bp`` lower (B1), every other curve (RUONIA OIS,
+    the key-rate projection) ``shift_bp`` lower in parallel, the fixings known before ``prev_date``. ``kbd_only``:
+    a market without the rates curves (the KBD fallback)."""
     params = dataclasses.replace(ctx.kbd, trade_date=prev_date, b1=ctx.kbd.b1 - shift_bp)
-    market = dataclasses.replace(ctx.core_market, business_date=prev_date,
-                                 curves=(CurveEntry(KBD_CURVE_ID, KBD_SPEC, params),))
+    curves = [CurveEntry(KBD_CURVE_ID, KBD_SPEC, params)]
+    if not kbd_only:
+        curves += [dataclasses.replace(e, curve=shifted_curve(e.curve, prev_date, shift_bp))
+                   for e in ctx.core_market.curves if isinstance(e.curve, DiscountCurve)]
+    fixings = tuple(FixingEntry(f.fixing_id, dataclasses.replace(
+        f.history, valuation_date=prev_date, fixings=tuple(r for r in f.history.fixings if r[0] < prev_date),
+        published_at=())) for f in ctx.core_market.fixings)
+    market = dataclasses.replace(ctx.core_market, business_date=prev_date, curves=tuple(curves), fixings=fixings)
     return dataclasses.replace(ctx, kbd=params, curve=kbd_discount_curve(params), core_market=market,
                                cache=ShockedCurveCache())
+
+
+def flash_curves(prev: EodContext, ctx: EodContext) -> FlashCurves:
+    return FlashCurves.build(prev.kbd, ctx.kbd, prev.curve, ctx.curve, prev_market=prev.core_market,
+                             cur_market=ctx.core_market)
 
 
 def prev_outcome(prev: EodContext, o: Outcome, price_move_pct: float = 0.05) -> Outcome:
@@ -62,11 +85,12 @@ def prev_outcome(prev: EodContext, o: Outcome, price_move_pct: float = 0.05) -> 
     cum-coupon for the coupons paid since (their amount added to the accrued)."""
     if o.valuation is None:
         return o
-    assert o.terms is not None and o.quote is not None and o.quote.accrued_per_bond is not None
+    assert o.terms is not None and o.quote is not None
     d = prev.kbd.trade_date  # the market view stays the fixture's; only the curve and quote move
     paid = sum((c.amount_per_bond or Decimal(0) for c in o.terms.coupons if d < c.pay_date <= o.quote.trade_date),
                Decimal(0))
-    q = dataclasses.replace(o.quote, trade_date=d, accrued_per_bond=o.quote.accrued_per_bond + paid, prices_pct={
+    acc = None if o.quote.accrued_per_bond is None else o.quote.accrued_per_bond + paid
+    q = dataclasses.replace(o.quote, trade_date=d, accrued_per_bond=acc, prices_pct={
         k: v + Decimal(str(price_move_pct)) for k, v in o.quote.prices_pct.items()})
     valued, _ = value_bonds(prev.core_market, [bond_request("p", o.terms, q, d, o.valuation.quantity)])
     assert isinstance(valued["p"], BondValuation), valued["p"]
@@ -115,7 +139,7 @@ def test_spread_is_the_z_change(ctx, outcomes):
         if o.valuation is None:
             continue
         p = prev_outcome(prev, o)
-        f = explain(p.valuation, o.valuation, FlashCurves.build(prev.kbd, ctx.kbd))
+        f = explain(p.valuation, o.valuation, flash_curves(prev, ctx))
         dz = o.valuation.z_spread_bp - p.valuation.z_spread_bp
         assert abs(f.rates) < 1e-6  # the same yield per tenor: no rate move
         assert f.spread * dz <= 0  # wider spread, lower value for a long position
@@ -127,10 +151,58 @@ def test_coupon_received_in_the_window(ctx, outcomes):
     last = max((c for c in o.terms.coupons if c.pay_date <= ctx.business_date), key=lambda c: c.pay_date)
     prev = shifted_prev(ctx, last.pay_date - timedelta(days=1), shift_bp=0.0)
     p = prev_outcome(prev, o, price_move_pct=0.0)
-    f = explain(p.valuation, o.valuation, FlashCurves.build(prev.kbd, ctx.kbd))
+    f = explain(p.valuation, o.valuation, flash_curves(prev, ctx))
     assert f.received_rub == pytest.approx(float(last.amount_per_bond) * QTY)
     assert abs(f.explained - f.total) < 1e-4
     assert f.carry > f.received_rub * 0.5  # the coupon is carry, not a price drop
+
+
+def test_bonds_are_discounted_on_ruonia(outcomes):
+    """The owner's decision of 20.10: a fixed RUB bond, OFZ or corporate, has its Z-spread to RUONIA OIS and its
+    rate DV01 on RUB RUONIA, none on the KBD (RUB OFZ, a market curve now)."""
+    assert outcomes
+    for o in outcomes:
+        v = o.valuation
+        assert (v.discount_curve_id, v.spread_curve) == ("RUB_RUONIA_OIS", "RUB RUONIA"), o.secid
+        assert set(v.risk()) == {"RUB RUONIA"} and v.dv01_rub < 0 and v.spread01_rub < 0
+        assert not any("KBD" in a for a in v.assumptions)
+
+
+@pytest.mark.parametrize("secid,curves", [("SU29008RMFS8", {"RUB RUONIA"}),
+                                          ("RU000A109XR1", {"RUB RUONIA", "RUB KEY"})])
+def test_floater_rates_on_both_curves(ctx, secid, curves):
+    """A floater's ``rates`` reprices its discount and projection curves: it matches the linear explain (DV01 per
+    curve x that curve's move) and leaves nothing in ``other`` when nothing else changed."""
+    o = value(ctx, [(secid, QTY)], fallback=False)[0]
+    assert o.valuation is not None and o.valuation.floater is not None, o.reason
+    assert {c for c, bs in o.valuation.risk().items() if any(bs.values())} == curves
+    prev = shifted_prev(ctx, ctx.business_date - timedelta(days=1))
+    p = prev_outcome(prev, o)
+    f = explain(p.valuation, o.valuation, flash_curves(prev, ctx))
+    assert abs(f.rates - f.rates_linear) < 0.02 * abs(f.rates_linear) + 1.0, (f.rates, f.rates_linear)
+    assert abs(f.other) < 1.0, f.other
+    assert abs(f.explained - f.total) < 1e-4
+
+
+def test_kbd_fallback_without_ruonia(ctx, outcomes):
+    """No RUONIA OIS curve in the market: the bonds are discounted on the KBD, say so (``assumed``) and carry their
+    DV01 on RUB OFZ; a PnL across the change of curve is the simple one (all in other), the run goes on."""
+    prev = shifted_prev(ctx, ctx.business_date - timedelta(days=1), kbd_only=True)
+    prevs = [prev_outcome(prev, o) for o in outcomes]
+    for p in prevs:
+        v = p.valuation
+        assert (v.discount_curve_id, v.quality, set(v.risk())) == ("RUB_KBD", "assumed", {"RUB OFZ"})
+        assert any("discounted on the KBD: no RUONIA OIS curve" in a for a in v.assumptions)
+    cur = [dataclasses.replace(o) for o in outcomes]
+    attach_pnl(prev, prevs, ctx, cur)
+    for o in cur:
+        assert o.pnl is not None and o.pnl.rates == 0.0 and o.pnl.other == pytest.approx(o.pnl.total)
+        assert "discounted on RUB OFZ" in o.pnl.note
+    # both dates on the KBD: the exact explain on it, as before the switch
+    prev2 = shifted_prev(ctx, ctx.business_date - timedelta(days=2), 2 * SHIFT_BP, kbd_only=True)
+    p2 = prev_outcome(prev2, prevs[0])
+    f = explain(p2.valuation, prevs[0].valuation, flash_curves(prev2, prev))
+    assert abs(f.rates - f.rates_linear) < 0.02 * abs(f.rates_linear) and abs(f.other) < 1e-6
 
 
 def test_not_priced_previous_day_gets_no_pnl_and_a_warning(ctx, outcomes, tmp_path):

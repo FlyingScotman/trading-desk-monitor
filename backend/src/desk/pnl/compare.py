@@ -1,8 +1,9 @@
 """The flash PnL both ways: ``desk.pnl.flash`` vs core ``explain_horizon_pnl`` (slice S4 step 4).
 
 Core is run per bond on the D-1 instrument (the backend's ``core_instrument`` after the D-1
-trade date), from the D-1 KBD to the D KBD, with both spreads calibrated by core to the two
-published dirty prices; its per-bond amounts are scaled by the quantity here.
+trade date), from the D-1 discount curve to the D one (``EodContext.discount``: RUONIA OIS, the KBD on a date
+without it), with both spreads calibrated by core to the two published dirty prices; its per-bond amounts are
+scaled by the quantity here. The table says "KBD" for that curve; on RUONIA both sides roll it by ``roll_curve``.
 
 Definitions side by side (``q`` and ``received`` omitted; ``z0``/``z1`` flash's calibrated
 spreads, ``s0``/``s1`` core's; rolled = D-1 curve with its shape in calendar days moved to D):
@@ -98,7 +99,7 @@ def compare(prev_ctx: EodContext, prev_outcomes: list[Outcome], ctx: EodContext,
         try:
             inst = core_instrument(p.terms, pv.valuation_date, pv.horizon_date,
                                    None if offer is None else (offer[0], offer[1], "offer"), coupons=s.coupons)
-            x = explain_horizon_pnl(inst, prev_ctx.curve, ctx.curve, prev_ctx.calendar,
+            x = explain_horizon_pnl(inst, prev_ctx.discount[1], ctx.discount[1], prev_ctx.calendar,
                                     start_dirty_price_rub=pv.dirty_rub, end_dirty_price_rub=v.dirty_rub,
                                     spread_convention=SPREAD_CONVENTION,
                                     redemption_horizon="maturity" if offer is None else "confirmed_put",

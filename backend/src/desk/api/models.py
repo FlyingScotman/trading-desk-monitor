@@ -168,8 +168,8 @@ class SpreadRules(BaseModel):
 
 class ScenarioDefinition(BaseModel):
     """The prototype scenario shape. curves: bp per RISK_BUCKETS pillar (11) or one number for all, per
-    published curve ("RUB OFZ" the KBD, "RUB RUONIA", "RUB KEY", a currency's "USD"...), each moving only by
-    its own vector; ofzSpread: OFZ Z-spread to the KBD, bp; fx: % against RUB (+ = weaker rouble). Returned
+    published curve ("RUB RUONIA" the RUB bonds' discount curve, "RUB KEY", "RUB OFZ" the KBD, a currency's
+    "USD"...), each moving only by its own vector; ofzSpread: OFZ Z-spread to RUONIA, bp; fx: % against RUB (+ = weaker rouble). Returned
     normalized: 11-pillar lists, zeros and empty entries left out."""
 
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
@@ -294,7 +294,7 @@ class BondHistoryPoint(BaseModel):
     date: date
     clean_price: float | None = Field(None, description="% of face; basis in price_basis")
     ytm: float | None = Field(None, description="%, effective annual: MOEX's to yield_date, else the run's")
-    z_spread_bp: float | None = Field(None, description="the desk run's Z-spread to the KBD")
+    z_spread_bp: float | None = Field(None, description="the desk run's Z-spread to its discount curve (RUONIA OIS since the owner's decision of 20.10)")
     g_spread_bp: float | None = Field(None, description="MOEX's")
     accrued: float | None = None
     volume_rub: float | None = None

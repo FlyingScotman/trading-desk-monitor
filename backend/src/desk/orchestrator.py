@@ -6,7 +6,8 @@ the floaters need, built once per date), and the settlement calendar. ``value`` 
 (secid, quantity) requests through core ``value_portfolio`` and returns one ``Outcome`` per
 request: a valuation or a rejection with its reason. ``attach_pnl`` adds the day-over-day flash
 PnL against the valuations of the previous date (``desk.pnl.flash``; a foreign-face bond's FX revaluation in
-``fx_gross``, ``desk.pnl.direct.split_fx``).
+``fx_gross``, ``desk.pnl.direct.split_fx``). RUB bonds are discounted on RUONIA OIS (``valuation.bonds.discount_curve``;
+the KBD, flagged, on a date whose market has no RUONIA curve).
 """
 
 from __future__ import annotations
@@ -31,11 +32,19 @@ from rub_fixed_income import (
 )
 
 from .curves import rates
-from .marketdata.adapter import KBD_SPEC, BondQuote, BondTerms, MarketView, StaticView
+from .marketdata.adapter import KBD_CURVE_ID, KBD_SPEC, BondQuote, BondTerms, MarketView, StaticView
 from .marketdata.bundle import SnapshotDir, SnapshotError
 from .pnl.direct import split_fx
 from .pnl.flash import FlashCurves, FlashPnl, NoPnl, explain
-from .valuation.bonds import BondRequest, BondValuation, Rejected, bond_request, settlement_date, value_bonds
+from .valuation.bonds import (
+    BondRequest,
+    BondValuation,
+    Rejected,
+    bond_request,
+    discount_curve,
+    settlement_date,
+    value_bonds,
+)
 from .valuation.fallback import RUNGS, CarriedSpread, FallbackContext, approximate, par_proxy, simple_pnl
 
 KBD_TOLERANCE_BP = 0.05
@@ -74,6 +83,17 @@ class EodContext:
     @property
     def business_date(self) -> date:
         return self.market.business_date
+
+    @property
+    def discount(self) -> tuple[str, DiscountCurve, str | None]:
+        """The curve RUB bonds are discounted on (``valuation.bonds.discount_curve``): core curve ID, the built curve
+        and the note of a KBD fallback (None on RUONIA)."""
+        cid, note = discount_curve(self.core_market)
+        if cid == KBD_CURVE_ID:
+            return cid, self.curve, note
+        built = next(c.curve for c in self.core_market.curves if c.curve_id == cid)
+        assert isinstance(built, DiscountCurve)
+        return cid, built, note
 
     @property
     def point_in_time_warning(self) -> str | None:
@@ -212,7 +232,8 @@ def attach_pnl(prev: EodContext, prev_outcomes: list[Outcome], ctx: EodContext, 
     """Set ``pnl`` or ``no_pnl`` on every outcome of ``ctx`` priced today. Both lists are in request order."""
     if len(prev_outcomes) != len(outcomes):
         raise ValueError("previous and current requests differ")
-    curves = FlashCurves.build(prev.kbd, ctx.kbd, prev.curve, ctx.curve)
+    curves = FlashCurves.build(prev.kbd, ctx.kbd, prev.curve, ctx.curve, prev_market=prev.core_market,
+                               cur_market=ctx.core_market)
     cache = ShockedCurveCache()
     for p, o in zip(prev_outcomes, outcomes):
         if o.valuation is None:
@@ -229,6 +250,13 @@ def attach_pnl(prev: EodContext, prev_outcomes: list[Outcome], ctx: EodContext, 
             if o.valuation.quality in RUNGS or p.valuation.quality in RUNGS:  # no cashflows to reprice
                 assert o.terms is not None
                 o.pnl = split_fx(simple_pnl(p.valuation, o.valuation, o.terms, ctx), prev, ctx, o.terms)
+                continue
+            if p.valuation.discount_curve_id != o.valuation.discount_curve_id:  # a KBD fallback on one date
+                assert o.terms is not None
+                o.pnl = replace(simple_pnl(p.valuation, o.valuation, o.terms, ctx), note=(
+                    f"simple PnL: discounted on {p.valuation.spread_curve} on {prev.business_date}, on "
+                    f"{o.valuation.spread_curve} on {ctx.business_date}: the spreads are to different curves, "
+                    "q x (dirty D - dirty D-1) + received, all in other"))
                 continue
             o.pnl = explain(p.valuation, o.valuation, curves, cache)
         except NoPnl as e:

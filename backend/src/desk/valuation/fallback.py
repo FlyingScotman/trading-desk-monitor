@@ -10,7 +10,8 @@ Rung            Value
 market_value    a price today: q * (clean % * face / 100 + accrued). Accrued from the quote,
                 else from the current coupon (rate * face * days / 365), else 0
 stale_price     the same with the last price of the previous ``LOOKBACK_DAYS`` calendar days
-model_price     no price, a usable fixed schedule: priced on the KBD at the Z-spread carried from
+model_price     no price, a usable fixed schedule: priced on the discount curve (RUONIA OIS, the KBD on a
+                date without it, ``EodContext.discount``) at the Z-spread to that curve carried from
                 the latest earlier run (its model spread, or the bond's last market Z if newer;
                 desk store, S5), so the price moves with the curve only; without one at the
                 median Z of today's traded exact-priced bonds of the issuer, else of the bond
@@ -23,14 +24,14 @@ reported_value  an instrument the static snapshot does not know (an unmapped ban
 ==============  ==============================================================================
 
 Risk of the priced rungs: with a usable fixed schedule, core ``BondRiskEngine`` calibrated to the
-dirty price (bucket DV01 and spread risk on the KBD, as for exact bonds). Otherwise a duration
+dirty price (bucket DV01 and spread risk on the discount curve, as for exact bonds). Otherwise a duration
 estimate: MOEX ``duration_days``, else the time to the horizon; DV01 = -Macaulay * PV * 1e-4
 (the buckets bump continuous zero rates) split linearly between the two nearest pillars; CS01 =
 DV01 for credit, 0 for OFZ. A floater's rates duration is the time to its next reset (its CS01
 keeps the full duration). A bond with a foreign face is valued in RUB at the CBR rate (MOEX TOM
 when CBR is missing); core has no curve in its currency, so its rate risk is always the duration
 estimate (DV01 in RUB per bp), booked on the currency's curve (``bonds.ccy_curve``: ``USD``, ``CNY``...)
-instead of the KBD. MOEX publishes the accrued in the settlement currency (RUB for most replacement
+instead of RUONIA. MOEX publishes the accrued in the settlement currency (RUB for most replacement
 bonds) and the price in % of the foreign face.
 
 Flash PnL of a position not exact on either date: ``simple_pnl``, q * (dirty_D - dirty_D-1) +
@@ -64,6 +65,7 @@ from ..marketdata.adapter import OFZ_CLASSES, BondQuote, BondTerms, MarketView, 
 from ..pnl.flash import FlashPnl, NoPnl
 from .bonds import (
     PRICE_BASIS_ORDER,
+    RISK_CURVES,
     SPREAD_CONVENTION,
     BondValuation,
     Rejected,
@@ -100,11 +102,14 @@ class CarriedSpread:
     z_spread_bp: float
     business_date: date
     source: str
+    curve: str | None = None
+    """The published curve the spread is to (``BondValuation.spread_curve``, a run's ``spread_curve``): a model price
+    reuses only a spread to its own discount curve (a run before the RUONIA switch had spreads to the KBD)."""
 
 
 def used_model_spreads(outcomes: list[Outcome]) -> list[CarriedSpread]:
     """The spreads the model-price valuations of ``outcomes`` used, one per secid, for the store."""
-    out = {o.secid: CarriedSpread(o.secid, v.z_spread_bp, v.valuation_date, v.model_spread_source)
+    out = {o.secid: CarriedSpread(o.secid, v.z_spread_bp, v.valuation_date, v.model_spread_source, v.spread_curve)
            for o in outcomes if (v := o.valuation) and v.quality == "model_price" and v.model_spread_source
            and math.isfinite(v.z_spread_bp)}
     return list(out.values())
@@ -225,7 +230,7 @@ def _schedule(t: BondTerms, d: date) -> tuple[Any, tuple[BondCashflow, ...], Any
 
 def _engine(ctx: EodContext, flows: tuple[BondCashflow, ...], kind: str, q: float, *,
             spread_bp: float | None = None, dirty: float | None = None) -> tuple[BondRiskEngine, Any]:
-    e = BondRiskEngine(BondRiskRequest(cashflows=flows, settlement_date=ctx.business_date, curve=ctx.curve,
+    e = BondRiskEngine(BondRiskRequest(cashflows=flows, settlement_date=ctx.business_date, curve=ctx.discount[1],
                                        spread_convention=SPREAD_CONVENTION,
                                        spread_kind=kind,  # type: ignore[arg-type]
                                        spread_bp=spread_bp, dirty_price_rub=dirty, quantity=q),
@@ -275,7 +280,9 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
     face_bd = face_on(t, bd)
     matured = not t.is_perpetual and (t.maturity_date is not None and t.maturity_date <= bd
                                       or face_bd is not None and face_bd <= 0)
-    curve = ccy_curve(face_ccy)
+    disc_id, _, disc_note = ctx.discount
+    disc = RISK_CURVES[disc_id]
+    curve = disc if face_ccy == "RUB" else ccy_curve(face_ccy)
     if is_fx:
         why.append(f"FX bond ({face_ccy}): market value at {fx_face[1]} {fx_face[0]:g} RUB, no core curve in "
                    f"{face_ccy}: rate risk a duration proxy on curve {curve}")
@@ -352,13 +359,15 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
         if sched is not None:
             try:
                 _, r = _engine(ctx, sched[1], kind, q, dirty=dirty)
-                why.append("risk: KBD, Z calibrated to this price on the fixed schedule")
+                why.append(f"risk: {disc}, Z calibrated to this price on the fixed schedule"
+                           + (f" ({disc_note})" if disc_note else ""))
+                bs = {b.bucket: b.dv01_rub for b in r.buckets}
                 mdur = -r.dv01_rub / pv * 1e4 if pv else math.nan
                 return make(quality, price_basis=basis, clean_pct=clean, accrued_rub=acc, face_rub=face,
                             dirty_rub=dirty, pv_rub=pv, ytm_pct=ytm,
                             macaulay_years=mdur * (1 + (y or 0) / 100), modified_duration=mdur,
-                            z_spread_bp=r.spread_bp,
-                            buckets={b.bucket: b.dv01_rub for b in r.buckets}, dv01_rub=r.dv01_rub,
+                            z_spread_bp=r.spread_bp, discount_curve_id=disc_id,
+                            buckets=bs, curve_buckets={disc: bs}, dv01_rub=r.dv01_rub,
                             spread01_rub=r.cs01_rub if kind == "credit" else r.ofz_spr01_rub)
             except (ValueError, RuntimeError):
                 pass  # no Z reproduces this price: fall to the duration estimate
@@ -387,7 +396,9 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
                     spread01_rub=s01 if kind == "credit" else 0.0)
 
     priced = None  # ((engine, risk), Z, model_spread_source, assumption text)
-    if sched is not None and (c := fb.carried.get(t.secid)) is not None and math.isfinite(c.z_spread_bp):
+    if sched is not None and (c := fb.carried.get(t.secid)) is not None and c.curve not in (None, disc):
+        why.append(f"carried Z {c.z_spread_bp:.0f} bp from {c.business_date} is to {c.curve}, not {disc}: not used")
+    elif sched is not None and c is not None and math.isfinite(c.z_spread_bp):
         # used even outside Z_BAND_BP: the band keeps outliers out of a group median, but the bond's own wide Z
         # is evidence (a distressed name), and a median would price it near par
         # shortcut: a carried spread never refreshes from better information (new issuer peers, a market-wide
@@ -409,12 +420,14 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
             acc = sched[2].accrued(bd)
         except (ValueError, CoreRejection):
             acc = accrued_rub(None)
-        why.append(f"model price: KBD + {label}, no price in {LOOKBACK_DAYS} days")
+        why.append(f"model price: {disc} + {label}, no price in {LOOKBACK_DAYS} days"
+                   + (f" ({disc_note})" if disc_note else ""))
+        bs = {b.bucket: b.dv01_rub for b in r.buckets}
         mdur = -r.dv01_rub / r.pv_rub * 1e4 if r.pv_rub else math.nan
         return make("model_price", price_basis="model", clean_pct=(dirty - acc) / face * 100,
                     accrued_rub=acc, face_rub=face, dirty_rub=dirty, pv_rub=q * dirty, ytm_pct=math.nan,
                     macaulay_years=mdur, modified_duration=mdur, z_spread_bp=z, model_spread_source=source,
-                    buckets={b.bucket: b.dv01_rub for b in r.buckets}, dv01_rub=r.dv01_rub,
+                    discount_curve_id=disc_id, buckets=bs, curve_buckets={disc: bs}, dv01_rub=r.dv01_rub,
                     spread01_rub=r.cs01_rub if kind == "credit" else r.ofz_spr01_rub)
 
     acc = accrued_rub(outcome.quote)

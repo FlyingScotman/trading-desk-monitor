@@ -7,10 +7,12 @@ The definition keeps the prototype shape (``prototypes/data.js``), so the protot
      "spreads": {"_all": bp, "_mult": factor > 0, "sector": {name: bp}, "issuer": {name: bp}, "rating": {r: bp}},
      "fx": {"USD": pct, ...}}
 
-A curve is a published curve of the run (R8): ``RUB OFZ`` the KBD, ``RUB RUONIA`` and ``RUB KEY`` a floater's
-projection curves, ``USD`` and the like a currency's curve; each moves only by its own vector. The preset moves of
+A curve is a published curve of the run (R8): ``RUB RUONIA`` the discount curve of every RUB bond (and a RUONIA
+floater's projection), ``RUB KEY`` a key-rate floater's projection, ``RUB OFZ`` the KBD (a market curve: no bond
+is discounted on it unless the date has no RUONIA curve, so a shock of it alone moves nothing else), ``USD``
+and the like a currency's curve; each moves only by its own vector. The preset moves of
 all rates shift the three RUB curves alike; the basis preset only ``RUB KEY`` (store migration 0008).
-``ofzSpread`` is the OFZ Z-spread to the KBD (the prototype's spread to RUONIA has no curve in the runs).
+``ofzSpread`` is the OFZ Z-spread to RUONIA (ORG_CONVENTIONS §4).
 ``normalize`` gives the stored, returned and hashed form: every curve a list of 11 floats, zero entries,
 ``_mult == 1``, empty maps and all-zero curves dropped; an unknown key, a bad length, |bp| > ``MAX_BP``
 or an FX move of -100 % or less raise ``DefinitionError``. A null or missing section counts as empty.

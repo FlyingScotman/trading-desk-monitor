@@ -20,7 +20,7 @@ core (``direct``). ``merge`` puts the two back in the inputs' order for ``desk_r
 - OTC and other rows (and any asset class this module does not know): rung ``reported_value`` at the report's
   ``mv_rub``, with its risk (``reported_risk``): ``risk_dv01_rub`` in the rates bucket of ``RISK_BUCKETS`` whose pillar
   is nearest ``maturity_date`` (no maturity, or one already past: the shortest bucket, said in the assumptions), on
-  the curve of the row's currency (``RUB OFZ`` for RUB, else ``USD`` and so on), ``risk_cs01_rub`` as CS01.
+  the curve of the row's currency (``RUB RUONIA`` for RUB, else ``USD`` and so on), ``risk_cs01_rub`` as CS01.
   Without ``mv_rub``: not valued, reason ``no_reported_value`` (in coverage, no fact).
 """
 
@@ -107,7 +107,7 @@ def _bonds(ctx: EodContext, secid: str, qty: float | None, x: dict[str, Any]) ->
 def reported_risk(ctx: EodContext, x: dict[str, Any]) -> tuple[dict[str, dict[str, float]], float, list[str]]:
     """The report's own risk of a row valued without core: (bucket DV01 by curve, CS01, notes). ``risk_dv01_rub``
     goes whole into the bucket whose pillar is nearest the years to ``maturity_date`` (no maturity or a past one:
-    the shortest bucket), on the curve of the row's currency (``bonds.ccy_curve``: the KBD for RUB, else ``USD``
+    the shortest bucket), on the curve of the row's currency (``bonds.ccy_curve``: RUONIA for RUB, else ``USD``
     and so on). Both are the bank's figures (approximate), so said in the notes."""
     buckets, notes = dict.fromkeys(RISK_BUCKETS, 0.0), []
     dv01, cs01 = x.get("risk_dv01_rub"), x.get("risk_cs01_rub")

@@ -7,9 +7,10 @@ reproduces the run's within ``BASE_TOLERANCE_RUB`` and core repriced it; its res
 the Taylor total the browser shows. Fallback rungs and rows without a bond (an FX forward, ``assumed``) have no
 cashflows: they stay Taylor only, with ``code`` = their quality. ``blended`` = exact of the covered positions + Taylor of the rest.
 
-Curves (R8): the shock of ``RUB OFZ`` moves the KBD (the bonds' discount curve), ``RUB RUONIA`` and ``RUB KEY`` the
-RUONIA OIS and key-rate projection curves by name (``curve_shifts_bp``), each only by its own vector, as the Taylor
-moves each curve's factors: a floater sees the basis when one curve moves without the other. Another curve (a
+Curves (R8): ``RUB RUONIA`` and ``RUB KEY`` move the RUONIA OIS curve (every RUB bond's discount curve, a RUONIA
+floater's projection) and the key-rate projection by name (``curve_shifts_bp``), each only by its own vector, as
+the Taylor moves each curve's factors: a floater sees the basis when one curve moves without the other. The shock
+of ``RUB OFZ`` is the shock's own curve: it moves the KBD of a bond discounted on it (a date without RUONIA). Another curve (a
 currency's, ``bonds.ccy_curve``) has no core curve; only Taylor positions carry risk on it.
 """
 
@@ -32,7 +33,8 @@ BASE_TOLERANCE_RUB = 1.0
 REPRICED = ("exact", "assumed")
 CTX_CACHE_SIZE = 2
 NAMED_CURVES = tuple((core, published) for core, published in RISK_CURVES.items() if published != OFZ_CURVE)
-"""(core curve ID, published curve) moved by name; the KBD is the shock's own curve."""
+"""(core curve ID, published curve) moved by name; the KBD is the shock's own curve (a bond whose discount curve
+is named moves it by its name)."""
 
 
 def core_scenario(name: str, norm: Mapping[str, Any], ds: float) -> PortfolioScenario:

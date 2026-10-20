@@ -21,7 +21,7 @@ export function ScenarioLab() {
   const [presets, setPresets] = useState<ScenarioDefOut[]>([]);
   const [presetId, setPresetId] = useState('');
   const [ed, setEd] = useState<EditorState>({ base: { curves: {} }, add: 0 });
-  const [curvePick, setCurvePick] = useState('RUB OFZ');
+  const [curvePick, setCurvePick] = useState('RUB RUONIA');
   const [job, setJob] = useState<ScenarioJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
@@ -58,8 +58,8 @@ export function ScenarioLab() {
     return () => { alive = false; clearTimeout(t); };
   }, [job, pollTick]);
 
-  const curves = payload?.curves ?? ['RUB OFZ'];
-  const curve = curves.includes(curvePick) ? curvePick : curves.includes('RUB OFZ') ? 'RUB OFZ' : curves[0];
+  const curves = payload?.curves ?? ['RUB RUONIA'];
+  const curve = curves.includes(curvePick) ? curvePick : curves.includes('RUB RUONIA') ? 'RUB RUONIA' : curves[0];
   const norm = useMemo((): NormDef | string => {
     try { return normalize(effective(ed), payload?.curves); } catch (e) { return (e as Error).message; }
   }, [ed, payload]);

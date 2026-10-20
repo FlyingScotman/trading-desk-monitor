@@ -105,7 +105,7 @@ export function ScenarioEditor({ presets, presetId, onPreset, buckets, curves, c
         <div className="ph"><h2>Спреды</h2><span className="hint">б.п.</span></div>
         <div className="pb">
           <Slider id="ofz" label="Спред ОФЗ" min={-200} max={300} value={base.ofzSpread ?? 0}
-            onChange={v => onChange({ add, base: { ...base, ofzSpread: v } })} title="Z-спред ОФЗ к КБД" />
+            onChange={v => onChange({ add, base: { ...base, ofzSpread: v } })} title="Z-спред ОФЗ к RUONIA" />
           <Slider id="all" label="Кредит, все" min={-300} max={1000} value={s._all ?? 0}
             onChange={v => setSpreads('_all', v)} title="Сдвиг кредитного спреда всех корпоратов (_all)" />
         </div>

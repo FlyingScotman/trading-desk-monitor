@@ -10,10 +10,19 @@ Steps:
    a policy setting) for every request of the run. Core calibrates the Z-spread (annual,
    ACT/365F) to the dirty price, and computes bucket DV01, the CS01 or OFZ spread risk, the
    Hessian, the effective yield and duration. Bucket DV01 and the Hessian stay per curve, under the
-   published curve IDs (``RISK_CURVES``): a floater's discount curve (the KBD) and its projection curve
-   (RUONIA OIS or the key-rate projection) are separate factors, so their basis risk is not netted
-   away. Its rejections become ``Rejected("core_<code>")``.
-   The hash-verified result (``rub-portfolio-risk-result.v2``) is returned for storage.
+   published curve IDs (``RISK_CURVES``): a floater's projection curve (the key-rate projection) is a
+   separate factor from its discount curve, so their basis risk is not netted away. Its rejections become
+   ``Rejected("core_<code>")``. The hash-verified result (``rub-portfolio-risk-result.v2``) is returned for storage.
+
+**Discount curve** (owner's decision of 20.10, ORG_CONVENTIONS §4, DATA_CONTRACT §0.3): every RUB bond, OFZ and
+corporate, fixed and floater, is discounted on the RUONIA OIS curve (``RUONIA_OIS_CURVE_ID``, published ``RUB
+RUONIA``) plus its Z-spread calibrated to the market price: the OFZ spread to RUONIA (``ofz_spr01``) or the credit
+spread to RUONIA (CS01). So a fixed bond's rate DV01 is on ``RUB RUONIA``; a RUONIA floater projects and discounts
+on the same curve (one factor); a key-rate floater has ``RUB KEY`` (projection) and ``RUB RUONIA`` (discount). The
+KBD (``RUB OFZ``) stays the market curve of the G-spread, the curve chart and the bond history ("спред к КБД"):
+no bond carries DV01 on it, except on a date without a RUONIA OIS curve in the market (``discount_curve``): then
+the bonds are discounted on the KBD, their risk is on ``RUB OFZ`` and every valuation says so in ``assumptions``
+(quality ``assumed``), and the run goes on.
 
 **A bond is valued somehow rather than not at all** (the owner's rule). Below an exact valuation
 ``BondValuation.quality`` is ``assumed`` and ``assumptions`` says why, one short reason each:
@@ -60,6 +69,7 @@ from rub_fixed_income import (
     MarketSnapshot,
     ObservationShift,
     ObservationWindow,
+    Offer,
     PortfolioRiskResult,
     Position,
     PositionValuation,
@@ -94,16 +104,30 @@ CAP_FLOOR_GUARD_BP = 25.0
 """Floors and caps are priced at intrinsic value (core has no volatility) only this far from the strike."""
 PERPETUAL_CALL_YEARS = 5
 
-OFZ_CURVE = "RUB OFZ"
-RISK_CURVES = {KBD_CURVE_ID: OFZ_CURVE, RUONIA_OIS_CURVE_ID: "RUB RUONIA", KEY_RATE_CURVE_ID: "RUB KEY"}
-"""Core curve ID -> the published curve its bucket DV01 goes on (the run's ``curves`` reference, R8): a floater
-has the KBD (discounting) and its projection curve, each with its own buckets, so its basis risk shows."""
+OFZ_CURVE, RUONIA_CURVE = "RUB OFZ", "RUB RUONIA"
+RISK_CURVES = {KBD_CURVE_ID: OFZ_CURVE, RUONIA_OIS_CURVE_ID: RUONIA_CURVE, KEY_RATE_CURVE_ID: "RUB KEY"}
+"""Core curve ID -> the published curve its bucket DV01 goes on (the run's ``curves`` reference, R8): a key-rate
+floater has RUONIA OIS (discounting) and the key-rate projection, each with its own buckets, so its basis risk
+shows."""
+DISCOUNT_CURVE_ID = RUONIA_OIS_CURVE_ID
+"""The discount curve of RUB bonds (the owner's decision of 20.10); ``KBD_CURVE_ID`` when the market has none."""
 
 
 def ccy_curve(ccy: str) -> str:
-    """The published curve of rate risk without a core curve (a duration proxy, a report's DV01): the KBD for RUB,
-    else a curve named by the currency (``USD``), published without points until the hub has its curve."""
-    return OFZ_CURVE if ccy == "RUB" else ccy
+    """The published curve of rate risk without a core curve (a duration proxy, a report's DV01): RUONIA for RUB
+    (the curve RUB bonds are discounted on, DATA_CONTRACT §0.3), else a curve named by the currency (``USD``),
+    published without points until the hub has its curve."""
+    return RUONIA_CURVE if ccy == "RUB" else ccy
+
+
+def discount_curve(market: MarketSnapshot) -> tuple[str, str | None]:
+    """The core curve ID RUB bonds are discounted on in ``market`` and, when it is not RUONIA OIS, the note
+    every valuation on it carries: RUONIA OIS, else the KBD (a market without the RUONIA curve: the hub
+    published no OIS quotes for the date or the curve could not be built, ``orchestrator.with_rates``)."""
+    if any(c.curve_id == DISCOUNT_CURVE_ID for c in market.curves):
+        return DISCOUNT_CURVE_ID, None
+    return KBD_CURVE_ID, (f"discounted on the KBD: no RUONIA OIS curve in the market of {market.business_date}, "
+                          "risk on RUB OFZ, spread to the KBD")
 
 
 FLOATER_BENCHMARKS = ("KEY_RATE", "RUONIA", "RUONIA_3M", "RUONIA_INDEX")
@@ -433,10 +457,31 @@ class BondValuation:
     assumptions: tuple[str, ...] = ()
     model_spread_source: str | None = None
     """Set on a ``model_price``: where its ``z_spread_bp`` comes from (stored and carried by the desk store)."""
+    discount_curve_id: str | None = None
+    """Core ID of the curve the bond is discounted on and its Z-spread is to (``DISCOUNT_CURVE_ID``, the KBD on a
+    date without RUONIA, ``discount_curve``); None for a value without a curve (a price or a report)."""
+    floater: FloaterModel | None = field(default=None, repr=False, compare=False)
+    """A floater's coupon model, for the flash PnL to reproject it on other curves (``pnl.flash``)."""
+
+    @property
+    def spread_curve(self) -> str | None:
+        """The published curve of ``z_spread_bp`` (``RISK_CURVES``)."""
+        return None if self.discount_curve_id is None else RISK_CURVES.get(self.discount_curve_id)
 
     def risk(self) -> dict[str, dict[str, float]]:
-        """Bucket DV01 by published curve: ``curve_buckets``, else ``buckets`` on the KBD (``RUB OFZ``)."""
-        return self.curve_buckets or {OFZ_CURVE: self.buckets}
+        """Bucket DV01 by published curve: ``curve_buckets``, else ``buckets`` on the discount curve (RUONIA)."""
+        return self.curve_buckets or {self.spread_curve or RUONIA_CURVE: self.buckets}
+
+
+@dataclass(frozen=True)
+class FloaterModel:
+    """What core priced a floater with: its instrument, the offer it is redeemed at (None: maturity) and the
+    cap/floor guard of the policy. ``pnl.flash`` builds its coupons on any dated market from these."""
+
+    instrument: Instrument
+    offer: Offer | None
+    horizon_date: date
+    guard_bp: float | None
 
 
 @dataclass
@@ -517,6 +562,7 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
     position ID, and the core results. ``scenarios`` (core ``PortfolioScenario``) go to every core call."""
     out: dict[str, BondValuation | Rejected] = {}
     results = []
+    disc, disc_note = discount_curve(market)
     for r in requests:  # core values at the business date; the MOEX accrued is as of the trade date
         if r.quote.trade_date != market.business_date:
             out[r.position_id] = Rejected("stale_quote", f"trade date {r.quote.trade_date}, business date "
@@ -551,14 +597,14 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
             continue
         guard = any(i.coupon_leg.rule.bounds for i in instruments.values()  # type: ignore[union-attr]
                     if isinstance(i.coupon_leg, FloatingCouponLeg))
-        policy = ValuationPolicy(KBD_CURVE_ID, spread_kind=kind, spread_convention=SPREAD_CONVENTION,
+        policy = ValuationPolicy(disc, spread_kind=kind, spread_convention=SPREAD_CONVENTION,
                                  horizon="confirmed_put", include_second_order=second_order,
                                  cap_floor_guard_bp=CAP_FLOOR_GUARD_BP if guard else None,
                                  exercise_assumptions=tuple(calls.items()))
         floaters = any(isinstance(i.coupon_leg, FloatingCouponLeg) for i in instruments.values())
-        # Without floaters the call needs only the KBD: it keeps the job identity it had before S4.
+        # Without floaters the call needs only the discount curve.
         snap = market if floaters else replace(market, fixings=(), curves=tuple(
-            c for c in market.curves if c.curve_id == KBD_CURVE_ID))
+            c for c in market.curves if c.curve_id == disc))
         result = value_portfolio(run_id=f"desk-eod-{market.business_date}-{kind}", as_of=market.known_at,
                                  snapshot=replace(snap, quotes=tuple(quotes.values())),
                                  instruments=list(instruments.values()), positions=positions, policy=policy,
@@ -569,12 +615,20 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
         rows = {v.position_id: v for v in result.positions}
         for p in positions:
             if p.position_id in rows:
-                out[p.position_id] = _valuation(ok[p.instrument_id], rows[p.position_id], p.quantity)
+                out[p.position_id] = _valuation(ok[p.instrument_id], rows[p.position_id], p.quantity, guard,
+                                                disc_note)
     return out, results
 
 
-def _valuation(prep: _Prepared, v: PositionValuation, quantity: float) -> BondValuation:
+def _valuation(prep: _Prepared, v: PositionValuation, quantity: float, guard: bool = False,
+               disc_note: str | None = None) -> BondValuation:
     r = prep.request
+    notes = [*prep.notes, *([disc_note] if disc_note else [])]
+    inst = prep.instrument
+    floater = None
+    if isinstance(inst.coupon_leg, FloatingCouponLeg):
+        offer = inst.horizon("confirmed_put", v.settlement_date)[1] if v.horizon == "confirmed_put" else None
+        floater = FloaterModel(inst, offer, v.horizon_date, CAP_FLOOR_GUARD_BP if guard else None)
     first = v.factor_risk.first_order_by_factor()
     by_curve: dict[str, dict[str, float]] = {}
     for f, x in first.items():
@@ -591,7 +645,8 @@ def _valuation(prep: _Prepared, v: PositionValuation, quantity: float) -> BondVa
         modified_duration=v.macaulay_duration_years / (1.0 + v.effective_yield),
         z_spread_bp=v.spread_bp, spread_kind=v.spread_kind, dv01_rub=math.fsum(buckets.values()), buckets=buckets,
         spread01_rub=first["CS"], calculation_id=v.calculation_id, curve_buckets=by_curve, cashflows=prep.flows,
-        quality="assumed" if prep.notes else "exact", assumptions=tuple(prep.notes),
+        quality="assumed" if notes else "exact", assumptions=tuple(notes), discount_curve_id=v.curve_id,
+        floater=floater,
     )
     if v.factor_risk.has_second_order:
         # Core's full Hessian over its factors, renamed to the published curves; every curve is its own factor,

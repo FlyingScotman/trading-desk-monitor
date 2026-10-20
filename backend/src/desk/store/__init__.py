@@ -389,20 +389,23 @@ def default_runs(con: psycopg.Connection, since: date) -> dict[date, dict]:
 def carried_spreads(con: psycopg.Connection, before: date) -> dict[str, CarriedSpread]:
     """Per secid the latest Z-spread of the default runs (``DEFAULT_RUNS``) before ``before``: the model
     spread a model price used, or the bond's last market Z (exact or assumed), whichever run is later.
-    TEST, INTRADAY, REPLAY and superseded runs never supply one."""
+    TEST, INTRADAY, REPLAY and superseded runs never supply one. ``curve``: the curve the spread is to, the
+    ``spread_curve`` of the bond's fact in that run (``RUB OFZ``, the KBD, for a run before the RUONIA switch)."""
+    curve = "COALESCE(p.fact->>'spread_curve', 'RUB OFZ')"
     rows = con.execute(
-        "SELECT DISTINCT ON (secid) secid, z, business_date, run_id, source FROM ("
-        " SELECT m.secid, m.z_spread_bp AS z, r.business_date, r.run_id, m.source, 1 AS pri"
+        "SELECT DISTINCT ON (secid) secid, z, business_date, run_id, source, curve FROM ("
+        " SELECT m.secid, m.z_spread_bp AS z, r.business_date, r.run_id, m.source, 1 AS pri,"
+        f"  (SELECT {curve} FROM run_position p WHERE p.run_id = m.run_id AND p.secid = m.secid LIMIT 1) AS curve"
         " FROM model_spread m JOIN run r USING (run_id)"
         f" WHERE r.run_id IN ({DEFAULT_RUNS}) AND r.business_date < %(d)s"
         " UNION ALL"
-        " SELECT p.secid, (p.fact->>'spread_bp')::float8, r.business_date, r.run_id, NULL, 0"
+        f" SELECT p.secid, (p.fact->>'spread_bp')::float8, r.business_date, r.run_id, NULL, 0, {curve}"
         " FROM run_position p JOIN run r USING (run_id)"
         f" WHERE r.run_id IN ({DEFAULT_RUNS}) AND r.business_date < %(d)s"
         "  AND p.quality IN ('exact', 'assumed') AND jsonb_typeof(p.fact->'spread_bp') = 'number'"
         ") x ORDER BY secid, business_date DESC, run_id DESC, pri", {"d": before}).fetchall()
-    return {s: CarriedSpread(s, z, d, src or f"last market Z {z:.0f} bp on {d} (run {rid})")
-            for s, z, d, rid, src in rows if math.isfinite(z)}
+    return {s: CarriedSpread(s, z, d, src or f"last market Z {z:.0f} bp on {d} (run {rid})", c or "RUB OFZ")
+            for s, z, d, rid, src, c in rows if math.isfinite(z)}
 
 
 def reap_orphans(con: psycopg.Connection, older_than: timedelta = timedelta(hours=1)) -> list[int]:

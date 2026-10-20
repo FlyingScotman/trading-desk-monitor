@@ -18,10 +18,11 @@ core gets the PnL of ``pnl.direct`` (by the rate move, or by the reports: an INF
 previous market says so in a WARN line: no position has a PnL then, and none is shown as 0 (R10).
 
 Risk by curve (R8): a row's ``risk`` and ``gamma`` are per published curve (``BondValuation.risk``, the Hessian
-factors ``IR|<curve>|<bucket>``): ``RUB OFZ`` (the KBD), ``RUB RUONIA`` and ``RUB KEY`` (a floater's projection
-curve), a currency's curve (``USD``: a foreign bond's duration proxy, a report's DV01). ``curves_reference``
+factors ``IR|<curve>|<bucket>``): ``RUB RUONIA`` (the discount curve of every RUB bond, a RUONIA floater's
+projection), ``RUB KEY`` (a key-rate floater's projection), ``RUB OFZ`` (the KBD: only on a date without RUONIA,
+``valuation.bonds.discount_curve``), a currency's curve (``USD``: a foreign bond's duration proxy, a report's DV01). ``curves_reference``
 publishes the KBD, the RUONIA OIS and key-rate curves the run built (zero rates and the day's move) and a curve
-without points for every other curve of the risk; ``dv01`` stays the sum over the curves.
+without points for every other curve of the risk; ``dv01`` stays the sum over the curves. ``spread_curve`` is the curve ``spread_bp`` is to (the discount curve).
 """
 
 from __future__ import annotations
@@ -310,7 +311,7 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
         "ofz_spr01": v.spread01_rub if v.spread_kind == "ofz" else 0.0,
         "instrument_id": t.secid, "accrued": v.accrued_rub, "coupon_freq": t.coupon_frequency,
         "yield_date": v.horizon_date.isoformat() if v.horizon_kind in ("offer", "call") else None,
-        "spread_type": "Z", "spread_curve": OFZ_CURVE, "new_today": False,
+        "spread_type": "Z", "spread_curve": v.spread_curve, "new_today": False,
         "risk": risk_by_curve(v),
         **({"fx_delta": {ccy: v.pv_rub / fx[0]}} if fx else {}),
         **({"pnl": o.pnl.as_tdm()} if o.pnl else {}),
@@ -424,7 +425,7 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
         log.append(("WARN", (f"флэш-PnL без разложения ({SIMPLE_METHOD}: q x Δdirty + выплаты, всё в other) "
                              f"у {len(simple)} поз.: {sum(x.total for x in simple):,.0f} ₽")))
     if with_pnl:
-        tot = {k: sum(getattr(x, k) for x in with_pnl) for k in ("carry", "rolldown", "rates", "spread", "other")}
+        tot = {k: sum(getattr(x, k) for x in with_pnl) for k in ("carry", "rolldown", "rates", "spread", "other", "fx_gross")}
         worst = max(abs(x.identity_error) for x in with_pnl)
         log.append(("INFO", f"флэш-PnL {with_pnl[0].prev_date} -> {with_pnl[0].as_of} ({METHOD}), "
                     f"позиций {len(with_pnl)} (без разложения {len(simple)}): "

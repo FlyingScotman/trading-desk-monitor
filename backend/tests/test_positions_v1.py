@@ -166,8 +166,8 @@ def test_otc_at_reported_value_with_bucketed_risk(ctx):
     assert (v.quality, v.pv_rub, v.dv01_rub, v.spread01_rub, v.spread_kind) == (
         "reported_value", 125000.5, -850.25, -12.0, "credit")  # 4.24 years: the 5Y pillar is nearest
     assert v.buckets["5Y"] == -850.25 and sum(1 for x in v.buckets.values() if x) == 1
-    assert v.risk() == {"RUB OFZ": v.buckets}  # a RUB row: on the KBD
-    assert any("bucket 5Y of RUB OFZ" in a and "approximate" in a for a in v.assumptions)
+    assert v.risk() == {"RUB RUONIA": v.buckets}  # a RUB row: on RUONIA, the RUB discount curve
+    assert any("bucket 5Y of RUB RUONIA" in a and "approximate" in a for a in v.assumptions)
     cny = one(ctx, {"asset_class": "otc", "source_instrument_id": "XCCY-1", "ccy": "CNY", "mv_rub": 1.0,
                     "maturity_date": "2031-01-10", "risk_dv01_rub": -40.0})  # R8: on the curve of its currency
     assert cny.valuation.risk() == {"CNY": {**dict.fromkeys(RISK_BUCKETS, 0.0), "5Y": -40.0}}
@@ -246,11 +246,11 @@ def test_publish_api_and_compat(ctx, store_url, tmp_path):
     o2 = got["O2"]["fact"]
     assert (got["O2"]["pv_rub"], got["O2"]["dv01_rub"], o2["instr_type"], o2["segment"]) == (5e5, -850.0, "OTC",
                                                                                            "Деривативы")
-    assert o2["risk"] == {"RUB OFZ": {**dict.fromkeys(o2["risk"]["RUB OFZ"], 0.0), "5Y": -850.0}}
+    assert o2["risk"] == {"RUB RUONIA": {**dict.fromkeys(o2["risk"]["RUB RUONIA"], 0.0), "5Y": -850.0}}
     assert o2["extra"]["quality"] == "reported_value" and o2["maturity"] == "2031-01-10" and o2["name"] == "IRS 5Y"
     desk = c.get(f"/api/v1/compat/desk?run_id={rid}").json()  # the Desk Monitor: O2 valued, O1 listed without PV
     dp = {p["id"]: p for p in desk["positions"]}
-    assert dp["O2"]["mvRub"] == 5e5 and dp["O2"]["risk"]["RUB OFZ"][6] == -850.0 and dp["O2"]["segment"] == "Деривативы"
+    assert dp["O2"]["mvRub"] == 5e5 and dp["O2"]["risk"]["RUB RUONIA"][6] == -850.0 and dp["O2"]["segment"] == "Деривативы"
     # R8: the USD bond's reported DV01 on the USD curve, which the Desk Monitor gets without points
     assert got["B3"]["fact"]["risk"] == {"USD": {**dict.fromkeys(RISK_BUCKETS, 0.0), "3Y": -2400.0}}
     assert dp["B3"]["risk"] == {"USD": [0.0] * 5 + [-2400.0] + [0.0] * 5}
@@ -273,7 +273,7 @@ def test_publish_api_and_compat(ctx, store_url, tmp_path):
                            " WHERE run_id = %s AND fact IS NOT NULL ORDER BY ord", (rid,)).fetchall()
         ref = {r["kind"]: r["data"] for r in con.execute("SELECT kind, data FROM run_reference WHERE run_id = %s",
                                                          (rid,))}
-    t2 = {p["position_id"]: p for p in reprice_run(SnapshotDir(FIX), run_row, prow, ref, {"curves": {"RUB OFZ": 1}})
+    t2 = {p["position_id"]: p for p in reprice_run(SnapshotDir(FIX), run_row, prow, ref, {"curves": {"RUB RUONIA": 1}})
           ["positions"]}
     assert t2["FX2"]["code"] == "assumed" and t2["FX2"]["exact"] is None and t2["L1"]["exact"] is not None
     assert c.get(f"/api/v1/runs/{rid}/aggregates?dims=quality,ccy").status_code == 200

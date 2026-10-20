@@ -132,6 +132,13 @@ def test_published_pnl_methods_and_honest_absence(ctx, prev, store_url):
     pnl = {p["position_id"]: p for p in c.get(f"/api/v1/runs/{rid}/pnl").json()["positions"]}
     assert pnl["FX1"]["components"]["fx_gross"] == pytest.approx(pnl["FX1"]["total"])
     assert pnl["O1"]["extra"]["flag"] == "по отчёту" and pnl["B2"]["no_pnl"]["reason"] == "no_prev_report"
+    tot = c.get(f"/api/v1/runs/{rid}").json()["totals"]  # the run totals: the components add up to the total
+    for b, t in tot.items():
+        if t["pnl"]["total"] is not None:
+            parts = sum(t["pnl"][k] or 0.0 for k in ("carry", "rolldown", "rates", "spread", "other", "fx_gross"))
+            assert parts == pytest.approx(t["pnl"]["total"]), b
+    assert tot["_total"]["pnl"]["fx_gross"] == pytest.approx(pnl["FX1"]["total"] + sum(
+        p["components"]["fx_gross"] or 0.0 for k, p in pnl.items() if k != "FX1" and p["components"]))
     desk = c.get(f"/api/v1/compat/desk?run_id={rid}").json()
     assert desk["prevDate"] == PREV.isoformat() and desk["pnlAvailable"] and desk["pnlReason"] is None
     ps = {p["id"]: p for p in desk["positions"]}

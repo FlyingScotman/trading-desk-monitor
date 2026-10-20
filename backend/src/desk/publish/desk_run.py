@@ -30,7 +30,8 @@ from ..store import PositionInputs
 from ..valuation.fallback import CarriedSpread, used_model_spreads
 from .tdm_run import REFERENCE_KINDS, RunContent, git_sha, run_content
 
-PNL_KEYS = ("carry", "rolldown", "rates", "spread", "other", "total")
+PNL_KEYS = ("carry", "rolldown", "rates", "spread", "other", "fx_gross", "total")
+"""Run totals per book: the components sum to ``total`` (a foreign-face bond's FX revaluation is in ``fx_gross``)."""
 
 
 def _finite(x: Any) -> Any:

@@ -442,7 +442,7 @@ export interface components {
             ytm?: number | null;
             /**
              * Z Spread Bp
-             * @description the desk run's Z-spread to the KBD
+             * @description the desk run's Z-spread to its discount curve (RUONIA OIS since the owner's decision of 20.10)
              */
             z_spread_bp?: number | null;
             /**
@@ -1078,8 +1078,8 @@ export interface components {
         /**
          * ScenarioDefinition
          * @description The prototype scenario shape. curves: bp per RISK_BUCKETS pillar (11) or one number for all, per
-         *     published curve ("RUB OFZ" the KBD, "RUB RUONIA", "RUB KEY", a currency's "USD"...), each moving only by
-         *     its own vector; ofzSpread: OFZ Z-spread to the KBD, bp; fx: % against RUB (+ = weaker rouble). Returned
+         *     published curve ("RUB RUONIA" the RUB bonds' discount curve, "RUB KEY", "RUB OFZ" the KBD, a currency's
+         *     "USD"...), each moving only by its own vector; ofzSpread: OFZ Z-spread to RUONIA, bp; fx: % against RUB (+ = weaker rouble). Returned
          *     normalized: 11-pillar lists, zeros and empty entries left out.
          */
         ScenarioDefinition: {

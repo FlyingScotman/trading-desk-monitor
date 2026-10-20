@@ -23,9 +23,9 @@ from desk.settings import REPO_ROOT
 book = test_api.book  # the module fixture: every fixture bond, valued
 PRESETS = ["par+100", "par-100", "keyhike", "bullsteep", "bearflat", "basis", "ofzwide", "rubdep", "credit",
            "sector", "stress22"]
-KEYHIKE = {"curves": {"RUB OFZ": [200, 195, 180, 150, 105, 85, 65, 55, 45, 40, 35]}, "ofzSpread": 10,
+KEYHIKE = {"curves": {"RUB RUONIA": [200, 195, 180, 150, 105, 85, 65, 55, 45, 40, 35]}, "ofzSpread": 10,
            "spreads": {"_all": 25}}
-KEYHIKE_PRESET = {**KEYHIKE, "curves": dict.fromkeys(RUB_CURVES, KEYHIKE["curves"]["RUB OFZ"])}
+KEYHIKE_PRESET = {**KEYHIKE, "curves": dict.fromkeys(RUB_CURVES, KEYHIKE["curves"]["RUB RUONIA"])}
 """R8: a move of all rates shifts the three RUB curves alike."""
 
 
@@ -59,7 +59,9 @@ def test_risk_payload_and_compat_scenarios(store_url, book, client):
     ps = client.get(f"/api/v1/runs/{rid}/positions").json()["positions"]
     assert p["run_id"] == rid and len(p["buckets"]) == 11
     assert p["curves"] == ["RUB KEY", "RUB OFZ", "RUB RUONIA", "USD"]  # the floaters' and the USD bond's too
-    assert {f.split("|")[1] for f in p["factors"] if f.startswith("IR|")} == set(p["curves"]) and "CS" in p["factors"]
+    # no bond is discounted on the KBD (RUB OFZ): it is a scenario curve without risk
+    assert {f.split("|")[1] for f in p["factors"] if f.startswith("IR|")} == set(p["curves"]) - {"RUB OFZ"}
+    assert "CS" in p["factors"]
     assert [x["position_id"] for x in p["positions"]] == [x["position_id"] for x in ps if x["fact"]]
     n = len(p["factors"])
     assert all(0 <= i < n for x in p["positions"] for i, _ in x["delta"])
@@ -96,11 +98,11 @@ def test_job_end_to_end(store_url, book, client):
     assert set(res["totals"]) == {"_total", "OFZ", "CORP"}
     # an equivalent definition (scalar-free, reordered, zeros) is the same job, now with its result
     same = {"fx": {"USD": 0}, "spreads": {"_all": 25, "_mult": 1, "sector": {}}, "ofzSpread": 10,
-            "curves": {"RUB OFZ": KEYHIKE["curves"]["RUB OFZ"]}}
+            "curves": {"RUB RUONIA": KEYHIKE["curves"]["RUB RUONIA"]}}
     r2 = client.post("/api/v1/scenario-jobs", json={"base_run_id": rid, "definition": same})
     assert r2.status_code == 200 and r2.json() == done
     # a failed job (the snapshots are missing) can be resubmitted: a new job
-    par = {"curves": {"RUB OFZ": 1}}
+    par = {"curves": {"RUB RUONIA": 1}}
     j1 = client.post("/api/v1/scenario-jobs", json={"base_run_id": rid, "definition": par}).json()
     with store.connect(store_url) as con:
         assert jobs.run_once(con, SnapshotDir(FIX / "nothing-here")) == j1["job_id"]

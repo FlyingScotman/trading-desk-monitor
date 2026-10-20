@@ -59,11 +59,23 @@ def test_carried_spread_is_used_and_named(ctx, exact):
     assert v.quality == "model_price" and v.z_spread_bp == c.z_spread_bp and v.model_spread_source == src
     assert v.pv_rub == pytest.approx(o.valuation.pv_rub, rel=1e-7)  # the engine at its own exact Z
     assert v.pv_rub != pytest.approx(_model(ctx, o)[0].pv_rub, rel=1e-6)  # not the median price
-    assert any(a.startswith(f"model price: KBD + Z {c.z_spread_bp:.0f} bp carried from {d0} ({src})")
+    assert any(a.startswith(f"model price: RUB RUONIA + Z {c.z_spread_bp:.0f} bp carried from {d0} ({src})")
                for a in v.assumptions)
     # far outside Z_BAND_BP and still the bond's own evidence: used
     wide, _ = _model(ctx, o, [CarriedSpread(RZD, 3000.0, d0, "last market Z 3000 bp")])
     assert wide.z_spread_bp == 3000.0 and wide.pv_rub < v.pv_rub
+
+
+def test_a_spread_to_another_curve_is_not_carried(ctx, exact):
+    """A run before the RUONIA switch has spreads to the KBD (``RUB OFZ``): a model price on RUONIA does not reuse
+    one, it takes the day's median, and says why."""
+    o, d0 = exact[RZD], ctx.business_date - timedelta(3)
+    c = CarriedSpread(RZD, 50.0, d0, "last market Z 50 bp", "RUB OFZ")
+    v, _ = _model(ctx, o, [c])
+    assert v.z_spread_bp == MEDIAN_BP and v.model_spread_source.startswith("issuer median Z")
+    assert any("carried Z 50 bp" in a and "is to RUB OFZ, not RUB RUONIA" in a for a in v.assumptions)
+    ok, _ = _model(ctx, o, [CarriedSpread(RZD, 50.0, d0, "x", "RUB RUONIA")])
+    assert ok.z_spread_bp == 50.0 and ok.discount_curve_id == "RUB_RUONIA_OIS" and set(ok.risk()) == {"RUB RUONIA"}
 
 
 def test_a_carried_spread_the_engine_rejects_falls_to_the_median(ctx, exact, monkeypatch):

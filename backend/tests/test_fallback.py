@@ -103,11 +103,11 @@ def test_fx_bond_in_rub_at_cbr(ctx, exact):
     usd = next(c for c in row.reference["curves"] if c["curve_id"] == "USD")
     assert (usd["ccy"], usd["points"]) == ("USD", [])  # a stub: the risk is shown, there is no USD curve yet
 
-
+    """R8 phase 1: an OFZ-IN keeps a nominal DV01 from its duration on the RUB discount curve (RUONIA), a proxy."""
 def test_ofz_in_nominal_proxy_is_flagged(exact):
-    """R8 phase 1: an OFZ-IN keeps a nominal DV01 from its duration on the KBD, said to be a proxy."""
+    """R8 phase 1: an OFZ-IN keeps a nominal DV01 from its duration on the RUB discount curve (RUONIA), said to be a proxy."""
     v = exact["SU52005RMFS4"].valuation
-    assert v.quality == "market_value" and set(v.risk()) == {"RUB OFZ"} and v.dv01_rub < 0
+    assert v.quality == "market_value" and set(v.risk()) == {"RUB RUONIA"} and v.dv01_rub < 0
     assert any("indexed face: a nominal-rate proxy" in a for a in v.assumptions)
 
 
