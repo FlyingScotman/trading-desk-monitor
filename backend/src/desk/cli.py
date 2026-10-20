@@ -27,6 +27,8 @@ turns it off) and publishes the run into the store; ``--tdm`` also into the tdm 
 ``--books A,B`` values only those books, as a TEST run (never the default run of the date). A load
 covers the books of its file (``load-positions --books``: these); a covered book without rows is closed.
     desk demo-book --snapshots .devdata/snapshots --date 2026-10-15 --out examples/demo_book.csv
+    desk instruments export --out instruments.xlsx [--date D] [--active] [--value]
+                                         the bond universe of a cached static snapshot, no positions (R9)
 """
 
 from __future__ import annotations
@@ -359,6 +361,18 @@ def _test_rows(sd: SnapshotDir, ctx) -> list[tuple[str, str, str, float]]:
     return rows
 
 
+def cmd_instruments_export(a: argparse.Namespace) -> int:
+    from .report import instruments
+
+    ex, summ = instruments.export(Path(a.out), Path(a.snapshots), on=a.date, static_file=a.static_file,
+                                  market_file=a.market_file, active_only=a.active, with_value=a.value)
+    m = ex.market
+    print(f"static {ex.static.id[:12]} of {ex.static.business_date} (known_at {ex.static.doc.get('known_at')}), "
+          f"market {m.id[:12] if m else '-'}: {len(ex.rows)} instruments -> {a.out}")
+    print(instruments.summary_text(summ))
+    return 0
+
+
 def cmd_hub_check(a: argparse.Namespace) -> int:
     client = HubClient(a.settings)
     h = client.health()
@@ -515,6 +529,20 @@ def main(argv: list[str] | None = None) -> int:
                    help="drop folder (default: DESK_SNAPSHOT_DROP)")
     i.add_argument("--snapshots", default=str(settings.snapshot_cache))
     i.set_defaults(fn=cmd_import_drop)
+    ins = sub.add_parser("instruments", help="the instruments of the cached static snapshots (public data)")
+    insub = ins.add_subparsers(dest="instruments_cmd", required=True)
+    ie = insub.add_parser("export", help="every bond of a static snapshot as the desk sees it, with data-quality "
+                          "flags and core eligibility; no positions (CSV UTF-8 with BOM, or .xlsx)")
+    ie.add_argument("--out", required=True, help="file to write: .csv or .xlsx")
+    ie.add_argument("--date", type=_iso, help="the static snapshot desk eod would use for this date "
+                    "(default: the newest cached static snapshot)")
+    ie.add_argument("--snapshots", default=str(settings.snapshot_cache), help="cache folder (default: DESK_SNAPSHOT_CACHE)")
+    ie.add_argument("--static-file", type=Path, help="export this static bundle instead of the cache's")
+    ie.add_argument("--market-file", type=Path, help="with --static-file: the market bundle for the quote columns")
+    ie.add_argument("--active", action="store_true", help="active instruments only (default: also recently matured)")
+    ie.add_argument("--value", action="store_true", help="also value every active bond through core with the "
+                    "date's quote (slow) and add the reason it is not exact")
+    ie.set_defaults(fn=cmd_instruments_export)
     d = sub.add_parser("demo-book", help="generate the synthetic demo book")
     d.add_argument("--snapshots", default=str(settings.snapshot_cache))
     d.add_argument("--date", required=True)
