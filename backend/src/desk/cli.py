@@ -48,7 +48,7 @@ from pathlib import Path
 import psycopg
 
 from . import store
-from .marketdata import cache
+from .marketdata import cache, history
 from .marketdata.adapter import MarketView
 from .marketdata.bundle import SnapshotDir, SnapshotError
 from .marketdata.hub import HubClient, HubError, hub_check
@@ -146,6 +146,11 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
     with store.connect(store_url or store.resolve_url(settings)) as con:
         for rid in store.reap_orphans(con):
             out(f"WARN run {rid} was still loading: marked failed")
+        try:  # the run's snapshots in the market history (the bond charts); one query each once loaded
+            for snap in (ctx.market.snapshot, ctx.static.snapshot, *((prev.snapshot,) if prev else ())):
+                history.load_snapshot(con, snap)
+        except psycopg.Error as e:
+            out(f"WARN market history not updated: {type(e).__name__}: {e}")
         if book:
             _load(con, Path(book), d, out=out)
         inputs = store.positions_for(con, date.fromisoformat(d), books=books)
@@ -409,6 +414,7 @@ def cmd_sync(a: argparse.Namespace) -> int:
     rows = cache.sync(client, Path(a.snapshots), sorted(dates), a.cut)
     print(f"sync {a.cut} from {client.host} into {a.snapshots}: {len(rows)} dates")
     _print_synced(rows)
+    _load_history(a.settings, Path(a.snapshots))
     return 0 if rows and all(s.market_id for s in rows) else 1
 
 
@@ -420,7 +426,24 @@ def cmd_import_drop(a: argparse.Namespace) -> int:
     print(f"imported {len(imported)} bundles from {a.drop}")
     for name, reason in rejected:
         print(f"  rejected {name}: {reason}")
+    _load_history(a.settings, Path(a.snapshots))
     return 1 if rejected else 0
+
+
+def _load_history(settings: Settings, folder: Path) -> None:
+    """The new bundles of the cache into the store's market history (the bond charts) when a store is set
+    (``DESK_STORE_URL``): the embedded one is not started for it. ``desk eod``, ``desk cycle`` and the autopilot load
+    them anyway, so a store that cannot be reached is only a note."""
+    if not settings.store_url:
+        return
+    try:
+        with store.connect(settings.store_url) as con:
+            line = history.load_cache(con, folder).text()
+    except psycopg.Error as e:
+        print(f"market history not updated ({type(e).__name__}: {e}); the next desk cycle loads it")
+        return
+    if line:
+        print(line)
 
 
 def cmd_serve(a: argparse.Namespace) -> int:

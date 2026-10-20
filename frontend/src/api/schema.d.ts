@@ -166,8 +166,11 @@ export interface paths {
         };
         /**
          * Bond History
-         * @description The issue's points from the default runs (price, yield, Z-spread, accrued, the desk's face); ``wal``
-         *     is accepted for the contract and not used yet.
+         * @description The issue's quoted days from the market history (the cached hub snapshots, ``history_days`` deep) merged
+         *     with the default runs that hold it (Z-spread, the desk's face), and the KBD rate at its term with the spread
+         *     to it (``desk.marketdata.history.bond_history``). ``instrument_id`` is the MOEX secid (or the report's id),
+         *     ``isin`` finds the bond through the static snapshots; ``curve``: the KBD (RUB OFZ; own, base) has rates,
+         *     another curve gives none; ``wal`` is accepted for the contract and not used yet.
          */
         get: operations["bond_history_api_v1_bonds_history_get"];
         put?: never;
@@ -331,7 +334,7 @@ export interface components {
              * Step
              * @enum {string}
              */
-            step: "sync" | "scan" | "eod";
+            step: "sync" | "scan" | "eod" | "history";
             /** Done */
             done: number;
             /** Total */
@@ -384,9 +387,9 @@ export interface components {
         };
         /**
          * BondHistory
-         * @description The history of an issue for the monitors (DATA_CONTRACT §6). Today: the desk's own default runs, one point
-         *     per business date the desk held it; no curve rate yet (``spread_to_curve_note`` says so). Empty, not 404,
-         *     when the issue is unknown.
+         * @description The history of an issue for the monitors (DATA_CONTRACT §6): every quoted day of the market history
+         *     (``md_bond_eod``: the cached hub snapshots, ``history_days`` deep) merged with the desk's default runs that hold
+         *     it; the curve rate is the KBD at the bond's term. Empty, not 404, when the issue is unknown.
          */
         BondHistory: {
             /** Instrument Id */
@@ -411,34 +414,65 @@ export interface components {
              * Format: date
              */
             date: string;
-            /** Clean Price */
+            /**
+             * Clean Price
+             * @description % of face; basis in price_basis
+             */
             clean_price?: number | null;
             /**
              * Ytm
-             * @description %
+             * @description %, effective annual: MOEX's to yield_date, else the run's
              */
             ytm?: number | null;
-            /** Z Spread Bp */
+            /**
+             * Z Spread Bp
+             * @description the desk run's Z-spread to the KBD
+             */
             z_spread_bp?: number | null;
-            /** G Spread Bp */
+            /**
+             * G Spread Bp
+             * @description MOEX's
+             */
             g_spread_bp?: number | null;
             /** Accrued */
             accrued?: number | null;
             /** Volume Rub */
             volume_rub?: number | null;
-            /** Source */
+            /**
+             * Source
+             * @description market, market + desk run, desk run
+             */
             source?: string | null;
             /**
              * Face Amount
-             * @description the desk's face in the bond's currency, all books
+             * @description the desk's face in the bond's currency, all books; null on a day without a default run
              */
             face_amount?: number | null;
-            /** Tenor Y */
+            /**
+             * Tenor Y
+             * @description years to yield_date (offer or maturity), else to maturity
+             */
             tenor_y?: number | null;
-            /** Curve Rate */
+            /**
+             * Curve Rate
+             * @description %, the KBD of the date at tenor_y (RUB bonds with known coupons)
+             */
             curve_rate?: number | null;
-            /** Spread To Curve Bp */
+            /**
+             * Spread To Curve Bp
+             * @description ytm - curve_rate
+             */
             spread_to_curve_bp?: number | null;
+            /**
+             * Price Basis
+             * @description legal_close, close or waprice (the runs' order)
+             */
+            price_basis?: string | null;
+            /**
+             * Yield Date
+             * @description the date MOEX's yield runs to: the offer or maturity
+             */
+            yield_date?: string | null;
         };
         /** ErrorOut */
         ErrorOut: {

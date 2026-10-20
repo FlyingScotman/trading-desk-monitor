@@ -278,23 +278,27 @@ class ScenarioJob(BaseModel):
 
 class BondHistoryPoint(BaseModel):
     date: date
-    clean_price: float | None = None
-    ytm: float | None = Field(None, description="%")
-    z_spread_bp: float | None = None
-    g_spread_bp: float | None = None
+    clean_price: float | None = Field(None, description="% of face; basis in price_basis")
+    ytm: float | None = Field(None, description="%, effective annual: MOEX's to yield_date, else the run's")
+    z_spread_bp: float | None = Field(None, description="the desk run's Z-spread to the KBD")
+    g_spread_bp: float | None = Field(None, description="MOEX's")
     accrued: float | None = None
     volume_rub: float | None = None
-    source: str | None = None
-    face_amount: float | None = Field(None, description="the desk's face in the bond's currency, all books")
-    tenor_y: float | None = None
-    curve_rate: float | None = None
-    spread_to_curve_bp: float | None = None
+    source: str | None = Field(None, description="market, market + desk run, desk run")
+    face_amount: float | None = Field(None, description="the desk's face in the bond's currency, all books; null "
+                                      "on a day without a default run")
+    tenor_y: float | None = Field(None, description="years to yield_date (offer or maturity), else to maturity")
+    curve_rate: float | None = Field(None, description="%, the KBD of the date at tenor_y (RUB bonds with known "
+                                     "coupons)")
+    spread_to_curve_bp: float | None = Field(None, description="ytm - curve_rate")
+    price_basis: str | None = Field(None, description="legal_close, close or waprice (the runs' order)")
+    yield_date: date | None = Field(None, description="the date MOEX's yield runs to: the offer or maturity")
 
 
 class BondHistory(BaseModel):
-    """The history of an issue for the monitors (DATA_CONTRACT §6). Today: the desk's own default runs, one point
-    per business date the desk held it; no curve rate yet (``spread_to_curve_note`` says so). Empty, not 404,
-    when the issue is unknown."""
+    """The history of an issue for the monitors (DATA_CONTRACT §6): every quoted day of the market history
+    (``md_bond_eod``: the cached hub snapshots, ``history_days`` deep) merged with the desk's default runs that hold
+    it; the curve rate is the KBD at the bond's term. Empty, not 404, when the issue is unknown."""
 
     instrument_id: str | None
     isin: str | None
