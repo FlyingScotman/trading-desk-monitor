@@ -69,6 +69,8 @@ from .bonds import (
     Rejected,
     bond_request,
     ccy_curve,
+    coupon_view,
+    current_period,
     face_on,
     fixed_schedule,
     next_offer,
@@ -184,17 +186,9 @@ def _price(q: BondQuote) -> tuple[str, float] | None:
     return next(((b, float(q.prices_pct[b])) for b in FALLBACK_BASES if q.prices_pct.get(b, 0) > 0), None)
 
 
-def _current_coupon(t: BondTerms, d: date) -> tuple[Any, date | None]:
-    """The coupon period running on ``d`` and its start (None when unknown)."""
-    for i, c in enumerate(t.coupons):
-        if c.pay_date > d:
-            return c, c.start or (t.coupons[i - 1].pay_date if i else None)
-    return None, None
-
-
 def _accrued(t: BondTerms, d: date, face: float) -> tuple[float, str] | None:
     """Accrued per bond in face currency from the current coupon, ACT/365 on the rate."""
-    c, start = _current_coupon(t, d)
+    c, start = current_period(t, d)
     if c is None or start is None or start > d:
         return None
     days = (d - start).days
@@ -318,8 +312,8 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
     offer = next_offer(t, bd)
     horizon, hkind = ((offer[0], offer[2]) if offer else (t.maturity_date, "maturity") if t.maturity_date
                       else (bd, "unknown"))
-    coupon, _ = _current_coupon(t, bd)
-    coupon_pct = float(coupon.rate_pct) if coupon is not None and coupon.rate_pct is not None else None
+    coupon, _ = current_period(t, bd)
+    coupon_pct = coupon_view(t, bd).pct  # every rung shows the static coupon (D4): rate, amount, last known rate
     sa = ref.source_analytics if ref else {}
     y = _yield(sa)
     ytm = y if y is not None else math.nan
@@ -449,7 +443,7 @@ def par_proxy(ctx: EodContext, outcome: Outcome, quantity: float, note: str) -> 
     return BondValuation(
         secid=t.secid, quantity=quantity, valuation_date=bd, settlement=bd, horizon_date=t.maturity_date or bd,
         horizon_kind="maturity" if t.maturity_date else "unknown", price_basis="par", clean_pct=100.0,
-        accrued_rub=acc, face_rub=float(face) * fx_face[0], current_coupon_pct=None, dirty_rub=dirty,
+        accrued_rub=acc, face_rub=float(face) * fx_face[0], current_coupon_pct=coupon_view(t, bd).pct, dirty_rub=dirty,
         pv_rub=quantity * dirty, ytm_pct=math.nan, macaulay_years=math.nan, modified_duration=math.nan,
         z_spread_bp=math.nan, spread_kind="ofz" if t.bond_class in OFZ_CLASSES else "credit", dv01_rub=0.0,
         buckets=dict.fromkeys(RISK_BUCKETS, 0.0), spread01_rub=0.0,

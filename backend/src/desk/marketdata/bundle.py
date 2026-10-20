@@ -3,6 +3,10 @@
 A bundle file is ``<snapshot_id>.json.gz``: the gzip of the canonical JSON the hub serves from
 ``/v1/snapshots/{id}/bundle``. ``sha256(gunzip(file)) == snapshot_id`` is checked on every
 read. Decimals stay strings; the adapter converts them.
+
+Versions (D10): any ``market_snapshot/1.<minor>`` is read. A minor version only adds fields and datasets (the hub's
+``schemas/market_snapshot/v1/README.md``), and the adapter reads the fields it knows by name, so unknown ones are
+ignored. Another major version (``market_snapshot/2.0``) is refused: its meaning may have changed.
 """
 
 from __future__ import annotations
@@ -10,11 +14,25 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION = "market_snapshot/1.0"
+"""The version the desk was written against; ``supported_schema`` accepts every minor of its major."""
+SCHEMA_MAJOR = "market_snapshot/1"
+_SCHEMA = re.compile(r"^market_snapshot/1\.(0|[1-9][0-9]*)$")
+
+
+def supported_schema(version: object) -> bool:
+    """True for ``market_snapshot/1.<minor>`` (additive minors), False for anything else (another major, garbage)."""
+    return isinstance(version, str) and _SCHEMA.match(version) is not None
+
+
+def check_schema(doc: dict[str, Any], name: str) -> None:
+    if not supported_schema(doc.get("schema_version")):
+        raise SnapshotError(f"{name}: schema_version {doc.get('schema_version')!r}, need {SCHEMA_MAJOR}.x")
 
 
 class SnapshotError(ValueError):
@@ -50,8 +68,7 @@ def parse_bundle(body: bytes, snapshot_id: str, name: str | None = None) -> Snap
     if sid != snapshot_id:
         raise SnapshotError(f"{name}: sha256 {sid} does not match the file name")
     doc = json.loads(raw)
-    if doc.get("schema_version") != SCHEMA_VERSION:
-        raise SnapshotError(f"{name}: schema_version {doc.get('schema_version')!r}, need {SCHEMA_VERSION}")
+    check_schema(doc, name)
     return Snapshot(sid, doc["kind"], doc["cut_type"], doc["business_date"], doc.get("static_snapshot_id"), doc)
 
 

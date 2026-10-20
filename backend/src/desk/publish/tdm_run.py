@@ -20,15 +20,24 @@ factors ``IR|<curve>|<bucket>``): ``RUB OFZ`` (the KBD), ``RUB RUONIA`` and ``RU
 curve), a currency's curve (``USD``: a foreign bond's duration proxy, a report's DV01). ``curves_reference``
 publishes the KBD, the RUONIA OIS and key-rate curves the run built (zero rates and the day's move) and a curve
 without points for every other curve of the risk; ``dv01`` stays the sum over the curves.
+
+Display fields (R9 static audit, D1-D8): a bond is named by MOEX's full ``name`` (the short name in
+``extra.short_name``, the SECID in ``instrument_id``); its coupon is ``bonds.coupon_view`` for every rung (a floater:
+the published rate or amount, else ``index + margin`` at the latest fixing, ``extra.coupon_basis`` ``projected``)
+with ``index_name``/``margin``; ``coupon_type`` keeps the hub's zero / indexed_face / variable_known / unknown;
+``coupon_freq`` comes from the schedule when MOEX gives none. The issuer shows ``issuer_display`` of its name, sector
+and rating ``NO_DATA`` until the hub has them. An unmapped bond shows the report's name marked ``FROM_REPORT``, its
+ISIN, and the report's issuer (``x_issuer``).
 """
 
 from __future__ import annotations
 
 import json
 import math
+import re
 import subprocess
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -52,7 +61,7 @@ from ..orchestrator import EodContext, Outcome
 from ..pnl.flash import METHOD
 from ..settings import REPO_ROOT
 from ..store import PositionInputs
-from ..valuation.bonds import OFZ_CURVE, RISK_CURVES, BondValuation
+from ..valuation.bonds import OFZ_CURVE, RISK_CURVES, BondValuation, coupon_view, implied_frequency
 from ..valuation.fallback import METHOD as SIMPLE_METHOD
 from ..valuation.fallback import QUALITIES, SimplePnl, fx_rate
 from ..valuation.positions import normalised
@@ -78,23 +87,75 @@ BOOKS = {
 }
 DEFAULT_BOOK = {"desk": "—", "trader": None, "book_type": None, "entity": "—", "ocp_to": None}
 """A book with no store metadata and outside the demo ``BOOKS``: named by its id."""
-UNMAPPED_ISSUER = {"issuer": "Не сопоставлено", "name": None, "issuer_group": "Не сопоставлено", "is_gov": False,
-                   "is_quasi": False}
-"""The issuer of the unmapped bonds (an instrument the static snapshot does not know)."""
+NO_DATA = "нет данных"
+"""An issuer's sector and rating the hub does not publish (D3: until HS3/HS5), said instead of left blank."""
+UNMAPPED_ISSUER = {"issuer": "Не сопоставлено", "name": None, "issuer_group": "Не сопоставлено", "sector": NO_DATA,
+                   "rating": NO_DATA, "is_gov": False, "is_quasi": False}
+"""The issuer of the unmapped bonds (an instrument the static snapshot does not know) whose row names none."""
+FROM_REPORT = " (из отчёта)"
+"""Marks a name that is the bank report's, not the static snapshot's (an unmapped bond, D6)."""
 FX_CCYS = ("USD", "EUR", "CNY")
 INDICES = (("KEY_RATE", "КС"), ("RUONIA", "RUONIA"))
+COUPON_TYPES = {"fixed": "fix", "floating": "float"}
+"""Hub coupon type -> the position's ``coupon_type``. The others (``zero``, ``indexed_face``, ``variable_known``,
+``unknown``) are kept as the hub names them (D5); the legacy tdm store knows only fix/float (``publish``)."""
+
+_LEGAL_FORMS = re.compile(
+    r"(?:публичное|непубличное|открытое|закрытое)?\s*акционерное\s+общество|общество\s+с\s+ограниченной\s+"
+    r"ответственностью|государственная\s+корпорация|государственная\s+компания", re.IGNORECASE)
+_SHORT_FORMS = re.compile(r"^(?:ПАО|ОАО|ЗАО|НАО|АО|ООО|ГК)\s+|\(\s*(?:ПАО|ОАО|ЗАО|НАО|АО|ООО)?\s*\)")
+_ABBREVIATED = ((re.compile(r"специализированное\s+финансовое\s+общество", re.IGNORECASE), "СФО"),
+                (re.compile(r"ипотечный\s+агент", re.IGNORECASE), "ИА"))
+_QUOTES = re.compile("[\"«»“”„']")
+_CAPS_WORD = re.compile(r"[А-ЯЁA-Z]{4,}")
+_VOWELS = set("АЕЁИОУЫЭЮЯAEIOUY")
+
+
+def issuer_display(name: str) -> str:
+    """A readable issuer name from MOEX's legal one until the hub sends short names (D2, HS1): the legal form
+    dropped (``публичное акционерное общество``, ``ПАО``, ``(публичное акционерное общество)``), quotes dropped, an
+    all-capitals name in normal case (a word of 4+ letters with a vowel; ``ГТЛК``, ``РЖД`` stay), ``СФО`` and ``ИА``
+    abbreviated. ``открытое акционерное общество "Российские железные дороги"`` -> ``Российские железные дороги``,
+    ``АКЦИОНЕРНОЕ ОБЩЕСТВО "АЛЬФА-БАНК"`` -> ``Альфа-Банк``."""
+    s = _LEGAL_FORMS.sub(" ", name)
+    for rx, short in _ABBREVIATED:
+        s = rx.sub(short, s)
+    s = _QUOTES.sub("", s)
+    s = " ".join(s.split())
+    s = _SHORT_FORMS.sub("", s).strip(" ,.-")
+    s = " ".join(s.split())
+    if not s:
+        return name
+    if not any(ch.islower() for ch in s):
+        s = _CAPS_WORD.sub(lambda m: m[0][0] + m[0][1:].lower() if _VOWELS & set(m[0]) else m[0], s)
+    return s[0].upper() + s[1:]
 
 
 def _issuer_key(ctx: EodContext, o: Outcome) -> tuple[str, dict[str, Any]]:
+    """The issuer reference of a bond: its key (the issuer's short name, else its legal name) and the record. The
+    display name is ``issuer_display``; the group is the issuer itself until the hub has groups (HS4); sector and
+    rating ``NO_DATA`` when the hub has none (D2, D3)."""
     assert o.terms is not None
     iss = ctx.static.issuer_of(o.terms)
     is_gov = o.terms.bond_class.startswith("ofz") or bool(iss and iss.is_sovereign)
     if iss is None:
         key = f"issuer:{o.terms.issuer_id or o.secid}"
-        return key, {"issuer": key, "name": None, "issuer_group": key, "is_gov": is_gov, "is_quasi": False}
+        return key, {"issuer": key, "name": None, "issuer_group": key, "sector": NO_DATA, "rating": NO_DATA,
+                     "is_gov": is_gov, "is_quasi": False}
     key = iss.short_name or iss.name
-    return key, {"issuer": key, "name": iss.name, "issuer_group": iss.name, "sector": iss.sector,
-                 "rating": None, "is_gov": is_gov, "is_quasi": False}
+    name = issuer_display(key)
+    return key, {"issuer": key, "name": name, "issuer_group": name, "sector": iss.sector or NO_DATA,
+                 "rating": NO_DATA, "is_gov": is_gov, "is_quasi": False}
+
+
+def _report_issuer(x: dict[str, Any]) -> dict[str, Any]:
+    """The issuer of an unmapped bond: the report's ``x_issuer`` when it names one (D6), else ``UNMAPPED_ISSUER``."""
+    name = ((x.get("x") or {}).get("x_issuer") or "").strip() if isinstance(x.get("x"), dict) else ""
+    if not name:
+        return UNMAPPED_ISSUER
+    shown = issuer_display(name)  # the same display as a mapped issuer's: one line per issuer in the Desk Monitor
+    return {"issuer": f"report:{name}", "name": shown, "issuer_group": shown, "sector": NO_DATA, "rating": NO_DATA,
+            "is_gov": False, "is_quasi": False}
 
 
 def curve_points(ctx: EodContext, prev: MarketView | None) -> list[dict[str, Any]]:
@@ -254,10 +315,13 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
         why.append("notional unknown: the market value is shown")
     vd = x.get("value_date")
     mat = x.get("maturity_date") or vd
+    name = x.get("source_instrument_name") or (f"{ccy} {vd or 'spot'}" if fx else x.get("source_instrument_id"))
+    if kind == "bond":  # unmapped: the bank's name (D6), else its ISIN
+        name = (name or x.get("isin") or pid) + FROM_REPORT
     return {
         "position_id": pid, "book_id": book, "instr_type": itype, "asset_class": aclass, "segment": segment,
-        "name": x.get("source_instrument_name") or (f"{ccy} {vd or 'spot'}" if fx else x.get("source_instrument_id"))
-        or pid, "isin": x.get("isin"), "issuer": None, "ccy": ccy, "maturity": mat.isoformat() if mat else None,
+        "name": name or pid, "isin": x.get("isin"), "issuer": None, "ccy": ccy,
+        "maturity": mat.isoformat() if mat else None,
         "tenor_y": (mat - ctx.business_date).days / 365.25 if mat and not fx else None,
         "side": ("BUY" if amount >= 0 else "SELL") if fx else "long" if amount >= 0 else "short",
         "notional": amount, "notional_rub": amount * rate, "price": _num(v.clean_pct), "mv": v.pv_rub / rate,
@@ -282,13 +346,18 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
     sa = q.source_analytics if q else {}
     ccy = t.face_unit or "RUB"
     fx = fx_rate(ctx, ccy) if ccy != "RUB" else None  # foreign face: amounts in RUB, notional and FX delta in ccy
+    cpn = coupon_view(t, as_of, lambda code: (f[1] if (f := ctx.market.latest_fixing(code)) else None))
+    if cpn.pct is None and v.current_coupon_pct is not None:
+        cpn = replace(cpn, pct=v.current_coupon_pct, basis="rate")
+    freq = t.coupon_frequency or implied_frequency(t)
     return {
         "position_id": pid, "book_id": book, "instr_type": "BOND",
         "asset_class": ASSET_CLASS.get(t.bond_class, t.bond_class), "segment": SEGMENT.get(t.bond_class, "Корп"),
-        "name": t.short_name or t.name, "isin": t.isin, "issuer": issuer, "ccy": ccy if fx else "RUB",
+        "name": t.name or t.short_name, "isin": t.isin, "issuer": issuer, "ccy": ccy if fx else "RUB",
         "maturity": t.maturity_date.isoformat() if t.maturity_date else None,
         "tenor_y": (t.maturity_date - as_of).days / 365.25 if t.maturity_date else None,
-        "coupon_type": "float" if t.coupon_type == "floating" else "fix", "coupon": v.current_coupon_pct,
+        "coupon_type": COUPON_TYPES.get(t.coupon_type, t.coupon_type), "coupon": cpn.pct,
+        "index_name": cpn.index_name, "margin": cpn.margin_pct,
         "side": "long" if v.quantity >= 0 else "short",
         "notional": v.quantity * v.face_rub / (fx[0] if fx else 1.0), "notional_rub": v.quantity * v.face_rub,
         "price": v.clean_pct, "mv": v.pv_rub / (fx[0] if fx else 1.0), "mv_rub": v.pv_rub,
@@ -296,7 +365,7 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
         "convexity": v.curve_convexity, "dv01": v.dv01_rub,
         "cs01": v.spread01_rub if v.spread_kind == "credit" else 0.0,
         "ofz_spr01": v.spread01_rub if v.spread_kind == "ofz" else 0.0,
-        "instrument_id": t.secid, "accrued": v.accrued_rub, "coupon_freq": t.coupon_frequency,
+        "instrument_id": t.secid, "accrued": v.accrued_rub, "coupon_freq": freq,
         "yield_date": v.horizon_date.isoformat() if v.horizon_kind in ("offer", "call") else None,
         "spread_type": "Z", "spread_curve": OFZ_CURVE, "new_today": False,
         "risk": risk_by_curve(v),
@@ -310,6 +379,8 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
             "moex_yield_close_pct": sa.get("yield_close_pct"), "moex_duration_days": sa.get("duration_days"),
             "valuation": "computed" if v.quality == "exact" else "approximated",
             "quality": v.quality, "assumptions": list(v.assumptions),
+            "short_name": t.short_name, "coupon_basis": cpn.basis,
+            **({"coupon_freq_source": "schedule"} if freq and not t.coupon_frequency else {}),
             **({"not_exact_reason": o.reason} if o.reason else {}),
             **({"fx_rate": fx[0], "fx_source": fx[1]} if fx else {}),
             **({"pnl": o.pnl.extra()} if o.pnl else {}),
@@ -366,9 +437,10 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
             if prev is not None:
                 no_pnl.append(f"{pid} {label}: нет PnL (оценка без инструмента, S7a)")
             rows.append(row := direct_row(ctx, book, pid, o, x or {}, quantities.get(pid)))
-            if row["instr_type"] == "BOND":  # tdm needs an issuer for a bond
-                row["issuer"] = UNMAPPED_ISSUER["issuer"]
-                issuers[row["issuer"]] = UNMAPPED_ISSUER
+            if row["instr_type"] == "BOND":  # tdm needs an issuer for a bond: the report's (D6), else none known
+                iss = _report_issuer(x or {})
+                row["issuer"] = iss["issuer"]
+                issuers[row["issuer"]] = iss
             continue
         if o.pnl is None and prev is not None:
             e = o.no_pnl
@@ -427,7 +499,9 @@ def publish(db: str, ctx: EodContext, positions: list[tuple[str, str, Outcome]],
                "prev_market_snapshot_id": prev.snapshot.id if prev else None,
                "core_results": store_core_results(db, [o for _, _, o in positions])}
     c = run_content(ctx, positions, prev, lineage, inputs)
-    rows = [r for r in c.rows if r["instr_type"] in TDM_INSTR_TYPES]
+    # the legacy tdm store knows the coupon types fix and float only (a CHECK): the others are written as fix
+    rows = [{**r, "coupon_type": "float" if r["coupon_type"] == "float" else "fix"} if r.get("coupon_type") else r
+            for r in c.rows if r["instr_type"] in TDM_INSTR_TYPES]
     if len(rows) < len(c.rows):  # the desk store holds them; the legacy tdm store has no such instrument type
         c.log.append(("WARN", "в tdm не записаны позиции без типа инструмента tdm (OTC/прочее): "
                       + ", ".join(r["position_id"] for r in c.rows if r["instr_type"] not in TDM_INSTR_TYPES)))

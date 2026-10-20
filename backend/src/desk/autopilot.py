@@ -23,7 +23,8 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    recomputed, to keep it cheap). Oldest first, except that the latest positions date goes first while it has no
    default run at all (a first launch, a new day): the current position shows before the backlog is done (its model
    prices then carry spreads from the runs that existed when it ran). A date that failed is not retried until its
-   inputs change.
+   inputs change. The step's detail also lists the latest positions date's bonds without an instrument: counts by
+   reason and the ISINs (``inbox.scan.unmapped``, D6).
 4. **history** (with the hub and ``history_days`` > 0): market history older than the cache for the bond charts,
    ``HISTORY_PER_CYCLE`` of the ``history_days`` latest hub dates per cycle, newest first, into the store's tables
    without caching the bundles; only after a sync that reached the hub and left no date for the next cycle, and
@@ -600,10 +601,23 @@ class Autopilot:
             if rid is not None:
                 done.append(f"{d} run {rid} ({why})")
                 ran.append(d)
-        parts = done + failed + notes
-        if failed:
-            return "error", "; ".join(parts)
-        return ("ok" if done else "skipped"), "; ".join(parts) or f"up to date ({dates[0]}..{dates[-1]})"
+        parts = (done + failed + notes or [f"up to date ({dates[0]}..{dates[-1]})"]) \
+            + self._unmapped(settings, con, latest_valid)
+        return ("error" if failed else "ok" if done else "skipped"), "; ".join(parts)
+
+    @staticmethod
+    def _unmapped(settings: Settings, con: psycopg.Connection, day: str) -> list[str]:
+        """The latest positions date's bonds without an instrument, by reason with their ISINs (D6), for the eod
+        step's detail; nothing when every bond resolves."""
+        from .inbox import scan
+
+        d = date.fromisoformat(day)
+        try:
+            u = scan.unmapped(settings, store.positions_for(con, d), d)
+        except Exception as e:  # noqa: BLE001 - a status line never fails the step
+            log.warning("autopilot: unmapped bonds of %s not listed: %s", day, e)
+            return []
+        return [f"{day} {scan.unmapped_text(u, limit=10)}"] if u.get("count") or u.get("error") else []
 
     def _eod_line(self, line: str) -> None:
         log.info("eod: %s", line)
