@@ -45,7 +45,7 @@ class Pages(unittest.TestCase):
         for api in ("open", "attach", "attr", "close"):
             self.assertIn(f" {api},", drill.split("const api = {")[1].split("}")[0] + ",", api)
         for name in DATA_PAGES:
-            self.assertIn("D.drill", (PROTO / name).read_text(encoding="utf-8"), name)
+            self.assertRegex((PROTO / name).read_text(encoding="utf-8"), r"\b(D|DESK)\.drill", name)
 
     def test_other_pages_apply_the_desk_monitor_filter(self):
         self.assertIn("desk-scope.js", (PROTO / "desk-loader.js").read_text(encoding="utf-8"))
