@@ -75,7 +75,15 @@ from . import runner
 from .conformance import list_files
 from .loader import AdapterHandle, load_adapter
 from .spi import DATASETS_WITH_BOOK, AdapterFailure, source_datasets
-from .static_index import CalendarUnavailable, build_index, business_calendar, covering, static_snapshots
+from .static_index import (
+    UNMAPPED_REASONS,
+    CalendarUnavailable,
+    build_index,
+    business_calendar,
+    covering,
+    static_snapshots,
+    unmapped_bonds,
+)
 from .timesem import MSK, parse_ts, report_date_suspicious, revision_key, valid_date
 from .validate import check_hit, check_read, check_reference, unit_hash
 
@@ -747,7 +755,8 @@ def replay(con: psycopg.Connection, settings: Settings, source: str, date_from: 
 def status(con: psycopg.Connection, settings: Settings, on: date | None = None) -> dict:
     """``desk inbox status``: per source and business date the current status of the files, their units and
     issues (of their latest attempt) and the copies; per active book the valid date of its positions for ``on``
-    (default: today, Moscow) and its age. Codes and counts only."""
+    (default: today, Moscow) and its age; the bonds of those positions without an instrument (``unmapped``: counts
+    by reason and the ISINs, D6). Codes, counts and ISINs only."""
     latest = "SELECT DISTINCT ON (sha256) * FROM inbox_file_status ORDER BY sha256, status_id DESC"
     groups: dict[tuple, dict] = {}
 
@@ -792,7 +801,31 @@ def status(con: psycopg.Connection, settings: Settings, on: date | None = None) 
                       "source": inputs.sources.get(b["book_id"], {}).get("source"),
                       "stale": None if expect is None else (vd is None or vd < expect)})
     return {"adapter": adapter_line(adapter(settings)), "positions_for": day.isoformat(),
-            "expected_valid_date": expect.isoformat() if expect else None, "groups": out_groups, "books": books}
+            "expected_valid_date": expect.isoformat() if expect else None, "groups": out_groups, "books": books,
+            "unmapped": unmapped(settings, inputs, day)}
+
+
+def unmapped(settings: Settings, inputs: store.PositionInputs, day: date) -> dict[str, Any]:
+    """The bonds of ``inputs`` without an instrument in the cached static snapshot of ``day``, by reason, with their
+    ISINs (``static_index.unmapped_bonds``, D6); ``error`` when the static snapshot cannot be read."""
+    try:
+        return unmapped_bonds(settings.snapshot_cache, [(secid, inputs.extra.get(pid))
+                                                        for pid, _, secid, _ in inputs.rows], day)
+    except (OSError, ValueError) as e:
+        return {"count": None, "by_reason": {}, "isins": [], "error": type(e).__name__}
+
+
+def unmapped_text(u: dict[str, Any], limit: int | None = None) -> str:
+    """One line: ``unmapped bonds 3 (not_in_static 2, not_on_moex 1): RU000A0JWRE5 not_in_static, ...``."""
+    if u.get("error"):
+        return f"unmapped bonds: unknown ({u['error']})"
+    if not u.get("count"):
+        return "unmapped bonds: 0" if u.get("static_snapshot") else "unmapped bonds: no cached static snapshot"
+    isins = u["isins"][:limit] if limit else u["isins"]
+    more = len(u["isins"]) - len(isins)
+    return (f"unmapped bonds {u['count']} (" + ", ".join(f"{k} {v}" for k, v in sorted(u["by_reason"].items()))
+            + ")" + (": " + ", ".join(f"{i['isin']} {i['reason']}" for i in isins) if isins else "")
+            + (f" and {more} more" if more else ""))
 
 
 def status_text(st: dict) -> str:
@@ -809,6 +842,9 @@ def status_text(st: dict) -> str:
         flag = "" if b["stale"] is None else " STALE" if b["stale"] else " ok"
         lines.append(f"  {b['book_id']}: " + (f"valid {b['valid_date']}, {b['age_days']} days, {b['source']}"
                                              if b["valid_date"] else "no positions") + flag)
+    if "unmapped" in st:
+        lines.append(unmapped_text(st["unmapped"]))
+        lines += [f"  {code}: {why}" for code, why in UNMAPPED_REASONS.items() if code in st["unmapped"]["by_reason"]]
     return "\n".join(lines)
 
 

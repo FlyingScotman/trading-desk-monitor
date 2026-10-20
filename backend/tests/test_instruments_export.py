@@ -46,9 +46,12 @@ def test_monitor_mapping_matches_publish(export):
     assert instruments.MON_ASSET_CLASS == tdm_run.ASSET_CLASS
     assert instruments.MON_SEGMENT == tdm_run.SEGMENT
     r = rows_of(export)
-    assert r["SU26238RMFS4"]["mon_name"] == "ОФЗ 26238"  # the MOEX short name, as position_row shows it
-    assert r["RU000A0JXQ44"]["mon_issuer_group"] == r["RU000A0JXQ44"]["issuer_name"]  # no group: the legal name
-    assert r["RU000A109XR1"]["mon_coupon_type"] == "float" and r["SU52005RMFS4"]["mon_coupon_type"] == "fix"
+    assert r["SU26238RMFS4"]["mon_name"] == "ОФЗ-ПД 26238 15/05/2041"  # MOEX NAME, as position_row shows it (D1)
+    rzd = r["RU000A0JXQ44"]  # "открытое акционерное общество ..." read without the legal form (D2); no group yet
+    assert rzd["mon_issuer"] == rzd["mon_issuer_group"] == "Российские железные дороги"
+    assert r["RU000A100GW5"]["mon_issuer"] == "Альфа-Банк" and r["RU000A1034P7"]["mon_issuer"] == "Банк ВТБ"
+    assert r["RU000A109XR1"]["mon_coupon_type"] == "float" and r["SU52005RMFS4"]["mon_coupon_type"] == "indexed_face"
+    assert r["RU000A10GCT1"]["mon_coupon_type"] == "unknown" and r["SU26238RMFS4"]["mon_coupon_type"] == "fix"
     assert all(x["rating"] is None for x in export.rows)
 
 
@@ -59,8 +62,9 @@ def test_core_static_reasons_and_coupons(export):
     assert r["RU000A10BRM5"]["core_static"] == "not_rub"  # USD face settled in RUB
     assert "currency_mismatch" in r["RU000A10BRM5"]["dq_flags"]
     assert r["RU000A100GW5"]["core_assumptions"].startswith("perpetual: call assumed")
-    # a floater: valued, but the monitor has no coupon to show (its periods carry no rate)
-    assert r["RU000A109XR1"]["core_static"] == "ok" and r["RU000A109XR1"]["mon_coupon_pct"] is None
+    # a floater whose running period has an amount and no rate: the amount as a rate (D4)
+    assert r["RU000A109XR1"]["core_static"] == "ok" and r["RU000A109XR1"]["mon_coupon_pct"] == 15.7558
+    assert r["SU52005RMFS4"]["core_static"] == "face_indexed" and r["SU52005RMFS4"]["mon_coupon_pct"] == 2.5
     assert "floater_formula_inferred" in r["RU000A109XR1"]["dq_flags"]
 
 

@@ -373,7 +373,7 @@ const DIMS = {
   assetClass:  { label: 'Класс актива', by: 'классам активов', order: AC.concat([FUND]), get: r => isPos(r) ? r.p.assetClass : FUND },
   segment:     { label: 'Сегмент', by: 'сегментам', order: SEG.concat([FUND]), get: r => isPos(r) ? r.p.segment : FUND },
   instrType:   { label: 'Тип инструмента', by: 'типам инструментов', order: Object.values(INSTR).concat([FUND]), get: r => isPos(r) ? INSTR[r.p.instrType] : FUND },
-  couponType:  { label: 'Тип купона', by: 'типу купона', order: ['Фиксированный', 'Плавающий', 'Не облигация', FUND], get: r => !isPos(r) ? FUND : r.p.instrType !== 'BOND' ? 'Не облигация' : r.p.couponType === 'float' ? 'Плавающий' : 'Фиксированный' },
+  couponType:  { label: 'Тип купона', by: 'типу купона', order: ['Фиксированный', 'Плавающий', 'Бескупонная', 'Индексируемый номинал', 'Переменный', 'Неизвестен', 'Не облигация', FUND], get: r => !isPos(r) ? FUND : r.p.instrType !== 'BOND' ? 'Не облигация' : ({float: 'Плавающий', zero: 'Бескупонная', indexed_face: 'Индексируемый номинал', variable_known: 'Переменный', unknown: 'Неизвестен'})[r.p.couponType] || 'Фиксированный' },
   issuer:      { label: 'Эмитент', by: 'эмитентам', get: r => isPos(r) ? (r.p.issuer || 'Без эмитента') : FUND },
   issuerGroup: { label: 'Группа эмитента', by: 'группам эмитентов', get: r => isPos(r) ? (r.p.issuerGroup || 'Без эмитента') : FUND },
   sector:      { label: 'Сектор', by: 'секторам', get: r => isPos(r) ? (r.p.sector || 'Без сектора') : FUND },

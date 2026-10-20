@@ -9,7 +9,8 @@ __version__ = "0.1.0"
 # Bumped by hand when a change makes a run compute something else from the same inputs (valuation, PnL, risk
 # buckets, coverage). A run records ``logic_version()`` in its lineage; the autopilot recomputes the latest positions
 # date once when its default run was made by another logic version (older dates stay as they were computed).
-VALUATION_VERSION = 3  # 2: risk per curve (R8); 3: RUB bonds discounted on RUONIA OIS, flash PnL on the bond's curves
+VALUATION_VERSION = 4  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
+# 4: RUB bonds discounted on RUONIA OIS + Z-spread, flash PnL on the bond's own curves
 
 
 def logic_version() -> str:

@@ -283,7 +283,9 @@ def test_compat_parity_with_tdm_assemble(store_url, book, client, tmp_path):
         for k in R10_PNL & set(a["pnl"]):
             a["pnl"].pop(k)
     for a, b in zip(got["positions"], want["positions"], strict=True):
-        assert a == b, (a["id"], {f: (a.get(f), b.get(f)) for f in set(a) | set(b) if a.get(f) != b.get(f)})
+        if b.get("couponType") == "fix" and a.get("couponType") not in ("fix", "float"):
+            a = {**a, "couponType": "fix"}  # tdm knows fix/float only; the desk store keeps the hub's type (D5)
+        assert a == b,(a["id"], {f: (a.get(f), b.get(f)) for f in set(a) | set(b) if a.get(f) != b.get(f)})
     w = want["positions"]  # the comparison covered PnL, fallback rungs, gamma, bucket risk, reference data
     assert len(w) == len(positions) - 1  # the unvalued position is in neither
     assert any(p["pnl"]["explained"] for p in w) and any(not p["pnl"]["explained"] for p in w)

@@ -892,7 +892,11 @@ const BD_GROUPS = [['none','нет'],['book','книга'],['issuerGroup','гр�
 const BD_RANGES = [['1M',21],['3M',63],['6M',126],['1Y',261]];
 const ratingIdx = r => { const i = D.RATING_ORDER.indexOf(r); return i < 0 ? 99 : i; };
 const curveName = c => c === 'own' ? 'расчётному спреду' : c === 'base' ? 'базовой кривой валюты' : (D.CURVES[c] ? D.CURVES[c].name : c);
-const cpnTxt = p => p.couponType === 'float' ? (p.index || 'плав.') + (p.margin != null ? ' + ' + num(p.margin,2) + '%' : '') : p.coupon != null ? num(p.coupon,2) + '%' : '—';
+// coupon types of the backend (R9 D5): fix/float and the hub's zero, indexed_face, variable_known, unknown
+const CPN_TYPE = {fix: 'фиксированный', float: 'плавающий', zero: 'бескупонная', indexed_face: 'индексируемый номинал', variable_known: 'переменный, известен', unknown: 'неизвестен'};
+const cpnProj = p => !!(p.extra && p.extra.coupon_basis === 'projected');
+const cpnPct = p => p.coupon != null ? (cpnProj(p) ? '≈' : '') + num(p.coupon,2) + '%' : null;
+const cpnTxt = p => p.couponType === 'float' ? (p.index || 'плав.') + (p.margin != null ? ' + ' + num(p.margin,2) + '%' : '') + (p.coupon != null ? ' (' + cpnPct(p) + (cpnProj(p) ? ', прогноз' : '') + ')' : '') : p.couponType === 'zero' ? 'бескупонная' : cpnPct(p) || '—';
 const bdSpr = (r, prev) => U.spreadTo(r.p, S.bd.curve, prev);
 const bdQ = r => r.p.quote || null;
 const BD_COLS = [
@@ -1124,7 +1128,7 @@ function openDrawer(id){
     ['Книга', bk.name + ' · ' + (BT_LABEL[bk.bookType] || '')], ['Деск / трейдер', [bk.desk, bk.trader].filter(Boolean).join(' · ')], ['Юрлицо', bk.entity], ['Класс', p.assetClass], ['Сегмент', p.segment], ['Тип', p.instrType],
     ['ISIN', p.isin], ['Эмитент', p.issuer], ['Группа', p.issuerGroup], ['Сектор', p.sector], ['Рейтинг', p.rating],
     ['Валюта', p.ccy], ['Погашение', dt(p.maturity)], ['Срок, лет', num(p.tenorY,2)],
-    ['Купон', p.couponType === 'float' ? (p.index + ' + ' + num(p.margin,2) + '%') : p.coupon != null ? num(p.coupon,2) + '%' : null],
+    ['Купон', p.instrType === 'BOND' || p.coupon != null ? cpnTxt(p) : null], ['Тип купона', p.couponType ? CPN_TYPE[p.couponType] || p.couponType : null],
     ['Индекс', p.couponType === 'fix' ? p.index : null], ['Сторона', p.side],
     ['Номинал', p.notional == null ? null : num(p.notional/1e6,2) + ' млн ' + p.ccy], ['Цена', p.price != null ? num(p.price,2) : null],
     ['MV', p.mv == null ? null : num(p.mv/1e6,2) + ' млн ' + p.ccy], ['MV, ₽', p.mvRub == null ? '— (не оценено)' : M(p.mvRub,1) + ' млн'],
