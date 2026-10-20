@@ -5,7 +5,8 @@ market snapshot (core's KBD curve, the RUONIA OIS and key-rate projection curves
 the floaters need, built once per date), and the settlement calendar. ``value`` prices a list of
 (secid, quantity) requests through core ``value_portfolio`` and returns one ``Outcome`` per
 request: a valuation or a rejection with its reason. ``attach_pnl`` adds the day-over-day flash
-PnL against the valuations of the previous date (``desk.pnl.flash``).
+PnL against the valuations of the previous date (``desk.pnl.flash``; a foreign-face bond's FX revaluation in
+``fx_gross``, ``desk.pnl.direct.split_fx``).
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from rub_fixed_income import (
 from .curves import rates
 from .marketdata.adapter import KBD_SPEC, BondQuote, BondTerms, MarketView, StaticView
 from .marketdata.bundle import SnapshotDir, SnapshotError
+from .pnl.direct import split_fx
 from .pnl.flash import FlashCurves, FlashPnl, NoPnl, explain
 from .valuation.bonds import BondRequest, BondValuation, Rejected, bond_request, settlement_date, value_bonds
 from .valuation.fallback import RUNGS, CarriedSpread, FallbackContext, approximate, par_proxy, simple_pnl
@@ -226,7 +228,7 @@ def attach_pnl(prev: EodContext, prev_outcomes: list[Outcome], ctx: EodContext, 
                 raise NoPnl("par_proxy", f"valued at par on {d}, no price")
             if o.valuation.quality in RUNGS or p.valuation.quality in RUNGS:  # no cashflows to reprice
                 assert o.terms is not None
-                o.pnl = simple_pnl(p.valuation, o.valuation, o.terms, ctx)
+                o.pnl = split_fx(simple_pnl(p.valuation, o.valuation, o.terms, ctx), prev, ctx, o.terms)
                 continue
             o.pnl = explain(p.valuation, o.valuation, curves, cache)
         except NoPnl as e:

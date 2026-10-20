@@ -108,15 +108,17 @@ class FlashPnl:
     rates_linear: float
     """Σ D-1 bucket DV01 × zero move per pillar: the first-order estimate of ``rates``."""
     price_basis: tuple[str, str]
+    fx_gross: float = 0.0
+    """The FX revaluation of a foreign-face bond (``pnl.direct.split_fx``), taken out of ``other``; 0 for a RUB bond."""
 
     @property
     def explained(self) -> float:
-        return self.carry + self.rolldown + self.rates + self.spread + self.other
+        return self.carry + self.rolldown + self.rates + self.spread + self.other + self.fx_gross
 
     def as_tdm(self) -> dict[str, float]:
         """The ``pnl`` dict of a ``tdm`` position (writer PNL_COLS)."""
         return {"carry": self.carry, "rolldown": self.rolldown, "rates": self.rates, "spread": self.spread,
-                "convexity": 0.0, "other": self.other, "fx_gross": 0.0, "fx_funding": 0.0, "new_trades": 0.0}
+                "convexity": 0.0, "other": self.other, "fx_gross": self.fx_gross, "fx_funding": 0.0, "new_trades": 0.0}
 
     def extra(self) -> dict[str, Any]:
         return {

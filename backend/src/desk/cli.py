@@ -53,7 +53,7 @@ from .marketdata.adapter import MarketView
 from .marketdata.bundle import SnapshotDir, SnapshotError
 from .marketdata.hub import HubClient, HubError, hub_check
 from .orchestrator import attach_pnl, prepare, value
-from .pnl.flash import NoPnl
+from .pnl import direct as direct_pnl
 from .publish import desk_run, tdm_run
 from .report import validation
 from .settings import Settings, SettingsError, adapter_config_dir, load, mask_url
@@ -173,13 +173,17 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             prev_ctx = prepare(sd, prev_date)
             attach_pnl(prev_ctx, value(prev_ctx, bp.requests, position_ids=bp.position_ids, carried_spreads=carried),
                        ctx, outcomes)
-            for o in bp.direct.values():  # fx, otc, unmapped bonds: the reason in run_position.no_pnl, not a bare null
-                if o.valuation is not None:
-                    o.no_pnl = NoPnl("valued_without_core", f"{o.valuation.quality}: no day-over-day PnL yet (S7a)")
+            # fx rows, the report-valued rows (otc, unmapped bonds): by the rate move and by the reports of both
+            # dates (pnl.direct); the reason in run_position.no_pnl when there is none, never a bare null
+            prev_inputs = store.positions_for(con, prev_ctx.business_date, books=books)
+            direct_pnl.attach(prev_ctx, ctx, bp.direct, inputs, pv1.plan(prev_ctx, prev_inputs).direct)
             flash = [o.pnl for o in outcomes if o.pnl]
             out(f"flash PnL {prev_date} -> {d}: {len(flash)}/{sum(o.valuation is not None for o in outcomes)} "
                 f"priced positions, total {sum(p.total for p in flash):,.0f} RUB, "
                 f"max identity error {max((abs(p.identity_error) for p in flash), default=0):.2e} RUB")
+            dp = [o.pnl for o in bp.direct.values() if o.pnl]
+            out(f"PnL without core: {len(dp)}/{sum(o.valuation is not None for o in bp.direct.values())} positions "
+                f"(by the rate move or the reports), total {sum(p.total for p in dp):,.0f} RUB")
         if not prev_date:
             out(f"WARN no flash PnL: no eod_final market snapshot before {d} in {snapshots}")
         positions = pv1.merge(bp, outcomes)
