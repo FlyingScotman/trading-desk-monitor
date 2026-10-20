@@ -6,8 +6,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PROTO = ROOT / "prototypes"
-PAGES = ["index.html", "desk-monitor.html", "widget-board.html", "pivot-studio.html", "scenario-lab.html", "settings.html"]
-DATA_PAGES = ["desk-monitor.html", "widget-board.html", "pivot-studio.html", "scenario-lab.html"]
+PAGES = ["index.html", "desk-monitor.html", "control-center.html", "widget-board.html", "pivot-studio.html", "scenario-lab.html", "settings.html"]
+DATA_PAGES = ["desk-monitor.html", "control-center.html", "widget-board.html", "pivot-studio.html", "scenario-lab.html"]
 
 
 def scripts(html):

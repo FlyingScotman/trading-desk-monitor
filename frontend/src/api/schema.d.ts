@@ -258,6 +258,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/cockpit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Cockpit Data
+         * @description The control center's data beside window.DESK (R20): run freshness, log warnings, bond quotes D and D-1, the market universe, CBR meetings and fixings, the cash flow calendar of the held bonds; ``desk.api.cockpit``
+         */
+        get: operations["cockpit_data_api_v1_cockpit_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/autopilot/status": {
         parameters: {
             query?: never;
@@ -1854,6 +1874,58 @@ export interface operations {
         };
     };
     compat_desk_api_v1_compat_desk_get: {
+        parameters: {
+            query?: {
+                as_of?: string | null;
+                run_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    cockpit_data_api_v1_cockpit_get: {
         parameters: {
             query?: {
                 as_of?: string | null;

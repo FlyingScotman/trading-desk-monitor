@@ -34,7 +34,7 @@ from ..scenario import jobs
 from ..scenario.definition import definition_hash, normalize
 from ..scenario.taylor import risk_payload
 from ..settings import REPO_ROOT
-from . import compat
+from . import cockpit, compat
 from .autopilot_routes import router as autopilot_router
 from .models import (
     COMPAT,
@@ -398,6 +398,17 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
             raise ApiError(404, "not_found", missing)
         return desk
 
+    @app.get("/api/v1/cockpit", description="The control center's data beside window.DESK (R20): run freshness, "
+             "log warnings, bond quotes D and D-1, the market universe, CBR meetings and fixings, the cash flow "
+             "calendar of the held bonds; ``desk.api.cockpit``")
+    def cockpit_data(con: Con, request: Request, as_of: date | None = None,
+                     run_id: int | None = None) -> dict[str, Any]:
+        run = compat.resolve_run(con, as_of, run_id)
+        if run is None:
+            raise ApiError(404, "not_found", f"прогон {run_id} не найден" if run_id else
+                           "нет опубликованных прогонов" + (f" на {as_of}" if as_of else ""))
+        return cockpit.build(con, run, cockpit_snapshots(request))
+
     from .diagnostics_routes import router as diagnostics_router
     from .settings_routes import router as settings_router  # here: it imports ApiError from this module
     from .update_routes import router as update_router
@@ -420,6 +431,18 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     return app
 
 
+def cockpit_snapshots(request: Request) -> Path | None:
+    """The snapshot cache the cockpit reads its bundles from: ``app.state.snapshots`` (``serve``), else the
+    settings' (re-read: an edit applies to the running server); None when the settings do not load."""
+    if (path := getattr(request.app.state, "snapshots", None)) is not None:
+        return Path(path)
+    from ..settings import SettingsError, load
+    try:
+        return load().snapshot_cache
+    except SettingsError:
+        return None
+
+
 def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir: Path | None = None,
           snapshots: Path | None = None, adapter_status: Callable[[], str] | None = None,
           autopilot: Any = None) -> int:
@@ -438,6 +461,8 @@ def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir:
     if snapshots is not None:
         jobs.Worker(store_url, SnapshotDir(snapshots)).start()
     app = create_app(store_url, static_dir, adapter_status=adapter_status)
+    if snapshots is not None:
+        app.state.snapshots = Path(snapshots)
     if autopilot is not None:
         app.state.autopilot = autopilot
         autopilot.start()
