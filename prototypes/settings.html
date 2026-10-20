@@ -263,6 +263,50 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
     <div class="ph"><h2 id="h-where">Где лежат данные</h2><span class="muted">только чтение · действующие значения</span></div>
     <div class="pb"><table class="t"><tbody id="eff"></tbody></table></div>
   </section>
+
+  <!-- 7. Обновление программы (self-contained: its style and script are here; data: /api/v1/update) -->
+  <section class="pnl" id="up" aria-labelledby="h-up">
+    <style>
+      #up .up-steps{list-style:none;margin:0;padding:0;display:flex;gap:6px 18px;flex-wrap:wrap}
+      #up .up-steps li{display:inline-flex;align-items:center;gap:6px;color:var(--fg-3)}
+      #up .up-steps li::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--line-2)}
+      #up .up-steps li.on{color:var(--fg)} #up .up-steps li.on::before{background:var(--warn)}
+      #up .up-steps li.done{color:var(--good-tx)} #up .up-steps li.done::before{background:var(--good)}
+      #up .up-steps li.fail{color:var(--neg-tx)} #up .up-steps li.fail::before{background:var(--crit)}
+      #up .tag.new{border-color:var(--accent);color:var(--accent-ink)}
+      #up td.num{text-align:right;white-space:nowrap}
+      @media (max-width:700px){ #up .up-t thead{display:none} #up .up-t td{display:block;border:0;padding:2px 8px} #up .up-t tr{display:block;border-bottom:1px solid var(--line);padding-block:6px} #up td.num{text-align:left} }
+    </style>
+    <div class="ph"><h2 id="h-up">Обновление программы</h2><span class="muted">установлена <span class="mono" id="up-ver">…</span></span></div>
+    <div class="pb">
+      <div class="note warn" id="up-off" hidden></div>
+      <div class="form" style="margin-top:10px">
+        <label for="up-dir">Папка с обновлениями</label>
+        <div>
+          <div class="row">
+            <input class="inp mono" id="up-dir" placeholder="\\сервер\папка\DeskMonitor — пусто: только загрузка с компьютера" autocomplete="off">
+            <button class="ibtn" id="up-dir-save" type="button">Сохранить папку</button>
+          </div>
+          <p class="hint">Сюда кладутся архивы DeskMonitor-….zip (полные) или DeskMonitor-patch-….zip (заплатки). Настройки и данные при обновлении не меняются. <span id="up-dir-msg"></span></p>
+        </div>
+      </div>
+      <table class="t up-t" style="margin-top:10px">
+        <thead><tr><th>Архив</th><th>Версия</th><th>Тип</th><th class="num">Размер</th><th>Дата</th><th></th></tr></thead>
+        <tbody id="up-list"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
+      </table>
+      <div class="row" style="margin-top:8px">
+        <input type="file" id="up-file" accept=".zip,application/zip" hidden>
+        <button class="ibtn" id="up-upload" type="button">Загрузить zip с компьютера</button>
+        <button class="lnk" id="up-refresh" type="button">обновить список</button>
+        <span id="up-upmsg"></span>
+      </div>
+      <div class="res" id="up-progress" hidden>
+        <ol class="up-steps" id="up-steps"><li>проверка</li><li>подготовка</li><li>перезапуск</li><li>готово</li></ol>
+        <div id="up-pmsg" style="margin-top:6px"></div>
+      </div>
+      <div class="res" id="up-last" hidden></div>
+    </div>
+  </section>
 </main>
 
 <div class="savebar">
@@ -584,5 +628,143 @@ async function renderConfigFiles(a){
   try { render(await api('GET', '/api/v1/settings')); }
   catch(e) { $('home-note').hidden = true; $('load-err').hidden = false; $('load-err').textContent = 'Не удалось загрузить настройки: ' + e.message; }
   loadAdapter();
+})();
+</script>
+<script>
+'use strict';
+/* ---------- 7. Обновление программы: the zips of /api/v1/update; «Установить» checks and stages one, desk serve
+   exits, the launcher (start.bat) installs it and starts the new version; this page polls until it answers ---------- */
+(function updates(){
+  const U = {data:null, busy:false, timer:null};
+  const KIND = {full:'полный', patch:'заплатка'};
+  const CMP = {newer:['новее','tag new'], older:['старее','tag'], same:['установлена','tag'], other:['другая сборка','tag']};
+  const mb = n => n < 1048576 ? Math.max(1, Math.round(n / 1024)) + ' КБ' : (n / 1048576).toFixed(n < 10485760 ? 1 : 0).replace('.', ',') + ' МБ';
+  const when = s => s ? new Date(s).toLocaleString('ru-RU', {dateStyle:'short', timeStyle:'short'}) : '';
+
+  function progress(step, msg, cls, doneText){  // step 0..3 is running (or failed with cls 'err'), 4: all done
+    $('up-progress').hidden = false;
+    const lis = $('up-steps').children;
+    for (let i = 0; i < lis.length; i++) lis[i].className = i < step ? 'done' : i === step ? (cls === 'err' ? 'fail' : 'on') : '';
+    lis[3].textContent = doneText || 'готово';
+    $('up-progress').className = 'res' + (cls === 'err' ? ' bad' : step === 4 ? ' ok' : '');
+    $('up-pmsg').className = cls || 'muted'; $('up-pmsg').textContent = msg || '';
+  }
+
+  function render(d){
+    U.data = d;
+    $('up-ver').textContent = d.current_version;
+    $('up-off').hidden = d.can_install; $('up-off').textContent = d.unavailable || '';
+    if (document.activeElement !== $('up-dir')) $('up-dir').value = d.update_dir || '';
+    $('up-dir-msg').className = d.update_dir_error ? 'err' : 'muted'; $('up-dir-msg').textContent = d.update_dir_error || '';
+    const tb = $('up-list'); tb.textContent = '';
+    if (!d.items.length) tb.append(h('tr', {}, h('td', {colspan:6, class:'muted'},
+      d.update_dir ? 'В папке с обновлениями нет zip-архивов.' : 'Архивов нет: укажите папку с обновлениями или загрузите zip с компьютера.')));
+    for (const it of d.items) {
+      const [cmpText, cmpCls] = CMP[it.compare] || ['', 'tag'];
+      tb.append(h('tr', {},
+        h('td', {}, h('span', {class:'mono', style:'word-break:break-all'}, it.name), it.source === 'upload' ? h('span', {class:'muted'}, ' · загружен') : null,
+          it.error && it.compare !== 'same' ? h('div', {class:'err'}, it.error) : null),
+        h('td', {}, h('span', {class:'mono'}, it.version || '—'), ' ', cmpText ? h('span', {class:cmpCls}, cmpText) : null),
+        h('td', {}, it.kind ? KIND[it.kind] + (it.kind === 'patch' && it.base_version ? ' от ' + it.base_version : it.adapter ? ', с адаптером' : '') : '—'),
+        h('td', {class:'num mono'}, mb(it.size)),
+        h('td', {class:'mono'}, when(it.modified)),
+        h('td', {style:'width:1%'}, it.compare === 'same' ? null : h('button', {class:'btn', type:'button',
+          disabled:!(d.can_install && !it.error && !U.busy), title:it.error || d.unavailable || null, onclick:() => install(it)}, 'Установить'))));
+    }
+    const l = d.last, box = $('up-last');
+    box.hidden = !l || U.busy || !!d.pending || !!d.applying;
+    if (!box.hidden) {
+      box.className = 'res ' + (l.ok ? 'ok' : 'bad'); box.textContent = '';
+      box.append(h('div', {class:l.ok ? 'okmsg' : 'err'}, (l.ok ? 'Последнее обновление: ' : 'Последнее обновление не удалось: ') + (l.message || '')),
+        h('div', {class:'muted mono'}, (l.from_version ? l.from_version + ' → ' : '') + (l.version || '') + (l.at ? ' · ' + when(l.at) : '')));
+    }
+  }
+
+  async function load(){
+    try { render(await api('GET', '/api/v1/update')); }
+    catch(e) {
+      $('up-list').textContent = '';
+      $('up-list').append(h('tr', {}, h('td', {colspan:6, class:'err'}, 'Не удалось получить список обновлений: ' + e.message)));
+      return;
+    }
+    const run = U.data.pending || U.data.applying;
+    if (run && !U.busy) {  // the page was opened (or reloaded) while an update is under way
+      U.busy = true; render(U.data);
+      progress(2, 'Идёт установка версии ' + run.version + '…');
+      wait(run.version, Date.now());
+    }
+  }
+
+  async function install(it){
+    const warn = it.compare === 'older' ? '\n\nВнимание: эта версия СТАРЕЕ установленной.' : it.compare === 'other' ? '\n\nДругая сборка: какая из версий новее, неизвестно.' : '';
+    if (!confirm('Установить Desk Monitor ' + it.version + ' (' + (KIND[it.kind] || '') + ')?\nСервер перезапустится, это займёт около минуты; страница обновится сама.' + warn)) return;
+    const body = {source:it.source, name:it.name}, started = Date.now();
+    U.busy = true; render(U.data);
+    progress(0, 'Проверяю архив…');
+    try { const c = await api('POST', '/api/v1/update/check', body); if (c.error) throw new Error(c.error); }
+    catch(e) { progress(0, e.message, 'err'); U.busy = false; load(); return; }
+    progress(1, 'Готовлю файлы: распаковка и проверка контрольных сумм…');
+    let r;
+    try { r = await api('POST', '/api/v1/update/install', body); }
+    catch(e) { progress(1, e.message, 'err'); U.busy = false; load(); return; }
+    progress(2, 'Перезапуск: сервер остановится, заменит файлы и запустится заново (ход виден в окне start.bat)…');
+    wait(r.version, started);
+  }
+
+  function wait(target, started){
+    let down = false;
+    clearInterval(U.timer);
+    U.timer = setInterval(async () => {
+      let d = null;
+      try { const r = await fetch('/api/v1/update', {headers:{'Accept':'application/json'}, cache:'no-store'}); if (r.ok) d = await r.json(); } catch(e) {}
+      if (!d) { down = true; }
+      else if (d.current_version === target && !d.pending && !d.applying) {
+        clearInterval(U.timer);
+        progress(4, 'Установлена версия ' + target + '. Перезагружаю страницу…', 'okmsg', 'готово (версия ' + target + ')');
+        setTimeout(() => location.reload(), 1500);
+        return;
+      } else if (!d.pending && !d.applying && d.last && d.last.version === target && !d.last.ok && (down || new Date(d.last.at) >= new Date(started - 1000))) {
+        clearInterval(U.timer); U.busy = false;
+        progress(2, d.last.message || 'Обновление не удалось.', 'err');
+        render(d);
+        return;
+      }
+      if (Date.now() - started > 15 * 60e3) {
+        clearInterval(U.timer); U.busy = false;
+        progress(2, 'Новая версия не ответила за 15 минут. Посмотрите окно start.bat и журналы logs\\update.log, logs\\serve.log в папке данных.', 'err');
+      }
+    }, 2000);
+  }
+
+  $('up-refresh').addEventListener('click', load);
+  $('up-upload').addEventListener('click', () => $('up-file').click());
+  $('up-file').addEventListener('change', async () => {
+    const f = $('up-file').files[0], msg = $('up-upmsg');
+    $('up-file').value = '';
+    if (!f) return;
+    if (U.data && f.size > U.data.max_zip_mb * 1048576) { msg.className = 'err'; msg.textContent = 'Файл больше ' + U.data.max_zip_mb + ' МБ.'; return; }
+    msg.className = 'muted'; msg.textContent = 'Загружаю ' + f.name + ' (' + mb(f.size) + ')…';
+    $('up-upload').disabled = true;
+    try {
+      const r = await fetch('/api/v1/update/upload?name=' + encodeURIComponent(f.name),
+        {method:'POST', headers:{'Content-Type':'application/zip', 'Accept':'application/json'}, body:f});
+      let j = null; try { j = await r.json(); } catch(e) {}
+      if (!r.ok) throw new Error((j && j.message) || ('HTTP ' + r.status));
+      msg.className = j.error && j.compare !== 'same' ? 'err' : 'okmsg';
+      msg.textContent = j.compare === 'same' ? 'Загружен: эта версия уже установлена.'
+        : j.error ? 'Загружен, но установить нельзя: ' + j.error : 'Загружен: версия ' + j.version + '. Нажмите «Установить» в списке.';
+    } catch(e) { msg.className = 'err'; msg.textContent = 'Не загружен: ' + e.message; }
+    finally { $('up-upload').disabled = false; load(); }
+  });
+  $('up-dir-save').addEventListener('click', async () => {
+    const v = $('up-dir').value.trim();
+    try {
+      await api('PUT', '/api/v1/settings', {update_dir: v || null});
+      await load();
+      if (!U.data || !U.data.update_dir_error) { $('up-dir-msg').className = 'okmsg'; $('up-dir-msg').textContent = 'Сохранено.'; }
+    } catch(e) { $('up-dir-msg').className = 'err'; $('up-dir-msg').textContent = 'Не сохранено: ' + e.message; }
+  });
+  $('up-dir').addEventListener('keydown', e => { if (e.key === 'Enter') $('up-dir-save').click(); });
+  load();
 })();
 </script>
