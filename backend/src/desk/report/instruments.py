@@ -51,7 +51,7 @@ COLUMNS: tuple[tuple[str, str], ...] = (
     ("status", "Статус в хабе: active / matured"),
     ("name", "Полное наименование выпуска (MOEX NAME)"),
     ("short_name", "Краткое наименование (MOEX SHORTNAME, до 10 символов)"),
-    ("mon_name", "Как бумага названа в мониторе (short_name, иначе name)"),
+    ("mon_name", "Как бумага названа в мониторе (MOEX NAME, D1; краткое имя и SECID остаются кодами)"),
     ("issuer_id", "ID эмитента MOEX (emitent_id)"),
     ("issuer_name", "Эмитент: полное наименование (MOEX emitent_title)"),
     ("issuer_short_name", "Эмитент: краткое наименование (в хабе не заполняется)"),
@@ -59,8 +59,8 @@ COLUMNS: tuple[tuple[str, str], ...] = (
     ("issuer_ogrn", "ОГРН эмитента"),
     ("issuer_country", "Страна эмитента"),
     ("issuer_is_sovereign", "Суверенный эмитент (Минфин РФ)"),
-    ("mon_issuer", "Эмитент в мониторе (краткое, иначе полное наименование)"),
-    ("mon_issuer_group", "Группа эмитента в мониторе (сейчас = полное наименование эмитента)"),
+    ("mon_issuer", "Эмитент в мониторе: краткое, иначе полное наименование без ОПФ и кавычек (D2)"),
+    ("mon_issuer_group", "Группа эмитента в мониторе (пока в хабе нет групп, HS4: = эмитент в мониторе)"),
     ("sector", "Отрасль (issuers.sector хаба)"),
     ("rating", "Рейтинг (в контракте хаба поля нет)"),
     ("bond_class", "Класс бумаги хаба (bond_class)"),
@@ -72,7 +72,7 @@ COLUMNS: tuple[tuple[str, str], ...] = (
     ("coupon_details", "MOEX COUPON_DETAILS"),
     ("coupon_type", "Тип купона хаба: fixed / floating / indexed_face / zero / variable_known / unknown"),
     ("coupon_type_basis", "Основание типа купона (moex_label, schedule, schedule_constant, ofz_series, ...)"),
-    ("mon_coupon_type", "Тип купона в мониторе (fix / float)"),
+    ("mon_coupon_type", "Тип купона в мониторе (fix / float / zero / indexed_face / variable_known / unknown, D5)"),
     ("coupon_frequency", "Купонов в год (MOEX COUPONFREQUENCY)"),
     ("coupon_period_days", "Длина купонного периода, дней (MOEX COUPONPERIOD)"),
     ("implied_frequency", "Купонов в год по графику (медиана периодов)"),
@@ -86,7 +86,7 @@ COLUMNS: tuple[tuple[str, str], ...] = (
     ("current_coupon_rate_pct", "Текущий купон: ставка, % годовых (MOEX valueprc)"),
     ("current_coupon_amount", "Текущий купон: сумма на бумагу"),
     ("current_coupon_status", "Текущий купон: статус хаба"),
-    ("mon_coupon_pct", "Купон, который покажет монитор (ставка ближайшего купона после оценки ядром)"),
+    ("mon_coupon_pct", "Купон, который покажет монитор (D4): ставка текущего купона, иначе его сумма как ставка, иначе последняя известная ставка; у флоатера без суммы монитор покажет прогноз «индекс + маржа» по фиксингу"),
     ("coupon_benchmark", "MOEX COUPON_BENCHMARK"),
     ("coupon_benchmark_spread_pct", "MOEX COUPON_BENCHMARK_SPREAD, п.п."),
     ("floater_benchmark", "Формула флоатера: индекс (хаб)"),
@@ -272,23 +272,26 @@ def instrument_row(raw: dict[str, Any], t: BondTerms, view: StaticView, as_of: d
     offers = sorted((o for o in t.offers if o.status == "scheduled" and o.date and o.date > as_of),
                     key=lambda o: o.date)  # type: ignore[arg-type,return-value]
     core, detail, assumptions, mon_coupon = _static_check(t, as_of)
-    floating = t.coupon_type == "floating"
+    from ..publish.tdm_run import COUPON_TYPES, issuer_display  # what the monitor shows, from the same code
+    from ..valuation.bonds import coupon_view
+
+    mon_coupon = cv if (cv := coupon_view(t, as_of).pct) is not None else mon_coupon
+    mon_issuer = issuer_display(iss.short_name or iss.name) if iss else f"issuer:{t.issuer_id or t.secid}"
     row: dict[str, Any] = {
         "secid": t.secid, "isin": t.isin, "regnumber": raw.get("regnumber"), "status": t.status,
-        "name": raw.get("name"), "short_name": t.short_name, "mon_name": t.short_name or t.name,
+        "name": raw.get("name"), "short_name": t.short_name, "mon_name": t.name or t.short_name,
         "issuer_id": t.issuer_id,
         "issuer_name": iss.name if iss else None, "issuer_short_name": iss.short_name if iss else None,
         "issuer_inn": iss.inn if iss else None,
         "issuer_ogrn": iraw.get("ogrn"), "issuer_country": iraw.get("country"),
         "issuer_is_sovereign": iss.is_sovereign if iss else None,
-        "mon_issuer": (iss.short_name or iss.name) if iss else f"issuer:{t.issuer_id or t.secid}",
-        "mon_issuer_group": iss.name if iss else f"issuer:{t.issuer_id or t.secid}",
+        "mon_issuer": mon_issuer, "mon_issuer_group": mon_issuer,
         "sector": iss.sector if iss else None, "rating": None,
         "bond_class": t.bond_class, "mon_asset_class": MON_ASSET_CLASS.get(t.bond_class, t.bond_class),
         "mon_segment": MON_SEGMENT.get(t.bond_class, "Корп"),
         "sec_type": raw.get("sec_type"), "bond_type": raw.get("bond_type"), "bond_subtype": raw.get("bond_subtype"),
         "coupon_details": raw.get("coupon_details"), "coupon_type": t.coupon_type,
-        "coupon_type_basis": raw.get("coupon_type_basis"), "mon_coupon_type": "float" if floating else "fix",
+        "coupon_type_basis": raw.get("coupon_type_basis"), "mon_coupon_type": COUPON_TYPES.get(t.coupon_type, t.coupon_type),
         "coupon_frequency": t.coupon_frequency, "coupon_period_days": raw.get("coupon_period_days"),
         "implied_frequency": _implied_frequency(t), "coupons_total": len(t.coupons), "coupons_future": len(future),
         "coupons_future_no_value": len(no_value),
