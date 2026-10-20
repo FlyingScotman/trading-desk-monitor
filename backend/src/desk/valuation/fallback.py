@@ -28,7 +28,8 @@ dirty price (bucket DV01 and spread risk on the discount curve, as for exact bon
 estimate: MOEX ``duration_days``, else the time to the horizon; DV01 = -Macaulay * PV * 1e-4
 (the buckets bump continuous zero rates) split linearly between the two nearest pillars; CS01 =
 DV01 for credit, 0 for OFZ. A floater's rates duration is the time to its next reset (its CS01
-keeps the full duration). A bond with a foreign face is valued in RUB at the CBR rate (MOEX TOM
+keeps the full duration); a key-rate floater books it on two curves as core does an exact one
+(``key_rate_floater_proxy``, R15): the full duration on the discount curve, the projection on ``RUB KEY``. A bond with a foreign face is valued in RUB at the CBR rate (MOEX TOM
 when CBR is missing); core has no curve in its currency, so its rate risk is always the duration
 estimate (DV01 in RUB per bp), booked on the currency's curve (``bonds.ccy_curve``: ``USD``, ``CNY``...)
 instead of RUONIA. MOEX publishes the accrued in the settlement currency (RUB for most replacement
@@ -61,6 +62,7 @@ from rub_fixed_income import (
     kbd_effective_yield,
 )
 
+from ..curves.rates import KEY_RATE_CURVE_ID
 from ..marketdata.adapter import OFZ_CLASSES, BondQuote, BondTerms, MarketView, core_instrument
 from ..pnl.flash import FlashPnl, NoPnl
 from .bonds import (
@@ -83,6 +85,8 @@ if TYPE_CHECKING:
     from ..orchestrator import EodContext, Outcome
 
 FALLBACK_BASES = (*PRICE_BASIS_ORDER, "market_price2", "market_price3", "admitted_quote")
+KEY_CURVE = RISK_CURVES[KEY_RATE_CURVE_ID]
+"""The key-rate projection curve (``RUB KEY``): a key-rate floater on a fallback rung books its projection here."""
 LOOKBACK_DAYS = 30
 MIN_BONDS = {"issuer": 3, "class": 3, "kind": 3}
 Z_BAND_BP = (-100.0, 2000.0)
@@ -244,6 +248,19 @@ def _split(t: float, dv01: float) -> dict[str, float]:
     return out
 
 
+def key_rate_floater_proxy(disc: str, mac: float, reset: float, pv: float) -> dict[str, dict[str, float]]:
+    """The duration proxy of a key-rate floater by curve, as core books an exact one (R15): every cashflow is
+    discounted on ``disc`` (-Macaulay x PV at the full duration) and the coupons after the reset are projected on
+    the key-rate curve (``KEY_CURVE``): +duration at the horizon, -time to the reset at the reset (the forwards
+    between them). Summed over the curves the buckets are the single-curve proxy (-time to the reset x PV at the
+    reset), so the total DV01 and every parallel shift of all curves are unchanged; only a move of the key rate
+    against RUONIA (the basis) now moves the floater."""
+    proj = {b: x + y for (b, x), y in zip(_split(mac, mac * pv * 1e-4).items(),
+                                         _split(reset, -reset * pv * 1e-4).values())}
+    return {disc: {b: x + 0.0 for b, x in _split(mac, -mac * pv * 1e-4).items()},
+            KEY_CURVE: {b: x + 0.0 for b, x in proj.items()}}
+
+
 def _f(v: Any) -> float | None:
     return None if v in (None, "") else float(v)
 
@@ -383,10 +400,16 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
         why.append(note + (f": DV01 split between the nearest pillars of {curve}" if rate_t else ": DV01 0"))
         yy = y / 100 if y is not None else 0.0 if is_fx else kbd_effective_yield(ctx.kbd, max(mac, 1 / 365))
         buckets = _split(rate_t, dv01) if rate_t else zero
+        by_curve = {curve: buckets}
+        if not is_fx and t.coupon_type == "floating" and coupon is not None and mac > rate_t \
+                and (t.floater_formula or {}).get("benchmark") == "KEY_RATE":
+            by_curve = key_rate_floater_proxy(curve, mac, rate_t, pv)
+            why.append(f"key-rate floater (R15): discounting {-mac:.2f} y on {curve}, projection "
+                       f"+{mac:.2f} y / {-rate_t:.2f} y on {KEY_CURVE}; their sum is the DV01 to the reset")
         return make(quality, price_basis=basis, clean_pct=clean, accrued_rub=acc, face_rub=face * fx_face[0],
                     dirty_rub=dirty, pv_rub=pv, ytm_pct=ytm, macaulay_years=mac,
                     modified_duration=mac / (1 + yy), z_spread_bp=math.nan, dv01_rub=dv01,
-                    buckets=buckets, curve_buckets={curve: buckets},
+                    buckets=buckets, curve_buckets=by_curve,
                     spread01_rub=s01 if kind == "credit" else 0.0)
 
     priced = None  # ((engine, risk), Z, model_spread_source, assumption text)

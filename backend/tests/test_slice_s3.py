@@ -84,10 +84,14 @@ class Handler(BaseHTTPRequestHandler):
             s.fail -= 1
             return self._json(503, {"error": {"status": 503, "message": "database unavailable"}})
         if u.path == "/v1/snapshots":
-            rows = [r for r in s.rows if all(r.get(k) == q[k] for k in ("kind", "cut_type", "business_date") if k in q)]
-            rows.sort(key=lambda r: (r["business_date"], r.get("cut_ts") or ""), reverse=True)  # the hub's order
-            if q.get("latest") == "true":
-                return self._json(200, {"data": rows[:1], "meta": {"returned": len(rows[:1]), "latest": True}})
+            rows = [{**r, "superseded_by": next((o["snapshot_id"] for o in s.rows if o.get("supersedes")
+                                                 and o["supersedes"] == r["snapshot_id"]), None)}
+                    for r in s.rows if all(r.get(k) == q[k] for k in ("kind", "cut_type", "business_date") if k in q)]
+            rows.sort(key=lambda r: (r["business_date"], r.get("cut_ts") or "", r.get("published_at") or ""),
+                      reverse=True)  # the hub's order
+            if q.get("latest") == "true":  # the newest one no other supersedes
+                rows = [r for r in rows if not r["superseded_by"]][:1]
+                return self._json(200, {"data": rows, "meta": {"returned": len(rows), "latest": True}})
             off = int(q.get("offset", 0))
             chunk = rows[off:off + s.page]
             return self._json(200, {"data": chunk, "meta": {

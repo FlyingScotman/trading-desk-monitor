@@ -14,18 +14,21 @@ for a run without a previous market, the run says ``pnlAvailable`` (false with `
 ``pnlReasonText``) and ``pnlCoverage``; a position without PnL has every ``pnl`` amount null with ``available``
 false, ``reason``, ``reasonText`` and ``reasonDetail``; one with PnL has its ``method``/``methodText``/``flag``,
 and a PnL by the reports (``pnl.reasons.REPORTED_METHOD``) is in ``pnl.reported``, not in ``other``. ``history``
-has null PnL for a run where no position has one. compat, removed with window.DESK (M7); never extended
-otherwise."""
+has null PnL for a run where no position has one. ``riskNotes`` (R14, R15): what the run's risk by curve lacks (a
+rates curve missing from the hub's snapshot, a run made before the RUONIA discounting), so the risk views say it
+instead of showing a curve as silently zero. compat, removed with window.DESK (M7); never extended otherwise."""
 
 from __future__ import annotations
 
 import math
+import re
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
 from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
 
+from ..curves.rates import input_notes
 from ..pnl.reasons import METHOD_TEXT, REPORTED_METHOD, RUN_NO_POSITION_PNL, RUN_NO_PREV_MARKET, no_pnl_text
 from ..store import CURRENT_RUNS, DEFAULT_RUNS, slice_label
 
@@ -38,6 +41,24 @@ RATINGS = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-", "B
 RUB = {"ccy": "RUB", "rate": 1.0, "move_pct": 0.0, "rate_cbr": 1.0, "move_pct_cbr": 0.0, "rate_cbr_next": 1.0}
 CONTRACT_VERSION = "1.3"
 HISTORY_DAYS = 22  # tdm.assemble.HISTORY_DAYS
+
+RUONIA_DISCOUNT_VERSION = 4
+"""``VALUATION_VERSION`` from which RUB bonds are discounted on RUONIA OIS (an older run has its risk on RUB OFZ)."""
+
+
+def risk_notes(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """``riskNotes`` of a run: ``{code, curve, text, detail}`` per rates input its market lacked (``rates.input_notes``:
+    ``curve_missing:ruonia_ois`` and so on) and ``run_before_ruonia`` for a run made by a logic version before the
+    RUONIA discounting (only the latest positions date is recomputed after an upgrade)."""
+    lin = run.get("lineage") or {}
+    out = input_notes(lin.get("rates"), run["business_date"])
+    m = re.search(r"\+v(\d+)", lin.get("logic_version") or "")
+    if m and int(m.group(1)) < RUONIA_DISCOUNT_VERSION:
+        out.append({"code": "run_before_ruonia", "curve": "RUB RUONIA", "detail": lin.get("logic_version"),
+                    "text": "прогон посчитан до перехода на дисконтирование по RUONIA — риск облигаций на ОФЗ "
+                            "(RUB OFZ); после обновления пересчитывается только последняя дата"})
+    return out
+
 
 def resolve_run(con, as_of: date | None = None, run_id: int | None = None) -> dict[str, Any] | None:
     """As tdm.assemble.resolve_run: the complete run run_id, else the run shown for as_of, else the newest run shown
@@ -368,7 +389,8 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         "CBR_MEETINGS": [], "CARRY_SCENARIOS": DEFAULT_CARRY, "CARRY_HORIZONS": CARRY_HORIZONS,
         "official": {"asOf": as_of, "received": any(p["pnl"]["official"] is not None for p in positions),
                      "basis": "CBR", "receivedAt": None},
-        "positions": positions, "funding": [], "fundingPnl": {"carry": 0.0, "fx": 0.0, "fxCbr": 0.0},
+        "positions": positions, "riskNotes": risk_notes(run),
+        "funding": [], "fundingPnl": {"carry": 0.0, "fx": 0.0, "fxCbr": 0.0},
         "fundingPnlByBook": {b: dict(zero_book) for b in books}, "history": history,
         "source": {"kind": "db", "runId": rid, "runType": run["run_type"],
                    "publishedAt": completed.isoformat() if completed else None,

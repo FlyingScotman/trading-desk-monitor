@@ -138,6 +138,18 @@ def hub_dates(client: HubClient, cut_type: str = "eod_final") -> Iterator[str]:
             yield row["business_date"]
 
 
+def hub_latest(client: HubClient, cut_type: str = "eod_final") -> Iterator[tuple[str, str]]:
+    """(business date, snapshot id) of each date's market snapshot of ``cut_type`` that no other supersedes (the
+    hub's ``superseded_by``), newest date first: a correction the hub published after a date was loaded shows as
+    another id (WEB-11 re-publishes its 2026 history so)."""
+    seen: set[str] = set()
+    for row in client.list_snapshots(kind="market", cut_type=cut_type):
+        if row["business_date"] in seen or row.get("superseded_by"):
+            continue
+        seen.add(row["business_date"])
+        yield row["business_date"], row["snapshot_id"]
+
+
 def import_drop(drop: Path, cache: Path) -> tuple[list[str], list[tuple[str, str]]]:
     """Copy hand-delivered bundles from the drop folder with the same verification (ADR-001 §4).
     Returns (imported ids, [(file name, reason)] rejected); bad files are not copied."""

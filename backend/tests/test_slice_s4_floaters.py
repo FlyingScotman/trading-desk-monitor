@@ -37,7 +37,10 @@ def test_calendars_extend_by_rule_and_say_where(ctx):
     assert not target.is_business_day(date(2030, 4, 22)) and not target.is_business_day(date(2030, 4, 19))  # Easter
     prov = ctx.lineage()["calendar_provisional_from"]
     assert prov["RU_PRODUCTION"] == "2028-01-01" and prov["MOEX_STOCK"] == "2027-01-01"  # the hub's own, earlier
-    assert set(ctx.rates) == {"ruonia_ois", "key_rate", "fixings"}
+    assert set(ctx.rates) == {"ruonia_ois", "key_rate", "fixings", "status", "codes", "coverage"}
+    assert ctx.rates["status"] == {"ruonia_ois": "ok", "key_rate_swap": "ok", "fixings": "ok"} and ctx.rates["codes"] == []
+    assert ctx.rates["coverage"] == {"ruonia_ois": {"present": ["otc_monitor", "ratescalcs"], "missing": []},
+                                     "key_rate_swap": {"present": ["otc_monitor", "ratescalcs"], "missing": []}}
 
 
 def test_fixed_bonds_stay_exact_and_results_carry_the_book_ids(outs):
