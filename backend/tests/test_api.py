@@ -30,7 +30,13 @@ DATE = "2026-10-15"
 QTY = 1000.0
 # Keys of window.DESK.source the parity test leaves out; everything else must be equal.
 EXCLUDED = {"runId": "the two stores number their runs independently",
-            "publishedAt": "publication time of each store's run"}
+            "publishedAt": "publication time of each store's run",
+            **dict.fromkeys(("cutType", "cutTs", "slice", "prevCutType", "pnlBasis"),
+                            "the run's market slice (R11): the desk store's only")}
+R10_RUN = {"pnlAvailable", "pnlReason", "pnlReasonText", "pnlCoverage"}
+"""window.DESK keys compat adds (R10: a missing PnL is said, not shown as 0); tdm's assembler has none."""
+R10_PNL = {"available", "reason", "reasonText", "reasonDetail", "method", "methodText", "flag", "reported"}
+"""Keys of a position's ``pnl`` compat adds."""
 
 
 @pytest.fixture(scope="module")
@@ -254,16 +260,28 @@ def test_compat_parity_with_tdm_assemble(store_url, book, client, tmp_path):
         client.get(f"/api/v1/compat/desk?run_id={rid}").json()
     assert got["source"]["runId"] == rid and want["source"]["runId"] == tdm_id
     for key in EXCLUDED:
-        got["source"].pop(key), want["source"].pop(key)
-    assert set(got) == set(want)
+        got["source"].pop(key), want["source"].pop(key, None)
+    assert set(got) - R10_RUN == set(want)
+    assert got["pnlAvailable"] and got["pnlReason"] is None and got["pnlCoverage"]["withPnl"] > 0
     for k in want:
         if k != "positions":
             assert got[k] == want[k], k
     nv = [p for p in got["positions"] if p.get("notValued")]  # compat lists the unvalued position, tdm does not
     assert len(nv) == 1 and nv[0]["mvRub"] is None and nv[0]["extra"]["quality"] == "not_valued"
     assert nv[0]["extra"]["reason"] and not nv[0]["risk"] and nv[0]["dv01"] == 0 and got["positions"][-1] is nv[0]
+    assert nv[0]["pnl"]["available"] is False and nv[0]["pnl"]["reason"] == "not_valued"
+    assert nv[0]["pnl"]["explained"] is None and nv[0]["pnl"]["carry"] is None
     got["positions"] = got["positions"][:-1]
     assert [p["id"] for p in got["positions"]] == [p["id"] for p in want["positions"]]
+    for a, b in zip(got["positions"], want["positions"], strict=True):  # tdm: a missing PnL as 0, compat: null
+        if a["pnl"]["available"]:
+            assert a["pnl"]["reported"] == 0.0 and a["pnl"]["method"]
+        else:
+            assert a["pnl"]["reasonText"] and all(a["pnl"][k] is None for k in b["pnl"])
+            assert not any(b["pnl"][k] for k in b["pnl"])
+            a["pnl"] = {**b["pnl"]}
+        for k in R10_PNL & set(a["pnl"]):
+            a["pnl"].pop(k)
     for a, b in zip(got["positions"], want["positions"], strict=True):
         if b.get("couponType") == "fix" and a.get("couponType") not in ("fix", "float"):
             a = {**a, "couponType": "fix"}  # tdm knows fix/float only; the desk store keeps the hub's type (D5)

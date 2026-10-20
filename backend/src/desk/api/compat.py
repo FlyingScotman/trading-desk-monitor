@@ -5,9 +5,17 @@ does not hold yet (funding, OCP, scenario results, official PnL, CBR meetings, b
 assembler renders a run without it. ``history`` is the default runs of the earlier dates, where tdm's
 desk_history holds the latest published EOD run of each date (any cut). A position the run did not value (no
 fact: no data at all, an OTC row without the report's value) is listed after the valued ones with ``notValued``,
-no PV (``mvRub`` null), zero risk and PnL and its reason in ``extra``, so the positions list shows it and no total
+no PV (``mvRub`` null), zero risk and its reason in ``extra``, so the positions list shows it and no total
 moves; it has no segment and no instrument type (the one addition beyond tdm's assembler, which drops such a
-position). compat, removed with window.DESK (M7); never extended otherwise."""
+position).
+
+Honest absence of PnL (R10), the other departure from tdm, which shows a missing PnL as 0: ``prevDate`` is null
+for a run without a previous market, the run says ``pnlAvailable`` (false with ``pnlReason`` and its Russian
+``pnlReasonText``) and ``pnlCoverage``; a position without PnL has every ``pnl`` amount null with ``available``
+false, ``reason``, ``reasonText`` and ``reasonDetail``; one with PnL has its ``method``/``methodText``/``flag``,
+and a PnL by the reports (``pnl.reasons.REPORTED_METHOD``) is in ``pnl.reported``, not in ``other``. ``history``
+has null PnL for a run where no position has one. compat, removed with window.DESK (M7); never extended
+otherwise."""
 
 from __future__ import annotations
 
@@ -18,7 +26,8 @@ from typing import Any
 
 from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
 
-from ..store import DEFAULT_RUNS
+from ..pnl.reasons import METHOD_TEXT, REPORTED_METHOD, RUN_NO_POSITION_PNL, RUN_NO_PREV_MARKET, no_pnl_text
+from ..store import CURRENT_RUNS, DEFAULT_RUNS, slice_label
 
 PNL_KEYS = ("carry", "rolldown", "rates", "spread", "fx_gross", "fx_funding", "funding", "convexity",
             "new_trades", "other")
@@ -31,16 +40,26 @@ CONTRACT_VERSION = "1.3"
 HISTORY_DAYS = 22  # tdm.assemble.HISTORY_DAYS
 
 def resolve_run(con, as_of: date | None = None, run_id: int | None = None) -> dict[str, Any] | None:
-    """As tdm.assemble.resolve_run: the complete run run_id, else the default run of as_of, else the latest
-    default run."""
+    """As tdm.assemble.resolve_run: the complete run run_id, else the run shown for as_of, else the newest run shown
+    (``CURRENT_RUNS``, R11: a date's default run, otherwise its intraday run: today's book on the latest cut)."""
     if run_id:
         return con.execute("SELECT * FROM run WHERE run_id = %s AND status = 'complete'",
                            (run_id,)).fetchone()
     if as_of:
-        return con.execute(f"SELECT * FROM run WHERE run_id IN ({DEFAULT_RUNS}) AND business_date = %s",
+        return con.execute(f"SELECT * FROM run WHERE run_id IN ({CURRENT_RUNS}) AND business_date = %s",
                            (as_of,)).fetchone()
-    return con.execute(f"SELECT * FROM run WHERE run_id IN ({DEFAULT_RUNS})"
+    return con.execute(f"SELECT * FROM run WHERE run_id IN ({CURRENT_RUNS})"
                        " ORDER BY business_date DESC LIMIT 1").fetchone()
+
+
+def run_slice(run: dict[str, Any]) -> dict[str, Any]:
+    """The run's market slice for ``source`` (R11): cut type and time, the label the pages show, and what the flash
+    PnL is measured against when it is not the previous business day's close."""
+    basis = (run.get("lineage") or {}).get("pnl_basis") or {}
+    cut_ts = run.get("cut_ts")
+    return {"cutType": run["cut_type"], "cutTs": cut_ts.isoformat() if cut_ts else None,
+            "slice": slice_label(run["business_date"], run["cut_type"], cut_ts, run["run_type"]),
+            "prevCutType": run.get("prev_cut_type"), "pnlBasis": basis.get("label")}
 
 
 def _years(d0: str, d1: str | None) -> float | None:
@@ -95,10 +114,10 @@ def _gamma(rows: list[list[Any]] | None) -> list[list[Any]]:
     return [[a, b, v] for (a, b), v in sorted(out.items())]
 
 
-def run_totals(rows) -> tuple[float, float, float, float]:
+def run_totals(rows) -> tuple[float | None, float | None, float, float]:
     """As tdm.writer.run_totals on rows (fact, pnl) of a run without funding deals: (official, explained,
     dv01, cs01). A position without official PnL counts its explained PnL plus the FX basis (CBR rates),
-    one without PnL nothing."""
+    one without PnL nothing; official and explained are None (not 0) when no position has a PnL (R10)."""
     off, exp = [], []
     for r in rows:
         if q := r["pnl"]:
@@ -109,7 +128,8 @@ def run_totals(rows) -> tuple[float, float, float, float]:
             off.append(q["official"] if q.get("official") is not None else e + (gc + fc - g - f))
             exp.append(e)
     facts = [r["fact"] for r in rows]  # SQLite SUM is compensated too
-    return (math.fsum(off), math.fsum(exp), math.fsum(p.get("dv01") or 0.0 for p in facts),
+    return (math.fsum(off) if off else None, math.fsum(exp) if exp else None,
+            math.fsum(p.get("dv01") or 0.0 for p in facts),
             math.fsum(p.get("cs01") or 0.0 for p in facts))
 
 
@@ -120,6 +140,19 @@ INPUT_FIELDS = ("asset_class", "ccy", "source_instrument_id", "source_instrument
                 "value_date", "maturity_date", "amount_ccy", "face_amount_ccy", "face_outstanding_ccy",
                 "mark_price_pct", "mv_rub", "risk_dv01_rub", "risk_cs01_rub", "src", "x")
 """What an unvalued position shows of its report row (position_input of the run's position sets)."""
+
+
+PNL_FIELDS = ("carry", "rolldown", "rates", "spread", "fx", "funding", "convexity", "newTrades", "other", "reported",
+              "fxGross", "fxFunding", "fxGrossCbr", "fxFundingCbr", "fxCbr", "explained", "explainedCbr", "fxBasis",
+              "unexplained")
+"""The amounts of a Desk Monitor position's ``pnl``: all null for a position without PnL."""
+
+
+def no_pnl(code: str, detail: str | None = None) -> dict[str, Any]:
+    """A position's ``pnl`` without PnL (R10): every amount null, not 0, and why (``pnl.reasons``)."""
+    return {**dict.fromkeys(PNL_FIELDS), "official": None, "breakNote": None, "available": False, "reason": code,
+            "reasonText": no_pnl_text(code), "reasonDetail": detail or None, "method": None, "methodText": None,
+            "flag": None}
 
 
 def _json(v: Any) -> Any:
@@ -133,9 +166,6 @@ def _not_valued(r: dict[str, Any], books: dict[str, dict], x: dict[str, Any] | N
     x = {k: _json(v) for k, v in (x or {}).items() if v is not None}
     kind = (x.get("asset_class") or "").lower()
     aclass, segment = (None, None) if kind in ("", "bond") else NOT_VALUED_KIND.get(kind, NOT_VALUED_KIND["other"])
-    zero = dict.fromkeys(("carry", "rolldown", "rates", "spread", "fx", "funding", "convexity", "newTrades", "other",
-                          "fxGross", "fxFunding", "fxGrossCbr", "fxFundingCbr", "fxCbr", "explained", "explainedCbr",
-                          "fxBasis", "unexplained"), 0.0)
     return {
         "id": r["position_id"], "book": r["book_id"], "assetClass": aclass, "segment": segment, "instrType": None,
         "name": x.get("source_instrument_name") or x.get("source_instrument_id") or r["secid"] or r["position_id"],
@@ -146,10 +176,26 @@ def _not_valued(r: dict[str, Any], books: dict[str, dict], x: dict[str, Any] | N
         "risk": {}, "fxDelta": {}, "jtd": 0.0, "gamma": [], **gamma_summary([], None, None, 0.0),
         "entity": books.get(r["book_id"], {}).get("entity", "—"), "portfolio": portfolio, "newToday": False,
         "notValued": True,
-        "pnl": {**zero, "official": None, "breakNote": None},
+        "pnl": no_pnl("not_valued", r["reason"]),
         "extra": {"quality": "not_valued", "valuation": "not_valued", "reason": r["reason"],
                   "quantity": r["quantity"], **({"reported": x} if x else {})},
     }
+
+
+def _no_pnl_of(stored: dict[str, Any] | None, prev_date: date | None) -> tuple[str, str | None]:
+    """(code, detail) of a valued position without PnL: run_position.no_pnl, else the run's own reason."""
+    if stored:
+        return stored.get("reason") or "not_computed", stored.get("detail")
+    return (RUN_NO_PREV_MARKET, None) if prev_date is None else ("not_computed", None)
+
+
+def pnl_state(run: dict[str, Any], positions: list[dict[str, Any]]) -> dict[str, Any]:
+    """The run-level PnL fields of window.DESK (R10): ``pnlAvailable`` false with a code and its text when the run
+    has no previous market or no position has a PnL; ``pnlCoverage``: positions with PnL of all the listed ones."""
+    n = sum(p["pnl"]["available"] for p in positions)
+    code = RUN_NO_PREV_MARKET if run["prev_date"] is None else RUN_NO_POSITION_PNL if not n else None
+    return {"pnlAvailable": code is None, "pnlReason": code, "pnlReasonText": no_pnl_text(code) if code else None,
+            "pnlCoverage": {"withPnl": n, "positions": len(positions)}}
 
 
 def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
@@ -177,7 +223,7 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
                    for r in fxr}
     indices = {r["index_name"]: r["value"] for r in ref.get("indices", [])}
 
-    prows = con.execute("SELECT position_id, fact, pnl FROM run_position WHERE run_id = %s"
+    prows = con.execute("SELECT position_id, fact, pnl, no_pnl FROM run_position WHERE run_id = %s"
                         " AND fact IS NOT NULL ORDER BY ord", (rid,)).fetchall()
     has_bonds = {r["fact"]["book_id"] for r in prows if r["fact"].get("instr_type") == "BOND"}
     books = {}
@@ -220,6 +266,8 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         fx_basis = (gross_cbr + fund_cbr) - (comp["fx_gross"] + comp["fx_funding"])
         explained_cbr = explained + fx_basis
         official = q.get("official") if q else None
+        method = ((q or {}).get("extra") or {}).get("method")
+        reported = comp["other"] if method == REPORTED_METHOD else 0.0  # the reports' difference: its own step
         cs01 = _zero(p.get("cs01"))
         gamma = _gamma(p.get("gamma"))
         risk = {}
@@ -248,13 +296,16 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
                 "carry": comp["carry"], "rolldown": comp["rolldown"], "rates": comp["rates"],
                 "spread": comp["spread"],
                 "fx": comp["fx_gross"] + comp["fx_funding"], "funding": comp["funding"],
-                "convexity": comp["convexity"], "newTrades": comp["new_trades"], "other": comp["other"],
+                "convexity": comp["convexity"], "newTrades": comp["new_trades"], "other": comp["other"] - reported,
+                "reported": reported,
                 "fxGross": comp["fx_gross"], "fxFunding": comp["fx_funding"], "fxGrossCbr": gross_cbr,
                 "fxFundingCbr": fund_cbr, "fxCbr": gross_cbr + fund_cbr, "explained": explained,
                 "explainedCbr": explained_cbr, "fxBasis": fx_basis,
                 "unexplained": 0.0 if official is None else official - explained_cbr, "official": official,
-                "breakNote": q.get("break_note") if q else None,
-            },
+                "breakNote": q.get("break_note"), "available": True, "reason": None, "reasonText": None,
+                "reasonDetail": None, "method": method, "methodText": METHOD_TEXT.get(method, method) if method else None,
+                "flag": (q.get("extra") or {}).get("flag"),
+            } if q else no_pnl(*_no_pnl_of(row["no_pnl"], run["prev_date"])),
         }
         if p.get("accrual_only"):
             pos.update({"accrualOnly": True, "purchaseDate": p.get("purchase_date"),
@@ -297,14 +348,16 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
             "SELECT jsonb_build_object('dv01', fact->'dv01', 'cs01', fact->'cs01') AS fact, pnl FROM run_position"
             " WHERE run_id = %s AND fact IS NOT NULL", (h["run_id"],)).fetchall()) for h in hist] + [(as_of, prows)]:
         off, exp, dv01, cs01 = run_totals(rows)
-        cum += off
+        cum += off or 0.0
         history.append({"date": d, "pnlOfficial": off, "pnlExplained": exp, "pnlCum": cum, "dv01": dv01,
                         "cs01": cs01})
+    # no previous market: prevDate null (R10), the funding accrual still over the previous weekday
     prev = run["prev_date"] or _prev_weekday(run["business_date"])
     zero_book = {"carry": 0.0, "fx": 0.0, "fxCbr": 0.0, "fxAllocated": 0.0, "inPositions": 0.0}
     completed = run["completed_at"]
     return {
-        "asOf": as_of, "prevDate": prev.isoformat(),
+        "asOf": as_of, "prevDate": run["prev_date"].isoformat() if run["prev_date"] else None,
+        **pnl_state(run, positions),
         "accrualDays": max(1, (run["business_date"] - prev).days), "reportingCcy": "RUB",
         "BUCKETS": B, "PILLARS": list(RISK_PILLARS), "CURVES": curves, "CURVE_MOVES": moves,
         "FX": fx, "FX_MOVE_PCT": fx_move, "FX_CBR": fx_cbr, "FX_CBR_MOVE_PCT": fx_cbr_move,
@@ -320,5 +373,6 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         "source": {"kind": "db", "runId": rid, "runType": run["run_type"],
                    "publishedAt": completed.isoformat() if completed else None,
                    "libVersion": f"rub-fixed-income-core {run['core_version']}",
-                   "marketSnapshot": run["market_snapshot_id"], "contractVersion": CONTRACT_VERSION},
+                   "marketSnapshot": run["market_snapshot_id"], "contractVersion": CONTRACT_VERSION,
+                   **run_slice(run)},
     }

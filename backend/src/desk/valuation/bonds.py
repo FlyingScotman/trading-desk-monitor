@@ -84,7 +84,7 @@ from ..marketdata.adapter import (
     price_observation,
 )
 
-PRICE_BASIS_ORDER = ("legal_close", "close", "waprice")
+PRICE_BASIS_ORDER = ("legal_close", "close", "last", "waprice")  # last: intraday cuts only (R11)
 """Provisional valuation price basis (to be fixed by a DEC entry): MOEX legal close, then close,
 then weighted average."""
 

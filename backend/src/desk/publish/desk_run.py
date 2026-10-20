@@ -49,9 +49,12 @@ def _jsonb(x: Any) -> Jsonb:
 
 def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str, str, Outcome]], *,
             prev: MarketView | None, run_type: str = "EOD", inputs: PositionInputs,
-            carried_from: dict[str, CarriedSpread] | None = None) -> tuple[int, str, list[str]]:
+            carried_from: dict[str, CarriedSpread] | None = None,
+            pnl_basis: dict[str, Any] | None = None) -> tuple[int, str, list[str]]:
     """positions: (position_id, book_id, outcome) of ``inputs`` (``store.positions_for``); ``carried_from``:
-    the carried spreads the valuation got. Returns (run_id, status, warnings)."""
+    the carried spreads the valuation got; ``pnl_basis``: what the flash PnL is measured against
+    (``desk.cli.pnl_basis``, lineage ``pnl_basis``). Returns (run_id, status, warnings). An INTRADAY run supersedes
+    nothing: the older intraday runs of its date are deleted once it is complete (``store.prune_intraday``)."""
     outcomes = [o for _, _, o in positions]
     results = {o.core_result.result_sha256: o.core_result for o in outcomes if o.core_result}
     bodies = {sha: portfolio_result_to_json(r).decode() for sha, r in results.items()}  # raises unless verified
@@ -69,17 +72,21 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
         "core_results": [{"result_sha256": sha, "schema": r.schema_version, "label": r.run_id.rsplit("-", 1)[-1]}
                          for sha, r in results.items()],
         "model_spreads": {"carried": carried, "new": len(spreads) - carried},
+        "cut_ts": ctx.market.snapshot.doc.get("cut_ts"),
+        "pnl_basis": pnl_basis,
     }
     content = run_content(ctx, positions, prev, lineage, inputs)
     run_id = con.execute(
         "INSERT INTO run (run_type, business_date, prev_date, cut_type, supersedes_run_id, market_snapshot_id,"
         " static_snapshot_id, prev_market_snapshot_id, private_inputs_hash, position_set_ids, positions_known_at,"
-        " core_version, backend_version, backend_git_sha, lineage) VALUES (%(type)s, %(bd)s, %(prev)s, %(cut)s,"
-        " (SELECT max(run_id) FROM run WHERE business_date = %(bd)s AND run_type = %(type)s"
+        " core_version, backend_version, backend_git_sha, lineage, cut_ts, prev_cut_type)"
+        " VALUES (%(type)s, %(bd)s, %(prev)s, %(cut)s,"
+        " (SELECT max(run_id) FROM run WHERE business_date = %(bd)s AND run_type = %(type)s AND %(type)s <> 'INTRADAY'"
         "  AND (cut_type = %(cut)s OR %(cut)s = 'eod_final')"  # a final run supersedes the preliminary one (04 §3)
         "  AND status = 'complete'), %(m)s, %(s)s, %(pm)s, %(h)s, %(ids)s, %(known)s, %(core)s, %(be)s, %(sha)s,"
-        " %(lineage)s) RETURNING run_id",
+        " %(lineage)s, %(cut_ts)s, %(pcut)s) RETURNING run_id",
         {"type": run_type, "bd": bd, "prev": prev.business_date if prev else None,
+         "cut_ts": lineage["cut_ts"], "pcut": prev.snapshot.cut_type if prev else None,
          "cut": ctx.market.snapshot.cut_type, "m": ctx.market.snapshot.id, "s": ctx.static.snapshot.id,
          "pm": lineage["prev_market_snapshot_id"], "h": inputs.private_inputs_hash, "ids": inputs.set_ids,
          "known": inputs.known_at, "core": CORE_VERSION, "be": BACKEND_VERSION, "sha": lineage["backend_git_sha"],

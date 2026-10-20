@@ -69,7 +69,8 @@ def static_root() -> Path:
 
 
 REQUEST_ID = re.compile(r"[\w.:-]{1,128}")
-HEADER_SQL = f"SELECT r.*, r.run_id IN ({compat.DEFAULT_RUNS}) AS is_default FROM run r"
+HEADER_SQL = (f"SELECT r.*, r.run_id IN ({compat.DEFAULT_RUNS}) AS is_default,"
+              f" r.run_id IN ({compat.CURRENT_RUNS}) AS is_current FROM run r")
 DIMS = {"book": "book_id", "quality": "quality", "asset_class": "fact->>'asset_class'",
         "segment": "fact->>'segment'", "issuer": "fact->>'issuer'", "ccy": "fact->>'ccy'"}
 PNL_KEYS = compat.PNL_KEYS
@@ -91,7 +92,10 @@ def _error(request: Request, status: int, code: str, message: str, details: Any 
 
 
 def _header(row: dict[str, Any]) -> dict[str, Any]:
-    return {**row, "as_of": row["business_date"], "published_at": row["completed_at"]}
+    basis = (row.get("lineage") or {}).get("pnl_basis") or {}
+    return {**row, "as_of": row["business_date"], "published_at": row["completed_at"],
+            "label": compat.slice_label(row["business_date"], row["cut_type"], row.get("cut_ts"), row["run_type"]),
+            "pnl_basis": basis.get("label")}
 
 
 def _run_or_404(con, run_id: int) -> dict[str, Any]:
@@ -212,9 +216,11 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         return {"runs": [_header(r) for r in rows[:limit]],
                 "next_cursor": rows[limit - 1]["run_id"] if len(rows) > limit else None}
 
-    @app.get("/api/v1/runs/default", response_model=RunHeader)
+    @app.get("/api/v1/runs/default", response_model=RunHeader,
+             description="The run shown (R11): of business_date, its default run, otherwise its latest intraday "
+                         "run; without business_date, the newest such run (today's intraday run when there is one)")
     def default_run(con: Con, business_date: date | None = None):
-        sql = HEADER_SQL + f" WHERE r.run_id IN ({compat.DEFAULT_RUNS})"
+        sql = HEADER_SQL + f" WHERE r.run_id IN ({compat.CURRENT_RUNS})"
         if business_date:
             row = con.execute(sql + " AND r.business_date = %s", (business_date,)).fetchone()
         else:

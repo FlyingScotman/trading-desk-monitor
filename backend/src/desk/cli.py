@@ -43,19 +43,20 @@ import sys
 import time
 from collections import Counter
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from itertools import islice
 from pathlib import Path
+from typing import Any
 
 import psycopg
 
 from . import store
 from .marketdata import cache, history
 from .marketdata.adapter import MarketView
-from .marketdata.bundle import SnapshotDir, SnapshotError
+from .marketdata.bundle import SnapshotDir, SnapshotError, previous_market
 from .marketdata.hub import HubClient, HubError, hub_check
-from .orchestrator import attach_pnl, prepare, value
-from .pnl.flash import NoPnl
+from .orchestrator import EodContext, attach_pnl, prepare, value
+from .pnl import direct as direct_pnl
 from .publish import desk_run, tdm_run
 from .report import validation
 from .settings import Settings, SettingsError, adapter_config_dir, load, mask_url
@@ -114,24 +115,66 @@ def cmd_eod(a: argparse.Namespace) -> int:
     return 0
 
 
+def pnl_basis(ctx: EodContext, prev: tuple[str, str] | None) -> dict[str, Any]:
+    """What the flash PnL of ``ctx`` is measured against (R11; lineage ``pnl_basis``): ``prev_date``,
+    ``prev_cut_type`` (``bundle.previous_market``), ``expected_date`` (the previous business day of the
+    settlement calendar) and ``label``: None when it is the expected day's ``eod_final``, else what the pages show
+    («PnL от 15.10 (закрытие): нет закрытия 16.10»)."""
+    expected: date | None = None
+    try:  # core steps forward only: walk back to the previous business day
+        d = ctx.business_date
+        for _ in range(31):
+            d -= timedelta(days=1)
+            if ctx.calendar.is_business_day(d):
+                expected = d
+                break
+    except Exception:  # noqa: BLE001 - a date outside the calendar: no expectation, the basis is still named
+        expected = None
+    out: dict[str, Any] = {"prev_date": prev[0] if prev else None, "prev_cut_type": prev[1] if prev else None,
+                           "expected_date": expected.isoformat() if expected else None, "label": None}
+    exp = f"{expected:%d.%m}" if expected else "предыдущего рабочего дня"
+    if prev is None:
+        out["label"] = f"нет PnL: нет закрытия {exp} и более ранних"
+    elif prev[1] != "eod_final" or prev[0] != out["expected_date"]:
+        pd = date.fromisoformat(prev[0])
+        missing = (f"нет закрытия {exp}" if prev[0] != out["expected_date"]
+                   else f"нет окончательного закрытия {exp}")
+        out["label"] = f"PnL от {pd:%d.%m} ({store.CUT_LABELS[prev[1]]}): {missing}"
+    return out
+
+
 def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, store_url: str | None = None,
             book: str | None = None, books: list[str] | None = None, run_type: str = "EOD",
             report_dir: str | Path | None = None, tdm: bool = False, db: str | Path | None = None,
-            no_gamma: bool = False, no_pnl: bool = False, out: Callable[[str], None] = print) -> int | None:
+            no_gamma: bool = False, no_pnl: bool = False, out: Callable[[str], None] = print,
+            cut_type: str = "eod_final", market_snapshot_id: str | None = None) -> int | None:
     """The EOD run of date ``d`` (``desk eod`` without its hub pull; the autopilot calls it too): values the
     books of the store on the cached snapshot of ``d`` and publishes the run. Returns the desk run id, None when
-    the store has no positions for the date. Raises on a missing snapshot or a failed publication."""
+    the store has no positions for the date. Raises on a missing snapshot or a failed publication.
+
+    ``cut_type`` / ``market_snapshot_id``: another market cut of ``d`` than its ``eod_final`` (R11: the autopilot's
+    intraday step values today's book on an ``intraday`` cut, ``run_type`` INTRADAY, or on ``eod_preliminary``).
+    The flash PnL is measured against the newest earlier ``eod_final`` of the cache, else an ``eod_preliminary``
+    (``bundle.previous_market``); when that is not the previous business day's final, the run says so
+    (``pnl_basis``)."""
     snapshots = snapshots or settings.snapshot_cache
     sd = SnapshotDir(Path(snapshots))
     t0 = time.perf_counter()
-    ctx = prepare(sd, d)
-    prev_date = sd.previous_market_date(d)
-    prev = MarketView(sd.market(prev_date)) if prev_date else None
+    ctx = prepare(sd, d, cut_type, market_snapshot_id=market_snapshot_id)
+    prev_cut = previous_market(sd, d)
+    prev_date = prev_cut[0] if prev_cut else None
+    prev = MarketView(sd.market(*prev_cut)) if prev_cut else None
+    basis = pnl_basis(ctx, prev_cut)
     prov = sd.provenance(ctx.market.snapshot.id)
     origin = (f"hub {prov['hub']}, published {prov['published_at']} ({_age(prov['published_at'])})" if prov
               else f"local file, known_at {ctx.market.snapshot.doc.get('known_at')}")
-    out(f"market {ctx.market.snapshot.id[:12]} ({origin})  static {ctx.static.snapshot.id[:12]}  "
-        f"KBD check {ctx.kbd_check_bp:.4f} bp  previous {prev_date}")
+    cut = "" if ctx.market.snapshot.cut_type == "eod_final" else \
+        f" [{ctx.market.snapshot.cut_type} {ctx.market.snapshot.doc.get('cut_ts')}]"
+    out(f"market {ctx.market.snapshot.id[:12]}{cut} ({origin})  static {ctx.static.snapshot.id[:12]}  "
+        f"KBD check {ctx.kbd_check_bp:.4f} bp  previous {prev_date}"
+        + (f" ({prev_cut[1]})" if prev_cut and prev_cut[1] != "eod_final" else ""))
+    if basis["label"] and prev_cut:
+        out(f"WARN flash PnL basis: {basis['label']}")
     if ctx.point_in_time_warning:
         out(f"WARN {ctx.point_in_time_warning}")
 
@@ -171,26 +214,30 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
         bp = pv1.plan(ctx, inputs)
         outcomes = value(ctx, bp.requests, second_order=not no_gamma, position_ids=bp.position_ids,
                          carried_spreads=carried)
-        if prev_date and not no_pnl:
-            prev_ctx = prepare(sd, prev_date)
+        if prev_cut and not no_pnl:
+            prev_ctx = prepare(sd, *prev_cut)
             attach_pnl(prev_ctx, value(prev_ctx, bp.requests, position_ids=bp.position_ids, carried_spreads=carried),
                        ctx, outcomes)
-            for o in bp.direct.values():  # fx, otc, unmapped bonds: the reason in run_position.no_pnl, not a bare null
-                if o.valuation is not None:
-                    o.no_pnl = NoPnl("valued_without_core", f"{o.valuation.quality}: no day-over-day PnL yet (S7a)")
+            # fx rows, the report-valued rows (otc, unmapped bonds): by the rate move and by the reports of both
+            # dates (pnl.direct); the reason in run_position.no_pnl when there is none, never a bare null
+            prev_inputs = store.positions_for(con, prev_ctx.business_date, books=books)
+            direct_pnl.attach(prev_ctx, ctx, bp.direct, inputs, pv1.plan(prev_ctx, prev_inputs).direct)
             flash = [o.pnl for o in outcomes if o.pnl]
             out(f"flash PnL {prev_date} -> {d}: {len(flash)}/{sum(o.valuation is not None for o in outcomes)} "
                 f"priced positions, total {sum(p.total for p in flash):,.0f} RUB, "
                 f"max identity error {max((abs(p.identity_error) for p in flash), default=0):.2e} RUB")
+            dp = [o.pnl for o in bp.direct.values() if o.pnl]
+            out(f"PnL without core: {len(dp)}/{sum(o.valuation is not None for o in bp.direct.values())} positions "
+                f"(by the rate move or the reports), total {sum(p.total for p in dp):,.0f} RUB")
         if not prev_date:
-            out(f"WARN no flash PnL: no eod_final market snapshot before {d} in {snapshots}")
+            out(f"WARN no flash PnL: no eod_final or eod_preliminary market snapshot before {d} in {snapshots}")
         positions = pv1.merge(bp, outcomes)
         ok = sum(o.valuation is not None for _, _, o in positions)
         by_q = Counter(o.valuation.quality if o.valuation else "not_valued" for _, _, o in positions)
         out(f"book: {ok}/{len(positions)} positions valued (" + ", ".join(f"{q} {n}" for q, n in by_q.most_common())
             + f"), {len(carried)} carried spreads")
         run_id, status, warnings = desk_run.publish(con, ctx, positions, prev=prev, run_type=run_type,
-                                                    inputs=inputs, carried_from=carried)
+                                                    inputs=inputs, carried_from=carried, pnl_basis=basis)
         out(f"desk run {run_id}: {status}, {len(warnings)} warnings")
     if tdm:
         tdm_id, status, warnings = tdm_run.publish(db or settings.db, ctx, positions, prev=prev, inputs=inputs)
@@ -493,8 +540,8 @@ def cmd_cycle(a: argparse.Namespace) -> int:
     store.migrate(url)
     st = Autopilot(store_url=url, force=True, out=print).run_cycle(a.date or (), hub=not a.no_hub)
     lr = st["latest_run"]
-    print(f"{st['message']}; latest default run: "
-          + (f"{lr['run_id']} of {lr['as_of']}, {lr['created_at']}" if lr else "none"))
+    print(f"{st['message']}; latest run: "
+          + (f"{lr['run_id']} of {lr['as_of']} ({lr.get('label')}), {lr['created_at']}" if lr else "none"))
     return 1 if st["state"] == "error" else 0
 
 

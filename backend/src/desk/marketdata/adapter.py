@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -156,6 +156,12 @@ ZCYC_KEYS = ("B1", "B2", "B3", "T1", *(f"G{i}" for i in range(1, 10)))
 
 PRICE_FIELDS = ("legal_close", "close", "waprice", "market_price2", "market_price3", "admitted_quote",
                 "open", "high", "low")
+INTRADAY_PRICE_FIELDS = (("close", "close_price_pct"), ("last", "last_pct"), ("waprice", "waprice_pct"),
+                         ("market_price", "market_price_pct"), ("bid", "bid_pct"), ("offer", "offer_pct"))
+"""An intraday cut's quote (``bond_quotes_intraday``: MOEX marketdata, the latest of the day per bond and board) as
+price bases: the closing price once there is one, else the last trade (``PRICE_BASIS_ORDER``); its trade date is
+the Moscow date of ``ts``. It has no MOEX accrued and no face: the valuation computes the accrued."""
+MSK = timezone(timedelta(hours=3), "MSK")
 
 
 CALENDAR_HORIZON = date(2079, 12, 31)
@@ -291,6 +297,14 @@ class MarketView:
                 q["secid"], q["board"], date.fromisoformat(q["trade_date"]), _d(q.get("face_value")),
                 _d(q.get("accrued_per_bond")), prices, q.get("num_trades"), q.get("source_analytics") or {},
                 _d(q.get("volume_bonds")), _d(q.get("value_ccy")), q.get("currency_id"))
+        for q in d.get("bond_quotes_intraday") or ():  # an intraday cut (R11); EOD cuts leave it empty
+            if (q["secid"], q["board"]) in self.quotes:
+                continue
+            prices = {k: Decimal(q[f]) for k, f in INTRADAY_PRICE_FIELDS if q.get(f) is not None}
+            ts = datetime.fromisoformat(q["ts"])
+            self.quotes[(q["secid"], q["board"])] = BondQuote(
+                q["secid"], q["board"], ts.astimezone(MSK).date(), None, None, prices, q.get("num_trades"),
+                q.get("source_analytics") or {}, _d(q.get("vol_today")), _d(q.get("val_today")), None)
         if len(d["zcyc_params"]) != 1:
             raise SnapshotError(f"{snap.id}: expected one zcyc_params row, got {len(d['zcyc_params'])}")
         self.zcyc = d["zcyc_params"][0]
