@@ -78,6 +78,17 @@ JS = "text/javascript; charset=utf-8"
 NO_STORE = {"Cache-Control": "no-store"}
 
 
+class Revalidated(StaticFiles):
+    """The pages and scripts with ``Cache-Control: no-cache``: the browser asks each time (a 304 when unchanged), so
+    an update takes effect on the next load. Without it the browser may keep a page it guesses fresh from its age and
+    run the pre-update code on the fresh data (``desk-data.js`` is no-store): R16, the coupon «null»."""
+
+    def file_response(self, *args: Any, **kwargs: Any) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 class ApiError(Exception):
     def __init__(self, status: int, code: str, message: str, details: Any = None) -> None:
         super().__init__(message)
@@ -399,10 +410,10 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         def app_slash(request: Request):  # the "/" mount would 404 it
             return RedirectResponse("/app/" + (f"?{request.url.query}" if request.url.query else ""))
 
-        app.mount("/app", StaticFiles(directory=built, html=True), name="app")
+        app.mount("/app", Revalidated(directory=built, html=True), name="app")
     static = Path(static_dir) if static_dir else static_root() / "prototypes"
     if static.is_dir():  # an installed wheel has no prototypes/
-        app.mount("/", StaticFiles(directory=static, html=True), name="static")
+        app.mount("/", Revalidated(directory=static, html=True), name="static")
     return app
 
 
