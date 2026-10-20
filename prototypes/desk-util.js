@@ -103,9 +103,10 @@
   const pnlPartText = pc => pc && pc.partial ? 'частично: ' + pc.n + ' из ' + pc.m + ' ' + plural(pc.m, 'позиции', 'позиций', 'позиций') : '';
   const pnlNaHtml = tip => `<span class="na" title="${escA(tip || 'PnL не посчитан')}">—</span>`;
   const pnlPartHtml = pc => pc && pc.partial ? `<span class="part" title="${escA(pc.tip)}">${pnlPartText(pc)}</span>` : '';
-  // Рейтинг: «нет данных» (в хабе рейтинга нет) — не грейд, а корзина «без рейтинга» вместе с позициями без рейтинга.
+  // Рейтинг: «нет данных» (в хабе рейтингов нет) и «без рейтинга» (рейтинги есть, у бумаги нет) — не грейды, а одна
+  // корзина «без рейтинга»; её ключ в сценариях — NO_RATING.
   const NO_RATING = 'нет данных', NO_RATING_LABEL = 'без рейтинга';
-  const isRated = r => !!r && r !== NO_RATING;
+  const isRated = r => !!r && r !== NO_RATING && r !== NO_RATING_LABEL;
   const ratingLabel = r => isRated(r) ? r : NO_RATING_LABEL;
   function bucketMatrix(list, curves) {
     curves = curves || Object.keys(CURVES);
@@ -243,7 +244,7 @@
     if (sp._mult) ds += (sp._mult - 1) * (p.spreadBp || 100);
     if (sp._all) ds += sp._all;
     const pick = (grp, k) => k != null && ((sp[grp] && sp[grp][k]) || 0);
-    ds += pick('rating', p.rating) + pick('sector', p.sector) + pick('issuer', p.issuer);
+    ds += pick('rating', p.rating && !isRated(p.rating) ? NO_RATING : p.rating) + pick('sector', p.sector) + pick('issuer', p.issuer);
     if (p.rating && typeof sp[p.rating] === 'number') ds += sp[p.rating];
     if (p.issuer && typeof sp[p.issuer] === 'number') ds += sp[p.issuer];
     return ds;

@@ -68,8 +68,12 @@ def test_a_1_1_bundle_with_unknown_fields_is_read(tmp_path):
     assert cache.verify(body, sid)["schema_version"] == "market_snapshot/1.1"
     snap = parse_bundle(body, sid)
     view, ref = StaticView(snap), StaticView(SnapshotDir(FIX).get(STATIC))
-    assert view.bonds == ref.bonds
-    assert view.issuers == ref.issuers
+    assert {s: dataclasses.replace(b, lat_name=None, coupon_frequency_schedule=None) for s, b in view.bonds.items()} \
+        == ref.bonds  # the 1.1 fields are read (test_hub_static_1_1), nothing else changes
+    assert view.bonds[FLOATER].lat_name == "Latin name" and view.bonds[FLOATER].coupon_frequency_schedule == 4
+    assert {i: dataclasses.replace(x, okved=None, group_id=None) for i, x in view.issuers.items()} == ref.issuers
+    assert [(r.scope, r.issuer_id, r.rating) for r in view.ratings] == [("issuer", 1, "AAA(RU)")]
+    assert ref.ratings is None  # a 1.0 snapshot has no ratings: "нет данных", not "без рейтинга"
     assert SnapshotDir(tmp_path).get(sid).doc["schema_version"] == "market_snapshot/1.1"
 
     refs = static_index.static_snapshots(tmp_path)  # the inbox reads it too

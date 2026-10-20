@@ -12,6 +12,10 @@ snapshot (public hub data only; nothing from the desk store or the private input
   with ``--value`` and a market snapshot of the date, the full valuation's reason (quote, price, core);
 - data-quality flags (``dq_flags``, codes in :data:`FLAGS`).
 
+Contract 1.1 fields (HS3, HS4, HS5, HS7, HS11, HS12) are columns of their own (issuer group, state ownership, sector
+source, OKVED, rating, Latin name, schedule frequency, ``face_value_date``) with their fill rates in the summary;
+empty from a 1.0 snapshot.
+
 The coverage summary (:func:`summary`) counts fills per field and bond class, the reasons and the flags; the
 static data audit (``docs/architecture/reviews/STATIC_DATA_AUDIT_2026-10-20.md``) is built from it.
 
@@ -48,21 +52,31 @@ COLUMNS: tuple[tuple[str, str], ...] = (
     ("secid", "SECID MOEX (ключ инструмента в мониторе)"),
     ("isin", "ISIN"),
     ("regnumber", "Номер госрегистрации"),
-    ("status", "Статус в хабе: active / matured"),
+    ("status", "Статус в хабе: active / matured / delisted (живая, но не торгуется на MOEX, HS2)"),
     ("name", "Полное наименование выпуска (MOEX NAME)"),
     ("short_name", "Краткое наименование (MOEX SHORTNAME, до 10 символов)"),
+    ("lat_name", "Латинское наименование (MOEX LATNAME, контракт 1.1, HS12)"),
     ("mon_name", "Как бумага названа в мониторе (MOEX NAME, D1; краткое имя и SECID остаются кодами)"),
     ("issuer_id", "ID эмитента MOEX (emitent_id)"),
     ("issuer_name", "Эмитент: полное наименование (MOEX emitent_title)"),
-    ("issuer_short_name", "Эмитент: краткое наименование (в хабе не заполняется)"),
+    ("issuer_short_name", "Эмитент: краткое наименование (MOEX, HS1)"),
     ("issuer_inn", "ИНН эмитента"),
     ("issuer_ogrn", "ОГРН эмитента"),
     ("issuer_country", "Страна эмитента"),
     ("issuer_is_sovereign", "Суверенный эмитент (Минфин РФ)"),
+    ("issuer_group_id", "Группа эмитента: ID (хаб, курируемый справочник, HS4)"),
+    ("issuer_group", "Группа эмитента: наименование (хаб, HS4)"),
+    ("issuer_group_relation", "Связь с группой: parent / subsidiary / spv / securitization_spv / affiliate"),
+    ("issuer_is_state_owned", "Госкомпания (квази-суверен) по документу (хаб, HS4; пусто = не установлено)"),
     ("mon_issuer", "Эмитент в мониторе: краткое, иначе полное наименование без ОПФ и кавычек (D2)"),
-    ("mon_issuer_group", "Группа эмитента в мониторе (пока в хабе нет групп, HS4: = эмитент в мониторе)"),
-    ("sector", "Отрасль (issuers.sector хаба)"),
-    ("rating", "Рейтинг (в контракте хаба поля нет)"),
+    ("mon_issuer_group", "Группа эмитента в мониторе: группа хаба, иначе эмитент в мониторе (D3)"),
+    ("sector", "Отрасль: код таксономии хаба (issuers.sector, HS3)"),
+    ("sector_source", "Откуда отрасль: okved / curated / group / rule (хаб)"),
+    ("okved", "ОКВЭД2 основной (хаб; пусто, пока ФНС недоступна)"),
+    ("mon_sector", "Отрасль в мониторе (по-русски; «нет данных», когда в хабе нет)"),
+    ("rating", "Рейтинг по шкале деска (лучший национальный рейтинг выпуска, иначе эмитента; D9)"),
+    ("rating_source", "Рейтинг: агентство, рейтинг как у агентства, выпуск/эмитент"),
+    ("mon_rating", "Рейтинг в мониторе («без рейтинга» / «нет данных», когда рейтингов в хабе нет)"),
     ("bond_class", "Класс бумаги хаба (bond_class)"),
     ("mon_asset_class", "Класс актива в мониторе"),
     ("mon_segment", "Сегмент в мониторе"),
@@ -75,6 +89,7 @@ COLUMNS: tuple[tuple[str, str], ...] = (
     ("mon_coupon_type", "Тип купона в мониторе (fix / float / zero / indexed_face / variable_known / unknown, D5)"),
     ("coupon_frequency", "Купонов в год (MOEX COUPONFREQUENCY)"),
     ("coupon_period_days", "Длина купонного периода, дней (MOEX COUPONPERIOD)"),
+    ("coupon_frequency_schedule", "Купонов в год по графику, расчёт хаба (HS7)"),
     ("implied_frequency", "Купонов в год по графику (медиана периодов)"),
     ("coupons_total", "Купонов в графике"),
     ("coupons_future", "Будущих купонов"),
@@ -99,6 +114,7 @@ COLUMNS: tuple[tuple[str, str], ...] = (
     ("currency", "Валюта расчётов (основной режим)"),
     ("face_value", "Текущий номинал"),
     ("initial_face_value", "Первоначальный номинал"),
+    ("face_value_date", "Дата, с которой действует текущий номинал по графику погашений (хаб, HS11)"),
     ("issue_date", "Дата размещения"),
     ("maturity_date", "Дата погашения"),
     ("is_perpetual", "Бессрочная"),
@@ -157,10 +173,13 @@ FLAGS: dict[str, str] = {
     "issuer_name_dated": "наименование эмитента в старой форме (ОАО / ЗАО / открытое акционерное общество)",
     "name_latin": "краткое наименование без кириллицы",
     "matured": "погашена (в снапшоте ещё 31 день)",
+    "not_traded": "живая, но MOEX её не торгует (delisted, HS2): котировки нет, оценка по модели",
 }
 
-FILL_FIELDS = ("isin", "regnumber", "name", "short_name", "issuer_name", "issuer_short_name", "issuer_inn",
-               "issuer_ogrn", "issuer_country", "sector", "rating", "coupon_frequency", "current_coupon_rate_pct",
+FILL_FIELDS = ("isin", "regnumber", "name", "short_name", "lat_name", "issuer_name", "issuer_short_name",
+               "issuer_inn", "issuer_ogrn", "issuer_country", "issuer_group", "issuer_is_state_owned", "sector",
+               "sector_source", "okved", "rating", "coupon_frequency", "coupon_frequency_schedule",
+               "face_value_date", "current_coupon_rate_pct",
                "mon_coupon_pct", "floater_benchmark", "floater_spread_bp", "floater_lag_days", "face_value",
                "maturity_date", "issue_date", "listing_level", "issue_size", "day_count")
 
@@ -272,27 +291,38 @@ def instrument_row(raw: dict[str, Any], t: BondTerms, view: StaticView, as_of: d
     offers = sorted((o for o in t.offers if o.status == "scheduled" and o.date and o.date > as_of),
                     key=lambda o: o.date)  # type: ignore[arg-type,return-value]
     core, detail, assumptions, mon_coupon = _static_check(t, as_of)
-    from ..publish.tdm_run import COUPON_TYPES, issuer_display  # what the monitor shows, from the same code
+    from ..marketdata.ratings import position_rating
+    from ..publish.tdm_run import COUPON_TYPES, issuer_reference  # what the monitor shows, from the same code
     from ..valuation.bonds import coupon_view
 
     mon_coupon = cv if (cv := coupon_view(t, as_of).pct) is not None else mon_coupon
-    mon_issuer = issuer_display(iss.short_name or iss.name) if iss else f"issuer:{t.issuer_id or t.secid}"
+    key, ref = issuer_reference(view, t)
+    rating = position_rating(view, t)
     row: dict[str, Any] = {
         "secid": t.secid, "isin": t.isin, "regnumber": raw.get("regnumber"), "status": t.status,
-        "name": raw.get("name"), "short_name": t.short_name, "mon_name": t.name or t.short_name,
+        "name": raw.get("name"), "short_name": t.short_name, "lat_name": t.lat_name,
+        "mon_name": t.name or t.short_name,
         "issuer_id": t.issuer_id,
         "issuer_name": iss.name if iss else None, "issuer_short_name": iss.short_name if iss else None,
         "issuer_inn": iss.inn if iss else None,
         "issuer_ogrn": iraw.get("ogrn"), "issuer_country": iraw.get("country"),
         "issuer_is_sovereign": iss.is_sovereign if iss else None,
-        "mon_issuer": mon_issuer, "mon_issuer_group": mon_issuer,
-        "sector": iss.sector if iss else None, "rating": None,
+        "issuer_group_id": iss.group_id if iss else None, "issuer_group": iss.group_name if iss else None,
+        "issuer_group_relation": iss.group_relation if iss else None,
+        "issuer_is_state_owned": iss.is_state_owned if iss else None,
+        "mon_issuer": ref["name"] or key, "mon_issuer_group": ref["issuer_group"],
+        "sector": iss.sector if iss else None, "sector_source": iss.sector_source if iss else None,
+        "okved": iss.okved if iss else None, "mon_sector": ref["sector"],
+        "rating": rating.grade if rating.rating else None,
+        "rating_source": f"{rating.agency} {rating.rating} ({rating.scope})" if rating.rating else None,
+        "mon_rating": rating.grade,
         "bond_class": t.bond_class, "mon_asset_class": MON_ASSET_CLASS.get(t.bond_class, t.bond_class),
         "mon_segment": MON_SEGMENT.get(t.bond_class, "Корп"),
         "sec_type": raw.get("sec_type"), "bond_type": raw.get("bond_type"), "bond_subtype": raw.get("bond_subtype"),
         "coupon_details": raw.get("coupon_details"), "coupon_type": t.coupon_type,
         "coupon_type_basis": raw.get("coupon_type_basis"), "mon_coupon_type": COUPON_TYPES.get(t.coupon_type, t.coupon_type),
         "coupon_frequency": t.coupon_frequency, "coupon_period_days": raw.get("coupon_period_days"),
+        "coupon_frequency_schedule": t.coupon_frequency_schedule,
         "implied_frequency": _implied_frequency(t), "coupons_total": len(t.coupons), "coupons_future": len(future),
         "coupons_future_no_value": len(no_value),
         "coupon_status_mix": "/".join(str(sum(c.status == s for c in future))
@@ -311,7 +341,8 @@ def instrument_row(raw: dict[str, Any], t: BondTerms, view: StaticView, as_of: d
         "floater_floor_cap_pct": (f"{f.get('floor_pct') or ''}/{f.get('cap_pct') or ''}"
                                   if f.get("floor_pct") or f.get("cap_pct") else None),
         "face_unit": t.face_unit, "currency": t.currency, "face_value": t.face_value,
-        "initial_face_value": t.initial_face_value, "issue_date": raw.get("issue_date"),
+        "initial_face_value": t.initial_face_value, "face_value_date": t.face_value_date,
+        "issue_date": raw.get("issue_date"),
         "maturity_date": t.maturity_date, "is_perpetual": t.is_perpetual, "is_amortizing": raw.get("is_amortizing"),
         "amortizations_future": sum(r.kind == "amortization" for r in reds),
         "redemptions_future_sum": sum((r.value_per_bond for r in reds if r.value_per_bond), Decimal(0)) if reds else None,
@@ -397,6 +428,8 @@ def flags(row: dict[str, Any], t: BondTerms, raw: dict[str, Any], as_of: date, s
         out.append("name_latin")
     if t.status == "matured":
         out.append("matured")
+    if t.status == "delisted" or "not_traded" in t.labels:
+        out.append("not_traded")
     return out
 
 

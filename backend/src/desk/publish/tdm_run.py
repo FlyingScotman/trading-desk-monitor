@@ -29,9 +29,16 @@ Display fields (R9 static audit, D1-D8): a bond is named by MOEX's full ``name``
 ``extra.short_name``, the SECID in ``instrument_id``); its coupon is ``bonds.coupon_view`` for every rung (a floater:
 the published rate or amount, else ``index + margin`` at the latest fixing, ``extra.coupon_basis`` ``projected``)
 with ``index_name``/``margin``; ``coupon_type`` keeps the hub's zero / indexed_face / variable_known / unknown;
-``coupon_freq`` comes from the schedule when MOEX gives none. The issuer shows ``issuer_display`` of its name, sector
-and rating ``NO_DATA`` until the hub has them. An unmapped bond shows the report's name marked ``FROM_REPORT``, its
-ISIN, and the report's issuer (``x_issuer``).
+``coupon_freq`` comes from the schedule when MOEX gives none (the hub's ``coupon_frequency_schedule``, else ours). An
+unmapped bond shows the report's name marked ``FROM_REPORT``, its ISIN, and the report's issuer (``x_issuer``).
+
+Issuer (D2, D3, D9; ``issuer_reference``), from what the static snapshot has (contract 1.1 adds groups, ratings): the
+name ``issuer_display`` of the hub's short name, else of the legal name, else the group's; ``issuer_group`` the hub
+group's name (HS4), else that readable name; ``is_quasi`` the hub's ``is_state_owned``; ``sector`` the hub's sector
+code in Russian (``SECTOR_LABELS``), else ``NO_DATA``; ``rating`` per position (``marketdata.ratings``: the best
+national-scale issue rating, else the issuer's, on the desk scale; ``NO_RATING`` when the hub has ratings and none
+applies, ``NO_DATA`` when it has none), the agency's own in ``extra.rating``. ``extra.lat_name`` is MOEX's Latin name
+(HS12).
 """
 
 from __future__ import annotations
@@ -59,7 +66,8 @@ from tdm.writer import Run
 
 from .. import __version__ as BACKEND_VERSION
 from ..curves import rates
-from ..marketdata.adapter import MarketView
+from ..marketdata import ratings
+from ..marketdata.adapter import BondTerms, MarketView, StaticView
 from ..marketdata.bundle import SnapshotError
 from ..orchestrator import EodContext, Outcome
 from ..pnl.direct import DirectPnl
@@ -93,8 +101,17 @@ BOOKS = {
 }
 DEFAULT_BOOK = {"desk": "—", "trader": None, "book_type": None, "entity": "—", "ocp_to": None}
 """A book with no store metadata and outside the demo ``BOOKS``: named by its id."""
-NO_DATA = "нет данных"
-"""An issuer's sector and rating the hub does not publish (D3: until HS3/HS5), said instead of left blank."""
+NO_DATA = ratings.NO_DATA
+"""An issuer's sector and rating the hub does not publish (D3), said instead of left blank."""
+SECTOR_LABELS = {
+    "banks": "Банки", "leasing": "Лизинг", "oil_gas": "Нефть и газ", "metals_mining": "Металлургия и добыча",
+    "utilities": "Электроэнергетика и ЖКХ", "telecom": "Телекоммуникации", "real_estate": "Недвижимость и девелопмент",
+    "transport": "Транспорт", "retail": "Розничная торговля", "agro": "Сельское хозяйство и пищевая промышленность",
+    "chemicals": "Химия и удобрения", "it": "ИТ", "financial_spv": "Финансовые SPV",
+    "securitization_spv": "SPV секьюритизации", "sovereign": "Суверенные", "subfederal": "Субфедеральные",
+    "municipal": "Муниципальные", "supranational": "Международные финансовые организации", "other": "Прочие"}
+"""The hub's sector taxonomy (``mdhub/data/sector_map.json`` ``taxonomy``, ``label_ru``; HS3) as the pages show it. A
+code outside it is shown as the hub sends it."""
 UNMAPPED_ISSUER = {"issuer": "Не сопоставлено", "name": None, "issuer_group": "Не сопоставлено", "sector": NO_DATA,
                    "rating": NO_DATA, "is_gov": False, "is_quasi": False}
 """The issuer of the unmapped bonds (an instrument the static snapshot does not know) whose row names none."""
@@ -137,21 +154,39 @@ def issuer_display(name: str) -> str:
     return s[0].upper() + s[1:]
 
 
-def _issuer_key(ctx: EodContext, o: Outcome) -> tuple[str, dict[str, Any]]:
-    """The issuer reference of a bond: its key (the issuer's short name, else its legal name) and the record. The
-    display name is ``issuer_display``; the group is the issuer itself until the hub has groups (HS4); sector and
-    rating ``NO_DATA`` when the hub has none (D2, D3)."""
-    assert o.terms is not None
-    iss = ctx.static.issuer_of(o.terms)
-    is_gov = o.terms.bond_class.startswith("ofz") or bool(iss and iss.is_sovereign)
+def sector_label(code: str | None) -> str:
+    return SECTOR_LABELS.get(code, code) if code else NO_DATA
+
+
+def issuer_reference(static: StaticView, terms: BondTerms) -> tuple[str, dict[str, Any]]:
+    """The issuer reference of a bond: its key (the issuer's short name, else its legal name) and the record (D2,
+    D3). The display name: ``issuer_display`` of the hub's short name (HS1), else of the legal name, else the group's
+    name; the group: the hub's ``group_name`` (HS4), else the display name; ``is_quasi``: the hub's
+    ``is_state_owned``; the sector in Russian, ``NO_DATA`` when the hub has none; the rating: the issuer's own
+    (``ratings.issuer_rating``; ``run_content`` takes the best of its positions' when it has none). The hub's group
+    id and relation, sector source and OKVED ride along for the reference (the pages ignore them)."""
+    iss = static.issuer_of(terms)
+    is_gov = terms.bond_class.startswith("ofz") or bool(iss and iss.is_sovereign)
     if iss is None:
-        key = f"issuer:{o.terms.issuer_id or o.secid}"
-        return key, {"issuer": key, "name": None, "issuer_group": key, "sector": NO_DATA, "rating": NO_DATA,
-                     "is_gov": is_gov, "is_quasi": False}
-    key = iss.short_name or iss.name
-    name = issuer_display(key)
-    return key, {"issuer": key, "name": name, "issuer_group": name, "sector": iss.sector or NO_DATA,
-                 "rating": NO_DATA, "is_gov": is_gov, "is_quasi": False}
+        key = f"issuer:{terms.issuer_id or terms.secid}"
+        return key, {"issuer": key, "name": None, "issuer_group": key, "sector": NO_DATA,
+                     "rating": ratings.issuer_rating(static, None).grade, "is_gov": is_gov, "is_quasi": False}
+    legal = (iss.short_name or "").strip() or (iss.name or "").strip()
+    key = legal or f"issuer:{iss.issuer_id}"
+    name = issuer_display(legal) if legal else iss.group_name or key
+    rating = ratings.issuer_rating(static, iss.issuer_id)
+    rec: dict[str, Any] = {
+        "issuer": key, "name": name, "issuer_group": iss.group_name or name, "sector": sector_label(iss.sector),
+        "rating": rating.grade, "is_gov": is_gov, "is_quasi": bool(iss.is_state_owned)}
+    hub = {"group_id": iss.group_id, "group_relation": iss.group_relation, "sector_code": iss.sector,
+           "sector_source": iss.sector_source, "okved": iss.okved, "is_state_owned": iss.is_state_owned,
+           "rating_source": rating.extra()}
+    return key, {**rec, **{k: v for k, v in hub.items() if v is not None}}
+
+
+def _issuer_key(ctx: EodContext, o: Outcome) -> tuple[str, dict[str, Any]]:
+    assert o.terms is not None
+    return issuer_reference(ctx.static, o.terms)
 
 
 def _report_issuer(x: dict[str, Any]) -> dict[str, Any]:
@@ -363,11 +398,13 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
     cpn = coupon_view(t, as_of, lambda code: (f[1] if (f := ctx.market.latest_fixing(code)) else None))
     if cpn.pct is None and v.current_coupon_pct is not None:
         cpn = replace(cpn, pct=v.current_coupon_pct, basis="rate")
-    freq = t.coupon_frequency or implied_frequency(t)
+    freq = t.coupon_frequency or t.coupon_frequency_schedule or implied_frequency(t)
+    rating = ratings.position_rating(ctx.static, t)
     return {
         "position_id": pid, "book_id": book, "instr_type": "BOND",
         "asset_class": ASSET_CLASS.get(t.bond_class, t.bond_class), "segment": SEGMENT.get(t.bond_class, "Корп"),
-        "name": t.name or t.short_name, "isin": t.isin, "issuer": issuer, "ccy": ccy if fx else "RUB",
+        "name": t.name or t.short_name, "isin": t.isin, "issuer": issuer, "rating": rating.grade,
+        "ccy": ccy if fx else "RUB",
         "maturity": t.maturity_date.isoformat() if t.maturity_date else None,
         "tenor_y": (t.maturity_date - as_of).days / 365.25 if t.maturity_date else None,
         "coupon_type": COUPON_TYPES.get(t.coupon_type, t.coupon_type), "coupon": cpn.pct,
@@ -394,6 +431,8 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
             "valuation": "computed" if v.quality == "exact" else "approximated",
             "quality": v.quality, "assumptions": list(v.assumptions),
             "short_name": t.short_name, "coupon_basis": cpn.basis,
+            **({"lat_name": t.lat_name} if t.lat_name else {}),
+            **({"rating": r} if (r := rating.extra()) else {}),
             **({"coupon_freq_source": "schedule"} if freq and not t.coupon_frequency else {}),
             **({"not_exact_reason": o.reason} if o.reason else {}),
             **({"fx_rate": fx[0], "fx_source": fx[1]} if fx else {}),
@@ -461,8 +500,10 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
         if isinstance(o.pnl, SimplePnl) and o.pnl.flag:
             no_pnl.append(f"{pid} {o.secid}: PnL {o.pnl.total:,.0f} ₽ с модельной ценой ({o.pnl.flag})")
         key, rec = _issuer_key(ctx, o)
+        rows.append(row := position_row(ctx, book, pid, o, key, x))
+        if ratings.desk_grade(rec["rating"]) is None:  # no rating of the issuer itself: the best of its bonds' (D9)
+            rec["rating"] = min(issuers.get(key, rec)["rating"], row["rating"], key=ratings.rating_rank)
         issuers[key] = rec
-        rows.append(position_row(ctx, book, pid, o, key, x))
     # every book of the run, also one whose positions are all unvalued (an OTC-only book): the Desk Monitor shows
     # only the positions of the reference books, so a book missing here would hide its rows from coverage
     used = list(dict.fromkeys([r["book_id"] for r in rows] + [book for _, book, _ in positions]))

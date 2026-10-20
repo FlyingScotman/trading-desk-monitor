@@ -266,6 +266,7 @@ details.pop summary::-webkit-details-marker{display:none}
 .dr-h{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:10px}
 .dr-h h2{margin:0;font-size:17px;font-weight:600;text-wrap:balance}
 .dr-sub{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.dr-lat{margin-top:2px;font-size:12px;color:var(--fg-2)}
 .pill{font-size:11px;border:1px solid var(--line-2);border-radius:2px;padding:0 6px;color:var(--fg-2)}
 .dr-s{margin-top:16px}
 .dr-s h4{margin:0 0 6px;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-3);font-weight:600}
@@ -1137,7 +1138,8 @@ function openDrawer(id){
   const bk = D.BOOKS[p.book];
   const F = [
     ['Книга', bk.name + ' · ' + (BT_LABEL[bk.bookType] || '')], ['Деск / трейдер', [bk.desk, bk.trader].filter(Boolean).join(' · ')], ['Юрлицо', bk.entity], ['Класс', p.assetClass], ['Сегмент', p.segment], ['Тип', p.instrType],
-    ['ISIN', p.isin], ['Эмитент', p.issuer], ['Группа', p.issuerGroup], ['Сектор', p.sector], ['Рейтинг', p.rating],
+    ['ISIN', p.isin], ['Эмитент', p.issuer], ['Группа', p.issuerGroup], ['Сектор', p.sector],
+    ['Рейтинг', p.rating ? U.ratingLabel(p.rating) + (p.extra && p.extra.rating ? ' (' + p.extra.rating.agency + ': ' + p.extra.rating.rating + ')' : '') : null],
     ['Валюта', p.ccy], ['Погашение', dt(p.maturity)], ['Срок, лет', num(p.tenorY,2)],
     ['Купон', p.instrType === 'BOND' || p.coupon != null ? cpnTxt(p) : null, cpnTip(p)], ['Тип купона', p.couponType ? CPN_TYPE[p.couponType] || p.couponType : null],
     ['Индекс', p.couponType === 'fix' ? p.index : null], ['Сторона', p.side],
@@ -1166,7 +1168,7 @@ function openDrawer(id){
   const bookMv = sum(D.positions.filter(x => x.book === p.book && x.instrType === 'BOND'), x => x.mvRub), bookFund = -sum(D.funding.filter(f => f.book === p.book), f => f.amountRub);
   const bmk = own ? benchRate(own) : null;
   $('drawer').innerHTML = `
-    <div class="dr-h"><div><h2>${esc(p.name)}</h2><div class="dr-sub"><span class="pill">${esc(bk.name)}</span><span class="pill">${esc(p.assetClass)}</span><span class="pill">${esc(p.ccy)}</span>${p.rating ? `<span class="pill">${esc(p.rating)}</span>` : ''}${p.newToday ? '<span class="tag" style="margin:0">NEW · сделка сегодня</span>' : ''}</div></div>
+    <div class="dr-h"><div><h2>${esc(p.name)}</h2>${p.extra && p.extra.lat_name ? `<div class="dr-lat" lang="en">${esc(p.extra.lat_name)}</div>` : ''}<div class="dr-sub"><span class="pill">${esc(bk.name)}</span><span class="pill">${esc(p.assetClass)}</span><span class="pill">${esc(p.ccy)}</span>${U.isRated(p.rating) ? `<span class="pill">${esc(p.rating)}</span>` : ''}${p.newToday ? '<span class="tag" style="margin:0">NEW · сделка сегодня</span>' : ''}</div></div>
       <button type="button" class="ibtn" id="dr-close" aria-label="Закрыть карточку">Закрыть ✕</button></div>
     ${p.instrType === 'BOND' ? `<div class="dr-s"><button type="button" class="lnk" data-act="bdhist" data-v="${esc(U.bondKey(p))}">История цены, доходности и спреда выпуска →</button></div>` : ''}
     <div class="dr-s"><h4>Параметры</h4><dl class="kvl">${F.map(x => `<div><dt>${esc(x[0])}</dt><dd title="${esc(!x[2] ? x[1] : x[1] === '—' ? x[2] : x[1] + ' — ' + x[2])}">${esc(x[1])}</dd></div>`).join('')}</dl></div>

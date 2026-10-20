@@ -29,6 +29,7 @@ from typing import Any
 from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
 
 from ..curves.rates import input_notes
+from ..marketdata import ratings
 from ..pnl.reasons import METHOD_TEXT, REPORTED_METHOD, RUN_NO_POSITION_PNL, RUN_NO_PREV_MARKET, no_pnl_text
 from ..store import CURRENT_RUNS, DEFAULT_RUNS, slice_label
 
@@ -36,8 +37,11 @@ PNL_KEYS = ("carry", "rolldown", "rates", "spread", "fx_gross", "fx_funding", "f
             "new_trades", "other")
 CARRY_HORIZONS = [["1M", 1], ["3M", 3], ["6M", 6], ["1Y", 12]]
 DEFAULT_CARRY = [{"id": "flat", "name": "КС без изменений", "ks": {"mode": "flat"}}]
-RATINGS = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-", "BB+", "BB", "BB-", "B+", "B",
-           "B-", "CCC", "D"]  # tdm ref_rating seed order
+RATINGS = list(ratings.RATINGS)
+"""The desk scale, best first (tdm ref_rating seed order, with CCC+/CCC-/CC/C/RD/SD). A position's rating is a grade of
+it (``marketdata.ratings.desk_grade`` of the agency's national-scale rating: ruAA+, AA+(RU), AA+.ru, AA+|ru| -> AA+,
+D9), or «без рейтинга» / «нет данных»; ``RATING_ORDER`` lists the run's ratings in that order (``rating_rank``: an
+agency notation of an older run sorts as its grade, values without a grade last)."""
 RUB = {"ccy": "RUB", "rate": 1.0, "move_pct": 0.0, "rate_cbr": 1.0, "move_pct_cbr": 0.0, "rate_cbr_next": 1.0}
 CONTRACT_VERSION = "1.3"
 HISTORY_DAYS = 22  # tdm.assemble.HISTORY_DAYS
@@ -264,9 +268,9 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         if r.get("is_quasi"):
             x["quasi"] = True
         issuers[disp[r["issuer"]]] = x
-    used = list(dict.fromkeys(x["rating"] for x in issuers.values() if x["rating"]))
-    rating_order = sorted(used, key=lambda r:
-                          RATINGS.index(r) if r in RATINGS else len(RATINGS) + used.index(r))
+    used = list(dict.fromkeys([x["rating"] for x in issuers.values() if x["rating"]]
+                              + [r["fact"]["rating"] for r in prows if r["fact"].get("rating")]))
+    rating_order = sorted(used, key=lambda r: (ratings.rating_rank(r), used.index(r)))
 
     # the report's Portfolio column (the adapter's x_portfolio: HTM, trading, ...) of every position, valued or
     # not, for the Desk Monitor's portfolio filter; None for a row without it (a legacy load)
@@ -300,7 +304,8 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
             "id": pid, "book": p["book_id"], "assetClass": p.get("asset_class"), "segment": p.get("segment"),
             "instrType": p.get("instr_type"), "name": p.get("name"), "isin": p.get("isin"), "issuer": iname,
             "issuerGroup": iss["group"] if iss else None, "sector": iss["sector"] if iss else None,
-            "rating": iss["rating"] if iss else None, "ccy": p.get("ccy"), "maturity": p.get("maturity"),
+            "rating": p.get("rating") or (iss["rating"] if iss else None), "ccy": p.get("ccy"),
+            "maturity": p.get("maturity"),
             "tenorY": p["tenor_y"] if p.get("tenor_y") is not None else _years(as_of, p.get("maturity")),
             "couponType": p.get("coupon_type"), "coupon": p.get("coupon"), "index": p.get("index_name"),
             "margin": p.get("margin"), "side": p.get("side"),
