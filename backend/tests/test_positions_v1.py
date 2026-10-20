@@ -241,7 +241,7 @@ def test_publish_api_and_compat(ctx, store_url, tmp_path):
     fx2 = got["FX2"]["fact"]  # a forward: no MV, its amount only in the FX delta (the OCP) and the notional
     assert (got["FX2"]["pv_rub"], fx2["mv_rub"], fx2["fx_delta"], fx2["notional"]) == (0.0, 0.0, {"USD": -400.0},
                                                                                       -400.0)
-    assert got["B2"]["fact"]["name"] == "Bond abroad" and got["B2"]["dv01_rub"] == 0.0
+    assert got["B2"]["fact"]["name"] == "Bond abroad (из отчёта)" and got["B2"]["dv01_rub"] == 0.0
     assert got["O1"]["reason"] == "no_reported_value: otc IRS-1: no mv_rub" and got["O1"]["fact"] is None
     o2 = got["O2"]["fact"]
     assert (got["O2"]["pv_rub"], got["O2"]["dv01_rub"], o2["instr_type"], o2["segment"]) == (5e5, -850.0, "OTC",
@@ -290,7 +290,7 @@ def test_publish_api_and_compat(ctx, store_url, tmp_path):
     assert [k for k in pos if pos[k].get("notValued")] == ["B4", "O1"] and pos["B4"]["mvRub"] is None
     assert (pos["FX1"]["instrType"], pos["FX1"]["ccy"], pos["FX1"]["fxDelta"]) == ("FX", "USD",
                                                                                   {"USD": pytest.approx(1000.0)})
-    assert pos["B2"]["name"] == "Bond abroad" and pos["B2"]["instrumentId"] == "XS000"
+    assert pos["B2"]["name"] == "Bond abroad (из отчёта)" and pos["B2"]["instrumentId"] == "XS000"
     assert set(desk["BOOKS"]) == {"OFZ", "CORP", "TSY"} and desk["BOOKS"]["TSY"]["bookType"] == "DERIVS"
 
 

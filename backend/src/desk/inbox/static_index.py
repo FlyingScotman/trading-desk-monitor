@@ -2,7 +2,8 @@
 (08 §7) and the business calendar of the time semantics (08 §6.5).
 
 Both come from cached static snapshots (``<sha256>.json.gz`` bundles, plus the cache's ``index.json`` when
-``desk sync`` wrote one). A bundle's identity is checked on read like ``desk.marketdata.bundle`` does; that
+``desk sync`` wrote one). A bundle's identity and schema (any ``market_snapshot/1.x``, D10) are checked on read like
+``desk.marketdata.bundle`` does; that
 module is not imported so the conformance kit stays free of the rest of the backend.
 
 Index record per instrument, from the static ``instruments`` rows: ``instrument_id`` and ``moex_secid`` are the
@@ -21,6 +22,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 from functools import cache
@@ -30,6 +32,7 @@ from typing import Any
 INDEX_FORMAT = "desk.inbox.instruments/1"
 CALENDAR = "RU_PRODUCTION"
 LOOKUP_KINDS = ("isin", "regnum", "moex_secid")
+_SCHEMA = re.compile(r"^market_snapshot/1\.(0|[1-9][0-9]*)$")
 
 
 class CalendarUnavailable(LookupError):
@@ -56,8 +59,8 @@ def static_snapshots(folder: str | Path) -> list[StaticRef]:
     else:
         for p in folder.glob("*.json.gz"):
             st = p.stat()
-            kind, business_date = _head(str(p), st.st_mtime_ns, st.st_size)
-            if kind == "static":
+            kind, business_date, schema = _head(str(p), st.st_mtime_ns, st.st_size)
+            if kind == "static" and supported_schema(schema):  # a bundle of another major is not ours to read
                 out.append(StaticRef(p.name.split(".")[0], business_date, p))
     # shortcut: two static snapshots of one business date are ordered by id, not by supersession; upgrade
     # when the hub publishes static corrections.
@@ -65,11 +68,12 @@ def static_snapshots(folder: str | Path) -> list[StaticRef]:
 
 
 @cache
-def _head(path: str, mtime_ns: int, size: int) -> tuple[Any, Any]:
-    """(kind, business_date) of a bundle, read once per file version (a folder scan must not decompress all)."""
+def _head(path: str, mtime_ns: int, size: int) -> tuple[Any, Any, Any]:
+    """(kind, business_date, schema_version) of a bundle, read once per file version (a folder scan must not
+    decompress all)."""
     with gzip.open(path) as f:
         doc = json.load(f)
-    return doc.get("kind"), doc.get("business_date")
+    return doc.get("kind"), doc.get("business_date"), doc.get("schema_version")
 
 
 def covering(refs: list[StaticRef], on: date | str | None) -> StaticRef | None:
@@ -83,11 +87,21 @@ def covering(refs: list[StaticRef], on: date | str | None) -> StaticRef | None:
     return older[-1] if older else refs[-1]
 
 
+def supported_schema(version: object) -> bool:
+    """``market_snapshot/1.<minor>``: the minors are additive, unknown fields are ignored (as
+    ``desk.marketdata.bundle.supported_schema``; D10). Another major is not read. A bundle without a version (the
+    conformance kit's synthetic ones; the hub always sends one, and ``desk sync`` verifies it) is read as before."""
+    return version is None or isinstance(version, str) and _SCHEMA.match(version) is not None
+
+
 def _data(ref: StaticRef) -> dict[str, Any]:
     raw = gzip.decompress(ref.path.read_bytes())
     if hashlib.sha256(raw).hexdigest() != ref.id:
         raise ValueError(f"{ref.path.name}: sha256 does not match the file name")
-    return json.loads(raw)["data"]
+    doc = json.loads(raw)
+    if not supported_schema(doc.get("schema_version")):
+        raise ValueError(f"{ref.path.name}: schema_version {doc.get('schema_version')!r}, need market_snapshot/1.x")
+    return doc["data"]
 
 
 def _instruments(data: dict[str, Any]) -> dict[str, Any]:
@@ -115,6 +129,72 @@ def build_index(folder: str | Path, out_path: str | Path, dates: list[date | str
         for r in sorted(chosen.values(), key=lambda r: (r.business_date, r.id))]}
     Path(out_path).write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
     return doc
+
+
+UNMAPPED_REASONS = {
+    "ambiguous": "ISIN или рег. номер у двух выпусков справочника",
+    "not_in_static": "нет в справочнике хаба (неторгуемый, погашенный или новый выпуск)",
+    "not_on_moex": "ISIN не российский: вероятно, выпуска нет на MOEX",
+    "no_identifier": "в отчёте нет ISIN, рег. номера и кода MOEX",
+}
+"""Why a bond of the report has no instrument (D6), in the order the codes are checked."""
+
+
+@cache
+def _keys(ref: StaticRef) -> dict[str, dict[str, str | None]]:
+    """moex_secid / isin / regnum -> secid of one static snapshot (None: two instruments share the value)."""
+    m = _instruments(_data(ref))
+    return {"moex_secid": {s: s for s in m["secid"]}, "isin": m["isin"], "regnum": m["regnum"]}
+
+
+def unmapped_reason(keys: dict[str, dict[str, str | None]], row: dict[str, Any], secid: str | None = None
+                    ) -> str | None:
+    """None when the bond resolves as ``valuation.positions`` resolves it (its secid, else ``moex_secid``, ``isin``,
+    ``regnum`` naming one instrument); else a code of ``UNMAPPED_REASONS``. "Not on MOEX" is a guess from the ISIN's
+    country prefix: only the hub knows the MOEX universe beyond its snapshot."""
+    if secid and secid in keys["moex_secid"]:
+        return None
+    shared = False
+    for kind in LOOKUP_KINDS:
+        v = row.get(kind)
+        if isinstance(v, str) and v in keys[kind]:
+            if keys[kind][v] is not None:
+                return None
+            shared = True
+    if shared:
+        return "ambiguous"
+    if not any(row.get(k) for k in LOOKUP_KINDS) and not secid:
+        return "no_identifier"
+    isin = row.get("isin")
+    if isinstance(isin, str) and isin[:2].upper() != "RU":
+        return "not_on_moex"
+    return "not_in_static"
+
+
+def unmapped_bonds(folder: str | Path, rows: list[tuple[str | None, dict[str, Any] | None]],
+                   on: date | str | None) -> dict[str, Any]:
+    """The bonds of ``rows`` (secid, report row fields or None for a legacy row) without an instrument in the static
+    snapshot covering ``on``: counts by reason and the ISINs, no other position data (an inbox status is shared)."""
+    ref = covering(static_snapshots(folder), on)
+    out: dict[str, Any] = {"static_snapshot": ref.id if ref else None,
+                           "static_date": ref.business_date if ref else None, "count": 0, "by_reason": {},
+                           "isins": []}
+    if ref is None:
+        return out
+    keys, isins = _keys(ref), {}
+    for secid, x in rows:
+        x = x or {}
+        if (x.get("asset_class") or "bond").lower() != "bond":
+            continue
+        reason = unmapped_reason(keys, x, secid)
+        if reason is None:
+            continue
+        out["count"] += 1
+        out["by_reason"][reason] = out["by_reason"].get(reason, 0) + 1
+        if isinstance(x.get("isin"), str):
+            isins.setdefault(x["isin"], reason)
+    out["isins"] = [{"isin": i, "reason": r} for i, r in sorted(isins.items())]
+    return out
 
 
 class Instruments:

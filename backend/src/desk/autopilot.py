@@ -23,7 +23,8 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    recomputed, to keep it cheap). Oldest first, except that the latest positions date goes first while it has no
    default run at all (a first launch, a new day): the current position shows before the backlog is done (its model
    prices then carry spreads from the runs that existed when it ran). A date that failed is not retried until its
-   inputs change.
+   inputs change. The step's detail also lists the latest positions date's bonds without an instrument: counts by
+   reason and the ISINs (``inbox.scan.unmapped``, D6).
 4. **intraday** (with the hub and the ``intraday`` setting, R11): on a business day from 10:00 MSK, today's book
    (the latest position sets, carried forward: ``store.positions_for``) valued on the hub's newest ``intraday``
    cut of today, from 19:45 on its ``eod_preliminary`` cut: the EOD code path (``cli.eod_run``) on another market
@@ -638,10 +639,23 @@ class Autopilot:
             if rid is not None:
                 done.append(f"{d} run {rid} ({why})")
                 ran.append(d)
-        parts = done + failed + notes
-        if failed:
-            return "error", "; ".join(parts)
-        return ("ok" if done else "skipped"), "; ".join(parts) or f"up to date ({dates[0]}..{dates[-1]})"
+        parts = (done + failed + notes or [f"up to date ({dates[0]}..{dates[-1]})"]) \
+            + self._unmapped(settings, con, latest_valid)
+        return ("error" if failed else "ok" if done else "skipped"), "; ".join(parts)
+
+    @staticmethod
+    def _unmapped(settings: Settings, con: psycopg.Connection, day: str) -> list[str]:
+        """The latest positions date's bonds without an instrument, by reason with their ISINs (D6), for the eod
+        step's detail; nothing when every bond resolves."""
+        from .inbox import scan
+
+        d = date.fromisoformat(day)
+        try:
+            u = scan.unmapped(settings, store.positions_for(con, d), d)
+        except Exception as e:  # noqa: BLE001 - a status line never fails the step
+            log.warning("autopilot: unmapped bonds of %s not listed: %s", day, e)
+            return []
+        return [f"{day} {scan.unmapped_text(u, limit=10)}"] if u.get("count") or u.get("error") else []
 
     def _business_day(self, settings: Settings, d: date) -> bool:
         """``d`` is a business day of the settlement calendar of the newest cached static snapshot (parsed once per

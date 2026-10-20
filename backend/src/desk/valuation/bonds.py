@@ -38,6 +38,7 @@ valuation for information only.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
@@ -200,6 +201,82 @@ def floater_rule(terms: BondTerms) -> tuple[FloatingCouponRule, str, str, str]:
     if bench == "KEY_RATE":
         return rule, "KEY_RATE", KEY_RATE_CURVE_ID, desc
     return rule, "RUONIA", RUONIA_OIS_CURVE_ID, desc
+
+
+INDEX_NAMES = {"KEY_RATE": "КС", "RUONIA": "RUONIA", "RUONIA_3M": "RUONIA 3M", "RUONIA_6M": "RUONIA 6M",
+               "RUONIA_INDEX": "RUONIA (индекс)", "CPI": "ИПЦ", "ZCYC": "КБД"}
+"""Display name of a floater's benchmark; КС and RUONIA are the Desk Monitor's index names (``tdm_run.INDICES``)."""
+
+
+@dataclass(frozen=True)
+class CouponView:
+    """The coupon a position shows (D4), for every bond, also one core does not value: from the static terms."""
+
+    pct: float | None
+    """% a year; None when nothing is known."""
+    basis: str | None
+    """``rate`` (MOEX's rate of the running period), ``amount`` (its published amount as a rate:
+    amount x 365 / (days x face)), ``assumed`` (no figure for the period: the last known rate), ``projected`` (a
+    floater's index + margin at the latest fixing, not a published coupon), ``zero``; None with ``pct``."""
+    index_name: str | None = None
+    """A floater's benchmark (``INDEX_NAMES``)."""
+    margin_pct: float | None = None
+    """A floater's margin over the benchmark, %."""
+
+
+def current_period(terms: BondTerms, d: date) -> tuple[Coupon | None, date | None]:
+    """The coupon period running on ``d`` (the first one paid after it) and its start (None when unknown)."""
+    for i, c in enumerate(terms.coupons):
+        if c.pay_date > d:
+            return c, c.start or (terms.coupons[i - 1].pay_date if i else None)
+    return None, None
+
+
+def coupon_view(terms: BondTerms, d: date, index_value: Callable[[str], float | None] | None = None) -> CouponView:
+    """The running coupon of a bond on ``d``: MOEX's rate, else its amount as a rate, else for a floater its
+    projection ``index + margin`` (``index_value(benchmark)``: the latest fixing, %; floor, cap and multiplier
+    applied), else the last known rate. A floater always carries its index and margin when the formula has them."""
+    f = terms.floater_formula if terms.coupon_type == "floating" else None
+    bench = f.get("benchmark") if f else None
+    index = (INDEX_NAMES.get(bench) or f.get("benchmark_raw") or bench) if f and bench else None
+    margin = float(f["spread_bp"]) / 100 if f and f.get("spread_bp") is not None else None
+    if terms.coupon_type == "zero":
+        return CouponView(0.0, "zero")
+    c, start = current_period(terms, d)
+    if c is not None and c.rate_pct is not None:
+        return CouponView(float(c.rate_pct), "rate", index, margin)
+    face = (c.face or terms.face_value) if c is not None else None
+    if c is not None and c.amount_per_bond and start is not None and c.pay_date > start and face:
+        rate = float(c.amount_per_bond) * 365 * 100 / (float(face) * (c.pay_date - start).days)
+        return CouponView(round(rate, 4), "amount", index, margin)
+    if f is not None:
+        fixing = index_value(bench) if index_value and bench and margin is not None else None
+        if fixing is None:
+            return CouponView(None, None, index, margin)
+        rate = fixing * float(f.get("multiplier") or 1) + margin  # type: ignore[operator]
+        if f.get("floor_pct") is not None:
+            rate = max(rate, float(f["floor_pct"]))
+        if f.get("cap_pct") is not None:
+            rate = min(rate, float(f["cap_pct"]))
+        return CouponView(round(rate, 4), "projected", index, margin)
+    last = next((x.rate_pct for x in reversed(terms.coupons) if x.pay_date <= d and x.rate_pct is not None), None)
+    return CouponView(float(last), "assumed") if last is not None else CouponView(None, None)
+
+
+def implied_frequency(terms: BondTerms) -> int | None:
+    """Coupons a year from the schedule (365 / the median period), for display when MOEX gives no frequency (D8:
+    MOEX omits COUPONFREQUENCY when the first period is irregular)."""
+    days, prev = [], None
+    for c in terms.coupons:
+        start, prev = c.start or prev, c.pay_date
+        if start is not None and c.pay_date > start:
+            days.append((c.pay_date - start).days)
+    if not days:
+        return None
+    days.sort()
+    n = len(days)
+    med = days[n // 2] if n % 2 else (days[n // 2 - 1] + days[n // 2]) / 2
+    return max(1, round(365 / med))
 
 
 def next_offer(terms: BondTerms, settlement: date) -> tuple[date, Decimal, str] | None:

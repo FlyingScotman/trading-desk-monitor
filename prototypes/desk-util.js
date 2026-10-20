@@ -528,7 +528,7 @@
         add('derivs', p.book, p.id, arr);
       }
       // rolldown к горизонту (по желанию): фикс. облигации и IRS, пока живы
-      if (cfg.rolldown && n === N && !p.accrualOnly && ((p.instrType === 'BOND' && p.couponType === 'fix') || p.instrType === 'IRS')) {
+      if (cfg.rolldown && n === N && !p.accrualOnly && ((p.instrType === 'BOND' && p.couponType && p.couponType !== 'float') || p.instrType === 'IRS')) {
         const h = N / 365.25, T = p.instrType === 'BOND' ? yieldTenor(p) : p.tenorY;
         let rd = 0;
         Object.keys(p.risk || {}).forEach(c => {

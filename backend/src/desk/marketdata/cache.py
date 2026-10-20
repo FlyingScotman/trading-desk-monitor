@@ -2,7 +2,7 @@
 
 The cache is a folder of ``<snapshot_id>.json.gz`` files that :class:`~.bundle.SnapshotDir` reads,
 so a run never depends on the hub being up. Every file is verified before it lands
-(``sha256(gunzip(body)) == snapshot_id``, schema version) and written atomically
+(``sha256(gunzip(body)) == snapshot_id``, schema version ``market_snapshot/1.x``) and written atomically
 (``.part``, then rename). The cache is append-only: the backend never rewrites a bundle, and deletes
 only the intraday and preliminary market cuts of past dates (``prune``, R11: one every half hour); a correction is
 a new file and ``SnapshotDir.market`` picks the one not superseded.
@@ -24,7 +24,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .bundle import SCHEMA_VERSION, SnapshotError
+from .bundle import SnapshotError, check_schema
 from .hub import HubClient
 
 _ID = re.compile(r"^[0-9a-f]{64}$")
@@ -40,8 +40,7 @@ def verify(body: bytes, snapshot_id: str) -> dict[str, Any]:
     if sid != snapshot_id:
         raise SnapshotError(f"{snapshot_id[:12]}: content sha256 is {sid[:12]}, not the snapshot id")
     doc = json.loads(raw)
-    if doc.get("schema_version") != SCHEMA_VERSION:
-        raise SnapshotError(f"{snapshot_id[:12]}: schema_version {doc.get('schema_version')!r}, need {SCHEMA_VERSION}")
+    check_schema(doc, snapshot_id[:12])  # any 1.x (additive minors, D10); another major is refused
     return {k: v for k, v in doc.items() if k != "data"}
 
 
