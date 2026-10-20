@@ -70,7 +70,8 @@ def test_missing_rates_inputs_are_named_and_the_risk_goes_where_it_says(tmp_path
         assert "риск отнесён на ОФЗ (RUB OFZ)" in notes[0]["text"] and "no ruonia_ois quote set" in notes[0]["detail"]
         assert notes[1]["curve"] == "RUB KEY" and notes[1]["detail"] is None
     outs = {o.secid: o for o in value(ctx, [(s, 1000.0) for s in (OFZ, CORP, KEY)])}
-    assert set(outs[OFZ].valuation.risk()) == set(outs[CORP].valuation.risk()) == {disc}
+    assert set(outs[CORP].valuation.risk()) == {disc}  # an OFZ: RUONIA + the basis when there is RUONIA (R18)
+    assert set(outs[OFZ].valuation.risk()) == ({"RUB OFZ"} if disc == "RUB OFZ" else {disc, "RUB OFZ-RUONIA"})
     key = outs[KEY].valuation
     if not drop:
         assert key.quality in ("exact", "assumed") and set(key.risk()) == {"RUB KEY", "RUB RUONIA"}
@@ -112,7 +113,7 @@ def test_the_run_log_and_the_risk_pages_say_what_is_missing(tmp_path, store_url)
     assert "флоатеры по индексам: KEY_RATE: market_value (core_missing_market_data) 1" in info
     desk = TestClient(create_app(store_url)).get("/api/v1/compat/desk").json()
     assert [n["code"] for n in desk["riskNotes"]] == lineage
-    assert desk["riskNotes"][0]["text"].endswith("облигации дисконтированы по КБД, риск отнесён на ОФЗ (RUB OFZ)")
+    assert desk["riskNotes"][0]["text"].endswith("риск отнесён на ОФЗ (RUB OFZ), базис ОФЗ–RUONIA не выделен")
     assert set(desk["CURVES"]) == {"RUB OFZ", "RUB KEY"}  # no RUB RUONIA curve: the note says why
 
 
@@ -122,7 +123,7 @@ def test_risk_notes_of_older_runs():
         "curve_error": "2026-10-19: no ruonia_ois quote set dated the business date (present: [])", "fixings": {}}}}
     assert [n["code"] for n in risk_notes(old)] == ["curve_missing:ruonia_ois", "curve_unbuilt:key_rate_swap",
                                                     "run_before_ruonia"]
-    kr = {"business_date": date(2026, 10, 19), "lineage": {"logic_version": "0.1.0+v4+core0.9", "rates": {
+    kr = {"business_date": date(2026, 10, 19), "lineage": {"logic_version": "0.1.0+v6+core0.9", "rates": {
         "ruonia_ois": {}, "curve_error": "2026-10-19: no CBR meeting effective after the business date"}}}
     assert [(n["code"], n["detail"]) for n in risk_notes(kr)] == [
         ("curve_error:key_rate_swap", "2026-10-19: no CBR meeting effective after the business date")]

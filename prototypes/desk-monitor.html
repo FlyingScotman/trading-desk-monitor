@@ -781,8 +781,9 @@ function rSummary(){
   }));
   // DV01 by bucket
   const sel = $('sum-bview');
-  sel.innerHTML = [['RUB','RUB-кривые (стек)'],['ALL','Все кривые (стек)']].concat(CURVES.map(c => [c, D.CURVES[c].name])).map(o => `<option value="${esc(o[0])}"${S.sum.bview === o[0] ? ' selected' : ''}>${esc(o[1])}</option>`).join('');
-  const show = S.sum.bview === 'RUB' ? CURVES.filter(c => D.CURVES[c].ccy === 'RUB') : S.sum.bview === 'ALL' ? CURVES : [S.sum.bview];
+  sel.innerHTML = [['RUB','RUB-кривые ставок (стек)'],['ALL','Все кривые ставок (стек)']].concat(CURVES.map(c => [c, D.CURVES[c].name])).map(o => `<option value="${esc(o[0])}"${S.sum.bview === o[0] ? ' selected' : ''}>${esc(o[1])}</option>`).join('');
+  // стеки — по кривым ставок: базис ОФЗ–RUONIA (R18) повторяет DV01 ОФЗ по RUONIA, его видно отдельно
+  const show = S.sum.bview === 'RUB' ? U.rateCurves(CURVES.filter(c => D.CURVES[c].ccy === 'RUB')) : S.sum.bview === 'ALL' ? U.rateCurves(CURVES) : [S.sum.bview];
   chart('c-sum-bucket', opt({
     legend:legend({data:show.map(c => D.CURVES[c].name)}),
     tooltip:{valueFormatter:v => num(v,0) + ' тыс ₽/б.п.'},
@@ -959,7 +960,7 @@ function bdAgg(c, list){
 }
 function rBonds(){
   const cs = $('bd-curve');
-  cs.innerHTML = [['base','Базовая кривая валюты (ОФЗ для RUB)'],['own','Расчётный спред (Z / G / DM)']].concat(CURVES.filter(U.hasPoints).map(c => [c, D.CURVES[c].name + ' · ' + D.CURVES[c].ccy]))
+  cs.innerHTML = [['base','Базовая кривая валюты (ОФЗ для RUB)'],['own','Расчётный спред (Z / G / DM)']].concat(CURVES.filter(c => U.hasPoints(c) && !U.isBasis(c)).map(c => [c, D.CURVES[c].name + ' · ' + D.CURVES[c].ccy]))
     .map(o => `<option value="${esc(o[0])}"${S.bd.curve === o[0] ? ' selected' : ''}>${esc(o[1])}</option>`).join('');
   $('bd-group').innerHTML = BD_GROUPS.map(o => `<option value="${o[0]}"${S.bd.group === o[0] ? ' selected' : ''}>${o[1]}</option>`).join('');
   $('bd-range').innerHTML = BD_RANGES.map(o => `<button type="button" data-v="${o[0]}" aria-pressed="${S.bd.range === o[0]}">${o[0]}</button>`).join('');
@@ -1012,9 +1013,9 @@ function rBonds(){
 // карта доходностей: бумаги одной валюты с фикс. купоном против кривой
 // кривая без точек (валютная заглушка «USD …» несёт только риск) на карту не идёт
 function bdMapCurve(){
-  if (U.hasPoints(S.bd.curve)) return S.bd.curve;
+  if (U.hasPoints(S.bd.curve) && !U.isBasis(S.bd.curve)) return S.bd.curve;  // базис — не кривая доходности
   const b = U.baseCurve(S.ccy !== 'ALL' ? S.ccy : 'RUB');
-  return b && U.hasPoints(b) ? b : (CURVES.find(U.hasPoints) || CURVES[0]);
+  return b && U.hasPoints(b) ? b : (CURVES.find(c => U.hasPoints(c) && !U.isBasis(c)) || CURVES[0]);
 }
 function rBondMap(rows){
   const cc = bdMapCurve(), ccy = D.CURVES[cc].ccy;
@@ -1201,8 +1202,9 @@ function closeDrawer(){
 /* ======================= 3. Риски по кривым ======================= */
 function rRisk(){
   riskNotes('risk-notes');
-  { const l0 = P(), kd = sum(l0, p => sum((p.risk && p.risk['RUB KEY']) || [])), ofz = sum(l0, p => p.ofzSpr01 || 0), cs = sum(l0, p => p.cs01);
-    $('risk-extra').innerHTML = `<span title="Чувствительность ОФЗ к их спреду относительно кривой, на которой считан риск ставок (RUONIA OIS; на дату без неё — КБД)">спред ОФЗ01 <b class="num${nc(ofz)}">${K(ofz,0)}</b></span> · <span title="CS01: чувствительность к кредитному спреду бумаг к их базовой кривой">CS01 <b class="num${nc(cs)}">${K(cs,0)}</b></span> · <span title="DV01 на кривой RUB KEY: чувствительность к ключевой ставке (флоатеры на КС, свопы на КС)">DV01 на КС <b class="num${nc(kd)}">${K(kd,0)}</b></span> тыс ₽/б.п.`; }
+  { const l0 = P(), kd = sum(l0, p => sum((p.risk && p.risk['RUB KEY']) || [])), ofz = sum(l0, p => p.ofzSpr01 || 0), cs = sum(l0, p => p.cs01),
+      bs = sum(l0, p => sum((p.risk && p.risk[U.BASIS_CURVE]) || []));
+    $('risk-extra').innerHTML = `<span title="R18: кривая ОФЗ = RUONIA + базис. DV01 ОФЗ к базису ОФЗ–RUONIA (сдвиг кривой ОФЗ при неизменной RUONIA); в DV01 не входит">базис ОФЗ–RUONIA <b class="num${nc(bs)}">${K(bs,0)}</b></span> · <span title="Чувствительность ОФЗ к собственному спреду к кривой ОФЗ (КБД)">спред ОФЗ01 <b class="num${nc(ofz)}">${K(ofz,0)}</b></span> · <span title="CS01: чувствительность к кредитному спреду бумаг к их базовой кривой">CS01 <b class="num${nc(cs)}">${K(cs,0)}</b></span> · <span title="DV01 на кривой RUB KEY: чувствительность к ключевой ставке (флоатеры на КС, свопы на КС)">DV01 на КС <b class="num${nc(kd)}">${K(kd,0)}</b></span> тыс ₽/б.п.`; }
   if (!D.CURVES[S.risk.curve] && CURVES.length) { S.risk.curve = CURVES[0]; S.risk.cell = null; }  // the default (RUB RUONIA) is the demo's: a run may publish other curves only
   const l = P(), mode = S.risk.mode, curve = S.risk.curve;
   document.querySelectorAll('#risk-mode button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === mode));

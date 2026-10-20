@@ -7,12 +7,16 @@ The definition keeps the prototype shape (``prototypes/data.js``), so the protot
      "spreads": {"_all": bp, "_mult": factor > 0, "sector": {name: bp}, "issuer": {name: bp}, "rating": {r: bp}},
      "fx": {"USD": pct, ...}}
 
-A curve is a published curve of the run (R8): ``RUB RUONIA`` the discount curve of every RUB bond (and a RUONIA
-floater's projection), ``RUB KEY`` a key-rate floater's projection, ``RUB OFZ`` the KBD (a market curve: no bond
-is discounted on it unless the date has no RUONIA curve, so a shock of it alone moves nothing else), ``USD``
-and the like a currency's curve; each moves only by its own vector. The preset moves of
-all rates shift the three RUB curves alike; the basis preset only ``RUB KEY`` (store migration 0008).
-``ofzSpread`` is the OFZ Z-spread to RUONIA (ORG_CONVENTIONS §4).
+A curve is a published curve of the run (R8): ``RUB RUONIA`` the discount curve of every RUB corporate (and a
+RUONIA floater's projection), ``RUB KEY`` a key-rate floater's projection, ``RUB OFZ`` the OFZ curve (the KBD, the
+discount curve of an OFZ), ``RUB OFZ-RUONIA`` the OFZ-RUONIA basis (R18: OFZ curve = RUONIA + basis), ``USD`` and
+the like a currency's curve. ``curve_moves`` gives every factor its move: a curve its own vector, and the OFZ curve
+and the basis together: the basis moves by its own vector when it has one, else by ``RUB OFZ`` less ``RUB RUONIA``
+when ``RUB OFZ`` has one, else not at all, and the OFZ curve by ``RUB RUONIA`` plus the basis. So a definition of
+curve moves keeps its meaning (a shock of ``RUB OFZ`` alone widens the basis; RUONIA alone moves the OFZ curve
+with it), and an OFZ, whose risk is on RUONIA and on the basis, moves by its OFZ curve's move. The preset moves of
+all rates shift the three RUB rate curves alike (the basis stays); the basis preset only ``RUB KEY`` (store
+migration 0008). ``ofzSpread`` is an OFZ's own Z-spread to the OFZ curve (to RUONIA before R18).
 ``normalize`` gives the stored, returned and hashed form: every curve a list of 11 floats, zero entries,
 ``_mult == 1``, empty maps and all-zero curves dropped; an unknown key, a bad length, |bp| > ``MAX_BP``
 or an FX move of -100 % or less raise ``DefinitionError``. A null or missing section counts as empty.
@@ -30,9 +34,12 @@ from rub_fixed_income import RISK_BUCKETS
 
 MAX_BP = 5000.0
 KEYS = ("curves", "ofzSpread", "spreads", "fx")
-RUB_CURVES = ("RUB OFZ", "RUB RUONIA", "RUB KEY")
-"""The curves core reprices (``valuation.bonds.RISK_CURVES``): a shock on them is valid for every run, also one
-published before R8 with ``RUB OFZ`` only (its floaters' risk summed there)."""
+OFZ_CURVE, RUONIA_CURVE, BASIS_CURVE = "RUB OFZ", "RUB RUONIA", "RUB OFZ-RUONIA"  # valuation.bonds
+RUB_RATE_CURVES = (OFZ_CURVE, RUONIA_CURVE, "RUB KEY")
+"""The rate curves core reprices (``valuation.bonds.RISK_CURVES``): a parallel move of the rates moves these."""
+RUB_CURVES = (*RUB_RATE_CURVES, BASIS_CURVE)
+"""The curves a shock may name in every run, also one published before R8 with ``RUB OFZ`` only (its floaters' risk
+summed there) or before R18 (no basis): the rate curves and the OFZ-RUONIA basis."""
 SPREAD_RULES = ("sector", "issuer", "rating")
 
 
@@ -112,6 +119,30 @@ def normalize(defn: Mapping[str, Any], curves: Iterable[str] | None = None) -> d
     if fx:
         out["fx"] = fx
     return out
+
+
+def curve_moves(norm: Mapping[str, Any]) -> dict[str, list[float]]:
+    """The move of every shocked factor (bp per bucket): the definition's curves as given, with ``RUB OFZ`` (the OFZ
+    curve) and ``BASIS_CURVE`` (the OFZ-RUONIA basis) set together (R18): basis = its own vector, else ``RUB OFZ``
+    less ``RUB RUONIA`` when ``RUB OFZ`` is given, else 0; OFZ curve = ``RUB RUONIA`` + basis. Both are listed only
+    when one of them is nonzero."""
+    curves = {c: list(v) for c, v in norm.get("curves", {}).items()}
+    zero = [0.0] * len(RISK_BUCKETS)
+    r = curves.get(RUONIA_CURVE, zero)
+    if BASIS_CURVE in curves:
+        basis = curves[BASIS_CURVE]
+        ofz = [x + y for x, y in zip(r, basis)]
+    elif OFZ_CURVE in curves:  # the OFZ curve's own vector, exactly (the TS port computes the same)
+        ofz = curves[OFZ_CURVE]
+        basis = [o - x for o, x in zip(ofz, r)]
+    else:
+        basis, ofz = zero, r
+    for c, v in ((BASIS_CURVE, basis), (OFZ_CURVE, ofz)):
+        if any(v):
+            curves[c] = v
+        else:
+            curves.pop(c, None)
+    return curves
 
 
 def definition_hash(norm: Mapping[str, Any]) -> str:

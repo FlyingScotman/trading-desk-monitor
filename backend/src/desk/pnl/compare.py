@@ -99,7 +99,8 @@ def compare(prev_ctx: EodContext, prev_outcomes: list[Outcome], ctx: EodContext,
         try:
             inst = core_instrument(p.terms, pv.valuation_date, pv.horizon_date,
                                    None if offer is None else (offer[0], offer[1], "offer"), coupons=s.coupons)
-            x = explain_horizon_pnl(inst, prev_ctx.discount[1], ctx.discount[1], prev_ctx.calendar,
+            kind = pv.spread_kind  # an OFZ on the KBD, a corporate on RUONIA (R18)
+            x = explain_horizon_pnl(inst, prev_ctx.discount_for(kind)[1], ctx.discount_for(kind)[1], prev_ctx.calendar,
                                     start_dirty_price_rub=pv.dirty_rub, end_dirty_price_rub=v.dirty_rub,
                                     spread_convention=SPREAD_CONVENTION,
                                     redemption_horizon="maturity" if offer is None else "confirmed_put",

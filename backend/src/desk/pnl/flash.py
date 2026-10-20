@@ -3,8 +3,10 @@
 The position of ``D-1`` (its cashflows or coupon model, quantity and calibrated Z-spread ``z0``) is repriced
 step by step until it reaches the market of ``D``. Each step changes one thing, so the components add up to
 the total by construction. "Curves" are the curves the bond depends on: its discount curve (RUONIA OIS, the KBD
-on a date without RUONIA: ``BondValuation.discount_curve_id``) and, for a floater, its projection curve (RUONIA
-OIS, then the same curve, or the key-rate projection):
+on a date without RUONIA, the KBD for an OFZ: ``BondValuation.discount_curve_id``) and, for a floater, its projection
+curve (RUONIA OIS, then the same curve, or the key-rate projection). An OFZ's ``rates`` is split (R18,
+``rates_basis``) into the RUONIA move and the OFZ-RUONIA basis move (the KBD's less RUONIA's), the basis part to
+first order:
 
 ==========  =================================================================  ==============
 Step        Value of the D-1 position                                          Component
@@ -63,7 +65,14 @@ from rub_fixed_income import (
 )
 
 from ..marketdata.adapter import KBD_CURVE_ID
-from ..valuation.bonds import RISK_CURVES, SPREAD_CONVENTION, BondValuation, FloaterModel
+from ..valuation.bonds import (
+    BASIS_CURVE,
+    RISK_CURVES,
+    RUONIA_CURVE,
+    SPREAD_CONVENTION,
+    BondValuation,
+    FloaterModel,
+)
 
 METHOD = "desk-flash-exact-v2"
 """v2: on the bond's own curves (the RUONIA discount curve, a floater's projection curve reprojected); v1 repriced
@@ -146,6 +155,15 @@ class FlashCurves:
             self._moves[curve_id] = out
         return self._moves[curve_id]
 
+    def basis_move_bp(self) -> dict[str, float]:
+        """The OFZ-RUONIA basis move per risk pillar (R18): the KBD's zero move less RUONIA OIS's; empty when RUONIA
+        is not on both dates."""
+        ruonia = self.zero_move_bp(PUBLISHED_TO_CORE[RUONIA_CURVE])
+        if not ruonia:
+            return {}
+        kbd = self.zero_move_bp(KBD_CURVE_ID)
+        return {b: kbd[b] - ruonia[b] for b in ruonia}
+
     def market(self, prev: bool) -> MarketSnapshot:
         m = self.prev_market if prev else self.cur_market
         if m is None:
@@ -184,6 +202,10 @@ class FlashPnl:
     price_basis: tuple[str, str]
     fx_gross: float = 0.0
     """The FX revaluation of a foreign-face bond (``pnl.direct.split_fx``), taken out of ``other``; 0 for a RUB bond."""
+    rates_basis: float | None = None
+    """R18, an OFZ on a date pair with RUONIA: the part of ``rates`` from the OFZ-RUONIA basis move (its D-1 basis
+    buckets x the basis move per pillar, first order); ``rates - rates_basis`` is the RUONIA part (with the second
+    order). None when there is no basis risk or no RUONIA move to split by."""
 
     @property
     def explained(self) -> float:
@@ -201,6 +223,8 @@ class FlashPnl:
             "z1_bp": round(self.z1_bp, 4), "received_rub": self.received_rub, "total": self.total,
             "identity_error": self.identity_error, "rates_linear": self.rates_linear,
             "prev_price_basis": self.price_basis[0],
+            **({"rates_split": {RUONIA_CURVE: self.rates - self.rates_basis, BASIS_CURVE: self.rates_basis}}
+               if self.rates_basis is not None else {}),
         }
 
 
@@ -278,10 +302,13 @@ def explain(prev: BondValuation, cur: BondValuation, curves: FlashCurves,
         v_spread = pv(s1, curves.cur_curves, cur.z_spread_bp, True) + received
     except (ValueError, RuntimeError, CoreRejection) as e:
         raise NoPnl("core_error", str(e)) from e
-    linear = 0.0
+    linear, basis = 0.0, None
     for c, bs in prev.risk().items():
-        move = curves.zero_move_bp(PUBLISHED_TO_CORE.get(c, c))
-        linear += sum(x * move.get(b, 0.0) for b, x in bs.items())
+        move = curves.basis_move_bp() if c == BASIS_CURVE else curves.zero_move_bp(PUBLISHED_TO_CORE.get(c, c))
+        part = sum(x * move.get(b, 0.0) for b, x in bs.items())
+        linear += part
+        if c == BASIS_CURVE and move:
+            basis = part
     v1 = q * cur.dirty_rub + received
     total = q * (cur.dirty_rub - prev.dirty_rub) + received
     out = FlashPnl(
@@ -291,7 +318,7 @@ def explain(prev: BondValuation, cur: BondValuation, curves: FlashCurves,
         received_rub=received,
         carry=v_carry - v0, rolldown=v_roll - v_carry, rates=v_rates - v_roll, spread=v_spread - v_rates,
         other=v1 - v_spread, total=total, identity_error=0.0, rates_linear=linear,
-        price_basis=(prev.price_basis, cur.price_basis),
+        price_basis=(prev.price_basis, cur.price_basis), rates_basis=basis,
     )
     err = out.explained - total
     object.__setattr__(out, "identity_error", err)

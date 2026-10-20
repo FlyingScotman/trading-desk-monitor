@@ -141,6 +141,25 @@ Core **0.32.0** (18 October 2026) has an engine for every product the book holds
 | Callables, perpetuals, constant-CPR pass-throughs | `callables`, `pass_through` (0.20), with explicit exercise or CPR assumptions | The desk's assumptions (DEC10) | S4 for perpetuals to call; the rest per DEC10 |
 | Structured notes and other bonds without a usable schedule | none | — | `not covered`, or `imported` |
 
+### 7.1 RUB bond curves and risk factors (R8, 20.10; R18, 21.10)
+
+| Bond | Discount curve | Rate risk published on | Spread risk |
+|---|---|---|---|
+| Corporate, subfederal, municipal (fixed or floater) | RUONIA OIS (`RUB_RUONIA_OIS`) + own Z-spread | `RUB RUONIA`; a key-rate floater's projection on `RUB KEY` | CS01 (to RUONIA) |
+| OFZ (PD, PK, IN, AD, N) | the OFZ curve: KBD (`RUB_KBD`) + own Z-spread to it | `RUB RUONIA` and, the same buckets, the basis `RUB OFZ-RUONIA`; an OFZ-PK's RUONIA projection on `RUB RUONIA` | `ofz_spr01` (to the OFZ curve) |
+| Any, on a date without the RUONIA curve | KBD | `RUB OFZ` (no split; a corporate is `assumed`, the run log and the pages say `curve_missing:ruonia_ois`) | as above |
+
+The OFZ curve is RUONIA plus the **OFZ-RUONIA basis** (`valuation.bonds.split_ofz`): a RUONIA move with the basis
+unchanged moves the OFZ curve too, a basis move moves only the OFZ. The basis is a spread factor, not a rate curve:
+it is left out of `dv01`, of the bucket totals and of the parallel gamma (`split_hessian` rewrites an OFZ's Hessian in
+the two factors). The run publishes it as a curve of kind `basis`: the KBD's rates less RUONIA's per pillar and its
+day's move. A scenario keeps its meaning (`scenario.definition.curve_moves`): the basis moves by its own vector, else by
+`RUB OFZ` less `RUB RUONIA` when `RUB OFZ` is given, else not; the OFZ curve by RUONIA plus the basis. So the presets
+that move the three RUB rate curves alike leave the basis where it is, and a shock of `RUB OFZ` alone is a basis
+shock. The flash PnL of an OFZ splits `rates` into RUONIA and the basis (`FlashPnl.rates_basis`, first order; in the
+position's PnL extra as `rates_split`). Runs made before `VALUATION_VERSION` 6 keep their risk as computed (RUONIA
+only, or `RUB OFZ` before version 4); the pages say so (`riskNotes`).
+
 Carry, rolldown and theta of the whole mixed book: `horizon_portfolio` (0.14, 0.30–0.32). Derivatives return `rub-portfolio-risk-result.v3`; bond-only jobs keep v2 byte for byte (core `docs/portfolio-v3.md`). The backend stores and verifies these hash-verified results rather than inventing its own result shape for core output.
 
 The `imported` path (contract 1.3 position, risk and gamma sections) stays for:

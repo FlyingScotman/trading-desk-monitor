@@ -14,15 +14,18 @@ Steps:
    separate factor from its discount curve, so their basis risk is not netted away. Its rejections become
    ``Rejected("core_<code>")``. The hash-verified result (``rub-portfolio-risk-result.v2``) is returned for storage.
 
-**Discount curve** (owner's decision of 20.10, ORG_CONVENTIONS §4, DATA_CONTRACT §0.3): every RUB bond, OFZ and
-corporate, fixed and floater, is discounted on the RUONIA OIS curve (``RUONIA_OIS_CURVE_ID``, published ``RUB
-RUONIA``) plus its Z-spread calibrated to the market price: the OFZ spread to RUONIA (``ofz_spr01``) or the credit
-spread to RUONIA (CS01). So a fixed bond's rate DV01 is on ``RUB RUONIA``; a RUONIA floater projects and discounts
-on the same curve (one factor); a key-rate floater has ``RUB KEY`` (projection) and ``RUB RUONIA`` (discount). The
-KBD (``RUB OFZ``) stays the market curve of the G-spread, the curve chart and the bond history ("спред к КБД"):
-no bond carries DV01 on it, except on a date without a RUONIA OIS curve in the market (``discount_curve``): then
-the bonds are discounted on the KBD, their risk is on ``RUB OFZ`` and every valuation says so in ``assumptions``
-(quality ``assumed``), and the run goes on.
+**Discount curve** (owner's decisions of 20.10, ORG_CONVENTIONS §4, DATA_CONTRACT §0.3, and R18): a corporate (and a
+subfederal, municipal or any other non-OFZ RUB bond), fixed or floater, is discounted on the RUONIA OIS curve
+(``RUONIA_OIS_CURVE_ID``, published ``RUB RUONIA``) plus its credit Z-spread calibrated to the market price (CS01).
+An OFZ is discounted on the OFZ curve, the KBD, plus its own small Z-spread to it (``ofz_spr01``), and the OFZ curve
+is RUONIA plus the **OFZ-RUONIA basis** (R18): its KBD bucket DV01 is published on ``RUB RUONIA`` and, the same
+buckets again, on ``BASIS_CURVE`` (``split_ofz``). A move of RUONIA with the basis unchanged moves the OFZ curve; a
+move of the basis moves only the OFZ. The basis is a spread factor, not a rate curve: it is left out of ``dv01_rub``,
+``buckets`` and every sum over the rate curves. So a fixed bond's rate DV01 is on ``RUB RUONIA``; a RUONIA floater
+projects and discounts on the same curve (one factor) unless it is an OFZ-PK (KBD discounting: RUONIA + basis); a
+key-rate floater has ``RUB KEY`` (projection) and ``RUB RUONIA`` (discount). On a date without a RUONIA OIS curve
+in the market (``discount_curve``) every bond is discounted on the KBD and its risk is on ``RUB OFZ`` (no split); a
+corporate then says so in ``assumptions`` (quality ``assumed``), and the run goes on.
 
 **A bond is valued somehow rather than not at all** (the owner's rule). Below an exact valuation
 ``BondValuation.quality`` is ``assumed`` and ``assumptions`` says why, one short reason each:
@@ -105,13 +108,14 @@ CAP_FLOOR_GUARD_BP = 25.0
 """Floors and caps are priced at intrinsic value (core has no volatility) only this far from the strike."""
 PERPETUAL_CALL_YEARS = 5
 
-OFZ_CURVE, RUONIA_CURVE = "RUB OFZ", "RUB RUONIA"
+OFZ_CURVE, RUONIA_CURVE, BASIS_CURVE = "RUB OFZ", "RUB RUONIA", "RUB OFZ-RUONIA"
 RISK_CURVES = {KBD_CURVE_ID: OFZ_CURVE, RUONIA_OIS_CURVE_ID: RUONIA_CURVE, KEY_RATE_CURVE_ID: "RUB KEY"}
 """Core curve ID -> the published curve its bucket DV01 goes on (the run's ``curves`` reference, R8): a key-rate
 floater has RUONIA OIS (discounting) and the key-rate projection, each with its own buckets, so its basis risk
 shows."""
 DISCOUNT_CURVE_ID = RUONIA_OIS_CURVE_ID
-"""The discount curve of RUB bonds (the owner's decision of 20.10); ``KBD_CURVE_ID`` when the market has none."""
+"""The discount curve of RUB corporates (the owner's decision of 20.10); ``KBD_CURVE_ID`` when the market has none.
+An OFZ is discounted on the KBD (R18)."""
 
 
 def ccy_curve(ccy: str) -> str:
@@ -121,14 +125,68 @@ def ccy_curve(ccy: str) -> str:
     return RUONIA_CURVE if ccy == "RUB" else ccy
 
 
-def discount_curve(market: MarketSnapshot) -> tuple[str, str | None]:
-    """The core curve ID RUB bonds are discounted on in ``market`` and, when it is not RUONIA OIS, the note
-    every valuation on it carries: RUONIA OIS, else the KBD (a market without the RUONIA curve: the hub
-    published no OIS quotes for the date or the curve could not be built, ``orchestrator.with_rates``)."""
-    if any(c.curve_id == DISCOUNT_CURVE_ID for c in market.curves):
+def has_ruonia(market: MarketSnapshot) -> bool:
+    """The market has the RUONIA OIS curve (``orchestrator.with_rates`` built it)."""
+    return any(c.curve_id == DISCOUNT_CURVE_ID for c in market.curves)
+
+
+def discount_curve(market: MarketSnapshot, kind: str = "credit") -> tuple[str, str | None]:
+    """The core curve ID a RUB bond of spread ``kind`` is discounted on in ``market`` and, for a corporate not on
+    RUONIA OIS, the note every valuation on it carries. An OFZ (``kind`` ``ofz``): the KBD, the OFZ curve (R18: its
+    risk is RUONIA plus the basis, ``split_ofz``). A corporate: RUONIA OIS, else the KBD (a market without the
+    RUONIA curve: the hub published no OIS quotes for the date or the curve could not be built,
+    ``orchestrator.with_rates``)."""
+    if kind == "ofz":
+        return KBD_CURVE_ID, None
+    if has_ruonia(market):
         return DISCOUNT_CURVE_ID, None
     return KBD_CURVE_ID, (f"discounted on the KBD: no RUONIA OIS curve in the market of {market.business_date}, "
                           "risk on RUB OFZ, spread to the KBD")
+
+
+def split_ofz(by_curve: dict[str, dict[str, float]], ruonia: bool) -> dict[str, dict[str, float]]:
+    """Bucket DV01 by published curve with the OFZ curve's (``RUB OFZ``) put on its factors (R18): added to ``RUB
+    RUONIA`` and, the same buckets, on ``BASIS_CURVE`` (OFZ curve = RUONIA + basis, so the derivative by either
+    factor is the derivative by the OFZ curve). Unchanged on a market without RUONIA (``ruonia`` False): the risk
+    stays on ``RUB OFZ``."""
+    if not ruonia or OFZ_CURVE not in by_curve:
+        return by_curve
+    out = {c: dict(bs) for c, bs in by_curve.items() if c != OFZ_CURVE}
+    kbd = by_curve[OFZ_CURVE]
+    r = out.setdefault(RUONIA_CURVE, dict.fromkeys(RISK_BUCKETS, 0.0))
+    for b, x in kbd.items():
+        r[b] = r.get(b, 0.0) + x
+    out[BASIS_CURVE] = dict(kbd)
+    return out
+
+
+def rate_buckets(by_curve: dict[str, dict[str, float]]) -> dict[str, float]:
+    """Bucket DV01 summed over the rate curves (every curve moved together): the basis left out (R18)."""
+    return {b: math.fsum(bs.get(b, 0.0) for c, bs in by_curve.items() if c != BASIS_CURVE) for b in RISK_BUCKETS}
+
+
+def split_hessian(hessian: list[tuple[str, str, float]], ruonia: bool) -> list[tuple[str, str, float]]:
+    """``hessian`` (upper triangle by factor name, ``IR|<published curve>|<bucket>``, as ``BondValuation.hessian``)
+    with every ``RUB OFZ`` factor substituted by ``RUB RUONIA`` + basis (R18): the quadratic form in the OFZ curve's
+    moves k = r + s, rewritten in the RUONIA moves r and the basis moves s, terms of one pair summed. The second
+    order of any scenario is unchanged when its basis move is its OFZ move less its RUONIA move."""
+    if not ruonia or not any(OFZ_CURVE in f for a, b, _ in hessian for f in (a, b)):
+        return hessian
+
+    def sub(f: str) -> list[str]:
+        if f.startswith(f"IR|{OFZ_CURVE}|"):
+            b = f.rsplit("|", 1)[1]
+            return [f"IR|{RUONIA_CURVE}|{b}", f"IR|{BASIS_CURVE}|{b}"]
+        return [f]
+
+    sym: dict[tuple[str, str], float] = {}  # Q = 0.5 * sum_ij S_ij u_i u_j
+    for a, b, x in hessian:
+        for fa in sub(a):
+            for fb in sub(b):
+                sym[(fa, fb)] = sym.get((fa, fb), 0.0) + x
+                if a != b:
+                    sym[(fb, fa)] = sym.get((fb, fa), 0.0) + x
+    return [(a, b, x) for (a, b), x in sorted(sym.items()) if a <= b and x]
 
 
 FLOATER_BENCHMARKS = ("KEY_RATE", "RUONIA", "RUONIA_3M", "RUONIA_INDEX")
@@ -639,7 +697,7 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
     position ID, and the core results. ``scenarios`` (core ``PortfolioScenario``) go to every core call."""
     out: dict[str, BondValuation | Rejected] = {}
     results = []
-    disc, disc_note = discount_curve(market)
+    ruonia = has_ruonia(market)
     for r in requests:  # core values at the business date; the MOEX accrued is as of the trade date
         if r.quote.trade_date != market.business_date:
             out[r.position_id] = Rejected("stale_quote", f"trade date {r.quote.trade_date}, business date "
@@ -649,6 +707,7 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
                 and (r.terms.bond_class in OFZ_CLASSES) == (kind == "ofz")]
         if not reqs:
             continue
+        disc, disc_note = discount_curve(market, kind)
         instruments, quotes, positions, calls, ok = {}, {}, [], {}, {}
         for r in reqs:
             s = r.schedule
@@ -693,12 +752,12 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
         for p in positions:
             if p.position_id in rows:
                 out[p.position_id] = _valuation(ok[p.instrument_id], rows[p.position_id], p.quantity, guard,
-                                                disc_note)
+                                                disc_note, ruonia)
     return out, results
 
 
 def _valuation(prep: _Prepared, v: PositionValuation, quantity: float, guard: bool = False,
-               disc_note: str | None = None) -> BondValuation:
+               disc_note: str | None = None, ruonia: bool = True) -> BondValuation:
     r = prep.request
     notes = [*prep.notes, *([disc_note] if disc_note else [])]
     inst = prep.instrument
@@ -712,7 +771,8 @@ def _valuation(prep: _Prepared, v: PositionValuation, quantity: float, guard: bo
         if f.startswith("IR|"):
             _, c, b = _factor(f).split("|")
             by_curve.setdefault(c, dict.fromkeys(RISK_BUCKETS, 0.0))[b] += x
-    buckets = {b: math.fsum(bs[b] for bs in by_curve.values()) for b in RISK_BUCKETS}
+    by_curve = split_ofz(by_curve, ruonia)  # R18: an OFZ's KBD risk on RUONIA + the basis
+    buckets = rate_buckets(by_curve)
     out = BondValuation(
         secid=r.terms.secid, quantity=quantity, valuation_date=v.settlement_date, settlement=r.settlement,
         horizon_date=v.horizon_date, horizon_kind=r.schedule.horizon_kind, price_basis=r.price_basis,
@@ -735,6 +795,7 @@ def _valuation(prep: _Prepared, v: PositionValuation, quantity: float, guard: bo
         rates = math.fsum(x * (1 if a == b else 2) for a, b, x in out.hessian
                           if a.startswith("IR|") and b.startswith("IR|"))
         out.curve_convexity = rates * 1e8 / v.pv_rub if v.pv_rub else None
+        out.hessian = split_hessian(out.hessian, ruonia)
     return out
 
 

@@ -31,10 +31,14 @@ def gamma_summary(rows, mv_rub, convexity, cs01):
     """Сводные вторые производные позиции, RUB на (б.п.)^2:
     gammaIr — к параллельному сдвигу всех кривых (сумма всех IR×IR, вне диагонали дважды),
     gammaCs — к спреду, gammaIrCs — смешанная ставки×спред.
-    Без явной матрицы — из выпуклости: MV × C × 1e-8 (доходность = ставка + спред)."""
+    Без явной матрицы — из выпуклости: MV × C × 1e-8 (доходность = ставка + спред).
+    Базис ОФЗ–RUONIA (кривая 'RUB OFZ-RUONIA', R18) — спред, а не ставка: при параллельном сдвиге он не меняется,
+    его факторы не входят."""
     ir = cs = ircs = 0.0
     if rows:
         for a, b, v in rows:
+            if "|RUB OFZ-RUONIA|" in a or "|RUB OFZ-RUONIA|" in b:
+                continue
             k = 1 if a == b else 2
             ta, tb = a.split("|")[0], b.split("|")[0]
             if ta == "IR" and tb == "IR":

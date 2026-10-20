@@ -3342,7 +3342,7 @@
         "additionalProperties": false,
         "type": "object",
         "title": "ScenarioDefinition",
-        "description": "The prototype scenario shape. curves: bp per RISK_BUCKETS pillar (11) or one number for all, per\npublished curve (\"RUB RUONIA\" the RUB bonds' discount curve, \"RUB KEY\", \"RUB OFZ\" the KBD, a currency's\n\"USD\"...), each moving only by its own vector; ofzSpread: OFZ Z-spread to RUONIA, bp; fx: % against RUB (+ = weaker rouble). Returned\nnormalized: 11-pillar lists, zeros and empty entries left out."
+        "description": "The prototype scenario shape. curves: bp per RISK_BUCKETS pillar (11) or one number for all, per\npublished curve (\"RUB RUONIA\" the corporates' discount curve, \"RUB KEY\", \"RUB OFZ\" the OFZ curve (the KBD),\n\"RUB OFZ-RUONIA\" the OFZ-RUONIA basis, a currency's \"USD\"...); the OFZ curve and the basis move together (OFZ\ncurve = RUONIA + basis; basis = its own vector, else RUB OFZ less RUB RUONIA when RUB OFZ is given, else 0), every\nother curve by its own vector; ofzSpread: an OFZ's own Z-spread to the OFZ curve, bp; fx: % against RUB (+ =\nweaker rouble). Returned normalized: 11-pillar lists, zeros and empty entries left out."
       },
       "ScenarioJob": {
         "properties": {

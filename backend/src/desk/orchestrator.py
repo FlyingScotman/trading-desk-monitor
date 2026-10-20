@@ -42,6 +42,7 @@ from .valuation.bonds import (
     Rejected,
     bond_request,
     discount_curve,
+    has_ruonia,
     settlement_date,
     value_bonds,
 )
@@ -86,14 +87,24 @@ class EodContext:
 
     @property
     def discount(self) -> tuple[str, DiscountCurve, str | None]:
-        """The curve RUB bonds are discounted on (``valuation.bonds.discount_curve``): core curve ID, the built curve
-        and the note of a KBD fallback (None on RUONIA)."""
-        cid, note = discount_curve(self.core_market)
+        """The curve RUB corporates are discounted on: ``discount_for("credit")``."""
+        return self.discount_for("credit")
+
+    def discount_for(self, kind: str) -> tuple[str, DiscountCurve, str | None]:
+        """The curve a RUB bond of spread ``kind`` (``ofz``, ``credit``) is discounted on
+        (``valuation.bonds.discount_curve``): core curve ID, the built curve and the note of a KBD fallback (None on
+        RUONIA, and for an OFZ, which is discounted on the KBD, R18)."""
+        cid, note = discount_curve(self.core_market, kind)
         if cid == KBD_CURVE_ID:
             return cid, self.curve, note
         built = next(c.curve for c in self.core_market.curves if c.curve_id == cid)
         assert isinstance(built, DiscountCurve)
         return cid, built, note
+
+    @property
+    def has_ruonia(self) -> bool:
+        """The market has the RUONIA OIS curve: an OFZ's KBD risk is then RUONIA + the basis (``split_ofz``)."""
+        return has_ruonia(self.core_market)
 
     @property
     def point_in_time_warning(self) -> str | None:

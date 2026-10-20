@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 from rub_fixed_income import CurveEntry, DiscountCurve, FixingEntry, ShockedCurveCache, kbd_discount_curve
 
-from desk.marketdata.adapter import KBD_CURVE_ID, KBD_SPEC, MarketView
+from desk.marketdata.adapter import KBD_CURVE_ID, KBD_SPEC, OFZ_CLASSES, MarketView
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import EodContext, Outcome, attach_pnl, prepare, value
 from desk.pnl.flash import FlashCurves, explain
@@ -158,17 +158,23 @@ def test_coupon_received_in_the_window(ctx, outcomes):
 
 
 def test_bonds_are_discounted_on_ruonia(outcomes):
-    """The owner's decision of 20.10: a fixed RUB bond, OFZ or corporate, has its Z-spread to RUONIA OIS and its
-    rate DV01 on RUB RUONIA, none on the KBD (RUB OFZ, a market curve now)."""
-    assert outcomes
+    """The owner's decision of 20.10: a fixed corporate has its Z-spread to RUONIA OIS and its rate DV01 on RUB
+    RUONIA. R18: an OFZ is discounted on the OFZ curve (the KBD, its Z-spread to it) and its KBD DV01 is published
+    on RUB RUONIA and, the same buckets, on the OFZ-RUONIA basis; none stays on RUB OFZ (a market curve)."""
+    assert {o.terms.bond_class in OFZ_CLASSES for o in outcomes} == {True, False}
     for o in outcomes:
-        v = o.valuation
-        assert (v.discount_curve_id, v.spread_curve) == ("RUB_RUONIA_OIS", "RUB RUONIA"), o.secid
-        assert set(v.risk()) == {"RUB RUONIA"} and v.dv01_rub < 0 and v.spread01_rub < 0
-        assert not any("KBD" in a for a in v.assumptions)
+        v, r = o.valuation, o.valuation.risk()
+        assert v.dv01_rub < 0 and v.spread01_rub < 0 and not any("KBD" in a for a in v.assumptions)
+        if o.terms.bond_class in OFZ_CLASSES:
+            assert (v.discount_curve_id, v.spread_curve) == ("RUB_KBD", "RUB OFZ"), o.secid
+            assert set(r) == {"RUB RUONIA", "RUB OFZ-RUONIA"} and r["RUB RUONIA"] == r["RUB OFZ-RUONIA"] == v.buckets
+            assert v.dv01_rub == pytest.approx(sum(r["RUB RUONIA"].values()))  # the basis is not in the DV01
+        else:
+            assert (v.discount_curve_id, v.spread_curve) == ("RUB_RUONIA_OIS", "RUB RUONIA"), o.secid
+            assert set(r) == {"RUB RUONIA"}
 
 
-@pytest.mark.parametrize("secid,curves", [("SU29008RMFS8", {"RUB RUONIA"}),
+@pytest.mark.parametrize("secid,curves", [("SU29008RMFS8", {"RUB RUONIA", "RUB OFZ-RUONIA"}),
                                           ("RU000A109XR1", {"RUB RUONIA", "RUB KEY"})])
 def test_floater_rates_on_both_curves(ctx, secid, curves):
     """A floater's ``rates`` reprices its discount and projection curves: it matches the linear explain (DV01 per
@@ -185,17 +191,26 @@ def test_floater_rates_on_both_curves(ctx, secid, curves):
 
 
 def test_kbd_fallback_without_ruonia(ctx, outcomes):
-    """No RUONIA OIS curve in the market: the bonds are discounted on the KBD, say so (``assumed``) and carry their
-    DV01 on RUB OFZ; a PnL across the change of curve is the simple one (all in other), the run goes on."""
+    """No RUONIA OIS curve in the market: the corporates are discounted on the KBD, say so (``assumed``) and carry
+    their DV01 on RUB OFZ; a PnL across the change of curve is the simple one (all in other), the run goes on. An OFZ
+    is on the KBD on both dates (R18): exact, its risk on RUB OFZ without the split, a full flash PnL."""
     prev = shifted_prev(ctx, ctx.business_date - timedelta(days=1), kbd_only=True)
     prevs = [prev_outcome(prev, o) for o in outcomes]
+    ofz = {o.secid for o in outcomes if o.terms.bond_class in OFZ_CLASSES}
     for p in prevs:
         v = p.valuation
+        if p.secid in ofz:
+            assert (v.discount_curve_id, set(v.risk())) == ("RUB_KBD", {"RUB OFZ"})
+            assert not any("KBD" in a for a in v.assumptions)
+            continue
         assert (v.discount_curve_id, v.quality, set(v.risk())) == ("RUB_KBD", "assumed", {"RUB OFZ"})
         assert any("discounted on the KBD: no RUONIA OIS curve" in a for a in v.assumptions)
     cur = [dataclasses.replace(o) for o in outcomes]
     attach_pnl(prev, prevs, ctx, cur)
     for o in cur:
+        if o.secid in ofz:  # the D-1 risk has no basis to split by
+            assert o.pnl is not None and o.pnl.rates != 0.0 and o.pnl.rates_basis is None
+            continue
         assert o.pnl is not None and o.pnl.rates == 0.0 and o.pnl.other == pytest.approx(o.pnl.total)
         assert "discounted on RUB OFZ" in o.pnl.note
     # both dates on the KBD: the exact explain on it, as before the switch

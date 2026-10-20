@@ -11,7 +11,8 @@ market_value    a price today: q * (clean % * face / 100 + accrued). Accrued fro
                 else from the current coupon (rate * face * days / 365), else 0
 stale_price     the same with the last price of the previous ``LOOKBACK_DAYS`` calendar days
 model_price     no price, a usable fixed schedule: priced on the discount curve (RUONIA OIS, the KBD on a
-                date without it, ``EodContext.discount``) at the Z-spread to that curve carried from
+                date without it; the KBD for an OFZ, R18: ``EodContext.discount_for``) at the Z-spread to that
+                curve carried from
                 the latest earlier run (its model spread, or the bond's last market Z if newer;
                 desk store, S5), so the price moves with the curve only; without one at the
                 median Z of today's traded exact-priced bonds of the issuer, else of the bond
@@ -78,6 +79,7 @@ from .bonds import (
     face_on,
     fixed_schedule,
     next_offer,
+    split_ofz,
     value_bonds,
 )
 
@@ -228,7 +230,7 @@ def _schedule(t: BondTerms, d: date) -> tuple[Any, tuple[BondCashflow, ...], Any
 
 def _engine(ctx: EodContext, flows: tuple[BondCashflow, ...], kind: str, q: float, *,
             spread_bp: float | None = None, dirty: float | None = None) -> tuple[BondRiskEngine, Any]:
-    e = BondRiskEngine(BondRiskRequest(cashflows=flows, settlement_date=ctx.business_date, curve=ctx.discount[1],
+    e = BondRiskEngine(BondRiskRequest(cashflows=flows, settlement_date=ctx.business_date, curve=ctx.discount_for(kind)[1],
                                        spread_convention=SPREAD_CONVENTION,
                                        spread_kind=kind,  # type: ignore[arg-type]
                                        spread_bp=spread_bp, dirty_price_rub=dirty, quantity=q),
@@ -291,7 +293,7 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
     face_bd = face_on(t, bd)
     matured = not t.is_perpetual and (t.maturity_date is not None and t.maturity_date <= bd
                                       or face_bd is not None and face_bd <= 0)
-    disc_id, _, disc_note = ctx.discount
+    disc_id, _, disc_note = ctx.discount_for(kind)  # an OFZ on the KBD, its risk RUONIA + basis (R18, make)
     disc = RISK_CURVES[disc_id]
     curve = disc if face_ccy == "RUB" else ccy_curve(face_ccy)
     if is_fx:
@@ -351,6 +353,8 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
             kw.update(clean_pct=0.0, accrued_rub=0.0, face_rub=0.0, dirty_rub=0.0, pv_rub=0.0, ytm_pct=math.nan,
                       macaulay_years=0.0, modified_duration=0.0, z_spread_bp=math.nan, dv01_rub=0.0, buckets=zero,
                       curve_buckets={}, spread01_rub=0.0)
+        if kw.get("curve_buckets"):  # an OFZ's KBD risk on RUONIA + the basis (R18)
+            kw["curve_buckets"] = split_ofz(kw["curve_buckets"], ctx.has_ruonia)
         return BondValuation(secid=t.secid, quantity=q, valuation_date=bd, settlement=bd,
                              horizon_date=horizon, horizon_kind=hkind, current_coupon_pct=coupon_pct,
                              spread_kind=kind, calculation_id=f"desk-fallback:{quality}:{t.secid}:{bd}",

@@ -32,11 +32,13 @@ def test_intraday_cut_discounts_on_ruonia(tmp_path, own_day_quotes):
             assert v is None and o.reason == "core_missing_market_data"
             continue
         assert v is not None and v.price_basis == "last", (o.secid, o.reason, o.detail)
-        if own_day_quotes:
-            assert v.discount_curve_id == "RUB_RUONIA_OIS" and "RUB OFZ" not in v.risk()
+        if own_day_quotes:  # an OFZ on the KBD: RUONIA + the basis (R18); a corporate on RUONIA
+            assert v.discount_curve_id == ("RUB_KBD" if o.secid == OFZ else "RUB_RUONIA_OIS")
+            assert "RUB OFZ" not in v.risk() and ("RUB OFZ-RUONIA" in v.risk()) is (o.secid == OFZ)
             assert not any("KBD" in a for a in v.assumptions)
         else:
             assert (v.discount_curve_id, set(v.risk())) == ("RUB_KBD", {"RUB OFZ"})
-            assert v.quality == "assumed" and any("no RUONIA OIS curve in the market of 2026-10-16" in a
-                                                  for a in v.assumptions)
+            if o.secid != OFZ:  # an OFZ is on the KBD anyway
+                assert v.quality == "assumed" and any("no RUONIA OIS curve in the market of 2026-10-16" in a
+                                                      for a in v.assumptions)
     assert ("curve_error" in ctx.rates) is not own_day_quotes

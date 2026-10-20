@@ -31,6 +31,7 @@ from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
 from ..curves.rates import input_notes
 from ..pnl.reasons import METHOD_TEXT, REPORTED_METHOD, RUN_NO_POSITION_PNL, RUN_NO_PREV_MARKET, no_pnl_text
 from ..store import CURRENT_RUNS, DEFAULT_RUNS, slice_label
+from ..valuation.bonds import BASIS_CURVE
 
 PNL_KEYS = ("carry", "rolldown", "rates", "spread", "fx_gross", "fx_funding", "funding", "convexity",
             "new_trades", "other")
@@ -44,6 +45,8 @@ HISTORY_DAYS = 22  # tdm.assemble.HISTORY_DAYS
 
 RUONIA_DISCOUNT_VERSION = 4
 """``VALUATION_VERSION`` from which RUB bonds are discounted on RUONIA OIS (an older run has its risk on RUB OFZ)."""
+OFZ_BASIS_VERSION = 6
+"""``VALUATION_VERSION`` from which an OFZ's risk is RUONIA + the OFZ-RUONIA basis (R18; versions 4-5: RUONIA only)."""
 
 
 def risk_notes(run: dict[str, Any]) -> list[dict[str, Any]]:
@@ -57,6 +60,10 @@ def risk_notes(run: dict[str, Any]) -> list[dict[str, Any]]:
         out.append({"code": "run_before_ruonia", "curve": "RUB RUONIA", "detail": lin.get("logic_version"),
                     "text": "прогон посчитан до перехода на дисконтирование по RUONIA — риск облигаций на ОФЗ "
                             "(RUB OFZ); после обновления пересчитывается только последняя дата"})
+    elif m and int(m.group(1)) < OFZ_BASIS_VERSION:
+        out.append({"code": "run_before_ofz_basis", "curve": BASIS_CURVE, "detail": lin.get("logic_version"),
+                    "text": "прогон посчитан до выделения базиса ОФЗ–RUONIA — риск ОФЗ целиком на RUONIA (RUB RUONIA); "
+                            "после обновления пересчитывается только последняя дата"})
     return out
 
 
@@ -103,10 +110,13 @@ def _prev_weekday(d: date) -> date:
 
 
 def gamma_summary(rows, mv_rub, convexity, cs01) -> dict[str, Any]:
-    """As tdm.assemble.gamma_summary: RUB per bp^2 to parallel IR, to the spread and mixed."""
+    """As tdm.assemble.gamma_summary: RUB per bp^2 to parallel IR, to the spread and mixed. A parallel move of the
+    rates leaves the OFZ-RUONIA basis (R18) where it is: its factors are left out."""
     ir = cs = ircs = 0.0
     if rows:
         for a, b, v in rows:
+            if f"|{BASIS_CURVE}|" in a or f"|{BASIS_CURVE}|" in b:
+                continue
             k = 1 if a == b else 2
             ta, tb = a.split("|")[0], b.split("|")[0]
             if ta == "IR" and tb == "IR":

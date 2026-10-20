@@ -1,6 +1,6 @@
 import type { ScenarioDefOut, ScenarioDefinition } from '../api/types';
 import { snum } from '../format';
-import { N_BUCKETS, RUB_CURVES } from '../taylor/taylor';
+import { N_BUCKETS, RUB_RATE_CURVES } from '../taylor/taylor';
 
 /** What the user edits: a base definition (from a preset) plus a parallel add-on to every RUB curve. */
 export interface EditorState {
@@ -9,7 +9,7 @@ export interface EditorState {
 }
 
 /** The parallel add-on of a curve: every RUB curve moves with it (all rates), a currency's curve does not. */
-const addOf = (add: number, curve: string) => (RUB_CURVES.includes(curve) ? add : 0);
+const addOf = (add: number, curve: string) => (RUB_RATE_CURVES.includes(curve) ? add : 0);
 
 export const baseCurve = (def: ScenarioDefinition, curve: string): number[] => {
   const v = def.curves?.[curve] ?? 0;
@@ -19,7 +19,7 @@ export const baseCurve = (def: ScenarioDefinition, curve: string): number[] => {
 /** The definition sent to Taylor and to the exact job: the add-on on each RUB curve (an all-zero curve drops out). */
 export function effective({ base, add }: EditorState): ScenarioDefinition {
   const curves = { ...base.curves };
-  for (const c of RUB_CURVES) curves[c] = baseCurve(base, c).map(x => x + add);
+  for (const c of RUB_RATE_CURVES) curves[c] = baseCurve(base, c).map(x => x + add);
   return { ...base, curves };
 }
 
@@ -82,7 +82,7 @@ export function ScenarioEditor({ presets, presetId, onPreset, buckets, curves, c
         <div className="ph"><h2>Кривые</h2><span className="hint">б.п., шаг 5</span></div>
         <div className="pb">
           <Slider id="add" label="Параллельно" min={-500} max={500} value={add} onChange={v => onChange({ base, add: v })}
-            title={`Параллельная надбавка ко всем бакетам рублёвых кривых (${RUB_CURVES.join(', ')})`} />
+            title={`Параллельная надбавка ко всем бакетам рублёвых кривых ставок (${RUB_RATE_CURVES.join(', ')}; базис ОФЗ–RUONIA не меняется)`} />
           <select className="sel" value={curve} onChange={e => onCurve(e.target.value)} aria-label="Кривая">
             {curves.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
