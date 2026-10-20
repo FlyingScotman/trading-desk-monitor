@@ -35,8 +35,9 @@ EXCLUDED = {"runId": "the two stores number their runs independently",
                             "the run's market slice (R11): the desk store's only")}
 R10_RUN = {"pnlAvailable", "pnlReason", "pnlReasonText", "pnlCoverage"}
 """window.DESK keys compat adds (R10: a missing PnL is said, not shown as 0); tdm's assembler has none."""
-R10_PNL = {"available", "reason", "reasonText", "reasonDetail", "method", "methodText", "flag", "reported"}
-"""Keys of a position's ``pnl`` compat adds."""
+R10_PNL = {"available", "reason", "reasonText", "reasonDetail", "method", "methodText", "flag", "reported",
+           "noDecomp", "residual", "otherWhy"}
+"""Keys of a position's ``pnl`` compat adds (R21: ``other`` split into ``noDecomp`` and ``residual``)."""
 
 
 @pytest.fixture(scope="module")

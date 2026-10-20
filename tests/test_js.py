@@ -36,3 +36,7 @@ class ScenarioEngineJs(unittest.TestCase):
     def test_coupon_display(self):
         r = subprocess.run(["node", str(ROOT / "tests" / "js" / "coupon_r16.test.js")], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_drill_down_and_pnl_other_split(self):
+        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "drill_r19.test.js")], capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

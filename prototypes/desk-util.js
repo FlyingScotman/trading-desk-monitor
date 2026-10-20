@@ -33,6 +33,11 @@
       if (!e || e.available === false) return;   // PnL не посчитан: суммы остаются null, не 0
       if (e.funding == null) e.funding = 0;
       if (e.reported == null) e.reported = 0;   // PnL «по отчёту» (позиции, оценённые по отчёту): отдельной строкой
+      // R21: «Прочее» сервер делит на «Без разложения» и «Невязку цены» (other — их сумма); данные без деления — всё
+      // в «Без разложения», чтобы компоненты по-прежнему складывались во флэш
+      if (e.noDecomp == null && e.residual == null) { e.residual = 0; e.noDecomp = e.other || 0; }
+      if (e.noDecomp == null) e.noDecomp = (e.other || 0) - (e.residual || 0);
+      if (e.residual == null) e.residual = (e.other || 0) - e.noDecomp;
       if (e.fxBasis == null) e.fxBasis = 0;
       if (e.explainedCbr == null) e.explainedCbr = e.explained + e.fxBasis;
     });
@@ -610,7 +615,25 @@
       ksAvg: idxSeries('КС').reduce((a, b) => a + b, 0) / N, ksEnd: idxSeries('КС')[N - 1] };
   }
 
-  D.util = { sum, groupBy, bucketMatrix, netFx, runScenario, curveRate, hasPoints, pnlOk, pnlCover, pnlSum, pnlPartText, pnlNaHtml, pnlPartHtml,
+  // ---------- компоненты PnL (R21): подписи и «что это» — одни на всех страницах ----------
+  // k — поле p.pnl; split — компонента разложения «Прочего» (other = noDecomp + residual).
+  const PNL_PARTS = [
+    { k: 'carry', label: 'Кэрри', tip: 'Доход от течения времени при неизменных кривых и спреде: начисление купона, приближение к погашению; купоны и погашения дня — здесь.' },
+    { k: 'rolldown', label: 'Ролл-даун', tip: 'Скатывание по кривой: ставки на тех же сроках не изменились, а срок бумаги сократился на день.' },
+    { k: 'rates', label: 'Ставки', tip: 'Переоценка ядром при сдвиге кривых бумаги (дисконтной и проекционной) с D−1 на D при неизменном спреде.' },
+    { k: 'spread', label: 'Спред', tip: 'Переоценка от изменения Z-спреда бумаги к её кривой (спред D против спреда D−1).' },
+    { k: 'fx', label: 'FX', tip: 'Валютная переоценка: позиция в валюте × изменение курса (для облигации в валюте — FX-дельта D−1 × Δ курса).' },
+    { k: 'funding', label: 'Фондирование', tip: 'Стоимость фондирования бумаг за день (тело фондирования — к чистой MV).' },
+    { k: 'convexity', label: 'Выпуклость', tip: 'Эффект второго порядка. При полной переоценке ядром он уже внутри «Ставок» и «Спреда», поэтому здесь 0.' },
+    { k: 'newTrades', label: 'Новые сделки', tip: 'PnL сделок дня. Отдельно пока не считается: у позиций по отчёту сделки дня — внутри «По отчёту».' },
+    { k: 'noDecomp', label: 'Без разложения', split: 1, tip: 'Весь PnL позиций, которые ядро не переоценивает по шагам: оценка по рыночной, модельной или прошлой цене без денежных потоков (PnL = количество × Δ грязной цены + выплаты) или смена кривой дисконтирования. Разложить на кэрри / ставки / спред нельзя. Нажмите — позиции и причина у каждой.' },
+    { k: 'residual', label: 'Невязка цены', split: 1, tip: 'Остаток у бумаг с полным разложением ядром: рыночная грязная цена D минус стоимость вчерашних денежных потоков при сегодняшнем Z-спреде. Обычно около 0; заметна при смене графика (оферта, новый купон) или несогласованных цене и НКД.' },
+    { k: 'reported', label: 'По отчёту', tip: 'Разница отчётных стоимостей позиций, оценённых по отчёту (OTC, несопоставленные бумаги), за два дня; сделки дня внутри.' }
+  ];
+  const PNL_PART = {}; PNL_PARTS.forEach(x => { PNL_PART[x.k] = x; });
+  PNL_PART.other = { k: 'other', label: 'Прочее', tip: '«Без разложения» + «Невязка цены»: то, что не разложено на кэрри, ставки, спред и FX.' };
+
+  D.util = { sum, PNL_PARTS, PNL_PART, groupBy, bucketMatrix, netFx, runScenario, curveRate, hasPoints, pnlOk, pnlCover, pnlSum, pnlPartText, pnlNaHtml, pnlPartHtml,
     NO_RATING, NO_RATING_LABEL, isRated, ratingLabel, fundingFx, spreadShock, ownSpr01, ACCURACY_BP,
     runCarry, ksPath, carryEnd, indexAt, addDays, monthsAdd,
     baseCurve, yieldTenor, spreadTo, bondKey, bondRows, wavg, bondHistory, normHistory, couponView, couponText };

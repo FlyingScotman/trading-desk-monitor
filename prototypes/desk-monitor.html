@@ -258,8 +258,9 @@ details.pop summary::-webkit-details-marker{display:none}
 .cnt{font-size:11.5px;color:var(--fg-3)}
 
 /* drawer */
-.scrim{position:fixed;inset:0;background:rgba(5,9,14,.45);z-index:40}
-.drawer{position:fixed;top:0;right:0;bottom:0;width:min(540px,100vw);background:var(--panel);border-left:1px solid var(--line-2);box-shadow:var(--shadow);z-index:41;overflow-y:auto;padding:calc(env(safe-area-inset-top,0px) + 14px) 18px 30px}
+.scrim{position:fixed;inset:0;background:rgba(5,9,14,.45);z-index:52}
+/* карточка позиции — над панелью «из чего состоит» (desk-drill.js, z 50/51): клик по строке панели открывает её сверху */
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(540px,100vw);background:var(--panel);border-left:1px solid var(--line-2);box-shadow:var(--shadow);z-index:53;overflow-y:auto;padding:calc(env(safe-area-inset-top,0px) + 14px) 18px 30px}
 @media (prefers-reduced-motion:no-preference){.drawer:not([hidden]){animation:slin .18s ease-out}@keyframes slin{from{transform:translateX(24px);opacity:.6}}}
 .dr-h{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:10px}
 .dr-h h2{margin:0;font-size:17px;font-weight:600;text-wrap:balance}
@@ -443,6 +444,48 @@ const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const sum = U.sum;
 const $ = id => document.getElementById(id);
 
+/* ---------- R19: «из чего состоит число» (desk-drill.js) ----------
+   Клик по числу, столбику, ячейке открывает панель позиций, из которых оно сложено, с вкладом каждой; набор — тот же
+   P() (фильтр страницы), что и у числа. Без desk-drill.js (тестовый стенд) числа просто не кликаются. */
+const DR = D.drill || null;
+const dA = (key, fn, hint) => DR ? DR.attr(key, fn, hint) : '';
+const dOpen = fn => { if (DR) { const s = fn(); if (s) DR.open(s); } };
+const fNote = () => unfiltered() ? 'Весь деск.' : 'По текущему фильтру страницы: ' + P().length + ' поз.';
+// строки фондирования уровня книги (остатки ДС, РЕПО) — не позиции: отдельными строками панели
+const fundRows = (f, list) => (list || FU()).filter(x => !x.pnl.inPosition).map(x => ({name:'Фондирование книги: ' + x.type + ' ' + x.ccy, book:x.book,
+  value:f(x), sub:x.rateExpr ? 'ставка ' + x.rateExpr : '', extra:{method:'фондирование книги', quality:'—'}})).filter(r => isFinite(r.value) && r.value);
+const drPos = (l, f, o) => DR.pos(l, f, Object.assign({note:fNote()}, o, {note:[o && o.note, fNote()].filter(Boolean).join(' ')}));
+// DV01 по кривой и бакету (curve / bi null — все); null у позиции без риска на кривой
+function riskOf(p, curve, bi){
+  const cs = curve ? [curve] : Object.keys(p.risk || {}); let v = 0, any = false;
+  cs.forEach(c => { const a = p.risk && p.risk[c]; if (a) { any = true; v += bi == null ? sum(a) : a[bi]; } });
+  return any ? v : null;
+}
+const drRisk = (l, curve, bi, title) => drPos(l, p => riskOf(p, curve, bi), {title, unit:'тыс ₽/б.п.', scale:1e3, digits:1,
+  note:'DV01 по бакетам (key-rate): ₽ за 1 б.п. сдвига ставки кривой в бакете; сумма по бакетам — DV01 позиции на кривой.'});
+const drSum = (l, key, title, unit, scale, digits, note) => drPos(l, p => p[key], {title, unit, scale, digits, note});
+const ocpKind = p => p.ocpTransfer ? 'xfer' : p.instrType === 'BOND' ? 'bond' : p.instrType === 'FX' ? 'fx' : 'der';
+const OCP_PART = {bond:'облигации', fund:'фондирование', xfer:'перенос ОВП', der:'деривативы', fx:'FX'};
+function drOcp(l, c, part){   // part null — нетто ОВП (с фондированием по переключателю)
+  const pl = part === 'fund' ? [] : l.filter(p => p.fxDelta && p.fxDelta[c] && (!part || ocpKind(p) === part));
+  const fr = part === 'fund' || (!part && S.withFunding) ? FU().filter(f => f.fxDelta && f.fxDelta[c]).map(f => ({name:'Фондирование: ' + f.type, book:f.book, value:f.fxDelta[c], sub:f.rateExpr || ''})) : [];
+  return drPos(pl, p => p.fxDelta[c], {title:'ОВП ' + c + (part ? ' · ' + OCP_PART[part] : ' · нетто'), unit:'млн ' + c, scale:1e6, digits:2, extraRows:fr,
+    extra:p => ({kind:OCP_PART[ocpKind(p)]}), columns:[{key:'kind', label:'Часть'}], groups:[{key:'kind', label:'Часть ОВП'}],
+    note:'Валютная дельта позиций в валюте' + (fr.length ? ' и тела фондирования' : '') + '.'});
+}
+// PnL: компонента k (с учётом «с фондированием»), флэш, explain ЦБ, официальный, break — по позициям с PnL + строки фондирования книги
+const pnlOpt = o => Object.assign({unit:'млн ₽', scale:1e6, digits:3, signed:true}, o);   // как на вкладке PnL и в KPI
+const drPnlPart = (l, k) => DR.pnl(l, k, pnlOpt({value:p => pnlComp(p, k), note:fNote()}));
+const drPnl = (l, f, title, fundF, fl, note) => drPos(l.filter(U.pnlOk), f, pnlOpt({title, sub:DR.pnlWhy,
+  extra:p => ({method:p.pnl.methodText || p.pnl.method || '—', quality:DR.qual(p)}), columns:[{key:'quality', label:'Оценка'}],
+  groups:[{key:'method', label:'Метод'}, {key:'quality', label:'Оценка'}],
+  extraRows:S.withFunding && fundF ? fundRows(fundF, fl) : [], note}));
+const drFlash = (l, t, fl) => drPnl(l, flashOf, t || 'PnL дня · флэш (рынок)', f => f.pnl.carry + f.pnl.fx, fl, 'Флэш — переоценка по рыночным курсам: сумма компонент PnL позиций' + (S.withFunding ? ' и фондирование книги (остатки ДС, РЕПО).' : '.'));
+const drExpCbr = (l, t, fl) => drPnl(l, expCbrOf, t || 'PnL дня · explain по курсам ЦБ', f => f.pnl.carry + (f.pnl.fxCbr != null ? f.pnl.fxCbr : f.pnl.fx), fl, 'Флэш с FX-компонентами по курсам ЦБ вместо рыночных.');
+const drOff = (l, t, fl) => drPnl(l, p => offOf(p) || 0, t || 'PnL дня · официальный (ЦБ)', f => f.pnl.carry + (f.pnl.fxCbr != null ? f.pnl.fxCbr : f.pnl.fx), fl, 'Официальный PnL позиций (курсы ЦБ), T+1.');
+const drBasis = (l, t, fl) => drPnl(l, p => expCbrOf(p) - flashOf(p), t || 'PnL дня · курсы ЦБ − рынок', f => (f.pnl.fxCbr != null ? f.pnl.fxCbr : f.pnl.fx) - f.pnl.fx, fl, 'Разница FX-компонент по курсам ЦБ и по рыночным курсам.');
+const drUnexp = (l, t) => drPnl(l, p => p.pnl.unexplained, t || 'PnL дня · unexplained (официальный − explain ЦБ)', null, null, 'Break: официальный PnL минус explain по курсам ЦБ, по позициям.');
+
 /* ---------- storage ---------- */
 const store = {
   get(k){ try { return localStorage.getItem(k); } catch(e){ return null; } },
@@ -625,6 +668,8 @@ function ocpParts(list){
   return o;
 }
 const issuerExp = p => p.instrType === 'BOND' ? p.mvRub : p.instrType === 'CDS' ? (p.side === 'SELL' ? p.notional : -p.notional) : 0;
+const drIssuer = (l, g) => drPos(l.filter(p => p.issuerGroup === g), issuerExp, {title:'Экспозиция · ' + g, unit:'млрд ₽', scale:1e9, digits:3,
+  note:'MV облигаций группы эмитента плюс номинал проданной защиты CDS (купленная — с минусом).'});
 function issuerGroups(list){
   const g = {}; list.forEach(p => { if (!p.issuerGroup) return; const e = issuerExp(p); if (!e) return; (g[p.issuerGroup] = g[p.issuerGroup] || {name:p.issuerGroup, exp:0, n:0}); g[p.issuerGroup].exp += e; g[p.issuerGroup].n++; });
   return Object.values(g);
@@ -695,19 +740,19 @@ function renderKpi(){
   const chg = (cur, k) => hp && hp[k] != null ? `<span>vs вчера <span class="num${nc(cur - hp[k])}">${M(cur - hp[k],2,true)}</span></span>` : '';
   $('kpis').innerHTML = `
   <div class="kpi"><div class="kl"><span>DV01 итого</span><span></span></div>
-    <div class="kv${nc(dv)}">${M(dv,2)}<small>млн ₽/б.п.</small></div>
+    <div class="kv${nc(dv)}"${dA('kpi:dv01', () => drSum(P(), 'dv01', 'DV01 итого', 'млн ₽/б.п.', 1e6, 3, 'DV01 позиции — ₽ за 1 б.п. параллельного сдвига ставок.'))}>${M(dv,2)}<small>млн ₽/б.п.</small></div>
     <div class="ks">${unfiltered() ? chg(dv,'dv01') : ''}${spark(h.map(x => x.dv01), 66, 18)}</div></div>
   <div class="kpi"><div class="kl"><span>CS01 итого</span><span></span></div>
-    <div class="kv${nc(cs)}">${M(cs,2)}<small>млн ₽/б.п.</small></div>
-    <div class="ks">${unfiltered() ? chg(cs,'cs01') : ''}<span title="Чувствительность ОФЗ к их спреду относительно кривой, на которой считан риск ставок">спред ОФЗ <span class="num${nc(ofz)}">${M(ofz,2)}</span></span>${spark(h.map(x => x.cs01), 66, 18)}</div></div>
+    <div class="kv${nc(cs)}"${dA('kpi:cs01', () => drSum(P(), 'cs01', 'CS01 итого', 'млн ₽/б.п.', 1e6, 3, 'CS01 — ₽ за 1 б.п. роста кредитного спреда бумаги к её базовой кривой.'))}>${M(cs,2)}<small>млн ₽/б.п.</small></div>
+    <div class="ks">${unfiltered() ? chg(cs,'cs01') : ''}<span title="Чувствительность ОФЗ к их спреду относительно кривой, на которой считан риск ставок">спред ОФЗ <span class="num${nc(ofz)}"${dA('kpi:ofz', () => drSum(P().filter(p => p.ofzSpr01), 'ofzSpr01', 'Спред ОФЗ01', 'млн ₽/б.п.', 1e6, 3, 'Чувствительность ОФЗ к их спреду относительно кривой риска ставок.'))}>${M(ofz,2)}</span></span>${spark(h.map(x => x.cs01), 66, 18)}</div></div>
   <div class="kpi wide"><div class="kl"><span>ОВП ${S.withFunding ? 'с фондированием' : 'без фондирования'}</span><span>млн вал. · млн ₽ экв.</span></div>
-    <div class="ocp">${CCYS.map(c => `<span>${c}</span><span class="num${nc(o[c].net)}">${M(o[c].net,1,true)}</span><span class="num muted">${num(o[c].net * D.FX[c] / 1e6,0,true)} млн ₽</span>`).join('')}</div></div>
+    <div class="ocp">${CCYS.map(c => `<span>${c}</span><span class="num${nc(o[c].net)}"${dA('kpi:ocp:' + c, () => drOcp(P(), c, null))}>${M(o[c].net,1,true)}</span><span class="num muted">${num(o[c].net * D.FX[c] / 1e6,0,true)} млн ₽</span>`).join('')}</div></div>
   <div class="kpi"><div class="kl"><span>PnL дня</span><span>флэш · рынок</span></div>
-    <div class="kv${nc(flash)}">${flash == null ? naHtml(pc.tip) : M(flash,1,true)}<small>млн ₽</small></div>
-    <div class="ks">${partHtml(pc)}${!has ? `<span class="muted" title="${esc(pc.tip)}">не посчитан</span>` : off == null ? '<span class="muted">офиц. — ожидается T+1</span>' : `<span title="Официальный PnL (курсы ЦБ)">офиц. <span class="num${nc(off)}">${M(off,1,true)}</span></span><span title="Официальный − explain по курсам ЦБ">break <span class="num${nc(off-expC)}">${M(off-expC,1,true)}</span></span>`}${spark(h.map(x => x.pnlOfficial), 66, 18)}</div></div>
+    <div class="kv${nc(flash)}"${flash == null ? '' : dA('kpi:pnl', () => drFlash(P()))}>${flash == null ? naHtml(pc.tip) : M(flash,1,true)}<small>млн ₽</small></div>
+    <div class="ks">${partHtml(pc)}${!has ? `<span class="muted" title="${esc(pc.tip)}">не посчитан</span>` : off == null ? '<span class="muted">офиц. — ожидается T+1</span>' : `<span title="Официальный PnL (курсы ЦБ)">офиц. <span class="num${nc(off)}"${dA('kpi:off', () => drOff(P()))}>${M(off,1,true)}</span></span><span title="Официальный − explain по курсам ЦБ">break <span class="num${nc(off-expC)}"${dA('kpi:brk', () => drPnl(P(), p => (offOf(p) || 0) - expCbrOf(p), 'Break: официальный − explain по курсам ЦБ'))}>${M(off-expC,1,true)}</span></span>`}${spark(h.map(x => x.pnlOfficial), 66, 18)}</div></div>
   <div class="kpi"><div class="kl"><span>MV брутто / нетто</span><span>${l.length} поз.</span></div>
-    <div class="kv">${BN(gross,1)}<small>млрд ₽</small></div>
-    <div class="ks"><span>нетто <span class="num${nc(net)}">${BN(net,1)}</span> млрд ₽</span></div></div>`;
+    <div class="kv"${dA('kpi:gross', () => drPos(P(), p => p.mvRub == null ? null : Math.abs(p.mvRub), {title:'MV брутто', unit:'млрд ₽', scale:1e9, digits:3, note:'Сумма |MV| позиций.'}))}>${BN(gross,1)}<small>млрд ₽</small></div>
+    <div class="ks"><span>нетто <span class="num${nc(net)}"${dA('kpi:net', () => drSum(P(), 'mvRub', 'MV нетто', 'млрд ₽', 1e9, 3, 'Сумма MV позиций (короткие — с минусом).'))}>${BN(net,1)}</span> млрд ₽</span></div></div>`;
 }
 
 /* ---------- header: filters ---------- */
@@ -759,7 +804,7 @@ function rSummary(){
   const l = P(), m = U.bucketMatrix(l);
   // DV01 by curve
   const cv = CURVES.map(c => sum(m[c]) / 1e3);
-  chart('c-sum-curve', opt({
+  const cc = chart('c-sum-curve', opt({
     grid:{left:6, right:24, top:6, bottom:4},
     tooltip:{valueFormatter:v => num(v,0) + ' тыс ₽/б.п.'},
     yAxis:xCat(CURVES.map(c => D.CURVES[c].name), {inverse:true, axisLabel:{color:TK.fg_2, fontSize:11, fontFamily:TK.ui}}),
@@ -767,21 +812,23 @@ function rSummary(){
     series:[{type:'bar', name:'DV01', barWidth:'52%', data:cv.map(v => ({value:v, itemStyle:{color:v < 0 ? TK.neg : TK.pos, borderRadius:v < 0 ? [2,0,0,2] : [0,2,2,0]},
       label:{show:true, position:v < 0 ? 'left' : 'right', color:TK.fg_2, fontFamily:TK.mono, fontSize:10.5, formatter:() => num(v,0)}}))}]
   }));
+  if (cc && DR) cc.on('click', pp => dOpen(() => drRisk(P(), CURVES[pp.dataIndex], null, 'DV01 · ' + D.CURVES[CURVES[pp.dataIndex]].name)));
   // DV01 by bucket
   const sel = $('sum-bview');
   sel.innerHTML = [['RUB','RUB-кривые (стек)'],['ALL','Все кривые (стек)']].concat(CURVES.map(c => [c, D.CURVES[c].name])).map(o => `<option value="${esc(o[0])}"${S.sum.bview === o[0] ? ' selected' : ''}>${esc(o[1])}</option>`).join('');
   const show = S.sum.bview === 'RUB' ? CURVES.filter(c => D.CURVES[c].ccy === 'RUB') : S.sum.bview === 'ALL' ? CURVES : [S.sum.bview];
-  chart('c-sum-bucket', opt({
+  const cb = chart('c-sum-bucket', opt({
     legend:legend({data:show.map(c => D.CURVES[c].name)}),
     tooltip:{valueFormatter:v => num(v,0) + ' тыс ₽/б.п.'},
     xAxis:xCat(B), yAxis:yVal(),
     series:show.map(c => ({type:'bar', name:D.CURVES[c].name, stack:'dv', barWidth:'58%', itemStyle:{color:curveColor(c), borderColor:TK.panel, borderWidth:show.length > 1 ? 1 : 0},
       emphasis:{focus:'series'}, data:m[c].map(v => +(v/1e3).toFixed(1))}))
   }));
+  if (cb && DR) cb.on('click', pp => { const c = show[pp.seriesIndex]; if (c) dOpen(() => drRisk(P(), c, pp.dataIndex, 'DV01 · ' + D.CURVES[c].name + ' · ' + B[pp.dataIndex])); });
   // segments
   const segL = SEGS.map(s => sum(l.filter(p => segOf(p) === s && p.mvRub > 0), p => p.mvRub)/1e9);
   const segS = SEGS.map(s => sum(l.filter(p => segOf(p) === s && p.mvRub < 0), p => p.mvRub)/1e9);
-  chart('c-sum-seg', opt({
+  const cs = chart('c-sum-seg', opt({
     legend:legend({data:['Длинные','Короткие']}),
     grid:{left:6, right:20, top:28, bottom:4},
     tooltip:{valueFormatter:v => num(v,2) + ' млрд ₽'},
@@ -792,10 +839,12 @@ function rSummary(){
       {type:'bar', name:'Короткие', stack:'s', barWidth:'50%', itemStyle:{color:TK.cat[1]}, data:segS}
     ]
   }));
+  if (cs && DR) cs.on('click', pp => { const s = SEGS[pp.dataIndex], long = pp.seriesIndex === 0;
+    dOpen(() => drPos(P().filter(p => segOf(p) === s && (long ? p.mvRub > 0 : p.mvRub < 0)), p => p.mvRub, {title:'MV · ' + (SEG_LABEL[s] || s) + ' · ' + (long ? 'длинные' : 'короткие'), unit:'млрд ₽', scale:1e9, digits:3})); });
   // issuers top10
   const ig = issuerGroups(l).sort((a,b) => Math.abs(b.exp) - Math.abs(a.exp)).slice(0,10), igMx = ig.length ? Math.abs(ig[0].exp) : 1;
   $('sum-issuers').innerHTML = ig.length ? `<div class="ll"><span class="h">Группа</span><span class="h"></span><span class="h" style="text-align:right">млрд ₽</span><span class="h" style="text-align:right">поз.</span>` +
-    ig.map(g => `<span class="nm" title="${esc(g.name)}">${esc(g.name)}</span>${mbar(g.exp/igMx)}<span class="num${nc(g.exp)}">${BN(g.exp,2)}</span><span class="num muted">${g.n}</span>`).join('') + '</div>'
+    ig.map(g => `<span class="nm" title="${esc(g.name)}">${esc(g.name)}</span>${mbar(g.exp/igMx)}<span class="num${nc(g.exp)}"${dA('sum:iss:' + g.name, () => drIssuer(P(), g.name))}>${BN(g.exp,2)}</span><span class="num muted">${g.n}</span>`).join('') + '</div>'
     : '<p class="note">Нет эмитентского риска в выбранном фильтре.</p>';
   // history
   const h = D.history;
@@ -851,14 +900,15 @@ function rPositions(){
   const lead = Math.max(1, cols.findIndex(c => c.sum) === -1 ? cols.length : cols.findIndex(c => c.sum));
   const aggRow = (cls, label, list, attrs) => `<tr class="${cls}"${attrs || ''}><td colspan="${lead}">${label}</td>` + cols.slice(lead).map(c => {
     if (!c.sum) return '<td></td>';
+    const where = label.replace(/<[^>]+>/g, '').replace(/^▾/, '').trim(), dd = dA(() => colSpec(c, list, where));
     if (c.pnl) {  // итог PnL — только по позициям с PnL: «—», если ни у одной нет, подсказка «частично», если не у всех
       const pc = U.pnlCover(list);
       if (pc.none) return `<td class="n">${naHtml(pc.tip)}</td>`;
       const s = sum(list, p => colVal(c,p) || 0);
-      return `<td class="n${nc(s)}"${pc.partial ? ` title="${esc(pc.tip)}"` : ''}>${num(s, c.d)}${pc.partial ? '<sup class="muted">*</sup>' : ''}</td>`;
+      return `<td class="n${nc(s)}"${dd}${pc.partial ? ` title="${esc(pc.tip)}"` : ''}>${num(s, c.d)}${pc.partial ? '<sup class="muted">*</sup>' : ''}</td>`;
     }
     const s = sum(list, p => colVal(c,p) || 0);
-    return `<td class="n${nc(s)}">${num(s, c.d)}</td>`;
+    return `<td class="n${nc(s)}"${dd}>${num(s, c.d)}</td>`;
   }).join('') + '</tr>';
   const rowHtml = p => `<tr class="click${p.newToday ? ' new' : ''}${S.pos.sel === p.id ? ' sel' : ''}" tabindex="0" data-act="pos" data-v="${p.id}">${cols.map(c => cellHtml(c,p)).join('')}</tr>`;
   let body = '';
@@ -882,6 +932,12 @@ function rPositions(){
   $('pos-group').value = S.pos.group;
   if ($('pos-q').value !== S.pos.q) $('pos-q').value = S.pos.q;
   $('colpop').querySelector('summary').textContent = 'Колонки · ' + cols.length + '/' + COLS.length;
+}
+// колонка таблицы позиций по строкам группы / итога: значения — в единицах колонки (как в таблице)
+function colSpec(c, list, where){
+  const [name, unit] = c.t.split(', '), l = c.pnl ? list.filter(U.pnlOk) : list, nNa = list.length - l.length;
+  return drPos(l, p => colVal(c, p), {title:name + ' · ' + where, unit:unit || '', digits:c.d, sub:c.pnl ? DR.pnlWhy : null,
+    note:'Сумма колонки по позициям строки.' + (nNa ? ' Без PnL ' + nNa + ' поз. — не входят.' : '')});
 }
 function renderColPop(){
   $('colpop-b').innerHTML = COLS.map(c => `<label><input type="checkbox" data-col="${c.k}"${S.pos.cols.has(c.k) ? ' checked' : ''}>${esc(c.t)}</label>`).join('');
@@ -973,7 +1029,8 @@ function rBonds(){
     return `<td${c.mono ? ' class="mono"' : ''}>${esc(c.f ? c.f(v) : (v == null || v === '' ? '—' : v))}</td>`;
   };
   const aggRow = (cls, label, list, attrs) => `<tr class="${cls}"${attrs || ''}><td colspan="${cols.findIndex(c => c.k === 'ty')}">${label}</td>` + cols.slice(cols.findIndex(c => c.k === 'ty')).map(c => {
-    const v = bdAgg(c, list); return v === undefined ? '<td></td>' : `<td class="n${c.sg ? nc(v) : ''}">${num(v, c.d)}</td>`; }).join('') + '</tr>';
+    const v = bdAgg(c, list), dd = c.sum ? dA(() => bdSpec(list, c.v, c.t.split(', ')[0] + ' · ' + label.replace(/<[^>]+>/g, '').trim(), c.t.split(', ')[1] || '', 1, c.d)) : '';
+    return v === undefined ? '<td></td>' : `<td class="n${c.sg ? nc(v) : ''}"${dd}>${num(v, c.d)}</td>`; }).join('') + '</tr>';
   const rowHtml = r => `<tr class="click${r.newToday ? ' new' : ''}${U.bondKey(r.p) === S.bd.sel ? ' sel' : ''}" tabindex="0" data-act="bdsel" data-v="${esc(U.bondKey(r.p))}">${cols.map(c => cell(c, r)).join('')}</tr>`;
   let body = '';
   if (S.bd.group === 'none') body = rows.map(rowHtml).join('');
@@ -989,13 +1046,21 @@ function rBonds(){
   $('bd-tw').innerHTML = `<table class="t"><thead>${head}</thead><tbody>${body || `<tr><td colspan="${cols.length}" class="muted" style="padding:16px 8px">Нет облигаций по текущему фильтру и поиску.</td></tr>`}</tbody><tfoot>${aggRow('tot', 'Итого · ' + rows.length + ' ' + plural(rows.length,'выпуск','выпуска','выпусков'), rows)}</tfoot></table>`;
   $('bd-cnt').textContent = rows.length + ' ' + plural(rows.length,'выпуск','выпуска','выпусков') + ' · ' + sum(rows, r => r.positions.length) + ' поз.';
   const wy = U.wavg(rows, r => r.p.ytm, bdW), ws = U.wavg(rows, r => bdSpr(r), bdW), wd = U.wavg(rows, r => r.p.mdur, bdW), wsd = U.wavg(rows, r => r.p.sprDur, bdW);
-  $('bd-sum').innerHTML = [['MV', BN(sum(rows, r => r.mvRub),2) + ' млрд ₽'], ['Доходность', wy == null ? '—' : num(wy,2) + '%'],
+  $('bd-sum').innerHTML = [['MV', BN(sum(rows, r => r.mvRub),2) + ' млрд ₽', dA('bd:mv', () => bdSpec(bdRowsFiltered(), r => r.mvRub, 'MV облигаций', 'млрд ₽', 1e9, 3))], ['Доходность', wy == null ? '—' : num(wy,2) + '%'],
     [S.bd.curve === 'own' ? 'Расч. спред' : 'Спред к ' + (S.bd.curve === 'base' ? 'баз. кривой' : S.bd.curve), ws == null ? '—' : num(ws,0) + ' б.п.'],
-    ['Мод. дюрация', num(wd,2)], ['Спред-дюрация', num(wsd,2)], ['DV01', K(sum(rows, r => r.dv01),0) + ' тыс ₽/б.п.'], ['CS01', K(sum(rows, r => r.cs01),0) + ' тыс ₽/б.п.'],
-    ['PnL дня', rows.some(r => r.pnl != null) ? M(sum(rows, r => r.pnl || 0),1,true) + ' млн ₽' : '—']].map(x => `<span>${x[0]}<b>${x[1]}</b></span>`).join('') + '<span class="muted">средние — по |MV|</span>';
+    ['Мод. дюрация', num(wd,2)], ['Спред-дюрация', num(wsd,2)], ['DV01', K(sum(rows, r => r.dv01),0) + ' тыс ₽/б.п.', dA('bd:dv01', () => bdSpec(bdRowsFiltered(), r => r.dv01, 'DV01 облигаций', 'тыс ₽/б.п.', 1e3, 1))],
+    ['CS01', K(sum(rows, r => r.cs01),0) + ' тыс ₽/б.п.', dA('bd:cs01', () => bdSpec(bdRowsFiltered(), r => r.cs01, 'CS01 облигаций', 'тыс ₽/б.п.', 1e3, 1))],
+    ['PnL дня', rows.some(r => r.pnl != null) ? M(sum(rows, r => r.pnl || 0),1,true) + ' млн ₽' : '—', rows.some(r => r.pnl != null) ? dA('bd:pnl', () => bdSpec(bdRowsFiltered(), r => r.pnl, 'PnL дня облигаций · флэш', 'млн ₽', 1e6, 2)) : '']].map(x => `<span>${x[0]}<b${x[2] || ''}>${x[1]}</b></span>`).join('') + '<span class="muted">средние — по |MV|</span>';
   // карта и история — порознь: ошибка в одной не оставляет пустой другую
   try { rBondMap(rows); } catch (e) { console.error('карта доходностей', e); $('bd-map-note').textContent = 'Карта не построена: ' + e.message; }
   try { rBondHist(rows); } catch (e) { console.error('история выпуска', e); $('bd-h-note').textContent = 'История не построена: ' + e.message; }
+}
+// выпуски (строки U.bondRows) как строки панели «из чего состоит»: позиции выпуска сложены, клик — карточка первой
+function bdSpec(rows, f, title, unit, scale, digits){
+  return {title, unit, scale, digits, note:'Сумма по выпускам облигаций в таблице (позиции одного выпуска сложены). ' + fNote(),
+    rows:rows.map(r => ({id:r.positions[0].id, name:r.p.name, isin:r.p.isin, book:r.books.length === 1 ? r.books[0] : null,
+      bookName:r.books.map(b => D.BOOKS[b].name).join(', '), issuer:r.p.issuer, segment:r.p.segment, value:f(r),
+      sub:r.positions.length > 1 ? r.positions.length + ' поз.' : (r.pnl != null && U.pnlOk(r.p) ? DR.pnlWhy(r.p) : '')})).filter(x => x.value != null && isFinite(x.value))};
 }
 // карта доходностей: бумаги одной валюты с фикс. купоном против кривой
 // кривая без точек (валютная заглушка «USD …» несёт только риск) на карту не идёт
@@ -1105,9 +1170,14 @@ function bucketSvg(vals){
   });
   return s + '</svg>';
 }
-// «По отчёту» — разница отчётных стоимостей позиций, оценённых по отчёту (OTC, несопоставленные): отдельной строкой
-const PNL_KEYS = [['carry','Кэрри'],['rolldown','Ролл-даун'],['rates','Ставки'],['spread','Спред'],['fx','FX'],['funding','Фондирование'],['convexity','Выпуклость'],['newTrades','Новые сделки'],['other','Прочее'],['reported','По отчёту']];
+// Компоненты PnL — DESK.util.PNL_PARTS (подписи и «что это»). R21: бывшее «Прочее» — две компоненты: «Без разложения»
+// (весь PnL позиций без пересчёта ядром по шагам) и «Невязка цены» (остаток у бумаг с разложением); «По отчёту» —
+// разница отчётных стоимостей позиций, оценённых по отчёту. Эти три показываются, только когда не нулевые.
+const PNL_KEYS = U.PNL_PARTS.map(x => [x.k, x.label]);
+const PNL_OPT = new Set(['noDecomp','residual','reported']);
+const pnlTip = k => (U.PNL_PART[k] || {}).tip || '';
 const WF_SHORT = {'Выпуклость':'Выпукл.','Новые сделки':'Новые\nсделки','Фондирование':'Фондир.','Фонд. ДС/РЕПО':'Фонд.\nДС/РЕПО','Фонд. FX ДС':'Фонд.\nFX ДС','По отчёту':'По\nотчёту',
+  'Без разложения':'Без\nразлож.','Невязка цены':'Невязка\nцены',
   'Флэш (рынок)':'Флэш\n(рынок)','Курсы ЦБ':'Курсы\nЦБ','Unexplained':'Unexpl.','Официальный (ЦБ)':'Офиц.\n(ЦБ)'};
 // значение компоненты PnL позиции с учётом переключателя «с фондированием»
 const pnlComp = (p, k) => S.withFunding ? p.pnl[k] : k === 'funding' ? 0 : k === 'fx' ? (p.pnl.fxGross != null ? p.pnl.fxGross : p.pnl.fx) : p.pnl[k];
@@ -1149,7 +1219,7 @@ function openDrawer(id){
   ].filter(x => x[1] != null && x[1] !== '');
   const curves = Object.keys(p.risk || {});
   const e = p.pnl, mx = Math.max(...PNL_KEYS.map(k => Math.abs(e[k[0]] || 0)), Math.abs(e.official || 0), Math.abs(e.explained || 0), Math.abs(e.unexplained || 0)) || 1;
-  const pr = (lbl, v, cls) => `<span class="${cls || ''}">${lbl}</span><span class="${cls || ''}" style="display:flex;align-items:center"><span class="mb" style="width:100%"><i class="${v < 0 ? 'm' : 'p'}" style="width:${(Math.abs(v)/mx*50).toFixed(1)}%"></i></span></span><span class="num${nc(v)} ${cls || ''}">${K(v,0,true)}</span>`;
+  const pr = (lbl, v, cls, tip) => `<span class="${cls || ''}"${tip ? ` title="${esc(tip)}"` : ''}>${lbl}</span><span class="${cls || ''}" style="display:flex;align-items:center"><span class="mb" style="width:100%"><i class="${v < 0 ? 'm' : 'p'}" style="width:${(Math.abs(v)/mx*50).toFixed(1)}%"></i></span></span><span class="num${nc(v)} ${cls || ''}">${K(v,0,true)}</span>`;
   const own = D.funding.find(f => f.positionId === p.id), fl = D.funding.filter(f => f.book === p.book && f.positionId == null);
   const bookMv = sum(D.positions.filter(x => x.book === p.book && x.instrType === 'BOND'), x => x.mvRub), bookFund = -sum(D.funding.filter(f => f.book === p.book), f => f.amountRub);
   const bmk = own ? benchRate(own) : null;
@@ -1162,8 +1232,9 @@ function openDrawer(id){
     <div class="dr-s bk"><h4>DV01 по бакетам, тыс ₽/б.п.</h4>${curves.length ? curves.map(c => `<div class="cap"><span>${esc(D.CURVES[c].name)}</span><span class="mono">${K(sum(p.risk[c]),1)}</span></div>${bucketSvg(p.risk[c])}`).join('') : '<p class="note">Нет процентного риска по кривым (CDS / спот FX).</p>'}</div>
     ${!U.pnlOk(p) ? `<div class="dr-s"><h4>PnL за день, тыс ₽</h4><div class="pnl-b"><span class="sum">Флэш (рынок)</span><span></span><span class="num sum">${naHtml(pnlWhy(p))}</span></div>
       <p class="note" style="margin-top:6px">${esc(pnlWhy(p))}</p></div>`
-    : `<div class="dr-s"><h4>PnL за день, тыс ₽</h4><div class="pnl-b">${PNL_KEYS.filter(k => k[0] !== 'reported' || e.reported).map(k => pr(k[1], e[k[0]] || 0)).join('')}${pr('Флэш (рынок)', e.explained, 'sum')}${pr('Курсы ЦБ − рынок', e.fxBasis || 0)}${pr('Explain (ЦБ)', e.explainedCbr != null ? e.explainedCbr : e.explained, 'sum')}${e.official == null ? '' : pr('Unexplained', e.unexplained) + pr('Официальный (ЦБ)', e.official, 'sum')}</div>
+    : `<div class="dr-s"><h4>PnL за день, тыс ₽</h4><div class="pnl-b">${PNL_KEYS.filter(k => !PNL_OPT.has(k[0]) || Math.abs(e[k[0]] || 0) >= 0.5).map(k => pr(k[1], e[k[0]] || 0, '', pnlTip(k[0]))).join('')}${pr('Флэш (рынок)', e.explained, 'sum')}${pr('Курсы ЦБ − рынок', e.fxBasis || 0)}${pr('Explain (ЦБ)', e.explainedCbr != null ? e.explainedCbr : e.explained, 'sum')}${e.official == null ? '' : pr('Unexplained', e.unexplained) + pr('Официальный (ЦБ)', e.official, 'sum')}</div>
       ${pnlHow(p) ? `<p class="note" style="margin-top:6px">${esc(pnlHow(p))}</p>` : ''}
+      ${e.otherWhy ? `<p class="note" style="margin-top:4px">«${esc(Math.abs(e.residual || 0) > Math.abs(e.noDecomp || 0) ? 'Невязка цены' : 'Без разложения')}»: ${esc(e.otherWhy)}</p>` : ''}
       ${e.breakNote ? `<div class="brk"><b>Break:</b> ${esc(e.breakNote)}</div>` : ''}</div>`}
     ${own ? `<div class="dr-s"><h4>Фондирование бумаги</h4>
       <dl class="kvl"><div><dt>Тип</dt><dd>${esc(own.type)}</dd></div><div><dt>Тело</dt><dd>${M(own.amount,2)} млн ${own.ccy} (${M(own.amountRub,1)} млн ₽)</dd></div>
@@ -1189,7 +1260,7 @@ function closeDrawer(){
 /* ======================= 3. Риски по кривым ======================= */
 function rRisk(){
   { const l0 = P(), kd = sum(l0, p => sum((p.risk && p.risk['RUB KEY']) || [])), ofz = sum(l0, p => p.ofzSpr01 || 0), cs = sum(l0, p => p.cs01);
-    $('risk-extra').innerHTML = `<span title="Чувствительность ОФЗ к их спреду относительно кривой, на которой считан риск ставок (в прогоне — КБД, в демо — RUONIA)">спред ОФЗ01 <b class="num${nc(ofz)}">${K(ofz,0)}</b></span> · <span title="CS01: чувствительность к кредитному спреду бумаг к их базовой кривой">CS01 <b class="num${nc(cs)}">${K(cs,0)}</b></span> · <span title="DV01 на кривой RUB KEY: чувствительность к ключевой ставке (флоатеры на КС, свопы на КС)">DV01 на КС <b class="num${nc(kd)}">${K(kd,0)}</b></span> тыс ₽/б.п.`; }
+    $('risk-extra').innerHTML = `<span title="Чувствительность ОФЗ к их спреду относительно кривой, на которой считан риск ставок (в прогоне — КБД, в демо — RUONIA)">спред ОФЗ01 <b class="num${nc(ofz)}"${dA('risk:ofz', () => drSum(P().filter(p => p.ofzSpr01), 'ofzSpr01', 'Спред ОФЗ01', 'тыс ₽/б.п.', 1e3, 1))}>${K(ofz,0)}</b></span> · <span title="CS01: чувствительность к кредитному спреду бумаг к их базовой кривой">CS01 <b class="num${nc(cs)}"${dA('risk:cs01', () => drSum(P(), 'cs01', 'CS01', 'тыс ₽/б.п.', 1e3, 1))}>${K(cs,0)}</b></span> · <span title="DV01 на кривой RUB KEY: чувствительность к ключевой ставке (флоатеры на КС, свопы на КС)">DV01 на КС <b class="num${nc(kd)}"${dA('risk:key', () => drRisk(P(), 'RUB KEY', null, 'DV01 на КС (RUB KEY)'))}>${K(kd,0)}</b></span> тыс ₽/б.п.`; }
   if (!D.CURVES[S.risk.curve] && CURVES.length) { S.risk.curve = CURVES[0]; S.risk.cell = null; }  // the default (RUB RUONIA) is the demo's: a run may publish other curves only
   const l = P(), mode = S.risk.mode, curve = S.risk.curve;
   document.querySelectorAll('#risk-mode button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === mode));
@@ -1222,9 +1293,10 @@ function rRisk(){
       h += `<td><button type="button" class="cb${z ? ' zero' : ''}${isOn(r,i) ? ' on' : ''}" data-act="cell" data-r="${esc(r.key)}" data-b="${i}" style="${z ? 'background:transparent' : `background:${c.bg};color:${c.fg}`}" title="${esc(r.label)} × ${B[i]}: ${K(v,1)} тыс ₽/б.п.">${z ? '·' : K(v,0)}</button></td>`;
     });
     const rt = sum(r.vals);
-    h += `<td class="tot${nc(rt)}">${K(rt,0)}</td></tr>`;
+    h += `<td class="tot${nc(rt)}"${dA('risk:row:' + r.key, () => mode === 'curves' ? drRisk(P(), r.key, null, 'DV01 · ' + r.label) : drRisk(P().filter(p => p.book === r.key), curve, null, 'DV01 · ' + D.CURVES[curve].name + ' · ' + r.label))}>${K(rt,0)}</td></tr>`;
   });
-  h += `</tbody><tfoot><tr><th class="rl">Итого</th>${colT.map(v => `<td class="tot${nc(v)}">${K(v,0)}</td>`).join('')}<td class="tot${nc(tot)}">${K(tot,0)}</td></tr></tfoot></table>`;
+  const colL = () => mode === 'curves' ? P() : P().filter(p => rows.some(r => r.key === p.book));
+  h += `</tbody><tfoot><tr><th class="rl">Итого</th>${colT.map((v,i) => `<td class="tot${nc(v)}"${dA('risk:col:' + i, () => drRisk(colL(), mode === 'curves' ? null : curve, i, 'DV01 · ' + (mode === 'curves' ? 'все кривые' : D.CURVES[curve].name) + ' · ' + B[i]))}>${K(v,0)}</td>`).join('')}<td class="tot${nc(tot)}"${dA('risk:tot', () => drRisk(colL(), mode === 'curves' ? null : curve, null, 'DV01 · ' + (mode === 'curves' ? 'все кривые' : D.CURVES[curve].name)))}>${K(tot,0)}</td></tr></tfoot></table>`;
   $('risk-hm').innerHTML = rows.length ? h : '<p class="note">Нет процентного риска по выбранной кривой в текущем фильтре.</p>';
   const cl = divCell(-mx, mx), cr = divCell(mx, mx), cm = divCell(0, mx);
   $('risk-legend').innerHTML = `<span>− теряет при росте ставок</span><span class="gr" style="background:linear-gradient(90deg,${cl.bg},${cm.bg},${cr.bg})"></span><span>+ выигрывает</span><span class="mono">±${K(mx,0)}</span>`;
@@ -1247,7 +1319,7 @@ function rRisk(){
   const lv = U.bucketMatrix(l, [curve])[curve].map(v => v/1e3);
   let cum = 0; const cumv = lv.map(v => (cum += v));
   $('risk-lad-title').textContent = 'Лестница DV01 · ' + D.CURVES[curve].name;
-  chart('c-risk-ladder', opt({
+  const lc = chart('c-risk-ladder', opt({
     legend:legend({data:['DV01 бакета','Накопленный']}),
     tooltip:{valueFormatter:v => num(v,0) + ' тыс ₽/б.п.'},
     xAxis:xCat(B), yAxis:yVal(),
@@ -1256,6 +1328,8 @@ function rRisk(){
       {type:'line', name:'Накопленный', data:cumv.map(v => +v.toFixed(1)), symbol:'circle', symbolSize:5, lineStyle:{width:2, color:TK.fg_2}, itemStyle:{color:TK.fg_2}}
     ]
   }));
+  if (lc && DR) lc.on('click', pp => dOpen(() => pp.seriesIndex === 0 ? drRisk(P(), curve, pp.dataIndex, 'DV01 · ' + D.CURVES[curve].name + ' · ' + B[pp.dataIndex])
+    : drPos(P(), p => { const a = p.risk && p.risk[curve]; return a ? sum(a.slice(0, pp.dataIndex + 1)) : null; }, {title:'DV01 накопленный · ' + D.CURVES[curve].name + ' · до ' + B[pp.dataIndex], unit:'тыс ₽/б.п.', scale:1e3, digits:1})));
   // curve + move (two stacked grids, two separate y axes — no dual axis on a single plot)
   const cvd = D.CURVES[curve], mv = D.CURVE_MOVES[curve] || cvd.pts.map(() => 0);
   $('risk-crv-title').textContent = cvd.name + ': уровень и изменение за день';
@@ -1305,8 +1379,10 @@ function rExpo(){
   $('ex-unit').textContent = me.unit; $('ex-tunit').textContent = me.unit;
   $('ex-note').textContent = E.chart === 'treemap' ? 'Площадь — модуль величины. Синий — положительная (длинная) экспозиция, оранжевый — отрицательная (короткая).' : 'Показаны 25 крупнейших по модулю.';
   const fmtV = v => num(v / me.s, me.d);
+  const exSpec = names => drPos(names.flatMap(n => g[n] || []), me.f, {title:me.t + ' · ' + (names.length === 1 ? names[0] : dimName.toLowerCase() + ': итого'), unit:me.unit, scale:me.s, digits:me.d + 1});
+  let ec;
   if (E.chart === 'treemap') {
-    chart('c-ex', opt({
+    ec = chart('c-ex', opt({
       tooltip:{trigger:'item', formatter:p => `<b>${esc(p.name)}</b><br>${me.t}: ${fmtV(p.data.raw)} ${me.unit}<br>Доля брутто: ${pct(Math.abs(p.data.raw)/gross,1)} · ${p.data.n} поз.`},
       series:[{type:'treemap', left:0, right:0, top:0, bottom:0, roam:false, nodeClick:false, breadcrumb:{show:false},
         itemStyle:{borderColor:TK.panel, borderWidth:2, gapWidth:2},
@@ -1315,7 +1391,7 @@ function rExpo(){
     }));
   } else {
     const top = rows.slice(0,25);
-    chart('c-ex', opt({
+    ec = chart('c-ex', opt({
       grid:{left:6, right:60, top:6, bottom:6},
       tooltip:{valueFormatter:v => num(v, me.d) + ' ' + me.unit},
       yAxis:xCat(top.map(r => r.name), {inverse:true, axisLabel:{color:TK.fg_2, fontSize:11, fontFamily:TK.ui, width:150, overflow:'truncate', interval:0}}),
@@ -1323,13 +1399,14 @@ function rExpo(){
       series:[{type:'bar', name:me.t, barWidth:'60%', data:top.map(r => { const v = +(r.v/me.s).toFixed(4); return {value:v, itemStyle:{color:v >= 0 ? TK.cat[0] : TK.cat[1], borderRadius:v < 0 ? [2,0,0,2] : [0,2,2,0]}, label:{show:true, position:v < 0 ? 'left' : 'right', color:TK.fg_2, fontFamily:TK.mono, fontSize:10.5, formatter:() => num(v, me.d)}}; })}]
     }));
   }
+  if (ec && DR) ec.on('click', pp => { if (pp.name && g[pp.name]) dOpen(() => exSpec([pp.name])); });
   $('ex-table').innerHTML = `<table class="t"><thead><tr><th>${esc(dimName)}</th><th class="n">${esc(me.t)}</th><th class="n">Доля брутто</th><th class="n">Поз.</th></tr></thead><tbody>` +
-    rows.map(r => `<tr><td>${esc(r.name)}</td><td class="n${nc(r.v)}">${fmtV(r.v)}</td><td class="n">${pct(Math.abs(r.v)/gross,1)}</td><td class="n">${r.n}</td></tr>`).join('') +
-    `</tbody><tfoot><tr><td>Итого нетто</td><td class="n${nc(sum(rows, r => r.v))}">${fmtV(sum(rows, r => r.v))}</td><td class="n">100%</td><td class="n">${sum(rows, r => r.n)}</td></tr></tfoot></table>`;
+    rows.map(r => `<tr><td>${esc(r.name)}</td><td class="n${nc(r.v)}"${dA(() => exSpec([r.name]))}>${fmtV(r.v)}</td><td class="n">${pct(Math.abs(r.v)/gross,1)}</td><td class="n">${r.n}</td></tr>`).join('') +
+    `</tbody><tfoot><tr><td>Итого нетто</td><td class="n${nc(sum(rows, r => r.v))}"${dA('ex:tot', () => exSpec(rows.map(r => r.name)))}>${fmtV(sum(rows, r => r.v))}</td><td class="n">100%</td><td class="n">${sum(rows, r => r.n)}</td></tr></tfoot></table>`;
   // concentration
   const ig = issuerGroups(l).sort((a,b) => Math.abs(b.exp) - Math.abs(a.exp)), igMx = ig.length ? Math.abs(ig[0].exp) : 1, igGross = sum(ig, g => Math.abs(g.exp)) || 1;
   $('ex-conc').innerHTML = `<table class="t"><thead><tr><th>Группа</th><th class="n">Экспозиция</th><th style="min-width:120px"></th><th class="n">Доля</th><th class="n">Поз.</th></tr></thead><tbody>` +
-    ig.map(g => `<tr><td>${esc(g.name)}</td><td class="n${nc(g.exp)}">${BN(g.exp,2)}</td><td>${mbar(g.exp/igMx)}</td><td class="n">${pct(Math.abs(g.exp)/igGross,1)}</td><td class="n">${g.n}</td></tr>`).join('') + '</tbody></table>';
+    ig.map(g => `<tr><td>${esc(g.name)}</td><td class="n${nc(g.exp)}"${dA('ex:iss:' + g.name, () => drIssuer(P(), g.name))}>${BN(g.exp,2)}</td><td>${mbar(g.exp/igMx)}</td><td class="n">${pct(Math.abs(g.exp)/igGross,1)}</td><td class="n">${g.n}</td></tr>`).join('') + '</tbody></table>';
   // OCP
   const o = ocpParts(l);
   const PARTS = [['bond','Облигации'],['fund','Фондирование'],['xfer','Перенос ОВП'],['der','Деривативы'],['fx','FX']];
@@ -1344,7 +1421,7 @@ function rExpo(){
       .concat([{type:'scatter', name:'Нетто ОВП', symbol:'diamond', symbolSize:12, itemStyle:{color:TK.fg, borderColor:TK.panel, borderWidth:1.5}, z:5, data:CCYS.map(c => +(o[c].net * D.FX[c] / 1e6).toFixed(1))}])
   }));
   $('ex-ocp').innerHTML = `<table class="t"><thead><tr><th>Вал.</th>${PARTS.map(x => `<th class="n">${x[1]}</th>`).join('')}<th class="n">Нетто${S.withFunding ? '' : ' (без фонд.)'}</th><th class="n">Нетто, млн ₽</th></tr></thead><tbody>` +
-    CCYS.map(c => `<tr><td>${c}</td>${PARTS.map(x => `<td class="n${nc(o[c][x[0]])}${x[0] === 'fund' && !S.withFunding ? ' muted' : ''}">${M(o[c][x[0]],1,true)}</td>`).join('')}<td class="n${nc(o[c].net)}"><b>${M(o[c].net,1,true)}</b></td><td class="n${nc(o[c].net)}">${num(o[c].net * D.FX[c] / 1e6,0,true)}</td></tr>`).join('') + '</tbody></table>';
+    CCYS.map(c => `<tr><td>${c}</td>${PARTS.map(x => `<td class="n${nc(o[c][x[0]])}${x[0] === 'fund' && !S.withFunding ? ' muted' : ''}"${dA('ex:ocp:' + c + ':' + x[0], () => drOcp(P(), c, x[0]))}>${M(o[c][x[0]],1,true)}</td>`).join('')}<td class="n${nc(o[c].net)}"${dA('ex:ocp:' + c, () => drOcp(P(), c, null))}><b>${M(o[c].net,1,true)}</b></td><td class="n${nc(o[c].net)}">${num(o[c].net * D.FX[c] / 1e6,0,true)}</td></tr>`).join('') + '</tbody></table>';
   // по книгам: нетто ОВП с фондированием
   const ob = {}; l.forEach(p => { for (const c in p.fxDelta) { (ob[p.book] = ob[p.book] || {})[c] = (ob[p.book][c] || 0) + p.fxDelta[c]; } });
   if (S.withFunding) FU().forEach(f => { for (const c in f.fxDelta) { (ob[f.book] = ob[f.book] || {})[c] = (ob[f.book][c] || 0) + f.fxDelta[c]; } });
@@ -1453,6 +1530,17 @@ function scRun(sc, l){
   const comp = {}; COMP.forEach(c => { comp[c[0]] = sum(by, x => x[c[0]]); });
   return {by, ff, ffBook, comp, total:sum(by, x => x.total) + ff, fullReval:r.fullReval, warn:r.accuracyWarning, maxDy:r.maxDyBp};
 }
+// результат сценария по позициям (компонента comp, null — итог) + нераспределённый FX фондирования книг
+function drScen(sc, r, comp, books, where){
+  // comp: компонента COMP (fx — вместе с FX фондирования книг, как в карточке сценария), 'fxpos' — FX позиций,
+  // 'ff' — только FX фондирования книг, null — итог
+  const bs = books ? new Set(books) : null, l = r.by.filter(x => !bs || bs.has(byId[x.id].book)), key = comp === 'fxpos' ? 'fx' : comp;
+  const ff = !comp || comp === 'fx' || comp === 'ff' ? Object.keys(r.ffBook).filter(b => (!bs || bs.has(b)) && r.ffBook[b]).map(b => ({name:'FX остатков ДС и РЕПО книги', book:b, value:r.ffBook[b]})) : [];
+  const cn = comp === 'ff' ? 'Фонд. FX' : key ? COMP.find(c => c[0] === key)[1] + (comp === 'fxpos' ? ' позиций' : '') : 'итого';
+  return {title:'Сценарий «' + sc.name + '» · ' + cn + (where ? ' · ' + where : ''), unit:'млн ₽', scale:1e6, digits:2, signed:true,
+    rows:(comp === 'ff' ? [] : l.map(x => { const p = byId[x.id]; return {id:p.id, name:p.name, book:p.book, issuer:p.issuer || p.issuerGroup, isin:p.isin, segment:p.segment, value:key ? x[key] : x.total}; })).concat(ff),
+    note:'ΔPV позиций в сценарии: ' + scDesc(sc) + '. ' + fNote()};
+}
 function scDesc(sc){
   const parts = [];
   if (sc.curves) Object.keys(sc.curves).forEach(c => { const v = sc.curves[c]; parts.push(D.CURVES[c].name + ': ' + (Array.isArray(v) ? num(v[0],0,true) + '…' + num(v[v.length-1],0,true) + ' б.п. (1M…20Y+)' : num(v,0,true) + ' б.п.')); });
@@ -1473,16 +1561,17 @@ function rScen(){
   const R = {}; sel.forEach(id => { R[id] = scRun(scById(id), l); });
   $('sc-cards').innerHTML = sel.map(id => { const r = R[id]; return `<button type="button" class="sc-c" data-act="scfocus" data-v="${esc(id)}" aria-pressed="${id === S.scen.focus}">
       <span class="nm"><span class="sw" style="background:${scColor(id)}"></span>${esc(scById(id).name)}</span>
-      <span class="kv${nc(r.total)}">${M(r.total,0,true)}<small>млн ₽</small></span>
-      <span class="cm">${COMP.map(c => `<span>${c[1]}</span>`).join('')}${COMP.map(c => `<span class="num${nc(r.comp[c[0]] + (c[0] === 'fx' ? r.ff : 0))}">${M(r.comp[c[0]] + (c[0] === 'fx' ? r.ff : 0),0,true)}</span>`).join('')}</span>
+      <span class="kv${nc(r.total)}"${dA('sc:' + id, () => drScen(scById(id), R[id], null))}>${M(r.total,0,true)}<small>млн ₽</small></span>
+      <span class="cm">${COMP.map(c => `<span>${c[1]}</span>`).join('')}${COMP.map(c => `<span class="num${nc(r.comp[c[0]] + (c[0] === 'fx' ? r.ff : 0))}"${dA('sc:' + id + ':' + c[0], () => drScen(scById(id), R[id], c[0]))}>${M(r.comp[c[0]] + (c[0] === 'fx' ? r.ff : 0),0,true)}</span>`).join('')}</span>
       <span class="sc-q">${r.fullReval ? chip('ok','Полная переоценка') : r.warn ? chip('warn', 'Сдвиг до ' + num(r.maxDy,0) + ' б.п. у ' + pct(r.warn.mvShare,0) + ' MV — нужна полная переоценка') : chip('info','Греки до 2-го порядка')}</span></button>`; }).join('');
   const books = ALL_BOOKS.filter(b => S.books.has(b) && l.some(p => p.book === b));
   const bookTot = (r, b, comp) => sum(r.by.filter(x => byId[x.id].book === b), x => comp ? x[comp] : x.total);
   const bookFF = (sc, b) => (R[sc.id] && R[sc.id].ffBook[b]) || 0;
   const fid = S.scen.focus, fsc = scById(fid), fr = R[fid];
+  let scc;
   if (sel.length > 1) {
     $('sc-ch-title').textContent = 'Сравнение сценариев по книгам';
-    chart('c-sc', opt({
+    scc = chart('c-sc', opt({
       legend:legend({data:sel.map(id => scById(id).name)}),
       tooltip:{valueFormatter:v => num(v,1,true) + ' млн ₽'},
       grid:{top:sel.length > 2 ? 50 : 30},
@@ -1492,7 +1581,7 @@ function rScen(){
     }));
   } else {
     $('sc-ch-title').textContent = 'Результат по книгам и компонентам · ' + fsc.name;
-    chart('c-sc', opt({
+    scc = chart('c-sc', opt({
       legend:legend({data:COMP.map(c => c[1])}),
       tooltip:{valueFormatter:v => num(v,1,true) + ' млн ₽'},
       xAxis:xCat(books.map(b => D.BOOKS[b].name), {axisLabel:{color:TK.fg_2, fontSize:10.5, fontFamily:TK.ui, interval:0, rotate:$('c-sc').clientWidth < 820 ? 30 : 0}}),
@@ -1501,11 +1590,14 @@ function rScen(){
         data:books.map(b => +((bookTot(fr, b, c[0]) + (c[0] === 'fx' ? bookFF(fsc, b) : 0))/1e6).toFixed(2))}))
     }));
   }
+  if (scc && DR) scc.on('click', pp => { const b = books[pp.dataIndex]; if (!b) return;
+    dOpen(() => sel.length > 1 ? drScen(scById(sel[pp.seriesIndex]), R[sel[pp.seriesIndex]], null, [b], D.BOOKS[b].name) : drScen(fsc, fr, COMP[pp.seriesIndex][0], [b], D.BOOKS[b].name)); });
   $('sc-t-title').textContent = 'Книга × компонент · ' + fsc.name;
-  const rowsT = books.map(b => ({n:D.BOOKS[b].name, c:COMP.map(c => bookTot(fr, b, c[0])), ff:bookFF(fsc, b)}));
+  const rowsT = books.map(b => ({b, n:D.BOOKS[b].name, c:COMP.map(c => bookTot(fr, b, c[0])), ff:bookFF(fsc, b)}));
+  const scd = (comp, bs, where) => dA(() => drScen(fsc, fr, comp, bs, where));
   $('sc-table').innerHTML = `<table class="t"><thead><tr><th>Книга</th>${COMP.map(c => `<th class="n">${c[1]}</th>`).join('')}<th class="n">Фонд. FX</th><th class="n">Итого</th></tr></thead><tbody>` +
-    rowsT.map(r => { const t = sum(r.c) + r.ff; return `<tr><td>${esc(r.n)}</td>${r.c.map(v => `<td class="n${nc(v)}">${M(v,1)}</td>`).join('')}<td class="n${nc(r.ff)}">${M(r.ff,1)}</td><td class="n${nc(t)}"><b>${M(t,1,true)}</b></td></tr>`; }).join('') +
-    `</tbody><tfoot><tr><td>Итого</td>${COMP.map(c => `<td class="n${nc(fr.comp[c[0]])}">${M(fr.comp[c[0]],1)}</td>`).join('')}<td class="n${nc(fr.ff)}">${M(fr.ff,1)}</td><td class="n${nc(fr.total)}">${M(fr.total,1,true)}</td></tr></tfoot></table>`;
+    rowsT.map(r => { const t = sum(r.c) + r.ff; return `<tr><td>${esc(r.n)}</td>${r.c.map((v,i) => `<td class="n${nc(v)}"${scd(COMP[i][0] === 'fx' ? 'fxpos' : COMP[i][0], [r.b], r.n)}>${M(v,1)}</td>`).join('')}<td class="n${nc(r.ff)}"${scd('ff', [r.b], r.n)}>${M(r.ff,1)}</td><td class="n${nc(t)}"${scd(null, [r.b], r.n)}><b>${M(t,1,true)}</b></td></tr>`; }).join('') +
+    `</tbody><tfoot><tr><td>Итого</td>${COMP.map(c => `<td class="n${nc(fr.comp[c[0]])}"${scd(c[0] === 'fx' ? 'fxpos' : c[0], null, 'все книги')}>${M(fr.comp[c[0]],1)}</td>`).join('')}<td class="n${nc(fr.ff)}"${scd('ff', null, 'все книги')}>${M(fr.ff,1)}</td><td class="n${nc(fr.total)}"${scd(null, null, 'все книги')}>${M(fr.total,1,true)}</td></tr></tfoot></table>`;
   $('sc-desc').innerHTML = '<b>Шоки:</b> ' + esc(scDesc(fsc)) + '. ' + (fr.fullReval ? 'Полная переоценка расчётным сервисом.'
     : 'Разложение до 2-го порядка: key-rate DV01 и CS01; выпуклость — матрица гамм (ставки, спред, ставки×спред) или выпуклость к доходности; '
       + 'кросс FX — валютная часть PnL пересчитана по шокированному курсу. FX облигации считается вместе с телом её фондирования; FX остатков ДС — столбец «Фонд. FX».'
@@ -1521,23 +1613,26 @@ function rPnl(){
   // R10: считаем только позиции с PnL; без PnL — «—» с причиной, при неполном покрытии — «частично: N из M позиций»
   const all = P(), pc = U.pnlCover(all), l = all.filter(U.pnlOk), fp = fundPnl(), wf = S.withFunding, ready = offReady() && !pc.none;
   if (pc.none) return rPnlNone(all, pc);
-  const keys = PNL_KEYS.filter(k => (wf || k[0] !== 'funding') && (k[0] !== 'reported' || l.some(p => p.pnl.reported)));
-  const steps = keys.map(k => ({n:k[1], v:sum(l, p => pnlComp(p, k[0]))}));
-  if (wf) { steps.push({n:'Фонд. ДС/РЕПО', v:fp.carry}); steps.push({n:'Фонд. FX ДС', v:fp.fx}); }
+  const keys = PNL_KEYS.filter(k => (wf || k[0] !== 'funding') && (!PNL_OPT.has(k[0]) || l.some(p => Math.abs(p.pnl[k[0]] || 0) >= 0.5)));
+  const steps = keys.map(k => ({n:k[1], v:sum(l, p => pnlComp(p, k[0])), k:k[0], dd:() => drPnlPart(all, k[0])}));
+  const fl0 = FU().filter(f => !f.pnl.inPosition), fundD = (t, f) => () => ({title:'PnL дня · ' + t, unit:'млн ₽', scale:1e6, digits:3, signed:true, rows:fundRows(f, fl0),
+    note:'Фондирование уровня книги: остатки ДС деривативов и РЕПО (фондирование облигаций — в их PnL, компонента «Фондирование»).'});
+  if (wf) { steps.push({n:'Фонд. ДС/РЕПО', v:fp.carry, dd:fundD('фондирование книги, кэрри', f => f.pnl.carry)}); steps.push({n:'Фонд. FX ДС', v:fp.fx, dd:fundD('фондирование книги, FX', f => f.pnl.fx)}); }
   const flash = sum(steps, s => s.v);
   const expC = sum(l, expCbrOf) + (wf ? fp.carry + fp.fxCbr : 0), basis = expC - flash;
   const unexp = ready ? sum(l, p => p.pnl.unexplained) : 0, official = expC + unexp;
   const bars = []; let r = 0;
-  steps.forEach(s => { bars.push({n:s.n, lo:r, hi:r + s.v, v:s.v, k:'d'}); r += s.v; });
-  bars.push({n:'Флэш (рынок)', lo:0, hi:flash, v:flash, k:'t'});
-  bars.push({n:'Курсы ЦБ', lo:flash, hi:expC, v:basis, k:'b'});
-  if (ready) { bars.push({n:'Unexplained', lo:expC, hi:official, v:unexp, k:'u'}); bars.push({n:'Официальный (ЦБ)', lo:0, hi:official, v:official, k:'t'}); }
+  steps.forEach(s => { bars.push({n:s.n, lo:r, hi:r + s.v, v:s.v, k:'d', dd:s.dd, tip:s.k ? pnlTip(s.k) : ''}); r += s.v; });
+  bars.push({n:'Флэш (рынок)', lo:0, hi:flash, v:flash, k:'t', dd:() => drFlash(all)});
+  bars.push({n:'Курсы ЦБ', lo:flash, hi:expC, v:basis, k:'b', dd:() => drBasis(all)});
+  if (ready) { bars.push({n:'Unexplained', lo:expC, hi:official, v:unexp, k:'u', dd:() => drUnexp(all)}); bars.push({n:'Официальный (ЦБ)', lo:0, hi:official, v:official, k:'t', dd:() => drOff(all)}); }
   const col = b => b.k === 't' ? TK.accent : b.k === 'u' ? TK.serious : b.k === 'b' ? TK.fg_3 : (b.v < 0 ? TK.neg : TK.pos);
   const narrow = $('c-pnl-wf').clientWidth < 640;
   $('pnl-off-st').innerHTML = ready ? chip('ok', 'Официальный PnL за ' + dt(D.official.asOf || D.asOf) + ' получен') : chip('info', 'Официальный PnL — ожидается T+1');
-  chart('c-pnl-wf', opt({
+  const wfc = chart('c-pnl-wf', opt({
     grid:{left:6, right:10, top:22, bottom:6},
-    tooltip:{trigger:'item', formatter:p => { const b = bars[p.dataIndex]; return `<b>${esc(b.n)}</b><br>${M(b.v,2,true)} млн ₽` + (b.k === 'd' ? `<br><span style="opacity:.7">накопл.: ${M(b.hi,1,true)}</span>` : b.k === 'b' ? '<br><span style="opacity:.7">FX-компоненты по курсам ЦБ вместо рыночных</span>' : ''); }},
+    tooltip:{trigger:'item', formatter:p => { const b = bars[p.dataIndex]; return `<b>${esc(b.n)}</b><br>${M(b.v,2,true)} млн ₽` + (b.k === 'd' ? `<br><span style="opacity:.7">накопл.: ${M(b.hi,1,true)}</span>` : b.k === 'b' ? '<br><span style="opacity:.7">FX-компоненты по курсам ЦБ вместо рыночных</span>' : '') +
+      (b.tip ? `<br><span style="opacity:.8;display:inline-block;max-width:320px;white-space:normal">${esc(b.tip)}</span>` : '') + (DR && b.dd ? '<br><span style="opacity:.7">клик — из каких позиций состоит</span>' : ''); }},
     xAxis:xCat(bars.map(b => WF_SHORT[b.n] || b.n), {axisLabel:{color:TK.fg_2, fontSize:10.5, fontFamily:TK.ui, interval:0, rotate:narrow ? 40 : 0, hideOverlap:false, lineHeight:13}}),
     yAxis:yVal(axN),
     series:[{type:'custom', name:'PnL', encode:{x:0, y:[1,2]},
@@ -1552,15 +1647,17 @@ function rPnl(){
         return {type:'group', children:ch};
       }}]
   }));
+  if (wfc && DR) wfc.on('click', p => { const b = bars[p.dataIndex]; if (b && b.dd) dOpen(b.dd); });
   $('pnl-side').innerHTML = `<div class="bigs">
-     <div><span class="kl">Флэш (рынок)</span><span class="kv${nc(flash)}">${M(flash,1,true)}</span></div>
-     <div><span class="kl">Официальный (ЦБ)</span><span class="kv${nc(official)}">${ready ? M(official,1,true) : '—'}</span></div>
-     <div><span class="kl">Курсы ЦБ − рынок</span><span class="kv${nc(basis)}">${M(basis,2,true)}</span></div>
-     <div><span class="kl">Unexplained (vs ЦБ)</span><span class="kv${nc(unexp)}">${ready ? M(unexp,2,true) : '—'}</span></div></div>
+     <div><span class="kl">Флэш (рынок)</span><span class="kv${nc(flash)}"${dA('pnl:flash', () => drFlash(P()))}>${M(flash,1,true)}</span></div>
+     <div><span class="kl">Официальный (ЦБ)</span><span class="kv${nc(official)}"${ready ? dA('pnl:off', () => drOff(P())) : ''}>${ready ? M(official,1,true) : '—'}</span></div>
+     <div><span class="kl">Курсы ЦБ − рынок</span><span class="kv${nc(basis)}"${dA('pnl:basis', () => drBasis(P()))}>${M(basis,2,true)}</span></div>
+     <div><span class="kl">Unexplained (vs ЦБ)</span><span class="kv${nc(unexp)}"${ready ? dA('pnl:unexp', () => drUnexp(P())) : ''}>${ready ? M(unexp,2,true) : '—'}</span></div></div>
      ${pc.partial ? `<p class="note" style="margin-top:10px">${partHtml(pc)} Итоги — только по позициям с PnL. Без PnL: ${esc(pc.reasons.map(x => x[0] + ' — ' + x[1]).join('; '))}.</p>` : ''}
      ${l.some(p => p.pnl.reported) ? `<p class="note" style="margin-top:6px">«По отчёту» — разница отчётных стоимостей позиций, оценённых по отчёту (OTC, несопоставленные бумаги), за два дня; сделки дня внутри.</p>` : ''}
      <p class="note" style="margin-top:10px">${wf ? 'С фондированием: облигации — в компоненте «Фондирование» (' + M(sum(l, p => p.pnl.funding || 0),1,true) + ' млн), остатки ДС и РЕПО — строками книги (' + M(fp.carry,1,true) + ' млн, FX ' + M(fp.fx,1,true) + ').' : 'Без фондирования: только позиционный PnL.'} Официальный PnL приходит на T+1 и сравнивается с explain по курсам ЦБ. Порог разбора break — 0,5 млн ₽ на позицию.</p>
-     <div class="lim" style="margin-top:6px">${keys.map(k => { const v = sum(l, p => pnlComp(p, k[0])); return `<div class="lim-r"><span class="sw" style="background:${v < 0 ? TK.neg : TK.pos}"></span><span>${k[1]}</span><span class="num${nc(v)}">${M(v,2,true)}</span></div>`; }).join('')}</div>`;
+     ${keys.some(k => k[0] === 'noDecomp' || k[0] === 'residual') ? `<p class="note" style="margin-top:6px">«Прочее» разделено: <b>без разложения</b> — весь PnL позиций, которые ядро не переоценивает по шагам (оценка по цене без денежных потоков, смена кривой); <b>невязка цены</b> — остаток у бумаг с разложением. Нажмите на сумму — позиции и причина у каждой.</p>` : ''}
+     <div class="lim" style="margin-top:6px">${keys.map(k => { const v = sum(l, p => pnlComp(p, k[0])); return `<div class="lim-r"><span class="sw" style="background:${v < 0 ? TK.neg : TK.pos}"></span><span title="${esc(pnlTip(k[0]))}" style="cursor:help">${k[1]} <span class="muted" aria-hidden="true">ⓘ</span></span><span class="num${nc(v)}"${dA('pnl:part:' + k[0], () => drPnlPart(P(), k[0]))}>${M(v,2,true)}</span></div>`; }).join('')}${wf ? [['Фонд. ДС/РЕПО', fp.carry, f => f.pnl.carry], ['Фонд. FX ДС', fp.fx, f => f.pnl.fx]].map(x => `<div class="lim-r"><span class="sw" style="background:${x[1] < 0 ? TK.neg : TK.pos}"></span><span title="Фондирование уровня книги: остатки ДС деривативов и РЕПО">${x[0]}</span><span class="num${nc(x[1])}"${dA('pnl:fund:' + x[0], fundD(x[0], x[2]))}>${M(x[1],2,true)}</span></div>`).join('') : ''}</div>`;
   // by book
   const books = ALL_BOOKS.filter(b => S.books.has(b));
   const br = books.map(b => { const xa = all.filter(p => p.book === b), x = xa.filter(U.pnlOk), cv = U.pnlCover(xa), fb = FU().filter(f => f.book === b && !f.pnl.inPosition);
@@ -1571,8 +1668,9 @@ function rPnl(){
   const bst = u => Math.abs(u) >= 2e6 ? ['crit','Крупный'] : Math.abs(u) >= 0.5e6 ? ['warn','Разобрать'] : ['ok','В допуске'];
   const bookV = (r, v) => r.e == null ? naHtml(r.cv.tip) : M(v,2,true) + (r.cv.partial ? `<sup class="muted" title="${esc(r.cv.tip)}">*</sup>` : '');
   $('pnl-books').innerHTML = `<table class="t"><thead><tr><th>Книга</th><th class="n">Флэш (рынок)</th><th class="n">Explain (ЦБ)</th><th class="n">Официальный (ЦБ)</th><th class="n">Break</th><th>Статус</th></tr></thead><tbody>` +
-    br.map(r => `<tr><td>${esc(D.BOOKS[r.b].name)}${r.cv.partial ? ' ' + partHtml(r.cv) : ''}</td><td class="n${nc(r.e)}">${bookV(r, r.e)}</td><td class="n${nc(r.c)}">${bookV(r, r.c)}</td><td class="n${nc(r.o || 0)}">${ready && r.e != null ? M(r.o,2,true) : '—'}</td><td class="n${nc(r.u)}"><b>${ready && r.e != null ? M(r.u,2,true) : '—'}</b></td><td>${r.e == null ? chip('info','PnL не посчитан') : ready ? chip(bst(r.u)[0], bst(r.u)[1]) : chip('info','Ожидается')}</td></tr>`).join('') +
-    `</tbody><tfoot><tr><td>Итого${pc.partial ? ' ' + partHtml(pc) : ''}</td><td class="n${nc(flash)}">${M(flash,2,true)}</td><td class="n${nc(expC)}">${M(expC,2,true)}</td><td class="n${nc(official)}">${ready ? M(official,2,true) : '—'}</td><td class="n${nc(unexp)}">${ready ? M(unexp,2,true) : '—'}</td><td></td></tr></tfoot></table>`;
+    br.map(r => { const bl = () => P().filter(p => p.book === r.b), bf = () => FU().filter(f => f.book === r.b && !f.pnl.inPosition), nm = D.BOOKS[r.b].name, ok = r.e != null;
+      return `<tr><td>${esc(nm)}${r.cv.partial ? ' ' + partHtml(r.cv) : ''}</td><td class="n${nc(r.e)}"${ok ? dA('pnl:bk:e:' + r.b, () => drFlash(bl(), 'PnL дня · флэш · ' + nm, bf())) : ''}>${bookV(r, r.e)}</td><td class="n${nc(r.c)}"${ok ? dA('pnl:bk:c:' + r.b, () => drExpCbr(bl(), 'PnL дня · explain ЦБ · ' + nm, bf())) : ''}>${bookV(r, r.c)}</td><td class="n${nc(r.o || 0)}"${ok && ready ? dA('pnl:bk:o:' + r.b, () => drOff(bl(), 'PnL дня · официальный · ' + nm, bf())) : ''}>${ready && r.e != null ? M(r.o,2,true) : '—'}</td><td class="n${nc(r.u)}"${ok && ready ? dA('pnl:bk:u:' + r.b, () => drUnexp(bl(), 'Break · ' + nm)) : ''}><b>${ready && r.e != null ? M(r.u,2,true) : '—'}</b></td><td>${r.e == null ? chip('info','PnL не посчитан') : ready ? chip(bst(r.u)[0], bst(r.u)[1]) : chip('info','Ожидается')}</td></tr>`; }).join('') +
+    `</tbody><tfoot><tr><td>Итого${pc.partial ? ' ' + partHtml(pc) : ''}</td><td class="n${nc(flash)}"${dA('pnl:tot:e', () => drFlash(P()))}>${M(flash,2,true)}</td><td class="n${nc(expC)}"${dA('pnl:tot:c', () => drExpCbr(P()))}>${M(expC,2,true)}</td><td class="n${nc(official)}"${ready ? dA('pnl:tot:o', () => drOff(P())) : ''}>${ready ? M(official,2,true) : '—'}</td><td class="n${nc(unexp)}"${ready ? dA('pnl:tot:u', () => drUnexp(P())) : ''}>${ready ? M(unexp,2,true) : '—'}</td><td></td></tr></tfoot></table>`;
   // breaks
   const bl = ready ? l.filter(p => p.pnl.breakNote || Math.abs(p.pnl.unexplained) >= 0.5e6).sort((a,b) => Math.abs(b.pnl.unexplained) - Math.abs(a.pnl.unexplained)) : [];
   $('pnl-brk-cnt').textContent = bl.length + ' ' + plural(bl.length,'позиция','позиции','позиций') + ' · |break| ≥ 0,5 млн или с комментарием';
@@ -1695,9 +1793,13 @@ window.addEventListener('resize', () => { clearTimeout(rT); rT = setTimeout(() =
   if (Math.abs(window.innerWidth - lastW) > 80) { lastW = window.innerWidth; renderTab(); }
 }, 150); });
 
+/* ---------- карточка позиции для панели «из чего состоит» (desk-drill.js) и ссылок #card=<id> с других страниц ---------- */
+D.card = {open:(id, from) => { lastFocus = from || document.activeElement; openDrawer(String(id)); }, isOpen:() => !$('drawer').hidden, close:() => closeDrawer()};
+
 /* ---------- boot ---------- */
 $('asof').textContent = dt(D.asOf) + (D.source && D.source.publishedAt ? ' ' + D.source.publishedAt.slice(11, 16) : '');
 readTokens(); renderFilters(); renderKpi(); renderTabs(); renderColPop(); renderTab();
+{ const m = /^#card=(.+)$/.exec(location.hash || ''); if (m) { const id = decodeURIComponent(m[1]); if (byId[id]) openDrawer(id); } }
 
 })();
 </script>

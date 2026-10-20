@@ -215,7 +215,7 @@ t('Scenario Lab, прогон без PnL: сверка, дерево и итог
 t('Scenario Lab, частично: итог деска по позициям с PnL, «частично», колонка «По отчёту»; до T+1 official — «—»', () => {
   const a = page('scenario-lab.html', partial, { 'scenlab.mode': '"expl"' }), D = a.D;
   const ok = D.positions.filter(D.util.pnlOk), hier = a.$('#hier-wrap').innerHTML;
-  assert.ok(hier.includes('<th>По отчёту</th>'), 'PnL «по отчёту» — своей колонкой');
+  assert.ok(hier.includes('>По отчёту</th>'), 'PnL «по отчёту» — своей колонкой');
   assert.ok(hier.includes('частично: ' + ok.length + ' из ' + D.positions.length + ' позиций'));
   assert.ok(a.$('#recon').innerHTML.includes('частично:'));
   const b = page('scenario-lab.html', awaitingOfficial, { 'scenlab.mode': '"expl"' });

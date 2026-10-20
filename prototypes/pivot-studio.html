@@ -927,7 +927,8 @@ function renderSummary(v, m) {
   if (v.opts.topN) parts.push('топ-' + v.opts.topN);
   $('#crumb').innerHTML = `<b>${esc(measureLabel(m, v))}</b> по ${esc(rowsPh)}` + parts.map(p => `<span class="sep">·</span>${esc(p)}`).join('') + `<span class="sep">·</span><span class="u">${esc(unitLabel(m, v))}</span>`;
   const g = aval(P.grand, m), gc = coverOf(P.grand, m);
-  $('#grand').innerHTML = `<span>Итого</span><b class="num${m.signed && g < 0 ? '' : ''}">${g == null && gc ? U.pnlNaHtml(gc.tip) : fmtM(g, m, v)}</b><small>${esc(unitLabel(m, v))}</small>${gc ? ' ' + U.pnlPartHtml(gc) : ''}`;
+  // R19: итог кликабелен — те же позиции, что у ячеек (панель позиций, openDrill без ограничений по измерениям)
+  $('#grand').innerHTML = `<span>Итого</span><b class="num${m.signed && g < 0 ? '' : ''}" data-pv-grand tabindex="0" role="button" style="cursor:pointer" title="Нажмите — из каких позиций состоит">${g == null && gc ? U.pnlNaHtml(gc.tip) : fmtM(g, m, v)}</b><small>${esc(unitLabel(m, v))}</small>${gc ? ' ' + U.pnlPartHtml(gc) : ''}`;
 }
 function renderHints(v, m) {
   const hs = [];
@@ -1014,6 +1015,8 @@ $('#pvWrap').addEventListener('click', e => {
   const td = e.target.closest('td[data-i]');
   if (td) { const cs = $('#pvWrap')._cons[+td.dataset.i]; openDrill(cs, curFacts, td); }
 });
+$('#grand').addEventListener('click', e => { const b = e.target.closest('[data-pv-grand]'); if (b) openDrill({}, curFacts, b); });
+$('#grand').addEventListener('keydown', e => { const b = e.target.closest('[data-pv-grand]'); if (b && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openDrill({}, curFacts, b); } });
 $('#pvWrap').addEventListener('keydown', e => {
   if (e.key !== 'Enter' && e.key !== ' ') return;
   const td = e.target.closest('td[data-i]'); if (!td) return;
@@ -1225,6 +1228,8 @@ function openDrill(cons, facts, from) {
   $('#drawer').classList.add('open'); $('#drawer').setAttribute('aria-hidden', 'false'); $('#scrim').classList.add('open');
   $('#drClose').focus();
 }
+// карточка позиции — в Desk Monitor (#card=<id>), с выбранным прогоном (desk-nav.js)
+const cardHref = id => (window.DESK_NAV && window.DESK_NAV.href ? window.DESK_NAV.href('desk-monitor.html') : 'desk-monitor.html') + '#card=' + encodeURIComponent(id);
 function closeDrill() {
   $('#drawer').classList.remove('open'); $('#drawer').setAttribute('aria-hidden', 'true'); $('#scrim').classList.remove('open');
   if (drillReturn && drillReturn.isConnected) drillReturn.focus();
@@ -1267,7 +1272,7 @@ function renderDrill() {
   h += '<div class="dr-body"><table class="dt"><thead><tr>' + cols.map(c => `<th class="${c.r ? 'r' : ''}" scope="col" aria-sort="${c.k === sCol.k ? (dir < 0 ? 'descending' : 'ascending') : 'none'}"><button type="button" data-sk="${c.k}">${esc(c.l)}${c.k === sCol.k ? `<span class="ar">${dir < 0 ? '▼' : '▲'}</span>` : ''}</button></th>`).join('') + '</tr></thead><tbody>';
   sorted.forEach(e => {
     h += '<tr>' + cols.map(c => {
-      if (c.k === 'name') return `<td><div class="nm">${esc(e.r.name)}</div><div class="sb">${esc(e.r.sub || '')}</div></td>`;
+      if (c.k === 'name') return `<td><div class="nm">${esc(e.r.name)}${isPos(e.r) ? ` <a class="lnk" style="font-weight:400;font-size:11px" href="${esc(cardHref(e.r.p.id))}" title="Карточка позиции в Desk Monitor">карточка →</a>` : ''}</div><div class="sb">${esc(e.r.sub || '')}${isPos(e.r) && D.drill && m.pnlM && D.drill.pnlWhy(e.r.p) ? ' · ' + esc(D.drill.pnlWhy(e.r.p)) : ''}</div></td>`;
       if (c.r) { const val = c.fmt ? c.fmt(e) : c.get(e); return `<td class="r num${c.sgn && e.num < 0 ? '' : ''}">${val}</td>`; }
       return `<td>${esc(c.get(e))}</td>`;
     }).join('') + '</tr>';
