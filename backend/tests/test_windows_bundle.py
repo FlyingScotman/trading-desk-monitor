@@ -182,9 +182,10 @@ def test_patch_zip_holds_only_changed_files_and_overlays_exactly(monkeypatch, tm
     assert patch.name == "DeskMonitor-patch-1.0-a-to-1.1-b.zip"
     with zipfile.ZipFile(patch) as z:
         names = sorted(n.removeprefix("DeskMonitor/") for n in z.namelist())
-        assert names == ["MANIFEST.sha256", "PATCH_DELETE.txt", "PATCH_README.txt", "VERSION", "app/new.js",
-                         "wheelhouse/desk_backend-0.1.0-py3-none-any.whl"]
+        assert names == ["MANIFEST.sha256", "PATCH_BASE.txt", "PATCH_DELETE.txt", "PATCH_README.txt", "VERSION",
+                         "app/new.js", "wheelhouse/desk_backend-0.1.0-py3-none-any.whl"]
         assert "1.1-b" in z.read("DeskMonitor/PATCH_README.txt").decode("utf-8-sig")
+        assert z.read("DeskMonitor/PATCH_BASE.txt") == b"1.0-a\n"
         installed = tmp_path / "C"
         zipfile.ZipFile(base).extractall(installed)
         z.extractall(installed)

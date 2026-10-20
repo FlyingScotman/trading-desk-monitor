@@ -24,8 +24,13 @@ start.bat makes the venv ``env/`` from ``python/`` and the wheelhouse, offline, 
 the version or the folder changes; data and settings live in DESK_HOME (see backend/windows/deskctl.py).
 ``--patch-base`` also writes ``DeskMonitor-patch-<old version>-to-<new version>.zip`` next to the full zip: only
 the files whose bytes differ from the old bundle or are new (``VERSION`` and ``MANIFEST.sha256`` always), under the
-same ``DeskMonitor/`` folder, plus ``PATCH_README.txt`` and, when files were dropped, ``PATCH_DELETE.txt`` (the
-new deskctl.py deletes those on start). Unpacked over the old folder it gives the new bundle's files exactly.
+same ``DeskMonitor/`` folder, plus ``PATCH_README.txt``, ``PATCH_BASE.txt`` (the old version) and, when files were
+dropped, ``PATCH_DELETE.txt`` (the new deskctl.py deletes those on start). Unpacked over the old folder it gives the
+new bundle's files exactly.
+
+Both zips install from the settings page too («Обновление программы», ``desk.update``): it checks the layout, the
+VERSION, every file against ``MANIFEST.sha256`` and, for a patch, that the installed files are the ones the patch
+was made for. A build whose ``python/`` differs from the installed one is refused there (the manual way only).
 
 Built from the files git tracks or sees (``git ls-files -co --exclude-standard``); a dirty tree is refused
 unless ``--allow-dirty``. Wheels and the zip take their timestamps from the HEAD commit (SOURCE_DATE_EPOCH).
@@ -161,6 +166,10 @@ Desk Monitor: обновление {old} -> {new}
 
 Это небольшой архив-заплатка: только изменённые файлы. Старую папку программы не удаляйте.
 
+Проще всего (если установленная версия уже умеет обновляться сама): Настройки ->
+«Обновление программы» -> «Загрузить zip с компьютера» (или положите zip в папку
+обновлений) -> «Установить». Страница сама перезагрузится с новой версией. Иначе - вручную:
+
 1) Остановите программу: двойной щелчок по stop.bat (или закройте окно start.bat).
 
 2) Распакуйте архив в C:\\DeskMonitor с заменой файлов. Проще всего так:
@@ -186,9 +195,26 @@ Desk Monitor: обновление {old} -> {new}
 """
 
 
+def write_manifest(stage: Path, header: str) -> None:
+    """``MANIFEST.sha256``: ``header`` (``#`` lines), then the sha256 of every file of ``stage``."""
+    listing = sorted(p for p in stage.rglob("*") if p.is_file() and p.name != "MANIFEST.sha256")
+    (stage / "MANIFEST.sha256").write_text(header + "".join(f"{sha256(p)}  {p.relative_to(stage).as_posix()}\n"
+                                                            for p in listing))
+
+
+def write_zip(out: Path, files, stamp: tuple) -> None:
+    """``files``: (path under ``DeskMonitor/``, bytes) pairs, deflated, with the build's timestamp."""
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for rel, data in files:
+            info = zipfile.ZipInfo(f"{TOP}/{rel}", stamp)
+            info.compress_type, info.external_attr = zipfile.ZIP_DEFLATED, 0o644 << 16
+            z.writestr(info, data)
+
+
 def write_patch(base_zip: Path, stage: Path, version: str, out_dir: Path, stamp: tuple) -> Path:
     """``DeskMonitor-patch-<old>-to-<new>.zip``: the files of ``stage`` that are new or differ from ``base_zip``,
-    VERSION and MANIFEST.sha256 always, PATCH_README.txt, and PATCH_DELETE.txt when files were dropped."""
+    VERSION and MANIFEST.sha256 always, PATCH_README.txt, PATCH_BASE.txt, and PATCH_DELETE.txt when files were
+    dropped."""
     prefix = TOP + "/"
     with zipfile.ZipFile(base_zip) as z:
         old = {n[len(prefix):]: z.read(n) for n in z.namelist() if n.startswith(prefix) and not n.endswith("/")}
@@ -198,14 +224,11 @@ def write_patch(base_zip: Path, stage: Path, version: str, out_dir: Path, stamp:
                if rel in ("VERSION", "MANIFEST.sha256") or old.get(rel) != p.read_bytes()]
     dropped = sorted(set(old) - set(new))
     out = out_dir / f"{TOP}-patch-{old_version}-to-{version}.zip"
-    extra = {"PATCH_README.txt": crlf(PATCH_README.format(old=old_version, new=version).encode(), bom=True)}
+    extra = {"PATCH_README.txt": crlf(PATCH_README.format(old=old_version, new=version).encode(), bom=True),
+             "PATCH_BASE.txt": f"{old_version}\n".encode()}
     if dropped:
         extra["PATCH_DELETE.txt"] = ("".join(f"{rel}\n" for rel in dropped)).encode()
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-        for rel, data in [*((rel, new[rel].read_bytes()) for rel in changed), *extra.items()]:
-            info = zipfile.ZipInfo(prefix + rel, stamp)
-            info.compress_type, info.external_attr = zipfile.ZIP_DEFLATED, 0o644 << 16
-            z.writestr(info, data)
+    write_zip(out, [*((rel, new[rel].read_bytes()) for rel in changed), *extra.items()], stamp)
     size = sum(new[rel].stat().st_size for rel in changed)
     print(f"\npatch {out}  {out.stat().st_size / 1e6:.2f} MB ({size / 1e6:.2f} MB unpacked), sha256 {sha256(out)}\n"
           f"  {old_version} -> {version}: {len(changed)} files changed or new, {len(dropped)} dropped")
@@ -321,19 +344,15 @@ def main() -> int:
         (stage / "VERSION").write_text(version + "\n")
 
         listing = sorted(p for p in stage.rglob("*") if p.is_file())
-        manifest = "".join(f"{sha256(p)}  {p.relative_to(stage).as_posix()}\n" for p in listing)
         py_line = (f"python-build-standalone {a.python_release} cpython {a.python_version} sha256 {runtime[1]}"
                    if runtime else "no bundled Python (py -3.11)")
-        (stage / "MANIFEST.sha256").write_text(f"# {TOP} {version}, repository commit {commit}"
-                                               f"{' (dirty)' if dirty else ''}\n# {py_line}\n" + manifest)
+        write_manifest(stage, f"# {TOP} {version}, repository commit {commit}{' (dirty)' if dirty else ''}\n"
+                              f"# {py_line}\n")
         a.out.mkdir(parents=True, exist_ok=True)
         out = a.out / f"{name}.zip"
         stamp = time.gmtime(max(epoch, 315532800))[:6]  # zip dates start in 1980
-        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-            for p in sorted(p for p in stage.rglob("*") if p.is_file()):
-                info = zipfile.ZipInfo(f"{TOP}/{p.relative_to(stage).as_posix()}", stamp)
-                info.compress_type, info.external_attr = zipfile.ZIP_DEFLATED, 0o644 << 16
-                z.writestr(info, p.read_bytes())
+        write_zip(out, ((p.relative_to(stage).as_posix(), p.read_bytes())
+                        for p in sorted(p for p in stage.rglob("*") if p.is_file())), stamp)
         longest = max((f"{TOP}/{p.relative_to(stage).as_posix()}" for p in listing), key=len)
         print(f"\n{out}  {out.stat().st_size / 1e6:.1f} MB, {len(listing) + 1} files, sha256 {sha256(out)}\n"
               f"version {version}; {py_line}; adapter: {len(adapter)} files\n"
