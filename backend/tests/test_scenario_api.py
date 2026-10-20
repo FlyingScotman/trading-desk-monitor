@@ -17,14 +17,16 @@ from desk import store
 from desk.api import create_app
 from desk.marketdata.bundle import SnapshotDir
 from desk.scenario import jobs
-from desk.scenario.definition import definition_hash, normalize
+from desk.scenario.definition import RUB_CURVES, definition_hash, normalize
 from desk.settings import REPO_ROOT
 
 book = test_api.book  # the module fixture: every fixture bond, valued
-PRESETS = ["par+100", "par-100", "keyhike", "bullsteep", "bearflat", "ofzwide", "rubdep", "credit", "sector",
-           "stress22"]
+PRESETS = ["par+100", "par-100", "keyhike", "bullsteep", "bearflat", "basis", "ofzwide", "rubdep", "credit",
+           "sector", "stress22"]
 KEYHIKE = {"curves": {"RUB OFZ": [200, 195, 180, 150, 105, 85, 65, 55, 45, 40, 35]}, "ofzSpread": 10,
            "spreads": {"_all": 25}}
+KEYHIKE_PRESET = {**KEYHIKE, "curves": dict.fromkeys(RUB_CURVES, KEYHIKE["curves"]["RUB OFZ"])}
+"""R8: a move of all rates shifts the three RUB curves alike."""
 
 
 @pytest.fixture
@@ -42,8 +44,11 @@ def test_presets_listed_normalized(client):
         assert normalize(s["definition"]) == s["definition"]
         assert s["definition_hash"] == definition_hash(normalize(s["definition"]))
     kh = next(s for s in sc if s["scenario_id"] == "keyhike")
-    assert kh["definition"] == normalize(KEYHIKE)
+    assert kh["definition"] == normalize(KEYHIKE_PRESET)
     assert next(s for s in sc if s["scenario_id"] == "ofzwide")["definition"] == {"ofzSpread": 40.0}
+    for s in sc:  # every curve preset moves the three RUB curves, except the basis (the key rate only)
+        assert set(s["definition"].get("curves", RUB_CURVES)) == ({"RUB KEY"} if s["scenario_id"] == "basis"
+                                                                  else set(RUB_CURVES))
 
 
 def test_risk_payload_and_compat_scenarios(store_url, book, client):
@@ -52,8 +57,9 @@ def test_risk_payload_and_compat_scenarios(store_url, book, client):
     assert r.status_code == 200
     p = r.json()
     ps = client.get(f"/api/v1/runs/{rid}/positions").json()["positions"]
-    assert p["run_id"] == rid and len(p["buckets"]) == 11 and p["curves"] == ["RUB OFZ"]
-    assert p["factors"][0] == "IR|RUB OFZ|1M" and "CS" in p["factors"]
+    assert p["run_id"] == rid and len(p["buckets"]) == 11
+    assert p["curves"] == ["RUB KEY", "RUB OFZ", "RUB RUONIA", "USD"]  # the floaters' and the USD bond's too
+    assert {f.split("|")[1] for f in p["factors"] if f.startswith("IR|")} == set(p["curves"]) and "CS" in p["factors"]
     assert [x["position_id"] for x in p["positions"]] == [x["position_id"] for x in ps if x["fact"]]
     n = len(p["factors"])
     assert all(0 <= i < n for x in p["positions"] for i, _ in x["delta"])
@@ -64,7 +70,8 @@ def test_risk_payload_and_compat_scenarios(store_url, book, client):
     assert_error(client.get("/api/v1/runs/999999/risk"), 404, "not_found")
     sc = client.get(f"/api/v1/compat/desk?run_id={rid}").json()["SCENARIOS"]
     kh = next(s for s in sc if s["id"] == "keyhike")
-    assert kh == {"id": "keyhike", "name": kh["name"], "kind": "preset", "description": None, **normalize(KEYHIKE)}
+    assert kh == {"id": "keyhike", "name": kh["name"], "kind": "preset", "description": None,
+                  **normalize(KEYHIKE_PRESET)}
     assert [s["id"] for s in sc] == PRESETS
 
 
@@ -168,7 +175,7 @@ def test_job_errors(store_url, book, client):
     assert_error(post({"spreads": {"_avg": 1}}), 422, "invalid_parameter")
     assert_error(post({"spreads": {"all": 1, "_all": 2}}), 422, "invalid_parameter")  # the alias only
     assert_error(post({"curves": {"RUB OFZ": [1, 2, 3]}}), 422, "invalid_parameter")
-    assert "not published" in assert_error(post({"curves": {"RUB KEY": 50}}), 422, "invalid_parameter")["message"]
+    assert "not published" in assert_error(post({"curves": {"EUR": 50}}), 422, "invalid_parameter")["message"]
     assert_error(post({"ofzSpread": 6000}), 422, "invalid_parameter")
     assert_error(post({"fx": {"USD": -100}}), 422, "invalid_parameter")
     assert_error(post({"spreads": {"_mult": 0}}), 422, "invalid_parameter")

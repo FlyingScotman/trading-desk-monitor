@@ -135,12 +135,26 @@ The owner's rule (19 October 2026): a bond is valued somehow rather than not at 
 |---|---|---|
 | `exact` | core `value_portfolio` on the published terms | none |
 | `assumed` | core, with stated assumptions | floater formula `inferred` with the default convention; perpetual to an assumed call; future coupons at the current rate; accrued computed; accrued mismatch vs MOEX |
-| `market_value` | today's price × face + accrued (× FX for a foreign face); risk from core calibrated to the price, else from the duration | the reason core could not value it |
+| `market_value` | today's price × face + accrued (× FX for a foreign face); risk from core calibrated to the price, else from the duration (a foreign bond's always, on its currency's curve) | the reason core could not value it; a duration proxy (foreign face, OFZ-IN indexed face) |
 | `stale_price` | the same with the last price of the previous 30 days | price date and age |
 | `model_price` | the bond's schedule on the KBD at the Z-spread carried from the latest earlier run in the store (the spread its model price used, or its last market Z if newer), so only the curve moves it; without one, the median Z of its issuer, class or kind (traded bonds, Z within −100…2000 bp) | where the spread comes from and since when |
 | `par_proxy` | current face (+ accrued if known), no risk | no price, no usable schedule |
 
 A bond past its final redemption, or fully amortized, is valued 0. The face is the one outstanding on the business date from the redemption schedule. Only a bond with no data at all (no terms, no face) stays without a valuation, and an unexpected error for one bond sends it to `par_proxy` with the error named.
+
+### Risk by curve
+
+Bucket DV01 and the Hessian are published per curve (owner request R8, phase 1); `dv01` is their sum:
+
+| Position | Curves of its risk |
+|---|---|
+| Fixed RUB bond (core, or a fallback rung on the KBD) | `RUB OFZ` (the KBD) |
+| Floater (OFZ-PK on RUONIA, corporate on the key rate or RUONIA) | `RUB OFZ` (discounting) and `RUB RUONIA` or `RUB KEY` (projection): two legs of opposite sign, the basis, with the cross terms in the Hessian |
+| Foreign bond (fallback, core has no curve in its currency) | `USD`, `EUR`, `CNY`…: DV01 in RUB from the MOEX duration, a proxy |
+| OFZ-IN (fallback) | `RUB OFZ`, nominal DV01 from the duration, flagged as a proxy (no real curve or inflation factor yet) |
+| Report's own risk (`risk_dv01_rub`: unmapped bond, OTC) | the curve of the row's currency (`RUB OFZ` for RUB) |
+
+The run publishes `RUB OFZ`, `RUB RUONIA` and `RUB KEY` with their points (KBD effective yields; zero rates of the RUONIA OIS and key-rate projection curves, annual compounding) and the day's move, and a curve without points for a currency's curve. A scenario shifts each curve by its own vector (`desk.scenario.exact.core_scenario`); the preset moves of all rates shift the three RUB curves alike (store migration 0008).
 
 Exact and assumed bonds get the flash PnL by exact repricing. Market value and stale or model price get PnL = q·(dirty_D − dirty_D−1) + received, all in `other`; across a model price it carries a flag ("price discovery: model -> market"). A position at par on either date gets no PnL (reason `par_proxy`).
 

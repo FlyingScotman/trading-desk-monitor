@@ -6,6 +6,11 @@ spread shock (core takes one spread shift per scenario). A position is covered w
 reproduces the run's within ``BASE_TOLERANCE_RUB`` and core repriced it; its residual is exact minus
 the Taylor total the browser shows. Fallback rungs and rows without a bond (an FX forward, ``assumed``) have no
 cashflows: they stay Taylor only, with ``code`` = their quality. ``blended`` = exact of the covered positions + Taylor of the rest.
+
+Curves (R8): the shock of ``RUB OFZ`` moves the KBD (the bonds' discount curve), ``RUB RUONIA`` and ``RUB KEY`` the
+RUONIA OIS and key-rate projection curves by name (``curve_shifts_bp``), each only by its own vector, as the Taylor
+moves each curve's factors: a floater sees the basis when one curve moves without the other. Another curve (a
+currency's, ``bonds.ccy_curve``) has no core curve; only Taylor positions carry risk on it.
 """
 
 from __future__ import annotations
@@ -17,14 +22,26 @@ from rub_fixed_income import RISK_BUCKETS, BondScenario, PortfolioScenario
 
 from ..marketdata.bundle import SnapshotDir
 from ..orchestrator import EodContext, prepare, value
-from ..publish.tdm_run import CURVE_ID
+from ..valuation.bonds import OFZ_CURVE, RISK_CURVES
 from .definition import definition_hash, normalize, own_spread_shock
 from .taylor import PARTS, risk_payload, run_taylor
 
-METHOD = "desk-scenario-exact-v1"
+METHOD = "desk-scenario-exact-v2"
+"""v2 (R8): each curve moves only by its own shifts; v1 moved a floater's projection curve with the KBD."""
 BASE_TOLERANCE_RUB = 1.0
 REPRICED = ("exact", "assumed")
 CTX_CACHE_SIZE = 2
+NAMED_CURVES = tuple((core, published) for core, published in RISK_CURVES.items() if published != OFZ_CURVE)
+"""(core curve ID, published curve) moved by name; the KBD is the shock's own curve."""
+
+
+def core_scenario(name: str, norm: Mapping[str, Any], ds: float) -> PortfolioScenario:
+    """The core scenario of a normalized definition for an own spread shock ``ds``: every curve core values with
+    moves by its published curve's shifts only (0 when the definition has none)."""
+    curves, zero = norm.get("curves", {}), (0.0,) * len(RISK_BUCKETS)
+    return PortfolioScenario(name=name, shock=BondScenario(tuple(curves.get(OFZ_CURVE, zero)), ds),
+                             fx_shocks_pct=tuple(norm.get("fx", {}).items()),
+                             curve_shifts_bp=tuple((core, tuple(curves.get(c, zero))) for core, c in NAMED_CURVES))
 
 
 def _context(snapshots: SnapshotDir, run: Mapping[str, Any], ctx_cache: dict | None) -> EodContext:
@@ -62,11 +79,9 @@ def reprice_run(snapshots: SnapshotDir, run: Mapping[str, Any], rows: list[Mappi
             code[p["position_id"]] = p["quality"]
     if groups:
         ctx = _context(snapshots, run, ctx_cache)
-        shifts = tuple(norm.get("curves", {}).get(CURVE_ID, (0.0,) * len(RISK_BUCKETS)))
         for ds, ps in groups.items():  # shortcut: one core call per distinct ds; upgrade: a per-position spread shift in core
             pids = [p["position_id"] for p in ps]
-            scenario = PortfolioScenario(name=h[:12], shock=BondScenario(shifts, ds),
-                                         fx_shocks_pct=tuple(norm.get("fx", {}).items()))
+            scenario = core_scenario(h[:12], norm, ds)
             outs = value(ctx, [(p["secid"], qty[p["position_id"]]) for p in ps], position_ids=pids, fallback=False,
                          scenarios=(scenario,))
             for p, o in zip(ps, outs):

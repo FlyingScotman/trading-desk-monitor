@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from psycopg.rows import dict_row
+from rub_fixed_income import RISK_BUCKETS
 
 from desk import store
 from desk.api import create_app
@@ -165,7 +166,12 @@ def test_otc_at_reported_value_with_bucketed_risk(ctx):
     assert (v.quality, v.pv_rub, v.dv01_rub, v.spread01_rub, v.spread_kind) == (
         "reported_value", 125000.5, -850.25, -12.0, "credit")  # 4.24 years: the 5Y pillar is nearest
     assert v.buckets["5Y"] == -850.25 and sum(1 for x in v.buckets.values() if x) == 1
-    assert any("bucket 5Y" in a and "approximate" in a for a in v.assumptions)
+    assert v.risk() == {"RUB OFZ": v.buckets}  # a RUB row: on the KBD
+    assert any("bucket 5Y of RUB OFZ" in a and "approximate" in a for a in v.assumptions)
+    cny = one(ctx, {"asset_class": "otc", "source_instrument_id": "XCCY-1", "ccy": "CNY", "mv_rub": 1.0,
+                    "maturity_date": "2031-01-10", "risk_dv01_rub": -40.0})  # R8: on the curve of its currency
+    assert cny.valuation.risk() == {"CNY": {**dict.fromkeys(RISK_BUCKETS, 0.0), "5Y": -40.0}}
+    assert cny.valuation.dv01_rub == -40.0 and any("bucket 5Y of CNY" in a for a in cny.valuation.assumptions)
     short = one(ctx, {"asset_class": "other", "source_instrument_id": "X", "ccy": "RUB", "mv_rub": 1.0,
                       "risk_dv01_rub": 3.0})  # no maturity: the shortest bucket, flagged
     assert short.valuation.buckets["1M"] == 3.0 and any("no maturity_date" in a for a in short.valuation.assumptions)
@@ -205,7 +211,8 @@ def test_publish_api_and_compat(ctx, store_url, tmp_path):
         "B1": bond(source_instrument_id="RU000A109XR1", isin=FLOATER, face_outstanding_ccy=8_000.0,
                    mark_price_pct=99.0, mv_rub=8000.0, src="R12", x={"x_desk": "a"}),
         "B2": bond(source_instrument_id="XS000", source_instrument_name="Bond abroad", mv_rub=1e6),
-        "B3": bond(source_instrument_id="XS001", ccy="USD", mark_price_pct=95.0, face_amount_ccy=1e5),
+        "B3": bond(source_instrument_id="XS001", ccy="USD", mark_price_pct=95.0, face_amount_ccy=1e5,
+                   maturity_date=date(2029, 6, 1), risk_dv01_rub=-2400.0),
         "B4": bond(source_instrument_id="XS002"),
         "FX1": {"asset_class": "fx", "ccy": "USD", "amount_ccy": 1000.0},
         "FX2": {"asset_class": "fx", "ccy": "USD", "amount_ccy": -400.0, "value_date": date(2027, 1, 15)},
@@ -244,6 +251,12 @@ def test_publish_api_and_compat(ctx, store_url, tmp_path):
     desk = c.get(f"/api/v1/compat/desk?run_id={rid}").json()  # the Desk Monitor: O2 valued, O1 listed without PV
     dp = {p["id"]: p for p in desk["positions"]}
     assert dp["O2"]["mvRub"] == 5e5 and dp["O2"]["risk"]["RUB OFZ"][6] == -850.0 and dp["O2"]["segment"] == "Деривативы"
+    # R8: the USD bond's reported DV01 on the USD curve, which the Desk Monitor gets without points
+    assert got["B3"]["fact"]["risk"] == {"USD": {**dict.fromkeys(RISK_BUCKETS, 0.0), "3Y": -2400.0}}
+    assert dp["B3"]["risk"] == {"USD": [0.0] * 5 + [-2400.0] + [0.0] * 5}
+    assert set(desk["CURVES"]) >= {c for p in desk["positions"] for c in p["risk"]} | {"USD"}
+    assert desk["CURVES"]["USD"] == {"name": "USD: кривой нет, риск по дюрации", "ccy": "USD", "kind": "bond",
+                                     "pts": [None] * 11} and desk["CURVE_MOVES"]["USD"] == [0.0] * 11
     assert dp["O1"]["notValued"] and dp["O1"]["mvRub"] is None and dp["O1"]["extra"]["quality"] == "not_valued"
     assert dp["FX1"]["instrType"] == "FX" and dp["FX1"]["mvRub"] == pytest.approx(1000 * USD)
     assert (dp["FX2"]["mvRub"], dp["FX2"]["fxDelta"]) == (0.0, {"USD": -400.0})

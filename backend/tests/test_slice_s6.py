@@ -17,7 +17,7 @@ from desk.marketdata.bundle import SnapshotDir, SnapshotError
 from desk.orchestrator import prepare, value
 from desk.publish import desk_run, tdm_run
 from desk.scenario import exact
-from desk.scenario.definition import DefinitionError, definition_hash, normalize, own_spread_shock
+from desk.scenario.definition import RUB_CURVES, DefinitionError, definition_hash, normalize, own_spread_shock
 from desk.scenario.exact import reprice_run
 from desk.scenario.taylor import risk_payload, run_taylor
 from desk.valuation.bonds import SPREAD_CONVENTION
@@ -36,6 +36,10 @@ CASES = {
     "sector": {"spreads": {"sector": {"Девелопмент": 300, "Лизинг": 150}, "rating": {"A": 80, "BB": 250},
                            "issuer": {"ООО Синтетик": 40}, "_mult": 1.5}},
     "rubdep": {"curves": {"RUB OFZ": 50}, "ofzSpread": 10, "fx": {"USD": 15, "CNY": 15, "EUR": 15, "CHF": 15}},
+    # R8: every RUB curve, the key-rate basis alone, a currency's curve with its FX
+    "rub+50": {"curves": dict.fromkeys(RUB_CURVES, 50)},
+    "basis": {"curves": {"RUB KEY": [50, 50, 45, 40, 30, 25, 20, 15, 10, 10, 10]}},
+    "usd": {"curves": {"USD": [30, 30, 30, 25, 20, 20, 15, 15, 10, 10, 10]}, "fx": {"USD": 10}},
 }
 
 
@@ -72,8 +76,10 @@ def test_normalize_and_hash():
         with pytest.raises(DefinitionError):
             normalize(bad)
     with pytest.raises(DefinitionError, match="not published"):
-        normalize({"curves": {"RUB KEY": 1}}, curves=["RUB OFZ"])
-    assert normalize({"curves": {"RUB KEY": 0}}, curves=["RUB OFZ"]) == {}
+        normalize({"curves": {"USD": 1}}, curves=["RUB OFZ"])
+    assert normalize({"curves": {"USD": 0}}, curves=["RUB OFZ"]) == {}
+    # the RUB curves core reprices are valid for every run, also one published with RUB OFZ only (before R8)
+    assert normalize({"curves": {"RUB KEY": 1}}, curves=["RUB OFZ"]) == {"curves": {"RUB KEY": [1.0] * 11}}
 
 
 def test_own_spread_shock():
@@ -117,7 +123,7 @@ def test_reprice_run_keyhike(golden):
     snaps, _, run, rows, reference = golden
     cache: dict = {}
     res = reprice_run(snaps, run, rows, reference, KEYHIKE, cache)
-    assert res["method"] == "desk-scenario-exact-v1" and res["definition_hash"] == definition_hash(normalize(KEYHIKE))
+    assert res["method"] == "desk-scenario-exact-v2" and res["definition_hash"] == definition_hash(normalize(KEYHIKE))
     by_q = {r["position_id"]: r["quality"] for r in rows}
     fallback = sorted(pid for pid, q in by_q.items() if q not in ("exact", "assumed"))
     cov = res["coverage"]
@@ -136,6 +142,25 @@ def test_reprice_run_keyhike(golden):
     assert set(res["totals"]) == {"_total", "OFZ", "CORP"}
     assert list(cache) == [run["run_id"]]
     assert reprice_run(snaps, run, rows, reference, KEYHIKE, cache) == res  # from the cached context
+
+
+def test_reprice_run_moves_each_curve_by_its_own_shifts(golden):
+    """R8: core moves the KBD by RUB OFZ and the projection curves by name, each by its own vector only, as the
+    Taylor moves each curve's factors: one bp on every RUB curve, and one projection curve alone, reprice the
+    floaters as their per-curve risk says."""
+    snaps, _, run, rows, reference = golden
+    sc = exact.core_scenario("x", normalize({"curves": {"RUB KEY": 2, "RUB OFZ": 1}}), 3.0)
+    assert sc.shock.curve_shifts_bp == (1.0,) * 11 and sc.shock.spread_shift_bp == 3.0
+    assert dict(sc.curve_shifts_bp) == {"RUB_KEY_RATE_PROJ": (2.0,) * 11, "RUB_RUONIA_OIS": (0.0,) * 11}
+    floaters = {r["position_id"] for r in rows if len(r["fact"]["risk"]) > 1}
+    assert len(floaters) >= 2  # the OFZ-PK on RUONIA, the corporate on the key rate
+    for d in ({"curves": dict.fromkeys(RUB_CURVES, 1)}, {"curves": {"RUB KEY": 1}}, {"curves": {"RUB RUONIA": -1}}):
+        res = reprice_run(snaps, run, rows, reference, d)
+        moved = [p for p in res["positions"] if p["position_id"] in floaters and p["taylor"]["rates"]]
+        assert moved and all(p["exact"] is not None for p in moved)
+        for p in res["positions"]:
+            if p["exact"] is not None:
+                assert abs(p["residual"]) <= 1e-3 * abs(p["taylor"]["total"]) + 1e-6, (d, p)
 
 
 def test_reprice_run_passes_the_fx_shocks(golden, monkeypatch):
@@ -247,7 +272,11 @@ def test_parity_fixture_is_current(golden):
         assert not diff, stale + "\n" + "\n".join(diff[:20])
     keyhike = next(c for c in doc["cases"] if c["name"] == "keyhike")
     p = keyhike["payload"]
-    assert p["factors"][-3:] == ["CS", "FX|CNY", "FX|USD"] and p["curves"] == ["RUB OFZ"]
+    assert p["factors"][-3:] == ["CS", "FX|CNY", "FX|USD"]
+    assert p["curves"] == ["RUB KEY", "RUB OFZ", "RUB RUONIA", "USD"]
+    assert {f.rsplit("|", 1)[0] for f in p["factors"] if f.startswith("IR|")} == {f"IR|{c}" for c in p["curves"]}
+    basis = next(c for c in doc["cases"] if c["name"] == "basis")["expected"]["positions"]
+    assert sum(1 for x in basis if x["rates"]) == 1  # only the key-rate floater has risk on RUB KEY
     by = {x["position_id"]: x for x in p["positions"]}
     assert (by["S02"]["sector"], by["S03"]["rating"], by["S03"]["spread_bp"]) == ("Девелопмент", "BB", None)
     assert all(i <= j for x in p["positions"] for i, j, _ in x["gamma"])

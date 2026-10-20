@@ -28,8 +28,10 @@ estimate: MOEX ``duration_days``, else the time to the horizon; DV01 = -Macaulay
 (the buckets bump continuous zero rates) split linearly between the two nearest pillars; CS01 =
 DV01 for credit, 0 for OFZ. A floater's rates duration is the time to its next reset (its CS01
 keeps the full duration). A bond with a foreign face is valued in RUB at the CBR rate (MOEX TOM
-when CBR is missing) with no curve risk. MOEX publishes the accrued in the settlement currency
-(RUB for most replacement bonds) and the price in % of the foreign face.
+when CBR is missing); core has no curve in its currency, so its rate risk is always the duration
+estimate (DV01 in RUB per bp), booked on the currency's curve (``bonds.ccy_curve``: ``USD``, ``CNY``...)
+instead of the KBD. MOEX publishes the accrued in the settlement currency (RUB for most replacement
+bonds) and the price in % of the foreign face.
 
 Flash PnL of a position not exact on either date: ``simple_pnl``, q * (dirty_D - dirty_D-1) +
 received, all in ``other``. No decomposition is faked.
@@ -66,6 +68,7 @@ from .bonds import (
     BondValuation,
     Rejected,
     bond_request,
+    ccy_curve,
     face_on,
     fixed_schedule,
     next_offer,
@@ -271,8 +274,10 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
     face_bd = face_on(t, bd)
     matured = not t.is_perpetual and (t.maturity_date is not None and t.maturity_date <= bd
                                       or face_bd is not None and face_bd <= 0)
+    curve = ccy_curve(face_ccy)
     if is_fx:
-        why.append(f"FX bond ({face_ccy}): market value only, {fx_face[1]} {fx_face[0]:g} RUB, no curve risk")
+        why.append(f"FX bond ({face_ccy}): market value at {fx_face[1]} {fx_face[0]:g} RUB, no core curve in "
+                   f"{face_ccy}: rate risk a duration proxy on curve {curve}")
 
     found = None
     # today's quote first; the history is loaded only when it has no usable price
@@ -326,7 +331,7 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
                        else f"face 0 on {bd}: fully redeemed, valued 0")
             kw.update(clean_pct=0.0, accrued_rub=0.0, face_rub=0.0, dirty_rub=0.0, pv_rub=0.0, ytm_pct=math.nan,
                       macaulay_years=0.0, modified_duration=0.0, z_spread_bp=math.nan, dv01_rub=0.0, buckets=zero,
-                      spread01_rub=0.0)
+                      curve_buckets={}, spread01_rub=0.0)
         return BondValuation(secid=t.secid, quantity=q, valuation_date=bd, settlement=bd,
                              horizon_date=horizon, horizon_kind=hkind, current_coupon_pct=coupon_pct,
                              spread_kind=kind, calculation_id=f"desk-fallback:{quality}:{t.secid}:{bd}",
@@ -343,13 +348,6 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
         acc = accrued_rub(quote)
         dirty = clean / 100 * face * fx_face[0] + acc
         pv = q * dirty
-        if is_fx:
-            mac = _f(sa.get("duration_days"))
-            mdur = mac / 365 / (1 + (y or 0) / 100) if mac else math.nan
-            return make(quality, price_basis=basis, clean_pct=clean, accrued_rub=acc,
-                        face_rub=face * fx_face[0], dirty_rub=dirty, pv_rub=pv, ytm_pct=ytm,
-                        macaulay_years=mac / 365 if mac else math.nan, modified_duration=mdur,
-                        z_spread_bp=math.nan, dv01_rub=0.0, buckets=zero, spread01_rub=0.0)
         if sched is not None:
             try:
                 _, r = _engine(ctx, sched[1], kind, q, dirty=dirty)
@@ -374,14 +372,17 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
         if t.coupon_type == "floating" and coupon is not None:  # the coupon resets: rates risk only to then
             rate_t = (coupon.pay_date - bd).days / 365
             note += f"; rates duration ~ time to next reset {coupon.pay_date}"
+        if t.is_face_indexed:  # OFZ-IN (R8 phase 1): no real curve or inflation factor yet, see ORG_CONVENTIONS §4.1
+            note += "; indexed face: a nominal-rate proxy, no real-rate and inflation split"
         # bucket DV01 bumps continuously compounded zero rates: dPV ~ -Macaulay * PV, not modified duration
         dv01, s01 = -rate_t * pv * 1e-4 + 0.0, -mac * pv * 1e-4 + 0.0
-        why.append(note + (": DV01 split between the nearest pillars" if rate_t else ": DV01 0"))
-        yy = y / 100 if y is not None else kbd_effective_yield(ctx.kbd, max(mac, 1 / 365))
-        return make(quality, price_basis=basis, clean_pct=clean, accrued_rub=acc, face_rub=face,
+        why.append(note + (f": DV01 split between the nearest pillars of {curve}" if rate_t else ": DV01 0"))
+        yy = y / 100 if y is not None else 0.0 if is_fx else kbd_effective_yield(ctx.kbd, max(mac, 1 / 365))
+        buckets = _split(rate_t, dv01) if rate_t else zero
+        return make(quality, price_basis=basis, clean_pct=clean, accrued_rub=acc, face_rub=face * fx_face[0],
                     dirty_rub=dirty, pv_rub=pv, ytm_pct=ytm, macaulay_years=mac,
                     modified_duration=mac / (1 + yy), z_spread_bp=math.nan, dv01_rub=dv01,
-                    buckets=_split(rate_t, dv01) if rate_t else zero,
+                    buckets=buckets, curve_buckets={curve: buckets},
                     spread01_rub=s01 if kind == "credit" else 0.0)
 
     priced = None  # ((engine, risk), Z, model_spread_source, assumption text)

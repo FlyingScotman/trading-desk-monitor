@@ -14,6 +14,12 @@ report's instrument name and the report's risk when it gave one. Books: the stor
 (``PositionInputs.books``: name, desk, entity, book_type); the demo ``BOOKS`` only for a book without it.
 The same holds for the flash PnL of slice S2: a priced position without PnL gets no ``pnl`` dict
 and a WARN line with the reason; a simple PnL (all in ``other``) is counted in its own WARN line.
+
+Risk by curve (R8): a row's ``risk`` and ``gamma`` are per published curve (``BondValuation.risk``, the Hessian
+factors ``IR|<curve>|<bucket>``): ``RUB OFZ`` (the KBD), ``RUB RUONIA`` and ``RUB KEY`` (a floater's projection
+curve), a currency's curve (``USD``: a foreign bond's duration proxy, a report's DV01). ``curves_reference``
+publishes the KBD, the RUONIA OIS and key-rate curves the run built (zero rates and the day's move) and a curve
+without points for every other curve of the risk; ``dv01`` stays the sum over the curves.
 """
 
 from __future__ import annotations
@@ -21,27 +27,36 @@ from __future__ import annotations
 import json
 import math
 import subprocess
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
-from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS, kbd_effective_yield, portfolio_result_to_json
+from rub_fixed_income import (
+    RISK_BUCKETS,
+    RISK_PILLARS,
+    CoreRejection,
+    DiscountCurve,
+    kbd_effective_yield,
+    portfolio_result_to_json,
+)
 from rub_fixed_income import __version__ as CORE_VERSION
 from tdm.writer import Run
 
 from .. import __version__ as BACKEND_VERSION
+from ..curves import rates
 from ..marketdata.adapter import MarketView
+from ..marketdata.bundle import SnapshotError
 from ..orchestrator import EodContext, Outcome
 from ..pnl.flash import METHOD
 from ..settings import REPO_ROOT
 from ..store import PositionInputs
+from ..valuation.bonds import OFZ_CURVE, RISK_CURVES, BondValuation
 from ..valuation.fallback import METHOD as SIMPLE_METHOD
 from ..valuation.fallback import QUALITIES, SimplePnl, fx_rate
 from ..valuation.positions import normalised
 
-CURVE_ID = "RUB OFZ"
 ASSET_CLASS = {"ofz_pd": "ОФЗ-ПД", "ofz_ad": "ОФЗ-АД", "ofz_pk": "ОФЗ-ПК", "ofz_in": "ОФЗ-ИН",
                "subfederal": "Субфедеральные", "municipal": "Муниципальные", "corporate": "Корпоративные"}
 SEGMENT = {"ofz_pd": "Гос", "ofz_ad": "Гос", "ofz_pk": "Гос", "ofz_in": "Гос",
@@ -90,6 +105,71 @@ def curve_points(ctx: EodContext, prev: MarketView | None) -> list[dict[str, Any
         move = (r - kbd_effective_yield(prev_kbd, t) * 100) * 100 if prev_kbd else 0.0
         pts.append({"bucket": b, "rate": round(r, 4), "move_bp": round(move, 2)})
     return pts
+
+
+RATES_CURVES = {rates.RUONIA_OIS_CURVE_ID: "RUONIA OIS (MOEX)",
+                rates.KEY_RATE_CURVE_ID: "Ключевая ставка (IRS KEYRATE)"}
+"""The rates curves of ``orchestrator.with_rates`` the run publishes (under ``RISK_CURVES``), with their names."""
+CCY_CURVE_NAME = "{ccy}: кривой нет, риск по дюрации"
+"""A currency's curve (``bonds.ccy_curve``): no points, only the risk booked on it."""
+
+
+def _zero_points(curve: DiscountCurve, prev: DiscountCurve | None) -> list[dict[str, Any]]:
+    """Zero rates (annual compounding, %) of a built curve at the risk pillars, and their move since ``prev``
+    at the same tenor, bp."""
+    def zero(c: DiscountCurve, t: float) -> float:
+        return c.zero_rate(c.curve_date + timedelta(days=max(1, round(t * 365.25)))) * 100
+
+    pts = []
+    for b, t in zip(RISK_BUCKETS, RISK_PILLARS):
+        r = zero(curve, t)
+        move = (r - zero(prev, t)) * 100 if prev else 0.0
+        pts.append({"bucket": b, "rate": round(r, 4), "move_bp": round(move, 2)})
+    return pts
+
+
+def _prev_rates(ctx: EodContext, prev: MarketView) -> dict[str, DiscountCurve]:
+    """The previous date's RUONIA OIS and key-rate curves, built as ``with_rates`` builds them (on this run's static,
+    for the calendars): only for the day's move, so one that cannot be built is left out (move 0)."""
+    out: dict[str, DiscountCurve] = {}
+    try:
+        ois = rates.ruonia_ois(prev.snapshot, ctx.static.snapshot)
+        out[ois.entry.curve_id] = ois.curve
+        kr = rates.key_rate_projection(prev.snapshot, ctx.static.snapshot, ois.curve)
+        out[kr.entry.curve_id] = kr.curve
+    except (rates.RatesInputError, SnapshotError, CoreRejection, ValueError):
+        pass
+    return out
+
+
+def curves_reference(ctx: EodContext, prev: MarketView | None, rows: list[dict[str, Any]],
+                     fx: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The run's curves: the KBD (``RUB OFZ``), the RUONIA OIS and key-rate curves built for the run, and a curve
+    without points for any other curve a row's risk is on (a currency's, ``bonds.ccy_curve``), so that every
+    curve of the risk is in the reference (the Desk Monitor shows only those, tdm requires them). ``fx``: the run's
+    rates (``_fx_rows``); a currency without one gives its curve in RUB (tdm needs a rate per currency), as
+    ``direct_row`` shows such a row in RUB."""
+    out = [{"curve_id": OFZ_CURVE, "name": "ОФЗ (КБД MOEX)", "ccy": "RUB", "kind": "bond",
+            "points": curve_points(ctx, prev)}]
+    built = {c.curve_id: c.curve for c in ctx.core_market.curves
+             if c.curve_id in RATES_CURVES and isinstance(c.curve, DiscountCurve)}
+    old = _prev_rates(ctx, prev) if prev and built else {}
+    for cid, name in RATES_CURVES.items():
+        if cid in built:
+            out.append({"curve_id": RISK_CURVES[cid], "name": name, "ccy": "RUB", "kind": "swap",
+                        "points": _zero_points(built[cid], old.get(cid))})
+    have = {c["curve_id"] for c in out}
+    for c in dict.fromkeys(c for r in rows for c in r.get("risk") or {}):
+        if c not in have:  # a currency's curve; a RUB curve core did not build keeps its risk, without points
+            ccy = c if c in {r["ccy"] for r in fx} else "RUB"
+            out.append({"curve_id": c, "name": CCY_CURVE_NAME.format(ccy=c), "ccy": ccy, "kind": "bond",
+                        "points": []})
+    return out
+
+
+def risk_by_curve(v: BondValuation) -> dict[str, dict[str, float]]:
+    """``v.risk()`` without the curves where every bucket is 0."""
+    return {c: bs for c, bs in v.risk().items() if any(bs.values())}
 
 
 def store_core_results(db: str, outcomes: list[Outcome]) -> list[dict[str, str]]:
@@ -182,7 +262,7 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
         "side": ("BUY" if amount >= 0 else "SELL") if fx else "long" if amount >= 0 else "short",
         "notional": amount, "notional_rub": amount * rate, "price": _num(v.clean_pct), "mv": v.pv_rub / rate,
         "mv_rub": v.pv_rub, "dv01": v.dv01_rub, "cs01": v.spread01_rub, "ofz_spr01": 0.0,
-        "risk": {CURVE_ID: v.buckets} if any(v.buckets.values()) else {}, "gamma": [],
+        "risk": risk_by_curve(v), "gamma": [],
         "instrument_id": x.get("moex_secid") or x.get("source_instrument_id"), "new_today": False,
         **({"fx_delta": {ccy: amount if fx else v.pv_rub / rate}} if ccy != "RUB" else {}),
         "extra": {
@@ -218,11 +298,11 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
         "ofz_spr01": v.spread01_rub if v.spread_kind == "ofz" else 0.0,
         "instrument_id": t.secid, "accrued": v.accrued_rub, "coupon_freq": t.coupon_frequency,
         "yield_date": v.horizon_date.isoformat() if v.horizon_kind in ("offer", "call") else None,
-        "spread_type": "Z", "spread_curve": CURVE_ID, "new_today": False,
-        "risk": {CURVE_ID: v.buckets},
+        "spread_type": "Z", "spread_curve": OFZ_CURVE, "new_today": False,
+        "risk": risk_by_curve(v),
         **({"fx_delta": {ccy: v.pv_rub / fx[0]}} if fx else {}),
         **({"pnl": o.pnl.as_tdm()} if o.pnl else {}),
-        "gamma": _gamma(v.hessian),
+        "gamma": [[a, b, g] for a, b, g in v.hessian],
         "extra": {
             "price_basis": v.price_basis, "horizon_kind": v.horizon_kind, "valuation_date": v.valuation_date.isoformat(),
             "settlement": v.settlement.isoformat(),
@@ -236,20 +316,6 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
             **reported(x),
         },
     }
-
-
-def _factor(name: str) -> str:
-    return f"IR|{CURVE_ID}|{name.rsplit('|', 1)[1]}" if name.startswith("IR|") else name
-
-
-def _gamma(hessian: list[tuple[str, str, float]]) -> list[list[Any]]:
-    """The upper-triangle Hessian on the one published curve: a floater's projection-curve factors
-    move with the discount curve's of the same bucket (as its bucket DV01 does), so they are summed."""
-    out: dict[tuple[str, str], float] = defaultdict(float)
-    for a, b, g in hessian:
-        fa, fb = _factor(a), _factor(b)
-        out[min(fa, fb), max(fa, fb)] += 2 * g if fa == fb and a != b else g  # cross-curve term on the diagonal
-    return [[a, b, g] for (a, b), g in out.items()]
 
 
 def git_sha() -> str | None:
@@ -321,12 +387,12 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
         fx = ctx.market.latest_fixing(code)
         if fx:
             indices.append({"index_name": name, "value": fx[1]})
+    rates_fx = _fx_rows(ctx, prev)
     reference = {
         "books": book_rows(used, inputs.books if inputs else {}),
         "issuers": list(issuers.values()),
-        "curves": [{"curve_id": CURVE_ID, "name": "ОФЗ (КБД MOEX)", "ccy": "RUB", "kind": "bond",
-                    "points": curve_points(ctx, prev)}],
-        "fx": _fx_rows(ctx, prev),
+        "curves": curves_reference(ctx, prev, rows, rates_fx),
+        "fx": rates_fx,
         "indices": indices,
     }
     log = [("INFO", "lineage " + json.dumps(lineage, ensure_ascii=False, default=str))]
