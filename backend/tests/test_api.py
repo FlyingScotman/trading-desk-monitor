@@ -25,6 +25,7 @@ from desk.publish import tdm_run
 from desk.store import MIGRATIONS
 
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1"
+STATIC = Path(__file__).resolve().parents[2] / "prototypes"
 DATE = "2026-10-15"
 QTY = 1000.0
 # Keys of window.DESK.source the parity test leaves out; everything else must be equal.
@@ -206,11 +207,18 @@ def test_errors_etag_and_health(store_url, book, client):
     assert "compat" in spec["components"]["schemas"]["RunHeader"]["properties"]["as_of"]["description"]
 
 
-def test_desk_data_js_without_runs_falls_back_to_demo(client):
+def test_desk_data_js_without_runs_gives_the_empty_state_not_the_demo(client):
     r = client.get("/desk-data.js")
     assert r.status_code == 200 and "window.DESK_MISSING" in r.text and "window.DESK =" not in r.text
-    assert "не найден" in client.get("/desk-data.js?run_id=5").text
-    assert "window.DESK" not in client.get("/desk-data.js?demo=1").text
+    assert 'window.DESK_EMPTY = {"reason": "no_runs", "message": "нет опубликованных прогонов"};' in r.text
+    r = client.get("/desk-data.js?run_id=5")
+    assert "не найден" in r.text and '"reason": "not_found"' in r.text
+    assert "window.DESK" not in client.get("/desk-data.js?demo=1").text  # the demo only when asked for
+    fallback = (STATIC / "desk-fallback.js").read_text(encoding="utf-8")
+    assert "window.DESK_EMPTY" in fallback and "desk-empty.js" in fallback  # the loader honours it
+    empty = (STATIC / "desk-empty.js").read_text(encoding="utf-8")
+    assert "Прогонов ещё нет" in empty and "settings.html" in empty and "api/v1/autopilot/status" in empty
+    assert client.get("/desk-empty.js").status_code == 200
     assert_error(client.get("/api/v1/compat/desk"), 404, "not_found")
     assert client.get("/desk-monitor.html").status_code == 200
 

@@ -706,7 +706,7 @@ attach_official_pnl(r"C:\tdm\data\tdm.sqlite", run_id=run.run_id)
 | `GET /api/v1/bonds/history?instrument_id=\|isin=&curve=&from=&to=&wal=` | *1.2.* История выпуска: `{instrument_id, isin, name, ccy, curve, spread_to_curve_note, series:[{date, clean_price, ytm, z_spread_bp, g_spread_bp, accrued, volume_rub, source, face_amount, tenor_y, curve_rate, spread_to_curve_bp}]}`. Срок на каждую дату — до оферты (пока она впереди) или погашения, для ИЦБ — `wal` + прошедшее время. `curve_rate` — ставка `curve` на этом сроке. `face_amount` — номинал по `pos_snapshot` (0, если в снэпшоте дня бумаги нет; `null`, если снэпшота нет). Флоатер или кривая другой валюты: `curve_rate = null`, причина — в `spread_to_curve_note` |
 | `GET /api/v1/…` | справочники, срезы, рынок, покрытие — `docs/SERVICE_DATA_MODEL.md` §4 |
 
-Выбор прогона: `run_id` → последний опубликованный на `as_of` → самый последний опубликованный. Если опубликованного прогона нет, страницы показывают демо-данные с плашкой «ДЕМО-данные» и причиной.
+Выбор прогона: `run_id` → последний опубликованный на `as_of` → самый последний опубликованный. Если опубликованного прогона нет, страницы на сервере `desk serve` показывают экран «Прогонов ещё нет» с ходом автопилота и ссылкой на Настройки (`window.DESK_EMPTY`, `prototypes/desk-empty.js`), а не демо-данные; демо — только явно (`?demo=1`), при открытии файла напрямую (`file://`) и у прототипного сервера `tdm` (плашка «ДЕМО-данные» с причиной).
 
 **Форма `window.DESK`.** Это контракт между сервером и страницами. Его собирает `tdm/assemble.py`; эталон — `prototypes/data.js`. На демо-наборе сборка проверена на точное совпадение с моком по всем полям.
 

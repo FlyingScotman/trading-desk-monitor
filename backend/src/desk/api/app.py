@@ -373,13 +373,15 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
     @app.get("/desk-data.js", include_in_schema=False)
     def desk_js(con: Con, as_of: date | None = None, run_id: int | None = None, demo: str | None = None):
-        # as tdm/server.py: no run gives DESK_MISSING and no window.DESK, so desk-fallback.js loads data.js
+        # no run: DESK_MISSING and DESK_EMPTY, no window.DESK; desk-fallback.js then shows the empty state
+        # ("no runs yet", the autopilot's progress), never the demo data set. Only ?demo=1 asks for data.js.
         if demo:
             return Response("/* demo requested: data.js */\n", media_type=JS, headers=NO_STORE)
         desk, missing = _compat(con, as_of, run_id)
         if desk is None:
-            msg = json.dumps(missing, ensure_ascii=False)
-            body = f"/* {missing}: demo data.js */\nwindow.DESK_MISSING = {msg};\n"
+            empty = {"reason": "not_found" if as_of or run_id else "no_runs", "message": missing}
+            body = (f"/* {missing}: empty state */\nwindow.DESK_MISSING = {json.dumps(missing, ensure_ascii=False)};\n"
+                    f"window.DESK_EMPTY = {json.dumps(empty, ensure_ascii=False)};\n")
         else:
             body = "window.DESK = " + json.dumps(desk, ensure_ascii=False, separators=(",", ":")) + ";\n"
         return Response(body, media_type=JS, headers=NO_STORE)

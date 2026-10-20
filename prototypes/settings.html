@@ -250,7 +250,10 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
       <label for="inbox_poll_seconds">Период опроса, сек</label>
       <div><input class="inp mono num" id="inbox_poll_seconds" data-key="inbox_poll_seconds" inputmode="decimal" placeholder="60"></div>
       <label for="autopilot_sync_last">Загружать последних дат</label>
-      <div><input class="inp mono num" id="autopilot_sync_last" data-key="autopilot_sync_last" inputmode="numeric" placeholder="5">
+      <div><input class="inp mono num" id="autopilot_sync_last" data-key="autopilot_sync_last" inputmode="numeric" placeholder="5"></div>
+      <label for="inbox_lookback_days">Брать отчёты не старше, дней</label>
+      <div><input class="inp mono num" id="inbox_lookback_days" data-key="inbox_lookback_days" inputmode="numeric" placeholder="10">
+        <p class="hint">Пусто — 10. Более старые файлы в папках с отчётами не читаются (папку с архивом за годы можно оставить), снимки с маркет-дата сервера за более ранние даты не загружаются. 0 — без ограничения (медленно на больших папках).</p>
         <p class="hint">Изменения применяются со следующего цикла (не позже чем через период опроса), перезапуск сервера не нужен.</p></div>
     </div>
   </section>
@@ -304,7 +307,7 @@ async function api(method, url, body){
 }
 
 const S = {data:null, dirs:[], dirty:false, adapter:null};
-const KEYS = ['hub_url','https_proxy','proxy_user','hub_transport','no_proxy','hub_ca_bundle','private_adapter','private_adapter_config','inbox_poll_seconds','autopilot_sync_last'];
+const KEYS = ['hub_url','https_proxy','proxy_user','hub_transport','no_proxy','hub_ca_bundle','private_adapter','private_adapter_config','inbox_poll_seconds','autopilot_sync_last','inbox_lookback_days'];
 
 function setDirty(v){
   S.dirty = v;
@@ -380,13 +383,15 @@ const EFF = [
   ['store','Хранилище'], ['pg_dir','Встроенная PostgreSQL'], ['db','SQLite (прототип)'], ['report_dir','Отчёты валидации'],
   ['private_adapter','Адаптер'], ['private_adapter_default','Адаптер из комплекта'], ['private_adapter_config','Папка настроек адаптера'], ['private_adapter_sha256','Закреплённый отпечаток адаптера'],
   ['inbox_dirs','Папки с отчётами'], ['inbox_archive','Архив принятых файлов'], ['inbox_poll_seconds','Период опроса, сек'],
-  ['autopilot','Автообновление'], ['autopilot_sync_last','Загружать последних дат'], ['logs_dir','Журналы']];
+  ['autopilot','Автообновление'], ['autopilot_sync_last','Загружать последних дат'],
+  ['inbox_lookback_days','Брать отчёты не старше, дней'], ['logs_dir','Журналы']];
 function renderEffective(eff){
   const tb = $('eff'); tb.textContent = '';
   EFF.forEach(([k, label]) => {
     let v = eff[k];
     if (Array.isArray(v)) v = v.length ? v.join('\n') : '—';
     else if (typeof v === 'boolean') v = k === 'autopilot' ? (v ? 'включено' : 'выключено') : (v ? 'да' : 'нет');
+    else if (k === 'inbox_lookback_days' && v === 0) v = 'без ограничения';
     else if (v == null || v === '') v = '—';
     tb.append(h('tr', {}, h('td', {class:'k'}, label), h('td', {class:'v', style:'white-space:pre-wrap'}, String(v))));
   });
@@ -401,6 +406,11 @@ function collect(){
       if (!v) { body[k] = null; continue; }
       const n = Number(v.replace(',', '.'));
       if (!isFinite(n) || n <= 0 || (k === 'autopilot_sync_last' && !Number.isInteger(n))) throw new Error((k === 'inbox_poll_seconds' ? 'Период опроса' : 'Число дат') + ': нужно положительное число');
+      body[k] = n;
+    } else if (k === 'inbox_lookback_days') {
+      if (!v) { body[k] = null; continue; }
+      const n = Number(v);
+      if (!Number.isInteger(n) || n < 0) throw new Error('Брать отчёты не старше: нужно целое число дней (0 — без ограничения)');
       body[k] = n;
     } else body[k] = v || null;
   }

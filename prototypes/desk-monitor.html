@@ -81,6 +81,7 @@ a.ibtn{text-decoration:none}
 .ap[data-state="off"] .dot{background:var(--fg-3)}
 .ap .err{color:var(--neg-tx);max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ap .new{border-color:var(--warn);color:var(--fg)}
+.ap .prog{color:var(--fg);max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tag.q-rep{border-color:var(--accent-line);color:var(--accent-ink)}
 .tag.q-nv{border-color:var(--crit);color:var(--neg-tx)}
 
@@ -1627,19 +1628,20 @@ window.addEventListener('resize', () => { clearTimeout(rT); rT = setTimeout(() =
 $('asof').textContent = dt(D.asOf) + (D.source && D.source.publishedAt ? ' ' + D.source.publishedAt.slice(11, 16) : '');
 readTokens(); renderFilters(); renderKpi(); renderTabs(); renderColPop(); renderTab();
 
-/* ---------- автопилот (GET api/v1/autopilot/status, раз в 30 с; 404 или нет сети — плашки нет) ---------- */
+/* ---------- автопилот (GET api/v1/autopilot/status, раз в 30 с, во время цикла раз в 5 с; 404 или нет сети — плашки нет) ---------- */
 (function autopilot(){
   if (!/^https?:$/.test(location.protocol)) return;
   const box = $('ap'), ST = {idle:'ожидание', running:'идёт цикл', error:'ошибка'};
   const hm = s => { const d = new Date(s); return isNaN(d) ? '' : d.toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'}); };
   const pinned = () => { const u = new URL(location.href); return u.searchParams.has('run_id') || u.searchParams.has('as_of') || u.searchParams.has('demo'); };
   let base = D.source && D.source.kind === 'db' && !pinned() ? String(D.source.runId) : null, fastUntil = 0, timer = null, busy = false, last = null;
-  function schedule(){ clearTimeout(timer); timer = setTimeout(poll, Date.now() < fastUntil ? 5000 : 30000); }
+  function schedule(){ clearTimeout(timer); timer = setTimeout(poll, Date.now() < fastUntil || (last && last.state === 'running') ? 5000 : 30000); }
   function render(j){
     last = j;
     const st = !j.enabled ? 'off' : (j.state || 'idle'), lr = j.latest_run, fresh = lr && base != null && String(lr.run_id) !== base;
     box.dataset.state = st;
     box.innerHTML = `<span class="dot" aria-hidden="true"></span><span>Автопилот: <b>${esc(j.enabled ? (ST[st] || st) : 'выключен')}</b></span>`
+      + (st === 'running' && j.progress && j.message ? `<span class="prog" title="${esc(j.progress.detail || j.message)}">${esc(j.message)}</span>` : '')
       + (j.last_cycle_at ? `<span class="muted" title="Последний цикл${j.last_ok_at ? '; последний успешный ' + esc(j.last_ok_at.replace('T',' ').slice(0,16)) : ''}">обн. ${esc(hm(j.last_cycle_at))}</span>` : '')
       + (lr ? `<span class="muted" title="Последний прогон автопилота">прогон ${esc(dt(lr.as_of))} #${esc(lr.run_id)}</span>` : '')
       + (st === 'error' && j.message ? `<span class="err" title="${esc(j.message)}">${esc(j.message)}</span>` : '')
