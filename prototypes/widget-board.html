@@ -55,7 +55,6 @@ button{font:inherit;color:inherit}
 .brand b{font:600 16px var(--font-sans);letter-spacing:-.01em}
 .brand span{font:500 12px var(--font-cond);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font:12px var(--font-mono);color:var(--fg-2)}
-.test{font:500 10.5px var(--font-sans);letter-spacing:.05em;text-transform:uppercase;color:var(--fg);border:1px dashed var(--warn);padding:1px 6px;border-radius:2px}
 .top .actions{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
 .btn{height:28px;padding:0 10px;border:1px solid var(--line-2);background:var(--panel);color:var(--fg);border-radius:3px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font:500 12px var(--font-sans);white-space:nowrap}
 .btn:hover{border-color:var(--accent)}
@@ -229,7 +228,7 @@ input[type="checkbox"]{accent-color:var(--accent);margin:0}
       <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><rect x="1" y="1" width="11" height="7" fill="var(--accent)"/><rect x="14" y="1" width="11" height="7" fill="none" stroke="var(--fg-2)" stroke-width="1.2"/><rect x="1" y="10" width="7" height="15" fill="none" stroke="var(--fg-2)" stroke-width="1.2"/><rect x="10" y="10" width="15" height="15" fill="none" stroke="var(--fg-2)" stroke-width="1.2"/></svg>
       <b>Widget Board</b><span>FI-деск</span>
     </div>
-    <div class="meta"><span id="asof"></span><span class="test" title="Все цифры вымышленные">Тестовые данные</span></div>
+    <div class="meta"><span id="asof"></span></div>
     <div class="actions">
       <button class="btn" id="editBtn" aria-pressed="false" type="button"><svg width="13" height="13" viewBox="0 0 13 13" aria-hidden="true"><path d="M1 12V9.5L8.6 1.9l2.5 2.5L3.5 12z" fill="none" stroke="currentColor" stroke-width="1.3"/></svg><span>Редактировать доску</span></button>
       <button class="btn ghost" id="themeBtn" type="button" title="Переключить тему"><svg width="13" height="13" viewBox="0 0 13 13" aria-hidden="true"><circle cx="6.5" cy="6.5" r="5.3" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6.5 1.2a5.3 5.3 0 0 1 0 10.6z" fill="currentColor"/></svg><span>Тема</span></button>
@@ -253,11 +252,13 @@ input[type="checkbox"]{accent-color:var(--accent);margin:0}
 </div>
 <div class="sr" aria-live="polite" id="live"></div>
 
+<script src="desk-nav.js"></script>
 <script src="desk-loader.js"></script>
 <script src="echarts.min.js"></script>
 <script>
 (function(){
 'use strict';
+DESK.scope.apply();  // фильтр Desk Monitor (юрлицо, деск, портфель, книги…): только его позиции (desk-scope.js)
 const D = window.DESK, U = D.util;
 const BK = Object.keys(D.BOOKS);
 const CCYS = Object.keys(D.FX).filter(c => c !== 'RUB');
@@ -924,7 +925,12 @@ const BD_SORT = { mv: '|MV|', ytm: 'доходности', spr: 'спреду', 
 const bdCurveShort = c => c === 'base' ? 'баз. кривой' : c === 'own' ? 'расч.' : c;
 const bdSprD = (r, c) => { const a = U.spreadTo(r.p, c), b = U.spreadTo(r.p, c, true); return a == null || b == null ? null : a - b; };
 const BD_RANK = { mv: r => Math.abs(r.mvRub), ytm: r => r.p.ytm, spr: (r, c) => U.spreadTo(r.p, c), dspr: (r, c) => Math.abs(bdSprD(r, c) || 0), dur: r => r.p.mdur, cs01: r => Math.abs(r.cs01) };
-function bdDefaultIsin(l) { const rows = U.bondRows(l).sort((a, b) => Math.abs(b.mvRub) - Math.abs(a.mvRub)); return rows.length ? rows[0].p.isin : null; }
+// выпуск по умолчанию: крупнейший по |MV| с ценой или доходностью; ключ — U.bondKey (ISIN, у бумаги без него — код)
+function bdDefaultKey(l) {
+  const rows = U.bondRows(l).sort((a, b) => Math.abs(b.mvRub) - Math.abs(a.mvRub)), priced = rows.filter(r => r.p.price != null || r.p.ytm != null);
+  return (priced[0] || rows[0]) ? U.bondKey((priced[0] || rows[0]).p) : null;
+}
+const bondByKey = k => D.positions.find(x => x.instrType === 'BOND' && U.bondKey(x) === k);
 WT.bonds = {
   name: 'Облигации', glyph: 'table', desc: 'Выпуски под фильтр: доходность, спред к выбранной кривой, изменения за день, дюрация, позиция и риск. Клик по строке — история выпуска в виджете «История выпуска».',
   def: { w: 8, h: 3, cfg: { curve: 'base', sort: 'mv', topN: '20', book: 'all', segment: 'all', ccy: 'all' } },
@@ -936,11 +942,11 @@ WT.bonds = {
     let rows = all.slice().sort((a, z) => { const x = rk(a, c), y = rk(z, c); return (y == null ? -Infinity : y) - (x == null ? -Infinity : x); });
     if (+cfg.topN) rows = rows.slice(0, +cfg.topN);
     if (!rows.length) { b.innerHTML = '<div class="empty">Нет облигаций под фильтр</div>'; return ''; }
-    const sel = ui.bondSel || bdDefaultIsin(scope({}));
+    const sel = ui.bondSel || bdDefaultKey(scope({}));
     const d = (v, k) => `<td class="n${v != null && Math.abs(v) >= 0.05 ? (v < 0 ? ' neg' : '') : ''}">${num(v, k, true)}</td>`;
     b.innerHTML = `<div class="tw"><table class="tbl"><thead><tr><th>Выпуск</th><th>Рейт.</th><th>Вал.</th><th class="n">Срок</th><th class="n">Дох., %</th><th class="n">Δ, б.п.</th><th class="n">Спред к ${esc(bdCurveShort(c))}</th><th class="n">Δ, б.п.</th><th class="n">Дюр.</th><th class="n">MV, млн ₽</th><th class="n">DV01, тыс</th><th class="n">CS01, тыс</th></tr></thead><tbody>${
       rows.map(r => { const p = r.p, q = p.quote;
-        return `<tr class="${p.isin === sel ? 'sel' : ''}"><td><button class="xf" data-bond="${esc(p.isin)}" title="История выпуска · ${esc(p.isin)}">${esc(p.name)}</button>${p.yieldDate ? '<span class="tag" title="к оферте">оф.</span>' : ''}</td>
+        return `<tr class="${U.bondKey(p) === sel ? 'sel' : ''}"><td><button class="xf" data-bond="${esc(U.bondKey(p))}" title="История выпуска · ${esc(p.isin || p.instrumentId || '')}">${esc(p.name)}</button>${p.yieldDate ? '<span class="tag" title="к оферте">оф.</span>' : ''}</td>
         <td>${esc(p.rating || '—')}</td><td><button class="xf" data-xf="ccy" data-v="${p.ccy}">${p.ccy}</button></td><td class="n">${num(U.yieldTenor(p), 1)}</td>
         <td class="n">${num(p.ytm, 2)}</td>${d(q && q.prevYtm != null ? (q.ytm - q.prevYtm) * 100 : null, 1)}<td class="n">${num(U.spreadTo(p, c), 0)}</td>${d(bdSprD(r, c), 1)}
         <td class="n">${num(p.mdur, 2)}</td><td class="n">${mln(r.mvRub, 1)}</td><td class="n">${ths(r.dv01, 0)}</td><td class="n">${ths(r.cs01, 0)}</td></tr>`; }).join('')}</tbody></table></div>`;
@@ -957,11 +963,11 @@ const BD_RANGES = { '1M': 21, '3M': 63, '6M': 126, '1Y': 261 };
 WT.bondhist = {
   name: 'История выпуска', glyph: 'line', desc: 'Цена, доходность и спред к выбранной кривой по дням за 1М…1Г, плюс позиция по снэпшотам. Выпуск — из настроек или по клику в виджете «Облигации».',
   def: { w: 4, h: 3, cfg: { isin: '', curve: 'base', range: '6M' } },
-  fields: [{ key: 'isin', label: 'Выпуск', type: 'select', opts: () => [['', 'Выбранный в таблице облигаций']].concat(D.positions.filter(p => p.instrType === 'BOND').sort((a, z) => a.name.localeCompare(z.name, 'ru')).map(p => [p.isin, p.name])) },
+  fields: [{ key: 'isin', label: 'Выпуск', type: 'select', opts: () => [['', 'Выбранный в таблице облигаций']].concat(D.positions.filter(p => p.instrType === 'BOND').sort((a, z) => a.name.localeCompare(z.name, 'ru')).map(p => [U.bondKey(p), p.name])) },
     { key: 'curve', label: 'Спред к', type: 'select', opts: BD_CURVE_OPTS }, { key: 'range', label: 'Период', type: 'select', opts: () => Object.keys(BD_RANGES).map(k => [k, k]) }],
-  title: c => { const p = D.positions.find(x => x.isin === (c.isin || ui.bondSel)); return 'История · ' + (p ? p.name : 'выпуск'); },
+  title: c => { const p = bondByKey(c.isin || ui.bondSel); return 'История · ' + (p ? p.name : 'выпуск'); },
   render(b, cfg, w) {
-    const isin = cfg.isin || ui.bondSel || bdDefaultIsin(scope({})), p = D.positions.find(x => x.isin === isin && x.instrType === 'BOND');
+    const p = bondByKey(cfg.isin || ui.bondSel || bdDefaultKey(scope({})));  // cfg.isin — ключ выпуска (U.bondKey), имя поля — прежнее
     if (!p) { b.innerHTML = '<div class="empty">Выберите выпуск в настройках или кликните облигацию в виджете «Облигации»</div>'; return ''; }
     const c = cfg.curve || 'base', own = c === 'own', tok = (w._tok = (w._tok || 0) + 1);
     b.innerHTML = '<div class="ch"><div class="empty">Загрузка…</div></div>';
@@ -974,7 +980,7 @@ WT.bondhist = {
       const grids = [{ top: 30, height: '24%' }, { top: '44%', height: '22%' }, { top: '74%', bottom: 4 }].map(g => Object.assign({ left: 6, right: 14, containLabel: true }, g));
       const xa = i => cAxis(W(h.dates).map(ddmm), { gridIndex: i, boundaryGap: false, axisLabel: { show: i === 2, color: TK.fg2, fontSize: 10, hideOverlap: true } });
       const ya = (i, n, f) => vAxis(f, { gridIndex: i, scale: true, splitNumber: 2, name: n, nameLocation: 'end', nameGap: 5, nameTextStyle: { color: TK.muted, fontSize: 10, align: 'left' } });
-      const ln = (n, i, data, col, x) => Object.assign({ name: n, type: 'line', xAxisIndex: i, yAxisIndex: i, data, showSymbol: false, lineStyle: { width: 1.5, color: col }, itemStyle: { color: col } }, x || {});
+      const ln = (n, i, data, col, x) => Object.assign({ name: n, type: 'line', xAxisIndex: i, yAxisIndex: i, data, showSymbol: data.length <= 40, lineStyle: { width: 1.5, color: col }, itemStyle: { color: col } }, x || {});
       const series = [ln('Цена', 0, W(h.price), TK.cat[0]), ln('Доходность', 1, W(h.ytm), TK.cat[0])];
       if (W(h.curveRate).some(v => v != null)) series.push(ln('Кривая на сроке', 1, W(h.curveRate), TK.muted, { lineStyle: { width: 1.1, type: [4, 3], color: TK.muted } }));
       if (spr.some(v => v != null)) series.push(ln(sprName, 2, W(spr), TK.cat[1]));
@@ -990,9 +996,9 @@ WT.bondhist = {
       }));
       const last = h.dates.length - 1, ds = spr[last] != null && spr[i0] != null ? spr[last] - spr[i0] : null;
       const s = b.closest('.wg') && b.closest('.wg').querySelector('.wg-s');
-      if (s) s.textContent = `${p.isin} · дох. ${num(h.ytm[last], 2)} % · спред ${num(spr[last], 0)} б.п.` + (ds != null ? ` (${num(ds, 0, true)} за ${cfg.range})` : '') + (h.note ? ' · ' + h.note : '');
+      if (s) s.textContent = `${p.isin || p.instrumentId || ""} · дох. ${num(h.ytm[last], 2)} % · спред ${num(spr[last], 0)} б.п.` + (ds != null ? ` (${num(ds, 0, true)} за ${cfg.range})` : '') + (h.note ? ' · ' + h.note : '');
     });
-    return p.isin;
+    return p.isin || p.instrumentId || "";
   }
 };
 

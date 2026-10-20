@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { getDefaultRun, getJob, getRisk, getScenarioDefs, listRuns, submitJob } from '../api/client';
-import type { RiskPayload, RunHeader, ScenarioDefOut, ScenarioJob } from '../api/types';
+import { getDefaultRun, getJob, getRisk, getScenarioDefs, submitJob } from '../api/client';
+import type { RiskPayload, ScenarioDefOut, ScenarioJob } from '../api/types';
 import { ResidualTable, ResultTable } from '../components/ResultTable';
 import { type EditorState, ScenarioEditor, effective } from '../components/ScenarioEditor';
 import { StatusChip } from '../components/StatusChip';
@@ -9,11 +9,14 @@ import { type NormDef, canon, normalize, runTaylor } from '../taylor/taylor';
 
 const ACCURACY_BP = 500;
 const POLL_MS = 500;
-const queryRun = Number(new URLSearchParams(location.search).get('run_id')) || null;
+// The run chosen for all desk pages: ?run_id= or ?as_of= (the default run of that date); none, the latest default run.
+// The navigation bar (desk-nav.js, loaded before this module) puts a remembered choice into the address and switches it.
+const query = new URLSearchParams(location.search);
+const queryRun = Number(query.get('run_id')) || null;
+const queryDate = query.get('as_of');
 
 export function ScenarioLab() {
   const [runId, setRunId] = useState<number | null>(queryRun);
-  const [runs, setRuns] = useState<RunHeader[]>([]);
   const [payload, setPayload] = useState<RiskPayload | null>(null);
   const [presets, setPresets] = useState<ScenarioDefOut[]>([]);
   const [presetId, setPresetId] = useState('');
@@ -26,8 +29,7 @@ export function ScenarioLab() {
   runRef.current = runId;
 
   useEffect(() => {
-    listRuns().then(setRuns).catch(e => setError(String(e.message)));
-    if (runId == null) getDefaultRun().then(r => setRunId(r.run_id)).catch(e => setError(String(e.message)));
+    if (runId == null) getDefaultRun(queryDate).then(r => setRunId(r.run_id)).catch(e => setError(String(e.message)));
     getScenarioDefs().then(list => {
       setPresets(list);
       const first = list.find(p => p.scenario_id === 'keyhike') ?? list[0];
@@ -66,12 +68,6 @@ export function ScenarioLab() {
     try { return job.base_run_id !== runId || canon(normalize(job.definition)) !== canon(norm); } catch { return true; }
   }, [job, norm, runId]);
 
-  const pickRun = (id: number) => {
-    const u = new URL(location.href);
-    u.searchParams.set('run_id', String(id));
-    history.replaceState(null, '', u);
-    setRunId(id);
-  };
   const pickPreset = (id: string) => {
     const p = presets.find(x => x.scenario_id === id);
     if (p) { setPresetId(id); setEd({ base: p.definition, add: 0 }); }
@@ -97,18 +93,6 @@ export function ScenarioLab() {
     <>
       <header className="top">
         <div className="brand"><b>Scenario <i>Lab</i></b><span>FI-деск · Тейлор ≈ в браузере, точная переоценка на сервере</span></div>
-        <div className="spacer" />
-        <label className="runpick">
-          <span className="muted">Прогон</span>
-          <select className="sel" value={runId ?? ''} onChange={e => pickRun(+e.target.value)}>
-            {runId != null && !runs.some(r => r.run_id === runId) && <option value={runId}>#{runId}</option>}
-            {runs.map(r => (
-              <option key={r.run_id} value={r.run_id}>
-                {r.business_date} · #{r.run_id} · {r.cut_type}{r.is_default ? ' · по умолчанию' : ''}
-              </option>
-            ))}
-          </select>
-        </label>
       </header>
 
       <main className="scen">

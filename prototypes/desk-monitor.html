@@ -68,20 +68,8 @@ button,select,input{font:inherit;color:inherit}
 .logo rect{fill:var(--fg-3)}
 .meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:var(--fg-2);font-size:12px}
 .meta b{color:var(--fg);font-weight:500}
-.test{border:1px dashed var(--warn);color:var(--fg);padding:1px 7px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;border-radius:2px}
 .ibtn{background:var(--panel-2);border:1px solid var(--line-2);border-radius:2px;padding:3px 9px;cursor:pointer;color:var(--fg-2);font-size:12px}
 .ibtn:hover{color:var(--fg);border-color:var(--accent-line)}
-a.ibtn{text-decoration:none}
-.ap{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;color:var(--fg-2)}
-.ap[hidden]{display:none}
-.ap .dot{width:8px;height:8px;border-radius:50%;background:var(--fg-3);flex:none}
-.ap[data-state="idle"] .dot{background:var(--good)}
-.ap[data-state="running"] .dot{background:var(--accent)}
-.ap[data-state="error"] .dot{background:var(--crit)}
-.ap[data-state="off"] .dot{background:var(--fg-3)}
-.ap .err{color:var(--neg-tx);max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ap .new{border-color:var(--warn);color:var(--fg)}
-.ap .prog{color:var(--fg);max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tag.q-rep{border-color:var(--accent-line);color:var(--accent-ink)}
 .tag.q-nv{border-color:var(--crit);color:var(--neg-tx)}
 
@@ -109,6 +97,7 @@ a.ibtn{text-decoration:none}
 .chip{border:1px solid var(--line-2);background:transparent;border-radius:2px;padding:2px 8px;font-size:12px;cursor:pointer;color:var(--fg-2);white-space:nowrap}
 .chip:hover{color:var(--fg);border-color:var(--accent-line)}
 .chip[aria-pressed="true"]{background:var(--accent-weak);border-color:var(--accent);color:var(--accent-ink)}
+.chip .cn{font-family:var(--font-mono);font-size:10px;color:var(--fg-3);margin-left:5px}
 select{background:var(--panel-2);border:1px solid var(--line-2);border-radius:2px;padding:2px 6px;font-size:12px}
 .tgl{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--fg-2);cursor:pointer;user-select:none}
 .tgl input{position:absolute;opacity:0;width:1px;height:1px}
@@ -298,9 +287,6 @@ details.pop summary::-webkit-details-marker{display:none}
     </div>
     <div class="meta">
       <span>срез <b class="mono" id="asof"></b> МСК · закрытие</span>
-      <span class="test" title="Все цифры вымышленные">Тестовые данные</span>
-      <span class="ap" id="ap" hidden role="status" aria-live="polite"></span>
-      <a class="ibtn" id="settings-link" href="settings.html" title="Настройки: хаб, папки отчётов, адаптер">Настройки</a>
       <button class="ibtn" id="theme-btn" type="button" title="Переключить светлую/тёмную тему">Тема</button>
     </div>
   </div>
@@ -424,6 +410,7 @@ details.pop summary::-webkit-details-marker{display:none}
 <div class="scrim" id="scrim" hidden></div>
 <aside class="drawer" id="drawer" hidden aria-label="Карточка позиции" role="dialog"></aside>
 
+<script src="desk-nav.js"></script>
 <script src="echarts.min.js"></script>
 <script src="desk-loader.js"></script>
 <script>
@@ -441,6 +428,10 @@ const SEG_BASE = ['Гос','Корп','Секьюритизация','Дерив
 const SEG_SEEN = [...new Set(D.positions.map(segOf))];
 const SEGS = SEG_ORDER.filter(s => SEG_BASE.includes(s) || SEG_SEEN.includes(s)).concat(SEG_SEEN.filter(s => !SEG_ORDER.includes(s)));
 const SEG_LABEL = {'Секьюритизация':'Секьюр', 'Суб':'Субфед./муниц.', '—':'Без сегмента'};
+// Портфель — колонка Portfolio отчёта (HTM, торговые…), у позиции; в книге их бывает несколько. Нет колонки — «—».
+const portOf = p => p.portfolio || '—';
+const PORTS = [...new Set(D.positions.map(portOf))].sort((a, b) => (a === '—') - (b === '—') || a.localeCompare(b, 'ru'));
+const BOOK_PORTS = {}; D.positions.forEach(p => (BOOK_PORTS[p.book] = BOOK_PORTS[p.book] || new Set()).add(portOf(p)));
 const CCYS = Object.keys(D.FX).filter(c => c !== 'RUB');
 const CCY_OPTS = ['ALL','RUB'].concat(CCYS, [...new Set(D.positions.map(p => p.ccy))].filter(c => c && c !== 'RUB' && !CCYS.includes(c)));
 const Q_LABEL = {exact:'точно', assumed:'допущение', market_value:'рыночная стоимость', stale_price:'прошлая цена', model_price:'модельная цена', par_proxy:'по номиналу', reported_value:'по отчёту', not_valued:'не оценено'};
@@ -495,6 +486,7 @@ const mbar = f => `<span class="ub"><i class="ub-ok" style="width:${Math.min(100
 /* ---------- state ---------- */
 const COLS = [
   {k:'book', t:'Книга', v:p => D.BOOKS[p.book].name, def:1},
+  {k:'portfolio', t:'Портфель', v:portOf},
   {k:'name', t:'Инструмент', def:1, nm:1},
   {k:'isin', t:'ISIN', mono:1},
   {k:'assetClass', t:'Класс', def:1},
@@ -534,6 +526,7 @@ const TABS = [['summary','Сводка'],['positions','Позиции'],['bonds'
 
 const S = {
   tab:'summary', books:new Set(ALL_BOOKS), ccy:'ALL', segs:new Set(SEGS), withFunding:true,
+  ents:new Set(), desks:new Set(), ports:new Set(), pick:new Set(),  // фильтр по измерениям, пусто — все; books — итог
   sum:{bview:'RUB'},
   pos:{q:'', group:'none', sort:{k:'mvRub', dir:-1}, cols:new Set(COLS.filter(c => c.def).map(c => c.k)), collapsed:new Set(), sel:null},
   risk:{mode:'curves', curve:'RUB RUONIA', cell:null},
@@ -543,48 +536,52 @@ const S = {
   bd:{q:'', curve:'base', group:'none', sort:{k:'mvRub', dir:-1}, sel:null, range:'6M'}
 };
 /* ---------- sticky selection (fidm.sel.v1) ----------
-   {entities, desks, books, segments, ccys}: пустой список — «все». Хранится между прогонами и перезагрузками;
-   id, которых нет в текущем прогоне, не теряются: применяются только присутствующие (если не осталось ни одного —
-   измерение не фильтрует), остальные сохраняются до явного выбора. */
+   {entities, desks, portfolios, books, segments, ccys}: пустой список — «все». Хранится между прогонами и перезагрузками
+   (его же читают Widget Board, Pivot Studio и Scenario Lab); id, которых нет в текущем прогоне, не теряются: применяются
+   только присутствующие (если не осталось ни одного — измерение не фильтрует), остальные сохраняются до явного выбора.
+   Измерения складываются пересечением: юрлицо ∩ деск ∩ портфель ∩ книги ∩ сегмент ∩ валюта; внутри — любое из выбранных. */
 const SEL_KEY = 'fidm.sel.v1';
 const strs = a => Array.isArray(a) ? a.filter(x => typeof x === 'string') : [];
 let SEL = (function(){
   let o = null; try { o = JSON.parse(store.get(SEL_KEY) || 'null'); } catch(e){ o = null; }
   o = o && typeof o === 'object' ? o : {};
-  return {entities:strs(o.entities), desks:strs(o.desks), books:strs(o.books), segments:strs(o.segments), ccys:strs(o.ccys)};
+  return {entities:strs(o.entities), desks:strs(o.desks), portfolios:strs(o.portfolios), books:strs(o.books),
+          segments:strs(o.segments), ccys:strs(o.ccys)};
 })();
 function saveSel(){ store.set(SEL_KEY, JSON.stringify(SEL)); }
-const selEmpty = () => !SEL.entities.length && !SEL.desks.length && !SEL.books.length && !SEL.segments.length && !SEL.ccys.length;
+const selEmpty = () => !SEL.entities.length && !SEL.desks.length && !SEL.portfolios.length && !SEL.books.length && !SEL.segments.length && !SEL.ccys.length;
+// Книга подходит под юрлицо, деск и портфель (skip — кроме этого измерения: так считаются чипы самого измерения).
+const bookIn = (b, skip) => (skip === 'ent' || !S.ents.size || S.ents.has(D.BOOKS[b].entity))
+  && (skip === 'desk' || !S.desks.size || S.desks.has(D.BOOKS[b].desk))
+  && (skip === 'port' || !S.ports.size || [...(BOOK_PORTS[b] || [])].some(x => S.ports.has(x)));
+const facet = skip => ALL_BOOKS.filter(b => bookIn(b, skip));
+// S.books — книги на экране: выбранные книги внутри фасета, а не выбрано ни одной из них — весь фасет.
+function effBooks(){ const f = facet(), pk = f.filter(b => S.pick.has(b)); S.books = new Set(pk.length ? pk : f); }
 function applySel(){
-  let bk = ALL_BOOKS;
-  const narrow = (ids, has) => { if (!ids.length) return; const f = bk.filter(b => has(b, ids)); if (f.length) bk = f; };
-  narrow(SEL.entities, (b, ids) => ids.includes(D.BOOKS[b].entity));
-  narrow(SEL.desks, (b, ids) => ids.includes(D.BOOKS[b].desk));
-  narrow(SEL.books, (b, ids) => ids.includes(b));
-  S.books = new Set(bk);
+  const present = (ids, all) => new Set(ids.filter(x => all.includes(x)));
+  S.ents = present(SEL.entities, ENTS); S.desks = present(SEL.desks, DESKS); S.ports = present(SEL.portfolios, PORTS);
+  S.pick = present(SEL.books, ALL_BOOKS);
+  ['ports','desks','ents'].forEach(k => { if (!facet().length) S[k] = new Set(); });  // сохранённое сочетание пусто в этом прогоне
+  effBooks();
   const sg = SEGS.filter(x => SEL.segments.includes(x)); S.segs = new Set(sg.length ? sg : SEGS);
   const c = SEL.ccys.find(x => CCY_OPTS.includes(x)); S.ccy = c || 'ALL';
 }
-// После действия пользователя: текущий выбор + сохранённые id, которых нет в этом прогоне.
-function storeSel(kind){
-  const allB = S.books.size === ALL_BOOKS.length;
-  if (kind === 'ent' || kind === 'desk') {
-    const key = kind === 'ent' ? 'entity' : 'desk', vals = [...new Set([...S.books].map(b => D.BOOKS[b][key]))];
-    SEL.entities = !allB && kind === 'ent' ? vals : []; SEL.desks = !allB && kind === 'desk' ? vals : []; SEL.books = [];
-  } else if (kind === 'book') {
-    SEL.entities = []; SEL.desks = [];
-    SEL.books = allB ? [] : [...S.books].concat(SEL.books.filter(b => !ALL_BOOKS.includes(b)));
-  } else if (kind === 'books-all') { SEL.entities = []; SEL.desks = []; SEL.books = []; }
-  else if (kind === 'seg') SEL.segments = S.segs.size === SEGS.length ? [] : [...S.segs].concat(SEL.segments.filter(x => !SEGS.includes(x)));
-  else if (kind === 'segs-all') SEL.segments = [];
-  else if (kind === 'ccy') SEL.ccys = S.ccy === 'ALL' ? [] : [S.ccy];
-  else if (kind === 'reset') SEL = {entities:[], desks:[], books:[], segments:[], ccys:[]};
+// После действия пользователя: текущий выбор + сохранённые id, которых нет в этом прогоне (измерение «все» — забыть их).
+function storeSel(){
+  const keep = (cur, all, old) => cur.length ? cur.concat(old.filter(x => !all.includes(x))) : [];
+  SEL = {entities:keep([...S.ents], ENTS, SEL.entities), desks:keep([...S.desks], DESKS, SEL.desks),
+         portfolios:keep([...S.ports], PORTS, SEL.portfolios), books:keep([...S.pick], ALL_BOOKS, SEL.books),
+         segments:keep(S.segs.size === SEGS.length ? [] : [...S.segs], SEGS, SEL.segments), ccys:S.ccy === 'ALL' ? [] : [S.ccy]};
   saveSel();
 }
+// Измерение изменилось: книги, выпавшие из фасета, из выбора уходят; итог и сохранённый выбор — заново.
+function refilter(){ S.pick = new Set([...S.pick].filter(b => bookIn(b))); effBooks(); storeSel(); rerender(); }
+const unfiltered = () => S.books.size === ALL_BOOKS.length && !S.ports.size && S.ccy === 'ALL' && S.segs.size === SEGS.length;
 function selAbsent(){
   const out = [];
   SEL.entities.filter(x => !ENTS.includes(x)).forEach(x => out.push('юрлицо ' + x));
   SEL.desks.filter(x => !DESKS.includes(x)).forEach(x => out.push('деск ' + x));
+  SEL.portfolios.filter(x => !PORTS.includes(x)).forEach(x => out.push('портфель ' + x));
   SEL.books.filter(x => !ALL_BOOKS.includes(x)).forEach(x => out.push('книга ' + x));
   SEL.segments.filter(x => !SEGS.includes(x)).forEach(x => out.push('сегмент ' + x));
   SEL.ccys.filter(x => !CCY_OPTS.includes(x)).forEach(x => out.push('валюта ' + x));
@@ -599,7 +596,7 @@ function selAbsent(){
 })();
 
 /* ---------- data selectors ---------- */
-const P = () => D.positions.filter(p => S.books.has(p.book) && (S.ccy === 'ALL' || p.ccy === S.ccy) && (S.segs.size === SEGS.length || S.segs.has(segOf(p))));
+const P = () => D.positions.filter(p => S.books.has(p.book) && (!S.ports.size || S.ports.has(portOf(p))) && (S.ccy === 'ALL' || p.ccy === S.ccy) && (S.segs.size === SEGS.length || S.segs.has(segOf(p))));
 const FU = () => D.funding.filter(f => S.books.has(f.book) && (S.ccy === 'ALL' || f.ccy === S.ccy));
 const byId = {}; D.positions.forEach(p => { byId[p.id] = p; });
 // Фондирование уровня книги (остатки ДС деривативов, РЕПО). Фондирование облигаций — внутри PnL бумаг (funding, fx).
@@ -687,10 +684,10 @@ function renderKpi(){
   $('kpis').innerHTML = `
   <div class="kpi"><div class="kl"><span>DV01 итого</span><span></span></div>
     <div class="kv${nc(dv)}">${M(dv,2)}<small>млн ₽/б.п.</small></div>
-    <div class="ks">${S.books.size === ALL_BOOKS.length && S.ccy === 'ALL' && S.segs.size === SEGS.length ? chg(dv,'dv01') : ''}${spark(h.map(x => x.dv01), 66, 18)}</div></div>
+    <div class="ks">${unfiltered() ? chg(dv,'dv01') : ''}${spark(h.map(x => x.dv01), 66, 18)}</div></div>
   <div class="kpi"><div class="kl"><span>CS01 итого</span><span></span></div>
     <div class="kv${nc(cs)}">${M(cs,2)}<small>млн ₽/б.п.</small></div>
-    <div class="ks">${S.books.size === ALL_BOOKS.length && S.ccy === 'ALL' && S.segs.size === SEGS.length ? chg(cs,'cs01') : ''}<span title="Чувствительность ОФЗ к спреду ОФЗ − RUONIA">спред ОФЗ <span class="num${nc(ofz)}">${M(ofz,2)}</span></span>${spark(h.map(x => x.cs01), 66, 18)}</div></div>
+    <div class="ks">${unfiltered() ? chg(cs,'cs01') : ''}<span title="Чувствительность ОФЗ к их спреду относительно кривой, на которой считан риск ставок">спред ОФЗ <span class="num${nc(ofz)}">${M(ofz,2)}</span></span>${spark(h.map(x => x.cs01), 66, 18)}</div></div>
   <div class="kpi wide"><div class="kl"><span>ОВП ${S.withFunding ? 'с фондированием' : 'без фондирования'}</span><span>млн вал. · млн ₽ экв.</span></div>
     <div class="ocp">${CCYS.map(c => `<span>${c}</span><span class="num${nc(o[c].net)}">${M(o[c].net,1,true)}</span><span class="num muted">${num(o[c].net * D.FX[c] / 1e6,0,true)} млн ₽</span>`).join('')}</div></div>
   <div class="kpi"><div class="kl"><span>PnL дня</span><span>флэш · рынок</span></div>
@@ -704,19 +701,23 @@ function renderKpi(){
 /* ---------- header: filters ---------- */
 function renderFilters(){
   const ae = document.activeElement, keep = ae && ae.dataset && ae.dataset.act ? [ae.dataset.act, ae.dataset.v] : null;
-  const allB = S.books.size === ALL_BOOKS.length, allS = S.segs.size === SEGS.length, absent = selAbsent();
-  const deskBooks = d => ALL_BOOKS.filter(b => D.BOOKS[b].desk === d);
-  const deskOn = d => !allB && deskBooks(d).length === S.books.size && deskBooks(d).every(b => S.books.has(b));
-  const entBooks = d => ALL_BOOKS.filter(b => D.BOOKS[b].entity === d);
-  const entOn = d => !allB && entBooks(d).length === S.books.size && entBooks(d).every(b => S.books.has(b));
+  const allS = S.segs.size === SEGS.length, absent = selAbsent(), fb = facet(), allB = !fb.some(b => S.pick.has(b));
+  // Чипы юрлиц, десков и портфелей — только значения, у которых есть книги при выборе в остальных измерениях
+  // (выбранные видны всегда, чтобы их можно было снять); число — сколько таких книг. Книги — только из фасета.
+  const group = (label, act, set, vals, skip, has, lbl) => {
+    const f = facet(skip), n = v => f.filter(b => has(b, v)).length;
+    return `<div class="fg"><span class="fl">${label}</span><button type="button" class="chip" data-act="${act}-all" data-v="" aria-pressed="${!set.size}">Все</button>${
+      vals.filter(v => set.has(v) || n(v)).map(v => `<button type="button" class="chip" data-act="${act}" data-v="${esc(v)}" aria-pressed="${set.has(v)}" title="${n(v)} ${plural(n(v),'книга','книги','книг')} при остальном фильтре">${esc(lbl ? lbl(v) : v)}<span class="cn">${n(v)}</span></button>`).join('')}</div>`;
+  };
   $('filters').innerHTML = `
-   ${ENTS.length > 1 ? `<div class="fg"><span class="fl">Юрлицо</span>${ENTS.map(d => `<button type="button" class="chip" data-act="ent" data-v="${esc(d)}" aria-pressed="${entOn(d)}">${esc(d)}</button>`).join('')}</div>` : ''}
-   <div class="fg"><span class="fl">Деск</span>${DESKS.map(d => `<button type="button" class="chip" data-act="desk" data-v="${esc(d)}" aria-pressed="${deskOn(d)}">${esc(d)}</button>`).join('')}</div>
-   <div class="fg"><span class="fl">Книги</span><button type="button" class="chip" data-act="books-all" data-v="" aria-pressed="${allB}">Все</button>${ALL_BOOKS.map(b => `<button type="button" class="chip" data-act="book" data-v="${esc(b)}" aria-pressed="${!allB && S.books.has(b)}" title="${esc([b, D.BOOKS[b].desk, D.BOOKS[b].trader, D.BOOKS[b].entity, BT_LABEL[D.BOOKS[b].bookType]].filter(Boolean).join(' · '))}">${esc(D.BOOKS[b].name)}</button>`).join('')}</div>
+   ${ENTS.length > 1 ? group('Юрлицо', 'ent', S.ents, ENTS, 'ent', (b, v) => D.BOOKS[b].entity === v) : ''}
+   ${group('Деск', 'desk', S.desks, DESKS, 'desk', (b, v) => D.BOOKS[b].desk === v)}
+   ${PORTS.length > 1 ? group('Портфель', 'port', S.ports, PORTS, 'port', (b, v) => !!BOOK_PORTS[b] && BOOK_PORTS[b].has(v), v => v === '—' ? 'Без портфеля' : v) : ''}
+   <div class="fg"><span class="fl">Книги</span><button type="button" class="chip" data-act="books-all" data-v="" aria-pressed="${allB}">Все</button>${fb.map(b => `<button type="button" class="chip" data-act="book" data-v="${esc(b)}" aria-pressed="${!allB && S.pick.has(b)}" title="${esc([b, D.BOOKS[b].desk, D.BOOKS[b].trader, D.BOOKS[b].entity, BT_LABEL[D.BOOKS[b].bookType], BOOK_PORTS[b] && 'портфели: ' + [...BOOK_PORTS[b]].join(', ')].filter(Boolean).join(' · '))}">${esc(D.BOOKS[b].name)}</button>`).join('')}</div>
    <div class="fg"><span class="fl">Сегмент</span><button type="button" class="chip" data-act="segs-all" data-v="" aria-pressed="${allS}">Все</button>${SEGS.map(s => `<button type="button" class="chip" data-act="seg" data-v="${esc(s)}" aria-pressed="${!allS && S.segs.has(s)}">${esc(SEG_LABEL[s] || s)}</button>`).join('')}</div>
    <div class="fg"><label class="fl" for="f-ccy">Валюта</label><select id="f-ccy">${CCY_OPTS.map(c => `<option value="${c}"${S.ccy === c ? ' selected' : ''}>${c === 'ALL' ? 'все' : c}</option>`).join('')}</select></div>
    <div class="fg"><label class="tgl" title="Учитывать фондирование в ОВП, PnL и сценариях"><input type="checkbox" id="f-fund"${S.withFunding ? ' checked' : ''}><span class="tgl-s"></span>с фондированием</label></div>
-   ${(!allB || !allS || S.ccy !== 'ALL' || !selEmpty()) ? '<button type="button" class="lnk" data-act="reset" data-v="" title="Показать все юрлица, книги, сегменты и валюты и забыть сохранённый выбор">Сбросить фильтр</button>' : ''}
+   ${(!unfiltered() || !selEmpty()) ? '<button type="button" class="lnk" data-act="reset" data-v="" title="Показать все юрлица, дески, портфели, книги, сегменты и валюты и забыть сохранённый выбор">Сбросить фильтр</button>' : ''}
    ${absent.length ? `<span class="muted" style="font-size:11px" title="${esc('Сохранённый выбор, которого нет в этом прогоне (сохраняется): ' + absent.join(', '))}">+${absent.length} вне прогона</span>` : ''}`;
   if (keep) { const el = $('filters').querySelector(`[data-act="${keep[0]}"][data-v="${CSS.escape(keep[1] || '')}"]`); if (el) el.focus(); }
 }
@@ -932,7 +933,10 @@ function rBonds(){
     if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1;
     return (typeof x === 'number' ? x - y : String(x).localeCompare(String(y), 'ru')) * dir;
   });
-  if (!rows.some(r => r.p.isin === S.bd.sel)) S.bd.sel = rows.length ? rows.slice().sort((a,b) => Math.abs(b.mvRub) - Math.abs(a.mvRub))[0].p.isin : null;
+  if (!rows.some(r => U.bondKey(r.p) === S.bd.sel)) {  // по умолчанию — крупнейшая по |MV| бумага с ценой или доходностью
+    const priced = rows.filter(r => r.p.price != null || r.p.ytm != null), pool = priced.length ? priced : rows;
+    S.bd.sel = pool.length ? U.bondKey(pool.slice().sort((a,b) => Math.abs(b.mvRub) - Math.abs(a.mvRub))[0].p) : null;
+  }
   const sprT = S.bd.curve === 'own' ? 'Спред расч., б.п.' : 'Спред к ' + (S.bd.curve === 'base' ? 'баз. кривой' : S.bd.curve) + ', б.п.';
   const cols = BD_COLS.filter(c => !(c.k === 'own' && S.bd.curve === 'own'));
   const cell = (c, r) => {
@@ -943,7 +947,7 @@ function rBonds(){
   };
   const aggRow = (cls, label, list, attrs) => `<tr class="${cls}"${attrs || ''}><td colspan="${cols.findIndex(c => c.k === 'ty')}">${label}</td>` + cols.slice(cols.findIndex(c => c.k === 'ty')).map(c => {
     const v = bdAgg(c, list); return v === undefined ? '<td></td>' : `<td class="n${c.sg ? nc(v) : ''}">${num(v, c.d)}</td>`; }).join('') + '</tr>';
-  const rowHtml = r => `<tr class="click${r.newToday ? ' new' : ''}${r.p.isin === S.bd.sel ? ' sel' : ''}" tabindex="0" data-act="bdsel" data-v="${esc(r.p.isin)}">${cols.map(c => cell(c, r)).join('')}</tr>`;
+  const rowHtml = r => `<tr class="click${r.newToday ? ' new' : ''}${U.bondKey(r.p) === S.bd.sel ? ' sel' : ''}" tabindex="0" data-act="bdsel" data-v="${esc(U.bondKey(r.p))}">${cols.map(c => cell(c, r)).join('')}</tr>`;
   let body = '';
   if (S.bd.group === 'none') body = rows.map(rowHtml).join('');
   else {
@@ -962,8 +966,9 @@ function rBonds(){
     [S.bd.curve === 'own' ? 'Расч. спред' : 'Спред к ' + (S.bd.curve === 'base' ? 'баз. кривой' : S.bd.curve), ws == null ? '—' : num(ws,0) + ' б.п.'],
     ['Мод. дюрация', num(wd,2)], ['Спред-дюрация', num(wsd,2)], ['DV01', K(sum(rows, r => r.dv01),0) + ' тыс ₽/б.п.'], ['CS01', K(sum(rows, r => r.cs01),0) + ' тыс ₽/б.п.'],
     ['PnL дня', M(sum(rows, r => r.pnl),1,true) + ' млн ₽']].map(x => `<span>${x[0]}<b>${x[1]}</b></span>`).join('') + '<span class="muted">средние — по |MV|</span>';
-  rBondMap(rows);
-  rBondHist(rows);
+  // карта и история — порознь: ошибка в одной не оставляет пустой другую
+  try { rBondMap(rows); } catch (e) { console.error('карта доходностей', e); $('bd-map-note').textContent = 'Карта не построена: ' + e.message; }
+  try { rBondHist(rows); } catch (e) { console.error('история выпуска', e); $('bd-h-note').textContent = 'История не построена: ' + e.message; }
 }
 // карта доходностей: бумаги одной валюты с фикс. купоном против кривой
 function bdMapCurve(){
@@ -972,18 +977,19 @@ function bdMapCurve(){
 }
 function rBondMap(rows){
   const cc = bdMapCurve(), ccy = D.CURVES[cc].ccy;
-  const pts = rows.filter(r => r.p.ccy === ccy && r.p.couponType !== 'float' && r.p.ytm != null);
+  const fixed = rows.filter(r => r.p.ccy === ccy && r.p.couponType !== 'float' && r.p.ytm != null);
+  const pts = fixed.filter(r => U.yieldTenor(r.p) > 0), nNoT = fixed.length - pts.length;  // без срока (бессрочные, нет даты погашения) — не на карте
   const nFl = rows.filter(r => r.p.ccy === ccy && r.p.couponType === 'float').length, nOther = rows.filter(r => r.p.ccy !== ccy).length;
   $('bd-map-title').textContent = 'Карта доходностей · ' + D.CURVES[cc].name;
-  $('bd-map-note').textContent = [nFl ? `флоатеры (${nFl}) не показаны — их доходность задаёт индекс` : '', nOther ? `бумаги в других валютах (${nOther}) — выберите их кривую в «Спред к» или валюту в фильтре` : '', 'размер — |MV|, пустой кружок — короткая позиция']
+  $('bd-map-note').textContent = [nFl ? `флоатеры (${nFl}) не показаны — их доходность задаёт индекс` : '', nNoT ? `без срока до погашения или оферты (${nNoT}) не показаны` : '', nOther ? `бумаги в других валютах (${nOther}) — выберите их кривую в «Спред к» или валюту в фильтре` : '', 'размер — |MV|, пустой кружок — короткая позиция']
     .filter(Boolean).join(' · ');
   const cats = [...new Set(pts.map(r => r.p.segment === 'Гос' ? 'Гос' : (r.p.rating || 'н/р')))].sort((a,b) => (a === 'Гос' ? -1 : b === 'Гос' ? 1 : ratingIdx(a) - ratingIdx(b)));
   const mx = Math.max(1, ...pts.map(r => Math.abs(r.mvRub)));
   const colOf = k => k === 'Гос' ? TK.fg_2 : TK.cat[(ratingIdx(k) + 1) % 8];
   const maxT = Math.max(5, ...pts.map(r => U.yieldTenor(r.p)));
   const series = cats.map(k => ({type:'scatter', name:k, data:pts.filter(r => (r.p.segment === 'Гос' ? 'Гос' : (r.p.rating || 'н/р')) === k).map(r => {
-    const on = r.p.isin === S.bd.sel, c = colOf(k), short = r.mvRub < 0;
-    return {value:[+U.yieldTenor(r.p).toFixed(3), +r.p.ytm.toFixed(3)], isin:r.p.isin, r, symbolSize:6 + 20 * Math.sqrt(Math.abs(r.mvRub) / mx),
+    const on = U.bondKey(r.p) === S.bd.sel, c = colOf(k), short = r.mvRub < 0;
+    return {value:[+U.yieldTenor(r.p).toFixed(3), +r.p.ytm.toFixed(3)], key:U.bondKey(r.p), r, symbolSize:6 + 20 * Math.sqrt(Math.abs(r.mvRub) / mx),
       itemStyle:{color:short ? 'transparent' : c, borderColor:on ? TK.fg : c, borderWidth:on ? 2.5 : short ? 1.5 : 0, opacity:.9}};
   }), itemStyle:{color:colOf(k)}, emphasis:{scale:1.2}}));
   series.push({type:'line', name:D.CURVES[cc].name, data:D.PILLARS.map((t,i) => [t, D.CURVES[cc].pts[i]]).filter(x => x[0] <= maxT + 2), smooth:.3, symbol:'none', z:1,
@@ -997,17 +1003,18 @@ function rBondMap(rows){
     yAxis:yVal(v => num(v,1), {scale:true}),
     series
   }));
-  if (c) c.on('click', pp => { if (pp.data && pp.data.isin) { S.bd.sel = pp.data.isin; rBonds(); } });
+  if (c) c.on('click', pp => { if (pp.data && pp.data.key) { S.bd.sel = pp.data.key; rBonds(); } });
 }
 // история выпуска (асинхронно: демо — сразу, база — /api/v1/bonds/history)
 let bdTok = 0;
 function rBondHist(rows){
-  const r = rows.find(x => x.p.isin === S.bd.sel);
+  const r = rows.find(x => U.bondKey(x.p) === S.bd.sel);
   const tok = ++bdTok;
   if (!r) { $('bd-h-title').textContent = 'История выпуска'; $('bd-h-head').innerHTML = ''; $('bd-h-stats').innerHTML = ''; $('bd-h-note').textContent = 'Выберите выпуск в таблице или на карте.'; chart('c-bd-hist', {}); return; }
   $('bd-h-title').textContent = 'История выпуска · ' + r.p.name;
   $('bd-h-note').textContent = 'Загрузка…';
-  U.bondHistory(r.p, S.bd.curve).then(h => { if (tok === bdTok && S.tab === 'bonds') drawBondHist(r, h); });
+  U.bondHistory(r.p, S.bd.curve).then(h => { if (tok === bdTok && S.tab === 'bonds') drawBondHist(r, h); })
+    .catch(e => { console.error('история выпуска', e); $('bd-h-note').textContent = 'История не построена: ' + e.message; });
 }
 function drawBondHist(r, h){
   const p = r.p;
@@ -1037,7 +1044,7 @@ function drawBondHist(r, h){
   const G = [{top:30, height:78}, {top:134, height:92}, {top:252, height:84}, {top:362, height:44}].map(g => Object.assign({left:6, right:26, containLabel:true}, g));
   const xa = i => xCat(dates, {gridIndex:i, boundaryGap:false, axisLabel:{show:i === 3, color:TK.fg_3, fontSize:10, fontFamily:TK.mono, hideOverlap:true, formatter:v => v.slice(0,6) + v.slice(8)}});
   const ya = (i, name, fmt) => yVal(fmt, {gridIndex:i, scale:true, splitNumber:2, name, nameLocation:'end', nameGap:6, nameTextStyle:{color:TK.fg_3, fontSize:10, align:'left'}});
-  const ln = (name, gi, data, color, extra) => Object.assign({type:'line', name, xAxisIndex:gi, yAxisIndex:gi, data, showSymbol:false, symbol:'circle', connectNulls:false, lineStyle:{width:1.6, color}, itemStyle:{color}}, extra || {});
+  const ln = (name, gi, data, color, extra) => Object.assign({type:'line', name, xAxisIndex:gi, yAxisIndex:gi, data, showSymbol:data.length <= 40, symbol:'circle', connectNulls:false, lineStyle:{width:1.6, color}, itemStyle:{color}}, extra || {});
   const series = [ln('Цена', 0, W(h.price), TK.cat[0]), ln('Доходность, %', 1, W(h.ytm), TK.cat[0])];
   if (W(h.curveRate).some(v => v != null)) series.push(ln('Кривая ' + h.curve + ' на сроке', 1, W(h.curveRate), TK.fg_3, {lineStyle:{width:1.2, color:TK.fg_3, type:[4,3]}}));
   if (hasSpr) series.push(ln(sprName, 2, W(spr), TK.cat[1]));
@@ -1119,7 +1126,7 @@ function openDrawer(id){
   $('drawer').innerHTML = `
     <div class="dr-h"><div><h2>${esc(p.name)}</h2><div class="dr-sub"><span class="pill">${esc(bk.name)}</span><span class="pill">${esc(p.assetClass)}</span><span class="pill">${esc(p.ccy)}</span>${p.rating ? `<span class="pill">${esc(p.rating)}</span>` : ''}${p.newToday ? '<span class="tag" style="margin:0">NEW · сделка сегодня</span>' : ''}</div></div>
       <button type="button" class="ibtn" id="dr-close" aria-label="Закрыть карточку">Закрыть ✕</button></div>
-    ${p.instrType === 'BOND' ? `<div class="dr-s"><button type="button" class="lnk" data-act="bdhist" data-v="${esc(p.isin)}">История цены, доходности и спреда выпуска →</button></div>` : ''}
+    ${p.instrType === 'BOND' ? `<div class="dr-s"><button type="button" class="lnk" data-act="bdhist" data-v="${esc(U.bondKey(p))}">История цены, доходности и спреда выпуска →</button></div>` : ''}
     <div class="dr-s"><h4>Параметры</h4><dl class="kvl">${F.map(x => `<div><dt>${esc(x[0])}</dt><dd title="${esc(x[1])}">${esc(x[1])}</dd></div>`).join('')}</dl></div>
     ${repHtml(p)}
     <div class="dr-s bk"><h4>DV01 по бакетам, тыс ₽/б.п.</h4>${curves.length ? curves.map(c => `<div class="cap"><span>${esc(D.CURVES[c].name)}</span><span class="mono">${K(sum(p.risk[c]),1)}</span></div>${bucketSvg(p.risk[c])}`).join('') : '<p class="note">Нет процентного риска по кривым (CDS / спот FX).</p>'}</div>
@@ -1149,7 +1156,7 @@ function closeDrawer(){
 /* ======================= 3. Риски по кривым ======================= */
 function rRisk(){
   { const l0 = P(), kd = sum(l0, p => sum((p.risk && p.risk['RUB KEY']) || [])), ofz = sum(l0, p => p.ofzSpr01 || 0), cs = sum(l0, p => p.cs01);
-    $('risk-extra').innerHTML = `<span title="RUB-облигации: риск ставок — на RUONIA; ОФЗ — плюс спред ОФЗ к RUONIA">спред ОФЗ01 <b class="num${nc(ofz)}">${K(ofz,0)}</b></span> · <span title="CS01 корпоратов RUB — к RUONIA">CS01 <b class="num${nc(cs)}">${K(cs,0)}</b></span> · <span title="Чувствительность к базису КС − RUONIA: DV01 на кривой RUB KEY">базис КС−RUONIA <b class="num${nc(kd)}">${K(kd,0)}</b></span> тыс ₽/б.п.`; }
+    $('risk-extra').innerHTML = `<span title="Чувствительность ОФЗ к их спреду относительно кривой, на которой считан риск ставок (в прогоне — КБД, в демо — RUONIA)">спред ОФЗ01 <b class="num${nc(ofz)}">${K(ofz,0)}</b></span> · <span title="CS01: чувствительность к кредитному спреду бумаг к их базовой кривой">CS01 <b class="num${nc(cs)}">${K(cs,0)}</b></span> · <span title="DV01 на кривой RUB KEY: чувствительность к ключевой ставке (флоатеры на КС, свопы на КС)">DV01 на КС <b class="num${nc(kd)}">${K(kd,0)}</b></span> тыс ₽/б.п.`; }
   if (!D.CURVES[S.risk.curve] && CURVES.length) { S.risk.curve = CURVES[0]; S.risk.cell = null; }  // the default (RUB RUONIA) is the demo's: a run may publish other curves only
   const l = P(), mode = S.risk.mode, curve = S.risk.curve;
   document.querySelectorAll('#risk-mode button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === mode));
@@ -1537,13 +1544,13 @@ document.addEventListener('click', e => {
   if (t) {
     const a = t.dataset.act, v = t.dataset.v;
     if (a === 'tab' || a === 'goto') return setTab(v);
-    if (a === 'ent') { const db = ALL_BOOKS.filter(b => D.BOOKS[b].entity === v); const exact = S.books.size === db.length && db.every(b => S.books.has(b)); S.books = new Set(exact ? ALL_BOOKS : db); storeSel('ent'); return rerender(); }
-    if (a === 'desk') { const db = ALL_BOOKS.filter(b => D.BOOKS[b].desk === v); const exact = S.books.size === db.length && db.every(b => S.books.has(b)); S.books = new Set(exact ? ALL_BOOKS : db); storeSel('desk'); return rerender(); }
-    if (a === 'book') { toggleIn(S.books, ALL_BOOKS, v); storeSel('book'); return rerender(); }
-    if (a === 'books-all') { S.books = new Set(ALL_BOOKS); storeSel('books-all'); return rerender(); }
-    if (a === 'seg') { toggleIn(S.segs, SEGS, v); storeSel('seg'); return rerender(); }
-    if (a === 'segs-all') { S.segs = new Set(SEGS); storeSel('segs-all'); return rerender(); }
-    if (a === 'reset') { S.books = new Set(ALL_BOOKS); S.segs = new Set(SEGS); S.ccy = 'ALL'; storeSel('reset'); return rerender(); }
+    const dim = {ent:'ents', desk:'desks', port:'ports', book:'pick'}[a.replace(/-all$/, '')];
+    if (dim && a.endsWith('-all')) { S[dim].clear(); return refilter(); }
+    if (dim) { const s = S[dim]; if (s.has(v)) s.delete(v); else s.add(v); return refilter(); }  // в измерении — любое из выбранных
+    if (a === 'books-all') { S.pick.clear(); return refilter(); }
+    if (a === 'seg') { toggleIn(S.segs, SEGS, v); return refilter(); }
+    if (a === 'segs-all') { S.segs = new Set(SEGS); return refilter(); }
+    if (a === 'reset') { ['ents','desks','ports','pick'].forEach(k => S[k].clear()); S.segs = new Set(SEGS); S.ccy = 'ALL'; return refilter(); }
     if (a === 'sort') { if (S.pos.sort.k === v) S.pos.sort.dir *= -1; else { const c = COLS.find(x => x.k === v); S.pos.sort = {k:v, dir:c.n ? -1 : 1}; } return rPositions(); }
     if (a === 'grp') { if (S.pos.collapsed.has(v)) S.pos.collapsed.delete(v); else S.pos.collapsed.add(v); rPositions(); const r = document.querySelector(`tr[data-act="grp"][data-v="${CSS.escape(v)}"]`); if (r) r.focus(); return; }
     if (a === 'pos') { lastFocus = t; return openDrawer(v); }
@@ -1582,7 +1589,7 @@ document.addEventListener('click', e => {
 });
 document.addEventListener('change', e => {
   const t = e.target;
-  if (t.id === 'f-ccy') { S.ccy = t.value; storeSel('ccy'); return rerender(); }
+  if (t.id === 'f-ccy') { S.ccy = t.value; return refilter(); }
   if (t.id === 'f-fund') { S.withFunding = t.checked; renderKpi(); return renderTab(); }
   if (t.id === 'fu-roll') { S.fund.roll = t.checked; return rCarry(P()); }
   if (t.id === 'sum-bview') { S.sum.bview = t.value; return rSummary(); }
@@ -1628,45 +1635,5 @@ window.addEventListener('resize', () => { clearTimeout(rT); rT = setTimeout(() =
 $('asof').textContent = dt(D.asOf) + (D.source && D.source.publishedAt ? ' ' + D.source.publishedAt.slice(11, 16) : '');
 readTokens(); renderFilters(); renderKpi(); renderTabs(); renderColPop(); renderTab();
 
-/* ---------- автопилот (GET api/v1/autopilot/status, раз в 30 с, во время цикла раз в 5 с; 404 или нет сети — плашки нет) ---------- */
-(function autopilot(){
-  if (!/^https?:$/.test(location.protocol)) return;
-  const box = $('ap'), ST = {idle:'ожидание', running:'идёт цикл', error:'ошибка'};
-  const hm = s => { const d = new Date(s); return isNaN(d) ? '' : d.toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'}); };
-  const pinned = () => { const u = new URL(location.href); return u.searchParams.has('run_id') || u.searchParams.has('as_of') || u.searchParams.has('demo'); };
-  let base = D.source && D.source.kind === 'db' && !pinned() ? String(D.source.runId) : null, fastUntil = 0, timer = null, busy = false, last = null;
-  function schedule(){ clearTimeout(timer); timer = setTimeout(poll, Date.now() < fastUntil || (last && last.state === 'running') ? 5000 : 30000); }
-  function render(j){
-    last = j;
-    const st = !j.enabled ? 'off' : (j.state || 'idle'), lr = j.latest_run, fresh = lr && base != null && String(lr.run_id) !== base;
-    box.dataset.state = st;
-    box.innerHTML = `<span class="dot" aria-hidden="true"></span><span>Автопилот: <b>${esc(j.enabled ? (ST[st] || st) : 'выключен')}</b></span>`
-      + (st === 'running' && j.progress && j.message ? `<span class="prog" title="${esc(j.progress.detail || j.message)}">${esc(j.message)}</span>` : '')
-      + (j.last_cycle_at ? `<span class="muted" title="Последний цикл${j.last_ok_at ? '; последний успешный ' + esc(j.last_ok_at.replace('T',' ').slice(0,16)) : ''}">обн. ${esc(hm(j.last_cycle_at))}</span>` : '')
-      + (lr ? `<span class="muted" title="Последний прогон автопилота">прогон ${esc(dt(lr.as_of))} #${esc(lr.run_id)}</span>` : '')
-      + (st === 'error' && j.message ? `<span class="err" title="${esc(j.message)}">${esc(j.message)}</span>` : '')
-      + (fresh ? `<button type="button" class="ibtn new" id="ap-load" title="Загрузить новый прогон; выбор юрлиц и книг сохранится">Новый прогон ${esc(dt(lr.as_of))} — показать</button>` : '')
-      + `<button type="button" class="ibtn" id="ap-run" title="Запустить цикл автопилота сейчас: хаб, папки отчётов, EOD"${busy || st === 'running' ? ' disabled' : ''}>Обновить</button>`;
-    box.hidden = false;
-  }
-  function poll(){
-    fetch('api/v1/autopilot/status', {cache:'no-store'}).then(r => r.ok ? r.json() : null).then(j => {
-      if (!j || typeof j !== 'object') { box.hidden = true; return; }
-      if (base == null && j.latest_run) base = String(j.latest_run.run_id);  // страница закреплена на прогоне: новое — после загрузки
-      render(j);
-    }).catch(() => { box.hidden = true; }).then(schedule);
-  }
-  box.addEventListener('click', e => {
-    if (e.target.id === 'ap-load') {  // выбор хранится в localStorage (fidm.sel.v1): переход его не теряет
-      const u = new URL(location.href); ['as_of','run_id','demo'].forEach(k => u.searchParams.delete(k)); location.href = u.toString(); return;
-    }
-    if (e.target.id !== 'ap-run') return;
-    busy = true; if (last) render(last);
-    fetch('api/v1/autopilot/run', {method:'POST'}).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); })
-      .catch(err => { if (last) render(Object.assign({}, last, {state:'error', message:'Не удалось запустить: ' + err.message})); })
-      .then(() => { busy = false; fastUntil = Date.now() + 60000; clearTimeout(timer); timer = setTimeout(poll, 1500); });
-  });
-  poll();
-})();
 })();
 </script>

@@ -126,7 +126,8 @@ def _json(v: Any) -> Any:
     return v.isoformat() if isinstance(v, date) else float(v) if isinstance(v, Decimal) else v
 
 
-def _not_valued(r: dict[str, Any], books: dict[str, dict], x: dict[str, Any] | None) -> dict[str, Any]:
+def _not_valued(r: dict[str, Any], books: dict[str, dict], x: dict[str, Any] | None,
+                portfolio: str | None) -> dict[str, Any]:
     """A run_position without fact as a Desk Monitor position: visible, PV empty, nothing in any total. ``x``: its
     report row (``INPUT_FIELDS``, None for a legacy row): name, currency, maturity and the raw x_* fields."""
     x = {k: _json(v) for k, v in (x or {}).items() if v is not None}
@@ -143,7 +144,8 @@ def _not_valued(r: dict[str, Any], books: dict[str, dict], x: dict[str, Any] | N
         "notional": None,
         "notionalRub": None, "price": None, "mv": None, "mvRub": None, "dv01": 0.0, "cs01": 0.0, "ofzSpr01": 0.0,
         "risk": {}, "fxDelta": {}, "jtd": 0.0, "gamma": [], **gamma_summary([], None, None, 0.0),
-        "entity": books.get(r["book_id"], {}).get("entity", "—"), "newToday": False, "notValued": True,
+        "entity": books.get(r["book_id"], {}).get("entity", "—"), "portfolio": portfolio, "newToday": False,
+        "notValued": True,
         "pnl": {**zero, "official": None, "breakNote": None},
         "extra": {"quality": "not_valued", "valuation": "not_valued", "reason": r["reason"],
                   "quantity": r["quantity"], **({"reported": x} if x else {})},
@@ -199,6 +201,12 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
     rating_order = sorted(used, key=lambda r:
                           RATINGS.index(r) if r in RATINGS else len(RATINGS) + used.index(r))
 
+    # the report's Portfolio column (the adapter's x_portfolio: HTM, trading, ...) of every position, valued or
+    # not, for the Desk Monitor's portfolio filter; None for a row without it (a legacy load)
+    portfolio = {r["position_id"]: r["portfolio"] for r in con.execute(
+        "SELECT position_id, x->>'x_portfolio' AS portfolio FROM position_input WHERE set_id = ANY(%s)"
+        " AND x ? 'x_portfolio'", (run["position_set_ids"] or [],))}
+
     positions = []
     for row in prows:
         p, q = row["fact"], row["pnl"]
@@ -235,7 +243,7 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
             "wal": p.get("wal"), "cpr": p.get("cpr"), "counterparty": p.get("counterparty"),
             "newToday": bool(p.get("new_today")),
             "gamma": gamma, **gamma_summary(gamma, p.get("mv_rub"), p.get("convexity"), cs01),
-            "entity": books.get(p["book_id"], {}).get("entity", "—"),
+            "entity": books.get(p["book_id"], {}).get("entity", "—"), "portfolio": portfolio.get(pid),
             "pnl": {
                 "carry": comp["carry"], "rolldown": comp["rolldown"], "rates": comp["rates"],
                 "spread": comp["spread"],
@@ -271,7 +279,8 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         if unvalued else {}
     for r in unvalued:
         i = inputs.get(r["position_id"])
-        positions.append(_not_valued(r, books, {k: v for k, v in i.items() if k != "position_id"} if i else None))
+        positions.append(_not_valued(r, books, {k: v for k, v in i.items() if k != "position_id"} if i else None,
+                                     portfolio.get(r["position_id"])))
 
     scenarios = [{"id": s["scenario_id"], "name": s["name"], "kind": s["kind"], "description": s["description"],
                   **s["definition"]} for s in con.execute(

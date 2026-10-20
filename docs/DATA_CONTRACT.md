@@ -720,7 +720,7 @@ OFZ_SPREAD_MOVE?, JTD_RECOVERY, FUNDING_RULES[{bookType?,desk?,book?,entity?,ins
 OCP_TRANSFERS[{from,to,ccy,amount,before,rate,valueDate}], CBR_MEETINGS[{date,effective}]
 CARRY_SCENARIOS[{id,name,ks{mode,steps?,path?},on?,fundSpread?,hardCcy?}], CARRY_HORIZONS[[label,months]]
 official{asOf,received,basis:'CBR',receivedAt}
-positions[{id,book,entity,assetClass,segment,instrType,name,isin,issuer,issuerGroup,sector,rating,ccy,maturity,tenorY,
+positions[{id,book,entity,portfolio,assetClass,segment,instrType,name,isin,issuer,issuerGroup,sector,rating,ccy,maturity,tenorY,
            couponType,coupon,index,margin,side,notional,notionalRub,price,mv,mvRub,ytm,spreadBp,mdur,sprDur,convexity,
            dv01,cs01,ofzSpr01,risk{curve:[11]},fxDelta{ccy:amt},jtd,wal,cpr,counterparty,newToday,
            gamma[[f1,f2,d2PV]],gammaIr,gammaCs,gammaIrCs,gammaSource,
@@ -740,6 +740,8 @@ source{kind:'db'|'demo',runId,runType,publishedAt,libVersion,marketSnapshot,cont
 `unexplained` = `official` − `explainedCbr` (0, пока `official` нет); `amountRub` — по рыночному курсу; `pnl.fx` строки = `fxGross` − `fxAllocated`.
 Для прогона 1.0–1.2: курсы ЦБ = рыночным, `bookType` — по позициям (есть облигации → `TRADING`), `entity` = «—», `kind` = `DEAL`,
 `CARRY_SCENARIOS` — только «КС без изменений».
+`portfolio` — колонка Portfolio отчёта о позициях (поле `x_portfolio` строки адаптера: HTM, торговые портфели и т. п.),
+у каждой позиции, оценённой и нет; `null` — колонки нет (загрузка `load-positions`; хранилище tdm — всегда `null`). По нему — фильтр «Портфель» Desk Monitor.
 
 ### 6.1 Какие экраны что используют
 

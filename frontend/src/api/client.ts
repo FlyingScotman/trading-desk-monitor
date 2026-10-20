@@ -9,8 +9,8 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return r.json();
 }
 
-export const getDefaultRun = () => api<RunHeader>('/runs/default');
-export const listRuns = () => api<{ runs: RunHeader[] }>('/runs?status=complete&limit=100').then(r => r.runs);
+export const getDefaultRun = (businessDate?: string | null) =>
+  api<RunHeader>('/runs/default' + (businessDate ? `?business_date=${encodeURIComponent(businessDate)}` : ''));
 export const getRisk = (runId: number) => api<RiskPayload>(`/runs/${runId}/risk`);
 export const getScenarioDefs = () =>
   api<{ scenarios: ScenarioDefOut[] }>('/scenario-defs').then(r => r.scenarios);

@@ -488,6 +488,10 @@
   fx('FXB', 'USDRUB', 'FWD 1M', -6 * mm, 81.90, '2026-11-13', { newToday: true });
 
   positions.forEach(p => { if (!p.entity) p.entity = BOOKS[p.book].entity; if (p.ofzSpr01 == null) p.ofzSpr01 = 0; });
+  // portfolio — колонка Portfolio отчёта банка (x_portfolio): по режиму книги; длинные ОФЗ — портфель ликвидности,
+  // так что в одной книге бывают два портфеля
+  const PORTFOLIO = { TRADING: 'Торговый', HTM: 'HTM', DERIVS: 'Деривативы' };
+  positions.forEach(p => { p.portfolio = p.book === 'OFZ' && p.tenorY > 10 ? 'Ликвидность' : PORTFOLIO[BOOKS[p.book].bookType]; });
   const cleanMv = p => p.mv - p.notional * (p.accrued || 0) / 100;   // чистая MV в валюте бумаги
 
   // ---------- ставки фондирования (справочник funding_rates, docs/DATA_REQUIREMENTS.md) ----------
@@ -552,6 +556,7 @@
           couponType: null, coupon: null, index: null, side: a > 0 ? 'BUY' : 'SELL', notional: a, price: rate,
           mv: 0, mvRub: 0, ytm: null, spreadBp: null, mdur: null, dv01: 0, cs01: 0, ofzSpr01: 0, risk: {}, fxDelta, jtd: 0,
           counterparty: 'Книга «' + cp + '» (внутр.)', newToday: true, ocpTransfer: true, entity: BOOKS[bk].entity,
+          portfolio: PORTFOLIO[BOOKS[bk].bookType],
         });
       });
       OCP_TRANSFERS.push({ from: b, to: BOOKS[b].ocpTo, ccy, amount: amt, before: ocp[ccy], rate, valueDate: NEXT_DATE });

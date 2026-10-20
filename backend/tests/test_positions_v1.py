@@ -351,3 +351,31 @@ def test_book_rows_fallbacks():
     assert [r["book_id"] for r in rows] == ["OFZ", "REAL", "META"]
     assert rows[0]["entity"] == "Демо" and (rows[1]["name"], rows[1]["entity"]) == ("REAL", "—")
     assert (rows[2]["name"], rows[2]["desk"], rows[2]["entity"], rows[2]["book_type"]) == ("M", "D", "E", "HTM")
+
+
+def test_portfolio_of_every_position(ctx, store_url):
+    """The report's Portfolio column (x_portfolio) reaches window.DESK on every position, valued or not; a legacy
+    row has none. The Desk Monitor filters by it (HTM vs trading)."""
+    d = date.fromisoformat(DATE)
+    with store.connect(store_url) as con:
+        con.execute("INSERT INTO inbox_file (sha256, path, name, size_bytes, mtime) VALUES (%s, 'p.csv', 'p.csv', 1,"
+                    " now())", ("b" * 64,))
+        store.store_inbox_set(
+            con, book_id="MIX1", valid_date=d, source="positions_csv", priority=None, report_date=d, report_ts=None,
+            seq=None, generated_at=None, file_mtime=datetime.now(UTC), file_name="p.csv", sha256="b" * 64,
+            adapter_fingerprint="fp", unit_hash="u", rows=[
+                {"_src": "L2", "book_id": "MIX1", "position_id": "MIX1|OFZ", "asset_class": "bond",
+                 "instrument_id": "SU26238RMFS4", "quantity": "10", "ccy": "RUB", "x_portfolio": "HTM"},
+                {"_src": "L3", "book_id": "MIX1", "position_id": "MIX1|IRS", "asset_class": "otc",
+                 "source_instrument_id": "IRS-9", "ccy": "RUB", "x_portfolio": "Торговый"}])
+        store.load_positions(con, [("L1", "OFZ", "SU26238RMFS4", 5.0)], valid_date=d, source_name="tests",
+                             source_sha256="-")
+        inp = store.positions_for(con, d)
+        _, positions = run(ctx, inp)
+        rid, status, _ = desk_run.publish(con, ctx, positions, prev=None, inputs=inp)
+    assert status == "complete"
+    desk = TestClient(create_app(store_url)).get(f"/api/v1/compat/desk?run_id={rid}").json()
+    pos = {p["id"]: p for p in desk["positions"]}
+    assert not pos["MIX1|OFZ"].get("notValued") and pos["MIX1|IRS"]["notValued"]
+    assert (pos["MIX1|OFZ"]["portfolio"], pos["MIX1|IRS"]["portfolio"], pos["L1"]["portfolio"]) == (
+        "HTM", "Торговый", None)

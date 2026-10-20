@@ -159,6 +159,7 @@ def assemble(con, run):
             "wal": p["wal"], "cpr": p["cpr"], "counterparty": p["counterparty"], "newToday": bool(p["new_today"]),
             "gamma": gamma.get(pid, []), **gamma_summary(gamma.get(pid), p["mv_rub"], p["convexity"], p["cs01"]),
             "entity": books.get(p["book_id"], {}).get("entity", "—"),
+            "portfolio": None,  # колонка Portfolio отчёта банка: строк отчёта в хранилище tdm нет
             "pnl": {
                 "carry": comp["carry"], "rolldown": comp["rolldown"], "rates": comp["rates"], "spread": comp["spread"],
                 "fx": comp["fx_gross"] + comp["fx_funding"], "funding": comp["funding"],

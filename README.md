@@ -16,6 +16,11 @@
 
 Лимиты и VaR сюда не входят: их считают отдельные модули.
 
+Страницы связаны: строка навигации вверху каждой (и React-приложения `/app/`) ведёт на любую страницу и несёт общий
+выбор прогона (дата/номер — во всех страницах один), показывает автопилот с кнопкой «Обновить» и плашку «Тестовые данные»,
+только когда страница и правда на демо-наборе. Фильтр Desk Monitor (юрлицо ∩ деск ∩ портфель ∩ книги ∩ сегмент ∩ валюта)
+действует и на Widget Board, Pivot Studio и Scenario Lab; строка показывает его и снимает.
+
 ## Быстрый старт
 
 ```bash
@@ -57,7 +62,8 @@ python -m tdm attach-official --as-of 2026-10-13   # T+1: официальный
 ## Структура
 
 ```
-prototypes/   страницы UI, desk-loader.js (откуда брать данные), desk-util.js (расчёты в браузере), data.js (демо)
+prototypes/   страницы UI, desk-nav.js (строка навигации, общий прогон, автопилот), desk-loader.js (откуда брать данные),
+              desk-util.js (расчёты в браузере), desk-scope.js (фильтр Desk Monitor на других страницах), data.js (демо)
 tdm/          schema.sql, datasets.py (спецификация входных наборов), loader.py (CSV), market.py, histscen.py,
               writer.py (SDK), importer.py, assemble.py (БД → window.DESK), api.py, server.py, cli.py
 contract/     JSON Schema пакета прогона, csv/ — шаблоны входных наборов

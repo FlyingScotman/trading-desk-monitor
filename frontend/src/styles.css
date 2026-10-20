@@ -37,7 +37,6 @@ button,input,select{font:inherit;color:inherit}
 .brand b i{font-style:normal;color:var(--accent)}
 .brand span{color:var(--fg-3);font-size:12px}
 .spacer{flex:1}
-.runpick{display:flex;gap:6px;align-items:center;font-size:12px}
 .sel{border:1px solid var(--line-strong);background:var(--surface);padding:4px 6px;border-radius:3px;font-family:var(--font-mono);max-width:100%}
 .btn{border:1px solid var(--line-strong);background:var(--surface);padding:4px 10px;border-radius:3px;cursor:pointer;color:var(--fg)}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
