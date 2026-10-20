@@ -181,7 +181,7 @@ def test_cli_revalues_the_previous_date_with_the_same_carried_spreads(store_url,
     csv = _cli_env(monkeypatch, tmp_path, store_url, book)
     sentinel = {MODEL: CarriedSpread(MODEL, 123.0, date.fromisoformat(DATE) - timedelta(days=7), "test")}
     monkeypatch.setattr(store, "carried_spreads", lambda con, before: sentinel)
-    monkeypatch.setattr(SnapshotDir, "previous_market_date", lambda self, d: DATE)  # the fixture has one date,
+    monkeypatch.setattr(SnapshotDir, "previous_market_date", lambda self, d, cut="eod_final": DATE)  # one date,
     monkeypatch.setattr(cli, "attach_pnl", lambda *a: None)  # so no PnL between the "two" dates
     calls = []
 

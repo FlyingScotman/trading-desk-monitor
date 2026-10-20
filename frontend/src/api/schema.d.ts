@@ -62,7 +62,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Default Run */
+        /**
+         * Default Run
+         * @description The run shown (R11): of business_date, its default run, otherwise its latest intraday run; without business_date, the newest such run (today's intraday run when there is one)
+         */
         get: operations["default_run_api_v1_runs_default_get"];
         put?: never;
         post?: never;
@@ -334,7 +337,7 @@ export interface components {
              * Step
              * @enum {string}
              */
-            step: "sync" | "scan" | "eod" | "history";
+            step: "sync" | "scan" | "eod" | "intraday" | "history";
             /** Done */
             done: number;
             /** Total */
@@ -342,7 +345,10 @@ export interface components {
             /** Detail */
             detail: string;
         };
-        /** AutopilotRun */
+        /**
+         * AutopilotRun
+         * @description The newest run shown (R11: today's intraday run when there is one) and its market slice.
+         */
         AutopilotRun: {
             /** Run Id */
             run_id: string;
@@ -350,6 +356,16 @@ export interface components {
             as_of: string;
             /** Created At */
             created_at: string | null;
+            /** Run Type */
+            run_type?: string | null;
+            /** Cut Type */
+            cut_type?: string | null;
+            /** Cut Ts */
+            cut_ts?: string | null;
+            /** Label */
+            label?: string | null;
+            /** Pnl Basis */
+            pnl_basis?: string | null;
         };
         /** AutopilotStatus */
         AutopilotStatus: {
@@ -846,6 +862,33 @@ export interface components {
              * @description The default run of its date: the latest complete EOD run on eod_final, otherwise on eod_preliminary (04 §3)
              */
             is_default: boolean;
+            /**
+             * Is Current
+             * @description The run shown for its date (R11): its default run, otherwise its latest complete INTRADAY run (today's book on the latest intraday cut). Only the latest INTRADAY run of a date is kept
+             * @default false
+             */
+            is_current?: boolean;
+            /**
+             * Cut Ts
+             * @description Nominal UTC instant of the market cut (the intraday cut time); null for runs made before R11
+             */
+            cut_ts?: string | null;
+            /**
+             * Label
+             * @description The run's market slice as the pages show it: «20.10 14:30 МСК · внутри дня», «19.10 · закрытие предв.», «19.10 · закрытие»
+             * @default
+             */
+            label?: string;
+            /**
+             * Prev Cut Type
+             * @description Cut of the snapshot the flash PnL is measured against (eod_final, else eod_preliminary); null without one
+             */
+            prev_cut_type?: string | null;
+            /**
+             * Pnl Basis
+             * @description Set when the flash PnL is not against the previous business day's eod_final: what it is against («PnL от 15.10 (закрытие): нет закрытия 16.10»)
+             */
+            pnl_basis?: string | null;
             /** Market Snapshot Id */
             market_snapshot_id: string;
             /** Static Snapshot Id */
@@ -927,6 +970,33 @@ export interface components {
              * @description The default run of its date: the latest complete EOD run on eod_final, otherwise on eod_preliminary (04 §3)
              */
             is_default: boolean;
+            /**
+             * Is Current
+             * @description The run shown for its date (R11): its default run, otherwise its latest complete INTRADAY run (today's book on the latest intraday cut). Only the latest INTRADAY run of a date is kept
+             * @default false
+             */
+            is_current?: boolean;
+            /**
+             * Cut Ts
+             * @description Nominal UTC instant of the market cut (the intraday cut time); null for runs made before R11
+             */
+            cut_ts?: string | null;
+            /**
+             * Label
+             * @description The run's market slice as the pages show it: «20.10 14:30 МСК · внутри дня», «19.10 · закрытие предв.», «19.10 · закрытие»
+             * @default
+             */
+            label?: string;
+            /**
+             * Prev Cut Type
+             * @description Cut of the snapshot the flash PnL is measured against (eod_final, else eod_preliminary); null without one
+             */
+            prev_cut_type?: string | null;
+            /**
+             * Pnl Basis
+             * @description Set when the flash PnL is not against the previous business day's eod_final: what it is against («PnL от 15.10 (закрытие): нет закрытия 16.10»)
+             */
+            pnl_basis?: string | null;
             /** Market Snapshot Id */
             market_snapshot_id: string;
             /** Static Snapshot Id */

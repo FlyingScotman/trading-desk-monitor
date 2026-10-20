@@ -39,11 +39,14 @@ ROWS = [{"snapshot_id": MARKET, "kind": "market", "cut_type": "eod_final", "busi
 
 class Stub(ThreadingHTTPServer):
     """Knobs: ``snapshots`` (False = hub without the snapshot layer), ``status`` (forced code for
-    /v1), ``fail`` (5xx answers before success), ``body`` (override bundle bytes)."""
+    /v1), ``fail`` (5xx answers before success), ``body`` (override bundle bytes), ``rows`` (the list, the
+    fixtures' by default) and ``bundles`` (more bundle bodies by id: other cuts and dates)."""
 
     def reset(self) -> None:
         self.snapshots, self.status, self.fail, self.body, self.page = True, None, 0, None, 1
         self.requests: list[str] = []
+        self.rows: list[dict] = list(ROWS)
+        self.bundles: dict[str, bytes] = {}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -81,7 +84,8 @@ class Handler(BaseHTTPRequestHandler):
             s.fail -= 1
             return self._json(503, {"error": {"status": 503, "message": "database unavailable"}})
         if u.path == "/v1/snapshots":
-            rows = [r for r in ROWS if all(r.get(k) == q[k] for k in ("kind", "cut_type", "business_date") if k in q)]
+            rows = [r for r in s.rows if all(r.get(k) == q[k] for k in ("kind", "cut_type", "business_date") if k in q)]
+            rows.sort(key=lambda r: (r["business_date"], r.get("cut_ts") or ""), reverse=True)  # the hub's order
             if q.get("latest") == "true":
                 return self._json(200, {"data": rows[:1], "meta": {"returned": len(rows[:1]), "latest": True}})
             off = int(q.get("offset", 0))
@@ -89,12 +93,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"data": chunk, "meta": {
                 "next_offset": off + s.page if off + s.page < len(rows) else None}})
         sid, _, leaf = u.path.removeprefix("/v1/snapshots/").partition("/")
-        if sid not in (MARKET, STATIC):
+        if sid not in (MARKET, STATIC) and sid not in s.bundles:
             return self._json(404, {"error": {"status": 404, "message": "snapshot not found"}})
         if leaf == "manifest":
-            row = next(r for r in ROWS if r["snapshot_id"] == sid)
+            row = next(r for r in s.rows if r["snapshot_id"] == sid)
             return self._json(200, {"data": {}, "meta": {"published_at": row["published_at"], "superseded_by": None}})
-        body = s.body if s.body is not None else (FIX / f"{sid}.json.gz").read_bytes()
+        body = s.body if s.body is not None else s.bundles.get(sid) or (FIX / f"{sid}.json.gz").read_bytes()
         return self._send(200, body, "application/gzip", ETag=f'"{sid}"', X_Snapshot_Sha256=sid)
 
 

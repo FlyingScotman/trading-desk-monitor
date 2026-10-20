@@ -24,14 +24,27 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    default run at all (a first launch, a new day): the current position shows before the backlog is done (its model
    prices then carry spreads from the runs that existed when it ran). A date that failed is not retried until its
    inputs change.
-4. **history** (with the hub and ``history_days`` > 0): market history older than the cache for the bond charts,
+4. **intraday** (with the hub and the ``intraday`` setting, R11): on a business day from 10:00 MSK, today's book
+   (the latest position sets, carried forward: ``store.positions_for``) valued on the hub's newest ``intraday``
+   cut of today, from 19:45 on its ``eod_preliminary`` cut: the EOD code path (``cli.eod_run``) on another market
+   snapshot, an INTRADAY run (a preliminary one is an EOD run, the date's default until the final). The hub is
+   asked (one list call, ``latest=true``) at most once per half-hour slot (``POLL_SLOT_S``, starting
+   ``POLL_LAG_S`` after the cut times), and for the preliminary cut only until today has a run on it; a run is made
+   only for a cut newer than the last run's (or when the position sets changed). The flash PnL is measured against
+   the previous business day's ``eod_final``, else the newest earlier final or preliminary close, and the run says
+   which (``pnl_basis``). Only the latest INTRADAY run of a date is kept (``store.prune_intraday``); intraday and
+   preliminary bundles of dates older than ``KEEP_CUT_DAYS`` leave the cache (``cache.prune``) unless a shown run
+   reads them. The next morning the date's ``eod_final`` EOD run (step 3) supersedes both.
+5. **history** (with the hub and ``history_days`` > 0): market history older than the cache for the bond charts,
    ``HISTORY_PER_CYCLE`` of the ``history_days`` latest hub dates per cycle, newest first, into the store's tables
    without caching the bundles; only after a sync that reached the hub and left no date for the next cycle, and
    after the EOD runs, so it never delays them. The lookback above does not apply: these dates feed no run.
-5. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
-   ``progress`` ({"step": "sync"|"scan"|"eod"|"history", "done": int, "total": int|null, "detail": str}) follow it
-   live: hub dates fetched of those to fetch, report files done of those offered, EOD dates run of those to run,
-   history dates loaded of those to load.
+6. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
+   ``progress`` ({"step": "sync"|"scan"|"eod"|"intraday"|"history", "done": int, "total": int|null, "detail": str})
+   follow it live: hub dates fetched of those to fetch, report files done of those offered, EOD dates run of those
+   to run, history dates loaded of those to load. ``latest_run`` is the newest run shown (``store.CURRENT_RUNS``:
+   today's intraday run until there is an EOD run of a later date), with its slice (``run_type``, ``cut_type``,
+   ``cut_ts``, ``label``).
 
 Settings are read again at the start of every cycle (``desk.settings.load``), so edits apply without a restart.
 Errors are caught per step, logged (``desk.autopilot`` and ``<home>/logs/autopilot.log``) and shown in the status;
@@ -50,6 +63,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime, timedelta
+from datetime import time as dtime
 from itertools import islice
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -60,7 +74,8 @@ import psycopg
 from . import logic_version, store
 from .inbox.timesem import MSK
 from .marketdata import cache, history
-from .marketdata.bundle import SnapshotDir, SnapshotError
+from .marketdata.adapter import StaticView
+from .marketdata.bundle import SnapshotDir, SnapshotError, previous_market
 from .marketdata.hub import HubClient, HubError
 from .settings import Settings, load
 
@@ -78,21 +93,31 @@ LOCK_FILE = "cycle.lock"
 HISTORY_PER_CYCLE = 5   # hub dates of market history fetched per cycle (~0.5 MB each), newest first
 MAX_HISTORY_DAYS = 2600  # history_days is capped here (~10 years of business dates)
 
-LATEST_RUN = (f"SELECT run_id, business_date, completed_at FROM run WHERE run_id IN ({store.DEFAULT_RUNS})"
-              " ORDER BY business_date DESC LIMIT 1")
+INTRADAY_FROM = dtime(10, 0)  # MSK: the hub's first intraday cut of the day
+PRELIM_FROM = dtime(19, 45)   # MSK: the hub's eod_preliminary cut of the day
+POLL_SLOT_S = 1800            # the hub is asked for a newer cut of today at most once per half-hour slot
+POLL_LAG_S = 300              # slots start 5 min after the cut times (:05, :35): the hub publishes after its cut
+KEEP_CUT_DAYS = 3             # intraday and preliminary bundles of older dates leave the cache
+
+LATEST_RUN = ("SELECT run_id, business_date, completed_at, run_type, cut_type, cut_ts,"
+              " lineage->'pnl_basis'->>'label' FROM run"
+              f" WHERE run_id IN ({store.CURRENT_RUNS}) ORDER BY business_date DESC LIMIT 1")
 
 
 def _iso(ts: datetime | None) -> str | None:
     return ts.isoformat(timespec="seconds") if ts else None
 
 
-def latest_run(con: psycopg.Connection) -> dict[str, str] | None:
-    """The default run of the latest business date: {run_id, as_of, created_at} (I4), None without one."""
+def latest_run(con: psycopg.Connection) -> dict[str, Any] | None:
+    """The run shown for the latest business date (``store.CURRENT_RUNS``: its default run, else its intraday run):
+    {run_id, as_of, created_at, run_type, cut_type, cut_ts, label, pnl_basis} (I4, R11), None without one."""
     row = con.execute(LATEST_RUN).fetchone()
     if row is None:
         return None
-    rid, d, done = row
-    return {"run_id": str(rid), "as_of": d.isoformat(), "created_at": _iso(done)}
+    rid, d, done, rtype, cut, cut_ts, basis = row
+    return {"run_id": str(rid), "as_of": d.isoformat(), "created_at": _iso(done), "run_type": rtype,
+            "cut_type": cut, "cut_ts": _iso(cut_ts), "label": store.slice_label(d, cut, cut_ts, rtype),
+            "pnl_basis": basis}
 
 
 class CycleLock:
@@ -163,6 +188,8 @@ def progress_text(p: dict[str, Any]) -> str:
     if p["step"] == "eod":
         day = f" {detail[8:10]}.{detail[5:7]}" if len(detail) == 10 else ""
         return f"EOD{day}: {done} из {total}"
+    if p["step"] == "intraday":
+        return f"Внутри дня: {detail}" if detail else "Внутри дня"
     if p["step"] == "history":
         return f"История котировок: {done} из {total}" if total is not None else "История котировок: список дат"
     return f"{p['step']}: {done}" + (f" из {total}" if total is not None else "")
@@ -174,9 +201,14 @@ class Autopilot:
 
     def __init__(self, *, settings_loader: Callable[[], Settings] = load, store_url: str | None = None,
                  force: bool = False, today: Callable[[], date] | None = None,
-                 out: Callable[[str], None] | None = None) -> None:
+                 now: Callable[[], datetime] | None = None, out: Callable[[str], None] | None = None) -> None:
+        """``now`` (the Moscow clock of the intraday step) and ``today``: the clocks, for tests; with ``today``
+        alone the clock stands at the start of that day (the intraday step waits for 10:00)."""
         self._load, self._store_url, self.force, self._out = settings_loader, store_url, force, out
-        self._today = today or (lambda: datetime.now(MSK).date())
+        if now is None and today is not None:
+            now = lambda: datetime.combine(today(), dtime(0), MSK)
+        self._now = now or (lambda: datetime.now(MSK))
+        self._today = today or (lambda: self._now().astimezone(MSK).date())
         self._cycle = threading.Lock()
         self._lock = threading.Lock()
         self._wake, self._stop = threading.Event(), threading.Event()
@@ -187,6 +219,10 @@ class Autopilot:
         self._hub_failed = False               # this cycle's hub sync failed: no history step
         self._sync_later = 0                   # hub dates the sync left for the next cycle: no history step
         self._history_dates: tuple[float, int, list[str]] | None = None  # (listed at, depth, hub dates newest first)
+        self._poll_slot: tuple | None = None   # (date, cut, slot) the hub was last asked for a cut of today in
+        self._polled: dict[tuple, dict | None] = {}  # (date, cut) -> the hub's newest row of that cut, when asked
+        self._calendar: tuple | None = None    # (static id, BusinessCalendar | None, valid from, valid to)
+        self._pruned_on: date | None = None    # the day the cache's old intraday bundles were last pruned
         self._interval = 60.0
         self._on = True
         self._log_handler: RotatingFileHandler | None = None
@@ -285,6 +321,8 @@ class Autopilot:
             if con is not None:
                 steps.append(self._guard("scan", lambda: self._scan(settings, con)))
                 steps.append(self._guard("eod", lambda: self._eod(settings, con, url, extra, ran)))
+                if hub and settings.hub_url:
+                    steps.append(self._guard("intraday", lambda: self._intraday(settings, con, url, ran)))
                 if hub and settings.hub_url and int(getattr(settings, "history_days", 0) or 0) > 0:
                     steps.append(self._guard("history", lambda: self._history(settings, con)))
                 try:
@@ -299,7 +337,7 @@ class Autopilot:
         return self._finish(started, steps, ran, settings)
 
     def _latest(self, settings: Settings) -> dict[str, str] | None:
-        """The latest default run read on a connection of its own (a skipped cycle has none); the last known one
+        """The latest run shown read on a connection of its own (a skipped cycle has none); the last known one
         when the store cannot be read."""
         try:
             with store.connect(self._store_url or store.resolve_url(settings)) as con:
@@ -568,9 +606,9 @@ class Autopilot:
             ids, n = store.current_sets(con, date.fromisoformat(d))
             if not n:
                 continue
-            snap = sd.market(d).id
-            prev_d = sd.previous_market_date(d)
-            prev = sd.market(prev_d).id if prev_d else None
+            snap = sd.market_id(d)
+            prev_cut = previous_market(sd, d)  # as cli.eod_run: the newest earlier close, its final preferred
+            prev = sd.market_id(*prev_cut) if prev_cut else None
             run = runs.get(date.fromisoformat(d))
             why = ("no default run" if run is None else "positions changed" if run["position_set_ids"] != ids
                    else "market snapshot changed" if run["market_snapshot_id"] != snap
@@ -604,6 +642,111 @@ class Autopilot:
         if failed:
             return "error", "; ".join(parts)
         return ("ok" if done else "skipped"), "; ".join(parts) or f"up to date ({dates[0]}..{dates[-1]})"
+
+    def _business_day(self, settings: Settings, d: date) -> bool:
+        """``d`` is a business day of the settlement calendar of the newest cached static snapshot (parsed once per
+        static); Monday to Friday when there is none or it does not cover ``d``."""
+        sd = SnapshotDir(Path(settings.snapshot_cache))
+        statics = sorted(((m.get("business_date") or "", sid) for sid in sd.ids()
+                          if (m := sd.manifest(sid) or {}).get("kind") == "static"), reverse=True)
+        if statics:
+            sid = statics[0][1]
+            if self._calendar is None or self._calendar[0] != sid:
+                try:
+                    self._calendar = (sid, *StaticView(sd.get(sid)).business_calendar("MOEX_STOCK"))
+                except Exception as e:  # noqa: BLE001 - a calendar that cannot be read: weekdays
+                    log.warning("autopilot: no calendar from static %s: %s", sid[:12], e)
+                    self._calendar = (sid, None, None, None)
+            _, cal, vf, vt = self._calendar
+            if cal is not None and vf <= d <= vt:
+                return bool(cal.is_business_day(d))
+        return d.weekday() < 5
+
+    def _intraday(self, settings: Settings, con: psycopg.Connection, url: str | None,
+                  ran: list[str]) -> tuple[str, str]:
+        """Today's book on the hub's newest intraday (from 19:45: preliminary) cut of today; see the module doc."""
+        from .cli import eod_run
+
+        if not getattr(settings, "intraday", True):
+            return "skipped", "off in the settings (intraday)"
+        if self._hub_failed:
+            return "skipped", "the hub sync failed this cycle"
+        now = self._now().astimezone(MSK)
+        today, t = now.date(), now.time()
+        if t < INTRADAY_FROM:
+            return "skipped", f"before {INTRADAY_FROM:%H:%M} MSK"
+        if not self._business_day(settings, today):
+            return "skipped", f"{today} is not a business day"
+        ids, n = store.current_sets(con, today)
+        if not n:
+            return "skipped", "no positions in the store"
+        cut = "eod_preliminary" if t >= PRELIM_FROM else "intraday"
+        rtype = "INTRADAY" if cut == "intraday" else "EOD"
+        last = con.execute(
+            "SELECT run_id, market_snapshot_id, cut_ts, position_set_ids FROM run WHERE business_date = %s"
+            " AND run_type = %s AND cut_type = %s AND status = 'complete' ORDER BY run_id DESC LIMIT 1",
+            (today, rtype, cut)).fetchone()
+        slot = (today, cut, int((now.timestamp() - POLL_LAG_S) // POLL_SLOT_S))
+        asked = False
+        if self._poll_slot != slot and not (cut == "eod_preliminary" and last):
+            client = HubClient(settings)
+            self._progress("intraday", 0, None, "срез хаба")
+            self._polled = {k: v for k, v in self._polled.items() if k[0] == today}
+            self._polled[(today, cut)] = next(client.list_snapshots(
+                kind="market", cut_type=cut, business_date=today.isoformat(), latest=True), None)
+            self._poll_slot, asked = slot, True
+        row = self._polled.get((today, cut))
+        target: tuple[str, str] | None = None  # (snapshot id, why)
+        if row is not None:
+            row_ts = datetime.fromisoformat(row["cut_ts"]) if row.get("cut_ts") else None
+            newer = last is None or (row["snapshot_id"] != last[1]
+                                     and (row_ts is None or last[2] is None or row_ts >= last[2]))
+            if newer:
+                target = (row["snapshot_id"], "new cut" if last is None or row_ts != last[2] else "cut corrected")
+        if target is None and last is not None and sorted(last[3]) != ids:
+            target = (last[1], "positions changed")
+        when = "asked the hub" if asked else "next hub check in the next half-hour slot"
+        if target is None:
+            if last is not None:
+                return "ok", (f"up to date: run {last[0]} on {store.slice_label(today, cut, last[2])} ({when})")
+            return "skipped", f"no {cut} cut of {today} on the hub yet ({when})"
+        sid, why = target
+        sig = (cut, sid, tuple(ids), logic_version())
+        if self._failed.get(f"{cut} {today}") == sig:
+            return "skipped", f"{cut} {sid[:12]} failed before on the same inputs, not retried"
+        cache_dir = Path(settings.snapshot_cache)
+        if row is not None and sid == row["snapshot_id"]:
+            self._progress("intraday", 0, 1, "загрузка среза")
+            cache.fetch_row(HubClient(settings), cache_dir, row)
+        label = store.slice_label(today, cut, row.get("cut_ts") if row and sid == row["snapshot_id"] else last[2])
+        self._progress("intraday", 0, 1, label)
+        self._emit(f"intraday {label}: {why}")
+        log.info("autopilot: intraday %s %s (%s)", cut, sid[:12], why)
+        try:
+            rid = eod_run(settings, today.isoformat(), snapshots=cache_dir, store_url=url, report_dir=None,
+                          out=self._eod_line, cut_type=cut, market_snapshot_id=sid, run_type=rtype)
+        except Exception as e:
+            log.exception("autopilot: intraday %s failed", label)
+            self._failed[f"{cut} {today}"] = sig
+            return "error", f"{label} failed ({type(e).__name__}: {e})"
+        self._failed.pop(f"{cut} {today}", None)
+        if rid is None:
+            return "skipped", f"{label}: no positions for {today}"
+        ran.append(label)
+        parts = [f"{label}: run {rid} ({why})"]
+        basis = con.execute("SELECT lineage->'pnl_basis'->>'label' FROM run WHERE run_id = %s", (rid,)).fetchone()
+        if basis and basis[0]:
+            parts.append(basis[0])
+        if cut == "intraday" and (gone := store.prune_intraday(con, today, rid)):
+            parts.append(f"removed intraday run{'s' if len(gone) > 1 else ''} {', '.join(map(str, gone))}")
+        if self._pruned_on != today:
+            keep = {m for (m,) in con.execute(f"SELECT market_snapshot_id FROM run WHERE run_id IN ({store.CURRENT_RUNS})")}
+            pruned = cache.prune(cache_dir, (today - timedelta(days=KEEP_CUT_DAYS)).isoformat(), keep)
+            self._pruned_on = today
+            if pruned:
+                parts.append(f"{len(pruned)} old intraday/preliminary bundles pruned from the cache")
+        self._progress("intraday", 1, 1, label)
+        return "ok", "; ".join(parts)
 
     def _eod_line(self, line: str) -> None:
         log.info("eod: %s", line)

@@ -30,7 +30,9 @@ DATE = "2026-10-15"
 QTY = 1000.0
 # Keys of window.DESK.source the parity test leaves out; everything else must be equal.
 EXCLUDED = {"runId": "the two stores number their runs independently",
-            "publishedAt": "publication time of each store's run"}
+            "publishedAt": "publication time of each store's run",
+            **dict.fromkeys(("cutType", "cutTs", "slice", "prevCutType", "pnlBasis"),
+                            "the run's market slice (R11): the desk store's only")}
 R10_RUN = {"pnlAvailable", "pnlReason", "pnlReasonText", "pnlCoverage"}
 """window.DESK keys compat adds (R10: a missing PnL is said, not shown as 0); tdm's assembler has none."""
 R10_PNL = {"available", "reason", "reasonText", "reasonDetail", "method", "methodText", "flag", "reported"}
@@ -258,7 +260,7 @@ def test_compat_parity_with_tdm_assemble(store_url, book, client, tmp_path):
         client.get(f"/api/v1/compat/desk?run_id={rid}").json()
     assert got["source"]["runId"] == rid and want["source"]["runId"] == tdm_id
     for key in EXCLUDED:
-        got["source"].pop(key), want["source"].pop(key)
+        got["source"].pop(key), want["source"].pop(key, None)
     assert set(got) - R10_RUN == set(want)
     assert got["pnlAvailable"] and got["pnlReason"] is None and got["pnlCoverage"]["withPnl"] > 0
     for k in want:

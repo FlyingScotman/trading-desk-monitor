@@ -67,7 +67,7 @@ def _manifest(path: Path) -> dict[str, Any]:
         with gzip.open(path) as f:
             doc = json.load(f)
         _MANIFESTS[key] = {k: doc.get(k) for k in ("kind", "cut_type", "business_date", "static_snapshot_id",
-                                                   "supersedes")}
+                                                   "supersedes", "cut_ts")}
     return _MANIFESTS[key]
 
 
@@ -97,17 +97,44 @@ class SnapshotDir:
         return sorted({m["business_date"] for m in self._manifests.values()
                        if m["kind"] == "market" and m["cut_type"] == cut_type})
 
-    def market(self, business_date: str, cut_type: str = "eod_final") -> Snapshot:
+    def market_id(self, business_date: str, cut_type: str = "eod_final") -> str:
+        """The id ``market`` reads, without reading the bundle."""
         ids = [sid for sid, m in self._manifests.items()
                if m["kind"] == "market" and m["cut_type"] == cut_type and m["business_date"] == business_date]
         if not ids:
             raise SnapshotError(f"no {cut_type} market snapshot for {business_date} in {self.root}")
         if len(ids) > 1:
-            # Corrections supersede; pick the one no other snapshot supersedes.
+            # Corrections supersede; pick the one no other snapshot supersedes (of the intraday cuts of a date,
+            # several stand: the latest cut).
             superseded = {self._manifests[i]["supersedes"] for i in ids}
-            ids = [i for i in ids if i not in superseded]
-        return self.get(ids[0])
+            ids = sorted((i for i in ids if i not in superseded),
+                         key=lambda i: (self._manifests[i].get("cut_ts") or "", i), reverse=True)
+        return ids[0]
+
+    def market(self, business_date: str, cut_type: str = "eod_final") -> Snapshot:
+        return self.get(self.market_id(business_date, cut_type))
+
+    def ids(self) -> list[str]:
+        return list(self._manifests)
+
+    def manifest(self, snapshot_id: str) -> dict[str, Any] | None:
+        """The envelope fields of a cached bundle (kind, cut_type, business_date, cut_ts, ...); None when absent."""
+        return self._manifests.get(snapshot_id)
 
     def previous_market_date(self, business_date: str, cut_type: str = "eod_final") -> str | None:
         earlier = [d for d in self.market_dates(cut_type) if d < business_date]
         return earlier[-1] if earlier else None
+
+
+PREV_CUTS = ("eod_final", "eod_preliminary")
+"""The cuts a flash PnL is measured against (R11): the newest earlier close of the cache, its ``eod_final`` when
+there is one, else its ``eod_preliminary`` (the previous day's preliminary close beats an older final)."""
+
+
+def previous_market(snapshots: SnapshotDir, business_date: str) -> tuple[str, str] | None:
+    """(date, cut_type) of the market snapshot the flash PnL of ``business_date`` is measured against: the newest
+    cached close before it, ``eod_final`` preferred over ``eod_preliminary`` on the same date; None without either.
+    Whether it is the previous business day is for the caller (``desk.cli.pnl_basis``), which has the calendar."""
+    found = [(d, -i, cut) for i, cut in enumerate(PREV_CUTS)
+             if (d := snapshots.previous_market_date(business_date, cut))]
+    return (max(found)[0], max(found)[2]) if found else None

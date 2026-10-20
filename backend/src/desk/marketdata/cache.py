@@ -3,8 +3,9 @@
 The cache is a folder of ``<snapshot_id>.json.gz`` files that :class:`~.bundle.SnapshotDir` reads,
 so a run never depends on the hub being up. Every file is verified before it lands
 (``sha256(gunzip(body)) == snapshot_id``, schema version) and written atomically
-(``.part``, then rename). The cache is append-only: the backend never rewrites or deletes a
-bundle; a correction is a new file and ``SnapshotDir.market`` picks the one not superseded.
+(``.part``, then rename). The cache is append-only: the backend never rewrites a bundle, and deletes
+only the intraday and preliminary market cuts of past dates (``prune``, R11: one every half hour); a correction is
+a new file and ``SnapshotDir.market`` picks the one not superseded.
 
 Beside a bundle pulled from the hub, ``<snapshot_id>.hub.json`` keeps the facts the bundle cannot
 carry: the hub host, ``published_at`` and when it was fetched (run lineage, snapshot age).
@@ -83,20 +84,49 @@ class Synced:
     downloaded: list[str] = field(default_factory=list)
 
 
+def fetch_row(client: HubClient, cache: Path, row: dict[str, Any]) -> Synced:
+    """The market snapshot of a hub list row and the static snapshot it names, unless cached."""
+    s = Synced(row["business_date"], row["snapshot_id"], row.get("static_snapshot_id"), row.get("published_at"))
+    if fetch(client, cache, row["snapshot_id"], row):
+        s.downloaded.append(row["snapshot_id"])
+    if s.static_id and fetch(client, cache, s.static_id):
+        s.downloaded.append(s.static_id)
+    return s
+
+
 def sync(client: HubClient, cache: Path, dates: Iterable[str], cut_type: str = "eod_final") -> list[Synced]:
     """For each date: the newest non-superseded market snapshot and the static snapshot it names."""
     out = []
     for d in dates:
-        s = Synced(d)
         rows = list(client.list_snapshots(kind="market", cut_type=cut_type, business_date=d, latest=True))
-        if rows:
-            row = rows[0]
-            s.market_id, s.static_id, s.published_at = row["snapshot_id"], row["static_snapshot_id"], row["published_at"]
-            if fetch(client, cache, s.market_id, row):
-                s.downloaded.append(s.market_id)
-            if s.static_id and fetch(client, cache, s.static_id):
-                s.downloaded.append(s.static_id)
-        out.append(s)
+        out.append(fetch_row(client, cache, rows[0]) if rows else Synced(d))
+    return out
+
+
+PRUNED_CUTS = ("intraday", "eod_preliminary")
+
+
+def prune(cache: Path, before: str, keep: Iterable[str] = ()) -> list[str]:
+    """Delete the intraday and preliminary market bundles (and their ``.hub.json``) of business dates before
+    ``before``, except the ids in ``keep`` (the snapshots of the runs still shown). ``eod_final`` and static bundles
+    stay. Returns the ids deleted; a file that cannot be deleted now (a lock on Windows) is left for next time."""
+    from .bundle import SnapshotDir
+
+    folder, kept, out = Path(cache), set(keep), []
+    if not folder.is_dir():
+        return out
+    sd = SnapshotDir(folder)
+    for sid in sd.ids():
+        m = sd.manifest(sid) or {}
+        if (m.get("kind") != "market" or m.get("cut_type") not in PRUNED_CUTS or sid in kept
+                or not m.get("business_date") or m["business_date"] >= before):
+            continue
+        try:
+            bundle_path(folder, sid).unlink(missing_ok=True)
+            (folder / f"{sid}.hub.json").unlink(missing_ok=True)
+        except OSError:
+            continue
+        out.append(sid)
     return out
 
 

@@ -128,7 +128,8 @@ class FallbackContext:
 
     def past_quotes(self, terms: BondTerms) -> Iterator[BondQuote]:
         if self.history is None:
-            bd, cut = self.ctx.business_date, self.ctx.market.snapshot.cut_type
+            # the closes of the earlier dates, also for a run on an intraday or preliminary cut (R11)
+            bd, cut = self.ctx.business_date, "eod_final"
             dates = [d for d in self.ctx.snapshots.market_dates(cut)
                      if bd - timedelta(LOOKBACK_DAYS) <= date.fromisoformat(d) < bd]
             self.history = [MarketView(self.ctx.snapshots.market(d, cut)) for d in reversed(dates)]
