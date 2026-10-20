@@ -37,6 +37,16 @@ class Pages(unittest.TestCase):
         for name in PAGES:
             self.assertNotIn("Тестовые данные</span>", (PROTO / name).read_text(encoding="utf-8"), name)
 
+    def test_data_pages_load_the_drill_down(self):
+        """R19: «из чего состоит число» (desk-drill.js) — загрузчиком после фильтра, на всех страницах с данными деска."""
+        loader = (PROTO / "desk-loader.js").read_text(encoding="utf-8")
+        self.assertLess(loader.index("desk-scope.js"), loader.index("desk-drill.js"))
+        drill = (PROTO / "desk-drill.js").read_text(encoding="utf-8")
+        for api in ("open", "attach", "attr", "close"):
+            self.assertIn(f" {api},", drill.split("const api = {")[1].split("}")[0] + ",", api)
+        for name in DATA_PAGES:
+            self.assertIn("D.drill", (PROTO / name).read_text(encoding="utf-8"), name)
+
     def test_other_pages_apply_the_desk_monitor_filter(self):
         self.assertIn("desk-scope.js", (PROTO / "desk-loader.js").read_text(encoding="utf-8"))
         for name in DATA_PAGES:

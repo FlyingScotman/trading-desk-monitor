@@ -16,7 +16,10 @@ false, ``reason``, ``reasonText`` and ``reasonDetail``; one with PnL has its ``m
 and a PnL by the reports (``pnl.reasons.REPORTED_METHOD``) is in ``pnl.reported``, not in ``other``. ``history``
 has null PnL for a run where no position has one. ``riskNotes`` (R14, R15): what the run's risk by curve lacks (a
 rates curve missing from the hub's snapshot, a run made before the RUONIA discounting), so the risk views say it
-instead of showing a curve as silently zero. compat, removed with window.DESK (M7); never extended otherwise."""
+instead of showing a curve as silently zero. R21: ``other`` (kept, their sum) is split into ``noDecomp`` (the whole
+PnL of a position core does not reprice step by step: a fallback rung, a change of discount curve) and ``residual``
+(the price residual of a decomposed bond), with ``otherWhy``, the Russian reason (``pnl.reasons.other_split``). compat,
+removed with window.DESK (M7); never extended otherwise."""
 
 from __future__ import annotations
 
@@ -29,7 +32,14 @@ from typing import Any
 from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
 
 from ..curves.rates import input_notes
-from ..pnl.reasons import METHOD_TEXT, REPORTED_METHOD, RUN_NO_POSITION_PNL, RUN_NO_PREV_MARKET, no_pnl_text
+from ..pnl.reasons import (
+    METHOD_TEXT,
+    REPORTED_METHOD,
+    RUN_NO_POSITION_PNL,
+    RUN_NO_PREV_MARKET,
+    no_pnl_text,
+    other_split,
+)
 from ..store import CURRENT_RUNS, DEFAULT_RUNS, slice_label
 
 PNL_KEYS = ("carry", "rolldown", "rates", "spread", "fx_gross", "fx_funding", "funding", "convexity",
@@ -164,7 +174,7 @@ INPUT_FIELDS = ("asset_class", "ccy", "source_instrument_id", "source_instrument
 
 
 PNL_FIELDS = ("carry", "rolldown", "rates", "spread", "fx", "funding", "convexity", "newTrades", "other", "reported",
-              "fxGross", "fxFunding", "fxGrossCbr", "fxFundingCbr", "fxCbr", "explained", "explainedCbr", "fxBasis",
+              "noDecomp", "residual", "otherWhy", "fxGross", "fxFunding", "fxGrossCbr", "fxFundingCbr", "fxCbr", "explained", "explainedCbr", "fxBasis",
               "unexplained")
 """The amounts of a Desk Monitor position's ``pnl``: all null for a position without PnL."""
 
@@ -289,6 +299,8 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         official = q.get("official") if q else None
         method = ((q or {}).get("extra") or {}).get("method")
         reported = comp["other"] if method == REPORTED_METHOD else 0.0  # the reports' difference: its own step
+        no_decomp, residual, other_why = other_split(method, comp["other"] - reported, (q or {}).get("extra"),
+                                                     p.get("extra"), comp["fx_gross"]) if q else (0.0, 0.0, None)
         cs01 = _zero(p.get("cs01"))
         gamma = _gamma(p.get("gamma"))
         risk = {}
@@ -318,7 +330,7 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
                 "spread": comp["spread"],
                 "fx": comp["fx_gross"] + comp["fx_funding"], "funding": comp["funding"],
                 "convexity": comp["convexity"], "newTrades": comp["new_trades"], "other": comp["other"] - reported,
-                "reported": reported,
+                "reported": reported, "noDecomp": no_decomp, "residual": residual, "otherWhy": other_why,
                 "fxGross": comp["fx_gross"], "fxFunding": comp["fx_funding"], "fxGrossCbr": gross_cbr,
                 "fxFundingCbr": fund_cbr, "fxCbr": gross_cbr + fund_cbr, "explained": explained,
                 "explainedCbr": explained_cbr, "fxBasis": fx_basis,

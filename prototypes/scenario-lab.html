@@ -509,6 +509,20 @@ const SECT = (function(){ const m = {}; P.forEach(p => { if (p.cs01 && p.sector)
 const OFZ01 = P.reduce((s, p) => s + (p.ofzSpr01 || 0), 0);
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// R19: «из чего состоит» (desk-drill.js): клик по итогу, компоненте, ячейке книги — панель позиций с вкладом каждой.
+// Позиции — те же P (фильтр Desk Monitor); без desk-drill.js числа не кликаются.
+const DR = D.drill || null;
+const dA = (key, fn) => DR ? DR.attr(key, fn) : '';
+const posRow = (p, v) => ({id:p.id, name:p.name, book:p.book, issuer:p.issuer || p.issuerGroup, isin:p.isin, segment:p.segment, value:v});
+// результат сценария R по позициям: comp — rates|spread|fx|convexity|fxCross|total|fundFx; keep(p) — какие позиции;
+// book — только эта книга (FX фондирования книг — строками для total и fundFx)
+function scSpec(R, comp, title, keep, book){
+  const rows = comp === 'fundFx' ? [] : R.r.byPosition.filter(x => !keep || keep(posById[x.id])).map(x => posRow(posById[x.id], x[comp]));
+  const ff = comp === 'fundFx' || (comp === 'total' && !keep) ? Object.keys(R.r.fundingFxByBook || {}).filter(b => R.r.fundingFxByBook[b] && (!book || b === book))
+    .map(b => ({name:'FX остатков ДС и РЕПО книги', book:b, value:R.r.fundingFxByBook[b]})) : [];
+  return {title:'Сценарий · ' + title, unit:'млн ₽', scale:1e6, digits:2, signed:true, rows:rows.concat(ff),
+    note:'ΔPV позиций в сценарии (греки до 2-го порядка или полная переоценка), по позициям под фильтром Desk Monitor.'};
+}
 
 // ---------- формат ----------
 const NF = {}; const nf = d => NF[d] || (NF[d] = new Intl.NumberFormat('ru-RU', {minimumFractionDigits:d, maximumFractionDigits:d}));
@@ -789,11 +803,11 @@ function renderResults(){
   const loaded = allScen().find(s => s.id === S.loadedId);
   $('#sc-name').innerHTML = `${esc(loaded ? loaded.name : 'Свой сценарий')}${S.dirty ? ' <span class="badge edit">изменён в редакторе</span>' : ''}`;
   const dvRub = RUBC.reduce((s, c) => s + DV[c].reduce((a, b) => a + b, 0), 0);
-  $('#hero').innerHTML = `<div><div class="lbl">PnL сценария</div><div class="big">${smln(R.total, 1)}<small>млн ₽</small></div></div>
+  $('#hero').innerHTML = `<div><div class="lbl">PnL сценария</div><div class="big"${dA('lab:total', () => scSpec(S.res, 'total', 'итого'))}>${smln(R.total, 1)}<small>млн ₽</small></div></div>
     <div class="side"><span>${R.r.fullReval ? 'Полная переоценка (расчётный сервис)' : R.r.accuracyWarning ? `<b>Сдвиг доходности до ${num(R.r.maxDyBp, 0)} б.п.: вне области точности 2-го порядка (±${U.ACCURACY_BP} б.п.) — нужна полная переоценка</b>` : 'Греки до 2-го порядка (выпуклость, кросс FX)'}</span><span>${R.total < 0 ? 'Убыток' : 'Прибыль'} · ${R.r.byPosition.filter(x => x.total < -1e5).length} позиций в минусе &gt; 0,1 млн</span><span>DV01 RUB-кривых ${mln(dvRub, 2)} млн ₽/б.п.</span></div>`;
   const cmax = Math.max(1, ...COMPS.map(c => Math.abs(R.comp[c[0]])));
-  $('#decomp').innerHTML = COMPS.map(([k, n]) => `<span>${n}</span><div data-tip="${T(n, [['PnL', smln(R.comp[k]) + ' млн ₽'], ['Доля в итоге', R.total ? num(R.comp[k] / R.total * 100, 0) + '%' : '—']])}">${dbar(R.comp[k], cmax)}</div><span class="num r">${smln(R.comp[k], 1)}</span>`).join('')
-    + `<span class="tot">Итого</span><span class="tot"></span><span class="num r tot">${smln(R.total, 1)}</span>`;
+  $('#decomp').innerHTML = COMPS.map(([k, n]) => `<span>${n}</span><div data-tip="${T(n, [['PnL', smln(R.comp[k]) + ' млн ₽'], ['Доля в итоге', R.total ? num(R.comp[k] / R.total * 100, 0) + '%' : '—']])}">${dbar(R.comp[k], cmax)}</div><span class="num r"${dA('lab:comp:' + k, () => scSpec(S.res, k, n))}>${smln(R.comp[k], 1)}</span>`).join('')
+    + `<span class="tot">Итого</span><span class="tot"></span><span class="num r tot"${dA('lab:total2', () => scSpec(S.res, 'total', 'итого'))}>${smln(R.total, 1)}</span>`;
 
   // heatmap
   let hmax = 0; CK.forEach(c => R.heat[c].forEach(v => hmax = Math.max(hmax, Math.abs(v))));
@@ -804,9 +818,9 @@ function renderResults(){
     h += `<tr><td class="l">${esc(c)}</td>${R.heat[c].map((v, i) => {
       const sel = S.heatSel && S.heatSel[0] === c && S.heatSel[1] === i;
       return `<td class="n cell${sel ? ' sel' : ''}" data-c="${esc(c)}" data-i="${i}"${heatStyle(v, hmax)} data-tip="${T(c + ' · ' + BK[i], [['DV01', num(DV[c][i] / 1e3, 0) + ' тыс ₽/б.п.'], ['Шок', snum(R.shock[c][i]) + ' б.п.'], ['PnL', smln(v) + ' млн ₽']])}">${Math.abs(v) < 5e3 ? '<span class="muted">·</span>' : smln(v, 1)}</td>`;
-    }).join('')}<td class="n"><b>${smln(rs, 1)}</b></td></tr>`;
+    }).join('')}<td class="n"${dA('lab:heat:' + c, () => heatSpec(c, null))}><b>${smln(rs, 1)}</b></td></tr>`;
   });
-  h += `<tr class="tot"><td class="l">Итого rates</td>${colTot.map(v => `<td class="n">${Math.abs(v) < 5e3 ? '·' : smln(v, 1)}</td>`).join('')}<td class="n">${smln(R.comp.rates, 1)}</td></tr></tbody>`;
+  h += `<tr class="tot"><td class="l">Итого rates</td>${colTot.map((v, i) => `<td class="n"${Math.abs(v) < 5e3 ? '' : dA('lab:heatcol:' + i, () => heatSpec(null, i))}>${Math.abs(v) < 5e3 ? '·' : smln(v, 1)}</td>`).join('')}<td class="n"${dA('lab:rates', () => scSpec(S.res, 'rates', 'Rates'))}>${smln(R.comp.rates, 1)}</td></tr></tbody>`;
   $('#heat').innerHTML = h;
 
   // reverse helper
@@ -829,15 +843,16 @@ function renderResults(){
   let bt = `<thead><tr><th class="l">Книга</th><th>Rates</th><th>Spread</th><th>FX</th><th>Conv.</th><th>FX cross</th><th>Фонд. FX</th><th>Итого</th></tr></thead><tbody>`;
   BOOKK.slice().sort((a, b) => R.book[a].total - R.book[b].total).forEach(b => {
     const x = R.book[b];
-    bt += `<tr><td class="l" title="Деск ${esc(D.BOOKS[b].desk)}">${esc(D.BOOKS[b].name)}</td>${['rates','spread','fx','convexity','fxCross','fundFx'].map(k => `<td class="n${Math.abs(x[k]) < 5e3 ? ' z' : ''}">${Math.abs(x[k]) < 5e3 ? '·' : smln(x[k], 1)}</td>`).join('')}<td class="n"${heatStyle(x.total, bmax)}><b>${smln(x.total, 1)}</b></td></tr>`;
+    const inB = p => p.book === b, bn = D.BOOKS[b].name;
+    bt += `<tr><td class="l" title="Деск ${esc(D.BOOKS[b].desk)}">${esc(bn)}</td>${['rates','spread','fx','convexity','fxCross','fundFx'].map(k => `<td class="n${Math.abs(x[k]) < 5e3 ? ' z' : ''}"${Math.abs(x[k]) < 5e3 ? '' : dA('lab:bk:' + b + ':' + k, () => scSpec(S.res, k, k + ' · ' + bn, k === 'fundFx' ? null : inB, b))}>${Math.abs(x[k]) < 5e3 ? '·' : smln(x[k], 1)}</td>`).join('')}<td class="n"${heatStyle(x.total, bmax)}${dA('lab:bk:' + b, () => bookSpec(b))}><b>${smln(x.total, 1)}</b></td></tr>`;
   });
-  bt += `<tr class="tot"><td class="l">Итого</td>${['rates','spread','fx','convexity','fxCross','fundFx'].map(k => `<td class="n">${smln(R.comp[k], 1)}</td>`).join('')}<td class="n">${smln(R.total, 1)}</td></tr></tbody>`;
+  bt += `<tr class="tot"><td class="l">Итого</td>${['rates','spread','fx','convexity','fxCross','fundFx'].map(k => `<td class="n"${dA('lab:bkt:' + k, () => scSpec(S.res, k, k + ' · все книги'))}>${smln(R.comp[k], 1)}</td>`).join('')}<td class="n"${dA('lab:bkt', () => scSpec(S.res, 'total', 'итого'))}>${smln(R.total, 1)}</td></tr></tbody>`;
   $('#by-book').innerHTML = bt;
 
   // issuer groups
   const top = grps.slice().sort((a, b) => Math.abs(b[1].total) - Math.abs(a[1].total)).slice(0, 12).sort((a, b) => a[1].total - b[1].total);
   const gmax = Math.max(1, ...top.map(g => Math.abs(g[1].total)));
-  $('#by-issuer').innerHTML = top.map(([g, x]) => `<span class="nm" title="${esc(g)}">${esc(g)}</span><div data-tip="${T(g, [['Rates', smln(x.rates) + ' млн'], ['Spread', smln(x.spread) + ' млн'], ['FX', smln(x.fx) + ' млн'], ['Convexity', smln(x.convexity) + ' млн'], ['FX cross', smln(x.fxCross) + ' млн'], ['Итого', smln(x.total) + ' млн ₽'], ['Позиций', x.n]])}">${dbar(x.total, gmax)}</div><span class="num r">${smln(x.total, 1)}</span>`).join('');
+  $('#by-issuer').innerHTML = top.map(([g, x]) => `<span class="nm" title="${esc(g)}">${esc(g)}</span><div data-tip="${T(g, [['Rates', smln(x.rates) + ' млн'], ['Spread', smln(x.spread) + ' млн'], ['FX', smln(x.fx) + ' млн'], ['Convexity', smln(x.convexity) + ' млн'], ['FX cross', smln(x.fxCross) + ' млн'], ['Итого', smln(x.total) + ' млн ₽'], ['Позиций', x.n]])}">${dbar(x.total, gmax)}</div><span class="num r"${dA('lab:grp:' + g, () => scSpec(S.res, 'total', g, p => p.issuerGroup === g))}>${smln(x.total, 1)}</span>`).join('');
 
   // top-15
   const t15 = R.r.byPosition.slice().sort((a, b) => a.total - b.total).slice(0, 15);
@@ -846,6 +861,20 @@ function renderResults(){
   $('#top15').innerHTML = tt + '</tbody>';
 
   renderCompare(R);
+}
+// ставочный шок ячейки «кривая × бакет» по позициям: DV01 позиции в бакете × шок (c / i null — все)
+function heatSpec(c, i){
+  const R = S.res, cs = c ? [c] : CK;
+  const f = p => { let v = 0, any = false; cs.forEach(k => { const a = p.risk && p.risk[k]; if (!a) return; any = true;
+    (i == null ? a.map((_, j) => j) : [i]).forEach(j => { v += a[j] * R.shock[k][j]; }); }); return any ? v : null; };
+  return Object.assign(DR.pos(P, f, {title:'Сценарий · rates · ' + (c || 'все кривые') + (i == null ? '' : ' · ' + BK[i]), unit:'млн ₽', scale:1e6, digits:2, signed:true}),
+    {note:'Линейно: DV01 позиции в бакете × сдвиг кривой в бакете (б.п.).'});
+}
+// итог книги: позиции книги + нераспределённый FX фондирования книги
+function bookSpec(b){
+  const s = scSpec(S.res, 'total', D.BOOKS[b].name, p => p.book === b), ff = (S.res.r.fundingFxByBook || {})[b];
+  if (ff) s.rows.push({name:'FX остатков ДС и РЕПО книги', book:b, value:ff});
+  return s;
 }
 function renderCompare(R){
   const cols = [{id:'__ed', name:'Редактор' + (S.dirty ? ' *' : ''), res:R}].concat(RES0.map(x => ({id:x.s.id, name:x.s.name, res:x.res}))).concat(S.custom.map(s => ({id:s.id, name:s.name, res:compute(s)})));
@@ -874,9 +903,24 @@ document.addEventListener('click', e => {
 // official = explained + fxBasis (курсы ЦБ − рынок) + unexplained.
 // «Прочее» и «По отчёту» (PnL позиций, оценённых по отчёту, — разница отчётных стоимостей) — колонками, когда они есть:
 // без них компоненты не складываются во флэш
+// R21: «Прочее» — двумя колонками: «Без разлож.» (весь PnL позиций без пересчёта ядром по шагам) и «Невязка цены»
+// (остаток у бумаг с разложением); подсказки «что это» — DESK.util.PNL_PART.
 const EXC_OPT = k => P.some(p => U.pnlOk(p) && Math.abs(p.pnl[k] || 0) > 1);
 const EXC = [['carry','Carry'],['rolldown','Rolldown'],['rates','Rates'],['spread','Spread'],['fx','FX'],['funding','Фондир.'],['convexity','Convexity'],['newTrades','Новые сделки']]
-  .concat(EXC_OPT('other') ? [['other','Прочее']] : [], EXC_OPT('reported') ? [['reported','По отчёту']] : [], [['fundCarry','Фонд. ДС carry'],['fundFx','Фонд. ДС FX']]);
+  .concat(EXC_OPT('noDecomp') ? [['noDecomp','Без разлож.']] : [], EXC_OPT('residual') ? [['residual','Невязка цены']] : [], EXC_OPT('reported') ? [['reported','По отчёту']] : [], [['fundCarry','Фонд. ДС carry'],['fundFx','Фонд. ДС FX']]);
+const EXC_TIP = k => ({fundCarry:'Кэрри фондирования уровня книги: остатки ДС деривативов и РЕПО.', fundFx:'FX-переоценка фондирования уровня книги.'}[k] || (U.PNL_PART && U.PNL_PART[k] ? U.PNL_PART[k].tip : ''));
+// листья дерева (позиции и строки фондирования книг) узла r и панель «из чего состоит» колонки k
+const leaves = r => r === TREE.tot ? TREE.desks.flatMap(leaves) : r.children ? r.children.flatMap(leaves) : [r];
+const EXC_NAME = k => ({explained:'флэш (рынок)', fxBasis:'курсы ЦБ − рынок', official:'официальный (ЦБ)', unexplained:'unexplained', expCbr:'explain ЦБ'}[k] || (EXC.find(x => x[0] === k) || [k, k])[1]);
+function hierSpec(r, k){
+  const v = x => k === 'expCbr' ? x.explained + x.fxBasis : x[k];
+  const rows = leaves(r).filter(x => !x.na && !(x.kind === 'pos' && !U.pnlOk(x.p))).map(x => x.kind === 'pos'
+    ? Object.assign(posRow(x.p, v(x)), {sub:DR.pnlWhy(x.p), extra:{method:x.p.pnl.methodText || x.p.pnl.method || '—', quality:DR.qual(x.p)}})
+    : {name:x.name, book:x.key.slice(1), value:v(x), sub:x.sub, extra:{method:'фондирование книги', quality:'—'}});
+  return {title:'PnL дня · ' + EXC_NAME(k) + (r === TREE.tot ? '' : ' · ' + r.name), unit:'млн ₽', scale:1e6, digits:3, signed:true, rows,
+    note:EXC_TIP(k) || 'Сумма по позициям и строкам фондирования книг в узле.', columns:[{key:'quality', label:'Оценка'}],
+    groups:[{key:'method', label:'Метод'}]};
+}
 const NUMK = EXC.map(x => x[0]).concat(['explained','fxBasis','official','unexplained']);
 const TODAY = D.history[D.history.length - 1].date;
 // R10: позиция без PnL — «—» с причиной, в суммы не входит; итоги — только по позициям с PnL, с пометкой «частично».
@@ -936,11 +980,12 @@ function renderRecon(){
   const t = dayTotals(S.date), pct = t.official && t.unexplained != null ? t.unexplained / Math.abs(t.official) * 100 : null;
   const val = (x, tip) => x == null ? na(tip) : smln(x) + '<small>млн ₽</small>', pc = t.detail ? t.cover : null;
   const opts = D.history.slice().reverse().map(h => `<option value="${h.date}"${h.date === S.date ? ' selected' : ''}>${fdate(h.date)}${h.date === TODAY ? ' · детализация' : ' · только итоги'}</option>`).join('');
+  const rd = (k, x) => t.detail && x != null ? dA('lab:recon:' + k, () => hierSpec(TREE.tot, k)) : '';
   $('#recon').innerHTML = `<div class="datebox"><label class="lbl mono muted" for="ex-date" style="font:600 10px var(--font-mono);letter-spacing:.08em;text-transform:uppercase">Дата</label><select id="ex-date">${opts}</select></div>
-    <div class="kpi"><span class="lbl">Official PnL (ЦБ)</span><span class="val">${val(t.official, t.explained == null ? t.tip : OFF_WAIT)}</span></div><span class="op">−</span>
-    <div class="kpi"><span class="lbl">Флэш (рынок)</span><span class="val">${val(t.explained, t.tip)}</span></div><span class="op">−</span>
-    <div class="kpi"><span class="lbl">Курсы ЦБ − рынок</span><span class="val">${val(t.fxBasis, t.tip)}</span></div><span class="op">=</span>
-    <div class="kpi"><span class="lbl">Unexplained</span><span class="val">${val(t.unexplained, t.explained == null ? t.tip : OFF_WAIT)}</span></div>
+    <div class="kpi"><span class="lbl">Official PnL (ЦБ)</span><span class="val"${rd('official', t.official)}>${val(t.official, t.explained == null ? t.tip : OFF_WAIT)}</span></div><span class="op">−</span>
+    <div class="kpi"><span class="lbl">Флэш (рынок)</span><span class="val"${rd('explained', t.explained)}>${val(t.explained, t.tip)}</span></div><span class="op">−</span>
+    <div class="kpi"><span class="lbl">Курсы ЦБ − рынок</span><span class="val"${rd('fxBasis', t.fxBasis)}>${val(t.fxBasis, t.tip)}</span></div><span class="op">=</span>
+    <div class="kpi"><span class="lbl">Unexplained</span><span class="val"${rd('unexplained', t.unexplained)}>${val(t.unexplained, t.explained == null ? t.tip : OFF_WAIT)}</span></div>
     <div class="kpi"><span class="lbl">% unexplained</span><span class="val">${pct == null ? '—' : num(Math.abs(pct), 1) + '<small>%</small>'}</span></div>
     <div class="kpi"><span class="lbl">Статус</span>${dayChip(t)}<span class="muted" style="font-size:11px">порог условный: max(5% · |official|, 2 млн ₽)</span></div>
     ${pc && pc.partial ? `<div class="kpi" style="max-width:320px"><span class="lbl">Покрытие PnL</span>${U.pnlPartHtml(pc)}<span class="muted" style="font-size:11px">итоги — только по позициям с PnL. Без PnL: ${esc(pc.reasons.map(x => x[0] + ' — ' + x[1]).join('; '))}</span></div>` : ''}
@@ -963,13 +1008,13 @@ function renderWaterfall(){
   }
   if (t.detail) {
     let cum = 0; const tot = TREE.tot;
-    EXC.forEach(([k, n]) => { items.push({n, s:cum, e:cum + tot[k], v:tot[k], kind:'step'}); cum += tot[k]; });
-    items.push({n:'= Флэш', s:0, e:tot.explained, v:tot.explained, kind:'total'});
-    items.push({n:'Курсы ЦБ', s:tot.explained, e:tot.explained + tot.fxBasis, v:tot.fxBasis, kind:'step'});
+    EXC.forEach(([k, n]) => { items.push({n, s:cum, e:cum + tot[k], v:tot[k], kind:'step', k}); cum += tot[k]; });
+    items.push({n:'= Флэш', s:0, e:tot.explained, v:tot.explained, kind:'total', k:'explained'});
+    items.push({n:'Курсы ЦБ', s:tot.explained, e:tot.explained + tot.fxBasis, v:tot.fxBasis, kind:'step', k:'fxBasis'});
     if (READY) {
-      items.push({n:'Unexplained', s:tot.explained + tot.fxBasis, e:tot.official, v:tot.unexplained, kind:'un'});
-      items.push({n:'= Official', s:0, e:tot.official, v:tot.official, kind:'total'});
-    } else items.push({n:'= Explain ЦБ', s:0, e:tot.explained + tot.fxBasis, v:tot.explained + tot.fxBasis, kind:'total'});
+      items.push({n:'Unexplained', s:tot.explained + tot.fxBasis, e:tot.official, v:tot.unexplained, kind:'un', k:'unexplained'});
+      items.push({n:'= Official', s:0, e:tot.official, v:tot.official, kind:'total', k:'official'});
+    } else items.push({n:'= Explain ЦБ', s:0, e:tot.explained + tot.fxBasis, v:tot.explained + tot.fxBasis, kind:'total', k:'expCbr'});
     $('#wf-hint').textContent = 'млн ₽ · ' + fdate(S.date) + ' · флэш по рыночным курсам, ' + (READY ? 'официальный — по курсам ЦБ' : 'официальный — T+1') +
       (tot.cover.partial ? ' · ' + U.pnlPartText(tot.cover) : '');
   } else {
@@ -987,7 +1032,8 @@ function renderWaterfall(){
   c.setOption({
     animation: !reduced, animationDuration: 300,
     grid:{left:56, right:12, top:24, bottom: narrow ? 64 : 34},
-    tooltip: Object.assign({trigger:'item', formatter: p => { const it = items[p.dataIndex]; return `<b>${it.n}</b><br>${smln(it.v)} млн ₽` + (it.kind === 'step' ? `<br><span style="color:${col.fg2}">нарастающим: ${smln(it.e)} млн</span>` : ''); }}, ttStyle()),
+    tooltip: Object.assign({trigger:'item', formatter: p => { const it = items[p.dataIndex], tp = it.k ? EXC_TIP(it.k) : ''; return `<b>${it.n}</b><br>${smln(it.v)} млн ₽` + (it.kind === 'step' ? `<br><span style="color:${col.fg2}">нарастающим: ${smln(it.e)} млн</span>` : '') +
+      (tp ? `<br><span style="color:${col.fg2};display:inline-block;max-width:300px;white-space:normal">${esc(tp)}</span>` : '') + (DR && it.k && t.detail ? `<br><span style="color:${col.fg2}">клик — из каких позиций состоит</span>` : ''); }}, ttStyle()),
     xAxis:{type:'category', data: items.map(i => i.n), axisLine:{lineStyle:{color:col.line2}}, axisTick:{show:false}, axisLabel:Object.assign({}, bt, {color:col.fg2, interval:0, rotate: narrow ? 40 : 0, fontSize: narrow ? 9 : 10, formatter: v => narrow ? v : v.replace('Новые сделки', 'Новые\nсделки').replace('По отчёту', 'По\nотчёту').replace('Фонд. ДС carry', 'Фонд. ДС\ncarry').replace('Фонд. ДС FX', 'Фонд. ДС\nFX').replace('= Флэш', '=\nФлэш').replace('Курсы ЦБ', 'Курсы\nЦБ').replace('= Official', '=\nOfficial')})},
     yAxis:{type:'value', splitLine:{lineStyle:{color:col.line}}, axisLabel:Object.assign({}, bt, {formatter: v => num(v / 1e6, 0)})},
     series:[{type:'custom', data: items.map((it, i) => [i, it.s, it.e]), encode:{x:0, y:[1, 2]},
@@ -1002,6 +1048,8 @@ function renderWaterfall(){
         ]};
       }}]
   }, true);
+  c.off('click');
+  if (DR && t.detail) c.on('click', p => { const it = items[p.dataIndex]; if (it && it.k) DR.open(hierSpec(TREE.tot, it.k)); });
 }
 
 function renderHistory(){
@@ -1037,7 +1085,9 @@ function cellsFor(r){
   if (tip) return `<td class="n">${na(tip)}</td>`.repeat(NCOL);   // R10: PnL не посчитан — «—» во всех колонках, не 0
   const part = r.cover && r.cover.partial ? `<sup class="pm" title="${esc(r.cover.tip)}">*</sup>` : '';
   const off = v => READY ? smln(v) : na(OFF_WAIT);
-  return NUMK.filter(k => k !== 'explained' && k !== 'fxBasis' && k !== 'official' && k !== 'unexplained').map(k => `<td class="n${r[k] === 0 ? ' z' : ''}">${r[k] === 0 ? '·' : smln(r[k])}</td>`).join('') + `<td class="n">${smln(r.explained)}${part}</td><td class="n${r.fxBasis ? '' : ' z'}">${r.fxBasis ? smln(r.fxBasis) : '·'}</td><td class="n">${off(r.official)}${READY ? part : ''}</td><td class="n uc">${r.kind === 'fund' ? '<span class="muted">·</span>' : off(r.unexplained)}</td>`;
+  // узлы (деск, книга, итог) — кликабельны: позиции узла и их вклад в колонку
+  const dd = k => r.kind === 'pos' || r.kind === 'fund' || !r[k] ? '' : dA('lab:hier:' + r.key + ':' + k, () => hierSpec(r, k));
+  return NUMK.filter(k => k !== 'explained' && k !== 'fxBasis' && k !== 'official' && k !== 'unexplained').map(k => `<td class="n${r[k] === 0 ? ' z' : ''}"${dd(k)}>${r[k] === 0 ? '·' : smln(r[k])}</td>`).join('') + `<td class="n"${dd('explained')}>${smln(r.explained)}${part}</td><td class="n${r.fxBasis ? '' : ' z'}"${dd('fxBasis')}>${r.fxBasis ? smln(r.fxBasis) : '·'}</td><td class="n"${READY ? dd('official') : ''}>${off(r.official)}${READY ? part : ''}</td><td class="n uc"${READY && r.kind !== 'fund' ? dd('unexplained') : ''}>${r.kind === 'fund' ? '<span class="muted">·</span>' : off(r.unexplained)}</td>`;
 }
 // статус строки: без PnL / до T+1 — «PnL не посчитан» / «Ожидается», иначе по unexplained
 const rowChip = (r, isRow) => r.na || r.none ? chip('info', 'PnL не посчитан') : !READY ? chip('info', 'Ожидается T+1') : chip(status(r.unexplained, r.official, isRow));
@@ -1070,7 +1120,7 @@ function renderHier(){
   });
   if (!rows) rows = `<tr><td class="l" colspan="${NCOL + 2}"><div class="empty"><b>Нет позиций с |unexplained| &gt; ${num(S.fltX, 1)} млн ₽</b>Снизьте порог фильтра.</div></td></tr>`;
   const t = TREE.tot;
-  wrap.innerHTML = `<table class="t hier"><thead><tr><th class="l">Позиция · млн ₽</th>${EXC.map(x => `<th>${x[1]}</th>`).join('')}<th>Флэш</th><th>Курсы ЦБ</th><th>Official</th><th>Unexpl.</th><th class="l">Статус</th></tr></thead><tbody>${rows}</tbody>
+  wrap.innerHTML = `<table class="t hier"><thead><tr><th class="l">Позиция · млн ₽</th>${EXC.map(x => `<th${EXC_TIP(x[0]) ? ` title="${esc(EXC_TIP(x[0]))}"` : ''}>${x[1]}</th>`).join('')}<th>Флэш</th><th>Курсы ЦБ</th><th>Official</th><th>Unexpl.</th><th class="l">Статус</th></tr></thead><tbody>${rows}</tbody>
     <tfoot><tr class="tot"><td class="l">Итого деск${t.cover.partial ? ' ' + U.pnlPartHtml(t.cover) : ''}</td>${cellsFor(t)}<td class="l">${rowChip(t, false)}</td></tr></tfoot></table>`;
 }
 $('#hier-wrap').addEventListener('click', e => { const b = e.target.closest('.tg'); if (!b || S.fltOn) return; const k = b.dataset.key; S.open.has(k) ? S.open.delete(k) : S.open.add(k); renderHier(); const nb = $(`#hier-wrap .tg[data-key="${k}"]`); if (nb) nb.focus(); });
