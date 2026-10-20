@@ -143,6 +143,10 @@ class BondQuote:
     """Every published price basis that is present: legal_close, close, waprice, market_price2, ..."""
     num_trades: int | None
     source_analytics: dict[str, Any]
+    volume_bonds: Decimal | None = None
+    value: Decimal | None = None
+    """Turnover in ``currency_id``, the settlement currency (``SUR``: RUB)."""
+    currency_id: str | None = None
 
 
 OFZ_CLASSES = ("ofz_pd", "ofz_ad", "ofz_pk", "ofz_in")
@@ -263,6 +267,16 @@ class StaticView:
         return self.issuers.get(terms.issuer_id) if terms.issuer_id is not None else None
 
 
+def zcyc_parameters(trade_date: str | date, params: dict[str, Any], where: str = "zcyc_params") -> ZcycParameters:
+    """Core's KBD parameters of a hub ``zcyc_params`` row (``params``: its published decimal strings)."""
+    missing = [k for k in ZCYC_KEYS if params.get(k) is None]
+    if missing:
+        raise SnapshotError(f"{where}: ZCYC parameters missing: {missing}")
+    b1, b2, b3, t1, *g = (float(Decimal(params[k])) for k in ZCYC_KEYS)
+    d = trade_date if isinstance(trade_date, date) else date.fromisoformat(trade_date)
+    return ZcycParameters(d, b1, b2, b3, t1, tuple(g))  # type: ignore[arg-type]
+
+
 class MarketView:
     def __init__(self, snap: Snapshot) -> None:
         if snap.kind != "market":
@@ -275,7 +289,8 @@ class MarketView:
             prices = {k: Decimal(q[f"{k}_pct"]) for k in PRICE_FIELDS if q.get(f"{k}_pct") is not None}
             self.quotes[(q["secid"], q["board"])] = BondQuote(
                 q["secid"], q["board"], date.fromisoformat(q["trade_date"]), _d(q.get("face_value")),
-                _d(q.get("accrued_per_bond")), prices, q.get("num_trades"), q.get("source_analytics") or {})
+                _d(q.get("accrued_per_bond")), prices, q.get("num_trades"), q.get("source_analytics") or {},
+                _d(q.get("volume_bonds")), _d(q.get("value_ccy")), q.get("currency_id"))
         if len(d["zcyc_params"]) != 1:
             raise SnapshotError(f"{snap.id}: expected one zcyc_params row, got {len(d['zcyc_params'])}")
         self.zcyc = d["zcyc_params"][0]
@@ -293,12 +308,7 @@ class MarketView:
     def zcyc_parameters(self) -> ZcycParameters:
         """The KBD publication of the snapshot, dated its own trade date (core checks that it is the
         business date)."""
-        p = self.zcyc["params"]
-        missing = [k for k in ZCYC_KEYS if p.get(k) is None]
-        if missing:
-            raise SnapshotError(f"{self.snapshot.id}: ZCYC parameters missing: {missing}")
-        b1, b2, b3, t1, *g = (float(Decimal(p[k])) for k in ZCYC_KEYS)
-        return ZcycParameters(date.fromisoformat(self.zcyc["trade_date"]), b1, b2, b3, t1, tuple(g))  # type: ignore[arg-type]
+        return zcyc_parameters(self.zcyc["trade_date"], self.zcyc["params"], self.snapshot.id)
 
     def core_market(self, static: StaticView) -> MarketSnapshot:
         """Core market snapshot without quotes: the KBD under ``KBD_CURVE_ID`` and every calendar of

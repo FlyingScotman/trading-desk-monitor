@@ -36,14 +36,22 @@ class Snapshot:
 
 
 def read_bundle(path: Path) -> Snapshot:
-    raw = gzip.decompress(path.read_bytes())
+    return parse_bundle(path.read_bytes(), path.name.split(".")[0], path.name)
+
+
+def parse_bundle(body: bytes, snapshot_id: str, name: str | None = None) -> Snapshot:
+    """A bundle's gzipped bytes (a file, or a hub body that is not cached), verified against ``snapshot_id``."""
+    name = name or snapshot_id[:12]
+    try:
+        raw = gzip.decompress(body)
+    except (OSError, EOFError) as e:
+        raise SnapshotError(f"{name}: not a complete gzip body ({e})") from None
     sid = hashlib.sha256(raw).hexdigest()
-    expected = path.name.split(".")[0]
-    if sid != expected:
-        raise SnapshotError(f"{path.name}: sha256 {sid} does not match the file name")
+    if sid != snapshot_id:
+        raise SnapshotError(f"{name}: sha256 {sid} does not match the file name")
     doc = json.loads(raw)
     if doc.get("schema_version") != SCHEMA_VERSION:
-        raise SnapshotError(f"{path.name}: schema_version {doc.get('schema_version')!r}, need {SCHEMA_VERSION}")
+        raise SnapshotError(f"{name}: schema_version {doc.get('schema_version')!r}, need {SCHEMA_VERSION}")
     return Snapshot(sid, doc["kind"], doc["cut_type"], doc["business_date"], doc.get("static_snapshot_id"), doc)
 
 

@@ -98,6 +98,7 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "autopilot_sync_last": ("DESK_AUTOPILOT_SYNC_LAST", "int"),
     "inbox_lookback_days": ("DESK_INBOX_LOOKBACK_DAYS", "int0"),
     "update_dir": ("DESK_UPDATE_DIR", "path"),
+    "history_days": ("DESK_HISTORY_DAYS", "int0"),
 }
 PROXY_KEYS = {"https_proxy": "HTTPS_PROXY", "no_proxy": "NO_PROXY"}
 READ_ONLY_KEYS = ("hub_token", "hub_token_set", "proxy_password", "proxy_password_set", "home", "effective",
@@ -161,6 +162,7 @@ class Settings:
     autopilot: bool = True
     autopilot_sync_last: int = 5
     inbox_lookback_days: int = 10  # the inbox takes report files at most this many days old; 0: no limit
+    history_days: int = 260  # hub business dates of market history for the bond charts (~1 year); 0: the cache only
     private_adapter_default: bool = False  # private_adapter came from DESK_DEFAULT_PRIVATE_ADAPTER
     update_dir: Path | None = None  # update zips of the Windows bundle (desk.update)
 
@@ -223,6 +225,7 @@ class Settings:
             ("autopilot_sync_last", str(self.autopilot_sync_last)),
             ("inbox_lookback_days", str(self.inbox_lookback_days) if self.inbox_lookback_days else "0 (no limit)"),
             ("update_dir", str(self.update_dir or "none")),
+            ("history_days", str(self.history_days) if self.history_days else "0 (off: the cached dates only)"),
         ]
 
 
@@ -496,6 +499,7 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         autopilot=flag("DESK_AUTOPILOT", defaults.autopilot),
         autopilot_sync_last=count("DESK_AUTOPILOT_SYNC_LAST", defaults.autopilot_sync_last),
         inbox_lookback_days=count("DESK_INBOX_LOOKBACK_DAYS", defaults.inbox_lookback_days, 0),
+        history_days=count("DESK_HISTORY_DAYS", defaults.history_days, 0),
         private_adapter_default=adapter_default,
         update_dir=_path(get("DESK_UPDATE_DIR")),
     )

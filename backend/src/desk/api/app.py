@@ -29,6 +29,7 @@ from psycopg.rows import dict_row
 from starlette.exceptions import HTTPException
 
 from .. import __version__
+from ..marketdata import history
 from ..scenario import jobs
 from ..scenario.definition import definition_hash, normalize
 from ..scenario.taylor import risk_payload
@@ -309,30 +310,15 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     def bond_history(con: Con, instrument_id: str | None = None, isin: str | None = None,
                      curve: str | None = None, wal: float | None = None,
                      from_: Annotated[date | None, Query(alias="from")] = None, to: date | None = None):
-        """The issue's points from the default runs (price, yield, Z-spread, accrued, the desk's face); ``wal``
-        is accepted for the contract and not used yet."""
+        """The issue's quoted days from the market history (the cached hub snapshots, ``history_days`` deep) merged
+        with the default runs that hold it (Z-spread, the desk's face), and the KBD rate at its term with the spread
+        to it (``desk.marketdata.history.bond_history``). ``instrument_id`` is the MOEX secid (or the report's id),
+        ``isin`` finds the bond through the static snapshots; ``curve``: the KBD (RUB OFZ; own, base) has rates,
+        another curve gives none; ``wal`` is accepted for the contract and not used yet."""
         if not (instrument_id or isin):
             raise ApiError(422, "invalid_parameter", "instrument_id or isin is required")
-        rows = con.execute(
-            f"SELECT r.business_date, p.fact FROM run_position p JOIN run r ON r.run_id = p.run_id"
-            f" WHERE p.run_id IN ({compat.DEFAULT_RUNS}) AND p.fact IS NOT NULL AND p.fact->>'instr_type' = 'BOND'"
-            " AND (p.fact->>'instrument_id' = %s OR p.fact->>'isin' = %s)"
-            " AND (%s::date IS NULL OR r.business_date >= %s::date) AND (%s::date IS NULL OR r.business_date <= %s::date)"
-            " ORDER BY r.business_date, p.ord", (instrument_id, isin, from_, from_, to, to)).fetchall()
-        points: dict[date, dict[str, Any]] = {}
-        for r in rows:
-            f, d = r["fact"], r["business_date"]
-            if d not in points:
-                points[d] = {"date": d, "clean_price": f.get("price"), "ytm": f.get("ytm"),
-                             "z_spread_bp": f.get("spread_bp"), "accrued": f.get("accrued"),
-                             "tenor_y": f.get("tenor_y"), "source": "desk run", "face_amount": 0.0}
-            points[d]["face_amount"] += f.get("notional") or 0.0
-        last = rows[-1]["fact"] if rows else {}
-        return BondHistory(
-            instrument_id=last.get("instrument_id") or instrument_id, isin=last.get("isin") or isin,
-            name=last.get("name"), ccy=last.get("ccy"), curve=curve,
-            spread_to_curve_note="ставка кривой по истории пока не считается; точки — дни основных прогонов"
-            if rows else None, series=list(points.values()))
+        return BondHistory(**history.bond_history(con, instrument_id=instrument_id, isin=isin, curve=curve,
+                                                  from_=from_, to=to))
 
     # ---- scenarios (S6)
     @app.get("/api/v1/scenario-defs", response_model=ScenarioDefList, response_model_exclude_unset=True)

@@ -11,7 +11,8 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    the first one; ``desk cycle --date`` apart), at most ``autopilot_sync_last + SYNC_EXTRA`` dates per cycle (the
    rest next cycle), and a date the hub has no snapshot for is not asked again for ``MISSING_TTL_S``. The
    snapshot drop folder, when set, is imported too. A hub error is the step's error: the cycle goes on with the
-   cache.
+   cache. Then the bundles of the cache not loaded yet go into the store's market history (``desk.marketdata.history``:
+   the bond charts; one query when there is nothing new).
 2. **scan**: ``desk inbox scan`` (when inbox folders are set). Sync comes first: a ``start_of_day`` report needs a
    cached calendar covering its date and the day before, otherwise it waits (``waiting_calendar``).
 3. **eod**: for each cached ``eod_final`` business date from ``min(today - WINDOW_DAYS, latest positions date)``
@@ -23,9 +24,14 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    default run at all (a first launch, a new day): the current position shows before the backlog is done (its model
    prices then carry spreads from the runs that existed when it ran). A date that failed is not retried until its
    inputs change.
-4. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
-   ``progress`` ({"step": "sync"|"scan"|"eod", "done": int, "total": int|null, "detail": str}) follow it live:
-   hub dates fetched of those to fetch, report files done of those offered, EOD dates run of those to run.
+4. **history** (with the hub and ``history_days`` > 0): market history older than the cache for the bond charts,
+   ``HISTORY_PER_CYCLE`` of the ``history_days`` latest hub dates per cycle, newest first, into the store's tables
+   without caching the bundles; only after a sync that reached the hub and left no date for the next cycle, and
+   after the EOD runs, so it never delays them. The lookback above does not apply: these dates feed no run.
+5. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
+   ``progress`` ({"step": "sync"|"scan"|"eod"|"history", "done": int, "total": int|null, "detail": str}) follow it
+   live: hub dates fetched of those to fetch, report files done of those offered, EOD dates run of those to run,
+   history dates loaded of those to load.
 
 Settings are read again at the start of every cycle (``desk.settings.load``), so edits apply without a restart.
 Errors are caught per step, logged (``desk.autopilot`` and ``<home>/logs/autopilot.log``) and shown in the status;
@@ -44,6 +50,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime, timedelta
+from itertools import islice
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -52,7 +59,7 @@ import psycopg
 
 from . import logic_version, store
 from .inbox.timesem import MSK
-from .marketdata import cache
+from .marketdata import cache, history
 from .marketdata.bundle import SnapshotDir, SnapshotError
 from .marketdata.hub import HubClient, HubError
 from .settings import Settings, load
@@ -68,6 +75,8 @@ MISSING_TTL_S = 6 * 3600.0  # a date the hub has no snapshot for is not asked ag
 PREV_MARGIN_DAYS = 7    # below the lookback: the hub date before its first day (flash PnL, a start-of-day calendar)
 MIN_SLEEP_S = 1.0
 LOCK_FILE = "cycle.lock"
+HISTORY_PER_CYCLE = 5   # hub dates of market history fetched per cycle (~0.5 MB each), newest first
+MAX_HISTORY_DAYS = 2600  # history_days is capped here (~10 years of business dates)
 
 LATEST_RUN = (f"SELECT run_id, business_date, completed_at FROM run WHERE run_id IN ({store.DEFAULT_RUNS})"
               " ORDER BY business_date DESC LIMIT 1")
@@ -154,6 +163,8 @@ def progress_text(p: dict[str, Any]) -> str:
     if p["step"] == "eod":
         day = f" {detail[8:10]}.{detail[5:7]}" if len(detail) == 10 else ""
         return f"EOD{day}: {done} из {total}"
+    if p["step"] == "history":
+        return f"История котировок: {done} из {total}" if total is not None else "История котировок: список дат"
     return f"{p['step']}: {done}" + (f" из {total}" if total is not None else "")
 
 
@@ -173,6 +184,9 @@ class Autopilot:
         self._failed: dict[str, tuple] = {}
         self._checked: dict[str, float] = {}   # hub date -> monotonic time it was last asked of the hub
         self._missing: dict[str, float] = {}   # hub date -> monotonic time the hub had no snapshot for it
+        self._hub_failed = False               # this cycle's hub sync failed: no history step
+        self._sync_later = 0                   # hub dates the sync left for the next cycle: no history step
+        self._history_dates: tuple[float, int, list[str]] | None = None  # (listed at, depth, hub dates newest first)
         self._interval = 60.0
         self._on = True
         self._log_handler: RotatingFileHandler | None = None
@@ -271,6 +285,8 @@ class Autopilot:
             if con is not None:
                 steps.append(self._guard("scan", lambda: self._scan(settings, con)))
                 steps.append(self._guard("eod", lambda: self._eod(settings, con, url, extra, ran)))
+                if hub and settings.hub_url and int(getattr(settings, "history_days", 0) or 0) > 0:
+                    steps.append(self._guard("history", lambda: self._history(settings, con)))
                 try:
                     latest = latest_run(con)
                 except psycopg.Error:
@@ -368,11 +384,12 @@ class Autopilot:
     def _sync(self, settings: Settings, con: psycopg.Connection | None, extra: list[str],
               hub: bool) -> tuple[str, str]:
         parts, status = [], "ok"
+        self._hub_failed, self._sync_later = False, 0
         if hub and settings.hub_url:
             try:
                 parts.append(self._hub_sync(settings, con, extra))
             except (HubError, SnapshotError, OSError, ValueError) as e:
-                status = "error"
+                status, self._hub_failed = "error", True
                 parts.append(f"hub: {e}; the cached snapshots are used")
         if settings.snapshot_drop:
             if Path(settings.snapshot_drop).is_dir():
@@ -384,9 +401,18 @@ class Autopilot:
             else:
                 status = "error"
                 parts.append(f"drop: {settings.snapshot_drop} is not a folder")
+        loaded = ""
+        if con is not None:  # the new bundles of the cache into the market history (the bond charts)
+            try:
+                loaded = history.load_cache(con, Path(settings.snapshot_cache),
+                                            lambda i, n, sid: self._progress("sync", i, n, "history " + sid)).text()
+            except psycopg.Error as e:
+                status, loaded = "error", f"history tables: {type(e).__name__}: {e}"
         if not parts:
-            return "skipped", "hub not configured (hub_url)" if hub else "hub off (--no-hub), no drop folder"
-        return status, "; ".join(parts)
+            return ("error" if status == "error" else "skipped"), "; ".join(
+                ["hub not configured (hub_url)" if hub else "hub off (--no-hub), no drop folder"]
+                + ([loaded] if loaded else []))
+        return status, "; ".join(parts + ([loaded] if loaded else []))
 
     def _hub_sync(self, settings: Settings, con: psycopg.Connection | None, extra: list[str]) -> str:
         client = HubClient(settings)  # raises HubError without a token on the first request
@@ -431,6 +457,7 @@ class Autopilot:
         due.sort(key=lambda d: (d in cached, d not in extra))
         limit = max(n, 1) + SYNC_EXTRA
         todo, later = due[:limit], len(due) - min(len(due), limit)
+        self._sync_later = later
         pulled, missing = [], []
         for i, d in enumerate(todo):
             self._progress("sync", i, len(todo), d)
@@ -453,6 +480,57 @@ class Autopilot:
                 + (f"; no snapshot for {', '.join(missing)}" if missing else "")
                 + f" ({len(wanted)} dates wanted, {len(todo)} asked"
                 + (f", {later} next cycle" if later else "") + ")")
+
+    def _history(self, settings: Settings, con: psycopg.Connection) -> tuple[str, str]:
+        """Market history for the bond charts beyond the cache: the ``history_days`` latest hub dates, newest first,
+        ``HISTORY_PER_CYCLE`` a cycle, straight into the store's tables (``history.fetch_hub``; not cached, see
+        ``desk.marketdata.history``). Only after a sync that reached the hub and left nothing for the next cycle: the
+        regular dates come first. The hub's date list is read again once per ``RECHECK_S``."""
+        if self._hub_failed:
+            return "skipped", "the hub sync failed this cycle"
+        if self._sync_later:
+            return "skipped", f"after the sync ({self._sync_later} dates next cycle)"
+        depth = min(int(settings.history_days), MAX_HISTORY_DAYS)
+        client = HubClient(settings)
+        now = time.monotonic()
+        if (self._history_dates is None or self._history_dates[1] != depth
+                or now - self._history_dates[0] >= RECHECK_S):
+            self._progress("history", 0, None, "список дат хаба")
+            self._history_dates = (now, depth, list(islice(cache.hub_dates(client), depth)))
+        dates = self._history_dates[2]
+        if not dates:
+            return "skipped", "the hub lists no dates"
+        for d in [d for d, t in self._missing.items() if now - t >= MISSING_TTL_S]:
+            del self._missing[d]
+        have = history.loaded_dates(con) | set(SnapshotDir(Path(settings.snapshot_cache)).market_dates())
+        due = [d for d in dates if d not in have and d not in self._missing]  # cached dates load in the sync
+        todo = due[:HISTORY_PER_CYCLE]
+        loaded, missing = [], []
+        for i, d in enumerate(todo):
+            self._progress("history", i, len(todo), d)
+            try:
+                st = history.fetch_hub(con, client, d)
+            except HubError as e:
+                if e.status != 404:
+                    raise
+                st = None
+            except SnapshotError as e:  # a body that does not verify
+                log.warning("autopilot: history %s: %s", d, e)
+                st = "unreadable"
+            if st == "loaded":
+                loaded.append(d)
+            else:  # no snapshot on the hub, or one that cannot be loaded: not asked again soon
+                self._missing[d] = time.monotonic()
+                missing.append(f"{d} ({st or 'no snapshot'})")
+        span = f"history_days {depth}: {len(dates)} on the hub back to {dates[-1]}"
+        if not todo:
+            return "ok", f"up to date ({span})"
+        parts = ["loaded " + ", ".join(loaded) if loaded else "nothing loaded"]
+        if missing:
+            parts.append(f"not loaded {', '.join(missing)}")
+        if len(due) > len(todo):
+            parts.append(f"{len(due) - len(todo)} dates in the next cycles")
+        return "ok", "; ".join(parts) + f" ({span})"
 
     def _scan(self, settings: Settings, con: psycopg.Connection) -> tuple[str, str]:
         from .inbox import scan
