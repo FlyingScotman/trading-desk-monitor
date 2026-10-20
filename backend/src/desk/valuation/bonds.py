@@ -9,7 +9,10 @@ Steps:
 2. ``value_bonds``: one ``value_portfolio`` call per spread kind (OFZ spread or credit spread is
    a policy setting) for every request of the run. Core calibrates the Z-spread (annual,
    ACT/365F) to the dirty price, and computes bucket DV01, the CS01 or OFZ spread risk, the
-   Hessian, the effective yield and duration. Its rejections become ``Rejected("core_<code>")``.
+   Hessian, the effective yield and duration. Bucket DV01 and the Hessian stay per curve, under the
+   published curve IDs (``RISK_CURVES``): a floater's discount curve (the KBD) and its projection curve
+   (RUONIA OIS or the key-rate projection) are separate factors, so their basis risk is not netted
+   away. Its rejections become ``Rejected("core_<code>")``.
    The hash-verified result (``rub-portfolio-risk-result.v2``) is returned for storage.
 
 **A bond is valued somehow rather than not at all** (the owner's rule). Below an exact valuation
@@ -90,6 +93,18 @@ ACCRUED_TOLERANCE_RUB = 0.01
 CAP_FLOOR_GUARD_BP = 25.0
 """Floors and caps are priced at intrinsic value (core has no volatility) only this far from the strike."""
 PERPETUAL_CALL_YEARS = 5
+
+OFZ_CURVE = "RUB OFZ"
+RISK_CURVES = {KBD_CURVE_ID: OFZ_CURVE, RUONIA_OIS_CURVE_ID: "RUB RUONIA", KEY_RATE_CURVE_ID: "RUB KEY"}
+"""Core curve ID -> the published curve its bucket DV01 goes on (the run's ``curves`` reference, R8): a floater
+has the KBD (discounting) and its projection curve, each with its own buckets, so its basis risk shows."""
+
+
+def ccy_curve(ccy: str) -> str:
+    """The published curve of rate risk without a core curve (a duration proxy, a report's DV01): the KBD for RUB,
+    else a curve named by the currency (``USD``), published without points until the hub has its curve."""
+    return OFZ_CURVE if ccy == "RUB" else ccy
+
 
 FLOATER_BENCHMARKS = ("KEY_RATE", "RUONIA", "RUONIA_3M", "RUONIA_INDEX")
 OLD_OFZ_PK = ("SU29007RMFS0", "SU29008RMFS8", "SU29009RMFS6", "SU29010RMFS4")
@@ -397,14 +412,18 @@ class BondValuation:
     dv01_rub: float
     """Sum of the bucket DV01 (central differences, 1 bp)."""
     buckets: dict[str, float]
-    """Per bucket, the discount curve plus a floater's projection curve (both moved together)."""
+    """Per bucket, summed over the curves (``curve_buckets``): every curve moved together (the flash PnL's
+    linear rates term)."""
     spread01_rub: float
     """CS01 for credit, OFZ spread risk for OFZ: core factor ``CS``."""
     calculation_id: str
+    curve_buckets: dict[str, dict[str, float]] = field(default_factory=dict)
+    """Bucket DV01 per published curve (``RISK_CURVES``, ``ccy_curve``); empty: all of ``buckets`` on the KBD.
+    Read it through ``risk``."""
     curve_convexity: float | None = None
     hessian: list[tuple[str, str, float]] = field(default_factory=list)
-    """Upper triangle, factor names ``IR|<bucket>`` and ``CS``; like ``buckets``, a floater's two curves move
-    together."""
+    """Upper triangle, factor names ``IR|<published curve>|<bucket>`` and ``CS``: a floater's discount and
+    projection curves are separate factors, with their cross terms."""
     cashflows: tuple[BondCashflow, ...] = ()
     """To the horizon; a floater's projected on the base curves."""
     core_version: str = CORE_VERSION
@@ -414,6 +433,10 @@ class BondValuation:
     assumptions: tuple[str, ...] = ()
     model_spread_source: str | None = None
     """Set on a ``model_price``: where its ``z_spread_bp`` comes from (stored and carried by the desk store)."""
+
+    def risk(self) -> dict[str, dict[str, float]]:
+        """Bucket DV01 by published curve: ``curve_buckets``, else ``buckets`` on the KBD (``RUB OFZ``)."""
+        return self.curve_buckets or {OFZ_CURVE: self.buckets}
 
 
 @dataclass
@@ -553,8 +576,12 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
 def _valuation(prep: _Prepared, v: PositionValuation, quantity: float) -> BondValuation:
     r = prep.request
     first = v.factor_risk.first_order_by_factor()
-    buckets = {b: math.fsum(x for f, x in first.items() if f.startswith("IR|") and f.endswith(f"|{b}"))
-               for b in RISK_BUCKETS}
+    by_curve: dict[str, dict[str, float]] = {}
+    for f, x in first.items():
+        if f.startswith("IR|"):
+            _, c, b = _factor(f).split("|")
+            by_curve.setdefault(c, dict.fromkeys(RISK_BUCKETS, 0.0))[b] += x
+    buckets = {b: math.fsum(bs[b] for bs in by_curve.values()) for b in RISK_BUCKETS}
     out = BondValuation(
         secid=r.terms.secid, quantity=quantity, valuation_date=v.settlement_date, settlement=r.settlement,
         horizon_date=v.horizon_date, horizon_kind=r.schedule.horizon_kind, price_basis=r.price_basis,
@@ -563,24 +590,25 @@ def _valuation(prep: _Prepared, v: PositionValuation, quantity: float) -> BondVa
         ytm_pct=v.effective_yield * 100.0, macaulay_years=v.macaulay_duration_years,
         modified_duration=v.macaulay_duration_years / (1.0 + v.effective_yield),
         z_spread_bp=v.spread_bp, spread_kind=v.spread_kind, dv01_rub=math.fsum(buckets.values()), buckets=buckets,
-        spread01_rub=first["CS"], calculation_id=v.calculation_id, cashflows=prep.flows,
+        spread01_rub=first["CS"], calculation_id=v.calculation_id, curve_buckets=by_curve, cashflows=prep.flows,
         quality="assumed" if prep.notes else "exact", assumptions=tuple(prep.notes),
     )
     if v.factor_risk.has_second_order:
-        # IR|<curve>|<bucket> -> IR|<bucket>: a floater's discount and projection curves move together, so
-        # their cross term (k, o) of one bucket lands twice on the diagonal of the joint Hessian.
-        order = {f: i for i, f in enumerate([*(f"IR|{b}" for b in RISK_BUCKETS), "CS"])}
-        joint: dict[tuple[str, str], float] = {}
+        # Core's full Hessian over its factors, renamed to the published curves; every curve is its own factor,
+        # so a floater keeps the cross terms of its discount and projection curves.
         for (a, b), x in v.factor_risk.hessian_by_factor().items():
-            i, j = sorted((_factor(a), _factor(b)), key=lambda f: order.get(f, len(order)))
-            joint[(i, j)] = joint.get((i, j), 0.0) + x * (2 if i == j and a != b else 1)
-        out.hessian = [(a, b, x) for (a, b), x in joint.items()]
-        rates = math.fsum(x * (1 if a == b else 2) for (a, b), x in joint.items()
+            fa, fb = sorted((_factor(a), _factor(b)))
+            out.hessian.append((fa, fb, x))
+        # every curve moved in parallel together: the convexity of the yield
+        rates = math.fsum(x * (1 if a == b else 2) for a, b, x in out.hessian
                           if a.startswith("IR|") and b.startswith("IR|"))
         out.curve_convexity = rates * 1e8 / v.pv_rub if v.pv_rub else None
     return out
 
 
 def _factor(name: str) -> str:
-    """Core ``IR|<curve>|<bucket>`` -> the backend's ``IR|<bucket>``."""
-    return "IR|" + name.rsplit("|", 1)[1] if name.startswith("IR|") else name
+    """Core ``IR|<curve>|<bucket>`` -> ``IR|<published curve>|<bucket>`` (``RISK_CURVES``)."""
+    if not name.startswith("IR|"):
+        return name
+    _, c, b = name.split("|")
+    return f"IR|{RISK_CURVES.get(c, c)}|{b}"

@@ -2,10 +2,14 @@
 
 The definition keeps the prototype shape (``prototypes/data.js``), so the prototype ``runScenario`` reads it::
 
-    {"curves": {"RUB OFZ": [11 bp, RISK_BUCKETS order] | bp}, "ofzSpread": bp,
+    {"curves": {"RUB OFZ": [11 bp, RISK_BUCKETS order] | bp, "RUB RUONIA": ..., "RUB KEY": ..., "USD": ...},
+     "ofzSpread": bp,
      "spreads": {"_all": bp, "_mult": factor > 0, "sector": {name: bp}, "issuer": {name: bp}, "rating": {r: bp}},
      "fx": {"USD": pct, ...}}
 
+A curve is a published curve of the run (R8): ``RUB OFZ`` the KBD, ``RUB RUONIA`` and ``RUB KEY`` a floater's
+projection curves, ``USD`` and the like a currency's curve; each moves only by its own vector. The preset moves of
+all rates shift the three RUB curves alike; the basis preset only ``RUB KEY`` (store migration 0008).
 ``ofzSpread`` is the OFZ Z-spread to the KBD (the prototype's spread to RUONIA has no curve in the runs).
 ``normalize`` gives the stored, returned and hashed form: every curve a list of 11 floats, zero entries,
 ``_mult == 1``, empty maps and all-zero curves dropped; an unknown key, a bad length, |bp| > ``MAX_BP``
@@ -24,6 +28,9 @@ from rub_fixed_income import RISK_BUCKETS
 
 MAX_BP = 5000.0
 KEYS = ("curves", "ofzSpread", "spreads", "fx")
+RUB_CURVES = ("RUB OFZ", "RUB RUONIA", "RUB KEY")
+"""The curves core reprices (``valuation.bonds.RISK_CURVES``): a shock on them is valid for every run, also one
+published before R8 with ``RUB OFZ`` only (its floaters' risk summed there)."""
 SPREAD_RULES = ("sector", "issuer", "rating")
 
 
@@ -57,7 +64,8 @@ def _rules(x: Any, what: str) -> dict[str, float]:
 
 
 def normalize(defn: Mapping[str, Any], curves: Iterable[str] | None = None) -> dict[str, Any]:
-    """The normalized definition. ``curves``: the curve IDs the run publishes; a shock on another raises."""
+    """The normalized definition. ``curves``: the curve IDs the run publishes; a shock on another curve than
+    those and ``RUB_CURVES`` raises."""
     defn = _map(defn, "definition")
     if extra := set(defn) - set(KEYS):
         raise DefinitionError(f"unknown keys {sorted(extra)}")
@@ -70,7 +78,7 @@ def normalize(defn: Mapping[str, Any], curves: Iterable[str] | None = None) -> d
         vec = [_num(x, f"curves.{cid}") for x in vec]
         if any(vec):
             shocked[cid] = vec
-    if curves is not None and (unknown := set(shocked) - set(curves)):
+    if curves is not None and (unknown := set(shocked) - set(curves) - set(RUB_CURVES)):
         raise DefinitionError(f"curves {sorted(unknown)} are not published by the run")
     if shocked:
         out["curves"] = shocked

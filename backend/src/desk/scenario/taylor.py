@@ -1,7 +1,8 @@
 """The T1 scenario estimate: the run's stored risk as a payload, and the Taylor sum over it (S6 §3).
 
 ``risk_payload`` turns the published facts (``tdm_run.position_row``) of a run's valued positions into
-indexed factors. Factor order: ``IR|<curve>|<bucket>`` by curve (sorted) x ``RISK_BUCKETS``, then ``CS``,
+indexed factors. ``curves``: the curves a scenario may shock, the run's published curves, those of the risk and
+``RUB_CURVES`` (sorted). Factor order: ``IR|<curve>|<bucket>`` by curve (sorted) x ``RISK_BUCKETS``, then ``CS``,
 then ``FX|<ccy>`` (sorted); only factors that occur are listed. Per position ``delta`` holds the nonzero
 first order in factor order (IR RUB/bp from ``risk``, CS RUB/bp from ``cs01`` or ``ofz_spr01``, FX RUB per
 1 % = ``fx_delta x fx_rate / 100``), ``gamma`` the upper-triangle Hessian as ``[i, j, RUB/(unit_i x unit_j)]``
@@ -19,7 +20,7 @@ from typing import Any
 
 from rub_fixed_income import RISK_BUCKETS
 
-from .definition import own_spread_shock
+from .definition import RUB_CURVES, own_spread_shock
 
 PARTS = ("rates", "spread", "fx", "convexity", "total")
 
@@ -31,7 +32,7 @@ def risk_payload(run: Mapping[str, Any], rows: list[Mapping[str, Any]], referenc
     valued = [r for r in rows if r.get("fact")]
     issuers = {i["issuer"]: i for i in reference.get("issuers") or []}
     curves = sorted({c["curve_id"] for c in reference.get("curves") or []}
-                    | {c for r in valued for c in (r["fact"].get("risk") or {})})
+                    | {c for r in valued for c in (r["fact"].get("risk") or {})} | set(RUB_CURVES))
     firsts, seen = [], set()
     for r in valued:
         f = r["fact"]

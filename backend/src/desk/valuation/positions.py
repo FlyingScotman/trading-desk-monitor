@@ -19,8 +19,9 @@ core (``direct``). ``merge`` puts the two back in the inputs' order for ``desk_r
   in the assumptions); its amount counts in the open currency position, never in MV.
 - OTC and other rows (and any asset class this module does not know): rung ``reported_value`` at the report's
   ``mv_rub``, with its risk (``reported_risk``): ``risk_dv01_rub`` in the rates bucket of ``RISK_BUCKETS`` whose pillar
-  is nearest ``maturity_date`` (no maturity, or one already past: the shortest bucket, said in the assumptions),
-  ``risk_cs01_rub`` as CS01. Without ``mv_rub``: not valued, reason ``no_reported_value`` (in coverage, no fact).
+  is nearest ``maturity_date`` (no maturity, or one already past: the shortest bucket, said in the assumptions), on
+  the curve of the row's currency (``RUB OFZ`` for RUB, else ``USD`` and so on), ``risk_cs01_rub`` as CS01.
+  Without ``mv_rub``: not valued, reason ``no_reported_value`` (in coverage, no fact).
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
 from ..inbox.schema import load_schema, norm_ccy
 from ..orchestrator import EodContext, Outcome
 from ..store import PositionInputs
-from .bonds import BondValuation, face_on
+from .bonds import BondValuation, ccy_curve, face_on
 from .fallback import fx_rate
 
 MISMATCH_BONDS = 0.5
@@ -103,12 +104,14 @@ def _bonds(ctx: EodContext, secid: str, qty: float | None, x: dict[str, Any]) ->
     return n, notes
 
 
-def reported_risk(ctx: EodContext, x: dict[str, Any]) -> tuple[dict[str, float], float, list[str]]:
-    """The report's own risk of a row valued without core: (bucket DV01, CS01, notes). ``risk_dv01_rub`` goes whole
-    into the bucket whose pillar is nearest the years to ``maturity_date``; no maturity or a past one: the
-    shortest bucket. Both are the bank's figures (approximate), so said in the notes."""
+def reported_risk(ctx: EodContext, x: dict[str, Any]) -> tuple[dict[str, dict[str, float]], float, list[str]]:
+    """The report's own risk of a row valued without core: (bucket DV01 by curve, CS01, notes). ``risk_dv01_rub``
+    goes whole into the bucket whose pillar is nearest the years to ``maturity_date`` (no maturity or a past one:
+    the shortest bucket), on the curve of the row's currency (``bonds.ccy_curve``: the KBD for RUB, else ``USD``
+    and so on). Both are the bank's figures (approximate), so said in the notes."""
     buckets, notes = dict.fromkeys(RISK_BUCKETS, 0.0), []
     dv01, cs01 = x.get("risk_dv01_rub"), x.get("risk_cs01_rub")
+    curve = ccy_curve(x.get("ccy") or "RUB")
     if dv01:
         mat = x.get("maturity_date")
         t = (mat - ctx.business_date).days / 365.25 if mat else None
@@ -117,27 +120,27 @@ def reported_risk(ctx: EodContext, x: dict[str, Any]) -> tuple[dict[str, float],
         where = (f"maturity {mat}" if t is not None and t > 0 else
                  f"maturity {mat} not after {ctx.business_date}: shortest bucket" if mat else
                  "no maturity_date: shortest bucket")
-        notes.append(f"reported_risk: DV01 {dv01:g} RUB/bp of the report in bucket {RISK_BUCKETS[i]} ({where}),"
-                     " approximate")
+        notes.append(f"reported_risk: DV01 {dv01:g} RUB/bp of the report in bucket {RISK_BUCKETS[i]} of {curve} "
+                     f"({where}), approximate")
     if cs01:
         notes.append(f"reported_risk: CS01 {cs01:g} RUB/bp of the report")
-    return buckets, cs01 or 0.0, notes
+    return ({curve: buckets} if dv01 else {}), cs01 or 0.0, notes
 
 
 def _valuation(ctx: EodContext, kind: str, qty: float, pv: float, quality: str, why: list[str], *,
                price: float = math.nan, accrued: float = 0.0, face: float = math.nan,
-               horizon: date | None = None, buckets: dict[str, float] | None = None,
+               horizon: date | None = None, risk: dict[str, dict[str, float]] | None = None,
                cs01: float = 0.0) -> BondValuation:
-    """A valuation without core: PV, and only the risk given (``reported_risk``)."""
+    """A valuation without core: PV, and only the risk given (``reported_risk``, bucket DV01 by curve)."""
     bd = ctx.business_date
-    buckets = buckets or dict.fromkeys(RISK_BUCKETS, 0.0)
+    buckets = {b: math.fsum(bs[b] for bs in (risk or {}).values()) for b in RISK_BUCKETS}
     return BondValuation(
         secid="", quantity=qty, valuation_date=bd, settlement=bd, horizon_date=horizon or bd,
         horizon_kind="value_date" if horizon else "unknown", price_basis=kind, clean_pct=price, accrued_rub=accrued,
         face_rub=face, current_coupon_pct=None, dirty_rub=pv / qty if qty else math.nan, pv_rub=pv, ytm_pct=math.nan,
         macaulay_years=math.nan, modified_duration=math.nan, z_spread_bp=math.nan,
         spread_kind="credit" if cs01 else kind, dv01_rub=math.fsum(buckets.values()), buckets=buckets,
-        spread01_rub=cs01, calculation_id=f"desk-{kind}:{bd}",
+        spread01_rub=cs01, calculation_id=f"desk-{kind}:{bd}", curve_buckets=dict(risk or {}),
         quality=quality, assumptions=tuple(why))
 
 
@@ -150,11 +153,11 @@ def _reported(ctx: EodContext, qty: float | None, x: dict[str, Any], reason: str
     """Rung ``reported_value``: the bank's figure for a bond we cannot value ourselves."""
     o = Outcome(None, None, None, reason=reason)  # type: ignore[arg-type]
     q = qty if qty is not None else 1.0
-    buckets, cs01, risk = reported_risk(ctx, x)
+    by_curve, cs01, risk = reported_risk(ctx, x)
     if x.get("mv_rub") is not None:
         o.valuation = _valuation(ctx, "reported", q, x["mv_rub"], "reported_value",
                                  [*why, "reported_value: PV = the report's mv_rub" + ("" if risk else ", no risk"),
-                                  *risk], price=x.get("mark_price_pct") or math.nan, buckets=buckets, cs01=cs01)
+                                  *risk], price=x.get("mark_price_pct") or math.nan, risk=by_curve, cs01=cs01)
         return o
     f = next((f for f in ("face_outstanding_ccy", "face_amount_ccy") if x.get(f) is not None), None)
     ccy = x.get("ccy") or "RUB"
@@ -171,7 +174,7 @@ def _reported(ctx: EodContext, qty: float | None, x: dict[str, Any], reason: str
                 + (f", x {fx[1]} {fx[0]:g}" if ccy != "RUB" else "") + ("" if risk else ", no risk"), *risk]
         pv = (x["mark_price_pct"] / 100 * face + (acc or 0.0)) * fx[0]
         o.valuation = _valuation(ctx, "reported", q, pv, "reported_value", why, price=x["mark_price_pct"],
-                                 accrued=(acc or 0.0) * fx[0], face=face * fx[0], buckets=buckets, cs01=cs01)
+                                 accrued=(acc or 0.0) * fx[0], face=face * fx[0], risk=by_curve, cs01=cs01)
         return o
     o.reason, o.detail = reason.split(":")[0], f"{_source_id(x)}: no mv_rub, no mark price with a face"
     return o
@@ -210,10 +213,10 @@ def _otc(ctx: EodContext, qty: float | None, x: dict[str, Any], kind: str) -> Ou
         return Outcome(None, None, None, reason="no_reported_value",  # type: ignore[arg-type]
                        detail=f"{kind} {_source_id(x)}: no mv_rub")
     o = Outcome(None, None, None)  # type: ignore[arg-type]
-    buckets, cs01, risk = reported_risk(ctx, x)
+    by_curve, cs01, risk = reported_risk(ctx, x)
     o.valuation = _valuation(ctx, "reported", qty if qty is not None else 1.0, x["mv_rub"], "reported_value",
                              [f"{kind}: PV = the report's mv_rub" + ("" if risk else ", no risk reported"), *risk],
-                             buckets=buckets, cs01=cs01)
+                             risk=by_curve, cs01=cs01)
     return o
 
 

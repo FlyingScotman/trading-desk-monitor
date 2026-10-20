@@ -281,6 +281,10 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         i = inputs.get(r["position_id"])
         positions.append(_not_valued(r, books, {k: v for k, v in i.items() if k != "position_id"} if i else None,
                                      portfolio.get(r["position_id"])))
+    for c in dict.fromkeys(c for p in positions for c in p["risk"]):
+        if c not in curves:  # a risk curve the run's reference lacks: shown without points, its risk never dropped
+            curves[c] = {"name": c, "ccy": c.split()[0], "kind": "bond", "pts": [None] * len(B)}
+            moves[c] = [0.0] * len(B)
 
     scenarios = [{"id": s["scenario_id"], "name": s["name"], "kind": s["kind"], "description": s["description"],
                   **s["definition"]} for s in con.execute(

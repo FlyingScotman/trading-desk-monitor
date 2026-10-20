@@ -92,7 +92,23 @@ def test_fx_bond_in_rub_at_cbr(ctx, exact):
     clean_rub = float(o.quote.prices_pct["legal_close"]) / 100 * float(o.quote.face_value) * cbr
     dirty = clean_rub + float(o.quote.accrued_per_bond)
     assert v.quality == "market_value" and v.pv_rub == pytest.approx(Q * dirty)
-    assert v.dv01_rub == 0.0 and any("FX bond (USD)" in a for a in v.assumptions)
+    assert any("FX bond (USD)" in a and "duration proxy on curve USD" in a for a in v.assumptions)
+    # R8: rate risk from the MOEX duration, as a RUB bond's fallback, in RUB per bp, on the USD curve
+    mac = float(o.quote.source_analytics["duration_days"]) / 365
+    assert v.macaulay_years == pytest.approx(mac) and v.dv01_rub == pytest.approx(-mac * v.pv_rub * 1e-4)
+    assert set(v.risk()) == {"USD"} and sum(v.risk()["USD"].values()) == pytest.approx(v.dv01_rub)
+    assert sum(1 for x in v.buckets.values() if x) <= 2 and v.spread01_rub == pytest.approx(v.dv01_rub)  # credit
+    row = tdm_run.run_content(ctx, [("P1", "MIXED", replace(o, valuation=v))], None, {})
+    assert set(row.rows[0]["risk"]) == {"USD"} and row.rows[0]["fx_delta"] == {"USD": pytest.approx(v.pv_rub / cbr)}
+    usd = next(c for c in row.reference["curves"] if c["curve_id"] == "USD")
+    assert (usd["ccy"], usd["points"]) == ("USD", [])  # a stub: the risk is shown, there is no USD curve yet
+
+
+def test_ofz_in_nominal_proxy_is_flagged(exact):
+    """R8 phase 1: an OFZ-IN keeps a nominal DV01 from its duration on the KBD, said to be a proxy."""
+    v = exact["SU52005RMFS4"].valuation
+    assert v.quality == "market_value" and set(v.risk()) == {"RUB OFZ"} and v.dv01_rub < 0
+    assert any("indexed face: a nominal-rate proxy" in a for a in v.assumptions)
 
 
 def test_stale_price_within_the_window(ctx, exact):
@@ -151,6 +167,10 @@ def test_every_position_published_with_quality(ctx, exact, tmp_path):
     assert Counter(json.loads(r[0])["quality"] for r in rows) == want and want["market_value"] >= 1
     assert ("USD" in {r[2] for r in rows}) and con.execute(
         "SELECT COUNT(*) FROM position_fx WHERE run_id=? AND ccy='USD'", (run_id,)).fetchone()[0] == 1
+    # every curve of the risk is a run curve (tdm requires it): the USD bond's on a USD curve without points
+    assert {r[0] for r in con.execute("SELECT DISTINCT curve_id FROM position_risk WHERE run_id=?", (run_id,))} \
+        <= {r[0] for r in con.execute("SELECT curve_id FROM run_curve WHERE run_id=?", (run_id,))} \
+        == {"RUB OFZ", "RUB RUONIA", "RUB KEY", "USD"}
     assert all(not isinstance(r[1], float) or math.isfinite(r[1]) for r in rows)
     assert sum("оценка market_value" in w for w in warnings) == want["market_value"]
     log = [m for (m,) in con.execute("SELECT message FROM calc_run_log WHERE run_id=?", (run_id,))]

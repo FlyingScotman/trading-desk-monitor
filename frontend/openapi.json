@@ -2485,7 +2485,8 @@
               "type": "string"
             },
             "type": "array",
-            "title": "Curves"
+            "title": "Curves",
+            "description": "The curves a scenario may shock: the run's, those of the risk and the RUB curves core reprices (sorted)"
           },
           "factors": {
             "items": {
@@ -3185,7 +3186,7 @@
         "additionalProperties": false,
         "type": "object",
         "title": "ScenarioDefinition",
-        "description": "The prototype scenario shape. curves: bp per RISK_BUCKETS pillar (11) or one number for all, per\npublished curve (\"RUB OFZ\"); ofzSpread: OFZ Z-spread to the KBD, bp; fx: % against RUB (+ = weaker\nrouble). Returned normalized: 11-pillar lists, zeros and empty entries left out."
+        "description": "The prototype scenario shape. curves: bp per RISK_BUCKETS pillar (11) or one number for all, per\npublished curve (\"RUB OFZ\" the KBD, \"RUB RUONIA\", \"RUB KEY\", a currency's \"USD\"...), each moving only by\nits own vector; ofzSpread: OFZ Z-spread to the KBD, bp; fx: % against RUB (+ = weaker rouble). Returned\nnormalized: 11-pillar lists, zeros and empty entries left out."
       },
       "ScenarioJob": {
         "properties": {

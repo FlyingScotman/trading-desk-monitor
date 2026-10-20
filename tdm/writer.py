@@ -537,9 +537,7 @@ class Run:
         n_b = con.execute("SELECT COUNT(*) FROM ref_bucket").fetchone()[0]
         for r in q("SELECT curve_id, COUNT(*) FROM mkt_curve_point WHERE run_id=? GROUP BY curve_id HAVING COUNT(*) <> ?", n_b):
             err.append(f"кривая {r[0]}: {r[1]} точек вместо {n_b} (нужен каждый бакет)")
-        for r in q("SELECT c.curve_id FROM run_curve c WHERE c.run_id=? AND NOT EXISTS"
-                   " (SELECT 1 FROM mkt_curve_point m WHERE m.run_id=c.run_id AND m.curve_id=c.curve_id)"):
-            err.append(f"кривая {r[0]}: нет точек")
+        # кривая без точек допустима: заглушка, на которой только риск (валютная кривая без данных, R8)
         curves = {r[0] for r in q("SELECT curve_id FROM run_curve WHERE run_id=?")}
         bks = {r[0] for r in con.execute("SELECT bucket FROM ref_bucket")}
         for (f,) in q("SELECT factor_1 FROM position_gamma WHERE run_id=? UNION SELECT factor_2 FROM position_gamma WHERE run_id=?", rid):

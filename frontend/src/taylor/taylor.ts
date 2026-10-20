@@ -4,6 +4,8 @@ import type { RiskPayload, RiskPosition, ScenarioDefinition, SpreadRules, Taylor
 
 export const N_BUCKETS = 11;
 const MAX_BP = 5000;
+/** The curves core reprices (Python RUB_CURVES): a shock on them is valid for every run, even one without them. */
+export const RUB_CURVES: readonly string[] = ['RUB OFZ', 'RUB RUONIA', 'RUB KEY'];
 
 export interface NormSpreads {
   _all?: number;
@@ -56,7 +58,7 @@ export function normalize(def: ScenarioDefinition, curveNames?: readonly string[
     if (arr.length !== N_BUCKETS) throw new Error(`кривая ${c}: нужно ${N_BUCKETS} бакетов`);
     const vec = arr.map((x, i) => bp(x, `${c}[${i}]`) + 0);  // -0 -> 0
     if (!vec.some(x => x !== 0)) continue;  // an all-zero curve is dropped, even an unpublished one
-    if (curveNames && !curveNames.includes(c)) throw new Error(`кривая ${c} не публикуется в прогоне`);
+    if (curveNames && !curveNames.includes(c) && !RUB_CURVES.includes(c)) throw new Error(`кривая ${c} не публикуется в прогоне`);
     curves[c] = vec;
   }
   const out: NormDef = {};

@@ -119,3 +119,42 @@ def test_floater_formula_fields_override_the_defaults(ctx):
     assert s.assumptions == ()  # curated: no inferred formula
     (v,) = value_one(ctx, dataclasses.replace(t, floater_formula=f), ctx.market.quote(t))
     assert (v.quality, v.assumptions) == ("exact", ())  # the floor is far from the ~15.75 % coupon: intrinsic
+
+
+def test_floater_risk_stays_per_curve(ctx):
+    """R8: a floater's discount (KBD) and projection curve are separate factors, with their own buckets and
+    their cross terms in the Hessian; the totals are their sums, as before."""
+    o_ofz, o_pk, o_key = value(ctx, [(s, 1000.0) for s in (OFZ, OFZ_PK, KEY)], second_order=True)
+    assert set(o_ofz.valuation.risk()) == {"RUB OFZ"}
+    for o, proj in ((o_pk, "RUB RUONIA"), (o_key, "RUB KEY")):
+        v = o.valuation
+        risk = v.risk()
+        assert set(risk) == {"RUB OFZ", proj}
+        kbd, fwd = sum(risk["RUB OFZ"].values()), sum(risk[proj].values())
+        assert kbd < 0 < fwd and abs(kbd) > 2 * abs(v.dv01_rub)  # the basis: two large legs, a small net
+        assert v.dv01_rub == pytest.approx(kbd + fwd, rel=1e-12)
+        assert all(v.buckets[b] == pytest.approx(risk["RUB OFZ"][b] + risk[proj][b]) for b in v.buckets)
+        curves = {f.split("|")[1] for a, b, _ in v.hessian for f in (a, b) if f.startswith("IR|")}
+        assert curves == {"RUB OFZ", proj} and all(a <= b for a, b, _ in v.hessian)
+        assert any(a.split("|")[1] != b.split("|")[1] for a, b, _ in v.hessian if "CS" not in (a, b))  # cross terms
+
+
+def test_run_publishes_the_rates_curves(ctx):
+    from desk.publish import tdm_run
+
+    outs = value(ctx, [(s, 1000.0) for s in (OFZ, OFZ_PK, KEY)], second_order=True)
+    c = tdm_run.run_content(ctx, [(f"P{i}", "OFZ", o) for i, o in enumerate(outs)], None, {})
+    curves = {x["curve_id"]: x for x in c.reference["curves"]}
+    assert list(curves) == ["RUB OFZ", "RUB RUONIA", "RUB KEY"]
+    for cid in ("RUB RUONIA", "RUB KEY"):
+        x = curves[cid]
+        assert (x["ccy"], x["kind"], len(x["points"])) == ("RUB", "swap", 11)
+        assert all(10 < p["rate"] < 25 and p["move_bp"] == 0.0 for p in x["points"])
+    # the day's move against the previous date's curves, built the same way (here the same market: 0)
+    assert set(tdm_run._prev_rates(ctx, ctx.market)) == {"RUB_RUONIA_OIS", "RUB_KEY_RATE_PROJ"}
+    again = tdm_run.run_content(ctx, [(f"P{i}", "OFZ", o) for i, o in enumerate(outs)], ctx.market, {})
+    assert again.reference["curves"][1]["points"] == curves["RUB RUONIA"]["points"]
+    pk, key = c.rows[1], c.rows[2]
+    assert set(pk["risk"]) == {"RUB OFZ", "RUB RUONIA"} and set(key["risk"]) == {"RUB OFZ", "RUB KEY"}
+    assert pk["dv01"] == pytest.approx(sum(sum(b.values()) for b in pk["risk"].values()))
+    assert {f.split("|")[1] for g in key["gamma"] for f in g[:2] if f.startswith("IR|")} == {"RUB OFZ", "RUB KEY"}
