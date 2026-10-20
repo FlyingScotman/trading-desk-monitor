@@ -15,7 +15,7 @@ import sys
 import time
 import uuid
 from collections.abc import Callable, Iterator
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -158,6 +158,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
                   responses={404: {"model": ErrorOut}, 422: {"model": ErrorOut}, 503: {"model": ErrorOut}})
 
     app.state.store_url = store_url
+    app.state.started_at = datetime.now(UTC)  # the diagnostics' uptime (R13)
 
     @app.middleware("http")
     async def request_id(request: Request, call_next):
@@ -397,11 +398,13 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
             raise ApiError(404, "not_found", missing)
         return desk
 
+    from .diagnostics_routes import router as diagnostics_router
     from .settings_routes import router as settings_router  # here: it imports ApiError from this module
     from .update_routes import router as update_router
 
     app.include_router(settings_router, include_in_schema=False)  # local admin routes (/settings.html)
     app.include_router(update_router, include_in_schema=False)
+    app.include_router(diagnostics_router, include_in_schema=False)
     app.include_router(autopilot_router)
 
     built = Path(app_dir) if app_dir else static_root() / "frontend" / "dist"

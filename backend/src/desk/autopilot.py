@@ -62,6 +62,7 @@ import logging
 import os
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime, timedelta
 from datetime import time as dtime
@@ -91,6 +92,7 @@ MISSING_TTL_S = 6 * 3600.0  # a date the hub has no snapshot for is not asked ag
 PREV_MARGIN_DAYS = 7    # below the lookback: the hub date before its first day (flash PnL, a start-of-day calendar)
 MIN_SLEEP_S = 1.0
 LOCK_FILE = "cycle.lock"
+KEEP_CYCLES = 20        # the last cycles kept in memory with their step durations (desk.diagnostics, R13)
 HISTORY_PER_CYCLE = 5   # hub dates of market history fetched per cycle (~0.5 MB each), newest first
 MAX_HISTORY_DAYS = 2600  # history_days is capped here (~10 years of business dates)
 
@@ -228,6 +230,8 @@ class Autopilot:
         self._on = True
         self._log_handler: RotatingFileHandler | None = None
         self._status = idle_status(True, "Ожидает первого цикла")
+        self._cycles: deque[dict[str, Any]] = deque(maxlen=KEEP_CYCLES)  # the last cycles, newest last (R13)
+        self._durations: dict[str, float] = {}  # step name -> seconds, of the running cycle
 
     # ---- thread
 
@@ -276,6 +280,7 @@ class Autopilot:
         besides the automatic ones (``desk cycle --date``); ``hub=False`` skips the hub (the drop is imported)."""
         with self._cycle:
             started = datetime.now(UTC)
+            self._durations = {}
             self._update(state="running", message="Цикл выполняется", steps=[], progress=None)
             steps: list[dict[str, Any]] = []
             try:
@@ -291,6 +296,7 @@ class Autopilot:
                     self._status.update(state="idle", message="Автопилот выключен в настройках", steps=[],
                                         progress=None)
                 return self.status()
+            log.info("autopilot: cycle start")
             lock = CycleLock(settings.home)
             try:
                 held = lock.acquire()
@@ -367,6 +373,10 @@ class Autopilot:
         if not errors:
             upd["last_ok_at"] = _iso(started)
         self._update(**upd)
+        self._cycles.append({"started_at": _iso(started), "duration_s": round((datetime.now(UTC) - started)
+                                                                               .total_seconds(), 1),
+                             "state": upd["state"], "message": msg,
+                             "steps": [{**s, "duration_s": self._durations.get(s["name"])} for s in steps]})
         log.info("autopilot: cycle done: %s", msg)
         return self.status()
 
@@ -388,11 +398,13 @@ class Autopilot:
         return s
 
     def _guard(self, name: str, fn: Callable[[], tuple[str, str]]) -> dict[str, Any]:
+        t0 = time.monotonic()
         try:
             status, detail = fn()
         except Exception as e:
             log.exception("autopilot: step %s failed", name)
             status, detail = "error", f"{type(e).__name__}: {e}"
+        self._durations[name] = round(time.monotonic() - t0, 2)
         return self._step(name, status, detail)
 
     def _emit(self, line: str) -> None:
@@ -417,6 +429,34 @@ class Autopilot:
         if log.level == logging.NOTSET or log.level > logging.INFO:
             log.setLevel(logging.INFO)
         self._log_handler = handler
+
+    def diagnostics(self) -> dict[str, Any]:
+        """The thread's own state for ``desk.diagnostics`` (R13): the last cycles with their step durations, what the
+        hub was last asked and answered for the intraday step, the dates it remembers as missing or failed. Dates,
+        codes, counts and snapshot id prefixes; the step details as they are (the caller scrubs them)."""
+        now = time.monotonic()
+        hist = self._history_dates
+        slot = self._poll_slot
+        return {
+            "running": self.running, "force": self.force, "interval_s": self._interval, "on_in_settings": self._on,
+            "cycles": [dict(c, steps=[dict(s) for s in c["steps"]]) for c in self._cycles],
+            "hub_failed_last_cycle": self._hub_failed, "sync_dates_left_for_next_cycle": self._sync_later,
+            "hub_dates_checked": len(self._checked),
+            "hub_missing_dates": {d: round(now - t) for d, t in sorted(self._missing.items())},  # date -> age, s
+            "failed_inputs": sorted(self._failed),  # dates (eod) and "<cut> <date>" (intraday) not retried as they are
+            "history_dates": None if hist is None else {
+                "listed_s_ago": round(now - hist[0]), "depth": hist[1], "count": len(hist[2]),
+                "newest": hist[2][0] if hist[2] else None, "oldest": hist[2][-1] if hist[2] else None},
+            "intraday_poll_slot": None if slot is None else {
+                "date": slot[0].isoformat(), "cut": slot[1],
+                "slot_start": _iso(datetime.fromtimestamp(slot[2] * POLL_SLOT_S + POLL_LAG_S, MSK))},
+            "intraday_hub_rows": [
+                {"date": d.isoformat(), "cut": cut, "found": row is not None,
+                 **({"snapshot_id": str(row.get("snapshot_id") or "")[:12], "cut_ts": row.get("cut_ts"),
+                     "published_at": row.get("published_at")} if row else {})}
+                for (d, cut), row in sorted(self._polled.items(), key=lambda kv: (kv[0][0], kv[0][1]))],
+            "cache_pruned_on": self._pruned_on.isoformat() if self._pruned_on else None,
+        }
 
     # ---- steps
 
