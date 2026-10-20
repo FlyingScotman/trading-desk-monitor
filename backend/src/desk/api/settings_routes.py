@@ -60,6 +60,11 @@ def _loopback(host: str | None) -> bool:
 
 def local_only(request: Request) -> None:
     """Refuse anything but a same-machine browser or tool (see the module doc)."""
+    check_local(request)
+
+
+def check_local(request: Request, write_types: tuple[str, ...] = ("application/json",)) -> None:
+    """``local_only`` with the content types a write may send (none of them one a cross-site form can send)."""
     client = request.client.host if request.client else None
     if not _loopback(client):
         raise ApiError(403, "invalid_parameter", "settings are available from this computer only (127.0.0.1)")
@@ -70,8 +75,8 @@ def local_only(request: Request) -> None:
         raise ApiError(403, "invalid_parameter", "cross-site request refused")
     if request.method not in ("GET", "HEAD", "OPTIONS"):
         ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
-        if ctype != "application/json":
-            raise ApiError(415, "invalid_parameter", "send Content-Type: application/json")
+        if ctype not in write_types:
+            raise ApiError(415, "invalid_parameter", f"send Content-Type: {' or '.join(write_types)}")
 
 
 router = APIRouter(dependencies=[Depends(local_only)])
@@ -102,7 +107,7 @@ def _effective(st: Settings) -> dict[str, Any]:
         "inbox_dirs": [str(d) for d in st.inbox_dirs], "inbox_archive": str(st.inbox_archive),
         "inbox_poll_seconds": st.inbox_poll_seconds, "autopilot": st.autopilot,
         "autopilot_sync_last": st.autopilot_sync_last, "inbox_lookback_days": st.inbox_lookback_days,
-        "logs_dir": str(st.logs_dir),
+        "logs_dir": str(st.logs_dir), "update_dir": str(st.update_dir) if st.update_dir else None,
     }
 
 

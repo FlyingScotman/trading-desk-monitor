@@ -11,10 +11,15 @@ if not exist "%DM_PY%" (
   set "DM_PYARG=-3.11"
 )
 if not exist "%~dp0app\deskctl.py" goto incomplete
-"%DM_PY%" %DM_PYARG% -I -X utf8 "%~dp0app\deskctl.py" cycle %*
-set "DM_RC=%ERRORLEVEL%"
-if not "%DM_RC%"=="0" timeout /t 60
-exit /b %DM_RC%
+rem One block to the end: cmd.exe reads it whole before running it, so an update installed from the settings
+rem page may replace this file meanwhile (outside a block cmd.exe reads on from a byte offset).
+setlocal EnableDelayedExpansion
+(
+  "%DM_PY%" %DM_PYARG% -I -X utf8 "%~dp0app\deskctl.py" cycle %*
+  set "DM_RC=!ERRORLEVEL!"
+  if not "!DM_RC!"=="0" timeout /t 60
+  exit /b !DM_RC!
+)
 
 :nopython
 echo Python not found: python\ is missing from this folder and the py launcher is not installed.

@@ -438,9 +438,9 @@ def cmd_serve(a: argparse.Namespace) -> int:
     if ap is not None:
         on = a.autopilot or a.settings.autopilot
         print(f"autopilot: {'on' if on else 'off in the settings'}, every {a.settings.inbox_poll_seconds:g} s")
-    serve(url, host=a.host, port=a.port, snapshots=None if a.no_worker else a.settings.snapshot_cache,
-          adapter_status=lambda: scan.adapter_line(scan.adapter(a.settings)), autopilot=ap)
-    return 0
+    # not 0 when the settings page installs an update: the launcher (start.bat) restarts it (desk.update)
+    return serve(url, host=a.host, port=a.port, snapshots=None if a.no_worker else a.settings.snapshot_cache,
+                 adapter_status=lambda: scan.adapter_line(scan.adapter(a.settings)), autopilot=ap)
 
 
 def cmd_cycle(a: argparse.Namespace) -> int:

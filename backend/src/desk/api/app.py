@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -394,8 +395,10 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         return desk
 
     from .settings_routes import router as settings_router  # here: it imports ApiError from this module
+    from .update_routes import router as update_router
 
     app.include_router(settings_router, include_in_schema=False)  # local admin routes (/settings.html)
+    app.include_router(update_router, include_in_schema=False)
     app.include_router(autopilot_router)
 
     built = Path(app_dir) if app_dir else static_root() / "frontend" / "dist"
@@ -413,12 +416,17 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
 def serve(store_url: str, host: str = "127.0.0.1", port: int = 8000, static_dir: Path | None = None,
           snapshots: Path | None = None, adapter_status: Callable[[], str] | None = None,
-          autopilot: Any = None) -> None:
+          autopilot: Any = None) -> int:
     """``snapshots``: the snapshot cache the scenario worker reprices from; None runs no worker.
-    ``autopilot``: a ``desk.autopilot.Autopilot``, started here and shown by ``/api/v1/autopilot/*``."""
+    ``autopilot``: a ``desk.autopilot.Autopilot``, started here and shown by ``/api/v1/autopilot/*``.
+    Returns the exit code for ``desk serve``: 0, or the launcher's restart code after ``app.state.request_restart``
+    (an update staged by ``/api/v1/update/install``, desk.update)."""
+    import threading
+
     import uvicorn
 
     from ..marketdata.bundle import SnapshotDir
+    from ..update import restart_code
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     if snapshots is not None:
@@ -428,4 +436,28 @@ def serve(store_url: str, host: str = "127.0.0.1", port: int = 8000, static_dir:
         app.state.autopilot = autopilot
         autopilot.start()
     # the desk.api logger logs every request with its request id, so no uvicorn access log
-    uvicorn.run(app, host=host, port=port, access_log=False)
+    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, access_log=False))
+    restart = restart_code()
+    asked: list[bool] = []
+
+    def exit_for_restart() -> None:
+        time.sleep(0.5)  # the install response reaches the page first
+        if autopilot is not None:
+            log.info("restart for an update: waiting for the autopilot's cycle to end")
+            autopilot.stop(timeout=300)
+        server.should_exit = True
+
+    def request_restart() -> None:
+        if not asked:
+            asked.append(True)
+            threading.Thread(target=exit_for_restart, name="desk-restart", daemon=True).start()
+
+    if restart is not None:  # only under the launcher (start.bat): something must start the server again
+        app.state.request_restart = request_restart
+    try:
+        server.run()
+    except KeyboardInterrupt:  # uvicorn raises the captured Ctrl+C again after its shutdown
+        pass
+    if not server.started:
+        sys.exit(3)  # as uvicorn.run: the port was taken or the app failed to start
+    return restart if asked and restart is not None else 0

@@ -50,6 +50,8 @@ layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub
                            time, then by the report date ``match`` gives) and hub dates at most this many days old
                            (10; 0: no limit); a folder holding years of reports is not read. A backfill of older
                            dates (S8) gets its own explicit date range.
+* ``DESK_UPDATE_DIR``      the Windows bundle: a folder (a network share, say) holding update zips that the
+                           settings page offers to install (``desk.update``); none by default
 
 Relative paths resolve against the repository (install) root, those of ``settings.json`` against
 ``<home>``. The proxy comes from the standard ``HTTPS_PROXY`` / ``NO_PROXY`` variables; ``settings.json``
@@ -95,6 +97,7 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "autopilot": ("DESK_AUTOPILOT", "bool"),
     "autopilot_sync_last": ("DESK_AUTOPILOT_SYNC_LAST", "int"),
     "inbox_lookback_days": ("DESK_INBOX_LOOKBACK_DAYS", "int0"),
+    "update_dir": ("DESK_UPDATE_DIR", "path"),
 }
 PROXY_KEYS = {"https_proxy": "HTTPS_PROXY", "no_proxy": "NO_PROXY"}
 READ_ONLY_KEYS = ("hub_token", "hub_token_set", "proxy_password", "proxy_password_set", "home", "effective",
@@ -159,6 +162,7 @@ class Settings:
     autopilot_sync_last: int = 5
     inbox_lookback_days: int = 10  # the inbox takes report files at most this many days old; 0: no limit
     private_adapter_default: bool = False  # private_adapter came from DESK_DEFAULT_PRIVATE_ADAPTER
+    update_dir: Path | None = None  # update zips of the Windows bundle (desk.update)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "home", Path(self.home) if self.home is not None else desk_home())
@@ -218,6 +222,7 @@ class Settings:
             ("autopilot", "on" if self.autopilot else "off"),
             ("autopilot_sync_last", str(self.autopilot_sync_last)),
             ("inbox_lookback_days", str(self.inbox_lookback_days) if self.inbox_lookback_days else "0 (no limit)"),
+            ("update_dir", str(self.update_dir or "none")),
         ]
 
 
@@ -492,6 +497,7 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         autopilot_sync_last=count("DESK_AUTOPILOT_SYNC_LAST", defaults.autopilot_sync_last),
         inbox_lookback_days=count("DESK_INBOX_LOOKBACK_DAYS", defaults.inbox_lookback_days, 0),
         private_adapter_default=adapter_default,
+        update_dir=_path(get("DESK_UPDATE_DIR")),
     )
 
 
