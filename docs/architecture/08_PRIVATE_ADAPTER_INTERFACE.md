@@ -40,7 +40,7 @@ Setting `DESK_PRIVATE_ADAPTER` (environment, the settings page or `backend/.env`
 
 **When loading fails** (import error, name collision, missing function, unsupported SPI or contract version, fingerprint mismatch), ingestion is off and says why: `desk inbox status` and `/health/ready` show `adapter: error <reason>`. Everything else (existing runs, the API, scenarios) keeps working. There is no silent fallback to the reference adapter.
 
-**Constraints on the adapter.** Python 3.11, standard library only. It must not import `desk` at run time (its tests may, for the conformance kit). No network access, no file writes, no state between calls.
+**Constraints on the adapter.** Python 3.11, standard library only. It must not import `desk` at run time (its tests may, for the conformance kit). No network access, no file writes, no state between calls. Within one inbox scan the backend reuses a few long-lived child processes for many calls (since 20.10.2026: the import and the instruments index are paid once, not per file), so module-level state survives between calls of a scan: it may hold caches keyed by what they cache (a file's path, size and modification time), never anything that changes the result of a call.
 
 ## 3 The module interface
 
