@@ -30,8 +30,9 @@
       if (p.ofzSpr01 == null) p.ofzSpr01 = 0;
       if (!p.entity) p.entity = (D.BOOKS[p.book] || {}).entity || '—';
       const e = p.pnl;
-      if (!e) return;
+      if (!e || e.available === false) return;   // PnL не посчитан: суммы остаются null, не 0
       if (e.funding == null) e.funding = 0;
+      if (e.reported == null) e.reported = 0;   // PnL «по отчёту» (позиции, оценённые по отчёту): отдельной строкой
       if (e.fxBasis == null) e.fxBasis = 0;
       if (e.explainedCbr == null) e.explainedCbr = e.explained + e.fxBasis;
     });
@@ -50,16 +51,45 @@
     arr.forEach(x => { const k = typeof key === 'function' ? key(x) : x[key]; (out[k] = out[k] || []).push(x); });
     return out;
   }
+  // У кривой есть точки: валютная кривая-заглушка ('USD' и т. п.) несёт только риск, pts — все null.
+  function hasPoints(curve) {
+    const c = CURVES[curve];
+    return !!(c && c.pts && c.pts.some(v => v != null && isFinite(v)));
+  }
+  // Ставка кривой на сроке t, %; null — у кривой нет точек (или нет точки на нужном отрезке).
   function curveRate(curve, t) {
-    const pts = CURVES[curve].pts;
-    if (t <= PILLARS[0]) return pts[0];
+    if (!hasPoints(curve) || t == null || !isFinite(t)) return null;
+    const pts = CURVES[curve].pts, ok = v => v != null && isFinite(v);
+    if (t <= PILLARS[0]) return ok(pts[0]) ? pts[0] : null;
     for (let i = 1; i < PILLARS.length; i++) {
       if (t <= PILLARS[i]) {
+        if (!ok(pts[i - 1]) || !ok(pts[i])) return null;
         const w = (t - PILLARS[i - 1]) / (PILLARS[i] - PILLARS[i - 1]);
         return pts[i - 1] * (1 - w) + pts[i] * w;
       }
     }
-    return pts[pts.length - 1];
+    const last = pts[pts.length - 1];
+    return ok(last) ? last : null;
+  }
+  // ---------- PnL: посчитан ли (R10) ----------
+  // У позиции без PnL сервер отдаёт p.pnl.available === false, суммы null и причину (reasonText); демо-данные — всегда с PnL.
+  const pnlOk = p => !!p.pnl && p.pnl.available !== false;
+  // Покрытие PnL списка позиций: n из m посчитаны; reasons — [текст причины, число позиций] по убыванию;
+  // tip — текст подсказки к «—» или к пометке «частично».
+  function pnlCover(list) {
+    const m = list.length, by = {};
+    let n = 0;
+    list.forEach(p => {
+      if (pnlOk(p)) { n++; return; }
+      const t = (p.pnl && p.pnl.reasonText) || D.pnlReasonText || 'PnL не посчитан';
+      by[t] = (by[t] || 0) + 1;
+    });
+    const reasons = Object.keys(by).map(t => [t, by[t]]).sort((a, b) => b[1] - a[1]);
+    const head = n ? 'частично: ' + n + ' из ' + m + ' позиций' : 'PnL не посчитан';
+    const runWhy = !n && D.pnlAvailable === false && D.pnlReasonText ? D.pnlReasonText : null;
+    const tip = runWhy ? 'PnL не посчитан: ' + runWhy
+      : head + (reasons.length ? '. Без PnL: ' + reasons.map(r => r[0] + ' — ' + r[1]).join('; ') : '');
+    return { n, m, none: m > 0 && n === 0, partial: n > 0 && n < m, reasons, tip };
   }
   function bucketMatrix(list, curves) {
     curves = curves || Object.keys(CURVES);
@@ -290,9 +320,9 @@
   }
   function curveRatePrev(curve, t) {   // кривая вчера = сегодня − изменение за день
     const mv = D.CURVE_MOVES && D.CURVE_MOVES[curve];
-    if (!mv) return null;
+    if (!mv || !hasPoints(curve)) return null;
     const saved = CURVES[curve].pts;
-    try { CURVES[curve].pts = saved.map((v, i) => v - (mv[i] || 0) / 100); return curveRate(curve, t); } finally { CURVES[curve].pts = saved; }
+    try { CURVES[curve].pts = saved.map((v, i) => v == null ? null : v - (mv[i] || 0) / 100); return curveRate(curve, t); } finally { CURVES[curve].pts = saved; }
   }
   // Спред доходности облигации к кривой, б.п. curve: 'own' — расчётный спред (p.spreadBp, тип p.spreadType),
   // 'base' — базовая кривая валюты бумаги, иначе id кривой. null — не применимо (флоатер, другая валюта, нет доходности).
@@ -307,7 +337,8 @@
       const y = p.quote && p.quote.prevYtm, r = curveRatePrev(c, t + 1 / 365.25);
       return y == null || r == null ? null : (y - r) * 100;
     }
-    return p.ytm == null ? null : (p.ytm - curveRate(c, t)) * 100;
+    const r = curveRate(c, t);   // null у кривой без точек: спред не «доходность − 0»
+    return p.ytm == null || r == null ? null : (p.ytm - r) * 100;
   }
   // Строки таблицы облигаций: позиции BOND, объединённые по выпуску (ISIN) или по (ключ группы, ISIN).
   // Ключ выпуска: ISIN, у бумаги без него — instrumentId (код источника), иначе id позиции.
@@ -322,7 +353,8 @@
       const ps = by[k], p = ps[0];
       return { key: k, p, positions: ps, books: [...new Set(ps.map(x => x.book))],
         notional: sum(ps, x => x.notional), mvRub: sum(ps, x => x.mvRub), dv01: sum(ps, x => x.dv01), cs01: sum(ps, x => x.cs01),
-        ofzSpr01: sum(ps, x => x.ofzSpr01 || 0), gammaIr: sum(ps, x => x.gammaIr || 0), pnl: sum(ps, x => x.pnl ? x.pnl.explained : 0),
+        ofzSpr01: sum(ps, x => x.ofzSpr01 || 0), gammaIr: sum(ps, x => x.gammaIr || 0),
+        pnl: ps.some(pnlOk) ? sum(ps.filter(pnlOk), x => x.pnl.explained) : null, pnlCover: pnlCover(ps),
         newToday: ps.some(x => x.newToday) };
     });
   }
@@ -405,7 +437,7 @@
         const t1 = daysBetween(D.asOf, m.effective) / 365.25;
         const nx = ms[i + 1] ? daysBetween(D.asOf, ms[i + 1].effective) / 365.25 : t1 + 0.25;
         const r1 = curveRate('RUB KEY', t1), r2 = curveRate('RUB KEY', nx);
-        cur = Math.round(((r2 * nx - r1 * t1) / (nx - t1)) * 4) / 4;
+        if (r1 != null && r2 != null) cur = Math.round(((r2 * nx - r1 * t1) / (nx - t1)) * 4) / 4;
       }
       if (k.mode !== 'flat') out.push({ date: m.effective, ks: cur, meeting: m.date });
     });
@@ -500,7 +532,7 @@
         const h = N / 365.25, T = p.instrType === 'BOND' ? yieldTenor(p) : p.tenorY;
         let rd = 0;
         Object.keys(p.risk || {}).forEach(c => {
-          if (!CURVES[c]) return;
+          if (!hasPoints(c)) return;   // кривая без точек (валютная заглушка): ролл-дауна не считаем
           const dv = p.risk[c].reduce((a, b) => a + b, 0);
           rd += dv * (curveRate(c, Math.max(0, T - h)) - curveRate(c, T)) * 100;
         });
@@ -536,7 +568,7 @@
       ksAvg: idxSeries('КС').reduce((a, b) => a + b, 0) / N, ksEnd: idxSeries('КС')[N - 1] };
   }
 
-  D.util = { sum, groupBy, bucketMatrix, netFx, runScenario, curveRate, fundingFx, spreadShock, ownSpr01, ACCURACY_BP,
+  D.util = { sum, groupBy, bucketMatrix, netFx, runScenario, curveRate, hasPoints, pnlOk, pnlCover, fundingFx, spreadShock, ownSpr01, ACCURACY_BP,
     runCarry, ksPath, carryEnd, indexAt, addDays, monthsAdd,
     baseCurve, yieldTenor, spreadTo, bondKey, bondRows, wavg, bondHistory, normHistory };
 })();

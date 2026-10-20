@@ -13,7 +13,9 @@ an unmapped bond, an OTC or other row at the report's value) is written by ``dir
 report's instrument name and the report's risk when it gave one. Books: the store's metadata in force
 (``PositionInputs.books``: name, desk, entity, book_type); the demo ``BOOKS`` only for a book without it.
 The same holds for the flash PnL of slice S2: a priced position without PnL gets no ``pnl`` dict
-and a WARN line with the reason; a simple PnL (all in ``other``) is counted in its own WARN line.
+and a WARN line with the reason; a simple PnL (all in ``other``) is counted in its own WARN line. A row valued without
+core gets the PnL of ``pnl.direct`` (by the rate move, or by the reports: an INFO line per method). A run without a
+previous market says so in a WARN line: no position has a PnL then, and none is shown as 0 (R10).
 
 Risk by curve (R8): a row's ``risk`` and ``gamma`` are per published curve (``BondValuation.risk``, the Hessian
 factors ``IR|<curve>|<bucket>``): ``RUB OFZ`` (the KBD), ``RUB RUONIA`` and ``RUB KEY`` (a floater's projection
@@ -49,7 +51,9 @@ from ..curves import rates
 from ..marketdata.adapter import MarketView
 from ..marketdata.bundle import SnapshotError
 from ..orchestrator import EodContext, Outcome
+from ..pnl.direct import DirectPnl
 from ..pnl.flash import METHOD
+from ..pnl.reasons import FX_METHOD, NO_PNL_TEXT, REPORTED_METHOD, RUN_NO_PREV_MARKET
 from ..settings import REPO_ROOT
 from ..store import PositionInputs
 from ..valuation.bonds import OFZ_CURVE, RISK_CURVES, BondValuation
@@ -206,6 +210,12 @@ def _fx_rows(ctx: EodContext, prev: MarketView | None) -> list[dict[str, Any]]:
     return rows
 
 
+def _why(o: Outcome) -> str:
+    """The reason code and detail of an outcome without PnL, for the run log."""
+    e = o.no_pnl
+    return f"{e.reason}{': ' + e.detail if e.detail else ''}" if e else "флэш-PnL не считался"
+
+
 def _num(x: float | None) -> float | None:
     return None if x is None or math.isnan(x) else x
 
@@ -265,9 +275,11 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
         "risk": risk_by_curve(v), "gamma": [],
         "instrument_id": x.get("moex_secid") or x.get("source_instrument_id"), "new_today": False,
         **({"fx_delta": {ccy: amount if fx else v.pv_rub / rate}} if ccy != "RUB" else {}),
+        **({"pnl": o.pnl.as_tdm()} if o.pnl else {}),
         "extra": {
             "valuation": "reported" if v.quality == "reported_value" else "approximated", "quality": v.quality,
             "assumptions": why, "quantity_bonds": qty, **({"not_exact_reason": o.reason} if o.reason else {}),
+            **({"pnl": o.pnl.extra()} if o.pnl else {}),
             **({"fx_rate": rate} if ccy != "RUB" else {}), **reported(x),
         },
     }
@@ -362,18 +374,16 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
         quality[o.valuation.quality] += 1
         if o.valuation.quality != "exact":
             approx.append(f"{pid} {label}: оценка {o.valuation.quality}: " + "; ".join(o.valuation.assumptions))
-        if o.terms is None:  # valued without core (valuation.positions): no flash PnL in S7a
-            if prev is not None:
-                no_pnl.append(f"{pid} {label}: нет PnL (оценка без инструмента, S7a)")
+        if o.terms is None:  # valued without core (valuation.positions): PnL by the rate move or the reports
+            if prev is not None and o.pnl is None:
+                no_pnl.append(f"{pid} {label}: нет PnL ({_why(o)})")
             rows.append(row := direct_row(ctx, book, pid, o, x or {}, quantities.get(pid)))
             if row["instr_type"] == "BOND":  # tdm needs an issuer for a bond
                 row["issuer"] = UNMAPPED_ISSUER["issuer"]
                 issuers[row["issuer"]] = UNMAPPED_ISSUER
             continue
         if o.pnl is None and prev is not None:
-            e = o.no_pnl
-            no_pnl.append(f"{pid} {o.secid}: нет PnL ({e.reason}{': ' + e.detail if e.detail else ''})" if e
-                          else f"{pid} {o.secid}: нет PnL (флэш-PnL не считался)")
+            no_pnl.append(f"{pid} {o.secid}: нет PnL ({_why(o)})")
         if isinstance(o.pnl, SimplePnl) and o.pnl.flag:
             no_pnl.append(f"{pid} {o.secid}: PnL {o.pnl.total:,.0f} ₽ с модельной ценой ({o.pnl.flag})")
         key, rec = _issuer_key(ctx, o)
@@ -400,8 +410,15 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
         log.append(("WARN", "статика не на дату рынка: " + ctx.point_in_time_warning))
     log.append(("INFO", "качество оценки: " + ", ".join(f"{k} {quality[k]}" for k in QUALITIES if quality[k])
                 + (f", не посчитано {len(skipped)}" if skipped else "")))
+    if prev is None:
+        log.append(("WARN", (f"PnL не посчитан: {NO_PNL_TEXT[RUN_NO_PREV_MARKET]} (нет среза eod_final раньше "
+                             f"{ctx.business_date}); позиции без PnL, а не с нулём")))
     log += [("WARN", s) for s in skipped + approx + no_pnl]
-    with_pnl = [o.pnl for _, _, o in positions if o.pnl]
+    direct = [o.pnl for _, _, o in positions if isinstance(o.pnl, DirectPnl)]
+    for method, flag in ((FX_METHOD, "по курсу"), (REPORTED_METHOD, "по отчёту")):
+        if xs := [x for x in direct if x.method == method]:
+            log.append(("INFO", f"PnL {flag} ({method}) у {len(xs)} поз.: {sum(x.total for x in xs):,.0f} ₽"))
+    with_pnl = [o.pnl for _, _, o in positions if o.pnl and not isinstance(o.pnl, DirectPnl)]
     simple = [x for x in with_pnl if isinstance(x, SimplePnl)]
     if simple:
         log.append(("WARN", (f"флэш-PnL без разложения ({SIMPLE_METHOD}: q x Δdirty + выплаты, всё в other) "

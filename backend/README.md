@@ -167,7 +167,9 @@ Bucket DV01 and the Hessian are published per curve (owner request R8, phase 1);
 
 The run publishes `RUB OFZ`, `RUB RUONIA` and `RUB KEY` with their points (KBD effective yields; zero rates of the RUONIA OIS and key-rate projection curves, annual compounding) and the day's move, and a curve without points for a currency's curve. A scenario shifts each curve by its own vector (`desk.scenario.exact.core_scenario`); the preset moves of all rates shift the three RUB curves alike (store migration 0008).
 
-Exact and assumed bonds get the flash PnL by exact repricing. Market value and stale or model price get PnL = q·(dirty_D − dirty_D−1) + received, all in `other`; across a model price it carries a flag ("price discovery: model -> market"). A position at par on either date gets no PnL (reason `par_proxy`).
+Exact and assumed bonds get the flash PnL by exact repricing. Market value and stale or model price get PnL = q·(dirty_D − dirty_D−1) + received, all in `other`; across a model price it carries a flag ("price discovery: model -> market"). A position at par on either date gets no PnL (reason `par_proxy`). A foreign-face bond's FX revaluation (its FX delta of D−1 × the rate move) is taken out of `other` into `fx_gross`. Rows valued without core (`pnl/direct.py`): an FX row gets amount × (rate D − rate D−1), method `desk-fx-spot-v1` (a forward only its spot delta, flagged); a row at the report's value (OTC, unmapped bonds) gets today's reported PV − yesterday's for the same position, method `desk-reported-v1`, flag «по отчёту», shown as its own explain step; none when yesterday had no reported value or the book's report was not renewed.
+
+A missing PnL is never 0 (R10): a position without one has `run_position.no_pnl` {reason, detail}, and the `window.DESK` adapter gives it null amounts with the reason's Russian text (`pnl/reasons.py`); a run without a previous `eod_final` market has `prevDate` null, `pnlAvailable` false with its reason, and a WARN line in its own log. The Desk Monitor shows «—» with the reason as a tooltip, and totals over the positions with PnL marked «частично: N из M позиций».
 
 ## Settings
 
@@ -225,6 +227,8 @@ The tests run slices S1–S3 on the hub's golden fixtures, vendored in `tests/fi
 | `valuation/fallback.py` | The ladder below core: market value, stale price, model price, par proxy, each with its quality flag; the simple PnL for those rungs | 01 §3, the owner's rule |
 | `pnl/compare.py` | Regression check: the flash PnL against core `explain_horizon_pnl` | VERTICAL_SLICES S4 |
 | `pnl/flash.py` | Day-over-day flash PnL by exact repricing: carry, rolldown, rates, spread, other, with the identity check | VERTICAL_SLICES S2 |
+| `pnl/direct.py` | PnL without core: FX rows and a foreign bond's FX part by the rate move, report-valued rows by the reports (R10) | R10 |
+| `pnl/reasons.py` | No-PnL reason codes and PnL methods with their Russian text, for the run log and `window.DESK` | R10 |
 | `orchestrator.py` | One EOD date: prepare snapshots and curve, value requests, attach the flash PnL | 04 §1 |
 | `store/` | The desk store: migrations, bitemporal positions (`load_positions`, `positions_for`), carried spreads, orphan reaping | ADR-006, 04 §2 |
 | `publish/desk_run.py` | Writes an immutable run with its lineage, core results, model spreads, coverage and totals | 04 §3 |
