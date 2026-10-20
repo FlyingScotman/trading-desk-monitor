@@ -52,7 +52,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from rub_fixed_income import (
@@ -456,16 +456,23 @@ def _fill_coupons(terms: BondTerms, coupons: tuple[Coupon, ...], after: date, ho
 
 def face_on(terms: BondTerms, d: date) -> Decimal | None:
     """Face outstanding on ``d`` after the redemptions paid on or before it, from the static face moved by the
-    redemptions between the static snapshot's date and ``d`` (a static snapshot later or earlier than the market).
+    redemptions between the date the static face is as of and ``d`` (a static snapshot later or earlier than the
+    market).
 
-    The static face is the face before the redemptions dated on its own date (seen on the dev snapshots: an
-    amortization on 17.10 is still in the face of the 17.10 static, one on 16.10 is out), and before the final
-    redemption on a bond matured by then (MOEX keeps that face)."""
+    Contract 1.1 (HS11, D7) states that date: ``face_value_date``, the latest redemption already deducted from the
+    face (MOEX deducts a redemption during its day, so on a payment day the static face is after it when
+    ``face_value_date`` is that day, before it when earlier). Without it (a 1.0 snapshot, or a face that matches no
+    step of the schedule) the observed rule of the dev snapshots: the static face is before the redemptions dated
+    on its own date (an amortization on 17.10 is still in the face of the 17.10 static, one on 16.10 is out), and
+    before the final redemption on a bond matured by then (MOEX keeps that face)."""
     if terms.face_value is None or terms.face_date is None:
         return terms.face_value
-    s = terms.face_date
-    if terms.maturity_date is not None and not terms.is_perpetual:
-        s = min(s, terms.maturity_date)
+    if terms.face_value_date is not None:  # face_value is after every redemption dated on or before it
+        s = terms.face_value_date + timedelta(days=1)
+    else:
+        s = terms.face_date
+        if terms.maturity_date is not None and not terms.is_perpetual:
+            s = min(s, terms.maturity_date)
     reds = [r.value_per_bond or Decimal(0) for r in terms.redemptions if (d < r.date < s if d < s else s <= r.date <= d)]
     return terms.face_value + (1 if d < s else -1) * sum(reds, Decimal(0))
 

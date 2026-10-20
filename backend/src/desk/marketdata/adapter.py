@@ -9,6 +9,10 @@ The hub facts live here as ``BondTerms`` / ``BondQuote``. ``core_instrument``,
 ``price_observation`` and ``MarketView.core_market`` map them to core's portfolio types
 (``Instrument``, ``BondPriceObservation``, ``MarketSnapshot``) once the valuation layer has
 decided that a bond is in scope and what its horizon is.
+
+Contract 1.1 (R9 HS1-HS13) adds facts read here when present and left None in a 1.0 snapshot: the issuer's group,
+state ownership, sector source and OKVED (``Issuer``), the Latin name, the schedule's frequency and
+``face_value_date`` (``BondTerms``), and the ``ratings`` dataset (``StaticView.ratings``, ``marketdata.ratings``).
 """
 
 from __future__ import annotations
@@ -120,6 +124,13 @@ class BondTerms:
     """The static snapshot's business date: ``face_value`` is the face outstanding then."""
     initial_face_value: Decimal | None = None
     """The face at issue (static ``initial_face_value``), before amortization and indexation."""
+    lat_name: str | None = None
+    """1.1 (HS12): MOEX LATNAME verbatim."""
+    coupon_frequency_schedule: int | None = None
+    """1.1 (HS7): coupons per year from the published schedule (the hub's median period)."""
+    face_value_date: date | None = None
+    """1.1 (HS11): the date from which ``face_value`` is outstanding by the redemptions (the latest redemption already
+    deducted); None in a 1.0 snapshot or when the face matches no step of the schedule (``bonds.face_on``)."""
 
 
 @dataclass(frozen=True)
@@ -130,6 +141,30 @@ class Issuer:
     inn: str | None
     sector: str | None
     is_sovereign: bool
+    # 1.1 (HS3, HS4); None in a 1.0 snapshot. ``ogrn``/``country`` are 1.0 fields (HS1)
+    sector_source: str | None = None
+    okved: str | None = None
+    okved_version: str | None = None
+    group_id: str | None = None
+    group_name: str | None = None
+    group_relation: str | None = None
+    is_state_owned: bool | None = None
+    ogrn: str | None = None
+    country: str | None = None
+
+
+@dataclass(frozen=True)
+class Rating:
+    """A row of the 1.1 ``ratings`` dataset (HS5): agency, scale and rating verbatim (``marketdata.ratings``)."""
+    scope: str
+    secid: str | None
+    issuer_id: int | None
+    agency: str
+    scale: str
+    rating: str | None
+    outlook: str | None
+    rating_date: date | None
+    action: str | None
 
 
 @dataclass(frozen=True)
@@ -220,9 +255,19 @@ class StaticView:
         d = snap.data
         self.issuers = {
             int(x["issuer_id"]): Issuer(int(x["issuer_id"]), x["name"], x.get("short_name"), x.get("inn"),
-                                        x.get("sector"), bool(x.get("is_sovereign")))
+                                        x.get("sector"), bool(x.get("is_sovereign")), x.get("sector_source"),
+                                        x.get("okved"), x.get("okved_version"), x.get("group_id"), x.get("group_name"),
+                                        x.get("group_relation"), x.get("is_state_owned"), x.get("ogrn"),
+                                        x.get("country"))
             for x in d["issuers"]
         }
+        self.ratings: tuple[Rating, ...] | None = None if "ratings" not in d else tuple(
+            Rating(r.get("scope") or ("issue" if r.get("secid") else "issuer"), r.get("secid"),
+                   None if r.get("issuer_id") is None else int(r["issuer_id"]), r.get("agency") or "",
+                   r.get("scale") or "", r.get("rating"), r.get("outlook"), _date(r.get("rating_date")),
+                   r.get("action"))
+            for r in d["ratings"])
+        """The 1.1 ``ratings`` dataset; None when the snapshot has none (1.0): no source, not "unrated"."""
         self.calendars = {c["calendar"]: c for c in d["calendars"]}
         coupons: dict[str, list[Coupon]] = defaultdict(list)
         for c in d["coupon_periods"]:
@@ -258,7 +303,9 @@ class StaticView:
                 redemptions=tuple(sorted(reds.get(sid, ()), key=lambda r: r.date)),
                 offers=tuple(offers.get(sid, ())),
                 floater_formula=formulas.get(sid), face_date=as_of,
-                initial_face_value=_d(i.get("initial_face_value")),
+                initial_face_value=_d(i.get("initial_face_value")), lat_name=i.get("lat_name"),
+                coupon_frequency_schedule=i.get("coupon_frequency_schedule"),
+                face_value_date=_date(i.get("face_value_date")),
             )
 
     def business_calendar(self, name: str) -> tuple[BusinessCalendar, date, date]:

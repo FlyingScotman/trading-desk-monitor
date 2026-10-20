@@ -495,8 +495,9 @@ const D = window.DESK, U = D.util, P = D.positions, BK = D.BUCKETS;
 const RAT = D.RATING_ORDER, BOOKK = Object.keys(D.BOOKS);
 // Грейды — слайдерами по шкале; «нет данных» (в хабе нет рейтинга) — не грейд: одна корзина «без рейтинга» после них.
 // Ключ шока корзины — сам U.NO_RATING (его читает util.spreadShock по p.rating).
-const RAT_G = RAT.filter(U.isRated), NORAT = RAT.includes(U.NO_RATING) || P.some(p => p.rating === U.NO_RATING && p.cs01);
-const NORAT_POS = P.filter(p => p.rating === U.NO_RATING && p.cs01), NORAT_CS = NORAT_POS.reduce((s, p) => s + p.cs01, 0);
+const unrated = r => !!r && !U.isRated(r);
+const RAT_G = RAT.filter(U.isRated), NORAT = RAT.some(unrated) || P.some(p => unrated(p.rating) && p.cs01);
+const NORAT_POS = P.filter(p => unrated(p.rating) && p.cs01), NORAT_CS = NORAT_POS.reduce((s, p) => s + p.cs01, 0);
 const RAT_KEYS = RAT_G.concat(NORAT ? [U.NO_RATING] : []);
 const posById = {}; P.forEach(p => posById[p.id] = p);
 const DV = U.bucketMatrix(P);

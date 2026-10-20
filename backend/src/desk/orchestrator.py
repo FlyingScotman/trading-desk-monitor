@@ -237,6 +237,9 @@ def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: b
         out.append(o)
         try:
             if quote is None:
+                if terms.status == "delisted" or "not_traded" in terms.labels:  # HS2: alive, on no MOEX board
+                    raise Rejected("not_traded", "alive bond MOEX no longer trades (static status "
+                                                 f"{terms.status}): no market quote")
                 raise Rejected("no_quote")
             settle = settlement_date(quote.trade_date, terms.settle_lag_days, ctx.calendar, *ctx.calendar_window)
             todo.append(bond_request(pid, terms, quote, settle, qty))
