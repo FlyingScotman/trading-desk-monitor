@@ -167,6 +167,9 @@ button{font:inherit;color:inherit}
 .xf:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
 .tag{display:inline-block;font:500 9.5px var(--font-sans);letter-spacing:.04em;text-transform:uppercase;padding:0 4px;border-radius:2px;border:1px solid var(--line-2);color:var(--fg-2);margin-left:6px;vertical-align:1px}
 .tag.brk{border-color:var(--warn);color:var(--fg)}
+/* PnL не посчитан (R10): прочерк с причиной в подсказке; «частично: N из M позиций» */
+.na{color:var(--muted);cursor:help;text-decoration:underline dotted;text-underline-offset:3px}
+.part{font:10.5px var(--font-sans);color:var(--fg-2);border:1px dashed var(--warn);border-radius:2px;padding:0 5px;cursor:help;white-space:nowrap}
 
 /* tooltips (ECharts html) */
 .ttr{display:flex;align-items:center;gap:6px;font-size:12px;line-height:18px}
@@ -405,7 +408,16 @@ function fundPnl(cfg) {
   }
   return { carry, fx, total: carry + fx };
 }
-const spreadMove = p => p.cs01 ? p.pnl.spread / p.cs01 : null;
+// R10: PnL не посчитан — «—» с причиной, а не 0; суммы — только по позициям с PnL (U.pnlSum), при неполном
+// покрытии — «частично: N из M позиций». Официальный PnL приходит на T+1: до этого — «—», а не 0.
+const offReady = () => !D.official || D.official.received !== false;
+const OFF_WAIT = 'Официальный PnL (курсы ЦБ) ещё не получен — ожидается T+1';
+const pnlWhy = p => U.pnlOk(p) ? null : 'PnL не посчитан: ' + ((p.pnl && p.pnl.reasonText) || D.pnlReasonText || 'причина не указана');
+// PnL дня позиции для таблиц: официальный (ЦБ), до T+1 — флэш (рынок); null — PnL не посчитан
+const posOff = p => !U.pnlOk(p) ? null : offReady() ? p.pnl.official : p.pnl.explained;
+const posOffTip = p => pnlWhy(p) || 'Официальный PnL по позиции не получен';
+// история: null — PnL за день не посчитан (не 0)
+const hv = (x, k = 1) => x == null || !isFinite(x) ? null : x / k;
 
 /* ---------------- cross-filter ---------------- */
 const DIM_LABEL = { book: 'Книга', issuer: 'Эмитент', ccy: 'Валюта' };
@@ -473,13 +485,22 @@ WT.kpi = {
       sub = `≈ ${mln(net * D.FX[c], 0, true)} млн ₽ · курс ${num(D.FX[c], 2)}`;
       extra = [['обл.', pr.bonds], ['XCCY', pr.derivs], ['FX', pr.fx], ['фонд.', pr.funding]].map(([n, v]) => `<span>${n} <b>${mln(v, 1, true)}</b></span>`).join('');
     } else if (m === 'pnl') {
-      // флэш по рыночным курсам — основной; официальный (курсы ЦБ) приходит на T+1
-      const fund = fundPnl(cfg).total, v = sum(l, p => p.pnl.explained) + fund;
-      const off = sum(l, p => p.pnl.official || 0) + fund, un = sum(l, p => p.pnl.unexplained);
-      val = mln(v, 1, true); unit = 'млн ₽ · флэш';
-      sub = `фондирование ${mln(sum(l, p => p.pnl.funding || 0) + fund, 1, true)} млн` + (bf().issuer ? ' (книжное не учтено)' : '');
-      extra = `<span>офиц. (ЦБ) <b>${mln(off, 1, true)}</b></span><span>необъясн. <b>${mln(un, 1, true)}</b></span>`;
-      if (!filt) { sp = H.map(h => h.pnlOfficial); spKind = 'bar'; spFmt = x => mln(x, 1, true) + ' млн ₽'; }
+      // флэш по рыночным курсам — основной; официальный (курсы ЦБ) приходит на T+1.
+      // R10: только позиции с PnL; ни у одной нет — «—» с причиной, не у всех — «частично: N из M позиций»
+      const pc = U.pnlCover(l), fp = fundPnl(cfg), fund = fp.total;
+      if (pc.none) {
+        val = U.pnlNaHtml(pc.tip); unit = 'млн ₽ · флэш';
+        sub = `<span title="${esc(pc.tip)}">PnL не посчитан</span>`;
+        extra = '<span>офиц. (ЦБ) <b>—</b></span><span>необъясн. <b>—</b></span>';
+      } else {
+        const v = U.pnlSum(l, p => p.pnl.explained) + fund;
+        const off = offReady() ? U.pnlSum(l, p => p.pnl.official || 0) + fund : null, un = offReady() ? U.pnlSum(l, p => p.pnl.unexplained) : null;
+        val = mln(v, 1, true); unit = 'млн ₽ · флэш';
+        sub = (pc.partial ? U.pnlPartHtml(pc) + ' ' : '') + `фондирование ${mln(U.pnlSum(l, p => p.pnl.funding || 0) + fund, 1, true)} млн` + (bf().issuer ? ' (книжное не учтено)' : '');
+        extra = off == null ? `<span title="${esc(OFF_WAIT)}">офиц. (ЦБ) <b>—</b> ожидается T+1</span>`
+          : `<span>офиц. (ЦБ) <b>${mln(off, 1, true)}</b></span><span>необъясн. <b>${mln(un, 1, true)}</b></span>`;
+      }
+      if (!filt) { sp = H.map(h => hv(h.pnlOfficial)); spKind = 'bar'; spFmt = x => x == null ? 'PnL не посчитан' : mln(x, 1, true) + ' млн ₽'; }
       else extra += '<span>история — по деску</span>';
     } else if (m === 'mv') {
       const v = sum(l, p => p.mvRub), g = sum(l, p => Math.abs(p.mvRub));
@@ -502,7 +523,7 @@ function sparkline(el, wid, data, kind, fmt) {
     xAxis: { type: 'category', data: dates, show: false, boundaryGap: kind === 'bar' },
     yAxis: { type: 'value', show: false, scale: kind !== 'bar' },
     series: [kind === 'bar'
-      ? { type: 'bar', data: data.map(v => ({ value: v, itemStyle: { color: signCol(v), opacity: .85 } })), barWidth: '62%' }
+      ? { type: 'bar', data: data.map(v => ({ value: v, itemStyle: { color: v == null ? TK.muted : signCol(v), opacity: .85 } })), barWidth: '62%' }
       : { type: 'line', data, showSymbol: false, symbol: 'circle', lineStyle: { width: 1.5, color: TK.accent }, itemStyle: { color: TK.accent },
           areaStyle: { color: TK.accent, opacity: .1 },
           markPoint: { symbol: 'circle', symbolSize: 6, label: { show: false }, itemStyle: { color: TK.accent, borderColor: TK.panel, borderWidth: 1.5 }, data: [{ coord: [last, data[last]] }] } }]
@@ -625,7 +646,7 @@ WT.treemap = {
   title: c => 'Экспозиция по ' + TREE_DIMS[c.dim],
   render(b, cfg, w) {
     const l = scope(cfg);
-    const dimF = { book: p => p.book, segment: p => p.segment, sector: p => p.sector || 'Деривативы и FX', rating: p => p.rating || 'Без рейтинга', ccy: p => p.ccy, assetClass: p => p.assetClass }[cfg.dim];
+    const dimF = { book: p => p.book, segment: p => p.segment, sector: p => p.sector || 'Деривативы и FX', rating: p => U.ratingLabel(p.rating), ccy: p => p.ccy, assetClass: p => p.assetClass }[cfg.dim];
     const mF = { mv: p => Math.abs(p.mvRub), dv01: p => Math.abs(p.dv01), cs01: p => Math.abs(p.cs01), jtd: p => Math.abs(p.jtd) }[cfg.measure];
     const sc = cfg.measure === 'mv' || cfg.measure === 'jtd' ? 1e9 : 1e3, unit = sc === 1e9 ? 'млрд ₽' : 'тыс ₽/б.п.';
     const top = {};
@@ -752,19 +773,24 @@ WT.explain = {
   fields: FILT,
   title: () => 'PnL explain за день',
   render(b, cfg, w) {
-    const l = scope(cfg), fl = fscope(cfg);
-    if (!l.length) { b.innerHTML = '<div class="empty">Нет позиций под фильтр</div>'; return ''; }
-    const comps = [['Кэрри', 'carry'], ['Ролл-даун', 'rolldown'], ['Ставки', 'rates'], ['Спреды', 'spread'], ['FX', 'fx'], ['Фондирование бумаг', 'funding'], ['Выпуклость', 'convexity'], ['Новые сделки', 'newTrades'], ['Прочее', 'other']]
+    const all = scope(cfg), pc = U.pnlCover(all), l = all.filter(U.pnlOk);
+    if (!all.length) { b.innerHTML = '<div class="empty">Нет позиций под фильтр</div>'; return ''; }
+    // R10: компоненты — только по позициям с PnL; ни у одной нет — причина вместо нулевого водопада
+    if (pc.none) { b.innerHTML = `<div class="empty"><span><b>PnL не посчитан</b><br>${esc(pc.tip.replace(/^PnL не посчитан:?\s*/, ''))}</span></div>`; return 'PnL не посчитан' + (tags(cfg).length ? ' · ' + tags(cfg).join(' · ') : ''); }
+    const ready = offReady();
+    const comps = [['Кэрри', 'carry'], ['Ролл-даун', 'rolldown'], ['Ставки', 'rates'], ['Спреды', 'spread'], ['FX', 'fx'], ['Фондирование бумаг', 'funding'], ['Выпуклость', 'convexity'], ['Новые сделки', 'newTrades'], ['Прочее', 'other'], ['По отчёту', 'reported']]
       .map(([n, k]) => [n, sum(l, p => p.pnl[k] || 0)]);
     const fp = fundPnl(cfg);
     const fxi = comps.findIndex(c => c[0] === 'FX');
-    comps.splice(fxi, 1, ['FX позиций', sum(l, p => p.pnl.fxGross != null ? p.pnl.fxGross : p.pnl.fx)], ['FX тела фондир.', sum(l, p => p.pnl.fxFunding || 0)]);
-    comps.push(['Фонд. книги: кэрри', fp.carry], ['Фонд. книги: FX', fp.fx], ['Курсы ЦБ − рынок', sum(l, p => p.pnl.fxBasis || 0)], ['Необъяснённое', sum(l, p => p.pnl.unexplained)]);
+    comps.splice(fxi, 1, ['FX позиций', sum(l, p => (p.pnl.fxGross != null ? p.pnl.fxGross : p.pnl.fx) || 0)], ['FX тела фондир.', sum(l, p => p.pnl.fxFunding || 0)]);
+    comps.push(['Фонд. книги: кэрри', fp.carry], ['Фонд. книги: FX', fp.fx], ['Курсы ЦБ − рынок', sum(l, p => p.pnl.fxBasis || 0)]);
+    if (ready) comps.push(['Необъяснённое', sum(l, p => p.pnl.unexplained || 0)]);
     const rows = comps.filter(c => Math.abs(c[1]) > 1);
     const total = sum(comps, c => c[1]);
     let run = 0;
     const items = rows.map(([n, v], i) => { const s = run; run += v; return { name: n, value: [i, s / 1e6, run / 1e6, v / 1e6], col: n === 'Необъяснённое' ? TK.warn : signCol(v) }; });
-    items.push({ name: 'Официальный PnL', value: [items.length, 0, total / 1e6, total / 1e6], col: TK.total });
+    // до T+1 официального PnL нет: итог — explain по курсам ЦБ, не «официальный»
+    items.push({ name: ready ? 'Официальный PnL' : 'Explain (ЦБ)', value: [items.length, 0, total / 1e6, total / 1e6], col: TK.total });
     const breaks = l.filter(p => p.pnl.breakNote);
     b.innerHTML = '<div class="ch"></div>';
     mk(b.firstChild, w.id, base({
@@ -785,8 +811,9 @@ WT.explain = {
             { type: 'text', style: { text: num(v, 1, true), x: x + wd + 4, y: p0[1], verticalAlign: 'middle', fill: TK.fg2, font: `10px ${TK.mono}` } }] };
         } }]
     }));
-    const offic = total, un = comps[comps.length - 1][1];
-    return `млн ₽ · официальный ${mln(offic, 1, true)} · необъясн. ${pct(Math.abs(un) / (Math.abs(offic) || 1))}` + (tags(cfg).length ? ' · ' + tags(cfg).join(' · ') : '');
+    const offic = total, un = ready ? comps[comps.length - 1][1] : null;
+    return (ready ? `млн ₽ · официальный ${mln(offic, 1, true)} · необъясн. ${pct(Math.abs(un) / (Math.abs(offic) || 1))}` : `млн ₽ · explain (ЦБ) ${mln(offic, 1, true)} · официальный — T+1`) +
+      (pc.partial ? ' · ' + U.pnlPartText(pc) : '') + (tags(cfg).length ? ' · ' + tags(cfg).join(' · ') : '');
   }
 };
 
@@ -798,13 +825,15 @@ WT.history = {
   title: c => 'PnL: официальный vs explain' + (c.mode === 'cum' ? ' · Σ' : ''),
   render(b, cfg, w) {
     const dates = H.map(h => ddmm(h.date));
-    let off = H.map(h => h.pnlOfficial / 1e6), exp = H.map(h => h.pnlExplained / 1e6);
-    if (cfg.mode === 'cum') { let a = 0, c = 0; off = off.map(v => (a += v)); exp = exp.map(v => (c += v)); }
+    // R10: день без PnL — разрыв линии (null), не 0; нарастающий итог его пропускает
+    let off = H.map(h => hv(h.pnlOfficial, 1e6)), exp = H.map(h => hv(h.pnlExplained, 1e6));
+    const none = H.filter(h => h.pnlOfficial == null && h.pnlExplained == null).length;
+    if (cfg.mode === 'cum') { let a = 0, c = 0; off = off.map(v => v == null ? null : (a += v)); exp = exp.map(v => v == null ? null : (c += v)); }
     b.innerHTML = '<div class="ch"></div>';
     mk(b.firstChild, w.id, base({
       legend: legend(), grid: { left: 6, right: 14, top: 26, bottom: 4, containLabel: true },
-      tooltip: axisTT({ axisPointer: { type: 'line', lineStyle: { color: TK.line2 } }, formatter: ps => `<div class="tth">${ps[0].axisValue}</div>` + ps.map(p => ttr(p.color, p.seriesName, mln(p.value * 1e6, 1, true) + ' млн ₽')).join('') +
-        ttr(TK.warn, 'Разница', mln((ps[0].value - (ps[1] ? ps[1].value : 0)) * 1e6, 2, true) + ' млн ₽') }),
+      tooltip: axisTT({ axisPointer: { type: 'line', lineStyle: { color: TK.line2 } }, formatter: ps => `<div class="tth">${ps[0].axisValue}</div>` + ps.map(p => ttr(p.color, p.seriesName, p.value == null ? '— не посчитан' : mln(p.value * 1e6, 1, true) + ' млн ₽')).join('') +
+        (ps[0].value != null && ps[1] && ps[1].value != null ? ttr(TK.warn, 'Разница', mln((ps[0].value - ps[1].value) * 1e6, 2, true) + ' млн ₽') : '') }),
       xAxis: cAxis(dates, { boundaryGap: false, axisLabel: { color: TK.fg2, fontSize: 10, hideOverlap: true } }),
       yAxis: vAxis(v => num(v, 0)),
       series: [
@@ -813,13 +842,13 @@ WT.history = {
           endLabel: { show: false } },
         { name: 'Explain', type: 'line', data: exp, symbol: 'circle', symbolSize: 4, showSymbol: false, lineStyle: { width: 1.5, type: [4, 3], color: TK.cat[1] }, itemStyle: { color: TK.cat[1] } }]
     }));
-    return 'млн ₽, вкл. фондирование' + (anyBoardFilter() ? ' · деск целиком (без фильтра)' : '');
+    return 'млн ₽, вкл. фондирование' + (none ? ` · без PnL: ${none} дн.` : '') + (anyBoardFilter() ? ' · деск целиком (без фильтра)' : '');
   }
 };
 
 /* ---- positions blotter ---- */
 const fxRub = p => sum(Object.keys(p.fxDelta || {}), c => p.fxDelta[c] * D.FX[c]);
-const BL_RANK = { mv: p => Math.abs(p.mvRub), dv01: p => Math.abs(p.dv01), cs01: p => Math.abs(p.cs01), pnl: p => Math.abs(p.pnl.official), jtd: p => Math.abs(p.jtd), fx: p => Math.abs(fxRub(p)) };
+const BL_RANK = { mv: p => Math.abs(p.mvRub), dv01: p => Math.abs(p.dv01), cs01: p => Math.abs(p.cs01), pnl: p => Math.abs(posOff(p) || 0), jtd: p => Math.abs(p.jtd), fx: p => Math.abs(fxRub(p)) };
 WT.blotter = {
   name: 'Мини-блоттер позиций', glyph: 'table', desc: 'Таблица позиций под фильтр, топ-N по выбранной мере. Сортировка по заголовкам, клик по книге/эмитенту/валюте — фильтр доски.',
   def: { w: 12, h: 3, cfg: { measure: 'mv', topN: '20', book: 'all', segment: 'all', ccy: 'all' } },
@@ -831,7 +860,7 @@ WT.blotter = {
     if (+cfg.topN) rows = rows.slice(0, +cfg.topN);
     if (!rows.length) { b.innerHTML = '<div class="empty">Нет позиций под фильтр</div>'; return ''; }
     const cols = [
-      { k: 'name', t: 'Инструмент', v: p => p.name, h: p => `${p.issuerGroup ? `<button class="xf" data-xf="issuer" data-v="${esc(p.issuerGroup)}" title="Фильтр по эмитенту ${esc(p.issuerGroup)}">${esc(p.name)}</button>` : esc(p.name)}${p.newToday ? '<span class="tag">нов.</span>' : ''}${p.pnl.breakNote ? `<span class="tag brk" title="${esc(p.pnl.breakNote)}">! разрыв</span>` : ''}` },
+      { k: 'name', t: 'Инструмент', v: p => p.name, h: p => `${p.issuerGroup ? `<button class="xf" data-xf="issuer" data-v="${esc(p.issuerGroup)}" title="Фильтр по эмитенту ${esc(p.issuerGroup)}">${esc(p.name)}</button>` : esc(p.name)}${p.newToday ? '<span class="tag">нов.</span>' : ''}${p.pnl && p.pnl.breakNote ? `<span class="tag brk" title="${esc(p.pnl.breakNote)}">! разрыв</span>` : ''}` },
       { k: 'book', t: 'Книга', v: p => D.BOOKS[p.book].name, h: p => `<button class="xf" data-xf="book" data-v="${p.book}">${esc(D.BOOKS[p.book].name)}</button>` },
       { k: 'ac', t: 'Класс', v: p => p.assetClass, h: p => `<span class="m">${esc(p.assetClass)}</span>` },
       { k: 'ccy', t: 'Вал.', v: p => p.ccy, h: p => `<button class="xf" data-xf="ccy" data-v="${p.ccy}">${p.ccy}</button>` },
@@ -841,11 +870,12 @@ WT.blotter = {
     ];
     if (cfg.measure === 'jtd') cols.push({ k: 'jtd', t: 'JTD, млн ₽', n: 1, v: p => p.jtd, h: p => mln(p.jtd, 0) });
     if (cfg.measure === 'fx') cols.push({ k: 'fx', t: 'FX-дельта, млн ₽', n: 1, v: fxRub, h: p => mln(fxRub(p), 0, true) });
-    cols.push({ k: 'pnl', t: 'PnL дня, тыс ₽', n: 1, v: p => p.pnl.official, h: p => ths(p.pnl.official, 0, true) },
+    cols.push({ k: 'pnl', t: offReady() ? 'PnL дня, тыс ₽' : 'PnL флэш, тыс ₽', n: 1, v: posOff, h: p => posOff(p) == null ? U.pnlNaHtml(posOffTip(p)) : ths(posOff(p), 0, true) },
       { k: 'ytm', t: 'Дох., %', n: 1, v: p => p.ytm, h: p => p.ytm == null ? '—' : num(p.ytm, 2) },
       { k: 'mat', t: 'Погашение', v: p => p.maturity, h: p => `<span class="m">${p.maturity ? p.maturity.split('-').reverse().join('.') : '—'}</span>` });
     const s = ui.sorts[w.id];
-    if (s) { const c = cols.find(x => x.k === s.k); if (c) rows.sort((a, z) => { const va = c.v(a), vz = c.v(z); const r = typeof va === 'number' ? (va || 0) - (vz || 0) : String(va).localeCompare(String(vz), 'ru'); return s.dir * r; }); }
+    if (s) { const c = cols.find(x => x.k === s.k); if (c) rows.sort((a, z) => { const va = c.v(a), vz = c.v(z); if (c.n && (va == null || vz == null)) return (va == null) - (vz == null);  // без значения — в конце
+      const r = typeof va === 'number' ? (va || 0) - (vz || 0) : String(va).localeCompare(String(vz), 'ru'); return s.dir * r; }); }
     b.innerHTML = `<div class="tw"><table class="tbl"><thead><tr>${cols.map(c => `<th class="${c.n ? 'n' : ''}" aria-sort="${s && s.k === c.k ? (s.dir > 0 ? 'ascending' : 'descending') : 'none'}"><button class="sortb" data-sort="${c.k}">${c.t}${s && s.k === c.k ? (s.dir > 0 ? ' ↑' : ' ↓') : ''}</button></th>`).join('')}</tr></thead><tbody>${
       rows.map(p => `<tr>${cols.map(c => `<td class="${c.n ? 'n' : ''}">${c.h(p)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
     b.querySelectorAll('[data-sort]').forEach(btn => btn.addEventListener('click', () => {
@@ -904,18 +934,21 @@ WT.watch = {
       const kind = it.slice(0, 1), key = it.slice(2);
       const ps = kind === 'g' ? l.filter(p => p.issuerGroup === key) : l.filter(p => p.name === key);
       if (!ps.length) { hidden++; return null; }
-      const cs = sum(ps, p => p.cs01), spr = cs ? sum(ps, p => p.pnl.spread) / cs : null;
-      const brk = ps.filter(p => p.pnl.breakNote);
-      const grp = kind === 'g' ? key : ps[0].issuerGroup;
-      return { kind, key, grp, n: ps.length, mv: sum(ps, p => p.mvRub), dv: sum(ps, p => p.dv01), cs, pnl: sum(ps, p => p.pnl.official), spr, brk, ccy: ps[0].ccy };
+      // R10: PnL и движение спреда — только по позициям с PnL; ни у одной нет — «—» с причиной
+      const cs = sum(ps, p => p.cs01), okp = ps.filter(U.pnlOk), csOk = sum(okp, p => p.cs01), spr = csOk ? sum(okp, p => p.pnl.spread || 0) / csOk : null;
+      const brk = okp.filter(p => p.pnl.breakNote);
+      const grp = kind === 'g' ? key : ps[0].issuerGroup, pc = U.pnlCover(ps);
+      const pnl = offReady() ? U.pnlSum(ps, p => p.pnl.official) : null;
+      return { kind, key, grp, n: ps.length, mv: sum(ps, p => p.mvRub), dv: sum(ps, p => p.dv01), cs, pnl, pc, spr, brk, ccy: ps[0].ccy };
     }).filter(Boolean);
     if (!rows.length) { b.innerHTML = `<div class="empty">${(cfg.items || []).length ? 'Все элементы скрыты фильтром доски' : 'Добавьте эмитентов или позиции в настройках'}</div>`; return ''; }
     b.innerHTML = `<div class="tw"><table class="tbl"><thead><tr><th>Объект</th><th class="n">MV, млн ₽</th><th class="n">DV01, тыс</th><th class="n">CS01, тыс</th><th class="n">PnL дня, тыс ₽</th><th class="n">Δ спреда, б.п.</th><th>Флаги</th></tr></thead><tbody>${rows.map(r => `<tr>
       <td>${r.grp ? `<button class="xf" data-xf="issuer" data-v="${esc(r.grp)}">${esc(r.key)}</button>` : `<button class="xf" data-xf="ccy" data-v="${r.ccy}">${esc(r.key)}</button>`}<span class="tag">${r.kind === 'g' ? 'группа · ' + r.n : 'позиция'}</span></td>
-      <td class="n">${mln(r.mv, 1)}</td><td class="n">${ths(r.dv, 0)}</td><td class="n">${ths(r.cs, 0)}</td><td class="n">${ths(r.pnl, 0, true)}</td>
-      <td class="n">${r.spr == null ? '—' : num(r.spr, 0, true)}</td>
+      <td class="n">${mln(r.mv, 1)}</td><td class="n">${ths(r.dv, 0)}</td><td class="n">${ths(r.cs, 0)}</td><td class="n">${r.pnl == null ? U.pnlNaHtml(r.pc.none ? r.pc.tip : OFF_WAIT) : ths(r.pnl, 0, true) + (r.pc.partial ? `<sup class="m" title="${esc(r.pc.tip)}">*</sup>` : '')}</td>
+      <td class="n">${r.spr == null ? (r.pc.none ? U.pnlNaHtml(r.pc.tip) : '—') : num(r.spr, 0, true)}</td>
       <td>${r.brk.length ? `<span class="st st-warn" title="${esc(r.brk.map(x => x.pnl.breakNote).join('; '))}"><b aria-hidden="true">!</b>разрыв ${mln(sum(r.brk, x => x.pnl.unexplained), 1, true)} млн</span>` : (r.spr != null && r.spr >= 10 ? `<span class="st st-serious"><b aria-hidden="true">▲</b>спред +${num(r.spr, 0)} б.п.</span>` : '<span class="m">—</span>')}</td></tr>`).join('')}</tbody></table></div>`;
-    return `${rows.length} объектов` + (hidden ? ` · ${hidden} скрыто фильтром` : '');
+    const wpc = U.pnlCover(rows.flatMap(r => r.kind === 'g' ? l.filter(p => p.issuerGroup === r.key) : l.filter(p => p.name === r.key)));
+    return `${rows.length} объектов` + (hidden ? ` · ${hidden} скрыто фильтром` : '') + (wpc.partial ? ' · PnL ' + U.pnlPartText(wpc) : wpc.none ? ' · PnL не посчитан' : '');
   }
 };
 

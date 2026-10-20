@@ -182,6 +182,12 @@ table.pv{border-collapse:separate;border-spacing:0;width:100%;font-size:12.5px}
 .pv td.num:focus-visible{outline:2px solid var(--focus);outline-offset:-2px;border-radius:0}
 .pv td.empty{color:var(--line-strong);cursor:default;text-align:right}
 .pv td.empty:hover{box-shadow:none}
+/* PnL не посчитан (R10): прочерк с причиной в подсказке; «частично: N из M позиций» */
+.na,.pv td.num.na{color:var(--muted);cursor:help;text-decoration:underline dotted;text-underline-offset:3px}
+.part{font-size:11px;font-family:var(--font-ui);font-weight:400;color:var(--text-2);border:1px dashed var(--div-neg);border-radius:2px;padding:0 5px;cursor:help;white-space:nowrap}
+.pm{color:var(--muted);font-weight:400;margin-left:1px}
+.grand span.part,.dr-stats span.part{text-transform:none;letter-spacing:0;align-self:flex-start;margin-top:3px}
+.grand span.na,.dr-stats span.na,.kpi span.na{font-size:inherit;text-transform:none;letter-spacing:0;color:var(--muted)}
 .pv tr.l1 th{font-weight:500}
 .pv tr.l1.has-kids th,.pv tr.l1.has-kids td{border-top:1px solid var(--line)}
 .pv tr.l2 th{padding-left:34px;color:var(--text-2)}
@@ -343,7 +349,8 @@ const CURVE_KEYS = Object.keys(D.CURVES);
 const INSTR = { BOND: 'Облигации', IRS: 'IRS', XCCY: 'XCCY', CDS: 'CDS', FX: 'FX спот/форвард' };
 const CCY_CURVE = { RUB: 'RUB RUONIA', USD: 'USD SOFR', CNY: 'CNY', EUR: 'EUR ESTR', CHF: 'CHF SARON' };
 const FUND_CURVE = { RUB: 'RUB RUONIA', USD: 'USD SOFR', CNY: 'CNY', EUR: 'EUR ESTR', CHF: 'CHF SARON' };
-const RATINGS = D.RATING_ORDER.concat(['Без рейтинга']);
+// «нет данных» (в хабе нет рейтинга) — не грейд: одна корзина «без рейтинга» вместе с позициями без рейтинга
+const RATINGS = D.RATING_ORDER.filter(U.isRated).concat([U.NO_RATING_LABEL]);
 const SC_SHORT = { 'par+100': '+100 б.п. RUB', 'par-100': '−100 б.п. RUB', keyhike: 'КС +200 б.п.', bullsteep: 'Bull steepener', bearflat: 'Bear flattener', rubdep: 'Рубль −15%', credit: 'Спреды ×2', stress22: 'Стресс «2022»', basis: 'Базис КС−RUONIA +50', ofzwide: 'Спред ОФЗ +40', sector: 'Девелоперы и лизинг' };
 
 function nearestBucket(t) {
@@ -377,7 +384,7 @@ const DIMS = {
   issuer:      { label: 'Эмитент', by: 'эмитентам', get: r => isPos(r) ? (r.p.issuer || 'Без эмитента') : FUND },
   issuerGroup: { label: 'Группа эмитента', by: 'группам эмитентов', get: r => isPos(r) ? (r.p.issuerGroup || 'Без эмитента') : FUND },
   sector:      { label: 'Сектор', by: 'секторам', get: r => isPos(r) ? (r.p.sector || 'Без сектора') : FUND },
-  rating:      { label: 'Рейтинг', by: 'рейтингам', ordinal: true, order: RATINGS.concat([FUND]), get: r => isPos(r) ? (r.p.rating || 'Без рейтинга') : FUND },
+  rating:      { label: 'Рейтинг', by: 'рейтингам', ordinal: true, order: RATINGS.concat([FUND]), get: r => isPos(r) ? U.ratingLabel(r.p.rating) : FUND },
   ccy:         { label: 'Валюта', by: 'валютам', fund: true, order: CCYS, get: r => r.ccy },
   curve:       { label: 'Кривая', by: 'кривым', fund: true, order: CURVE_KEYS, get: r => r.curve },
   bucket:      { label: 'Бакет', by: 'бакетам', fund: true, ordinal: true, order: BK, get: r => nearestBucket(r.tenor) },
@@ -412,20 +419,24 @@ function scen(id) {
   return scenCache[id];
 }
 const fxRub = o => Object.keys(o || {}).reduce((s, c) => s + o[c] * D.FX[c], 0);
+const offReady = () => !D.official || D.official.received !== false;
+const OFF_WAIT = 'Официальный PnL (курсы ЦБ) ещё не получен — ожидается T+1';
 const MEASURES = {
   dv01:  { label: 'DV01', unit: '₽/б.п.', signed: true, src: 'pos', explode: true, val: r => r.p.dv01 },
   cs01:  { label: 'CS01', unit: '₽/б.п.', signed: true, src: 'pos', val: r => r.p.cs01 },
   ofz01: { label: 'Спред ОФЗ01', unit: '₽/б.п.', signed: true, src: 'pos', val: r => r.p.ofzSpr01 || 0 },
-  pfund: { label: 'PnL: фондирование бумаг', unit: '₽', signed: true, src: 'pos', val: r => r.p.pnl.funding || 0 },
+  pfund: { label: 'PnL: фондирование бумаг', unit: '₽', signed: true, src: 'pos', pnlM: true, val: r => U.pnlOk(r.p) ? r.p.pnl.funding || 0 : null },
   jtd:   { label: 'JTD', unit: '₽', signed: true, src: 'pos', val: r => r.p.jtd },
   mv:    { label: 'MV', unit: '₽', signed: true, src: 'pos', val: r => r.p.mvRub },
   notional: { label: 'Номинал (брутто)', unit: '₽', signed: false, src: 'pos', val: r => Math.abs(r.p.notional) * D.FX[r.p.ccy] },
   ocp:   { label: 'ОВП', unit: '₽ экв.', signed: true, src: 'pos+fund', val: r => fxRub(isPos(r) ? r.p.fxDelta : r.f.fxDelta) },
   count: { label: 'Кол-во позиций', unit: 'шт.', signed: false, src: 'pos', agg: 'count', val: () => 1 },
-  // фондирование облигаций уже в PnL бумаг: у строк фондирования, привязанных к бумаге, PnL = 0
-  pnl:   { label: 'PnL флэш (рынок)', unit: '₽', signed: true, src: 'pos+fund', val: r => isPos(r) ? r.p.pnl.explained : (r.f.pnl.inPosition ? 0 : r.f.pnl.carry + r.f.pnl.fx) },
-  pnloff:{ label: 'PnL official (ЦБ)', unit: '₽', signed: true, src: 'pos+fund', val: r => isPos(r) ? (r.p.pnl.official || 0) : (r.f.pnl.inPosition ? 0 : r.f.pnl.carry + (r.f.pnl.fxCbr != null ? r.f.pnl.fxCbr : r.f.pnl.fx)) },
-  unexp: { label: 'PnL unexplained', unit: '₽', signed: true, src: 'pos', val: r => r.p.pnl.unexplained },
+  // фондирование облигаций уже в PnL бумаг: у строк фондирования, привязанных к бумаге, PnL = 0.
+  // R10 (pnlM): у позиции без PnL значение null — в суммы не входит, ячейка без единого значения — «—», не 0;
+  // официальный PnL и unexplained до T+1 (official.received = false) — «—» (needOff)
+  pnl:   { label: 'PnL флэш (рынок)', unit: '₽', signed: true, src: 'pos+fund', pnlM: true, val: r => isPos(r) ? (U.pnlOk(r.p) ? r.p.pnl.explained : null) : (r.f.pnl.inPosition ? 0 : r.f.pnl.carry + r.f.pnl.fx) },
+  pnloff:{ label: 'PnL official (ЦБ)', unit: '₽', signed: true, src: 'pos+fund', pnlM: true, needOff: true, val: r => !offReady() ? null : isPos(r) ? (U.pnlOk(r.p) ? r.p.pnl.official || 0 : null) : (r.f.pnl.inPosition ? 0 : r.f.pnl.carry + (r.f.pnl.fxCbr != null ? r.f.pnl.fxCbr : r.f.pnl.fx)) },
+  unexp: { label: 'PnL unexplained', unit: '₽', signed: true, src: 'pos', pnlM: true, needOff: true, val: r => offReady() && U.pnlOk(r.p) ? r.p.pnl.unexplained : null },
   scen:  { label: 'Сценарий', unit: '₽', signed: true, src: 'pos+fund', val: (r, v) => { const s = scen(v.scen); return isPos(r) ? (s.pos.get(r.p.id) || 0) : (s.fund.get(r.f.id) || 0); } },
   famt:  { label: 'Фондирование: объём', unit: '₽', signed: true, src: 'fund', val: r => r.f.amountRub },
   fcarry:{ label: 'Фондирование: кэрри за день', unit: '₽', signed: true, src: 'fund', val: r => r.f.pnl.carry },
@@ -481,7 +492,7 @@ const FILTERS = [
   { k: 'book', label: 'Книга', vals: BOOK_KEYS.map(k => [k, D.BOOKS[k].name]), get: r => r.book, fund: true },
   { k: 'segment', label: 'Сегмент', vals: SEG.map(s => [s, s]), get: r => DIMS.segment.get(r) },
   { k: 'ccy', label: 'Валюта', vals: CCYS.map(s => [s, s]), get: r => r.ccy, fund: true },
-  { k: 'rating', label: 'Рейтинг', vals: RATINGS.map(s => [s, s === 'Без рейтинга' ? 'б/р' : s]), get: r => DIMS.rating.get(r) },
+  { k: 'rating', label: 'Рейтинг', vals: RATINGS.map(s => [s, s === U.NO_RATING_LABEL ? 'б/р' : s]), get: r => DIMS.rating.get(r) },
   { k: 'assetClass', label: 'Класс актива', vals: AC.map(s => [s, s]), get: r => DIMS.assetClass.get(r) },
 ];
 const emptyFilters = () => ({ book: [], segment: [], ccy: [], rating: [], assetClass: [] });
@@ -524,7 +535,8 @@ function sanitize(v) {
   out.col = DIMS[v.col] ? v.col : null;
   out.viz = VIZ.some(z => z[0] === v.viz) ? v.viz : 'table';
   out.filters = emptyFilters();
-  FILTERS.forEach(F => { const a = v.filters && v.filters[F.k]; if (Array.isArray(a)) out.filters[F.k] = a.filter(x => F.vals.some(q => q[0] === x)); });
+  const legacy = x => x === 'Без рейтинга' || x === U.NO_RATING ? U.NO_RATING_LABEL : x;   // сохранённые виды до «без рейтинга»
+  FILTERS.forEach(F => { const a = v.filters && v.filters[F.k]; if (Array.isArray(a)) out.filters[F.k] = [...new Set(a.map(F.k === 'rating' ? legacy : x => x))].filter(x => F.vals.some(q => q[0] === x)); });
   out.opts = Object.assign({}, DEF_OPTS);
   const o = v.opts || {};
   if (typeof o.totals === 'boolean') out.opts.totals = o.totals;
@@ -581,20 +593,35 @@ function getFacts(v, dimsOverride) {
       if (x == null || !isFinite(x) || !w) return;   // нет значения (например, не облигация) — не участвует в среднем
       facts.push({ r, d: base, num: x * w, den: w });
     } else {
-      facts.push({ r, d: base, num: agg === 'count' ? 1 : m.val(r, v), den: 0 });
+      const x = agg === 'count' ? 1 : m.val(r, v);
+      if (x == null && m.pnlM) facts.push({ r, d: base, num: 0, den: 0, na: true });   // PnL не посчитан: не 0, а пропуск
+      else facts.push({ r, d: base, num: x, den: 0 });
     }
   });
   return facts;
 }
-const newAgg = () => ({ num: 0, den: 0, recs: new Set() });
-function addTo(a, f) { a.num += f.num; a.den += f.den; a.recs.add(f.r.id); }
-function mergeAgg(a, b) { a.num += b.num; a.den += b.den; b.recs.forEach(x => a.recs.add(x)); }
+// has — записей со значением, miss — записи без значения (PnL не посчитан)
+const newAgg = () => ({ num: 0, den: 0, recs: new Set(), has: 0, miss: new Set() });
+function addTo(a, f) { a.num += f.num; a.den += f.den; a.recs.add(f.r.id); if (f.na) a.miss.add(f.r.id); else a.has++; }
+function mergeAgg(a, b) { a.num += b.num; a.den += b.den; b.recs.forEach(x => a.recs.add(x)); a.has += b.has; b.miss.forEach(x => a.miss.add(x)); }
+const REC = new Map(POS_FUND.map(r => [r.id, r]));
+const recWhy = (r, m) => m.needOff && !offReady() ? OFF_WAIT
+  : isPos(r) && !U.pnlOk(r.p) ? 'PnL не посчитан: ' + ((r.p.pnl && r.p.pnl.reasonText) || D.pnlReasonText || 'причина не указана') : 'Нет значения';
+// Покрытие PnL агрегата: null — мера не PnL или пропусков нет; иначе {none, partial, tip, n, m} (U.pnlCover по позициям)
+function coverOf(a, m) {
+  if (!m.pnlM || !a || !a.miss.size) return null;
+  if (m.needOff && !offReady()) return { none: true, partial: false, n: 0, m: a.recs.size, reasons: [], tip: OFF_WAIT };
+  const pc = U.pnlCover([...a.recs].map(id => REC.get(id)).filter(r => r && isPos(r)).map(r => r.p));
+  if (pc.none && a.has) return Object.assign({}, pc, { none: false, partial: true, tip: 'Только фондирование. ' + pc.tip });
+  return pc;
+}
 function cellOf(map, k) { let a = map.get(k); if (!a) { a = newAgg(); map.set(k, a); } return a; }
 function aval(a, m) {
   if (!a) return null;
   const g = aggOf(m);
   if (g === 'count') return a.recs.size;
   if (g === 'wavg') return a.den ? a.num / a.den : null;
+  if (a.miss && a.miss.size && !a.has) return null;   // ни одного значения (PnL не посчитан) — «—», не 0
   return a.num;
 }
 const mkNode = k => ({ key: k, label: String(k), members: [k], total: newAgg(), cells: new Map(), kids: [], kmap: new Map() });
@@ -629,7 +656,7 @@ function buildPivot(v, facts) {
     addTo(grand, f); if (dc) addTo(cellOf(colTot, f.d[dc]), f);
   });
   const eps = zeroEps(m, v);
-  const isZero = a => { const x = aval(a, m); return x == null || Math.abs(x) < eps; };
+  const isZero = a => { const x = aval(a, m); return x == null ? !(a && a.miss && a.miss.size) : Math.abs(x) < eps; };   // «—» без PnL не прячем
   let rows = [...map1.values()];
   rows.forEach(n => { n.kids = [...n.kmap.values()]; if (v.opts.hideZeros) n.kids = n.kids.filter(k => !isZero(k.total)); });
   if (v.opts.hideZeros) rows = rows.filter(n => !isZero(n.total));
@@ -695,9 +722,11 @@ const labelOn = (x, max) => max && Math.abs(x) / max > 0.55 ? '#ffffff' : null;
 $('#asof').textContent = fmtDate(D.asOf);
 (function kpis() {
   const dv = U.sum(D.positions, p => p.dv01), cs = U.sum(D.positions, p => p.cs01);
-  const pnl = U.sum(D.positions, p => p.pnl.official || 0) + D.fundingPnl.carry + (D.fundingPnl.fxCbr != null ? D.fundingPnl.fxCbr : D.fundingPnl.fx);
-  const ue = U.sum(D.positions, p => p.pnl.unexplained);
-  const k = (l, v, u, cls) => `<div class="kpi ${cls || ''}"><span>${l}</span><b class="num">${fmtNum(v / 1e6, 2)} <small>${u}</small></b></div>`;
+  // R10: только позиции с PnL; ни у одной нет или официальный ещё не пришёл — «—» с причиной, не 0
+  const pc = U.pnlCover(D.positions), off = offReady() && !pc.none, tip = pc.none ? pc.tip : OFF_WAIT;
+  const pnl = off ? U.pnlSum(D.positions, p => p.pnl.official || 0) + D.fundingPnl.carry + (D.fundingPnl.fxCbr != null ? D.fundingPnl.fxCbr : D.fundingPnl.fx) : null;
+  const ue = off ? U.pnlSum(D.positions, p => p.pnl.unexplained) : null;
+  const k = (l, v, u, cls) => `<div class="kpi ${cls || ''}"><span>${l}</span><b class="num">${v == null ? U.pnlNaHtml(tip) : fmtNum(v / 1e6, 2) + (pc.partial && /PnL|Unexpl/.test(l) ? `<sup class="pm" title="${esc(pc.tip)}">*</sup>` : '')} <small>${u}</small></b></div>`;
   $('#kpis').innerHTML = k('DV01 деска', dv, 'млн ₽/б.п.') + k('CS01 деска', cs, 'млн ₽/б.п.') + k('PnL official', pnl, 'млн ₽') + k('Unexplained', ue, 'млн ₽', 'opt-k') +
     `<div class="kpi opt-k"><span>Позиций</span><b class="num">${D.positions.length} <small>+ ${D.funding.length} фонд.</small></b></div>`;
 })();
@@ -897,8 +926,8 @@ function renderSummary(v, m) {
   });
   if (v.opts.topN) parts.push('топ-' + v.opts.topN);
   $('#crumb').innerHTML = `<b>${esc(measureLabel(m, v))}</b> по ${esc(rowsPh)}` + parts.map(p => `<span class="sep">·</span>${esc(p)}`).join('') + `<span class="sep">·</span><span class="u">${esc(unitLabel(m, v))}</span>`;
-  const g = aval(P.grand, m);
-  $('#grand').innerHTML = `<span>Итого</span><b class="num${m.signed && g < 0 ? '' : ''}">${fmtM(g, m, v)}</b><small>${esc(unitLabel(m, v))}</small>`;
+  const g = aval(P.grand, m), gc = coverOf(P.grand, m);
+  $('#grand').innerHTML = `<span>Итого</span><b class="num${m.signed && g < 0 ? '' : ''}">${g == null && gc ? U.pnlNaHtml(gc.tip) : fmtM(g, m, v)}</b><small>${esc(unitLabel(m, v))}</small>${gc ? ' ' + U.pnlPartHtml(gc) : ''}`;
 }
 function renderHints(v, m) {
   const hs = [];
@@ -908,6 +937,9 @@ function renderHints(v, m) {
   else if (cb && m.src === 'fund') hs.push('Для фондирования «Бакет» — пиллар, ближайший к сроку сделки, «Кривая» — кривая ставки фондирования в её валюте.');
   else if (cb) hs.push('«Кривая» и «Бакет» раскладывают риск только для DV01. Для меры «' + measureLabel(m, v) + '» позиция целиком относится к своей основной кривой (с наибольшим |DV01|, иначе — кривой валюты) и к бакету, ближайшему к сроку погашения.');
   if (v.viz === 'ladder' && m.explode && !cb) hs.push('Линейка по бакетам раскладывает DV01 по key-rate бакетам, хотя в строках/столбцах вида бакета нет.');
+  const gc = coverOf(P.grand, m);
+  if (gc && gc.none) hs.push(/^PnL не посчитан|^Официальный/.test(gc.tip) ? gc.tip + '.' : 'PnL не посчитан: ' + gc.tip + '.');
+  else if (gc && gc.partial) hs.push('PnL посчитан не для всех позиций (' + U.pnlPartText(gc) + '): суммы — только по позициям с PnL, ячейка без единого значения — «—». ' + (gc.reasons.length ? 'Без PnL: ' + gc.reasons.map(x => x[0] + ' — ' + x[1]).join('; ') + '.' : ''));
   if (v.measure === 'pnl') hs.push('PnL official включает стоимость фондирования и FX-переоценку валютного фондирования — это отдельные записи «Фондирование» (тип фондирования, контрагент).');
   if (v.measure === 'scen') hs.push('Сценарий: полная переоценка из расчётного сервиса, если она загружена для пресета; иначе util.runScenario — дельта по key-rate бакетам + выпуклость облигаций + спреды + FX линейно. FX-переоценка валютного фондирования — отдельные записи «Фондирование».');
   if (v.measure === 'ocp') hs.push('ОВП = FX-дельта позиций + валютное фондирование, в рублёвом эквиваленте по курсу на дату.');
@@ -933,10 +965,11 @@ function renderPivot(v, m) {
     return ` style="background:color-mix(in srgb, ${col} ${a}%, transparent)"`;
   };
   const cell = (agg, c, lvl, cls) => {
-    const x = aval(agg, m);
+    const x = aval(agg, m), cv = coverOf(agg, m);
+    if (x == null && cv) { cons.push(c); return `<td class="num na${cls ? ' ' + cls : ''}" tabindex="0" data-i="${cons.length - 1}" title="${esc(cv.tip)}">—</td>`; }
     if (!agg || x == null) return `<td class="empty${cls ? ' ' + cls : ''}">·</td>`;
     cons.push(c);
-    return `<td class="num${cls ? ' ' + cls : ''}" tabindex="0" data-i="${cons.length - 1}"${lvl >= 0 ? shade(x, lvl) : ''}>${fmtM(x, m, v)}</td>`;
+    return `<td class="num${cls ? ' ' + cls : ''}" tabindex="0" data-i="${cons.length - 1}"${lvl >= 0 ? shade(x, lvl) : ''}${cv ? ` title="${esc(cv.tip)}"` : ''}>${fmtM(x, m, v)}${cv ? '<sup class="pm">*</sup>' : ''}</td>`;
   };
   const corner = DIMS[P.d1].label + (P.d2 ? ' → ' + DIMS[P.d2].label : '') + (hasCol ? ' ╲ ' + DIMS[P.dc].label : '');
   let h = `<table class="pv"><thead><tr><th class="corner" scope="col">${esc(corner)}</th>`;
@@ -1182,10 +1215,10 @@ function openDrill(cons, facts, from) {
   facts.forEach(f => {
     if (!ks.every(k => cons[k].includes(f.d[k]))) return;
     let e = by.get(f.r.id); if (!e) { e = { r: f.r, num: 0, den: 0 }; by.set(f.r.id, e); }
-    e.num += f.num; e.den += f.den;
+    e.num += f.num; e.den += f.den; if (f.na) e.na = true;
   });
   let list = [...by.values()];
-  if (aggOf(m) === 'sum') list = list.filter(e => Math.abs(e.num) > 1e-6);
+  if (aggOf(m) === 'sum') list = list.filter(e => e.na || Math.abs(e.num) > 1e-6);   // без PnL — строкой с «—»
   drill = { cons, list, v, m, explode: facts === ladderFacts ? !!m.explode : isExplode(v, m), sort: { k: 'val', dir: -1 } };
   drillReturn = from || document.activeElement;
   renderDrill();
@@ -1200,7 +1233,9 @@ function closeDrill() {
 function renderDrill() {
   const { list, v, m, cons } = drill;
   const a = aggOf(m), sc = unitsScale(v);
-  const tot = a === 'count' ? list.length : a === 'wavg' ? (list.reduce((s, e) => s + e.den, 0) ? list.reduce((s, e) => s + e.num, 0) / list.reduce((s, e) => s + e.den, 0) : null) : list.reduce((s, e) => s + e.num, 0);
+  const valued = list.filter(e => !e.na), nNa = list.length - valued.length;
+  const tot = a === 'count' ? list.length : a === 'wavg' ? (list.reduce((s, e) => s + e.den, 0) ? list.reduce((s, e) => s + e.num, 0) / list.reduce((s, e) => s + e.den, 0) : null) : valued.length ? valued.reduce((s, e) => s + e.num, 0) : null;
+  const dAgg = nNa ? { recs: new Set(list.map(e => e.r.id)), miss: new Set(list.filter(e => e.na).map(e => e.r.id)), has: valued.length } : null, dc = dAgg ? coverOf(dAgg, m) : null;
   const cols = [
     { k: 'name', l: 'Позиция', get: e => e.r.name, s: 1 },
     { k: 'book', l: 'Книга', get: e => D.BOOKS[e.r.book].name, s: 1 },
@@ -1214,8 +1249,8 @@ function renderDrill() {
     cols.push({ k: 'val', l: 'MV, млн ₽', r: 1, get: e => isPos(e.r) ? e.r.p.mvRub : 0, fmt: e => isPos(e.r) ? fmtNum(e.r.p.mvRub / 1e6, 1) : '—' });
   } else {
     if (drill.explode) cols.push({ k: 'full', l: 'DV01 позиции', r: 1, get: e => e.r.p.dv01, fmt: e => fmtM(e.r.p.dv01, m, v) });
-    cols.push({ k: 'val', l: drill.explode ? 'Вклад в ячейку' : measureLabel(m, v), r: 1, get: e => e.num, fmt: e => fmtM(e.num, m, v), sgn: 1 });
-    cols.push({ k: 'share', l: 'Доля', r: 1, get: e => tot ? e.num / tot : 0, fmt: e => tot ? fmtNum(e.num / tot * 100, 1) + '%' : '—' });
+    cols.push({ k: 'val', l: drill.explode ? 'Вклад в ячейку' : measureLabel(m, v), r: 1, get: e => e.num, fmt: e => e.na ? U.pnlNaHtml(recWhy(e.r, m)) : fmtM(e.num, m, v), sgn: 1 });
+    cols.push({ k: 'share', l: 'Доля', r: 1, get: e => tot ? e.num / tot : 0, fmt: e => tot && !e.na ? fmtNum(e.num / tot * 100, 1) + '%' : '—' });
   }
   const sCol = cols.find(c => c.k === drill.sort.k) || cols[cols.length - 1];
   const dir = drill.sort.dir;
@@ -1228,7 +1263,7 @@ function renderDrill() {
   const nPos = list.filter(e => isPos(e.r)).length, nF = list.length - nPos;
   let h = `<div class="dr-h"><div class="dr-k">Позиции ячейки · ${esc(measureLabel(m, v))}</div><button type="button" class="dr-close" id="drClose" aria-label="Закрыть панель">${ICON.x}</button>` +
     `<h2 class="dr-t" id="drTitle">${esc(consTitle(cons))}</h2><div class="dr-sub">${Object.keys(cons).map(k => esc(DIMS[k].label) + ': ' + esc(cons[k].length > 6 ? cons[k].slice(0, 6).join(', ') + ' …' : cons[k].join(', '))).join(' · ') || 'без ограничений по измерениям'}</div></div>`;
-  h += `<div class="dr-stats"><div><span>${a === 'wavg' ? 'Среднее взвешенное' : 'Итого по ячейке'}</span><b class="num">${fmtM(tot, m, v)} <small style="font-size:12px;color:var(--muted);font-family:var(--font-ui)">${esc(unitLabel(m, v))}</small></b></div><div><span>Записей</span><b class="num">${nPos}${nF ? ' + ' + nF + ' фонд.' : ''}</b></div></div>`;
+  h += `<div class="dr-stats"><div><span>${a === 'wavg' ? 'Среднее взвешенное' : 'Итого по ячейке'}</span><b class="num">${tot == null && dc ? U.pnlNaHtml(dc.tip) : fmtM(tot, m, v)} <small style="font-size:12px;color:var(--muted);font-family:var(--font-ui)">${esc(unitLabel(m, v))}</small></b>${dc && dc.partial ? U.pnlPartHtml(dc) : ''}</div><div><span>Записей</span><b class="num">${nPos}${nF ? ' + ' + nF + ' фонд.' : ''}</b></div></div>`;
   h += '<div class="dr-body"><table class="dt"><thead><tr>' + cols.map(c => `<th class="${c.r ? 'r' : ''}" scope="col" aria-sort="${c.k === sCol.k ? (dir < 0 ? 'descending' : 'ascending') : 'none'}"><button type="button" data-sk="${c.k}">${esc(c.l)}${c.k === sCol.k ? `<span class="ar">${dir < 0 ? '▼' : '▲'}</span>` : ''}</button></th>`).join('') + '</tr></thead><tbody>';
   sorted.forEach(e => {
     h += '<tr>' + cols.map(c => {
