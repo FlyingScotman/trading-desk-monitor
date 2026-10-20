@@ -16,6 +16,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -75,6 +76,16 @@ def parse_bundle(body: bytes, snapshot_id: str, name: str | None = None) -> Snap
 _MANIFESTS: dict[tuple[str, int, int], dict[str, Any]] = {}
 
 
+def _utc(ts: str | None) -> str:
+    """A bundle's timestamp as comparable text (UTC ISO); empty when absent or unreadable."""
+    if not ts:
+        return ""
+    try:
+        return datetime.fromisoformat(ts).astimezone(UTC).isoformat()
+    except ValueError:
+        return ts
+
+
 def _manifest(path: Path) -> dict[str, Any]:
     """The envelope fields ``SnapshotDir`` lists. A bundle is content-addressed and the cache append-only, so it
     is parsed once per process (an autopilot cycle builds a ``SnapshotDir`` every minute)."""
@@ -84,7 +95,7 @@ def _manifest(path: Path) -> dict[str, Any]:
         with gzip.open(path) as f:
             doc = json.load(f)
         _MANIFESTS[key] = {k: doc.get(k) for k in ("kind", "cut_type", "business_date", "static_snapshot_id",
-                                                   "supersedes", "cut_ts")}
+                                                   "supersedes", "cut_ts", "known_at")}
     return _MANIFESTS[key]
 
 
@@ -122,10 +133,13 @@ class SnapshotDir:
             raise SnapshotError(f"no {cut_type} market snapshot for {business_date} in {self.root}")
         if len(ids) > 1:
             # Corrections supersede; pick the one no other snapshot supersedes (of the intraday cuts of a date,
-            # several stand: the latest cut).
+            # several stand: the latest cut). Two can stand for one cut when the cache skipped a link of the chain
+            # (A <- B <- C with B never fetched: the hub re-publishing its history, WEB-11): the later known_at is the
+            # correction (the hub never back-dates known_at), never the order of the ids.
             superseded = {self._manifests[i]["supersedes"] for i in ids}
             ids = sorted((i for i in ids if i not in superseded),
-                         key=lambda i: (self._manifests[i].get("cut_ts") or "", i), reverse=True)
+                         key=lambda i: (_utc(self._manifests[i].get("cut_ts")), _utc(self._manifests[i].get("known_at")),
+                                        i), reverse=True)
         return ids[0]
 
     def market(self, business_date: str, cut_type: str = "eod_final") -> Snapshot:

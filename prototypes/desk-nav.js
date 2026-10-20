@@ -244,8 +244,10 @@
     var data = (!!D && !empty) || inApp;  // страница показывает данные прогона
     var box = el('span', { 'class': 'dn-ap', role: 'status', 'aria-live': 'polite', hidden: '' });
     st.appendChild(box);
-    // base — прогон на экране: новый в latest_run значит «посчитан новый день/прогон»
-    var base = db && !pinned ? String(D.source.runId) : null, fastUntil = 0, timer = null, busy = false, last = null;
+    // base — прогон на экране: новый в latest_run значит «посчитан новый день/прогон»; страница, закреплённая на
+    // другом прогоне (выбор помнится 12 часов), сразу предлагает последний: иначе вчерашний или посчитанный до
+    // обновления прогон выглядит как текущий (R14, R17)
+    var base = db ? String(D.source.runId) : null, fastUntil = 0, timer = null, busy = false, last = null;
     function schedule() { clearTimeout(timer); timer = setTimeout(poll, Date.now() < fastUntil || (last && last.state === 'running') ? 5000 : 30000); }
     function once(runId) {  // одна авто-перезагрузка на прогон: не зациклиться, если сервер его всё же не отдал
       try {
@@ -272,7 +274,7 @@
       if (fresh) {
         box.appendChild(el('button', { type: 'button', 'class': 'dn-new', 'data-act': 'load',
           title: pinned ? 'Перейти на последний прогон (на всех страницах)' : 'Загрузить новый прогон; фильтры и доски сохранятся' },
-          'Новый прогон ' + (lr.label || dt(lr.as_of)) + ' — показать'));
+          (pinned ? 'Последний прогон ' : 'Новый прогон ') + (lr.label || dt(lr.as_of)) + ' — показать'));
       }
       var b = el('button', { type: 'button', 'data-act': 'run', title: 'Запустить цикл автопилота сейчас: хаб, папки отчётов, EOD' }, 'Обновить');
       if (busy || s === 'running') b.disabled = true;

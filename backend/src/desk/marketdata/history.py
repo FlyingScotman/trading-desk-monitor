@@ -241,6 +241,15 @@ def loaded_dates(con: psycopg.Connection) -> set[str]:
     return {d.isoformat() for (d,) in con.execute("SELECT business_date FROM md_kbd")}
 
 
+def superseded_dates(con: psycopg.Connection, latest: list[tuple[str, str]]) -> list[str]:
+    """The dates of ``latest`` ((date, the hub's current snapshot id), ``cache.hub_latest``) whose rows come from
+    another snapshot while the hub's current one was never handled: a correction published after the date was loaded
+    (the rows would otherwise stay on the superseded snapshot for good)."""
+    rows = {d.isoformat(): sid for d, sid in con.execute("SELECT business_date, snapshot_id FROM md_kbd")}
+    handled = loaded_ids(con)
+    return [d for d, sid in latest if d in rows and rows[d] != sid and sid not in handled]
+
+
 # ---- reading
 
 

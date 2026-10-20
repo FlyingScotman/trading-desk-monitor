@@ -144,6 +144,8 @@ select{background:var(--panel-2);border:1px solid var(--line-2);border-radius:2p
 .bd-h-head{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:baseline;margin:0 0 8px;font-size:12px;color:var(--fg-3)}
 .bd-h-head b{color:var(--fg);font-size:13px}
 .note{font-size:11.5px;color:var(--fg-3);margin:0}
+.rnote{font-size:12px;color:var(--fg-2);border-left:3px solid var(--warn);padding:4px 8px;margin:6px 0 0}
+.rnote div+div{margin-top:3px}
 .toolbar{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;margin-bottom:12px}
 .seg{display:inline-flex;border:1px solid var(--line-2);border-radius:2px;overflow:hidden;flex-wrap:wrap}
 .seg button{background:transparent;border:0;border-right:1px solid var(--line-2);padding:3px 9px;font-size:12px;cursor:pointer;color:var(--fg-2)}
@@ -302,7 +304,7 @@ details.pop summary::-webkit-details-marker{display:none}
   <!-- 1. Сводка -->
   <section class="tab" id="tab-summary" role="tabpanel" aria-label="Сводка">
     <div class="grid">
-      <div class="pnl s4"><div class="ph"><h3>DV01 по кривым</h3><span class="u">тыс ₽/б.п.</span></div><div class="pb"><div class="ch" id="c-sum-curve"></div></div></div>
+      <div class="pnl s4"><div class="ph"><h3>DV01 по кривым</h3><span class="u">тыс ₽/б.п.</span></div><div class="pb"><div class="ch" id="c-sum-curve"></div><div class="rnote" id="sum-risk-notes" role="note" hidden></div></div></div>
       <div class="pnl s8"><div class="ph"><h3>DV01 по бакетам</h3><div class="ctl"><select id="sum-bview" aria-label="Кривые на графике"></select><span class="u">тыс ₽/б.п.</span></div></div><div class="pb"><div class="ch" id="c-sum-bucket"></div></div></div>
       <div class="pnl s4"><div class="ph"><h3>Экспозиция по сегментам</h3><span class="u">MV, млрд ₽</span></div><div class="pb"><div class="ch" id="c-sum-seg"></div></div></div>
       <div class="pnl s8"><div class="ph"><h3>Топ-10 групп эмитентов</h3><span class="u">MV облигаций + продажа защиты CDS, млрд ₽</span></div><div class="pb" id="sum-issuers"></div></div>
@@ -349,6 +351,7 @@ details.pop summary::-webkit-details-marker{display:none}
       <div class="legend-div" id="risk-legend"></div>
       <span class="cnt" id="risk-extra"></span>
     </div>
+    <div class="rnote" id="risk-notes" role="note" hidden style="margin:0 0 10px"></div>
     <div class="grid">
       <div class="pnl s12"><div class="ph"><h3 id="risk-hm-title">DV01: кривая × бакет</h3><span class="u">тыс ₽/б.п. · нажмите ячейку</span></div><div class="pb"><div class="tw" id="risk-hm"></div></div></div>
       <div class="pnl s12"><div class="ph"><h3 id="risk-ct-title">Вклад позиций</h3><span class="u" id="risk-ct-sub"></span></div><div class="tw" id="risk-ct" style="max-height:340px;overflow:auto"></div></div>
@@ -754,9 +757,18 @@ function renderTab(){
   ({summary:rSummary, positions:rPositions, bonds:rBonds, risk:rRisk, expo:rExpo, funding:rFunding, scen:rScen, pnl:rPnl})[S.tab]();
 }
 
+// what the run's risk by curve lacks (R14, R15: riskNotes) — said, not shown as a silent zero
+function riskNotes(id){
+  const n = D.riskNotes || [], box = $(id);
+  if (!box) return;
+  box.hidden = !n.length;
+  box.innerHTML = n.map(x => `<div title="${esc([x.code, x.detail].filter(Boolean).join(': '))}">${esc(x.text)}</div>`).join('');
+}
+
 /* ======================= 1. Сводка ======================= */
 function rSummary(){
   const l = P(), m = U.bucketMatrix(l);
+  riskNotes('sum-risk-notes');
   // DV01 by curve
   const cv = CURVES.map(c => sum(m[c]) / 1e3);
   chart('c-sum-curve', opt({
@@ -1189,8 +1201,9 @@ function closeDrawer(){
 
 /* ======================= 3. Риски по кривым ======================= */
 function rRisk(){
+  riskNotes('risk-notes');
   { const l0 = P(), kd = sum(l0, p => sum((p.risk && p.risk['RUB KEY']) || [])), ofz = sum(l0, p => p.ofzSpr01 || 0), cs = sum(l0, p => p.cs01);
-    $('risk-extra').innerHTML = `<span title="Чувствительность ОФЗ к их спреду относительно кривой, на которой считан риск ставок (в прогоне — КБД, в демо — RUONIA)">спред ОФЗ01 <b class="num${nc(ofz)}">${K(ofz,0)}</b></span> · <span title="CS01: чувствительность к кредитному спреду бумаг к их базовой кривой">CS01 <b class="num${nc(cs)}">${K(cs,0)}</b></span> · <span title="DV01 на кривой RUB KEY: чувствительность к ключевой ставке (флоатеры на КС, свопы на КС)">DV01 на КС <b class="num${nc(kd)}">${K(kd,0)}</b></span> тыс ₽/б.п.`; }
+    $('risk-extra').innerHTML = `<span title="Чувствительность ОФЗ к их спреду относительно кривой, на которой считан риск ставок (RUONIA OIS; на дату без неё — КБД)">спред ОФЗ01 <b class="num${nc(ofz)}">${K(ofz,0)}</b></span> · <span title="CS01: чувствительность к кредитному спреду бумаг к их базовой кривой">CS01 <b class="num${nc(cs)}">${K(cs,0)}</b></span> · <span title="DV01 на кривой RUB KEY: чувствительность к ключевой ставке (флоатеры на КС, свопы на КС)">DV01 на КС <b class="num${nc(kd)}">${K(kd,0)}</b></span> тыс ₽/б.п.`; }
   if (!D.CURVES[S.risk.curve] && CURVES.length) { S.risk.curve = CURVES[0]; S.risk.cell = null; }  // the default (RUB RUONIA) is the demo's: a run may publish other curves only
   const l = P(), mode = S.risk.mode, curve = S.risk.curve;
   document.querySelectorAll('#risk-mode button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === mode));

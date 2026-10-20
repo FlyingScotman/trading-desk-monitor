@@ -484,6 +484,7 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
         log.append(("WARN", "статика не на дату рынка: " + ctx.point_in_time_warning))
     log.append(("INFO", "качество оценки: " + ", ".join(f"{k} {quality[k]}" for k in QUALITIES if quality[k])
                 + (f", не посчитано {len(skipped)}" if skipped else "")))
+    log += rates_log(ctx, positions, rows)
     if prev is None:
         log.append(("WARN", (f"PnL не посчитан: {NO_PNL_TEXT[RUN_NO_PREV_MARKET]} (нет среза eod_final раньше "
                              f"{ctx.business_date}); позиции без PnL, а не с нулём")))
@@ -507,6 +508,31 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
     log.append(("WARN", "JTD не считается в слайсе S1 (нет решения по recovery): поле jtd = 0"))
     log.append(("INFO", f"опубликовано позиций: {len(rows)} (точно {quality['exact']}), не посчитано: {len(skipped)}"))
     return RunContent(rows, reference, log)
+
+
+def rates_log(ctx: EodContext, positions: list[tuple[str, str, Outcome]], rows: list[dict[str, Any]]
+              ) -> list[tuple[str, str]]:
+    """The run log's lines on the rates inputs and the risk by curve (R14, R15): a WARN line per missing input
+    (``rates.input_notes``: ``<code>: <text>``), the number of positions with risk on each curve, and the floaters by
+    benchmark: how many core valued (exact/assumed) and why the others are on a fallback rung (reason codes)."""
+    out = [("WARN", f"{n['code']}: {n['text']}" + (f" ({n['detail']})" if n["detail"] else ""))
+           for n in rates.input_notes(ctx.rates, ctx.business_date)]
+    on = Counter(c for r in rows for c in r.get("risk") or {})
+    out.append(("INFO", "риск по кривым, позиций: " + (", ".join(f"{c} {n}" for c, n in sorted(on.items())) or "нет")))
+    floaters: dict[str, Counter[str]] = {}
+    for _, _, o in positions:
+        t = o.terms
+        if t is None or t.coupon_type != "floating":
+            continue
+        bench = (t.floater_formula or {}).get("benchmark") or "без формулы"
+        v = o.valuation
+        key = (v.quality if v and v.quality in ("exact", "assumed") else
+               f"{v.quality if v else 'не посчитано'} ({o.reason or 'нет причины'})")
+        floaters.setdefault(bench, Counter())[key] += 1
+    if floaters:
+        out.append(("INFO", "флоатеры по индексам: " + "; ".join(
+            f"{b}: " + ", ".join(f"{k} {n}" for k, n in sorted(c.items())) for b, c in sorted(floaters.items()))))
+    return out
 
 
 def publish(db: str, ctx: EodContext, positions: list[tuple[str, str, Outcome]], *,

@@ -63,6 +63,15 @@ class RatesInputError(ValueError):
     pass
 
 
+class QuoteSetMissing(RatesInputError):
+    """The market snapshot has no quote set of the dataset dated its business date: a coverage gap of the hub
+    (``curve_quote_sets`` coverage ``missing``), not a build error."""
+
+    def __init__(self, message: str, dataset: str) -> None:
+        super().__init__(message)
+        self.dataset = dataset
+
+
 @dataclass(frozen=True)
 class RatesCurve:
     entry: CurveEntry
@@ -109,8 +118,8 @@ def select_quote_set(market: Snapshot, dataset: str) -> tuple[ar.QuoteSet, dict[
     sets = ar.quote_sets(market, dataset)
     dated = [s for s in sets if s.snapshot_date == bd]
     if not dated:
-        raise RatesInputError(f"{market.business_date}: no {dataset} quote set dated the business date "
-                              f"(present: {[(s.source, s.snapshot_date.isoformat()) for s in sets]})")
+        raise QuoteSetMissing(f"{market.business_date}: no {dataset} quote set dated the business date "
+                              f"(present: {[(s.source, s.snapshot_date.isoformat()) for s in sets]})", dataset)
     best = min(dated, key=lambda s: (bool(s.stale_reasons), s.quote_basis != "bid_ask_mid", -s.fetched_at.timestamp()))
     return best, {
         "dataset": dataset, "quote_set_id": best.quote_set_id, "source": best.source, "quote_basis": best.quote_basis,
@@ -250,3 +259,83 @@ def fixing_entries(market: Snapshot, static: Snapshot,
             info["unpublished_business_days"] = [d.isoformat() for d in history.unpublished_business_days]
         lineage[code] = info
     return tuple(entries), lineage
+
+
+# ---- what a run lacks (R14, R15): codes for the run log, the pages and the diagnostics
+
+RATES_DATASETS = ("ruonia_ois", "key_rate_swap")
+INPUT_CODE = {"missing": "curve_missing", "error": "curve_error", "no_discount": "curve_unbuilt"}
+INPUT_TEXT = {
+    "curve_missing:ruonia_ois": "нет кривой RUONIA в срезе хаба за {d} (нет котировок RUONIA OIS) — облигации "
+                                "дисконтированы по КБД, риск отнесён на ОФЗ (RUB OFZ)",
+    "curve_error:ruonia_ois": "кривая RUONIA за {d} не построена из котировок RUONIA OIS — облигации дисконтированы "
+                              "по КБД, риск отнесён на ОФЗ (RUB OFZ)",
+    "curve_missing:key_rate_swap": "нет кривой ключевой ставки в срезе хаба за {d} (нет котировок IRS KEYRATE) — "
+                                   "флоатеры на КС оценены запасной ступенью, риск КС по дюрации",
+    "curve_error:key_rate_swap": "кривая ключевой ставки за {d} не построена из котировок IRS KEYRATE — флоатеры на "
+                                 "КС оценены запасной ступенью, риск КС по дюрации",
+    "curve_unbuilt:key_rate_swap": "кривая ключевой ставки за {d} не строится без кривой RUONIA — флоатеры на КС "
+                                   "оценены запасной ступенью, риск КС по дюрации",
+    "fixings_error": "фиксинги RUONIA и КС за {d} не прочитаны — флоатеры оценены запасной ступенью",
+}
+"""Russian text of each code, ``{d}``: the business date (dd.mm)."""
+INPUT_CURVE = {"ruonia_ois": "RUB RUONIA", "key_rate_swap": "RUB KEY"}
+"""The published curve (``valuation.bonds.RISK_CURVES``) a code's dataset gives."""
+
+
+def quote_set_coverage(market: Snapshot) -> dict[str, dict[str, list[str]]]:
+    """The hub's coverage of the RUONIA OIS and key-rate swap series in ``market``: per dataset the sources present and
+    the expected ones missing (``curve_quote_sets`` coverage: ``source/dataset``)."""
+    ds = next((d for d in market.doc.get("datasets") or () if d.get("name") == "curve_quote_sets"), None)
+    cov = (ds or {}).get("coverage") or {}
+    out = {}
+    for name in RATES_DATASETS:
+        out[name] = {k: sorted(s.split("/")[0] for s in cov.get(k) or () if s.endswith("/" + name))
+                     for k in ("present", "missing")}
+    return out
+
+
+def input_codes(status: dict[str, str]) -> list[str]:
+    """``curve_missing:ruonia_ois``, ``curve_error:key_rate_swap``, ``curve_unbuilt:key_rate_swap``, ``fixings_error``
+    for the inputs of ``orchestrator.with_rates`` that are not ``ok``."""
+    out = [f"{INPUT_CODE[status[n]]}:{n}" for n in RATES_DATASETS if status.get(n, "ok") != "ok"]
+    return out + (["fixings_error"] if status.get("fixings", "ok") != "ok" else [])
+
+
+def _inferred_codes(lineage: dict[str, Any]) -> list[str]:
+    """The codes of a run made before ``with_rates`` recorded them, from its error messages."""
+    err, out = lineage.get("curve_error") or "", []
+    if "ruonia_ois" not in lineage and err:
+        out += ["curve_missing:ruonia_ois" if "no ruonia_ois quote set" in err else "curve_error:ruonia_ois",
+                "curve_unbuilt:key_rate_swap"]
+    elif "key_rate" not in lineage and err:
+        out.append("curve_missing:key_rate_swap" if "no key_rate_swap quote set" in err else "curve_error:key_rate_swap")
+    return out + (["fixings_error"] if lineage.get("fixings_error") else [])
+
+
+def input_notes(lineage: dict[str, Any] | None, business_date: date | str) -> list[dict[str, Any]]:
+    """What the run lacks, one ``{code, curve, text, detail}`` per code of its rates lineage (``with_rates``; inferred
+    from the error messages for an older run): ``curve`` is the published curve that is missing (None: fixings),
+    ``text`` the Russian line the run log and the risk pages show, ``detail`` the error (no position data)."""
+    if not lineage:
+        return []
+    d = date.fromisoformat(business_date) if isinstance(business_date, str) else business_date
+    codes = lineage.get("codes")
+    if codes is None:
+        codes = _inferred_codes(lineage)
+    out = []
+    for code in codes:
+        name = code.partition(":")[2]
+        out.append({"code": code, "curve": INPUT_CURVE.get(name),
+                    "text": INPUT_TEXT.get(code, code).format(d=f"{d:%d.%m}"), "detail": _detail(code, lineage)})
+    return out
+
+
+def _detail(code: str, lineage: dict[str, Any]) -> str | None:
+    if code == "fixings_error":
+        return lineage.get("fixings_error")
+    if code.startswith("curve_unbuilt"):
+        return None
+    if code.endswith(":key_rate_swap"):
+        return lineage.get("key_rate_error") or lineage.get("curve_error")
+    return lineage.get("curve_error")

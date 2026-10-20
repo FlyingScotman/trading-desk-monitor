@@ -31,7 +31,8 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    snapshot, an INTRADAY run (a preliminary one is an EOD run, the date's default until the final). The hub is
    asked (one list call, ``latest=true``) at most once per half-hour slot (``POLL_SLOT_S``, starting
    ``POLL_LAG_S`` after the cut times), and for the preliminary cut only until today has a run on it; a run is made
-   only for a cut newer than the last run's (or when the position sets changed). The flash PnL is measured against
+   only for a cut newer than the last run's, when the position sets changed, or when the previous close it is measured
+   against changed (the previous day's ``eod_final`` published late or corrected). The flash PnL is measured against
    the previous business day's ``eod_final``, else the newest earlier final or preliminary close, and the run says
    which (``pnl_basis``). Only the latest INTRADAY run of a date is kept (``store.prune_intraday``); intraday and
    preliminary bundles of dates older than ``KEEP_CUT_DAYS`` leave the cache (``cache.prune``) unless a shown run
@@ -219,7 +220,8 @@ class Autopilot:
         self._missing: dict[str, float] = {}   # hub date -> monotonic time the hub had no snapshot for it
         self._hub_failed = False               # this cycle's hub sync failed: no history step
         self._sync_later = 0                   # hub dates the sync left for the next cycle: no history step
-        self._history_dates: tuple[float, int, list[str]] | None = None  # (listed at, depth, hub dates newest first)
+        self._history_dates: tuple[float, int, list[tuple[str, str]]] | None = None
+        # (listed at, depth, [(hub date, its current snapshot id)] newest first)
         self._poll_slot: tuple | None = None   # (date, cut, slot) the hub was last asked for a cut of today in
         self._polled: dict[tuple, dict | None] = {}  # (date, cut) -> the hub's newest row of that cut, when asked
         self._calendar: tuple | None = None    # (static id, BusinessCalendar | None, valid from, valid to)
@@ -523,7 +525,8 @@ class Autopilot:
     def _history(self, settings: Settings, con: psycopg.Connection) -> tuple[str, str]:
         """Market history for the bond charts beyond the cache: the ``history_days`` latest hub dates, newest first,
         ``HISTORY_PER_CYCLE`` a cycle, straight into the store's tables (``history.fetch_hub``; not cached, see
-        ``desk.marketdata.history``). Only after a sync that reached the hub and left nothing for the next cycle: the
+        ``desk.marketdata.history``), and again a date whose loaded snapshot the hub has since superseded by a
+        correction (``history.superseded_dates``). Only after a sync that reached the hub and left nothing for the next cycle: the
         regular dates come first. The hub's date list is read again once per ``RECHECK_S``."""
         if self._hub_failed:
             return "skipped", "the hub sync failed this cycle"
@@ -535,14 +538,16 @@ class Autopilot:
         if (self._history_dates is None or self._history_dates[1] != depth
                 or now - self._history_dates[0] >= RECHECK_S):
             self._progress("history", 0, None, "список дат хаба")
-            self._history_dates = (now, depth, list(islice(cache.hub_dates(client), depth)))
-        dates = self._history_dates[2]
+            self._history_dates = (now, depth, list(islice(cache.hub_latest(client), depth)))
+        latest = self._history_dates[2]
+        dates = [d for d, _ in latest]
         if not dates:
             return "skipped", "the hub lists no dates"
         for d in [d for d, t in self._missing.items() if now - t >= MISSING_TTL_S]:
             del self._missing[d]
         have = history.loaded_dates(con) | set(SnapshotDir(Path(settings.snapshot_cache)).market_dates())
-        due = [d for d in dates if d not in have and d not in self._missing]  # cached dates load in the sync
+        corrected = set(history.superseded_dates(con, latest))  # loaded, then corrected on the hub (WEB-11)
+        due = [d for d in dates if (d not in have or d in corrected) and d not in self._missing]  # cached: the sync
         todo = due[:HISTORY_PER_CYCLE]
         loaded, missing = [], []
         for i, d in enumerate(todo):
@@ -564,7 +569,8 @@ class Autopilot:
         span = f"history_days {depth}: {len(dates)} on the hub back to {dates[-1]}"
         if not todo:
             return "ok", f"up to date ({span})"
-        parts = ["loaded " + ", ".join(loaded) if loaded else "nothing loaded"]
+        parts = ["loaded " + ", ".join(f"{d} (correction)" if d in corrected else d for d in loaded)
+                 if loaded else "nothing loaded"]
         if missing:
             parts.append(f"not loaded {', '.join(missing)}")
         if len(due) > len(todo):
@@ -697,7 +703,8 @@ class Autopilot:
         cut = "eod_preliminary" if t >= PRELIM_FROM else "intraday"
         rtype = "INTRADAY" if cut == "intraday" else "EOD"
         last = con.execute(
-            "SELECT run_id, market_snapshot_id, cut_ts, position_set_ids FROM run WHERE business_date = %s"
+            "SELECT run_id, market_snapshot_id, cut_ts, position_set_ids, prev_market_snapshot_id FROM run"
+            " WHERE business_date = %s"
             " AND run_type = %s AND cut_type = %s AND status = 'complete' ORDER BY run_id DESC LIMIT 1",
             (today, rtype, cut)).fetchone()
         slot = (today, cut, int((now.timestamp() - POLL_LAG_S) // POLL_SLOT_S))
@@ -719,13 +726,18 @@ class Autopilot:
                 target = (row["snapshot_id"], "new cut" if last is None or row_ts != last[2] else "cut corrected")
         if target is None and last is not None and sorted(last[3]) != ids:
             target = (last[1], "positions changed")
+        sd = SnapshotDir(Path(settings.snapshot_cache))
+        prev_cut = previous_market(sd, today.isoformat())
+        prev_id = sd.market_id(*prev_cut) if prev_cut else None
+        if target is None and last is not None and last[4] != prev_id:
+            target = (last[1], "previous close changed")  # the previous close arrived (or was corrected) after it
         when = "asked the hub" if asked else "next hub check in the next half-hour slot"
         if target is None:
             if last is not None:
                 return "ok", (f"up to date: run {last[0]} on {store.slice_label(today, cut, last[2])} ({when})")
             return "skipped", f"no {cut} cut of {today} on the hub yet ({when})"
         sid, why = target
-        sig = (cut, sid, tuple(ids), logic_version())
+        sig = (cut, sid, tuple(ids), prev_id, logic_version())
         if self._failed.get(f"{cut} {today}") == sig:
             return "skipped", f"{cut} {sid[:12]} failed before on the same inputs, not retried"
         cache_dir = Path(settings.snapshot_cache)

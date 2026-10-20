@@ -131,21 +131,45 @@ def check_against_standard_yields(params: ZcycParameters, standard_yields: list[
 def with_rates(market: MarketView, static: StaticView, core: MarketSnapshot) -> tuple[MarketSnapshot, dict[str, Any]]:
     """``core`` plus the RUONIA OIS curve (built once), the key-rate projection off it and the RUONIA and
     key-rate fixings. An input that cannot be built is left out with its error in the lineage: the floaters
-    that need it are then rejected by core with the reason, the rest of the book is unaffected."""
+    that need it are then rejected by core with the reason, the rest of the book is unaffected.
+
+    The lineage says what is missing and why (R14, R15): ``status`` per input (``ok``; ``missing``: the snapshot has
+    no quote set of the dataset dated the business date, a coverage gap of the hub; ``error``: the curve could not be
+    built; ``no_discount``: the key-rate curve needs the RUONIA OIS curve), ``codes`` for the run log and the pages
+    (``rates.input_notes``) and ``coverage``, the hub's own list of the present and missing quote-set series.
+    ``curve_error`` keeps the first error message (the RUONIA one, else the key-rate one)."""
     curves, lineage, fixings = list(core.curves), {}, ()
+    status: dict[str, str] = {}
+    lineage["coverage"] = rates.quote_set_coverage(market.snapshot)
+    ois = None
     try:
         ois = rates.ruonia_ois(market.snapshot, static.snapshot)
         curves.append(CurveEntry(ois.entry.curve_id, ois.entry.spec_id, ois.curve))
         lineage["ruonia_ois"] = ois.lineage
-        kr = rates.key_rate_projection(market.snapshot, static.snapshot, ois.curve)
-        curves.append(kr.entry)
-        lineage["key_rate"] = {k: v for k, v in kr.lineage.items() if k != "segments"}
+        status["ruonia_ois"] = "ok"
     except (rates.RatesInputError, SnapshotError, CoreRejection, ValueError) as e:
         lineage["curve_error"] = str(e)
+        status["ruonia_ois"] = "missing" if isinstance(e, rates.QuoteSetMissing) else "error"
+    if ois is None:
+        status["key_rate_swap"] = "no_discount"
+    else:
+        try:
+            kr = rates.key_rate_projection(market.snapshot, static.snapshot, ois.curve)
+            curves.append(kr.entry)
+            lineage["key_rate"] = {k: v for k, v in kr.lineage.items() if k != "segments"}
+            status["key_rate_swap"] = "ok"
+        except (rates.RatesInputError, SnapshotError, CoreRejection, ValueError) as e:
+            lineage.setdefault("curve_error", str(e))
+            lineage["key_rate_error"] = str(e)
+            status["key_rate_swap"] = "missing" if isinstance(e, rates.QuoteSetMissing) else "error"
     try:
         fixings, lineage["fixings"] = rates.fixing_entries(market.snapshot, static.snapshot)
+        status["fixings"] = "ok"
     except (SnapshotError, CoreRejection, ValueError) as e:
         lineage["fixings_error"] = str(e)
+        status["fixings"] = "error"
+    lineage["status"] = status
+    lineage["codes"] = rates.input_codes(status)
     return replace(core, curves=tuple(curves), fixings=fixings), lineage
 
 
