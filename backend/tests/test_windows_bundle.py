@@ -160,3 +160,36 @@ def test_desk_environ_drops_this_machines_pip_settings(monkeypatch):
     monkeypatch.setenv("PIP_INDEX_URL", "https://mirror.example/simple")
     env = deskctl.desk_environ()
     assert "PIP_USER" not in env and "PIP_INDEX_URL" not in env and env["PIP_NO_INPUT"] == "1"
+
+
+def test_patch_zip_holds_only_changed_files_and_overlays_exactly(monkeypatch, tmp_path):
+    def tree(root: Path) -> dict[str, bytes]:
+        return {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+    old = {"VERSION": b"1.0-a\n", "MANIFEST.sha256": b"m1", "python/python.exe": b"py", "app/deskctl.py": b"v1",
+           "wheelhouse/desk_backend-0.1.0-py3-none-any.whl": b"w1", "app/gone.txt": b"x"}
+    base = tmp_path / "old.zip"
+    with zipfile.ZipFile(base, "w") as z:
+        for rel, data in old.items():
+            z.writestr(f"DeskMonitor/{rel}", data)
+    stage = tmp_path / "stage"
+    new = {**{k: v for k, v in old.items() if k != "app/gone.txt"}, "VERSION": b"1.1-b\n", "MANIFEST.sha256": b"m2",
+           "wheelhouse/desk_backend-0.1.0-py3-none-any.whl": b"w2", "app/new.js": b"n"}
+    for rel, data in new.items():
+        (stage / rel).parent.mkdir(parents=True, exist_ok=True)
+        (stage / rel).write_bytes(data)
+    patch = build.write_patch(base, stage, "1.1-b", tmp_path, (2026, 10, 20, 0, 0, 0))
+    assert patch.name == "DeskMonitor-patch-1.0-a-to-1.1-b.zip"
+    with zipfile.ZipFile(patch) as z:
+        names = sorted(n.removeprefix("DeskMonitor/") for n in z.namelist())
+        assert names == ["MANIFEST.sha256", "PATCH_DELETE.txt", "PATCH_README.txt", "VERSION", "app/new.js",
+                         "wheelhouse/desk_backend-0.1.0-py3-none-any.whl"]
+        assert "1.1-b" in z.read("DeskMonitor/PATCH_README.txt").decode("utf-8-sig")
+        installed = tmp_path / "C"
+        zipfile.ZipFile(base).extractall(installed)
+        z.extractall(installed)
+    root = installed / "DeskMonitor"
+    (root / "PATCH_README.txt").unlink()
+    monkeypatch.setattr(deskctl, "ROOT", root)
+    deskctl.apply_patch_delete()
+    assert tree(root) == new

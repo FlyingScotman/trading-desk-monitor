@@ -1,6 +1,7 @@
 """Build the offline Windows bundle of Desk Monitor (dev only, runs at home): one zip, unzip, start.bat.
 
     python3.11 backend/tools/build_windows_bundle.py [--out dist] [--adapter-zip PATH] [--allow-dirty]
+                                                     [--patch-base OLD_BUNDLE.zip]
 
 Needs uv, git, network to PyPI and GitHub, and a Python with pip (``python3.11 -m pip``). Writes
 ``dist/DeskMonitor-<version>[-with-adapter].zip``, version ``<backend version>-<commit date>-<short sha>``
@@ -21,6 +22,11 @@ Needs uv, git, network to PyPI and GitHub, and a Python with pip (``python3.11 -
 
 start.bat makes the venv ``env/`` from ``python/`` and the wheelhouse, offline, on the first start and whenever
 the version or the folder changes; data and settings live in DESK_HOME (see backend/windows/deskctl.py).
+``--patch-base`` also writes ``DeskMonitor-patch-<old version>-to-<new version>.zip`` next to the full zip: only
+the files whose bytes differ from the old bundle or are new (``VERSION`` and ``MANIFEST.sha256`` always), under the
+same ``DeskMonitor/`` folder, plus ``PATCH_README.txt`` and, when files were dropped, ``PATCH_DELETE.txt`` (the
+new deskctl.py deletes those on start). Unpacked over the old folder it gives the new bundle's files exactly.
+
 Built from the files git tracks or sees (``git ls-files -co --exclude-standard``); a dirty tree is refused
 unless ``--allow-dirty``. Wheels and the zip take their timestamps from the HEAD commit (SOURCE_DATE_EPOCH).
 """
@@ -150,6 +156,63 @@ def crlf(data: bytes, bom: bool = False) -> bytes:
     return (b"\xef\xbb\xbf" if bom else b"") + data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
 
 
+PATCH_README = """\
+Desk Monitor: обновление {old} -> {new}
+
+Это небольшой архив-заплатка: только изменённые файлы. Старую папку программы не удаляйте.
+
+1) Остановите программу: двойной щелчок по stop.bat (или закройте окно start.bat).
+
+2) Распакуйте архив в C:\\DeskMonitor с заменой файлов. Проще всего так:
+   правой кнопкой по zip -> Свойства -> галочка «Разблокировать» -> ОК; затем откройте zip
+   двойным щелчком, зайдите в папку DeskMonitor внутри, выделите всё (Ctrl+A), скопируйте
+   и вставьте в папку, где у вас лежит start.bat (например C:\\DeskMonitor). На вопрос
+   Windows выберите «Заменить файлы в папке назначения».
+   Проверка: в файле VERSION в папке программы теперь {new}.
+
+3) Запустите start.bat. Он пересоберёт окружение (без интернета, ~1-2 минуты);
+   настройки, токен и данные сохранятся.
+
+4) В Настройках (http://127.0.0.1:8000/settings.html), раздел «Маркет-дата сервер»:
+   - Способ подключения: «Авто» (или «curl Windows»);
+   - Прокси: http://host:port БЕЗ логина и пароля - у вас вход по учётке Windows уже проверен;
+   - «Логин прокси» и «Пароль прокси» оставьте пустыми;
+   - «Сохранить», затем «Проверить связь».
+   Если всё же не пускает: укажите логин прокси (ДОМЕН\\логин) и пароль прокси
+   (кнопка «Сохранить пароль») и снова «Проверить связь».
+"""
+
+
+def write_patch(base_zip: Path, stage: Path, version: str, out_dir: Path, stamp: tuple) -> Path:
+    """``DeskMonitor-patch-<old>-to-<new>.zip``: the files of ``stage`` that are new or differ from ``base_zip``,
+    VERSION and MANIFEST.sha256 always, PATCH_README.txt, and PATCH_DELETE.txt when files were dropped."""
+    prefix = TOP + "/"
+    with zipfile.ZipFile(base_zip) as z:
+        old = {n[len(prefix):]: z.read(n) for n in z.namelist() if n.startswith(prefix) and not n.endswith("/")}
+    old_version = old.get("VERSION", b"unknown").decode().strip()
+    new = {p.relative_to(stage).as_posix(): p for p in sorted(stage.rglob("*")) if p.is_file()}
+    changed = [rel for rel, p in new.items()
+               if rel in ("VERSION", "MANIFEST.sha256") or old.get(rel) != p.read_bytes()]
+    dropped = sorted(set(old) - set(new))
+    out = out_dir / f"{TOP}-patch-{old_version}-to-{version}.zip"
+    extra = {"PATCH_README.txt": crlf(PATCH_README.format(old=old_version, new=version).encode(), bom=True)}
+    if dropped:
+        extra["PATCH_DELETE.txt"] = ("".join(f"{rel}\n" for rel in dropped)).encode()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for rel, data in [*((rel, new[rel].read_bytes()) for rel in changed), *extra.items()]:
+            info = zipfile.ZipInfo(prefix + rel, stamp)
+            info.compress_type, info.external_attr = zipfile.ZIP_DEFLATED, 0o644 << 16
+            z.writestr(info, data)
+    size = sum(new[rel].stat().st_size for rel in changed)
+    print(f"\npatch {out}  {out.stat().st_size / 1e6:.2f} MB ({size / 1e6:.2f} MB unpacked), sha256 {sha256(out)}\n"
+          f"  {old_version} -> {version}: {len(changed)} files changed or new, {len(dropped)} dropped")
+    for rel in changed:
+        print(f"    {rel}")
+    for rel in dropped:
+        print(f"    deleted: {rel}")
+    return out
+
+
 def check_wheelhouse(wh: Path, env: dict) -> None:
     """Prove the wheelhouse installs on Windows / CPython 3.11 offline, as start.bat does it: pip checks the
     wheel tags (it evaluates markers for this machine), uv the markers for Windows (sys_platform == 'win32')."""
@@ -171,6 +234,7 @@ def main() -> int:
     ap.add_argument("--python-release", default=PBS_RELEASE, help="python-build-standalone release tag")
     ap.add_argument("--python-version", default=PBS_PYTHON, help="the CPython 3.11.x of that release")
     ap.add_argument("--no-python", action="store_true", help="no bundled runtime: the PC then needs py -3.11")
+    ap.add_argument("--patch-base", type=Path, help="an older bundle zip: also write the patch zip from it")
     a = ap.parse_args()
     if not a.python_version.startswith("3.11."):
         sys.exit("the wheelhouse is cp311: --python-version must be 3.11.x")
@@ -271,6 +335,8 @@ def main() -> int:
         print(f"\n{out}  {out.stat().st_size / 1e6:.1f} MB, {len(listing) + 1} files, sha256 {sha256(out)}\n"
               f"version {version}; {py_line}; adapter: {len(adapter)} files\n"
               f"wheelhouse {n_whl} wheels; longest path in the zip ({len(longest)}): {longest}")
+        if a.patch_base:
+            write_patch(a.patch_base, stage, version, a.out, stamp)
     return 0
 
 

@@ -263,8 +263,26 @@ def _rmtree(p: Path) -> None:
     shutil.rmtree(p, onerror=retry)
 
 
+def apply_patch_delete() -> None:
+    """A patch zip (``build_windows_bundle.py --patch-base``) lists in ``PATCH_DELETE.txt`` the files the new version
+    no longer has; delete them (inside this folder only), then the list."""
+    listing = ROOT / "PATCH_DELETE.txt"
+    if not listing.is_file():
+        return
+    for line in listing.read_text(encoding="utf-8").splitlines():
+        parts = line.strip().replace("\\", "/").split("/")
+        if not line.strip() or ".." in parts or ":" in line or parts[0] in ("", "env"):
+            continue
+        try:
+            ROOT.joinpath(*parts).unlink(missing_ok=True)
+        except OSError:
+            pass
+    listing.unlink(missing_ok=True)
+
+
 def ensure_env(env: dict[str, str], *, force: bool = False) -> None:
     """Create ``env\\`` from the bundled runtime and the wheelhouse unless it already belongs to this bundle."""
+    apply_patch_delete()
     check_paths(env)
     want = {"version": version(), "root": str(ROOT)}
     try:
