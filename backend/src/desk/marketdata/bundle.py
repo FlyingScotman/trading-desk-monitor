@@ -80,6 +80,10 @@ class SnapshotDir:
         for p in sorted(self.root.glob("*.json.gz")):
             self._manifests[p.name.split(".")[0]] = _manifest(p)
 
+    def manifests(self) -> dict[str, dict[str, Any]]:
+        """snapshot id -> kind, cut_type, business_date, static_snapshot_id of every bundle in the folder."""
+        return {sid: dict(m) for sid, m in self._manifests.items()}
+
     def get(self, snapshot_id: str) -> Snapshot:
         return read_bundle(self.root / f"{snapshot_id}.json.gz")
 
