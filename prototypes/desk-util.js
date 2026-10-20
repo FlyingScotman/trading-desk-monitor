@@ -91,6 +91,22 @@
       : head + (reasons.length ? '. Без PnL: ' + reasons.map(r => r[0] + ' — ' + r[1]).join('; ') : '');
     return { n, m, none: m > 0 && n === 0, partial: n > 0 && n < m, reasons, tip };
   }
+  // Сумма f по позициям с PnL, значения null пропускаются; null — ни у одной позиции значения нет (не 0).
+  function pnlSum(list, f) {
+    let s = 0, k = 0;
+    list.forEach(p => { if (!pnlOk(p)) return; const v = f(p); if (v != null && isFinite(v)) { s += v; k++; } });
+    return k ? s : null;
+  }
+  // Разметка для страниц (стили .na и .part — на странице): «—» с причиной в подсказке; «частично: N из M позиций».
+  const escA = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const plural = (n, one, few, many) => { const a = n % 10, b = n % 100; return a === 1 && b !== 11 ? one : a >= 2 && a <= 4 && (b < 12 || b > 14) ? few : many; };
+  const pnlPartText = pc => pc && pc.partial ? 'частично: ' + pc.n + ' из ' + pc.m + ' ' + plural(pc.m, 'позиции', 'позиций', 'позиций') : '';
+  const pnlNaHtml = tip => `<span class="na" title="${escA(tip || 'PnL не посчитан')}">—</span>`;
+  const pnlPartHtml = pc => pc && pc.partial ? `<span class="part" title="${escA(pc.tip)}">${pnlPartText(pc)}</span>` : '';
+  // Рейтинг: «нет данных» (в хабе рейтинга нет) — не грейд, а корзина «без рейтинга» вместе с позициями без рейтинга.
+  const NO_RATING = 'нет данных', NO_RATING_LABEL = 'без рейтинга';
+  const isRated = r => !!r && r !== NO_RATING;
+  const ratingLabel = r => isRated(r) ? r : NO_RATING_LABEL;
   function bucketMatrix(list, curves) {
     curves = curves || Object.keys(CURVES);
     const m = {}; curves.forEach(c => { m[c] = new Array(BUCKETS.length).fill(0); });
@@ -568,7 +584,8 @@
       ksAvg: idxSeries('КС').reduce((a, b) => a + b, 0) / N, ksEnd: idxSeries('КС')[N - 1] };
   }
 
-  D.util = { sum, groupBy, bucketMatrix, netFx, runScenario, curveRate, hasPoints, pnlOk, pnlCover, fundingFx, spreadShock, ownSpr01, ACCURACY_BP,
+  D.util = { sum, groupBy, bucketMatrix, netFx, runScenario, curveRate, hasPoints, pnlOk, pnlCover, pnlSum, pnlPartText, pnlNaHtml, pnlPartHtml,
+    NO_RATING, NO_RATING_LABEL, isRated, ratingLabel, fundingFx, spreadShock, ownSpr01, ACCURACY_BP,
     runCarry, ksPath, carryEnd, indexAt, addDays, monthsAdd,
     baseCurve, yieldTenor, spreadTo, bondKey, bondRows, wavg, bondHistory, normHistory };
 })();

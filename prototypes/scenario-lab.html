@@ -135,6 +135,13 @@ input[type=range]{width:100%;accent-color:var(--accent);margin:0;height:18px}
 .chk{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--fg-2);cursor:pointer;padding:4px 0}
 .chk input{accent-color:var(--accent);margin:0}
 .note{font-size:11px;color:var(--fg-3);margin:4px 0 0}
+/* корзина «без рейтинга» — отдельно от грейдов */
+.row.norat{margin-top:6px;padding-top:6px;border-top:1px dashed var(--line-strong)}
+.row.norat label{font-style:italic}
+/* PnL не посчитан (R10): прочерк с причиной в подсказке; «частично: N из M позиций» */
+.na{color:var(--fg-3);cursor:help;text-decoration:underline dotted;text-underline-offset:3px}
+.part{font:11px var(--font-sans);color:var(--fg-2);border:1px dashed var(--warn);border-radius:2px;padding:0 5px;cursor:help;white-space:nowrap}
+.pm{color:var(--fg-3);margin-left:1px}
 .save{display:flex;gap:6px;flex-wrap:wrap}
 .save input{flex:1;min-width:140px;border:1px solid var(--line-strong);background:var(--surface);padding:4px 8px;border-radius:3px}
 
@@ -486,6 +493,11 @@ input[type=date].dt{border:1px solid var(--line-strong);background:var(--surface
 DESK.scope.apply();  // фильтр Desk Monitor (юрлицо, деск, портфель, книги…): только его позиции (desk-scope.js)
 const D = window.DESK, U = D.util, P = D.positions, BK = D.BUCKETS;
 const RAT = D.RATING_ORDER, BOOKK = Object.keys(D.BOOKS);
+// Грейды — слайдерами по шкале; «нет данных» (в хабе нет рейтинга) — не грейд: одна корзина «без рейтинга» после них.
+// Ключ шока корзины — сам U.NO_RATING (его читает util.spreadShock по p.rating).
+const RAT_G = RAT.filter(U.isRated), NORAT = RAT.includes(U.NO_RATING) || P.some(p => p.rating === U.NO_RATING && p.cs01);
+const NORAT_POS = P.filter(p => p.rating === U.NO_RATING && p.cs01), NORAT_CS = NORAT_POS.reduce((s, p) => s + p.cs01, 0);
+const RAT_KEYS = RAT_G.concat(NORAT ? [U.NO_RATING] : []);
 const posById = {}; P.forEach(p => posById[p.id] = p);
 const DV = U.bucketMatrix(P);
 // в редакторе — только кривые, на которых есть риск (КБД 'RUB OFZ' — рыночная кривая: риск ОФЗ на RUONIA + спред ОФЗ)
@@ -541,7 +553,7 @@ function normalize(sc){
   const fx = {}; FXC.forEach(k => fx[k] = (sc.fx && sc.fx[k]) || 0);
   const sp = sc.spreads || {}; const rating = {}, sector = {};
   // _all раскладывается по рейтингам (у всех бумаг с CS01 есть рейтинг); старый формат — рейтинг ключом верхнего уровня
-  RAT.forEach(r => rating[r] = (typeof sp[r] === 'number' ? sp[r] : 0) + ((sp.rating && sp.rating[r]) || 0) + (sp._all || 0));
+  RAT_KEYS.forEach(r => rating[r] = (typeof sp[r] === 'number' ? sp[r] : 0) + ((sp.rating && sp.rating[r]) || 0) + (sp._all || 0));
   SECT.forEach(k => sector[k] = (sp.sector && sp.sector[k]) || 0);
   const basis = RUBC.length === 2 ? Math.round(curves['RUB KEY'].reduce((a, v, i) => a + v - curves['RUB RUONIA'][i], 0) / BK.length) : 0;
   return {name: sc.name, curves, fx, rating, sector, issuer: Object.assign({}, sp.issuer || {}), mult: sp._mult || 1, ofz: sc.ofzSpread || 0, basis};
@@ -736,10 +748,13 @@ function renderFx(){
 }
 $('#fx-box').addEventListener('input', e => { const c = e.target.dataset.fx; if (!c) return; S.ed.fx[c] = +e.target.value; const row = e.target.closest('.row'); row.querySelector('output').textContent = snum(S.ed.fx[c]) + '%'; row.querySelector('label span').textContent = num(D.FX[c] * (1 + S.ed.fx[c] / 100), 2); markDirty(); });
 function renderCredit(){
-  $('#cr-box').innerHTML = RAT.map(r => `<div class="row"><label for="cr-${r}">${r}</label><input type="range" id="cr-${r}" data-r="${r}" min="-100" max="600" step="5" value="${S.ed.rating[r]}"><output class="num" for="cr-${r}">${snum(S.ed.rating[r])} б.п.</output></div>`).join('')
+  const crRow = (r, i, label, cls, title) => `<div class="row${cls ? ' ' + cls : ''}"><label for="cr-${i}"${title ? ` title="${esc(title)}"` : ''}>${esc(label)}</label><input type="range" id="cr-${i}" data-r="${esc(r)}" min="-100" max="600" step="5" value="${S.ed.rating[r]}"><output class="num" for="cr-${i}">${snum(S.ed.rating[r])} б.п.</output></div>`;
+  $('#cr-box').innerHTML = RAT_G.map((r, i) => crRow(r, i, r)).join('')
+    + (NORAT ? crRow(U.NO_RATING, 'norat', U.NO_RATING_LABEL, 'norat', 'Бумаги, рейтинга которых нет в справочнике (хаб: «нет данных»), — одна корзина, не грейд')
+      + `<p class="note">«${U.NO_RATING_LABEL}» — не грейд шкалы: бумаги без рейтинга в справочнике (${NORAT_POS.length}, CS01 ${num(NORAT_CS / 1e3, 0)} тыс ₽/б.п.), шокируются одной корзиной.</p>` : '')
     + `<div class="row"><label for="cr-mult">Множитель спредов</label><input type="range" id="cr-mult" min="0.5" max="3" step="0.1" value="${S.ed.mult}"><output class="num" for="cr-mult">×${num(S.ed.mult, 1)}</output></div>`
     + `<details style="margin-top:4px"><summary class="note" style="cursor:pointer">По секторам (${SECT.length})</summary>`
-    + SECT.map(k => `<div class="row"><label for="cs-${esc(k)}" title="${esc(k)}">${esc(k)}</label><input type="range" id="cs-${esc(k)}" data-sec="${esc(k)}" min="-100" max="600" step="5" value="${S.ed.sector[k]}"><output class="num">${snum(S.ed.sector[k])} б.п.</output></div>`).join('') + '</details>'
+    + SECT.map((k, i) => { const lb = k === U.NO_RATING ? 'без сектора' : k; return `<div class="row"><label for="cs-${i}" title="${esc(lb)}">${esc(lb)}</label><input type="range" id="cs-${i}" data-sec="${esc(k)}" min="-100" max="600" step="5" value="${S.ed.sector[k]}"><output class="num" for="cs-${i}">${snum(S.ed.sector[k])} б.п.</output></div>`; }).join('') + '</details>'
     + (Object.keys(S.ed.issuer).length ? `<p class="note">По эмитентам (из пресета): ${esc(Object.keys(S.ed.issuer).map(k => k + ' ' + snum(S.ed.issuer[k])).join(', '))} б.п.</p>` : '')
     + '<p class="note">Шоки складываются: рейтинг + сектор + эмитент + (k − 1) × спред. Спред RUB-корпоратов — к RUONIA. Суверенные валютные бумаги шокируются как остальные; ОФЗ — слайдером «Спред ОФЗ − RUONIA».</p>';
 }
@@ -857,9 +872,20 @@ document.addEventListener('click', e => {
 // ================== PnL EXPLAIN ==================
 // Флэш (explained) — по рыночным курсам; официальный PnL — по курсам ЦБ, приходит на T+1.
 // official = explained + fxBasis (курсы ЦБ − рынок) + unexplained.
-const EXC = [['carry','Carry'],['rolldown','Rolldown'],['rates','Rates'],['spread','Spread'],['fx','FX'],['funding','Фондир.'],['convexity','Convexity'],['newTrades','Новые сделки'],['fundCarry','Фонд. ДС carry'],['fundFx','Фонд. ДС FX']];
+// «Прочее» и «По отчёту» (PnL позиций, оценённых по отчёту, — разница отчётных стоимостей) — колонками, когда они есть:
+// без них компоненты не складываются во флэш
+const EXC_OPT = k => P.some(p => U.pnlOk(p) && Math.abs(p.pnl[k] || 0) > 1);
+const EXC = [['carry','Carry'],['rolldown','Rolldown'],['rates','Rates'],['spread','Spread'],['fx','FX'],['funding','Фондир.'],['convexity','Convexity'],['newTrades','Новые сделки']]
+  .concat(EXC_OPT('other') ? [['other','Прочее']] : [], EXC_OPT('reported') ? [['reported','По отчёту']] : [], [['fundCarry','Фонд. ДС carry'],['fundFx','Фонд. ДС FX']]);
 const NUMK = EXC.map(x => x[0]).concat(['explained','fxBasis','official','unexplained']);
 const TODAY = D.history[D.history.length - 1].date;
+// R10: позиция без PnL — «—» с причиной, в суммы не входит; итоги — только по позициям с PnL, с пометкой «частично».
+// Официальный PnL приходит на T+1: до этого official и unexplained — «—», а не 0.
+const READY = !D.official || D.official.received !== false;
+const OFF_WAIT = 'Официальный PnL (курсы ЦБ) ещё не получен — ожидается T+1';
+const pnlWhy = p => U.pnlOk(p) ? null : 'PnL не посчитан: ' + ((p.pnl && p.pnl.reasonText) || D.pnlReasonText || 'причина не указана') + (p.pnl && p.pnl.reasonDetail ? ' (' + p.pnl.reasonDetail + ')' : '');
+const na = tip => U.pnlNaHtml(tip);
+const smlnN = (x, d) => x == null ? '—' : smln(x, d);
 function status(u, o, isRow){ const tol = Math.max(2e6, 0.05 * Math.abs(o)), a = Math.abs(u); return a > tol ? 'crit' : a > tol * (isRow ? .25 : .5) ? 'warn' : 'ok'; }
 function zero(){ const o = {}; NUMK.forEach(k => o[k] = 0); return o; }
 function addTo(a, b){ NUMK.forEach(k => a[k] += b[k]); }
@@ -868,8 +894,9 @@ const TREE = (function(){
   BOOKK.forEach(b => {
     const meta = D.BOOKS[b];
     const kids = P.filter(p => p.book === b).map(p => {
-      const r = Object.assign({kind:'pos', key:'p' + p.id, name:p.name, sub:`${p.assetClass} · ${p.ccy}${p.newToday ? ' · новая сделка' : ''}`, note:p.pnl.breakNote}, zero());
-      ['carry','rolldown','rates','spread','fx','funding','convexity','newTrades','explained','fxBasis','official','unexplained'].forEach(k => r[k] = p.pnl[k] || 0);
+      const ok = U.pnlOk(p);
+      const r = Object.assign({kind:'pos', key:'p' + p.id, name:p.name, sub:`${p.assetClass} · ${p.ccy}${p.newToday ? ' · новая сделка' : ''}`, note:ok ? p.pnl.breakNote : null, p, na: pnlWhy(p)}, zero());
+      if (ok) NUMK.filter(k => k !== 'fundCarry' && k !== 'fundFx').forEach(k => r[k] = p.pnl[k] || 0);
       return r;
     });
     // фондирование уровня книги (остатки ДС, РЕПО); фондирование облигаций — в колонке «Фондир.» позиций
@@ -881,6 +908,12 @@ const TREE = (function(){
     d.children.push(bn); addTo(d, bn);
   });
   const tot = zero(); desks.forEach(d => addTo(tot, d));
+  // покрытие PnL узла: ни у одной позиции нет PnL (и нет фондирования книги) — «—»; не у всех — «частично»
+  const cover = (n, ps, fund) => { const c = U.pnlCover(ps); n.none = c.none && !fund;
+    n.cover = c.none && fund ? Object.assign({}, c, {partial: true, tip: 'Только фондирование книги. ' + c.tip}) : c; };
+  const posOf = bn => bn.children.filter(k => k.kind === 'pos').map(k => k.p), fundIn = bn => bn.children.some(k => k.kind === 'fund');
+  desks.forEach(d => { d.children.forEach(bn => cover(bn, posOf(bn), fundIn(bn))); cover(d, d.children.flatMap(posOf), d.children.some(fundIn)); });
+  cover(tot, desks.flatMap(d => d.children.flatMap(posOf)), desks.some(d => d.children.some(fundIn)));
   const byU = (a, b) => (a.kind === 'fund') - (b.kind === 'fund') || Math.abs(b.unexplained) - Math.abs(a.unexplained);
   desks.sort(byU); desks.forEach(d => { d.children.sort(byU); d.children.forEach(b => b.children.sort(byU)); });
   return {desks, tot};
@@ -889,20 +922,28 @@ const TREE = (function(){
 TREE.desks.forEach(d => S.open.add(d.key));
 (function(){ let best = null; TREE.desks.forEach(d => d.children.forEach(b => { if (!best || Math.abs(b.unexplained) > Math.abs(best.unexplained)) best = b; })); if (best) S.open.add(best.key); })();
 
+// null — не посчитано (нет PnL ни у одной позиции, официальный ещё не пришёл): «—», а не 0
+const hUn = h => h.pnlOfficial == null || h.pnlExplained == null ? null : h.pnlOfficial - h.pnlExplained;
 function dayTotals(date){
-  if (date === TODAY) { const t = TREE.tot; return {official:t.official, explained:t.explained, fxBasis:t.fxBasis, unexplained:t.unexplained, detail:true}; }
-  const h = D.history.find(x => x.date === date); return {official:h.pnlOfficial, explained:h.pnlExplained, fxBasis:0, unexplained:h.pnlOfficial - h.pnlExplained, detail:false};
+  if (date === TODAY) { const t = TREE.tot, no = t.none;
+    return {official:no || !READY ? null : t.official, explained:no ? null : t.explained, fxBasis:no ? null : t.fxBasis, unexplained:no || !READY ? null : t.unexplained, detail:true, cover:t.cover,
+      tip: no ? t.cover.tip : OFF_WAIT}; }
+  const h = D.history.find(x => x.date === date);
+  return {official:h.pnlOfficial, explained:h.pnlExplained, fxBasis:h.pnlExplained == null ? null : 0, unexplained:hUn(h), detail:false, tip:'PnL за ' + fdate(date) + ' не посчитан'};
 }
+const dayChip = t => t.explained == null ? chip('info', 'PnL не посчитан') : t.official == null ? chip('info', 'Ожидается T+1') : chip(status(t.unexplained, t.official, false));
 function renderRecon(){
-  const t = dayTotals(S.date), st = status(t.unexplained, t.official, false), pct = t.official ? t.unexplained / Math.abs(t.official) * 100 : 0;
+  const t = dayTotals(S.date), pct = t.official && t.unexplained != null ? t.unexplained / Math.abs(t.official) * 100 : null;
+  const val = (x, tip) => x == null ? na(tip) : smln(x) + '<small>млн ₽</small>', pc = t.detail ? t.cover : null;
   const opts = D.history.slice().reverse().map(h => `<option value="${h.date}"${h.date === S.date ? ' selected' : ''}>${fdate(h.date)}${h.date === TODAY ? ' · детализация' : ' · только итоги'}</option>`).join('');
   $('#recon').innerHTML = `<div class="datebox"><label class="lbl mono muted" for="ex-date" style="font:600 10px var(--font-mono);letter-spacing:.08em;text-transform:uppercase">Дата</label><select id="ex-date">${opts}</select></div>
-    <div class="kpi"><span class="lbl">Official PnL (ЦБ)</span><span class="val">${smln(t.official)}<small>млн ₽</small></span></div><span class="op">−</span>
-    <div class="kpi"><span class="lbl">Флэш (рынок)</span><span class="val">${smln(t.explained)}<small>млн ₽</small></span></div><span class="op">−</span>
-    <div class="kpi"><span class="lbl">Курсы ЦБ − рынок</span><span class="val">${smln(t.fxBasis)}<small>млн ₽</small></span></div><span class="op">=</span>
-    <div class="kpi"><span class="lbl">Unexplained</span><span class="val">${smln(t.unexplained)}<small>млн ₽</small></span></div>
-    <div class="kpi"><span class="lbl">% unexplained</span><span class="val">${num(Math.abs(pct), 1)}<small>%</small></span></div>
-    <div class="kpi"><span class="lbl">Статус</span>${chip(st)}<span class="muted" style="font-size:11px">порог условный: max(5% · |official|, 2 млн ₽)</span></div>
+    <div class="kpi"><span class="lbl">Official PnL (ЦБ)</span><span class="val">${val(t.official, t.explained == null ? t.tip : OFF_WAIT)}</span></div><span class="op">−</span>
+    <div class="kpi"><span class="lbl">Флэш (рынок)</span><span class="val">${val(t.explained, t.tip)}</span></div><span class="op">−</span>
+    <div class="kpi"><span class="lbl">Курсы ЦБ − рынок</span><span class="val">${val(t.fxBasis, t.tip)}</span></div><span class="op">=</span>
+    <div class="kpi"><span class="lbl">Unexplained</span><span class="val">${val(t.unexplained, t.explained == null ? t.tip : OFF_WAIT)}</span></div>
+    <div class="kpi"><span class="lbl">% unexplained</span><span class="val">${pct == null ? '—' : num(Math.abs(pct), 1) + '<small>%</small>'}</span></div>
+    <div class="kpi"><span class="lbl">Статус</span>${dayChip(t)}<span class="muted" style="font-size:11px">порог условный: max(5% · |official|, 2 млн ₽)</span></div>
+    ${pc && pc.partial ? `<div class="kpi" style="max-width:320px"><span class="lbl">Покрытие PnL</span>${U.pnlPartHtml(pc)}<span class="muted" style="font-size:11px">итоги — только по позициям с PnL. Без PnL: ${esc(pc.reasons.map(x => x[0] + ' — ' + x[1]).join('; '))}</span></div>` : ''}
     ${t.detail ? '' : '<div class="kpi" style="max-width:280px"><span class="lbl">Детализация</span><span class="muted" style="font-size:12px">За эту дату хранятся только итоги. Позиции и компоненты — только за ' + fdate(TODAY) + '.</span></div>'}`;
   $('#ex-date').addEventListener('change', e => { S.date = e.target.value; renderExplain(); });
 }
@@ -915,18 +956,28 @@ function ttStyle(){ return {backgroundColor: tok('--surface'), borderColor: tok(
 function renderWaterfall(){
   const t = dayTotals(S.date), c = ch('wf');
   const items = [];
+  if (t.explained == null) {   // R10: PnL не посчитан — причина вместо нулевого водопада
+    $('#wf-hint').textContent = 'млн ₽ · ' + fdate(S.date) + ' · PnL не посчитан';
+    c.setOption({xAxis:{show:false}, yAxis:{show:false}, series:[], title:{text:t.tip, left:'center', top:'middle', textStyle:{color:tok('--fg-3'), fontSize:12, fontWeight:'normal', width:420, overflow:'break'}}}, true);
+    return;
+  }
   if (t.detail) {
     let cum = 0; const tot = TREE.tot;
     EXC.forEach(([k, n]) => { items.push({n, s:cum, e:cum + tot[k], v:tot[k], kind:'step'}); cum += tot[k]; });
     items.push({n:'= Флэш', s:0, e:tot.explained, v:tot.explained, kind:'total'});
     items.push({n:'Курсы ЦБ', s:tot.explained, e:tot.explained + tot.fxBasis, v:tot.fxBasis, kind:'step'});
-    items.push({n:'Unexplained', s:tot.explained + tot.fxBasis, e:tot.official, v:tot.unexplained, kind:'un'});
-    items.push({n:'= Official', s:0, e:tot.official, v:tot.official, kind:'total'});
-    $('#wf-hint').textContent = 'млн ₽ · ' + fdate(S.date) + ' · флэш по рыночным курсам, официальный — по курсам ЦБ';
+    if (READY) {
+      items.push({n:'Unexplained', s:tot.explained + tot.fxBasis, e:tot.official, v:tot.unexplained, kind:'un'});
+      items.push({n:'= Official', s:0, e:tot.official, v:tot.official, kind:'total'});
+    } else items.push({n:'= Explain ЦБ', s:0, e:tot.explained + tot.fxBasis, v:tot.explained + tot.fxBasis, kind:'total'});
+    $('#wf-hint').textContent = 'млн ₽ · ' + fdate(S.date) + ' · флэш по рыночным курсам, ' + (READY ? 'официальный — по курсам ЦБ' : 'официальный — T+1') +
+      (tot.cover.partial ? ' · ' + U.pnlPartText(tot.cover) : '');
   } else {
     items.push({n:'= Explained', s:0, e:t.explained, v:t.explained, kind:'total'});
-    items.push({n:'Unexplained', s:t.explained, e:t.official, v:t.unexplained, kind:'un'});
-    items.push({n:'= Official', s:0, e:t.official, v:t.official, kind:'total'});
+    if (t.official != null) {
+      items.push({n:'Unexplained', s:t.explained, e:t.official, v:t.unexplained, kind:'un'});
+      items.push({n:'= Official', s:0, e:t.official, v:t.official, kind:'total'});
+    }
     $('#wf-hint').textContent = 'млн ₽ · ' + fdate(S.date) + ' · только итоги, компонентов нет';
   }
   const col = {pos:tok('--pos'), neg:tok('--neg'), tot:tok('--accent'), fg:tok('--fg'), fg2:tok('--fg-2'), line:tok('--line'), line2:tok('--line-strong')};
@@ -937,7 +988,7 @@ function renderWaterfall(){
     animation: !reduced, animationDuration: 300,
     grid:{left:56, right:12, top:24, bottom: narrow ? 64 : 34},
     tooltip: Object.assign({trigger:'item', formatter: p => { const it = items[p.dataIndex]; return `<b>${it.n}</b><br>${smln(it.v)} млн ₽` + (it.kind === 'step' ? `<br><span style="color:${col.fg2}">нарастающим: ${smln(it.e)} млн</span>` : ''); }}, ttStyle()),
-    xAxis:{type:'category', data: items.map(i => i.n), axisLine:{lineStyle:{color:col.line2}}, axisTick:{show:false}, axisLabel:Object.assign({}, bt, {color:col.fg2, interval:0, rotate: narrow ? 40 : 0, fontSize: narrow ? 9 : 10, formatter: v => narrow ? v : v.replace('Новые сделки', 'Новые\nсделки').replace('Фонд. ДС carry', 'Фонд. ДС\ncarry').replace('Фонд. ДС FX', 'Фонд. ДС\nFX').replace('= Флэш', '=\nФлэш').replace('Курсы ЦБ', 'Курсы\nЦБ').replace('= Official', '=\nOfficial')})},
+    xAxis:{type:'category', data: items.map(i => i.n), axisLine:{lineStyle:{color:col.line2}}, axisTick:{show:false}, axisLabel:Object.assign({}, bt, {color:col.fg2, interval:0, rotate: narrow ? 40 : 0, fontSize: narrow ? 9 : 10, formatter: v => narrow ? v : v.replace('Новые сделки', 'Новые\nсделки').replace('По отчёту', 'По\nотчёту').replace('Фонд. ДС carry', 'Фонд. ДС\ncarry').replace('Фонд. ДС FX', 'Фонд. ДС\nFX').replace('= Флэш', '=\nФлэш').replace('Курсы ЦБ', 'Курсы\nЦБ').replace('= Official', '=\nOfficial')})},
     yAxis:{type:'value', splitLine:{lineStyle:{color:col.line}}, axisLabel:Object.assign({}, bt, {formatter: v => num(v / 1e6, 0)})},
     series:[{type:'custom', data: items.map((it, i) => [i, it.s, it.e]), encode:{x:0, y:[1, 2]},
       renderItem: (params, api) => {
@@ -962,17 +1013,17 @@ function renderHistory(){
   const tt = Object.assign({trigger:'axis', axisPointer:{type:'line', lineStyle:{color:line2}}}, ttStyle());
   const m = ch('h-main'), u = ch('h-un'), cu = ch('h-cum');
   m.setOption({animation:!reduced, grid:{left:46, right:10, top:26, bottom:18}, legend:{top:0, right:6, itemWidth:14, itemHeight:2, textStyle:{color:fg2, fontSize:11}, data:['Official','Explained']},
-    tooltip: Object.assign({}, tt, {formatter: ps => `<b>${fdate(H[ps[0].dataIndex].date)}</b><br>` + ps.map(p => `${p.marker}${p.seriesName}: ${smln(p.value)} млн`).join('<br>') + `<br>Unexplained: ${smln(H[ps[0].dataIndex].pnlOfficial - H[ps[0].dataIndex].pnlExplained)} млн`}),
+    tooltip: Object.assign({}, tt, {formatter: ps => `<b>${fdate(H[ps[0].dataIndex].date)}</b><br>` + ps.map(p => `${p.marker}${p.seriesName}: ${p.value == null ? '— не посчитан' : smln(p.value) + ' млн'}`).join('<br>') + `<br>Unexplained: ${smlnN(hUn(H[ps[0].dataIndex]))} млн`}),
     xAxis: ax(false), yAxis: ya(),
     series:[{name:'Official', type:'line', data:H.map(h => h.pnlOfficial), symbol:'circle', symbolSize:5, lineStyle:{width:2, color:tok('--c1')}, itemStyle:{color:tok('--c1')}, markLine:mark},
             {name:'Explained', type:'line', data:H.map(h => h.pnlExplained), symbol:'circle', symbolSize:5, lineStyle:{width:2, color:tok('--c2'), type:[4, 3]}, itemStyle:{color:tok('--c2')}}]}, true);
   u.setOption({animation:!reduced, grid:{left:46, right:10, top:8, bottom:18},
-    tooltip: Object.assign({}, tt, {axisPointer:{type:'shadow', shadowStyle:{color:'rgba(127,127,127,.12)'}}, formatter: ps => { const h = H[ps[0].dataIndex], v = h.pnlOfficial - h.pnlExplained, st = status(v, h.pnlOfficial, false); return `<b>${fdate(h.date)}</b><br>Unexplained: ${smln(v)} млн<br>Статус: ${ST_LBL[st]}`; }}),
+    tooltip: Object.assign({}, tt, {axisPointer:{type:'shadow', shadowStyle:{color:'rgba(127,127,127,.12)'}}, formatter: ps => { const h = H[ps[0].dataIndex], v = hUn(h); return `<b>${fdate(h.date)}</b><br>Unexplained: ${smlnN(v)} млн<br>Статус: ${v == null ? 'PnL не посчитан' : ST_LBL[status(v, h.pnlOfficial, false)]}`; }}),
     xAxis: ax(false), yAxis: ya(),
-    series:[{type:'bar', barWidth:'55%', data: H.map(h => { const v = h.pnlOfficial - h.pnlExplained, st = status(v, h.pnlOfficial, false); return {value:v, itemStyle:{color: st === 'crit' ? tok('--crit') : st === 'warn' ? tok('--warn') : tok('--fg-3'), borderRadius:1}}; }),
+    series:[{type:'bar', barWidth:'55%', data: H.map(h => { const v = hUn(h), st = v == null ? 'ok' : status(v, h.pnlOfficial, false); return {value:v, itemStyle:{color: st === 'crit' ? tok('--crit') : st === 'warn' ? tok('--warn') : tok('--fg-3'), borderRadius:1}}; }),
       markLine:{silent:true, symbol:'none', lineStyle:{color:line2, type:'dashed'}, label:{show:false}, data:[{yAxis:2e6}, {yAxis:-2e6}, {xAxis:selI, lineStyle:{color:tok('--accent'), type:'solid'}}]}}]}, true);
   cu.setOption({animation:!reduced, grid:{left:46, right:10, top:8, bottom:22},
-    tooltip: Object.assign({}, tt, {formatter: ps => `<b>${fdate(H[ps[0].dataIndex].date)}</b><br>Накопленный: ${smln(ps[0].value)} млн<br>За день: ${smln(H[ps[0].dataIndex].pnlOfficial)} млн`}),
+    tooltip: Object.assign({}, tt, {formatter: ps => `<b>${fdate(H[ps[0].dataIndex].date)}</b><br>Накопленный: ${smlnN(ps[0].value)} млн<br>За день: ${H[ps[0].dataIndex].pnlOfficial == null ? '— не посчитан' : smln(H[ps[0].dataIndex].pnlOfficial) + ' млн'}`}),
     xAxis: ax(true), yAxis: ya(),
     series:[{type:'line', data:H.map(h => h.pnlCum), symbol:'none', lineStyle:{width:2, color:tok('--accent')}, areaStyle:{color:tok('--accent'), opacity:.12}, markLine:mark}]}, true);
   [m, u, cu].forEach(c => { c.group = 'hist'; });
@@ -980,11 +1031,20 @@ function renderHistory(){
   [m, u, cu].forEach(c => { if (c.__bound) return; c.__bound = true; c.getZr().on('click', e => { const pt = [e.offsetX, e.offsetY]; if (!c.containPixel('grid', pt)) return; const i = Math.round(c.convertFromPixel({xAxisIndex:0}, pt)[0]); if (H[i]) { S.date = H[i].date; renderExplain(); } }); });
 }
 
-function cellsFor(r){ return NUMK.filter(k => k !== 'explained' && k !== 'fxBasis' && k !== 'official' && k !== 'unexplained').map(k => `<td class="n${r[k] === 0 ? ' z' : ''}">${r[k] === 0 ? '·' : smln(r[k])}</td>`).join('') + `<td class="n">${smln(r.explained)}</td><td class="n${r.fxBasis ? '' : ' z'}">${r.fxBasis ? smln(r.fxBasis) : '·'}</td><td class="n">${smln(r.official)}</td><td class="n uc">${r.kind === 'fund' ? '<span class="muted">·</span>' : smln(r.unexplained)}</td>`; }
+const NCOL = NUMK.length;
+function cellsFor(r){
+  const tip = r.na || (r.none ? r.cover.tip : null);
+  if (tip) return `<td class="n">${na(tip)}</td>`.repeat(NCOL);   // R10: PnL не посчитан — «—» во всех колонках, не 0
+  const part = r.cover && r.cover.partial ? `<sup class="pm" title="${esc(r.cover.tip)}">*</sup>` : '';
+  const off = v => READY ? smln(v) : na(OFF_WAIT);
+  return NUMK.filter(k => k !== 'explained' && k !== 'fxBasis' && k !== 'official' && k !== 'unexplained').map(k => `<td class="n${r[k] === 0 ? ' z' : ''}">${r[k] === 0 ? '·' : smln(r[k])}</td>`).join('') + `<td class="n">${smln(r.explained)}${part}</td><td class="n${r.fxBasis ? '' : ' z'}">${r.fxBasis ? smln(r.fxBasis) : '·'}</td><td class="n">${off(r.official)}${READY ? part : ''}</td><td class="n uc">${r.kind === 'fund' ? '<span class="muted">·</span>' : off(r.unexplained)}</td>`;
+}
+// статус строки: без PnL / до T+1 — «PnL не посчитан» / «Ожидается», иначе по unexplained
+const rowChip = (r, isRow) => r.na || r.none ? chip('info', 'PnL не посчитан') : !READY ? chip('info', 'Ожидается T+1') : chip(status(r.unexplained, r.official, isRow));
 const CHEV = '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M3 1l5 4-5 4z"/></svg>';
 function renderHier(){
   const wrap = $('#hier-wrap');
-  if (S.date !== TODAY) { wrap.innerHTML = `<div class="empty"><b>Позиционной детализации за ${fdate(S.date)} нет</b>Хранятся только итоги дня: official ${smln(dayTotals(S.date).official)} млн, explained ${smln(dayTotals(S.date).explained)} млн. Выберите ${fdate(TODAY)}, чтобы увидеть дерево деск → книга → позиция.</div>`; return; }
+  if (S.date !== TODAY) { wrap.innerHTML = `<div class="empty"><b>Позиционной детализации за ${fdate(S.date)} нет</b>Хранятся только итоги дня: official ${smlnN(dayTotals(S.date).official)} млн, explained ${smlnN(dayTotals(S.date).explained)} млн. Выберите ${fdate(TODAY)}, чтобы увидеть дерево деск → книга → позиция.</div>`; return; }
   const X = S.fltX * 1e6, fOn = S.fltOn;
   const match = r => Math.abs(r.unexplained) > X;
   let rows = '', shown = 0;
@@ -992,26 +1052,26 @@ function renderHier(){
     const dMatch = !fOn || d.children.some(b => match(b) || b.children.some(match));
     if (!dMatch) return;
     const dOpen = fOn || S.open.has(d.key);
-    rows += `<tr class="desk"><td class="l"><button class="tg" data-key="${d.key}" aria-expanded="${dOpen}">${CHEV}Деск ${esc(d.name)}</button></td>${cellsFor(d)}<td class="l">${chip(status(d.unexplained, d.official, true))}</td></tr>`;
+    rows += `<tr class="desk"><td class="l"><button class="tg" data-key="${d.key}" aria-expanded="${dOpen}">${CHEV}Деск ${esc(d.name)}</button></td>${cellsFor(d)}<td class="l">${rowChip(d, true)}</td></tr>`;
     if (!dOpen) return;
     d.children.forEach(b => {
       const kids = fOn ? b.children.filter(match) : b.children;
       if (fOn && !kids.length && !match(b)) return;
       const bOpen = fOn ? kids.length > 0 : S.open.has(b.key);
       const nb = b.children.filter(k => k.note).length;
-      rows += `<tr class="book"><td class="l ind1"><button class="tg" data-key="${b.key}" aria-expanded="${bOpen}">${CHEV}${esc(b.name)}</button> <span class="psub">${esc(b.sub)} · ${b.children.length}${nb ? ` · пояснений: ${nb}` : ''}</span></td>${cellsFor(b)}<td class="l">${chip(status(b.unexplained, b.official, true))}</td></tr>`;
+      rows += `<tr class="book"><td class="l ind1"><button class="tg" data-key="${b.key}" aria-expanded="${bOpen}">${CHEV}${esc(b.name)}</button> <span class="psub">${esc(b.sub)} · ${b.children.length}${nb ? ` · пояснений: ${nb}` : ''}</span>${b.cover.partial ? ' ' + U.pnlPartHtml(b.cover) : ''}</td>${cellsFor(b)}<td class="l">${rowChip(b, true)}</td></tr>`;
       if (!bOpen) return;
       kids.forEach(r => {
         shown++;
-        let st = r.kind === 'fund' ? 'ok' : status(r.unexplained, r.official, true); if (r.note && st === 'ok') st = 'warn';
-        rows += `<tr class="${r.kind}"><td class="l ind2">${esc(r.name)} <span class="psub">${esc(r.sub)}</span>${r.note ? `<div class="bnote"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1 11.5 11H.5z"/></svg>${esc(r.note)}</div>` : ''}</td>${cellsFor(r)}<td class="l">${r.kind === 'fund' ? chip('info', 'Без explain') : chip(st)}</td></tr>`;
+        let st = r.kind === 'fund' || !READY ? 'ok' : status(r.unexplained, r.official, true); if (r.note && st === 'ok') st = 'warn';
+        rows += `<tr class="${r.kind}"><td class="l ind2">${esc(r.name)} <span class="psub">${esc(r.sub)}</span>${r.note ? `<div class="bnote"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1 11.5 11H.5z"/></svg>${esc(r.note)}</div>` : ''}</td>${cellsFor(r)}<td class="l">${r.kind === 'fund' ? chip('info', 'Без explain') : r.na ? chip('info', 'PnL не посчитан') : !READY && !r.note ? chip('info', 'Ожидается T+1') : chip(st)}</td></tr>`;
       });
     });
   });
-  if (!rows) rows = `<tr><td class="l" colspan="17"><div class="empty"><b>Нет позиций с |unexplained| &gt; ${num(S.fltX, 1)} млн ₽</b>Снизьте порог фильтра.</div></td></tr>`;
+  if (!rows) rows = `<tr><td class="l" colspan="${NCOL + 2}"><div class="empty"><b>Нет позиций с |unexplained| &gt; ${num(S.fltX, 1)} млн ₽</b>Снизьте порог фильтра.</div></td></tr>`;
   const t = TREE.tot;
   wrap.innerHTML = `<table class="t hier"><thead><tr><th class="l">Позиция · млн ₽</th>${EXC.map(x => `<th>${x[1]}</th>`).join('')}<th>Флэш</th><th>Курсы ЦБ</th><th>Official</th><th>Unexpl.</th><th class="l">Статус</th></tr></thead><tbody>${rows}</tbody>
-    <tfoot><tr class="tot"><td class="l">Итого деск</td>${cellsFor(t)}<td class="l">${chip(status(t.unexplained, t.official, false))}</td></tr></tfoot></table>`;
+    <tfoot><tr class="tot"><td class="l">Итого деск${t.cover.partial ? ' ' + U.pnlPartHtml(t.cover) : ''}</td>${cellsFor(t)}<td class="l">${rowChip(t, false)}</td></tr></tfoot></table>`;
 }
 $('#hier-wrap').addEventListener('click', e => { const b = e.target.closest('.tg'); if (!b || S.fltOn) return; const k = b.dataset.key; S.open.has(k) ? S.open.delete(k) : S.open.add(k); renderHier(); const nb = $(`#hier-wrap .tg[data-key="${k}"]`); if (nb) nb.focus(); });
 $('#flt-on').addEventListener('change', e => { S.fltOn = e.target.checked; renderHier(); });
@@ -1020,7 +1080,7 @@ $('#exp-all').addEventListener('click', () => { TREE.desks.forEach(d => { S.open
 $('#col-all').addEventListener('click', () => { S.open.clear(); TREE.desks.forEach(d => S.open.add(d.key)); renderHier(); });
 
 const RX_BOOKS = BOOKK.filter(b => P.some(p => p.book === b && Object.keys(p.risk).length));
-if (!S.rxBook) { let best = RX_BOOKS[0], bv = 0; RX_BOOKS.forEach(b => { const v = Math.abs(P.filter(p => p.book === b).reduce((s, p) => s + p.pnl.rates, 0)); if (v > bv) { bv = v; best = b; } }); S.rxBook = best; }
+if (!S.rxBook) { let best = RX_BOOKS[0], bv = 0; RX_BOOKS.forEach(b => { const v = Math.abs(P.filter(p => p.book === b && U.pnlOk(p)).reduce((s, p) => s + (p.pnl.rates || 0), 0)); if (v > bv) { bv = v; best = b; } }); S.rxBook = best; }
 function renderRx(){
   $('#rx-books').innerHTML = RX_BOOKS.concat(['__all']).map(b => `<button data-rx="${b}" aria-pressed="${S.rxBook === b}">${b === '__all' ? 'Все книги' : esc(D.BOOKS[b].name)}</button>`).join('');
   const wrap = $('#rx-wrap');
@@ -1029,7 +1089,9 @@ function renderRx(){
   const M = U.bucketMatrix(list), curves = CK.filter(c => M[c].some(v => Math.abs(v) > 1));
   const pnl = {}; curves.forEach(c => pnl[c] = M[c].map((v, i) => v * D.CURVE_MOVES[c][i]));
   let mx = 0; curves.forEach(c => pnl[c].forEach(v => mx = Math.max(mx, Math.abs(v))));
-  const check = list.reduce((s, p) => s + p.pnl.rates, 0);
+  // сверка — только по позициям с PnL (R10): у позиции без PnL колонки Rates нет
+  const lp = list.filter(U.pnlOk), rpc = U.pnlCover(list), check = rpc.none ? null : lp.reduce((s, p) => s + (p.pnl.rates || 0), 0);
+  const Mok = rpc.partial ? U.bucketMatrix(lp) : M, totOk = curves.reduce((s, c) => s + (Mok[c] || []).reduce((a, v, i) => a + v * D.CURVE_MOVES[c][i], 0), 0);
   let h = `<table class="t rx"><thead><tr><th class="l cv">Кривая</th><th class="l">Строка</th>${BK.map(b => `<th>${b}</th>`).join('')}<th>Σ</th></tr></thead><tbody>`;
   curves.forEach(c => {
     const dvs = M[c].reduce((a, b) => a + b, 0), ps = pnl[c].reduce((a, b) => a + b, 0);
@@ -1039,7 +1101,8 @@ function renderRx(){
   });
   const tot = curves.reduce((s, c) => s + pnl[c].reduce((a, b) => a + b, 0), 0);
   h += `<tr class="tot"><td class="l" colspan="2">Rates PnL · ${S.rxBook === '__all' ? 'все книги' : esc(D.BOOKS[S.rxBook].name)}</td>${BK.map((_, i) => `<td class="n">${smln(curves.reduce((s, c) => s + pnl[c][i], 0))}</td>`).join('')}<td class="n">${smln(tot)}</td></tr></tbody></table>
-    <p class="note" style="padding:0 12px 10px">Сверка: сумма матрицы ${smln(tot)} млн = колонка Rates в иерархии ${smln(check)} млн ${Math.abs(tot - check) < 1 ? chip('ok', 'сходится') : chip('warn', 'расхождение')}. Положительный DV01 — выигрыш при росте ставок.</p>`;
+    <p class="note" style="padding:0 12px 10px">${check == null ? `Сверка с колонкой Rates иерархии: ${na(rpc.tip)} — PnL не посчитан, матрица — оценка по DV01.`
+      : `Сверка${rpc.partial ? ' (' + U.pnlPartHtml(rpc) + ', матрица по тем же позициям ' + smln(totOk) + ' млн)' : ''}: сумма матрицы ${smln(totOk)} млн = колонка Rates в иерархии ${smln(check)} млн ${Math.abs(totOk - check) < 1 ? chip('ok', 'сходится') : chip('warn', 'расхождение')}.`} Положительный DV01 — выигрыш при росте ставок.</p>`;
   wrap.innerHTML = h;
 }
 $('#rx-books').addEventListener('click', e => { const b = e.target.closest('[data-rx]'); if (!b) return; S.rxBook = b.dataset.rx; renderRx(); });
