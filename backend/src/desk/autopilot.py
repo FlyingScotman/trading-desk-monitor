@@ -19,7 +19,10 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    ``desk eod`` when the date has no default run, or its default run read other position sets (a new revision of a
    book), another market snapshot (a correction) or another previous snapshot (the flash PnL); the latest positions
    date also when its default run was made by another ``desk.logic_version()`` (an upgrade: older dates are not
-   recomputed, to keep it cheap). Oldest first. A date that failed is not retried until its inputs change.
+   recomputed, to keep it cheap). Oldest first, except that the latest positions date goes first while it has no
+   default run at all (a first launch, a new day): the current position shows before the backlog is done (its model
+   prices then carry spreads from the runs that existed when it ran). A date that failed is not retried until its
+   inputs change.
 4. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
    ``progress`` ({"step": "sync"|"scan"|"eod", "done": int, "total": int|null, "detail": str}) follow it live:
    hub dates fetched of those to fetch, report files done of those offered, EOD dates run of those to run.
@@ -502,6 +505,7 @@ class Autopilot:
                 notes.append(f"{d} failed before on the same inputs, not retried")
                 continue
             todo.append((d, why, sig))
+        todo.sort(key=lambda t: not (t[0] == latest_valid and t[1] == "no default run"))  # stable: then oldest first
         for i, (d, why, sig) in enumerate(todo):
             self._progress("eod", i + 1, len(todo), d)
             self._emit(f"eod {d}: {why}")

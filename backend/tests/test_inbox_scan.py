@@ -27,11 +27,11 @@ D = date.fromisoformat
 @pytest.fixture(autouse=True)
 def _fresh_process():
     """Each test is a new process for the scanner: no cached adapter, no stability memory."""
-    scan._handles.clear()
-    scan._last_seen.clear()
+    for memo in (scan._handles, scan._last_seen, scan._static_seen):
+        memo.clear()
     yield
-    scan._handles.clear()
-    scan._last_seen.clear()
+    for memo in (scan._handles, scan._last_seen, scan._static_seen):
+        memo.clear()
 
 
 @pytest.fixture
@@ -239,6 +239,8 @@ def test_waiting_calendar_is_retried(con, tmp_path):
     shutil.copy(PRIV / "positions_20261014.csv", inbox / "positions_20280110.csv")  # beyond the calendar
     s = cfg(tmp_path, inbox)
     assert scan.scan(con, s).files == {"waiting_calendar": 1}
+    assert scan.scan(con, s).files == {}  # the same calendars: not matched again
+    scan._static_seen.clear()  # as after a sync brought a static snapshot
     assert scan.scan(con, s).files == {"waiting_calendar": 1}  # retried, no second status row
     assert con.execute("SELECT count(*) FROM inbox_file_status").fetchone()[0] == 1
 
@@ -283,9 +285,11 @@ def test_lookback_skips_old_files_unhashed_and_ignores_old_report_dates_once(con
     assert not set(calls["hash"]) & set(years)  # a stat only: never hashed, matched or read
     assert r.files == {"ignored_too_old": 2, "accepted": 1, "ignored": 1}, r.text()
     assert calls["read"] == ["positions_20261017.csv"]
-    rows = dict(con.execute("SELECT report_date, archive_path FROM inbox_file_status"
-                            " WHERE status = 'ignored_too_old'").fetchall())
-    assert set(rows) == {D("2026-10-14"), D("2026-10-15")} and set(rows.values()) == {None}  # not archived
+    assert set(calls["hash"]) == {"positions_20261017.csv"}  # an old report date or not the adapter's: never hashed
+    rows = dict(con.execute("SELECT report_date, source FROM inbox_unread WHERE status = 'ignored_too_old'").fetchall())
+    assert set(rows) == {D("2026-10-14"), D("2026-10-15")}  # remembered by path, size and time only
+    assert not con.execute("SELECT 1 FROM inbox_file_status WHERE status LIKE 'ignored%'").fetchone()
+    assert len(list((tmp_path / "archive").glob("*/positions_*.csv"))) == 1  # only the file read is archived
     assert not con.execute("SELECT 1 FROM event WHERE type LIKE '%too_old%'").fetchone()  # no event flood
 
     calls["hash"].clear()
@@ -378,3 +382,84 @@ def test_end_to_end_scan_then_eod(store_url, tmp_path, monkeypatch, capsys):
     assert cli.main(["config"]) == 0
     assert "inbox_poll_seconds       0" in capsys.readouterr().out
     assert cli.main(["runs"]) == 0
+
+
+def _adapter_calls(monkeypatch) -> dict[str, int]:
+    """Count the adapter calls of the scanner by kind."""
+    n = {"match": 0, "read": 0, "reference": 0}
+    for kind in n:
+        fn = getattr(scan.runner, f"call_{kind}")
+
+        def counted(*a, _fn=fn, _kind=kind, **kw):
+            n[_kind] += 1
+            return _fn(*a, **kw)
+
+        monkeypatch.setattr(scan.runner, f"call_{kind}", counted)
+    return n
+
+
+def test_an_idle_scan_touches_no_file_and_calls_no_adapter(con, tmp_path, monkeypatch):
+    inbox = tmp_path / "in"
+    put(inbox, "positions_20261015.csv", "positions_20261016.csv")
+    for i in range(300):  # a folder of old-format reports the adapter does not take
+        (inbox / f"old_report_{i:04d}.xls").write_bytes(b"x" * 64)
+    s = cfg(tmp_path, inbox)
+    calls, n = _counting(monkeypatch), _adapter_calls(monkeypatch)
+    r = scan.scan(con, s)
+    assert r.files == {"accepted": 1, "partially_accepted": 1, "ignored": 300}, r.text()
+    assert set(calls["hash"]) == {"positions_20261015.csv", "positions_20261016.csv"}  # declined: never hashed
+    assert n == {"match": 7, "read": 2, "reference": 1}  # 302 files: 7 match batches of 50
+    assert con.execute("SELECT count(*) FROM inbox_unread WHERE status = 'ignored'").fetchone()[0] == 300
+    assert not con.execute("SELECT 1 FROM event WHERE type = 'input.ignored'").fetchone()  # no event flood
+
+    for k in n:
+        n[k] = 0
+    calls["hash"].clear()
+    r = scan.scan(con, s)  # nothing new: a folder listing, no hash, no adapter call, no reference()
+    assert r.files == {} and n == {"match": 0, "read": 0, "reference": 0} and not calls["hash"], r.text()
+    assert scan.status(con, s)["groups"][0]["files"] == {"ignored": 300}
+
+    (inbox / "old_report_0000.xls").write_bytes(b"y" * 65)  # a changed file is looked at again
+    assert scan.scan(con, s).files == {"ignored": 1} and n["match"] == 1 and n["reference"] == 0
+
+    scan._handles.clear()
+    conf = tmp_path / "conf"
+    shutil.copytree(CONFIG, conf)
+    (conf / "note.txt").write_text("a new config file: a new fingerprint", encoding="utf-8")
+    r = scan.scan(con, cfg(tmp_path, inbox, config=conf))  # the adapter changed: declined files asked again
+    assert r.files == {"ignored": 300} and n["reference"] == 1 and n["read"] == 0, r.text()  # books refreshed once
+    assert scan.retry(con, s, ("ignored",)).files == {"ignored": 300}
+
+
+REVISIONS_4_FILES = 9  # the same in any order: processing order is not a semantic (08 §6.6 revision keys)
+
+
+@pytest.mark.parametrize("workers", ["1", "3"])
+def test_reads_run_in_parallel_workers_newest_report_first(con, tmp_path, monkeypatch, workers):
+    monkeypatch.setenv(scan.READ_WORKERS_ENV, workers)
+    inbox = tmp_path / "in"
+    put(inbox, "positions_20261014.csv", "positions_20261015.csv", "positions_20261016.csv",
+        "positions_20261017.csv")
+    seen: list[tuple] = []
+    r = scan.scan(con, cfg(tmp_path, inbox), progress=lambda done, total, detail: seen.append((done, total, detail)))
+    assert r.files == {"accepted": 3, "partially_accepted": 1} and r.revisions == REVISIONS_4_FILES, r.text()
+    order = [n for (n,) in con.execute("SELECT f.name FROM inbox_file_status s JOIN inbox_file f USING (sha256)"
+                                       " ORDER BY s.status_id")]
+    assert order == ["positions_20261017.csv", "positions_20261016.csv", "positions_20261015.csv",
+                     "positions_20261014.csv"]
+    assert (4, 4, "positions_20261014.csv") in seen
+
+
+def test_a_hung_worker_is_killed_and_the_next_call_starts_a_new_one(tmp_path):
+    from desk.inbox.loader import load_adapter
+
+    hangs = load_adapter(str(ADAPTERS / "read_hangs"), None, None)
+    good = load_adapter(None, None, None)
+    f = str(PRIV / "positions_20261014.csv")
+    with scan.runner.pooled(1) as pool:
+        with pytest.raises(scan.AdapterFailure, match="timed_out"):
+            scan.runner.call_read(hangs, f, {"source": "market", "report_date": "2026-10-15"}, None, 1)
+        assert scan.runner.call_match(good, [f], None, 10)[f]["source"] == "positions_csv"
+        w = pool._all[0]
+        assert w._p is not None and w._p.poll() is None  # one live worker serves the following calls
+    assert w._p is None  # ended with the block

@@ -1,11 +1,16 @@
 """The adapter's child process (08 §2) and the parent-side calls into it.
 
 The backend never imports adapter code itself: every call (``describe``, ``reference``, ``match``, ``read``)
-runs in ``<python> -I`` with an environment stripped to ``DESK_PRIVATE_ADAPTER*``, ``PATH``, ``SYSTEMROOT``,
+runs in a child ``<python> -I`` with an environment stripped to ``DESK_PRIVATE_ADAPTER*``, ``PATH``, ``SYSTEMROOT``,
 ``TEMP`` and ``TMP``, so a hung or crashing adapter cannot stop the backend and never sees the store URL or the
 hub token. ``-I`` also drops ``PYTHONPATH``; the folder holding ``desk`` is put on the child's ``sys.path`` by
 the bootstrap code instead. One JSON request goes in on stdin, one JSON response comes out on stdout (the
 adapter's own prints are sent to stderr), and the JSON encoding enforces "plain data only".
+
+A call is one child process (``run``), or, inside ``pooled()`` (one inbox scan), a request to a long-lived child
+(``Worker``, ``serve``: one JSON line in, one JSON line out) that imports the adapter and loads the instruments
+index once instead of per call: on Windows a Python start and the adapter's imports cost far more than a ``match``.
+A worker that times out or crashes is killed like a one-shot child, and the next call starts a new one.
 
 Exceptions cross as their type and (file, line, function) frames, never the message, which can hold a cell
 value (08 §6.8). With ``DESK_PRIVATE_ADAPTER_DEBUG=1`` the child prints the full traceback to stderr and the
@@ -18,10 +23,14 @@ import importlib
 import importlib.util
 import json
 import os
+import queue
 import signal
 import subprocess
 import sys
+import threading
 import traceback
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -73,8 +82,29 @@ def _error(exc: BaseException) -> dict:
     return {"type": type(exc).__name__, "frames": _frames(exc)}
 
 
+_modules: dict[str, Any] = {}  # child side: the adapter imported once per process (a worker serves many calls)
+_indexes: dict[tuple, Instruments] = {}  # child side: the instruments index per (path, mtime, size)
+
+
 def _import(spec: str | None) -> Any:
     spec = spec or REFERENCE_ADAPTER
+    if spec not in _modules:
+        _modules[spec] = _import_new(spec)
+    return _modules[spec]
+
+
+def _instruments(path: str | None) -> Instruments:
+    if not path:
+        return Instruments(None)
+    st = os.stat(path)
+    key = (path, st.st_mtime_ns, st.st_size)
+    if key not in _indexes:
+        _indexes.clear()  # one index at a time: the scan rewrites it in place
+        _indexes[key] = Instruments.from_file(path)
+    return _indexes[key]
+
+
+def _import_new(spec: str) -> Any:
     if not is_path_spec(spec):
         try:
             return importlib.import_module(spec)
@@ -124,7 +154,7 @@ def _handle(req: dict) -> dict:
         return {"ok": True, "result": {"describe": desc, "spi_version": getattr(mod, "SPI_VERSION", None),
                                        "has_reference": callable(getattr(mod, "reference", None)),
                                        "location": location}}
-    ctx = Ctx(SPI_VERSION, req.get("config_dir"), Instruments.from_file(req.get("instruments_index")),
+    ctx = Ctx(SPI_VERSION, req.get("config_dir"), _instruments(req.get("instruments_index")),
               [str(d) for d in req.get("inbox_dirs") or []])
     if op == "match":
         out: dict[str, Any] = {}
@@ -160,6 +190,22 @@ def main() -> None:
     out.flush()
 
 
+def serve() -> None:
+    """The worker's loop (``Worker``): one JSON request per line on stdin, one JSON response per line on stdout,
+    until stdin closes. stdout is protected as in ``main``."""
+    out = os.fdopen(os.dup(1), "wb")
+    os.dup2(2, 1)
+    sys.stdout = sys.stderr
+    for line in sys.stdin.buffer:
+        try:
+            resp = _handle(json.loads(line))
+            body = json.dumps(resp, allow_nan=False)
+        except BaseException as e:  # noqa: BLE001
+            body = json.dumps({"ok": False, "error": _error(e)})
+        out.write(body.encode("ascii") + b"\n")
+        out.flush()
+
+
 # ---- parent side -------------------------------------------------------------------------------------------
 
 
@@ -181,14 +227,18 @@ def _kill_tree(p: subprocess.Popen) -> None:
     p.kill()
 
 
+def _spawn(entry: str) -> subprocess.Popen:
+    boot = f"import sys; sys.path[:0] = [{_DESK_ROOT!r}]; from desk.inbox.runner import {entry}; {entry}()"
+    debug = os.environ.get(DEBUG_ENV) == "1"
+    group = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+    return subprocess.Popen([sys.executable, "-I", "-c", boot], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=None if debug else subprocess.DEVNULL, env=child_env(), **group)
+
+
 def run(request: dict, timeout_s: float) -> dict:
     """One child process, one request; raises ``AdapterFailure`` on timeout, crash or garbage output. Never
     hangs: on timeout the process tree is killed and the wait for it is bounded too."""
-    boot = f"import sys; sys.path[:0] = [{_DESK_ROOT!r}]; from desk.inbox.runner import main; main()"
-    debug = os.environ.get(DEBUG_ENV) == "1"
-    group = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
-    p = subprocess.Popen([sys.executable, "-I", "-c", boot], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                         stderr=None if debug else subprocess.DEVNULL, env=child_env(), **group)
+    p = _spawn("main")
     try:
         stdout, _ = p.communicate(json.dumps(request).encode("utf-8"), timeout=timeout_s)
     except subprocess.TimeoutExpired:
@@ -206,6 +256,117 @@ def run(request: dict, timeout_s: float) -> dict:
     except ValueError:
         raise AdapterFailure("failed", "bad_runner_output") from None
     return resp
+
+
+class Worker:
+    """A long-lived child (``serve``) answering one request at a time. Started on the first call; a timeout, a
+    crash or garbage output kills it (``AdapterFailure`` as ``run`` raises) and the next call starts a new one."""
+
+    def __init__(self) -> None:
+        self._p: subprocess.Popen | None = None
+        self._lines: queue.Queue = queue.Queue()
+
+    def _start(self) -> subprocess.Popen:
+        p = _spawn("serve")
+        lines: queue.Queue = queue.Queue()
+
+        def pump() -> None:  # the reader thread: a blocking readline cannot time out by itself
+            try:
+                for line in p.stdout:  # type: ignore[union-attr]
+                    lines.put(line)
+            except (OSError, ValueError):
+                pass
+            lines.put(None)
+
+        threading.Thread(target=pump, name="desk-adapter-pump", daemon=True).start()
+        self._p, self._lines = p, lines
+        return p
+
+    def call(self, request: dict, timeout_s: float) -> dict:
+        p = self._p if self._p is not None and self._p.poll() is None else self._start()
+        try:
+            p.stdin.write(json.dumps(request).encode("utf-8") + b"\n")  # type: ignore[union-attr]
+            p.stdin.flush()  # type: ignore[union-attr]
+        except OSError:
+            self.close()
+            raise AdapterFailure("failed", "runner_exit") from None
+        try:
+            line = self._lines.get(timeout=timeout_s)
+        except queue.Empty:
+            self.close()
+            raise AdapterFailure("timed_out", "timeout") from None
+        if line is None:
+            self.close()
+            raise AdapterFailure("failed", "runner_exit")
+        try:
+            return json.loads(line)
+        except ValueError:
+            self.close()
+            raise AdapterFailure("failed", "bad_runner_output") from None
+
+    def close(self) -> None:
+        """Ends the child: stdin closed (its loop returns), killed with its tree if it does not exit at once."""
+        p, self._p = self._p, None
+        if p is None:
+            return
+        try:
+            p.stdin.close()  # type: ignore[union-attr]
+        except OSError:
+            pass
+        try:
+            p.wait(timeout=0.5 if p.poll() is None else 0)
+        except subprocess.TimeoutExpired:
+            _kill_tree(p)
+            try:
+                p.wait(timeout=KILL_WAIT_S)
+            except subprocess.TimeoutExpired:
+                pass
+        if p.stdout:
+            p.stdout.close()
+
+
+class Pool:
+    """``size`` workers handed out one call at a time (``read`` calls run in parallel threads)."""
+
+    def __init__(self, size: int) -> None:
+        self.size = max(1, int(size))
+        self._all = [Worker() for _ in range(self.size)]
+        self._idle: queue.LifoQueue = queue.LifoQueue()
+        for w in self._all:
+            self._idle.put(w)
+
+    def call(self, request: dict, timeout_s: float) -> dict:
+        w = self._idle.get()
+        try:
+            return w.call(request, timeout_s)
+        finally:
+            self._idle.put(w)
+
+    def close(self) -> None:
+        for w in self._all:
+            w.close()
+
+
+_pool: Pool | None = None
+
+
+@contextmanager
+def pooled(size: int = 1) -> Iterator[Pool]:
+    """Within the block every ``call_*`` but ``call_describe`` goes to ``size`` long-lived workers, which are
+    ended on leaving it (so a changed adapter is imported afresh by the next block)."""
+    global _pool
+    prev, pool = _pool, Pool(size)
+    _pool = pool
+    try:
+        yield pool
+    finally:
+        _pool = prev
+        pool.close()
+
+
+def _call(request: dict, timeout_s: float) -> dict:
+    pool = _pool
+    return pool.call(request, timeout_s) if pool is not None else run(request, timeout_s)
 
 
 def _request(handle: Any, op: str, instruments_index: str | Path | None, **extra: Any) -> dict:
@@ -241,7 +402,7 @@ def call_match(handle: Any, paths: list[str], instruments_index: str | Path | No
     for i in range(0, len(paths), MATCH_CHUNK):
         chunk = paths[i:i + MATCH_CHUNK]
         try:
-            out.update(_result(run(_request(handle, "match", instruments_index, paths=chunk), timeout_s)))
+            out.update(_result(_call(_request(handle, "match", instruments_index, paths=chunk), timeout_s)))
         except AdapterFailure as f:
             out.update({p: {"_error": {"kind": f.kind, "type": f.type, "frames": f.frames}} for p in chunk})
     return out
@@ -249,12 +410,12 @@ def call_match(handle: Any, paths: list[str], instruments_index: str | Path | No
 
 def call_read(handle: Any, path: str, hit: dict, instruments_index: str | Path | None, timeout_s: float) -> Any:
     """The raw ``read`` result (checked by ``validate.check_read``); raises ``AdapterFailure``."""
-    return _result(run(_request(handle, "read", instruments_index, path=path, hit=hit), timeout_s))
+    return _result(_call(_request(handle, "read", instruments_index, path=path, hit=hit), timeout_s))
 
 
 def call_reference(handle: Any, instruments_index: str | Path | None, timeout_s: float) -> Any:
     """The raw ``reference(ctx)`` result; raises ``AdapterFailure``."""
-    return _result(run(_request(handle, "reference", instruments_index), timeout_s))
+    return _result(_call(_request(handle, "reference", instruments_index), timeout_s))
 
 
 if __name__ == "__main__":
