@@ -356,6 +356,32 @@
     const r = curveRate(c, t);   // null у кривой без точек: спред не «доходность − 0»
     return p.ytm == null || r == null ? null : (p.ytm - r) * 100;
   }
+  // Купон позиции (R16) для карточки, таблицы облигаций и истории выпуска: { text, title }. Значение — p.coupon
+  // (% годовых), основание — p.extra.coupon_basis (rate / amount / projected / assumed / zero), у флоатера индекс и маржа —
+  // p.index, p.margin. Прогноз «индекс + маржа» помечен «≈» и «прогноз»; неизвестный купон — «—». Прогон до правки D4
+  // (без индекса и маржи) и любые null / NaN / строка "null" не попадают в текст.
+  const pct2 = v => new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v).replace('-', '−') + '%';
+  const finite = v => v != null && v !== '' && typeof v !== 'boolean' && isFinite(+v) ? +v : null;
+  const label = v => typeof v === 'string' && v.trim() && !/^(null|undefined|nan|none)$/i.test(v.trim()) ? v.trim() : null;
+  const CPN_BASIS = { rate: 'ставка текущего купона', amount: 'сумма текущего купона, пересчитанная в ставку',
+    assumed: 'последняя известная ставка: текущий купон не опубликован' };
+  function couponView(p) {
+    const c = finite(p.coupon), basis = p.extra && p.extra.coupon_basis, proj = basis === 'projected' && c != null;
+    if (p.couponType === 'zero') return { text: 'бескупонная', title: 'дисконтная бумага: купона нет' };
+    const v = c == null ? null : (proj ? '≈' : '') + pct2(c);
+    if (p.couponType === 'float') {
+      const idx = label(p.index), m = finite(p.margin);
+      const formula = (idx || 'плав.') + (m == null ? '' : (m < 0 ? ' − ' : ' + ') + pct2(Math.abs(m)));
+      const text = v == null ? formula : formula + ' (' + v + (proj ? ', прогноз' : '') + ')';
+      const title = proj ? 'прогноз: ' + formula + ' по последнему фиксингу индекса'
+        : v == null ? 'плавающий купон: текущая ставка неизвестна' + (idx ? '' : ', индекс не указан')
+        : CPN_BASIS[basis] || 'плавающий купон';
+      return { text, title };
+    }
+    if (v == null) return { text: '—', title: 'купон неизвестен' };
+    return { text: v, title: CPN_BASIS[basis] || 'купон, % годовых' };
+  }
+  const couponText = p => couponView(p).text;
   // Строки таблицы облигаций: позиции BOND, объединённые по выпуску (ISIN) или по (ключ группы, ISIN).
   // Ключ выпуска: ISIN, у бумаги без него — instrumentId (код источника), иначе id позиции.
   const bondKey = p => p.isin || p.instrumentId || String(p.id);
@@ -587,5 +613,5 @@
   D.util = { sum, groupBy, bucketMatrix, netFx, runScenario, curveRate, hasPoints, pnlOk, pnlCover, pnlSum, pnlPartText, pnlNaHtml, pnlPartHtml,
     NO_RATING, NO_RATING_LABEL, isRated, ratingLabel, fundingFx, spreadShock, ownSpr01, ACCURACY_BP,
     runCarry, ksPath, carryEnd, indexAt, addDays, monthsAdd,
-    baseCurve, yieldTenor, spreadTo, bondKey, bondRows, wavg, bondHistory, normHistory };
+    baseCurve, yieldTenor, spreadTo, bondKey, bondRows, wavg, bondHistory, normHistory, couponView, couponText };
 })();

@@ -894,9 +894,8 @@ const ratingIdx = r => { const i = D.RATING_ORDER.indexOf(r); return i < 0 ? 99 
 const curveName = c => c === 'own' ? 'расчётному спреду' : c === 'base' ? 'базовой кривой валюты' : (D.CURVES[c] ? D.CURVES[c].name : c);
 // coupon types of the backend (R9 D5): fix/float and the hub's zero, indexed_face, variable_known, unknown
 const CPN_TYPE = {fix: 'фиксированный', float: 'плавающий', zero: 'бескупонная', indexed_face: 'индексируемый номинал', variable_known: 'переменный, известен', unknown: 'неизвестен'};
-const cpnProj = p => !!(p.extra && p.extra.coupon_basis === 'projected');
-const cpnPct = p => p.coupon != null ? (cpnProj(p) ? '≈' : '') + num(p.coupon,2) + '%' : null;
-const cpnTxt = p => p.couponType === 'float' ? (p.index || 'плав.') + (p.margin != null ? ' + ' + num(p.margin,2) + '%' : '') + (p.coupon != null ? ' (' + cpnPct(p) + (cpnProj(p) ? ', прогноз' : '') + ')' : '') : p.couponType === 'zero' ? 'бескупонная' : cpnPct(p) || '—';
+// купон (R16): текст и подсказка — DESK.util.couponView (прогноз «≈ … прогноз», неизвестный — «—», никогда не null)
+const cpnTxt = p => U.couponText(p), cpnTip = p => U.couponView(p).title;
 const bdSpr = (r, prev) => U.spreadTo(r.p, S.bd.curve, prev);
 const bdQ = r => r.p.quote || null;
 const BD_COLS = [
@@ -905,7 +904,7 @@ const BD_COLS = [
   {k:'issuer', t:'Эмитент', v:r => r.p.issuer},
   {k:'rating', t:'Рейт.', v:r => ratingIdx(r.p.rating), h:r => `<td>${esc(r.p.rating || '—')}</td>`},
   {k:'ccy', t:'Вал.', v:r => r.p.ccy},
-  {k:'cpn', t:'Купон', v:r => r.p.coupon, h:r => `<td class="mono">${esc(cpnTxt(r.p))}</td>`},
+  {k:'cpn', t:'Купон', v:r => r.p.coupon, h:r => `<td class="mono" title="${esc(cpnTip(r.p))}">${esc(cpnTxt(r.p))}</td>`},
   {k:'mat', t:'Погашение', v:r => r.p.maturity, f:dt, mono:1},
   {k:'ydate', t:'Оферта', v:r => r.p.yieldDate || null, f:dt, mono:1},
   {k:'ty', t:'Срок, лет', n:1, d:2, v:r => U.yieldTenor(r.p), w:1},
@@ -1048,7 +1047,7 @@ function rBondHist(rows){
 }
 function drawBondHist(r, h){
   const p = r.p;
-  $('bd-h-head').innerHTML = `<b>${esc(p.name)}</b><span class="mono">${esc(p.isin || '')}</span><span>${esc(p.issuer || '')} · ${esc(p.rating || 'н/р')} · ${esc(p.ccy)}</span><span>купон ${esc(cpnTxt(p))}</span><span>погашение ${dt(p.maturity)}${p.yieldDate ? ' · оферта ' + dt(p.yieldDate) : ''}</span><span>${esc(r.books.map(b => D.BOOKS[b].name).join(', '))}</span>`;
+  $('bd-h-head').innerHTML = `<b>${esc(p.name)}</b><span class="mono">${esc(p.isin || '')}</span><span>${esc(p.issuer || '')} · ${esc(p.rating || 'н/р')} · ${esc(p.ccy)}</span><span title="${esc(cpnTip(p))}">купон ${esc(cpnTxt(p))}</span><span>погашение ${dt(p.maturity)}${p.yieldDate ? ' · оферта ' + dt(p.yieldDate) : ''}</span><span>${esc(r.books.map(b => D.BOOKS[b].name).join(', '))}</span>`;
   if (h.error || !h.dates.length) {
     $('bd-h-stats').innerHTML = ''; chart('c-bd-hist', {});
     $('bd-h-note').textContent = 'Нет истории котировок по выпуску' + (h.error ? ': ' + h.error : '') + '. Источник — md_bond_quote (docs/DATA_REQUIREMENTS.md, набор bond_quotes).';
@@ -1117,7 +1116,7 @@ function repHtml(p){
   const r = p.extra && p.extra.reported; if (!r) return '';
   const kv = Object.keys(r).filter(k => k !== 'x').map(k => [k, r[k]]).concat(r.x && typeof r.x === 'object' ? Object.keys(r.x).map(k => [k, r.x[k]]) : []);
   if (!kv.length) return '';
-  const val = v => v != null && typeof v === 'object' ? JSON.stringify(v) : String(v);
+  const val = v => v == null || (typeof v === 'number' && !isFinite(v)) ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v);  // пустая ячейка — «—», не null
   return `<div class="dr-s"><h4>Из отчёта</h4><dl class="kvl">${kv.map(x => `<div><dt class="mono">${esc(x[0])}</dt><dd title="${esc(val(x[1]))}">${esc(val(x[1]))}</dd></div>`).join('')}</dl></div>`;
 }
 function openDrawer(id){
@@ -1128,7 +1127,7 @@ function openDrawer(id){
     ['Книга', bk.name + ' · ' + (BT_LABEL[bk.bookType] || '')], ['Деск / трейдер', [bk.desk, bk.trader].filter(Boolean).join(' · ')], ['Юрлицо', bk.entity], ['Класс', p.assetClass], ['Сегмент', p.segment], ['Тип', p.instrType],
     ['ISIN', p.isin], ['Эмитент', p.issuer], ['Группа', p.issuerGroup], ['Сектор', p.sector], ['Рейтинг', p.rating],
     ['Валюта', p.ccy], ['Погашение', dt(p.maturity)], ['Срок, лет', num(p.tenorY,2)],
-    ['Купон', p.instrType === 'BOND' || p.coupon != null ? cpnTxt(p) : null], ['Тип купона', p.couponType ? CPN_TYPE[p.couponType] || p.couponType : null],
+    ['Купон', p.instrType === 'BOND' || p.coupon != null ? cpnTxt(p) : null, cpnTip(p)], ['Тип купона', p.couponType ? CPN_TYPE[p.couponType] || p.couponType : null],
     ['Индекс', p.couponType === 'fix' ? p.index : null], ['Сторона', p.side],
     ['Номинал', p.notional == null ? null : num(p.notional/1e6,2) + ' млн ' + p.ccy], ['Цена', p.price != null ? num(p.price,2) : null],
     ['MV', p.mv == null ? null : num(p.mv/1e6,2) + ' млн ' + p.ccy], ['MV, ₽', p.mvRub == null ? '— (не оценено)' : M(p.mvRub,1) + ' млн'],
@@ -1158,7 +1157,7 @@ function openDrawer(id){
     <div class="dr-h"><div><h2>${esc(p.name)}</h2><div class="dr-sub"><span class="pill">${esc(bk.name)}</span><span class="pill">${esc(p.assetClass)}</span><span class="pill">${esc(p.ccy)}</span>${p.rating ? `<span class="pill">${esc(p.rating)}</span>` : ''}${p.newToday ? '<span class="tag" style="margin:0">NEW · сделка сегодня</span>' : ''}</div></div>
       <button type="button" class="ibtn" id="dr-close" aria-label="Закрыть карточку">Закрыть ✕</button></div>
     ${p.instrType === 'BOND' ? `<div class="dr-s"><button type="button" class="lnk" data-act="bdhist" data-v="${esc(U.bondKey(p))}">История цены, доходности и спреда выпуска →</button></div>` : ''}
-    <div class="dr-s"><h4>Параметры</h4><dl class="kvl">${F.map(x => `<div><dt>${esc(x[0])}</dt><dd title="${esc(x[1])}">${esc(x[1])}</dd></div>`).join('')}</dl></div>
+    <div class="dr-s"><h4>Параметры</h4><dl class="kvl">${F.map(x => `<div><dt>${esc(x[0])}</dt><dd title="${esc(!x[2] ? x[1] : x[1] === '—' ? x[2] : x[1] + ' — ' + x[2])}">${esc(x[1])}</dd></div>`).join('')}</dl></div>
     ${repHtml(p)}
     <div class="dr-s bk"><h4>DV01 по бакетам, тыс ₽/б.п.</h4>${curves.length ? curves.map(c => `<div class="cap"><span>${esc(D.CURVES[c].name)}</span><span class="mono">${K(sum(p.risk[c]),1)}</span></div>${bucketSvg(p.risk[c])}`).join('') : '<p class="note">Нет процентного риска по кривым (CDS / спот FX).</p>'}</div>
     ${!U.pnlOk(p) ? `<div class="dr-s"><h4>PnL за день, тыс ₽</h4><div class="pnl-b"><span class="sum">Флэш (рынок)</span><span></span><span class="num sum">${naHtml(pnlWhy(p))}</span></div>
