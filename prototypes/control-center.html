@@ -648,15 +648,17 @@ function renderHeat() {
   const bg = v => { if (!v || !max) return ''; const a = Math.round(Math.min(1, Math.abs(v) / max) * 55 + 6); return `background:color-mix(in srgb,var(${v < 0 ? '--neg' : '--pos'}) ${a}%,transparent)`; };
   const cname = c => (D.CURVES[c] && D.CURVES[c].name) || c;
   const head = '<tr><th>Кривая</th>' + B.map(b => `<th>${esc(b)}</th>`).join('') + '<th>Итого</th><th>+100 б.п.</th></tr>';
-  const body = curves.map(c => '<tr><td title="' + esc(cname(c)) + '">' + esc(c) + (U.hasPoints(c) ? '' : ' <span class="tag" title="у кривой нет точек: риск по дюрации">без точек</span>') + '</td>' + B.map((b, i) => {
+  const body = curves.map(c => '<tr><td title="' + esc(cname(c)) + '">' + esc(U.isBasis(c) ? 'Базис ОФЗ–RUONIA' : c) + (U.isBasis(c) ? ' <span class="tag" title="кривая ОФЗ = RUONIA + базис: риск ОФЗ к сдвигу кривой ОФЗ при неизменной RUONIA; в итог DV01 не входит">не в итоге</span>' : '') + (U.hasPoints(c) ? '' : ' <span class="tag" title="у кривой нет точек: риск по дюрации">без точек</span>') + '</td>' + B.map((b, i) => {
     const fn = () => mk('DV01 ' + c + ' ' + b, VAL, p => riskAt(p, c, i), { note: '₽ на +1 б.п. на сроке ' + b + ' кривой ' + cname(c) });
     const v = fn().total;
     return v ? `<td class="hm" style="${bg(v)}" data-drill="${reg(fn)}" data-f="k" tabindex="0" role="button" title="${esc(c + ' ' + b + ': ' + F.m(v) + ' ₽/б.п.')}">${F.k(v)}</td>` : '<td class="hm mut">·</td>';
   }).join('') + `<td class="hm">${dv('k', () => mk('DV01 ' + c + ' (все сроки)', VAL, p => riskRow(p, c)))}</td>` +
     `<td class="hm">${dv('k', () => mk('+100 б.п. по кривой ' + c + ' ≈ DV01 × 100', VAL, p => { const r = riskRow(p, c); return ok(r) ? r * 100 : null; }), { sign: true })}</td></tr>`).join('');
-  const foot = '<tr class="tot"><td>Все кривые</td>' + B.map((b, i) => `<td class="hm">${dv('k', () => mk('DV01 ' + b + ' (все кривые)', VAL, p => sum(curves, c => riskAt(p, c, i) || 0)))}</td>`).join('') +
-    `<td class="hm">${dv('k', () => mk('DV01 по кривым и срокам', VAL, p => sum(curves, c => riskRow(p, c) || 0)))}</td>` +
-    `<td class="hm">${dv('k', () => mk('+100 б.п. по всем кривым ≈ DV01 × 100', VAL, p => sum(curves, c => riskRow(p, c) || 0) * 100), { sign: true })}</td></tr>`;
+  // итог — по кривым ставок: базис ОФЗ–RUONIA (R18) повторяет DV01 ОФЗ по RUONIA и в итог не входит
+  const rc = U.rateCurves(curves);
+  const foot = '<tr class="tot"><td>Все кривые ставок</td>' + B.map((b, i) => `<td class="hm">${dv('k', () => mk('DV01 ' + b + ' (все кривые ставок)', VAL, p => sum(rc, c => riskAt(p, c, i) || 0)))}</td>`).join('') +
+    `<td class="hm">${dv('k', () => mk('DV01 по кривым и срокам', VAL, p => sum(rc, c => riskRow(p, c) || 0)))}</td>` +
+    `<td class="hm">${dv('k', () => mk('+100 б.п. по всем кривым ставок ≈ DV01 × 100', VAL, p => sum(rc, c => riskRow(p, c) || 0) * 100), { sign: true })}</td></tr>`;
   box.innerHTML = `<table>${head}${body}${foot}</table>`;
 }
 
@@ -751,7 +753,7 @@ const keySpec = () => mk('Риск к ключевой ставке: DV01 кри
 const isIdx = (p, re) => p.instrType === 'BOND' && (p.couponType === 'float' || p.couponType === 'floating' || p.index) && re.test(String(p.index || ''));
 
 function renderCurves() {
-  const B = D.BUCKETS, curves = Object.keys(D.CURVES).filter(U.hasPoints).sort((a, b) => ((CURVE_ORDER.indexOf(a) + 1) || 99) - ((CURVE_ORDER.indexOf(b) + 1) || 99)).slice(0, 6);
+  const B = D.BUCKETS, curves = Object.keys(D.CURVES).filter(c => U.hasPoints(c) && !U.isBasis(c)).sort((a, b) => ((CURVE_ORDER.indexOf(a) + 1) || 99) - ((CURVE_ORDER.indexOf(b) + 1) || 99)).slice(0, 6);
   const col = CAT(), series = [];
   curves.forEach((c, ci) => {
     const pts = D.CURVES[c].pts, mv = (D.CURVE_MOVES || {})[c] || [];

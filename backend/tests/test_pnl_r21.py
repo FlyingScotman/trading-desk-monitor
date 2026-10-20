@@ -25,6 +25,7 @@ from desk.pnl import direct
 from desk.pnl.reasons import EXACT_METHODS, FX_METHOD, REPORTED_METHOD, other_split
 from desk.publish import desk_run
 from desk.store import PositionInputs
+from desk.valuation.bonds import BASIS_CURVE
 from desk.valuation.fallback import METHOD as SIMPLE_METHOD
 from desk.valuation.positions import merge, plan
 
@@ -128,10 +129,11 @@ def test_payload_has_what_the_drill_down_needs(desk):
     # the KPIs are sums over the listed positions: DV01 and CS01 as the run's history row of the date
     assert d["history"][-1]["dv01"] == pytest.approx(math.fsum(p["dv01"] for p in ps))
     assert d["history"][-1]["cs01"] == pytest.approx(math.fsum(p["cs01"] for p in ps))
-    # a position's bucket risk adds up to its DV01 when all of it is on curves (the heatmap cells reconcile)
+    # a position's bucket risk adds up to its DV01 when all of it is on curves (the heatmap cells reconcile); the
+    # OFZ-RUONIA basis (R18) repeats an OFZ's RUONIA buckets and is not in DV01
     for p in ps:
         if p["risk"] and p.get("instrType") == "BOND":
-            assert math.fsum(sum(v) for v in p["risk"].values()) == pytest.approx(p["dv01"], rel=1e-6, abs=1e-6), p["id"]
+            assert math.fsum(sum(v) for c, v in p["risk"].items() if c != BASIS_CURVE) == pytest.approx(p["dv01"], rel=1e-6, abs=1e-6), p["id"]
 
 
 @pytest.mark.parametrize(("method", "other", "pnl_extra", "fact_extra", "fx", "want"), [
