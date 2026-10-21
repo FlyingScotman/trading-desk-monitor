@@ -169,7 +169,7 @@ export interface paths {
         };
         /**
          * Bond History
-         * @description The issue's quoted days from the market history (the cached hub snapshots, ``history_days`` deep) merged
+         * @description The issue's quoted days from the market history (the hub's history API, else the cached hub snapshots) merged
          *     with the default runs that hold it (Z-spread, the desk's face), and the KBD rate at its term with the spread
          *     to it (``desk.marketdata.history.bond_history``). ``instrument_id`` is the MOEX secid (or the report's id),
          *     ``isin`` finds the bond through the static snapshots; ``curve``: the KBD (RUB OFZ; own, base) has rates,
@@ -404,8 +404,9 @@ export interface components {
         /**
          * BondHistory
          * @description The history of an issue for the monitors (DATA_CONTRACT §6): every quoted day of the market history
-         *     (``md_bond_eod``: the cached hub snapshots, ``history_days`` deep) merged with the desk's default runs that hold
-         *     it; the curve rate is the KBD at the bond's term. Empty, not 404, when the issue is unknown.
+         *     (``md_bond_day``: the hub's history API, from 2024-01-03, else the cached hub snapshots, ``history_days`` deep)
+         *     merged with the desk's default runs that hold it; the curve rate is the KBD at the bond's term. Empty, not 404,
+         *     when the issue is unknown.
          */
         BondHistory: {
             /** Instrument Id */
@@ -489,6 +490,31 @@ export interface components {
              * @description the date MOEX's yield runs to: the offer or maturity
              */
             yield_date?: string | null;
+            /**
+             * Moex Zspread Bp
+             * @description MOEX's Z-spread to the KBD
+             */
+            moex_zspread_bp?: number | null;
+            /**
+             * Icpi
+             * @description MOEX yields ICPI (linkers), verbatim
+             */
+            icpi?: number | null;
+            /**
+             * Ir
+             * @description MOEX yields IR (linkers), verbatim
+             */
+            ir?: number | null;
+            /**
+             * Bei
+             * @description MOEX yields BEI (linkers), verbatim
+             */
+            bei?: number | null;
+            /**
+             * Origin
+             * @description where the market fields come from: hub (the hub's history API) or snapshot (a cached eod_final snapshot)
+             */
+            origin?: string | null;
         };
         /** ErrorOut */
         ErrorOut: {

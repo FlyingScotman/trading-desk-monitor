@@ -331,7 +331,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     def bond_history(con: Con, instrument_id: str | None = None, isin: str | None = None,
                      curve: str | None = None, wal: float | None = None,
                      from_: Annotated[date | None, Query(alias="from")] = None, to: date | None = None):
-        """The issue's quoted days from the market history (the cached hub snapshots, ``history_days`` deep) merged
+        """The issue's quoted days from the market history (the hub's history API, else the cached hub snapshots) merged
         with the default runs that hold it (Z-spread, the desk's face), and the KBD rate at its term with the spread
         to it (``desk.marketdata.history.bond_history``). ``instrument_id`` is the MOEX secid (or the report's id),
         ``isin`` finds the bond through the static snapshots; ``curve``: the KBD (RUB OFZ; own, base) has rates,
@@ -431,12 +431,14 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         return concepts.positions_history(con, run, wanted, from_)
 
     from .diagnostics_routes import router as diagnostics_router
+    from .market_history import router as market_history_router  # /api/v1/history/market, /status (R24)
     from .settings_routes import router as settings_router  # here: it imports ApiError from this module
     from .update_routes import router as update_router
 
     app.include_router(settings_router, include_in_schema=False)  # local admin routes (/settings.html)
     app.include_router(update_router, include_in_schema=False)
     app.include_router(diagnostics_router, include_in_schema=False)
+    app.include_router(market_history_router, include_in_schema=False)
     app.include_router(autopilot_router)
 
     built = Path(app_dir) if app_dir else static_root() / "frontend" / "dist"

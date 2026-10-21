@@ -19,6 +19,9 @@ fails holds ``{"error": ...}`` and the rest is still there):
   quote sets per ``source/dataset`` and their quote counts, the hub's own coverage and stale reasons, the expected
   curves missing, ZCYC/bond quote/fixing counts, and for the newest ones whether the RUONIA OIS and key-rate curves
   build from them and on which quote set (R14, R15);
+* ``market_history`` (R24): whether the hub's history API serves the token or why not (``hub без API истории
+  (версия < 0.2.0)``, ``токен без права read``), and per dataset the stored date range, row and bond counts, the
+  queries complete, to fetch and failed, the bytes fetched (``hubhistory.status``);
 * ``static``: the cached static snapshots: dates, schema, instrument counts by status, class, coupon type, floater
   formulas by benchmark, calendars;
 * ``inbox``: the adapter (name, version), folders (count, exist), files by status, source and error code, units,
@@ -682,6 +685,8 @@ def hub_section(settings: Settings, scrub: Scrubber, live: bool, cached_ids: set
     out.update(checked=True, reachable=chk.get("health") is not None, ok=chk.get("ok"),
                health=chk.get("health"), token_accepted=chk.get("token_accepted"), transport=chk.get("transport"),
                error=scrub.text(chk.get("error")), check_s=round(time.perf_counter() - t0, 2))
+    if api := chk.get("history_api"):  # R24: the history API for this token, or why not
+        out["history_api"] = {**api, "reason": scrub.text(api.get("reason"))}
     latest = chk.get("latest") or {}
     out["latest_eod_final"] = {k: latest.get(k) for k in ("business_date", "published_at", "age_hours")} | \
         {"snapshot_id": _id(latest.get("snapshot_id"))} if latest else None
@@ -1243,6 +1248,7 @@ def build(settings: Settings | None = None, *, store_url: str | None = None, aut
             cached = {p.name.split(".")[0] for p in Path(settings.snapshot_cache).glob("*.json.gz")}
         section("hub", lambda: hub_section(settings, scrub, hub, cached))
         section("snapshots", lambda: snapshots_section(settings, scrub))
+        section("market_history", need_store(lambda c: market_history_section(c, scrub)))
         section("static", lambda: static_section(settings, scrub))
         section("inbox", need_store(lambda c: inbox_section(settings, c, scrub, now)))
         section("positions", need_store(lambda c: positions_section(settings, c, now)))
@@ -1251,12 +1257,23 @@ def build(settings: Settings | None = None, *, store_url: str | None = None, aut
         doc["build"] = {"duration_s": round(time.perf_counter() - t_all, 2), "sections_s": times,
                         "store_error": scrub.text(store_error) if store_error else None, "hub_asked": bool(hub)}
         order = ("schema", "generated_at", "privacy", "app", "clock", "settings", "autopilot", "hub", "snapshots",
-                 "static", "inbox", "positions", "runs", "logs", "db", "build")
+                 "market_history", "static", "inbox", "positions", "runs", "logs", "db", "build")
         doc = {k: doc[k] for k in order if k in doc}
         return scrub.doc(json.loads(json.dumps(doc, ensure_ascii=False, default=str)))
     finally:
         if con is not None:
             con.close()
+
+
+def market_history_section(con: psycopg.Connection, scrub: Scrubber) -> dict[str, Any]:
+    """The store's market history from the hub's history API (R24): dates, counts, codes; errors scrubbed."""
+    from .marketdata import hubhistory
+
+    st = hubhistory.status(con)
+    if st["api"]:
+        st["api"]["reason"] = scrub.text(st["api"]["reason"])
+    st["errors"] = [scrub.text(e, 200) for e in st["errors"]]
+    return st
 
 
 def dumps(doc: dict[str, Any]) -> str:

@@ -15,7 +15,8 @@ layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub
 * ``DESK_HUB_URL``         hub base URL, set per installation (no default: the address is
                            never kept in the repository); HTTPS only, plain HTTP is
                            accepted for localhost (test stubs)
-* ``DESK_HUB_TOKEN``       bearer token of this consumer (scope ``snapshots``), or
+* ``DESK_HUB_TOKEN``       bearer token of this consumer (scope ``read``: snapshots and the history API of hub
+                           0.2.0; a ``snapshots`` token serves the snapshots only), or
   ``DESK_HUB_TOKEN_FILE``  a file holding it; else ``<home>/hub_token`` (written by the settings page).
                            Never commit either; the repository is public
 * ``DESK_HUB_CA_BUNDLE``   PEM bundle for a TLS-inspecting proxy (inside the work network)
@@ -52,6 +53,10 @@ layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub
                            time, then by the report date ``match`` gives) and hub dates at most this many days old
                            (10; 0: no limit); a folder holding years of reports is not read. A backfill of older
                            dates (S8) gets its own explicit date range.
+* ``DESK_HISTORY_BONDS_FROM``, ``DESK_HISTORY_RATES_FROM``  first date of the market history read from the hub's
+                           history API (``YYYY-MM-DD``; defaults 2024-01-03 for bonds, where the hub's bond EOD
+                           starts, and 2010-01-01 for the KBD, curves, fixings and FX, bounded by what the hub has);
+                           the autopilot's history step (``history_days`` > 0) fetches it a little per cycle
 * ``DESK_UPDATE_DIR``      the Windows bundle: a folder (a network share, say) holding update zips that the
                            settings page offers to install (``desk.update``); none by default
 
@@ -67,6 +72,7 @@ import os
 import re
 import tempfile
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -102,6 +108,8 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "inbox_lookback_days": ("DESK_INBOX_LOOKBACK_DAYS", "int0"),
     "update_dir": ("DESK_UPDATE_DIR", "path"),
     "history_days": ("DESK_HISTORY_DAYS", "int0"),
+    "history_bonds_from": ("DESK_HISTORY_BONDS_FROM", "date"),
+    "history_rates_from": ("DESK_HISTORY_RATES_FROM", "date"),
 }
 PROXY_KEYS = {"https_proxy": "HTTPS_PROXY", "no_proxy": "NO_PROXY"}
 READ_ONLY_KEYS = ("hub_token", "hub_token_set", "proxy_password", "proxy_password_set", "home", "effective",
@@ -167,6 +175,8 @@ class Settings:
     intraday: bool = True  # the autopilot values today's book on the hub's intraday / preliminary cuts (R11)
     inbox_lookback_days: int = 35  # report dates at most this many days old (R22); 0: no limit
     history_days: int = 260  # hub business dates of market history for the bond charts (~1 year); 0: the cache only
+    history_bonds_from: date = date(2024, 1, 3)  # the hub's history API: bonds from (its bond EOD starts here)
+    history_rates_from: date = date(2010, 1, 1)  # the hub's history API: KBD, curves, fixings, FX from
     private_adapter_default: bool = False  # private_adapter came from DESK_DEFAULT_PRIVATE_ADAPTER
     update_dir: Path | None = None  # update zips of the Windows bundle (desk.update)
 
@@ -231,6 +241,8 @@ class Settings:
             ("inbox_lookback_days", str(self.inbox_lookback_days) if self.inbox_lookback_days else "0 (no limit)"),
             ("update_dir", str(self.update_dir or "none")),
             ("history_days", str(self.history_days) if self.history_days else "0 (off: the cached dates only)"),
+            ("history_bonds_from", self.history_bonds_from.isoformat()),
+            ("history_rates_from", self.history_rates_from.isoformat()),
         ]
 
 
@@ -314,6 +326,8 @@ def check_settings_doc(doc: object) -> list[str]:
             errors.append(f"{key}: must be a whole number >= 0")
         elif kind == "bool" and not isinstance(v, bool):
             errors.append(f"{key}: must be true or false")
+        elif kind == "date" and not (isinstance(v, str) and (not v.strip() or _is_date(v.strip()))):
+            errors.append(f"{key}: must be a date YYYY-MM-DD")
         elif kind == "dirs":
             if not isinstance(v, list):
                 errors.append(f"{key}: must be a list of {{path, label, recursive}}")
@@ -326,6 +340,14 @@ def check_settings_doc(doc: object) -> list[str]:
                 elif not isinstance(d.get("recursive"), (bool, type(None))):
                     errors.append(f"{key}[{i}]: recursive must be true or false")
     return errors
+
+
+def _is_date(v: str) -> bool:
+    try:
+        date.fromisoformat(v)
+    except ValueError:
+        return False
+    return len(v) == 10
 
 
 def _json_layer(doc: dict[str, Any], home: Path) -> dict[str, str]:
@@ -449,6 +471,12 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
             raise SettingsError(f"{key}: expected 1/0, true/false, yes/no or on/off, not {v!r}")
         return v in _TRUE if v else default
 
+    def day(key: str, default: date) -> date:
+        v = (get(key) or "").strip()
+        if v and not _is_date(v):
+            raise SettingsError(f"{key}: expected a date YYYY-MM-DD, not {v!r}")
+        return date.fromisoformat(v) if v else default
+
     def count(key: str, default: int, least: int = 1) -> int:
         v = env.get(key)  # "0" is a value here (no limit), not unset
         try:
@@ -506,6 +534,8 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         intraday=flag("DESK_INTRADAY", defaults.intraday),
         inbox_lookback_days=count("DESK_INBOX_LOOKBACK_DAYS", defaults.inbox_lookback_days, 0),
         history_days=count("DESK_HISTORY_DAYS", defaults.history_days, 0),
+        history_bonds_from=day("DESK_HISTORY_BONDS_FROM", defaults.history_bonds_from),
+        history_rates_from=day("DESK_HISTORY_RATES_FROM", defaults.history_rates_from),
         private_adapter_default=adapter_default,
         update_dir=_path(get("DESK_UPDATE_DIR")),
     )

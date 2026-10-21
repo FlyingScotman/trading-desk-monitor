@@ -40,9 +40,12 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    preliminary bundles of dates older than ``KEEP_CUT_DAYS`` leave the cache (``cache.prune``) unless a shown run
    reads them. The next morning the date's ``eod_final`` EOD run (step 3) supersedes both.
 5. **history** (with the hub and ``history_days`` > 0): market history older than the cache for the bond charts,
-   ``HISTORY_PER_CYCLE`` of the ``history_days`` latest hub dates per cycle, newest first, into the store's tables
-   without caching the bundles; only after a sync that reached the hub and left no date for the next cycle, and
-   after the EOD runs, so it never delays them. The lookback above does not apply: these dates feed no run.
+   from the hub's history API when it serves the token (``desk.marketdata.hubhistory``: bonds from
+   ``history_bonds_from``, KBD, curves, fixings and FX from ``history_rates_from``; ``hubhistory.BUDGET_S`` seconds a
+   cycle, resumable), else ``HISTORY_PER_CYCLE`` of the ``history_days`` latest hub dates per cycle, newest first,
+   into the store's tables without caching the bundles (the step's detail says why the API was not used); only
+   after a sync that reached the hub and left no date for the next cycle, and after the EOD runs, so it never delays
+   them. The lookback above does not apply: these dates feed no run.
 6. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
    ``progress`` ({"step": "sync"|"scan"|"eod"|"intraday"|"history", "done": int, "total": int|null, "detail": str})
    follow it live: hub dates fetched of those to fetch, report files done of those offered, EOD dates run of those
@@ -78,7 +81,7 @@ import psycopg
 
 from . import logic_version, store
 from .inbox.timesem import MSK
-from .marketdata import cache, history
+from .marketdata import cache, history, hubhistory
 from .marketdata.adapter import StaticView
 from .marketdata.bundle import SnapshotDir, SnapshotError, previous_market
 from .marketdata.hub import HubClient, HubError
@@ -566,17 +569,29 @@ class Autopilot:
                 + (f", {later} next cycle" if later else "") + ")")
 
     def _history(self, settings: Settings, con: psycopg.Connection) -> tuple[str, str]:
-        """Market history for the bond charts beyond the cache: the ``history_days`` latest hub dates, newest first,
-        ``HISTORY_PER_CYCLE`` a cycle, straight into the store's tables (``history.fetch_hub``; not cached, see
-        ``desk.marketdata.history``), and again a date whose loaded snapshot the hub has since superseded by a
-        correction (``history.superseded_dates``). Only after a sync that reached the hub and left nothing for the next cycle: the
-        regular dates come first. The hub's date list is read again once per ``RECHECK_S``."""
+        """Market history: from the hub's history API when it serves this token (``desk.marketdata.hubhistory``, R24:
+        ``hubhistory.BUDGET_S`` a cycle, resumable), else from the snapshots (``_history_bundles``), with the reason.
+        Only after a sync that reached the hub and left nothing for the next cycle: the regular dates come first."""
         if self._hub_failed:
             return "skipped", "the hub sync failed this cycle"
         if self._sync_later:
             return "skipped", f"after the sync ({self._sync_later} dates next cycle)"
-        depth = min(int(settings.history_days), MAX_HISTORY_DAYS)
         client = HubClient(settings)
+        rep = hubhistory.sync(con, client, today=self._today(), bonds_from=settings.history_bonds_from,
+                              rates_from=settings.history_rates_from, held=hubhistory.held_secids(con),
+                              progress=lambda i, n, d: self._progress("history", i, n, d))
+        if rep.available:
+            return ("error" if rep.errors else "ok"), rep.text()
+        status, detail = self._history_bundles(settings, con, client)
+        return status, f"{detail}; {rep.text()}"
+
+    def _history_bundles(self, settings: Settings, con: psycopg.Connection, client: HubClient) -> tuple[str, str]:
+        """Market history for the bond charts beyond the cache when the hub has no history API: the ``history_days``
+        latest hub dates, newest first, ``HISTORY_PER_CYCLE`` a cycle, straight into the store's tables
+        (``history.fetch_hub``; not cached, see ``desk.marketdata.history``), and again a date whose loaded snapshot
+        the hub has since superseded by a correction (``history.superseded_dates``). The hub's date list is read again
+        once per ``RECHECK_S``."""
+        depth = min(int(settings.history_days), MAX_HISTORY_DAYS)
         now = time.monotonic()
         if (self._history_dates is None or self._history_dates[1] != depth
                 or now - self._history_dates[0] >= RECHECK_S):

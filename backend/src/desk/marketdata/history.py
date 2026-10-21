@@ -12,6 +12,13 @@ by ``desk eod`` for the snapshots its run reads (``load_snapshot``) and, for dat
 a market bundle is ~0.5 MB and its static one ~4 MB (the fixtures' bytes per bond: ~140 per quote, ~1 200 per bond's
 terms, times ~3 000 bonds), a year of them ~1 GB, while a year of rows is ~100 MB.
 
+With a hub that has the history API (hub 0.2.0) and a token with scope ``read``, the autopilot's history step reads
+the history from it instead (``desk.marketdata.hubhistory``: years in a few calls, the KBD, curves, fixings and FX
+too, tables ``md_hub_*``) and ``fetch_hub`` is not used; without it (a hub before 0.2.0 answers 404, a token
+without ``read`` 403) the step falls back to ``fetch_hub``. The readers take a day's row from the views
+``md_bond_day`` / ``md_kbd_day``: the history API's row when it has one, else the snapshot's. Contract 1.2
+quotes add MOEX's linker analytics (``icpi``, ``ir``, ``bei``, ``cbr``) to ``md_bond_eod``.
+
 ``bond_history`` reads one bond's series for ``GET /api/v1/bonds/history``: every quoted day, the desk's default runs
 merged in (Z-spread, face held), and the KBD yield at the bond's term (to the offer while it is ahead, else to
 maturity: DATA_CONTRACT §6) with the spread to it, for RUB fixed-coupon bonds.
@@ -29,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
-from psycopg.rows import dict_row
+from psycopg.rows import dict_row, tuple_row
 from psycopg.types.json import Jsonb
 from rub_fixed_income import ZcycParameters, kbd_effective_yield
 
@@ -53,7 +60,7 @@ BAD_BUNDLE = (SnapshotError, KeyError, TypeError, ValueError, ArithmeticError)
 
 EOD_COLS = ("business_date", "secid", "board", "clean_pct", "price_basis", "yield_pct", "yield_date", "duration_days",
             "gspread_bp", "zspread_bp", "accrued_per_bond", "face_value", "volume_bonds", "value", "currency_id",
-            "num_trades")
+            "num_trades", "icpi", "ir", "bei", "cbr")
 INSTRUMENT_COLS = ("secid", "isin", "name", "short_name", "bond_class", "coupon_type", "face_unit", "maturity_date",
                    "is_perpetual", "business_date", "snapshot_id")
 
@@ -93,7 +100,7 @@ def market_rows(snap: Snapshot) -> tuple[dict[str, Any], list[tuple]]:
                      date.fromisoformat(sa["yield_date"]) if sa.get("yield_date") else None,
                      _f(sa.get("duration_days")), _f(sa.get("gspread_bp")), _f(sa.get("zspread_bp")),
                      _f(q.accrued_per_bond), _f(q.face_value), _f(q.volume_bonds), _f(q.value), q.currency_id,
-                     q.num_trades))
+                     q.num_trades, *(_f(sa.get(k)) for k in ("icpi", "ir", "bei", "cbr"))))
     return head, rows
 
 
@@ -237,8 +244,19 @@ def fetch_hub(con: psycopg.Connection, client: HubClient, business_date: str) ->
 
 
 def loaded_dates(con: psycopg.Connection) -> set[str]:
-    """The business dates with rows (``md_kbd``)."""
-    return {d.isoformat() for (d,) in con.execute("SELECT business_date FROM md_kbd")}
+    """The business dates with a KBD row: of a snapshot (``md_kbd``) or of the hub's history API (``md_kbd_day``)."""
+    return {d.isoformat() for (d,) in con.execute("SELECT business_date FROM md_kbd_day")}
+
+
+def latest_market_day(con: psycopg.Connection, on_or_before: date) -> date | None:
+    """The latest day with bond quotes on or before a date, of the history API (``md_hub_bond``) or of the snapshots
+    (``md_bond_eod``); two index lookups, not a scan of the view."""
+    cur = con.cursor(row_factory=tuple_row)
+    days = [r[0] for r in (cur.execute("SELECT max(trade_date) FROM md_hub_bond WHERE trade_date <= %s",
+                                       (on_or_before,)).fetchone(),
+                           cur.execute("SELECT max(business_date) FROM md_bond_eod WHERE business_date <= %s",
+                                       (on_or_before,)).fetchone()) if r[0] is not None]
+    return max(days) if days else None
 
 
 def superseded_dates(con: psycopg.Connection, latest: list[tuple[str, str]]) -> list[str]:
@@ -276,13 +294,14 @@ def _years(d: date, until: date | None) -> float | None:
 
 def bond_history(con: psycopg.Connection, *, instrument_id: str | None, isin: str | None, curve: str | None = None,
                  from_: date | None = None, to: date | None = None) -> dict[str, Any]:
-    """The bond's series (the ``BondHistory`` shape): every day of ``md_bond_eod`` in the range and every default
-    run that holds it, by date. Market fields (price, MOEX yield and G-spread, accrued, volume) come from the quote,
+    """The bond's series (the ``BondHistory`` shape): every day of ``md_bond_day`` (the history API's rows, else the
+    snapshots') in the range and every default run that holds it, by date. Market fields (price, MOEX yield and G-spread, accrued, volume) come from the quote,
     the run fills those the quote lacks and adds the Z-spread and the desk's face (all books); a day without a run
     has ``face_amount`` null. The term (``tenor_y``) runs to the MOEX yield date (the offer while it is ahead, else
     maturity), else to maturity. ``curve_rate``: the KBD of the date at that term, for a RUB bond with known coupons,
     when ``curve`` is the KBD (``KBD_CURVE``; unset, ``own`` and ``base`` mean it too: the runs' only curve);
-    ``spread_to_curve_bp`` = ytm - curve_rate."""
+    ``spread_to_curve_bp`` = ytm - curve_rate. ``moex_zspread_bp`` is MOEX's Z-spread to the KBD; ``icpi``, ``ir``,
+    ``bei``: MOEX's linker analytics as published (contract 1.2); ``origin``: ``hub`` (history API) or ``snapshot``."""
     on_kbd = curve in (None, "", "own", "base", KBD_CURVE)
     cur = con.cursor(row_factory=dict_row)
     facts = cur.execute(
@@ -302,13 +321,13 @@ def bond_history(con: psycopg.Connection, *, instrument_id: str | None, isin: st
     inst = cur.execute("SELECT * FROM md_instrument WHERE secid = ANY(%s)", (secids,)).fetchall()
     inst = min(inst, key=lambda r: secids.index(r["secid"])) if inst else None
     quotes = cur.execute(
-        "SELECT DISTINCT ON (b.business_date) b.*, k.trade_date AS kbd_date, k.params FROM md_bond_eod b"
-        " JOIN md_kbd k USING (business_date) WHERE b.secid = ANY(%(s)s)"
+        "SELECT DISTINCT ON (b.business_date) b.*, k.trade_date AS kbd_date, k.params FROM md_bond_day b"
+        " LEFT JOIN md_kbd_day k USING (business_date) WHERE b.secid = ANY(%(s)s)"
         " AND (%(from)s::date IS NULL OR b.business_date >= %(from)s::date)"
         " AND (%(to)s::date IS NULL OR b.business_date <= %(to)s::date)"
         " ORDER BY b.business_date, array_position(%(s)s, b.secid)", {"s": secids, "from": from_, "to": to}).fetchall()
     curves = {r["business_date"]: kbd(r["trade_date"], r["params"]) for r in cur.execute(
-        "SELECT business_date, trade_date, params FROM md_kbd WHERE business_date = ANY(%s)",
+        "SELECT business_date, trade_date, params FROM md_kbd_day WHERE business_date = ANY(%s)",
         (sorted({f["business_date"] for f in facts}),))}
     points: dict[date, dict[str, Any]] = {}
     for q in quotes:
@@ -318,7 +337,8 @@ def bond_history(con: psycopg.Connection, *, instrument_id: str | None, isin: st
         points[d] = {"date": d, "clean_price": q["clean_pct"], "ytm": q["yield_pct"], "g_spread_bp": q["gspread_bp"],
                      "accrued": q["accrued_per_bond"], "volume_rub": q["value"] if rub else None,
                      "source": "market", "face_amount": None, "yield_date": q["yield_date"],
-                     "price_basis": q["price_basis"]}
+                     "price_basis": q["price_basis"], "moex_zspread_bp": q["zspread_bp"],
+                     **{k: q[k] for k in ("icpi", "ir", "bei")}, "origin": q["origin"]}
     for r in facts:
         f, d = r["fact"], r["business_date"]
         p = points.setdefault(d, {"date": d, "source": "desk run"})
