@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>C03 · Позиции в центре</title>
+<link rel="stylesheet" href="lib/kit.css">
+<style>
+html, body { height: 100%; }
+body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.c3-bar { display: flex; gap: 8px 14px; align-items: center; flex-wrap: wrap; padding: 7px 14px; border-bottom: 1px solid var(--line); background: var(--bg); }
+.c3-bar .grp { display: inline-flex; gap: 6px; align-items: center; }
+.c3-bar .lb { color: var(--fg-3); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+.c3-bar .k-input { min-width: 260px; }
+.c3-bar .sp { flex: 1; }
+.c3-sub { display: flex; gap: 12px; align-items: center; padding: 4px 14px; border-bottom: 1px solid var(--line); background: var(--bg-2); font-size: 11.5px; color: var(--fg-3); flex-wrap: wrap; min-height: 26px; }
+.c3-sub .lg { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-2); }
+.c3-sub .lg i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.c3-sub a { cursor: pointer; color: var(--fg-2); }
+.c3-sub a:hover { color: var(--accent); }
+.c3-main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 440px; }
+.c3-tbl { overflow: auto; min-height: 0; border-right: 1px solid var(--line); background: var(--panel); }
+.c3-card { overflow: auto; min-height: 0; background: var(--panel); }
+@media (max-width: 1000px) {
+  body { height: auto; overflow: auto; }
+  .c3-main { grid-template-columns: 1fr; }
+  .c3-tbl { max-height: 70vh; border-right: 0; border-bottom: 1px solid var(--line); }
+  .c3-bar .k-input { min-width: 0; width: 100%; }
+}
+.c3-tbl table.k-tbl { font-size: 12px; }
+.c3-tbl .k-tbl td { padding: 3px 7px; }
+.c3-tbl .k-tbl th { padding: 5px 7px; }
+.c3-tbl tr.row td { background: var(--tint, transparent); }
+.c3-tbl tr.row:hover td:not(.stripe) { background: var(--hover); }
+.c3-tbl tr.row.sel td:not(.stripe) { background: var(--accent-bg) !important; }
+.c3-tbl tr.row.sel td:nth-child(2) { box-shadow: inset 2px 0 0 var(--accent); }
+.c3-tbl tr.grp td .gl { white-space: nowrap; }
+.c3-tbl .sd { border-color: var(--warn); color: var(--warn); padding: 0 4px; margin-left: 4px; }
+.c3-tbl .ev-soon { color: var(--warn); }
+.c3-tbl td .spark { vertical-align: middle; position: static; }
+/* карточка */
+.cd-hd { padding: 12px 14px 10px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 3; }
+.cd-hd .t { font-size: 15px; font-weight: 650; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.cd-hd .st { color: var(--fg-2); font-size: 11.5px; margin-top: 2px; }
+.cd-hd .acts { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.cd-bd { padding: 4px 14px 24px; }
+.cd-ev { margin-top: 10px; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--panel-2); display: flex; gap: 10px; align-items: baseline; }
+.cd-ev.soon { border-color: var(--warn); }
+.cd-ev .big { font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.cd-bd .k-fields .v { font-size: 13px; }
+.cd-pnl { display: grid; grid-template-columns: 70px minmax(0, 1fr) 80px; gap: 2px 8px; align-items: center; font-size: 12px; }
+.cd-pnl .n { text-align: right; font-variant-numeric: tabular-nums; }
+.cd-pnl .tot { font-weight: 650; border-top: 1px solid var(--line); padding-top: 3px; }
+.cd-empty { padding: 40px 20px; color: var(--fg-3); text-align: center; }
+</style>
+</head>
+<body>
+<div class="c3-bar">
+  <span class="grp"><span class="lb">Колонки</span><span id="sCols"></span></span>
+  <span class="grp"><span class="lb">Группы</span><span id="sGrp"></span></span>
+  <span class="grp"><span class="lb">Цвет</span><span id="sColor"></span></span>
+  <span class="sp"></span>
+  <input class="k-input" id="q" placeholder="поиск: бумага, ISIN, эмитент, книга, купон… (несколько слов)">
+</div>
+<div class="c3-sub" id="sub"></div>
+<div class="c3-main">
+  <div class="c3-tbl" id="tbl"></div>
+  <div class="c3-card" id="card"></div>
+</div>
+<script src="../echarts.min.js"></script>
+<script src="lib/mock.js"></script>
+<script src="lib/kit.js"></script>
+<script>
+(function () {
+  const M = MOCK, K = KIT, f = K.f, esc = K.esc;
+  K.top({ title: 'C03 · Позиции в центре', tag: 'таблица позиций + карточка рядом' });
+
+  // ---------- состояние ----------
+  const st = { preset: 'base', grouping: 'ccy', color: 'issuer', sort: [], q: '', sel: null, collapsed: {} };
+  try { Object.assign(st, JSON.parse(localStorage.getItem('c03-state') || '{}'), { sort: [], q: '', collapsed: {} }); } catch (e) { }
+  const save = () => { try { localStorage.setItem('c03-state', JSON.stringify({ preset: st.preset, grouping: st.grouping, color: st.color, sel: st.sel })); } catch (e) { } };
+
+  // ---------- цвета ----------
+  function rgba(hex, a) {
+    hex = String(hex || '').trim();
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex); if (!m) return 'transparent';
+    const n = parseInt(m[1], 16); return 'rgba(' + (n >> 16) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+  }
+  let pnlMax = 1;
+  function colorOf(r) {
+    if (st.color === 'ccy') return K.ccyColor(r.ccy);
+    if (st.color === 'type') return K.kindColor[r.kind];
+    if (st.color === 'pnl') return r.pnl.total >= 0 ? K.css('--pos') : K.css('--neg');
+    return K.issuerColor(r.issuer);
+  }
+  function tintOf(r) {
+    const light = K.theme() === 'light';
+    if (st.color === 'pnl') { const a = Math.min(1, Math.abs(r.pnl.total) / pnlMax); return rgba(colorOf(r), ((light ? 0.03 : 0.04) + 0.26 * Math.pow(a, 0.8)).toFixed(3)); }
+    return rgba(colorOf(r), light ? 0.05 : 0.06);
+  }
+
+  // ---------- колонки ----------
+  const hist = {}; const H = id => hist[id] || (hist[id] = M.posHistory(id));
+  const evName = { put: 'пут', call: 'колл', mat: 'погаш' };
+  const pnlCol = (key, label, k) => ({ label, num: true, val: r => r.pnl[k], fmt: v => '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.pnl[k], unit: 'тыс ₽', sfmt: f.k, title: 'тыс ₽' });
+  const C = {
+    name: { label: 'Бумага', val: r => r.name, fmt: (v, r) => esc(v) + (r.tradedToday ? '<span class="k-tag sd" title="сделки сегодня">сд</span>' : '') },
+    issuer: { label: 'Эмитент', val: r => r.issuerName, fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
+    issuerFull: { label: 'Эмитент (полн.)', val: r => r.issuerFull, fmt: v => esc(v) },
+    isin: { label: 'ISIN', val: r => r.isin, fmt: v => '<span class="mono mut3">' + esc(v || '—') + '</span>' },
+    ccy: { label: 'Вал', val: r => M.ccyOrder[r.ccy], fmt: (v, r) => K.ccyTag(r.ccy) },
+    kind: { label: 'Тип', val: r => r.group + r.kind, fmt: (v, r) => '<span class="tagc" style="border-color:' + K.kindColor[r.kind] + '66">' + esc(M.kindShort[r.kind]) + '</span>' },
+    book: { label: 'Книга', val: r => r.book, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
+    coupon: { label: 'Купон', val: r => r.couponFmt, fmt: v => '<span class="mono">' + esc(v || '—') + '</span>', title: 'Q — квартальный, M — месячный, S — полугодовой, A — годовой' },
+    curCpn: { label: 'Тек. купон', num: true, val: r => r.group === 'DER' ? null : r.curCpn, fmt: v => f.pct(v) },
+    offer: { label: 'Оферта', val: r => r.offer || null, fmt: (v, r) => v ? f.date(v) + ' <span class="mut3">' + (r.offerKind === 'put' ? 'P' : 'C') + '</span>' : '<span class="mut3">—</span>' },
+    maturity: { label: 'Погашение', val: r => r.maturity, fmt: v => f.date(v) },
+    event: { label: 'Ближайшее событие', val: r => r.event.date, title: 'оферта (пут/колл), если есть, иначе погашение',
+      fmt: (v, r) => '<span class="' + (r.group !== 'DER' && r.tenor < 0.25 ? 'ev-soon' : 'mut3') + '">' + evName[r.event.kind] + '</span> ' + f.date(r.event.date) + ' <span class="mut3">' + f.yrs(r.tenor) + '</span>' },
+    tenor: { label: 'Срок', num: true, val: r => r.tenor, fmt: v => f.yrs(v), title: 'до оферты, если есть, иначе до погашения' },
+    notional: { label: 'Номинал, млн', num: true, val: r => r.notional, fmt: (v, r) => f.mn(v, 0) + ' <span class="mut3">' + r.ccy + '</span>', title: 'в валюте бумаги' },
+    mv: { label: 'MV, млн ₽', neutral: true, num: true, val: r => r.mv, fmt: v => f.mn(v, 0), sum: r => r.mv, unit: 'млн ₽', sfmt: v => f.mn(v, 0) },
+    price: { label: 'Цена', num: true, val: r => r.price, fmt: v => f.px(v) },
+    chg: { label: 'Δ цены', num: true, val: r => r.price == null ? null : r.price - r.prevPrice, fmt: v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.s(v, 2) + '</span>' },
+    bidask: { label: 'Bid / Ask', num: true, val: r => r.bid, fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : '<span class="mut">' + f.px(r.bid) + ' / ' + f.px(r.ask) + '</span>' },
+    spark: { label: 'Цена 30д', val: r => { if (r.price == null) return null; const a = H(r.id).price; return a[a.length - 1] - a[a.length - 31]; }, title: 'сортировка — по изменению за 30 дней',
+      fmt: (v, r) => r.price == null ? '<span class="mut3">—</span>' : K.spark(H(r.id).price.slice(-30), 70, 16, v >= 0 ? K.css('--pos') : K.css('--neg')) },
+    ytm: { label: 'Дох.', num: true, val: r => r.ytm, fmt: v => f.pct(v) },
+    spread: { label: 'Спред', num: true, val: r => r.zspread, fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : f.bp(v) + ' <span class="mut3">' + (r.spreadLabel || '') + '</span>', title: 'Z-спред к RUONIA (фикс) / дисконт-маржа (флоатер), б.п.' },
+    gspread: { label: 'G-спред', num: true, val: r => r.gspread, fmt: v => v == null ? '<span class="mut3">—</span>' : f.bp(v), title: 'к кривой ОФЗ, б.п.' },
+    dur: { label: 'Дюр.', num: true, val: r => r.mdur, fmt: v => v == null ? '<span class="mut3">—</span>' : f.n(v, 2) },
+    dv01: { label: 'DV01', neutral: true, num: true, val: r => r.dv01, fmt: v => f.dv(v), sum: r => r.dv01, unit: 'тыс ₽/бп', sfmt: f.dv, title: 'тыс ₽/бп, по ставкам' },
+    cs01: { label: 'CS01', neutral: true, num: true, val: r => r.cs01, fmt: v => v ? f.dv(v) : '<span class="mut3">·</span>', sum: r => r.cs01, unit: 'тыс ₽/бп', sfmt: f.dv, title: 'тыс ₽/бп' },
+    basis01: { label: 'Базис01', neutral: true, num: true, val: r => r.basis01, fmt: v => v ? f.dv(v) : '<span class="mut3">·</span>', sum: r => r.basis01, unit: 'тыс ₽/бп', sfmt: f.dv, title: 'базис ОФЗ − RUONIA, тыс ₽/бп' },
+    fund: { label: 'Фонд.', num: true, val: r => r.fundRate, fmt: v => v == null ? '<span class="mut3">—</span>' : f.pct(v), title: 'ставка фондирования' },
+    carry: { label: 'Кэрри/д', num: true, val: r => r.carryDay, fmt: v => '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.carryDay, unit: 'тыс ₽', sfmt: f.k, title: 'тыс ₽ в день' },
+    pc: pnlCol('pc', 'Кэрри', 'carry'), pr: pnlCol('pr', 'Ставки', 'rates'), ps: pnlCol('ps', 'Спред', 'spread'), pf: pnlCol('pf', 'FX', 'fx'), pt: pnlCol('pt', 'Сделки', 'trading'), po: pnlCol('po', 'Прочее', 'other'),
+    pnl: { label: 'PnL дня', num: true, val: r => r.pnl.total, fmt: v => '<b class="' + f.cls(v) + '">' + f.k(v) + '</b>', sum: r => r.pnl.total, unit: 'тыс ₽', sfmt: f.k, title: 'тыс ₽' },
+    pnlMtd: { label: 'MTD', num: true, val: r => r.pnlMtd, fmt: v => '<span class="' + f.cls(v) + '">' + f.mn(v, 1) + '</span>', sum: r => r.pnlMtd, unit: 'млн ₽', sfmt: v => f.mn(v, 1), title: 'млн ₽' },
+    pnlYtd: { label: 'YTD', num: true, val: r => r.pnlYtd, fmt: v => '<span class="' + f.cls(v) + '">' + f.mn(v, 1) + '</span>', sum: r => r.pnlYtd, unit: 'млн ₽', sfmt: v => f.mn(v, 1), title: 'млн ₽' },
+    rating: { label: 'Рейтинг', val: r => r.rating, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
+    sector: { label: 'Сектор', val: r => r.sector, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
+    entity: { label: 'Юрлицо', val: r => r.entity, fmt: v => '<span class="mut">' + esc(M.entities.find(e => e.id === v).name) + '</span>' },
+    desk: { label: 'Деск', val: r => r.desk, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
+  };
+  const PRESETS = [
+    ['base', 'Базовый', ['name', 'ccy', 'kind', 'book', 'coupon', 'offer', 'maturity', 'event', 'notional', 'price', 'ytm', 'spread', 'dv01', 'cs01', 'spark', 'isin']],
+    ['risk', 'Риск', ['name', 'ccy', 'kind', 'book', 'event', 'tenor', 'notional', 'mv', 'dur', 'dv01', 'cs01', 'basis01', 'carry']],
+    ['px', 'Цены и спреды', ['name', 'ccy', 'kind', 'coupon', 'event', 'price', 'chg', 'bidask', 'spark', 'ytm', 'spread', 'gspread', 'dur']],
+    ['pnl', 'Кэрри и PnL', ['name', 'ccy', 'book', 'coupon', 'curCpn', 'fund', 'carry', 'pc', 'pr', 'ps', 'pf', 'pt', 'po', 'pnl', 'pnlMtd', 'pnlYtd']],
+    ['stat', 'Статика', ['name', 'isin', 'issuerFull', 'ccy', 'kind', 'rating', 'sector', 'coupon', 'offer', 'maturity', 'tenor', 'book', 'entity', 'desk']],
+    ['all', 'Всё', ['name', 'isin', 'ccy', 'kind', 'book', 'rating', 'coupon', 'curCpn', 'offer', 'maturity', 'event', 'tenor', 'notional', 'mv', 'price', 'chg', 'spark', 'ytm', 'spread', 'gspread', 'dur', 'dv01', 'cs01', 'basis01', 'carry', 'pnl', 'pnlMtd', 'pnlYtd']],
+  ];
+  // колонка валюты лишняя, когда валюта уже в заголовках групп
+  const cols = () => (PRESETS.find(p => p[0] === st.preset) || PRESETS[0])[2].filter(k => !(k === 'ccy' && (st.grouping === 'ccy' || st.grouping === 'book'))).map(k => Object.assign({ key: k }, C[k]));
+
+  // ---------- группировки ----------
+  const CCYN = { RUB: 'Рубли', USD: 'Доллары', EUR: 'Евро', CNY: 'Юани' };
+  const TBO = ['< 6м', '6м–1г', '1–2г', '2–3г', '3–5г', '5–7г', '7–10г', '10г+'];
+  const fixFloat = r => r.group === 'DER' ? M.kindShort[r.kind] : r.cpn.type === 'float' ? 'Флоатеры' : r.cpn.type === 'linker' ? 'Линкеры' : 'Фикс';
+  const FFO = ['Фикс', 'Флоатеры', 'Линкеры'];
+  const lvCcy = { key: r => r.ccy, label: k => K.ccyTag(k) + ' ' + CCYN[k], order: (a, b) => M.ccyOrder[a] - M.ccyOrder[b], color: k => K.ccyColor(k) };
+  const GROUPS = {
+    ccy: [lvCcy,
+      { key: r => r.group === 'DER' ? 'Деривативы' : r.issuerName, label: (k, rows) => esc(k) + (rows[0].group === 'DER' ? ' <span class="mut3" style="font-weight:400">по контрагентам</span>' : '') + (rows[0].rating && rows[0].rating !== '—' ? ' <span class="mut3" style="font-weight:400">' + esc(rows[0].rating) + '</span>' : ''), order: K.issuerOrder, color: (k, rows) => K.issuerColor(rows[0].issuer) },
+      { key: fixFloat, label: k => '<span class="mut">' + esc(k) + '</span>', order: (a, b) => { const i = x => { const j = FFO.indexOf(x); return j < 0 ? 9 : j; }; return i(a) - i(b) || a.localeCompare(b, 'ru'); }, skipSingle: true }],
+    book: [{ key: r => r.book, label: k => esc(M.book[k].name) + ' <span class="mut3" style="font-weight:400">' + esc(k + ' · ' + M.book[k].desk) + '</span>', order: (a, b) => M.books.findIndex(x => x.id === a) - M.books.findIndex(x => x.id === b) }, lvCcy],
+    type: [{ key: r => r.group + '.' + r.kind, label: k => { const t = M.typeRows.find(x => x.id === k); return '<b style="color:' + K.kindColor[t.kind] + '">●</b> ' + esc(M.groupLabel[t.group] + ' · ' + t.label); }, order: (a, b) => M.typeRows.findIndex(x => x.id === a) - M.typeRows.findIndex(x => x.id === b) },
+      { key: r => K.tenorBucket(r.tenor), label: k => '<span class="mut">срок ' + esc(k) + '</span>', order: (a, b) => TBO.indexOf(a) - TBO.indexOf(b) }],
+    none: [],
+  };
+
+  // ---------- данные ----------
+  function rows() {
+    let L = K.list();
+    const w = st.q.toLowerCase().split(/\s+/).filter(Boolean);
+    if (w.length) L = L.filter(p => w.every(x => p.searchText.includes(x)));
+    if (st.sort.length) {
+      const CC = Object.assign({}, C);
+      L = L.slice().sort((a, b) => {
+        for (const [k, d] of st.sort) {
+          const c = CC[k]; const x = c.val(a), y = c.val(b);
+          if (x == null && y == null) continue; if (x == null) return 1; if (y == null) return -1;
+          const r = typeof x === 'string' ? x.localeCompare(y, 'ru') : x - y; if (r) return d * r;
+        }
+        return 0;
+      });
+    }
+    return L;
+  }
+
+  // ---------- таблица ----------
+  const tbl = document.getElementById('tbl');
+  let visible = [];
+  function sumCell(c, list, title) {
+    if (!c.sum) return '<td></td>';
+    const tot = list.reduce((s, r) => s + c.sum(r), 0);
+    if (!list.length) return '<td></td>';
+    return '<td class="n">' + K.d({ title: title + ' · ' + c.label, unit: c.unit, fmt: c.sfmt, rows: list.map(p => ({ p, v: c.sum(p) })) }, c.sfmt(tot), c.neutral ? '' : null) + '</td>';
+  }
+  function render() {
+    const L = rows(), CL = cols(), G = GROUPS[st.grouping] || [];
+    pnlMax = Math.max(1, ...L.map(p => Math.abs(p.pnl.total)));
+    visible = [];
+    const firstSum = CL.findIndex(c => c.sum), span = firstSum < 0 ? CL.length : Math.max(1, firstSum);
+    const head = '<thead><tr><th class="stripe"></th>' + CL.map(c => {
+      const si = st.sort.findIndex(s => s[0] === c.key);
+      return '<th class="sortable' + (c.num ? ' n' : '') + '" data-k="' + c.key + '" title="' + esc(c.title || 'щелчок — сортировка, Shift+щелчок — добавить колонку') + '">' + c.label + (si >= 0 ? '<span class="si">' + (st.sort[si][1] > 0 ? '▲' : '▼') + (st.sort.length > 1 ? si + 1 : '') + '</span>' : '') + '</th>';
+    }).join('') + '</tr></thead>';
+    let body = '';
+    const leaf = r => {
+      visible.push(r.id);
+      return '<tr class="row' + (r.id === st.sel ? ' sel' : '') + '" data-id="' + r.id + '" style="--tint:' + tintOf(r) + '"><td class="stripe" style="background:' + colorOf(r) + '"></td>' +
+        CL.map(c => { const v = c.val(r); return '<td class="' + (c.num ? 'n' : '') + '">' + (c.fmt ? c.fmt(v, r) : esc(v)) + '</td>'; }).join('') + '</tr>';
+    };
+    function emit(list, level, path, title) {
+      if (level >= G.length) { list.forEach(r => body += leaf(r)); return; }
+      const g = G[level], m = new Map();
+      list.forEach(r => { const k = g.key(r); if (!m.has(k)) m.set(k, []); m.get(k).push(r); });
+      const keys = [...m.keys()]; if (g.order) keys.sort(g.order);
+      if (g.skipSingle && keys.length === 1) return emit(list, level + 1, path + '/' + keys[0], title);
+      keys.forEach(k => {
+        const sub = m.get(k), p = path + '/' + k, col = !!st.collapsed[p];
+        const lbl = g.label ? g.label(k, sub) : esc(k);
+        const t = (title ? title + ' · ' : '') + String(k);
+        body += '<tr class="grp l' + Math.min(level, 2) + '" data-g="' + esc(p) + '"><td class="stripe" style="background:' + (g.color ? g.color(k, sub) : 'transparent') + '"></td>' +
+          '<td colspan="' + span + '" style="padding-left:' + (7 + level * 14) + 'px"><span class="gl"><span class="tw">' + (col ? '▸' : '▾') + '</span>' + lbl + ' <span class="mut3" style="font-weight:400">' + sub.length + '</span></span></td>' +
+          CL.slice(span).map(c => sumCell(c, sub, t)).join('') + '</tr>';
+        if (!col) emit(sub, level + 1, p, t);
+      });
+    }
+    emit(L, 0, '', '');
+    const foot = '<tfoot><tr><td></td><td colspan="' + span + '">Итого <span class="mut3" style="font-weight:400">' + L.length + ' поз.</span></td>' + CL.slice(span).map(c => sumCell(c, L, 'Итого')).join('') + '</tr></tfoot>';
+    const sc = tbl.scrollTop;
+    tbl.innerHTML = '<table class="k-tbl">' + head + '<tbody>' + (body || '<tr><td colspan="' + (CL.length + 1) + '" class="k-empty">ничего не найдено</td></tr>') + '</tbody>' + foot + '</table>';
+    tbl.scrollTop = sc;
+    tbl.querySelectorAll('th.sortable').forEach(th => th.onclick = e => {
+      const k = th.dataset.k, i = st.sort.findIndex(s => s[0] === k);
+      if (e.shiftKey) { if (i >= 0) { if (st.sort[i][1] > 0) st.sort[i][1] = -1; else st.sort.splice(i, 1); } else st.sort.push([k, 1]); }
+      else st.sort = i >= 0 && st.sort.length === 1 ? (st.sort[0][1] > 0 ? [[k, -1]] : []) : [[k, C[k].num ? -1 : 1]];
+      render();
+    });
+    tbl.querySelectorAll('tr.grp').forEach(tr => tr.onclick = e => { if (e.target.closest('[data-dr]')) return; st.collapsed[tr.dataset.g] = !st.collapsed[tr.dataset.g]; render(); });
+    tbl.querySelectorAll('tr.row').forEach(tr => {
+      tr.onclick = e => { if (e.target.closest('[data-dr]')) return; select(tr.dataset.id, false); };
+      tr.ondblclick = () => K.card(tr.dataset.id);
+    });
+    if (!st.sel || !M.pos[st.sel] || !visible.includes(st.sel)) { if (visible.length) select(visible[0], false); else showCard(null); }
+    renderSub(L);
+  }
+  function select(id, scroll) {
+    st.sel = id; save();
+    tbl.querySelectorAll('tr.row.sel').forEach(x => x.classList.remove('sel'));
+    const tr = tbl.querySelector('tr.row[data-id="' + id + '"]');
+    if (tr) { tr.classList.add('sel'); if (scroll) { const head = tbl.querySelector('thead').offsetHeight, foot = tbl.querySelector('tfoot').offsetHeight; const top = tr.offsetTop - head, bot = tr.offsetTop + tr.offsetHeight + foot; if (top < tbl.scrollTop) tbl.scrollTop = top; else if (bot > tbl.scrollTop + tbl.clientHeight) tbl.scrollTop = bot - tbl.clientHeight; } }
+    showCard(id);
+  }
+
+  // ---------- строка под панелью: легенда, счётчик, подсказки ----------
+  function renderSub(L) {
+    const sub = document.getElementById('sub');
+    let lg = '';
+    if (st.color === 'ccy') lg = M.ccys.map(c => '<span class="lg"><i style="background:' + K.ccyColor(c) + '"></i>' + c + '</span>').join('');
+    else if (st.color === 'type') lg = M.typeRows.filter(t => L.some(p => p.group + '.' + p.kind === t.id)).map(t => '<span class="lg"><i style="background:' + K.kindColor[t.kind] + '"></i>' + esc(t.label) + '</span>').join('');
+    else if (st.color === 'pnl') lg = '<span class="lg"><i style="background:' + K.css('--pos') + '"></i>прибыль дня</span><span class="lg"><i style="background:' + K.css('--neg') + '"></i>убыток дня</span><span>насыщенность — размер</span>';
+    else lg = '<span>полоса и подложка — цвет эмитента</span>';
+    sub.innerHTML = '<span><b style="color:var(--fg)">' + L.length + '</b> позиций</span>' + lg + '<span class="sp" style="flex:1"></span>' +
+      (st.sort.length ? '<a data-a="unsort">✕ сортировка по умолчанию</a>' : '<span>сортировка: валюта → эмитент → фикс/флоатер → срок до оферты</span>') +
+      '<a data-a="collapse">свернуть</a><a data-a="expand">развернуть</a>' +
+      '<span><span class="k-kbd">↑</span><span class="k-kbd">↓</span> выбор · <span class="k-kbd">Enter</span> полная карточка · Shift+щелчок — сортировка по нескольким</span>';
+    sub.querySelectorAll('[data-a]').forEach(a => a.onclick = () => {
+      if (a.dataset.a === 'unsort') st.sort = [];
+      if (a.dataset.a === 'expand') st.collapsed = {};
+      if (a.dataset.a === 'collapse') { st.collapsed = {}; tbl.querySelectorAll('tr.grp.l0').forEach(tr => st.collapsed[tr.dataset.g] = true); }
+      render();
+    });
+  }
+
+  // ---------- карточка справа ----------
+  const card = document.getElementById('card');
+  card.innerHTML = '<div class="cd-hd"></div><div class="cd-bd"><div class="cd-ev-box"></div><div class="k-sec">Параметры</div><div class="cd-fields"></div>' +
+    '<div class="k-sec">История <span class="sp"></span><span class="hseg"></span></div><div class="cd-h" style="height:180px"></div>' +
+    '<div class="k-sec">PnL дня <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽</span></div><div class="cd-pnl"></div>' +
+    '<div class="k-sec">Риск по бакетам <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽/бп</span></div><div class="cd-r" style="height:150px"></div>' +
+    '<div class="k-sec cfs-t">Ближайшие потоки</div><div class="cd-cfs"></div></div>';
+  const $ = s => card.querySelector(s);
+  let cur = null, hmode = 'yield';
+  const hChart = K.chart($('.cd-h'), () => {
+    if (!cur) return { series: [] };
+    const p = cur, h = H(p.id), isBond = p.group !== 'DER';
+    const m = isBond ? hmode : (hmode === 'dv01' ? 'dv01' : 'notional');
+    const S = m === 'price' ? [{ name: 'Цена', data: h.price }] : m === 'yield' ? [{ name: 'Доходность', data: h.ytm }, { name: 'ОФЗ на сроке', data: h.bench, lineStyle: { type: 'dashed', width: 1 } }]
+      : m === 'spread' ? [{ name: 'Спред, б.п.', data: h.spr }] : m === 'dv01' ? [{ name: 'DV01, тыс ₽/бп', data: h.dv01.map(v => v / 1e3), step: 'end' }] : [{ name: 'Номинал, млн', data: h.notional.map(v => v / 1e6), step: 'end', areaStyle: { opacity: .15 } }];
+    return { grid: { left: 4, right: 8, top: 24, bottom: 2, containLabel: true }, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis' },
+      xAxis: { type: 'category', data: h.dates, axisLabel: { formatter: v => f.dshort(v) } }, yAxis: { type: 'value', scale: true },
+      series: S.map((s, i) => Object.assign({ type: 'line', showSymbol: false, lineStyle: { width: 1.5 }, color: i ? K.css('--fg-3') : K.issuerColor(p.issuer) }, s)), dataZoom: [{ type: 'inside', start: 50 }] };
+  });
+  const rChart = K.chart($('.cd-r'), () => {
+    if (!cur) return { series: [] };
+    const p = cur, ids = M.curves.filter(c => p.risk[c.id].some(v => Math.abs(v) > 1)).map(c => c.id);
+    return { grid: { left: 4, right: 8, top: 22, bottom: 2, containLabel: true }, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis', valueFormatter: v => f.dv(v) },
+      xAxis: { type: 'category', data: M.buckets }, yAxis: { type: 'value', axisLabel: { formatter: v => f.dv(v) } },
+      series: ids.map(id => ({ name: M.curve[id].short, type: 'bar', stack: M.curve[id].kind === 'rate' ? 'a' : 'b' + id, data: p.risk[id], itemStyle: { color: K.curveColors[id] } }))
+        .concat(p.cs01 ? [{ name: 'CS01', type: 'bar', data: p.cs01b, itemStyle: { color: K.curveColors.CS01 } }] : []) };
+  });
+  function showCard(id) {
+    const p = id ? M.pos[id] : null;
+    if (!p) { cur = null; $('.cd-hd').innerHTML = '<div class="cd-empty">выберите позицию в таблице</div>'; return; }
+    const prevBond = cur && cur.group !== 'DER';
+    cur = p;
+    const isBond = p.group !== 'DER';
+    $('.cd-hd').innerHTML = '<div class="t"><span style="color:' + K.issuerColor(p.issuer) + '">●</span>' + esc(p.name) + ' ' + K.ccyTag(p.ccy) + ' <span class="tagc" style="font-size:11px;font-weight:400;padding:0 6px;border:1px solid var(--line);border-radius:4px;color:var(--fg-2)">' + esc(p.kindLabel) + '</span></div>' +
+      '<div class="st">' + esc(p.issuerFull) + (p.isin ? ' · <span class="mono">' + esc(p.isin) + '</span>' : '') + ' · ' + esc(p.book) + ' — ' + esc(p.bookName) + (p.rating !== '—' ? ' · ' + esc(p.rating) : '') + '</div>' +
+      '<div class="acts"><button class="k-btn pri" data-a="full">Открыть полностью ↗</button>' + (p.issuer ? '<button class="k-btn" data-a="iss">Все бумаги эмитента</button>' : '') + '<button class="k-btn" data-a="book">Книга ' + esc(p.book) + '</button></div>';
+    $('.cd-hd [data-a=full]').onclick = () => K.card(p.id);
+    if (p.issuer) $('.cd-hd [data-a=iss]').onclick = () => K.drill({ title: 'Эмитент ' + p.issuerName + ' · MV', unit: 'млн ₽', fmt: v => f.mn(v, 1), list: K.list().filter(x => x.issuer === p.issuer), val: x => x.group === 'DER' ? x.notionalRub : x.mv });
+    $('.cd-hd [data-a=book]').onclick = () => K.drill({ title: 'Книга ' + p.book + ' · DV01', unit: 'тыс ₽/бп', list: M.positions.filter(x => x.book === p.book), val: 'dv01' });
+    // событие
+    const evTxt = { put: 'Пут-оферта', call: 'Колл-опцион', mat: isBond ? 'Погашение' : 'Срок сделки' }[p.event.kind];
+    const soon = isBond && p.tenor < 0.25;
+    $('.cd-ev-box').innerHTML = '<div class="cd-ev' + (soon ? ' soon' : '') + '"><span class="mut">' + evTxt + '</span><span class="big">' + f.date(p.event.date) + '</span><span class="mut">через ' + f.yrs(p.tenor) + '</span>' +
+      (p.offer ? '<span class="sp" style="flex:1"></span><span class="mut3">погашение ' + f.date(p.maturity) + '</span>' : '') + '</div>';
+    const F = isBond ? [
+      ['Номинал', f.mn(p.notional, 0) + ' <small>млн ' + p.ccy + '</small>'], ['MV', f.mn(p.mv, 1) + ' <small>млн ₽</small>'],
+      ['Цена', f.px(p.price) + ' <small class="' + f.cls(p.price - p.prevPrice) + '">' + f.s(p.price - p.prevPrice, 2) + '</small>'], ['Bid / Ask', '<small>' + f.px(p.bid) + ' / ' + f.px(p.ask) + '</small>'],
+      ['Доходность', f.pct(p.ytm) + ' <small>к ' + (p.event.kind === 'mat' ? 'погаш.' : 'оферте') + '</small>'], [p.spreadLabel === 'DM' ? 'Дисконт-маржа' : 'Z-спред', f.bp(p.zspread) + ' <small>б.п.' + (p.gspread != null ? ' · G ' + f.bp(p.gspread) : '') + '</small>'],
+      ['Купон', '<span class="mono">' + esc(p.couponFmt) + '</span>'], ['Текущий купон', f.pct(p.curCpn) + (p.cpn.type === 'float' ? ' <small>прогноз</small>' : '')],
+      ['Мод. дюрация', p.mdur == null ? '—' : f.n(p.mdur, 2)], ['DV01', f.dv(p.dv01) + ' <small>тыс ₽/бп</small>'],
+      ['CS01', f.dv(p.cs01) + ' <small>тыс ₽/бп</small>'], ['Базис ОФЗ01', p.basis01 ? f.dv(p.basis01) : '—'],
+      ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽ · фонд. ' + f.pct(p.fundRate) + '</small>'], ['НКД', f.mn(p.accrued, 2) + ' <small>млн ₽</small>'],
+    ] : [
+      ['Номинал', f.mn(p.notional, 0) + ' <small>млн ' + p.ccy + '</small>'], ['MTM', f.mn(p.mv, 1) + ' <small>млн ₽</small>'],
+      ['Ставка / курс', esc(p.couponFmt)], ['Срок', f.date(p.maturity) + ' <small>' + f.yrs(p.tenor) + '</small>'],
+      ['DV01', f.dv(p.dv01) + ' <small>тыс ₽/бп</small>'], ['FX дельта', p.fxDelta ? f.mn(p.fxDelta, 1) + ' <small>млн ' + p.ccy + '</small>' : '—'],
+      ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽</small>'], ['Контрагент', esc(p.cpty || '—')],
+    ];
+    $('.cd-fields').innerHTML = '<div class="k-fields">' + F.map(([l, v]) => '<div><div class="l">' + l + '</div><div class="v">' + v + '</div></div>').join('') + '</div>';
+    // PnL
+    const pn = p.pnl, parts = [['Кэрри', pn.carry], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx], ['Сделки', pn.trading], ['Прочее', pn.other]];
+    const mx = Math.max(1, ...parts.map(x => Math.abs(x[1])));
+    $('.cd-pnl').innerHTML = parts.map(([l, v]) => '<span class="mut">' + l + '</span>' + K.bar(v, mx) + '<span class="n ' + f.cls(v) + '">' + f.ks(v) + '</span>').join('') +
+      '<span class="tot">Итого</span><span class="tot mut3" style="font-size:11px">MTD ' + f.mns(p.pnlMtd, 1) + ' млн · YTD ' + f.mns(p.pnlYtd, 1) + ' млн</span><span class="n tot ' + f.cls(pn.total) + '">' + f.ks(pn.total) + '</span>';
+    // история: режимы зависят от типа
+    if (prevBond !== isBond || !card.querySelector('.hseg .k-seg')) {
+      const items = (isBond ? [['price', 'цена'], ['yield', 'доходн.'], ['spread', 'спред']] : []).concat([['notional', 'позиция'], ['dv01', 'DV01']]);
+      if (!items.some(x => x[0] === hmode)) hmode = items[0][0];
+      K.seg($('.hseg'), items, hmode, v => { hmode = v; hChart.redraw(); });
+    }
+    hChart.redraw(); rChart.redraw();
+    // потоки
+    const cf = M.cashflows.filter(c => c.pos === p.id).slice(0, 6);
+    $('.cfs-t').style.display = isBond ? '' : 'none';
+    $('.cd-cfs').innerHTML = !isBond ? '' : cf.length ? '<table class="k-tbl"><thead><tr><th>Дата</th><th>Тип</th><th class="n">Сумма, ' + p.ccy + '</th><th class="n">≈ млн ₽</th></tr></thead><tbody>' +
+      cf.map(c => '<tr><td>' + f.date(c.date) + '</td><td>' + ({ cpn: 'купон', mat: 'погашение', put: 'пут-оферта', call: 'колл' }[c.kind]) + (c.est ? ' <span class="mut3">прогноз</span>' : '') + '</td><td class="n">' + f.n(c.amount, 0) + '</td><td class="n">' + f.mn(c.amountRub, 1) + '</td></tr>').join('') + '</tbody></table>' : '<div class="k-empty">нет потоков в горизонте 18 мес.</div>';
+  }
+
+  // ---------- панель управления ----------
+  K.seg(document.getElementById('sCols'), PRESETS.map(p => [p[0], p[1]]), st.preset, v => { st.preset = v; st.sort = st.sort.filter(s => cols().some(c => c.key === s[0])); save(); render(); });
+  K.seg(document.getElementById('sGrp'), [['ccy', 'валюта → эмитент'], ['book', 'книга → валюта'], ['type', 'тип → срок'], ['none', 'без групп']], st.grouping, v => { st.grouping = v; st.collapsed = {}; save(); render(); });
+  K.seg(document.getElementById('sColor'), [['issuer', 'эмитент'], ['ccy', 'валюта'], ['type', 'тип'], ['pnl', 'PnL дня']], st.color, v => { st.color = v; save(); render(); });
+  const q = document.getElementById('q');
+  q.oninput = () => { st.q = q.value; render(); };
+  K.commands([{ label: 'Колонки: ' + 'Базовый', run: () => document.querySelector('#sCols button').click() }, { label: 'Поиск в таблице позиций', run: () => q.focus() }]);
+
+  document.addEventListener('keydown', e => {
+    if (document.querySelector('.k-drawer, .k-pal')) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (!visible.length) return;
+      const i = visible.indexOf(st.sel);
+      let j = i < 0 ? 0 : i + (e.key === 'ArrowDown' ? 1 : -1);
+      j = Math.max(0, Math.min(visible.length - 1, j));
+      select(visible[j], true); e.preventDefault();
+    } else if (e.key === 'Enter' && st.sel) { K.card(st.sel); e.preventDefault(); }
+  });
+  K.onFilter(render);
+  K.on('theme', render);
+  render();
+})();
+</script>
+</body>
+</html>

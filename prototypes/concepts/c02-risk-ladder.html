@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>C02 · Лестница рисков</title>
+<link rel="stylesheet" href="lib/kit.css">
+<style>
+.strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+.strip .k-kpi .s { white-space: normal; line-height: 1.5; }
+.sec .hd { flex-wrap: wrap; }
+.sec .hd .tot { color: var(--fg-2); font-size: 12px; white-space: nowrap; }
+.sec .hd .tot b { color: var(--fg); font-weight: 600; }
+.chart { height: 330px; }
+#secs { grid-template-columns: repeat(auto-fit, minmax(620px, 1fr)); }
+#secs .sec.wide { grid-column: 1 / -1; }
+#secs .sec:not(.wide) .chart { height: 290px; }
+@media (max-width: 700px) { #secs { grid-template-columns: 1fr; } }
+.sm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
+.sm { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px 4px; background: var(--bg-2); min-width: 0; }
+.sm .t { display: flex; gap: 6px; align-items: baseline; font-size: 12px; white-space: nowrap; }
+.sm .t .l { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.sm svg { display: block; width: 100%; height: 86px; }
+.sm svg rect.b { cursor: pointer; }
+.sm svg rect.b:hover { opacity: 1 !important; stroke: var(--fg); stroke-width: .6; }
+.prof svg { display: block; }
+.sim { display: grid; grid-template-columns: 300px minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+@media (max-width: 1250px) { .sim { grid-template-columns: 1fr; } }
+.sl { display: grid; grid-template-columns: 92px 1fr 54px; gap: 8px; align-items: center; margin: 6px 0; font-size: 12px; }
+.sl input[type=range] { width: 100%; accent-color: var(--accent); }
+.sl .val { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+.presets { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.presets .k-btn { padding: 2px 8px; font-size: 11.5px; }
+.bigpnl { font-size: 26px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.comp { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--fg-2); margin: 2px 0 8px; }
+.comp b { font-weight: 600; }
+.k-tbl td.lbl { white-space: nowrap; }
+.iss-more { padding: 6px 12px; }
+</style>
+</head>
+<body>
+<div class="k-page">
+  <div class="strip" id="strip"></div>
+  <div class="k-panel" id="sim"><div class="hd"><h3>Сдвиг кривых → PnL</h3><span class="k-note">линейно: DV01 × сдвиг, без выпуклости</span><span class="sp"></span><span class="scope"></span></div><div class="bd"></div></div>
+  <div id="secs" class="k-grid"></div>
+  <div class="k-panel" id="iss"><div class="hd"><h3>Эмитент × срок</h3><span class="k-note">тыс ₽/бп · щелчок по клетке — позиции</span><span class="sp"></span><span class="met"></span></div><div class="bd flush scroll"></div></div>
+</div>
+<script src="../echarts.min.js"></script>
+<script src="lib/mock.js"></script>
+<script src="lib/kit.js"></script>
+<script>
+(function () {
+  const M = MOCK, K = KIT, f = K.f, esc = K.esc, css = K.css;
+  K.top({ title: 'C02 · Лестница рисков', tag: 'только риск: валюты → кривые → бакеты → типы' });
+  const CCYN = { RUB: 'Рубли', USD: 'Доллары', EUR: 'Евро', CNY: 'Юани' };
+  const RATE = {}; M.ccys.forEach(c => RATE[c] = M.curves.filter(x => x.ccy === c && x.kind === 'rate').map(x => x.id));
+  const ALLRATE = M.curves.filter(x => x.kind === 'rate').map(x => x.id);
+  const NB = M.buckets.length;
+  const typeOf = p => p.group + '.' + p.kind;
+  const sumArr = a => a.reduce((s, x) => s + x, 0);
+  // значение метрики позиции в бакете k для валюты риска ccy
+  function mval(p, ccy, metric, k) {
+    if (metric === 'rates') { let s = 0; for (const id of RATE[ccy]) s += p.risk[id][k]; return s; }
+    if (metric === 'basis') return ccy === 'RUB' ? p.risk['RUB OFZ'][k] : 0;
+    return p.ccy === ccy ? p.cs01b[k] : 0;
+  }
+  const METN = { rates: 'DV01 ставки', basis: 'базис ОФЗ', cs01: 'CS01' };
+  // свой реестр для SVG-элементов: тот же механизм, что у K.d (data-dr)
+  const regDr = spec => K._reg.push(spec) - 1;
+  const ccysInUse = () => M.ccys.filter(c => K.list().some(p => p.ccy === c || RATE[c].some(id => p.dv01ByCurve[id])));
+
+  // ---------- верхняя полоса ----------
+  function drawStrip() {
+    const L = K.list();
+    let html = '';
+    M.ccys.forEach(c => {
+      const tot = M.sum(L, p => RATE[c].reduce((s, id) => s + p.dv01ByCurve[id], 0));
+      if (!L.some(p => RATE[c].some(id => p.dv01ByCurve[id]))) return;
+      const curves = M.curves.filter(x => x.ccy === c);
+      html += K.kpi(K.ccyTag(c) + ' DV01 ставки',
+        K.d({ title: c + ' · DV01 ставки', unit: 'тыс ₽/бп', list: L, val: p => RATE[c].reduce((s, id) => s + p.dv01ByCurve[id], 0) }, null, '') + ' <span class="mut" style="font-size:11px">тыс/бп</span>',
+        curves.length > 1 ? curves.map(x => esc(x.short) + ' ' + K.d({ title: x.name, unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve[x.id] }, null, '')).join(' · ') : 'CS01 ' + K.d({ title: c + ' · CS01', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === c), val: 'cs01' }, null, ''));
+    });
+    const short = p => ALLRATE.reduce((s, id) => s + sumArr(p.risk[id].slice(0, 4)), 0), long = p => ALLRATE.reduce((s, id) => s + sumArr(p.risk[id].slice(4)), 0);
+    html += K.kpi('Короткий / длинный конец', K.d({ title: 'DV01 до 2Y включительно', unit: 'тыс ₽/бп', list: L, val: short }, null, '') + ' <span class="mut">/</span> ' + K.d({ title: 'DV01 дальше 2Y', unit: 'тыс ₽/бп', list: L, val: long }, null, ''), '≤ 2Y / > 2Y, все кривые');
+    html += K.kpi('CS01 всего', K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }, null, ''), M.ccys.map(c => c + ' ' + K.d({ title: 'CS01 ' + c, unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === c), val: 'cs01' }, null, '')).join(' · '));
+    document.getElementById('strip').innerHTML = html;
+  }
+
+  // ---------- секции по валютам ----------
+  const VIEWS = [['curves', 'кривые'], ['types', 'типы'], ['ladder', 'лесенки'], ['cum', 'кумулятив'], ['heat', 'тепловая'], ['table', 'таблица']];
+  const state = {}; let secObjs = [];
+  try { Object.assign(state, JSON.parse(localStorage.getItem('c02-state') || '{}')); } catch (e) { }
+  const save = () => { try { localStorage.setItem('c02-state', JSON.stringify(state)); } catch (e) { } };
+
+  function typeRowsFor(L, ccy, metric) {
+    return M.typeRows.map(t => {
+      const list = L.filter(p => typeOf(p) === t.id);
+      const vals = M.buckets.map((_, k) => list.reduce((s, p) => s + mval(p, ccy, metric, k), 0));
+      return { t, list, vals, tot: sumArr(vals) };
+    }).filter(r => r.vals.some(v => Math.abs(v) > 300));
+  }
+  function bucketRows(list, ccy, metric, k) { return list.map(p => ({ p, v: mval(p, ccy, metric, k) })); }
+
+  function buildSections() {
+    secObjs.forEach(s => s.charts.forEach(c => c.dispose()));
+    secObjs = [];
+    const box = document.getElementById('secs'); box.innerHTML = '';
+    ccysInUse().forEach(ccy => {
+      const st = state[ccy] = Object.assign({ view: ccy === 'RUB' ? 'curves' : 'curves', metric: 'rates' }, state[ccy]);
+      const p = K.h('div', 'k-panel sec' + (ccy === 'RUB' ? ' wide' : ''));
+      p.innerHTML = '<div class="hd"><h3>' + K.ccyTag(ccy) + ' ' + CCYN[ccy] + '</h3><span class="tot"></span><span class="sp"></span><span class="met"></span><span class="vw"></span></div><div class="bd"></div>';
+      box.appendChild(p);
+      const o = { ccy, el: p, bd: p.querySelector('.bd'), charts: [] };
+      secObjs.push(o);
+      K.seg(p.querySelector('.vw'), VIEWS, st.view, v => { st.view = v; save(); renderSec(o); });
+      renderSec(o);
+    });
+  }
+  function renderSec(o) {
+    const { ccy, bd } = o, st = state[ccy], L = K.list();
+    o.charts.forEach(c => c.dispose()); o.charts = [];
+    bd.innerHTML = ''; bd.classList.toggle('flush', st.view === 'table' || st.view === 'heat'); bd.classList.toggle('scroll', st.view === 'table' || st.view === 'heat');
+    // итоги в заголовке
+    const tot = o.el.querySelector('.tot');
+    tot.innerHTML = 'ставки <b>' + K.d({ title: ccy + ' · DV01 ставки', unit: 'тыс ₽/бп', list: L, val: p => RATE[ccy].reduce((s, id) => s + p.dv01ByCurve[id], 0) }, null, '') + '</b>' +
+      (ccy === 'RUB' ? ' · базис ОФЗ <b>' + K.d({ title: 'Базис ОФЗ−RUONIA', unit: 'тыс ₽/бп', list: L, val: 'basis01' }, null, '') + '</b>' : '') +
+      ' · CS01 <b>' + K.d({ title: ccy + ' · CS01', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === ccy), val: 'cs01' }, null, '') + '</b> <span class="mut3">тыс ₽/бп</span>';
+    // переключатель метрики — только там, где он что-то меняет
+    const metBox = o.el.querySelector('.met');
+    if (['types', 'ladder', 'heat'].includes(st.view)) {
+      const mets = [['rates', 'ставки']].concat(ccy === 'RUB' ? [['basis', 'базис ОФЗ']] : []).concat([['cs01', 'CS01']]);
+      if (!mets.some(m => m[0] === st.metric)) st.metric = 'rates';
+      K.seg(metBox, mets, st.metric, v => { st.metric = v; save(); renderSec(o); });
+    } else metBox.innerHTML = '';
+
+    if (st.view === 'curves') {
+      const el = K.h('div', 'chart'); bd.appendChild(el);
+      o.charts.push(K.riskStack(el, { curves: M.curves.filter(x => x.ccy === ccy).map(x => x.id) }));
+      bd.appendChild(K.h('div', 'k-note', 'Столбцы — кривые; ромб — итог бакета по ставкам' + (ccy === 'RUB' ? ' (базис ОФЗ — отдельный столбец, в итог не входит)' : '') + '; пунктир — кумулятивный риск до срока (правая ось). Щелчок по любому элементу — вклад позиций.'));
+    }
+    if (st.view === 'types') {
+      const el = K.h('div', 'chart'); bd.appendChild(el);
+      let rows;
+      const ch = K.chart(el, () => {
+        rows = typeRowsFor(K.list(), ccy, st.metric);
+        const tot = M.buckets.map((_, k) => rows.reduce((s, r) => s + r.vals[k], 0)); let c = 0; const cum = tot.map(v => c += v);
+        return {
+          grid: { left: 8, right: 8, top: 34, bottom: 4, containLabel: true },
+          legend: { top: 0, left: 0, type: 'scroll', data: rows.map(r => r.t.label).concat(['итог', 'кумулятив']) },
+          tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.dv(v) },
+          xAxis: { type: 'category', data: M.buckets },
+          yAxis: [{ type: 'value', axisLabel: { formatter: v => f.dv(v) } }, { type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => f.dv(v), color: css('--warn') } }],
+          series: rows.map(r => ({ name: r.t.label, type: 'bar', stack: 's', barMaxWidth: 38, data: r.vals, itemStyle: { color: K.kindColor[r.t.kind] } }))
+            .concat([{ name: 'итог', type: 'scatter', symbol: 'diamond', symbolSize: 11, data: tot, itemStyle: { color: css('--fg'), borderColor: css('--bg'), borderWidth: 1 }, z: 5, label: { show: true, position: 'top', formatter: p => f.dv(p.value), color: css('--fg-2'), fontSize: 10 } },
+            { name: 'кумулятив', type: 'line', yAxisIndex: 1, data: cum, symbolSize: 4, lineStyle: { width: 2, type: 'dashed', color: css('--warn') }, itemStyle: { color: css('--warn') }, z: 4 }]),
+        };
+      });
+      ch.on('click', pp => {
+        const k = pp.dataIndex, L = K.list();
+        if (pp.seriesName === 'кумулятив') return K.drill({ title: ccy + ' · ' + METN[st.metric] + ' · кумулятив до ' + M.buckets[k], unit: 'тыс ₽/бп', dim: 'kind', rows: L.map(p => ({ p, v: M.buckets.slice(0, k + 1).reduce((s, _, j) => s + mval(p, ccy, st.metric, j), 0) })) });
+        if (pp.seriesName === 'итог') return K.drill({ title: ccy + ' · ' + METN[st.metric] + ' · ' + M.buckets[k], unit: 'тыс ₽/бп', dim: 'kind', rows: bucketRows(L, ccy, st.metric, k) });
+        const r = rows[pp.seriesIndex]; K.drill({ title: ccy + ' · ' + r.t.label + ' · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: bucketRows(r.list, ccy, st.metric, k) });
+      });
+      o.charts.push(ch);
+    }
+    if (st.view === 'ladder') {
+      const rows = typeRowsFor(L, ccy, st.metric);
+      const own = !!st.own;
+      const tools = K.h('div'); tools.style.cssText = 'display:flex;gap:8px;align-items:center;margin-bottom:8px'; bd.appendChild(tools);
+      tools.appendChild(K.h('span', 'mut', 'шкала:')); const sb = K.h('span'); tools.appendChild(sb);
+      K.seg(sb, [['0', 'общая'], ['1', 'своя у каждого']], own ? '1' : '0', v => { st.own = v === '1'; save(); renderSec(o); });
+      const g = K.h('div', 'sm-grid'); bd.appendChild(g);
+      const W = 230, H = 96, pad = 2, bw = (W - pad * 2) / NB, avail = H - 20;
+      const ext = vs => [Math.max(0, ...vs), Math.max(0, ...vs.map(v => -v))];
+      const [gP, gN] = ext(rows.flatMap(r => r.vals));
+      rows.forEach(r => {
+        const [P, N] = own ? ext(r.vals) : [gP, gN], span = (P + N) || 1;
+        const zero = 4 + P / span * avail, scale = avail / span;
+        let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">';
+        svg += '<line x1="0" x2="' + W + '" y1="' + zero + '" y2="' + zero + '" style="stroke:var(--line-2)"/>';
+        r.vals.forEach((v, k) => {
+          const hgt = Math.abs(v) * scale, x = pad + k * bw + 1.5, y = v < 0 ? zero : zero - hgt;
+          const id = regDr({ title: ccy + ' · ' + r.t.label + ' · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: bucketRows(r.list, ccy, st.metric, k) });
+          svg += '<rect class="b" data-dr="' + id + '" x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + (bw - 3).toFixed(1) + '" height="' + Math.max(0.5, hgt).toFixed(1) + '" style="fill:' + K.kindColor[r.t.kind] + ';opacity:.85"><title>' + M.buckets[k] + ': ' + f.dv(v) + ' тыс ₽/бп</title></rect>';
+          if (k % 2 === 0 || NB < 8) svg += '<text x="' + (x + (bw - 3) / 2).toFixed(1) + '" y="' + (H - 1) + '" text-anchor="middle" style="fill:var(--fg-3);font-size:8px">' + M.buckets[k] + '</text>';
+        });
+        svg += '</svg>';
+        const c = K.h('div', 'sm');
+        c.innerHTML = '<div class="t"><b style="color:' + K.kindColor[r.t.kind] + '">■</b><span class="l">' + esc(r.t.label) + ' <span class="mut3">' + r.list.length + '</span></span>' + K.d({ title: ccy + ' · ' + r.t.label + ' · ' + METN[st.metric], unit: 'тыс ₽/бп', rows: r.list.map(p => ({ p, v: M.buckets.reduce((s, _, k) => s + mval(p, ccy, st.metric, k), 0) })) }, null, '') + '</div>' + svg;
+        g.appendChild(c);
+      });
+      if (!rows.length) g.innerHTML = '<div class="k-empty">нет риска</div>';
+      bd.appendChild(K.h('div', 'k-note', 'Профиль ' + METN[st.metric] + ' по срокам для каждого типа инструментов. Общая шкала — видно, кто где «сидит» и кто главный; своя — форма профиля мелких типов. Щелчок по столбику — позиции.'));
+    }
+    if (st.view === 'cum') {
+      const el = K.h('div', 'chart'); bd.appendChild(el);
+      const cs = M.curves.filter(x => x.ccy === ccy);
+      const ch = K.chart(el, () => {
+        const L = K.list();
+        const cum = cs.map(c => { let a = 0; return M.buckets.map((_, k) => a += M.sum(L, p => p.risk[c.id][k])); });
+        const tot = M.buckets.map((_, k) => cs.reduce((s, c, i) => s + (c.kind === 'rate' ? cum[i][k] : 0), 0));
+        return {
+          grid: { left: 8, right: 10, top: 34, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 },
+          tooltip: { trigger: 'axis', valueFormatter: v => f.dv(v) },
+          xAxis: { type: 'category', data: M.buckets, boundaryGap: false }, yAxis: { type: 'value', axisLabel: { formatter: v => f.dv(v) } },
+          series: cs.map((c, i) => ({ name: c.short + (c.kind === 'basis' ? ' (базис)' : ''), type: 'line', data: cum[i], symbolSize: 4, lineStyle: { width: 1.6, type: c.kind === 'basis' ? 'dotted' : 'solid' }, color: K.curveColors[c.id] }))
+            .concat(cs.filter(c => c.kind === 'rate').length > 1 ? [{ name: 'Σ ставки', type: 'line', data: tot, symbolSize: 5, lineStyle: { width: 2.5 }, color: css('--fg'), areaStyle: { opacity: .08 } }] : []),
+        };
+      });
+      ch.on('click', pp => {
+        const k = pp.dataIndex, L = K.list(); const c = cs[pp.seriesIndex];
+        const ids = c ? [c.id] : cs.filter(x => x.kind === 'rate').map(x => x.id);
+        K.drill({ title: ccy + ' · ' + (c ? c.short : 'Σ ставки') + ' · кумулятив до ' + M.buckets[k], unit: 'тыс ₽/бп', rows: L.map(p => ({ p, v: ids.reduce((s, id) => s + sumArr(p.risk[id].slice(0, k + 1)), 0) })) });
+      });
+      o.charts.push(ch);
+      bd.appendChild(K.h('div', 'k-note', 'Накопленный риск «до этого срока»: где кривая выходит на полку — дальше риска нет; крутой участок — основной риск.'));
+    }
+    if (st.view === 'heat') {
+      const rows = typeRowsFor(L, ccy, st.metric);
+      const max = Math.max(1, ...rows.flatMap(r => r.vals.map(Math.abs)));
+      const heat = st.metric === 'cs01' ? v => K.heatMono(v, max, '227,179,65') : v => K.heatRisk(v, max);
+      const groups = ['DER', 'GOV', 'CORP'];
+      const tot = M.buckets.map((_, k) => rows.reduce((s, r) => s + r.vals[k], 0)); let c = 0; const cum = tot.map(v => c += v);
+      let html = '<table class="k-tbl"><thead><tr><th>Тип · ' + METN[st.metric] + '</th>' + M.buckets.map(b => '<th class="n">' + b + '</th>').join('') + '<th class="n">Итого</th><th>Профиль</th></tr></thead><tbody>';
+      groups.forEach(g => {
+        const gr = rows.filter(r => r.t.group === g); if (!gr.length) return;
+        const glist = gr.flatMap(r => r.list);
+        const gv = M.buckets.map((_, k) => gr.reduce((s, r) => s + r.vals[k], 0));
+        html += '<tr class="grp l1"><td class="lbl">' + ({ DER: 'Деривативы', GOV: 'Гос', CORP: 'Корп' }[g]) + '</td>' + gv.map((v, k) => '<td class="n">' + (Math.abs(v) < 300 ? '<span class="mut3">·</span>' : K.d({ title: ccy + ' · ' + M.groupLabel[g] + ' · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: bucketRows(glist, ccy, st.metric, k) }, null, '')) + '</td>').join('') +
+          '<td class="n"><b>' + K.d({ title: ccy + ' · ' + M.groupLabel[g], unit: 'тыс ₽/бп', rows: glist.map(p => ({ p, v: M.buckets.reduce((s, _, k) => s + mval(p, ccy, st.metric, k), 0) })) }, null, '') + '</b></td><td></td></tr>';
+        gr.forEach(r => {
+          html += '<tr><td class="lbl" style="padding-left:24px"><b style="color:' + K.kindColor[r.t.kind] + '">●</b> ' + esc(r.t.label) + ' <span class="mut3">' + r.list.length + '</span></td>' +
+            r.vals.map((v, k) => '<td class="n" style="' + heat(v) + '">' + (Math.abs(v) < 300 ? '<span class="mut3">·</span>' : K.d({ title: ccy + ' · ' + r.t.label + ' · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: bucketRows(r.list, ccy, st.metric, k) }, null, '')) + '</td>').join('') +
+            '<td class="n"><b>' + K.d({ title: ccy + ' · ' + r.t.label, unit: 'тыс ₽/бп', rows: r.list.map(p => ({ p, v: M.buckets.reduce((s, _, k) => s + mval(p, ccy, st.metric, k), 0) })) }, null, '') + '</b></td><td class="prof">' + profile(r.vals, max, K.kindColor[r.t.kind]) + '</td></tr>';
+        });
+      });
+      html += '</tbody><tfoot><tr><td>Итого</td>' + tot.map((v, k) => '<td class="n">' + K.d({ title: ccy + ' · ' + METN[st.metric] + ' · ' + M.buckets[k], unit: 'тыс ₽/бп', dim: 'kind', rows: bucketRows(L, ccy, st.metric, k) }, null, '') + '</td>').join('') + '<td class="n">' + f.dv(sumArr(tot)) + '</td><td></td></tr>' +
+        '<tr><td class="mut">кумулятив</td>' + cum.map(v => '<td class="n mut">' + f.dv(v) + '</td>').join('') + '<td></td><td></td></tr></tfoot></table>';
+      bd.innerHTML = html;
+    }
+    if (st.view === 'table') {
+      const el = K.h('div'); bd.appendChild(el);
+      K.bucketTable(el, ccy, { cs01: true });
+    }
+  }
+  function profile(vals, max, color) {
+    const W = 110, H = 22, bw = W / vals.length, z = H / 2;
+    return '<svg width="' + W + '" height="' + H + '"><line x1="0" x2="' + W + '" y1="' + z + '" y2="' + z + '" style="stroke:var(--line-2)"/>' + vals.map((v, k) => { const h = Math.abs(v) / max * (H / 2 - 1); return '<rect x="' + (k * bw + 1).toFixed(1) + '" y="' + (v < 0 ? z : z - h).toFixed(1) + '" width="' + (bw - 2).toFixed(1) + '" height="' + Math.max(.5, h).toFixed(1) + '" fill="' + color + '"/>'; }).join('') + '</svg>';
+  }
+
+  // ---------- эмитент × срок ----------
+  let issMet = 'cs01', issAll = false;
+  function drawIssuers() {
+    const P = document.getElementById('iss'), bd = P.querySelector('.bd'), L = K.list();
+    const val = (p, k) => issMet === 'cs01' ? p.cs01b[k] : ALLRATE.reduce((s, id) => s + p.risk[id][k], 0);
+    const g = {};
+    L.filter(p => p.group !== 'DER').forEach(p => { (g[p.issuer] = g[p.issuer] || []).push(p); });
+    let rows = Object.keys(g).map(id => { const list = g[id]; const vals = M.buckets.map((_, k) => list.reduce((s, p) => s + val(p, k), 0)); return { id, iss: M.issuer[id], list, vals, tot: sumArr(vals) }; })
+      .filter(r => Math.abs(r.tot) > 100).sort((a, b) => Math.abs(b.tot) - Math.abs(a.tot));
+    const n = rows.length; if (!issAll) rows = rows.slice(0, 18);
+    const max = Math.max(1, ...rows.flatMap(r => r.vals.map(Math.abs)));
+    const heat = issMet === 'cs01' ? v => K.heatMono(v, max, '227,179,65') : v => K.heatRisk(v, max);
+    const nm = issMet === 'cs01' ? 'CS01' : 'DV01';
+    bd.innerHTML = '<table class="k-tbl"><thead><tr><th>Эмитент</th><th>Рейт.</th><th>Вал.</th>' + M.buckets.map(b => '<th class="n">' + b + '</th>').join('') + '<th class="n">' + nm + '</th><th class="n">MV, млн</th></tr></thead><tbody>' +
+      rows.map(r => '<tr><td class="lbl"><b style="color:' + K.issuerColor(r.id) + '">●</b> ' + esc(r.iss.short) + ' <span class="mut3">' + esc(r.iss.sector) + '</span></td><td class="mut">' + esc(r.iss.rating) + '</td><td>' + [...new Set(r.list.map(p => p.ccy))].sort((a, b) => M.ccyOrder[a] - M.ccyOrder[b]).map(K.ccyTag).join(' ') + '</td>' +
+        r.vals.map((v, k) => '<td class="n" style="' + heat(v) + '">' + (Math.abs(v) < 300 ? '<span class="mut3">·</span>' : K.d({ title: r.iss.short + ' · ' + nm + ' · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: r.list.map(p => ({ p, v: val(p, k) })) }, null, '')) + '</td>').join('') +
+        '<td class="n"><b>' + K.d({ title: r.iss.short + ' · ' + nm, unit: 'тыс ₽/бп', rows: r.list.map(p => ({ p, v: M.buckets.reduce((s, _, k) => s + val(p, k), 0) })) }, null, '') + '</b></td><td class="n mut">' + f.mn(M.sum(r.list, 'mv'), 0) + '</td></tr>').join('') +
+      '</tbody></table>' + (n > 18 ? '<div class="iss-more"><a href="#" id="issMore">' + (issAll ? 'показать первые 18' : 'показать всех (' + n + ')') + '</a></div>' : '');
+    const a = bd.querySelector('#issMore'); if (a) a.onclick = e => { e.preventDefault(); issAll = !issAll; drawIssuers(); };
+  }
+  K.seg(document.querySelector('#iss .met'), [['cs01', 'CS01'], ['dv01', 'DV01 ставки']], issMet, v => { issMet = v; drawIssuers(); });
+
+  // ---------- сдвиг кривых ----------
+  const sim = { scope: 'ALL', par: 100, twist: 0, basis: 0, credit: 0 };
+  const lnA = Math.log(M.pillars[0]), lnB = Math.log(M.pillars[NB - 1]);
+  const tw = M.pillars.map(t => (Math.log(t) - lnA) / (lnB - lnA) - 0.5);
+  const shift = k => sim.par + sim.twist * tw[k];
+  const inScope = c => sim.scope === 'ALL' || sim.scope === c;
+  function simPos(p) {
+    let r = 0, b = 0, c = 0; const byB = new Array(NB).fill(0);
+    for (const id of ALLRATE) { if (!inScope(M.curve[id].ccy)) continue; const a = p.risk[id]; for (let k = 0; k < NB; k++) { const x = a[k] * shift(k); r += x; byB[k] += x; } }
+    if (inScope('RUB') && sim.basis) for (let k = 0; k < NB; k++) { const x = p.risk['RUB OFZ'][k] * sim.basis; b += x; byB[k] += x; }
+    if (inScope(p.ccy) && sim.credit) for (let k = 0; k < NB; k++) { const x = p.cs01b[k] * sim.credit; c += x; byB[k] += x; }
+    return { r, b, c, t: r + b + c, byB };
+  }
+  const SL = [['par', 'Параллельно', -300, 300, 5], ['twist', 'Наклон 20Y−3M', -300, 300, 5], ['basis', 'Базис ОФЗ', -150, 150, 5], ['credit', 'Кредит. спреды', -200, 300, 5]];
+  const PRE = [
+    ['+100 парал.', { par: 100, twist: 0, basis: 0, credit: 0 }], ['−100 парал.', { par: -100, twist: 0, basis: 0, credit: 0 }],
+    ['бычий стипенинг', { par: -100, twist: 100, basis: 0, credit: 0 }], ['медвежий флэттенинг', { par: 100, twist: -100, basis: 0, credit: 0 }],
+    ['КС −200 (короткий)', { par: -100, twist: 200, basis: 0, credit: 0 }], ['ОФЗ шире на 30', { par: 0, twist: 0, basis: 30, credit: 0 }],
+    ['risk-off: спреды +75, ставки +50', { par: 50, twist: -30, basis: 20, credit: 75 }], ['сброс', { par: 0, twist: 0, basis: 0, credit: 0 }],
+  ];
+  let simChart = null, simRes = null;
+  function buildSim() {
+    const P = document.getElementById('sim'), bd = P.querySelector('.bd');
+    K.seg(P.querySelector('.scope'), [['ALL', 'все валюты']].concat(M.ccys.map(c => [c, c])), sim.scope, v => { sim.scope = v; updSim(); });
+    bd.innerHTML = '<div class="sim"><div class="ctl">' + SL.map(([k, l, a, b, s]) => '<div class="sl"><span>' + l + '</span><input type="range" min="' + a + '" max="' + b + '" step="' + s + '" value="' + sim[k] + '" data-k="' + k + '"><span class="val" data-v="' + k + '"></span></div>').join('') +
+      '<div class="presets">' + PRE.map((x, i) => '<button class="k-btn" data-p="' + i + '">' + x[0] + '</button>').join('') + '</div>' +
+      '<div class="k-note" style="margin-top:8px">Сдвиг в бакете = параллельный + наклон × вес (от −½ на 3M до +½ на 20Y, лог-шкала). Базис — только RUB; спреды — CS01 бумаг выбранных валют.</div></div>' +
+      '<div><div class="bigpnl"></div><div class="comp"></div><div class="schart" style="height:230px"></div></div><div class="stbl" style="overflow:auto"></div></div>';
+    bd.querySelectorAll('input[type=range]').forEach(i => i.oninput = () => { sim[i.dataset.k] = +i.value; updSim(); });
+    bd.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { Object.assign(sim, PRE[+b.dataset.p][1]); bd.querySelectorAll('input[type=range]').forEach(i => i.value = sim[i.dataset.k]); updSim(); });
+    simChart = K.chart(bd.querySelector('.schart'), () => {
+      const R = simRes || [];
+      const sr = M.buckets.map((_, k) => M.sum(R, x => { let s = 0; for (const id of ALLRATE) if (inScope(M.curve[id].ccy)) s += x.p.risk[id][k] * shift(k); return s; }));
+      const sb = M.buckets.map((_, k) => inScope('RUB') ? M.sum(R, x => x.p.risk['RUB OFZ'][k] * sim.basis) : 0);
+      const sc = M.buckets.map((_, k) => M.sum(R, x => inScope(x.p.ccy) ? x.p.cs01b[k] * sim.credit : 0));
+      return {
+        animation: false, grid: { left: 6, right: 8, top: 28, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 },
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: ps => '<b>' + M.buckets[ps[0].dataIndex] + '</b><br>' + ps.map(p => p.marker + p.seriesName + ': <b>' + (p.seriesName === 'сдвиг, б.п.' ? f.s(p.value, 0) : f.mns(p.value, 2) + ' млн') + '</b>').join('<br>') },
+        xAxis: { type: 'category', data: M.buckets }, yAxis: [{ type: 'value', axisLabel: { formatter: v => f.mn(v, 0) } }, { type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => f.s(v, 0), color: css('--fg-3') } }],
+        series: [
+          { name: 'ставки', type: 'bar', stack: 'p', data: sr, itemStyle: { color: K.curveColors['RUB RUONIA'] } },
+          { name: 'базис', type: 'bar', stack: 'p', data: sb, itemStyle: { color: K.curveColors['RUB OFZ'] } },
+          { name: 'спреды', type: 'bar', stack: 'p', data: sc, itemStyle: { color: K.curveColors.CS01 } },
+          { name: 'сдвиг, б.п.', type: 'line', yAxisIndex: 1, data: M.buckets.map((_, k) => shift(k)), symbolSize: 4, lineStyle: { type: 'dashed', width: 1.4, color: css('--fg-3') }, itemStyle: { color: css('--fg-3') } },
+        ],
+      };
+    });
+    simChart.on('click', pp => { const k = pp.dataIndex; K.drill({ title: 'Сдвиг: PnL в бакете ' + M.buckets[k], unit: 'тыс ₽', fmt: f.k, rows: simRes.map(x => ({ p: x.p, v: x.byB[k] })) }); });
+    updSim();
+  }
+  function updSim() {
+    const P = document.getElementById('sim'), bd = P.querySelector('.bd');
+    SL.forEach(([k]) => { bd.querySelector('[data-v=' + k + ']').textContent = f.s(sim[k], 0); });
+    const L = K.list();
+    simRes = L.map(p => Object.assign({ p }, simPos(p)));
+    const T = key => M.sum(simRes, key);
+    const rowsOf = key => simRes.map(x => ({ p: x.p, v: x[key] }));
+    bd.querySelector('.bigpnl').innerHTML = K.d({ title: 'Сдвиг кривых: PnL', unit: 'млн ₽', fmt: v => f.mns(v, 1), rows: rowsOf('t') }) + ' <span class="mut" style="font-size:13px;font-weight:400">млн ₽</span>';
+    bd.querySelector('.comp').innerHTML = 'ставки <b>' + K.d({ title: 'Сдвиг: ставки', unit: 'млн ₽', fmt: v => f.mns(v, 1), rows: rowsOf('r') }) + '</b> · базис <b>' + K.d({ title: 'Сдвиг: базис ОФЗ', unit: 'млн ₽', fmt: v => f.mns(v, 1), rows: rowsOf('b') }) + '</b> · спреды <b>' + K.d({ title: 'Сдвиг: спреды', unit: 'млн ₽', fmt: v => f.mns(v, 1), rows: rowsOf('c') }) + '</b>';
+    // по типам
+    const types = M.typeRows.map(t => ({ t, xs: simRes.filter(x => typeOf(x.p) === t.id) })).filter(r => r.xs.some(x => Math.abs(x.t) > 1));
+    const mx = Math.max(1, ...types.map(r => Math.abs(M.sum(r.xs, 't'))));
+    const cell = (xs, key, title) => { const v = M.sum(xs, key); return Math.abs(v) < 500 ? '<span class="mut3">·</span>' : K.d({ title, unit: 'млн ₽', fmt: v => f.mns(v, 1), rows: xs.map(x => ({ p: x.p, v: x[key] })) }); };
+    bd.querySelector('.stbl').innerHTML = '<table class="k-tbl"><thead><tr><th>Тип</th><th class="n">Ставки</th><th class="n">Базис</th><th class="n">Спреды</th><th class="n">Итого, млн</th><th style="width:90px"></th></tr></thead><tbody>' +
+      types.map(r => { const v = M.sum(r.xs, 't'); return '<tr><td class="lbl"><b style="color:' + K.kindColor[r.t.kind] + '">●</b> ' + esc(r.t.label) + '</td><td class="n">' + cell(r.xs, 'r', r.t.label + ' · ставки') + '</td><td class="n">' + cell(r.xs, 'b', r.t.label + ' · базис') + '</td><td class="n">' + cell(r.xs, 'c', r.t.label + ' · спреды') + '</td><td class="n"><b>' + cell(r.xs, 't', r.t.label + ' · итого') + '</b></td><td>' + K.bar(v, mx) + '</td></tr>'; }).join('') +
+      '</tbody><tfoot><tr><td>Итого</td><td class="n">' + f.mns(T('r'), 1) + '</td><td class="n">' + f.mns(T('b'), 1) + '</td><td class="n">' + f.mns(T('c'), 1) + '</td><td class="n ' + f.cls(T('t')) + '">' + f.mns(T('t'), 1) + '</td><td></td></tr></tfoot></table>';
+    if (simChart) simChart.redraw();
+  }
+
+  buildSim(); drawStrip(); buildSections(); drawIssuers();
+  K.onFilter(() => { drawStrip(); buildSections(); drawIssuers(); updSim(); });
+  K.on('theme', () => { secObjs.forEach(o => { if (['heat', 'ladder'].includes(state[o.ccy].view)) renderSec(o); }); drawIssuers(); });
+  K.commands(M.ccys.map(c => ({ label: 'Риск ' + c + ': к секции', run: () => { const o = secObjs.find(x => x.ccy === c); if (o) o.el.scrollIntoView({ behavior: 'smooth' }); } })));
+})();
+</script>
+</body>
+</html>
