@@ -95,11 +95,11 @@
     key: { label: 'DV01 КС', unit: 'тыс ₽/бп', fmt: f.dv, kind: 'risk', parts: curveParts(['RUB KEY']) },
     basis01: { label: 'Базис ОФЗ01', unit: 'тыс ₽/бп', fmt: f.dv, kind: 'risk', parts: curveParts(['RUB OFZ']) },
     cs01: { label: 'CS01', unit: 'тыс ₽/бп', fmt: f.dv, kind: 'risk', parts: p => p.cs01b.map((v, k) => ({ curve: 'CS01', bucket: k, v })).filter(x => x.v) },
-    mv: { label: 'MV облигаций', unit: 'млн ₽', fmt: v => f.mn(v, 0), kind: 'size', parts: one(p => p.group === 'DER' ? 0 : p.mv) },
-    notional: { label: 'Номинал', unit: 'млн ₽', fmt: v => f.mn(v, 0), kind: 'size', parts: one(p => p.notionalRub) },
+    mv: { label: 'MV облигаций', unit: 'mm ₽', fmt: v => f.mn(v, 0), kind: 'size', parts: one(p => p.group === 'DER' ? 0 : p.mv) },
+    notional: { label: 'Номинал', unit: 'mm ₽', fmt: v => f.mn(v, 0), kind: 'size', parts: one(p => p.notionalRub) },
     carry: { label: 'Кэрри / день', unit: 'тыс ₽', fmt: f.k, kind: 'pnl', parts: one(p => p.carryDay) },
     pnl: { label: 'PnL дня', unit: 'тыс ₽', fmt: f.k, kind: 'pnl', parts: p => FACT.map(([k]) => ({ factor: k, v: p.pnl[k] })).filter(x => x.v) },
-    pnlMtd: { label: 'PnL MTD', unit: 'млн ₽', fmt: v => f.mn(v, 1), kind: 'pnl', parts: one(p => p.pnlMtd) },
+    pnlMtd: { label: 'PnL MTD', unit: 'mm ₽', fmt: v => f.mn(v, 1), kind: 'pnl', parts: one(p => p.pnlMtd) },
     count: { label: 'Кол-во позиций', unit: 'шт', fmt: v => f.n(v), kind: 'size', parts: one(() => 1) },
   };
   FACT.forEach(([k, t]) => MEAS['pnl_' + k] = { label: 'PnL: ' + t, unit: 'тыс ₽', fmt: f.k, kind: 'pnl', parts: p => [{ factor: k, v: p.pnl[k] }] });

@@ -119,8 +119,8 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     event: { label: 'Ближайшее событие', val: r => r.event.date, title: 'оферта (пут/колл), если есть, иначе погашение',
       fmt: (v, r) => '<span class="' + (r.group !== 'DER' && r.tenor < 0.25 ? 'ev-soon' : 'mut3') + '">' + evName[r.event.kind] + '</span> ' + f.date(r.event.date) + ' <span class="mut3">' + f.yrs(r.tenor) + '</span>' },
     tenor: { label: 'Срок', num: true, val: r => r.tenor, fmt: v => f.yrs(v), title: 'до оферты, если есть, иначе до погашения' },
-    notional: { label: 'Номинал, млн', num: true, val: r => r.notional, fmt: (v, r) => f.mn(v, 0) + ' <span class="mut3">' + r.ccy + '</span>', title: 'в валюте бумаги' },
-    mv: { label: 'MV, млн ₽', neutral: true, num: true, val: r => r.mv, fmt: v => f.mn(v, 0), sum: r => r.mv, unit: 'млн ₽', sfmt: v => f.mn(v, 0) },
+    notional: { label: 'Номинал, mm', num: true, val: r => r.notional, fmt: (v, r) => f.mn(v, 0) + ' <span class="mut3">' + r.ccy + '</span>', title: 'в валюте бумаги' },
+    mv: { label: 'MV, mm ₽', neutral: true, num: true, val: r => r.mv, fmt: v => f.mn(v, 0), sum: r => r.mv, unit: 'mm ₽', sfmt: v => f.mn(v, 0) },
     price: { label: 'Цена', num: true, val: r => r.price, fmt: v => f.px(v) },
     chg: { label: 'Δ цены', num: true, val: r => r.price == null ? null : r.price - r.prevPrice, fmt: v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.s(v, 2) + '</span>' },
     bidask: { label: 'Bid / Ask', num: true, val: r => r.bid, fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : '<span class="mut">' + f.px(r.bid) + ' / ' + f.px(r.ask) + '</span>' },
@@ -137,8 +137,8 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     carry: { label: 'Кэрри/д', num: true, val: r => r.carryDay, fmt: v => '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.carryDay, unit: 'тыс ₽', sfmt: f.k, title: 'тыс ₽ в день' },
     pc: pnlCol('pc', 'Кэрри', 'carry'), pr: pnlCol('pr', 'Ставки', 'rates'), ps: pnlCol('ps', 'Спред', 'spread'), pf: pnlCol('pf', 'FX', 'fx'), pt: pnlCol('pt', 'Сделки', 'trading'), po: pnlCol('po', 'Прочее', 'other'),
     pnl: { label: 'PnL дня', num: true, val: r => r.pnl.total, fmt: v => '<b class="' + f.cls(v) + '">' + f.k(v) + '</b>', sum: r => r.pnl.total, unit: 'тыс ₽', sfmt: f.k, title: 'тыс ₽' },
-    pnlMtd: { label: 'MTD', num: true, val: r => r.pnlMtd, fmt: v => '<span class="' + f.cls(v) + '">' + f.mn(v, 1) + '</span>', sum: r => r.pnlMtd, unit: 'млн ₽', sfmt: v => f.mn(v, 1), title: 'млн ₽' },
-    pnlYtd: { label: 'YTD', num: true, val: r => r.pnlYtd, fmt: v => '<span class="' + f.cls(v) + '">' + f.mn(v, 1) + '</span>', sum: r => r.pnlYtd, unit: 'млн ₽', sfmt: v => f.mn(v, 1), title: 'млн ₽' },
+    pnlMtd: { label: 'MTD', num: true, val: r => r.pnlMtd, fmt: v => '<span class="' + f.cls(v) + '">' + f.mn(v, 1) + '</span>', sum: r => r.pnlMtd, unit: 'mm ₽', sfmt: v => f.mn(v, 1), title: 'mm ₽' },
+    pnlYtd: { label: 'YTD', num: true, val: r => r.pnlYtd, fmt: v => '<span class="' + f.cls(v) + '">' + f.mn(v, 1) + '</span>', sum: r => r.pnlYtd, unit: 'mm ₽', sfmt: v => f.mn(v, 1), title: 'mm ₽' },
     rating: { label: 'Рейтинг', val: r => r.rating, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
     sector: { label: 'Сектор', val: r => r.sector, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
     entity: { label: 'Юрлицо', val: r => r.entity, fmt: v => '<span class="mut">' + esc(M.entities.find(e => e.id === v).name) + '</span>' },
@@ -291,7 +291,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     const p = cur, h = H(p.id), isBond = p.group !== 'DER';
     const m = isBond ? hmode : (hmode === 'dv01' ? 'dv01' : 'notional');
     const S = m === 'price' ? [{ name: 'Цена', data: h.price }] : m === 'yield' ? [{ name: 'Доходность', data: h.ytm }, { name: 'ОФЗ на сроке', data: h.bench, lineStyle: { type: 'dashed', width: 1 } }]
-      : m === 'spread' ? [{ name: 'Спред, б.п.', data: h.spr }] : m === 'dv01' ? [{ name: 'DV01, тыс ₽/бп', data: h.dv01.map(v => v / 1e3), step: 'end' }] : [{ name: 'Номинал, млн', data: h.notional.map(v => v / 1e6), step: 'end', areaStyle: { opacity: .15 } }];
+      : m === 'spread' ? [{ name: 'Спред, б.п.', data: h.spr }] : m === 'dv01' ? [{ name: 'DV01, тыс ₽/бп', data: h.dv01.map(v => v / 1e3), step: 'end' }] : [{ name: 'Номинал, mm', data: h.notional.map(v => v / 1e6), step: 'end', areaStyle: { opacity: .15 } }];
     return { grid: { left: 4, right: 8, top: 24, bottom: 2, containLabel: true }, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis' },
       xAxis: { type: 'category', data: h.dates, axisLabel: { formatter: v => f.dshort(v) } }, yAxis: { type: 'value', scale: true },
       series: S.map((s, i) => Object.assign({ type: 'line', showSymbol: false, lineStyle: { width: 1.5 }, color: i ? K.css('--fg-3') : K.issuerColor(p.issuer) }, s)), dataZoom: [{ type: 'inside', start: 50 }] };
@@ -314,7 +314,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
       '<div class="st">' + esc(p.issuerFull) + (p.isin ? ' · <span class="mono">' + esc(p.isin) + '</span>' : '') + ' · ' + esc(p.book) + ' — ' + esc(p.bookName) + (p.rating !== '—' ? ' · ' + esc(p.rating) : '') + '</div>' +
       '<div class="acts"><button class="k-btn pri" data-a="full">Открыть полностью ↗</button>' + (p.issuer ? '<button class="k-btn" data-a="iss">Все бумаги эмитента</button>' : '') + '<button class="k-btn" data-a="book">Книга ' + esc(p.book) + '</button></div>';
     $('.cd-hd [data-a=full]').onclick = () => K.card(p.id);
-    if (p.issuer) $('.cd-hd [data-a=iss]').onclick = () => K.drill({ title: 'Эмитент ' + p.issuerName + ' · MV', unit: 'млн ₽', fmt: v => f.mn(v, 1), list: K.list().filter(x => x.issuer === p.issuer), val: x => x.group === 'DER' ? x.notionalRub : x.mv });
+    if (p.issuer) $('.cd-hd [data-a=iss]').onclick = () => K.drill({ title: 'Эмитент ' + p.issuerName + ' · MV', unit: 'mm ₽', fmt: v => f.mn(v, 1), list: K.list().filter(x => x.issuer === p.issuer), val: x => x.group === 'DER' ? x.notionalRub : x.mv });
     $('.cd-hd [data-a=book]').onclick = () => K.drill({ title: 'Книга ' + p.book + ' · DV01', unit: 'тыс ₽/бп', list: M.positions.filter(x => x.book === p.book), val: 'dv01' });
     // событие
     const evTxt = { put: 'Пут-оферта', call: 'Колл-опцион', mat: isBond ? 'Погашение' : 'Срок сделки' }[p.event.kind];
@@ -322,17 +322,17 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     $('.cd-ev-box').innerHTML = '<div class="cd-ev' + (soon ? ' soon' : '') + '"><span class="mut">' + evTxt + '</span><span class="big">' + f.date(p.event.date) + '</span><span class="mut">через ' + f.yrs(p.tenor) + '</span>' +
       (p.offer ? '<span class="sp" style="flex:1"></span><span class="mut3">погашение ' + f.date(p.maturity) + '</span>' : '') + '</div>';
     const F = isBond ? [
-      ['Номинал', f.mn(p.notional, 0) + ' <small>млн ' + p.ccy + '</small>'], ['MV', f.mn(p.mv, 1) + ' <small>млн ₽</small>'],
+      ['Номинал', f.mn(p.notional, 0) + ' <small>mm ' + p.ccy + '</small>'], ['MV', f.mn(p.mv, 1) + ' <small>mm ₽</small>'],
       ['Цена', f.px(p.price) + ' <small class="' + f.cls(p.price - p.prevPrice) + '">' + f.s(p.price - p.prevPrice, 2) + '</small>'], ['Bid / Ask', '<small>' + f.px(p.bid) + ' / ' + f.px(p.ask) + '</small>'],
       ['Доходность', f.pct(p.ytm) + ' <small>к ' + (p.event.kind === 'mat' ? 'погаш.' : 'оферте') + '</small>'], [p.spreadLabel === 'DM' ? 'Дисконт-маржа' : 'Z-спред', f.bp(p.zspread) + ' <small>б.п.' + (p.gspread != null ? ' · G ' + f.bp(p.gspread) : '') + '</small>'],
       ['Купон', '<span class="mono">' + esc(p.couponFmt) + '</span>'], ['Текущий купон', f.pct(p.curCpn) + (p.cpn.type === 'float' ? ' <small>прогноз</small>' : '')],
       ['Мод. дюрация', p.mdur == null ? '—' : f.n(p.mdur, 2)], ['DV01', f.dv(p.dv01) + ' <small>тыс ₽/бп</small>'],
       ['CS01', f.dv(p.cs01) + ' <small>тыс ₽/бп</small>'], ['Базис ОФЗ01', p.basis01 ? f.dv(p.basis01) : '—'],
-      ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽ · фонд. ' + f.pct(p.fundRate) + '</small>'], ['НКД', f.mn(p.accrued, 2) + ' <small>млн ₽</small>'],
+      ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽ · фонд. ' + f.pct(p.fundRate) + '</small>'], ['НКД', f.mn(p.accrued, 2) + ' <small>mm ₽</small>'],
     ] : [
-      ['Номинал', f.mn(p.notional, 0) + ' <small>млн ' + p.ccy + '</small>'], ['MTM', f.mn(p.mv, 1) + ' <small>млн ₽</small>'],
+      ['Номинал', f.mn(p.notional, 0) + ' <small>mm ' + p.ccy + '</small>'], ['MTM', f.mn(p.mv, 1) + ' <small>mm ₽</small>'],
       ['Ставка / курс', esc(p.couponFmt)], ['Срок', f.date(p.maturity) + ' <small>' + f.yrs(p.tenor) + '</small>'],
-      ['DV01', f.dv(p.dv01) + ' <small>тыс ₽/бп</small>'], ['FX дельта', p.fxDelta ? f.mn(p.fxDelta, 1) + ' <small>млн ' + p.ccy + '</small>' : '—'],
+      ['DV01', f.dv(p.dv01) + ' <small>тыс ₽/бп</small>'], ['FX дельта', p.fxDelta ? f.mn(p.fxDelta, 1) + ' <small>mm ' + p.ccy + '</small>' : '—'],
       ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽</small>'], ['Контрагент', esc(p.cpty || '—')],
     ];
     $('.cd-fields').innerHTML = '<div class="k-fields">' + F.map(([l, v]) => '<div><div class="l">' + l + '</div><div class="v">' + v + '</div></div>').join('') + '</div>';
@@ -340,7 +340,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     const pn = p.pnl, parts = [['Кэрри', pn.carry], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx], ['Сделки', pn.trading], ['Прочее', pn.other]];
     const mx = Math.max(1, ...parts.map(x => Math.abs(x[1])));
     $('.cd-pnl').innerHTML = parts.map(([l, v]) => '<span class="mut">' + l + '</span>' + K.bar(v, mx) + '<span class="n ' + f.cls(v) + '">' + f.ks(v) + '</span>').join('') +
-      '<span class="tot">Итого</span><span class="tot mut3" style="font-size:11px">MTD ' + f.mns(p.pnlMtd, 1) + ' млн · YTD ' + f.mns(p.pnlYtd, 1) + ' млн</span><span class="n tot ' + f.cls(pn.total) + '">' + f.ks(pn.total) + '</span>';
+      '<span class="tot">Итого</span><span class="tot mut3" style="font-size:11px">MTD ' + f.mns(p.pnlMtd, 1) + ' mm · YTD ' + f.mns(p.pnlYtd, 1) + ' mm</span><span class="n tot ' + f.cls(pn.total) + '">' + f.ks(pn.total) + '</span>';
     // история: режимы зависят от типа
     if (prevBond !== isBond || !card.querySelector('.hseg .k-seg')) {
       const items = (isBond ? [['price', 'цена'], ['yield', 'доходн.'], ['spread', 'спред']] : []).concat([['notional', 'позиция'], ['dv01', 'DV01']]);
@@ -351,7 +351,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     // потоки
     const cf = M.cashflows.filter(c => c.pos === p.id).slice(0, 6);
     $('.cfs-t').style.display = isBond ? '' : 'none';
-    $('.cd-cfs').innerHTML = !isBond ? '' : cf.length ? '<table class="k-tbl"><thead><tr><th>Дата</th><th>Тип</th><th class="n">Сумма, ' + p.ccy + '</th><th class="n">≈ млн ₽</th></tr></thead><tbody>' +
+    $('.cd-cfs').innerHTML = !isBond ? '' : cf.length ? '<table class="k-tbl"><thead><tr><th>Дата</th><th>Тип</th><th class="n">Сумма, ' + p.ccy + '</th><th class="n">≈ mm ₽</th></tr></thead><tbody>' +
       cf.map(c => '<tr><td>' + f.date(c.date) + '</td><td>' + ({ cpn: 'купон', mat: 'погашение', put: 'пут-оферта', call: 'колл' }[c.kind]) + (c.est ? ' <span class="mut3">прогноз</span>' : '') + '</td><td class="n">' + f.n(c.amount, 0) + '</td><td class="n">' + f.mn(c.amountRub, 1) + '</td></tr>').join('') + '</tbody></table>' : '<div class="k-empty">нет потоков в горизонте 18 мес.</div>';
   }
 

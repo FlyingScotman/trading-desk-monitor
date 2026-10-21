@@ -220,20 +220,20 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
   function eventsTable(a, o) {
     return '<table class="mini"><thead><tr><th>Дата</th><th>Событие</th><th>Бумага</th>' + (o.rating ? '<th>Рейтинг</th>' : '<th>Вал</th>') + '<th class="n">Сумма</th><th class="n">' + o.unitCol + '</th></tr></thead><tbody>' +
       a.map(x => '<tr' + (x.pos ? ' data-card="' + x.pos + '"' : '') + '><td>' + f.date(x.date) + '</td><td><span class="kb" style="--c:' + KC[x.kind] + '">' + KN[x.kind] + '</span></td><td>' + esc(x.name) + (x.held ? ' <span class="held">в портфеле</span>' : '') + '</td>' +
-        (o.rating ? '<td class="mut">' + esc(x.rating) + '</td>' : '<td>' + K.ccyTag(x.ccy) + '</td>') + '<td class="n">' + f.mn(x.amt, 1) + ' <span class="mut3">млн ' + x.ccy + '</span></td><td class="n"><b>' + o.fmt(x.val) + '</b></td></tr>').join('') + '</tbody></table>';
+        (o.rating ? '<td class="mut">' + esc(x.rating) + '</td>' : '<td>' + K.ccyTag(x.ccy) + '</td>') + '<td class="n">' + f.mn(x.amt, 1) + ' <span class="mut3">mm ' + x.ccy + '</span></td><td class="n"><b>' + o.fmt(x.val) + '</b></td></tr>').join('') + '</tbody></table>';
   }
 
   // ---------- панель управления ----------
   const bar = document.getElementById('bar');
   function renderBar() {
     bar.innerHTML = '<span class="m"></span><span class="lbl">горизонт</span><span class="h"></span><span class="lbl">столбцы по</span><span class="p"></span><span class="x"></span><span style="flex:1"></span><span class="k-note">' +
-      (st.mode === 'pf' ? 'наш портфель с учётом фильтра книг · суммы в млн ₽' : st.mode === 'fx' ? 'все валютные выпуски российских эмитентов · суммы в млн $ экв.' : 'рублёвый рынок агрегатами · млрд ₽') + '</span>';
+      (st.mode === 'pf' ? 'наш портфель с учётом фильтра книг · суммы в mm ₽' : st.mode === 'fx' ? 'все валютные выпуски российских эмитентов · суммы в mm $ экв.' : 'рублёвый рынок агрегатами · bn ₽') + '</span>';
     K.seg(bar.querySelector('.m'), [['pf', 'Наш портфель'], ['fx', 'Валютные бонды РФ'], ['rub', 'Рублёвый рынок']], st.mode, v => { st.mode = v; save(); render(); });
     K.seg(bar.querySelector('.h'), Object.keys(HZ).map(k => [k, k]), st.hz, v => { st.hz = v; save(); render(); });
     K.seg(bar.querySelector('.p'), [['auto', 'авто'], ['w', 'неделям'], ['m', 'месяцам']], st.per, v => { st.per = v; save(); render(); });
     const x = bar.querySelector('.x');
     if (st.mode === 'rub') {
-      x.innerHTML = '<span class="k-chip' + (st.big ? ' on' : '') + '">' + (st.big ? '☑' : '☐') + ' только крупные (≥ 10 млрд, рейтинг ≥ A)</span>';
+      x.innerHTML = '<span class="k-chip' + (st.big ? ' on' : '') + '">' + (st.big ? '☑' : '☐') + ' только крупные (≥ 10 bn, рейтинг ≥ A)</span>';
       x.firstChild.onclick = () => { st.big = !st.big; save(); render(); };
     }
   }
@@ -247,14 +247,14 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     const sub = a => ccys.filter(c => a.some(x => x.ccy === c)).map(c => c + ' ' + f.mn(sumBy(a.filter(x => x.ccy === c), x => x.amt), 1)).join(' · ');
     const puts = byKind('put'), nextPut = puts[0];
     kpis.innerHTML = '<div class="k-kpis">' +
-      K.kpi('Всего поступлений', K.d({ title: 'Все потоки до ' + f.date(e), unit: 'млн ₽', fmt: v => f.mn(v, 1), rows: rows(ev), color: false }) + ' <span class="mut" style="font-size:11px">млн ₽</span>', ev.length + ' событий до ' + f.date(e)) +
-      ['cpn', 'mat', 'put', 'call'].map(k => { const a = byKind(k); return K.kpi('<span style="color:' + KC[k] + '">●</span> ' + KNP[k], a.length ? K.d({ title: KNP[k] + ' до ' + f.date(e), unit: 'млн ₽', fmt: v => f.mn(v, 1), rows: rows(a), color: false }) : '<span class="mut3">—</span>', a.length ? a.length + ' · ' + sub(a) + ' млн' : 'нет в горизонте'); }).join('') +
+      K.kpi('Всего поступлений', K.d({ title: 'Все потоки до ' + f.date(e), unit: 'mm ₽', fmt: v => f.mn(v, 1), rows: rows(ev), color: false }) + ' <span class="mut" style="font-size:11px">mm ₽</span>', ev.length + ' событий до ' + f.date(e)) +
+      ['cpn', 'mat', 'put', 'call'].map(k => { const a = byKind(k); return K.kpi('<span style="color:' + KC[k] + '">●</span> ' + KNP[k], a.length ? K.d({ title: KNP[k] + ' до ' + f.date(e), unit: 'mm ₽', fmt: v => f.mn(v, 1), rows: rows(a), color: false }) : '<span class="mut3">—</span>', a.length ? a.length + ' · ' + sub(a) + ' mm' : 'нет в горизонте'); }).join('') +
       K.kpi('Ближайшая оферта', nextPut ? '<span data-card="' + nextPut.pos + '" class="dr" style="color:var(--warn)">' + f.dshort(nextPut.date) + '</span>' : '<span class="mut3">—</span>', nextPut ? esc(nextPut.name) + ' · через ' + Math.round(U.yearsTo(nextPut.date) * 365.25) + ' дн' : 'нет в горизонте') +
       '</div>';
 
     const row = K.h('div', 'c8-row'); view.appendChild(row);
     const pc = panel('Календарь'); row.appendChild(pc);
-    calendar(pc.querySelector('.bd'), ev, { fmt: v => f.mn(v, 0), unit: 'млн ₽', onDay: (ds, a) => K.drill({ title: 'Потоки ' + f.date(ds), unit: 'млн ₽', fmt: v => f.mn(v, 1), rows: rows(a), note: [...new Set(a.map(x => KN[x.kind]))].join(', ') }) });
+    calendar(pc.querySelector('.bd'), ev, { fmt: v => f.mn(v, 0), unit: 'mm ₽', onDay: (ds, a) => K.drill({ title: 'Потоки ' + f.date(ds), unit: 'mm ₽', fmt: v => f.mn(v, 1), rows: rows(a), note: [...new Set(a.map(x => KN[x.kind]))].join(', ') }) });
     const col = K.h('div', 'c8-col'); row.appendChild(col);
     const ps = panel('Поступления по ' + (P === 'w' ? 'неделям' : 'месяцам'), '<span class="by"></span>'); col.appendChild(ps);
     const el = K.h('div', 'chart'); ps.querySelector('.bd').appendChild(el);
@@ -263,7 +263,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
       const keys = st.pfBy === 'kind' ? ['cpn', 'put', 'call', 'mat'].filter(k => ev.some(x => x.kind === k)) : ccys;
       const match = (x, k) => st.pfBy === 'kind' ? x.kind === k : x.ccy === k;
       const ser = keys.map(k => ({ name: st.pfBy === 'kind' ? KNP[k] : k, color: st.pfBy === 'kind' ? KC[k] : K.ccyColor(k), vals: cats.map(c => sumBy(ev.filter(x => pkey(x.date, P) === c && match(x, k)), x => x.val)) }));
-      const c = stackChart(el, cats.map(c => plabel(c, P)), ser, { fmt: v => f.mn(v, 0), unit: 'млн ₽', onClick: (i, s) => { const a = ev.filter(x => pkey(x.date, P) === cats[i] && match(x, keys[s])); K.drill({ title: ser[s].name + ' · ' + plabel(cats[i], P), unit: 'млн ₽', fmt: v => f.mn(v, 1), rows: rows(a) }); } });
+      const c = stackChart(el, cats.map(c => plabel(c, P)), ser, { fmt: v => f.mn(v, 0), unit: 'mm ₽', onClick: (i, s) => { const a = ev.filter(x => pkey(x.date, P) === cats[i] && match(x, keys[s])); K.drill({ title: ser[s].name + ' · ' + plabel(cats[i], P), unit: 'mm ₽', fmt: v => f.mn(v, 1), rows: rows(a) }); } });
       c._pf = true;
     };
     K.seg(ps.querySelector('.by'), [['kind', 'по типу'], ['ccy', 'по валюте']], st.pfBy, v => { st.pfBy = v; save(); draw(); });
@@ -286,8 +286,8 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
         { key: 'kind', label: 'Событие', fmt: (v, r) => '<span class="kb" style="--c:' + KC[v] + '">' + KN[v] + '</span>' + (r.est ? ' <span class="mut3">прогноз</span>' : '') },
         { key: 'name', label: 'Бумага', fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
         { key: 'ccy', label: 'Вал', fmt: (v, r) => K.ccyTag(r.ccy), val: r => M.ccyOrder[r.ccy] },
-        { key: 'amt', label: 'Сумма', num: true, fmt: (v, r) => f.mn(v, 2) + ' <span class="mut3">млн ' + (r.ccy || '') + '</span>' },
-        { key: 'val', label: '≈ млн ₽', num: true, fmt: v => f.mn(v, 1), sum: true, drill: false },
+        { key: 'amt', label: 'Сумма', num: true, fmt: (v, r) => f.mn(v, 2) + ' <span class="mut3">mm ' + (r.ccy || '') + '</span>' },
+        { key: 'val', label: '≈ mm ₽', num: true, fmt: v => f.mn(v, 1), sum: true, drill: false },
         { key: 'book', label: 'Книга', fmt: v => '<span class="mut">' + esc(v) + '</span>' },
       ],
     });
@@ -296,14 +296,14 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
   // ---------- режим «Валютные бонды РФ» ----------
   function renderFx(view, kpis) {
     const e = end(), ev = fxEvents(e), P = per(), cats = periods(e, P);
-    const fmt = v => f.mn(v, 0), unit = 'млн $ экв.';
+    const fmt = v => f.mn(v, 0), unit = 'mm $ экв.';
     const by = k => ev.filter(x => x.kind === k);
     const ccys = ['USD', 'EUR', 'CNY'].filter(c => ev.some(x => x.ccy === c));
     const sub = a => ccys.filter(c => a.some(x => x.ccy === c)).map(c => c + ' ' + f.mn(sumBy(a.filter(x => x.ccy === c), x => x.amt), 0)).join(' · ');
-    const openList = (title, a) => { const bd = sheet(esc(title), a.length + ' событий · ' + fmt(sumBy(a, x => x.val)) + ' ' + unit); bd.innerHTML = eventsTable(a.slice().sort((x, y) => x.date.localeCompare(y.date) || y.val - x.val), { fmt: v => f.mn(v, 1), unitCol: 'млн $ экв.' }); };
+    const openList = (title, a) => { const bd = sheet(esc(title), a.length + ' событий · ' + fmt(sumBy(a, x => x.val)) + ' ' + unit); bd.innerHTML = eventsTable(a.slice().sort((x, y) => x.date.localeCompare(y.date) || y.val - x.val), { fmt: v => f.mn(v, 1), unitCol: 'mm $ экв.' }); };
     const held = ev.filter(x => x.held && x.kind !== 'cpn');
     kpis.innerHTML = '<div class="k-kpis">' +
-      ['cpn', 'put', 'mat'].map(k => { const a = by(k); return K.kpi('<span style="color:' + KC[k] + '">●</span> ' + KNP[k], a.length ? '<span class="dr" data-k="' + k + '">' + fmt(sumBy(a, x => x.val)) + '</span> <span class="mut" style="font-size:11px">млн $</span>' : '<span class="mut3">—</span>', a.length + (k === 'cpn' ? ' выплат' : ' выпусков') + (a.length ? ' · ' + sub(a) + ' млн' : '')); }).join('') +
+      ['cpn', 'put', 'mat'].map(k => { const a = by(k); return K.kpi('<span style="color:' + KC[k] + '">●</span> ' + KNP[k], a.length ? '<span class="dr" data-k="' + k + '">' + fmt(sumBy(a, x => x.val)) + '</span> <span class="mut" style="font-size:11px">mm $</span>' : '<span class="mut3">—</span>', a.length + (k === 'cpn' ? ' выплат' : ' выпусков') + (a.length ? ' · ' + sub(a) + ' mm' : '')); }).join('') +
       K.kpi('Выпусков в ойкумене', M.universeFx.length + '', [...new Set(M.universeFx.map(b => b.issuer))].length + ' эмитентов · ' + M.universeFx.filter(b => b.held).length + ' у нас') +
       K.kpi('Наши: оферты и погашения', held.length ? '<span class="dr" data-k="held">' + held.length + '</span>' : '<span class="mut3">0</span>', held.length ? held.map(x => esc(x.name)).slice(0, 2).join(', ') : 'в горизонте нет') +
       '</div>';
@@ -311,9 +311,9 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
 
     const row = K.h('div', 'c8-row'); view.appendChild(row);
     const pc = panel('Календарь выплат по всем выпускам'); row.appendChild(pc);
-    calendar(pc.querySelector('.bd'), ev, { fmt, unit: 'млн $', onDay: (ds, a) => openList('Выплаты ' + f.date(ds), a) });
+    calendar(pc.querySelector('.bd'), ev, { fmt, unit: 'mm $', onDay: (ds, a) => openList('Выплаты ' + f.date(ds), a) });
     const col = K.h('div', 'c8-col'); row.appendChild(col);
-    const ps = panel('Выплаты по ' + (P === 'w' ? 'неделям' : 'месяцам') + ', млн $ экв.', '<span class="by"></span>'); col.appendChild(ps);
+    const ps = panel('Выплаты по ' + (P === 'w' ? 'неделям' : 'месяцам') + ', mm $ экв.', '<span class="by"></span>'); col.appendChild(ps);
     const el = K.h('div', 'chart'); ps.querySelector('.bd').appendChild(el);
     const draw = () => {
       charts.filter(c => c._fx).forEach(c => c.dispose()); charts = charts.filter(c => !c._fx);
@@ -325,7 +325,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     K.seg(ps.querySelector('.by'), [['ccy', 'по валюте'], ['kind', 'по типу']], st.fxBy, v => { st.fxBy = v; save(); draw(); });
     draw();
     // топ эмитентов
-    const pi = panel('Кто платит больше всех, млн $ экв.'); col.appendChild(pi);
+    const pi = panel('Кто платит больше всех, mm $ экв.'); col.appendChild(pi);
     const el2 = K.h('div'); el2.style.height = '300px'; pi.querySelector('.bd').appendChild(el2);
     const iss = {}; ev.forEach(x => { const o = iss[x.issuerName] = iss[x.issuerName] || { n: x.issuerName, cpn: 0, put: 0, mat: 0, a: [] }; o[x.kind] += x.val; o.a.push(x); });
     const top = Object.values(iss).sort((a, b) => (b.cpn + b.put + b.mat) - (a.cpn + a.put + a.mat)).slice(0, 12).reverse();
@@ -348,8 +348,8 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
         { key: 'name', label: 'Выпуск', fmt: (v, r) => esc(v) + (r.held ? ' <span class="held">в портфеле</span>' : '') },
         { key: 'ccy', label: 'Вал', fmt: v => K.ccyTag(v) },
         { key: 'rating', label: 'Рейтинг', fmt: (v, r) => '<span class="mut">' + esc(r.rating) + '</span>', val: r => rRank(r.rating) },
-        { key: 'amt', label: 'Объём', num: true, fmt: (v, r) => f.mn(v, 0) + ' <span class="mut3">млн ' + r.ccy + '</span>' },
-        { key: 'val', label: 'млн $ экв.', num: true, fmt: v => f.mn(v, 0), sum: true, drill: false },
+        { key: 'amt', label: 'Объём', num: true, fmt: (v, r) => f.mn(v, 0) + ' <span class="mut3">mm ' + r.ccy + '</span>' },
+        { key: 'val', label: 'mm $ экв.', num: true, fmt: v => f.mn(v, 0), sum: true, drill: false },
       ],
     });
   }
@@ -357,7 +357,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
   // ---------- режим «Рублёвый рынок» ----------
   function renderRub(view, kpis) {
     const e = end(), all = rubEvents(e), P = per(), cats = periods(e, P);
-    const fmt = v => f.bn(v, 1), unit = 'млрд ₽';
+    const fmt = v => f.bn(v, 1), unit = 'bn ₽';
     const red = all.filter(x => x.kind !== 'cpn'), cpn = all.filter(x => x.kind === 'cpn');
     const what = st.rubWhat === 'red' ? red : st.rubWhat === 'cpn' ? cpn : all;
     const whatLabel = { red: 'Погашения и оферты', cpn: 'Купоны', all: 'Все выплаты' }[st.rubWhat];
@@ -367,9 +367,9 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
       const mx = Math.max(1, ...g.map(x => sumBy(x.a, y => y.val)));
       bd.innerHTML = '<div class="k-sec">По рейтингу</div><table class="mini"><thead><tr><th>Группа</th><th class="n">Событий</th><th class="n">Купоны</th><th class="n">Погаш. + оферты</th><th style="width:30%"></th></tr></thead><tbody>' +
         g.map(x => { const s = sumBy(x.a, y => y.val); return '<tr><td><b style="color:' + RBC[x.b] + '">■</b> ' + x.b + '</td><td class="n mut">' + x.a.length + '</td><td class="n">' + fmt(sumBy(x.a.filter(y => y.kind === 'cpn'), y => y.val)) + '</td><td class="n">' + fmt(sumBy(x.a.filter(y => y.kind !== 'cpn'), y => y.val)) + '</td><td>' + K.bar(s, mx, true) + '</td></tr>'; }).join('') + '</tbody></table>' +
-        '<div class="k-sec">Крупнейшие 12</div>' + eventsTable(a.slice().sort((x, y) => y.val - x.val).slice(0, 12), { fmt: v => f.bn(v, 2), unitCol: 'млрд ₽', rating: true });
+        '<div class="k-sec">Крупнейшие 12</div>' + eventsTable(a.slice().sort((x, y) => y.val - x.val).slice(0, 12), { fmt: v => f.bn(v, 2), unitCol: 'bn ₽', rating: true });
     };
-    const kp = (label, a, sub) => K.kpi(label, a.length ? '<span class="dr">' + fmt(sumBy(a, x => x.val)) + '</span> <span class="mut" style="font-size:11px">млрд</span>' : '<span class="mut3">—</span>', sub);
+    const kp = (label, a, sub) => K.kpi(label, a.length ? '<span class="dr">' + fmt(sumBy(a, x => x.val)) + '</span> <span class="mut" style="font-size:11px">bn</span>' : '<span class="mut3">—</span>', sub);
     kpis.innerHTML = '<div class="k-kpis">' +
       kp('<span style="color:' + KC.cpn + '">●</span> Купоны', cpn, cpn.length + ' выплат') +
       kp('<span style="color:' + KC.mat + '">●</span> Погашения', all.filter(x => x.kind === 'mat'), all.filter(x => x.kind === 'mat').length + ' выпусков') +
@@ -382,7 +382,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     kk.forEach((k, i) => { const s = k.querySelector('.dr'); if (s) s.onclick = () => openAgg(titles[i] + ' до ' + f.date(e), lists[i]); });
 
     const row = K.h('div', 'c8-row'); view.appendChild(row);
-    const ps = panel(whatLabel + ' по ' + (P === 'w' ? 'неделям' : 'месяцам') + ' и рейтингу, млрд ₽', '<span class="by"></span>'); row.appendChild(ps);
+    const ps = panel(whatLabel + ' по ' + (P === 'w' ? 'неделям' : 'месяцам') + ' и рейтингу, bn ₽', '<span class="by"></span>'); row.appendChild(ps);
     const el = K.h('div', 'chart'); el.style.height = '330px'; ps.querySelector('.bd').appendChild(el);
     K.seg(ps.querySelector('.by'), [['red', 'погашения + оферты'], ['cpn', 'купоны'], ['all', 'всё']], st.rubWhat, v => { st.rubWhat = v; save(); render(); });
     const ser = RBS.map(b => ({ name: b, color: RBC[b], vals: cats.map(c => sumBy(what.filter(x => x.bucket === b && pkey(x.date, P) === c), x => x.val)) }));
@@ -407,12 +407,12 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
 
     const row2 = K.h('div', 'c8-row'); view.appendChild(row2);
     const pc = panel('Календарь: ' + whatLabel.toLowerCase()); row2.appendChild(pc);
-    calendar(pc.querySelector('.bd'), what, { fmt: v => f.bn(v, 0), unit: 'млрд ₽', onDay: (ds, a) => openAgg(whatLabel + ' ' + f.date(ds), a) });
+    calendar(pc.querySelector('.bd'), what, { fmt: v => f.bn(v, 0), unit: 'bn ₽', onDay: (ds, a) => openAgg(whatLabel + ' ' + f.date(ds), a) });
     // короткий список крупных
-    const pb = panel('Крупные погашения и оферты', '<span class="k-note">≥ 10 млрд, рейтинг ≥ A</span>'); row2.appendChild(pb);
+    const pb = panel('Крупные погашения и оферты', '<span class="k-note">≥ 10 bn, рейтинг ≥ A</span>'); row2.appendChild(pb);
     pb.querySelector('.bd').classList.add('flush', 'scroll'); pb.querySelector('.bd').style.maxHeight = '520px';
     const bigList = rubAll.filter(x => x.date <= e && x.big && x.kind !== 'cpn');
-    pb.querySelector('.bd').innerHTML = bigList.length ? '<table class="mini"><thead><tr><th>Дата</th><th>Событие</th><th>Выпуск</th><th>Рейтинг</th><th class="n">Объём, млрд</th></tr></thead><tbody>' +
+    pb.querySelector('.bd').innerHTML = bigList.length ? '<table class="mini"><thead><tr><th>Дата</th><th>Событие</th><th>Выпуск</th><th>Рейтинг</th><th class="n">Объём, bn</th></tr></thead><tbody>' +
       bigList.map(x => '<tr><td>' + f.date(x.date) + '</td><td><span class="kb" style="--c:' + KC[x.kind] + '">' + KN[x.kind] + '</span></td><td>' + esc(x.name) + (x.flt ? ' <span class="mut3">флоатер</span>' : '') + '</td><td><b style="color:' + RBC[x.bucket] + '">■</b> ' + esc(x.rating) + '</td><td class="n"><b>' + f.bn(x.val, 1) + '</b></td></tr>').join('') + '</tbody></table>' +
       '<div class="k-note" style="padding:6px 10px">' + bigList.length + ' выпусков из ' + rubAll.filter(x => x.date <= e && x.kind !== 'cpn').length + ' за горизонт; мелочь — только в агрегатах</div>' : '<div class="k-empty">в горизонте нет</div>';
   }

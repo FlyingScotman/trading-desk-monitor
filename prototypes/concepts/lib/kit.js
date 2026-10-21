@@ -1,7 +1,7 @@
 /*
  * KIT — общие компоненты концептов (нужны mock.js и ../echarts.min.js).
  *
- *  KIT.f.*                — форматирование (тыс ₽/бп, млн, млрд, б.п., даты)
+ *  KIT.f.*                — форматирование (тыс ₽/бп, mm, bn, б.п., даты)
  *  KIT.top({title, tag})  — шапка: дата среза, фильтр книг (общий для всех концептов), поиск, тема
  *  KIT.list()             — позиции после фильтра шапки; KIT.onFilter(fn) — перерисовка при смене фильтра
  *  KIT.d(spec)            — кликабельная цифра: spec = {title, list|rows, val, fmt, unit, v?}; щелчок раскрывает вклад
@@ -17,14 +17,46 @@
   const M = window.MOCK;
   const K = window.KIT = {};
 
+  // ---------- валюта отчёта: все суммы деска (MV, риск, PnL, кэрри, потоки) пересчитываются по споту ----------
+  K.REPRS = ['RUB', 'USD', 'EUR', 'CNY'];
+  K.SYM = { RUB: '₽', USD: '$', EUR: '€', CNY: '¥' };
+  K.repr = 'RUB';
+  try { const r = localStorage.getItem('concepts-repr'); if (r && M.fx[r]) K.repr = r; } catch (e) { }
+  M.repr = K.repr;
+  M.toRepr = {}; Object.keys(M.fx).forEach(c => M.toRepr[c] = M.fx[c] / M.fx[K.repr]);
+  if (K.repr !== 'RUB') (function convert(k) {
+    const sc = (o, keys) => keys.forEach(x => { if (o[x] != null) o[x] *= k; });
+    const arr = a => a && a.forEach((v, i) => a[i] = v * k);
+    M.positions.forEach(p => {
+      sc(p, ['mv', 'accrued', 'carryDay', 'rollDay', 'dv01', 'basis01', 'cs01', 'notionalRub', 'pnlMtd', 'pnlYtd']);
+      arr(p.cs01b); Object.keys(p.risk).forEach(c => arr(p.risk[c])); Object.keys(p.dv01ByCurve).forEach(c => p.dv01ByCurve[c] *= k);
+      Object.keys(p.pnl).forEach(x => p.pnl[x] *= k);
+    });
+    const H = M.hist; [H.dv01, H.dv01Book, H.mvType, H.mvCcy, H.pnl].forEach(g => Object.keys(g).forEach(x => arr(g[x]))); arr(H.cs01);
+    M.cashflows.forEach(c => c.amountRub *= k);
+    M.universeRub.forEach(b => b.size *= k);
+  })(1 / M.fx[K.repr]);
+  K.setRepr = c => { try { localStorage.setItem('concepts-repr', c); } catch (e) { } location.reload(); };
+  // подписи «₽» в разметке страниц заменяются символом валюты отчёта
+  if (K.repr !== 'RUB') {
+    const sym = K.SYM[K.repr], re = /₽/g;
+    const fixNode = n => { if (n.nodeValue.indexOf('₽') >= 0) n.nodeValue = n.nodeValue.replace(re, sym); };
+    const fix = root => { const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT); let n; while ((n = w.nextNode())) fixNode(n); };
+    new MutationObserver(ms => ms.forEach(m => { m.addedNodes.forEach(n => n.nodeType === 3 ? fixNode(n) : n.nodeType === 1 && fix(n)); if (m.type === 'characterData') fixNode(m.target); }))
+      .observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+    document.addEventListener('DOMContentLoaded', () => fix(document.body));
+  }
+
   // ---------- форматирование ----------
-  const NB = ' ';
-  const grp = (v, d) => { if (v == null || !isFinite(v)) return '—'; const s = Math.abs(v).toFixed(d || 0).split('.'); s[0] = s[0].replace(/\B(?=(\d{3})+(?!\d))/g, NB); return (v < 0 ? '−' : '') + s.join(','); };
+  // формат чисел: запятая — разделитель тысяч, точка — дробной части (1,234.56)
+  const grp = (v, d) => { if (v == null || !isFinite(v)) return '—'; const s = Math.abs(v).toFixed(d || 0).split('.'); s[0] = s[0].replace(/\B(?=(\d{3})+(?!\d))/g, ','); return (v < 0 && /[1-9]/.test(s.join('')) ? '−' : '') + s.join('.'); };
+  // в валюте отчёта, отличной от рубля, суммы в тысячах мелкие: показываем с одним знаком после точки
+  const KD = K.repr === 'RUB' ? 0 : 1;
   const sgn = (v, d) => (v > 0 ? '+' : '') + grp(v, d);
   const f = K.f = {
     n: grp, s: sgn,
-    k: v => grp(v / 1e3, 0),                     // тыс
-    ks: v => sgn(v / 1e3, 0),
+    k: v => grp(v / 1e3, KD),                     // тыс
+    ks: v => sgn(v / 1e3, KD),
     mn: (v, d) => grp(v / 1e6, d == null ? 1 : d),
     mns: (v, d) => sgn(v / 1e6, d == null ? 1 : d),
     bn: (v, d) => grp(v / 1e9, d == null ? 2 : d),
@@ -32,10 +64,10 @@
     bps: v => v == null ? '—' : sgn(v, 0),
     pct: (v, d) => v == null ? '—' : grp(v, d == null ? 2 : d) + '%',
     px: v => v == null ? '—' : grp(v, 3),
-    money: v => { if (v == null || !isFinite(v)) return '—'; const a = Math.abs(v); return a >= 1e9 ? grp(v / 1e9, 2) + ' млрд' : a >= 1e6 ? grp(v / 1e6, 1) + ' млн' : a >= 1e3 ? grp(v / 1e3, 0) + ' тыс' : grp(v, 0); },
+    money: v => { if (v == null || !isFinite(v)) return '—'; const a = Math.abs(v); return a >= 1e9 ? grp(v / 1e9, 2) + ' bn' : a >= 1e6 ? grp(v / 1e6, 1) + ' mm' : a >= 1e3 ? grp(v / 1e3, 0) + 'k' : grp(v, 0); },
     moneys: v => (v > 0 ? '+' : '') + f.money(v),
-    dv: v => grp(v / 1e3, 0),                    // DV01 в тыс ₽/бп
-    dvs: v => sgn(v / 1e3, 0),
+    dv: v => grp(v / 1e3, KD),                    // DV01 в тыс ₽/бп
+    dvs: v => sgn(v / 1e3, KD),
     date: s => s ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(2, 4) : '—',
     dshort: s => { if (!s) return '—'; const m = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']; return (+s.slice(8, 10)) + ' ' + m[+s.slice(5, 7) - 1]; },
     yrs: t => t == null ? '—' : t < 1 ? Math.round(t * 12) + 'м' : grp(t, 1) + 'г',
@@ -102,24 +134,35 @@
   K.setFilter = (patch) => { Object.assign(filt, patch); try { localStorage.setItem('concepts-filter', JSON.stringify(filt)); } catch (e) { } fire('filter'); renderFilterChips(); };
   K.list = () => M.positions.filter(p => (!filt.entity || p.entity === filt.entity) && (!filt.desk || p.desk === filt.desk) && (!filt.books || !filt.books.length || filt.books.includes(p.book)) && (!filt.ccy || p.ccy === filt.ccy));
   let chipsBox = null;
+  // каскад: юрлицо → деск → книги; в каждом списке только варианты, совместимые с уже выбранным
+  const booksIn = () => M.books.filter(b => (!filt.entity || b.entity === filt.entity) && (!filt.desk || b.desk === filt.desk));
+  const nPos = {}; M.positions.forEach(p => nPos[p.book] = (nPos[p.book] || 0) + 1);
   function renderFilterChips() {
     if (!chipsBox) return;
-    const ent = M.entities, desks = [...new Set(M.books.map(b => b.desk))];
-    const lbl = filt.books && filt.books.length ? (filt.books.length === 1 ? M.book[filt.books[0]].name : filt.books.length + ' книги') : 'все книги';
+    const ent = M.entities;
+    const desks = [...new Set(M.books.filter(b => !filt.entity || b.entity === filt.entity).map(b => b.desk))];
+    const lbl = filt.books && filt.books.length ? (filt.books.length === 1 ? M.book[filt.books[0]].name : filt.books.length + ' книг') : 'все книги (' + booksIn().length + ')';
     chipsBox.innerHTML =
-      '<span class="k-chip" data-f="entity">' + (filt.entity ? esc(ent.find(e => e.id === filt.entity).name) : 'все юрлица') + ' ▾</span>' +
-      '<span class="k-chip" data-f="desk">' + (filt.desk ? esc(filt.desk) : 'все дески') + ' ▾</span>' +
+      '<span class="k-chip' + (filt.entity ? ' on' : '') + '" data-f="entity">' + (filt.entity ? esc(ent.find(e => e.id === filt.entity).name) : 'все юрлица') + ' ▾</span>' +
+      '<span class="k-chip' + (filt.desk ? ' on' : '') + '" data-f="desk">' + (filt.desk ? esc(filt.desk) : 'все дески') + ' ▾</span>' +
       '<span class="k-chip' + (filt.books && filt.books.length ? ' on' : '') + '" data-f="books">' + esc(lbl) + ' ▾</span>' +
       ((filt.entity || filt.desk || (filt.books && filt.books.length) || filt.ccy) ? '<span class="k-chip" data-f="reset"><span class="x">✕</span> сбросить</span>' : '');
     chipsBox.querySelectorAll('[data-f]').forEach(ch => ch.onclick = ev => {
       const k = ch.dataset.f;
       if (k === 'reset') return K.setFilter({ entity: null, desk: null, books: null, ccy: null });
-      const items = k === 'entity' ? [{ v: null, t: 'все юрлица' }].concat(ent.map(e => ({ v: e.id, t: e.name })))
-        : k === 'desk' ? [{ v: null, t: 'все дески' }].concat(desks.map(d => ({ v: d, t: d })))
-          : M.books.map(b => ({ v: b.id, t: b.name + ' · ' + b.id, sub: b.desk + ' · ' + M.entities.find(e => e.id === b.entity).name, multi: true }));
+      const items = k === 'entity' ? [{ v: null, t: 'все юрлица' }].concat(ent.map(e => ({ v: e.id, t: e.name, sub: M.books.filter(b => b.entity === e.id).length + ' книг' })))
+        : k === 'desk' ? [{ v: null, t: 'все дески' }].concat(desks.map(d => ({ v: d, t: d, sub: M.books.filter(b => b.desk === d && (!filt.entity || b.entity === filt.entity)).length + ' книг' })))
+          : booksIn().map(b => ({ v: b.id, t: b.name, sub: b.id + ' · ' + b.desk + (filt.entity ? '' : ' · ' + M.entities.find(e => e.id === b.entity).name) + ' · ' + (nPos[b.id] || 0) + ' поз', multi: true, empty: !nPos[b.id] }));
       menu(ch, items, k === 'books' ? (filt.books || []) : filt[k], v => {
         if (k === 'books') { const s = new Set(filt.books || []); s.has(v) ? s.delete(v) : s.add(v); K.setFilter({ books: [...s] }); }
-        else K.setFilter({ [k]: v });
+        else {
+          // смена юрлица или деска убирает выбранные книги, которые в новый срез не входят
+          const patch = { [k]: v };
+          if (k === 'entity' && v && filt.desk && !M.books.some(b => b.entity === v && b.desk === filt.desk)) patch.desk = null;
+          Object.assign(filt, patch);
+          const ok = new Set(booksIn().map(b => b.id)); patch.books = (filt.books || []).filter(b => ok.has(b));
+          K.setFilter(patch);
+        }
       }, k === 'books');
       ev.stopPropagation();
     });
@@ -128,14 +171,32 @@
   function menu(anchor, items, cur, pick, multi) {
     if (openMenu) openMenu.remove();
     const m = h('div', 'k-panel'); m.style.cssText = 'position:fixed;z-index:140;min-width:220px;max-height:60vh;overflow:auto;box-shadow:var(--shadow);padding:4px 0';
-    const r = anchor.getBoundingClientRect(); m.style.left = Math.min(r.left, innerWidth - 260) + 'px'; m.style.top = (r.bottom + 4) + 'px';
-    items.forEach(it => {
+    const r = anchor.getBoundingClientRect(); m.style.left = Math.min(r.left, innerWidth - 300) + 'px'; m.style.top = (r.bottom + 4) + 'px';
+    let rowsBox = m, q = multi ? (menu._q || '') : '';
+    const reopen = () => { m.remove(); openMenu = null; const nb = chipsBox.querySelector('[data-f=books]'); if (nb) nb.click(); };
+    const vis = () => items.filter(it => !q || (it.t + ' ' + (it.sub || '')).toLowerCase().includes(q));
+    if (multi) {
+      const tb = h('div'); tb.style.cssText = 'display:flex;gap:6px;padding:4px 8px 6px;border-bottom:1px solid var(--line);position:sticky;top:-4px;background:var(--panel)';
+      const inp = h('input', 'k-input'); inp.placeholder = 'найти книгу…'; inp.value = q; inp.style.minWidth = '0'; inp.style.flex = '1';
+      const all = h('button', 'k-btn', 'все видимые'), none = h('button', 'k-btn', 'снять');
+      tb.append(inp, all, none); m.appendChild(tb); rowsBox = h('div'); m.appendChild(rowsBox);
+      inp.oninput = () => { q = menu._q = inp.value.toLowerCase(); paintRows(); };
+      inp.onclick = e => e.stopPropagation();
+      all.onclick = e => { e.stopPropagation(); K.setFilter({ books: [...new Set((filt.books || []).concat(vis().map(it => it.v)))] }); reopen(); };
+      none.onclick = e => { e.stopPropagation(); K.setFilter({ books: null }); reopen(); };
+      setTimeout(() => inp.focus(), 0);
+    }
+    function paintRows() {
+    rowsBox.querySelectorAll('.mi').forEach(x => x.remove());
+    vis().forEach(it => {
       const on = multi ? cur.includes(it.v) : cur === it.v;
       const row = h('div', '', (multi ? '<span style="width:16px;display:inline-block">' + (on ? '☑' : '☐') + '</span>' : (on ? '• ' : '&nbsp; ')) + esc(it.t) + (it.sub ? ' <span class="mut3" style="font-size:11px">' + esc(it.sub) + '</span>' : ''));
-      row.style.cssText = 'padding:5px 12px;cursor:pointer;white-space:nowrap'; row.onmouseenter = () => row.style.background = 'var(--hover)'; row.onmouseleave = () => row.style.background = '';
-      row.onclick = e => { e.stopPropagation(); pick(it.v); if (!multi) close(); else { m.remove(); openMenu = null; const nb = chipsBox.querySelector('[data-f=books]'); if (nb) nb.click(); } };
-      m.appendChild(row);
+      row.className = 'mi'; row.style.cssText = 'padding:5px 12px;cursor:pointer;white-space:nowrap' + (it.empty ? ';opacity:.5' : ''); row.onmouseenter = () => row.style.background = 'var(--hover)'; row.onmouseleave = () => row.style.background = '';
+      row.onclick = e => { e.stopPropagation(); pick(it.v); if (!multi) close(); else reopen(); };
+      rowsBox.appendChild(row);
     });
+    }
+    paintRows();
     document.body.appendChild(m); openMenu = m;
     const close = () => { if (openMenu === m) { m.remove(); openMenu = null; } };
     setTimeout(() => document.addEventListener('click', close, { once: true }), 0);
@@ -151,6 +212,7 @@
     bar.innerHTML = '<div class="brand"><a href="index.html" title="Все концепты">◂ концепты</a><span>' + esc(opt.title || '') + '</span>' + (opt.tag ? '<span class="tag">' + esc(opt.tag) + '</span>' : '') + '</div>' +
       '<div class="filters" style="display:flex;gap:6px;flex-wrap:wrap"></div><div class="sp"></div>' +
       (opt.extra || '') +
+      '<span class="k-chip" data-a="repr" title="Валюта отчёта: все суммы деска пересчитываются по споту">в ' + K.repr + ' ' + K.SYM[K.repr] + ' ▾</span>' +
       '<span class="asof">срез <b>' + f.date(M.asOf) + '</b> · ' + esc(M.cut.label) + '</span>' +
       '<button class="k-btn" data-a="search">Поиск <span class="k-kbd">Ctrl K</span></button>' +
       '<button class="k-btn" data-a="theme" title="Светлая / тёмная тема">◐</button>';
@@ -158,6 +220,8 @@
     chipsBox = bar.querySelector('.filters'); renderFilterChips();
     bar.querySelector('[data-a=search]').onclick = () => K.palette();
     bar.querySelector('[data-a=theme]').onclick = K.toggleTheme;
+    const rc = bar.querySelector('[data-a=repr]');
+    rc.onclick = e => { e.stopPropagation(); menu(rc, K.REPRS.map(c => ({ v: c, t: 'в ' + c + ' ' + K.SYM[c], sub: c === 'RUB' ? '' : 'курс ' + f.n(M.fx[c], 2) })), K.repr, v => { if (v !== K.repr) K.setRepr(v); }); };
     return bar;
   };
 
@@ -307,11 +371,18 @@
       return { data, tot, cum, L };
     };
     let cur = ser();
+    let side = false, names = [], totals = {};
     const chart = K.chart(el, () => {
       cur = ser();
+      side = opts.legend === 'side' || (opts.legend !== 'top' && el.clientWidth >= 560);
+      names = ids.map(id => id === 'CS01' ? 'CS01' : M.curve[id].short);
+      totals = {}; names.forEach((n, i) => totals[n] = cur.data[i].reduce((a, b) => a + b, 0));
+      totals['итог бакета'] = cur.tot.reduce((a, b) => a + b, 0);
       return {
-        grid: { left: 8, right: 8, top: 34, bottom: 4, containLabel: true },
-        legend: { top: 0, left: 0, data: ids.map(id => id === 'CS01' ? 'CS01' : M.curve[id].short).concat(['итог бакета', 'кумулятив']) },
+        // широкая панель: легенда слева столбиком — название кривой и её сумма; узкая — легенда сверху
+        grid: side ? { left: 168, right: 8, top: 12, bottom: 4, containLabel: true } : { left: 8, right: 8, top: 34, bottom: 4, containLabel: true },
+        legend: side ? { orient: 'vertical', left: 0, top: 'middle', itemGap: 9, data: names.concat(['итог бакета', 'кумулятив']), formatter: n => { const t = totals[n]; return t == null ? n : '{n|' + n + '}{v|' + f.dv(t) + '}'; }, textStyle: { color: css('--fg-2'), rich: { n: { width: 84, color: css('--fg-2') }, v: { width: 54, align: 'right', fontWeight: 600, color: css('--fg') } } } }
+          : { top: 0, left: 0, data: names.concat(['итог бакета', 'кумулятив']) },
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: ps => { const k = ps[0].dataIndex; return '<b>' + M.buckets[k] + '</b><br>' + ps.map(p => p.marker + p.seriesName + ': <b>' + f.dv(p.value) + '</b>').join('<br>') + '<br><span style="opacity:.6">тыс ₽/бп · щелчок — вклад позиций</span>'; } },
         xAxis: { type: 'category', data: M.buckets },
         yAxis: [{ type: 'value', axisLabel: { formatter: v => f.dv(v) } }, { type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => f.dv(v), color: css('--warn') } }],
@@ -424,8 +495,8 @@
     maturity: { key: 'maturity', label: 'Погашение', fmt: v => f.date(v) },
     offer: { key: 'offer', label: 'Оферта', fmt: (v, r) => v ? f.date(v) + ' <span class="mut3">' + (r.offerKind === 'put' ? 'P' : 'C') + '</span>' : '<span class="mut3">—</span>' },
     tenor: { key: 'tenor', label: 'Срок', num: true, fmt: v => f.yrs(v), title: 'до оферты, если есть, иначе до погашения' },
-    notional: { key: 'notional', label: 'Номинал', num: true, fmt: (v, r) => f.mn(v, 0) + ' <span class="mut3">' + r.ccy + '</span>', title: 'млн, в валюте бумаги' },
-    mv: { key: 'mv', label: 'MV, млн ₽', num: true, fmt: v => f.mn(v, 0), sum: true, unit: 'млн ₽', sumFmt: v => f.mn(v, 0) },
+    notional: { key: 'notional', label: 'Номинал', num: true, fmt: (v, r) => f.mn(v, 0) + ' <span class="mut3">' + r.ccy + '</span>', title: 'mm, в валюте бумаги' },
+    mv: { key: 'mv', label: 'MV, mm ₽', num: true, fmt: v => f.mn(v, 0), sum: true, unit: 'mm ₽', sumFmt: v => f.mn(v, 0) },
     price: { key: 'price', label: 'Цена', num: true, fmt: v => f.px(v) },
     ytm: { key: 'ytm', label: 'Дох.', num: true, fmt: v => f.pct(v) },
     spread: { key: 'zspread', label: 'Спред', num: true, fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : f.bp(v) + ' <span class="mut3">' + (r.spreadLabel || '') + '</span>', title: 'Z-спред к RUONIA (фикс) / дисконт-маржа (флоатер)' },
@@ -436,7 +507,7 @@
     basis01: { key: 'basis01', label: 'Базис01', num: true, fmt: v => v ? f.dv(v) : '<span class="mut3">·</span>', sum: true, unit: 'тыс ₽/бп', title: 'ОФЗ − RUONIA' },
     carry: { key: 'carryDay', label: 'Кэрри/д', num: true, fmt: v => f.k(v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽', title: 'тыс ₽ в день' },
     pnl: { key: 'pnl', label: 'PnL дня', num: true, val: r => r.pnl.total, fmt: v => f.k(v), cls: v => f.cls(v), sum: r => r.pnl.total, unit: 'тыс ₽' },
-    pnlMtd: { key: 'pnlMtd', label: 'PnL MTD', num: true, fmt: v => f.mn(v, 1), cls: v => f.cls(v), sum: true, unit: 'млн ₽', sumFmt: v => f.mn(v, 1) },
+    pnlMtd: { key: 'pnlMtd', label: 'PnL MTD', num: true, fmt: v => f.mn(v, 1), cls: v => f.cls(v), sum: true, unit: 'mm ₽', sumFmt: v => f.mn(v, 1) },
     rating: { key: 'rating', label: 'Рейтинг', fmt: v => '<span class="mut">' + esc(v) + '</span>' },
     sector: { key: 'sector', label: 'Сектор', fmt: v => '<span class="mut">' + esc(v) + '</span>' },
   };
@@ -458,39 +529,40 @@
     const isBond = p.group !== 'DER';
     const ev = { put: 'пут-оферта', call: 'колл-опцион', mat: 'погашение' }[p.event.kind];
     const fields = isBond ? [
-      ['Номинал', f.mn(p.notional, 0) + ' <small>млн ' + p.ccy + '</small>'], ['MV', f.mn(p.mv, 1) + ' <small>млн ₽</small>'],
+      ['Номинал', f.mn(p.notional, 0) + ' <small>mm ' + p.ccy + '</small>'], ['MV', f.mn(p.mv, 1) + ' <small>mm ₽</small>'],
       ['Цена (bid/ask)', f.px(p.price) + ' <small>' + f.px(p.bid) + ' / ' + f.px(p.ask) + '</small>'], ['Изм. цены', '<span class="' + f.cls(p.price - p.prevPrice) + '">' + f.s(p.price - p.prevPrice, 3) + '</span>'],
-      ['Доходность', f.pct(p.ytm) + ' <small>к ' + (p.event.kind === 'mat' ? 'погаш.' : 'оферте') + '</small>'], [(p.spreadLabel === 'DM' ? 'Дисконт-маржа' : 'Z-спред к RUONIA'), f.bp(p.zspread) + ' <small>б.п.</small>'],
+      p.cpn.type === 'float' ? ['Доходность', '<span class="mut3">—</span> <small>флоатер: смотрим DM</small>'] : ['Доходность', f.pct(p.ytm) + ' <small>к ' + (p.event.kind === 'mat' ? 'погаш.' : 'оферте') + '</small>'], [(p.spreadLabel === 'DM' ? 'Дисконт-маржа' : 'Z-спред к RUONIA'), f.bp(p.zspread) + ' <small>б.п.</small>'],
       ['G-спред к ОФЗ', f.bp(p.gspread) + ' <small>б.п.</small>'], ['Мод. дюрация', p.mdur == null ? '—' : f.n(p.mdur, 2)],
       ['Купон', '<span class="mono">' + esc(p.couponFmt) + '</span>'], ['Текущий купон', f.pct(p.curCpn) + (p.cpn.type === 'float' ? ' <small>прогноз</small>' : '')],
       ['Ближайшее событие', f.date(p.event.date) + ' <small>' + ev + ', ' + f.yrs(p.tenor) + '</small>'], ['Погашение', f.date(p.maturity) + ' <small>' + f.yrs(p.yearsToMat) + '</small>'],
       ['DV01 ставки', K.d({ title: 'DV01 ' + p.name, unit: 'тыс ₽/бп', rows: [{ p, v: p.dv01 }] }, f.dv(p.dv01), '') + ' <small>тыс ₽/бп</small>'], ['CS01', f.dv(p.cs01) + ' <small>тыс ₽/бп</small>'],
       ['Базис ОФЗ01', p.basis01 ? f.dv(p.basis01) : '—'], ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽ (фонд. ' + f.pct(p.fundRate) + ')</small>'],
-      ['НКД', f.mn(p.accrued, 2) + ' <small>млн ₽</small>'], ['Рейтинг / сектор', esc(p.rating) + ' <small>' + esc(p.sector) + '</small>'],
+      ['НКД', f.mn(p.accrued, 2) + ' <small>mm ₽</small>'], ['Рейтинг / сектор', esc(p.rating) + ' <small>' + esc(p.sector) + '</small>'],
     ] : [
-      ['Номинал', f.mn(p.notional, 0) + ' <small>млн ' + p.ccy + '</small>'], ['MTM', f.mn(p.mv, 1) + ' <small>млн ₽</small>'],
+      ['Номинал', f.mn(p.notional, 0) + ' <small>mm ' + p.ccy + '</small>'], ['MTM', f.mn(p.mv, 1) + ' <small>mm ₽</small>'],
       ['Ставка / курс', esc(p.couponFmt)], ['Срок', f.date(p.maturity) + ' <small>' + f.yrs(p.tenor) + '</small>'],
-      ['DV01', f.dv(p.dv01) + ' <small>тыс ₽/бп</small>'], ['FX дельта', p.fxDelta ? f.mn(p.fxDelta, 1) + ' <small>млн ' + p.ccy + '</small>' : '—'],
+      ['DV01', f.dv(p.dv01) + ' <small>тыс ₽/бп</small>'], ['FX дельта', p.fxDelta ? f.mn(p.fxDelta, 1) + ' <small>mm ' + p.ccy + '</small>' : '—'],
       ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽</small>'], ['Контрагент', esc(p.cpty || '—')],
     ];
     const pn = p.pnl;
     o.bd.innerHTML = '<div class="k-tags">' + [p.desk, M.entities.find(e => e.id === p.entity).name, p.rating !== '—' ? 'рейтинг ' + p.rating : null, p.tradedToday ? 'сделки сегодня' : null].filter(Boolean).map(t => '<span class="k-tag">' + esc(t) + '</span>').join('') + '</div>' +
       '<div class="k-sec">Параметры</div><div class="k-fields">' + fields.map(([l, v]) => '<div><div class="l">' + l + '</div><div class="v">' + v + '</div></div>').join('') + '</div>' +
       '<div class="k-sec">PnL <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽</span></div>' +
-      '<div class="k-fields">' + [['Итого день', pn.total], ['Кэрри', pn.carry], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx], ['Сделки', pn.trading], ['Прочее', pn.other], ['MTD', p.pnlMtd], ['YTD', p.pnlYtd]].map(([l, v]) => '<div><div class="l">' + l + '</div><div class="v ' + f.cls(v) + '">' + (Math.abs(v) >= 1e7 ? f.mns(v, 1) + ' <small>млн</small>' : f.ks(v)) + '</div></div>').join('') + '</div>' +
+      '<div class="k-fields">' + [['Итого день', pn.total], ['Кэрри', pn.carry], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx], ['Сделки', pn.trading], ['Прочее', pn.other], ['MTD', p.pnlMtd], ['YTD', p.pnlYtd]].map(([l, v]) => '<div><div class="l">' + l + '</div><div class="v ' + f.cls(v) + '">' + (Math.abs(v) >= 1e7 ? f.mns(v, 1) + ' <small>mm</small>' : f.ks(v)) + '</div></div>').join('') + '</div>' +
       '<div class="k-sec">История <span class="sp"></span><span class="hseg"></span></div><div class="hchart" style="height:230px"></div>' +
       '<div class="k-sec">Риск по бакетам <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽/бп</span></div><div class="rchart" style="height:200px"></div>' +
       (isBond ? '<div class="k-sec">Ближайшие потоки</div><div class="cfs"></div>' : '');
     // история
     const H = M.posHistory(p.id);
-    let mode = isBond ? 'yield' : 'notional';
+    const isFloat = isBond && p.cpn.type === 'float';
+    let mode = isFloat ? 'spread' : isBond ? 'yield' : 'notional';
     const hc = K.chart(o.bd.querySelector('.hchart'), () => {
       const xs = H.dates;
-      const S = mode === 'price' ? [{ name: 'Цена', data: H.price }] : mode === 'yield' ? [{ name: 'Доходность', data: H.ytm }, { name: 'ОФЗ на сроке', data: H.bench, lineStyle: { type: 'dashed', width: 1 } }] : mode === 'spread' ? [{ name: 'Спред, б.п.', data: H.spr }] : mode === 'dv01' ? [{ name: 'DV01, тыс ₽/бп', data: H.dv01.map(v => v / 1e3), step: 'end' }] : [{ name: 'Номинал, млн', data: H.notional.map(v => v / 1e6), step: 'end', areaStyle: { opacity: .15 } }];
+      const S = mode === 'price' ? [{ name: 'Цена', data: H.price }] : mode === 'yield' ? [{ name: 'Доходность', data: H.ytm }, { name: 'ОФЗ на сроке', data: H.bench, lineStyle: { type: 'dashed', width: 1 } }] : mode === 'spread' ? [{ name: 'Спред, б.п.', data: H.spr }] : mode === 'dv01' ? [{ name: 'DV01, тыс ₽/бп', data: H.dv01.map(v => v / 1e3), step: 'end' }] : [{ name: 'Номинал, mm', data: H.notional.map(v => v / 1e6), step: 'end', areaStyle: { opacity: .15 } }];
       return { grid: { left: 6, right: 10, top: 26, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis' }, xAxis: { type: 'category', data: xs, axisLabel: { formatter: v => f.dshort(v) } }, yAxis: { type: 'value', scale: true }, series: S.map((s, i) => Object.assign({ type: 'line', showSymbol: false, lineStyle: { width: 1.6 }, color: i ? css('--fg-3') : K.issuerColor(p.issuer) }, s)), dataZoom: [{ type: 'inside' }] };
     });
     o.charts.push(hc);
-    K.seg(o.bd.querySelector('.hseg'), (isBond ? [['price', 'цена'], ['yield', 'доходность'], ['spread', 'спред']] : []).concat([['notional', 'позиция'], ['dv01', 'DV01']]), mode, v => { mode = v; hc.redraw(); });
+    K.seg(o.bd.querySelector('.hseg'), (isFloat ? [['price', 'цена'], ['spread', 'DM']] : isBond ? [['price', 'цена'], ['yield', 'доходность'], ['spread', 'спред']] : []).concat([['notional', 'позиция'], ['dv01', 'DV01']]), mode, v => { mode = v; hc.redraw(); });
     // риск по бакетам
     const cids = M.curves.filter(c => p.risk[c.id].some(v => Math.abs(v) > 1)).map(c => c.id);
     const rc = K.chart(o.bd.querySelector('.rchart'), () => ({
@@ -501,7 +573,7 @@
     o.charts.push(rc);
     if (isBond) {
       const cf = M.cashflows.filter(c => c.pos === p.id).slice(0, 8);
-      o.bd.querySelector('.cfs').innerHTML = cf.length ? '<table class="k-tbl"><thead><tr><th>Дата</th><th>Тип</th><th class="n">Сумма, ' + p.ccy + '</th><th class="n">≈ млн ₽</th></tr></thead><tbody>' +
+      o.bd.querySelector('.cfs').innerHTML = cf.length ? '<table class="k-tbl"><thead><tr><th>Дата</th><th>Тип</th><th class="n">Сумма, ' + p.ccy + '</th><th class="n">≈ mm ₽</th></tr></thead><tbody>' +
         cf.map(c => '<tr><td>' + f.date(c.date) + '</td><td>' + ({ cpn: 'купон', mat: 'погашение', put: 'пут-оферта', call: 'колл' }[c.kind]) + (c.est ? ' <span class="mut3">прогноз</span>' : '') + '</td><td class="n">' + f.n(c.amount, 0) + '</td><td class="n">' + f.mn(c.amountRub, 1) + '</td></tr>').join('') + '</tbody></table>' : '<div class="k-empty">нет потоков в горизонте</div>';
     }
     return o;
@@ -521,7 +593,7 @@
       const m = s => words.every(w => s.includes(w));
       items = [];
       cmds.forEach(c => { if (!q || m(c.label.toLowerCase())) items.push({ k: 'экран', t: c.label, r: c.hint || '', run: c.run }); });
-      M.issuers.forEach(i => { const L = M.positions.filter(p => p.issuer === i.id); if (L.length && q && m((i.name + ' ' + i.short + ' ' + i.sector).toLowerCase())) items.push({ k: 'эмитент', t: i.name, r: L.length + ' поз · DV01 ' + f.dv(M.sum(L, 'dv01')), run: () => K.drill({ title: 'Эмитент ' + i.short, unit: 'млн ₽ MV', fmt: v => f.mn(v, 1), list: L, val: p => p.group === 'DER' ? p.notionalRub : p.mv }) }); });
+      M.issuers.forEach(i => { const L = M.positions.filter(p => p.issuer === i.id); if (L.length && q && m((i.name + ' ' + i.short + ' ' + i.sector).toLowerCase())) items.push({ k: 'эмитент', t: i.name, r: L.length + ' поз · DV01 ' + f.dv(M.sum(L, 'dv01')), run: () => K.drill({ title: 'Эмитент ' + i.short, unit: 'mm ₽ MV', fmt: v => f.mn(v, 1), list: L, val: p => p.group === 'DER' ? p.notionalRub : p.mv }) }); });
       M.books.forEach(b => { if (q && m((b.id + ' ' + b.name + ' ' + b.desk).toLowerCase())) items.push({ k: 'книга', t: b.name + ' · ' + b.id, r: 'фильтр шапки', run: () => K.setFilter({ books: [b.id] }) }); });
       M.positions.forEach(p => { if (q && m(p.searchText)) items.push({ k: 'позиция', t: p.name, r: p.ccy + ' · ' + p.book + ' · DV01 ' + f.dv(p.dv01), run: () => K.card(p.id) }); });
       items = items.slice(0, 60); sel = 0; paint();
@@ -539,29 +611,46 @@
   K.tip = (e, html) => { if (!tip) { tip = h('div', 'k-tip'); document.body.appendChild(tip); } if (!html) { tip.style.display = 'none'; return; } tip.innerHTML = html; tip.style.display = 'block'; const x = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8), y = Math.min(e.clientY + 14, innerHeight - tip.offsetHeight - 8); tip.style.left = x + 'px'; tip.style.top = y + 'px'; };
 
   // ---------- готовые блоки ----------
-  // сводная таблица рисков: строки — типы инструментов внутри валют, колонки — кривые валюты; значения кликабельны
+  // сводная таблица рисков: строки — валюта → гос/корп/деривативы → тип, колонки — кривые; значения кликабельны.
+  // Раскраска (переключатель над таблицей, запоминается): по типу (фон строки и цвет подписи), тепловая, по знаку, без цвета.
+  K.RISK_COLOR = [['type', 'по типу'], ['heat', 'тепловая'], ['sign', 'по знаку'], ['none', 'без цвета']];
+  K.riskColor = (() => { try { return localStorage.getItem('concepts-riskcolor') || 'type'; } catch (e) { return 'type'; } })();
+  const tint = (hex, a) => hex && hex[0] === '#' && hex.length === 7 ? hex + Math.round(a * 255).toString(16).padStart(2, '0') : 'transparent';
   K.riskMatrix = function (el, opt) {
     opt = opt || {};
+    const box = h('div', 'k-rm'); const bar = h('div', 'k-rm-bar');
+    el.innerHTML = ''; if (opt.controls !== false) el.appendChild(bar); el.appendChild(box);
+    if (opt.controls !== false) {
+      bar.append(h('span', 'mut', 'цвет:'));
+      const sb = h('span'); bar.appendChild(sb);
+      K.seg(sb, K.RISK_COLOR, K.riskColor, v => { K.riskColor = v; try { localStorage.setItem('concepts-riskcolor', v); } catch (e) { } fire('riskcolor'); });
+      bar.appendChild(h('span', 'k-note', 'тыс ' + K.SYM[K.repr] + '/бп · щелчок по цифре — из чего она'));
+    }
     function draw() {
-      const L = K.list();
+      const mode = K.riskColor, L = K.list();
       const ccys = M.ccys.filter(c => L.some(p => p.ccy === c));
-      let html = '<table class="k-tbl"><thead><tr><th>Валюта / тип</th>';
       const cols = [];
       ccys.forEach(c => M.curves.filter(x => x.ccy === c).forEach(x => cols.push(x)));
       const curCols = opt.curves ? cols.filter(c => opt.curves.includes(c.id)) : cols;
-      html += curCols.map(c => '<th class="n" title="' + esc(c.name) + '">' + esc(c.short) + '</th>').join('') + '<th class="n">DV01 ставки</th><th class="n">CS01</th><th class="n">MV, млн ₽</th></tr></thead><tbody>';
       const allMax = Math.max(1, ...M.typeRows.map(t => Math.abs(M.sum(L.filter(p => p.group + '.' + p.kind === t.id), 'dv01'))));
-      const row = (label, list, lvl, color) => {
-        const cells = curCols.map(c => { const v = M.sum(list, p => p.dv01ByCurve[c.id]); return '<td class="n" style="' + K.heatRisk(v, allMax) + '">' + (Math.abs(v) < 500 ? '<span class="mut3">·</span>' : K.d({ title: label + ' · ' + c.short, unit: 'тыс ₽/бп', list, val: p => p.dv01ByCurve[c.id] }, null, '')) + '</td>'; }).join('');
+      const cellStyle = v => mode === 'heat' ? K.heatRisk(v, allMax) : mode === 'sign' ? 'color:' + (v < 0 ? 'var(--accent)' : 'var(--warn)') : '';
+      const num = (v, spec, bold) => Math.abs(v) < 500 ? '<span class="mut3">·</span>' : (bold ? '<b>' : '') + K.d(spec, null, '') + (bold ? '</b>' : '');
+      let html = '<table class="k-tbl k-compact"><thead><tr><th>Валюта / тип</th><th class="n">DV01</th>' +
+        curCols.map(c => '<th class="n" title="' + esc(c.name) + '">' + (ccys.length > 1 ? '<span class="mut3">' + c.ccy + '</span> ' : '') + esc(c.short) + '</th>').join('') +
+        '<th class="n">CS01</th><th class="n">MV, mm</th></tr></thead><tbody>';
+      const row = (label, list, lvl, color, ccy) => {
         const dv = M.sum(list, 'dv01'), cs = M.sum(list, 'cs01'), mv = M.sum(list, p => p.group === 'DER' ? 0 : p.mv);
-        return '<tr class="' + (lvl === 0 ? 'grp' : '') + '"><td style="padding-left:' + (8 + lvl * 16) + 'px">' + (color ? '<b style="color:' + color + '">●</b> ' : '') + label + ' <span class="mut3">' + list.length + '</span></td>' + cells +
-          '<td class="n" style="' + K.heatRisk(dv, allMax) + '"><b>' + K.d({ title: label + ' · DV01', unit: 'тыс ₽/бп', list, val: 'dv01' }, null, '') + '</b></td>' +
-          '<td class="n" style="' + K.heatMono(cs, allMax, '227,179,65') + '">' + (cs ? K.d({ title: label + ' · CS01', unit: 'тыс ₽/бп', list, val: 'cs01' }, null, '') : '<span class="mut3">·</span>') + '</td>' +
-          '<td class="n">' + (mv ? K.d({ title: label + ' · MV', unit: 'млн ₽', fmt: v => f.mn(v, 0), list, val: p => p.group === 'DER' ? 0 : p.mv, color: false }) : '<span class="mut3">·</span>') + '</td></tr>';
+        const rowBg = mode === 'type' ? (color ? tint(color, 0.10) : ccy ? tint(K.ccyColor(ccy), 0.16) : '') : '';
+        const lab = mode === 'type' && color ? '<span style="color:' + color + '">' + label + '</span>' : (color && mode !== 'type' ? '<b style="color:' + color + '">●</b> ' : '') + (mode === 'type' && color ? '' : label);
+        return '<tr class="' + (lvl === 0 ? 'grp' : '') + '"' + (rowBg ? ' style="background:' + rowBg + '"' : '') + '><td style="padding-left:' + (6 + lvl * 12) + 'px">' + lab + ' <span class="mut3">' + list.length + '</span></td>' +
+          '<td class="n" style="' + cellStyle(dv) + '">' + num(dv, { title: label.replace(/<[^>]+>/g, '') + ' · DV01', unit: 'тыс ₽/бп', list, val: 'dv01' }, true) + '</td>' +
+          curCols.map(c => { const v = M.sum(list, p => p.dv01ByCurve[c.id]); return '<td class="n" style="' + cellStyle(v) + '">' + num(v, { title: label.replace(/<[^>]+>/g, '') + ' · ' + c.short, unit: 'тыс ₽/бп', list, val: p => p.dv01ByCurve[c.id] }) + '</td>'; }).join('') +
+          '<td class="n" style="' + (mode === 'heat' ? K.heatMono(cs, allMax, '227,179,65') : cellStyle(cs)) + '">' + (cs ? num(cs, { title: label.replace(/<[^>]+>/g, '') + ' · CS01', unit: 'тыс ₽/бп', list, val: 'cs01' }) : '<span class="mut3">·</span>') + '</td>' +
+          '<td class="n">' + (mv ? K.d({ title: label.replace(/<[^>]+>/g, '') + ' · MV', unit: 'mm ₽', fmt: v => f.mn(v, 0), list, val: p => p.group === 'DER' ? 0 : p.mv, color: false }) : '<span class="mut3">·</span>') + '</td></tr>';
       };
       ccys.forEach(c => {
         const Lc = L.filter(p => p.ccy === c);
-        html += row(K.ccyTag(c) + ' ' + ({ RUB: 'Рубли', USD: 'Доллары', EUR: 'Евро', CNY: 'Юани' }[c]), Lc, 0);
+        html += row(K.ccyTag(c) + ' ' + ({ RUB: 'Рубли', USD: 'Доллары', EUR: 'Евро', CNY: 'Юани' }[c]), Lc, 0, null, c);
         ['GOV', 'CORP', 'DER'].forEach(g => {
           const Lg = Lc.filter(p => p.group === g); if (!Lg.length) return;
           const kinds = M.typeRows.filter(t => t.group === g && Lg.some(p => p.kind === t.kind));
@@ -569,33 +658,40 @@
           else kinds.forEach(t => html += row(M.groupLabel[g] + ' · ' + t.label, Lg.filter(p => p.kind === t.kind), 1, K.kindColor[t.kind]));
         });
       });
-      html += '</tbody><tfoot>' + row('Итого', L, 0).replace('<tr class="grp">', '<tr>') + '</tfoot></table>';
-      el.innerHTML = html;
+      html += '</tbody><tfoot>' + row('Итого', L, 0).replace('<tr class="grp"', '<tr') + '</tfoot></table>';
+      box.innerHTML = html;
     }
-    draw(); K.live(el, 'filter', draw); K.live(el, 'theme', draw);
+    draw(); K.live(el, 'filter', draw); K.live(el, 'theme', draw); K.live(el, 'riskcolor', () => { draw(); const b = bar.querySelector('.k-seg'); if (b) b.querySelectorAll('button').forEach((x, i) => x.classList.toggle('on', K.RISK_COLOR[i][0] === K.riskColor)); });
     return { redraw: draw };
   };
 
-  // таблица «кривая × бакет» для одной валюты с итогом и кумулятивом
+  // таблица «кривая × бакет» для одной валюты: название кривой и итог закреплены слева, справа — бакеты; снизу Σ и кумулятив
   K.bucketTable = function (el, ccy, opt) {
     opt = opt || {};
     function draw() {
-      const L = K.list();
+      const L = K.list(), mode = K.riskColor;
       const cs = M.curves.filter(c => c.ccy === ccy);
       const rows = cs.map(c => ({ label: c.short, id: c.id, vals: M.buckets.map((_, k) => M.sum(L, p => p.risk[c.id][k])) }));
       if (opt.cs01) rows.push({ label: 'CS01', id: 'CS01', vals: M.buckets.map((_, k) => M.sum(L.filter(p => p.ccy === ccy), p => p.cs01b[k])) });
-      const rateRows = rows.filter(r => r.id === 'CS01' || M.curve[r.id].kind === 'rate');
-      const tot = M.buckets.map((_, k) => rows.filter(r => r.id !== 'CS01' && M.curve[r.id].kind === 'rate').reduce((s, r) => s + r.vals[k], 0));
+      const isRate = r => r.id !== 'CS01' && M.curve[r.id].kind === 'rate';
+      const tot = M.buckets.map((_, k) => rows.filter(isRate).reduce((s, r) => s + r.vals[k], 0));
       let c = 0; const cum = tot.map(v => c += v);
       const max = Math.max(1, ...rows.flatMap(r => r.vals.map(Math.abs)));
-      const cell = (v, title, rowsFn) => '<td class="n" style="' + K.heatRisk(v, max) + '">' + (Math.abs(v) < 500 ? '<span class="mut3">·</span>' : K.d({ title, unit: 'тыс ₽/бп', rows: rowsFn() }, null, '')) + '</td>';
-      el.innerHTML = '<table class="k-tbl"><thead><tr><th>' + K.ccyTag(ccy) + ' кривая</th>' + M.buckets.map(b => '<th class="n">' + b + '</th>').join('') + '<th class="n">Итого</th></tr></thead><tbody>' +
-        rows.map(r => '<tr><td><b style="color:' + K.curveColors[r.id] + '">■</b> ' + esc(r.label) + (r.id !== 'CS01' && M.curve[r.id].kind === 'basis' ? ' <span class="mut3">базис</span>' : '') + '</td>' + r.vals.map((v, k) => cell(v, r.label + ' · ' + M.buckets[k], () => L.map(p => ({ p, v: r.id === 'CS01' ? (p.ccy === ccy ? p.cs01b[k] : 0) : p.risk[r.id][k] })))).join('') +
-          '<td class="n"><b>' + K.d({ title: r.label + ' · всего', unit: 'тыс ₽/бп', rows: L.map(p => ({ p, v: r.id === 'CS01' ? (p.ccy === ccy ? p.cs01 : 0) : p.dv01ByCurve[r.id] })) }) + '</b></td></tr>').join('') +
-        '</tbody><tfoot><tr><td>Σ ставки</td>' + tot.map((v, k) => '<td class="n">' + K.d({ title: ccy + ' ставки · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: L.map(p => ({ p, v: cs.filter(x => x.kind === 'rate').reduce((s, x) => s + p.risk[x.id][k], 0) })) }, null, '') + '</td>').join('') + '<td class="n">' + f.dv(tot.reduce((a, b) => a + b, 0)) + '</td></tr>' +
-        '<tr><td class="mut">кумулятив</td>' + cum.map((v, k) => '<td class="n mut">' + K.d({ title: ccy + ' кумулятив до ' + M.buckets[k], unit: 'тыс ₽/бп', rows: L.map(p => ({ p, v: cs.filter(x => x.kind === 'rate').reduce((s, x) => s + p.risk[x.id].slice(0, k + 1).reduce((a, b) => a + b, 0), 0) })) }, null, '') + '</td>').join('') + '<td></td></tr></tfoot></table>';
+      const st = v => mode === 'heat' ? K.heatRisk(v, max) : mode === 'sign' ? 'color:' + (v < 0 ? 'var(--accent)' : 'var(--warn)') : '';
+      const cell = (v, title, rowsFn) => '<td class="n" style="' + st(v) + '">' + (Math.abs(v) < 500 ? '<span class="mut3">·</span>' : K.d({ title, unit: 'тыс ₽/бп', rows: rowsFn() }, null, '')) + '</td>';
+      const rowsOf = (r, k) => L.map(p => ({ p, v: r.id === 'CS01' ? (p.ccy === ccy ? (k == null ? p.cs01 : p.cs01b[k]) : 0) : (k == null ? p.dv01ByCurve[r.id] : p.risk[r.id][k]) }));
+      const rateRows = (k, cumul) => L.map(p => ({ p, v: cs.filter(x => x.kind === 'rate').reduce((s, x) => s + (cumul ? p.risk[x.id].slice(0, k + 1).reduce((a, b) => a + b, 0) : p.risk[x.id][k]), 0) }));
+      el.innerHTML = '<div class="k-tbl-wrap"><table class="k-tbl k-compact k-pin2"><thead><tr><th>' + K.ccyTag(ccy) + ' кривая</th><th class="n">Итого</th>' + M.buckets.map(b => '<th class="n">' + b + '</th>').join('') + '</tr></thead><tbody>' +
+        rows.map(r => {
+          const col = K.curveColors[r.id], bg = mode === 'type' ? ' style="background:' + tint(col, 0.10) + '"' : '';
+          return '<tr' + bg + '><td><b style="color:' + col + '">■</b> ' + (mode === 'type' ? '<span style="color:' + col + '">' + esc(r.label) + '</span>' : esc(r.label)) + (r.id !== 'CS01' && M.curve[r.id].kind === 'basis' ? ' <span class="mut3">базис</span>' : '') + '</td>' +
+            '<td class="n"><b>' + K.d({ title: r.label + ' · всего', unit: 'тыс ₽/бп', rows: rowsOf(r) }, null, '') + '</b></td>' +
+            r.vals.map((v, k) => cell(v, r.label + ' · ' + M.buckets[k], () => rowsOf(r, k))).join('') + '</tr>';
+        }).join('') +
+        '</tbody><tfoot><tr><td>Σ ставки</td><td class="n">' + f.dv(tot.reduce((a, b) => a + b, 0)) + '</td>' + tot.map((v, k) => '<td class="n">' + K.d({ title: ccy + ' ставки · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: rateRows(k) }, null, '') + '</td>').join('') + '</tr>' +
+        '<tr><td class="mut">кумулятив</td><td></td>' + cum.map((v, k) => '<td class="n mut">' + K.d({ title: ccy + ' кумулятив до ' + M.buckets[k], unit: 'тыс ₽/бп', rows: rateRows(k, true) }, null, '') + '</td>').join('') + '</tr></tfoot></table></div>';
     }
-    draw(); K.live(el, 'filter', draw); K.live(el, 'theme', draw);
+    draw(); K.live(el, 'filter', draw); K.live(el, 'theme', draw); K.live(el, 'riskcolor', draw);
     return { redraw: draw };
   };
 
@@ -612,7 +708,7 @@
       const cols = vals.map(v => v >= 0 ? css('--pos') : css('--neg')).concat([css('--accent')]);
       const lo = Math.min(0, ...segs.map(x => Math.min(x[0], x[1]))), hi = Math.max(0, ...segs.map(x => Math.max(x[0], x[1])));
       return {
-        grid: { left: 6, right: 10, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'item', formatter: p => (keys[p.dataIndex] ? keys[p.dataIndex][1] : 'Итого') + ': <b>' + f.mns(p.dataIndex < vals.length ? vals[p.dataIndex] : run, 2) + '</b> млн' },
+        grid: { left: 6, right: 10, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'item', formatter: p => (keys[p.dataIndex] ? keys[p.dataIndex][1] : 'Итого') + ': <b>' + f.mns(p.dataIndex < vals.length ? vals[p.dataIndex] : run, 2) + '</b> mm' },
         xAxis: { type: 'category', data: keys.map(k => k[1]).concat(['Итого']) }, yAxis: { type: 'value', min: lo, max: hi, scale: false, axisLabel: { formatter: v => f.mn(v, 0) } },
         series: [{
           type: 'custom', data: segs.map((s, i) => [i, s[0], s[1]]),
@@ -641,13 +737,13 @@
       const L = K.list(), k = M.kpis(L);
       const pnlH = M.hist.pnl.total.slice(-30);
       el.innerHTML = '<div class="k-kpis">' +
-        K.kpi('PnL дня', K.d({ title: 'PnL дня', unit: 'млн ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(k.pnl, 1) + ' млн'), 'MTD ' + K.d({ title: 'PnL MTD', unit: 'млн ₽', fmt: v => f.mns(v, 1), list: L, val: 'pnlMtd' }) + ' · YTD ' + K.d({ title: 'PnL YTD', unit: 'млн ₽', fmt: v => f.mns(v, 0), list: L, val: 'pnlYtd' }), K.spark(pnlH, 70, 20)) +
+        K.kpi('PnL дня', K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(k.pnl, 1) + ' mm'), 'MTD ' + K.d({ title: 'PnL MTD', unit: 'mm ₽', fmt: v => f.mns(v, 1), list: L, val: 'pnlMtd' }) + ' · YTD ' + K.d({ title: 'PnL YTD', unit: 'mm ₽', fmt: v => f.mns(v, 0), list: L, val: 'pnlYtd' }), K.spark(pnlH, 70, 20)) +
         K.kpi('DV01 ставки', K.d({ title: 'DV01 ставки (все кривые)', unit: 'тыс ₽/бп', list: L, val: 'dv01' }) + ' <span class="mut" style="font-size:11px">тыс/бп</span>', M.ccys.map(c => c + ' ' + K.d({ title: 'DV01 ' + c, unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === c), val: 'dv01' }, null, '')).join(' · ')) +
         K.kpi('RUONIA · КС', K.d({ title: 'DV01 RUONIA', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB RUONIA'] }) + ' · ' + K.d({ title: 'DV01 КС', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB KEY'] }), 'базис ОФЗ ' + K.d({ title: 'Базис ОФЗ−RUONIA', unit: 'тыс ₽/бп', list: L, val: 'basis01' }, null, '')) +
         K.kpi('CS01', K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }), 'корп. RUB ' + K.d({ title: 'CS01 корп RUB', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === 'RUB'), val: 'cs01' }, null, '') + ' · вал. ' + K.d({ title: 'CS01 валютные', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy !== 'RUB'), val: 'cs01' }, null, '')) +
-        K.kpi('Кэрри / день', K.d({ title: 'Кэрри за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }) + ' <span class="mut" style="font-size:11px">тыс</span>', 'в год ≈ ' + f.mn(k.carryDay * 365, 0) + ' млн') +
-        K.kpi('Облигации MV', K.d({ title: 'MV облигаций', unit: 'млрд ₽', fmt: v => f.bn(v, 1), list: L.filter(p => p.group !== 'DER'), val: 'mv', color: false }) + ' <span class="mut" style="font-size:11px">млрд</span>', M.ccys.map(c => c + ' ' + f.bn(k.byCcy[c].mv, 1)).join(' · ')) +
-        K.kpi('ОВП', M.ccys.filter(c => c !== 'RUB').map(c => c + ' ' + K.d({ title: 'FX дельта ' + c, unit: 'млн ' + c, fmt: v => f.mn(v, 1), list: L.filter(p => p.ccy === c), val: 'fxDelta' })).join(' '), 'млн в валюте') +
+        K.kpi('Кэрри / день', K.d({ title: 'Кэрри за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }) + ' <span class="mut" style="font-size:11px">тыс</span>', 'в год ≈ ' + f.mn(k.carryDay * 365, 0) + ' mm') +
+        K.kpi('Облигации MV', K.d({ title: 'MV облигаций', unit: 'bn ₽', fmt: v => f.bn(v, 1), list: L.filter(p => p.group !== 'DER'), val: 'mv', color: false }) + ' <span class="mut" style="font-size:11px">bn</span>', M.ccys.map(c => c + ' ' + f.bn(k.byCcy[c].mv, 1)).join(' · ')) +
+        K.kpi('ОВП', M.ccys.filter(c => c !== 'RUB').map(c => c + ' ' + K.d({ title: 'FX дельта ' + c, unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: L.filter(p => p.ccy === c), val: 'fxDelta' })).join(' '), 'mm в валюте') +
         '</div>';
     }
     draw(); K.live(el, 'filter', draw);

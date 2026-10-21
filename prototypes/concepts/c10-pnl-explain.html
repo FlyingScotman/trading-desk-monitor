@@ -63,7 +63,7 @@
     return (mtdCache[p.id] = o);
   }
   const val = (p, k) => k === 'total' ? (mode === 'day' ? p.pnl.total : p.pnlMtd) : (mode === 'day' ? p.pnl[k] : mtd(p)[k]);
-  const U = () => mode === 'day' ? { fmt: f.k, fmts: f.ks, unit: 'тыс ₽', big: v => f.mns(v, 2) + ' млн' } : { fmt: v => f.mn(v, 1), fmts: v => f.mns(v, 1), unit: 'млн ₽', big: v => f.mns(v, 1) + ' млн' };
+  const U = () => mode === 'day' ? { fmt: f.k, fmts: f.ks, unit: 'тыс ₽', big: v => f.mns(v, 2) + ' mm' } : { fmt: v => f.mn(v, 1), fmts: v => f.mns(v, 1), unit: 'mm ₽', big: v => f.mns(v, 1) + ' mm' };
   const ratePnl = (p, cid, k) => p.risk[cid][k] * M.curve[cid].chg[k];
   function panel(title, extra, cls) { const p = h('div', 'k-panel ' + (cls || '')); p.innerHTML = '<div class="hd"><h3>' + title + '</h3><span class="sp"></span>' + (extra || '') + '</div><div class="bd"></div>'; return p; }
 
@@ -85,7 +85,7 @@
 
     // ---------- водопад + матрица ----------
     const g1 = h('div', 'g2'); page.appendChild(g1);
-    const pw = panel('Водопад', '<span class="k-note">млн ₽ · щелчок по столбцу</span>'); g1.appendChild(pw);
+    const pw = panel('Водопад', '<span class="k-note">mm ₽ · щелчок по столбцу</span>'); g1.appendChild(pw);
     const wel = h('div', 'chart'); pw.querySelector('.bd').appendChild(wel);
     const vals = FAC.map(([k]) => M.sum(L, p => val(p, k)));
     // водопад через custom-серию: обычный стек ломается, когда столбец уходит ниже нуля
@@ -95,7 +95,7 @@
       const pos = K.css('--pos'), neg = K.css('--neg'), acc = K.css('--accent'), lab = K.css('--fg-2'), ln = K.css('--line-2');
       return {
         grid: { left: 6, right: 10, top: 22, bottom: 4, containLabel: true },
-        tooltip: { trigger: 'item', formatter: p => (FAC[p.dataIndex] ? FAC[p.dataIndex][1] : 'Итого') + ': <b>' + f.mns(p.value[3], 2) + '</b> млн' },
+        tooltip: { trigger: 'item', formatter: p => (FAC[p.dataIndex] ? FAC[p.dataIndex][1] : 'Итого') + ': <b>' + f.mns(p.value[3], 2) + '</b> mm' },
         xAxis: { type: 'category', data: FAC.map(x => x[1]).concat(['Итого']) },
         yAxis: { type: 'value', axisLabel: { formatter: v => f.mn(v, 0) } },
         series: [{
@@ -182,10 +182,10 @@
       selDay = i;
       const parts = FAC.map(([k, t]) => [k, t, HP[k][i]]), mx = Math.max(1, ...parts.map(x => Math.abs(x[2])));
       const last = i === n - 1;
-      info.innerHTML = '<div style="font-weight:600;margin-bottom:2px">' + f.date(M.histDates[i]) + (last ? ' · сегодня' : '') + '</div><div class="' + f.cls(HP.total[i]) + '" style="font-size:20px;font-weight:650;margin-bottom:6px">' + f.mns(HP.total[i], 2) + ' <span class="mut" style="font-size:12px">млн</span></div>' +
+      info.innerHTML = '<div style="font-weight:600;margin-bottom:2px">' + f.date(M.histDates[i]) + (last ? ' · сегодня' : '') + '</div><div class="' + f.cls(HP.total[i]) + '" style="font-size:20px;font-weight:650;margin-bottom:6px">' + f.mns(HP.total[i], 2) + ' <span class="mut" style="font-size:12px">mm</span></div>' +
         parts.map(([k, t, v]) => '<div class="row"><span><b style="color:' + FCOL[k] + '">■</b> ' + t + '</span>' + K.bar(v, mx) + '<span class="n ' + f.cls(v) + '">' + (last ? K.d({ title: 'PnL дня · ' + t, unit: 'тыс ₽', fmt: f.ks, list: K.list(), val: p => p.pnl[k] }, f.mns(v, 2), f.cls(v)) : f.mns(v, 2)) + '</span></div>').join('') +
         '<div class="k-note" style="margin-top:8px">' + (last ? 'сегодня — цифры раскрываются по позициям' : 'по прошлым дням хранится только разложение деска') + '</div>' +
-        '<div class="k-note">с начала окна: ' + f.mns(HP.total.slice(0, i + 1).reduce((a, b) => a + b, 0), 1) + ' млн</div>';
+        '<div class="k-note">с начала окна: ' + f.mns(HP.total.slice(0, i + 1).reduce((a, b) => a + b, 0), 1) + ' mm</div>';
     }
     showDay(selDay);
     hc.raw.getZr().on('click', e => { const pt = [e.offsetX, e.offsetY]; if (!hc.raw.containPixel('grid', pt)) return; const i = Math.round(hc.raw.convertFromPixel({ xAxisIndex: 0 }, pt[0])); if (i >= 0 && i < n) { showDay(i); hc.raw.setOption({ series: FAC.map(() => ({})).concat([{}, { symbolSize: (v, p) => p.dataIndex === selDay ? 10 : 4 }]) }); } });

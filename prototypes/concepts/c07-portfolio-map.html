@@ -76,15 +76,15 @@
     rating: { t: 'рейтинг → эмитент', lv: [p => p.rating === '—' ? 'без рейтинга' : p.rating, p => p.group === 'DER' ? (p.cpty || 'Деривативы') : p.issuerName] },
   };
   const SIZES = {
-    mv: { t: 'MV', v: p => p.group === 'DER' ? 0 : Math.abs(p.mv), fmt: v => f.mn(v, 0) + ' млн ₽' },
+    mv: { t: 'MV', v: p => p.group === 'DER' ? 0 : Math.abs(p.mv), fmt: v => f.mn(v, 0) + ' mm ₽' },
     dv01: { t: '|DV01|', v: p => Math.abs(p.dv01) + Math.abs(p.basis01) * 0, fmt: v => f.dv(v) + ' тыс ₽/бп' },
     cs01: { t: '|CS01|', v: p => Math.abs(p.cs01), fmt: v => f.dv(v) + ' тыс ₽/бп' },
-    notional: { t: 'номинал', v: p => Math.abs(p.notionalRub), fmt: v => f.mn(v, 0) + ' млн ₽' },
+    notional: { t: 'номинал', v: p => Math.abs(p.notionalRub), fmt: v => f.mn(v, 0) + ' mm ₽' },
   };
   // база нормировки цвета: MV для облигаций, номинал для деривативов
   const base = p => p.group === 'DER' ? Math.abs(p.notionalRub) * 0.02 : Math.abs(p.mv);
   const COLORS = {
-    pnl: { t: 'PnL дня', div: true, unit: 'б.п. к MV', agg: L => { const b = M.sum(L, base); return b ? M.sum(L, p => p.pnl.total) / b * 1e4 : 0; }, fmt: v => f.s(v, 1) + ' б.п.', abs: L => f.mns(M.sum(L, p => p.pnl.total), 2) + ' млн ₽' },
+    pnl: { t: 'PnL дня', div: true, unit: 'б.п. к MV', agg: L => { const b = M.sum(L, base); return b ? M.sum(L, p => p.pnl.total) / b * 1e4 : 0; }, fmt: v => f.s(v, 1) + ' б.п.', abs: L => f.mns(M.sum(L, p => p.pnl.total), 2) + ' mm ₽' },
     spr: { t: 'Δ спреда', div: true, inv: true, unit: 'б.п. (рост — красный)', agg: L => wavg(L.filter(p => p.group === 'CORP'), p => p.spreadChgBp), fmt: v => f.s(v, 1) + ' б.п.' },
     ytm: { t: 'доходность', div: false, unit: '%', agg: L => wavg(L.filter(p => p.group !== 'DER' && p.kind !== 'IN'), p => p.ytm), fmt: v => f.pct(v) },
     carry: { t: 'кэрри', div: true, unit: '% годовых к MV', agg: L => { const b = M.sum(L, base); return b ? M.sum(L, 'carryDay') * 365 / b * 100 : 0; }, fmt: v => f.s(v, 2) + '%', abs: L => f.ks(M.sum(L, 'carryDay')) + ' тыс ₽/д' },
@@ -252,7 +252,7 @@
       grid: { left: 8, right: 24, top: 40, bottom: 8, containLabel: true },
       legend: { top: 0, data: ratings },
       labelLayout: { hideOverlap: true },
-      tooltip: { formatter: pp => { const b = bubData[pp.data.i]; return '<b>' + esc(b.name) + '</b> · ' + b.rating + '<br>срок ' + f.yrs(b.t) + ' · спред ' + f.bp(b.s) + ' б.п.<br>MV ' + f.mn(b.mv, 0) + ' млн ₽ · ' + b.Li.length + ' бумаг'; } },
+      tooltip: { formatter: pp => { const b = bubData[pp.data.i]; return '<b>' + esc(b.name) + '</b> · ' + b.rating + '<br>срок ' + f.yrs(b.t) + ' · спред ' + f.bp(b.s) + ' б.п.<br>MV ' + f.mn(b.mv, 0) + ' mm ₽ · ' + b.Li.length + ' бумаг'; } },
       xAxis: { type: 'value', name: 'срок, лет', nameLocation: 'middle', nameGap: 22, min: 0 },
       yAxis: { type: 'log', name: 'спред, б.п. (лог)', logBase: 10, min: v => Math.max(10, Math.floor(v.min / 10) * 10) },
       series: ratings.map(r => ({
@@ -262,7 +262,7 @@
       })),
     };
   });
-  bc.on('click', pp => { const b = bubData[pp.data.i]; if (b) K.drill({ title: 'Эмитент ' + b.name, unit: 'млн ₽ MV', fmt: v => f.mn(v, 1), list: b.Li, val: 'mv', dim: 'pos' }); });
+  bc.on('click', pp => { const b = bubData[pp.data.i]; if (b) K.drill({ title: 'Эмитент ' + b.name, unit: 'mm ₽ MV', fmt: v => f.mn(v, 1), list: b.Li, val: 'mv', dim: 'pos' }); });
 
   // ---------- управление ----------
   function redrawTree() { build(); legend(); tc.redraw(); members(); }

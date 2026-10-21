@@ -155,3 +155,18 @@ table.k-tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-si
   .k-page { padding: 10px 10px 30px; }
   .k-kpi .v { font-size: 17px; }
 }
+
+/* компактные таблицы рисков: по ширине содержимого, плотные строки */
+table.k-tbl.k-compact { width: auto; font-size: 12px; }
+.k-compact th, .k-compact td { padding: 3px 9px; }
+.k-compact td.n, .k-compact th.n { min-width: 58px; }
+.k-rm-bar { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.k-rm { overflow: auto; }
+/* первые две колонки (название и итог) закреплены при горизонтальной прокрутке */
+.k-pin2 tr > :first-child { position: sticky; left: 0; z-index: 1; background: var(--panel); min-width: 120px; }
+.k-pin2 tr > :nth-child(2) { position: sticky; left: 120px; z-index: 1; background: var(--panel); border-right: 1px solid var(--line-2); }
+.k-pin2 thead tr > :first-child, .k-pin2 thead tr > :nth-child(2) { z-index: 3; background: var(--panel-2); }
+.k-pin2 tfoot td:first-child, .k-pin2 tfoot td:nth-child(2) { background: var(--panel-2); }
+/* KPI с несколькими валютами: значения переносятся, а не обрезаются */
+.k-kpi .v { white-space: normal; line-height: 1.2; }
+.k-kpi .s { white-space: normal; }

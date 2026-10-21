@@ -75,7 +75,7 @@
   }
 
   // ---------- юрлица, деск, книги ----------
-  M.entities = [{ id: 'BANK', name: 'Банк' }, { id: 'IC', name: 'Инвесткомпания' }];
+  M.entities = [{ id: 'BANK', name: 'Банк' }, { id: 'IC', name: 'Инвесткомпания' }, { id: 'AM', name: 'Управляющая компания' }];
   M.books = [
     { id: 'OFZ', name: 'ОФЗ трейдинг', entity: 'BANK', desk: 'Rates', type: 'TRADING', trader: 'А. Волков' },
     { id: 'RATES', name: 'Процентные деривативы', entity: 'BANK', desk: 'Rates', type: 'DERIVS', trader: 'А. Волков' },
@@ -86,6 +86,19 @@
     { id: 'HTM', name: 'Инвестиционный (HTM)', entity: 'BANK', desk: 'ALM', type: 'HTM', trader: '—' },
     { id: 'IC-BND', name: 'ИК облигации', entity: 'IC', desk: 'Credit', type: 'TRADING', trader: 'С. Лебедев' },
   ];
+  // книг много (как у владельца): дочерние книги семейств, часть позиций разнесена по ним
+  const SUB = {
+    OFZ: [['OFZ-ARB', 'ОФЗ арбитраж'], ['OFZ-LONG', 'ОФЗ длинные'], ['OFZ-MM', 'ОФЗ маркет-мейкинг']],
+    RATES: [['RATES-OIS', 'OIS RUONIA'], ['RATES-KS', 'Свопы на КС'], ['RATES-HDG', 'Хедж облигаций']],
+    CORP: [['CORP-1', 'Корп. 1-й эшелон'], ['CORP-2', 'Корп. 2-й эшелон'], ['CORP-NEW', 'Первичка']],
+    FLOAT: [['FLOAT-KS', 'Флоатеры КС'], ['FLOAT-RUO', 'Флоатеры RUONIA']],
+    FXCR: [['FXCR-CNY', 'Юаневые бонды'], ['FXCR-USD', 'Замещающие USD']],
+    FXB: [['FXB-SWAP', 'FX свопы'], ['FXB-FWD', 'FX форварды']],
+    'IC-BND': [['IC-HY', 'ИК высокодоходные'], ['IC-MM', 'ИК маркет-мейкинг']],
+  };
+  Object.keys(SUB).forEach(id => { const b = M.books.find(x => x.id === id); SUB[id].forEach(([sid, nm]) => M.books.push(Object.assign({}, b, { id: sid, name: nm, parent: id }))); });
+  [['AM-BOND', 'Фонд облигаций', 'Credit'], ['AM-OFZ', 'Фонд ОФЗ', 'Rates'], ['AM-CNY', 'Фонд юаневых облигаций', 'Credit'], ['AM-DER', 'Хедж фондов', 'Rates']]
+    .forEach(([id, nm, desk]) => M.books.push({ id, name: nm, entity: 'AM', desk, type: 'TRADING', trader: 'Е. Смирнова' }));
   M.book = Object.fromEntries(M.books.map(b => [b.id, b]));
 
   // ---------- эмитенты ----------
@@ -245,6 +258,12 @@
   der.forEach(d => P.push(Object.assign({ isin: null, issuer: null, group: 'DER', maturity: addMonths(AS_OF, Math.round(d.tenor * 12)), spreadBp: 0, cpn: null }, d)));
 
   // ---------- оценка позиций ----------
+  // разнести позиции по дочерним книгам и фондам УК (детерминированно)
+  P.forEach(p => {
+    const h = hash(p.name) % 10, fam = SUB[p.book];
+    if (fam && h < 6) p.book = fam[h % fam.length][0];
+    else if (h === 9 && p.ccy !== 'USD') p.book = p.group === 'DER' ? 'AM-DER' : p.group === 'GOV' ? 'AM-OFZ' : p.ccy === 'CNY' ? 'AM-CNY' : 'AM-BOND';
+  });
   const positions = P.map((p, i) => {
     p.id = 'P' + String(i + 1).padStart(3, '0');
     const r = rng(p.name);
@@ -382,6 +401,7 @@
     const scale = Math.abs(p.mv || p.notionalRub * 0.02);
     p.pnlMtd = p.carryDay * 15 + p.pnl.total + (r() - 0.42) * scale * 0.004;
     p.pnlYtd = p.carryDay * 200 + p.pnlMtd + (r() - 0.35) * scale * 0.025;
+    if (p.cpn && p.cpn.type === 'float') { p.ytmProxy = p.ytm; p.ytm = null; p.dm = p.zspread; }
     p.searchText = [p.name, p.isin, p.issuerName, p.issuerFull, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt].join(' ').toLowerCase();
     return p;
   });

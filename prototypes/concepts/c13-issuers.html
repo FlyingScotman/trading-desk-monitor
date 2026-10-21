@@ -62,7 +62,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   const KC = { cpn: '#4c9dff', put: '#e3b341', call: '#b48cff', mat: '#3fb67a' };
   const KN = { cpn: 'купон', put: 'пут-оферта', call: 'колл', mat: 'погашение' };
   const MEAS = {
-    mv: { t: 'MV', unit: 'млн ₽', val: p => p.mv, fmt: v => f.mn(v, 0), abs: true },
+    mv: { t: 'MV', unit: 'mm ₽', val: p => p.mv, fmt: v => f.mn(v, 0), abs: true },
     cs01: { t: 'CS01', unit: 'тыс ₽/бп', val: p => p.cs01, fmt: f.dv, abs: true },
     dv01: { t: 'DV01', unit: 'тыс ₽/бп', val: p => p.dv01, fmt: f.dv, abs: true },
     pnl: { t: 'PnL дня', unit: 'тыс ₽', val: p => p.pnl.total, fmt: f.k },
@@ -101,11 +101,11 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     const pct = (a, b) => b ? Math.round(a / b * 100) + '%' : '—';
     document.getElementById('kpis').innerHTML = '<div class="k-kpis">' +
       K.kpi('Эмитентов', String(ISS.length), corp.length + ' без Минфина · ' + L.length + ' бумаг') +
-      K.kpi('Топ-10 корп. в MV', K.d({ title: 'Топ-10 эмитентов по MV', unit: 'млн ₽', fmt: v => f.mn(v, 0), list: t10.flatMap(x => x.list), val: 'mv', dim: 'issuer', color: false }, pct(sumBy(t10, x => x.mv), corpMv)), 'от корпоративной MV ' + f.bn(corpMv, 1) + ' млрд') +
+      K.kpi('Топ-10 корп. в MV', K.d({ title: 'Топ-10 эмитентов по MV', unit: 'mm ₽', fmt: v => f.mn(v, 0), list: t10.flatMap(x => x.list), val: 'mv', dim: 'issuer', color: false }, pct(sumBy(t10, x => x.mv), corpMv)), 'от корпоративной MV ' + f.bn(corpMv, 1) + ' bn') +
       K.kpi('Топ-10 в CS01', K.d({ title: 'Топ-10 эмитентов по CS01', unit: 'тыс ₽/бп', list: t10cs.flatMap(x => x.list), val: 'cs01', dim: 'issuer', color: false }, pct(sumBy(t10cs, x => x.cs01), totCs)), 'CS01 всего ' + f.dv(totCs) + ' тыс/бп') +
-      K.kpi('Крупнейший корп.', top ? '<span class="dr" data-iss="' + top.id + '" style="color:' + K.issuerColor(top.id) + '">' + esc(top.name) + '</span>' : '—', top ? pct(top.mv, corpMv) + ' корп. MV · ' + f.mn(top.mv, 0) + ' млн' : '') +
+      K.kpi('Крупнейший корп.', top ? '<span class="dr" data-iss="' + top.id + '" style="color:' + K.issuerColor(top.id) + '">' + esc(top.name) + '</span>' : '—', top ? pct(top.mv, corpMv) + ' корп. MV · ' + f.mn(top.mv, 0) + ' mm' : '') +
       K.kpi('Индекс Херфиндаля', String(hhi), hhi < 1000 ? 'низкая концентрация' : hhi < 1800 ? 'умеренная концентрация' : 'высокая концентрация') +
-      K.kpi('Минфин', mf ? K.d({ title: 'Минфин: MV', unit: 'млн ₽', fmt: v => f.mn(v, 0), list: mf.list, val: 'mv', color: false }, pct(mf.mv, totMv)) : '—', mf ? 'доля MV · DV01 ' + f.dv(mf.dv01) + ' тыс/бп' : '') +
+      K.kpi('Минфин', mf ? K.d({ title: 'Минфин: MV', unit: 'mm ₽', fmt: v => f.mn(v, 0), list: mf.list, val: 'mv', color: false }, pct(mf.mv, totMv)) : '—', mf ? 'доля MV · DV01 ' + f.dv(mf.dv01) + ' тыс/бп' : '') +
       '</div>';
     document.querySelectorAll('[data-iss]').forEach(e => e.onclick = () => select(e.dataset.iss, true));
   }
@@ -167,7 +167,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
         { key: 'name', label: 'Эмитент', fmt: (v, r) => '<b>' + esc(v) + '</b> <span class="mtag">' + r.ccys.join(' ') + '</span>' },
         { key: 'rating', label: 'Рейт.', val: r => RATING.indexOf(r.rating), fmt: (v, r) => '<span class="mut">' + esc(r.rating) + '</span>' },
         { key: 'n', label: 'Бум.', num: true, fmt: v => '<span class="mut">' + v + '</span>' },
-        { key: 'mv', label: 'MV, млн', num: true, fmt: drillCell('mv', v => f.mn(v, 0), 'млн ₽', 'MV'), sum: true, drill: false, sumFmt: v => f.mn(v, 0) },
+        { key: 'mv', label: 'MV, mm', num: true, fmt: drillCell('mv', v => f.mn(v, 0), 'mm ₽', 'MV'), sum: true, drill: false, sumFmt: v => f.mn(v, 0) },
         { key: 'share', label: '', val: r => r.mv, fmt: (v) => K.bar(v, max, true), w: '70px' },
         { key: 'cs01', label: 'CS01', num: true, fmt: drillCell('cs01', f.dv, 'тыс ₽/бп', 'CS01'), sum: true, drill: false, sumFmt: f.dv },
         { key: 'dv01', label: 'DV01', num: true, fmt: drillCell('dv01', f.dv, 'тыс ₽/бп', 'DV01'), sum: true, drill: false, sumFmt: f.dv },
@@ -196,14 +196,14 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     hp.innerHTML = '<div class="bd"><div class="ihd"><span class="sw" style="background:' + col + '"></span><div style="flex:1;min-width:220px"><div class="nm">' + esc(x.full) + '</div><div class="full">' + esc(x.sector) + ' · рейтинг ' + esc(x.rating) + ' · ' + x.n + ' бумаг (' + (x.n - nFlt) + ' фикс, ' + nFlt + ' флоатеры) · ' + x.ccys.map(K.ccyTag).join(' ') + '</div></div>' +
       '<div class="k-tags">' + [...new Set(L.map(p => p.book))].map(b => '<span class="k-tag">' + esc(b) + '</span>').join('') + '</div></div>' +
       '<div class="k-fields" style="margin-top:10px">' + [
-        ['MV', D('MV', 'mv', v => f.mn(v, 0), 'млн ₽', '') + ' <small>млн ₽ · ' + Math.round(x.mv / totMv * 100) + '% книги</small>'],
+        ['MV', D('MV', 'mv', v => f.mn(v, 0), 'mm ₽', '') + ' <small>mm ₽ · ' + Math.round(x.mv / totMv * 100) + '% книги</small>'],
         ['CS01', D('CS01', 'cs01', f.dv, 'тыс ₽/бп') + ' <small>тыс ₽/бп</small>'],
         ['DV01 ставки', D('DV01', 'dv01', f.dv, 'тыс ₽/бп') + ' <small>тыс ₽/бп</small>'],
         ['Базис ОФЗ01', x.basis01 ? D('Базис ОФЗ01', 'basis01', f.dv, 'тыс ₽/бп') : '—'],
         ['PnL дня', D('PnL дня', p => p.pnl.total, f.k, 'тыс ₽') + ' <small>тыс ₽</small>'],
         ['Кэрри / день', D('Кэрри', 'carryDay', f.k, 'тыс ₽') + ' <small>тыс ₽</small>'],
-        ['PnL MTD', D('PnL MTD', 'pnlMtd', v => f.mn(v, 1), 'млн ₽') + ' <small>млн ₽</small>'],
-        ['PnL YTD', D('PnL YTD', 'pnlYtd', v => f.mn(v, 1), 'млн ₽') + ' <small>млн ₽</small>'],
+        ['PnL MTD', D('PnL MTD', 'pnlMtd', v => f.mn(v, 1), 'mm ₽') + ' <small>mm ₽</small>'],
+        ['PnL YTD', D('PnL YTD', 'pnlYtd', v => f.mn(v, 1), 'mm ₽') + ' <small>mm ₽</small>'],
         ['Ср. спред (по MV)', f.bp(wavg(p => p.zspread)) + ' <small>б.п.</small>'],
         ['Ср. дюрация', f.n(wavg(p => p.mdur), 2)],
         ['Ср. срок до события', f.yrs(wavg(p => p.tenor))],
@@ -232,7 +232,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
       const maxT = Math.max(2, ...ours.map(p => p.tenor), ...(isY ? uni.map(b => b.tenor) : [])) * 1.08;
       curveChart = K.chart(cel, () => ({
         grid: { left: 6, right: 16, top: 34, bottom: 18, containLabel: true }, legend: { top: 0, left: 0, type: 'scroll' },
-        tooltip: { trigger: 'item', formatter: d => Array.isArray(d.value) ? '<b>' + esc(d.data.name || d.seriesName) + '</b><br>срок ' + f.yrs(d.value[0]) + ' · ' + (isY ? f.pct(d.value[1]) : f.bp(d.value[1]) + ' б.п.') + (d.data.p ? '<br>MV ' + f.mn(d.data.p.mv, 0) + ' млн · щелчок — карточка' : '') : '' },
+        tooltip: { trigger: 'item', formatter: d => Array.isArray(d.value) ? '<b>' + esc(d.data.name || d.seriesName) + '</b><br>срок ' + f.yrs(d.value[0]) + ' · ' + (isY ? f.pct(d.value[1]) : f.bp(d.value[1]) + ' б.п.') + (d.data.p ? '<br>MV ' + f.mn(d.data.p.mv, 0) + ' mm · щелчок — карточка' : '') : '' },
         xAxis: { type: 'value', name: 'лет до оферты / погашения', nameLocation: 'middle', nameGap: 22, max: Math.ceil(maxT), axisLabel: { formatter: '{value}' } },
         yAxis: { type: 'value', scale: true, axisLabel: { formatter: isY ? '{value}%' : '{value}' } },
         series,
@@ -263,16 +263,16 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     ep.querySelector('.bd').classList.add('flush', 'scroll'); ep.querySelector('.bd').style.maxHeight = '300px';
     const ids = new Set(L.map(p => p.id)), endD = U.addMonths(M.asOf, 12);
     const ev = M.cashflows.filter(c => ids.has(c.pos) && c.date > M.asOf && c.date <= endD);
-    ep.querySelector('.bd').innerHTML = ev.length ? '<table class="mini"><thead><tr><th>Дата</th><th>Событие</th><th>Бумага</th><th class="n">Сумма</th><th class="n">≈ млн ₽</th></tr></thead><tbody>' +
+    ep.querySelector('.bd').innerHTML = ev.length ? '<table class="mini"><thead><tr><th>Дата</th><th>Событие</th><th>Бумага</th><th class="n">Сумма</th><th class="n">≈ mm ₽</th></tr></thead><tbody>' +
       ev.map(c => '<tr data-card="' + c.pos + '" class="' + (c.kind === 'put' ? 'put' : '') + '"><td>' + f.date(c.date) + '</td><td><span class="kb" style="--c:' + KC[c.kind] + '">' + KN[c.kind] + '</span>' + (c.est ? ' <span class="mut3">прогноз</span>' : '') + '</td><td>' + esc(M.pos[c.pos].name) + '</td><td class="n">' + f.mn(c.amount, 1) + ' <span class="mut3">' + c.ccy + '</span></td><td class="n">' + f.mn(c.amountRub, 1) + '</td></tr>').join('') + '</tbody></table>' : '<div class="k-empty">нет событий</div>';
-    const hp2 = panel('PnL эмитента за год', '<span class="k-note">оценка по ценам + кэрри, млн ₽</span>'); two2.appendChild(hp2);
+    const hp2 = panel('PnL эмитента за год', '<span class="k-note">оценка по ценам + кэрри, mm ₽</span>'); two2.appendChild(hp2);
     const hel = K.h('div', 'ch'); hp2.querySelector('.bd').appendChild(hel);
     const Hs = L.map(p => ({ p, h: M.posHistory(p.id) })), dates = Hs[0].h.dates;
-    const daily = dates.map((_, i) => i === 0 ? 0 : sumBy(Hs, ({ p, h }) => { const n = h.notional[i - 1], fx = M.fx[p.ccy]; const dp = h.price[i] != null && h.price[i - 1] != null ? h.price[i] - h.price[i - 1] : 0; return n * dp / 100 * fx * (p.indexation || 1) + (p.notional ? p.carryDay * n / p.notional : 0); }));
+    const daily = dates.map((_, i) => i === 0 ? 0 : sumBy(Hs, ({ p, h }) => { const n = h.notional[i - 1], fx = M.toRepr[p.ccy]; const dp = h.price[i] != null && h.price[i - 1] != null ? h.price[i] - h.price[i - 1] : 0; return n * dp / 100 * fx * (p.indexation || 1) + (p.notional ? p.carryDay * n / p.notional : 0); }));
     let cs = 0; const cum = daily.map(v => (cs += v));
     dashCharts.push(K.chart(hel, () => ({
       grid: { left: 6, right: 10, top: 28, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 },
-      tooltip: { trigger: 'axis', valueFormatter: v => f.mns(v, 2) + ' млн' },
+      tooltip: { trigger: 'axis', valueFormatter: v => f.mns(v, 2) + ' mm' },
       xAxis: { type: 'category', data: dates, axisLabel: { formatter: f.dshort } },
       yAxis: [{ type: 'value', axisLabel: { formatter: v => f.mn(v, 0) } }, { type: 'value', splitLine: { show: false }, axisLabel: { formatter: v => f.mn(v, 0), color: col } }],
       dataZoom: [{ type: 'inside' }],

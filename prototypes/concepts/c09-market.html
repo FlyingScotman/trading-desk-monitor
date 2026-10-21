@@ -62,7 +62,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
     </div>
   </div>
   <div class="k-panel">
-    <div class="hd"><h3>Движения дня</h3><span class="sp"></span><span class="k-note">крупные выпуски (> 8 млрд), изм. доходности за день</span></div>
+    <div class="hd"><h3>Движения дня</h3><span class="sp"></span><span class="k-note">крупные выпуски (> 8 bn), изм. доходности за день</span></div>
     <div class="bd flush" id="movers"></div>
   </div>
 </div>
@@ -135,9 +135,9 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
       legend: { top: 4, right: 12, data: ['ОФЗ'].concat(RB.map(x => x[0])).concat(['кривая ОФЗ', 'RUONIA OIS', 'наши']) },
       tooltip: {
         trigger: 'item', formatter: pp => {
-          if (pp.seriesName === 'наши') { const p = L[pp.data.i]; return '<b>' + esc(p.name) + '</b> · ' + esc(p.rating) + '<br>' + esc(p.couponFmt) + ' · ' + ({ put: 'пут', call: 'колл', mat: 'погаш.' }[p.event.kind]) + ' ' + f.date(p.event.date) + '<br>дох. ' + f.pct(p.ytm) + ' · G ' + f.bp(p.gspread) + ' · ' + p.spreadLabel + ' ' + f.bp(p.zspread) + ' б.п.<br>MV ' + f.mn(p.mv, 0) + ' млн ₽ · DV01 ' + f.dv(p.dv01) + '<br><span style="opacity:.6">щелчок — карточка</span>'; }
+          if (pp.seriesName === 'наши') { const p = L[pp.data.i]; return '<b>' + esc(p.name) + '</b> · ' + esc(p.rating) + '<br>' + esc(p.couponFmt) + ' · ' + ({ put: 'пут', call: 'колл', mat: 'погаш.' }[p.event.kind]) + ' ' + f.date(p.event.date) + '<br>дох. ' + f.pct(p.ytm) + ' · G ' + f.bp(p.gspread) + ' · ' + p.spreadLabel + ' ' + f.bp(p.zspread) + ' б.п.<br>MV ' + f.mn(p.mv, 0) + ' mm ₽ · DV01 ' + f.dv(p.dv01) + '<br><span style="opacity:.6">щелчок — карточка</span>'; }
           const b = pp.data.b; if (!b) return '';
-          return '<b>' + esc(b.name) + '</b><br>' + esc(b.sector) + ' · ' + esc(b.rating) + (b.flt ? ' · флоатер' : '') + '<br>дох. ' + f.pct(b.ytm) + ' · G ' + f.bp(b.spread) + ' б.п. · срок ' + f.yrs(b.tenor) + '<br>объём ' + f.bn(b.size, 1) + ' млрд';
+          return '<b>' + esc(b.name) + '</b><br>' + esc(b.sector) + ' · ' + esc(b.rating) + (b.flt ? ' · флоатер' : '') + '<br>дох. ' + f.pct(b.ytm) + ' · G ' + f.bp(b.spread) + ' б.п. · срок ' + f.yrs(b.tenor) + '<br>объём ' + f.bn(b.size, 1) + ' bn';
         },
       },
       xAxis: { type: 'value', name: S.x === 'dur' ? 'дюрация, лет' : 'срок до оферты/погашения, лет', nameLocation: 'middle', nameGap: 24, min: 0, max: v => Math.min(16, Math.ceil(v.max)) },
@@ -180,7 +180,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
     const cid = M.curves.find(c => c.ccy === S.fx).id;
     return {
       grid: { left: 8, right: 16, top: 36, bottom: 8, containLabel: true }, legend: { top: 2, right: 10, data: ['рынок', 'наши', M.curve[cid].short] },
-      tooltip: { formatter: pp => { if (pp.seriesName === 'наши') { const p = fxL[pp.data.i]; return '<b>' + esc(p.name) + '</b><br>дох. ' + f.pct(p.ytm) + ' · Z ' + f.bp(p.zspread) + ' б.п.<br>MV ' + f.mn(p.mv, 0) + ' млн ₽<br><span style="opacity:.6">щелчок — карточка</span>'; } const b = pp.data.b; return b ? '<b>' + esc(b.name) + '</b><br>' + esc(b.rating) + ' · купон ' + f.pct(b.cpn) + ' ' + b.freq + '<br>дох. ' + f.pct(b.ytm) + ' · ' + (b.put ? 'пут ' + f.date(b.put) : 'погаш. ' + f.date(b.maturity)) + '<br>в обращении ' + f.mn(b.outstanding, 0) + ' млн ' + b.ccy + (b.held ? '<br><b>в портфеле</b>' : '') : ''; } },
+      tooltip: { formatter: pp => { if (pp.seriesName === 'наши') { const p = fxL[pp.data.i]; return '<b>' + esc(p.name) + '</b><br>дох. ' + f.pct(p.ytm) + ' · Z ' + f.bp(p.zspread) + ' б.п.<br>MV ' + f.mn(p.mv, 0) + ' mm ₽<br><span style="opacity:.6">щелчок — карточка</span>'; } const b = pp.data.b; return b ? '<b>' + esc(b.name) + '</b><br>' + esc(b.rating) + ' · купон ' + f.pct(b.cpn) + ' ' + b.freq + '<br>дох. ' + f.pct(b.ytm) + ' · ' + (b.put ? 'пут ' + f.date(b.put) : 'погаш. ' + f.date(b.maturity)) + '<br>в обращении ' + f.mn(b.outstanding, 0) + ' mm ' + b.ccy + (b.held ? '<br><b>в портфеле</b>' : '') : ''; } },
       xAxis: { type: 'value', name: 'срок, лет', nameLocation: 'middle', nameGap: 22, min: 0 }, yAxis: { type: 'value', name: 'дох., %', nameTextStyle: { align: 'left' }, scale: true },
       series: [
         { name: 'рынок', type: 'scatter', data: fxU.map(b => ({ value: [b.tenor, b.ytm], b, symbolSize: 5 + Math.sqrt(b.outstanding / (S.fx === 'CNY' ? 2e10 : 1.5e9)) * 9, itemStyle: { color: K.issuerColor(b.issuer), opacity: 0.75 } })), label: { show: true, position: 'right', fontSize: 9, color: K.css('--fg-3'), formatter: pp => pp.data.b.issuerName.split(' ')[0] }, labelLayout: { hideOverlap: true } },
@@ -229,7 +229,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
       { key: 'ytm', label: 'Доходность', num: true, fmt: v => f.pct(v) },
       { key: 'chgBp', label: 'Изм., б.п.', num: true, fmt: v => f.bps(v), style: v => K.heat(-v, mxChg), title: 'рост доходности — красный' },
       { key: 'bar', label: '', val: r => r.chgBp, fmt: v => K.bar(-v, mxChg) },
-      { key: 'vol', label: 'Оборот, млн', num: true, fmt: v => f.mn(v, 0) },
+      { key: 'vol', label: 'Оборот, mm', num: true, fmt: v => f.mn(v, 0) },
     ],
   });
 
