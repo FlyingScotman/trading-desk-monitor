@@ -108,7 +108,7 @@
     html += '<section id="s1"><div class="toc">' + SECS.map(([id, t]) => '<a href="#' + id + '">' + t + '</a>').join('') + '</div>' +
       '<h2><span class="no">01</span> Итог дня <span class="sp"></span><span class="k-note">' + f.date(M.asOf) + ', ' + esc(M.cut.label) + ' · к закрытию ' + f.date(M.prevDate) + '</span></h2>' +
       '<div class="hl"><span class="big ' + f.cls(tot) + '">' + K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(tot, 1)) + ' <span style="font-size:18px;font-weight:500" class="mut">mm ₽</span></span>' +
-      '<span class="sub">MTD <b>' + mln('PnL MTD', L, 'pnlMtd') + '</b> · YTD <b>' + mln('PnL YTD', L, 'pnlYtd', 0) + '</b></span></div>' +
+      '<span class="sub">MTD <b>' + mln('PnL MTD', L, 'pnlMtd') + '</b>' + K.partial('mtd') + ' · YTD <b>' + mln('PnL YTD', L, 'pnlYtd', 0) + '</b>' + K.partial('ytd') + '</span></div>' +
       '<p>За день ' + word(tot) + ' <b>' + f.mn(Math.abs(tot), 1) + ' mm</b>. Главное: ' + parts.slice(0, 3).map(x => x.h).join(', ') + '.' +
       (parts.length > 3 ? ' Остальное: ' + parts.slice(3).map(x => x.h).join(', ') + '.' : '') + '</p>' +
       '<p class="mut" style="font-size:13px">Риск на утро: DV01 по ставкам ' + dvx('DV01 ставки', L, 'dv01') + ', из них RUONIA ' + dvx('DV01 RUONIA', L, p => p.dv01ByCurve['RUB RUONIA']) +
@@ -165,7 +165,7 @@
     const nextOffers = L.filter(p => p.event && (p.event.kind === 'put' || p.event.kind === 'call')).sort((a, b) => a.event.date.localeCompare(b.event.date));
     const cbrIn = M.cbr.meetings.find(d => d > M.asOf);
     html += '<section id="s4"><h2><span class="no">04</span> На горизонте 2 недели <span class="sp"></span><span class="k-note">' + f.date(M.asOf) + ' — ' + f.date(end) + '</span></h2>' +
-      '<p>' + (M.cbr.next && M.cbr.next.date ? '<b>' + f.dshort(M.cbr.next.date) + ' — ' + esc(M.cbr.next.label) + '</b> (через ' + plural(daysTo(M.cbr.next.date), 'день', 'дня', 'дней') + '): консенсус ' + esc(M.cbr.next.consensus) + ', в кривой ' + esc(M.cbr.next.priced) + '. ' : '<span class="mut">Календаря заседаний ЦБ в данных нет.</span> ') +
+      '<p>' + (M.cbr.next && M.cbr.next.date ? '<b>' + f.dshort(M.cbr.next.date) + ' — ' + esc(M.cbr.next.label) + '</b> (через ' + plural(daysTo(M.cbr.next.date), 'день', 'дня', 'дней') + '): ' + K.cbrLine() + ' ' : '<span class="mut">Календаря заседаний ЦБ в данных нет.</span> ') +
       'Риск к КС на сроке до 1 года: ' + K.d({ title: 'КС до 1Y', unit: 'тыс ₽/бп', list: L, val: p => p.risk['RUB KEY'].slice(0, M.buckets.indexOf('1Y') + 1).reduce((a, b) => a + b, 0) }, null, '') + ' тыс/бп, RUONIA до 1 года: ' + K.d({ title: 'RUONIA до 1Y', unit: 'тыс ₽/бп', list: L, val: p => p.risk['RUB RUONIA'].slice(0, M.buckets.indexOf('1Y') + 1).reduce((a, b) => a + b, 0) }, null, '') + ' тыс/бп. ' +
       'Купонов придёт на ' + K.d({ title: 'Купоны за 2 недели', unit: 'mm ₽', fmt: v => f.mn(v, 1), rows: cpnRub.map(c => ({ p: M.pos[c.pos], v: c.amountRub })), color: false }) + ' mm ₽ по ' + plural(new Set(cpnRub.map(c => c.pos)).size, 'бумаге', 'бумагам', 'бумагам') +
       (big.length ? '; погашения и оферты — ' + K.d({ title: 'Погашения и оферты', unit: 'mm ₽', fmt: v => f.mn(v, 1), rows: big.map(c => ({ p: M.pos[c.pos], v: c.amountRub })), color: false }) + ' mm ₽.' : '; погашений и оферт нет.') +

@@ -15,7 +15,11 @@
  *  - PnL: кэрри = carry + rolldown, ставки = rates + convexity, FX = fx, сделки = newTrades, прочее = funding + other +
  *    reported; итог = explained.
  * История позиции (M.posHistory) — синхронный запрос /api/v1/history/positions: первые две позиции по одной,
- * дальше сразу все (страницы C11, C13 просят историю всех позиций).
+ * дальше сразу все (страницы C11, C13 просят историю всех позиций). Кроме цен рынка в ней номинал, DV01, CS01,
+ * базис, MV и DV01 по кривым каждого прогона (M.histSource = 'runs': история риска — настоящая, не «номинал ×
+ * сегодняшние чувствительности»).
+ * Календарь рынка (M.marketCal) — тоже лениво, /api/v1/calendar/market: агрегаты по дням, типам и валютам из
+ * статики хаба; строки за ячейкой — M.marketCal.flows({...}) тем же запросом с фильтром.
  */
 (function () {
   'use strict';
@@ -47,6 +51,7 @@
   M.run = { id: src.runId, runType: src.runType, slice: src.slice, cutType: src.cutType, publishedAt: src.publishedAt, pnlBasis: src.pnlBasis };
   M.cut = { type: src.cutType || 'eod_final', time: src.cutTs ? src.cutTs.slice(11, 16) : '', label: src.slice || src.cutType || '' };
   M.notes = (X.notes || []).slice();
+  const runQ = 'run_id=' + encodeURIComponent((D.source || {}).runId || '');
   (D.riskNotes || []).forEach(n => M.notes.push(n.text + (n.detail ? ' (' + n.detail + ')' : '')));
   if (!D.pnlAvailable && D.pnlReasonText) M.notes.push('PnL: ' + D.pnlReasonText);
   if (!window.DESK_EXTRAS) M.notes.push('нет данных /concepts-data.js: история, потоки и рынок пусты');
@@ -115,7 +120,7 @@
   M.entities = [...new Set(M.books.map(b => b.entity))].map(e => ({ id: e, name: e }));
   const NO = v => (v == null || v === 'нет данных') ? null : v;
   const issuerNames = [...new Set(D.positions.map(p => p.issuer).filter(Boolean))];
-  M.issuers = issuerNames.map(n => { const i = (D.ISSUERS || {})[n] || {}; return { id: n, name: n, short: n, sector: NO(i.sector) || '—', rating: NO(i.rating) || '—' }; });
+  M.issuers = issuerNames.map(n => { const i = (D.ISSUERS || {})[n] || {}; return { id: n, name: n, short: n, sector: NO(i.sector) || '—', rating: NO(i.rating) || '—', group: i.group && i.group !== n ? i.group : null, quasi: !!i.quasi, gov: !!i.gov }; });
   M.issuer = Object.fromEntries(M.issuers.map(i => [i.id, i]));
 
   // ---------- классификация ----------
@@ -163,6 +168,8 @@
     p.issuerName = d.issuer || d.counterparty || (group === 'DER' ? 'Деривативы' : '—');
     p.issuerFull = d.issuer || (d.counterparty ? 'Контрагент: ' + d.counterparty : p.issuerName);
     p.sector = NO(d.sector) || (group === 'DER' ? 'Деривативы' : '—'); p.rating = NO(d.rating) || '—';
+    p.issuerGroup = d.issuerGroup && d.issuerGroup !== d.issuer ? d.issuerGroup : null;
+    p.latName = ex.lat_name || null; p.issueSize = num(ex.issue_size);
     p.groupLabel = M.groupLabel[group]; p.kindLabel = M.kindLabel[kind];
     // купон
     const F = FREQ[d.couponFreq] || '';
@@ -221,7 +228,7 @@
     p.pnlMtd = num(xp.pnlMtd); p.pnlYtd = num(xp.pnlYtd);
     p.spreadChgBp = num(xp.spreadChgBp);
     p.tradedToday = !!(xp.trade || d.newToday); p.tradeToday = xp.trade || null;
-    p.searchText = [p.name, p.isin, p.issuerName, p.issuerFull, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio].join(' ').toLowerCase();
+    p.searchText = [p.name, p.isin, p.issuerName, p.issuerFull, p.issuerGroup, p.latName, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio].join(' ').toLowerCase();
     return p;
   });
   M.positions = positions;
@@ -236,6 +243,8 @@
   // ---------- история деска ----------
   const H = X.hist || {};
   M.histDates = (X.histDates && X.histDates.length) ? X.histDates.slice() : [M.asOf];
+  M.histSource = X.histSource || 'positions';  // 'runs': суммы прогонов по датам
+  M.pnlPeriods = X.pnlPeriods || null;
   const n = M.histDates.length;
   const series = (src, keys, today) => { const o = {}; keys.forEach(k => { o[k] = (src && src[k]) ? src[k].map(v => v == null ? null : +v) : new Array(n).fill(0); if (!src && today) o[k][n - 1] = today(k); }); return o; };
   const sumBy = (f) => positions.reduce((s, p) => s + (f(p) || 0), 0);
@@ -253,7 +262,6 @@
 
   // ---------- история позиции (лениво, синхронно) ----------
   const histCache = {}; let misses = 0, all = false;
-  const runQ = 'run_id=' + encodeURIComponent(M.run.id || '');
   function fetchHist(ids) {
     try {
       const x = new XMLHttpRequest();
@@ -271,18 +279,69 @@
       if (j) Object.entries(j.series || {}).forEach(([pid, s]) => histCache[pid] = Object.assign({ dates: j.dates }, s));
     }
     const p = M.pos[id], s = histCache[id];
-    const k = (M.toRepr && M.toRepr.RUB) || 1;  // DV01 истории — в рублях, как и позиции до пересчёта kit.js
-    if (!s || !s.dates.length) return { dates: [M.asOf], price: [p.price], ytm: [p.ytm], spr: [p.zspread], notional: [p.notional], dv01: [p.dv01], bench: [p.ccy === 'RUB' ? curveAt('OFZ', p.tenor) : null] };
-    return { dates: s.dates, price: s.price, ytm: s.ytm, spr: s.spr, notional: s.notional, dv01: s.dv01.map(v => v == null ? null : v * k), bench: s.bench };
+    const k = (M.toRepr && M.toRepr.RUB) || 1;  // риск и MV истории — в рублях, как и позиции до пересчёта kit.js
+    if (!s || !s.dates.length) {
+      const c = {}; Object.keys(p.dv01ByCurve).forEach(id => { if (p.dv01ByCurve[id] && id !== 'RUB OFZ') c[id] = [p.dv01ByCurve[id]]; });
+      return { dates: [M.asOf], price: [p.price], ytm: [p.ytm], spr: [p.zspread], notional: [p.notional], dv01: [p.dv01], cs01: [p.cs01], basis: [p.basis01], mv: [p.group === 'DER' ? Math.abs(p.notionalRub) : p.mv], curves: c, bench: [p.ccy === 'RUB' ? curveAt('OFZ', p.tenor) : null], fromRuns: true };
+    }
+    // сервер шлёт null вместо ряда без значений: здесь он снова массив (нули для риска, null для цен)
+    const n = s.dates.length, nulls = () => new Array(n).fill(null);
+    const sc = a => a ? a.map(v => v == null ? null : v * k) : null;
+    const risk = a => a ? sc(a) : (s.notional || []).map(v => v == null ? null : 0);
+    const curves = {}; Object.entries(s.curves || {}).forEach(([c, a]) => curves[curveOf(c)] = sc(a));
+    return { dates: s.dates, price: s.price || nulls(), ytm: s.ytm || nulls(), spr: s.spr || nulls(), notional: s.notional || nulls(),
+      dv01: risk(s.dv01), cs01: risk(s.cs01), basis: risk(s.basis), mv: risk(s.mv), curves, bench: s.bench || nulls(), fromRuns: true };
   };
 
   // ---------- потоки, рынок, ЦБ ----------
   M.cashflows = (X.cashflows || []).filter(c => M.pos[c.pos]).map(c => ({ date: c.date, pos: c.pos, kind: c.kind === 'amort' ? 'mat' : c.kind, amort: c.kind === 'amort', ccy: c.ccy, amount: c.amount, est: c.est, amountRub: c.amount * (M.fx[c.ccy] || 1) }));
-  M.universeRub = (X.universeRub || []).map(b => Object.assign({}, b, { rating: b.rating || 'без рейтинга', sector: b.sector || (b.isOfz ? 'ОФЗ' : '—'), size: b.size || 0, cpn: b.cpn, dur: b.dur || 0, tenor: b.tenor || 0 }));
+  // сектор ОФЗ — «ОФЗ» (у Минфина в статике сектор «суверен»), остальные — по статике хаба; рейтингов в данных нет
+  M.universeRub = (X.universeRub || []).map(b => Object.assign({}, b, { rating: b.rating || 'без рейтинга', sector: b.isOfz ? 'ОФЗ' : (b.sector || '—'), size: b.size || 0, cpn: b.cpn, dur: b.dur || 0, tenor: b.tenor || 0 }));
   M.universeFx = (X.universeFx || []).map(b => Object.assign({}, b, { rating: b.rating || 'без рейтинга', sector: b.sector || '—', outstanding: b.outstanding || 0, cpn: b.cpn || 0, freq: b.freq || '', tenor: b.tenor || 0, coupons: b.coupons || [] }));
   M.marketMovers = X.marketMovers || [];
   M.marketDate = X.marketDate || null;
-  M.cbr = X.cbr && X.cbr.next ? X.cbr : { next: { date: null, label: 'нет календаря заседаний ЦБ', consensus: '—', priced: '—' }, meetings: (X.cbr && X.cbr.meetings) || [] };
+  M.staticDate = X.staticDate || null;
+  const CB = X.cbr || {};
+  M.cbr = {
+    next: CB.next ? Object.assign({}, CB.next, { consensus: CB.next.consensus || 'нет данных', priced: CB.next.priced || 'нет данных' })
+      : { date: null, label: 'нет календаря заседаний ЦБ', consensus: '—', priced: '—' },
+    meetings: CB.meetings || [], estimated: CB.estimated || [], past: CB.past || [], keyRate: CB.keyRate == null ? null : CB.keyRate,
+  };
+
+  // ---------- календарь рынка (лениво: только страницам, которые его просят) ----------
+  const RUB_K = () => (M.toRepr && M.toRepr.RUB) || 1;  // рублёвые суммы — в валюте отчёта, как и всё на страницах
+  function getJson(path) {
+    try { const x = new XMLHttpRequest(); x.open('GET', path, false); x.send(); return x.status === 200 ? JSON.parse(x.responseText) : null; } catch (e) { return null; }
+  }
+  let calCache;
+  Object.defineProperty(M, 'marketCal', { configurable: true, get() {
+    if (calCache !== undefined) return calCache;
+    const c = getJson('../api/v1/calendar/market?' + runQ);
+    if (!c || c.missing) { calCache = null; return null; }
+    const held = new Set(c.held || []), k = RUB_K(), F = c.fields;
+    const rows = (key, conv) => (c[key] || []).map(r => { const o = {}; F[key].forEach((f, i) => o[f] = r[i]); if (conv) conv(o); return o; });
+    const posBySec = {}; D.positions.forEach(p => { if (p.instrumentId) posBySec[p.instrumentId] = p.id; });
+    calCache = {
+      source: 'real', staticDate: c.staticDate, asOf: c.asOf, horizonEnd: c.horizonEnd, bigRub: c.bigRub * k,
+      types: c.types.map(id => ({ id, label: c.typeLabels[id] || id })), ccys: c.ccys || [], coverage: c.coverage || {},
+      rub: rows('rub', o => { o.amount *= k; o.bigAmount *= k; o.estAmount *= k; }),
+      rubSector: rows('rubSector', o => { o.amount *= k; }),
+      rubBig: rows('rubBig', o => { o.amount *= k; o.held = held.has(o.secid); o.pos = posBySec[o.secid] || null; }),
+      fx: rows('fx'), fxIssuers: rows('fxIssuers'),
+      fxEvents: rows('fxEvents', o => { o.held = held.has(o.secid); o.pos = posBySec[o.secid] || null; }),
+      notes: ['календарь рынка — по статике хаба на ' + c.staticDate + ': купоны (ещё не объявленные — по последнему, «прогноз»), амортизации, погашения и оферты всех выпусков × объём выпуска MOEX'],
+      flows(q) {  // строки за ячейкой: {market, from, to, type, kind, ccy, sector, big, issuer, secid}
+        const qs = Object.entries(q || {}).filter(([, v]) => v != null && v !== false && v !== '').map(([a, v]) => a + '=' + encodeURIComponent(v)).join('&');
+        const j = getJson('../api/v1/calendar/market?' + runQ + '&' + qs);
+        if (!j) return { count: 0, amount: 0, rows: [] };
+        const kk = q && q.market === 'rub' ? k : 1;
+        j.amount = (j.amount || 0) * kk;
+        j.rows.forEach(r => { r.amount = r.amount == null ? null : r.amount * kk; r.pos = posBySec[r.secid] || null; });
+        return j;
+      },
+    };
+    return calCache;
+  } });
 
   // ---------- как в mock.js ----------
   function priceFromYield(cpn, y, T, f) {
