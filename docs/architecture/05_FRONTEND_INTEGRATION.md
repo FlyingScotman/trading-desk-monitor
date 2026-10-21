@@ -83,11 +83,15 @@ Notes:
 ## 4a Interface concepts on real data
 
 The concepts (`prototypes/concepts/`, owner feedback 21.10) run on the demo set and on real runs alike: `lib/real.js` maps `window.DESK` plus `window.DESK_EXTRAS` (`/concepts-data.js`) onto the demo set's shape, so a concept page needs no code for the data source. Rules it keeps:
-- absent data is null and named in the header's notes, never a made-up number (ratings, sectors and sizes of the market's bonds, CBR meetings, foreign curves' points);
+- absent data is null and named in the header's notes, never a made-up number (ratings, foreign curves' points; the market's sectors, sizes and coupons until the static snapshot's facts are in, R23);
 - a floater has no yield: its spread is the discount margin;
 - the OFZ curve of the concepts is the basis OFZ − RUONIA (the run's KBD minus RUONIA OIS), its risk the positions' `ofzSpr01` by tenor; risk the run booked on the KBD (a date without RUONIA) is added to RUONIA;
 - instrument types: GOV (ОФЗ-ПД, -ПК, -ИН, sovereign FX), SUB, CORP (fixed / floaters), DER (OTC by the report, FX), other; the same in `api/concepts.kind_of` and `real.js`;
-- the desk's series over time are the default runs' own sums (risk, MV, PnL) and the market history (price, yield, G-spread); C11 alone rebuilds risk from each position's face by run times today's sensitivities, and says so on the page.
+- the desk's series over time are the default runs' own sums (risk, MV, PnL; `publish.summary`, one row per run) and the market history (price, yield, G-spread); C11 charts risk and MV per date from each position's run of that date (face, DV01, CS01, basis, MV, DV01 by curve: `/api/v1/history/positions`), with the book filter; only the demo set rebuilds them as today's sensitivities times the face, and the page says which;
+- PnL month and year to date are sums of the runs of the period; when the period is partial (positions start later, business days without a run, market history too short) `pnlPeriods` says so, the header's notes explain it and the pages mark MTD/YTD with «*» (`KIT.partial`);
+- the market's payment calendar (C08) is aggregated on the server (`/api/v1/calendar/market`, R23): RUB by day × type (ОФЗ-ПД, -ПК, -ИН, corporate fixed / floating, subfederal, other) × kind, the FX bonds of Russian issuers by day × currency × kind; amounts in the face currency, one currency at a time (C08's FX mode has a currency switch and never sums across currencies); the rows behind a cell come from the same endpoint on a drill (`M.marketCal.flows`). `lib/mock.js` builds the same shape from the demo universe, so C08 has one code path;
+- the market universe (C09, C13) carries the static snapshot's issuer, group, sector, outstanding face, coupon and frequency; without ratings C09 colours the market map by issuer sector; CBR meetings (C05, C06, C08, C09) come from the market snapshot's `cbr_meetings` (dates ahead, estimated or announced, past decisions and the key rate); consensus and the rate the curve prices are not in the data and the pages say so;
+- the data responses are built once per run and store state and cached with ETag and gzip; `desk serve` builds the newest run's ahead (`app.warm_bodies`). At the owner's size (600 positions, 200 runs) the pages are interactive in under 2 s (`tools/tti.js`, numbers in `backend/README.md`).
 
 ## 5 Live behaviour (intraday)
 
