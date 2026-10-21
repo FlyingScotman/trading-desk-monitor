@@ -110,6 +110,19 @@ def test_bond_facts_flows_and_calendar_from_the_static_snapshot():
     assert cal["coverage"]["with_group"] >= 2 and cal["coverage"]["with_lat_name"] == len(facts)
 
 
+def test_an_offer_from_two_sources_is_one_event():
+    """E2E 21.10.2026: the hub lists a scheduled offer once per source (cbonds and MOEX ISS); the market calendar
+    counted it twice, doubling the possible volume of the offers (5.3 trillion RUB of corporate puts in November)."""
+    doc = static_11()
+    as_of = date.fromisoformat(DATE)
+    facts = static_facts.bond_facts(doc["data"], as_of)
+    put = {"secid": RZD, "offer_date": "2027-03-01", "status": "scheduled", "type": "put", "source": "cbonds"}
+    doc["data"]["offers"] = (doc["data"].get("offers") or []) + [put, {**put, "source": "moex_iss"},
+                                                                  {**put, "type": "call", "source": "moex_iss"}]
+    fl = [x for x in static_facts.flows(doc["data"], facts, as_of) if x["secid"] == RZD and x["pay_date"] == "2027-03-01"]
+    assert sorted(x["kind"] for x in fl) == ["call", "put"]  # a put and a call of one day stay two events
+
+
 def test_a_foreign_issuers_fx_bond_is_left_out():
     doc = static_11()
     for i in doc["data"]["issuers"]:

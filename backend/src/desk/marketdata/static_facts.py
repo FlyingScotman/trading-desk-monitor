@@ -48,8 +48,9 @@ from .bundle import Snapshot
 
 log = logging.getLogger(__name__)
 
-VERSION = 1
-"""Format of the rows written here: another value rebuilds them on the next load."""
+VERSION = 2
+"""Format of the rows written here: another value rebuilds them on the next load (2: an offer listed by two sources
+counted once)."""
 KEEP = 4
 HORIZON_DAYS = 400
 BIG_RUB = 10e9
@@ -196,12 +197,18 @@ def flows(data: dict[str, Any], facts: dict[str, dict[str, Any]], as_of: date,
         for r in reds.get(sid, ()):
             if lo < r["date"] <= hi:
                 add(sid, f, r["date"], "mat" if r["kind"] == "maturity" else "amort", _num(r.get("value_per_bond")))
+    seen: set[tuple[str, str, str]] = set()
     for o in data.get("offers") or ():
         f = facts.get(o["secid"])
         d = o.get("offer_date")
         if f is None or not keep(f) or not d or not (lo < d <= hi) or o.get("status") != "scheduled" \
                 or o.get("type") not in ("put", "call"):
             continue
+        # one offer from two sources (cbonds and MOEX ISS: 557 of 4 403 scheduled offers of the static of
+        # 21.10.2026) is one event: counted twice it doubled the possible volume of the market's offers
+        if (key := (o["secid"], d, o["type"])) in seen:
+            continue
+        seen.add(key)
         face = f["face"]
         if face is not None:  # the face outstanding on the offer date: the face now less what is redeemed before
             face -= sum(_num(r.get("value_per_bond")) or 0.0 for r in reds.get(o["secid"], ())
