@@ -379,8 +379,9 @@
     p.tradedToday = traded;
     p.tradeToday = traded ? { qty: Math.round((r() - 0.5) * 0.3 * Math.abs(p.notional) / 1e6) * 1e6, price: p.price } : null;
     p.pnl = { carry, rates, spread, fx: fxp, trading, other, total: carry + rates + spread + fxp + trading + other };
-    p.pnlMtd = p.pnl.total * (8 + r() * 10) + (r() - 0.5) * Math.abs(p.mv || p.notionalRub * 0.02) * 0.004;
-    p.pnlYtd = p.pnlMtd * (4 + r() * 8) + (r() - 0.45) * Math.abs(p.mv || p.notionalRub * 0.02) * 0.02;
+    const scale = Math.abs(p.mv || p.notionalRub * 0.02);
+    p.pnlMtd = p.carryDay * 15 + p.pnl.total + (r() - 0.42) * scale * 0.004;
+    p.pnlYtd = p.carryDay * 200 + p.pnlMtd + (r() - 0.35) * scale * 0.025;
     p.searchText = [p.name, p.isin, p.issuerName, p.issuerFull, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt].join(' ').toLowerCase();
     return p;
   });
@@ -419,9 +420,9 @@
     for (let i = 0; i < n; i++) {
       const last = i === n - 1;
       series.pnl.carry.push(last ? tp.carry : tp.carry * (0.8 + pr() * 0.4));
-      series.pnl.rates.push(last ? tp.rates : (pr() - 0.5) * 9e6 + rndn() * 2e6);
-      series.pnl.spread.push(last ? tp.spread : (pr() - 0.5) * 4e6);
-      series.pnl.fx.push(last ? tp.fx : (pr() - 0.5) * 2.5e6);
+      series.pnl.rates.push(last ? tp.rates : (pr() - 0.5) * 30e6 + rndn() * 6e6);
+      series.pnl.spread.push(last ? tp.spread : (pr() - 0.5) * 9e6);
+      series.pnl.fx.push(last ? tp.fx : (pr() - 0.5) * 12e6);
       series.pnl.trading.push(last ? tp.trading : (pr() < 0.4 ? (pr() - 0.4) * 3e6 : 0));
       series.pnl.other.push(last ? tp.other : (pr() - 0.5) * 6e5);
     }

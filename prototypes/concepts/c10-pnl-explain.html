@@ -12,7 +12,7 @@
 .g2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); gap: 12px; }
 .g2b { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 12px; }
 @media (max-width: 1150px) { .g2, .g2b { grid-template-columns: 1fr; } }
-.fac { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.fac { display: grid; grid-template-columns: repeat(auto-fill, minmax(212px, 1fr)); gap: 10px; }
 .fac .k-panel .bd { padding: 4px 0 6px; }
 .fac table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .fac td { padding: 3px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
@@ -20,7 +20,7 @@
 .fac tr[data-card] { cursor: pointer; }
 .fac tr[data-card]:hover td { background: var(--hover); }
 .fac .k-bar { min-width: 40px; }
-.fac td.nm { max-width: 125px; overflow: hidden; text-overflow: ellipsis; }
+.fac td.nm { max-width: 100px; overflow: hidden; text-overflow: ellipsis; }
 .fac td.n { text-align: right; font-variant-numeric: tabular-nums; }
 .chart { height: 300px; }
 .mx td.n { min-width: 70px; }
@@ -104,7 +104,7 @@
             const i = api.value(0), lo = api.coord([i, api.value(1)]), hi = api.coord([i, api.value(2)]), w = Math.min(52, api.size([1, 0])[0] * 0.6), v = api.value(3);
             const last = i === vals.length, col = last ? acc : v >= 0 ? pos : neg;
             const kids = [{ type: 'rect', shape: { x: lo[0] - w / 2, y: hi[1], width: w, height: Math.max(1, lo[1] - hi[1]) }, style: { fill: col } },
-              { type: 'text', style: { text: f.mns(v / 1e6 * 1e6, 1).replace(/.*/, f.mns(v, 1)), x: lo[0], y: (v >= 0 || last ? hi[1] - 4 : lo[1] + 4), textAlign: 'center', textVerticalAlign: v >= 0 || last ? 'bottom' : 'top', fill: lab, fontSize: 11 } }];
+              { type: 'text', style: { text: f.mns(v, 1), x: lo[0], y: (v >= 0 || last ? hi[1] - 4 : lo[1] + 4), textAlign: 'center', textVerticalAlign: v >= 0 || last ? 'bottom' : 'top', fill: lab, fontSize: 11 } }];
             if (!last) { const nx = api.coord([i + 1, 0]); const yy = v >= 0 ? hi[1] : lo[1]; kids.push({ type: 'line', shape: { x1: lo[0] + w / 2, y1: yy, x2: nx[0] - w / 2, y2: yy }, style: { stroke: ln, lineDash: [3, 3] } }); }
             return { type: 'group', children: kids };
           },

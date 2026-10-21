@@ -603,13 +603,25 @@
     const c = K.chart(el, () => {
       L = K.list();
       const vals = keys.map(([k]) => M.sum(L, p => p.pnl[k]));
-      let run = 0; const base = [], up = [];
-      vals.forEach(v => { base.push(v >= 0 ? run : run + v); up.push(Math.abs(v)); run += v; });
+      // отрезки [от, до]: стек ECharts раскладывает отрицательные значения отдельно, поэтому рисуем прямоугольники сами
+      let run = 0; const segs = vals.map(v => { const s = [run, run + v]; run += v; return s; });
+      segs.push([0, run]);
+      const cols = vals.map(v => v >= 0 ? css('--pos') : css('--neg')).concat([css('--accent')]);
+      const lo = Math.min(0, ...segs.map(x => Math.min(x[0], x[1]))), hi = Math.max(0, ...segs.map(x => Math.max(x[0], x[1])));
       return {
-        grid: { left: 6, right: 10, top: 16, bottom: 4, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: ps => { const i = ps[0].dataIndex; return keys[i] ? keys[i][1] + ': <b>' + f.mns(vals[i], 2) + '</b> млн' : 'Итого: <b>' + f.mns(run, 2) + '</b> млн'; } },
-        xAxis: { type: 'category', data: keys.map(k => k[1]).concat(['Итого']) }, yAxis: { type: 'value', axisLabel: { formatter: v => f.mn(v, 0) } },
-        series: [{ type: 'bar', stack: 'w', itemStyle: { color: 'transparent' }, data: base.concat([run >= 0 ? 0 : run]), silent: true },
-        { type: 'bar', stack: 'w', barMaxWidth: 48, data: up.map((v, i) => ({ value: v, itemStyle: { color: vals[i] >= 0 ? css('--pos') : css('--neg') } })).concat([{ value: Math.abs(run), itemStyle: { color: css('--accent') } }]), label: { show: true, position: 'top', color: css('--fg-2'), fontSize: 11, formatter: p => p.dataIndex < vals.length ? f.mns(vals[p.dataIndex], 1) : f.mns(run, 1) } }],
+        grid: { left: 6, right: 10, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'item', formatter: p => (keys[p.dataIndex] ? keys[p.dataIndex][1] : 'Итого') + ': <b>' + f.mns(p.dataIndex < vals.length ? vals[p.dataIndex] : run, 2) + '</b> млн' },
+        xAxis: { type: 'category', data: keys.map(k => k[1]).concat(['Итого']) }, yAxis: { type: 'value', min: lo, max: hi, scale: false, axisLabel: { formatter: v => f.mn(v, 0) } },
+        series: [{
+          type: 'custom', data: segs.map((s, i) => [i, s[0], s[1]]),
+          renderItem: (params, api) => {
+            const i = api.value(0), a = api.coord([i, api.value(1)]), b = api.coord([i, api.value(2)]), w = Math.min(48, api.size([1, 0])[0] * 0.6);
+            const y0 = Math.min(a[1], b[1]), hh = Math.max(1, Math.abs(a[1] - b[1]));
+            const v = i < vals.length ? vals[i] : run;
+            return { type: 'group', children: [
+              { type: 'rect', shape: { x: a[0] - w / 2, y: y0, width: w, height: hh }, style: { fill: cols[i] } },
+              { type: 'text', style: { x: a[0], y: y0 - 4, text: f.mns(v, 1), fill: css('--fg-2'), fontSize: 11, align: 'center', verticalAlign: 'bottom' } }] };
+          },
+        }],
       };
     });
     c.on('click', pp => { const i = pp.dataIndex; if (i < keys.length) K.drill({ title: 'PnL · ' + keys[i][1], unit: 'тыс ₽', fmt: f.k, list: L, val: p => p.pnl[keys[i][0]] }); else K.drill({ title: 'PnL дня', unit: 'тыс ₽', fmt: f.k, list: L, val: p => p.pnl.total }); });
