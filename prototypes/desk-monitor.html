@@ -291,7 +291,7 @@ details.pop summary::-webkit-details-marker{display:none}
       <b>FI Desk Monitor</b><span class="sep">/</span><span class="desk">Деск долгового рынка</span>
     </div>
     <div class="meta">
-      <span>срез <b class="mono" id="asof"></b> МСК · закрытие</span>
+      <span>срез <b class="mono" id="asof"></b> <span id="asof-cut">МСК · закрытие</span></span>
       <button class="ibtn" id="theme-btn" type="button" title="Переключить светлую/тёмную тему">Тема</button>
     </div>
   </div>
@@ -1709,7 +1709,10 @@ window.addEventListener('resize', () => { clearTimeout(rT); rT = setTimeout(() =
 }, 150); });
 
 /* ---------- boot ---------- */
-$('asof').textContent = dt(D.asOf) + (D.source && D.source.publishedAt ? ' ' + D.source.publishedAt.slice(11, 16) : '');
+// срез прогона из базы — его подпись (R11: «21.10 18:30 МСК · внутри дня» / «20.10 · закрытие»); время публикации
+// (UTC) за время среза МСК не выдаётся. Демо и tdm — как раньше
+if (D.source && D.source.slice) { $('asof').textContent = dt(D.asOf); $('asof-cut').textContent = '· ' + D.source.slice; }
+else $('asof').textContent = dt(D.asOf) + (D.source && D.source.publishedAt ? ' ' + D.source.publishedAt.slice(11, 16) : '');
 readTokens(); renderFilters(); renderKpi(); renderTabs(); renderColPop(); renderTab();
 
 })();

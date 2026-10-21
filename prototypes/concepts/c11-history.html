@@ -58,7 +58,9 @@ tr.row.sel td { background: var(--accent-bg); }
   // ось — с первой даты, на которую известна хоть одна позиция (на прогоне из базы раньше первого прогона позиций нет;
   // цены рынка там есть, но без номинала история деска была бы нулём, а не «неизвестно»)
   const FIRST = Math.max(0, Math.min(...M.positions.map(p => H[p.id].notional.findIndex(v => v != null)).filter(i => i >= 0)));
-  if (FIRST > 0) Object.keys(H).forEach(id => { const h = H[id], o = {}; Object.keys(h).forEach(k => o[k] = Array.isArray(h[k]) ? h[k].slice(FIRST) : h[k]); H[id] = o; });
+  // ряды и вложенные ряды (риск по кривым: {кривая: [...]}) — с той же даты, иначе индексы кривых разойдутся с DATES
+  const cut = v => Array.isArray(v) ? v.slice(FIRST) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, a]) => [k, cut(a)])) : v;
+  if (FIRST > 0) Object.keys(H).forEach(id => { const h = H[id], o = {}; Object.keys(h).forEach(k => o[k] = cut(h[k])); H[id] = o; });
   const DATES = H[M.positions[0].id].dates, N = DATES.length, LAST = N - 1;
   const scale = (p, i) => p.notional ? H[p.id].notional[i] / p.notional : 0;
   const pxr = (p, i) => p.price && H[p.id].price[i] != null ? H[p.id].price[i] / p.price : 1;
@@ -217,6 +219,8 @@ tr.row.sel td { background: var(--accent-bg); }
 
   // ---------- изменения по позициям ----------
   let topTbl = null;
+  const yLast = (p, x) => x.ytm[LAST] != null ? x.ytm[LAST] : p.ytm;
+  const pLast = (p, x) => x.price[LAST] != null ? x.price[LAST] : p.price;
   function topRows() {
     const L = K.list(), i0 = st.cmp, h = p => H[p.id];
     return L.map(p => {
@@ -224,9 +228,10 @@ tr.row.sel td { background: var(--accent-bg); }
       return Object.assign(Object.create(p), {
         dNot: x.notional[LAST] - x.notional[i0], not0: x.notional[i0],
         dDv: V.dv01(p, LAST) - V.dv01(p, i0), dMv: V.mv(p, LAST) - V.mv(p, i0),
-        dY: x.ytm[i0] != null && p.group !== 'DER' ? (x.ytm[LAST] - x.ytm[i0]) * 100 : null,
+        // сегодня без закрытия MOEX (прогон внутри дня): доходность и цена — из прогона; нет значения — нет и разницы
+        dY: x.ytm[i0] != null && yLast(p, x) != null && p.group !== 'DER' ? (yLast(p, x) - x.ytm[i0]) * 100 : null,
         dS: x.spr[i0] != null && x.spr[LAST] != null ? x.spr[LAST] - x.spr[i0] : null,
-        dP: x.price[i0] != null ? x.price[LAST] - x.price[i0] : null,
+        dP: x.price[i0] != null && pLast(p, x) != null ? pLast(p, x) - x.price[i0] : null,
       });
     }).filter(r => st.top !== 'trades' || r.dNot !== 0);
   }
@@ -273,8 +278,8 @@ tr.row.sel td { background: var(--accent-bg); }
         ['Номинал, mm', f.mn(x.notional[LAST], 0), d(x.notional[i0], x.notional[LAST], v => f.mns(v, 0))],
         ['DV01, тыс/бп', f.dv(V.dv01(p, LAST)), d(V.dv01(p, i0), V.dv01(p, LAST), f.dvs)],
       ].concat(isB ? [
-        ['Цена', f.px(x.price[LAST]), d(x.price[i0], x.price[LAST], v => f.s(v, 2))],
-        ['Доходность', f.pct(x.ytm[LAST]), d(x.ytm[i0], x.ytm[LAST], v => f.s(v * 100, 0) + ' бп')],
+        ['Цена', f.px(pLast(p, x)), d(x.price[i0], pLast(p, x), v => f.s(v, 2))],
+        ['Доходность', f.pct(yLast(p, x)), d(x.ytm[i0], yLast(p, x), v => f.s(v * 100, 0) + ' бп')],
         ['Спред, бп', f.bp(x.spr[LAST]), d(x.spr[i0], x.spr[LAST], f.bps)],
       ] : []).map(([l, v, dd]) => '<div><div class="l">' + l + '</div><div class="v">' + v + '</div><div class="l">с ' + f.date(DATES[i0]) + ': ' + dd + '</div></div>').join('') + '</div><div class="chart" style="height:250px"></div>';
     const inp = bd.querySelector('input');

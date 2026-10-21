@@ -70,6 +70,9 @@
   M.fx = Object.assign({ RUB: 1 }, D.FX);
   M.ccys.forEach(c => { if (M.fx[c] == null) { M.fx[c] = 1; M.notes.push('нет курса ' + c + ': суммы этой валюты не пересчитаны'); } });
   M.fxChgPct = Object.assign({ RUB: 0 }, D.FX_MOVE_PCT);
+  // курс, по которому посчитан PnL FX прогона (backend: курс ЦБ, действующий на дату, иначе MOEX TOM) — он может
+  // отличаться от рыночного курса шапки; страницы показывают оба, чтобы FX PnL сходился с движением курса
+  if (D.FX_CBR) M.fxPnl = { label: 'ЦБ', rate: Object.assign({ RUB: 1 }, D.FX_CBR), chgPct: Object.assign({ RUB: 0 }, D.FX_CBR_MOVE_PCT) };
   M.indices = Object.assign({}, D.INDICES);
   M.buckets = D.BUCKETS.slice();
   M.pillars = D.PILLARS.slice();
@@ -126,7 +129,11 @@
   M.entities = [...new Set(M.books.map(b => b.entity))].map(e => ({ id: e, name: e }));
   const NO = v => (v == null || v === 'нет данных') ? null : v;
   const issuerNames = [...new Set(D.positions.map(p => p.issuer).filter(Boolean))];
-  M.issuers = issuerNames.map(n => { const i = (D.ISSUERS || {})[n] || {}; return { id: n, name: n, short: n, sector: NO(i.sector) || '—', rating: NO(i.rating) || '—', group: i.group && i.group !== n ? i.group : null, quasi: !!i.quasi, gov: !!i.gov }; });
+  // короткое имя эмитента для списков и осей (в статике хаба short_name пуст): без организационно-правовой формы и
+  // кавычек, не длиннее 30 знаков; полное — в name
+  const LEGAL = /^(публичное|непубличное)?\s*(акционерное общество|общество с ограниченной ответственностью)\s*|\s*\((п?ао|ооо)\)|^(пао|ао|ооо|мкпао|нао)\s+|\s+(пао|ао|ооо)$/gi;
+  const shortName = (n, gov) => { if (gov) return 'Минфин РФ'; let t = n.replace(LEGAL, '').replace(/[«»"]/g, '').replace(/\s+/g, ' ').trim() || n; return t.length > 30 ? t.slice(0, 29) + '…' : t; };
+  M.issuers = issuerNames.map(n => { const i = (D.ISSUERS || {})[n] || {}; return { id: n, name: n, short: shortName(n, i.gov), sector: NO(i.sector) || '—', rating: NO(i.rating) || '—', group: i.group && i.group !== n ? i.group : null, quasi: !!i.quasi, gov: !!i.gov }; });
   M.issuer = Object.fromEntries(M.issuers.map(i => [i.id, i]));
 
   // ---------- классификация ----------

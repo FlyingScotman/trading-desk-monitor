@@ -221,14 +221,14 @@
       const rows = typeRowsFor(L, ccy, st.metric);
       const max = Math.max(1, ...rows.flatMap(r => r.vals.map(Math.abs)));
       const heat = st.metric === 'cs01' ? v => K.heatMono(v, max, '227,179,65') : v => K.heatRisk(v, max);
-      const groups = ['DER', 'GOV', 'CORP'];
+      const groups = ['DER', 'GOV', 'SUB', 'CORP', 'OTH'];
       const tot = M.buckets.map((_, k) => rows.reduce((s, r) => s + r.vals[k], 0)); let c = 0; const cum = tot.map(v => c += v);
       let html = '<table class="k-tbl"><thead><tr><th>Тип · ' + METN[st.metric] + '</th>' + M.buckets.map(b => '<th class="n">' + b + '</th>').join('') + '<th class="n">Итого</th><th>Профиль</th></tr></thead><tbody>';
       groups.forEach(g => {
         const gr = rows.filter(r => r.t.group === g); if (!gr.length) return;
         const glist = gr.flatMap(r => r.list);
         const gv = M.buckets.map((_, k) => gr.reduce((s, r) => s + r.vals[k], 0));
-        html += '<tr class="grp l1"><td class="lbl">' + ({ DER: 'Деривативы', GOV: 'Гос', CORP: 'Корп' }[g]) + '</td>' + gv.map((v, k) => '<td class="n">' + (Math.abs(v) < 300 ? '<span class="mut3">·</span>' : K.d({ title: ccy + ' · ' + M.groupLabel[g] + ' · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: bucketRows(glist, ccy, st.metric, k) }, null, '')) + '</td>').join('') +
+        html += '<tr class="grp l1"><td class="lbl">' + M.groupLabel[g] + '</td>' + gv.map((v, k) => '<td class="n">' + (Math.abs(v) < 300 ? '<span class="mut3">·</span>' : K.d({ title: ccy + ' · ' + M.groupLabel[g] + ' · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: bucketRows(glist, ccy, st.metric, k) }, null, '')) + '</td>').join('') +
           '<td class="n"><b>' + K.d({ title: ccy + ' · ' + M.groupLabel[g], unit: 'тыс ₽/бп', rows: glist.map(p => ({ p, v: M.buckets.reduce((s, _, k) => s + mval(p, ccy, st.metric, k), 0) })) }, null, '') + '</b></td><td></td></tr>';
         gr.forEach(r => {
           html += '<tr><td class="lbl" style="padding-left:24px"><b style="color:' + K.kindColor[r.t.kind] + '">●</b> ' + esc(r.t.label) + ' <span class="mut3">' + r.list.length + '</span></td>' +

@@ -25,7 +25,7 @@ if (!pages.length) pages = fs.readdirSync(dir).filter(f => /\.html$/.test(f));
     await pg.screenshot({ path: path.join(out, name.replace('.html', '.png')) });
     const dr = await pg.$('[data-dr]');
     if (dr) { await dr.click(); await pg.waitForTimeout(300); await pg.screenshot({ path: path.join(out, name.replace('.html', '-drill.png')) }); await pg.keyboard.press('Escape'); }
-    const row = await pg.$('tr.row[data-id^="P"]');
+    const row = await pg.$(base ? 'tr.row[data-id]' : 'tr.row[data-id^="P"]');  // на прогоне id позиции — «книга|бумага»
     if (row) { await row.click(); await pg.waitForTimeout(500); await pg.screenshot({ path: path.join(out, name.replace('.html', '-card.png')) }); await pg.keyboard.press('Escape'); }
     console.log((errs.length ? 'FAIL ' : 'ok   ') + name + (dr ? ' drill' : ' -') + (row ? ' card' : ' -') + (errs.length ? '\n   ' + errs.slice(0, 5).join('\n   ') : ''));
     if (errs.length) bad++;

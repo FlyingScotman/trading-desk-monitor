@@ -107,9 +107,9 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
   const GR = BY_SEC ? (function () {
     const n = {}; M.universeRub.forEach(b => { if (!b.isOfz && b.sector && b.sector !== '—') n[b.sector] = (n[b.sector] || 0) + 1; });
     const top = Object.keys(n).sort((a, b) => n[b] - n[a]).slice(0, 8);
-    return top.map((k, i) => [k, null, K.PAL[i % K.PAL.length]]).concat([['прочие', null, '#8a96a3']]);
+    return top.map((k, i) => [k, null, K.PAL[i % K.PAL.length]]).concat([[top.length ? 'прочие' : 'корп. (секторов нет)', null, '#8a96a3']]);
   })() : RB;
-  const gOf = o => BY_SEC ? (GR.find(x => x[0] === o.sector) ? o.sector : 'прочие') : rbOf(o.rating);
+  const gOf = o => BY_SEC ? (GR.find(x => x[0] === o.sector) ? o.sector : GR[GR.length - 1][0]) : rbOf(o.rating);
   const S = { x: 'dur', flt: 'fix', rt: BY_SEC ? GR.map(x => x[0]) : ['AAA', 'AA', 'A', 'BBB'].concat(RB.some(x => x[0] === 'б/р') ? ['б/р'] : []), sec: '', ours: false, curve: 'lvl', fx: 'CNY', per: '1D' };
   try { Object.assign(S, JSON.parse(localStorage.getItem('c09-state') || '{}')); } catch (e) { }
   if (!S.rt.some(k => GR.some(x => x[0] === k))) S.rt = GR.map(x => x[0]);
@@ -147,7 +147,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
     ser.push({
       name: 'наши', type: 'scatter', z: 6,
       data: L.map((p, i) => ({ value: [xOf(p, true), p.ytm], i, symbolSize: 9 + Math.sqrt(Math.abs(p.mv) / maxMv) * 26, itemStyle: { color: 'rgba(0,0,0,0)', borderColor: p.notional < 0 ? K.css('--neg') : K.issuerColor(p.issuer), borderWidth: 2.2 } })),
-      label: { show: true, position: 'right', fontSize: 10, color: K.css('--fg-2'), formatter: pp => { const p = L[pp.data.i]; return Math.abs(p.mv) / maxMv > 0.3 ? p.issuerName : ''; } },
+      label: { show: true, position: 'right', fontSize: 10, color: K.css('--fg-2'), formatter: pp => { const p = L[pp.data.i]; return Math.abs(p.mv) / maxMv > 0.3 && !M.isMinfin(p.issuer) ? p.issuerName : ''; } },  // ОФЗ видны по кривой ОФЗ
       emphasis: { itemStyle: { borderWidth: 3.5 } },
     });
     return {
@@ -161,7 +161,8 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
         },
       },
       xAxis: { type: 'value', name: S.x === 'dur' ? 'дюрация, лет' : 'срок до оферты/погашения, лет', nameLocation: 'middle', nameGap: 24, min: 0, max: v => Math.min(16, Math.ceil(v.max)) },
-      yAxis: { type: 'value', name: 'доходность, %', nameTextStyle: { align: 'left' }, scale: true, max: v => Math.min(Math.ceil(v.max), 30) },
+      // шкала 0…30%: отрицательные и запредельные доходности (дефолтные и структурные выпуски) — за краем, а не сжимают карту
+      yAxis: { type: 'value', name: 'доходность, %', nameTextStyle: { align: 'left' }, scale: true, min: v => Math.max(Math.floor(v.min), 0), max: v => Math.min(Math.ceil(v.max), 30) },
       dataZoom: [{ type: 'inside', xAxisIndex: 0 }, { type: 'inside', yAxisIndex: 0 }],
       series: ser,
     };
@@ -239,13 +240,18 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
   const TBK = [[1, '< 1г'], [2, '1–2г'], [3, '2–3г'], [5, '3–5г'], [99, '5г+']];
   const tbk = t => TBK.findIndex(x => t <= x[0]);
   const med = a => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
-  const grid = {}; M.universeRub.filter(b => !b.isOfz && !b.flt).forEach(b => { const k = b.rating + '|' + tbk(b.tenor); (grid[k] = grid[k] || []).push(b.spread); });
-  const medOf = (r, t) => med(grid[r + '|' + tbk(t)] || []);
+  // выпуски без G-спреда (нет котировки или доходности) в медиану не входят: null в сортировке стал бы нулём
+  const grid = {}; M.universeRub.filter(b => !b.isOfz && !b.flt && b.spread != null).forEach(b => { const k = b.rating + '|' + tbk(b.tenor); (grid[k] = grid[k] || []).push(b.spread); });
+  // позиция без рейтинга («—») сравнивается с выпусками рынка без рейтинга (у хаба рейтингов нет вовсе)
+  const rk = r => NR(r) ? 'без рейтинга' : r;
+  const medOf = (r, t) => med(grid[rk(r) + '|' + tbk(t)] || []);
+  const NO_RATINGS = !M.universeRub.some(b => !b.isOfz && !NR(b.rating));
   (function sprTab() {
     const vals = RATINGS.flatMap(r => TBK.map((_, i) => med(grid[r + '|' + i] || []))).filter(v => v != null);
     const mx = Math.max(...vals);
-    document.getElementById('sprtab').innerHTML = '<table class="k-tbl sp"><thead><tr><th>Рейтинг</th>' + TBK.map(x => '<th class="n">' + x[1] + '</th>').join('') + '<th class="n">выпусков</th></tr></thead><tbody>' +
-      RATINGS.map(r => { const all = TBK.map((_, i) => grid[r + '|' + i] || []); const n = all.reduce((s, a) => s + a.length, 0); const ourN = K.list().filter(p => p.rating === r && p.ccy === 'RUB' && p.group === 'CORP').length;
+    const shown = NO_RATINGS ? RATINGS.filter(r => TBK.some((_, i) => (grid[r + '|' + i] || []).length)) : RATINGS;
+    document.getElementById('sprtab').innerHTML = (NO_RATINGS ? '<div class="k-note" style="padding:6px 10px">нет данных по рейтингам: хаб их не публикует — медиана G-спреда всех корпоративных фикс-выпусков срока</div>' : '') + '<table class="k-tbl sp"><thead><tr><th>Рейтинг</th>' + TBK.map(x => '<th class="n">' + x[1] + '</th>').join('') + '<th class="n">выпусков</th></tr></thead><tbody>' +
+      shown.map(r => { const all = TBK.map((_, i) => grid[r + '|' + i] || []); const n = all.reduce((s, a) => s + a.length, 0); const ourN = K.list().filter(p => rk(p.rating) === r && p.ccy === 'RUB' && p.group === 'CORP').length;
         return '<tr><td><b style="color:' + (RB.find(x => x[0] === rbOf(r)) || RB[4])[2] + '">●</b> ' + r + (ourN ? ' <span class="k-tag" title="наших позиций">наши ' + ourN + '</span>' : '') + '</td>' + all.map(a => { const m = med(a); return '<td class="n" style="' + K.heatMono(m, mx, '227,160,60') + '" title="' + a.length + ' выпусков">' + (m == null ? '<span class="mut3">·</span>' : f.bp(m)) + '</td>'; }).join('') + '<td class="n mut">' + n + '</td></tr>'; }).join('') + '</tbody></table>';
   })();
 

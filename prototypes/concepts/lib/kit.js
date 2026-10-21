@@ -16,6 +16,11 @@
   'use strict';
   const M = window.MOCK;
   const K = window.KIT = {};
+  // группы бумаг в порядке показа: демо знает GOV/CORP/DER, прогон из базы — ещё SUB (субфедеральные) и OTH
+  K.GROUPS = ['GOV', 'SUB', 'CORP', 'DER', 'OTH'];
+  M.groupLabel = Object.assign({ GOV: 'Гос', SUB: 'Суб', CORP: 'Корп', DER: 'Деривативы', OTH: 'Прочее' }, M.groupLabel);
+  // Минфин РФ: в демо — эмитент MINFIN, в прогоне — эмитент с флагом gov статики хаба
+  M.isMinfin = M.isMinfin || (id => id === 'MINFIN' || !!(M.issuer && M.issuer[id] && M.issuer[id].gov));
 
   // ---------- валюта отчёта: все суммы деска (MV, риск, PnL, кэрри, потоки) пересчитываются по споту ----------
   K.REPRS = ['RUB', 'USD', 'EUR', 'CNY'];
@@ -30,7 +35,7 @@
     M.positions.forEach(p => {
       sc(p, ['mv', 'accrued', 'carryDay', 'rollDay', 'dv01', 'basis01', 'cs01', 'notionalRub', 'pnlMtd', 'pnlYtd']);
       arr(p.cs01b); Object.keys(p.risk).forEach(c => arr(p.risk[c])); Object.keys(p.dv01ByCurve).forEach(c => p.dv01ByCurve[c] *= k);
-      Object.keys(p.pnl).forEach(x => p.pnl[x] *= k);
+      Object.keys(p.pnl).forEach(x => { if (typeof p.pnl[x] === 'number') p.pnl[x] *= k; });  // null (нет PnL) остаётся null
     });
     const H = M.hist; [H.dv01, H.dv01Book, H.mvType, H.mvCcy, H.pnl].forEach(g => Object.keys(g).forEach(x => arr(g[x]))); arr(H.cs01);
     M.cashflows.forEach(c => c.amountRub *= k);
@@ -81,6 +86,11 @@
     return (c.keyRate != null ? 'ключевая ' + f.pct(c.keyRate) : '') + (last ? ' (' + f.date(last.date) + ': ' + K.esc(last.decisionText || last.decision) + ')' : '') +
       '; консенсуса и ожиданий кривой в данных нет.';
   };
+  // разрез, которого в данных нет (секторов и рейтингов в статике хаба нет): у всех позиций «—» / «без рейтинга»
+  K.unknownDim = v => v == null || v === '—' || v === 'нет данных' || v === 'без рейтинга';
+  K.dimMissing = (list, key) => list.length > 0 && list.every(p => K.unknownDim(p[key]));
+  // панель без данных: «нет данных» и причина вместо пустого графика или нулей
+  K.noData = (el, why) => { if (el) el.innerHTML = '<div class="k-empty"><b>нет данных</b>' + (why ? '<br><span class="mut">' + K.esc(why) + '</span>' : '') + '</div>'; };
   // PnL MTD / YTD, посчитанные не за весь период (прогонов нет за часть дней, позиции в базе позже начала): метка «*»
   K.partial = key => {
     const q = M.pnlPeriods && M.pnlPeriods[key];
@@ -713,7 +723,7 @@
       ccys.forEach(c => {
         const Lc = L.filter(p => p.ccy === c);
         html += row(K.ccyTag(c) + ' ' + ({ RUB: 'Рубли', USD: 'Доллары', EUR: 'Евро', CNY: 'Юани' }[c]), Lc, 0, null, c);
-        ['GOV', 'CORP', 'DER'].forEach(g => {
+        K.GROUPS.forEach(g => {
           const Lg = Lc.filter(p => p.group === g); if (!Lg.length) return;
           const kinds = M.typeRows.filter(t => t.group === g && Lg.some(p => p.kind === t.kind));
           if (kinds.length > 1) { html += row(M.groupLabel[g], Lg, 1); kinds.forEach(t => html += row(t.label, Lg.filter(p => p.kind === t.kind), 2, K.kindColor[t.kind])); }

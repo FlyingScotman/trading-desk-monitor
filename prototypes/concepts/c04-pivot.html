@@ -117,7 +117,7 @@
     { id: 'pnl-book', t: 'PnL: книга × фактор', s: 'explain', r: ['book'], c: 'factor', m: 'pnl', v: 'heat' },
     { id: 'pnl-type', t: 'PnL: тип × фактор', s: 'explain', r: ['ccy', 'type'], c: 'factor', m: 'pnl', v: 'heat' },
     { id: 'carry-iss', t: 'Кэрри по эмитентам', s: 'тыс ₽ в день', r: ['issuer'], c: 'ccy', m: 'carry', v: 'bar', rs: 'abs' },
-    { id: 'events', t: 'Оферты и погашения по месяцам', s: '24 мес.', r: ['evmonth'], c: 'evkind', m: 'notional', v: 'bar', fg: ['GOV', 'CORP'] },
+    { id: 'events', t: 'Оферты и погашения по месяцам', s: '24 мес.', r: ['evmonth'], c: 'evkind', m: 'notional', v: 'bar', fg: ['GOV', 'SUB', 'CORP'] },
     { id: 'count', t: 'Сколько чего', s: 'тип × валюта', r: ['type'], c: 'ccy', m: 'count', v: 'table' },
   ];
 
@@ -291,7 +291,7 @@
       '<span class="grp"><span class="lb">Колонки</span>' + pick('c', esc(DIMS[st.c].label)) + '</span>' +
       '<span class="grp"><span class="lb">Мера</span>' + pick('m', esc(MEAS[st.m].label), 'm') + '</span>' +
       '<span class="grp"><span class="lb">Фильтр</span>' + M.ccys.map(c => '<span class="k-chip' + (st.fc.includes(c) ? ' on' : '') + '" data-fc="' + c + '">' + c + '</span>').join('') +
-      ['GOV', 'CORP', 'DER'].map(g => '<span class="k-chip' + (st.fg.includes(g) ? ' on' : '') + '" data-fg="' + g + '">' + M.groupLabel[g] + '</span>').join('') + '</span>' +
+      K.GROUPS.filter(g => g === 'GOV' || g === 'CORP' || g === 'DER' || M.positions.some(p => p.group === g)).map(g => '<span class="k-chip' + (st.fg.includes(g) ? ' on' : '') + '" data-fg="' + g + '">' + M.groupLabel[g] + '</span>').join('') + '</span>' +
       '<span class="sp"></span><span class="grp"><span class="lb">Строки по</span><span id="rsSeg"></span></span><span class="grp"><span class="lb">Вид</span><span id="vSeg"></span></span>';
     const on = (a, fn) => { const e = ctrl.querySelector('[data-a=' + a + ']'); if (e) e.onclick = ev => { ev.stopPropagation(); fn(e); }; };
     on('r0', e => K.menu(e, dimItems(false), st.r[0], v => { st.r[0] = v; if (st.r[1] === v) st.r.length = 1; st.col = {}; render(); }));
