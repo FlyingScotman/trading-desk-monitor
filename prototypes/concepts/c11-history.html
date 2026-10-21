@@ -68,7 +68,7 @@ tr.row.sel td { background: var(--accent-bg); }
     mv: (p, i) => p.group === 'DER' ? 0 : p.mv * scale(p, i) * pxr(p, i),
     notional: (p, i) => H[p.id].notional[i] * M.toRepr[p.ccy],
   };
-  const RANGES = [['1M', 21], ['3M', 63], ['6M', 126], ['1Y', 250]];
+  const RANGES = [['1M', 21], ['3M', 63], ['6M', 126], ['1Y', 250], ['всё', 100000]];
   const st = { range: 63, cmp: LAST - 5, risk: 'factors', mv: 'type', pnl: 'factors', pos: null, pm: null, top: 'dv01' };
   try { Object.assign(st, JSON.parse(localStorage.getItem('c11-state') || '{}')); } catch (e) { }
   st.cmp = Math.min(LAST - 1, Math.max(0, st.cmp));
@@ -256,7 +256,7 @@ tr.row.sel td { background: var(--accent-bg); }
     const mets = isB ? PM : PM.slice(0, 2);
     if (!mets.some(m => m[0] === st.pm)) st.pm = 'notional';
     if (chPos) { chPos.dispose(); chPos = null; }
-    K.seg(P.querySelector('.m'), mets, st.pm, v => { st.pm = v; save(); chPos.redraw(); });
+    K.seg(P.querySelector('.m'), mets, st.pm, v => { st.pm = v; save(); drawPos(); });
     const i0 = st.cmp;
     const d = (a, b, fm) => a == null || b == null ? '—' : '<span class="' + f.cls(b - a) + '">' + fm(b - a) + '</span>';
     bd.innerHTML = '<div class="pv-hd"><input class="k-input" list="posList" placeholder="найти позицию: бумага, ISIN, эмитент…" value=""><datalist id="posList">' + K.list().map(q => '<option value="' + esc(q.name) + '">' + esc(q.issuerName + ' · ' + q.book + ' · ' + q.ccy) + '</option>').join('') + '</datalist>' +
@@ -271,6 +271,23 @@ tr.row.sel td { background: var(--accent-bg); }
       ] : []).map(([l, v, dd]) => '<div><div class="l">' + l + '</div><div class="v">' + v + '</div><div class="l">с ' + f.date(DATES[i0]) + ': ' + dd + '</div></div>').join('') + '</div><div class="chart" style="height:250px"></div>';
     const inp = bd.querySelector('input');
     inp.onchange = () => { const q = K.list().find(z => z.name === inp.value) || K.list().find(z => z.searchText.includes(inp.value.toLowerCase())); if (q) { st.pos = q.id; save(); drawPos(); if (topTbl) topTbl.redraw(); } };
+    // цена, доходность, спред — вся история бумаги (API истории хаба, с 2024), не только дни прогонов
+    const DH = isB && ['price', 'ytm', 'spr'].includes(st.pm) ? M.posHistory(p.id, { deep: true }) : null;
+    if (DH && DH.deep) {
+      const n0 = Math.max(0, DH.dates.length - st.range), xs = DH.dates.slice(n0), c = K.issuerColor(p.issuer);
+      const cut = a => (a || []).slice(n0), mk = DH.dates.indexOf(DATES[st.cmp]) - n0;
+      const S = st.pm === 'price' ? [{ name: 'Цена', data: cut(DH.price), color: c }]
+        : st.pm === 'ytm' ? [{ name: 'Доходность, %', data: cut(DH.ytm), color: c }].concat(DH.bench && DH.bench.some(v => v != null) ? [{ name: 'ОФЗ на сроке', data: cut(DH.bench), color: css('--fg-3'), lineStyle: { type: 'dashed', width: 1 } }] : [])
+          : [{ name: p.cpn && p.cpn.type === 'float' ? 'DM, б.п.' : 'G-спред, б.п.', data: cut(p.cpn && p.cpn.type === 'float' ? (DH.dm || DH.spr) : DH.spr), color: c, connectNulls: true }].concat(DH.zspr && !(p.cpn && p.cpn.type === 'float') ? [{ name: 'Z-спред MOEX, б.п.', data: cut(DH.zspr), color: css('--fg-3') }] : []);
+      chPos = K.chart(bd.querySelector('.chart'), () => ({
+        animation: false, grid: { left: 6, right: 10, top: 30, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 },
+        tooltip: { trigger: 'axis', valueFormatter: v => f.n(v, st.pm === 'spr' ? 0 : 2) }, xAxis: { type: 'category', data: xs, axisLabel: { formatter: v => f.dshort(v) } },
+        yAxis: { type: 'value', scale: true }, dataZoom: [{ type: 'inside' }],
+        series: S.map((x, k) => Object.assign({ type: 'line', showSymbol: false, lineStyle: { width: 1.6 }, markLine: k === 0 && mk >= 0 ? { silent: true, symbol: 'none', label: { formatter: 'сравнение', color: css('--fg-3'), fontSize: 10 }, lineStyle: { color: css('--warn'), type: 'dashed' }, data: [{ xAxis: mk }] } : undefined }, x)),
+      }));
+      chPos.on('click', pp => { const i = DATES.indexOf(xs[pp.dataIndex]); if (i >= 0 && i !== LAST) setCmp(i); else if (i === LAST) K.card(p.id); });
+      return;
+    }
     chPos = series(bd.querySelector('.chart'), () => {
       const I = idxs(), c = K.issuerColor(p.issuer);
       if (st.pm === 'notional') return [{ name: 'Номинал, mm ' + p.ccy, data: I.map(i => x.notional[i] / 1e6), step: 'end', color: c, areaStyle: { opacity: .15 } }];
