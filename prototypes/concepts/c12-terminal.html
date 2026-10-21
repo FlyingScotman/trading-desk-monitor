@@ -217,11 +217,11 @@ body { font-family: var(--mono); font-size: 12.5px; }
       }
       case 'clear': setTimeout(() => panes.filter(p => !p.pinned).forEach(close), 0); return '';
       case 'book': {
-        const w = o.words[0] || '';
-        if (!w || w === 'all' || w === 'все') { K.setFilter({ books: null }); bd.innerHTML = '<span class="ok">фильтр книг снят</span>'; return 'фильтр'; }
-        const ids = o.words.map(x => x.toUpperCase()).filter(x => M.book[x]);
-        if (!ids.length) { bd.innerHTML = '<span class="err">нет такой книги.</span> Книги: ' + M.books.map(b => '<a href="#" data-run="book ' + b.id + '">' + b.id + '</a>').join(' · '); return 'фильтр'; }
-        K.setFilter({ books: ids }); bd.innerHTML = '<span class="ok">фильтр: ' + ids.map(i => esc(i + ' — ' + M.book[i].name)).join(', ') + '</span>. Панели пересчитаны.';
+        // сам фильтр ставит exec(), здесь — только состояние: панель перерисовывается при каждой смене фильтра
+        const ids = bookIds(o);
+        if (ids === null) { bd.innerHTML = '<span class="err">нет такой книги.</span> Книги: ' + M.books.map(b => '<a href="#" data-run="book ' + b.id + '">' + b.id + '</a>').join(' · ') + ' · <a href="#" data-run="book all">all</a>'; return 'фильтр'; }
+        const cur = K.filter.books || [];
+        bd.innerHTML = cur.length ? '<span class="ok">фильтр книг: ' + cur.map(i => esc(i + ' — ' + M.book[i].name)).join(', ') + '</span> · все панели пересчитаны · <a href="#" data-run="book all">снять</a>' : '<span class="ok">фильтр книг снят: весь деск</span>';
         return 'фильтр';
       }
       case 'hud': { const e = K.h('div'); bd.appendChild(e); K.hud(e); return 'ключевые цифры'; }
@@ -339,6 +339,13 @@ body { font-family: var(--mono); font-size: 12.5px; }
     return '';
   }
   function P_flush(bd) { bd.classList.add('flush'); }
+  // book OFZ RATES → ['OFZ','RATES']; book all → []; неизвестная книга → null
+  function bookIds(o) {
+    const w = o.words[0] || '';
+    if (!w || w === 'all' || w === 'все') return [];
+    const ids = o.words.map(x => x.toUpperCase()).filter(x => M.book[x]);
+    return ids.length ? ids : null;
+  }
 
   // ---------- ввод ----------
   const inp = document.getElementById('cmd'), ac = document.getElementById('ac');
@@ -348,6 +355,8 @@ body { font-family: var(--mono); font-size: 12.5px; }
     line = line.trim(); if (!line) return;
     hist = [line].concat(hist.filter(x => x !== line)).slice(0, 50); try { localStorage.setItem('c12-hist', JSON.stringify(hist)); } catch (e) { }
     hi = -1; inp.value = ''; hideAc();
+    const o = parse(line);
+    if (o.verb === 'book') { const ids = bookIds(o); if (ids) K.setFilter({ books: ids.length ? ids : null }); }
     addPane(line); window.scrollTo({ top: 0 });
   }
   function suggest() {
@@ -388,7 +397,8 @@ body { font-family: var(--mono); font-size: 12.5px; }
     if (e.key.length === 1 && e.key !== '/' && !document.querySelector('.k-drawer')) { inp.focus(); }
   });
   document.getElementById('quick').innerHTML = ['risk rub', 'risk rub by issuer', 'risk usd bucket', 'pos float rub', 'pnl top 10', 'pnl by book', 'cal 30d', 'cal fx', 'curve ruonia', 'help'].map(c => '<span class="k-chip" data-run="' + c + '">' + c + '</span>').join('');
-  K.onFilter(() => panes.forEach(render));
+  let busy = false;
+  K.onFilter(() => { if (busy) return; busy = true; try { panes.forEach(render); } finally { busy = false; } });
   K.on('theme', () => panes.forEach(render));
   K.commands([{ label: 'Терминал: справка по командам', run: () => exec('help') }, { label: 'Терминал: очистить вывод', run: () => exec('clear') }]);
 

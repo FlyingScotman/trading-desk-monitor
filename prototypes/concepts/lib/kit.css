@@ -150,6 +150,8 @@ table.k-tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-si
 .k-empty { color: var(--fg-3); padding: 24px; text-align: center; }
 @media (max-width: 720px) {
   .k-top { padding: 6px 10px; }
+  .k-top .brand { white-space: normal; flex-wrap: wrap; }
+  .k-top .brand .tag, .k-top .asof { display: none; }
   .k-page { padding: 10px 10px 30px; }
   .k-kpi .v { font-size: 17px; }
 }

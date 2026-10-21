@@ -32,6 +32,7 @@ table.mini tr.put td { background: color-mix(in srgb, var(--warn) 8%, transparen
 table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 .kb { display: inline-block; padding: 0 6px; border-radius: 4px; font-size: 11px; border: 1px solid var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); }
 .mtag { font-size: 10.5px; color: var(--fg-3); }
+@media (max-width: 720px) { .k-top .brand .tag { display: none; } .k-panel > .hd { flex-wrap: wrap; } }
 </style>
 </head>
 <body>
@@ -176,7 +177,10 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   }
 
   // ---------- дашборд эмитента ----------
-  let dashCharts = [];
+  let dashCharts = [], curRs = null;
+  // в узкой панели легенда K.riskStack наезжает на подпись правой оси: прячем подпись и опускаем сетку (и после смены темы)
+  const fixRs = () => curRs && curRs.setOption({ grid: { top: 52 }, yAxis: [{}, { name: '' }] });
+  K.on('theme', fixRs);
   function panel(title, extra) { const p = K.h('div', 'k-panel'); p.innerHTML = '<div class="hd"><h3>' + title + '</h3><span class="sp"></span>' + (extra || '') + '</div><div class="bd"></div>'; return p; }
   function renderDash() {
     dashCharts.forEach(c => c.dispose()); dashCharts = [];
@@ -243,7 +247,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     const cids = M.curves.filter(c => L.some(p => p.risk[c.id].some(v => Math.abs(v) > 1))).map(c => c.id);
     const sel = x.id;
     const rs = K.riskStack(rel, { curves: cids.concat(L.some(p => p.cs01) ? ['CS01'] : []), list: () => K.list().filter(p => p.issuer === sel && p.group !== 'DER'), labels: false });
-    rs.setOption({ grid: { top: 52 }, yAxis: [{}, { name: '' }] });   // в узкой панели легенда kit наезжает на подпись правой оси
+    curRs = rs; fixRs();
     dashCharts.push(rs);
     // наши бумаги
     const bp = panel('Наши бумаги эмитента', '<span class="k-note">валюта → фикс / флоатеры · по сроку до оферты</span>'); dash.appendChild(bp);
