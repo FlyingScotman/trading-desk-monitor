@@ -25,3 +25,6 @@ frontend/node_modules/
 # Windows bundle (backend/tools/build_windows_bundle.py)
 /dist/
 prototypes/concepts/.shots/
+
+# Snapshot folder listing index (desk.marketdata.bundle.MANIFEST_INDEX), written beside any bundle folder
+.manifests.json

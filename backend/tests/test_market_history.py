@@ -25,7 +25,7 @@ from desk.api import create_app
 from desk.autopilot import HISTORY_PER_CYCLE, Autopilot
 from desk.marketdata import history, hubhistory
 from desk.marketdata.adapter import zcyc_parameters
-from desk.marketdata.bundle import read_bundle
+from desk.marketdata.bundle import MANIFEST_INDEX, read_bundle
 from desk.marketdata.hub import NO_HISTORY_API, HistoryUnavailable
 from desk.settings import Settings, check_settings_doc, load
 
@@ -267,7 +267,7 @@ def test_autopilot_history_step_backfills_a_few_dates_per_cycle(store_url, tmp_p
         assert ap._history(s, con) == ("ok", (f"loaded {', '.join(dates[1:6])}; 6 dates in the next cycles"
                                              f" (history_days 12: 12 on the hub back to {dates[11]}){NO_API}"))
         # the cached one: the sync's
-        assert len(hub.bundles) == HISTORY_PER_CYCLE == 5 and sorted(p.name for p in cache.iterdir()) == sorted(
+        assert len(hub.bundles) == HISTORY_PER_CYCLE == 5 and sorted(p.name for p in cache.iterdir() if p.name != MANIFEST_INDEX) == sorted(
             p.name for p in FIX.glob("*.json.gz"))  # not cached
         ap._history(s, con)
         st = ap._history(s, con)

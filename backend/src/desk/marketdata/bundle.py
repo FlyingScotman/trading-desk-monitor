@@ -11,9 +11,11 @@ ignored. Another major version (``market_snapshot/2.0``) is refused: its meaning
 
 from __future__ import annotations
 
+import contextlib
 import gzip
 import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -99,14 +101,55 @@ def _manifest(path: Path) -> dict[str, Any]:
     return _MANIFESTS[key]
 
 
+MANIFEST_INDEX = ".manifests.json"
+"""The folder's envelope fields per bundle file (name -> size, mtime and the fields), so that a new process does not
+parse every bundle again: E2E 21.10.2026, five months of the whole universe (190 bundles, 1.4 GB of JSON) took 54 s
+to list, at the start of every ``desk`` command and of the settings page's «История прогонов». A file whose size or
+time changed is parsed again; a folder that cannot be written (a drop) works as before."""
+
+
+def _read_index(root: Path) -> dict[str, Any]:
+    try:
+        idx = json.loads((root / MANIFEST_INDEX).read_text(encoding="utf-8"))
+        return idx if isinstance(idx, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_index(root: Path, idx: dict[str, Any]) -> None:
+    tmp = root / f"{MANIFEST_INDEX}.{os.getpid()}.tmp"
+    try:
+        tmp.write_text(json.dumps(idx, separators=(",", ":")), encoding="utf-8")
+        os.replace(tmp, root / MANIFEST_INDEX)  # atomic: a reader sees the old index or the new one
+    except OSError:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+
+
 class SnapshotDir:
     """A folder of bundle files (dev export, file drop or a local mirror of the hub)."""
 
     def __init__(self, root: Path) -> None:
         self.root = Path(root)
         self._manifests: dict[str, dict[str, Any]] = {}
+        idx, seen, changed = _read_index(self.root), set(), False
         for p in sorted(self.root.glob("*.json.gz")):
-            self._manifests[p.name.split(".")[0]] = _manifest(p)
+            st = p.stat()
+            e = idx.get(p.name)
+            if isinstance(e, dict) and e.get("size") == st.st_size and e.get("mtime_ns") == st.st_mtime_ns \
+                    and isinstance(e.get("m"), dict):
+                m = e["m"]
+            else:
+                m = _manifest(p)
+                idx[p.name] = {"size": st.st_size, "mtime_ns": st.st_mtime_ns, "m": m}
+                changed = True
+            seen.add(p.name)
+            self._manifests[p.name.split(".")[0]] = m
+        for name in [n for n in idx if n not in seen]:
+            del idx[name]
+            changed = True
+        if changed:
+            _write_index(self.root, idx)
 
     def manifests(self) -> dict[str, dict[str, Any]]:
         """snapshot id -> kind, cut_type, business_date, static_snapshot_id of every bundle in the folder."""
