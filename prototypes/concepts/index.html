@@ -70,7 +70,7 @@ textarea { width: 100%; min-height: 54px; resize: vertical; border: 1px solid va
 <div class="wrap">
   <header>
     <div>
-      <div class="eyebrow">FI-деск · прототипы на вымышленных данных · срез 21.10.2026</div>
+      <div class="eyebrow" id="eyebrow">FI-деск · прототипы на вымышленных данных · срез 21.10.2026</div>
       <h1>Концепты интерфейса монитора деска</h1>
       <p class="lede">Несколько разных ответов на вопрос «как должен выглядеть монитор». Это не варианты одного экрана, а разные подходы: кокпит со вкладками, экран целиком про риск, таблица позиций в центре, агрегатор с пресетами, утренний брифинг, плиточная доска, командная строка, визуальная карта, рынок, календарь, эмитенты. Отметьте, что нравится, и напишите, что взять: следующая итерация соберёт целевой интерфейс из отмеченного.</p>
     </div>
@@ -89,6 +89,19 @@ textarea { width: 100%; min-height: 54px; resize: vertical; border: 1px solid va
   <div class="grid" id="grid"></div>
   <p class="foot">Данные вымышленные (prototypes/concepts/lib/mock.js), расчёты упрощённые. Оценки и заметки сохраняются: на опубликованной странице — для следующей итерации, в локальном файле — только в этом браузере.</p>
 </div>
+<script>
+// served by desk serve: the concepts run on the monitor's data; link back to the other pages
+(function () {
+  if (!/^https?:$/.test(location.protocol) || /[?&]demo=1/.test(location.search)) return;
+  fetch('../health/live', { cache: 'no-store' }).then(function (r) {
+    if (!r.ok) return;
+    var e = document.getElementById('eyebrow');
+    if (e) e.innerHTML = 'FI-деск · мониторы на данных Desk Monitor · <a href="../desk-monitor.html">◂ Desk Monitor</a> · <a href="../settings.html">Настройки</a>';
+    var f = document.querySelector('.foot');
+    if (f) f.textContent = 'Данные — последний прогон монитора и история из хаба; демо-данные: добавьте ?demo=1 к адресу страницы. Оценки и заметки сохраняются только в этом браузере.';
+  }).catch(function () { });
+})();
+</script>
 <script>
 (function () {
   'use strict';
