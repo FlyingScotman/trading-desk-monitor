@@ -135,5 +135,5 @@ Initial goals carried from program ADR07: RPO 24 h, RTO 2 h. Confirm with the ow
 - On the Windows server, services bind to localhost; only the reverse proxy listens on the network.
 - Authentication and roles per [05](05_FRONTEND_INTEGRATION.md) §6.
 - The hub and the desk have no shared database. The backend reads hub data only through its snapshot cache.
-- The backend's hub token (scope `snapshots`) is kept in the secret store. Every other consumer of the hub has its own token.
+- The backend's hub token (scope `read`: the snapshots and, from hub 0.2.0, the history API; R24) is kept in the secret store. Every other consumer of the hub has its own token.
 - No secrets in repositories, URLs or logs. The hub already redacts secrets in logs and URLs; keep that behaviour.

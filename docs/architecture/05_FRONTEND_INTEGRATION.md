@@ -89,6 +89,14 @@ The concepts (`prototypes/concepts/`, owner feedback 21.10) run on the demo set 
 - instrument types: GOV (ОФЗ-ПД, -ПК, -ИН, sovereign FX), SUB, CORP (fixed / floaters), DER (OTC by the report, FX), other; the same in `api/concepts.kind_of` and `real.js`;
 - the desk's series over time are the default runs' own sums (risk, MV, PnL) and the market history (price, yield, G-spread); C11 alone rebuilds risk from each position's face by run times today's sensitivities, and says so on the page.
 
+### 4b Market history on the pages (R24)
+
+The market's past comes from the store's market history, which the hub's history API fills years deep (bonds from 2024-01-03, KBD, curves, fixings and FX further back; [04](04_BACKEND.md) §9), else the snapshots. It is not in `/concepts-data.js`, which every page loads; two lazily loaded endpoints carry it, so a page that does not chart it stays as fast as before (pages load in about 0.5 s warm on the fixture server, the market endpoint answers in about 0.2 s and is cached per run until the history changes):
+- `/api/v1/history/positions?run_id=&ids=&from=`: a position's price, yield (none for a floater), G-spread, MOEX's Z-spread to the KBD, the floater's discount margin by the runs, a linker's ICPI / IR / BEI, the KBD at its term, face and DV01 by the runs. The card of a position asks for its whole history (the chart opens on the last year; wheel and slider go back), pages charting every position for a year;
+- `/api/v1/history/market?run_id=`: per bond the yield and price change over 1D / 1W / 1M / 3M / YTD (C09's movers, any period), КС, RUONIA, RUSFAR, RUSFAR CNY and CPI year on year, CBR and MOEX FX with their changes (C09's strip, C05's market section), RUONIA OIS, key-rate swaps and the KBD at the pillars on those days and two years of 1Y–10Y (C09's curves: compared with a chosen past day, and their history).
+
+`lib/real.js` exposes them as `M.posHistory(id, {deep: true})` and `M.marketHistory()` (synchronous, once); the demo set has neither, and pages fall back to what they showed before.
+
 ## 5 Live behaviour (intraday)
 
 - The UI subscribes to `/api/v1/events`. On `run.published` it shows a "newer run available" banner, or auto-switches if the user pinned "follow latest".

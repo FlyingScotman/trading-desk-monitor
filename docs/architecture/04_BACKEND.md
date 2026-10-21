@@ -161,3 +161,11 @@ Status by package: `rub-fixed-income-core/docs/PRODUCT_ROADMAP.md`. Briefs: [bri
 | CLI commands as orchestrator entry points | `window.DESK` blob → desk API ([05](05_FRONTEND_INTEGRATION.md)) |
 
 The baseline review findings B01–B12 (`docs/program/BASELINE_REVIEW.md`) and the BE-1…BE-10 findings in [reviews/2026-10-16_module_review.md](reviews/2026-10-16_module_review.md) serve as an acceptance checklist for the new backend.
+
+## 9 Market history (R7, R24)
+
+The charts' market past is a read model in the store, not a run input: runs read their pinned snapshots only. Two sources fill it:
+- **the hub's history API** (hub 0.2.0, `/v1/history/*`, a token with scope `read`; `backend/src/desk/marketdata/hubhistory.py`): bond EOD from 2024-01-03 (the hub's first), the KBD, the curve quote sets the index lists (RUONIA OIS, key-rate swaps, CNY curves), fixings (key rate, RUONIA, RUSFAR, CPI) and FX, in a few columnar calls per month or year, revalidated by ETag (a 304 per unchanged chunk), resumable across autopilot cycles within a time budget, after the EOD runs;
+- **the snapshots** (`history.py`): every cached `eod_final` bundle, and a few uncached ones per cycle when the hub has no history API (a hub before 0.2.0, or a token without `read`; the reason is shown in the settings page, `desk hub-check`, `desk history status` and the diagnostics).
+
+A day's row is the history API's when it has one, else the snapshot's (views `md_bond_day`, `md_kbd_day`). The concept pages read it through two lazily loaded endpoints ([05](05_FRONTEND_INTEGRATION.md) §4b).
