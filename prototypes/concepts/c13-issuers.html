@@ -38,7 +38,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 <div class="k-page">
   <div id="kpis"></div>
   <div class="k-panel">
-    <div class="hd"><h3>Концентрация</h3><span class="sp"></span><span class="k-note">мера:</span><span id="meas"></span></div>
+    <div class="hd"><h3>Концентрация</h3><span class="sp"></span><span id="exmf"></span><span class="k-note">мера:</span><span id="meas"></span></div>
     <div class="bd"><div class="c13-strip">
       <div><div class="k-note" id="paretoNote">топ-15 эмитентов и накопленная доля · щелчок — открыть эмитента</div><div id="pareto" class="chs"></div></div>
       <div><div class="k-note">по секторам · щелчок — из чего</div><div id="sector" class="chs"></div></div>
@@ -66,7 +66,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     dv01: { t: 'DV01', unit: 'тыс ₽/бп', val: p => p.dv01, fmt: f.dv, abs: true },
     pnl: { t: 'PnL дня', unit: 'тыс ₽', val: p => p.pnl.total, fmt: f.k },
   };
-  const st = { meas: 'mv', sel: null, curve: 'ytm' };
+  const st = { meas: 'mv', sel: null, curve: 'ytm', exMf: true };
   try { Object.assign(st, JSON.parse(localStorage.getItem('c13') || '{}')); } catch (e) { }
   const save = () => { try { localStorage.setItem('c13', JSON.stringify(st)); } catch (e) { } };
   const sumBy = (a, fn) => a.reduce((s, x) => s + fn(x), 0);
@@ -114,9 +114,12 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   function renderStrip() {
     stripCharts.forEach(c => c.dispose()); stripCharts = [];
     const m = MEAS[st.meas];
-    const v = x => m.abs ? Math.abs(x[st.meas]) : x[st.meas];
+    const SRC = st.exMf ? ISS.filter(x => x.id !== 'MINFIN') : ISS;
+    const ex = document.getElementById('exmf');
+    ex.innerHTML = '<span class="k-chip' + (st.exMf ? ' on' : '') + '">' + (st.exMf ? '☑' : '☐') + ' без Минфина</span>';
+    ex.firstChild.onclick = () => { st.exMf = !st.exMf; save(); renderStrip(); };
     // Парето
-    const corp = ISS.slice().sort((a, b) => Math.abs(b[st.meas]) - Math.abs(a[st.meas]));
+    const corp = SRC.slice().sort((a, b) => Math.abs(b[st.meas]) - Math.abs(a[st.meas]));
     const top = corp.slice(0, 15), tot = sumBy(corp, x => Math.abs(x[st.meas])) || 1;
     let c = 0; const cum = top.map(x => (c += Math.abs(x[st.meas])) / tot * 100);
     const pc = K.chart(document.getElementById('pareto'), () => ({
@@ -130,7 +133,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     pc.on('click', pp => select(top[pp.dataIndex].id, true));
     stripCharts.push(pc);
     // сектора и рейтинги
-    const L = ISS.flatMap(x => x.list);
+    const L = SRC.flatMap(x => x.list);
     const agg = keyFn => { const g = {}; L.forEach(p => { const k = keyFn(p); (g[k] = g[k] || []).push(p); }); return g; };
     const sec = agg(p => p.sector), secK = Object.keys(sec).sort((a, b) => Math.abs(sumBy(sec[a], m.val)) - Math.abs(sumBy(sec[b], m.val)));
     const sc = K.chart(document.getElementById('sector'), () => ({
@@ -224,10 +227,10 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
       if (isY && ccys.includes('RUB')) series.push({ name: 'RUONIA OIS', type: 'line', showSymbol: false, data: M.pillars.map((t, i) => [t, M.curve['RUB RUONIA'].pts[i]]), lineStyle: { type: 'dotted', width: 1.2, color: K.curveColors['RUB RUONIA'] }, itemStyle: { color: K.curveColors['RUB RUONIA'] } });
       const maxT = Math.max(2, ...ours.map(p => p.tenor), ...(isY ? uni.map(b => b.tenor) : [])) * 1.08;
       curveChart = K.chart(cel, () => ({
-        grid: { left: 6, right: 16, top: 30, bottom: 18, containLabel: true }, legend: { top: 0, left: 0, type: 'scroll' },
+        grid: { left: 6, right: 16, top: 34, bottom: 18, containLabel: true }, legend: { top: 0, left: 0, type: 'scroll' },
         tooltip: { trigger: 'item', formatter: d => Array.isArray(d.value) ? '<b>' + esc(d.data.name || d.seriesName) + '</b><br>срок ' + f.yrs(d.value[0]) + ' · ' + (isY ? f.pct(d.value[1]) : f.bp(d.value[1]) + ' б.п.') + (d.data.p ? '<br>MV ' + f.mn(d.data.p.mv, 0) + ' млн · щелчок — карточка' : '') : '' },
         xAxis: { type: 'value', name: 'лет до оферты / погашения', nameLocation: 'middle', nameGap: 22, max: Math.ceil(maxT), axisLabel: { formatter: '{value}' } },
-        yAxis: { type: 'value', scale: true, name: isY ? 'доходность, %' : 'спред, б.п.' },
+        yAxis: { type: 'value', scale: true, axisLabel: { formatter: isY ? '{value}%' : '{value}' } },
         series,
       }));
       curveChart.on('click', d => { if (d.data && d.data.id) K.card(d.data.id); });
@@ -239,7 +242,9 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     const rel = K.h('div', 'ch'); rp.querySelector('.bd').appendChild(rel);
     const cids = M.curves.filter(c => L.some(p => p.risk[c.id].some(v => Math.abs(v) > 1))).map(c => c.id);
     const sel = x.id;
-    dashCharts.push(K.riskStack(rel, { curves: cids.concat(L.some(p => p.cs01) ? ['CS01'] : []), list: () => K.list().filter(p => p.issuer === sel && p.group !== 'DER'), labels: false }));
+    const rs = K.riskStack(rel, { curves: cids.concat(L.some(p => p.cs01) ? ['CS01'] : []), list: () => K.list().filter(p => p.issuer === sel && p.group !== 'DER'), labels: false });
+    rs.setOption({ grid: { top: 56 }, legend: { type: 'scroll', right: 0 } });   // в узкой панели легенда kit наезжает на подпись правой оси
+    dashCharts.push(rs);
     // наши бумаги
     const bp = panel('Наши бумаги эмитента', '<span class="k-note">валюта → фикс / флоатеры · по сроку до оферты</span>'); dash.appendChild(bp);
     bp.querySelector('.bd').classList.add('flush');
