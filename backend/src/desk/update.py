@@ -16,7 +16,7 @@ Checks: safe member paths only (relative, no ``..``, drive, backslash, link, res
 layout (``app/``, ``wheelhouse/``, ``adapter/``, ``python/`` and the root files), size limits, a full zip complete
 and a patch made for the installed files (the manifest's unchanged entries match the installed manifest).
 ``python/`` is never replaced while it runs the launcher: a zip that changes it is refused (the manual way).
-A full zip without ``adapter/`` keeps the installed adapter.
+A full zip without ``adapter/`` keeps the installed adapter, and so does a patch built from a bundle without one.
 """
 
 from __future__ import annotations
@@ -297,7 +297,10 @@ def plan(c: Contents, root: Path) -> tuple[list[str], list[str]]:
              (rel == "MANIFEST.sha256" or not (root / rel).is_file() or file_sha256(root / rel) != c.manifest[rel])]
     known = installed_manifest(root) or {}
     if c.kind == "patch":
-        gone = {*c.delete, *(rel for rel in known if rel not in c.manifest)}
+        # a patch built from a bundle without the private adapter keeps the installed one, as a full zip does
+        keeps_adapter = not any(rel.startswith("adapter/") for rel in c.manifest)
+        gone = {*c.delete, *(rel for rel in known if rel not in c.manifest
+                             and not (keeps_adapter and rel.startswith("adapter/")))}
         return write, sorted(rel for rel in gone if not rel.startswith("python/") and (root / rel).is_file())
     delete = []
     for d in (*REPLACED_DIRS, *(("adapter",) if c.adapter else ())):
