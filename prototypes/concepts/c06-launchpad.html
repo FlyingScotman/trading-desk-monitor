@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>C06 · Плиточная доска</title>
+<link rel="stylesheet" href="lib/kit.css">
+<style>
+html, body { height: 100%; }
+body { display: flex; flex-direction: column; overflow: hidden; }
+#board { flex: 1; min-height: 0; display: grid; gap: 6px; padding: 6px; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-rows: minmax(0, 1fr); }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
+.tile.span2 { grid-column: span 2; }
+.tile > .th { display: flex; align-items: center; gap: 6px; padding: 3px 6px 3px 9px; border-bottom: 1px solid var(--line); min-height: 28px; background: var(--panel-2); }
+.tile > .th h3 { margin: 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile > .th .sp { flex: 1; }
+.tile > .th .k-seg button { padding: 1px 6px; font-size: 10.5px; }
+.tile > .th .mx { border: 1px solid var(--line-2); background: var(--panel); border-radius: 4px; cursor: pointer; padding: 0 5px; font-size: 12px; color: var(--fg-2); line-height: 18px; }
+.tile > .th .mx:hover { color: var(--accent); border-color: var(--accent); }
+.tile > .tb { flex: 1; min-height: 0; overflow: auto; position: relative; }
+.tile > .tb.pad { padding: 6px 8px; }
+.tile .fill { position: absolute; inset: 4px 6px; }
+.tile.max { position: fixed; z-index: 80; inset: 50px 12px 12px; box-shadow: var(--shadow); border-color: var(--line-2); }
+.tile.max > .th h3 { font-size: 13px; }
+.tile table.k-tbl { font-size: 11.5px; }
+.tile .k-tbl td { padding: 2px 6px; }
+.tile .k-tbl th { padding: 3px 6px; }
+.max-scrim { position: fixed; inset: 0; z-index: 79; background: rgba(0, 0, 0, .45); }
+.presets { display: flex; gap: 4px; align-items: center; }
+.presets .mut3 { font-size: 11px; margin-right: 2px; }
+/* HUD-плитка */
+.hudg { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--line); height: 100%; }
+.hudg > div { background: var(--panel); padding: 4px 9px; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+.hudg .l { font-size: 10.5px; color: var(--fg-2); text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hudg .v { font-size: 17px; font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; line-height: 1.25; }
+.hudg .s { font-size: 10.5px; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hudg .spk { display: flex; align-items: center; gap: 6px; }
+.tile.max .hudg { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.tile.max .hudg > div { padding: 14px 18px; }
+.tile.max .hudg .v { font-size: 30px; }
+.tile.max .hudg .l, .tile.max .hudg .s { font-size: 13px; }
+.ev-kind { display: inline-block; min-width: 46px; font-size: 10.5px; padding: 0 5px; border-radius: 3px; text-align: center; border: 1px solid var(--line-2); color: var(--fg-2); }
+.ev-kind.put, .ev-kind.call { border-color: var(--warn); color: var(--warn); }
+.ev-kind.mat { border-color: var(--accent); color: var(--accent); }
+.ev-kind.cbr { border-color: var(--neg); color: var(--neg); }
+@media (max-width: 900px) {
+  body { overflow: auto; height: auto; display: block; }
+  #board { grid-template-columns: 1fr; grid-auto-rows: 300px; }
+  .tile.span2 { grid-column: auto; }
+}
+</style>
+</head>
+<body>
+<div id="board"></div>
+<script src="../echarts.min.js"></script>
+<script src="lib/boot.js"></script>
+<script src="lib/kit.js"></script>
+<script>
+(function () {
+  const M = MOCK, K = KIT, f = K.f, esc = K.esc, css = K.css;
+  const PRESETS = {
+    morning: { label: 'Утро', tiles: ['hud', 'waterfall', 'toppnl', 'events', 'rubrisk', 'curves', 'matrix', 'blotter', 'fxrisk', 'issuers', 'fx', 'carry'] },
+    rates: { label: 'Rates', tiles: ['hud', 'rubrisk:2', 'curves', 'matrix:2', 'blotter', 'waterfall', 'fxrisk', 'carry', 'toppnl', 'fx'], modes: { blotter: 'dv01', matrix: 'table' } },
+    credit: { label: 'Credit', tiles: ['hud', 'issuers', 'blotter:2', 'toppnl', 'events', 'fxrisk', 'carry', 'matrix:2', 'waterfall', 'fx'], modes: { blotter: 'cs01', issuers: 'cs01' } },
+  };
+  let preset = 'morning', modes = {};
+  try { preset = localStorage.getItem('c06-preset') || 'morning'; if (!PRESETS[preset]) preset = 'morning'; modes = JSON.parse(localStorage.getItem('c06-modes') || '{}'); } catch (e) { }
+  const save = () => { try { localStorage.setItem('c06-preset', preset); localStorage.setItem('c06-modes', JSON.stringify(modes)); } catch (e) { } };
+
+  const bar = K.top({ title: 'C06 · Плиточная доска', tag: 'всё на одном экране, ⤢ — развернуть плитку', extra: '<span class="presets"><span class="mut3">раскладка</span>' + Object.entries(PRESETS).map(([k, p]) => '<span class="k-chip" data-p="' + k + '">' + p.label + '</span>').join('') + '</span>' });
+  function paintPresets() { bar.querySelectorAll('[data-p]').forEach(c => c.classList.toggle('on', c.dataset.p === preset)); }
+  bar.querySelectorAll('[data-p]').forEach(c => c.onclick = () => { preset = c.dataset.p; save(); paintPresets(); build(); });
+  paintPresets();
+
+  const sumL = (L, fn) => M.sum(L, fn);
+  const bonds = L => L.filter(p => p.group !== 'DER');
+  const small = (el, opt) => K.chart(el, opt);
+  const grid = { left: 4, right: 8, top: 22, bottom: 2, containLabel: true };
+  // колонка валюты: у K.posCols.ccy fmt получает порядковый номер валюты (val), а не код — рисуем по строке
+  const ccyCol = Object.assign({}, K.posCols.ccy, { fmt: (v, r) => K.ccyTag(r.ccy) });
+  // стек риска в маленькой плитке: подпись правой оси «кумулятив» налезает на легенду
+  const stack = (el, opt) => { const c = K.riskStack(el, Object.assign({ labels: false }, opt)); c.setOption({ yAxis: [{}, { name: '' }] }); return c; };
+
+  // ---------- плитки ----------
+  const TILES = {
+    hud: {
+      title: 'Ключевые цифры', modes: [['num', 'цифры'], ['spark', 'тренд']],
+      render(bd, mode) {
+        const L = K.list(), k = M.kpis(L), H = M.hist;
+        const dvH = M.histDates.map((_, i) => M.curves.filter(c => c.kind === 'rate').reduce((s, c) => s + H.dv01[c.id][i], 0)).slice(-40);
+        const sp = (a, c) => mode === 'spark' ? K.spark(a.slice(-40), 64, 18, c) : '';
+        const cell = (l, v, s, spark) => '<div><div class="l">' + l + '</div><div class="spk"><span class="v">' + v + '</span>' + (spark || '') + '</div><div class="s">' + (s || '&nbsp;') + '</div></div>';
+        bd.innerHTML = '<div class="hudg">' +
+          cell('PnL дня, mm', K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(k.pnl, 1)), 'MTD ' + K.d({ title: 'PnL MTD', unit: 'mm ₽', fmt: v => f.mns(v, 1), list: L, val: 'pnlMtd' }) + K.partial('mtd'), sp(H.pnl.total)) +
+          cell('DV01, тыс/бп', K.d({ title: 'DV01 ставки', unit: 'тыс ₽/бп', list: L, val: 'dv01' }, null, ''), 'RUONIA ' + K.d({ title: 'DV01 RUONIA', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB RUONIA'] }, null, '') + ' · КС ' + K.d({ title: 'DV01 КС', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB KEY'] }, null, ''), sp(dvH, css('--accent'))) +
+          cell('CS01, тыс/бп', K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }, null, ''), 'базис ОФЗ ' + K.d({ title: 'Базис ОФЗ−RUONIA', unit: 'тыс ₽/бп', list: L, val: 'basis01' }, null, ''), sp(H.cs01, css('--warn'))) +
+          cell('Кэрри/день, тыс', K.d({ title: 'Кэрри за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }), 'в год ≈ ' + f.mn(k.carryDay * 365, 0) + ' mm', sp(H.pnl.carry, css('--pos'))) +
+          cell('Облигации, bn', K.d({ title: 'MV облигаций', unit: 'bn ₽', fmt: v => f.bn(v, 1), list: bonds(L), val: 'mv', color: false }), M.ccys.map(c => c + ' ' + f.bn(k.byCcy[c].mv, 1)).join(' · ')) +
+          cell('ОВП, mm', ['USD', 'CNY'].map(c => c + ' ' + K.d({ title: 'FX дельта ' + c, unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: L.filter(p => p.ccy === c), val: 'fxDelta' })).join(' '), 'EUR ' + K.d({ title: 'FX дельта EUR', unit: 'mm EUR', fmt: v => f.mn(v, 1), list: L.filter(p => p.ccy === 'EUR'), val: 'fxDelta' })) +
+          cell('КС · RUONIA', f.pct(M.indices['КС']) + ' <span class="mut" style="font-size:12px">' + f.pct(M.indices['RUONIA']) + '</span>', esc(M.cbr.next.label) + ' ' + f.dshort(M.cbr.next.date)) +
+          cell('USD/RUB · CNY/RUB', f.n(M.fx.USD, 2) + ' <span class="mut" style="font-size:12px">' + f.n(M.fx.CNY, 2) + '</span>', '<span class="' + f.cls(M.fxChgPct.USD) + '">' + f.s(M.fxChgPct.USD, 2) + '%</span> · <span class="' + f.cls(M.fxChgPct.CNY) + '">' + f.s(M.fxChgPct.CNY, 2) + '%</span>') +
+          '</div>';
+      },
+    },
+    rubrisk: {
+      title: K.ccyTag('RUB') + ' риск по бакетам', modes: [['chart', 'стек'], ['table', 'таблица']],
+      render(bd, mode) {
+        if (mode === 'table') { bd.classList.remove('pad'); K.bucketTable(bd, 'RUB', { cs01: true }); return; }
+        const el = K.h('div', 'fill'); bd.appendChild(el); stack(el, { curves: ['RUB RUONIA', 'RUB KEY', 'RUB OFZ'] });
+      },
+    },
+    fxrisk: {
+      title: 'Валютные бонды: риск', modes: [['chart', 'стек'], ['table', 'позиции']],
+      render(bd, mode) {
+        const list = () => K.list().filter(p => p.ccy !== 'RUB' && p.group !== 'DER');
+        if (mode === 'table') {
+          K.table(bd, { rows: list(), search: false, footer: true, stripe: r => K.ccyColor(r.ccy), sort: [['dv01', 1]], columns: K.cols(['name', ccyCol, 'tenor', 'ytm', 'dv01', 'cs01']) });
+          return;
+        }
+        const el = K.h('div', 'fill'); bd.appendChild(el); stack(el, { curves: ['USD SOFR', 'EUR ESTR', 'CNY XCCY'], list });
+      },
+    },
+    matrix: {
+      title: 'Матрица рисков', modes: [['table', 'таблица'], ['bars', 'по типам']],
+      render(bd, mode) {
+        if (mode === 'table') { K.riskMatrix(bd); return; }
+        const el = K.h('div', 'fill'); bd.appendChild(el);
+        const L = K.list(), rows = M.typeRows.filter(t => L.some(p => p.group + '.' + p.kind === t.id)).reverse();
+        const lst = t => L.filter(p => p.group + '.' + p.kind === t.id);
+        const c = small(el, () => ({ grid: { left: 4, right: 14, top: 22, bottom: 2, containLabel: true }, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.dv(v) },
+          xAxis: { type: 'value', axisLabel: { formatter: v => f.dv(v) } }, yAxis: { type: 'category', data: rows.map(t => t.label), axisLabel: { fontSize: 10 } },
+          series: [{ name: 'DV01', type: 'bar', data: rows.map(t => sumL(lst(t), 'dv01')), itemStyle: { color: css('--accent') } }, { name: 'CS01', type: 'bar', data: rows.map(t => sumL(lst(t), 'cs01')), itemStyle: { color: css('--warn') } }] }));
+        c.on('click', pp => { const t = rows[pp.dataIndex]; K.drill({ title: t.label + ' · ' + pp.seriesName, unit: 'тыс ₽/бп', list: lst(t), val: pp.seriesIndex ? 'cs01' : 'dv01' }); });
+      },
+    },
+    toppnl: {
+      title: 'Топ вклад в PnL дня', modes: [['bars', 'бары'], ['table', 'таблица']],
+      render(bd, mode) {
+        const L = K.list().slice().sort((a, b) => Math.abs(b.pnl.total) - Math.abs(a.pnl.total)).slice(0, 12);
+        if (mode === 'table') {
+          const pc = (key, label) => ({ key: 'p' + key, label, num: true, val: r => r.pnl[key], fmt: f.k, cls: f.cls });
+          K.table(bd, { rows: L, search: false, footer: false, stripe: r => K.issuerColor(r.issuer), columns: K.cols(['name', pc('total', 'Итого'), pc('carry', 'Кэрри'), pc('rates', 'Ставки'), pc('spread', 'Спред'), pc('fx', 'FX')]) });
+          return;
+        }
+        const el = K.h('div', 'fill'); bd.appendChild(el);
+        const R = L.slice().reverse();
+        const c = small(el, () => ({ grid: { left: 4, right: 46, top: 4, bottom: 2, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.mns(v, 2) + ' mm' },
+          xAxis: { type: 'value', axisLabel: { formatter: v => f.mn(v, 0) } }, yAxis: { type: 'category', data: R.map(p => p.name.length > 22 ? p.name.slice(0, 21) + '…' : p.name), axisLabel: { fontSize: 10 } },
+          series: [{ type: 'bar', data: R.map(p => ({ value: p.pnl.total, itemStyle: { color: p.pnl.total >= 0 ? css('--pos') : css('--neg') } })), label: { show: true, position: 'right', fontSize: 10, color: css('--fg-2'), formatter: p => f.mns(p.value, 1) } }] }));
+        c.on('click', pp => K.card(R[pp.dataIndex].id));
+      },
+    },
+    waterfall: {
+      title: 'PnL дня: разложение', modes: [['wf', 'водопад'], ['hist', '30 дней']],
+      render(bd, mode) {
+        const el = K.h('div', 'fill'); bd.appendChild(el);
+        if (mode === 'wf') { K.pnlWaterfall(el); return; }
+        const keys = [['carry', 'Кэрри'], ['rates', 'Ставки'], ['spread', 'Спред'], ['fx', 'FX'], ['trading', 'Сделки'], ['other', 'Прочее']];
+        const n = 30, xs = M.histDates.slice(-n);
+        small(el, () => ({ grid, legend: { top: 0, left: 0, itemGap: 6, type: 'scroll' }, tooltip: { trigger: 'axis', valueFormatter: v => f.mns(v, 2) },
+          xAxis: { type: 'category', data: xs, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', axisLabel: { formatter: v => f.mn(v, 0) } },
+          series: keys.map(([k, t]) => ({ name: t, type: 'bar', stack: 'p', data: M.hist.pnl[k].slice(-n) })).concat([{ name: 'Итого', type: 'line', showSymbol: false, data: M.hist.pnl.total.slice(-n), color: css('--fg') }]) }));
+      },
+    },
+    blotter: {
+      title: 'Позиции по величине риска', modes: [['dv01', '|DV01|'], ['cs01', '|CS01|'], ['pnl', '|PnL|']],
+      render(bd, mode) {
+        const key = { dv01: p => p.dv01, cs01: p => p.cs01, pnl: p => p.pnl.total }[mode];
+        const L = K.list().filter(p => key(p)).sort((a, b) => Math.abs(key(b)) - Math.abs(key(a))).slice(0, 25);
+        const metric = mode === 'pnl' ? 'pnl' : mode;
+        K.table(bd, { rows: L, search: false, footer: false, stripe: r => K.issuerColor(r.issuer), columns: K.cols(['name', ccyCol, 'kind', 'tenor', metric, mode === 'dv01' ? 'cs01' : 'dv01']) });
+      },
+    },
+    events: {
+      title: 'События 30 дней', modes: [['list', 'список'], ['bars', 'по дням']],
+      render(bd, mode) {
+        const end = M.util.addDays(M.asOf, 30), ids = new Set(K.list().map(p => p.id));
+        const cf = M.cashflows.filter(c => c.date > M.asOf && c.date <= end && ids.has(c.pos) && M.pos[c.pos].group !== 'DER');
+        const cbr = M.cbr.meetings.filter(d => d > M.asOf && d <= end);
+        const lbl = { cpn: 'купон', mat: 'погаш', put: 'пут', call: 'колл' };
+        if (mode === 'list') {
+          const ev = cf.map(c => ({ date: c.date, kind: c.kind, html: '<span data-card="' + c.pos + '" class="dr" style="border:0">' + esc(M.pos[c.pos].name) + '</span>', v: c.amountRub, est: c.est }))
+            .concat(cbr.map(d => ({ date: d, kind: 'cbr', html: '<b>Заседание ЦБ</b> <span class="mut" title="консенсус ' + esc(M.cbr.next.consensus) + ', в рынке ' + esc(M.cbr.next.priced) + '">конс. ' + esc(M.cbr.next.consensus) + '</span>', v: null })))
+            .sort((a, b) => a.date.localeCompare(b.date) || (b.kind === 'cbr') - (a.kind === 'cbr'));
+          bd.innerHTML = '<table class="k-tbl"><thead><tr><th>Дата</th><th>Тип</th><th>Бумага</th><th class="n">mm ₽</th></tr></thead><tbody>' +
+            ev.map(e => '<tr><td>' + f.dshort(e.date) + '</td><td><span class="ev-kind ' + e.kind + '">' + (e.kind === 'cbr' ? 'ЦБ' : lbl[e.kind]) + '</span></td><td>' + e.html + '</td><td class="n">' + (e.v == null ? '' : f.mn(e.v, 1) + (e.est ? '<span class="mut3">*</span>' : '')) + '</td></tr>').join('') +
+            '</tbody></table><div class="k-note" style="padding:4px 8px">* купон флоатера — прогноз по текущему фиксингу; щелчок по бумаге — карточка</div>';
+          return;
+        }
+        const el = K.h('div', 'fill'); bd.appendChild(el);
+        const days = []; for (let d = M.util.addDays(M.asOf, 1); d <= end; d = M.util.addDays(d, 1)) days.push(d);
+        const kinds = [['cpn', 'купоны', css('--accent')], ['put', 'оферты', css('--warn')], ['call', 'коллы', '#ff8f3f'], ['mat', 'погашения', css('--pos')]];
+        const c = small(el, () => ({ grid, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.mn(v, 1) + ' mm' },
+          xAxis: { type: 'category', data: days, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', axisLabel: { formatter: v => f.mn(v, 0) } },
+          series: kinds.map(([k, t, col]) => ({ name: t, type: 'bar', stack: 'e', itemStyle: { color: col }, data: days.map(d => M.sum(cf.filter(c => c.date === d && c.kind === k), 'amountRub')),
+            markLine: k === 'cpn' && cbr.length ? { symbol: 'none', silent: true, lineStyle: { color: css('--neg'), type: 'dashed' }, label: { formatter: 'ЦБ', color: css('--neg') }, data: cbr.map(d => ({ xAxis: d })) } : undefined })) }));
+        c.on('click', pp => { const d = days[pp.dataIndex], k = kinds[pp.seriesIndex][0]; const rows = cf.filter(x => x.date === d && x.kind === k).map(x => ({ p: M.pos[x.pos], v: x.amountRub })); if (rows.length) K.drill({ title: kinds[pp.seriesIndex][1] + ' ' + f.dshort(d), unit: 'mm ₽', fmt: v => f.mn(v, 1), rows }); });
+      },
+    },
+    curves: {
+      title: 'Кривые: сегодня / вчера', modes: [['RUB RUONIA', 'RUONIA'], ['RUB KEY', 'КС'], ['OFZ', 'ОФЗ']],
+      render(bd, mode) {
+        const el = K.h('div', 'fill'); bd.appendChild(el);
+        const isOfz = mode === 'OFZ';
+        const today = isOfz ? M.ofzCurve : M.curve[mode].pts;
+        const chg = isOfz ? M.curve['RUB RUONIA'].chg.map((v, i) => v + M.curve['RUB OFZ'].chg[i]) : M.curve[mode].chg;
+        const yest = today.map((v, i) => v - chg[i] / 100);
+        const riskId = isOfz ? 'RUB OFZ' : mode;
+        const c = small(el, () => ({ grid: { left: 4, right: 4, top: 22, bottom: 2, containLabel: true }, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis' },
+          xAxis: { type: 'category', data: M.buckets }, yAxis: [{ type: 'value', scale: true, axisLabel: { formatter: v => v.toFixed(1) + '%' } }, { type: 'value', splitLine: { show: false }, axisLabel: { formatter: v => v + 'бп' } }],
+          series: [{ name: 'изм., б.п.', type: 'bar', yAxisIndex: 1, data: chg, itemStyle: { color: css('--fg-3'), opacity: .45 }, barMaxWidth: 18 },
+            { name: 'вчера', type: 'line', data: yest.map(v => +v.toFixed(3)), showSymbol: false, lineStyle: { type: 'dashed', width: 1.2 }, color: css('--fg-3'), tooltip: { valueFormatter: v => v.toFixed(2) + '%' } },
+            { name: 'сегодня', type: 'line', data: today.map(v => +v.toFixed(3)), symbolSize: 5, color: K.curveColors[riskId] || css('--accent'), tooltip: { valueFormatter: v => v.toFixed(2) + '%' } }] }));
+        c.on('click', pp => { const k = pp.dataIndex; K.drill({ title: 'Риск ' + (isOfz ? 'базис ОФЗ' : M.curve[mode].short) + ' · ' + M.buckets[k] + ' (изм. ' + chg[k] + ' бп)', unit: 'тыс ₽/бп', rows: K.list().map(p => ({ p, v: p.risk[riskId][k] })) }); });
+      },
+    },
+    issuers: {
+      title: 'Концентрация по эмитентам', modes: [['mv', 'MV'], ['cs01', 'CS01'], ['dv01', 'DV01']],
+      render(bd, mode) {
+        const el = K.h('div', 'fill'); bd.appendChild(el);
+        const val = { mv: p => p.mv, cs01: p => p.cs01, dv01: p => p.dv01 }[mode], fm = mode === 'mv' ? v => f.mn(v, 0) : f.dv;
+        const g = {}; bonds(K.list()).filter(p => !M.isMinfin(p.issuer) || mode !== 'cs01').forEach(p => { (g[p.issuer] = g[p.issuer] || { id: p.issuer, name: p.issuerName, v: 0, L: [] }).v += val(p); g[p.issuer].L.push(p); });
+        const R = Object.values(g).sort((a, b) => Math.abs(b.v) - Math.abs(a.v)).slice(0, 14).reverse();
+        const c = small(el, () => ({ grid: { left: 4, right: 50, top: 4, bottom: 2, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: fm },
+          xAxis: { type: 'value', axisLabel: { formatter: fm } }, yAxis: { type: 'category', data: R.map(x => x.name), axisLabel: { fontSize: 10 } },
+          series: [{ type: 'bar', data: R.map(x => ({ value: x.v, itemStyle: { color: K.issuerColor(x.id) } })), label: { show: true, position: 'right', fontSize: 10, color: css('--fg-2'), formatter: p => fm(p.value) } }] }));
+        c.on('click', pp => { const x = R[pp.dataIndex]; K.drill({ title: x.name + ' · ' + mode.toUpperCase(), unit: mode === 'mv' ? 'mm ₽' : 'тыс ₽/бп', fmt: fm, list: x.L, val }); });
+      },
+    },
+    fx: {
+      title: 'ОВП и курсы', modes: [['table', 'таблица'], ['bars', 'бары']],
+      render(bd, mode) {
+        const L = K.list(), C = ['USD', 'EUR', 'CNY'];
+        const part = (c, der) => L.filter(p => p.ccy === c && (p.group === 'DER') === der);
+        if (mode === 'table') {
+          bd.innerHTML = '<table class="k-tbl"><thead><tr><th>Вал</th><th class="n">Курс</th><th class="n">Бонды</th><th class="n">Дерив.</th><th class="n">ОВП</th><th class="n" title="тыс ₽">PnL FX</th></tr></thead><tbody>' +
+            C.map(c => '<tr><td>' + K.ccyTag(c) + '</td><td class="n">' + f.n(M.fx[c], 2) + ' <span class="' + f.cls(M.fxChgPct[c]) + '" style="font-size:10.5px">' + f.s(M.fxChgPct[c], 2) + '%</span></td>' +
+              '<td class="n">' + K.d({ title: 'FX дельта бондов ' + c, unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: part(c, false), val: 'fxDelta' }) + '</td>' +
+              '<td class="n">' + K.d({ title: 'FX дельта деривативов ' + c, unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: part(c, true), val: 'fxDelta' }) + '</td>' +
+              '<td class="n"><b>' + K.d({ title: 'ОВП ' + c, unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: L.filter(p => p.ccy === c), val: 'fxDelta' }) + '</b></td>' +
+              '<td class="n">' + K.d({ title: 'PnL FX ' + c, unit: 'тыс ₽', fmt: f.k, list: L.filter(p => p.ccy === c), val: p => p.pnl.fx }) + '</td></tr>').join('') +
+            '</tbody></table><div class="k-note" style="padding:4px 8px">mm в валюте; PnL FX — тыс ₽' +
+            (M.fxPnl ? '. ' + K.fxLine(C) : '') +
+            '. Вечером ОВП книг облигаций передаётся в FXB сделкой T+1</div>';
+          return;
+        }
+        const el = K.h('div', 'fill'); bd.appendChild(el);
+        const c = small(el, () => ({ grid, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.mn(v, 1) + ' mm ₽' },
+          xAxis: { type: 'category', data: C }, yAxis: { type: 'value', axisLabel: { formatter: v => f.mn(v, 0) } },
+          series: [['бонды', false, css('--accent')], ['деривативы', true, css('--warn')]].map(([n, der, col]) => ({ name: n, type: 'bar', stack: 'o', itemStyle: { color: col }, data: C.map(c => M.sum(part(c, der), p => p.fxDelta * M.toRepr[c])) })) }));
+        c.on('click', pp => { const cc = C[pp.dataIndex], der = pp.seriesIndex === 1; K.drill({ title: 'ОВП ' + cc + ' · ' + pp.seriesName, unit: 'mm ₽', fmt: v => f.mn(v, 1), list: part(cc, der), val: p => p.fxDelta * M.fx[cc] }); });
+      },
+    },
+    carry: {
+      title: 'Кэрри по книгам', modes: [['bars', 'бары'], ['table', 'таблица']],
+      render(bd, mode) {
+        const L = K.list(), books = M.books.filter(b => L.some(p => p.book === b.id));
+        const lst = b => L.filter(p => p.book === b.id);
+        if (mode === 'table') {
+          bd.innerHTML = '<table class="k-tbl"><thead><tr><th>Книга</th><th class="n">Кэрри/д, тыс</th><th class="n">≈ год, mm</th><th class="n">DV01</th><th class="n">MV, mm</th></tr></thead><tbody>' +
+            books.map(b => { const l = lst(b), cd = M.sum(l, 'carryDay'); return '<tr><td>' + esc(b.id) + ' <span class="mut3">' + esc(b.name) + '</span></td><td class="n">' + K.d({ title: 'Кэрри ' + b.id, unit: 'тыс ₽', fmt: f.k, list: l, val: 'carryDay' }) + '</td><td class="n mut">' + f.mn(cd * 365, 0) + '</td><td class="n">' + K.d({ title: 'DV01 ' + b.id, unit: 'тыс ₽/бп', list: l, val: 'dv01' }, null, '') + '</td><td class="n">' + K.d({ title: 'MV ' + b.id, unit: 'mm ₽', fmt: v => f.mn(v, 0), list: bonds(l), val: 'mv', color: false }) + '</td></tr>'; }).join('') + '</tbody></table>';
+          return;
+        }
+        const el = K.h('div', 'fill'); bd.appendChild(el);
+        const R = books.slice().reverse();
+        const c = small(el, () => ({ grid: { left: 4, right: 44, top: 4, bottom: 2, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.k(v) + ' тыс ₽' },
+          xAxis: { type: 'value', axisLabel: { formatter: f.k } }, yAxis: { type: 'category', data: R.map(b => b.id), axisLabel: { fontSize: 10 } },
+          series: [{ type: 'bar', data: R.map(b => { const v = M.sum(lst(b), 'carryDay'); return { value: v, itemStyle: { color: v >= 0 ? css('--pos') : css('--neg') } }; }), label: { show: true, position: 'right', fontSize: 10, color: css('--fg-2'), formatter: p => f.k(p.value) } }] }));
+        c.on('click', pp => { const b = R[pp.dataIndex]; K.drill({ title: 'Кэрри ' + b.name, unit: 'тыс ₽', fmt: f.k, list: lst(b), val: 'carryDay' }); });
+      },
+    },
+  };
+
+  // ---------- сборка доски ----------
+  const board = document.getElementById('board');
+  const live = [];
+  let maxed = null, scrim = null;
+  function renderTile(t) {
+    t.charts.forEach(c => c.dispose()); t.charts = [];
+    const before = new Set(K.charts);
+    t.bd.innerHTML = ''; t.bd.className = 'tb';
+    try { TILES[t.id].render(t.bd, t.mode); } catch (e) { console.error(e); t.bd.innerHTML = '<div class="k-empty">ошибка: ' + esc(e.message) + '</div>'; }
+    t.charts = K.charts.filter(c => !before.has(c));
+  }
+  function build() {
+    if (maxed) unmax();
+    live.splice(0).forEach(t => t.charts.forEach(c => c.dispose()));
+    board.innerHTML = '';
+    const P = PRESETS[preset];
+    P.tiles.forEach(spec => {
+      const [id, span] = spec.split(':'), def = TILES[id];
+      const mk = preset + '.' + id;
+      const mode = modes[mk] || (P.modes && P.modes[id]) || def.modes[0][0];
+      const el = K.h('div', 'tile' + (span === '2' ? ' span2' : ''));
+      el.innerHTML = '<div class="th"><h3>' + def.title + '</h3><span class="sp"></span><span class="ms"></span><button class="mx" title="Развернуть / свернуть (Esc)">⤢</button></div><div class="tb"></div>';
+      board.appendChild(el);
+      const t = { id, el, bd: el.querySelector('.tb'), mode, charts: [] };
+      K.seg(el.querySelector('.ms'), def.modes, mode, v => { t.mode = v; modes[mk] = v; save(); renderTile(t); });
+      el.querySelector('.mx').onclick = () => maxed === t ? unmax() : max(t);
+      live.push(t);
+      renderTile(t);
+    });
+    // ряды поровну на высоту экрана
+    const cells = P.tiles.reduce((s, x) => s + (x.endsWith(':2') ? 2 : 1), 0);
+    board.style.gridTemplateRows = 'repeat(' + Math.ceil(cells / 4) + ', minmax(0, 1fr))';
+  }
+  function max(t) { if (maxed) unmax(); maxed = t; t.el.classList.add('max'); scrim = K.h('div', 'max-scrim'); scrim.onclick = unmax; document.body.appendChild(scrim); t.el.querySelector('.mx').textContent = '✕'; }
+  function unmax() { if (!maxed) return; maxed.el.classList.remove('max'); maxed.el.querySelector('.mx').textContent = '⤢'; maxed = null; if (scrim) { scrim.remove(); scrim = null; } }
+  // Esc: сначала закрываются панели разбора и карточки, потом свернётся плитка
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && maxed && !document.querySelector('.k-drawer') && !document.querySelector('.k-pal')) unmax(); }, true);
+  K.onFilter(() => live.forEach(renderTile));
+  K.on('theme', () => live.forEach(renderTile));
+  K.commands(Object.entries(PRESETS).map(([k, p]) => ({ label: 'Раскладка: ' + p.label, run: () => { preset = k; save(); paintPresets(); build(); } })));
+  K.commands(Object.entries(TILES).map(([k, d]) => ({ label: 'Развернуть плитку: ' + d.title.replace(/<[^>]+>/g, '').trim(), run: () => { const t = live.find(x => x.id === k); if (t) max(t); } })));
+  build();
+})();
+</script>
+</body>
+</html>

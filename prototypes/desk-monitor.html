@@ -291,7 +291,7 @@ details.pop summary::-webkit-details-marker{display:none}
       <b>FI Desk Monitor</b><span class="sep">/</span><span class="desk">Деск долгового рынка</span>
     </div>
     <div class="meta">
-      <span>срез <b class="mono" id="asof"></b> МСК · закрытие</span>
+      <span>срез <b class="mono" id="asof"></b> <span id="asof-cut">МСК · закрытие</span></span>
       <button class="ibtn" id="theme-btn" type="button" title="Переключить светлую/тёмную тему">Тема</button>
     </div>
   </div>
@@ -403,7 +403,7 @@ details.pop summary::-webkit-details-marker{display:none}
 
   <!-- 7. PnL -->
   <section class="tab" id="tab-pnl" role="tabpanel" aria-label="PnL" hidden>
-    <div class="banner"><span class="dev-chip">в разработке</span><span>Флэш считается вечером по рыночным курсам; официальный PnL (курсы ЦБ) приходит на T+1 и сверяется с explain по курсам ЦБ. Методика ещё настраивается.</span><span id="pnl-off-st"></span></div>
+    <div class="banner"><span class="dev-chip">в разработке</span><span>Флэш считается вечером по рыночным курсам; официальный PnL (курсы ЦБ) приходит на T+1 и сверяется с explain по курсам ЦБ. Методика ещё настраивается.</span><span id="pnl-off-st"></span><span id="pnl-fx-st" class="muted" style="margin-left:8px"></span></div>
     <div class="grid">
       <div class="pnl s8"><div class="ph"><h3>PnL explain за день</h3><span class="u">млн ₽</span></div><div class="pb"><div class="ch h340" id="c-pnl-wf"></div></div></div>
       <div class="pnl s4"><div class="ph"><h3>Итог дня</h3><span class="u">млн ₽</span></div><div class="pb" id="pnl-side"></div></div>
@@ -499,7 +499,7 @@ const COLS = [
   {k:'issuer', t:'Эмитент'},
   {k:'issuerGroup', t:'Группа эмитента', def:1},
   {k:'sector', t:'Сектор'},
-  {k:'rating', t:'Рейтинг', def:1},
+  {k:'rating', t:'Рейтинг', def:1, tip:p => U.ratingTip(p)},
   {k:'ccy', t:'Вал.', def:1},
   {k:'maturity', t:'Погашение', f:dt, def:1, mono:1},
   {k:'tenorY', t:'Срок, лет', n:1, d:1},
@@ -842,7 +842,7 @@ function cellHtml(c,p){
   if (c.n) return `<td class="n${c.sg ? nc(v) : ''}"${tip ? ` title="${esc(tip)}"` : ''}>${num(v, c.d)}</td>`;
   if (c.k === 'name') return `<td class="nm" title="${esc(p.name)}">${esc(p.name)}${p.newToday ? '<span class="tag">NEW</span>' : ''}${qTag(p)}</td>`;
   const s = c.f ? c.f(v) : (v == null || v === '' ? '—' : v);
-  return `<td${c.mono ? ' class="mono"' : ''}>${esc(s)}</td>`;
+  return `<td${c.mono ? ' class="mono"' : ''}${tip ? ` title="${esc(tip)}"` : ''}>${esc(s)}</td>`;
 }
 function groupKey(p){
   const g = S.pos.group;
@@ -914,7 +914,7 @@ const BD_COLS = [
   {k:'name', t:'Выпуск', v:r => r.p.name, h:r => `<td class="nm" title="${esc(r.p.name + ' · ' + (r.p.isin || ''))}">${esc(r.p.name)}${r.newToday ? '<span class="tag">NEW</span>' : ''}${r.p.yieldDate ? '<span class="tag ofr" title="Доходность и спред — к оферте">ОФ</span>' : ''}</td>`},
   {k:'isin', t:'ISIN', v:r => r.p.isin, mono:1},
   {k:'issuer', t:'Эмитент', v:r => r.p.issuer},
-  {k:'rating', t:'Рейт.', v:r => ratingIdx(r.p.rating), h:r => `<td>${esc(r.p.rating || '—')}</td>`},
+  {k:'rating', t:'Рейт.', v:r => ratingIdx(r.p.rating), h:r => `<td title="${esc(U.ratingTip(r.p))}">${esc(r.p.rating || '—')}</td>`},
   {k:'ccy', t:'Вал.', v:r => r.p.ccy},
   {k:'cpn', t:'Купон', v:r => r.p.coupon, h:r => `<td class="mono" title="${esc(cpnTip(r.p))}">${esc(cpnTxt(r.p))}</td>`},
   {k:'mat', t:'Погашение', v:r => r.p.maturity, f:dt, mono:1},
@@ -1137,7 +1137,7 @@ function openDrawer(id){
   const bk = D.BOOKS[p.book];
   const F = [
     ['Книга', bk.name + ' · ' + (BT_LABEL[bk.bookType] || '')], ['Деск / трейдер', [bk.desk, bk.trader].filter(Boolean).join(' · ')], ['Юрлицо', bk.entity], ['Класс', p.assetClass], ['Сегмент', p.segment], ['Тип', p.instrType],
-    ['ISIN', p.isin], ['Эмитент', p.issuer], ['Группа', p.issuerGroup], ['Сектор', p.sector], ['Рейтинг', p.rating],
+    ['ISIN', p.isin], ['Эмитент', p.issuer], ['Группа', p.issuerGroup], ['Сектор', p.sector], ['Рейтинг', U.ratingText(p), U.ratingTip(p)],
     ['Валюта', p.ccy], ['Погашение', dt(p.maturity)], ['Срок, лет', num(p.tenorY,2)],
     ['Купон', p.instrType === 'BOND' || p.coupon != null ? cpnTxt(p) : null, cpnTip(p)], ['Тип купона', p.couponType ? CPN_TYPE[p.couponType] || p.couponType : null],
     ['Индекс', p.couponType === 'fix' ? p.index : null], ['Сторона', p.side],
@@ -1548,6 +1548,9 @@ function rPnl(){
   const col = b => b.k === 't' ? TK.accent : b.k === 'u' ? TK.serious : b.k === 'b' ? TK.fg_3 : (b.v < 0 ? TK.neg : TK.pos);
   const narrow = $('c-pnl-wf').clientWidth < 640;
   $('pnl-off-st').innerHTML = ready ? chip('ok', 'Официальный PnL за ' + dt(D.official.asOf || D.asOf) + ' получен') : chip('info', 'Официальный PnL — ожидается T+1');
+  // курсы флэша (R26): рыночный с источником (MOEX 19:00, иначе 14:00 / CETS / ЦБ) и курс ЦБ, действующий на дату
+  $('pnl-fx-st').textContent = CCYS.length ? 'FX флэша: ' + CCYS.map(c => c + ' ' + num(D.FX[c], c === 'CNY' ? 4 : 2) +
+    ((D.FX_SOURCE || {})[c] ? ' ' + D.FX_SOURCE[c] : '') + (D.FX_CBR && D.FX_CBR[c] != null && D.FX_CBR[c] !== D.FX[c] ? ' (ЦБ ' + num(D.FX_CBR[c], c === 'CNY' ? 4 : 2) + ')' : '')).join(', ') : '';
   chart('c-pnl-wf', opt({
     grid:{left:6, right:10, top:22, bottom:6},
     tooltip:{trigger:'item', formatter:p => { const b = bars[p.dataIndex]; return `<b>${esc(b.n)}</b><br>${M(b.v,2,true)} млн ₽` + (b.k === 'd' ? `<br><span style="opacity:.7">накопл.: ${M(b.hi,1,true)}</span>` : b.k === 'b' ? '<br><span style="opacity:.7">FX-компоненты по курсам ЦБ вместо рыночных</span>' : ''); }},
@@ -1709,7 +1712,10 @@ window.addEventListener('resize', () => { clearTimeout(rT); rT = setTimeout(() =
 }, 150); });
 
 /* ---------- boot ---------- */
-$('asof').textContent = dt(D.asOf) + (D.source && D.source.publishedAt ? ' ' + D.source.publishedAt.slice(11, 16) : '');
+// срез прогона из базы — его подпись (R11: «21.10 18:30 МСК · внутри дня» / «20.10 · закрытие»); время публикации
+// (UTC) за время среза МСК не выдаётся. Демо и tdm — как раньше
+if (D.source && D.source.slice) { $('asof').textContent = dt(D.asOf); $('asof-cut').textContent = '· ' + D.source.slice; }
+else $('asof').textContent = dt(D.asOf) + (D.source && D.source.publishedAt ? ' ' + D.source.publishedAt.slice(11, 16) : '');
 readTokens(); renderFilters(); renderKpi(); renderTabs(); renderColPop(); renderTab();
 
 })();

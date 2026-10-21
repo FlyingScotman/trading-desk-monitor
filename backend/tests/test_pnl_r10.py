@@ -29,6 +29,7 @@ FIX = Path(__file__).parent / "fixtures" / "mdhub_v1"
 DATE = "2026-10-15"
 PREV = date(2026, 10, 14)
 USD_PREV = 80.0
+USD_PREV_MKT = 80.4  # the MOEX 19:00 rate of the previous date (R26: the market rate the flash PnL is in)
 USD_BOND = "RU000A10BRM5"
 Q = 1000.0
 
@@ -40,11 +41,12 @@ def ctx():
 
 @pytest.fixture(scope="module")
 def prev(ctx):
-    """The fixture market one day earlier with USD at 80 (CBR), no MOEX TOM; the KBD shifted as in S2."""
+    """The fixture market one day earlier with USD at 80 (CBR) and 80.4 (MOEX 19:00), no MOEX TOM; the KBD shifted as
+    in S2."""
     p = shifted_prev(ctx, PREV)
     m = copy.copy(ctx.market)
     m.business_date = PREV
-    m.fx = lambda ccy: ({"cbr": USD_PREV, "cbr_next": None, "moex_tom": None} if ccy == "USD"
+    m.fx = lambda ccy: ({"cbr": USD_PREV, "cbr_next": None, "moex_tom": None, "moex_19": USD_PREV_MKT} if ccy == "USD"
                         else {"cbr": None, "cbr_next": None, "moex_tom": None})
     return dataclasses.replace(p, market=m)
 
@@ -67,17 +69,23 @@ PREV_EXTRA = {"O1": {**EXTRA["O1"], "mv_rub": 4.2e5}}  # B2 was not in yesterday
 
 
 def test_split_fx_of_a_foreign_bond(ctx, prev):
-    """A USD-face bond (fallback rung, simple PnL): the FX delta of D-1 x the rate move goes to fx_gross."""
+    """A USD-face bond (fallback rung, simple PnL): the FX delta of D-1 x the market rate move (MOEX 19:00, R26) goes to
+    fx_gross; the same delta x the CBR move is fx_gross_cbr (the official basis), beside it."""
     (o,) = value(ctx, [(USD_BOND, Q)])
     cur = approximate(ctx, o, Q, FallbackContext(ctx, history=[]))
-    cbr = ctx.market.fx("USD")["cbr"]
-    p_v = dataclasses.replace(cur, valuation_date=PREV, dirty_rub=cur.dirty_rub * USD_PREV / cbr - 3.0)
+    fx = ctx.market.fx("USD")
+    mkt, cbr = fx["moex_19"], fx["cbr"]
+    p_v = dataclasses.replace(cur, valuation_date=PREV, dirty_rub=cur.dirty_rub * USD_PREV_MKT / mkt - 3.0)
     c = Outcome(o.secid, o.terms, o.quote, valuation=cur)
     attach_pnl(prev, [Outcome(o.secid, o.terms, o.quote, valuation=p_v)], ctx, [c])
     pnl = c.pnl
-    assert pnl.fx_gross == pytest.approx(Q * p_v.dirty_rub / USD_PREV * (cbr - USD_PREV))
+    delta = Q * p_v.dirty_rub / USD_PREV_MKT
+    assert pnl.fx_gross == pytest.approx(delta * (mkt - USD_PREV_MKT))
+    assert pnl.fx_gross_cbr == pytest.approx(delta * (cbr - USD_PREV))
     assert pnl.other + pnl.fx_gross == pytest.approx(pnl.total) and pnl.explained == pytest.approx(pnl.total)
-    assert pnl.as_tdm()["fx_gross"] == pnl.fx_gross and FX_METHOD in pnl.extra()["note"]
+    t = pnl.as_tdm()
+    assert t["fx_gross"] == pnl.fx_gross and t["fx_gross_cbr"] == pnl.fx_gross_cbr and FX_METHOD in pnl.extra()["note"]
+    assert "MOEX 19:00" in pnl.extra()["note"] and "at CBR" in pnl.extra()["note"]
     # a RUB bond is left as is
     rub = next(x for x in value(ctx, [("RU000A0JXQ44", Q)]))
     v = approximate(ctx, rub, Q, FallbackContext(ctx, history=[]))
@@ -98,11 +106,13 @@ def _direct(ctx, prev, valid: date | str = DATE):
 
 def test_fx_rows_by_the_rate_move_and_otc_by_the_reports(ctx, prev):
     _, bp = _direct(ctx, prev)
-    d, cbr = bp.direct, ctx.market.fx("USD")["cbr"]
-    fx1 = d["FX1"].pnl
-    assert (fx1.method, fx1.fx_gross, fx1.total, fx1.other) == (FX_METHOD, pytest.approx(1000 * (cbr - USD_PREV)),
-                                                                pytest.approx(1000 * (cbr - USD_PREV)), 0.0)
-    assert d["FX2"].pnl.total == pytest.approx(-400 * (cbr - USD_PREV)) and d["FX2"].pnl.flag == direct.FORWARD_FLAG
+    d, fx = bp.direct, ctx.market.fx("USD")
+    mkt, cbr = fx["moex_19"], fx["cbr"]
+    fx1 = d["FX1"].pnl  # at the market rate (R26), the CBR move beside it
+    assert (fx1.method, fx1.fx_gross, fx1.total, fx1.other) == (FX_METHOD, pytest.approx(1000 * (mkt - USD_PREV_MKT)),
+                                                                pytest.approx(1000 * (mkt - USD_PREV_MKT)), 0.0)
+    assert fx1.fx_gross_cbr == pytest.approx(1000 * (cbr - USD_PREV)) and fx1.as_tdm()["fx_gross_cbr"] == fx1.fx_gross_cbr
+    assert d["FX2"].pnl.total == pytest.approx(-400 * (mkt - USD_PREV_MKT)) and d["FX2"].pnl.flag == direct.FORWARD_FLAG
     assert d["FX3"].pnl.total == 0.0 and d["FX3"].pnl.method == FX_METHOD  # RUB cash: no FX move
     o1 = d["O1"].pnl
     assert (o1.method, o1.other, o1.fx_gross, o1.flag) == (REPORTED_METHOD, pytest.approx(8e4), 0.0, "по отчёту")

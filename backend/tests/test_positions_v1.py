@@ -26,7 +26,7 @@ from desk.valuation.positions import merge, plan
 
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1"
 DATE = "2026-10-15"
-USD = 83.9497  # CBR on the fixture date
+USD = 83.76  # MOEX 19:00 on the fixture date (R26: FX rows and bonds at the market rate; CBR 83.9497)
 FLOATER = "RU000A109XR1"  # amortized: initial face 1000, outstanding 800
 
 

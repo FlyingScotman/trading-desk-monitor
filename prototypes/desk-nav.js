@@ -27,6 +27,7 @@
   var here = inApp ? 'app/' : location.pathname.split('/').pop() || 'index.html';
   var PAGES = [
     ['desk-monitor.html', 'Desk Monitor', 'Сводка, позиции, риски, фондирование, PnL'],
+    ['concepts/index.html', 'Мониторы', '13 мониторов на реальных данных: кокпит, риски, позиции, PnL, календари, рынок, история'],
     ['widget-board.html', 'Widget Board', 'Свои доски из виджетов'],
     ['pivot-studio.html', 'Pivot Studio', 'Сводные таблицы по любым разрезам'],
     ['scenario-lab.html', 'Scenario & PnL Lab', 'Конструктор сценариев и PnL explain (≈, в браузере)'],

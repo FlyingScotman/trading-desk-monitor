@@ -10,13 +10,17 @@
     desk runs --date 2026-10-15          the store's runs: status, positions, qualities, PnL
     desk inbox scan                      bank reports of DESK_INBOX_DIRS through the adapter into the store
     desk inbox status [--date D] [--json]          files, units, issues per source and date; book ages
+    desk inbox reconcile [--date D] [--json]       per book: report rows -> accepted -> in the run; why rows were lost
     desk inbox retry [--status failed,rejected]    offer files in these statuses again
     desk inbox replay --source S --from D1 --to D2 read archived accepted files again (new revisions if changed)
     desk adapter check [--adapter SPEC] [--dir D] [--stub-ctx] [--json]   the conformance kit (08 §8)
     desk serve                           desk API + Desk Monitor on http://127.0.0.1:8100, scenario worker, autopilot
     desk cycle [--date D] [--no-hub]     one autopilot cycle: hub sync -> inbox scan -> EOD of changed dates
+    desk backfill [--from D] [--to D] [--dry-run]  default runs of the past dates with positions (R23)
     desk openapi --out ../frontend/openapi.json   the API's OpenAPI document (stdout without --out)
     desk diagnostics [--out FILE] [--no-hub]       how the desk works here, without private data (R13)
+    desk history status [--json]         the market history read from the hub's history API (R24) and why not
+    desk history sync [--budget S]       fetch it now, for at most S seconds (default 600; resumable)
 
 Defaults for the snapshot folder, the run store and the report folder come from
 :mod:`desk.settings` (``DESK_*`` variables or ``backend/.env``); ``desk config`` prints them.
@@ -37,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import dataclasses
 import getpass
 import hashlib
 import json
@@ -52,16 +57,37 @@ from typing import Any
 import psycopg
 
 from . import store
-from .marketdata import cache, history
+from .marketdata import cache, history, reference, static_facts
 from .marketdata.adapter import MarketView
 from .marketdata.bundle import SnapshotDir, SnapshotError, previous_market
 from .marketdata.hub import HubClient, HubError, hub_check
 from .orchestrator import EodContext, attach_pnl, prepare, value
 from .pnl import direct as direct_pnl
 from .publish import desk_run, tdm_run
+from .publish import summary as run_summary
 from .report import validation
 from .settings import Settings, SettingsError, adapter_config_dir, load, mask_url
 from .valuation import positions as pv1
+
+
+class ContextCache:
+    """The ``size`` prepared market dates used last (``orchestrator.prepare``), keyed by the snapshot folder, date, cut and
+    snapshot id: ``desk backfill`` values consecutive dates, and each date's market is the next date's previous one.
+    A prepared context is read only by the valuation (its curve cache only grows), so sharing it changes nothing."""
+
+    def __init__(self, size: int = 3) -> None:  # a date's own market, its previous one, the next date's
+        self.size, self._items = size, {}
+
+    def prepare(self, sd: SnapshotDir, business_date: str, cut_type: str = "eod_final",
+                market_snapshot_id: str | None = None) -> EodContext:
+        key = (str(sd.root), business_date, cut_type, market_snapshot_id or sd.market_id(business_date, cut_type))
+        ctx = self._items.pop(key, None)
+        if ctx is None:
+            ctx = prepare(sd, business_date, cut_type, market_snapshot_id=market_snapshot_id)
+        self._items[key] = ctx
+        while len(self._items) > self.size:
+            self._items.pop(next(iter(self._items)))
+        return ctx
 
 
 def read_book(path: Path) -> list[tuple[str, str, str, float]]:
@@ -85,6 +111,18 @@ def _print_synced(rows: list[cache.Synced]) -> None:
             print(f"  {s.business_date}  market {s.market_id[:12]}  static {(s.static_id or '-')[:12]}  "
                   f"published {s.published_at} ({_age(s.published_at)})  "
                   f"{len(s.downloaded)} downloaded, {2 - len(s.downloaded)} cached")
+
+
+def _print_newest_static(client: HubClient, snapshots: Path) -> None:
+    """The hub's newest static (issuer facts, ratings: R25) into the cache, with a line saying which."""
+    try:
+        s = cache.newest_static(client, snapshots)
+    except (HubError, SnapshotError) as e:
+        print(f"  newest static: not fetched ({e})")
+        return
+    if s is not None:
+        print(f"  newest static {s.static_id[:12]} of {s.business_date}, published {s.published_at}: "
+              + ("downloaded" if s.downloaded else "cached") + " (issuer facts and ratings of the runs and pages)")
 
 
 def _store(a: argparse.Namespace) -> psycopg.Connection:
@@ -111,6 +149,7 @@ def cmd_eod(a: argparse.Namespace) -> int:
         client = HubClient(a.settings)
         dates = [a.date] + list(islice((d for d in cache.hub_dates(client, a.cut) if d < a.date), 1))
         _print_synced(cache.sync(client, Path(a.snapshots), dates, a.cut))
+        _print_newest_static(client, Path(a.snapshots))
     eod_run(a.settings, a.date, snapshots=a.snapshots, book=a.book, books=a.books, run_type=run_type,
             report_dir=a.report_dir, tdm=a.tdm, db=a.db, no_gamma=a.no_gamma, no_pnl=a.no_pnl)
     return 0
@@ -148,7 +187,8 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             book: str | None = None, books: list[str] | None = None, run_type: str = "EOD",
             report_dir: str | Path | None = None, tdm: bool = False, db: str | Path | None = None,
             no_gamma: bool = False, no_pnl: bool = False, out: Callable[[str], None] = print,
-            cut_type: str = "eod_final", market_snapshot_id: str | None = None) -> int | None:
+            cut_type: str = "eod_final", market_snapshot_id: str | None = None,
+            contexts: ContextCache | None = None, read_model: bool = True) -> int | None:
     """The EOD run of date ``d`` (``desk eod`` without its hub pull; the autopilot calls it too): values the
     books of the store on the cached snapshot of ``d`` and publishes the run. Returns the desk run id, None when
     the store has no positions for the date. Raises on a missing snapshot or a failed publication.
@@ -157,11 +197,21 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
     intraday step values today's book on an ``intraday`` cut, ``run_type`` INTRADAY, or on ``eod_preliminary``).
     The flash PnL is measured against the newest earlier ``eod_final`` of the cache, else an ``eod_preliminary``
     (``bundle.previous_market``); when that is not the previous business day's final, the run says so
-    (``pnl_basis``)."""
+    (``pnl_basis``).
+
+    ``contexts`` (``desk backfill``, R23): prepared dates kept between calls, so that a run of consecutive dates
+    prepares each date's market once (as the run's own date, then as the next date's previous one).
+    ``read_model``: also put the run's static snapshot's facts (the market calendar, issuer groups, sectors) and
+    the CBR meetings into the store's read model (``desk.marketdata.static_facts``); the backfill leaves them to the
+    latest date. After the publication the run's summary for the concept pages is written (``publish.summary``)."""
     snapshots = snapshots or settings.snapshot_cache
     sd = SnapshotDir(Path(snapshots))
     t0 = time.perf_counter()
-    ctx = prepare(sd, d, cut_type, market_snapshot_id=market_snapshot_id)
+    prep = contexts.prepare if contexts is not None else prepare
+    ctx = prep(sd, d, cut_type, market_snapshot_id=market_snapshot_id)
+    # issuer names, groups, sectors and ratings: the newest static of the cache, not the market's own (R25)
+    ctx = dataclasses.replace(ctx, reference=reference.facts(sd, ctx.static),
+                              proxy_curves=bool(getattr(settings, "proxy_curves_for_risk", False)))
     prev_cut = previous_market(sd, d)
     prev_date = prev_cut[0] if prev_cut else None
     prev = MarketView(sd.market(*prev_cut)) if prev_cut else None
@@ -198,6 +248,14 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
                 history.load_snapshot(con, snap)
         except psycopg.Error as e:
             out(f"WARN market history not updated: {type(e).__name__}: {e}")
+        if read_model:
+            try:  # the concept pages' market calendar, issuer groups and sectors, CBR meetings (R23)
+                static_facts.load_static(con, ctx.static.snapshot)
+                if ctx.reference_facts.snapshot_id != ctx.static.snapshot.id:  # the newest static's facts (R25)
+                    static_facts.load_static(con, sd.get(ctx.reference_facts.snapshot_id))
+                static_facts.load_cbr(con, ctx.market.snapshot)
+            except psycopg.Error as e:
+                out(f"WARN static facts not updated: {type(e).__name__}: {e}")
         if book:
             _load(con, Path(book), d, out=out)
         inputs = store.positions_for(con, date.fromisoformat(d), books=books)
@@ -216,7 +274,7 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
         outcomes = value(ctx, bp.requests, second_order=not no_gamma, position_ids=bp.position_ids,
                          carried_spreads=carried)
         if prev_cut and not no_pnl:
-            prev_ctx = prepare(sd, *prev_cut)
+            prev_ctx = prep(sd, *prev_cut)
             attach_pnl(prev_ctx, value(prev_ctx, bp.requests, position_ids=bp.position_ids, carried_spreads=carried),
                        ctx, outcomes)
             # fx rows, the report-valued rows (otc, unmapped bonds): by the rate move and by the reports of both
@@ -240,6 +298,13 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
         run_id, status, warnings = desk_run.publish(con, ctx, positions, prev=prev, run_type=run_type,
                                                     inputs=inputs, carried_from=carried, pnl_basis=basis)
         out(f"desk run {run_id}: {status}, {len(warnings)} warnings")
+        for (m,) in con.execute("SELECT message FROM run_log WHERE run_id = %s AND message LIKE %s",
+                                (run_id, "справочник эмитентов%")):
+            out(m)  # where the issuer facts and ratings come from and how many bonds have one (R25)
+        try:
+            run_summary.ensure(con, [run_id])
+        except psycopg.Error as e:  # the pages build it on first read
+            out(f"WARN run summary not written: {type(e).__name__}: {e}")
     if tdm:
         tdm_id, status, warnings = tdm_run.publish(db or settings.db, ctx, positions, prev=prev, inputs=inputs)
         out(f"tdm run {tdm_id}: {status}, {len(warnings)} warnings")
@@ -255,6 +320,10 @@ def cmd_inbox(a: argparse.Namespace) -> int:
             st = scan.status(con, a.settings, date.fromisoformat(a.date) if a.date else None)
             print(json.dumps(st, indent=2) if a.json else scan.status_text(st))
             return 0 if st["adapter"].startswith("ok") else 1
+        if a.inbox_cmd == "reconcile":
+            rc = scan.reconcile(con, a.settings, date.fromisoformat(a.date) if a.date else None)
+            print(json.dumps(rc, indent=2, ensure_ascii=False) if a.json else scan.reconcile_text(rc))
+            return 0
         if a.inbox_cmd == "scan":
             res = scan.scan(con, a.settings)
         elif a.inbox_cmd == "retry":
@@ -458,6 +527,9 @@ def cmd_hub_check(a: argparse.Namespace) -> int:
     if latest := r["latest"]:
         print(f"latest   {a.cut} {latest['business_date']}  {(latest['snapshot_id'] or '')[:12]}  "
               f"published {latest['published_at']} ({_age(latest['published_at'])})")
+    if hapi := r.get("history_api"):
+        print("history  " + (f"API available: {', '.join(hapi['datasets'])} ({hapi['series']} series)"
+                             if hapi["available"] else f"API not used: {hapi['reason']} (history from the snapshots)"))
     if r["error"]:
         print(f"desk: {r['error']}", file=sys.stderr)
     return 0 if r["ok"] else 1
@@ -482,6 +554,7 @@ def cmd_sync(a: argparse.Namespace) -> int:
     rows = cache.sync(client, Path(a.snapshots), sorted(dates), a.cut)
     print(f"sync {a.cut} from {client.host} into {a.snapshots}: {len(rows)} dates")
     _print_synced(rows)
+    _print_newest_static(client, Path(a.snapshots))
     _load_history(a.settings, Path(a.snapshots))
     return 0 if rows and all(s.market_id for s in rows) else 1
 
@@ -514,6 +587,30 @@ def _load_history(settings: Settings, folder: Path) -> None:
         print(line)
 
 
+def cmd_history(a: argparse.Namespace) -> int:
+    """``desk history status|sync`` (R24): the store's market history from the hub's history API."""
+    from .marketdata import hubhistory
+
+    url = store.resolve_url(a.settings)
+    store.migrate(url)
+    with store.connect(url) as con:
+        if a.history_cmd == "sync":
+            client = HubClient(a.settings)
+            rep = hubhistory.sync(con, client, bonds_from=a.settings.history_bonds_from,
+                                  rates_from=a.settings.history_rates_from, held=hubhistory.held_secids(con),
+                                  budget_s=a.budget,
+                                  progress=lambda i, n, d: print(f"  {i + 1}/{n} {d}", flush=True) if a.verbose
+                                  else None)
+            print(rep.text())
+            if not rep.available:
+                print("the autopilot loads the history from the snapshots instead (history_days)")
+                return 1
+            return 1 if rep.errors else 0
+        st = hubhistory.status(con)
+        print(hubhistory.to_json(st) if a.json else "\n".join(hubhistory.status_text(st)))
+    return 0
+
+
 def cmd_serve(a: argparse.Namespace) -> int:
     from .api import serve
 
@@ -544,6 +641,62 @@ def cmd_cycle(a: argparse.Namespace) -> int:
     print(f"{st['message']}; latest run: "
           + (f"{lr['run_id']} of {lr['as_of']} ({lr.get('label')}), {lr['created_at']}" if lr else "none"))
     return 1 if st["state"] == "error" else 0
+
+
+def cmd_backfill(a: argparse.Namespace) -> int:
+    """``desk backfill``: the default runs of the past dates (``desk.backfill``). The runs of one date at a time hold
+    the cycle lock (``<home>/cycle.lock``), so a ``desk serve`` running alongside keeps its cycles between them."""
+    from . import backfill
+    from .autopilot import CycleLock
+
+    st = a.settings
+    url = store.resolve_url(st)
+    store.migrate(url)
+    d_from = backfill.start_date(st, date.fromisoformat(a.date_from) if a.date_from else None)
+    d_to = date.fromisoformat(a.date_to) if a.date_to else date.today()
+    if d_from > d_to:
+        print(f"desk backfill: --from {d_from} is after --to {d_to}", file=sys.stderr)
+        return 2
+    client = None
+    rows = None
+    if not a.no_hub and st.hub_url:
+        client = HubClient(st)
+        rows = backfill.hub_rows(client, d_from)
+        print(f"hub {client.host}: {len(rows)} eod_final dates from {rows[-1][0] if rows else '-'}")
+    with _store(a) as con:
+        if not a.no_inbox and not a.dry_run:
+            line = backfill.inbox(con, st, d_from, force=a.rescan)
+            print(line or "inbox: reports from the start date read before (--rescan reads them again)")
+        p = backfill.plan(con, st, d_from, d_to, rows)
+    print(backfill.text(p, dry_run=a.dry_run))
+    if a.dry_run or not p.todo:
+        return 0
+    lock = CycleLock(st.home)
+    contexts = ContextCache()
+    done = failed = 0
+    t0 = time.perf_counter()
+    for i, day in enumerate(p.todo, 1):
+        waited = False
+        while not lock.acquire():
+            if not waited:
+                print("  waiting for the autopilot's cycle (desk serve) to end ...")
+                waited = True
+            time.sleep(5)
+        try:
+            one = backfill.Plan(p.date_from, p.date_to, [day], p.hub)
+            res = backfill.run(st, one, store_url=url, client=client, out=print, contexts=contexts)
+        finally:
+            lock.release()
+        done += len(res["done"])
+        failed += len(res["failed"])
+        for d, err in res["failed"]:
+            print(f"  {d} FAILED: {err}")
+        for d in res["skipped"]:
+            print(f"  {d} skipped: its bundle is not cached and the hub is off")
+        el = time.perf_counter() - t0
+        print(f"[{i}/{len(p.todo)}] {day.date} done; {el:.0f} s, about {el / i * (len(p.todo) - i):.0f} s left")
+    print(f"backfill: {done} dates run, {failed} failed, in {time.perf_counter() - t0:.0f} s")
+    return 1 if failed else 0
 
 
 def cmd_openapi(a: argparse.Namespace) -> int:
@@ -616,6 +769,10 @@ def main(argv: list[str] | None = None) -> int:
     ist.add_argument("--date", type=_iso, help="business date (default: today's positions)")
     ist.add_argument("--json", action="store_true")
     ist.set_defaults(fn=cmd_inbox)
+    irc = isub.add_parser("reconcile", help="per book: rows of the report, accepted, in the default run; the losses")
+    irc.add_argument("--date", type=_iso, help="business date (default: the latest default run's)")
+    irc.add_argument("--json", action="store_true")
+    irc.set_defaults(fn=cmd_inbox)
     irt = isub.add_parser("retry", help="offer files in these statuses again, whatever the adapter fingerprint")
     irt.add_argument("--status", type=_list, help="statuses (default ignored,match_failed,failed,timed_out,"
                      "rejected,waiting_calendar)")
@@ -690,6 +847,17 @@ def main(argv: list[str] | None = None) -> int:
                     "(repeatable)")
     cy.add_argument("--no-hub", action="store_true", help="no hub sync (the drop folder is still imported)")
     cy.set_defaults(fn=cmd_cycle)
+    bf = sub.add_parser("backfill", help="the default runs of past business dates with positions (history of "
+                        "risk and PnL): older reports in, hub closes pulled, oldest date first")
+    bf.add_argument("--from", dest="date_from", type=_iso, help="first business date (default: the setting "
+                    "backfill_from, 2026-01-05: the hub's first eod_final close)")
+    bf.add_argument("--to", dest="date_to", type=_iso, help="last business date (default: today)")
+    bf.add_argument("--dry-run", action="store_true", help="only say which dates would run and why")
+    bf.add_argument("--no-hub", action="store_true", help="the cached closes only, nothing downloaded")
+    bf.add_argument("--no-inbox", action="store_true", help="do not read the older reports of the inbox first")
+    bf.add_argument("--rescan", action="store_true", help="read the inbox from the start date again even if done "
+                    "before with the same adapter")
+    bf.set_defaults(fn=cmd_backfill)
     oa = sub.add_parser("openapi", help="print or write the desk API's OpenAPI document")
     oa.add_argument("--out", help="write it to this file")
     oa.set_defaults(fn=cmd_openapi)
@@ -698,6 +866,15 @@ def main(argv: list[str] | None = None) -> int:
     dg.add_argument("--out", help="write it to this file (stdout without --out)")
     dg.add_argument("--no-hub", action="store_true", help="do not ask the hub (no live check, no snapshot list)")
     dg.set_defaults(fn=cmd_diagnostics)
+    hi = sub.add_parser("history", help="the market history from the hub's history API (hub 0.2.0, R24)")
+    hisub = hi.add_subparsers(dest="history_cmd", required=True)
+    hst = hisub.add_parser("status", help="stored ranges, rows and queries per dataset; why the API is not used")
+    hst.add_argument("--json", action="store_true")
+    hst.set_defaults(fn=cmd_history)
+    hsy = hisub.add_parser("sync", help="fetch the history now (what the autopilot does a little per cycle)")
+    hsy.add_argument("--budget", type=float, default=600.0, help="seconds at most (default 600); run it again to go on")
+    hsy.add_argument("--verbose", action="store_true", help="print each query")
+    hsy.set_defaults(fn=cmd_history)
     c = sub.add_parser("config", help="print the effective settings (token masked)")
     c.set_defaults(fn=cmd_config)
     a = ap.parse_args(argv)

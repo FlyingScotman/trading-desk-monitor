@@ -22,8 +22,10 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    date also when its default run was made by another ``desk.logic_version()`` (an upgrade: older dates are not
    recomputed, to keep it cheap). Oldest first, except that the latest positions date goes first while it has no
    default run at all (a first launch, a new day): the current position shows before the backlog is done (its model
-   prices then carry spreads from the runs that existed when it ran). A date that failed is not retried until its
-   inputs change. The step's detail also lists the latest positions date's bonds without an instrument: counts by
+   prices then carry spreads from the runs that existed when it ran). While the inbox is still draining (the scan
+   left files waiting for a calendar and the sync left hub dates for the next cycle), only the latest positions
+   date runs: the older dates run once the backlog is in, not once per cycle as each book's revision lands (R22).
+   A date that failed is not retried until its inputs change. The step's detail also lists the latest positions date's bonds without an instrument: counts by
    reason and the ISINs (``inbox.scan.unmapped``, D6).
 4. **intraday** (with the hub and the ``intraday`` setting, R11): on a business day from 10:00 MSK, today's book
    (the latest position sets, carried forward: ``store.positions_for``) valued on the hub's newest ``intraday``
@@ -38,11 +40,19 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    preliminary bundles of dates older than ``KEEP_CUT_DAYS`` leave the cache (``cache.prune``) unless a shown run
    reads them. The next morning the date's ``eod_final`` EOD run (step 3) supersedes both.
 5. **history** (with the hub and ``history_days`` > 0): market history older than the cache for the bond charts,
-   ``HISTORY_PER_CYCLE`` of the ``history_days`` latest hub dates per cycle, newest first, into the store's tables
-   without caching the bundles; only after a sync that reached the hub and left no date for the next cycle, and
-   after the EOD runs, so it never delays them. The lookback above does not apply: these dates feed no run.
-6. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
-   ``progress`` ({"step": "sync"|"scan"|"eod"|"intraday"|"history", "done": int, "total": int|null, "detail": str})
+   from the hub's history API when it serves the token (``desk.marketdata.hubhistory``: bonds from
+   ``history_bonds_from``, KBD, curves, fixings and FX from ``history_rates_from``; ``hubhistory.BUDGET_S`` seconds a
+   cycle, resumable), else ``HISTORY_PER_CYCLE`` of the ``history_days`` latest hub dates per cycle, newest first,
+   into the store's tables without caching the bundles (the step's detail says why the API was not used); only
+   after a sync that reached the hub and left no date for the next cycle, and after the EOD runs, so it never delays
+   them. The lookback above does not apply: these dates feed no run.
+6. **backfill** (setting ``backfill``, R23; ``desk.backfill``): the default runs of the past business dates with
+   positions from ``backfill_from`` on: once per start date and adapter the inbox reads the older reports; then the
+   dates whose run is missing or stale run, oldest first, for at most ``backfill_budget_s`` seconds a cycle, up to the
+   day before the eod step's first date (those dates are the eod step's). Last in the cycle, after the EOD, intraday and history steps, so the latest date never waits for it; not while the inbox
+   backlog drains (R22). The hub's date list is read once per ``RECHECK_S``.
+7. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
+   ``progress`` ({"step": "sync"|"scan"|"eod"|"intraday"|"history"|"backfill", "done": int, "total": int|null, "detail": str})
    follow it live: hub dates fetched of those to fetch, report files done of those offered, EOD dates run of those
    to run, history dates loaded of those to load. ``latest_run`` is the newest run shown (``store.CURRENT_RUNS``:
    today's intraday run until there is an EOD run of a later date), with its slice (``run_type``, ``cut_type``,
@@ -76,7 +86,7 @@ import psycopg
 
 from . import logic_version, store
 from .inbox.timesem import MSK
-from .marketdata import cache, history
+from .marketdata import cache, history, hubhistory, static_facts
 from .marketdata.adapter import StaticView
 from .marketdata.bundle import SnapshotDir, SnapshotError, previous_market
 from .marketdata.hub import HubClient, HubError
@@ -102,6 +112,7 @@ PRELIM_FROM = dtime(19, 45)   # MSK: the hub's eod_preliminary cut of the day
 POLL_SLOT_S = 1800            # the hub is asked for a newer cut of today at most once per half-hour slot
 POLL_LAG_S = 300              # slots start 5 min after the cut times (:05, :35): the hub publishes after its cut
 KEEP_CUT_DAYS = 3             # intraday and preliminary bundles of older dates leave the cache
+STATIC_POLL_S = 300.0         # the hub's newest static is asked for at most this often (R25: reference facts, ratings)
 
 LATEST_RUN = ("SELECT run_id, business_date, completed_at, run_type, cut_type, cut_ts,"
               " lineage->'pnl_basis'->>'label' FROM run"
@@ -196,6 +207,9 @@ def progress_text(p: dict[str, Any]) -> str:
         return f"Внутри дня: {detail}" if detail else "Внутри дня"
     if p["step"] == "history":
         return f"История котировок: {done} из {total}" if total is not None else "История котировок: список дат"
+    if p["step"] == "backfill":
+        day = f" {detail[8:10]}.{detail[5:7]}.{detail[:4]}" if len(detail) == 10 else (f" {detail}" if detail else "")
+        return f"История прогонов{day}: {done} из {total}" if total is not None else f"История прогонов{day}"
     return f"{p['step']}: {done}" + (f" из {total}" if total is not None else "")
 
 
@@ -222,7 +236,12 @@ class Autopilot:
         self._missing: dict[str, float] = {}   # hub date -> monotonic time the hub had no snapshot for it
         self._hub_failed = False               # this cycle's hub sync failed: no history step
         self._sync_later = 0                   # hub dates the sync left for the next cycle: no history step
+        self._inbox_waiting = 0                # files the last scan left waiting for a calendar (R22)
         self._history_dates: tuple[float, int, list[tuple[str, str]]] | None = None
+        self._static_polled = float("-inf")    # monotonic time the hub's newest static was last asked for (R25)
+        self._backfill_rows: tuple[float, str, list[tuple[str, str]]] | None = None  # (listed at, from, hub rows)
+        self._contexts: Any = None  # the backfill's prepared dates, kept between its runs (cli.ContextCache)
+        self._eod_from: str | None = None  # the oldest date the eod step keeps current, this cycle
         # (listed at, depth, [(hub date, its current snapshot id)] newest first)
         self._poll_slot: tuple | None = None   # (date, cut, slot) the hub was last asked for a cut of today in
         self._polled: dict[tuple, dict | None] = {}  # (date, cut) -> the hub's newest row of that cut, when asked
@@ -334,6 +353,8 @@ class Autopilot:
                     steps.append(self._guard("intraday", lambda: self._intraday(settings, con, url, ran)))
                 if hub and settings.hub_url and int(getattr(settings, "history_days", 0) or 0) > 0:
                     steps.append(self._guard("history", lambda: self._history(settings, con)))
+                if getattr(settings, "backfill", True):
+                    steps.append(self._guard("backfill", lambda: self._backfill(settings, con, url, hub, ran)))
                 try:
                     latest = latest_run(con)
                 except psycopg.Error:
@@ -557,23 +578,61 @@ class Autopilot:
         if todo:
             self._progress("sync", len(todo), len(todo), "")
         latest = hub_dates[0] if hub_dates else "none"
+        static = self._newest_static(settings, con, client)
         return (f"hub {client.host}: latest {latest}; " + (f"pulled {', '.join(pulled)}" if pulled else "up to date")
+                + (f"; {static}" if static else "")
                 + (f"; no snapshot for {', '.join(missing)}" if missing else "")
                 + f" ({len(wanted)} dates wanted, {len(todo)} asked"
                 + (f", {later} next cycle" if later else "") + ")")
 
+    def _newest_static(self, settings: Settings, con: psycopg.Connection | None, client: HubClient) -> str:
+        """The hub's newest static snapshot into the cache (``cache.newest_static``, at most every
+        ``STATIC_POLL_S``) and its facts into the read model (``static_facts.load_static``: the pages' issuer groups,
+        sectors and ratings, R25); the step detail, empty when nothing changed."""
+        now = time.monotonic()
+        if now - self._static_polled < STATIC_POLL_S:
+            return ""
+        self._static_polled = now
+        try:
+            got = cache.newest_static(client, Path(settings.snapshot_cache))
+        except Exception as e:  # noqa: BLE001 - the dates are synced; the reference facts wait for the next poll
+            return f"newest static not fetched: {type(e).__name__}: {e}"
+        if got is None or not got.static_id:
+            return ""
+        out = f"static {got.static_id[:12]} of {got.business_date} pulled" if got.downloaded else ""
+        if con is not None:
+            try:
+                res = static_facts.load_static(con, SnapshotDir(Path(settings.snapshot_cache)).get(got.static_id))
+                if res == "loaded":
+                    out = (out + "; " if out else "") + f"static facts {got.static_id[:12]} loaded"
+            except (psycopg.Error, SnapshotError, OSError) as e:
+                out = (out + "; " if out else "") + f"static facts not loaded: {type(e).__name__}: {e}"
+        return out
+
     def _history(self, settings: Settings, con: psycopg.Connection) -> tuple[str, str]:
-        """Market history for the bond charts beyond the cache: the ``history_days`` latest hub dates, newest first,
-        ``HISTORY_PER_CYCLE`` a cycle, straight into the store's tables (``history.fetch_hub``; not cached, see
-        ``desk.marketdata.history``), and again a date whose loaded snapshot the hub has since superseded by a
-        correction (``history.superseded_dates``). Only after a sync that reached the hub and left nothing for the next cycle: the
-        regular dates come first. The hub's date list is read again once per ``RECHECK_S``."""
+        """Market history: from the hub's history API when it serves this token (``desk.marketdata.hubhistory``, R24:
+        ``hubhistory.BUDGET_S`` a cycle, resumable), else from the snapshots (``_history_bundles``), with the reason.
+        Only after a sync that reached the hub and left nothing for the next cycle: the regular dates come first."""
         if self._hub_failed:
             return "skipped", "the hub sync failed this cycle"
         if self._sync_later:
             return "skipped", f"after the sync ({self._sync_later} dates next cycle)"
-        depth = min(int(settings.history_days), MAX_HISTORY_DAYS)
         client = HubClient(settings)
+        rep = hubhistory.sync(con, client, today=self._today(), bonds_from=settings.history_bonds_from,
+                              rates_from=settings.history_rates_from, held=hubhistory.held_secids(con),
+                              progress=lambda i, n, d: self._progress("history", i, n, d))
+        if rep.available:
+            return ("error" if rep.errors else "ok"), rep.text()
+        status, detail = self._history_bundles(settings, con, client)
+        return status, f"{detail}; {rep.text()}"
+
+    def _history_bundles(self, settings: Settings, con: psycopg.Connection, client: HubClient) -> tuple[str, str]:
+        """Market history for the bond charts beyond the cache when the hub has no history API: the ``history_days``
+        latest hub dates, newest first, ``HISTORY_PER_CYCLE`` a cycle, straight into the store's tables
+        (``history.fetch_hub``; not cached, see ``desk.marketdata.history``), and again a date whose loaded snapshot
+        the hub has since superseded by a correction (``history.superseded_dates``). The hub's date list is read again
+        once per ``RECHECK_S``."""
+        depth = min(int(settings.history_days), MAX_HISTORY_DAYS)
         now = time.monotonic()
         if (self._history_dates is None or self._history_dates[1] != depth
                 or now - self._history_dates[0] >= RECHECK_S):
@@ -617,12 +676,63 @@ class Autopilot:
             parts.append(f"{len(due) - len(todo)} dates in the next cycles")
         return "ok", "; ".join(parts) + f" ({span})"
 
+    def _backfill(self, settings: Settings, con: psycopg.Connection, url: str | None, hub: bool,
+                  ran: list[str]) -> tuple[str, str]:
+        """The backfill step (module doc, ``desk.backfill``)."""
+        from . import backfill
+        from .cli import ContextCache
+
+        if self._inbox_waiting and self._sync_later:
+            return "skipped", "after the inbox backlog"
+        if not settings.inbox_dirs and con.execute("SELECT NOT EXISTS (SELECT 1 FROM position_set)").fetchone()[0]:
+            return "skipped", "no positions in the store"
+        d_from, today = backfill.start_date(settings), self._today()
+        if self._eod_from:  # the eod step's dates are its own: a date it failed is not tried twice a cycle
+            today = min(today, date.fromisoformat(self._eod_from) - timedelta(days=1))
+        parts = []
+        line = backfill.inbox(con, settings, d_from,
+                              progress=lambda done, total, detail: self._progress("backfill", done, total, "отчёты"))
+        if line:
+            parts.append(line)
+        client, rows = None, None
+        if hub and settings.hub_url and not self._hub_failed:
+            client = HubClient(settings)
+            now = time.monotonic()
+            if (self._backfill_rows is None or self._backfill_rows[1] != d_from.isoformat()
+                    or now - self._backfill_rows[0] >= RECHECK_S):
+                self._progress("backfill", 0, None, "список дат хаба")
+                self._backfill_rows = (now, d_from.isoformat(), backfill.hub_rows(client, d_from))
+            rows = self._backfill_rows[2]
+        p = backfill.plan(con, settings, d_from, today, rows)
+        s = p.summary()
+        span = (f"{s['from']}..{s['to']}: {s['done']} of {s['dates'] - s['no_positions'] - s['no_market']} dates with "
+                f"positions have their run" + (f", {s['failed']} failed before" if s["failed"] else ""))
+        if not p.todo:
+            return "ok", "; ".join(parts + [f"up to date ({span})"])
+        if self._contexts is None:
+            self._contexts = ContextCache()
+        res = backfill.run(settings, p, store_url=url, client=client, budget_s=float(settings.backfill_budget_s),
+                           out=self._eod_line, contexts=self._contexts,
+                           progress=lambda i, n, d: self._progress("backfill", i, n, d))
+        if res["done"]:
+            ran.append(f"история {len(res['done'])} дат")
+            parts.append(f"ran {len(res['done'])} dates ({res['done'][0]}..{res['done'][-1]}) in {res['seconds']} s")
+        parts += [f"{d} failed ({e})" for d, e in res["failed"][:5]]
+        if res["skipped"]:
+            parts.append(f"{len(res['skipped'])} dates not cached and no hub")
+        if res["left"]:
+            parts.append(f"{res['left']} dates in the next cycles")
+        parts.append(span)
+        return ("error" if res["failed"] else "ok"), "; ".join(parts)
+
     def _scan(self, settings: Settings, con: psycopg.Connection) -> tuple[str, str]:
         from .inbox import scan
 
+        self._inbox_waiting = 0
         if not settings.inbox_dirs:
             return "skipped", "no inbox folders (inbox_dirs)"
         res = scan.scan(con, settings, progress=lambda done, total, detail: self._progress("scan", done, total, detail))
+        self._inbox_waiting = res.files.get("waiting_calendar", 0)
         detail = "; ".join(res.text().splitlines())
         if res.busy:
             return "skipped", detail
@@ -631,6 +741,8 @@ class Autopilot:
     def _eod(self, settings: Settings, con: psycopg.Connection, url: str | None, extra: list[str],
              ran: list[str]) -> tuple[str, str]:
         from .cli import eod_run
+
+        self._eod_from = None
 
         today = self._today()
         pdates = store.position_dates(con, today - timedelta(days=WINDOW_DAYS))
@@ -643,6 +755,7 @@ class Autopilot:
         cached = sd.market_dates()
         dates = [d for d in cached if max(start, first) <= d <= today.isoformat()][-MAX_EOD_DATES:]
         dates = sorted(set(dates) | {d for d in (latest_valid, *extra) if d in cached and d >= first})
+        self._eod_from = max(start, first)  # the backfill step leaves this date on to this step
         if not dates:
             return "skipped", f"no cached eod_final snapshot from {max(start, first)} on"
         runs = store.default_runs(con, date.fromisoformat(dates[0]))
@@ -669,6 +782,12 @@ class Autopilot:
                 continue
             todo.append((d, why, sig))
         todo.sort(key=lambda t: not (t[0] == latest_valid and t[1] == "no default run"))  # stable: then oldest first
+        if self._inbox_waiting and self._sync_later:
+            held = [t for t in todo if t[0] != latest_valid and t[0] not in extra]
+            if held:  # the backlog drains over the next cycles: these dates run once, after it (R22)
+                todo = [t for t in todo if t not in held]
+                notes.append(f"{len(held)} dates wait for the inbox backlog ({self._inbox_waiting} files wait for "
+                             f"a calendar, {self._sync_later} hub dates next cycle)")
         for i, (d, why, sig) in enumerate(todo):
             self._progress("eod", i + 1, len(todo), d)
             self._emit(f"eod {d}: {why}")

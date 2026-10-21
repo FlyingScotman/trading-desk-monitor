@@ -27,18 +27,30 @@ schedule moves into its spread and residual instead of an ``other``.
 
 Horizons: core's explain takes no exercise assumption and never assumes a call
 (``Instrument.horizon``), so a bond the backend values to a call is given to core with that call
-as a confirmed put: the same flows, priced to the same date.
+as a put: the same flows, priced to the same date. Puts go with their exercise windows and core's ``open_put``
+horizon, as in the valuation.
+
+Floaters (core 0.33, BACKLOG #78): core explains them on the D-1 coupon model the valuation used
+(``BondValuation.floater``), with the fixings known on each date (``fixings`` / ``end_fixings``) and, for a key-rate
+floater, the key-rate projection curve of each date: at the D market its coupons are re-projected, so the fixings
+realised over the day against the forwards carry assumed are in ``rates``, as in the flash.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from rub_fixed_income import CoreRejection, explain_horizon_pnl
+from rub_fixed_income import (
+    CoreRejection,
+    DiscountCurve,
+    FloatingCouponLeg,
+    MarketSnapshot,
+    explain_horizon_pnl,
+)
 
 from ..marketdata.adapter import core_instrument
 from ..orchestrator import EodContext, Outcome
-from ..valuation.bonds import SPREAD_CONVENTION, Rejected, fixed_schedule
+from ..valuation.bonds import SPREAD_CONVENTION, Rejected, discount_curve, fixed_schedule
 
 COMPONENTS = ("carry", "rolldown", "rates", "spread", "other")
 
@@ -75,8 +87,8 @@ class Row:
 def compare(prev_ctx: EodContext, prev_outcomes: list[Outcome], ctx: EodContext,
             outcomes: list[Outcome]) -> list[Row]:
     """One row per position valued by core (exact or assumed) on both dates; ``outcomes`` must carry ``pnl``
-    (``attach_pnl``). Core is given the D-1 schedule the valuation used (coupon gaps filled); a floater, whose
-    projected coupons need the market, is left out."""
+    (``attach_pnl``). Core is given the D-1 schedule the valuation used (coupon gaps filled); a floater its D-1
+    coupon model with the fixings and projection curves of both dates."""
     rows = []
     for p, o in zip(prev_outcomes, outcomes, strict=True):
         pv, v = p.valuation, o.valuation
@@ -87,8 +99,6 @@ def compare(prev_ctx: EodContext, prev_outcomes: list[Outcome], ctx: EodContext,
             s = fixed_schedule(p.terms, pv.valuation_date)
         except Rejected:
             continue
-        if s.floater is not None:
-            continue
         q, f = pv.quantity, o.pnl
         recv = q * sum(cf.amount for cf in pv.cashflows if pv.valuation_date < cf.payment_date <= v.valuation_date)
         total = q * (v.dirty_rub - pv.dirty_rub) + recv
@@ -97,13 +107,21 @@ def compare(prev_ctx: EodContext, prev_outcomes: list[Outcome], ctx: EodContext,
         # dev books; core rejects a call without reset terms); test it once a priced call bond exists
         offer = s.offer if pv.horizon_kind != "maturity" else None
         try:
-            inst = core_instrument(p.terms, pv.valuation_date, pv.horizon_date,
-                                   None if offer is None else (offer[0], offer[1], "offer"), coupons=s.coupons)
+            if s.floater is not None:
+                if pv.floater is None:
+                    continue
+                inst, extra = pv.floater.instrument, _floater_inputs(pv.floater.instrument, prev_ctx.core_market,
+                                                                     ctx.core_market, pv.floater.guard_bp)
+                offer = pv.floater.offer  # a put the floater is valued to (None: maturity, or a call redeemed)
+            else:
+                inst, extra = core_instrument(p.terms, pv.valuation_date, pv.horizon_date,
+                                              None if offer is None else (offer[0], offer[1], "offer"),
+                                              coupons=s.coupons), {}
             x = explain_horizon_pnl(inst, prev_ctx.discount[1], ctx.discount[1], prev_ctx.calendar,
                                     start_dirty_price_rub=pv.dirty_rub, end_dirty_price_rub=v.dirty_rub,
                                     spread_convention=SPREAD_CONVENTION,
-                                    redemption_horizon="maturity" if offer is None else "confirmed_put",
-                                    curve_cache=ctx.cache)
+                                    redemption_horizon="maturity" if offer is None else "open_put",
+                                    curve_cache=ctx.cache, **extra)
         except (CoreRejection, ValueError) as e:
             rows.append(Row(o.secid, q, recv, total, flash, None, reason=f"core: {e}"))
             continue
@@ -113,3 +131,20 @@ def compare(prev_ctx: EodContext, prev_outcomes: list[Outcome], ctx: EodContext,
         rows.append(Row(o.secid, q, recv, total, flash, core, z,
                         reason="" if f else f"flash: {o.no_pnl.reason if o.no_pnl else 'no pnl'}"))
     return rows
+
+
+
+def _floater_inputs(inst, prev: MarketSnapshot, cur: MarketSnapshot, guard_bp: float | None) -> dict:
+    """``explain_horizon_pnl``'s floater arguments: the fixings known on each date and, when the leg projects off
+    another curve than the discount curve (a key-rate floater), that curve on each date."""
+    leg = inst.coupon_leg
+    assert isinstance(leg, FloatingCouponLeg)
+    out = {"fixings": prev.point_in_time_fixing(leg.fixing_id), "end_fixings": cur.point_in_time_fixing(leg.fixing_id),
+           "strike_guard_bp": guard_bp}
+    pid = leg.projection_curve_id
+    if pid is not None and pid != discount_curve(prev)[0]:
+        a, b = ({c.curve_id: c.curve for c in m.curves}.get(pid) for m in (prev, cur))
+        if not isinstance(a, DiscountCurve) or not isinstance(b, DiscountCurve):
+            raise ValueError(f"projection curve {pid} not built on both dates")
+        out.update(projection_curve=a, end_projection_curve=b)
+    return out

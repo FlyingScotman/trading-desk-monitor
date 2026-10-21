@@ -183,7 +183,11 @@ class FlashPnl:
     ``rates``."""
     price_basis: tuple[str, str]
     fx_gross: float = 0.0
-    """The FX revaluation of a foreign-face bond (``pnl.direct.split_fx``), taken out of ``other``; 0 for a RUB bond."""
+    """The FX revaluation of a foreign-face bond (``pnl.direct.split_fx``) at the market rates (MOEX 19:00,
+    ``fallback.FX_MARKET``), taken out of ``other``; 0 for a RUB bond."""
+    fx_gross_cbr: float | None = None
+    """The same FX revaluation at the CBR rates in force (the official basis, DATA_CONTRACT §0.6); None for a RUB bond
+    or without a CBR rate on either date."""
 
     @property
     def explained(self) -> float:
@@ -192,7 +196,8 @@ class FlashPnl:
     def as_tdm(self) -> dict[str, float]:
         """The ``pnl`` dict of a ``tdm`` position (writer PNL_COLS)."""
         return {"carry": self.carry, "rolldown": self.rolldown, "rates": self.rates, "spread": self.spread,
-                "convexity": 0.0, "other": self.other, "fx_gross": self.fx_gross, "fx_funding": 0.0, "new_trades": 0.0}
+                "convexity": 0.0, "other": self.other, "fx_gross": self.fx_gross, "fx_funding": 0.0, "new_trades": 0.0,
+                **({"fx_gross_cbr": self.fx_gross_cbr} if self.fx_gross_cbr is not None else {})}
 
     def extra(self) -> dict[str, Any]:
         return {

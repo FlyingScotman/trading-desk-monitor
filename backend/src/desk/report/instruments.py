@@ -35,8 +35,9 @@ from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
 
+from ..marketdata import ratings, reference
 from ..marketdata.adapter import BondTerms, MarketView, StaticView
-from ..marketdata.bundle import Snapshot, SnapshotDir, SnapshotError, read_bundle
+from ..marketdata.bundle import Snapshot, SnapshotDir, SnapshotError, _utc, read_bundle
 
 # What the monitor shows (publish.tdm_run): kept in step by test_instruments_export.
 MON_ASSET_CLASS = {"ofz_pd": "ОФЗ-ПД", "ofz_ad": "ОФЗ-АД", "ofz_pk": "ОФЗ-ПК", "ofz_in": "ОФЗ-ИН",
@@ -60,9 +61,16 @@ COLUMNS: tuple[tuple[str, str], ...] = (
     ("issuer_country", "Страна эмитента"),
     ("issuer_is_sovereign", "Суверенный эмитент (Минфин РФ)"),
     ("mon_issuer", "Эмитент в мониторе: краткое, иначе полное наименование без ОПФ и кавычек (D2)"),
-    ("mon_issuer_group", "Группа эмитента в мониторе (пока в хабе нет групп, HS4: = эмитент в мониторе)"),
-    ("sector", "Отрасль (issuers.sector хаба)"),
-    ("rating", "Рейтинг (в контракте хаба поля нет)"),
+    ("mon_issuer_group", "Группа эмитента в мониторе (issuers.group_name хаба, HS4; без группы = эмитент в мониторе)"),
+    ("sector", "Отрасль (issuers.sector хаба; ОФЗ, субфедеральные и муниципальные — по классу бумаги, R25)"),
+    ("rating", ("Рейтинг деска: лучший из АКРА / Эксперт РА / НКР / НРА по национальной шкале (выпуск, иначе "
+               "эмитент); б/р — рейтинга нет, пусто — в статике нет рейтингов (R25)")),
+    ("rating_agency", "Агентство рейтинга деска"),
+    ("rating_verbatim", "Рейтинг как его пишет агентство (AA-(RU), ruAA-, AA-.ru, AA-|ru|)"),
+    ("rating_date", "Дата рейтинга"),
+    ("rating_basis", "Чей рейтинг: issue — выпуска, issuer — эмитента, issuer_bonds — уровень эмитента по выпускам"),
+    ("rating_bucket", "Корзина: AAA / AA / A / BBB / ≤BB / б/р"),
+    ("ratings_all", "Все рейтинги агентств: агентство рейтинг дата"),
     ("bond_class", "Класс бумаги хаба (bond_class)"),
     ("mon_asset_class", "Класс актива в мониторе"),
     ("mon_segment", "Сегмент в мониторе"),
@@ -160,7 +168,7 @@ FLAGS: dict[str, str] = {
 }
 
 FILL_FIELDS = ("isin", "regnumber", "name", "short_name", "issuer_name", "issuer_short_name", "issuer_inn",
-               "issuer_ogrn", "issuer_country", "sector", "rating", "coupon_frequency", "current_coupon_rate_pct",
+               "issuer_ogrn", "issuer_country", "sector", "rating", "rating_agency", "coupon_frequency", "current_coupon_rate_pct",
                "mon_coupon_pct", "floater_benchmark", "floater_spread_bp", "floater_lag_days", "face_value",
                "maturity_date", "issue_date", "listing_level", "issue_size", "day_count")
 
@@ -211,11 +219,12 @@ def find_snapshots(snapshots: Path, on: str | None = None, static_file: Path | N
             market = None
         if market is not None and market.static_snapshot_id and market.static_snapshot_id in manifests:
             return sd.get(market.static_snapshot_id), market
-    statics = sorted((m["business_date"], sid) for sid, m in manifests.items()
+    statics = sorted((m["business_date"], _utc(m.get("known_at")), _utc(m.get("cut_ts")), sid)
+                     for sid, m in manifests.items()
                      if m["kind"] == "static" and (on is None or m["business_date"] <= on))
     if not statics:
         raise SnapshotError(f"no static snapshot in {snapshots}" + (f" dated on or before {on}" if on else ""))
-    static = sd.get(statics[-1][1])
+    static = sd.get(statics[-1][-1])  # the newest: the latest date, then the latest known_at (R25)
     if market is None:
         try:
             market = sd.market(static.business_date)
@@ -258,8 +267,10 @@ def _static_check(t: BondTerms, as_of: date) -> tuple[str, str, str, float | Non
 
 def instrument_row(raw: dict[str, Any], t: BondTerms, view: StaticView, as_of: date,
                    shared_isins: dict[str, int], issuers: dict[int, dict[str, Any]]) -> dict[str, Any]:
-    iss = view.issuer_of(t)
+    ref = reference.of(view.snapshot)
+    iss = ref.issuer(t.issuer_id) or view.issuer_of(t)
     iraw = issuers.get(t.issuer_id, {}) if t.issuer_id is not None else {}
+    rt = ref.ratings.bond(t.secid, t.issuer_id)
     f = t.floater_formula or {}
     periods = _periods(t)
     future = [c for c, _ in periods if c.pay_date > as_of]
@@ -285,8 +296,13 @@ def instrument_row(raw: dict[str, Any], t: BondTerms, view: StaticView, as_of: d
         "issuer_inn": iss.inn if iss else None,
         "issuer_ogrn": iraw.get("ogrn"), "issuer_country": iraw.get("country"),
         "issuer_is_sovereign": iss.is_sovereign if iss else None,
-        "mon_issuer": mon_issuer, "mon_issuer_group": mon_issuer,
-        "sector": iss.sector if iss else None, "rating": None,
+        "mon_issuer": mon_issuer, "mon_issuer_group": (iss.group_name if iss else None) or mon_issuer,
+        "sector": iss.sector if iss else None,
+        "rating": rt["grade"] if rt else (ratings.NOT_RATED if ref.ratings.has_data else None),
+        "rating_agency": rt and rt["agency"], "rating_verbatim": rt and rt["rating"], "rating_date": rt and rt["date"],
+        "rating_basis": rt and rt["basis"], "rating_bucket": ratings.bucket(rt["grade"] if rt else None)
+        if ref.ratings.has_data else None,
+        "ratings_all": "; ".join(f"{a} {r} {d or ''}".strip() for a, r, _, d, _ in rt["agencies"]) if rt else None,
         "bond_class": t.bond_class, "mon_asset_class": MON_ASSET_CLASS.get(t.bond_class, t.bond_class),
         "mon_segment": MON_SEGMENT.get(t.bond_class, "Корп"),
         "sec_type": raw.get("sec_type"), "bond_type": raw.get("bond_type"), "bond_subtype": raw.get("bond_subtype"),

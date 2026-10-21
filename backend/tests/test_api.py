@@ -33,7 +33,8 @@ EXCLUDED = {"runId": "the two stores number their runs independently",
             "publishedAt": "publication time of each store's run",
             **dict.fromkeys(("cutType", "cutTs", "slice", "prevCutType", "pnlBasis"),
                             "the run's market slice (R11): the desk store's only")}
-R10_RUN = {"pnlAvailable", "pnlReason", "pnlReasonText", "pnlCoverage", "riskNotes"}  # riskNotes: R14
+R10_RUN = {"pnlAvailable", "pnlReason", "pnlReasonText", "pnlCoverage", "riskNotes",  # riskNotes: R14
+           "FX_SOURCE"}  # R26: the market rate's source (MOEX 19:00 ...)
 """window.DESK keys compat adds (R10: a missing PnL is said, not shown as 0); tdm's assembler has none."""
 R10_PNL = {"available", "reason", "reasonText", "reasonDetail", "method", "methodText", "flag", "reported"}
 """Keys of a position's ``pnl`` compat adds."""

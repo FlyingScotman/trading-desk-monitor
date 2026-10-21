@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>C07 · Карта портфеля</title>
+<link rel="stylesheet" href="lib/kit.css">
+<style>
+.map-grid { display: grid; grid-template-columns: minmax(0, 1.75fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+@media (max-width: 1150px) { .map-grid { grid-template-columns: 1fr; } }
+.side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.ctl { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.ctl .lbl { color: var(--fg-2); font-size: 12px; }
+#tree { height: 640px; }
+#sun { height: 360px; }
+#bub { height: 340px; }
+.legend { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--fg-2); }
+.legend .grad { width: 180px; height: 10px; border-radius: 3px; border: 1px solid var(--line-2); }
+.crumb { font-size: 12px; color: var(--fg-2); }
+.crumb b { color: var(--fg); }
+@media (max-width: 720px) { #tree { height: 460px; } }
+</style>
+</head>
+<body>
+<div class="k-page">
+  <div class="k-panel">
+    <div class="hd"><h3>Настройка карты</h3><span class="sp"></span><span class="k-note">щелчок — приблизить узел, щелчок по бумаге — карточка</span></div>
+    <div class="bd ctl">
+      <span class="lbl">группировать:</span><span id="gGroup"></span>
+      <span class="lbl">размер:</span><span id="gSize"></span>
+      <span class="lbl">цвет:</span><span id="gColor"></span>
+      <span class="legend" id="legend"></span>
+    </div>
+  </div>
+  <div class="map-grid">
+    <div class="side">
+      <div class="k-panel">
+        <div class="hd"><h3>Портфель</h3><span class="sp"></span><span class="crumb" id="crumb"></span></div>
+        <div class="bd flush"><div id="tree"></div></div>
+      </div>
+      <div class="k-panel">
+        <div class="hd"><h3>Состав узла</h3><span class="sp"></span><span class="crumb" id="crumb2"></span></div>
+        <div class="bd flush" id="members"></div>
+      </div>
+    </div>
+    <div class="side">
+      <div class="k-panel">
+        <div class="hd"><h3>Риск: кривая → тип → эмитент</h3><span class="sp"></span><span class="k-note">|тыс ₽/бп|, щелчок — вклад</span></div>
+        <div class="bd flush"><div id="sun"></div></div>
+      </div>
+      <div class="k-panel">
+        <div class="hd"><h3>Эмитенты: срок × спред</h3><span class="sp"></span><span id="bubCcy"></span></div>
+        <div class="bd flush"><div id="bub"></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="../echarts.min.js"></script>
+<script src="lib/boot.js"></script>
+<script src="lib/kit.js"></script>
+<script>
+(function () {
+  const M = MOCK, K = KIT, f = K.f, esc = K.esc;
+  K.top({ title: 'C07 · Карта портфеля', tag: 'сначала картинка: treemap, sunburst риска, эмитенты' });
+
+  // ---------- настройки ----------
+  const S = { group: 'ccy', size: 'mv', color: 'pnl', bubCcy: 'RUB' };
+  try { Object.assign(S, JSON.parse(localStorage.getItem('c07-state') || '{}')); } catch (e) { }
+  const save = () => { try { localStorage.setItem('c07-state', JSON.stringify(S)); } catch (e) { } };
+
+  const GROUPS = {
+    ccy: { t: 'валюта → тип → эмитент', lv: [p => p.ccy, p => p.groupLabel + ' · ' + M.kindShort[p.kind], p => p.group === 'DER' ? 'Деривативы' : p.issuerName] },
+    book: { t: 'книга → эмитент', lv: [p => p.book + ' · ' + p.bookName, p => p.group === 'DER' ? 'Деривативы' : p.issuerName] },
+    sector: { t: 'сектор → эмитент', lv: [p => p.sector, p => p.group === 'DER' ? (p.cpty || 'Деривативы') : p.issuerName] },
+    rating: { t: 'рейтинг → эмитент', lv: [p => p.rating === '—' ? 'без рейтинга' : p.rating, p => p.group === 'DER' ? (p.cpty || 'Деривативы') : p.issuerName] },
+  };
+  const SIZES = {
+    mv: { t: 'MV', v: p => p.group === 'DER' ? 0 : Math.abs(p.mv), fmt: v => f.mn(v, 0) + ' mm ₽' },
+    dv01: { t: '|DV01|', v: p => Math.abs(p.dv01) + Math.abs(p.basis01) * 0, fmt: v => f.dv(v) + ' тыс ₽/бп' },
+    cs01: { t: '|CS01|', v: p => Math.abs(p.cs01), fmt: v => f.dv(v) + ' тыс ₽/бп' },
+    notional: { t: 'номинал', v: p => Math.abs(p.notionalRub), fmt: v => f.mn(v, 0) + ' mm ₽' },
+  };
+  // база нормировки цвета: MV для облигаций, номинал для деривативов
+  const base = p => p.group === 'DER' ? Math.abs(p.notionalRub) * 0.02 : Math.abs(p.mv);
+  const COLORS = {
+    pnl: { t: 'PnL дня', div: true, unit: 'б.п. к MV', agg: L => { const b = M.sum(L, base); return b ? M.sum(L, p => p.pnl.total) / b * 1e4 : 0; }, fmt: v => f.s(v, 1) + ' б.п.', abs: L => f.mns(M.sum(L, p => p.pnl.total), 2) + ' mm ₽' },
+    spr: { t: 'Δ спреда', div: true, inv: true, unit: 'б.п. (рост — красный)', agg: L => wavg(L.filter(p => p.group === 'CORP' || p.group === 'SUB'), p => p.spreadChgBp), fmt: v => f.s(v, 1) + ' б.п.' },
+    ytm: { t: 'доходность', div: false, unit: '%', agg: L => wavg(L.filter(p => p.group !== 'DER' && p.kind !== 'IN'), p => p.ytm), fmt: v => f.pct(v) },
+    carry: { t: 'кэрри', div: true, unit: '% годовых к MV', agg: L => { const b = M.sum(L, base); return b ? M.sum(L, 'carryDay') * 365 / b * 100 : 0; }, fmt: v => f.s(v, 2) + '%', abs: L => f.ks(M.sum(L, 'carryDay')) + ' тыс ₽/д' },
+    tenor: { t: 'срок до события', div: false, unit: 'лет', agg: L => wavg(L, p => p.tenor), fmt: v => f.yrs(v) },
+  };
+  function wavg(L, fn) { const w = M.sum(L, base); return w ? L.reduce((s, p) => s + fn(p) * base(p), 0) / w : null; }
+
+  // ---------- цвет ----------
+  const hex = c => { c = c.replace('#', ''); return [0, 2, 4].map(i => parseInt(c.slice(i, i + 2), 16)); };
+  const mix = (a, b, t) => { const A = hex(a), B = hex(b); return '#' + A.map((x, i) => Math.round(x + (B[i] - x) * t).toString(16).padStart(2, '0')).join(''); };
+  const SEQ = ['#24406b', '#2f6fcf', '#22a3b6', '#c9a234', '#e0663f'];
+  function seqColor(t) { t = Math.max(0, Math.min(1, t)); const n = SEQ.length - 1, i = Math.min(n - 1, Math.floor(t * n)); return mix(SEQ[i], SEQ[i + 1], t * n - i); }
+  function neutral() { return K.theme() === 'light' ? '#dde3ea' : '#2a323d'; }
+  function divColor(v, max, inv) {
+    if (v == null || !max) return neutral();
+    const t = Math.min(1, Math.abs(v) / max), good = inv ? v < 0 : v > 0;
+    return mix(neutral(), good ? (K.theme() === 'light' ? '#1a8a52' : '#2e9d64') : (K.theme() === 'light' ? '#cf3b30' : '#d9534a'), Math.pow(t, 0.75));
+  }
+  let scale = { lo: 0, hi: 1, max: 1 };
+  function colorOf(v) { const C = COLORS[S.color]; if (v == null) return neutral(); return C.div ? divColor(v, scale.max, C.inv) : seqColor((v - scale.lo) / ((scale.hi - scale.lo) || 1)); }
+  function legend() {
+    const C = COLORS[S.color], el = document.getElementById('legend');
+    const g = C.div ? 'linear-gradient(90deg,' + divColor(-scale.max, scale.max, C.inv) + ',' + neutral() + ',' + divColor(scale.max, scale.max, C.inv) + ')' : 'linear-gradient(90deg,' + SEQ.join(',') + ')';
+    el.innerHTML = '<span>' + (C.div ? C.fmt(-scale.max) : C.fmt(scale.lo)) + '</span><span class="grad" style="background:' + g + '"></span><span>' + (C.div ? C.fmt(scale.max) : C.fmt(scale.hi)) + '</span><span class="mut3">' + esc(C.unit) + '</span>';
+  }
+
+  // ---------- дерево ----------
+  let tree = null, nodeById = {}, curNode = null;
+  function build() {
+    const L = K.list().filter(p => SIZES[S.size].v(p) > 0);
+    const lv = GROUPS[S.group].lv, C = COLORS[S.color];
+    nodeById = {};
+    let uid = 0;
+    function mk(name, list, depth, path) {
+      const id = 'n' + (uid++);
+      const node = { name, id, list, path };
+      nodeById[id] = node;
+      if (depth < lv.length) {
+        const g = new Map(); list.forEach(p => { const k = lv[depth](p); if (!g.has(k)) g.set(k, []); g.get(k).push(p); });
+        node.children = [...g.entries()].map(([k, sub]) => mk(k, sub, depth + 1, path.concat([k]))).sort((a, b) => b.value - a.value);
+        node.value = node.children.reduce((s, c) => s + c.value, 0);
+      } else {
+        node.children = list.map(p => { const lid = 'n' + (uid++); const leaf = { name: p.name, id: lid, pid: p.id, list: [p], path: path.concat([p.name]), value: SIZES[S.size].v(p) }; nodeById[lid] = leaf; return leaf; }).sort((a, b) => b.value - a.value);
+        node.value = node.children.reduce((s, c) => s + c.value, 0);
+      }
+      return node;
+    }
+    tree = mk('Портфель', L, 0, []);
+    // шкала цвета — по бумагам
+    const leafVals = L.map(p => C.agg([p])).filter(v => v != null && isFinite(v));
+    if (C.div) { const s = leafVals.map(Math.abs).sort((a, b) => a - b); scale.max = s[Math.floor(s.length * 0.92)] || 1; }
+    else { const s = leafVals.slice().sort((a, b) => a - b); scale.lo = s[Math.floor(s.length * 0.04)] || 0; scale.hi = s[Math.floor(s.length * 0.96)] || 1; }
+    curNode = tree;
+  }
+  function toEc(n, depth) {
+    const C = COLORS[S.color], v = C.agg(n.list);
+    const o = { name: n.name, value: n.value, id: n.id, cv: v, itemStyle: { color: colorOf(v) } };
+    if (n.children) o.children = n.children.map(c => toEc(c, depth + 1));
+    return o;
+  }
+  build();
+  const treeEl = document.getElementById('tree');
+  const tc = K.chart(treeEl, () => {
+    const C = COLORS[S.color], Z = SIZES[S.size];
+    return {
+      tooltip: {
+        formatter: pp => {
+          const n = nodeById[pp.data && pp.data.id]; if (!n) return '';
+          const p = n.pid ? M.pos[n.pid] : null;
+          return '<b>' + esc(n.path.join(' › ') || 'Портфель') + '</b><br>' + Z.t + ': <b>' + Z.fmt(n.value) + '</b> · ' + Math.round(n.value / (tree.value || 1) * 1000) / 10 + '%<br>' + C.t + ': <b>' + (pp.data.cv == null ? '—' : C.fmt(pp.data.cv)) + '</b>' + (C.abs ? ' (' + C.abs(n.list) + ')' : '') +
+            (p ? '<br><span style="opacity:.7">' + esc(p.couponFmt || '') + ' · ' + esc(p.book) + ' · DV01 ' + f.dv(p.dv01) + ' · щелчок — карточка</span>' : '<br><span style="opacity:.7">' + n.list.length + ' поз · щелчок — приблизить</span>');
+        },
+      },
+      series: [{
+        type: 'treemap', name: 'Портфель', data: tree.children.map(c => toEc(c, 1)), roam: false, nodeClick: 'zoomToNode', leafDepth: null,
+        top: 4, left: 4, right: 4, bottom: 30, squareRatio: 0.7, visibleMin: 80,
+        breadcrumb: { show: true, bottom: 4, height: 20, itemStyle: { color: K.css('--panel-2'), borderColor: K.css('--line-2'), textStyle: { color: K.css('--fg-2') } }, emphasis: { itemStyle: { color: K.css('--hover') } } },
+        upperLabel: { show: true, height: 20, color: K.css('--fg'), fontSize: 11, fontWeight: 600, formatter: pp => pp.name + '  ' + Z.fmt(pp.value).replace(/ .*/, '') },
+        label: { show: true, color: K.theme() === 'light' ? '#17202a' : '#e6edf3', fontSize: 11, overflow: 'truncate', formatter: pp => { const v = pp.data.cv; return pp.name + (v != null ? '\n' + C.fmt(v) : ''); } },
+        itemStyle: { borderColor: K.css('--bg'), borderWidth: 1, gapWidth: 1 },
+        levels: [
+          { itemStyle: { borderColor: K.css('--bg'), borderWidth: 3, gapWidth: 3 }, upperLabel: { show: true } },
+          { itemStyle: { borderColor: K.css('--line-2'), borderWidth: 2, gapWidth: 2 } },
+          { itemStyle: { borderColor: K.css('--line'), borderWidth: 1, gapWidth: 1 } },
+          { itemStyle: { borderWidth: 0, gapWidth: 1 } },
+        ],
+      }],
+    };
+  });
+  function findByPath(info) {
+    // treePathInfo: [корень серии, ..., узел]
+    let n = tree;
+    for (let i = 1; i < (info || []).length; i++) { const c = (n.children || []).find(x => x.name === info[i].name); if (!c) break; n = c; }
+    return n;
+  }
+  tc.on('click', pp => {
+    let n = null;
+    if (pp.selfType === 'breadcrumb') n = findByPath(pp.treePathInfo);
+    else n = nodeById[pp.data && pp.data.id] || findByPath(pp.treePathInfo);
+    if (!n) return;
+    if (n.pid) { K.card(n.pid); return; }
+    curNode = n; members();
+  });
+
+  // ---------- состав узла ----------
+  function members() {
+    const n = curNode || tree, path = n.path.length ? n.path.map(esc).join(' › ') : 'весь портфель';
+    document.getElementById('crumb').innerHTML = '<b>' + path + '</b> · ' + n.list.length + ' поз · ' + SIZES[S.size].t + ' ' + SIZES[S.size].fmt(n.value);
+    document.getElementById('crumb2').innerHTML = path;
+    const el = document.getElementById('members');
+    K.table(el, {
+      rows: n.list.slice().sort((a, b) => SIZES[S.size].v(b) - SIZES[S.size].v(a)), autoFilter: false, stripe: r => K.issuerColor(r.issuer), maxHeight: '360px',
+      // колонка валюты: в K.posCols.ccy fmt получает порядок валюты (val), а не код — рисуем по строке
+      columns: K.cols(['name', Object.assign({}, K.posCols.ccy, { fmt: (v, r) => K.ccyTag(r.ccy) }), 'kind', 'book', 'tenor', 'ytm', 'spread', 'mv', 'dv01', 'cs01', 'carry', 'pnl']),
+    });
+  }
+
+  // ---------- sunburst риска ----------
+  const sunEl = document.getElementById('sun');
+  let sunLists = {};
+  const sc = K.chart(sunEl, () => {
+    const L = K.list(); sunLists = {};
+    const factors = M.curves.map(c => ({ id: c.id, name: c.short, color: K.curveColors[c.id], v: p => p.dv01ByCurve[c.id] })).concat([{ id: 'CS01', name: 'CS01', color: K.curveColors.CS01, v: p => p.cs01 }]);
+    let uid = 0;
+    const data = factors.map(F => {
+      const Lf = L.filter(p => Math.abs(F.v(p)) > 1);
+      if (!Lf.length) return null;
+      const byType = new Map(); Lf.forEach(p => { const k = p.groupLabel + ' · ' + M.kindShort[p.kind]; if (!byType.has(k)) byType.set(k, []); byType.get(k).push(p); });
+      const id0 = 's' + (uid++); sunLists[id0] = { title: F.name, list: Lf, val: F.v };
+      return {
+        name: F.name, id: id0, itemStyle: { color: F.color },
+        children: [...byType.entries()].map(([k, Lt]) => {
+          const byIss = new Map(); Lt.forEach(p => { const kk = p.group === 'DER' ? (p.cpty || 'Деривативы') : p.issuerName; if (!byIss.has(kk)) byIss.set(kk, []); byIss.get(kk).push(p); });
+          const id1 = 's' + (uid++); sunLists[id1] = { title: F.name + ' · ' + k, list: Lt, val: F.v };
+          return {
+            name: k, id: id1, children: [...byIss.entries()].map(([kk, Li]) => { const id2 = 's' + (uid++); const sv = M.sum(Li, F.v); sunLists[id2] = { title: F.name + ' · ' + k + ' · ' + kk, list: Li, val: F.v }; return { name: kk, id: id2, value: Math.abs(sv) / 1e3, sv }; }),
+          };
+        }),
+      };
+    }).filter(Boolean);
+    return {
+      tooltip: { formatter: pp => { const s = sunLists[pp.data.id]; if (!s) return ''; const v = M.sum(s.list, s.val); return '<b>' + esc(s.title) + '</b><br>' + f.dv(v) + ' тыс ₽/бп · ' + s.list.length + ' поз'; } },
+      series: [{
+        type: 'sunburst', data, radius: ['12%', '92%'], nodeClick: false, sort: (a, b) => b.getValue() - a.getValue(),
+        itemStyle: { borderColor: K.css('--panel'), borderWidth: 1 },
+        label: { color: K.theme() === 'light' ? '#17202a' : '#e6edf3', fontSize: 10, minAngle: 9, overflow: 'truncate' },
+        levels: [{}, { r0: '12%', r: '38%', label: { rotate: 0, fontWeight: 600 } }, { r0: '38%', r: '64%', itemStyle: { opacity: 0.85 }, label: { rotate: 'tangential' } }, { r0: '64%', r: '92%', itemStyle: { opacity: 0.7 }, label: { position: 'outside', show: false } }],
+      }],
+    };
+  });
+  sc.on('click', pp => { const s = sunLists[pp.data && pp.data.id]; if (s) K.drill({ title: 'Риск · ' + s.title, unit: 'тыс ₽/бп', list: s.list, val: s.val }); });
+
+  // ---------- эмитенты: срок × спред ----------
+  const RCOL = { AAA: '#4c9dff', 'AA+': '#22c3d6', AA: '#3fb67a', 'AA-': '#8bc34a', 'A+': '#e3b341', A: '#ff8f3f', 'BBB+': '#f0645a' };
+  const bubEl = document.getElementById('bub');
+  let bubData = [];
+  const bc = K.chart(bubEl, () => {
+    // ОФЗ в рублях — не кредит (их спред к RUONIA — базис), на карту эмитентов не ставим
+    const L = K.list().filter(p => p.group !== 'DER' && p.zspread != null && !(p.ccy === 'RUB' && p.group === 'GOV') && (S.bubCcy === 'all' || (S.bubCcy === 'RUB' ? p.ccy === 'RUB' : p.ccy !== 'RUB')));
+    const by = new Map(); L.forEach(p => { if (!by.has(p.issuer)) by.set(p.issuer, []); by.get(p.issuer).push(p); });
+    bubData = [...by.entries()].map(([iss, Li]) => ({ iss, Li, name: M.issuer[iss].short, rating: M.issuer[iss].rating, t: wavg(Li, p => p.tenor), s: wavg(Li, p => p.zspread), mv: M.sum(Li, 'mv') }));
+    const maxMv = Math.max(1, ...bubData.map(b => b.mv));
+    const ratings = [...new Set(bubData.map(b => b.rating))].sort();
+    return {
+      grid: { left: 8, right: 24, top: 40, bottom: 8, containLabel: true },
+      legend: { top: 0, data: ratings },
+      labelLayout: { hideOverlap: true },
+      tooltip: { formatter: pp => { const b = bubData[pp.data.i]; return '<b>' + esc(b.name) + '</b> · ' + b.rating + '<br>срок ' + f.yrs(b.t) + ' · спред ' + f.bp(b.s) + ' б.п.<br>MV ' + f.mn(b.mv, 0) + ' mm ₽ · ' + b.Li.length + ' бумаг'; } },
+      xAxis: { type: 'value', name: 'срок, лет', nameLocation: 'middle', nameGap: 22, min: 0 },
+      yAxis: { type: 'log', name: 'спред, б.п. (лог)', logBase: 10, min: v => Math.max(10, Math.floor(v.min / 10) * 10) },
+      series: ratings.map(r => ({
+        name: r, type: 'scatter', itemStyle: { color: RCOL[r] || '#a0b4c8', opacity: 0.8, borderColor: K.css('--bg'), borderWidth: 1 },
+        label: { show: true, position: 'right', formatter: pp => bubData[pp.data.i].name, color: K.css('--fg-2'), fontSize: 10 },
+        data: bubData.map((b, i) => ({ b, i })).filter(x => x.b.rating === r).map(x => ({ value: [x.b.t, Math.max(10, x.b.s)], i: x.i, symbolSize: 7 + Math.sqrt(x.b.mv / maxMv) * 30 })),
+      })),
+    };
+  });
+  bc.on('click', pp => { const b = bubData[pp.data.i]; if (b) K.drill({ title: 'Эмитент ' + b.name, unit: 'mm ₽ MV', fmt: v => f.mn(v, 1), list: b.Li, val: 'mv', dim: 'pos' }); });
+
+  // ---------- управление ----------
+  function redrawTree() { build(); legend(); tc.redraw(); members(); }
+  K.seg(document.getElementById('gGroup'), Object.entries(GROUPS).map(([k, g]) => [k, g.t]), S.group, v => { S.group = v; save(); redrawTree(); });
+  K.seg(document.getElementById('gSize'), Object.entries(SIZES).map(([k, g]) => [k, g.t]), S.size, v => { S.size = v; save(); redrawTree(); });
+  K.seg(document.getElementById('gColor'), Object.entries(COLORS).map(([k, g]) => [k, g.t]), S.color, v => { S.color = v; save(); redrawTree(); });
+  K.seg(document.getElementById('bubCcy'), [['RUB', 'RUB'], ['fx', 'валютные'], ['all', 'все']], S.bubCcy, v => { S.bubCcy = v; save(); bc.redraw(); });
+  K.onFilter(() => { redrawTree(); sc.redraw(); bc.redraw(); });
+  K.on('theme', () => { legend(); });
+  K.commands([
+    { label: 'Карта: по валютам и типам', run: () => { S.group = 'ccy'; save(); location.reload(); } },
+    { label: 'Карта: по книгам', run: () => { S.group = 'book'; save(); location.reload(); } },
+    { label: 'Карта: по секторам', run: () => { S.group = 'sector'; save(); location.reload(); } },
+  ]);
+  redrawTree();
+})();
+</script>
+</body>
+</html>

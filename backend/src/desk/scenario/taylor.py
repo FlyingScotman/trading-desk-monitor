@@ -20,6 +20,7 @@ from typing import Any
 
 from rub_fixed_income import RISK_BUCKETS
 
+from ..marketdata import ratings
 from .definition import RUB_CURVES, own_spread_shock
 
 PARTS = ("rates", "spread", "fx", "convexity", "total")
@@ -54,7 +55,7 @@ def risk_payload(run: Mapping[str, Any], rows: list[Mapping[str, Any]], referenc
         positions.append({
             "position_id": r["position_id"], "book_id": r["book_id"], "secid": r["secid"], "name": f.get("name"),
             "quality": r.get("quality"), "issuer": f.get("issuer"), "sector": iss.get("sector"),
-            "rating": iss.get("rating"),
+            "rating": ratings.position_rating(f, iss),  # the bond's own desk rating, else its issuer's (R25)
             "spread_kind": "ofz" if f.get("ofz_spr01") else "credit" if f.get("cs01") else None,
             "spread_bp": f.get("spread_bp"), "pv_rub": r["pv_rub"],
             "delta": sorted([idx[k], x] for k, x in d.items()), "gamma": gamma,

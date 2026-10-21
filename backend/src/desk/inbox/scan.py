@@ -22,15 +22,25 @@ with the size and time already taken in is not hashed again. Then, per file:
   new position set unless its ``unit_hash`` equals the current revision's;
 * the file: ``accepted``, ``partially_accepted``, ``rejected`` or ``superseded`` (all its units).
 
-The lookback (``inbox_lookback_days``, ``scan`` only; ``retry`` and ``replay`` are explicit and take any date): a
-file modified before ``today - lookback`` is not even hashed (``skipped: too_old``, a stat only); a file whose
-report date (from ``match``) is older is ledgered once as ``ignored_too_old`` (terminal, not an error, no event)
-and never archived or read; a file ``waiting_calendar`` whose report date falls behind gets that status too, so it
+The lookback (``inbox_lookback_days``, ``scan`` only; ``retry`` and ``replay`` are explicit and take any date) is
+decided by the report date ``match`` gives (R22): a file whose report date is older is remembered once as
+``ignored_too_old`` (terminal, not an error, no event) and never archived or read. Only a file modified more than
+``MTIME_SLACK_DAYS`` before the lookback starts is skipped on its modification time alone (``skipped: too_old``,
+not even matched): a report is written on or after its report date, so it cannot fall inside the window; a file ``waiting_calendar`` whose report date falls behind gets that status too, so it
 stops driving hub syncs. None of them is offered again while still too old, fingerprint change or not; after the
-lookback grows they are. A backfill of older dates (S8) will take its own explicit date range.
+lookback grows they are. ``desk backfill`` (R23) scans with the lookback starting on its own start date
+(``scan(since=...)``), so the older reports come in once.
 
-Speed (a folder holds thousands of old reports; a scan with nothing new must cost a folder listing): every offered
-file is matched first, by the adapter's ``match`` alone, without hashing it. A new file that ``match`` declines
+Speed (a folder holds thousands of old reports; a scan with nothing new must cost a folder listing, R22): the
+folders are listed once with ``os.scandir`` (on Windows the listing carries the sizes and times: no request per
+file on a network share). Every offered file is matched first, by the adapter's ``match`` alone, without hashing
+it: the workers are started and warmed first (the adapter imported, the instruments index loaded, under the read
+timeout), then the batches of ``MATCH_BATCH`` files go to all of them at once, each under the match timeout. The
+files of a call that timed out or crashed are matched once more with ``MATCH_RETRY_FACTOR`` times the time,
+``MATCH_RETRY_CHUNK`` per call after a timeout and one per call after a crash (a file that kills its worker then
+takes only itself); a file still failing that way is ``match_failed`` and offered again by a
+later scan once ``TRANSIENT_RETRY_H`` hours have passed (an exception of ``match`` itself is the adapter's answer and
+waits for a new fingerprint, as before). A new file that ``match`` declines
 (``ignored``) or dates behind the lookback (``ignored_too_old``) is remembered by path, size and time in
 ``inbox_unread`` and never hashed, archived or ledgered; it is offered again only when the adapter's fingerprint
 changes (ignored) or the lookback reaches its date (too old). The rest is processed newest report date first, so
@@ -39,7 +49,9 @@ the latest positions land before the backlog. The adapter runs in ``read_workers
 the processing, which stays in order and in one thread. ``reference()`` runs only in a scan that reads a file, or
 once after the adapter's fingerprint (code or config files) changed, in parallel with the reads. Files waiting
 for a calendar are matched again only after the cache's static snapshots changed. The instruments index is
-rebuilt only when the snapshots it should cover change.
+rebuilt only when it lacks a snapshot the scan needs (a new day, a report date of an older snapshot); it keeps the
+snapshots it already holds for dates inside the lookback, so a scan rebuilds it at most once and the next scans
+not at all (``static_index`` format 2: the newest snapshot in full, the older ones as differences).
 
 Files are processed one transaction each: an interrupted scan (``stop.bat``, a crash) keeps every file done so
 far (its sighting), and the next scan goes on with the rest. ``progress(done, total, detail)`` is called as it
@@ -58,9 +70,10 @@ import json
 import logging
 import os
 import shutil
+import time
 from collections import Counter
 from collections.abc import Callable, Iterable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -72,7 +85,7 @@ from psycopg.types.json import Jsonb
 from .. import store
 from ..settings import Settings, adapter_config_dir
 from . import runner
-from .conformance import list_files
+from .conformance import list_entries
 from .loader import AdapterHandle, load_adapter
 from .spi import DATASETS_WITH_BOOK, AdapterFailure, source_datasets
 from .static_index import (
@@ -81,6 +94,7 @@ from .static_index import (
     build_index,
     business_calendar,
     covering,
+    index_refs,
     static_snapshots,
     unmapped_bonds,
 )
@@ -98,6 +112,11 @@ READ_WORKERS_ENV = "DESK_INBOX_READ_WORKERS"
 REFERENCE_MARK = "reference.done"  # in the archive folder: the fingerprint the books were last refreshed with
 READ_DONE = ("accepted", "partially_accepted", "superseded")
 MATCH_BATCH = 50
+MATCH_RETRY_CHUNK = 10    # files per call when the files of a timed-out or crashed call are matched again
+MATCH_RETRY_FACTOR = 4    # ... with this many times the match timeout (at least MATCH_RETRY_MIN_S)
+MATCH_RETRY_MIN_S = 60.0
+TRANSIENT_RETRY_H = 6     # a file match_failed by a timeout or a crash is offered again after this many hours
+MTIME_SLACK_DAYS = 31     # a file modified this much before the lookback is skipped without asking match
 EVENTS = {"stale_copy": "input.stale", "timed_out": "input.failed"}
 
 _handles: dict[tuple, AdapterHandle] = {}
@@ -155,6 +174,8 @@ class ScanResult:
     revisions: int = 0
     books_revised: int = 0
     notes: Counter = field(default_factory=Counter)     # reference() problems by code
+    match: Counter = field(default_factory=Counter)     # retried, recovered, warm_<failure>: the match step (R22)
+    timings: dict = field(default_factory=dict)         # list_s, match_s, process_s, index_builds
 
     @property
     def ok(self) -> bool:
@@ -170,6 +191,10 @@ class ScanResult:
             return "\n".join([*lines, "another scan holds the inbox lock: nothing done"])
         lines += [f"files: {c(self.files)}", f"copies: {c(self.copies)}", f"skipped: {c(self.skipped)}",
                   f"units: {c(self.units)}; new revisions {self.revisions}; books revised {self.books_revised}"]
+        if self.match:
+            lines.append(f"match: {c(self.match)}")
+        if self.timings:
+            lines.append("time: " + ", ".join(f"{k} {v:g}" for k, v in self.timings.items()))
         return "\n".join(lines + ([f"notes: {c(self.notes)}"] if self.notes else []))
 
 
@@ -194,6 +219,12 @@ def _sha256(path: str) -> str:
 def _issue(severity: str, code: str, scope: dict | None, message: str) -> dict:
     return {"severity": severity, "code": code, "src": None, "scope": scope, "message": message, "count": 1,
             "origin": "backend"}
+
+
+def _transient(hit: Any) -> bool:
+    """A match result that is a timeout or a crash of the call, not the adapter's answer about the file."""
+    e = hit.get("_error") if isinstance(hit, dict) else None
+    return isinstance(e, dict) and e.get("type") in runner.TRANSIENT
 
 
 def _key(report_date: date, report_ts: datetime | None, seq: int | None, generated_at: datetime | None,
@@ -302,18 +333,18 @@ class _Scan:
         """New stable files, not hashed yet (``run`` hashes them batch by batch). Files modified before the
         lookback are skipped on their ``stat`` alone."""
         out, limit = [], self.settings.inbox_max_file_mb * 2**20
-        oldest = datetime.combine(self.cutoff, datetime.min.time(), MSK).timestamp() if self.cutoff else None
+        oldest = datetime.combine(self.cutoff - timedelta(days=MTIME_SLACK_DAYS), datetime.min.time(),
+                                  MSK).timestamp() if self.cutoff else None
+        t0 = time.perf_counter()
         self.progress(0, None, "просмотр папок")
         seen = set(self.con.execute("SELECT path, size_bytes, mtime FROM inbox_sighting").fetchall())
         unread = {(p, n, m): (st, fp, rd) for p, n, m, st, fp, rd in self.con.execute(
             "SELECT path, size_bytes, mtime, status, adapter_fingerprint, report_date FROM inbox_unread")}
-        for n, p in enumerate(list_files([str(d) for d in self.settings.inbox_dirs]), 1):
+        entries = list_entries([str(d) for d in self.settings.inbox_dirs])
+        self.res.timings["list_s"] = round(time.perf_counter() - t0, 2)
+        for n, (p, st) in enumerate(entries, 1):
             if n % LIST_TICK == 0:
                 self.progress(n, None, "просмотр папок")
-            try:
-                st = os.stat(p)
-            except OSError:
-                continue
             if oldest is not None and st.st_mtime < oldest:
                 self.res.skipped["too_old"] += 1
                 continue
@@ -336,15 +367,20 @@ class _Scan:
         return out
 
     def known(self, want: Callable[[str, str], bool], source: str | None = None,
-              between: tuple[date, date] | None = None, *, fresh: bool = False) -> list[Offer]:
+              between: tuple[date, date] | None = None, *, fresh: bool = False,
+              statuses: Iterable[str] | None = None, extra: str = "") -> list[Offer]:
         """Files whose current status and adapter fingerprint pass ``want``: from the archive, else from the
         path they were read at when it still holds the same content. ``fresh``: only those within the lookback
-        (by report date, else by modification time)."""
+        (by report date, else by modification time). ``statuses``: only files in these (filtered by the query, so
+        a scan does not walk the whole ledger); ``extra``: one more SQL condition on the latest status ``l``."""
         out = []
         for sha, status, fp, path, arch, src, vd, rd, name, size, mtime in self.con.execute(
-                "SELECT DISTINCT ON (s.sha256) s.sha256, s.status, s.adapter_fingerprint, s.path, s.archive_path,"
-                " s.source, s.valid_date, s.report_date, f.name, f.size_bytes, f.mtime FROM inbox_file_status s"
-                " JOIN inbox_file f USING (sha256) ORDER BY s.sha256, s.status_id DESC").fetchall():
+                "SELECT l.sha256, l.status, l.adapter_fingerprint, l.path, l.archive_path, l.source, l.valid_date,"
+                " l.report_date, f.name, f.size_bytes, f.mtime FROM (SELECT DISTINCT ON (sha256) * FROM"
+                " inbox_file_status ORDER BY sha256, status_id DESC) l JOIN inbox_file f USING (sha256)"
+                " WHERE (%s::text[] IS NULL OR l.status = ANY(%s))" + (f" AND ({extra})" if extra else "")
+                + " ORDER BY l.sha256", (list(statuses) if statuses is not None else None,
+                                         list(statuses) if statuses is not None else None)).fetchall():
             if not want(status, fp) or (source is not None and src != source) \
                     or (between and not (vd and between[0] <= vd <= between[1])):
                 continue
@@ -357,6 +393,14 @@ class _Scan:
                 continue
             out.append(Offer(sha, p, name, size, mtime, False))
         return out
+
+    def transient(self) -> list[Offer]:
+        """Files ``match_failed`` by a timeout or a crash of the adapter's worker (not by an exception of ``match``)
+        more than ``TRANSIENT_RETRY_H`` hours ago, within the lookback: offered again whatever the fingerprint."""
+        cut = self.now - timedelta(hours=TRANSIENT_RETRY_H)
+        types = ", ".join(f"'{t}'" for t in runner.TRANSIENT)
+        return self.known(lambda st, fp: True, fresh=True, statuses=("match_failed",),
+                          extra=f"l.error_type IN ({types}) AND l.at < '{cut.isoformat()}'::timestamptz")
 
     def unread(self, statuses: Iterable[str]) -> list[Offer]:
         """New-file offers of the ``inbox_unread`` files in these statuses still at their path unchanged."""
@@ -418,6 +462,7 @@ class _Scan:
         dated.sort(key=lambda w: w[1]["report_date"], reverse=True)  # newest first: the latest positions land first
         work = dated + [w for w in work if not any(w is d for d in dated)]
         self._index_for(h for _, h in work)
+        t0 = time.perf_counter()
         total, done = len(work), 0
         self.progress(0, total, "")
         window = max(4, 2 * self.workers)
@@ -447,6 +492,7 @@ class _Scan:
             self._reads.clear()
             self._ex.shutdown(wait=False, cancel_futures=True)  # a read still running ends with its worker
             self._ex = None
+            self.res.timings["process_s"] = round(time.perf_counter() - t0, 2)
 
     @property
     def workers(self) -> int:
@@ -460,12 +506,46 @@ class _Scan:
         return ok, decl, check_hit(decl, hit) if ok else None
 
     def _match(self, offers: list[Offer]) -> dict[str, Any]:
+        """``match`` for every offer: the workers warmed first, then the batches on all of them at once; the
+        files of a call that timed out or crashed once more, in smaller calls with more time (R22)."""
         self._ensure_index([])
+        t0 = time.perf_counter()
+        paths = [o.path for o in offers]
+        self.progress(0, len(paths), "запуск адаптера")
+        warm = runner.call_warm(self.h, self.index, max(self.settings.adapter_read_timeout_s,
+                                                        self.settings.adapter_match_timeout_s))
+        self.res.match.update({f"warm_{k}": n for k, n in warm.items() if k != "ok"})
+        timeout = self.settings.adapter_match_timeout_s
+        hits = self._match_all(paths, MATCH_BATCH, timeout, "сопоставление файлов")
+        again = [p for p in paths if _transient(hits.get(p))]
+        if again:
+            self.res.match["retried"] += len(again)
+            log.warning("inbox: match timed out or crashed for %d files: matched again", len(again))
+            # a timeout: fewer files per call and more time; a crash: one file per call, so it takes only itself
+            slow = [p for p in again if hits[p]["_error"].get("type") == "timeout"]
+            crashed = [p for p in again if p not in set(slow)]
+            budget = max(timeout * MATCH_RETRY_FACTOR, MATCH_RETRY_MIN_S)
+            second = {**self._match_all(slow, MATCH_RETRY_CHUNK, budget, "повторное сопоставление"),
+                      **self._match_all(crashed, 1, budget, "повторное сопоставление")}
+            self.res.match.update(recovered=sum(1 for p in again if not _transient(second.get(p))))
+            self.res.match = +self.res.match  # no zero counts
+            hits.update(second)
+        self.res.timings["match_s"] = round(time.perf_counter() - t0, 2)
+        return hits
+
+    def _match_all(self, paths: list[str], chunk: int, timeout: float, label: str) -> dict[str, Any]:
+        """The calls of ``chunk`` files each, on all the workers at once."""
         hits: dict[str, Any] = {}
-        for i in range(0, len(offers), MATCH_BATCH):  # one timeout per batch, not per folder
-            self.progress(i, len(offers), "сопоставление файлов")
-            hits.update(runner.call_match(self.h, [o.path for o in offers[i:i + MATCH_BATCH]], self.index,
-                                          self.settings.adapter_match_timeout_s))
+        if not paths:
+            return hits
+        batches = [paths[i:i + chunk] for i in range(0, len(paths), chunk)]
+        done = 0
+        with ThreadPoolExecutor(min(self.workers, len(batches)) or 1, thread_name_prefix="desk-inbox-match") as ex:
+            futs = {ex.submit(runner.call_match, self.h, b, self.index, timeout, chunk): len(b) for b in batches}
+            for f in as_completed(futs):
+                hits.update(f.result())
+                done += futs[f]
+                self.progress(done, len(paths), label)
         return hits
 
     def _prefetch(self, o: Offer, hit: Any) -> None:
@@ -486,18 +566,26 @@ class _Scan:
         self._reads[o.path] = self._ex.submit(runner.call_read, self.h, o.path, hit, self.index, timeout)
 
     def _ensure_index(self, dates: list[str]) -> None:
-        """The instruments index of the newest static snapshot plus those covering ``dates``, written only when that
-        set of snapshots differs from the one it was last written for (``instruments.ids`` next to it)."""
+        """The instruments index holding the newest static snapshot and those covering ``dates``: written only when
+        the one on disk lacks one of them (its snapshots are in ``instruments.ids`` next to it). A rebuild keeps the
+        snapshots it held that cover dates inside the lookback, so the next scans find what they need (R22)."""
         refs = static_snapshots(self.cache)
-        want = sorted({r.id for r in [covering(refs, None)] + [covering(refs, d) for d in dates] if r})
+        want = {r.id for r in [covering(refs, None)] + [covering(refs, d) for d in dates] if r}
         ids = self.index.with_suffix(".ids")
+        have: set[str] = set()
         try:
-            if self.index.is_file() and json.loads(ids.read_text(encoding="utf-8")) == want:
-                return
+            if self.index.is_file():
+                have = set(json.loads(ids.read_text(encoding="utf-8")))
         except (OSError, ValueError):
-            pass
-        build_index(self.cache, self.index, dates)
-        ids.write_text(json.dumps(want), encoding="utf-8")
+            have = set()
+        if want <= have and (want or self.index.is_file()):
+            return
+        floor = covering(refs, self.cutoff) if self.cutoff else None
+        keep = {r.id for r in refs if r.id in have and (floor is None or r.business_date >= floor.business_date)}
+        chosen = index_refs(self.cache, dates, keep)
+        build_index(self.cache, self.index, dates, keep)
+        ids.write_text(json.dumps(sorted(r.id for r in chosen)), encoding="utf-8")
+        self.res.timings["index_builds"] = self.res.timings.get("index_builds", 0) + 1
 
     def _index_for(self, hits: Iterable[Any]) -> None:
         """The instruments index covering the report dates of these hits too (lookups on older business dates)."""
@@ -704,7 +792,7 @@ class _Scan:
 
 def _session(con: psycopg.Connection, settings: Settings, now: datetime | None,
              offers: Callable[[_Scan], list[Offer]], *, lookback: bool = False,
-             progress: Progress | None = None) -> ScanResult:
+             progress: Progress | None = None, since: date | None = None) -> ScanResult:
     h = adapter(settings)
     res = ScanResult(adapter_line(h))
     if not h.ok:
@@ -715,7 +803,8 @@ def _session(con: psycopg.Connection, settings: Settings, now: datetime | None,
         return res
     try:
         now = now or datetime.now(UTC)
-        cutoff = lookback_cutoff(settings, now.astimezone(MSK).date()) if lookback else None
+        cutoff = since if since is not None else lookback_cutoff(settings, now.astimezone(MSK).date()) if lookback \
+            else None
         s = _Scan(con, settings, h, res, now, cutoff, progress)
         with runner.pooled(read_workers()):  # workers start on the first call: an idle scan starts none
             s.run(offers(s))
@@ -726,15 +815,24 @@ def _session(con: psycopg.Connection, settings: Settings, now: datetime | None,
 
 
 def scan(con: psycopg.Connection, settings: Settings, *, now: datetime | None = None,
-         progress: Progress | None = None) -> ScanResult:
+         progress: Progress | None = None, since: date | None = None) -> ScanResult:
     """New stable files of the folders, files to re-offer after a fingerprint change, and those waiting for a
-    calendar; within the lookback only (``ignored_too_old`` files again once the lookback covers them)."""
+    calendar; within the lookback only (``ignored_too_old`` files again once the lookback covers them). ``since``
+    (``desk backfill``, R23): the lookback starts on this date instead, so the older reports are read too."""
     def offers(s: _Scan) -> list[Offer]:
         s.retire_too_old()
         again = ("waiting_calendar", TOO_OLD) if s.calendars_changed() else (TOO_OLD,)
         return s.new_files() + s.known(lambda st, fp: (st in REOFFER and fp != s.h.fingerprint) or st in again,
-                                       fresh=True)
-    return _session(con, settings, now, offers, lookback=True, progress=progress)
+                                       fresh=True, statuses=(*REOFFER, *again)) + s.transient()
+    res = _session(con, settings, now, offers, lookback=True, progress=progress, since=since)
+    global last_scan
+    last_scan = {"at": datetime.now(UTC).isoformat(), "files": dict(res.files), "skipped": dict(res.skipped),
+                 "copies": dict(res.copies), "match": dict(res.match), "timings": dict(res.timings)}
+    return res
+
+
+last_scan: dict[str, Any] | None = None
+"""The counts of this process's last ``scan`` (``reconcile`` shows them: the skipped files are not ledgered)."""
 
 
 def retry(con: psycopg.Connection, settings: Settings, statuses: tuple[str, ...] = (*REOFFER, "waiting_calendar"),
@@ -848,3 +946,158 @@ def status_text(st: dict) -> str:
     return "\n".join(lines)
 
 
+
+
+# ---- reconcile (R22) ------------------------------------------------------------------------------------------
+
+LOSS_REASONS = {
+    "match_failed": "адаптер не смог сопоставить файл (ошибка или таймаут match)",
+    "timed_out": "чтение файла не уложилось в таймаут",
+    "failed": "чтение файла упало с ошибкой адаптера",
+    "rejected": "файл отклонён целиком при проверке",
+    "waiting_calendar": "нет календаря на дату отчёта (ждёт снимок справочника с хаба)",
+    "ignored": "адаптер не узнал файл (не его формат)",
+    "ignored_too_old": "дата отчёта старше окна загрузки (inbox_lookback_days)",
+    "unit_rejected": "книга в файле отклонена (ошибки в строках, см. коды)",
+    "unit_superseded": "книга пришла в другом, более новом отчёте или от источника с большим приоритетом",
+    "scope_conflict": "та же книга и дата от другого источника без приоритетов",
+    "book_closed_by_omission": "книги нет в отчёте, который покрывает все книги: позиции закрыты",
+    "duplicate_key": "повтор ключа позиции в книге: книга отклонена",
+    "unknown_book": "книги нет в справочнике книг адаптера (reference)",
+    "missing_required": "в строках нет обязательных полей: книга отклонена",
+    "not_in_run": "позиции загружены после расчёта даты: расчёт ещё не пересчитан",
+    "rows_differ": "строк в расчёте не столько, сколько загружено",
+}
+"""What each loss code means, for the owner (the settings page and ``desk inbox reconcile``)."""
+
+
+def reconcile(con: psycopg.Connection, settings: Settings, on: date | None = None) -> dict[str, Any]:
+    """``desk inbox reconcile`` (R22): where each book's rows went, for the business date ``on`` (default: the date
+    of the latest default run, else today, Moscow). Per book: the position set in force (valid date, source,
+    report date, file), the rows of the report unit that stored it, the rows of the set, the rows of the date's
+    default run (and how many of them were valued), and the units of the book rejected or superseded from the
+    lookback on with their issue codes. Then over all files: the current statuses (the ledger and the files never
+    read), the loss codes with counts and their meaning, and the last scan's counts of this process.
+    Book ids, file names, codes and counts: the owner's own view; the diagnostics take only its totals."""
+    today = datetime.now(UTC).astimezone(MSK).date()
+    run = con.execute(f"SELECT run_id, business_date, position_set_ids FROM run WHERE run_id IN ({store.DEFAULT_RUNS})"
+                      " AND business_date <= %s ORDER BY business_date DESC LIMIT 1", (on or today,)).fetchone()
+    day = on or (run[1] if run else today)
+    if run and run[1] != day:
+        run = None
+    since = lookback_cutoff(settings, today) or (day - timedelta(days=MTIME_SLACK_DAYS))
+    latest = "(SELECT DISTINCT ON (sha256) * FROM inbox_file_status ORDER BY sha256, status_id DESC)"
+
+    sets = {b: (sid, vd, src, rd, name) for sid, b, vd, src, rd, name in con.execute(
+        "SELECT DISTINCT ON (book_id) set_id, book_id, valid_date, source, report_date, source_name"
+        f" FROM position_set WHERE valid_date <= %s ORDER BY book_id, {store.CURRENT_SET}", (day,))}
+    ids = [v[0] for v in sets.values()]
+    accepted = dict(con.execute("SELECT set_id, count(*) FROM position_input WHERE set_id = ANY(%s) GROUP BY 1",
+                                (ids,)).fetchall())
+    in_report = dict(con.execute("SELECT DISTINCT ON (set_id) set_id, row_count FROM inbox_unit"
+                                 " WHERE set_id = ANY(%s) ORDER BY set_id, unit_id", (ids,)).fetchall())
+    in_run: dict[str, tuple[int, int]] = {}
+    if run:
+        in_run = {b: (n, v) for b, n, v in con.execute(
+            "SELECT book_id, count(*), count(*) FILTER (WHERE quality IS NOT NULL) FROM run_position"
+            " WHERE run_id = %s GROUP BY 1", (run[0],))}
+    # what was lost counts from the valid date of the set in force on: an older report rejected and then
+    # followed by an accepted one lost nothing
+    def current(b: str | None, vd: date | None) -> bool:
+        return vd is not None and (b not in sets or vd >= sets[b][1])
+
+    lost_units: dict[str, Counter] = {}
+    for b, st, vd, n, rows in con.execute(
+            f"SELECT u.scope->>'book_id', u.status, u.valid_date, count(*), sum(u.row_count) FROM {latest} l"
+            " JOIN inbox_unit u USING (status_id) WHERE u.status <> 'accepted' AND u.valid_date BETWEEN %s AND %s"
+            " GROUP BY 1, 2, 3", (since, day)):
+        if current(b, vd):
+            c = lost_units.setdefault(b or "-", Counter())
+            c[f"unit_{st}"] += n
+            c[f"unit_{st}_rows"] += int(rows or 0)
+    issues: dict[str, Counter] = {}
+    for b, vd, code, n in con.execute(
+            f"SELECT i.scope->>'book_id', l.valid_date, i.code, sum(i.count) FROM {latest} l"
+            " JOIN inbox_issue i USING (status_id) WHERE i.severity <> 'info' AND l.valid_date BETWEEN %s AND %s"
+            " GROUP BY 1, 2, 3", (since, day)):
+        if current(b, vd):
+            issues.setdefault(b or "-", Counter())[code] += int(n)
+
+    books = []
+    names = {b["book_id"]: b for b in store.current_books(con, day)}
+    for b in sorted(set(sets) | {k for k, v in names.items() if v.get("active", True)}):
+        sid, vd, src, rd, name = sets.get(b, (None, None, None, None, None))
+        n_acc = accepted.get(sid, 0) if sid else None
+        n_run, n_val = in_run.get(b, (0, 0) if sid in (run[2] or []) else (None, None)) if run else (None, None)
+        lu, iss = lost_units.get(b, Counter()), issues.get(b, Counter())
+        flags = []
+        if sid is None:
+            flags.append("no_positions")
+        if run and sid is not None and sid not in (run[2] or []):
+            flags.append("not_in_run")
+        elif run and n_acc is not None and (n_run or 0) != n_acc:
+            flags.append("rows_differ")
+        if lu.get("unit_rejected"):
+            flags.append("unit_rejected")
+        books.append({
+            "book_id": b, "name": (names.get(b) or {}).get("name"), "active": (names.get(b) or {}).get("active", True),
+            "valid_date": vd.isoformat() if vd else None, "age_days": (day - vd).days if vd else None,
+            "source": src, "report_date": rd.isoformat() if rd else None, "file": name,
+            "rows_in_report": in_report.get(sid) if sid else None, "rows_accepted": n_acc,
+            "rows_in_run": n_run, "rows_valued": n_val,
+            "units_rejected": lu.get("unit_rejected", 0), "rows_rejected": lu.get("unit_rejected_rows", 0),
+            "units_superseded": lu.get("unit_superseded", 0), "issues": dict(iss.most_common()), "flags": flags})
+
+    files = Counter(dict(con.execute(f"SELECT status, count(*) FROM {latest} l GROUP BY 1").fetchall()))
+    files.update(dict(con.execute("SELECT status, count(*) FROM inbox_unread GROUP BY 1").fetchall()))
+    errors = [{"status": st, "error_type": t or c, "files": n} for st, c, t, n in con.execute(
+        f"SELECT status, error_code, error_type, count(*) FROM {latest} l WHERE status IN"
+        " ('match_failed', 'failed', 'timed_out', 'rejected') GROUP BY 1, 2, 3 ORDER BY 4 DESC")]
+    losses = Counter({k: files[k] for k in ("match_failed", "timed_out", "failed", "rejected", "waiting_calendar",
+                                            "ignored", "ignored_too_old") if files.get(k)})
+    for bk in books:
+        losses["unit_rejected"] += bk["units_rejected"]
+        losses["unit_superseded"] += bk["units_superseded"]
+        for code in ("scope_conflict", "book_closed_by_omission", "duplicate_key", "unknown_book",
+                     "missing_required"):
+            losses[code] += bk["issues"].get(code, 0)
+        for f in ("not_in_run", "rows_differ"):
+            losses[f] += f in bk["flags"]
+    totals = {k: sum(bk[k] or 0 for bk in books) for k in ("rows_in_report", "rows_accepted", "rows_in_run",
+                                                            "rows_valued", "rows_rejected")}
+    return {"date": day.isoformat(), "run_id": run[0] if run else None, "since": since.isoformat(),
+            "books": books, "totals": {**totals, "books": len(books),
+                                       "books_flagged": sum(1 for bk in books if bk["flags"])},
+            "files": dict(sorted(files.items())), "file_errors": errors,
+            "losses": [{"code": k, "count": n, "what": LOSS_REASONS.get(k, k)}
+                       for k, n in losses.most_common() if n],
+            "last_scan": last_scan}
+
+
+def reconcile_text(r: dict[str, Any]) -> str:
+    """``desk inbox reconcile`` as text: a table of books, then the files and the losses."""
+    def n(x: Any) -> str:
+        return "-" if x is None else str(x)
+    lines = [f"positions for {r['date']}" + (f", default run {r['run_id']}" if r["run_id"] else ", no default run")
+             + f" (losses counted from {r['since']})",
+             (f"{'book':<16} {'valid':<10} {'age':>4} {'report':>7} {'accepted':>8} {'in run':>7} {'valued':>7}"
+              f" {'rejected':>8}  flags / issues")]
+    for b in r["books"]:
+        extra = ", ".join(b["flags"] + [f"{k} {v}" for k, v in b["issues"].items()])
+        lines.append(f"{b['book_id'][:16]:<16} {n(b['valid_date']):<10} {n(b['age_days']):>4}"
+                     f" {n(b['rows_in_report']):>7} {n(b['rows_accepted']):>8} {n(b['rows_in_run']):>7}"
+                     f" {n(b['rows_valued']):>7} {b['units_rejected'] or '':>8}  {extra}")
+    t = r["totals"]
+    lines.append(f"{'total':<16} {'':<10} {'':>4} {t['rows_in_report']:>7} {t['rows_accepted']:>8}"
+                 f" {t['rows_in_run']:>7} {t['rows_valued']:>7}  books {t['books']}, flagged {t['books_flagged']}")
+    lines.append("files: " + (", ".join(f"{k} {v}" for k, v in r["files"].items()) or "none"))
+    lines += [f"  {e['status']} {e['error_type'] or '-'}: {e['files']}" for e in r["file_errors"]]
+    if r["losses"]:
+        lines.append("losses:")
+        lines += [f"  {x['code']} {x['count']}: {x['what']}" for x in r["losses"]]
+    if r.get("last_scan"):
+        ls = r["last_scan"]
+        lines.append(f"last scan {ls['at'][:19]}: skipped " + (", ".join(f"{k} {v}" for k, v in ls["skipped"].items())
+                                                             or "none")
+                     + ("; match " + ", ".join(f"{k} {v}" for k, v in ls["match"].items()) if ls["match"] else ""))
+    return "\n".join(lines)

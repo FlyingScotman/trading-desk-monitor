@@ -54,16 +54,39 @@ def masked(n: int) -> int | str:
     return "<10" if 0 < n < 10 else n
 
 
-def list_files(dirs: list[str]) -> list[str]:
-    """Files of the folders (a folder ending in ``**`` recursively), without temp and hidden files (08 §13)."""
-    out = []
+def list_entries(dirs: list[str]) -> list[tuple[str, os.stat_result]]:
+    """Files of the folders (a folder ending in ``**`` recursively) with their ``stat``, without temp and hidden
+    files (08 §13), sorted by path. One directory listing per folder: on Windows the listing already carries each
+    file's size and times, so a network share costs no request per file (R22)."""
+    out: list[tuple[str, os.stat_result]] = []
+
+    def walk(folder: str, recursive: bool) -> None:
+        try:
+            with os.scandir(folder) as it:
+                entries = list(it)
+        except OSError:
+            return
+        for e in entries:
+            try:
+                if e.is_dir(follow_symlinks=False):
+                    if recursive:
+                        walk(e.path, True)
+                    continue
+                if not e.is_file() or e.name.startswith(_SKIP_PREFIX) or e.name.endswith(_SKIP_SUFFIX):
+                    continue
+                out.append((e.path, e.stat()))
+            except OSError:  # gone or locked between the listing and the stat: the next scan sees it
+                continue
+
     for d in dirs:
         recursive = d.rstrip("/\\").endswith("**")
-        root = Path(d.rstrip("/\\").removesuffix("**") if recursive else d)
-        for p in sorted(root.rglob("*") if recursive else root.glob("*")):
-            if p.is_file() and not p.name.startswith(_SKIP_PREFIX) and not p.name.endswith(_SKIP_SUFFIX):
-                out.append(str(p))
-    return out
+        walk(str(Path(d.rstrip("/\\").removesuffix("**") if recursive else d)), recursive)
+    return sorted(out, key=lambda x: x[0])
+
+
+def list_files(dirs: list[str]) -> list[str]:
+    """Files of the folders (a folder ending in ``**`` recursively), without temp and hidden files (08 §13)."""
+    return [p for p, _ in list_entries(dirs)]
 
 
 @dataclass

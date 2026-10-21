@@ -8,14 +8,22 @@ with ``source_analytics``:
 - yields (MOEX ``effective_yield_waprice_pct`` has 4 decimals, ``yield_close_pct`` 2);
 - Macaulay duration in days;
 - the yield horizon date;
-- G-spread to the KBD at the duration;
+- G-spread to the KBD at the duration (and core's own G-spread of the valuation, at its price basis);
 - Z-spread to the KBD (annual and continuous).
+
+All priced bonds are recomputed in one core ``bond_metrics_batch`` per price basis (core 0.33): the scalar solvers'
+definitions, solved with numpy (the recompute of 1,800 bonds: 1.9 s -> 0.6 s on 20.10.2026).
 
 Differences point at a convention gap or a data problem in the hub, the adapter or core.
 
-MOEX convention (found in S1): MOEX effective yields and durations are measured from the
-**trade date**, not from the T+1 settlement date, with the same dirty price. Since S2 the desk
-valuation itself is at the trade date too (``valuation.bonds``), because the MOEX accrued is.
+MOEX convention (R26, live EOD of 20.10.2026, 594 fixed bonds, as core 0.33's goldens): MOEX yields are measured at
+the **T+1 settlement date** with the accrued interest of that date: MOEX ``ACCINT`` (as of the trade date) plus our
+accrual of the days in between. ``EFFECTIVEYIELDWAPRICE`` then agrees to 0.003 bp (median), 495 of 594 within 0.5 bp;
+from the trade date with the trade-date dirty price (the S1 reading) it was 1.2 bp, 220 of 594. MOEX ``DURATION`` is
+the Macaulay duration at its published yield (core: within a day). The desk valuation itself stays at the trade date
+(``valuation.bonds``, F9), so its ``ytm_pct`` is not MOEX's to the bp. The hub's EOD ``gspread_bp`` is on an intraday
+KBD, not the closing one of the snapshot (11.8 bp median from MOEX's own yield and duration on the closing KBD): it is
+shown, not compared bp for bp.
 """
 
 from __future__ import annotations
@@ -31,16 +39,17 @@ from typing import Any
 
 from rub_fixed_income import (
     CONTINUOUS,
+    BondMetricsInput,
+    CoreRejection,
+    InvalidTerms,
     ZSpreadConvention,
-    bond_duration,
-    kbd_effective_yield,
-    solve_nominal_annual_yield,
-    solve_z_spread,
+    bond_metrics_batch,
 )
 from rub_fixed_income import __version__ as CORE_VERSION
 
+from ..marketdata.adapter import core_instrument
 from ..orchestrator import EodContext, Outcome
-from ..valuation.bonds import SPREAD_CONVENTION
+from ..valuation.bonds import SPREAD_CONVENTION, Rejected, fixed_schedule
 from ..valuation.fallback import QUALITIES
 
 Z_CONTINUOUS = ZSpreadConvention(compounding=CONTINUOUS)
@@ -55,7 +64,8 @@ def _f(v: Any) -> float | None:
     return None if v in (None, "") else float(v)
 
 
-def compare(ctx: EodContext, o: Outcome) -> dict[str, Any]:
+def _row(o: Outcome) -> dict[str, Any]:
+    """The comparison row without the recomputed analytics (``_metrics`` adds them)."""
     t, q, v = o.terms, o.quote, o.valuation
     row: dict[str, Any] = {
         "secid": o.secid,
@@ -73,51 +83,94 @@ def compare(ctx: EodContext, o: Outcome) -> dict[str, Any]:
     if row["status"] != "priced" or q is None:
         return row
     sa = q.source_analytics
-    ydate = v.valuation_date  # the trade date, as MOEX measures yields (see module docstring)
-    flows = [(c.payment_date, c.amount) for c in v.cashflows]
-    days = (v.horizon_date - ydate).days
+    days = (v.horizon_date - v.valuation_date).days
     row.update(
         horizon=v.horizon_date.isoformat(), horizon_kind=v.horizon_kind, horizon_days=days,
         moex_horizon=sa.get("yield_date"), moex_horizon_type=sa.get("yield_date_type"),
         price_basis=v.price_basis, clean_pct=v.clean_pct, ytm_pct=round(v.ytm_pct, 4),
         z_spread_bp=round(v.z_spread_bp, 2), dv01_rub=v.dv01_rub,
+        **({"core_g_spread_bp": round(v.g_spread_bp, 2)} if v.g_spread_bp is not None else {}),
+        **({"core_dm_bp": round(v.discount_margin_bp, 2)} if v.discount_margin_bp is not None else {}),
     )
+    return row
 
-    def y_at(basis: str) -> float | None:
-        if basis not in q.prices_pct:
-            return None
-        dirty = float(q.prices_pct[basis]) * v.face_rub / 100.0 + v.accrued_rub
-        try:
-            return solve_nominal_annual_yield(dirty_price=dirty, settlement_date=ydate, cashflows=flows) * 100
-        except ValueError:
-            return None
 
-    y_wap, y_close = y_at("waprice"), y_at("close")
+def _accrual_to_settlement(ctx: EodContext, o: Outcome) -> float | None:
+    """Our accrued interest at the T+1 settlement date minus at the trade date (core ``Instrument.accrued`` on the
+    valuation's terms), None when it cannot be computed."""
+    v, t = o.valuation, o.terms
+    assert v is not None and t is not None
+    try:
+        if v.floater is not None:
+            inst = v.floater.instrument
+            return inst.accrued(v.settlement, ctx.core_market) - inst.accrued(v.valuation_date, ctx.core_market)
+        sch = fixed_schedule(t, v.valuation_date)
+        inst = core_instrument(t, v.valuation_date, sch.horizon_date, sch.offer, coupons=sch.coupons,
+                               redeem_at_horizon=sch.horizon_kind == "call")
+        return inst.accrued(v.settlement) - inst.accrued(v.valuation_date)
+    except (CoreRejection, Rejected, ValueError):
+        return None
+
+
+def _inputs(o: Outcome, basis: str, accrual: float | None) -> BondMetricsInput | None:
+    """The bond at the MOEX price ``basis`` (``waprice``, ``close``) on its valuation's flows, settled T+1 with the
+    MOEX accrued moved to that date by ``accrual``, as MOEX measures yields (see the module docstring)."""
+    q, v = o.quote, o.valuation
+    if q is None or v is None or basis not in q.prices_pct or accrual is None:
+        return None
+    dirty = float(q.prices_pct[basis]) * v.face_rub / 100.0 + v.accrued_rub + accrual
+    flows = tuple(c for c in v.cashflows if c.payment_date > v.settlement)
+    try:
+        return BondMetricsInput(v.settlement, dirty, flows, o.secid)
+    except (ValueError, InvalidTerms):
+        return None
+
+
+def _metrics(ctx: EodContext, priced: list[tuple[dict[str, Any], Outcome]]) -> None:
+    """Our yield, duration and spreads at the MOEX prices of every priced bond, vs MOEX's: core
+    ``bond_metrics_batch`` (core 0.33) for all bonds at once instead of the scalar solvers per bond, the same
+    definitions (``solve_nominal_annual_yield``, ``bond_duration``, ``g_spread_bp``, ``solve_z_spread``) to ~1e-12."""
+    if not priced:
+        return
+    accrual = {id(o): _accrual_to_settlement(ctx, o) for _, o in priced}
+    wap = [(row, o, i) for row, o in priced if (i := _inputs(o, "waprice", accrual[id(o)])) is not None]
+    close = [(row, i) for row, o in priced if (i := _inputs(o, "close", accrual[id(o)])) is not None]
+    if wap:
+        ins = [i for _, _, i in wap]
+        annual = bond_metrics_batch(ins, kbd=ctx.kbd, curve=ctx.curve, spread_convention=SPREAD_CONVENTION)
+        cont = bond_metrics_batch(ins, curve=ctx.curve, spread_convention=Z_CONTINUOUS)
+        for (row, o, _), m, c in zip(wap, annual, cont):
+            if m.effective_yield is not None:
+                row["y_wap"] = m.effective_yield * 100
+                row["mac_days"] = round(m.macaulay_years * 365, 1)
+                row["g_spread_bp"] = m.g_spread_bp
+                row["moex_g_spread_bp"] = _f(o.quote.source_analytics.get("gspread_bp"))
+            if m.z_spread_bp is not None:
+                row["z_annual_wap_bp"] = m.z_spread_bp
+            if c.z_spread_bp is not None:
+                row["z_cont_wap_bp"] = c.z_spread_bp
+            row["moex_z_spread_bp"] = _f(o.quote.source_analytics.get("zspread_bp"))
+    for (row, _), m in zip(close, bond_metrics_batch([i for _, i in close]) if close else []):
+        if m.effective_yield is not None:
+            row["y_close"] = m.effective_yield * 100
+
+
+def _check(row: dict[str, Any], o: Outcome) -> None:
+    sa = o.quote.source_analytics  # type: ignore[union-attr]
+    v = o.valuation
+    assert v is not None
+    y_wap, y_close = row.pop("y_wap", None), row.pop("y_close", None)
     m_wap, m_close = _f(sa.get("effective_yield_waprice_pct")), _f(sa.get("yield_close_pct"))
     row["y_wap"], row["moex_y_wap"] = y_wap, m_wap
     row["d_y_wap_bp"] = (y_wap - m_wap) * 100 if y_wap is not None and m_wap is not None else None
     row["d_y_close_bp"] = (y_close - m_close) * 100 if y_close is not None and m_close is not None else None
     m_dur = _f(sa.get("duration_days"))
-    mac = bond_duration(annual_yield=y_wap / 100, settlement_date=ydate, cashflows=flows).macaulay_years \
-        if y_wap is not None else v.macaulay_years
-    row["mac_days"], row["moex_dur_days"] = round(mac * 365, 1), m_dur
-    row["d_dur_days"] = mac * 365 - m_dur if m_dur is not None else None
+    row.setdefault("mac_days", round(v.macaulay_years * 365, 1))
+    row["moex_dur_days"] = m_dur
+    row["d_dur_days"] = row["mac_days"] - m_dur if m_dur is not None else None
     row["horizon_match"] = sa.get("yield_date") == v.horizon_date.isoformat() if sa.get("yield_date") else None
-    if y_wap is not None:
-        row["g_spread_bp"] = (y_wap - kbd_effective_yield(ctx.kbd, mac) * 100) * 100
-        row["moex_g_spread_bp"] = _f(sa.get("gspread_bp"))
-        dirty_wap = float(q.prices_pct["waprice"]) * v.face_rub / 100.0 + v.accrued_rub
-        cf = [(c.payment_date, c.amount) for c in v.cashflows]
-        try:
-            row["z_annual_wap_bp"] = solve_z_spread(cf, dirty_wap, ctx.curve, settlement_date=ydate,
-                                                    convention=SPREAD_CONVENTION) * 1e4
-            row["z_cont_wap_bp"] = solve_z_spread(cf, dirty_wap, ctx.curve, settlement_date=ydate,
-                                                  convention=Z_CONTINUOUS) * 1e4
-        except (ValueError, RuntimeError):
-            pass
-        row["moex_z_spread_bp"] = _f(sa.get("zspread_bp"))
     d = row.get("d_y_wap_bp")
-    if days < SHORT_DAYS:
+    if row["horizon_days"] < SHORT_DAYS:
         row["check"] = "short"
     elif d is None:
         row["check"] = "no_moex"
@@ -127,7 +180,20 @@ def compare(ctx: EodContext, o: Outcome) -> dict[str, Any]:
         row["check"] = "warn"
     else:
         row["check"] = "mismatch"
-    return row
+
+
+def compare_all(ctx: EodContext, outcomes: list[Outcome]) -> list[dict[str, Any]]:
+    """One row per outcome (``compare``), the analytics of all priced bonds in one batch."""
+    rows = [_row(o) for o in outcomes]
+    priced = [(r, o) for r, o in zip(rows, outcomes) if r["status"] == "priced" and o.quote is not None]
+    _metrics(ctx, priced)
+    for r, o in priced:
+        _check(r, o)
+    return rows
+
+
+def compare(ctx: EodContext, o: Outcome) -> dict[str, Any]:
+    return compare_all(ctx, [o])[0]
 
 
 def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -155,7 +221,7 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def build(ctx: EodContext, outcomes: list[Outcome]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    rows = [compare(ctx, o) for o in outcomes]
+    rows = compare_all(ctx, outcomes)
     return rows, summarize(rows)
 
 

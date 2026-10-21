@@ -25,7 +25,7 @@ from desk.autopilot import Autopilot
 from desk.inbox import scan
 from desk.inbox.timesem import MSK
 from desk.marketdata import cache
-from desk.marketdata.bundle import SnapshotDir, previous_market
+from desk.marketdata.bundle import MANIFEST_INDEX, SnapshotDir, previous_market
 from desk.settings import JSON_KEYS, Settings, check_settings_doc, load
 
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1"
@@ -268,5 +268,5 @@ def test_cache_prune_keeps_finals_today_and_shown_runs(tmp_path):
     (folder / f"{ids['old']}.hub.json").write_text("{}")
     gone = cache.prune(folder, "2026-10-14", keep={ids["kept"]})
     assert sorted(gone) == sorted([ids["old"], ids["old_pre"]])
-    left = {p.name.split(".")[0] for p in folder.iterdir()}
+    left = {p.name.split(".")[0] for p in folder.iterdir() if p.name != MANIFEST_INDEX}  # the listing's index aside
     assert left == {test_slice_s3.MARKET, STATIC, ids["kept"], ids["new"]}

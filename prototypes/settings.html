@@ -165,7 +165,7 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
       <label for="token">Токен</label>
       <div>
         <div class="row">
-          <input class="inp mono" id="token" type="password" placeholder="вставьте токен сервера (scope snapshots)" autocomplete="new-password">
+          <input class="inp mono" id="token" type="password" placeholder="вставьте токен сервера (scope read)" autocomplete="new-password">
           <button class="ibtn" id="token-save" type="button">Сохранить токен</button>
           <button class="lnk" id="token-clear" type="button">удалить</button>
         </div>
@@ -254,12 +254,28 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
       <label for="autopilot_sync_last">Загружать последних дат</label>
       <div><input class="inp mono num" id="autopilot_sync_last" data-key="autopilot_sync_last" inputmode="numeric" placeholder="5"></div>
       <label for="inbox_lookback_days">Брать отчёты не старше, дней</label>
-      <div><input class="inp mono num" id="inbox_lookback_days" data-key="inbox_lookback_days" inputmode="numeric" placeholder="10">
-        <p class="hint">Пусто — 10. Более старые файлы в папках с отчётами не читаются (папку с архивом за годы можно оставить), снимки с маркет-дата сервера за более ранние даты не загружаются. 0 — без ограничения (медленно на больших папках).</p>
+      <div><input class="inp mono num" id="inbox_lookback_days" data-key="inbox_lookback_days" inputmode="numeric" placeholder="35">
+        <p class="hint">Пусто — 35. Возраст считается по дате отчёта (из имени или содержимого файла), а не по дате изменения файла: книга, по которой отчёт приходит раз в несколько недель, тоже загрузится. Более старые отчёты не читаются (папку с архивом за годы можно оставить, она просматривается один раз), снимки с маркет-дата сервера за более ранние даты не загружаются. 0 — без ограничения (медленно на больших папках).</p>
         <p class="hint">Изменения применяются со следующего цикла (не позже чем через период опроса), перезапуск сервера не нужен.</p></div>
       <label for="history_days">История котировок, рабочих дней</label>
       <div><input class="inp mono num" id="history_days" data-key="history_days" inputmode="numeric" placeholder="260">
-        <p class="hint">Пусто — 260 (около года). Для графиков цен и доходностей сервер понемногу, по нескольку дат за цикл, догружает с маркет-дата сервера котировки за прошлые дни. 0 — не догружать, только загруженные срезы.</p></div>
+        <p class="hint">Пусто — 260 (около года). Для графиков цен и доходностей сервер понемногу, по нескольку дат за цикл, догружает с маркет-дата сервера котировки за прошлые дни. 0 — не догружать, только загруженные срезы. Если сервер отдаёт API истории (версия 0.2.0 и токен с правом read), история берётся оттуда — на годы назад, вместе с КБД, кривыми, фиксингами и курсами, а это число не действует (кроме 0 — выключено).</p>
+        <p class="hint" id="hist-st"></p></div>
+      <label for="history_bonds_from">История облигаций с</label>
+      <div><input class="inp mono" id="history_bonds_from" data-key="history_bonds_from" placeholder="2024-01-03" autocomplete="off">
+        <p class="hint">Пусто — 2024-01-03 (с этой даты у сервера есть закрытия облигаций). Только для API истории.</p></div>
+      <label for="history_rates_from">История ставок и курсов с</label>
+      <div><input class="inp mono" id="history_rates_from" data-key="history_rates_from" placeholder="2010-01-01" autocomplete="off">
+        <p class="hint">КБД, кривые RUONIA OIS и КС-свопов, фиксинги (КС, RUONIA, RUSFAR, ИПЦ), курсы ЦБ и MOEX. Пусто — 2010-01-01 (или сколько есть на сервере).</p></div>
+      <label for="backfill">История прогонов</label>
+      <div><label class="tgl"><input type="checkbox" id="backfill" data-key="backfill"><span class="tgl-s"></span><span id="backfill-lbl">включено</span></label>
+        <p class="hint">Сервер в фоне считает прошлые даты: по каждой рабочей дате с позициями (отчёт дня, а без него — последний предыдущий отчёт книги) — расчёт на окончательном закрытии этой даты. Из них — история риска, MV, PnL с начала месяца и года. Сначала один раз читает старые отчёты из папок (старше окна выше), потом считает даты от самой ранней, в конце каждого цикла и не дольше заданного времени, так что текущий день не ждёт. Уже посчитанные даты с теми же входными данными не пересчитываются. Ход — в разделе «История прогонов» ниже; то же сразу целиком: <span class="mono">desk.bat backfill</span>.</p></div>
+      <label for="backfill_from">История прогонов с даты</label>
+      <div><input class="inp mono" id="backfill_from" data-key="backfill_from" type="date" style="width:170px" placeholder="2026-01-05">
+        <p class="hint">Пусто — 05.01.2026, первое окончательное закрытие на маркет-дата сервере.</p></div>
+      <label for="backfill_budget_s">История прогонов: секунд за цикл</label>
+      <div><input class="inp mono num" id="backfill_budget_s" data-key="backfill_budget_s" inputmode="numeric" placeholder="600">
+        <p class="hint">Пусто — 600. Одна дата всегда досчитывается до конца, даже если время вышло.</p></div>
     </div>
   </section>
 
@@ -331,6 +347,55 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
       <pre id="dg-out" hidden></pre>
     </div>
   </section>
+
+  <!-- 9. Загрузка позиций (R22; self-contained: its style and script are here; data: /api/v1/inbox/reconcile) -->
+  <section class="pnl" id="rc" aria-labelledby="h-rc">
+    <style>
+      #rc .rc-sum{display:flex;gap:6px 14px;flex-wrap:wrap;align-items:baseline;margin-top:8px}
+      #rc .rc-sum b{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+      #rc .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+      #rc .chip{border:1px solid var(--line-2);border-radius:2px;padding:1px 7px;font-size:12px;background:var(--panel-2)}
+      #rc .chip.bad{border-color:var(--bad, #d9534f);color:var(--bad, #d9534f)}
+      #rc .tw{overflow-x:auto;margin-top:10px;border:1px solid var(--line-2);border-radius:2px;max-height:420px}
+      #rc table{border-collapse:collapse;width:100%;font-size:12px}
+      #rc th,#rc td{padding:3px 8px;border-bottom:1px solid var(--line);white-space:nowrap;text-align:left}
+      #rc th{position:sticky;top:0;background:var(--panel-2);color:var(--fg-2);font-weight:500}
+      #rc td.n,#rc th.n{text-align:right;font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+      #rc tr.flag td{background:color-mix(in srgb, var(--warn, #c9a227) 10%, transparent)}
+      #rc ul.loss{margin:8px 0 0;padding-left:18px}
+      #rc ul.loss li{margin:2px 0}
+    </style>
+    <div class="ph"><h2 id="h-rc">Загрузка позиций</h2><span class="muted" id="rc-when"></span></div>
+    <div class="pb">
+      <div class="note">По каждой книге: сколько строк было в отчёте, сколько загружено и сколько попало в расчёт дня; что отклонено и почему. То же в командной строке: <span class="mono">desk inbox reconcile</span>.</div>
+      <div class="row" style="margin-top:10px">
+        <label for="rc-date" class="muted">Дата позиций</label>
+        <input class="inp mono" id="rc-date" type="date" style="width:150px">
+        <button class="ibtn" id="rc-run" type="button">Обновить</button>
+        <span id="rc-msg" class="muted"></span>
+      </div>
+      <div class="rc-sum" id="rc-sum"></div>
+      <div class="chips" id="rc-files"></div>
+      <ul class="loss" id="rc-loss"></ul>
+      <div class="tw" id="rc-tw" hidden>
+        <table>
+          <thead><tr><th>Книга</th><th>Название</th><th>Позиции на</th><th class="n">дн.</th><th class="n">В отчёте</th><th class="n">Загружено</th><th class="n">В расчёте</th><th class="n">Оценено</th><th class="n">Отклонено</th><th>Отчёт</th><th>Замечания</th></tr></thead>
+          <tbody id="rc-books"></tbody>
+        </table>
+      </div>
+      <div class="muted" id="rc-scan" style="margin-top:8px"></div>
+    </div>
+  </section>
+
+  <!-- 10. История прогонов (R23; self-contained: its script is here; data: /api/v1/backfill/status) -->
+  <section class="pnl" id="bf" aria-labelledby="h-bf">
+    <div class="ph"><h2 id="h-bf">История прогонов</h2><span class="muted" id="bf-when"></span></div>
+    <div class="pb">
+      <div class="note">Расчёты прошлых дат для истории риска и PnL с начала месяца и года. Считает сервер в фоне (настройка «История прогонов» выше) или команда <span class="mono">desk.bat backfill</span>.</div>
+      <div class="row" style="margin-top:10px"><button class="ibtn" id="bf-run" type="button">Обновить</button><span id="bf-msg" class="muted"></span></div>
+      <table class="t" style="margin-top:8px"><tbody id="bf-rows"></tbody></table>
+    </div>
+  </section>
 </main>
 
 <div class="savebar">
@@ -376,7 +441,7 @@ async function api(method, url, body){
 }
 
 const S = {data:null, dirs:[], dirty:false, adapter:null};
-const KEYS = ['hub_url','https_proxy','proxy_user','hub_transport','no_proxy','hub_ca_bundle','private_adapter','private_adapter_config','inbox_poll_seconds','autopilot_sync_last','inbox_lookback_days','history_days'];
+const KEYS = ['hub_url','https_proxy','proxy_user','hub_transport','no_proxy','hub_ca_bundle','private_adapter','private_adapter_config','inbox_poll_seconds','autopilot_sync_last','inbox_lookback_days','history_days','history_bonds_from','history_rates_from','backfill_from','backfill_budget_s'];
 
 function setDirty(v){
   S.dirty = v;
@@ -408,6 +473,7 @@ function render(d){
   });
   $('ap-lbl').textContent = $('autopilot').checked ? 'включено' : 'выключено';
   $('intraday-lbl').textContent = $('intraday').checked ? 'включено' : 'выключено';
+  $('backfill-lbl').textContent = $('backfill').checked ? 'включено' : 'выключено';
   $('cfg-default').textContent = (d.home || '') + (d.home && d.home.includes('\\') ? '\\' : '/') + 'adapter-config';
   $('token-file').textContent = eff.token_file || 'hub_token';
   const byDefault = !!eff.private_adapter_default && !d.private_adapter && !env.includes('private_adapter');
@@ -425,6 +491,7 @@ function render(d){
 }
 $('autopilot').addEventListener('change', () => { $('ap-lbl').textContent = $('autopilot').checked ? 'включено' : 'выключено'; });
 $('intraday').addEventListener('change', () => { $('intraday-lbl').textContent = $('intraday').checked ? 'включено' : 'выключено'; });
+$('backfill').addEventListener('change', () => { $('backfill-lbl').textContent = $('backfill').checked ? 'включено' : 'выключено'; });
 
 function tokenState(set, source){
   const st = $('token-st');
@@ -455,13 +522,16 @@ const EFF = [
   ['private_adapter','Адаптер'], ['private_adapter_default','Адаптер из комплекта'], ['private_adapter_config','Папка настроек адаптера'], ['private_adapter_sha256','Закреплённый отпечаток адаптера'],
   ['inbox_dirs','Папки с отчётами'], ['inbox_archive','Архив принятых файлов'], ['inbox_poll_seconds','Период опроса, сек'],
   ['autopilot','Автообновление'], ['intraday','Расчёт внутри дня'], ['autopilot_sync_last','Загружать последних дат'],
-  ['inbox_lookback_days','Брать отчёты не старше, дней'], ['history_days','История котировок, рабочих дней'], ['logs_dir','Журналы']];
+  ['inbox_lookback_days','Брать отчёты не старше, дней'], ['history_days','История котировок, рабочих дней'],
+  ['history_bonds_from','История облигаций с'], ['history_rates_from','История ставок и курсов с'],
+  ['backfill','История прогонов'], ['backfill_from','История прогонов с даты'], ['backfill_budget_s','История прогонов: секунд за цикл'], ['logs_dir','Журналы']];
+
 function renderEffective(eff){
   const tb = $('eff'); tb.textContent = '';
   EFF.forEach(([k, label]) => {
     let v = eff[k];
     if (Array.isArray(v)) v = v.length ? v.join('\n') : '—';
-    else if (typeof v === 'boolean') v = k === 'autopilot' || k === 'intraday' ? (v ? 'включено' : 'выключено') : (v ? 'да' : 'нет');
+    else if (typeof v === 'boolean') v = k === 'autopilot' || k === 'intraday' || k === 'backfill' ? (v ? 'включено' : 'выключено') : (v ? 'да' : 'нет');
     else if (k === 'inbox_lookback_days' && v === 0) v = 'без ограничения';
     else if (k === 'history_days' && v === 0) v = 'не догружать';
     else if (v == null || v === '') v = '—';
@@ -484,15 +554,28 @@ function collect(){
       const n = Number(v);
       if (!Number.isInteger(n) || n < 0) throw new Error('Брать отчёты не старше: нужно целое число дней (0 — без ограничения)');
       body[k] = n;
+    } else if (k === 'backfill_budget_s') {
+      if (!v) { body[k] = null; continue; }
+      const n = Number(v.replace(',', '.'));
+      if (!isFinite(n) || n <= 0) throw new Error('История прогонов: нужно положительное число секунд');
+      body[k] = n;
+    } else if (k === 'backfill_from') {
+      if (!v) { body[k] = null; continue; }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) throw new Error('История прогонов с даты: нужна дата');
+      body[k] = v;
     } else if (k === 'history_days') {
       if (!v) { body[k] = null; continue; }
       const n = Number(v);
       if (!Number.isInteger(n) || n < 0) throw new Error('История котировок: нужно целое число рабочих дней (0 — не догружать)');
       body[k] = n;
+    } else if (k === 'history_bonds_from' || k === 'history_rates_from') {
+      if (v && !/^\d{4}-\d{2}-\d{2}$/.test(v)) throw new Error((k === 'history_bonds_from' ? 'История облигаций' : 'История ставок') + ': дата в виде ГГГГ-ММ-ДД');
+      body[k] = v || null;
     } else body[k] = v || null;
   }
   body.autopilot = $('autopilot').checked;
   body.intraday = $('intraday').checked;
+  body.backfill = $('backfill').checked;
   const dirs = S.dirs.map(d => ({path:d.path.trim(), label:d.label.trim(), recursive:!!d.recursive})).filter(d => d.path);
   body.inbox_dirs = dirs.length ? dirs : null;
   return body;
@@ -567,12 +650,30 @@ $('test-hub').addEventListener('click', async () => {
     if (r.transport) lines.push(h('div', {class:'muted'}, 'Способ подключения: ' + (r.transport === 'curl' ? 'curl Windows' : 'Python')));
     if (r.latest) lines.push(h('div', {}, 'Последний срез ', h('span', {class:'mono'}, r.latest.cut + ' ' + r.latest.business_date),
       ', опубликован ', h('span', {class:'mono'}, r.latest.published_at || '?'), r.latest.age_hours != null ? ' (' + age(r.latest.age_hours) + ')' : ''));
+    if (r.history_api) lines.push(r.history_api.available
+      ? h('div', {}, 'API истории есть: ', h('span', {class:'mono'}, (r.history_api.datasets || []).join(', ')))
+      : h('div', {class:'muted'}, 'API истории не используется: ' + r.history_api.reason + ' — история котировок догружается по срезам.'));
     if (r.error) lines.push(h('div', {class:'err'}, 'Ошибка: ' + r.error));
     if (r.ok) lines.unshift(h('div', {class:'okmsg'}, 'Связь есть.'));
     box.append(...lines);
   } catch(e) { box.className = 'res bad'; box.textContent = 'Ошибка: ' + e.message; }
   finally { btn.disabled = false; }
 });
+
+/* ---------- market history (R24): what the store holds from the hub's history API, or why it is not used ---------- */
+async function loadHistoryStatus(){
+  const el = $('hist-st');
+  let st;
+  try { st = await api('GET', '/api/v1/history/status'); } catch(e) { el.textContent = ''; return; }
+  const a = st.api, b = (st.datasets || {}).bonds || {}, n = v => (v || 0).toLocaleString('ru-RU');
+  el.textContent = '';
+  if (!a) { el.textContent = 'API истории сервера ещё не опрашивался (первый цикл автообновления).'; return; }
+  if (!a.available) { el.append(h('span', {class:'err'}, 'API истории не используется: ' + a.reason + '.'), ' История котировок догружается по срезам (последние «История котировок, рабочих дней»).'); return; }
+  const pend = Object.values(st.datasets || {}).reduce((s, d) => s + (d.pending || 0), 0);
+  el.append(h('span', {class:'okmsg'}, 'История из API сервера: '), 'облигации ' + (b.from ? b.from + ' … ' + b.to + ', ' + n(b.rows) + ' строк, ' + n(b.bonds) + ' выпусков' : 'ещё не загружены') +
+    (pend ? '; догружается, осталось запросов: ' + pend : '; загружено всё') + (st.errors && st.errors.length ? '; ошибки: ' + st.errors.length : '') + '.');
+}
+loadHistoryStatus();
 
 /* ---------- adapter ---------- */
 async function loadAdapter(){
@@ -852,5 +953,97 @@ async function renderConfigFiles(a){
       msg('Скопировано в буфер обмена.', 'okmsg');
     } catch(e) { msg('Не скопировано: ' + (e.message || e) + '. Используйте «Скачать».', 'err'); }
   });
+})();
+</script>
+<script>
+'use strict';
+/* ---------- 9. Загрузка позиций (R22): /api/v1/inbox/reconcile — per book the rows of the report, loaded and in the
+   day's run, the file statuses and why rows were lost; read on opening the page and on «Обновить» ---------- */
+(function reconcile(){
+  const FILES = {accepted:'принято', partially_accepted:'принято частично', superseded:'заменено более новым',
+    rejected:'отклонено', match_failed:'не сопоставлено', failed:'ошибка чтения', timed_out:'таймаут чтения',
+    waiting_calendar:'ждёт календарь', ignored:'не отчёт адаптера', ignored_too_old:'старше окна'};
+  const BAD = new Set(['rejected','match_failed','failed','timed_out','waiting_calendar']);
+  const FLAGS = {no_positions:'нет позиций', not_in_run:'загружено после расчёта', rows_differ:'строк в расчёте не столько, сколько загружено',
+    unit_rejected:'книга в отчёте отклонена'};
+  const num = v => v == null ? '—' : String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  function msg(text, cls){ $('rc-msg').className = cls || 'muted'; $('rc-msg').textContent = text || ''; }
+
+  async function load(){
+    msg('Загружаю…');
+    try {
+      const d = $('rc-date').value;
+      const r = await fetch('/api/v1/inbox/reconcile' + (d ? '?on=' + d : ''), {headers:{'Accept':'application/json'}, cache:'no-store'});
+      const text = await r.text();
+      if (!r.ok) { let m = 'HTTP ' + r.status; try { m = JSON.parse(text).detail || m; } catch(e) {} throw new Error(m); }
+      draw(JSON.parse(text)); msg('');
+    } catch(e) { msg('Не удалось получить: ' + (e.message || e), 'err'); }
+  }
+
+  function draw(rc){
+    if (!$('rc-date').value) $('rc-date').value = rc.date;
+    $('rc-when').textContent = 'позиции на ' + rc.date + (rc.run_id ? ' · расчёт №' + rc.run_id : ' · расчёта на дату нет');
+    const t = rc.totals;
+    $('rc-sum').innerHTML = '<span>Книг <b>' + num(t.books) + '</b>, с замечаниями <b>' + num(t.books_flagged) + '</b></span>' +
+      '<span>Строк в отчётах <b>' + num(t.rows_in_report) + '</b> → загружено <b>' + num(t.rows_accepted) + '</b> → в расчёте <b>' +
+      num(t.rows_in_run) + '</b> (оценено <b>' + num(t.rows_valued) + '</b>)</span>' +
+      (t.rows_rejected ? '<span>отклонено строк <b>' + num(t.rows_rejected) + '</b></span>' : '');
+    $('rc-files').innerHTML = Object.entries(rc.files).map(([k, n]) =>
+      '<span class="chip' + (BAD.has(k) ? ' bad' : '') + '" title="' + esc(k) + '">' + esc(FILES[k] || k) + ' <b class="mono">' + num(n) + '</b></span>').join('') +
+      rc.file_errors.map(e => '<span class="chip bad">' + esc(FILES[e.status] || e.status) + ': ' + esc(e.error_type || '—') + ' <b class="mono">' + num(e.files) + '</b></span>').join('');
+    $('rc-loss').innerHTML = rc.losses.filter(x => !['ignored','ignored_too_old'].includes(x.code)).map(x =>
+      '<li><span class="mono">' + esc(x.code) + '</span> <b class="mono">' + num(x.count) + '</b> — ' + esc(x.what) + '</li>').join('');
+    $('rc-tw').hidden = !rc.books.length;
+    $('rc-books').innerHTML = rc.books.map(b => '<tr class="' + (b.flags.length ? 'flag' : '') + '">' +
+      '<td class="mono">' + esc(b.book_id) + '</td><td>' + esc(b.name || '') + '</td><td class="mono">' + esc(b.valid_date || '—') + '</td>' +
+      '<td class="n">' + num(b.age_days) + '</td><td class="n">' + num(b.rows_in_report) + '</td><td class="n">' + num(b.rows_accepted) + '</td>' +
+      '<td class="n">' + num(b.rows_in_run) + '</td><td class="n">' + num(b.rows_valued) + '</td>' +
+      '<td class="n">' + (b.units_rejected ? (b.rows_rejected ? num(b.rows_rejected) + ' стр.' : b.units_rejected + ' отч.') : '') + '</td>' +
+      '<td>' + esc(b.file || '') + '</td>' +
+      '<td>' + esc(b.flags.map(f => FLAGS[f] || f).concat(Object.entries(b.issues).map(([k, n]) => k + ' ' + n)).join('; ')) + '</td></tr>').join('');
+    const ls = rc.last_scan;
+    $('rc-scan').textContent = ls ? 'Последний просмотр папок ' + ls.at.slice(0, 16).replace('T', ' ') + ' UTC: пропущено ' +
+      (Object.entries(ls.skipped).map(([k, n]) => k + ' ' + n).join(', ') || 'ничего') +
+      (Object.keys(ls.match || {}).length ? '; сопоставление: ' + Object.entries(ls.match).map(([k, n]) => k + ' ' + n).join(', ') : '') +
+      (ls.timings ? '; время: ' + Object.entries(ls.timings).map(([k, v]) => k + ' ' + v).join(', ') : '') : '';
+  }
+
+  $('rc-run').addEventListener('click', load);
+  $('rc-date').addEventListener('change', load);
+  if (/^https?:$/.test(location.protocol)) load();
+})();
+</script>
+<script>
+/* ---------- 10. История прогонов (R23): /api/v1/backfill/status ---------- */
+(function backfillStatus(){
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const dd = s => s ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(0, 4) : '—';
+  async function load(){
+    $('bf-msg').textContent = 'загрузка…';
+    try {
+      const r = await fetch('/api/v1/backfill/status', {headers:{'Accept':'application/json'}, cache:'no-store'});
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const s = await r.json();
+      const withPos = s.dates - s.no_positions - s.no_market;
+      const rows = [
+        ['Включено', s.enabled ? 'да' : 'нет (настройка «История прогонов» выше)'],
+        ['Даты', dd(s.from) + ' — ' + dd(s.to) + ': ' + s.dates + ' рабочих дат' + (s.hub ? '' : ' (по загруженным срезам)')],
+        ['Посчитано', s.done + ' из ' + withPos + ' дат с позициями'],
+        ['Осталось', s.todo ? s.todo + (s.next && s.next.length ? ' (ближайшие ' + s.next.map(dd).join(', ') + ')' : '') : '—'],
+        ['Без позиций', s.no_positions + (s.first_positions ? ' (позиции в базе с ' + dd(s.first_positions) + ')' : '')],
+        ['Не посчитались', s.failed ? s.failed + ': ' + (s.failed_dates || []).map(dd).join(', ') + ' — повтор после изменения данных' : '—'],
+        ['Самый ранний расчёт', dd(s.oldest_run)],
+        ['Старые отчёты прочитаны с', dd(s.inbox_scanned_from)],
+      ];
+      if (s.step) rows.push(['Последний цикл', s.step.status + ': ' + s.step.detail]);
+      const tb = $('bf-rows'); tb.textContent = '';
+      rows.forEach(([k, v]) => { const tr = document.createElement('tr'); tr.innerHTML = '<td class="k"></td><td class="v" style="white-space:pre-wrap"></td>'; tr.children[0].textContent = k; tr.children[1].textContent = v; tb.append(tr); });
+      $('bf-msg').textContent = ''; $('bf-when').textContent = 'на ' + new Date().toLocaleTimeString('ru-RU');
+    } catch (e) { $('bf-msg').textContent = 'не загрузилось: ' + e.message; }
+  }
+  $('bf-run').addEventListener('click', load);
+  if (/^https?:$/.test(location.protocol)) load();
 })();
 </script>

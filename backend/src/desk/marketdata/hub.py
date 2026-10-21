@@ -4,6 +4,10 @@
 * ``GET /v1/snapshots?kind&cut_type&business_date&latest``  list, newest first, ``meta.next_offset``
 * ``GET /v1/snapshots/{id}/manifest``                envelope
 * ``GET /v1/snapshots/{id}/bundle``                  gzipped canonical JSON, ``X-Snapshot-Sha256``
+* ``GET /v1/history/index|bonds|curves/{ds}|zcyc|fixings|fx``  hub 0.2.0 (R24): columnar pages (``history_page``),
+                                                     ``next`` cursor, gzip, weak ETag -> 304, numbers as ``Decimal``;
+                                                     scope ``read`` (403 -> ``токен без права read``), a hub before
+                                                     0.2.0 answers 404 (``hub без API истории (версия < 0.2.0)``)
 
 Two transports behind one client (``hub_transport``, settings): ``python``, the standard library (``urllib``
 honours ``HTTPS_PROXY``/``NO_PROXY`` and, on Windows, the Internet Options proxy; a proxy login only as Basic,
@@ -23,6 +27,7 @@ a URL or a log line; so does the proxy password.
 
 from __future__ import annotations
 
+import gzip
 import http.client
 import io
 import json
@@ -39,6 +44,7 @@ import urllib.request
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from email.message import Message
 from pathlib import Path
 from typing import Any
@@ -72,6 +78,40 @@ class Response:
     status: int
     headers: Message
     body: bytes
+
+
+HISTORY_PREFIX = "/v1/history"
+NO_HISTORY_API = "hub без API истории (версия < 0.2.0)"
+NO_READ_SCOPE = "токен без права read"
+
+
+class HistoryUnavailable(HubError):
+    """The hub's history API cannot be used: ``code`` ``no_api`` (404: a hub before 0.2.0), ``no_read`` (403: the
+    token has no scope ``read``) or ``unauthorized`` (401). The desk then falls back to the snapshots."""
+
+    def __init__(self, message: str, status: int, code: str) -> None:
+        super().__init__(message, status)
+        self.code = code
+
+
+@dataclass
+class HistoryPage:
+    """A page of the columnar envelope: ``rows[i][j]`` is the value of ``columns[j]`` (numbers ``Decimal``)."""
+
+    dataset: str | None
+    columns: list[str]
+    rows: list[list[Any]]
+    next: str | None
+    data_version: str | None
+    as_of: str | None
+    meta: dict[str, Any]
+    etag: str | None
+    not_modified: bool = False
+    wire_bytes: int = 0
+
+    def records(self) -> Iterator[dict[str, Any]]:
+        cols = self.columns
+        return (dict(zip(cols, r, strict=True)) for r in self.rows)
 
 
 class TransportError(Exception):
@@ -156,8 +196,9 @@ class PythonTransport:
                 {scheme: with_credentials(self.proxy, settings.proxy_user, settings.proxy_password)}))
         self._opener = urllib.request.build_opener(*handlers)
 
-    def get(self, url: str, token: str | None) -> Response:
-        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept-Encoding": "identity"})
+    def get(self, url: str, token: str | None, headers: dict[str, str] | None = None) -> Response:
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept-Encoding": "identity",
+                                                   **(headers or {})})
         if token:
             req.add_unredirected_header("Authorization", f"Bearer {token}")
         try:
@@ -230,8 +271,10 @@ class CurlTransport:
         self.proxy_user, self.proxy_password = settings.proxy_user, settings.proxy_password
         self.windows = os.name == "nt"
 
-    def config(self, token: str | None) -> str:
-        lines = [f"header = {_q('User-Agent: ' + USER_AGENT)}", f"header = {_q('Accept-Encoding: identity')}"]
+    def config(self, token: str | None, headers: dict[str, str] | None = None) -> str:
+        extra = {"Accept-Encoding": "identity", **(headers or {})}  # no --compressed: the client gunzips (as Python)
+        lines = [f"header = {_q('User-Agent: ' + USER_AGENT)}"] + [f"header = {_q(f'{k}: {v}')}"
+                                                                   for k, v in extra.items()]
         if token:
             lines.append(f"header = {_q('Authorization: Bearer ' + token)}")
         if self.proxy:
@@ -255,7 +298,7 @@ class CurlTransport:
                 "--max-time", f"{max(self.timeout * 30, 600):g}", "-o", str(body), "-D", str(heads),
                 "-w", "%{http_code} %{http_connect}", "-K", str(cfg), url]
 
-    def get(self, url: str, token: str | None) -> Response:
+    def get(self, url: str, token: str | None, headers: dict[str, str] | None = None) -> Response:
         self.home.mkdir(parents=True, exist_ok=True)
         paths: list[Path] = []
         try:
@@ -264,7 +307,7 @@ class CurlTransport:
                 os.close(fd)  # mkstemp: mode 0600 on POSIX; on Windows <home> is the user's
                 paths.append(Path(name))
             cfg, body, heads = paths
-            cfg.write_text(self.config(token), encoding="utf-8")
+            cfg.write_text(self.config(token, headers), encoding="utf-8")
             try:
                 r = subprocess.run(self.command(url, body, heads, cfg), capture_output=True, check=False,
                                    timeout=max(self.timeout * 30, 600) + 30, creationflags=_NO_WINDOW)
@@ -352,7 +395,10 @@ class HubClient:
         return bool(self._settings.proxy_user or (self.transport.proxy and split_proxy(self.transport.proxy)[1]))
 
     # -- transport -------------------------------------------------------------------------
-    def _get(self, path: str, params: dict[str, Any] | None = None, *, auth: bool = True) -> tuple[bytes, Any]:
+    def _fetch(self, path: str, params: dict[str, Any] | None = None, *, auth: bool = True,
+               headers: dict[str, str] | None = None, scope: str = "snapshots") -> Response:
+        """One GET with the retries: a 2xx (or a 304 when ``headers`` revalidate) answer; 401, 403, other 4xx raise
+        at once (``scope`` names the token scope in the 403 message), 5xx and no answer are retried."""
         query = urllib.parse.urlencode({k: v for k, v in (params or {}).items() if v is not None})
         url = self.url + path + (f"?{query}" if query else "")
         if auth and not self._token:
@@ -364,7 +410,7 @@ class HubClient:
                 time.sleep(self.backoff_s * 2 ** (attempt - 1))
             attempt += 1
             try:
-                r = self.transport.get(url, self._token if auth else None)
+                r = self.transport.get(url, self._token if auth else None, headers)
             except TransportError as e:
                 if e.proxy_status:
                     if self._switch_to_curl():
@@ -382,13 +428,17 @@ class HubClient:
             if r.status == 401:
                 raise HubError(f"token rejected by {self.host} (401)", 401)
             if r.status == 403:
-                raise HubError(f"token lacks scope 'snapshots' on {self.host} (403)", 403)
-            if 200 <= r.status < 300:
-                return r.body, r.headers
+                raise HubError(f"token lacks scope '{scope}' on {self.host} (403)", 403)
+            if 200 <= r.status < 300 or (r.status == 304 and headers and "If-None-Match" in headers):
+                return r
             if r.status < 500:
                 raise HubError(f"{path}: {r.status} {_message(r)}", r.status)
             last = f"{r.status} {_message(r)}"
         raise HubError(f"{self.host} unreachable after {self.retries + 1} attempts: {last}")
+
+    def _get(self, path: str, params: dict[str, Any] | None = None, *, auth: bool = True) -> tuple[bytes, Any]:
+        r = self._fetch(path, params, auth=auth)
+        return r.body, r.headers
 
     def _json(self, path: str, params: dict[str, Any] | None = None, *, auth: bool = True) -> dict[str, Any]:
         body, _ = self._get(path, params, auth=auth)
@@ -426,6 +476,56 @@ class HubClient:
         return body
 
 
+    # -- history API (hub 0.2.0, WEB-15: docs/HISTORY_API.md of the hub) ------------------------------------------
+    def history_page(self, path: str, params: dict[str, Any], *, cursor: str | None = None,
+                     etag: str | None = None) -> HistoryPage:
+        """One page of ``/v1/history{path}``: gzip asked for, numbers as ``Decimal``; ``etag`` revalidates (a 304 is
+        a page with ``not_modified`` and no rows). A hub without the API (404 on ``/index``) or a token without
+        scope ``read`` (403) raise ``HistoryUnavailable`` with the reason the desk shows."""
+        headers = {"Accept-Encoding": "gzip", "Accept": "application/json"}
+        if etag:
+            headers["If-None-Match"] = etag
+        try:
+            r = self._fetch(HISTORY_PREFIX + path, {**params, "cursor": cursor}, headers=headers, scope="read")
+        except HubError as e:
+            if e.status == 404 and path == "/index":
+                raise HistoryUnavailable(NO_HISTORY_API, 404, "no_api") from None
+            if e.status == 403:
+                raise HistoryUnavailable(NO_READ_SCOPE, 403, "no_read") from None
+            if e.status == 401:
+                raise HistoryUnavailable(f"токен не принят хабом {self.host} (401)", 401, "unauthorized") from None
+            raise
+        tag = r.headers.get("ETag")
+        if r.status == 304:
+            return HistoryPage(None, [], [], None, None, None, {}, tag or etag, True, 0)
+        raw = r.body
+        if (r.headers.get("Content-Encoding") or "").lower() == "gzip":
+            try:
+                raw = gzip.decompress(raw)
+            except (OSError, EOFError) as e:
+                raise HubError(f"{path}: not a complete gzip body ({e})") from None
+        try:
+            doc = json.loads(raw, parse_float=Decimal)
+            return HistoryPage(doc.get("dataset"), list(doc["columns"]), doc["rows"], doc.get("next"),
+                               doc.get("data_version"), doc.get("as_of"), doc.get("meta") or {}, tag, False,
+                               len(r.body))
+        except (ValueError, KeyError, TypeError) as e:
+            raise HubError(f"{path}: not a history envelope ({type(e).__name__}: {e})") from None
+
+    def history_pages(self, path: str, params: dict[str, Any]) -> Iterator[HistoryPage]:
+        """Every page of a history query, following ``next`` with the same parameters."""
+        page = self.history_page(path, params)
+        yield page
+        while page.next:
+            page = self.history_page(path, params, cursor=page.next)
+            yield page
+
+    def history_index(self) -> list[dict[str, Any]]:
+        """``/v1/history/index``: one dict per dataset / series (``dataset``, ``series``, ``source``, ``unit``,
+        ``date_from``, ``date_to``, ``rows``, ``days``, ``series_count``, ``endpoint``)."""
+        return [r for p in self.history_pages("/index", {}) for r in p.records()]
+
+
 def _message(r: Response) -> str:
     try:
         return json.loads(r.body)["error"]["message"]
@@ -436,9 +536,11 @@ def _message(r: Response) -> str:
 def hub_check(settings: Settings, cut: str = "eod_final", retries: int | None = None) -> dict[str, Any]:
     """``desk hub-check`` as data (the CLI and the settings page): ``{"ok", "host", "health": {status, version,
     migrations} | None, "token_accepted", "latest": {cut, business_date, snapshot_id, published_at, age_hours} |
-    None, "error": str | None}``. Never raises; the token is never part of the result."""
+    None, "error": str | None, "history_api": history_probe() | None}``. Never raises; the token is never part of
+    the result. ``history_api`` (the hub reached): whether the history API serves this token; ``ok`` does not
+    depend on it (without it the desk loads the history from the snapshots)."""
     out: dict[str, Any] = {"ok": False, "host": None, "health": None, "token_accepted": False, "latest": None,
-                           "error": None, "transport": None}
+                           "error": None, "transport": None, "history_api": None}
     client = None
     try:
         client = HubClient(settings)
@@ -447,6 +549,7 @@ def hub_check(settings: Settings, cut: str = "eod_final", retries: int | None = 
         out["host"] = client.host
         h = client.health()
         out["health"] = {k: h.get(k) for k in ("status", "version", "migrations")}
+        out["history_api"] = history_probe(client)
         latest = next(client.list_snapshots(kind="market", cut_type=cut, latest=True), None)
         out["token_accepted"] = True
         if latest is None:
@@ -469,3 +572,19 @@ def hub_check(settings: Settings, cut: str = "eod_final", retries: int | None = 
     if client is not None:
         out["transport"] = client.transport.name
     return out
+
+
+def history_probe(client: HubClient) -> dict[str, Any]:
+    """``{"available", "code", "reason", "datasets", "series"}`` of the hub's history API for this token: one call of
+    ``/v1/history/index``. ``code``: ``ok``, ``no_api`` (a hub before 0.2.0), ``no_read`` (the token lacks scope
+    ``read``), ``unauthorized`` or ``error``; ``reason`` is the text the desk shows (Russian for the first two)."""
+    try:
+        idx = client.history_index()
+    except HistoryUnavailable as e:
+        return {"available": False, "code": e.code, "reason": str(e), "datasets": None, "series": None}
+    except (HubError, OSError, ValueError) as e:
+        return {"available": False, "code": "error", "reason": f"{type(e).__name__}: {e}", "datasets": None,
+                "series": None}
+    return {"available": True, "code": "ok", "reason": None, "datasets": sorted({r.get("dataset") for r in idx
+                                                                                 if r.get("dataset")}),
+            "series": len(idx)}

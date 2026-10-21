@@ -966,26 +966,26 @@
       "delta": [
        [
         18,
-        -16163.16011
+        -16126.76453
        ],
        [
         19,
-        -224.4883348
+        -223.9828407
        ],
        [
         20,
-        -16387.64844
+        -16350.74737
        ],
        [
         22,
-        813808.392
+        811975.89
        ]
       ],
       "gamma": [],
       "issuer": "Публичное акционерное общество \"Акрон\"",
       "name": "Акрон (ПАО) БО-001P-09",
       "position_id": "P04",
-      "pv_rub": 81380839.2,
+      "pv_rub": 81197589.0,
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "RU000A10BRM5",
@@ -1349,7 +1349,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU26238RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 43.5013605,
       "spread_kind": "ofz"
      },
@@ -1514,7 +1514,7 @@
       "quality": "assumed",
       "rating": "нет данных",
       "secid": "SU29008RMFS8",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 17.47537511,
       "spread_kind": "ofz"
      },
@@ -1687,7 +1687,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU46020RMFS2",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 3.244360553,
       "spread_kind": "ofz"
      },
@@ -1711,7 +1711,7 @@
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "SU52005RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": null,
       "spread_kind": null
      },
@@ -1887,8 +1887,8 @@
       "position_id": "P04",
       "rates": 0.0,
       "second_order": false,
-      "spread": -409691.211,
-      "total": -409691.211
+      "spread": -408768.68425,
+      "total": -408768.68425
      },
      {
       "convexity": 398.882027141028,
@@ -1976,8 +1976,8 @@
       "convexity": 9536360.544359103,
       "fx": 0.0,
       "rates": -370874703.54863715,
-      "spread": -109775265.99706574,
-      "total": -471113609.0013437
+      "spread": -109774343.47031574,
+      "total": -471112686.4745937
      },
      "FX": {
       "convexity": 0.0,
@@ -1997,8 +1997,8 @@
       "convexity": 9537463.284741048,
       "fx": 0.0,
       "rates": -370956577.02935374,
-      "spread": -109783708.81150874,
-      "total": -471202822.5561214
+      "spread": -109782786.28475875,
+      "total": -471201900.0293714
      }
     }
    },
@@ -2786,26 +2786,26 @@
       "delta": [
        [
         18,
-        -16163.16011
+        -16126.76453
        ],
        [
         19,
-        -224.4883348
+        -223.9828407
        ],
        [
         20,
-        -16387.64844
+        -16350.74737
        ],
        [
         22,
-        813808.392
+        811975.89
        ]
       ],
       "gamma": [],
       "issuer": "Публичное акционерное общество \"Акрон\"",
       "name": "Акрон (ПАО) БО-001P-09",
       "position_id": "P04",
-      "pv_rub": 81380839.2,
+      "pv_rub": 81197589.0,
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "RU000A10BRM5",
@@ -3169,7 +3169,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU26238RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 43.5013605,
       "spread_kind": "ofz"
      },
@@ -3334,7 +3334,7 @@
       "quality": "assumed",
       "rating": "нет данных",
       "secid": "SU29008RMFS8",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 17.47537511,
       "spread_kind": "ofz"
      },
@@ -3507,7 +3507,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU46020RMFS2",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 3.244360553,
       "spread_kind": "ofz"
      },
@@ -3531,7 +3531,7 @@
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "SU52005RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": null,
       "spread_kind": null
      },
@@ -3708,13 +3708,13 @@
      },
      {
       "convexity": 0.0,
-      "fx": 28483293.72,
+      "fx": 28419156.150000002,
       "max_move_bp": 1000.0,
       "position_id": "P04",
       "rates": 0.0,
       "second_order": false,
       "spread": 0.0,
-      "total": 28483293.72
+      "total": 28419156.150000002
      },
      {
       "convexity": 50560.816459617316,
@@ -3800,10 +3800,10 @@
     "totals": {
      "CORP": {
       "convexity": 2123463550.7364867,
-      "fx": 28483293.72,
+      "fx": 28419156.150000002,
       "rates": -1785039592.8157525,
       "spread": -4782245672.955685,
-      "total": -4415338421.31495
+      "total": -4415402558.884951
      },
      "FX": {
       "convexity": 0.0,
@@ -3821,10 +3821,10 @@
      },
      "_total": {
       "convexity": 2123479769.8447483,
-      "fx": 31933293.72,
+      "fx": 31869156.150000002,
       "rates": -1785447388.2549381,
       "spread": -4782228787.326799,
-      "total": -4412263112.016988
+      "total": -4412327249.586988
      }
     }
    },
@@ -4612,26 +4612,26 @@
       "delta": [
        [
         18,
-        -16163.16011
+        -16126.76453
        ],
        [
         19,
-        -224.4883348
+        -223.9828407
        ],
        [
         20,
-        -16387.64844
+        -16350.74737
        ],
        [
         22,
-        813808.392
+        811975.89
        ]
       ],
       "gamma": [],
       "issuer": "Публичное акционерное общество \"Акрон\"",
       "name": "Акрон (ПАО) БО-001P-09",
       "position_id": "P04",
-      "pv_rub": 81380839.2,
+      "pv_rub": 81197589.0,
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "RU000A10BRM5",
@@ -4995,7 +4995,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU26238RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 43.5013605,
       "spread_kind": "ofz"
      },
@@ -5160,7 +5160,7 @@
       "quality": "assumed",
       "rating": "нет данных",
       "secid": "SU29008RMFS8",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 17.47537511,
       "spread_kind": "ofz"
      },
@@ -5333,7 +5333,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU46020RMFS2",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 3.244360553,
       "spread_kind": "ofz"
      },
@@ -5357,7 +5357,7 @@
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "SU52005RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": null,
       "spread_kind": null
      },
@@ -6427,26 +6427,26 @@
       "delta": [
        [
         18,
-        -16163.16011
+        -16126.76453
        ],
        [
         19,
-        -224.4883348
+        -223.9828407
        ],
        [
         20,
-        -16387.64844
+        -16350.74737
        ],
        [
         22,
-        813808.392
+        811975.89
        ]
       ],
       "gamma": [],
       "issuer": "Публичное акционерное общество \"Акрон\"",
       "name": "Акрон (ПАО) БО-001P-09",
       "position_id": "P04",
-      "pv_rub": 81380839.2,
+      "pv_rub": 81197589.0,
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "RU000A10BRM5",
@@ -6810,7 +6810,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU26238RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 43.5013605,
       "spread_kind": "ofz"
      },
@@ -6975,7 +6975,7 @@
       "quality": "assumed",
       "rating": "нет данных",
       "secid": "SU29008RMFS8",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 17.47537511,
       "spread_kind": "ofz"
      },
@@ -7148,7 +7148,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU46020RMFS2",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 3.244360553,
       "spread_kind": "ofz"
      },
@@ -7172,7 +7172,7 @@
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "SU52005RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": null,
       "spread_kind": null
      },
@@ -7346,13 +7346,13 @@
      },
      {
       "convexity": 0.0,
-      "fx": 12207125.879999999,
+      "fx": 12179638.35,
       "max_move_bp": 50.0,
       "position_id": "P04",
       "rates": 0.0,
       "second_order": false,
       "spread": 0.0,
-      "total": 12207125.879999999
+      "total": 12179638.35
      },
      {
       "convexity": 70.25306346634888,
@@ -7438,10 +7438,10 @@
     "totals": {
      "CORP": {
       "convexity": 2624853.7807740867,
-      "fx": 12207125.879999999,
+      "fx": 12179638.35,
       "rates": -252238711.25057316,
       "spread": 0.0,
-      "total": -237406731.58979905
+      "total": -237434219.11979905
      },
      "FX": {
       "convexity": 0.0,
@@ -7459,10 +7459,10 @@
      },
      "_total": {
       "convexity": 2626039.4728077687,
-      "fx": 13932125.879999999,
+      "fx": 13904638.35,
       "rates": -252309685.67134032,
       "spread": -8442.814443000001,
-      "total": -235759963.13297555
+      "total": -235787450.66297555
      }
     }
    },
@@ -8250,26 +8250,26 @@
       "delta": [
        [
         18,
-        -16163.16011
+        -16126.76453
        ],
        [
         19,
-        -224.4883348
+        -223.9828407
        ],
        [
         20,
-        -16387.64844
+        -16350.74737
        ],
        [
         22,
-        813808.392
+        811975.89
        ]
       ],
       "gamma": [],
       "issuer": "Публичное акционерное общество \"Акрон\"",
       "name": "Акрон (ПАО) БО-001P-09",
       "position_id": "P04",
-      "pv_rub": 81380839.2,
+      "pv_rub": 81197589.0,
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "RU000A10BRM5",
@@ -8633,7 +8633,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU26238RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 43.5013605,
       "spread_kind": "ofz"
      },
@@ -8798,7 +8798,7 @@
       "quality": "assumed",
       "rating": "нет данных",
       "secid": "SU29008RMFS8",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 17.47537511,
       "spread_kind": "ofz"
      },
@@ -8971,7 +8971,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU46020RMFS2",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 3.244360553,
       "spread_kind": "ofz"
      },
@@ -8995,7 +8995,7 @@
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "SU52005RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": null,
       "spread_kind": null
      },
@@ -10092,26 +10092,26 @@
       "delta": [
        [
         18,
-        -16163.16011
+        -16126.76453
        ],
        [
         19,
-        -224.4883348
+        -223.9828407
        ],
        [
         20,
-        -16387.64844
+        -16350.74737
        ],
        [
         22,
-        813808.392
+        811975.89
        ]
       ],
       "gamma": [],
       "issuer": "Публичное акционерное общество \"Акрон\"",
       "name": "Акрон (ПАО) БО-001P-09",
       "position_id": "P04",
-      "pv_rub": 81380839.2,
+      "pv_rub": 81197589.0,
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "RU000A10BRM5",
@@ -10475,7 +10475,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU26238RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 43.5013605,
       "spread_kind": "ofz"
      },
@@ -10640,7 +10640,7 @@
       "quality": "assumed",
       "rating": "нет данных",
       "secid": "SU29008RMFS8",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 17.47537511,
       "spread_kind": "ofz"
      },
@@ -10813,7 +10813,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU46020RMFS2",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 3.244360553,
       "spread_kind": "ofz"
      },
@@ -10837,7 +10837,7 @@
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "SU52005RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": null,
       "spread_kind": null
      },
@@ -11908,26 +11908,26 @@
       "delta": [
        [
         18,
-        -16163.16011
+        -16126.76453
        ],
        [
         19,
-        -224.4883348
+        -223.9828407
        ],
        [
         20,
-        -16387.64844
+        -16350.74737
        ],
        [
         22,
-        813808.392
+        811975.89
        ]
       ],
       "gamma": [],
       "issuer": "Публичное акционерное общество \"Акрон\"",
       "name": "Акрон (ПАО) БО-001P-09",
       "position_id": "P04",
-      "pv_rub": 81380839.2,
+      "pv_rub": 81197589.0,
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "RU000A10BRM5",
@@ -12291,7 +12291,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU26238RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 43.5013605,
       "spread_kind": "ofz"
      },
@@ -12456,7 +12456,7 @@
       "quality": "assumed",
       "rating": "нет данных",
       "secid": "SU29008RMFS8",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 17.47537511,
       "spread_kind": "ofz"
      },
@@ -12629,7 +12629,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU46020RMFS2",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 3.244360553,
       "spread_kind": "ofz"
      },
@@ -12653,7 +12653,7 @@
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "SU52005RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": null,
       "spread_kind": null
      },
@@ -12823,13 +12823,13 @@
      },
      {
       "convexity": 0.0,
-      "fx": 8138083.92,
+      "fx": 8119758.9,
       "max_move_bp": 20.0,
       "position_id": "P04",
-      "rates": -327752.968896,
+      "rates": -327014.947414,
       "second_order": false,
       "spread": 0.0,
-      "total": 7810330.951104
+      "total": 7792743.952586001
      },
      {
       "convexity": 0.0,
@@ -12915,10 +12915,10 @@
     "totals": {
      "CORP": {
       "convexity": 0.0,
-      "fx": 8138083.92,
-      "rates": -327752.968896,
+      "fx": 8119758.9,
+      "rates": -327014.947414,
       "spread": 0.0,
-      "total": 7810330.951104
+      "total": 7792743.952586001
      },
      "FX": {
       "convexity": 0.0,
@@ -12936,10 +12936,10 @@
      },
      "_total": {
       "convexity": 0.0,
-      "fx": 8138083.92,
-      "rates": -327752.968896,
+      "fx": 8119758.9,
+      "rates": -327014.947414,
       "spread": 0.0,
-      "total": 7810330.951104
+      "total": 7792743.952586001
      }
     }
    },
@@ -13727,26 +13727,26 @@
       "delta": [
        [
         18,
-        -16163.16011
+        -16126.76453
        ],
        [
         19,
-        -224.4883348
+        -223.9828407
        ],
        [
         20,
-        -16387.64844
+        -16350.74737
        ],
        [
         22,
-        813808.392
+        811975.89
        ]
       ],
       "gamma": [],
       "issuer": "Публичное акционерное общество \"Акрон\"",
       "name": "Акрон (ПАО) БО-001P-09",
       "position_id": "P04",
-      "pv_rub": 81380839.2,
+      "pv_rub": 81197589.0,
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "RU000A10BRM5",
@@ -14110,7 +14110,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU26238RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 43.5013605,
       "spread_kind": "ofz"
      },
@@ -14275,7 +14275,7 @@
       "quality": "assumed",
       "rating": "нет данных",
       "secid": "SU29008RMFS8",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 17.47537511,
       "spread_kind": "ofz"
      },
@@ -14448,7 +14448,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU46020RMFS2",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 3.244360553,
       "spread_kind": "ofz"
      },
@@ -14472,7 +14472,7 @@
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "SU52005RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": null,
       "spread_kind": null
      },
@@ -15543,26 +15543,26 @@
       "delta": [
        [
         18,
-        -16163.16011
+        -16126.76453
        ],
        [
         19,
-        -224.4883348
+        -223.9828407
        ],
        [
         20,
-        -16387.64844
+        -16350.74737
        ],
        [
         22,
-        813808.392
+        811975.89
        ]
       ],
       "gamma": [],
       "issuer": "Публичное акционерное общество \"Акрон\"",
       "name": "Акрон (ПАО) БО-001P-09",
       "position_id": "P04",
-      "pv_rub": 81380839.2,
+      "pv_rub": 81197589.0,
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "RU000A10BRM5",
@@ -15926,7 +15926,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU26238RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 43.5013605,
       "spread_kind": "ofz"
      },
@@ -16091,7 +16091,7 @@
       "quality": "assumed",
       "rating": "нет данных",
       "secid": "SU29008RMFS8",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 17.47537511,
       "spread_kind": "ofz"
      },
@@ -16264,7 +16264,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU46020RMFS2",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 3.244360553,
       "spread_kind": "ofz"
      },
@@ -16288,7 +16288,7 @@
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "SU52005RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": null,
       "spread_kind": null
      },

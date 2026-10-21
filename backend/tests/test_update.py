@@ -527,3 +527,15 @@ def test_hot_update_end_to_end(tmp_path):
             proc.wait(15)
         except subprocess.TimeoutExpired:
             os.killpg(proc.pid, signal.SIGKILL)
+
+
+def test_a_patch_without_the_adapter_keeps_the_installed_one(old_new, tmp_path):
+    """The owner's bundle has the private adapter; a patch built from a bundle without it must not delete it."""
+    root, new, old_zip = old_new
+    (root / "adapter/pkg").mkdir(parents=True)
+    (root / "adapter/pkg/__init__.py").write_text("private")
+    with (root / "MANIFEST.sha256").open("a") as f:  # the installed manifest lists the adapter (a -with-adapter build)
+        f.write(build.sha256(root / "adapter/pkg/__init__.py") + "  adapter/pkg/__init__.py\n")
+    patch = build.write_patch(old_zip, new, NEW, tmp_path, STAMP)
+    doc = update.stage(patch, root, tmp_path / "home")
+    assert doc["delete"] == ["app/prototypes/old.js"]

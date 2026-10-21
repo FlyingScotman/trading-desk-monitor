@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Концепты монитора деска</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Галерея концептов: шапка-тезис, сетка карточек с миниатюрами, под каждой — оценка и заметка владельца. */
+:root {
+  --bg: #f3f5f7; --panel: #ffffff; --fg: #15202b; --fg-2: #4e5d6c; --fg-3: #8592a0; --line: #dfe5eb;
+  --accent: #1d63c9; --accent-bg: rgba(29, 99, 201, .08); --good: #17804b; --warn: #a8740a; --bad: #c0392b;
+  --sans: "IBM Plex Sans", system-ui, "Segoe UI", sans-serif; --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0e1319; --panel: #151c24; --fg: #e5ebf1; --fg-2: #9eabb8; --fg-3: #6c7988; --line: #25303b;
+  --accent: #5ea2ff; --accent-bg: rgba(94, 162, 255, .12); --good: #3fbf7f; --warn: #e0b04a; --bad: #f06a5d; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0e1319; --panel: #151c24; --fg: #e5ebf1; --fg-2: #9eabb8; --fg-3: #6c7988; --line: #25303b;
+  --accent: #5ea2ff; --accent-bg: rgba(94, 162, 255, .12); --good: #3fbf7f; --warn: #e0b04a; --bad: #f06a5d; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--sans); }
+.wrap { max-width: 1280px; margin: 0 auto; padding-block: 28px 60px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: flex; flex-direction: column; gap: 28px; }
+header { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 28px; align-items: end; }
+@media (max-width: 860px) { header { grid-template-columns: 1fr; } }
+.eyebrow { font: 500 12px var(--mono); color: var(--fg-3); letter-spacing: .04em; }
+h1 { font-size: 30px; line-height: 1.15; margin: 6px 0 10px; text-wrap: balance; font-weight: 700; }
+.lede { color: var(--fg-2); max-width: 64ch; margin: 0; }
+.common { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; font-size: 13px; }
+.common h2 { font: 600 12px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--fg-2); margin: 0 0 8px; }
+.common ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.common b { font-weight: 600; }
+kbd { font: 11px var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; }
+.bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; color: var(--fg-2); }
+.bar .sp { flex: 1; }
+.chip { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 3px 10px; cursor: pointer; font: inherit; color: var(--fg-2); }
+.chip.on { border-color: var(--accent); color: var(--fg); background: var(--accent-bg); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); gap: 16px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+.card.v-like { border-color: var(--good); }
+.card.v-idea { border-color: var(--warn); }
+.card.v-no { opacity: .62; }
+.thumb { display: block; aspect-ratio: 16 / 10; max-width: 100%; background: #0d1117; border-bottom: 1px solid var(--line); overflow: hidden; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; object-position: top left; display: block; transition: transform .25s; }
+.thumb:hover img { transform: scale(1.02); }
+@media (prefers-reduced-motion: reduce) { .thumb img { transition: none; } }
+.cb { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+.cid { font: 500 12px var(--mono); color: var(--fg-3); }
+.card h3 { margin: 0; font-size: 17px; display: flex; gap: 8px; align-items: baseline; }
+.card h3 a { color: var(--fg); text-decoration: none; }
+.card h3 a:hover { color: var(--accent); }
+.card p { margin: 0; color: var(--fg-2); font-size: 13px; }
+.look { font-size: 12.5px; color: var(--fg-2); }
+.look b { color: var(--fg); font-weight: 600; }
+.vote { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; padding-top: 6px; }
+.vote button { border: 1px solid var(--line); background: transparent; color: var(--fg-2); border-radius: 6px; padding: 3px 9px; cursor: pointer; font: 12.5px var(--sans); }
+.vote button:hover { border-color: var(--accent); }
+.vote button:focus-visible, .chip:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.vote button.on[data-v=like] { border-color: var(--good); color: var(--good); background: color-mix(in srgb, var(--good) 10%, transparent); }
+.vote button.on[data-v=idea] { border-color: var(--warn); color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.vote button.on[data-v=no] { border-color: var(--bad); color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
+textarea { width: 100%; min-height: 54px; resize: vertical; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: 13px var(--sans); padding: 6px 8px; }
+.saved { font: 11px var(--mono); color: var(--fg-3); min-height: 14px; }
+.foot { color: var(--fg-3); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <div class="eyebrow" id="eyebrow">FI-деск · прототипы на вымышленных данных · срез 21.10.2026</div>
+      <h1>Концепты интерфейса монитора деска</h1>
+      <p class="lede">Несколько разных ответов на вопрос «как должен выглядеть монитор». Это не варианты одного экрана, а разные подходы: кокпит со вкладками, экран целиком про риск, таблица позиций в центре, агрегатор с пресетами, утренний брифинг, плиточная доска, командная строка, визуальная карта, рынок, календарь, эмитенты. Отметьте, что нравится, и напишите, что взять: следующая итерация соберёт целевой интерфейс из отмеченного.</p>
+    </div>
+    <div class="common">
+      <h2>Работает везде</h2>
+      <ul>
+        <li><b>Щелчок по любой сумме</b> (пунктир) раскрывает, из каких позиций она складывается; разрез по эмитентам, книгам, валютам, типам, срокам; таблица или график.</li>
+        <li><b>Щелчок по позиции</b> открывает карточку: параметры, PnL по факторам, история цены, доходности, спреда и номинала, риск по бакетам, потоки.</li>
+        <li><b>Поиск по всему</b>: <kbd>Ctrl K</kbd> или <kbd>/</kbd>.</li>
+        <li><b>Сортировка</b> по нескольким колонкам: <kbd>Shift</kbd>+щелчок по заголовку.</li>
+        <li><b>Фильтр книг</b> в шапке общий для всех концептов.</li>
+      </ul>
+    </div>
+  </header>
+  <div class="bar"><span>Показать:</span><span id="flt"></span><span class="sp"></span><span id="store" class="saved"></span></div>
+  <div class="grid" id="grid"></div>
+  <p class="foot">Данные вымышленные (prototypes/concepts/lib/mock.js), расчёты упрощённые. Оценки и заметки сохраняются: на опубликованной странице — для следующей итерации, в локальном файле — только в этом браузере.</p>
+</div>
+<script>
+// served by desk serve: the concepts run on the monitor's data; link back to the other pages
+(function () {
+  if (!/^https?:$/.test(location.protocol) || /[?&]demo=1/.test(location.search)) return;
+  fetch('../health/live', { cache: 'no-store' }).then(function (r) {
+    if (!r.ok) return;
+    var e = document.getElementById('eyebrow');
+    if (e) e.innerHTML = 'FI-деск · мониторы на данных Desk Monitor · <a href="../desk-monitor.html">◂ Desk Monitor</a> · <a href="../settings.html">Настройки</a>';
+    var f = document.querySelector('.foot');
+    if (f) f.textContent = 'Данные — последний прогон монитора и история из хаба; демо-данные: добавьте ?demo=1 к адресу страницы. Оценки и заметки сохраняются только в этом браузере.';
+  }).catch(function () { });
+})();
+</script>
+<script>
+(function () {
+  'use strict';
+  const C = [
+    ['c01-cockpit', 'C01', 'Кокпит', 'Классика: полоса ключевых цифр сверху и вкладки «Риски / Позиции / PnL / История». Сводная таблица рисков (валюта → тип → кривая) с тепловой раскраской, по каждой валюте stacked bar по кривым с итогом бакета и кумулятивом.', 'сводную таблицу рисков и график риска по бакетам'],
+    ['c02-risk-ladder', 'C02', 'Лестница рисков', 'Экран только про риск: разделы по валютам, у каждого блока переключатель таблица / график / тепловая карта, тип × бакет, CS01 эмитент × срок, сдвиг кривой ползунком.', 'переключатели вида и ползунок сдвига'],
+    ['c03-blotter', 'C03', 'Позиции в центре', 'Большая таблица позиций и постоянная карточка справа. Пресеты колонок и группировок, раскраска по эмитенту, валюте или типу, ↑↓ по строкам.', 'пресеты колонок и раскраску строк'],
+    ['c04-pivot', 'C04', 'Агрегатор в один клик', 'Один сводный экран вместо многих: готовые пресеты разрезов и быстрый выбор строк, колонок и меры. Вид: таблица, тепловая карта, столбцы или treemap.', 'пресеты сверху и смену меры'],
+    ['c05-morning-brief', 'C05', 'Утренний брифинг', 'Одна страница, которая читается сверху вниз за две минуты: что случилось с PnL и почему, что изменилось в риске, главные вклады, события на две недели, на что обратить внимание.', 'текст с кликабельными цифрами'],
+    ['c06-launchpad', 'C06', 'Плиточная доска', 'Плотная сетка панелей на одном экране без прокрутки. У каждой панели свой режим; любую можно развернуть. Раскладки «Утро», «Rates», «Credit».', 'раскладки и разворот панели'],
+    ['c07-portfolio-map', 'C07', 'Карта портфеля', 'Визуальный подход: treemap валюта → тип → эмитент → бумага, размер и цвет выбираются; sunburst риска; пузырьки эмитентов (срок × спред).', 'смену меры размера и цвета'],
+    ['c08-calendar', 'C08', 'Календарь выплат', 'Потоки нашего портфеля, все валютные бонды российских эмитентов и агрегаты рублёвого рынка по рейтингам. Оферты выделены, есть заседания ЦБ.', 'режим «Валютные бонды РФ»'],
+    ['c09-market', 'C09', 'Рынок', 'Карта доходностей рынка с кривыми ОФЗ и RUONIA и нашими позициями поверх, карта валютных бондов, кривые сегодня и вчера, спреды по рейтингам, лидеры движения.', 'фильтры карты и «только наши»'],
+    ['c10-pnl-explain', 'C10', 'PnL explain', 'Всё про PnL: водопад, фактор × разрез, вклад ставок по кривой и бакету, история за полгода, разбор «прочего» по позициям.', 'матрицу фактор × разрез'],
+    ['c11-history', 'C11', 'Динамика', 'Как менялись риск и позиции: DV01 по кривым и книгам, объёмы по типам и валютам, сравнение двух дат, история любой позиции.', 'сравнение двух дат'],
+    ['c12-terminal', 'C12', 'Терминал', 'Работа с клавиатуры: команды вроде «risk rub by issuer», «pos сбер», «cal fx», результаты складываются панелями.', 'набрать help'],
+    ['c13-issuers', 'C13', 'Эмитенты', 'Всё через эмитента: концентрация, список эмитентов с экспозицией, по выбранному — все бумаги, его кривая, риск, события.', 'щелчок по эмитенту в списке'],
+  ];
+  const V = { like: 'нравится', idea: 'взять частично', no: 'не моё' };
+  const state = {};
+  let db = null, show = 'all';
+  const storeEl = document.getElementById('store');
+  function local(k, v) { try { if (v === undefined) return JSON.parse(localStorage.getItem('concepts-fb') || '{}')[k]; const all = JSON.parse(localStorage.getItem('concepts-fb') || '{}'); all[k] = v; localStorage.setItem('concepts-fb', JSON.stringify(all)); } catch (e) { return undefined; } }
+  C.forEach(c => { state[c[0]] = local(c[0]) || { verdict: null, note: '' }; });
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+  const grid = document.getElementById('grid');
+  function render() {
+    grid.innerHTML = '';
+    C.filter(c => show === 'all' || (show === 'marked' ? state[c[0]].verdict && state[c[0]].verdict !== 'no' : !state[c[0]].verdict)).forEach(([id, num, name, desc, look]) => {
+      const s = state[id];
+      const el = document.createElement('article');
+      el.className = 'card' + (s.verdict ? ' v-' + s.verdict : '');
+      el.innerHTML = '<a class="thumb" href="' + id + '.html"><img src="thumbs/' + id + '.jpg" alt="' + esc(name) + ': снимок экрана" loading="lazy"></a>' +
+        '<div class="cb"><div class="cid">' + num + '</div><h3><a href="' + id + '.html">' + esc(name) + '</a></h3><p>' + esc(desc) + '</p>' +
+        '<div class="look">Попробуйте: <b>' + esc(look) + '</b></div>' +
+        '<div class="vote">' + Object.keys(V).map(v => '<button type="button" data-v="' + v + '" class="' + (s.verdict === v ? 'on' : '') + '">' + V[v] + '</button>').join('') + '</div>' +
+        '<textarea id="note-' + id + '" placeholder="что взять, что убрать…">' + esc(s.note) + '</textarea><div class="saved"></div></div>';
+      el.querySelectorAll('.vote button').forEach(b => b.onclick = () => { s.verdict = s.verdict === b.dataset.v ? null : b.dataset.v; save(id, el); render(); });
+      const ta = el.querySelector('textarea'); let t = null;
+      ta.oninput = () => { s.note = ta.value; clearTimeout(t); t = setTimeout(() => save(id, el), 700); };
+      grid.appendChild(el);
+    });
+  }
+  async function save(id, el) {
+    local(id, state[id]);
+    const mark = el && el.querySelector('.saved');
+    if (!db) { if (mark) mark.textContent = 'сохранено в этом браузере'; return; }
+    try { await db.doc('feedback/' + id).set({ verdict: state[id].verdict, note: state[id].note, updatedAt: new Date().toISOString() }); if (mark) mark.textContent = 'сохранено'; }
+    catch (e) { if (mark) mark.textContent = 'не сохранилось: ' + (e && e.code || e); }
+  }
+  const flt = document.getElementById('flt');
+  function renderFlt() {
+    flt.innerHTML = [['all', 'все'], ['marked', 'отмеченные'], ['new', 'без оценки']].map(([k, t]) => '<button type="button" class="chip' + (show === k ? ' on' : '') + '" data-k="' + k + '">' + t + '</button>').join(' ');
+    flt.querySelectorAll('button').forEach(b => b.onclick = () => { show = b.dataset.k; renderFlt(); render(); });
+  }
+  renderFlt(); render();
+  // общие оценки: на опубликованной странице — в базе артефакта (их читает следующая итерация)
+  if (window.claude && window.claude.use) {
+    window.claude.use('db').then(async d => {
+      if (!d) return;
+      db = d;
+      try {
+        const snap = await d.collection('feedback').get();
+        (snap.docs || snap || []).forEach(doc => { const id = doc.id, v = doc.data ? doc.data() : doc; if (state[id] && v) state[id] = { verdict: v.verdict || null, note: v.note || '' }; });
+        storeEl.textContent = 'оценки видны следующей итерации';
+        render();
+      } catch (e) { storeEl.textContent = ''; }
+    }).catch(() => { });
+  }
+})();
+</script>
+</body>
+</html>

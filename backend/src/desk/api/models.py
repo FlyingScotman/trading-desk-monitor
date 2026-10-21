@@ -307,12 +307,19 @@ class BondHistoryPoint(BaseModel):
     spread_to_curve_bp: float | None = Field(None, description="ytm - curve_rate")
     price_basis: str | None = Field(None, description="legal_close, close or waprice (the runs' order)")
     yield_date: date | None = Field(None, description="the date MOEX's yield runs to: the offer or maturity")
+    moex_zspread_bp: float | None = Field(None, description="MOEX's Z-spread to the KBD")
+    icpi: float | None = Field(None, description="MOEX yields ICPI (linkers), verbatim")
+    ir: float | None = Field(None, description="MOEX yields IR (linkers), verbatim")
+    bei: float | None = Field(None, description="MOEX yields BEI (linkers), verbatim")
+    origin: str | None = Field(None, description="where the market fields come from: hub (the hub's history API) "
+                               "or snapshot (a cached eod_final snapshot)")
 
 
 class BondHistory(BaseModel):
     """The history of an issue for the monitors (DATA_CONTRACT §6): every quoted day of the market history
-    (``md_bond_eod``: the cached hub snapshots, ``history_days`` deep) merged with the desk's default runs that hold
-    it; the curve rate is the KBD at the bond's term. Empty, not 404, when the issue is unknown."""
+    (``md_bond_day``: the hub's history API, from 2024-01-03, else the cached hub snapshots, ``history_days`` deep)
+    merged with the desk's default runs that hold it; the curve rate is the KBD at the bond's term. Empty, not 404,
+    when the issue is unknown."""
 
     instrument_id: str | None
     isin: str | None

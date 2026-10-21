@@ -56,11 +56,11 @@ def test_corporate_maps_to_a_rate_accrual_leg_with_its_put(ctx):
     coupons = {c.pay_date: c for c in t.coupons}
     assert all(p.rate == pytest.approx(float(coupons[p.payment_date].rate_pct) / 100) for p in leg.periods)
     assert all(p.payment_date <= s.horizon_date for p in leg.periods)
-    (offer,) = inst.offers  # only the offer the F2 rule chose
+    (offer,) = inst.offers  # the offer the F2 rule chose (no earlier put whose window closed)
     assert offer.kind is OfferKind.PUT and offer.confirmed and offer.offer_date == s.horizon_date
     o = value(ctx, [(CORP, 1.0)])[0]
     v = o.core_result.positions[0]
-    assert v.horizon == "confirmed_put" and v.horizon_date == s.horizon_date
+    assert v.horizon == "open_put" and v.horizon_date == s.horizon_date  # core applies the window (0.33)
     assert o.valuation.cashflows[-1].payment_date == s.horizon_date
 
 
@@ -86,12 +86,14 @@ def test_coupon_gaps_are_assumed_and_flagged(ctx):
     assert (o.valuation.quality, o.valuation.assumptions) == ("exact", ())
 
 
-def test_one_core_call_per_spread_kind(ctx):
+def test_one_core_call_for_the_book_with_the_spread_kind_per_bond(ctx):
+    """Core 0.33 ``spread_kinds``: one ``value_portfolio`` call for OFZ and corporates, each row keeping its kind."""
     outs = value(ctx, [(OFZ, 10.0), (CORP, 5.0), (OFZ, -3.0)])
     assert all(o.valuation for o in outs)
-    ofz_result, corp_result = outs[0].core_result, outs[1].core_result
-    assert outs[2].core_result is ofz_result and corp_result is not ofz_result
-    assert len(ofz_result.positions) == 2 and ofz_result.coverage.status == "complete"
+    result = outs[0].core_result
+    assert all(o.core_result is result for o in outs) and result.run_id.endswith("-book")
+    assert len(result.positions) == 3 and result.coverage.status == "complete"
+    assert [o.valuation.spread_kind for o in outs] == ["ofz", "credit", "ofz"]
     assert outs[0].valuation.pv_rub == pytest.approx(outs[2].valuation.pv_rub * -10 / 3)
 
 

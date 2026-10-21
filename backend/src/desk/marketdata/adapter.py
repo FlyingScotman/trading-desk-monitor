@@ -86,6 +86,9 @@ class Offer:
     status: str
     price_pct: Decimal | None
     window_end: date | None
+    window_start: date | None = None
+    """The holders' exercise window (MOEX ``offerdatestart`` / ``offerdateend``): core's ``open_put`` horizon skips a
+    put whose window closed before the settlement date."""
 
 
 @dataclass(frozen=True)
@@ -120,6 +123,10 @@ class BondTerms:
     """The static snapshot's business date: ``face_value`` is the face outstanding then."""
     initial_face_value: Decimal | None = None
     """The face at issue (static ``initial_face_value``), before amortization and indexation."""
+    lat_name: str | None = None
+    """MOEX LATNAME (static 1.1, HS12)."""
+    issue_size: Decimal | None = None
+    """Number of bonds of the issue as MOEX lists it (``issue_size``; for OFZ the declared volume)."""
 
 
 @dataclass(frozen=True)
@@ -130,6 +137,11 @@ class Issuer:
     inn: str | None
     sector: str | None
     is_sovereign: bool
+    group_id: str | None = None
+    """Static 1.1 (HS4): the issuer's group, curated by the hub (``group_name`` its display name)."""
+    group_name: str | None = None
+    is_state_owned: bool | None = None
+    country: str | None = None
 
 
 @dataclass(frozen=True)
@@ -220,7 +232,8 @@ class StaticView:
         d = snap.data
         self.issuers = {
             int(x["issuer_id"]): Issuer(int(x["issuer_id"]), x["name"], x.get("short_name"), x.get("inn"),
-                                        x.get("sector"), bool(x.get("is_sovereign")))
+                                        x.get("sector"), bool(x.get("is_sovereign")), x.get("group_id"),
+                                        x.get("group_name"), x.get("is_state_owned"), x.get("country"))
             for x in d["issuers"]
         }
         self.calendars = {c["calendar"]: c for c in d["calendars"]}
@@ -236,7 +249,7 @@ class StaticView:
         offers: dict[str, list[Offer]] = defaultdict(list)
         for o in d["offers"]:
             offers[o["secid"]].append(Offer(_date(o.get("offer_date")), o["type"], o["status"], _d(o.get("price_pct")),
-                                         _date(o.get("window_end"))))
+                                         _date(o.get("window_end")), _date(o.get("window_start"))))
         formulas = {f["secid"]: f for f in d["floater_formulas"]}
         self.bonds: dict[str, BondTerms] = {}
         as_of = date.fromisoformat(snap.business_date)
@@ -259,6 +272,7 @@ class StaticView:
                 offers=tuple(offers.get(sid, ())),
                 floater_formula=formulas.get(sid), face_date=as_of,
                 initial_face_value=_d(i.get("initial_face_value")),
+                lat_name=i.get("lat_name"), issue_size=_d(i.get("issue_size")),
             )
 
     def business_calendar(self, name: str) -> tuple[BusinessCalendar, date, date]:
@@ -341,17 +355,28 @@ class MarketView:
         return date.fromisoformat(r["fixing_date"]), float(Decimal(r["value"]))
 
     def fx(self, ccy: str) -> dict[str, float | None]:
-        """RUB per 1 unit: CBR official in force on the business date and the MOEX TOM weighted price."""
+        """RUB per 1 unit: CBR official in force on the business date (``cbr``) and set on it for the next day
+        (``cbr_next``); the MOEX indicative rates of the business date at 19:00 and 14:00 MSK (``moex_19``,
+        ``moex_14``); the CETS TOM close (``cets_close``, else its weighted price) and weighted price (``moex_tom``)."""
         bd = self.business_date.isoformat()
         cbr = [r for r in self.fx_rates if r["kind"] == "cbr_official" and r["ccy"] == ccy and r["effective_date"] == bd]
         nxt = [r for r in self.fx_rates if r["kind"] == "cbr_official" and r["ccy"] == ccy and r["set_date"] == bd]
         tom = [r for r in self.fx_rates if r["kind"] == "moex_eod" and r["ccy"] == ccy
                and r.get("board") == "CETS" and (r.get("tenor") or "").upper() == "TOM" and r.get("trade_date") == bd
                and (r.get("waprice_rub_per_unit") or r.get("close_rub_per_unit"))]
+
+        def indicative(kind: str) -> float | None:
+            rows = [r for r in self.fx_rates if r["kind"] == kind and r["ccy"] == ccy and r.get("trade_date") == bd
+                    and r.get("rate_rub_per_unit")]
+            return _f(rows[0]["rate_rub_per_unit"]) if rows else None
+
         return {
             "cbr": _f(cbr[0]["rate_rub_per_unit"]) if cbr else None,
             "cbr_next": _f(nxt[0]["rate_rub_per_unit"]) if nxt else None,
             "moex_tom": _f(tom[0].get("waprice_rub_per_unit") or tom[0].get("close_rub_per_unit")) if tom else None,
+            "moex_19": indicative("moex_indicative_19"),
+            "moex_14": indicative("moex_indicative_14"),
+            "cets_close": _f(tom[0].get("close_rub_per_unit") or tom[0].get("waprice_rub_per_unit")) if tom else None,
         }
 
 
@@ -359,6 +384,30 @@ def price_observation(secid: str, basis: str, clean_pct: float, accrued: Decimal
     """The quote the backend selected, with the MOEX accrued as given (core does not recompute it; without
     one core computes a fixed bond's from its leg)."""
     return BondPriceObservation(secid, clean_pct, basis, None if accrued is None else float(accrued))
+
+
+def _window(o: Offer, d: date) -> tuple[date | None, date | None]:
+    """An offer's exercise window as core accepts it: an end after the offer date (bad data) is dropped, and so is a
+    start after the end."""
+    end = o.window_end if o.window_end is not None and o.window_end <= d else None
+    start = o.window_start if o.window_start is not None and o.window_start <= (end or d) else None
+    return start, end
+
+
+def put_offers(terms: BondTerms, after: date, offer: tuple[date, Decimal, str]) -> tuple[CoreOffer, ...]:
+    """The puts core chooses the horizon from (``ValuationPolicy(horizon="open_put")``, core 0.33): every scheduled put
+    (or untyped offer) of ``terms`` in ``(after, offer date]`` with its exercise window, in date order, the chosen
+    ``offer`` last. The earlier ones are there because their window has closed (rule F2, ``valuation.bonds.next_offer``),
+    so core's ``open_put`` skips them by the same rule and lands on ``offer``: core, not the backend, applies the
+    window. Confirmed, as the backend has always taken a ``scheduled`` offer (``open_put`` ignores it anyway)."""
+    d, price, _ = offer
+    cands = {o.date: o for o in terms.offers if o.status == "scheduled" and o.type in ("put", "unknown")
+             and o.date is not None and after < o.date <= d}
+    out = {k: CoreOffer(k, OfferKind.PUT, True, float(o.price_pct if o.price_pct is not None else 100), *_window(o, k))
+           for k, o in cands.items() if k < d}
+    chosen = cands.get(d)
+    out[d] = CoreOffer(d, OfferKind.PUT, True, float(price), *(_window(chosen, d) if chosen else (None, None)))
+    return tuple(out[k] for k in sorted(out))
 
 
 def core_instrument(terms: BondTerms, after: date, horizon: date, offer: tuple[date, Decimal, str] | None = None, *,
@@ -370,8 +419,9 @@ def core_instrument(terms: BondTerms, after: date, horizon: date, offer: tuple[d
     Only what the valuation needs, so that gaps outside it cannot reject the bond: the coupons
     paid in ``(after, horizon]`` (``coupons``, the valuation layer's schedule with any amounts it
     assumed, default the snapshot's; the valuation layer has checked them), the redemptions after
-    ``after`` (their sum, the current face, is ``initial_face``), and the one offer the backend chose
-    as horizon (F2 open-window rule in ``valuation.bonds``; core has no exercise windows). A call
+    ``after`` (their sum, the current face, is ``initial_face``), and the offer the backend chose
+    as horizon (F2 open-window rule in ``valuation.bonds``): a put with the earlier puts whose window has closed, each
+    with its window (``put_offers``), for core's ``open_put`` horizon to choose it (core 0.33). A call
     needs an ``ExerciseAssumption`` in the valuation policy; a perpetual has no redemption and is
     valued to its call that way. ``redeem_at_horizon`` redeems the face outstanding at ``horizon``
     instead, without offers: a call core cannot exercise (a callable floater).
@@ -380,7 +430,9 @@ def core_instrument(terms: BondTerms, after: date, horizon: date, offer: tuple[d
     the rate (MOEX); the snapshot publishes no day count, so those are ACT/365. A period ends at
     the next one's start when its payment date was moved past it (a holiday). A floater
     (``floater`` = rule, fixing ID, projection curve ID) gets a ``FloatingCouponLeg``: coupons MOEX
-    published (``known``/``current_published``, non-zero) are cash, the others are projected.
+    published (``known``/``current_published``, non-zero) are cash with their rate (``published_rate``), the others
+    are projected; a corporate's accrues on the rate (``AccrualBasis.RATE_ACT_365``), an OFZ-PK's pro rata on the
+    amount (core 0.33 ``Instrument.accrued``).
 
     ``settlement_lag_days`` is 0 (finding F9, core brief C2): the MOEX price and accrued are as of
     the trade date, so core must settle on it; at T+1 the Z-spread is off by 0.5-2.8 bp.
@@ -393,9 +445,12 @@ def core_instrument(terms: BondTerms, after: date, horizon: date, offer: tuple[d
         nxt = flows[i + 1].start if i + 1 < len(flows) else None
         end = nxt if start is not None and nxt is not None and start < nxt < c.pay_date else c.pay_date
         if floater is not None and start is not None:
-            published = c.amount_per_bond if c.status in ("known", "current_published") and c.amount_per_bond else None
-            periods.append(FloatingCouponPeriod(start, end, c.pay_date, float(c.face or terms.face_value),  # type: ignore[arg-type]
-                                                None if published is None else float(published)))
+            known = c.status in ("known", "current_published") and bool(c.amount_per_bond)
+            periods.append(FloatingCouponPeriod(
+                start, end, c.pay_date, float(c.face or terms.face_value),  # type: ignore[arg-type]
+                float(c.amount_per_bond) if known else None,  # type: ignore[arg-type]
+                # the issuer's rate of a published coupon: a corporate accrues on it (core 0.33 accrued)
+                float(c.rate_pct) / 100 if known and c.rate_pct else None))
             continue
         if start is None or c.amount_per_bond is None or (not ofz and c.rate_pct is None):
             raise InvalidTerms(f"coupon {c.no} on {c.pay_date}: start {c.start}, amount {c.amount_per_bond}, "
@@ -404,8 +459,9 @@ def core_instrument(terms: BondTerms, after: date, horizon: date, offer: tuple[d
         periods.append(CouponPeriod(start, end, c.pay_date, amount) if ofz
                        else RateCouponPeriod(start, end, c.pay_date, amount, float(c.rate_pct) / 100))  # type: ignore[arg-type]
     leg: FixedCouponLeg | RateAccrualCouponLeg | FloatingCouponLeg | None
-    if floater is not None and periods:
-        leg = FloatingCouponLeg(floater[0], tuple(periods), floater[1], floater[2])  # type: ignore[arg-type]
+    if floater is not None and periods:  # OFZ-PK accrue pro rata on the amount (Minfin), corporates on the rate (MOEX)
+        leg = FloatingCouponLeg(floater[0], tuple(periods), floater[1], floater[2],  # type: ignore[arg-type]
+                                None if ofz else AccrualBasis.RATE_ACT_365)
     elif not periods:
         leg = None
     else:
@@ -419,8 +475,11 @@ def core_instrument(terms: BondTerms, after: date, horizon: date, offer: tuple[d
     principal = PrincipalLeg(tuple(
         CoreRedemption(d, a, CashflowKind.MATURITY if i == len(reds) - 1 else CashflowKind.AMORTIZATION)
         for i, (d, a) in enumerate(reds)))
-    offers = () if offer is None or redeem_at_horizon else (
-        CoreOffer(offer[0], OfferKind.CALL if offer[2] == "call" else OfferKind.PUT, True, float(offer[1])),)
+    offers: tuple[CoreOffer, ...] = ()
+    if offer is not None and not redeem_at_horizon and offer[2] == "call":
+        offers = (CoreOffer(offer[0], OfferKind.CALL, True, float(offer[1])),)
+    elif offer is not None and not redeem_at_horizon:
+        offers = put_offers(terms, after, offer)
     return Instrument(
         terms.secid, ProductType.FLOATING_BOND if isinstance(leg, FloatingCouponLeg) else ProductType.FIXED_BOND, "RUB", face, leg, principal,
         terms.calendar, offers=offers, settlement_lag_days=0, isin=terms.isin,

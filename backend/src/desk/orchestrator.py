@@ -34,6 +34,8 @@ from rub_fixed_income import (
 from .curves import rates
 from .marketdata.adapter import KBD_CURVE_ID, KBD_SPEC, BondQuote, BondTerms, MarketView, StaticView
 from .marketdata.bundle import SnapshotDir, SnapshotError
+from .marketdata.reference import Reference
+from .marketdata.reference import facts as reference_of
 from .pnl.direct import split_fx
 from .pnl.flash import FlashCurves, FlashPnl, NoPnl, explain
 from .valuation.bonds import (
@@ -79,6 +81,16 @@ class EodContext:
     cache: ShockedCurveCache
     rates: dict[str, Any] = field(default_factory=dict)
     """Lineage of the rates inputs in ``core_market`` (or the error that left one out)."""
+    reference: Reference | None = None
+    """Issuer and rating facts of the newest static of the cache (``marketdata.reference``, R25); None: the run's
+    own static's (``reference_facts``)."""
+    proxy_curves: bool = False
+    """Setting ``proxy_curves_for_risk`` (default off): show the hub's government par-yield proxies (UST par, ECB AAA,
+    Bund; contract 1.3) as the USD/EUR curves of the run. Off: those curves stay without points."""
+
+    @property
+    def reference_facts(self) -> Reference:
+        return self.reference if self.reference is not None else reference_of(None, self.static)
 
     @property
     def business_date(self) -> date:
@@ -108,6 +120,8 @@ class EodContext:
             "market_snapshot_id": self.market.snapshot.id,
             "static_snapshot_id": self.static.snapshot.id,
             "static_business_date": self.static.snapshot.business_date,
+            "reference_snapshot_id": self.reference_facts.snapshot_id,
+            "reference_business_date": self.reference_facts.business_date,
             "point_in_time_warning": self.point_in_time_warning,
             "cut_type": self.market.snapshot.cut_type,
             "hub": prov.get("hub"),

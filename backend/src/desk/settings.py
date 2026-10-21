@@ -15,7 +15,8 @@ layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub
 * ``DESK_HUB_URL``         hub base URL, set per installation (no default: the address is
                            never kept in the repository); HTTPS only, plain HTTP is
                            accepted for localhost (test stubs)
-* ``DESK_HUB_TOKEN``       bearer token of this consumer (scope ``snapshots``), or
+* ``DESK_HUB_TOKEN``       bearer token of this consumer (scope ``read``: snapshots and the history API of hub
+                           0.2.0; a ``snapshots`` token serves the snapshots only), or
   ``DESK_HUB_TOKEN_FILE``  a file holding it; else ``<home>/hub_token`` (written by the settings page).
                            Never commit either; the repository is public
 * ``DESK_HUB_CA_BUNDLE``   PEM bundle for a TLS-inspecting proxy (inside the work network)
@@ -48,10 +49,23 @@ layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub
                            latest hub dates it keeps in sync (5)
 * ``DESK_INTRADAY``        the autopilot's intraday step (on): today's book on the hub's intraday cuts every half
                            hour, from 19:45 on the preliminary close (R11)
+* ``DESK_PROXY_CURVES_FOR_RISK``  (off) the hub's government par-yield proxies of contract 1.3 (``usd_ust_par``,
+                           ``eur_aaa_par``, ``eur_bund_par``: UST par, ECB AAA, Bund, **not OIS**) become the points
+                           and the day's move of the run's USD / EUR curves, so the rates PnL and the scenario shifts
+                           of USD/EUR risk use them. Off: they are shown on the market pages as proxies only and the
+                           USD/EUR curves of the risk stay without points (R25)
 * ``DESK_INBOX_LOOKBACK_DAYS``  the inbox scan and the autopilot's hub sync take report files (by modification
                            time, then by the report date ``match`` gives) and hub dates at most this many days old
-                           (10; 0: no limit); a folder holding years of reports is not read. A backfill of older
-                           dates (S8) gets its own explicit date range.
+                           (35; 0: no limit); a folder holding years of reports is not read. The backfill
+                           (``DESK_BACKFILL_FROM``) reads the older ones once.
+* ``DESK_HISTORY_BONDS_FROM``, ``DESK_HISTORY_RATES_FROM``  first date of the market history read from the hub's
+                           history API (``YYYY-MM-DD``; defaults 2024-01-03 for bonds, where the hub's bond EOD
+                           starts, and 2010-01-01 for the KBD, curves, fixings and FX, bounded by what the hub has);
+                           the autopilot's history step (``history_days`` > 0) fetches it a little per cycle
+* ``DESK_BACKFILL``, ``DESK_BACKFILL_FROM``, ``DESK_BACKFILL_BUDGET_S``  the autopilot's backfill step (on): the
+                           default runs of the past business dates from this date (2026-01-05, the hub's first
+                           eod_final close) with positions, at most this many seconds a cycle (600), after every
+                           other step (``desk.backfill``, R23; ``desk backfill`` does the same at once)
 * ``DESK_UPDATE_DIR``      the Windows bundle: a folder (a network share, say) holding update zips that the
                            settings page offers to install (``desk.update``); none by default
 
@@ -67,6 +81,7 @@ import os
 import re
 import tempfile
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -99,9 +114,15 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "autopilot": ("DESK_AUTOPILOT", "bool"),
     "autopilot_sync_last": ("DESK_AUTOPILOT_SYNC_LAST", "int"),
     "intraday": ("DESK_INTRADAY", "bool"),
+    "proxy_curves_for_risk": ("DESK_PROXY_CURVES_FOR_RISK", "bool"),
     "inbox_lookback_days": ("DESK_INBOX_LOOKBACK_DAYS", "int0"),
     "update_dir": ("DESK_UPDATE_DIR", "path"),
     "history_days": ("DESK_HISTORY_DAYS", "int0"),
+    "history_bonds_from": ("DESK_HISTORY_BONDS_FROM", "date"),
+    "history_rates_from": ("DESK_HISTORY_RATES_FROM", "date"),
+    "backfill": ("DESK_BACKFILL", "bool"),
+    "backfill_from": ("DESK_BACKFILL_FROM", "date"),
+    "backfill_budget_s": ("DESK_BACKFILL_BUDGET_S", "num"),
 }
 PROXY_KEYS = {"https_proxy": "HTTPS_PROXY", "no_proxy": "NO_PROXY"}
 READ_ONLY_KEYS = ("hub_token", "hub_token_set", "proxy_password", "proxy_password_set", "home", "effective",
@@ -158,17 +179,23 @@ class Settings:
     inbox_dirs: tuple[Path, ...] = ()
     inbox_archive: Path = None  # type: ignore[assignment]  # None: <home>/inbox-archive
     inbox_poll_seconds: float = 60.0
-    adapter_match_timeout_s: float = 10.0
+    adapter_match_timeout_s: float = 60.0  # per match call (50 files); the worker start-up is apart (R22)
     adapter_read_timeout_s: float = 600.0
     inbox_max_file_mb: float = 500.0
     home: Path = None  # type: ignore[assignment]  # None: desk_home()
     autopilot: bool = True
     autopilot_sync_last: int = 5
     intraday: bool = True  # the autopilot values today's book on the hub's intraday / preliminary cuts (R11)
-    inbox_lookback_days: int = 10  # the inbox takes report files at most this many days old; 0: no limit
+    proxy_curves_for_risk: bool = False  # UST par / ECB AAA / Bund proxies as the run's USD/EUR curves (R25; not OIS)
+    inbox_lookback_days: int = 35  # report dates at most this many days old (R22); 0: no limit
     history_days: int = 260  # hub business dates of market history for the bond charts (~1 year); 0: the cache only
+    history_bonds_from: date = date(2024, 1, 3)  # the hub's history API: bonds from (its bond EOD starts here)
+    history_rates_from: date = date(2010, 1, 1)  # the hub's history API: KBD, curves, fixings, FX from
     private_adapter_default: bool = False  # private_adapter came from DESK_DEFAULT_PRIVATE_ADAPTER
     update_dir: Path | None = None  # update zips of the Windows bundle (desk.update)
+    backfill: bool = True  # the autopilot computes the default runs of past dates (desk.backfill, R23)
+    backfill_from: str = "2026-01-05"  # first date of the backfill (the hub's first eod_final close)
+    backfill_budget_s: float = 600.0  # seconds of backfill runs per autopilot cycle (after every other step)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "home", Path(self.home) if self.home is not None else desk_home())
@@ -228,9 +255,15 @@ class Settings:
             ("autopilot", "on" if self.autopilot else "off"),
             ("autopilot_sync_last", str(self.autopilot_sync_last)),
             ("intraday", "on" if self.intraday else "off"),
+            ("proxy_curves_for_risk", "on (UST par / ECB AAA / Bund, not OIS)" if self.proxy_curves_for_risk
+             else "off (proxies shown only)"),
             ("inbox_lookback_days", str(self.inbox_lookback_days) if self.inbox_lookback_days else "0 (no limit)"),
             ("update_dir", str(self.update_dir or "none")),
             ("history_days", str(self.history_days) if self.history_days else "0 (off: the cached dates only)"),
+            ("history_bonds_from", self.history_bonds_from.isoformat()),
+            ("history_rates_from", self.history_rates_from.isoformat()),
+            ("backfill", (f"on from {self.backfill_from}, {self.backfill_budget_s:g} s a cycle" if self.backfill
+                          else "off")),
         ]
 
 
@@ -314,6 +347,8 @@ def check_settings_doc(doc: object) -> list[str]:
             errors.append(f"{key}: must be a whole number >= 0")
         elif kind == "bool" and not isinstance(v, bool):
             errors.append(f"{key}: must be true or false")
+        elif kind == "date" and not (isinstance(v, str) and (not v.strip() or _is_date(v.strip()))):
+            errors.append(f"{key}: must be a date YYYY-MM-DD")
         elif kind == "dirs":
             if not isinstance(v, list):
                 errors.append(f"{key}: must be a list of {{path, label, recursive}}")
@@ -326,6 +361,15 @@ def check_settings_doc(doc: object) -> list[str]:
                 elif not isinstance(d.get("recursive"), (bool, type(None))):
                     errors.append(f"{key}[{i}]: recursive must be true or false")
     return errors
+
+
+def _is_date(v: str) -> bool:
+    v = v.strip()
+    try:
+        date.fromisoformat(v)
+    except ValueError:
+        return False
+    return len(v) == 10
 
 
 def _json_layer(doc: dict[str, Any], home: Path) -> dict[str, str]:
@@ -449,6 +493,12 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
             raise SettingsError(f"{key}: expected 1/0, true/false, yes/no or on/off, not {v!r}")
         return v in _TRUE if v else default
 
+    def day(key: str, default: date) -> date:
+        v = (get(key) or "").strip()
+        if v and not _is_date(v):
+            raise SettingsError(f"{key}: expected a date YYYY-MM-DD, not {v!r}")
+        return date.fromisoformat(v) if v else default
+
     def count(key: str, default: int, least: int = 1) -> int:
         v = env.get(key)  # "0" is a value here (no limit), not unset
         try:
@@ -474,6 +524,9 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         adapter = str(_path(adapter))
     elif adapter is None and (fallback := _path(proc.get("DESK_DEFAULT_PRIVATE_ADAPTER"))) and fallback.is_dir():
         adapter, adapter_default = str(fallback), True  # the bundle's adapter, below every other layer
+    backfill_from = (get("DESK_BACKFILL_FROM") or defaults.backfill_from).strip()
+    if not _is_date(backfill_from):
+        raise SettingsError(f"DESK_BACKFILL_FROM (backfill_from) must be a date YYYY-MM-DD, not {backfill_from!r}")
     store_url = get("DESK_STORE_URL")
     if store_url is not None and urlsplit(store_url).scheme not in ("postgresql", "postgres"):
         raise SettingsError("DESK_STORE_URL must be a postgresql:// URI")
@@ -504,10 +557,16 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         autopilot=flag("DESK_AUTOPILOT", defaults.autopilot),
         autopilot_sync_last=count("DESK_AUTOPILOT_SYNC_LAST", defaults.autopilot_sync_last),
         intraday=flag("DESK_INTRADAY", defaults.intraday),
+        proxy_curves_for_risk=flag("DESK_PROXY_CURVES_FOR_RISK", defaults.proxy_curves_for_risk),
         inbox_lookback_days=count("DESK_INBOX_LOOKBACK_DAYS", defaults.inbox_lookback_days, 0),
         history_days=count("DESK_HISTORY_DAYS", defaults.history_days, 0),
+        history_bonds_from=day("DESK_HISTORY_BONDS_FROM", defaults.history_bonds_from),
+        history_rates_from=day("DESK_HISTORY_RATES_FROM", defaults.history_rates_from),
         private_adapter_default=adapter_default,
         update_dir=_path(get("DESK_UPDATE_DIR")),
+        backfill=flag("DESK_BACKFILL", defaults.backfill),
+        backfill_from=backfill_from,
+        backfill_budget_s=num("DESK_BACKFILL_BUDGET_S", defaults.backfill_budget_s),
     )
 
 

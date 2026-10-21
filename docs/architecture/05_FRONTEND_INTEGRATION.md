@@ -80,6 +80,27 @@ Notes:
 
    Details: FE-1…FE-7 in [reviews/2026-10-16_module_review.md](reviews/2026-10-16_module_review.md).
 
+## 4a Interface concepts on real data
+
+The concepts (`prototypes/concepts/`, owner feedback 21.10) run on the demo set and on real runs alike: `lib/real.js` maps `window.DESK` plus `window.DESK_EXTRAS` (`/concepts-data.js`) onto the demo set's shape, so a concept page needs no code for the data source. Rules it keeps:
+- absent data is null and named in the header's notes, never a made-up number (ratings, foreign curves' points; the market's sectors, sizes and coupons until the static snapshot's facts are in, R23);
+- a floater has no yield: its spread is the discount margin;
+- the OFZ curve of the concepts is the basis OFZ − RUONIA (the run's KBD minus RUONIA OIS), its risk the positions' `ofzSpr01` by tenor; risk the run booked on the KBD (a date without RUONIA) is added to RUONIA;
+- instrument types: GOV (ОФЗ-ПД, -ПК, -ИН, sovereign FX), SUB, CORP (fixed / floaters), DER (OTC by the report, FX), other; the same in `api/concepts.kind_of` and `real.js`;
+- the desk's series over time are the default runs' own sums (risk, MV, PnL; `publish.summary`, one row per run) and the market history (price, yield, G-spread); C11 charts risk and MV per date from each position's run of that date (face, DV01, CS01, basis, MV, DV01 by curve: `/api/v1/history/positions`), with the book filter; only the demo set rebuilds them as today's sensitivities times the face, and the page says which;
+- PnL month and year to date are sums of the runs of the period; when the period is partial (positions start later, business days without a run, market history too short) `pnlPeriods` says so, the header's notes explain it and the pages mark MTD/YTD with «*» (`KIT.partial`);
+- the market's payment calendar (C08) is aggregated on the server (`/api/v1/calendar/market`, R23): RUB by day × type (ОФЗ-ПД, -ПК, -ИН, corporate fixed / floating, subfederal, other) × kind, the FX bonds of Russian issuers by day × currency × kind; amounts in the face currency, one currency at a time (C08's FX mode has a currency switch and never sums across currencies); the rows behind a cell come from the same endpoint on a drill (`M.marketCal.flows`). `lib/mock.js` builds the same shape from the demo universe, so C08 has one code path;
+- the market universe (C09, C13) carries the static snapshot's issuer, group, sector, outstanding face, coupon and frequency; without ratings C09 colours the market map by issuer sector; CBR meetings (C05, C06, C08, C09) come from the market snapshot's `cbr_meetings` (dates ahead, estimated or announced, past decisions and the key rate); consensus and the rate the curve prices are not in the data and the pages say so;
+- the data responses are built once per run and store state and cached with ETag and gzip; `desk serve` builds the newest run's ahead (`app.warm_bodies`). At the owner's size (600 positions, 200 runs) the pages are interactive in under 2 s (`tools/tti.js`, numbers in `backend/README.md`).
+
+### 4b Market history on the pages (R24)
+
+The market's past comes from the store's market history, which the hub's history API fills years deep (bonds from 2024-01-03, KBD, curves, fixings and FX further back; [04](04_BACKEND.md) §9), else the snapshots. It is not in `/concepts-data.js`, which every page loads; two lazily loaded endpoints carry it, so a page that does not chart it stays as fast as before (pages load in about 0.5 s warm on the fixture server, the market endpoint answers in about 0.2 s and is cached per run until the history changes):
+- `/api/v1/history/positions?run_id=&ids=&from=`: a position's price, yield (none for a floater), G-spread, MOEX's Z-spread to the KBD, the floater's discount margin by the runs, a linker's ICPI / IR / BEI, the KBD at its term, face and DV01 by the runs. The card of a position asks for its whole history (the chart opens on the last year; wheel and slider go back), pages charting every position for a year;
+- `/api/v1/history/market?run_id=`: per bond the yield and price change over 1D / 1W / 1M / 3M / YTD (C09's movers, any period), КС, RUONIA, RUSFAR, RUSFAR CNY and CPI year on year, CBR and MOEX FX with their changes (C09's strip, C05's market section), RUONIA OIS, key-rate swaps and the KBD at the pillars on those days and two years of 1Y–10Y (C09's curves: compared with a chosen past day, and their history).
+
+`lib/real.js` exposes them as `M.posHistory(id, {deep: true})` and `M.marketHistory()` (synchronous, once); the demo set has neither, and pages fall back to what they showed before.
+
 ## 5 Live behaviour (intraday)
 
 - The UI subscribes to `/api/v1/events`. On `run.published` it shows a "newer run available" banner, or auto-switches if the user pinned "follow latest".

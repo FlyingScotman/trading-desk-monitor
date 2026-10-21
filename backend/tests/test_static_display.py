@@ -9,6 +9,7 @@ import dataclasses
 import gzip
 import hashlib
 import json
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -68,8 +69,8 @@ def test_a_1_1_bundle_with_unknown_fields_is_read(tmp_path):
     assert cache.verify(body, sid)["schema_version"] == "market_snapshot/1.1"
     snap = parse_bundle(body, sid)
     view, ref = StaticView(snap), StaticView(SnapshotDir(FIX).get(STATIC))
-    assert view.bonds == ref.bonds
-    assert view.issuers == ref.issuers
+    assert {k: replace(v, lat_name=None) for k, v in view.bonds.items()} == ref.bonds  # 1.1 lat_name read (R23)
+    assert {k: replace(v, group_id=None) for k, v in view.issuers.items()} == ref.issuers  # 1.1 groups read (R23)
     assert SnapshotDir(tmp_path).get(sid).doc["schema_version"] == "market_snapshot/1.1"
 
     refs = static_index.static_snapshots(tmp_path)  # the inbox reads it too

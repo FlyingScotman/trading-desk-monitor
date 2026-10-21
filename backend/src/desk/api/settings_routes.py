@@ -23,6 +23,7 @@ from fastapi import APIRouter, Body, Depends, Request
 
 from ..inbox import runner, scan
 from ..inbox.loader import CONFIG_NAME_RE, check_config_files, load_adapter
+from ..marketdata import hubhistory
 from ..marketdata.hub import hub_check
 from ..settings import (
     READ_ONLY_KEYS,
@@ -109,6 +110,8 @@ def _effective(st: Settings) -> dict[str, Any]:
         "autopilot_sync_last": st.autopilot_sync_last, "intraday": st.intraday,
         "inbox_lookback_days": st.inbox_lookback_days,
         "history_days": st.history_days,
+        "history_bonds_from": st.history_bonds_from.isoformat(), "history_rates_from": st.history_rates_from.isoformat(),
+        "backfill": st.backfill, "backfill_from": st.backfill_from, "backfill_budget_s": st.backfill_budget_s,
         "logs_dir": str(st.logs_dir), "update_dir": str(st.update_dir) if st.update_dir else None,
     }
 
@@ -166,6 +169,7 @@ def put_hub_token(body: JsonBody) -> dict[str, Any]:
     try:
         write_hub_token(token, desk_home())
         st = load()
+        hubhistory.forget()  # a new token: the history API is asked again in the next cycle
     except SettingsError as e:
         raise ApiError(422, "invalid_parameter", str(e)) from None
     return {"hub_token_set": bool(st.hub_token), "hub_token_source": st.hub_token_source}

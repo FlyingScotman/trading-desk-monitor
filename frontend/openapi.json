@@ -3,7 +3,7 @@
   "info": {
     "title": "Desk API",
     "description": "Desk API v1 (docs/architecture/05 §2)",
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "paths": {
     "/health/live": {
@@ -658,7 +658,7 @@
     "/api/v1/bonds/history": {
       "get": {
         "summary": "Bond History",
-        "description": "The issue's quoted days from the market history (the cached hub snapshots, ``history_days`` deep) merged\nwith the default runs that hold it (Z-spread, the desk's face), and the KBD rate at its term with the spread\nto it (``desk.marketdata.history.bond_history``). ``instrument_id`` is the MOEX secid (or the report's id),\n``isin`` finds the bond through the static snapshots; ``curve``: the KBD (RUB OFZ; own, base) has rates,\nanother curve gives none; ``wal`` is accepted for the contract and not used yet.",
+        "description": "The issue's quoted days from the market history (the hub's history API, else the cached hub snapshots) merged\nwith the default runs that hold it (Z-spread, the desk's face), and the KBD rate at its term with the spread\nto it (``desk.marketdata.history.bond_history``). ``instrument_id`` is the MOEX secid (or the report's id),\n``isin`` finds the bond through the static snapshots; ``curve``: the KBD (RUB OFZ; own, base) has rates,\nanother curve gives none; ``wal`` is accepted for the contract and not used yet.",
         "operationId": "bond_history_api_v1_bonds_history_get",
         "parameters": [
           {
@@ -1289,7 +1289,8 @@
               "scan",
               "eod",
               "intraday",
-              "history"
+              "history",
+              "backfill"
             ],
             "title": "Step"
           },
@@ -1609,7 +1610,7 @@
           "series"
         ],
         "title": "BondHistory",
-        "description": "The history of an issue for the monitors (DATA_CONTRACT §6): every quoted day of the market history\n(``md_bond_eod``: the cached hub snapshots, ``history_days`` deep) merged with the desk's default runs that hold\nit; the curve rate is the KBD at the bond's term. Empty, not 404, when the issue is unknown."
+        "description": "The history of an issue for the monitors (DATA_CONTRACT §6): every quoted day of the market history\n(``md_bond_day``: the hub's history API, from 2024-01-03, else the cached hub snapshots, ``history_days`` deep)\nmerged with the desk's default runs that hold it; the curve rate is the KBD at the bond's term. Empty, not 404,\nwhen the issue is unknown."
       },
       "BondHistoryPoint": {
         "properties": {
@@ -1772,6 +1773,66 @@
             ],
             "title": "Yield Date",
             "description": "the date MOEX's yield runs to: the offer or maturity"
+          },
+          "moex_zspread_bp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Moex Zspread Bp",
+            "description": "MOEX's Z-spread to the KBD"
+          },
+          "icpi": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icpi",
+            "description": "MOEX yields ICPI (linkers), verbatim"
+          },
+          "ir": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ir",
+            "description": "MOEX yields IR (linkers), verbatim"
+          },
+          "bei": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bei",
+            "description": "MOEX yields BEI (linkers), verbatim"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin",
+            "description": "where the market fields come from: hub (the hub's history API) or snapshot (a cached eod_final snapshot)"
           }
         },
         "type": "object",

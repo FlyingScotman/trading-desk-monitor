@@ -1,0 +1,34 @@
+{
+ "source": "marketdatahub.cc eod_final, trimmed to the golden bonds",
+ "bonds": [
+  "SU26238RMFS4",
+  "SU26244RMFS2",
+  "RU000A10AS02",
+  "RU000A107W48",
+  "RU000A10EQV2",
+  "RU000A0JXE06",
+  "RU000A10AAU6",
+  "RU000A10C3P3",
+  "RU000A1087J8",
+  "SU29008RMFS8",
+  "SU29024RMFS5",
+  "SU29027RMFS8",
+  "RU000A10D806",
+  "RU000A10CZ68",
+  "RU000A10BLG0"
+ ],
+ "snapshots": {
+  "2026-10-19": {
+   "market": "c672da13032aaefa3a0aba7e86296041e65502d4b4f1755518c70effc41a4d2c",
+   "static": "bae1ca3875914825c2e61e467af3f1592e6478ded64ee165a61108c05ad7cae8",
+   "hub_market": "7a127b6f54aa2c40e800f66dc1d243ce34cd02e1258f1368bb0c2ef79cc39606",
+   "hub_static": "754edef4e9b0b9a41e4228ab749af16bd01c34ea4de3ff5f5e17e02883b09fd7"
+  },
+  "2026-10-20": {
+   "market": "3d06ceacddeace0ab4202ba842ecf967d2d6c3fe27c25732ef00f4af3e568c18",
+   "static": "9614fd6fb404874d4df807460f3a7b37fe7bb64980ee850337edd03136700c2b",
+   "hub_market": "9445e714a5bf06e7e4ff6e938842c1809f7d5ba3cd59215dc6fb46367f48f2ac",
+   "hub_static": "6d73fe0bb693c57a558122fb0aeb38bee9e5f2f19a7dee8b2fe6f37644e98511"
+  }
+ }
+}
