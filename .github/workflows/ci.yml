@@ -1,0 +1,26 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Python 3.12 venv with the backend, the tdm package and dev tools
+        working-directory: backend
+        run: |
+          uv venv -p 3.12 .venv
+          uv pip install -p .venv -e ".[dev]" -e ..
+      - name: Lint
+        run: backend/.venv/bin/ruff check backend
+      - name: Backend tests (embedded PostgreSQL)
+        working-directory: backend
+        run: .venv/bin/python -m pytest -q -p no:cacheprovider
+      - name: Root tests
+        run: backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests
