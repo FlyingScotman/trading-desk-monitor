@@ -24,3 +24,4 @@ frontend/node_modules/
 
 # Windows bundle (backend/tools/build_windows_bundle.py)
 /dist/
+prototypes/concepts/.shots/
