@@ -38,7 +38,7 @@ class AutopilotRun(BaseModel):
 
 
 class AutopilotProgress(BaseModel):
-    step: Literal["sync", "scan", "eod", "intraday", "history"]
+    step: Literal["sync", "scan", "eod", "intraday", "history", "backfill"]
     done: int
     total: int | None
     detail: str

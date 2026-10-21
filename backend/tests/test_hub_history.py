@@ -317,7 +317,8 @@ def test_positions_history_deep_with_spreads_and_linkers(desk_on_api):
     assert h["dates"][0] == "2024-01-03" and h["dates"][-1] == DATE
     ofz, flt, lk = h["series"]["P1"], h["series"]["P2"], h["series"]["P3"]
     assert ofz["zspr"][-1] is not None and "icpi" not in ofz and "dm" not in ofz
-    assert all(v is None for v in flt["ytm"]) and flt["dm"][-1] is not None and flt["dm"][0] is None
+    assert flt["ytm"] is None  # no yield for a floater: a series empty on every date is sent as null (R23)
+    assert flt["dm"][-1] is not None and flt["dm"][0] is None
     assert lk["icpi"][0] is not None and lk["bei"][-1] is not None
     one_year = desk_on_api.get("/api/v1/history/positions?run_id=1").json()
     assert one_year["dates"][0] >= "2025-10-15"

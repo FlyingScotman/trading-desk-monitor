@@ -90,6 +90,69 @@ class Revalidated(StaticFiles):
         return response
 
 
+class BodyCache:
+    """The concept pages' responses (megabytes of JSON a year of runs) by request key: the body, its gzip and its
+    ETag, valid while the store's ``concepts.fingerprint`` is the same (a new run, market date, static snapshot or
+    CBR meetings change it). At most ``size`` keys, the least recently used dropped."""
+
+    def __init__(self, size: int = 24) -> None:
+        import threading
+
+        self.size, self._items, self._lock = size, {}, threading.Lock()
+
+    def get(self, key: tuple, fp: str) -> tuple[bytes, bytes, str] | None:
+        with self._lock:
+            hit = self._items.pop(key, None)
+            if hit is None or hit[0] != fp:
+                return None
+            self._items[key] = hit
+            return hit[1]
+
+    def put(self, key: tuple, fp: str, body: bytes) -> tuple[bytes, bytes, str]:
+        import gzip
+
+        val = (body, gzip.compress(body, compresslevel=6), '"' + hashlib.sha256(body).hexdigest()[:32] + '"')
+        with self._lock:
+            self._items.pop(key, None)
+            self._items[key] = (fp, val)
+            while len(self._items) > self.size:
+                self._items.pop(next(iter(self._items)))
+        return val
+
+
+DESK_FP_SQL = "SELECT md5(coalesce(string_agg(s::text, ',' ORDER BY scenario_id), '')) FROM scenario_def s"
+"""What ``window.DESK`` reads beyond the runs: the scenario definitions (editable)."""
+
+
+def _body_cached(cache: BodyCache, con, key: tuple, build: Callable[[], bytes],
+                 extra_fp: str | None = None) -> tuple[bytes, bytes, str]:
+    fp = concepts.fingerprint(con) + (str(con.execute(extra_fp).fetchone()) if extra_fp else "")
+    hit = cache.get(key, fp)
+    if hit is None:
+        t0 = time.perf_counter()
+        hit = cache.put(key, fp, build())
+        log.info("built %s in %.0f ms, %d KB (%d KB gzip)", key[0], (time.perf_counter() - t0) * 1e3,
+                 len(hit[0]) // 1024, len(hit[1]) // 1024)
+    return hit
+
+
+def cached_body(request: Request, con, key: tuple, build: Callable[[], bytes],
+                extra_fp: str | None = None) -> tuple[bytes, bytes]:
+    body, gz, _ = _body_cached(request.app.state.body_cache, con, key, build, extra_fp)
+    return body, gz
+
+
+def cached_response(request: Request, con, key: tuple, build: Callable[[], bytes], media_type: str) -> Response:
+    """``build()`` once per store state (``BodyCache``); a 304 for the browser's ETag, the gzip when it accepts it."""
+    body, gz, tag = _body_cached(request.app.state.body_cache, con, key, build)
+    headers = {"ETag": tag, "Cache-Control": "no-cache", "Vary": "Accept-Encoding"}
+    if tag in [t.strip() for t in request.headers.get("if-none-match", "").split(",")]:
+        return Response(status_code=304, headers=headers)
+    if "gzip" in request.headers.get("accept-encoding", ""):
+        return Response(gz, media_type=media_type, headers={**headers, "Content-Encoding": "gzip"})
+    return Response(body, media_type=media_type, headers=headers)
+
+
 class ApiError(Exception):
     def __init__(self, status: int, code: str, message: str, details: Any = None) -> None:
         super().__init__(message)
@@ -129,6 +192,56 @@ def _cached(request: Request, run: dict[str, Any], model) -> Response:
     return Response(body, media_type="application/json", headers=headers)
 
 
+def _json_bytes(x: Any) -> bytes:
+    return json.dumps(x, ensure_ascii=False, separators=(",", ":"), default=str).encode()
+
+
+def desk_body(con, run: dict[str, Any]) -> bytes:
+    return ("window.DESK = " + json.dumps(compat.assemble(con, run), ensure_ascii=False, separators=(",", ":"))
+            + ";\n").encode()
+
+
+def extras_body(con, run: dict[str, Any], writer: Any = None) -> bytes:
+    return concepts.script(concepts.extras(con, run, writer)).encode()
+
+
+def history_body(con, run: dict[str, Any], writer: Any = None, wanted: list[str] | None = None,
+                 from_: date | None = None) -> bytes:
+    return _json_bytes(concepts.positions_history(con, run, wanted, from_, writer))
+
+
+def calendar_body(con, run: dict[str, Any]) -> bytes:
+    held = concepts.held_secids(con, run["run_id"])
+    return _json_bytes(concepts.market_calendar(con, run["business_date"], held) or {"missing": True})
+
+
+def warm_bodies(app: FastAPI) -> list[str]:
+    """Build the pages' bodies of the newest run shown (``/desk-data.js``, ``/concepts-data.js``, every position's
+    history, the market calendar) into the cache when the store changed since they were built, so that the first page load after
+    a new run finds them ready (``serve`` runs it every ``WARM_S``). Returns the bodies built."""
+    cache: BodyCache = app.state.body_cache
+    built = []
+    with psycopg.connect(app.state.store_url, row_factory=dict_row, autocommit=True, connect_timeout=5,
+                         options="-c default_transaction_read_only=on") as con:
+        run = compat.resolve_run(con)
+        if run is None:
+            return built
+        writer = app.state.write_summaries
+        for key, build, extra in ((("desk", run["run_id"]), lambda: desk_body(con, run), DESK_FP_SQL),
+                                  (("extras", run["run_id"]), lambda: extras_body(con, run, writer), None),
+                                  (("history", run["run_id"], (), None), lambda: history_body(con, run, writer), None),
+                                  (("calendar", run["run_id"]), lambda: calendar_body(con, run), None)):
+            fp = concepts.fingerprint(con) + (str(con.execute(extra).fetchone()) if extra else "")
+            if cache.get(key, fp) is None:
+                cache.put(key, fp, build())
+                built.append(key[0])
+    return built
+
+
+WARM_S = 20.0
+"""How often ``serve`` checks whether the concept pages' bodies need building again."""
+
+
 def _total(components: dict[str, Any] | None) -> float | None:
     return sum(components.get(k) or 0.0 for k in PNL_KEYS) if components else None
 
@@ -160,6 +273,15 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
     app.state.store_url = store_url
     app.state.started_at = datetime.now(UTC)  # the diagnostics' uptime (R13)
+    app.state.body_cache = BodyCache()
+
+    def write_summaries(ids: list[int]) -> None:  # the API's connections are read-only (concepts.Writer)
+        from ..publish import summary
+
+        with psycopg.connect(store_url, autocommit=True, connect_timeout=5) as w:
+            summary.ensure(w, ids)
+
+    app.state.write_summaries = write_summaries
     # window.DESK and the concept pages' series of a large book are megabytes of JSON: compressed on the wire
     app.add_middleware(GZipMiddleware, minimum_size=4096)
 
@@ -380,11 +502,19 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         return compat.assemble(con, run), ""
 
     @app.get("/desk-data.js", include_in_schema=False)
-    def desk_js(con: Con, as_of: date | None = None, run_id: int | None = None, demo: str | None = None):
+    def desk_js(con: Con, request: Request, as_of: date | None = None, run_id: int | None = None,
+                demo: str | None = None):
         # no run: DESK_MISSING and DESK_EMPTY, no window.DESK; desk-fallback.js then shows the empty state
         # ("no runs yet", the autopilot's progress), never the demo data set. Only ?demo=1 asks for data.js.
         if demo:
             return Response("/* demo requested: data.js */\n", media_type=JS, headers=NO_STORE)
+        run = compat.resolve_run(con, as_of, run_id)
+        if run is not None:  # built once per run and store state (R23); the browser still asks every time (R16)
+            body, gz = cached_body(request, con, ("desk", run["run_id"]), lambda: desk_body(con, run), DESK_FP_SQL)
+            if "gzip" in request.headers.get("accept-encoding", ""):
+                return Response(gz, media_type=JS, headers={**NO_STORE, "Content-Encoding": "gzip",
+                                                            "Vary": "Accept-Encoding"})
+            return Response(body, media_type=JS, headers=NO_STORE)
         desk, missing = _compat(con, as_of, run_id)
         if desk is None:
             empty = {"reason": "not_found" if as_of or run_id else "no_runs", "message": missing}
@@ -411,24 +541,43 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         run = None if demo else compat.resolve_run(con, as_of, run_id)
         if run is None:
             return Response("/* no run: window.DESK_EXTRAS not set */\n", media_type=JS, headers=NO_STORE)
-        body = concepts.script(concepts.extras(con, run)).encode()
-        tag = '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
-        headers = {"ETag": tag, "Cache-Control": "no-cache"}
-        if tag in [t.strip() for t in request.headers.get("if-none-match", "").split(",")]:
-            return Response(status_code=304, headers=headers)
-        return Response(body, media_type=JS, headers=headers)
+        return cached_response(request, con, ("extras", run["run_id"]), lambda: extras_body(con, run, write_summaries), JS)
 
     @app.get("/api/v1/history/positions", include_in_schema=False)
-    def positions_history(con: Con, run_id: int | None = None, as_of: date | None = None,
+    def positions_history(con: Con, request: Request, run_id: int | None = None, as_of: date | None = None,
                           ids: str | None = Query(None, description="comma-separated position ids; all when unset"),
-                          from_: Annotated[date | None, Query(alias="from")] = None) -> dict[str, Any]:
+                          from_: Annotated[date | None, Query(alias="from")] = None) -> Response:
         """The run's positions' series on one date axis (``concepts.positions_history``): MOEX price, yield and
         G-spread, the KBD at the bond's term, face and DV01 by the default runs. For the concept pages' charts."""
         run = compat.resolve_run(con, as_of, run_id)
         if run is None:
             raise ApiError(404, "not_found", f"run {run_id} not found" if run_id else "no runs")
         wanted = [i for i in (ids or "").split(",") if i] or None
-        return concepts.positions_history(con, run, wanted, from_)
+        return cached_response(request, con, ("history", run["run_id"], tuple(wanted or ()), from_),
+                               lambda: history_body(con, run, write_summaries, wanted, from_), "application/json")
+
+    @app.get("/api/v1/calendar/market", include_in_schema=False)
+    def market_calendar(con: Con, request: Request, run_id: int | None = None, as_of: date | None = None,
+                        market: str | None = Query(None, pattern="^(rub|fx)$", description="with it: the flows"),
+                        from_: Annotated[date | None, Query(alias="from")] = None, to: date | None = None,
+                        type: str | None = None, kind: str | None = None, ccy: str | None = None,
+                        sector: str | None = None, issuer: str | None = None, secid: str | None = None,
+                        big: bool = False, limit: int = Query(concepts.FLOW_LIMIT, ge=1, le=5000)):
+        """The market's payment calendar of the run's date (``concepts.market_calendar``: aggregates by day, type or
+        currency and kind); with ``market`` the flows behind a cell, the largest first (``concepts.market_flows``)."""
+        run = compat.resolve_run(con, as_of, run_id)
+        if run is None:
+            raise ApiError(404, "not_found", f"run {run_id} not found" if run_id else "no runs")
+        if market is None:
+            return cached_response(request, con, ("calendar", run["run_id"]), lambda: calendar_body(con, run),
+                                   "application/json")
+        held = concepts.held_secids(con, run["run_id"])
+        out = concepts.market_flows(con, run["business_date"], market=market, date_from=from_, date_to=to,
+                                    type_=type, kind=kind, ccy=ccy, sector=sector, big=big, issuer=issuer,
+                                    secid=secid, held=held, limit=limit)
+        if out is None:
+            raise ApiError(404, "not_found", "no static snapshot facts in the store yet (after the next run)")
+        return out
 
     from .diagnostics_routes import router as diagnostics_router
     from .market_history import router as market_history_router  # /api/v1/history/market, /status (R24)
@@ -494,6 +643,21 @@ def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir:
 
     if restart is not None:  # only under the launcher (start.bat): something must start the server again
         app.state.request_restart = request_restart
+
+    def warm_loop() -> None:  # the concept pages' bodies ready before the first page asks (R23)
+        while not server.should_exit:
+            try:
+                built = warm_bodies(app)
+                if built:
+                    log.info("concept bodies built ahead: %s", ", ".join(built))
+            except Exception:
+                log.warning("concept bodies not built ahead", exc_info=True)
+            for _ in range(int(WARM_S * 10)):
+                if server.should_exit:
+                    break
+                time.sleep(0.1)
+
+    threading.Thread(target=warm_loop, name="desk-warm", daemon=True).start()
     try:
         server.run()
     except KeyboardInterrupt:  # uvicorn raises the captured Ctrl+C again after its shutdown

@@ -50,8 +50,11 @@ tr.row.sel td { background: var(--accent-bg); }
   const M = MOCK, K = KIT, f = K.f, esc = K.esc, css = K.css;
   K.top({ title: 'C11 · Динамика', tag: 'как менялись риск и позиции' });
 
-  // ---------- история, восстановленная из позиций (учитывает фильтр книг) ----------
+  // ---------- история позиций (учитывает фильтр книг) ----------
+  // на прогонах из базы риск, MV и номинал каждой даты — из прогона этой даты (между прогонами — последний);
+  // в демо прогонов по датам нет: риск восстановлен как номинал даты × сегодняшние чувствительности
   const H = {}; M.positions.forEach(p => H[p.id] = M.posHistory(p.id));
+  const REAL = M.positions.length > 0 && M.positions.every(p => H[p.id].fromRuns);
   // ось — с первой даты, на которую известна хоть одна позиция (на прогоне из базы раньше первого прогона позиций нет;
   // цены рынка там есть, но без номинала история деска была бы нулём, а не «неизвестно»)
   const FIRST = Math.max(0, Math.min(...M.positions.map(p => H[p.id].notional.findIndex(v => v != null)).filter(i => i >= 0)));
@@ -59,15 +62,19 @@ tr.row.sel td { background: var(--accent-bg); }
   const DATES = H[M.positions[0].id].dates, N = DATES.length, LAST = N - 1;
   const scale = (p, i) => p.notional ? H[p.id].notional[i] / p.notional : 0;
   const pxr = (p, i) => p.price && H[p.id].price[i] != null ? H[p.id].price[i] / p.price : 1;
-  // показатели позиции на дату i
+  const at = (a, i) => (a && a[i]) || 0;
+  // показатели позиции на дату i (ряды истории — уже в валюте отчёта)
   const V = {
-    dv01: (p, i) => p.dv01 * scale(p, i),
-    cs01: (p, i) => p.cs01 * scale(p, i),
-    basis: (p, i) => p.basis01 * scale(p, i),
-    curve: id => (p, i) => p.dv01ByCurve[id] * scale(p, i),
-    mv: (p, i) => p.group === 'DER' ? 0 : p.mv * scale(p, i) * pxr(p, i),
+    dv01: (p, i) => at(H[p.id].dv01, i),
+    cs01: (p, i) => H[p.id].cs01 ? at(H[p.id].cs01, i) : p.cs01 * scale(p, i),
+    basis: (p, i) => H[p.id].basis ? at(H[p.id].basis, i) : p.basis01 * scale(p, i),
+    curve: id => (p, i) => (M.curve[id] || {}).kind === 'basis' ? V.basis(p, i)
+      : H[p.id].curves ? at(H[p.id].curves[id], i) : p.dv01ByCurve[id] * scale(p, i),
+    mv: (p, i) => p.group === 'DER' ? 0 : H[p.id].mv ? at(H[p.id].mv, i) : p.mv * scale(p, i) * pxr(p, i),
     notional: (p, i) => H[p.id].notional[i] * M.toRepr[p.ccy],
   };
+  const SRC_NOTE = REAL ? 'риск, MV и номинал на каждую дату — из прогона этой даты (между прогонами — последний); работает с фильтром книг'
+    : 'история риска и объёмов восстановлена из позиций (номиналы × сегодняшние чувствительности) — работает с фильтром книг';
   const RANGES = [['1M', 21], ['3M', 63], ['6M', 126], ['1Y', 250], ['всё', 100000]];
   const st = { range: 63, cmp: LAST - 5, risk: 'factors', mv: 'type', pnl: 'factors', pos: null, pm: null, top: 'dv01' };
   try { Object.assign(st, JSON.parse(localStorage.getItem('c11-state') || '{}')); } catch (e) { }
@@ -81,7 +88,7 @@ tr.row.sel td { background: var(--accent-bg); }
   // ---------- панель управления ----------
   const ctl = document.getElementById('ctl');
   function drawCtl() {
-    ctl.innerHTML = '<span class="lbl">Период</span><span class="rg"></span><span style="width:12px"></span><span class="lbl">Сравнить с</span><select id="cmpSel"></select><span class="qk"></span><span style="flex:1"></span><span class="k-note">история риска и объёмов восстановлена из позиций (номиналы × сегодняшние чувствительности) — работает с фильтром книг</span>';
+    ctl.innerHTML = '<span class="lbl">Период</span><span class="rg"></span><span style="width:12px"></span><span class="lbl">Сравнить с</span><select id="cmpSel"></select><span class="qk"></span><span style="flex:1"></span><span class="k-note">' + SRC_NOTE + '</span>';
     K.seg(ctl.querySelector('.rg'), RANGES.map(r => [String(r[1]), r[0]]), String(st.range), v => { st.range = +v; if (st.cmp < from()) st.cmp = from(); save(); drawAll(); });
     const sel = ctl.querySelector('#cmpSel');
     for (let i = LAST - 1; i >= 0; i--) { const o = document.createElement('option'); o.value = i; o.textContent = f.date(DATES[i]) + ' · ' + (LAST - i) + ' р.д. назад'; if (i === st.cmp) o.selected = true; sel.appendChild(o); }
@@ -123,7 +130,7 @@ tr.row.sel td { background: var(--accent-bg); }
     chRisk = series(pRisk.querySelector('.chart'), () => { const L = K.list(); defs = riskDefs(L); return defs.map(([n, fn, c]) => ({ name: n, data: agg(L, fn), color: c })); }, { fmt: v => f.dv(v) });
     chRisk.on('click', pp => {
       const i = idxs()[pp.dataIndex], d = defs[pp.seriesIndex]; if (!d) return;
-      K.drill({ title: d[0] + ' на ' + f.date(DATES[i]), unit: 'тыс ₽/бп', rows: atRows(K.list(), d[1], i), note: 'восстановлено по номиналам' });
+      K.drill({ title: d[0] + ' на ' + f.date(DATES[i]), unit: 'тыс ₽/бп', rows: atRows(K.list(), d[1], i), note: REAL ? 'по прогону даты' : 'восстановлено по номиналам' });
       if (i !== LAST) setCmp(i);
     });
   }
@@ -184,9 +191,10 @@ tr.row.sel td { background: var(--accent-bg); }
   const PC = { carry: '#3fb67a', rates: '#4c9dff', spread: '#e3b341', fx: '#b48cff', trading: '#ff8f3f', other: '#a0b4c8' };
   function drawPnl() {
     K.seg(pPnl.querySelector('.m'), [['factors', 'по факторам'], ['total', 'итог']], st.pnl, v => { st.pnl = v; save(); chPnl.redraw(); });
-    const hOff = N - M.histDates.length; // история PnL короче (130 р.д.)
+    // PnL — по датам прогонов (M.histDates): дата оси без прогона в столбцах не показана
+    const hIdx = Object.fromEntries(M.histDates.map((d, j) => [d, j])), hi = i => hIdx[DATES[i]];
     chPnl = K.chart(pPnl.querySelector('.chart'), () => {
-      const I = idxs().filter(i => i >= hOff), hi = i => i - hOff;
+      const I = idxs().filter(i => hi(i) != null);
       let c = 0; const cum = I.map(i => c += M.hist.pnl.total[hi(i)]);
       const bars = st.pnl === 'factors' ? PK.map(([k, n]) => ({ name: n, type: 'bar', stack: 'p', data: I.map(i => M.hist.pnl[k][hi(i)]), itemStyle: { color: PC[k] } }))
         : [{ name: 'PnL дня', type: 'bar', data: I.map(i => ({ value: M.hist.pnl.total[hi(i)], itemStyle: { color: M.hist.pnl.total[hi(i)] >= 0 ? css('--pos') : css('--neg') } })) }];
@@ -200,7 +208,7 @@ tr.row.sel td { background: var(--accent-bg); }
       };
     });
     chPnl.on('click', pp => {
-      const I = idxs().filter(i => i >= hOff), i = I[pp.dataIndex];
+      const I = idxs().filter(i => hi(i) != null), i = I[pp.dataIndex];
       if (i !== LAST) { setCmp(i); return; }
       const k = st.pnl === 'factors' && PK[pp.seriesIndex] ? PK[pp.seriesIndex] : null;
       K.drill({ title: 'PnL сегодня' + (k ? ' · ' + k[1] : ''), unit: 'тыс ₽', fmt: f.k, list: K.list(), val: p => k ? p.pnl[k[0]] : p.pnl.total });

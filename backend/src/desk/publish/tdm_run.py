@@ -61,6 +61,7 @@ from .. import __version__ as BACKEND_VERSION
 from ..curves import rates
 from ..marketdata.adapter import MarketView
 from ..marketdata.bundle import SnapshotError
+from ..marketdata.static_facts import SECTOR_LABELS
 from ..orchestrator import EodContext, Outcome
 from ..pnl.direct import DirectPnl
 from ..pnl.flash import METHOD
@@ -139,8 +140,9 @@ def issuer_display(name: str) -> str:
 
 def _issuer_key(ctx: EodContext, o: Outcome) -> tuple[str, dict[str, Any]]:
     """The issuer reference of a bond: its key (the issuer's short name, else its legal name) and the record. The
-    display name is ``issuer_display``; the group is the issuer itself until the hub has groups (HS4); sector and
-    rating ``NO_DATA`` when the hub has none (D2, D3)."""
+    display name is ``issuer_display``; the group is the hub's group (``group_name``, static 1.1, HS4), else the
+    issuer itself; the sector the hub's (HS3) in Russian (``static_facts.SECTOR_LABELS``); ``is_quasi`` the hub's
+    ``is_state_owned``; sector and rating ``NO_DATA`` when the hub has none (D2, D3; ratings: HS5 has no source)."""
     assert o.terms is not None
     iss = ctx.static.issuer_of(o.terms)
     is_gov = o.terms.bond_class.startswith("ofz") or bool(iss and iss.is_sovereign)
@@ -150,8 +152,9 @@ def _issuer_key(ctx: EodContext, o: Outcome) -> tuple[str, dict[str, Any]]:
                      "is_gov": is_gov, "is_quasi": False}
     key = iss.short_name or iss.name
     name = issuer_display(key)
-    return key, {"issuer": key, "name": name, "issuer_group": name, "sector": iss.sector or NO_DATA,
-                 "rating": NO_DATA, "is_gov": is_gov, "is_quasi": False}
+    sector = SECTOR_LABELS.get(iss.sector, iss.sector) if iss.sector else NO_DATA
+    return key, {"issuer": key, "name": name, "issuer_group": iss.group_name or name, "sector": sector,
+                 "rating": NO_DATA, "is_gov": is_gov, "is_quasi": bool(iss.is_state_owned)}
 
 
 def _report_issuer(x: dict[str, Any]) -> dict[str, Any]:
@@ -456,6 +459,8 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
             "valuation": "computed" if v.quality == "exact" else "approximated",
             "quality": v.quality, "assumptions": list(v.assumptions),
             "short_name": t.short_name, "coupon_basis": cpn.basis, **offer,
+            **({"lat_name": t.lat_name} if t.lat_name else {}),
+            **({"issue_size": float(t.issue_size)} if t.issue_size is not None else {}),
             "cashflows": cashflows(t, v, as_of, face_ccy, freq, cpn.pct), **_quote_extra(q, sa),
             **({"coupon_freq_source": "schedule"} if freq and not t.coupon_frequency else {}),
             **({"not_exact_reason": o.reason} if o.reason else {}),

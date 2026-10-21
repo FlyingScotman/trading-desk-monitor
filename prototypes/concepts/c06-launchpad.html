@@ -92,7 +92,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const sp = (a, c) => mode === 'spark' ? K.spark(a.slice(-40), 64, 18, c) : '';
         const cell = (l, v, s, spark) => '<div><div class="l">' + l + '</div><div class="spk"><span class="v">' + v + '</span>' + (spark || '') + '</div><div class="s">' + (s || '&nbsp;') + '</div></div>';
         bd.innerHTML = '<div class="hudg">' +
-          cell('PnL дня, mm', K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(k.pnl, 1)), 'MTD ' + K.d({ title: 'PnL MTD', unit: 'mm ₽', fmt: v => f.mns(v, 1), list: L, val: 'pnlMtd' }), sp(H.pnl.total)) +
+          cell('PnL дня, mm', K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(k.pnl, 1)), 'MTD ' + K.d({ title: 'PnL MTD', unit: 'mm ₽', fmt: v => f.mns(v, 1), list: L, val: 'pnlMtd' }) + K.partial('mtd'), sp(H.pnl.total)) +
           cell('DV01, тыс/бп', K.d({ title: 'DV01 ставки', unit: 'тыс ₽/бп', list: L, val: 'dv01' }, null, ''), 'RUONIA ' + K.d({ title: 'DV01 RUONIA', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB RUONIA'] }, null, '') + ' · КС ' + K.d({ title: 'DV01 КС', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB KEY'] }, null, ''), sp(dvH, css('--accent'))) +
           cell('CS01, тыс/бп', K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }, null, ''), 'базис ОФЗ ' + K.d({ title: 'Базис ОФЗ−RUONIA', unit: 'тыс ₽/бп', list: L, val: 'basis01' }, null, ''), sp(H.cs01, css('--warn'))) +
           cell('Кэрри/день, тыс', K.d({ title: 'Кэрри за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }), 'в год ≈ ' + f.mn(k.carryDay * 365, 0) + ' mm', sp(H.pnl.carry, css('--pos'))) +

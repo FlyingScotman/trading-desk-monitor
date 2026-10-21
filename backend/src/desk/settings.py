@@ -51,12 +51,16 @@ layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub
                            hour, from 19:45 on the preliminary close (R11)
 * ``DESK_INBOX_LOOKBACK_DAYS``  the inbox scan and the autopilot's hub sync take report files (by modification
                            time, then by the report date ``match`` gives) and hub dates at most this many days old
-                           (10; 0: no limit); a folder holding years of reports is not read. A backfill of older
-                           dates (S8) gets its own explicit date range.
+                           (35; 0: no limit); a folder holding years of reports is not read. The backfill
+                           (``DESK_BACKFILL_FROM``) reads the older ones once.
 * ``DESK_HISTORY_BONDS_FROM``, ``DESK_HISTORY_RATES_FROM``  first date of the market history read from the hub's
                            history API (``YYYY-MM-DD``; defaults 2024-01-03 for bonds, where the hub's bond EOD
                            starts, and 2010-01-01 for the KBD, curves, fixings and FX, bounded by what the hub has);
                            the autopilot's history step (``history_days`` > 0) fetches it a little per cycle
+* ``DESK_BACKFILL``, ``DESK_BACKFILL_FROM``, ``DESK_BACKFILL_BUDGET_S``  the autopilot's backfill step (on): the
+                           default runs of the past business dates from this date (2026-01-05, the hub's first
+                           eod_final close) with positions, at most this many seconds a cycle (600), after every
+                           other step (``desk.backfill``, R23; ``desk backfill`` does the same at once)
 * ``DESK_UPDATE_DIR``      the Windows bundle: a folder (a network share, say) holding update zips that the
                            settings page offers to install (``desk.update``); none by default
 
@@ -110,6 +114,9 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "history_days": ("DESK_HISTORY_DAYS", "int0"),
     "history_bonds_from": ("DESK_HISTORY_BONDS_FROM", "date"),
     "history_rates_from": ("DESK_HISTORY_RATES_FROM", "date"),
+    "backfill": ("DESK_BACKFILL", "bool"),
+    "backfill_from": ("DESK_BACKFILL_FROM", "date"),
+    "backfill_budget_s": ("DESK_BACKFILL_BUDGET_S", "num"),
 }
 PROXY_KEYS = {"https_proxy": "HTTPS_PROXY", "no_proxy": "NO_PROXY"}
 READ_ONLY_KEYS = ("hub_token", "hub_token_set", "proxy_password", "proxy_password_set", "home", "effective",
@@ -179,6 +186,9 @@ class Settings:
     history_rates_from: date = date(2010, 1, 1)  # the hub's history API: KBD, curves, fixings, FX from
     private_adapter_default: bool = False  # private_adapter came from DESK_DEFAULT_PRIVATE_ADAPTER
     update_dir: Path | None = None  # update zips of the Windows bundle (desk.update)
+    backfill: bool = True  # the autopilot computes the default runs of past dates (desk.backfill, R23)
+    backfill_from: str = "2026-01-05"  # first date of the backfill (the hub's first eod_final close)
+    backfill_budget_s: float = 600.0  # seconds of backfill runs per autopilot cycle (after every other step)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "home", Path(self.home) if self.home is not None else desk_home())
@@ -243,6 +253,8 @@ class Settings:
             ("history_days", str(self.history_days) if self.history_days else "0 (off: the cached dates only)"),
             ("history_bonds_from", self.history_bonds_from.isoformat()),
             ("history_rates_from", self.history_rates_from.isoformat()),
+            ("backfill", (f"on from {self.backfill_from}, {self.backfill_budget_s:g} s a cycle" if self.backfill
+                          else "off")),
         ]
 
 
@@ -343,6 +355,7 @@ def check_settings_doc(doc: object) -> list[str]:
 
 
 def _is_date(v: str) -> bool:
+    v = v.strip()
     try:
         date.fromisoformat(v)
     except ValueError:
@@ -502,6 +515,9 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         adapter = str(_path(adapter))
     elif adapter is None and (fallback := _path(proc.get("DESK_DEFAULT_PRIVATE_ADAPTER"))) and fallback.is_dir():
         adapter, adapter_default = str(fallback), True  # the bundle's adapter, below every other layer
+    backfill_from = (get("DESK_BACKFILL_FROM") or defaults.backfill_from).strip()
+    if not _is_date(backfill_from):
+        raise SettingsError(f"DESK_BACKFILL_FROM (backfill_from) must be a date YYYY-MM-DD, not {backfill_from!r}")
     store_url = get("DESK_STORE_URL")
     if store_url is not None and urlsplit(store_url).scheme not in ("postgresql", "postgres"):
         raise SettingsError("DESK_STORE_URL must be a postgresql:// URI")
@@ -538,6 +554,9 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         history_rates_from=day("DESK_HISTORY_RATES_FROM", defaults.history_rates_from),
         private_adapter_default=adapter_default,
         update_dir=_path(get("DESK_UPDATE_DIR")),
+        backfill=flag("DESK_BACKFILL", defaults.backfill),
+        backfill_from=backfill_from,
+        backfill_budget_s=num("DESK_BACKFILL_BUDGET_S", defaults.backfill_budget_s),
     )
 
 

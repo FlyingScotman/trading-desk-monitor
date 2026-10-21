@@ -264,7 +264,7 @@ def test_api_status_and_run(tmp_path, store_url):
         assert st["enabled"] is True and st["state"] == "idle"
         assert st["message"] == "Не настроено: укажите маркет-дата сервер и папки с отчётами в Настройках"
         assert [(x["name"], x["status"]) for x in st["steps"]] == [("sync", "skipped"), ("scan", "skipped"),
-                                                                    ("eod", "skipped")]
+                                                                    ("eod", "skipped"), ("backfill", "skipped")]
         assert st["steps"][2]["detail"] == "no positions in the store"
         r = c.post("/api/v1/autopilot/run")
         assert r.status_code == 202 and r.json() == {"queued": True}
@@ -280,7 +280,7 @@ def test_status_shows_live_progress_of_a_running_cycle(tmp_path, store_url, monk
     c = TestClient(app)
     seen: list[dict] = []
 
-    def fake_scan(con, settings, *, progress=None, now=None):
+    def fake_scan(con, settings, *, progress=None, now=None, since=None):
         progress(0, None, "просмотр папок")
         seen.append(c.get("/api/v1/autopilot/status").json())
         progress(37, 412, "positions_20261016.csv")

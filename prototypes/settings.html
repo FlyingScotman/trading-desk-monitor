@@ -267,6 +267,15 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
       <label for="history_rates_from">История ставок и курсов с</label>
       <div><input class="inp mono" id="history_rates_from" data-key="history_rates_from" placeholder="2010-01-01" autocomplete="off">
         <p class="hint">КБД, кривые RUONIA OIS и КС-свопов, фиксинги (КС, RUONIA, RUSFAR, ИПЦ), курсы ЦБ и MOEX. Пусто — 2010-01-01 (или сколько есть на сервере).</p></div>
+      <label for="backfill">История прогонов</label>
+      <div><label class="tgl"><input type="checkbox" id="backfill" data-key="backfill"><span class="tgl-s"></span><span id="backfill-lbl">включено</span></label>
+        <p class="hint">Сервер в фоне считает прошлые даты: по каждой рабочей дате с позициями (отчёт дня, а без него — последний предыдущий отчёт книги) — расчёт на окончательном закрытии этой даты. Из них — история риска, MV, PnL с начала месяца и года. Сначала один раз читает старые отчёты из папок (старше окна выше), потом считает даты от самой ранней, в конце каждого цикла и не дольше заданного времени, так что текущий день не ждёт. Уже посчитанные даты с теми же входными данными не пересчитываются. Ход — в разделе «История прогонов» ниже; то же сразу целиком: <span class="mono">desk.bat backfill</span>.</p></div>
+      <label for="backfill_from">История прогонов с даты</label>
+      <div><input class="inp mono" id="backfill_from" data-key="backfill_from" type="date" style="width:170px" placeholder="2026-01-05">
+        <p class="hint">Пусто — 05.01.2026, первое окончательное закрытие на маркет-дата сервере.</p></div>
+      <label for="backfill_budget_s">История прогонов: секунд за цикл</label>
+      <div><input class="inp mono num" id="backfill_budget_s" data-key="backfill_budget_s" inputmode="numeric" placeholder="600">
+        <p class="hint">Пусто — 600. Одна дата всегда досчитывается до конца, даже если время вышло.</p></div>
     </div>
   </section>
 
@@ -377,6 +386,16 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
       <div class="muted" id="rc-scan" style="margin-top:8px"></div>
     </div>
   </section>
+
+  <!-- 10. История прогонов (R23; self-contained: its script is here; data: /api/v1/backfill/status) -->
+  <section class="pnl" id="bf" aria-labelledby="h-bf">
+    <div class="ph"><h2 id="h-bf">История прогонов</h2><span class="muted" id="bf-when"></span></div>
+    <div class="pb">
+      <div class="note">Расчёты прошлых дат для истории риска и PnL с начала месяца и года. Считает сервер в фоне (настройка «История прогонов» выше) или команда <span class="mono">desk.bat backfill</span>.</div>
+      <div class="row" style="margin-top:10px"><button class="ibtn" id="bf-run" type="button">Обновить</button><span id="bf-msg" class="muted"></span></div>
+      <table class="t" style="margin-top:8px"><tbody id="bf-rows"></tbody></table>
+    </div>
+  </section>
 </main>
 
 <div class="savebar">
@@ -422,7 +441,7 @@ async function api(method, url, body){
 }
 
 const S = {data:null, dirs:[], dirty:false, adapter:null};
-const KEYS = ['hub_url','https_proxy','proxy_user','hub_transport','no_proxy','hub_ca_bundle','private_adapter','private_adapter_config','inbox_poll_seconds','autopilot_sync_last','inbox_lookback_days','history_days','history_bonds_from','history_rates_from'];
+const KEYS = ['hub_url','https_proxy','proxy_user','hub_transport','no_proxy','hub_ca_bundle','private_adapter','private_adapter_config','inbox_poll_seconds','autopilot_sync_last','inbox_lookback_days','history_days','history_bonds_from','history_rates_from','backfill_from','backfill_budget_s'];
 
 function setDirty(v){
   S.dirty = v;
@@ -454,6 +473,7 @@ function render(d){
   });
   $('ap-lbl').textContent = $('autopilot').checked ? 'включено' : 'выключено';
   $('intraday-lbl').textContent = $('intraday').checked ? 'включено' : 'выключено';
+  $('backfill-lbl').textContent = $('backfill').checked ? 'включено' : 'выключено';
   $('cfg-default').textContent = (d.home || '') + (d.home && d.home.includes('\\') ? '\\' : '/') + 'adapter-config';
   $('token-file').textContent = eff.token_file || 'hub_token';
   const byDefault = !!eff.private_adapter_default && !d.private_adapter && !env.includes('private_adapter');
@@ -471,6 +491,7 @@ function render(d){
 }
 $('autopilot').addEventListener('change', () => { $('ap-lbl').textContent = $('autopilot').checked ? 'включено' : 'выключено'; });
 $('intraday').addEventListener('change', () => { $('intraday-lbl').textContent = $('intraday').checked ? 'включено' : 'выключено'; });
+$('backfill').addEventListener('change', () => { $('backfill-lbl').textContent = $('backfill').checked ? 'включено' : 'выключено'; });
 
 function tokenState(set, source){
   const st = $('token-st');
@@ -502,13 +523,15 @@ const EFF = [
   ['inbox_dirs','Папки с отчётами'], ['inbox_archive','Архив принятых файлов'], ['inbox_poll_seconds','Период опроса, сек'],
   ['autopilot','Автообновление'], ['intraday','Расчёт внутри дня'], ['autopilot_sync_last','Загружать последних дат'],
   ['inbox_lookback_days','Брать отчёты не старше, дней'], ['history_days','История котировок, рабочих дней'],
-  ['history_bonds_from','История облигаций с'], ['history_rates_from','История ставок и курсов с'], ['logs_dir','Журналы']];
+  ['history_bonds_from','История облигаций с'], ['history_rates_from','История ставок и курсов с'],
+  ['backfill','История прогонов'], ['backfill_from','История прогонов с даты'], ['backfill_budget_s','История прогонов: секунд за цикл'], ['logs_dir','Журналы']];
+
 function renderEffective(eff){
   const tb = $('eff'); tb.textContent = '';
   EFF.forEach(([k, label]) => {
     let v = eff[k];
     if (Array.isArray(v)) v = v.length ? v.join('\n') : '—';
-    else if (typeof v === 'boolean') v = k === 'autopilot' || k === 'intraday' ? (v ? 'включено' : 'выключено') : (v ? 'да' : 'нет');
+    else if (typeof v === 'boolean') v = k === 'autopilot' || k === 'intraday' || k === 'backfill' ? (v ? 'включено' : 'выключено') : (v ? 'да' : 'нет');
     else if (k === 'inbox_lookback_days' && v === 0) v = 'без ограничения';
     else if (k === 'history_days' && v === 0) v = 'не догружать';
     else if (v == null || v === '') v = '—';
@@ -531,6 +554,15 @@ function collect(){
       const n = Number(v);
       if (!Number.isInteger(n) || n < 0) throw new Error('Брать отчёты не старше: нужно целое число дней (0 — без ограничения)');
       body[k] = n;
+    } else if (k === 'backfill_budget_s') {
+      if (!v) { body[k] = null; continue; }
+      const n = Number(v.replace(',', '.'));
+      if (!isFinite(n) || n <= 0) throw new Error('История прогонов: нужно положительное число секунд');
+      body[k] = n;
+    } else if (k === 'backfill_from') {
+      if (!v) { body[k] = null; continue; }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) throw new Error('История прогонов с даты: нужна дата');
+      body[k] = v;
     } else if (k === 'history_days') {
       if (!v) { body[k] = null; continue; }
       const n = Number(v);
@@ -543,6 +575,7 @@ function collect(){
   }
   body.autopilot = $('autopilot').checked;
   body.intraday = $('intraday').checked;
+  body.backfill = $('backfill').checked;
   const dirs = S.dirs.map(d => ({path:d.path.trim(), label:d.label.trim(), recursive:!!d.recursive})).filter(d => d.path);
   body.inbox_dirs = dirs.length ? dirs : null;
   return body;
@@ -978,6 +1011,39 @@ async function renderConfigFiles(a){
 
   $('rc-run').addEventListener('click', load);
   $('rc-date').addEventListener('change', load);
+  if (/^https?:$/.test(location.protocol)) load();
+})();
+</script>
+<script>
+/* ---------- 10. История прогонов (R23): /api/v1/backfill/status ---------- */
+(function backfillStatus(){
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const dd = s => s ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(0, 4) : '—';
+  async function load(){
+    $('bf-msg').textContent = 'загрузка…';
+    try {
+      const r = await fetch('/api/v1/backfill/status', {headers:{'Accept':'application/json'}, cache:'no-store'});
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const s = await r.json();
+      const withPos = s.dates - s.no_positions - s.no_market;
+      const rows = [
+        ['Включено', s.enabled ? 'да' : 'нет (настройка «История прогонов» выше)'],
+        ['Даты', dd(s.from) + ' — ' + dd(s.to) + ': ' + s.dates + ' рабочих дат' + (s.hub ? '' : ' (по загруженным срезам)')],
+        ['Посчитано', s.done + ' из ' + withPos + ' дат с позициями'],
+        ['Осталось', s.todo ? s.todo + (s.next && s.next.length ? ' (ближайшие ' + s.next.map(dd).join(', ') + ')' : '') : '—'],
+        ['Без позиций', s.no_positions + (s.first_positions ? ' (позиции в базе с ' + dd(s.first_positions) + ')' : '')],
+        ['Не посчитались', s.failed ? s.failed + ': ' + (s.failed_dates || []).map(dd).join(', ') + ' — повтор после изменения данных' : '—'],
+        ['Самый ранний расчёт', dd(s.oldest_run)],
+        ['Старые отчёты прочитаны с', dd(s.inbox_scanned_from)],
+      ];
+      if (s.step) rows.push(['Последний цикл', s.step.status + ': ' + s.step.detail]);
+      const tb = $('bf-rows'); tb.textContent = '';
+      rows.forEach(([k, v]) => { const tr = document.createElement('tr'); tr.innerHTML = '<td class="k"></td><td class="v" style="white-space:pre-wrap"></td>'; tr.children[0].textContent = k; tr.children[1].textContent = v; tb.append(tr); });
+      $('bf-msg').textContent = ''; $('bf-when').textContent = 'на ' + new Date().toLocaleTimeString('ru-RU');
+    } catch (e) { $('bf-msg').textContent = 'не загрузилось: ' + e.message; }
+  }
+  $('bf-run').addEventListener('click', load);
   if (/^https?:$/.test(location.protocol)) load();
 })();
 </script>

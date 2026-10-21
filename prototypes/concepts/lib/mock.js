@@ -469,8 +469,15 @@
       notional[i] = pos;
       dv01[i] = p.notional ? p.dv01 * pos / p.notional : 0;
     }
-    return { dates, price, ytm, spr, notional, dv01, bench };
+    // риск и MV — номинал дня × сегодняшние чувствительности (в демо прогонов по датам нет: fromRuns = false)
+    const sc = i => p.notional ? notional[i] / p.notional : 0;
+    const cs01 = dates.map((_, i) => p.cs01 * sc(i)), basis = dates.map((_, i) => p.basis01 * sc(i));
+    const mv = dates.map((_, i) => p.group === 'DER' ? 0 : p.mv * sc(i) * (p.price && price[i] != null ? price[i] / p.price : 1));
+    const curves = {};
+    Object.keys(p.dv01ByCurve).forEach(c => { if (p.dv01ByCurve[c] && (M.curve[c] || {}).kind !== 'basis') curves[c] = dates.map((_, i) => p.dv01ByCurve[c] * sc(i)); });
+    return { dates, price, ytm, spr, notional, dv01, cs01, basis, mv, curves, bench, fromRuns: false };
   };
+  M.histSource = 'positions';
 
   // ---------- денежные потоки портфеля ----------
   M.cashflows = (function () {
@@ -560,6 +567,60 @@
   // ---------- рынок: изменения дня и «пульс» ----------
   M.marketMovers = M.universeRub.filter(b => b.size > 8e9).slice(0, 60).map(b => { const r = rng('mv' + b.id); return { name: b.name, rating: b.rating, sector: b.sector, ytm: b.ytm, chgBp: Math.round((r() - 0.5) * 40), vol: Math.round(r() * 4e9) }; });
   M.cbr = { next: { date: '2026-10-24', label: 'Заседание ЦБ (опорное)', consensus: '−50 б.п.', priced: '−38 б.п.' }, meetings: ['2026-10-24', '2026-12-18', '2027-02-13', '2027-03-20', '2027-04-24'] };
+
+  M.cbr.past = [{ date: '2026-09-12', decision: 'cut', decisionText: 'снижение', rate: 17, prev: 18 }];
+  M.cbr.estimated = [];
+  M.cbr.keyRate = 17;
+
+  // ---------- календарь рынка: агрегаты той же формы, что у real.js (/api/v1/calendar/market) ----------
+  // из демо-«ойкумен»: купоны по частоте от погашения назад, оферты и погашения — объём выпуска
+  let calCache;
+  Object.defineProperty(M, 'marketCal', { configurable: true, get() {
+    if (calCache) return calCache;
+    const E = addDays(AS_OF, 400), BIG = 1e10 * ((M.toRepr && M.toRepr.RUB) || 1);
+    const TYPES = [['PD', 'ОФЗ-ПД'], ['PK', 'ОФЗ-ПК'], ['IN', 'ОФЗ-ИН'], ['CORP_FIX', 'Корп. фикс'], ['CORP_FLT', 'Корп. флоатеры'], ['SUB', 'Субфед. и муни'], ['OTHER', 'Прочие (ИЦБ, ЦБ, структурные)']];
+    const rubEv = [], fxEv = [];
+    M.universeRub.forEach(b => {
+      const d0 = b.maturity || b.put, fq = FREQ[b.freq], rate = b.cpn != null ? b.cpn : b.ytm;
+      const type = b.isOfz ? 'PD' : b.flt ? 'CORP_FLT' : 'CORP_FIX';
+      const base = { secid: b.id, name: b.name, issuer: b.sector, type, sector: b.sector, ccy: 'RUB', outstanding: b.size, big: b.size >= BIG, held: false };
+      let d = fq ? d0 : null;
+      while (d && d > AS_OF) { if (d <= E) rubEv.push(Object.assign({ date: d, kind: 'cpn', amount: b.size * rate / 100 / fq, est: !!b.flt }, base)); d = addMonths(d, -12 / fq); }
+      if (d0 && d0 > AS_OF && d0 <= E) rubEv.push(Object.assign({ date: d0, kind: b.put ? 'put' : 'mat', amount: b.size, est: !!b.put }, base));
+    });
+    M.universeFx.forEach(b => {
+      const fq = FREQ[b.freq], base = { secid: b.isin, name: b.name, issuer: b.issuerName, type: b.ccy, sector: b.sector, ccy: b.ccy, outstanding: b.outstanding, held: b.held };
+      b.coupons.forEach(d => { if (d > AS_OF && d <= E) fxEv.push(Object.assign({ date: d, kind: 'cpn', amount: b.outstanding * b.cpn / 100 / fq, est: false }, base)); });
+      if (b.put && b.put > AS_OF && b.put <= E) fxEv.push(Object.assign({ date: b.put, kind: 'put', amount: b.outstanding, est: true }, base));
+      if (b.maturity > AS_OF && b.maturity <= E) fxEv.push(Object.assign({ date: b.maturity, kind: 'mat', amount: b.outstanding, est: false }, base));
+    });
+    const agg = (ev, keyFn, fields) => {
+      const m = new Map();
+      ev.forEach(x => { const k = keyFn(x).join('|'); let o = m.get(k); if (!o) { o = {}; fields.forEach((f, i) => o[f] = keyFn(x)[i]); o.amount = 0; o.count = 0; o.bigAmount = 0; o.bigCount = 0; o.estAmount = 0; m.set(k, o); }
+        o.amount += x.amount; o.count++; if (x.big) { o.bigAmount += x.amount; o.bigCount++; } if (x.est) o.estAmount += x.amount; });
+      return [...m.values()];
+    };
+    calCache = {
+      source: 'demo', staticDate: AS_OF, asOf: AS_OF, horizonEnd: E, bigRub: BIG, coverage: {},
+      types: TYPES.map(([id, label]) => ({ id, label })), ccys: [...new Set(fxEv.map(x => x.ccy))].sort(),
+      rub: agg(rubEv, x => [x.date, x.type, x.kind], ['date', 'type', 'kind']),
+      rubSector: agg(rubEv, x => [x.date.slice(0, 7), x.sector, x.kind], ['month', 'sector', 'kind']),
+      rubBig: rubEv.filter(x => x.big && x.kind !== 'cpn').map(x => ({ date: x.date, kind: x.kind, secid: x.secid, name: x.name, type: x.type, amount: x.amount, held: false, pos: null })).sort((a, b) => a.date.localeCompare(b.date)),
+      fx: agg(fxEv, x => [x.date, x.ccy, x.kind], ['date', 'ccy', 'kind']),
+      fxIssuers: agg(fxEv, x => [x.date.slice(0, 7), x.ccy, x.issuer, x.kind], ['month', 'ccy', 'issuer', 'kind']),
+      fxEvents: fxEv.filter(x => x.kind !== 'cpn').map(x => ({ date: x.date, kind: x.kind, secid: x.secid, name: x.name, issuer: x.issuer, ccy: x.ccy, amount: x.amount, held: x.held, pos: null })).sort((a, b) => a.date.localeCompare(b.date)),
+      notes: ['демо: выплаты рынка придуманы по демо-выпускам'],
+      flows(q) {
+        q = q || {};
+        const ev = (q.market === 'fx' ? fxEv : rubEv).filter(x => (!q.from || x.date >= q.from) && (!q.to || x.date <= q.to) && (!q.type || x.type === q.type) &&
+          (!q.kind || (q.kind === 'red' ? x.kind !== 'cpn' : q.kind === 'redemption' ? (x.kind === 'mat' || x.kind === 'amort') : q.kind === 'offer' ? (x.kind === 'put' || x.kind === 'call') : x.kind === q.kind)) && (!q.ccy || x.ccy === q.ccy) && (!q.sector || x.sector === q.sector) &&
+          (!q.big || x.big) && (!q.issuer || x.issuer === q.issuer) && (!q.secid || x.secid === q.secid));
+        const rows = ev.slice().sort((a, b) => b.amount - a.amount).slice(0, q.limit || 500).map(x => Object.assign({ pos: null }, x));
+        return { count: ev.length, amount: ev.reduce((s, x) => s + x.amount, 0), rows };
+      },
+    };
+    return calCache;
+  } });
 
   // ---------- вспомогательное ----------
   M.sum = (arr, f) => arr.reduce((s, x) => s + (typeof f === 'function' ? f(x) : x[f]), 0);

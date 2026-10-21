@@ -73,6 +73,21 @@
     yrs: t => t == null ? '—' : t < 1 ? Math.round(t * 12) + 'м' : grp(t, 1) + 'г',
     cls: v => v > 0 ? 'pos' : v < 0 ? 'neg' : '',
   };
+  // заседание ЦБ одной фразой: консенсус и ожидание кривой, если они есть в данных, иначе ставка и прошлое решение
+  K.cbrLine = () => {
+    const c = M.cbr || {}, n = c.next || {}, last = (c.past || [])[0];
+    const known = v => v && v !== '—' && v !== 'нет данных';
+    if (known(n.consensus) || known(n.priced)) return 'консенсус ' + K.esc(n.consensus) + ', в кривой ' + K.esc(n.priced) + '.';
+    return (c.keyRate != null ? 'ключевая ' + f.pct(c.keyRate) : '') + (last ? ' (' + f.date(last.date) + ': ' + K.esc(last.decisionText || last.decision) + ')' : '') +
+      '; консенсуса и ожиданий кривой в данных нет.';
+  };
+  // PnL MTD / YTD, посчитанные не за весь период (прогонов нет за часть дней, позиции в базе позже начала): метка «*»
+  K.partial = key => {
+    const q = M.pnlPeriods && M.pnlPeriods[key];
+    if (!q || q.complete) return '';
+    const t = 'частично: сумма ' + q.runs + ' прогонов' + (q.from ? ' с ' + f.date(q.from) : '') + ((q.why && q.why.length) ? '; ' + q.why.join('; ') : '');
+    return '<sup class="mut3" title="' + K.esc(t) + '" style="cursor:help">*</sup>';
+  };
   K.esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const esc = K.esc;
   const h = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
@@ -784,7 +799,7 @@
       const L = K.list(), k = M.kpis(L);
       const pnlH = M.hist.pnl.total.slice(-30);
       el.innerHTML = '<div class="k-kpis">' +
-        K.kpi('PnL дня', K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(k.pnl, 1) + ' mm'), 'MTD ' + K.d({ title: 'PnL MTD', unit: 'mm ₽', fmt: v => f.mns(v, 1), list: L, val: 'pnlMtd' }) + ' · YTD ' + K.d({ title: 'PnL YTD', unit: 'mm ₽', fmt: v => f.mns(v, 0), list: L, val: 'pnlYtd' }), K.spark(pnlH, 70, 20)) +
+        K.kpi('PnL дня', K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(k.pnl, 1) + ' mm'), 'MTD ' + K.d({ title: 'PnL MTD', unit: 'mm ₽', fmt: v => f.mns(v, 1), list: L, val: 'pnlMtd' }) + K.partial('mtd') + ' · YTD ' + K.d({ title: 'PnL YTD', unit: 'mm ₽', fmt: v => f.mns(v, 0), list: L, val: 'pnlYtd' }) + K.partial('ytd'), K.spark(pnlH, 70, 20)) +
         K.kpi('DV01 ставки', K.d({ title: 'DV01 ставки (все кривые)', unit: 'тыс ₽/бп', list: L, val: 'dv01' }) + ' <span class="mut" style="font-size:11px">тыс/бп</span>', M.ccys.map(c => c + ' ' + K.d({ title: 'DV01 ' + c, unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === c), val: 'dv01' }, null, '')).join(' · ')) +
         K.kpi('RUONIA · КС', K.d({ title: 'DV01 RUONIA', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB RUONIA'] }) + ' · ' + K.d({ title: 'DV01 КС', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB KEY'] }), 'базис ОФЗ ' + K.d({ title: 'Базис ОФЗ−RUONIA', unit: 'тыс ₽/бп', list: L, val: 'basis01' }, null, '')) +
         K.kpi('CS01', K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }), 'корп. RUB ' + K.d({ title: 'CS01 корп RUB', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === 'RUB'), val: 'cs01' }, null, '') + ' · вал. ' + K.d({ title: 'CS01 валютные', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy !== 'RUB'), val: 'cs01' }, null, '')) +
