@@ -158,14 +158,14 @@ class Settings:
     inbox_dirs: tuple[Path, ...] = ()
     inbox_archive: Path = None  # type: ignore[assignment]  # None: <home>/inbox-archive
     inbox_poll_seconds: float = 60.0
-    adapter_match_timeout_s: float = 10.0
+    adapter_match_timeout_s: float = 60.0  # per match call (50 files); the worker start-up is apart (R22)
     adapter_read_timeout_s: float = 600.0
     inbox_max_file_mb: float = 500.0
     home: Path = None  # type: ignore[assignment]  # None: desk_home()
     autopilot: bool = True
     autopilot_sync_last: int = 5
     intraday: bool = True  # the autopilot values today's book on the hub's intraday / preliminary cuts (R11)
-    inbox_lookback_days: int = 10  # the inbox takes report files at most this many days old; 0: no limit
+    inbox_lookback_days: int = 35  # report dates at most this many days old (R22); 0: no limit
     history_days: int = 260  # hub business dates of market history for the bond charts (~1 year); 0: the cache only
     private_adapter_default: bool = False  # private_adapter came from DESK_DEFAULT_PRIVATE_ADAPTER
     update_dir: Path | None = None  # update zips of the Windows bundle (desk.update)

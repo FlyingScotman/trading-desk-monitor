@@ -10,6 +10,7 @@
     desk runs --date 2026-10-15          the store's runs: status, positions, qualities, PnL
     desk inbox scan                      bank reports of DESK_INBOX_DIRS through the adapter into the store
     desk inbox status [--date D] [--json]          files, units, issues per source and date; book ages
+    desk inbox reconcile [--date D] [--json]       per book: report rows -> accepted -> in the run; why rows were lost
     desk inbox retry [--status failed,rejected]    offer files in these statuses again
     desk inbox replay --source S --from D1 --to D2 read archived accepted files again (new revisions if changed)
     desk adapter check [--adapter SPEC] [--dir D] [--stub-ctx] [--json]   the conformance kit (08 §8)
@@ -255,6 +256,10 @@ def cmd_inbox(a: argparse.Namespace) -> int:
             st = scan.status(con, a.settings, date.fromisoformat(a.date) if a.date else None)
             print(json.dumps(st, indent=2) if a.json else scan.status_text(st))
             return 0 if st["adapter"].startswith("ok") else 1
+        if a.inbox_cmd == "reconcile":
+            rc = scan.reconcile(con, a.settings, date.fromisoformat(a.date) if a.date else None)
+            print(json.dumps(rc, indent=2, ensure_ascii=False) if a.json else scan.reconcile_text(rc))
+            return 0
         if a.inbox_cmd == "scan":
             res = scan.scan(con, a.settings)
         elif a.inbox_cmd == "retry":
@@ -616,6 +621,10 @@ def main(argv: list[str] | None = None) -> int:
     ist.add_argument("--date", type=_iso, help="business date (default: today's positions)")
     ist.add_argument("--json", action="store_true")
     ist.set_defaults(fn=cmd_inbox)
+    irc = isub.add_parser("reconcile", help="per book: rows of the report, accepted, in the default run; the losses")
+    irc.add_argument("--date", type=_iso, help="business date (default: the latest default run's)")
+    irc.add_argument("--json", action="store_true")
+    irc.set_defaults(fn=cmd_inbox)
     irt = isub.add_parser("retry", help="offer files in these statuses again, whatever the adapter fingerprint")
     irt.add_argument("--status", type=_list, help="statuses (default ignored,match_failed,failed,timed_out,"
                      "rejected,waiting_calendar)")

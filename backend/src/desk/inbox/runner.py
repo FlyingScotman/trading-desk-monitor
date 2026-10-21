@@ -11,6 +11,8 @@ A call is one child process (``run``), or, inside ``pooled()`` (one inbox scan),
 (``Worker``, ``serve``: one JSON line in, one JSON line out) that imports the adapter and loads the instruments
 index once instead of per call: on Windows a Python start and the adapter's imports cost far more than a ``match``.
 A worker that times out or crashes is killed like a one-shot child, and the next call starts a new one.
+``call_warm`` starts every worker of the pool and has it import the adapter and load the index under a budget of
+its own (R22), so the start-up of a slow adapter never eats the timeout of the ``match`` calls that follow.
 
 Exceptions cross as their type and (file, line, function) frames, never the message, which can hold a cell
 value (08 §6.8). With ``DESK_PRIVATE_ADAPTER_DEBUG=1`` the child prints the full traceback to stderr and the
@@ -142,6 +144,8 @@ def _handle(req: dict) -> dict:
     except _LoadError as e:
         return {"ok": False, "load_error": e.code, **(_error(e.exc) if e.exc else {"type": None, "frames": []})}
     op = req["op"]
+    if op == "warm":  # the import above, and the index: paid once per worker, not inside a match timeout
+        return {"ok": True, "result": {"snapshot_id": _instruments(req.get("instruments_index")).snapshot_id}}
     if op == "describe":
         missing = [f for f in ("describe", "match", "read") if not callable(getattr(mod, f, None))]
         if missing:
@@ -342,6 +346,30 @@ class Pool:
         finally:
             self._idle.put(w)
 
+    def each(self, request: dict, timeout_s: float) -> list[dict | AdapterFailure]:
+        """``request`` on every worker at once (each started if needed), waiting for all: the responses or the
+        failures, one per worker. The workers are taken from the idle queue, so no other call interleaves."""
+        workers = [self._idle.get() for _ in range(self.size)]
+        out: list[dict | AdapterFailure] = [AdapterFailure("failed", "not_called")] * len(workers)
+
+        def one(i: int) -> None:
+            try:
+                out[i] = workers[i].call(request, timeout_s)
+            except AdapterFailure as f:
+                out[i] = f
+
+        threads = [threading.Thread(target=one, args=(i,), name="desk-adapter-warm", daemon=True)
+                   for i in range(len(workers))]
+        try:
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        finally:
+            for w in workers:
+                self._idle.put(w)
+        return out
+
     def close(self) -> None:
         for w in self._all:
             w.close()
@@ -392,15 +420,37 @@ def call_describe(spec: str | None, config_dir: str | None, timeout_s: float,
                timeout_s)
 
 
+def call_warm(handle: Any, instruments_index: str | Path | None, timeout_s: float) -> dict[str, int]:
+    """Inside ``pooled()``: every worker started, the adapter imported and the instruments index loaded, all at once
+    under ``timeout_s`` (R22). Counts ``{"ok": n, "<failure type>": n}``; a worker that fails is started again by
+    its next call, as before. Outside a pool (one child per call) there is nothing to warm."""
+    pool = _pool
+    if pool is None or handle.error:
+        return {}
+    counts: dict[str, int] = {}
+    for r in pool.each(_request(handle, "warm", instruments_index), timeout_s):
+        if isinstance(r, AdapterFailure):
+            k = r.type or "error"
+        else:
+            k = "ok" if r.get("ok") else (r.get("load_error") or (r.get("error") or {}).get("type") or "error")
+        counts[k] = counts.get(k, 0) + 1
+    return counts
+
+
+# a call's failure that says nothing about the files it was given: a timeout or a crash of the worker, worth one
+# more try with more time and fewer files (R22); an exception of match itself is the adapter's answer, not retried
+TRANSIENT = ("timeout", "runner_exit", "bad_runner_output")
+
+
 def call_match(handle: Any, paths: list[str], instruments_index: str | Path | None,
-               timeout_s: float) -> dict[str, Any]:
-    """``match`` for files, ``MATCH_CHUNK`` per child call and ``timeout_s`` per call: per path the hit, None
+               timeout_s: float, chunk_size: int = MATCH_CHUNK) -> dict[str, Any]:
+    """``match`` for files, ``chunk_size`` per child call and ``timeout_s`` per call: per path the hit, None
     (not the adapter's) or ``{"_error": {"kind": "failed"|"timed_out", "type": ..., "frames": [...]}}``
     (status ``match_failed``). A timeout or crash of a call marks every path of its chunk."""
     out: dict[str, Any] = {}
     paths = list(paths)
-    for i in range(0, len(paths), MATCH_CHUNK):
-        chunk = paths[i:i + MATCH_CHUNK]
+    for i in range(0, len(paths), chunk_size):
+        chunk = paths[i:i + chunk_size]
         try:
             out.update(_result(_call(_request(handle, "match", instruments_index, paths=chunk), timeout_s)))
         except AdapterFailure as f:
