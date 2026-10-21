@@ -182,14 +182,32 @@ def _medians(ctx: EodContext) -> dict[tuple[str, Any], tuple[float, int]]:
     return {k: (statistics.median(zs), len(zs)) for k, zs in groups.items() if len(zs) >= MIN_BONDS[k[0]]}
 
 
+FX_MARKET = (("moex_19", "MOEX 19:00"), ("moex_14", "MOEX 14:00"), ("cets_close", "CETS close"), ("cbr", "CBR"))
+"""The market rate of a currency (owner's decision of 21.10, R26; ORG_CONVENTIONS §2.2, DATA_CONTRACT §0.2), first
+present: the MOEX indicative rate at 19:00 MSK of the business date, else at 14:00, else the CETS TOM close, else the
+CBR rate in force. Its label is the rate's ``source`` shown next to it."""
+
+
 def fx_rate(ctx: EodContext, ccy: str) -> tuple[float, str] | None:
-    """RUB per unit: CBR official in force on the business date, else the MOEX TOM price."""
+    """RUB per unit at the market rate (``FX_MARKET``) and its source: what foreign-currency bonds and FX rows are
+    valued at and their flash PnL is measured in (the CBR rate in force stays beside it: ``fx_rate_cbr``)."""
     if ccy == "RUB":
         return 1.0, ""
-    fx = ctx.market.fx(ccy)
-    if fx["cbr"]:
-        return fx["cbr"], "CBR"
-    return (fx["moex_tom"], "MOEX TOM") if fx["moex_tom"] else None
+    return market_fx(ctx.market.fx(ccy))
+
+
+def market_fx(fx: dict[str, float | None]) -> tuple[float, str] | None:
+    """The first rate of ``FX_MARKET`` in ``MarketView.fx`` and its source label."""
+    return next(((fx[k], label) for k, label in FX_MARKET if fx.get(k)), None)  # type: ignore[misc]
+
+
+def fx_rate_cbr(ctx: EodContext, ccy: str) -> tuple[float, str] | None:
+    """RUB per unit at the CBR rate in force on the business date (set the business day before): the official PnL's
+    rate (``fx_gross_cbr``); None without one."""
+    if ccy == "RUB":
+        return 1.0, ""
+    r = ctx.market.fx(ccy)["cbr"]
+    return (r, "CBR") if r else None
 
 
 def _price(q: BondQuote) -> tuple[str, float] | None:
@@ -220,7 +238,7 @@ def _schedule(t: BondTerms, d: date) -> tuple[Any, tuple[BondCashflow, ...], Any
         call = s.horizon_kind == "call"
         inst = core_instrument(t, d, s.horizon_date, None if call else s.offer, coupons=s.coupons,
                                redeem_at_horizon=call)
-        flows = inst.cashflows(after=d, offer=inst.offers[0] if inst.offers else None)
+        flows = inst.cashflows(after=d, offer=inst.horizon("open_put", d)[1] if inst.offers else None)
     except (Rejected, CoreRejection):
         return None
     return s, tuple(BondCashflow(f.payment_date, f.amount) for f in flows), inst

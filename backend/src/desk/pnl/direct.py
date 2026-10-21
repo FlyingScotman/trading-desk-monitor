@@ -2,12 +2,16 @@
 positions valued at the report's figure. Each is flagged with its method (``reasons.METHOD_TEXT``).
 
 - FX row (``valuation.positions._fx``), spot or cash at the market rate, or a forward without a reported value:
-  today's amount x (rate D - rate D-1), the rate as the valuation takes it (``fallback.fx_rate``: CBR in force,
-  else MOEX TOM), method ``desk-fx-spot-v1``, in ``fx_gross``. A forward gets its spot delta only (no forward
-  points), said in its flag. RUB cash: 0.
+  today's amount x (rate D - rate D-1), the rate as the valuation takes it (``fallback.fx_rate``: the market rate,
+  MOEX 19:00, else 14:00, else CETS close, else CBR; owner's decision of 21.10, R26), method ``desk-fx-spot-v1``, in
+  ``fx_gross``; the same amount x the CBR move in ``fx_gross_cbr`` (the official basis). A forward gets its spot delta
+  only (no forward points), said in its flag. RUB cash: 0.
 - Foreign-face bond (``split_fx``, on its simple PnL): the FX delta of D-1 (PV D-1 in currency, as ``tdm_run``
-  publishes ``fx_delta``) x the rate move goes from ``other`` to ``fx_gross``; the rest is the price move at
-  today's rate plus the received flows.
+  publishes ``fx_delta``) x the market rate move goes from ``other`` to ``fx_gross`` (x the CBR move:
+  ``fx_gross_cbr``); the rest is the price move at today's rate plus the received flows. MOEX settles replacement
+  bonds in RUB at the CBR rate of the settlement day T+1, set on D near the 19:00 market: valued at the CBR rate in
+  force on D (set on D-1) the price and the rate moved a day apart and FX and other cancelled (E2E 20.10: FX -187 mm,
+  other +119 mm on a market of -0.15 %).
 - Row valued at the report's figure (rung ``reported_value``: OTC, other, unmapped bonds, a forward with the
   report's mv_rub): today's reported PV - yesterday's for the same position_id, both from the reports (method
   ``desk-reported-v1``, flag «по отчёту»), all in ``other``. Trades of the day are inside it. None when the
@@ -24,7 +28,7 @@ from datetime import date
 from typing import TYPE_CHECKING, Any
 
 from ..inbox.schema import norm_ccy
-from ..valuation.fallback import SimplePnl, fx_rate
+from ..valuation.fallback import SimplePnl, fx_rate, fx_rate_cbr
 from .flash import NoPnl
 from .reasons import FX_METHOD, REPORTED_METHOD
 
@@ -47,6 +51,7 @@ class DirectPnl:
     total: float
     fx_gross: float = 0.0
     other: float = 0.0
+    fx_gross_cbr: float | None = None
     note: str = ""
     flag: str = ""
     carry: float = 0.0
@@ -61,7 +66,8 @@ class DirectPnl:
 
     def as_tdm(self) -> dict[str, float]:
         return {"carry": 0.0, "rolldown": 0.0, "rates": 0.0, "spread": 0.0, "convexity": 0.0, "other": self.other,
-                "fx_gross": self.fx_gross, "fx_funding": 0.0, "new_trades": 0.0}
+                "fx_gross": self.fx_gross, "fx_funding": 0.0, "new_trades": 0.0,
+                **({"fx_gross_cbr": self.fx_gross_cbr} if self.fx_gross_cbr is not None else {})}
 
     def extra(self) -> dict[str, Any]:
         return {"method": self.method, "prev_date": self.prev_date.isoformat(), "total": self.total,
@@ -80,9 +86,12 @@ def split_fx(pnl: SimplePnl, prev: EodContext, ctx: EodContext, terms: BondTerms
                        ": the FX revaluation stays in other")
     delta = pnl.v0 / r0[0]  # the FX delta of D-1 in currency (PV / rate, as tdm_run publishes fx_delta)
     fx = delta * (r1[0] - r0[0])
-    return replace(pnl, fx_gross=fx, other=pnl.other - fx,
+    c0, c1 = fx_rate_cbr(prev, ccy), fx_rate_cbr(ctx, ccy)
+    fx_cbr = delta * (c1[0] - c0[0]) if c0 and c1 else None
+    return replace(pnl, fx_gross=fx, other=pnl.other - fx, fx_gross_cbr=fx_cbr,
                    note=f"{pnl.note}; fx_gross = FX delta D-1 {delta:,.2f} {ccy} x ({r1[0]:g} {r1[1]} - {r0[0]:g} "
-                        f"{r0[1]}) ({FX_METHOD})")
+                        f"{r0[1]}) ({FX_METHOD})"
+                        + (f"; at CBR {c1[0]:g} - {c0[0]:g}: {fx_cbr:,.2f}" if fx_cbr is not None else ""))
 
 
 def _fx_row(prev: EodContext, ctx: EodContext, o: Outcome, x: dict[str, Any]) -> DirectPnl:
@@ -99,7 +108,9 @@ def _fx_row(prev: EodContext, ctx: EodContext, o: Outcome, x: dict[str, Any]) ->
         raise NoPnl("no_prev_fx_rate", f"{ccy} on {prev.business_date}")
     r1 = v.face_rub  # the rate the row was valued at (``positions._fx``)
     fx = amount * (r1 - r0[0])
+    c0, c1 = fx_rate_cbr(prev, ccy), fx_rate_cbr(ctx, ccy)
     return DirectPnl(FX_METHOD, prev.business_date, ctx.business_date, fx, fx_gross=fx, flag=flag,
+                     fx_gross_cbr=amount * (c1[0] - c0[0]) if c0 and c1 else None,
                      note=f"{amount:,.2f} {ccy} x ({r1:g} - {r0[0]:g} {r0[1]})")
 
 

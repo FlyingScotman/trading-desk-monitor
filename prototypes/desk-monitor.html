@@ -403,7 +403,7 @@ details.pop summary::-webkit-details-marker{display:none}
 
   <!-- 7. PnL -->
   <section class="tab" id="tab-pnl" role="tabpanel" aria-label="PnL" hidden>
-    <div class="banner"><span class="dev-chip">в разработке</span><span>Флэш считается вечером по рыночным курсам; официальный PnL (курсы ЦБ) приходит на T+1 и сверяется с explain по курсам ЦБ. Методика ещё настраивается.</span><span id="pnl-off-st"></span></div>
+    <div class="banner"><span class="dev-chip">в разработке</span><span>Флэш считается вечером по рыночным курсам; официальный PnL (курсы ЦБ) приходит на T+1 и сверяется с explain по курсам ЦБ. Методика ещё настраивается.</span><span id="pnl-off-st"></span><span id="pnl-fx-st" class="muted" style="margin-left:8px"></span></div>
     <div class="grid">
       <div class="pnl s8"><div class="ph"><h3>PnL explain за день</h3><span class="u">млн ₽</span></div><div class="pb"><div class="ch h340" id="c-pnl-wf"></div></div></div>
       <div class="pnl s4"><div class="ph"><h3>Итог дня</h3><span class="u">млн ₽</span></div><div class="pb" id="pnl-side"></div></div>
@@ -1548,6 +1548,9 @@ function rPnl(){
   const col = b => b.k === 't' ? TK.accent : b.k === 'u' ? TK.serious : b.k === 'b' ? TK.fg_3 : (b.v < 0 ? TK.neg : TK.pos);
   const narrow = $('c-pnl-wf').clientWidth < 640;
   $('pnl-off-st').innerHTML = ready ? chip('ok', 'Официальный PnL за ' + dt(D.official.asOf || D.asOf) + ' получен') : chip('info', 'Официальный PnL — ожидается T+1');
+  // курсы флэша (R26): рыночный с источником (MOEX 19:00, иначе 14:00 / CETS / ЦБ) и курс ЦБ, действующий на дату
+  $('pnl-fx-st').textContent = CCYS.length ? 'FX флэша: ' + CCYS.map(c => c + ' ' + num(D.FX[c], c === 'CNY' ? 4 : 2) +
+    ((D.FX_SOURCE || {})[c] ? ' ' + D.FX_SOURCE[c] : '') + (D.FX_CBR && D.FX_CBR[c] != null && D.FX_CBR[c] !== D.FX[c] ? ' (ЦБ ' + num(D.FX_CBR[c], c === 'CNY' ? 4 : 2) + ')' : '')).join(', ') : '';
   chart('c-pnl-wf', opt({
     grid:{left:6, right:10, top:22, bottom:6},
     tooltip:{trigger:'item', formatter:p => { const b = bars[p.dataIndex]; return `<b>${esc(b.n)}</b><br>${M(b.v,2,true)} млн ₽` + (b.k === 'd' ? `<br><span style="opacity:.7">накопл.: ${M(b.hi,1,true)}</span>` : b.k === 'b' ? '<br><span style="opacity:.7">FX-компоненты по курсам ЦБ вместо рыночных</span>' : ''); }},

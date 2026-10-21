@@ -22,7 +22,14 @@ from desk.orchestrator import Outcome, attach_pnl, prepare, value
 from desk.publish import tdm_run
 from desk.report import validation
 from desk.valuation.bonds import Rejected, face_on, fixed_schedule
-from desk.valuation.fallback import FallbackContext, SimplePnl, approximate, simple_pnl
+from desk.valuation.fallback import (
+    FallbackContext,
+    SimplePnl,
+    approximate,
+    fx_rate,
+    fx_rate_cbr,
+    simple_pnl,
+)
 
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1"
 Q = 1000.0
@@ -84,24 +91,49 @@ def test_market_value_floater_on_duration(ctx, exact):
         assert (v.spread01_rub < v.dv01_rub) if kind == "credit" else v.spread01_rub == 0.0
 
 
-def test_fx_bond_in_rub_at_cbr(ctx, exact):
+def test_fx_bond_in_rub_at_the_market_rate(ctx, exact):
+    """R26 (owner, 21.10): a foreign-face bond is in RUB at the MOEX indicative rate of 19:00, not the CBR rate."""
     o = exact[USD]
     v = approximate(ctx, o, Q, _fb(ctx))
-    cbr = ctx.market.fx("USD")["cbr"]
+    fx = ctx.market.fx("USD")
+    rate = fx["moex_19"]
+    assert rate != fx["cbr"] and fx_rate(ctx, "USD") == (rate, "MOEX 19:00")
     # price in % of the USD face, MOEX accrued already in RUB (settlement currency)
-    clean_rub = float(o.quote.prices_pct["legal_close"]) / 100 * float(o.quote.face_value) * cbr
+    clean_rub = float(o.quote.prices_pct["legal_close"]) / 100 * float(o.quote.face_value) * rate
     dirty = clean_rub + float(o.quote.accrued_per_bond)
     assert v.quality == "market_value" and v.pv_rub == pytest.approx(Q * dirty)
-    assert any("FX bond (USD)" in a and "duration proxy on curve USD" in a for a in v.assumptions)
+    assert any("FX bond (USD)" in a and "MOEX 19:00" in a and "duration proxy on curve USD" in a for a in v.assumptions)
     # R8: rate risk from the MOEX duration, as a RUB bond's fallback, in RUB per bp, on the USD curve
     mac = float(o.quote.source_analytics["duration_days"]) / 365
     assert v.macaulay_years == pytest.approx(mac) and v.dv01_rub == pytest.approx(-mac * v.pv_rub * 1e-4)
     assert set(v.risk()) == {"USD"} and sum(v.risk()["USD"].values()) == pytest.approx(v.dv01_rub)
     assert sum(1 for x in v.buckets.values() if x) <= 2 and v.spread01_rub == pytest.approx(v.dv01_rub)  # credit
     row = tdm_run.run_content(ctx, [("P1", "MIXED", replace(o, valuation=v))], None, {})
-    assert set(row.rows[0]["risk"]) == {"USD"} and row.rows[0]["fx_delta"] == {"USD": pytest.approx(v.pv_rub / cbr)}
+    assert set(row.rows[0]["risk"]) == {"USD"} and row.rows[0]["fx_delta"] == {"USD": pytest.approx(v.pv_rub / rate)}
+    assert (row.rows[0]["extra"]["fx_rate"], row.rows[0]["extra"]["fx_source"]) == (rate, "MOEX 19:00")
+    (usd_fx,) = [r for r in row.reference["fx"] if r["ccy"] == "USD"]
+    assert (usd_fx["rate"], usd_fx["rate_source"], usd_fx["rate_cbr"]) == (rate, "MOEX 19:00", fx["cbr"])
     usd = next(c for c in row.reference["curves"] if c["curve_id"] == "USD")
     assert (usd["ccy"], usd["points"]) == ("USD", [])  # a stub: the risk is shown, there is no USD curve yet
+
+
+
+def test_market_fx_falls_back_14_cets_cbr_and_says_so():
+    """R26: MOEX 19:00, else 14:00, else the CETS TOM close, else the CBR rate in force; the source goes with it.
+    The CBR rate in force is kept apart (the official basis)."""
+    class _Ctx:
+        def __init__(self, fx):
+            self.market = type("M", (), {"fx": lambda _s, _c: fx})()
+
+    full = {"cbr": 80.0, "cbr_next": 81.0, "moex_tom": 82.5, "moex_19": 81.1, "moex_14": 80.9, "cets_close": 82.0}
+    for drop, want in (((), (81.1, "MOEX 19:00")), (("moex_19",), (80.9, "MOEX 14:00")),
+                       (("moex_19", "moex_14"), (82.0, "CETS close")),
+                       (("moex_19", "moex_14", "cets_close"), (80.0, "CBR"))):
+        ctx = _Ctx({k: (None if k in drop else v) for k, v in full.items()})
+        assert fx_rate(ctx, "USD") == want and fx_rate_cbr(ctx, "USD") == (80.0, "CBR")
+    none = _Ctx(dict.fromkeys(full))
+    assert fx_rate(none, "USD") is None and fx_rate_cbr(none, "USD") is None and fx_rate(none, "RUB") == (1.0, "")
+
 
     """R8 phase 1: an OFZ-IN keeps a nominal DV01 from its duration on the RUB discount curve (RUONIA), a proxy."""
 def test_ofz_in_nominal_proxy_is_flagged(exact):
@@ -202,7 +234,7 @@ def test_a_failing_ladder_falls_to_par_proxy(ctx, monkeypatch):
     (o,) = value(ctx, [(USD, Q)])  # not exact: the ladder runs and fails
     v = o.valuation
     assert v.quality == "par_proxy" and v.dv01_rub == 0.0
-    assert v.pv_rub == pytest.approx(Q * (float(o.quote.face_value) * ctx.market.fx("USD")["cbr"]
+    assert v.pv_rub == pytest.approx(Q * (float(o.quote.face_value) * ctx.market.fx("USD")["moex_19"]
                                           + float(o.quote.accrued_per_bond)))
     assert "fallback ladder failed: ZeroDivisionError: float division by zero" in v.assumptions[0]
 

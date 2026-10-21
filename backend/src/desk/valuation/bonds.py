@@ -3,13 +3,15 @@
 Steps:
 
 1. ``bond_request``: decide whether the bond is in scope (``eligibility``), its horizon (the
-   next scheduled offer whose window is still open, rule F2; core has no exercise windows; a
-   perpetual's assumed call), its coupons up to it, and the price basis. A refusal is a
-   ``Rejected`` with a stable reason code.
-2. ``value_bonds``: one ``value_portfolio`` call per spread kind (OFZ spread or credit spread is
-   a policy setting) for every request of the run. Core calibrates the Z-spread (annual,
-   ACT/365F) to the dirty price, and computes bucket DV01, the CS01 or OFZ spread risk, the
-   Hessian, the effective yield and duration. Bucket DV01 and the Hessian stay per curve, under the
+   next scheduled offer whose window is still open, rule F2, which core 0.33 applies itself: the puts go to core with
+   their exercise windows and the policy's ``open_put`` horizon chooses; a perpetual's assumed call), its coupons up to
+   it, and the price basis. A refusal is a ``Rejected`` with a stable reason code.
+2. ``value_bonds``: one ``value_portfolio`` call for every request of the run, the spread kind per bond in the
+   policy (``spread_kinds``: OFZ spread for OFZ, credit spread for the rest). Core calibrates the Z-spread (annual,
+   ACT/365F) to the dirty price, and computes bucket DV01, the CS01 or OFZ spread risk and its split by tenor bucket
+   (``spread_buckets``), the Hessian, the effective yield and duration, the G-spread to the KBD whatever the discount
+   curve (``g_spread_curve_id``, MOEX's ``GSPREADBP`` definition) and a floater's discount margin over its projection
+   curve (``discount_margin``). Bucket DV01 and the Hessian stay per curve, under the
    published curve IDs (``RISK_CURVES``): a floater's projection curve (the key-rate projection) is a
    separate factor from its discount curve, so their basis risk is not netted away. Its rejections become
    ``Rejected("core_<code>")``. The hash-verified result (``rub-portfolio-risk-result.v2``) is returned for storage.
@@ -34,7 +36,9 @@ the bonds are discounted on the KBD, their risk is on ``RUB OFZ`` and every valu
 - a perpetual: called on an assumed date (``perpetual_call``), coupons MOEX does not list at the
   current rate;
 - a floater on an ``inferred`` formula: its family's default convention (``floater_rule``);
-- no MOEX accrued: computed (core, from a fixed leg; ours for a floater, ``_floater_accrued``);
+- no MOEX accrued: computed by core (``Instrument.accrued``: a fixed leg, and since core 0.33 a floater's: a coupon
+  fixed in advance pro rata on the amount for OFZ-PK or on the rate for corporates, one set in arrears by the formula
+  over the elapsed days with the realised fixings);
 - our accrued differs from MOEX's by more than ``ACCRUED_TOLERANCE_RUB``: kept and flagged.
 
 Valuation date (finding F9, DEC entry pending): the MOEX price and the MOEX accrued are both
@@ -63,9 +67,7 @@ from rub_fixed_income import (
     ExerciseAssumption,
     FixedCouponLeg,
     FloatingCouponLeg,
-    FloatingCouponPeriod,
     FloatingCouponRule,
-    FloatingLeg,
     Instrument,
     MarketSnapshot,
     ObservationShift,
@@ -221,7 +223,7 @@ def floater_rule(terms: BondTerms) -> tuple[FloatingCouponRule, str, str, str]:
     obs = "6 months in advance" if window else f"{shift} calendar days back" if shift else "no lag"
     desc = (f"{bench} {'+' if margin >= 0 else '-'} {abs(margin) * 1e4:g} bp, {averaging}, {obs}, "
             f"{'ACT/ACT' if dc is DayCount.ACT_ACT_ISDA else 'ACT/365F'}"
-            + (f", floor {floor:.2%} cap {cap and f'{cap:.2%}'}" if rule.bounds else ""))
+            + "".join(f", {k} {x:.2%}" for k, x in (("floor", floor), ("cap", cap)) if x is not None))
     if bench == "KEY_RATE":
         return rule, "KEY_RATE", KEY_RATE_CURVE_ID, desc
     return rule, "RUONIA", RUONIA_OIS_CURVE_ID, desc
@@ -539,6 +541,15 @@ class BondValuation:
     date without RUONIA, ``discount_curve``); None for a value without a curve (a price or a report)."""
     floater: FloaterModel | None = field(default=None, repr=False, compare=False)
     """A floater's coupon model, for the flash PnL to reproject it on other curves (``pnl.flash``)."""
+    g_spread_bp: float | None = None
+    """Core's G-spread to the KBD (a RUB fixed-coupon bond; effective yield minus the KBD at the Macaulay duration,
+    MOEX's ``GSPREADBP`` definition), whatever the discount curve; None for a floater and off core."""
+    discount_margin_bp: float | None = None
+    """A floater's discount margin: the spread over its projection curve that reprices its projected flows to the
+    dirty price (core ``discount_margin_bp``; the Z-spread on a single curve); None for a fixed bond and off core."""
+    spread_buckets: dict[str, float] = field(default_factory=dict)
+    """``spread01_rub`` split by ``RISK_BUCKETS`` (core ``spread_buckets_rub``, in proportion to the discount-only
+    key-rate risk): CS01 by tenor for credit, the OFZ–RUONIA basis by tenor for OFZ (R18); empty off core."""
 
     @property
     def spread_curve(self) -> str | None:
@@ -569,7 +580,7 @@ class _Prepared:
     flows: tuple[BondCashflow, ...]
     notes: list[str]
     accrued: float
-    """Ours, to check the MOEX accrued (or to replace a missing one for a floater)."""
+    """Core's (``Instrument.accrued``), to check the MOEX accrued."""
 
 
 def _split_assumed(inst: Instrument, s: FixedSchedule, after: date) -> tuple[Instrument, tuple]:
@@ -585,27 +596,6 @@ def _split_assumed(inst: Instrument, s: FixedSchedule, after: date) -> tuple[Ins
     return replace(inst, coupon_leg=known), leg.periods[n:]
 
 
-def _floater_accrued(inst: Instrument, market: MarketSnapshot, flows: tuple, after: date) -> float:
-    """Core assumes no floater accrual convention. Ours: a published current coupon pro rata; an unpublished
-    one is the formula's coupon over ``[start, after)`` (MOEX OFZ-PK, key-rate and RUONIA corporates accrue
-    the realized fixings), or the projected coupon pro rata when that needs a projection."""
-    leg = inst.coupon_leg
-    assert isinstance(leg, FloatingCouponLeg)
-    p = leg.periods[0]
-    if not p.accrual_start < after < p.accrual_end:
-        return 0.0
-    if p.published_coupon_rub is None:
-        try:
-            part = FloatingCouponPeriod(p.accrual_start, after, after, p.notional_rub)
-            history = market.point_in_time_fixing(leg.fixing_id)
-            return FloatingLeg(leg.rule, (part,), history).project(None, settlement_date=p.accrual_start)[0].amount_rub
-        except (CoreRejection, ValueError):
-            pass
-    coupon = next((f.coupon for f in flows if f.accrual_start == p.accrual_start), 0.0)
-    frac = (after - p.accrual_start).days / (p.accrual_end - p.accrual_start).days
-    return float(Decimal(repr(coupon * frac)).quantize(Decimal("0.01"), ROUND_HALF_UP))
-
-
 def _prepare(r: BondRequest, market: MarketSnapshot) -> _Prepared:
     s, after = r.schedule, r.quote.trade_date
     call = s.horizon_kind == "call"
@@ -614,14 +604,11 @@ def _prepare(r: BondRequest, market: MarketSnapshot) -> _Prepared:
     # Cashflows to the horizon: a call (or a perpetual's assumed one) redeems the face then.
     flow_inst = core_instrument(r.terms, after, s.horizon_date, coupons=s.coupons, floater=s.floater,
                                 redeem_at_horizon=True) if call else inst
-    offer = None if call or not inst.offers else inst.offers[0]
+    offer = None if call or not inst.offers else inst.horizon("open_put", after)[1]
     floating = isinstance(inst.coupon_leg, FloatingCouponLeg)  # not when no coupon is left to the horizon
     flows = flow_inst.cashflows(after=after, offer=offer, market=market if floating else None,
                                 strike_guard_bp=CAP_FLOOR_GUARD_BP)
-    if not floating:
-        accrued = inst.accrued(after)
-    else:
-        accrued = _floater_accrued(inst, market, flows, after)
+    accrued = inst.accrued(after, market if floating else None)
     notes = list(s.assumptions)
     moex = r.quote.accrued_per_bond
     if moex is None:
@@ -635,8 +622,9 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
                 cache: ShockedCurveCache | None = None, scenarios: tuple = ()
                 ) -> tuple[dict[str, BondValuation | Rejected], list[PortfolioRiskResult]]:
     """Value ``requests`` on ``market`` (a core snapshot without quotes, with the curves and fixings
-    floaters need), one core call per spread kind. Returns the valuation or the rejection per
-    position ID, and the core results. ``scenarios`` (core ``PortfolioScenario``) go to every core call."""
+    floaters need), in one core call (the spread kind per bond: ``spread_kinds``). Returns the valuation or the
+    rejection per position ID, and the core results (one, or none without a valuable request). ``scenarios`` (core
+    ``PortfolioScenario``) go to the core call."""
     out: dict[str, BondValuation | Rejected] = {}
     results = []
     disc, disc_note = discount_curve(market)
@@ -644,56 +632,53 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
         if r.quote.trade_date != market.business_date:
             out[r.position_id] = Rejected("stale_quote", f"trade date {r.quote.trade_date}, business date "
                                           f"{market.business_date}")
-    for kind in ("ofz", "credit"):
-        reqs = [r for r in requests if r.position_id not in out
-                and (r.terms.bond_class in OFZ_CLASSES) == (kind == "ofz")]
-        if not reqs:
+    reqs = [r for r in requests if r.position_id not in out]
+    instruments, quotes, positions, calls, ok, kinds = {}, {}, [], {}, {}, {}
+    for r in reqs:
+        s = r.schedule
+        try:
+            prep = ok.get(r.terms.secid) or _prepare(r, market)
+            inst = prep.instrument
+            if s.horizon_kind == "call" and s.floater is None:
+                inst, assumed = _split_assumed(inst, s, r.quote.trade_date)
+                calls[inst.instrument_id] = ExerciseAssumption.to_call(s.horizon_date, assumed)
+        except (CoreRejection, ValueError) as e:
+            code = e.code.lower() if isinstance(e, CoreRejection) else "invalid_terms"
+            out[r.position_id] = Rejected(f"core_{code}", str(e))
             continue
-        instruments, quotes, positions, calls, ok = {}, {}, [], {}, {}
-        for r in reqs:
-            s = r.schedule
-            try:
-                prep = ok.get(r.terms.secid) or _prepare(r, market)
-                inst = prep.instrument
-                if s.horizon_kind == "call" and s.floater is None:
-                    inst, assumed = _split_assumed(inst, s, r.quote.trade_date)
-                    calls[inst.instrument_id] = ExerciseAssumption.to_call(s.horizon_date, assumed)
-            except (CoreRejection, ValueError) as e:
-                code = e.code.lower() if isinstance(e, CoreRejection) else "invalid_terms"
-                out[r.position_id] = Rejected(f"core_{code}", str(e))
-                continue
-            ok[r.terms.secid] = prep
-            instruments[inst.instrument_id] = inst
-            accrued = r.quote.accrued_per_bond
-            if accrued is None and isinstance(inst.coupon_leg, FloatingCouponLeg):
-                accrued = Decimal(repr(prep.accrued))
-            quotes[inst.instrument_id] = price_observation(inst.instrument_id, r.price_basis, r.clean_pct, accrued)
-            positions.append(Position(r.position_id, inst.instrument_id, r.quantity, "desk", AccountingCategory.TRADING,
-                                      "RUB"))
-        if not positions:
-            continue
-        guard = any(i.coupon_leg.rule.bounds for i in instruments.values()  # type: ignore[union-attr]
-                    if isinstance(i.coupon_leg, FloatingCouponLeg))
-        policy = ValuationPolicy(disc, spread_kind=kind, spread_convention=SPREAD_CONVENTION,
-                                 horizon="confirmed_put", include_second_order=second_order,
-                                 cap_floor_guard_bp=CAP_FLOOR_GUARD_BP if guard else None,
-                                 exercise_assumptions=tuple(calls.items()))
-        floaters = any(isinstance(i.coupon_leg, FloatingCouponLeg) for i in instruments.values())
-        # Without floaters the call needs only the discount curve.
-        snap = market if floaters else replace(market, fixings=(), curves=tuple(
-            c for c in market.curves if c.curve_id == disc))
-        result = value_portfolio(run_id=f"desk-eod-{market.business_date}-{kind}", as_of=market.known_at,
-                                 snapshot=replace(snap, quotes=tuple(quotes.values())),
-                                 instruments=list(instruments.values()), positions=positions, policy=policy,
-                                 scenarios=scenarios, curve_cache=cache)
-        results.append(result)
-        for rej in result.coverage.rejections:
-            out[rej.position_id] = Rejected(f"core_{rej.code.lower()}", rej.message)
-        rows = {v.position_id: v for v in result.positions}
-        for p in positions:
-            if p.position_id in rows:
-                out[p.position_id] = _valuation(ok[p.instrument_id], rows[p.position_id], p.quantity, guard,
-                                                disc_note)
+        ok[r.terms.secid] = prep
+        instruments[inst.instrument_id] = inst
+        kinds[inst.instrument_id] = "ofz" if r.terms.bond_class in OFZ_CLASSES else "credit"
+        # no MOEX accrued: core's own (a floater's too since core 0.33)
+        quotes[inst.instrument_id] = price_observation(inst.instrument_id, r.price_basis, r.clean_pct,
+                                                       r.quote.accrued_per_bond)
+        positions.append(Position(r.position_id, inst.instrument_id, r.quantity, "desk", AccountingCategory.TRADING,
+                                  "RUB"))
+    if not positions:
+        return out, results
+    guard = any(i.coupon_leg.rule.bounds for i in instruments.values()  # type: ignore[union-attr]
+                if isinstance(i.coupon_leg, FloatingCouponLeg))
+    policy = ValuationPolicy(disc, spread_kind="credit", spread_convention=SPREAD_CONVENTION, horizon="open_put",
+                             include_second_order=second_order,
+                             cap_floor_guard_bp=CAP_FLOOR_GUARD_BP if guard else None,
+                             exercise_assumptions=tuple(calls.items()),
+                             spread_kinds=tuple((i, k) for i, k in kinds.items() if k == "ofz"),
+                             g_spread_curve_id=KBD_CURVE_ID, discount_margin=True, spread_buckets=True)
+    floaters = any(isinstance(i.coupon_leg, FloatingCouponLeg) for i in instruments.values())
+    # Without floaters the call needs only the discount curve and the KBD (the G-spread).
+    snap = market if floaters else replace(market, fixings=(), curves=tuple(
+        c for c in market.curves if c.curve_id in (disc, KBD_CURVE_ID)))
+    result = value_portfolio(run_id=f"desk-eod-{market.business_date}-book", as_of=market.known_at,
+                             snapshot=replace(snap, quotes=tuple(quotes.values())),
+                             instruments=list(instruments.values()), positions=positions, policy=policy,
+                             scenarios=scenarios, curve_cache=cache)
+    results.append(result)
+    for rej in result.coverage.rejections:
+        out[rej.position_id] = Rejected(f"core_{rej.code.lower()}", rej.message)
+    rows = {v.position_id: v for v in result.positions}
+    for p in positions:
+        if p.position_id in rows:
+            out[p.position_id] = _valuation(ok[p.instrument_id], rows[p.position_id], p.quantity, guard, disc_note)
     return out, results
 
 
@@ -704,7 +689,7 @@ def _valuation(prep: _Prepared, v: PositionValuation, quantity: float, guard: bo
     inst = prep.instrument
     floater = None
     if isinstance(inst.coupon_leg, FloatingCouponLeg):
-        offer = inst.horizon("confirmed_put", v.settlement_date)[1] if v.horizon == "confirmed_put" else None
+        offer = inst.horizon(v.horizon, v.settlement_date)[1] if v.horizon in ("confirmed_put", "open_put") else None
         floater = FloaterModel(inst, offer, v.horizon_date, CAP_FLOOR_GUARD_BP if guard else None)
     first = v.factor_risk.first_order_by_factor()
     by_curve: dict[str, dict[str, float]] = {}
@@ -713,6 +698,9 @@ def _valuation(prep: _Prepared, v: PositionValuation, quantity: float, guard: bo
             _, c, b = _factor(f).split("|")
             by_curve.setdefault(c, dict.fromkeys(RISK_BUCKETS, 0.0))[b] += x
     buckets = {b: math.fsum(bs[b] for bs in by_curve.values()) for b in RISK_BUCKETS}
+    if v.horizon_date != r.schedule.horizon_date:  # core's open_put chose another offer than rule F2 (not expected)
+        notes.append(f"horizon: core {v.horizon_date.isoformat()} ({v.horizon}), backend "
+                     f"{r.schedule.horizon_date.isoformat()} ({r.schedule.horizon_kind})")
     out = BondValuation(
         secid=r.terms.secid, quantity=quantity, valuation_date=v.settlement_date, settlement=r.settlement,
         horizon_date=v.horizon_date, horizon_kind=r.schedule.horizon_kind, price_basis=r.price_basis,
@@ -723,7 +711,8 @@ def _valuation(prep: _Prepared, v: PositionValuation, quantity: float, guard: bo
         z_spread_bp=v.spread_bp, spread_kind=v.spread_kind, dv01_rub=math.fsum(buckets.values()), buckets=buckets,
         spread01_rub=first["CS"], calculation_id=v.calculation_id, curve_buckets=by_curve, cashflows=prep.flows,
         quality="assumed" if notes else "exact", assumptions=tuple(notes), discount_curve_id=v.curve_id,
-        floater=floater,
+        floater=floater, g_spread_bp=v.g_spread_bp, discount_margin_bp=v.discount_margin_bp,
+        spread_buckets=dict(zip(RISK_BUCKETS, v.spread_buckets_rub)) if v.spread_buckets_rub else {},
     )
     if v.factor_risk.has_second_order:
         # Core's full Hessian over its factors, renamed to the published curves; every curve is its own factor,

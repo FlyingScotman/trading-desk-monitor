@@ -39,7 +39,7 @@ from typing import Any
 from psycopg.rows import tuple_row
 
 from ..marketdata import static_facts
-from ..marketdata.history import RUB_SETTLEMENT, curve_rate, kbd, latest_market_day
+from ..marketdata.history import RUB_SETTLEMENT, curve_rate, curve_rates_by_day, kbd, latest_market_day
 from ..publish import summary
 from ..publish.summary import CURVE_MAP, GOV_CLASSES, PNL, kind_of  # noqa: F401 - the pages' names, re-exported
 from ..store import DEFAULT_RUNS
@@ -437,7 +437,18 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
     curves = {r["business_date"]: kbd(r["trade_date"], r["params"]) for r in con.execute(
         "SELECT business_date, trade_date, params FROM md_kbd_day WHERE business_date = ANY(%s)", (dates,))}
     run_at = dict(by_run)
-    bench_cache: dict[tuple[date, int], float | None] = {}
+    # the KBD at each fixed RUB bond's term on each date, all at once per date (core kbd_effective_yields)
+    want: dict[date, set[int]] = {}
+    for pid, r in pos.items():
+        f = r["fact"]
+        if f.get("ccy") in (None, "RUB") and f.get("coupon_type") == "fix":
+            mat = date.fromisoformat(f["maturity"]) if f.get("maturity") else None
+            q = quotes.get(secid.get(pid) or "", {})
+            for d in dates:
+                yd = (q[d][3] if d in q and q[d][3] else None) or mat
+                if yd and yd > d:
+                    want.setdefault(d, set()).add((yd - d).days)
+    bench_cache: dict[tuple[date, int], float | None] = curve_rates_by_day(curves, want)
 
     def bench(d: date, t: float | None) -> float | None:
         if t is None:
@@ -466,7 +477,8 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
             s["ytm"].append(None if flt or not x else x[1])
             s["spr"].append(x[2] if x else None)
             s["zspr"].append(x[4] if x else None)
-            s["dm"].append(last[7] if flt and last and ps is not None else None)
+            s["dm"].append((last[9] if len(last) > 9 and last[9] is not None else last[7])  # core DM, else the Z
+                           if flt and last and ps is not None else None)
             for k, j in (("icpi", 5), ("ir", 6), ("bei", 7)):
                 s[k].append(x[j] if x else None)
             for k, j in (("notional", 0), ("dv01", 1), ("cs01", 2), ("basis", 3), ("mv", 4)):

@@ -70,7 +70,7 @@ from ..settings import REPO_ROOT
 from ..store import PositionInputs
 from ..valuation.bonds import OFZ_CURVE, RISK_CURVES, BondValuation, coupon_view, implied_frequency
 from ..valuation.fallback import METHOD as SIMPLE_METHOD
-from ..valuation.fallback import QUALITIES, SimplePnl, fx_rate
+from ..valuation.fallback import QUALITIES, SimplePnl, fx_rate, market_fx
 from ..valuation.positions import normalised
 
 ASSET_CLASS = {"ofz_pd": "ОФЗ-ПД", "ofz_ad": "ОФЗ-АД", "ofz_pk": "ОФЗ-ПК", "ofz_in": "ОФЗ-ИН",
@@ -258,17 +258,21 @@ def store_core_results(db: str, outcomes: list[Outcome]) -> list[dict[str, str]]
 
 
 def _fx_rows(ctx: EodContext, prev: MarketView | None) -> list[dict[str, Any]]:
+    """The run's rates (``mkt_fx``, DATA_CONTRACT §0.2): ``rate`` the market rate the flash PnL is in
+    (``fallback.FX_MARKET``: MOEX 19:00, else 14:00, else CETS close, else CBR) with its ``rate_source``, and its move
+    on the previous date's by the same chain; ``rate_cbr`` the CBR rate in force, its move, and ``rate_cbr_next``."""
     rows = []
     for ccy in FX_CCYS:
         now = ctx.market.fx(ccy)
-        rate = now["moex_tom"] or now["cbr"]
-        if rate is None:
+        mkt = market_fx(now)
+        if mkt is None:
             continue
         old = prev.fx(ccy) if prev else {}
-        old_rate = (old.get("moex_tom") or old.get("cbr")) if old else None
+        was = market_fx(old) if old else None
         rows.append({
-            "ccy": ccy, "rate": rate,
-            "move_pct": (rate / old_rate - 1) * 100 if old_rate else 0.0,
+            "ccy": ccy, "rate": mkt[0], "rate_source": mkt[1],
+            "move_pct": (mkt[0] / was[0] - 1) * 100 if was else 0.0,
+            **({"prev_rate": was[0], "prev_rate_source": was[1]} if was else {}),
             "rate_cbr": now["cbr"],
             "move_pct_cbr": (now["cbr"] / old["cbr"] - 1) * 100 if now["cbr"] and old.get("cbr") else None,
             "rate_cbr_next": now["cbr_next"],
@@ -406,6 +410,21 @@ def _quote_extra(q: Any, sa: dict[str, Any]) -> dict[str, Any]:
     return {"quote": {k: x for k, x in out.items() if x is not None}}
 
 
+def core_analytics(v: BondValuation) -> dict[str, Any]:
+    """Core 0.33's analytics of a valuation for ``extra`` (null fields left out): ``g_spread_bp`` (core's G-spread to
+    the KBD, MOEX's definition, beside MOEX's own in ``quote.gspread_bp``), ``dm_bp`` (a floater's discount margin over
+    its projection curve) and ``spread_buckets`` (``cs01`` or ``ofz_spr01`` by ``RISK_BUCKETS``: CS01 by tenor, the
+    OFZ–RUONIA basis by tenor, R18), which sum to the row's ``cs01`` / ``ofz_spr01``."""
+    out: dict[str, Any] = {}
+    if v.g_spread_bp is not None and math.isfinite(v.g_spread_bp):
+        out["g_spread_bp"] = v.g_spread_bp
+    if v.discount_margin_bp is not None and math.isfinite(v.discount_margin_bp):
+        out["dm_bp"] = v.discount_margin_bp
+    if v.spread_buckets:
+        out["spread_buckets"] = {b: x for b, x in v.spread_buckets.items() if x}
+    return out
+
+
 def _f(x: Any) -> float | None:
     try:
         return None if x is None else float(x)
@@ -461,7 +480,7 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
             "short_name": t.short_name, "coupon_basis": cpn.basis, **offer,
             **({"lat_name": t.lat_name} if t.lat_name else {}),
             **({"issue_size": float(t.issue_size)} if t.issue_size is not None else {}),
-            "cashflows": cashflows(t, v, as_of, face_ccy, freq, cpn.pct), **_quote_extra(q, sa),
+            "cashflows": cashflows(t, v, as_of, face_ccy, freq, cpn.pct), **_quote_extra(q, sa), **core_analytics(v),
             **({"coupon_freq_source": "schedule"} if freq and not t.coupon_frequency else {}),
             **({"not_exact_reason": o.reason} if o.reason else {}),
             **({"fx_rate": fx[0], "fx_source": fx[1]} if fx else {}),

@@ -46,7 +46,7 @@ def test_calendars_extend_by_rule_and_say_where(ctx):
 def test_fixed_bonds_stay_exact_and_results_carry_the_book_ids(outs):
     o = outs[OFZ]
     assert (o.valuation.quality, o.valuation.assumptions) == ("exact", ())
-    assert [p.position_id for p in o.core_result.positions] == ["P1", "P2"]  # one OFZ call: OFZ-PD and OFZ-PK
+    assert [p.position_id for p in o.core_result.positions] == ["P1", "P2", "P3", "P4", "P5"]  # one call: the book
 
 
 def test_ofz_pk_in_advance_is_valued_on_its_fixed_current_coupon(outs):

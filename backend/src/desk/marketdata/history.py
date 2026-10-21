@@ -38,7 +38,7 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row, tuple_row
 from psycopg.types.json import Jsonb
-from rub_fixed_income import ZcycParameters, kbd_effective_yield
+from rub_fixed_income import ZcycParameters, kbd_effective_yield, kbd_effective_yields
 
 from ..store import DEFAULT_RUNS
 from ..valuation.bonds import PRICE_BASIS_ORDER
@@ -286,6 +286,23 @@ def curve_rate(params: ZcycParameters | None, tenor_y: float | None) -> float | 
     if params is None or tenor_y is None or not tenor_y > 0:
         return None
     return kbd_effective_yield(params, tenor_y) * 100
+
+
+def curve_rates_by_day(curves: dict[date, ZcycParameters | None], days: dict[date, set[int]]
+                       ) -> dict[tuple[date, int], float | None]:
+    """``curve_rate`` at many terms of many dates, keyed (date, days to the term; the term is ``days / 365.25``
+    years): one vectorised core ``kbd_effective_yields`` per date (core 0.33) instead of a call per bond and date
+    (a year of 600 bonds: 150,000 points, 2.4 -> 0.2 us each). A date without parameters gives None."""
+    out: dict[tuple[date, int], float | None] = {}
+    for d, ns in days.items():
+        ns_ = sorted(n for n in ns if n > 0)
+        params = curves.get(d)
+        if params is None:
+            out.update(((d, n), None) for n in ns_)
+        elif ns_:
+            ys = kbd_effective_yields(params, [n / 365.25 for n in ns_])
+            out.update(((d, n), float(y) * 100) for n, y in zip(ns_, ys))
+    return out
 
 
 def _years(d: date, until: date | None) -> float | None:

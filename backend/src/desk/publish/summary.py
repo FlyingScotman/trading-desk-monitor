@@ -7,11 +7,12 @@ hundreds of thousands of rows at a year of runs; a run never changes, so its sum
 (``ensure``: by ``desk eod`` right after the publication, by the API for a run of an older version on first read)
 and the pages read one row per run.
 
-Per position (``pos``): ``[face, dv01, cs01, basis, mv, pnl, price, spread_bp, {curve: dv01}]`` with
+Per position (``pos``): ``[face, dv01, cs01, basis, mv, pnl, price, spread_bp, {curve: dv01}, dm_bp]`` with
 ``face`` the fact's ``notional`` (face currency), ``dv01`` the sum of its risk by curve (RUB per bp, the same sum the
 pages' DV01 is), ``basis`` its ``ofz_spr01``, ``mv`` as the type series count it (a bond's PV in RUB, a derivative's
-or FX row's notional in RUB), ``pnl`` the day's total over the pages' factors (null without a flash PnL). Curves are
-the pages' ids (``CURVE_MAP``)."""
+or FX row's notional in RUB), ``pnl`` the day's total over the pages' factors (null without a flash PnL), ``dm_bp`` a
+floater's discount margin (core 0.33; null for a fixed bond and in a run before it). Curves are the pages' ids
+(``CURVE_MAP``)."""
 
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
-VERSION = 1
+VERSION = 2  # 2: a floater's discount margin (pos[9])
 CURVE_MAP = {"RUB OFZ": "RUB RUONIA", "USD": "USD SOFR", "EUR": "EUR ESTR", "CNY": "CNY XCCY"}
 """A run's risk curve -> the concept pages' curve (``desk.api.concepts`` re-exports it; ``lib/real.js`` mirrors it).
 ``RUB OFZ`` (the KBD) carries a bond's rates risk only on a date without RUONIA OIS, so it is added to RUONIA."""
@@ -37,7 +38,8 @@ ROWS_SQL = ("SELECT position_id, book_id, pv_rub, fact->'risk' AS risk, (fact->>
             " fact->>'asset_class' AS asset_class, fact->>'coupon_type' AS coupon_type, fact->>'ccy' AS ccy,"
             " (fact->>'notional')::float8 AS notional, (fact->>'notional_rub')::float8 AS notional_rub,"
             " (fact->>'price')::float8 AS price, (fact->>'spread_bp')::float8 AS spread_bp,"
-            " (fact->>'dv01')::float8 AS dv01, pnl FROM run_position WHERE run_id = %s AND fact IS NOT NULL")
+            " (fact->>'dv01')::float8 AS dv01, (fact->'extra'->>'dm_bp')::float8 AS dm_bp, pnl"
+            " FROM run_position WHERE run_id = %s AND fact IS NOT NULL")
 
 
 def kind_of(f: dict[str, Any]) -> tuple[str, str]:
@@ -114,7 +116,8 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
                 pnl[kk] += v
         pos[x["position_id"]] = [_r(x["notional"], 2), _r(sum(curves.values()), 2), _r(x["cs01"], 2), _r(x["ofz"], 2),
                                  _r(m, 0), _r(p["total"], 0) if p else None, _r(x["price"], 4),
-                                 _r(x["spread_bp"], 2), {c: round(v, 2) for c, v in curves.items() if v}]
+                                 _r(x["spread_bp"], 2), {c: round(v, 2) for c, v in curves.items() if v},
+                                 _r(x.get("dm_bp"), 2)]
     return {"dv01": dv01, "cs01": cs01, "basis": basis, "dv01Book": book, "mvType": mv_type, "mvCcy": mv_ccy,
             "pnl": pnl, "pos": pos}
 

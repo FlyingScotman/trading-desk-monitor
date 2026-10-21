@@ -241,7 +241,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
               '<td class="n"><b>' + K.d({ title: 'ОВП ' + c, unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: L.filter(p => p.ccy === c), val: 'fxDelta' }) + '</b></td>' +
               '<td class="n">' + K.d({ title: 'PnL FX ' + c, unit: 'тыс ₽', fmt: f.k, list: L.filter(p => p.ccy === c), val: p => p.pnl.fx }) + '</td></tr>').join('') +
             '</tbody></table><div class="k-note" style="padding:4px 8px">mm в валюте; PnL FX — тыс ₽' +
-            (M.fxPnl ? ' по курсу ' + M.fxPnl.label + ' (' + C.filter(c => M.fxPnl.rate[c] != null).map(c => c + ' ' + f.n(M.fxPnl.rate[c], 2) + ' ' + f.s(M.fxPnl.chgPct[c], 2) + '%').join(', ') + ')' : '') +
+            (M.fxPnl ? '. ' + K.fxLine(C) : '') +
             '. Вечером ОВП книг облигаций передаётся в FXB сделкой T+1</div>';
           return;
         }

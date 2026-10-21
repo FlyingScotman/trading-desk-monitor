@@ -6,12 +6,14 @@
  *
  * Соответствия (держать в согласии с api/concepts.py):
  *  - кривые: RUB RUONIA, RUB KEY — как в прогоне; RUB OFZ страниц — базис ОФЗ − RUONIA (КБД минус RUONIA, б.п.),
- *    его риск — ofzSpr01 позиции, разложенный по сроку; риск прогона на «RUB OFZ» (КБД: только в день без RUONIA)
+ *    его риск — ofzSpr01 позиции по бакетам срока (ядро 0.33, extra.spread_buckets); риск прогона на «RUB OFZ» (КБД: только в день без RUONIA)
  *    добавлен к RUONIA; кривые валют USD/EUR/CNY — USD SOFR / EUR ESTR / CNY XCCY (точек нет, только риск);
  *  - тип: GOV PD/PK/IN/SOVFX, SUB FIX/FLT, CORP FIX/FLT, DER OTC/FX, OTH (api/concepts.kind_of);
  *  - срок — до оферты или колла, по которым считается доходность, иначе до погашения;
- *  - у флоатера доходности нет (ytm = null), спред — дисконт-маржа (Z-спред прогона);
- *  - CS01 и базис разложены по двум соседним бакетам срока (в прогоне они одной цифрой);
+ *  - у флоатера доходности нет (ytm = null), спред — дисконт-маржа ядра (extra.dm_bp: спред к кривой проекции; в
+ *    прогоне до ядра 0.33 — Z-спред); G-спред — ядра (extra.g_spread_bp, определение MOEX), иначе MOEX;
+ *  - CS01 и базис по бакетам срока — ядра (extra.spread_buckets: CS по бакетам пропорционально ставочному риску
+ *    дисконтирования); в прогоне до ядра 0.33 — по двум соседним бакетам срока;
  *  - PnL: кэрри = carry + rolldown, ставки = rates + convexity, FX = fx, сделки = newTrades, прочее = funding + other +
  *    reported; итог = explained.
  * История позиции (M.posHistory) — синхронный запрос /api/v1/history/positions: первые две позиции по одной,
@@ -70,9 +72,14 @@
   M.fx = Object.assign({ RUB: 1 }, D.FX);
   M.ccys.forEach(c => { if (M.fx[c] == null) { M.fx[c] = 1; M.notes.push('нет курса ' + c + ': суммы этой валюты не пересчитаны'); } });
   M.fxChgPct = Object.assign({ RUB: 0 }, D.FX_MOVE_PCT);
-  // курс, по которому посчитан PnL FX прогона (backend: курс ЦБ, действующий на дату, иначе MOEX TOM) — он может
-  // отличаться от рыночного курса шапки; страницы показывают оба, чтобы FX PnL сходился с движением курса
-  if (D.FX_CBR) M.fxPnl = { label: 'ЦБ', rate: Object.assign({ RUB: 1 }, D.FX_CBR), chgPct: Object.assign({ RUB: 0 }, D.FX_CBR_MOVE_PCT) };
+  // курс, по которому посчитан PnL FX прогона: рыночный (решение владельца 21.10, R26 — MOEX 19:00, иначе 14:00,
+  // иначе закрытие CETS, иначе ЦБ; источник по валюте — D.FX_SOURCE), то есть курс шапки; курс ЦБ, действующий на
+  // дату (официальный PnL), — рядом (M.fxCbr). Прогон до R26 (FX_SOURCE нет) считал PnL FX по курсу ЦБ.
+  M.fxSource = Object.assign({}, D.FX_SOURCE || {});
+  M.fxCbr = D.FX_CBR ? { label: 'ЦБ', rate: Object.assign({ RUB: 1 }, D.FX_CBR), chgPct: Object.assign({ RUB: 0 }, D.FX_CBR_MOVE_PCT) } : null;
+  const fxLabels = [...new Set(Object.values(M.fxSource).filter(Boolean))];
+  if (fxLabels.length) M.fxPnl = { label: fxLabels.join(' / '), rate: Object.assign({}, M.fx), chgPct: Object.assign({}, M.fxChgPct), source: M.fxSource };
+  else if (M.fxCbr) M.fxPnl = M.fxCbr;
   M.indices = Object.assign({}, D.INDICES);
   M.buckets = D.BUCKETS.slice();
   M.pillars = D.PILLARS.slice();
@@ -209,8 +216,10 @@
     p.bid = num(q.bid); p.ask = num(q.ask); p.volumeDay = num(q.value);
     const flt = p.cpn && p.cpn.type === 'float';
     p.ytm = flt ? null : num(d.ytm); p.ytmProxy = num(d.ytm);
-    p.zspread = num(d.spreadBp); p.gspread = flt ? null : num(q.gspread_bp);
-    p.dm = flt ? p.zspread : null; p.spreadLabel = flt ? 'DM' : (p.zspread != null ? 'Z' : '');
+    p.zSpreadZ = num(d.spreadBp); p.gspreadMoex = flt ? null : num(q.gspread_bp);
+    p.gspread = flt ? null : (num(ex.g_spread_bp) != null ? num(ex.g_spread_bp) : p.gspreadMoex);
+    p.dm = flt ? (num(ex.dm_bp) != null ? num(ex.dm_bp) : p.zSpreadZ) : null;
+    p.zspread = flt ? p.dm : p.zSpreadZ; p.spreadLabel = flt ? 'DM' : (p.zspread != null ? 'Z' : '');
     p.mdur = num(d.mdur); p.sprDur = num(d.sprDur);
     p.accrued = num(d.accrued) || 0;
     p.mv = num(d.mvRub); p.mvCcy = num(d.mv);
@@ -219,10 +228,13 @@
     p.risk = {}; M.curves.forEach(c => p.risk[c.id] = zeros());
     Object.entries(d.risk || {}).forEach(([c, arr]) => { const id = curveOf(c); arr.forEach((v, k) => p.risk[id][k] += v || 0); });
     p.basis01 = num(d.ofzSpr01) || 0;
-    const w = bucketWeights(p.tenor);
-    if (p.basis01) w.forEach((x, k) => p.risk['RUB OFZ'][k] += p.basis01 * x);
     p.cs01 = num(d.cs01) || 0;
-    p.cs01b = w.map(x => p.cs01 * x);
+    // по бакетам — ядра (spread_buckets: сумма = ofzSpr01 или cs01); без них — по двум соседним бакетам срока
+    const sb = ex.spread_buckets, w = bucketWeights(p.tenor);
+    const split = tot => sb ? M.buckets.map(b => (num(sb[b]) || 0)) : w.map(x => tot * x);
+    p.spreadBucketsSource = sb ? 'core' : 'tenor';
+    if (p.basis01) split(p.basis01).forEach((x, k) => p.risk['RUB OFZ'][k] += x);
+    p.cs01b = p.cs01 ? split(p.cs01) : zeros();
     p.dv01ByCurve = {}; let tot = 0;
     M.curves.forEach(c => { const s = p.risk[c.id].reduce((a, v) => a + v, 0); p.dv01ByCurve[c.id] = s; if (c.kind === 'rate') tot += s; });
     p.dv01 = tot;

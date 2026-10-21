@@ -86,6 +86,18 @@
     return (c.keyRate != null ? 'ключевая ' + f.pct(c.keyRate) : '') + (last ? ' (' + f.date(last.date) + ': ' + K.esc(last.decisionText || last.decision) + ')' : '') +
       '; консенсуса и ожиданий кривой в данных нет.';
   };
+  // курс PnL FX одной фразой (R26): по какому курсу посчитан FX (рыночный MOEX 19:00, иначе 14:00 / CETS / ЦБ — по
+  // валюте) и курс ЦБ, действующий на дату, рядом; demo — пусто
+  K.fxLine = (ccys) => {
+    const P = M.fxPnl, C = M.fxCbr;
+    if (!P) return '';
+    const cs = (ccys || M.ccys).filter(c => c !== 'RUB' && P.rate[c] != null);
+    if (!cs.length) return '';
+    return 'PnL FX по курсу ' + cs.map(c => c + ' ' + f.n(P.rate[c], c === 'CNY' ? 4 : 2) + ' ' + f.s(P.chgPct[c], 2) + '%' +
+      (P.source && P.source[c] && P.source[c] !== P.label ? ' (' + K.esc(P.source[c]) + ')' : '') +
+      (C && C !== P && C.rate[c] != null ? ' · ЦБ ' + f.n(C.rate[c], c === 'CNY' ? 4 : 2) + ' ' + f.s(C.chgPct[c], 2) + '%' : '')).join(', ') +
+      ' — ' + K.esc(P.label) + (C && C !== P ? '; курс ЦБ (действующий на дату) — для официального PnL' : '');
+  };
   // разрез, которого в данных нет (секторов и рейтингов в статике хаба нет): у всех позиций «—» / «без рейтинга»
   K.unknownDim = v => v == null || v === '—' || v === 'нет данных' || v === 'без рейтинга';
   K.dimMissing = (list, key) => list.length > 0 && list.every(p => K.unknownDim(p[key]));

@@ -239,8 +239,12 @@
       const head = noCurve(r) ? 'Ставки: кривой RUONIA OIS в прогоне нет' : (a > 0.5 ? 'Ставки выросли' : a < -0.5 ? 'Ставки снизились' : 'Ставки почти не изменились') + ': RUONIA OIS ' + chgRange(r) + ' б.п.' + (Math.abs(a) > 0.5 ? ' (сильнее всего ' + maxBucket(r) + ')' : '');
       return head + ', КС-свопы ' + chgRange(M.curve['RUB KEY']) + ', базис ОФЗ ' + chgRange(b) + (ab > 0.5 ? ' — ОФЗ слабее свопов.' : ab < -0.5 ? ' — ОФЗ сильнее свопов.' : '.');
     }
-    // курс PnL FX, когда он не рыночный курс шапки (прогон из базы: курс ЦБ на дату)
-    const fxPnlRate = c => M.fxPnl && M.fxPnl.rate[c] != null && (Math.abs(M.fxPnl.rate[c] - M.fx[c]) > 0.005 || Math.abs((M.fxPnl.chgPct[c] || 0) - (M.fxChgPct[c] || 0)) > 0.005) ? '; PnL по курсу ' + M.fxPnl.label + ' ' + f.n(M.fxPnl.rate[c], 2) + ', ' + (M.fxPnl.chgPct[c] > 0 ? '+' : '') + f.n(M.fxPnl.chgPct[c], 2) + '%' : '';
+    // курс PnL FX (R26): рыночный — курс шапки (MOEX 19:00, иначе 14:00 / CETS / ЦБ — источник рядом), курс ЦБ,
+    // действующий на дату, — рядом; прогон до R26 считал PnL по курсу ЦБ — тогда сказано, что по нему
+    const differs = (a, c) => a && a.rate[c] != null && (Math.abs(a.rate[c] - M.fx[c]) > 0.005 || Math.abs((a.chgPct[c] || 0) - (M.fxChgPct[c] || 0)) > 0.005);
+    const fxPnlRate = c => (M.fxSource && M.fxSource[c] ? ', ' + esc(M.fxSource[c]) : '') +
+      (differs(M.fxPnl, c) ? '; PnL по курсу ' + M.fxPnl.label + ' ' + f.n(M.fxPnl.rate[c], 2) + ', ' + (M.fxPnl.chgPct[c] > 0 ? '+' : '') + f.n(M.fxPnl.chgPct[c], 2) + '%'
+        : differs(M.fxCbr, c) ? '; ЦБ ' + f.n(M.fxCbr.rate[c], 2) + ', ' + (M.fxCbr.chgPct[c] > 0 ? '+' : '') + f.n(M.fxCbr.chgPct[c], 2) + '%' : '');
     const mv = M.marketMovers.slice().sort((a, b) => b.chgBp - a.chgBp);
     const up = mv.slice(0, 6), dn = mv.slice(-6).reverse();
     const ccyFx = M.ccys.filter(c => c !== 'RUB');

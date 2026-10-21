@@ -112,6 +112,9 @@
       };
     });
     wc.on('click', pp => { const i = pp.dataIndex; const k = FAC[i] ? FAC[i][0] : 'total'; K.drill({ title: 'PnL · ' + (FAC[i] ? FAC[i][1] : 'итог'), unit: u.unit, fmt: u.fmts, list: L, val: p => val(p, k) }); });
+    // FX: по какому курсу посчитан (R26: рыночный MOEX 19:00, курс ЦБ рядом)
+    const fxl = K.fxLine(M.ccys.filter(c => L.some(p => p.ccy === c)));
+    if (fxl) { const n = h('div', 'k-note'); n.style.padding = '4px 10px'; n.innerHTML = fxl; pw.querySelector('.bd').appendChild(n); }
 
     const pm = panel('Фактор × <span class="dseg"></span>', '<span class="k-note">' + u.unit + '</span>'); g1.appendChild(pm);
     pm.querySelector('.hd h3').style.cssText = 'display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:13px';

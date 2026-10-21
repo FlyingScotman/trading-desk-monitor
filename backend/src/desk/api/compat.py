@@ -242,6 +242,8 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
                    else (fx_move[r["ccy"]] if r.get("rate_cbr") is None else 0.0) for r in fxr}
     fx_cbr_next = {r["ccy"]: r["rate_cbr_next"] if r.get("rate_cbr_next") is not None else fx_cbr[r["ccy"]]
                    for r in fxr}
+    # the market rate's source (R26: MOEX 19:00, else 14:00, else CETS close, else CBR); a run before it: unknown
+    fx_source = {r["ccy"]: r.get("rate_source") for r in fxr if r["ccy"] != "RUB"}
     indices = {r["index_name"]: r["value"] for r in ref.get("indices", [])}
 
     prows = con.execute("SELECT position_id, fact, pnl, no_pnl FROM run_position WHERE run_id = %s"
@@ -382,7 +384,7 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         "accrualDays": max(1, (run["business_date"] - prev).days), "reportingCcy": "RUB",
         "BUCKETS": B, "PILLARS": list(RISK_PILLARS), "CURVES": curves, "CURVE_MOVES": moves,
         "FX": fx, "FX_MOVE_PCT": fx_move, "FX_CBR": fx_cbr, "FX_CBR_MOVE_PCT": fx_cbr_move,
-        "FX_CBR_NEXT": fx_cbr_next,
+        "FX_CBR_NEXT": fx_cbr_next, "FX_SOURCE": fx_source,
         "INDICES": indices, "ISSUERS": issuers, "RATING_ORDER": rating_order,
         "BOOKS": books, "SCENARIOS": scenarios, "scenarioResults": {},
         "JTD_RECOVERY": 0.0, "FUNDING_RULES": [], "OCP_TRANSFERS": [],
