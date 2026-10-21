@@ -6,6 +6,11 @@ Both come from cached static snapshots (``<sha256>.json.gz`` bundles, plus the c
 ``desk.marketdata.bundle`` does; that
 module is not imported so the conformance kit stays free of the rest of the backend.
 
+Index format ``desk.inbox.instruments/2`` (R22): the newest static snapshot in full, every older one as its
+difference from it (records set or dropped per lookup map). Consecutive days differ by a few dozen issues, so an
+index covering the five weeks of the inbox lookback costs little more than one snapshot to write, ship to the
+adapter's workers and load. ``Instruments`` reads format 1 (every snapshot in full) as well.
+
 Index record per instrument, from the static ``instruments`` rows: ``instrument_id`` and ``moex_secid`` are the
 ``secid`` (the backend's instrument key), ``isin``, ``regnum`` (``regnumber``), ``name``, ``currency``
 (``currency_id``), ``kind`` (``bond_class``: ofz_pd, corporate, ...) and ``initial_face``
@@ -29,7 +34,8 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-INDEX_FORMAT = "desk.inbox.instruments/1"
+INDEX_FORMAT = "desk.inbox.instruments/2"
+LOOKUP_MAPS = ("secid", "isin", "regnum")
 CALENDAR = "RU_PRODUCTION"
 LOOKUP_KINDS = ("isin", "regnum", "moex_secid")
 _SCHEMA = re.compile(r"^market_snapshot/1\.(0|[1-9][0-9]*)$")
@@ -119,15 +125,43 @@ def _instruments(data: dict[str, Any]) -> dict[str, Any]:
     return {"secid": by_secid, **by}
 
 
-def build_index(folder: str | Path, out_path: str | Path, dates: list[date | str] | None = None) -> dict:
-    """Write the instruments index for ``ctx.instruments``: the newest static snapshot plus those covering
-    ``dates``. Returns the written document. With no static snapshot the index is empty (every lookup None)."""
+def index_refs(folder: str | Path, dates: list[date | str] | None = None,
+               ids: list[str] | tuple[str, ...] | set[str] = ()) -> list[StaticRef]:
+    """The static snapshots an index for ``dates`` holds: the newest, those covering the dates, and the cached
+    snapshots of ``ids`` (an index already written that is kept), oldest first."""
     refs = static_snapshots(folder)
     chosen = {r.id: r for r in [covering(refs, None)] + [covering(refs, d) for d in dates or []] if r}
-    doc = {"format": INDEX_FORMAT, "snapshots": [
-        {"id": r.id, "business_date": r.business_date, **_instruments(_data(r))}
-        for r in sorted(chosen.values(), key=lambda r: (r.business_date, r.id))]}
-    Path(out_path).write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    chosen.update({r.id: r for r in refs if r.id in set(ids)})
+    return sorted(chosen.values(), key=lambda r: (r.business_date, r.id))
+
+
+def _delta(base: dict[str, Any], snap: dict[str, Any]) -> dict[str, Any]:
+    """Per lookup map, what differs from the newest snapshot: the keys set to another value (or added), the keys
+    dropped."""
+    out = {}
+    for m in LOOKUP_MAPS:
+        b, x = base[m], snap[m]
+        out[m] = {"set": {k: v for k, v in x.items() if k not in b or b[k] != v},
+                  "drop": [k for k in b if k not in x]}
+    return out
+
+
+def build_index(folder: str | Path, out_path: str | Path, dates: list[date | str] | None = None,
+                ids: list[str] | tuple[str, ...] | set[str] = ()) -> dict:
+    """Write the instruments index for ``ctx.instruments``: the newest static snapshot plus those covering
+    ``dates`` (and the cached ones of ``ids``), the newest in full and the others as their differences from it.
+    Returns the written document. With no static snapshot the index is empty (every lookup None)."""
+    chosen = index_refs(folder, dates, ids)
+    snaps: list[dict[str, Any]] = []
+    if chosen:
+        base = _instruments(_data(chosen[-1]))
+        snaps = [{"id": r.id, "business_date": r.business_date, "delta": _delta(base, _instruments(_data(r)))}
+                 for r in chosen[:-1]]
+        snaps.append({"id": chosen[-1].id, "business_date": chosen[-1].business_date, **base})
+    doc = {"format": INDEX_FORMAT, "snapshots": snaps}
+    tmp = Path(out_path).with_name(Path(out_path).name + ".part")  # the workers never read half a file
+    tmp.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(out_path)
     return doc
 
 
@@ -197,11 +231,36 @@ def unmapped_bonds(folder: str | Path, rows: list[tuple[str | None, dict[str, An
     return out
 
 
+class _Overlay:
+    """A lookup map of an older snapshot in a format 2 index: its own values over the newest snapshot's."""
+
+    __slots__ = ("_base", "_drop", "_set")
+
+    def __init__(self, base: dict, delta: dict) -> None:
+        self._base, self._set, self._drop = base, delta.get("set") or {}, frozenset(delta.get("drop") or ())
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        if key in self._set:
+            return self._set[key]
+        if key in self._drop:
+            return default
+        return self._base.get(key, default)
+
+
+def _snapshots(doc: dict | None) -> list[dict]:
+    """The snapshots of an index document, each with its three lookup maps (format 2 deltas as overlays)."""
+    snaps = sorted((doc or {}).get("snapshots", []), key=lambda s: (s["business_date"], s["id"]))
+    full = next((x for x in reversed(snaps) if "delta" not in x), None)
+    return [x if "delta" not in x else {"id": x["id"], "business_date": x["business_date"],
+                                        **{m: _Overlay(full[m] if full else {}, x["delta"].get(m) or {})
+                                           for m in LOOKUP_MAPS}} for x in snaps]
+
+
 class Instruments:
     """``ctx.instruments`` over an index document; ``Instruments(None)`` is the stub (every lookup None)."""
 
     def __init__(self, doc: dict | None) -> None:
-        self._snaps = sorted((doc or {}).get("snapshots", []), key=lambda s: (s["business_date"], s["id"]))
+        self._snaps = _snapshots(doc)
         self.snapshot_id: str | None = self._snaps[-1]["id"] if self._snaps else None
 
     @classmethod

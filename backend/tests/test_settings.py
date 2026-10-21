@@ -70,7 +70,7 @@ def test_inbox_and_adapter_settings(tmp_path: Path) -> None:
     s = load({"DESK_ENV_FILE": str(tmp_path / "none")})
     assert s.private_adapter is None and s.inbox_dirs == () and s.inbox_archive == REPO_ROOT / ".devdata" / "inbox"
     assert (s.inbox_poll_seconds, s.adapter_match_timeout_s, s.adapter_read_timeout_s, s.inbox_max_file_mb) == \
-        (60, 10, 600, 500)
+        (60, 60, 600, 500)
     s = load({"DESK_ENV_FILE": str(tmp_path / "none"), "DESK_PRIVATE_ADAPTER": "adapters/tda",
               "DESK_PRIVATE_ADAPTER_CONFIG": "/cfg", "DESK_PRIVATE_ADAPTER_SHA256": "ab" * 32,
               "DESK_INBOX_DIRS": "/in/a; in/b/** ;", "DESK_INBOX_POLL_SECONDS": "5", "DESK_INBOX_MAX_FILE_MB": "1.5"})

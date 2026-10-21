@@ -22,7 +22,8 @@ fails holds ``{"error": ...}`` and the rest is still there):
 * ``static``: the cached static snapshots: dates, schema, instrument counts by status, class, coupon type, floater
   formulas by benchmark, calendars;
 * ``inbox``: the adapter (name, version), folders (count, exist), files by status, source and error code, units,
-  issue codes, copies, file extensions; ``positions``: position sets per date (counts), today's book by asset class,
+  issue codes, copies, file extensions, and ``reconcile`` (R22): rows of the reports, accepted and in the default
+  run as totals, books by flag and age, loss codes, the last scan's counts and timings (no book ids); ``positions``: position sets per date (counts), today's book by asset class,
   unmapped bonds by reason, book ages;
 * ``runs``: the last runs: id, date, type, cut, times, status, versions, snapshot id prefixes, position counts by
   valuation quality and reason code, discount curve, curves built, risk per curve (positions contributing, no
@@ -940,7 +941,23 @@ def inbox_section(settings: Settings, con: psycopg.Connection, scrub: Scrubber, 
         "SELECT type, count(*) FROM event WHERE at >= now() - interval '7 days' GROUP BY 1 ORDER BY 2 DESC")}
     out["waiting_calendar_report_dates"] = [_iso(d) for (d,) in q(
         f"SELECT DISTINCT report_date FROM ({latest}) l WHERE status = 'waiting_calendar' ORDER BY 1 DESC LIMIT 20")]
+    out["reconcile"] = reconcile_summary(scan.reconcile(con, settings))
     return out
+
+
+def reconcile_summary(r: dict[str, Any]) -> dict[str, Any]:
+    """``desk inbox reconcile`` without books and files (R22): the totals of rows (report, accepted, in the run,
+    valued, rejected), the books by flag and by valid date age, the loss codes with counts, the file statuses and
+    error types, the last scan's counts. Counts and codes only."""
+    flags = Counter(f for b in r["books"] for f in b["flags"])
+    return {"date": r["date"], "has_default_run": r["run_id"] is not None, "since": r["since"],
+            "totals": r["totals"], "books_by_flag": dict(flags.most_common()),
+            "books_by_age_days": dict(Counter(str(b["age_days"]) for b in r["books"]
+                                              if b["age_days"] is not None).most_common(15)),
+            "issue_codes": dict(sum((Counter(b["issues"]) for b in r["books"]), Counter()).most_common(20)),
+            "losses": {x["code"]: x["count"] for x in r["losses"]}, "files": r["files"],
+            "file_errors": r["file_errors"],
+            "last_scan": {k: v for k, v in (r.get("last_scan") or {}).items() if k != "at"} or None}
 
 
 def positions_section(settings: Settings, con: psycopg.Connection, now: datetime) -> dict[str, Any]:

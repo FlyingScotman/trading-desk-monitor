@@ -22,8 +22,10 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    date also when its default run was made by another ``desk.logic_version()`` (an upgrade: older dates are not
    recomputed, to keep it cheap). Oldest first, except that the latest positions date goes first while it has no
    default run at all (a first launch, a new day): the current position shows before the backlog is done (its model
-   prices then carry spreads from the runs that existed when it ran). A date that failed is not retried until its
-   inputs change. The step's detail also lists the latest positions date's bonds without an instrument: counts by
+   prices then carry spreads from the runs that existed when it ran). While the inbox is still draining (the scan
+   left files waiting for a calendar and the sync left hub dates for the next cycle), only the latest positions
+   date runs: the older dates run once the backlog is in, not once per cycle as each book's revision lands (R22).
+   A date that failed is not retried until its inputs change. The step's detail also lists the latest positions date's bonds without an instrument: counts by
    reason and the ISINs (``inbox.scan.unmapped``, D6).
 4. **intraday** (with the hub and the ``intraday`` setting, R11): on a business day from 10:00 MSK, today's book
    (the latest position sets, carried forward: ``store.positions_for``) valued on the hub's newest ``intraday``
@@ -222,6 +224,7 @@ class Autopilot:
         self._missing: dict[str, float] = {}   # hub date -> monotonic time the hub had no snapshot for it
         self._hub_failed = False               # this cycle's hub sync failed: no history step
         self._sync_later = 0                   # hub dates the sync left for the next cycle: no history step
+        self._inbox_waiting = 0                # files the last scan left waiting for a calendar (R22)
         self._history_dates: tuple[float, int, list[tuple[str, str]]] | None = None
         # (listed at, depth, [(hub date, its current snapshot id)] newest first)
         self._poll_slot: tuple | None = None   # (date, cut, slot) the hub was last asked for a cut of today in
@@ -620,9 +623,11 @@ class Autopilot:
     def _scan(self, settings: Settings, con: psycopg.Connection) -> tuple[str, str]:
         from .inbox import scan
 
+        self._inbox_waiting = 0
         if not settings.inbox_dirs:
             return "skipped", "no inbox folders (inbox_dirs)"
         res = scan.scan(con, settings, progress=lambda done, total, detail: self._progress("scan", done, total, detail))
+        self._inbox_waiting = res.files.get("waiting_calendar", 0)
         detail = "; ".join(res.text().splitlines())
         if res.busy:
             return "skipped", detail
@@ -669,6 +674,12 @@ class Autopilot:
                 continue
             todo.append((d, why, sig))
         todo.sort(key=lambda t: not (t[0] == latest_valid and t[1] == "no default run"))  # stable: then oldest first
+        if self._inbox_waiting and self._sync_later:
+            held = [t for t in todo if t[0] != latest_valid and t[0] not in extra]
+            if held:  # the backlog drains over the next cycles: these dates run once, after it (R22)
+                todo = [t for t in todo if t not in held]
+                notes.append(f"{len(held)} dates wait for the inbox backlog ({self._inbox_waiting} files wait for "
+                             f"a calendar, {self._sync_later} hub dates next cycle)")
         for i, (d, why, sig) in enumerate(todo):
             self._progress("eod", i + 1, len(todo), d)
             self._emit(f"eod {d}: {why}")
