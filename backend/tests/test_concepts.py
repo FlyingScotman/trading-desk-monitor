@@ -85,6 +85,32 @@ def test_concepts_data_js(desk):
     assert extras(desk, f"?as_of={PREV}")["histDates"] == [PREV]
 
 
+def test_trades_only_against_the_previous_close(desk, store_url):
+    """E2E 21.10.2026: with the history of runs still being backfilled the run before the latest was months older, and
+    every position showed as a trade of the day. Trades and changes are against the run of the previous close only."""
+    from datetime import timedelta
+
+    from psycopg.rows import dict_row
+
+    from desk.api import compat
+    with store.connect(store_url) as con:
+        con.row_factory = dict_row
+        run = compat.resolve_run(con, date.fromisoformat(DATE))
+        assert run["prev_date"].isoformat() == PREV
+        x = concepts.extras(con, run)
+        assert x["positions"]["P1"]["trade"] and not any("нет прогона за" in n for n in x["notes"])
+        gap = concepts.extras(con, {**run, "prev_date": run["prev_date"] - timedelta(days=1)})  # no run of that close
+        # a face that moves by itself (a linker's indexation, an amortization) with the same number of bonds: no trade
+        con.execute("UPDATE run_summary SET data = jsonb_set(data, '{pos,P2,0}', to_jsonb((data->'pos'->'P2'->>0)::float8"
+                    " * 1.01)) WHERE run_id = %s", (run["run_id"],))
+        indexed = concepts.extras(con, run)
+    assert "trade" not in indexed["positions"]["P2"]
+    assert indexed["positions"]["P1"]["trade"]["qty"] == pytest.approx(x["positions"]["P1"]["trade"]["qty"])
+    assert not any("trade" in p or "prevPrice" in p for p in gap["positions"].values())
+    assert any("нет прогона за 2026-10-13" in n for n in gap["notes"])
+    assert gap["positions"]["P1"]["pnlMtd"] == pytest.approx(x["positions"]["P1"]["pnlMtd"])  # periods unchanged
+
+
 def test_concepts_data_js_etag_and_empty(desk, store_url):
     r = desk.get("/concepts-data.js")
     again = desk.get("/concepts-data.js", headers={"If-None-Match": r.headers["etag"]})

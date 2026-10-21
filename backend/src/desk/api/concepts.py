@@ -152,7 +152,11 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
         return {k: [s[field].get(k, 0.0) for s in sums] for k in keys}
 
     pnl = {k: [(s["pnl"] or {}).get(k) if s["pnl"] else None for s in sums] for k in (*PNL, "total")}
-    cur, prev = sums[-1]["pos"], (sums[-2]["pos"] if n > 1 else None)
+    # the day's trades, the previous price and the spread change: against the run of the previous close only (the
+    # run's prev_date); an older run (a gap in the history of runs, the backfill still running) would show every
+    # change since then as a trade of the day
+    prev_ok = n > 1 and run.get("prev_date") is not None and runs[-2]["business_date"] == run["prev_date"]
+    cur, prev = sums[-1]["pos"], (sums[-2]["pos"] if prev_ok else None)
     acc: dict[str, list[float]] = {pid: [0.0, 0.0] for pid in cur}
     y, m = as_of.year, as_of.month
     for r, s in zip(runs, sums):
@@ -167,6 +171,9 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
                 if mtd:
                     a[0] += p[5]
     has_pnl = {pid for s in sums for pid, p in s["pos"].items() if p[5] is not None}
+    qty = {(r["run_id"], r["position_id"]): r["quantity"] for r in con.execute(
+        "SELECT run_id, position_id, quantity FROM run_position WHERE run_id = ANY(%s) AND quantity IS NOT NULL",
+        ([run["run_id"], runs[-2]["run_id"]],))} if prev is not None else {}
     positions: dict[str, dict[str, Any]] = {}
     for pid, p in cur.items():
         out: dict[str, Any] = {}
@@ -178,9 +185,12 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
             if p[7] is not None and p0[7] is not None:
                 out["spreadChgBp"] = p[7] - p0[7]
             dq = (p[0] or 0.0) - (p0[0] or 0.0)
+            n1, n0 = qty.get((run["run_id"], pid)), qty.get((runs[-2]["run_id"], pid))
+            if n1 and n0 is not None:  # the number of bonds: a linker's indexed or an amortizer's face moves by itself
+                dq = (n1 - n0) * (p[0] or 0.0) / n1 if abs(n1 - n0) > 1e-6 * max(1.0, abs(n1)) else 0.0
             if abs(dq) > 1e-6 * max(1.0, abs(p[0] or 0.0)):
                 out["trade"] = {"qty": dq, "price": p[6]}
-        elif n > 1:
+        elif prev is not None:
             out["trade"] = {"qty": p[0], "price": p[6], "new": True}
         positions[pid] = out
     periods, notes = _periods(con, as_of, dates)
@@ -198,6 +208,9 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
                           "amount": amount, "est": bool(est)})
     if not flows and cur:
         notes.append("потоков позиций в прогоне нет: прогон посчитан до версии с потоками (пересчитается последняя дата)")
+    if not prev_ok and run.get("prev_date") is not None:
+        notes.append(f"сделки дня и изменения к вчера не показаны: нет прогона за {run['prev_date'].isoformat()}"
+                     " (досчитать: desk backfill)")
     flows.sort(key=lambda c: c["date"])
     market = universe(con, as_of, held)
     notes += market.pop("notes")
