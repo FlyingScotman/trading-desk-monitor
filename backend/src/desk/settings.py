@@ -49,6 +49,11 @@ layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub
                            latest hub dates it keeps in sync (5)
 * ``DESK_INTRADAY``        the autopilot's intraday step (on): today's book on the hub's intraday cuts every half
                            hour, from 19:45 on the preliminary close (R11)
+* ``DESK_PROXY_CURVES_FOR_RISK``  (off) the hub's government par-yield proxies of contract 1.3 (``usd_ust_par``,
+                           ``eur_aaa_par``, ``eur_bund_par``: UST par, ECB AAA, Bund, **not OIS**) become the points
+                           and the day's move of the run's USD / EUR curves, so the rates PnL and the scenario shifts
+                           of USD/EUR risk use them. Off: they are shown on the market pages as proxies only and the
+                           USD/EUR curves of the risk stay without points (R25)
 * ``DESK_INBOX_LOOKBACK_DAYS``  the inbox scan and the autopilot's hub sync take report files (by modification
                            time, then by the report date ``match`` gives) and hub dates at most this many days old
                            (35; 0: no limit); a folder holding years of reports is not read. The backfill
@@ -109,6 +114,7 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "autopilot": ("DESK_AUTOPILOT", "bool"),
     "autopilot_sync_last": ("DESK_AUTOPILOT_SYNC_LAST", "int"),
     "intraday": ("DESK_INTRADAY", "bool"),
+    "proxy_curves_for_risk": ("DESK_PROXY_CURVES_FOR_RISK", "bool"),
     "inbox_lookback_days": ("DESK_INBOX_LOOKBACK_DAYS", "int0"),
     "update_dir": ("DESK_UPDATE_DIR", "path"),
     "history_days": ("DESK_HISTORY_DAYS", "int0"),
@@ -180,6 +186,7 @@ class Settings:
     autopilot: bool = True
     autopilot_sync_last: int = 5
     intraday: bool = True  # the autopilot values today's book on the hub's intraday / preliminary cuts (R11)
+    proxy_curves_for_risk: bool = False  # UST par / ECB AAA / Bund proxies as the run's USD/EUR curves (R25; not OIS)
     inbox_lookback_days: int = 35  # report dates at most this many days old (R22); 0: no limit
     history_days: int = 260  # hub business dates of market history for the bond charts (~1 year); 0: the cache only
     history_bonds_from: date = date(2024, 1, 3)  # the hub's history API: bonds from (its bond EOD starts here)
@@ -248,6 +255,8 @@ class Settings:
             ("autopilot", "on" if self.autopilot else "off"),
             ("autopilot_sync_last", str(self.autopilot_sync_last)),
             ("intraday", "on" if self.intraday else "off"),
+            ("proxy_curves_for_risk", "on (UST par / ECB AAA / Bund, not OIS)" if self.proxy_curves_for_risk
+             else "off (proxies shown only)"),
             ("inbox_lookback_days", str(self.inbox_lookback_days) if self.inbox_lookback_days else "0 (no limit)"),
             ("update_dir", str(self.update_dir or "none")),
             ("history_days", str(self.history_days) if self.history_days else "0 (off: the cached dates only)"),
@@ -548,6 +557,7 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         autopilot=flag("DESK_AUTOPILOT", defaults.autopilot),
         autopilot_sync_last=count("DESK_AUTOPILOT_SYNC_LAST", defaults.autopilot_sync_last),
         intraday=flag("DESK_INTRADAY", defaults.intraday),
+        proxy_curves_for_risk=flag("DESK_PROXY_CURVES_FOR_RISK", defaults.proxy_curves_for_risk),
         inbox_lookback_days=count("DESK_INBOX_LOOKBACK_DAYS", defaults.inbox_lookback_days, 0),
         history_days=count("DESK_HISTORY_DAYS", defaults.history_days, 0),
         history_bonds_from=day("DESK_HISTORY_BONDS_FROM", defaults.history_bonds_from),

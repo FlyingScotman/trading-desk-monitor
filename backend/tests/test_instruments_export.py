@@ -80,7 +80,9 @@ def test_quotes_and_summary(export):
     assert sum(r["has_quote"] for r in export.rows) >= 9
     s = instruments.summary(export.rows)
     assert s["instruments"] == 10 and s["by_class"]["corporate"] == 6
-    assert s["fill"]["_total"]["sector"] == 0 and s["fill"]["_total"]["isin"] == 10
+    # the hub has no sector in the fixture; the four OFZ get the sovereign by the bond class (R25)
+    assert s["fill"]["_total"]["sector"] == 4 and s["fill"]["_total"]["isin"] == 10
+    assert s["fill"]["_total"]["rating_agency"] == 0  # a 1.0 static: no ratings
     assert s["core_static"]["ok"] == 8
     assert "instruments" in instruments.summary_text(s)
 

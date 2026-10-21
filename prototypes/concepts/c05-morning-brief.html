@@ -90,6 +90,18 @@
   const plural = (n, a, b, c) => { const m = n % 10, h = n % 100; return n + ' ' + (m === 1 && h !== 11 ? a : m >= 2 && m <= 4 && (h < 10 || h >= 20) ? b : c); };
   const daysTo = d => Math.round((M.util.parse(d) - M.util.parse(M.asOf)) / 864e5);
   const word = v => v >= 0 ? 'заработали' : 'потеряли';
+  // USD / EUR / CNY: сдвиг кривой, если она есть в прогоне; без кривой — фиксинги SOFR и €STR (хаб 0.3.0), иначе «нет
+  // данных» (R25). Прокси-кривая UST par (не OIS) подписана как прокси.
+  function fxRatesLine() {
+    const fix = k => { const x = MH && MH.indices && MH.indices[k]; const v = x && x.value != null ? x.value : M.indices[k];
+      return v == null ? null : k + ' ' + f.pct(v) + (x && x.chgBp && x.chgBp[0] ? ' (' + f.bps(x.chgBp[0]) + ' б.п.)' : ''); };
+    const c = M.curve['USD SOFR'], e = M.curve['EUR ESTR'], cn = M.curve['CNY XCCY'];
+    const cur = (cv, name) => (/прокси/.test(cv.name || '') ? esc(cv.name) : name) + ' ' + chgRange(cv) + ' б.п.';
+    const parts = [noCurve(c) ? (fix('SOFR') || 'SOFR нет данных') : cur(c, 'USD')];
+    if (!noCurve(e)) parts.push(cur(e, 'EUR')); else if (fix('€STR')) parts.push(fix('€STR'));
+    parts.push(noCurve(cn) ? 'CNY нет данных' : 'CNY ' + chgRange(cn) + ' б.п.');
+    return parts.join(', ') + (noCurve(c) && noCurve(cn) ? ' (кривых USD/CNY в данных хаба нет' + (fix('SOFR') ? '; SOFR и €STR — фиксинги дня' : '') + ')' : '');
+  }
 
   // ---------- фиксинги, курсы ЦБ и кривые за неделю, месяц, с начала года (история рынка хаба) ----------
   function marketHist() {
@@ -102,9 +114,15 @@
       '<td>' + K.spark((x.series || []).slice(-130).map(v => v[1]), 110, 20) + '</td></tr>').join('');
     const fx = Object.entries(MH.fx || {}).map(([c, x]) => '<tr><td>' + c + '/RUB ЦБ</td><td class="n"><b>' + f.n(x.cbr, c === 'CNY' ? 4 : 2) + '</b></td>' +
       ['1D', '1W', '1M', 'YTD'].map(p => { const v = x.chgPct[at(p)]; return '<td class="n ' + cl(v) + '">' + (v == null ? '—' : f.s(v, 2) + '%') + '</td>'; }).join('') +
-      '<td class="mut3">' + (x.moexTom != null ? 'MOEX TOM ' + f.n(x.moexTom, c === 'CNY' ? 4 : 2) : '') + '</td></tr>').join('');
+      '<td class="mut3">' + (x.moexTom != null ? 'MOEX TOM ' + f.n(x.moexTom, c === 'CNY' ? 4 : 2) : '') + '</td></tr>').join('') +
+      // кросс-курсы (R25): ряды хаба 0.3.0 (ЕЦБ, ФРС H.10, CETS, кросс ЦБ), иначе — кросс курсов ЦБ
+      Object.entries(MH.crosses || {}).map(([pr, x]) => '<tr><td title="' + esc(x.label + (x.date ? ', ' + f.date(x.date) : '')) + '">' + pr + ' <span class="mut3">' + esc(x.label) + '</span></td><td class="n"><b>' + f.n(x.value, 4) + '</b></td>' +
+        ['1D', '1W', '1M', 'YTD'].map(p => { const v = x.chgPct[at(p)]; return '<td class="n ' + cl(v) + '">' + (v == null ? '—' : f.s(v, 2) + '%') + '</td>'; }).join('') +
+        '<td>' + K.spark((x.series || []).slice(-130).map(v => v[1]), 110, 20) + '</td></tr>').join('');
     const T = [1, 5, 10], ti = t => (MH.pillars || M.pillars).indexOf(t);
-    const cv = [['RUONIA OIS', 'RUB RUONIA'], ['КС-свопы', 'RUB KEY'], ['КБД (ОФЗ)', 'OFZ']].filter(([, id]) => MH.curves && MH.curves[id]).map(([n, id]) => {
+    // прокси-кривые USD / EUR (госбумаги par, не OIS; хаб 0.3.0) — только для взгляда, в риск не входят (R25)
+    const proxies = Object.entries(MH.curves || {}).filter(([, c]) => c.proxy).map(([id, c]) => [(c.ccy || '') + ' <span class="mut3">' + esc(c.proxy) + '</span>', id]);
+    const cv = [['RUONIA OIS', 'RUB RUONIA'], ['КС-свопы', 'RUB KEY'], ['КБД (ОФЗ)', 'OFZ']].concat(proxies).filter(([, id]) => MH.curves && MH.curves[id]).map(([n, id]) => {
       const c = MH.curves[id], now = c.pts.asOf || [];
       return '<tr><td>' + n + '</td>' + T.map(t => '<td class="n"><b>' + f.pct(now[ti(t)]) + '</b></td>').join('') +
         ['1W', '1M', 'YTD'].map(p => { const b = c.pts[p]; return T.map(t => { const v = b && now[ti(t)] != null && b[ti(t)] != null ? Math.round((now[ti(t)] - b[ti(t)]) * 100) : null; return '<td class="n ' + cl(v) + '">' + bp(v) + '</td>'; }).join(''); }).join('') + '</tr>';
@@ -247,7 +265,7 @@
     const mvT = (arr) => '<table class="mini"><thead><tr><th>Выпуск</th><th>Рейт.</th><th class="n">Дох.</th><th class="n">Δ б.п.</th></tr></thead><tbody>' + arr.map(b => '<tr><td class="name">' + esc(b.name) + ' <span class="mut3">' + esc(b.sector) + '</span></td><td class="mut">' + esc(b.rating) + '</td><td class="n">' + f.pct(b.ytm) + '</td><td class="n ' + (b.chgBp > 0 ? 'chg-up' : 'chg-dn') + '"><b>' + f.bps(b.chgBp) + '</b></td></tr>').join('') + '</tbody></table>';
     html += '<section id="s6"><h2><span class="no">06</span> Рынок <span class="sp"></span><span class="k-note">изменения к закрытию ' + f.date(M.prevDate) + '</span></h2>' +
       '<p>' + mktSentence() + ' ' +
-      'SOFR ' + chgRange(M.curve['USD SOFR']) + ', CNY ' + chgRange(M.curve['CNY XCCY']) + (noCurve(M.curve['USD SOFR']) && noCurve(M.curve['CNY XCCY']) ? ' (кривых USD/CNY в данных хаба нет)' : ' б.п.') + '. Курсы: ' + ccyFx.map(c => c + ' ' + f.n(M.fx[c], 2) + ' (' + (M.fxChgPct[c] > 0 ? '+' : '') + f.n(M.fxChgPct[c], 2) + '%' + fxPnlRate(c) + ', PnL ' + K.d({ title: 'FX PnL ' + c, unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L.filter(p => p.ccy === c), val: p => p.pnl.fx }) + ' mm)').join(', ') + '. ' +
+      fxRatesLine() + '. Курсы: ' + ccyFx.map(c => c + ' ' + f.n(M.fx[c], 2) + ' (' + (M.fxChgPct[c] > 0 ? '+' : '') + f.n(M.fxChgPct[c], 2) + '%' + fxPnlRate(c) + ', PnL ' + K.d({ title: 'FX PnL ' + c, unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L.filter(p => p.ccy === c), val: p => p.pnl.fx }) + ' mm)').join(', ') + '. ' +
       'КС ' + f.pct(M.indices['КС']) + ', RUONIA ' + f.pct(M.indices['RUONIA']) + '.</p>' +
       '<div class="two"><div><div class="cap">Кривые RUB: сегодня, вчера и сдвиг</div><div class="chart" id="curveChart"></div></div>' +
       '<div><div class="cap">Корпоративный рынок: сильнее всего выросли доходности</div>' + mvT(up) + '<div class="cap" style="margin-top:10px">…и снизились</div>' + mvT(dn) + '</div></div>' + marketHist() + '</section>';

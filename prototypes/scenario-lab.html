@@ -494,9 +494,10 @@ DESK.scope.apply();  // фильтр Desk Monitor (юрлицо, деск, по�
 const D = window.DESK, U = D.util, P = D.positions, BK = D.BUCKETS;
 const RAT = D.RATING_ORDER, BOOKK = Object.keys(D.BOOKS);
 // Грейды — слайдерами по шкале; «нет данных» (в хабе нет рейтинга) — не грейд: одна корзина «без рейтинга» после них.
-// Ключ шока корзины — сам U.NO_RATING (его читает util.spreadShock по p.rating).
-const RAT_G = RAT.filter(U.isRated), NORAT = RAT.includes(U.NO_RATING) || P.some(p => p.rating === U.NO_RATING && p.cs01);
-const NORAT_POS = P.filter(p => p.rating === U.NO_RATING && p.cs01), NORAT_CS = NORAT_POS.reduce((s, p) => s + p.cs01, 0);
+// Ключ шока корзины — U.NO_RATING; в сценарий он пишется и как U.NOT_RATED («б/р»: рейтинги в статике есть, у бумаги
+// нет), так что util.spreadShock и бэкенд находят его по p.rating любой из двух (R25).
+const RAT_G = RAT.filter(U.isRated), NORAT = RAT.some(r => !U.isRated(r)) || P.some(p => p.rating && !U.isRated(p.rating) && p.cs01);
+const NORAT_POS = P.filter(p => p.rating && !U.isRated(p.rating) && p.cs01), NORAT_CS = NORAT_POS.reduce((s, p) => s + p.cs01, 0);
 const RAT_KEYS = RAT_G.concat(NORAT ? [U.NO_RATING] : []);
 const posById = {}; P.forEach(p => posById[p.id] = p);
 const DV = U.bucketMatrix(P);
@@ -553,7 +554,8 @@ function normalize(sc){
   const fx = {}; FXC.forEach(k => fx[k] = (sc.fx && sc.fx[k]) || 0);
   const sp = sc.spreads || {}; const rating = {}, sector = {};
   // _all раскладывается по рейтингам (у всех бумаг с CS01 есть рейтинг); старый формат — рейтинг ключом верхнего уровня
-  RAT_KEYS.forEach(r => rating[r] = (typeof sp[r] === 'number' ? sp[r] : 0) + ((sp.rating && sp.rating[r]) || 0) + (sp._all || 0));
+  const rr = r => (sp.rating && (sp.rating[r] || (r === U.NO_RATING ? sp.rating[U.NOT_RATED] : 0))) || 0;
+  RAT_KEYS.forEach(r => rating[r] = (typeof sp[r] === 'number' ? sp[r] : 0) + rr(r) + (sp._all || 0));
   SECT.forEach(k => sector[k] = (sp.sector && sp.sector[k]) || 0);
   const basis = RUBC.length === 2 ? Math.round(curves['RUB KEY'].reduce((a, v, i) => a + v - curves['RUB RUONIA'][i], 0) / BK.length) : 0;
   return {name: sc.name, curves, fx, rating, sector, issuer: Object.assign({}, sp.issuer || {}), mult: sp._mult || 1, ofz: sc.ofzSpread || 0, basis};
@@ -562,7 +564,8 @@ function toScenario(ed){
   const curves = {}; CK.forEach(c => curves[c] = ed.curves[c].slice());
   const nz = o => { const r = {}; Object.keys(o).forEach(k => { if (o[k]) r[k] = o[k]; }); return r; };
   return {name: ed.name, curves, fx: Object.assign({}, ed.fx), ofzSpread: ed.ofz || 0,
-    spreads: {rating: nz(ed.rating), sector: nz(ed.sector), issuer: nz(ed.issuer), _mult: ed.mult}};
+    spreads: {rating: nz(Object.assign({}, ed.rating, ed.rating[U.NO_RATING] ? {[U.NOT_RATED]: ed.rating[U.NO_RATING]} : {})),
+      sector: nz(ed.sector), issuer: nz(ed.issuer), _mult: ed.mult}};
 }
 function shockOf(sc){ const m = {}; CK.forEach(c => { const v = sc.curves && sc.curves[c]; m[c] = v == null ? BK.map(() => 0) : Array.isArray(v) ? v : BK.map(() => v); }); return m; }
 function compute(sc){

@@ -180,6 +180,12 @@ def eligibility(terms: BondTerms) -> None:
             raise Rejected("floater_formula_incomplete", f"{f['status']} formula without a spread")
 
 
+
+def _pct(x: float | None) -> str:
+    """A floater's floor or cap in its description; «—» when the formula has none (a cap without a floor: 4 floaters
+    of the hub's static of 21.10.2026 failed here)."""
+    return "—" if x is None else f"{x:.2%}"
+
 def floater_rule(terms: BondTerms) -> tuple[FloatingCouponRule, str, str, str]:
     """Coupon rule, fixing ID, projection curve ID and a description of a floater's formula.
 
@@ -221,7 +227,7 @@ def floater_rule(terms: BondTerms) -> tuple[FloatingCouponRule, str, str, str]:
     obs = "6 months in advance" if window else f"{shift} calendar days back" if shift else "no lag"
     desc = (f"{bench} {'+' if margin >= 0 else '-'} {abs(margin) * 1e4:g} bp, {averaging}, {obs}, "
             f"{'ACT/ACT' if dc is DayCount.ACT_ACT_ISDA else 'ACT/365F'}"
-            + (f", floor {floor:.2%} cap {cap and f'{cap:.2%}'}" if rule.bounds else ""))
+            + (f", floor {_pct(floor)} cap {_pct(cap)}" if rule.bounds else ""))
     if bench == "KEY_RATE":
         return rule, "KEY_RATE", KEY_RATE_CURVE_ID, desc
     return rule, "RUONIA", RUONIA_OIS_CURVE_ID, desc

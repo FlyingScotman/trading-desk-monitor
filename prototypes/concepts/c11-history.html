@@ -272,6 +272,7 @@ tr.row.sel td { background: var(--accent-bg); }
     K.seg(P.querySelector('.m'), mets, st.pm, v => { st.pm = v; save(); drawPos(); });
     const i0 = st.cmp;
     const d = (a, b, fm) => a == null || b == null ? '—' : '<span class="' + f.cls(b - a) + '">' + fm(b - a) + '</span>';
+    const lastOf = a => { for (let k = a.length - 1; k >= 0; k--) if (a[k] != null) return a[k]; return null; };
     bd.innerHTML = '<div class="pv-hd"><input class="k-input" list="posList" placeholder="найти позицию: бумага, ISIN, эмитент…" value=""><datalist id="posList">' + K.list().map(q => '<option value="' + esc(q.name) + '">' + esc(q.issuerName + ' · ' + q.book + ' · ' + q.ccy) + '</option>').join('') + '</datalist>' +
       '<b style="color:' + K.issuerColor(p.issuer) + '">●</b> <b>' + esc(p.name) + '</b> ' + K.ccyTag(p.ccy) + ' <span class="mut">' + esc(p.book) + '</span><span style="flex:1"></span><button class="k-btn" data-card="' + p.id + '">Карточка</button></div>' +
       '<div class="pv-sum">' + [
@@ -281,6 +282,9 @@ tr.row.sel td { background: var(--accent-bg); }
         ['Цена', f.px(pLast(p, x)), d(x.price[i0], pLast(p, x), v => f.s(v, 2))],
         ['Доходность', f.pct(yLast(p, x)), d(x.ytm[i0], yLast(p, x), v => f.s(v * 100, 0) + ' бп')],
         ['Спред, бп', f.bp(x.spr[LAST]), d(x.spr[i0], x.spr[LAST], f.bps)],
+      ] : []).concat(isB && (x.icpi || x.cpi) ? [  // линкер: ICPI MOEX и ИПЦ г/г, известный на дату (R25)
+        ['ICPI', x.icpi ? f.n(lastOf(x.icpi), 4) : '—', x.icpi ? d(x.icpi[i0], lastOf(x.icpi), v => f.s(v, 4)) : '—'],
+        ['ИПЦ г/г', x.cpi ? f.pct(lastOf(x.cpi)) : '—', x.cpi ? d(x.cpi[i0], lastOf(x.cpi), v => f.s(v * 100, 0) + ' бп') : '—'],
       ] : []).map(([l, v, dd]) => '<div><div class="l">' + l + '</div><div class="v">' + v + '</div><div class="l">с ' + f.date(DATES[i0]) + ': ' + dd + '</div></div>').join('') + '</div><div class="chart" style="height:250px"></div>';
     const inp = bd.querySelector('input');
     inp.onchange = () => { const q = K.list().find(z => z.name === inp.value) || K.list().find(z => z.searchText.includes(inp.value.toLowerCase())); if (q) { st.pos = q.id; save(); drawPos(); if (topTbl) topTbl.redraw(); } };
@@ -291,6 +295,7 @@ tr.row.sel td { background: var(--accent-bg); }
       const cut = a => (a || []).slice(n0), mk = DH.dates.indexOf(DATES[st.cmp]) - n0;
       const S = st.pm === 'price' ? [{ name: 'Цена', data: cut(DH.price), color: c }]
         : st.pm === 'ytm' ? [{ name: 'Доходность, %', data: cut(DH.ytm), color: c }].concat(DH.bench && DH.bench.some(v => v != null) ? [{ name: 'ОФЗ на сроке', data: cut(DH.bench), color: css('--fg-3'), lineStyle: { type: 'dashed', width: 1 } }] : [])
+            .concat(DH.cpi ? [{ name: 'ИПЦ г/г, %', data: cut(DH.cpi), color: css('--warn'), step: 'end', lineStyle: { type: 'dashed', width: 1 } }] : [])
           : [{ name: p.cpn && p.cpn.type === 'float' ? 'DM, б.п.' : 'G-спред, б.п.', data: cut(p.cpn && p.cpn.type === 'float' ? (DH.dm || DH.spr) : DH.spr), color: c, connectNulls: true }].concat(DH.zspr && !(p.cpn && p.cpn.type === 'float') ? [{ name: 'Z-спред MOEX, б.п.', data: cut(DH.zspr), color: css('--fg-3') }] : []);
       chPos = K.chart(bd.querySelector('.chart'), () => ({
         animation: false, grid: { left: 6, right: 10, top: 30, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 },

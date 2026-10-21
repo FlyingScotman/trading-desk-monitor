@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import dataclasses
 import getpass
 import hashlib
 import json
@@ -56,7 +57,7 @@ from typing import Any
 import psycopg
 
 from . import store
-from .marketdata import cache, history, static_facts
+from .marketdata import cache, history, reference, static_facts
 from .marketdata.adapter import MarketView
 from .marketdata.bundle import SnapshotDir, SnapshotError, previous_market
 from .marketdata.hub import HubClient, HubError, hub_check
@@ -112,6 +113,18 @@ def _print_synced(rows: list[cache.Synced]) -> None:
                   f"{len(s.downloaded)} downloaded, {2 - len(s.downloaded)} cached")
 
 
+def _print_newest_static(client: HubClient, snapshots: Path) -> None:
+    """The hub's newest static (issuer facts, ratings: R25) into the cache, with a line saying which."""
+    try:
+        s = cache.newest_static(client, snapshots)
+    except (HubError, SnapshotError) as e:
+        print(f"  newest static: not fetched ({e})")
+        return
+    if s is not None:
+        print(f"  newest static {s.static_id[:12]} of {s.business_date}, published {s.published_at}: "
+              + ("downloaded" if s.downloaded else "cached") + " (issuer facts and ratings of the runs and pages)")
+
+
 def _store(a: argparse.Namespace) -> psycopg.Connection:
     return store.connect(store.resolve_url(a.settings))
 
@@ -136,6 +149,7 @@ def cmd_eod(a: argparse.Namespace) -> int:
         client = HubClient(a.settings)
         dates = [a.date] + list(islice((d for d in cache.hub_dates(client, a.cut) if d < a.date), 1))
         _print_synced(cache.sync(client, Path(a.snapshots), dates, a.cut))
+        _print_newest_static(client, Path(a.snapshots))
     eod_run(a.settings, a.date, snapshots=a.snapshots, book=a.book, books=a.books, run_type=run_type,
             report_dir=a.report_dir, tdm=a.tdm, db=a.db, no_gamma=a.no_gamma, no_pnl=a.no_pnl)
     return 0
@@ -195,6 +209,9 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
     t0 = time.perf_counter()
     prep = contexts.prepare if contexts is not None else prepare
     ctx = prep(sd, d, cut_type, market_snapshot_id=market_snapshot_id)
+    # issuer names, groups, sectors and ratings: the newest static of the cache, not the market's own (R25)
+    ctx = dataclasses.replace(ctx, reference=reference.facts(sd, ctx.static),
+                              proxy_curves=bool(getattr(settings, "proxy_curves_for_risk", False)))
     prev_cut = previous_market(sd, d)
     prev_date = prev_cut[0] if prev_cut else None
     prev = MarketView(sd.market(*prev_cut)) if prev_cut else None
@@ -234,6 +251,8 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
         if read_model:
             try:  # the concept pages' market calendar, issuer groups and sectors, CBR meetings (R23)
                 static_facts.load_static(con, ctx.static.snapshot)
+                if ctx.reference_facts.snapshot_id != ctx.static.snapshot.id:  # the newest static's facts (R25)
+                    static_facts.load_static(con, sd.get(ctx.reference_facts.snapshot_id))
                 static_facts.load_cbr(con, ctx.market.snapshot)
             except psycopg.Error as e:
                 out(f"WARN static facts not updated: {type(e).__name__}: {e}")
@@ -279,6 +298,9 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
         run_id, status, warnings = desk_run.publish(con, ctx, positions, prev=prev, run_type=run_type,
                                                     inputs=inputs, carried_from=carried, pnl_basis=basis)
         out(f"desk run {run_id}: {status}, {len(warnings)} warnings")
+        for (m,) in con.execute("SELECT message FROM run_log WHERE run_id = %s AND message LIKE %s",
+                                (run_id, "справочник эмитентов%")):
+            out(m)  # where the issuer facts and ratings come from and how many bonds have one (R25)
         try:
             run_summary.ensure(con, [run_id])
         except psycopg.Error as e:  # the pages build it on first read
@@ -532,6 +554,7 @@ def cmd_sync(a: argparse.Namespace) -> int:
     rows = cache.sync(client, Path(a.snapshots), sorted(dates), a.cut)
     print(f"sync {a.cut} from {client.host} into {a.snapshots}: {len(rows)} dates")
     _print_synced(rows)
+    _print_newest_static(client, Path(a.snapshots))
     _load_history(a.settings, Path(a.snapshots))
     return 0 if rows and all(s.market_id for s in rows) else 1
 

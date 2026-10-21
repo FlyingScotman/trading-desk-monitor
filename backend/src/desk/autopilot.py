@@ -86,7 +86,7 @@ import psycopg
 
 from . import logic_version, store
 from .inbox.timesem import MSK
-from .marketdata import cache, history, hubhistory
+from .marketdata import cache, history, hubhistory, static_facts
 from .marketdata.adapter import StaticView
 from .marketdata.bundle import SnapshotDir, SnapshotError, previous_market
 from .marketdata.hub import HubClient, HubError
@@ -112,6 +112,7 @@ PRELIM_FROM = dtime(19, 45)   # MSK: the hub's eod_preliminary cut of the day
 POLL_SLOT_S = 1800            # the hub is asked for a newer cut of today at most once per half-hour slot
 POLL_LAG_S = 300              # slots start 5 min after the cut times (:05, :35): the hub publishes after its cut
 KEEP_CUT_DAYS = 3             # intraday and preliminary bundles of older dates leave the cache
+STATIC_POLL_S = 300.0         # the hub's newest static is asked for at most this often (R25: reference facts, ratings)
 
 LATEST_RUN = ("SELECT run_id, business_date, completed_at, run_type, cut_type, cut_ts,"
               " lineage->'pnl_basis'->>'label' FROM run"
@@ -237,6 +238,7 @@ class Autopilot:
         self._sync_later = 0                   # hub dates the sync left for the next cycle: no history step
         self._inbox_waiting = 0                # files the last scan left waiting for a calendar (R22)
         self._history_dates: tuple[float, int, list[tuple[str, str]]] | None = None
+        self._static_polled = float("-inf")    # monotonic time the hub's newest static was last asked for (R25)
         self._backfill_rows: tuple[float, str, list[tuple[str, str]]] | None = None  # (listed at, from, hub rows)
         self._contexts: Any = None  # the backfill's prepared dates, kept between its runs (cli.ContextCache)
         self._eod_from: str | None = None  # the oldest date the eod step keeps current, this cycle
@@ -576,10 +578,36 @@ class Autopilot:
         if todo:
             self._progress("sync", len(todo), len(todo), "")
         latest = hub_dates[0] if hub_dates else "none"
+        static = self._newest_static(settings, con, client)
         return (f"hub {client.host}: latest {latest}; " + (f"pulled {', '.join(pulled)}" if pulled else "up to date")
+                + (f"; {static}" if static else "")
                 + (f"; no snapshot for {', '.join(missing)}" if missing else "")
                 + f" ({len(wanted)} dates wanted, {len(todo)} asked"
                 + (f", {later} next cycle" if later else "") + ")")
+
+    def _newest_static(self, settings: Settings, con: psycopg.Connection | None, client: HubClient) -> str:
+        """The hub's newest static snapshot into the cache (``cache.newest_static``, at most every
+        ``STATIC_POLL_S``) and its facts into the read model (``static_facts.load_static``: the pages' issuer groups,
+        sectors and ratings, R25); the step detail, empty when nothing changed."""
+        now = time.monotonic()
+        if now - self._static_polled < STATIC_POLL_S:
+            return ""
+        self._static_polled = now
+        try:
+            got = cache.newest_static(client, Path(settings.snapshot_cache))
+        except Exception as e:  # noqa: BLE001 - the dates are synced; the reference facts wait for the next poll
+            return f"newest static not fetched: {type(e).__name__}: {e}"
+        if got is None or not got.static_id:
+            return ""
+        out = f"static {got.static_id[:12]} of {got.business_date} pulled" if got.downloaded else ""
+        if con is not None:
+            try:
+                res = static_facts.load_static(con, SnapshotDir(Path(settings.snapshot_cache)).get(got.static_id))
+                if res == "loaded":
+                    out = (out + "; " if out else "") + f"static facts {got.static_id[:12]} loaded"
+            except (psycopg.Error, SnapshotError, OSError) as e:
+                out = (out + "; " if out else "") + f"static facts not loaded: {type(e).__name__}: {e}"
+        return out
 
     def _history(self, settings: Settings, con: psycopg.Connection) -> tuple[str, str]:
         """Market history: from the hub's history API when it serves this token (``desk.marketdata.hubhistory``, R24:

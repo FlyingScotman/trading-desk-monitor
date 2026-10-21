@@ -58,7 +58,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 (function () {
   const M = MOCK, K = KIT, f = K.f, U = M.util, esc = K.esc;
   K.top({ title: 'C13 · Эмитенты', tag: 'концентрация, кривая и риск каждого эмитента' });
-  const RATING = ['AAA', 'AA+', 'AA', 'AA-', 'A+', 'A', 'A-', 'BBB+', 'BBB', 'BBB-', 'BB+', 'BB', 'B'];
+  const RATING = K.RATINGS;  // грейды; график — по корзинам деска AAA / AA / A / BBB / ≤BB / б/р (R25)
   const KC = { cpn: '#4c9dff', put: '#e3b341', call: '#b48cff', mat: '#3fb67a' };
   const KN = { cpn: 'купон', put: 'пут-оферта', call: 'колл', mat: 'погашение' };
   const MEAS = {
@@ -80,7 +80,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     L.forEach(p => (g[p.issuer] = g[p.issuer] || []).push(p));
     ISS = Object.entries(g).map(([id, list]) => {
       const i = M.issuer[id];
-      const o = { id, name: i.short, full: i.name, sector: i.sector, rating: i.rating, list, n: list.length,
+      const o = { id, name: i.short, full: i.name, sector: i.sector, rating: i.rating, ratingInfo: i.ratingInfo, list, n: list.length,
         mv: sumBy(list, p => p.mv), cs01: sumBy(list, p => p.cs01), dv01: sumBy(list, p => p.dv01), basis01: sumBy(list, p => p.basis01),
         pnl: sumBy(list, p => p.pnl.total), carry: sumBy(list, p => p.carryDay), mtd: sumBy(list, p => p.pnlMtd), ytd: sumBy(list, p => p.pnlYtd),
         ccys: [...new Set(list.map(p => p.ccy))].sort((a, b) => M.ccyOrder[a] - M.ccyOrder[b]) };
@@ -146,12 +146,12 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     }));
     sc.on('click', pp => K.drill({ title: 'Сектор «' + secK[pp.dataIndex] + '» · ' + m.t, unit: m.unit, fmt: m.fmt, list: sec[secK[pp.dataIndex]], val: m.val, dim: 'issuer' }));
     stripCharts.push(sc); }
-    const rat = agg(p => p.rating), ratK = RATING.filter(r => rat[r]);
-    if (NORAT) K.noData(document.getElementById('rating'), 'рейтингов в данных хаба нет'); else {
+    const rat = agg(p => K.ratingBucket(p.rating)), ratK = K.RATING_BUCKETS.map(b => b[0]).filter(r => rat[r]);
+    if (NORAT) K.noData(document.getElementById('rating'), 'рейтингов в статике хаба нет'); else {
     const rc = K.chart(document.getElementById('rating'), () => ({
       grid: { left: 6, right: 6, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: x => m.fmt(x) + ' ' + m.unit },
       xAxis: { type: 'category', data: ratK }, yAxis: { type: 'value', axisLabel: { formatter: x => m.fmt(x) } },
-      series: [{ type: 'bar', barMaxWidth: 30, data: ratK.map((r, i) => ({ value: sumBy(rat[r], m.val), itemStyle: { color: ['#4c9dff', '#22c3d6', '#22c3d6', '#22c3d6', '#3fb67a', '#3fb67a', '#3fb67a', '#e3b341', '#e3b341', '#e3b341', '#f0645a', '#f0645a', '#f0645a'][RATING.indexOf(r)] } })), label: { show: true, position: 'top', fontSize: 10, color: K.css('--fg-2'), formatter: p => m.fmt(p.value) } }],
+      series: [{ type: 'bar', barMaxWidth: 30, data: ratK.map(r => ({ value: sumBy(rat[r], m.val), itemStyle: { color: (K.RATING_BUCKETS.find(b => b[0] === r) || [])[1] } })), label: { show: true, position: 'top', fontSize: 10, color: K.css('--fg-2'), formatter: p => m.fmt(p.value) } }],
     }));
     rc.on('click', pp => K.drill({ title: 'Рейтинг ' + ratK[pp.dataIndex] + ' · ' + m.t, unit: m.unit, fmt: m.fmt, list: rat[ratK[pp.dataIndex]], val: m.val, dim: 'issuer' }));
     stripCharts.push(rc); }
@@ -168,7 +168,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
       stripe: r => K.issuerColor(r.id),
       columns: [
         { key: 'name', label: 'Эмитент', fmt: (v, r) => '<b>' + esc(v) + '</b> <span class="mtag">' + r.ccys.join(' ') + '</span>' },
-        { key: 'rating', label: 'Рейт.', val: r => RATING.indexOf(r.rating), fmt: (v, r) => '<span class="mut">' + esc(r.rating) + '</span>' },
+        { key: 'rating', label: 'Рейт.', val: r => K.ratingRank(r.rating), fmt: (v, r) => '<span class="mut" title="' + esc(K.ratingTip(r.rating, r.ratingInfo)) + '">' + esc(K.ratingText(r.rating, r.ratingInfo)) + '</span>' },
         { key: 'n', label: 'Бум.', num: true, fmt: v => '<span class="mut">' + v + '</span>' },
         { key: 'mv', label: 'MV, mm', num: true, fmt: drillCell('mv', v => f.mn(v, 0), 'mm ₽', 'MV'), sum: true, drill: false, sumFmt: v => f.mn(v, 0) },
         { key: 'share', label: '', val: r => r.mv, fmt: (v) => K.bar(v, max, true), w: '70px' },
@@ -196,7 +196,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     const nFlt = L.filter(p => p.cpn && p.cpn.type === 'float').length;
     // шапка
     const hp = K.h('div', 'k-panel'); dash.appendChild(hp);
-    hp.innerHTML = '<div class="bd"><div class="ihd"><span class="sw" style="background:' + col + '"></span><div style="flex:1;min-width:220px"><div class="nm">' + esc(x.full) + '</div><div class="full">' + esc(x.sector) + ' · рейтинг ' + esc(x.rating) + ' · ' + x.n + ' бумаг (' + (x.n - nFlt) + ' фикс, ' + nFlt + ' флоатеры) · ' + x.ccys.map(K.ccyTag).join(' ') + '</div></div>' +
+    hp.innerHTML = '<div class="bd"><div class="ihd"><span class="sw" style="background:' + col + '"></span><div style="flex:1;min-width:220px"><div class="nm">' + esc(x.full) + '</div><div class="full">' + esc(x.sector) + ' · рейтинг <span title="' + esc(K.ratingTip(x.rating, x.ratingInfo)) + '">' + esc(K.ratingText(x.rating, x.ratingInfo)) + '</span> · ' + x.n + ' бумаг (' + (x.n - nFlt) + ' фикс, ' + nFlt + ' флоатеры) · ' + x.ccys.map(K.ccyTag).join(' ') + '</div></div>' +
       '<div class="k-tags">' + [...new Set(L.map(p => p.book))].map(b => '<span class="k-tag">' + esc(b) + '</span>').join('') + '</div></div>' +
       '<div class="k-fields" style="margin-top:10px">' + [
         ['MV', D('MV', 'mv', v => f.mn(v, 0), 'mm ₽', '') + ' <small>mm ₽ · ' + Math.round(x.mv / totMv * 100) + '% книги</small>'],

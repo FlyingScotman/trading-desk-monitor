@@ -499,7 +499,7 @@ const COLS = [
   {k:'issuer', t:'Эмитент'},
   {k:'issuerGroup', t:'Группа эмитента', def:1},
   {k:'sector', t:'Сектор'},
-  {k:'rating', t:'Рейтинг', def:1},
+  {k:'rating', t:'Рейтинг', def:1, tip:p => U.ratingTip(p)},
   {k:'ccy', t:'Вал.', def:1},
   {k:'maturity', t:'Погашение', f:dt, def:1, mono:1},
   {k:'tenorY', t:'Срок, лет', n:1, d:1},
@@ -842,7 +842,7 @@ function cellHtml(c,p){
   if (c.n) return `<td class="n${c.sg ? nc(v) : ''}"${tip ? ` title="${esc(tip)}"` : ''}>${num(v, c.d)}</td>`;
   if (c.k === 'name') return `<td class="nm" title="${esc(p.name)}">${esc(p.name)}${p.newToday ? '<span class="tag">NEW</span>' : ''}${qTag(p)}</td>`;
   const s = c.f ? c.f(v) : (v == null || v === '' ? '—' : v);
-  return `<td${c.mono ? ' class="mono"' : ''}>${esc(s)}</td>`;
+  return `<td${c.mono ? ' class="mono"' : ''}${tip ? ` title="${esc(tip)}"` : ''}>${esc(s)}</td>`;
 }
 function groupKey(p){
   const g = S.pos.group;
@@ -914,7 +914,7 @@ const BD_COLS = [
   {k:'name', t:'Выпуск', v:r => r.p.name, h:r => `<td class="nm" title="${esc(r.p.name + ' · ' + (r.p.isin || ''))}">${esc(r.p.name)}${r.newToday ? '<span class="tag">NEW</span>' : ''}${r.p.yieldDate ? '<span class="tag ofr" title="Доходность и спред — к оферте">ОФ</span>' : ''}</td>`},
   {k:'isin', t:'ISIN', v:r => r.p.isin, mono:1},
   {k:'issuer', t:'Эмитент', v:r => r.p.issuer},
-  {k:'rating', t:'Рейт.', v:r => ratingIdx(r.p.rating), h:r => `<td>${esc(r.p.rating || '—')}</td>`},
+  {k:'rating', t:'Рейт.', v:r => ratingIdx(r.p.rating), h:r => `<td title="${esc(U.ratingTip(r.p))}">${esc(r.p.rating || '—')}</td>`},
   {k:'ccy', t:'Вал.', v:r => r.p.ccy},
   {k:'cpn', t:'Купон', v:r => r.p.coupon, h:r => `<td class="mono" title="${esc(cpnTip(r.p))}">${esc(cpnTxt(r.p))}</td>`},
   {k:'mat', t:'Погашение', v:r => r.p.maturity, f:dt, mono:1},
@@ -1137,7 +1137,7 @@ function openDrawer(id){
   const bk = D.BOOKS[p.book];
   const F = [
     ['Книга', bk.name + ' · ' + (BT_LABEL[bk.bookType] || '')], ['Деск / трейдер', [bk.desk, bk.trader].filter(Boolean).join(' · ')], ['Юрлицо', bk.entity], ['Класс', p.assetClass], ['Сегмент', p.segment], ['Тип', p.instrType],
-    ['ISIN', p.isin], ['Эмитент', p.issuer], ['Группа', p.issuerGroup], ['Сектор', p.sector], ['Рейтинг', p.rating],
+    ['ISIN', p.isin], ['Эмитент', p.issuer], ['Группа', p.issuerGroup], ['Сектор', p.sector], ['Рейтинг', U.ratingText(p), U.ratingTip(p)],
     ['Валюта', p.ccy], ['Погашение', dt(p.maturity)], ['Срок, лет', num(p.tenorY,2)],
     ['Купон', p.instrType === 'BOND' || p.coupon != null ? cpnTxt(p) : null, cpnTip(p)], ['Тип купона', p.couponType ? CPN_TYPE[p.couponType] || p.couponType : null],
     ['Индекс', p.couponType === 'fix' ? p.index : null], ['Сторона', p.side],

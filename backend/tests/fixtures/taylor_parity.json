@@ -1349,7 +1349,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU26238RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 43.5013605,
       "spread_kind": "ofz"
      },
@@ -1514,7 +1514,7 @@
       "quality": "assumed",
       "rating": "нет данных",
       "secid": "SU29008RMFS8",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 17.47537511,
       "spread_kind": "ofz"
      },
@@ -1687,7 +1687,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU46020RMFS2",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 3.244360553,
       "spread_kind": "ofz"
      },
@@ -1711,7 +1711,7 @@
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "SU52005RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": null,
       "spread_kind": null
      },
@@ -3169,7 +3169,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU26238RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 43.5013605,
       "spread_kind": "ofz"
      },
@@ -3334,7 +3334,7 @@
       "quality": "assumed",
       "rating": "нет данных",
       "secid": "SU29008RMFS8",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 17.47537511,
       "spread_kind": "ofz"
      },
@@ -3507,7 +3507,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU46020RMFS2",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 3.244360553,
       "spread_kind": "ofz"
      },
@@ -3531,7 +3531,7 @@
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "SU52005RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": null,
       "spread_kind": null
      },
@@ -4995,7 +4995,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU26238RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 43.5013605,
       "spread_kind": "ofz"
      },
@@ -5160,7 +5160,7 @@
       "quality": "assumed",
       "rating": "нет данных",
       "secid": "SU29008RMFS8",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 17.47537511,
       "spread_kind": "ofz"
      },
@@ -5333,7 +5333,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU46020RMFS2",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 3.244360553,
       "spread_kind": "ofz"
      },
@@ -5357,7 +5357,7 @@
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "SU52005RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": null,
       "spread_kind": null
      },
@@ -6810,7 +6810,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU26238RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 43.5013605,
       "spread_kind": "ofz"
      },
@@ -6975,7 +6975,7 @@
       "quality": "assumed",
       "rating": "нет данных",
       "secid": "SU29008RMFS8",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 17.47537511,
       "spread_kind": "ofz"
      },
@@ -7148,7 +7148,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU46020RMFS2",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 3.244360553,
       "spread_kind": "ofz"
      },
@@ -7172,7 +7172,7 @@
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "SU52005RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": null,
       "spread_kind": null
      },
@@ -8633,7 +8633,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU26238RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 43.5013605,
       "spread_kind": "ofz"
      },
@@ -8798,7 +8798,7 @@
       "quality": "assumed",
       "rating": "нет данных",
       "secid": "SU29008RMFS8",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 17.47537511,
       "spread_kind": "ofz"
      },
@@ -8971,7 +8971,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU46020RMFS2",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 3.244360553,
       "spread_kind": "ofz"
      },
@@ -8995,7 +8995,7 @@
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "SU52005RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": null,
       "spread_kind": null
      },
@@ -10475,7 +10475,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU26238RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 43.5013605,
       "spread_kind": "ofz"
      },
@@ -10640,7 +10640,7 @@
       "quality": "assumed",
       "rating": "нет данных",
       "secid": "SU29008RMFS8",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 17.47537511,
       "spread_kind": "ofz"
      },
@@ -10813,7 +10813,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU46020RMFS2",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 3.244360553,
       "spread_kind": "ofz"
      },
@@ -10837,7 +10837,7 @@
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "SU52005RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": null,
       "spread_kind": null
      },
@@ -12291,7 +12291,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU26238RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 43.5013605,
       "spread_kind": "ofz"
      },
@@ -12456,7 +12456,7 @@
       "quality": "assumed",
       "rating": "нет данных",
       "secid": "SU29008RMFS8",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 17.47537511,
       "spread_kind": "ofz"
      },
@@ -12629,7 +12629,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU46020RMFS2",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 3.244360553,
       "spread_kind": "ofz"
      },
@@ -12653,7 +12653,7 @@
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "SU52005RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": null,
       "spread_kind": null
      },
@@ -14110,7 +14110,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU26238RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 43.5013605,
       "spread_kind": "ofz"
      },
@@ -14275,7 +14275,7 @@
       "quality": "assumed",
       "rating": "нет данных",
       "secid": "SU29008RMFS8",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 17.47537511,
       "spread_kind": "ofz"
      },
@@ -14448,7 +14448,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU46020RMFS2",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 3.244360553,
       "spread_kind": "ofz"
      },
@@ -14472,7 +14472,7 @@
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "SU52005RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": null,
       "spread_kind": null
      },
@@ -15926,7 +15926,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU26238RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 43.5013605,
       "spread_kind": "ofz"
      },
@@ -16091,7 +16091,7 @@
       "quality": "assumed",
       "rating": "нет данных",
       "secid": "SU29008RMFS8",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 17.47537511,
       "spread_kind": "ofz"
      },
@@ -16264,7 +16264,7 @@
       "quality": "exact",
       "rating": "нет данных",
       "secid": "SU46020RMFS2",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": 3.244360553,
       "spread_kind": "ofz"
      },
@@ -16288,7 +16288,7 @@
       "quality": "market_value",
       "rating": "нет данных",
       "secid": "SU52005RMFS4",
-      "sector": "нет данных",
+      "sector": "Суверен",
       "spread_bp": null,
       "spread_kind": null
      },

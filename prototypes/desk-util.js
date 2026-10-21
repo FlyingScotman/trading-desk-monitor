@@ -103,10 +103,20 @@
   const pnlPartText = pc => pc && pc.partial ? 'частично: ' + pc.n + ' из ' + pc.m + ' ' + plural(pc.m, 'позиции', 'позиций', 'позиций') : '';
   const pnlNaHtml = tip => `<span class="na" title="${escA(tip || 'PnL не посчитан')}">—</span>`;
   const pnlPartHtml = pc => pc && pc.partial ? `<span class="part" title="${escA(pc.tip)}">${pnlPartText(pc)}</span>` : '';
-  // Рейтинг: «нет данных» (в хабе рейтинга нет) — не грейд, а корзина «без рейтинга» вместе с позициями без рейтинга.
-  const NO_RATING = 'нет данных', NO_RATING_LABEL = 'без рейтинга';
-  const isRated = r => !!r && r !== NO_RATING;
+  // Рейтинг: «нет данных» (в статике хаба рейтингов нет) и «б/р» (рейтинги есть, у эмитента — нет) — не грейды, а
+  // одна корзина «без рейтинга» вместе с позициями без рейтинга (R25).
+  const NO_RATING = 'нет данных', NOT_RATED = 'б/р', NO_RATING_LABEL = 'без рейтинга';
+  const isRated = r => !!r && r !== NO_RATING && r !== NOT_RATED;
   const ratingLabel = r => isRated(r) ? r : NO_RATING_LABEL;
+  // Рейтинг деска с агентством (R25): «AA- · АКРА»; подсказка — все агентства, как они пишут рейтинг, дата, чей рейтинг.
+  const RATING_BASIS = { issue: 'рейтинг выпуска', issuer: 'рейтинг эмитента', issuer_bonds: 'уровень эмитента по выпускам' };
+  const fmtD = d => d ? d.split('-').reverse().join('.') : '';
+  const ratingText = p => !p.rating ? null : p.ratingInfo && p.ratingInfo.agency ? p.rating + ' · ' + p.ratingInfo.agency : p.rating;
+  const ratingTip = p => {
+    const x = p.ratingInfo; if (!x) return p.rating === NOT_RATED ? 'у бумаги и эмитента нет рейтинга АКРА / Эксперт РА / НКР / НРА в статике хаба' : p.rating === NO_RATING ? 'в статике хаба рейтингов нет' : '';
+    return (x.agencies || []).map(a => a[0] + ' ' + a[1] + (a[3] ? ' от ' + fmtD(a[3]) : '') + (a[4] ? ', прогноз ' + a[4] : '')).join('; ')
+      + (x.basis ? ' · ' + (RATING_BASIS[x.basis] || x.basis) : '') + ' · лучший по национальной шкале';
+  };
   function bucketMatrix(list, curves) {
     curves = curves || Object.keys(CURVES);
     const m = {}; curves.forEach(c => { m[c] = new Array(BUCKETS.length).fill(0); });
@@ -611,7 +621,7 @@
   }
 
   D.util = { sum, groupBy, bucketMatrix, netFx, runScenario, curveRate, hasPoints, pnlOk, pnlCover, pnlSum, pnlPartText, pnlNaHtml, pnlPartHtml,
-    NO_RATING, NO_RATING_LABEL, isRated, ratingLabel, fundingFx, spreadShock, ownSpr01, ACCURACY_BP,
+    NO_RATING, NOT_RATED, NO_RATING_LABEL, isRated, ratingLabel, ratingText, ratingTip, fundingFx, spreadShock, ownSpr01, ACCURACY_BP,
     runCarry, ksPath, carryEnd, indexAt, addDays, monthsAdd,
     baseCurve, yieldTenor, spreadTo, bondKey, bondRows, wavg, bondHistory, normHistory, couponView, couponText };
 })();

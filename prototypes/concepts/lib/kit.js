@@ -88,6 +88,18 @@
   };
   // разрез, которого в данных нет (секторов и рейтингов в статике хаба нет): у всех позиций «—» / «без рейтинга»
   K.unknownDim = v => v == null || v === '—' || v === 'нет данных' || v === 'без рейтинга';
+  // рейтинги (R25): грейды национальной шкалы по убыванию, корзины деска и их цвета; «б/р» — рейтинга нет у бумаги и
+  // эмитента (рейтинги в статике есть), «нет данных» / «—» — рейтингов в данных нет вовсе
+  K.RATINGS = ['AAA', 'AA+', 'AA', 'AA-', 'A+', 'A', 'A-', 'BBB+', 'BBB', 'BBB-', 'BB+', 'BB', 'BB-', 'B+', 'B', 'B-', 'CCC+', 'CCC', 'CCC-', 'CC', 'C', 'RD', 'SD', 'D'];
+  K.RATING_BUCKETS = [['AAA', '#4c9dff'], ['AA', '#22c3d6'], ['A', '#3fb67a'], ['BBB', '#e3b341'], ['≤BB', '#f0645a'], ['б/р', '#8a96a3']];
+  K.ratingRank = r => { const i = K.RATINGS.indexOf(r); return i < 0 ? 99 : i; };
+  K.ratingBucket = r => K.RATINGS.indexOf(r) < 0 ? 'б/р' : r === 'AAA' ? 'AAA' : /^AA[+-]?$/.test(r) ? 'AA' : /^A[+-]?$/.test(r) ? 'A' : /^BBB/.test(r) ? 'BBB' : '≤BB';
+  K.ratingColor = r => (K.RATING_BUCKETS.find(b => b[0] === K.ratingBucket(r)) || K.RATING_BUCKETS[5])[1];
+  const RB_BASIS = { issue: 'рейтинг выпуска', issuer: 'рейтинг эмитента', issuer_bonds: 'уровень эмитента по выпускам' };
+  // «AA- · АКРА» и подсказка: все агентства (как пишут рейтинг, дата, прогноз), чей рейтинг
+  K.ratingText = (r, info) => !r || r === '—' ? '—' : info && info.agency ? r + ' · ' + info.agency : r;
+  K.ratingTip = (r, info) => !info ? (r === 'б/р' ? 'нет рейтинга АКРА / Эксперт РА / НКР / НРА у бумаги и эмитента в статике хаба' : '') :
+    (info.agencies || []).map(a => a[0] + ' ' + a[1] + (a[3] ? ' от ' + f.date(a[3]) : '') + (a[4] ? ', прогноз ' + a[4] : '')).join('; ') + (info.basis ? ' · ' + (RB_BASIS[info.basis] || info.basis) : '') + ' · лучший по национальной шкале';
   K.dimMissing = (list, key) => list.length > 0 && list.every(p => K.unknownDim(p[key]));
   // панель без данных: «нет данных» и причина вместо пустого графика или нулей
   K.noData = (el, why) => { if (el) el.innerHTML = '<div class="k-empty"><b>нет данных</b>' + (why ? '<br><span class="mut">' + K.esc(why) + '</span>' : '') + '</div>'; };
@@ -597,7 +609,7 @@
       ['Ближайшее событие', f.date(p.event.date) + ' <small>' + ev + ', ' + f.yrs(p.tenor) + '</small>'], ['Погашение', f.date(p.maturity) + ' <small>' + f.yrs(p.yearsToMat) + '</small>'],
       ['DV01 ставки', K.d({ title: 'DV01 ' + p.name, unit: 'тыс ₽/бп', rows: [{ p, v: p.dv01 }] }, f.dv(p.dv01), '') + ' <small>тыс ₽/бп</small>'], ['CS01', f.dv(p.cs01) + ' <small>тыс ₽/бп</small>'],
       ['Базис ОФЗ01', p.basis01 ? f.dv(p.basis01) : '—'], ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽ (фонд. ' + f.pct(p.fundRate) + ')</small>'],
-      ['НКД', f.mn(p.accrued, 2) + ' <small>mm ₽</small>'], ['Рейтинг / сектор', esc(p.rating) + ' <small>' + esc(p.sector) + '</small>'],
+      ['НКД', f.mn(p.accrued, 2) + ' <small>mm ₽</small>'], ['Рейтинг / сектор', '<span title="' + esc(K.ratingTip(p.rating, p.ratingInfo)) + '">' + esc(K.ratingText(p.rating, p.ratingInfo)) + '</span> <small>' + esc(p.sector) + '</small>'],
     ] : [
       ['Номинал', f.mn(p.notional, 0) + ' <small>mm ' + p.ccy + '</small>'], ['MTM', f.mn(p.mv, 1) + ' <small>mm ₽</small>'],
       ['Ставка / курс', esc(p.couponFmt)], ['Срок', f.date(p.maturity) + ' <small>' + f.yrs(p.tenor) + '</small>'],
@@ -607,9 +619,12 @@
     if (isBond && p.kind === 'IN' && M.posHistory) {  // линкер: последние ICPI / IR / BEI MOEX (контракт 1.2), если есть
       const LH = M.posHistory(p.id, { deep: true }), last = a => { for (let i = (a || []).length - 1; i >= 0; i--) if (a[i] != null) return a[i]; return null; };
       if (LH.icpi || LH.bei) fields.push(['ICPI (MOEX)', last(LH.icpi) == null ? '—' : f.n(last(LH.icpi), 4)], ['IR / BEI (MOEX)', f.pct(last(LH.ir)) + ' <small>/ ' + f.pct(last(LH.bei)) + '</small>']);
+      // ИПЦ г/г рядом с ICPI (R25): ЦБ (контракт 1.3), иначе по ИПЦ м/м Росстата — последний известный на дату
+      const cpiNow = last(LH.cpi) != null ? last(LH.cpi) : M.indices['CPI г/г'];
+      if (cpiNow != null) fields.push(['ИПЦ г/г', f.pct(cpiNow) + ' <small>' + (LH.bei && last(LH.bei) != null ? 'BEI − ИПЦ ' + f.bps((last(LH.bei) - cpiNow) * 100) + ' б.п.' : 'последний известный') + '</small>']);
     }
     const pn = p.pnl;
-    o.bd.innerHTML = '<div class="k-tags">' + [p.desk, (M.entities.find(e => e.id === p.entity) || {}).name, p.rating !== '—' ? 'рейтинг ' + p.rating : null, p.tradedToday ? 'сделки сегодня' : null, p.quality && p.quality !== 'exact' ? 'оценка: ' + p.quality : null].filter(t => t && t !== '—').map(t => '<span class="k-tag">' + esc(t) + '</span>').join('') + '</div>' +
+    o.bd.innerHTML = '<div class="k-tags">' + [p.desk, (M.entities.find(e => e.id === p.entity) || {}).name, p.rating !== '—' ? 'рейтинг ' + K.ratingText(p.rating, p.ratingInfo) : null, p.tradedToday ? 'сделки сегодня' : null, p.quality && p.quality !== 'exact' ? 'оценка: ' + p.quality : null].filter(t => t && t !== '—').map(t => '<span class="k-tag">' + esc(t) + '</span>').join('') + '</div>' +
       '<div class="k-sec">Параметры</div><div class="k-fields">' + fields.map(([l, v]) => '<div><div class="l">' + l + '</div><div class="v">' + v + '</div></div>').join('') + '</div>' +
       '<div class="k-sec">PnL <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽</span></div>' +
       '<div class="k-fields">' + [['Итого день', pn.total], ['Кэрри', pn.carry], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx], ['Сделки', pn.trading], ['Прочее', pn.other], ['MTD', p.pnlMtd], ['YTD', p.pnlYtd]].map(([l, v]) => '<div><div class="l">' + l + '</div><div class="v ' + f.cls(v) + '">' + (Math.abs(v) >= 1e7 ? f.mns(v, 1) + ' <small>mm</small>' : f.ks(v)) + '</div></div>').join('') + '</div>' +
@@ -628,13 +643,13 @@
         : mode === 'yield' ? [{ name: 'Доходность', data: H.ytm }, { name: 'ОФЗ на сроке', data: H.bench, lineStyle: { type: 'dashed', width: 1 } }]
           : mode === 'spread' ? (isFloat ? [{ name: 'DM, б.п.', data: H.dm || H.spr, connectNulls: true }]
             : [{ name: 'G-спред, б.п.', data: H.spr }].concat(H.zspr ? [{ name: 'Z-спред MOEX, б.п.', data: H.zspr }] : []))
-            : mode === 'infl' ? [{ name: 'BEI, %', data: H.bei || [] }, { name: 'IR (реальная), %', data: H.ir || [] }]
+            : mode === 'infl' ? [{ name: 'BEI, %', data: H.bei || [] }, { name: 'IR (реальная), %', data: H.ir || [] }].concat(H.cpi ? [{ name: 'ИПЦ г/г, %', data: H.cpi, step: 'end', lineStyle: { type: 'dashed', width: 1.2 } }] : [])
               : mode === 'dv01' ? [{ name: 'DV01, тыс ₽/бп', data: H.dv01.map(v => v / 1e3), step: 'end' }] : [{ name: 'Номинал, mm', data: H.notional.map(v => v / 1e6), step: 'end', areaStyle: { opacity: .15 } }];
       return { grid: { left: 6, right: 10, top: 26, bottom: long ? 30 : 4, containLabel: true }, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis' }, xAxis: { type: 'category', data: xs, axisLabel: { formatter: v => f.dshort(v) } }, yAxis: { type: 'value', scale: true }, series: S.map((s, i) => Object.assign({ type: 'line', showSymbol: false, lineStyle: { width: 1.6 }, color: i ? css('--fg-3') : K.issuerColor(p.issuer) }, s)),
         dataZoom: long ? [{ type: 'inside', startValue: xs.length - 260 }, { type: 'slider', height: 14, bottom: 4, startValue: xs.length - 260, labelFormatter: (i, v) => f.dshort(v) }] : [{ type: 'inside' }] };
     });
     o.charts.push(hc);
-    K.seg(o.bd.querySelector('.hseg'), (isFloat ? [['price', 'цена'], ['spread', 'DM']] : isBond ? [['price', 'цена'], ['yield', 'доходность'], ['spread', 'спред']] : []).concat(isLinker && H.bei ? [['infl', 'BEI/IR']] : []).concat([['notional', 'позиция'], ['dv01', 'DV01']]), mode, v => { mode = v; hc.redraw(); });
+    K.seg(o.bd.querySelector('.hseg'), (isFloat ? [['price', 'цена'], ['spread', 'DM']] : isBond ? [['price', 'цена'], ['yield', 'доходность'], ['spread', 'спред']] : []).concat(isLinker && (H.bei || H.cpi) ? [['infl', H.cpi ? 'BEI/IR/ИПЦ' : 'BEI/IR']] : []).concat([['notional', 'позиция'], ['dv01', 'DV01']]), mode, v => { mode = v; hc.redraw(); });
     // риск по бакетам
     const cids = M.curves.filter(c => p.risk[c.id].some(v => Math.abs(v) > 1)).map(c => c.id);
     const rc = K.chart(o.bd.querySelector('.rchart'), () => ({

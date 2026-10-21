@@ -7,13 +7,19 @@ previous year), and for those days
 
 * ``bonds``: per quoted bond (secid) its yield change in bp and its clean price change in points over each period
   (``md_bond_day``: the history API's rows, else the snapshots');
-* ``indices``: КС, RUONIA, RUSFAR, RUSFAR CNY and CPI year on year (from CPI_RU_MOM, the product of the last twelve
-  months) from the hub's fixings, each with its value, its changes in bp and its last year of values;
+* ``indices``: КС, RUONIA, RUSFAR, RUSFAR CNY, SOFR and €STR (hub 0.3.0, contract 1.3: one series per day by the
+  hub's source order, ``SOURCE_ORDER``) and CPI year on year (the CBR's official ``CPI_RU_YOY`` of 1.3, else computed
+  from CPI_RU_MOM, the product of the last twelve months, said in ``source``) from the hub's fixings, each with its
+  value, its changes in bp and its last year of values; an index the hub does not have is absent;
 * ``fx``: the CBR rates of USD, EUR and CNY (RUB per unit) with their changes in %, and MOEX's TOM close;
+* ``crosses``: EUR/USD and USD/CNY: the hub's cross-rate series (1.3: ``CROSS_PREF``, the kind shown in ``kind``,
+  every kind's value in ``kinds``), else computed from the two CBR rates (``kind`` ``cbr_derived``);
 * ``curves``: RUONIA OIS (``RUB RUONIA``), key-rate swaps (``RUB KEY``), the KBD (``OFZ``) and the other curve datasets
   of the hub at the risk pillars on each of those days (linear in the term between quoted tenors, none outside),
   and two years of daily mids of 1Y, 2Y, 5Y and 10Y. A day's quote set of a curve is that of one source: two-sided
-  (bid/ask) before mid-only, then the most tenors, then the latest fetched.
+  (bid/ask) before mid-only, then the most tenors, then the latest fetched. The government par-yield proxies of 1.3
+  (``usd_ust_par``, ``eur_aaa_par``, ``eur_bund_par``) carry ``proxy`` «прокси (UST par), не OIS» and their
+  currency: display only, never the risk of a run (``curves.proxy``).
 
 Without the history API's tables the bonds come from the snapshots and the rest is empty, with a note. Numbers are
 floats rounded for display; the ETag is the body's hash."""
@@ -33,6 +39,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 from rub_fixed_income import RISK_PILLARS, kbd_effective_yield
 
+from ..curves import proxy
 from ..marketdata import hubhistory
 from ..marketdata.history import kbd
 from ..marketdata.history import latest_market_day as latest_day
@@ -40,8 +47,20 @@ from . import compat
 from .app import ApiError, db
 
 PERIODS = ("1D", "1W", "1M", "3M", "YTD")
-INDICES = (("КС", "KEY_RATE"), ("RUONIA", "RUONIA"), ("RUSFAR", "RUSFAR"), ("RUSFAR CNY", "RUSFARCNY"))
+INDICES = (("КС", "KEY_RATE"), ("RUONIA", "RUONIA"), ("RUSFAR", "RUSFAR"), ("RUSFAR CNY", "RUSFARCNY"),
+           ("SOFR", "SOFR"), ("€STR", "ESTR"))
 CPI = "CPI_RU_MOM"
+CPI_YOY = "CPI_RU_YOY"
+SOURCE_ORDER = {"ESTR": ("ecb_data_portal", "bundesbank", "dbnomics", "fred"), "SOFR": ("nyfed", "fred"),
+                "SOFR30DAVG": ("nyfed", "fred"), "SOFR90DAVG": ("nyfed", "fred"), "SOFR180DAVG": ("nyfed", "fred"),
+                "SOFRINDEX": ("nyfed", "fred")}
+"""Codes whose sources republish one figure (the hub's HISTORY_API): per day the first source present in this order.
+Any other code: the source with the most rows (one series per code, sources are not merged)."""
+CROSSES = (("EUR/USD", "EUR", "USD"), ("USD/CNY", "USD", "CNY"))
+CROSS_PREF = {"EUR/USD": ("ecb", "fred_h10", "cbr_cross", "moex_indicative_cross", "moex_cets"),
+              "USD/CNY": ("moex_cets", "cbr_cross", "moex_indicative_cross", "fred_h10", "ecb")}
+CROSS_LABELS = {"ecb": "ЕЦБ", "fred_h10": "ФРС H.10", "cbr_cross": "кросс курсов ЦБ", "moex_cets": "MOEX CETS",
+                "moex_indicative_cross": "кросс индикативных MOEX 19:00", "cbr_derived": "кросс курсов ЦБ (расчёт)"}
 FX = ("USD", "EUR", "CNY")
 CURVE_IDS = {"ruonia_ois": "RUB RUONIA", "key_rate_swap": "RUB KEY"}
 SERIES_TENORS = (1.0, 2.0, 5.0, 10.0)
@@ -103,24 +122,49 @@ def _at(series: list[tuple[date, float]], d: date | None) -> float | None:
     return series[i - 1][1] if i else None
 
 
-def indices(con, d: date, starts: dict[str, date | None]) -> dict[str, dict[str, Any]]:
-    codes = [c for _, c in INDICES] + [CPI]
+def fixing_series(con, codes: list[str], d: date) -> dict[str, list[tuple[date, float]]]:
+    """code -> [(date, value)] up to ``d``: one series per code (``SOURCE_ORDER``, else the source with most rows)."""
     src = _source_per_code(con, codes)
     raw: dict[str, list[tuple[date, float]]] = defaultdict(list)
+    merged: dict[str, dict[date, tuple[int, float]]] = defaultdict(dict)
     for r in con.execute("SELECT index_code, source, fixing_date, value FROM md_hub_fixing WHERE index_code = ANY(%s)"
                          " AND fixing_date <= %s AND value IS NOT NULL ORDER BY fixing_date",
                          (codes, d)):
-        if src.get(r["index_code"]) == r["source"]:
-            raw[r["index_code"]].append((r["fixing_date"], float(r["value"])))
+        code = r["index_code"]
+        if code in SOURCE_ORDER:
+            order = SOURCE_ORDER[code]
+            k = order.index(r["source"]) if r["source"] in order else len(order)
+            have = merged[code].get(r["fixing_date"])
+            if have is None or k < have[0]:
+                merged[code][r["fixing_date"]] = (k, float(r["value"]))
+        elif src.get(code) == r["source"]:
+            raw[code].append((r["fixing_date"], float(r["value"])))
+    for code, by_day in merged.items():
+        raw[code] = [(x, v) for x, (_, v) in sorted(by_day.items())]
+    return raw
+
+
+def cpi_yoy(raw: dict[str, list[tuple[date, float]]]) -> tuple[list[tuple[date, float]], str | None]:
+    """CPI year on year, % (month = the first day of the month): the CBR's official ``CPI_RU_YOY`` (contract 1.3),
+    else the product of twelve monthly indices of ``CPI_RU_MOM`` (Rosstat, % to the previous month); and its source."""
+    if raw.get(CPI_YOY):
+        return raw[CPI_YOY], "ЦБ: ИПЦ г/г (официальный)"
+    cpi = raw.get(CPI, [])
+    yoy = []
+    for i in range(11, len(cpi)):
+        months = cpi[i - 11:i + 1]
+        if (months[-1][0].year - months[0][0].year) * 12 + months[-1][0].month - months[0][0].month == 11:
+            yoy.append((months[-1][0], (math.prod(v / 100 for _, v in months) - 1) * 100))
+    return yoy, ("расчёт по ИПЦ м/м Росстата (12 мес.)" if yoy else None)
+
+
+def indices(con, d: date, starts: dict[str, date | None]) -> dict[str, dict[str, Any]]:
+    codes = [c for _, c in INDICES] + [CPI, CPI_YOY]
+    raw = fixing_series(con, codes, d)
     out: dict[str, dict[str, Any]] = {}
     series = {name: raw.get(code, []) for name, code in INDICES}
-    cpi = raw.get(CPI, [])
-    if len(cpi) >= 12:  # CPI year on year: the product of twelve monthly indices (% to the previous month)
-        yoy = []
-        for i in range(11, len(cpi)):
-            months = cpi[i - 11:i + 1]
-            if (months[-1][0].year - months[0][0].year) * 12 + months[-1][0].month - months[0][0].month == 11:
-                yoy.append((months[-1][0], (math.prod(v / 100 for _, v in months) - 1) * 100))
+    yoy, yoy_src = cpi_yoy(raw)
+    if yoy:
         series["CPI г/г"] = yoy
     for name, s in series.items():
         if not s:
@@ -131,6 +175,47 @@ def indices(con, d: date, starts: dict[str, date | None]) -> dict[str, dict[str,
                      "chgBp": [_r((v - o) * 100, 1) if v is not None and (o := _at(s, starts[k])) is not None
                                else None for k in PERIODS],
                      "series": [[x.isoformat(), _r(y, 4)] for x, y in s if x > d - timedelta(days=366)]}
+        if name == "CPI г/г":
+            out[name]["source"] = yoy_src
+    return out
+
+
+def crosses(con, d: date, starts: dict[str, date | None]) -> dict[str, dict[str, Any]]:
+    """EUR/USD and USD/CNY (module doc): the hub's cross series of the first kind of ``CROSS_PREF`` it has (a pair
+    stored the other way round is inverted), else the CBR cross; {} without either."""
+    pairs = [p for p, _, _ in CROSSES] + [f"{q}/{b}" for _, b, q in CROSSES]
+    by: dict[tuple[str, str], list[tuple[date, float]]] = defaultdict(list)
+    for r in con.execute("SELECT kind, pair, date, per_unit FROM md_hub_fx WHERE pair = ANY(%s) AND kind <> ALL(%s)"
+                         " AND date <= %s AND per_unit IS NOT NULL AND per_unit <> 0 ORDER BY date",
+                         (pairs, list(hubhistory.FX_KINDS), d + timedelta(days=1))):
+        by[(r["kind"], r["pair"])].append((r["date"], float(r["per_unit"])))
+    cbr: dict[str, list[tuple[date, float]]] = defaultdict(list)
+    for r in con.execute("SELECT pair, date, per_unit FROM md_hub_fx WHERE kind = 'cbr_official' AND pair = ANY(%s)"
+                         " AND date <= %s AND per_unit IS NOT NULL ORDER BY date",
+                         ([f"{c}/RUB" for c in FX], d + timedelta(days=1))):
+        cbr[r["pair"][:3]].append((r["date"], float(r["per_unit"])))
+    out = {}
+    for pair, base, quote in CROSSES:
+        kinds: dict[str, list[tuple[date, float]]] = {}
+        for k in CROSS_PREF[pair]:
+            s = by.get((k, pair)) or [(x, 1 / v) for x, v in by.get((k, f"{quote}/{base}"), [])]
+            if s:
+                kinds[k] = s
+        if not kinds and cbr.get(base) and cbr.get(quote):
+            q = cbr[quote]
+            kinds["cbr_derived"] = [(x, v / qv) for x, v in cbr[base] if (qv := _at(q, x))]
+        if not kinds:
+            continue
+        kind = next(iter(kinds))
+        s = kinds[kind]
+        v = _at(s, d)
+        last = next((x for x, _ in reversed(s) if x <= d), None)
+        out[pair] = {"value": _r(v, 6), "date": last and last.isoformat(), "kind": kind,
+                     "label": CROSS_LABELS.get(kind, kind),
+                     "chgPct": [_r((v / o - 1) * 100, 3) if v is not None and (o := _at(s, starts[k])) else None
+                                for k in PERIODS],
+                     "kinds": {k: _r(_at(x, d), 6) for k, x in kinds.items()},
+                     "series": [[x.isoformat(), _r(y, 6)] for x, y in s if x > d - timedelta(days=366)]}
     return out
 
 
@@ -234,6 +319,8 @@ def curves(con, d: date, starts: dict[str, date | None]) -> dict[str, dict[str, 
     days, chosen = curve_days(con, d)
     for ds, by_day in days.items():
         entry(CURVE_IDS.get(ds, ds), by_day, interp, {day: chosen[(ds, day)] for day in by_day})
+        if proxy.is_proxy(ds) and CURVE_IDS.get(ds, ds) in out:  # government par yields, not OIS: display only
+            out[CURVE_IDS.get(ds, ds)].update({"proxy": proxy.label(ds), "ccy": proxy.PROXIES[ds][0]})
     params = {r["business_date"]: kbd(r["trade_date"], r["params"]) for r in con.execute(
         "SELECT business_date, trade_date, params FROM md_kbd_day WHERE business_date <= %s AND business_date > %s",
         (d, d - timedelta(days=SERIES_DAYS)))}
@@ -286,7 +373,8 @@ def _market(con, run: dict[str, Any]) -> dict[str, Any]:
     return {"runId": run["run_id"], "asOf": as_of.isoformat(), "marketDate": d.isoformat(),
             "periods": {k: v and v.isoformat() for k, v in starts.items()}, "periodOrder": list(PERIODS),
             "pillars": list(RISK_PILLARS), "bonds": bond_changes(con, d, starts), "indices": ind,
-            "fx": fx(con, d, starts), "curves": curves(con, d, starts), "notes": notes}
+            "fx": fx(con, d, starts), "crosses": crosses(con, d, starts), "curves": curves(con, d, starts),
+            "notes": notes}
 
 
 # ---- routes (``create_app`` includes ``router``; this module imports ``app``, not the other way round) ----------

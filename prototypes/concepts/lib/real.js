@@ -133,7 +133,7 @@
   // кавычек, не длиннее 30 знаков; полное — в name
   const LEGAL = /^(публичное|непубличное)?\s*(акционерное общество|общество с ограниченной ответственностью)\s*|\s*\((п?ао|ооо)\)|^(пао|ао|ооо|мкпао|нао)\s+|\s+(пао|ао|ооо)$/gi;
   const shortName = (n, gov) => { if (gov) return 'Минфин РФ'; let t = n.replace(LEGAL, '').replace(/[«»"]/g, '').replace(/\s+/g, ' ').trim() || n; return t.length > 30 ? t.slice(0, 29) + '…' : t; };
-  M.issuers = issuerNames.map(n => { const i = (D.ISSUERS || {})[n] || {}; return { id: n, name: n, short: shortName(n, i.gov), sector: NO(i.sector) || '—', rating: NO(i.rating) || '—', group: i.group && i.group !== n ? i.group : null, quasi: !!i.quasi, gov: !!i.gov }; });
+  M.issuers = issuerNames.map(n => { const i = (D.ISSUERS || {})[n] || {}; return { id: n, name: n, short: shortName(n, i.gov), sector: NO(i.sector) || '—', rating: NO(i.rating) || '—', ratingInfo: i.ratingInfo || null, group: i.group && i.group !== n ? i.group : null, quasi: !!i.quasi, gov: !!i.gov }; });
   M.issuer = Object.fromEntries(M.issuers.map(i => [i.id, i]));
 
   // ---------- классификация ----------
@@ -181,6 +181,7 @@
     p.issuerName = d.issuer || d.counterparty || (group === 'DER' ? 'Деривативы' : '—');
     p.issuerFull = d.issuer || (d.counterparty ? 'Контрагент: ' + d.counterparty : p.issuerName);
     p.sector = NO(d.sector) || (group === 'DER' ? 'Деривативы' : '—'); p.rating = NO(d.rating) || '—';
+    p.ratingInfo = d.ratingInfo || null; p.ratingAgency = (d.ratingInfo || {}).agency || null;  // рейтинг деска (R25)
     p.issuerGroup = d.issuerGroup && d.issuerGroup !== d.issuer ? d.issuerGroup : null;
     p.latName = ex.lat_name || null; p.issueSize = num(ex.issue_size);
     p.groupLabel = M.groupLabel[group]; p.kindLabel = M.kindLabel[kind];
@@ -241,7 +242,7 @@
     p.pnlMtd = num(xp.pnlMtd); p.pnlYtd = num(xp.pnlYtd);
     p.spreadChgBp = num(xp.spreadChgBp);
     p.tradedToday = !!(xp.trade || d.newToday); p.tradeToday = xp.trade || null;
-    p.searchText = [p.name, p.isin, p.issuerName, p.issuerFull, p.issuerGroup, p.latName, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio].join(' ').toLowerCase();
+    p.searchText = [p.name, p.isin, p.issuerName, p.issuerFull, p.issuerGroup, p.latName, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio, p.rating, p.ratingAgency].join(' ').toLowerCase();
     return p;
   });
   M.positions = positions;
@@ -284,7 +285,7 @@
       return JSON.parse(x.responseText);
     } catch (e) { return null; }
   }
-  const OPT = ['zspr', 'dm', 'icpi', 'ir', 'bei'];
+  const OPT = ['zspr', 'dm', 'icpi', 'ir', 'bei', 'cpi'];
   M.posHistory = function (id, opts) {
     if (opts && opts.deep) {
       if (!(id in deepCache)) { const j = fetchHist([id], '2000-01-01'); deepCache[id] = j && j.series && j.series[id] ? Object.assign({ dates: j.dates }, j.series[id]) : null; }
@@ -332,16 +333,21 @@
       if (x.status === 200) market = JSON.parse(x.responseText);
     } catch (e) { market = null; }
     if (market) {
-      // индексы, которых нет в прогоне (RUSFAR, RUSFAR CNY, CPI г/г), — из фиксингов хаба
+      // индексы, которых нет в прогоне (RUSFAR, RUSFAR CNY, SOFR, €STR, CPI г/г), — из фиксингов хаба
       Object.entries(market.indices || {}).forEach(([k, v]) => { if (M.indices[k] == null && v.value != null) M.indices[k] = v.value; });
       (market.notes || []).forEach(n => M.notes.push(n));
     }
+    // кросс-курсы (R25): ряды хаба (контракт 1.3) или кросс курсов ЦБ с сервера; без истории рынка — по курсам прогона
+    M.crosses = market && market.crosses && Object.keys(market.crosses).length ? market.crosses : Object.fromEntries(
+      [['EUR/USD', 'EUR', 'USD'], ['USD/CNY', 'USD', 'CNY']].filter(([, b, q]) => M.fx[b] && M.fx[q] && M.fx[b] !== 1 && M.fx[q] !== 1)
+        .map(([pr, b, q]) => [pr, { value: M.fx[b] / M.fx[q], kind: 'run', label: 'кросс курсов прогона', chgPct: [M.fxChgPct && M.fxChgPct[b] != null && M.fxChgPct[q] != null ? ((1 + M.fxChgPct[b] / 100) / (1 + M.fxChgPct[q] / 100) - 1) * 100 : null] }]));
     return market;
   };
 
   // ---------- потоки, рынок, ЦБ ----------
   M.cashflows = (X.cashflows || []).filter(c => M.pos[c.pos]).map(c => ({ date: c.date, pos: c.pos, kind: c.kind === 'amort' ? 'mat' : c.kind, amort: c.kind === 'amort', ccy: c.ccy, amount: c.amount, est: c.est, amountRub: c.amount * (M.fx[c.ccy] || 1) }));
-  // сектор ОФЗ — «ОФЗ» (у Минфина в статике сектор «суверен»), остальные — по статике хаба; рейтингов в данных нет
+  // сектор ОФЗ — «ОФЗ» (у Минфина в статике сектор «суверен»), остальные — по статике хаба; рейтинг деска — по новейшей
+  // статике (R25): грейд, «б/р» (рейтингов у выпуска и эмитента нет), без рейтингов в статике — «без рейтинга»
   M.universeRub = (X.universeRub || []).map(b => Object.assign({}, b, { rating: b.rating || 'без рейтинга', sector: b.isOfz ? 'ОФЗ' : (b.sector || '—'), size: b.size || 0, cpn: b.cpn, dur: b.dur || 0, tenor: b.tenor || 0 }));
   M.universeFx = (X.universeFx || []).map(b => Object.assign({}, b, { rating: b.rating || 'без рейтинга', sector: b.sector || '—', outstanding: b.outstanding || 0, cpn: b.cpn || 0, freq: b.freq || '', tenor: b.tenor || 0, coupons: b.coupons || [] }));
   M.marketMovers = X.marketMovers || [];

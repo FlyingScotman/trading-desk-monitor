@@ -10,8 +10,9 @@ day of the period has no run: then the sum is partial), the previous run's price
 holding (a trade, a new position), its flows of the next 18 months (``extra.cashflows``), the market of the latest
 cached close not after the run (every quoted bond, ``universeRub`` and ``universeFx``, with the static snapshot's
 issuer, group, sector, outstanding face, coupon and frequency: ``marketdata.static_facts``; the day's movers) and the
-CBR meetings (``cbr``: the next one, the dates ahead, the past decisions). What the store does not have is null with
-a note in ``notes``: ratings (the hub has no source), months before the first default run.
+CBR meetings (``cbr``: the next one, the dates ahead, the past decisions). Issuer, group, sector and the desk's rating
+(``marketdata.ratings``) of the market's bonds come from the newest static of the read model (R25). What the store does
+not have is null with a note in ``notes``: ratings when the static has none, months before the first default run.
 
 ``positions_history``: per position of the run, aligned on one date axis: MOEX's clean price, yield (none for a
 floater), G- and Z-spread and a linker's ICPI / IR / BEI from ``md_bond_day`` (the hub's history API, from
@@ -252,9 +253,11 @@ def cbr(con, as_of: date) -> dict[str, Any]:
 
 
 MARKET_SQL = ("SELECT b.*, i.isin, i.name, i.short_name, i.bond_class, i.coupon_type, i.face_unit, i.maturity_date,"
-              " i.is_perpetual, s.data AS st FROM md_bond_day b LEFT JOIN md_instrument i USING (secid)"
+              " i.is_perpetual, COALESCE(n.data, s.data) AS st FROM md_bond_day b LEFT JOIN md_instrument i USING (secid)"
+              " LEFT JOIN md_static_bond n ON n.snapshot_id = %s AND n.secid = b.secid"
               " LEFT JOIN md_static_bond s ON s.snapshot_id = %s AND s.secid = b.secid WHERE b.business_date = %s")
-"""A day's market: ``md_bond_day``, the hub's history API rows, else the snapshots' (R24), with the static facts."""
+"""A day's market: ``md_bond_day``, the hub's history API rows, else the snapshots' (R24), with the static facts of the
+newest static (issuer, group, sector, rating: R25), else of the static of the date (a bond matured since)."""
 
 
 def _static_for(con, as_of: date) -> dict[str, Any] | None:
@@ -266,14 +269,16 @@ def universe(con, as_of: date, held: set[str | None]) -> dict[str, Any]:
     """The market of the latest cached close not after ``as_of``: every quoted RUB bond (``universeRub``), every quoted
     bond with a foreign face (``universeFx``) and the 60 RUB bonds with the most turnover with their yield change since
     the close before (``marketMovers``). Issuer, group, sector, outstanding face (``size``, RUB; ``outstanding`` in the
-    face currency), coupon and frequency from the static snapshot's facts of the date (``static_facts``); ratings are
-    not in the hub's data."""
+    face currency), coupon and frequency from the static snapshot's facts (``static_facts``; the newest static's for
+    the issuer, sector, group and rating, R25)."""
     d = latest_market_day(con, as_of)
     if d is None:
         return {"marketDate": None, "universeRub": [], "universeFx": [], "marketMovers": [],
                 "notes": ["рыночной истории (md_bond_eod) нет: карта рынка пуста"]}
     st = _static_for(con, as_of)
     sid = st["snapshot_id"] if st else None
+    new = static_facts.newest(con)
+    nid = new["snapshot_id"] if new else None
     prev = latest_market_day(con, d - timedelta(days=1))
     old = {r["secid"]: r["yield_pct"] for r in con.execute(
         "SELECT secid, yield_pct FROM md_bond_day WHERE business_date = %s", (prev,))} if prev else {}
@@ -285,7 +290,7 @@ def universe(con, as_of: date, held: set[str | None]) -> dict[str, Any]:
             fx_coupons[r["secid"]] = r["d"]
     rub, fx = [], []
     with_static = 0
-    for r in con.execute(MARKET_SQL, (sid, d)).fetchall():
+    for r in con.execute(MARKET_SQL, (nid, sid, d)).fetchall():
         mat, yd = r["maturity_date"], r["yield_date"]
         ev = yd if yd and (mat is None or yd < mat) else mat
         tenor = (ev - d).days / 365.25 if ev and ev > d else None
@@ -300,7 +305,9 @@ def universe(con, as_of: date, held: set[str | None]) -> dict[str, Any]:
              "put": yd.isoformat() if yd and mat and yd < mat else None, "tenor": tenor,
              "ytm": None if flt else y, "ytmMoex": y, "dur": (r["duration_days"] or 0) / 365.25 or None,
              "spread": r["gspread_bp"], "zspread": r["zspread_bp"], "chgBp": chg, "value": r["value"],
-             "flt": flt, "held": r["secid"] in held, "rating": None, "sector": f.get("sector_label"),
+             "flt": flt, "held": r["secid"] in held, "rating": f.get("rating"),
+             "ratingAgency": (f.get("rating_info") or {}).get("agency"),
+             "ratingInfo": f.get("rating_info"), "sector": f.get("sector_label"),
              "group": f.get("group"), "issuerName": f.get("issuer"), "issuerFull": f.get("issuer_full"),
              "type": f.get("type"), "cpn": f.get("cpn_pct"), "freq": f.get("freq_letter"),
              "issueSize": f.get("issue_size"),
@@ -308,6 +315,8 @@ def universe(con, as_of: date, held: set[str | None]) -> dict[str, Any]:
         unit = r["face_unit"] or f.get("face_unit") or ("RUB" if r["currency_id"] in RUB_SETTLEMENT else None)
         if unit == "RUB" or unit is None:
             b["isOfz"] = (r["bond_class"] or "").startswith("ofz")
+            if b["isOfz"]:  # the sovereign: no agency rating (not «б/р»), the pages' sector «ОФЗ»
+                b.update(rating=None, ratingAgency=None, ratingInfo=None, sector="ОФЗ")
             b["size"] = f.get("outstanding")
             b["issuer"] = f.get("issuer") or None
             rub.append(b)
@@ -325,10 +334,19 @@ def universe(con, as_of: date, held: set[str | None]) -> dict[str, Any]:
                      "ещё не разобран (появится после прогона)")
     elif st["business_date"] != d:
         notes.append(f"условия выпусков (эмитент, сектор, объём, купон) — по статике {st['business_date']}")
-    notes.append("рейтингов в данных хаба нет; объём выпуска — по MOEX (для ОФЗ — объявленный, а не размещённый)")
+    cov = ((new or st or {}).get("data") or {}).get("calendar", {}).get("coverage", {})
+    if not any(b.get("rating") for b in rub):
+        notes.append("рейтингов в статике хаба нет (" + ((new or st or {}).get("business_date") or date.min).isoformat()
+                     + "): G-спред по рейтингам — одной группой «без рейтинга»")
+    else:
+        notes.append(f"рейтинги — лучший из АКРА / Эксперт РА / НКР / НРА по национальной шкале (выпуск, иначе эмитент;"
+                     f" у {cov.get('with_rating', 0)} из {cov.get('bonds', 0)} выпусков статики"
+                     f" {new['business_date'].isoformat() if new else ''})")
+    notes.append("объём выпуска — по MOEX (для ОФЗ — объявленный, а не размещённый)")
     return {"marketDate": d.isoformat(), "universeRub": rub, "universeFx": fx,
             "staticDate": st["business_date"].isoformat() if st else None,
-            "marketMovers": [{"name": b["name"], "rating": None, "sector": b["sector"], "ytm": b["ytmMoex"],
+            "referenceDate": new["business_date"].isoformat() if new else None,
+            "marketMovers": [{"name": b["name"], "rating": b["rating"], "sector": b["sector"], "ytm": b["ytmMoex"],
                               "chgBp": b["chgBp"], "vol": b["value"]} for b in movers],
             "notes": notes}
 
@@ -373,12 +391,12 @@ def market_flows(con, as_of: date, *, market: str, date_from: date | None = None
         where.append("f.kind = %s")
         args.append(kind)
     if sector is not None:
-        if sector == "ОФЗ":
-            where.append("f.type IN ('PD', 'PK', 'IN') AND s.data->>'sector_label' IS NULL")
+        if sector == "ОФЗ":  # the OFZ by type (their sector, by the bond class since R25, is the sovereign's)
+            where.append("f.type IN ('PD', 'PK', 'IN')")
         elif sector == "—":
             where.append("s.data->>'sector_label' IS NULL AND f.type NOT IN ('PD', 'PK', 'IN')")
         else:
-            where.append("s.data->>'sector_label' = %s")
+            where.append("s.data->>'sector_label' = %s AND f.type NOT IN ('PD', 'PK', 'IN')")
             args.append(sector)
     if big:
         where.append("(s.data->>'outstanding')::float8 >= %s")
@@ -438,6 +456,7 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
         "SELECT business_date, trade_date, params FROM md_kbd_day WHERE business_date = ANY(%s)", (dates,))}
     run_at = dict(by_run)
     bench_cache: dict[tuple[date, int], float | None] = {}
+    cpi = _cpi_known(con, run["business_date"]) if any(_linker(r["fact"]) for r in pos.values()) else []
 
     def bench(d: date, t: float | None) -> float | None:
         if t is None:
@@ -469,6 +488,7 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
             s["dm"].append(last[7] if flt and last and ps is not None else None)
             for k, j in (("icpi", 5), ("ir", 6), ("bei", 7)):
                 s[k].append(x[j] if x else None)
+            s["cpi"].append(_cpi_at(cpi, d) if cpi and _linker(f) else None)
             for k, j in (("notional", 0), ("dv01", 1), ("cs01", 2), ("basis", 3), ("mv", 4)):
                 s[k].append(last[j] if last else None)
             for c in last[8] if last else ():
@@ -487,13 +507,40 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
         out["curves"] = {c: v for c, v in cv.items() if any(v)}
         series[pid] = out
     return {"runId": run["run_id"], "dates": [d.isoformat() for d in dates], "series": series,
-            "note": "цена, доходность, G- и Z-спред (к КБД), у линкеров ICPI, IR, BEI — MOEX (история закрытий хаба); "
-                    "номинал, DV01, CS01, базис, MV и дисконт-маржа флоатера — по прогонам деска (между прогонами — последний)"}
+            "note": "цена, доходность, G- и Z-спред (к КБД), у линкеров ICPI, IR, BEI — MOEX (история закрытий хаба), "
+                    "ИПЦ г/г — последний известный на дату (ЦБ, иначе по ИПЦ м/м Росстата, через "
+                    f"{CPI_LAG_DAYS} дн. после месяца); номинал, DV01, CS01, базис, MV и дисконт-маржа флоатера — по "
+                    "прогонам деска (между прогонами — последний)"}
 
 
-OPTIONAL = ("zspr", "dm", "icpi", "ir", "bei")
+OPTIONAL = ("zspr", "dm", "icpi", "ir", "bei", "cpi")
 """Series of ``positions_history`` given only when the position has a value: MOEX's Z-spread to the KBD, the desk's
-discount margin of a floater (its run spread), MOEX's linker analytics (contract 1.2)."""
+discount margin of a floater (its run spread), MOEX's linker analytics (contract 1.2), and for a linker CPI year on
+year as known on the date (R25)."""
+CPI_LAG_DAYS = 45
+"""CPI of a month is known this many days after the month's first day (Rosstat publishes it mid next month; the hub's
+``published_on`` is kept only for the newest months): a date sees the CPI y/y of the months it could have known."""
+
+
+def _linker(f: dict[str, Any]) -> bool:
+    return f.get("asset_class") == "ОФЗ-ИН" or f.get("coupon_type") == "indexed_face"
+
+
+def _cpi_known(con, d: date) -> list[tuple[date, float]]:
+    """CPI y/y (``market_history.cpi_yoy``) by the date it is known on (the month's first day + ``CPI_LAG_DAYS``)."""
+    from .market_history import CPI, CPI_YOY, cpi_yoy, fixing_series  # api.market_history imports the app
+
+    yoy, _ = cpi_yoy(fixing_series(con, [CPI, CPI_YOY], d))
+    return [(m + timedelta(days=CPI_LAG_DAYS), v) for m, v in yoy]
+
+
+def _cpi_at(series: list[tuple[date, float]], d: date) -> float | None:
+    v = None
+    for x, y in series:
+        if x > d:
+            break
+        v = y
+    return _rnd(v, 2)
 
 
 def script(data: dict[str, Any]) -> str:
