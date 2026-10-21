@@ -116,6 +116,37 @@ def test_a_failed_date_is_not_retried_on_the_same_inputs(tmp_path, cache, store_
     assert st["failed"] == 1 and st["failed_dates"] == ["2026-10-14"] and st["oldest_run"] == "2026-10-15"
 
 
+@pytest.mark.parametrize("error", [
+    pytest.param(lambda: __import__("psycopg").OperationalError("connection to server on socket failed"), id="store"),
+    pytest.param(lambda: __import__("desk.marketdata.hub", fromlist=["HubError"]).HubError("hub unreachable"), id="hub"),
+])
+def test_a_store_or_network_error_is_not_a_failed_date(tmp_path, cache, store_url, monkeypatch, error):
+    """E2E 21.10.2026: the store went away mid-backfill and every later date was remembered as failed, so they were
+    never computed again. Such an error stops the run and is not remembered: the next run computes the dates."""
+    load(store_url, tmp_path, "2026-10-13", 10)
+    s = settings(tmp_path, cache, store_url)
+    real = cli.eod_run
+    down = {"on": True}
+
+    def flaky(settings, d, **kw):
+        if down["on"] and d == "2026-10-14":
+            raise error()
+        return real(settings, d, **kw)
+
+    monkeypatch.setattr(cli, "eod_run", flaky)
+    with store.connect(store_url) as con:
+        res = backfill.run(s, backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15)), store_url=store_url,
+                           out=lambda line: None)
+        assert res["done"] == ["2026-10-13"] and [d for d, _ in res["failed"]] == ["2026-10-14"]
+        assert "tried again next time" in res["failed"][0][1] and res["left"] == 1  # 15.10 not even tried
+        p = backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15))
+        assert [(d.date, d.status) for d in p.days if d.status != "no_positions"] == [
+            ("2026-10-13", "done"), ("2026-10-14", "todo"), ("2026-10-15", "todo")]
+        down["on"] = False
+        res = backfill.run(s, p, store_url=store_url, out=lambda line: None)
+    assert res["done"] == ["2026-10-14", "2026-10-15"] and not res["failed"]
+
+
 def test_budget_runs_at_least_one_date(tmp_path, cache, store_url):
     load(store_url, tmp_path, "2026-10-12", 10)
     s = settings(tmp_path, cache, store_url)

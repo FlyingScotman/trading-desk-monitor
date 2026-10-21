@@ -51,6 +51,7 @@ import psycopg
 from . import logic_version, store
 from .marketdata import cache
 from .marketdata.bundle import SnapshotDir, previous_market
+from .marketdata.hub import HubError, TransportError
 from .settings import Settings
 
 log = logging.getLogger("desk.backfill")
@@ -215,6 +216,15 @@ def inbox(con: psycopg.Connection, settings: Settings, date_from: date, *, force
     return "inbox from " + date_from.isoformat() + ": " + "; ".join(res.text().splitlines())
 
 
+def transient(e: BaseException) -> bool:
+    """An error of the store connection, the network, the disk or the hub as a whole (unreachable, 5xx, token or
+    proxy refused), not of the date's data: such a date is not marked failed (a failed date is not tried again on the
+    same inputs), and the run stops there, since the next dates would hit it too."""
+    if isinstance(e, HubError):
+        return e.status is None or e.status >= 500 or e.status in (401, 403, 407)
+    return isinstance(e, (psycopg.OperationalError, TransportError, OSError))
+
+
 def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: Any = None,
         budget_s: float | None = None, out: Callable[[str], None] = print,
         progress: Callable[[int, int, str], None] | None = None, contexts: Any = None) -> dict[str, Any]:
@@ -249,6 +259,10 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
             rid = eod_run(settings, day.date, snapshots=cache_dir, store_url=store_url, report_dir=None,
                           out=lambda s: out("  " + s), contexts=contexts, read_model=False)
         except Exception as e:  # one date's bad data must not stop the others
+            if transient(e):  # the store or the network, not the date: not remembered, the rest waits for next time
+                log.exception("backfill %s interrupted", day.date)
+                failed.append((day.date, f"{type(e).__name__}: {e} (not the date's data: tried again next time)"))
+                break
             log.exception("backfill %s failed", day.date)
             fails[day.date] = day.sig
             failed.append((day.date, f"{type(e).__name__}: {e}"))
