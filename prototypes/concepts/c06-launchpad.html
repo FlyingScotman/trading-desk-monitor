@@ -36,6 +36,10 @@ body { display: flex; flex-direction: column; overflow: hidden; }
 .hudg .v { font-size: 17px; font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; line-height: 1.25; }
 .hudg .s { font-size: 10.5px; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hudg .spk { display: flex; align-items: center; gap: 6px; }
+.tile.max .hudg { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.tile.max .hudg > div { padding: 14px 18px; }
+.tile.max .hudg .v { font-size: 30px; }
+.tile.max .hudg .l, .tile.max .hudg .s { font-size: 13px; }
 .ev-kind { display: inline-block; min-width: 46px; font-size: 10.5px; padding: 0 5px; border-radius: 3px; text-align: center; border: 1px solid var(--line-2); color: var(--fg-2); }
 .ev-kind.put, .ev-kind.call { border-color: var(--warn); color: var(--warn); }
 .ev-kind.mat { border-color: var(--accent); color: var(--accent); }

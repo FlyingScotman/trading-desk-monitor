@@ -25,11 +25,12 @@ body { font-family: var(--mono); font-size: 12.5px; }
 .quick { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
 .quick .k-chip { font-family: var(--mono); font-size: 11.5px; }
 #out { padding: 10px 14px 60px; display: flex; flex-direction: column; gap: 10px; }
-.pane { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; min-width: 0; }
+.pane { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; min-width: 0; scroll-margin-top: 140px; }
+.pane.min > .pb { display: none; }
+.pane > .ph .tw { color: var(--fg-3); cursor: pointer; width: 12px; }
 .pane.pinned { border-color: rgba(242, 181, 58, .55); }
 .pane > .ph { display: flex; align-items: center; gap: 10px; padding: 5px 10px; border-bottom: 1px solid var(--line); background: var(--panel-2); border-radius: 6px 6px 0 0; }
 .pane > .ph .cmd { color: var(--amber); font-weight: 600; cursor: pointer; }
-.pane > .ph .cmd::before { content: "› "; color: var(--fg-3); }
 .pane > .ph .ttl { color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: system-ui, sans-serif; }
 .pane > .ph .sp { flex: 1; }
 .pane > .ph .tm { color: var(--fg-3); font-size: 11px; }
@@ -135,10 +136,11 @@ body { font-family: var(--mono); font-size: 12.5px; }
   function addPane(line, opts) {
     opts = opts || {};
     const el = K.h('div', 'pane');
-    el.innerHTML = '<div class="ph"><span class="cmd" title="повторить">' + esc(line) + '</span><span class="ttl"></span><span class="sp"></span><span class="tm">' + clock() + '</span>' +
+    el.innerHTML = '<div class="ph"><span class="tw" title="Свернуть / развернуть">▾</span><span class="cmd" title="в строку команд">' + esc(line) + '</span><span class="ttl"></span><span class="sp"></span><span class="tm">' + clock() + '</span>' +
       '<button class="pin" title="Закрепить сверху">📌</button><button class="re" title="Пересчитать (по текущему фильтру)">↻</button><button class="x" title="Закрыть">✕</button></div><div class="pb"></div>';
     const P = { el, line, pinned: !!opts.pin, charts: [], bd: el.querySelector('.pb') };
     el.querySelector('.x').onclick = () => close(P);
+    el.querySelector('.tw').onclick = () => { const m = el.classList.toggle('min'); el.querySelector('.tw').textContent = m ? '▸' : '▾'; };
     el.querySelector('.pin').onclick = () => { P.pinned = !P.pinned; layout(); };
     el.querySelector('.re').onclick = () => render(P);
     el.querySelector('.cmd').onclick = () => { inp.value = line; inp.focus(); };
@@ -294,9 +296,10 @@ body { font-family: var(--mono); font-size: 12.5px; }
         const cf = M.cashflows.filter(c => c.date > M.asOf && c.date <= end && ids.has(c.pos) && M.pos[c.pos].group !== 'DER' && (!o.ccy || c.ccy === o.ccy));
         const weeks = {}; cf.forEach(c => { const d = M.util.parse(c.date); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); const k = M.util.iso(d); (weeks[k] = weeks[k] || []).push(c); });
         const wk = Object.keys(weeks).sort();
-        const row = K.h('div', 'row2'); bd.appendChild(row); const a = K.h('div'), b = K.h('div'); b.style.cssText = 'overflow:auto;max-height:340px'; row.append(a, b);
+        const hh = days <= 7 ? 190 : 300;
+        const row = K.h('div', 'row2'); bd.appendChild(row); const a = K.h('div'), b = K.h('div'); b.style.cssText = 'overflow:auto;max-height:' + (hh + 20) + 'px'; row.append(a, b);
         const kinds = [['cpn', 'купоны', css('--accent')], ['put', 'оферты', css('--warn')], ['call', 'коллы', '#ff8f3f'], ['mat', 'погашения', css('--pos')]];
-        const c = K.chart(ch(a, 300), () => ({ grid: { left: 6, right: 10, top: 28, bottom: 4, containLabel: true }, legend: { top: 0 }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.mn(v, 1) + ' млн ₽' },
+        const c = K.chart(ch(a, hh), () => ({ grid: { left: 6, right: 10, top: 28, bottom: 4, containLabel: true }, legend: { top: 0 }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.mn(v, 1) + ' млн ₽' },
           xAxis: { type: 'category', data: wk, axisLabel: { formatter: v => 'нед ' + f.dshort(v) } }, yAxis: { type: 'value', axisLabel: { formatter: v => f.mn(v, 0) } },
           series: kinds.map(([k, t, col]) => ({ name: t, type: 'bar', stack: 'w', itemStyle: { color: col }, data: wk.map(w => M.sum(weeks[w].filter(x => x.kind === k), 'amountRub')) })) }));
         c.on('click', pp => { const w = wk[pp.dataIndex], k = kinds[pp.seriesIndex]; const rows = weeks[w].filter(x => x.kind === k[0]).map(x => ({ p: M.pos[x.pos], v: x.amountRub })); if (rows.length) K.drill({ title: k[1] + ' · неделя ' + f.dshort(w), unit: 'млн ₽', fmt: v => f.mn(v, 1), rows }); });
@@ -357,7 +360,9 @@ body { font-family: var(--mono); font-size: 12.5px; }
     hi = -1; inp.value = ''; hideAc();
     const o = parse(line);
     if (o.verb === 'book') { const ids = bookIds(o); if (ids) K.setFilter({ books: ids.length ? ids : null }); }
-    addPane(line); window.scrollTo({ top: 0 });
+    const P = addPane(line);
+    // новый результат — сразу под закреплёнными панелями
+    requestAnimationFrame(() => panes.some(p => p.pinned) && !P.pinned ? P.el.scrollIntoView({ block: 'start' }) : window.scrollTo({ top: 0 }));
   }
   function suggest() {
     const q = inp.value.toLowerCase().trim();
