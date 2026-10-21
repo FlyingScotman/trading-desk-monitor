@@ -89,7 +89,10 @@
   // ---------- события ----------
   const subs = {};
   function fire(ev) { (subs[ev] || []).forEach(fn => { try { fn(); } catch (e) { console.error(e); } }); }
-  K.on = (ev, fn) => (subs[ev] = subs[ev] || []).push(fn);
+  // подписка; возвращает функцию отписки
+  K.on = (ev, fn) => { (subs[ev] = subs[ev] || []).push(fn); return () => { const a = subs[ev], i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); }; };
+  // перерисовка блока, пока его элемент в документе; отписывается, когда элемент удалён
+  K.live = (el, ev, fn) => { const off = K.on(ev, () => { if (!el.isConnected) return off(); fn(); }); return off; };
   K.onFilter = fn => K.on('filter', fn);
 
   // ---------- фильтр книг (верхний уровень) ----------
@@ -296,7 +299,7 @@
     const ids = opts.curves;
     const ser = () => {
       const L = list();
-      const data = ids.map(id => M.buckets.map((_, k) => id === 'CS01' ? M.sum(L, p => p.cs01b[k]) : M.sum(L, p => p.risk[id][k])));
+      const data = ids.map(id => M.buckets.map((_, k) => id === 'CS01' ? M.sum(L, p => (!opts.ccy || p.ccy === opts.ccy) ? p.cs01b[k] : 0) : M.sum(L, p => p.risk[id][k])));
       // итог и кумулятив — только по процентным кривым; базис ОФЗ и CS01 — отдельными столбцами рядом
       const isRate = id => id !== 'CS01' && M.curve[id].kind === 'rate';
       const tot = M.buckets.map((_, k) => data.reduce((s, d, i) => s + (isRate(ids[i]) ? d[k] : 0), 0));
@@ -313,7 +316,7 @@
         xAxis: { type: 'category', data: M.buckets },
         yAxis: [{ type: 'value', axisLabel: { formatter: v => f.dv(v) } }, { type: 'value', name: 'кумулятив', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => f.dv(v), color: css('--warn') } }],
         series: ids.map((id, i) => ({ name: id === 'CS01' ? 'CS01' : M.curve[id].short, type: 'bar', stack: id !== 'CS01' && M.curve[id].kind === 'rate' ? 'r' : 'x' + i, barMaxWidth: 38, data: cur.data[i], itemStyle: { color: K.curveColors[id] } }))
-          .concat([{ name: 'итог бакета', type: 'scatter', symbol: 'diamond', symbolSize: 11, data: cur.tot, itemStyle: { color: css('--fg'), borderColor: css('--bg'), borderWidth: 1 }, z: 5, label: { show: opts.labels !== false, position: 'top', formatter: p => f.dv(p.value), color: css('--fg-2'), fontSize: 10 } },
+          .concat([{ name: 'итог бакета', type: 'scatter', symbol: 'diamond', symbolSize: 11, data: cur.tot, itemStyle: { color: css('--fg'), borderColor: css('--bg'), borderWidth: 1 }, z: 5, label: { show: opts.labels !== false, position: 'top', formatter: p => Math.abs(p.value) < 500 ? '' : f.dv(p.value), color: css('--fg-2'), fontSize: 10 } },
           { name: 'кумулятив', type: 'line', yAxisIndex: opts.cumSameAxis ? 0 : 1, smooth: false, data: cur.cum, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2, type: 'dashed', color: css('--warn') }, itemStyle: { color: css('--warn') }, z: 4 }]),
       };
     });
@@ -323,9 +326,9 @@
       if (pp.seriesName === 'кумулятив') return K.drill({ title: 'Кумулятивный риск до ' + M.buckets[k], unit: 'тыс ₽/бп', rows: L.map(p => ({ p, v: rids.reduce((s, id) => s + p.risk[id].slice(0, k + 1).reduce((a, b) => a + b, 0), 0) })) });
       if (pp.seriesName === 'итог бакета') return K.drill({ title: 'Риск ставок ' + M.buckets[k], unit: 'тыс ₽/бп', rows: L.map(p => ({ p, v: rids.reduce((s, id) => s + p.risk[id][k], 0) })) });
       const id = ids[pp.seriesIndex];
-      K.drill({ title: (id === 'CS01' ? 'CS01' : M.curve[id].short) + ' · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: L.map(p => ({ p, v: id === 'CS01' ? p.cs01b[k] : p.risk[id][k] })) });
+      K.drill({ title: (id === 'CS01' ? 'CS01' : M.curve[id].short) + ' · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: L.map(p => ({ p, v: id === 'CS01' ? ((!opts.ccy || p.ccy === opts.ccy) ? p.cs01b[k] : 0) : p.risk[id][k] })) });
     });
-    K.onFilter(() => chart.redraw());
+    K.live(el, 'filter', () => chart.redraw());
     return chart;
   };
 
@@ -404,7 +407,7 @@
     }
     draw();
     const api = { redraw: draw, state: st, setSort: s => { st.sort = s; draw(); }, el };
-    if (opts.autoFilter !== false && !opts.rows) K.onFilter(draw);
+    if (opts.autoFilter !== false && !opts.rows) K.live(el, 'filter', draw);
     return api;
   };
 
@@ -569,7 +572,7 @@
       html += '</tbody><tfoot>' + row('Итого', L, 0).replace('<tr class="grp">', '<tr>') + '</tfoot></table>';
       el.innerHTML = html;
     }
-    draw(); K.onFilter(draw); K.on('theme', draw);
+    draw(); K.live(el, 'filter', draw); K.live(el, 'theme', draw);
     return { redraw: draw };
   };
 
@@ -592,7 +595,7 @@
         '</tbody><tfoot><tr><td>Σ ставки</td>' + tot.map((v, k) => '<td class="n">' + K.d({ title: ccy + ' ставки · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: L.map(p => ({ p, v: cs.filter(x => x.kind === 'rate').reduce((s, x) => s + p.risk[x.id][k], 0) })) }, null, '') + '</td>').join('') + '<td class="n">' + f.dv(tot.reduce((a, b) => a + b, 0)) + '</td></tr>' +
         '<tr><td class="mut">кумулятив</td>' + cum.map((v, k) => '<td class="n mut">' + K.d({ title: ccy + ' кумулятив до ' + M.buckets[k], unit: 'тыс ₽/бп', rows: L.map(p => ({ p, v: cs.filter(x => x.kind === 'rate').reduce((s, x) => s + p.risk[x.id].slice(0, k + 1).reduce((a, b) => a + b, 0), 0) })) }, null, '') + '</td>').join('') + '<td></td></tr></tfoot></table>';
     }
-    draw(); K.onFilter(draw); K.on('theme', draw);
+    draw(); K.live(el, 'filter', draw); K.live(el, 'theme', draw);
     return { redraw: draw };
   };
 
@@ -625,7 +628,7 @@
       };
     });
     c.on('click', pp => { const i = pp.dataIndex; if (i < keys.length) K.drill({ title: 'PnL · ' + keys[i][1], unit: 'тыс ₽', fmt: f.k, list: L, val: p => p.pnl[keys[i][0]] }); else K.drill({ title: 'PnL дня', unit: 'тыс ₽', fmt: f.k, list: L, val: p => p.pnl.total }); });
-    K.onFilter(() => c.redraw());
+    K.live(el, 'filter', () => c.redraw());
     return c;
   };
 
@@ -647,7 +650,7 @@
         K.kpi('ОВП', M.ccys.filter(c => c !== 'RUB').map(c => c + ' ' + K.d({ title: 'FX дельта ' + c, unit: 'млн ' + c, fmt: v => f.mn(v, 1), list: L.filter(p => p.ccy === c), val: 'fxDelta' })).join(' '), 'млн в валюте') +
         '</div>';
     }
-    draw(); K.onFilter(draw);
+    draw(); K.live(el, 'filter', draw);
     return { redraw: draw };
   };
 

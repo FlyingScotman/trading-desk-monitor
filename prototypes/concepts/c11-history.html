@@ -13,6 +13,8 @@
 .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
 @media (max-width: 1150px) { .two { grid-template-columns: 1fr; } }
 .chart { height: 300px; }
+.col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+#pCmp > .bd { max-height: 860px; }
 .cmp td.lbl { white-space: nowrap; }
 .cmp tr.sec td { background: var(--bg-2); color: var(--fg-2); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; padding-top: 7px; }
 .pv-hd { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
@@ -33,12 +35,12 @@ tr.row.sel td { background: var(--accent-bg); }
   </div>
   <div class="two">
     <div class="k-panel" id="pCmp"><div class="hd"><h3>Сравнение: <span class="d0"></span> → сегодня</h3><span class="sp"></span><span class="k-note">щелчок по Δ — какие позиции дали изменение</span></div><div class="bd flush scroll"></div></div>
-    <div class="k-panel" id="pPnl"><div class="hd"><h3>PnL деска</h3><span class="sp"></span><span class="m"></span></div><div class="bd"><div class="chart"></div><div class="k-note">Столбцы — PnL дня по факторам, линия — накопленный с начала периода. Последний день — щелчок раскрывает позиции.</div></div></div>
-  </div>
-  <div class="two">
-    <div class="k-panel" id="pTop"><div class="hd"><h3>Что изменилось по позициям</h3><span class="sp"></span><span class="m"></span></div><div class="bd flush"></div></div>
+    <div class="col">
+    <div class="k-panel" id="pPnl"><div class="hd"><h3>PnL деска</h3><span class="sp"></span><span class="m"></span></div><div class="bd"><div class="chart"></div><div class="k-note">Столбцы — PnL дня по факторам, линия — накопленный с начала периода. Последний день — щелчок раскрывает позиции, другой — делает его датой сравнения.</div></div></div>
     <div class="k-panel" id="pPos"><div class="hd"><h3>Позиция во времени</h3><span class="sp"></span><span class="m"></span></div><div class="bd"></div></div>
+    </div>
   </div>
+  <div class="k-panel" id="pTop"><div class="hd"><h3>Что изменилось по позициям</h3><span class="k-note">с даты сравнения · щелчок по строке — позиция во времени</span><span class="sp"></span><span class="m"></span></div><div class="bd flush"></div></div>
 </div>
 <script src="../echarts.min.js"></script>
 <script src="lib/mock.js"></script>
@@ -221,12 +223,15 @@ tr.row.sel td { background: var(--accent-bg); }
     K.seg(P.querySelector('.m'), [['dv01', 'по ΔDV01'], ['trades', 'только со сделками'], ['market', 'по Δ доходности']], st.top, v => { st.top = v; save(); topTbl.setSort(sortFor()); topTbl.redraw(); });
     const sortFor = () => st.top === 'market' ? [['dY', -1]] : [['adv', -1]];
     topTbl = K.table(P.querySelector('.bd'), {
-      rowsFn: topRows, maxHeight: '420px', sort: sortFor(), stripe: r => K.issuerColor(r.issuer), autoFilter: false,
+      rowsFn: topRows, maxHeight: '460px', sort: sortFor(), stripe: r => K.issuerColor(r.issuer), autoFilter: false,
       rowCls: r => r.id === st.pos ? 'sel' : '',
       onRow: r => { st.pos = r.id; save(); drawPos(); topTbl.redraw(); },
       columns: [
         { key: 'name', label: 'Позиция', fmt: (v, r) => esc(v) + ' <span class="mut3">' + esc(r.book) + '</span>' },
-        { key: 'ccy', label: 'Вал', fmt: v => K.ccyTag(v), val: r => M.ccyOrder[r.ccy] },
+        { key: 'ccy', label: 'Вал', fmt: (v, r) => K.ccyTag(r.ccy), val: r => M.ccyOrder[r.ccy] },
+        { key: 'kind', label: 'Тип', fmt: (v, r) => '<span class="tagc">' + esc(M.kindShort[r.kind]) + '</span>' },
+        { key: 'not0', label: 'Номинал было', num: true, fmt: (v, r) => f.mn(v, 0) + ' <span class="mut3">' + r.ccy + '</span>', title: 'млн в валюте бумаги на дату сравнения' },
+        { key: 'nowN', label: 'стало', num: true, val: r => H[r.id].notional[LAST], fmt: v => f.mn(v, 0) },
         { key: 'dNot', label: 'Δ номинал', num: true, fmt: (v, r) => v ? f.mns(v, 0) : '<span class="mut3">·</span>', cls: v => f.cls(v), title: 'млн в валюте бумаги' },
         { key: 'adv', label: 'ΔDV01', num: true, val: r => Math.abs(r.dDv), fmt: (v, r) => Math.abs(r.dDv) < 500 ? '<span class="mut3">·</span>' : f.dvs(r.dDv), sum: r => r.dDv, sumFmt: v => f.dvs(v), unit: 'тыс ₽/бп', drillTitle: 'ΔDV01 за период' },
         { key: 'dMv', label: 'ΔMV, млн', num: true, fmt: v => Math.abs(v) < 5e5 ? '<span class="mut3">·</span>' : f.mns(v, 0), sum: true, sumFmt: v => f.mns(v, 0), unit: 'млн ₽', drillTitle: 'ΔMV за период' },

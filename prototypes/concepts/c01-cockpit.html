@@ -54,8 +54,8 @@
         const el = K.h('div', 'chart'); pc.querySelector('.bd').appendChild(el);
         let withCs = false;
         const ids = () => curves.concat(withCs ? ['CS01'] : []);
-        let ch = K.riskStack(el, { curves: ids() });
-        K.seg(pc.querySelector('.mode'), [['r', 'ставки'], ['rc', '+ CS01']], 'r', v => { withCs = v === 'rc'; ch.dispose(); ch = K.riskStack(el, { curves: ids() }); });
+        let ch = K.riskStack(el, { curves: ids(), ccy });
+        K.seg(pc.querySelector('.mode'), [['r', 'ставки'], ['rc', '+ CS01']], 'r', v => { withCs = v === 'rc'; ch.dispose(); ch = K.riskStack(el, { curves: ids(), ccy }); });
         K.bucketTable(pt.querySelector('.bd'), ccy, { cs01: true });
       });
     }
