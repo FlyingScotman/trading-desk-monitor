@@ -346,7 +346,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
         { key: 'kind', label: 'Событие', fmt: v => '<span class="kb" style="--c:' + KC[v] + '">' + KN[v] + '</span>' },
         { key: 'name', label: 'Выпуск', fmt: (v, r) => esc(v) + (r.held ? ' <span class="held">в портфеле</span>' : '') },
         { key: 'ccy', label: 'Вал', fmt: v => K.ccyTag(v) },
-        { key: 'rating', label: 'Рейтинг', fmt: v => '<span class="mut">' + esc(v) + '</span>', val: r => rRank(r.rating) },
+        { key: 'rating', label: 'Рейтинг', fmt: (v, r) => '<span class="mut">' + esc(r.rating) + '</span>', val: r => rRank(r.rating) },
         { key: 'amt', label: 'Объём', num: true, fmt: (v, r) => f.mn(v, 0) + ' <span class="mut3">млн ' + r.ccy + '</span>' },
         { key: 'val', label: 'млн $ экв.', num: true, fmt: v => f.mn(v, 0), sum: true, drill: false },
       ],
@@ -395,6 +395,13 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     tb.innerHTML = '<table class="k-tbl heat"><thead><tr><th>Рейтинг</th>' + cats.map(c => '<th class="n">' + plabel(c, P) + '</th>').join('') + '<th class="n">Итого</th></tr></thead><tbody>' +
       RBS.map((b, i) => '<tr><td><b style="color:' + RBC[b] + '">■</b> ' + b + '</td>' + grid[i].map((v, j) => '<td class="n' + (v ? ' c' : '') + '" data-i="' + i + '" data-j="' + j + '" style="' + K.heatMono(v, mx) + '">' + (v ? f.bn(v, 1) : '<span class="mut3">·</span>') + '</td>').join('') + '<td class="n"><b>' + f.bn(grid[i].reduce((a, c) => a + c, 0), 1) + '</b></td></tr>').join('') +
       '</tbody><tfoot><tr><td>Итого</td>' + cats.map((c, j) => '<td class="n">' + f.bn(grid.reduce((s, r) => s + r[j], 0), 1) + '</td>').join('') + '<td class="n">' + f.bn(grid.flat().reduce((a, c) => a + c, 0), 1) + '</td></tr></tfoot></table>';
+    // по секторам — кто именно гасится
+    const sec = {}; what.forEach(x => { const k = x.b.sector; (sec[k] = sec[k] || []).push(x); });
+    const secL = Object.entries(sec).map(([k, a]) => ({ k, a, v: sumBy(a, x => x.val) })).sort((a, b) => b.v - a.v).slice(0, 8);
+    const smx = Math.max(1, ...secL.map(x => x.v));
+    const sb = K.h('div'); sb.style.padding = '0 0 8px'; ph.querySelector('.bd').appendChild(sb);
+    sb.innerHTML = '<div class="k-sec" style="padding:0 10px">По секторам</div><table class="mini"><tbody>' + secL.map((x, i) => '<tr data-i="' + i + '" style="cursor:pointer"><td>' + esc(x.k) + ' <span class="mut3">' + x.a.length + '</span></td><td class="n">' + f.bn(x.v, 1) + '</td><td style="width:45%">' + K.bar(x.v, smx, true) + '</td></tr>').join('') + '</tbody></table>';
+    sb.querySelectorAll('tr[data-i]').forEach(tr => tr.onclick = () => { const x = secL[+tr.dataset.i]; openAgg(whatLabel + ' · ' + x.k, x.a); });
     tb.querySelectorAll('td.c').forEach(td => td.onclick = () => { const i = +td.dataset.i, j = +td.dataset.j; openAgg(RBS[i] + ' · ' + plabel(cats[j], P), what.filter(x => x.bucket === RBS[i] && pkey(x.date, P) === cats[j])); });
 
     const row2 = K.h('div', 'c8-row'); view.appendChild(row2);
