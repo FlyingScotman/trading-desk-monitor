@@ -87,7 +87,7 @@
   K.PAL = ['#4c9dff', '#3fb67a', '#e3b341', '#f0645a', '#b48cff', '#22c3d6', '#ff8f3f', '#8bc34a', '#ef6fb0', '#7f8cff', '#c9a26b', '#5fd4a8', '#ff6b8b', '#a0b4c8'];
   const issuerIdx = {}; M.issuers.forEach((x, i) => issuerIdx[x.id] = i);
   K.issuerColor = id => id && issuerIdx[id] != null ? K.PAL[issuerIdx[id] % K.PAL.length] : '#7a8794';
-  K.kindColor = { PD: '#4c9dff', PK: '#22c3d6', IN: '#7f8cff', SOVFX: '#b48cff', FIX: '#3fb67a', FLT: '#e3b341', IRS: '#f0645a', KSW: '#ff8f3f', BAS: '#ef6fb0', FXF: '#a0b4c8', XCCY: '#c9a26b' };
+  K.kindColor = { PD: '#4c9dff', PK: '#22c3d6', IN: '#7f8cff', SOVFX: '#b48cff', FIX: '#3fb67a', FLT: '#e3b341', IRS: '#f0645a', KSW: '#ff8f3f', BAS: '#ef6fb0', FXF: '#a0b4c8', XCCY: '#c9a26b', OTC: '#f0645a', FX: '#a0b4c8', OTH: '#8a96a3' };
   // фон ячейки тепловой карты: синий — короткий риск/убыток не важно; знак цвета задаётся pos/neg
   K.heat = (v, max, opt) => {
     if (!v || !max) return '';
@@ -204,6 +204,40 @@
   }
   K.menu = menu;
 
+  // ---------- источник данных: прогон из базы (desk serve) или демо-набор (lib/boot.js, lib/real.js) ----------
+  K.source = window.CONCEPTS_SOURCE || 'file';
+  function srcChip() {
+    const s = K.source;
+    if (s === 'real') return '<span class="k-chip asof" data-a="src" title="Прогон из базы: выбрать другой">срез <b>' + f.date(M.asOf) + '</b> · ' + esc(M.cut.label) + ' · #' + esc(M.run && M.run.id) + ' ▾</span>';
+    const t = s === 'empty' ? 'прогонов нет — тестовые данные' : s === 'demo' ? 'тестовые данные' : 'демо (файл)';
+    return '<span class="k-chip" data-a="src" style="border-color:var(--warn);color:var(--warn)" title="Вымышленный набор lib/mock.js">' + t + (s === 'file' ? '' : ' ▾') + '</span>' +
+      '<span class="asof">срез <b>' + f.date(M.asOf) + '</b> · ' + esc(M.cut.label) + '</span>';
+  }
+  function go(sel) {  // как desk-nav.js: выбор в адресе и в localStorage (desk.run.v1), общий со страницами прогона
+    try { if (Object.keys(sel).length) localStorage.setItem('desk.run.v1', JSON.stringify({ sel, at: Date.now() })); else localStorage.removeItem('desk.run.v1'); } catch (e) { }
+    const u = new URL(location.href); ['run_id', 'as_of', 'demo'].forEach(k => u.searchParams.delete(k)); Object.keys(sel).forEach(k => u.searchParams.set(k, sel[k]));
+    location.href = u.toString();
+  }
+  function bindSrc(bar) {
+    const ch = bar.querySelector('[data-a=src]'), nb = bar.querySelector('[data-a=notes]');
+    if (nb) nb.onclick = e => {
+      e.stopPropagation(); if (openMenu) openMenu.remove();
+      const m = h('div', 'k-panel'); m.style.cssText = 'position:fixed;z-index:140;width:min(460px,92vw);max-height:60vh;overflow:auto;box-shadow:var(--shadow);padding:10px 14px;font-size:12.5px';
+      const r = nb.getBoundingClientRect(); m.style.left = Math.max(8, Math.min(r.left, innerWidth - 470)) + 'px'; m.style.top = (r.bottom + 4) + 'px';
+      m.innerHTML = '<div class="k-sec" style="margin-top:0">Чего нет в данных</div><ul style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px">' + M.notes.map(t => '<li>' + esc(t) + '</li>').join('') + '</ul>';
+      document.body.appendChild(m); openMenu = m;
+      setTimeout(() => document.addEventListener('click', () => { if (openMenu === m) { m.remove(); openMenu = null; } }, { once: true }), 0);
+    };
+    if (!ch || K.source === 'file') return;
+    ch.onclick = e => {
+      e.stopPropagation();
+      fetch('../api/v1/runs?status=complete&limit=60').then(r => r.json()).then(j => {
+        const items = [{ v: 'latest', t: 'последний прогон' }].concat((j.runs || []).filter(r => r.run_type !== 'TEST').map(r => ({ v: String(r.run_id), t: (r.label || r.business_date) + ' · #' + r.run_id, sub: r.is_default ? 'основной' : r.run_type }))).concat([{ v: 'demo', t: 'тестовые данные (демо)' }]);
+        menu(ch, items, K.source === 'real' ? String(M.run.id) : (K.source === 'demo' ? 'demo' : null), v => go(v === 'latest' ? {} : v === 'demo' ? { demo: '1' } : { run_id: v }));
+      }).catch(() => menu(ch, [{ v: 'latest', t: 'последний прогон' }, { v: 'demo', t: 'тестовые данные (демо)' }], null, v => go(v === 'latest' ? {} : { demo: '1' })));
+    };
+  }
+
   // ---------- шапка ----------
   K.top = function (opt) {
     opt = opt || {};
@@ -213,13 +247,14 @@
       '<div class="filters" style="display:flex;gap:6px;flex-wrap:wrap"></div><div class="sp"></div>' +
       (opt.extra || '') +
       '<span class="k-chip" data-a="repr" title="Валюта отчёта: все суммы деска пересчитываются по споту">в ' + K.repr + ' ' + K.SYM[K.repr] + ' ▾</span>' +
-      '<span class="asof">срез <b>' + f.date(M.asOf) + '</b> · ' + esc(M.cut.label) + '</span>' +
+      srcChip() + (M.notes && M.notes.length ? '<span class="k-chip" data-a="notes" title="Чего нет в данных прогона" style="border-color:var(--warn)">ⓘ ' + M.notes.length + '</span>' : '') +
       '<button class="k-btn" data-a="search">Поиск <span class="k-kbd">Ctrl K</span></button>' +
       '<button class="k-btn" data-a="theme" title="Светлая / тёмная тема">◐</button>';
     document.body.prepend(bar);
     chipsBox = bar.querySelector('.filters'); renderFilterChips();
     bar.querySelector('[data-a=search]').onclick = () => K.palette();
     bar.querySelector('[data-a=theme]').onclick = K.toggleTheme;
+    bindSrc(bar);
     const rc = bar.querySelector('[data-a=repr]');
     rc.onclick = e => { e.stopPropagation(); menu(rc, K.REPRS.map(c => ({ v: c, t: 'в ' + c + ' ' + K.SYM[c], sub: c === 'RUB' ? '' : 'курс ' + f.n(M.fx[c], 2) })), K.repr, v => { if (v !== K.repr) K.setRepr(v); }); };
     return bar;
@@ -526,11 +561,11 @@
     const o = drawer(true); o.title = p.name; o.charts = [];
     o.el.querySelector('.t').innerHTML = '<span style="color:' + K.issuerColor(p.issuer) + '">●</span> ' + esc(p.name) + ' ' + K.ccyTag(p.ccy);
     o.el.querySelector('.st').innerHTML = esc(p.issuerFull) + (p.isin ? ' · <span class="mono">' + esc(p.isin) + '</span>' : '') + ' · ' + esc(p.book) + ' — ' + esc(p.bookName) + ' · ' + esc(p.groupLabel) + ' / ' + esc(p.kindLabel);
-    const isBond = p.group !== 'DER';
+    const isBond = !!p.cpn;
     const ev = { put: 'пут-оферта', call: 'колл-опцион', mat: 'погашение' }[p.event.kind];
     const fields = isBond ? [
       ['Номинал', f.mn(p.notional, 0) + ' <small>mm ' + p.ccy + '</small>'], ['MV', f.mn(p.mv, 1) + ' <small>mm ₽</small>'],
-      ['Цена (bid/ask)', f.px(p.price) + ' <small>' + f.px(p.bid) + ' / ' + f.px(p.ask) + '</small>'], ['Изм. цены', '<span class="' + f.cls(p.price - p.prevPrice) + '">' + f.s(p.price - p.prevPrice, 3) + '</span>'],
+      ['Цена (bid/ask)', f.px(p.price) + ' <small>' + f.px(p.bid) + ' / ' + f.px(p.ask) + '</small>'], ['Изм. цены', p.prevPrice == null || p.price == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(p.price - p.prevPrice) + '">' + f.s(p.price - p.prevPrice, 3) + '</span>'],
       p.cpn.type === 'float' ? ['Доходность', '<span class="mut3">—</span> <small>флоатер: смотрим DM</small>'] : ['Доходность', f.pct(p.ytm) + ' <small>к ' + (p.event.kind === 'mat' ? 'погаш.' : 'оферте') + '</small>'], [(p.spreadLabel === 'DM' ? 'Дисконт-маржа' : 'Z-спред к RUONIA'), f.bp(p.zspread) + ' <small>б.п.</small>'],
       ['G-спред к ОФЗ', f.bp(p.gspread) + ' <small>б.п.</small>'], ['Мод. дюрация', p.mdur == null ? '—' : f.n(p.mdur, 2)],
       ['Купон', '<span class="mono">' + esc(p.couponFmt) + '</span>'], ['Текущий купон', f.pct(p.curCpn) + (p.cpn.type === 'float' ? ' <small>прогноз</small>' : '')],
@@ -545,7 +580,7 @@
       ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽</small>'], ['Контрагент', esc(p.cpty || '—')],
     ];
     const pn = p.pnl;
-    o.bd.innerHTML = '<div class="k-tags">' + [p.desk, M.entities.find(e => e.id === p.entity).name, p.rating !== '—' ? 'рейтинг ' + p.rating : null, p.tradedToday ? 'сделки сегодня' : null].filter(Boolean).map(t => '<span class="k-tag">' + esc(t) + '</span>').join('') + '</div>' +
+    o.bd.innerHTML = '<div class="k-tags">' + [p.desk, (M.entities.find(e => e.id === p.entity) || {}).name, p.rating !== '—' ? 'рейтинг ' + p.rating : null, p.tradedToday ? 'сделки сегодня' : null, p.quality && p.quality !== 'exact' ? 'оценка: ' + p.quality : null].filter(t => t && t !== '—').map(t => '<span class="k-tag">' + esc(t) + '</span>').join('') + '</div>' +
       '<div class="k-sec">Параметры</div><div class="k-fields">' + fields.map(([l, v]) => '<div><div class="l">' + l + '</div><div class="v">' + v + '</div></div>').join('') + '</div>' +
       '<div class="k-sec">PnL <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽</span></div>' +
       '<div class="k-fields">' + [['Итого день', pn.total], ['Кэрри', pn.carry], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx], ['Сделки', pn.trading], ['Прочее', pn.other], ['MTD', p.pnlMtd], ['YTD', p.pnlYtd]].map(([l, v]) => '<div><div class="l">' + l + '</div><div class="v ' + f.cls(v) + '">' + (Math.abs(v) >= 1e7 ? f.mns(v, 1) + ' <small>mm</small>' : f.ks(v)) + '</div></div>').join('') + '</div>' +

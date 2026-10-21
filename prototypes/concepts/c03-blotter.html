@@ -69,7 +69,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   <div class="c3-card" id="card"></div>
 </div>
 <script src="../echarts.min.js"></script>
-<script src="lib/mock.js"></script>
+<script src="lib/boot.js"></script>
 <script src="lib/kit.js"></script>
 <script>
 (function () {
@@ -285,7 +285,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     '<div class="k-sec">Риск по бакетам <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽/бп</span></div><div class="cd-r" style="height:150px"></div>' +
     '<div class="k-sec cfs-t">Ближайшие потоки</div><div class="cd-cfs"></div></div>';
   const $ = s => card.querySelector(s);
-  let cur = null, hmode = 'yield';
+  let cur = null, hmode = 'yield', prevSeg = null;
   const hChart = K.chart($('.cd-h'), () => {
     if (!cur) return { series: [] };
     const p = cur, h = H(p.id), isBond = p.group !== 'DER';
@@ -307,9 +307,8 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   function showCard(id) {
     const p = id ? M.pos[id] : null;
     if (!p) { cur = null; $('.cd-hd').innerHTML = '<div class="cd-empty">выберите позицию в таблице</div>'; return; }
-    const prevBond = cur && cur.group !== 'DER';
     cur = p;
-    const isBond = p.group !== 'DER';
+    const isBond = !!p.cpn, isFloat = isBond && p.cpn.type === 'float';
     $('.cd-hd').innerHTML = '<div class="t"><span style="color:' + K.issuerColor(p.issuer) + '">●</span>' + esc(p.name) + ' ' + K.ccyTag(p.ccy) + ' <span class="tagc" style="font-size:11px;font-weight:400;padding:0 6px;border:1px solid var(--line);border-radius:4px;color:var(--fg-2)">' + esc(p.kindLabel) + '</span></div>' +
       '<div class="st">' + esc(p.issuerFull) + (p.isin ? ' · <span class="mono">' + esc(p.isin) + '</span>' : '') + ' · ' + esc(p.book) + ' — ' + esc(p.bookName) + (p.rating !== '—' ? ' · ' + esc(p.rating) : '') + '</div>' +
       '<div class="acts"><button class="k-btn pri" data-a="full">Открыть полностью ↗</button>' + (p.issuer ? '<button class="k-btn" data-a="iss">Все бумаги эмитента</button>' : '') + '<button class="k-btn" data-a="book">Книга ' + esc(p.book) + '</button></div>';
@@ -342,8 +341,10 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     $('.cd-pnl').innerHTML = parts.map(([l, v]) => '<span class="mut">' + l + '</span>' + K.bar(v, mx) + '<span class="n ' + f.cls(v) + '">' + f.ks(v) + '</span>').join('') +
       '<span class="tot">Итого</span><span class="tot mut3" style="font-size:11px">MTD ' + f.mns(p.pnlMtd, 1) + ' mm · YTD ' + f.mns(p.pnlYtd, 1) + ' mm</span><span class="n tot ' + f.cls(pn.total) + '">' + f.ks(pn.total) + '</span>';
     // история: режимы зависят от типа
-    if (prevBond !== isBond || !card.querySelector('.hseg .k-seg')) {
-      const items = (isBond ? [['price', 'цена'], ['yield', 'доходн.'], ['spread', 'спред']] : []).concat([['notional', 'позиция'], ['dv01', 'DV01']]);
+    const segKey = isBond + '/' + isFloat;
+    if (prevSeg !== segKey || !card.querySelector('.hseg .k-seg')) {
+      prevSeg = segKey;
+      const items = (isFloat ? [['price', 'цена'], ['spread', 'DM / спред']] : isBond ? [['price', 'цена'], ['yield', 'доходн.'], ['spread', 'спред']] : []).concat([['notional', 'позиция'], ['dv01', 'DV01']]);
       if (!items.some(x => x[0] === hmode)) hmode = items[0][0];
       K.seg($('.hseg'), items, hmode, v => { hmode = v; hChart.redraw(); });
     }

@@ -63,7 +63,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
   <div id="view" style="display:flex;flex-direction:column;gap:12px"></div>
 </div>
 <script src="../echarts.min.js"></script>
-<script src="lib/mock.js"></script>
+<script src="lib/boot.js"></script>
 <script src="lib/kit.js"></script>
 <script>
 (function () {
@@ -128,9 +128,9 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
       M.universeRub.forEach(b => {
         const d0 = b.maturity || b.put, fq = FQ[b.freq], step = 12 / fq, rate = b.cpn != null ? b.cpn : b.ytm;
         const base = { name: b.name, rating: b.rating, bucket: RB(b), big: isBig(b), size: b.size, flt: b.flt, b };
-        let d = d0;
-        while (d > M.asOf) { if (d <= E12) rubAll.push(Object.assign({ date: d, kind: 'cpn', amt: b.size * rate / 100 / fq }, base)); d = U.addMonths(d, -step); }
-        if (d0 <= E12) rubAll.push(Object.assign({ date: d0, kind: b.put ? 'put' : 'mat', amt: b.size }, base));
+        let d = fq ? d0 : null;  // периодичность неизвестна (выпуск из истории рынка без условий): купонов не строим
+        while (d && d > M.asOf) { if (d <= E12) rubAll.push(Object.assign({ date: d, kind: 'cpn', amt: b.size * rate / 100 / fq }, base)); d = U.addMonths(d, -step); }
+        if (d0 && d0 > M.asOf && d0 <= E12) rubAll.push(Object.assign({ date: d0, kind: b.put ? 'put' : 'mat', amt: b.size }, base));
       });
       rubAll.forEach((x, i) => { x.id = 'r' + i; x.val = x.amt; x.ccy = 'RUB'; });
       rubAll.sort((a, b) => a.date.localeCompare(b.date));
