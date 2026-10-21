@@ -139,7 +139,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     pnl: { label: 'PnL дня', num: true, val: r => r.pnl.total, fmt: v => '<b class="' + f.cls(v) + '">' + f.k(v) + '</b>', sum: r => r.pnl.total, unit: 'тыс ₽', sfmt: f.k, title: 'тыс ₽' },
     pnlMtd: { label: 'MTD', num: true, val: r => r.pnlMtd, fmt: v => '<span class="' + f.cls(v) + '">' + f.mn(v, 1) + '</span>', sum: r => r.pnlMtd, unit: 'mm ₽', sfmt: v => f.mn(v, 1), title: 'mm ₽' },
     pnlYtd: { label: 'YTD', num: true, val: r => r.pnlYtd, fmt: v => '<span class="' + f.cls(v) + '">' + f.mn(v, 1) + '</span>', sum: r => r.pnlYtd, unit: 'mm ₽', sfmt: v => f.mn(v, 1), title: 'mm ₽' },
-    rating: { label: 'Рейтинг', val: r => r.rating, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
+    rating: { label: 'Рейтинг', val: r => K.ratingRank(r.rating), fmt: (v, r) => '<span class="mut" title="' + esc(K.ratingTip(r.rating, r.ratingInfo)) + '">' + esc(K.ratingText(r.rating, r.ratingInfo)) + '</span>' },
     sector: { label: 'Сектор', val: r => r.sector, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
     entity: { label: 'Юрлицо', val: r => r.entity, fmt: v => '<span class="mut">' + esc(M.entities.find(e => e.id === v).name) + '</span>' },
     desk: { label: 'Деск', val: r => r.desk, fmt: v => '<span class="mut">' + esc(v) + '</span>' },

@@ -44,13 +44,14 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
+from . import ratings
 from .bundle import Snapshot
 
 log = logging.getLogger(__name__)
 
-VERSION = 2
+VERSION = 3
 """Format of the rows written here: another value rebuilds them on the next load (2: an offer listed by two sources
-counted once)."""
+counted once; 3: the desk's rating of every bond, the sector by the bond class where the hub has none, R25)."""
 KEEP = 4
 HORIZON_DAYS = 400
 BIG_RUB = 10e9
@@ -112,8 +113,13 @@ def _issuer_name(iss: dict[str, Any] | None) -> tuple[str | None, str | None]:
 
 
 def bond_facts(data: dict[str, Any], as_of: date) -> dict[str, dict[str, Any]]:
-    """Per active bond of the static data (not matured on ``as_of``): see the module doc."""
+    """Per active bond of the static data (not matured on ``as_of``): see the module doc. R25: ``rating`` (the
+    desk's grade, ``ratings.RatingBook.bond``; ``б/р`` without one, null when the static has no ratings),
+    ``rating_info`` (agency, the rating as written, date, basis), ``rating_bucket``; ``sector`` by the bond class
+    where the hub has none (``reference.CLASS_SECTOR``, ``sector_source``)."""
     issuers = {int(x["issuer_id"]): x for x in data.get("issuers") or ()}
+    ref = _reference(data)
+    book = ref.ratings
     cpns: dict[str, list[dict]] = defaultdict(list)
     for c in data.get("coupon_periods") or ():
         cpns[c["secid"]].append(c)
@@ -136,7 +142,9 @@ def bond_facts(data: dict[str, Any], as_of: date) -> dict[str, dict[str, Any]]:
         else:
             known = [c for c in rows if c.get("rate_pct") is not None and c["pay_date"] <= d]
             rate = _num(known[-1]["rate_pct"]) if known else None
-        sector = (iss or {}).get("sector")
+        iss_ref = ref.issuer(i.get("issuer_id"))
+        sector = (iss or {}).get("sector") or (iss_ref.sector if iss_ref else None)
+        rt = book.bond(i["secid"], i.get("issuer_id"))
         out[i["secid"]] = {
             "isin": i.get("isin"), "name": i.get("name"), "short_name": i.get("short_name"), "lat_name": i.get("lat_name"),
             "bond_class": i.get("bond_class"), "coupon_type": i.get("coupon_type"), "face_unit": unit,
@@ -144,6 +152,10 @@ def bond_facts(data: dict[str, Any], as_of: date) -> dict[str, dict[str, Any]]:
             "issuer_id": i.get("issuer_id"), "issuer": short, "issuer_full": full,
             "group": (iss or {}).get("group_name"), "group_id": (iss or {}).get("group_id"),
             "sector": sector, "sector_label": SECTOR_LABELS.get(sector, sector) if sector else None,
+            "sector_source": ((iss or {}).get("sector_source") or "hub") if (iss or {}).get("sector")
+            else ("bond_class" if sector else None),
+            "rating": book.label(rt) if book.has_data else None, "rating_info": ratings.compact(rt),
+            "rating_bucket": ratings.bucket(rt["grade"] if rt else None) if book.has_data else None,
             "country": (iss or {}).get("country"), "state_owned": (iss or {}).get("is_state_owned"),
             "issue_size": size, "face": face, "outstanding": size * face if size is not None and face is not None else None,
             "freq": freq, "freq_letter": FREQ_LETTER.get(freq) if freq else None, "cpn_pct": rate,
@@ -151,6 +163,13 @@ def bond_facts(data: dict[str, Any], as_of: date) -> dict[str, dict[str, Any]]:
             "foreign_issuer": i.get("bond_class") in NOT_RUSSIAN or ((iss or {}).get("country") not in (None, "RU")),
         }
     return out
+
+
+def _reference(data: dict[str, Any]):
+    """The reference facts (``reference.build``) of a static's data."""
+    from .reference import build
+
+    return build(Snapshot("", "static", "", "", None, {"data": data}))
 
 
 def flows(data: dict[str, Any], facts: dict[str, dict[str, Any]], as_of: date,
@@ -242,7 +261,7 @@ def calendar(fl: list[dict[str, Any]], facts: dict[str, dict[str, Any]], as_of: 
                 r[3] += 1
             if x["est"]:
                 r[4] += a
-            s = sec[(x["pay_date"][:7], f["sector_label"] or ("ОФЗ" if x["type"] in ("PD", "PK", "IN") else "—"),
+            s = sec[(x["pay_date"][:7], "ОФЗ" if x["type"] in ("PD", "PK", "IN") else (f["sector_label"] or "—"),
                      x["kind"])]
             s[0] += a
             s[1] += 1
@@ -285,6 +304,8 @@ def calendar(fl: list[dict[str, Any]], facts: dict[str, dict[str, Any]], as_of: 
                      "fx_bonds": len(fx_bonds), "fx_without_size": sum(f["issue_size"] is None for f in fx_bonds),
                      "flows": len(fl), "flows_unknown_amount": unknown,
                      "with_sector": sum(bool(f["sector"]) for f in facts.values()),
+                     "with_sector_hub": sum(f.get("sector_source") not in (None, "bond_class") for f in facts.values()),
+                     "with_rating": sum(bool(f.get("rating_info")) for f in facts.values()),
                      "with_group": sum(bool(f["group"]) for f in facts.values()),
                      "with_lat_name": sum(bool(f["lat_name"]) for f in facts.values()), "bonds": len(facts)},
     }
@@ -357,6 +378,18 @@ def static_for(con: psycopg.Connection, as_of: date) -> dict[str, Any] | None:
     if row is None:
         row = con.execute("SELECT snapshot_id, business_date, data FROM md_static_summary"
                           " ORDER BY business_date, loaded_at LIMIT 1").fetchone()
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return dict(row)
+    return {"snapshot_id": row[0], "business_date": row[1], "data": row[2]}
+
+
+def newest(con: psycopg.Connection) -> dict[str, Any] | None:
+    """The newest static snapshot of the read model (R25: issuer, sector, group and rating facts are the newest the
+    desk has, whatever the date shown): {snapshot_id, business_date, data} or None."""
+    row = con.execute("SELECT snapshot_id, business_date, data FROM md_static_summary"
+                      " ORDER BY business_date DESC, loaded_at DESC LIMIT 1").fetchone()
     if row is None:
         return None
     if isinstance(row, dict):

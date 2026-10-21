@@ -310,6 +310,12 @@ class Handler(BaseHTTPRequestHandler):
             rows.append([name, None, "moex_iss", None, min(r[dcol] for r in sel), max(r[dcol] for r in sel), len(sel),
                          len({r[dcol] for r in sel}), len({r["secid"] for r in sel}) if name == "bonds" else None,
                          f"/v1/history/{name}"])
+        for kind, pair in sorted({(r["kind"], r["pair"]) for r in s.data["fx"]
+                                  if r["kind"] not in ("cbr_official", "moex_eod")}):  # hub 0.3.0: a row per kind
+            sel = [r for r in s.data["fx"] if r["kind"] == kind and r["pair"] == pair]
+            rows.append(["fx", pair, sel[0].get("_source", "hub"), kind, min(r["date"] for r in sel),
+                         max(r["date"] for r in sel), len(sel), len({r["date"] for r in sel}), None,
+                         f"/v1/history/fx?kind={kind}&pair={pair}"])
         for ds in sorted({r["_ds"] for r in s.data["curves"]}):
             sel = [r for r in s.data["curves"] if r["_ds"] == ds]
             for src in sorted({r["source"] for r in sel}):

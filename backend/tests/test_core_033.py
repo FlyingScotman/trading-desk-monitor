@@ -133,7 +133,7 @@ def test_cap_only_floater_is_described():
                                             "floor_pct": None, "status": "curated"},
                        "bond_class": "corporate", "secid": "X"})()
     rule, _, _, desc = floater_rule(t)  # type: ignore[arg-type]
-    assert rule.bounds.cap == 0.25 and rule.bounds.floor is None and desc.endswith(", cap 25.00%")
+    assert rule.bounds.cap == 0.25 and rule.bounds.floor is None and desc.endswith(", floor — cap 25.00%")
 
 
 def test_core_explains_floaters_next_to_the_flash(ctx):

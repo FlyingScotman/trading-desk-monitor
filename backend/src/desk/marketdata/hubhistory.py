@@ -67,6 +67,10 @@ PAGE_LIMIT = 50000       # the hub's maximum
 MAX_SECIDS = 500         # per bonds call (the hub's maximum)
 HELD_RUNS = 10           # the default runs whose bonds are "held" (fetched first)
 FX_KINDS = ("cbr_official", "moex_eod")
+CROSS_KINDS = ("ecb", "cbr_cross", "moex_indicative_cross", "moex_cets", "fred_h10")
+"""Cross rates of hub 0.3.0 (contract 1.3, ``/v1/history/fx``: EUR/USD, USD/CNY, ...), separate series per kind,
+never merged: fetched as dataset ``fx_cross`` only when ``/v1/history/index`` lists one of them (an older hub would
+refuse the kinds), into ``md_hub_fx`` beside the RUB rates (R25)."""
 
 BOND_FIELDS = ("legal_close_pct", "close_pct", "waprice_pct", "accrued_per_bond", "face_value", "face_unit",
                "currency_id", "volume_bonds", "value_ccy", "num_trades", "yield_close_pct", "effective_yield_pct",
@@ -157,8 +161,10 @@ def _fixing(r: dict[str, Any]) -> tuple | None:
 
 
 def _fx(r: dict[str, Any]) -> tuple | None:
-    per_unit = r.get("rate") if r["kind"] == "cbr_official" else (r.get("close_per_unit")
-                                                                  or r.get("waprice_per_unit"))
+    # cbr_official and the cross kinds publish ``rate`` (RUB per unit; units of the quote per base); moex_eod and
+    # moex_cets their close per unit
+    per_unit = r.get("rate") if r["kind"] != "moex_eod" and r.get("rate") is not None else (
+        r.get("close_per_unit") or r.get("waprice_per_unit"))
     return (r["kind"], r["pair"], r["date"], r.get("secid") or "", r.get("board") or "", r.get("rate"),
             r.get("close"), r.get("waprice"), per_unit, r.get("tenor"), r.get("nominal"))
 
@@ -167,11 +173,14 @@ def specs(index: list[dict[str, Any]], bonds_from: date = BONDS_FROM, rates_from
     """The datasets the desk fetches, from what the index lists: rates first (small), the bonds last."""
     first: dict[str, date] = {}
     curves: dict[str, date] = {}
+    cross: dict[str, date] = {}
     for r in index:
         if not r.get("date_from"):
             continue
         d = date.fromisoformat(str(r["date_from"]))
         ds = r.get("dataset")
+        if ds == "fx" and (k := str(r.get("unit") or r.get("kind") or "").split(":")[0]) in CROSS_KINDS:
+            cross[k] = min(cross.get(k, d), d)
         if ds == "curves" and r.get("series"):
             curves[r["series"]] = min(curves.get(r["series"], d), d)
         elif ds in ("bonds", "zcyc", "fixings", "fx"):
@@ -194,6 +203,13 @@ def specs(index: list[dict[str, Any]], bonds_from: date = BONDS_FROM, rates_from
                         ("kind", "pair", "date", "secid", "board", "rate", "close", "waprice", "per_unit", "tenor",
                          "nominal"), ("kind", "pair", "date", "secid", "board"), _fx,
                         "kind = ANY(%(kinds)s)", (("kinds", list(FX_KINDS)),)))
+    if cross:
+        kinds = [k for k in CROSS_KINDS if k in cross]
+        out.append(Spec("fx_cross", "/fx", (("kind", ",".join(kinds)), ("fields", ",".join(FX_FIELDS)), *lim),
+                        "year", max(rates_from, min(cross.values())), "md_hub_fx", "date",
+                        ("kind", "pair", "date", "secid", "board", "rate", "close", "waprice", "per_unit", "tenor",
+                         "nominal"), ("kind", "pair", "date", "secid", "board"), _fx,
+                        "kind = ANY(%(kinds)s)", (("kinds", kinds),)))
     for ds, d in sorted(curves.items()):
         out.append(Spec(f"curves/{ds}", f"/curves/{ds}", (("rule", "eod"), ("fields", ",".join(CURVE_FIELDS)), *lim),
                         "year", max(rates_from, d), "md_hub_curve", "snapshot_date",

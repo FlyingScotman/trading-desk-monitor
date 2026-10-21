@@ -30,8 +30,13 @@ Display fields (R9 static audit, D1-D8): a bond is named by MOEX's full ``name``
 the published rate or amount, else ``index + margin`` at the latest fixing, ``extra.coupon_basis`` ``projected``)
 with ``index_name``/``margin``; ``coupon_type`` keeps the hub's zero / indexed_face / variable_known / unknown;
 ``coupon_freq`` comes from the schedule when MOEX gives none. The issuer shows ``issuer_display`` of its name, sector
-and rating ``NO_DATA`` until the hub has them. An unmapped bond shows the report's name marked ``FROM_REPORT``, its
+and rating ``NO_DATA`` when the hub has none. An unmapped bond shows the report's name marked ``FROM_REPORT``, its
 ISIN, and the report's issuer (``x_issuer``).
+
+Ratings and reference facts (R25): the issuer's short name, group, sector and rating come from the newest static of
+the cache (``EodContext.reference_facts``); the issuer's rating is the desk's view (``marketdata.ratings``), a bond's
+own (issue, else issuer level) is in ``extra.rating`` (grade, agency, the rating as written, date, outlook, basis,
+bucket, every agency's rating).
 """
 
 from __future__ import annotations
@@ -58,7 +63,8 @@ from rub_fixed_income import __version__ as CORE_VERSION
 from tdm.writer import Run
 
 from .. import __version__ as BACKEND_VERSION
-from ..curves import rates
+from ..curves import proxy, rates
+from ..marketdata import ratings
 from ..marketdata.adapter import MarketView
 from ..marketdata.bundle import SnapshotError
 from ..marketdata.static_facts import SECTOR_LABELS
@@ -102,7 +108,9 @@ UNMAPPED_ISSUER = {"issuer": "Не сопоставлено", "name": None, "iss
 FROM_REPORT = " (из отчёта)"
 """Marks a name that is the bank report's, not the static snapshot's (an unmapped bond, D6)."""
 FX_CCYS = ("USD", "EUR", "CNY")
-INDICES = (("KEY_RATE", "КС"), ("RUONIA", "RUONIA"))
+INDICES = (("KEY_RATE", "КС"), ("RUONIA", "RUONIA"), ("SOFR", "SOFR"), ("ESTR", "€STR"), ("CPI_RU_YOY", "CPI г/г"))
+"""Fixings of the market snapshot the run publishes as its indices (SOFR, €STR and the CBR's CPI y/y: contract 1.3,
+R25; absent from an older snapshot, then not published)."""
 COUPON_TYPES = {"fixed": "fix", "floating": "float"}
 """Hub coupon type -> the position's ``coupon_type``. The others (``zero``, ``indexed_face``, ``variable_known``,
 ``unknown``) are kept as the hub names them (D5); the legacy tdm store knows only fix/float (``publish``)."""
@@ -139,22 +147,32 @@ def issuer_display(name: str) -> str:
 
 
 def _issuer_key(ctx: EodContext, o: Outcome) -> tuple[str, dict[str, Any]]:
-    """The issuer reference of a bond: its key (the issuer's short name, else its legal name) and the record. The
-    display name is ``issuer_display``; the group is the hub's group (``group_name``, static 1.1, HS4), else the
-    issuer itself; the sector the hub's (HS3) in Russian (``static_facts.SECTOR_LABELS``); ``is_quasi`` the hub's
-    ``is_state_owned``; sector and rating ``NO_DATA`` when the hub has none (D2, D3; ratings: HS5 has no source)."""
+    """The issuer reference of a bond: its key (the issuer's short name, else its legal name) and the record, from the
+    newest static of the cache (``ctx.reference_facts``, R25; the run's own static for an issuer it does not know).
+    The display name is ``issuer_display``; the group is the hub's group (``group_name``, static 1.1, HS4), else the
+    issuer itself; the sector the hub's (HS3, or by the bond class: ``reference.CLASS_SECTOR``) in Russian
+    (``static_facts.SECTOR_LABELS``), ``NO_DATA`` when there is none; ``is_quasi`` the hub's ``is_state_owned``; the
+    rating the desk's view of the issuer (``ratings.RatingBook.issuer``: the grade, its agency and basis in
+    ``rating_info``), ``б/р`` when the static has ratings but none of this issuer, ``NO_DATA`` when it has none."""
     assert o.terms is not None
-    iss = ctx.static.issuer_of(o.terms)
+    ref = ctx.reference_facts
+    iss = ref.issuer(o.terms.issuer_id) or ctx.static.issuer_of(o.terms)
     is_gov = o.terms.bond_class.startswith("ofz") or bool(iss and iss.is_sovereign)
+    rt = ref.ratings.issuer(o.terms.issuer_id)
+    # the sovereign is not rated on the agencies' national scales: no rating rather than «б/р»
+    label = None if is_gov and rt is None and ref.ratings.has_data else ref.ratings.label(rt)
+    rating = {"rating": label, **({"rating_info": ratings.compact(rt)} if rt else {})}
     if iss is None:
         key = f"issuer:{o.terms.issuer_id or o.secid}"
-        return key, {"issuer": key, "name": None, "issuer_group": key, "sector": NO_DATA, "rating": NO_DATA,
+        return key, {"issuer": key, "name": None, "issuer_group": key, "sector": NO_DATA, **rating,
                      "is_gov": is_gov, "is_quasi": False}
     key = iss.short_name or iss.name
     name = issuer_display(key)
     sector = SECTOR_LABELS.get(iss.sector, iss.sector) if iss.sector else NO_DATA
-    return key, {"issuer": key, "name": name, "issuer_group": iss.group_name or name, "sector": sector,
-                 "rating": NO_DATA, "is_gov": is_gov, "is_quasi": bool(iss.is_state_owned)}
+    src = ref.sector_source.get(iss.issuer_id)
+    return key, {"issuer": key, "name": name, "issuer_group": iss.group_name or name, "sector": sector, **rating,
+                 **({"sector_source": src} if src and iss.sector else {}),
+                 "is_gov": is_gov, "is_quasi": bool(iss.is_state_owned)}
 
 
 def _report_issuer(x: dict[str, Any]) -> dict[str, Any]:
@@ -232,9 +250,35 @@ def curves_reference(ctx: EodContext, prev: MarketView | None, rows: list[dict[s
     for c in dict.fromkeys(c for r in rows for c in r.get("risk") or {}):
         if c not in have:  # a currency's curve; a RUB curve core did not build keeps its risk, without points
             ccy = c if c in {r["ccy"] for r in fx} else "RUB"
+            pts = _proxy_points(ctx, prev, c) if ctx.proxy_curves else None
+            if pts is not None:  # the setting proxy_curves_for_risk (default off): UST par / ECB AAA, not OIS
+                out.append({"curve_id": c, "name": PROXY_CURVE_NAME.format(ccy=c, what=pts[0]), "ccy": ccy,
+                            "kind": "bond", "points": pts[1]})
+                continue
             out.append({"curve_id": c, "name": CCY_CURVE_NAME.format(ccy=c), "ccy": ccy, "kind": "bond",
                         "points": []})
     return out
+
+
+PROXY_CURVE_NAME = "{ccy}: {what}, риск по дюрации"
+"""A currency's curve given by the hub's government par-yield proxy (``curves.proxy``; setting
+``proxy_curves_for_risk``)."""
+
+
+def _proxy_points(ctx: EodContext, prev: MarketView | None, ccy: str) -> tuple[str, list[dict[str, Any]]] | None:
+    """(label, points) of a currency's curve from the market's proxy quote set at the risk pillars, the move to the
+    previous market's same proxy; None when the market has none."""
+    now = proxy.points(ctx.market.curve_quote_sets, ccy)
+    if now is None:
+        return None
+    old = proxy.points(prev.curve_quote_sets, ccy) if prev else None
+    old = old if old and old[0] == now[0] else None
+    pts = []
+    for b, t in zip(RISK_BUCKETS, RISK_PILLARS):
+        r = proxy.at(now[1], t)
+        o = proxy.at(old[1], t) if old else None
+        pts.append({"bucket": b, "rate": round(r, 4), "move_bp": round((r - o) * 100, 2) if o is not None else 0.0})
+    return proxy.label(now[0]), pts
 
 
 def risk_by_curve(v: BondValuation) -> dict[str, dict[str, float]]:
@@ -446,6 +490,7 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
         cpn = replace(cpn, pct=v.current_coupon_pct, basis="rate")
     freq = t.coupon_frequency or implied_frequency(t)
     face_ccy = v.face_rub / (fx[0] if fx else 1.0)
+    rating = ratings.compact(ctx.reference_facts.ratings.bond(t.secid, t.issuer_id))
     offer = ({"offer_date": v.horizon_date.isoformat(), "offer_kind": "call" if v.horizon_kind == "call" else "put"}
              if v.horizon_kind in ("offer", "call") else {})
     return {
@@ -480,6 +525,7 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
             "short_name": t.short_name, "coupon_basis": cpn.basis, **offer,
             **({"lat_name": t.lat_name} if t.lat_name else {}),
             **({"issue_size": float(t.issue_size)} if t.issue_size is not None else {}),
+            **({"rating": rating} if rating else {}),
             "cashflows": cashflows(t, v, as_of, face_ccy, freq, cpn.pct), **_quote_extra(q, sa), **core_analytics(v),
             **({"coupon_freq_source": "schedule"} if freq and not t.coupon_frequency else {}),
             **({"not_exact_reason": o.reason} if o.reason else {}),
@@ -572,6 +618,7 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
     log.append(("INFO", "качество оценки: " + ", ".join(f"{k} {quality[k]}" for k in QUALITIES if quality[k])
                 + (f", не посчитано {len(skipped)}" if skipped else "")))
     log += rates_log(ctx, positions, rows)
+    log.append(("INFO", reference_log(ctx, rows, reference["issuers"])))
     if prev is None:
         log.append(("WARN", (f"PnL не посчитан: {NO_PNL_TEXT[RUN_NO_PREV_MARKET]} (нет среза eod_final раньше "
                              f"{ctx.business_date}); позиции без PnL, а не с нулём")))
@@ -595,6 +642,21 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
     log.append(("WARN", "JTD не считается в слайсе S1 (нет решения по recovery): поле jtd = 0"))
     log.append(("INFO", f"опубликовано позиций: {len(rows)} (точно {quality['exact']}), не посчитано: {len(skipped)}"))
     return RunContent(rows, reference, log)
+
+
+def reference_log(ctx: EodContext, rows: list[dict[str, Any]], issuers: list[dict[str, Any]]) -> str:
+    """The run log's line on the reference facts (R25): which static they come from and how many bonds have a rating
+    (by basis) and how many issuers a sector."""
+    ref = ctx.reference_facts
+    bonds = [r for r in rows if r["instr_type"] == "BOND" and r.get("coupon_type") is not None]
+    by = Counter(((r.get("extra") or {}).get("rating") or {}).get("basis", "нет") for r in bonds)
+    mapped = [i for i in issuers if not str(i["issuer"]).startswith(("report:", "issuer:"))]
+    own = "" if ref.snapshot_id == ctx.static.snapshot.id else f" (новее статики рынка {ctx.static.snapshot.id[:12]})"
+    return (f"справочник эмитентов и рейтинги: статика {ref.snapshot_id[:12]} от {ref.business_date}"
+            f" ({ref.schema_version}){own}; рейтинг у {len(bonds) - by.get('нет', 0)} из {len(bonds)} облигаций ("
+            + ", ".join(f"{ratings.BASIS_TEXT.get(k, k)} {n}" for k, n in sorted(by.items())) + ")"
+            + ("; строк рейтингов в статике нет" if not ref.ratings.has_data else "")
+            + f"; сектор у {sum(i['sector'] != NO_DATA for i in mapped)} из {len(mapped)} эмитентов")
 
 
 def rates_log(ctx: EodContext, positions: list[tuple[str, str, Outcome]], rows: list[dict[str, Any]]

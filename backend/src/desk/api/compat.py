@@ -29,6 +29,7 @@ from typing import Any
 from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
 
 from ..curves.rates import input_notes
+from ..marketdata import ratings
 from ..pnl.reasons import METHOD_TEXT, REPORTED_METHOD, RUN_NO_POSITION_PNL, RUN_NO_PREV_MARKET, no_pnl_text
 from ..store import CURRENT_RUNS, DEFAULT_RUNS, slice_label
 
@@ -38,6 +39,8 @@ CARRY_HORIZONS = [["1M", 1], ["3M", 3], ["6M", 6], ["1Y", 12]]
 DEFAULT_CARRY = [{"id": "flat", "name": "КС без изменений", "ks": {"mode": "flat"}}]
 RATINGS = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-", "BB+", "BB", "BB-", "B+", "B",
            "B-", "CCC", "D"]  # tdm ref_rating seed order
+RATING_RANK = {g: i for i, g in enumerate([*ratings.GRADES, ratings.NOT_RATED, ratings.NO_DATA])}
+"""The order of ``RATING_ORDER``: the grades best first (``marketdata.ratings.GRADES``), then б/р and нет данных."""
 RUB = {"ccy": "RUB", "rate": 1.0, "move_pct": 0.0, "rate_cbr": 1.0, "move_pct_cbr": 0.0, "rate_cbr_next": 1.0}
 CONTRACT_VERSION = "1.3"
 HISTORY_DAYS = 22  # tdm.assemble.HISTORY_DAYS
@@ -261,14 +264,22 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
     for r in ref.get("issuers", []):
         disp[r["issuer"]] = r.get("name") or r["issuer"]
         x = {"group": r["issuer_group"], "sector": r.get("sector"), "rating": r.get("rating")}
+        if r.get("rating_info"):  # the desk's rating view (R25): agency, the rating as written, date, basis
+            x["ratingInfo"] = r["rating_info"]
         if r.get("is_gov"):
             x["gov"] = True
         if r.get("is_quasi"):
             x["quasi"] = True
         issuers[disp[r["issuer"]]] = x
-    used = list(dict.fromkeys(x["rating"] for x in issuers.values() if x["rating"]))
-    rating_order = sorted(used, key=lambda r:
-                          RATINGS.index(r) if r in RATINGS else len(RATINGS) + used.index(r))
+    def pos_rating(p: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
+        """A bond's own desk rating (``extra.rating``, R25), else its issuer's."""
+        own = (p.get("extra") or {}).get("rating") if isinstance(p.get("extra"), dict) else None
+        iss = issuers.get(disp.get(p["issuer"], p["issuer"])) if p.get("issuer") else None
+        return ratings.position_rating(p, iss), own or (iss or {}).get("ratingInfo")
+
+    used = list(dict.fromkeys([x["rating"] for x in issuers.values() if x["rating"]]
+                              + [g for r in prows if (g := pos_rating(r["fact"])[0])]))
+    rating_order = sorted(used, key=lambda r: RATING_RANK.get(r, len(RATING_RANK) + used.index(r)))
 
     # the report's Portfolio column (the adapter's x_portfolio: HTM, trading, ...) of every position, valued or
     # not, for the Desk Monitor's portfolio filter; None for a row without it (a legacy load)
@@ -302,7 +313,8 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
             "id": pid, "book": p["book_id"], "assetClass": p.get("asset_class"), "segment": p.get("segment"),
             "instrType": p.get("instr_type"), "name": p.get("name"), "isin": p.get("isin"), "issuer": iname,
             "issuerGroup": iss["group"] if iss else None, "sector": iss["sector"] if iss else None,
-            "rating": iss["rating"] if iss else None, "ccy": p.get("ccy"), "maturity": p.get("maturity"),
+            "rating": pos_rating(p)[0], **({"ratingInfo": ri} if (ri := pos_rating(p)[1]) else {}),
+            "ccy": p.get("ccy"), "maturity": p.get("maturity"),
             "tenorY": p["tenor_y"] if p.get("tenor_y") is not None else _years(as_of, p.get("maturity")),
             "couponType": p.get("coupon_type"), "coupon": p.get("coupon"), "index": p.get("index_name"),
             "margin": p.get("margin"), "side": p.get("side"),

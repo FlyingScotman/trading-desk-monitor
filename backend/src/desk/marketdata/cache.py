@@ -102,6 +102,26 @@ def sync(client: HubClient, cache: Path, dates: Iterable[str], cut_type: str = "
     return out
 
 
+def newest_static(client: HubClient, cache: Path, scan: int = 20) -> Synced | None:
+    """The hub's newest static snapshot (by business date, then publication) into the cache unless cached (R25: the
+    issuer facts and ratings come from the newest static, which no market snapshot of the cache may name yet: the
+    1.2 static with ratings of 21.10.2026 came at 17:30 MSK, the morning's close names the 08:00 one). ``scan``: the
+    list rows looked at (newest first). None when the hub lists no static snapshot."""
+    rows = []
+    for i, r in enumerate(client.list_snapshots(kind="static", latest=True)):
+        if i >= scan:
+            break
+        if not r.get("superseded_by"):
+            rows.append(r)
+    if not rows:
+        return None
+    r = max(rows, key=lambda x: (x.get("business_date") or "", x.get("published_at") or "", x["snapshot_id"]))
+    s = Synced(r["business_date"], None, r["snapshot_id"], r.get("published_at"))
+    if fetch(client, cache, r["snapshot_id"], r):
+        s.downloaded.append(r["snapshot_id"])
+    return s
+
+
 PRUNED_CUTS = ("intraday", "eod_preliminary")
 
 

@@ -10,12 +10,13 @@ __version__ = "0.1.0"
 # buckets, coverage). A run records ``logic_version()`` in its lineage; the autopilot recomputes the latest positions
 # date once when its default run was made by another logic version; the backfill (desk.backfill, R23) recomputes the
 # older dates in the background.
-VALUATION_VERSION = 8  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
+VALUATION_VERSION = 9  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
 # 4: RUB bonds discounted on RUONIA OIS + Z-spread, flash PnL on the bond's own curves;
 # 5: a key-rate floater on a fallback rung books its projection on RUB KEY, the run log names missing rates inputs
 # 6: a bond's offer, its next 18 months of flows and the day's quote (G-spread, volume) in extra (concept pages)
 # 7: the issuer's group, sector (Russian) and state ownership from static 1.1, a bond's Latin name and issue size
-# 8: core 0.33 (R26): floater accrued, G-spread to the KBD, a floater's DM and CS01 / OFZ basis by bucket from core,
+# 8: the issuers' facts and the desk's ratings (issue, issuer level; extra.rating) from the newest static of the cache (R25)
+# 9: core 0.33 (R26): floater accrued, G-spread to the KBD, a floater's DM and CS01 / OFZ basis by bucket from core,
 # puts with their exercise windows (open_put), one core call per book; FX bonds and FX rows at the MOEX 19:00 rate
 
 
