@@ -1248,15 +1248,31 @@ def build(settings: Settings | None = None, *, store_url: str | None = None, aut
         section("positions", need_store(lambda c: positions_section(settings, c, now)))
         section("runs", need_store(lambda c: runs_section(c, scrub)))
         section("db", need_store(lambda c: db_section(c, settings)))
+        section("backfill", need_store(lambda c: backfill_section(settings, c)))
         doc["build"] = {"duration_s": round(time.perf_counter() - t_all, 2), "sections_s": times,
                         "store_error": scrub.text(store_error) if store_error else None, "hub_asked": bool(hub)}
         order = ("schema", "generated_at", "privacy", "app", "clock", "settings", "autopilot", "hub", "snapshots",
-                 "static", "inbox", "positions", "runs", "logs", "db", "build")
+                 "static", "inbox", "positions", "runs", "backfill", "logs", "db", "build")
         doc = {k: doc[k] for k in order if k in doc}
         return scrub.doc(json.loads(json.dumps(doc, ensure_ascii=False, default=str)))
     finally:
         if con is not None:
             con.close()
+
+
+def backfill_section(settings: Settings, con: psycopg.Connection) -> dict[str, Any]:
+    """The history of runs (R23, ``desk.backfill.status``: dates and counts) and the concept pages' read model: run
+    summaries, the static snapshots' facts (date, coverage counts), the CBR meetings."""
+    from . import backfill
+
+    st = backfill.status(con, settings)
+    summ = con.execute("SELECT count(*), (SELECT count(*) FROM run WHERE status = 'complete') FROM run_summary").fetchone()
+    stat = [{"business_date": d.isoformat(), "snapshot": sid[:12], "coverage": (data or {}).get("coverage")}
+            for sid, d, data in con.execute("SELECT snapshot_id, business_date, data->'calendar' FROM md_static_summary"
+                                            " ORDER BY business_date DESC")]
+    cbr = con.execute("SELECT count(*), max(business_date) FROM md_cbr_meeting").fetchone()
+    return {**st, "run_summaries": {"written": summ[0], "complete_runs": summ[1]}, "static_facts": stat,
+            "cbr_meetings": {"rows": cbr[0], "as_of": cbr[1].isoformat() if cbr[1] else None}}
 
 
 def dumps(doc: dict[str, Any]) -> str:

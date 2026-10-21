@@ -43,8 +43,13 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    ``HISTORY_PER_CYCLE`` of the ``history_days`` latest hub dates per cycle, newest first, into the store's tables
    without caching the bundles; only after a sync that reached the hub and left no date for the next cycle, and
    after the EOD runs, so it never delays them. The lookback above does not apply: these dates feed no run.
-6. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
-   ``progress`` ({"step": "sync"|"scan"|"eod"|"intraday"|"history", "done": int, "total": int|null, "detail": str})
+6. **backfill** (setting ``backfill``, R23; ``desk.backfill``): the default runs of the past business dates with
+   positions from ``backfill_from`` on: once per start date and adapter the inbox reads the older reports; then the
+   dates whose run is missing or stale run, oldest first, for at most ``backfill_budget_s`` seconds a cycle, up to the
+   day before the eod step's first date (those dates are the eod step's). Last in the cycle, after the EOD, intraday and history steps, so the latest date never waits for it; not while the inbox
+   backlog drains (R22). The hub's date list is read once per ``RECHECK_S``.
+7. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
+   ``progress`` ({"step": "sync"|"scan"|"eod"|"intraday"|"history"|"backfill", "done": int, "total": int|null, "detail": str})
    follow it live: hub dates fetched of those to fetch, report files done of those offered, EOD dates run of those
    to run, history dates loaded of those to load. ``latest_run`` is the newest run shown (``store.CURRENT_RUNS``:
    today's intraday run until there is an EOD run of a later date), with its slice (``run_type``, ``cut_type``,
@@ -198,6 +203,9 @@ def progress_text(p: dict[str, Any]) -> str:
         return f"Внутри дня: {detail}" if detail else "Внутри дня"
     if p["step"] == "history":
         return f"История котировок: {done} из {total}" if total is not None else "История котировок: список дат"
+    if p["step"] == "backfill":
+        day = f" {detail[8:10]}.{detail[5:7]}.{detail[:4]}" if len(detail) == 10 else (f" {detail}" if detail else "")
+        return f"История прогонов{day}: {done} из {total}" if total is not None else f"История прогонов{day}"
     return f"{p['step']}: {done}" + (f" из {total}" if total is not None else "")
 
 
@@ -226,6 +234,9 @@ class Autopilot:
         self._sync_later = 0                   # hub dates the sync left for the next cycle: no history step
         self._inbox_waiting = 0                # files the last scan left waiting for a calendar (R22)
         self._history_dates: tuple[float, int, list[tuple[str, str]]] | None = None
+        self._backfill_rows: tuple[float, str, list[tuple[str, str]]] | None = None  # (listed at, from, hub rows)
+        self._contexts: Any = None  # the backfill's prepared dates, kept between its runs (cli.ContextCache)
+        self._eod_from: str | None = None  # the oldest date the eod step keeps current, this cycle
         # (listed at, depth, [(hub date, its current snapshot id)] newest first)
         self._poll_slot: tuple | None = None   # (date, cut, slot) the hub was last asked for a cut of today in
         self._polled: dict[tuple, dict | None] = {}  # (date, cut) -> the hub's newest row of that cut, when asked
@@ -337,6 +348,8 @@ class Autopilot:
                     steps.append(self._guard("intraday", lambda: self._intraday(settings, con, url, ran)))
                 if hub and settings.hub_url and int(getattr(settings, "history_days", 0) or 0) > 0:
                     steps.append(self._guard("history", lambda: self._history(settings, con)))
+                if getattr(settings, "backfill", True):
+                    steps.append(self._guard("backfill", lambda: self._backfill(settings, con, url, hub, ran)))
                 try:
                     latest = latest_run(con)
                 except psycopg.Error:
@@ -620,6 +633,55 @@ class Autopilot:
             parts.append(f"{len(due) - len(todo)} dates in the next cycles")
         return "ok", "; ".join(parts) + f" ({span})"
 
+    def _backfill(self, settings: Settings, con: psycopg.Connection, url: str | None, hub: bool,
+                  ran: list[str]) -> tuple[str, str]:
+        """The backfill step (module doc, ``desk.backfill``)."""
+        from . import backfill
+        from .cli import ContextCache
+
+        if self._inbox_waiting and self._sync_later:
+            return "skipped", "after the inbox backlog"
+        if not settings.inbox_dirs and con.execute("SELECT NOT EXISTS (SELECT 1 FROM position_set)").fetchone()[0]:
+            return "skipped", "no positions in the store"
+        d_from, today = backfill.start_date(settings), self._today()
+        if self._eod_from:  # the eod step's dates are its own: a date it failed is not tried twice a cycle
+            today = min(today, date.fromisoformat(self._eod_from) - timedelta(days=1))
+        parts = []
+        line = backfill.inbox(con, settings, d_from,
+                              progress=lambda done, total, detail: self._progress("backfill", done, total, "отчёты"))
+        if line:
+            parts.append(line)
+        client, rows = None, None
+        if hub and settings.hub_url and not self._hub_failed:
+            client = HubClient(settings)
+            now = time.monotonic()
+            if (self._backfill_rows is None or self._backfill_rows[1] != d_from.isoformat()
+                    or now - self._backfill_rows[0] >= RECHECK_S):
+                self._progress("backfill", 0, None, "список дат хаба")
+                self._backfill_rows = (now, d_from.isoformat(), backfill.hub_rows(client, d_from))
+            rows = self._backfill_rows[2]
+        p = backfill.plan(con, settings, d_from, today, rows)
+        s = p.summary()
+        span = (f"{s['from']}..{s['to']}: {s['done']} of {s['dates'] - s['no_positions'] - s['no_market']} dates with "
+                f"positions have their run" + (f", {s['failed']} failed before" if s["failed"] else ""))
+        if not p.todo:
+            return "ok", "; ".join(parts + [f"up to date ({span})"])
+        if self._contexts is None:
+            self._contexts = ContextCache()
+        res = backfill.run(settings, p, store_url=url, client=client, budget_s=float(settings.backfill_budget_s),
+                           out=self._eod_line, contexts=self._contexts,
+                           progress=lambda i, n, d: self._progress("backfill", i, n, d))
+        if res["done"]:
+            ran.append(f"история {len(res['done'])} дат")
+            parts.append(f"ran {len(res['done'])} dates ({res['done'][0]}..{res['done'][-1]}) in {res['seconds']} s")
+        parts += [f"{d} failed ({e})" for d, e in res["failed"][:5]]
+        if res["skipped"]:
+            parts.append(f"{len(res['skipped'])} dates not cached and no hub")
+        if res["left"]:
+            parts.append(f"{res['left']} dates in the next cycles")
+        parts.append(span)
+        return ("error" if res["failed"] else "ok"), "; ".join(parts)
+
     def _scan(self, settings: Settings, con: psycopg.Connection) -> tuple[str, str]:
         from .inbox import scan
 
@@ -637,6 +699,8 @@ class Autopilot:
              ran: list[str]) -> tuple[str, str]:
         from .cli import eod_run
 
+        self._eod_from = None
+
         today = self._today()
         pdates = store.position_dates(con, today - timedelta(days=WINDOW_DAYS))
         if not pdates:
@@ -648,6 +712,7 @@ class Autopilot:
         cached = sd.market_dates()
         dates = [d for d in cached if max(start, first) <= d <= today.isoformat()][-MAX_EOD_DATES:]
         dates = sorted(set(dates) | {d for d in (latest_valid, *extra) if d in cached and d >= first})
+        self._eod_from = max(start, first)  # the backfill step leaves this date on to this step
         if not dates:
             return "skipped", f"no cached eod_final snapshot from {max(start, first)} on"
         runs = store.default_runs(con, date.fromisoformat(dates[0]))

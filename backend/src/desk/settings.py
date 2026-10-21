@@ -50,8 +50,12 @@ layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub
                            hour, from 19:45 on the preliminary close (R11)
 * ``DESK_INBOX_LOOKBACK_DAYS``  the inbox scan and the autopilot's hub sync take report files (by modification
                            time, then by the report date ``match`` gives) and hub dates at most this many days old
-                           (10; 0: no limit); a folder holding years of reports is not read. A backfill of older
-                           dates (S8) gets its own explicit date range.
+                           (35; 0: no limit); a folder holding years of reports is not read. The backfill
+                           (``DESK_BACKFILL_FROM``) reads the older ones once.
+* ``DESK_BACKFILL``, ``DESK_BACKFILL_FROM``, ``DESK_BACKFILL_BUDGET_S``  the autopilot's backfill step (on): the
+                           default runs of the past business dates from this date (2026-01-05, the hub's first
+                           eod_final close) with positions, at most this many seconds a cycle (600), after every
+                           other step (``desk.backfill``, R23; ``desk backfill`` does the same at once)
 * ``DESK_UPDATE_DIR``      the Windows bundle: a folder (a network share, say) holding update zips that the
                            settings page offers to install (``desk.update``); none by default
 
@@ -102,6 +106,9 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "inbox_lookback_days": ("DESK_INBOX_LOOKBACK_DAYS", "int0"),
     "update_dir": ("DESK_UPDATE_DIR", "path"),
     "history_days": ("DESK_HISTORY_DAYS", "int0"),
+    "backfill": ("DESK_BACKFILL", "bool"),
+    "backfill_from": ("DESK_BACKFILL_FROM", "date"),
+    "backfill_budget_s": ("DESK_BACKFILL_BUDGET_S", "num"),
 }
 PROXY_KEYS = {"https_proxy": "HTTPS_PROXY", "no_proxy": "NO_PROXY"}
 READ_ONLY_KEYS = ("hub_token", "hub_token_set", "proxy_password", "proxy_password_set", "home", "effective",
@@ -169,6 +176,9 @@ class Settings:
     history_days: int = 260  # hub business dates of market history for the bond charts (~1 year); 0: the cache only
     private_adapter_default: bool = False  # private_adapter came from DESK_DEFAULT_PRIVATE_ADAPTER
     update_dir: Path | None = None  # update zips of the Windows bundle (desk.update)
+    backfill: bool = True  # the autopilot computes the default runs of past dates (desk.backfill, R23)
+    backfill_from: str = "2026-01-05"  # first date of the backfill (the hub's first eod_final close)
+    backfill_budget_s: float = 600.0  # seconds of backfill runs per autopilot cycle (after every other step)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "home", Path(self.home) if self.home is not None else desk_home())
@@ -231,6 +241,8 @@ class Settings:
             ("inbox_lookback_days", str(self.inbox_lookback_days) if self.inbox_lookback_days else "0 (no limit)"),
             ("update_dir", str(self.update_dir or "none")),
             ("history_days", str(self.history_days) if self.history_days else "0 (off: the cached dates only)"),
+            ("backfill", (f"on from {self.backfill_from}, {self.backfill_budget_s:g} s a cycle" if self.backfill
+                          else "off")),
         ]
 
 
@@ -294,6 +306,16 @@ def read_settings_json(home: Path | None = None) -> dict[str, Any]:
     return doc
 
 
+def _is_date(v: str) -> bool:
+    from datetime import date
+
+    try:
+        date.fromisoformat(v.strip())
+    except ValueError:
+        return False
+    return True
+
+
 def check_settings_doc(doc: object) -> list[str]:
     """Shape errors of a settings.json document (unknown keys are kept and ignored; null means unset)."""
     if not isinstance(doc, dict):
@@ -314,6 +336,8 @@ def check_settings_doc(doc: object) -> list[str]:
             errors.append(f"{key}: must be a whole number >= 0")
         elif kind == "bool" and not isinstance(v, bool):
             errors.append(f"{key}: must be true or false")
+        elif kind == "date" and not (isinstance(v, str) and _is_date(v)):
+            errors.append(f"{key}: must be a date YYYY-MM-DD")
         elif kind == "dirs":
             if not isinstance(v, list):
                 errors.append(f"{key}: must be a list of {{path, label, recursive}}")
@@ -474,6 +498,9 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         adapter = str(_path(adapter))
     elif adapter is None and (fallback := _path(proc.get("DESK_DEFAULT_PRIVATE_ADAPTER"))) and fallback.is_dir():
         adapter, adapter_default = str(fallback), True  # the bundle's adapter, below every other layer
+    backfill_from = (get("DESK_BACKFILL_FROM") or defaults.backfill_from).strip()
+    if not _is_date(backfill_from):
+        raise SettingsError(f"DESK_BACKFILL_FROM (backfill_from) must be a date YYYY-MM-DD, not {backfill_from!r}")
     store_url = get("DESK_STORE_URL")
     if store_url is not None and urlsplit(store_url).scheme not in ("postgresql", "postgres"):
         raise SettingsError("DESK_STORE_URL must be a postgresql:// URI")
@@ -508,6 +535,9 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         history_days=count("DESK_HISTORY_DAYS", defaults.history_days, 0),
         private_adapter_default=adapter_default,
         update_dir=_path(get("DESK_UPDATE_DIR")),
+        backfill=flag("DESK_BACKFILL", defaults.backfill),
+        backfill_from=backfill_from,
+        backfill_budget_s=num("DESK_BACKFILL_BUDGET_S", defaults.backfill_budget_s),
     )
 
 

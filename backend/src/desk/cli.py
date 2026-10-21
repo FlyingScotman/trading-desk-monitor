@@ -16,6 +16,7 @@
     desk adapter check [--adapter SPEC] [--dir D] [--stub-ctx] [--json]   the conformance kit (08 §8)
     desk serve                           desk API + Desk Monitor on http://127.0.0.1:8100, scenario worker, autopilot
     desk cycle [--date D] [--no-hub]     one autopilot cycle: hub sync -> inbox scan -> EOD of changed dates
+    desk backfill [--from D] [--to D] [--dry-run]  default runs of the past dates with positions (R23)
     desk openapi --out ../frontend/openapi.json   the API's OpenAPI document (stdout without --out)
     desk diagnostics [--out FILE] [--no-hub]       how the desk works here, without private data (R13)
 
@@ -590,6 +591,62 @@ def cmd_cycle(a: argparse.Namespace) -> int:
     return 1 if st["state"] == "error" else 0
 
 
+def cmd_backfill(a: argparse.Namespace) -> int:
+    """``desk backfill``: the default runs of the past dates (``desk.backfill``). The runs of one date at a time hold
+    the cycle lock (``<home>/cycle.lock``), so a ``desk serve`` running alongside keeps its cycles between them."""
+    from . import backfill
+    from .autopilot import CycleLock
+
+    st = a.settings
+    url = store.resolve_url(st)
+    store.migrate(url)
+    d_from = backfill.start_date(st, date.fromisoformat(a.date_from) if a.date_from else None)
+    d_to = date.fromisoformat(a.date_to) if a.date_to else date.today()
+    if d_from > d_to:
+        print(f"desk backfill: --from {d_from} is after --to {d_to}", file=sys.stderr)
+        return 2
+    client = None
+    rows = None
+    if not a.no_hub and st.hub_url:
+        client = HubClient(st)
+        rows = backfill.hub_rows(client, d_from)
+        print(f"hub {client.host}: {len(rows)} eod_final dates from {rows[-1][0] if rows else '-'}")
+    with _store(a) as con:
+        if not a.no_inbox and not a.dry_run:
+            line = backfill.inbox(con, st, d_from, force=a.rescan)
+            print(line or "inbox: reports from the start date read before (--rescan reads them again)")
+        p = backfill.plan(con, st, d_from, d_to, rows)
+    print(backfill.text(p, dry_run=a.dry_run))
+    if a.dry_run or not p.todo:
+        return 0
+    lock = CycleLock(st.home)
+    contexts = ContextCache()
+    done = failed = 0
+    t0 = time.perf_counter()
+    for i, day in enumerate(p.todo, 1):
+        waited = False
+        while not lock.acquire():
+            if not waited:
+                print("  waiting for the autopilot's cycle (desk serve) to end ...")
+                waited = True
+            time.sleep(5)
+        try:
+            one = backfill.Plan(p.date_from, p.date_to, [day], p.hub)
+            res = backfill.run(st, one, store_url=url, client=client, out=print, contexts=contexts)
+        finally:
+            lock.release()
+        done += len(res["done"])
+        failed += len(res["failed"])
+        for d, err in res["failed"]:
+            print(f"  {d} FAILED: {err}")
+        for d in res["skipped"]:
+            print(f"  {d} skipped: its bundle is not cached and the hub is off")
+        el = time.perf_counter() - t0
+        print(f"[{i}/{len(p.todo)}] {day.date} done; {el:.0f} s, about {el / i * (len(p.todo) - i):.0f} s left")
+    print(f"backfill: {done} dates run, {failed} failed, in {time.perf_counter() - t0:.0f} s")
+    return 1 if failed else 0
+
+
 def cmd_openapi(a: argparse.Namespace) -> int:
     from .api import create_app
 
@@ -738,6 +795,17 @@ def main(argv: list[str] | None = None) -> int:
                     "(repeatable)")
     cy.add_argument("--no-hub", action="store_true", help="no hub sync (the drop folder is still imported)")
     cy.set_defaults(fn=cmd_cycle)
+    bf = sub.add_parser("backfill", help="the default runs of past business dates with positions (history of "
+                        "risk and PnL): older reports in, hub closes pulled, oldest date first")
+    bf.add_argument("--from", dest="date_from", type=_iso, help="first business date (default: the setting "
+                    "backfill_from, 2026-01-05: the hub's first eod_final close)")
+    bf.add_argument("--to", dest="date_to", type=_iso, help="last business date (default: today)")
+    bf.add_argument("--dry-run", action="store_true", help="only say which dates would run and why")
+    bf.add_argument("--no-hub", action="store_true", help="the cached closes only, nothing downloaded")
+    bf.add_argument("--no-inbox", action="store_true", help="do not read the older reports of the inbox first")
+    bf.add_argument("--rescan", action="store_true", help="read the inbox from the start date again even if done "
+                    "before with the same adapter")
+    bf.set_defaults(fn=cmd_backfill)
     oa = sub.add_parser("openapi", help="print or write the desk API's OpenAPI document")
     oa.add_argument("--out", help="write it to this file")
     oa.set_defaults(fn=cmd_openapi)

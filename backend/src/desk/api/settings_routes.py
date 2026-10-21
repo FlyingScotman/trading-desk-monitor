@@ -109,6 +109,7 @@ def _effective(st: Settings) -> dict[str, Any]:
         "autopilot_sync_last": st.autopilot_sync_last, "intraday": st.intraday,
         "inbox_lookback_days": st.inbox_lookback_days,
         "history_days": st.history_days,
+        "backfill": st.backfill, "backfill_from": st.backfill_from, "backfill_budget_s": st.backfill_budget_s,
         "logs_dir": str(st.logs_dir), "update_dir": str(st.update_dir) if st.update_dir else None,
     }
 

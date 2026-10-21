@@ -28,7 +28,8 @@ decided by the report date ``match`` gives (R22): a file whose report date is ol
 ``MTIME_SLACK_DAYS`` before the lookback starts is skipped on its modification time alone (``skipped: too_old``,
 not even matched): a report is written on or after its report date, so it cannot fall inside the window; a file ``waiting_calendar`` whose report date falls behind gets that status too, so it
 stops driving hub syncs. None of them is offered again while still too old, fingerprint change or not; after the
-lookback grows they are. A backfill of older dates (S8) will take its own explicit date range.
+lookback grows they are. ``desk backfill`` (R23) scans with the lookback starting on its own start date
+(``scan(since=...)``), so the older reports come in once.
 
 Speed (a folder holds thousands of old reports; a scan with nothing new must cost a folder listing, R22): the
 folders are listed once with ``os.scandir`` (on Windows the listing carries the sizes and times: no request per
@@ -791,7 +792,7 @@ class _Scan:
 
 def _session(con: psycopg.Connection, settings: Settings, now: datetime | None,
              offers: Callable[[_Scan], list[Offer]], *, lookback: bool = False,
-             progress: Progress | None = None) -> ScanResult:
+             progress: Progress | None = None, since: date | None = None) -> ScanResult:
     h = adapter(settings)
     res = ScanResult(adapter_line(h))
     if not h.ok:
@@ -802,7 +803,8 @@ def _session(con: psycopg.Connection, settings: Settings, now: datetime | None,
         return res
     try:
         now = now or datetime.now(UTC)
-        cutoff = lookback_cutoff(settings, now.astimezone(MSK).date()) if lookback else None
+        cutoff = since if since is not None else lookback_cutoff(settings, now.astimezone(MSK).date()) if lookback \
+            else None
         s = _Scan(con, settings, h, res, now, cutoff, progress)
         with runner.pooled(read_workers()):  # workers start on the first call: an idle scan starts none
             s.run(offers(s))
@@ -813,15 +815,16 @@ def _session(con: psycopg.Connection, settings: Settings, now: datetime | None,
 
 
 def scan(con: psycopg.Connection, settings: Settings, *, now: datetime | None = None,
-         progress: Progress | None = None) -> ScanResult:
+         progress: Progress | None = None, since: date | None = None) -> ScanResult:
     """New stable files of the folders, files to re-offer after a fingerprint change, and those waiting for a
-    calendar; within the lookback only (``ignored_too_old`` files again once the lookback covers them)."""
+    calendar; within the lookback only (``ignored_too_old`` files again once the lookback covers them). ``since``
+    (``desk backfill``, R23): the lookback starts on this date instead, so the older reports are read too."""
     def offers(s: _Scan) -> list[Offer]:
         s.retire_too_old()
         again = ("waiting_calendar", TOO_OLD) if s.calendars_changed() else (TOO_OLD,)
         return s.new_files() + s.known(lambda st, fp: (st in REOFFER and fp != s.h.fingerprint) or st in again,
                                        fresh=True, statuses=(*REOFFER, *again)) + s.transient()
-    res = _session(con, settings, now, offers, lookback=True, progress=progress)
+    res = _session(con, settings, now, offers, lookback=True, progress=progress, since=since)
     global last_scan
     last_scan = {"at": datetime.now(UTC).isoformat(), "files": dict(res.files), "skipped": dict(res.skipped),
                  "copies": dict(res.copies), "match": dict(res.match), "timings": dict(res.timings)}

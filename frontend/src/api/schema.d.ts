@@ -337,7 +337,7 @@ export interface components {
              * Step
              * @enum {string}
              */
-            step: "sync" | "scan" | "eod" | "intraday" | "history";
+            step: "sync" | "scan" | "eod" | "intraday" | "history" | "backfill";
             /** Done */
             done: number;
             /** Total */

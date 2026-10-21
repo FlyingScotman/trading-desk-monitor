@@ -2,6 +2,9 @@
 preview, or as a file to save (``download=1``: ``desk-diagnostics-<UTC>.json``). Local only, like the settings
 routes: the document has no private data, but it does describe this machine's setup.
 
+``GET /api/v1/backfill/status`` (R23) is the settings page's «История прогонов»: ``desk.backfill.status`` (dates
+and counts, the store and the cache only, no hub call).
+
 ``GET /api/v1/inbox/reconcile`` (R22) is the settings page's «Загрузка позиций»: ``desk inbox reconcile`` as JSON,
 book ids and file names included (the owner's own machine, local only).
 """
@@ -51,5 +54,25 @@ def get_reconcile(request: Request, on: str | None = None) -> Response:
         raise HTTPException(500, f"settings: {e}") from None
     with store.connect(request.app.state.store_url or store.resolve_url(settings)) as con:
         doc = scan.reconcile(con, settings, day)
+    return Response(json.dumps(doc, ensure_ascii=False, default=str), media_type="application/json; charset=utf-8",
+                    headers={"Cache-Control": "no-store"})
+
+
+@router.get("/api/v1/backfill/status")
+def get_backfill_status(request: Request) -> Response:
+    """The history of runs: the range, dates with their run, to run, without positions, failed; the oldest run."""
+    import json
+
+    from .. import backfill
+
+    try:
+        settings = load()
+    except SettingsError as e:
+        raise HTTPException(500, f"settings: {e}") from None
+    with store.connect(request.app.state.store_url or store.resolve_url(settings)) as con:
+        doc = backfill.status(con, settings)
+    ap = getattr(request.app.state, "autopilot", None)
+    if ap is not None:
+        doc["step"] = next((x for x in ap.status().get("steps", []) if x["name"] == "backfill"), None)
     return Response(json.dumps(doc, ensure_ascii=False, default=str), media_type="application/json; charset=utf-8",
                     headers={"Cache-Control": "no-store"})

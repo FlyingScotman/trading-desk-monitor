@@ -1289,7 +1289,8 @@
               "scan",
               "eod",
               "intraday",
-              "history"
+              "history",
+              "backfill"
             ],
             "title": "Step"
           },
