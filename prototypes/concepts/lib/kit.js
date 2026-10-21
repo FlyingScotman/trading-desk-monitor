@@ -413,7 +413,7 @@
     issuer: { key: 'issuerName', label: 'Эмитент', fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
     name: { key: 'name', label: 'Бумага', fmt: (v, r) => esc(v) + (r.tradedToday ? ' <span class="k-tag" style="border-color:var(--warn);color:var(--warn)" title="сделки сегодня">сд</span>' : '') },
     isin: { key: 'isin', label: 'ISIN', fmt: v => '<span class="mono mut">' + esc(v || '—') + '</span>' },
-    ccy: { key: 'ccy', label: 'Вал', fmt: v => K.ccyTag(v), val: r => M.ccyOrder[r.ccy] },
+    ccy: { key: 'ccy', label: 'Вал', fmt: (v, r) => K.ccyTag(r.ccy), val: r => M.ccyOrder[r.ccy] },
     kind: { key: 'kind', label: 'Тип', fmt: (v, r) => '<span class="tagc" style="border-color:' + K.kindColor[v] + '55">' + esc(M.kindShort[v]) + '</span>' },
     book: { key: 'book', label: 'Книга', fmt: v => '<span class="mut">' + esc(v) + '</span>' },
     coupon: { key: 'couponFmt', label: 'Купон', fmt: v => '<span class="mono">' + esc(v || '—') + '</span>' },

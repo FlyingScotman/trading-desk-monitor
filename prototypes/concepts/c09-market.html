@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>C09 · Рынок</title>
+<link rel="stylesheet" href="lib/kit.css">
+<style>
+.strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; }
+.strip .k-kpi .v { font-size: 17px; }
+.strip .k-kpi.cbr { grid-column: span 2; }
+.mk-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+.mk-grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+@media (max-width: 1150px) { .mk-grid, .mk-grid2 { grid-template-columns: 1fr; } .strip .k-kpi.cbr { grid-column: auto; } }
+.side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+#ymap { height: 560px; }
+#fxmap { height: 300px; }
+#curves { height: 300px; }
+.ctl { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.ctl .lbl { color: var(--fg-2); font-size: 12px; }
+select.k-input { min-width: 150px; }
+.ctl label { display: inline-flex; gap: 5px; align-items: center; font-size: 12px; color: var(--fg-2); cursor: pointer; }
+table.sp td, table.sp th { text-align: right; }
+table.sp td:first-child, table.sp th:first-child { text-align: left; }
+</style>
+</head>
+<body>
+<div class="k-page">
+  <div class="strip" id="strip"></div>
+  <div class="mk-grid">
+    <div class="k-panel">
+      <div class="hd"><h3>Карта доходностей RUB</h3><span class="sp"></span><span class="k-note">точки — рынок, кольца — наши позиции (размер — MV), щелчок по кольцу — карточка</span></div>
+      <div class="ctl">
+        <span class="lbl">ось X:</span><span id="cX"></span>
+        <span class="lbl">тип:</span><span id="cFlt"></span>
+        <span class="lbl">рейтинг:</span><span id="cRt"></span>
+        <select class="k-input" id="cSec"></select>
+        <label><input type="checkbox" id="cOurs"> только наши</label>
+      </div>
+      <div class="bd flush"><div id="ymap"></div></div>
+    </div>
+    <div class="side">
+      <div class="k-panel">
+        <div class="hd"><h3>Кривые</h3><span class="sp"></span><span id="cCurve"></span></div>
+        <div class="bd flush"><div id="curves"></div></div>
+      </div>
+      <div class="k-panel">
+        <div class="hd"><h3>Валютные бонды РФ-эмитентов</h3><span class="sp"></span><span id="cFx"></span></div>
+        <div class="bd flush"><div id="fxmap"></div></div>
+      </div>
+    </div>
+  </div>
+  <div class="mk-grid2">
+    <div class="k-panel">
+      <div class="hd"><h3>G-спред по рейтингам × срок</h3><span class="sp"></span><span class="k-note">медиана, б.п., фикс-купон, рынок RUB</span></div>
+      <div class="bd flush scroll" id="sprtab"></div>
+    </div>
+    <div class="k-panel">
+      <div class="hd"><h3>Наши против рынка</h3><span class="sp"></span><span class="k-note">G-спред бумаги − медиана её рейтинга и срока</span></div>
+      <div class="bd flush" id="rv"></div>
+    </div>
+  </div>
+  <div class="k-panel">
+    <div class="hd"><h3>Движения дня</h3><span class="sp"></span><span class="k-note">крупные выпуски (> 8 млрд), изм. доходности за день</span></div>
+    <div class="bd flush" id="movers"></div>
+  </div>
+</div>
+<script src="../echarts.min.js"></script>
+<script src="lib/mock.js"></script>
+<script src="lib/kit.js"></script>
+<script>
+(function () {
+  const M = MOCK, K = KIT, f = K.f, esc = K.esc;
+  K.top({ title: 'C09 · Рынок', tag: 'где что торгуется: карта доходностей, кривые, спреды' });
+
+  // ---------- полоса индексов ----------
+  const ir = M.util.rng('idxchg');
+  const idxChg = {}; Object.keys(M.indices).forEach(k => idxChg[k] = k === 'КС' ? 0 : Math.round((ir() - 0.45) * 12));
+  function strip() {
+    const t = (l, v, s, cls) => '<div class="k-kpi' + (cls ? ' ' + cls : '') + '"><div class="l">' + l + '</div><div class="v">' + v + '</div><div class="s">' + (s || '&nbsp;') + '</div></div>';
+    const chg = k => { const v = idxChg[k]; return v ? '<span class="' + f.cls(v) + '">' + f.bps(v) + ' б.п.</span>' : '<span class="mut3">без изм.</span>'; };
+    let h = ['КС', 'RUONIA', 'RUSFAR', 'CPI г/г', 'SOFR', 'RUSFAR CNY'].map(k => t(k, f.pct(M.indices[k]), chg(k))).join('');
+    h += ['USD', 'EUR', 'CNY'].map(c => t(c + '/RUB', f.n(M.fx[c], c === 'CNY' ? 3 : 2), '<span class="' + f.cls(M.fxChgPct[c]) + '">' + f.s(M.fxChgPct[c], 2) + '%</span>')).join('');
+    const ofz10 = M.curveAt('OFZ', 10), ofz2 = M.curveAt('OFZ', 2);
+    h += t('ОФЗ 2Y / 10Y', f.n(ofz2, 2) + ' / ' + f.n(ofz10, 2), 'наклон ' + f.bps((ofz10 - ofz2) * 100) + ' б.п.');
+    h += t('ЦБ · ' + f.dshort(M.cbr.next.date), esc(M.cbr.next.consensus) + ' <span class="mut" style="font-size:12px">консенсус</span>', 'в кривой ' + esc(M.cbr.next.priced) + ' · дальше ' + M.cbr.meetings.slice(1, 4).map(f.dshort).join(', '), 'cbr');
+    document.getElementById('strip').innerHTML = h;
+  }
+  strip();
+
+  // ---------- карта доходностей ----------
+  const RB = [['AAA', r => r === 'AAA', '#4c9dff'], ['AA', r => /^AA[+-]?$/.test(r), '#22c3d6'], ['A', r => /^A[+-]?$/.test(r), '#3fb67a'], ['BBB', r => /^BBB/.test(r), '#e3b341'], ['≤BB', r => /^B{1,2}[+-]?$/.test(r), '#f0645a']];
+  const rbOf = r => (RB.find(x => x[1](r)) || RB[4])[0];
+  const S = { x: 'dur', flt: 'fix', rt: ['AAA', 'AA', 'A', 'BBB'], sec: '', ours: false, curve: 'lvl', fx: 'CNY' };
+  try { Object.assign(S, JSON.parse(localStorage.getItem('c09-state') || '{}')); } catch (e) { }
+  const save = () => { try { localStorage.setItem('c09-state', JSON.stringify(S)); } catch (e) { } };
+  const xOf = (o, our) => S.x === 'dur' ? (our ? (o.cpn.type === 'float' ? 0.15 : o.mdur) : o.dur) : o.tenor;
+  const secs = [...new Set(M.universeRub.map(b => b.sector))].sort((a, b) => a.localeCompare(b, 'ru'));
+  const secSel = document.getElementById('cSec');
+  secSel.innerHTML = '<option value="">все секторы</option>' + secs.map(s => '<option' + (s === S.sec ? ' selected' : '') + '>' + esc(s) + '</option>').join('');
+  secSel.onchange = () => { S.sec = secSel.value; save(); ym.redraw(); };
+  const ours = document.getElementById('cOurs'); ours.checked = S.ours; ours.onchange = () => { S.ours = ours.checked; save(); ym.redraw(); };
+  K.seg(document.getElementById('cX'), [['dur', 'дюрация'], ['tenor', 'срок']], S.x, v => { S.x = v; save(); ym.redraw(); });
+  K.seg(document.getElementById('cFlt'), [['all', 'все'], ['fix', 'фикс'], ['flt', 'флоатеры']], S.flt, v => { S.flt = v; save(); ym.redraw(); });
+  // рейтинг — множественный выбор чипами
+  const rtBox = document.getElementById('cRt');
+  function rtChips() {
+    rtBox.innerHTML = RB.map(([k, , c]) => '<span class="k-chip' + (S.rt.includes(k) ? ' on' : '') + '" data-r="' + k + '" style="margin-right:4px"><b style="color:' + c + '">●</b> ' + k + '</span>').join('');
+    rtBox.querySelectorAll('[data-r]').forEach(ch => ch.onclick = () => { const k = ch.dataset.r; S.rt = S.rt.includes(k) ? S.rt.filter(x => x !== k) : S.rt.concat([k]); if (!S.rt.length) S.rt = RB.map(x => x[0]); save(); rtChips(); ym.redraw(); });
+  }
+  rtChips();
+
+  let ourPts = [];
+  const ym = K.chart(document.getElementById('ymap'), () => {
+    const okU = b => (S.flt === 'all' || (S.flt === 'flt' ? b.flt : !b.flt)) && (!S.sec || b.sector === S.sec) && (b.isOfz || S.rt.includes(rbOf(b.rating)));
+    const U = S.ours ? [] : M.universeRub.filter(okU);
+    const L = K.list().filter(p => p.group !== 'DER' && p.ccy === 'RUB' && p.kind !== 'IN' && (S.flt === 'all' || (S.flt === 'flt' ? p.cpn.type === 'float' : p.cpn.type === 'fix')) && (!S.sec || p.sector === S.sec || (S.sec === 'ОФЗ' && p.group === 'GOV')) && (p.group === 'GOV' || S.rt.includes(rbOf(p.rating))));
+    ourPts = L;
+    const maxMv = Math.max(1, ...L.map(p => Math.abs(p.mv)));
+    const curveX = M.pillars.filter(t => t <= 16);
+    const ser = [];
+    ser.push({ name: 'ОФЗ', type: 'scatter', symbolSize: 6, itemStyle: { color: K.css('--fg-2'), opacity: 0.8 }, data: U.filter(b => b.isOfz).map(b => ({ value: [xOf(b), b.ytm], b })) });
+    RB.forEach(([k, , c]) => ser.push({ name: k, type: 'scatter', symbolSize: 5, itemStyle: { color: c, opacity: 0.55 }, data: U.filter(b => !b.isOfz && rbOf(b.rating) === k).map(b => ({ value: [xOf(b), b.ytm], b })) }));
+    ser.push({ name: 'кривая ОФЗ', type: 'line', smooth: true, showSymbol: false, lineStyle: { width: 2, color: K.css('--fg') }, itemStyle: { color: K.css('--fg') }, data: curveX.map(t => [t, M.curveAt('OFZ', t)]), z: 3, silent: true });
+    ser.push({ name: 'RUONIA OIS', type: 'line', smooth: true, showSymbol: false, lineStyle: { width: 2, type: 'dashed', color: K.curveColors['RUB RUONIA'] }, itemStyle: { color: K.curveColors['RUB RUONIA'] }, data: curveX.map(t => [t, M.curveAt('RUB RUONIA', t)]), z: 3, silent: true });
+    ser.push({
+      name: 'наши', type: 'scatter', z: 6,
+      data: L.map((p, i) => ({ value: [xOf(p, true), p.ytm], i, symbolSize: 9 + Math.sqrt(Math.abs(p.mv) / maxMv) * 26, itemStyle: { color: 'rgba(0,0,0,0)', borderColor: p.notional < 0 ? K.css('--neg') : K.issuerColor(p.issuer), borderWidth: 2.2 } })),
+      label: { show: true, position: 'right', fontSize: 10, color: K.css('--fg-2'), formatter: pp => { const p = L[pp.data.i]; return Math.abs(p.mv) / maxMv > 0.3 ? p.issuerName : ''; } },
+      emphasis: { itemStyle: { borderWidth: 3.5 } },
+    });
+    return {
+      grid: { left: 10, right: 20, top: 40, bottom: 10, containLabel: true },
+      legend: { top: 4, right: 12, data: ['ОФЗ'].concat(RB.map(x => x[0])).concat(['кривая ОФЗ', 'RUONIA OIS', 'наши']) },
+      tooltip: {
+        trigger: 'item', formatter: pp => {
+          if (pp.seriesName === 'наши') { const p = L[pp.data.i]; return '<b>' + esc(p.name) + '</b> · ' + esc(p.rating) + '<br>' + esc(p.couponFmt) + ' · ' + ({ put: 'пут', call: 'колл', mat: 'погаш.' }[p.event.kind]) + ' ' + f.date(p.event.date) + '<br>дох. ' + f.pct(p.ytm) + ' · G ' + f.bp(p.gspread) + ' · ' + p.spreadLabel + ' ' + f.bp(p.zspread) + ' б.п.<br>MV ' + f.mn(p.mv, 0) + ' млн ₽ · DV01 ' + f.dv(p.dv01) + '<br><span style="opacity:.6">щелчок — карточка</span>'; }
+          const b = pp.data.b; if (!b) return '';
+          return '<b>' + esc(b.name) + '</b><br>' + esc(b.sector) + ' · ' + esc(b.rating) + (b.flt ? ' · флоатер' : '') + '<br>дох. ' + f.pct(b.ytm) + ' · G ' + f.bp(b.spread) + ' б.п. · срок ' + f.yrs(b.tenor) + '<br>объём ' + f.bn(b.size, 1) + ' млрд';
+        },
+      },
+      xAxis: { type: 'value', name: S.x === 'dur' ? 'дюрация, лет' : 'срок до оферты/погашения, лет', nameLocation: 'middle', nameGap: 24, min: 0, max: v => Math.min(16, Math.ceil(v.max)) },
+      yAxis: { type: 'value', name: 'доходность, %', nameTextStyle: { align: 'left' }, scale: true, max: v => Math.min(Math.ceil(v.max), 30) },
+      dataZoom: [{ type: 'inside', xAxisIndex: 0 }, { type: 'inside', yAxisIndex: 0 }],
+      series: ser,
+    };
+  });
+  ym.on('click', pp => { if (pp.seriesName === 'наши') K.card(ourPts[pp.data.i].id); });
+
+  // ---------- кривые ----------
+  const cv = K.chart(document.getElementById('curves'), () => {
+    const R = M.curve['RUB RUONIA'], KS = M.curve['RUB KEY'], B = M.curve['RUB OFZ'];
+    const yd = c => c.pts.map((v, k) => v - c.chg[k] / 100);
+    const ofzY = M.pillars.map((_, k) => yd(R)[k] + (B.pts[k] - B.chg[k]) / 100);
+    const base = { grid: { left: 8, right: 12, top: 34, bottom: 6, containLabel: true }, legend: { top: 4, left: 8, type: 'scroll' }, tooltip: { trigger: 'axis' }, xAxis: { type: 'category', data: M.buckets } };
+    if (S.curve === 'lvl') return Object.assign(base, {
+      tooltip: { trigger: 'axis', valueFormatter: v => f.pct(v) }, yAxis: { type: 'value', scale: true, axisLabel: { formatter: v => v.toFixed(1) } },
+      series: [['ОФЗ', M.ofzCurve, ofzY, '#9b7bff'], ['RUONIA', R.pts, yd(R), K.curveColors['RUB RUONIA']], ['КС', KS.pts, yd(KS), K.curveColors['RUB KEY']]].flatMap(([n, a, b, c]) => [
+        { name: n, type: 'line', data: a, color: c, symbolSize: 4, lineStyle: { width: 2 } },
+        { name: n + ' вчера', type: 'line', data: b, color: c, showSymbol: false, lineStyle: { width: 1, type: 'dotted' } }]),
+    });
+    if (S.curve === 'chg') return Object.assign(base, {
+      tooltip: { trigger: 'axis', valueFormatter: v => f.bps(v) + ' б.п.' }, yAxis: { type: 'value', axisLabel: { formatter: v => v } },
+      series: [['ОФЗ', M.pillars.map((_, k) => R.chg[k] + B.chg[k]), '#9b7bff'], ['RUONIA', R.chg, K.curveColors['RUB RUONIA']], ['КС', KS.chg, K.curveColors['RUB KEY']]].map(([n, d, c]) => ({ name: n, type: 'bar', data: d, color: c, barMaxWidth: 14 })),
+    });
+    return Object.assign(base, {
+      tooltip: { trigger: 'axis', valueFormatter: v => f.bp(v) + ' б.п.' }, yAxis: { type: 'value' },
+      series: [{ name: 'базис ОФЗ − RUONIA', type: 'bar', data: B.pts.map(v => ({ value: v, itemStyle: { color: v >= 0 ? '#9b7bff' : K.css('--warn') } })), barMaxWidth: 22, label: { show: true, position: 'top', fontSize: 10, color: K.css('--fg-2') } },
+      { name: 'вчера', type: 'line', data: B.pts.map((v, k) => v - B.chg[k]), color: K.css('--fg-3'), lineStyle: { type: 'dotted' }, symbolSize: 4 }],
+    });
+  });
+  K.seg(document.getElementById('cCurve'), [['lvl', 'уровни'], ['chg', 'изм. дня'], ['basis', 'базис ОФЗ']], S.curve, v => { S.curve = v; save(); cv.redraw(); });
+
+  // ---------- валютные ----------
+  let fxU = [], fxL = [];
+  const fm = K.chart(document.getElementById('fxmap'), () => {
+    fxU = M.universeFx.filter(b => b.ccy === S.fx);
+    fxL = K.list().filter(p => p.group !== 'DER' && p.ccy === S.fx);
+    const cid = M.curves.find(c => c.ccy === S.fx).id;
+    return {
+      grid: { left: 8, right: 16, top: 36, bottom: 8, containLabel: true }, legend: { top: 2, right: 10, data: ['рынок', 'наши', M.curve[cid].short] },
+      tooltip: { formatter: pp => { if (pp.seriesName === 'наши') { const p = fxL[pp.data.i]; return '<b>' + esc(p.name) + '</b><br>дох. ' + f.pct(p.ytm) + ' · Z ' + f.bp(p.zspread) + ' б.п.<br>MV ' + f.mn(p.mv, 0) + ' млн ₽<br><span style="opacity:.6">щелчок — карточка</span>'; } const b = pp.data.b; return b ? '<b>' + esc(b.name) + '</b><br>' + esc(b.rating) + ' · купон ' + f.pct(b.cpn) + ' ' + b.freq + '<br>дох. ' + f.pct(b.ytm) + ' · ' + (b.put ? 'пут ' + f.date(b.put) : 'погаш. ' + f.date(b.maturity)) + '<br>в обращении ' + f.mn(b.outstanding, 0) + ' млн ' + b.ccy + (b.held ? '<br><b>в портфеле</b>' : '') : ''; } },
+      xAxis: { type: 'value', name: 'срок, лет', nameLocation: 'middle', nameGap: 22, min: 0 }, yAxis: { type: 'value', name: 'дох., %', nameTextStyle: { align: 'left' }, scale: true },
+      series: [
+        { name: 'рынок', type: 'scatter', data: fxU.map(b => ({ value: [b.tenor, b.ytm], b, symbolSize: 5 + Math.sqrt(b.outstanding / (S.fx === 'CNY' ? 2e10 : 1.5e9)) * 9, itemStyle: { color: K.issuerColor(b.issuer), opacity: 0.75 } })), label: { show: true, position: 'right', fontSize: 9, color: K.css('--fg-3'), formatter: pp => pp.data.b.issuerName.split(' ')[0] }, labelLayout: { hideOverlap: true } },
+        { name: 'наши', type: 'scatter', z: 5, data: fxL.map((p, i) => ({ value: [p.tenor, p.ytm], i, symbolSize: 16, itemStyle: { color: 'rgba(0,0,0,0)', borderColor: K.css('--fg'), borderWidth: 2 } })) },
+        { name: M.curve[cid].short, type: 'line', smooth: true, showSymbol: false, silent: true, lineStyle: { type: 'dashed', width: 1.5 }, color: K.curveColors[cid], data: M.pillars.filter(t => t <= 10).map((t, k) => [t, M.curve[cid].pts[k]]) },
+      ],
+    };
+  });
+  fm.on('click', pp => { if (pp.seriesName === 'наши') K.card(fxL[pp.data.i].id); });
+  K.seg(document.getElementById('cFx'), [['USD', 'USD'], ['EUR', 'EUR'], ['CNY', 'CNY']], S.fx, v => { S.fx = v; save(); fm.redraw(); });
+
+  // ---------- спреды по рейтингам ----------
+  const RATINGS = ['AAA', 'AA+', 'AA', 'AA-', 'A+', 'A', 'A-', 'BBB+', 'BBB', 'BBB-', 'BB+', 'BB', 'B'];
+  const TBK = [[1, '< 1г'], [2, '1–2г'], [3, '2–3г'], [5, '3–5г'], [99, '5г+']];
+  const tbk = t => TBK.findIndex(x => t <= x[0]);
+  const med = a => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+  const grid = {}; M.universeRub.filter(b => !b.isOfz && !b.flt).forEach(b => { const k = b.rating + '|' + tbk(b.tenor); (grid[k] = grid[k] || []).push(b.spread); });
+  const medOf = (r, t) => med(grid[r + '|' + tbk(t)] || []);
+  (function sprTab() {
+    const vals = RATINGS.flatMap(r => TBK.map((_, i) => med(grid[r + '|' + i] || []))).filter(v => v != null);
+    const mx = Math.max(...vals);
+    document.getElementById('sprtab').innerHTML = '<table class="k-tbl sp"><thead><tr><th>Рейтинг</th>' + TBK.map(x => '<th class="n">' + x[1] + '</th>').join('') + '<th class="n">выпусков</th></tr></thead><tbody>' +
+      RATINGS.map(r => { const all = TBK.map((_, i) => grid[r + '|' + i] || []); const n = all.reduce((s, a) => s + a.length, 0); const ourN = K.list().filter(p => p.rating === r && p.ccy === 'RUB' && p.group === 'CORP').length;
+        return '<tr><td><b style="color:' + (RB.find(x => x[0] === rbOf(r)) || RB[4])[2] + '">●</b> ' + r + (ourN ? ' <span class="k-tag" title="наших позиций">наши ' + ourN + '</span>' : '') + '</td>' + all.map(a => { const m = med(a); return '<td class="n" style="' + K.heatMono(m, mx, '227,160,60') + '" title="' + a.length + ' выпусков">' + (m == null ? '<span class="mut3">·</span>' : f.bp(m)) + '</td>'; }).join('') + '<td class="n mut">' + n + '</td></tr>'; }).join('') + '</tbody></table>';
+  })();
+
+  // ---------- наши против рынка ----------
+  const rvCols = [
+    'name', 'rating', 'tenor', 'ytm',
+    { key: 'gspread', label: 'G-спред', num: true, fmt: v => f.bp(v) },
+    { key: 'mkt', label: 'рынок', num: true, val: r => medOf(r.rating, r.tenor), fmt: v => v == null ? '—' : f.bp(v), title: 'медиана G-спреда рейтинга и срока' },
+    { key: 'rv', label: 'разница', num: true, val: r => { const m = medOf(r.rating, r.tenor); return m == null || r.gspread == null ? null : r.gspread - m; }, fmt: v => v == null ? '—' : f.bps(v), style: v => v == null ? '' : K.heat(v, 120), title: '> 0 — бумага дешевле рынка (шире спред)' },
+    'mv',
+  ];
+  K.table(document.getElementById('rv'), {
+    rowsFn: () => K.list().filter(p => p.group === 'CORP' && p.ccy === 'RUB' && p.cpn.type === 'fix'), columns: K.cols(rvCols), sort: [['rv', -1]], stripe: r => K.issuerColor(r.issuer), maxHeight: '420px', footer: false,
+  });
+
+  // ---------- движения дня ----------
+  const mov = M.marketMovers.map((b, i) => Object.assign({ id: 'm' + i, searchText: (b.name + ' ' + b.sector + ' ' + b.rating).toLowerCase() }, b));
+  const mxChg = Math.max(...mov.map(b => Math.abs(b.chgBp)));
+  K.table(document.getElementById('movers'), {
+    rows: mov, autoFilter: false, footer: false, sort: [['chgBp', -1]], maxHeight: '420px', onRow: () => { },
+    columns: [
+      { key: 'name', label: 'Выпуск' }, { key: 'sector', label: 'Сектор', fmt: v => '<span class="mut">' + esc(v) + '</span>' }, { key: 'rating', label: 'Рейтинг', fmt: v => '<b style="color:' + (RB.find(x => x[0] === rbOf(v)) || RB[4])[2] + '">●</b> ' + esc(v) },
+      { key: 'ytm', label: 'Доходность', num: true, fmt: v => f.pct(v) },
+      { key: 'chgBp', label: 'Изм., б.п.', num: true, fmt: v => f.bps(v), style: v => K.heat(-v, mxChg), title: 'рост доходности — красный' },
+      { key: 'bar', label: '', val: r => r.chgBp, fmt: v => K.bar(-v, mxChg) },
+      { key: 'vol', label: 'Оборот, млн', num: true, fmt: v => f.mn(v, 0) },
+    ],
+  });
+
+  K.onFilter(() => { ym.redraw(); fm.redraw(); });
+  K.commands([
+    { label: 'Карта: только наши позиции', run: () => { ours.checked = S.ours = true; save(); ym.redraw(); } },
+    { label: 'Карта: весь рынок', run: () => { ours.checked = S.ours = false; save(); ym.redraw(); } },
+  ]);
+})();
+</script>
+</body>
+</html>
