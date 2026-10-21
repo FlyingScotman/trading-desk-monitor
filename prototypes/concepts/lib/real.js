@@ -15,7 +15,12 @@
  *  - PnL: кэрри = carry + rolldown, ставки = rates + convexity, FX = fx, сделки = newTrades, прочее = funding + other +
  *    reported; итог = explained.
  * История позиции (M.posHistory) — синхронный запрос /api/v1/history/positions: первые две позиции по одной,
- * дальше сразу все (страницы C11, C13 просят историю всех позиций).
+ * дальше сразу все (страницы C11, C13 просят историю всех позиций), за год; M.posHistory(id, { deep: true }) —
+ * вся история бумаги (с 2024-01-03 через API истории хаба: карточка), с Z-спредом MOEX (zspr), дисконт-маржой
+ * флоатера по прогонам (dm) и ICPI / IR / BEI линкера, когда они есть.
+ * История рынка (M.marketHistory()) — тоже лениво, синхронно, один раз: /api/v1/history/market (изменения выпусков
+ * за 1Д/1Н/1М/3М/с начала года, индексы и фиксинги, курсы ЦБ, кривые RUONIA OIS / КС-свопов / КБД по датам);
+ * null, если её нет. Страницы, которым она не нужна, её не грузят.
  */
 (function () {
   'use strict';
@@ -252,18 +257,28 @@
   if (H.basis01) M.hist.dv01['RUB OFZ'] = H.basis01.slice();
 
   // ---------- история позиции (лениво, синхронно) ----------
-  const histCache = {}; let misses = 0, all = false;
+  const histCache = {}, deepCache = {}; let misses = 0, all = false;
   const runQ = 'run_id=' + encodeURIComponent(M.run.id || '');
-  function fetchHist(ids) {
+  function fetchHist(ids, from) {
     try {
       const x = new XMLHttpRequest();
-      x.open('GET', '../api/v1/history/positions?' + runQ + (ids ? '&ids=' + encodeURIComponent(ids.join(',')) : ''), false);
+      x.open('GET', '../api/v1/history/positions?' + runQ + (ids ? '&ids=' + encodeURIComponent(ids.join(',')) : '') + (from ? '&from=' + from : ''), false);
       x.send();
       if (x.status !== 200) return null;
       return JSON.parse(x.responseText);
     } catch (e) { return null; }
   }
-  M.posHistory = function (id) {
+  const OPT = ['zspr', 'dm', 'icpi', 'ir', 'bei'];
+  M.posHistory = function (id, opts) {
+    if (opts && opts.deep) {
+      if (!(id in deepCache)) { const j = fetchHist([id], '2000-01-01'); deepCache[id] = j && j.series && j.series[id] ? Object.assign({ dates: j.dates }, j.series[id]) : null; }
+      if (deepCache[id] && deepCache[id].dates.length) {
+        const s = deepCache[id], k = (M.toRepr && M.toRepr.RUB) || 1;
+        const o = { dates: s.dates, price: s.price, ytm: s.ytm, spr: s.spr, notional: s.notional, dv01: s.dv01.map(v => v == null ? null : v * k), bench: s.bench, deep: true };
+        OPT.forEach(key => { if (s[key]) o[key] = s[key]; });
+        return o;
+      }
+    }
     if (!histCache[id] && !all) {
       misses++;
       const j = fetchHist(misses > 2 ? null : [id]);
@@ -273,7 +288,28 @@
     const p = M.pos[id], s = histCache[id];
     const k = (M.toRepr && M.toRepr.RUB) || 1;  // DV01 истории — в рублях, как и позиции до пересчёта kit.js
     if (!s || !s.dates.length) return { dates: [M.asOf], price: [p.price], ytm: [p.ytm], spr: [p.zspread], notional: [p.notional], dv01: [p.dv01], bench: [p.ccy === 'RUB' ? curveAt('OFZ', p.tenor) : null] };
-    return { dates: s.dates, price: s.price, ytm: s.ytm, spr: s.spr, notional: s.notional, dv01: s.dv01.map(v => v == null ? null : v * k), bench: s.bench };
+    const o = { dates: s.dates, price: s.price, ytm: s.ytm, spr: s.spr, notional: s.notional, dv01: s.dv01.map(v => v == null ? null : v * k), bench: s.bench };
+    OPT.forEach(key => { if (s[key]) o[key] = s[key]; });
+    return o;
+  };
+
+  // ---------- история рынка (лениво, синхронно, один раз) ----------
+  let market;
+  M.marketHistory = function () {
+    if (market !== undefined) return market;
+    market = null;
+    try {
+      const x = new XMLHttpRequest();
+      x.open('GET', '../api/v1/history/market?' + runQ, false);
+      x.send();
+      if (x.status === 200) market = JSON.parse(x.responseText);
+    } catch (e) { market = null; }
+    if (market) {
+      // индексы, которых нет в прогоне (RUSFAR, RUSFAR CNY, CPI г/г), — из фиксингов хаба
+      Object.entries(market.indices || {}).forEach(([k, v]) => { if (M.indices[k] == null && v.value != null) M.indices[k] = v.value; });
+      (market.notes || []).forEach(n => M.notes.push(n));
+    }
+    return market;
   };
 
   // ---------- потоки, рынок, ЦБ ----------

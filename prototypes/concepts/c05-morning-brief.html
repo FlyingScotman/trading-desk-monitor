@@ -71,6 +71,7 @@
 <script>
 (function () {
   const M = MOCK, K = KIT, f = K.f, esc = K.esc;
+  const MH = M.marketHistory ? M.marketHistory() : null;  // история рынка (прогон из базы): фиксинги, курсы, кривые по датам
   K.top({ title: 'C05 · Утренний брифинг', tag: 'читается сверху вниз за 2 минуты' });
   const root = document.getElementById('brief');
   const SECS = [['s1', 'Итог'], ['s2', 'Что изменилось'], ['s3', 'Главные вклады'], ['s4', '2 недели'], ['s5', 'Внимание'], ['s6', 'Рынок']];
@@ -85,6 +86,30 @@
   const plural = (n, a, b, c) => { const m = n % 10, h = n % 100; return n + ' ' + (m === 1 && h !== 11 ? a : m >= 2 && m <= 4 && (h < 10 || h >= 20) ? b : c); };
   const daysTo = d => Math.round((M.util.parse(d) - M.util.parse(M.asOf)) / 864e5);
   const word = v => v >= 0 ? 'заработали' : 'потеряли';
+
+  // ---------- фиксинги, курсы ЦБ и кривые за неделю, месяц, с начала года (история рынка хаба) ----------
+  function marketHist() {
+    if (!MH || !MH.marketDate) return '';
+    const P = MH.periodOrder || ['1D', '1W', '1M', '3M', 'YTD'], at = k => P.indexOf(k);
+    const cl = v => v == null ? 'mut3' : v > 0 ? 'chg-up' : v < 0 ? 'chg-dn' : 'mut3';
+    const bp = v => v == null ? '—' : f.bps(v);
+    const rows = Object.entries(MH.indices || {}).map(([k, x]) => '<tr><td title="' + (x.date ? 'последнее значение: ' + f.date(x.date) : '') + '">' + esc(k) + (x.lag ? ' <span class="mut3" title="ЦБ публикует RUONIA на следующий рабочий день">за ' + f.dshort(x.date) + '</span>' : '') + '</td><td class="n"><b>' + f.pct(x.value) + '</b></td>' +
+      ['1D', '1W', '1M', 'YTD'].map(p => '<td class="n ' + cl(x.chgBp[at(p)]) + '">' + bp(x.chgBp[at(p)]) + '</td>').join('') +
+      '<td>' + K.spark((x.series || []).slice(-130).map(v => v[1]), 110, 20) + '</td></tr>').join('');
+    const fx = Object.entries(MH.fx || {}).map(([c, x]) => '<tr><td>' + c + '/RUB ЦБ</td><td class="n"><b>' + f.n(x.cbr, c === 'CNY' ? 4 : 2) + '</b></td>' +
+      ['1D', '1W', '1M', 'YTD'].map(p => { const v = x.chgPct[at(p)]; return '<td class="n ' + cl(v) + '">' + (v == null ? '—' : f.s(v, 2) + '%') + '</td>'; }).join('') +
+      '<td class="mut3">' + (x.moexTom != null ? 'MOEX TOM ' + f.n(x.moexTom, c === 'CNY' ? 4 : 2) : '') + '</td></tr>').join('');
+    const T = [1, 5, 10], ti = t => (MH.pillars || M.pillars).indexOf(t);
+    const cv = [['RUONIA OIS', 'RUB RUONIA'], ['КС-свопы', 'RUB KEY'], ['КБД (ОФЗ)', 'OFZ']].filter(([, id]) => MH.curves && MH.curves[id]).map(([n, id]) => {
+      const c = MH.curves[id], now = c.pts.asOf || [];
+      return '<tr><td>' + n + '</td>' + T.map(t => '<td class="n"><b>' + f.pct(now[ti(t)]) + '</b></td>').join('') +
+        ['1W', '1M', 'YTD'].map(p => { const b = c.pts[p]; return T.map(t => { const v = b && now[ti(t)] != null && b[ti(t)] != null ? Math.round((now[ti(t)] - b[ti(t)]) * 100) : null; return '<td class="n ' + cl(v) + '">' + bp(v) + '</td>'; }).join(''); }).join('') + '</tr>';
+    }).join('');
+    return '<div style="display:grid;grid-template-columns:minmax(0,1fr);gap:12px;margin-top:12px"><div><div class="cap">Ставки и курсы <span class="mut3">· изменения в б.п. (курсы — в %) к ' + ['1D', '1W', '1M', 'YTD'].map(p => f.dshort(MH.periods[p])).join(' / ') + '</span></div>' +
+      '<table class="mini"><thead><tr><th></th><th class="n">сейчас</th><th class="n">день</th><th class="n">неделя</th><th class="n">месяц</th><th class="n">с н.г.</th><th>полгода</th></tr></thead><tbody>' + rows + fx + '</tbody></table></div>' +
+      (cv ? '<div><div class="cap">Кривые: уровень 1Y / 5Y / 10Y и сдвиг, б.п.</div><table class="mini"><thead><tr><th></th>' + T.map(t => '<th class="n">' + t + 'Y</th>').join('') +
+        ['неделя', 'месяц', 'с н.г.'].map(p => '<th class="n" colspan="3">' + p + '</th>').join('') + '</tr></thead><tbody>' + cv + '</tbody></table></div>' : '') + '</div>';
+  }
 
   function render() {
     K.charts.slice().forEach(c => c.dispose());
@@ -213,7 +238,7 @@
       'SOFR ' + chgRange(M.curve['USD SOFR']) + ', CNY ' + chgRange(M.curve['CNY XCCY']) + ' б.п. Курсы: ' + ccyFx.map(c => c + ' ' + f.n(M.fx[c], 2) + ' (' + (M.fxChgPct[c] > 0 ? '+' : '') + f.n(M.fxChgPct[c], 2) + '%, PnL ' + K.d({ title: 'FX PnL ' + c, unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L.filter(p => p.ccy === c), val: p => p.pnl.fx }) + ' mm)').join(', ') + '. ' +
       'КС ' + f.pct(M.indices['КС']) + ', RUONIA ' + f.pct(M.indices['RUONIA']) + '.</p>' +
       '<div class="two"><div><div class="cap">Кривые RUB: сегодня, вчера и сдвиг</div><div class="chart" id="curveChart"></div></div>' +
-      '<div><div class="cap">Корпоративный рынок: сильнее всего выросли доходности</div>' + mvT(up) + '<div class="cap" style="margin-top:10px">…и снизились</div>' + mvT(dn) + '</div></div></section>';
+      '<div><div class="cap">Корпоративный рынок: сильнее всего выросли доходности</div>' + mvT(up) + '<div class="cap" style="margin-top:10px">…и снизились</div>' + mvT(dn) + '</div></div>' + marketHist() + '</section>';
 
     root.innerHTML = html;
 

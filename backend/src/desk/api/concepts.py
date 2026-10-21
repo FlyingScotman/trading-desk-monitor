@@ -11,8 +11,10 @@ the store does not have is null with a note in ``notes``: ratings, sectors and o
 bonds (the hub does not publish them yet), CBR meetings, months before the first default run.
 
 ``positions_history``: per position of the run, aligned on one date axis: MOEX's clean price, yield (none for a
-floater) and G-spread from ``md_bond_eod`` (``history_days`` deep), the KBD at the bond's term (a RUB bond with known
-coupons), and the face and DV01 of the default runs, carried forward between runs (null before the first).
+floater), G- and Z-spread and a linker's ICPI / IR / BEI from ``md_bond_day`` (the hub's history API, from
+2024-01-03; else the snapshots, ``history_days`` deep), the KBD at the bond's term (a RUB bond with known coupons),
+the face and DV01 of the default runs, carried forward between runs (null before the first), and a floater's
+discount margin on the days of a run.
 
 The classification (``kind_of``) and the curve ids (``CURVE_MAP``) are the pages' own and ``lib/real.js`` mirrors
 them: a change here is a change there."""
@@ -23,13 +25,13 @@ import json
 from datetime import date, timedelta
 from typing import Any
 
-from ..marketdata.history import RUB_SETTLEMENT, curve_rate, kbd
+from ..marketdata.history import RUB_SETTLEMENT, curve_rate, kbd, latest_market_day
 from ..store import DEFAULT_RUNS
 
 HIST_RUNS = 260
 """At most this many default runs make the desk series (about a year of business days)."""
 HISTORY_DAYS = 365
-"""Default depth of ``positions_history``."""
+"""Default depth of ``positions_history`` (``from`` asks for more: the card of a position asks for its whole history)."""
 FX_CCYS = ("USD", "EUR", "CNY", "CHF", "GBP", "HKD", "AED", "INR", "KZT", "BYN", "TRY", "JPY")
 
 CURVE_MAP = {"RUB OFZ": "RUB RUONIA", "USD": "USD SOFR", "EUR": "EUR ESTR", "CNY": "CNY XCCY"}
@@ -185,20 +187,21 @@ def _facts(con, run_id: int) -> list[dict[str, Any]]:
 
 
 MARKET_SQL = ("SELECT b.*, i.isin, i.name, i.short_name, i.bond_class, i.coupon_type, i.face_unit, i.maturity_date,"
-              " i.is_perpetual FROM md_bond_eod b LEFT JOIN md_instrument i USING (secid) WHERE b.business_date = %s")
+              " i.is_perpetual FROM md_bond_day b LEFT JOIN md_instrument i USING (secid) WHERE b.business_date = %s")
+"""A day's market: ``md_bond_day``, the hub's history API rows, else the snapshots' (R24)."""
 
 
 def universe(con, as_of: date, held: set[str | None]) -> dict[str, Any]:
     """The market of the latest cached close not after ``as_of``: every quoted RUB bond (``universeRub``), every quoted
     bond with a foreign face (``universeFx``) and the 60 RUB bonds with the most turnover with their yield change since
     the close before (``marketMovers``). Ratings, sectors, outstanding amounts and coupons are not in the store."""
-    d = con.execute("SELECT max(business_date) AS d FROM md_kbd WHERE business_date <= %s", (as_of,)).fetchone()["d"]
+    d = latest_market_day(con, as_of)
     if d is None:
         return {"marketDate": None, "universeRub": [], "universeFx": [], "marketMovers": [],
                 "notes": ["рыночной истории (md_bond_eod) нет: карта рынка и календарь рынка пусты"]}
-    prev = con.execute("SELECT max(business_date) AS d FROM md_kbd WHERE business_date < %s", (d,)).fetchone()["d"]
+    prev = latest_market_day(con, d - timedelta(days=1))
     old = {r["secid"]: r["yield_pct"] for r in con.execute(
-        "SELECT secid, yield_pct FROM md_bond_eod WHERE business_date = %s", (prev,))} if prev else {}
+        "SELECT secid, yield_pct FROM md_bond_day WHERE business_date = %s", (prev,))} if prev else {}
     rub, fx = [], []
     for r in con.execute(MARKET_SQL, (d,)).fetchall():
         mat, yd = r["maturity_date"], r["yield_date"]
@@ -213,7 +216,7 @@ def universe(con, as_of: date, held: set[str | None]) -> dict[str, Any]:
              "ytm": None if flt else y, "ytmMoex": y, "dur": (r["duration_days"] or 0) / 365.25 or None,
              "spread": r["gspread_bp"], "zspread": r["zspread_bp"], "chgBp": chg, "value": r["value"],
              "flt": flt, "held": r["secid"] in held, "rating": None, "sector": None, "size": None, "cpn": None,
-             "freq": None}
+             "freq": None, **{k: r[k] for k in ("icpi", "ir", "bei") if r[k] is not None}}
         unit = r["face_unit"] or ("RUB" if r["currency_id"] in RUB_SETTLEMENT else None)
         if unit == "RUB" or unit is None:
             b["isOfz"] = (r["bond_class"] or "").startswith("ofz")
@@ -242,20 +245,21 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
     runs = [r for r in _runs(con, run) if r["business_date"] >= from_]
     by_run: dict[str, dict[date, tuple[float | None, float | None]]] = {}
     for r in runs:
-        for x in con.execute("SELECT position_id, (fact->>'notional')::float8 AS n, (fact->>'dv01')::float8 AS dv"
-                             " FROM run_position WHERE run_id = %s AND fact IS NOT NULL AND position_id = ANY(%s)",
-                             (r["run_id"], list(pos))):
-            by_run.setdefault(x["position_id"], {})[r["business_date"]] = (x["n"], x["dv"])
+        for x in con.execute("SELECT position_id, (fact->>'notional')::float8 AS n, (fact->>'dv01')::float8 AS dv,"
+                             " (fact->>'spread_bp')::float8 AS spr FROM run_position WHERE run_id = %s"
+                             " AND fact IS NOT NULL AND position_id = ANY(%s)", (r["run_id"], list(pos))):
+            by_run.setdefault(x["position_id"], {})[r["business_date"]] = (x["n"], x["dv"], x["spr"])
     secid = {pid: (r["fact"].get("instrument_id") or r["secid"]) for pid, r in pos.items()
              if r["fact"].get("instr_type") == "BOND"}
     quotes: dict[str, dict[date, dict[str, Any]]] = {}
-    for q in con.execute("SELECT business_date, secid, clean_pct, yield_pct, gspread_bp, yield_date FROM md_bond_eod"
+    for q in con.execute("SELECT business_date, secid, clean_pct, yield_pct, gspread_bp, zspread_bp, yield_date,"
+                         " icpi, ir, bei FROM md_bond_day"
                          " WHERE secid = ANY(%s) AND business_date >= %s AND business_date <= %s",
                          (list(set(secid.values())), from_, run["business_date"])):
         quotes.setdefault(q["secid"], {})[q["business_date"]] = q
     dates = sorted({d for s in quotes.values() for d in s} | {r["business_date"] for r in runs})
     curves = {r["business_date"]: kbd(r["trade_date"], r["params"]) for r in con.execute(
-        "SELECT business_date, trade_date, params FROM md_kbd WHERE business_date = ANY(%s)", (dates,))}
+        "SELECT business_date, trade_date, params FROM md_kbd_day WHERE business_date = ANY(%s)", (dates,))}
     series = {}
     for pid, r in pos.items():
         f = r["fact"]
@@ -264,12 +268,16 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
         mat = date.fromisoformat(f["maturity"]) if f.get("maturity") else None
         q = quotes.get(secid.get(pid) or "", {})
         held = by_run.get(pid, {})
-        s = {k: [] for k in ("price", "ytm", "spr", "notional", "dv01", "bench")}
-        last: tuple[float | None, float | None] | None = None
+        s = {k: [] for k in ("price", "ytm", "spr", "notional", "dv01", "bench", *OPTIONAL)}
+        last: tuple[float | None, float | None, float | None] | None = None
         for d in dates:
             x = q.get(d)
             if d in held:
                 last = held[d]
+            s["zspr"].append(x["zspread_bp"] if x else None)
+            s["dm"].append(held[d][2] if flt and d in held else None)
+            for k in ("icpi", "ir", "bei"):
+                s[k].append(x[k] if x else None)
             s["price"].append(x["clean_pct"] if x else (f.get("price") if d == run["business_date"] else None))
             s["ytm"].append(None if flt or not x else x["yield_pct"])
             s["spr"].append(x["gspread_bp"] if x else None)
@@ -278,9 +286,18 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
             yd = x["yield_date"] if x and x["yield_date"] else mat
             t = (yd - d).days / 365.25 if yd and yd > d else None
             s["bench"].append(curve_rate(curves.get(d), t) if rub_fix else None)
+        for k in OPTIONAL:  # only when the bond has them: most series would be nulls
+            if all(v is None for v in s[k]):
+                del s[k]
         series[pid] = s
     return {"runId": run["run_id"], "dates": [d.isoformat() for d in dates], "series": series,
-            "note": "цена, доходность и G-спред — MOEX (история закрытий хаба); номинал и DV01 — по прогонам деска"}
+            "note": ("цена, доходность, G- и Z-спред (к КБД), у линкеров ICPI, IR, BEI — MOEX (история закрытий хаба);"
+                     " номинал, DV01 и дисконт-маржа флоатера — по прогонам деска")}
+
+
+OPTIONAL = ("zspr", "dm", "icpi", "ir", "bei")
+"""Series of ``positions_history`` given only when the position has a value: MOEX's Z-spread to the KBD, the desk's
+discount margin of a floater (its run spread), MOEX's linker analytics (contract 1.2)."""
 
 
 def script(data: dict[str, Any]) -> str:

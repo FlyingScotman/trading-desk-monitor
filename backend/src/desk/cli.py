@@ -18,6 +18,8 @@
     desk cycle [--date D] [--no-hub]     one autopilot cycle: hub sync -> inbox scan -> EOD of changed dates
     desk openapi --out ../frontend/openapi.json   the API's OpenAPI document (stdout without --out)
     desk diagnostics [--out FILE] [--no-hub]       how the desk works here, without private data (R13)
+    desk history status [--json]         the market history read from the hub's history API (R24) and why not
+    desk history sync [--budget S]       fetch it now, for at most S seconds (default 600; resumable)
 
 Defaults for the snapshot folder, the run store and the report folder come from
 :mod:`desk.settings` (``DESK_*`` variables or ``backend/.env``); ``desk config`` prints them.
@@ -463,6 +465,9 @@ def cmd_hub_check(a: argparse.Namespace) -> int:
     if latest := r["latest"]:
         print(f"latest   {a.cut} {latest['business_date']}  {(latest['snapshot_id'] or '')[:12]}  "
               f"published {latest['published_at']} ({_age(latest['published_at'])})")
+    if hapi := r.get("history_api"):
+        print("history  " + (f"API available: {', '.join(hapi['datasets'])} ({hapi['series']} series)"
+                             if hapi["available"] else f"API not used: {hapi['reason']} (history from the snapshots)"))
     if r["error"]:
         print(f"desk: {r['error']}", file=sys.stderr)
     return 0 if r["ok"] else 1
@@ -517,6 +522,30 @@ def _load_history(settings: Settings, folder: Path) -> None:
         return
     if line:
         print(line)
+
+
+def cmd_history(a: argparse.Namespace) -> int:
+    """``desk history status|sync`` (R24): the store's market history from the hub's history API."""
+    from .marketdata import hubhistory
+
+    url = store.resolve_url(a.settings)
+    store.migrate(url)
+    with store.connect(url) as con:
+        if a.history_cmd == "sync":
+            client = HubClient(a.settings)
+            rep = hubhistory.sync(con, client, bonds_from=a.settings.history_bonds_from,
+                                  rates_from=a.settings.history_rates_from, held=hubhistory.held_secids(con),
+                                  budget_s=a.budget,
+                                  progress=lambda i, n, d: print(f"  {i + 1}/{n} {d}", flush=True) if a.verbose
+                                  else None)
+            print(rep.text())
+            if not rep.available:
+                print("the autopilot loads the history from the snapshots instead (history_days)")
+                return 1
+            return 1 if rep.errors else 0
+        st = hubhistory.status(con)
+        print(hubhistory.to_json(st) if a.json else "\n".join(hubhistory.status_text(st)))
+    return 0
 
 
 def cmd_serve(a: argparse.Namespace) -> int:
@@ -707,6 +736,15 @@ def main(argv: list[str] | None = None) -> int:
     dg.add_argument("--out", help="write it to this file (stdout without --out)")
     dg.add_argument("--no-hub", action="store_true", help="do not ask the hub (no live check, no snapshot list)")
     dg.set_defaults(fn=cmd_diagnostics)
+    hi = sub.add_parser("history", help="the market history from the hub's history API (hub 0.2.0, R24)")
+    hisub = hi.add_subparsers(dest="history_cmd", required=True)
+    hst = hisub.add_parser("status", help="stored ranges, rows and queries per dataset; why the API is not used")
+    hst.add_argument("--json", action="store_true")
+    hst.set_defaults(fn=cmd_history)
+    hsy = hisub.add_parser("sync", help="fetch the history now (what the autopilot does a little per cycle)")
+    hsy.add_argument("--budget", type=float, default=600.0, help="seconds at most (default 600); run it again to go on")
+    hsy.add_argument("--verbose", action="store_true", help="print each query")
+    hsy.set_defaults(fn=cmd_history)
     c = sub.add_parser("config", help="print the effective settings (token masked)")
     c.set_defaults(fn=cmd_config)
     a = ap.parse_args(argv)

@@ -23,9 +23,10 @@ from test_slice_s3 import TOKEN
 from desk import autopilot, cli, store
 from desk.api import create_app
 from desk.autopilot import HISTORY_PER_CYCLE, Autopilot
-from desk.marketdata import history
+from desk.marketdata import history, hubhistory
 from desk.marketdata.adapter import zcyc_parameters
 from desk.marketdata.bundle import read_bundle
+from desk.marketdata.hub import NO_HISTORY_API, HistoryUnavailable
 from desk.settings import Settings, check_settings_doc, load
 
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1"
@@ -34,6 +35,7 @@ MARKET, STATIC = INDEX["market_eod_final"]["snapshot_id"], INDEX["static_daily"]
 DATE = "2026-10-15"
 OFZ, OFZ_ISIN, FLOATER, USD_FACE = "SU26238RMFS4", "RU000A1038V6", "SU29008RMFS8", "RU000A10BRM5"
 server, stub = test_slice_s3.server, test_slice_s3.stub  # the stub hub of slice S3
+NO_API = f"; history API: {NO_HISTORY_API}"  # the stub hubs are 0.1.x: the history step reads the bundles
 PRICES = ("legal_close_pct", "close_pct", "waprice_pct", "market_price2_pct", "market_price3_pct", "open_pct",
           "high_pct", "low_pct")
 
@@ -225,9 +227,10 @@ def test_history_route_gives_every_quoted_day_with_the_curve_rate(desk_with_hist
 
 
 class FakeHub:
-    """The hub's list and bundles for ``dates`` (newest first): shifted fixture snapshots, built on demand."""
+    """The hub's list and bundles for ``dates`` (newest first): shifted fixture snapshots, built on demand. A hub
+    before 0.2.0: no history API (the history step falls back to the bundles, R24)."""
 
-    host = "hub.test"
+    host, url = "hub.test", "https://hub.test"
 
     def __init__(self, dates: list[str]) -> None:
         self.dates, self.bodies, self.lists, self.bundles = dates, {}, 0, []
@@ -243,6 +246,9 @@ class FakeHub:
                 yield {"snapshot_id": self.bodies[d][0], "business_date": d, "kind": "market",
                        "cut_type": "eod_final"}
 
+    def history_index(self):
+        raise HistoryUnavailable(NO_HISTORY_API, 404, "no_api")
+
     def bundle(self, sid: str) -> bytes:
         self.bundles.append(sid)
         return next(b for s, b in self.bodies.values() if s == sid)
@@ -256,15 +262,18 @@ def test_autopilot_history_step_backfills_a_few_dates_per_cycle(store_url, tmp_p
     s = Settings(home=tmp_path / "home", snapshot_cache=cache, store_url=store_url, hub_url="https://hub.test",
                  history_days=12)
     ap = Autopilot(settings_loader=lambda: s, today=lambda: date(2026, 10, 19))
+    hubhistory.forget()
     with store.connect(store_url) as con:
         assert ap._history(s, con) == ("ok", (f"loaded {', '.join(dates[1:6])}; 6 dates in the next cycles"
-                                             f" (history_days 12: 12 on the hub back to {dates[11]})"))  # the cached one: the sync's
+                                             f" (history_days 12: 12 on the hub back to {dates[11]}){NO_API}"))
+        # the cached one: the sync's
         assert len(hub.bundles) == HISTORY_PER_CYCLE == 5 and sorted(p.name for p in cache.iterdir()) == sorted(
             p.name for p in FIX.glob("*.json.gz"))  # not cached
         ap._history(s, con)
         st = ap._history(s, con)
         assert st[1].startswith(f"loaded {dates[11]}") and "next cycles" not in st[1]
-        assert ap._history(s, con) == ("ok", f"up to date (history_days 12: 12 on the hub back to {dates[11]})")
+        assert ap._history(s, con) == ("ok", f"up to date (history_days 12: 12 on the hub back to {dates[11]})"
+                                             + NO_API)
         assert hub.lists == 1 and len(hub.bundles) == 11  # the list read once per hour; 12 dates less the cached
         assert len(history.loaded_dates(con)) == 11  # the cached date loads in the sync step, not here
         ap._sync_later = 2
@@ -283,7 +292,7 @@ def test_cycle_loads_the_cache_and_runs_the_history_step(stub, store_url, tmp_pa
     ap = Autopilot(settings_loader=lambda: s, today=lambda: date(2026, 10, 19))
     by = {x["name"]: (x["status"], x["detail"]) for x in ap.run_cycle()["steps"]}
     assert "pulled 2026-10-15" in by["sync"][1] and "history tables: date 2026-10-15, static 1" in by["sync"][1]
-    assert by["history"] == ("ok", "up to date (history_days 260: 1 on the hub back to 2026-10-15)")
+    assert by["history"] == ("ok", "up to date (history_days 260: 1 on the hub back to 2026-10-15)" + NO_API)
     stub.requests.clear()
     by = {x["name"]: (x["status"], x["detail"]) for x in ap.run_cycle()["steps"]}
     assert "history tables" not in by["sync"][1] and not any("/bundle" in r for r in stub.requests)

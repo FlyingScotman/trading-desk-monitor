@@ -62,7 +62,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
     </div>
   </div>
   <div class="k-panel">
-    <div class="hd"><h3>Движения дня</h3><span class="sp"></span><span class="k-note">крупные выпуски (> 8 bn), изм. доходности за день</span></div>
+    <div class="hd"><h3>Движения дня</h3><span class="sp"></span><span id="cMov"></span><span class="k-note" id="movNote">крупные выпуски (> 8 bn), изм. доходности за день</span></div>
     <div class="bd flush" id="movers"></div>
   </div>
 </div>
@@ -72,14 +72,18 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
 <script>
 (function () {
   const M = MOCK, K = KIT, f = K.f, esc = K.esc;
+  // история рынка (прогон из базы: /api/v1/history/market; демо — нет): изменения выпусков за периоды, фиксинги, кривые по датам
+  const MH = M.marketHistory ? M.marketHistory() : null;
+  const PER = [['1D', 'день'], ['1W', 'неделя'], ['1M', 'месяц'], ['3M', '3 мес'], ['YTD', 'с начала года']];
+  const perIdx = k => PER.findIndex(x => x[0] === k);
   K.top({ title: 'C09 · Рынок', tag: 'где что торгуется: карта доходностей, кривые, спреды' });
 
   // ---------- полоса индексов ----------
   const ir = M.util.rng('idxchg');
-  const idxChg = {}; Object.keys(M.indices).forEach(k => idxChg[k] = k === 'КС' ? 0 : Math.round((ir() - 0.45) * 12));
+  const idxChg = {}; Object.keys(M.indices).forEach(k => idxChg[k] = MH ? ((MH.indices || {})[k] ? MH.indices[k].chgBp[0] : null) : k === 'КС' ? 0 : Math.round((ir() - 0.45) * 12));
   function strip() {
     const t = (l, v, s, cls) => '<div class="k-kpi' + (cls ? ' ' + cls : '') + '"><div class="l">' + l + '</div><div class="v">' + v + '</div><div class="s">' + (s || '&nbsp;') + '</div></div>';
-    const chg = k => { const v = idxChg[k]; return v ? '<span class="' + f.cls(v) + '">' + f.bps(v) + ' б.п.</span>' : '<span class="mut3">без изм.</span>'; };
+    const chg = k => { const v = idxChg[k]; return v ? '<span class="' + f.cls(v) + '">' + f.bps(v) + ' б.п.</span>' : v == null ? '<span class="mut3">—</span>' : '<span class="mut3">без изм.</span>'; };
     let h = ['КС', 'RUONIA', 'RUSFAR', 'CPI г/г', 'SOFR', 'RUSFAR CNY'].map(k => t(k, f.pct(M.indices[k]), chg(k))).join('');
     h += ['USD', 'EUR', 'CNY'].map(c => t(c + '/RUB', f.n(M.fx[c], c === 'CNY' ? 3 : 2), '<span class="' + f.cls(M.fxChgPct[c]) + '">' + f.s(M.fxChgPct[c], 2) + '%</span>')).join('');
     const ofz10 = M.curveAt('OFZ', 10), ofz2 = M.curveAt('OFZ', 2);
@@ -95,7 +99,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
   const NR = r => !r || r === 'без рейтинга' || r === '—';
   if (M.universeRub.some(b => !b.isOfz && NR(b.rating)) || M.positions.some(p => p.group === 'CORP' && NR(p.rating))) RB.splice(4, 0, ['б/р', NR, '#8a96a3']);
   const rbOf = r => (RB.find(x => x[1](r)) || RB[RB.length - 1])[0];
-  const S = { x: 'dur', flt: 'fix', rt: ['AAA', 'AA', 'A', 'BBB'].concat(RB.some(x => x[0] === 'б/р') ? ['б/р'] : []), sec: '', ours: false, curve: 'lvl', fx: 'CNY' };
+  const S = { x: 'dur', flt: 'fix', rt: ['AAA', 'AA', 'A', 'BBB'].concat(RB.some(x => x[0] === 'б/р') ? ['б/р'] : []), sec: '', ours: false, curve: 'lvl', fx: 'CNY', per: '1D' };
   try { Object.assign(S, JSON.parse(localStorage.getItem('c09-state') || '{}')); } catch (e) { }
   const save = () => { try { localStorage.setItem('c09-state', JSON.stringify(S)); } catch (e) { } };
   const xOf = (o, our) => S.x === 'dur' ? (our ? (o.cpn.type === 'float' ? 0.15 : o.mdur) : o.dur) : o.tenor;
@@ -152,20 +156,39 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
   ym.on('click', pp => { if (pp.seriesName === 'наши') K.card(ourPts[pp.data.i].id); });
 
   // ---------- кривые ----------
+  // с прошлой датой (история рынка): уровни кривых на день, неделю, месяц… назад вместо «вчера» прогона
+  const HC = MH && MH.curves || {};
+  const hcAt = (id, per) => HC[id] && HC[id].pts && HC[id].pts[per] ? HC[id].pts[per].map(v => v == null ? null : v) : null;
+  const perLbl = () => S.per === '1D' ? 'вчера' : (PER.find(x => x[0] === S.per) || PER[0])[1] + ' назад';
+  // изменение кривой за период — обе даты из истории (один источник котировок, одна интерполяция), б.п.
+  const hd = id => { const a = hcAt(id, 'asOf'), b = hcAt(id, S.per); return a && b ? a.map((v, k) => v == null || b[k] == null ? null : Math.round((v - b[k]) * 1000) / 10) : null; };
   const cv = K.chart(document.getElementById('curves'), () => {
     const R = M.curve['RUB RUONIA'], KS = M.curve['RUB KEY'], B = M.curve['RUB OFZ'];
-    const yd = c => c.pts.map((v, k) => v - c.chg[k] / 100);
-    const ofzY = M.pillars.map((_, k) => yd(R)[k] + (B.pts[k] - B.chg[k]) / 100);
+    const yd0 = c => c.pts.map((v, k) => v - c.chg[k] / 100);
+    const histId = { 'RUB RUONIA': 'RUB RUONIA', 'RUB KEY': 'RUB KEY' };
+    const yd = c => (histId[c.id] && hcAt(c.id, S.per)) || yd0(c);
+    const ofzY = hcAt('OFZ', S.per) || M.pillars.map((_, k) => yd0(R)[k] + (B.pts[k] - B.chg[k]) / 100);
+    if (S.curve === 'hist' && HC['RUB RUONIA']) {  // как менялись кривые: 1Y и 5Y RUONIA OIS, КС-свопов и КБД за два года
+      const lines = [['RUONIA', HC['RUB RUONIA'], K.curveColors['RUB RUONIA']], ['КС', HC['RUB KEY'], K.curveColors['RUB KEY']], ['ОФЗ', HC.OFZ, '#9b7bff']].filter(x => x[1]);
+      const dates = [...new Set(lines.flatMap(([, c]) => c.series.dates))].sort();
+      const at = (c, t) => { const m = {}; c.series.dates.forEach((d, i) => m[d] = c.series[t][i]); return dates.map(d => m[d] == null ? null : m[d]); };
+      return { grid: { left: 8, right: 12, top: 34, bottom: 22, containLabel: true }, legend: { top: 4, left: 8, type: 'scroll' }, tooltip: { trigger: 'axis', valueFormatter: v => f.pct(v) },
+        xAxis: { type: 'category', data: dates, axisLabel: { formatter: v => f.dshort(v) } }, yAxis: { type: 'value', scale: true, axisLabel: { formatter: v => v.toFixed(1) } },
+        dataZoom: [{ type: 'inside' }, { type: 'slider', height: 12, bottom: 2 }],
+        series: lines.flatMap(([n, c, col]) => [{ name: n + ' 1Y', type: 'line', data: at(c, '1Y'), color: col, showSymbol: false, connectNulls: true, lineStyle: { width: 1.2, type: 'dotted' } },
+          { name: n + ' 5Y', type: 'line', data: at(c, '5Y'), color: col, showSymbol: false, connectNulls: true, lineStyle: { width: 1.8 } }]) };
+    }
     const base = { grid: { left: 8, right: 12, top: 34, bottom: 6, containLabel: true }, legend: { top: 4, left: 8, type: 'scroll' }, tooltip: { trigger: 'axis' }, xAxis: { type: 'category', data: M.buckets } };
     if (S.curve === 'lvl') return Object.assign(base, {
       tooltip: { trigger: 'axis', valueFormatter: v => f.pct(v) }, yAxis: { type: 'value', scale: true, axisLabel: { formatter: v => v.toFixed(1) } },
       series: [['ОФЗ', M.ofzCurve, ofzY, '#9b7bff'], ['RUONIA', R.pts, yd(R), K.curveColors['RUB RUONIA']], ['КС', KS.pts, yd(KS), K.curveColors['RUB KEY']]].flatMap(([n, a, b, c]) => [
         { name: n, type: 'line', data: a, color: c, symbolSize: 4, lineStyle: { width: 2 } },
-        { name: n + ' вчера', type: 'line', data: b, color: c, showSymbol: false, lineStyle: { width: 1, type: 'dotted' } }]),
+        { name: n + ' ' + perLbl(), type: 'line', data: b, color: c, showSymbol: false, lineStyle: { width: 1, type: 'dotted' } }]),
     });
     if (S.curve === 'chg') return Object.assign(base, {
       tooltip: { trigger: 'axis', valueFormatter: v => f.bps(v) + ' б.п.' }, yAxis: { type: 'value', axisLabel: { formatter: v => v } },
-      series: [['ОФЗ', M.pillars.map((_, k) => R.chg[k] + B.chg[k]), '#9b7bff'], ['RUONIA', R.chg, K.curveColors['RUB RUONIA']], ['КС', KS.chg, K.curveColors['RUB KEY']]].map(([n, d, c]) => ({ name: n, type: 'bar', data: d, color: c, barMaxWidth: 14 })),
+      series: [['ОФЗ', hd('OFZ') || M.pillars.map((_, k) => R.chg[k] + B.chg[k]), '#9b7bff'], ['RUONIA', hd('RUB RUONIA') || R.chg, K.curveColors['RUB RUONIA']],
+        ['КС', hd('RUB KEY') || KS.chg, K.curveColors['RUB KEY']]].map(([n, d, c]) => ({ name: n + ' ' + ({ '1D': 'за день', '1W': 'за неделю', '1M': 'за месяц', '3M': 'за 3 мес', YTD: 'с начала года' })[S.per], type: 'bar', data: d, color: c, barMaxWidth: 14 })),
     });
     return Object.assign(base, {
       tooltip: { trigger: 'axis', valueFormatter: v => f.bp(v) + ' б.п.' }, yAxis: { type: 'value' },
@@ -173,7 +196,9 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
       { name: 'вчера', type: 'line', data: B.pts.map((v, k) => v - B.chg[k]), color: K.css('--fg-3'), lineStyle: { type: 'dotted' }, symbolSize: 4 }],
     });
   });
-  K.seg(document.getElementById('cCurve'), [['lvl', 'уровни'], ['chg', 'изм. дня'], ['basis', 'базис ОФЗ']], S.curve, v => { S.curve = v; save(); cv.redraw(); });
+  const curveModes = [['lvl', 'уровни'], ['chg', MH && HC['RUB RUONIA'] ? 'изменение' : 'изм. дня'], ['basis', 'базис ОФЗ']].concat(HC['RUB RUONIA'] ? [['hist', 'динамика']] : []);
+  if (!curveModes.some(m => m[0] === S.curve)) S.curve = 'lvl';
+  K.seg(document.getElementById('cCurve'), curveModes, S.curve, v => { S.curve = v; save(); cv.redraw(); });
 
   // ---------- валютные ----------
   let fxU = [], fxL = [];
@@ -223,15 +248,26 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
     rowsFn: () => K.list().filter(p => p.group === 'CORP' && p.ccy === 'RUB' && p.cpn.type === 'fix'), columns: K.cols(rvCols), sort: [['rv', -1]], stripe: r => K.issuerColor(r.issuer), maxHeight: '420px', footer: false,
   });
 
-  // ---------- движения дня ----------
-  const mov = M.marketMovers.map((b, i) => Object.assign({ id: 'm' + i, searchText: (b.name + ' ' + b.sector + ' ' + b.rating).toLowerCase() }, b));
-  const mxChg = Math.max(...mov.map(b => Math.abs(b.chgBp)));
-  K.table(document.getElementById('movers'), {
-    rows: mov, autoFilter: false, footer: false, sort: [['chgBp', -1]], maxHeight: '420px', onRow: () => { },
+  // ---------- движения: день, неделя, месяц, 3 месяца, с начала года (история рынка), иначе — день прогона ----------
+  const movers = () => {
+    if (!MH || !MH.bonds) return M.marketMovers;
+    const k = perIdx(S.per);
+    return M.universeRub.filter(b => b.value && MH.bonds[b.id] && MH.bonds[b.id].y[k] != null).sort((a, b) => b.value - a.value).slice(0, 60)
+      .map(b => ({ name: b.name, rating: b.rating, sector: b.sector, ytm: b.ytmMoex, chgBp: MH.bonds[b.id].y[k], chgPx: MH.bonds[b.id].p[k], vol: b.value }));
+  };
+  const movRows = () => movers().map((b, i) => Object.assign({ id: 'm' + i, searchText: (b.name + ' ' + b.sector + ' ' + b.rating).toLowerCase() }, b));
+  let mov = movRows();
+  let mxChg = Math.max(1, ...mov.map(b => Math.abs(b.chgBp)));
+  const movNote = () => { const d = MH && MH.periods && MH.periods[S.per]; document.getElementById('movNote').textContent = MH ? 'крупнейшие по обороту выпуски, изм. доходности' + (d ? ' к ' + f.date(d) : '') : 'крупные выпуски (> 8 bn), изм. доходности за день'; };
+  if (MH && MH.bonds) K.seg(document.getElementById('cMov'), PER, S.per, v => { S.per = v; save(); mov = movRows(); mxChg = Math.max(1, ...mov.map(b => Math.abs(b.chgBp))); movNote(); movT.redraw(); cv.redraw(); });
+  movNote();
+  const movT = K.table(document.getElementById('movers'), {
+    rowsFn: () => mov, autoFilter: false, footer: false, sort: [['chgBp', -1]], maxHeight: '420px', onRow: () => { },
     columns: [
       { key: 'name', label: 'Выпуск' }, { key: 'sector', label: 'Сектор', fmt: v => '<span class="mut">' + esc(v) + '</span>' }, { key: 'rating', label: 'Рейтинг', fmt: v => '<b style="color:' + (RB.find(x => x[0] === rbOf(v)) || RB[4])[2] + '">●</b> ' + esc(v) },
       { key: 'ytm', label: 'Доходность', num: true, fmt: v => f.pct(v) },
       { key: 'chgBp', label: 'Изм., б.п.', num: true, fmt: v => f.bps(v), style: v => K.heat(-v, mxChg), title: 'рост доходности — красный' },
+      { key: 'chgPx', label: 'Изм. цены', num: true, fmt: v => v == null ? '—' : f.s(v, 2), title: 'изменение чистой цены, п.п.' },
       { key: 'bar', label: '', val: r => r.chgBp, fmt: v => K.bar(-v, mxChg) },
       { key: 'vol', label: 'Оборот, mm', num: true, fmt: v => f.mn(v, 0) },
     ],

@@ -19,7 +19,7 @@ import test_slice_s3
 from fastapi.testclient import TestClient
 from test_autopilot import cfg, put, steps
 from test_intraday import FRI, MON, STATIC, at, body, publish, run_rows
-from test_market_history import FIX, MARKET, market_doc, shifted, write
+from test_market_history import FIX, MARKET, NO_API, FakeHub, market_doc, shifted, write
 
 from desk import autopilot, cli, store
 from desk.api import create_app
@@ -211,7 +211,7 @@ def test_the_later_correction_wins_when_the_cache_missed_a_link(tmp_path):
 class CorrectingHub:
     """The hub's list (with ``superseded_by``) and bundles of shifted fixture snapshots, corrections included."""
 
-    host = "hub.test"
+    host, url = "hub.test", "https://hub.test"
 
     def __init__(self) -> None:
         self.rows: list[dict] = []
@@ -233,6 +233,8 @@ class CorrectingHub:
     def bundle(self, sid: str) -> bytes:
         return self.bodies[sid]
 
+    history_index = FakeHub.history_index  # a hub before 0.2.0: the history step reads the bundles (R24)
+
 
 def test_history_step_reloads_a_date_the_hub_corrected(store_url, tmp_path, monkeypatch):
     hub = CorrectingHub()
@@ -242,12 +244,13 @@ def test_history_step_reloads_a_date_the_hub_corrected(store_url, tmp_path, monk
     ap = Autopilot(settings_loader=lambda: s, today=lambda: date(2026, 10, 19))
     a = hub.add("2026-10-14", 1, "2026-10-14T18:00:00Z")
     with store.connect(store_url) as con:
-        assert ap._history(s, con) == ("ok", "loaded 2026-10-14 (history_days 5: 1 on the hub back to 2026-10-14)")
+        assert ap._history(s, con) == ("ok", "loaded 2026-10-14 (history_days 5: 1 on the hub back to 2026-10-14)"
+                                       + NO_API)
         c = hub.add("2026-10-14", 2, "2026-10-20T06:00:00Z", supersedes=a)
         ap._history_dates = None  # the list is read again once an hour
         assert ap._history(s, con) == ("ok", ("loaded 2026-10-14 (correction) "
-                                             "(history_days 5: 1 on the hub back to 2026-10-14)"))
+                                             "(history_days 5: 1 on the hub back to 2026-10-14)" + NO_API))
         assert con.execute("SELECT snapshot_id FROM md_kbd").fetchall() == [(c,)]
         ap._history_dates = None
-        assert ap._history(s, con) == ("ok", "up to date (history_days 5: 1 on the hub back to 2026-10-14)")
+        assert ap._history(s, con) == ("ok", "up to date (history_days 5: 1 on the hub back to 2026-10-14)" + NO_API)
         assert history.superseded_dates(con, [("2026-10-14", c)]) == []

@@ -165,7 +165,7 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
       <label for="token">Токен</label>
       <div>
         <div class="row">
-          <input class="inp mono" id="token" type="password" placeholder="вставьте токен сервера (scope snapshots)" autocomplete="new-password">
+          <input class="inp mono" id="token" type="password" placeholder="вставьте токен сервера (scope read)" autocomplete="new-password">
           <button class="ibtn" id="token-save" type="button">Сохранить токен</button>
           <button class="lnk" id="token-clear" type="button">удалить</button>
         </div>
@@ -259,7 +259,14 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
         <p class="hint">Изменения применяются со следующего цикла (не позже чем через период опроса), перезапуск сервера не нужен.</p></div>
       <label for="history_days">История котировок, рабочих дней</label>
       <div><input class="inp mono num" id="history_days" data-key="history_days" inputmode="numeric" placeholder="260">
-        <p class="hint">Пусто — 260 (около года). Для графиков цен и доходностей сервер понемногу, по нескольку дат за цикл, догружает с маркет-дата сервера котировки за прошлые дни. 0 — не догружать, только загруженные срезы.</p></div>
+        <p class="hint">Пусто — 260 (около года). Для графиков цен и доходностей сервер понемногу, по нескольку дат за цикл, догружает с маркет-дата сервера котировки за прошлые дни. 0 — не догружать, только загруженные срезы. Если сервер отдаёт API истории (версия 0.2.0 и токен с правом read), история берётся оттуда — на годы назад, вместе с КБД, кривыми, фиксингами и курсами, а это число не действует (кроме 0 — выключено).</p>
+        <p class="hint" id="hist-st"></p></div>
+      <label for="history_bonds_from">История облигаций с</label>
+      <div><input class="inp mono" id="history_bonds_from" data-key="history_bonds_from" placeholder="2024-01-03" autocomplete="off">
+        <p class="hint">Пусто — 2024-01-03 (с этой даты у сервера есть закрытия облигаций). Только для API истории.</p></div>
+      <label for="history_rates_from">История ставок и курсов с</label>
+      <div><input class="inp mono" id="history_rates_from" data-key="history_rates_from" placeholder="2010-01-01" autocomplete="off">
+        <p class="hint">КБД, кривые RUONIA OIS и КС-свопов, фиксинги (КС, RUONIA, RUSFAR, ИПЦ), курсы ЦБ и MOEX. Пусто — 2010-01-01 (или сколько есть на сервере).</p></div>
     </div>
   </section>
 
@@ -415,7 +422,7 @@ async function api(method, url, body){
 }
 
 const S = {data:null, dirs:[], dirty:false, adapter:null};
-const KEYS = ['hub_url','https_proxy','proxy_user','hub_transport','no_proxy','hub_ca_bundle','private_adapter','private_adapter_config','inbox_poll_seconds','autopilot_sync_last','inbox_lookback_days','history_days'];
+const KEYS = ['hub_url','https_proxy','proxy_user','hub_transport','no_proxy','hub_ca_bundle','private_adapter','private_adapter_config','inbox_poll_seconds','autopilot_sync_last','inbox_lookback_days','history_days','history_bonds_from','history_rates_from'];
 
 function setDirty(v){
   S.dirty = v;
@@ -494,7 +501,8 @@ const EFF = [
   ['private_adapter','Адаптер'], ['private_adapter_default','Адаптер из комплекта'], ['private_adapter_config','Папка настроек адаптера'], ['private_adapter_sha256','Закреплённый отпечаток адаптера'],
   ['inbox_dirs','Папки с отчётами'], ['inbox_archive','Архив принятых файлов'], ['inbox_poll_seconds','Период опроса, сек'],
   ['autopilot','Автообновление'], ['intraday','Расчёт внутри дня'], ['autopilot_sync_last','Загружать последних дат'],
-  ['inbox_lookback_days','Брать отчёты не старше, дней'], ['history_days','История котировок, рабочих дней'], ['logs_dir','Журналы']];
+  ['inbox_lookback_days','Брать отчёты не старше, дней'], ['history_days','История котировок, рабочих дней'],
+  ['history_bonds_from','История облигаций с'], ['history_rates_from','История ставок и курсов с'], ['logs_dir','Журналы']];
 function renderEffective(eff){
   const tb = $('eff'); tb.textContent = '';
   EFF.forEach(([k, label]) => {
@@ -528,6 +536,9 @@ function collect(){
       const n = Number(v);
       if (!Number.isInteger(n) || n < 0) throw new Error('История котировок: нужно целое число рабочих дней (0 — не догружать)');
       body[k] = n;
+    } else if (k === 'history_bonds_from' || k === 'history_rates_from') {
+      if (v && !/^\d{4}-\d{2}-\d{2}$/.test(v)) throw new Error((k === 'history_bonds_from' ? 'История облигаций' : 'История ставок') + ': дата в виде ГГГГ-ММ-ДД');
+      body[k] = v || null;
     } else body[k] = v || null;
   }
   body.autopilot = $('autopilot').checked;
@@ -606,12 +617,30 @@ $('test-hub').addEventListener('click', async () => {
     if (r.transport) lines.push(h('div', {class:'muted'}, 'Способ подключения: ' + (r.transport === 'curl' ? 'curl Windows' : 'Python')));
     if (r.latest) lines.push(h('div', {}, 'Последний срез ', h('span', {class:'mono'}, r.latest.cut + ' ' + r.latest.business_date),
       ', опубликован ', h('span', {class:'mono'}, r.latest.published_at || '?'), r.latest.age_hours != null ? ' (' + age(r.latest.age_hours) + ')' : ''));
+    if (r.history_api) lines.push(r.history_api.available
+      ? h('div', {}, 'API истории есть: ', h('span', {class:'mono'}, (r.history_api.datasets || []).join(', ')))
+      : h('div', {class:'muted'}, 'API истории не используется: ' + r.history_api.reason + ' — история котировок догружается по срезам.'));
     if (r.error) lines.push(h('div', {class:'err'}, 'Ошибка: ' + r.error));
     if (r.ok) lines.unshift(h('div', {class:'okmsg'}, 'Связь есть.'));
     box.append(...lines);
   } catch(e) { box.className = 'res bad'; box.textContent = 'Ошибка: ' + e.message; }
   finally { btn.disabled = false; }
 });
+
+/* ---------- market history (R24): what the store holds from the hub's history API, or why it is not used ---------- */
+async function loadHistoryStatus(){
+  const el = $('hist-st');
+  let st;
+  try { st = await api('GET', '/api/v1/history/status'); } catch(e) { el.textContent = ''; return; }
+  const a = st.api, b = (st.datasets || {}).bonds || {}, n = v => (v || 0).toLocaleString('ru-RU');
+  el.textContent = '';
+  if (!a) { el.textContent = 'API истории сервера ещё не опрашивался (первый цикл автообновления).'; return; }
+  if (!a.available) { el.append(h('span', {class:'err'}, 'API истории не используется: ' + a.reason + '.'), ' История котировок догружается по срезам (последние «История котировок, рабочих дней»).'); return; }
+  const pend = Object.values(st.datasets || {}).reduce((s, d) => s + (d.pending || 0), 0);
+  el.append(h('span', {class:'okmsg'}, 'История из API сервера: '), 'облигации ' + (b.from ? b.from + ' … ' + b.to + ', ' + n(b.rows) + ' строк, ' + n(b.bonds) + ' выпусков' : 'ещё не загружены') +
+    (pend ? '; догружается, осталось запросов: ' + pend : '; загружено всё') + (st.errors && st.errors.length ? '; ошибки: ' + st.errors.length : '') + '.');
+}
+loadHistoryStatus();
 
 /* ---------- adapter ---------- */
 async function loadAdapter(){
