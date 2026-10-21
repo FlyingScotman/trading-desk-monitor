@@ -157,6 +157,17 @@ The price, yield and spread charts read the store's market history (`desk/market
 
 It is filled from every bundle of the cache (the autopilot's sync step; `desk sync` and `desk import-drop` too when `DESK_STORE_URL` is set), from the snapshots a `desk eod` reads, and by the autopilot's history step for the `history_days` latest hub dates the cache does not hold. Those bundles are not cached: for the whole universe a market bundle is about 0.5 MB and its static one about 4 MB (the fixtures' bytes per bond, about 140 per quote and 1 200 per bond's terms, times ~3 000 bonds), so a year of them would take about 1 GB, while a year of rows takes about 100 MB. The history is a read model: a lost store refills from the cache and the hub.
 
+### Concept pages on real runs
+
+The interface concepts (`prototypes/concepts/`, served at `/concepts/`) read the run the other pages show. `lib/boot.js` chooses the data before the page code runs: over `desk serve`, `/desk-data.js` (`window.DESK`) and `/concepts-data.js` (`window.DESK_EXTRAS`), from which `lib/real.js` builds the pages' data (the shape of the demo set `lib/mock.js`); `?demo=1`, a store without runs or a page opened as a file get the demo set, and the header says so. The run is chosen as on the other pages (`?run_id=`, `?as_of=`, the remembered choice `desk.run.v1`), from the header's run chip too.
+
+- `/concepts-data.js?run_id=` (`desk/api/concepts.py`, ETag, `no-cache`): over the default runs up to the run, the desk's series (DV01 by curve, CS01, OFZ basis, DV01 by book, market value by instrument type and currency, PnL by factor); per position its PnL month and year to date over those runs, the previous run's price and spread and the change of its holding (a trade); the positions' flows of the next 18 months; the market of the latest close in the history (every quoted bond, RUB and foreign face, and the day's movers by turnover). Ratings, sectors, outstanding amounts and coupons of the market's bonds and CBR meetings are not in the store: null, listed in the header's notes.
+- `/api/v1/history/positions?run_id=&ids=&from=`: the run's positions on one date axis, MOEX price, yield (none for a floater) and G-spread from `md_bond_eod`, the KBD at the bond's term, face and DV01 by the default runs (carried forward between runs, null before the first). A position's card asks for one position, a page that charts every position (C11, C13) for all at once.
+- A bond's fact carries its offer (`extra.offer_date`, `offer_kind`), its flows of the next 18 months (`extra.cashflows`: date, kind, amount in the face currency, forecast) and the day's quote (`extra.quote`: G-spread, bid/offer when the cut has them, volume, turnover); runs from `VALUATION_VERSION` 6 (the latest date is recomputed once after the upgrade).
+- Responses over 4 KB are gzipped.
+
+`tests/concepts_live.py` serves two fixture runs and a month of market history on an embedded PostgreSQL; `node ../prototypes/concepts/tools/smoke.js <out> --base http://127.0.0.1:8199/concepts/` and `tools/clickthrough.js --base ...` open every concept page on it and fail on any console error.
+
 ## Valuation quality
 
 The owner's rule (19 October 2026): a bond is valued somehow rather than not at all. Every valuation carries `quality` and `assumptions`, published in the position's `extra`, the run log and the validation report:

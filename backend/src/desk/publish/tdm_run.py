@@ -351,6 +351,65 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
     }
 
 
+CASHFLOW_DAYS = 548
+"""How far ahead a position's ``extra.cashflows`` go (18 months): the payment calendars of the concept pages."""
+
+
+def _per_bond(c: Any, face: float, freq: int | None, pct: float | None) -> tuple[float | None, bool]:
+    """A coupon's amount per bond in the face currency and whether it is a forecast: the published amount, else the
+    published rate on the face, else ``pct`` (the current or projected coupon) on the face (a forecast)."""
+    if c.amount_per_bond is not None:
+        return float(c.amount_per_bond), False
+    f = freq or 2
+    if c.rate_pct is not None:
+        return float(c.rate_pct) / 100 * face / f, False
+    return (pct / 100 * face / f, True) if pct is not None else (None, True)
+
+
+def cashflows(t: Any, v: BondValuation, as_of: date, face_ccy: float, freq: int | None, pct: float | None
+              ) -> list[list[Any]]:
+    """The position's flows of the next ``CASHFLOW_DAYS`` up to its horizon (the offer or call it is priced to, else
+    maturity): ``[date, kind, amount, forecast]`` with kind ``cpn`` / ``amort`` / ``put`` / ``call`` / ``mat``, the
+    amount in the face currency for the whole position (signed by the side). A coupon without a published amount or
+    rate is the current coupon on the face, a forecast; so is every floater's coupon after the next one (its rate is
+    fixed later, whatever the schedule repeats)."""
+    end = min(as_of + timedelta(days=CASHFLOW_DAYS), v.horizon_date)
+    q, out, floating, nth = v.quantity, [], t.coupon_type == "floating", 0
+    for c in sorted(t.coupons, key=lambda c: c.pay_date):
+        if as_of < c.pay_date <= end:
+            face = float(c.face) if c.face is not None else face_ccy
+            amt, est = _per_bond(c, face, freq, pct)
+            nth += 1
+            if amt is not None:
+                out.append([c.pay_date.isoformat(), "cpn", amt * q, est or (floating and nth > 1)])
+    for r in t.redemptions:
+        if as_of < r.date < v.horizon_date and r.date <= end and r.value_per_bond is not None:
+            out.append([r.date.isoformat(), "amort", float(r.value_per_bond) * q, False])
+    if as_of < v.horizon_date <= as_of + timedelta(days=CASHFLOW_DAYS):
+        kind = {"offer": "put", "call": "call"}.get(v.horizon_kind, "mat")
+        out.append([v.horizon_date.isoformat(), kind, face_ccy * q, False])
+    return sorted(out, key=lambda x: x[0])
+
+
+def _quote_extra(q: Any, sa: dict[str, Any]) -> dict[str, Any]:
+    """The day's quote beyond the price the valuation uses: MOEX G-spread, bid/offer when the cut has them (intraday),
+    volume, turnover and trades. Null fields are left out."""
+    if q is None:
+        return {}
+    px = q.prices_pct or {}
+    out = {"gspread_bp": _f(sa.get("gspread_bp")), "bid": _f(px.get("bid")), "ask": _f(px.get("offer")),
+           "volume_bonds": _f(q.volume_bonds), "value": _f(q.value), "value_ccy": q.currency_id,
+           "num_trades": q.num_trades}
+    return {"quote": {k: x for k, x in out.items() if x is not None}}
+
+
+def _f(x: Any) -> float | None:
+    try:
+        return None if x is None else float(x)
+    except (TypeError, ValueError):
+        return None
+
+
 def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
                  x: dict[str, Any] | None = None) -> dict[str, Any]:
     t, q, v = o.terms, o.quote, o.valuation
@@ -364,6 +423,9 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
     if cpn.pct is None and v.current_coupon_pct is not None:
         cpn = replace(cpn, pct=v.current_coupon_pct, basis="rate")
     freq = t.coupon_frequency or implied_frequency(t)
+    face_ccy = v.face_rub / (fx[0] if fx else 1.0)
+    offer = ({"offer_date": v.horizon_date.isoformat(), "offer_kind": "call" if v.horizon_kind == "call" else "put"}
+             if v.horizon_kind in ("offer", "call") else {})
     return {
         "position_id": pid, "book_id": book, "instr_type": "BOND",
         "asset_class": ASSET_CLASS.get(t.bond_class, t.bond_class), "segment": SEGMENT.get(t.bond_class, "Корп"),
@@ -393,7 +455,8 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
             "moex_yield_close_pct": sa.get("yield_close_pct"), "moex_duration_days": sa.get("duration_days"),
             "valuation": "computed" if v.quality == "exact" else "approximated",
             "quality": v.quality, "assumptions": list(v.assumptions),
-            "short_name": t.short_name, "coupon_basis": cpn.basis,
+            "short_name": t.short_name, "coupon_basis": cpn.basis, **offer,
+            "cashflows": cashflows(t, v, as_of, face_ccy, freq, cpn.pct), **_quote_extra(q, sa),
             **({"coupon_freq_source": "schedule"} if freq and not t.coupon_frequency else {}),
             **({"not_exact_reason": o.reason} if o.reason else {}),
             **({"fx_rate": fx[0], "fx_source": fx[1]} if fx else {}),

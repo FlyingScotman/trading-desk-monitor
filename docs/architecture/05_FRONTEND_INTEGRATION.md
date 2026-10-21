@@ -80,6 +80,15 @@ Notes:
 
    Details: FE-1…FE-7 in [reviews/2026-10-16_module_review.md](reviews/2026-10-16_module_review.md).
 
+## 4a Interface concepts on real data
+
+The concepts (`prototypes/concepts/`, owner feedback 21.10) run on the demo set and on real runs alike: `lib/real.js` maps `window.DESK` plus `window.DESK_EXTRAS` (`/concepts-data.js`) onto the demo set's shape, so a concept page needs no code for the data source. Rules it keeps:
+- absent data is null and named in the header's notes, never a made-up number (ratings, sectors and sizes of the market's bonds, CBR meetings, foreign curves' points);
+- a floater has no yield: its spread is the discount margin;
+- the OFZ curve of the concepts is the basis OFZ − RUONIA (the run's KBD minus RUONIA OIS), its risk the positions' `ofzSpr01` by tenor; risk the run booked on the KBD (a date without RUONIA) is added to RUONIA;
+- instrument types: GOV (ОФЗ-ПД, -ПК, -ИН, sovereign FX), SUB, CORP (fixed / floaters), DER (OTC by the report, FX), other; the same in `api/concepts.kind_of` and `real.js`;
+- the desk's series over time are the default runs' own sums (risk, MV, PnL) and the market history (price, yield, G-spread); C11 alone rebuilds risk from each position's face by run times today's sensitivities, and says so on the page.
+
 ## 5 Live behaviour (intraday)
 
 - The UI subscribes to `/api/v1/events`. On `run.published` it shows a "newer run available" banner, or auto-switches if the user pinned "follow latest".
