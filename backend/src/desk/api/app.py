@@ -23,6 +23,7 @@ import psycopg
 from fastapi import Depends, FastAPI, Query, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from psycopg.rows import dict_row
@@ -34,7 +35,7 @@ from ..scenario import jobs
 from ..scenario.definition import definition_hash, normalize
 from ..scenario.taylor import risk_payload
 from ..settings import REPO_ROOT
-from . import compat
+from . import compat, concepts
 from .autopilot_routes import router as autopilot_router
 from .models import (
     COMPAT,
@@ -159,6 +160,8 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
     app.state.store_url = store_url
     app.state.started_at = datetime.now(UTC)  # the diagnostics' uptime (R13)
+    # window.DESK and the concept pages' series of a large book are megabytes of JSON: compressed on the wire
+    app.add_middleware(GZipMiddleware, minimum_size=4096)
 
     @app.middleware("http")
     async def request_id(request: Request, call_next):
@@ -397,6 +400,35 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         if desk is None:
             raise ApiError(404, "not_found", missing)
         return desk
+
+    # ---- concept pages (prototypes/concepts/, lib/real.js): their data beyond window.DESK
+    @app.get("/concepts-data.js", include_in_schema=False)
+    def concepts_js(con: Con, request: Request, as_of: date | None = None, run_id: int | None = None,
+                    demo: str | None = None):
+        """``window.DESK_EXTRAS`` of the run ``/desk-data.js`` shows for the same parameters (``concepts.extras``);
+        nothing without a run. The ETag is the body's hash: a new default run changes the series, a page reload then
+        gets them, an unchanged run a 304."""
+        run = None if demo else compat.resolve_run(con, as_of, run_id)
+        if run is None:
+            return Response("/* no run: window.DESK_EXTRAS not set */\n", media_type=JS, headers=NO_STORE)
+        body = concepts.script(concepts.extras(con, run)).encode()
+        tag = '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
+        headers = {"ETag": tag, "Cache-Control": "no-cache"}
+        if tag in [t.strip() for t in request.headers.get("if-none-match", "").split(",")]:
+            return Response(status_code=304, headers=headers)
+        return Response(body, media_type=JS, headers=headers)
+
+    @app.get("/api/v1/history/positions", include_in_schema=False)
+    def positions_history(con: Con, run_id: int | None = None, as_of: date | None = None,
+                          ids: str | None = Query(None, description="comma-separated position ids; all when unset"),
+                          from_: Annotated[date | None, Query(alias="from")] = None) -> dict[str, Any]:
+        """The run's positions' series on one date axis (``concepts.positions_history``): MOEX price, yield and
+        G-spread, the KBD at the bond's term, face and DV01 by the default runs. For the concept pages' charts."""
+        run = compat.resolve_run(con, as_of, run_id)
+        if run is None:
+            raise ApiError(404, "not_found", f"run {run_id} not found" if run_id else "no runs")
+        wanted = [i for i in (ids or "").split(",") if i] or None
+        return concepts.positions_history(con, run, wanted, from_)
 
     from .diagnostics_routes import router as diagnostics_router
     from .settings_routes import router as settings_router  # here: it imports ApiError from this module

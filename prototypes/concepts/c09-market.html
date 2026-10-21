@@ -67,7 +67,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
   </div>
 </div>
 <script src="../echarts.min.js"></script>
-<script src="lib/mock.js"></script>
+<script src="lib/boot.js"></script>
 <script src="lib/kit.js"></script>
 <script>
 (function () {
@@ -91,8 +91,11 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
 
   // ---------- карта доходностей ----------
   const RB = [['AAA', r => r === 'AAA', '#4c9dff'], ['AA', r => /^AA[+-]?$/.test(r), '#22c3d6'], ['A', r => /^A[+-]?$/.test(r), '#3fb67a'], ['BBB', r => /^BBB/.test(r), '#e3b341'], ['≤BB', r => /^B{1,2}[+-]?$/.test(r), '#f0645a']];
-  const rbOf = r => (RB.find(x => x[1](r)) || RB[4])[0];
-  const S = { x: 'dur', flt: 'fix', rt: ['AAA', 'AA', 'A', 'BBB'], sec: '', ours: false, curve: 'lvl', fx: 'CNY' };
+  // на прогоне из базы у выпусков рынка рейтинга нет (хаб его не публикует): отдельная группа, а не «≤BB»
+  const NR = r => !r || r === 'без рейтинга' || r === '—';
+  if (M.universeRub.some(b => !b.isOfz && NR(b.rating)) || M.positions.some(p => p.group === 'CORP' && NR(p.rating))) RB.splice(4, 0, ['б/р', NR, '#8a96a3']);
+  const rbOf = r => (RB.find(x => x[1](r)) || RB[RB.length - 1])[0];
+  const S = { x: 'dur', flt: 'fix', rt: ['AAA', 'AA', 'A', 'BBB'].concat(RB.some(x => x[0] === 'б/р') ? ['б/р'] : []), sec: '', ours: false, curve: 'lvl', fx: 'CNY' };
   try { Object.assign(S, JSON.parse(localStorage.getItem('c09-state') || '{}')); } catch (e) { }
   const save = () => { try { localStorage.setItem('c09-state', JSON.stringify(S)); } catch (e) { } };
   const xOf = (o, our) => S.x === 'dur' ? (our ? (o.cpn.type === 'float' ? 0.15 : o.mdur) : o.dur) : o.tenor;
@@ -194,6 +197,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
 
   // ---------- спреды по рейтингам ----------
   const RATINGS = ['AAA', 'AA+', 'AA', 'AA-', 'A+', 'A', 'A-', 'BBB+', 'BBB', 'BBB-', 'BB+', 'BB', 'B'];
+  if (M.universeRub.some(b => !b.isOfz && b.rating === 'без рейтинга')) RATINGS.push('без рейтинга');
   const TBK = [[1, '< 1г'], [2, '1–2г'], [3, '2–3г'], [5, '3–5г'], [99, '5г+']];
   const tbk = t => TBK.findIndex(x => t <= x[0]);
   const med = a => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };

@@ -43,7 +43,7 @@ tr.row.sel td { background: var(--accent-bg); }
   <div class="k-panel" id="pTop"><div class="hd"><h3>Что изменилось по позициям</h3><span class="k-note">с даты сравнения · щелчок по строке — позиция во времени</span><span class="sp"></span><span class="m"></span></div><div class="bd flush"></div></div>
 </div>
 <script src="../echarts.min.js"></script>
-<script src="lib/mock.js"></script>
+<script src="lib/boot.js"></script>
 <script src="lib/kit.js"></script>
 <script>
 (function () {
@@ -52,6 +52,10 @@ tr.row.sel td { background: var(--accent-bg); }
 
   // ---------- история, восстановленная из позиций (учитывает фильтр книг) ----------
   const H = {}; M.positions.forEach(p => H[p.id] = M.posHistory(p.id));
+  // ось — с первой даты, на которую известна хоть одна позиция (на прогоне из базы раньше первого прогона позиций нет;
+  // цены рынка там есть, но без номинала история деска была бы нулём, а не «неизвестно»)
+  const FIRST = Math.max(0, Math.min(...M.positions.map(p => H[p.id].notional.findIndex(v => v != null)).filter(i => i >= 0)));
+  if (FIRST > 0) Object.keys(H).forEach(id => { const h = H[id], o = {}; Object.keys(h).forEach(k => o[k] = Array.isArray(h[k]) ? h[k].slice(FIRST) : h[k]); H[id] = o; });
   const DATES = H[M.positions[0].id].dates, N = DATES.length, LAST = N - 1;
   const scale = (p, i) => p.notional ? H[p.id].notional[i] / p.notional : 0;
   const pxr = (p, i) => p.price && H[p.id].price[i] != null ? H[p.id].price[i] / p.price : 1;
@@ -85,7 +89,7 @@ tr.row.sel td { background: var(--accent-bg); }
     const Q = [['вчера', 1], ['неделя', 5], ['месяц', 21], ['квартал', 63], ['полгода', 126]];
     K.seg(ctl.querySelector('.qk'), Q.map(q => [String(LAST - q[1]), q[0]]), String(st.cmp), v => setCmp(+v));
   }
-  function setCmp(i) { st.cmp = i; if (i < from()) { st.range = RANGES.find(r => r[1] >= N - i)?.[1] || 250; } save(); drawAll(); }
+  function setCmp(i) { i = Math.max(0, Math.min(LAST - 1, i)); st.cmp = i; if (i < from()) { st.range = RANGES.find(r => r[1] >= N - i)?.[1] || 250; } save(); drawAll(); }
 
   // ---------- общий конструктор линейных графиков с отметкой даты сравнения ----------
   function series(el, getS, opts) {
