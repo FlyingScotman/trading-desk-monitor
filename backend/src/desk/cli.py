@@ -53,16 +53,37 @@ from typing import Any
 import psycopg
 
 from . import store
-from .marketdata import cache, history
+from .marketdata import cache, history, static_facts
 from .marketdata.adapter import MarketView
 from .marketdata.bundle import SnapshotDir, SnapshotError, previous_market
 from .marketdata.hub import HubClient, HubError, hub_check
 from .orchestrator import EodContext, attach_pnl, prepare, value
 from .pnl import direct as direct_pnl
 from .publish import desk_run, tdm_run
+from .publish import summary as run_summary
 from .report import validation
 from .settings import Settings, SettingsError, adapter_config_dir, load, mask_url
 from .valuation import positions as pv1
+
+
+class ContextCache:
+    """The ``size`` prepared market dates used last (``orchestrator.prepare``), keyed by the snapshot folder, date, cut and
+    snapshot id: ``desk backfill`` values consecutive dates, and each date's market is the next date's previous one.
+    A prepared context is read only by the valuation (its curve cache only grows), so sharing it changes nothing."""
+
+    def __init__(self, size: int = 3) -> None:  # a date's own market, its previous one, the next date's
+        self.size, self._items = size, {}
+
+    def prepare(self, sd: SnapshotDir, business_date: str, cut_type: str = "eod_final",
+                market_snapshot_id: str | None = None) -> EodContext:
+        key = (str(sd.root), business_date, cut_type, market_snapshot_id or sd.market_id(business_date, cut_type))
+        ctx = self._items.pop(key, None)
+        if ctx is None:
+            ctx = prepare(sd, business_date, cut_type, market_snapshot_id=market_snapshot_id)
+        self._items[key] = ctx
+        while len(self._items) > self.size:
+            self._items.pop(next(iter(self._items)))
+        return ctx
 
 
 def read_book(path: Path) -> list[tuple[str, str, str, float]]:
@@ -149,7 +170,8 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             book: str | None = None, books: list[str] | None = None, run_type: str = "EOD",
             report_dir: str | Path | None = None, tdm: bool = False, db: str | Path | None = None,
             no_gamma: bool = False, no_pnl: bool = False, out: Callable[[str], None] = print,
-            cut_type: str = "eod_final", market_snapshot_id: str | None = None) -> int | None:
+            cut_type: str = "eod_final", market_snapshot_id: str | None = None,
+            contexts: ContextCache | None = None, read_model: bool = True) -> int | None:
     """The EOD run of date ``d`` (``desk eod`` without its hub pull; the autopilot calls it too): values the
     books of the store on the cached snapshot of ``d`` and publishes the run. Returns the desk run id, None when
     the store has no positions for the date. Raises on a missing snapshot or a failed publication.
@@ -158,11 +180,18 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
     intraday step values today's book on an ``intraday`` cut, ``run_type`` INTRADAY, or on ``eod_preliminary``).
     The flash PnL is measured against the newest earlier ``eod_final`` of the cache, else an ``eod_preliminary``
     (``bundle.previous_market``); when that is not the previous business day's final, the run says so
-    (``pnl_basis``)."""
+    (``pnl_basis``).
+
+    ``contexts`` (``desk backfill``, R23): prepared dates kept between calls, so that a run of consecutive dates
+    prepares each date's market once (as the run's own date, then as the next date's previous one).
+    ``read_model``: also put the run's static snapshot's facts (the market calendar, issuer groups, sectors) and
+    the CBR meetings into the store's read model (``desk.marketdata.static_facts``); the backfill leaves them to the
+    latest date. After the publication the run's summary for the concept pages is written (``publish.summary``)."""
     snapshots = snapshots or settings.snapshot_cache
     sd = SnapshotDir(Path(snapshots))
     t0 = time.perf_counter()
-    ctx = prepare(sd, d, cut_type, market_snapshot_id=market_snapshot_id)
+    prep = contexts.prepare if contexts is not None else prepare
+    ctx = prep(sd, d, cut_type, market_snapshot_id=market_snapshot_id)
     prev_cut = previous_market(sd, d)
     prev_date = prev_cut[0] if prev_cut else None
     prev = MarketView(sd.market(*prev_cut)) if prev_cut else None
@@ -199,6 +228,12 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
                 history.load_snapshot(con, snap)
         except psycopg.Error as e:
             out(f"WARN market history not updated: {type(e).__name__}: {e}")
+        if read_model:
+            try:  # the concept pages' market calendar, issuer groups and sectors, CBR meetings (R23)
+                static_facts.load_static(con, ctx.static.snapshot)
+                static_facts.load_cbr(con, ctx.market.snapshot)
+            except psycopg.Error as e:
+                out(f"WARN static facts not updated: {type(e).__name__}: {e}")
         if book:
             _load(con, Path(book), d, out=out)
         inputs = store.positions_for(con, date.fromisoformat(d), books=books)
@@ -217,7 +252,7 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
         outcomes = value(ctx, bp.requests, second_order=not no_gamma, position_ids=bp.position_ids,
                          carried_spreads=carried)
         if prev_cut and not no_pnl:
-            prev_ctx = prepare(sd, *prev_cut)
+            prev_ctx = prep(sd, *prev_cut)
             attach_pnl(prev_ctx, value(prev_ctx, bp.requests, position_ids=bp.position_ids, carried_spreads=carried),
                        ctx, outcomes)
             # fx rows, the report-valued rows (otc, unmapped bonds): by the rate move and by the reports of both
@@ -241,6 +276,10 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
         run_id, status, warnings = desk_run.publish(con, ctx, positions, prev=prev, run_type=run_type,
                                                     inputs=inputs, carried_from=carried, pnl_basis=basis)
         out(f"desk run {run_id}: {status}, {len(warnings)} warnings")
+        try:
+            run_summary.ensure(con, [run_id])
+        except psycopg.Error as e:  # the pages build it on first read
+            out(f"WARN run summary not written: {type(e).__name__}: {e}")
     if tdm:
         tdm_id, status, warnings = tdm_run.publish(db or settings.db, ctx, positions, prev=prev, inputs=inputs)
         out(f"tdm run {tdm_id}: {status}, {len(warnings)} warnings")

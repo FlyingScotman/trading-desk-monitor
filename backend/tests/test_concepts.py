@@ -78,7 +78,10 @@ def test_concepts_data_js(desk):
     assert x["marketDate"] == DATE and x["universeRub"] and x["marketMovers"]
     assert any(b["held"] for b in x["universeRub"]) and all(b["ytm"] is None for b in x["universeRub"] if b["flt"])
     assert any(b["ccy"] == "USD" for b in x["universeFx"])
-    assert x["cbr"] == {"next": None, "meetings": []} and x["curveMap"]["USD"] == "USD SOFR"
+    assert x["cbr"]["next"]["date"] == "2026-10-23" and x["cbr"]["next"]["estimated"]  # the fixture's cbr_meetings
+    assert x["cbr"]["meetings"][0] == "2026-10-23" and x["cbr"]["past"][0]["date"] == "2026-09-11"
+    assert x["cbr"]["keyRate"] == 14.0 and x["curveMap"]["USD"] == "USD SOFR"
+    assert x["histSource"] == "runs" and not x["pnlPeriods"]["ytd"]["complete"]  # two runs of the year
     assert extras(desk, f"?as_of={PREV}")["histDates"] == [PREV]
 
 
@@ -96,10 +99,12 @@ def test_positions_history(desk):
     d = h["dates"]
     assert d[-1] == DATE and len(d) == 32 and d == sorted(d)
     s = h["series"]["P1"]
-    assert all(len(v) == len(d) for v in s.values())
+    assert all(len(v) == len(d) for k, v in s.items() if v is not None and k != "curves")
     assert s["notional"][-1] == pytest.approx(10 * 1000) and s["notional"][-2] == pytest.approx(8 * 1000)
     assert s["notional"][0] is None and s["price"][0] is not None and s["bench"][-1] is not None
-    assert s["ytm"][-1] is not None and all(v is None for v in h["series"]["P2"]["ytm"])  # a floater: no yield
+    assert s["ytm"][-1] is not None and h["series"]["P2"]["ytm"] is None  # a floater: no yield (a null series)
+    assert s["dv01"][-1] is not None and s["mv"][-1] > 0 and s["cs01"] is None  # an OFZ: no credit spread risk
+    assert set(s["curves"]) == {"RUB RUONIA"} and s["curves"]["RUB RUONIA"][-1] == pytest.approx(s["dv01"][-1])
     one = desk.get("/api/v1/history/positions?ids=P2").json()
     assert set(one["series"]) == {"P2"}
     assert desk.get("/api/v1/history/positions?run_id=999").status_code == 404

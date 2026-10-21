@@ -356,7 +356,7 @@ def slice_label(business_date: date | str, cut_type: str | None, cut_ts: datetim
     return label + (f" · {run_type}" if run_type in ("TEST", "REPLAY") else "")
 
 
-RUN_ROW_TABLES = ("run_position", "run_reference", "run_log", "run_core_result", "model_spread")
+RUN_ROW_TABLES = ("run_position", "run_reference", "run_log", "run_core_result", "model_spread", "run_summary")
 
 
 def prune_intraday(con: psycopg.Connection, business_date: date, keep_run_id: int) -> list[int]:

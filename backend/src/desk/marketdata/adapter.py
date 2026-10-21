@@ -120,6 +120,10 @@ class BondTerms:
     """The static snapshot's business date: ``face_value`` is the face outstanding then."""
     initial_face_value: Decimal | None = None
     """The face at issue (static ``initial_face_value``), before amortization and indexation."""
+    lat_name: str | None = None
+    """MOEX LATNAME (static 1.1, HS12)."""
+    issue_size: Decimal | None = None
+    """Number of bonds of the issue as MOEX lists it (``issue_size``; for OFZ the declared volume)."""
 
 
 @dataclass(frozen=True)
@@ -130,6 +134,11 @@ class Issuer:
     inn: str | None
     sector: str | None
     is_sovereign: bool
+    group_id: str | None = None
+    """Static 1.1 (HS4): the issuer's group, curated by the hub (``group_name`` its display name)."""
+    group_name: str | None = None
+    is_state_owned: bool | None = None
+    country: str | None = None
 
 
 @dataclass(frozen=True)
@@ -220,7 +229,8 @@ class StaticView:
         d = snap.data
         self.issuers = {
             int(x["issuer_id"]): Issuer(int(x["issuer_id"]), x["name"], x.get("short_name"), x.get("inn"),
-                                        x.get("sector"), bool(x.get("is_sovereign")))
+                                        x.get("sector"), bool(x.get("is_sovereign")), x.get("group_id"),
+                                        x.get("group_name"), x.get("is_state_owned"), x.get("country"))
             for x in d["issuers"]
         }
         self.calendars = {c["calendar"]: c for c in d["calendars"]}
@@ -259,6 +269,7 @@ class StaticView:
                 offers=tuple(offers.get(sid, ())),
                 floater_formula=formulas.get(sid), face_date=as_of,
                 initial_face_value=_d(i.get("initial_face_value")),
+                lat_name=i.get("lat_name"), issue_size=_d(i.get("issue_size")),
             )
 
     def business_calendar(self, name: str) -> tuple[BusinessCalendar, date, date]:
