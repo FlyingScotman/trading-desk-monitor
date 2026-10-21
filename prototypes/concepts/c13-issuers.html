@@ -243,7 +243,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     const cids = M.curves.filter(c => L.some(p => p.risk[c.id].some(v => Math.abs(v) > 1))).map(c => c.id);
     const sel = x.id;
     const rs = K.riskStack(rel, { curves: cids.concat(L.some(p => p.cs01) ? ['CS01'] : []), list: () => K.list().filter(p => p.issuer === sel && p.group !== 'DER'), labels: false });
-    rs.setOption({ grid: { top: 56 }, legend: { type: 'scroll', right: 0 } });   // в узкой панели легенда kit наезжает на подпись правой оси
+    rs.setOption({ grid: { top: 52 }, yAxis: [{}, { name: '' }] });   // в узкой панели легенда kit наезжает на подпись правой оси
     dashCharts.push(rs);
     // наши бумаги
     const bp = panel('Наши бумаги эмитента', '<span class="k-note">валюта → фикс / флоатеры · по сроку до оферты</span>'); dash.appendChild(bp);
