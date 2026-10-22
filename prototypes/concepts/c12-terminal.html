@@ -254,8 +254,8 @@ body { font-family: var(--mono); font-size: 12.5px; }
         bd.innerHTML = sumLine(L);
         if (!L.length) { bd.innerHTML += '<span class="err">ничего не найдено</span>'; return '0 позиций'; }
         const e = K.h('div'); bd.appendChild(e);
-        K.table(e, { rows: L, search: false, groupBy: L.length > 12 ? K.defaultGroups : null, stripe: r => K.issuerColor(r.issuer), maxHeight: '58vh',
-          columns: K.cols(['name', ccyCol, 'kind', 'book', 'coupon', 'event', 'tenor', 'notional', 'price', 'ytm', 'spread', 'dv01', 'cs01', 'pnl']) });
+        K.table(e, { rows: L, search: false, groupable: K.defaultGroups, stripe: r => K.issuerColor(r.issuer), maxHeight: '58vh',
+          columns: K.cols(['name', ccyCol, 'issuer', 'kind', 'book', 'coupon', 'event', 'tenor', 'notional', 'price', 'ytm', 'spread', 'dv01', 'cs01', 'pnl']) });
         return L.length + ' позиций' + (o.words.length ? ' · «' + o.words.join(' ') + '»' : '') + (o.ccy ? ' · ' + o.ccy : '');
       }
       case 'pnl': {
@@ -268,7 +268,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
         if (o.flags.top || o.n) {
           const n = o.n || 10, T = L.slice().sort((a, b) => Math.abs(b.pnl.total) - Math.abs(a.pnl.total)).slice(0, n);
           const pc = (key, label) => ({ key: 'p' + key, label, num: true, val: r => r.pnl[key], fmt: f.k, cls: f.cls });
-          K.table(bd, { rows: T, search: false, footer: false, stripe: r => K.issuerColor(r.issuer), columns: K.cols(['name', ccyCol, 'book', pc('total', 'Итого'), pc('carry', 'Кэрри'), pc('rates', 'Ставки'), pc('spread', 'Спред'), pc('fx', 'FX'), pc('trading', 'Сделки'), pc('other', 'Прочее')]) });
+          K.table(bd, { rows: T, search: false, footer: false, stripe: r => K.issuerColor(r.issuer), columns: K.cols(['name', ccyCol, 'issuer', 'book', pc('total', 'Итого'), pc('carry', 'Кэрри'), pc('rates', 'Ставки'), pc('spread', 'Спред'), pc('fx', 'FX'), pc('trading', 'Сделки'), pc('other', 'Прочее')]) });
           return 'топ-' + n + ' вкладов в PnL дня, тыс ₽';
         }
         if (o.dim) { bd.innerHTML = sumLine(L); const e = K.h('div'); bd.appendChild(e); dimTable(e, L, o.dim, PNL_COLS); return 'PnL дня по разрезу «' + (DIM_DEF[o.dim] || [o.dim])[0] + '», тыс ₽'; }

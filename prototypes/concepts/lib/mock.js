@@ -48,9 +48,10 @@
 
   // ---------- рынок ----------
   M.ccys = ['RUB', 'USD', 'EUR', 'CNY', 'CHF'];
-  M.ccyOrder = { RUB: 0, USD: 1, EUR: 2, CNY: 3, CHF: 4 };
-  M.fx = { RUB: 1, USD: 81.42, EUR: 94.58, CNY: 11.41, CHF: 101.85 };
-  M.fxChgPct = { RUB: 0, USD: 0.38, EUR: -0.12, CNY: 0.21, CHF: 0.15 };
+  // GBP и AED — только вторые валюты мелких кроссов (остатки ОВП, R43): валют деска (M.ccys) не добавляют
+  M.ccyOrder = { RUB: 0, USD: 1, EUR: 2, CNY: 3, CHF: 4, GBP: 5, AED: 6 };
+  M.fx = { RUB: 1, USD: 81.42, EUR: 94.58, CNY: 11.41, CHF: 101.85, GBP: 108.62, AED: 22.17 };
+  M.fxChgPct = { RUB: 0, USD: 0.38, EUR: -0.12, CNY: 0.21, CHF: 0.15, GBP: 0.22, AED: 0.38 };
   M.indices = { 'КС': 14.50, 'RUONIA': 14.32, 'RUSFAR': 14.28, 'SOFR': 4.08, 'RUSFAR CNY': 5.45, '€STR': 2.15, 'CPI г/г': 6.8 };
   M.buckets = ['3M', '6M', '1Y', '2Y', '3Y', '4Y', '5Y', '7Y', '10Y', '15Y', '20Y+'];
   M.pillars = [0.25, 0.5, 1, 2, 3, 4, 5, 7, 10, 15, 20];
@@ -141,14 +142,14 @@
   M.issuer = Object.fromEntries(M.issuers.map(i => [i.id, i]));
 
   M.groupLabel = { GOV: 'Гос', CORP: 'Корп', DER: 'Деривативы' };
-  M.kindLabel = { PD: 'ОФЗ-ПД (фикс)', PK: 'ОФЗ-ПК (флоатер)', IN: 'ОФЗ-ИН (линкер)', SOVFX: 'Суверен. валютные', FIX: 'Фикс', FLT: 'Флоатер', IRS: 'IRS / OIS', KSW: 'Своп на КС', BAS: 'Базис КС/RUONIA', FXF: 'FX форвард', XCCY: 'XCCY', OTC: 'OTC (по отчёту)' };
-  M.kindShort = { PD: 'ПД', PK: 'ПК', IN: 'ИН', SOVFX: 'Сув', FIX: 'Фикс', FLT: 'Флоат', IRS: 'IRS', KSW: 'КС-своп', BAS: 'Базис', FXF: 'FX fwd', XCCY: 'XCCY', OTC: 'OTC' };
+  M.kindLabel = { PD: 'ОФЗ-ПД (фикс)', PK: 'ОФЗ-ПК (флоатер)', IN: 'ОФЗ-ИН (линкер)', SOVFX: 'Минфин валютные', FIX: 'Фикс', FLT: 'Флоатер', IRS: 'IRS / OIS', KSW: 'Своп на КС', BAS: 'Базис КС/RUONIA', FXF: 'FX форвард', XCCY: 'XCCY', OTC: 'OTC (по отчёту)' };
+  M.kindShort = { PD: 'ПД', PK: 'ПК', IN: 'ИН', SOVFX: 'Минфин вал.', FIX: 'Фикс', FLT: 'Флоат', IRS: 'IRS', KSW: 'КС-своп', BAS: 'Базис', FXF: 'FX fwd', XCCY: 'XCCY', OTC: 'OTC' };
   // строки «типов» для сводной таблицы рисков (порядок — как владелец смотрит)
   M.typeRows = [
     { id: 'GOV.PD', group: 'GOV', kind: 'PD', label: 'ОФЗ-ПД' },
     { id: 'GOV.PK', group: 'GOV', kind: 'PK', label: 'ОФЗ-ПК (флоатеры)' },
     { id: 'GOV.IN', group: 'GOV', kind: 'IN', label: 'ОФЗ-ИН' },
-    { id: 'GOV.SOVFX', group: 'GOV', kind: 'SOVFX', label: 'Суверенные валютные' },
+    { id: 'GOV.SOVFX', group: 'GOV', kind: 'SOVFX', label: 'Минфин валютные (евробонды, замещающие)' },
     { id: 'CORP.FIX', group: 'CORP', kind: 'FIX', label: 'Корп. фикс' },
     { id: 'CORP.FLT', group: 'CORP', kind: 'FLT', label: 'Корп. флоатеры' },
     { id: 'DER.IRS', group: 'DER', kind: 'IRS', label: 'IRS / OIS' },
@@ -188,9 +189,11 @@
   // ОФЗ-ИН
   [['52002', '2028-02-02', 650], ['52005', '2033-05-18', 900]].forEach(([n, mat, nom]) =>
     B({ isin: 'RU000A10' + n, name: 'ОФЗ ' + n + '-ИН', issuer: 'MINFIN', group: 'GOV', kind: 'IN', ccy: 'RUB', book: 'OFZ', maturity: mat, cpn: { type: 'linker', rate: 2.5, freq: 'S' }, notional: nom * 1e6, spreadBp: 0 }));
-  // суверенные валютные
+  // Минфин в валюте (R39): замещающие облигации и евробонды — свой тип «Минфин валютные», не «суверены»; эмитент — MINFIN
   B({ isin: 'RU000A105RJ8', name: 'Минфин РФ 12-28 USD', issuer: 'MINFIN', group: 'GOV', kind: 'SOVFX', ccy: 'USD', book: 'FXCR', maturity: '2028-06-24', cpn: { type: 'fix', rate: 12.75, freq: 'S' }, notional: 18e6, spreadBp: 190 });
   B({ isin: 'RU000A105RL4', name: 'Минфин РФ 43 USD', issuer: 'MINFIN', group: 'GOV', kind: 'SOVFX', ccy: 'USD', book: 'FXCR', maturity: '2043-06-24', cpn: { type: 'fix', rate: 5.875, freq: 'S' }, notional: 25e6, spreadBp: 260 });
+  B({ isin: 'XS0767472458', name: 'Россия-2042 USD (евробонд)', issuer: 'MINFIN', group: 'GOV', kind: 'SOVFX', ccy: 'USD', book: 'FXCR', maturity: '2042-04-04', cpn: { type: 'fix', rate: 5.625, freq: 'S' }, notional: 6e6, spreadBp: 245 });
+  B({ isin: 'RU000A1089H3', name: 'Минфин РФ 27 EUR (замещающая)', issuer: 'MINFIN', group: 'GOV', kind: 'SOVFX', ccy: 'EUR', book: 'FXCR', maturity: '2027-05-27', cpn: { type: 'fix', rate: 1.125, freq: 'A' }, notional: 4e6, spreadBp: 210 });
   B({ isin: 'RU000A108Y82', name: 'Минфин РФ 27 CNY', issuer: 'MINFIN', group: 'GOV', kind: 'SOVFX', ccy: 'CNY', book: 'FXCR', maturity: '2027-12-10', cpn: { type: 'fix', rate: 6.50, freq: 'S' }, notional: 320e6, spreadBp: 120 });
   // корп. фикс RUB
   const cf = [
@@ -273,6 +276,10 @@
     { name: 'NDF USD/RUB 6M buy (расчёт в RUB)', kind: 'FXF', productGroup: 'fx_ndf', ccy: 'USD', curve: 'USD SOFR', curve2: 'RUB RUONIA', tenor: 0.5, notional: 30e6, rate: 85.10, settle: 'cash', book: 'FXB', cpty: 'Сбербанк' },
     { name: 'FX fwd USD/CNY 3M buy (кросс)', kind: 'FXF', ccy: 'USD', ccy2: 'CNY', curve: 'USD SOFR', curve2: 'CNY XCCY', tenor: 0.25, notional: 20e6, rate: 7.12, book: 'FXB', cpty: 'ВТБ' },
     { name: 'FX swap CNY/RUB TOM/1M buy/sell', kind: 'FXF', ccy: 'CNY', curve: 'CNY FWD', curve2: 'RUB RUONIA', tenor: 0.083, notional: -300e6, rate: 11.53, near: 11.42, book: 'FXB', cpty: 'НКЦ' },
+    // мелкие кроссы: вторая валюта (GBP, AED) — остаток ОВП, в плитке ОВП свёрнут в «+N прочих» (R43); своей кривой
+    // у GBP и AED в демо нет — дисконт по кривой первой валюты
+    { name: 'FX fwd EUR/GBP 1M buy (кросс)', kind: 'FXF', ccy: 'EUR', ccy2: 'GBP', curve: 'EUR ESTR', curve2: 'EUR ESTR', tenor: 0.083, notional: 40e3, rate: 0.8705, book: 'FXB', cpty: 'ВТБ' },
+    { name: 'FX fwd USD/AED 1M buy (кросс)', kind: 'FXF', ccy: 'USD', ccy2: 'AED', curve: 'USD SOFR', curve2: 'USD SOFR', tenor: 0.083, notional: 9e3, rate: 3.6725, book: 'FXB', cpty: 'ВТБ' },
     { name: 'CHF/RUB fwd 6M buy', kind: 'FXF', ccy: 'CHF', curve: 'CHF SARON', curve2: 'RUB RUONIA', tenor: 0.5, notional: 8e6, rate: 107.90, book: 'FXB', cpty: 'Газпромбанк' },
   ];
   der.forEach(d => P.push(Object.assign({ isin: null, issuer: null, group: 'DER', maturity: addMonths(AS_OF, Math.round(d.tenor * 12)), spreadBp: 0, cpn: null }, d)));

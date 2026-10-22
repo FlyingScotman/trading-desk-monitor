@@ -35,7 +35,7 @@ t('тип инструмента: облигации по эмитенту и к
     Object.assign(odd, { instrType: 'OTC', extra: { reported: {} } });
   });
   const kinds = {}; M.positions.forEach(p => { const k = I.kindOf(p); kinds[k] = (kinds[k] || 0) + 1; });
-  for (const k of ['OFZ_PD', 'OFZ_PK', 'SOV_FX', 'CORP_FIX', 'CORP_FLT', 'SECUR', 'IRS', 'CCS', 'CDS', 'BOND_FUT', 'FX', 'OCP', 'UNCLASSIFIED'])
+  for (const k of ['OFZ_PD', 'OFZ_PK', 'MINFIN_FX', 'CORP_FIX', 'CORP_FLT', 'SECUR', 'IRS', 'CCS', 'CDS', 'BOND_FUT', 'FX', 'OCP', 'UNCLASSIFIED'])
     assert.ok(kinds[k] > 0, k + ' ' + JSON.stringify(kinds));
   assert.strictEqual(Object.values(kinds).reduce((a, b) => a + b, 0), M.positions.length);
   assert.ok(Object.keys(kinds).every(k => I.group[k]), 'каждый тип — из таблицы');

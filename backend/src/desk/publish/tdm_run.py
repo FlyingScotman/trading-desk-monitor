@@ -86,6 +86,7 @@ from ..valuation.bonds import OFZ_CURVE, RISK_CURVES, BondValuation, coupon_view
 from ..valuation.fallback import METHOD as SIMPLE_METHOD
 from ..valuation.fallback import QUALITIES, SimplePnl, fx_rate, market_fx
 from ..valuation.positions import normalised
+from .summary import MINFIN_CLASSES, MINFIN_INN, NOT_MINFIN_CLASSES
 
 ASSET_CLASS = {"ofz_pd": "ОФЗ-ПД", "ofz_ad": "ОФЗ-АД", "ofz_pk": "ОФЗ-ПК", "ofz_in": "ОФЗ-ИН",
                "subfederal": "Субфедеральные", "municipal": "Муниципальные", "corporate": "Корпоративные"}
@@ -165,7 +166,11 @@ def _issuer_key(ctx: EodContext, o: Outcome) -> tuple[str, dict[str, Any]]:
     assert o.terms is not None
     ref = ctx.reference_facts
     iss = ref.issuer(o.terms.issuer_id) or ctx.static.issuer_of(o.terms)
-    is_gov = o.terms.bond_class.startswith("ofz") or bool(iss and iss.is_sovereign)
+    # the Minfin (R39, ``summary.is_minfin``): by the issuer -- the hub's sovereign flag or the Minfin's INN -- or the
+    # classes the hub derives from that INN (OFZ, the Minfin's FX bonds); a foreign sovereign is not it
+    cls = o.terms.bond_class
+    is_gov = cls not in NOT_MINFIN_CLASSES and (cls.startswith("ofz") or cls in MINFIN_CLASSES or bool(
+        iss and (iss.is_sovereign or iss.inn == MINFIN_INN)))
     rt = ref.ratings.issuer(o.terms.issuer_id)
     # the sovereign is not rated on the agencies' national scales: no rating rather than «б/р»
     label = None if is_gov and rt is None and ref.ratings.has_data else ref.ratings.label(rt)

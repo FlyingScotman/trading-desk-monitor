@@ -45,7 +45,7 @@ from ..marketdata import static_facts
 from ..marketdata.bundle import read_bundle
 from ..marketdata.history import RUB_SETTLEMENT, curve_rate, curve_rates_by_day, kbd, latest_market_day
 from ..publish import summary
-from ..publish.summary import CURVE_MAP, GOV_CLASSES, PNL, kind_of  # noqa: F401 - the pages' names, re-exported
+from ..publish.summary import CURVE_MAP, GOV_CLASSES, PNL, is_minfin, kind_of  # noqa: F401 - the pages' names
 from ..store import DEFAULT_RUNS
 
 HIST_RUNS = 260
@@ -635,7 +635,7 @@ def script(data: dict[str, Any]) -> str:
 
 INSTR_KINDS: tuple[tuple[str, str, str], ...] = (
     ("OFZ_PD", "GOV", "ОФЗ-ПД"), ("OFZ_PK", "GOV", "ОФЗ-ПК (флоатеры)"), ("OFZ_IN", "GOV", "ОФЗ-ИН (линкеры)"),
-    ("SOV_FX", "GOV", "Суверенные валютные"),
+    ("MINFIN_FX", "GOV", "Минфин валютные (евробонды, замещающие)"),
     ("SUBFED", "SUB", "Субфедеральные"), ("MUNI", "SUB", "Муниципальные"),
     ("CORP_FIX", "CORP", "Корпоративные фикс"), ("CORP_FLT", "CORP", "Корпоративные флоатеры"),
     ("SECUR", "CORP", "Секьюритизация (ИЦБ, ABS)"),
@@ -649,7 +649,8 @@ INSTR_KINDS: tuple[tuple[str, str, str], ...] = (
 )
 """The instrument kinds of the table, in its order: (kind, group, label). The one mapping table of the
 classification: a bond by issuer type and coupon (``kind_of``, plus the static's class: subfederal / municipal,
-securitisation), a derivative or FX row by the adapter's product group (``PRODUCT_KIND``), else by the legacy tdm
+securitisation; the Russian Minfin's bonds by the issuer, ``summary.is_minfin``: in roubles the OFZ kinds, in a
+foreign currency ``MINFIN_FX`` -- its Eurobonds and replacement bonds, never a generic "sovereigns" kind, R39), a derivative or FX row by the adapter's product group (``PRODUCT_KIND``), else by the legacy tdm
 instrument type (``LEGACY_KIND``); what none of them names is ``UNCLASSIFIED`` (shown, never dropped). The group
 is ``kind_of``'s but for a legacy derivative (DER, not OTH) and an unmapped or unvalued bond (OTH, not CORP)."""
 KIND_GROUP = {k: g for k, g, _ in INSTR_KINDS}
@@ -660,7 +661,7 @@ PRODUCT_KIND = {"irs": "IRS", "ccs": "CCS", "cds": "CDS", "trs": "TRS", "bond_fu
 classified by the bond's own fields."""
 LEGACY_KIND = {"IRS": "IRS", "XCCY": "CCS", "CDS": "CDS"}
 """A legacy tdm store's instrument type -> kind."""
-BOND_KIND = {("GOV", "PD"): "OFZ_PD", ("GOV", "PK"): "OFZ_PK", ("GOV", "IN"): "OFZ_IN", ("GOV", "SOVFX"): "SOV_FX",
+BOND_KIND = {("GOV", "PD"): "OFZ_PD", ("GOV", "PK"): "OFZ_PK", ("GOV", "IN"): "OFZ_IN", ("GOV", "SOVFX"): "MINFIN_FX",
              ("CORP", "FIX"): "CORP_FIX", ("CORP", "FLT"): "CORP_FLT"}
 CROSS_CCY_KINDS = ("CCS", "FX_FWD", "FX_FUT", "FX")
 """Kinds whose risk lies in more than one currency: the attribution rule (``ATTRIBUTIONS``) decides where."""
@@ -681,9 +682,10 @@ MISSING_TEXT = {"not_valued": "не оценена", "reported_no_risk": "оце
 GROUPS = ("GOV", "SUB", "CORP", "DER", "OTH")
 
 
-def instr_kind(f: dict[str, Any]) -> str:
+def instr_kind(f: dict[str, Any], gov_issuers: frozenset[str] | set[str] = frozenset()) -> str:
     """The table's instrument kind of a position's fact, or of an unvalued position's report row given as
-    ``{"ccy", "asset_class" (bond | fx | otc | other), "extra": {"reported": {x_*}}}`` (no ``instr_type``)."""
+    ``{"ccy", "asset_class" (bond | fx | otc | other), "extra": {"reported": {x_*}}}`` (no ``instr_type``).
+    ``gov_issuers``: the run's issuers flagged as the Minfin (``gov_issuers``), for ``summary.is_minfin``."""
     ex = f.get("extra") if isinstance(f.get("extra"), dict) else {}
     pg = (ex.get("reported") or {}).get("x_product_group")
     it = f.get("instr_type")
@@ -702,7 +704,7 @@ def instr_kind(f: dict[str, Any]) -> str:
         return "UNCLASSIFIED"
     if f.get("asset_class") == "Не сопоставлено":
         return "BOND_NA"
-    g, k = kind_of(f)
+    g, k = kind_of(f, gov_issuers)
     if g == "SUB":
         return "MUNI" if f.get("asset_class") == "Муниципальные" else "SUBFED"
     if g == "CORP" and f.get("segment") == "Секьюритизация":
@@ -761,9 +763,28 @@ def risk_items(con, run: dict[str, Any], books: list[str] | None = None
     return items, fx
 
 
+def gov_issuers(con, run_id: int) -> frozenset[str]:
+    """The issuer keys of a run's issuer reference flagged ``is_gov`` (the Minfin: ``summary.is_minfin``)."""
+    ref = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'issuers'", (run_id,)).fetchone()
+    return frozenset(r["issuer"] for r in (ref["data"] if ref else None) or [] if r.get("is_gov") and r.get("issuer"))
+
+
+MATRIX_MEASURES: tuple[tuple[str, str, str], ...] = (
+    ("dv01", "DV01", "labelled"), ("dv01_curve", "DV01 по кривой", "yes"), ("cs01", "CS01", "yes"),
+    ("ofz_basis", "Базис ОФЗ", "yes"), ("fx_delta", "FX-дельта", "repr"), ("mv", "MV", "yes"),
+    ("notional", "Номинал", "yes"), ("n_positions", "Позиций", "yes"),
+)
+"""The measures of the matrix (R38: one shown at a time), with whether a cell sums across currencies (the total row,
+in RUB): ``yes``; ``repr`` only at the run's rates (``fx_delta_rub``: null when a rate is missing); ``labelled`` --
+DV01 over the curves of different currencies sums, but is not a currency's risk (``dv01_all_curves_rub``)."""
+
+
 def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
-               attribution: str = ATTRIBUTION_DEFAULT) -> dict[str, Any]:
-    """The table currency x instrument type over a run's positions. ``items``: ``{"position_id", "fact"}`` of a
+               attribution: str = ATTRIBUTION_DEFAULT, gov_issuers: frozenset[str] = frozenset()) -> dict[str, Any]:
+    """The table currency x instrument type over a run's positions, as a matrix (R38): ``ccys`` are its rows,
+    ``columns`` the instrument kinds present (in ``INSTR_KINDS`` order, with each kind's total over all currencies:
+    what sums, in RUB), a cell is the ``rows`` entry of level ``kind`` (ccy, kind), a row total the entry of level
+    ``ccy`` (and of level ``group`` its subtotal by group); ``total`` the corner. ``items``: ``{"position_id", "fact"}`` of a
     valued position, ``{"position_id", "fact": None, "input": <report row as for instr_kind>}`` of an unvalued
     one; ``fx`` the run's RUB rate per currency. Amounts in RUB (``*_rub``); the notional and FX delta in the
     currency (``*_ccy``), DV01 and MV too where its rate is known. Rows: one per currency (``level`` ccy), group
@@ -786,7 +807,7 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
             c["ids"].add(pid)
             c["missing"]["not_valued"] = c["missing"].get("not_valued", 0) + 1
             continue
-        kind, home = instr_kind(f), f.get("ccy") or "RUB"
+        kind, home = instr_kind(f, gov_issuers), f.get("ccy") or "RUB"
         legs = attribution == "legs" or kind not in CROSS_CCY_KINDS
         c = cell(home, kind)
         c["ids"].add(pid)
@@ -863,7 +884,25 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
              "fx_delta_rub": None if no_rate else sum(r["fx_delta_ccy"] * (fx.get(r["ccy"]) or 0.0)
                                                       for r in blocks if r["ccy"] != "RUB"),
              "n_risk_missing": sum(r["n_risk_missing"] for r in blocks)}
+    columns = []
+    for k in sorted({k for _, k in cells}, key=order.__getitem__):
+        mine = [(cc, c) for (cc, kk), c in cells.items() if kk == k]
+        curves: dict[str, float] = {}
+        for _, c in mine:
+            for cid, v in c["curves"].items():
+                curves[cid] = curves.get(cid, 0.0) + v
+        fx_rows = [(cc, c["fx_delta_ccy"]) for cc, c in mine if cc != "RUB" and c["fx_delta_ccy"]]
+        columns.append({
+            "kind": k, "group": KIND_GROUP[k], "label": KIND_LABEL[k],
+            "n_positions": len(set().union(*(c["ids"] for _, c in mine))),
+            "notional_rub": sum(c["notional_rub"] for _, c in mine), "mv_rub": sum(c["mv_rub"] for _, c in mine),
+            "dv01_by_curve_rub": curves, "dv01_all_curves_rub": sum(curves.values()),
+            "ofz_basis_rub": sum(c["basis"] for _, c in mine), "cs01_rub": sum(c["cs01"] for _, c in mine),
+            "fx_delta_rub": None if any(not fx.get(cc) for cc, _ in fx_rows) else sum(v * fx[cc] for cc, v in fx_rows),
+            "n_risk_missing": sum(sum(c["missing"].values()) for _, c in mine)})
     return {"attribution": attribution, "attribution_rule": ATTRIBUTIONS[attribution],
             "attribution_provisional": True, "cross_ccy_kinds": list(CROSS_CCY_KINDS),
             "kinds": [{"kind": k, "group": g, "label": lab} for k, g, lab in INSTR_KINDS],
-            "fx": {c: fx.get(c) for c in ccys if c != "RUB"}, "rows": rows, "total": total}
+            "measures": [{"measure": m, "label": lab, "across_ccys": a} for m, lab, a in MATRIX_MEASURES],
+            "fx": {c: fx.get(c) for c in ccys if c != "RUB"}, "ccys": ccys, "columns": columns, "rows": rows,
+            "total": total}

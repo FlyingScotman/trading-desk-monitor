@@ -78,9 +78,11 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   K.top({ title: 'C03 · Позиции в центре', tag: 'таблица позиций + карточка рядом' });
 
   // ---------- состояние ----------
-  const st = { preset: 'base', grouping: 'ccy', color: 'issuer', sort: [], q: '', sel: null, collapsed: {} };
-  try { Object.assign(st, JSON.parse(localStorage.getItem('c03-state') || '{}'), { sort: [], q: '', collapsed: {} }); } catch (e) { }
-  const save = () => { try { localStorage.setItem('c03-state', JSON.stringify({ preset: st.preset, grouping: st.grouping, color: st.color, sel: st.sel })); } catch (e) { } };
+  // по умолчанию — плоская таблица (R37): валюта и эмитент — обычные столбцы (сортировка, ⏷ фильтр по значениям);
+  // группировка — по желанию. Сохранённая группировка до R37 (v < 2) была прежним умолчанием, а не выбором — не берём
+  const st = { preset: 'base', grouping: 'none', color: 'issuer', sort: [], q: '', sel: null, collapsed: {}, filters: {} };
+  try { const sv = JSON.parse(localStorage.getItem('c03-state') || '{}'); if (sv.v !== 2) delete sv.grouping; Object.assign(st, sv, { sort: [], q: '', collapsed: {}, filters: {} }); } catch (e) { }
+  const save = () => { try { localStorage.setItem('c03-state', JSON.stringify({ v: 2, preset: st.preset, grouping: st.grouping, color: st.color, sel: st.sel })); } catch (e) { } };
 
   // ---------- цвета ----------
   function rgba(hex, a) {
@@ -107,12 +109,12 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   const pnlCol = (key, label, k) => ({ label, num: true, val: r => r.pnl[k], fmt: v => '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.pnl[k], unit: 'тыс ₽', sfmt: f.k, title: 'тыс ₽' });
   const C = {
     name: { label: 'Бумага', val: r => r.name, fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? '<span class="k-tag sd" title="сделки сегодня">сд</span>' : '') },
-    issuer: { label: 'Эмитент', val: r => r.issuerName, fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
-    issuerFull: { label: 'Эмитент (полн.)', val: r => r.issuerFull, fmt: v => esc(v) },
+    issuer: { label: 'Эмитент', filter: true, title: 'эмитент (у деривативов — контрагент)', val: r => r.issuerName, fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
+    issuerFull: { label: 'Эмитент (полн.)', filter: true, val: r => r.issuerFull, fmt: v => esc(v) },
     isin: { label: 'ISIN', val: r => r.isin, fmt: v => '<span class="mono mut3">' + esc(v || '—') + '</span>' },
-    ccy: { label: 'Вал', val: r => M.ccyOrder[r.ccy], fmt: (v, r) => K.ccyTag(r.ccy) },
-    kind: { label: 'Тип', val: r => r.group + r.kind, fmt: (v, r) => '<span class="tagc" style="border-color:' + K.kindColor[r.kind] + '66">' + esc(M.kindShort[r.kind]) + '</span>' },
-    book: { label: 'Книга', val: r => r.book, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
+    ccy: { label: 'Вал', val: r => M.ccyOrder[r.ccy] ?? 99, fmt: (v, r) => K.ccyTag(r.ccy), filter: r => r.ccy, fltOrder: K.posCols.ccy.fltOrder },
+    kind: { label: 'Тип', val: r => r.group + r.kind, filter: r => M.kindLabel[r.kind] || r.kind, fmt: (v, r) => '<span class="tagc" style="border-color:' + K.kindColor[r.kind] + '66">' + esc(M.kindShort[r.kind]) + '</span>' },
+    book: { label: 'Книга', filter: true, val: r => r.book, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
     coupon: { label: 'Купон', val: r => r.couponFmt, fmt: v => '<span class="mono">' + esc(v || '—') + '</span>', title: 'Q — квартальный, M — месячный, S — полугодовой, A — годовой' },
     curCpn: { label: 'Тек. купон', num: true, val: r => r.group === 'DER' ? null : r.curCpn, fmt: v => f.pct(v) },
     offer: { label: 'Оферта', val: r => r.offer || null, fmt: (v, r) => v ? f.date(v) + ' <span class="mut3">' + (r.offerKind === 'put' ? 'P' : 'C') + '</span>' : '<span class="mut3">—</span>' },
@@ -141,21 +143,21 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     pnl: { label: 'PnL дня', num: true, val: r => r.pnl.total, fmt: v => '<b class="' + f.cls(v) + '">' + f.k(v) + '</b>', sum: r => r.pnl.total, unit: 'тыс ₽', sfmt: f.k, title: 'тыс ₽' },
     pnlMtd: { label: 'MTD', num: true, val: r => r.pnlMtd, fmt: v => '<span class="' + f.cls(v) + '">' + f.mn(v, 1) + '</span>', sum: r => r.pnlMtd, unit: 'mm ₽', sfmt: v => f.mn(v, 1), title: 'mm ₽' },
     pnlYtd: { label: 'YTD', num: true, val: r => r.pnlYtd, fmt: v => '<span class="' + f.cls(v) + '">' + f.mn(v, 1) + '</span>', sum: r => r.pnlYtd, unit: 'mm ₽', sfmt: v => f.mn(v, 1), title: 'mm ₽' },
-    rating: { label: 'Рейтинг', val: r => K.ratingRank(r.rating), fmt: (v, r) => '<span class="mut" title="' + esc(K.ratingTip(r.rating, r.ratingInfo)) + '">' + esc(K.ratingText(r.rating, r.ratingInfo)) + '</span>' },
-    sector: { label: 'Сектор', val: r => r.sector, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
-    entity: { label: 'Юрлицо', val: r => r.entity, fmt: v => '<span class="mut">' + esc(M.entities.find(e => e.id === v).name) + '</span>' },
-    desk: { label: 'Деск', val: r => r.desk, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
+    rating: { label: 'Рейтинг', filter: r => r.rating, val: r => K.ratingRank(r.rating), fmt: (v, r) => '<span class="mut" title="' + esc(K.ratingTip(r.rating, r.ratingInfo)) + '">' + esc(K.ratingText(r.rating, r.ratingInfo)) + '</span>' },
+    sector: { label: 'Сектор', filter: true, val: r => r.sector, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
+    entity: { label: 'Юрлицо', filter: true, val: r => r.entity, fmt: v => '<span class="mut">' + esc(M.entities.find(e => e.id === v).name) + '</span>' },
+    desk: { label: 'Деск', filter: true, val: r => r.desk, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
   };
   const PRESETS = [
-    ['base', 'Базовый', ['name', 'ccy', 'kind', 'book', 'coupon', 'offer', 'maturity', 'event', 'notional', 'price', 'ytm', 'spread', 'dv01', 'cs01', 'spark', 'isin']],
-    ['risk', 'Риск', ['name', 'ccy', 'kind', 'book', 'event', 'tenor', 'notional', 'mv', 'dur', 'dv01', 'cs01', 'basis01', 'carry']],
-    ['px', 'Цены и спреды', ['name', 'ccy', 'kind', 'coupon', 'event', 'price', 'chg', 'bidask', 'spark', 'ytm', 'spread', 'zdisc', 'gspread', 'dur']],
-    ['pnl', 'Кэрри и PnL', ['name', 'ccy', 'book', 'coupon', 'curCpn', 'fund', 'carry', 'pc', 'pr', 'ps', 'pf', 'pt', 'po', 'pnl', 'pnlMtd', 'pnlYtd']],
-    ['stat', 'Статика', ['name', 'isin', 'issuerFull', 'ccy', 'kind', 'rating', 'sector', 'coupon', 'offer', 'maturity', 'tenor', 'book', 'entity', 'desk']],
-    ['all', 'Всё', ['name', 'isin', 'ccy', 'kind', 'book', 'rating', 'coupon', 'curCpn', 'offer', 'maturity', 'event', 'tenor', 'notional', 'mv', 'price', 'chg', 'spark', 'ytm', 'spread', 'zdisc', 'gspread', 'dur', 'dv01', 'cs01', 'basis01', 'carry', 'pnl', 'pnlMtd', 'pnlYtd']],
+    ['base', 'Базовый', ['name', 'ccy', 'issuer', 'kind', 'book', 'coupon', 'offer', 'maturity', 'event', 'notional', 'price', 'ytm', 'spread', 'dv01', 'cs01', 'spark', 'isin']],
+    ['risk', 'Риск', ['name', 'ccy', 'issuer', 'kind', 'book', 'event', 'tenor', 'notional', 'mv', 'dur', 'dv01', 'cs01', 'basis01', 'carry']],
+    ['px', 'Цены и спреды', ['name', 'ccy', 'issuer', 'kind', 'coupon', 'event', 'price', 'chg', 'bidask', 'spark', 'ytm', 'spread', 'zdisc', 'gspread', 'dur']],
+    ['pnl', 'Кэрри и PnL', ['name', 'ccy', 'issuer', 'book', 'coupon', 'curCpn', 'fund', 'carry', 'pc', 'pr', 'ps', 'pf', 'pt', 'po', 'pnl', 'pnlMtd', 'pnlYtd']],
+    ['stat', 'Статика', ['name', 'isin', 'issuer', 'issuerFull', 'ccy', 'kind', 'rating', 'sector', 'coupon', 'offer', 'maturity', 'tenor', 'book', 'entity', 'desk']],
+    ['all', 'Всё', ['name', 'isin', 'ccy', 'issuer', 'kind', 'book', 'rating', 'coupon', 'curCpn', 'offer', 'maturity', 'event', 'tenor', 'notional', 'mv', 'price', 'chg', 'spark', 'ytm', 'spread', 'zdisc', 'gspread', 'dur', 'dv01', 'cs01', 'basis01', 'carry', 'pnl', 'pnlMtd', 'pnlYtd']],
   ];
-  // колонка валюты лишняя, когда валюта уже в заголовках групп
-  const cols = () => (PRESETS.find(p => p[0] === st.preset) || PRESETS[0])[2].filter(k => !(k === 'ccy' && (st.grouping === 'ccy' || st.grouping === 'book'))).map(k => Object.assign({ key: k }, C[k]));
+  // валюта и эмитент — в каждом наборе колонок, и при группировке тоже (R37)
+  const cols = () => (PRESETS.find(p => p[0] === st.preset) || PRESETS[0])[2].map(k => Object.assign({ key: k }, C[k]));
 
   // ---------- группировки ----------
   const CCYN = { RUB: 'Рубли', USD: 'Доллары', EUR: 'Евро', CNY: 'Юани' };
@@ -175,11 +177,14 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
   // ---------- данные ----------
   // колонка для сортировки строк и групп (KIT.rowCmp, KIT.groupKeys): значение и слагаемое итога группы
-  const colOf = k => C[k] ? { val: C[k].val, sum: C[k].sum || null } : null;
+  const colOf = k => C[k] ? { val: C[k].val, sum: C[k].sum || null, filter: C[k].filter, fltOrder: C[k].fltOrder, key: k } : null;
+  let base = [];  // строки под поиском — для списка значений фильтра столбца
   function rows() {
     let L = K.list();
     const w = st.q.toLowerCase().split(/\s+/).filter(Boolean);
     if (w.length) L = L.filter(p => w.every(x => p.searchText.includes(x)));
+    base = L;
+    L = K.applyFilters(L, st.filters, colOf);
     if (st.sort.length) L = L.slice().sort(K.rowCmp(st.sort, colOf));
     return L;
   }
@@ -200,7 +205,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     const firstSum = CL.findIndex(c => c.sum), span = firstSum < 0 ? CL.length : Math.max(1, firstSum);
     const head = '<thead><tr><th class="stripe"></th>' + CL.map(c => {
       const si = st.sort.findIndex(s => s[0] === c.key);
-      return '<th class="sortable' + (c.num ? ' n' : '') + '" data-k="' + c.key + '" title="' + esc(c.title || 'щелчок — сортировка, Shift+щелчок — добавить колонку') + '">' + (c.tip ? '<span class="k-hint">' + c.label + '</span>' : c.label) + (si >= 0 ? '<span class="si">' + (st.sort[si][1] > 0 ? '▲' : '▼') + (st.sort.length > 1 ? si + 1 : '') + '</span>' : '') + '</th>';
+      return '<th class="sortable' + (c.num ? ' n' : '') + '" data-k="' + c.key + '" title="' + esc(c.title || 'щелчок — сортировка, Shift+щелчок — добавить колонку') + '">' + (c.tip ? '<span class="k-hint">' + c.label + '</span>' : c.label) + (si >= 0 ? '<span class="si">' + (st.sort[si][1] > 0 ? '▲' : '▼') + (st.sort.length > 1 ? si + 1 : '') + '</span>' : '') + K.fltIcon(c, st.filters) + '</th>';
     }).join('') + '</tr></thead>';
     let body = '';
     const leaf = r => {
@@ -230,6 +235,11 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     const sc = tbl.scrollTop;
     tbl.innerHTML = '<table class="k-tbl">' + head + '<tbody>' + (body || '<tr><td colspan="' + (CL.length + 1) + '" class="k-empty">ничего не найдено</td></tr>') + '</tbody>' + foot + '</table>';
     tbl.scrollTop = sc;
+    tbl.querySelectorAll('th .k-flt').forEach(ic => ic.onclick = e => {
+      e.stopPropagation();
+      const k = ic.dataset.flt, c = colOf(k);
+      K.colFilter(ic, K.fltItems(K.applyFilters(base, st.filters, colOf, k), c), st.filters[k] || null, v => { st.filters[k] = v; render(); });
+    });
     tbl.querySelectorAll('th.sortable').forEach(th => th.onclick = e => {
       const k = th.dataset.k, i = st.sort.findIndex(s => s[0] === k);
       if (e.shiftKey) { if (i >= 0) { if (st.sort[i][1] > 0) st.sort[i][1] = -1; else st.sort.splice(i, 1); } else st.sort.push([k, 1]); }
@@ -260,13 +270,16 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     else if (st.color === 'type') lg = M.typeRows.filter(t => L.some(p => p.group + '.' + p.kind === t.id)).map(t => '<span class="lg"><i style="background:' + K.kindColor[t.kind] + '"></i>' + esc(t.label) + '</span>').join('');
     else if (st.color === 'pnl') lg = '<span class="lg"><i style="background:' + K.css('--pos') + '"></i>прибыль дня</span><span class="lg"><i style="background:' + K.css('--neg') + '"></i>убыток дня</span><span>насыщенность — размер</span>';
     else lg = '<span>полоса и подложка — цвет эмитента</span>';
-    sub.innerHTML = '<span><b style="color:var(--fg)">' + L.length + '</b> позиций</span>' + lg + '<span class="sp" style="flex:1"></span>' +
+    const fk = Object.keys(st.filters).filter(k => st.filters[k] && C[k]);
+    const flt = fk.length ? '<span>фильтр: ' + fk.map(k => esc(C[k].label) + ' — ' + esc(st.filters[k].length <= 3 ? st.filters[k].join(', ') : st.filters[k].length + ' знач.')).join('; ') + '</span><a data-a="unfilter">✕ фильтры</a>' : '';
+    sub.innerHTML = '<span><b style="color:var(--fg)">' + L.length + '</b> позиций</span>' + lg + flt + '<span class="sp" style="flex:1"></span>' +
       (st.sort.length ? '<span>сортировка: ' + st.sort.map(([k, d]) => esc(C[k].label) + (d > 0 ? ' ▲' : ' ▼')).join(', ') + ((GROUPS[st.grouping] || []).length ? ' — и группы' + (C[st.sort[0][0]].sum ? ' (по сумме)' : '') : '') + '</span><a data-a="unsort">✕ сортировка по умолчанию</a>'
-        : '<span>сортировка: валюта → эмитент → фикс/флоатер → срок до оферты; щелчок по столбцу сортирует и группы</span>') +
-      '<a data-a="collapse">свернуть</a><a data-a="expand">развернуть</a>' +
+        : '<span>сортировка по умолчанию: валюта → эмитент → срок до оферты; щелчок по столбцу — сортировка' + ((GROUPS[st.grouping] || []).length ? ' (и групп)' : '') + ', ⏷ — фильтр</span>') +
+      ((GROUPS[st.grouping] || []).length ? '<a data-a="collapse">свернуть</a><a data-a="expand">развернуть</a>' : '') +
       '<span><span class="k-kbd">↑</span><span class="k-kbd">↓</span> выбор · <span class="k-kbd">Enter</span> полная карточка · Shift+щелчок — сортировка по нескольким</span>';
     sub.querySelectorAll('[data-a]').forEach(a => a.onclick = () => {
       if (a.dataset.a === 'unsort') st.sort = [];
+      if (a.dataset.a === 'unfilter') st.filters = {};
       if (a.dataset.a === 'expand') st.collapsed = {};
       if (a.dataset.a === 'collapse') { st.collapsed = {}; tbl.querySelectorAll('tr.grp.l0').forEach(tr => st.collapsed[tr.dataset.g] = true); }
       render();
@@ -357,7 +370,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
   // ---------- панель управления ----------
   K.seg(document.getElementById('sCols'), PRESETS.map(p => [p[0], p[1]]), st.preset, v => { st.preset = v; st.sort = st.sort.filter(s => cols().some(c => c.key === s[0])); save(); render(); });
-  K.seg(document.getElementById('sGrp'), [['ccy', 'валюта → эмитент'], ['book', 'книга → валюта'], ['type', 'тип → срок'], ['none', 'без групп']], st.grouping, v => { st.grouping = v; st.collapsed = {}; save(); render(); });
+  K.seg(document.getElementById('sGrp'), [['none', 'без групп'], ['ccy', 'валюта → эмитент'], ['book', 'книга → валюта'], ['type', 'тип → срок']], st.grouping, v => { st.grouping = v; st.collapsed = {}; save(); render(); });
   K.seg(document.getElementById('sColor'), [['issuer', 'эмитент'], ['ccy', 'валюта'], ['type', 'тип'], ['pnl', 'PnL дня']], st.color, v => { st.color = v; save(); render(); });
   const q = document.getElementById('q');
   q.oninput = () => { st.q = q.value; render(); };

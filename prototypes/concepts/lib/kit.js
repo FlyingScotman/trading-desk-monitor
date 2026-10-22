@@ -598,24 +598,79 @@
     return keys.slice().sort((a, b) => cmpList(agg.get(a), agg.get(b), sort) || (order ? order(a, b) : 0));
   };
 
+  // ---------- фильтр по значениям столбца (R37) ----------
+  // Столбец с filter (true — по значению val, или функция r → значение) фильтруется, как любой: ⏷ в заголовке —
+  // список значений столбца с числом строк (под остальными фильтрами), отмеченные видны. Валюта и эмитент —
+  // обычные столбцы таблиц позиций: сортируются и фильтруются, как остальные.
+  K.fltVal = (c, r) => { const v = c.filter === true ? (c.val ? c.val(r) : r[c.key]) : c.filter(r); return v == null || v === '' ? '—' : String(v); };
+  K.applyFilters = (rows, filters, colOf, skip) => {
+    const ks = Object.keys(filters || {}).filter(k => k !== skip && filters[k] && colOf(k) && colOf(k).filter);
+    return ks.length ? rows.filter(r => ks.every(k => filters[k].includes(K.fltVal(colOf(k), r)))) : rows;
+  };
+  K.fltItems = (rows, c) => {
+    const n = new Map(); rows.forEach(r => { const v = K.fltVal(c, r); n.set(v, (n.get(v) || 0) + 1); });
+    return [...n].map(([v, k]) => ({ v, t: c.fltLabel ? c.fltLabel(v) : v, n: k })).sort((a, b) => c.fltOrder ? c.fltOrder(a.v, b.v) : a.t.localeCompare(b.t, 'ru'));
+  };
+  K.fltIcon = (c, filters) => c.filter ? '<span class="k-flt' + (filters && filters[c.key] ? ' on' : '') + '" data-flt="' + esc(c.key) + '" title="фильтр по значениям столбца">⏷</span>' : '';
+  let fltPop = null;
+  K.closeColFilter = () => { if (fltPop) { fltPop.remove(); fltPop = null; } };
+  // items: [{v, t, n}]; sel — выбранные значения или null (все); onChange(массив | null)
+  K.colFilter = function (anchor, items, sel, onChange) {
+    K.closeColFilter();
+    const m = h('div', 'k-panel k-flt-pop'); m.style.cssText = 'position:fixed;z-index:140;min-width:200px;max-width:340px;max-height:60vh;overflow:auto;box-shadow:var(--shadow);padding:4px 0';
+    const r = anchor.getBoundingClientRect(); m.style.left = Math.max(4, Math.min(r.left, innerWidth - 350)) + 'px'; m.style.top = (r.bottom + 4) + 'px';
+    let cur = sel ? new Set(sel) : null, q = '';
+    const tb = h('div'); tb.style.cssText = 'display:flex;gap:6px;padding:4px 8px 6px;border-bottom:1px solid var(--line);position:sticky;top:-4px;background:var(--panel)';
+    const inp = h('input', 'k-input'); inp.placeholder = 'найти…'; inp.style.cssText = 'min-width:0;flex:1';
+    const all = h('button', 'k-btn', 'все'), none = h('button', 'k-btn', 'снять');
+    tb.append(inp, all, none); m.appendChild(tb);
+    const list = h('div'); m.appendChild(list);
+    const emit = () => onChange(cur && cur.size < items.length ? [...cur] : null);
+    function paint() {
+      list.innerHTML = '';
+      items.filter(it => !q || it.t.toLowerCase().includes(q)).forEach(it => {
+        const on = !cur || cur.has(it.v);
+        const row = h('div', 'mi', '<span style="width:16px;display:inline-block">' + (on ? '☑' : '☐') + '</span>' + esc(it.t) + ' <span class="mut3" style="font-size:11px">' + it.n + '</span>');
+        row.style.cssText = 'padding:4px 12px;cursor:pointer;white-space:nowrap';
+        row.onclick = e => { e.stopPropagation(); if (!cur) cur = new Set(items.map(x => x.v)); if (cur.has(it.v)) cur.delete(it.v); else cur.add(it.v); paint(); emit(); };
+        list.appendChild(row);
+      });
+    }
+    inp.oninput = () => { q = inp.value.toLowerCase(); paint(); };
+    inp.onclick = e => e.stopPropagation();
+    m.onclick = e => e.stopPropagation();
+    all.onclick = () => { cur = null; paint(); emit(); };
+    none.onclick = () => { cur = new Set(); paint(); emit(); };
+    paint(); document.body.appendChild(m); fltPop = m;
+    if (items.length > 8) setTimeout(() => inp.focus(), 0);
+    setTimeout(() => document.addEventListener('click', K.closeColFilter, { once: true }), 0);
+    return m;
+  };
+
   // ---------- таблица ----------
   // opts: {columns:[{key,label,val(r),fmt(v,r),cls,title,sum:true|fn,drill:{title,unit,fmt,val}, w}], rows|rowsFn, groupBy:[{key(r),label(k,rows)}], search:bool,
-  //        sort:[[key,dir]] (по умолчанию — строки в группах; щелчок по заголовку сортирует и группы, кроме groupBy[i].fixed), stripe(r)->color, onRow(r), rowCls(r), tools(el), maxHeight, footer:bool}
+  //        sort:[[key,dir]] (по умолчанию — строки в группах; щелчок по заголовку сортирует и группы, кроме groupBy[i].fixed), stripe(r)->color, onRow(r), rowCls(r), tools(el), maxHeight, footer:bool,
+  //        groupable:[уровни] — группировка по желанию (переключатель «плоская / валюта → эмитент»); по умолчанию таблица плоская (R37)}
   K.table = function (el, opts) {
-    const st = { sort: opts.sort ? opts.sort.slice() : [], q: '', collapsed: {}, groupSort: false };
+    const st = { sort: opts.sort ? opts.sort.slice() : [], q: '', collapsed: {}, groupSort: false, filters: {}, grouped: false };
     el.innerHTML = '';
-    let tools = null;
-    if (opts.search !== false || opts.tools) {
+    let tools = null, fltChip = null;
+    if (opts.search !== false || opts.tools || opts.groupable) {
       tools = h('div', 'k-tbl-tools'); el.appendChild(tools);
       if (opts.search !== false) { const i = h('input', 'k-input'); i.placeholder = 'поиск в таблице…'; i.oninput = () => { st.q = i.value.toLowerCase(); draw(); }; tools.appendChild(i); }
-      tools.appendChild(h('span', 'k-note', 'щелчок по заголовку сортирует строки и группы · Shift+щелчок — по нескольким колонкам'));
+      if (opts.groupable) {
+        const g = h('span'); tools.appendChild(g);
+        K.seg(g, [['flat', 'плоская'], ['grp', opts.groupLabel || 'валюта → эмитент']], 'flat', v => { st.grouped = v === 'grp'; st.collapsed = {}; draw(); });
+      }
+      tools.appendChild(h('span', 'k-note', 'щелчок по заголовку — сортировка · Shift+щелчок — по нескольким · ⏷ — фильтр по значениям'));
+      fltChip = h('span', 'k-chip on'); fltChip.style.display = 'none'; fltChip.onclick = () => { st.filters = {}; draw(); }; tools.appendChild(fltChip);
       if (opts.tools) { const sp = h('span'); sp.style.flex = '1'; tools.appendChild(sp); opts.tools(tools); }
     }
     const wrap = h('div', 'k-tbl-wrap'); if (opts.maxHeight) wrap.style.maxHeight = opts.maxHeight; el.appendChild(wrap);
     const cols = () => opts.columns.filter(c => !c.hidden);
     const val = (c, r) => c.val ? c.val(r) : r[c.key];
     // колонка для сортировки строк и групп: значение и, если у колонки есть итог, слагаемое суммы группы
-    const colOf = k => { const c = opts.columns.find(x => x.key === k); return c ? { val: r => val(c, r), sum: c.sum ? (typeof c.sum === 'function' ? c.sum : r => val(c, r) || 0) : null } : null; };
+    const colOf = k => { const c = opts.columns.find(x => x.key === k); return c ? { val: r => val(c, r), sum: c.sum ? (typeof c.sum === 'function' ? c.sum : r => val(c, r) || 0) : null, filter: c.filter, key: c.key } : null; };
     function sorted(rows) {
       if (!st.sort.length) return rows;
       return rows.slice().sort(K.rowCmp(st.sort, colOf));
@@ -623,9 +678,12 @@
     function draw() {
       let rows = opts.rowsFn ? opts.rowsFn() : opts.rows;
       if (st.q) rows = rows.filter(r => (r.searchText || JSON.stringify(r)).toLowerCase().includes(st.q));
-      rows = sorted(rows);
+      const base = rows;
+      rows = sorted(K.applyFilters(rows, st.filters, colOf));
       const C = cols();
-      const head = '<thead><tr>' + (opts.stripe ? '<th class="stripe"></th>' : '') + C.map(c => { const si = st.sort.findIndex(s => s[0] === c.key); return '<th class="sortable ' + (c.num ? 'n' : '') + '" data-k="' + c.key + '" title="' + esc(c.title || '') + '"' + (c.w ? ' style="width:' + c.w + '"' : '') + '>' + (c.tip ? '<span class="k-hint">' + c.label + '</span>' : c.label) + (si >= 0 ? '<span class="si">' + (st.sort[si][1] > 0 ? '▲' : '▼') + (st.sort.length > 1 ? si + 1 : '') + '</span>' : '') + '</th>'; }).join('') + '</tr></thead>';
+      const nf = Object.keys(st.filters).filter(k => st.filters[k]).length;
+      if (fltChip) { fltChip.style.display = nf ? '' : 'none'; fltChip.innerHTML = '<span class="x">✕</span> фильтры (' + nf + ')'; }
+      const head = '<thead><tr>' + (opts.stripe ? '<th class="stripe"></th>' : '') + C.map(c => { const si = st.sort.findIndex(s => s[0] === c.key); return '<th class="sortable ' + (c.num ? 'n' : '') + '" data-k="' + c.key + '" title="' + esc(c.title || '') + '"' + (c.w ? ' style="width:' + c.w + '"' : '') + '>' + (c.tip ? '<span class="k-hint">' + c.label + '</span>' : c.label) + (si >= 0 ? '<span class="si">' + (st.sort[si][1] > 0 ? '▲' : '▼') + (st.sort.length > 1 ? si + 1 : '') + '</span>' : '') + K.fltIcon(c, st.filters) + '</th>'; }).join('') + '</tr></thead>';
       const cell = (c, r) => { const v = val(c, r); return '<td class="' + (c.num ? 'n ' : '') + (c.cls ? (typeof c.cls === 'function' ? c.cls(v, r) : c.cls) : '') + '"' + (c.style ? ' style="' + c.style(v, r) + '"' : '') + '>' + (c.fmt ? c.fmt(v, r) : esc(v)) + '</td>'; };
       const sumCell = (c, list) => {
         if (!c.sum) return '<td></td>';
@@ -636,7 +694,7 @@
         return '<td class="n ' + f.cls(tot) + '">' + fm(tot, {}) + '</td>';
       };
       let body = '';
-      const groups = opts.groupBy || [];
+      const groups = opts.groupBy || (st.grouped && opts.groupable) || [];
       const nCols = C.length + (opts.stripe ? 1 : 0);
       function emit(list, level, path) {
         if (level >= groups.length) { list.forEach(r => { body += '<tr class="row ' + (opts.rowCls ? opts.rowCls(r) : '') + '" data-id="' + esc(r.id) + '">' + (opts.stripe ? '<td class="stripe" style="background:' + opts.stripe(r) + '"></td>' : '') + C.map(c => cell(c, r)).join('') + '</tr>'; }); return; }
@@ -655,6 +713,11 @@
       emit(rows, 0, '');
       const foot = opts.footer === false ? '' : '<tfoot><tr>' + (opts.stripe ? '<td></td>' : '') + C.map((c, i) => i === 0 ? '<td>Итого <span class="mut3" style="font-weight:400">' + rows.length + '</span></td>' : sumCell(c, rows)).join('') + '</tr></tfoot>';
       wrap.innerHTML = '<table class="k-tbl">' + head + '<tbody>' + (body || '<tr><td colspan="' + nCols + '" class="k-empty">ничего не найдено</td></tr>') + '</tbody>' + foot + '</table>';
+      wrap.querySelectorAll('th .k-flt').forEach(ic => ic.onclick = e => {
+        e.stopPropagation();
+        const c = opts.columns.find(x => x.key === ic.dataset.flt);
+        K.colFilter(ic, K.fltItems(K.applyFilters(base, st.filters, colOf, c.key), c), st.filters[c.key] || null, v => { st.filters[c.key] = v; draw(); });
+      });
       wrap.querySelectorAll('th.sortable').forEach(th => th.onclick = e => {
         const k = th.dataset.k, i = st.sort.findIndex(s => s[0] === k);
         if (e.shiftKey) { if (i >= 0) { if (st.sort[i][1] > 0) st.sort[i][1] = -1; else st.sort.splice(i, 1); } else st.sort.push([k, 1]); }
@@ -666,19 +729,20 @@
       wrap.querySelectorAll('tr.row').forEach(tr => tr.onclick = e => { if (e.target.closest('[data-dr]')) return; const id = tr.dataset.id; const r = rows.find(x => String(x.id) === id); if (opts.onRow) opts.onRow(r); else if (M.pos[id]) K.card(id); });
     }
     draw();
-    const api = { redraw: draw, state: st, setSort: s => { st.sort = s; draw(); }, el };
+    const api = { redraw: draw, state: st, setSort: s => { st.sort = s; draw(); }, setFilter: (k, v) => { st.filters[k] = v; draw(); }, setGrouped: g => { st.grouped = !!g; draw(); }, el };
     if (opts.autoFilter !== false && !opts.rows) K.live(el, 'filter', draw);
     return api;
   };
 
   // стандартные колонки позиций (концепты берут нужные по ключу)
   K.posCols = {
-    issuer: { key: 'issuerName', label: 'Эмитент', fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
+    // валюта и эмитент — обычные столбцы (R37): сортировка и фильтр по значениям, как у остальных
+    issuer: { key: 'issuerName', label: 'Эмитент', filter: true, title: 'эмитент (у деривативов — контрагент)', fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
     name: { key: 'name', label: 'Бумага', fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? ' <span class="k-tag" style="border-color:var(--warn);color:var(--warn)" title="сделки сегодня">сд</span>' : '') },
     isin: { key: 'isin', label: 'ISIN', fmt: v => '<span class="mono mut">' + esc(v || '—') + '</span>' },
-    ccy: { key: 'ccy', label: 'Вал', fmt: (v, r) => K.ccyTag(r.ccy), val: r => M.ccyOrder[r.ccy] },
-    kind: { key: 'kind', label: 'Тип', fmt: (v, r) => '<span class="tagc" style="border-color:' + K.kindColor[v] + '55">' + esc(M.kindShort[v]) + '</span>' },
-    book: { key: 'book', label: 'Книга', fmt: v => '<span class="mut">' + esc(v) + '</span>' },
+    ccy: { key: 'ccy', label: 'Вал', fmt: (v, r) => K.ccyTag(r.ccy), val: r => M.ccyOrder[r.ccy] ?? 99, filter: r => r.ccy, fltOrder: (a, b) => ((M.ccyOrder[a] ?? 99) - (M.ccyOrder[b] ?? 99)) || a.localeCompare(b) },
+    kind: { key: 'kind', label: 'Тип', filter: r => M.kindLabel[r.kind] || r.kind, fmt: (v, r) => '<span class="tagc" style="border-color:' + K.kindColor[v] + '55">' + esc(M.kindShort[v]) + '</span>' },
+    book: { key: 'book', label: 'Книга', filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
     coupon: { key: 'couponFmt', label: 'Купон', fmt: v => '<span class="mono">' + esc(v || '—') + '</span>' },
     event: { key: 'event', label: 'Событие', val: r => r.event.date, fmt: (v, r) => '<span class="mut3">' + ({ put: 'пут', call: 'колл', mat: 'погаш' }[r.event.kind]) + '</span> ' + f.date(r.event.date) },
     maturity: { key: 'maturity', label: 'Погашение', fmt: v => f.date(v) },
@@ -699,13 +763,14 @@
     carry: { key: 'carryDay', label: 'Кэрри/д', num: true, fmt: v => f.k(v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽', title: 'тыс ₽ в день' },
     pnl: { key: 'pnl', label: 'PnL дня', num: true, val: r => r.pnl.total, fmt: v => f.k(v), cls: v => f.cls(v), sum: r => r.pnl.total, unit: 'тыс ₽' },
     pnlMtd: { key: 'pnlMtd', label: 'PnL MTD', num: true, fmt: v => f.mn(v, 1), cls: v => f.cls(v), sum: true, unit: 'mm ₽', sumFmt: v => f.mn(v, 1) },
-    rating: { key: 'rating', label: 'Рейтинг', fmt: v => '<span class="mut">' + esc(v) + '</span>' },
-    sector: { key: 'sector', label: 'Сектор', fmt: v => '<span class="mut">' + esc(v) + '</span>' },
+    rating: { key: 'rating', label: 'Рейтинг', filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
+    sector: { key: 'sector', label: 'Сектор', filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
   };
   K.cols = keys => keys.map(k => typeof k === 'string' ? Object.assign({}, K.posCols[k]) : k);
   // порядок эмитентов в группах: Минфин первым, деривативы последними, остальные по алфавиту
   K.issuerOrder = (a, b) => { const r = x => x === 'Минфин' ? 0 : x === 'Деривативы' ? 2 : 1; return (r(a) - r(b)) || a.localeCompare(b, 'ru'); };
-  // группировка по умолчанию: валюта → эмитент (у рублёвых эмитентов — флоатеры отдельно от фикса)
+  // группировка «валюта → эмитент» — по желанию (opts.groupable таблиц, R37): по умолчанию таблицы позиций плоские,
+  // валюта и эмитент в них — обычные столбцы
   K.defaultGroups = [
     { key: r => r.ccy, label: k => K.ccyTag(k) + ' ' + K.ccyName(k), order: (a, b) => M.ccyOrder[a] - M.ccyOrder[b], color: k => K.ccyColor(k), span: 1 },
     { key: r => r.group === 'DER' ? 'Деривативы' : r.issuerName, label: (k, rows) => esc(k) + (rows[0].group === 'DER' ? ' <span class="mut3" style="font-weight:400">(по контрагентам)</span>' : ''), order: K.issuerOrder, color: (k, rows) => K.issuerColor(rows[0].issuer) },
@@ -1173,6 +1238,34 @@
   // KPI-плитка; spec — для разбора по щелчку
   K.kpi = (label, valueHtml, sub, spark, tip) => '<div class="k-kpi"><div class="l">' + K.hint(label, tip) + '</div><div class="v">' + valueHtml + '</div><div class="s">' + (sub || '&nbsp;') + '</div>' + (spark || '') + '</div>';
 
+  // ---------- ОВП в шапке (R43) ----------
+  // Мини-таблица: валюта на строку — сумма в валюте (mm) и эквивалент в валюте отчёта, по |эквиваленту| по убыванию,
+  // один формат (1 знак, разделитель тысяч, знак цветом); строки, которые округляются до 0.0 mm, — под «+N прочих».
+  // Суммы — по ногам (INSTR.fxIn: ключи fx_delta прогона; вторая валюта кросса — в своей строке).
+  K.tips.fxMini = 'Открытая валютная позиция по валютам (FX-дельта, по ногам: у кросса — обе валюты), mm в валюте и ≈ в валюте отчёта по курсу прогона; щелчок по цифре — из каких позиций';
+  K.fxRows = L => K.fxCcys(L).map(c => { const v = M.sum(L, p => INSTR.fxIn(p, c)); return { c, v, eq: v * ((M.toRepr && M.toRepr[c]) || 1) }; })
+    .sort((a, b) => (Math.abs(b.eq) - Math.abs(a.eq)) || a.c.localeCompare(b.c));
+  K.FX_MINOR = 0.05e6;  // меньше — 0.0 mm: в «прочих»
+  K.fxMini = function (L) {
+    const R = K.fxRows(L);
+    if (!R.length) return '<span class="mut3">открытых позиций нет</span>';
+    const minor = r => Math.abs(r.v) < K.FX_MINOR;
+    const big = R.filter(r => !minor(r)), rest = R.filter(minor);
+    const row = (r, cls) => '<tr' + (cls ? ' class="' + cls + '"' : '') + '><td class="c">' + esc(r.c) + '</td><td>' +
+      K.d({ title: 'ОВП ' + r.c + ' (FX-дельта)', unit: 'mm ' + r.c, fmt: v => f.mns(v, 1), list: L, val: p => INSTR.fxIn(p, r.c) }, f.mns(r.v, 1)) +
+      '</td><td class="' + f.cls(r.eq) + '">' + f.mns(r.eq, 1) + '</td></tr>';
+    return '<table class="k-fxm"><thead><tr><th>вал.</th><th>mm в вал.</th><th>≈ mm ' + K.SYM[K.repr] + '</th></tr></thead><tbody>' +
+      big.map(r => row(r)).join('') +
+      (rest.length ? '<tr class="more" data-fxmore="' + rest.length + '"><td colspan="3" title="' + esc(rest.map(r => r.c + ' ' + f.mns(r.v, 3) + ' mm').join(' · ')) + '">+' + rest.length + ' прочих: ' + esc(rest.map(r => r.c).join(', ')) + '</td></tr>' + rest.map(r => row(r, 'small')).join('') : '') +
+      '</tbody></table>';
+  };
+  document.addEventListener('click', e => {
+    const t = e.target.closest && e.target.closest('[data-fxmore]');
+    if (!t) return;
+    const tb = t.closest('.k-fxm'); tb.classList.toggle('open');
+    t.firstChild.textContent = tb.classList.contains('open') ? 'свернуть прочие (' + t.dataset.fxmore + ')' : '+' + t.dataset.fxmore + ' прочих';
+  });
+
   // стандартная строка HUD: риск по валютам и кривым, PnL, кэрри, объём
   K.hud = function (el) {
     function draw() {
@@ -1185,7 +1278,7 @@
         K.kpi('CS01', K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }), 'корп. RUB ' + K.d({ title: 'CS01 корп RUB', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === 'RUB'), val: 'cs01' }, null, '') + ' · вал. ' + K.d({ title: 'CS01 валютные', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy !== 'RUB'), val: 'cs01' }, null, ''), null, K.tips.cs01) +
         K.kpi('Кэрри / день', K.d({ title: 'Кэрри за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }) + ' <span class="mut" style="font-size:11px">тыс</span>', 'в год ≈ ' + f.mn(k.carryDay * 365, 0) + ' mm') +
         K.kpi('Облигации MV', K.d({ title: 'MV облигаций', unit: 'bn ₽', fmt: v => f.bn(v, 1), list: L.filter(p => p.group !== 'DER'), val: 'mv', color: false }) + ' <span class="mut" style="font-size:11px">bn</span>', M.ccys.map(c => c + ' ' + f.bn(k.byCcy[c].mv, 1)).join(' · ')) +
-        K.kpi('ОВП', K.fxCcys(L).map(c => c + ' ' + K.d({ title: 'FX дельта ' + c, unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: L, val: p => INSTR.fxIn(p, c) })).join(' '), 'mm в валюте') +
+        '<div class="k-kpi k-fxk"><div class="l">' + K.hint('ОВП', K.tips.fxMini) + '</div><div class="v">' + K.fxMini(L) + '</div><div class="s"><a class="go" href="c06-launchpad.html#fx" title="плитка «ОВП и курсы»: бонды и деривативы по валютам, курсы, PnL FX">подробно (C06) →</a></div></div>' +
         '</div>';
     }
     draw(); K.live(el, 'filter', draw);

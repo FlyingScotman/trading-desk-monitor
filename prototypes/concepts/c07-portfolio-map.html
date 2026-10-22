@@ -198,8 +198,7 @@
     const el = document.getElementById('members');
     K.table(el, {
       rows: n.list.slice().sort((a, b) => SIZES[S.size].v(b) - SIZES[S.size].v(a)), autoFilter: false, stripe: r => K.issuerColor(r.issuer), maxHeight: '360px',
-      // колонка валюты: в K.posCols.ccy fmt получает порядок валюты (val), а не код — рисуем по строке
-      columns: K.cols(['name', Object.assign({}, K.posCols.ccy, { fmt: (v, r) => K.ccyTag(r.ccy) }), 'kind', 'book', 'tenor', 'ytm', 'spread', 'mv', 'dv01', 'cs01', 'carry', 'pnl']),
+      columns: K.cols(['name', 'ccy', 'issuer', 'kind', 'book', 'tenor', 'ytm', 'spread', 'mv', 'dv01', 'cs01', 'carry', 'pnl']),
     });
   }
 

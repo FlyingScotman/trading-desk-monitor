@@ -80,6 +80,24 @@ table.k-tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-si
 .k-tbl th.sortable { cursor: pointer; }
 .k-tbl th.sortable:hover { color: var(--fg); }
 .k-tbl th .si { font-size: 10px; color: var(--accent); margin-left: 3px; }
+/* фильтр по значениям столбца (R37): ⏷ в заголовке, активный — цветом акцента */
+.k-tbl th .k-flt { font-size: 10px; margin-left: 4px; opacity: .35; cursor: pointer; padding: 0 2px; }
+.k-tbl th:hover .k-flt { opacity: .85; }
+.k-tbl th .k-flt.on { opacity: 1; color: var(--accent); }
+.k-flt-pop .mi:hover { background: var(--hover); }
+/* ОВП в шапке (R43): мини-таблица, валюта на строку */
+.k-kpi.k-fxk .v { font-size: 12px; font-weight: 400; white-space: normal; }
+.k-fxm { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 12px; font-weight: 400; line-height: 1.35; }
+.k-fxm th { font-size: 10px; font-weight: 500; color: var(--fg-3); text-align: right; padding: 0 0 1px 6px; text-transform: none; letter-spacing: 0; }
+.k-fxm th:first-child, .k-fxm td:first-child { text-align: left; padding-left: 0; }
+.k-fxm td { text-align: right; padding: 0 0 0 6px; white-space: nowrap; }
+.k-fxm td.c { font-weight: 600; color: var(--fg-2); }
+.k-fxm tr.more td { color: var(--fg-3); font-size: 11px; cursor: pointer; }
+.k-fxm tr.more td:hover { color: var(--accent); }
+.k-fxm tr.small { display: none; }
+.k-fxm.open tr.small { display: table-row; }
+.k-fxk .go { cursor: pointer; color: var(--fg-3); }
+.k-fxk .go:hover { color: var(--accent); }
 .k-tbl td { padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .k-tbl tbody tr.row { cursor: pointer; }
 .k-tbl tbody tr.row:hover td { background: var(--hover); }

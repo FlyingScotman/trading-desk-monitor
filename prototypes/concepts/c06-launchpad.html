@@ -98,7 +98,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
           cell('CS01, тыс/бп', K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }, null, ''), 'базис ОФЗ ' + K.d({ title: 'Базис ОФЗ−RUONIA', unit: 'тыс ₽/бп', list: L, val: 'basis01' }, null, ''), sp(H.cs01, css('--warn'))) +
           cell('Кэрри/день, тыс', K.d({ title: 'Кэрри за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }), 'в год ≈ ' + f.mn(k.carryDay * 365, 0) + ' mm', sp(H.pnl.carry, css('--pos'))) +
           cell('Облигации, bn', K.d({ title: 'MV облигаций', unit: 'bn ₽', fmt: v => f.bn(v, 1), list: bonds(L), val: 'mv', color: false }), M.ccys.map(c => c + ' ' + f.bn(k.byCcy[c].mv, 1)).join(' · ')) +
-          cell('ОВП, mm', K.fxCcys(L).slice(0, 2).map(c => c + ' ' + K.d({ title: 'FX дельта ' + c, unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: L, val: p => INSTR.fxIn(p, c) })).join(' '), K.fxCcys(L).slice(2).map(c => c + ' ' + K.d({ title: 'FX дельта ' + c, unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: L, val: p => INSTR.fxIn(p, c) })).join(' · ')) +
+          cell('ОВП <a class="mut3" href="#fx" data-fxgo title="плитка «ОВП и курсы»">→</a>', K.fxMini(L), '') +  // R43: валюта на строку, мелкие — в «прочих»
           cell('КС · RUONIA', f.pct(M.indices['КС']) + ' <span class="mut" style="font-size:12px">' + f.pct(M.indices['RUONIA']) + '</span>', esc(M.cbr.next.label) + ' ' + f.dshort(M.cbr.next.date)) +
           cell('USD/RUB · CNY/RUB', f.n(M.fx.USD, 2) + ' <span class="mut" style="font-size:12px">' + f.n(M.fx.CNY, 2) + '</span>', '<span class="' + f.cls(M.fxChgPct.USD) + '">' + f.s(M.fxChgPct.USD, 2) + '%</span> · <span class="' + f.cls(M.fxChgPct.CNY) + '">' + f.s(M.fxChgPct.CNY, 2) + '%</span>') +
           '</div>';
@@ -116,7 +116,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
       render(bd, mode) {
         const list = () => K.list().filter(p => p.ccy !== 'RUB' && p.group !== 'DER');
         if (mode === 'table') {
-          K.table(bd, { rows: list(), search: false, footer: true, stripe: r => K.ccyColor(r.ccy), sort: [['dv01', 1]], columns: K.cols(['name', ccyCol, 'tenor', 'ytm', 'dv01', 'cs01']) });
+          K.table(bd, { rows: list(), search: false, footer: true, stripe: r => K.ccyColor(r.ccy), sort: [['dv01', 1]], columns: K.cols(['name', ccyCol, 'issuer', 'tenor', 'ytm', 'dv01', 'cs01']) });
           return;
         }
         const el = K.h('div', 'fill'); bd.appendChild(el); stack(el, { curves: ['USD SOFR', 'EUR ESTR', 'CNY XCCY'], list });
@@ -141,7 +141,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const L = K.list().slice().sort((a, b) => Math.abs(b.pnl.total) - Math.abs(a.pnl.total)).slice(0, 12);
         if (mode === 'table') {
           const pc = (key, label) => ({ key: 'p' + key, label, num: true, val: r => r.pnl[key], fmt: f.k, cls: f.cls });
-          K.table(bd, { rows: L, search: false, footer: false, stripe: r => K.issuerColor(r.issuer), columns: K.cols(['name', pc('total', 'Итого'), pc('carry', 'Кэрри'), pc('rates', 'Ставки'), pc('spread', 'Спред'), pc('fx', 'FX')]) });
+          K.table(bd, { rows: L, search: false, footer: false, stripe: r => K.issuerColor(r.issuer), columns: K.cols(['name', ccyCol, 'issuer', pc('total', 'Итого'), pc('carry', 'Кэрри'), pc('rates', 'Ставки'), pc('spread', 'Спред'), pc('fx', 'FX')]) });
           return;
         }
         const el = K.h('div', 'fill'); bd.appendChild(el);
@@ -170,7 +170,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const key = { dv01: p => p.dv01, cs01: p => p.cs01, pnl: p => p.pnl.total }[mode];
         const L = K.list().filter(p => key(p)).sort((a, b) => Math.abs(key(b)) - Math.abs(key(a))).slice(0, 25);
         const metric = mode === 'pnl' ? 'pnl' : mode;
-        K.table(bd, { rows: L, search: false, footer: false, stripe: r => K.issuerColor(r.issuer), columns: K.cols(['name', ccyCol, 'kind', 'tenor', metric, mode === 'dv01' ? 'cs01' : 'dv01']) });
+        K.table(bd, { rows: L, search: false, footer: false, stripe: r => K.issuerColor(r.issuer), columns: K.cols(['name', ccyCol, 'issuer', 'kind', 'tenor', metric, mode === 'dv01' ? 'cs01' : 'dv01']) });
       },
     },
     events: {
@@ -313,9 +313,14 @@ body { display: flex; flex-direction: column; overflow: hidden; }
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && maxed && !document.querySelector('.k-drawer') && !document.querySelector('.k-pal')) unmax(); }, true);
   K.onFilter(() => live.forEach(renderTile));
   K.on('theme', () => live.forEach(renderTile));
+  // C06#fx — плитка ОВП развёрнута (ссылка из шапки мониторов, R43)
+  const showFx = () => { const t = live.find(x => x.id === 'fx'); if (t) max(t); };
+  window.addEventListener('hashchange', () => { if (location.hash === '#fx') showFx(); });
+  document.addEventListener('click', e => { if (e.target.closest && e.target.closest('[data-fxgo]')) { e.preventDefault(); showFx(); } });
   K.commands(Object.entries(PRESETS).map(([k, p]) => ({ label: 'Раскладка: ' + p.label, run: () => { preset = k; save(); paintPresets(); build(); } })));
   K.commands(Object.entries(TILES).map(([k, d]) => ({ label: 'Развернуть плитку: ' + d.title.replace(/<[^>]+>/g, '').trim(), run: () => { const t = live.find(x => x.id === k); if (t) max(t); } })));
   build();
+  if (location.hash === '#fx') showFx();
 })();
 </script>
 </body>
