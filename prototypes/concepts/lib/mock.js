@@ -402,7 +402,10 @@
     p.pnlMtd = p.carryDay * 15 + p.pnl.total + (r() - 0.42) * scale * 0.004;
     p.pnlYtd = p.carryDay * 200 + p.pnlMtd + (r() - 0.35) * scale * 0.025;
     if (p.cpn && p.cpn.type === 'float') { p.ytmProxy = p.ytm; p.ytm = null; p.dm = p.zspread; }
-    p.searchText = [p.name, p.isin, p.issuerName, p.issuerFull, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt].join(' ').toLowerCase();
+    // портфель (колонка Portfolio отчёта): HTM-книга — HTM, часть торговых бумаг — AFS, остальное — торговый
+    const bt = (M.books.find(b => b.id === p.book) || {}).type;
+    p.portfolio = bt === 'HTM' ? 'HTM' : bt === 'TRADING' && /[05]$/.test(p.id) ? 'AFS' : 'Торговый';
+    p.searchText = [p.name, p.isin, p.issuerName, p.issuerFull, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio].join(' ').toLowerCase();
     return p;
   });
   M.positions = positions;

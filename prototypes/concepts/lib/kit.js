@@ -2,7 +2,7 @@
  * KIT — общие компоненты концептов (нужны mock.js и ../echarts.min.js).
  *
  *  KIT.f.*                — форматирование (тыс ₽/бп, mm, bn, б.п., даты)
- *  KIT.top({title, tag})  — шапка: дата среза, фильтр книг (общий для всех концептов), поиск, тема
+ *  KIT.top({title, tag})  — шапка: дата среза, фильтр книг и портфелей (общий для всех мониторов), поиск, тема
  *  KIT.list()             — позиции после фильтра шапки; KIT.onFilter(fn) — перерисовка при смене фильтра
  *  KIT.d(spec)            — кликабельная цифра: spec = {title, list|rows, val, fmt, unit, v?}; щелчок раскрывает вклад
  *  KIT.drill(spec)        — открыть разбор вклада (позиции, группировка по эмитенту/книге/валюте/типу/бакету)
@@ -177,28 +177,46 @@
   K.onFilter = fn => K.on('filter', fn);
 
   // ---------- фильтр книг (верхний уровень) ----------
-  const filt = { entity: null, desk: null, books: null, ccy: null };
+  // portsOff — скрытые портфели (колонка Portfolio отчёта, x_portfolio адаптера; '—' — позиции без неё): новые
+  // портфели прогона видны, пока их не сняли; сохранённые, которых в прогоне нет, ни на что не влияют
+  const filt = { entity: null, desk: null, books: null, ccy: null, portsOff: null };
   try { Object.assign(filt, JSON.parse(localStorage.getItem('concepts-filter') || '{}')); } catch (e) { }
   K.filter = filt;
   K.setFilter = (patch) => { Object.assign(filt, patch); try { localStorage.setItem('concepts-filter', JSON.stringify(filt)); } catch (e) { } fire('filter'); renderFilterChips(); };
-  K.list = () => M.positions.filter(p => (!filt.entity || p.entity === filt.entity) && (!filt.desk || p.desk === filt.desk) && (!filt.books || !filt.books.length || filt.books.includes(p.book)) && (!filt.ccy || p.ccy === filt.ccy));
+  const portOf = p => p.portfolio || '—';
+  const PORTS = [...new Set(M.positions.map(portOf))].sort((a, b) => (a === '—') - (b === '—') || a.localeCompare(b, 'ru'));
+  const portsOff = () => (filt.portsOff || []).filter(v => PORTS.includes(v));
+  K.list = () => { const off = portsOff(); return M.positions.filter(p => (!filt.entity || p.entity === filt.entity) && (!filt.desk || p.desk === filt.desk) && (!filt.books || !filt.books.length || filt.books.includes(p.book)) && (!filt.ccy || p.ccy === filt.ccy) && (!off.length || !off.includes(portOf(p)))); };
   let chipsBox = null;
   // каскад: юрлицо → деск → книги; в каждом списке только варианты, совместимые с уже выбранным
   const booksIn = () => M.books.filter(b => (!filt.entity || b.entity === filt.entity) && (!filt.desk || b.desk === filt.desk));
-  const nPos = {}; M.positions.forEach(p => nPos[p.book] = (nPos[p.book] || 0) + 1);
+  const nPos = {}, nPort = {}; M.positions.forEach(p => { nPos[p.book] = (nPos[p.book] || 0) + 1; nPort[portOf(p)] = (nPort[portOf(p)] || 0) + 1; });
+  const portName = v => v === '—' ? 'без портфеля' : v;
   function renderFilterChips() {
     if (!chipsBox) return;
     const ent = M.entities;
     const desks = [...new Set(M.books.filter(b => !filt.entity || b.entity === filt.entity).map(b => b.desk))];
     const lbl = filt.books && filt.books.length ? (filt.books.length === 1 ? M.book[filt.books[0]].name : filt.books.length + ' книг') : 'все книги (' + booksIn().length + ')';
+    // чип портфелей — когда адаптер их передал (x_portfolio); у прогона без колонки все позиции «без портфеля»
+    const off = portsOff(), showPorts = PORTS.some(v => v !== '—');
+    const plbl = !off.length ? 'все портфели' : off.length === 1 ? 'без ' + portName(off[0]) : 'портфели: ' + (PORTS.length - off.length) + ' из ' + PORTS.length;
     chipsBox.innerHTML =
       '<span class="k-chip' + (filt.entity ? ' on' : '') + '" data-f="entity">' + (filt.entity ? esc(ent.find(e => e.id === filt.entity).name) : 'все юрлица') + ' ▾</span>' +
       '<span class="k-chip' + (filt.desk ? ' on' : '') + '" data-f="desk">' + (filt.desk ? esc(filt.desk) : 'все дески') + ' ▾</span>' +
       '<span class="k-chip' + (filt.books && filt.books.length ? ' on' : '') + '" data-f="books">' + esc(lbl) + ' ▾</span>' +
-      ((filt.entity || filt.desk || (filt.books && filt.books.length) || filt.ccy) ? '<span class="k-chip" data-f="reset"><span class="x">✕</span> сбросить</span>' : '');
+      (showPorts ? '<span class="k-chip' + (off.length ? ' on' : '') + '" data-f="ports" title="Портфель — колонка Portfolio отчёта о позициях">' + esc(plbl) + ' ▾</span>' : '') +
+      ((filt.entity || filt.desk || (filt.books && filt.books.length) || filt.ccy || off.length) ? '<span class="k-chip" data-f="reset"><span class="x">✕</span> сбросить</span>' : '');
     chipsBox.querySelectorAll('[data-f]').forEach(ch => ch.onclick = ev => {
       const k = ch.dataset.f;
-      if (k === 'reset') return K.setFilter({ entity: null, desk: null, books: null, ccy: null });
+      if (k === 'reset') return K.setFilter({ entity: null, desk: null, books: null, ccy: null, portsOff: null });
+      if (k === 'ports') {  // отмеченные — видны; щелчок снимает или возвращает портфель
+        const items = PORTS.map(v => ({ v, t: portName(v), sub: nPort[v] + ' поз', multi: true }));
+        menu(ch, items, PORTS.filter(v => !off.includes(v)), v => {
+          const s = new Set(off); s.has(v) ? s.delete(v) : s.add(v);
+          K.setFilter({ portsOff: s.size >= PORTS.length ? [] : [...s] });  // снять все — значит показать все
+        }, 'ports');
+        return ev.stopPropagation();
+      }
       const items = k === 'entity' ? [{ v: null, t: 'все юрлица' }].concat(ent.map(e => ({ v: e.id, t: e.name, sub: M.books.filter(b => b.entity === e.id).length + ' книг' })))
         : k === 'desk' ? [{ v: null, t: 'все дески' }].concat(desks.map(d => ({ v: d, t: d, sub: M.books.filter(b => b.desk === d && (!filt.entity || b.entity === filt.entity)).length + ' книг' })))
           : booksIn().map(b => ({ v: b.id, t: b.name, sub: b.id + ' · ' + b.desk + (filt.entity ? '' : ' · ' + M.entities.find(e => e.id === b.entity).name) + ' · ' + (nPos[b.id] || 0) + ' поз', multi: true, empty: !nPos[b.id] }));
@@ -212,19 +230,20 @@
           const ok = new Set(booksIn().map(b => b.id)); patch.books = (filt.books || []).filter(b => ok.has(b));
           K.setFilter(patch);
         }
-      }, k === 'books');
+      }, k === 'books' && 'books');
       ev.stopPropagation();
     });
   }
   let openMenu = null;
+  // multi — ключ чипа шапки ('books', 'ports'), меню которого переоткрывается после щелчка; у книг — поиск и «все / снять»
   function menu(anchor, items, cur, pick, multi) {
     if (openMenu) openMenu.remove();
     const m = h('div', 'k-panel'); m.style.cssText = 'position:fixed;z-index:140;min-width:220px;max-height:60vh;overflow:auto;box-shadow:var(--shadow);padding:4px 0';
     const r = anchor.getBoundingClientRect(); m.style.left = Math.min(r.left, innerWidth - 300) + 'px'; m.style.top = (r.bottom + 4) + 'px';
-    let rowsBox = m, q = multi ? (menu._q || '') : '';
-    const reopen = () => { m.remove(); openMenu = null; const nb = chipsBox.querySelector('[data-f=books]'); if (nb) nb.click(); };
+    let rowsBox = m, q = multi === 'books' ? (menu._q || '') : '';
+    const reopen = () => { m.remove(); openMenu = null; const nb = chipsBox.querySelector('[data-f=' + multi + ']'); if (nb) nb.click(); };
     const vis = () => items.filter(it => !q || (it.t + ' ' + (it.sub || '')).toLowerCase().includes(q));
-    if (multi) {
+    if (multi === 'books') {
       const tb = h('div'); tb.style.cssText = 'display:flex;gap:6px;padding:4px 8px 6px;border-bottom:1px solid var(--line);position:sticky;top:-4px;background:var(--panel)';
       const inp = h('input', 'k-input'); inp.placeholder = 'найти книгу…'; inp.value = q; inp.style.minWidth = '0'; inp.style.flex = '1';
       const all = h('button', 'k-btn', 'все видимые'), none = h('button', 'k-btn', 'снять');
@@ -292,7 +311,7 @@
     opt = opt || {};
     document.title = opt.title || document.title;
     const bar = h('div', 'k-top');
-    bar.innerHTML = '<div class="brand"><a href="index.html" title="Все концепты">◂ концепты</a><span>' + esc(opt.title || '') + '</span>' + (opt.tag ? '<span class="tag">' + esc(opt.tag) + '</span>' : '') + '</div>' +
+    bar.innerHTML = '<div class="brand"><a href="index.html" title="Все мониторы">◂ мониторы</a><span>' + esc(opt.title || '') + '</span>' + (opt.tag ? '<span class="tag">' + esc(opt.tag) + '</span>' : '') + '</div>' +
       '<div class="filters" style="display:flex;gap:6px;flex-wrap:wrap"></div><div class="sp"></div>' +
       (opt.extra || '') +
       '<span class="k-chip" data-a="repr" title="Валюта отчёта: все суммы деска пересчитываются по споту">в ' + K.repr + ' ' + K.SYM[K.repr] + ' ▾</span>' +
@@ -853,6 +872,6 @@
   K.commands([
     { label: 'Сбросить фильтр книг', run: () => K.setFilter({ entity: null, desk: null, books: null, ccy: null }) },
     { label: 'Переключить тему', run: () => K.toggleTheme() },
-    { label: 'Все концепты', run: () => location.href = 'index.html' },
+    { label: 'Все мониторы', run: () => location.href = 'index.html' },
   ]);
 })();
