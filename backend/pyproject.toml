@@ -11,6 +11,10 @@ dependencies = [
     "uvicorn>=0.30",
     # the OS trust store for the hub's TLS (Windows root auto-download, corporate roots pushed by policy)
     "truststore>=0.10",
+    # users and sessions (api/auth.py, ADR04: no custom cryptography): Argon2id password hashes, and the
+    # self-signed certificate of `desk lan enable --self-signed`
+    "argon2-cffi>=23.1",
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]

@@ -6,8 +6,9 @@ The alias is not part of a run's frozen rows: ``GET /api/v1/runs/{id}/positions`
 name. An empty alias clears it; every change is an append-only revision with who and when
 (``GET /api/v1/instruments/aliases/{isin}/history``).
 
-shortcut: no users yet (05 §6), so a change is a settings-like write: loopback clients only (``local_only``) and
-recorded as ``changed_by = 'local'``. With users: the trader or admin role, and the user's name.
+Who may change it (``desk.api.auth.alias_guard``): with sign-in off, loopback clients only, recorded as
+``changed_by = 'local'``; with it on, the trader or admin role, recorded with the user's name. Every change is also
+in the audit log (``alias``).
 """
 
 from __future__ import annotations
@@ -21,8 +22,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Request
 from pydantic import BaseModel, Field
 
+from . import auth
 from .app import ApiError, Con, ConRW
-from .settings_routes import local_only
 
 router = APIRouter(tags=["instruments"])
 
@@ -35,7 +36,7 @@ LOCAL_USER = "local"
 class InstrumentAlias(BaseModel):
     isin: str
     alias: str = Field(description="The display name to show instead of the exchange name")
-    changed_by: str = Field(description="Who set it: 'local' (this computer) until users exist")
+    changed_by: str = Field(description="Who set it: the user, or 'local' (this computer, sign-in off)")
     changed_at: datetime
 
 
@@ -101,7 +102,7 @@ def aliases_by_isin(con, isins: Iterable[str | None] | None = None) -> dict[str,
 
 
 def _who(request: Request) -> str:
-    return LOCAL_USER  # the signed-in user once there are users (05 §6)
+    return auth.actor(request)  # the signed-in user; LOCAL_USER while sign-in is off
 
 
 def _latest(con, isin: str) -> dict | None:
@@ -123,9 +124,10 @@ def alias_history(con: Con, isin: Annotated[str, Path(description="The ISIN")]):
     return {"isin": isin, "revisions": rows}
 
 
-@router.put("/api/v1/instruments/alias", response_model=AliasState, dependencies=[Depends(local_only)],
-            description="Set or clear (blank or null) the alias of an ISIN. From this computer only until users "
-                        "exist; a change is recorded with who and when, a request that changes nothing is not.")
+@router.put("/api/v1/instruments/alias", response_model=AliasState, dependencies=[Depends(auth.alias_guard)],
+            description="Set or clear (blank or null) the alias of an ISIN. A trader or admin (sign-in off: this "
+                        "computer only); a change is recorded with who and when, a request that changes nothing "
+                        "is not.")
 def put_alias(con: ConRW, body: AliasIn, request: Request):
     isin, alias = normalize_isin(body.isin), normalize_alias(body.alias)
     with con.transaction():
@@ -136,4 +138,6 @@ def put_alias(con: ConRW, body: AliasIn, request: Request):
                     "changed_at": last and last["changed_at"], "changed": False}
         row = con.execute("INSERT INTO instrument_alias_rev (isin, alias, changed_by) VALUES (%s, %s, %s)"
                           " RETURNING changed_by, changed_at", (isin, alias, _who(request))).fetchone()
+        auth.audit(con, row["changed_by"], "alias", isin, ip=auth.client_ip(request),
+                   detail={"alias": alias, "was": last["alias"] if last else None})
     return {"isin": isin, "alias": alias, **row, "changed": True}

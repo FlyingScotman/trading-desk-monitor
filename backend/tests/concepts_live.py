@@ -97,6 +97,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8199)
     ap.add_argument("--no-api", action="store_true", help="no history API rows: the snapshot path alone")
+    ap.add_argument("--auth", metavar="USER:PASSWORD", help="sign-in on (desk.api.auth), with this admin")
     args = ap.parse_args()
     import uvicorn
 
@@ -105,7 +106,15 @@ def main() -> int:
         # routes that read the settings themselves (the position card's flows) find the fixture snapshots
         os.environ.setdefault("DESK_SNAPSHOT_CACHE", str(Path(t) / "cache"))
         print(f"serving on http://127.0.0.1:{args.port}/concepts/", flush=True)
-        uvicorn.run(create_app(url), host="127.0.0.1", port=args.port, log_level="warning")
+        cfg = None
+        if args.auth:
+            from desk.api import auth
+
+            name, password = args.auth.split(":", 1)
+            with store.connect(url) as con:
+                auth.add_user(con, name, "admin", password, actor="concepts_live")
+            cfg = auth.AuthConfig(enabled=True)
+        uvicorn.run(create_app(url, auth=cfg), host="127.0.0.1", port=args.port, log_level="warning")
     return 0
 
 

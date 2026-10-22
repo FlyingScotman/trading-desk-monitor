@@ -3,7 +3,7 @@
 asks ``desk serve`` to exit for the launcher (``app.state.request_restart``, set by ``serve``). In a checkout, or a
 desk serve not started by start.bat, the list and the check work and the install answers 409.
 
-Local only, like the settings routes (``settings_routes.check_local``); the upload is a raw zip body
+Admin only, like the settings routes (``settings_routes.check_local``: this computer while sign-in is off); the upload is a raw zip body
 (``Content-Type: application/zip``), which a cross-site form cannot send either.
 """
 

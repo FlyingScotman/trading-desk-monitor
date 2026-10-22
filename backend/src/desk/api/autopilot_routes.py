@@ -8,11 +8,12 @@ from __future__ import annotations
 from typing import Literal
 
 import psycopg
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException
 
 from ..autopilot import idle_status, latest_run
+from .auth import trader_guard
 
 router = APIRouter(tags=["autopilot"])
 
@@ -71,7 +72,8 @@ def autopilot_status(request: Request):
     return st
 
 
-@router.post("/api/v1/autopilot/run", response_model=Queued, status_code=202)
+@router.post("/api/v1/autopilot/run", response_model=Queued, status_code=202,
+             dependencies=[Depends(trader_guard)])  # a trader or admin when sign-in is on
 def autopilot_run(request: Request):
     ap = getattr(request.app.state, "autopilot", None)
     if ap is None or not ap.running:

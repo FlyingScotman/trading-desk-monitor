@@ -7,22 +7,20 @@ them (08 §4 ``settings_tabs``, FND-4): a check against the tab's schema and a d
 Every route re-reads the settings (``desk.settings.load``), so an edit applies to the running server. The adapter
 is only ever called through the child-process runner (``desk.inbox.loader.load_adapter``), never imported here.
 
-shortcut: no authentication, like the rest of the API (05 §6). These routes therefore answer loopback clients
-only (``desk serve`` binds 127.0.0.1), with a loopback ``Host`` (no DNS rebinding) and, if the browser sends one,
-a loopback ``Origin``; a write needs ``Content-Type: application/json``, which a cross-site form cannot send.
-The token is accepted, stored and reported as set or not, never returned.
+Access (``desk.api.auth.require_admin``): with sign-in off, loopback clients only (``desk serve`` binds 127.0.0.1),
+with a loopback ``Host`` (no DNS rebinding) and, if the browser sends one, a loopback ``Origin``; with it on, an
+admin (from other computers only with ``admin_from_network``). A write needs ``Content-Type: application/json``,
+which a cross-site form cannot send. The token is accepted, stored and reported as set or not, never returned.
 """
 
 from __future__ import annotations
 
 import hashlib
-import ipaddress
 import json
 import os
 import re
 from pathlib import Path
 from typing import Annotated, Any
-from urllib.parse import urlsplit
 
 import psycopg
 from fastapi import APIRouter, Body, Depends, Request
@@ -50,6 +48,7 @@ from ..settings import (
     write_proxy_password,
 )
 from .app import ApiError
+from .auth import require_admin
 
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
 LOCAL_USER = "local"
@@ -58,39 +57,16 @@ RECENT_DAYS = 35
 """Books seen in positions of the last ``RECENT_DAYS`` days before the newest position date are offered."""
 CURRENCIES = ("RUB", "USD", "EUR", "CNY", "CHF", "GBP", "JPY", "HKD", "KZT", "AED", "TRY", "BYN", "INR")
 JsonBody = Annotated[dict[str, Any], Body()]
-_LOOPBACK_NAMES = ("localhost", "127.0.0.1", "::1")
-
-
-def _loopback(host: str | None) -> bool:
-    if not host:
-        return False
-    if host.strip("[]").lower() in _LOOPBACK_NAMES:
-        return True
-    try:
-        return ipaddress.ip_address(host.strip("[]")).is_loopback
-    except ValueError:
-        return False
 
 
 def local_only(request: Request) -> None:
-    """Refuse anything but a same-machine browser or tool (see the module doc)."""
-    check_local(request)
+    """The admin routes' guard (see the module doc): this computer while sign-in is off, else an admin."""
+    require_admin(request)
 
 
 def check_local(request: Request, write_types: tuple[str, ...] = ("application/json",)) -> None:
     """``local_only`` with the content types a write may send (none of them one a cross-site form can send)."""
-    client = request.client.host if request.client else None
-    if not _loopback(client):
-        raise ApiError(403, "invalid_parameter", "settings are available from this computer only (127.0.0.1)")
-    if not _loopback(request.url.hostname):
-        raise ApiError(403, "invalid_parameter", "open the settings page as http://127.0.0.1:<port>/settings.html")
-    origin = request.headers.get("origin")
-    if origin and origin != "null" and not _loopback(urlsplit(origin).hostname):
-        raise ApiError(403, "invalid_parameter", "cross-site request refused")
-    if request.method not in ("GET", "HEAD", "OPTIONS"):
-        ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
-        if ctype not in write_types:
-            raise ApiError(415, "invalid_parameter", f"send Content-Type: {' or '.join(write_types)}")
+    require_admin(request, write_types)
 
 
 router = APIRouter(dependencies=[Depends(local_only)])

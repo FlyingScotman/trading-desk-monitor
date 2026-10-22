@@ -83,6 +83,12 @@ layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub
                            ``python``, ``curl``, ``powershell``, or ``browser``: downloads by the browser only), the
                            folder the browser saves downloads to (default: the Windows «Загрузки» folder), and the
                            check for a new version when a page is opened (on; only in the Windows bundle)
+* ``DESK_AUTH``, ``DESK_BIND_HOST``, ``DESK_PORT``, ``DESK_TLS_CERT``, ``DESK_TLS_KEY``, ``DESK_ALLOW_PLAIN_HTTP``,
+  ``DESK_ADMIN_FROM_NETWORK``, ``DESK_SESSION_IDLE_MINUTES``, ``DESK_SESSION_MAX_HOURS``, ``DESK_LOGIN_MAX_FAILURES``,
+  ``DESK_LOGIN_LOCKOUT_MINUTES``  users and network access (``desk.api.auth``, read when ``desk serve`` starts):
+                           sign-in (off), the address and port (127.0.0.1:8100; another address than loopback
+                           needs sign-in, and HTTPS or ``allow_plain_http``), the certificate, admins from other
+                           computers (on), session limits (8 h idle, 24 h) and the lockout (5 wrong passwords, 15 min)
 
 Relative paths resolve against the repository (install) root, those of ``settings.json`` against
 ``<home>``. The proxy comes from the standard ``HTTPS_PROXY`` / ``NO_PROXY`` variables; ``settings.json``
@@ -151,6 +157,18 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "backfill": ("DESK_BACKFILL", "bool"),
     "backfill_from": ("DESK_BACKFILL_FROM", "date"),
     "backfill_budget_s": ("DESK_BACKFILL_BUDGET_S", "num"),
+    # users and network access (api/auth.py); read when desk serve starts
+    "auth": ("DESK_AUTH", "bool"),
+    "bind_host": ("DESK_BIND_HOST", "str"),
+    "port": ("DESK_PORT", "int"),
+    "tls_cert": ("DESK_TLS_CERT", "path"),
+    "tls_key": ("DESK_TLS_KEY", "path"),
+    "allow_plain_http": ("DESK_ALLOW_PLAIN_HTTP", "bool"),
+    "admin_from_network": ("DESK_ADMIN_FROM_NETWORK", "bool"),
+    "session_idle_minutes": ("DESK_SESSION_IDLE_MINUTES", "int"),
+    "session_max_hours": ("DESK_SESSION_MAX_HOURS", "int"),
+    "login_max_failures": ("DESK_LOGIN_MAX_FAILURES", "int"),
+    "login_lockout_minutes": ("DESK_LOGIN_LOCKOUT_MINUTES", "int"),
 }
 PROXY_KEYS = {"https_proxy": "HTTPS_PROXY", "no_proxy": "NO_PROXY"}
 READ_ONLY_KEYS = ("hub_token", "hub_token_set", "proxy_password", "proxy_password_set", "home", "effective",
@@ -235,6 +253,18 @@ class Settings:
     backfill: bool = True  # the autopilot computes the default runs of past dates (desk.backfill, R23)
     backfill_from: str = "2026-01-05"  # first date of the backfill (the hub's first eod_final close)
     backfill_budget_s: float = 600.0  # seconds of backfill runs per autopilot cycle (after every other step)
+    # users and network access (desk.api.auth; DECISIONS DEC13): read by desk serve when it starts
+    auth: bool = False  # sign-in with the monitor's own accounts; off: this computer only
+    bind_host: str = "127.0.0.1"  # the address desk serve listens on; another than loopback needs auth
+    port: int = 8100
+    tls_cert: Path | None = None  # HTTPS: a PEM certificate and its key (desk lan enable --self-signed makes them)
+    tls_key: Path | None = None
+    allow_plain_http: bool = False  # a network address over plain HTTP (with a warning on the pages)
+    admin_from_network: bool = True  # admins may use the settings from other computers (auth on)
+    session_idle_minutes: int = 480  # a session ends after this long without a request
+    session_max_hours: int = 24  # ... and this long after the sign-in in any case
+    login_max_failures: int = 5  # wrong passwords in a row before the account is locked ...
+    login_lockout_minutes: int = 15  # ... for this long
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "home", Path(self.home) if self.home is not None else desk_home())
@@ -313,6 +343,13 @@ class Settings:
             ("history_rates_from", self.history_rates_from.isoformat()),
             ("backfill", (f"on from {self.backfill_from}, {self.backfill_budget_s:g} s a cycle" if self.backfill
                           else "off")),
+            ("auth", "on (sign-in with the monitor's accounts)" if self.auth else "off (this computer only)"),
+            ("bind_host", f"{self.bind_host}:{self.port}"),
+            ("tls", f"{self.tls_cert} / {self.tls_key}" if self.tls_cert else "off (HTTP)"),
+            ("allow_plain_http", "on" if self.allow_plain_http else "off"),
+            ("admin_from_network", "on" if self.admin_from_network else "off (admin pages from this computer only)"),
+            ("sessions", f"idle {self.session_idle_minutes} min, at most {self.session_max_hours} h"),
+            ("login_lockout", f"{self.login_max_failures} wrong passwords -> {self.login_lockout_minutes} min"),
         ]
 
 
@@ -590,6 +627,15 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
     if update_transport not in UPDATE_TRANSPORTS:
         raise SettingsError(f"DESK_UPDATE_TRANSPORT (update_transport) must be one of "
                             f"{', '.join(UPDATE_TRANSPORTS)}, not {update_transport!r}")
+    bind_host = (get("DESK_BIND_HOST") or defaults.bind_host).strip()
+    if not re.fullmatch(r"[A-Za-z0-9.:_-]{1,253}|\[[0-9A-Fa-f:.]+\]", bind_host):
+        raise SettingsError(f"DESK_BIND_HOST (bind_host) must be an IP address or a host name, not {bind_host!r}")
+    port = count("DESK_PORT", defaults.port)
+    if port > 65535:
+        raise SettingsError(f"DESK_PORT (port) must be 1..65535, not {port}")
+    tls_cert, tls_key = _path(get("DESK_TLS_CERT")), _path(get("DESK_TLS_KEY"))
+    if bool(tls_cert) != bool(tls_key):
+        raise SettingsError("tls_cert and tls_key (DESK_TLS_CERT, DESK_TLS_KEY) go together: set both or neither")
     store_url = get("DESK_STORE_URL")
     if store_url is not None and urlsplit(store_url).scheme not in ("postgresql", "postgres"):
         raise SettingsError("DESK_STORE_URL must be a postgresql:// URI")
@@ -640,6 +686,17 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         backfill=flag("DESK_BACKFILL", defaults.backfill),
         backfill_from=backfill_from,
         backfill_budget_s=num("DESK_BACKFILL_BUDGET_S", defaults.backfill_budget_s),
+        auth=flag("DESK_AUTH", defaults.auth),
+        bind_host=bind_host.strip("[]"),
+        port=port,
+        tls_cert=tls_cert,
+        tls_key=tls_key,
+        allow_plain_http=flag("DESK_ALLOW_PLAIN_HTTP", defaults.allow_plain_http),
+        admin_from_network=flag("DESK_ADMIN_FROM_NETWORK", defaults.admin_from_network),
+        session_idle_minutes=count("DESK_SESSION_IDLE_MINUTES", defaults.session_idle_minutes),
+        session_max_hours=count("DESK_SESSION_MAX_HOURS", defaults.session_max_hours),
+        login_max_failures=count("DESK_LOGIN_MAX_FAILURES", defaults.login_max_failures),
+        login_lockout_minutes=count("DESK_LOGIN_LOCKOUT_MINUTES", defaults.login_lockout_minutes),
     )
 
 

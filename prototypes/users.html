@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Пользователи · FI Desk Monitor</title>
+<!-- Пользователи и журнал действий (пакет 1, п. 9): раздел desk-users.js на отдельной странице. Только администратор
+     (при выключенном входе — только с этого компьютера). Те же цвета, что у settings.html. -->
+<style>
+:root{
+  --bg:#0c1117; --panel:#111820; --line:#212b37; --fg:#d4dbe3; --fg-2:#97a4b3; --fg-3:#677587;
+  --accent:#5aaec4; --good:#57c46a; --warn:#fab219; --crit:#f08a86;
+  --font-ui:"Golos Text","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif; color-scheme:dark;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){ --bg:#edf0f3; --panel:#ffffff; --line:#dbe1e7; --fg:#141d27; --fg-2:#465464; --fg-3:#738192;
+    --accent:#1c748c; --good:#18792a; --crit:#b8302f; color-scheme:light; }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-ui);font-size:13px;line-height:1.45}
+main{max-width:1000px;margin:0 auto;padding:16px}
+section{background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:16px}
+</style>
+<body>
+<script src="desk-nav.js"></script>
+<main>
+  <section data-desk-users></section>
+</main>
+<script src="desk-users.js"></script>
+</body>
+</html>

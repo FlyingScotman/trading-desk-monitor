@@ -1,7 +1,7 @@
 """Desk API v1 (05 §2, the S5 subset) over the desk store, read-only but for scenario job submission (S6),
 plus the window.DESK compatibility adapter (05 §4), the S6 app at /app/ and the prototypes as static files.
 
-shortcut: no authentication in S5; the reverse proxy authenticates (05 §6), bind 127.0.0.1 until then.
+Users and access: ``auth`` (off by default: 127.0.0.1 only, as before; on: sign-in, roles, CSRF, audit; 05 §6).
 shortcut: one psycopg connection per request, no pool; fine for a few users, pool it if latency shows."""
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ from ..scenario import jobs
 from ..scenario.definition import definition_hash, normalize
 from ..scenario.taylor import risk_payload
 from ..settings import REPO_ROOT
+from . import auth as authn
 from . import compat, concepts
 from .autopilot_routes import router as autopilot_router
 from .models import (
@@ -308,16 +309,18 @@ ConRW = Annotated[psycopg.Connection, Depends(db_rw)]
 
 
 def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | None = None,
-               adapter_status: Callable[[], str] | None = None) -> FastAPI:
+               adapter_status: Callable[[], str] | None = None, auth: authn.AuthConfig | None = None) -> FastAPI:
     """No scenario worker here (``serve`` starts one): jobs submitted to this app stay queued.
     ``adapter_status``: the private adapter's ``ok <name> <version> <fp>`` or ``error <reason>`` for
-    ``/health/ready`` (``desk.inbox.scan.adapter_line``, loaded once per process); None: not reported."""
+    ``/health/ready`` (``desk.inbox.scan.adapter_line``, loaded once per process); None: not reported.
+    ``auth``: sign-in and roles (``desk.api.auth``); None: off, this computer only."""
     app = FastAPI(title="Desk API", version=__version__, description="Desk API v1 (docs/architecture/05 §2)",
                   responses={404: {"model": ErrorOut}, 422: {"model": ErrorOut}, 503: {"model": ErrorOut}})
 
     app.state.store_url = store_url
     app.state.started_at = datetime.now(UTC)  # the diagnostics' uptime (R13)
     app.state.body_cache = BodyCache()
+    app.state.auth = auth or authn.AuthConfig()
 
     def write_summaries(ids: list[int]) -> None:  # the API's connections are read-only (concepts.Writer)
         from ..publish import summary
@@ -328,6 +331,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     app.state.write_summaries = write_summaries
     # window.DESK and the concept pages' series of a large book are megabytes of JSON: compressed on the wire
     app.add_middleware(GZipMiddleware, minimum_size=4096)
+    authn.install(app, _error)  # sessions, roles, CSRF, audit; inside request_id (added after it)
 
     @app.middleware("http")
     async def request_id(request: Request, call_next):
@@ -546,7 +550,8 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
     @app.post("/api/v1/scenario-jobs", response_model=ScenarioJob, response_model_exclude_unset=True,
               status_code=status.HTTP_202_ACCEPTED,
-              description="202: a new job, queued; 200: the live or done job of an equivalent definition")
+              description="202: a new job, queued; 200: the live or done job of an equivalent definition",
+              dependencies=[Depends(authn.trader_guard)])
     def submit_job(con: ConRW, body: JobIn, response: Response):
         try:
             job, created = jobs.submit(con, body.base_run_id,
@@ -697,11 +702,39 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     return app
 
 
+def listen_sockets(host: str, port: int) -> list:
+    """The sockets ``serve`` listens on: ``host``, and 127.0.0.1 beside a specific network address, so that the
+    launcher's health check and the admin's own browser keep working on this computer (0.0.0.0 covers it)."""
+    import socket
+
+    hosts = [host] + ([] if authn.is_loopback(host) or host in ("0.0.0.0", "::") else ["127.0.0.1"])
+    out = []
+    try:
+        for h in hosts:
+            family = socket.AF_INET6 if ":" in h else socket.AF_INET
+            sock = socket.socket(family, socket.SOCK_STREAM)
+            if os.name != "nt":  # on Windows SO_REUSEADDR would let another process take the port too
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if h == "::":
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            out.append(sock)
+            sock.bind((h, port))
+            sock.set_inheritable(True)
+    except OSError:
+        for sock in out:
+            sock.close()
+        raise
+    return out
+
+
 def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir: Path | None = None,
           snapshots: Path | None = None, adapter_status: Callable[[], str] | None = None,
-          autopilot: Any = None) -> int:
+          autopilot: Any = None, auth: authn.AuthConfig | None = None,
+          tls: tuple[Path, Path] | None = None, allow_plain_http: bool = False) -> int:
     """``snapshots``: the snapshot cache the scenario worker reprices from; None runs no worker.
     ``autopilot``: a ``desk.autopilot.Autopilot``, started here and shown by ``/api/v1/autopilot/*``.
+    ``auth``, ``tls`` (certificate, key) and ``allow_plain_http``: see ``desk.api.auth.check_bind``, which refuses
+    a network ``host`` without sign-in (or without TLS, unless allowed).
     Returns the exit code for ``desk serve``: 0, or the launcher's restart code after ``app.state.request_restart``
     (an update staged by ``/api/v1/update/install``, desk.update)."""
     import threading
@@ -712,14 +745,24 @@ def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir:
     from ..update import restart_code
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    auth = auth or authn.AuthConfig()
+    for w in authn.check_bind(host, auth=auth.enabled, tls=tls is not None, allow_plain_http=allow_plain_http):
+        log.warning(w)
+    try:
+        sockets = listen_sockets(host, port)
+    except OSError as e:
+        log.error("cannot listen on %s:%s: %s", host, port, e)
+        sys.exit(3)  # as uvicorn: the port was taken
     if snapshots is not None:
         jobs.Worker(store_url, SnapshotDir(snapshots)).start()
-    app = create_app(store_url, static_dir, adapter_status=adapter_status)
+    app = create_app(store_url, static_dir, adapter_status=adapter_status, auth=auth)
     if autopilot is not None:
         app.state.autopilot = autopilot
         autopilot.start()
     # the desk.api logger logs every request with its request id, so no uvicorn access log
-    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, access_log=False))
+    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, access_log=False,
+                                           ssl_certfile=str(tls[0]) if tls else None,
+                                           ssl_keyfile=str(tls[1]) if tls else None))
     restart = restart_code()
     asked: list[bool] = []
 
@@ -753,7 +796,7 @@ def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir:
 
     threading.Thread(target=warm_loop, name="desk-warm", daemon=True).start()
     try:
-        server.run()
+        server.run(sockets=sockets)
     except KeyboardInterrupt:  # uvicorn raises the captured Ctrl+C again after its shutdown
         pass
     if not server.started:
