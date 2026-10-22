@@ -269,7 +269,18 @@ def test_apply_backs_up_and_rolls_back(launcher, tmp_path):
 
     doc = update.stage(full_zip(new, tmp_path / "n.zip"), root, Path(env["DESK_HOME"]))
     deskctl.apply_update(env, Path(doc["staged"]))
-    deskctl.confirm_update(env)
+    seen, record = [], deskctl.record_update
+
+    def record_while_applying(*a):  # a status poll between the two steps must never see neither (the e2e flake)
+        seen.append((upd / "applying.json").exists())
+        record(*a)
+
+    deskctl.record_update = record_while_applying
+    try:
+        deskctl.confirm_update(env)
+    finally:
+        deskctl.record_update = record
+    assert seen == [True]
     last = json.loads((upd / "last.json").read_text())
     assert last["ok"] and last["version"] == NEW and last["from_version"] == OLD
     assert not (upd / "applying.json").exists() and not Path(doc["staged"]).exists() and tree(root) == tree(new)

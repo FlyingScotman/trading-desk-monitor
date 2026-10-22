@@ -650,8 +650,10 @@ def confirm_update(env: dict[str, str]) -> None:
     state = _read_json(upd / "applying.json")
     if not isinstance(state, dict):
         return
-    (upd / "applying.json").unlink(missing_ok=True)
+    # the outcome before the marker goes: the settings page (and the tests) read "no longer applying" as "done" and
+    # then expect last.json; the other order left a moment with neither
     record_update(env, True, version(), str(state.get("from_version")), f"Установлена версия {version()}.")
+    (upd / "applying.json").unlink(missing_ok=True)
     update_log(env, f"Обновление до {version()} завершено.")
     _drop_staged(state.get("staged"))
     if (upd / "backup").is_dir():
