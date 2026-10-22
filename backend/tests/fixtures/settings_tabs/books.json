@@ -1,0 +1,43 @@
+{
+  "books": [
+    {
+      "book_id": "T1",
+      "name": "Synthetic bond trading book",
+      "desk": "SYN_DESK",
+      "book_type": "TRADING",
+      "entity": "ENT1",
+      "ocp_to": "D1",
+      "trader": "Trader A"
+    },
+    {
+      "book_id": "D1",
+      "name": "Synthetic derivatives book",
+      "desk": "SYN_DESK",
+      "book_type": "DERIVS",
+      "entity": "ENT1",
+      "trader": "Trader B"
+    },
+    {
+      "book_id": "F1",
+      "name": "Synthetic futures book",
+      "desk": "SYN_DESK",
+      "book_type": "FUTURES",
+      "entity": "ENT1",
+      "trader": "Trader B"
+    },
+    {
+      "book_id": "H1",
+      "name": "Synthetic HTM book",
+      "desk": "SYN_DESK",
+      "book_type": "HTM",
+      "entity": "ENT1"
+    },
+    {
+      "book_id": "C1",
+      "name": "Synthetic book of the other entity",
+      "desk": "SYN_DESK",
+      "book_type": "TRADING",
+      "entity": "ENT2"
+    }
+  ]
+}

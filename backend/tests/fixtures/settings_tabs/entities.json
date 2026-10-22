@@ -1,0 +1,23 @@
+{
+  "_comment": "Synthetic: invented entities and sweeps, never the firm's (docs/ORG_RULES.md §1, §3).",
+  "entities": [
+    {
+      "entity": "ENT1",
+      "name": "Synthetic entity funded by book type",
+      "funding_scheme": "by_book_type"
+    },
+    {
+      "entity": "ENT2",
+      "name": "Synthetic entity funded on its cash",
+      "funding_scheme": "cash_balance",
+      "pnl_sweep": "monthly"
+    },
+    {
+      "entity": "ENT2",
+      "name": "Synthetic entity funded on its cash",
+      "funding_scheme": "cash_balance",
+      "pnl_sweep": "quarterly",
+      "valid_from": "2026-10-19"
+    }
+  ]
+}

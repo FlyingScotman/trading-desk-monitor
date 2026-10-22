@@ -78,6 +78,20 @@ class Pages(unittest.TestCase):
             html = (PROTO / name).read_text(encoding="utf-8")
             self.assertEqual("DESK.scope.apply()" in html, name != "desk-monitor.html", name)  # у Desk Monitor свой фильтр
 
+    def test_settings_page_sections_and_forms(self):
+        # R41: разделы с навигацией слева; ссылки других страниц (#up — desk-updater.js, #bf — kit.js) ведут в раздел.
+        # R40: формы адаптера — settings-forms.js, после строки навигации, в стиле мониторов (kit.css)
+        html = (PROTO / "settings.html").read_text(encoding="utf-8")
+        for sec in ("hub", "adapter", "entities", "books", "funding", "auto", "up", "diag"):
+            self.assertIn(f'href="#{sec}" data-sec="{sec}"', html, sec)
+            self.assertRegex(html, rf'<section class="sec" id="[^"]+" data-sec="{sec}"', sec)
+        for anchor in ("up", "up-gh", "up-refresh", "bf", "rc", "dg"):
+            self.assertIn(f'id="{anchor}"', html, anchor)
+        src = scripts(html)
+        self.assertLess(src.index("desk-nav.js"), src.index("settings-forms.js"))
+        self.assertIn('href="concepts/lib/kit.css"', html)
+        self.assertIn("concepts-theme", html)  # та же тема, что у мониторов
+
 
 if __name__ == "__main__":
     unittest.main()
