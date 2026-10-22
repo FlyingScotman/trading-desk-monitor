@@ -656,7 +656,10 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
         fx = ctx.market.latest_fixing(code)
         if fx:
             indices.append({"index_name": name, "value": fx[1]})
-    rates_fx = _fx_rows(ctx, prev, row_currencies(rows))
+    # and the currencies of the rows not valued (R45: an OMR row without MV left the page without an OMR rate, so it
+    # could not say what the row is in roubles)
+    unvalued = [x for pid, _, o in positions if o.valuation is None and (x := extra.get(pid))]
+    rates_fx = _fx_rows(ctx, prev, [*row_currencies(rows), *row_currencies(unvalued)])
     reference = {
         "books": book_rows(used, inputs.books if inputs else {}),
         "issuers": list(issuers.values()),

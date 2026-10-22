@@ -81,7 +81,10 @@
   M.ccys = BASE_CCY.filter(c => c === 'RUB' || posCcy.includes(c) || D.FX[c] != null).concat(posCcy.filter(c => !BASE_CCY.includes(c)));
   M.ccyOrder = Object.fromEntries(M.ccys.map((c, i) => [c, i]));
   M.fx = Object.assign({ RUB: 1 }, D.FX);
-  M.ccys.forEach(c => { if (M.fx[c] == null) { M.fx[c] = 1; M.notes.push('нет курса ' + c + ': суммы этой валюты не пересчитаны'); } });
+  // нет курса валюты (R45): предупреждение — только если в ней есть ненулевые суммы оценённых позиций; валюта одних не
+  // оценённых строк (OMR у строки без MV) — в разборе «не оценены» (M.unvalued.fxMissing), строка с нулём — не повод
+  const fxNeeded = c => D.positions.some(p => !p.notValued && (p.ccy === c && (num(p.notional) || num(p.mvRub) || num(p.mv)) || num((p.fxDelta || {})[c])));
+  M.ccys.forEach(c => { if (M.fx[c] == null) { M.fx[c] = 1; if (fxNeeded(c)) M.notes.push('нет курса ' + c + ': суммы этой валюты не пересчитаны'); } });
   M.fxChgPct = Object.assign({ RUB: 0 }, D.FX_MOVE_PCT);
   // курс, по которому посчитан PnL FX прогона: рыночный (решение владельца 21.10, R26 — MOEX 19:00, иначе 14:00,
   // иначе закрытие CETS, иначе ЦБ; источник по валюте — D.FX_SOURCE), то есть курс шапки; курс ЦБ, действующий на
@@ -324,7 +327,13 @@
   M.defaultOrder = (a, b) => ((M.ccyOrder[a.ccy] ?? 99) - (M.ccyOrder[b.ccy] ?? 99)) || (groupOrder[a.group] - groupOrder[b.group]) ||
     (a.issuerName || '').localeCompare(b.issuerName || '', 'ru') || ((kindOrder[a.kind] || 0) - (kindOrder[b.kind] || 0)) || (a.tenor - b.tenor);
   positions.sort(M.defaultOrder);
-  if (positions.some(p => p.notValued)) M.notes.push(positions.filter(p => p.notValued).length + ' поз. не оценены (нет данных): показаны без риска и MV');
+  // не оценённые позиции — по причинам и типам (R45, api/coverage.py): разбор в панели «Чего нет в данных» (kit.js)
+  M.unvalued = X.unvalued || null; M.approx = X.approx || null;
+  const UV = M.unvalued;
+  if (UV && UV.total) {
+    if (UV.open) M.notes.push(UV.open + ' поз. не оценены: показаны без риска и MV — разбор по причинам ниже' + (UV.closed ? '; ещё ' + UV.closed + ' закрытых (нулевой объём) — не в счёте' : '') + (UV.fxMissing.length ? '; нет курса ' + UV.fxMissing.join(', ') + ' — суммы этих строк не в рублях' : ''));
+    else M.notes.push(UV.closed + ' закрытых позиций (нулевой объём) в отчёте — не оценены, в счёт не входят');
+  } else if (positions.some(p => p.notValued)) M.notes.push(positions.filter(p => p.notValued).length + ' поз. не оценены (нет данных): показаны без риска и MV');
 
   // ---------- история деска ----------
   const H = X.hist || {};
@@ -360,7 +369,7 @@
   const OPT = ['zspr', 'dm', 'icpi', 'ir', 'bei', 'cpi'];
   M.posHistory = function (id, opts) {
     if (opts && opts.deep) {
-      if (!(id in deepCache)) { const j = fetchHist([id], '2000-01-01'); deepCache[id] = j && j.series && j.series[id] ? Object.assign({ dates: j.dates }, j.series[id]) : null; }
+      if (!(id in deepCache)) { const j = fetchHist([id], '2000-01-01'); deepCache[id] = j && j.series && j.series[id] ? Object.assign({ dates: j.dates, runAt: j.runAt }, j.series[id]) : null; }
       if (deepCache[id] && deepCache[id].dates.length) {
         return conv(deepCache[id], { deep: true });
       }
@@ -369,7 +378,7 @@
       misses++;
       const j = fetchHist(misses > 2 ? null : [id]);
       if (misses > 2) all = true;
-      if (j) Object.entries(j.series || {}).forEach(([pid, s]) => histCache[pid] = Object.assign({ dates: j.dates }, s));
+      if (j) Object.entries(j.series || {}).forEach(([pid, s]) => histCache[pid] = Object.assign({ dates: j.dates, runAt: j.runAt }, s));
     }
     const p = M.pos[id], s = histCache[id];
     if (!s || !s.dates.length) {
@@ -390,6 +399,10 @@
     const o = Object.assign({ dates: s.dates, price: s.price || nulls(), ytm: s.ytm || nulls(), spr: s.spr || nulls(), notional: s.notional || nulls(),
       dv01: risk(s.dv01), cs01: risk(s.cs01), basis: risk(s.basis), mv: risk(s.mv), curves, bench: s.bench || nulls(), fromRuns: true }, extra || {});
     OPT.forEach(key => { if (s[key]) o[key] = s[key]; });
+    // на чём стоит точка (R44): прогон даты (runAt: null — прогона нет, значение перенесено), точки не по ядру (pt), бумаг
+    if (s.runAt) o.runAt = s.runAt;
+    if (s.pt) o.pt = s.pt;
+    if (s.qty) o.qty = s.qty;
     return o;
   }
 

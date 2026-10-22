@@ -287,9 +287,10 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     if (!cur) return { series: [] };
     const p = cur, h = H(p.id), isBond = p.group !== 'DER';
     const m = isBond ? hmode : (hmode === 'dv01' ? 'dv01' : 'notional');
-    const S = m === 'price' ? [{ name: 'Цена', data: h.price }] : m === 'yield' ? [{ name: 'Доходность', data: h.ytm }, { name: 'ОФЗ на сроке', data: h.bench, lineStyle: { type: 'dashed', width: 1 } }]
+    const R = m === 'dv01' || m === 'notional' ? K.runSeries(h, m, { color: K.issuerColor(p.issuer) }) : null;  // R44: прогон даты, разрывы, маркеры
+    const S = R ? R.series : m === 'price' ? [{ name: 'Цена', data: h.price }] : m === 'yield' ? [{ name: 'Доходность', data: h.ytm }, { name: 'ОФЗ на сроке', data: h.bench, lineStyle: { type: 'dashed', width: 1 } }]
       : m === 'spread' ? [{ name: 'Спред, б.п.', data: h.spr }] : m === 'dv01' ? [{ name: 'DV01, тыс ₽/бп', data: h.dv01.map(v => v / 1e3), step: 'end' }] : [{ name: 'Номинал, mm', data: h.notional.map(v => v / 1e6), step: 'end', areaStyle: { opacity: .15 } }];
-    return { grid: { left: 4, right: 8, top: 24, bottom: 2, containLabel: true }, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis' },
+    return { grid: { left: 4, right: 8, top: 24, bottom: 2, containLabel: true }, legend: { top: 0, left: 0 }, tooltip: R ? R.tooltip : { trigger: 'axis' },
       xAxis: { type: 'category', data: h.dates, axisLabel: { formatter: v => f.dshort(v) } }, yAxis: { type: 'value', scale: true },
       series: S.map((s, i) => Object.assign({ type: 'line', showSymbol: false, lineStyle: { width: 1.5 }, color: i ? K.css('--fg-3') : K.issuerColor(p.issuer) }, s)), dataZoom: [{ type: 'inside', start: 50 }] };
   });
