@@ -7,7 +7,10 @@
  * Соответствия (держать в согласии с api/concepts.py):
  *  - кривые: RUB RUONIA, RUB KEY — как в прогоне; RUB OFZ страниц — базис ОФЗ − RUONIA (КБД минус RUONIA, б.п.),
  *    его риск — ofzSpr01 позиции по бакетам срока (ядро 0.33, extra.spread_buckets); риск прогона на «RUB OFZ» (КБД: только в день без RUONIA)
- *    добавлен к RUONIA; кривые валют USD/EUR/CNY — USD SOFR / EUR ESTR / CNY XCCY (точек нет, только риск);
+ *    добавлен к RUONIA; кривые валют USD/EUR/CNY — USD SOFR / EUR ESTR / CNY XCCY (точки — если прогон их публикует,
+ *    иначе только риск); прочие кривые риска — своими строками со своей валютой (CNY implied, прокси, CHF…);
+ *  - FX-дельта — по валютам (p.fxDeltaBy = fx_delta {ccy}); p.fxDelta — только в валюте позиции; ноги FX-сделки —
+ *    p.legs (extra.legs); DV01 и ОВП по валюте — «по ногам» (lib/instr.js: INSTR.dv01In / INSTR.fxIn);
  *  - тип: GOV PD/PK/IN/SOVFX, SUB FIX/FLT, CORP FIX/FLT, DER OTC/FX, OTH (api/concepts.kind_of); тип инструмента
  *    таблицы «валюта × тип» (ОФЗ-ПД, свопы, фьючерсы… по группе продукта отчёта) — lib/instr.js (api/concepts.instr_kind)
  *    из instrType, assetClass, segment, productGroup (extra.reported.x_product_group) и fxDeltaBy позиции;
@@ -68,7 +71,8 @@
 
   // ---------- валюты, курсы, индексы ----------
   const BASE_CCY = ['RUB', 'USD', 'EUR', 'CNY'];
-  const posCcy = [...new Set(D.positions.map(p => p.ccy).filter(Boolean))];
+  // валюты позиций и валюты FX-дельты (у кросса USD/CNY вторая валюта — только в fx_delta)
+  const posCcy = [...new Set(D.positions.flatMap(p => [p.ccy].concat(Object.keys(p.fxDelta || {}).filter(c => num(p.fxDelta[c])))).filter(c => c && c !== 'RUB'))];
   M.ccys = BASE_CCY.filter(c => c === 'RUB' || posCcy.includes(c) || D.FX[c] != null).concat(posCcy.filter(c => !BASE_CCY.includes(c)));
   M.ccyOrder = Object.fromEntries(M.ccys.map((c, i) => [c, i]));
   M.fx = Object.assign({ RUB: 1 }, D.FX);
@@ -89,19 +93,27 @@
   const zeros = () => new Array(NB).fill(0);
 
   // ---------- кривые ----------
+  // Кривая риска прогона «USD» / «EUR» / «CNY» (риск по дюрации, точек нет: bonds.ccy_curve) — на кривой страниц
+  // USD SOFR / EUR ESTR / CNY XCCY; если прогон публикует саму эту кривую с точками (или кривая «CNY» — с точками), берём
+  // её имя и точки. Любая другая кривая риска (CNY implied, прокси UST/ECB, CHF…) — своей строкой со своей валютой
+  // (ccy прогона): блоки валют кокпита и лестница берут кривые по curve.ccy, не по списку.
   const CURVE_MAP = Object.assign({ 'RUB OFZ': 'RUB RUONIA', USD: 'USD SOFR', EUR: 'EUR ESTR', CNY: 'CNY XCCY' }, X.curveMap || {});
   const C = D.CURVES || {}, MV = D.CURVE_MOVES || {};
+  const hasPts = c => !!(c && c.pts && c.pts.some(v => num(v) != null));
+  // исходная кривая прогона для кривой страниц: она сама или её псевдоним из CURVE_MAP (первая с точками)
+  const srcOf = id => [id].concat(Object.keys(CURVE_MAP).filter(k => CURVE_MAP[k] === id && k !== 'RUB OFZ')).find(k => hasPts(C[k])) || id;
   const pts = id => (C[id] && C[id].pts) ? C[id].pts.map(num) : new Array(NB).fill(null);
   const chg = id => (MV[id] || zeros()).map(v => num(v) || 0);
+  const stub = (id, ccy, short) => { const s = srcOf(id), c = C[s];
+    return hasPts(c) ? { id, ccy, name: c.name || id, short, kind: 'rate', pts: pts(s), chg: chg(s) }
+      : { id, ccy, name: ccy + ' (кривой нет, риск по дюрации)', short, kind: 'rate', pts: new Array(NB).fill(null), chg: zeros() }; };
   const kbd = pts('RUB OFZ'), ruo = pts('RUB RUONIA');
   M.curves = [
     { id: 'RUB RUONIA', ccy: 'RUB', name: (C['RUB RUONIA'] || {}).name || 'RUONIA OIS', short: 'RUONIA', kind: 'rate', pts: ruo, chg: chg('RUB RUONIA') },
     { id: 'RUB KEY', ccy: 'RUB', name: (C['RUB KEY'] || {}).name || 'Ключевая ставка (КС)', short: 'КС', kind: 'rate', pts: pts('RUB KEY'), chg: chg('RUB KEY') },
     { id: 'RUB OFZ', ccy: 'RUB', name: 'Базис ОФЗ − RUONIA', short: 'ОФЗ-базис', kind: 'basis',
       pts: kbd.map((v, i) => v != null && ruo[i] != null ? (v - ruo[i]) * 100 : null), chg: chg('RUB OFZ').map((v, i) => v - chg('RUB RUONIA')[i]) },
-    { id: 'USD SOFR', ccy: 'USD', name: 'USD (кривой нет, риск по дюрации)', short: 'USD', kind: 'rate', pts: new Array(NB).fill(null), chg: zeros() },
-    { id: 'EUR ESTR', ccy: 'EUR', name: 'EUR (кривой нет, риск по дюрации)', short: 'EUR', kind: 'rate', pts: new Array(NB).fill(null), chg: zeros() },
-    { id: 'CNY XCCY', ccy: 'CNY', name: 'CNY (кривой нет, риск по дюрации)', short: 'CNY', kind: 'rate', pts: new Array(NB).fill(null), chg: zeros() },
+    stub('USD SOFR', 'USD', 'USD'), stub('EUR ESTR', 'EUR', 'EUR'), stub('CNY XCCY', 'CNY', 'CNY'),
   ];
   const curveOf = c => CURVE_MAP[c] || c;
   // кривые риска, которых страницы не знают (валюта вне USD/EUR/CNY и т. п.), — своими строками
@@ -176,6 +188,7 @@
   const IDX = { KEY_RATE: 'КС', 'КС': 'КС', RUONIA: 'RUONIA' };
   const pct = v => { const t = String(+(+v).toFixed(3)); const d = (t.split('.')[1] || '').length; return (+v).toFixed(Math.max(2, d)); };
   const XP = X.positions || {};
+  const camel = o => Object.fromEntries(Object.entries(o).map(([k, v]) => [k.replace(/_([a-z])/g, (_, c) => c.toUpperCase()), v]));
   const accrualDays = D.accrualDays || 1;
   const positions = D.positions.map(d => {
     const [group, kind] = kindOf(d), ex = d.extra || {}, q = ex.quote || {}, xp = XP[d.id] || {};
@@ -190,7 +203,11 @@
     p.productGroup = (ex.reported || {}).x_product_group || null;
     p.ocp = !!(d.ocpTransfer || d.assetClass === 'Перенос ОВП');
     p.accrualOnly = !!d.accrualOnly;  // HTM по начислению: рыночного риска нет по правилу, это не пропуск
+    // FX-дельта по валютам (fx_delta {ccy} прогона): у форварда, свопа и кросса валют может быть несколько — не сворачиваем
     p.fxDeltaBy = Object.fromEntries(Object.entries(d.fxDelta || {}).filter(([, v]) => num(v)).map(([c, v]) => [c, +v]));
+    // ноги FX-сделки (extra.legs; провизорная форма WP-M4: leg, value_date, buy_ccy, buy_amount, sell_ccy, sell_amount,
+    // contract_rate, rate_quote, fwd_rate, points, df, settlement, settlement_ccy, fixing_date, fixing_rate, payment_date)
+    p.legs = Array.isArray(ex.legs) && ex.legs.length ? ex.legs.filter(l => l && typeof l === 'object').map(camel) : null;
     const b = M.book[d.book] || {};
     p.bookName = b.name || d.book; p.entity = b.entity || d.entity || '—'; p.desk = b.desk || '—';
     p.issuerName = d.issuer || d.counterparty || (group === 'DER' ? 'Деривативы' : '—');
@@ -247,7 +264,7 @@
     p.dv01ByCurve = {}; let tot = 0;
     M.curves.forEach(c => { const s = p.risk[c.id].reduce((a, v) => a + v, 0); p.dv01ByCurve[c.id] = s; if (c.kind === 'rate') tot += s; });
     p.dv01 = tot;
-    p.fxDelta = Object.values(d.fxDelta || {}).reduce((a, v) => a + (v || 0), 0);
+    p.fxDelta = p.fxDeltaBy[p.ccy] || 0;  // в валюте позиции; все валюты — p.fxDeltaBy (сумма разных валют — не мера)
     // PnL
     const e = d.pnl || {};
     if (e.available === false || !d.pnl) {
@@ -444,7 +461,9 @@
     const S = f => M.sum(list, f);
     const k = { dv01: S('dv01'), cs01: S('cs01'), basis01: S('basis01'), mvBonds: S(p => p.group === 'DER' ? 0 : p.mv), pnl: S(p => p.pnl.total), carryDay: S('carryDay'),
       pnlMtd: S('pnlMtd'), pnlYtd: S('pnlYtd'), byCcy: {}, byCurve: {} };
-    M.ccys.forEach(c => k.byCcy[c] = { dv01: S(p => p.ccy === c ? p.dv01 : 0), mv: S(p => p.ccy === c && p.group !== 'DER' ? p.mv : 0), fxDelta: S(p => p.ccy === c ? p.fxDelta : 0) });
+    // по ногам (lib/instr.js): DV01 — по валюте кривой, FX-дельта — по своей валюте; MV — в валюте позиции
+    const I = window.INSTR;
+    M.ccys.forEach(c => k.byCcy[c] = { dv01: S(p => I.dv01In(p, c)), mv: S(p => p.ccy === c && p.group !== 'DER' ? p.mv : 0), fxDelta: S(p => I.fxIn(p, c)) });
     M.curves.forEach(c => k.byCurve[c.id] = S(p => p.dv01ByCurve[c.id]));
     return k;
   };

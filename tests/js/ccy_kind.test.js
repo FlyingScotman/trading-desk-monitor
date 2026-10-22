@@ -81,7 +81,7 @@ t('по валюте сделки: всё в валюте позиции, чуж
   assert.ok(sum(usd, 'foreign') !== 0 && sum(usd, 'curve:RUB RUONIA') === sum(usd, 'foreign'));
   near(sum(usd, 'dv01'), M.positions.filter(p => p.ccy === 'USD').reduce((s, p) => s + (p.dv01ByCurve['USD SOFR'] || 0), 0), 'USD на своей кривой');
   for (const mm of ['dv01', 'mv', 'notional', 'cs01', 'fx']) near(sum(pos.total, mm), sum(legs.total, mm), 'итог ' + mm);
-  // по валюте сделки DV01 рублёвого блока = DV01 рублёвых позиций (как в шапке кокпита)
+  // по валюте сделки DV01 рублёвого блока = DV01 рублёвых позиций (шапка кокпита — по ногам, как таблица по умолчанию)
   near(sum(block(pos, 'RUB').total, 'dv01'), M.positions.filter(p => p.ccy === 'RUB').reduce((s, p) => s + p.dv01, 0), 'RUB как в HUD');
 });
 

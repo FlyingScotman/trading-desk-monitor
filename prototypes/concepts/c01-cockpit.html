@@ -47,9 +47,11 @@
       top.querySelector('.bd').classList.add('flush', 'scroll');
       view.appendChild(top); K.riskMatrix(top.querySelector('.bd'));
       const g = K.h('div', 'k-grid'); g.style.marginTop = '12px'; view.appendChild(g);
-      const BLOCKS = [['RUB', ['RUB RUONIA', 'RUB KEY', 'RUB OFZ']], ['USD', ['USD SOFR']], ['CNY', ['CNY XCCY']], ['EUR', ['EUR ESTR']]];
-      // другие валюты с риском (CHF и т. п.) — своими блоками, после основных
-      M.ccys.filter(c => !BLOCKS.some(b => b[0] === c)).forEach(c => { const ids = M.curves.filter(x => x.ccy === c && x.kind === 'rate').map(x => x.id); if (ids.length) BLOCKS.push([c, ids]); });
+      // блок валюты — все кривые этой валюты из данных прогона (curve.ccy: у кривой валюта — своя), не список: новая
+      // кривая (implied CNY, прокси USD/EUR, CHF) попадает в блок своей валюты сама; рубли, доллары, юани, евро — первыми
+      const ORDER = ['RUB', 'USD', 'CNY', 'EUR'];
+      const ccys = [...new Set(ORDER.concat(M.ccys, M.curves.map(x => x.ccy)))];
+      const BLOCKS = ccys.map(c => [c, M.curves.filter(x => x.ccy === c).map(x => x.id)]).filter(b => b[1].length);
       BLOCKS.forEach(([ccy, curves]) => {
         const box = K.h('div', 'ccy-block');
         const pc = panel(K.ccyTag(ccy) + ' риск по бакетам', '<span class="mode"></span>');

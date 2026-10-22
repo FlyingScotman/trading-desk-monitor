@@ -45,6 +45,7 @@ tr.row.sel td { background: var(--accent-bg); }
 <script src="../echarts.min.js"></script>
 <script src="lib/boot.js"></script>
 <script src="lib/kit.js"></script>
+<script src="lib/instr.js"></script>
 <script>
 (function () {
   const M = MOCK, K = KIT, f = K.f, esc = K.esc, css = K.css;
@@ -124,7 +125,9 @@ tr.row.sel td { background: var(--accent-bg); }
     if (st.risk === 'factors') return [['DV01 ставки', V.dv01, css('--accent')], ['CS01', V.cs01, K.curveColors.CS01], ['Базис ОФЗ', V.basis, K.curveColors['RUB OFZ']]];
     if (st.risk === 'curves') return M.curves.filter(c => L.some(p => p.dv01ByCurve[c.id])).map(c => [c.short, V.curve(c.id), K.curveColors[c.id]]);
     if (st.risk === 'books') return M.books.filter(b => L.some(p => p.book === b.id && p.dv01)).map((b, k) => [b.id, (p, i) => p.book === b.id ? V.dv01(p, i) : 0, K.PAL[k % K.PAL.length]]);
-    return M.ccys.filter(c => L.some(p => p.ccy === c)).map(c => [c, (p, i) => p.ccy === c ? V.dv01(p, i) : 0, K.ccyColor(c)]);
+    // по ногам (lib/instr.js): DV01 валюты — по кривым этой валюты (у кривой валюта — своя), не по валюте позиции
+    return M.ccys.map(c => [c, M.curves.filter(x => x.ccy === c && x.kind === 'rate').map(x => V.curve(x.id))]).filter(([c, fs]) => fs.length && L.some(p => INSTR.dv01In(p, c)))
+      .map(([c, fs]) => [c, (p, i) => fs.reduce((s, fn) => s + fn(p, i), 0), K.ccyColor(c)]);
   }
   function drawRisk() {
     K.seg(pRisk.querySelector('.m'), RISKM, st.risk, v => { st.risk = v; save(); chRisk.redraw(); });
