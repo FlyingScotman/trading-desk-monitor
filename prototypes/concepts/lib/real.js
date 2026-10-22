@@ -245,7 +245,11 @@
     p.zSpreadZ = num(d.spreadBp); p.gspreadMoex = flt ? null : num(q.gspread_bp);
     p.gspread = flt ? null : (num(ex.g_spread_bp) != null ? num(ex.g_spread_bp) : p.gspreadMoex);
     p.dm = flt ? (num(ex.dm_bp) != null ? num(ex.dm_bp) : p.zSpreadZ) : null;
+    p.dmSource = flt ? (num(ex.dm_bp) != null ? 'core' : 'z') : null;  // 'z': DM ядра нет (прогон до ядра 0.33) — показан Z
     p.zspread = flt ? p.dm : p.zSpreadZ; p.spreadLabel = flt ? 'DM' : (p.zspread != null ? 'Z' : '');
+    // кривая, к которой Z-спред (spreadBp ядра — к кривой дисконтирования: RUONIA, в день без неё — КБД); у флоатера это
+    // Z-спред к RUONIA с купонами по прогнозу (R32), сравнимый с Z фикс-бумаг; DM — к кривой проекции
+    p.spreadCurve = d.spreadCurve || null;
     p.mdur = num(d.mdur); p.sprDur = num(d.sprDur);
     p.accrued = num(d.accrued) || 0;
     p.mv = num(d.mvRub); p.mvCcy = num(d.mv);

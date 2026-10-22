@@ -35,6 +35,14 @@ class Pages(unittest.TestCase):
             self.assertIn("lib/instr.js", src, f.name)
             self.assertLess(src.index("lib/kit.js"), src.index("lib/instr.js"), f.name)
 
+    def test_monitor_tables_sort_groups_like_ordinary_fields(self):
+        # R31: группы таблиц (валюта → эмитент…) сортируются щелчком по столбцу, как обычные поля, — общим правилом
+        # KIT.groupKeys; ни один монитор не упорядочивает группы только своим порядком уровня
+        for f in sorted((PROTO / "concepts").glob("c*.html")) + [PROTO / "concepts" / "lib" / "kit.js"]:
+            src = f.read_text(encoding="utf-8")
+            self.assertIsNone(re.search(r"keys\.sort\((g|G)\.order\)", src), f.name)
+        self.assertIn("K.groupKeys(", (PROTO / "concepts" / "c03-blotter.html").read_text(encoding="utf-8"))
+
     def test_react_app_loads_the_same_nav(self):
         for f in (ROOT / "frontend" / "index.html", ROOT / "frontend" / "dist" / "index.html"):
             self.assertIn('<script src="../desk-nav.js"></script>', f.read_text(encoding="utf-8"), f)

@@ -1251,6 +1251,183 @@
           }
         }
       }
+    },
+    "/api/v1/instruments/aliases": {
+      "get": {
+        "tags": [
+          "instruments"
+        ],
+        "summary": "List Aliases",
+        "operationId": "list_aliases_api_v1_instruments_aliases_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasList"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instruments/aliases/{isin}/history": {
+      "get": {
+        "tags": [
+          "instruments"
+        ],
+        "summary": "Alias History",
+        "operationId": "alias_history_api_v1_instruments_aliases__isin__history_get",
+        "parameters": [
+          {
+            "name": "isin",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The ISIN",
+              "title": "Isin"
+            },
+            "description": "The ISIN"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasHistory"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/instruments/alias": {
+      "put": {
+        "tags": [
+          "instruments"
+        ],
+        "summary": "Put Alias",
+        "description": "Set or clear (blank or null) the alias of an ISIN. From this computer only until users exist; a change is recorded with who and when, a request that changes nothing is not.",
+        "operationId": "put_alias_api_v1_instruments_alias_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AliasIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasState"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1373,6 +1550,166 @@
           "rows"
         ],
         "title": "Aggregates"
+      },
+      "AliasHistory": {
+        "properties": {
+          "isin": {
+            "type": "string",
+            "title": "Isin"
+          },
+          "revisions": {
+            "items": {
+              "$ref": "#/components/schemas/AliasRevision"
+            },
+            "type": "array",
+            "title": "Revisions",
+            "description": "Newest first"
+          }
+        },
+        "type": "object",
+        "required": [
+          "isin",
+          "revisions"
+        ],
+        "title": "AliasHistory"
+      },
+      "AliasIn": {
+        "properties": {
+          "isin": {
+            "type": "string",
+            "title": "Isin",
+            "description": "The security's ISIN (case and surrounding spaces ignored)"
+          },
+          "alias": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alias",
+            "description": "The display name, at most 120 characters; null or blank clears it (the exchange name again)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "isin"
+        ],
+        "title": "AliasIn"
+      },
+      "AliasList": {
+        "properties": {
+          "aliases": {
+            "items": {
+              "$ref": "#/components/schemas/InstrumentAlias"
+            },
+            "type": "array",
+            "title": "Aliases",
+            "description": "The aliases in force, by ISIN"
+          }
+        },
+        "type": "object",
+        "required": [
+          "aliases"
+        ],
+        "title": "AliasList"
+      },
+      "AliasRevision": {
+        "properties": {
+          "rev_id": {
+            "type": "integer",
+            "title": "Rev Id"
+          },
+          "alias": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alias",
+            "description": "null: the alias was cleared"
+          },
+          "changed_by": {
+            "type": "string",
+            "title": "Changed By"
+          },
+          "changed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Changed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rev_id",
+          "alias",
+          "changed_by",
+          "changed_at"
+        ],
+        "title": "AliasRevision"
+      },
+      "AliasState": {
+        "properties": {
+          "isin": {
+            "type": "string",
+            "title": "Isin"
+          },
+          "alias": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alias",
+            "description": "In force after the request; null: none (the exchange name is shown)"
+          },
+          "changed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Changed By",
+            "description": "Of the latest revision; null: the ISIN never had one"
+          },
+          "changed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Changed At"
+          },
+          "changed": {
+            "type": "boolean",
+            "title": "Changed",
+            "description": "False when the request set what was already in force (no revision)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "isin",
+          "alias",
+          "changed_by",
+          "changed_at",
+          "changed"
+        ],
+        "title": "AliasState"
       },
       "AutopilotProgress": {
         "properties": {
@@ -1967,6 +2304,37 @@
         ],
         "title": "ErrorOut"
       },
+      "InstrumentAlias": {
+        "properties": {
+          "isin": {
+            "type": "string",
+            "title": "Isin"
+          },
+          "alias": {
+            "type": "string",
+            "title": "Alias",
+            "description": "The display name to show instead of the exchange name"
+          },
+          "changed_by": {
+            "type": "string",
+            "title": "Changed By",
+            "description": "Who set it: 'local' (this computer) until users exist"
+          },
+          "changed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Changed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "isin",
+          "alias",
+          "changed_by",
+          "changed_at"
+        ],
+        "title": "InstrumentAlias"
+      },
       "JobIn": {
         "properties": {
           "base_run_id": {
@@ -2342,6 +2710,18 @@
             ],
             "title": "No Pnl",
             "description": "{reason, detail} when priced but without PnL"
+          },
+          "alias": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alias",
+            "description": "The display name a user gave fact.isin (PUT /api/v1/instruments/alias), in force now, old runs too; null: none, show fact.name"
           }
         },
         "type": "object",

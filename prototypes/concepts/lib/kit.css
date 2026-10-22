@@ -121,6 +121,9 @@ table.k-tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-si
 .k-fields .l { font-size: 11px; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .k-fields .v { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .k-fields .v small { font-weight: 400; color: var(--fg-2); font-size: 11px; }
+/* подпись с подсказкой (KIT.hint): пунктир снизу, курсор «?» */
+.k-hint { cursor: help; text-decoration: underline dotted; text-decoration-color: var(--fg-3); text-underline-offset: 2px; }
+.k-crisk td:first-child { white-space: nowrap; }
 .k-sec { font-size: 11px; color: var(--fg-2); text-transform: uppercase; letter-spacing: .06em; margin: 16px 0 6px; display: flex; align-items: center; gap: 8px; }
 .k-sec .sp { flex: 1; }
 .k-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }

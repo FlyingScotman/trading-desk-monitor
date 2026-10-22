@@ -250,7 +250,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     pt.querySelector('.bd').classList.add('flush');
     K.table(pt.querySelector('.bd'), {
       rows: ev, maxHeight: '60vh', sort: [['date', 1]], rowCls: r => r.kind === 'put' ? 'putrow' : '', onRow: r => K.card(r.pos),
-      groupBy: [{ key: r => weekStart(r.date), order: (a, b) => a.localeCompare(b), span: 3, label: (k, a) => 'Неделя ' + f.dshort(k) + ' – ' + f.dshort(U.addDays(k, 6)) + (a.some(x => x.kind === 'put') ? '<span class="putb">оферта</span>' : '') + (a.some(x => cbr.has(x.date)) || [...Array(7)].some((_, i) => cbr.has(U.addDays(k, i))) ? '<span class="putb" style="color:var(--neg);border-color:var(--neg)">ЦБ</span>' : '') }],
+      groupBy: [{ key: r => weekStart(r.date), order: (a, b) => a.localeCompare(b), fixed: true, span: 3, label: (k, a) => 'Неделя ' + f.dshort(k) + ' – ' + f.dshort(U.addDays(k, 6)) + (a.some(x => x.kind === 'put') ? '<span class="putb">оферта</span>' : '') + (a.some(x => cbr.has(x.date)) || [...Array(7)].some((_, i) => cbr.has(U.addDays(k, i))) ? '<span class="putb" style="color:var(--neg);border-color:var(--neg)">ЦБ</span>' : '') }],
       columns: [
         { key: 'date', label: 'Дата', fmt: v => f.date(v) + ' <span class="mut3">' + WD[U.parse(v).getDay()] + '</span>' },
         { key: 'kind', label: 'Событие', fmt: (v, r) => '<span class="kb" style="--c:' + KC[v] + '">' + KN[v] + '</span>' + (r.est ? ' <span class="mut3">прогноз</span>' : '') },
