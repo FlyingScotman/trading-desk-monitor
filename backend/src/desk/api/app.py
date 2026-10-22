@@ -644,9 +644,11 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     from .market_history import router as market_history_router  # /api/v1/history/market, /status (R24)
     from .settings_routes import router as settings_router  # here: it imports ApiError from this module
     from .update_routes import router as update_router
+    from .updater_routes import router as updater_router  # GitHub Releases (desk.updater)
 
     app.include_router(settings_router, include_in_schema=False)  # local admin routes (/settings.html)
     app.include_router(update_router, include_in_schema=False)
+    app.include_router(updater_router, include_in_schema=False)
     app.include_router(diagnostics_router, include_in_schema=False)
     app.include_router(market_history_router, include_in_schema=False)
     app.include_router(autopilot_router)

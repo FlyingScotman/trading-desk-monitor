@@ -10,7 +10,6 @@ Local only, like the settings routes (``settings_routes.check_local``); the uplo
 from __future__ import annotations
 
 import os
-import threading
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -26,7 +25,7 @@ from .settings_routes import check_local, local_only
 
 ZIP_TYPES = ("application/zip", "application/x-zip-compressed", "application/octet-stream")
 JsonBody = Annotated[dict[str, Any], Body()]
-_installing = threading.Lock()
+_installing = update.INSTALL_LOCK
 
 
 def local_zip(request: Request) -> None:
@@ -56,8 +55,9 @@ def _bad(e: update.UpdateError) -> ApiError:
 
 @router.get("/api/v1/update", dependencies=[Depends(local_only)])
 def get_update(request: Request) -> dict[str, Any]:
-    """The installed version, whether this server can install, the zips (``source`` ``dir`` or ``upload``) and the
-    launcher's ``pending`` / ``applying`` / ``last`` (desk.update.state)."""
+    """The installed version, whether this server can install, the zips (``source`` ``dir`` or ``upload``), the
+    version a rollback returns to (``rollback``) and the launcher's ``pending`` / ``applying`` / ``last``
+    (desk.update.state)."""
     st, home, error = _settings()
     root, current = update.bundle_root(), update.current_version()
     items: list[dict[str, Any]] = []
@@ -70,7 +70,9 @@ def get_update(request: Request) -> dict[str, Any]:
     if update.uploads_dir(home).is_dir():
         items += [{**i, "source": "upload"} for i in update.list_zips(update.uploads_dir(home), root, current)]
     reason = _unavailable(request)
+    point = update.rollback_point(root, home) if root is not None else None
     return {"current_version": current, "bundle_root": str(root) if root else None, "can_install": reason is None,
+            "rollback": {"version": point["version"]} if point else None,
             "unavailable": reason, "update_dir": str(st.update_dir) if st and st.update_dir else None,
             "update_dir_error": dir_error, "settings_error": error, "items": items,
             "max_zip_mb": update.MAX_ZIP_BYTES >> 20, **update.state(home)}
@@ -97,11 +99,16 @@ def check(body: JsonBody) -> dict[str, Any]:
 @router.post("/api/v1/update/install", dependencies=[Depends(local_only)], status_code=202)
 def install(body: JsonBody, request: Request):
     """Check and stage the zip, then ask the launcher to install it: desk serve exits once the response is sent
-    (and the autopilot's cycle, if one runs, is over); the page polls ``GET /api/v1/update`` for the new version."""
+    (and the autopilot's cycle, if one runs, is over); the page polls ``GET /api/v1/update`` for the new version.
+    A version older than the installed one only with ``"allow_downgrade": true``."""
     reason = _unavailable(request)
     if reason:
         raise ApiError(409, "invalid_parameter", reason)
     path, home, _ = _find(body)
+    if body.get("allow_downgrade") is not True and \
+            update.describe(path, None, update.current_version())["compare"] == "older":
+        raise ApiError(409, "invalid_parameter", "Эта версия старее установленной: подтвердите установку "
+                                                 "старой версии (allow_downgrade).")
     if not _installing.acquire(blocking=False):
         raise ApiError(409, "invalid_parameter", "Обновление уже готовится.")
     try:
@@ -118,6 +125,34 @@ def install(body: JsonBody, request: Request):
     finally:
         _installing.release()
     return JSONResponse({"version": staged["version"], "from_version": staged["from_version"], "kind": staged["kind"],
+                         "files": len(staged["files"]), "delete": len(staged["delete"]), "restarting": True},
+                        status_code=202)
+
+
+@router.post("/api/v1/update/rollback", dependencies=[Depends(local_only)], status_code=202)
+def rollback(request: Request):
+    """Stage the return to the previous version from the launcher's backup (``update.stage_rollback``) and ask
+    the launcher to install it, as ``install`` does."""
+    reason = _unavailable(request)
+    if reason:
+        raise ApiError(409, "invalid_parameter", reason)
+    _, home, _ = _settings()
+    if not _installing.acquire(blocking=False):
+        raise ApiError(409, "invalid_parameter", "Обновление уже готовится.")
+    try:
+        if update.state(home)["pending"]:
+            raise ApiError(409, "invalid_parameter", "Обновление уже запрошено: дождитесь перезапуска.")
+        root = update.bundle_root()
+        assert root is not None
+        try:
+            staged = update.stage_rollback(root, home)
+        except update.UpdateError as e:
+            raise _bad(e) from None
+        update.request(staged, home)
+        request.app.state.request_restart()
+    finally:
+        _installing.release()
+    return JSONResponse({"version": staged["version"], "from_version": staged["from_version"], "kind": "rollback",
                          "files": len(staged["files"]), "delete": len(staged["delete"]), "restarting": True},
                         status_code=202)
 
