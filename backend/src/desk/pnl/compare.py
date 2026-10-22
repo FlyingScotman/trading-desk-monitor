@@ -92,8 +92,8 @@ def compare(prev_ctx: EodContext, prev_outcomes: list[Outcome], ctx: EodContext,
     rows = []
     for p, o in zip(prev_outcomes, outcomes, strict=True):
         pv, v = p.valuation, o.valuation
-        if pv is None or v is None or {pv.quality, v.quality} - {"exact", "assumed"}:
-            continue
+        if pv is None or v is None or {pv.quality, v.quality} - {"exact", "assumed"} or pv.foreign or v.foreign:
+            continue  # a foreign bond: core's explain here is on the RUB discount curve only
         assert p.terms is not None and p.quote is not None
         try:
             s = fixed_schedule(p.terms, pv.valuation_date)

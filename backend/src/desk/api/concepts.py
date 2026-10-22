@@ -18,7 +18,8 @@ not have is null with a note in ``notes``: ratings when the static has none, mon
 floater), G- and Z-spread and a linker's ICPI / IR / BEI from ``md_bond_day`` (the hub's history API, from
 2024-01-03; else the snapshots, ``history_days`` deep), the KBD at the bond's term (a RUB bond with known coupons),
 and from the default runs the face, DV01, CS01, OFZ basis, MV and DV01 by curve, carried forward between runs (null
-before the first), and a floater's discount margin on the days of a run. A series that is zero or null on every date
+before the first), and a floater's discount margin on the days of a run (``dm``, core's) and on every day of its price
+history (``dmPx``, estimated from the price: ``dm_from_price``). A series that is zero or null on every date
 is sent as null; the optional ones (``OPTIONAL``) are left out.
 
 ``market_calendar`` / ``market_flows``: the aggregates of the static snapshot of the run's date
@@ -516,6 +517,7 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
         s: dict[str, list] = {k: [] for k in ("price", "ytm", "spr", "notional", "dv01", "cs01", "basis", "mv", "bench", *OPTIONAL)}
         cv: dict[str, list] = {}
         last: list | None = None
+        anchors: list[tuple[int, float, float | None, float | None, float | None]] = []
         for i, d in enumerate(dates):
             x = q.get(d)
             ps = run_at.get(d)
@@ -527,6 +529,8 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
             s["zspr"].append(x[4] if x else None)
             s["dm"].append((last[9] if len(last) > 9 and last[9] is not None else last[7])  # core DM, else the Z
                            if flt and last and ps is not None else None)
+            if s["dm"][-1] is not None:  # a run's DM, its price and spread risk per face: an anchor of dmPx
+                anchors.append((i, s["dm"][-1], x[0] if x else last[6], last[2] or last[3], last[0]))  # type: ignore[index]
             for k, j in (("icpi", 5), ("ir", 6), ("bei", 7)):
                 s[k].append(x[j] if x else None)
             s["cpi"].append(_cpi_at(cpi, d) if cpi and _linker(f) else None)
@@ -541,6 +545,10 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
                 s["bench"].append(_rnd(bench(d, (yd - d).days / 365.25 if yd and yd > d else None), 4))
             else:
                 s["bench"].append(None)
+        if flt and anchors and f.get("ccy") in (None, "RUB"):
+            hz = f.get("yield_date") or f.get("maturity")
+            s["dmPx"] = dm_from_price(dates, s["price"], anchors, date.fromisoformat(hz) if hz else None,
+                                      (f.get("coupon") or 0.0) / 100) or []
         for k in OPTIONAL:  # only when the bond has them: most series would be nulls
             if all(v is None for v in s[k]):
                 del s[k]
@@ -551,13 +559,48 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
             "note": "цена, доходность, G- и Z-спред (к КБД), у линкеров ICPI, IR, BEI — MOEX (история закрытий хаба), "
                     "ИПЦ г/г — последний известный на дату (ЦБ, иначе по ИПЦ м/м Росстата, через "
                     f"{CPI_LAG_DAYS} дн. после месяца); номинал, DV01, CS01, базис, MV и дисконт-маржа флоатера — по "
-                    "прогонам деска (между прогонами — последний)"}
+                    "прогонам деска (между прогонами — последний); DM флоатера по цене (dmPx) — оценка за каждый день "
+                    "истории цены: DM ближайшего прогона минус изменение чистой цены MOEX, делённое на спредовую "
+                    "дюрацию прогона (CS01 на номинал, приведённую к сроку до оферты или погашения)"}
 
 
-OPTIONAL = ("zspr", "dm", "icpi", "ir", "bei", "cpi")
+OPTIONAL = ("zspr", "dm", "dmPx", "icpi", "ir", "bei", "cpi")
 """Series of ``positions_history`` given only when the position has a value: MOEX's Z-spread to the KBD, the desk's
-discount margin of a floater (its run spread), MOEX's linker analytics (contract 1.2), and for a linker CPI year on
-year as known on the date (R25)."""
+discount margin of a floater (its run spread) and its estimate from the price on every date of the price history
+(``dm_from_price``), MOEX's linker analytics (contract 1.2), and for a linker CPI year on year as known on the date
+(R25)."""
+
+
+def _annuity(t: float, r: float) -> float:
+    return t if r <= 0 else (1.0 - math.exp(-r * t)) / r
+
+
+def dm_from_price(dates: list[date], price: list[float | None],
+                  anchors: list[tuple[int, float, float | None, float | None, float | None]],
+                  horizon: date | None, rate: float) -> list[float | None] | None:
+    """A RUB floater's discount margin on every date of its MOEX price history (batch 1, item 6): the runs give core's
+    DM only from the day the position appeared (``anchors``: date index, DM, clean price, spread risk and face of each
+    run with a DM). From the latest run at or before the date (else the first after it): DM_run - (clean - clean_run)
+    / 100 / spread duration, the spread duration per face of the run (-CS01 / face; the OFZ basis of an OFZ-PK)
+    averaged with the same moved to the date in proportion to the annuity to the ``horizon`` at ``rate`` (the current
+    coupon). First order in the spread; the curves' move between the dates is left out, small for a floater whose
+    coupon resets. Equal to the run's DM on a run date with a MOEX price; None without a price or past the horizon."""
+    if horizon is None:
+        return None
+    out: list[float | None] = []
+    j = 0
+    for i, (d, px) in enumerate(zip(dates, price)):
+        while j + 1 < len(anchors) and anchors[j + 1][0] <= i:
+            j += 1
+        ai, dm, px_a, s01, face = anchors[j]
+        ta, td = (horizon - dates[ai]).days / 365.25, (horizon - d).days / 365.25
+        sd_a = -s01 / face if s01 and face else 0.0  # RUB per bp per RUB of face, > 0 long and short
+        if px is None or px_a is None or ta <= 0 or td <= 0 or sd_a <= 0:
+            out.append(None)
+            continue
+        sd = sd_a * (1.0 + _annuity(td, rate) / _annuity(ta, rate)) / 2.0
+        out.append(_rnd(dm - (px - px_a) / 100.0 / sd, 2))
+    return out if any(v is not None for v in out) else None
 CPI_LAG_DAYS = 45
 """CPI of a month is known this many days after the month's first day (Rosstat publishes it mid next month; the hub's
 ``published_on`` is kept only for the newest months): a date sees the CPI y/y of the months it could have known."""

@@ -299,7 +299,8 @@ tr.row.sel td { background: var(--accent-bg); }
       const S = st.pm === 'price' ? [{ name: 'Цена', data: cut(DH.price), color: c }]
         : st.pm === 'ytm' ? [{ name: 'Доходность, %', data: cut(DH.ytm), color: c }].concat(DH.bench && DH.bench.some(v => v != null) ? [{ name: 'ОФЗ на сроке', data: cut(DH.bench), color: css('--fg-3'), lineStyle: { type: 'dashed', width: 1 } }] : [])
             .concat(DH.cpi ? [{ name: 'ИПЦ г/г, %', data: cut(DH.cpi), color: css('--warn'), step: 'end', lineStyle: { type: 'dashed', width: 1 } }] : [])
-          : [{ name: p.cpn && p.cpn.type === 'float' ? 'DM, б.п.' : 'G-спред, б.п.', data: cut(p.cpn && p.cpn.type === 'float' ? (DH.dm || DH.spr) : DH.spr), color: c, connectNulls: true }].concat(DH.zspr && !(p.cpn && p.cpn.type === 'float') ? [{ name: 'Z-спред MOEX, б.п.', data: cut(DH.zspr), color: css('--fg-3') }] : []);
+          : p.cpn && p.cpn.type === 'float' ? K.dmSeries(DH, cut, [c, css('--fg-3')])
+            : [{ name: 'G-спред, б.п.', data: cut(DH.spr), color: c, connectNulls: true }].concat(DH.zspr ? [{ name: 'Z-спред MOEX, б.п.', data: cut(DH.zspr), color: css('--fg-3') }] : []);
       chPos = K.chart(bd.querySelector('.chart'), () => ({
         animation: false, grid: { left: 6, right: 10, top: 30, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 },
         tooltip: { trigger: 'axis', valueFormatter: v => f.n(v, st.pm === 'spr' ? 0 : 2) }, xAxis: { type: 'category', data: xs, axisLabel: { formatter: v => f.dshort(v) } },

@@ -5,8 +5,9 @@ market snapshot (core's KBD curve, the RUONIA OIS and key-rate projection curves
 the floaters need, built once per date), and the settlement calendar. ``value`` prices a list of
 (secid, quantity) requests through core ``value_portfolio`` and returns one ``Outcome`` per
 request: a valuation or a rejection with its reason. ``attach_pnl`` adds the day-over-day flash
-PnL against the valuations of the previous date (``desk.pnl.flash``; a foreign-face bond's FX revaluation in
-``fx_gross``, ``desk.pnl.direct.split_fx``). RUB bonds are discounted on RUONIA OIS (``valuation.bonds.discount_curve``;
+PnL against the valuations of the previous date (``desk.pnl.flash``; a foreign bond core values on its own curve is
+explained in its currency with the rate move in ``fx_gross``, one on the fallback ladder gets its carry at its yield,
+``valuation.fallback.yield_pnl``, and its FX revaluation in ``fx_gross``, ``desk.pnl.direct.split_fx``). RUB bonds are discounted on RUONIA OIS (``valuation.bonds.discount_curve``;
 the KBD, flagged, on a date whose market has no RUONIA curve).
 """
 
@@ -53,9 +54,11 @@ from .valuation.fallback import (
     CarriedSpread,
     FallbackContext,
     approximate,
+    fx_rate_cbr,
     market_fx,
     par_proxy,
     simple_pnl,
+    yield_pnl,
 )
 
 KBD_TOLERANCE_BP = 0.05
@@ -299,6 +302,15 @@ def foreign_bond_curves(ctx: EodContext) -> dict[str, tuple[str, ...]]:
     return {c: ids for c, ids in out.items() if any(i in ctx.fx.curves for i in ids)}
 
 
+def with_cbr(pnl: FlashPnl, prev: EodContext, ctx: EodContext) -> FlashPnl:
+    """A foreign bond's flash PnL with ``fx_gross_cbr``: its FX delta of D-1 x the move of the CBR rates in force (the
+    official basis, as ``pnl.direct.split_fx``); as is for a RUB bond or without a CBR rate on either date."""
+    if pnl.fx_rates is None:
+        return pnl
+    c0, c1 = fx_rate_cbr(prev, pnl.ccy), fx_rate_cbr(ctx, pnl.ccy)
+    return replace(pnl, fx_gross_cbr=pnl.fx_delta_ccy * (c1[0] - c0[0])) if c0 and c1 else pnl
+
+
 def attach_pnl(prev: EodContext, prev_outcomes: list[Outcome], ctx: EodContext, outcomes: list[Outcome]) -> None:
     """Set ``pnl`` or ``no_pnl`` on every outcome of ``ctx`` priced today. Both lists are in request order."""
     if len(prev_outcomes) != len(outcomes):
@@ -318,19 +330,19 @@ def attach_pnl(prev: EodContext, prev_outcomes: list[Outcome], ctx: EodContext, 
             if "par_proxy" in (p.valuation.quality, o.valuation.quality):  # a placeholder value: no PnL is better
                 d = prev.business_date if p.valuation.quality == "par_proxy" else ctx.business_date
                 raise NoPnl("par_proxy", f"valued at par on {d}, no price")
-            # no cashflows to reprice, or a foreign bond (core 0.34): the flash explain is on the RUB curves only
-            if o.valuation.quality in RUNGS or p.valuation.quality in RUNGS or o.valuation.foreign \
-                    or p.valuation.foreign:
+            # no cashflows to reprice: the dirty price move (a foreign bond's carry at its yield, ``yield_pnl``)
+            if o.valuation.quality in RUNGS or p.valuation.quality in RUNGS:
                 assert o.terms is not None
-                o.pnl = split_fx(simple_pnl(p.valuation, o.valuation, o.terms, ctx), prev, ctx, o.terms)
+                o.pnl = split_fx(yield_pnl(p.valuation, o.valuation, o.terms, prev, ctx), prev, ctx, o.terms)
                 continue
-            if p.valuation.discount_curve_id != o.valuation.discount_curve_id:  # a KBD fallback on one date
+            if p.valuation.discount_curve_id != o.valuation.discount_curve_id:  # a KBD (or foreign) fallback on one date
                 assert o.terms is not None
-                o.pnl = replace(simple_pnl(p.valuation, o.valuation, o.terms, ctx), note=(
+                o.pnl = split_fx(replace(simple_pnl(p.valuation, o.valuation, o.terms, ctx), note=(
                     f"simple PnL: discounted on {p.valuation.spread_curve} on {prev.business_date}, on "
                     f"{o.valuation.spread_curve} on {ctx.business_date}: the spreads are to different curves, "
-                    "q x (dirty D - dirty D-1) + received, all in other"))
+                    "q x (dirty D - dirty D-1) + received, all in other")), prev, ctx, o.terms)
                 continue
-            o.pnl = explain(p.valuation, o.valuation, curves, cache)
+            # a foreign bond (core 0.34) in its currency on its own curve, the rate move in fx_gross
+            o.pnl = with_cbr(explain(p.valuation, o.valuation, curves, cache), prev, ctx)
         except NoPnl as e:
             o.no_pnl = e
