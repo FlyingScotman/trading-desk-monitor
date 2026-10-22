@@ -12,15 +12,20 @@ cached close not after the run (every quoted bond, ``universeRub`` and ``univers
 issuer, group, sector, outstanding face, coupon and frequency: ``marketdata.static_facts``; the day's movers) and the
 CBR meetings (``cbr``: the next one, the dates ahead, the past decisions). Issuer, group, sector and the desk's rating
 (``marketdata.ratings``) of the market's bonds come from the newest static of the read model (R25). What the store does
-not have is null with a note in ``notes``: ratings when the static has none, months before the first default run.
+not have is null with a note in ``notes``: ratings when the static has none, months before the first default run,
+the dates of the history computed by an older program (R44). ``unvalued`` / ``approx``: what the run did not value or
+valued without core, by cause and instrument (``api.coverage``, R45).
 
 ``positions_history``: per position of the run, aligned on one date axis: MOEX's clean price, yield (none for a
 floater), G- and Z-spread and a linker's ICPI / IR / BEI from ``md_bond_day`` (the hub's history API, from
 2024-01-03; else the snapshots, ``history_days`` deep), the KBD at the bond's term (a RUB bond with known coupons),
-and from the default runs the face, DV01, CS01, OFZ basis, MV and DV01 by curve, carried forward between runs (null
-before the first), and a floater's discount margin on the days of a run (``dm``, core's) and on every day of its price
-history (``dmPx``, estimated from the price: ``dm_from_price``). A series that is zero or null on every date
-is sent as null; the optional ones (``OPTIONAL``) are left out.
+and from the default runs the face, number of bonds (``qty``), DV01, CS01, OFZ basis, MV and DV01 by curve, carried
+forward between runs (null before the first), and a floater's discount margin on the days of a run (``dm``, core's) and
+on every day of its price history (``dmPx``, estimated from the price: ``dm_from_price``). A series that is zero or null
+on every date is sent as null; the optional ones (``OPTIONAL``) are left out. What a point stands on (R44): ``runAt``
+per date (null: no run of the date, the value is carried; else the run, ``cut`` when not the final close, ``old`` when
+another program computed it) and per position ``pt`` {date index: [kind, text]} for the points not valued by core on
+the day's data (``point_flag``), so that a chart shows them apart instead of as risk moves.
 
 ``market_calendar`` / ``market_flows``: the aggregates of the static snapshot of the run's date
 (``static_facts.calendar``) and, for a drill-down, the flows themselves with their bond.
@@ -128,10 +133,11 @@ def _periods(con, as_of: date, dates: list[str]) -> tuple[dict[str, Any], list[s
         missing = [d for d in ref if d >= lo and d not in have]
         runs_in = [d for d in dates if d >= start.isoformat()]
         why = []
-        if oldest is None or oldest > start:
-            why.append("история рынка начинается позже начала периода")
+        if oldest is None or unknown_days(start, oldest):
+            why.append("история рынка начинается позже начала периода" if oldest is None else
+                       f"история рынка (закрытия хаба) с {oldest.isoformat()}: прогонов раньше быть не может")
         elif first_pos is not None and ref and first_pos.isoformat() > ref[0]:
-            why.append(f"позиции в базе с {first_pos.isoformat()}")
+            why.append(f"позиции в базе с {first_pos.isoformat()}: отчётов раньше нет (папки отчётов, Настройки)")
         if missing:
             why.append(f"нет прогонов за {len(missing)} рабочих дн. (первый {missing[0]})")
         out[key] = {"from": runs_in[0] if runs_in else None, "runs": len(runs_in), "missing": len(missing),
@@ -139,11 +145,31 @@ def _periods(con, as_of: date, dates: list[str]) -> tuple[dict[str, Any], list[s
                     "positionsFrom": first_pos.isoformat() if first_pos else None, "why": why}
         if why and runs_in:
             notes.append(f"PnL {label} — частичный: сумма {len(runs_in)} прогонов с {runs_in[0]}; {'; '.join(why)}"
-                         + ("; досчитать: desk backfill" if missing else ""))
+                         + (f"; досчитать: {BACKFILL_LINK} (desk backfill)" if missing else ""))
     return out, notes
 
 
+BACKFILL_LINK = "Настройки → «История прогонов»"
+"""The settings page's history of runs (``settings.html#bf``): a note naming it is a link on the pages (``lib/kit.js``)."""
+FIXED_HOLIDAYS = {(1, d) for d in range(1, 9)} | {(2, 23), (3, 8), (5, 1), (5, 9), (6, 12), (11, 4)}
+"""Russia's fixed public holidays (month, day): no close on them, so a period starting on one is not cut short."""
+
+
+def unknown_days(start: date, first: date) -> list[date]:
+    """The weekdays from ``start`` up to the market history's ``first`` date that are not fixed public holidays: the
+    business days of the period the history cannot tell (2026: the hub's first close is 5 January, the year has no
+    earlier business day, so the year to date is not partial because of it)."""
+    out, d = [], start
+    while d < first:
+        if d.weekday() < 5 and (d.month, d.day) not in FIXED_HOLIDAYS:
+            out.append(d)
+        d += timedelta(days=1)
+    return out
+
+
 def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
+    from . import coverage  # it imports this module
+
     runs = _runs(con, run)
     dates = [r["business_date"].isoformat() for r in runs]
     n = len(runs)
@@ -214,7 +240,10 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
         notes.append("потоков позиций в прогоне нет: прогон посчитан до версии с потоками (пересчитается последняя дата)")
     if not prev_ok and run.get("prev_date") is not None:
         notes.append(f"сделки дня и изменения к вчера не показаны: нет прогона за {run['prev_date'].isoformat()}"
-                     " (досчитать: desk backfill)")
+                     f" (досчитать: {BACKFILL_LINK}, desk backfill)")
+    if (old := old_runs(con, runs)):
+        notes.append(f"история: {old} из {n} дат посчитаны прошлой версией программы — в графиках истории позиции "
+                     f"они пунктиром; пересчитать: {BACKFILL_LINK} (идёт в фоне, от ранних дат)")
     flows.sort(key=lambda c: c["date"])
     market = universe(con, as_of, held)
     notes += market.pop("notes")
@@ -226,7 +255,18 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
                      "dv01Book": series("dv01Book"), "mvType": series("mvType"), "mvCcy": series("mvCcy"), "pnl": pnl},
             "histSource": "runs", "pnlPeriods": periods,
             "positions": positions, "cashflows": flows, **market,
-            "cbr": cb, "curveMap": CURVE_MAP, "notes": notes}
+            "cbr": cb, "curveMap": CURVE_MAP, "notes": notes,
+            "unvalued": coverage.unvalued(con, run), "approx": coverage.approx(con, run)}
+
+
+def old_runs(con, runs: list[dict[str, Any]]) -> int:
+    """How many of the runs were computed by another program than the current one (``backfill.same_logic``)."""
+    from .. import logic_version
+    from ..backfill import same_logic
+
+    now = logic_version()
+    return sum(not same_logic(r["v"], now) for r in con.execute(
+        "SELECT lineage->>'logic_version' AS v FROM run WHERE run_id = ANY(%s)", ([r["run_id"] for r in runs],)))
 
 
 def cbr(con, as_of: date) -> dict[str, Any]:
@@ -470,6 +510,7 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
     runs = [r for r in _runs(con, run) if r["business_date"] >= from_]
     S = summaries(con, [r["run_id"] for r in runs], writer, list(pos) if ids else None)
     by_run = [(r["business_date"], S[r["run_id"]]["pos"]) for r in runs]
+    meta, held = run_points(con, runs, list(pos))
     secid = {pid: (r["fact"].get("instrument_id") or r["secid"]) for pid, r in pos.items()
              if r["fact"].get("instr_type") == "BOND"}
     quotes: dict[str, dict[date, tuple]] = {}
@@ -485,6 +526,7 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
     curves = {r["business_date"]: kbd(r["trade_date"], r["params"]) for r in con.execute(
         "SELECT business_date, trade_date, params FROM md_kbd_day WHERE business_date = ANY(%s)", (dates,))}
     run_at = dict(by_run)
+    run_of = {r["business_date"]: r["run_id"] for r in runs}
     # the KBD at each fixed RUB bond's term on each date, all at once per date (core kbd_effective_yields)
     want: dict[date, set[int]] = {}
     for pid, r in pos.items():
@@ -518,11 +560,19 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
         cv: dict[str, list] = {}
         last: list | None = None
         anchors: list[tuple[int, float, float | None, float | None, float | None]] = []
+        qty: list[float | None] = []
+        pts: dict[int, list[str]] = {}
+        n_bonds: float | None = None
         for i, d in enumerate(dates):
             x = q.get(d)
             ps = run_at.get(d)
             if ps is not None:
                 last = ps.get(pid)  # None: not held on that run date
+                h = held.get((run_of[d], pid))
+                n_bonds = h[0] if h and last is not None else None
+                if h and (p := point_flag(h, meta[run_of[d]]["books"].get(h[3]), d, last is not None)):
+                    pts[i] = p
+            qty.append(n_bonds)
             s["price"].append(x[0] if x else (f.get("price") if d == run["business_date"] else None))
             s["ytm"].append(None if flt or not x else x[1])
             s["spr"].append(x[2] if x else None)
@@ -554,14 +604,89 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
                 del s[k]
         out: dict[str, Any] = {k: (_thin(v) if k in ("cs01", "basis", "bench", "ytm") else v) for k, v in s.items()}
         out["curves"] = {c: v for c, v in cv.items() if any(v)}
+        out["qty"], out["pt"] = qty, pts
         series[pid] = out
+    at = [run_of.get(d) for d in dates]
     return {"runId": run["run_id"], "dates": [d.isoformat() for d in dates], "series": series,
+            "runAt": [None if rid is None else {"id": rid, **{k: v for k, v in meta[rid].items() if k != "books"}}
+                      for rid in at],
             "note": "цена, доходность, G- и Z-спред (к КБД), у линкеров ICPI, IR, BEI — MOEX (история закрытий хаба), "
                     "ИПЦ г/г — последний известный на дату (ЦБ, иначе по ИПЦ м/м Росстата, через "
                     f"{CPI_LAG_DAYS} дн. после месяца); номинал, DV01, CS01, базис, MV и дисконт-маржа флоатера — по "
-                    "прогонам деска (между прогонами — последний); DM флоатера по цене (dmPx) — оценка за каждый день "
+                    "прогонам деска (между прогонами — последний; runAt и pt говорят, какой прогон у даты и чем точка "
+                    "отличается); DM флоатера по цене (dmPx) — оценка за каждый день "
                     "истории цены: DM ближайшего прогона минус изменение чистой цены MOEX, делённое на спредовую "
                     "дюрацию прогона (CS01 на номинал, приведённую к сроку до оферты или погашения)"}
+
+
+
+QUALITY_TEXT = {"market_value": "оценка по рыночной стоимости (без ядра)",
+                "stale_price": "нет котировки дня: старая цена, риск — по дюрации (до пересчёта купона у флоатера)",
+                "model_price": "нет котировки: модельная цена, риск — по дюрации",
+                "par_proxy": "оценка по номиналу: риска нет (не ноль, а пропуск)",
+                "reported_value": "по отчёту банка: риск — отчёта или нет"}
+"""A run position's quality (``valuation.fallback.QUALITIES``) whose risk is not core's from the bond's terms and the
+day's price: its point is not comparable with core's on the neighbouring dates (``pt`` kind ``method``)."""
+
+
+def _logic_label(v: str | None) -> str:
+    """``0.2.0+v8+core0.32.1`` as ``0.2.0 (оценка v8, ядро 0.32.1)``."""
+    if not v:
+        return "версия не записана"
+    parts = v.split("+build", 1)[0].split("+")
+    ver = next((p[1:] for p in parts[1:] if p.startswith("v")), None)
+    core = next((p[4:] for p in parts[1:] if p.startswith("core")), None)
+    return parts[0] + (f" (оценка v{ver}" + (f", ядро {core}" if core else "") + ")" if ver else "")
+
+
+def run_points(con, runs: list[dict[str, Any]], pids: list[str]
+               ) -> tuple[dict[int, dict[str, Any]], dict[tuple[int, str], tuple]]:
+    """What a history point of a position depends on beyond its numbers (R44): per run its cut when not the final
+    close (``cut``: ``eod_preliminary`` when the date has no final one; an intraday cut for the run shown), the program that computed it when that is not the current one
+    (``old``: ``logic_version`` without the bundle build differs, ``backfill.same_logic``; the history of runs
+    recomputes such a date) and per book the date of the report its positions are from (``books``); per (run,
+    position) the number of bonds, the quality, why it is not exact and the book."""
+    from .. import logic_version
+    from ..backfill import same_logic
+
+    now = logic_version()
+    meta: dict[int, dict[str, Any]] = {}
+    ids = [r["run_id"] for r in runs]
+    for r in con.execute(
+            "SELECT r.run_id, r.cut_type, r.lineage->>'logic_version' AS logic,"
+            " (SELECT jsonb_object_agg(s.book_id, s.valid_date) FROM position_set s"
+            "  WHERE s.set_id = ANY(r.position_set_ids)) AS books FROM run r WHERE r.run_id = ANY(%s)", (ids,)):
+        m: dict[str, Any] = {"books": r["books"] or {}}
+        if r["cut_type"] != "eod_final":
+            m["cut"] = r["cut_type"]
+        if not same_logic(r["logic"], now):
+            m["old"] = _logic_label(r["logic"])
+        meta[r["run_id"]] = m
+    held: dict[tuple[int, str], tuple] = {}
+    with con.cursor(row_factory=tuple_row) as cur:
+        for rid, pid, n, quality, why, book in cur.execute(
+                "SELECT run_id, position_id, quantity, quality, CASE WHEN quality = 'exact' THEN NULL ELSE reason END,"
+                " book_id FROM run_position WHERE run_id = ANY(%s) AND position_id = ANY(%s)", (ids, pids)):
+            held[(rid, pid)] = (n, quality, why, book)
+    return meta, held
+
+
+def point_flag(h: tuple, book_date: str | None, d: date, valued: bool) -> list[str] | None:
+    """``pt`` of a position's point on a run date (``run_points``): ``[kind, text]``, None for a clean point. Kinds:
+    ``unvalued`` (held, not valued: no number at all), ``method`` (valued without core, ``QUALITY_TEXT``: a risk of
+    another method), ``minor`` (core's numbers with an assumption, or the book's positions from an earlier report)."""
+    _, quality, why, book = h
+    reason = f" ({why})" if why else ""
+    if not valued:
+        return ["unvalued", "позиция не оценена" + reason]
+    if quality in QUALITY_TEXT:
+        return ["method", QUALITY_TEXT[quality] + reason]
+    notes = []
+    if quality == "assumed":
+        notes.append("оценка ядра с допущением" + reason)
+    if book_date and book_date < d.isoformat():
+        notes.append(f"позиции книги {book} — из отчёта за {book_date} (за дату отчёта нет)")
+    return ["minor", "; ".join(notes)] if notes else None
 
 
 OPTIONAL = ("zspr", "dm", "dmPx", "icpi", "ir", "bei", "cpi")

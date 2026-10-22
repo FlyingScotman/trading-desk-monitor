@@ -160,6 +160,12 @@
     'обычный Z-спред, у флоатера — купоны по прогнозу своей кривой проекции (КС или RUONIA), дисконт по RUONIA + Z. Сравним у фиксов ' +
     'и флоатеров. Дисконт-маржа (DM) флоатера — спред к его кривой проекции; у флоатера на RUONIA (ОФЗ-ПК) Z и DM равны.';
   K.zdiscTip = K.tips.zdisc;
+  // каким должен быть DV01 флоатера во времени (R44): подпись под графиком истории карточки
+  K.tips.floaterDv01 = 'Флоатер: ставочный DV01 мал — купон пересматривается, и ставка двигает цену только до ближайшей фиксации купона: ' +
+    'DV01 ≈ −(время до фиксации) × MV × 1 б.п. (у флоатера на КС — сумма дисконтирования по RUONIA и проекции по КС). Он пилообразный: ' +
+    'к дате фиксации плавно уходит к нулю, после неё прыгает на полный купонный период; у флоатера на RUONIA с начислением ' +
+    'за период — около нуля всегда. Основной риск флоатера — спредовый: CS01 (базис у ОФЗ-ПК) и DM — по всему сроку до погашения, ' +
+    'он больше. Плавное снижение к нулю — подход фиксации купона, ступень — изменение числа бумаг (видно в «на 1 бумагу» и подсказке).';
   // подсказка к кривой риска: RUONIA и КС — конвенция бампа, базис ОФЗ, CS01; прочие — название кривой
   K.curveTip = id => id === 'CS01' ? K.tips.cs01 : id === 'RUB OFZ' || (M.curve[id] && M.curve[id].kind === 'basis') ? K.tips.basis01
     : id === 'RUB RUONIA' || id === 'RUB KEY' ? (M.curve[id] ? M.curve[id].name + '.\n' : '') + K.tips.ruonia
@@ -336,9 +342,11 @@
     const ch = bar.querySelector('[data-a=src]'), nb = bar.querySelector('[data-a=notes]');
     if (nb) nb.onclick = e => {
       e.stopPropagation(); if (openMenu) openMenu.remove();
-      const m = h('div', 'k-panel'); m.style.cssText = 'position:fixed;z-index:140;width:min(460px,92vw);max-height:60vh;overflow:auto;box-shadow:var(--shadow);padding:10px 14px;font-size:12.5px';
-      const r = nb.getBoundingClientRect(); m.style.left = Math.max(8, Math.min(r.left, innerWidth - 470)) + 'px'; m.style.top = (r.bottom + 4) + 'px';
-      m.innerHTML = '<div class="k-sec" style="margin-top:0">Чего нет в данных</div><ul style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px">' + M.notes.map(t => '<li>' + esc(t) + '</li>').join('') + '</ul>';
+      const m = h('div', 'k-panel'), wide = !!(M.unvalued && M.unvalued.total || M.approx && M.approx.length), W = wide ? 640 : 460;
+      m.style.cssText = 'position:fixed;z-index:140;width:min(' + W + 'px,92vw);max-height:70vh;overflow:auto;box-shadow:var(--shadow);padding:10px 14px;font-size:12.5px';
+      const r = nb.getBoundingClientRect(); m.style.left = Math.max(8, Math.min(r.left, innerWidth - W - 10)) + 'px'; m.style.top = (r.bottom + 4) + 'px';
+      m.innerHTML = '<div class="k-sec" style="margin-top:0">Чего нет в данных</div><ul style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px">' + M.notes.map(t => '<li>' + K.noteHtml(t) + '</li>').join('') + '</ul>' + K.coverageHtml();
+      m.querySelectorAll('tr[data-cg]').forEach(tr => tr.onclick = () => { const [sec, i] = tr.dataset.cg.split(':'), g = (sec === 'u' ? M.unvalued.groups : M.approx)[+i]; K.posList(g.why || g.text, g.ids, g.kindLabel + (g.todo ? ' · что сделать: ' + g.todo : '')); });
       document.body.appendChild(m); openMenu = m;
       setTimeout(() => document.addEventListener('click', () => { if (openMenu === m) { m.remove(); openMenu = null; } }, { once: true }), 0);
     };
@@ -351,6 +359,41 @@
       }).catch(() => menu(ch, [{ v: 'latest', t: 'последний прогон' }, { v: 'demo', t: 'тестовые данные (демо)' }], null, v => go(v === 'latest' ? {} : { demo: '1' })));
     };
   }
+
+  // ---------- «Чего нет в данных»: ссылки и разбор не оценённых позиций (R45, api/coverage.py) ----------
+  // «Настройки → «История прогонов»» в тексте заметки — ссылка на страницу досчёта истории
+  const BF = 'Настройки → «История прогонов»';
+  K.noteHtml = t => esc(t).split(esc(BF)).join('<a href="../settings.html#bf">' + esc(BF) + '</a>');
+  // таблицы причин: не оценены (причина × тип: позиций, сумма в ₽ где есть курс, MV отчёта) и оценены не ядром;
+  // строка — список позиций (K.posList), из него — карточка
+  K.coverageHtml = () => {
+    const U = M.unvalued, A = M.approx || [], mm = v => v == null ? '<span class="mut3">—</span>' : f.mn(v, 1);
+    let out = '';
+    if (U && U.groups && U.groups.length) {
+      out += '<div class="k-sec">Не оценены: ' + U.open + ' поз.' + (U.closed ? ' + ' + U.closed + ' закрытых' : '') + ' <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">строка — список позиций</span></div>' +
+        '<table class="k-tbl k-compact" style="width:100%"><thead><tr><th>Причина · что сделать</th><th>Тип</th><th class="n">Поз.</th><th class="n" title="номинал / сумма строки в рублях по курсу прогона">Сумма, mm ₽</th><th class="n" title="MV из отчёта, где он есть">MV отч.</th></tr></thead><tbody>' +
+        U.groups.map((g, i) => '<tr class="row" data-cg="u:' + i + '" style="cursor:pointer' + (g.closed ? ';opacity:.6' : '') + '"><td><b>' + esc(g.why) + '</b><div class="mut3">' + esc(g.todo) + '</div></td><td class="mut">' + esc(g.kindLabel) + '</td><td class="n">' + g.n + '</td><td class="n">' + mm(g.notionalRub) +
+          (g.noRate && g.noRate.length ? ' <span class="mut3" title="нет курса в прогоне: сумма этих строк не в рублях">+ ' + esc(g.noRate.join(', ')) + '</span>' : '') + '</td><td class="n">' + mm(g.mvRub) + '</td></tr>').join('') + '</tbody></table>';
+    }
+    if (A.length) {
+      out += '<div class="k-sec">Оценены не ядром: ' + A.reduce((s, g) => s + g.n, 0) + ' поз. <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">риск — отчёта или по дюрации</span></div>' +
+        '<table class="k-tbl k-compact" style="width:100%"><thead><tr><th>Как оценены</th><th>Тип</th><th class="n">Поз.</th><th class="n">MV, mm ₽</th></tr></thead><tbody>' +
+        A.map((g, i) => '<tr class="row" data-cg="a:' + i + '" style="cursor:pointer"><td>' + esc(g.text) + '</td><td class="mut">' + esc(g.kindLabel) + '</td><td class="n">' + g.n + '</td><td class="n">' + mm(g.mvRub) + '</td></tr>').join('') + '</tbody></table>';
+    }
+    return out;
+  };
+  // список позиций группы: имя, книга, валюта, тип, причина (extra прогона); строка — карточка позиции
+  K.posList = function (title, ids, sub) {
+    const o = drawer(); o.title = title;
+    const why = {}; ((window.DESK || {}).positions || []).forEach(d => { const e = d.extra || {}; why[d.id] = e.reason || e.not_exact_reason || (e.assumptions || []).join('; ') || ''; });
+    const L = ids.map(id => M.pos[id]).filter(Boolean);
+    o.el.querySelector('.t').textContent = title;
+    o.el.querySelector('.st').textContent = L.length + ' поз.' + (sub ? ' · ' + sub : '');
+    o.bd.innerHTML = '<table class="k-tbl"><thead><tr><th>Позиция</th><th>Книга</th><th>Ccy</th><th>Тип</th><th>Причина</th></tr></thead><tbody>' +
+      L.map(p => '<tr class="row" data-id="' + esc(p.id) + '"><td>' + esc(p.name) + ' <span class="mut3 mono">' + esc(p.isin || p.id) + '</span></td><td class="mut">' + esc(p.book) + '</td><td>' + (p.ccy ? K.ccyTag(p.ccy) : '') + '</td><td class="mut">' + esc(p.kindLabel || '') + '</td><td class="mut3" style="max-width:360px">' + esc(why[p.id] || '') + '</td></tr>').join('') + '</tbody></table>';
+    o.bd.querySelectorAll('tr.row').forEach(tr => tr.onclick = () => K.card(tr.dataset.id));
+    return o;
+  };
 
   // ход «Истории прогонов» (сервер досчитывает прошлые даты от самой ранней, R23): пока есть даты к расчёту, чип
   // в шапке говорит, сколько готово, — история риска, MTD/YTD и изменения позиций прошлых дат появляются по мере расчёта
@@ -883,6 +926,60 @@
     el.innerHTML = head + tbl + ent + probs;
   };
 
+  // ---------- история позиции по прогонам: на чём стоит точка (R44; api/concepts.positions_history) ----------
+  // H.runAt[i] — прогон даты (null: прогона нет), H.pt[i] — [вид, текст] точки не по ядру, H.qty — бумаг по прогонам
+  const PT_LABEL = { old: 'прошлая версия программы', method: 'другой метод оценки', unvalued: 'не оценена', gap: 'нет прогона за дату', minor: 'замечание', before: 'до истории прогонов' };
+  K.histPoint = (H, i) => {
+    const RA = H.runAt; if (!RA) return null;
+    if (H._first == null) H._first = RA.findIndex(Boolean);
+    const r = RA[i], pt = H.pt && H.pt[i];
+    if (!r) return i < H._first || H._first < 0 ? { k: 'before', t: 'прогонов до этой даты нет' } : { k: 'gap', t: 'прогона за дату нет — значения риска за неё нет (не переносим с прошлого прогона)' };
+    const notes = [];
+    if (r.cut) notes.push(r.cut === 'eod_preliminary' ? 'предварительное закрытие (финального среза за дату нет)' : 'срез ' + r.cut);
+    if (pt && pt[0] !== 'minor') return { k: pt[0], t: pt[1] + (r.old ? '; прогон версии ' + r.old : '') };
+    if (pt && pt[1]) notes.push(pt[1]);
+    if (r.old) return { k: 'old', t: 'посчитано версией ' + r.old + ' — пересчитается историей прогонов' + (notes.length ? '; ' + notes.join('; ') : '') };
+    return notes.length ? { k: 'minor', t: notes.join('; ') } : null;
+  };
+  // ряды DV01 / номинала / DM позиции: { series, tooltip, note }. opt.perBond — DV01 на 1 бумагу (₽/бп): видно, что
+  // изменилось — размер позиции или риск на бумагу
+  K.runSeries = function (H, mode, opt) {
+    opt = opt || {};
+    const xs = H.dates, RA = H.runAt, per = mode === 'dv01' && opt.perBond && H.qty;
+    const raw = (mode === 'dm' ? H.dm : mode === 'dv01' ? H.dv01 : H.notional) || [];
+    const name = mode === 'dm' ? 'DM, б.п.' : mode === 'notional' ? 'Номинал, mm' : per ? 'DV01, ₽/бп на 1 бумагу' : 'DV01, тыс ₽/бп';
+    const val = i => { const v = raw[i]; if (v == null) return RA && RA[i] && mode !== 'dm' ? 0 : null; if (per) { const q = H.qty[i]; return q ? v / q : null; } return mode === 'dv01' ? v / 1e3 : mode === 'notional' ? v / 1e6 : v; };
+    const P = xs.map((_, i) => K.histPoint(H, i)), V = xs.map((_, i) => val(i));
+    const main = V.map((v, i) => !P[i] || P[i].k === 'minor' ? v : null), old = V.map((v, i) => P[i] && P[i].k === 'old' ? v : null);
+    const iso = a => a.map((v, i) => v != null && a[i - 1] == null && a[i + 1] == null ? [i, v] : null).filter(Boolean);  // одиночная точка линией не видна
+    const pts = k => V.map((v, i) => P[i] && P[i].k === k && v != null ? [i, v] : null).filter(Boolean);
+    const step = mode === 'dm' ? false : 'end', warn = css('--warn') || '#e3b341', c0 = opt.color || css('--accent');
+    const series = [{ type: 'line', name, data: main, step, connectNulls: mode === 'dm', showSymbol: false, lineStyle: { width: 1.6 }, color: c0 }]
+      .concat(iso(main).length ? [{ type: 'scatter', name, data: iso(main), symbolSize: 4, color: c0 }] : [])
+      .concat(old.some(v => v != null) ? [{ type: 'line', name: 'прошлая версия расчёта', data: old, step, connectNulls: mode === 'dm', showSymbol: false, lineStyle: { width: 1.2, type: 'dashed' }, color: css('--fg-3') }] : [])
+      .concat(iso(old).length ? [{ type: 'scatter', name: 'прошлая версия расчёта', data: iso(old), symbolSize: 4, color: css('--fg-3') }] : [])
+      .concat(pts('method').length ? [{ type: 'scatter', name: 'другой метод оценки', data: pts('method'), symbol: 'diamond', symbolSize: 7, color: warn }] : []);
+    // замечания (допущение ядра, позиции книги из прошлого отчёта, предварительное закрытие) — в подсказке, без маркера
+    const at = Object.fromEntries(xs.map((d, i) => [d, i]));
+    const fmt = v => v == null ? '—' : mode === 'dm' ? f.n(v, 1) : per ? f.n(v, 3) : f.n(v, mode === 'dv01' ? 3 : 2);
+    const tooltip = { trigger: 'axis', formatter: ps => {
+      const i = at[(ps[0] || {}).axisValue]; if (i == null) return '';
+      const q = H.qty && H.qty[i], q0 = H.qty && i > 0 ? H.qty[i - 1] : null, pt = P[i];
+      return '<b>' + esc(f.date(xs[i])) + '</b><br>' + esc(name) + ': <b>' + fmt(pt && (pt.k === 'gap' || pt.k === 'unvalued' || pt.k === 'before') ? null : V[i]) + '</b>' +
+        (q != null ? '<br><span style="opacity:.75">бумаг: ' + f.n(q) + (q0 != null && Math.abs(q - q0) > 1e-6 ? ' (' + f.s(q - q0) + ' к ' + esc(f.date(xs[i - 1])) + ')' : '') + '</span>' : '') +
+        (pt && pt.k !== 'before' ? '<br><span style="color:' + warn + '">' + esc(PT_LABEL[pt.k]) + ': ' + esc(pt.t) + '</span>' : '');
+    } };
+    // покрытие ряда: с первой точки, где позиция есть
+    const from = V.findIndex((v, i) => (v != null && v !== 0) || (P[i] && P[i].k === 'unvalued'));
+    const cnt = { clean: 0, old: 0, method: 0, unvalued: 0, gap: 0 };
+    if (from >= 0) for (let i = from; i < xs.length; i++) { const k = P[i] ? P[i].k : 'clean'; if (k === 'minor') cnt.clean++; else if (k === 'gap') { if (raw[i] != null) cnt.gap++; } else if (k in cnt) cnt[k]++; }
+    const note = !RA ? '' : 'Точки ряда: ' + cnt.clean + ' — ядро на прогоне своей даты' + (cnt.old ? ' · ' + cnt.old + ' — прошлой версией программы (пунктир)' : '') +
+      (cnt.method ? ' · ' + cnt.method + ' — другим методом (◆, причина в подсказке)' : '') + (cnt.unvalued ? ' · ' + cnt.unvalued + ' — позиция не оценена (разрыв)' : '') +
+      (cnt.gap ? ' · ' + cnt.gap + ' — прогона за дату нет (разрыв)' : '') + (cnt.old || cnt.gap ? '. Досчитать: ' + K.noteHtml(BF) : '') +
+      (mode === 'dv01' && H.qty ? '. Тренд риска на бумагу и размер позиции различает «на 1 бумагу»; число бумаг и его изменение — в подсказке' : '');
+    return { series, tooltip, note };
+  };
+
   K.card = function (id) {
     const p = M.pos[id]; if (!p) return;
     const o = drawer(true); o.title = p.name; o.charts = [];
@@ -921,7 +1018,7 @@
       (p.legs && p.legs.length ? '<div class="k-sec">Ноги сделки <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">' + p.legs.length + '</span></div>' + K.legsHtml(p) : '') +
       '<div class="k-sec">PnL <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽</span></div>' +
       '<div class="k-fields">' + [['Итого день', pn.total], ['Кэрри', pn.carry], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx], ['Сделки', pn.trading], ['Прочее', pn.other], ['MTD', p.pnlMtd], ['YTD', p.pnlYtd]].map(([l, v]) => '<div><div class="l">' + l + '</div><div class="v ' + f.cls(v) + '">' + (Math.abs(v) >= 1e7 ? f.mns(v, 1) + ' <small>mm</small>' : f.ks(v)) + '</div></div>').join('') + '</div>' + K.fundingLine(p) +
-      '<div class="k-sec">История <span class="sp"></span><span class="hseg"></span></div><div class="hchart" style="height:230px"></div>' +
+      '<div class="k-sec">История <span class="sp"></span><span class="hunit" style="margin-right:6px"></span><span class="hseg"></span></div><div class="hchart" style="height:230px"></div><div class="hnote mut3" style="font-size:11.5px;line-height:1.45;margin:4px 0 0"></div>' +
       '<div class="k-sec">Риск по бакетам <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽/бп</span></div><div class="rchart" style="height:200px"></div>' +
       '<div class="k-sec">Риск по кривым и срокам <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽/бп · подпись — как считается</span></div>' + K.curveRiskTable(p) +
       (isBond ? '<div class="k-sec">Потоки</div><div class="cfs"></div>' : '');
@@ -930,20 +1027,34 @@
     const H = M.posHistory(p.id, isBond ? { deep: true } : undefined);
     const isFloat = isBond && p.cpn.type === 'float';
     const isLinker = isBond && (p.kind === 'IN' || !!H.bei);
-    let mode = isFloat ? 'spread' : isBond ? 'yield' : 'notional';
+    let mode = isFloat ? 'spread' : isBond ? 'yield' : 'notional', unit = 'pos';
+    const hnote = o.bd.querySelector('.hnote'), hunit = o.bd.querySelector('.hunit');
+    const perBondOk = !!(H.qty && H.qty.some(v => v));
     const hc = K.chart(o.bd.querySelector('.hchart'), () => {
       const xs = H.dates, long = xs.length > 300;
-      const S = mode === 'price' ? [{ name: 'Цена', data: H.price }]
+      // ряды по прогонам (R44): точка — прогон своей даты; прошлой версией — пунктиром, другим методом — маркером,
+      // без прогона или без оценки — разрыв (причина в подсказке)
+      const R = mode === 'dv01' || mode === 'notional' || (mode === 'spread' && isFloat && H.dm) ? K.runSeries(H, mode === 'spread' ? 'dm' : mode, { color: K.issuerColor(p.issuer), perBond: unit === 'bond' }) : null;
+      if (R && mode === 'spread' && H.dmPx) {  // R35: DM ядра по прогонам (R44) и оценка по цене за всю историю пунктиром
+        R.series.forEach(x => { if (x.name === 'DM, б.п.') x.name = 'DM ядра (прогоны), б.п.'; });
+        R.series.push({ type: 'line', name: 'DM по цене (оценка), б.п.', data: H.dmPx, connectNulls: true, showSymbol: false, lineStyle: { type: 'dashed', width: 1.2 }, color: css('--fg-3') });
+        const tf = R.tooltip.formatter, at = Object.fromEntries(H.dates.map((d, i) => [d, i]));
+        R.tooltip.formatter = ps => { const i = at[(ps[0] || {}).axisValue], v = i == null ? null : H.dmPx[i]; return tf(ps) + (v != null ? '<br>DM по цене (оценка): <b>' + f.n(v, 1) + '</b>' : ''); };
+      }
+      hnote.innerHTML = R ? R.note + (isFloat && mode === 'dv01' ? '<div style="margin-top:3px">' + esc(K.tips.floaterDv01) + '</div>' : '') : '';
+      hunit.style.display = mode === 'dv01' && perBondOk ? '' : 'none';
+      const S = R ? R.series : mode === 'price' ? [{ name: 'Цена', data: H.price }]
         : mode === 'yield' ? [{ name: 'Доходность', data: H.ytm }, { name: 'ОФЗ на сроке', data: H.bench, lineStyle: { type: 'dashed', width: 1 } }]
           : mode === 'spread' ? (isFloat ? K.dmSeries(H)
             : [{ name: 'G-спред, б.п.', data: H.spr }].concat(H.zspr ? [{ name: 'Z-спред MOEX, б.п.', data: H.zspr }] : []))
             : mode === 'infl' ? [{ name: 'BEI, %', data: H.bei || [] }, { name: 'IR (реальная), %', data: H.ir || [] }].concat(H.cpi ? [{ name: 'ИПЦ г/г, %', data: H.cpi, step: 'end', lineStyle: { type: 'dashed', width: 1.2 } }] : [])
               : mode === 'dv01' ? [{ name: 'DV01, тыс ₽/бп', data: H.dv01.map(v => v / 1e3), step: 'end' }] : [{ name: 'Номинал, mm', data: H.notional.map(v => v / 1e6), step: 'end', areaStyle: { opacity: .15 } }];
-      return { grid: { left: 6, right: 10, top: 26, bottom: long ? 30 : 4, containLabel: true }, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis' }, xAxis: { type: 'category', data: xs, axisLabel: { formatter: v => f.dshort(v) } }, yAxis: { type: 'value', scale: true }, series: S.map((s, i) => Object.assign({ type: 'line', showSymbol: false, lineStyle: { width: 1.6 }, color: i ? css('--fg-3') : K.issuerColor(p.issuer) }, s)),
+      return { grid: { left: 6, right: 10, top: 26, bottom: long ? 30 : 4, containLabel: true }, legend: { top: 0, left: 0 }, tooltip: R ? R.tooltip : { trigger: 'axis' }, xAxis: { type: 'category', data: xs, axisLabel: { formatter: v => f.dshort(v) } }, yAxis: { type: 'value', scale: true }, series: S.map((s, i) => Object.assign({ type: 'line', showSymbol: false, lineStyle: { width: 1.6 }, color: i ? css('--fg-3') : K.issuerColor(p.issuer) }, s)),
         dataZoom: long ? [{ type: 'inside', startValue: xs.length - 260 }, { type: 'slider', height: 14, bottom: 4, startValue: xs.length - 260, labelFormatter: (i, v) => f.dshort(v) }] : [{ type: 'inside' }] };
     });
     o.charts.push(hc);
     K.seg(o.bd.querySelector('.hseg'), (isFloat ? [['price', 'цена'], ['spread', 'DM']] : isBond ? [['price', 'цена'], ['yield', 'доходность'], ['spread', 'спред']] : []).concat(isLinker && (H.bei || H.cpi) ? [['infl', H.cpi ? 'BEI/IR/ИПЦ' : 'BEI/IR']] : []).concat([['notional', 'позиция'], ['dv01', 'DV01']]), mode, v => { mode = v; hc.redraw(); });
+    if (perBondOk) K.seg(hunit, [['pos', 'вся позиция'], ['bond', 'на 1 бумагу']], unit, v => { unit = v; hc.redraw(); });
     // риск по бакетам
     const cids = M.curves.filter(c => p.risk[c.id].some(v => Math.abs(v) > 1)).map(c => c.id);
     const rc = K.chart(o.bd.querySelector('.rchart'), () => ({

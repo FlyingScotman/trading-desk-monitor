@@ -53,6 +53,10 @@ class ScenarioEngineJs(unittest.TestCase):
         r = subprocess.run(["node", str(ROOT / "tests" / "js" / "alias_ui.test.js")], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
+    def test_history_points_and_coverage(self):  # R44, R45
+        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "history_coverage.test.js")], capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
     def test_desk_updater_browser_check(self):
         r = subprocess.run(["node", str(ROOT / "tests" / "js" / "desk_updater.test.js")], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
