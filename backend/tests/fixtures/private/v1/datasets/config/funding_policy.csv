@@ -1,0 +1,3 @@
+﻿policy_id;valid_from;active;book_type;pnl_sweep;htm_base;mv_base_date;cash_base_date;new_positions;closed_positions;fx_date;out_of_currency;entity_cash_book_type;repo_rate;repo_contract_from_term_days;repo_security_book_type;write_off_date
+firm;;1;;;cash_spent;previous_business_day;previous_business_day;next_period;full_period;as_of;security_ccy;;security;30;TRADING;last_calendar_day
+trading_sweep;;1;TRADING;monthly;;;;;;;;;;;;

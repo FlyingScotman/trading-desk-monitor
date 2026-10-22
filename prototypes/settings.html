@@ -4,105 +4,134 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:,">
 <title>Настройки · FI Desk Monitor</title>
+<!-- Стиль мониторов (concepts/lib/kit.css: те же цвета, тёмная/светлая тема) + раскладка этой страницы. Без внешних
+     шрифтов и скриптов: страница работает на машине без интернета. Данные: /api/v1/settings, /api/v1/adapter (desk serve). -->
+<link rel="stylesheet" href="concepts/lib/kit.css">
 <style>
-/* Same tokens as desk-monitor.html (graphite-navy, steel-cyan accent, dark-first); no external fonts or scripts:
-   this page must work on a machine without internet. Data: /api/v1/settings, /api/v1/adapter (desk serve). */
 :root{
-  --bg:#0c1117; --panel:#111820; --panel-2:#151d27; --raise:#1b2530; --line:#212b37; --line-2:#2e3a48;
-  --fg:#d4dbe3; --fg-2:#97a4b3; --fg-3:#677587;
-  --accent:#5aaec4; --accent-ink:#8fd0e1; --accent-weak:rgba(90,174,196,.13); --accent-line:rgba(90,174,196,.45);
-  --neg-tx:#f08a86; --good:#0ca30c; --good-tx:#57c46a; --warn:#fab219; --crit:#d03b3b;
-  --ink-light:#f2f6fa;
-  --font-ui:"Golos Text","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
-  --font-mono:"JetBrains Mono","IBM Plex Mono",ui-monospace,"SFMono-Regular",Consolas,"Liberation Mono",monospace;
-  color-scheme:dark;
+  /* имена прежней страницы и desk-updater.js → токены мониторов */
+  --accent-ink:var(--accent); --accent-weak:var(--accent-bg); --accent-line:var(--accent);
+  --good:var(--pos); --good-tx:var(--pos); --neg-tx:var(--neg); --crit:var(--neg); --font-mono:var(--mono); --ink-light:#fff;
+  --warn-bg:rgba(227,179,65,.14);
 }
-@media (prefers-color-scheme: light){
-  :root:not([data-theme="dark"]){
-    --bg:#edf0f3; --panel:#ffffff; --panel-2:#f5f7f9; --raise:#ffffff; --line:#dbe1e7; --line-2:#c5ced8;
-    --fg:#141d27; --fg-2:#465464; --fg-3:#738192;
-    --accent:#1c748c; --accent-ink:#155e72; --accent-weak:rgba(28,116,140,.10); --accent-line:rgba(28,116,140,.45);
-    --neg-tx:#b8302f; --good-tx:#18792a; --ink-light:#ffffff;
-    color-scheme:light;
-  }
-}
-:root[data-theme="light"]{
-  --bg:#edf0f3; --panel:#ffffff; --panel-2:#f5f7f9; --raise:#ffffff; --line:#dbe1e7; --line-2:#c5ced8;
-  --fg:#141d27; --fg-2:#465464; --fg-3:#738192;
-  --accent:#1c748c; --accent-ink:#155e72; --accent-weak:rgba(28,116,140,.10); --accent-line:rgba(28,116,140,.45);
-  --neg-tx:#b8302f; --good-tx:#18792a; --ink-light:#ffffff;
-  color-scheme:light;
-}
-*{box-sizing:border-box}
+:root[data-theme="light"]{ --warn-bg:rgba(183,133,10,.10); }
 [hidden]{display:none!important}
-body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-ui);font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
+body{min-height:100vh}
 button,select,input,textarea{font:inherit;color:inherit}
 :focus-visible{outline:2px solid var(--accent);outline-offset:1px}
-.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
-.muted{color:var(--fg-3)}
-.wrap{padding-inline:16px;max-width:1040px;margin-inline:auto}
-a{color:var(--accent-ink)}
+.muted,.mut{color:var(--fg-2)} .mut3{color:var(--fg-3)} .small{font-size:11px}
+a{color:var(--accent)}
 
-/* header */
-.top{position:sticky;top:0;z-index:30;background:var(--bg);border-bottom:1px solid var(--line)}
-.bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding-block:8px}
-.brand{display:flex;align-items:center;gap:8px;min-width:0}
-.brand b{font-weight:700;letter-spacing:.02em;font-size:14px}
-.brand .sep{color:var(--fg-3)}
-.brand .desk{color:var(--fg-2)}
-.logo{width:22px;height:16px;flex:none}
-.logo path{fill:none;stroke:var(--accent);stroke-width:1.8}
-.logo rect{fill:var(--fg-3)}
-.meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px}
-.ibtn{background:var(--panel-2);border:1px solid var(--line-2);border-radius:2px;padding:3px 9px;cursor:pointer;color:var(--fg-2);font-size:12px;text-decoration:none;display:inline-block}
-.ibtn:hover{color:var(--fg);border-color:var(--accent-line)}
-.btn{background:var(--accent);border:1px solid var(--accent);color:var(--ink-light);border-radius:2px;padding:5px 14px;cursor:pointer;font-weight:600;font-size:12.5px}
-.btn:hover{filter:brightness(1.08)}
-.btn[disabled],.ibtn[disabled]{opacity:.5;cursor:default;filter:none}
+/* ---------- раскладка: навигация слева, раздел справа ---------- */
+.st-shell{display:grid;grid-template-columns:236px minmax(0,1fr);min-height:calc(100vh - 34px)}
+.st-nav{position:sticky;top:0;align-self:start;max-height:100vh;overflow:auto;padding:16px 10px 24px;border-right:1px solid var(--line);background:var(--bg-2);min-height:calc(100vh - 34px)}
+.st-nav .ttl{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 8px 12px}
+.st-nav .ttl b{font-size:15px;font-weight:650;letter-spacing:.01em}
+.st-nav .grp{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--fg-3);padding:14px 10px 4px}
+.st-nav a{display:flex;align-items:center;gap:9px;padding:6px 10px;border-radius:6px;color:var(--fg-2);text-decoration:none;font-size:13px;position:relative}
+.st-nav a:hover{background:var(--hover);color:var(--fg)}
+.st-nav a.on{background:var(--accent-bg);color:var(--fg);font-weight:550}
+.st-nav a.on::before{content:"";position:absolute;left:-10px;top:6px;bottom:6px;width:3px;border-radius:0 3px 3px 0;background:var(--accent)}
+.st-nav a svg{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;opacity:.85}
+.st-nav a .lbl{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.st-nav a .nb{font-size:10.5px;color:var(--fg-3);font-variant-numeric:tabular-nums}
+.st-nav a .dot{width:7px;height:7px;border-radius:50%;flex:none;background:transparent}
+.st-nav a .dot.ok{background:var(--pos)} .st-nav a .dot.bad{background:var(--neg)} .st-nav a .dot.warn{background:var(--warn)} .st-nav a .dot.dirty{background:var(--accent)}
+.st-nav .foot{margin:18px 8px 0;font-size:11.5px;color:var(--fg-3);line-height:1.5}
+.st-main{padding:20px 28px 110px;min-width:0;max-width:1240px}
+@media (max-width:860px){
+  .st-shell{grid-template-columns:1fr}
+  .st-nav{position:sticky;top:0;z-index:40;max-height:none;min-height:0;display:flex;gap:4px;overflow-x:auto;padding:8px 10px;border-right:0;border-bottom:1px solid var(--line)}
+  .st-nav .ttl,.st-nav .grp,.st-nav .foot{display:none}
+  .st-nav a{flex:none} .st-nav a.on::before{display:none}
+  .st-main{padding:14px 16px 110px}
+}
+.sec-h{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:0 0 14px}
+.sec-h h1{margin:0;font-size:20px;font-weight:650;letter-spacing:.005em}
+.sec-h p{margin:3px 0 0;color:var(--fg-2);max-width:760px}
+.sec-h .badges{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding-top:4px}
+section.sec{display:none} section.sec.on{display:block}
 
-/* panels */
-.main{padding-block:14px 90px;display:flex;flex-direction:column;gap:12px}
-.pnl{background:var(--panel);border:1px solid var(--line);border-radius:2px;min-width:0}
-.ph{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:8px 12px;border-bottom:1px solid var(--line)}
-.ph h2{margin:0;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-2)}
-.pb{padding:12px}
-.note{border:1px solid var(--accent-line);background:var(--accent-weak);border-radius:2px;padding:9px 12px;color:var(--fg)}
-.note.warn{border-color:var(--warn);background:transparent}
-.note.err{border-color:var(--crit);background:transparent;color:var(--neg-tx)}
+/* ---------- карточки ---------- */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;margin:0 0 14px;min-width:0}
+.card > .hd{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--line)}
+.card > .hd h2{margin:0;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-2)}
+.card > .hd .sp,.sp{flex:1}
+.card > .bd{padding:14px}
+.card > .bd.flush{padding:0}
+.note{border:1px solid var(--line-2);background:var(--panel-2);border-radius:6px;padding:9px 12px;color:var(--fg);margin:0 0 12px}
+.note.warn{border-color:var(--warn);background:var(--warn-bg)}
+.note.err{border-color:var(--neg);background:var(--neg-bg)}
+.note.ok{border-color:var(--pos);background:var(--pos-bg)}
 .hint{font-size:12px;color:var(--fg-3);margin:4px 0 0}
+details.more{margin-top:4px;font-size:12px;color:var(--fg-3)}
+details.more summary{cursor:pointer;color:var(--accent);list-style:none;display:inline}
+details.more summary::-webkit-details-marker{display:none}
+details.more[open] summary{margin-bottom:4px}
+details.more p{margin:4px 0}
 
-/* forms */
-.form{display:grid;grid-template-columns:minmax(150px,220px) minmax(0,1fr);gap:10px 14px;align-items:start}
-@media (max-width:700px){.form{grid-template-columns:1fr}}
-.form > label{padding-top:5px;color:var(--fg-2)}
-.inp,.ta{width:100%;background:var(--panel-2);border:1px solid var(--line-2);border-radius:2px;padding:5px 8px;font-size:12.5px}
-.inp:focus,.ta:focus{border-color:var(--accent)}
-.inp.mono,.ta{font-family:var(--font-mono)}
-.inp.num{width:120px}
-.ta{min-height:160px;resize:vertical;line-height:1.4;tab-size:2;white-space:pre}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.row > .inp{flex:1;min-width:180px}
-.tag{display:inline-block;font-size:10px;font-weight:600;letter-spacing:.04em;padding:0 5px;border-radius:2px;border:1px solid var(--line-2);color:var(--fg-2);vertical-align:1px;white-space:nowrap}
-.tag.req{border-color:var(--warn);color:var(--fg)}
-.tag.env{border-color:var(--warn);color:var(--warn)}
+/* значки состояния */
+.badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;line-height:17px;padding:0 8px;border-radius:999px;border:1px solid var(--line-2);color:var(--fg-2);background:var(--panel-2);white-space:nowrap;font-weight:500}
+.badge.ok{color:var(--pos);border-color:var(--pos);background:var(--pos-bg)}
+.badge.bad{color:var(--neg);border-color:var(--neg);background:var(--neg-bg)}
+.badge.warn{color:var(--warn);border-color:var(--warn);background:var(--warn-bg)}
+.badge.acc{color:var(--accent);border-color:var(--accent);background:var(--accent-bg)}
+.badge.st::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
 .st{display:inline-flex;align-items:center;gap:6px;font-size:12px;white-space:nowrap}
 .st::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--fg-3)}
-.st.ok::before{background:var(--good)}
-.st.bad::before{background:var(--crit)}
-.st.wait::before{background:var(--warn)}
-.res{margin-top:10px;padding:8px 10px;border-radius:2px;border:1px solid var(--line-2);background:var(--panel-2);font-size:12.5px}
-.res.ok{border-color:var(--good)}
-.res.bad{border-color:var(--crit)}
-.res .err{color:var(--neg-tx)}
-.err{color:var(--neg-tx);font-size:12px}
-.okmsg{color:var(--good-tx);font-size:12px}
+.st.ok::before{background:var(--pos)} .st.bad::before{background:var(--neg)} .st.wait::before{background:var(--warn)}
 
-/* tables */
+/* формы */
+.form{display:grid;grid-template-columns:minmax(150px,210px) minmax(0,1fr);gap:12px 16px;align-items:start}
+@media (max-width:700px){.form{grid-template-columns:1fr;gap:4px 0}.form > label{padding-top:8px}}
+.form > label{padding-top:6px;color:var(--fg-2)}
+.inp,.ta{width:100%;background:var(--bg);border:1px solid var(--line-2);border-radius:6px;padding:5px 9px;font-size:12.5px;color:var(--fg);min-width:0}
+.inp:focus,.ta:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg)}
+select.inp{padding:4px 6px}
+.inp.mono,.ta{font-family:var(--mono)}
+.inp.num{width:130px;font-variant-numeric:tabular-nums}
+.ta{min-height:220px;resize:vertical;line-height:1.45;tab-size:2;white-space:pre}
+.ta-s{min-height:0;white-space:pre;font-family:var(--mono)}
+.row:not(tr){display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.row:not(tr) > .inp{flex:1;min-width:180px}
+.btn{display:inline-flex;align-items:center;gap:6px;background:var(--accent-2);border:1px solid var(--accent-2);color:#fff;border-radius:6px;padding:5px 14px;cursor:pointer;font-weight:600;font-size:12.5px;text-decoration:none}
+.btn:hover{filter:brightness(1.1)}
+.ibtn{display:inline-flex;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--line-2);border-radius:6px;padding:4px 11px;cursor:pointer;color:var(--fg);font-size:12px;text-decoration:none}
+.ibtn:hover{border-color:var(--accent)}
+.ibtn.danger:hover{border-color:var(--neg);color:var(--neg)}
+.btn[disabled],.ibtn[disabled]{opacity:.55;cursor:default;filter:none;border-color:var(--line-2)}
+.btn[disabled]{background:var(--panel-2);color:var(--fg-3)}
+.form .inp:not(.num){max-width:620px}
+.tgl-s.unset{background:repeating-linear-gradient(45deg,var(--line-2) 0 3px,transparent 3px 6px)}
+.tgl-l{color:var(--fg-2)}
+.lnk{background:none;border:0;color:var(--accent);cursor:pointer;font-size:12px;padding:2px 0;text-decoration:underline;text-underline-offset:2px}
+.tag{display:inline-block;font-size:10.5px;font-weight:600;letter-spacing:.03em;padding:0 6px;border-radius:4px;border:1px solid var(--line-2);color:var(--fg-2);vertical-align:1px;white-space:nowrap}
+.tag.req{border-color:var(--warn);color:var(--fg)}
+.tag.env{border-color:var(--warn);color:var(--warn)}
+.tag.new{border-color:var(--accent);color:var(--accent)}
+.res{margin-top:10px;padding:9px 12px;border-radius:6px;border:1px solid var(--line-2);background:var(--panel-2);font-size:12.5px}
+.res.ok{border-color:var(--pos)} .res.bad{border-color:var(--neg)}
+.err{color:var(--neg);font-size:12px}
+.okmsg{color:var(--pos);font-size:12px}
+.chk{display:inline-flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;color:var(--fg-2)}
+.x{background:none;border:1px solid transparent;color:var(--fg-3);cursor:pointer;font-size:14px;line-height:1;padding:2px 6px;border-radius:4px}
+.x:hover{color:var(--fg);border-color:var(--line-2)} .x.del:hover{color:var(--neg)}
+
+/* переключатель */
+.tgl{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none;color:var(--fg);position:relative}
+.tgl input{position:absolute;opacity:0;width:1px;height:1px}
+.tgl-s{width:30px;height:16px;border-radius:8px;background:var(--line-2);position:relative;transition:background .15s;flex:none}
+.tgl-s::after{content:"";position:absolute;left:2px;top:2px;width:12px;height:12px;border-radius:50%;background:var(--fg-2);transition:transform .15s}
+.tgl input:checked + .tgl-s{background:var(--accent)}
+.tgl input:checked + .tgl-s::after{transform:translateX(14px);background:#fff}
+.tgl input:focus-visible + .tgl-s{outline:2px solid var(--accent);outline-offset:2px}
+
+/* простые таблицы (папки, «где лежат данные», обновления) */
 table.t{border-collapse:collapse;width:100%;font-size:12.5px}
-.t th,.t td{padding:5px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
-.t th{font-weight:500;color:var(--fg-3);font-size:11px;background:var(--panel-2)}
+.t th,.t td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
+.t th{font-weight:500;color:var(--fg-2);font-size:11.5px;background:var(--panel-2)}
 .t td.k{color:var(--fg-2);white-space:nowrap;width:1%}
-.t td.v{font-family:var(--font-mono);word-break:break-all}
+.t td.v{font-family:var(--mono);word-break:break-all}
 .t .inp{min-width:120px}
 @media (max-width:700px){
   .dirs-t thead{display:none}
@@ -110,328 +139,455 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
   .dirs-t td{border:0;width:auto!important}
   .dirs-t td:nth-child(-n+2){grid-column:1/-1}
 }
-.chk{display:inline-flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;color:var(--fg-2)}
-.x{background:none;border:1px solid transparent;color:var(--fg-3);cursor:pointer;font-size:15px;line-height:1;padding:2px 6px;border-radius:2px}
-.x:hover{color:var(--neg-tx);border-color:var(--line-2)}
-.lnk{background:none;border:0;color:var(--accent-ink);cursor:pointer;font-size:12px;padding:2px 0;text-decoration:underline;text-underline-offset:2px}
+.kv{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.kv > div{background:var(--panel);padding:7px 10px;min-width:0}
+.kv .l{font-size:11px;color:var(--fg-3);text-transform:uppercase;letter-spacing:.04em}
+.kv .v{margin-top:2px;word-break:break-word}
+.src-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.src-chips .k-chip{cursor:default}
+.cf{border:1px solid var(--line);border-radius:6px;background:var(--panel-2)}
+.cf + .cf{margin-top:8px}
+.cf > summary{cursor:pointer;padding:9px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;list-style:none}
+.cf > summary::-webkit-details-marker{display:none}
+.cf > summary::before{content:"▸";color:var(--fg-3);width:10px}
+.cf[open] > summary::before{content:"▾"}
+.cf > .in{padding:0 12px 12px}
+.cf .help{margin:0 0 8px;color:var(--fg-2);white-space:pre-wrap;font-size:12px}
 
-/* toggle (as desk-monitor) */
-.tgl{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none;color:var(--fg)}
-.tgl input{position:absolute;opacity:0;width:1px;height:1px}
-.tgl-s{width:30px;height:16px;border-radius:8px;background:var(--line-2);position:relative;transition:background .15s;flex:none}
-.tgl-s::after{content:"";position:absolute;left:2px;top:2px;width:12px;height:12px;border-radius:50%;background:var(--fg-2);transition:transform .15s}
-.tgl input:checked + .tgl-s{background:var(--accent)}
-.tgl input:checked + .tgl-s::after{transform:translateX(14px);background:var(--ink-light)}
-.tgl input:focus-visible + .tgl-s{outline:2px solid var(--accent);outline-offset:2px}
+/* ---------- формы адаптера (settings-forms.js) ---------- */
+.sf-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:0 0 12px}
+.sf-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.sf-file{color:var(--fg-2);font-size:12px}
+.sf-acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.sf-table,.sf-obj,.sf-summary{background:var(--panel);border:1px solid var(--line);border-radius:8px;margin:0 0 14px;overflow:hidden}
+.sf-th{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 12px;border-bottom:1px solid var(--line)}
+.sf-th h4,.sf-th h5{margin:0;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-2)}
+.sf-th h5{text-transform:none;letter-spacing:0;font-size:12.5px;color:var(--fg)}
+.sf-obj > .sf-grid{padding:12px}
+.sf-sub{border-top:1px solid var(--line)} .sf-sub > .sf-th{border-bottom:0;padding-bottom:0} .sf-sub > .sf-grid{padding:10px 12px 12px}
+.sf-t td{vertical-align:middle}
+.sf-t tbody tr.row td{cursor:pointer}
+.sf-t tbody tr.row:hover td{background:var(--hover)}
+.sf-t tbody tr.row.dim td{color:var(--fg-3)}
+.sf-t tbody tr.row.bad td:first-child{box-shadow:inset 3px 0 0 var(--neg)}
+.sf-t tbody tr.row.warn td:first-child{box-shadow:inset 3px 0 0 var(--warn)}
+.sf-t td.bad{background:var(--neg-bg)!important;color:var(--neg)!important}
+.sf-t tr.unconf td{background:var(--warn-bg)}
+.sf-t tr.grp td{background:var(--bg-2);font-weight:600;cursor:default}
+.sf-t td.sf-state{white-space:nowrap;width:1%}
+.sf-t td.sf-rowacts{white-space:nowrap;width:1%;text-align:right}
+.sf-matrix td,.sf-matrix th{text-align:center} .sf-matrix td:first-child,.sf-matrix th:first-child{text-align:left}
+.req{color:var(--warn)}
+.sf-grid{display:grid;grid-template-columns:minmax(140px,200px) minmax(0,1fr);gap:10px 16px;align-items:start}
+@media (max-width:700px){.sf-grid{grid-template-columns:1fr;gap:2px 0}}
+.sf-l{padding-top:6px;color:var(--fg-2)}
+.sf-grid .inp{max-width:440px}
+.sf-grid .inp.num{max-width:160px}
+.sf-c.bad .inp{border-color:var(--neg)}
+.sf-issues{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:4px}
+.sf-issues li{font-size:12.5px}
+.sf-issues .code{font-size:11px}
+.sf-raw .ta{min-height:360px}
+.sf-drawer > .bd{padding:14px 16px}
+.sf-drawer > .ft{padding:10px 16px;border-top:1px solid var(--line);background:var(--panel-2)}
+.sf-drawer h4{margin:16px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-2)}
+.verdict{padding:10px 12px;border-radius:6px;border:1px solid var(--line-2);font-weight:550}
+.verdict.ok{border-color:var(--pos);background:var(--pos-bg);color:var(--pos)}
+.verdict.bad{border-color:var(--neg);background:var(--neg-bg);color:var(--neg)}
+.verdict.warn{border-color:var(--warn);background:var(--warn-bg)}
+.diff{border:1px solid var(--line-2);border-radius:6px;overflow:auto;max-height:52vh;font-size:11.5px;line-height:1.5;background:var(--bg)}
+.diff > div{white-space:pre;padding:0 8px 0 0}
+.diff .d-n{display:inline-block;width:38px;text-align:right;color:var(--fg-3);padding-right:6px;user-select:none}
+.diff .d-o{display:inline-block;width:14px;color:var(--fg-3);user-select:none}
+.diff .d-add{background:var(--pos-bg)} .diff .d-add .d-o{color:var(--pos)}
+.diff .d-del{background:var(--neg-bg)} .diff .d-del .d-o{color:var(--neg)}
+.diff .d-skip{color:var(--fg-3);background:var(--panel-2);padding:2px 10px;font-style:italic}
 
-/* adapter config files */
-.cf{border:1px solid var(--line);border-radius:2px;padding:10px 12px;background:var(--panel-2)}
-.cf + .cf{margin-top:10px}
-.cf h3{margin:0;font-size:13px;font-weight:600}
-.cf .help{margin:4px 0 8px;color:var(--fg-2);white-space:pre-wrap}
-.src{margin:6px 0 0;padding-left:18px}
-.src li{margin:2px 0}
-
-/* save bar */
-.savebar{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--panel);border-top:1px solid var(--line-2);box-shadow:0 -8px 24px rgba(0,0,0,.25)}
-.savebar .wrap{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-block:9px;flex-wrap:wrap}
-.dirty{color:var(--warn);font-size:12px}
+/* панель сохранения settings.json — только когда есть изменения */
+.savebar{position:fixed;left:50%;transform:translateX(-50%);bottom:16px;z-index:60;background:var(--panel);border:1px solid var(--line-2);border-radius:10px;box-shadow:var(--shadow);display:flex;align-items:center;gap:12px;padding:9px 12px 9px 16px;max-width:calc(100vw - 32px);flex-wrap:wrap}
+.toast{position:fixed;right:16px;bottom:16px;z-index:120;max-width:min(460px,calc(100vw - 32px));background:var(--panel);border:1px solid var(--line-2);border-left:3px solid var(--accent);border-radius:8px;box-shadow:var(--shadow);padding:10px 14px;font-size:12.5px}
+.toast.ok{border-left-color:var(--pos)} .toast.err{border-left-color:var(--neg)}
+#users-card .du > h2,#users-card .du > p.du-note:first-of-type{display:none} /* заголовок и состояние входа — в шапке раздела выше */
 </style>
 
-<header class="top">
-  <div class="bar wrap">
-    <div class="brand">
-      <svg class="logo" viewBox="0 0 22 16" aria-hidden="true"><rect x="1" y="11" width="2" height="4"/><rect x="5" y="9" width="2" height="6"/><rect x="9" y="8" width="2" height="7"/><rect x="13" y="7.5" width="2" height="7.5"/><rect x="17" y="7" width="2" height="8"/><path d="M1 9 C5 4 9 3 21 2"/></svg>
-      <b>FI Desk Monitor</b><span class="sep">/</span><span class="desk">Настройки</span>
-    </div>
-    <div class="meta">
-      <button class="ibtn" id="theme-btn" type="button" title="Переключить светлую/тёмную тему">Тема</button>
-    </div>
-  </div>
-</header>
+<div class="st-shell">
+  <nav class="st-nav" aria-label="Разделы настроек">
+    <div class="ttl"><b>Настройки</b><button class="k-btn" id="theme-btn" type="button" title="Светлая / тёмная тема">◐</button></div>
+    <div class="grp">Программа</div>
+    <a href="#hub" data-sec="hub"><svg viewBox="0 0 16 16"><path d="M6 2v3M10 2v3M4.5 5h7v3a3.5 3.5 0 0 1-7 0zM8 11.5V14"/></svg><span class="lbl">Подключения</span><span class="dot" data-nav="hub"></span></a>
+    <a href="#adapter" data-sec="adapter"><svg viewBox="0 0 16 16"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5"/><path d="M6 1.5v2M10 1.5v2M6 12.5v2M10 12.5v2M1.5 6h2M1.5 10h2M12.5 6h2M12.5 10h2"/></svg><span class="lbl">Адаптер и источники</span><span class="dot" data-nav="adapter"></span></a>
+    <div class="grp">Справочники деска</div>
+    <a href="#entities" data-sec="entities"><svg viewBox="0 0 16 16"><path d="M2 14h12M3 14V6l5-3.5L13 6v8M6 14v-4h4v4"/></svg><span class="lbl">Юрлица</span><span class="nb" data-count="entities"></span><span class="dot" data-nav="entities"></span></a>
+    <a href="#books" data-sec="books"><svg viewBox="0 0 16 16"><path d="M3 2.5h7.5a1.5 1.5 0 0 1 1.5 1.5v9.5H4.5A1.5 1.5 0 0 1 3 12zM3 12a1.5 1.5 0 0 1 1.5-1.5H12M6 5.5h3.5"/></svg><span class="lbl">Книги</span><span class="nb" data-count="books"></span><span class="dot" data-nav="books"></span></a>
+    <a href="#funding" data-sec="funding"><svg viewBox="0 0 16 16"><path d="M12.5 3.5l-9 9M5 6.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM11 12.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z"/></svg><span class="lbl">Фондирование</span><span class="nb" data-count="funding"></span><span class="dot" data-nav="funding"></span></a>
+    <div class="grp">Работа</div>
+    <a href="#auto" data-sec="auto"><svg viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3"/></svg><span class="lbl">Автообновление</span><span class="dot" data-nav="auto"></span></a>
+    <a href="#up" data-sec="up"><svg viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10"/></svg><span class="lbl">Обновление программы</span><span class="nb" id="nav-ver"></span></a>
+    <a href="#diag" data-sec="diag"><svg viewBox="0 0 16 16"><path d="M1.5 8.5h3l2-5 3 9 2-4h3"/></svg><span class="lbl">Диагностика</span></a>
+    <div class="grp" data-users-nav>Доступ</div>
+    <a href="#users" data-sec="users" data-users-nav><svg viewBox="0 0 16 16"><circle cx="6" cy="5.5" r="2.5"/><path d="M1.5 13.5c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4M10.5 3.2a2.5 2.5 0 0 1 0 4.6M12 9.8c1.5.5 2.5 1.8 2.5 3.7"/></svg><span class="lbl">Пользователи</span><span class="nb" id="nav-auth"></span></a>
+    <div class="foot" id="home-note">Загрузка настроек…</div>
+  </nav>
 
-<main class="main wrap">
-  <div class="note" id="home-note">Загрузка настроек…</div>
-  <div class="note err" id="load-err" hidden></div>
-  <div class="note warn" id="env-note" hidden></div>
+  <main class="st-main">
+    <div class="note err" id="load-err" hidden></div>
+    <div class="note warn" id="env-note" hidden></div>
 
-  <!-- 1. Маркет-дата сервер -->
-  <section class="pnl" aria-labelledby="h-hub">
-    <div class="ph"><h2 id="h-hub">Маркет-дата сервер</h2><span class="st" id="token-st">токен …</span></div>
-    <div class="pb form">
-      <label for="hub_url">Адрес сервера</label>
-      <div><input class="inp mono" id="hub_url" data-key="hub_url" placeholder="https://…" autocomplete="off">
-        <p class="hint">Только https:// (http — лишь для 127.0.0.1).</p></div>
-      <label for="token">Токен</label>
-      <div>
-        <div class="row">
-          <input class="inp mono" id="token" type="password" placeholder="вставьте токен сервера (scope read)" autocomplete="new-password">
-          <button class="ibtn" id="token-save" type="button">Сохранить токен</button>
-          <button class="lnk" id="token-clear" type="button">удалить</button>
-        </div>
-        <p class="hint">Токен хранится отдельно в файле <span class="mono" id="token-file">hub_token</span> и никогда не показывается. <span id="token-msg"></span></p>
-      </div>
-      <label for="https_proxy">Прокси</label>
-      <div><input class="inp mono" id="https_proxy" data-key="https_proxy" placeholder="http://proxy:3128 — пусто: без прокси или из системы" autocomplete="off"></div>
-      <label for="proxy_user">Логин прокси</label>
-      <div><input class="inp mono" id="proxy_user" data-key="proxy_user" placeholder="пусто — вход по учётке Windows (способ «curl Windows»)" autocomplete="off"></div>
-      <label for="proxy-pw">Пароль прокси</label>
-      <div>
-        <div class="row">
-          <input class="inp mono" id="proxy-pw" type="password" placeholder="пароль прокси" autocomplete="new-password">
-          <button class="ibtn" id="proxy-pw-save" type="button">Сохранить пароль</button>
-          <button class="lnk" id="proxy-pw-clear" type="button">удалить</button>
-        </div>
-        <p class="hint">Пароль хранится отдельно в файле <span class="mono">proxy_password</span> и никогда не показывается. <span id="proxy-pw-st"></span> <span id="proxy-pw-msg"></span></p>
-      </div>
-      <label for="hub_transport">Способ подключения</label>
-      <div><select class="inp" id="hub_transport" data-key="hub_transport">
-          <option value="auto">Авто</option><option value="python">Python</option><option value="curl">curl Windows</option>
-        </select>
-        <p class="hint">Если прокси пускает по учётке Windows, логин/пароль не нужны: способ "curl Windows" использует текущего пользователя. «Авто» сам переходит на curl, если прокси требует вход.</p></div>
-      <label for="no_proxy">Без прокси для</label>
-      <div><input class="inp mono" id="no_proxy" data-key="no_proxy" placeholder="localhost,127.0.0.1 — действует только вместе с прокси выше" autocomplete="off"></div>
-      <label for="hub_ca_bundle">Сертификат CA (PEM)</label>
-      <div><input class="inp mono" id="hub_ca_bundle" data-key="hub_ca_bundle" placeholder="пусто — системное хранилище сертификатов" autocomplete="off">
-        <p class="hint">Нужен, только если корпоративный прокси подменяет сертификаты и система их не знает.</p></div>
-      <label></label>
-      <div>
-        <button class="ibtn" id="test-hub" type="button">Проверить связь</button>
-        <div class="res" id="hub-res" hidden></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- 2. Папки с отчётами -->
-  <section class="pnl" aria-labelledby="h-dirs">
-    <div class="ph"><h2 id="h-dirs">Папки с отчётами</h2><span class="tag env" id="dirs-env" hidden>задано переменной окружения</span></div>
-    <div class="pb">
-      <table class="t dirs-t">
-        <thead><tr><th>Папка</th><th>Подпись</th><th>Подпапки</th><th></th></tr></thead>
-        <tbody id="dirs"></tbody>
-      </table>
-      <div class="row" style="margin-top:8px"><button class="ibtn" id="dir-add" type="button">+ Добавить папку</button></div>
-      <p class="hint">Сервер просматривает эти папки и передаёт новые файлы адаптеру. Подпись — только заметка для вас (например, «Позиции», «PnL»).</p>
-    </div>
-  </section>
-
-  <!-- 3. Адаптер -->
-  <section class="pnl" aria-labelledby="h-ad">
-    <div class="ph"><h2 id="h-ad">Адаптер</h2><span class="st wait" id="ad-st">проверка…</span></div>
-    <div class="pb">
-      <div class="form">
-        <label for="private_adapter">Папка адаптера</label>
-        <div><input class="inp mono" id="private_adapter" data-key="private_adapter" placeholder="пусто — эталонный адаптер (CSV)" autocomplete="off">
-          <p class="hint">Папка пакета приватного адаптера (с файлом __init__.py).</p>
-          <p class="hint" id="ad-default" hidden></p></div>
-        <label for="private_adapter_config">Папка настроек адаптера</label>
-        <div><input class="inp mono" id="private_adapter_config" data-key="private_adapter_config" autocomplete="off">
-          <p class="hint">Пусто — <span class="mono" id="cfg-default"></span> (создаётся сама).</p></div>
-      </div>
-      <div class="res" id="ad-res" hidden></div>
-      <div class="row" style="margin-top:8px"><button class="ibtn" id="ad-refresh" type="button">Обновить статус</button></div>
-    </div>
-  </section>
-
-  <!-- 4. Файлы настроек адаптера -->
-  <section class="pnl" aria-labelledby="h-cf">
-    <div class="ph"><h2 id="h-cf">Файлы настроек адаптера</h2></div>
-    <div class="pb" id="cf-list"><p class="muted">Загрузка…</p></div>
-  </section>
-
-  <!-- 5. Автообновление -->
-  <section class="pnl" aria-labelledby="h-ap">
-    <div class="ph"><h2 id="h-ap">Автообновление</h2></div>
-    <div class="pb form">
-      <label for="autopilot">Автообновление</label>
-      <div><label class="tgl"><input type="checkbox" id="autopilot" data-key="autopilot"><span class="tgl-s"></span><span id="ap-lbl">включено</span></label>
-        <p class="hint">Сервер сам загружает срезы с маркет-дата сервера, забирает новые отчёты из папок и пересчитывает риски.</p></div>
-      <label for="intraday">Расчёт внутри дня</label>
-      <div><label class="tgl"><input type="checkbox" id="intraday" data-key="intraday"><span class="tgl-s"></span><span id="intraday-lbl">включено</span></label>
-        <p class="hint">В рабочие дни с 10:00 МСК портфель дня пересчитывается на свежем внутридневном срезе маркет-дата сервера (не чаще раза в 30 минут), после 19:45 — на предварительном закрытии; PnL — к закрытию предыдущего рабочего дня. Утром его заменяет расчёт на окончательном закрытии. Хранится только последний внутридневной расчёт дня.</p></div>
-      <label for="inbox_poll_seconds">Период опроса, сек</label>
-      <div><input class="inp mono num" id="inbox_poll_seconds" data-key="inbox_poll_seconds" inputmode="decimal" placeholder="60"></div>
-      <label for="autopilot_sync_last">Загружать последних дат</label>
-      <div><input class="inp mono num" id="autopilot_sync_last" data-key="autopilot_sync_last" inputmode="numeric" placeholder="5"></div>
-      <label for="inbox_lookback_days">Брать отчёты не старше, дней</label>
-      <div><input class="inp mono num" id="inbox_lookback_days" data-key="inbox_lookback_days" inputmode="numeric" placeholder="35">
-        <p class="hint">Пусто — 35. Возраст считается по дате отчёта (из имени или содержимого файла), а не по дате изменения файла: книга, по которой отчёт приходит раз в несколько недель, тоже загрузится. Более старые отчёты не читаются (папку с архивом за годы можно оставить, она просматривается один раз), снимки с маркет-дата сервера за более ранние даты не загружаются. 0 — без ограничения (медленно на больших папках).</p>
-        <p class="hint">Изменения применяются со следующего цикла (не позже чем через период опроса), перезапуск сервера не нужен.</p></div>
-      <label for="history_days">История котировок, рабочих дней</label>
-      <div><input class="inp mono num" id="history_days" data-key="history_days" inputmode="numeric" placeholder="260">
-        <p class="hint">Пусто — 260 (около года). Для графиков цен и доходностей сервер понемногу, по нескольку дат за цикл, догружает с маркет-дата сервера котировки за прошлые дни. 0 — не догружать, только загруженные срезы. Если сервер отдаёт API истории (версия 0.2.0 и токен с правом read), история берётся оттуда — на годы назад, вместе с КБД, кривыми, фиксингами и курсами, а это число не действует (кроме 0 — выключено).</p>
-        <p class="hint" id="hist-st"></p></div>
-      <label for="history_bonds_from">История облигаций с</label>
-      <div><input class="inp mono" id="history_bonds_from" data-key="history_bonds_from" placeholder="2024-01-03" autocomplete="off">
-        <p class="hint">Пусто — 2024-01-03 (с этой даты у сервера есть закрытия облигаций). Только для API истории.</p></div>
-      <label for="history_rates_from">История ставок и курсов с</label>
-      <div><input class="inp mono" id="history_rates_from" data-key="history_rates_from" placeholder="2010-01-01" autocomplete="off">
-        <p class="hint">КБД, кривые RUONIA OIS и КС-свопов, фиксинги (КС, RUONIA, RUSFAR, ИПЦ), курсы ЦБ и MOEX. Пусто — 2010-01-01 (или сколько есть на сервере).</p></div>
-      <label for="backfill">История прогонов</label>
-      <div><label class="tgl"><input type="checkbox" id="backfill" data-key="backfill"><span class="tgl-s"></span><span id="backfill-lbl">включено</span></label>
-        <p class="hint">Сервер в фоне считает прошлые даты: по каждой рабочей дате с позициями (отчёт дня, а без него — последний предыдущий отчёт книги) — расчёт на окончательном закрытии этой даты. Из них — история риска, MV, PnL с начала месяца и года. Сначала один раз читает старые отчёты из папок (старше окна выше), потом считает даты от самой ранней, в конце каждого цикла и не дольше заданного времени, так что текущий день не ждёт. Уже посчитанные даты с теми же входными данными не пересчитываются. Ход — в разделе «История прогонов» ниже; то же сразу целиком: <span class="mono">desk.bat backfill</span>.</p></div>
-      <label for="backfill_from">История прогонов с даты</label>
-      <div><input class="inp mono" id="backfill_from" data-key="backfill_from" type="date" style="width:170px" placeholder="2026-01-05">
-        <p class="hint">Пусто — 05.01.2026, первое окончательное закрытие на маркет-дата сервере.</p></div>
-      <label for="backfill_budget_s">История прогонов: секунд за цикл</label>
-      <div><input class="inp mono num" id="backfill_budget_s" data-key="backfill_budget_s" inputmode="numeric" placeholder="600">
-        <p class="hint">Пусто — 600. Одна дата всегда досчитывается до конца, даже если время вышло.</p></div>
-    </div>
-  </section>
-
-  <!-- 6. Где лежат данные -->
-  <section class="pnl" aria-labelledby="h-where">
-    <div class="ph"><h2 id="h-where">Где лежат данные</h2><span class="muted">только чтение · действующие значения</span></div>
-    <div class="pb"><table class="t"><tbody id="eff"></tbody></table></div>
-  </section>
-
-  <!-- 7. Обновление программы (self-contained: its style and script are here; data: /api/v1/update) -->
-  <section class="pnl" id="up" aria-labelledby="h-up">
-    <style>
-      #up .up-steps{list-style:none;margin:0;padding:0;display:flex;gap:6px 18px;flex-wrap:wrap}
-      #up .up-steps li{display:inline-flex;align-items:center;gap:6px;color:var(--fg-3)}
-      #up .up-steps li::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--line-2)}
-      #up .up-steps li.on{color:var(--fg)} #up .up-steps li.on::before{background:var(--warn)}
-      #up .up-steps li.done{color:var(--good-tx)} #up .up-steps li.done::before{background:var(--good)}
-      #up .up-steps li.fail{color:var(--neg-tx)} #up .up-steps li.fail::before{background:var(--crit)}
-      #up .tag.new{border-color:var(--accent);color:var(--accent-ink)}
-      #up td.num{text-align:right;white-space:nowrap}
-      @media (max-width:700px){ #up .up-t thead{display:none} #up .up-t td{display:block;border:0;padding:2px 8px} #up .up-t tr{display:block;border-bottom:1px solid var(--line);padding-block:6px} #up td.num{text-align:left} }
-    </style>
-    <div class="ph"><h2 id="h-up">Обновление программы</h2><span class="muted">установлена <span class="mono" id="up-ver">…</span></span></div>
-    <div class="pb">
-      <div class="note warn" id="up-off" hidden></div>
-      <div class="form" style="margin-top:10px">
-        <label for="up-dir">Папка с обновлениями</label>
-        <div>
-          <div class="row">
-            <input class="inp mono" id="up-dir" placeholder="\\сервер\папка\DeskMonitor — пусто: только загрузка с компьютера" autocomplete="off">
-            <button class="ibtn" id="up-dir-save" type="button">Сохранить папку</button>
+    <!-- ========== Подключения ========== -->
+    <section class="sec" id="sec-hub" data-sec="hub">
+      <div class="sec-h"><div><h1>Подключения</h1><p>Маркет-дата сервер (хаб): откуда монитор берёт котировки, кривые и фиксинги.</p></div>
+        <div class="badges"><span class="badge st" id="token-st">токен …</span><span class="badge" id="hub-st" hidden></span></div></div>
+      <div class="card">
+        <div class="hd"><h2>Маркет-дата сервер</h2><span class="sp"></span><button class="ibtn" id="test-hub" type="button">Проверить связь</button></div>
+        <div class="bd form">
+          <label for="hub_url">Адрес сервера</label>
+          <div><input class="inp mono" id="hub_url" data-key="hub_url" placeholder="https://…" autocomplete="off">
+            <p class="hint">Только https:// (http — лишь для 127.0.0.1).</p></div>
+          <label for="token">Токен</label>
+          <div>
+            <div class="row">
+              <input class="inp mono" id="token" type="password" placeholder="вставьте токен сервера (право read)" autocomplete="new-password">
+              <button class="ibtn" id="token-save" type="button">Сохранить токен</button>
+              <button class="lnk" id="token-clear" type="button">удалить</button>
+            </div>
+            <p class="hint">Хранится отдельно, в файле <span class="mono" id="token-file">hub_token</span>, и никогда не показывается. <span id="token-msg"></span></p>
           </div>
-          <p class="hint">Сюда кладутся архивы DeskMonitor-….zip (полные) или DeskMonitor-patch-….zip (заплатки). Настройки и данные при обновлении не меняются. <span id="up-dir-msg"></span></p>
+          <label></label>
+          <div class="res" id="hub-res" hidden></div>
         </div>
       </div>
-      <table class="t up-t" style="margin-top:10px">
-        <thead><tr><th>Архив</th><th>Версия</th><th>Тип</th><th class="num">Размер</th><th>Дата</th><th></th></tr></thead>
-        <tbody id="up-list"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
-      </table>
-      <div class="row" style="margin-top:8px">
-        <input type="file" id="up-file" accept=".zip,application/zip" hidden>
-        <button class="ibtn" id="up-upload" type="button">Загрузить zip с компьютера</button>
-        <button class="lnk" id="up-refresh" type="button">обновить список</button>
-        <span id="up-upmsg"></span>
+      <div class="card">
+        <div class="hd"><h2>Прокси и сертификаты</h2><span class="mut3">нужны, только если хаб доступен через корпоративный прокси</span></div>
+        <div class="bd form">
+          <label for="https_proxy">Прокси</label>
+          <div><input class="inp mono" id="https_proxy" data-key="https_proxy" placeholder="http://proxy:3128 — пусто: без прокси или из системы" autocomplete="off"></div>
+          <label for="hub_transport">Способ подключения</label>
+          <div><select class="inp" id="hub_transport" data-key="hub_transport" style="max-width:240px">
+              <option value="auto">Авто</option><option value="python">Python</option><option value="curl">curl Windows</option>
+            </select>
+            <details class="more"><summary>Что выбрать</summary><p>Если прокси пускает по учётке Windows, логин и пароль не нужны: «curl Windows» входит текущим пользователем. «Авто» сам переходит на curl, если прокси требует вход.</p></details></div>
+          <label for="proxy_user">Логин прокси</label>
+          <div><input class="inp mono" id="proxy_user" data-key="proxy_user" placeholder="пусто — вход по учётке Windows (curl Windows)" autocomplete="off"></div>
+          <label for="proxy-pw">Пароль прокси</label>
+          <div>
+            <div class="row">
+              <input class="inp mono" id="proxy-pw" type="password" placeholder="пароль прокси" autocomplete="new-password">
+              <button class="ibtn" id="proxy-pw-save" type="button">Сохранить пароль</button>
+              <button class="lnk" id="proxy-pw-clear" type="button">удалить</button>
+            </div>
+            <p class="hint">Хранится отдельно, в файле <span class="mono">proxy_password</span>. <span id="proxy-pw-st"></span> <span id="proxy-pw-msg"></span></p>
+          </div>
+          <label for="no_proxy">Без прокси для</label>
+          <div><input class="inp mono" id="no_proxy" data-key="no_proxy" placeholder="localhost,127.0.0.1 — только вместе с прокси выше" autocomplete="off"></div>
+          <label for="hub_ca_bundle">Сертификат CA (PEM)</label>
+          <div><input class="inp mono" id="hub_ca_bundle" data-key="hub_ca_bundle" placeholder="пусто — системное хранилище сертификатов" autocomplete="off">
+            <p class="hint">Только если прокси подменяет сертификаты, а система их не знает.</p></div>
+        </div>
       </div>
-      <div class="res" id="up-progress" hidden>
-        <ol class="up-steps" id="up-steps"><li>проверка</li><li>подготовка</li><li>перезапуск</li><li>готово</li></ol>
-        <div id="up-pmsg" style="margin-top:6px"></div>
-      </div>
-      <div class="res" id="up-last" hidden></div>
-    </div>
-  </section>
+    </section>
 
-  <!-- 8. Диагностика (R13; self-contained: its style and script are here; data: /api/v1/diagnostics) -->
-  <section class="pnl" id="dg" aria-labelledby="h-dg">
-    <style>
-      #dg pre{margin:10px 0 0;max-height:440px;overflow:auto;background:var(--panel-2);border:1px solid var(--line-2);border-radius:2px;padding:8px 10px;font-family:var(--font-mono);font-size:11.5px;line-height:1.4;white-space:pre;tab-size:2}
-    </style>
-    <div class="ph"><h2 id="h-dg">Диагностика</h2><span class="muted" id="dg-size"></span></div>
-    <div class="pb">
-      <div class="note">Без позиций, книг, ISIN и сумм — можно передать агенту. Файл описывает работу программы: версию, настройки (без путей и паролей), шаги автообновления, срезы рынка и наличие кривых, счётчики отчётов и прогонов, ошибки журналов по видам.</div>
-      <div class="row" style="margin-top:10px">
-        <button class="btn" id="dg-run" type="button">Собрать диагностику</button>
-        <button class="ibtn" id="dg-save" type="button" disabled>Скачать</button>
-        <button class="ibtn" id="dg-copy" type="button" disabled>Скопировать</button>
-        <label class="chk"><input type="checkbox" id="dg-hub" checked> проверить маркет-дата сервер</label>
-        <span id="dg-msg" class="muted"></span>
+    <!-- ========== Адаптер и источники ========== -->
+    <section class="sec" id="sec-adapter" data-sec="adapter">
+      <div class="sec-h"><div><h1>Адаптер и источники</h1><p>Приватный адаптер читает отчёты банка из папок; здесь — где он и какие отчёты читать.</p></div>
+        <div class="badges"><span class="badge st" id="ad-st">проверка…</span><button class="ibtn" id="ad-refresh" type="button">Обновить статус</button></div></div>
+      <div class="card">
+        <div class="hd"><h2>Адаптер</h2></div>
+        <div class="bd">
+          <div id="ad-res"></div>
+          <div class="form" style="margin-top:14px">
+            <label for="private_adapter">Папка адаптера</label>
+            <div><input class="inp mono" id="private_adapter" data-key="private_adapter" placeholder="пусто — эталонный адаптер (CSV)" autocomplete="off">
+              <p class="hint">Папка пакета приватного адаптера (с файлом __init__.py).</p>
+              <p class="hint" id="ad-default" hidden></p></div>
+            <label for="private_adapter_config">Папка настроек адаптера</label>
+            <div><input class="inp mono" id="private_adapter_config" data-key="private_adapter_config" autocomplete="off">
+              <p class="hint">Пусто — <span class="mono" id="cfg-default"></span> (создаётся сама). Здесь лежат файлы юрлиц, книг и фондирования.</p></div>
+          </div>
+        </div>
       </div>
-      <pre id="dg-out" hidden></pre>
-    </div>
-  </section>
-
-  <!-- 9. Загрузка позиций (R22; self-contained: its style and script are here; data: /api/v1/inbox/reconcile) -->
-  <section class="pnl" id="rc" aria-labelledby="h-rc">
-    <style>
-      #rc .rc-sum{display:flex;gap:6px 14px;flex-wrap:wrap;align-items:baseline;margin-top:8px}
-      #rc .rc-sum b{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
-      #rc .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
-      #rc .chip{border:1px solid var(--line-2);border-radius:2px;padding:1px 7px;font-size:12px;background:var(--panel-2)}
-      #rc .chip.bad{border-color:var(--bad, #d9534f);color:var(--bad, #d9534f)}
-      #rc .tw{overflow-x:auto;margin-top:10px;border:1px solid var(--line-2);border-radius:2px;max-height:420px}
-      #rc table{border-collapse:collapse;width:100%;font-size:12px}
-      #rc th,#rc td{padding:3px 8px;border-bottom:1px solid var(--line);white-space:nowrap;text-align:left}
-      #rc th{position:sticky;top:0;background:var(--panel-2);color:var(--fg-2);font-weight:500}
-      #rc td.n,#rc th.n{text-align:right;font-family:var(--font-mono);font-variant-numeric:tabular-nums}
-      #rc tr.flag td{background:color-mix(in srgb, var(--warn, #c9a227) 10%, transparent)}
-      #rc ul.loss{margin:8px 0 0;padding-left:18px}
-      #rc ul.loss li{margin:2px 0}
-    </style>
-    <div class="ph"><h2 id="h-rc">Загрузка позиций</h2><span class="muted" id="rc-when"></span></div>
-    <div class="pb">
-      <div class="note">По каждой книге: сколько строк было в отчёте, сколько загружено и сколько попало в расчёт дня; что отклонено и почему. То же в командной строке: <span class="mono">desk inbox reconcile</span>.</div>
-      <div class="row" style="margin-top:10px">
-        <label for="rc-date" class="muted">Дата позиций</label>
-        <input class="inp mono" id="rc-date" type="date" style="width:150px">
-        <button class="ibtn" id="rc-run" type="button">Обновить</button>
-        <span id="rc-msg" class="muted"></span>
+      <div class="card">
+        <div class="hd"><h2>Папки с отчётами</h2><span class="tag env" id="dirs-env" hidden>задано переменной окружения</span><span class="sp"></span><button class="ibtn" id="dir-add" type="button">+ Добавить папку</button></div>
+        <div class="bd flush">
+          <table class="t dirs-t">
+            <thead><tr><th>Папка</th><th>Подпись</th><th>Подпапки</th><th></th></tr></thead>
+            <tbody id="dirs"></tbody>
+          </table>
+        </div>
+        <div class="bd" style="padding-top:8px"><p class="hint" style="margin:0">Сервер просматривает эти папки и передаёт новые файлы адаптеру. Подпись — заметка для вас («Позиции», «PnL»).</p></div>
       </div>
-      <div class="rc-sum" id="rc-sum"></div>
-      <div class="chips" id="rc-files"></div>
-      <ul class="loss" id="rc-loss"></ul>
-      <div class="tw" id="rc-tw" hidden>
-        <table>
-          <thead><tr><th>Книга</th><th>Название</th><th>Позиции на</th><th class="n">дн.</th><th class="n">В отчёте</th><th class="n">Загружено</th><th class="n">В расчёте</th><th class="n">Оценено</th><th class="n">Отклонено</th><th>Отчёт</th><th>Замечания</th></tr></thead>
-          <tbody id="rc-books"></tbody>
-        </table>
+      <div id="tabs-adapter"></div>
+      <div class="card" id="cf-card">
+        <div class="hd"><h2>Другие файлы настроек</h2><span class="mut3">без формы — правятся как JSON</span></div>
+        <div class="bd" id="cf-list"><p class="mut">Загрузка…</p></div>
       </div>
-      <div class="muted" id="rc-scan" style="margin-top:8px"></div>
-    </div>
-  </section>
+    </section>
 
-  <!-- 10. История прогонов (R23; self-contained: its script is here; data: /api/v1/backfill/status) -->
-  <section class="pnl" id="bf" aria-labelledby="h-bf">
-    <div class="ph"><h2 id="h-bf">История прогонов</h2><span class="muted" id="bf-when"></span></div>
-    <div class="pb">
-      <div class="note">Расчёты прошлых дат для истории риска и PnL с начала месяца и года. Считает сервер в фоне (настройка «История прогонов» выше) или команда <span class="mono">desk.bat backfill</span>.</div>
-      <div class="row" style="margin-top:10px"><button class="ibtn" id="bf-run" type="button">Обновить</button><span id="bf-msg" class="muted"></span></div>
-      <table class="t" style="margin-top:8px"><tbody id="bf-rows"></tbody></table>
-    </div>
-  </section>
-</main>
+    <!-- ========== Юрлица / Книги / Фондирование: формы адаптера ========== -->
+    <section class="sec" id="sec-entities" data-sec="entities">
+      <div class="sec-h"><div><h1>Юрлица</h1><p>Юрлица деска: схема фондирования и списание PnL. Код юрлица — точно как в отчётах и в книгах.</p></div></div>
+      <div data-tab-slot="entities"></div>
+    </section>
+    <section class="sec" id="sec-books" data-sec="books">
+      <div class="sec-h"><div><h1>Книги</h1><p>Тип книги, юрлицо, куда переносится ОВП и коды книги в отчётах. Книги из позиций, которых здесь нет, помечены «не настроено».</p></div></div>
+      <div data-tab-slot="books"></div>
+    </section>
+    <section class="sec" id="sec-funding" data-sec="funding">
+      <div class="sec-h"><div><h1>Фондирование</h1><p>Ставки фондирования по типу книги и валюте: индекс + спред или фикс, база дней. Смена ставки — новая строка с датой «действует с», прежняя остаётся в истории.</p></div></div>
+      <div data-tab-slot="funding"></div>
+    </section>
 
-<div class="savebar">
-  <div class="wrap">
-    <span id="save-msg" class="muted">Изменения сохраняются в settings.json.</span>
-    <button class="btn" id="save" type="button">Сохранить настройки</button>
-  </div>
+    <!-- ========== Автообновление ========== -->
+    <section class="sec" id="sec-auto" data-sec="auto">
+      <div class="sec-h"><div><h1>Автообновление</h1><p>Что сервер делает сам: загрузка срезов, отчётов и пересчёт; история котировок и прошлых дат.</p></div></div>
+      <div class="card">
+        <div class="hd"><h2>Цикл</h2></div>
+        <div class="bd form">
+          <label for="autopilot">Автообновление</label>
+          <div><label class="tgl"><input type="checkbox" id="autopilot" data-key="autopilot"><span class="tgl-s"></span><span id="ap-lbl">включено</span></label>
+            <p class="hint">Срезы с маркет-дата сервера, новые отчёты из папок, пересчёт рисков.</p></div>
+          <label for="intraday">Расчёт внутри дня</label>
+          <div><label class="tgl"><input type="checkbox" id="intraday" data-key="intraday"><span class="tgl-s"></span><span id="intraday-lbl">включено</span></label>
+            <details class="more"><summary>Как это работает</summary><p>В рабочие дни с 10:00 МСК портфель дня пересчитывается на свежем внутридневном срезе (не чаще раза в 30 минут), после 19:45 — на предварительном закрытии; PnL — к закрытию предыдущего рабочего дня. Утром его заменяет расчёт на окончательном закрытии. Хранится только последний внутридневной расчёт дня.</p></details></div>
+          <label for="inbox_poll_seconds">Период опроса, сек</label>
+          <div><input class="inp mono num" id="inbox_poll_seconds" data-key="inbox_poll_seconds" inputmode="decimal" placeholder="60"></div>
+          <label for="autopilot_sync_last">Загружать последних дат</label>
+          <div><input class="inp mono num" id="autopilot_sync_last" data-key="autopilot_sync_last" inputmode="numeric" placeholder="5"></div>
+          <label for="inbox_lookback_days">Отчёты не старше, дней</label>
+          <div><input class="inp mono num" id="inbox_lookback_days" data-key="inbox_lookback_days" inputmode="numeric" placeholder="35">
+            <p class="hint">Пусто — 35, 0 — без ограничения. Применяется со следующего цикла.</p>
+            <details class="more"><summary>Подробнее</summary><p>Возраст считается по дате отчёта (из имени или содержимого файла), а не по дате изменения файла: книга, по которой отчёт приходит раз в несколько недель, тоже загрузится. Более старые отчёты не читаются (папку с архивом за годы можно оставить, она просматривается один раз), снимки с маркет-дата сервера за более ранние даты не загружаются. Без ограничения — медленно на больших папках. Перезапуск сервера не нужен.</p></details></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="hd"><h2>История котировок</h2><span class="mut3" id="hist-st"></span></div>
+        <div class="bd form">
+          <label for="history_days">Рабочих дней</label>
+          <div><input class="inp mono num" id="history_days" data-key="history_days" inputmode="numeric" placeholder="260">
+            <p class="hint">Пусто — 260 (около года), 0 — не догружать.</p>
+            <details class="more"><summary>Подробнее</summary><p>Для графиков цен и доходностей сервер понемногу, по нескольку дат за цикл, догружает котировки за прошлые дни. Если сервер отдаёт API истории (версия 0.2.0 и токен с правом read), история берётся оттуда — на годы назад, вместе с КБД, кривыми, фиксингами и курсами, и это число не действует (кроме 0 — выключено).</p></details></div>
+          <label for="history_bonds_from">Облигации с</label>
+          <div><input class="inp mono" id="history_bonds_from" data-key="history_bonds_from" placeholder="2024-01-03" autocomplete="off" style="max-width:170px">
+            <p class="hint">Пусто — 2024-01-03. Только для API истории.</p></div>
+          <label for="history_rates_from">Ставки и курсы с</label>
+          <div><input class="inp mono" id="history_rates_from" data-key="history_rates_from" placeholder="2010-01-01" autocomplete="off" style="max-width:170px">
+            <p class="hint">КБД, кривые RUONIA OIS и КС-свопов, фиксинги, курсы ЦБ и MOEX. Пусто — 2010-01-01.</p></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="hd"><h2>История прогонов</h2><a class="lnk" href="#bf">ход расчёта →</a></div>
+        <div class="bd form">
+          <label for="backfill">Считать прошлые даты</label>
+          <div><label class="tgl"><input type="checkbox" id="backfill" data-key="backfill"><span class="tgl-s"></span><span id="backfill-lbl">включено</span></label>
+            <p class="hint">История риска, MV и PnL с начала месяца и года.</p>
+            <details class="more"><summary>Как это работает</summary><p>Сервер в фоне считает прошлые даты: по каждой рабочей дате с позициями (отчёт дня, а без него — последний предыдущий отчёт книги) — расчёт на окончательном закрытии. Сначала один раз читает старые отчёты из папок, потом считает даты от самой ранней, в конце каждого цикла и не дольше заданного времени. Уже посчитанные даты с теми же входными данными не пересчитываются. То же сразу целиком: <span class="mono">desk.bat backfill</span>.</p></details></div>
+          <label for="backfill_from">С даты</label>
+          <div><input class="inp mono" id="backfill_from" data-key="backfill_from" type="date" style="width:170px" placeholder="2026-01-05">
+            <p class="hint">Пусто — 05.01.2026, первое окончательное закрытие на сервере.</p></div>
+          <label for="backfill_budget_s">Секунд за цикл</label>
+          <div><input class="inp mono num" id="backfill_budget_s" data-key="backfill_budget_s" inputmode="numeric" placeholder="600">
+            <p class="hint">Пусто — 600. Начатая дата всегда досчитывается.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== Обновление программы (свои стиль и скрипт; данные: /api/v1/update; GitHub — desk-updater.js) ========== -->
+    <section class="sec" id="up" data-sec="up" aria-labelledby="h-up">
+      <style>
+        #up .up-steps{list-style:none;margin:0;padding:0;display:flex;gap:6px 18px;flex-wrap:wrap}
+        #up .up-steps li{display:inline-flex;align-items:center;gap:6px;color:var(--fg-3)}
+        #up .up-steps li::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--line-2)}
+        #up .up-steps li.on{color:var(--fg)} #up .up-steps li.on::before{background:var(--warn)}
+        #up .up-steps li.done{color:var(--pos)} #up .up-steps li.done::before{background:var(--pos)}
+        #up .up-steps li.fail{color:var(--neg)} #up .up-steps li.fail::before{background:var(--neg)}
+        #up td.num{text-align:right;white-space:nowrap}
+        #up #up-gh .row{margin-top:4px}
+        @media (max-width:700px){ #up .up-t thead{display:none} #up .up-t td{display:block;border:0;padding:2px 8px} #up .up-t tr{display:block;border-bottom:1px solid var(--line);padding-block:6px} #up td.num{text-align:left} }
+      </style>
+      <div class="sec-h"><div><h1 id="h-up">Обновление программы</h1><p>Новая версия — с GitHub или из папки с архивами. Настройки и данные при обновлении не меняются.</p></div>
+        <div class="badges"><span class="badge">установлена <span class="mono" id="up-ver">…</span></span></div></div>
+      <div class="note warn" id="up-off" hidden></div>
+      <div class="card"><div class="hd"><h2>С GitHub</h2></div><div class="bd" id="up-gh"></div></div><!-- desk-updater.js -->
+      <div class="card">
+        <div class="hd"><h2>Из папки или файла</h2><span class="sp"></span><button class="lnk" id="up-refresh" type="button">обновить список</button></div>
+        <div class="bd">
+          <div class="form">
+            <label for="up-dir">Папка с обновлениями</label>
+            <div>
+              <div class="row">
+                <input class="inp mono" id="up-dir" placeholder="\\сервер\папка\DeskMonitor — пусто: только загрузка с компьютера" autocomplete="off">
+                <button class="ibtn" id="up-dir-save" type="button">Сохранить папку</button>
+              </div>
+              <p class="hint">Архивы DeskMonitor-….zip (полные) или DeskMonitor-patch-….zip (заплатки). <span id="up-dir-msg"></span></p>
+            </div>
+          </div>
+        </div>
+        <div class="bd flush">
+          <table class="t up-t">
+            <thead><tr><th>Архив</th><th>Версия</th><th>Тип</th><th class="num">Размер</th><th>Дата</th><th></th></tr></thead>
+            <tbody id="up-list"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="bd">
+          <div class="row">
+            <input type="file" id="up-file" accept=".zip,application/zip" hidden>
+            <button class="ibtn" id="up-upload" type="button">Загрузить zip с компьютера</button>
+            <span class="mut3">или перетащите архив на страницу</span>
+            <span id="up-upmsg"></span>
+          </div>
+          <div class="res" id="up-progress" hidden>
+            <ol class="up-steps" id="up-steps"><li>проверка</li><li>подготовка</li><li>перезапуск</li><li>готово</li></ol>
+            <div id="up-pmsg" style="margin-top:6px"></div>
+          </div>
+          <div class="res" id="up-last" hidden></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== Пользователи (вход и доступ по сети, пакет 1 п. 9; раздел — desk-users.js) ========== -->
+    <section class="sec" id="sec-users" data-sec="users">
+      <div class="sec-h"><div><h1>Пользователи</h1><p>Кто входит в Desk Monitor и с какой ролью: просмотр, трейдер, администратор. Журнал действий — внизу.</p></div>
+        <div class="badges"><span class="badge st" id="auth-st">вход …</span></div></div>
+      <div class="note" id="users-off" hidden>
+        <b>Вход по паролю выключен</b> — Desk Monitor открыт только на этом компьютере, пользователи не нужны.
+        Чтобы пустить коллег по сети: заведите здесь себя администратором и коллег (или <span class="mono">desk.bat user add ИМЯ --role admin</span>),
+        затем включите вход и доступ из сети: <span class="mono">desk.bat lan enable --self-signed</span>, брандмауэр
+        (<span class="mono">desk.bat firewall add</span>) и перезапуск — по шагам в START_HERE.txt, раздел 9 «Доступ коллегам по сети».
+      </div>
+      <div class="note warn" id="users-denied" hidden>Пользователями управляет администратор.</div>
+      <div class="card" id="users-card"><section class="bd" data-desk-users></section></div>
+    </section>
+
+    <!-- ========== Диагностика ========== -->
+    <section class="sec" id="sec-diag" data-sec="diag">
+      <div class="sec-h"><div><h1>Диагностика</h1><p>Файл для агента, доступ из сети, загрузка позиций по книгам, ход истории прогонов и где что лежит.</p></div></div>
+
+      <!-- Диагностика (R13; свои стиль и скрипт; данные: /api/v1/diagnostics) -->
+      <div class="card" id="dg">
+        <style>
+          #dg pre{margin:10px 0 0;max-height:440px;overflow:auto;background:var(--bg);border:1px solid var(--line-2);border-radius:6px;padding:8px 10px;font-family:var(--mono);font-size:11.5px;line-height:1.4;white-space:pre;tab-size:2}
+        </style>
+        <div class="hd"><h2>Файл диагностики</h2><span class="mut3" id="dg-size"></span></div>
+        <div class="bd">
+          <p class="hint" style="margin:0 0 10px">Без позиций, книг, ISIN и сумм — можно передать агенту: версия, настройки без путей и паролей, шаги автообновления, срезы, счётчики отчётов и прогонов, ошибки журналов.</p>
+          <div class="row">
+            <button class="btn" id="dg-run" type="button">Собрать диагностику</button>
+            <button class="ibtn" id="dg-save" type="button" disabled>Скачать</button>
+            <button class="ibtn" id="dg-copy" type="button" disabled>Скопировать</button>
+            <label class="chk"><input type="checkbox" id="dg-hub" checked> проверить маркет-дата сервер</label>
+            <span id="dg-msg" class="muted"></span>
+          </div>
+          <pre id="dg-out" hidden></pre>
+        </div>
+      </div>
+
+      <!-- Доступ из сети (desk lan status; данные: /api/v1/lan/status) -->
+      <div class="card" id="lan">
+        <style>
+          #lan .pr{margin:2px 0}
+          #lan .pr b{font-weight:500}
+          #lan .pr.bad b{color:var(--neg)} #lan .pr.ok b{color:var(--pos)}
+          #lan .pr .hint{margin:2px 0 6px 0}
+        </style>
+        <div class="hd"><h2>Доступ из сети</h2><span class="mut3" id="lan-when"></span><span class="sp"></span><button class="ibtn" id="lan-run" type="button">Проверить сейчас</button></div>
+        <div class="bd">
+          <p class="hint" style="margin:0 0 8px">Адрес, HTTPS и сертификат, правило брандмауэра, адреса для коллег и проверка этого сервера с этого же компьютера (без прокси) — то же, что <span class="mono">desk.bat lan status</span>. Как включить доступ: START_HERE.txt, раздел 9. <span id="lan-msg" class="muted"></span></p>
+          <table class="t"><tbody id="lan-rows"></tbody></table>
+          <div id="lan-probe" style="margin-top:8px"></div>
+        </div>
+      </div>
+
+      <!-- Загрузка позиций (R22; данные: /api/v1/inbox/reconcile) -->
+      <div class="card" id="rc">
+        <style>
+          #rc .rc-sum{display:flex;gap:6px 14px;flex-wrap:wrap;align-items:baseline;margin-top:8px}
+          #rc .rc-sum b{font-family:var(--mono);font-variant-numeric:tabular-nums}
+          #rc .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+          #rc .chip{border:1px solid var(--line-2);border-radius:999px;padding:0 8px;font-size:12px;background:var(--panel-2)}
+          #rc .chip.bad{border-color:var(--neg);color:var(--neg)}
+          #rc .tw{overflow-x:auto;margin-top:10px;border:1px solid var(--line-2);border-radius:6px;max-height:420px}
+          #rc table{border-collapse:collapse;width:100%;font-size:12px}
+          #rc th,#rc td{padding:3px 8px;border-bottom:1px solid var(--line);white-space:nowrap;text-align:left}
+          #rc th{position:sticky;top:0;background:var(--panel-2);color:var(--fg-2);font-weight:500}
+          #rc td.n,#rc th.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+          #rc tr.flag td{background:var(--warn-bg)}
+          #rc ul.loss{margin:8px 0 0;padding-left:18px}
+          #rc ul.loss li{margin:2px 0}
+        </style>
+        <div class="hd"><h2>Загрузка позиций</h2><span class="mut3" id="rc-when"></span></div>
+        <div class="bd">
+          <p class="hint" style="margin:0 0 10px">По каждой книге: строк в отчёте, загружено, в расчёте дня; что отклонено и почему (<span class="mono">desk inbox reconcile</span>).</p>
+          <div class="row">
+            <label for="rc-date" class="muted">Дата позиций</label>
+            <input class="inp mono" id="rc-date" type="date" style="width:150px">
+            <button class="ibtn" id="rc-run" type="button">Обновить</button>
+            <span id="rc-msg" class="muted"></span>
+          </div>
+          <div class="rc-sum" id="rc-sum"></div>
+          <div class="chips" id="rc-files"></div>
+          <ul class="loss" id="rc-loss"></ul>
+          <div class="tw" id="rc-tw" hidden>
+            <table>
+              <thead><tr><th>Книга</th><th>Название</th><th>Позиции на</th><th class="n">дн.</th><th class="n">В отчёте</th><th class="n">Загружено</th><th class="n">В расчёте</th><th class="n">Оценено</th><th class="n">Отклонено</th><th>Отчёт</th><th>Замечания</th></tr></thead>
+              <tbody id="rc-books"></tbody>
+            </table>
+          </div>
+          <div class="muted" id="rc-scan" style="margin-top:8px"></div>
+        </div>
+      </div>
+
+      <!-- История прогонов (R23; данные: /api/v1/backfill/status) -->
+      <div class="card" id="bf">
+        <div class="hd"><h2>История прогонов</h2><span class="mut3" id="bf-when"></span><span class="sp"></span><button class="ibtn" id="bf-run" type="button">Обновить</button></div>
+        <div class="bd">
+          <p class="hint" style="margin:0 0 8px">Расчёты прошлых дат для истории риска и PnL. Включается в «Автообновление» или командой <span class="mono">desk.bat backfill</span>. <span id="bf-msg" class="muted"></span></p>
+          <table class="t"><tbody id="bf-rows"></tbody></table>
+        </div>
+      </div>
+
+      <!-- Где лежат данные -->
+      <div class="card" id="eff-card">
+        <div class="hd"><h2>Где лежат данные</h2><span class="mut3">только чтение · действующие значения</span></div>
+        <div class="bd"><div class="kv" id="eff"></div></div>
+      </div>
+    </section>
+  </main>
 </div>
 
+<div class="savebar" id="savebar" hidden>
+  <span id="save-msg" class="dirty">Есть несохранённые изменения настроек</span>
+  <button class="ibtn" id="save-undo" type="button">Отменить</button>
+  <button class="btn" id="save" type="button">Сохранить настройки</button>
+</div>
+<div class="toast" id="toast" hidden role="status"></div>
+
 <script src="desk-nav.js"></script>
+<script src="settings-forms.js"></script>
 <script>
 'use strict';
 const $ = id => document.getElementById(id);
+const SF = window.SETTINGS_FORMS, h = SF.h;
 const store = { get(k){ try { return localStorage.getItem(k); } catch(e){ return null; } },
                 set(k, v){ try { localStorage.setItem(k, v); } catch(e){} } };
+
+/* ---------- тема: та же, что у мониторов (concepts-theme; по умолчанию тёмная) ---------- */
 (function theme(){
-  const th = store.get('fidm.theme'); if (th === 'light' || th === 'dark') document.documentElement.setAttribute('data-theme', th);
+  const t = store.get('concepts-theme') || store.get('fidm.theme');
+  if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
   $('theme-btn').addEventListener('click', () => {
-    const root = document.documentElement, cur = root.getAttribute('data-theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
-    const nx = cur === 'dark' ? 'light' : 'dark'; root.setAttribute('data-theme', nx); store.set('fidm.theme', nx);
+    const light = document.documentElement.getAttribute('data-theme') !== 'light';
+    if (light) document.documentElement.setAttribute('data-theme', 'light'); else document.documentElement.removeAttribute('data-theme');
+    store.set('concepts-theme', light ? 'light' : 'dark');
   });
 })();
 
-function h(tag, attrs, ...kids){
-  const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs || {})) {
-    if (v == null || v === false) continue;
-    if (k === 'class') el.className = v; else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
-    else if (k === 'value') el.value = v; else if (k === 'checked') el.checked = !!v; else el.setAttribute(k, v === true ? '' : v);
-  }
-  for (const c of kids.flat()) if (c != null && c !== false) el.append(c.nodeType ? c : String(c));
-  return el;
+let toastTimer = null;
+function toast(text, cls){
+  const t = $('toast'); t.hidden = false; t.className = 'toast ' + (cls || ''); t.textContent = text;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, cls === 'err' ? 9000 : 5000);
 }
 
 async function api(method, url, body){
-  const opt = {method, headers:{'Accept':'application/json'}};
+  const opt = {method, headers:{'Accept':'application/json'}, cache:'no-store'};
   if (body !== undefined) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
   let r;
   try { r = await fetch(url, opt); } catch(e) { throw new Error('сервер недоступен: ' + e.message); }
@@ -440,29 +596,90 @@ async function api(method, url, body){
   return j;
 }
 
+/* ---------- разделы: #hub, #adapter, #entities, #books, #funding, #auto, #up, #diag (и #dg, #lan, #rc, #bf, #eff внутри), #users ---------- */
+const SECTIONS = ['hub', 'adapter', 'entities', 'books', 'funding', 'auto', 'up', 'diag', 'users'];
+const INNER = {dg:'diag', lan:'diag', rc:'diag', bf:'diag', eff:'diag', 'eff-card':'diag'};
+function show(hash){
+  let id = (hash || '').replace(/^#/, ''), inner = null;
+  if (INNER[id]) { inner = id; id = INNER[id]; }
+  if (!SECTIONS.includes(id)) { const tab = id.startsWith('tab-') ? id : null; id = tab ? 'adapter' : (store.get('settings.sec') || 'hub'); if (tab) inner = tab; }
+  document.querySelectorAll('section.sec').forEach(s => s.classList.toggle('on', s.dataset.sec === id));
+  document.querySelectorAll('.st-nav a[data-sec]').forEach(a => { a.classList.toggle('on', a.dataset.sec === id); if (a.dataset.sec === id) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+  store.set('settings.sec', id);
+  if (id === 'users') usersSection();
+  const cur = document.querySelector('.st-nav a.on');  // на телефоне разделы — полосой: выбранный виден
+  if (cur && matchMedia('(max-width:860px)').matches) cur.parentNode.scrollLeft = cur.offsetLeft - 16;
+  if (inner && $(inner)) setTimeout(() => $(inner).scrollIntoView({block:'start', behavior:'smooth'}), 30);
+  else window.scrollTo(0, 0);
+}
+/* ---------- Пользователи: раздел desk-users.js (только администратор; вход выключен — объяснение, как включить) ---------- */
+let usersMounted = false;
+function authState(){  // desk-auth.js (подключает desk-nav.js): GET /api/v1/auth/state
+  const A = window.DESK_AUTH;
+  if (A && A.ready) return A.ready;
+  return fetch('/api/v1/auth/state', {headers:{'Accept':'application/json'}, cache:'no-store'}).then(r => r.ok ? r.json() : null, () => null);
+}
+function usersSection(){
+  if (usersMounted) return;
+  usersMounted = true;
+  authState().then(st => {
+    const on = !!(st && st.enabled), admin = !on || !!(st.user && st.user.role === 'admin');
+    $('auth-st').textContent = on ? 'вход по паролю включён' : 'вход выключен';
+    $('auth-st').className = 'badge st ' + (on ? 'ok' : '');
+    $('users-off').hidden = on;
+    $('users-denied').hidden = admin;
+    $('users-card').hidden = !admin;
+    if (!admin) return;
+    const slot = document.querySelector('#users-card [data-desk-users]');
+    const go = () => window.DeskUsers.mount(slot);
+    if (window.DeskUsers) return go();
+    const sc = document.createElement('script'); sc.src = 'desk-users.js'; sc.onload = go; document.head.appendChild(sc);
+  });
+}
+authState().then(st => {  // ссылка в навигации: при включённом входе — только администратору
+  const on = !!(st && st.enabled), admin = !on || !!(st.user && st.user.role === 'admin');
+  document.querySelectorAll('[data-users-nav]').forEach(e => { e.hidden = !admin; });
+  $('nav-auth').textContent = on ? 'вход' : '';
+});
+window.addEventListener('hashchange', () => show(location.hash));
+show(location.hash);
+
+/* ---------- settings.json ---------- */
 const S = {data:null, dirs:[], dirty:false, adapter:null};
 const KEYS = ['hub_url','https_proxy','proxy_user','hub_transport','no_proxy','hub_ca_bundle','private_adapter','private_adapter_config','inbox_poll_seconds','autopilot_sync_last','inbox_lookback_days','history_days','history_bonds_from','history_rates_from','backfill_from','backfill_budget_s'];
 
 function setDirty(v){
   S.dirty = v;
-  $('save-msg').className = v ? 'dirty' : 'muted';
-  $('save-msg').textContent = v ? 'Есть несохранённые изменения' : 'Изменения сохраняются в settings.json.';
+  $('savebar').hidden = !v;
+  $('save-msg').className = 'dirty'; $('save-msg').textContent = 'Есть несохранённые изменения настроек';
+  for (const sec of ['hub', 'adapter', 'auto']) {  // точка «изменено» у раздела, где правили settings.json
+    const dot = document.querySelector('.dot[data-nav="' + sec + '"]');
+    if (dot) dot.className = 'dot ' + (v && S.dirtySecs && S.dirtySecs.has(sec) ? 'dirty' : (dot.dataset.base || ''));
+  }
 }
-document.addEventListener('input', e => { if (e.target.closest('[data-key], #dirs')) setDirty(true); });
-document.addEventListener('change', e => { if (e.target.closest('[data-key], #dirs')) setDirty(true); });
-window.addEventListener('beforeunload', e => { if (S.dirty) { e.preventDefault(); e.returnValue = ''; } });
+function markDirty(e){
+  const sec = e.target.closest('section.sec');
+  if (!e.target.closest('[data-key], #dirs')) return;
+  (S.dirtySecs = S.dirtySecs || new Set()).add(sec ? sec.dataset.sec : '');
+  setDirty(true);
+}
+document.addEventListener('input', markDirty);
+document.addEventListener('change', markDirty);
+window.addEventListener('beforeunload', e => { if (S.dirty || Object.values(FORMS).some(f => f.dirty())) { e.preventDefault(); e.returnValue = ''; } });
+function navDot(sec, cls, title){
+  const d = document.querySelector('.dot[data-nav="' + sec + '"]'); if (!d) return;
+  d.dataset.base = cls || ''; d.className = 'dot ' + (cls || ''); d.title = title || '';
+}
 
-/* ---------- render ---------- */
 function render(d){
   S.data = d;
   const eff = d.effective || {};
   $('home-note').textContent = '';
-  $('home-note').append('Настройки хранятся в папке ', h('b', {class:'mono'}, d.home),
-    ' и сохраняются при обновлении программы: новую версию можно распаковать в любую папку — настройки и данные останутся на месте.');
+  $('home-note').append('Настройки — в папке ', h('span', {class:'mono', style:'word-break:break-all'}, d.home), '; обновление программы их не трогает.');
   $('load-err').hidden = !d.error; $('load-err').textContent = d.error ? 'Ошибка в настройках: ' + d.error : '';
   const env = d.env_overrides || [];
   $('env-note').hidden = !env.length;
-  $('env-note').textContent = env.length ? 'Заданы переменными окружения и имеют приоритет над этой страницей: ' + env.join(', ') : '';
+  $('env-note').textContent = env.length ? 'Заданы переменными окружения и главнее этой страницы: ' + env.join(', ') : '';
   document.querySelectorAll('[data-key]').forEach(el => {
     const k = el.dataset.key, v = d[k];
     if (el.type === 'checkbox') el.checked = v == null ? true : !!v;
@@ -474,30 +691,32 @@ function render(d){
   $('ap-lbl').textContent = $('autopilot').checked ? 'включено' : 'выключено';
   $('intraday-lbl').textContent = $('intraday').checked ? 'включено' : 'выключено';
   $('backfill-lbl').textContent = $('backfill').checked ? 'включено' : 'выключено';
+  navDot('auto', $('autopilot').checked ? 'ok' : 'warn', $('autopilot').checked ? 'автообновление включено' : 'автообновление выключено');
   $('cfg-default').textContent = (d.home || '') + (d.home && d.home.includes('\\') ? '\\' : '/') + 'adapter-config';
   $('token-file').textContent = eff.token_file || 'hub_token';
   const byDefault = !!eff.private_adapter_default && !d.private_adapter && !env.includes('private_adapter');
   $('private_adapter').placeholder = byDefault ? 'пусто — адаптер из комплекта программы' : 'пусто — эталонный адаптер (CSV)';
   $('ad-default').hidden = !byDefault; $('ad-default').textContent = '';
-  if (byDefault) $('ad-default').append('Сейчас используется адаптер из комплекта программы: ', h('span', {class:'mono'}, eff.private_adapter),
-    '. Укажите другую папку, только если нужно его заменить.');
+  if (byDefault) $('ad-default').append('Сейчас — адаптер из комплекта программы: ', h('span', {class:'mono'}, eff.private_adapter),
+    '. Другую папку указывайте, только чтобы его заменить.');
   tokenState(d.hub_token_set, eff.hub_token_source);
   proxyPwState(d.proxy_password_set);
   S.dirs = (Array.isArray(d.inbox_dirs) ? d.inbox_dirs : []).map(x => ({path:x.path || '', label:x.label || '', recursive:!!x.recursive}));
   $('dirs-env').hidden = !env.includes('inbox_dirs');
   renderDirs();
   renderEffective(eff);
+  S.dirtySecs = new Set();
   setDirty(false);
 }
-$('autopilot').addEventListener('change', () => { $('ap-lbl').textContent = $('autopilot').checked ? 'включено' : 'выключено'; });
-$('intraday').addEventListener('change', () => { $('intraday-lbl').textContent = $('intraday').checked ? 'включено' : 'выключено'; });
-$('backfill').addEventListener('change', () => { $('backfill-lbl').textContent = $('backfill').checked ? 'включено' : 'выключено'; });
+for (const [id, lbl] of [['autopilot','ap-lbl'], ['intraday','intraday-lbl'], ['backfill','backfill-lbl']])
+  $(id).addEventListener('change', () => { $(lbl).textContent = $(id).checked ? 'включено' : 'выключено'; });
 
 function tokenState(set, source){
   const st = $('token-st');
-  st.className = 'st ' + (set ? 'ok' : 'bad');
+  st.className = 'badge st ' + (set ? 'ok' : 'bad');
   st.textContent = set ? 'токен задан' : 'токен не задан';
   st.title = source || '';
+  if (!S.hubTested) navDot('hub', set ? '' : 'bad', set ? '' : 'токен хаба не задан');
 }
 
 function renderDirs(){
@@ -508,10 +727,10 @@ function renderDirs(){
       oninput:e => { d.path = e.target.value; }})),
     h('td', {}, h('input', {class:'inp', value:d.label, placeholder:'Позиции', 'aria-label':'Подпись', oninput:e => { d.label = e.target.value; }})),
     h('td', {}, h('label', {class:'chk'}, h('input', {type:'checkbox', checked:d.recursive, onchange:e => { d.recursive = e.target.checked; }}), 'включая подпапки')),
-    h('td', {style:'width:1%'}, h('button', {class:'x', type:'button', title:'Убрать папку', 'aria-label':'Убрать папку',
-      onclick:() => { S.dirs.splice(i, 1); renderDirs(); setDirty(true); }}, '×')))));
+    h('td', {style:'width:1%'}, h('button', {class:'x del', type:'button', title:'Убрать папку', 'aria-label':'Убрать папку',
+      onclick:() => { S.dirs.splice(i, 1); renderDirs(); (S.dirtySecs = S.dirtySecs || new Set()).add('adapter'); setDirty(true); }}, '×')))));
 }
-$('dir-add').addEventListener('click', () => { S.dirs.push({path:'', label:'', recursive:false}); renderDirs(); setDirty(true);
+$('dir-add').addEventListener('click', () => { S.dirs.push({path:'', label:'', recursive:false}); renderDirs(); (S.dirtySecs = S.dirtySecs || new Set()).add('adapter'); setDirty(true);
   const ins = $('dirs').querySelectorAll('input.inp.mono'); if (ins.length) ins[ins.length - 1].focus(); });
 
 const EFF = [
@@ -527,7 +746,7 @@ const EFF = [
   ['backfill','История прогонов'], ['backfill_from','История прогонов с даты'], ['backfill_budget_s','История прогонов: секунд за цикл'], ['logs_dir','Журналы']];
 
 function renderEffective(eff){
-  const tb = $('eff'); tb.textContent = '';
+  const box = $('eff'); box.textContent = '';
   EFF.forEach(([k, label]) => {
     let v = eff[k];
     if (Array.isArray(v)) v = v.length ? v.join('\n') : '—';
@@ -535,11 +754,11 @@ function renderEffective(eff){
     else if (k === 'inbox_lookback_days' && v === 0) v = 'без ограничения';
     else if (k === 'history_days' && v === 0) v = 'не догружать';
     else if (v == null || v === '') v = '—';
-    tb.append(h('tr', {}, h('td', {class:'k'}, label), h('td', {class:'v', style:'white-space:pre-wrap'}, String(v))));
+    box.append(h('div', {}, h('div', {class:'l'}, label), h('div', {class:'v mono', style:'white-space:pre-wrap'}, String(v))));
   });
 }
 
-/* ---------- save ---------- */
+/* ---------- сохранение settings.json ---------- */
 function collect(){
   const body = {};
   for (const k of KEYS) {
@@ -552,7 +771,7 @@ function collect(){
     } else if (k === 'inbox_lookback_days') {
       if (!v) { body[k] = null; continue; }
       const n = Number(v);
-      if (!Number.isInteger(n) || n < 0) throw new Error('Брать отчёты не старше: нужно целое число дней (0 — без ограничения)');
+      if (!Number.isInteger(n) || n < 0) throw new Error('Отчёты не старше: нужно целое число дней (0 — без ограничения)');
       body[k] = n;
     } else if (k === 'backfill_budget_s') {
       if (!v) { body[k] = null; continue; }
@@ -586,9 +805,10 @@ async function save(){
   $('save').disabled = true;
   try {
     const d = await api('PUT', '/api/v1/settings', body);
+    const adapterChanged = S.data && (S.data.private_adapter !== d.private_adapter || S.data.private_adapter_config !== d.private_adapter_config);
     render(d);
-    $('save-msg').className = 'okmsg'; $('save-msg').textContent = 'Сохранено ' + new Date().toLocaleTimeString('ru-RU');
-    loadAdapter();
+    toast('Настройки сохранены ' + new Date().toLocaleTimeString('ru-RU'), 'ok');
+    loadAdapter(adapterChanged);
     return true;
   } catch(e) {
     $('save-msg').className = 'err'; $('save-msg').textContent = 'Не сохранено: ' + e.message;
@@ -596,8 +816,9 @@ async function save(){
   } finally { $('save').disabled = false; }
 }
 $('save').addEventListener('click', save);
+$('save-undo').addEventListener('click', () => { if (S.data) render(S.data); });
 
-/* ---------- token ---------- */
+/* ---------- токен ---------- */
 async function putToken(token){
   $('token-msg').className = ''; $('token-msg').textContent = '';
   try {
@@ -616,7 +837,7 @@ $('token-save').addEventListener('click', () => {
 $('token').addEventListener('keydown', e => { if (e.key === 'Enter') $('token-save').click(); });
 $('token-clear').addEventListener('click', () => { if (confirm('Удалить сохранённый токен?')) putToken(''); });
 
-/* ---------- proxy password ---------- */
+/* ---------- пароль прокси ---------- */
 function proxyPwState(set){ $('proxy-pw-st').textContent = set ? 'Пароль задан.' : 'Пароль не задан.'; }
 async function putProxyPw(password){
   $('proxy-pw-msg').className = ''; $('proxy-pw-msg').textContent = '';
@@ -635,15 +856,18 @@ $('proxy-pw-save').addEventListener('click', () => {
 $('proxy-pw').addEventListener('keydown', e => { if (e.key === 'Enter') $('proxy-pw-save').click(); });
 $('proxy-pw-clear').addEventListener('click', () => { if (confirm('Удалить сохранённый пароль прокси?')) putProxyPw(''); });
 
-/* ---------- hub test ---------- */
+/* ---------- проверка связи с хабом ---------- */
 function age(hours){ if (hours == null) return ''; return hours < 48 ? hours.toFixed(1).replace('.', ',') + ' ч назад' : (hours / 24).toFixed(1).replace('.', ',') + ' дн назад'; }
 $('test-hub').addEventListener('click', async () => {
   const box = $('hub-res'), btn = $('test-hub');
-  if (S.dirty && !(await save())) return;  // the check uses the saved settings
+  if (S.dirty && !(await save())) return;  // проверяются сохранённые настройки
   btn.disabled = true; box.hidden = false; box.className = 'res'; box.textContent = 'Проверяем связь…';
   try {
     const r = await api('POST', '/api/v1/settings/test-hub', {});
     box.textContent = ''; box.className = 'res ' + (r.ok ? 'ok' : 'bad');
+    S.hubTested = true;
+    navDot('hub', r.ok ? 'ok' : 'bad', r.ok ? 'связь с хабом есть' : 'нет связи с хабом');
+    $('hub-st').hidden = false; $('hub-st').className = 'badge st ' + (r.ok ? 'ok' : 'bad'); $('hub-st').textContent = r.ok ? 'связь есть' : 'нет связи';
     const lines = [];
     if (r.health) lines.push(h('div', {}, 'Сервер ', h('b', {class:'mono'}, r.host || ''), ': ', r.health.status || '?', ', версия ', h('span', {class:'mono'}, r.health.version || '?')));
     if (r.token_accepted) lines.push(h('div', {}, 'Токен принят.'));
@@ -660,45 +884,54 @@ $('test-hub').addEventListener('click', async () => {
   finally { btn.disabled = false; }
 });
 
-/* ---------- market history (R24): what the store holds from the hub's history API, or why it is not used ---------- */
+/* ---------- история рынка (R24) ---------- */
 async function loadHistoryStatus(){
   const el = $('hist-st');
   let st;
   try { st = await api('GET', '/api/v1/history/status'); } catch(e) { el.textContent = ''; return; }
   const a = st.api, b = (st.datasets || {}).bonds || {}, n = v => (v || 0).toLocaleString('ru-RU');
   el.textContent = '';
-  if (!a) { el.textContent = 'API истории сервера ещё не опрашивался (первый цикл автообновления).'; return; }
-  if (!a.available) { el.append(h('span', {class:'err'}, 'API истории не используется: ' + a.reason + '.'), ' История котировок догружается по срезам (последние «История котировок, рабочих дней»).'); return; }
+  if (!a) { el.textContent = 'API истории ещё не опрашивался'; return; }
+  if (!a.available) { el.append(h('span', {class:'err'}, 'API истории не используется: ' + a.reason), ' — догружается по срезам'); return; }
   const pend = Object.values(st.datasets || {}).reduce((s, d) => s + (d.pending || 0), 0);
-  el.append(h('span', {class:'okmsg'}, 'История из API сервера: '), 'облигации ' + (b.from ? b.from + ' … ' + b.to + ', ' + n(b.rows) + ' строк, ' + n(b.bonds) + ' выпусков' : 'ещё не загружены') +
-    (pend ? '; догружается, осталось запросов: ' + pend : '; загружено всё') + (st.errors && st.errors.length ? '; ошибки: ' + st.errors.length : '') + '.');
+  el.append(h('span', {class:'okmsg'}, 'из API сервера: '), 'облигации ' + (b.from ? b.from + ' … ' + b.to + ', ' + n(b.rows) + ' строк, ' + n(b.bonds) + ' выпусков' : 'ещё не загружены') +
+    (pend ? '; осталось запросов: ' + pend : '; загружено всё') + (st.errors && st.errors.length ? '; ошибки: ' + st.errors.length : ''));
 }
-loadHistoryStatus();
 
-/* ---------- adapter ---------- */
-async function loadAdapter(){
+/* ---------- адаптер ---------- */
+async function loadAdapter(reloadForms){
   const st = $('ad-st'), box = $('ad-res');
-  st.className = 'st wait'; st.textContent = 'проверка…';
+  st.className = 'badge st warn'; st.textContent = 'проверка…';
   let a;
   try { a = await api('GET', '/api/v1/adapter'); }
-  catch(e) { st.className = 'st bad'; st.textContent = 'ошибка'; box.hidden = false; box.className = 'res bad'; box.textContent = e.message; renderConfigFiles(null); return; }
+  catch(e) {
+    st.className = 'badge st bad'; st.textContent = 'ошибка'; navDot('adapter', 'bad', e.message);
+    box.textContent = ''; box.append(h('div', {class:'note err'}, e.message)); renderConfigFiles(null); mountTabs(null); return;
+  }
   S.adapter = a;
-  st.className = 'st ' + (a.loaded ? 'ok' : 'bad');
+  st.className = 'badge st ' + (a.loaded ? 'ok' : 'bad');
   st.textContent = a.loaded ? 'загружен' : 'ошибка загрузки';
-  box.hidden = false; box.className = 'res ' + (a.loaded ? 'ok' : 'bad'); box.textContent = '';
-  box.append(h('div', {}, a.reference ? 'Эталонный адаптер (CSV) ' : a.default ? 'Адаптер из комплекта ' : 'Адаптер ', h('b', {}, a.name || ''), ' ', h('span', {class:'mono'}, a.version || ''),
-    a.fingerprint ? h('span', {class:'muted'}, ' · отпечаток ', h('span', {class:'mono'}, a.fingerprint.slice(0, 12))) : null));
-  box.append(h('div', {class:'muted mono', style:'word-break:break-all'}, a.path));
-  if (a.error) box.append(h('div', {class:'err'}, 'Ошибка: ' + a.error));
+  navDot('adapter', a.loaded ? 'ok' : 'bad', a.loaded ? 'адаптер загружен' : a.error);
+  box.textContent = '';
+  const kind = a.reference ? 'Эталонный адаптер (CSV)' : a.default ? 'Из комплекта программы' : 'Приватный адаптер';
   const srcs = (a.describe && Array.isArray(a.describe.sources)) ? a.describe.sources : [];
-  if (srcs.length) box.append(h('div', {style:'margin-top:6px'}, 'Источники:'),
-    h('ul', {class:'src'}, srcs.map(s => h('li', {}, h('span', {class:'mono'}, s.source), ' — ',
-      (s.datasets || [s.dataset]).join(', '), h('span', {class:'muted'}, ' · ' + (s.time_basis || '') + ' · ' + (s.completeness || ''))))));
-  (a.warnings || []).forEach(w => box.append(h('div', {class:'err'}, 'Предупреждение: ' + w)));
-  renderConfigFiles(a);
+  box.append(h('div', {class:'kv'},
+    h('div', {}, h('div', {class:'l'}, kind), h('div', {class:'v'}, h('b', {}, a.name || '—'), ' ', h('span', {class:'mono mut'}, a.version || ''))),
+    h('div', {}, h('div', {class:'l'}, 'Контракт'), h('div', {class:'v mono'}, (a.describe && a.describe.contract) || '—')),
+    h('div', {}, h('div', {class:'l'}, 'Отпечаток'), h('div', {class:'v mono', title:a.fingerprint || ''}, a.fingerprint ? a.fingerprint.slice(0, 16) + '…' : '—')),
+    h('div', {}, h('div', {class:'l'}, 'Формы настроек'), h('div', {class:'v'}, (a.settings_tabs || []).length ? (a.settings_tabs || []).map(t => t.title).join(', ') : 'нет — файлы правятся как JSON')),
+    h('div', {style:'grid-column:1/-1'}, h('div', {class:'l'}, 'Путь'), h('div', {class:'v mono mut', style:'word-break:break-all'}, a.path))));
+  if (srcs.length) box.append(h('div', {class:'src-chips'}, srcs.map(s => h('span', {class:'k-chip', title:(s.time_basis || '') + ' · ' + (s.completeness || '')},
+    h('b', {class:'mono'}, s.source), h('span', {class:'mut3'}, (s.datasets || [s.dataset]).join(', '))))));
+  if (a.error) box.append(h('div', {class:'note err', style:'margin-top:10px'}, 'Ошибка: ' + a.error));
+  (a.warnings || []).forEach(w => box.append(h('div', {class:'note warn', style:'margin-top:8px'}, 'Предупреждение: ' + w)));
+  const tabFiles = new Set((a.settings_tabs || []).map(t => t.file));
+  renderConfigFiles(a, tabFiles);
+  mountTabs(a, reloadForms);
 }
-$('ad-refresh').addEventListener('click', loadAdapter);
+$('ad-refresh').addEventListener('click', () => loadAdapter(false));
 
+/* ---------- файлы настроек без формы: сырой JSON (как раньше) ---------- */
 function jsonError(text){
   try { JSON.parse(text); return null; }
   catch(e) {
@@ -707,48 +940,48 @@ function jsonError(text){
     return 'Ошибка JSON' + where + ': ' + e.message;
   }
 }
-
-async function renderConfigFiles(a){
+async function renderConfigFiles(a, tabFiles){
   const list = $('cf-list'); list.textContent = '';
   if (!a) { list.append(h('p', {class:'muted'}, 'Статус адаптера недоступен.')); return; }
-  const files = a.config_files || [];
-  if (!files.length) {
-    list.append(h('p', {class:'muted'}, a.loaded ? 'Адаптер не объявляет файлов настроек.' : 'Адаптер не загружен.'));
-    return;
-  }
+  const files = (a.config_files || []).filter(f => !(tabFiles && tabFiles.has(f.name)));
+  $('cf-card').hidden = !files.length && a.loaded;
+  if (!files.length) { list.append(h('p', {class:'muted'}, a.loaded ? 'Адаптер не объявляет других файлов настроек.' : 'Адаптер не загружен.')); return; }
   if (a.config_dir) list.append(h('p', {class:'hint', style:'margin:0 0 10px'}, 'Папка: ', h('span', {class:'mono'}, a.config_dir)));
   for (const f of files) {
     const isJson = /\.json$/i.test(f.name);
     const ta = h('textarea', {class:'ta', spellcheck:'false', 'aria-label':f.title || f.name});
     const msg = h('span', {class:'muted'});
-    const state = h('span', {class:'tag'}, f.exists ? 'файл есть' : 'файла нет');
-    const card = h('div', {class:'cf'},
-      h('div', {class:'row', style:'justify-content:space-between'},
-        h('div', {}, h('h3', {style:'display:inline'}, f.title || f.name), ' ', h('span', {class:'mono muted'}, f.name)),
-        h('div', {class:'row'}, f.required ? h('span', {class:'tag req'}, 'обязательный') : h('span', {class:'tag'}, 'необязательный'), state)),
-      f.help ? h('p', {class:'help'}, f.help) : h('div', {style:'height:8px'}),
-      ta,
-      h('div', {class:'row', style:'margin-top:8px'},
-        h('button', {class:'btn', type:'button', onclick: async () => {
-          if (isJson) { const err = jsonError(ta.value); if (err) { msg.className = 'err'; msg.textContent = err; return; } }
-          try {
-            const r = await api('PUT', '/api/v1/adapter/config/' + encodeURIComponent(f.name), {text: ta.value});
-            msg.className = 'okmsg'; msg.textContent = 'Сохранено ' + new Date().toLocaleTimeString('ru-RU');
-            state.textContent = r.exists ? 'файл есть' : 'файла нет'; f.exists = r.exists;
-          } catch(e) {
-            const d = e.details || {};
-            msg.className = 'err'; msg.textContent = e.message + (d.line ? ' (строка ' + d.line + ', позиция ' + d.column + ')' : '');
-          }
-        }}, 'Сохранить'),
-        isJson ? h('button', {class:'ibtn', type:'button', onclick: () => {
-          const err = jsonError(ta.value); if (err) { msg.className = 'err'; msg.textContent = err; return; }
-          ta.value = JSON.stringify(JSON.parse(ta.value), null, 2) + '\n'; msg.className = 'muted'; msg.textContent = '';
-        }}, 'Форматировать') : null,
-        msg));
+    const state = h('span', {class:'badge ' + (f.exists ? 'ok' : '')}, f.exists ? 'файл есть' : 'файла нет');
+    let sha = null;
+    const card = h('details', {class:'cf'},
+      h('summary', {}, h('b', {}, f.title || f.name), h('span', {class:'mono mut3'}, f.name), h('span', {class:'sp'}),
+        f.required ? h('span', {class:'tag req'}, 'обязательный') : null, state),
+      h('div', {class:'in'},
+        f.help ? h('p', {class:'help'}, f.help) : null,
+        ta,
+        h('div', {class:'row', style:'margin-top:8px'},
+          h('button', {class:'btn', type:'button', onclick: async () => {
+            if (isJson) { const err = jsonError(ta.value); if (err) { msg.className = 'err'; msg.textContent = err; return; } }
+            try {
+              const r = await api('PUT', '/api/v1/adapter/config/' + encodeURIComponent(f.name), {text: ta.value, base_sha256: sha});
+              sha = r.sha256;
+              msg.className = 'okmsg'; msg.textContent = 'Сохранено ' + new Date().toLocaleTimeString('ru-RU') + (r.revision ? ' · правка №' + r.revision.rev_id : '');
+              state.textContent = r.exists ? 'файл есть' : 'файла нет'; state.className = 'badge ' + (r.exists ? 'ok' : ''); f.exists = r.exists;
+            } catch(e) {
+              const d = e.details || {};
+              msg.className = 'err'; msg.textContent = (e.status === 409 ? 'Файл изменили, пока вы его правили — обновите статус адаптера и повторите. ' : '') + e.message + (d.line ? ' (строка ' + d.line + ', позиция ' + d.column + ')' : '');
+            }
+          }}, 'Сохранить'),
+          isJson ? h('button', {class:'ibtn', type:'button', onclick: () => {
+            const err = jsonError(ta.value); if (err) { msg.className = 'err'; msg.textContent = err; return; }
+            ta.value = JSON.stringify(JSON.parse(ta.value), null, 2) + '\n'; msg.className = 'muted'; msg.textContent = '';
+          }}, 'Форматировать') : null,
+          msg)));
     if (isJson) ta.addEventListener('input', () => { const err = jsonError(ta.value); msg.className = err ? 'err' : 'muted'; msg.textContent = err || ''; });
     list.append(card);
     try {
       const r = await api('GET', '/api/v1/adapter/config/' + encodeURIComponent(f.name));
+      sha = r.sha256 || null;
       if (r.exists) ta.value = r.text;
       else {
         ta.value = f.template == null ? '' : (typeof f.template === 'string' && !isJson ? f.template : JSON.stringify(f.template, null, 2) + '\n');
@@ -758,17 +991,93 @@ async function renderConfigFiles(a){
   }
 }
 
-/* ---------- start ---------- */
+/* ---------- формы адаптера: юрлица, книги, фондирование, источники (settings-forms.js) ---------- */
+const FORMS = {};
+const SLOT = {entities:'entities', books:'books', funding:'funding'};  // остальные вкладки (sources, …) — в «Адаптер и источники»
+const CTX = {recent_books:[], indices:[], currencies:['RUB','USD','EUR','CNY'], error:null};
+let tabsKey = null;
+
+function uniq(list){ const seen = new Set(); return list.filter(o => o && o.value != null && o.value !== '' && !seen.has(o.value) && seen.add(o.value)); }
+function lists(){
+  const ents = ((FORMS.entities && FORMS.entities.data && FORMS.entities.data.entities) || []).filter(e => e && e.entity);
+  const books = ((FORMS.books && FORMS.books.data && FORMS.books.data.books) || []).filter(b => b && b.book_id);
+  const rules = ((FORMS.funding && FORMS.funding.data && FORMS.funding.data.rules) || []).filter(Boolean);
+  let entities = uniq(ents.map(e => ({value:e.entity, label:e.name || ''})));
+  if (!entities.length) entities = uniq(books.map(b => ({value:b.entity, label:''})).concat(CTX.recent_books.map(b => ({value:b.entity, label:'из отчёта'}))));
+  return {
+    entities,
+    books: uniq(books.map(b => ({value:b.book_id, label:b.name || ''}))),
+    currencies: uniq(CTX.currencies.map(c => ({value:c, label:''})).concat(rules.map(r => ({value:r.ccy, label:''})))),
+    indices: uniq(CTX.indices.map(i => ({value:i.code, label:i.last ? 'фиксинг ' + SF.fmtDate(i.last) : ''}))
+      .concat(rules.map(r => ({value:r.index_code, label:''}))).concat(CTX.indices.length ? [] : [{value:'KEY_RATE', label:'ключевая ставка'}, {value:'RUONIA', label:''}]))
+  };
+}
+function navForms(){
+  for (const id of ['entities', 'books', 'funding']) {
+    const f = FORMS[id], cnt = document.querySelector('[data-count="' + id + '"]');
+    if (!f || !f.data) { if (cnt) cnt.textContent = ''; navDot(id, '', ''); continue; }
+    const key = f.L.tables[0] && f.L.tables[0].key, n = key && Array.isArray(f.data[key]) ? f.data[key].length : 0;
+    const miss = id === 'books' ? SF.unconfigured(f.data, CTX.recent_books).length : 0;
+    if (cnt) cnt.textContent = miss ? n + ' · ' + miss + ' не настр.' : String(n);
+    const err = f.errors().length || f.parseError;
+    navDot(id, f.dirty() ? 'dirty' : err ? 'bad' : miss ? 'warn' : '', f.dirty() ? 'есть несохранённые изменения' : err ? 'есть ошибки' : miss ? miss + ' книг из позиций не настроено' : '');
+  }
+}
+async function loadContext(){
+  try { Object.assign(CTX, await api('GET', '/api/v1/adapter/settings-context')); } catch(e) { CTX.error = e.message; }
+  Object.values(FORMS).forEach(f => { if (f.data) f.render(); });
+  navForms();
+}
+function mountTabs(a, reload){
+  const tabs = (a && a.loaded && a.settings_tabs) || [];
+  const key = JSON.stringify([a && a.fingerprint && a.name, a && a.config_dir, tabs.map(t => t.id + ':' + t.file)]);
+  if (key === tabsKey && !reload) { Object.values(FORMS).forEach(f => f.load().then(navForms)); return; }
+  tabsKey = key;
+  for (const k of Object.keys(FORMS)) delete FORMS[k];
+  const files = new Map(((a && a.config_files) || []).map(f => [f.name, f]));
+  const extra = $('tabs-adapter'); extra.textContent = '';
+  for (const id of Object.keys(SLOT)) {
+    const slot = document.querySelector('[data-tab-slot="' + id + '"]'); slot.textContent = '';
+    if (!tabs.some(t => t.id === id)) slot.append(h('div', {class:'note'}, !a ? 'Статус адаптера недоступен.' : !a.loaded ? 'Адаптер не загружен — см. «Адаптер и источники».'
+      : 'Адаптер «' + (a.name || '') + '» не описывает эту форму (describe()["settings_tabs"]). Его файлы настроек — в разделе ', h('a', {href:'#adapter'}, 'Адаптер и источники'), '.'));
+  }
+  for (const t of tabs) {
+    let el;
+    if (SLOT[t.id]) el = document.querySelector('[data-tab-slot="' + t.id + '"]');
+    else {
+      el = h('div', {class:'bd'});
+      extra.append(h('div', {class:'card', id:'tab-' + t.id}, h('div', {class:'hd'}, h('h2', {}, t.title), t.help ? h('span', {class:'mut3'}, t.help) : null), el));
+    }
+    FORMS[t.id] = new SF.Form({el, tab:t, entry:files.get(t.file), api, lists, recent:() => CTX.recent_books,
+      onChange:navForms, showIssue:(text, cls) => toast(text, cls || 'err'),
+      onSaved:(f, res) => {
+        toast('Сохранено: ' + f.file + (res.revision ? ' · правка №' + res.revision.rev_id + ' (' + (res.revision.changed_by === 'local' ? 'этот компьютер' : res.revision.changed_by) + ')' : '') +
+          (res.history_error ? ' · история не записана: ' + res.history_error : '') + '. Адаптер прочтёт файл в следующем цикле.', res.history_error ? '' : 'ok');
+        Object.values(FORMS).forEach(o => { if (o !== f && o.data) o.render(); });
+        navForms();
+      }});
+    FORMS[t.id].load().then(navForms);
+  }
+  if (tabs.length) loadContext();
+}
+
+/* ---------- старт ---------- */
 (async function start(){
+  if (!/^https?:$/.test(location.protocol)) {
+    $('home-note').textContent = 'Страница открыта как файл: настройки работают только через сервер (desk serve, http://127.0.0.1:8100/settings.html).';
+    $('load-err').hidden = false; $('load-err').textContent = 'Нет сервера — откройте страницу через desk serve.';
+    return;
+  }
   try { render(await api('GET', '/api/v1/settings')); }
-  catch(e) { $('home-note').hidden = true; $('load-err').hidden = false; $('load-err').textContent = 'Не удалось загрузить настройки: ' + e.message; }
-  loadAdapter();
+  catch(e) { $('home-note').textContent = ''; $('load-err').hidden = false; $('load-err').textContent = 'Не удалось загрузить настройки: ' + e.message; }
+  loadAdapter(true);
+  loadHistoryStatus();
 })();
 </script>
 <script>
 'use strict';
-/* ---------- 7. Обновление программы: the zips of /api/v1/update; «Установить» checks and stages one, desk serve
-   exits, the launcher (start.bat) installs it and starts the new version; this page polls until it answers ---------- */
+/* ---------- Обновление программы: zip-архивы /api/v1/update; «Установить» проверяет и готовит архив, desk serve
+   выходит, запускатель (start.bat) ставит его и запускает новую версию; страница ждёт, пока та ответит ---------- */
 (function updates(){
   const U = {data:null, busy:false, timer:null};
   const KIND = {full:'полный', patch:'заплатка'};
@@ -776,7 +1085,7 @@ async function renderConfigFiles(a){
   const mb = n => n < 1048576 ? Math.max(1, Math.round(n / 1024)) + ' КБ' : (n / 1048576).toFixed(n < 10485760 ? 1 : 0).replace('.', ',') + ' МБ';
   const when = s => s ? new Date(s).toLocaleString('ru-RU', {dateStyle:'short', timeStyle:'short'}) : '';
 
-  function progress(step, msg, cls, doneText){  // step 0..3 is running (or failed with cls 'err'), 4: all done
+  function progress(step, msg, cls, doneText){  // шаг 0..3 идёт (или упал при cls 'err'), 4: всё готово
     $('up-progress').hidden = false;
     const lis = $('up-steps').children;
     for (let i = 0; i < lis.length; i++) lis[i].className = i < step ? 'done' : i === step ? (cls === 'err' ? 'fail' : 'on') : '';
@@ -787,7 +1096,7 @@ async function renderConfigFiles(a){
 
   function render(d){
     U.data = d;
-    $('up-ver').textContent = d.current_version;
+    $('up-ver').textContent = d.current_version; $('nav-ver').textContent = d.current_version;
     $('up-off').hidden = d.can_install; $('up-off').textContent = d.unavailable || '';
     if (document.activeElement !== $('up-dir')) $('up-dir').value = d.update_dir || '';
     $('up-dir-msg').className = d.update_dir_error ? 'err' : 'muted'; $('up-dir-msg').textContent = d.update_dir_error || '';
@@ -823,7 +1132,7 @@ async function renderConfigFiles(a){
       return;
     }
     const run = U.data.pending || U.data.applying;
-    if (run && !U.busy) {  // the page was opened (or reloaded) while an update is under way
+    if (run && !U.busy) {  // страницу открыли (или обновили) во время установки
       U.busy = true; render(U.data);
       progress(2, 'Идёт установка версии ' + run.version + '…');
       wait(run.version, Date.now());
@@ -833,7 +1142,7 @@ async function renderConfigFiles(a){
   async function install(it){
     const warn = it.compare === 'older' ? '\n\nВнимание: эта версия СТАРЕЕ установленной.' : it.compare === 'other' ? '\n\nДругая сборка: какая из версий новее, неизвестно.' : '';
     if (!confirm('Установить Desk Monitor ' + it.version + ' (' + (KIND[it.kind] || '') + ')?\nСервер перезапустится, это займёт около минуты; страница обновится сама.' + warn)) return;
-    const body = {source:it.source, name:it.name}, started = Date.now();
+    const body = {source:it.source, name:it.name, allow_downgrade:it.compare === 'older'}, started = Date.now();
     U.busy = true; render(U.data);
     progress(0, 'Проверяю архив…');
     try { const c = await api('POST', '/api/v1/update/check', body); if (c.error) throw new Error(c.error); }
@@ -900,13 +1209,14 @@ async function renderConfigFiles(a){
     } catch(e) { $('up-dir-msg').className = 'err'; $('up-dir-msg').textContent = 'Не сохранено: ' + e.message; }
   });
   $('up-dir').addEventListener('keydown', e => { if (e.key === 'Enter') $('up-dir-save').click(); });
-  load();
+  if (/^https?:$/.test(location.protocol)) load();
 })();
 </script>
+<script src="desk-updater.js" data-mode="panel"></script>
 <script>
 'use strict';
-/* ---------- 8. Диагностика (R13): /api/v1/diagnostics builds a JSON of how the desk works here, without private
-   data; the preview shows it as it will be saved, «Скачать» saves exactly that text, «Скопировать» copies it ---------- */
+/* ---------- Диагностика (R13): /api/v1/diagnostics — JSON о работе программы здесь, без приватных данных;
+   предпросмотр — как будет сохранено, «Скачать» сохраняет этот текст, «Скопировать» копирует ---------- */
 (function diagnostics(){
   const D = {text:null, name:null};
   const kb = n => Math.max(1, Math.round(n / 1024)) + ' КБ';
@@ -957,8 +1267,8 @@ async function renderConfigFiles(a){
 </script>
 <script>
 'use strict';
-/* ---------- 9. Загрузка позиций (R22): /api/v1/inbox/reconcile — per book the rows of the report, loaded and in the
-   day's run, the file statuses and why rows were lost; read on opening the page and on «Обновить» ---------- */
+/* ---------- Загрузка позиций (R22): /api/v1/inbox/reconcile — по книге строки отчёта, принятые и в расчёте дня,
+   статусы файлов и почему строки потеряны; при открытии страницы и по «Обновить» ---------- */
 (function reconcile(){
   const FILES = {accepted:'принято', partially_accepted:'принято частично', superseded:'заменено более новым',
     rejected:'отклонено', match_failed:'не сопоставлено', failed:'ошибка чтения', timed_out:'таймаут чтения',
@@ -976,7 +1286,7 @@ async function renderConfigFiles(a){
       const d = $('rc-date').value;
       const r = await fetch('/api/v1/inbox/reconcile' + (d ? '?on=' + d : ''), {headers:{'Accept':'application/json'}, cache:'no-store'});
       const text = await r.text();
-      if (!r.ok) { let m = 'HTTP ' + r.status; try { m = JSON.parse(text).detail || m; } catch(e) {} throw new Error(m); }
+      if (!r.ok) { let m = 'HTTP ' + r.status; try { m = JSON.parse(text).detail || JSON.parse(text).message || m; } catch(e) {} throw new Error(m); }
       draw(JSON.parse(text)); msg('');
     } catch(e) { msg('Не удалось получить: ' + (e.message || e), 'err'); }
   }
@@ -1015,7 +1325,7 @@ async function renderConfigFiles(a){
 })();
 </script>
 <script>
-/* ---------- 10. История прогонов (R23): /api/v1/backfill/status ---------- */
+/* ---------- История прогонов (R23): /api/v1/backfill/status ---------- */
 (function backfillStatus(){
   'use strict';
   const $ = id => document.getElementById(id);
@@ -1028,7 +1338,7 @@ async function renderConfigFiles(a){
       const s = await r.json();
       const withPos = s.dates - s.no_positions - s.no_market;
       const rows = [
-        ['Включено', s.enabled ? 'да' : 'нет (настройка «История прогонов» выше)'],
+        ['Включено', s.enabled ? 'да' : 'нет (настройка в «Автообновлении»)'],
         ['Даты', dd(s.from) + ' — ' + dd(s.to) + ': ' + s.dates + ' рабочих дат' + (s.hub ? '' : ' (по загруженным срезам)')],
         ['Посчитано', s.done + ' из ' + withPos + ' дат с позициями'],
         ['Осталось', s.todo ? s.todo + (s.next && s.next.length ? ' (ближайшие ' + s.next.map(dd).join(', ') + ')' : '') : '—'],
@@ -1045,5 +1355,60 @@ async function renderConfigFiles(a){
   }
   $('bf-run').addEventListener('click', load);
   if (/^https?:$/.test(location.protocol)) load();
+})();
+</script>
+<script>
+'use strict';
+/* ---------- Доступ из сети: /api/v1/lan/status (desk lan status) — адрес, HTTPS, сертификат, брандмауэр, адреса для коллег;
+   проверка при запуске сервера (last) и по «Проверить сейчас» (probe=1) ---------- */
+(function lanStatus(){
+  const FW = {true:'есть', false:'нет — desk.bat firewall add (от имени администратора)', null:'неизвестно (не Windows)'};
+  function rows(s){
+    const out = [
+      ['Слушает', s.bind_host + ':' + s.port + (s.network ? (s.bind_host === '0.0.0.0' || s.bind_host === '::' ? ' — все адреса этого компьютера и 127.0.0.1' : ' и 127.0.0.1') : ' — только этот компьютер')],
+      ['Вход по паролю', s.auth ? 'включён' : 'выключен'],
+      ['HTTPS', s.tls ? 'да' : (s.allow_plain_http ? 'нет, HTTP разрешён (allow_plain_http)' : 'нет')],
+    ];
+    const c = s.cert;
+    if (c) out.push(['Сертификат', !c.exists ? 'файл не найден' : c.error ? c.error
+      : 'до ' + c.not_after + '; имена: ' + c.sans.join(', ') + (c.missing.length ? '\nнет в сертификате (браузер предупредит): ' + c.missing.join(', ') + ' — новый: desk.bat lan enable --self-signed' : '')]);
+    if (s.network) {
+      out.push(['Брандмауэр', '«' + s.firewall.rule + '»: ' + FW[String(s.firewall.present)]]);
+      out.push(['Адреса для коллег', s.urls.join('\n') || '—']);
+    }
+    return out;
+  }
+  function probeBlock(p, title){
+    const box = document.createElement('div');
+    const h = document.createElement('div'); h.className = 'muted';
+    h.textContent = title + (p.at ? ' (' + new Date(p.at).toLocaleString('ru-RU') + ')' : '') + ':';
+    box.append(h);
+    [p.loopback].concat(p.lan).forEach(r => {
+      const d = document.createElement('div'); d.className = 'pr ' + (r.status === 'ok' ? 'ok' : 'bad');
+      d.innerHTML = '<span class="mono"></span> — <b></b> <span class="muted"></span>';
+      d.children[0].textContent = r.url; d.children[1].textContent = r.label;
+      d.children[2].textContent = '(' + (r.detail || r.status) + (r.ms != null ? ', ' + r.ms + ' мс' : '') + ')';
+      if (r.status !== 'ok') { const hn = document.createElement('div'); hn.className = 'hint'; hn.textContent = r.hint; d.append(hn); }
+      box.append(d);
+    });
+    return box;
+  }
+  async function load(probe){
+    $('lan-msg').textContent = probe ? 'проверяю…' : '';
+    try {
+      const r = await fetch('/api/v1/lan/status' + (probe ? '?probe=1' : ''), {headers:{'Accept':'application/json'}, cache:'no-store'});
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const s = await r.json();
+      const tb = $('lan-rows'); tb.textContent = '';
+      rows(s).forEach(([k, v]) => { const tr = document.createElement('tr'); tr.innerHTML = '<td class="k"></td><td class="v" style="white-space:pre-wrap"></td>'; tr.children[0].textContent = k; tr.children[1].textContent = v; tb.append(tr); });
+      const pb = $('lan-probe'); pb.textContent = '';
+      if (s.probe) pb.append(probeBlock(s.probe, 'Проверка сейчас'));
+      else if (s.last) pb.append(probeBlock(s.last, 'Проверка при запуске'));
+      else if (s.network) pb.textContent = 'Проверки при запуске ещё нет — «Проверить сейчас».';
+      $('lan-msg').textContent = ''; $('lan-when').textContent = 'на ' + new Date().toLocaleTimeString('ru-RU');
+    } catch (e) { $('lan-msg').textContent = 'не загрузилось: ' + e.message; }
+  }
+  $('lan-run').addEventListener('click', () => load(true));
+  if (/^https?:$/.test(location.protocol)) load(false);
 })();
 </script>

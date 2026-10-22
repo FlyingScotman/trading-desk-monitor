@@ -8,7 +8,12 @@
  *  - DV01 / CS01 — изменение PV в RUB при +1 б.п. (длинная облигация => DV01 < 0);
  *  - риск по кривым: p.risk[curveId] — массив по MOCK.buckets;
  *  - ОФЗ = RUONIA + базис (R18): у ОФЗ риск и на «RUB RUONIA», и на «RUB OFZ» (базис);
- *  - срок бумаги — до ближайшей оферты, если она есть, иначе до погашения (p.tenor, p.event).
+ *  - срок бумаги — до ближайшей оферты, если она есть, иначе до погашения (p.tenor, p.event);
+ *  - FX-дельта — по валютам (p.fxDeltaBy, как fx_delta {ccy} прогона; p.fxDelta — в валюте позиции): у кросса USD/CNY
+ *    она в обеих валютах; у FX-форварда риск на двух кривых (иностранной и RUONIA), у FX-свопа — на implied-кривой
+ *    юаня (CNY FWD); ноги FX-сделки — p.legs (как extra.legs прогона в lib/real.js); CHF-форвард — на своей кривой;
+ *  - имя бумаги (R33): p.name = алиас ?? биржевое (p.exchName), поиск — по обоим; алиасы демо — в памяти страницы
+ *    (M.aliasApi как в lib/real.js, но без сервера: после перезагрузки — снова только примерный алиас ниже).
  */
 (function () {
   'use strict';
@@ -42,10 +47,11 @@
   M.util = { iso, parse, yearsTo, addDays, addMonths, rng, hash, round };
 
   // ---------- рынок ----------
-  M.ccys = ['RUB', 'USD', 'EUR', 'CNY'];
-  M.ccyOrder = { RUB: 0, USD: 1, EUR: 2, CNY: 3 };
-  M.fx = { RUB: 1, USD: 81.42, EUR: 94.58, CNY: 11.41 };
-  M.fxChgPct = { RUB: 0, USD: 0.38, EUR: -0.12, CNY: 0.21 };
+  M.ccys = ['RUB', 'USD', 'EUR', 'CNY', 'CHF'];
+  // GBP и AED — только вторые валюты мелких кроссов (остатки ОВП, R43): валют деска (M.ccys) не добавляют
+  M.ccyOrder = { RUB: 0, USD: 1, EUR: 2, CNY: 3, CHF: 4, GBP: 5, AED: 6 };
+  M.fx = { RUB: 1, USD: 81.42, EUR: 94.58, CNY: 11.41, CHF: 101.85, GBP: 108.62, AED: 22.17 };
+  M.fxChgPct = { RUB: 0, USD: 0.38, EUR: -0.12, CNY: 0.21, CHF: 0.15, GBP: 0.22, AED: 0.38 };
   M.indices = { 'КС': 14.50, 'RUONIA': 14.32, 'RUSFAR': 14.28, 'SOFR': 4.08, 'RUSFAR CNY': 5.45, '€STR': 2.15, 'CPI г/г': 6.8 };
   M.buckets = ['3M', '6M', '1Y', '2Y', '3Y', '4Y', '5Y', '7Y', '10Y', '15Y', '20Y+'];
   M.pillars = [0.25, 0.5, 1, 2, 3, 4, 5, 7, 10, 15, 20];
@@ -56,6 +62,9 @@
     { id: 'USD SOFR', ccy: 'USD', name: 'USD SOFR', short: 'SOFR', kind: 'rate', pts: [4.05, 3.98, 3.85, 3.65, 3.58, 3.58, 3.62, 3.72, 3.85, 3.98, 4.05], chg: [0, -1, -1, -2, -3, -3, -3, -2, -2, -2, -2] },
     { id: 'EUR ESTR', ccy: 'EUR', name: 'EUR €STR', short: '€STR', kind: 'rate', pts: [2.12, 2.08, 2.05, 2.10, 2.18, 2.25, 2.32, 2.45, 2.60, 2.72, 2.78], chg: [0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 2] },
     { id: 'CNY XCCY', ccy: 'CNY', name: 'CNY (RUSFAR CNY / xccy)', short: 'CNY', kind: 'rate', pts: [5.40, 5.30, 5.15, 4.95, 4.88, 4.88, 4.95, 5.10, 5.25, 5.35, 5.40], chg: [1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0] },
+    // implied-кривая юаня из своп-пойнтов CETS (FX-свопы) и CHF — кривые, которых нет в старом списке блоков кокпита
+    { id: 'CNY FWD', ccy: 'CNY', name: 'CNY implied (своп-пойнты CETS)', short: 'CNY impl', kind: 'rate', pts: [5.65, 5.50, 5.30, 5.10, 5.00, 4.98, 5.02, 5.15, 5.28, 5.38, 5.42], chg: [2, 2, 1, 1, 1, 1, 1, 1, 0, 0, 0] },
+    { id: 'CHF SARON', ccy: 'CHF', name: 'CHF SARON', short: 'SARON', kind: 'rate', pts: [0.05, 0.06, 0.08, 0.10, 0.18, 0.25, 0.38, 0.48, 0.60, 0.68, 0.72], chg: [0, 0, 0, -1, -1, -1, -1, -1, -1, -1, -1] },
   ];
   M.curve = Object.fromEntries(M.curves.map(c => [c.id, c]));
   M.ofzCurve = M.pillars.map((t, i) => M.curve['RUB RUONIA'].pts[i] + M.curve['RUB OFZ'].pts[i] / 100);
@@ -133,14 +142,14 @@
   M.issuer = Object.fromEntries(M.issuers.map(i => [i.id, i]));
 
   M.groupLabel = { GOV: 'Гос', CORP: 'Корп', DER: 'Деривативы' };
-  M.kindLabel = { PD: 'ОФЗ-ПД (фикс)', PK: 'ОФЗ-ПК (флоатер)', IN: 'ОФЗ-ИН (линкер)', SOVFX: 'Суверен. валютные', FIX: 'Фикс', FLT: 'Флоатер', IRS: 'IRS / OIS', KSW: 'Своп на КС', BAS: 'Базис КС/RUONIA', FXF: 'FX форвард', XCCY: 'XCCY' };
-  M.kindShort = { PD: 'ПД', PK: 'ПК', IN: 'ИН', SOVFX: 'Сув', FIX: 'Фикс', FLT: 'Флоат', IRS: 'IRS', KSW: 'КС-своп', BAS: 'Базис', FXF: 'FX fwd', XCCY: 'XCCY' };
+  M.kindLabel = { PD: 'ОФЗ-ПД (фикс)', PK: 'ОФЗ-ПК (флоатер)', IN: 'ОФЗ-ИН (линкер)', SOVFX: 'Минфин валютные', FIX: 'Фикс', FLT: 'Флоатер', IRS: 'IRS / OIS', KSW: 'Своп на КС', BAS: 'Базис КС/RUONIA', FXF: 'FX форвард', XCCY: 'XCCY', OTC: 'OTC (по отчёту)' };
+  M.kindShort = { PD: 'ПД', PK: 'ПК', IN: 'ИН', SOVFX: 'Минфин вал.', FIX: 'Фикс', FLT: 'Флоат', IRS: 'IRS', KSW: 'КС-своп', BAS: 'Базис', FXF: 'FX fwd', XCCY: 'XCCY', OTC: 'OTC' };
   // строки «типов» для сводной таблицы рисков (порядок — как владелец смотрит)
   M.typeRows = [
     { id: 'GOV.PD', group: 'GOV', kind: 'PD', label: 'ОФЗ-ПД' },
     { id: 'GOV.PK', group: 'GOV', kind: 'PK', label: 'ОФЗ-ПК (флоатеры)' },
     { id: 'GOV.IN', group: 'GOV', kind: 'IN', label: 'ОФЗ-ИН' },
-    { id: 'GOV.SOVFX', group: 'GOV', kind: 'SOVFX', label: 'Суверенные валютные' },
+    { id: 'GOV.SOVFX', group: 'GOV', kind: 'SOVFX', label: 'Минфин валютные (евробонды, замещающие)' },
     { id: 'CORP.FIX', group: 'CORP', kind: 'FIX', label: 'Корп. фикс' },
     { id: 'CORP.FLT', group: 'CORP', kind: 'FLT', label: 'Корп. флоатеры' },
     { id: 'DER.IRS', group: 'DER', kind: 'IRS', label: 'IRS / OIS' },
@@ -148,6 +157,7 @@
     { id: 'DER.BAS', group: 'DER', kind: 'BAS', label: 'Базисные свопы' },
     { id: 'DER.FXF', group: 'DER', kind: 'FXF', label: 'FX форварды' },
     { id: 'DER.XCCY', group: 'DER', kind: 'XCCY', label: 'XCCY' },
+    { id: 'DER.OTC', group: 'DER', kind: 'OTC', label: 'OTC (по отчёту)' },
   ];
 
   // ---------- облигационная математика (упрощённо) ----------
@@ -179,9 +189,11 @@
   // ОФЗ-ИН
   [['52002', '2028-02-02', 650], ['52005', '2033-05-18', 900]].forEach(([n, mat, nom]) =>
     B({ isin: 'RU000A10' + n, name: 'ОФЗ ' + n + '-ИН', issuer: 'MINFIN', group: 'GOV', kind: 'IN', ccy: 'RUB', book: 'OFZ', maturity: mat, cpn: { type: 'linker', rate: 2.5, freq: 'S' }, notional: nom * 1e6, spreadBp: 0 }));
-  // суверенные валютные
+  // Минфин в валюте (R39): замещающие облигации и евробонды — свой тип «Минфин валютные», не «суверены»; эмитент — MINFIN
   B({ isin: 'RU000A105RJ8', name: 'Минфин РФ 12-28 USD', issuer: 'MINFIN', group: 'GOV', kind: 'SOVFX', ccy: 'USD', book: 'FXCR', maturity: '2028-06-24', cpn: { type: 'fix', rate: 12.75, freq: 'S' }, notional: 18e6, spreadBp: 190 });
   B({ isin: 'RU000A105RL4', name: 'Минфин РФ 43 USD', issuer: 'MINFIN', group: 'GOV', kind: 'SOVFX', ccy: 'USD', book: 'FXCR', maturity: '2043-06-24', cpn: { type: 'fix', rate: 5.875, freq: 'S' }, notional: 25e6, spreadBp: 260 });
+  B({ isin: 'XS0767472458', name: 'Россия-2042 USD (евробонд)', issuer: 'MINFIN', group: 'GOV', kind: 'SOVFX', ccy: 'USD', book: 'FXCR', maturity: '2042-04-04', cpn: { type: 'fix', rate: 5.625, freq: 'S' }, notional: 6e6, spreadBp: 245 });
+  B({ isin: 'RU000A1089H3', name: 'Минфин РФ 27 EUR (замещающая)', issuer: 'MINFIN', group: 'GOV', kind: 'SOVFX', ccy: 'EUR', book: 'FXCR', maturity: '2027-05-27', cpn: { type: 'fix', rate: 1.125, freq: 'A' }, notional: 4e6, spreadBp: 210 });
   B({ isin: 'RU000A108Y82', name: 'Минфин РФ 27 CNY', issuer: 'MINFIN', group: 'GOV', kind: 'SOVFX', ccy: 'CNY', book: 'FXCR', maturity: '2027-12-10', cpn: { type: 'fix', rate: 6.50, freq: 'S' }, notional: 320e6, spreadBp: 120 });
   // корп. фикс RUB
   const cf = [
@@ -254,6 +266,21 @@
     { name: 'CNY/RUB fwd 6M sell', kind: 'FXF', ccy: 'CNY', curve: 'CNY XCCY', curve2: 'RUB RUONIA', tenor: 0.5, notional: -700e6, rate: 12.05, book: 'FXB', cpty: 'НКЦ' },
     { name: 'EUR/RUB fwd 1M sell', kind: 'FXF', ccy: 'EUR', curve: 'EUR ESTR', curve2: 'RUB RUONIA', tenor: 0.083, notional: -10e6, rate: 95.70, book: 'FXB', cpty: 'Газпромбанк' },
     { name: 'XCCY CNY/RUB 2Y', kind: 'XCCY', ccy: 'CNY', curve: 'CNY XCCY', curve2: 'RUB RUONIA', tenor: 2, notional: -400e6, rate: 5.10, book: 'FXB', cpty: 'Газпромбанк' },
+    // группа продукта отчёта (x_product_group адаптера) — для типа инструмента таблицы «валюта × тип» (lib/instr.js)
+    { name: 'Si-12.26 фьючерс USD/RUB sell', kind: 'FXF', productGroup: 'fx_future', ccy: 'USD', curve: 'USD SOFR', curve2: 'RUB RUONIA', tenor: 0.15, notional: -20e6, rate: 84.60, book: 'FXB', cpty: 'MOEX' },
+    { name: 'CCS USD/RUB 3Y', kind: 'XCCY', productGroup: 'ccs', ccy: 'USD', curve: 'USD SOFR', curve2: 'RUB RUONIA', tenor: 3, notional: 15e6, rate: 4.10, book: 'FXB', cpty: 'ВТБ' },
+    // TRS по отчёту без риска: в таблице «валюта × тип» — «без риска», не ноль
+    { name: 'TRS корп. облигации 1Y (по отчёту)', kind: 'OTC', productGroup: 'trs', ccy: 'RUB', curve: 'RUB RUONIA', tenor: 1, notional: 1500e6, rate: 14.50, book: 'RATES', cpty: 'Газпромбанк' },
+    // FX-сделки с двумя валютами риска: NDF (расчёт разницы в рублях), кросс без рубля (FX-дельта в двух валютах, риск
+    // на двух иностранных кривых), FX-своп (две ноги, риск на implied-кривой юаня), CHF-форвард (своя кривая и валюта)
+    { name: 'NDF USD/RUB 6M buy (расчёт в RUB)', kind: 'FXF', productGroup: 'fx_ndf', ccy: 'USD', curve: 'USD SOFR', curve2: 'RUB RUONIA', tenor: 0.5, notional: 30e6, rate: 85.10, settle: 'cash', book: 'FXB', cpty: 'Сбербанк' },
+    { name: 'FX fwd USD/CNY 3M buy (кросс)', kind: 'FXF', ccy: 'USD', ccy2: 'CNY', curve: 'USD SOFR', curve2: 'CNY XCCY', tenor: 0.25, notional: 20e6, rate: 7.12, book: 'FXB', cpty: 'ВТБ' },
+    { name: 'FX swap CNY/RUB TOM/1M buy/sell', kind: 'FXF', ccy: 'CNY', curve: 'CNY FWD', curve2: 'RUB RUONIA', tenor: 0.083, notional: -300e6, rate: 11.53, near: 11.42, book: 'FXB', cpty: 'НКЦ' },
+    // мелкие кроссы: вторая валюта (GBP, AED) — остаток ОВП, в плитке ОВП свёрнут в «+N прочих» (R43); своей кривой
+    // у GBP и AED в демо нет — дисконт по кривой первой валюты
+    { name: 'FX fwd EUR/GBP 1M buy (кросс)', kind: 'FXF', ccy: 'EUR', ccy2: 'GBP', curve: 'EUR ESTR', curve2: 'EUR ESTR', tenor: 0.083, notional: 40e3, rate: 0.8705, book: 'FXB', cpty: 'ВТБ' },
+    { name: 'FX fwd USD/AED 1M buy (кросс)', kind: 'FXF', ccy: 'USD', ccy2: 'AED', curve: 'USD SOFR', curve2: 'USD SOFR', tenor: 0.083, notional: 9e3, rate: 3.6725, book: 'FXB', cpty: 'ВТБ' },
+    { name: 'CHF/RUB fwd 6M buy', kind: 'FXF', ccy: 'CHF', curve: 'CHF SARON', curve2: 'RUB RUONIA', tenor: 0.5, notional: 8e6, rate: 107.90, book: 'FXB', cpty: 'Газпромбанк' },
   ];
   der.forEach(d => P.push(Object.assign({ isin: null, issuer: null, group: 'DER', maturity: addMonths(AS_OF, Math.round(d.tenor * 12)), spreadBp: 0, cpn: null }, d)));
 
@@ -264,6 +291,25 @@
     if (fam && h < 6) p.book = fam[h % fam.length][0];
     else if (h === 9 && p.ccy !== 'USD') p.book = p.group === 'DER' ? 'AM-DER' : p.group === 'GOV' ? 'AM-OFZ' : p.ccy === 'CNY' ? 'AM-CNY' : 'AM-BOND';
   });
+  // FX-сделка: ноги (как extra.legs прогона), форвард по паритету ставок, MtM, FX-дельта по валютам (p.fxDeltaBy)
+  function fxDeal(p) {
+    const q = p.ccy2 || 'RUB', t = p.tenor, mat = p.maturity;
+    const S = M.fx[p.ccy] / M.fx[q], rb = curveAt(p.curve, t) / 100, rq = curveAt(p.curve2 || 'RUB RUONIA', t) / 100;
+    const fwd = S * (1 + rq * t) / (1 + rb * t), dfq = 1 / (1 + rq * t), dfb = 1 / (1 + rb * t);
+    const leg = (name, date, n, k, f) => ({ leg: name, valueDate: date, buyCcy: n > 0 ? p.ccy : q, buyAmount: n > 0 ? n : -n * k, sellCcy: n > 0 ? q : p.ccy, sellAmount: n > 0 ? n * k : -n,
+      contractRate: k, rateQuote: p.ccy + '/' + q, fwdRate: round(f, 4), points: round(f - S, 4), settlement: p.settle === 'cash' ? 'cash' : 'deliverable' });
+    p.legs = [];
+    if (p.near != null) p.legs.push(leg('near', addDays(AS_OF, 1), -p.notional, p.near, S));  // ближняя нога (TOM) — по споту
+    p.legs.push(leg(p.near != null ? 'far' : 'single', mat, p.notional, p.rate, fwd));
+    if (p.settle === 'cash') Object.assign(p.legs[p.legs.length - 1], { settlementCcy: 'RUB', fixingDate: addDays(mat, -2), fixingSource: 'ЦБ', paymentDate: mat });
+    // MtM в рублях: (форвард − курс сделки) × сумма × DF второй валюты; ближняя нога TOM — по споту
+    p.mv = p.legs.reduce((s, l, i) => s + (l.fwdRate - l.contractRate) * (i === 0 && p.near != null ? -p.notional : p.notional) * (l.leg === 'near' ? 1 : dfq), 0) * M.fx[q];
+    // FX-дельта (спот-эквивалент): сумма × DF своей валюты; кросс — ещё и во второй валюте; у свопа ноги гасятся
+    const delta = p.legs.reduce((s, l, i) => s + (i === 0 && p.near != null ? -p.notional : p.notional * dfb), 0);
+    p.fxDeltaBy = { [p.ccy]: round(delta, 0) };
+    if (p.ccy2) p.fxDeltaBy[p.ccy2] = round(-p.notional * p.rate * dfq, 0);
+    p.couponFmt = (p.productGroup === 'fx_ndf' ? 'NDF ' : p.near != null ? 'swap ' + p.near + ' / ' : 'fwd ') + p.rate + (p.ccy2 ? ' ' + p.ccy2 : '');
+  }
   const positions = P.map((p, i) => {
     p.id = 'P' + String(i + 1).padStart(3, '0');
     const r = rng(p.name);
@@ -319,6 +365,12 @@
       p.zspread = p.cpn.type === 'linker' ? null : p.cpn.type === 'float' ? Math.round(p.spreadBp + (r() - 0.5) * 16)
         : Math.round(p.ccy === 'RUB' ? (p.ytm - curveAt('RUB RUONIA', p.tenor)) * 100 : p.spreadBp + (r() - 0.5) * 20);
       p.spreadLabel = p.cpn.type === 'float' ? 'DM' : 'Z';
+      // Z-спред к кривой дисконтирования (R32): у фикса — тот же Z, у флоатера на КС — DM + базис КС − RUONIA на сроке
+      // (купоны по прогнозу КС, дисконт по RUONIA), у флоатера на RUONIA — равен DM; как spreadBp ядра в прогоне
+      p.zSpreadZ = p.cpn.type === 'linker' ? null : p.cpn.type === 'float' && p.ccy === 'RUB' && p.cpn.index === 'КС'
+        ? Math.round(p.zspread + (curveAt('RUB KEY', Math.min(p.tenor, 3)) - curveAt('RUB RUONIA', Math.min(p.tenor, 3))) * 100) : p.zspread;
+      p.spreadCurve = p.ccy === 'RUB' && p.zSpreadZ != null ? 'RUB RUONIA' : null;
+      p.dmSource = p.cpn.type === 'float' ? 'core' : null;
       p.accruedPct = round(p.curCpn / f * r(), 3);
       const dirty = (p.price + p.accruedPct) / 100 * (p.indexation || 1);
       p.mvCcy = p.notional * dirty;
@@ -326,6 +378,9 @@
       p.accrued = p.notional * p.accruedPct / 100 * fx;
       const w = bucketWeights(p.tenor);
       const dv = -p.mv * p.mdur * 1e-4;
+      // спред-риск фикс-бумаги (базис ОФЗ, CS01) — +1 б.п. к годовому Z-спреду, DV01 — к непрерывной ставке кривой:
+      // |спред01| = |DV01| / (1 + R RUONIA на сроке), как в прогоне (R29)
+      const zr = 1 / (1 + curveAt('RUB RUONIA', p.tenor) / 100);
       if (p.ccy === 'RUB') {
         if (p.cpn.type === 'float') {
           const projCurve = p.cpn.index === 'КС' ? 'RUB KEY' : 'RUB RUONIA';
@@ -336,15 +391,15 @@
           if (p.group === 'GOV') bucketWeights(p.tenor).forEach((x, k) => p.risk['RUB OFZ'][k] += -p.mv * p.sprDur * 1e-4 * x);
         } else {
           w.forEach((x, k) => p.risk['RUB RUONIA'][k] += dv * x);
-          if (p.group === 'GOV') w.forEach((x, k) => p.risk['RUB OFZ'][k] += dv * x);
+          if (p.group === 'GOV') w.forEach((x, k) => p.risk['RUB OFZ'][k] += dv * x * zr);
         }
-        if (p.group === 'CORP') bucketWeights(p.tenor).forEach((x, k) => p.cs01b[k] += -p.mv * p.sprDur * 1e-4 * x);
+        if (p.group === 'CORP') bucketWeights(p.tenor).forEach((x, k) => p.cs01b[k] += -p.mv * p.sprDur * 1e-4 * x * (p.cpn.type === 'fix' ? zr : 1));
       } else {
         const cid = M.curves.find(c => c.ccy === p.ccy).id;
         w.forEach((x, k) => p.risk[cid][k] += dv * x);
         w.forEach((x, k) => p.cs01b[k] += dv * x * 0.95);
       }
-      p.fxDelta = p.ccy === 'RUB' ? 0 : p.mvCcy;
+      p.fxDeltaBy = p.ccy === 'RUB' ? {} : { [p.ccy]: p.mvCcy };
       // кэрри за день: купонный доход − фондирование
       const fundRate = p.ccy === 'RUB' ? M.indices['КС'] + 0.25 : p.ccy === 'CNY' ? M.indices['RUSFAR CNY'] + 0.4 : 5.0;
       p.fundRate = fundRate;
@@ -368,17 +423,20 @@
       } else if (p.kind === 'BAS') {
         w.forEach((x, k) => { p.risk['RUB KEY'][k] += -nrub * ann * 1e-4 * x; p.risk['RUB RUONIA'][k] += nrub * ann * 1e-4 * x * 0.98; });
       } else if (p.kind === 'FXF' || p.kind === 'XCCY') {
-        w.forEach((x, k) => { p.risk[p.curve][k] += -sgn * nrub * ann * 1e-4 * x; p.risk['RUB RUONIA'][k] += sgn * nrub * ann * 1e-4 * x; });
+        // иностранная нога — на кривой валюты, вторая — на RUONIA (у кросса — на кривой второй валюты)
+        w.forEach((x, k) => { p.risk[p.curve][k] += -sgn * nrub * ann * 1e-4 * x; p.risk[p.curve2 || 'RUB RUONIA'][k] += sgn * nrub * ann * 1e-4 * x; });
       }
       p.mv = (rng(p.name + 'mv')() - 0.5) * nrub * 0.01;
+      p.fxDeltaBy = (p.kind === 'FXF' || p.kind === 'XCCY') ? { [p.ccy]: p.notional } : {};
+      if (p.kind === 'FXF' && p.productGroup !== 'fx_future') fxDeal(p);
       p.mvCcy = p.mv / M.fx[p.ccy];
       p.accrued = 0; p.price = null; p.ytm = p.rate; p.mdur = null;
-      p.fxDelta = (p.kind === 'FXF' || p.kind === 'XCCY') ? p.notional : 0;
       p.carryDay = p.kind === 'IRS' || p.kind === 'KSW' ? sgn * nrub * (p.rate - (p.kind === 'KSW' ? M.indices['КС'] : M.indices['RUONIA'])) / 100 / 365
         : p.kind === 'BAS' ? nrub * p.rate / 100 / 365 * 0.6 : -sgn * nrub * (M.indices['RUONIA'] - 5) / 100 / 365 * 0.15;
       p.rollDay = 0; p.cs01b.fill(0);
-      p.zspread = null; p.gspread = null;
+      p.zspread = null; p.zSpreadZ = null; p.gspread = null;
     }
+    p.fxDelta = p.fxDeltaBy[p.ccy] || 0;            // в валюте позиции; все валюты — p.fxDeltaBy
     p.dv01ByCurve = {}; let tot = 0;
     M.curves.forEach(c => { const s = p.risk[c.id].reduce((a, b) => a + b, 0); p.dv01ByCurve[c.id] = s; if (c.kind === 'rate') tot += s; });
     p.dv01 = tot;                                   // по ставкам (без базиса ОФЗ)
@@ -390,7 +448,7 @@
     const sprMove = p.group === 'CORP' ? Math.round((r() - 0.5) * 12) : 0;
     p.spreadChgBp = sprMove;
     const spread = p.cs01 * sprMove;
-    const fxp = p.fxDelta * M.fx[p.ccy] * M.fxChgPct[p.ccy] / 100;
+    const fxp = Object.entries(p.fxDeltaBy).reduce((s, [c, a]) => s + a * M.fx[c] * M.fxChgPct[c] / 100, 0);
     const carry = p.carryDay + p.rollDay;
     const other = (r() - 0.5) * Math.abs(p.mv || p.notionalRub * 0.01) * 0.0006;
     const traded = r() < 0.12;
@@ -405,15 +463,57 @@
     // портфель (колонка Portfolio отчёта): HTM-книга — HTM, часть торговых бумаг — AFS, остальное — торговый
     const bt = (M.books.find(b => b.id === p.book) || {}).type;
     p.portfolio = bt === 'HTM' ? 'HTM' : bt === 'TRADING' && /[05]$/.test(p.id) ? 'AFS' : 'Торговый';
-    p.searchText = [p.name, p.isin, p.issuerName, p.issuerFull, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio].join(' ').toLowerCase();
+    p.exchName = p.name; p.alias = null;
+    p.searchBase = [p.name, p.isin, p.issuerName, p.issuerFull, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio].join(' ').toLowerCase();
+    p.searchText = p.searchBase;
     return p;
   });
   M.positions = positions;
   M.pos = Object.fromEntries(positions.map(p => [p.id, p]));
+  // ---------- фондирование (демо, B1): ставка фондирования × MV бумаг за день, в кэрри позиций (как carryDay) ----------
+  (function () {
+    const byBook = {}, byEntity = {}; let total = 0;
+    positions.forEach(p => {
+      if (p.group === 'DER' || p.fundRate == null || p.book === 'HTM') return;
+      const v = -p.mv * p.fundRate / 100 / 365, bk = M.book[p.book] || {};
+      const b = byBook[p.book] || (byBook[p.book] = { total: 0, inPositions: 0, bookLevel: 0, problems: 0, base: 'mv_clean', writeOff: null });
+      b.total += v; b.inPositions += v; total += v;
+      byEntity[bk.entity || '—'] = (byEntity[bk.entity || '—'] || 0) + v;
+    });
+    M.funding = { state: 'demo', text: 'демо-набор: ставка фондирования × MV, в кэрри позиций', period: null, total, inPositions: total,
+      bookLevel: 0, byBook, byEntity, problems: [], provisional: [] };
+  })();
+
+  // ---------- имена бумаг: алиасы по ISIN в памяти (R33; на прогоне — таблица instrument_alias сервера) ----------
+  const now = () => new Date().toISOString();
+  const aliasRevs = { 'RU000A105RL4': [{ rev_id: 1, alias: 'Россия-2043 USD (евробонд)', changed_by: 'demo', changed_at: AS_OF + 'T09:00:00Z' }] };
+  M.aliases = {};
+  const applyAlias = (isin, alias) => {
+    const last = (aliasRevs[isin] || [])[0];
+    if (alias) M.aliases[isin] = { alias, changedBy: last.changed_by, changedAt: last.changed_at }; else delete M.aliases[isin];
+    positions.forEach(p => { if (p.isin === isin) { p.alias = alias || null; p.name = p.alias || p.exchName; p.searchText = (p.alias ? p.alias.toLowerCase() + ' ' : '') + p.searchBase; } });
+  };
+  Object.keys(aliasRevs).forEach(isin => applyAlias(isin, aliasRevs[isin][0].alias));
+  let revId = 1;
+  M.aliasApi = {
+    editable: true, demo: true,
+    readOnlyReason: '',
+    // как PUT /api/v1/instruments/alias: пробелы схлопываются, пустое — сброс, не длиннее 120 знаков
+    put(isin, raw) {
+      if (raw != null && /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(String(raw))) return Promise.resolve({ status: 422, body: { code: 'invalid_parameter', message: 'the alias has control characters' } });
+      const alias = raw == null ? null : String(raw).split(/\s+/).filter(Boolean).join(' ') || null;
+      if (alias && alias.length > 120) return Promise.resolve({ status: 422, body: { code: 'invalid_parameter', message: 'the alias is longer than 120 characters' } });
+      const revs = aliasRevs[isin] = aliasRevs[isin] || [], last = revs[0];
+      if ((last ? last.alias : null) === alias) return Promise.resolve({ status: 200, body: { isin, alias, changed_by: last && last.changed_by, changed_at: last && last.changed_at, changed: false } });
+      revs.unshift({ rev_id: ++revId, alias, changed_by: 'demo', changed_at: now() });
+      return Promise.resolve({ status: 200, body: { isin, alias, changed_by: 'demo', changed_at: revs[0].changed_at, changed: true } });
+    },
+    history: isin => Promise.resolve((aliasRevs[isin] || []).slice()),
+  };
 
   // сортировка по умолчанию: валюта → группа → эмитент → флоатер/фикс → срок до события
   const groupOrder = { GOV: 0, CORP: 1, DER: 2 };
-  const kindOrder = { PD: 0, PK: 1, IN: 2, SOVFX: 3, FLT: 0, FIX: 1, IRS: 0, KSW: 1, BAS: 2, FXF: 3, XCCY: 4 };
+  const kindOrder = { PD: 0, PK: 1, IN: 2, SOVFX: 3, FLT: 0, FIX: 1, IRS: 0, KSW: 1, BAS: 2, FXF: 3, XCCY: 4, OTC: 5 };
   M.defaultOrder = (a, b) => (M.ccyOrder[a.ccy] - M.ccyOrder[b.ccy]) || (groupOrder[a.group] - groupOrder[b.group]) ||
     (a.issuerName || '').localeCompare(b.issuerName || '', 'ru') || (kindOrder[a.kind] - kindOrder[b.kind]) || (a.tenor - b.tenor);
   positions.sort(M.defaultOrder);
@@ -478,7 +578,9 @@
     const mv = dates.map((_, i) => p.group === 'DER' ? 0 : p.mv * sc(i) * (p.price && price[i] != null ? price[i] / p.price : 1));
     const curves = {};
     Object.keys(p.dv01ByCurve).forEach(c => { if (p.dv01ByCurve[c] && (M.curve[c] || {}).kind !== 'basis') curves[c] = dates.map((_, i) => p.dv01ByCurve[c] * sc(i)); });
-    return { dates, price, ytm, spr, notional, dv01, cs01, basis, mv, curves, bench, fromRuns: false };
+    // флоатер (R35): DM ядра — по прогонам последних недель, оценка по цене — за всю историю, как у живого прогона
+    const dm = p.cpn && p.cpn.type === 'float' ? { dm: spr.map((v, i) => i >= n - 15 ? v : null), dmPx: spr.slice() } : {};
+    return Object.assign({ dates, price, ytm, spr, notional, dv01, cs01, basis, mv, curves, bench, fromRuns: false }, dm);
   };
   M.histSource = 'positions';
 
@@ -536,7 +638,7 @@
       const t = yearsTo(put || mat);
       const ytm = (ccyN === 'CNY' ? 6.2 : ccyN === 'USD' ? 6.8 : 5.0) + t * 0.15 + (r() - 0.5) * 1.2 + (M.issuer[iss].rating < 'AA' ? 0 : 1.5);
       const b = { isin: 'RU000A10' + (hash(issName + s) % 9000 + 1000) + 'Z', issuer: iss, issuerName: issName, name: issName + ' ' + s, ccy: ccyN, origCcy: ccy, maturity: mat, put, freq, outstanding: out_, cpn: round(cpn, 2), ytm: round(ytm, 2), tenor: t, rating: M.issuer[iss].rating, sector: M.issuer[iss].sector };
-      b.held = positions.some(p => p.name.replace(/ CNY$/, '').indexOf(s.replace(/ CNY$/, '')) >= 0 && p.issuer === iss);
+      b.held = positions.some(p => p.exchName.replace(/ CNY$/, '').indexOf(s.replace(/ CNY$/, '')) >= 0 && p.issuer === iss);
       const step = 12 / FREQ[freq]; let d = mat; const cps = [];
       while (d > AS_OF) { cps.push(d); d = addMonths(d, -step); }
       b.coupons = cps.reverse();
@@ -637,7 +739,9 @@
       pnlMtd: S('pnlMtd'), pnlYtd: S('pnlYtd'),
       byCcy: {}, byCurve: {},
     };
-    M.ccys.forEach(c => k.byCcy[c] = { dv01: S(p => p.ccy === c ? p.dv01 : 0), mv: S(p => p.ccy === c && p.group !== 'DER' ? p.mv : 0), fxDelta: S(p => p.ccy === c ? p.fxDelta : 0) });
+    // по ногам (lib/instr.js): DV01 — по валюте кривой, FX-дельта — по своей валюте; MV — в валюте позиции
+    const I = window.INSTR;
+    M.ccys.forEach(c => k.byCcy[c] = { dv01: S(p => I.dv01In(p, c)), mv: S(p => p.ccy === c && p.group !== 'DER' ? p.mv : 0), fxDelta: S(p => I.fxIn(p, c)) });
     M.curves.forEach(c => k.byCurve[c.id] = S(p => p.dv01ByCurve[c.id]));
     return k;
   };

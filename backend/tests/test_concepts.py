@@ -125,7 +125,7 @@ def test_positions_history(desk):
     d = h["dates"]
     assert d[-1] == DATE and len(d) == 32 and d == sorted(d)
     s = h["series"]["P1"]
-    assert all(len(v) == len(d) for k, v in s.items() if v is not None and k != "curves")
+    assert all(len(v) == len(d) for k, v in s.items() if v is not None and k not in ("curves", "pt"))
     assert s["notional"][-1] == pytest.approx(10 * 1000) and s["notional"][-2] == pytest.approx(8 * 1000)
     assert s["notional"][0] is None and s["price"][0] is not None and s["bench"][-1] is not None
     assert s["ytm"][-1] is not None and h["series"]["P2"]["ytm"] is None  # a floater: no yield (a null series)
@@ -134,6 +134,54 @@ def test_positions_history(desk):
     one = desk.get("/api/v1/history/positions?ids=P2").json()
     assert set(one["series"]) == {"P2"}
     assert desk.get("/api/v1/history/positions?run_id=999").status_code == 404
+
+
+def test_positions_history_points(desk, store_url):
+    """R44: a point of a position's history says which run it stands on and how that run valued it, so that a chart
+    shows a date of another program, another method, no run or no valuation apart instead of as a move of risk; the
+    number of bonds separates a trade from a change of risk per bond. The fixture is the owner's case in small: the
+    market of 2026-10-14 has no RUONIA OIS curve, core cannot value the floater, the fallback ladder's duration proxy
+    (time to the next coupon x PV) gives it another DV01 than core's on 2026-10-15 — a step that is not a risk move."""
+    h = desk.get("/api/v1/history/positions?ids=P2").json()
+    d, ra, s = h["dates"], h["runAt"], h["series"]["P2"]
+    i0, i1 = str(len(d) - 2), str(len(d) - 1)
+    assert len(ra) == len(d) and ra[-1]["id"] == h["runId"] and ra[-2] is not None and ra[0] is None  # market-only dates
+    assert "old" not in ra[-1] and "cut" not in ra[-1]  # the current program, the final close
+    assert s["pt"][i0][0] == "method" and "рыночной стоимости" in s["pt"][i0][1] and "RUB_RUONIA_OIS" in s["pt"][i0][1]
+    assert s["pt"][i1] == ["minor", "оценка ядра с допущением"]  # core's numbers (the floater's formula inferred)
+    assert s["dv01"][-2] != pytest.approx(s["dv01"][-1], rel=0.1)  # the two methods differ by more than the day's move
+    assert s["qty"][-1] == pytest.approx(5) and s["qty"][-2] == pytest.approx(5) and s["qty"][0] is None
+    with store.connect(store_url) as con:  # the earlier date by an older program; a trade of P1 today
+        con.execute("ALTER TABLE run DISABLE TRIGGER USER")  # a published run is frozen
+        con.execute("ALTER TABLE run_position DISABLE TRIGGER USER")
+        prev, cur = (r[0] for r in con.execute("SELECT run_id FROM run ORDER BY business_date"))
+        con.execute("UPDATE run SET lineage = jsonb_set(lineage, '{logic_version}', '\"0.1.9+v8+core0.32.0\"')"
+                    " WHERE run_id = %s", (prev,))
+        con.execute("UPDATE run_position SET quantity = 7 WHERE run_id = %s AND position_id = 'P1'", (cur,))
+    h = TestClient(create_app(store_url)).get("/api/v1/history/positions").json()
+    ra, p1, p3 = h["runAt"], h["series"]["P1"], h["series"]["P3"]
+    assert ra[-2]["old"] == "0.1.9 (оценка v8, ядро 0.32.0)" and "old" not in ra[-1]
+    assert p1["qty"][-2:] == [pytest.approx(8), pytest.approx(7)] and i1 not in p1["pt"]
+    assert p3["pt"][i0][0] == "unvalued" and p3["dv01"][-2] is None  # held, not valued: no number, not a zero
+    flag = concepts.point_flag
+    assert flag((5, "exact", None, "OFZ"), "2026-10-15", date(2026, 10, 15), True) is None
+    assert flag((5, "exact", None, "OFZ"), "2026-10-14", date(2026, 10, 15), True) == [
+        "minor", "позиции книги OFZ — из отчёта за 2026-10-14 (за дату отчёта нет)"]
+    assert flag((5, "par_proxy", "core_x", "OFZ"), None, date(2026, 10, 15), True)[0] == "method"
+
+
+def test_unknown_days_and_old_runs_note(desk, store_url):
+    """R44/R45: the year to date is not partial for want of history before the year's first close (2026: 5 January,
+    after the New Year holidays); a history computed partly by an older program says so and where to recompute it."""
+    assert concepts.unknown_days(date(2026, 1, 1), date(2026, 1, 5)) == []
+    assert concepts.unknown_days(date(2026, 1, 1), date(2026, 1, 12)) == [date(2026, 1, 9)]
+    with store.connect(store_url) as con:
+        con.execute("ALTER TABLE run DISABLE TRIGGER USER")  # a published run is frozen
+        con.execute("UPDATE run SET lineage = jsonb_set(lineage, '{logic_version}', '\"0.1.9+v8+core0.32.0\"')"
+                    " WHERE business_date = %s", (date.fromisoformat(PREV),))
+    x = extras(TestClient(create_app(store_url)))
+    note = next(n for n in x["notes"] if n.startswith("история: 1 из 2 дат"))
+    assert concepts.BACKFILL_LINK in note
 
 
 @pytest.mark.parametrize(("fact", "want"), [

@@ -1,5 +1,5 @@
 /*
- * Общая строка навигации всех страниц (прототипы и React-приложение /app/): ссылки на страницы, выбранный прогон,
+ * Общая строка навигации всех страниц (прототипы и React-приложение /app/): ссылки на основные страницы, выбранный прогон,
  * автопилот, «Тестовые данные». Подключается до desk-loader.js: выбор прогона должен попасть в адрес раньше,
  * чем загрузчик запросит desk-data.js.
  *
@@ -16,6 +16,7 @@
  * внутридневной). Если PnL посчитан не к закрытию предыдущего рабочего дня, это сказано в подсказке.
  * Фильтр Desk Monitor, который страница применила к своим данным (DESK.scope, desk-scope.js), виден здесь же:
  * что выбрано, сколько позиций, «изменить» (Desk Monitor) и ✕ (снять на всех страницах).
+ * Вход (desk-auth.js, подключается отсюда сразу): CSRF-заголовок изменяющих запросов, пользователь и «Выйти» в строке.
  * window.DESK_NAV: { sel, pinned, href(page), select(sel) }.
  */
 (function () {
@@ -25,12 +26,16 @@
   var inApp = /\/app\/[^\/]*$/.test(location.pathname);
   var root = inApp ? '../' : '';
   var here = inApp ? 'app/' : location.pathname.split('/').pop() || 'index.html';
+  if (http && !window.DESK_AUTH) {  // до первых запросов страницы: CSRF-заголовок, пользователь в строке (desk-auth.js)
+    var au = document.createElement('script');
+    au.src = root + 'desk-auth.js';
+    (document.head || document.documentElement).appendChild(au);
+  }
+  // Основной набор — мониторы (concepts/). Ранние экраны (desk-monitor.html, widget-board.html, pivot-studio.html,
+  // scenario-lab.html) устарели (22.10.2026): в строке их нет, открываются только по прямому адресу (README.md,
+  // «Устаревшие экраны»).
   var PAGES = [
-    ['desk-monitor.html', 'Desk Monitor', 'Сводка, позиции, риски, фондирование, PnL'],
     ['concepts/index.html', 'Мониторы', '13 мониторов на реальных данных: кокпит, риски, позиции, PnL, календари, рынок, история'],
-    ['widget-board.html', 'Widget Board', 'Свои доски из виджетов'],
-    ['pivot-studio.html', 'Pivot Studio', 'Сводные таблицы по любым разрезам'],
-    ['scenario-lab.html', 'Scenario & PnL Lab', 'Конструктор сценариев и PnL explain (≈, в браузере)'],
     ['app/', 'Сценарии (точно)', 'Тейлор и точная переоценка на сервере'],
     ['settings.html', 'Настройки', 'Хаб, папки отчётов, адаптер, автопилот']
   ];
@@ -189,6 +194,8 @@
     run.appendChild(cur);
     st.appendChild(run);
     if (!http) return;
+    var up = el('script', { src: root + 'desk-updater.js', 'data-mode': 'nav', 'data-root': root });  // «Новая версия …»
+    document.head.appendChild(up);
 
     function picker() {
       fetch(root + 'api/v1/runs?limit=200&status=complete', { cache: 'no-store' })
@@ -279,7 +286,8 @@
       }
       var b = el('button', { type: 'button', 'data-act': 'run', title: 'Запустить цикл автопилота сейчас: хаб, папки отчётов, EOD' }, 'Обновить');
       if (busy || s === 'running') b.disabled = true;
-      box.appendChild(b);
+      var au = window.DESK_AUTH && window.DESK_AUTH.state;  // роль «просмотр» цикл не запускает (сервер ответит 403)
+      if (!(au && au.enabled && au.user && au.user.role === 'viewer')) box.appendChild(b);
       box.hidden = false;
     }
     function poll() {

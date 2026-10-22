@@ -17,9 +17,11 @@ with the size and time already taken in is not hashed again. Then, per file:
 * the business date (``timesem.valid_date`` on the calendar of the cached static snapshots); no calendar →
   ``waiting_calendar``, offered again by every scan;
 * ``read``: raises or times out → ``failed`` / ``timed_out``; else ``validate.check_read``, then per unit
-  (book, valid date): rejected, or ``superseded`` (sorts below the current revision by report key, or another
-  source of higher priority has it), or a ``scope_conflict`` (another source, no priorities), or accepted, a
-  new position set unless its ``unit_hash`` equals the current revision's;
+  (dataset, scope unit, valid date; a unit of a multi-date file has its row's date): rejected, or ``superseded``
+  (sorts below the current revision by report key, or another source of higher priority has it), or a
+  ``scope_conflict`` (another source, no priorities), or accepted, a new revision unless its ``unit_hash`` equals
+  the current revision's: a position set for ``positions`` (per book), a ``dataset_set`` for every other dataset
+  with a schema (``ocp``, ``cash_balances``, ``pnl_official``, ``trade_terms``; private/1.2);
 * the file: ``accepted``, ``partially_accepted``, ``rejected`` or ``superseded`` (all its units).
 
 The lookback (``inbox_lookback_days``, ``scan`` only; ``retry`` and ``replay`` are explicit and take any date) is
@@ -46,7 +48,8 @@ waits for a new fingerprint, as before). A new file that ``match`` declines
 changes (ignored) or the lookback reaches its date (too old). The rest is processed newest report date first, so
 the latest positions land before the backlog. The adapter runs in ``read_workers()`` long-lived workers
 (``runner.pooled``), started only when a scan has files to match; reads run in parallel threads a window ahead of
-the processing, which stays in order and in one thread. ``reference()`` runs only in a scan that reads a file, or
+the processing, which stays in order and in one thread. ``reference()`` (books, and since private/1.2 the optional
+``entities`` and ``funding_rules``, stored as ``reference_rev``) runs only in a scan that reads a file, or
 once after the adapter's fingerprint (code or config files) changed, in parallel with the reads. Files waiting
 for a calendar are matched again only after the cache's static snapshots changed. The instruments index is
 rebuilt only when it lacks a snapshot the scan needs (a new day, a report date of an older snapshot); it keeps the
@@ -87,7 +90,7 @@ from ..settings import Settings, adapter_config_dir
 from . import runner
 from .conformance import list_entries
 from .loader import AdapterHandle, load_adapter
-from .spi import DATASETS_WITH_BOOK, AdapterFailure, source_datasets
+from .spi import DATASETS_WITH_BOOK, REFERENCE_KINDS, AdapterFailure, source_datasets
 from .static_index import (
     UNMAPPED_REASONS,
     CalendarUnavailable,
@@ -99,7 +102,7 @@ from .static_index import (
     unmapped_bonds,
 )
 from .timesem import MSK, parse_ts, report_date_suspicious, revision_key, valid_date
-from .validate import check_hit, check_read, check_reference, unit_hash
+from .validate import check_hit, check_read, check_reference_tables, unit_hash
 
 log = logging.getLogger(__name__)
 
@@ -173,6 +176,7 @@ class ScanResult:
     units: Counter = field(default_factory=Counter)
     revisions: int = 0
     books_revised: int = 0
+    reference_revised: Counter = field(default_factory=Counter)  # entities, funding_rules: rows revised
     notes: Counter = field(default_factory=Counter)     # reference() problems by code
     match: Counter = field(default_factory=Counter)     # retried, recovered, warm_<failure>: the match step (R22)
     timings: dict = field(default_factory=dict)         # list_s, match_s, process_s, index_builds
@@ -191,6 +195,8 @@ class ScanResult:
             return "\n".join([*lines, "another scan holds the inbox lock: nothing done"])
         lines += [f"files: {c(self.files)}", f"copies: {c(self.copies)}", f"skipped: {c(self.skipped)}",
                   f"units: {c(self.units)}; new revisions {self.revisions}; books revised {self.books_revised}"]
+        if self.reference_revised:
+            lines.append(f"reference revised: {c(self.reference_revised)}")
         if self.match:
             lines.append(f"match: {c(self.match)}")
         if self.timings:
@@ -283,9 +289,10 @@ class _Scan:
         try:
             ref = self._ref.result() if self._ref is not None else \
                 runner.call_reference(self.h, self.index, self.settings.adapter_read_timeout_s)
-            books, issues = check_reference(ref)
+            tables, issues = check_reference_tables(ref)
+            books = tables["books"]
         except AdapterFailure as f:
-            books, issues = None, [{"code": f.kind}]
+            tables, books, issues = {}, None, [{"code": f.kind}]
         self.res.notes.update(f"reference_{i['code']}" for i in issues)
         if books is None:
             log.warning("inbox: reference() unusable (%s): the stored books are used", ", ".join(self.res.notes))
@@ -294,6 +301,12 @@ class _Scan:
         self.res.books_revised = len(revised)
         if revised:
             self._event("books.changed", counts={"books": len(revised)})
+        for kind in REFERENCE_KINDS[1:]:  # entities, funding_rules: optional tables (private/1.2)
+            if tables.get(kind) is not None:
+                changed = store.store_reference(self.con, kind, tables[kind], self.h.fingerprint)  # type: ignore[arg-type]
+                if changed:
+                    self.res.reference_revised[kind] += len(changed)
+                    self._event("reference.changed", counts={kind: len(changed)})
         try:
             (self.archive / REFERENCE_MARK).write_text(self.h.fingerprint or "", encoding="utf-8")
         except OSError:
@@ -685,10 +698,10 @@ class _Scan:
                 " AND status = ANY(%s) LIMIT 1", (hit["source"], vd, hit["report_date"], list(READ_DONE))).fetchone():
             issues.append(_issue("info", "same_valid_date", None, "another report date maps to this business date"))
         key = revision_key(hit["report_date"], hit.get("report_ts"), hit.get("seq"), gen, o.mtime.timestamp())
-        # shortcut: every unit gets the file's business date; per-unit dates (_report_date, multi-date pnl_official and
-        # trades) come with those datasets (S8, S13)
+        # a unit of a multi-date file (_report_date, 08 §6.1) has its own business date; its revision key stays the
+        # file's, so a later file (a restated history) outranks an earlier one for the same unit
         outcomes = [self._unit(o, decl, hit, cols, parse_ts(gen), key, vd, u, issues) for u in c.units]
-        states = Counter(st for st, _, _ in outcomes)
+        states = Counter(st for st, *_ in outcomes)
         if c.file_error:
             status = "rejected"
         elif states["rejected"]:
@@ -697,16 +710,18 @@ class _Scan:
             status = "superseded" if states["superseded"] and not states["accepted"] else "accepted"
         sid = self._status(o, status, decl, generated_at=parse_ts(gen), error_code=c.file_error, counts={
             "units": dict(states), "rows": sum(len(u["rows"]) for u in c.units),
-            "revisions": sum(1 for st, s, n in outcomes if n), "issues": dict(Counter(i["severity"] for i in issues))},
-            **cols)
+            "revisions": sum(1 for _, _, n, _ in outcomes if n),
+            "issues": dict(Counter(i["severity"] for i in issues))}, **cols)
         unit_ids = []
-        for u, (st, set_id, new) in zip(c.units, outcomes):
+        for u, (st, set_id, new, uvd) in zip(c.units, outcomes):
             self.res.units[st] += 1
+            positions = u["dataset"] == "positions"
             unit_ids.append(con.execute(
                 "INSERT INTO inbox_unit (status_id, sha256, dataset, valid_date, report_date, scope, status, unit_hash,"
-                " row_count, set_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING unit_id",
-                (sid, o.sha256, u["dataset"], vd, u["report_date"], Jsonb(u["scope"]), st, unit_hash(u["rows"]),
-                 len(u["rows"]), set_id)).fetchone()[0])
+                " row_count, set_id, dataset_set_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                " RETURNING unit_id",
+                (sid, o.sha256, u["dataset"], uvd, u["report_date"], Jsonb(u["scope"]), st, unit_hash(u["rows"]),
+                 len(u["rows"]), set_id if positions else None, None if positions else set_id)).fetchone()[0])
         for i in issues:
             scope = {k: v for k, v in (i["scope"] or {}).items() if not k.startswith("_")}
             uid = next((uid for u, uid in zip(c.units, unit_ids) if scope and u["scope"] == scope), None)
@@ -716,39 +731,54 @@ class _Scan:
                          Jsonb(i["scope"]) if i["scope"] else None, i["message"], i["count"], i["origin"]))
 
     def _unit(self, o: Offer, decl: dict, hit: dict, cols: dict, gen: datetime | None, key: tuple, vd: date,
-              u: dict, issues: list[dict]) -> tuple[str, int | None, bool]:
-        """(status, set_id, new revision) of one unit (08 §6.6)."""
-        if u["status"] == "rejected":
-            return "rejected", None, False
+              u: dict, issues: list[dict]) -> tuple[str, int | None, bool, date | None]:
+        """(status, set_id, new revision, business date) of one unit (08 §6.6). positions units are position sets
+        (per book_id), every other dataset with a schema a ``dataset_set`` (per scope unit)."""
         scope = u["scope"]
-        if u["dataset"] != "positions" or "book_id" not in scope:
-            # shortcut: S7a stores positions units scoped by book; other datasets and scopes come with their slices
-            issues.append(_issue("error", "scope_not_supported", scope, "S7a stores positions per book_id"))
-            return "rejected", None, False
+        uvd: date | None = vd
+        if u["report_date"] != hit["report_date"]:  # a unit of a multi-date file
+            try:
+                uvd = self.valid_date(decl, u["report_date"])
+            except CalendarUnavailable:
+                if u["status"] != "rejected":
+                    issues.append(_issue("error", "waiting_calendar", scope, "no calendar covers the row's report date"))
+                return "rejected", None, False, None
+        if u["status"] == "rejected":
+            return "rejected", None, False, uvd
+        positions = u["dataset"] == "positions"
+        if positions and "book_id" not in scope:
+            # shortcut: positions are stored per book (position_set); a positions scope without book_id is refused
+            issues.append(_issue("error", "scope_not_supported", scope, "positions are stored per book_id"))
+            return "rejected", None, False, uvd
+        assert uvd is not None
         uh, src, prio = unit_hash(u["rows"]), hit["source"], decl.get("priority")
         sets = self.con.execute(
             "SELECT set_id, source, priority, report_date, report_ts, seq, generated_at, file_mtime, unit_hash"
             f" FROM position_set WHERE book_id = %s AND valid_date = %s ORDER BY {store.CURRENT_SET}",
-            (scope["book_id"], vd)).fetchall()
+            (scope["book_id"], uvd)).fetchall() if positions else \
+            store.dataset_unit_sets(self.con, u["dataset"], scope, uvd)
         others = [s[2] for s in sets if s[1] != src]
         if any(prio is None or p is None or p == prio for p in others):
             issues.append(_issue("error", "scope_conflict", scope, "another source has this unit (08 §6.6)"))
-            return "rejected", None, False
+            return "rejected", None, False, uvd
         if any(p > prio for p in others):
-            return "superseded", None, False
+            return "superseded", None, False, uvd
         own = [s for s in sets if s[1] == src]
         if own:
             if key < _key(*own[0][3:8]):
-                return "superseded", None, False
+                return "superseded", None, False, uvd
             if own[0][8] == uh:
-                return "accepted", own[0][0], False
-        set_id = store.store_inbox_set(
-            self.con, book_id=scope["book_id"], valid_date=vd, rows=u["rows"], source=src, priority=prio,
-            report_date=date.fromisoformat(hit["report_date"]), report_ts=cols["report_ts"], seq=hit.get("seq"),
-            generated_at=gen, file_mtime=o.mtime, file_name=o.name, sha256=o.sha256,
-            adapter_fingerprint=self.h.fingerprint, unit_hash=uh)  # type: ignore[arg-type]
+                return "accepted", own[0][0], False, uvd
+        common = {"valid_date": uvd, "rows": u["rows"], "source": src, "priority": prio,
+                  "report_date": date.fromisoformat(hit["report_date"]), "report_ts": cols["report_ts"],
+                  "seq": hit.get("seq"), "generated_at": gen, "file_mtime": o.mtime, "file_name": o.name,
+                  "sha256": o.sha256, "adapter_fingerprint": self.h.fingerprint, "unit_hash": uh}
+        if positions:
+            set_id = store.store_inbox_set(self.con, book_id=scope["book_id"], **common)  # type: ignore[arg-type]
+        else:
+            set_id = store.store_dataset_set(self.con, dataset=u["dataset"], scope=scope, **common)  # type: ignore[arg-type]
         self.res.revisions += 1
-        return "accepted", set_id, True
+        return "accepted", set_id, True, uvd
 
     def _archive(self, o: Offer) -> str:
         """``<archive>/<sha256>/<name>``: under its hash, with the name the adapter matches by (08 §13)."""

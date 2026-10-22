@@ -54,6 +54,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 <script src="../echarts.min.js"></script>
 <script src="lib/boot.js"></script>
 <script src="lib/kit.js"></script>
+<script src="lib/instr.js"></script>
 <script>
 (function () {
   const M = MOCK, K = KIT, f = K.f, U = M.util, esc = K.esc;
@@ -253,12 +254,12 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     curRs = rs; fixRs();
     dashCharts.push(rs);
     // наши бумаги
-    const bp = panel('Наши бумаги эмитента', '<span class="k-note">валюта → фикс / флоатеры · по сроку до оферты</span>'); dash.appendChild(bp);
+    const bp = panel('Наши бумаги эмитента', '<span class="k-note">по сроку до оферты · валюта — столбец; группы «валюта → фикс / флоатеры» — переключателем</span>'); dash.appendChild(bp);
     bp.querySelector('.bd').classList.add('flush');
     K.table(bp.querySelector('.bd'), {
       rows: L, search: L.length > 8, sort: [['tenor', 1]], stripe: p => K.kindColor[p.kind],
-      groupBy: [{ key: p => p.ccy + ' · ' + (p.cpn.type === 'float' ? 'флоатеры' : p.cpn.type === 'linker' ? 'линкеры' : 'фикс'), order: (a, b) => (M.ccyOrder[a.slice(0, 3)] - M.ccyOrder[b.slice(0, 3)]) || a.localeCompare(b, 'ru'), label: k => K.ccyTag(k.slice(0, 3)) + ' ' + esc(k.slice(6)), span: 2 }],
-      columns: K.cols(['name', 'book', 'coupon', 'event', 'tenor', 'notional', 'price', 'ytm', 'spread', 'dur', 'cs01', 'dv01', 'pnl', 'mv']),
+      groupable: [{ key: p => p.ccy + ' · ' + (p.cpn.type === 'float' ? 'флоатеры' : p.cpn.type === 'linker' ? 'линкеры' : 'фикс'), order: (a, b) => (M.ccyOrder[a.slice(0, 3)] - M.ccyOrder[b.slice(0, 3)]) || a.localeCompare(b, 'ru'), label: k => K.ccyTag(k.slice(0, 3)) + ' ' + esc(k.slice(6)), span: 2 }], groupLabel: 'валюта → фикс / флоатеры',
+      columns: K.cols(['name', 'ccy', 'book', 'coupon', 'event', 'tenor', 'notional', 'price', 'ytm', 'spread', 'dur', 'cs01', 'dv01', 'pnl', 'mv']),
     });
     // события + PnL
     const two2 = K.h('div', 'c13-two'); dash.appendChild(two2);

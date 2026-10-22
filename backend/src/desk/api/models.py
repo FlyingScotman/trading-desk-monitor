@@ -13,7 +13,8 @@ COMPAT = "compat, removed with window.DESK (M7)"
 
 
 class ErrorOut(BaseModel):
-    code: Literal["not_found", "invalid_parameter", "store_unavailable", "internal"]
+    code: Literal["not_found", "invalid_parameter", "store_unavailable", "internal", "unauthorized", "forbidden",
+                  "locked"]
     message: str
     request_id: str
     details: Any = None
@@ -81,6 +82,8 @@ class Position(BaseModel):
     fact: dict[str, Any] | None = Field(description="The published position record (tdm position row format)")
     pnl: dict[str, Any] | None = Field(description="Flash PnL components plus extra; null without PnL")
     no_pnl: dict[str, Any] | None = Field(description="{reason, detail} when priced but without PnL")
+    alias: str | None = Field(None, description="The display name a user gave fact.isin (PUT /api/v1/instruments/"
+                                                "alias), in force now, old runs too; null: none, show fact.name")
 
 
 class PositionList(BaseModel):
@@ -121,6 +124,93 @@ class RunPnl(BaseModel):
     totals: dict[str, PnlSums] = Field(description="Per book and _total")
 
 
+FundingState = Literal["computed", "not_configured", "invalid_config", "failed", "not_computed"]
+
+
+class FundingPeriod(BaseModel):
+    start: date = Field(description="The previous business day (excluded)")
+    end: date = Field(description="The run's business date (included)")
+    days: int = Field(description="Calendar days accrued")
+
+
+class FundingTotals(BaseModel):
+    total: float = Field(description="All funding lines, RUB (a cost is negative)")
+    in_positions: float = Field(description="Of it, in the positions' flash PnL (component funding)")
+    book_level: float = Field(description="Of it, book-level lines: cash, closed positions, positions without PnL")
+    lines: int
+    positions_funded: int
+
+
+class FundingWriteOff(BaseModel):
+    periodicity: str | None = Field(description="daily / monthly / quarterly / none; null: not set (a problem)")
+    last: date | None = Field(description="The last write-off date on or before the run's date")
+    since_write_off: float | None = Field(description="Funding accrued since it, RUB (this and earlier default runs)")
+
+
+class BookFunding(BaseModel):
+    book_id: str
+    entity: str | None
+    book_type: str | None
+    base: str | None = Field(description="What the book type is funded on: mv_clean, mv_dirty, cash, cost, none")
+    total: float
+    in_positions: float
+    book_level: float
+    lines: int
+    by_kind: dict[str, float] = Field(description="POS, HTM, CASH, ENTITY_CASH, REPO")
+    problems: int
+    write_off: FundingWriteOff | None
+
+
+class FundingLineOut(BaseModel):
+    key: str
+    kind: str
+    ref: str
+    book_id: str
+    book_type: str
+    entity: str
+    ccy: str
+    position_id: str | None
+    base: str
+    rate_expr: str
+    rate_pct: float = Field(description="Rate of the period's last day, %")
+    day_basis: str
+    body_ccy: float = Field(description="Funded body of the last day, signed (a long bond: negative)")
+    body_rub: float
+    days: int
+    first_day: date
+    last_day: date
+    interest_ccy: float
+    interest_rub: float
+    in_position: bool = Field(description="In the position's flash PnL (component funding)")
+    note: str
+
+
+class FundingProblemOut(BaseModel):
+    kind: str
+    ref: str
+    reason: str
+    book_id: str | None
+
+
+class RunFunding(BaseModel):
+    """The run's funding (wave B1, ``publish.funding_run``). ``state`` not_configured: the adapter gave no funding
+    rules, nothing is funded and nothing is shown as 0; not_computed: a run before B1."""
+
+    run_id: int
+    state: FundingState
+    text: str
+    period: FundingPeriod | None
+    reporting_ccy: str
+    totals: FundingTotals | None
+    books: list[BookFunding]
+    entities: dict[str, float] = Field(description="Funding by entity, RUB")
+    problems: list[FundingProblemOut]
+    notes: list[str]
+    provisional: list[str] = Field(description="Policy fields at the engine's provisional default (OPEN_DECISIONS)")
+    policy: dict[str, Any] | None = Field(description="The FundingPolicy applied, with the source of each field")
+    lines: list[FundingLineOut]
+
+
 class AggregateRow(BaseModel):
     key: dict[str, str | None]
     n_positions: int
@@ -136,6 +226,102 @@ class Aggregates(BaseModel):
     run_id: int
     dims: list[str]
     rows: list[AggregateRow]
+
+
+class RiskMissing(BaseModel):
+    reason: Literal["not_valued", "reported_no_risk", "no_risk"]
+    text: str
+    n: int
+
+
+class RiskTableRow(BaseModel):
+    """One row of the table currency x instrument type (UI-02): a currency's total (``level`` ccy), a group of it
+    (group) or an instrument kind (kind). DV01 is the block currency's own curves only."""
+    ccy: str
+    level: Literal["ccy", "group", "kind"]
+    group: Literal["GOV", "SUB", "CORP", "DER", "OTH"] | None
+    kind: str | None
+    label: str | None
+    n_positions: int = Field(description="positions of this currency (by the attribution rule)")
+    n_legs_only: int = Field(description="positions of another currency with a risk here (attribution 'legs')")
+    notional_ccy: float
+    notional_rub: float
+    mv_rub: float
+    mv_ccy: float | None = Field(description="null without the currency's rate")
+    dv01_rub: float = Field(description="DV01 on the curves of the row's currency, RUB per bp")
+    dv01_ccy: float | None = Field(description="the same in the currency per bp; null without its rate")
+    dv01_by_curve_rub: dict[str, float]
+    dv01_foreign_rub: float = Field(description="risk on another currency's curves kept here (attribution "
+                                    "'position'): in dv01_by_curve_rub, not in dv01_rub")
+    ofz_basis_rub: float
+    cs01_rub: float
+    fx_delta_ccy: float
+    n_risk_missing: int = Field(description="positions whose risk is missing (never counted as a zero)")
+    risk_missing: list[RiskMissing]
+
+
+class RiskTableTotal(BaseModel):
+    """Only what sums across currencies, in RUB."""
+    n_positions: int
+    notional_rub: float
+    mv_rub: float
+    dv01_by_curve_rub: dict[str, float]
+    dv01_all_curves_rub: float = Field(description="the sum over curves of different currencies: not a currency's "
+                                       "risk nor a hedge measure, labelled so")
+    ofz_basis_rub: float
+    cs01_rub: float
+    fx_delta_rub: float | None = Field(description="net FX delta at the run's rates; null when a rate is missing")
+    n_risk_missing: int
+
+
+class RiskTableKind(BaseModel):
+    kind: str
+    group: str
+    label: str
+
+
+class RiskTableColumn(BaseModel):
+    """A column of the matrix (R38): an instrument kind present, with its total over all currencies (what sums,
+    in RUB)."""
+    kind: str
+    group: str
+    label: str
+    n_positions: int
+    notional_rub: float
+    mv_rub: float
+    dv01_by_curve_rub: dict[str, float]
+    dv01_all_curves_rub: float = Field(description="the sum over curves of different currencies: labelled so")
+    ofz_basis_rub: float
+    cs01_rub: float
+    fx_delta_rub: float | None = Field(description="net FX delta at the run's rates (RUB rows left out); null when "
+                                       "a rate is missing")
+    n_risk_missing: int
+
+
+class RiskTableMeasure(BaseModel):
+    measure: Literal["dv01", "dv01_curve", "cs01", "ofz_basis", "fx_delta", "mv", "notional", "n_positions"]
+    label: str
+    across_ccys: Literal["yes", "repr", "labelled"] = Field(
+        description="whether the measure sums across currencies (the total row, in RUB): yes; repr only at the "
+        "run's rates; labelled: sums, but over curves of different currencies, not a currency's risk")
+
+
+class RiskTable(BaseModel):
+    """The matrix currency x instrument type (R38): ``ccys`` its rows, ``columns`` the kinds present with their
+    totals over all currencies; a cell is the ``rows`` entry of level ``kind`` (ccy, kind), a row total the entry
+    of level ``ccy``, the corner ``total``."""
+    run_id: int
+    attribution: Literal["legs", "position"]
+    attribution_rule: str
+    attribution_provisional: bool = Field(description="the rule is provisional: the owner decides (UI-02)")
+    cross_ccy_kinds: list[str] = Field(description="the kinds the attribution rule applies to")
+    kinds: list[RiskTableKind] = Field(description="the classification's kinds, in the table's order")
+    measures: list[RiskTableMeasure] = Field(description="the matrix's measures (one shown at a time)")
+    fx: dict[str, float | None]
+    ccys: list[str] = Field(description="the matrix's rows: currencies, RUB first")
+    columns: list[RiskTableColumn] = Field(description="the matrix's columns: the kinds present, in table order")
+    rows: list[RiskTableRow]
+    total: RiskTableTotal
 
 
 class LatestRun(BaseModel):
@@ -177,6 +363,8 @@ class ScenarioDefinition(BaseModel):
     ofzSpread: float = 0
     spreads: SpreadRules | None = None
     fx: dict[str, float] = {}
+    basis: dict[str, float] = Field(default={}, description="FX basis shift per currency, bp (core FXBASIS|<ccy>): "
+                                    "exact repricing of FX derivatives only, the Taylor has no basis factor")
 
 
 class ScenarioDefOut(BaseModel):

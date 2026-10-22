@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "private/1.3/entities",
+  "title": "entities row (reference())",
+  "description": "Private input contract v1 (docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md §10). One row as the adapter emits it. An optional field may be absent or null (the same thing); the empty string is invalid everywhere. Raw firm values go in x_* keys; _src is the row's location in the report, without sheet names.",
+  "type": "object",
+  "required": [
+    "_src",
+    "entity",
+    "funding_scheme"
+  ],
+  "properties": {
+    "_src": {
+      "$ref": "#/$defs/str"
+    },
+    "entity": {
+      "$ref": "#/$defs/str"
+    },
+    "name": {
+      "$ref": "#/$defs/str"
+    },
+    "funding_scheme": {
+      "enum": [
+        "by_book_type",
+        "cash_balance"
+      ]
+    },
+    "pnl_sweep": {
+      "enum": [
+        "daily",
+        "monthly",
+        "quarterly",
+        "none"
+      ]
+    },
+    "active": {
+      "type": "boolean",
+      "default": true
+    },
+    "valid_from": {
+      "$ref": "#/$defs/date"
+    }
+  },
+  "patternProperties": {
+    "^x_": {}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "str": {
+      "type": "string",
+      "minLength": 1
+    },
+    "amount": {
+      "type": [
+        "number",
+        "string"
+      ],
+      "pattern": "^-?[0-9]+(\\.[0-9]+)?$",
+      "description": "a finite JSON number or a decimal string; no NaN, exponents in strings, separators or commas"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    }
+  }
+}

@@ -3,9 +3,617 @@
   "info": {
     "title": "Desk API",
     "description": "Desk API v1 (docs/architecture/05 §2)",
-    "version": "0.2.0"
+    "version": "0.2.4"
   },
   "paths": {
+    "/api/v1/auth/state": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Auth State",
+        "description": "Sign-in on or off, who this is, whether the first admin may be created here. Open without a session.",
+        "operationId": "auth_state_api_v1_auth_state_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthState"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Login",
+        "operationId": "login_api_v1_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthState"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "wrong name or password"
+          },
+          "429": {
+            "description": "locked out"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Logout",
+        "operationId": "logout_api_v1_auth_logout_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/setup": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Setup",
+        "description": "Create the first admin: only while there is no active admin, only from this computer",
+        "operationId": "setup_api_v1_auth_setup_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthState"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/password": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Change Password",
+        "description": "The signed-in user's own password (also the forced change after a reset); other sessions are revoked.",
+        "operationId": "change_password_api_v1_auth_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Users",
+        "operationId": "users_api_v1_users_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserList"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Create User",
+        "operationId": "create_user_api_v1_users_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserRow"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{username}": {
+      "patch": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Change User",
+        "operationId": "change_user_api_v1_users__username__patch",
+        "parameters": [
+          {
+            "name": "username",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Username"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserRow"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/users/{username}/password": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Reset Password",
+        "operationId": "reset_password_api_v1_users__username__password_post",
+        "parameters": [
+          {
+            "name": "username",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Username"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordReset"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/audit": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Audit Entries",
+        "operationId": "audit_entries_api_v1_audit_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 2000,
+              "minimum": 1,
+              "default": 200,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Action"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditList"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
     "/health/live": {
       "get": {
         "summary": "Live",
@@ -525,6 +1133,66 @@
         }
       }
     },
+    "/api/v1/runs/{run_id}/funding": {
+      "get": {
+        "summary": "Funding",
+        "description": "The run's funding (B1): by book (with the write-off) and entity, its lines and problems; state\n``not_configured`` when the adapter gave no funding rules, ``not_computed`` for a run before B1.",
+        "operationId": "funding_api_v1_runs__run_id__funding_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunFunding"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
     "/api/v1/runs/{run_id}/aggregates": {
       "get": {
         "summary": "Aggregates",
@@ -545,11 +1213,11 @@
             "required": false,
             "schema": {
               "type": "string",
-              "description": "Comma-separated: book, quality, asset_class, segment, issuer, ccy",
+              "description": "Comma-separated: book, quality, asset_class, segment, issuer, ccy, instr_kind",
               "default": "book",
               "title": "Dims"
             },
-            "description": "Comma-separated: book, quality, asset_class, segment, issuer, ccy"
+            "description": "Comma-separated: book, quality, asset_class, segment, issuer, ccy, instr_kind"
           }
         ],
         "responses": {
@@ -559,6 +1227,100 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Aggregates"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run_id}/risk-table": {
+      "get": {
+        "summary": "Risk Table",
+        "description": "Aggregated risk as a matrix: currencies x instrument types (UI-02, R38; ``concepts.risk_table``).",
+        "operationId": "risk_table_api_v1_runs__run_id__risk_table_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "attribution",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "legs",
+                "position"
+              ],
+              "type": "string",
+              "description": "where a cross-currency kind's risk goes (CCS, FX_FWD, FX_FUT, FX): legs: each measure in its own currency: DV01 by curve in the curve's, FX delta in its currency's; position count, notional, MV, CS01 and the OFZ basis in the position's; position: everything of a cross-currency kind in the position's currency (the report's CCY); its risk on another currency's curves is shown apart (dv01_foreign_rub), outside the block's DV01. Default 'legs', provisional (UI-02)",
+              "default": "legs",
+              "title": "Attribution"
+            },
+            "description": "where a cross-currency kind's risk goes (CCS, FX_FWD, FX_FUT, FX): legs: each measure in its own currency: DV01 by curve in the curve's, FX delta in its currency's; position count, notional, MV, CS01 and the OFZ basis in the position's; position: everything of a cross-currency kind in the position's currency (the report's CCY); its risk on another currency's curves is shown apart (dv01_foreign_rub), outside the block's DV01. Default 'legs', provisional (UI-02)"
+          },
+          {
+            "name": "book",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "comma-separated books; all when omitted",
+              "title": "Book"
+            },
+            "description": "comma-separated books; all when omitted"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskTable"
                 }
               }
             }
@@ -1157,6 +1919,183 @@
           }
         }
       }
+    },
+    "/api/v1/instruments/aliases": {
+      "get": {
+        "tags": [
+          "instruments"
+        ],
+        "summary": "List Aliases",
+        "operationId": "list_aliases_api_v1_instruments_aliases_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasList"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instruments/aliases/{isin}/history": {
+      "get": {
+        "tags": [
+          "instruments"
+        ],
+        "summary": "Alias History",
+        "operationId": "alias_history_api_v1_instruments_aliases__isin__history_get",
+        "parameters": [
+          {
+            "name": "isin",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The ISIN",
+              "title": "Isin"
+            },
+            "description": "The ISIN"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasHistory"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/instruments/alias": {
+      "put": {
+        "tags": [
+          "instruments"
+        ],
+        "summary": "Put Alias",
+        "description": "Set or clear (blank or null) the alias of an ISIN. A trader or admin (sign-in off: this computer only); a change is recorded with who and when, a request that changes nothing is not.",
+        "operationId": "put_alias_api_v1_instruments_alias_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AliasIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasState"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1279,6 +2218,320 @@
           "rows"
         ],
         "title": "Aggregates"
+      },
+      "AliasHistory": {
+        "properties": {
+          "isin": {
+            "type": "string",
+            "title": "Isin"
+          },
+          "revisions": {
+            "items": {
+              "$ref": "#/components/schemas/AliasRevision"
+            },
+            "type": "array",
+            "title": "Revisions",
+            "description": "Newest first"
+          }
+        },
+        "type": "object",
+        "required": [
+          "isin",
+          "revisions"
+        ],
+        "title": "AliasHistory"
+      },
+      "AliasIn": {
+        "properties": {
+          "isin": {
+            "type": "string",
+            "title": "Isin",
+            "description": "The security's ISIN (case and surrounding spaces ignored)"
+          },
+          "alias": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alias",
+            "description": "The display name, at most 120 characters; null or blank clears it (the exchange name again)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "isin"
+        ],
+        "title": "AliasIn"
+      },
+      "AliasList": {
+        "properties": {
+          "aliases": {
+            "items": {
+              "$ref": "#/components/schemas/InstrumentAlias"
+            },
+            "type": "array",
+            "title": "Aliases",
+            "description": "The aliases in force, by ISIN"
+          }
+        },
+        "type": "object",
+        "required": [
+          "aliases"
+        ],
+        "title": "AliasList"
+      },
+      "AliasRevision": {
+        "properties": {
+          "rev_id": {
+            "type": "integer",
+            "title": "Rev Id"
+          },
+          "alias": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alias",
+            "description": "null: the alias was cleared"
+          },
+          "changed_by": {
+            "type": "string",
+            "title": "Changed By"
+          },
+          "changed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Changed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rev_id",
+          "alias",
+          "changed_by",
+          "changed_at"
+        ],
+        "title": "AliasRevision"
+      },
+      "AliasState": {
+        "properties": {
+          "isin": {
+            "type": "string",
+            "title": "Isin"
+          },
+          "alias": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alias",
+            "description": "In force after the request; null: none (the exchange name is shown)"
+          },
+          "changed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Changed By",
+            "description": "Of the latest revision; null: the ISIN never had one"
+          },
+          "changed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Changed At"
+          },
+          "changed": {
+            "type": "boolean",
+            "title": "Changed",
+            "description": "False when the request set what was already in force (no revision)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "isin",
+          "alias",
+          "changed_by",
+          "changed_at",
+          "changed"
+        ],
+        "title": "AliasState"
+      },
+      "AuditList": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/AuditRow"
+            },
+            "type": "array",
+            "title": "Entries"
+          }
+        },
+        "type": "object",
+        "required": [
+          "entries"
+        ],
+        "title": "AuditList"
+      },
+      "AuditRow": {
+        "properties": {
+          "audit_id": {
+            "type": "integer",
+            "title": "Audit Id"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          },
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ip"
+          },
+          "detail": {
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "audit_id",
+          "at",
+          "actor",
+          "action",
+          "target",
+          "ok",
+          "ip"
+        ],
+        "title": "AuditRow"
+      },
+      "AuthState": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "description": "Sign-in is on (the setting auth); off: this computer only, no accounts"
+          },
+          "user": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UserOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who this is: the signed-in user; auth off: 'local' (admin) for this computer; null: not signed in"
+          },
+          "setup_needed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setup Needed",
+            "description": "No active admin yet (null: the store is unavailable)"
+          },
+          "setup_allowed": {
+            "type": "boolean",
+            "title": "Setup Allowed",
+            "description": "This client may create the first admin (POST /api/v1/auth/setup): a loopback client while setup_needed"
+          },
+          "loopback": {
+            "type": "boolean",
+            "title": "Loopback",
+            "description": "The client is this computer"
+          },
+          "secure": {
+            "type": "boolean",
+            "title": "Secure",
+            "description": "Served over HTTPS"
+          },
+          "plain_http_lan": {
+            "type": "boolean",
+            "title": "Plain Http Lan",
+            "description": "Sign-in over plain HTTP on a network address: show a warning"
+          },
+          "admin_from_network": {
+            "type": "boolean",
+            "title": "Admin From Network"
+          },
+          "roles": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Roles",
+            "description": "Role -> its Russian name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "user",
+          "setup_needed",
+          "setup_allowed",
+          "loopback",
+          "secure",
+          "plain_http_lan",
+          "admin_from_network",
+          "roles"
+        ],
+        "title": "AuthState"
       },
       "AutopilotProgress": {
         "properties": {
@@ -1841,6 +3094,101 @@
         ],
         "title": "BondHistoryPoint"
       },
+      "BookFunding": {
+        "properties": {
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "entity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entity"
+          },
+          "book_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Book Type"
+          },
+          "base": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base",
+            "description": "What the book type is funded on: mv_clean, mv_dirty, cash, cost, none"
+          },
+          "total": {
+            "type": "number",
+            "title": "Total"
+          },
+          "in_positions": {
+            "type": "number",
+            "title": "In Positions"
+          },
+          "book_level": {
+            "type": "number",
+            "title": "Book Level"
+          },
+          "lines": {
+            "type": "integer",
+            "title": "Lines"
+          },
+          "by_kind": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "By Kind",
+            "description": "POS, HTM, CASH, ENTITY_CASH, REPO"
+          },
+          "problems": {
+            "type": "integer",
+            "title": "Problems"
+          },
+          "write_off": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FundingWriteOff"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "book_id",
+          "entity",
+          "book_type",
+          "base",
+          "total",
+          "in_positions",
+          "book_level",
+          "lines",
+          "by_kind",
+          "problems",
+          "write_off"
+        ],
+        "title": "BookFunding"
+      },
       "ErrorOut": {
         "properties": {
           "code": {
@@ -1849,7 +3197,10 @@
               "not_found",
               "invalid_parameter",
               "store_unavailable",
-              "internal"
+              "internal",
+              "unauthorized",
+              "forbidden",
+              "locked"
             ],
             "title": "Code"
           },
@@ -1872,6 +3223,309 @@
           "request_id"
         ],
         "title": "ErrorOut"
+      },
+      "FundingLineOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "ref": {
+            "type": "string",
+            "title": "Ref"
+          },
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "book_type": {
+            "type": "string",
+            "title": "Book Type"
+          },
+          "entity": {
+            "type": "string",
+            "title": "Entity"
+          },
+          "ccy": {
+            "type": "string",
+            "title": "Ccy"
+          },
+          "position_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position Id"
+          },
+          "base": {
+            "type": "string",
+            "title": "Base"
+          },
+          "rate_expr": {
+            "type": "string",
+            "title": "Rate Expr"
+          },
+          "rate_pct": {
+            "type": "number",
+            "title": "Rate Pct",
+            "description": "Rate of the period's last day, %"
+          },
+          "day_basis": {
+            "type": "string",
+            "title": "Day Basis"
+          },
+          "body_ccy": {
+            "type": "number",
+            "title": "Body Ccy",
+            "description": "Funded body of the last day, signed (a long bond: negative)"
+          },
+          "body_rub": {
+            "type": "number",
+            "title": "Body Rub"
+          },
+          "days": {
+            "type": "integer",
+            "title": "Days"
+          },
+          "first_day": {
+            "type": "string",
+            "format": "date",
+            "title": "First Day"
+          },
+          "last_day": {
+            "type": "string",
+            "format": "date",
+            "title": "Last Day"
+          },
+          "interest_ccy": {
+            "type": "number",
+            "title": "Interest Ccy"
+          },
+          "interest_rub": {
+            "type": "number",
+            "title": "Interest Rub"
+          },
+          "in_position": {
+            "type": "boolean",
+            "title": "In Position",
+            "description": "In the position's flash PnL (component funding)"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "kind",
+          "ref",
+          "book_id",
+          "book_type",
+          "entity",
+          "ccy",
+          "position_id",
+          "base",
+          "rate_expr",
+          "rate_pct",
+          "day_basis",
+          "body_ccy",
+          "body_rub",
+          "days",
+          "first_day",
+          "last_day",
+          "interest_ccy",
+          "interest_rub",
+          "in_position",
+          "note"
+        ],
+        "title": "FundingLineOut"
+      },
+      "FundingPeriod": {
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "date",
+            "title": "Start",
+            "description": "The previous business day (excluded)"
+          },
+          "end": {
+            "type": "string",
+            "format": "date",
+            "title": "End",
+            "description": "The run's business date (included)"
+          },
+          "days": {
+            "type": "integer",
+            "title": "Days",
+            "description": "Calendar days accrued"
+          }
+        },
+        "type": "object",
+        "required": [
+          "start",
+          "end",
+          "days"
+        ],
+        "title": "FundingPeriod"
+      },
+      "FundingProblemOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "ref": {
+            "type": "string",
+            "title": "Ref"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "book_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Book Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "ref",
+          "reason",
+          "book_id"
+        ],
+        "title": "FundingProblemOut"
+      },
+      "FundingTotals": {
+        "properties": {
+          "total": {
+            "type": "number",
+            "title": "Total",
+            "description": "All funding lines, RUB (a cost is negative)"
+          },
+          "in_positions": {
+            "type": "number",
+            "title": "In Positions",
+            "description": "Of it, in the positions' flash PnL (component funding)"
+          },
+          "book_level": {
+            "type": "number",
+            "title": "Book Level",
+            "description": "Of it, book-level lines: cash, closed positions, positions without PnL"
+          },
+          "lines": {
+            "type": "integer",
+            "title": "Lines"
+          },
+          "positions_funded": {
+            "type": "integer",
+            "title": "Positions Funded"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "in_positions",
+          "book_level",
+          "lines",
+          "positions_funded"
+        ],
+        "title": "FundingTotals"
+      },
+      "FundingWriteOff": {
+        "properties": {
+          "periodicity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Periodicity",
+            "description": "daily / monthly / quarterly / none; null: not set (a problem)"
+          },
+          "last": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last",
+            "description": "The last write-off date on or before the run's date"
+          },
+          "since_write_off": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since Write Off",
+            "description": "Funding accrued since it, RUB (this and earlier default runs)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "periodicity",
+          "last",
+          "since_write_off"
+        ],
+        "title": "FundingWriteOff"
+      },
+      "InstrumentAlias": {
+        "properties": {
+          "isin": {
+            "type": "string",
+            "title": "Isin"
+          },
+          "alias": {
+            "type": "string",
+            "title": "Alias",
+            "description": "The display name to show instead of the exchange name"
+          },
+          "changed_by": {
+            "type": "string",
+            "title": "Changed By",
+            "description": "Who set it: the user, or 'local' (this computer, sign-in off)"
+          },
+          "changed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Changed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "isin",
+          "alias",
+          "changed_by",
+          "changed_at"
+        ],
+        "title": "InstrumentAlias"
       },
       "JobIn": {
         "properties": {
@@ -1949,6 +3603,26 @@
         ],
         "title": "LogLine"
       },
+      "LoginIn": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Username"
+          },
+          "password": {
+            "type": "string",
+            "maxLength": 1024,
+            "title": "Password"
+          }
+        },
+        "type": "object",
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "LoginIn"
+      },
       "MissingPosition": {
         "properties": {
           "position_id": {
@@ -1966,6 +3640,46 @@
           "reason"
         ],
         "title": "MissingPosition"
+      },
+      "PasswordIn": {
+        "properties": {
+          "current_password": {
+            "type": "string",
+            "maxLength": 1024,
+            "title": "Current Password"
+          },
+          "new_password": {
+            "type": "string",
+            "maxLength": 1024,
+            "title": "New Password"
+          }
+        },
+        "type": "object",
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "title": "PasswordIn"
+      },
+      "PasswordReset": {
+        "properties": {
+          "password": {
+            "type": "string",
+            "maxLength": 1024,
+            "title": "Password"
+          },
+          "must_change_password": {
+            "type": "boolean",
+            "title": "Must Change Password",
+            "description": "A temporary password: changed at the next sign-in",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "password"
+        ],
+        "title": "PasswordReset"
       },
       "PnlSums": {
         "properties": {
@@ -2248,6 +3962,18 @@
             ],
             "title": "No Pnl",
             "description": "{reason, detail} when priced but without PnL"
+          },
+          "alias": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alias",
+            "description": "The display name a user gave fact.isin (PUT /api/v1/instruments/alias), in force now, old runs too; null: none, show fact.name"
           }
         },
         "type": "object",
@@ -2581,6 +4307,34 @@
         ],
         "title": "ResultTotals"
       },
+      "RiskMissing": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "enum": [
+              "not_valued",
+              "reported_no_risk",
+              "no_risk"
+            ],
+            "title": "Reason"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "n": {
+            "type": "integer",
+            "title": "N"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reason",
+          "text",
+          "n"
+        ],
+        "title": "RiskMissing"
+      },
       "RiskPayload": {
         "properties": {
           "run_id": {
@@ -2791,6 +4545,490 @@
           "gamma"
         ],
         "title": "RiskPosition"
+      },
+      "RiskTable": {
+        "properties": {
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "attribution": {
+            "type": "string",
+            "enum": [
+              "legs",
+              "position"
+            ],
+            "title": "Attribution"
+          },
+          "attribution_rule": {
+            "type": "string",
+            "title": "Attribution Rule"
+          },
+          "attribution_provisional": {
+            "type": "boolean",
+            "title": "Attribution Provisional",
+            "description": "the rule is provisional: the owner decides (UI-02)"
+          },
+          "cross_ccy_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Cross Ccy Kinds",
+            "description": "the kinds the attribution rule applies to"
+          },
+          "kinds": {
+            "items": {
+              "$ref": "#/components/schemas/RiskTableKind"
+            },
+            "type": "array",
+            "title": "Kinds",
+            "description": "the classification's kinds, in the table's order"
+          },
+          "measures": {
+            "items": {
+              "$ref": "#/components/schemas/RiskTableMeasure"
+            },
+            "type": "array",
+            "title": "Measures",
+            "description": "the matrix's measures (one shown at a time)"
+          },
+          "fx": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Fx"
+          },
+          "ccys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Ccys",
+            "description": "the matrix's rows: currencies, RUB first"
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/RiskTableColumn"
+            },
+            "type": "array",
+            "title": "Columns",
+            "description": "the matrix's columns: the kinds present, in table order"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/RiskTableRow"
+            },
+            "type": "array",
+            "title": "Rows"
+          },
+          "total": {
+            "$ref": "#/components/schemas/RiskTableTotal"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "attribution",
+          "attribution_rule",
+          "attribution_provisional",
+          "cross_ccy_kinds",
+          "kinds",
+          "measures",
+          "fx",
+          "ccys",
+          "columns",
+          "rows",
+          "total"
+        ],
+        "title": "RiskTable",
+        "description": "The matrix currency x instrument type (R38): ``ccys`` its rows, ``columns`` the kinds present with their\ntotals over all currencies; a cell is the ``rows`` entry of level ``kind`` (ccy, kind), a row total the entry\nof level ``ccy``, the corner ``total``."
+      },
+      "RiskTableColumn": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "group": {
+            "type": "string",
+            "title": "Group"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "n_positions": {
+            "type": "integer",
+            "title": "N Positions"
+          },
+          "notional_rub": {
+            "type": "number",
+            "title": "Notional Rub"
+          },
+          "mv_rub": {
+            "type": "number",
+            "title": "Mv Rub"
+          },
+          "dv01_by_curve_rub": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Dv01 By Curve Rub"
+          },
+          "dv01_all_curves_rub": {
+            "type": "number",
+            "title": "Dv01 All Curves Rub",
+            "description": "the sum over curves of different currencies: labelled so"
+          },
+          "ofz_basis_rub": {
+            "type": "number",
+            "title": "Ofz Basis Rub"
+          },
+          "cs01_rub": {
+            "type": "number",
+            "title": "Cs01 Rub"
+          },
+          "fx_delta_rub": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fx Delta Rub",
+            "description": "net FX delta at the run's rates (RUB rows left out); null when a rate is missing"
+          },
+          "n_risk_missing": {
+            "type": "integer",
+            "title": "N Risk Missing"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "group",
+          "label",
+          "n_positions",
+          "notional_rub",
+          "mv_rub",
+          "dv01_by_curve_rub",
+          "dv01_all_curves_rub",
+          "ofz_basis_rub",
+          "cs01_rub",
+          "fx_delta_rub",
+          "n_risk_missing"
+        ],
+        "title": "RiskTableColumn",
+        "description": "A column of the matrix (R38): an instrument kind present, with its total over all currencies (what sums,\nin RUB)."
+      },
+      "RiskTableKind": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "group": {
+            "type": "string",
+            "title": "Group"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "group",
+          "label"
+        ],
+        "title": "RiskTableKind"
+      },
+      "RiskTableMeasure": {
+        "properties": {
+          "measure": {
+            "type": "string",
+            "enum": [
+              "dv01",
+              "dv01_curve",
+              "cs01",
+              "ofz_basis",
+              "fx_delta",
+              "mv",
+              "notional",
+              "n_positions"
+            ],
+            "title": "Measure"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "across_ccys": {
+            "type": "string",
+            "enum": [
+              "yes",
+              "repr",
+              "labelled"
+            ],
+            "title": "Across Ccys",
+            "description": "whether the measure sums across currencies (the total row, in RUB): yes; repr only at the run's rates; labelled: sums, but over curves of different currencies, not a currency's risk"
+          }
+        },
+        "type": "object",
+        "required": [
+          "measure",
+          "label",
+          "across_ccys"
+        ],
+        "title": "RiskTableMeasure"
+      },
+      "RiskTableRow": {
+        "properties": {
+          "ccy": {
+            "type": "string",
+            "title": "Ccy"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "ccy",
+              "group",
+              "kind"
+            ],
+            "title": "Level"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "GOV",
+                  "SUB",
+                  "CORP",
+                  "DER",
+                  "OTH"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "n_positions": {
+            "type": "integer",
+            "title": "N Positions",
+            "description": "positions of this currency (by the attribution rule)"
+          },
+          "n_legs_only": {
+            "type": "integer",
+            "title": "N Legs Only",
+            "description": "positions of another currency with a risk here (attribution 'legs')"
+          },
+          "notional_ccy": {
+            "type": "number",
+            "title": "Notional Ccy"
+          },
+          "notional_rub": {
+            "type": "number",
+            "title": "Notional Rub"
+          },
+          "mv_rub": {
+            "type": "number",
+            "title": "Mv Rub"
+          },
+          "mv_ccy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mv Ccy",
+            "description": "null without the currency's rate"
+          },
+          "dv01_rub": {
+            "type": "number",
+            "title": "Dv01 Rub",
+            "description": "DV01 on the curves of the row's currency, RUB per bp"
+          },
+          "dv01_ccy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dv01 Ccy",
+            "description": "the same in the currency per bp; null without its rate"
+          },
+          "dv01_by_curve_rub": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Dv01 By Curve Rub"
+          },
+          "dv01_foreign_rub": {
+            "type": "number",
+            "title": "Dv01 Foreign Rub",
+            "description": "risk on another currency's curves kept here (attribution 'position'): in dv01_by_curve_rub, not in dv01_rub"
+          },
+          "ofz_basis_rub": {
+            "type": "number",
+            "title": "Ofz Basis Rub"
+          },
+          "cs01_rub": {
+            "type": "number",
+            "title": "Cs01 Rub"
+          },
+          "fx_delta_ccy": {
+            "type": "number",
+            "title": "Fx Delta Ccy"
+          },
+          "n_risk_missing": {
+            "type": "integer",
+            "title": "N Risk Missing",
+            "description": "positions whose risk is missing (never counted as a zero)"
+          },
+          "risk_missing": {
+            "items": {
+              "$ref": "#/components/schemas/RiskMissing"
+            },
+            "type": "array",
+            "title": "Risk Missing"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ccy",
+          "level",
+          "group",
+          "kind",
+          "label",
+          "n_positions",
+          "n_legs_only",
+          "notional_ccy",
+          "notional_rub",
+          "mv_rub",
+          "mv_ccy",
+          "dv01_rub",
+          "dv01_ccy",
+          "dv01_by_curve_rub",
+          "dv01_foreign_rub",
+          "ofz_basis_rub",
+          "cs01_rub",
+          "fx_delta_ccy",
+          "n_risk_missing",
+          "risk_missing"
+        ],
+        "title": "RiskTableRow",
+        "description": "One row of the table currency x instrument type (UI-02): a currency's total (``level`` ccy), a group of it\n(group) or an instrument kind (kind). DV01 is the block currency's own curves only."
+      },
+      "RiskTableTotal": {
+        "properties": {
+          "n_positions": {
+            "type": "integer",
+            "title": "N Positions"
+          },
+          "notional_rub": {
+            "type": "number",
+            "title": "Notional Rub"
+          },
+          "mv_rub": {
+            "type": "number",
+            "title": "Mv Rub"
+          },
+          "dv01_by_curve_rub": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Dv01 By Curve Rub"
+          },
+          "dv01_all_curves_rub": {
+            "type": "number",
+            "title": "Dv01 All Curves Rub",
+            "description": "the sum over curves of different currencies: not a currency's risk nor a hedge measure, labelled so"
+          },
+          "ofz_basis_rub": {
+            "type": "number",
+            "title": "Ofz Basis Rub"
+          },
+          "cs01_rub": {
+            "type": "number",
+            "title": "Cs01 Rub"
+          },
+          "fx_delta_rub": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fx Delta Rub",
+            "description": "net FX delta at the run's rates; null when a rate is missing"
+          },
+          "n_risk_missing": {
+            "type": "integer",
+            "title": "N Risk Missing"
+          }
+        },
+        "type": "object",
+        "required": [
+          "n_positions",
+          "notional_rub",
+          "mv_rub",
+          "dv01_by_curve_rub",
+          "dv01_all_curves_rub",
+          "ofz_basis_rub",
+          "cs01_rub",
+          "fx_delta_rub",
+          "n_risk_missing"
+        ],
+        "title": "RiskTableTotal",
+        "description": "Only what sums across currencies, in RUB."
       },
       "RunDetail": {
         "properties": {
@@ -3022,6 +5260,128 @@
           "log"
         ],
         "title": "RunDetail"
+      },
+      "RunFunding": {
+        "properties": {
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "computed",
+              "not_configured",
+              "invalid_config",
+              "failed",
+              "not_computed"
+            ],
+            "title": "State"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "period": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FundingPeriod"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reporting_ccy": {
+            "type": "string",
+            "title": "Reporting Ccy"
+          },
+          "totals": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FundingTotals"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "books": {
+            "items": {
+              "$ref": "#/components/schemas/BookFunding"
+            },
+            "type": "array",
+            "title": "Books"
+          },
+          "entities": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Entities",
+            "description": "Funding by entity, RUB"
+          },
+          "problems": {
+            "items": {
+              "$ref": "#/components/schemas/FundingProblemOut"
+            },
+            "type": "array",
+            "title": "Problems"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          },
+          "provisional": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Provisional",
+            "description": "Policy fields at the engine's provisional default (OPEN_DECISIONS)"
+          },
+          "policy": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy",
+            "description": "The FundingPolicy applied, with the source of each field"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/FundingLineOut"
+            },
+            "type": "array",
+            "title": "Lines"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "state",
+          "text",
+          "period",
+          "reporting_ccy",
+          "totals",
+          "books",
+          "entities",
+          "problems",
+          "notes",
+          "provisional",
+          "policy",
+          "lines"
+        ],
+        "title": "RunFunding",
+        "description": "The run's funding (wave B1, ``publish.funding_run``). ``state`` not_configured: the adapter gave no funding\nrules, nothing is funded and nothing is shown as 0; not_computed: a run before B1."
       },
       "RunHeader": {
         "properties": {
@@ -3398,6 +5758,15 @@
             "type": "object",
             "title": "Fx",
             "default": {}
+          },
+          "basis": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Basis",
+            "description": "FX basis shift per currency, bp (core FXBASIS|<ccy>): exact repricing of FX derivatives only, the Taylor has no basis factor",
+            "default": {}
           }
         },
         "additionalProperties": false,
@@ -3537,6 +5906,38 @@
         ],
         "title": "ScenarioResult"
       },
+      "SetupIn": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Username"
+          },
+          "password": {
+            "type": "string",
+            "maxLength": 1024,
+            "title": "Password"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "SetupIn"
+      },
       "SpreadRules": {
         "properties": {
           "_all": {
@@ -3623,6 +6024,254 @@
           "total"
         ],
         "title": "TaylorParts"
+      },
+      "UserIn": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Username"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "viewer",
+              "trader",
+              "admin"
+            ],
+            "title": "Role"
+          },
+          "password": {
+            "type": "string",
+            "maxLength": 1024,
+            "title": "Password"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "must_change_password": {
+            "type": "boolean",
+            "title": "Must Change Password",
+            "description": "The user sets their own password at the first sign-in",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "username",
+          "role",
+          "password"
+        ],
+        "title": "UserIn"
+      },
+      "UserList": {
+        "properties": {
+          "users": {
+            "items": {
+              "$ref": "#/components/schemas/UserRow"
+            },
+            "type": "array",
+            "title": "Users"
+          },
+          "roles": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Roles"
+          }
+        },
+        "type": "object",
+        "required": [
+          "users",
+          "roles"
+        ],
+        "title": "UserList"
+      },
+      "UserOut": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "viewer",
+              "trader",
+              "admin"
+            ],
+            "title": "Role"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "must_change_password": {
+            "type": "boolean",
+            "title": "Must Change Password",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "username",
+          "role"
+        ],
+        "title": "UserOut"
+      },
+      "UserPatch": {
+        "properties": {
+          "role": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "viewer",
+                  "trader",
+                  "admin"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          },
+          "active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "unlock": {
+            "type": "boolean",
+            "title": "Unlock",
+            "description": "Clear a lockout after wrong passwords",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "UserPatch"
+      },
+      "UserRow": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "viewer",
+              "trader",
+              "admin"
+            ],
+            "title": "Role"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          },
+          "must_change_password": {
+            "type": "boolean",
+            "title": "Must Change Password"
+          },
+          "locked": {
+            "type": "boolean",
+            "title": "Locked"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "password_changed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Password Changed At"
+          },
+          "last_login_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Login At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "username",
+          "display_name",
+          "role",
+          "active",
+          "must_change_password",
+          "locked",
+          "created_at",
+          "created_by",
+          "updated_at",
+          "password_changed_at",
+          "last_login_at"
+        ],
+        "title": "UserRow"
       }
     }
   }

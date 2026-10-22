@@ -32,6 +32,8 @@ from desk.inbox.spi import (
     HIT_KEYS,
     MULTI_DATE_DATASETS,
     READ_KEYS,
+    REFERENCE_KEYS,
+    REFERENCE_KINDS,
     RESERVED_KEYS,
     SEVERITIES,
     parse_contract,
@@ -244,6 +246,8 @@ def _check(decl: dict, hit: dict, result: Any, books: list[dict] | None, contrac
                                                            "face_outstanding_ccy")
             if norm["asset_class"] == "fx" and "amount_ccy" not in norm:
                 flag("error", "missing_required", uk, src, "an fx row needs amount_ccy")
+        for severity, code, message in (_row_rules(ds, norm) if not errs else ()):
+            flag(severity, code, uk, src, message)
         if ds in DATASET_KEYS:  # normalised values where valid (1.0 == "1"), repr so a list cannot break the set
             k = (ds, rd, tuple(repr({**row, **norm}.get(f)) for f in DATASET_KEYS[ds]))
             if k in keys_seen:
@@ -328,6 +332,135 @@ def _check(decl: dict, hit: dict, result: Any, books: list[dict] | None, contrac
             if abs(got - total) > max(Decimal("0.01"), Decimal("1e-8") * abs(total)):
                 raise _Reject("control_mismatch", f"{ds}: sum of {f} differs from the stated total")
     return "ok"
+
+
+FX_TERMS_FIELDS = ("value_date", "base_ccy", "quote_ccy", "side", "notional_base", "notional_quote")
+PNL_PARTS_TOLERANCE = Decimal("0.01")
+
+
+def _row_rules(dataset: str, row: dict) -> list[tuple[str, str, str]]:
+    """(severity, code, message) of the rules of 08 §10 beyond the schema, for one schema-valid row."""
+    out: list[tuple[str, str, str]] = []
+    if dataset == "pnl_official":
+        total, pl, oci = (amount(row[f]) for f in ("pnl_daily_rub", "pnl_pl_daily_rub", "pnl_oci_daily_rub"))
+        assert total is not None and pl is not None and oci is not None
+        if abs(total - pl - oci) > max(PNL_PARTS_TOLERANCE, Decimal("1e-8") * abs(total)):
+            out.append(("warning", "pnl_parts_mismatch",
+                        "pnl_daily_rub differs from pnl_pl_daily_rub + pnl_oci_daily_rub"))
+    elif dataset == "trade_terms" and row["product_kind"] in ("fx_forward", "fx_swap"):
+        missing = [f for f in FX_TERMS_FIELDS if f not in row]
+        if missing:
+            out.append(("error", "missing_required", f"an fx trade needs {', '.join(missing)}"))
+        elif row["base_ccy"] == row["quote_ccy"]:
+            out.append(("error", "bad_value", "base_ccy equals quote_ccy"))
+        if row["product_kind"] == "fx_swap" and "leg_id" not in row:
+            out.append(("error", "missing_required", "an fx_swap row is one leg and needs leg_id"))
+        if row.get("ndf") and "fixing_date" not in row:
+            out.append(("warning", "ndf_without_fixing", "an ndf without fixing_date"))
+    return out
+
+
+def _reference_rule(kind: str, row: dict) -> str | None:
+    """The message of a ``missing_required`` beyond the schema of a reference row, or None."""
+    if kind == "funding_rules":
+        if row["rate_kind"] == "index_spread" and "index_code" not in row:
+            return "index_spread needs index_code"
+        if row["rate_kind"] == "fixed" and "fixed_rate_pct" not in row:
+            return "fixed needs fixed_rate_pct"
+    if kind == "funding_policy":
+        if "book_type" in row and (wide := [f for f in POLICY_FIRM_WIDE if f in row]):
+            return f"{', '.join(wide)} take a row without book_type (firm-wide)"
+        if "pnl_sweep" in row and "book_type" not in row:
+            return "pnl_sweep needs book_type (an entity's own is entities.pnl_sweep)"
+    return None
+
+
+POLICY_FIRM_WIDE = ("htm_base", "mv_base_date", "cash_base_date", "new_positions", "closed_positions", "fx_date",
+                    "out_of_currency", "entity_cash_book_type", "repo_rate", "repo_contract_from_term_days",
+                    "repo_security_book_type", "write_off_date")
+"""``funding_policy`` fields of the firm-wide row (no ``book_type``); ``pnl_sweep`` is per book type (private/1.3)."""
+
+
+FUNDING_SELECTORS = ("instrument_id", "book_id", "entity", "book_type", "ccy")
+"""Selectors of a funding rule, most specific first (08 §7 ``funding_rules``)."""
+
+
+def check_reference_tables(result: Any) -> tuple[dict[str, list[dict] | None], list[dict]]:
+    """Validate ``reference(ctx)`` (08 §7, §10): per table of ``REFERENCE_KINDS`` the valid normalised rows (None for
+    an optional table the result does not have), and the issues. A malformed result gives ``{"books": None}`` and an
+    error. An invalid or repeated row is left out with an error issue (books: a repeated ``book_id``; entities and
+    funding rules: a repeated key and ``valid_from``, since their history is rows with different ``valid_from``).
+    Cross-checks are warnings: a book or rule naming an entity the ``entities`` table lacks (``unknown_entity``), a
+    rule naming an unknown book (``unknown_book``), two rules with equal selectors and ``valid_from``
+    (``ambiguous_rule``), a ``funding_policy`` setting given twice with different values for the same book type and
+    ``valid_from`` (``ambiguous_policy``)."""
+    books, issues = check_reference(result)
+    tables: dict[str, list[dict] | None] = {"books": books}
+    if books is None:
+        return tables, issues
+    for kind in REFERENCE_KINDS[1:]:
+        raw = result.get(kind)
+        if raw is None:
+            tables[kind] = None
+            continue
+        if not isinstance(raw, list) or not all(isinstance(r, dict) for r in raw):
+            issues.append(_issue("error", "bad_reference", None, None, f"reference()[{kind!r}] must be a list of objects"))
+            tables[kind] = None
+            continue
+        tables[kind] = _reference_rows(kind, raw, issues)
+    entities = {e["entity"] for e in tables.get("entities") or []}
+    known_books = {b["book_id"] for b in books}
+    if entities:
+        for b in books:
+            if b["entity"] not in entities:
+                issues.append(_issue("warning", "unknown_entity", {"book_id": b["book_id"]}, b.get("_src"),
+                                     "books: entity not in reference() entities"))
+    selectors: Counter = Counter()
+    for r in tables.get("funding_rules") or []:
+        if r.get("entity") is not None and entities and r["entity"] not in entities:
+            issues.append(_issue("warning", "unknown_entity", None, r.get("_src"), "funding_rules: entity not in entities"))
+        if r.get("book_id") is not None and r["book_id"] not in known_books:
+            issues.append(_issue("warning", "unknown_book", None, r.get("_src"), "funding_rules: book_id not in books"))
+        selectors[(r.get("valid_from"), *(r.get(f) for f in FUNDING_SELECTORS))] += 1
+    for n in (n for n in selectors.values() if n > 1):
+        issues.append(_issue("warning", "ambiguous_rule", None, None, "funding_rules: equal selectors and valid_from",
+                             n))
+    settings: dict[tuple, set] = {}
+    for r in tables.get("funding_policy") or []:
+        if r.get("active", True) is not False:
+            for f in (*POLICY_FIRM_WIDE, "pnl_sweep"):
+                if f in r:
+                    settings.setdefault((r.get("valid_from"), r.get("book_type"), f), set()).add(r[f])
+    for (_, _, f), values in settings.items():
+        if len(values) > 1:  # the engine leaves such a setting at its default and says so (rules.reference)
+            issues.append(_issue("warning", "ambiguous_policy", None, None,
+                                 f"funding_policy: {f} set twice with different values on one valid_from"))
+    return tables, issues
+
+
+def _reference_rows(kind: str, raw: list[dict], issues: list[dict]) -> list[dict]:
+    valid = []
+    for row in raw:
+        bad_keys = [k for k in row if k.startswith("_") and k != "_src"]
+        norm, errs, _ = validate_row(kind, row)
+        src = row.get("_src") if isinstance(row.get("_src"), str) else None
+        if bad_keys:
+            issues.append(_issue("error", "reserved_key", None, src, f"{kind} rows carry only _src"))
+        for e in errs:
+            issues.append(_issue("error", e.code, None, src, f"{kind}: field {e.field}" if e.field
+                                 else f"{kind}: field not in the contract"))
+        why = None if errs else _reference_rule(kind, norm)
+        if why:
+            issues.append(_issue("error", "missing_required", None, src, f"{kind}: {why}"))
+        if not errs and not bad_keys and not why:
+            valid.append(norm)
+    def key(r: dict) -> tuple:
+        return (*(r.get(k) for k in REFERENCE_KEYS[kind]), r.get("valid_from"))
+
+    counts = Counter(key(r) for r in valid)
+    for n in (n for n in counts.values() if n > 1):  # two definitions: neither is trusted
+        issues.append(_issue("error", "duplicate_key", None, None, f"{kind}: key and valid_from repeated", n))
+    return [r for r in valid if counts[key(r)] == 1]
 
 
 def check_reference(result: Any) -> tuple[list[dict] | None, list[dict]]:

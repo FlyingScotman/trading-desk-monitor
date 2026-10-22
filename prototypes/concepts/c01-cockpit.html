@@ -23,6 +23,7 @@
 <script src="../echarts.min.js"></script>
 <script src="lib/boot.js"></script>
 <script src="lib/kit.js"></script>
+<script src="lib/instr.js"></script>
 <script>
 (function () {
   const M = MOCK, K = KIT, f = K.f;
@@ -30,9 +31,10 @@
   // вкладки под шапкой
   document.body.insertBefore(document.getElementById('tabs'), document.querySelector('.k-page'));
   K.hud(document.getElementById('hud'));
-  const TABS = [['risk', 'Риски'], ['pos', 'Позиции'], ['pnl', 'PnL'], ['hist', 'История']];
+  const TABS = [['risk', 'Риски'], ['ccy', 'Валюта × тип'], ['pos', 'Позиции'], ['pnl', 'PnL'], ['hist', 'История']];
   let tab = 'risk';
   try { tab = localStorage.getItem('c01-tab') || 'risk'; } catch (e) { }
+  if (!TABS.some(t => t[0] === tab)) tab = 'risk';
   const tabs = document.getElementById('tabs'), view = document.getElementById('view');
   function renderTabs() { tabs.innerHTML = TABS.map(([k, t]) => '<button class="' + (k === tab ? 'on' : '') + '" data-k="' + k + '">' + t + '</button>').join(''); tabs.querySelectorAll('button').forEach(b => b.onclick = () => { tab = b.dataset.k; try { localStorage.setItem('c01-tab', tab); } catch (e) { } renderTabs(); render(); }); }
   K.commands(TABS.map(([k, t]) => ({ label: 'Вкладка: ' + t, run: () => { tab = k; renderTabs(); render(); } })));
@@ -45,13 +47,16 @@
       top.querySelector('.bd').classList.add('flush', 'scroll');
       view.appendChild(top); K.riskMatrix(top.querySelector('.bd'));
       const g = K.h('div', 'k-grid'); g.style.marginTop = '12px'; view.appendChild(g);
-      const BLOCKS = [['RUB', ['RUB RUONIA', 'RUB KEY', 'RUB OFZ']], ['USD', ['USD SOFR']], ['CNY', ['CNY XCCY']], ['EUR', ['EUR ESTR']]];
-      // другие валюты с риском (CHF и т. п.) — своими блоками, после основных
-      M.ccys.filter(c => !BLOCKS.some(b => b[0] === c)).forEach(c => { const ids = M.curves.filter(x => x.ccy === c && x.kind === 'rate').map(x => x.id); if (ids.length) BLOCKS.push([c, ids]); });
+      // блок валюты — все кривые этой валюты из данных прогона (curve.ccy: у кривой валюта — своя), не список: новая
+      // кривая (implied CNY, прокси USD/EUR, CHF) попадает в блок своей валюты сама; рубли, доллары, юани, евро — первыми
+      const ORDER = ['RUB', 'USD', 'CNY', 'EUR'];
+      const ccys = [...new Set(ORDER.concat(M.ccys, M.curves.map(x => x.ccy)))];
+      const BLOCKS = ccys.map(c => [c, M.curves.filter(x => x.ccy === c).map(x => x.id)]).filter(b => b[1].length);
       BLOCKS.forEach(([ccy, curves]) => {
         const box = K.h('div', 'ccy-block');
         const pc = panel(K.ccyTag(ccy) + ' риск по бакетам', '<span class="mode"></span>');
-        const pt = panel(K.ccyTag(ccy) + ' кривая × бакет');
+        // у рублей — подсказка, в какой конвенции риск RUONIA и почему базис ОФЗ не равен ему (R29, R30)
+        const pt = panel(K.ccyTag(ccy) + ' кривая × бакет', ccy === 'RUB' ? '<span class="k-note">' + K.hint('RUONIA, базис ОФЗ, CS01 — как считаются', K.tips.ruonia + '\n\n' + K.tips.basis01 + '\n\n' + K.tips.cs01) + '</span>' : '');
         pt.querySelector('.bd').classList.add('flush', 'scroll');
         box.append(pc, pt); g.appendChild(box);
         const el = K.h('div', 'chart'); pc.querySelector('.bd').appendChild(el);
@@ -62,12 +67,18 @@
         K.bucketTable(pt.querySelector('.bd'), ccy, { cs01: true });
       });
     }
+    if (tab === 'ccy') {
+      // агрегированный риск: валюта — верхний уровень, тип инструмента — разбивка (UI-02, lib/instr.js)
+      const p = panel('Агрегированный риск: валюта × тип инструмента', '<span class="k-note">по вертикали — валюта, по горизонтали — тип · одна мера · фильтр книг и портфелей шапки</span>');
+      p.querySelector('.bd').classList.add('flush', 'scroll');
+      view.appendChild(p); K.ccyKindTable(p.querySelector('.bd'));
+    }
     if (tab === 'pos') {
-      const p = panel('Позиции', '<span class="k-note">валюта → эмитент → флоатеры / фикс → срок до оферты</span>');
+      const p = panel('Позиции', '<span class="k-note">плоская таблица: валюта и эмитент — обычные столбцы (сортировка, ⏷ фильтр); группы — переключателем</span>');
       p.querySelector('.bd').classList.add('flush'); view.appendChild(p);
       K.table(p.querySelector('.bd'), {
-        rowsFn: () => K.list(), groupBy: K.defaultGroups, stripe: r => K.issuerColor(r.issuer), maxHeight: 'calc(100vh - 290px)',
-        columns: K.cols(['name', 'kind', 'book', 'coupon', 'event', 'maturity', 'tenor', 'notional', 'price', 'ytm', 'spread', 'dur', 'dv01', 'cs01', 'carry', 'pnl', 'mv']),
+        rowsFn: () => K.list(), groupable: K.defaultGroups, stripe: r => K.issuerColor(r.issuer), maxHeight: 'calc(100vh - 290px)',
+        columns: K.cols(['name', 'ccy', 'issuer', 'kind', 'book', 'coupon', 'event', 'maturity', 'tenor', 'notional', 'price', 'ytm', 'spread', 'dur', 'dv01', 'cs01', 'carry', 'pnl', 'mv']),
       });
     }
     if (tab === 'pnl') {
@@ -78,10 +89,12 @@
       const el2 = K.h('div', 'chart'); hp.querySelector('.bd').appendChild(el2);
       const keys = ['carry', 'rates', 'spread', 'fx', 'trading', 'other'], names = { carry: 'Кэрри', rates: 'Ставки', spread: 'Спред', fx: 'FX', trading: 'Сделки', other: 'Прочее' };
       K.chart(el2, () => ({ grid: { left: 6, right: 10, top: 28, bottom: 4, containLabel: true }, legend: { top: 0 }, tooltip: { trigger: 'axis', valueFormatter: v => f.mns(v, 2) }, xAxis: { type: 'category', data: M.histDates, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', axisLabel: { formatter: v => f.mn(v, 0) } }, dataZoom: [{ type: 'inside', start: 60 }], series: keys.map(k => ({ name: names[k], type: 'bar', stack: 'p', data: M.hist.pnl[k] })).concat([{ name: 'Итого', type: 'line', data: M.hist.pnl.total, showSymbol: false, color: K.css('--fg') }]) }));
+      const fp = panel('Фондирование', '<span class="k-note">по книгам и юрлицам · в кэрри позиций и строками книг</span>'); fp.style.marginTop = '12px'; fp.querySelector('.bd').classList.add('flush'); view.appendChild(fp);
+      K.fundingPanel(fp.querySelector('.bd'));
       const t = panel('PnL по позициям'); t.querySelector('.bd').classList.add('flush'); t.style.marginTop = '12px'; view.appendChild(t);
       K.table(t.querySelector('.bd'), {
-        rowsFn: () => K.list(), groupBy: [K.defaultGroups[0]], stripe: r => K.issuerColor(r.issuer), sort: [['pnl', 1]], maxHeight: '60vh',
-        columns: K.cols(['name', 'book', { key: 'pc', label: 'Кэрри', num: true, val: r => r.pnl.carry, fmt: f.k, cls: f.cls, sum: r => r.pnl.carry, unit: 'тыс ₽' }, { key: 'pr', label: 'Ставки', num: true, val: r => r.pnl.rates, fmt: f.k, cls: f.cls, sum: r => r.pnl.rates, unit: 'тыс ₽' }, { key: 'ps', label: 'Спред', num: true, val: r => r.pnl.spread, fmt: f.k, cls: f.cls, sum: r => r.pnl.spread, unit: 'тыс ₽' }, { key: 'pf', label: 'FX', num: true, val: r => r.pnl.fx, fmt: f.k, cls: f.cls, sum: r => r.pnl.fx, unit: 'тыс ₽' }, { key: 'pt', label: 'Сделки', num: true, val: r => r.pnl.trading, fmt: f.k, cls: f.cls, sum: r => r.pnl.trading, unit: 'тыс ₽' }, { key: 'po', label: 'Прочее', num: true, val: r => r.pnl.other, fmt: f.k, cls: f.cls, sum: r => r.pnl.other, unit: 'тыс ₽' }, 'pnl', 'pnlMtd']),
+        rowsFn: () => K.list(), groupable: [K.defaultGroups[0]], groupLabel: 'по валютам', stripe: r => K.issuerColor(r.issuer), sort: [['pnl', 1]], maxHeight: '60vh',
+        columns: K.cols(['name', 'ccy', 'issuer', 'book', { key: 'pc', label: 'Кэрри', num: true, val: r => r.pnl.carry, fmt: f.k, cls: f.cls, sum: r => r.pnl.carry, unit: 'тыс ₽' }, { key: 'pr', label: 'Ставки', num: true, val: r => r.pnl.rates, fmt: f.k, cls: f.cls, sum: r => r.pnl.rates, unit: 'тыс ₽' }, { key: 'ps', label: 'Спред', num: true, val: r => r.pnl.spread, fmt: f.k, cls: f.cls, sum: r => r.pnl.spread, unit: 'тыс ₽' }, { key: 'pf', label: 'FX', num: true, val: r => r.pnl.fx, fmt: f.k, cls: f.cls, sum: r => r.pnl.fx, unit: 'тыс ₽' }, { key: 'pt', label: 'Сделки', num: true, val: r => r.pnl.trading, fmt: f.k, cls: f.cls, sum: r => r.pnl.trading, unit: 'тыс ₽' }, { key: 'po', label: 'Прочее', num: true, val: r => r.pnl.other, fmt: f.k, cls: f.cls, sum: r => r.pnl.other, unit: 'тыс ₽' }, 'pnl', 'pnlMtd']),
       });
     }
     if (tab === 'hist') {

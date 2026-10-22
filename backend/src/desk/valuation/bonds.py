@@ -36,9 +36,14 @@ the bonds are discounted on the KBD, their risk is on ``RUB OFZ`` and every valu
 - a perpetual: called on an assumed date (``perpetual_call``), coupons MOEX does not list at the
   current rate;
 - a floater on an ``inferred`` formula: its family's default convention (``floater_rule``);
-- no MOEX accrued: computed by core (``Instrument.accrued``: a fixed leg, and since core 0.33 a floater's: a coupon
-  fixed in advance pro rata on the amount for OFZ-PK or on the rate for corporates, one set in arrears by the formula
-  over the elapsed days with the realised fixings);
+- no MOEX accrued (an intraday cut, a gap): computed by core (``Instrument.accrued``) and flagged only where core's
+  accrual is not exact: a coupon period the backend assumed or MOEX projected, or a floater's coupon not published yet
+  (accrued on the projected rate). A fixed leg with its published coupon, and a floater coupon fixed in advance (pro
+  rata on the amount for OFZ-PK, on the rate for corporates, core 0.33), are exact: no note, the quality stays;
+- a foreign bond (CNY, USD, EUR face; core 0.34): valued in its currency on its own curve (``value_bonds``,
+  ``foreign``), converted at the run's market rate; MOEX's accrued in RUB (``currency_id`` SUR) is converted to the
+  face currency at that rate. A government par-yield proxy curve (USD UST, EUR ECB AAA: not OIS) or a same-currency
+  fallback curve is said in the assumptions;
 - our accrued differs from MOEX's by more than ``ACCRUED_TOLERANCE_RUB``: kept and flagged.
 
 Valuation date (finding F9, DEC entry pending): the MOEX price and the MOEX accrued are both
@@ -55,6 +60,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
+from typing import Any
 
 from rub_fixed_income import (
     RISK_BUCKETS,
@@ -92,6 +98,7 @@ from ..marketdata.adapter import (
     BondQuote,
     BondTerms,
     Coupon,
+    bond_currency,
     core_instrument,
     price_observation,
 )
@@ -159,15 +166,21 @@ class FixedSchedule:
     """Coupon rule, fixing ID and projection curve ID of a floater."""
 
 
+FOREIGN_BOND_CCYS = ("CNY", "USD", "EUR")
+"""Face currencies core values a bond in besides RUB (core ``SUPPORTED_CURRENCIES``, 0.34: each on its own curve)."""
+
+
 def eligibility(terms: BondTerms) -> None:
-    if terms.currency != "RUB" or terms.face_unit != "RUB":
+    """A foreign-face bond (CNY, USD, EUR; MOEX's ``is_fx_face``, settled in RUB or in its currency) is in scope since
+    core 0.36 (BACKLOG #132): core discounts it on its currency's curve (``value_bonds``, ``foreign``). Another face
+    currency stays ``not_rub``."""
+    ccy = bond_currency(terms)
+    if ccy != "RUB" and ccy not in FOREIGN_BOND_CCYS:
         raise Rejected("not_rub", f"currency {terms.currency}, face {terms.face_unit}")
     if terms.is_structured or terms.bond_class == "structured":
         raise Rejected("structured")
     if terms.is_face_indexed:
         raise Rejected("face_indexed")
-    if terms.is_fx_face:
-        raise Rejected("fx_face")
     if terms.coupon_type not in SUPPORTED_COUPON_TYPES:
         raise Rejected(f"coupon_{terms.coupon_type}")
     if terms.bond_class in ("mbs", "securitization"):
@@ -556,11 +569,27 @@ class BondValuation:
     spread_buckets: dict[str, float] = field(default_factory=dict)
     """``spread01_rub`` split by ``RISK_BUCKETS`` (core ``spread_buckets_rub``, in proportion to the discount-only
     key-rate risk): CS01 by tenor for credit, the OFZ–RUONIA basis by tenor for OFZ (R18); empty off core."""
+    fx_delta: dict[str, float] | None = None
+    """A derivative valued by core (an FX forward, NDF, swap, cross, FX future: ``valuation.derivatives``): its spot
+    equivalent per currency (core ``fx_delta_foreign``, a cross's base and quote); None: the row's own rule."""
+    extra: dict[str, Any] = field(default_factory=dict)
+    """A derivative valued by core: what the run publishes in the row's ``extra`` beside the common fields (legs,
+    OCP amounts, basis risk, fixing status, the core model flags, the reconciliation with the report)."""
+    fx_rate: tuple[str, float] | None = None
+    """A foreign bond valued by core: its currency and the rate its ``_rub`` amounts are converted at (core
+    ``CurrencyAmounts``, the run's market rate), so the flash PnL reprices it in its currency and books the rate move
+    in ``fx_gross`` (``pnl.flash.explain``); None for a RUB bond and off core."""
 
     @property
     def spread_curve(self) -> str | None:
-        """The published curve of ``z_spread_bp`` (``RISK_CURVES``)."""
-        return None if self.discount_curve_id is None else RISK_CURVES.get(self.discount_curve_id)
+        """The published curve of ``z_spread_bp`` (``RISK_CURVES``; a foreign curve's ID is its published name)."""
+        return None if self.discount_curve_id is None else RISK_CURVES.get(self.discount_curve_id,
+                                                                           self.discount_curve_id)
+
+    @property
+    def foreign(self) -> bool:
+        """Discounted by core on a foreign curve (a CNY / USD / EUR bond, core 0.34): no RUB curve to explain on."""
+        return self.discount_curve_id is not None and self.discount_curve_id not in RISK_CURVES
 
     def risk(self) -> dict[str, dict[str, float]]:
         """Bucket DV01 by published curve: ``curve_buckets``, else ``buckets`` on the discount curve (RUONIA)."""
@@ -616,28 +645,70 @@ def _prepare(r: BondRequest, market: MarketSnapshot) -> _Prepared:
                                 strike_guard_bp=CAP_FLOOR_GUARD_BP)
     accrued = inst.accrued(after, market if floating else None)
     notes = list(s.assumptions)
-    moex = r.quote.accrued_per_bond
+    moex = quote_accrued(r, market)
+    ccy = bond_currency(r.terms)
     if moex is None:
-        notes.append("accrued computed: no MOEX accrued")
+        why = inexact_accrual(r, inst, after)
+        if why:
+            notes.append(f"accrued computed: no MOEX accrued, {why}")
     elif abs(round(accrued - float(moex), 2)) > ACCRUED_TOLERANCE_RUB:
-        notes.append(f"accrued mismatch vs MOEX {accrued - float(moex):+.2f} RUB (ours {accrued:.2f})")
+        notes.append(f"accrued mismatch vs MOEX {accrued - float(moex):+.2f} {ccy} (ours {accrued:.2f})")
     return _Prepared(r, inst, tuple(BondCashflow(f.payment_date, f.amount) for f in flows), notes, accrued)
 
 
+def quote_accrued(r: BondRequest, market: MarketSnapshot) -> Decimal | None:
+    """MOEX's accrued per bond in the bond's currency: as published, converted from RUB at the run's rate for a
+    foreign-face bond settled in RUB (``currency_id`` SUR/RUB; core's ``FxRate`` of the market). None without one."""
+    moex, ccy = r.quote.accrued_per_bond, bond_currency(r.terms)
+    if moex is None or ccy == "RUB":
+        return moex
+    settle = (r.quote.currency_id or r.terms.currency or ccy).upper()
+    if settle not in ("SUR", "RUB", "RUR"):
+        return moex
+    rate = next((x.rub_per_unit for x in market.fx if x.currency == ccy), None)
+    return None if not rate else (moex / Decimal(str(rate))).quantize(Decimal("0.01"), ROUND_HALF_UP)
+
+
+def inexact_accrual(r: BondRequest, inst: Instrument, after: date) -> str | None:
+    """Why core's own accrued of the running period is not exact (None: it is): the period's coupon was assumed by
+    the backend or projected by MOEX, or a floater's coupon is not published yet (accrued on the projected rate)."""
+    running = next((c for c in r.schedule.coupons if c.pay_date > after), None)
+    if running is None:
+        return None
+    if running.status in ("assumed", "projected_by_moex"):
+        return f"running coupon {running.status}"
+    if isinstance(inst.coupon_leg, FloatingCouponLeg):
+        published = running.status in ("known", "current_published") and bool(running.amount_per_bond)
+        if not published:
+            return "floater coupon not published, accrued on the projected rate"
+    return None
+
+
 def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_order: bool = False,
-                cache: ShockedCurveCache | None = None, scenarios: tuple = ()
+                cache: ShockedCurveCache | None = None, scenarios: tuple = (),
+                foreign: dict[str, tuple[str, ...]] | None = None,
                 ) -> tuple[dict[str, BondValuation | Rejected], list[PortfolioRiskResult]]:
     """Value ``requests`` on ``market`` (a core snapshot without quotes, with the curves and fixings
     floaters need), in one core call (the spread kind per bond: ``spread_kinds``). Returns the valuation or the
     rejection per position ID, and the core results (one, or none without a valuable request). ``scenarios`` (core
-    ``PortfolioScenario``) go to the core call."""
+    ``PortfolioScenario``) go to the core call. ``foreign``: ccy -> the curve IDs a foreign bond of that currency is
+    discounted on, in order (core ``foreign_curves``, then ``foreign_curve_fallbacks``;
+    ``orchestrator.foreign_bond_curves``); a foreign bond of a currency without one is ``Rejected("no_foreign_curve")``
+    (the fallback ladder values it)."""
+    foreign = foreign or {}
     out: dict[str, BondValuation | Rejected] = {}
     results = []
     disc, disc_note = discount_curve(market)
     for r in requests:  # core values at the business date; the MOEX accrued is as of the trade date
+        ccy = bond_currency(r.terms)
         if r.quote.trade_date != market.business_date:
             out[r.position_id] = Rejected("stale_quote", f"trade date {r.quote.trade_date}, business date "
                                           f"{market.business_date}")
+        elif ccy != "RUB" and not foreign.get(ccy):
+            out[r.position_id] = Rejected("no_foreign_curve", f"no {ccy} curve in the run (CNY: the XCCY curve; "
+                                          "USD/EUR: the par-yield proxies with proxy_curves_for_risk)")
+        elif ccy != "RUB" and not any(x.currency == ccy for x in market.fx):
+            out[r.position_id] = Rejected("no_fx_rate", f"{ccy} on {market.business_date}")
     reqs = [r for r in requests if r.position_id not in out]
     instruments, quotes, positions, calls, ok, kinds = {}, {}, [], {}, {}, {}
     for r in reqs:
@@ -655,25 +726,33 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
         ok[r.terms.secid] = prep
         instruments[inst.instrument_id] = inst
         kinds[inst.instrument_id] = "ofz" if r.terms.bond_class in OFZ_CLASSES else "credit"
-        # no MOEX accrued: core's own (a floater's too since core 0.33)
+        # no MOEX accrued: core's own (a floater's too since core 0.33); a foreign bond's in its currency
         quotes[inst.instrument_id] = price_observation(inst.instrument_id, r.price_basis, r.clean_pct,
-                                                       r.quote.accrued_per_bond)
+                                                       quote_accrued(r, market))
         positions.append(Position(r.position_id, inst.instrument_id, r.quantity, "desk", AccountingCategory.TRADING,
-                                  "RUB"))
+                                  inst.currency))
     if not positions:
         return out, results
     guard = any(i.coupon_leg.rule.bounds for i in instruments.values()  # type: ignore[union-attr]
                 if isinstance(i.coupon_leg, FloatingCouponLeg))
+    ccys = sorted({i.currency for i in instruments.values()} - {"RUB"})
     policy = ValuationPolicy(disc, spread_kind="credit", spread_convention=SPREAD_CONVENTION, horizon="open_put",
                              include_second_order=second_order,
                              cap_floor_guard_bp=CAP_FLOOR_GUARD_BP if guard else None,
                              exercise_assumptions=tuple(calls.items()),
                              spread_kinds=tuple((i, k) for i, k in kinds.items() if k == "ofz"),
-                             g_spread_curve_id=KBD_CURVE_ID, discount_margin=True, spread_buckets=True)
+                             g_spread_curve_id=KBD_CURVE_ID, discount_margin=True, spread_buckets=True,
+                             foreign_curves=tuple((c, foreign[c][0]) for c in ccys),
+                             foreign_curve_fallbacks=tuple((c, i) for c in ccys for i in foreign[c][1:]))
     floaters = any(isinstance(i.coupon_leg, FloatingCouponLeg) for i in instruments.values())
-    # Without floaters the call needs only the discount curve and the KBD (the G-spread).
-    snap = market if floaters else replace(market, fixings=(), curves=tuple(
-        c for c in market.curves if c.curve_id in (disc, KBD_CURVE_ID)))
+    # The call needs the discount curve, the KBD (the G-spread), a floater's projection curves and the foreign curves
+    # of its bonds, and no FX forward inputs: a RUB-only book keeps its bytes.
+    keep = {disc, KBD_CURVE_ID, *(i for c in ccys for i in foreign[c])}
+    snap = replace(market, fixings=market.fixings if floaters else (),
+                   curves=tuple(c for c in market.curves if floaters and not _foreign_id(c.curve_id)
+                                or c.curve_id in keep),
+                   fx=tuple(x for x in market.fx if x.currency in ccys), fx_spots=(), fx_bases=(), fx_fixings=())
+    proxies = {c.curve_id for c in market.curves if c.spec_id.endswith("_par_proxy_v1")}
     result = value_portfolio(run_id=f"desk-eod-{market.business_date}-book", as_of=market.known_at,
                              snapshot=replace(snap, quotes=tuple(quotes.values())),
                              instruments=list(instruments.values()), positions=positions, policy=policy,
@@ -684,8 +763,26 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
     rows = {v.position_id: v for v in result.positions}
     for p in positions:
         if p.position_id in rows:
-            out[p.position_id] = _valuation(ok[p.instrument_id], rows[p.position_id], p.quantity, guard, disc_note)
+            v = rows[p.position_id]
+            note = disc_note if v.curve_id == disc else foreign_curve_note(v, v.curve_id in proxies)
+            out[p.position_id] = _valuation(ok[p.instrument_id], v, p.quantity, guard, note)
     return out, results
+
+
+def _foreign_id(curve_id: str) -> bool:
+    """A foreign curve of ``curves.fx`` (its ID is its published name, ``CNY FX``): not a RUB bond's input."""
+    return " " in curve_id
+
+
+def foreign_curve_note(v: PositionValuation, proxy: bool) -> str | None:
+    """The assumption of a foreign bond on a proxy or a fallback curve (core ``CurveUse.proxy``,
+    ``curve_fallback_from``); None on its own curve (CNY on XCCY)."""
+    parts = []
+    if v.curve_fallback_from:
+        parts.append(f"curve {v.curve_fallback_from} absent: discounted on the fallback {v.curve_id}")
+    if proxy:
+        parts.append(f"discounted on {v.curve_id}: a government par-yield proxy, not OIS (proxy_curves_for_risk)")
+    return "; ".join(parts) or None
 
 
 def _valuation(prep: _Prepared, v: PositionValuation, quantity: float, guard: bool = False,
@@ -719,6 +816,7 @@ def _valuation(prep: _Prepared, v: PositionValuation, quantity: float, guard: bo
         quality="assumed" if notes else "exact", assumptions=tuple(notes), discount_curve_id=v.curve_id,
         floater=floater, g_spread_bp=v.g_spread_bp, discount_margin_bp=v.discount_margin_bp,
         spread_buckets=dict(zip(RISK_BUCKETS, v.spread_buckets_rub)) if v.spread_buckets_rub else {},
+        fx_rate=(v.currency_amounts.currency, v.currency_amounts.rub_per_unit) if v.currency_amounts else None,
     )
     if v.factor_risk.has_second_order:
         # Core's full Hessian over its factors, renamed to the published curves; every curve is its own factor,

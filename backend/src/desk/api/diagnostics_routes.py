@@ -29,11 +29,32 @@ def get_diagnostics(request: Request, hub: bool = True, download: bool = False) 
     now = datetime.now(UTC)
     doc = diagnostics.build(store_url=request.app.state.store_url, autopilot=getattr(request.app.state, "autopilot",
                                                                                      None),
-                            hub=hub, started_at=getattr(request.app.state, "started_at", None), now=now)
+                            hub=hub, started_at=getattr(request.app.state, "started_at", None), now=now,
+                            lan_probe=getattr(request.app.state, "lan_probe", None))
     headers = {"Cache-Control": "no-store"}
     if download:
         headers["Content-Disposition"] = f'attachment; filename="{diagnostics.file_name(now)}"'
     return Response(diagnostics.dumps(doc), media_type="application/json; charset=utf-8", headers=headers)
+
+
+@router.get("/api/v1/lan/status")
+def get_lan_status(request: Request, probe: bool = False) -> Response:
+    """The settings page's «Сеть» (``desk lan status``): address, HTTPS and its certificate's names, the firewall
+    rule, the URLs for colleagues, the self-check made at start (``last``) and, with ``probe=1``, a fresh one."""
+    import json
+
+    from .. import lan
+
+    try:
+        settings = load()
+    except SettingsError as e:
+        raise HTTPException(500, f"settings: {e}") from None
+    listen = getattr(request.app.state, "listen", None) or {}
+    doc = lan.status(settings, host=listen.get("host"), port=listen.get("port"), tls=listen.get("tls"), run_probe=probe,
+                     instance=getattr(request.app.state, "instance", None))
+    doc["last"] = getattr(request.app.state, "lan_probe", None)
+    return Response(json.dumps(doc, ensure_ascii=False, default=str), media_type="application/json; charset=utf-8",
+                    headers={"Cache-Control": "no-store"})
 
 
 @router.get("/api/v1/inbox/reconcile")

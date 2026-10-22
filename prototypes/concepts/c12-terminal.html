@@ -62,6 +62,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
 <script src="../echarts.min.js"></script>
 <script src="lib/boot.js"></script>
 <script src="lib/kit.js"></script>
+<script src="lib/instr.js"></script>
 <script>
 (function () {
   const M = MOCK, K = KIT, f = K.f, esc = K.esc, css = K.css;
@@ -233,7 +234,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
         if (o.dim) {
           const cols = o.flags.cs01 ? [RISK_COLS[4], RISK_COLS[0], RISK_COLS[5]] : RISK_COLS;
           bd.innerHTML = sumLine(L); const e = K.h('div'); bd.appendChild(e); dimTable(e, L, o.dim, cols);
-          return 'риск' + (o.ccy ? ' · ' + ccyName[o.ccy] : '') + ' по разрезу «' + (DIM_DEF[o.dim] || [o.dim])[0] + '»';
+          return 'риск' + (o.ccy ? ' · ' + (ccyName[o.ccy] || o.ccy) : '') + ' по разрезу «' + (DIM_DEF[o.dim] || [o.dim])[0] + '»';
         }
         if (o.ccy) {
           const curves = M.curves.filter(c => c.ccy === o.ccy).map(c => c.id);
@@ -241,9 +242,10 @@ body { font-family: var(--mono); font-size: 12.5px; }
           bd.innerHTML = sumLine(L);
           const row = K.h('div', 'row2'); bd.appendChild(row);
           const a = K.h('div'), b = K.h('div'); row.append(a, b);
-          K.riskStack(ch(a, 300), { curves: ids, list: () => K.list().filter(p => p.ccy === o.ccy || !o.ccy) });
+          // риск кривых валюты — у всех позиций (по ногам: рублёвая нога USD/RUB-форварда — в рублях), CS01 — у позиций валюты
+          K.riskStack(ch(a, 300), { curves: ids, ccy: o.ccy });
           b.style.overflow = 'auto'; K.bucketTable(b, o.ccy, { cs01: true });
-          return 'риск по бакетам · ' + ccyName[o.ccy] + ' · ромб — итог бакета, пунктир — кумулятив';
+          return 'риск по бакетам · ' + (ccyName[o.ccy] || o.ccy) + ' · ромб — итог бакета, пунктир — кумулятив';
         }
         P_flush(bd); K.riskMatrix(bd); return 'сводная матрица рисков, тыс ₽/бп';
       }
@@ -252,8 +254,8 @@ body { font-family: var(--mono); font-size: 12.5px; }
         bd.innerHTML = sumLine(L);
         if (!L.length) { bd.innerHTML += '<span class="err">ничего не найдено</span>'; return '0 позиций'; }
         const e = K.h('div'); bd.appendChild(e);
-        K.table(e, { rows: L, search: false, groupBy: L.length > 12 ? K.defaultGroups : null, stripe: r => K.issuerColor(r.issuer), maxHeight: '58vh',
-          columns: K.cols(['name', ccyCol, 'kind', 'book', 'coupon', 'event', 'tenor', 'notional', 'price', 'ytm', 'spread', 'dv01', 'cs01', 'pnl']) });
+        K.table(e, { rows: L, search: false, groupable: K.defaultGroups, stripe: r => K.issuerColor(r.issuer), maxHeight: '58vh',
+          columns: K.cols(['name', ccyCol, 'issuer', 'kind', 'book', 'coupon', 'event', 'tenor', 'notional', 'price', 'ytm', 'spread', 'dv01', 'cs01', 'pnl']) });
         return L.length + ' позиций' + (o.words.length ? ' · «' + o.words.join(' ') + '»' : '') + (o.ccy ? ' · ' + o.ccy : '');
       }
       case 'pnl': {
@@ -266,7 +268,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
         if (o.flags.top || o.n) {
           const n = o.n || 10, T = L.slice().sort((a, b) => Math.abs(b.pnl.total) - Math.abs(a.pnl.total)).slice(0, n);
           const pc = (key, label) => ({ key: 'p' + key, label, num: true, val: r => r.pnl[key], fmt: f.k, cls: f.cls });
-          K.table(bd, { rows: T, search: false, footer: false, stripe: r => K.issuerColor(r.issuer), columns: K.cols(['name', ccyCol, 'book', pc('total', 'Итого'), pc('carry', 'Кэрри'), pc('rates', 'Ставки'), pc('spread', 'Спред'), pc('fx', 'FX'), pc('trading', 'Сделки'), pc('other', 'Прочее')]) });
+          K.table(bd, { rows: T, search: false, footer: false, stripe: r => K.issuerColor(r.issuer), columns: K.cols(['name', ccyCol, 'issuer', 'book', pc('total', 'Итого'), pc('carry', 'Кэрри'), pc('rates', 'Ставки'), pc('spread', 'Спред'), pc('fx', 'FX'), pc('trading', 'Сделки'), pc('other', 'Прочее')]) });
           return 'топ-' + n + ' вкладов в PnL дня, тыс ₽';
         }
         if (o.dim) { bd.innerHTML = sumLine(L); const e = K.h('div'); bd.appendChild(e); dimTable(e, L, o.dim, PNL_COLS); return 'PnL дня по разрезу «' + (DIM_DEF[o.dim] || [o.dim])[0] + '», тыс ₽'; }

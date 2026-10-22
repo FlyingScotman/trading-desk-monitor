@@ -1,0 +1,4 @@
+﻿entity;book_id;ccy;ocp_ccy;ocp_rub;rate_rub_per_unit;x_lines
+ENT1;D1;usd;1500000;;;3
+ENT1;D1;CNY;-2500000.50;;;2
+ENT1;T1;;;;;

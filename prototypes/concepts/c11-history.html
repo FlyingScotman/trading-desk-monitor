@@ -45,6 +45,7 @@ tr.row.sel td { background: var(--accent-bg); }
 <script src="../echarts.min.js"></script>
 <script src="lib/boot.js"></script>
 <script src="lib/kit.js"></script>
+<script src="lib/instr.js"></script>
 <script>
 (function () {
   const M = MOCK, K = KIT, f = K.f, esc = K.esc, css = K.css;
@@ -124,7 +125,9 @@ tr.row.sel td { background: var(--accent-bg); }
     if (st.risk === 'factors') return [['DV01 ставки', V.dv01, css('--accent')], ['CS01', V.cs01, K.curveColors.CS01], ['Базис ОФЗ', V.basis, K.curveColors['RUB OFZ']]];
     if (st.risk === 'curves') return M.curves.filter(c => L.some(p => p.dv01ByCurve[c.id])).map(c => [c.short, V.curve(c.id), K.curveColors[c.id]]);
     if (st.risk === 'books') return M.books.filter(b => L.some(p => p.book === b.id && p.dv01)).map((b, k) => [b.id, (p, i) => p.book === b.id ? V.dv01(p, i) : 0, K.PAL[k % K.PAL.length]]);
-    return M.ccys.filter(c => L.some(p => p.ccy === c)).map(c => [c, (p, i) => p.ccy === c ? V.dv01(p, i) : 0, K.ccyColor(c)]);
+    // по ногам (lib/instr.js): DV01 валюты — по кривым этой валюты (у кривой валюта — своя), не по валюте позиции
+    return M.ccys.map(c => [c, M.curves.filter(x => x.ccy === c && x.kind === 'rate').map(x => V.curve(x.id))]).filter(([c, fs]) => fs.length && L.some(p => INSTR.dv01In(p, c)))
+      .map(([c, fs]) => [c, (p, i) => fs.reduce((s, fn) => s + fn(p, i), 0), K.ccyColor(c)]);
   }
   function drawRisk() {
     K.seg(pRisk.querySelector('.m'), RISKM, st.risk, v => { st.risk = v; save(); chRisk.redraw(); });
@@ -245,8 +248,8 @@ tr.row.sel td { background: var(--accent-bg); }
       onRow: r => { st.pos = r.id; save(); drawPos(); topTbl.redraw(); },
       columns: [
         { key: 'name', label: 'Позиция', fmt: (v, r) => esc(v) + ' <span class="mut3">' + esc(r.book) + '</span>' },
-        { key: 'ccy', label: 'Вал', fmt: (v, r) => K.ccyTag(r.ccy), val: r => M.ccyOrder[r.ccy] },
-        { key: 'kind', label: 'Тип', fmt: (v, r) => '<span class="tagc">' + esc(M.kindShort[r.kind]) + '</span>' },
+        K.posCols.ccy, K.posCols.issuer,
+        { key: 'kind', label: 'Тип', filter: r => M.kindLabel[r.kind] || r.kind, fmt: (v, r) => '<span class="tagc">' + esc(M.kindShort[r.kind]) + '</span>' },
         { key: 'not0', label: 'Номинал было', num: true, fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', title: 'mm в валюте бумаги на дату сравнения' },
         { key: 'nowN', label: 'стало', num: true, val: r => H[r.id].notional[LAST], fmt: v => f.mn(v, 0) },
         { key: 'dNot', label: 'Δ номинал', num: true, fmt: (v, r) => v ? f.mns(v, 0) : '<span class="mut3">·</span>', cls: v => f.cls(v), title: 'mm в валюте бумаги' },
@@ -296,7 +299,8 @@ tr.row.sel td { background: var(--accent-bg); }
       const S = st.pm === 'price' ? [{ name: 'Цена', data: cut(DH.price), color: c }]
         : st.pm === 'ytm' ? [{ name: 'Доходность, %', data: cut(DH.ytm), color: c }].concat(DH.bench && DH.bench.some(v => v != null) ? [{ name: 'ОФЗ на сроке', data: cut(DH.bench), color: css('--fg-3'), lineStyle: { type: 'dashed', width: 1 } }] : [])
             .concat(DH.cpi ? [{ name: 'ИПЦ г/г, %', data: cut(DH.cpi), color: css('--warn'), step: 'end', lineStyle: { type: 'dashed', width: 1 } }] : [])
-          : [{ name: p.cpn && p.cpn.type === 'float' ? 'DM, б.п.' : 'G-спред, б.п.', data: cut(p.cpn && p.cpn.type === 'float' ? (DH.dm || DH.spr) : DH.spr), color: c, connectNulls: true }].concat(DH.zspr && !(p.cpn && p.cpn.type === 'float') ? [{ name: 'Z-спред MOEX, б.п.', data: cut(DH.zspr), color: css('--fg-3') }] : []);
+          : p.cpn && p.cpn.type === 'float' ? K.dmSeries(DH, cut, [c, css('--fg-3')])
+            : [{ name: 'G-спред, б.п.', data: cut(DH.spr), color: c, connectNulls: true }].concat(DH.zspr ? [{ name: 'Z-спред MOEX, б.п.', data: cut(DH.zspr), color: css('--fg-3') }] : []);
       chPos = K.chart(bd.querySelector('.chart'), () => ({
         animation: false, grid: { left: 6, right: 10, top: 30, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 },
         tooltip: { trigger: 'axis', valueFormatter: v => f.n(v, st.pm === 'spr' ? 0 : 2) }, xAxis: { type: 'category', data: xs, axisLabel: { formatter: v => f.dshort(v) } },

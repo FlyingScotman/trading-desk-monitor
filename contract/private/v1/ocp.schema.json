@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "private/1.3/ocp",
+  "title": "ocp row",
+  "description": "Private input contract v1 (docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md §10). One row as the adapter emits it. An optional field may be absent or null (the same thing); the empty string is invalid everywhere. Raw firm values go in x_* keys; _src is the row's location in the report, without sheet names.",
+  "type": "object",
+  "required": [
+    "_src",
+    "entity",
+    "ccy",
+    "ocp_ccy"
+  ],
+  "properties": {
+    "_src": {
+      "$ref": "#/$defs/str"
+    },
+    "_dataset": {
+      "enum": [
+        "ocp"
+      ]
+    },
+    "entity": {
+      "$ref": "#/$defs/str"
+    },
+    "book_id": {
+      "$ref": "#/$defs/str"
+    },
+    "ccy": {
+      "$ref": "#/$defs/ccy"
+    },
+    "ocp_ccy": {
+      "$ref": "#/$defs/amount"
+    },
+    "ocp_rub": {
+      "$ref": "#/$defs/amount"
+    },
+    "rate_rub_per_unit": {
+      "$ref": "#/$defs/amount"
+    }
+  },
+  "patternProperties": {
+    "^x_": {}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "str": {
+      "type": "string",
+      "minLength": 1
+    },
+    "amount": {
+      "type": [
+        "number",
+        "string"
+      ],
+      "pattern": "^-?[0-9]+(\\.[0-9]+)?$",
+      "description": "a finite JSON number or a decimal string; no NaN, exponents in strings, separators or commas"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "ccy": {
+      "type": "string",
+      "minLength": 1,
+      "description": "a currency code; the backend upper-cases it and reads RUR as RUB"
+    }
+  }
+}

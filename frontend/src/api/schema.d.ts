@@ -4,6 +4,169 @@
  */
 
 export interface paths {
+    "/api/v1/auth/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Auth State
+         * @description Sign-in on or off, who this is, whether the first admin may be created here. Open without a session.
+         */
+        get: operations["auth_state_api_v1_auth_state_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Login */
+        post: operations["login_api_v1_auth_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Logout */
+        post: operations["logout_api_v1_auth_logout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Setup
+         * @description Create the first admin: only while there is no active admin, only from this computer
+         */
+        post: operations["setup_api_v1_auth_setup_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change Password
+         * @description The signed-in user's own password (also the forced change after a reset); other sessions are revoked.
+         */
+        post: operations["change_password_api_v1_auth_password_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Users */
+        get: operations["users_api_v1_users_get"];
+        put?: never;
+        /** Create User */
+        post: operations["create_user_api_v1_users_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{username}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change User */
+        patch: operations["change_user_api_v1_users__username__patch"];
+        trace?: never;
+    };
+    "/api/v1/users/{username}/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reset Password */
+        post: operations["reset_password_api_v1_users__username__password_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Audit Entries */
+        get: operations["audit_entries_api_v1_audit_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health/live": {
         parameters: {
             query?: never;
@@ -126,6 +289,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/funding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Funding
+         * @description The run's funding (B1): by book (with the write-off) and entity, its lines and problems; state
+         *     ``not_configured`` when the adapter gave no funding rules, ``not_computed`` for a run before B1.
+         */
+        get: operations["funding_api_v1_runs__run_id__funding_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}/aggregates": {
         parameters: {
             query?: never;
@@ -135,6 +319,26 @@ export interface paths {
         };
         /** Aggregates */
         get: operations["aggregates_api_v1_runs__run_id__aggregates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{run_id}/risk-table": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Risk Table
+         * @description Aggregated risk as a matrix: currencies x instrument types (UI-02, R38; ``concepts.risk_table``).
+         */
+        get: operations["risk_table_api_v1_runs__run_id__risk_table_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -292,6 +496,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instruments/aliases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Aliases */
+        get: operations["list_aliases_api_v1_instruments_aliases_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instruments/aliases/{isin}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Alias History */
+        get: operations["alias_history_api_v1_instruments_aliases__isin__history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instruments/alias": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Alias
+         * @description Set or clear (blank or null) the alias of an ISIN. A trader or admin (sign-in off: this computer only); a change is recorded with who and when, a request that changes nothing is not.
+         */
+        put: operations["put_alias_api_v1_instruments_alias_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -330,6 +588,147 @@ export interface components {
             dims: string[];
             /** Rows */
             rows: components["schemas"]["AggregateRow"][];
+        };
+        /** AliasHistory */
+        AliasHistory: {
+            /** Isin */
+            isin: string;
+            /**
+             * Revisions
+             * @description Newest first
+             */
+            revisions: components["schemas"]["AliasRevision"][];
+        };
+        /** AliasIn */
+        AliasIn: {
+            /**
+             * Isin
+             * @description The security's ISIN (case and surrounding spaces ignored)
+             */
+            isin: string;
+            /**
+             * Alias
+             * @description The display name, at most 120 characters; null or blank clears it (the exchange name again)
+             */
+            alias?: string | null;
+        };
+        /** AliasList */
+        AliasList: {
+            /**
+             * Aliases
+             * @description The aliases in force, by ISIN
+             */
+            aliases: components["schemas"]["InstrumentAlias"][];
+        };
+        /** AliasRevision */
+        AliasRevision: {
+            /** Rev Id */
+            rev_id: number;
+            /**
+             * Alias
+             * @description null: the alias was cleared
+             */
+            alias: string | null;
+            /** Changed By */
+            changed_by: string;
+            /**
+             * Changed At
+             * Format: date-time
+             */
+            changed_at: string;
+        };
+        /** AliasState */
+        AliasState: {
+            /** Isin */
+            isin: string;
+            /**
+             * Alias
+             * @description In force after the request; null: none (the exchange name is shown)
+             */
+            alias: string | null;
+            /**
+             * Changed By
+             * @description Of the latest revision; null: the ISIN never had one
+             */
+            changed_by: string | null;
+            /** Changed At */
+            changed_at: string | null;
+            /**
+             * Changed
+             * @description False when the request set what was already in force (no revision)
+             */
+            changed: boolean;
+        };
+        /** AuditList */
+        AuditList: {
+            /** Entries */
+            entries: components["schemas"]["AuditRow"][];
+        };
+        /** AuditRow */
+        AuditRow: {
+            /** Audit Id */
+            audit_id: number;
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Actor */
+            actor: string;
+            /** Action */
+            action: string;
+            /** Target */
+            target: string | null;
+            /** Ok */
+            ok: boolean;
+            /** Ip */
+            ip: string | null;
+            /** Detail */
+            detail?: unknown;
+        };
+        /** AuthState */
+        AuthState: {
+            /**
+             * Enabled
+             * @description Sign-in is on (the setting auth); off: this computer only, no accounts
+             */
+            enabled: boolean;
+            /** @description Who this is: the signed-in user; auth off: 'local' (admin) for this computer; null: not signed in */
+            user: components["schemas"]["UserOut"] | null;
+            /**
+             * Setup Needed
+             * @description No active admin yet (null: the store is unavailable)
+             */
+            setup_needed: boolean | null;
+            /**
+             * Setup Allowed
+             * @description This client may create the first admin (POST /api/v1/auth/setup): a loopback client while setup_needed
+             */
+            setup_allowed: boolean;
+            /**
+             * Loopback
+             * @description The client is this computer
+             */
+            loopback: boolean;
+            /**
+             * Secure
+             * @description Served over HTTPS
+             */
+            secure: boolean;
+            /**
+             * Plain Http Lan
+             * @description Sign-in over plain HTTP on a network address: show a warning
+             */
+            plain_http_lan: boolean;
+            /** Admin From Network */
+            admin_from_network: boolean;
+            /**
+             * Roles
+             * @description Role -> its Russian name
+             */
+            roles: {
+                [key: string]: string;
+            };
         };
         /** AutopilotProgress */
         AutopilotProgress: {
@@ -516,19 +915,202 @@ export interface components {
              */
             origin?: string | null;
         };
+        /** BookFunding */
+        BookFunding: {
+            /** Book Id */
+            book_id: string;
+            /** Entity */
+            entity: string | null;
+            /** Book Type */
+            book_type: string | null;
+            /**
+             * Base
+             * @description What the book type is funded on: mv_clean, mv_dirty, cash, cost, none
+             */
+            base: string | null;
+            /** Total */
+            total: number;
+            /** In Positions */
+            in_positions: number;
+            /** Book Level */
+            book_level: number;
+            /** Lines */
+            lines: number;
+            /**
+             * By Kind
+             * @description POS, HTM, CASH, ENTITY_CASH, REPO
+             */
+            by_kind: {
+                [key: string]: number;
+            };
+            /** Problems */
+            problems: number;
+            write_off: components["schemas"]["FundingWriteOff"] | null;
+        };
         /** ErrorOut */
         ErrorOut: {
             /**
              * Code
              * @enum {string}
              */
-            code: "not_found" | "invalid_parameter" | "store_unavailable" | "internal";
+            code: "not_found" | "invalid_parameter" | "store_unavailable" | "internal" | "unauthorized" | "forbidden" | "locked";
             /** Message */
             message: string;
             /** Request Id */
             request_id: string;
             /** Details */
             details?: unknown;
+        };
+        /** FundingLineOut */
+        FundingLineOut: {
+            /** Key */
+            key: string;
+            /** Kind */
+            kind: string;
+            /** Ref */
+            ref: string;
+            /** Book Id */
+            book_id: string;
+            /** Book Type */
+            book_type: string;
+            /** Entity */
+            entity: string;
+            /** Ccy */
+            ccy: string;
+            /** Position Id */
+            position_id: string | null;
+            /** Base */
+            base: string;
+            /** Rate Expr */
+            rate_expr: string;
+            /**
+             * Rate Pct
+             * @description Rate of the period's last day, %
+             */
+            rate_pct: number;
+            /** Day Basis */
+            day_basis: string;
+            /**
+             * Body Ccy
+             * @description Funded body of the last day, signed (a long bond: negative)
+             */
+            body_ccy: number;
+            /** Body Rub */
+            body_rub: number;
+            /** Days */
+            days: number;
+            /**
+             * First Day
+             * Format: date
+             */
+            first_day: string;
+            /**
+             * Last Day
+             * Format: date
+             */
+            last_day: string;
+            /** Interest Ccy */
+            interest_ccy: number;
+            /** Interest Rub */
+            interest_rub: number;
+            /**
+             * In Position
+             * @description In the position's flash PnL (component funding)
+             */
+            in_position: boolean;
+            /** Note */
+            note: string;
+        };
+        /** FundingPeriod */
+        FundingPeriod: {
+            /**
+             * Start
+             * Format: date
+             * @description The previous business day (excluded)
+             */
+            start: string;
+            /**
+             * End
+             * Format: date
+             * @description The run's business date (included)
+             */
+            end: string;
+            /**
+             * Days
+             * @description Calendar days accrued
+             */
+            days: number;
+        };
+        /** FundingProblemOut */
+        FundingProblemOut: {
+            /** Kind */
+            kind: string;
+            /** Ref */
+            ref: string;
+            /** Reason */
+            reason: string;
+            /** Book Id */
+            book_id: string | null;
+        };
+        /** FundingTotals */
+        FundingTotals: {
+            /**
+             * Total
+             * @description All funding lines, RUB (a cost is negative)
+             */
+            total: number;
+            /**
+             * In Positions
+             * @description Of it, in the positions' flash PnL (component funding)
+             */
+            in_positions: number;
+            /**
+             * Book Level
+             * @description Of it, book-level lines: cash, closed positions, positions without PnL
+             */
+            book_level: number;
+            /** Lines */
+            lines: number;
+            /** Positions Funded */
+            positions_funded: number;
+        };
+        /** FundingWriteOff */
+        FundingWriteOff: {
+            /**
+             * Periodicity
+             * @description daily / monthly / quarterly / none; null: not set (a problem)
+             */
+            periodicity: string | null;
+            /**
+             * Last
+             * @description The last write-off date on or before the run's date
+             */
+            last: string | null;
+            /**
+             * Since Write Off
+             * @description Funding accrued since it, RUB (this and earlier default runs)
+             */
+            since_write_off: number | null;
+        };
+        /** InstrumentAlias */
+        InstrumentAlias: {
+            /** Isin */
+            isin: string;
+            /**
+             * Alias
+             * @description The display name to show instead of the exchange name
+             */
+            alias: string;
+            /**
+             * Changed By
+             * @description Who set it: the user, or 'local' (this computer, sign-in off)
+             */
+            changed_by: string;
+            /**
+             * Changed At
+             * Format: date-time
+             */
+            changed_at: string;
         };
         /** JobIn */
         JobIn: {
@@ -565,12 +1147,37 @@ export interface components {
             /** Message */
             message: string;
         };
+        /** LoginIn */
+        LoginIn: {
+            /** Username */
+            username: string;
+            /** Password */
+            password: string;
+        };
         /** MissingPosition */
         MissingPosition: {
             /** Position Id */
             position_id: string;
             /** Reason */
             reason: string;
+        };
+        /** PasswordIn */
+        PasswordIn: {
+            /** Current Password */
+            current_password: string;
+            /** New Password */
+            new_password: string;
+        };
+        /** PasswordReset */
+        PasswordReset: {
+            /** Password */
+            password: string;
+            /**
+             * Must Change Password
+             * @description A temporary password: changed at the next sign-in
+             * @default true
+             */
+            must_change_password?: boolean;
         };
         /**
          * PnlSums
@@ -660,6 +1267,11 @@ export interface components {
             no_pnl: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Alias
+             * @description The display name a user gave fact.isin (PUT /api/v1/instruments/alias), in force now, old runs too; null: none, show fact.name
+             */
+            alias?: string | null;
         };
         /** PositionList */
         PositionList: {
@@ -778,6 +1390,18 @@ export interface components {
             /** N Exact */
             n_exact: number;
         };
+        /** RiskMissing */
+        RiskMissing: {
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "not_valued" | "reported_no_risk" | "no_risk";
+            /** Text */
+            text: string;
+            /** N */
+            n: number;
+        };
         /**
          * RiskPayload
          * @description First-order and Hessian sensitivities of a run's valued positions, for the Taylor (T1) scenario
@@ -847,6 +1471,229 @@ export interface components {
                 number,
                 number
             ][];
+        };
+        /**
+         * RiskTable
+         * @description The matrix currency x instrument type (R38): ``ccys`` its rows, ``columns`` the kinds present with their
+         *     totals over all currencies; a cell is the ``rows`` entry of level ``kind`` (ccy, kind), a row total the entry
+         *     of level ``ccy``, the corner ``total``.
+         */
+        RiskTable: {
+            /** Run Id */
+            run_id: number;
+            /**
+             * Attribution
+             * @enum {string}
+             */
+            attribution: "legs" | "position";
+            /** Attribution Rule */
+            attribution_rule: string;
+            /**
+             * Attribution Provisional
+             * @description the rule is provisional: the owner decides (UI-02)
+             */
+            attribution_provisional: boolean;
+            /**
+             * Cross Ccy Kinds
+             * @description the kinds the attribution rule applies to
+             */
+            cross_ccy_kinds: string[];
+            /**
+             * Kinds
+             * @description the classification's kinds, in the table's order
+             */
+            kinds: components["schemas"]["RiskTableKind"][];
+            /**
+             * Measures
+             * @description the matrix's measures (one shown at a time)
+             */
+            measures: components["schemas"]["RiskTableMeasure"][];
+            /** Fx */
+            fx: {
+                [key: string]: number | null;
+            };
+            /**
+             * Ccys
+             * @description the matrix's rows: currencies, RUB first
+             */
+            ccys: string[];
+            /**
+             * Columns
+             * @description the matrix's columns: the kinds present, in table order
+             */
+            columns: components["schemas"]["RiskTableColumn"][];
+            /** Rows */
+            rows: components["schemas"]["RiskTableRow"][];
+            total: components["schemas"]["RiskTableTotal"];
+        };
+        /**
+         * RiskTableColumn
+         * @description A column of the matrix (R38): an instrument kind present, with its total over all currencies (what sums,
+         *     in RUB).
+         */
+        RiskTableColumn: {
+            /** Kind */
+            kind: string;
+            /** Group */
+            group: string;
+            /** Label */
+            label: string;
+            /** N Positions */
+            n_positions: number;
+            /** Notional Rub */
+            notional_rub: number;
+            /** Mv Rub */
+            mv_rub: number;
+            /** Dv01 By Curve Rub */
+            dv01_by_curve_rub: {
+                [key: string]: number;
+            };
+            /**
+             * Dv01 All Curves Rub
+             * @description the sum over curves of different currencies: labelled so
+             */
+            dv01_all_curves_rub: number;
+            /** Ofz Basis Rub */
+            ofz_basis_rub: number;
+            /** Cs01 Rub */
+            cs01_rub: number;
+            /**
+             * Fx Delta Rub
+             * @description net FX delta at the run's rates (RUB rows left out); null when a rate is missing
+             */
+            fx_delta_rub: number | null;
+            /** N Risk Missing */
+            n_risk_missing: number;
+        };
+        /** RiskTableKind */
+        RiskTableKind: {
+            /** Kind */
+            kind: string;
+            /** Group */
+            group: string;
+            /** Label */
+            label: string;
+        };
+        /** RiskTableMeasure */
+        RiskTableMeasure: {
+            /**
+             * Measure
+             * @enum {string}
+             */
+            measure: "dv01" | "dv01_curve" | "cs01" | "ofz_basis" | "fx_delta" | "mv" | "notional" | "n_positions";
+            /** Label */
+            label: string;
+            /**
+             * Across Ccys
+             * @description whether the measure sums across currencies (the total row, in RUB): yes; repr only at the run's rates; labelled: sums, but over curves of different currencies, not a currency's risk
+             * @enum {string}
+             */
+            across_ccys: "yes" | "repr" | "labelled";
+        };
+        /**
+         * RiskTableRow
+         * @description One row of the table currency x instrument type (UI-02): a currency's total (``level`` ccy), a group of it
+         *     (group) or an instrument kind (kind). DV01 is the block currency's own curves only.
+         */
+        RiskTableRow: {
+            /** Ccy */
+            ccy: string;
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "ccy" | "group" | "kind";
+            /** Group */
+            group: ("GOV" | "SUB" | "CORP" | "DER" | "OTH") | null;
+            /** Kind */
+            kind: string | null;
+            /** Label */
+            label: string | null;
+            /**
+             * N Positions
+             * @description positions of this currency (by the attribution rule)
+             */
+            n_positions: number;
+            /**
+             * N Legs Only
+             * @description positions of another currency with a risk here (attribution 'legs')
+             */
+            n_legs_only: number;
+            /** Notional Ccy */
+            notional_ccy: number;
+            /** Notional Rub */
+            notional_rub: number;
+            /** Mv Rub */
+            mv_rub: number;
+            /**
+             * Mv Ccy
+             * @description null without the currency's rate
+             */
+            mv_ccy: number | null;
+            /**
+             * Dv01 Rub
+             * @description DV01 on the curves of the row's currency, RUB per bp
+             */
+            dv01_rub: number;
+            /**
+             * Dv01 Ccy
+             * @description the same in the currency per bp; null without its rate
+             */
+            dv01_ccy: number | null;
+            /** Dv01 By Curve Rub */
+            dv01_by_curve_rub: {
+                [key: string]: number;
+            };
+            /**
+             * Dv01 Foreign Rub
+             * @description risk on another currency's curves kept here (attribution 'position'): in dv01_by_curve_rub, not in dv01_rub
+             */
+            dv01_foreign_rub: number;
+            /** Ofz Basis Rub */
+            ofz_basis_rub: number;
+            /** Cs01 Rub */
+            cs01_rub: number;
+            /** Fx Delta Ccy */
+            fx_delta_ccy: number;
+            /**
+             * N Risk Missing
+             * @description positions whose risk is missing (never counted as a zero)
+             */
+            n_risk_missing: number;
+            /** Risk Missing */
+            risk_missing: components["schemas"]["RiskMissing"][];
+        };
+        /**
+         * RiskTableTotal
+         * @description Only what sums across currencies, in RUB.
+         */
+        RiskTableTotal: {
+            /** N Positions */
+            n_positions: number;
+            /** Notional Rub */
+            notional_rub: number;
+            /** Mv Rub */
+            mv_rub: number;
+            /** Dv01 By Curve Rub */
+            dv01_by_curve_rub: {
+                [key: string]: number;
+            };
+            /**
+             * Dv01 All Curves Rub
+             * @description the sum over curves of different currencies: not a currency's risk nor a hedge measure, labelled so
+             */
+            dv01_all_curves_rub: number;
+            /** Ofz Basis Rub */
+            ofz_basis_rub: number;
+            /** Cs01 Rub */
+            cs01_rub: number;
+            /**
+             * Fx Delta Rub
+             * @description net FX delta at the run's rates; null when a rate is missing
+             */
+            fx_delta_rub: number | null;
+            /** N Risk Missing */
+            n_risk_missing: number;
         };
         /** RunDetail */
         RunDetail: {
@@ -955,6 +1802,53 @@ export interface components {
             };
             /** Log */
             log: components["schemas"]["LogLine"][];
+        };
+        /**
+         * RunFunding
+         * @description The run's funding (wave B1, ``publish.funding_run``). ``state`` not_configured: the adapter gave no funding
+         *     rules, nothing is funded and nothing is shown as 0; not_computed: a run before B1.
+         */
+        RunFunding: {
+            /** Run Id */
+            run_id: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "computed" | "not_configured" | "invalid_config" | "failed" | "not_computed";
+            /** Text */
+            text: string;
+            period: components["schemas"]["FundingPeriod"] | null;
+            /** Reporting Ccy */
+            reporting_ccy: string;
+            totals: components["schemas"]["FundingTotals"] | null;
+            /** Books */
+            books: components["schemas"]["BookFunding"][];
+            /**
+             * Entities
+             * @description Funding by entity, RUB
+             */
+            entities: {
+                [key: string]: number;
+            };
+            /** Problems */
+            problems: components["schemas"]["FundingProblemOut"][];
+            /** Notes */
+            notes: string[];
+            /**
+             * Provisional
+             * @description Policy fields at the engine's provisional default (OPEN_DECISIONS)
+             */
+            provisional: string[];
+            /**
+             * Policy
+             * @description The FundingPolicy applied, with the source of each field
+             */
+            policy: {
+                [key: string]: unknown;
+            } | null;
+            /** Lines */
+            lines: components["schemas"]["FundingLineOut"][];
         };
         /** RunHeader */
         RunHeader: {
@@ -1129,6 +2023,14 @@ export interface components {
             fx?: {
                 [key: string]: number;
             };
+            /**
+             * Basis
+             * @description FX basis shift per currency, bp (core FXBASIS|<ccy>): exact repricing of FX derivatives only, the Taylor has no basis factor
+             * @default {}
+             */
+            basis?: {
+                [key: string]: number;
+            };
         };
         /** ScenarioJob */
         ScenarioJob: {
@@ -1174,6 +2076,15 @@ export interface components {
             /** Positions */
             positions: components["schemas"]["ResultPosition"][];
         };
+        /** SetupIn */
+        SetupIn: {
+            /** Username */
+            username: string;
+            /** Password */
+            password: string;
+            /** Display Name */
+            display_name?: string | null;
+        };
         /**
          * SpreadRules
          * @description Credit spread shocks in bp, additive; mult scales the position's own spread (factor > 0).
@@ -1218,6 +2129,104 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** UserIn */
+        UserIn: {
+            /** Username */
+            username: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "viewer" | "trader" | "admin";
+            /** Password */
+            password: string;
+            /** Display Name */
+            display_name?: string | null;
+            /**
+             * Must Change Password
+             * @description The user sets their own password at the first sign-in
+             * @default true
+             */
+            must_change_password?: boolean;
+        };
+        /** UserList */
+        UserList: {
+            /** Users */
+            users: components["schemas"]["UserRow"][];
+            /** Roles */
+            roles: {
+                [key: string]: string;
+            };
+        };
+        /** UserOut */
+        UserOut: {
+            /** Username */
+            username: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "viewer" | "trader" | "admin";
+            /** Display Name */
+            display_name?: string | null;
+            /**
+             * Must Change Password
+             * @default false
+             */
+            must_change_password?: boolean;
+        };
+        /** UserPatch */
+        UserPatch: {
+            /** Role */
+            role?: ("viewer" | "trader" | "admin") | null;
+            /** Active */
+            active?: boolean | null;
+            /** Display Name */
+            display_name?: string | null;
+            /**
+             * Unlock
+             * @description Clear a lockout after wrong passwords
+             * @default false
+             */
+            unlock?: boolean;
+        };
+        /** UserRow */
+        UserRow: {
+            /** Username */
+            username: string;
+            /** Display Name */
+            display_name: string | null;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "viewer" | "trader" | "admin";
+            /** Active */
+            active: boolean;
+            /** Must Change Password */
+            must_change_password: boolean;
+            /** Locked */
+            locked: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /**
+             * Password Changed At
+             * Format: date-time
+             */
+            password_changed_at: string;
+            /** Last Login At */
+            last_login_at: string | null;
+        };
     };
     responses: never;
     parameters: never;
@@ -1227,6 +2236,515 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    auth_state_api_v1_auth_state_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthState"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    login_api_v1_auth_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthState"];
+                };
+            };
+            /** @description wrong name or password */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description locked out */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    logout_api_v1_auth_logout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    setup_api_v1_auth_setup_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthState"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    change_password_api_v1_auth_password_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    users_api_v1_users_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserList"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    create_user_api_v1_users_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserRow"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    change_user_api_v1_users__username__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                username: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserRow"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    reset_password_api_v1_users__username__password_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                username: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordReset"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    audit_entries_api_v1_audit_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                action?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditList"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
     live_health_live_get: {
         parameters: {
             query?: never;
@@ -1577,10 +3095,59 @@ export interface operations {
             };
         };
     };
+    funding_api_v1_runs__run_id__funding_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunFunding"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
     aggregates_api_v1_runs__run_id__aggregates_get: {
         parameters: {
             query?: {
-                /** @description Comma-separated: book, quality, asset_class, segment, issuer, ccy */
+                /** @description Comma-separated: book, quality, asset_class, segment, issuer, ccy, instr_kind */
                 dims?: string;
             };
             header?: never;
@@ -1598,6 +3165,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Aggregates"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    risk_table_api_v1_runs__run_id__risk_table_get: {
+        parameters: {
+            query?: {
+                /** @description where a cross-currency kind's risk goes (CCS, FX_FWD, FX_FUT, FX): legs: each measure in its own currency: DV01 by curve in the curve's, FX delta in its currency's; position count, notional, MV, CS01 and the OFZ basis in the position's; position: everything of a cross-currency kind in the position's currency (the report's CCY); its risk on another currency's curves is shown apart (dv01_foreign_rub), outside the block's DV01. Default 'legs', provisional (UI-02) */
+                attribution?: "legs" | "position";
+                /** @description comma-separated books; all when omitted */
+                book?: string | null;
+            };
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RiskTable"];
                 };
             };
             /** @description Not Found */
@@ -1994,6 +3615,154 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Queued"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    list_aliases_api_v1_instruments_aliases_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AliasList"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    alias_history_api_v1_instruments_aliases__isin__history_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ISIN */
+                isin: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AliasHistory"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    put_alias_api_v1_instruments_alias_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AliasIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AliasState"];
                 };
             };
             /** @description Not Found */

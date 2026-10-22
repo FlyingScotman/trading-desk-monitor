@@ -12,7 +12,7 @@ from .api import handle as api_handle
 from .assemble import assemble, resolve_run
 from .db import connect, init_db
 
-STATIC_EXT = {".html", ".js", ".css", ".json", ".png", ".svg", ".ico", ".woff2"}
+STATIC_EXT = {".html", ".js", ".css", ".json", ".png", ".jpg", ".svg", ".ico", ".woff2"}  # .jpg: miniatures of the monitors
 _cache, _cache_lock = {}, threading.Lock()  # (run_id, версия сценариев) -> JSON
 
 

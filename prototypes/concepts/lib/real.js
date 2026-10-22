@@ -7,19 +7,31 @@
  * Соответствия (держать в согласии с api/concepts.py):
  *  - кривые: RUB RUONIA, RUB KEY — как в прогоне; RUB OFZ страниц — базис ОФЗ − RUONIA (КБД минус RUONIA, б.п.),
  *    его риск — ofzSpr01 позиции по бакетам срока (ядро 0.33, extra.spread_buckets); риск прогона на «RUB OFZ» (КБД: только в день без RUONIA)
- *    добавлен к RUONIA; кривые валют USD/EUR/CNY — USD SOFR / EUR ESTR / CNY XCCY (точек нет, только риск);
- *  - тип: GOV PD/PK/IN/SOVFX, SUB FIX/FLT, CORP FIX/FLT, DER OTC/FX, OTH (api/concepts.kind_of);
+ *    добавлен к RUONIA; кривые валют USD/EUR/CNY — USD SOFR / EUR ESTR / CNY XCCY (точки — если прогон их публикует,
+ *    иначе только риск); прочие кривые риска — своими строками со своей валютой (CNY implied, прокси, CHF…);
+ *  - FX-дельта — по валютам (p.fxDeltaBy = fx_delta {ccy}); p.fxDelta — только в валюте позиции; ноги FX-сделки —
+ *    p.legs (extra.legs); DV01 и ОВП по валюте — «по ногам» (lib/instr.js: INSTR.dv01In / INSTR.fxIn);
+ *  - тип: GOV PD/PK/IN/SOVFX (Минфин: в рублях ОФЗ, в валюте — «Минфин валютные», по эмитенту — R39), SUB FIX/FLT, CORP FIX/FLT, DER OTC/FX, OTH (api/concepts.kind_of); тип инструмента
+ *    таблицы «валюта × тип» (ОФЗ-ПД, свопы, фьючерсы… по группе продукта отчёта) — lib/instr.js (api/concepts.instr_kind)
+ *    из instrType, assetClass, segment, productGroup (x_product_group отчёта: M.productGroup) и fxDeltaBy позиции;
  *  - срок — до оферты или колла, по которым считается доходность, иначе до погашения;
  *  - у флоатера доходности нет (ytm = null), спред — дисконт-маржа ядра (extra.dm_bp: спред к кривой проекции; в
  *    прогоне до ядра 0.33 — Z-спред); G-спред — ядра (extra.g_spread_bp, определение MOEX), иначе MOEX;
  *  - CS01 и базис по бакетам срока — ядра (extra.spread_buckets: CS по бакетам пропорционально ставочному риску
  *    дисконтирования); в прогоне до ядра 0.33 — по двум соседним бакетам срока;
- *  - PnL: кэрри = carry + rolldown, ставки = rates + convexity, FX = fx, сделки = newTrades, прочее = funding + other +
- *    reported; итог = explained.
+ *  - PnL: кэрри = carry + rolldown + funding (кэрри за вычетом фондирования, B1), ставки = rates + convexity, FX = fx,
+ *    сделки = newTrades, прочее = other + reported; итог = explained. p.funding — фондирование позиции за период
+ *    (null — не посчитано: не настроено или проблема), p.fundingInfo — extra.funding (состояние, строки, причина);
+ *    M.funding — фондирование прогона (D.fundingStatus: состояние, итоги по книгам и юрлицам, проблемы).
  * История позиции (M.posHistory) — синхронный запрос /api/v1/history/positions: первые две позиции по одной,
  * дальше сразу все (страницы C11, C13 просят историю всех позиций). Кроме цен рынка в ней номинал, DV01, CS01,
  * базис, MV и DV01 по кривым каждого прогона (M.histSource = 'runs': история риска — настоящая, не «номинал ×
  * сегодняшние чувствительности»).
+ * Имена бумаг (батч 1, п. 3, R33): алиас по ISIN — GET /api/v1/instruments/aliases синхронно, до сборки позиций;
+ * p.name = алиас ?? биржевое имя (p.exchName), p.alias — алиас или null, поиск — по обоим (p.searchBase + алиас).
+ * Алиас не входит в строки прогона: тот же алиас — и у старых прогонов. Изменение — M.aliasApi.put (PUT
+ * /api/v1/instruments/alias, только с компьютера сервера: иначе 403 и карточка — только чтение), история —
+ * M.aliasApi.history; карточка (kit.js, K.aliasEdit) подставляет новое имя во все позиции бумаги.
  * Календарь рынка (M.marketCal) — тоже лениво, /api/v1/calendar/market: агрегаты по дням, типам и валютам из
  * статики хаба; строки за ячейкой — M.marketCal.flows({...}) тем же запросом с фильтром.
  * M.posHistory(id, { deep: true }) —
@@ -63,14 +75,24 @@
   (D.riskNotes || []).forEach(n => M.notes.push(n.text + (n.detail ? ' (' + n.detail + ')' : '')));
   if (!D.pnlAvailable && D.pnlReasonText) M.notes.push('PnL: ' + D.pnlReasonText);
   if (!window.DESK_EXTRAS) M.notes.push('нет данных /concepts-data.js: история, потоки и рынок пусты');
+  // фондирование прогона (B1, D.fundingStatus): не настроено / не посчитано — заметка в шапке, не 0
+  const FS = D.fundingStatus || { state: 'not_computed', text: 'прогон без расчёта фондирования' };
+  M.funding = { state: FS.state, text: FS.text, period: FS.period || null, total: num(FS.total), inPositions: num(FS.inPositions),
+    bookLevel: num(FS.bookLevel), byBook: FS.byBook || {}, byEntity: FS.byEntity || {}, problems: FS.problems || [], provisional: FS.provisional || [] };
+  if (FS.state !== 'computed') M.notes.push('Фондирование: ' + (FS.text || FS.state));
+  else if (M.funding.problems.length) M.notes.push('Фондирование: проблем ' + M.funding.problems.length + ' (кокпит, вкладка PnL)');
 
   // ---------- валюты, курсы, индексы ----------
   const BASE_CCY = ['RUB', 'USD', 'EUR', 'CNY'];
-  const posCcy = [...new Set(D.positions.map(p => p.ccy).filter(Boolean))];
+  // валюты позиций и валюты FX-дельты (у кросса USD/CNY вторая валюта — только в fx_delta)
+  const posCcy = [...new Set(D.positions.flatMap(p => [p.ccy].concat(Object.keys(p.fxDelta || {}).filter(c => num(p.fxDelta[c])))).filter(c => c && c !== 'RUB'))];
   M.ccys = BASE_CCY.filter(c => c === 'RUB' || posCcy.includes(c) || D.FX[c] != null).concat(posCcy.filter(c => !BASE_CCY.includes(c)));
   M.ccyOrder = Object.fromEntries(M.ccys.map((c, i) => [c, i]));
   M.fx = Object.assign({ RUB: 1 }, D.FX);
-  M.ccys.forEach(c => { if (M.fx[c] == null) { M.fx[c] = 1; M.notes.push('нет курса ' + c + ': суммы этой валюты не пересчитаны'); } });
+  // нет курса валюты (R45): предупреждение — только если в ней есть ненулевые суммы оценённых позиций; валюта одних не
+  // оценённых строк (OMR у строки без MV) — в разборе «не оценены» (M.unvalued.fxMissing), строка с нулём — не повод
+  const fxNeeded = c => D.positions.some(p => !p.notValued && (p.ccy === c && (num(p.notional) || num(p.mvRub) || num(p.mv)) || num((p.fxDelta || {})[c])));
+  M.ccys.forEach(c => { if (M.fx[c] == null) { M.fx[c] = 1; if (fxNeeded(c)) M.notes.push('нет курса ' + c + ': суммы этой валюты не пересчитаны'); } });
   M.fxChgPct = Object.assign({ RUB: 0 }, D.FX_MOVE_PCT);
   // курс, по которому посчитан PnL FX прогона: рыночный (решение владельца 21.10, R26 — MOEX 19:00, иначе 14:00,
   // иначе закрытие CETS, иначе ЦБ; источник по валюте — D.FX_SOURCE), то есть курс шапки; курс ЦБ, действующий на
@@ -87,19 +109,27 @@
   const zeros = () => new Array(NB).fill(0);
 
   // ---------- кривые ----------
+  // Кривая риска прогона «USD» / «EUR» / «CNY» (риск по дюрации, точек нет: bonds.ccy_curve) — на кривой страниц
+  // USD SOFR / EUR ESTR / CNY XCCY; если прогон публикует саму эту кривую с точками (или кривая «CNY» — с точками), берём
+  // её имя и точки. Любая другая кривая риска (CNY implied, прокси UST/ECB, CHF…) — своей строкой со своей валютой
+  // (ccy прогона): блоки валют кокпита и лестница берут кривые по curve.ccy, не по списку.
   const CURVE_MAP = Object.assign({ 'RUB OFZ': 'RUB RUONIA', USD: 'USD SOFR', EUR: 'EUR ESTR', CNY: 'CNY XCCY' }, X.curveMap || {});
   const C = D.CURVES || {}, MV = D.CURVE_MOVES || {};
+  const hasPts = c => !!(c && c.pts && c.pts.some(v => num(v) != null));
+  // исходная кривая прогона для кривой страниц: она сама или её псевдоним из CURVE_MAP (первая с точками)
+  const srcOf = id => [id].concat(Object.keys(CURVE_MAP).filter(k => CURVE_MAP[k] === id && k !== 'RUB OFZ')).find(k => hasPts(C[k])) || id;
   const pts = id => (C[id] && C[id].pts) ? C[id].pts.map(num) : new Array(NB).fill(null);
   const chg = id => (MV[id] || zeros()).map(v => num(v) || 0);
+  const stub = (id, ccy, short) => { const s = srcOf(id), c = C[s];
+    return hasPts(c) ? { id, ccy, name: c.name || id, short, kind: 'rate', pts: pts(s), chg: chg(s) }
+      : { id, ccy, name: ccy + ' (кривой нет, риск по дюрации)', short, kind: 'rate', pts: new Array(NB).fill(null), chg: zeros() }; };
   const kbd = pts('RUB OFZ'), ruo = pts('RUB RUONIA');
   M.curves = [
     { id: 'RUB RUONIA', ccy: 'RUB', name: (C['RUB RUONIA'] || {}).name || 'RUONIA OIS', short: 'RUONIA', kind: 'rate', pts: ruo, chg: chg('RUB RUONIA') },
     { id: 'RUB KEY', ccy: 'RUB', name: (C['RUB KEY'] || {}).name || 'Ключевая ставка (КС)', short: 'КС', kind: 'rate', pts: pts('RUB KEY'), chg: chg('RUB KEY') },
     { id: 'RUB OFZ', ccy: 'RUB', name: 'Базис ОФЗ − RUONIA', short: 'ОФЗ-базис', kind: 'basis',
       pts: kbd.map((v, i) => v != null && ruo[i] != null ? (v - ruo[i]) * 100 : null), chg: chg('RUB OFZ').map((v, i) => v - chg('RUB RUONIA')[i]) },
-    { id: 'USD SOFR', ccy: 'USD', name: 'USD (кривой нет, риск по дюрации)', short: 'USD', kind: 'rate', pts: new Array(NB).fill(null), chg: zeros() },
-    { id: 'EUR ESTR', ccy: 'EUR', name: 'EUR (кривой нет, риск по дюрации)', short: 'EUR', kind: 'rate', pts: new Array(NB).fill(null), chg: zeros() },
-    { id: 'CNY XCCY', ccy: 'CNY', name: 'CNY (кривой нет, риск по дюрации)', short: 'CNY', kind: 'rate', pts: new Array(NB).fill(null), chg: zeros() },
+    stub('USD SOFR', 'USD', 'USD'), stub('EUR ESTR', 'EUR', 'EUR'), stub('CNY XCCY', 'CNY', 'CNY'),
   ];
   const curveOf = c => CURVE_MAP[c] || c;
   // кривые риска, которых страницы не знают (валюта вне USD/EUR/CNY и т. п.), — своими строками
@@ -145,17 +175,26 @@
 
   // ---------- классификация ----------
   M.groupLabel = { GOV: 'Гос', SUB: 'Суб', CORP: 'Корп', DER: 'Деривативы', OTH: 'Прочее' };
-  M.kindLabel = { PD: 'ОФЗ-ПД (фикс)', PK: 'ОФЗ-ПК (флоатер)', IN: 'ОФЗ-ИН (линкер)', SOVFX: 'Суверен. валютные', FIX: 'Фикс', FLT: 'Флоатер', OTC: 'OTC (по отчёту)', FX: 'Валюта / FX', OTH: 'Прочее', IRS: 'IRS / OIS', KSW: 'Своп на КС', BAS: 'Базис КС/RUONIA', FXF: 'FX форвард', XCCY: 'XCCY' };
-  M.kindShort = { PD: 'ПД', PK: 'ПК', IN: 'ИН', SOVFX: 'Сув', FIX: 'Фикс', FLT: 'Флоат', OTC: 'OTC', FX: 'FX', OTH: 'Пр', IRS: 'IRS', KSW: 'КС-своп', BAS: 'Базис', FXF: 'FX fwd', XCCY: 'XCCY' };
+  M.kindLabel = { PD: 'ОФЗ-ПД (фикс)', PK: 'ОФЗ-ПК (флоатер)', IN: 'ОФЗ-ИН (линкер)', SOVFX: 'Минфин валютные', FIX: 'Фикс', FLT: 'Флоатер', OTC: 'OTC (по отчёту)', FX: 'Валюта / FX', OTH: 'Прочее', IRS: 'IRS / OIS', KSW: 'Своп на КС', BAS: 'Базис КС/RUONIA', FXF: 'FX форвард', XCCY: 'XCCY' };
+  M.kindShort = { PD: 'ПД', PK: 'ПК', IN: 'ИН', SOVFX: 'Минфин вал.', FIX: 'Фикс', FLT: 'Флоат', OTC: 'OTC', FX: 'FX', OTH: 'Пр', IRS: 'IRS', KSW: 'КС-своп', BAS: 'Базис', FXF: 'FX fwd', XCCY: 'XCCY' };
   M.typeRows = [
     { id: 'GOV.PD', group: 'GOV', kind: 'PD', label: 'ОФЗ-ПД' }, { id: 'GOV.PK', group: 'GOV', kind: 'PK', label: 'ОФЗ-ПК (флоатеры)' },
-    { id: 'GOV.IN', group: 'GOV', kind: 'IN', label: 'ОФЗ-ИН' }, { id: 'GOV.SOVFX', group: 'GOV', kind: 'SOVFX', label: 'Суверенные валютные' },
+    { id: 'GOV.IN', group: 'GOV', kind: 'IN', label: 'ОФЗ-ИН' }, { id: 'GOV.SOVFX', group: 'GOV', kind: 'SOVFX', label: 'Минфин валютные (евробонды, замещающие)' },
     { id: 'SUB.FIX', group: 'SUB', kind: 'FIX', label: 'Суб. фикс' }, { id: 'SUB.FLT', group: 'SUB', kind: 'FLT', label: 'Суб. флоатеры' },
     { id: 'CORP.FIX', group: 'CORP', kind: 'FIX', label: 'Корп. фикс' }, { id: 'CORP.FLT', group: 'CORP', kind: 'FLT', label: 'Корп. флоатеры' },
     { id: 'DER.OTC', group: 'DER', kind: 'OTC', label: 'OTC-деривативы (по отчёту)' }, { id: 'DER.FX', group: 'DER', kind: 'FX', label: 'Валюта / FX' },
     { id: 'OTH.OTH', group: 'OTH', kind: 'OTH', label: 'Прочее' },
   ];
   const GOV = { 'ОФЗ-ПД': 'PD', 'ОФЗ-АД': 'PD', 'ОФЗ-ПК': 'PK', 'ОФЗ-ИН': 'IN' };
+  // бумаги Минфина России (R39, api/concepts.is_minfin): по эмитенту, не по списку ISIN — флаг эмитента в справочнике
+  // прогона (gov: is_sovereign хаба, ИНН 7710168360) или класс хаба, выведенный из того же ИНН (ОФЗ: сегмент «Гос»,
+  // ОФЗ-*; валютные бумаги Минфина: sovereign_fx); иностранный суверен (foreign_sovereign) — не Минфин
+  const MINFIN_CLASSES = { sovereign_fx: 1 }, NOT_MINFIN = { foreign_sovereign: 1 };
+  M.isMinfinPos = p => !NOT_MINFIN[p.assetClass] && (p.segment === 'Гос' || !!GOV[p.assetClass] || !!MINFIN_CLASSES[p.assetClass]
+    || !!(p.issuer && ((D.ISSUERS || {})[p.issuer] || {}).gov));
+  // группа продукта отчёта (api/concepts.product_group): поля x_* строки отчёта лежат в extra.reported.x (так их хранит
+  // прогон и у оценённой, и у не оценённой позиции); плоское extra.reported.x_product_group — тоже принимается
+  M.productGroup = rep => !rep || typeof rep !== 'object' ? null : rep.x_product_group || (rep.x && typeof rep.x === 'object' ? rep.x.x_product_group : null) || null;
   function kindOf(p) {  // api/concepts.kind_of
     if (p.instrType === 'FX') return ['DER', 'FX'];
     if (p.instrType === 'OTC') return ['DER', 'OTC'];
@@ -164,25 +203,61 @@
     if (!p.instrType && (p.segment === 'FX')) return ['DER', 'FX'];
     if (!p.instrType && p.segment === 'Прочее') return ['OTH', 'OTH'];
     const flt = p.couponType === 'float' ? 'FLT' : 'FIX';
-    if (p.segment === 'Гос' || GOV[p.assetClass]) return (p.ccy || 'RUB') !== 'RUB' ? ['GOV', 'SOVFX'] : ['GOV', GOV[p.assetClass] || 'PD'];
+    if (M.isMinfinPos(p)) return (p.ccy || 'RUB') !== 'RUB' ? ['GOV', 'SOVFX'] : ['GOV', GOV[p.assetClass] || 'PD'];
     if (p.segment === 'Суб') return ['SUB', flt];
     return ['CORP', flt];
   }
+
+  // ---------- имена бумаг: алиасы по ISIN (R33) ----------
+  const LOOPBACK = /^(127\.\d+\.\d+\.\d+|localhost|\[?::1\]?)$/i;
+  M.aliases = {};
+  ((getJson('../api/v1/instruments/aliases') || {}).aliases || []).forEach(a => {
+    if (a && a.isin && a.alias) M.aliases[a.isin] = { alias: a.alias, changedBy: a.changed_by, changedAt: a.changed_at };
+  });
+  async function aliasCall(method, path, body) {
+    try {
+      const r = await fetch(path, method === 'PUT' ? { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
+      let j = null; try { j = await r.json(); } catch (e) { }
+      return { status: r.status, body: j };
+    } catch (e) { return { status: 0, body: { message: 'нет связи с сервером' } }; }
+  }
+  M.aliasApi = {
+    // менять можно только с компьютера сервера (local_only): с другого адреса — сразу только чтение, без запроса
+    editable: LOOPBACK.test(location.hostname || ''),
+    readOnlyReason: 'алиас меняется только на компьютере, где работает сервер деска (адрес 127.0.0.1)',
+    put: (isin, alias) => aliasCall('PUT', '../api/v1/instruments/alias', { isin, alias }),
+    history: isin => aliasCall('GET', '../api/v1/instruments/aliases/' + encodeURIComponent(isin) + '/history')
+      .then(r => r.status === 200 && r.body ? r.body.revisions : null),
+  };
 
   // ---------- позиции ----------
   const FREQ = { 12: 'M', 4: 'Q', 2: 'S', 1: 'A' };
   const IDX = { KEY_RATE: 'КС', 'КС': 'КС', RUONIA: 'RUONIA' };
   const pct = v => { const t = String(+(+v).toFixed(3)); const d = (t.split('.')[1] || '').length; return (+v).toFixed(Math.max(2, d)); };
   const XP = X.positions || {};
+  const camel = o => Object.fromEntries(Object.entries(o).map(([k, v]) => [k.replace(/_([a-z])/g, (_, c) => c.toUpperCase()), v]));
   const accrualDays = D.accrualDays || 1;
   const positions = D.positions.map(d => {
     const [group, kind] = kindOf(d), ex = d.extra || {}, q = ex.quote || {}, xp = XP[d.id] || {};
     const isBond = group !== 'DER' && group !== 'OTH';
     const p = {
-      id: d.id, isin: d.isin || null, name: d.name || d.id, issuer: d.issuer || null, group, kind, ccy: d.ccy || 'RUB', book: d.book,
+      id: d.id, isin: d.isin || null, exchName: d.name || d.id, issuer: d.issuer || null, group, kind, ccy: d.ccy || 'RUB', book: d.book,
       maturity: d.maturity || null, notional: num(d.notional) || 0, notionalRub: num(d.notionalRub) || 0, spreadBp: num(d.spreadBp),
       notValued: !!d.notValued, cpty: d.counterparty || null, portfolio: d.portfolio || null, quality: ex.quality || null,
     };
+    // имя — алиас бумаги (R33) или биржевое; d.alias — если сервер когда-нибудь пришлёт его в данных прогона
+    p.alias = (p.isin && M.aliases[p.isin] && M.aliases[p.isin].alias) || d.alias || null;
+    p.name = p.alias || p.exchName;
+    // для типа инструмента таблицы «валюта × тип» (lib/instr.js, api/concepts.instr_kind): поля факта и группа продукта отчёта
+    p.instrType = d.instrType || null; p.assetClass = d.assetClass || null; p.segment = d.segment || null;
+    p.productGroup = M.productGroup(ex.reported);
+    p.ocp = !!(d.ocpTransfer || d.assetClass === 'Перенос ОВП');
+    p.accrualOnly = !!d.accrualOnly;  // HTM по начислению: рыночного риска нет по правилу, это не пропуск
+    // FX-дельта по валютам (fx_delta {ccy} прогона): у форварда, свопа и кросса валют может быть несколько — не сворачиваем
+    p.fxDeltaBy = Object.fromEntries(Object.entries(d.fxDelta || {}).filter(([, v]) => num(v)).map(([c, v]) => [c, +v]));
+    // ноги FX-сделки (extra.legs; провизорная форма WP-M4: leg, value_date, buy_ccy, buy_amount, sell_ccy, sell_amount,
+    // contract_rate, rate_quote, fwd_rate, points, df, settlement, settlement_ccy, fixing_date, fixing_rate, payment_date)
+    p.legs = Array.isArray(ex.legs) && ex.legs.length ? ex.legs.filter(l => l && typeof l === 'object').map(camel) : null;
     const b = M.book[d.book] || {};
     p.bookName = b.name || d.book; p.entity = b.entity || d.entity || '—'; p.desk = b.desk || '—';
     p.issuerName = d.issuer || d.counterparty || (group === 'DER' ? 'Деривативы' : '—');
@@ -220,7 +295,11 @@
     p.zSpreadZ = num(d.spreadBp); p.gspreadMoex = flt ? null : num(q.gspread_bp);
     p.gspread = flt ? null : (num(ex.g_spread_bp) != null ? num(ex.g_spread_bp) : p.gspreadMoex);
     p.dm = flt ? (num(ex.dm_bp) != null ? num(ex.dm_bp) : p.zSpreadZ) : null;
+    p.dmSource = flt ? (num(ex.dm_bp) != null ? 'core' : 'z') : null;  // 'z': DM ядра нет (прогон до ядра 0.33) — показан Z
     p.zspread = flt ? p.dm : p.zSpreadZ; p.spreadLabel = flt ? 'DM' : (p.zspread != null ? 'Z' : '');
+    // кривая, к которой Z-спред (spreadBp ядра — к кривой дисконтирования: RUONIA, в день без неё — КБД); у флоатера это
+    // Z-спред к RUONIA с купонами по прогнозу (R32), сравнимый с Z фикс-бумаг; DM — к кривой проекции
+    p.spreadCurve = d.spreadCurve || null;
     p.mdur = num(d.mdur); p.sprDur = num(d.sprDur);
     p.accrued = num(d.accrued) || 0;
     p.mv = num(d.mvRub); p.mvCcy = num(d.mv);
@@ -239,7 +318,7 @@
     p.dv01ByCurve = {}; let tot = 0;
     M.curves.forEach(c => { const s = p.risk[c.id].reduce((a, v) => a + v, 0); p.dv01ByCurve[c.id] = s; if (c.kind === 'rate') tot += s; });
     p.dv01 = tot;
-    p.fxDelta = Object.values(d.fxDelta || {}).reduce((a, v) => a + (v || 0), 0);
+    p.fxDelta = p.fxDeltaBy[p.ccy] || 0;  // в валюте позиции; все валюты — p.fxDeltaBy (сумма разных валют — не мера)
     // PnL
     const e = d.pnl || {};
     if (e.available === false || !d.pnl) {
@@ -247,14 +326,17 @@
       p.carryDay = null; p.rollDay = null;
     } else {
       const z = v => v || 0;
-      p.pnl = { carry: z(e.carry) + z(e.rolldown), rates: z(e.rates) + z(e.convexity), spread: z(e.spread), fx: z(e.fx), trading: z(e.newTrades),
-        other: z(e.funding) + z(e.other) + z(e.reported), total: z(e.explained), available: true, method: e.methodText || e.method || null };
-      p.carryDay = (z(e.carry) + z(e.rolldown)) / accrualDays; p.rollDay = z(e.rolldown) / accrualDays;
+      p.pnl = { carry: z(e.carry) + z(e.rolldown) + z(e.funding), rates: z(e.rates) + z(e.convexity), spread: z(e.spread), fx: z(e.fx), trading: z(e.newTrades),
+        other: z(e.other) + z(e.reported), total: z(e.explained), available: true, method: e.methodText || e.method || null };
+      p.carryDay = (z(e.carry) + z(e.rolldown) + z(e.funding)) / accrualDays; p.rollDay = z(e.rolldown) / accrualDays;
     }
+    p.funding = e.available === false || !d.pnl ? null : num(e.funding);  // null: не посчитано (не настроено, проблема)
+    p.fundingInfo = ex.funding || null;
     p.pnlMtd = num(xp.pnlMtd); p.pnlYtd = num(xp.pnlYtd);
     p.spreadChgBp = num(xp.spreadChgBp);
     p.tradedToday = !!(xp.trade || d.newToday); p.tradeToday = xp.trade || null;
-    p.searchText = [p.name, p.isin, p.issuerName, p.issuerFull, p.issuerGroup, p.latName, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio, p.rating, p.ratingAgency].join(' ').toLowerCase();
+    p.searchBase = [p.exchName, p.isin, p.issuerName, p.issuerFull, p.issuerGroup, p.latName, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio, p.rating, p.ratingAgency].join(' ').toLowerCase();
+    p.searchText = (p.alias ? p.alias.toLowerCase() + ' ' : '') + p.searchBase;  // как K.setAlias
     return p;
   });
   M.positions = positions;
@@ -264,7 +346,13 @@
   M.defaultOrder = (a, b) => ((M.ccyOrder[a.ccy] ?? 99) - (M.ccyOrder[b.ccy] ?? 99)) || (groupOrder[a.group] - groupOrder[b.group]) ||
     (a.issuerName || '').localeCompare(b.issuerName || '', 'ru') || ((kindOrder[a.kind] || 0) - (kindOrder[b.kind] || 0)) || (a.tenor - b.tenor);
   positions.sort(M.defaultOrder);
-  if (positions.some(p => p.notValued)) M.notes.push(positions.filter(p => p.notValued).length + ' поз. не оценены (нет данных): показаны без риска и MV');
+  // не оценённые позиции — по причинам и типам (R45, api/coverage.py): разбор в панели «Чего нет в данных» (kit.js)
+  M.unvalued = X.unvalued || null; M.approx = X.approx || null;
+  const UV = M.unvalued;
+  if (UV && UV.total) {
+    if (UV.open) M.notes.push(UV.open + ' поз. не оценены: показаны без риска и MV — разбор по причинам ниже' + (UV.closed ? '; ещё ' + UV.closed + ' закрытых (нулевой объём) — не в счёте' : '') + (UV.fxMissing.length ? '; нет курса ' + UV.fxMissing.join(', ') + ' — суммы этих строк не в рублях' : ''));
+    else M.notes.push(UV.closed + ' закрытых позиций (нулевой объём) в отчёте — не оценены, в счёт не входят');
+  } else if (positions.some(p => p.notValued)) M.notes.push(positions.filter(p => p.notValued).length + ' поз. не оценены (нет данных): показаны без риска и MV');
 
   // ---------- история деска ----------
   const H = X.hist || {};
@@ -297,10 +385,10 @@
       return JSON.parse(x.responseText);
     } catch (e) { return null; }
   }
-  const OPT = ['zspr', 'dm', 'icpi', 'ir', 'bei', 'cpi'];
+  const OPT = ['zspr', 'dm', 'dmPx', 'icpi', 'ir', 'bei', 'cpi'];
   M.posHistory = function (id, opts) {
     if (opts && opts.deep) {
-      if (!(id in deepCache)) { const j = fetchHist([id], '2000-01-01'); deepCache[id] = j && j.series && j.series[id] ? Object.assign({ dates: j.dates }, j.series[id]) : null; }
+      if (!(id in deepCache)) { const j = fetchHist([id], '2000-01-01'); deepCache[id] = j && j.series && j.series[id] ? Object.assign({ dates: j.dates, runAt: j.runAt }, j.series[id]) : null; }
       if (deepCache[id] && deepCache[id].dates.length) {
         return conv(deepCache[id], { deep: true });
       }
@@ -309,7 +397,7 @@
       misses++;
       const j = fetchHist(misses > 2 ? null : [id]);
       if (misses > 2) all = true;
-      if (j) Object.entries(j.series || {}).forEach(([pid, s]) => histCache[pid] = Object.assign({ dates: j.dates }, s));
+      if (j) Object.entries(j.series || {}).forEach(([pid, s]) => histCache[pid] = Object.assign({ dates: j.dates, runAt: j.runAt }, s));
     }
     const p = M.pos[id], s = histCache[id];
     if (!s || !s.dates.length) {
@@ -330,6 +418,10 @@
     const o = Object.assign({ dates: s.dates, price: s.price || nulls(), ytm: s.ytm || nulls(), spr: s.spr || nulls(), notional: s.notional || nulls(),
       dv01: risk(s.dv01), cs01: risk(s.cs01), basis: risk(s.basis), mv: risk(s.mv), curves, bench: s.bench || nulls(), fromRuns: true }, extra || {});
     OPT.forEach(key => { if (s[key]) o[key] = s[key]; });
+    // на чём стоит точка (R44): прогон даты (runAt: null — прогона нет, значение перенесено), точки не по ядру (pt), бумаг
+    if (s.runAt) o.runAt = s.runAt;
+    if (s.pt) o.pt = s.pt;
+    if (s.qty) o.qty = s.qty;
     return o;
   }
 
@@ -397,14 +489,15 @@
     const held = new Set(c.held || []), k = RUB_K(), F = c.fields;
     const rows = (key, conv) => (c[key] || []).map(r => { const o = {}; F[key].forEach((f, i) => o[f] = r[i]); if (conv) conv(o); return o; });
     const posBySec = {}; D.positions.forEach(p => { if (p.instrumentId) posBySec[p.instrumentId] = p.id; });
+    const named = o => { const p = o.pos && M.pos[o.pos]; if (p && p.alias && o.name) o.name = p.alias; };  // алиас бумаги в портфеле (R33)
     calCache = {
       source: 'real', staticDate: c.staticDate, asOf: c.asOf, horizonEnd: c.horizonEnd, bigRub: c.bigRub * k,
       types: c.types.map(id => ({ id, label: c.typeLabels[id] || id })), ccys: c.ccys || [], coverage: c.coverage || {},
       rub: rows('rub', o => { o.amount *= k; o.bigAmount *= k; o.estAmount *= k; }),
       rubSector: rows('rubSector', o => { o.amount *= k; }),
-      rubBig: rows('rubBig', o => { o.amount *= k; o.held = held.has(o.secid); o.pos = posBySec[o.secid] || null; }),
+      rubBig: rows('rubBig', o => { o.amount *= k; o.held = held.has(o.secid); o.pos = posBySec[o.secid] || null; named(o); }),
       fx: rows('fx'), fxIssuers: rows('fxIssuers'),
-      fxEvents: rows('fxEvents', o => { o.held = held.has(o.secid); o.pos = posBySec[o.secid] || null; }),
+      fxEvents: rows('fxEvents', o => { o.held = held.has(o.secid); o.pos = posBySec[o.secid] || null; named(o); }),
       notes: ['календарь рынка — по статике хаба на ' + c.staticDate + ': купоны (ещё не объявленные — по последнему, «прогноз»), амортизации, погашения и оферты всех выпусков × объём выпуска MOEX'],
       flows(q) {  // строки за ячейкой: {market, from, to, type, kind, ccy, sector, big, issuer, secid}
         const qs = Object.entries(q || {}).filter(([, v]) => v != null && v !== false && v !== '').map(([a, v]) => a + '=' + encodeURIComponent(v)).join('&');
@@ -412,7 +505,7 @@
         if (!j) return { count: 0, amount: 0, rows: [] };
         const kk = q && q.market === 'rub' ? k : 1;
         j.amount = (j.amount || 0) * kk;
-        j.rows.forEach(r => { r.amount = r.amount == null ? null : r.amount * kk; r.pos = posBySec[r.secid] || null; });
+        j.rows.forEach(r => { r.amount = r.amount == null ? null : r.amount * kk; r.pos = posBySec[r.secid] || null; named(r); });
         return j;
       },
     };
@@ -436,7 +529,9 @@
     const S = f => M.sum(list, f);
     const k = { dv01: S('dv01'), cs01: S('cs01'), basis01: S('basis01'), mvBonds: S(p => p.group === 'DER' ? 0 : p.mv), pnl: S(p => p.pnl.total), carryDay: S('carryDay'),
       pnlMtd: S('pnlMtd'), pnlYtd: S('pnlYtd'), byCcy: {}, byCurve: {} };
-    M.ccys.forEach(c => k.byCcy[c] = { dv01: S(p => p.ccy === c ? p.dv01 : 0), mv: S(p => p.ccy === c && p.group !== 'DER' ? p.mv : 0), fxDelta: S(p => p.ccy === c ? p.fxDelta : 0) });
+    // по ногам (lib/instr.js): DV01 — по валюте кривой, FX-дельта — по своей валюте; MV — в валюте позиции
+    const I = window.INSTR;
+    M.ccys.forEach(c => k.byCcy[c] = { dv01: S(p => I.dv01In(p, c)), mv: S(p => p.ccy === c && p.group !== 'DER' ? p.mv : 0), fxDelta: S(p => I.fxIn(p, c)) });
     M.curves.forEach(c => k.byCurve[c.id] = S(p => p.dv01ByCurve[c.id]));
     return k;
   };

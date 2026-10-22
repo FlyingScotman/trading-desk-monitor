@@ -9,6 +9,8 @@ The screens in `prototypes/` are **visual mockups**. They define what the tool s
 
 They are not the working application, and the calculations inside them are illustrative. Integration is done **by the backend**: the backend exposes a typed desk API and an event stream, and the frontend renders what it receives.
 
+**Deprecated in the UI (22 October 2026).** The main set of screens is now the monitors (`prototypes/concepts/`, C01–C13, §4a), with the React scenario screen (`/app/`) and the settings. The mockup screens above (Desk Monitor, Widget Board, Pivot Studio, Scenario & PnL Lab) are no longer linked from the navigation bar, the home page or the monitors; their files and tests stay, and they open by direct URL. The port order in §4 predates this. Which monitor replaces which: root `README.md`, «Устаревшие экраны».
+
 ## 1 Principles
 
 1. **The backend is the only data source.** The frontend calls the desk API only. The browser never calls the hub on the VPS; bond and market views go through a backend proxy that reads the snapshot cache.
@@ -26,7 +28,7 @@ REST JSON plus an event stream. The OpenAPI is generated from the backend (FastA
 | `/api/v1/runs/{run_id}` | GET | Run header and full lineage |
 | `/api/v1/runs/{run_id}/positions` | GET (fields=…, book, entity) | Per-position facts: valuation, greeks (sparse, factor-indexed), PnL components, funding, OCP contribution, coverage |
 | `/api/v1/runs/{run_id}/aggregates` | GET (dims=book,curve,bucket…) | Server-computed cubes for first paint and reconciliation of screen totals |
-| `/api/v1/runs/{run_id}/funding` | GET | Funding lines (POS/HTM/CASH/REPO), OCP transfers |
+| `/api/v1/runs/{run_id}/funding` | GET | Funding of the run (B1, built): state (`computed`, `not_configured`, …), totals, by book with the write-off, by entity, lines (POS/HTM/CASH/ENTITY_CASH/REPO), problems, the policy and its provisional fields; OCP transfers later (B2) |
 | `/api/v1/runs/{run_id}/pnl` | GET | Flash PnL, explain components, official attachments with revision and coverage, breaks |
 | `/api/v1/runs/{run_id}/scenarios` | GET | Stored T3/T2 results for this run, by definition hash, with coverage |
 | `/api/v1/scenario-defs` | GET, POST, PUT, DELETE | Preset (read-only), historical (read-only) and per-user/shared custom scenario definitions |
@@ -109,10 +111,17 @@ The market's past comes from the store's market history, which the hub's history
 
 ## 6 Users and access
 
-- **Few users, on the inside Windows server:** the reverse proxy (IIS or Caddy) does authentication. Windows Integrated Authentication (Kerberos/NTLM) if IT allows it; otherwise named accounts with an established session library.
-- **Roles:**
-  - `viewer`: read;
-  - `trader`: plus custom scenarios and T2 jobs;
-  - `admin`: inputs, overrides, configuration.
-- **Audit:** who loaded inputs, applied overrides, attached official PnL, and ran jobs.
+- **Few users, sign-in in the app** (DECISIONS DEC13, batch 1 item 9; `backend/src/desk/api/auth.py`). The plan of a reverse proxy (IIS or Caddy, Windows Integrated Authentication) stays an option; Windows / AD single sign-on is a later step that would map AD groups to the same roles.
+  - **Off by default:** `desk serve` listens on 127.0.0.1 only, no accounts; the admin routes answer loopback clients with a loopback `Host` and `Origin` (as before).
+  - **On** (setting `auth`; `desk lan enable`): every page, script and API needs a session, except `/health/live`, `/login.html` and `/api/v1/auth/{state,login,setup}`. A page without a session is redirected (303) to `/login.html?next=…`, an API call answers 401 (`ErrorOut.code` `unauthorized`); a refused role answers 403 (`forbidden`), a lockout 429 (`locked`).
+  - **Accounts:** table `app_user` (migration 0015), Argon2id hashes (argon2-cffi), roles below. The first admin: `desk user add NAME --role admin`, or the setup form of the login page, open only to a loopback client while no active admin exists. Admins manage users at `/users.html` (`prototypes/desk-users.js`, a self-contained section the settings page can host) or with `desk user …`; a reset password is temporary (changed at the next sign-in).
+  - **Sessions:** `app_session` keeps the SHA-256 of a random token; the token is in an `httpOnly; SameSite=Strict` cookie (`Secure` over HTTPS). Limits: 8 h idle, 24 h absolute (`session_idle_minutes`, `session_max_hours`). Logout, disabling a user, a role change and a password reset revoke sessions.
+  - **CSRF:** a state-changing request needs `X-CSRF-Token` equal to the session's token (the pages read it from the `desk_csrf` cookie: `prototypes/desk-auth.js` adds it to every same-site `fetch`/XHR write; `frontend/src/api/client.ts` too) and a same-site `Origin`/`Referer` when the browser sends one. Login and setup (no session yet) need JSON and a same-site `Origin`.
+  - **Throttling:** 5 wrong passwords in a row lock the account for 15 min (`login_max_failures`, `login_lockout_minutes`); 30 failures from one address in that window answer 429 before any check.
+  - **Network:** `bind_host` / `port` (default 127.0.0.1:8100). A non-loopback address is refused without `auth`, and without TLS (`tls_cert`/`tls_key`, or `desk lan enable --self-signed`) unless `allow_plain_http`, which puts a warning on every page. Beside a specific address the server also listens on 127.0.0.1, so the launcher's health check stays there. `admin_from_network` (default on) lets admins use the admin routes from other computers. Windows: `desk.bat firewall add` (`netsh advfirewall firewall add rule … dir=in action=allow protocol=TCP localport=<port> profile=domain,private`, administrator). Running as a Windows service (no logged-in user) is a follow-up.
+- **Roles** (`auth.ROLES`):
+  - `viewer`: read every page and API but the admin routes;
+  - `trader`: plus scenario jobs (`POST /api/v1/scenario-jobs`), the autopilot's run now (`POST /api/v1/autopilot/run`) and alias edits (`PUT /api/v1/instruments/alias`);
+  - `admin`: plus settings, adapter, updates, diagnostics, users and the audit log (`/api/v1/settings*`, `/api/v1/adapter*`, `/api/v1/update*`, `/api/v1/diagnostics`, `/api/v1/users*`, `/api/v1/audit`).
+- **Audit** (`audit_log`, append-only, `GET /api/v1/audit`): logins and failures, logouts, user changes, settings / adapter / update writes (the names of the keys changed, never values or secrets), alias edits, scenario jobs, autopilot runs; with the user (`local` while sign-in is off), the client address and the outcome. Still to come: input loads, overrides and official PnL attachments.
 - User preferences, saved views and custom scenarios live on the server (`/api/v1/views`, `/api/v1/scenario-defs`), not in browser localStorage.

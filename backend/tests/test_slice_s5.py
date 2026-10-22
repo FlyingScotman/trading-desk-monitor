@@ -15,7 +15,7 @@ from desk import cli, store
 from desk.marketdata.adapter import MarketView
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import Outcome, attach_pnl, prepare, value
-from desk.publish import desk_run, tdm_run
+from desk.publish import desk_run, funding_run, tdm_run
 from desk.valuation.fallback import CarriedSpread
 
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1"
@@ -72,14 +72,20 @@ def test_publish_into_the_store(con, ctx, book, run_inputs):
     assert q("SELECT count(*) FROM run_position WHERE run_id = %s")[0][0] == len(book)
     assert q("SELECT quality FROM run_position WHERE run_id = %s AND position_id = 'X01'") == [(None,)]
     content = tdm_run.run_content(ctx, positions, prev, {})
-    assert [m for (m,) in q("SELECT message FROM run_log WHERE run_id = %s ORDER BY seq")][1:] \
-        == [m for _, m in content.log][1:]  # the same lines as tdm, after the lineage line
-    assert warnings == [m for level, m in content.log if level == "WARN"]
-    assert {k for (k,) in q("SELECT kind FROM run_reference WHERE run_id = %s")} == set(tdm_run.REFERENCE_KINDS)
+    log = [m for (m,) in q("SELECT message FROM run_log WHERE run_id = %s ORDER BY seq")]
+    funding = [m for m in log if m.startswith("фондирование")]  # B1: the desk store's own lines, before the last
+    assert funding == [funding_run.STATUS_TEXT["not_configured"] + "; фондирование не посчитано, в PnL его нет (не 0)"]
+    assert log[-2] == funding[0]
+    assert [m for m in log if m not in funding][1:] == [m for _, m in content.log][1:]  # tdm's, after the lineage
+    assert warnings == [m for level, m in content.log if level == "WARN"] + funding
+    assert {k for (k,) in q("SELECT kind FROM run_reference WHERE run_id = %s")} == {*tdm_run.REFERENCE_KINDS,
+                                                                                     "funding"}
 
     fact = q("SELECT fact FROM run_position WHERE run_id = %s AND position_id = 'P00'")[0][0]
     row = next(r for r in content.rows if r["position_id"] == "P00")
-    assert fact == desk_run._finite(row)  # position_row exactly, NaN as null
+    assert fact["extra"].pop("funding") == {"state": "not_configured", "amount_rub": None,
+                                            "reason": funding_run.STATUS_TEXT["not_configured"]}
+    assert fact == desk_run._finite(row)  # position_row exactly, NaN as null, beside its funding
 
     (cov, tot, lin, ids, h, sup), = q("SELECT coverage, totals, lineage, position_set_ids, private_inputs_hash,"
                                       " supersedes_run_id FROM run WHERE run_id = %s")

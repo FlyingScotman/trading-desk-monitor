@@ -14,9 +14,17 @@ This process never writes into the bundle folder.
 
 Checks: safe member paths only (relative, no ``..``, drive, backslash, link, reserved Windows name), the bundle's
 layout (``app/``, ``wheelhouse/``, ``adapter/``, ``python/`` and the root files), size limits, a full zip complete
-and a patch made for the installed files (the manifest's unchanged entries match the installed manifest).
-``python/`` is never replaced while it runs the launcher: a zip that changes it is refused (the manual way).
-A full zip without ``adapter/`` keeps the installed adapter, and so does a patch built from a bundle without one.
+and a patch made for the installed files: content, not version, decides: every file of the new manifest that the
+patch does not ship must already be installed with that sha256 (the files it ships can be anything); a mismatch says
+which file, the hashes and both build ids (``build_id``: two builds of one version string can differ), and the GitHub
+updater then takes the full zip. ``python/`` is never replaced while it runs the launcher: a zip that changes it is
+refused (the manual way). A full zip without ``adapter/`` keeps the installed adapter; a patch never touches it
+unless it ships adapter files itself (old with-adapter patches), and its manifest's adapter lines are not checked.
+
+Rollback by hand (``stage_rollback``): the launcher keeps the files an update replaced in
+``<home>/updates/backup/<old version>/`` (the newest three); the backup made when the running version was installed
+is staged like an update back to the old version, through the same launcher (which backs up the current files in
+turn). The GitHub updater (``desk.updater``) downloads zips into the uploads folder and installs them the same way.
 """
 
 from __future__ import annotations
@@ -27,6 +35,7 @@ import os
 import re
 import shutil
 import stat
+import threading
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -53,10 +62,17 @@ _RESERVED = re.compile(r"(?i)(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\..*)?")
 _VERSION_KEY = re.compile(r"(\d+(?:\.\d+)*)-(\d{8})-[0-9a-f]{7,40}(?:-dirty(\d{12}))?")
 _SHA = re.compile(r"[0-9a-f]{64}")
 _UPLOAD_CHARS = re.compile(r"[^A-Za-z0-9._+-]")
+_BASE_BUILDS = re.compile(r"\(сборка ([0-9a-f]{12}(?:, [0-9a-f]{12})*)\)")
+ADAPTER = "adapter/"
+INSTALL_LOCK = threading.Lock()  # one install (staging) at a time: the settings page's and the updater's
 
 
 class UpdateError(ValueError):
     """Why a zip cannot be installed, in the owner's words (the settings page shows it)."""
+
+
+class PatchBaseError(UpdateError):
+    """A patch made for other installed files (another build): the full zip of that version installs instead."""
 
 
 # ---- where and what runs ----------------------------------------------------------------------------------
@@ -115,6 +131,13 @@ def compare(new: str, current: str) -> str:
     return "newer" if a > b else "older"
 
 
+def build_id(manifest: dict[str, str]) -> str:
+    """A bundle build in 12 hex: the sha256 of its manifest lines outside ``adapter/`` (``MANIFEST.sha256`` itself
+    left out); the same function as ``build_windows_bundle.build_id`` (``PATCH_BASE.txt`` names the base's)."""
+    keep = sorted((rel, d) for rel, d in manifest.items() if not rel.startswith(ADAPTER) and rel != "MANIFEST.sha256")
+    return hashlib.sha256("".join(f"{d}  {rel}\n" for rel, d in keep).encode()).hexdigest()[:12]
+
+
 def file_sha256(p: Path) -> str:
     h = hashlib.sha256()
     with open(p, "rb") as f:
@@ -154,6 +177,7 @@ class Contents:
     members: dict[str, zipfile.ZipInfo]  # bundle path -> member (the patch notes left out)
     manifest: dict[str, str]  # every file of the new bundle -> sha256
     delete: list[str]  # a patch: the files the new version no longer has
+    base_builds: tuple[str, ...] = ()  # a patch: the build ids it was made from (PATCH_BASE.txt), when it names them
 
     @property
     def adapter(self) -> bool:
@@ -217,10 +241,14 @@ def read_contents(z: zipfile.ZipFile) -> Contents:
         raise UpdateError("В архиве нет MANIFEST.sha256: соберите его build_windows_bundle.py.")
     manifest = parse_manifest(_text(z, members["MANIFEST.sha256"]))
     patch = "PATCH_README.txt" in members or "PATCH_BASE.txt" in members
-    base, delete = None, []
+    base, delete, builds = None, [], ()
     if patch:
         if "PATCH_BASE.txt" in members:
-            base = _text(z, members["PATCH_BASE.txt"]).strip() or None
+            # "<version>" (older builders) or "<version> (сборка <build id>[, <build id>])"
+            text = _text(z, members["PATCH_BASE.txt"]).strip()
+            base = text.split()[0] if text else None
+            if m := _BASE_BUILDS.search(text):
+                builds = tuple(m[1].split(", "))
         elif m := re.search(r"обновление (\S+) -> (\S+)", _text(z, members["PATCH_README.txt"])):
             base = m[1]
         if "PATCH_DELETE.txt" in members:
@@ -241,7 +269,7 @@ def read_contents(z: zipfile.ZipFile) -> Contents:
         absent = sorted(set(manifest) - set(members))
         if absent:
             raise UpdateError(f"Архив неполный: нет {len(absent)} файлов из MANIFEST.sha256, например {absent[0]}.")
-    return Contents(version, "patch" if patch else "full", base, members, manifest, delete)
+    return Contents(version, "patch" if patch else "full", base, members, manifest, delete, builds)
 
 
 # ---- fitting it to the installed bundle ----------------------------------------------------------------------
@@ -283,10 +311,31 @@ def check_fits(c: Contents, root: Path) -> None:
         raise UpdateError("В этом архиве другая версия Python (папка python\\), а её нельзя заменить, пока программа "
                           "работает. Обновите вручную: stop.bat, распакуйте архив поверх папки программы, start.bat.")
     if c.kind == "patch":
-        stale = [rel for rel, d in c.manifest.items() if rel not in c.members and _installed(root, rel, have) != d]
+        adapter = _touches_adapter(c)
+        stale = [rel for rel, d in c.manifest.items() if rel not in c.members and _installed(root, rel, have) != d
+                 and (adapter or not rel.startswith(ADAPTER))]
         if stale:
-            raise UpdateError(f"Заплатка сделана для версии {c.base or '(неизвестно)'}, а установлена {current} "
-                              f"(не совпадает, например, {stale[0]}). Нужна заплатка от {current} или полный архив.")
+            raise PatchBaseError(_mismatch(c, root, current, have, stale))
+
+
+def _touches_adapter(c: Contents) -> bool:
+    """A patch replaces the installed adapter only when it ships adapter files (old with-adapter patches)."""
+    return any(rel.startswith(ADAPTER) for rel in c.members)
+
+
+def _mismatch(c: Contents, root: Path, current: str, have: dict[str, str] | None, stale: list[str]) -> str:
+    """Why a patch does not fit, with what it expects and what is installed: version and build of each side, the
+    first file that differs and its two sha256."""
+    want, got = c.manifest[stale[0]], _installed(root, stale[0], have)
+    made = f"версии {c.base or '(неизвестно)'}" + (f" (сборка {', '.join(c.base_builds)})" if c.base_builds else "")
+    build = build_id(have) if have is not None else "неизвестна: нет MANIFEST.sha256"
+    same = (" Версия та же, но сборка другая: архив собирали заново, и его файлы не совпадают побайтно."
+            if c.base == current else "")
+    return (f"Заплатка сделана для {made}, а установлена версия {current} (сборка {build}).{same} "
+            f"Файлов, которые заплатка не заменяет и которые не совпадают: {len(stale)}, например {stale[0]}: "
+            f"нужен sha256 {want[:12]}…, установлен {got[:12] + '…' if got else '— нет файла'}. "
+            f"Поставьте полный архив {TOP}-{c.version}.zip (обновление с GitHub берёт его само) "
+            "или заплатку от установленной сборки.")
 
 
 def plan(c: Contents, root: Path) -> tuple[list[str], list[str]]:
@@ -297,8 +346,8 @@ def plan(c: Contents, root: Path) -> tuple[list[str], list[str]]:
              (rel == "MANIFEST.sha256" or not (root / rel).is_file() or file_sha256(root / rel) != c.manifest[rel])]
     known = installed_manifest(root) or {}
     if c.kind == "patch":
-        # a patch built from a bundle without the private adapter keeps the installed one, as a full zip does
-        keeps_adapter = not any(rel.startswith("adapter/") for rel in c.manifest)
+        # a patch leaves the installed adapter alone unless it ships adapter files (an old with-adapter patch)
+        keeps_adapter = not _touches_adapter(c)
         gone = {*c.delete, *(rel for rel in known if rel not in c.manifest
                              and not (keeps_adapter and rel.startswith("adapter/")))}
         return write, sorted(rel for rel in gone if not rel.startswith("python/") and (root / rel).is_file())
@@ -358,6 +407,63 @@ def request(staged: dict[str, Any], home: Path) -> None:
     keys = ("version", "from_version", "kind", "source", "staged")
     doc = {**{k: staged[k] for k in keys}, "requested_at": datetime.now().isoformat(timespec="seconds")}
     atomic_write_text(updates_dir(home) / "pending.json", json.dumps(doc, ensure_ascii=False, indent=1) + "\n")
+
+
+def rollback_point(root: Path, home: Path, thorough: bool = False) -> dict[str, Any] | None:
+    """The backup the launcher made when it installed the running version (``version`` it goes back to,
+    ``backup`` folder, ``replaced``, ``created``); None when there is none or it is incomplete (``thorough``:
+    every backed-up file is checked to be there, else only ``VERSION``: the page asks often)."""
+    current = installed_version(root)
+    folder = updates_dir(home) / "backup"
+    try:
+        dirs = sorted((d for d in folder.iterdir() if d.is_dir()), key=lambda d: d.stat().st_mtime, reverse=True)
+    except OSError:
+        return None
+    for d in dirs:
+        try:
+            rec = json.loads((d / "backup.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(rec, dict) or rec.get("to_version") != current or not isinstance(rec.get("version"), str):
+            continue
+        replaced, created = rec.get("replaced"), rec.get("created")
+        if not isinstance(replaced, list) or not isinstance(created, list):
+            continue
+        if any(not isinstance(r, str) or _bad_path(r) for r in [*replaced, *created]) or "VERSION" not in replaced \
+                or not all((d / "files" / r).is_file() for r in (replaced if thorough else ["VERSION"])):
+            continue
+        return {"version": rec["version"], "backup": str(d), "replaced": replaced, "created": created}
+    return None
+
+
+def stage_rollback(root: Path, home: Path) -> dict[str, Any]:
+    """Stage the return to the version before the running one from its backup (``rollback_point``), like
+    ``stage``; UpdateError when there is no backup."""
+    point = rollback_point(root, home, thorough=True)
+    if point is None:
+        raise UpdateError("Нет резервной копии предыдущей версии (её делает установка обновления; хранятся три "
+                          "последние). Установите нужную версию из архива.")
+    backup = Path(point["backup"]) / "files"
+    dest = updates_dir(home) / "staged" / f"rollback-{point['version']}"
+    if dest.exists():
+        shutil.rmtree(dest)
+    files = {}
+    try:
+        for rel in point["replaced"]:
+            if rel.startswith("python/"):
+                continue
+            (dest / "files" / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(backup / rel, dest / "files" / rel)
+            files[rel] = file_sha256(dest / "files" / rel)
+    except BaseException:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise
+    delete = sorted(rel for rel in point["created"] if not rel.startswith("python/") and (root / rel).is_file())
+    doc = {"version": point["version"], "from_version": installed_version(root), "kind": "rollback",
+           "base_version": None, "source": f"резервная копия {point['version']}", "files": files, "delete": delete,
+           "created_at": datetime.now().isoformat(timespec="seconds")}
+    atomic_write_text(dest / "update.json", json.dumps(doc, ensure_ascii=False, indent=1) + "\n")
+    return {**doc, "staged": str(dest)}
 
 
 def state(home: Path) -> dict[str, Any]:

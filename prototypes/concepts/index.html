@@ -69,13 +69,14 @@ kbd { font: 11px var(--mono); border: 1px solid var(--line); border-bottom-width
   <p class="foot">Данные вымышленные (prototypes/concepts/lib/mock.js), расчёты упрощённые.</p>
 </div>
 <script>
-// served by desk serve: the monitors run on the monitor's data; link back to the other pages
+// served by desk serve: the monitors run on the monitor's data; links to the home page and the settings
+// (the earlier screens, Desk Monitor and the rest, are deprecated and not linked: README.md, «Устаревшие экраны»)
 (function () {
   if (!/^https?:$/.test(location.protocol) || /[?&]demo=1/.test(location.search)) return;
   fetch('../health/live', { cache: 'no-store' }).then(function (r) {
     if (!r.ok) return;
     var e = document.getElementById('eyebrow');
-    if (e) e.innerHTML = 'FI-деск · данные Desk Monitor · <a href="../desk-monitor.html">◂ Desk Monitor</a> · <a href="../settings.html">Настройки</a>';
+    if (e) e.innerHTML = 'FI-деск · данные из базы прогонов · <a href="../index.html">◂ Главная</a> · <a href="../settings.html">Настройки</a>';
     var f = document.querySelector('.foot');
     if (f) f.textContent = 'Данные — последний прогон монитора и история из хаба; демо-данные: добавьте ?demo=1 к адресу страницы.';
   }).catch(function () { });
@@ -85,7 +86,7 @@ kbd { font: 11px var(--mono); border: 1px solid var(--line); border-bottom-width
 (function () {
   'use strict';
   const C = [
-    ['c01-cockpit', 'C01', 'Кокпит', 'Ключевые цифры и вкладки «Риски / Позиции / PnL / История»; сводная таблица рисков валюта → тип → кривая, риск по бакетам по каждой валюте.'],
+    ['c01-cockpit', 'C01', 'Кокпит', 'Ключевые цифры и вкладки «Риски / Валюта × тип / Позиции / PnL / История»; сводная таблица рисков валюта → тип → кривая, риск по бакетам по каждой валюте; агрегированный риск по валютам с разбивкой по типам инструментов (ОФЗ-ПД, корпоративные, свопы, фьючерсы…).'],
     ['c02-risk-ladder', 'C02', 'Лестница рисков', 'Риск по валютам: тип × бакет таблицей, графиком или тепловой картой, CS01 эмитент × срок, сдвиг кривой.'],
     ['c03-blotter', 'C03', 'Позиции', 'Таблица позиций с карточкой справа, наборы колонок и группировок, раскраска по эмитенту, валюте или типу.'],
     ['c04-pivot', 'C04', 'Агрегатор', 'Сводная по любым строкам, колонкам и мере: таблица, тепловая карта, столбцы или treemap.'],

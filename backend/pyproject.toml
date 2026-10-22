@@ -1,16 +1,20 @@
 [project]
 name = "desk-backend"
-version = "0.2.0"
+version = "0.2.4"
 description = "Trading Desk Monitor backend: hub snapshots -> core valuation -> desk runs"
 requires-python = ">=3.11"
 dependencies = [
-    "rub-fixed-income-core==0.33.0",
+    "rub-fixed-income-core==0.36.0",
     "trading-desk-monitor",
     "psycopg[binary]>=3.2",
     "fastapi>=0.115",
     "uvicorn>=0.30",
     # the OS trust store for the hub's TLS (Windows root auto-download, corporate roots pushed by policy)
     "truststore>=0.10",
+    # users and sessions (api/auth.py, ADR04: no custom cryptography): Argon2id password hashes, and the
+    # self-signed certificate of `desk lan enable --self-signed`
+    "argon2-cffi>=23.1",
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]
@@ -25,7 +29,7 @@ desk = "desk.cli:main"
 # plain clone of this repository builds. Production pins a wheel built from that commit (06 §7).
 # To work on core and the backend together, override locally (not committed):
 #   uv pip install -e ../../rub-fixed-income-core
-rub-fixed-income-core = { git = "https://github.com/FlyingScotman/rub-fixed-income-core.git", rev = "5ec23b36bf8a7f26f170481b0d5b6569a2b4cbc6" }
+rub-fixed-income-core = { git = "https://github.com/FlyingScotman/rub-fixed-income-core.git", rev = "24fe77671122053289eae3a58615e6c259ea90e5" }
 trading-desk-monitor = { path = "..", editable = true }
 
 [build-system]
@@ -38,8 +42,9 @@ packages = ["src/desk"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # `pytest -m live` checks the real hub in DESK_HUB_URL; the default run never touches the network.
-addopts = "-m 'not live'"
-markers = ["live: needs DESK_HUB_URL and a hub token"]
+addopts = "-m 'not live and not bundle'"
+markers = ["live: needs DESK_HUB_URL and a hub token",
+           "bundle: builds a real wheel of the Windows bundle (uv and PyPI for the pinned build backends)"]
 
 [tool.ruff]
 line-length = 110

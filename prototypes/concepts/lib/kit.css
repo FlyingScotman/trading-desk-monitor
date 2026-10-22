@@ -80,6 +80,24 @@ table.k-tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-si
 .k-tbl th.sortable { cursor: pointer; }
 .k-tbl th.sortable:hover { color: var(--fg); }
 .k-tbl th .si { font-size: 10px; color: var(--accent); margin-left: 3px; }
+/* фильтр по значениям столбца (R37): ⏷ в заголовке, активный — цветом акцента */
+.k-tbl th .k-flt { font-size: 10px; margin-left: 4px; opacity: .35; cursor: pointer; padding: 0 2px; }
+.k-tbl th:hover .k-flt { opacity: .85; }
+.k-tbl th .k-flt.on { opacity: 1; color: var(--accent); }
+.k-flt-pop .mi:hover { background: var(--hover); }
+/* ОВП в шапке (R43): мини-таблица, валюта на строку */
+.k-kpi.k-fxk .v { font-size: 12px; font-weight: 400; white-space: normal; }
+.k-fxm { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 12px; font-weight: 400; line-height: 1.35; }
+.k-fxm th { font-size: 10px; font-weight: 500; color: var(--fg-3); text-align: right; padding: 0 0 1px 6px; text-transform: none; letter-spacing: 0; }
+.k-fxm th:first-child, .k-fxm td:first-child { text-align: left; padding-left: 0; }
+.k-fxm td { text-align: right; padding: 0 0 0 6px; white-space: nowrap; }
+.k-fxm td.c { font-weight: 600; color: var(--fg-2); }
+.k-fxm tr.more td { color: var(--fg-3); font-size: 11px; cursor: pointer; }
+.k-fxm tr.more td:hover { color: var(--accent); }
+.k-fxm tr.small { display: none; }
+.k-fxm.open tr.small { display: table-row; }
+.k-fxk .go { cursor: pointer; color: var(--fg-3); }
+.k-fxk .go:hover { color: var(--accent); }
 .k-tbl td { padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .k-tbl tbody tr.row { cursor: pointer; }
 .k-tbl tbody tr.row:hover td { background: var(--hover); }
@@ -117,9 +135,13 @@ table.k-tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-si
 .k-crumbs a:hover { color: var(--accent); }
 .k-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .k-fields > div { background: var(--panel); padding: 6px 10px; min-width: 0; }
+.k-fields > div.wide { grid-column: 1 / -1; }
 .k-fields .l { font-size: 11px; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .k-fields .v { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .k-fields .v small { font-weight: 400; color: var(--fg-2); font-size: 11px; }
+/* подпись с подсказкой (KIT.hint): пунктир снизу, курсор «?» */
+.k-hint { cursor: help; text-decoration: underline dotted; text-decoration-color: var(--fg-3); text-underline-offset: 2px; }
+.k-crisk td:first-child { white-space: nowrap; }
 .k-sec { font-size: 11px; color: var(--fg-2); text-transform: uppercase; letter-spacing: .06em; margin: 16px 0 6px; display: flex; align-items: center; gap: 8px; }
 .k-sec .sp { flex: 1; }
 .k-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
@@ -170,3 +192,18 @@ table.k-tbl.k-compact { width: auto; font-size: 12px; }
 /* KPI с несколькими валютами: значения переносятся, а не обрезаются */
 .k-kpi .v { white-space: normal; line-height: 1.2; }
 .k-kpi .s { white-space: normal; }
+/* имя бумаги: алиас, серое биржевое имя, правка на месте и история (R33) */
+.k-nm { display: inline-flex; align-items: baseline; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.k-exch { color: var(--fg-3); font-weight: 400; font-size: .82em; }
+.k-alias-tools { display: inline-flex; gap: 2px; }
+.k-ico { border: 0; background: none; color: var(--fg-3); cursor: pointer; font-size: 13px; line-height: 1; padding: 1px 4px; border-radius: 4px; }
+.k-ico:hover:not(:disabled) { color: var(--accent); background: var(--hover); }
+.k-ico:disabled { cursor: not-allowed; opacity: .45; }
+.k-alias-ed { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; font-weight: 400; }
+.k-alias-ed .k-input { min-width: 260px; font-size: 13px; }
+.k-alias-msg { font-size: 11px; flex-basis: 100%; }
+.k-alias-msg.warn { color: var(--warn); }
+.k-alias-pop { position: fixed; top: 80px; left: 40%; z-index: 300; width: 370px; max-height: 320px; overflow: auto; background: var(--panel); border: 1px solid var(--line-2); border-radius: 8px; box-shadow: var(--shadow); font-size: 12px; font-weight: 400; }
+.k-alias-pop .hd { padding: 8px 10px; border-bottom: 1px solid var(--line); font-weight: 600; }
+.k-alias-pop .bd { padding: 6px 10px 8px; }
+.k-alias-pop .ft { margin-top: 6px; font-size: 11px; }

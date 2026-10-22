@@ -1,7 +1,19 @@
 import type { RiskPayload, RunHeader, ScenarioDefOut, ScenarioDefinition, ScenarioJob } from './types';
 
+/** The session's CSRF token (cookie desk_csrf, set at sign-in; backend api/auth.py): sent with every write. */
+function csrf(): string {
+  const m = document.cookie.match(/(?:^|; )desk_csrf=([^;]*)/);
+  return m ? decodeURIComponent(m[1]) : '';
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch('/api/v1' + path, init);
+  const write = !!init?.method && !/^(GET|HEAD)$/i.test(init.method);
+  const headers = new Headers(init?.headers);
+  if (write && csrf()) headers.set('X-CSRF-Token', csrf());
+  const r = await fetch('/api/v1' + path, { ...init, headers, credentials: 'same-origin' });
+  if (r.status === 401) {  // signed out or the session expired: the login page, back here afterwards
+    location.href = '/login.html?next=' + encodeURIComponent(location.pathname + location.search);
+  }
   if (!r.ok) {
     const body = await r.json().catch(() => null);  // ErrorOut {code, message, ...}
     throw new Error(body?.message ?? `${r.status} ${r.statusText}`);

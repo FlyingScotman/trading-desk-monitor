@@ -13,6 +13,7 @@ Ctrl+C stops the server and removes the database."""
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -50,6 +51,17 @@ def build(tmp: Path, api: bool = True) -> str:
         write(hist, shifted(d, i + 2, known_at=f"{d}T17:00:00Z"))
     secids = sorted(prepare(SnapshotDir(FIX), DATE).static.bonds)
     settings = Settings(home=tmp / "home", snapshot_cache=cache)
+    with store.connect(url) as con:  # B1: synthetic books and funding rules, so the runs carry a funding block
+        store.store_books(con, [{"book_id": b, "name": n, "desk": "Rates", "book_type": "TRADING", "entity": "ДЕМО",
+                                 "active": True} for b, n in (("OFZ", "ОФЗ (демо)"), ("CORP", "Корпоративные (демо)"),
+                                                              ("CREDIT", "Кредит (демо)"))], "concepts_live")
+        store.store_reference(con, "funding_rules", [
+            {"rule_id": "trading_rub", "book_type": "TRADING", "ccy": "RUB", "basis": "mv_clean",
+             "rate_kind": "index_spread", "index_code": "KEY_RATE", "spread_bp": "100", "day_count": "ACT/365"}],
+            "concepts_live")
+        store.store_reference(con, "funding_policy", [{"policy_id": "firm", "htm_base": "clean_cost"},
+                                                      {"policy_id": "trading", "book_type": "TRADING",
+                                                       "pnl_sweep": "monthly"}], "concepts_live")
     for d, k in ((PREV, 1.0), (DATE, 1.25)):
         lines = ["position_id,book_id,secid,quantity_bonds"]
         for i, s in enumerate(secids):
@@ -85,13 +97,24 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8199)
     ap.add_argument("--no-api", action="store_true", help="no history API rows: the snapshot path alone")
+    ap.add_argument("--auth", metavar="USER:PASSWORD", help="sign-in on (desk.api.auth), with this admin")
     args = ap.parse_args()
     import uvicorn
 
     with tempfile.TemporaryDirectory() as t:
         url = build(Path(t), api=not args.no_api)
+        # routes that read the settings themselves (the position card's flows) find the fixture snapshots
+        os.environ.setdefault("DESK_SNAPSHOT_CACHE", str(Path(t) / "cache"))
         print(f"serving on http://127.0.0.1:{args.port}/concepts/", flush=True)
-        uvicorn.run(create_app(url), host="127.0.0.1", port=args.port, log_level="warning")
+        cfg = None
+        if args.auth:
+            from desk.api import auth
+
+            name, password = args.auth.split(":", 1)
+            with store.connect(url) as con:
+                auth.add_user(con, name, "admin", password, actor="concepts_live")
+            cfg = auth.AuthConfig(enabled=True)
+        uvicorn.run(create_app(url, auth=cfg), host="127.0.0.1", port=args.port, log_level="warning")
     return 0
 
 

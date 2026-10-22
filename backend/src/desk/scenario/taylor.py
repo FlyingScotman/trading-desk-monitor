@@ -39,8 +39,10 @@ def risk_payload(run: Mapping[str, Any], rows: list[Mapping[str, Any]], referenc
         f = r["fact"]
         d = {f"IR|{c}|{b}": x for c, bs in (f.get("risk") or {}).items() for b, x in bs.items()}
         d["CS"] = f.get("cs01") or f.get("ofz_spr01") or 0.0
-        rate = (f.get("extra") or {}).get("fx_rate")
-        d.update({f"FX|{c}": x * rate / 100 for c, x in (f.get("fx_delta") or {}).items() if x and rate})
+        ex = f.get("extra") or {}
+        rate, rates = ex.get("fx_rate"), ex.get("fx_rates") or {}  # a cross: a rate per currency (derivatives)
+        d.update({f"FX|{c}": x * r / 100 for c, x in (f.get("fx_delta") or {}).items()
+                  if x and (r := rates.get(c) or rate)})
         d = {k: x for k, x in d.items() if x}
         firsts.append(d)
         seen |= set(d) | {k for a, b, _ in f.get("gamma") or [] for k in (a, b)}

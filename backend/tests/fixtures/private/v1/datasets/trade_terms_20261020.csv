@@ -1,0 +1,6 @@
+﻿trade_id;leg_id;trade_version;book_id;entity;position_id;product_kind;source_product;trade_date;value_date;base_ccy;quote_ccy;side;notional_base;notional_quote;contract_rate;ndf;settle_ccy;fixing_date;fixing_source;counterparty_id;pv_rub
+FX-1;;1;D1;ENT1;;fx_forward;FXFWD;2026-10-01;2026-12-17;USD;RUB;buy;1000000;83500000;83.5;0;;;;CP-A;150000
+FX-2;;1;D1;ENT1;;fx_forward;FXNDF;2026-10-05;2027-01-15;CNY;RUB;sell;5000000;58000000;11.6;1;RUB;2027-01-13;CBR;CP-B;-20000
+SW-1;near;1;D1;ENT1;;fx_swap;FXSWAP;2026-10-19;2026-10-21;USD;RUB;sell;2000000;164000000;82;0;;;;CP-A;
+SW-1;far;1;D1;ENT1;;fx_swap;FXSWAP;2026-10-19;2026-11-21;USD;RUB;buy;2000000;164900000;82.45;0;;;;CP-A;
+T1;;;F1;ENT1;;fx_swap;BAD;2026-10-19;2026-11-21;USD;RUB;buy;1;82;;;;;;;

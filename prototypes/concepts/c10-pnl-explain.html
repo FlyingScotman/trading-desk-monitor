@@ -41,6 +41,7 @@
 <script src="../echarts.min.js"></script>
 <script src="lib/boot.js"></script>
 <script src="lib/kit.js"></script>
+<script src="lib/instr.js"></script>
 <script>
 (function () {
   const M = MOCK, K = KIT, f = K.f, esc = K.esc, h = K.h;
@@ -207,8 +208,7 @@
     const C = (key, label, fn, extra) => Object.assign({ key, label, num: true, val: fn, fmt: v => u.fmts(v), cls: v => f.cls(v), sum: fn, unit: u.unit, sumFmt: v => u.fmts(v) }, extra || {});
     K.table(ob.querySelector('.tb'), {
       rowsFn: () => ranked.slice(0, 25), autoFilter: false, search: false, stripe: r => K.issuerColor(r.issuer), maxHeight: '420px',
-      // колонка валюты: в kit fmt получает порядковый номер валюты, поэтому подпись берём из строки
-      columns: K.cols(['name', 'book', Object.assign({}, K.posCols.ccy, { fmt: (v, r) => K.ccyTag(r.ccy) }),
+      columns: K.cols(['name', 'ccy', 'issuer', 'book',
         C('ptot', 'PnL итог', p => val(p, 'total')),
         C('pexp', 'Объяснено', p => val(p, 'total') - val(p, 'other')),
         C('poth', 'Прочее', p => val(p, 'other')),

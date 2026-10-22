@@ -20,10 +20,12 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import psycopg
 from psycopg.types.json import Jsonb
 
+from ..inbox.spi import DATASET_KEYS, REFERENCE_KEYS, STOCK_DATASETS  # standard library only, no cycle
 from ..settings import REPO_ROOT, Settings, SettingsError
 from ..valuation.fallback import CarriedSpread
 
@@ -163,23 +165,28 @@ class PositionInputs:
     """S7a: per position_id the private contract v1 fields beyond ``rows`` (08 §10 ``positions``) that the row has:
     asset_class, ccy, face_amount_ccy, face_outstanding_ccy, amount_ccy, value_date, deal_id, source_instrument_id,
     source_instrument_name, isin, regnum, moex_secid, mark_price_pct, accrued_ccy, mv_rub, book_value_rub,
-    purchase_*, contract_rate_pct, maturity_date, risk_dv01_rub, risk_cs01_rub, src, x (amounts as float, dates as
-    date). A position loaded by
-    ``desk load-positions`` has no entry (a bond with secid and quantity). In ``rows`` secid and quantity are None
-    when the inbox row has no resolved instrument or gives only a face amount."""
+    purchase_*, contract_rate_pct, maturity_date, risk_dv01_rub, risk_cs01_rub, purchase_accrued_ccy (1.3), src, x
+    (amounts as float, dates as date). A position loaded by ``desk load-positions`` has no entry (a bond with secid
+    and quantity). In ``rows`` secid and quantity are None when the inbox row has no resolved instrument or gives
+    only a face amount."""
     sources: dict[str, dict] = field(default_factory=dict)
     """S7a: per book the set's origin for lineage: {source, report_date, inbox_file_sha256, file_name}
     (``load-positions`` sets: no report date and no inbox file)."""
     books: dict[str, dict] = field(default_factory=dict)
     """Per book of the sets that has one, its ``book_rev`` in force on the valid date as known at ``known_at``
     (``current_books``: name, desk, book_type, entity, ...): what the run publishes as the book's reference."""
+    trade_terms: list[dict] = field(default_factory=list)
+    """private/1.2 ``trade_terms`` rows in force on the date for the books of the sets (``dataset_rows``): the FX
+    trades ``valuation.derivatives`` values from their terms."""
+    trade_terms_units: list[dict] = field(default_factory=list)
+    """Where those rows came from (``DatasetInputs.units``), for the run's lineage."""
 
 
 LEGACY_SOURCE = "load-positions"
 V1_COLUMNS = ("asset_class", "ccy", "face_amount_ccy", "face_outstanding_ccy", "amount_ccy", "value_date", "deal_id",
               "source_instrument_id", "source_instrument_name", "isin", "regnum", "moex_secid", "mark_price_pct",
               "accrued_ccy", "mv_rub", "book_value_rub", "purchase_date", "purchase_price_pct", "purchase_yield_pct",
-              "contract_rate_pct", "maturity_date", "risk_dv01_rub", "risk_cs01_rub")
+              "contract_rate_pct", "maturity_date", "risk_dv01_rub", "risk_cs01_rub", "purchase_accrued_ccy")
 """position_input columns of the private contract v1 beyond secid (instrument_id) and quantity."""
 CURRENT_SET = ("valid_date DESC, coalesce(priority, 0) DESC, report_date DESC NULLS LAST, report_ts DESC NULLS LAST,"
                " seq DESC NULLS LAST, generated_at DESC NULLS LAST, file_mtime DESC NULLS LAST, recorded_at DESC,"
@@ -214,15 +221,24 @@ def positions_for(con: psycopg.Connection, valid_date: date, *, known_at: dateti
             canon_extra[pid] = {k: str(v) for k, v in fields.items()}
             extra[pid] = {k: float(v) if isinstance(v, Decimal) else v for k, v in fields.items()}
             extra[pid].update({k: v for k, v in (("src", src), ("x", x)) if v is not None})
-    # legacy inputs hash as before S7a; inbox rows add their canonical v1 fields (not src, not x: 08 §6.6)
-    canon = json.dumps([rows, canon_extra] if canon_extra else rows, separators=(",", ":"), ensure_ascii=False,
-                       sort_keys=True)
     used = {b for _, b, *_ in sets}
+    # the FX trades of the books (private/1.2 trade_terms, a stock), valued from their terms (valuation.derivatives)
+    terms = dataset_rows(con, "trade_terms", valid_date, known_at=known_at)
+    trade_terms = [r for r in terms.rows if str(r.get("book_id")) in used]
+    canon_terms = sorted(json.dumps({k: v for k, v in r.items() if not k.startswith("_") and k != "x"},
+                                     sort_keys=True, default=str) for r in trade_terms)
+    # legacy inputs hash as before S7a; inbox rows add their canonical v1 fields (not src, not x: 08 §6.6); the
+    # trades' terms only when there are any (books without them keep their hash)
+    parts: Any = ([rows, canon_extra] if canon_extra else rows) if not canon_terms else [rows, canon_extra, canon_terms]
+    canon = json.dumps(parts, separators=(",", ":"), ensure_ascii=False, sort_keys=True)
     return PositionInputs(rows, ids, {b: d for _, b, d, *_ in sets}, known_at,  # type: ignore[arg-type]
                           hashlib.sha256(canon.encode()).hexdigest(), extra,
                           {b: {"source": src, "report_date": rd, "inbox_file_sha256": sha, "file_name": name}
                            for _, b, _, src, rd, sha, name in sets},
-                          {b["book_id"]: b for b in current_books(con, valid_date, known_at) if b["book_id"] in used})
+                          {b["book_id"]: b for b in current_books(con, valid_date, known_at) if b["book_id"] in used},
+                          trade_terms,
+                          [{k: (v.isoformat() if isinstance(v, date) else v) for k, v in u.items()}
+                           for u in terms.units if str((u["scope"] or {}).get("book_id")) in used])
 
 
 def current_sets(con: psycopg.Connection, valid_date: date) -> tuple[list[int], int]:
@@ -280,7 +296,7 @@ def store_inbox_set(con: psycopg.Connection, *, book_id: str, valid_date: date, 
 
 _NUMERIC = {"face_amount_ccy", "face_outstanding_ccy", "amount_ccy", "mark_price_pct", "accrued_ccy", "mv_rub",
             "book_value_rub", "purchase_price_pct", "purchase_yield_pct", "contract_rate_pct", "risk_dv01_rub",
-            "risk_cs01_rub"}
+            "risk_cs01_rub", "purchase_accrued_ccy"}
 
 
 # --- books (08 §7, §10 books) --------------------------------------------------------------------------
@@ -321,6 +337,137 @@ def current_books(con: psycopg.Connection, on: date, known_at: datetime | None =
         " WHERE eff <= %s ORDER BY book_id, eff DESC, rev_id DESC", (known_at, on)).fetchall()
     return [{k: v.isoformat() if isinstance(v, date) else v for k, v in zip(BOOK_FIELDS, r) if v is not None}
             for r in rows]
+
+
+# --- datasets beyond positions (08 §10, private/1.2: ocp, cash_balances, pnl_official, trade_terms) ----------
+
+def scope_key(scope: dict) -> str:
+    """The canonical text of a scope unit: what the revisions of a dataset unit are grouped by."""
+    return json.dumps(scope, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def dataset_unit_sets(con: psycopg.Connection, dataset: str, scope: dict, valid_date: date) -> list[tuple]:
+    """The sets of one unit (dataset, scope unit, valid date), current first (``CURRENT_SET``): (set_id, source,
+    priority, report_date, report_ts, seq, generated_at, file_mtime, unit_hash), the shape ``desk.inbox.scan``
+    decides revisions on, as for ``position_set``."""
+    return con.execute(
+        "SELECT set_id, source, priority, report_date, report_ts, seq, generated_at, file_mtime, unit_hash"
+        f" FROM dataset_set WHERE dataset = %s AND scope_key = %s AND valid_date = %s ORDER BY {CURRENT_SET}",
+        (dataset, scope_key(scope), valid_date)).fetchall()
+
+
+def store_dataset_set(con: psycopg.Connection, *, dataset: str, scope: dict, valid_date: date, rows: list[dict],
+                      source: str, priority: int | None, report_date: date, report_ts: datetime | None,
+                      seq: int | None, generated_at: datetime | None, file_mtime: datetime, file_name: str,
+                      sha256: str, adapter_fingerprint: str, unit_hash: str) -> int:
+    """One accepted unit of a dataset other than positions as a ``dataset_set`` (revision = the previous one of the
+    unit + 1) with its rows. ``rows``: validated contract rows (``desk.inbox.validate``); ``_src`` and ``x_*`` are
+    kept beside the canonical fields. Returns the set id. The caller decides that the unit is a new revision."""
+    sk = scope_key(scope)
+    set_id = con.execute(
+        "INSERT INTO dataset_set (dataset, scope, scope_key, valid_date, revision, source, priority, report_date,"
+        " report_ts, seq, generated_at, file_mtime, inbox_file_sha256, source_name, adapter_fingerprint, unit_hash,"
+        " row_count) VALUES (%(ds)s, %(scope)s, %(sk)s, %(d)s, (SELECT coalesce(max(revision), 0) + 1 FROM dataset_set"
+        " WHERE dataset = %(ds)s AND scope_key = %(sk)s AND valid_date = %(d)s), %(src)s, %(prio)s, %(rd)s, %(ts)s,"
+        " %(seq)s, %(gen)s, %(mtime)s, %(sha)s, %(name)s, %(fp)s, %(uh)s, %(n)s) RETURNING set_id",
+        {"ds": dataset, "scope": Jsonb(scope), "sk": sk, "d": valid_date, "src": source, "prio": priority,
+         "rd": report_date, "ts": report_ts, "seq": seq, "gen": generated_at, "mtime": file_mtime, "sha": sha256,
+         "name": file_name, "fp": adapter_fingerprint, "uh": unit_hash, "n": len(rows)}).fetchone()[0]
+    keys = DATASET_KEYS.get(dataset, ())
+
+    def row_key(r: dict) -> str:
+        return "|".join("" if r.get(k) is None else str(r[k]) for k in keys)
+
+    ordered = sorted(rows, key=lambda r: (row_key(r), json.dumps(r, sort_keys=True, default=str)))
+    with con.cursor() as cur:
+        cur.executemany(
+            "INSERT INTO dataset_row (set_id, row_no, row_key, data, src, x) VALUES (%s, %s, %s, %s, %s, %s)",
+            [(set_id, n, row_key(r), Jsonb({k: v for k, v in r.items() if not k.startswith(("_", "x_"))}),
+              r.get("_src"), Jsonb(x) if (x := {k: v for k, v in r.items() if k.startswith("x_")}) else None)
+             for n, r in enumerate(ordered, 1)])
+    return set_id
+
+
+@dataclass
+class DatasetInputs:
+    """``dataset_rows``: the rows of a dataset in force on a date, and per unit where they came from."""
+
+    dataset: str
+    on: date
+    rows: list[dict]
+    """Canonical fields as stored (amounts as decimal strings), plus ``_src``, ``x`` (the x_* fields, if any),
+    ``_valid_date`` and ``_set_id`` of the unit the row belongs to."""
+    units: list[dict]
+    """Per unit read: {scope, valid_date, set_id, source, report_date, inbox_file_sha256, file_name, row_count}; a
+    unit whose current set is empty (closed by a full snapshot) is listed with row_count 0."""
+
+
+def dataset_rows(con: psycopg.Connection, dataset: str, on: date, *, known_at: datetime | None = None,
+                 scope: dict | None = None) -> DatasetInputs:
+    """The rows of ``dataset`` for business date ``on`` as known at ``known_at`` (default now), 08 §6.7: a stock
+    (``spi.STOCK_DATASETS``: ocp, cash_balances, trade_terms) takes per unit the current set with the latest valid
+    date <= ``on``; a flow (pnl_official) only units of valid date ``on``, never carried forward. ``scope``: only
+    units whose scope contains these key/values (``{"book_id": "B1"}``)."""
+    known_at = known_at or con.execute("SELECT now()").fetchone()[0]
+    when = "valid_date <= %(on)s" if dataset in STOCK_DATASETS else "valid_date = %(on)s"
+    sets = con.execute(
+        "SELECT DISTINCT ON (scope_key) set_id, scope, valid_date, source, report_date, inbox_file_sha256,"
+        f" source_name, row_count FROM dataset_set WHERE dataset = %(ds)s AND {when} AND recorded_at <= %(k)s"
+        " AND (%(scope)s::jsonb IS NULL OR scope @> %(scope)s::jsonb)"
+        f" ORDER BY scope_key, {CURRENT_SET}",
+        {"ds": dataset, "on": on, "k": known_at, "scope": Jsonb(scope) if scope else None}).fetchall()
+    units = [{"scope": sc, "valid_date": vd, "set_id": sid, "source": src, "report_date": rd,
+              "inbox_file_sha256": sha, "file_name": name, "row_count": n}
+             for sid, sc, vd, src, rd, sha, name, n in sets]
+    by_set = {u["set_id"]: u for u in units}
+    rows = []
+    for sid, data, src, x in con.execute(
+            "SELECT set_id, data, src, x FROM dataset_row WHERE set_id = ANY(%s) ORDER BY set_id, row_no",
+            (list(by_set),)):
+        rows.append({**data, "_src": src, **({"x": x} if x else {}), "_valid_date": by_set[sid]["valid_date"],
+                     "_set_id": sid})
+    return DatasetInputs(dataset, on, rows, units)
+
+
+# --- reference tables beyond books (08 §7, §10: entities, funding_rules) ---------------------------------
+
+def store_reference(con: psycopg.Connection, kind: str, rows: list[dict], adapter_fingerprint: str) -> list[str]:
+    """Validated ``reference()[kind]`` rows (``validate.check_reference_tables``): a new ``reference_rev`` for each
+    (key, valid_from) whose content changed. Returns the keys revised. shortcut: as for books, a row reference()
+    stops listing keeps its last revision; retire it with ``active = false``."""
+    changed = []
+    with con.transaction():
+        for r in rows:
+            content = {k: v for k, v in r.items() if not k.startswith("_")}
+            key = "|".join(str(r[k]) for k in REFERENCE_KEYS[kind])
+            sha = hashlib.sha256(json.dumps(content, sort_keys=True, default=str).encode()).hexdigest()
+            last = con.execute(
+                "SELECT content_sha256 FROM reference_rev WHERE kind = %s AND ref_key = %s"
+                " AND valid_from IS NOT DISTINCT FROM %s ORDER BY rev_id DESC LIMIT 1",
+                (kind, key, r.get("valid_from"))).fetchone()
+            if last and last[0] == sha:
+                continue
+            con.execute("INSERT INTO reference_rev (kind, ref_key, valid_from, active, content, adapter_fingerprint,"
+                        " content_sha256) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                        (kind, key, r.get("valid_from"), r.get("active", True), Jsonb(content), adapter_fingerprint,
+                         sha))
+            changed.append(key)
+    return changed
+
+
+def current_reference(con: psycopg.Connection, kind: str, on: date, known_at: datetime | None = None) -> list[dict]:
+    """The rows of a reference table in force on ``on`` as known at ``known_at`` (default now), by key: per key the
+    revision recorded by then with the greatest effective date <= ``on`` (its ``valid_from``, else the Moscow day it
+    was recorded; the first revision of a key: always), the latest on a tie. Retired rows (``active`` false) are
+    returned too, as ``current_books`` does."""
+    known_at = known_at or con.execute("SELECT now()").fetchone()[0]
+    rows = con.execute(
+        "SELECT DISTINCT ON (ref_key) content FROM (SELECT *, coalesce(valid_from, CASE WHEN rev_id ="
+        " min(rev_id) OVER (PARTITION BY ref_key) THEN '-infinity'::date"
+        " ELSE (recorded_at AT TIME ZONE 'Europe/Moscow')::date END) AS eff FROM reference_rev"
+        " WHERE kind = %s AND recorded_at <= %s) r WHERE eff <= %s ORDER BY ref_key, eff DESC, rev_id DESC",
+        (kind, known_at, on)).fetchall()
+    return [c for (c,) in rows]
 
 
 # --- runs ----------------------------------------------------------------------------------------------

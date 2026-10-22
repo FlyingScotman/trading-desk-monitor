@@ -12,14 +12,20 @@ cached close not after the run (every quoted bond, ``universeRub`` and ``univers
 issuer, group, sector, outstanding face, coupon and frequency: ``marketdata.static_facts``; the day's movers) and the
 CBR meetings (``cbr``: the next one, the dates ahead, the past decisions). Issuer, group, sector and the desk's rating
 (``marketdata.ratings``) of the market's bonds come from the newest static of the read model (R25). What the store does
-not have is null with a note in ``notes``: ratings when the static has none, months before the first default run.
+not have is null with a note in ``notes``: ratings when the static has none, months before the first default run,
+the dates of the history computed by an older program (R44). ``unvalued`` / ``approx``: what the run did not value or
+valued without core, by cause and instrument (``api.coverage``, R45).
 
 ``positions_history``: per position of the run, aligned on one date axis: MOEX's clean price, yield (none for a
 floater), G- and Z-spread and a linker's ICPI / IR / BEI from ``md_bond_day`` (the hub's history API, from
 2024-01-03; else the snapshots, ``history_days`` deep), the KBD at the bond's term (a RUB bond with known coupons),
-and from the default runs the face, DV01, CS01, OFZ basis, MV and DV01 by curve, carried forward between runs (null
-before the first), and a floater's discount margin on the days of a run. A series that is zero or null on every date
-is sent as null; the optional ones (``OPTIONAL``) are left out.
+and from the default runs the face, number of bonds (``qty``), DV01, CS01, OFZ basis, MV and DV01 by curve, carried
+forward between runs (null before the first), and a floater's discount margin on the days of a run (``dm``, core's) and
+on every day of its price history (``dmPx``, estimated from the price: ``dm_from_price``). A series that is zero or null
+on every date is sent as null; the optional ones (``OPTIONAL``) are left out. What a point stands on (R44): ``runAt``
+per date (null: no run of the date, the value is carried; else the run, ``cut`` when not the final close, ``old`` when
+another program computed it) and per position ``pt`` {date index: [kind, text]} for the points not valued by core on
+the day's data (``point_flag``), so that a chart shows them apart instead of as risk moves.
 
 ``market_calendar`` / ``market_flows``: the aggregates of the static snapshot of the run's date
 (``static_facts.calendar``) and, for a drill-down, the flows themselves with their bond.
@@ -44,7 +50,7 @@ from ..marketdata import static_facts
 from ..marketdata.bundle import read_bundle
 from ..marketdata.history import RUB_SETTLEMENT, curve_rate, curve_rates_by_day, kbd, latest_market_day
 from ..publish import summary
-from ..publish.summary import CURVE_MAP, GOV_CLASSES, PNL, kind_of  # noqa: F401 - the pages' names, re-exported
+from ..publish.summary import CURVE_MAP, GOV_CLASSES, PNL, is_minfin, kind_of  # noqa: F401 - the pages' names
 from ..store import DEFAULT_RUNS
 
 HIST_RUNS = 260
@@ -127,10 +133,11 @@ def _periods(con, as_of: date, dates: list[str]) -> tuple[dict[str, Any], list[s
         missing = [d for d in ref if d >= lo and d not in have]
         runs_in = [d for d in dates if d >= start.isoformat()]
         why = []
-        if oldest is None or oldest > start:
-            why.append("история рынка начинается позже начала периода")
+        if oldest is None or unknown_days(start, oldest):
+            why.append("история рынка начинается позже начала периода" if oldest is None else
+                       f"история рынка (закрытия хаба) с {oldest.isoformat()}: прогонов раньше быть не может")
         elif first_pos is not None and ref and first_pos.isoformat() > ref[0]:
-            why.append(f"позиции в базе с {first_pos.isoformat()}")
+            why.append(f"позиции в базе с {first_pos.isoformat()}: отчётов раньше нет (папки отчётов, Настройки)")
         if missing:
             why.append(f"нет прогонов за {len(missing)} рабочих дн. (первый {missing[0]})")
         out[key] = {"from": runs_in[0] if runs_in else None, "runs": len(runs_in), "missing": len(missing),
@@ -138,11 +145,31 @@ def _periods(con, as_of: date, dates: list[str]) -> tuple[dict[str, Any], list[s
                     "positionsFrom": first_pos.isoformat() if first_pos else None, "why": why}
         if why and runs_in:
             notes.append(f"PnL {label} — частичный: сумма {len(runs_in)} прогонов с {runs_in[0]}; {'; '.join(why)}"
-                         + ("; досчитать: desk backfill" if missing else ""))
+                         + (f"; досчитать: {BACKFILL_LINK} (desk backfill)" if missing else ""))
     return out, notes
 
 
+BACKFILL_LINK = "Настройки → «История прогонов»"
+"""The settings page's history of runs (``settings.html#bf``): a note naming it is a link on the pages (``lib/kit.js``)."""
+FIXED_HOLIDAYS = {(1, d) for d in range(1, 9)} | {(2, 23), (3, 8), (5, 1), (5, 9), (6, 12), (11, 4)}
+"""Russia's fixed public holidays (month, day): no close on them, so a period starting on one is not cut short."""
+
+
+def unknown_days(start: date, first: date) -> list[date]:
+    """The weekdays from ``start`` up to the market history's ``first`` date that are not fixed public holidays: the
+    business days of the period the history cannot tell (2026: the hub's first close is 5 January, the year has no
+    earlier business day, so the year to date is not partial because of it)."""
+    out, d = [], start
+    while d < first:
+        if d.weekday() < 5 and (d.month, d.day) not in FIXED_HOLIDAYS:
+            out.append(d)
+        d += timedelta(days=1)
+    return out
+
+
 def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
+    from . import coverage  # it imports this module
+
     runs = _runs(con, run)
     dates = [r["business_date"].isoformat() for r in runs]
     n = len(runs)
@@ -213,7 +240,10 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
         notes.append("потоков позиций в прогоне нет: прогон посчитан до версии с потоками (пересчитается последняя дата)")
     if not prev_ok and run.get("prev_date") is not None:
         notes.append(f"сделки дня и изменения к вчера не показаны: нет прогона за {run['prev_date'].isoformat()}"
-                     " (досчитать: desk backfill)")
+                     f" (досчитать: {BACKFILL_LINK}, desk backfill)")
+    if (old := old_runs(con, runs)):
+        notes.append(f"история: {old} из {n} дат посчитаны прошлой версией программы — в графиках истории позиции "
+                     f"они пунктиром; пересчитать: {BACKFILL_LINK} (идёт в фоне, от ранних дат)")
     flows.sort(key=lambda c: c["date"])
     market = universe(con, as_of, held)
     notes += market.pop("notes")
@@ -225,7 +255,18 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
                      "dv01Book": series("dv01Book"), "mvType": series("mvType"), "mvCcy": series("mvCcy"), "pnl": pnl},
             "histSource": "runs", "pnlPeriods": periods,
             "positions": positions, "cashflows": flows, **market,
-            "cbr": cb, "curveMap": CURVE_MAP, "notes": notes}
+            "cbr": cb, "curveMap": CURVE_MAP, "notes": notes,
+            "unvalued": coverage.unvalued(con, run), "approx": coverage.approx(con, run)}
+
+
+def old_runs(con, runs: list[dict[str, Any]]) -> int:
+    """How many of the runs were computed by another program than the current one (``backfill.same_logic``)."""
+    from .. import logic_version
+    from ..backfill import same_logic
+
+    now = logic_version()
+    return sum(not same_logic(r["v"], now) for r in con.execute(
+        "SELECT lineage->>'logic_version' AS v FROM run WHERE run_id = ANY(%s)", ([r["run_id"] for r in runs],)))
 
 
 def cbr(con, as_of: date) -> dict[str, Any]:
@@ -469,6 +510,7 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
     runs = [r for r in _runs(con, run) if r["business_date"] >= from_]
     S = summaries(con, [r["run_id"] for r in runs], writer, list(pos) if ids else None)
     by_run = [(r["business_date"], S[r["run_id"]]["pos"]) for r in runs]
+    meta, held = run_points(con, runs, list(pos))
     secid = {pid: (r["fact"].get("instrument_id") or r["secid"]) for pid, r in pos.items()
              if r["fact"].get("instr_type") == "BOND"}
     quotes: dict[str, dict[date, tuple]] = {}
@@ -484,6 +526,7 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
     curves = {r["business_date"]: kbd(r["trade_date"], r["params"]) for r in con.execute(
         "SELECT business_date, trade_date, params FROM md_kbd_day WHERE business_date = ANY(%s)", (dates,))}
     run_at = dict(by_run)
+    run_of = {r["business_date"]: r["run_id"] for r in runs}
     # the KBD at each fixed RUB bond's term on each date, all at once per date (core kbd_effective_yields)
     want: dict[date, set[int]] = {}
     for pid, r in pos.items():
@@ -516,17 +559,28 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
         s: dict[str, list] = {k: [] for k in ("price", "ytm", "spr", "notional", "dv01", "cs01", "basis", "mv", "bench", *OPTIONAL)}
         cv: dict[str, list] = {}
         last: list | None = None
+        anchors: list[tuple[int, float, float | None, float | None, float | None]] = []
+        qty: list[float | None] = []
+        pts: dict[int, list[str]] = {}
+        n_bonds: float | None = None
         for i, d in enumerate(dates):
             x = q.get(d)
             ps = run_at.get(d)
             if ps is not None:
                 last = ps.get(pid)  # None: not held on that run date
+                h = held.get((run_of[d], pid))
+                n_bonds = h[0] if h and last is not None else None
+                if h and (p := point_flag(h, meta[run_of[d]]["books"].get(h[3]), d, last is not None)):
+                    pts[i] = p
+            qty.append(n_bonds)
             s["price"].append(x[0] if x else (f.get("price") if d == run["business_date"] else None))
             s["ytm"].append(None if flt or not x else x[1])
             s["spr"].append(x[2] if x else None)
             s["zspr"].append(x[4] if x else None)
             s["dm"].append((last[9] if len(last) > 9 and last[9] is not None else last[7])  # core DM, else the Z
                            if flt and last and ps is not None else None)
+            if s["dm"][-1] is not None:  # a run's DM, its price and spread risk per face: an anchor of dmPx
+                anchors.append((i, s["dm"][-1], x[0] if x else last[6], last[2] or last[3], last[0]))  # type: ignore[index]
             for k, j in (("icpi", 5), ("ir", 6), ("bei", 7)):
                 s[k].append(x[j] if x else None)
             s["cpi"].append(_cpi_at(cpi, d) if cpi and _linker(f) else None)
@@ -541,23 +595,137 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
                 s["bench"].append(_rnd(bench(d, (yd - d).days / 365.25 if yd and yd > d else None), 4))
             else:
                 s["bench"].append(None)
+        if flt and anchors and f.get("ccy") in (None, "RUB"):
+            hz = f.get("yield_date") or f.get("maturity")
+            s["dmPx"] = dm_from_price(dates, s["price"], anchors, date.fromisoformat(hz) if hz else None,
+                                      (f.get("coupon") or 0.0) / 100) or []
         for k in OPTIONAL:  # only when the bond has them: most series would be nulls
             if all(v is None for v in s[k]):
                 del s[k]
         out: dict[str, Any] = {k: (_thin(v) if k in ("cs01", "basis", "bench", "ytm") else v) for k, v in s.items()}
         out["curves"] = {c: v for c, v in cv.items() if any(v)}
+        out["qty"], out["pt"] = qty, pts
         series[pid] = out
+    at = [run_of.get(d) for d in dates]
     return {"runId": run["run_id"], "dates": [d.isoformat() for d in dates], "series": series,
+            "runAt": [None if rid is None else {"id": rid, **{k: v for k, v in meta[rid].items() if k != "books"}}
+                      for rid in at],
             "note": "цена, доходность, G- и Z-спред (к КБД), у линкеров ICPI, IR, BEI — MOEX (история закрытий хаба), "
                     "ИПЦ г/г — последний известный на дату (ЦБ, иначе по ИПЦ м/м Росстата, через "
                     f"{CPI_LAG_DAYS} дн. после месяца); номинал, DV01, CS01, базис, MV и дисконт-маржа флоатера — по "
-                    "прогонам деска (между прогонами — последний)"}
+                    "прогонам деска (между прогонами — последний; runAt и pt говорят, какой прогон у даты и чем точка "
+                    "отличается); DM флоатера по цене (dmPx) — оценка за каждый день "
+                    "истории цены: DM ближайшего прогона минус изменение чистой цены MOEX, делённое на спредовую "
+                    "дюрацию прогона (CS01 на номинал, приведённую к сроку до оферты или погашения)"}
 
 
-OPTIONAL = ("zspr", "dm", "icpi", "ir", "bei", "cpi")
+
+QUALITY_TEXT = {"market_value": "оценка по рыночной стоимости (без ядра)",
+                "stale_price": "нет котировки дня: старая цена, риск — по дюрации (до пересчёта купона у флоатера)",
+                "model_price": "нет котировки: модельная цена, риск — по дюрации",
+                "par_proxy": "оценка по номиналу: риска нет (не ноль, а пропуск)",
+                "reported_value": "по отчёту банка: риск — отчёта или нет"}
+"""A run position's quality (``valuation.fallback.QUALITIES``) whose risk is not core's from the bond's terms and the
+day's price: its point is not comparable with core's on the neighbouring dates (``pt`` kind ``method``)."""
+
+
+def _logic_label(v: str | None) -> str:
+    """``0.2.0+v8+core0.32.1`` as ``0.2.0 (оценка v8, ядро 0.32.1)``."""
+    if not v:
+        return "версия не записана"
+    parts = v.split("+build", 1)[0].split("+")
+    ver = next((p[1:] for p in parts[1:] if p.startswith("v")), None)
+    core = next((p[4:] for p in parts[1:] if p.startswith("core")), None)
+    return parts[0] + (f" (оценка v{ver}" + (f", ядро {core}" if core else "") + ")" if ver else "")
+
+
+def run_points(con, runs: list[dict[str, Any]], pids: list[str]
+               ) -> tuple[dict[int, dict[str, Any]], dict[tuple[int, str], tuple]]:
+    """What a history point of a position depends on beyond its numbers (R44): per run its cut when not the final
+    close (``cut``: ``eod_preliminary`` when the date has no final one; an intraday cut for the run shown), the program that computed it when that is not the current one
+    (``old``: ``logic_version`` without the bundle build differs, ``backfill.same_logic``; the history of runs
+    recomputes such a date) and per book the date of the report its positions are from (``books``); per (run,
+    position) the number of bonds, the quality, why it is not exact and the book."""
+    from .. import logic_version
+    from ..backfill import same_logic
+
+    now = logic_version()
+    meta: dict[int, dict[str, Any]] = {}
+    ids = [r["run_id"] for r in runs]
+    for r in con.execute(
+            "SELECT r.run_id, r.cut_type, r.lineage->>'logic_version' AS logic,"
+            " (SELECT jsonb_object_agg(s.book_id, s.valid_date) FROM position_set s"
+            "  WHERE s.set_id = ANY(r.position_set_ids)) AS books FROM run r WHERE r.run_id = ANY(%s)", (ids,)):
+        m: dict[str, Any] = {"books": r["books"] or {}}
+        if r["cut_type"] != "eod_final":
+            m["cut"] = r["cut_type"]
+        if not same_logic(r["logic"], now):
+            m["old"] = _logic_label(r["logic"])
+        meta[r["run_id"]] = m
+    held: dict[tuple[int, str], tuple] = {}
+    with con.cursor(row_factory=tuple_row) as cur:
+        for rid, pid, n, quality, why, book in cur.execute(
+                "SELECT run_id, position_id, quantity, quality, CASE WHEN quality = 'exact' THEN NULL ELSE reason END,"
+                " book_id FROM run_position WHERE run_id = ANY(%s) AND position_id = ANY(%s)", (ids, pids)):
+            held[(rid, pid)] = (n, quality, why, book)
+    return meta, held
+
+
+def point_flag(h: tuple, book_date: str | None, d: date, valued: bool) -> list[str] | None:
+    """``pt`` of a position's point on a run date (``run_points``): ``[kind, text]``, None for a clean point. Kinds:
+    ``unvalued`` (held, not valued: no number at all), ``method`` (valued without core, ``QUALITY_TEXT``: a risk of
+    another method), ``minor`` (core's numbers with an assumption, or the book's positions from an earlier report)."""
+    _, quality, why, book = h
+    reason = f" ({why})" if why else ""
+    if not valued:
+        return ["unvalued", "позиция не оценена" + reason]
+    if quality in QUALITY_TEXT:
+        return ["method", QUALITY_TEXT[quality] + reason]
+    notes = []
+    if quality == "assumed":
+        notes.append("оценка ядра с допущением" + reason)
+    if book_date and book_date < d.isoformat():
+        notes.append(f"позиции книги {book} — из отчёта за {book_date} (за дату отчёта нет)")
+    return ["minor", "; ".join(notes)] if notes else None
+
+
+OPTIONAL = ("zspr", "dm", "dmPx", "icpi", "ir", "bei", "cpi")
 """Series of ``positions_history`` given only when the position has a value: MOEX's Z-spread to the KBD, the desk's
-discount margin of a floater (its run spread), MOEX's linker analytics (contract 1.2), and for a linker CPI year on
-year as known on the date (R25)."""
+discount margin of a floater (its run spread) and its estimate from the price on every date of the price history
+(``dm_from_price``), MOEX's linker analytics (contract 1.2), and for a linker CPI year on year as known on the date
+(R25)."""
+
+
+def _annuity(t: float, r: float) -> float:
+    return t if r <= 0 else (1.0 - math.exp(-r * t)) / r
+
+
+def dm_from_price(dates: list[date], price: list[float | None],
+                  anchors: list[tuple[int, float, float | None, float | None, float | None]],
+                  horizon: date | None, rate: float) -> list[float | None] | None:
+    """A RUB floater's discount margin on every date of its MOEX price history (batch 1, item 6): the runs give core's
+    DM only from the day the position appeared (``anchors``: date index, DM, clean price, spread risk and face of each
+    run with a DM). From the latest run at or before the date (else the first after it): DM_run - (clean - clean_run)
+    / 100 / spread duration, the spread duration per face of the run (-CS01 / face; the OFZ basis of an OFZ-PK)
+    averaged with the same moved to the date in proportion to the annuity to the ``horizon`` at ``rate`` (the current
+    coupon). First order in the spread; the curves' move between the dates is left out, small for a floater whose
+    coupon resets. Equal to the run's DM on a run date with a MOEX price; None without a price or past the horizon."""
+    if horizon is None:
+        return None
+    out: list[float | None] = []
+    j = 0
+    for i, (d, px) in enumerate(zip(dates, price)):
+        while j + 1 < len(anchors) and anchors[j + 1][0] <= i:
+            j += 1
+        ai, dm, px_a, s01, face = anchors[j]
+        ta, td = (horizon - dates[ai]).days / 365.25, (horizon - d).days / 365.25
+        sd_a = -s01 / face if s01 and face else 0.0  # RUB per bp per RUB of face, > 0 long and short
+        if px is None or px_a is None or ta <= 0 or td <= 0 or sd_a <= 0:
+            out.append(None)
+            continue
+        sd = sd_a * (1.0 + _annuity(td, rate) / _annuity(ta, rate)) / 2.0
+        out.append(_rnd(dm - (px - px_a) / 100.0 / sd, 2))
+    return out if any(v is not None for v in out) else None
 CPI_LAG_DAYS = 45
 """CPI of a month is known this many days after the month's first day (Rosstat publishes it mid next month; the hub's
 ``published_on`` is kept only for the newest months): a date sees the CPI y/y of the months it could have known."""
@@ -586,3 +754,291 @@ def _cpi_at(series: list[tuple[date, float]], d: date) -> float | None:
 
 def script(data: dict[str, Any]) -> str:
     return "window.DESK_EXTRAS = " + json.dumps(data, ensure_ascii=False, separators=(",", ":"), default=str) + ";\n"
+
+
+# ---- the aggregated risk table: currency x instrument type (UI-02; lib/instr.js mirrors it) ----
+
+INSTR_KINDS: tuple[tuple[str, str, str], ...] = (
+    ("OFZ_PD", "GOV", "ОФЗ-ПД"), ("OFZ_PK", "GOV", "ОФЗ-ПК (флоатеры)"), ("OFZ_IN", "GOV", "ОФЗ-ИН (линкеры)"),
+    ("MINFIN_FX", "GOV", "Минфин валютные (евробонды, замещающие)"),
+    ("SUBFED", "SUB", "Субфедеральные"), ("MUNI", "SUB", "Муниципальные"),
+    ("CORP_FIX", "CORP", "Корпоративные фикс"), ("CORP_FLT", "CORP", "Корпоративные флоатеры"),
+    ("SECUR", "CORP", "Секьюритизация (ИЦБ, ABS)"),
+    ("IRS", "DER", "Процентные свопы (IRS / OIS)"), ("CCS", "DER", "Валютно-процентные свопы (CCS)"),
+    ("CDS", "DER", "CDS"), ("TRS", "DER", "TRS"),
+    ("BOND_FUT", "DER", "Фьючерсы на облигации"), ("BOND_FWD", "DER", "Форварды на облигации"),
+    ("FX_FUT", "DER", "Валютные фьючерсы"), ("FX_FWD", "DER", "FX форварды / NDF"),
+    ("FX", "DER", "Валюта (спот, прочие FX)"), ("OCP", "DER", "Перенос ОВП"),
+    ("EQUITY", "OTH", "Акции"), ("BOND_NA", "OTH", "Облигации без класса (не сопоставлены)"),
+    ("UNCLASSIFIED", "OTH", "Не классифицировано"),
+)
+"""The instrument kinds of the table, in its order: (kind, group, label). The one mapping table of the
+classification: a bond by issuer type and coupon (``kind_of``, plus the static's class: subfederal / municipal,
+securitisation; the Russian Minfin's bonds by the issuer, ``summary.is_minfin``: in roubles the OFZ kinds, in a
+foreign currency ``MINFIN_FX`` -- its Eurobonds and replacement bonds, never a generic "sovereigns" kind, R39), a derivative or FX row by the adapter's product group (``PRODUCT_KIND``), else by the legacy tdm
+instrument type (``LEGACY_KIND``); what none of them names is ``UNCLASSIFIED`` (shown, never dropped). The group
+is ``kind_of``'s but for a legacy derivative (DER, not OTH) and an unmapped or unvalued bond (OTH, not CORP)."""
+KIND_GROUP = {k: g for k, g, _ in INSTR_KINDS}
+KIND_LABEL = {k: lab for k, _, lab in INSTR_KINDS}
+PRODUCT_KIND = {"irs": "IRS", "ccs": "CCS", "cds": "CDS", "trs": "TRS", "bond_future": "BOND_FUT",
+                "bond_forward": "BOND_FWD", "fx_future": "FX_FUT", "fx_ndf": "FX_FWD", "equity": "EQUITY"}
+"""The private adapter's ``x_product_group`` (``extra.reported.x``, ``product_group``) -> kind. ``bond`` and ``bond_custom`` are bonds:
+classified by the bond's own fields."""
+LEGACY_KIND = {"IRS": "IRS", "XCCY": "CCS", "CDS": "CDS"}
+"""A legacy tdm store's instrument type -> kind."""
+BOND_KIND = {("GOV", "PD"): "OFZ_PD", ("GOV", "PK"): "OFZ_PK", ("GOV", "IN"): "OFZ_IN", ("GOV", "SOVFX"): "MINFIN_FX",
+             ("CORP", "FIX"): "CORP_FIX", ("CORP", "FLT"): "CORP_FLT"}
+CROSS_CCY_KINDS = ("CCS", "FX_FWD", "FX_FUT", "FX")
+"""Kinds whose risk lies in more than one currency: the attribution rule (``ATTRIBUTIONS``) decides where."""
+ATTRIBUTIONS = {
+    "legs": "each measure in its own currency: DV01 by curve in the curve's, FX delta in its currency's; "
+            "position count, notional, MV, CS01 and the OFZ basis in the position's",
+    "position": "everything of a cross-currency kind in the position's currency (the report's CCY); its risk on "
+                "another currency's curves is shown apart (dv01_foreign_rub), outside the block's DV01",
+}
+ATTRIBUTION_DEFAULT = "legs"
+"""Provisional (UI-02): the owner decides how a CCS, an FX forward or an FX future is attributed."""
+RISK_KINDS = frozenset(k for k, g, _ in INSTR_KINDS if g in ("GOV", "SUB", "CORP")) | {
+    "IRS", "CCS", "CDS", "TRS", "BOND_FUT", "BOND_FWD", "FX_FUT", "FX_FWD", "BOND_NA"}
+"""Kinds whose position always has a rate or spread risk: one without any is ``risk missing``, never a zero (but
+an accrual-only HTM bond: no market risk by the rule)."""
+MISSING_TEXT = {"not_valued": "не оценена", "reported_no_risk": "оценена по отчёту, риска в отчёте нет",
+                "no_risk": "риск не посчитан"}
+GROUPS = ("GOV", "SUB", "CORP", "DER", "OTH")
+
+
+def product_group(rep: Any) -> str | None:
+    """The report's ``x_product_group`` of a position: a valued fact keeps the report's ``x_*`` fields under
+    ``extra.reported.x`` (``publish.tdm_run.reported`` of the stored row), an unvalued one's row has them flat."""
+    if not isinstance(rep, dict):
+        return None
+    pg = rep.get("x_product_group")
+    if pg is None and isinstance(rep.get("x"), dict):
+        pg = rep["x"].get("x_product_group")
+    return pg
+
+
+def instr_kind(f: dict[str, Any], gov_issuers: frozenset[str] | set[str] = frozenset()) -> str:
+    """The table's instrument kind of a position's fact, or of an unvalued position's report row given as
+    ``{"ccy", "asset_class" (bond | fx | otc | other), "extra": {"reported": {x_*}}}`` (no ``instr_type``).
+    ``gov_issuers``: the run's issuers flagged as the Minfin (``gov_issuers``), for ``summary.is_minfin``."""
+    ex = f.get("extra") if isinstance(f.get("extra"), dict) else {}
+    pg = product_group(ex.get("reported"))
+    it = f.get("instr_type")
+    if pg in PRODUCT_KIND:
+        return PRODUCT_KIND[pg]
+    if it in LEGACY_KIND:
+        return LEGACY_KIND[it]
+    if it is None and f.get("segment") is None:  # unvalued: its report row
+        it = {"fx": "FX", "otc": "OTC", "other": "OTHER"}.get(str(f.get("asset_class") or "").lower())
+        if it is None:
+            return "BOND_NA"
+    if it == "FX":
+        ocp = f.get("ocp_transfer") or ex.get("ocp_transfer") or f.get("asset_class") == "Перенос ОВП"
+        return "OCP" if ocp else "FX"
+    if it not in ("BOND", None):
+        return "UNCLASSIFIED"
+    if f.get("asset_class") == "Не сопоставлено":
+        return "BOND_NA"
+    g, k = kind_of(f, gov_issuers)
+    if g == "SUB":
+        return "MUNI" if f.get("asset_class") == "Муниципальные" else "SUBFED"
+    if g == "CORP" and f.get("segment") == "Секьюритизация":
+        return "SECUR"
+    return BOND_KIND[(g, k)]
+
+
+def _curve_ccy(curve: str) -> str:
+    return curve.split()[0]
+
+
+def _cell() -> dict[str, Any]:
+    return {"ids": set(), "legs": set(), "notional_ccy": 0.0, "notional_rub": 0.0, "mv_rub": 0.0, "curves": {},
+            "foreign": 0.0, "basis": 0.0, "cs01": 0.0, "fx_delta_ccy": 0.0, "missing": {}}
+
+
+def _risk_curves(f: dict[str, Any]) -> dict[str, float]:
+    """A fact's DV01 by the pages' curve (``CURVE_MAP``: the KBD's rate risk is RUONIA's), finite and nonzero."""
+    out: dict[str, float] = {}
+    for curve, bk in (f.get("risk") or {}).items():
+        cid = CURVE_MAP.get(curve, curve)
+        out[cid] = out.get(cid, 0.0) + sum(v or 0.0 for v in (bk or {}).values())
+    return {c: v for c, v in out.items() if v and math.isfinite(v)}
+
+
+def risk_items(con, run: dict[str, Any], books: list[str] | None = None
+               ) -> tuple[list[dict[str, Any]], dict[str, float | None]]:
+    """The positions of a run for ``risk_table`` (an unvalued one with its report row: currency, asset class and
+    ``x_*``) and the run's RUB rates (the reference's; a currency it lacks at the rate its bonds were valued at,
+    ``extra.fx_rate``, as ``compat.assemble``)."""
+    rid = run["run_id"]
+    sql, args = "SELECT position_id, fact FROM run_position WHERE run_id = %s", [rid]
+    if books:
+        sql, args = sql + " AND book_id = ANY(%s)", [*args, books]
+    rows = con.execute(sql + " ORDER BY ord", args).fetchall()
+    unvalued = [r["position_id"] for r in rows if r["fact"] is None]
+    inputs = {i["position_id"]: i for i in con.execute(
+        "SELECT position_id, ccy, asset_class, x FROM position_input WHERE set_id = ANY(%s) AND position_id = ANY(%s)",
+        (run["position_set_ids"], unvalued))} if unvalued else {}
+    items = []
+    for r in rows:
+        if r["fact"] is not None:
+            items.append({"position_id": r["position_id"], "fact": r["fact"]})
+            continue
+        i = inputs.get(r["position_id"]) or {}
+        items.append({"position_id": r["position_id"], "fact": None,
+                      "input": {"ccy": i.get("ccy"), "asset_class": i.get("asset_class"),
+                                "extra": {"reported": i.get("x") or {}}}})
+    ref = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'fx'", (rid,)).fetchone()
+    fx: dict[str, float | None] = {r["ccy"]: r.get("rate") for r in (ref["data"] if ref else []) or []}
+    for it in items:
+        f = it["fact"] or {}
+        ex = f.get("extra") if isinstance(f.get("extra"), dict) else {}
+        if f.get("ccy") and fx.get(f["ccy"]) is None and ex.get("fx_rate"):
+            fx[f["ccy"]] = ex["fx_rate"]
+    return items, fx
+
+
+def gov_issuers(con, run_id: int) -> frozenset[str]:
+    """The issuer keys of a run's issuer reference flagged ``is_gov`` (the Minfin: ``summary.is_minfin``)."""
+    ref = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'issuers'", (run_id,)).fetchone()
+    return frozenset(r["issuer"] for r in (ref["data"] if ref else None) or [] if r.get("is_gov") and r.get("issuer"))
+
+
+MATRIX_MEASURES: tuple[tuple[str, str, str], ...] = (
+    ("dv01", "DV01", "labelled"), ("dv01_curve", "DV01 по кривой", "yes"), ("cs01", "CS01", "yes"),
+    ("ofz_basis", "Базис ОФЗ", "yes"), ("fx_delta", "FX-дельта", "repr"), ("mv", "MV", "yes"),
+    ("notional", "Номинал", "yes"), ("n_positions", "Позиций", "yes"),
+)
+"""The measures of the matrix (R38: one shown at a time), with whether a cell sums across currencies (the total row,
+in RUB): ``yes``; ``repr`` only at the run's rates (``fx_delta_rub``: null when a rate is missing); ``labelled`` --
+DV01 over the curves of different currencies sums, but is not a currency's risk (``dv01_all_curves_rub``)."""
+
+
+def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
+               attribution: str = ATTRIBUTION_DEFAULT, gov_issuers: frozenset[str] = frozenset()) -> dict[str, Any]:
+    """The table currency x instrument type over a run's positions, as a matrix (R38): ``ccys`` are its rows,
+    ``columns`` the instrument kinds present (in ``INSTR_KINDS`` order, with each kind's total over all currencies:
+    what sums, in RUB), a cell is the ``rows`` entry of level ``kind`` (ccy, kind), a row total the entry of level
+    ``ccy`` (and of level ``group`` its subtotal by group); ``total`` the corner. ``items``: ``{"position_id", "fact"}`` of a
+    valued position, ``{"position_id", "fact": None, "input": <report row as for instr_kind>}`` of an unvalued
+    one; ``fx`` the run's RUB rate per currency. Amounts in RUB (``*_rub``); the notional and FX delta in the
+    currency (``*_ccy``), DV01 and MV too where its rate is known. Rows: one per currency (``level`` ccy), group
+    (group) and kind (kind) with a position or a risk there; ``total`` only what sums across currencies, DV01 over
+    the curves of different currencies only as ``dv01_all_curves_rub`` (labelled so, never as a currency's)."""
+    if attribution not in ATTRIBUTIONS:
+        raise ValueError(f"unknown attribution {attribution!r}")
+    cells: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def cell(ccy: str, kind: str) -> dict[str, Any]:
+        return cells.setdefault((ccy, kind), _cell())
+
+    every: set[str] = set()
+    for it in items:
+        pid, f = it["position_id"], it.get("fact")
+        every.add(pid)
+        if f is None:
+            inp = it.get("input") or {}
+            c = cell(inp.get("ccy") or "RUB", instr_kind({"asset_class": None, **inp}))
+            c["ids"].add(pid)
+            c["missing"]["not_valued"] = c["missing"].get("not_valued", 0) + 1
+            continue
+        kind, home = instr_kind(f, gov_issuers), f.get("ccy") or "RUB"
+        legs = attribution == "legs" or kind not in CROSS_CCY_KINDS
+        c = cell(home, kind)
+        c["ids"].add(pid)
+        for key, src in (("notional_ccy", "notional"), ("notional_rub", "notional_rub"), ("mv_rub", "mv_rub"),
+                         ("cs01", "cs01"), ("basis", "ofz_spr01")):
+            c[key] += f.get(src) or 0.0
+        curves = _risk_curves(f)
+        for cid, v in curves.items():
+            cc = _curve_ccy(cid)
+            o = c if cc == home or not legs else cell(cc, kind)
+            o["curves"][cid] = o["curves"].get(cid, 0.0) + v
+            if o is not c:
+                o["legs"].add(pid)
+            elif cc != home:
+                c["foreign"] += v
+        for cc, amt in (f.get("fx_delta") or {}).items():
+            if not amt:
+                continue
+            if cc == home:
+                c["fx_delta_ccy"] += amt
+            elif legs:
+                o = cell(cc, kind)
+                o["legs"].add(pid)
+                o["fx_delta_ccy"] += amt
+            elif fx.get(cc) and fx.get(home):  # in the position's currency at the day's rates
+                c["fx_delta_ccy"] += amt * fx[cc] / fx[home]
+        if kind in RISK_KINDS and not (curves or f.get("cs01") or f.get("ofz_spr01") or f.get("accrual_only")):
+            why = "reported_no_risk" if (f.get("extra") or {}).get("quality") == "reported_value" else "no_risk"
+            c["missing"][why] = c["missing"].get(why, 0) + 1
+
+    def out(ccy: str, level: str, group: str | None, kind: str | None, cs: list[dict[str, Any]]) -> dict[str, Any]:
+        ids = set().union(*(c["ids"] for c in cs))
+        curves: dict[str, float] = {}
+        missing: dict[str, int] = {}
+        for c in cs:
+            for cid, v in c["curves"].items():
+                curves[cid] = curves.get(cid, 0.0) + v
+            for k, n in c["missing"].items():
+                missing[k] = missing.get(k, 0) + n
+        dv01 = sum(v for cid, v in curves.items() if _curve_ccy(cid) == ccy)
+        mv = sum(c["mv_rub"] for c in cs)
+        rate = 1.0 if ccy == "RUB" else fx.get(ccy)
+        return {"ccy": ccy, "level": level, "group": group, "kind": kind, "label": KIND_LABEL[kind] if kind else None,
+                "n_positions": len(ids), "n_legs_only": len(set().union(*(c["legs"] for c in cs)) - ids),
+                "notional_ccy": sum(c["notional_ccy"] for c in cs),
+                "notional_rub": sum(c["notional_rub"] for c in cs), "mv_rub": mv, "mv_ccy": mv / rate if rate else None,
+                "dv01_rub": dv01, "dv01_ccy": dv01 / rate if rate else None, "dv01_by_curve_rub": curves,
+                "dv01_foreign_rub": sum(c["foreign"] for c in cs), "ofz_basis_rub": sum(c["basis"] for c in cs),
+                "cs01_rub": sum(c["cs01"] for c in cs), "fx_delta_ccy": sum(c["fx_delta_ccy"] for c in cs),
+                "n_risk_missing": sum(missing.values()),
+                "risk_missing": [{"reason": k, "text": MISSING_TEXT[k], "n": n} for k, n in sorted(missing.items())]}
+
+    order = {k: i for i, (k, _, _) in enumerate(INSTR_KINDS)}
+    ccys = sorted({c for c, _ in cells}, key=lambda c: (c != "RUB", FX_CCYS.index(c) if c in FX_CCYS else 99, c))
+    rows: list[dict[str, Any]] = []
+    for ccy in ccys:
+        mine = {k: c for (cc, k), c in cells.items() if cc == ccy}
+        rows.append(out(ccy, "ccy", None, None, list(mine.values())))
+        for g in GROUPS:
+            kinds = sorted((k for k in mine if KIND_GROUP[k] == g), key=order.__getitem__)
+            if kinds:
+                rows.append(out(ccy, "group", g, None, [mine[k] for k in kinds]))
+                rows.extend(out(ccy, "kind", g, k, [mine[k]]) for k in kinds)
+    blocks = [r for r in rows if r["level"] == "ccy"]
+    curves_all: dict[str, float] = {}
+    for r in blocks:
+        for cid, v in r["dv01_by_curve_rub"].items():
+            curves_all[cid] = curves_all.get(cid, 0.0) + v
+    no_rate = [r["ccy"] for r in blocks if r["ccy"] != "RUB" and r["fx_delta_ccy"] and not fx.get(r["ccy"])]
+    total = {"n_positions": len(every), "notional_rub": sum(r["notional_rub"] for r in blocks),
+             "mv_rub": sum(r["mv_rub"] for r in blocks), "dv01_by_curve_rub": curves_all,
+             "dv01_all_curves_rub": sum(curves_all.values()),
+             "ofz_basis_rub": sum(r["ofz_basis_rub"] for r in blocks), "cs01_rub": sum(r["cs01_rub"] for r in blocks),
+             "fx_delta_rub": None if no_rate else sum(r["fx_delta_ccy"] * (fx.get(r["ccy"]) or 0.0)
+                                                      for r in blocks if r["ccy"] != "RUB"),
+             "n_risk_missing": sum(r["n_risk_missing"] for r in blocks)}
+    columns = []
+    for k in sorted({k for _, k in cells}, key=order.__getitem__):
+        mine = [(cc, c) for (cc, kk), c in cells.items() if kk == k]
+        curves: dict[str, float] = {}
+        for _, c in mine:
+            for cid, v in c["curves"].items():
+                curves[cid] = curves.get(cid, 0.0) + v
+        fx_rows = [(cc, c["fx_delta_ccy"]) for cc, c in mine if cc != "RUB" and c["fx_delta_ccy"]]
+        columns.append({
+            "kind": k, "group": KIND_GROUP[k], "label": KIND_LABEL[k],
+            "n_positions": len(set().union(*(c["ids"] for _, c in mine))),
+            "notional_rub": sum(c["notional_rub"] for _, c in mine), "mv_rub": sum(c["mv_rub"] for _, c in mine),
+            "dv01_by_curve_rub": curves, "dv01_all_curves_rub": sum(curves.values()),
+            "ofz_basis_rub": sum(c["basis"] for _, c in mine), "cs01_rub": sum(c["cs01"] for _, c in mine),
+            "fx_delta_rub": None if any(not fx.get(cc) for cc, _ in fx_rows) else sum(v * fx[cc] for cc, v in fx_rows),
+            "n_risk_missing": sum(sum(c["missing"].values()) for _, c in mine)})
+    return {"attribution": attribution, "attribution_rule": ATTRIBUTIONS[attribution],
+            "attribution_provisional": True, "cross_ccy_kinds": list(CROSS_CCY_KINDS),
+            "kinds": [{"kind": k, "group": g, "label": lab} for k, g, lab in INSTR_KINDS],
+            "measures": [{"measure": m, "label": lab, "across_ccys": a} for m, lab, a in MATRIX_MEASURES],
+            "fx": {c: fx.get(c) for c in ccys if c != "RUB"}, "ccys": ccys, "columns": columns, "rows": rows,
+            "total": total}

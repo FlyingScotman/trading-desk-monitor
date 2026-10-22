@@ -1,7 +1,7 @@
 """Desk API v1 (05 §2, the S5 subset) over the desk store, read-only but for scenario job submission (S6),
 plus the window.DESK compatibility adapter (05 §4), the S6 app at /app/ and the prototypes as static files.
 
-shortcut: no authentication in S5; the reverse proxy authenticates (05 §6), bind 127.0.0.1 until then.
+Users and access: ``auth`` (off by default: 127.0.0.1 only, as before; on: sign-in, roles, CSRF, audit; 05 §6).
 shortcut: one psycopg connection per request, no pool; fine for a few users, pool it if latency shows."""
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import psycopg
 from fastapi import Depends, FastAPI, Query, Request, status
@@ -29,12 +29,14 @@ from fastapi.staticfiles import StaticFiles
 from psycopg.rows import dict_row
 from starlette.exceptions import HTTPException
 
-from .. import __version__
+from .. import __version__, lan
 from ..marketdata import history
+from ..publish.funding_run import NOT_COMPUTED, REPORTING_CCY, STATUS_TEXT
 from ..scenario import jobs
 from ..scenario.definition import definition_hash, normalize
 from ..scenario.taylor import risk_payload
 from ..settings import REPO_ROOT
+from . import auth as authn
 from . import compat, concepts
 from .autopilot_routes import router as autopilot_router
 from .models import (
@@ -42,6 +44,7 @@ from .models import (
     AggregateRow,
     Aggregates,
     BondHistory,
+    BookFunding,
     ErrorOut,
     JobIn,
     PnlSums,
@@ -50,7 +53,9 @@ from .models import (
     PositionPnl,
     Ready,
     RiskPayload,
+    RiskTable,
     RunDetail,
+    RunFunding,
     RunHeader,
     RunList,
     RunPnl,
@@ -74,6 +79,8 @@ HEADER_SQL = (f"SELECT r.*, r.run_id IN ({compat.DEFAULT_RUNS}) AS is_default,"
               f" r.run_id IN ({compat.CURRENT_RUNS}) AS is_current FROM run r")
 DIMS = {"book": "book_id", "quality": "quality", "asset_class": "fact->>'asset_class'",
         "segment": "fact->>'segment'", "issuer": "fact->>'issuer'", "ccy": "fact->>'ccy'"}
+PY_DIMS = {"instr_kind": concepts.instr_kind}
+"""Dimensions computed from the fact (an unvalued position: null), not in the SQL: ``concepts.instr_kind``."""
 PNL_KEYS = compat.PNL_KEYS
 JS = "text/javascript; charset=utf-8"
 NO_STORE = {"Cache-Control": "no-store"}
@@ -242,6 +249,44 @@ WARM_S = 20.0
 """How often ``serve`` checks whether the concept pages' bodies need building again."""
 
 
+def _py_grouped(con, run_id: int, names: list[str], cols: list[str]) -> list[dict[str, Any]]:
+    """``aggregates`` rows when a dimension is computed from the fact (``PY_DIMS``): the same sums, grouped here.
+    An unvalued position has no fact: its key there is null."""
+    sel = "".join(f"{c} AS s{i}, " for i, c in enumerate(cols))
+    out: dict[tuple, dict[str, Any]] = {}
+    gov = concepts.gov_issuers(con, run_id)  # the Minfin's bonds by the issuer (instr_kind, R39)
+    for r in con.execute(f"SELECT {sel}fact, pnl, pv_rub, dv01_rub, cs01_rub FROM run_position WHERE run_id = %s"
+                         " ORDER BY ord", (run_id,)):
+        sql_keys = iter(r[f"s{i}"] for i in range(len(cols)))
+        key = tuple(next(sql_keys) if d in DIMS else (PY_DIMS[d](r["fact"], gov) if r["fact"] is not None else None)
+                    for d in names)
+        g = out.setdefault(key, {**{f"k{i}": k for i, k in enumerate(key)}, "n_positions": 0, "n_valued": 0,
+                                 "n_pnl": 0, **dict.fromkeys(("pv_rub", "dv01_rub", "cs01_rub", *PNL_KEYS))})
+        g["n_positions"] += 1
+        g["n_valued"] += r["fact"] is not None
+        g["n_pnl"] += r["pnl"] is not None
+        for k in ("pv_rub", "dv01_rub", "cs01_rub"):
+            if r[k] is not None:
+                g[k] = (g[k] or 0.0) + r[k]
+        for k in PNL_KEYS:
+            if r["pnl"] and r["pnl"].get(k) is not None:
+                g[k] = (g[k] or 0.0) + r["pnl"][k]
+    return [out[k] for k in sorted(out, key=lambda t: tuple((v is None, str(v)) for v in t))]
+
+
+def funding_out(run_id: int, block: dict[str, Any] | None) -> RunFunding:
+    """``RunFunding`` of a run's funding block (``publish.funding_run``); a run before B1 has none."""
+    b = block or {"status": NOT_COMPUTED, "text": STATUS_TEXT[NOT_COMPUTED]}
+    policy = b.get("policy")
+    return RunFunding(
+        run_id=run_id, state=b["status"], text=b["text"], period=b.get("period"),
+        reporting_ccy=b.get("reporting_ccy") or REPORTING_CCY, totals=b.get("totals"),
+        books=[BookFunding(book_id=k, **{f: v.get(f) for f in BookFunding.model_fields if f != "book_id"})
+               for k, v in sorted((b.get("by_book") or {}).items())],
+        entities=b.get("by_entity") or {}, problems=b.get("problems") or [], notes=b.get("notes") or [],
+        provisional=(policy or {}).get("provisional") or [], policy=policy, lines=b.get("lines") or [])
+
+
 def _total(components: dict[str, Any] | None) -> float | None:
     return sum(components.get(k) or 0.0 for k in PNL_KEYS) if components else None
 
@@ -264,16 +309,20 @@ ConRW = Annotated[psycopg.Connection, Depends(db_rw)]
 
 
 def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | None = None,
-               adapter_status: Callable[[], str] | None = None) -> FastAPI:
+               adapter_status: Callable[[], str] | None = None, auth: authn.AuthConfig | None = None) -> FastAPI:
     """No scenario worker here (``serve`` starts one): jobs submitted to this app stay queued.
     ``adapter_status``: the private adapter's ``ok <name> <version> <fp>`` or ``error <reason>`` for
-    ``/health/ready`` (``desk.inbox.scan.adapter_line``, loaded once per process); None: not reported."""
+    ``/health/ready`` (``desk.inbox.scan.adapter_line``, loaded once per process); None: not reported.
+    ``auth``: sign-in and roles (``desk.api.auth``); None: off, this computer only."""
     app = FastAPI(title="Desk API", version=__version__, description="Desk API v1 (docs/architecture/05 §2)",
                   responses={404: {"model": ErrorOut}, 422: {"model": ErrorOut}, 503: {"model": ErrorOut}})
 
     app.state.store_url = store_url
     app.state.started_at = datetime.now(UTC)  # the diagnostics' uptime (R13)
+    app.state.instance = uuid.uuid4().hex[:16]  # /health/live's X-Desk-Instance: the LAN self-check knows its server
+    app.state.lan_probe = None  # desk.lan.probe_all once serve has started (the settings page's «Сеть»)
     app.state.body_cache = BodyCache()
+    app.state.auth = auth or authn.AuthConfig()
 
     def write_summaries(ids: list[int]) -> None:  # the API's connections are read-only (concepts.Writer)
         from ..publish import summary
@@ -284,6 +333,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     app.state.write_summaries = write_summaries
     # window.DESK and the concept pages' series of a large book are megabytes of JSON: compressed on the wire
     app.add_middleware(GZipMiddleware, minimum_size=4096)
+    authn.install(app, _error)  # sessions, roles, CSRF, audit; inside request_id (added after it)
 
     @app.middleware("http")
     async def request_id(request: Request, call_next):
@@ -325,7 +375,8 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
     # ---- health
     @app.get("/health/live")
-    def live() -> dict[str, str]:
+    def live(response: Response) -> dict[str, str]:
+        response.headers[lan.INSTANCE_HEADER] = app.state.instance
         return {"status": "ok"}
 
     @app.get("/health/ready", response_model=Ready)
@@ -382,10 +433,12 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     def positions(con: Con, run_id: int, request: Request, book: str | None = None,
                   quality: str | None = Query(None, description="exact, assumed, market_value, ...")):
         run = _run_or_404(con, run_id)
-        sql, args = "SELECT * FROM run_position WHERE run_id = %s", [run_id]
+        sql = ("SELECT p.*, a.alias FROM run_position p"  # the alias in force now (alias_routes), not frozen
+               " LEFT JOIN instrument_alias a ON a.isin = p.fact->>'isin' WHERE p.run_id = %s")
+        args: list[Any] = [run_id]
         for col, v in (("book_id", book), ("quality", quality)):
             if v is not None:
-                sql += f" AND {col} = %s"
+                sql += f" AND p.{col} = %s"
                 args.append(v)
         rows = con.execute(sql + " ORDER BY ord", args).fetchall()  # whole: a book is <= 2k positions
         return _cached(request, run, PositionList(run_id=run_id, positions=[Position(**r) for r in rows]))
@@ -411,24 +464,36 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         return _cached(request, run, RunPnl(run_id=run_id, positions=out,
                                             totals={k: PnlSums(**v) for k, v in totals.items()}))
 
+    @app.get("/api/v1/runs/{run_id}/funding", response_model=RunFunding)
+    def funding(con: Con, run_id: int, request: Request):
+        """The run's funding (B1): by book (with the write-off) and entity, its lines and problems; state
+        ``not_configured`` when the adapter gave no funding rules, ``not_computed`` for a run before B1."""
+        run = _run_or_404(con, run_id)
+        row = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'funding'",
+                          (run_id,)).fetchone()
+        return _cached(request, run, funding_out(run_id, row["data"] if row else None))
+
     @app.get("/api/v1/runs/{run_id}/aggregates", response_model=Aggregates)
     def aggregates(con: Con, run_id: int, request: Request,
-                   dims: str = Query("book", description="Comma-separated: " + ", ".join(DIMS))):
+                   dims: str = Query("book", description="Comma-separated: " + ", ".join([*DIMS, *PY_DIMS]))):
         names = [d.strip() for d in dims.split(",") if d.strip()]
-        bad = [d for d in names if d not in DIMS]
+        bad = [d for d in names if d not in DIMS and d not in PY_DIMS]
         if bad or not names:
             raise ApiError(422, "invalid_parameter", f"unknown dims: {', '.join(bad) or '(none)'}",
-                           {"allowed": list(DIMS)})
+                           {"allowed": [*DIMS, *PY_DIMS]})
         names = list(dict.fromkeys(names))
         run = _run_or_404(con, run_id)
-        cols = [DIMS[d] for d in names]  # whitelisted: safe to format into the SQL
+        cols = [DIMS[d] for d in names if d in DIMS]  # whitelisted: safe to format into the SQL
         sums = ", ".join(f"sum((pnl->>'{k}')::float8) AS {k}" for k in PNL_KEYS)
-        rows = con.execute(
-            f"SELECT {', '.join(f'{c} AS k{i}' for i, c in enumerate(cols))}, count(*) AS n_positions,"
-            f" count(fact) AS n_valued, count(pnl) AS n_pnl, sum(pv_rub) AS pv_rub,"
-            f" sum(dv01_rub) AS dv01_rub, sum(cs01_rub) AS cs01_rub, {sums}"
-            f" FROM run_position WHERE run_id = %s"
-            f" GROUP BY {', '.join(cols)} ORDER BY {', '.join(cols)}", (run_id,)).fetchall()
+        if any(d in PY_DIMS for d in names):
+            rows = _py_grouped(con, run_id, names, cols)
+        else:
+            rows = con.execute(
+                f"SELECT {', '.join(f'{c} AS k{i}' for i, c in enumerate(cols))}, count(*) AS n_positions,"
+                f" count(fact) AS n_valued, count(pnl) AS n_pnl, sum(pv_rub) AS pv_rub,"
+                f" sum(dv01_rub) AS dv01_rub, sum(cs01_rub) AS cs01_rub, {sums}"
+                f" FROM run_position WHERE run_id = %s"
+                f" GROUP BY {', '.join(cols)} ORDER BY {', '.join(cols)}", (run_id,)).fetchall()
         out = []
         for r in rows:
             p = {k: r[k] for k in PNL_KEYS}
@@ -438,6 +503,21 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
                                                          "dv01_rub", "cs01_rub")},
                                     pnl=p | {"total": sum(have) if have else None}))
         return _cached(request, run, Aggregates(run_id=run_id, dims=names, rows=out))
+
+    @app.get("/api/v1/runs/{run_id}/risk-table", response_model=RiskTable)
+    def risk_table(con: Con, run_id: int, request: Request,
+                   attribution: Literal["legs", "position"] = Query(
+                       concepts.ATTRIBUTION_DEFAULT, description="where a cross-currency kind's risk goes ("
+                       + ", ".join(concepts.CROSS_CCY_KINDS) + "): " + "; ".join(
+                           f"{k}: {v}" for k, v in concepts.ATTRIBUTIONS.items())
+                       + f". Default {concepts.ATTRIBUTION_DEFAULT!r}, provisional (UI-02)"),
+                   book: str | None = Query(None, description="comma-separated books; all when omitted")):
+        """Aggregated risk as a matrix: currencies x instrument types (UI-02, R38; ``concepts.risk_table``)."""
+        run = _run_or_404(con, run_id)
+        books = [b.strip() for b in book.split(",") if b.strip()] if book else None
+        items, fx = concepts.risk_items(con, run, books)
+        gov = concepts.gov_issuers(con, run_id)
+        return _cached(request, run, RiskTable(run_id=run_id, **concepts.risk_table(items, fx, attribution, gov)))
 
     @app.get("/api/v1/runs/{run_id}/risk", response_model=RiskPayload)
     def risk(con: Con, run_id: int, request: Request):
@@ -473,7 +553,8 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
     @app.post("/api/v1/scenario-jobs", response_model=ScenarioJob, response_model_exclude_unset=True,
               status_code=status.HTTP_202_ACCEPTED,
-              description="202: a new job, queued; 200: the live or done job of an equivalent definition")
+              description="202: a new job, queued; 200: the live or done job of an equivalent definition",
+              dependencies=[Depends(authn.trader_guard)])
     def submit_job(con: ConRW, body: JobIn, response: Response):
         try:
             job, created = jobs.submit(con, body.base_run_id,
@@ -596,16 +677,20 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
             raise ApiError(404, "not_found", "no static snapshot facts in the store yet (after the next run)")
         return out
 
+    from .alias_routes import router as alias_router  # /api/v1/instruments/alias(es) (batch 1, item 3)
     from .diagnostics_routes import router as diagnostics_router
     from .market_history import router as market_history_router  # /api/v1/history/market, /status (R24)
     from .settings_routes import router as settings_router  # here: it imports ApiError from this module
     from .update_routes import router as update_router
+    from .updater_routes import router as updater_router  # GitHub Releases (desk.updater)
 
     app.include_router(settings_router, include_in_schema=False)  # local admin routes (/settings.html)
     app.include_router(update_router, include_in_schema=False)
+    app.include_router(updater_router, include_in_schema=False)
     app.include_router(diagnostics_router, include_in_schema=False)
     app.include_router(market_history_router, include_in_schema=False)
     app.include_router(autopilot_router)
+    app.include_router(alias_router)
 
     built = Path(app_dir) if app_dir else static_root() / "frontend" / "dist"
     if built.is_dir():  # before "/": the frontend build, absent until npm run build
@@ -620,11 +705,72 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     return app
 
 
+def listen_sockets(host: str, port: int) -> list:
+    """The sockets ``serve`` listens on, all served by its one uvicorn server with the same TLS: ``host`` alone
+    when it covers 127.0.0.1 (a loopback address, 0.0.0.0, ::), else ``host`` and 127.0.0.1 beside it, so that the
+    launcher's health check and the admin's own browser keep working on this computer.
+    Not inheritable (Python's default): a child process must never hold a copy of a listening socket, which would
+    outlive this server and take connections nobody answers. No SO_REUSEADDR on Windows: there it would let another
+    process bind the same address and port."""
+    import socket
+
+    hosts = [host] + ([] if authn.is_loopback(host) or host in lan.WILDCARD else ["127.0.0.1"])
+    out = []
+    try:
+        for h in hosts:
+            family = socket.AF_INET6 if ":" in h else socket.AF_INET
+            sock = socket.socket(family, socket.SOCK_STREAM)
+            out.append(sock)
+            if os.name != "nt":
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if h == "::":
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            sock.bind((h, port))
+    except OSError:
+        for sock in out:
+            sock.close()
+        raise
+    return out
+
+
+def server_loop() -> str:
+    """uvicorn's ``loop``: on Windows the selector event loop. The default proactor loop closes a listening socket
+    for good after one failed accept (a client that resets before it is accepted, WinError 64; asyncio
+    ``proactor_events._start_serving``), which a server on the network meets; the selector loop logs such an accept
+    and keeps listening."""
+    return "asyncio:SelectorEventLoop" if os.name == "nt" else "auto"
+
+
+def self_check(app: FastAPI, server: Any, host: str, port: int, tls: bool, wait_s: float = 300.0) -> None:
+    """Once the server accepts: ``desk.lan.probe_all`` against 127.0.0.1 and this computer's network addresses (no
+    proxy), logged with a Russian hint (the start.bat window and serve.log) and kept in ``app.state.lan_probe`` for
+    the settings page."""
+    deadline = time.monotonic() + wait_s
+    while not server.started:
+        if server.should_exit or time.monotonic() > deadline:
+            return
+        time.sleep(0.2)
+    try:
+        res = lan.probe_all(host, port, tls, instance=app.state.instance)
+    except Exception:  # a diagnostic: never the server's problem
+        log.warning("LAN self-check failed", exc_info=True)
+        return
+    app.state.lan_probe = res
+    bad = [r for r in [res["loopback"], *res["lan"]] if r["status"] != "ok"]
+    if not bad:
+        log.info("проверка адресов (с этого компьютера, без прокси): %s", res["summary"])
+    for r in bad:
+        log.warning("проверка адреса %s: %s (%s). %s", r["url"], r["label"], r["detail"], r["hint"])
+
+
 def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir: Path | None = None,
           snapshots: Path | None = None, adapter_status: Callable[[], str] | None = None,
-          autopilot: Any = None) -> int:
+          autopilot: Any = None, auth: authn.AuthConfig | None = None,
+          tls: tuple[Path, Path] | None = None, allow_plain_http: bool = False) -> int:
     """``snapshots``: the snapshot cache the scenario worker reprices from; None runs no worker.
     ``autopilot``: a ``desk.autopilot.Autopilot``, started here and shown by ``/api/v1/autopilot/*``.
+    ``auth``, ``tls`` (certificate, key) and ``allow_plain_http``: see ``desk.api.auth.check_bind``, which refuses
+    a network ``host`` without sign-in (or without TLS, unless allowed).
     Returns the exit code for ``desk serve``: 0, or the launcher's restart code after ``app.state.request_restart``
     (an update staged by ``/api/v1/update/install``, desk.update)."""
     import threading
@@ -635,14 +781,25 @@ def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir:
     from ..update import restart_code
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    auth = auth or authn.AuthConfig()
+    for w in authn.check_bind(host, auth=auth.enabled, tls=tls is not None, allow_plain_http=allow_plain_http):
+        log.warning(w)
+    try:
+        sockets = listen_sockets(host, port)
+    except OSError as e:
+        log.error("cannot listen on %s:%s: %s", host, port, e)
+        sys.exit(3)  # as uvicorn: the port was taken
     if snapshots is not None:
         jobs.Worker(store_url, SnapshotDir(snapshots)).start()
-    app = create_app(store_url, static_dir, adapter_status=adapter_status)
+    app = create_app(store_url, static_dir, adapter_status=adapter_status, auth=auth)
+    app.state.listen = {"host": host, "port": port, "tls": tls is not None}  # the settings page's «Сеть»: what this server listens on
     if autopilot is not None:
         app.state.autopilot = autopilot
         autopilot.start()
     # the desk.api logger logs every request with its request id, so no uvicorn access log
-    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, access_log=False))
+    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, access_log=False, loop=server_loop(),
+                                           ssl_certfile=str(tls[0]) if tls else None,
+                                           ssl_keyfile=str(tls[1]) if tls else None))
     restart = restart_code()
     asked: list[bool] = []
 
@@ -675,8 +832,11 @@ def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir:
                 time.sleep(0.1)
 
     threading.Thread(target=warm_loop, name="desk-warm", daemon=True).start()
+    if not authn.is_loopback(host):
+        threading.Thread(target=self_check, args=(app, server, host, port, tls is not None), name="desk-lan-check",
+                         daemon=True).start()
     try:
-        server.run()
+        server.run(sockets=sockets)
     except KeyboardInterrupt:  # uvicorn raises the captured Ctrl+C again after its shutdown
         pass
     if not server.started:

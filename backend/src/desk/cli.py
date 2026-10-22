@@ -15,6 +15,12 @@
     desk inbox replay --source S --from D1 --to D2 read archived accepted files again (new revisions if changed)
     desk adapter check [--adapter SPEC] [--dir D] [--stub-ctx] [--json]   the conformance kit (08 §8)
     desk serve                           desk API + Desk Monitor on http://127.0.0.1:8100, scenario worker, autopilot
+                                         (address and port: settings bind_host / port, or --host / --port)
+    desk user add NAME --role admin      a user of the monitor (viewer, trader, admin); asks for the password
+    desk user list | passwd NAME | role NAME ROLE | disable NAME | enable NAME | unlock NAME
+    desk lan enable [--self-signed | --cert F --key F | --plain-http]   sign-in on, listen on the network
+    desk lan status [--no-probe] [--json]  address, HTTPS, certificate names, firewall rule, URLs, self-check
+    desk lan disable                     back to this computer only
     desk cycle [--date D] [--no-hub]     one autopilot cycle: hub sync -> inbox scan -> EOD of changed dates
     desk backfill [--from D] [--to D] [--dry-run]  default runs of the past dates with positions (R23)
     desk openapi --out ../frontend/openapi.json   the API's OpenAPI document (stdout without --out)
@@ -57,6 +63,7 @@ from typing import Any
 import psycopg
 
 from . import store
+from .curves import fx as fxcurves
 from .marketdata import cache, history, reference, static_facts
 from .marketdata.adapter import MarketView
 from .marketdata.bundle import SnapshotDir, SnapshotError, previous_market
@@ -79,11 +86,12 @@ class ContextCache:
         self.size, self._items = size, {}
 
     def prepare(self, sd: SnapshotDir, business_date: str, cut_type: str = "eod_final",
-                market_snapshot_id: str | None = None) -> EodContext:
-        key = (str(sd.root), business_date, cut_type, market_snapshot_id or sd.market_id(business_date, cut_type))
+                market_snapshot_id: str | None = None, *, fx_options: fxcurves.FxOptions | None = None) -> EodContext:
+        key = (str(sd.root), business_date, cut_type, market_snapshot_id or sd.market_id(business_date, cut_type),
+               fx_options)
         ctx = self._items.pop(key, None)
         if ctx is None:
-            ctx = prepare(sd, business_date, cut_type, market_snapshot_id=market_snapshot_id)
+            ctx = prepare(sd, business_date, cut_type, market_snapshot_id=market_snapshot_id, fx_options=fx_options)
         self._items[key] = ctx
         while len(self._items) > self.size:
             self._items.pop(next(iter(self._items)))
@@ -208,7 +216,8 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
     sd = SnapshotDir(Path(snapshots))
     t0 = time.perf_counter()
     prep = contexts.prepare if contexts is not None else prepare
-    ctx = prep(sd, d, cut_type, market_snapshot_id=market_snapshot_id)
+    fx_options = fxcurves.options_from(settings)  # the provisional FX choices (curves.fx.FxOptions)
+    ctx = prep(sd, d, cut_type, market_snapshot_id=market_snapshot_id, fx_options=fx_options)
     # issuer names, groups, sectors and ratings: the newest static of the cache, not the market's own (R25)
     ctx = dataclasses.replace(ctx, reference=reference.facts(sd, ctx.static),
                               proxy_curves=bool(getattr(settings, "proxy_curves_for_risk", False)))
@@ -270,17 +279,21 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
                 + (f", report {src['report_date']}" if src.get("report_date") else "")
                 + f", valid {vd}" + (f", carried {age} days" if age else ""))
         carried = store.carried_spreads(con, before=ctx.business_date)
-        bp = pv1.plan(ctx, inputs)
+        bp = pv1.plan(ctx, inputs, second_order=not no_gamma)
+        if bp.unlinked_terms:
+            out(f"WARN trade_terms: {len(bp.unlinked_terms)} trade(s) no positions row names, "
+                + ("valued as rows of their own" if fx_options.unlinked_terms else "not valued (fx_unlinked_terms off)")
+                + ": " + ", ".join(bp.unlinked_terms[:10]))
         outcomes = value(ctx, bp.requests, second_order=not no_gamma, position_ids=bp.position_ids,
                          carried_spreads=carried)
         if prev_cut and not no_pnl:
-            prev_ctx = prep(sd, *prev_cut)
+            prev_ctx = prep(sd, *prev_cut, fx_options=fx_options)
             attach_pnl(prev_ctx, value(prev_ctx, bp.requests, position_ids=bp.position_ids, carried_spreads=carried),
                        ctx, outcomes)
             # fx rows, the report-valued rows (otc, unmapped bonds): by the rate move and by the reports of both
             # dates (pnl.direct); the reason in run_position.no_pnl when there is none, never a bare null
             prev_inputs = store.positions_for(con, prev_ctx.business_date, books=books)
-            direct_pnl.attach(prev_ctx, ctx, bp.direct, inputs, pv1.plan(prev_ctx, prev_inputs).direct)
+            direct_pnl.attach(prev_ctx, ctx, bp.direct, inputs, pv1.plan(prev_ctx, prev_inputs, second_order=False).direct)
             flash = [o.pnl for o in outcomes if o.pnl]
             out(f"flash PnL {prev_date} -> {d}: {len(flash)}/{sum(o.valuation is not None for o in outcomes)} "
                 f"priced positions, total {sum(p.total for p in flash):,.0f} RUB, "
@@ -612,11 +625,33 @@ def cmd_history(a: argparse.Namespace) -> int:
 
 
 def cmd_serve(a: argparse.Namespace) -> int:
-    from .api import serve
+    from .api import auth, serve
 
-    url = store.resolve_url(a.settings)
+    st = a.settings
+    host, port = a.host or st.bind_host, a.port or st.port
+    tls = (st.tls_cert, st.tls_key) if st.tls_cert and st.tls_key else None
+    try:  # before the store: a refused address starts nothing
+        warnings = auth.check_bind(host, auth=st.auth, tls=tls is not None, allow_plain_http=st.allow_plain_http)
+    except auth.BindError as e:
+        print(e, file=sys.stderr)
+        return 2
+    if tls and not all(p.is_file() for p in tls):
+        print(f"desk serve: TLS files not found: {tls[0]}, {tls[1]} (tls_cert, tls_key)", file=sys.stderr)
+        return 2
+    url = store.resolve_url(st)
     store.migrate(url)
-    print(f"desk API on http://{a.host}:{a.port}/desk-monitor.html, store {mask_url(url)}")
+    scheme = "https" if tls else "http"
+    print(f"desk API on {scheme}://{'127.0.0.1' if host in ('0.0.0.0', '::') else host}:{port}"
+          f"/concepts/index.html, store {mask_url(url)}")
+    for w in warnings:
+        print(w)
+    if st.auth:
+        with store.connect(url) as con:
+            admin = auth.has_admin(con)
+        print("sign-in: on" + ("" if admin else "; no admin yet: desk user add NAME --role admin, or the setup form "
+                                                 f"of {scheme}://127.0.0.1:{port}/login.html on this computer"))
+        if not auth.is_loopback(host):
+            print("for colleagues: " + ", ".join(_lan_urls(host, port, tls is not None)[:3]))
     from .autopilot import Autopilot
     from .inbox import scan
 
@@ -627,8 +662,159 @@ def cmd_serve(a: argparse.Namespace) -> int:
         on = a.autopilot or a.settings.autopilot
         print(f"autopilot: {'on' if on else 'off in the settings'}, every {a.settings.inbox_poll_seconds:g} s")
     # not 0 when the settings page installs an update: the launcher (start.bat) restarts it (desk.update)
-    return serve(url, host=a.host, port=a.port, snapshots=None if a.no_worker else a.settings.snapshot_cache,
-                 adapter_status=lambda: scan.adapter_line(scan.adapter(a.settings)), autopilot=ap)
+    return serve(url, host=host, port=port, snapshots=None if a.no_worker else a.settings.snapshot_cache,
+                 adapter_status=lambda: scan.adapter_line(scan.adapter(a.settings)), autopilot=ap,
+                 auth=auth.AuthConfig.from_settings(st, host), tls=tls, allow_plain_http=st.allow_plain_http)
+
+
+# ---- users and network access (desk.api.auth) ------------------------------------------------------------------
+
+
+def _cli_actor() -> str:
+    try:
+        return "cli:" + getpass.getuser()
+    except (OSError, KeyError):  # no user name in this environment
+        return "cli"
+
+
+def _new_password(a: argparse.Namespace, name: str) -> str:
+    """``--password-stdin``: the first line of stdin (scripts); else asked twice without echo."""
+    if a.password_stdin:
+        return sys.stdin.readline().rstrip("\r\n")
+    first = getpass.getpass(f"password for {name}: ")
+    if getpass.getpass("again: ") != first:
+        raise store.InputError("the passwords differ")
+    return first
+
+
+def cmd_user(a: argparse.Namespace) -> int:
+    from .api import auth
+
+    url = store.resolve_url(a.settings)
+    store.migrate(url)
+    who = _cli_actor()
+    with store.connect(url) as con:
+        try:
+            if a.user_cmd == "list":
+                rows = auth.list_users(con)
+                if not rows:
+                    print("no users yet: desk user add NAME --role admin")
+                for r in rows:
+                    flags = [f for f, on in (("disabled", not r["active"]), ("locked", r["locked"]),
+                                             ("must change password", r["must_change_password"])) if on]
+                    last = r["last_login_at"].strftime("%Y-%m-%d %H:%M") if r["last_login_at"] else "never"
+                    print(f"{r['username']:<20} {r['role']:<7} last sign-in {last}"
+                          + (f"  [{', '.join(flags)}]" if flags else "")
+                          + (f"  {r['display_name']}" if r["display_name"] else ""))
+                return 0
+            name = auth.normalize_username(a.name)
+            if a.user_cmd == "add":
+                auth.add_user(con, name, a.role, _new_password(a, name), actor=who, display_name=a.display_name,
+                              must_change=a.temporary)
+                print(f"user {name} added, role {a.role}" + (" (changes the password at the first sign-in)"
+                                                              if a.temporary else ""))
+                if a.role == "admin" and not a.settings.auth:
+                    print("sign-in is still off (this computer only); for colleagues: desk lan enable")
+            elif a.user_cmd == "passwd":
+                auth.set_password(con, name, _new_password(a, name), actor=who, must_change=a.temporary)
+                print(f"password of {name} changed; its sessions are closed")
+            elif a.user_cmd == "role":
+                auth.update_user(con, name, actor=who, role=a.role)
+                print(f"{name}: role {a.role}")
+            elif a.user_cmd in ("disable", "enable"):
+                auth.update_user(con, name, actor=who, active=a.user_cmd == "enable")
+                print(f"{name}: {a.user_cmd}d")
+            elif a.user_cmd == "unlock":
+                auth.update_user(con, name, actor=who, unlock=True)
+                print(f"{name}: unlocked")
+        except auth.AuthError as e:
+            print(f"desk user: {e}", file=sys.stderr)
+            return 1
+    return 0
+
+
+def _lan_urls(host: str, port: int, tls: bool) -> list[str]:
+    from . import lan
+
+    return lan.lan_urls(host, port, tls)
+
+
+def firewall_command(port: int) -> str:
+    """The Windows firewall rule letting colleagues reach the port (``deskctl firewall add`` runs the same)."""
+    from . import lan
+
+    return (f'netsh advfirewall firewall add rule name="{lan.FIREWALL_RULE.format(port=port)}" dir=in action=allow '
+            f"protocol=TCP localport={port} profile=domain,private")
+
+
+def cmd_lan(a: argparse.Namespace) -> int:
+    from . import lan
+    from .api import auth
+    from .settings import desk_home, update_settings_json
+
+    st = a.settings
+    if a.lan_cmd == "status":
+        # the running server answers on 127.0.0.1 and, when it listens on the network, on this computer's addresses
+        doc = lan.status(st, run_probe=not a.no_probe, timeout=a.timeout)
+        if a.json:
+            print(json.dumps(doc, ensure_ascii=False, indent=1))
+        else:
+            lines = lan.status_lines(doc)
+            lines.insert(3, f"admins from other computers: {'yes' if st.admin_from_network else 'no'}")
+            print("\n".join(lines))
+            if doc["network"] and doc["firewall"]["present"] is not True:
+                print(f"Windows firewall (a command prompt run as administrator): {firewall_command(st.port)}")
+        p = doc["probe"]
+        return 1 if p and any(r["status"] != "ok" for r in [p["loopback"], *(p["lan"] if doc["network"] else [])]) \
+            else 0
+    if a.lan_cmd == "disable":
+        update_settings_json({"bind_host": "127.0.0.1", **({"auth": False} if a.auth_off else {})}, desk_home())
+        print("bind_host 127.0.0.1: this computer only" + ("; sign-in off" if a.auth_off else "; sign-in stays on")
+              + ". Restart Desk Monitor (stop.bat, start.bat).")
+        return 0
+    if not a.self_signed and not a.plain_http and bool(a.cert) != bool(a.key):
+        print("desk lan enable: --cert and --key go together", file=sys.stderr)
+        return 2
+    if not (a.self_signed or a.cert or a.plain_http or (st.tls_cert and st.tls_key) or st.allow_plain_http):
+        print("desk lan enable: choose HTTPS (--self-signed, or --cert F --key F) or --plain-http", file=sys.stderr)
+        return 2
+    url = store.resolve_url(st)
+    store.migrate(url)
+    with store.connect(url) as con:
+        if not auth.has_admin(con):
+            print("desk lan enable: create the first admin first: desk user add NAME --role admin", file=sys.stderr)
+            return 1
+    changes: dict[str, Any] = {"auth": True, "bind_host": a.host}
+    if a.port:
+        changes["port"] = a.port
+    port = a.port or st.port
+    if a.self_signed:
+        names = list(dict.fromkeys(n for n in (a.name or []) + auth.local_names() if n))
+        crt, key = auth.self_signed_cert(st.home / "tls", names)
+        changes.update(tls_cert=str(crt), tls_key=str(key), allow_plain_http=None)
+        print(f"self-signed certificate {crt} for {', '.join(names) or 'localhost'}")
+        print("  browsers warn about it («Подключение не защищено»): each colleague confirms it once "
+              "(«Дополнительно» -> «Перейти на сайт»), or IT issues a certificate of the corporate CA (--cert, --key)")
+    elif a.cert:
+        for f in (a.cert, a.key):
+            if not Path(f).is_file():
+                print(f"desk lan enable: {f} not found", file=sys.stderr)
+                return 2
+        changes.update(tls_cert=str(Path(a.cert).resolve()), tls_key=str(Path(a.key).resolve()),
+                       allow_plain_http=None)
+    elif a.plain_http:
+        changes.update(allow_plain_http=True, tls_cert=None, tls_key=None)
+        print("plain HTTP on the network: passwords and data cross it unencrypted; the pages show a warning")
+    if a.admin_from_network is not None:
+        changes["admin_from_network"] = a.admin_from_network
+    update_settings_json(changes, desk_home())
+    st = load()
+    tls = bool(st.tls_cert and st.tls_key)
+    print(f"sign-in on; listens on {st.bind_host}:{port}. Restart Desk Monitor (stop.bat, then start.bat).")
+    print("colleagues open: " + ", ".join(_lan_urls(st.bind_host, port, tls)))
+    print("Windows firewall, once, in a command prompt run as administrator: desk.bat firewall add")
+    print(f"  (it runs: {firewall_command(port)})")
+    return 0
 
 
 def cmd_cycle(a: argparse.Namespace) -> int:
@@ -833,8 +1019,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="demo: the S1 demo book; test: the S3 test book (three books, coverage cases)")
     d.set_defaults(fn=cmd_demo_book)
     sv = sub.add_parser("serve", help="the desk API and the Desk Monitor prototype on the store")
-    sv.add_argument("--host", default="127.0.0.1")
-    sv.add_argument("--port", type=int, default=8100)
+    sv.add_argument("--host", help=f"address to listen on (default: the setting bind_host, {settings.bind_host}); "
+                    "another than 127.0.0.1 needs sign-in (desk lan enable)")
+    sv.add_argument("--port", type=int, help=f"default: the setting port, {settings.port}")
     sv.add_argument("--no-worker", action="store_true",
                     help="no exact scenario worker (jobs stay queued); it reprices from DESK_SNAPSHOT_CACHE")
     sv.add_argument("--autopilot", action=argparse.BooleanOptionalAction, default=None,
@@ -875,6 +1062,61 @@ def main(argv: list[str] | None = None) -> int:
     hsy.add_argument("--budget", type=float, default=600.0, help="seconds at most (default 600); run it again to go on")
     hsy.add_argument("--verbose", action="store_true", help="print each query")
     hsy.set_defaults(fn=cmd_history)
+    us = sub.add_parser("user", help="users of the monitor (sign-in, desk.api.auth): viewer, trader, admin")
+    usub = us.add_subparsers(dest="user_cmd", required=True)
+    usub.add_parser("list", help="the users, their roles and last sign-in").set_defaults(fn=cmd_user)
+    ua = usub.add_parser("add", help="add a user; the password is asked twice (or --password-stdin)")
+    ua.add_argument("name", help="login: latin letters, digits, . _ - (e.g. ivanov)")
+    ua.add_argument("--role", required=True, choices=("viewer", "trader", "admin"),
+                    help="viewer: read; trader: also scenario jobs, the autopilot's run, aliases; admin: also "
+                    "settings, adapter, updates, users")
+    ua.add_argument("--display-name", help="the name shown in the header (e.g. Иванов И.)")
+    ua.add_argument("--temporary", action="store_true", help="the user changes the password at the first sign-in")
+    ua.add_argument("--password-stdin", action="store_true", help="read the password from the first line of stdin")
+    ua.set_defaults(fn=cmd_user)
+    up = usub.add_parser("passwd", help="set a user's password (closes the user's sessions)")
+    up.add_argument("name")
+    up.add_argument("--temporary", action="store_true", help="to be changed at the next sign-in")
+    up.add_argument("--password-stdin", action="store_true")
+    up.set_defaults(fn=cmd_user)
+    ur = usub.add_parser("role", help="change a user's role")
+    ur.add_argument("name")
+    ur.add_argument("role", choices=("viewer", "trader", "admin"))
+    ur.set_defaults(fn=cmd_user)
+    for verb, what in (("disable", "no sign-in (sessions closed); kept in the audit"), ("enable", "sign-in again"),
+                       ("unlock", "clear the lockout after wrong passwords")):
+        uv = usub.add_parser(verb, help=what)
+        uv.add_argument("name")
+        uv.set_defaults(fn=cmd_user)
+    ln = sub.add_parser("lan", help="access from other computers: sign-in on, listen on the network")
+    lsub = ln.add_subparsers(dest="lan_cmd", required=True)
+    ls = lsub.add_parser("status", help="sign-in, address, HTTPS and its certificate's names, the firewall rule, the "
+                         "URLs for colleagues, and a check of the running server on 127.0.0.1 and this computer's "
+                         "network addresses (exit 1 when one does not answer)")
+    ls.add_argument("--no-probe", action="store_true", help="skip the check of the running server")
+    ls.add_argument("--timeout", type=float, default=3.0, help="seconds per address checked (default 3)")
+    ls.add_argument("--json", action="store_true", help="as JSON")
+    ls.set_defaults(fn=cmd_lan)
+    le = lsub.add_parser("enable", help="sign-in on and listen on the network (needs an admin: desk user add); "
+                         "takes effect after a restart")
+    le.add_argument("--host", default="0.0.0.0", help="address to listen on (default 0.0.0.0: every network "
+                    "interface; or this computer's address on the office network)")
+    le.add_argument("--port", type=int, help=f"port (default: the setting port, {settings.port})")
+    tls = le.add_mutually_exclusive_group()
+    tls.add_argument("--self-signed", action="store_true", help="HTTPS with a certificate made here (browsers warn "
+                     "until each colleague accepts it)")
+    tls.add_argument("--cert", help="HTTPS with this PEM certificate (e.g. from the corporate CA); with --key")
+    tls.add_argument("--plain-http", action="store_true", help="no HTTPS: passwords cross the network unencrypted "
+                     "(a warning on every page)")
+    le.add_argument("--key", help="the certificate's PEM private key")
+    le.add_argument("--name", action="append", help="with --self-signed: another host name or address the "
+                    "certificate covers (repeatable; this computer's names are added)")
+    le.add_argument("--admin-from-network", action=argparse.BooleanOptionalAction, default=None,
+                    help="admins may use the settings from other computers (default: on)")
+    le.set_defaults(fn=cmd_lan)
+    ld = lsub.add_parser("disable", help="listen on 127.0.0.1 again (this computer only)")
+    ld.add_argument("--auth-off", action="store_true", help="also turn sign-in off")
+    ld.set_defaults(fn=cmd_lan)
     c = sub.add_parser("config", help="print the effective settings (token masked)")
     c.set_defaults(fn=cmd_config)
     a = ap.parse_args(argv)

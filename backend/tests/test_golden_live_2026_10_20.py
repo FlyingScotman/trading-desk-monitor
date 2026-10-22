@@ -15,7 +15,8 @@ Checked against MOEX's own figures in the snapshot (core 0.33, the backend on it
 - CS01 / OFZ basis by tenor bucket sums to the spread risk;
 - the FX bonds' PnL 19.10 -> 20.10 at the MOEX 19:00 rate (owner, 21.10): FX +3,618 RUB on 1,000 bonds of
   RU000A10D806, not -74,036 at the CBR rate in force (the CBR move from 83.6177 to 82.8504 vs the market's from
-  82.8504 to 82.8879); the CBR figure stays beside it as ``fx_gross_cbr``.
+  82.8504 to 82.8879); the CBR figure stays beside it as ``fx_gross_cbr``. Their carry at their yield (batch 1,
+  item 5: no USD / CNY curve in these snapshots, the fallback rung) is out of «Прочее»: +2,225 RUB.
 """
 
 from __future__ import annotations
@@ -97,11 +98,15 @@ def test_fx_bonds_pnl_at_the_19_00_rate(run):
     o = outs["RU000A10D806"]
     p = o.pnl
     assert p.fx_gross == pytest.approx(3618.34, abs=0.01) and p.fx_gross_cbr == pytest.approx(-74036.01, abs=0.01)
-    assert p.other == pytest.approx(41468.06, abs=0.01) and p.total == pytest.approx(45086.40, abs=0.01)
+    # batch 1, item 5: a day of carry at the bond's yield (10.6878 %) out of other; without a USD curve the yield move
+    # stays in other
+    assert p.carry == pytest.approx(2225.30, abs=0.01) and p.extra()["method"] == "desk-flash-yield-v1"
+    assert p.other == pytest.approx(41468.06 - 2225.30, abs=0.01) and p.total == pytest.approx(45086.40, abs=0.01)
     for s, ccy in FX.items():
         v = outs[s].valuation
         assert any("MOEX 19:00" in a for a in v.assumptions), s
         q = outs[s].pnl
+        assert q.carry > 0 and q.carry + q.other + q.fx_gross == pytest.approx(q.total), s
         delta = q.v0 / (82.8504 if ccy == "USD" else 12.4176)  # the D-1 FX delta at the 19.10 19:00 rate
         now = ctx.market.fx(ccy)["moex_19"]
         assert q.fx_gross == pytest.approx(delta * (now - (82.8504 if ccy == "USD" else 12.4176)), rel=1e-9), s

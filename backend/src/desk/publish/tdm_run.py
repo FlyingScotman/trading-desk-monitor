@@ -20,9 +20,14 @@ previous market says so in a WARN line: no position has a PnL then, and none is 
 Risk by curve (R8): a row's ``risk`` and ``gamma`` are per published curve (``BondValuation.risk``, the Hessian
 factors ``IR|<curve>|<bucket>``): ``RUB RUONIA`` (the discount curve of every RUB bond, a RUONIA floater's
 projection), ``RUB KEY`` (a key-rate floater's projection), ``RUB OFZ`` (the KBD: only on a date without RUONIA,
-``valuation.bonds.discount_curve``), a currency's curve (``USD``: a foreign bond's duration proxy, a report's
-DV01). ``curves_reference`` publishes the KBD, the RUONIA OIS and key-rate curves the run built (zero rates and the
-day's move) and a curve without points for every other curve of the risk; ``dv01`` stays the sum over the curves.
+``valuation.bonds.discount_curve``), core's foreign curves (``curves.fx``: ``CNY XCCY`` a CNY bond's, ``USD UST`` /
+``EUR AAA`` the par-yield proxies with ``proxy_curves_for_risk``, ``<CCY> FX`` an FX derivative's foreign leg), a
+currency's curve (``USD``: a foreign bond's duration proxy on the fallback ladder, a report's DV01). ``curves_reference``
+publishes the KBD, the RUONIA OIS and key-rate curves and the foreign curves the run built (zero rates and the day's
+move; a foreign curve with its own ``ccy``) and a curve without points for every other curve of the risk; ``dv01``
+stays the sum over the curves. An FX derivative valued by core from its terms (``valuation.derivatives``) is a row
+``instr_type`` FX with its ``fx_delta`` per currency (core's spot equivalent), its Hessian over the rate and FX factors
+and ``extra`` legs, ``ocp_amount``, ``basis01``, ``fixings``, ``core``; ``fx_log`` says what of the FX book was valued how.
 ``spread_curve`` is the curve ``spread_bp`` is to (the discount curve).
 
 Display fields (R9 static audit, D1-D8): a bond is named by MOEX's full ``name`` (the short name in
@@ -56,6 +61,7 @@ from rub_fixed_income import (
     RISK_BUCKETS,
     RISK_PILLARS,
     CoreRejection,
+    CurveEntry,
     DiscountCurve,
     kbd_effective_yield,
     portfolio_result_to_json,
@@ -64,21 +70,23 @@ from rub_fixed_income import __version__ as CORE_VERSION
 from tdm.writer import Run
 
 from .. import __version__ as BACKEND_VERSION
+from ..curves import fx as fxcurves
 from ..curves import proxy, rates
 from ..marketdata import ratings
 from ..marketdata.adapter import MarketView
 from ..marketdata.bundle import SnapshotError
 from ..marketdata.static_facts import SECTOR_LABELS
-from ..orchestrator import EodContext, Outcome
+from ..orchestrator import EodContext, Outcome, market_rates
 from ..pnl.direct import DirectPnl
 from ..pnl.flash import METHOD
-from ..pnl.reasons import FX_METHOD, NO_PNL_TEXT, REPORTED_METHOD, RUN_NO_PREV_MARKET
+from ..pnl.reasons import CORE_FX_METHOD, FX_METHOD, NO_PNL_TEXT, REPORTED_METHOD, RUN_NO_PREV_MARKET
 from ..settings import REPO_ROOT
 from ..store import PositionInputs
 from ..valuation.bonds import OFZ_CURVE, RISK_CURVES, BondValuation, coupon_view, implied_frequency
 from ..valuation.fallback import METHOD as SIMPLE_METHOD
 from ..valuation.fallback import QUALITIES, SimplePnl, fx_rate, market_fx
 from ..valuation.positions import normalised
+from .summary import MINFIN_CLASSES, MINFIN_INN, NOT_MINFIN_CLASSES
 
 ASSET_CLASS = {"ofz_pd": "ОФЗ-ПД", "ofz_ad": "ОФЗ-АД", "ofz_pk": "ОФЗ-ПК", "ofz_in": "ОФЗ-ИН",
                "subfederal": "Субфедеральные", "municipal": "Муниципальные", "corporate": "Корпоративные"}
@@ -158,7 +166,11 @@ def _issuer_key(ctx: EodContext, o: Outcome) -> tuple[str, dict[str, Any]]:
     assert o.terms is not None
     ref = ctx.reference_facts
     iss = ref.issuer(o.terms.issuer_id) or ctx.static.issuer_of(o.terms)
-    is_gov = o.terms.bond_class.startswith("ofz") or bool(iss and iss.is_sovereign)
+    # the Minfin (R39, ``summary.is_minfin``): by the issuer -- the hub's sovereign flag or the Minfin's INN -- or the
+    # classes the hub derives from that INN (OFZ, the Minfin's FX bonds); a foreign sovereign is not it
+    cls = o.terms.bond_class
+    is_gov = cls not in NOT_MINFIN_CLASSES and (cls.startswith("ofz") or cls in MINFIN_CLASSES or bool(
+        iss and (iss.is_sovereign or iss.inn == MINFIN_INN)))
     rt = ref.ratings.issuer(o.terms.issuer_id)
     # the sovereign is not rated on the agencies' national scales: no rating rather than «б/р»
     label = None if is_gov and rt is None and ref.ratings.has_data else ref.ratings.label(rt)
@@ -231,6 +243,20 @@ def _prev_rates(ctx: EodContext, prev: MarketView) -> dict[str, DiscountCurve]:
     return out
 
 
+def _prev_fx(ctx: EodContext, prev: MarketView, ois: DiscountCurve | None) -> dict[str, DiscountCurve]:
+    """The previous date's foreign curves (``curves.fx.with_fx`` on its market, this run's static and the previous
+    RUONIA OIS curve), only for the day's move: one that cannot be built is left out (move 0)."""
+    if ois is None:
+        return {}
+    try:
+        base = prev.core_market(ctx.static)
+        core = replace(base, curves=(*base.curves, CurveEntry(rates.RUONIA_OIS_CURVE_ID, rates.RUONIA_OIS_SPEC, ois)))
+        _, fxm = fxcurves.with_fx(prev, ctx.static, core, market_rates(prev), ctx.fx_options)
+    except (rates.RatesInputError, SnapshotError, CoreRejection, ValueError, KeyError):
+        return {}
+    return {cid: c.curve for cid, c in fxm.curves.items()}
+
+
 def curves_reference(ctx: EodContext, prev: MarketView | None, rows: list[dict[str, Any]],
                      fx: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The run's curves: the KBD (``RUB OFZ``), the RUONIA OIS and key-rate curves built for the run, and a curve
@@ -247,8 +273,16 @@ def curves_reference(ctx: EodContext, prev: MarketView | None, rows: list[dict[s
         if cid in built:
             out.append({"curve_id": RISK_CURVES[cid], "name": name, "ccy": "RUB", "kind": "swap",
                         "points": _zero_points(built[cid], old.get(cid))})
+    risk_curves = dict.fromkeys(c for r in rows for c in r.get("risk") or {})
+    foreign = [c for cid, c in ctx.fx.curves.items() if cid in risk_curves or c.ccy in fxcurves.MAIN_CCYS]
+    if foreign:  # core's foreign curves of the run (curves.fx): zero rates, the move on the previous date's
+        old_fx = _prev_fx(ctx, prev, old.get(rates.RUONIA_OIS_CURVE_ID)) if prev else {}
+        for c in foreign:
+            out.append({"curve_id": c.curve_id, "name": c.name, "ccy": c.ccy,
+                        "kind": "bond" if c.kind == "proxy" else "swap",
+                        "points": _zero_points(c.curve, old_fx.get(c.curve_id))})
     have = {c["curve_id"] for c in out}
-    for c in dict.fromkeys(c for r in rows for c in r.get("risk") or {}):
+    for c in risk_curves:
         if c not in have:  # a currency's curve; a RUB curve core did not build keeps its risk, without points
             ccy = c if c in {r["ccy"] for r in fx} else "RUB"
             pts = _proxy_points(ctx, prev, c) if ctx.proxy_curves else None
@@ -390,28 +424,37 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
     if amount is None:
         amount = v.pv_rub / rate
         why.append("notional unknown: the market value is shown")
+    core = bool(v.extra.get("core"))  # a derivative valued by core from its terms (valuation.derivatives)
     vd = x.get("value_date")
+    if core and v.horizon_kind == "value_date":
+        vd = v.horizon_date
     mat = x.get("maturity_date") or vd
     name = x.get("source_instrument_name") or (f"{ccy} {vd or 'spot'}" if fx else x.get("source_instrument_id"))
     if kind == "bond":  # unmapped: the bank's name (D6), else its ISIN
         name = (name or x.get("isin") or pid) + FROM_REPORT
+    if core:  # core's spot equivalent per currency, not the notional (the OCP amounts are in extra.ocp_amount)
+        delta = {c: d for c, d in (v.fx_delta or {}).items() if c != "RUB"}
+    else:
+        delta = {ccy: amount if fx else v.pv_rub / rate} if ccy != "RUB" else {}
     return {
-        "position_id": pid, "book_id": book, "instr_type": itype, "asset_class": aclass, "segment": segment,
-        "name": name or pid, "isin": x.get("isin"), "issuer": None, "ccy": ccy,
+        "position_id": pid, "book_id": book, "instr_type": "FX" if core else itype, "asset_class": aclass,
+        "segment": segment, "name": name or pid, "isin": x.get("isin"), "issuer": None, "ccy": ccy,
         "maturity": mat.isoformat() if mat else None,
-        "tenor_y": (mat - ctx.business_date).days / 365.25 if mat and not fx else None,
-        "side": ("BUY" if amount >= 0 else "SELL") if fx else "long" if amount >= 0 else "short",
+        "tenor_y": (mat - ctx.business_date).days / 365.25 if mat and (core or not fx) else None,
+        "side": ("BUY" if amount >= 0 else "SELL") if fx or core else "long" if amount >= 0 else "short",
         "notional": amount, "notional_rub": amount * rate, "price": _num(v.clean_pct), "mv": v.pv_rub / rate,
         "mv_rub": v.pv_rub, "dv01": v.dv01_rub, "cs01": v.spread01_rub, "ofz_spr01": 0.0,
-        "risk": risk_by_curve(v), "gamma": [],
+        "risk": risk_by_curve(v), "gamma": [[a, b, g] for a, b, g in v.hessian] if core else [],
         "instrument_id": x.get("moex_secid") or x.get("source_instrument_id"), "new_today": False,
-        **({"fx_delta": {ccy: amount if fx else v.pv_rub / rate}} if ccy != "RUB" else {}),
+        **({"fx_delta": delta} if delta else {}),
         **({"pnl": o.pnl.as_tdm()} if o.pnl else {}),
         "extra": {
-            "valuation": "reported" if v.quality == "reported_value" else "approximated", "quality": v.quality,
+            "valuation": ("computed" if core else "reported" if v.quality == "reported_value" else "approximated"),
+            "quality": v.quality,
             "assumptions": why, "quantity_bonds": qty, **({"not_exact_reason": o.reason} if o.reason else {}),
             **({"pnl": o.pnl.extra()} if o.pnl else {}),
-            **({"fx_rate": rate} if ccy != "RUB" else {}), **reported(x),
+            **({"fx_rate": rate} if ccy != "RUB" else {}), **v.extra, **reported(x),
+            **({"fx_delta_basis": "notional (no trade terms: undiscounted)"} if fx and not core and delta else {}),
         },
     }
 
@@ -618,7 +661,10 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
         fx = ctx.market.latest_fixing(code)
         if fx:
             indices.append({"index_name": name, "value": fx[1]})
-    rates_fx = _fx_rows(ctx, prev, row_currencies(rows))
+    # and the currencies of the rows not valued (R45: an OMR row without MV left the page without an OMR rate, so it
+    # could not say what the row is in roubles)
+    unvalued = [x for pid, _, o in positions if o.valuation is None and (x := extra.get(pid))]
+    rates_fx = _fx_rows(ctx, prev, [*row_currencies(rows), *row_currencies(unvalued)])
     reference = {
         "books": book_rows(used, inputs.books if inputs else {}),
         "issuers": list(issuers.values()),
@@ -638,7 +684,7 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
                              f"{ctx.business_date}); позиции без PnL, а не с нулём")))
     log += [("WARN", s) for s in skipped + approx + no_pnl]
     direct = [o.pnl for _, _, o in positions if isinstance(o.pnl, DirectPnl)]
-    for method, flag in ((FX_METHOD, "по курсу"), (REPORTED_METHOD, "по отчёту")):
+    for method, flag in ((FX_METHOD, "по курсу"), (REPORTED_METHOD, "по отчёту"), (CORE_FX_METHOD, "ядром")):
         if xs := [x for x in direct if x.method == method]:
             log.append(("INFO", f"PnL {flag} ({method}) у {len(xs)} поз.: {sum(x.total for x in xs):,.0f} ₽"))
     with_pnl = [o.pnl for _, _, o in positions if o.pnl and not isinstance(o.pnl, DirectPnl)]
@@ -695,7 +741,44 @@ def rates_log(ctx: EodContext, positions: list[tuple[str, str, Outcome]], rows: 
     if floaters:
         out.append(("INFO", "флоатеры по индексам: " + "; ".join(
             f"{b}: " + ", ".join(f"{k} {n}" for k, n in sorted(c.items())) for b, c in sorted(floaters.items()))))
+    out += fx_log(ctx, positions)
     return out
+
+
+def fx_summary(ctx: EodContext, positions: list[tuple[str, str, Outcome]]) -> dict[str, Any]:
+    """What was valued how in the FX and derivative book (M6): rows by core (per product), by the report or the
+    notional (per reason), foreign bonds by curve, and the FX inputs that are not built (``curves.fx`` codes)."""
+    core: Counter[str] = Counter()
+    other: Counter[str] = Counter()
+    bonds: Counter[str] = Counter()
+    for _, _, o in positions:
+        v = o.valuation
+        if v is not None and v.extra.get("core"):
+            core[v.extra["core"]["product"]] += 1
+        elif o.terms is None and v is not None and v.price_basis == "fx" and v.horizon_kind == "value_date" \
+                and v.horizon_date > ctx.business_date:
+            other[o.reason or "no_reason"] += 1
+        elif o.terms is not None and v is not None and v.foreign:
+            bonds[f"{v.spread_curve} {v.quality}"] += 1
+    return {"core": dict(core), "not_core": dict(other), "foreign_bonds": dict(bonds),
+            "inputs_missing": list(ctx.fx.lineage.get("codes") or [])}
+
+
+def fx_log(ctx: EodContext, positions: list[tuple[str, str, Outcome]]) -> list[tuple[str, str]]:
+    """The run log's line on the FX book (``fx_summary``), when there is any."""
+    s = fx_summary(ctx, positions)
+    if not (s["core"] or s["not_core"] or s["foreign_bonds"]):
+        return []
+    parts = []
+    if s["core"]:
+        parts.append("ядром: " + ", ".join(f"{k} {n}" for k, n in sorted(s["core"].items())))
+    if s["not_core"]:
+        parts.append("форварды не ядром: " + ", ".join(f"{k} {n}" for k, n in sorted(s["not_core"].items())))
+    if s["foreign_bonds"]:
+        parts.append("валютные облигации: " + ", ".join(f"{k} {n}" for k, n in sorted(s["foreign_bonds"].items())))
+    if s["inputs_missing"]:
+        parts.append("нет входов: " + ", ".join(s["inputs_missing"]))
+    return [("INFO", "FX-книга: " + "; ".join(parts))]
 
 
 def publish(db: str, ctx: EodContext, positions: list[tuple[str, str, Outcome]], *,
