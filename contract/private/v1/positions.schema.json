@@ -98,6 +98,9 @@
     "contract_rate_pct": {
       "$ref": "#/$defs/amount"
     },
+    "purchase_accrued_ccy": {
+      "$ref": "#/$defs/amount"
+    },
     "maturity_date": {
       "$ref": "#/$defs/date"
     },

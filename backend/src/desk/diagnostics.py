@@ -1063,6 +1063,9 @@ def run_summary(con: psycopg.Connection, r: dict[str, Any], scrub: Scrubber) -> 
         "position_sets": len(r["position_set_ids"] or []),
         "positions_carried_books": len(pos.get("carried_from") or {}),
         "position_sources": dict(Counter((s or {}).get("source") for s in (pos.get("sources") or {}).values())),
+        # B1: whether the run funded its book and how many problems it had (no amounts: they are the desk's figures)
+        "funding": {k: (lin.get("funding") or {}).get(k) for k in ("status", "problems", "rules")}
+        if lin.get("funding") else None,
     }
     rows = con.execute(POS_SQL, (r["run_id"],)).fetchall()
     quality, reasons, itype, ccy, disc, risk, no_pnl, methods, flags, assume = (Counter() for _ in range(10))

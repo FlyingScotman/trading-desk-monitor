@@ -1,4 +1,4 @@
-"""Private contract 1.2 (work package P1): FUTURES books, the ocp, cash_balances, pnl_official and trade_terms
+"""Private contract 1.2 (work package P1) and 1.3 (B1: funding_policy): FUTURES books, the ocp, cash_balances, pnl_official and trade_terms
 schemas, reference() entities and funding rules, describe() settings tabs, multi-date cash history, the generic
 dataset storage and the reference adapter over all of them. Synthetic data only."""
 
@@ -26,7 +26,7 @@ DS = FIX / "private" / "v1" / "datasets"
 DS_CONFIG, SNAPS = DS / "config", FIX / "mdhub_v1"
 DOC = REPO / "docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md"
 D = date.fromisoformat
-NEW = ("ocp", "cash_balances", "pnl_official", "trade_terms", "entities", "funding_rules")
+NEW = ("ocp", "cash_balances", "pnl_official", "trade_terms", "entities", "funding_rules", "funding_policy")
 BOOKS = [{"book_id": b, "name": b, "desk": "Rates", "book_type": t, "entity": e, "active": True}
          for b, t, e in (("T1", "TRADING", "ENT1"), ("D1", "DERIVS", "ENT1"), ("F1", "FUTURES", "ENT1"),
                          ("C1", "TRADING", "ENT2"))]
@@ -70,15 +70,15 @@ def test_new_schemas_equal_the_08_tables_and_their_templates(name: str) -> None:
     assert raw.startswith(b"\xef\xbb\xbf") and raw.endswith(b"\r\n") and raw.count(b"\n") == 1
     assert raw[3:].decode().strip().split(";") == schema_fields(name)[0]
     schema = json.loads((REPO / f"contract/private/v1/{name}.schema.json").read_text(encoding="utf-8"))
-    assert schema["$id"] == f"private/1.2/{name}" and schema["additionalProperties"] is False
+    assert schema["$id"] == f"private/1.3/{name}" and schema["additionalProperties"] is False
 
 
-def test_contract_is_1_2_and_keys_are_schema_fields() -> None:
-    assert CONTRACT == "private/1.2" and "cash_balances" in MULTI_DATE_DATASETS and "ocp" not in MULTI_DATE_DATASETS
+def test_contract_is_1_3_and_keys_are_schema_fields() -> None:
+    assert CONTRACT == "private/1.3" and "cash_balances" in MULTI_DATE_DATASETS and "ocp" not in MULTI_DATE_DATASETS
     for ds, keys in DATASET_KEYS.items():
         fields = schema_fields(ds)[0]
         assert not fields or set(keys) <= set(fields), ds  # trades: no schema yet
-    assert "## 10 Private input contract v1 (`private/1.2`)" in DOC.read_text(encoding="utf-8")
+    assert "## 10 Private input contract v1 (`private/1.3`)" in DOC.read_text(encoding="utf-8")
     for phase in ("A7", "A8", "A9", "A10"):
         assert phase in DOC.read_text(encoding="utf-8").split("## 11 Integration points", 1)[1].split("## 12", 1)[0]
 
@@ -90,7 +90,8 @@ def test_futures_book_type_and_backward_compatible_books() -> None:
     assert [(e.code, e.field) for e in errs] == [("bad_value", "book_type")]
     # a 1.1 reference without entities or funding rules: tables absent, nothing else asked
     tables, issues = check_reference_tables({"books": [{**BOOKS[0], "_src": "L2"}]})
-    assert tables == {"books": [{**BOOKS[0], "_src": "L2"}], "entities": None, "funding_rules": None}
+    assert tables == {"books": [{**BOOKS[0], "_src": "L2"}], "entities": None, "funding_rules": None,
+                      "funding_policy": None}
     assert issues == [] and tuple(tables) == REFERENCE_KINDS
 
 
@@ -218,12 +219,12 @@ def test_settings_tabs_are_checked_and_never_fatal() -> None:
 
 def test_reference_adapter_declares_every_dataset_and_reads_the_reference_tables(tmp_path: Path) -> None:
     h = load_adapter(None, str(DS_CONFIG), None)
-    assert h.ok and h.describe["contract"] == "private/1.2" and h.describe["sources"][0]["source"] == "positions_csv"
+    assert h.ok and h.describe["contract"] == "private/1.3" and h.describe["sources"][0]["source"] == "positions_csv"
     assert {s["dataset"] for s in h.describe["sources"]} == {"positions", "ocp", "cash_balances", "pnl_official",
                                                             "trade_terms"}
     rep = conformance.check(None, [str(DS)], stub_ctx=True, config_dir=str(DS_CONFIG))
     assert rep.ok, rep.text()
-    assert rep.reference == {"books": 4, "entities": 2, "funding_rules": 7}
+    assert rep.reference == {"books": 4, "entities": 2, "funding_rules": 7, "funding_policy": 2}
     g = {k[0]: v for k, v in rep.groups.items() if k[1] == "2026-10-20"}
     assert g["ocp_csv"].statuses == {"accepted": 1} and g["ocp_csv"].units == {"accepted": 2}
     assert g["cash_balances_csv"].units == {"accepted": 3} and g["cash_balances_csv"].rows == 6
@@ -231,7 +232,7 @@ def test_reference_adapter_declares_every_dataset_and_reads_the_reference_tables
     assert g["trade_terms_csv"].statuses == {"partially_accepted": 1}
     assert g["trade_terms_csv"].units == {"accepted": 1, "rejected": 1}
     j = rep.to_json()
-    assert j["reference"] == {"books": "<10", "entities": "<10", "funding_rules": "<10"}
+    assert j["reference"] == {"books": "<10", "entities": "<10", "funding_rules": "<10", "funding_policy": "<10"}
     assert "reference: books <10" in rep.text() and "ENT1" not in rep.text() and "KEY_RATE" not in rep.text()
 
 
@@ -269,7 +270,7 @@ def test_scan_stores_the_datasets_with_revisions_and_stock_flow_reads(con, tmp_p
     r = scan.scan(con, s)
     assert r.ok and r.files == {"accepted": 3, "partially_accepted": 1}, r.text()
     assert r.units == {"accepted": 8, "rejected": 1} and r.revisions == 8
-    assert r.reference_revised == {"entities": 2, "funding_rules": 7} and "reference revised" in r.text()
+    assert r.reference_revised == {"entities": 2, "funding_rules": 7, "funding_policy": 2} and "reference revised" in r.text()
 
     ocp = store.dataset_rows(con, "ocp", D("2026-10-20"))
     assert sorted((x["book_id"], x["ccy"], x["ocp_ccy"]) for x in ocp.rows) == [("D1", "CNY", "-2500000.5"),

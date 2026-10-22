@@ -28,7 +28,7 @@ REST JSON plus an event stream. The OpenAPI is generated from the backend (FastA
 | `/api/v1/runs/{run_id}` | GET | Run header and full lineage |
 | `/api/v1/runs/{run_id}/positions` | GET (fields=…, book, entity) | Per-position facts: valuation, greeks (sparse, factor-indexed), PnL components, funding, OCP contribution, coverage |
 | `/api/v1/runs/{run_id}/aggregates` | GET (dims=book,curve,bucket…) | Server-computed cubes for first paint and reconciliation of screen totals |
-| `/api/v1/runs/{run_id}/funding` | GET | Funding lines (POS/HTM/CASH/REPO), OCP transfers |
+| `/api/v1/runs/{run_id}/funding` | GET | Funding of the run (B1, built): state (`computed`, `not_configured`, …), totals, by book with the write-off, by entity, lines (POS/HTM/CASH/ENTITY_CASH/REPO), problems, the policy and its provisional fields; OCP transfers later (B2) |
 | `/api/v1/runs/{run_id}/pnl` | GET | Flash PnL, explain components, official attachments with revision and coverage, breaks |
 | `/api/v1/runs/{run_id}/scenarios` | GET | Stored T3/T2 results for this run, by definition hash, with coverage |
 | `/api/v1/scenario-defs` | GET, POST, PUT, DELETE | Preset (read-only), historical (read-only) and per-user/shared custom scenario definitions |

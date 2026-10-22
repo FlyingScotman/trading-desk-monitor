@@ -1,7 +1,7 @@
 """Compatibility adapter (05 §4): ``window.DESK`` from the desk store, in the shape ``tdm.assemble.assemble``
 produces. A port of that function onto the store's rows (run_position.fact/pnl, run_reference); the tdm
 writer's defaults (zero cs01/jtd, nonzero risk/FX/gamma only, RUB at 1) are applied here. What the store
-does not hold yet (funding, OCP, scenario results, official PnL, CBR meetings, bond quotes) is rendered as the tdm
+does not hold yet (OCP, scenario results, official PnL, CBR meetings, bond quotes) is rendered as the tdm
 assembler renders a run without it. ``history`` is the default runs of the earlier dates, where tdm's
 desk_history holds the latest published EOD run of each date (any cut). A position the run did not value (no
 fact: no data at all, an OTC row without the report's value) is listed after the valued ones with ``notValued``,
@@ -16,7 +16,13 @@ false, ``reason``, ``reasonText`` and ``reasonDetail``; one with PnL has its ``m
 and a PnL by the reports (``pnl.reasons.REPORTED_METHOD``) is in ``pnl.reported``, not in ``other``. ``history``
 has null PnL for a run where no position has one. ``riskNotes`` (R14, R15): what the run's risk by curve lacks (a
 rates curve missing from the hub's snapshot, a run made before the RUONIA discounting), so the risk views say it
-instead of showing a curve as silently zero. compat, removed with window.DESK (M7); never extended otherwise."""
+instead of showing a curve as silently zero. Funding (B1, ``publish.funding_run``): ``funding`` (the lines, in tdm's
+shape, with no FX revaluation and no FX delta: OQ-04), ``fundingPnl`` and ``fundingPnlByBook`` (the book-level lines;
+``inPositions``: what is in the positions' PnL), ``FUNDING_RULES`` (the adapter's rules the run used), a position's
+``pnl.funding`` (null, not 0, without funding: not configured, a problem) and ``fundingStatus`` (``fundingStatus``:
+state ``computed`` / ``not_configured`` / ``invalid_config`` / ``failed`` / ``not_computed``, its text, totals by
+book and entity, problems), the one key compat adds for it. compat, removed with window.DESK (M7); never extended
+otherwise."""
 
 from __future__ import annotations
 
@@ -31,6 +37,7 @@ from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
 from ..curves.rates import input_notes
 from ..marketdata import ratings
 from ..pnl.reasons import METHOD_TEXT, REPORTED_METHOD, RUN_NO_POSITION_PNL, RUN_NO_PREV_MARKET, no_pnl_text
+from ..publish.funding_run import NOT_COMPUTED, STATUS_TEXT
 from ..store import CURRENT_RUNS, DEFAULT_RUNS, slice_label
 
 PNL_KEYS = ("carry", "rolldown", "rates", "spread", "fx_gross", "fx_funding", "funding", "convexity",
@@ -341,7 +348,7 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
             "pnl": {
                 "carry": comp["carry"], "rolldown": comp["rolldown"], "rates": comp["rates"],
                 "spread": comp["spread"],
-                "fx": comp["fx_gross"] + comp["fx_funding"], "funding": comp["funding"],
+                "fx": comp["fx_gross"] + comp["fx_funding"], "funding": q.get("funding"),
                 "convexity": comp["convexity"], "newTrades": comp["new_trades"], "other": comp["other"] - reported,
                 "reported": reported,
                 "fxGross": comp["fx_gross"], "fxFunding": comp["fx_funding"], "fxGrossCbr": gross_cbr,
@@ -400,6 +407,7 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
     # no previous market: prevDate null (R10), the funding accrual still over the previous weekday
     prev = run["prev_date"] or _prev_weekday(run["business_date"])
     zero_book = {"carry": 0.0, "fx": 0.0, "fxCbr": 0.0, "fxAllocated": 0.0, "inPositions": 0.0}
+    funding = funding_view(ref.get("funding"), fx)
     completed = run["completed_at"]
     return {
         "asOf": as_of, "prevDate": run["prev_date"].isoformat() if run["prev_date"] else None,
@@ -410,16 +418,77 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         "FX_CBR_NEXT": fx_cbr_next, "FX_SOURCE": fx_source,
         "INDICES": indices, "ISSUERS": issuers, "RATING_ORDER": rating_order,
         "BOOKS": books, "SCENARIOS": scenarios, "scenarioResults": {},
-        "JTD_RECOVERY": 0.0, "FUNDING_RULES": [], "OCP_TRANSFERS": [],
+        "JTD_RECOVERY": 0.0, "FUNDING_RULES": funding["rules"], "OCP_TRANSFERS": [],
         "CBR_MEETINGS": [], "CARRY_SCENARIOS": DEFAULT_CARRY, "CARRY_HORIZONS": CARRY_HORIZONS,
         "official": {"asOf": as_of, "received": any(p["pnl"]["official"] is not None for p in positions),
                      "basis": "CBR", "receivedAt": None},
         "positions": positions, "riskNotes": risk_notes(run),
-        "funding": [], "fundingPnl": {"carry": 0.0, "fx": 0.0, "fxCbr": 0.0},
-        "fundingPnlByBook": {b: dict(zero_book) for b in books}, "history": history,
+        "funding": funding["lines"], "fundingPnl": funding["pnl"],
+        "fundingPnlByBook": {**{b: dict(zero_book) for b in books}, **funding["by_book"]},
+        "fundingStatus": funding["status"], "history": history,
         "source": {"kind": "db", "runId": rid, "runType": run["run_type"],
                    "publishedAt": completed.isoformat() if completed else None,
                    "libVersion": f"rub-fixed-income-core {run['core_version']}",
                    "marketSnapshot": run["market_snapshot_id"], "contractVersion": CONTRACT_VERSION,
                    **run_slice(run)},
     }
+
+
+FUNDING_TYPES = {"POS": "Фондирование позиции (MV)", "HTM": "FTP HTM (контракт)", "CASH": "Остаток ДС",
+                 "ENTITY_CASH": "Остаток ДС юрлица", "REPO": "РЕПО"}
+"""A funding line's ``type`` in the Desk Monitor (tdm's ``funding_deal.type``)."""
+
+
+def funding_view(block: dict[str, Any] | None, fx: dict[str, float]) -> dict[str, Any]:
+    """The run's funding block (``run_reference`` kind ``funding``) as window.DESK's ``funding``, ``fundingPnl``,
+    ``fundingPnlByBook``, ``FUNDING_RULES`` and ``fundingStatus``. A run before B1 has no block: state
+    ``not_computed``; a run whose adapter gave no rules: ``not_configured``; both with no lines and zero book sums,
+    as tdm shows a run without funding deals, and the state saying why."""
+    if not block:
+        block = {"status": NOT_COMPUTED, "text": STATUS_TEXT[NOT_COMPUTED]}
+    lines, by_book, pnl = [], {}, {"carry": 0.0, "fx": 0.0, "fxCbr": 0.0}
+    for x in block.get("lines") or []:
+        in_pos = bool(x.get("in_position"))
+        lines.append({
+            "id": x["key"], "book": x["book_id"], "kind": x["kind"], "positionId": x.get("position_id"),
+            "type": FUNDING_TYPES.get(x["kind"], x["kind"]), "ccy": x["ccy"], "amount": x["body_ccy"],
+            "amountRub": x["body_ccy"] * fx.get(x["ccy"], 1.0), "index": None, "spreadBp": None, "fixed": None,
+            "rate": x["rate_pct"], "rateExpr": x["rate_expr"], "benchmark": None,
+            "dayBasis": 360 if x.get("day_basis") == "ACT/360" else 365, "start": x["first_day"],
+            "maturity": None, "tenorY": 1 / 365, "counterparty": None, "collateral": None, "fxDelta": {},
+            "pnl": {"carry": x["interest_rub"], "fx": 0.0, "fxCbr": 0.0, "fxGross": 0.0, "fxGrossCbr": 0.0,
+                    "fxAllocated": 0.0, "inPosition": in_pos},
+            **({"ruleNote": x["note"]} if x.get("note") else {}),
+        })
+        b = by_book.setdefault(x["book_id"], {"carry": 0.0, "fx": 0.0, "fxCbr": 0.0, "fxAllocated": 0.0,
+                                              "inPositions": 0.0})
+        if in_pos:
+            b["inPositions"] += x["interest_rub"]
+            continue
+        b["carry"] += x["interest_rub"]
+        pnl["carry"] += x["interest_rub"]
+    rules = []
+    for r in block.get("rules") or []:
+        if r.get("active", True) is False:
+            continue
+        x = {"bookType": r.get("book_type"), "book": r.get("book_id"), "entity": r.get("entity"),
+             "instrument": r.get("instrument_id"), "ccy": r.get("ccy"), "index": r.get("index_code"),
+             "spreadBp": float(r["spread_bp"]) if r.get("spread_bp") is not None else None,
+             "fixed": float(r["fixed_rate_pct"]) if r.get("fixed_rate_pct") is not None else None,
+             "note": r.get("rule_id"), "basis": r.get("basis"), "rateKind": r.get("rate_kind"),
+             "validFrom": r.get("valid_from")}
+        rules.append({k: v for k, v in x.items() if v is not None and v != ""})
+    totals = block.get("totals")
+    status = {
+        "state": block.get("status"), "text": block.get("text"), "period": block.get("period"),
+        "total": totals["total"] if totals else None, "inPositions": totals["in_positions"] if totals else None,
+        "bookLevel": totals["book_level"] if totals else None,
+        "byBook": {b: {"total": v["total"], "inPositions": v["in_positions"], "bookLevel": v["book_level"],
+                       "problems": v.get("problems", 0), "base": v.get("base"), "writeOff": v.get("write_off")}
+                   for b, v in (block.get("by_book") or {}).items()},
+        "byEntity": block.get("by_entity") or {},
+        "problems": [{"kind": p["kind"], "ref": p["ref"], "book": p.get("book_id"), "reason": p["reason"]}
+                     for p in block.get("problems") or []],
+        "notes": block.get("notes") or [], "provisional": (block.get("policy") or {}).get("provisional") or [],
+    }
+    return {"lines": lines, "pnl": pnl, "by_book": by_book, "rules": rules, "status": status}

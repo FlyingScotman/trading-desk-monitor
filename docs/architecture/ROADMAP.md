@@ -49,6 +49,18 @@ Wave B, after wave A:
 | Package | What | Needs |
 |---|---|---|
 | B1 Funding in the run | `funding` and `fx_funding` in flash PnL, funding lines, `FUNDING_RULES` in compat, the currency liability in the FX delta of bond books (per OQ-04) | P1, P2, P8 |
+
+**B1 status (22 October 2026): done, except the OQ-04 part.** `publish/funding_run.py` runs the engine in every
+desk-store run (EOD and intraday; `desk_run.publish`): the adapter's `funding_rules`, `entities` and the new
+private/1.3 `funding_policy` (HTM base, DEC01 timing, REPO policy, write-off; 08 §10), positions of the run and of the
+previous default run, HTM lots from the report's purchase fields (`purchase_accrued_ccy`, 1.3), `cash_balances`,
+the hub's fixings and CBR rates. Published: the run's `funding` block (`run_reference`), a position's
+`fact.extra.funding` and PnL component `funding` (the pages' carry is net of it), book totals, run log lines and
+problems, `/api/v1/runs/{id}/funding`, window.DESK `funding` / `fundingPnl` / `fundingPnlByBook` / `FUNDING_RULES` /
+`fundingStatus`, the C01 cockpit's funding panel and the position card. Without rules: "not configured", never 0.
+Not done, by decision: `fx_funding` and the funding liability in the FX delta stay 0 / absent until OQ-04; REPO deals
+need `trade_terms` `repo` (a later minor). The private adapter (A7) must emit `funding_policy` and
+`purchase_accrued_ccy`.
 | B2 OCP | Loading `ocp`; OCP from positions vs from the report, by component; screen | P1, P2, P3 |
 | B3 Cash | Loading `cash_balances`; funding of cash-funded books and other entities; cash-break screen | P1, P2, the cash export (step 4) |
 | B4 Official PnL and reconciliation | S8 part 2 and S11: `pnl/official.py`, `pnl/reconcile.py`, API, screens | P1, adapter A3 |
@@ -128,7 +140,7 @@ Status (22 October): A0 and A2 are done (positions at work); the OCP adapter (A4
 4. **Orchestrator: the day cycle** (§1) as a dependency graph, not a cron list: an arrival triggers the runs that depend on it, and a rerun supersedes. `desk backfill --from 2026-01-01`: EOD runs and flash PnL for every date with positions, then reconciliation for every date with official PnL.
 5. **`desk.pnl.reconcile`**: ours vs official per date × book × instrument, matched on trade or position keys. Break analysis as a substitution waterfall: swap in internal market data (Δ market data), official positions (Δ positions), CBR FX (Δ FX basis), cash flows and accrual convention (Δ carry), new-trade lines (Δ new trades); the remainder is unexplained. Each cause gets a confidence: *confirmed* (the swap closes the break within the DEC12 threshold), *likely*, *unexplained*. Component matching: our carry vs official accrual, our price effect vs price change, FX vs FX.
 6. **`desk.marketdata.internal`**: the internal overlay replaces hub inputs it covers (curve points, bond prices, FX), keeps the rest, and records which. The EOD-internal run is a separate run type with its own lineage.
-7. **`desk_rules`** (`backend/src/desk/rules/`, location OQ-03; the funding engine and its reference-table reader are built in wave A P2, not wired into runs): OCP, cash, funding, dual FX basis: methodology in `ORG_CONVENTIONS.md`, the organization's rules (modes, rates, spreads) as data from the private adapter (S9). Until B1, funding in runs is 0.
+7. **`desk_rules`** (`backend/src/desk/rules/`, location OQ-03; the funding engine and its reference-table reader are built in wave A P2 and wired into the runs in B1): OCP, cash, funding, dual FX basis: methodology in `ORG_CONVENTIONS.md`, the organization's rules (modes, rates, spreads) as data from the private adapter (S9). Since B1 the runs compute funding (`publish/funding_run.py`).
 8. **Explain** on every snapshot (§1); intraday runs; SSE (S12).
 9. Carried from S4–S6: interface catalogue (`coverage`, `totals`), curve-spec mapping table, T3 presets, historical scenarios, custom scenarios, job cancel, worker out of the API process.
 

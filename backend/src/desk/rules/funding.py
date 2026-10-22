@@ -7,9 +7,9 @@ Pure and firm-agnostic. The organisation's rules arrive as data (``FundingRules`
 ``OPEN_DECISIONS``. A field's default is either a neutral generic choice or unset, and an unset convention the
 engine needs is a ``FundingProblem``, never a guess: the funding base of a market-value book (clean or dirty),
 the HTM base and the PnL write-off periodicity have no default and come from the adapter's settings
-(``reference.policy_from_reference``) or from the decision. Not wired into the run yet (wave B1: ``pnl/flash.py``,
-``publish/tdm_run.py``, ``api/compat.py``). ``PROTOTYPE_POLICY`` reproduces ``tdm/writer.py``
-``derive_funding()`` for POS and HTM.
+(``reference.policy_from_reference``, ``reference.apply_funding_policy`` for the private/1.3 ``funding_policy``) or
+from the decision. The runs call it through ``publish.funding_run`` (wave B1). ``PROTOTYPE_POLICY`` reproduces
+``tdm/writer.py`` ``derive_funding()`` for POS and HTM.
 
 **Accrual.** The period is (previous business day, as-of date]: every calendar day of it accrues (on a
 Monday: Saturday, Sunday, Monday). Day d accrues ``body(d) x rate(d) / basis`` in the line currency,

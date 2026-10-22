@@ -89,6 +89,8 @@
       const el2 = K.h('div', 'chart'); hp.querySelector('.bd').appendChild(el2);
       const keys = ['carry', 'rates', 'spread', 'fx', 'trading', 'other'], names = { carry: 'Кэрри', rates: 'Ставки', spread: 'Спред', fx: 'FX', trading: 'Сделки', other: 'Прочее' };
       K.chart(el2, () => ({ grid: { left: 6, right: 10, top: 28, bottom: 4, containLabel: true }, legend: { top: 0 }, tooltip: { trigger: 'axis', valueFormatter: v => f.mns(v, 2) }, xAxis: { type: 'category', data: M.histDates, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', axisLabel: { formatter: v => f.mn(v, 0) } }, dataZoom: [{ type: 'inside', start: 60 }], series: keys.map(k => ({ name: names[k], type: 'bar', stack: 'p', data: M.hist.pnl[k] })).concat([{ name: 'Итого', type: 'line', data: M.hist.pnl.total, showSymbol: false, color: K.css('--fg') }]) }));
+      const fp = panel('Фондирование', '<span class="k-note">по книгам и юрлицам · в кэрри позиций и строками книг</span>'); fp.style.marginTop = '12px'; fp.querySelector('.bd').classList.add('flush'); view.appendChild(fp);
+      K.fundingPanel(fp.querySelector('.bd'));
       const t = panel('PnL по позициям'); t.querySelector('.bd').classList.add('flush'); t.style.marginTop = '12px'; view.appendChild(t);
       K.table(t.querySelector('.bd'), {
         rowsFn: () => K.list(), groupBy: [K.defaultGroups[0]], stripe: r => K.issuerColor(r.issuer), sort: [['pnl', 1]], maxHeight: '60vh',

@@ -31,6 +31,7 @@ from starlette.exceptions import HTTPException
 
 from .. import __version__
 from ..marketdata import history
+from ..publish.funding_run import NOT_COMPUTED, REPORTING_CCY, STATUS_TEXT
 from ..scenario import jobs
 from ..scenario.definition import definition_hash, normalize
 from ..scenario.taylor import risk_payload
@@ -42,6 +43,7 @@ from .models import (
     AggregateRow,
     Aggregates,
     BondHistory,
+    BookFunding,
     ErrorOut,
     JobIn,
     PnlSums,
@@ -52,6 +54,7 @@ from .models import (
     RiskPayload,
     RiskTable,
     RunDetail,
+    RunFunding,
     RunHeader,
     RunList,
     RunPnl,
@@ -269,6 +272,19 @@ def _py_grouped(con, run_id: int, names: list[str], cols: list[str]) -> list[dic
     return [out[k] for k in sorted(out, key=lambda t: tuple((v is None, str(v)) for v in t))]
 
 
+def funding_out(run_id: int, block: dict[str, Any] | None) -> RunFunding:
+    """``RunFunding`` of a run's funding block (``publish.funding_run``); a run before B1 has none."""
+    b = block or {"status": NOT_COMPUTED, "text": STATUS_TEXT[NOT_COMPUTED]}
+    policy = b.get("policy")
+    return RunFunding(
+        run_id=run_id, state=b["status"], text=b["text"], period=b.get("period"),
+        reporting_ccy=b.get("reporting_ccy") or REPORTING_CCY, totals=b.get("totals"),
+        books=[BookFunding(book_id=k, **{f: v.get(f) for f in BookFunding.model_fields if f != "book_id"})
+               for k, v in sorted((b.get("by_book") or {}).items())],
+        entities=b.get("by_entity") or {}, problems=b.get("problems") or [], notes=b.get("notes") or [],
+        provisional=(policy or {}).get("provisional") or [], policy=policy, lines=b.get("lines") or [])
+
+
 def _total(components: dict[str, Any] | None) -> float | None:
     return sum(components.get(k) or 0.0 for k in PNL_KEYS) if components else None
 
@@ -439,6 +455,15 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
                         t[k] = (t[k] or 0.0) + x
         return _cached(request, run, RunPnl(run_id=run_id, positions=out,
                                             totals={k: PnlSums(**v) for k, v in totals.items()}))
+
+    @app.get("/api/v1/runs/{run_id}/funding", response_model=RunFunding)
+    def funding(con: Con, run_id: int, request: Request):
+        """The run's funding (B1): by book (with the write-off) and entity, its lines and problems; state
+        ``not_configured`` when the adapter gave no funding rules, ``not_computed`` for a run before B1."""
+        run = _run_or_404(con, run_id)
+        row = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'funding'",
+                          (run_id,)).fetchone()
+        return _cached(request, run, funding_out(run_id, row["data"] if row else None))
 
     @app.get("/api/v1/runs/{run_id}/aggregates", response_model=Aggregates)
     def aggregates(con: Con, run_id: int, request: Request,

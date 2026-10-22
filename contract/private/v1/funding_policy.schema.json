@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "private/1.3/funding_policy",
+  "title": "funding_policy row (reference())",
+  "description": "Private input contract v1 (docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md §10). One row as the adapter emits it. An optional field may be absent or null (the same thing); the empty string is invalid everywhere. Raw firm values go in x_* keys; _src is the row's location in the report, without sheet names.",
+  "type": "object",
+  "required": [
+    "_src",
+    "policy_id"
+  ],
+  "properties": {
+    "_src": {
+      "$ref": "#/$defs/str"
+    },
+    "policy_id": {
+      "$ref": "#/$defs/str"
+    },
+    "valid_from": {
+      "$ref": "#/$defs/date"
+    },
+    "active": {
+      "type": "boolean",
+      "default": true
+    },
+    "book_type": {
+      "enum": [
+        "TRADING",
+        "HTM",
+        "DERIVS",
+        "FUTURES"
+      ]
+    },
+    "pnl_sweep": {
+      "enum": [
+        "daily",
+        "monthly",
+        "quarterly",
+        "none"
+      ]
+    },
+    "htm_base": {
+      "enum": [
+        "cash_spent",
+        "clean_cost"
+      ]
+    },
+    "mv_base_date": {
+      "enum": [
+        "previous_business_day",
+        "as_of"
+      ]
+    },
+    "cash_base_date": {
+      "enum": [
+        "previous_business_day",
+        "as_of"
+      ]
+    },
+    "new_positions": {
+      "enum": [
+        "next_period",
+        "last_day",
+        "full_period"
+      ]
+    },
+    "closed_positions": {
+      "enum": [
+        "full_period",
+        "not_funded"
+      ]
+    },
+    "fx_date": {
+      "enum": [
+        "as_of",
+        "previous_business_day",
+        "each_day"
+      ]
+    },
+    "out_of_currency": {
+      "enum": [
+        "security_ccy",
+        "settlement_ccy"
+      ]
+    },
+    "entity_cash_book_type": {
+      "enum": [
+        "TRADING",
+        "HTM",
+        "DERIVS",
+        "FUTURES"
+      ]
+    },
+    "repo_rate": {
+      "enum": [
+        "security",
+        "contract"
+      ]
+    },
+    "repo_contract_from_term_days": {
+      "$ref": "#/$defs/int"
+    },
+    "repo_security_book_type": {
+      "enum": [
+        "TRADING",
+        "HTM",
+        "DERIVS",
+        "FUTURES"
+      ]
+    },
+    "write_off_date": {
+      "enum": [
+        "last_calendar_day",
+        "last_business_day"
+      ]
+    }
+  },
+  "patternProperties": {
+    "^x_": {}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "str": {
+      "type": "string",
+      "minLength": 1
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "int": {
+      "type": [
+        "integer",
+        "string"
+      ],
+      "pattern": "^-?[0-9]+$",
+      "description": "an integer: a JSON integer or a string of digits; normalised to an integer"
+    }
+  }
+}

@@ -18,7 +18,8 @@ Files, all ``;``-separated UTF-8 with BOM, header = canonical field names (``x_*
 * ``books.csv`` in ``ctx.config_dir``: ``reference()["books"]``, its unreadable lines in ``["issues"]``. Without a
   config folder there are no books, so the backend rejects every unit with ``unknown_book``: positions are never
   accepted for undefined books. ``entities.csv`` and ``funding_rules.csv`` there, when present, are
-  ``reference()["entities"]`` and ``["funding_rules"]`` (private/1.2).
+  ``reference()["entities"]`` and ``["funding_rules"]`` (private/1.2); ``funding_policy.csv`` is
+  ``["funding_policy"]`` (private/1.3).
 
 ``scopes`` of a file are the distinct scope units of its rows, plus every **marker**: a row whose only non-empty
 fields are the scope keys (and ``_report_date``), meaning "this unit is covered and has no rows" (how a book that
@@ -50,13 +51,14 @@ _BY_SOURCE = {src: ds for ds, (src, _, _) in _DATASETS.items()}
 _MULTI_DATE = {"cash_balances", "pnl_official"}
 _WITH_INSTRUMENT = {"positions", "pnl_official"}
 _BOOLEANS = {"active", "ndf"}
-_REFERENCE = (("books", "books.csv"), ("entities", "entities.csv"), ("funding_rules", "funding_rules.csv"))
+_REFERENCE = (("books", "books.csv"), ("entities", "entities.csv"), ("funding_rules", "funding_rules.csv"),
+              ("funding_policy", "funding_policy.csv"))
 _TRUE, _FALSE = {"1", "true", "yes"}, {"0", "false", "no"}
 
 
 def describe() -> dict:
     return {
-        "name": "desk_reference", "version": "1.1.0", "spi": 1, "contract": "private/1.2",
+        "name": "desk_reference", "version": "1.2.0", "spi": 1, "contract": "private/1.3",
         "sources": [{"source": src, "dataset": ds, "time_basis": tb, "completeness": "full_snapshot",
                      "scope": scope, "covers": "listed"} for ds, (src, tb, scope) in _DATASETS.items()],
     }

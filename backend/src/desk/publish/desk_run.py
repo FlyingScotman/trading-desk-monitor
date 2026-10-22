@@ -7,6 +7,11 @@ model spreads, coverage and totals are written in one transaction that ends with
 any error the rows roll back and the run is marked ``failed`` with the error. A total PnL is null, not 0,
 when no position of the book has a flash PnL. The run's ``position_set_ids`` (and lineage ``positions``)
 are the source of truth to reproduce its inputs; ``positions_known_at`` is only the horizon they were read at.
+
+Funding (B1, ``funding_run``): computed on the run's content before the run row is written; its block is the
+``run_reference`` kind ``funding``, its summary lineage ``funding``, its lines in the run log, a position's
+``fact.extra.funding`` and the ``funding`` component of its PnL (absent, not 0, when funding is not configured or the
+position has a problem). The book totals' ``pnl.funding`` sums it and ``pnl.total`` is net of it.
 """
 
 from __future__ import annotations
@@ -28,10 +33,12 @@ from ..marketdata.adapter import MarketView
 from ..orchestrator import EodContext, Outcome
 from ..store import PositionInputs
 from ..valuation.fallback import CarriedSpread, used_model_spreads
-from .tdm_run import REFERENCE_KINDS, RunContent, git_sha, run_content
+from . import funding_run
+from .tdm_run import RunContent, git_sha, run_content
 
-PNL_KEYS = ("carry", "rolldown", "rates", "spread", "other", "fx_gross", "total")
-"""Run totals per book: the components sum to ``total`` (a foreign-face bond's FX revaluation is in ``fx_gross``)."""
+PNL_KEYS = ("carry", "rolldown", "rates", "spread", "other", "fx_gross", "funding", "total")
+"""Run totals per book: the components sum to ``total`` (a foreign-face bond's FX revaluation is in ``fx_gross``, the
+position's funding in ``funding``: ``total`` is net of funding)."""
 
 
 def _finite(x: Any) -> Any:
@@ -78,6 +85,10 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
         "pnl_basis": pnl_basis,
     }
     content = run_content(ctx, positions, prev, lineage, inputs)
+    funding = funding_run.compute(con, bd, prev, ctx.market, content.rows, content.reference["books"], inputs,
+                                  {pid: o.terms for pid, _, o in positions if o.terms is not None})
+    funding.apply(content.rows, content.reference, content.log)
+    lineage["funding"] = funding.lineage()
     run_id = con.execute(
         "INSERT INTO run (run_type, business_date, prev_date, cut_type, supersedes_run_id, market_snapshot_id,"
         " static_snapshot_id, prev_market_snapshot_id, private_inputs_hash, position_set_ids, positions_known_at,"
@@ -95,7 +106,7 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
          "lineage": _jsonb(lineage)}).fetchone()[0]
     try:
         with con.transaction(), con.cursor() as cur:
-            _write(cur, run_id, positions, inputs, content, bodies, results, spreads)
+            _write(cur, run_id, positions, inputs, content, bodies, results, spreads, funding.pnl_funding)
     except Exception as e:
         con.execute("UPDATE run SET status = 'failed', error = %s WHERE run_id = %s",
                     (f"{type(e).__name__}: {e}"[:4000], run_id))
@@ -104,7 +115,8 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
 
 
 def _write(cur: psycopg.Cursor, run_id: int, positions: list[tuple[str, str, Outcome]], inputs: PositionInputs,
-           content: RunContent, bodies: dict[str, str], results: dict[str, Any], spreads: list[CarriedSpread]) -> None:
+           content: RunContent, bodies: dict[str, str], results: dict[str, Any], spreads: list[CarriedSpread],
+           pnl_funding: dict[str, float]) -> None:
     qty = {pid: q for pid, _, _, q in inputs.rows}
     facts = {r["position_id"]: _finite(r) for r in content.rows}
     coverage: dict[str, Counter[str]] = defaultdict(Counter)
@@ -115,7 +127,9 @@ def _write(cur: psycopg.Cursor, run_id: int, positions: list[tuple[str, str, Out
         v, f = o.valuation, facts.get(pid)
         why = f"{o.reason}{': ' + o.detail if o.detail else ''}" if o.reason else None
         pv, dv01, cs01 = (f["mv_rub"], f["dv01"], f["cs01"]) if f else (None, None, None)
-        pnl = {**o.pnl.as_tdm(), "extra": o.pnl.extra()} if o.pnl else None
+        fund = pnl_funding.get(pid) if o.pnl else None
+        pnl = {**o.pnl.as_tdm(), **({"funding": fund} if fund is not None else {}), "extra": o.pnl.extra()} \
+            if o.pnl else None
         q = v.quantity if v and o.terms else qty[pid]  # a bond given by face: the number of bonds valued
         rows.append((run_id, pid, i, book, o.secid, q, v.quality if v else None, why, pv, dv01, cs01,
                      _jsonb(f) if f else None, _jsonb(pnl) if pnl else None,
@@ -128,12 +142,17 @@ def _write(cur: psycopg.Cursor, run_id: int, positions: list[tuple[str, str, Out
                 t[k] += x or 0.0
             if o.pnl:
                 for k in PNL_KEYS:
-                    t["pnl"][k] = (t["pnl"][k] or 0.0) + getattr(o.pnl, k)
+                    if k == "funding":
+                        if fund is not None:
+                            t["pnl"][k] = (t["pnl"][k] or 0.0) + fund
+                        continue
+                    net = (fund or 0.0) if k == "total" else 0.0  # the total net of the position's funding
+                    t["pnl"][k] = (t["pnl"][k] or 0.0) + getattr(o.pnl, k) + net
     cur.executemany("INSERT INTO run_position (run_id, position_id, ord, book_id, secid, quantity, quality, reason, pv_rub,"
                     " dv01_rub, cs01_rub, fact, pnl, no_pnl) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     rows)
     cur.executemany("INSERT INTO run_reference (run_id, kind, data) VALUES (%s, %s, %s)",
-                    [(run_id, k, _jsonb(content.reference[k])) for k in REFERENCE_KINDS])
+                    [(run_id, k, _jsonb(v)) for k, v in content.reference.items()])  # REFERENCE_KINDS + funding
     cur.executemany("INSERT INTO run_log (run_id, seq, level, message) VALUES (%s, %s, %s, %s)",
                     [(run_id, i, level, m) for i, (level, m) in enumerate(content.log, 1)])
     cur.executemany("INSERT INTO run_core_result (run_id, result_sha256, label, body) VALUES (%s, %s, %s, %s)",
