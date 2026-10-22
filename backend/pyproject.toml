@@ -1,6 +1,6 @@
 [project]
 name = "desk-backend"
-version = "0.2.1"
+version = "0.2.2"
 description = "Trading Desk Monitor backend: hub snapshots -> core valuation -> desk runs"
 requires-python = ">=3.11"
 dependencies = [
