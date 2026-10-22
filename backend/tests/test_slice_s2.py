@@ -70,7 +70,8 @@ def shifted_prev(ctx: EodContext, prev_date: date, shift_bp: float = SHIFT_BP, *
     fixings = tuple(FixingEntry(f.fixing_id, dataclasses.replace(
         f.history, valuation_date=prev_date, fixings=tuple(r for r in f.history.fixings if r[0] < prev_date),
         published_at=())) for f in ctx.core_market.fixings)
-    market = dataclasses.replace(ctx.core_market, business_date=prev_date, curves=tuple(curves), fixings=fixings)
+    market = dataclasses.replace(ctx.core_market, business_date=prev_date, curves=tuple(curves), fixings=fixings,
+                                 fx_fixings=tuple(f for f in ctx.core_market.fx_fixings if f.fixing_date <= prev_date))
     return dataclasses.replace(ctx, kbd=params, curve=kbd_discount_curve(params), core_market=market,
                                cache=ShockedCurveCache())
 

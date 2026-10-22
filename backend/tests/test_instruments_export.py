@@ -59,7 +59,7 @@ def test_core_static_reasons_and_coupons(export):
     r = rows_of(export)
     assert r["SU26238RMFS4"]["core_static"] == "ok" and r["SU26238RMFS4"]["mon_coupon_pct"] == 7.1
     assert r["SU52005RMFS4"]["core_static"] == "face_indexed"
-    assert r["RU000A10BRM5"]["core_static"] == "not_rub"  # USD face settled in RUB
+    assert r["RU000A10BRM5"]["core_static"] == "ok"  # USD face settled in RUB: in scope since core 0.34
     assert "currency_mismatch" in r["RU000A10BRM5"]["dq_flags"]
     assert r["RU000A100GW5"]["core_assumptions"].startswith("perpetual: call assumed")
     # a floater whose running period has an amount and no rate: the amount as a rate (D4)
@@ -83,7 +83,7 @@ def test_quotes_and_summary(export):
     # the hub has no sector in the fixture; the four OFZ get the sovereign by the bond class (R25)
     assert s["fill"]["_total"]["sector"] == 4 and s["fill"]["_total"]["isin"] == 10
     assert s["fill"]["_total"]["rating_agency"] == 0  # a 1.0 static: no ratings
-    assert s["core_static"]["ok"] == 8
+    assert s["core_static"]["ok"] == 9
     assert "instruments" in instruments.summary_text(s)
 
 
@@ -95,7 +95,7 @@ def test_cli_csv_and_xlsx(tmp_path, capsys):
     raw = out.read_bytes()
     assert raw.startswith(b"\xef\xbb\xbf")  # BOM: Excel reads UTF-8
     rows = list(csv.DictReader(raw.decode("utf-8-sig").splitlines()))
-    assert len(rows) == 10 and {r["core_market"] for r in rows} <= {"exact", "assumed", "not_rub", "face_indexed"}
+    assert len(rows) == 10 and {r["core_market"] for r in rows} <= {"exact", "assumed", "no_foreign_curve", "face_indexed"}
     assert rows[0]["secid"] == "RU000A0JXQ44"
 
     xl = tmp_path / "instruments.xlsx"

@@ -57,6 +57,7 @@ from typing import Any
 import psycopg
 
 from . import store
+from .curves import fx as fxcurves
 from .marketdata import cache, history, reference, static_facts
 from .marketdata.adapter import MarketView
 from .marketdata.bundle import SnapshotDir, SnapshotError, previous_market
@@ -79,11 +80,12 @@ class ContextCache:
         self.size, self._items = size, {}
 
     def prepare(self, sd: SnapshotDir, business_date: str, cut_type: str = "eod_final",
-                market_snapshot_id: str | None = None) -> EodContext:
-        key = (str(sd.root), business_date, cut_type, market_snapshot_id or sd.market_id(business_date, cut_type))
+                market_snapshot_id: str | None = None, *, fx_options: fxcurves.FxOptions | None = None) -> EodContext:
+        key = (str(sd.root), business_date, cut_type, market_snapshot_id or sd.market_id(business_date, cut_type),
+               fx_options)
         ctx = self._items.pop(key, None)
         if ctx is None:
-            ctx = prepare(sd, business_date, cut_type, market_snapshot_id=market_snapshot_id)
+            ctx = prepare(sd, business_date, cut_type, market_snapshot_id=market_snapshot_id, fx_options=fx_options)
         self._items[key] = ctx
         while len(self._items) > self.size:
             self._items.pop(next(iter(self._items)))
@@ -208,7 +210,8 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
     sd = SnapshotDir(Path(snapshots))
     t0 = time.perf_counter()
     prep = contexts.prepare if contexts is not None else prepare
-    ctx = prep(sd, d, cut_type, market_snapshot_id=market_snapshot_id)
+    fx_options = fxcurves.options_from(settings)  # the provisional FX choices (curves.fx.FxOptions)
+    ctx = prep(sd, d, cut_type, market_snapshot_id=market_snapshot_id, fx_options=fx_options)
     # issuer names, groups, sectors and ratings: the newest static of the cache, not the market's own (R25)
     ctx = dataclasses.replace(ctx, reference=reference.facts(sd, ctx.static),
                               proxy_curves=bool(getattr(settings, "proxy_curves_for_risk", False)))
@@ -270,17 +273,21 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
                 + (f", report {src['report_date']}" if src.get("report_date") else "")
                 + f", valid {vd}" + (f", carried {age} days" if age else ""))
         carried = store.carried_spreads(con, before=ctx.business_date)
-        bp = pv1.plan(ctx, inputs)
+        bp = pv1.plan(ctx, inputs, second_order=not no_gamma)
+        if bp.unlinked_terms:
+            out(f"WARN trade_terms: {len(bp.unlinked_terms)} trade(s) no positions row names, "
+                + ("valued as rows of their own" if fx_options.unlinked_terms else "not valued (fx_unlinked_terms off)")
+                + ": " + ", ".join(bp.unlinked_terms[:10]))
         outcomes = value(ctx, bp.requests, second_order=not no_gamma, position_ids=bp.position_ids,
                          carried_spreads=carried)
         if prev_cut and not no_pnl:
-            prev_ctx = prep(sd, *prev_cut)
+            prev_ctx = prep(sd, *prev_cut, fx_options=fx_options)
             attach_pnl(prev_ctx, value(prev_ctx, bp.requests, position_ids=bp.position_ids, carried_spreads=carried),
                        ctx, outcomes)
             # fx rows, the report-valued rows (otc, unmapped bonds): by the rate move and by the reports of both
             # dates (pnl.direct); the reason in run_position.no_pnl when there is none, never a bare null
             prev_inputs = store.positions_for(con, prev_ctx.business_date, books=books)
-            direct_pnl.attach(prev_ctx, ctx, bp.direct, inputs, pv1.plan(prev_ctx, prev_inputs).direct)
+            direct_pnl.attach(prev_ctx, ctx, bp.direct, inputs, pv1.plan(prev_ctx, prev_inputs, second_order=False).direct)
             flash = [o.pnl for o in outcomes if o.pnl]
             out(f"flash PnL {prev_date} -> {d}: {len(flash)}/{sum(o.valuation is not None for o in outcomes)} "
                 f"priced positions, total {sum(p.total for p in flash):,.0f} RUB, "

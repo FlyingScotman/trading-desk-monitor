@@ -77,7 +77,7 @@ This section is the target design; the module does not exist yet (§1). `desk_ru
 - **Funding:**
   - POS/HTM by position;
   - CASH/REPO by book;
-  - the previous-business-day clean MV base (DEC01; today `tdm/writer.py` uses current MV);
+  - the MV base: the snapshot (previous business day or as-of) and clean or dirty, per DEC01 and the adapter's funding rules (today `tdm/writer.py` uses current MV);
   - calendar-day rates;
   - basis by currency (DEC02).
 - **FX:** market basis (internal ~19:00 mark, authoritative until DEC04 changes it) and CBR basis (correct effective date known at the cut; `tdm`'s `fx_cbr_next` picks the first future row, baseline review finding B08).

@@ -1458,6 +1458,14 @@ export interface components {
             fx?: {
                 [key: string]: number;
             };
+            /**
+             * Basis
+             * @description FX basis shift per currency, bp (core FXBASIS|<ccy>): exact repricing of FX derivatives only, the Taylor has no basis factor
+             * @default {}
+             */
+            basis?: {
+                [key: string]: number;
+            };
         };
         /** ScenarioJob */
         ScenarioJob: {

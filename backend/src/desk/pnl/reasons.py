@@ -26,6 +26,7 @@ NO_PNL_TEXT = {
     "no_prev_fx_rate": "нет курса валюты за предыдущий день",
     "no_prev_report": "нет отчётной стоимости позиции за предыдущий день",
     "report_carried": "отчёт не обновлялся с предыдущего дня",
+    "valued_differently": "за предыдущий день сделка оценена не ядром (нет условий или кривой)",
 }
 
 METHOD_TEXT = {
@@ -33,7 +34,9 @@ METHOD_TEXT = {
     "desk-flash-simple-v1": "флэш: изменение грязной цены, без разложения",
     "desk-fx-spot-v1": "по курсу: сумма × изменение курса",
     "desk-reported-v1": "по отчёту: разница отчётных стоимостей",
+    "desk-fx-core-v1": "FX-сделка: изменение PV ядра, курсовая часть по FX-дельте",
 }
+CORE_FX_METHOD = "desk-fx-core-v1"
 REPORTED_METHOD = "desk-reported-v1"
 FX_METHOD = "desk-fx-spot-v1"
 

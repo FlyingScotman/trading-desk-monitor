@@ -5,14 +5,16 @@ The definition keeps the prototype shape (``prototypes/data.js``), so the protot
     {"curves": {"RUB OFZ": [11 bp, RISK_BUCKETS order] | bp, "RUB RUONIA": ..., "RUB KEY": ..., "USD": ...},
      "ofzSpread": bp,
      "spreads": {"_all": bp, "_mult": factor > 0, "sector": {name: bp}, "issuer": {name: bp}, "rating": {r: bp}},
-     "fx": {"USD": pct, ...}}
+     "fx": {"USD": pct, ...},
+     "basis": {"CNY": bp, ...}}
 
 A curve is a published curve of the run (R8): ``RUB RUONIA`` the discount curve of every RUB bond (and a RUONIA
 floater's projection), ``RUB KEY`` a key-rate floater's projection, ``RUB OFZ`` the KBD (a market curve: no bond
 is discounted on it unless the date has no RUONIA curve, so a shock of it alone moves nothing else), ``USD``
 and the like a currency's curve; each moves only by its own vector. The preset moves of
 all rates shift the three RUB curves alike; the basis preset only ``RUB KEY`` (store migration 0008).
-``ofzSpread`` is the OFZ Z-spread to RUONIA (ORG_CONVENTIONS §4).
+``ofzSpread`` is the OFZ Z-spread to RUONIA (ORG_CONVENTIONS §4). ``basis`` shifts the FX basis of a currency
+(core ``FXBASIS|<ccy>``, bp) for the exact repricing of FX derivatives only (the Taylor has no basis factor).
 ``normalize`` gives the stored, returned and hashed form: every curve a list of 11 floats, zero entries,
 ``_mult == 1``, empty maps and all-zero curves dropped; an unknown key, a bad length, |bp| > ``MAX_BP``
 or an FX move of -100 % or less raise ``DefinitionError``. A null or missing section counts as empty.
@@ -29,7 +31,7 @@ from typing import Any
 from rub_fixed_income import RISK_BUCKETS
 
 MAX_BP = 5000.0
-KEYS = ("curves", "ofzSpread", "spreads", "fx")
+KEYS = ("curves", "ofzSpread", "spreads", "fx", "basis")
 RUB_CURVES = ("RUB OFZ", "RUB RUONIA", "RUB KEY")
 """The curves core reprices (``valuation.bonds.RISK_CURVES``): a shock on them is valid for every run, also one
 published before R8 with ``RUB OFZ`` only (its floaters' risk summed there)."""
@@ -111,6 +113,8 @@ def normalize(defn: Mapping[str, Any], curves: Iterable[str] | None = None) -> d
             fx[ccy] = float(v) + 0.0
     if fx:
         out["fx"] = fx
+    if basis := _rules(defn.get("basis"), "basis"):
+        out["basis"] = basis
     return out
 
 

@@ -1,7 +1,7 @@
 ﻿rule_id;valid_from;active;book_type;entity;book_id;ccy;instrument_id;basis;rate_kind;index_code;spread_bp;fixed_rate_pct;day_count
 trading_rub;;1;TRADING;;;RUB;;mv_clean;index_spread;KEY_RATE;100;;ACT/365
 trading_rub;2026-10-19;1;TRADING;;;RUB;;mv_clean;index_spread;KEY_RATE;150;;ACT/365
-trading_usd;;1;TRADING;;;USD;;mv_clean;fixed;;;5;ACT/360
+trading_usd;;1;TRADING;;;USD;;mv_clean;fixed;;;6;ACT/360
 derivs_rub;;1;DERIVS;;;RUB;;cash;index_spread;RUONIA;0;;ACT/365
 futures;;1;FUTURES;;;;;none;none;;;;
 htm;;1;HTM;;;;;cost;contract;;;;

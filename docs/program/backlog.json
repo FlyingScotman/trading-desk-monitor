@@ -255,7 +255,7 @@
         "Document any unsupported dependency before further integration"
       ],
       "evidence": [
-        "rub-fixed-income-core 0.33.0 pinned in backend/pyproject.toml; CI on Windows and Ubuntu since 0.9.0",
+        "rub-fixed-income-core 0.35.0 pinned in backend/pyproject.toml; CI on Windows and Ubuntu since 0.9.0",
         "backend/tools/build_windows_bundle.py: offline Python 3.11 win_amd64 bundle, delivered to the owner 20 October 2026"
       ],
       "reviewer": null,

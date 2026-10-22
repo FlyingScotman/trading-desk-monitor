@@ -1,7 +1,8 @@
 """The adapter's reference tables (private/1.2 ``reference()["funding_rules"]`` and ``["entities"]``, as
 ``inbox.validate.check_reference_tables`` normalises them or ``store.current_reference`` returns them) as the
 funding engine's inputs: ``FundingRules``, the entity types, the per-entity write-off and the base of each book
-type.
+type; ``policy_from_reference`` sets the last two on a ``FundingPolicy``, so the organisation's values come from
+the adapter's settings and not from the engine's defaults.
 
 The two models differ in a few places; the conversion is explicit about each:
 
@@ -13,18 +14,19 @@ The two models differ in a few places; the conversion is explicit about each:
   cash rule) gives no base: its lines take their base from the entity's type.
 - History: the rows of one ``rule_id`` with different ``valid_from`` are revisions; each ends where the next
   starts (``valid_to``), and a retired revision (``active`` false) ends the one before it and adds none.
-- The engine's ``ExtraSpread`` (bond-type extra spread, Q-F2) has no contract table yet: always empty here.
+- The engine's ``ExtraSpread`` (bond-type extra spread) has no contract table yet: always empty here.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from functools import partial
 from typing import Any
 
-from .funding import DayBasis, EntityType, FundingBase, FundingRule, FundingRules, Periodicity
+from .funding import DayBasis, EntityType, FundingBase, FundingPolicy, FundingRule, FundingRules, Periodicity
 
 _SCHEME_TYPES = {"by_book_type": EntityType.MAIN, "cash_balance": EntityType.OTHER}
 
@@ -102,3 +104,13 @@ def entities_from_reference(rows: Iterable[Mapping[str, Any]]
         if e.get("pnl_sweep"):
             sweeps[e["entity"]] = Periodicity(e["pnl_sweep"])
     return types, sweeps
+
+
+def policy_from_reference(rules: Iterable[Mapping[str, Any]], entities: Iterable[Mapping[str, Any]] = (),
+                          policy: FundingPolicy | None = None) -> FundingPolicy:
+    """``policy`` (default ``FundingPolicy()``) with the base of each book type the active ``funding_rules`` name
+    (over the engine's defaults) and the per-entity write-off of ``entities``. Everything else is unchanged."""
+    pol = policy or FundingPolicy()
+    _, sweeps = entities_from_reference(entities)
+    return replace(pol, base_by_book_type={**pol.base_by_book_type, **bases_from_reference(rules)},
+                   write_off=replace(pol.write_off, by_entity={**pol.write_off.by_entity, **sweeps}))

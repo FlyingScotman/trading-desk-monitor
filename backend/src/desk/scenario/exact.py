@@ -10,8 +10,15 @@ cashflows: they stay Taylor only, with ``code`` = their quality. ``blended`` = e
 Curves (R8): ``RUB RUONIA`` and ``RUB KEY`` move the RUONIA OIS curve (every RUB bond's discount curve, a RUONIA
 floater's projection) and the key-rate projection by name (``curve_shifts_bp``), each only by its own vector, as
 the Taylor moves each curve's factors: a floater sees the basis when one curve moves without the other. The shock
-of ``RUB OFZ`` is the shock's own curve: it moves the KBD of a bond discounted on it (a date without RUONIA). Another curve (a
-currency's, ``bonds.ccy_curve``) has no core curve; only Taylor positions carry risk on it.
+of ``RUB OFZ`` is the shock's own curve: it moves the KBD of a bond discounted on it (a date without RUONIA). A foreign
+curve core values on (``curves.fx``: ``CNY FX``, ``CNY XCCY``, ``USD UST``; its core ID is its published name) moves by name
+too: a foreign bond's discount curve, an FX derivative's foreign leg. A currency's curve without points (``USD``, a duration
+proxy, ``bonds.ccy_curve``) has no core curve; only Taylor positions carry risk on it.
+
+FX derivatives valued by core from their terms (``valuation.derivatives``) are repriced from the legs the run published
+(``extra.legs``), with the curves, the FX moves (``fx``) and the FX basis shifts (``basis``: ``FXBASIS|<ccy>``, bp; the
+Taylor has no basis factor, so its effect is all in the residual) on the run's market and the FX settings' defaults
+(a run made with other FX settings may not reproduce its base PV: ``base_mismatch``, Taylor only).
 """
 
 from __future__ import annotations
@@ -23,7 +30,8 @@ from rub_fixed_income import RISK_BUCKETS, BondScenario, PortfolioScenario
 
 from ..marketdata.bundle import SnapshotDir
 from ..orchestrator import EodContext, prepare, value
-from ..valuation.bonds import OFZ_CURVE, RISK_CURVES
+from ..valuation import derivatives as dv
+from ..valuation.bonds import OFZ_CURVE, RISK_CURVES, BondValuation
 from .definition import definition_hash, normalize, own_spread_shock
 from .taylor import PARTS, risk_payload, run_taylor
 
@@ -41,9 +49,15 @@ def core_scenario(name: str, norm: Mapping[str, Any], ds: float) -> PortfolioSce
     """The core scenario of a normalized definition for an own spread shock ``ds``: every curve core values with
     moves by its published curve's shifts only (0 when the definition has none)."""
     curves, zero = norm.get("curves", {}), (0.0,) * len(RISK_BUCKETS)
+    rub = {c for _, c in NAMED_CURVES} | {OFZ_CURVE}
+    # a foreign curve's core ID is its published name (curves.fx: CNY FX, CNY XCCY, USD UST); a currency's curve
+    # without points (USD: a duration proxy) has no core curve, and core ignores a shift of a curve it does not have
+    foreign = tuple((c, tuple(v)) for c, v in curves.items() if c not in rub)
     return PortfolioScenario(name=name, shock=BondScenario(tuple(curves.get(OFZ_CURVE, zero)), ds),
                              fx_shocks_pct=tuple(norm.get("fx", {}).items()),
-                             curve_shifts_bp=tuple((core, tuple(curves.get(c, zero))) for core, c in NAMED_CURVES))
+                             curve_shifts_bp=(*((core, tuple(curves.get(c, zero))) for core, c in NAMED_CURVES),
+                                              *foreign),
+                             basis_shifts_bp=tuple((f"FXBASIS|{c}", bp) for c, bp in norm.get("basis", {}).items()))
 
 
 def _context(snapshots: SnapshotDir, run: Mapping[str, Any], ctx_cache: dict | None) -> EodContext:
@@ -74,11 +88,36 @@ def reprice_run(snapshots: SnapshotDir, run: Mapping[str, Any], rows: list[Mappi
     exact: dict[str, float] = {}
     code: dict[str, str] = {}
     groups: dict[float, list[Mapping[str, Any]]] = {}
+    facts = {r["position_id"]: r.get("fact") or {} for r in rows}
+    fx_reqs: list[dv.Request] = []
     for p in payload["positions"]:
-        if p["quality"] in REPRICED and p["secid"] is not None:  # an FX forward is assumed but has no bond
+        ex = facts[p["position_id"]].get("extra") or {}
+        if p["quality"] in REPRICED and p["secid"] is not None:  # an FX forward without terms has no bond
             groups.setdefault(own_spread_shock(norm, p), []).append(p)
+        elif p["quality"] in REPRICED and ex.get("core") and (legs := dv.legs_from_fact(ex)):
+            fx_reqs.append(dv.Request(p["position_id"], p["book_id"], {"ccy": facts[p["position_id"]].get("ccy")},
+                                      legs))  # a derivative valued from its terms: repriced from its legs
         else:
             code[p["position_id"]] = p["quality"]
+    if fx_reqs:
+        ctx = _context(snapshots, run, ctx_cache)
+        scenario = core_scenario(h[:12], norm, 0.0)
+        valued, result = dv.value(ctx, fx_reqs, options=ctx.fx_options, second_order=False, scenarios=(scenario,))
+        pnl: dict[str, float | None] = {}
+        for s in result.scenarios[0].positions if result is not None else ():
+            pid = s.position_id.rsplit("#", 1)[0]
+            pnl[pid] = None if s.pnl_rub is None or pnl.get(pid, 0.0) is None else pnl.get(pid, 0.0) + s.pnl_rub
+        base = {p["position_id"]: p["pv_rub"] for p in payload["positions"]}
+        for r in fx_reqs:
+            pid, v = r.position_id, valued.get(r.position_id)
+            if not isinstance(v, BondValuation):
+                code[pid] = v.reason if v is not None else "not_valued"
+            elif abs(v.pv_rub - base[pid]) > BASE_TOLERANCE_RUB:
+                code[pid] = "base_mismatch"
+            elif pnl.get(pid) is None:
+                code[pid] = "core_failed"
+            else:
+                exact[pid] = pnl[pid]  # type: ignore[assignment]
     if groups:
         ctx = _context(snapshots, run, ctx_cache)
         for ds, ps in groups.items():  # shortcut: one core call per distinct ds; upgrade: a per-position spread shift in core

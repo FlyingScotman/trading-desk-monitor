@@ -31,6 +31,7 @@ from rub_fixed_income import (
     kbd_effective_yield,
 )
 
+from .curves import fx as fxcurves
 from .curves import rates
 from .marketdata.adapter import KBD_CURVE_ID, KBD_SPEC, BondQuote, BondTerms, MarketView, StaticView
 from .marketdata.bundle import SnapshotDir, SnapshotError
@@ -47,7 +48,15 @@ from .valuation.bonds import (
     settlement_date,
     value_bonds,
 )
-from .valuation.fallback import RUNGS, CarriedSpread, FallbackContext, approximate, par_proxy, simple_pnl
+from .valuation.fallback import (
+    RUNGS,
+    CarriedSpread,
+    FallbackContext,
+    approximate,
+    market_fx,
+    par_proxy,
+    simple_pnl,
+)
 
 KBD_TOLERANCE_BP = 0.05
 log = logging.getLogger(__name__)
@@ -86,7 +95,12 @@ class EodContext:
     own static's (``reference_facts``)."""
     proxy_curves: bool = False
     """Setting ``proxy_curves_for_risk`` (default off): show the hub's government par-yield proxies (UST par, ECB AAA,
-    Bund; contract 1.3) as the USD/EUR curves of the run. Off: those curves stay without points."""
+    Bund; contract 1.3) as the USD/EUR curves of the run, and discount USD / EUR bonds on them through core (``USD UST``,
+    ``EUR AAA``; core BACKLOG #124). Off: those curves stay without points and such bonds on their fallback rung."""
+    fx: fxcurves.FxMarket = field(default_factory=fxcurves.FxMarket)
+    """The run's FX inputs in ``core_market`` (``curves.fx.with_fx``): foreign curves, spots, their lineage."""
+    fx_options: fxcurves.FxOptions = field(default_factory=fxcurves.FxOptions)
+    """The provisional FX choices of the settings (``curves.fx.FxOptions``)."""
 
     @property
     def reference_facts(self) -> Reference:
@@ -132,6 +146,7 @@ class EodContext:
             "calendar": self.calendar.version,
             "calendar_provisional_from": self.static.provisional_from(),
             "rates": self.rates,
+            "fx": self.fx.lineage,
             "stale_datasets": self.market.stale,
         }
 
@@ -187,10 +202,16 @@ def with_rates(market: MarketView, static: StaticView, core: MarketSnapshot) -> 
     return replace(core, curves=tuple(curves), fixings=fixings), lineage
 
 
+def market_rates(market: MarketView) -> dict[str, tuple[float, str] | None]:
+    """ccy -> the market rate (``fallback.FX_MARKET``) and its source, for every currency of the snapshot's rates."""
+    return {c: market_fx(market.fx(c)) for c in sorted({r["ccy"] for r in market.fx_rates if r.get("ccy")} - {"RUB"})}
+
+
 def prepare(snapshots: SnapshotDir, business_date: str, cut_type: str = "eod_final",
-            market_snapshot_id: str | None = None) -> EodContext:
+            market_snapshot_id: str | None = None, *, fx_options: fxcurves.FxOptions | None = None) -> EodContext:
     """``market_snapshot_id`` (a stored run's own snapshot) instead of the latest of (date, cut): a later
-    correction or a relabelled cut must not change what a run is repriced on."""
+    correction or a relabelled cut must not change what a run is repriced on. ``fx_options``: the provisional FX
+    settings (``curves.fx.FxOptions``; default its defaults)."""
     if market_snapshot_id is None:
         snap = snapshots.market(business_date, cut_type)
     else:
@@ -204,13 +225,15 @@ def prepare(snapshots: SnapshotDir, business_date: str, cut_type: str = "eod_fin
     assert snap.static_snapshot_id
     static = StaticView(snapshots.get(snap.static_snapshot_id))
     core_market, rates_lineage = with_rates(market, static, market.core_market(static))
+    fx_options = fx_options or fxcurves.FxOptions()
+    core_market, fx_market = fxcurves.with_fx(market, static, core_market, market_rates(market), fx_options)
     params = market.zcyc_parameters()
     check = check_against_standard_yields(params, market.zcyc["standard_yields"])
     if check > KBD_TOLERANCE_BP:
         raise ValueError(f"KBD curve misses the published standard yields by {check:.3f} bp")
     cal, vf, vt = static.business_calendar("MOEX_STOCK")
     return EodContext(snapshots, market, static, params, kbd_discount_curve(params), core_market, cal, (vf, vt),
-                      check, ShockedCurveCache(), rates_lineage)
+                      check, ShockedCurveCache(), rates_lineage, fx=fx_market, fx_options=fx_options)
 
 
 def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: bool = False,
@@ -246,7 +269,7 @@ def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: b
         except Rejected as e:
             o.reason, o.detail = e.reason, e.detail
     valued, results = value_bonds(ctx.core_market, todo, second_order=second_order, cache=ctx.cache,
-                                  scenarios=scenarios)
+                                  scenarios=scenarios, foreign=foreign_bond_curves(ctx))
     by_pid = {p.position_id: r for r in results for p in r.positions}
     for pid, v in valued.items():
         o = out[index[pid]]
@@ -264,6 +287,16 @@ def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: b
                     log.warning("fallback ladder failed for %s, valued at par proxy", o.secid, exc_info=True)
                     o.valuation = par_proxy(ctx, o, qty, f"fallback ladder failed: {type(e).__name__}: {e}")
     return out
+
+
+def foreign_bond_curves(ctx: EodContext) -> dict[str, tuple[str, ...]]:
+    """ccy -> the curves a foreign bond is discounted on, in order (core ``foreign_curves`` then its
+    ``foreign_curve_fallbacks``; core BACKLOG #124): CNY on the XCCY curve; USD and EUR on the government par-yield
+    proxies only with the setting ``proxy_curves_for_risk``. A currency without one stays on the fallback ladder."""
+    out: dict[str, tuple[str, ...]] = {"CNY": (fxcurves.XCCY_CURVE_ID,)}
+    if ctx.proxy_curves:
+        out.update({ccy: (cid,) for ccy, cid, _ in fxcurves.PROXY_SPECS.values()})
+    return {c: ids for c, ids in out.items() if any(i in ctx.fx.curves for i in ids)}
 
 
 def attach_pnl(prev: EodContext, prev_outcomes: list[Outcome], ctx: EodContext, outcomes: list[Outcome]) -> None:
@@ -285,7 +318,9 @@ def attach_pnl(prev: EodContext, prev_outcomes: list[Outcome], ctx: EodContext, 
             if "par_proxy" in (p.valuation.quality, o.valuation.quality):  # a placeholder value: no PnL is better
                 d = prev.business_date if p.valuation.quality == "par_proxy" else ctx.business_date
                 raise NoPnl("par_proxy", f"valued at par on {d}, no price")
-            if o.valuation.quality in RUNGS or p.valuation.quality in RUNGS:  # no cashflows to reprice
+            # no cashflows to reprice, or a foreign bond (core 0.34): the flash explain is on the RUB curves only
+            if o.valuation.quality in RUNGS or p.valuation.quality in RUNGS or o.valuation.foreign \
+                    or p.valuation.foreign:
                 assert o.terms is not None
                 o.pnl = split_fx(simple_pnl(p.valuation, o.valuation, o.terms, ctx), prev, ctx, o.terms)
                 continue

@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 from ..inbox.schema import norm_ccy
 from ..valuation.fallback import SimplePnl, fx_rate, fx_rate_cbr
 from .flash import NoPnl
-from .reasons import FX_METHOD, REPORTED_METHOD
+from .reasons import CORE_FX_METHOD, FX_METHOD, REPORTED_METHOD
 
 if TYPE_CHECKING:
     from ..marketdata.adapter import BondTerms
@@ -126,6 +126,30 @@ def _reported(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, 
                      note=f"reported PV {v.pv_rub:,.2f} - {p.valuation.pv_rub:,.2f} RUB (trades of the day inside)")
 
 
+def _core_fx(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None) -> DirectPnl:
+    """A derivative valued by core on both dates: PV D minus PV D-1, of which the FX delta of D-1 per currency x the
+    market rate move is ``fx_gross`` (x the CBR move: ``fx_gross_cbr``), the rest (rates, points, time) ``other``."""
+    v = o.valuation
+    assert v is not None
+    pv = p.valuation if p is not None else None
+    if pv is None or not pv.extra.get("core"):
+        raise NoPnl("valued_differently", f"not valued by core from its terms on {prev.business_date}")
+    total = v.pv_rub - pv.pv_rub
+    fx, cbr, parts = 0.0, 0.0, []
+    for ccy, delta in (pv.fx_delta or {}).items():
+        r0, r1 = fx_rate(prev, ccy), fx_rate(ctx, ccy)
+        if r0 is None or r1 is None:
+            raise NoPnl("no_prev_fx_rate", f"{ccy} on {prev.business_date if r0 is None else ctx.business_date}")
+        fx += delta * (r1[0] - r0[0])
+        c0, c1 = fx_rate_cbr(prev, ccy), fx_rate_cbr(ctx, ccy)
+        cbr = cbr + delta * (c1[0] - c0[0]) if c0 and c1 and cbr is not None else None  # type: ignore[operator]
+        parts.append(f"{delta:,.2f} {ccy} x ({r1[0]:g} - {r0[0]:g})")
+    return DirectPnl(CORE_FX_METHOD, prev.business_date, ctx.business_date, total, fx_gross=fx, other=total - fx,
+                     fx_gross_cbr=cbr if pv.fx_delta else None,
+                     note=f"PV {v.pv_rub:,.2f} - {pv.pv_rub:,.2f} RUB; fx_gross = FX delta D-1 "
+                          + ("; ".join(parts) or "0"))
+
+
 def attach(prev: EodContext, ctx: EodContext, direct: dict[str, Outcome], inputs: PositionInputs,
            prev_direct: dict[str, Outcome]) -> None:
     """Set ``pnl`` or ``no_pnl`` on each valued outcome of ``direct`` (``positions.plan(ctx, inputs).direct``).
@@ -139,7 +163,9 @@ def attach(prev: EodContext, ctx: EodContext, direct: dict[str, Outcome], inputs
         kind = (x.get("asset_class") or "bond").lower()
         vd = inputs.valid_dates.get(book.get(pid, ""))
         try:
-            if v.quality == "reported_value":
+            if v.extra.get("core"):  # a derivative valued by core from its terms (valuation.derivatives)
+                o.pnl = _core_fx(prev, ctx, o, prev_direct.get(pid))  # type: ignore[assignment]
+            elif v.quality == "reported_value":
                 o.pnl = _reported(prev, ctx, o, prev_direct.get(pid),  # type: ignore[assignment]
                                   vd if vd is not None and vd <= prev.business_date else None)
             elif kind == "fx":
