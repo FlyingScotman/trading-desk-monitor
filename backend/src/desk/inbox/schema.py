@@ -4,8 +4,9 @@ Only the JSON-Schema subset those files use: ``type``, ``enum``, ``required``, `
 ``patternProperties``, ``additionalProperties: false``, ``pattern``, ``minLength``, ``format: date`` and local
 ``$ref``. Error codes are the 08 §6.3 ones and messages carry field names only, never values, because issues
 are shown and shared (08 §6.3). A validated row is normalised so that equal data hashes equally: amounts become
-plain decimal strings (a float through its shortest repr, so nothing is lost), absent and null are the same
-(null keys are dropped), ``ccy`` is upper case (``RUR`` is ``RUB``) and ``""`` is invalid.
+plain decimal strings (a float through its shortest repr, so nothing is lost), integers (``type`` integer, since
+private/1.2) become ints, absent and null are the same (null keys are dropped), ``ccy`` and every field of the
+``#/$defs/ccy`` type is upper case (``RUR`` is ``RUB``) and ``""`` is invalid.
 """
 
 from __future__ import annotations
@@ -23,6 +24,8 @@ from desk.inbox.spi import AMOUNT_RE, CODE_RE, SCHEMA_DIR
 
 _JSON_TYPES = {"string": str, "boolean": bool, "object": dict, "array": list}
 _CCY_ALIAS = {"RUR": "RUB"}
+_CCY_REF = "#/$defs/ccy"
+_INT_RE = re.compile(r"-?[0-9]+")
 
 
 @dataclass(frozen=True)
@@ -105,6 +108,12 @@ def _check_value(node: dict, value: Any) -> tuple[str | None, Any]:
     if "number" in types:  # amounts: number or decimal string (pattern applies to the string form)
         d = amount(value)
         return ("bad_number", None) if d is None else (None, amount_str(d))
+    if "integer" in types:  # an int, or a string of digits; never a bool or a float
+        if type(value) is int:
+            return None, value
+        if isinstance(value, str) and _INT_RE.fullmatch(value):
+            return None, int(value)
+        return "bad_number", None
     if "enum" in node:
         return (None, value) if value in node["enum"] else ("bad_value", None)
     if types and not any(isinstance(value, _JSON_TYPES[t]) for t in types if t in _JSON_TYPES):
@@ -141,7 +150,8 @@ def validate_row(dataset: str, row: dict, *, allow_newer: bool = False) -> tuple
             if code:
                 errors.append(RowError(code, key))
             else:
-                out[key] = norm_ccy(norm) if key == "ccy" else norm
+                is_ccy = key == "ccy" or props[key].get("$ref") == _CCY_REF
+                out[key] = norm_ccy(norm) if is_ccy and isinstance(norm, str) else norm
         elif any(re.search(p, key) for p in patterns):
             if value == "":
                 errors.append(RowError("bad_value", None))

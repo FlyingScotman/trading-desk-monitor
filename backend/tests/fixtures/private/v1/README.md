@@ -4,6 +4,10 @@ Synthetic positions in the canonical v1 CSV (`;`, UTF-8 with BOM, CRLF), read by
 `desk.inbox.reference` (source `positions_csv`, `start_of_day`, `covers=listed`) and by the test adapter
 `../../adapters/good_adapter` (same files, source `positions_daily`, `covers=all_active_books`). No real data.
 
+`datasets/` holds the fixtures of the other datasets and reference tables of private/1.2 (`ocp`,
+`cash_balances`, `pnl_official`, `trade_terms`, entities, funding rules) with their own config folder: see its
+README.
+
 `config/` is the adapter config folder (`DESK_PRIVATE_ADAPTER_CONFIG`): `books.csv` has B1 (TRADING), B2 (HTM),
 B3 (TRADING), all entity ENT1 and active, and B9, inactive. Valid dates below use the RU_PRODUCTION calendar
 of the static snapshot in `../../mdhub_v1` (2026-01-01..2027-12-31).

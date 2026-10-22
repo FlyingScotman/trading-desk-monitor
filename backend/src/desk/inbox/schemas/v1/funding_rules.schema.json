@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "private/1.2/funding_rules",
+  "title": "funding_rules row (reference())",
+  "description": "Private input contract v1 (docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md §10). One row as the adapter emits it. An optional field may be absent or null (the same thing); the empty string is invalid everywhere. Raw firm values go in x_* keys; _src is the row's location in the report, without sheet names.",
+  "type": "object",
+  "required": [
+    "_src",
+    "rule_id",
+    "rate_kind"
+  ],
+  "properties": {
+    "_src": {
+      "$ref": "#/$defs/str"
+    },
+    "rule_id": {
+      "$ref": "#/$defs/str"
+    },
+    "valid_from": {
+      "$ref": "#/$defs/date"
+    },
+    "active": {
+      "type": "boolean",
+      "default": true
+    },
+    "book_type": {
+      "enum": [
+        "TRADING",
+        "HTM",
+        "DERIVS",
+        "FUTURES"
+      ]
+    },
+    "entity": {
+      "$ref": "#/$defs/str"
+    },
+    "book_id": {
+      "$ref": "#/$defs/str"
+    },
+    "ccy": {
+      "$ref": "#/$defs/ccy"
+    },
+    "instrument_id": {
+      "$ref": "#/$defs/str"
+    },
+    "basis": {
+      "enum": [
+        "mv_clean",
+        "mv_dirty",
+        "cash",
+        "cost",
+        "none"
+      ]
+    },
+    "rate_kind": {
+      "enum": [
+        "index_spread",
+        "fixed",
+        "contract",
+        "none"
+      ]
+    },
+    "index_code": {
+      "$ref": "#/$defs/str"
+    },
+    "spread_bp": {
+      "$ref": "#/$defs/amount"
+    },
+    "fixed_rate_pct": {
+      "$ref": "#/$defs/amount"
+    },
+    "day_count": {
+      "enum": [
+        "ACT/365",
+        "ACT/360"
+      ]
+    }
+  },
+  "patternProperties": {
+    "^x_": {}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "str": {
+      "type": "string",
+      "minLength": 1
+    },
+    "amount": {
+      "type": [
+        "number",
+        "string"
+      ],
+      "pattern": "^-?[0-9]+(\\.[0-9]+)?$",
+      "description": "a finite JSON number or a decimal string; no NaN, exponents in strings, separators or commas"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "ccy": {
+      "type": "string",
+      "minLength": 1,
+      "description": "a currency code; the backend upper-cases it and reads RUR as RUB"
+    }
+  }
+}

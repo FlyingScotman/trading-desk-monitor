@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "private/1.2/trade_terms",
+  "title": "trade_terms row",
+  "description": "Private input contract v1 (docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md §10). One row as the adapter emits it. An optional field may be absent or null (the same thing); the empty string is invalid everywhere. Raw firm values go in x_* keys; _src is the row's location in the report, without sheet names.",
+  "type": "object",
+  "required": [
+    "_src",
+    "trade_id",
+    "book_id",
+    "product_kind",
+    "trade_date"
+  ],
+  "properties": {
+    "_src": {
+      "$ref": "#/$defs/str"
+    },
+    "_dataset": {
+      "enum": [
+        "trade_terms"
+      ]
+    },
+    "trade_id": {
+      "$ref": "#/$defs/str"
+    },
+    "leg_id": {
+      "$ref": "#/$defs/str"
+    },
+    "trade_version": {
+      "$ref": "#/$defs/int"
+    },
+    "book_id": {
+      "$ref": "#/$defs/str"
+    },
+    "entity": {
+      "$ref": "#/$defs/str"
+    },
+    "position_id": {
+      "$ref": "#/$defs/str"
+    },
+    "product_kind": {
+      "enum": [
+        "fx_forward",
+        "fx_swap"
+      ]
+    },
+    "source_product": {
+      "$ref": "#/$defs/str"
+    },
+    "trade_date": {
+      "$ref": "#/$defs/date"
+    },
+    "value_date": {
+      "$ref": "#/$defs/date"
+    },
+    "base_ccy": {
+      "$ref": "#/$defs/ccy"
+    },
+    "quote_ccy": {
+      "$ref": "#/$defs/ccy"
+    },
+    "side": {
+      "enum": [
+        "buy",
+        "sell"
+      ]
+    },
+    "notional_base": {
+      "$ref": "#/$defs/amount"
+    },
+    "notional_quote": {
+      "$ref": "#/$defs/amount"
+    },
+    "contract_rate": {
+      "$ref": "#/$defs/amount"
+    },
+    "ndf": {
+      "type": "boolean",
+      "default": false
+    },
+    "settle_ccy": {
+      "$ref": "#/$defs/ccy"
+    },
+    "fixing_date": {
+      "$ref": "#/$defs/date"
+    },
+    "fixing_source": {
+      "$ref": "#/$defs/str"
+    },
+    "counterparty_id": {
+      "$ref": "#/$defs/str"
+    },
+    "pv_rub": {
+      "$ref": "#/$defs/amount"
+    }
+  },
+  "patternProperties": {
+    "^x_": {}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "str": {
+      "type": "string",
+      "minLength": 1
+    },
+    "amount": {
+      "type": [
+        "number",
+        "string"
+      ],
+      "pattern": "^-?[0-9]+(\\.[0-9]+)?$",
+      "description": "a finite JSON number or a decimal string; no NaN, exponents in strings, separators or commas"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "ccy": {
+      "type": "string",
+      "minLength": 1,
+      "description": "a currency code; the backend upper-cases it and reads RUR as RUB"
+    },
+    "int": {
+      "type": [
+        "integer",
+        "string"
+      ],
+      "pattern": "^-?[0-9]+$",
+      "description": "an integer: a JSON integer or a string of digits; normalised to an integer"
+    }
+  }
+}

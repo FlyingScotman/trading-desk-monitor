@@ -40,7 +40,7 @@ from desk.inbox.static_index import (
     static_snapshots,
 )
 from desk.inbox.timesem import report_date_suspicious, revision_key, valid_date
-from desk.inbox.validate import check_hit, check_read, check_reference, unit_hash
+from desk.inbox.validate import check_hit, check_read, check_reference_tables, unit_hash
 
 PROTOCOL_CODES = frozenset({
     "bad_hit", "bad_result_shape", "bad_scopes", "bad_row", "bad_issue", "bad_controls", "missing_scopes",
@@ -121,6 +121,8 @@ class Report:
     groups: dict[tuple[str, str], Group] = field(default_factory=dict)
     problems: Counter = field(default_factory=Counter)   # conformance failures by code
     notes: Counter = field(default_factory=Counter)      # kit-level info codes (same_valid_date, ...)
+    reference: dict[str, int] = field(default_factory=dict)  # reference() rows kept per table (books, entities, ...)
+    reference_issues: Counter = field(default_factory=Counter)  # its warnings and infos by (severity, code)
 
     @property
     def ok(self) -> bool:
@@ -141,6 +143,9 @@ class Report:
             "match_seconds": round(self.match_seconds, 2),
             "problems": {k: masked(v) for k, v in sorted(self.problems.items())},
             "notes": {k: masked(v) for k, v in sorted(self.notes.items())},
+            "reference": {k: masked(v) for k, v in self.reference.items()},
+            "reference_issues": [{"severity": s, "code": c, "count": masked(n)}
+                                 for (s, c), n in sorted(self.reference_issues.items())],
             "weekdays": {"report_date": week("report_date"), "valid_date": week("valid_date")},
             "sources": [{
                 "source": g.source, "report_date": g.report_date, "valid_date": g.valid_date,
@@ -163,6 +168,9 @@ class Report:
         if self.load_error:
             return "\n".join([*lines, f"load error: {self.load_error}", "result: FAIL"])
         f = j["files"]
+        if j["reference"]:
+            lines.append("reference: " + ", ".join(f"{k} {v}" for k, v in j["reference"].items()))
+            lines += [f"    {i['severity']} {i['code']} {i['count']}" for i in j["reference_issues"]]
         lines.append(f"files: {f['matched']} matched, {f['ignored']} ignored, {f['match_failed']} match_failed "
                      f"(match {j['match_seconds']} s)")
         for s in j["sources"]:
@@ -231,7 +239,10 @@ def _run(report: Report, handle, dirs: list[str], refs: list, index_path: str | 
     books = None
     if any(d in DATASETS_WITH_BOOK for s in desc["sources"] for d in source_datasets(s)):
         try:
-            books, issues = check_reference(runner.call_reference(handle, index_path, read_timeout_s))
+            tables, issues = check_reference_tables(runner.call_reference(handle, index_path, read_timeout_s))
+            books = tables["books"]
+            report.reference = {k: len(v) for k, v in tables.items() if v is not None}
+            report.reference_issues = Counter((i["severity"], i["code"]) for i in issues if i["severity"] != "error")
         except AdapterFailure as f:
             report.problems[f"reference_{f.kind}"] += 1
             books, issues = None, []

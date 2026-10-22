@@ -1,12 +1,12 @@
 # 08 Private adapter interface (SPI v1)
 
-As of 19 October 2026, revision 2 (after an independent review). Status: **accepted; both tracks build against it.** Decision: [ADR-008](adr/ADR-008-private-adapter-boundary.md). Owner of this document: the backend. A change here is a versioned change (§9).
+As of 22 October 2026, revision 3 (private contract 1.2: FUTURES books, the `ocp`, `cash_balances`, `pnl_official` and `trade_terms` schemas, `reference()` entities and funding rules, `describe()` settings tabs, multi-date cash history, adapter phases A7–A10; revision 2 of 19 October followed an independent review). Status: **accepted; both tracks build against it.** Decision: [ADR-008](adr/ADR-008-private-adapter-boundary.md). Owner of this document: the backend. A change here is a versioned change (§9).
 
-The desk's own data (positions, OCP and cash, official PnL, trades, internal market data) arrives as bank reports. The backend reads them through a **private adapter**: a Python package that lives outside this repository and is plugged in by a path in the settings. This document is the whole contract between the two. Neither side needs to read the other's code.
+The desk's own data (positions, OCP and cash, official PnL, trade terms, trades, internal market data, and the firm's own rules: entities, book types, funding) arrives as bank reports. The backend reads them through a **private adapter**: a Python package that lives outside this repository and is plugged in by a path in the settings. This document is the whole contract between the two. Neither side needs to read the other's code.
 
 ## 1 Two tracks, four couplings
 
-The backend (slices S7+) and the adapter (phases A0–A6) are developed in parallel and mostly independently. They are coupled only through:
+The backend (slices S7+) and the adapter (phases A0–A10) are developed in parallel and mostly independently. They are coupled only through:
 
 | Coupling | Lives in | Used by the backend for | Used by the adapter for |
 |---|---|---|---|
@@ -15,7 +15,7 @@ The backend (slices S7+) and the adapter (phases A0–A6) are developed in paral
 | **Reference adapter and canonical fixtures** | `desk.inbox.reference`, `fixtures/private/v1/` | building S7+ with no private code | an example of a correct adapter |
 | **Conformance kit** (§8) | `desk adapter check`, `python -m desk.inbox.conformance` | — | its tests, and the owner's dry run at work |
 
-The backend never waits for the adapter: it develops on the reference adapter, which reads canonical CSV files. The adapter never waits for the backend: it develops against the schemas and the conformance kit. They meet at integration points I1–I6 (§11).
+The backend never waits for the adapter: it develops on the reference adapter, which reads canonical CSV files. The adapter never waits for the backend: it develops against the schemas and the conformance kit. They meet at integration points I1–I10 (§11).
 
 ## 2 Plugging the adapter in
 
@@ -60,6 +60,7 @@ def reference(ctx) -> dict: ...                      # §7; required when any so
 - Amounts are a finite JSON number or a string matching `^-?[0-9]+(\.[0-9]+)?$`. The backend stores them as `numeric` and sums in `Decimal`. NaN, infinity, thousands separators and locale commas are `bad_number` errors in the adapter, never passed on.
 - **Absent, null and empty.** An optional field may be absent or `null`; the two mean the same. The empty string `""` is invalid in every field: the adapter sends `null`.
 - **Reserved keys** in rows: `_src` (required, str: where the row came from), `_dataset` (required for multi-dataset sources, §4), `_report_date` (rows of multi-date files, §6.1). No other key may start with `_`.
+- **Integers** (`trade_version`, since 1.2) are a JSON integer or a string of digits; the backend stores an integer.
 
 ## 4 `describe()`
 
@@ -68,15 +69,18 @@ def reference(ctx) -> dict: ...                      # §7; required when any so
   "name": "tda",
   "version": "0.3.0",                  # the adapter's own release
   "spi": 1,
-  "contract": "private/1.0",           # §9
+  "contract": "private/1.2",           # §9
   "sources": [
     {"source": "positions_daily",     "dataset": "positions",      "time_basis": "start_of_day", "completeness": "full_snapshot", "scope": ["book_id"], "covers": "all_active_books"},
-    {"source": "ocp_cash",            "datasets": ["ocp", "cash_balances"], "time_basis": "start_of_day", "completeness": "full_snapshot",
+    {"source": "ocp_cash",            "datasets": ["ocp", "cash_balances"], "time_basis": "end_of_day", "completeness": "full_snapshot",
                                       "scope": {"ocp": ["entity"], "cash_balances": ["entity", "book_id"]}, "covers": "listed"},
     {"source": "pnl_tradelevel",      "dataset": "pnl_official",   "time_basis": "end_of_day",   "completeness": "full_snapshot", "scope": ["entity", "book_id"], "covers": "listed"},
     {"source": "internal_market_eod", "dataset": "internal_market","time_basis": "end_of_day",   "completeness": "full_snapshot", "scope": ["kind"], "covers": "listed"},
-    {"source": "trades_hourly",       "dataset": "trades",         "time_basis": "intraday",     "completeness": "full_snapshot", "scope": ["book_id"], "covers": "listed"}
-  ]
+    {"source": "trades_hourly",       "dataset": "trades",         "time_basis": "intraday",     "completeness": "full_snapshot", "scope": ["book_id"], "covers": "listed"},
+    {"source": "fx_terms",            "dataset": "trade_terms",    "time_basis": "end_of_day",   "completeness": "full_snapshot", "scope": ["book_id"], "covers": "listed"}
+  ],
+  "config_files":  [...],              # optional, below
+  "settings_tabs": [...]               # optional, below (1.2)
 }
 ```
 
@@ -104,6 +108,23 @@ def reference(ctx) -> dict: ...                      # §7; required when any so
   `name` is a plain file name (no folder). The backend tolerates the key's absence; an entry of a bad shape
   is ignored with a warning, never a load error. The files are part of the fingerprint (§2) like the rest of
   the config folder.
+- `settings_tabs` (list, optional, since 1.2; adapter phase A7): forms over `config_files`, so the firm's rules
+  (entities, book types, funding, prices) are edited on tabs the adapter itself describes, and the backend knows
+  nothing about them:
+
+  ```python
+  "settings_tabs": [{"id": "funding", "title": "Funding", "file": "funding.json", "help": "...",
+                     "schema": {"type": "object", "properties": {...}, "required": [...]}}]
+  ```
+
+  `id` matches `^[a-z][a-z0-9_]{1,40}$` and is unique; `file` is the `name` of a usable `config_files` entry;
+  `schema` is a JSON Schema (draft 2020-12) object of `type` `object` that the settings page renders as a form
+  and validates the file with before it writes it. The backend stores none of it and never interprets the file:
+  what reaches calculations goes through `reference()` (§7), validated by the contract schemas. Without the key,
+  or for a tab of a bad shape (ignored with a warning, `desk.inbox.loader.check_settings_tabs`), the file stays
+  editable as raw JSON. A change of a file changes the fingerprint (§2), so the next scan calls `reference()`.
+  Status 22.10.2026: the loader checks the key; the settings page still edits every file as raw JSON, the forms
+  come with the settings tabs work (A7, FND-4).
 
 ## 5 `match(path, ctx)`
 
@@ -142,7 +163,7 @@ Parses one matched file. `hit` is what `match` returned. Returns:
 - Each row is one record of the source's dataset (§10).
 - `_src`: the row's location in the report: a row number (`R12`), or a line number for CSV. **No sheet names**: the profiler hides them, and so does everything that may leave work. It is kept with the stored row for drill-down from any screen back to the report line.
 - Raw firm values the desk wants to see but calculations never use go in keys prefixed `x_`. The backend stores them as they are. Any other unknown key fails validation, except fields of a newer minor contract (§9).
-- A multi-date file (allowed for `pnl_official` and `trades` only) puts `_report_date` on every row. Each row's date is mapped like `report_date`.
+- A multi-date file (allowed for `pnl_official`, `trades` and, since 1.2, `cash_balances`: a balance history delivered at once) puts `_report_date` on every row; a row without it has the file's `report_date`. Each row's date is mapped like `report_date`, and each (scope unit, date) is a unit of its own (§6.6). Its revision key is the file's: a later file, say a restated history, outranks an earlier one for the same unit. A unit whose date has no calendar yet (`start_of_day` only) is rejected with `waiting_calendar` and the rest of the file is stored.
 - **Instrument identity.** A row carries:
   - `source_instrument_id`: as in the report (required in `positions` and `trades`, otherwise when the report has it);
   - `source_instrument_name`: when the report has it;
@@ -191,7 +212,7 @@ A `full_snapshot` read without `scopes` is `rejected` (`missing_scopes`). An abs
 - **Change detection.** A new revision is stored only when the canonical fields differ. `_src` and `x_*` are stored but excluded from the change hash, so an inserted header line or a new `x_` field does not restate history.
 
 ### 6.7 Stocks and flows
-- `positions`, `ocp` and `cash_balances` are **stocks**. A read for date D takes, per unit, the current revision with the latest `valid_date` ≤ D, and reports its age. A unit older than the previous business day is flagged `stale_input` on the day-status screen, and the run's lineage gives the `valid_date` per book.
+- `positions`, `ocp`, `cash_balances` and `trade_terms` are **stocks**. A read for date D takes, per unit, the current revision with the latest `valid_date` ≤ D, and reports its age. A unit older than the previous business day is flagged `stale_input` on the day-status screen, and the run's lineage gives the `valid_date` per book.
 - `pnl_official`, `trades` and `internal_market` are **flows or observations**. A read for D uses `valid_date = D` only and **never carries forward**. A missing day of official PnL is a gap, not yesterday's PnL again.
 
 ### 6.8 Failures and acceptance
@@ -221,7 +242,17 @@ Read-only; the backend builds it. An adapter must work when every lookup returns
 
 Because the adapter runs in a child process, `ctx.instruments` is served from a read-only index file that the backend writes before the call. The adapter cannot tell the difference.
 
-`reference(ctx)` returns reference rows the adapter owns: `{"books": [...]}` (§10), optionally with `"issues": [...]` shaped as in §6.3 (for example a malformed line of its mapping file); an `error` there fails the reference call. It is **required** when any source emits `book_id`. The backend calls it at load time and on `desk inbox scan`, and stores a new revision only when the content changed. Each book row may carry `valid_from`; without it, a change applies from its `known_at`, so a later change of `book_type` does not rewrite history. A `book_id` that is not in `books` gets a unit-scoped `unknown_book` error, raised by the backend.
+`reference(ctx)` returns reference rows the adapter owns: `{"books": [...]}` (§10), since 1.2 optionally `"entities": [...]` and `"funding_rules": [...]` (§10; absent: none, and the backend keeps what it stored before), optionally with `"issues": [...]` shaped as in §6.3 (for example a malformed line of its mapping file); an `error` there fails the reference call. It is **required** when any source emits `book_id`. The backend calls it at load time and on `desk inbox scan`, and stores a new revision only when the content changed. Each book row may carry `valid_from`; without it, a change applies from its `known_at`, so a later change of `book_type` does not rewrite history. A `book_id` that is not in `books` gets a unit-scoped `unknown_book` error, raised by the backend.
+
+`entities` and `funding_rules` are the firm's rules **as data** (adapter phase A7): the backend's funding engine is
+generic and parameterised by them, never by firm constants in public code. They are stored like books, bitemporal
+(`reference_rev`; `store.current_reference(kind, on)`), a new revision only when a row changed. Unlike books they
+may carry history: several rows of one key with different `valid_from`, the one in force on date D being the
+latest `valid_from` <= D (a row without `valid_from` applies from its first revision on, a later change from the
+day it was recorded, as books). An invalid row, or a repeated (key, `valid_from`), is left out with an error issue
+and the rest is kept; a book or rule naming an entity that `entities` does not list gets `unknown_entity`, a rule
+naming an unknown book `unknown_book`, two rules with the same selectors and `valid_from` `ambiguous_rule` (all
+warnings). The kit (§8) prints the number of rows kept per table.
 
 ## 8 Conformance kit
 
@@ -251,12 +282,15 @@ The summary holds counts and codes only. It has no values and no sheet names, an
 - **Private input contract** (`describe()["contract"]`, `private/<major>.<minor>`): the dataset schemas of §10, versioned on their own, separate from the public results contract (1.3/1.4).
   - The backend accepts its own major with any minor. Fields from a newer minor are dropped with a `field_from_newer_contract` warning; the file is not rejected.
   - A new optional field is a minor version; a renamed, retyped or newly required field is a major one.
-  - Minors so far: 1.0 (S7a); 1.1 adds the optional `positions` fields `maturity_date`, `risk_dv01_rub`, `risk_cs01_rub`. The backend supports 1.1 and accepts 1.0 adapters unchanged.
+  - Minors so far: 1.0 (S7a); 1.1 adds the optional `positions` fields `maturity_date`, `risk_dv01_rub`, `risk_cs01_rub`; 1.2 (22.10.2026) adds `book_type` `FUTURES`, the schemas of `ocp`, `cash_balances` (with the optional key field `ledger`), `pnl_official` and the new dataset `trade_terms`, the optional reference tables `entities` and `funding_rules`, the optional `describe()["settings_tabs"]`, and multi-date `cash_balances`. The backend supports 1.2 and accepts 1.0 and 1.1 adapters unchanged.
+  - A new enum value (`FUTURES`) is a minor too: old adapters stay valid. An adapter that emits it needs a backend on 1.2; an older one rejects that book (`bad_value`), never silently re-types it.
 - The adapter's README states the lowest backend version it needs. `desk adapter check` prints the backend version, the SPI, the contract and the adapter fingerprint.
 
-## 10 Private input contract v1 (`private/1.1`)
+## 10 Private input contract v1 (`private/1.2`)
 
-The schemas live in `contract/private/v1/`. The tables below are the design; the schema files are authoritative once written (S7a). They extend contract 1.3 ([DATA_REQUIREMENTS](../DATA_REQUIREMENTS.md) §4).
+The schemas live in `contract/private/v1/` (one per dataset and reference table, with a header-only CSV template each). The tables below are the design; the schema files are authoritative once written (S7a; `ocp`, `cash_balances`, `pnl_official`, `trade_terms`, `entities`, `funding_rules` since 1.2, and a test keeps each table equal to its schema). They extend contract 1.3 ([DATA_REQUIREMENTS](../DATA_REQUIREMENTS.md) §4) and supersede its templates (below). A dataset without a schema (`trades`, `internal_market`) is declared but its sources are rejected with `dataset_not_supported` until its slice.
+
+**Storage.** `positions` units are position sets (S7a). Every other dataset with a schema is stored generically, so a new dataset needs a schema and no code: one `dataset_set` per accepted unit (dataset, scope unit, business date) with the revision rules of §6.6, its rows in `dataset_row` (canonical fields as JSON, `_src` and `x_*` beside), typed views `ocp_row`, `cash_balance_row`, `pnl_official_row`, `trade_terms_row` over every revision, and `store.dataset_rows(dataset, D)` for the rows in force (§6.7: stocks carried forward, flows on D only).
 
 **Common rules.**
 - Units are in field names, as in the hub's wire format: `_pct`, `_bp`, `_rub`, `_ccy` (in the row's `ccy`), `_rpt` (in the report's own unit, not confirmed). Prices are clean, in % of the current face. FX is RUB per unit.
@@ -309,7 +343,8 @@ The open currency position as the bank's system reports it. The backend derives 
 
 ### `cash_balances` — stock; `full_snapshot`, scope `["entity", "book_id"]`
 
-Key: (`entity`, `book_id`, `ccy`, `account_id`).
+Key: (`entity`, `book_id`, `ccy`, `account_id`, `ledger`). A file may hold several dates (§6.1), for a history
+delivered at once.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -318,8 +353,9 @@ Key: (`entity`, `book_id`, `ccy`, `account_id`).
 | `account_id` ● | str | The account or ledger line; a constant if the report has one line per currency |
 | `balance_ccy` ● | num | `+` placed, `−` borrowed |
 | `account_kind` | str | For example settlement, margin, nostro |
+| `ledger` | str | The bookkeeping system the balance comes from, as the adapter codes it, when the same balance is reported by more than one system (their reconciliation is a backend screen, S9). Which system is authoritative on a break is not part of the contract |
 
-### `pnl_official` — flow; `full_snapshot`, scope `["entity", "book_id"]`, `time_basis = end_of_day`
+### `pnl_official` — flow; `full_snapshot`, scope `["entity", "book_id"]`, `time_basis = end_of_day`; may be multi-date (§6.1)
 
 One row per report line. Book totals are sums; the report's own totals go to `controls`. Key: (`entity`, `book_id`, `line_id`).
 
@@ -336,7 +372,7 @@ One row per report line. Book totals are sums; the report's own totals go to `co
 | `ccy` | str | The instrument's currency (a slice; the primary amounts are already RUB) |
 | `long_short`, `buy_sell` | str | As reported |
 | `pnl_daily_rub` ● | num | Official daily PnL (TradeLevel IFRS), RUB |
-| `pnl_pl_daily_rub` ●, `pnl_oci_daily_rub` ● | num | Its P&L and OCI parts. The backend checks `pnl_daily_rub = pnl_pl_daily_rub + pnl_oci_daily_rub` per line and records a mismatch as a warning |
+| `pnl_pl_daily_rub` ●, `pnl_oci_daily_rub` ● | num | Its P&L and OCI parts. The backend checks `pnl_daily_rub = pnl_pl_daily_rub + pnl_oci_daily_rub` per line (tolerance max(0.01, 1e-8 × \|total\|)) and records a mismatch as a warning `pnl_parts_mismatch` |
 | `pnl_mtd_rub`, `pnl_ytd_rub` | num | As reported; never summed across dates |
 | `accrual_rpt`, `price_change_rpt`, `fx_reval_rpt`, `premium_discount_rpt`, `new_trades_rpt`, `commission_rpt`, `brokerage_rpt`, `reserves_rpt`, `other_mtm_rpt`, `dividend_rpt` | num | Components in report units, not confirmed as RUB. Evidence for break analysis; the backend does not assume they add up to `pnl_daily_rub` |
 
@@ -348,6 +384,40 @@ A missing primary amount is an `error`. A missing component is `null`, never 0.
 - OTC: `trade_id` = `deal_id`.
 
 The kit reports the share of PnL lines that join a position.
+
+### `trade_terms` — stock; usually `full_snapshot`, scope `["book_id"]`, `covers = listed` (since 1.2)
+
+The economic terms of OTC trades the backend values itself from terms instead of taking the report's PV (adapter
+phase A9): their rates risk, the currency PV of their legs for the OCP, a reconciliation of PV. 1.2 defines FX
+forwards, NDFs and FX swaps; swaps (IRS, OIS, CCS), REPO and HTM purchase terms are later minors (drafts below).
+One row per trade, or per leg (`leg_id`) where a trade has several exchanges. A trade missing from a later
+snapshot of its book has matured or been closed. Key: (`trade_id`, `leg_id`).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `trade_id` ● | str | The trade's id in the booking system: the `deal_id` (and OTC `position_id`) of its `positions` row and the `trade_id` of its `pnl_official` lines, where those exist |
+| `leg_id` | str | The leg of a multi-leg trade, as the adapter codes it (an `fx_swap` has two rows, e.g. `near`, `far`); absent for a single-leg trade |
+| `trade_version` | int | As reported |
+| `book_id` ● | str | |
+| `entity` | str | When the report has it |
+| `position_id` | str | The `positions` row this trade is valued under, when not its `trade_id` |
+| `product_kind` ● | enum | `fx_forward` (one exchange on `value_date`: a deliverable outright, or an NDF with `ndf`), `fx_swap` (one row per leg). Later minors add more |
+| `source_product` | str | The report's own product code, as reported |
+| `trade_date` ● | date | |
+| `value_date` | date | The exchange's settlement date; for an NDF the settlement date of the difference. Required for every product of 1.2 |
+| `base_ccy`, `quote_ccy` | str | The pair: `contract_rate` is `quote_ccy` per one `base_ccy` (USD/RUB: base USD, quote RUB). Required for every product of 1.2 |
+| `side` | enum | `buy`, `sell`: the desk buys or sells `base_ccy` on `value_date` (and pays or receives `quote_ccy`). Required for every product of 1.2 |
+| `notional_base`, `notional_quote` | num | Unsigned amounts of the two legs, in `base_ccy` and `quote_ccy`. Required for every product of 1.2 |
+| `contract_rate` | num | The agreed rate, `quote_ccy` per `base_ccy`; when absent the backend uses `notional_quote / notional_base` |
+| `ndf` | bool | Non-deliverable: settled by the difference against the fixing, in `settle_ccy` (default false) |
+| `settle_ccy` | str | NDF: the settlement currency |
+| `fixing_date` | date | NDF: the fixing date; an NDF without it gets a warning `ndf_without_fixing` |
+| `fixing_source` | str | NDF: the fixing as the report names it (a central-bank rate, an exchange fixing); the backend maps it to a hub fixing |
+| `counterparty_id` | str | As in the report or the adapter's mapping |
+| `pv_rub` | num | Reconciliation: the PV as the bank's system reports it |
+
+A row of 1.2 without `value_date`, `base_ccy`, `quote_ccy`, `side` or a notional is a `missing_required` error for
+its unit, as is an `fx_swap` row without `leg_id`; `base_ccy` = `quote_ccy` is `bad_value`.
 
 ### `trades` — flow; `full_snapshot` per book for cumulative exports, or `increment` for deltas; `time_basis = intraday`
 
@@ -391,7 +461,52 @@ Keys by kind:
 
 ### `books` — from `reference()`
 
-As 1.3 `books`: `book_id` ●, `name` ●, `desk` ●, `book_type` ● (`TRADING`, `HTM`, `DERIVS`), `entity` ●, `ocp_to`, `trader`, `active` (default true), `valid_from`. `book_type` and `entity` are required here; 1.3 left them optional by mistake.
+As 1.3 `books`: `book_id` ●, `name` ●, `desk` ●, `book_type` ● (`TRADING`, `HTM`, `DERIVS`, `FUTURES`), `entity` ●, `ocp_to`, `trader`, `active` (default true), `valid_from`. `book_type` and `entity` are required here; 1.3 left them optional by mistake.
+
+`book_type` is the funding regime of the book, whatever the firm calls it: `TRADING` (a bond book funded on its market value), `HTM` (funded on its cost), `DERIVS` (funded on its cash balances), `FUTURES` (since 1.2: a book whose PnL is settled daily as variation margin, not funded). How each type is funded, at which rate, comes from `funding_rules`; `FUTURES` with a rule of `rate_kind` `none` is "not funded". `ocp_to`: the book the end-of-day currency position is transferred to, when the bank does that.
+
+### `entities` — from `reference()` (optional, since 1.2)
+
+The legal entities the books belong to (the `entity` of books and rows). Key: `entity`, with `valid_from`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `entity` ● | str | The entity code exactly as books and rows carry it |
+| `name` | str | |
+| `funding_scheme` ● | enum | `by_book_type`: each book is funded by the rules of its `book_type`; `cash_balance`: the entity's whole cash balance is funded, whatever its books |
+| `pnl_sweep` | enum | `daily`, `monthly`, `quarterly`, `none`: how often the entity's PnL is swept out of its cash (a sweep shows as a jump in `cash_balances`); absent: not known |
+| `active` | bool | Default true |
+| `valid_from` | date | First business date the row applies (§7) |
+
+### `funding_rules` — from `reference()` (optional, since 1.2)
+
+How books are funded: what is funded (the basis) and at which rate, per selectors. Key: `rule_id`, with `valid_from`
+(a change of rate is a new row of the same rule with a later `valid_from`, so past days keep the rates of their
+time).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `rule_id` ● | str | The adapter's stable id of the rule |
+| `valid_from` | date | First business date the row applies (§7) |
+| `active` | bool | Default true; false retires the rule from `valid_from` on |
+| `book_type` | enum | Selector: as `books` |
+| `entity` | str | Selector |
+| `book_id` | str | Selector: a special rate of one book |
+| `ccy` | str | Selector: the currency funded |
+| `instrument_id` | str | Selector: a special rate of one security (a hub instrument id) |
+| `basis` | enum | What is funded: `mv_clean`, `mv_dirty` (market value without or with accrued), `cash` (the cash balance), `cost` (the cash paid at purchase), `none`; absent: the engine's default for the book type |
+| `rate_kind` ● | enum | `index_spread` (an index plus `spread_bp`), `fixed` (`fixed_rate_pct`), `contract` (the position's or trade's own contract rate), `none` (not funded) |
+| `index_code` | str | `index_spread`: the hub's fixing index code (`KEY_RATE`, `RUONIA`, ...); required for it |
+| `spread_bp` | num | `index_spread`: added to the index; absent: 0 |
+| `fixed_rate_pct` | num | `fixed`: required for it |
+| `day_count` | enum | `ACT/365`, `ACT/360`; absent: the engine's default for the currency |
+
+A rule **applies** to a position (entity, book, book type, currency, instrument) on date D when it is in force on D
+and every selector it gives equals the position's; an absent selector matches anything. Of the rules that apply, the
+most specific wins: the one that gives the first selector, in the order `instrument_id`, `book_id`, `entity`,
+`book_type`, `ccy`, that the others do not. Rules with equal selectors are ambiguous (`ambiguous_rule`); the engine
+then takes the lowest `rule_id` and flags it. Interest is simple, accrued per calendar day and converted to RUB by
+the engine; nothing here compounds. A position no rule applies to is not funded and is flagged by the engine.
 
 ### Differences from 1.3, settled here
 
@@ -405,6 +520,38 @@ As 1.3 `books`: `book_id` ●, `name` ●, `desk` ●, `book_type` ● (`TRADING
 | revisions per (book, date) | per (dataset, scope unit, business date), across sources | |
 | `books.book_type`, `entity` optional | required | |
 
+### Contract 1.3 templates superseded
+
+The 1.3 CSV templates of the prototype (`contract/csv/`, [DATA_REQUIREMENTS](../DATA_REQUIREMENTS.md)) stay for the
+prototype `tdm`; for the backend the private contract replaces them:
+
+| 1.3 template | Superseded by |
+|---|---|
+| `positions.csv` | `positions` |
+| `books.csv` | `reference()["books"]` |
+| `funding_rates.csv` | `reference()["funding_rules"]` (its selectors `book_type`, `book_id`, `entity`, `instrument_id`, `ccy` and rate `index_name` + `spread_bp` or `fixed_rate` carry over) |
+| `cash_balances.csv` | `cash_balances` |
+| `pnl_official.csv` | `pnl_official` |
+| `otc_deals.csv` | `trade_terms` (FX forwards since 1.2; swaps, CCS, CDS: later minors) and `positions` (`otc` rows with the report's PV and risk) |
+| `funding.csv` (REPO and funding deals) | `trade_terms` (REPO: a later minor) |
+| `trades.csv` | `trades` |
+
+### Drafts (not in 1.2)
+
+Designs agreed in direction, without a schema yet; each becomes a minor with its slice:
+
+- `trade_terms` for swaps (adapter A9): `product_kind` `irs`, `ois`, `ccs`, one row per leg (`leg_id` `pay`/`receive`)
+  with `notional`, `ccy`, `fixed_rate_pct` or `index_code` + `spread_bp`, `start_date`, `maturity_date`, payment
+  frequency and day count; REPO: `product_kind` `repo`, the security (`instrument_id`/`isin`), `repo_rate_pct`,
+  dates of both legs; HTM purchases: `product_kind` `bond_purchase` with purchase date, price and contract rate.
+- `price_policy` (adapter A10), a reference table: per security (`instrument_id`, falling back to `isin`) a `policy`
+  (`sticky_internal`: the last internal EOD price holds until the next one and the hub's price does not replace it
+  intraday), with `valid_from`. A security without a hub price is valued only at the internal price, else down the
+  ladder with a warning.
+- `funding_rules` for REPO (the rate of the funded security, or the contract rate from a term threshold) and extra
+  spreads by bond class: new selectors, once the rules are settled.
+- `trades`, `internal_market`: as designed above, with S13 and S10.
+
 The backend's current `desk load-positions` CSV (`position_id, book_id, secid, quantity_bonds`) stays for the synthetic books. The reference adapter reads canonical v1 CSV.
 
 ## 11 Integration points
@@ -417,8 +564,17 @@ The backend's current `desk load-positions` CSV (`position_id, book_id, secid, q
 | **I4 OCP and cash** | S9 | A4 | reported OCP vs OCP derived from positions |
 | **I5 Internal market data** | S10 | A5 | EOD-internal run and the diff screen |
 | **I6 Trades** | S13 | A6 | intraday book = opening positions + trades |
+| **I7 Settings and rules** | `settings_tabs` (§4) on the settings page; `reference()` `entities`, `funding_rules` validated and stored (§7, 1.2); the generic funding engine reads them | A7: the tabs, `entities.json`, `funding.json`, FUTURES books | the tabs open and save; the engine's funding of a synthetic book on synthetic rules equals a hand calculation |
+| **I8 Cash balances** | `cash_balances` schema, storage and multi-date history (§6.1, 1.2); funding of cash-funded books (S9) | A8 | a day's balances equal the report; a history file fills the past dates; two ledgers side by side |
+| **I9 Trade terms** | `trade_terms` schema and storage (1.2, FX); valuation from terms by core (S14) | A9 | PV of FX forwards from terms vs `pv_rub`; the currency PV of legs enters the derived OCP |
+| **I10 Price policy** | `price_policy` (draft, §10) and the sticky internal price with S10 | A10 | a security on the list keeps its internal price intraday |
 
 Each point is done when the kit passes on the synthetic fixtures **and** the owner's dry run at work shows no `error` issues.
+
+Status 22.10.2026: I1 and I2 are live. The backend has the schemas and the storage of I3 (official PnL), I4
+(`ocp`), I7 (reference tables, settings tabs as a contract), I8 and I9; the screens and calculations on them come
+with their slices (S8, S9, S11, S14) and the funding engine. The reference adapter reads all of them from canonical
+CSV (`desk.inbox.reference`), so the backend builds on them before the private adapter emits them.
 
 ## 12 Who does what
 

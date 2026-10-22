@@ -1,0 +1,7 @@
+﻿_report_date;entity;book_id;ccy;account_id;balance_ccy;account_kind;ledger
+2026-10-16;ENT1;D1;RUB;MAIN;-50000000;settlement;S1
+2026-10-16;ENT1;D1;USD;MAIN;400000;settlement;S1
+;ENT1;D1;RUB;MAIN;-52000000;settlement;S1
+;ENT1;D1;RUB;MAIN;-51990000;settlement;S2
+;ENT1;D1;USD;MAIN;410000;settlement;S1
+;ENT2;C1;RUB;MAIN;125000000;;

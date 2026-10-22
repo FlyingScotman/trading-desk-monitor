@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "private/1.2/pnl_official",
+  "title": "pnl_official row",
+  "description": "Private input contract v1 (docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md §10). One row as the adapter emits it. An optional field may be absent or null (the same thing); the empty string is invalid everywhere. Raw firm values go in x_* keys; _src is the row's location in the report, without sheet names.",
+  "type": "object",
+  "required": [
+    "_src",
+    "entity",
+    "book_id",
+    "line_id",
+    "pnl_daily_rub",
+    "pnl_pl_daily_rub",
+    "pnl_oci_daily_rub"
+  ],
+  "properties": {
+    "_src": {
+      "$ref": "#/$defs/str"
+    },
+    "_dataset": {
+      "enum": [
+        "pnl_official"
+      ]
+    },
+    "entity": {
+      "$ref": "#/$defs/str"
+    },
+    "book_id": {
+      "$ref": "#/$defs/str"
+    },
+    "line_id": {
+      "$ref": "#/$defs/str"
+    },
+    "position_id": {
+      "$ref": "#/$defs/str"
+    },
+    "trade_id": {
+      "$ref": "#/$defs/str"
+    },
+    "trade_status": {
+      "$ref": "#/$defs/str"
+    },
+    "trade_version": {
+      "$ref": "#/$defs/int"
+    },
+    "trade_date": {
+      "$ref": "#/$defs/date"
+    },
+    "settle_date": {
+      "$ref": "#/$defs/date"
+    },
+    "maturity_date": {
+      "$ref": "#/$defs/date"
+    },
+    "source_instrument_id": {
+      "$ref": "#/$defs/str"
+    },
+    "source_instrument_name": {
+      "$ref": "#/$defs/str"
+    },
+    "isin": {
+      "$ref": "#/$defs/str"
+    },
+    "regnum": {
+      "$ref": "#/$defs/str"
+    },
+    "moex_secid": {
+      "$ref": "#/$defs/str"
+    },
+    "instrument_id": {
+      "$ref": "#/$defs/str"
+    },
+    "product_family": {
+      "$ref": "#/$defs/str"
+    },
+    "product_type": {
+      "$ref": "#/$defs/str"
+    },
+    "product_subtype": {
+      "$ref": "#/$defs/str"
+    },
+    "ccy": {
+      "$ref": "#/$defs/ccy"
+    },
+    "long_short": {
+      "$ref": "#/$defs/str"
+    },
+    "buy_sell": {
+      "$ref": "#/$defs/str"
+    },
+    "pnl_daily_rub": {
+      "$ref": "#/$defs/amount"
+    },
+    "pnl_pl_daily_rub": {
+      "$ref": "#/$defs/amount"
+    },
+    "pnl_oci_daily_rub": {
+      "$ref": "#/$defs/amount"
+    },
+    "pnl_mtd_rub": {
+      "$ref": "#/$defs/amount"
+    },
+    "pnl_ytd_rub": {
+      "$ref": "#/$defs/amount"
+    },
+    "accrual_rpt": {
+      "$ref": "#/$defs/amount"
+    },
+    "price_change_rpt": {
+      "$ref": "#/$defs/amount"
+    },
+    "fx_reval_rpt": {
+      "$ref": "#/$defs/amount"
+    },
+    "premium_discount_rpt": {
+      "$ref": "#/$defs/amount"
+    },
+    "new_trades_rpt": {
+      "$ref": "#/$defs/amount"
+    },
+    "commission_rpt": {
+      "$ref": "#/$defs/amount"
+    },
+    "brokerage_rpt": {
+      "$ref": "#/$defs/amount"
+    },
+    "reserves_rpt": {
+      "$ref": "#/$defs/amount"
+    },
+    "other_mtm_rpt": {
+      "$ref": "#/$defs/amount"
+    },
+    "dividend_rpt": {
+      "$ref": "#/$defs/amount"
+    }
+  },
+  "patternProperties": {
+    "^x_": {}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "str": {
+      "type": "string",
+      "minLength": 1
+    },
+    "amount": {
+      "type": [
+        "number",
+        "string"
+      ],
+      "pattern": "^-?[0-9]+(\\.[0-9]+)?$",
+      "description": "a finite JSON number or a decimal string; no NaN, exponents in strings, separators or commas"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "ccy": {
+      "type": "string",
+      "minLength": 1,
+      "description": "a currency code; the backend upper-cases it and reads RUR as RUB"
+    },
+    "int": {
+      "type": [
+        "integer",
+        "string"
+      ],
+      "pattern": "^-?[0-9]+$",
+      "description": "an integer: a JSON integer or a string of digits; normalised to an integer"
+    }
+  }
+}
