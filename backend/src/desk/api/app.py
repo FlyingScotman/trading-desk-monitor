@@ -29,7 +29,7 @@ from fastapi.staticfiles import StaticFiles
 from psycopg.rows import dict_row
 from starlette.exceptions import HTTPException
 
-from .. import __version__
+from .. import __version__, lan
 from ..marketdata import history
 from ..publish.funding_run import NOT_COMPUTED, REPORTING_CCY, STATUS_TEXT
 from ..scenario import jobs
@@ -319,6 +319,8 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
     app.state.store_url = store_url
     app.state.started_at = datetime.now(UTC)  # the diagnostics' uptime (R13)
+    app.state.instance = uuid.uuid4().hex[:16]  # /health/live's X-Desk-Instance: the LAN self-check knows its server
+    app.state.lan_probe = None  # desk.lan.probe_all once serve has started (the settings page's «Сеть»)
     app.state.body_cache = BodyCache()
     app.state.auth = auth or authn.AuthConfig()
 
@@ -373,7 +375,8 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
     # ---- health
     @app.get("/health/live")
-    def live() -> dict[str, str]:
+    def live(response: Response) -> dict[str, str]:
+        response.headers[lan.INSTANCE_HEADER] = app.state.instance
         return {"status": "ok"}
 
     @app.get("/health/ready", response_model=Ready)
@@ -703,28 +706,61 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
 
 def listen_sockets(host: str, port: int) -> list:
-    """The sockets ``serve`` listens on: ``host``, and 127.0.0.1 beside a specific network address, so that the
-    launcher's health check and the admin's own browser keep working on this computer (0.0.0.0 covers it)."""
+    """The sockets ``serve`` listens on, all served by its one uvicorn server with the same TLS: ``host`` alone
+    when it covers 127.0.0.1 (a loopback address, 0.0.0.0, ::), else ``host`` and 127.0.0.1 beside it, so that the
+    launcher's health check and the admin's own browser keep working on this computer.
+    Not inheritable (Python's default): a child process must never hold a copy of a listening socket, which would
+    outlive this server and take connections nobody answers. No SO_REUSEADDR on Windows: there it would let another
+    process bind the same address and port."""
     import socket
 
-    hosts = [host] + ([] if authn.is_loopback(host) or host in ("0.0.0.0", "::") else ["127.0.0.1"])
+    hosts = [host] + ([] if authn.is_loopback(host) or host in lan.WILDCARD else ["127.0.0.1"])
     out = []
     try:
         for h in hosts:
             family = socket.AF_INET6 if ":" in h else socket.AF_INET
             sock = socket.socket(family, socket.SOCK_STREAM)
-            if os.name != "nt":  # on Windows SO_REUSEADDR would let another process take the port too
+            out.append(sock)
+            if os.name != "nt":
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             if h == "::":
                 sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-            out.append(sock)
             sock.bind((h, port))
-            sock.set_inheritable(True)
     except OSError:
         for sock in out:
             sock.close()
         raise
     return out
+
+
+def server_loop() -> str:
+    """uvicorn's ``loop``: on Windows the selector event loop. The default proactor loop closes a listening socket
+    for good after one failed accept (a client that resets before it is accepted, WinError 64; asyncio
+    ``proactor_events._start_serving``), which a server on the network meets; the selector loop logs such an accept
+    and keeps listening."""
+    return "asyncio:SelectorEventLoop" if os.name == "nt" else "auto"
+
+
+def self_check(app: FastAPI, server: Any, host: str, port: int, tls: bool, wait_s: float = 300.0) -> None:
+    """Once the server accepts: ``desk.lan.probe_all`` against 127.0.0.1 and this computer's network addresses (no
+    proxy), logged with a Russian hint (the start.bat window and serve.log) and kept in ``app.state.lan_probe`` for
+    the settings page."""
+    deadline = time.monotonic() + wait_s
+    while not server.started:
+        if server.should_exit or time.monotonic() > deadline:
+            return
+        time.sleep(0.2)
+    try:
+        res = lan.probe_all(host, port, tls, instance=app.state.instance)
+    except Exception:  # a diagnostic: never the server's problem
+        log.warning("LAN self-check failed", exc_info=True)
+        return
+    app.state.lan_probe = res
+    bad = [r for r in [res["loopback"], *res["lan"]] if r["status"] != "ok"]
+    if not bad:
+        log.info("проверка адресов (с этого компьютера, без прокси): %s", res["summary"])
+    for r in bad:
+        log.warning("проверка адреса %s: %s (%s). %s", r["url"], r["label"], r["detail"], r["hint"])
 
 
 def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir: Path | None = None,
@@ -756,11 +792,12 @@ def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir:
     if snapshots is not None:
         jobs.Worker(store_url, SnapshotDir(snapshots)).start()
     app = create_app(store_url, static_dir, adapter_status=adapter_status, auth=auth)
+    app.state.listen = {"host": host, "port": port, "tls": tls is not None}  # the settings page's «Сеть»: what this server listens on
     if autopilot is not None:
         app.state.autopilot = autopilot
         autopilot.start()
     # the desk.api logger logs every request with its request id, so no uvicorn access log
-    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, access_log=False,
+    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, access_log=False, loop=server_loop(),
                                            ssl_certfile=str(tls[0]) if tls else None,
                                            ssl_keyfile=str(tls[1]) if tls else None))
     restart = restart_code()
@@ -795,6 +832,9 @@ def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir:
                 time.sleep(0.1)
 
     threading.Thread(target=warm_loop, name="desk-warm", daemon=True).start()
+    if not authn.is_loopback(host):
+        threading.Thread(target=self_check, args=(app, server, host, port, tls is not None), name="desk-lan-check",
+                         daemon=True).start()
     try:
         server.run(sockets=sockets)
     except KeyboardInterrupt:  # uvicorn raises the captured Ctrl+C again after its shutdown

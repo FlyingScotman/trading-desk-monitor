@@ -19,7 +19,8 @@
     desk user add NAME --role admin      a user of the monitor (viewer, trader, admin); asks for the password
     desk user list | passwd NAME | role NAME ROLE | disable NAME | enable NAME | unlock NAME
     desk lan enable [--self-signed | --cert F --key F | --plain-http]   sign-in on, listen on the network
-    desk lan status | disable            what colleagues would open; back to this computer only
+    desk lan status [--no-probe] [--json]  address, HTTPS, certificate names, firewall rule, URLs, self-check
+    desk lan disable                     back to this computer only
     desk cycle [--date D] [--no-hub]     one autopilot cycle: hub sync -> inbox scan -> EOD of changed dates
     desk backfill [--from D] [--to D] [--dry-run]  default runs of the past dates with positions (R23)
     desk openapi --out ../frontend/openapi.json   the API's OpenAPI document (stdout without --out)
@@ -733,36 +734,39 @@ def cmd_user(a: argparse.Namespace) -> int:
 
 
 def _lan_urls(host: str, port: int, tls: bool) -> list[str]:
-    from .api import auth
+    from . import lan
 
-    scheme = "https" if tls else "http"
-    names = auth.local_names() if host in ("0.0.0.0", "::") else [host]
-    return [f"{scheme}://{n}:{port}/" for n in names]
+    return lan.lan_urls(host, port, tls)
 
 
 def firewall_command(port: int) -> str:
     """The Windows firewall rule letting colleagues reach the port (``deskctl firewall add`` runs the same)."""
-    return (f'netsh advfirewall firewall add rule name="Desk Monitor (TCP {port})" dir=in action=allow '
+    from . import lan
+
+    return (f'netsh advfirewall firewall add rule name="{lan.FIREWALL_RULE.format(port=port)}" dir=in action=allow '
             f"protocol=TCP localport={port} profile=domain,private")
 
 
 def cmd_lan(a: argparse.Namespace) -> int:
+    from . import lan
     from .api import auth
     from .settings import desk_home, update_settings_json
 
     st = a.settings
     if a.lan_cmd == "status":
-        tls = bool(st.tls_cert and st.tls_key)
-        print(f"sign-in (auth): {'on' if st.auth else 'off'}")
-        print(f"listens on: {st.bind_host}:{st.port}"
-              + ("  (this computer only)" if auth.is_loopback(st.bind_host) else ""))
-        print(f"HTTPS: {'on, ' + str(st.tls_cert) if tls else 'off'}"
-              + ("; plain HTTP allowed (allow_plain_http)" if st.allow_plain_http and not tls else ""))
-        print(f"admins from other computers: {'yes' if st.admin_from_network else 'no'}")
-        if not auth.is_loopback(st.bind_host):
-            print("colleagues open: " + ", ".join(_lan_urls(st.bind_host, st.port, tls)))
-            print(f"Windows firewall (a command prompt run as administrator): {firewall_command(st.port)}")
-        return 0
+        # the running server answers on 127.0.0.1 and, when it listens on the network, on this computer's addresses
+        doc = lan.status(st, run_probe=not a.no_probe, timeout=a.timeout)
+        if a.json:
+            print(json.dumps(doc, ensure_ascii=False, indent=1))
+        else:
+            lines = lan.status_lines(doc)
+            lines.insert(3, f"admins from other computers: {'yes' if st.admin_from_network else 'no'}")
+            print("\n".join(lines))
+            if doc["network"] and doc["firewall"]["present"] is not True:
+                print(f"Windows firewall (a command prompt run as administrator): {firewall_command(st.port)}")
+        p = doc["probe"]
+        return 1 if p and any(r["status"] != "ok" for r in [p["loopback"], *(p["lan"] if doc["network"] else [])]) \
+            else 0
     if a.lan_cmd == "disable":
         update_settings_json({"bind_host": "127.0.0.1", **({"auth": False} if a.auth_off else {})}, desk_home())
         print("bind_host 127.0.0.1: this computer only" + ("; sign-in off" if a.auth_off else "; sign-in stays on")
@@ -1086,7 +1090,13 @@ def main(argv: list[str] | None = None) -> int:
         uv.set_defaults(fn=cmd_user)
     ln = sub.add_parser("lan", help="access from other computers: sign-in on, listen on the network")
     lsub = ln.add_subparsers(dest="lan_cmd", required=True)
-    lsub.add_parser("status", help="sign-in, address, HTTPS, the URL for colleagues").set_defaults(fn=cmd_lan)
+    ls = lsub.add_parser("status", help="sign-in, address, HTTPS and its certificate's names, the firewall rule, the "
+                         "URLs for colleagues, and a check of the running server on 127.0.0.1 and this computer's "
+                         "network addresses (exit 1 when one does not answer)")
+    ls.add_argument("--no-probe", action="store_true", help="skip the check of the running server")
+    ls.add_argument("--timeout", type=float, default=3.0, help="seconds per address checked (default 3)")
+    ls.add_argument("--json", action="store_true", help="as JSON")
+    ls.set_defaults(fn=cmd_lan)
     le = lsub.add_parser("enable", help="sign-in on and listen on the network (needs an admin: desk user add); "
                          "takes effect after a restart")
     le.add_argument("--host", default="0.0.0.0", help="address to listen on (default 0.0.0.0: every network "

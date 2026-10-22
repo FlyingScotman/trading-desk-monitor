@@ -1028,19 +1028,9 @@ def self_signed_cert(folder: Path, names: list[str], days: int = 825) -> tuple[P
 
 
 def local_names() -> list[str]:
-    """This computer's host names and IPv4 addresses (for the certificate and the URL to give colleagues)."""
-    import socket
+    """This computer's host names and IPv4 addresses (for the certificate and the URL to give colleagues):
+    ``desk.lan.local_names``."""
+    from .. import lan
 
-    out: list[str] = []
-    for n in (socket.gethostname(), socket.getfqdn()):
-        if n and n not in out:
-            out.append(n)
-    try:
-        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            ip = str(info[4][0])
-            if ip not in out and not ip.startswith("127."):
-                out.append(ip)
-    except OSError:
-        pass
-    return out
+    return lan.local_names()
 

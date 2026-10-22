@@ -459,7 +459,7 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
 
     <!-- ========== Диагностика ========== -->
     <section class="sec" id="sec-diag" data-sec="diag">
-      <div class="sec-h"><div><h1>Диагностика</h1><p>Файл для агента, загрузка позиций по книгам, ход истории прогонов и где что лежит.</p></div></div>
+      <div class="sec-h"><div><h1>Диагностика</h1><p>Файл для агента, доступ из сети, загрузка позиций по книгам, ход истории прогонов и где что лежит.</p></div></div>
 
       <!-- Диагностика (R13; свои стиль и скрипт; данные: /api/v1/diagnostics) -->
       <div class="card" id="dg">
@@ -477,6 +477,22 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
             <span id="dg-msg" class="muted"></span>
           </div>
           <pre id="dg-out" hidden></pre>
+        </div>
+      </div>
+
+      <!-- Доступ из сети (desk lan status; данные: /api/v1/lan/status) -->
+      <div class="card" id="lan">
+        <style>
+          #lan .pr{margin:2px 0}
+          #lan .pr b{font-weight:500}
+          #lan .pr.bad b{color:var(--neg)} #lan .pr.ok b{color:var(--pos)}
+          #lan .pr .hint{margin:2px 0 6px 0}
+        </style>
+        <div class="hd"><h2>Доступ из сети</h2><span class="mut3" id="lan-when"></span><span class="sp"></span><button class="ibtn" id="lan-run" type="button">Проверить сейчас</button></div>
+        <div class="bd">
+          <p class="hint" style="margin:0 0 8px">Адрес, HTTPS и сертификат, правило брандмауэра, адреса для коллег и проверка этого сервера с этого же компьютера (без прокси) — то же, что <span class="mono">desk.bat lan status</span>. Как включить доступ: START_HERE.txt, раздел 9. <span id="lan-msg" class="muted"></span></p>
+          <table class="t"><tbody id="lan-rows"></tbody></table>
+          <div id="lan-probe" style="margin-top:8px"></div>
         </div>
       </div>
 
@@ -580,9 +596,9 @@ async function api(method, url, body){
   return j;
 }
 
-/* ---------- разделы: #hub, #adapter, #entities, #books, #funding, #auto, #up, #diag (и #dg, #rc, #bf, #eff внутри), #users ---------- */
+/* ---------- разделы: #hub, #adapter, #entities, #books, #funding, #auto, #up, #diag (и #dg, #lan, #rc, #bf, #eff внутри), #users ---------- */
 const SECTIONS = ['hub', 'adapter', 'entities', 'books', 'funding', 'auto', 'up', 'diag', 'users'];
-const INNER = {dg:'diag', rc:'diag', bf:'diag', eff:'diag', 'eff-card':'diag'};
+const INNER = {dg:'diag', lan:'diag', rc:'diag', bf:'diag', eff:'diag', 'eff-card':'diag'};
 function show(hash){
   let id = (hash || '').replace(/^#/, ''), inner = null;
   if (INNER[id]) { inner = id; id = INNER[id]; }
@@ -1339,5 +1355,60 @@ function mountTabs(a, reload){
   }
   $('bf-run').addEventListener('click', load);
   if (/^https?:$/.test(location.protocol)) load();
+})();
+</script>
+<script>
+'use strict';
+/* ---------- Доступ из сети: /api/v1/lan/status (desk lan status) — адрес, HTTPS, сертификат, брандмауэр, адреса для коллег;
+   проверка при запуске сервера (last) и по «Проверить сейчас» (probe=1) ---------- */
+(function lanStatus(){
+  const FW = {true:'есть', false:'нет — desk.bat firewall add (от имени администратора)', null:'неизвестно (не Windows)'};
+  function rows(s){
+    const out = [
+      ['Слушает', s.bind_host + ':' + s.port + (s.network ? (s.bind_host === '0.0.0.0' || s.bind_host === '::' ? ' — все адреса этого компьютера и 127.0.0.1' : ' и 127.0.0.1') : ' — только этот компьютер')],
+      ['Вход по паролю', s.auth ? 'включён' : 'выключен'],
+      ['HTTPS', s.tls ? 'да' : (s.allow_plain_http ? 'нет, HTTP разрешён (allow_plain_http)' : 'нет')],
+    ];
+    const c = s.cert;
+    if (c) out.push(['Сертификат', !c.exists ? 'файл не найден' : c.error ? c.error
+      : 'до ' + c.not_after + '; имена: ' + c.sans.join(', ') + (c.missing.length ? '\nнет в сертификате (браузер предупредит): ' + c.missing.join(', ') + ' — новый: desk.bat lan enable --self-signed' : '')]);
+    if (s.network) {
+      out.push(['Брандмауэр', '«' + s.firewall.rule + '»: ' + FW[String(s.firewall.present)]]);
+      out.push(['Адреса для коллег', s.urls.join('\n') || '—']);
+    }
+    return out;
+  }
+  function probeBlock(p, title){
+    const box = document.createElement('div');
+    const h = document.createElement('div'); h.className = 'muted';
+    h.textContent = title + (p.at ? ' (' + new Date(p.at).toLocaleString('ru-RU') + ')' : '') + ':';
+    box.append(h);
+    [p.loopback].concat(p.lan).forEach(r => {
+      const d = document.createElement('div'); d.className = 'pr ' + (r.status === 'ok' ? 'ok' : 'bad');
+      d.innerHTML = '<span class="mono"></span> — <b></b> <span class="muted"></span>';
+      d.children[0].textContent = r.url; d.children[1].textContent = r.label;
+      d.children[2].textContent = '(' + (r.detail || r.status) + (r.ms != null ? ', ' + r.ms + ' мс' : '') + ')';
+      if (r.status !== 'ok') { const hn = document.createElement('div'); hn.className = 'hint'; hn.textContent = r.hint; d.append(hn); }
+      box.append(d);
+    });
+    return box;
+  }
+  async function load(probe){
+    $('lan-msg').textContent = probe ? 'проверяю…' : '';
+    try {
+      const r = await fetch('/api/v1/lan/status' + (probe ? '?probe=1' : ''), {headers:{'Accept':'application/json'}, cache:'no-store'});
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const s = await r.json();
+      const tb = $('lan-rows'); tb.textContent = '';
+      rows(s).forEach(([k, v]) => { const tr = document.createElement('tr'); tr.innerHTML = '<td class="k"></td><td class="v" style="white-space:pre-wrap"></td>'; tr.children[0].textContent = k; tr.children[1].textContent = v; tb.append(tr); });
+      const pb = $('lan-probe'); pb.textContent = '';
+      if (s.probe) pb.append(probeBlock(s.probe, 'Проверка сейчас'));
+      else if (s.last) pb.append(probeBlock(s.last, 'Проверка при запуске'));
+      else if (s.network) pb.textContent = 'Проверки при запуске ещё нет — «Проверить сейчас».';
+      $('lan-msg').textContent = ''; $('lan-when').textContent = 'на ' + new Date().toLocaleTimeString('ru-RU');
+    } catch (e) { $('lan-msg').textContent = 'не загрузилось: ' + e.message; }
+  }
+  $('lan-run').addEventListener('click', () => load(true));
+  if (/^https?:$/.test(location.protocol)) load(false);
 })();
 </script>

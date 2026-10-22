@@ -420,7 +420,11 @@ def test_cli_users_and_lan(store_url, home: Path, monkeypatch, capsys):
     doc = json.loads((home / "settings.json").read_text(encoding="utf-8"))
     assert doc["auth"] is True and doc["bind_host"] == "0.0.0.0" and doc["port"] == 8443
     assert Path(doc["tls_cert"]).is_file() and Path(doc["tls_key"]).is_file()
-    assert run("lan", "status") == 0 and "sign-in (auth): on" in capsys.readouterr().out
+    assert run("lan", "status", "--no-probe") == 0
+    out = capsys.readouterr().out
+    assert "sign-in (auth): on" in out and "names: desk.corp" in out and "firewall rule" in out
+    assert run("lan", "status", "--timeout", "0.5") == 1  # no server on 8443: the self-check fails
+    assert "refused" in capsys.readouterr().out
     assert run("lan", "enable", "--plain-http") == 0
     doc = json.loads((home / "settings.json").read_text(encoding="utf-8"))
     assert doc["allow_plain_http"] is True and "tls_cert" not in doc
