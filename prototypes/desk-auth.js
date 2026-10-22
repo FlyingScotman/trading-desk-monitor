@@ -79,6 +79,7 @@
     '.da-user.float{position:fixed;top:6px;right:10px;z-index:60;background:var(--panel,var(--surface,#fff));' +
     'border:1px solid var(--line,#d9dee5);border-radius:3px;padding:2px 8px}' +
     '.da-warn{background:#fff3cd;color:#5c4400;border-bottom:1px solid #e0c060;padding:4px 16px;font:12px/1.4 system-ui,"Segoe UI",sans-serif}' +
+    '@media (max-width:600px){.da-user{white-space:normal;flex-wrap:wrap;max-width:100%}}' +  // телефон: строка не шире экрана
     '@media print{.da-user,.da-warn{display:none}}';
 
   function widget(s, compact) {  // compact: шапка мониторов (.k-top), места мало — имя (смена пароля) и «Выйти»

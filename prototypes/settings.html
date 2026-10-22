@@ -207,7 +207,7 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
 .savebar{position:fixed;left:50%;transform:translateX(-50%);bottom:16px;z-index:60;background:var(--panel);border:1px solid var(--line-2);border-radius:10px;box-shadow:var(--shadow);display:flex;align-items:center;gap:12px;padding:9px 12px 9px 16px;max-width:calc(100vw - 32px);flex-wrap:wrap}
 .toast{position:fixed;right:16px;bottom:16px;z-index:120;max-width:min(460px,calc(100vw - 32px));background:var(--panel);border:1px solid var(--line-2);border-left:3px solid var(--accent);border-radius:8px;box-shadow:var(--shadow);padding:10px 14px;font-size:12.5px}
 .toast.ok{border-left-color:var(--pos)} .toast.err{border-left-color:var(--neg)}
-#users-card .du > h2{display:none} /* заголовок раздела — h1 выше */
+#users-card .du > h2,#users-card .du > p.du-note:first-of-type{display:none} /* заголовок и состояние входа — в шапке раздела выше */
 </style>
 
 <div class="st-shell">

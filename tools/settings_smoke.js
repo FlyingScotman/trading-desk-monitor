@@ -1,17 +1,19 @@
 // Playwright check of the settings page (R40, R41) on a running desk serve: every section opens without console
 // errors (dark and light), the adapter's forms render, the books table lists books of recent positions that books.json
 // lacks («не настроено»), one is added in one click, checked by the server with a diff, saved, and shows in the history.
-//   node tools/settings_smoke.js http://127.0.0.1:8100 [out_dir] [--no-write]
+//   node tools/settings_smoke.js http://127.0.0.1:8100 [out_dir] [--no-write] [--login USER:PASSWORD]
+// --login: sign in first (sign-in on, backend api/auth.py; an admin). The «Пользователи» section lists the users.
 // Needs a desk serve whose adapter declares settings_tabs (the trades-data-adapter) and positions of a book its
 // books.json does not name (e.g. `desk load-positions backend/examples/demo_book.csv --date …`). --no-write: look only.
 const { chromium } = require('/opt/node22/lib/node_modules/playwright');
 const path = require('path'), fs = require('fs');
 const args = process.argv.slice(2), noWrite = args.includes('--no-write');
+const li = args.indexOf('--login'), login = li >= 0 ? args.splice(li, 2)[1] : null;
 const pos = args.filter(a => !a.startsWith('--'));
 const base = (pos[0] || 'http://127.0.0.1:8100').replace(/\/$/, '');
 const out = path.resolve(pos[1] || path.join(__dirname, '..', '.shots', 'settings'));
 fs.mkdirSync(out, { recursive: true });
-const SECTIONS = ['hub', 'adapter', 'entities', 'books', 'funding', 'auto', 'up', 'diag'];
+const SECTIONS = ['hub', 'adapter', 'entities', 'books', 'funding', 'auto', 'up', 'diag', 'users'];
 let bad = 0;
 const fail = (m) => { bad++; console.log('FAIL ' + m); };
 const ok = (m) => console.log('ok   ' + m);
@@ -21,6 +23,11 @@ const ok = (m) => console.log('ok   ' + m);
   for (const theme of ['dark', 'light']) {
     const ctx = await b.newContext({ viewport: { width: 1440, height: 960 } });
     await ctx.addInitScript(t => { try { localStorage.setItem('concepts-theme', t); } catch (e) { } }, theme);
+    if (login) {
+      const [username, ...pw] = login.split(':');
+      const r = await ctx.request.post(base + '/api/v1/auth/login', { data: { username, password: pw.join(':') } });
+      if (!r.ok()) { fail('login ' + username + ': ' + r.status()); break; }
+    }
     const pg = await ctx.newPage();
     const errs = [];
     pg.on('pageerror', e => errs.push('pageerror: ' + e.message));
@@ -37,6 +44,16 @@ const ok = (m) => console.log('ok   ' + m);
       await pg.screenshot({ path: path.join(out, theme + '-' + s + '.png'), fullPage: true });
     }
     if (theme === 'dark') {
+      // «Пользователи» (desk-users.js): the list (or «пока нет»), and with sign-in off how to enable it (START_HERE §9)
+      await pg.evaluate(() => { location.hash = 'users'; });
+      await pg.waitForSelector('#sec-users [data-desk-users] h3', { timeout: 10000 }).catch(() => fail('users: the section did not render'));
+      await pg.waitForTimeout(600);
+      const u = await pg.evaluate(() => ({ off: !document.getElementById('users-off').hidden, text: document.querySelector('#sec-users [data-desk-users]').textContent,
+        badge: document.getElementById('auth-st').textContent, nav: !document.querySelector('a[data-sec=users]').hidden }));
+      if (!u.nav) fail('users: no link in the nav');
+      if (login ? u.off || !u.text.includes(login.split(':')[0]) : !u.off) fail('users: ' + JSON.stringify(u).slice(0, 300));
+      else ok('users: ' + u.badge + (login ? ', lists ' + login.split(':')[0] : ', how to enable shown'));
+      await pg.screenshot({ path: path.join(out, 'users.png'), fullPage: true });
       await pg.evaluate(() => { location.hash = 'books'; });
       await pg.waitForTimeout(300);
       const unconf = await pg.$$eval('#sec-books tr.unconf', rows => rows.map(r => r.textContent));
@@ -98,7 +115,9 @@ const ok = (m) => console.log('ok   ' + m);
     await ctx.close();
   }
   // phone width: navigation on top, no horizontal scroll
-  const m = await b.newPage({ viewport: { width: 390, height: 844 } });
+  const mc = await b.newContext({ viewport: { width: 390, height: 844 } });
+  if (login) { const [username, ...pw] = login.split(':'); await mc.request.post(base + '/api/v1/auth/login', { data: { username, password: pw.join(':') } }); }
+  const m = await mc.newPage();
   await m.goto(base + '/settings.html#books');
   await m.waitForTimeout(1500);
   const wide = await m.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

@@ -2,6 +2,7 @@
 // щёлкнуть первую кликабельную цифру (разбор) и первую строку позиции (карточка).
 // node prototypes/concepts/tools/smoke.js [out_dir] [--base http://127.0.0.1:8199/concepts/] [page.html ...]
 // --base: the pages served by desk serve (real runs, lib/real.js) instead of the files (demo data)
+// --login USER:PASSWORD: sign in first (desk serve with sign-in on, backend api/auth.py); the pages share the session
 const { chromium } = require('/opt/node22/lib/node_modules/playwright');
 const path = require('path'), fs = require('fs');
 const dir = path.resolve(__dirname, '..');
@@ -9,12 +10,20 @@ const out = path.resolve(process.argv[2] || path.join(dir, '.shots'));
 fs.mkdirSync(out, { recursive: true });
 let pages = process.argv.slice(3), base = null;
 const bi = pages.indexOf('--base'); if (bi >= 0) { base = pages[bi + 1]; pages.splice(bi, 2); }
+let login = null; const li = pages.indexOf('--login'); if (li >= 0) { login = pages[li + 1]; pages.splice(li, 2); }
 if (!pages.length) pages = fs.readdirSync(dir).filter(f => /\.html$/.test(f));
 (async () => {
   const b = await chromium.launch();
+  const ctx = await b.newContext();  // one session for every page (--login)
+  if (login) {
+    const [username, ...pw] = login.split(':'), origin = new URL(base).origin;
+    const r = await ctx.request.post(origin + '/api/v1/auth/login', { data: { username, password: pw.join(':') } });
+    if (!r.ok()) { console.log('FAIL login ' + username + ': ' + r.status()); process.exit(1); }
+    console.log('ok   signed in as ' + username);
+  }
   let bad = 0;
   for (const name of pages) {
-    const pg = await b.newPage({ viewport: { width: 1600, height: 1000 } });
+    const pg = await ctx.newPage(); await pg.setViewportSize({ width: 1600, height: 1000 });
     const errs = [];
     pg.on('pageerror', e => errs.push('pageerror: ' + e.message));
     pg.on('console', m => { if (m.type() === 'error') errs.push('console: ' + m.text()); });
