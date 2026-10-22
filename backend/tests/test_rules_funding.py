@@ -70,11 +70,19 @@ RULES = FundingRules((
 ))
 
 
+# The conventions these tests run under, set explicitly (the engine's defaults leave the market-value base, the HTM
+# base and the write-off unset): synthetic choices, not anyone's rules.
+POLICY = FundingPolicy(
+    base_by_book_type={"TRADING": FundingBase.MV_CLEAN, "HTM": FundingBase.COST, "DERIVS": FundingBase.CASH,
+                       "FUTURES": FundingBase.NONE},
+    htm_base=HtmBase.CASH_SPENT, repo=RepoPolicy(RepoRate.SECURITY), entity_cash_rate_book_type="TRADING")
+
+
 def pos(pid="P1", mv=1_000_000.0, *, book="B1", book_type="TRADING", entity="E1", ccy="RUB", accrued=0.0, **kw):
     return FundingPosition(pid, book, book_type, entity, ccy, mv, accrued, **kw)
 
 
-def run(period=ONE_DAY, rules=RULES, policy=PROVISIONAL_POLICY, **kw):
+def run(period=ONE_DAY, rules=RULES, policy=POLICY, **kw):
     return compute_funding(period, rules, RATES, FX, policy=policy, **kw)
 
 
@@ -117,7 +125,7 @@ def test_rule_version_valid_from_mid_period():
 
 
 def test_dirty_base_and_short_position():
-    policy = FundingPolicy(base_by_book_type={"TRADING": FundingBase.MV_DIRTY})
+    policy = replace(POLICY, base_by_book_type={**POLICY.base_by_book_type, "TRADING": FundingBase.MV_DIRTY})
     long_ = only(run(policy=policy, positions=[pos(accrued=3e4)], previous_positions=[pos(accrued=3e4)]))
     assert long_.days[0].body == -1.03e6 and long_.base is FundingBase.MV_DIRTY
     short = only(run(positions=[pos(mv=-5e5)], previous_positions=[pos(mv=-5e5)]))
@@ -125,7 +133,7 @@ def test_dirty_base_and_short_position():
 
 
 def test_as_of_base_uses_the_as_of_mv():
-    policy = FundingPolicy(mv_base_date=BaseDate.AS_OF)
+    policy = replace(POLICY, mv_base_date=BaseDate.AS_OF)
     line = only(run(policy=policy, positions=[pos(mv=2e6)], previous_positions=[pos(mv=1e6)]))
     assert line.days[0].body == -2e6
 
@@ -134,7 +142,7 @@ def test_as_of_base_uses_the_as_of_mv():
 @pytest.mark.parametrize("mode, days", [(NewPosition.NEXT_PERIOD, None), (NewPosition.LAST_DAY, [MON]),
                                         (NewPosition.FULL_PERIOD, [SAT, SUN, MON])])
 def test_new_position(mode, days):
-    r = run(WEEKEND, policy=FundingPolicy(new_positions=mode), positions=[pos("NEW", 3e5)], previous_positions=[])
+    r = run(WEEKEND, policy=replace(POLICY, new_positions=mode), positions=[pos("NEW", 3e5)], previous_positions=[])
     if days is None:
         assert not r.lines and "1 new position(s) funded from the next period" in r.notes[0]
     else:
@@ -149,7 +157,7 @@ def test_no_previous_snapshot_treats_everything_as_new():
 
 @pytest.mark.parametrize("mode", list(ClosedPosition))
 def test_closed_position(mode):
-    r = run(WEEKEND, policy=FundingPolicy(closed_positions=mode), positions=[], previous_positions=[pos("OLD")])
+    r = run(WEEKEND, policy=replace(POLICY, closed_positions=mode), positions=[], previous_positions=[pos("OLD")])
     if mode is ClosedPosition.NOT_FUNDED:
         assert not r.lines
     else:
@@ -159,7 +167,7 @@ def test_closed_position(mode):
 def test_reduced_position_follows_the_base_date():
     prev, cur = [pos(mv=1e6)], [pos(mv=4e5)]
     assert only(run(positions=cur, previous_positions=prev)).days[0].body == -1e6
-    as_of = FundingPolicy(mv_base_date=BaseDate.AS_OF)
+    as_of = replace(POLICY, mv_base_date=BaseDate.AS_OF)
     assert only(run(policy=as_of, positions=cur, previous_positions=prev)).days[0].body == -4e5
 
 
@@ -168,7 +176,7 @@ def test_reduced_position_follows_the_base_date():
                                          (FxDate.EACH_DAY, [80.0, 80.0, 82.0])])
 def test_foreign_bond_interest_in_reporting_currency(fx_date, fx):
     usd = pos("U1", 1e4, ccy="USD")
-    line = only(run(WEEKEND, policy=FundingPolicy(fx_date=fx_date), positions=[usd], previous_positions=[usd]))
+    line = only(run(WEEKEND, policy=replace(POLICY, fx_date=fx_date), positions=[usd], previous_positions=[usd]))
     assert line.ccy == "USD" and line.rate_expr == "4.00% fixed"
     assert line.interest == pytest.approx(-1e4 * 0.04 * 3 / 365)
     assert [d.fx for d in line.days] == fx
@@ -187,7 +195,7 @@ def test_multi_currency_book_totals():
 def test_out_of_currency_bond():
     usd = pos("U1", 1e4, ccy="USD", settlement_ccy="RUB")
     assert only(run(positions=[usd], previous_positions=[usd])).ccy == "USD"   # security_ccy (provisional)
-    policy = FundingPolicy(out_of_currency=OutOfCurrency.SETTLEMENT_CCY)
+    policy = replace(POLICY, out_of_currency=OutOfCurrency.SETTLEMENT_CCY)
     line = only(run(policy=policy, positions=[usd], previous_positions=[usd]))
     assert line.ccy == "RUB" and line.days[0].body == pytest.approx(-1e4 * 82.0)   # MV at FX of MON (prev)
     assert line.rate_expr == "IDX_K + 100 bp" and "settlement currency" in line.note
@@ -207,7 +215,7 @@ def test_missing_inputs_are_problems_not_zero():
 
 def test_stale_fixing_bound():
     stale = FixingTable({"IDX_K": {date(2026, 9, 1): 0.10}}, max_age_days=30)
-    r = compute_funding(ONE_DAY, RULES, stale, FX, positions=[pos()], previous_positions=[pos()])
+    r = compute_funding(ONE_DAY, RULES, stale, FX, positions=[pos()], previous_positions=[pos()], policy=POLICY)
     assert not r.lines and "no IDX_K value" in r.problems[0].reason
 
 
@@ -265,7 +273,7 @@ def test_extra_spread_by_bond_type():
 
 
 def test_day_basis_policy_and_rule_override():
-    policy = FundingPolicy(day_count=DayCountPolicy(DayBasis.ACT_365, (
+    policy = replace(POLICY, day_count=DayCountPolicy(DayBasis.ACT_365, (
         DayBasisRule(DayBasis.ACT_360, ccy="USD"), DayBasisRule(DayBasis.ACT_365, LineKind.POS, "USD"))))
     assert policy.day_count.basis(LineKind.CASH, "USD") is DayBasis.ACT_360
     assert policy.day_count.basis(LineKind.POS, "USD") is DayBasis.ACT_365
@@ -277,7 +285,7 @@ def test_day_basis_policy_and_rule_override():
     assert only(run(rules=rules, policy=policy, cash=cash, previous_cash=cash)).days[0].basis is DayBasis.ACT_365
 
 
-# ---------------------------------------------------------------------------------------------- cash, CTC, futures
+# ---------------------------------------------------------------------------------------------- cash, entity cash, futures
 def test_derivs_cash_balances():
     prev = [CashBalance("D1", "DERIVS", "E1", "RUB", 2e6), CashBalance("D1", "DERIVS", "E1", "USD", -1e4),
             CashBalance("B1", "TRADING", "E1", "RUB", 7e6)]   # cash of a bond book is not funded
@@ -289,21 +297,24 @@ def test_derivs_cash_balances():
     usd = next(x for x in r.lines if x.ccy == "USD")
     assert usd.interest_reporting == pytest.approx(-1e4 * 0.03 * 3 / 365 * 82.0)
     assert len(r.lines) == 2
-    as_of = only(run(WEEKEND, policy=FundingPolicy(cash_base_date=BaseDate.AS_OF), cash=cur, previous_cash=prev))
+    as_of = only(run(WEEKEND, policy=replace(POLICY, cash_base_date=BaseDate.AS_OF), cash=cur, previous_cash=prev))
     assert as_of.days[0].body == 3e6
     missing = run(cash=cur, previous_cash=None)
     assert not missing.lines and "no previous-day cash snapshot" in missing.problems[0].reason
 
 
-def test_other_entity_ctc_funds_the_whole_cash_balance():
-    entities = {"E1": "main", "CTC1": EntityType.OTHER}
-    cash = [CashBalance("X1", "DERIVS", "CTC1", "RUB", -1e6), CashBalance("X2", "TRADING", "CTC1", "RUB", 5e5)]
-    ps = [pos("CP", 1e6, entity="CTC1"), pos("P1")]
-    repo = RepoDeal("R1", "X1", "DERIVS", "CTC1", "RUB", 1e6, FRI, TUE)
+def test_other_entity_funds_the_whole_cash_balance():
+    entities = {"E1": "main", "OTH1": EntityType.OTHER}
+    cash = [CashBalance("X1", "DERIVS", "OTH1", "RUB", -1e6), CashBalance("X2", "TRADING", "OTH1", "RUB", 5e5)]
+    ps = [pos("CP", 1e6, entity="OTH1"), pos("P1")]
+    repo = RepoDeal("R1", "X1", "DERIVS", "OTH1", "RUB", 1e6, FRI, TUE)
     r = run(cash=cash, previous_cash=cash, positions=ps, previous_positions=ps, repos=[repo], entities=entities)
-    ctc = [x for x in r.lines if x.kind is LineKind.CTC]
-    assert [x.days[0].body for x in ctc] == [-1e6, 5e5]
-    assert all(x.rate_expr == "IDX_K + 100 bp" for x in ctc)   # the TRADING rules (ctc_rate_book_type)
+    ent = [x for x in r.lines if x.kind is LineKind.ENTITY_CASH]
+    assert [x.days[0].body for x in ent] == [-1e6, 5e5]
+    assert all(x.rate_expr == "IDX_K + 100 bp" for x in ent)   # the TRADING rules (entity_cash_rate_book_type)
+    own = run(cash=cash, previous_cash=cash, entities=entities,
+              policy=replace(POLICY, entity_cash_rate_book_type=None))   # default: each balance's own rules
+    assert [x.rate_expr for x in own.lines] == ["IDX_ON", "IDX_K + 100 bp"]
     assert [x.ref for x in r.lines if x.kind is LineKind.POS] == ["P1"]
     assert not any(x.kind is LineKind.REPO for x in r.lines)
     unknown = run(positions=[pos(entity="E9")], previous_positions=[pos(entity="E9")], entities=entities)
@@ -332,7 +343,7 @@ def test_htm_cash_spent_accrued_until_coupon():
     assert line.kind is LineKind.HTM and line.position_id == "H1" and line.rate_expr == "8.00% contract"
     assert [d.body for d in line.days] == [-9.7e5, -9.7e5, -9.5e5]
     assert line.interest == pytest.approx(-(9.7e5 * 2 + 9.5e5) * 0.08 / 365)
-    clean = only(run(WEEKEND, policy=FundingPolicy(htm_base=HtmBase.CLEAN_COST), htm_lots=[lot()]))
+    clean = only(run(WEEKEND, policy=replace(POLICY, htm_base=HtmBase.CLEAN_COST), htm_lots=[lot()]))
     assert [d.body for d in clean.days] == [-9.5e5] * 3
 
 
@@ -343,7 +354,7 @@ def test_htm_purchase_and_maturity_inside_the_period():
 
 
 def test_htm_problems():
-    assert run(htm_lots=[lot(contract_rate=None)]).problems[0].reason == "no contract rate (Q-S5)"
+    assert run(htm_lots=[lot(contract_rate=None)]).problems[0].reason == "no contract rate"
     assert "coupon date" in run(htm_lots=[lot(accrued_until=None)]).problems[0].reason
     h = pos("H2", 1e6, book="H", book_type="HTM")
     r = run(positions=[h], previous_positions=[h], htm_lots=[lot()])
@@ -367,7 +378,7 @@ def test_repo_at_the_security_rate():
 def test_repo_contract_rate_threshold():
     short = RepoDeal("S", "RP", "DERIVS", "E1", "RUB", 1e6, FRI, date(2026, 10, 23), contract_rate=0.2)
     long_ = replace(short, deal_id="L", maturity=date(2027, 1, 15))
-    policy = FundingPolicy(repo=RepoPolicy(contract_rate_from_term_days=30))
+    policy = replace(POLICY, repo=RepoPolicy(RepoRate.SECURITY, contract_rate_from_term_days=30))
     r = run(WEEKEND, RULES_REPO, policy=policy, repos=[short, long_])
     assert {x.ref: x.days[0].rate for x in r.lines} == pytest.approx({"S": 0.11, "L": 0.2})
     assert RepoPolicy(RepoRate.CONTRACT).rate_for(None) is RepoRate.CONTRACT
@@ -392,13 +403,13 @@ def test_accrual_over_consecutive_runs_counts_each_day_once():
 def test_funding_liabilities_and_fx_revaluation():
     ps = [pos("U1", 1e4, ccy="USD", accrued=200.0), pos("R1"), pos("D", 5.0, book_type="DERIVS"),
           pos("O", 1e4, ccy="USD", settlement_ccy="RUB")]
-    liab, probs = funding_liabilities(ps)
+    liab, probs = funding_liabilities(ps, policy=POLICY)
     assert [(x.position_id, x.ccy, x.amount) for x in liab] == [("U1", "USD", -1e4), ("R1", "RUB", -1e6),
                                                                  ("O", "USD", -1e4)]
     assert not probs
     pnl = liability_fx_pnl(liab, FX, FRI, MON)
     assert pnl == {"U1": pytest.approx(-1e4 * 2.0), "R1": 0.0, "O": pytest.approx(-2e4)}
-    settle = FundingPolicy(out_of_currency=OutOfCurrency.SETTLEMENT_CCY)
+    settle = replace(POLICY, out_of_currency=OutOfCurrency.SETTLEMENT_CCY)
     liab2, _ = funding_liabilities(ps, policy=settle, fx=FX, on=MON)
     assert liab2[-1].ccy == "RUB" and liab2[-1].amount == pytest.approx(-8.2e5)
     _, probs2 = funding_liabilities(ps, policy=settle)
@@ -419,10 +430,13 @@ def test_write_off_schedules():
     assert write_off_dates(FRI, MON, Periodicity.NONE) == ()
     assert last_write_off(TUE, Periodicity.QUARTERLY) == date(2026, 9, 30)
     assert last_write_off(TUE, Periodicity.NONE) is None
-    w = WriteOffPolicy(by_entity={"CTC2": Periodicity.QUARTERLY})
-    assert w.periodicity("DERIVS", "E1") is Periodicity.QUARTERLY
-    assert w.periodicity("TRADING", "CTC1", EntityType.OTHER) is Periodicity.MONTHLY
-    assert w.periodicity("TRADING", "CTC2", EntityType.OTHER) is Periodicity.QUARTERLY
+    w = WriteOffPolicy(by_book_type={"DERIVS": Periodicity.MONTHLY}, by_entity={"OTH2": Periodicity.QUARTERLY},
+                       other_entity=Periodicity.DAILY)
+    assert w.periodicity("DERIVS", "E1") is Periodicity.MONTHLY
+    assert w.periodicity("TRADING", "OTH1", EntityType.OTHER) is Periodicity.DAILY
+    assert w.periodicity("TRADING", "OTH2", EntityType.OTHER) is Periodicity.QUARTERLY
+    unset = WriteOffPolicy()   # nothing set by default: "not known"
+    assert unset.periodicity("DERIVS", "E1") is None and unset.periodicity("TRADING", "O", EntityType.OTHER) is None
 
 
 # ---------------------------------------------------------------------------------------------- providers
@@ -463,7 +477,18 @@ def test_open_decisions_name_policy_fields():
         for part in d.field.split("[")[0].split("."):
             obj = getattr(obj, part)
         assert d.ref and d.provisional and d.alternatives
-    assert p.base_by_book_type["TRADING"] is FundingBase.MV_CLEAN
+    assert "TRADING" not in p.base_by_book_type and p.htm_base is None and p.entity_cash_rate_book_type is None
+    assert p.write_off.by_book_type == {} and p.write_off.other_entity is None
     assert (p.mv_base_date, p.new_positions, p.closed_positions) == (
         BaseDate.PREVIOUS, NewPosition.NEXT_PERIOD, ClosedPosition.FULL_PERIOD)
-    assert json.loads(json.dumps(p.lineage()))["repo"]["rate"] == "security"
+    assert json.loads(json.dumps(p.lineage()))["repo"]["rate"] == "contract"
+
+
+def test_unset_conventions_are_problems():
+    """With the engine's defaults a market-value book has no base and an HTM lot no HTM base: problems, no line."""
+    r = run(policy=PROVISIONAL_POLICY, positions=[pos()], previous_positions=[pos()], htm_lots=[lot()])
+    assert not r.lines
+    assert [x.reason for x in r.problems] == ["no funding base for book type 'TRADING'",
+                                              "no HTM base configured (htm_base)"]
+    deal = RepoDeal("R1", "RP", "DERIVS", "E1", "RUB", 1e6, FRI, TUE, contract_rate=0.2)
+    assert only(run(policy=PROVISIONAL_POLICY, repos=[deal])).note == "rate=contract"   # the deal's own rate

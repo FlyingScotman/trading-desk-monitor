@@ -22,9 +22,9 @@ Each step follows the adapter's process (`trades-data-adapter` `CLAUDE.md`: fiel
 | 2 | **Derivatives risk**: swaps (IRS/OIS, key-rate), futures (FX, OFZ, RUONIA and key-rate) and FX forwards, **including their interest-rate risk** (today an FX forward carries FX delta only and a swap's reported DV01 sits in one bucket); the meaning of the report's NPV, DV01 and CS01; product classification; trade terms (A9) | P3 (derivatives in core, §2a), P6 (hub inputs H11, H13), P7 (core FX items) | M6 (§2a) | DEC08 |
 | 3 | **OCP** (ОВП): reported OCP vs OCP derived from positions, by component (cash and to-be-settled, PV of currency legs, futures, residual); OCP transfers | P1 (`ocp` schema); B2 | M2'' (OCP part), backlog DESK-03 (OCP) | DEC06, DEC12, OQ-04 |
 | 4 | **Cash**: cash balances per book with history; funding of cash-funded books and other entities; cash breaks between systems | P1 (`cash_balances` schema, multi-date history); B3 | M2'' (cash part); completes step 1 | DEC01 |
-| then | **Official PnL and reconciliation**: TradeLevel → `pnl_official` (adapter A3), YTD ours vs official, break analysis and register | P1 (`pnl_official` schema); B4 | M5 (S8 part 2, S11) | DEC05, DEC11, DEC12 |
+| then | **Official PnL and reconciliation**: the official PnL report → `pnl_official` (adapter A3), YTD ours vs official, break analysis and register | P1 (`pnl_official` schema); B4 | M5 (S8 part 2, S11) | DEC05, DEC11, DEC12 |
 
-The official PnL may move earlier if the owner can run the TradeLevel extractor sooner: it also gives the PV of currency legs (step 3) and a funding figure to accept step 1 against.
+The official PnL may move earlier if the owner can run the official PnL report's extractor sooner: the report may also give the PV of currency legs (step 3) and a funding figure to accept step 1 against.
 
 ### 0.2 Generic: wave A in parallel now, wave B after it
 
@@ -118,7 +118,7 @@ Its own `ROADMAP.md` holds the detail. Phases, in the order the backend needs th
 | A9 | Trade terms of derivatives and REPO, HTM contract rates → `trade_terms` (new dataset) | New (08 to be extended by P1); §0 step 2 |
 | A10 | Bonds with an internal (model) price → a "sticky price" policy (`price_policy`) | With A5, I5 (S10) |
 
-Status (22 October): A0 and A2 are done (positions at work); the OCP adapter (A4) is ready on synthetic files and waits for the `ocp` schema (P1); the TradeLevel reader (A3) is ported, its source still a stub; A5 is on hold by the owner's decision; A1, A6–A10 are open.
+Status (22 October): A0 and A2 are done (positions at work); the OCP adapter (A4) is ready on synthetic files and waits for the `ocp` schema (P1); the official PnL reader (A3) is ported, its source still a stub; A5 is on hold by the owner's decision; A1, A6–A10 are open.
 
 ### trading_desk_monitor: backend
 

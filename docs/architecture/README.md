@@ -72,7 +72,7 @@ Every boundary between components is listed here with its owner and the version 
 | Prototype input files (positions, trades, OTC, funding, official PnL) | bank systems → prototype `tdm` | trading_desk_monitor | `contract/csv/*.csv` | 1.3 | Templates kept for the prototype; superseded for the backend ([SUPERSEDED.md](../../contract/csv/SUPERSEDED.md)) |
 | Imported risk for products not yet computable | bank systems → backend | trading_desk_monitor | contract 1.3 CSV / bundle | 1.3 | Interim path ([ADR-001](adr/ADR-001-hosting-topology.md), [07](07_CORE_PRODUCT_COVERAGE.md)) |
 | Desk API | backend → frontend | trading_desk_monitor | OpenAPI (`frontend/openapi.json`) + generated TypeScript types (`frontend/src/api/schema.d.ts`) | v1 | Exists; a test fails when the committed `openapi.json` is stale ([05](05_FRONTEND_INTEGRATION.md)) |
-| Official PnL feed | TradeLevel reader (adapter A3) → backend | trading_desk_monitor | `pnl_official` dataset (private/1.2) | private/1.2 | Schema and storage exist; reconciliation is wave B4 |
+| Official PnL feed | Official PnL reader (adapter A3) → backend | trading_desk_monitor | `pnl_official` dataset (private/1.2) | private/1.2 | Schema and storage exist; reconciliation is wave B4 |
 | Hub `dataset` → core curve-spec mapping | backend adapter → core | trading_desk_monitor | Versioned mapping table | — | **To be created** ([02](02_MARKET_DATA_AND_CORE_CONTRACT.md) §4) |
 | Taylor parity fixtures | backend reference engine → frontend T1 port | trading_desk_monitor | JSON fixtures generated in Python | — | Exists: `backend/tests/fixtures/taylor_parity.json` (S6; `DESK_REGEN_FIXTURES=1` regenerates it) ([03](03_CALCULATION_SPLIT.md) §3) |
 

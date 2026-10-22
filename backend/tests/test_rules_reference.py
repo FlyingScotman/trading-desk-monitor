@@ -11,8 +11,13 @@ import pytest
 
 from desk.inbox import reference as reference_adapter
 from desk.inbox.validate import check_reference_tables
-from desk.rules.funding import DayBasis, EntityType, FundingBase, Periodicity
-from desk.rules.reference import bases_from_reference, entities_from_reference, funding_rules_from_reference
+from desk.rules.funding import DayBasis, EntityType, FundingBase, FundingPolicy, Periodicity, WriteOffPolicy
+from desk.rules.reference import (
+    bases_from_reference,
+    entities_from_reference,
+    funding_rules_from_reference,
+    policy_from_reference,
+)
 
 DS_CONFIG = Path(__file__).parent / "fixtures" / "private" / "v1" / "datasets" / "config"
 D = date.fromisoformat
@@ -37,7 +42,7 @@ def test_funding_rules_from_the_fixture(tables: dict) -> None:
     assert rules.resolve(D("2026-10-16"), **kw).expr == "KEY_RATE + 100 bp"
     assert rules.resolve(D("2026-10-20"), **kw).expr == "KEY_RATE + 150 bp"
     usd = rules.resolve(D("2026-10-20"), **{**kw, "ccy": "USD"})
-    assert usd.fixed_rate == pytest.approx(0.05) and usd.day_basis is DayBasis.ACT_360
+    assert usd.fixed_rate == pytest.approx(0.06) and usd.day_basis is DayBasis.ACT_360
     # the entity's cash rule outranks the book type's (entity 4 + ccy 2 > book type 1 + ccy 2)
     assert rules.resolve(D("2026-10-20"), **{**kw, "entity": "ENT2", "book_id": "C1"}).note == "ent2_cash"
     assert rules.resolve(D("2026-10-20"), **{**kw, "book_type": "FUTURES", "book_id": "F1"}) is None
@@ -51,6 +56,17 @@ def test_bases_and_entities_from_the_fixture(tables: dict) -> None:
     types, sweeps = entities_from_reference(tables["entities"])
     assert types == {"ENT1": EntityType.MAIN, "ENT2": EntityType.OTHER}
     assert sweeps == {"ENT2": Periodicity.MONTHLY}
+
+
+def test_policy_from_the_fixture(tables: dict) -> None:
+    """The adapter's settings, not the engine's defaults, give the market-value base and the per-entity sweep."""
+    assert "TRADING" not in FundingPolicy().base_by_book_type
+    pol = policy_from_reference(tables["funding_rules"], tables["entities"])
+    assert pol.base_by_book_type["TRADING"] is FundingBase.MV_CLEAN
+    assert pol.write_off.periodicity("TRADING", "ENT2", EntityType.OTHER) is Periodicity.MONTHLY
+    assert pol.write_off.periodicity("DERIVS", "ENT1") is None   # not in the contract: still unset
+    keep = FundingPolicy(write_off=WriteOffPolicy(by_entity={"ENT9": Periodicity.DAILY}))
+    assert policy_from_reference([], [], keep).write_off.by_entity == {"ENT9": Periodicity.DAILY}
 
 
 def test_retired_revisions_and_conflicting_bases() -> None:

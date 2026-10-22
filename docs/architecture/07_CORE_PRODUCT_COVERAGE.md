@@ -117,7 +117,7 @@ The book holds **all** the products below (owner, 16 October 2026), so packages 
 ### Package 6: REPO and funding legs
 
 - **Scope:** valuation of repo legs (fixed, floating on RUSFAR/RUONIA), collateral linkage.
-- **Boundary:** the desk's **funding economics** (previous-day clean MV base, calendar-day rates, OCP transfers) stay in the backend's `desk_rules`. Core supplies only instrument valuation. The current `project_financed_bond` compounds daily, which is not the desk's TRADING funding rule of simple interest on the previous clean MV (local audit F13).
+- **Boundary:** the desk's **funding economics** (funding base, calendar-day rates, OCP transfers; the organization's values come from the private adapter) stay in the backend's `desk_rules`. Core supplies only instrument valuation. The current `project_financed_bond` compounds daily, which is not the desk's funding engine: simple interest on the configured base (local audit F13).
 - **Depends on:** Package 1.
 
 ### Package 7: XCCY (CNY/RUB vs RUONIA)

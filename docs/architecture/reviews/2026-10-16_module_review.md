@@ -186,7 +186,7 @@ The reviewed package is 4,081 lines in 18 modules. The roughly 86k lines on disk
 | BE-5 | **`fx_cbr_next` returns the first future row**, which could be months ahead (reproduced: 2027-03-01 for an as-of of 2026-10-13). | `market.py:99` (B08) |
 | BE-6 | **The cache key uses `COUNT(*)`**, so replaced results with the same row count serve a stale body (reproduced). | `server.py:23` (B06) |
 | BE-7 | **Runs are not reproducible.** Inputs are current-version upserts with no knowledge time or input hash. Official PnL and scenario results mutate published runs in place. Assembly reads *current* scenario definitions, meetings, instruments and quotes. | B02, B03, B05 |
-| BE-8 | **Funding uses current MV, but the org rule says previous-business-day clean MV.** | `writer.py:440` (B01, DEC01) |
+| BE-8 | **Funding uses current MV; the base date and price are a convention to decide (DEC01), not current MV by default.** | `writer.py:440` (B01, DEC01) |
 | BE-9 | **The server binds `0.0.0.0` with no auth.** The install guide tells users to open the firewall. | `cli.py:17`, `run.bat:12` (B12) |
 | BE-10 | **Operational hazards:**<br>• `purge` deletes old EOD runs by default.<br>• `daily.bat` `move /y` overwrites same-named archived files.<br>• Historical scenarios build *before* the EOD calc.<br>• Naive local timestamps.<br>• No log files.<br>• Live-file copy offered as a backup method. | `cli.py:127`, `daily.bat` |
 

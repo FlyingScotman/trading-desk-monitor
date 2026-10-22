@@ -494,7 +494,7 @@ time).
 | `book_id` | str | Selector: a special rate of one book |
 | `ccy` | str | Selector: the currency funded |
 | `instrument_id` | str | Selector: a special rate of one security (a hub instrument id) |
-| `basis` | enum | What is funded: `mv_clean`, `mv_dirty` (market value without or with accrued), `cash` (the cash balance), `cost` (the cash paid at purchase), `none`; absent: the engine's default for the book type |
+| `basis` | enum | What is funded: `mv_clean`, `mv_dirty` (market value without or with accrued), `cash` (the cash balance), `cost` (the purchase cost; whether the accrued paid at purchase is funded is OQ-02), `none`; absent: the engine's default for the book type (`HTM` cost, `DERIVS` cash, `FUTURES` none; `TRADING` has none, so its rules must give `mv_clean` or `mv_dirty`) |
 | `rate_kind` ● | enum | `index_spread` (an index plus `spread_bp`), `fixed` (`fixed_rate_pct`), `contract` (the position's or trade's own contract rate), `none` (not funded) |
 | `index_code` | str | `index_spread`: the hub's fixing index code (`KEY_RATE`, `RUONIA`, ...); required for it |
 | `spread_bp` | num | `index_spread`: added to the index; absent: 0 |

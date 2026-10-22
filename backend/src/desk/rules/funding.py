@@ -3,8 +3,11 @@ balances and REPO deals, and its accrual over a period, per position, book and e
 
 Pure and firm-agnostic. The organisation's rules arrive as data (``FundingRules``: the private adapter's
 ``reference()["funding_rules"]`` once A7 lands); index fixings and FX rates through injected providers
-(``rate_index``); every open owner decision is a ``FundingPolicy`` field with a provisional default, listed
-with its decision id in ``OPEN_DECISIONS``. Not wired into the run yet (wave B1: ``pnl/flash.py``,
+(``rate_index``); every open owner decision is a ``FundingPolicy`` field, listed with its decision id in
+``OPEN_DECISIONS``. A field's default is either a neutral generic choice or unset, and an unset convention the
+engine needs is a ``FundingProblem``, never a guess: the funding base of a market-value book (clean or dirty),
+the HTM base and the PnL write-off periodicity have no default and come from the adapter's settings
+(``reference.policy_from_reference``) or from the decision. Not wired into the run yet (wave B1: ``pnl/flash.py``,
 ``publish/tdm_run.py``, ``api/compat.py``). ``PROTOTYPE_POLICY`` reproduces ``tdm/writer.py``
 ``derive_funding()`` for POS and HTM.
 
@@ -26,10 +29,11 @@ earns (body = +cash).
 - ``HTM`` — base ``cost``: one line per purchase lot (``HtmLot``) at its contract rate, from the day after
   the purchase to maturity. A position of a ``cost`` book without a lot is a problem.
 - ``CASH`` — base ``cash``: one line per book x currency balance, at the rules of the book's type.
-- ``CTC`` — an entity of type ``other`` is funded on its whole cash balance, every book, at the rules of
-  ``FundingPolicy.ctc_rate_book_type``; its positions and REPO deals get no line of their own.
-- ``REPO`` — the deal's cash leg, from the day after the start to maturity, at the collateral's rate or
-  the contract rate (``RepoPolicy``).
+- ``ENTITY_CASH`` — an entity of type ``other`` is funded on its whole cash balance, every book, at the rules
+  that apply to the balance (or those of ``FundingPolicy.entity_cash_rate_book_type``); its positions and
+  REPO deals get no line of their own.
+- ``REPO`` — the deal's cash leg, from the day after the start to maturity, at the contract rate or the
+  collateral's rate (``RepoPolicy``).
 - base ``none`` (a futures book): not funded.
 
 A missing input (rule, fixing, FX rate, contract rate) is a ``FundingProblem`` and the line is left out,
@@ -37,7 +41,7 @@ never a 0.
 
 **Also here:** ``funding_liabilities`` (the currency funding liability of the bond books, which offsets the
 FX delta of a foreign-currency bond, OCP-4), ``liability_fx_pnl``, ``write_off_dates`` / ``last_write_off``
-(PnL write-off schedule, Q-F4/Q-F5) and ``total_by`` (accrual over several runs, counted once).
+(PnL write-off schedule) and ``total_by`` (accrual over several runs, counted once).
 """
 
 from __future__ import annotations
@@ -69,7 +73,7 @@ class LineKind(StrEnum):
     POS = "POS"
     HTM = "HTM"
     CASH = "CASH"
-    CTC = "CTC"
+    ENTITY_CASH = "ENTITY_CASH"
     REPO = "REPO"
 
 
@@ -118,6 +122,8 @@ class FxDate(StrEnum):
 
 
 class HtmBase(StrEnum):
+    """What of an HTM purchase is funded (OQ-02); no default."""
+
     CASH_SPENT = "cash_spent"  # clean cost + the accrued paid at purchase, until the coupon date
     CLEAN_COST = "clean_cost"  # clean purchase cost only
 
@@ -177,7 +183,7 @@ class DayCountPolicy:
 
 @dataclass(frozen=True)
 class RepoPolicy:
-    rate: RepoRate = RepoRate.SECURITY
+    rate: RepoRate = RepoRate.CONTRACT
     contract_rate_from_term_days: int | None = None
     """A deal of at least this term (maturity - start, days) is funded at its contract rate; None: none is."""
     security_rate_book_type: str = "TRADING"
@@ -194,19 +200,15 @@ class RepoPolicy:
         return self.rate
 
 
-def _default_write_off() -> dict[str, Periodicity]:
-    return {"TRADING": Periodicity.DAILY, "FUTURES": Periodicity.DAILY, "DERIVS": Periodicity.QUARTERLY,
-            "HTM": Periodicity.NONE}
-
-
 @dataclass(frozen=True)
 class WriteOffPolicy:
-    """When a book's PnL is written off (to the treasury, by a deal): an entity's own periodicity, else
-    ``other_entity`` for an entity of type other, else the book type's."""
+    """When a book's PnL is written off (swept out of its cash): an entity's own periodicity (the adapter's
+    ``entities`` ``pnl_sweep``), else ``other_entity`` for an entity of type other, else the book type's. Nothing
+    is set by default: an unset periodicity is None, "not known", as an absent ``pnl_sweep`` in the contract."""
 
-    by_book_type: Mapping[str, Periodicity] = field(default_factory=_default_write_off)
+    by_book_type: Mapping[str, Periodicity] = field(default_factory=dict)
     by_entity: Mapping[str, Periodicity] = field(default_factory=dict)
-    other_entity: Periodicity = Periodicity.MONTHLY
+    other_entity: Periodicity | None = None
     date_rule: WriteOffDate = WriteOffDate.LAST_CALENDAR_DAY
 
     def periodicity(self, book_type: str, entity: str,
@@ -219,14 +221,16 @@ class WriteOffPolicy:
 
 
 def _default_bases() -> dict[str, FundingBase]:
-    return {"TRADING": FundingBase.MV_CLEAN, "HTM": FundingBase.COST, "DERIVS": FundingBase.CASH,
-            "FUTURES": FundingBase.NONE}
+    """The regimes the contract's ``book_type`` names (08 §10 ``books``). ``TRADING`` is funded on its market
+    value, clean or dirty, and has no default: the adapter's ``funding_rules`` ``basis`` gives it."""
+    return {"HTM": FundingBase.COST, "DERIVS": FundingBase.CASH, "FUTURES": FundingBase.NONE}
 
 
 @dataclass(frozen=True)
 class FundingPolicy:
-    """Every convention the engine applies. The defaults are **provisional** (``OPEN_DECISIONS``): each
-    stands for an owner decision not taken yet, and is replaced by the adapter's settings or the decision."""
+    """Every convention the engine applies. A default is **provisional** (``OPEN_DECISIONS``): a neutral generic
+    choice standing for an owner decision not taken yet, or unset (None, no entry) where any choice would be a
+    firm's own; the adapter's settings or the decision replace it."""
 
     base_by_book_type: Mapping[str, FundingBase] = field(default_factory=_default_bases)
     mv_base_date: BaseDate = BaseDate.PREVIOUS
@@ -236,10 +240,10 @@ class FundingPolicy:
     day_count: DayCountPolicy = field(default_factory=DayCountPolicy)
     fx_date: FxDate = FxDate.AS_OF
     reporting_ccy: str = "RUB"
-    htm_base: HtmBase = HtmBase.CASH_SPENT
+    htm_base: HtmBase | None = None
     repo: RepoPolicy = field(default_factory=RepoPolicy)
     out_of_currency: OutOfCurrency = OutOfCurrency.SECURITY_CCY
-    ctc_rate_book_type: str = "TRADING"
+    entity_cash_rate_book_type: str | None = None
     write_off: WriteOffPolicy = field(default_factory=WriteOffPolicy)
 
     def lineage(self) -> dict[str, Any]:
@@ -257,12 +261,13 @@ class OpenDecision:
 
 
 OPEN_DECISIONS: tuple[OpenDecision, ...] = (
-    OpenDecision("base_by_book_type['TRADING']", "Q-F1, FND-6", "Bond book base: clean or dirty MV",
-                 "mv_clean (the owner's belief, unconfirmed)", ("mv_dirty",)),
-    OpenDecision("base_by_book_type", "FND-2, FND-3", "Base of each book type (the adapter's funding.json)",
-                 "TRADING mv_clean, HTM cost, DERIVS cash, FUTURES none", ("any FundingBase per book type",)),
+    OpenDecision("base_by_book_type['TRADING']", "DEC01, FND-6", "Market-value book base: clean or dirty MV",
+                 "none: a problem until the adapter's funding_rules give the basis", ("mv_clean", "mv_dirty")),
+    OpenDecision("base_by_book_type", "OQ-01, FND-2, FND-3", "Base of each book type (the adapter's funding_rules)",
+                 "the regimes the contract's book_type names: HTM cost, DERIVS cash, FUTURES none",
+                 ("any FundingBase per book type",)),
     OpenDecision("mv_base_date", "DEC01, FND-7", "MV of the previous business day or of the as-of date",
-                 "previous_business_day (the written rule; the tdm prototype used as_of)", ("as_of",)),
+                 "previous_business_day (the position held overnight; the tdm prototype used as_of)", ("as_of",)),
     OpenDecision("new_positions", "DEC01, FND-7", "Positions opened during the period",
                  "next_period (consistent with the previous-day base)", ("last_day", "full_period")),
     OpenDecision("closed_positions", "DEC01, FND-7", "Positions closed or sold during the period",
@@ -274,34 +279,35 @@ OPEN_DECISIONS: tuple[OpenDecision, ...] = (
                  ("previous_business_day", "each_day")),
     OpenDecision("day_count", "DEC02, FND-8", "Day basis per line kind and currency",
                  "ACT/365 for every line", ("ACT/360 for chosen kinds x currencies",)),
-    OpenDecision("htm_base", "X3, FND-11", "HTM base: cash spent (purchase accrued funded until the coupon) "
-                 "or clean purchase cost; the two rule texts disagree", "cash_spent (the newer text)",
-                 ("clean_cost",)),
-    OpenDecision("repo.rate", "DEC03, FND-12", "REPO cash leg at the collateral's rate or the contract rate",
-                 "security", ("contract",)),
-    OpenDecision("repo.contract_rate_from_term_days", "Q-F3, FND-12",
-                 "Term from which a REPO is funded at its contract rate", "None (no threshold)",
+    OpenDecision("htm_base", "OQ-02, FND-11", "HTM base: cash spent (purchase accrued funded until the coupon) "
+                 "or clean purchase cost", "none: an HTM lot is a problem until it is set",
+                 ("cash_spent", "clean_cost")),
+    OpenDecision("repo.rate", "DEC03, FND-12", "REPO cash leg at the contract rate or the collateral's rate",
+                 "contract (the deal's own rate)", ("security",)),
+    OpenDecision("repo.contract_rate_from_term_days", "DEC03, FND-12",
+                 "Term from which a REPO is funded at its contract rate (with rate security)", "None (no threshold)",
                  ("a number of days",)),
     OpenDecision("repo.security_rate_book_type", "DEC03", "Book type whose rules give the collateral's rate",
-                 "TRADING", ("another book type",)),
-    OpenDecision("out_of_currency", "Q-F6, FND-15", "Funding currency of a bond bought in another currency",
-                 "security_ccy (the FX deal is sized in the bond's currency)", ("settlement_ccy",)),
-    OpenDecision("ctc_rate_book_type", "Q-F4, FND-13", "Rates of the cash of other entities (CTC)",
-                 "TRADING (the bond rules of the main entity)", ("another book type", "entity-specific rules")),
-    OpenDecision("write_off", "Q-F4, Q-F5, FND-13, FND-14", "PnL write-off periodicity and date",
-                 "TRADING/FUTURES daily, DERIVS quarterly, other entities monthly, HTM none; last calendar day",
-                 ("per entity periodicity", "last_business_day")),
+                 "TRADING (the market-value book type)", ("another book type",)),
+    OpenDecision("out_of_currency", "FND-15", "Funding currency of a bond bought in another currency",
+                 "security_ccy (the position's own currency)", ("settlement_ccy",)),
+    OpenDecision("entity_cash_rate_book_type", "FND-13", "Rates of the cash of an entity funded on its cash balance",
+                 "None (the rules that apply to the balance: its entity, book, currency, book type)",
+                 ("a book type whose rules apply",)),
+    OpenDecision("write_off", "FND-13, FND-14", "PnL write-off periodicity and date",
+                 "none set (the adapter's entities pnl_sweep per entity); last calendar day",
+                 ("per book type periodicity", "other_entity periodicity", "last_business_day")),
 )
 
 PROVISIONAL_POLICY = FundingPolicy()
 
 PROTOTYPE_POLICY = FundingPolicy(
-    mv_base_date=BaseDate.AS_OF, cash_base_date=BaseDate.AS_OF, new_positions=NewPosition.FULL_PERIOD,
+    base_by_book_type={**_default_bases(), "TRADING": FundingBase.MV_CLEAN}, mv_base_date=BaseDate.AS_OF, cash_base_date=BaseDate.AS_OF, new_positions=NewPosition.FULL_PERIOD,
     closed_positions=ClosedPosition.NOT_FUNDED, htm_base=HtmBase.CLEAN_COST,
     day_count=DayCountPolicy(DayBasis.ACT_365, tuple(DayBasisRule(DayBasis.ACT_360, k, c)
                                                      for k in (LineKind.CASH, LineKind.REPO)
                                                      for c in ("USD", "EUR", "CHF"))))
-"""``tdm/writer.py derive_funding()``: as-of MV, clean cost for HTM, ACT/360 for USD/EUR/CHF cash and
+"""``tdm/writer.py derive_funding()``: as-of clean MV, clean cost for HTM, ACT/360 for USD/EUR/CHF cash and
 REPO. For parity checks, not a decision."""
 
 
@@ -363,7 +369,7 @@ class FundingRule:
 
 @dataclass(frozen=True)
 class ExtraSpread:
-    """An additional spread of a bond type (Q-F2), on top of the resolved rule; ``ccy`` None: any."""
+    """An additional spread of a bond type, on top of the resolved rule; ``ccy`` None: any."""
 
     bond_type: str
     spread_bp: float
@@ -755,7 +761,10 @@ class _Engine:
             if self.entity_type(lot.entity, LineKind.HTM, lot.lot_id) is not EntityType.MAIN:
                 continue
             if lot.contract_rate is None:
-                self.problems.append(FundingProblem(LineKind.HTM, lot.lot_id, "no contract rate (Q-S5)"))
+                self.problems.append(FundingProblem(LineKind.HTM, lot.lot_id, "no contract rate"))
+                continue
+            if self.policy.htm_base is None:
+                self.problems.append(FundingProblem(LineKind.HTM, lot.lot_id, "no HTM base configured (htm_base)"))
                 continue
             acc = lot.purchase_accrued if self.policy.htm_base is HtmBase.CASH_SPENT else 0.0
             if acc and lot.accrued_until is None:
@@ -787,7 +796,7 @@ class _Engine:
             if t is None:
                 continue
             if t is EntityType.OTHER:
-                kind, rule_type = LineKind.CTC, pol.ctc_rate_book_type
+                kind, rule_type = LineKind.ENTITY_CASH, pol.entity_cash_rate_book_type or c.book_type
             else:
                 if self.base(c.book_type, LineKind.CASH, ref) is not FundingBase.CASH:
                     continue
