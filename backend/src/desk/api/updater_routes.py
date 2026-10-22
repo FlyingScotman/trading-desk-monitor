@@ -1,5 +1,5 @@
 """Routes of the GitHub updater (``desk.updater.service``) behind «Обновление программы» and the navigation bar's
-«новая версия» badge. Local only, like the other update routes (``settings_routes.check_local``).
+«новая версия» badge. Admin only, like the other update routes (``settings_routes.check_local``).
 
 * ``GET  /api/v1/update/remote``                 the state: installed and latest version, what would be installed,
                                                  the job, the diagnostics; starts a background check when due

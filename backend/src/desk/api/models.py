@@ -13,7 +13,8 @@ COMPAT = "compat, removed with window.DESK (M7)"
 
 
 class ErrorOut(BaseModel):
-    code: Literal["not_found", "invalid_parameter", "store_unavailable", "internal"]
+    code: Literal["not_found", "invalid_parameter", "store_unavailable", "internal", "unauthorized", "forbidden",
+                  "locked"]
     message: str
     request_id: str
     details: Any = None

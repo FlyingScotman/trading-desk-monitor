@@ -4,6 +4,8 @@
     python\\python.exe -I app\\deskctl.py stop               stop this bundle's desk processes and the embedded store
     python\\python.exe -I app\\deskctl.py cycle [args]       install if needed, then desk cycle (hub, inbox, EOD)
     python\\python.exe -I app\\deskctl.py desk [args]        install if needed, then any desk command
+    python\\python.exe -I app\\deskctl.py firewall add|remove|show [--port N]   the Windows firewall rule for colleagues
+                                                          (also: desk.bat firewall add, as administrator)
 
 The bundle folder (``DeskMonitor\\``, anywhere): ``python\\`` the runtime, ``wheelhouse\\`` every wheel and
 ``requirements.txt``, ``app\\`` this file, the prototypes and the built frontend, ``adapter\\`` the private adapter
@@ -13,6 +15,12 @@ wheels changed, just those are reinstalled. Data and settings live in DESK_HOME 
 ``%LOCALAPPDATA%\\DeskMonitor``, or ``C:\\DeskMonitorData`` when that path is not plain ASCII, see ``default_home``),
 outside the bundle, so they survive updates.
 The .bat files only find a Python and call this; the logic is here, away from cmd.exe quoting.
+
+Address (batch 1, item 9): ``desk serve`` listens where the settings say (``bind_host``, ``port`` of settings.json,
+``DESK_PORT`` / ``--port`` here win for the port); a network address needs sign-in (``desk lan enable``), and the
+server then also listens on 127.0.0.1, so the health check and the browser opened here stay on 127.0.0.1 (https
+when ``tls_cert`` is set). ``firewall add`` adds the inbound rule colleagues need (``netsh advfirewall``, as
+administrator); without administrator rights it prints the command to run.
 
 Hot update (the settings page, ``desk.update``): ``desk serve`` checks an update zip, stages its changed files in
 ``<DESK_HOME>\\updates\\staged\\<version>\\``, writes ``updates\\pending.json`` and exits with ``RESTART``. ``start``
@@ -33,6 +41,7 @@ import os
 import re
 import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import threading
@@ -464,7 +473,13 @@ def run_logged(cmd: list[str], env: dict[str, str], log: Path, on_start=None) ->
 
 
 def _no_proxy_get(url: str, timeout: float = 2.0) -> bool:
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # never via the corporate proxy
+    handlers: list = [urllib.request.ProxyHandler({})]  # never via the corporate proxy
+    if url.startswith("https://127.0.0.1"):  # our own server, often a self-signed certificate: not checked
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        handlers.append(urllib.request.HTTPSHandler(context=ctx))
+    opener = urllib.request.build_opener(*handlers)
     try:
         with opener.open(url, timeout=timeout) as r:
             return r.status == 200
@@ -483,6 +498,100 @@ def port_busy(port: int) -> bool:
         except OSError:
             return True
     return False
+
+
+# ---- the address desk serve listens on, and the firewall (batch 1, item 9)
+
+def serve_settings(env: dict[str, str], home: Path) -> dict:
+    """``bind_host``, ``port``, ``tls`` and ``auth`` as desk serve will read them: the process environment, then
+    ``<home>\\settings.json``, then the defaults (desk.settings; the env file is not read here)."""
+    doc = _read_json(home / "settings.json") or {}
+    doc = doc if isinstance(doc, dict) else {}
+
+    def pick(var: str, key: str):
+        return env.get(var) or doc.get(key)
+
+    try:
+        port = int(pick("DESK_PORT", "port") or DEFAULT_PORT)
+    except (TypeError, ValueError):
+        port = DEFAULT_PORT
+    auth = pick("DESK_AUTH", "auth")
+    return {"host": str(pick("DESK_BIND_HOST", "bind_host") or "127.0.0.1").strip("[]"), "port": port,
+            "tls": bool(pick("DESK_TLS_CERT", "tls_cert") and pick("DESK_TLS_KEY", "tls_key")),
+            "auth": auth is True or str(auth).lower() in ("1", "true", "yes", "on")}
+
+
+def _loopback_host(host: str) -> bool:
+    return host in ("127.0.0.1", "localhost", "::1") or host.startswith("127.")
+
+
+def lan_names(host: str) -> list[str]:
+    """What colleagues type: this computer's name and addresses (0.0.0.0), or the address itself."""
+    if host not in ("0.0.0.0", "::"):
+        return [host]
+    out = [socket.gethostname()]
+    try:
+        out += [i[4][0] for i in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)]
+    except OSError:
+        pass
+    return [n for i, n in enumerate(out) if n and n not in out[:i] and not n.startswith("127.")]
+
+
+FIREWALL_RULE = "Desk Monitor (TCP {port})"
+
+
+def firewall_commands(action: str, port: int, remoteip: str | None = None) -> list[list[str]]:
+    """``netsh advfirewall firewall`` commands (INSTALL.txt explains each part): an inbound allow rule for the
+    TCP port on the domain and private network profiles (not public: a café's Wi-Fi), from ``remoteip`` when
+    given (e.g. ``localsubnet`` or ``10.1.0.0/16``)."""
+    name = "name=" + FIREWALL_RULE.format(port=port)
+    if action == "add":
+        cmd = ["netsh", "advfirewall", "firewall", "add", "rule", name, "dir=in", "action=allow", "protocol=TCP",
+               f"localport={port}", "profile=domain,private"]
+        return [cmd + ([f"remoteip={remoteip}"] if remoteip else [])]
+    if action == "remove":
+        return [["netsh", "advfirewall", "firewall", "delete", "rule", name]]
+    return [["netsh", "advfirewall", "firewall", "show", "rule", name]]
+
+
+def _is_admin() -> bool:
+    if not WIN:
+        return False
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())  # type: ignore[attr-defined]
+    except (AttributeError, OSError):
+        return False
+
+
+def _shown(cmd: list[str]) -> str:
+    return " ".join(f'"{a}"' if " " in a else a for a in cmd)
+
+
+def cmd_firewall(args: list[str]) -> int:
+    action = args[0] if args and args[0] in ("add", "remove", "show") else None
+    if action is None:
+        say("firewall add | remove | show [--port N] [--remoteip ADDRESSES]: правило брандмауэра Windows для коллег")
+        return 2
+    env = desk_environ()
+    opts = dict(zip(args[1::2], args[2::2]))
+    port = int(opts.get("--port") or serve_settings(env, Path(env["DESK_HOME"]))["port"])
+    cmds = firewall_commands(action, port, opts.get("--remoteip"))
+    if action != "show" and not _is_admin():
+        say("Нужны права администратора. Откройте «Командную строку» от имени администратора (Пуск -> cmd -> "
+            "правой кнопкой -> «Запуск от имени администратора») и выполните:")
+        for c in cmds:
+            say("  " + _shown(c))
+        say("Или там же, в папке Desk Monitor: desk.bat firewall " + action)
+        return 1 if WIN else 0
+    rc = 0
+    for c in cmds:
+        say("> " + _shown(c))
+        rc = rc or subprocess.run(c, check=False).returncode
+    if action == "add" and rc == 0:
+        say(f"Готово: входящие подключения к порту {port} разрешены (сети домена и частные).")
+    return rc
 
 
 # ---- hot update (see the module doc; desk.update writes pending.json and the staged folder)
@@ -719,11 +828,12 @@ def hot_update(env: dict[str, str], args: list[str]) -> int | None:
 def cmd_start(args: list[str]) -> int:
     verify = "--verify-update" in args  # the new launcher of a hot update: confirm once the server answers
     args = [a for a in args if a != "--verify-update"]
-    port = int(os.environ.get("DESK_PORT") or DEFAULT_PORT)
-    if args[:1] == ["--port"] and len(args) > 1:
-        port = int(args[1])
     env = desk_environ()
     home = home_dir(env)
+    addr = serve_settings(env, home)  # bind_host, port, tls of the settings (desk serve reads the same)
+    port = addr["port"]
+    if args[:1] == ["--port"] and len(args) > 1:
+        port = int(args[1])
     if not verify and (updates_dir(env) / "applying.json").exists() and not bundle_processes()[0]:
         update_log(env, "Прошлое обновление не завершилось: возвращаю прежнюю версию из резервной копии ...")
         state = _read_json(updates_dir(env) / "applying.json") or {}
@@ -742,14 +852,21 @@ def cmd_start(args: list[str]) -> int:
             record_update(env, False, version(), "", str(e))
         raise
     page = "concepts/index.html" if (home / "settings.json").is_file() else "settings.html"  # the monitors
-    url = f"http://127.0.0.1:{port}/{page}"
+    scheme = "https" if addr["tls"] else "http"
+    local = f"{scheme}://127.0.0.1:{port}"  # desk serve listens here whatever bind_host says (desk.api.app)
+    url = f"{local}/{page}"
+    lan = not _loopback_host(addr["host"])
+    if lan and not addr["auth"]:
+        raise Fail(f"В настройках адрес {addr['host']} (доступ из сети), а вход по паролю выключен: сервер так не "
+                   "запустится. Создайте администратора и включите вход: desk.bat user add ИМЯ --role admin, затем "
+                   "desk.bat lan enable --self-signed. Или верните адрес 127.0.0.1: desk.bat lan disable.")
     if not verify and port_busy(port):  # verify: the old server just closed it (a busy port fails desk serve)
         ours = bool(bundle_processes()[0])
-        if _no_proxy_get(f"http://127.0.0.1:{port}/health/live") and ours:
+        if _no_proxy_get(f"{local}/health/live") and ours:
             say(f"Desk Monitor уже запущен: открываю {url}")
             webbrowser.open(url)
             return 0
-        if _no_proxy_get(f"http://127.0.0.1:{port}/health/live"):
+        if _no_proxy_get(f"{local}/health/live"):
             raise Fail(f"Порт {port} занят другим экземпляром Desk Monitor (старая версия из другой папки?). "
                        "Закройте его окно или запустите stop.bat в его папке, затем снова start.bat.")
         raise Fail(f"Порт {port} занят другой программой. Кто занял: netstat -ano | findstr :{port} "
@@ -759,6 +876,9 @@ def cmd_start(args: list[str]) -> int:
     log = home / "logs" / "serve.log"
     say(f"  журнал: {log}")
     say(f"  адрес: {url}")
+    if lan:
+        say("  для коллег: " + ", ".join(f"{scheme}://{n}:{port}/" for n in lan_names(addr["host"])[:3])
+            + "  (вход по паролю; правило брандмауэра: desk.bat firewall add от имени администратора)")
     say("Остановить: закройте это окно (или Ctrl+C, или stop.bat).")
     say()
 
@@ -768,7 +888,7 @@ def cmd_start(args: list[str]) -> int:
         # the first start of PostgreSQL may take a while; a new version that does not answer is rolled back
         deadline = time.monotonic() + (UPDATE_TIMEOUT_S if verify else 300)
         while time.monotonic() < deadline and proc.poll() is None:
-            if _no_proxy_get(f"http://127.0.0.1:{port}/health/live"):
+            if _no_proxy_get(f"{local}/health/live"):
                 if verify:
                     confirm_update(env)
                 if browse:
@@ -783,7 +903,8 @@ def cmd_start(args: list[str]) -> int:
 
     while True:
         # DESK_RESTART_CODE: desk serve may exit with it (desk.update), here it means "start me again"
-        rc = run_logged([str(desk_exe()), "serve", "--host", "127.0.0.1", "--port", str(port)],
+        # the address is the settings' bind_host (desk serve reads it; it refuses a network one without sign-in)
+        rc = run_logged([str(desk_exe()), "serve", "--port", str(port)],
                         {**env, "DESK_RESTART_CODE": str(RESTART)}, log, on_start=when_ready)
         if rc != RESTART:
             break
@@ -827,6 +948,8 @@ def cmd_cycle(args: list[str]) -> int:
 
 
 def cmd_desk(args: list[str]) -> int:
+    if args[:1] == ["firewall"]:  # desk.bat firewall add: the launcher's, not a desk command
+        return cmd_firewall(args[1:])
     env = desk_environ()
     home_dir(env)
     ensure_env(env)
@@ -834,7 +957,7 @@ def cmd_desk(args: list[str]) -> int:
 
 
 def main(argv: list[str]) -> int:
-    cmds = {"start": cmd_start, "stop": cmd_stop, "cycle": cmd_cycle, "desk": cmd_desk,
+    cmds = {"start": cmd_start, "stop": cmd_stop, "cycle": cmd_cycle, "desk": cmd_desk, "firewall": cmd_firewall,
             "reinstall": lambda a: ensure_env(desk_environ(), force=True) or 0}
     if not argv or argv[0] not in cmds:
         say(__doc__.split("\n\n")[1])

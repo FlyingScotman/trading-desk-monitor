@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Вход · Desk Monitor</title>
+<!--
+  Вход в Desk Monitor (пакет 1, п. 9; сервер backend/src/desk/api/auth.py). Открыт без входа, поэтому всё своё:
+  стили и скрипт здесь же, ничего не подгружает. Режимы (по GET /api/v1/auth/state и адресу):
+   - вход по имени и паролю (POST /api/v1/auth/login), затем переход на ?next= (только путь этого сайта);
+   - смена пароля (?change=1 или временный пароль после сброса администратором; POST /api/v1/auth/password);
+   - первый администратор (POST /api/v1/auth/setup): только на самом компьютере Desk Monitor (127.0.0.1),
+     пока активного администратора нет;
+   - вход выключен (по умолчанию): объяснение и ссылка на страницы.
+-->
+<style>
+  :root { --bg:#f3f5f8; --panel:#fff; --fg:#1b2129; --fg-2:#4d5866; --line:#d9dee5; --accent:#2f6fd6; --crit:#c62f2f; --warn-bg:#fff3cd; --warn-fg:#5c4400; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12161c; --panel:#1b2129; --fg:#e7ebf0; --fg-2:#a8b2bf; --line:#2c3440; --accent:#6aa0ff; --crit:#ff7b7b; --warn-bg:#3d3214; --warn-fg:#f5dc96; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:flex-start;
+         background:var(--bg); color:var(--fg); font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  .warn { align-self:stretch; background:var(--warn-bg); color:var(--warn-fg); padding:6px 16px; font-size:13px; }
+  main { width:100%; max-width:380px; margin:10vh 16px 40px; }
+  h1 { font-size:18px; margin:0 0 4px; letter-spacing:.02em; }
+  .sub { color:var(--fg-2); margin:0 0 18px; font-size:13px; }
+  form, .card { background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:18px; margin-bottom:14px; }
+  form h2 { font-size:15px; margin:0 0 12px; }
+  label { display:block; font-size:12px; color:var(--fg-2); margin:10px 0 4px; }
+  input { width:100%; font:inherit; color:var(--fg); background:var(--bg); border:1px solid var(--line); border-radius:3px; padding:7px 9px; }
+  input:focus { outline:2px solid var(--accent); outline-offset:-1px; }
+  button { margin-top:16px; width:100%; font:inherit; font-weight:600; color:#fff; background:var(--accent); border:0; border-radius:3px; padding:8px; cursor:pointer; }
+  button:disabled { opacity:.6; cursor:default; }
+  .err { color:var(--crit); font-size:13px; margin-top:10px; min-height:1em; white-space:pre-wrap; }
+  .note { color:var(--fg-2); font-size:13px; }
+  a { color:var(--accent); }
+  code { font-size:12px; background:var(--bg); padding:1px 4px; border-radius:2px; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<div class="warn" id="plain" hidden>⚠ Соединение без шифрования (HTTP): пароль и данные идут по сети открытым текстом. Администратору: включите HTTPS — <code>desk lan enable --self-signed</code>.</div>
+<main>
+  <h1>Desk Monitor</h1>
+  <p class="sub" id="sub">Вход</p>
+
+  <form id="login" hidden autocomplete="on">
+    <h2>Вход</h2>
+    <label for="l-user">Имя пользователя</label>
+    <input id="l-user" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+    <label for="l-pass">Пароль</label>
+    <input id="l-pass" name="password" type="password" autocomplete="current-password" required>
+    <button type="submit">Войти</button>
+    <div class="err" id="l-err" role="alert"></div>
+  </form>
+
+  <form id="change" hidden>
+    <h2>Смена пароля</h2>
+    <p class="note" id="c-why">Задайте свой пароль: не короче 8 знаков.</p>
+    <label for="c-cur">Текущий (или временный) пароль</label>
+    <input id="c-cur" type="password" autocomplete="current-password" required>
+    <label for="c-new">Новый пароль</label>
+    <input id="c-new" type="password" autocomplete="new-password" minlength="8" required>
+    <label for="c-new2">Новый пароль ещё раз</label>
+    <input id="c-new2" type="password" autocomplete="new-password" minlength="8" required>
+    <button type="submit">Сменить пароль</button>
+    <div class="err" id="c-err" role="alert"></div>
+  </form>
+
+  <form id="setup" hidden>
+    <h2>Первый администратор</h2>
+    <p class="note">Администраторов ещё нет. Создайте свою учётную запись: администратор заводит пользователей
+      (просмотр, трейдер, администратор) и меняет настройки. Эта форма работает только на самом компьютере Desk Monitor.</p>
+    <label for="s-user">Имя пользователя (латиницей, например ivanov)</label>
+    <input id="s-user" autocomplete="username" autocapitalize="none" spellcheck="false" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,63}">
+    <label for="s-name">Как показывать (необязательно)</label>
+    <input id="s-name" autocomplete="name" maxlength="120">
+    <label for="s-pass">Пароль (не короче 8 знаков)</label>
+    <input id="s-pass" type="password" autocomplete="new-password" minlength="8" required>
+    <label for="s-pass2">Пароль ещё раз</label>
+    <input id="s-pass2" type="password" autocomplete="new-password" minlength="8" required>
+    <button type="submit">Создать администратора</button>
+    <div class="err" id="s-err" role="alert"></div>
+  </form>
+
+  <div class="card note" id="info" hidden></div>
+</main>
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var q = new URL(location.href).searchParams;
+  var next = q.get('next') || '';
+  // только путь этого сайта: не //host, не схема, не обратная косая
+  if (!/^\/(?!\/)/.test(next) || /[\\\s]/.test(next) || /^\/login\.html/.test(next)) next = '/concepts/index.html';
+  var wantChange = q.get('change') === '1';
+  var esc = function (t) { return String(t).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); };
+  var nextLink = '<a href="' + esc(next) + '">Открыть страницы</a>';
+
+  function cookie(name) {
+    var m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+  function post(path, body) {
+    return fetch(path, { method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-Token': cookie('desk_csrf') }, body: JSON.stringify(body) })
+      .then(function (r) {
+        if (r.status === 204) return null;
+        return r.json().catch(function () { return {}; }).then(function (j) {
+          if (!r.ok) throw new Error((j && j.message) || ('HTTP ' + r.status));
+          return j;
+        });
+      });
+  }
+  function show(id) { ['login', 'change', 'setup', 'info'].forEach(function (k) { $(k).hidden = k !== id && !(id === 'login+setup' && (k === 'login' || k === 'setup')); }); }
+  function info(html) { $('info').innerHTML = html; $('info').hidden = false; }
+  function go() { location.replace(next); }
+  function busy(form, on) { form.querySelector('button').disabled = on; }
+
+  function render(s) {
+    $('plain').hidden = !s.plain_http_lan;
+    if (!s.enabled) {
+      $('sub').textContent = 'Вход по паролю выключен';
+      show(s.setup_allowed ? 'setup' : 'info');
+      info('Desk Monitor открыт только на этом компьютере, без учётных записей. ' +
+        nextLink + '.<br><br>Чтобы открыть его коллегам: создайте администратора ' +
+        '(форма выше или <code>desk.bat user add ИМЯ --role admin</code>), затем <code>desk.bat lan enable --self-signed</code> ' +
+        'и перезапуск — по шагам в START_HERE.txt («Доступ коллегам по сети»).');
+      return;
+    }
+    if (s.user) {
+      if (s.user.must_change_password || wantChange) {
+        $('sub').textContent = 'Вы вошли как ' + (s.user.display_name || s.user.username);
+        $('c-why').textContent = s.user.must_change_password ? 'Пароль временный: задайте свой (не короче 8 знаков), чтобы продолжить.'
+          : 'Не короче 8 знаков. Другие ваши сеансы будут закрыты.';
+        show('change'); $('c-cur').focus();
+      } else go();
+      return;
+    }
+    $('sub').textContent = 'Вход';
+    if (s.setup_needed && s.setup_allowed) { show('login+setup'); $('s-user').focus(); return; }
+    show('login');
+    if (s.setup_needed) info('Администратора ещё нет: его создают на компьютере Desk Monitor (откройте там ' +
+      '<code>' + (s.secure ? 'https' : 'http') + '://127.0.0.1:' + (location.port || (s.secure ? 443 : 80)) + '/login.html</code>) или командой <code>desk.bat user add ИМЯ --role admin</code>.');
+    $('l-user').focus();
+  }
+
+  $('login').addEventListener('submit', function (e) {
+    e.preventDefault(); busy(this, true); $('l-err').textContent = '';
+    var f = this;
+    post('/api/v1/auth/login', { username: $('l-user').value, password: $('l-pass').value })
+      .then(function (s) { $('l-pass').value = ''; render(s); })
+      .catch(function (err) { $('l-err').textContent = err.message; $('l-pass').select(); })
+      .then(function () { busy(f, false); });
+  });
+  $('change').addEventListener('submit', function (e) {
+    e.preventDefault(); $('c-err').textContent = '';
+    if ($('c-new').value !== $('c-new2').value) { $('c-err').textContent = 'новые пароли не совпадают'; return; }
+    var f = this; busy(f, true);
+    post('/api/v1/auth/password', { current_password: $('c-cur').value, new_password: $('c-new').value })
+      .then(go).catch(function (err) { $('c-err').textContent = err.message; }).then(function () { busy(f, false); });
+  });
+  $('setup').addEventListener('submit', function (e) {
+    e.preventDefault(); $('s-err').textContent = '';
+    if ($('s-pass').value !== $('s-pass2').value) { $('s-err').textContent = 'пароли не совпадают'; return; }
+    var f = this; busy(f, true);
+    post('/api/v1/auth/setup', { username: $('s-user').value, password: $('s-pass').value, display_name: $('s-name').value || null })
+      .then(function (s) {
+        if (s.enabled) { go(); return; }
+        show('info');
+        info('Администратор <b>' + esc($('s-user').value.toLowerCase()) + '</b> создан. Вход по паролю пока выключен: ' +
+          'чтобы открыть Desk Monitor коллегам, выполните <code>desk.bat lan enable --self-signed</code> и перезапустите его ' +
+          '(START_HERE.txt, «Доступ коллегам по сети»). ' + nextLink + '.');
+      })
+      .catch(function (err) { $('s-err').textContent = err.message; }).then(function () { busy(f, false); });
+  });
+
+  fetch('/api/v1/auth/state', { cache: 'no-store', headers: { Accept: 'application/json' } })
+    .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(render)
+    .catch(function (err) { show('info'); info('Сервер Desk Monitor не отвечает: ' + err.message + '. Обновите страницу через минуту.'); });
+})();
+</script>
+</body>
+</html>

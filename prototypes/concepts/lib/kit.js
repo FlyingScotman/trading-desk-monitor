@@ -373,6 +373,7 @@
       '<button class="k-btn" data-a="search">Поиск <span class="k-kbd">Ctrl K</span></button>' +
       '<button class="k-btn" data-a="theme" title="Светлая / тёмная тема">◐</button>';
     document.body.prepend(bar);
+    if (/^https?:$/.test(location.protocol) && !window.DESK_AUTH) document.head.appendChild(Object.assign(document.createElement('script'), { src: '../desk-auth.js' }));  // вход: пользователь, «Выйти», CSRF
     chipsBox = bar.querySelector('.filters'); renderFilterChips();
     bar.querySelector('[data-a=search]').onclick = () => K.palette();
     bar.querySelector('[data-a=theme]').onclick = K.toggleTheme;

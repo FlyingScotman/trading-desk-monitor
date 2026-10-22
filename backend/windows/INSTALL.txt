@@ -63,3 +63,15 @@ Desk Monitor - установка на рабочий компьютер (Window
 ЕСЛИ ЧТО-ТО НЕ ТАК
    Сообщение об ошибке остаётся в окне. Журнал сервера: %LOCALAPPDATA%\DeskMonitor\logs\serve.log.
    Порт занят, прокси, антивирус и прочее: app\INSTALL_BACKEND_WINDOWS.md, раздел «Если что-то не так».
+
+ДОСТУП ИЗ СЕТИ (коллегам, по паролю)
+   По умолчанию Desk Monitor слушает только 127.0.0.1 (этот компьютер) и входа нет. Включить:
+   START_HERE.txt, раздел 9. Коротко, в командной строке в этой папке:
+     desk.bat user add ИМЯ --role admin      администратор (пароль спросят)
+     desk.bat lan enable --self-signed       вход по паролю, сеть, HTTPS со своим сертификатом
+     desk.bat firewall add                   правило брандмауэра (cmd от имени администратора)
+     stop.bat, start.bat                     перезапуск; окно покажет адрес для коллег
+   Правило брандмауэра, которое добавляет firewall add:
+     netsh advfirewall firewall add rule name="Desk Monitor (TCP 8100)" dir=in action=allow protocol=TCP localport=8100 profile=domain,private
+     (входящие, разрешить, только TCP-порт 8100, только сети домена и частные).
+   Сервер откажется слушать сеть без входа по паролю, и без HTTPS - если не задано явно --plain-http.

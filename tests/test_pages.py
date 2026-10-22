@@ -6,7 +6,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PROTO = ROOT / "prototypes"
-PAGES = ["index.html", "desk-monitor.html", "widget-board.html", "pivot-studio.html", "scenario-lab.html", "settings.html"]
+PAGES = ["index.html", "desk-monitor.html", "widget-board.html", "pivot-studio.html", "scenario-lab.html", "settings.html",
+         "users.html"]
+LOGIN = "login.html"  # открыт без входа: без строки и без сторонних скриптов (backend api/auth.py PUBLIC)
 DATA_PAGES = ["desk-monitor.html", "widget-board.html", "pivot-studio.html", "scenario-lab.html"]
 # Основной набор — мониторы (concepts/), «Сценарии (точно)» (app/) и Настройки; ранние экраны устарели (22.10.2026):
 # файлы остаются и открываются по прямому адресу, но интерфейс их не предлагает (README.md, «Устаревшие экраны»)
@@ -20,7 +22,8 @@ def scripts(html):
 
 class Pages(unittest.TestCase):
     def test_every_page_has_the_nav_before_the_loader(self):
-        self.assertEqual(sorted(p.name for p in PROTO.glob("*.html")), sorted(PAGES))
+        self.assertEqual(sorted(p.name for p in PROTO.glob("*.html")), sorted([*PAGES, LOGIN]))
+        self.assertEqual(scripts((PROTO / LOGIN).read_text(encoding="utf-8")), [])
         for name in PAGES:
             src = scripts((PROTO / name).read_text(encoding="utf-8"))
             self.assertIn("desk-nav.js", src, name)
