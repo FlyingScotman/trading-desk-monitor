@@ -71,6 +71,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 <script src="../echarts.min.js"></script>
 <script src="lib/boot.js"></script>
 <script src="lib/kit.js"></script>
+<script src="lib/instr.js"></script>
 <script>
 (function () {
   const M = MOCK, K = KIT, f = K.f, esc = K.esc;
@@ -331,10 +332,11 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     ] : [
       ['Номинал', f.mn(p.notional, 0) + ' <small>mm ' + p.ccy + '</small>'], ['MTM', f.mn(p.mv, 1) + ' <small>mm ₽</small>'],
       ['Ставка / курс', esc(p.couponFmt)], ['Срок', f.date(p.maturity) + ' <small>' + f.yrs(p.tenor) + '</small>'],
-      ['DV01', f.dv(p.dv01) + ' <small>тыс ₽/бп</small>'], ['FX дельта', p.fxDelta ? f.mn(p.fxDelta, 1) + ' <small>mm ' + p.ccy + '</small>' : '—'],
+      ['DV01', f.dv(p.dv01) + ' <small>тыс ₽/бп</small>'], ['FX дельта', K.fxDeltaHtml(p), Object.values(INSTR.fxBy(p)).filter(v => v).length > 1],
       ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽</small>'], ['Контрагент', esc(p.cpty || '—')],
-    ];
-    $('.cd-fields').innerHTML = '<div class="k-fields">' + F.map(([l, v]) => '<div><div class="l">' + l + '</div><div class="v">' + v + '</div></div>').join('') + '</div>';
+    ].concat(K.curveRiskFields(p));
+    $('.cd-fields').innerHTML = '<div class="k-fields">' + F.map(([l, v, wide]) => '<div' + (wide ? ' class="wide"' : '') + '><div class="l">' + l + '</div><div class="v">' + v + '</div></div>').join('') + '</div>' +
+      (p.legs && p.legs.length ? '<div class="k-sec">Ноги сделки</div>' + K.legsHtml(p) : '');
     // PnL
     const pn = p.pnl, parts = [['Кэрри', pn.carry], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx], ['Сделки', pn.trading], ['Прочее', pn.other]];
     const mx = Math.max(1, ...parts.map(x => Math.abs(x[1])));

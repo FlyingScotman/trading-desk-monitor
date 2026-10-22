@@ -62,6 +62,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
 <script src="../echarts.min.js"></script>
 <script src="lib/boot.js"></script>
 <script src="lib/kit.js"></script>
+<script src="lib/instr.js"></script>
 <script>
 (function () {
   const M = MOCK, K = KIT, f = K.f, esc = K.esc, css = K.css;
@@ -233,7 +234,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
         if (o.dim) {
           const cols = o.flags.cs01 ? [RISK_COLS[4], RISK_COLS[0], RISK_COLS[5]] : RISK_COLS;
           bd.innerHTML = sumLine(L); const e = K.h('div'); bd.appendChild(e); dimTable(e, L, o.dim, cols);
-          return 'риск' + (o.ccy ? ' · ' + ccyName[o.ccy] : '') + ' по разрезу «' + (DIM_DEF[o.dim] || [o.dim])[0] + '»';
+          return 'риск' + (o.ccy ? ' · ' + (ccyName[o.ccy] || o.ccy) : '') + ' по разрезу «' + (DIM_DEF[o.dim] || [o.dim])[0] + '»';
         }
         if (o.ccy) {
           const curves = M.curves.filter(c => c.ccy === o.ccy).map(c => c.id);
@@ -241,9 +242,10 @@ body { font-family: var(--mono); font-size: 12.5px; }
           bd.innerHTML = sumLine(L);
           const row = K.h('div', 'row2'); bd.appendChild(row);
           const a = K.h('div'), b = K.h('div'); row.append(a, b);
-          K.riskStack(ch(a, 300), { curves: ids, list: () => K.list().filter(p => p.ccy === o.ccy || !o.ccy) });
+          // риск кривых валюты — у всех позиций (по ногам: рублёвая нога USD/RUB-форварда — в рублях), CS01 — у позиций валюты
+          K.riskStack(ch(a, 300), { curves: ids, ccy: o.ccy });
           b.style.overflow = 'auto'; K.bucketTable(b, o.ccy, { cs01: true });
-          return 'риск по бакетам · ' + ccyName[o.ccy] + ' · ромб — итог бакета, пунктир — кумулятив';
+          return 'риск по бакетам · ' + (ccyName[o.ccy] || o.ccy) + ' · ромб — итог бакета, пунктир — кумулятив';
         }
         P_flush(bd); K.riskMatrix(bd); return 'сводная матрица рисков, тыс ₽/бп';
       }

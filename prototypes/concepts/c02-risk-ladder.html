@@ -49,11 +49,11 @@
 <script src="../echarts.min.js"></script>
 <script src="lib/boot.js"></script>
 <script src="lib/kit.js"></script>
+<script src="lib/instr.js"></script>
 <script>
 (function () {
   const M = MOCK, K = KIT, f = K.f, esc = K.esc, css = K.css;
   K.top({ title: 'C02 · Лестница рисков', tag: 'только риск: валюты → кривые → бакеты → типы' });
-  const CCYN = { RUB: 'Рубли', USD: 'Доллары', EUR: 'Евро', CNY: 'Юани' };
   const RATE = {}; M.ccys.forEach(c => RATE[c] = M.curves.filter(x => x.ccy === c && x.kind === 'rate').map(x => x.id));
   const ALLRATE = M.curves.filter(x => x.kind === 'rate').map(x => x.id);
   const NB = M.buckets.length;
@@ -110,7 +110,7 @@
     ccysInUse().forEach(ccy => {
       const st = state[ccy] = Object.assign({ view: ccy === 'RUB' ? 'curves' : 'curves', metric: 'rates' }, state[ccy]);
       const p = K.h('div', 'k-panel sec' + (ccy === 'RUB' ? ' wide' : ''));
-      p.innerHTML = '<div class="hd"><h3>' + K.ccyTag(ccy) + ' ' + CCYN[ccy] + '</h3><span class="tot"></span><span class="sp"></span><span class="met"></span><span class="vw"></span></div><div class="bd"></div>';
+      p.innerHTML = '<div class="hd"><h3>' + K.ccyTag(ccy) + ' ' + K.ccyName(ccy) + '</h3><span class="tot"></span><span class="sp"></span><span class="met"></span><span class="vw"></span></div><div class="bd"></div>';
       box.appendChild(p);
       const o = { ccy, el: p, bd: p.querySelector('.bd'), charts: [] };
       secObjs.push(o);

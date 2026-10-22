@@ -27,6 +27,14 @@ class Pages(unittest.TestCase):
             if name in DATA_PAGES:
                 self.assertLess(src.index("desk-nav.js"), src.index("desk-loader.js"), name)  # выбор прогона — в адрес раньше
 
+    def test_monitors_load_the_ccy_attribution_after_the_kit(self):
+        # lib/instr.js — отнесение к валюте «по ногам» (DV01 по валюте кривой, ОВП по ключам FX-дельты): им пользуются
+        # шапка, карточка и ОВП kit.js на каждом мониторе
+        for f in sorted((PROTO / "concepts").glob("c*.html")):
+            src = scripts(f.read_text(encoding="utf-8"))
+            self.assertIn("lib/instr.js", src, f.name)
+            self.assertLess(src.index("lib/kit.js"), src.index("lib/instr.js"), f.name)
+
     def test_react_app_loads_the_same_nav(self):
         for f in (ROOT / "frontend" / "index.html", ROOT / "frontend" / "dist" / "index.html"):
             self.assertIn('<script src="../desk-nav.js"></script>', f.read_text(encoding="utf-8"), f)

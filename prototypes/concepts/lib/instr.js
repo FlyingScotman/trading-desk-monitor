@@ -17,6 +17,9 @@
  *  - «по валюте сделки» (position): всё в валюте позиции (CCY отчёта); риск на кривых другой валюты — отдельной
  *    колонкой «DV01 чужих кривых», в DV01 блока не входит.
  *  Одновалютные типы всегда «по ногам» (своя кривая — своя валюта, R27: никакая валюта не попадает в рубли).
+ *  Правило «по ногам» для одной позиции (INSTR.dv01By / dv01In, fxBy / fxIn, curveCcy) — общее для всех мониторов: шапка
+ *  (DV01 и ОВП по валютам), блоки валют кокпита, ОВП C06, история по валютам C11, карточка; поэтому lib/instr.js
+ *  загружается на каждой странице сразу после kit.js.
  * Чего нет — то нет: позиция типа с процентным или спредовым риском (облигации, свопы, фьючерсы и форварды) без
  * всякого риска (кроме HTM по начислению: у неё риска нет по правилу) — «без риска» с причиной (не оценена / оценена по отчёту без риска / не посчитан), а не 0.
  * Суммы — в валюте строки (по умолчанию) или в валюте отчёта; итог по всем валютам — только в валюте отчёта и только
@@ -81,7 +84,23 @@
     if (any) return null;
     return p.quality === 'reported_value' ? 'reported_no_risk' : 'no_risk';
   };
-  const fxBy = p => p.fxDeltaBy || (p.fxDelta ? { [p.ccy]: p.fxDelta } : {});
+  // ---------- отнесение мер позиции к валюте «по ногам» ----------
+  // Одно правило для всех мониторов: таблица «валюта × тип», шапка (DV01 и ОВП по валютам), блоки валют кокпита,
+  // ОВП C06, карточка позиции. DV01 кривой — в валюте кривой (у кривой валюта — своя: b3f3643), FX-дельта — по ключам
+  // fx_delta {ccy} прогона, не по валюте позиции: у USD/RUB-форварда риск RUONIA — рублёвый, у кросса USD/CNY
+  // FX-дельта — в обеих валютах.
+  const MK = () => window.MOCK || {};
+  I.curveCcy = id => { const c = (MK().curve || {})[id]; return (c && c.ccy) || String(id).split(' ')[0]; };
+  I.isRate = id => { const c = (MK().curve || {})[id]; return !c || c.kind === 'rate'; };
+  // FX-дельта по валютам: {ccy: сумма в валюте}; в демо-наборе без карты — одна валюта позиции
+  I.fxBy = p => p.fxDeltaBy || (p.fxDelta ? { [p.ccy]: p.fxDelta } : {});
+  I.fxIn = (p, ccy) => I.fxBy(p)[ccy] || 0;
+  // DV01 по валютам кривых (только процентные кривые, без базиса ОФЗ), в валюте отчёта, как dv01ByCurve
+  I.dv01By = p => { const o = {}; Object.entries(p.dv01ByCurve || {}).forEach(([id, v]) => { if (v && I.isRate(id)) { const c = I.curveCcy(id); o[c] = (o[c] || 0) + v; } }); return o; };
+  I.dv01In = (p, ccy) => I.dv01By(p)[ccy] || 0;
+  // валюты, в которых у позиции есть мера: своя, валюты кривых с риском, валюты FX-дельты
+  I.ccysOf = p => [...new Set([p.ccy || 'RUB'].concat(Object.keys(I.dv01By(p)), Object.keys(I.fxBy(p)).filter(c => I.fxIn(p, c))))];
+  const fxBy = I.fxBy;
 
   // таблица по списку позиций (K.list()): opt.attribution — legs | position, opt.units — own (валюта строки) | repr
   I.table = function (list, opt) {
@@ -90,8 +109,7 @@
     const attr = opt.attribution || I.ATTRIBUTION_DEFAULT, own = (opt.units || 'own') === 'own';
     const toR = c => (M.toRepr && M.toRepr[c]) || 1;
     const k = c => own ? 1 / toR(c) : 1;  // множитель из валюты отчёта в единицы строки
-    const curveCcy = id => (M.curve && M.curve[id] && M.curve[id].ccy) || String(id).split(' ')[0];
-    const rate = id => !M.curve || !M.curve[id] || M.curve[id].kind === 'rate';
+    const curveCcy = I.curveCcy, rate = I.isRate;
     const cells = {};
     const blank = (ccy, kind) => ({ ccy, kind, ids: new Set(), legs: new Set(), missing: [], m: {} });
     const cell = (ccy, kind) => { const key = ccy + '|' + kind; return cells[key] || (cells[key] = blank(ccy, kind)); };

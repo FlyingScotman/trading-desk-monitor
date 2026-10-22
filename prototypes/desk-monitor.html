@@ -523,7 +523,7 @@ const COLS = [
   {k:'gammaCs', t:'Гамма спреда, ₽/б.п.²', n:1, d:0, v:p => p.gammaCs || null, sum:1, sg:1},
   {k:'convexity', t:'Выпуклость', n:1, d:2},
   {k:'jtd', t:'JTD, млн ₽', n:1, d:1, v:p => p.jtd/1e6, sum:1, sg:1},
-  {k:'fxd', t:'FX-дельта, млн вал.', n:1, d:2, v:p => { const k = Object.keys(p.fxDelta); return k.length ? p.fxDelta[k[0]]/1e6 : null; }, sg:1},
+  {k:'fxd', t:'FX-дельта, млн вал.', n:1, d:2, v:p => { const k = Object.keys(p.fxDelta); return k.length ? (p.fxDelta[p.ccy] ?? p.fxDelta[k[0]])/1e6 : null; }, sg:1},  // в валюте позиции (кросс: вторая валюта — в карточке)
   {k:'pnlExp', t:'PnL флэш (рынок), тыс ₽', n:1, d:0, v:p => U.pnlOk(p) ? p.pnl.explained/1e3 : null, sum:1, def:1, sg:1, pnl:1, tip:p => pnlWhy(p) || pnlHow(p)},
   {k:'pnlOff', t:'PnL офиц. (ЦБ), тыс ₽', n:1, d:0, v:p => p.pnl.official == null ? null : p.pnl.official/1e3, sum:1, def:1, sg:1},
   {k:'pnlUnx', t:'Break vs explain ЦБ, тыс ₽', n:1, d:0, v:p => U.pnlOk(p) ? p.pnl.unexplained/1e3 : null, sum:1, sg:1},
