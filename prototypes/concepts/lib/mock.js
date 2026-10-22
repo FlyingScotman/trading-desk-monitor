@@ -133,8 +133,8 @@
   M.issuer = Object.fromEntries(M.issuers.map(i => [i.id, i]));
 
   M.groupLabel = { GOV: 'Гос', CORP: 'Корп', DER: 'Деривативы' };
-  M.kindLabel = { PD: 'ОФЗ-ПД (фикс)', PK: 'ОФЗ-ПК (флоатер)', IN: 'ОФЗ-ИН (линкер)', SOVFX: 'Суверен. валютные', FIX: 'Фикс', FLT: 'Флоатер', IRS: 'IRS / OIS', KSW: 'Своп на КС', BAS: 'Базис КС/RUONIA', FXF: 'FX форвард', XCCY: 'XCCY' };
-  M.kindShort = { PD: 'ПД', PK: 'ПК', IN: 'ИН', SOVFX: 'Сув', FIX: 'Фикс', FLT: 'Флоат', IRS: 'IRS', KSW: 'КС-своп', BAS: 'Базис', FXF: 'FX fwd', XCCY: 'XCCY' };
+  M.kindLabel = { PD: 'ОФЗ-ПД (фикс)', PK: 'ОФЗ-ПК (флоатер)', IN: 'ОФЗ-ИН (линкер)', SOVFX: 'Суверен. валютные', FIX: 'Фикс', FLT: 'Флоатер', IRS: 'IRS / OIS', KSW: 'Своп на КС', BAS: 'Базис КС/RUONIA', FXF: 'FX форвард', XCCY: 'XCCY', OTC: 'OTC (по отчёту)' };
+  M.kindShort = { PD: 'ПД', PK: 'ПК', IN: 'ИН', SOVFX: 'Сув', FIX: 'Фикс', FLT: 'Флоат', IRS: 'IRS', KSW: 'КС-своп', BAS: 'Базис', FXF: 'FX fwd', XCCY: 'XCCY', OTC: 'OTC' };
   // строки «типов» для сводной таблицы рисков (порядок — как владелец смотрит)
   M.typeRows = [
     { id: 'GOV.PD', group: 'GOV', kind: 'PD', label: 'ОФЗ-ПД' },
@@ -148,6 +148,7 @@
     { id: 'DER.BAS', group: 'DER', kind: 'BAS', label: 'Базисные свопы' },
     { id: 'DER.FXF', group: 'DER', kind: 'FXF', label: 'FX форварды' },
     { id: 'DER.XCCY', group: 'DER', kind: 'XCCY', label: 'XCCY' },
+    { id: 'DER.OTC', group: 'DER', kind: 'OTC', label: 'OTC (по отчёту)' },
   ];
 
   // ---------- облигационная математика (упрощённо) ----------
@@ -254,6 +255,11 @@
     { name: 'CNY/RUB fwd 6M sell', kind: 'FXF', ccy: 'CNY', curve: 'CNY XCCY', curve2: 'RUB RUONIA', tenor: 0.5, notional: -700e6, rate: 12.05, book: 'FXB', cpty: 'НКЦ' },
     { name: 'EUR/RUB fwd 1M sell', kind: 'FXF', ccy: 'EUR', curve: 'EUR ESTR', curve2: 'RUB RUONIA', tenor: 0.083, notional: -10e6, rate: 95.70, book: 'FXB', cpty: 'Газпромбанк' },
     { name: 'XCCY CNY/RUB 2Y', kind: 'XCCY', ccy: 'CNY', curve: 'CNY XCCY', curve2: 'RUB RUONIA', tenor: 2, notional: -400e6, rate: 5.10, book: 'FXB', cpty: 'Газпромбанк' },
+    // группа продукта отчёта (x_product_group адаптера) — для типа инструмента таблицы «валюта × тип» (lib/instr.js)
+    { name: 'Si-12.26 фьючерс USD/RUB sell', kind: 'FXF', productGroup: 'fx_future', ccy: 'USD', curve: 'USD SOFR', curve2: 'RUB RUONIA', tenor: 0.15, notional: -20e6, rate: 84.60, book: 'FXB', cpty: 'MOEX' },
+    { name: 'CCS USD/RUB 3Y', kind: 'XCCY', productGroup: 'ccs', ccy: 'USD', curve: 'USD SOFR', curve2: 'RUB RUONIA', tenor: 3, notional: 15e6, rate: 4.10, book: 'FXB', cpty: 'ВТБ' },
+    // TRS по отчёту без риска: в таблице «валюта × тип» — «без риска», не ноль
+    { name: 'TRS корп. облигации 1Y (по отчёту)', kind: 'OTC', productGroup: 'trs', ccy: 'RUB', curve: 'RUB RUONIA', tenor: 1, notional: 1500e6, rate: 14.50, book: 'RATES', cpty: 'Газпромбанк' },
   ];
   der.forEach(d => P.push(Object.assign({ isin: null, issuer: null, group: 'DER', maturity: addMonths(AS_OF, Math.round(d.tenor * 12)), spreadBp: 0, cpn: null }, d)));
 
@@ -413,7 +419,7 @@
 
   // сортировка по умолчанию: валюта → группа → эмитент → флоатер/фикс → срок до события
   const groupOrder = { GOV: 0, CORP: 1, DER: 2 };
-  const kindOrder = { PD: 0, PK: 1, IN: 2, SOVFX: 3, FLT: 0, FIX: 1, IRS: 0, KSW: 1, BAS: 2, FXF: 3, XCCY: 4 };
+  const kindOrder = { PD: 0, PK: 1, IN: 2, SOVFX: 3, FLT: 0, FIX: 1, IRS: 0, KSW: 1, BAS: 2, FXF: 3, XCCY: 4, OTC: 5 };
   M.defaultOrder = (a, b) => (M.ccyOrder[a.ccy] - M.ccyOrder[b.ccy]) || (groupOrder[a.group] - groupOrder[b.group]) ||
     (a.issuerName || '').localeCompare(b.issuerName || '', 'ru') || (kindOrder[a.kind] - kindOrder[b.kind]) || (a.tenor - b.tenor);
   positions.sort(M.defaultOrder);

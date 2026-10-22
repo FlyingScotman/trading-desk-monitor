@@ -17,7 +17,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import psycopg
 from fastapi import Depends, FastAPI, Query, Request, status
@@ -50,6 +50,7 @@ from .models import (
     PositionPnl,
     Ready,
     RiskPayload,
+    RiskTable,
     RunDetail,
     RunHeader,
     RunList,
@@ -74,6 +75,8 @@ HEADER_SQL = (f"SELECT r.*, r.run_id IN ({compat.DEFAULT_RUNS}) AS is_default,"
               f" r.run_id IN ({compat.CURRENT_RUNS}) AS is_current FROM run r")
 DIMS = {"book": "book_id", "quality": "quality", "asset_class": "fact->>'asset_class'",
         "segment": "fact->>'segment'", "issuer": "fact->>'issuer'", "ccy": "fact->>'ccy'"}
+PY_DIMS = {"instr_kind": concepts.instr_kind}
+"""Dimensions computed from the fact (an unvalued position: null), not in the SQL: ``concepts.instr_kind``."""
 PNL_KEYS = compat.PNL_KEYS
 JS = "text/javascript; charset=utf-8"
 NO_STORE = {"Cache-Control": "no-store"}
@@ -240,6 +243,30 @@ def warm_bodies(app: FastAPI) -> list[str]:
 
 WARM_S = 20.0
 """How often ``serve`` checks whether the concept pages' bodies need building again."""
+
+
+def _py_grouped(con, run_id: int, names: list[str], cols: list[str]) -> list[dict[str, Any]]:
+    """``aggregates`` rows when a dimension is computed from the fact (``PY_DIMS``): the same sums, grouped here.
+    An unvalued position has no fact: its key there is null."""
+    sel = "".join(f"{c} AS s{i}, " for i, c in enumerate(cols))
+    out: dict[tuple, dict[str, Any]] = {}
+    for r in con.execute(f"SELECT {sel}fact, pnl, pv_rub, dv01_rub, cs01_rub FROM run_position WHERE run_id = %s"
+                         " ORDER BY ord", (run_id,)):
+        sql_keys = iter(r[f"s{i}"] for i in range(len(cols)))
+        key = tuple(next(sql_keys) if d in DIMS else (PY_DIMS[d](r["fact"]) if r["fact"] is not None else None)
+                    for d in names)
+        g = out.setdefault(key, {**{f"k{i}": k for i, k in enumerate(key)}, "n_positions": 0, "n_valued": 0,
+                                 "n_pnl": 0, **dict.fromkeys(("pv_rub", "dv01_rub", "cs01_rub", *PNL_KEYS))})
+        g["n_positions"] += 1
+        g["n_valued"] += r["fact"] is not None
+        g["n_pnl"] += r["pnl"] is not None
+        for k in ("pv_rub", "dv01_rub", "cs01_rub"):
+            if r[k] is not None:
+                g[k] = (g[k] or 0.0) + r[k]
+        for k in PNL_KEYS:
+            if r["pnl"] and r["pnl"].get(k) is not None:
+                g[k] = (g[k] or 0.0) + r["pnl"][k]
+    return [out[k] for k in sorted(out, key=lambda t: tuple((v is None, str(v)) for v in t))]
 
 
 def _total(components: dict[str, Any] | None) -> float | None:
@@ -413,22 +440,25 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
     @app.get("/api/v1/runs/{run_id}/aggregates", response_model=Aggregates)
     def aggregates(con: Con, run_id: int, request: Request,
-                   dims: str = Query("book", description="Comma-separated: " + ", ".join(DIMS))):
+                   dims: str = Query("book", description="Comma-separated: " + ", ".join([*DIMS, *PY_DIMS]))):
         names = [d.strip() for d in dims.split(",") if d.strip()]
-        bad = [d for d in names if d not in DIMS]
+        bad = [d for d in names if d not in DIMS and d not in PY_DIMS]
         if bad or not names:
             raise ApiError(422, "invalid_parameter", f"unknown dims: {', '.join(bad) or '(none)'}",
-                           {"allowed": list(DIMS)})
+                           {"allowed": [*DIMS, *PY_DIMS]})
         names = list(dict.fromkeys(names))
         run = _run_or_404(con, run_id)
-        cols = [DIMS[d] for d in names]  # whitelisted: safe to format into the SQL
+        cols = [DIMS[d] for d in names if d in DIMS]  # whitelisted: safe to format into the SQL
         sums = ", ".join(f"sum((pnl->>'{k}')::float8) AS {k}" for k in PNL_KEYS)
-        rows = con.execute(
-            f"SELECT {', '.join(f'{c} AS k{i}' for i, c in enumerate(cols))}, count(*) AS n_positions,"
-            f" count(fact) AS n_valued, count(pnl) AS n_pnl, sum(pv_rub) AS pv_rub,"
-            f" sum(dv01_rub) AS dv01_rub, sum(cs01_rub) AS cs01_rub, {sums}"
-            f" FROM run_position WHERE run_id = %s"
-            f" GROUP BY {', '.join(cols)} ORDER BY {', '.join(cols)}", (run_id,)).fetchall()
+        if any(d in PY_DIMS for d in names):
+            rows = _py_grouped(con, run_id, names, cols)
+        else:
+            rows = con.execute(
+                f"SELECT {', '.join(f'{c} AS k{i}' for i, c in enumerate(cols))}, count(*) AS n_positions,"
+                f" count(fact) AS n_valued, count(pnl) AS n_pnl, sum(pv_rub) AS pv_rub,"
+                f" sum(dv01_rub) AS dv01_rub, sum(cs01_rub) AS cs01_rub, {sums}"
+                f" FROM run_position WHERE run_id = %s"
+                f" GROUP BY {', '.join(cols)} ORDER BY {', '.join(cols)}", (run_id,)).fetchall()
         out = []
         for r in rows:
             p = {k: r[k] for k in PNL_KEYS}
@@ -438,6 +468,20 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
                                                          "dv01_rub", "cs01_rub")},
                                     pnl=p | {"total": sum(have) if have else None}))
         return _cached(request, run, Aggregates(run_id=run_id, dims=names, rows=out))
+
+    @app.get("/api/v1/runs/{run_id}/risk-table", response_model=RiskTable)
+    def risk_table(con: Con, run_id: int, request: Request,
+                   attribution: Literal["legs", "position"] = Query(
+                       concepts.ATTRIBUTION_DEFAULT, description="where a cross-currency kind's risk goes ("
+                       + ", ".join(concepts.CROSS_CCY_KINDS) + "): " + "; ".join(
+                           f"{k}: {v}" for k, v in concepts.ATTRIBUTIONS.items())
+                       + f". Default {concepts.ATTRIBUTION_DEFAULT!r}, provisional (UI-02)"),
+                   book: str | None = Query(None, description="comma-separated books; all when omitted")):
+        """Aggregated risk: currency x instrument type (UI-02, ``concepts.risk_table``)."""
+        run = _run_or_404(con, run_id)
+        books = [b.strip() for b in book.split(",") if b.strip()] if book else None
+        items, fx = concepts.risk_items(con, run, books)
+        return _cached(request, run, RiskTable(run_id=run_id, **concepts.risk_table(items, fx, attribution)))
 
     @app.get("/api/v1/runs/{run_id}/risk", response_model=RiskPayload)
     def risk(con: Con, run_id: int, request: Request):

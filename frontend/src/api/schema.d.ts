@@ -143,6 +143,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/risk-table": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Risk Table
+         * @description Aggregated risk: currency x instrument type (UI-02, ``concepts.risk_table``).
+         */
+        get: operations["risk_table_api_v1_runs__run_id__risk_table_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}/risk": {
         parameters: {
             query?: never;
@@ -778,6 +798,18 @@ export interface components {
             /** N Exact */
             n_exact: number;
         };
+        /** RiskMissing */
+        RiskMissing: {
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "not_valued" | "reported_no_risk" | "no_risk";
+            /** Text */
+            text: string;
+            /** N */
+            n: number;
+        };
         /**
          * RiskPayload
          * @description First-order and Hessian sensitivities of a run's valued positions, for the Taylor (T1) scenario
@@ -847,6 +879,154 @@ export interface components {
                 number,
                 number
             ][];
+        };
+        /** RiskTable */
+        RiskTable: {
+            /** Run Id */
+            run_id: number;
+            /**
+             * Attribution
+             * @enum {string}
+             */
+            attribution: "legs" | "position";
+            /** Attribution Rule */
+            attribution_rule: string;
+            /**
+             * Attribution Provisional
+             * @description the rule is provisional: the owner decides (UI-02)
+             */
+            attribution_provisional: boolean;
+            /**
+             * Cross Ccy Kinds
+             * @description the kinds the attribution rule applies to
+             */
+            cross_ccy_kinds: string[];
+            /**
+             * Kinds
+             * @description the classification's kinds, in the table's order
+             */
+            kinds: components["schemas"]["RiskTableKind"][];
+            /** Fx */
+            fx: {
+                [key: string]: number | null;
+            };
+            /** Rows */
+            rows: components["schemas"]["RiskTableRow"][];
+            total: components["schemas"]["RiskTableTotal"];
+        };
+        /** RiskTableKind */
+        RiskTableKind: {
+            /** Kind */
+            kind: string;
+            /** Group */
+            group: string;
+            /** Label */
+            label: string;
+        };
+        /**
+         * RiskTableRow
+         * @description One row of the table currency x instrument type (UI-02): a currency's total (``level`` ccy), a group of it
+         *     (group) or an instrument kind (kind). DV01 is the block currency's own curves only.
+         */
+        RiskTableRow: {
+            /** Ccy */
+            ccy: string;
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "ccy" | "group" | "kind";
+            /** Group */
+            group: ("GOV" | "SUB" | "CORP" | "DER" | "OTH") | null;
+            /** Kind */
+            kind: string | null;
+            /** Label */
+            label: string | null;
+            /**
+             * N Positions
+             * @description positions of this currency (by the attribution rule)
+             */
+            n_positions: number;
+            /**
+             * N Legs Only
+             * @description positions of another currency with a risk here (attribution 'legs')
+             */
+            n_legs_only: number;
+            /** Notional Ccy */
+            notional_ccy: number;
+            /** Notional Rub */
+            notional_rub: number;
+            /** Mv Rub */
+            mv_rub: number;
+            /**
+             * Mv Ccy
+             * @description null without the currency's rate
+             */
+            mv_ccy: number | null;
+            /**
+             * Dv01 Rub
+             * @description DV01 on the curves of the row's currency, RUB per bp
+             */
+            dv01_rub: number;
+            /**
+             * Dv01 Ccy
+             * @description the same in the currency per bp; null without its rate
+             */
+            dv01_ccy: number | null;
+            /** Dv01 By Curve Rub */
+            dv01_by_curve_rub: {
+                [key: string]: number;
+            };
+            /**
+             * Dv01 Foreign Rub
+             * @description risk on another currency's curves kept here (attribution 'position'): in dv01_by_curve_rub, not in dv01_rub
+             */
+            dv01_foreign_rub: number;
+            /** Ofz Basis Rub */
+            ofz_basis_rub: number;
+            /** Cs01 Rub */
+            cs01_rub: number;
+            /** Fx Delta Ccy */
+            fx_delta_ccy: number;
+            /**
+             * N Risk Missing
+             * @description positions whose risk is missing (never counted as a zero)
+             */
+            n_risk_missing: number;
+            /** Risk Missing */
+            risk_missing: components["schemas"]["RiskMissing"][];
+        };
+        /**
+         * RiskTableTotal
+         * @description Only what sums across currencies, in RUB.
+         */
+        RiskTableTotal: {
+            /** N Positions */
+            n_positions: number;
+            /** Notional Rub */
+            notional_rub: number;
+            /** Mv Rub */
+            mv_rub: number;
+            /** Dv01 By Curve Rub */
+            dv01_by_curve_rub: {
+                [key: string]: number;
+            };
+            /**
+             * Dv01 All Curves Rub
+             * @description the sum over curves of different currencies: not a currency's risk nor a hedge measure, labelled so
+             */
+            dv01_all_curves_rub: number;
+            /** Ofz Basis Rub */
+            ofz_basis_rub: number;
+            /** Cs01 Rub */
+            cs01_rub: number;
+            /**
+             * Fx Delta Rub
+             * @description net FX delta at the run's rates; null when a rate is missing
+             */
+            fx_delta_rub: number | null;
+            /** N Risk Missing */
+            n_risk_missing: number;
         };
         /** RunDetail */
         RunDetail: {
@@ -1580,7 +1760,7 @@ export interface operations {
     aggregates_api_v1_runs__run_id__aggregates_get: {
         parameters: {
             query?: {
-                /** @description Comma-separated: book, quality, asset_class, segment, issuer, ccy */
+                /** @description Comma-separated: book, quality, asset_class, segment, issuer, ccy, instr_kind */
                 dims?: string;
             };
             header?: never;
@@ -1598,6 +1778,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Aggregates"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    risk_table_api_v1_runs__run_id__risk_table_get: {
+        parameters: {
+            query?: {
+                /** @description where a cross-currency kind's risk goes (CCS, FX_FWD, FX_FUT, FX): legs: each measure in its own currency: DV01 by curve in the curve's, FX delta in its currency's; position count, notional, MV, CS01 and the OFZ basis in the position's; position: everything of a cross-currency kind in the position's currency (the report's CCY); its risk on another currency's curves is shown apart (dv01_foreign_rub), outside the block's DV01. Default 'legs', provisional (UI-02) */
+                attribution?: "legs" | "position";
+                /** @description comma-separated books; all when omitted */
+                book?: string | null;
+            };
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RiskTable"];
                 };
             };
             /** @description Not Found */

@@ -23,6 +23,7 @@
 <script src="../echarts.min.js"></script>
 <script src="lib/boot.js"></script>
 <script src="lib/kit.js"></script>
+<script src="lib/instr.js"></script>
 <script>
 (function () {
   const M = MOCK, K = KIT, f = K.f;
@@ -30,9 +31,10 @@
   // вкладки под шапкой
   document.body.insertBefore(document.getElementById('tabs'), document.querySelector('.k-page'));
   K.hud(document.getElementById('hud'));
-  const TABS = [['risk', 'Риски'], ['pos', 'Позиции'], ['pnl', 'PnL'], ['hist', 'История']];
+  const TABS = [['risk', 'Риски'], ['ccy', 'Валюта × тип'], ['pos', 'Позиции'], ['pnl', 'PnL'], ['hist', 'История']];
   let tab = 'risk';
   try { tab = localStorage.getItem('c01-tab') || 'risk'; } catch (e) { }
+  if (!TABS.some(t => t[0] === tab)) tab = 'risk';
   const tabs = document.getElementById('tabs'), view = document.getElementById('view');
   function renderTabs() { tabs.innerHTML = TABS.map(([k, t]) => '<button class="' + (k === tab ? 'on' : '') + '" data-k="' + k + '">' + t + '</button>').join(''); tabs.querySelectorAll('button').forEach(b => b.onclick = () => { tab = b.dataset.k; try { localStorage.setItem('c01-tab', tab); } catch (e) { } renderTabs(); render(); }); }
   K.commands(TABS.map(([k, t]) => ({ label: 'Вкладка: ' + t, run: () => { tab = k; renderTabs(); render(); } })));
@@ -61,6 +63,12 @@
         K.seg(pc.querySelector('.mode'), [['r', 'ставки'], ['rc', '+ CS01']], 'r', v => { withCs = v === 'rc'; ch.dispose(); ch = K.riskStack(el, { curves: ids(), ccy }); });
         K.bucketTable(pt.querySelector('.bd'), ccy, { cs01: true });
       });
+    }
+    if (tab === 'ccy') {
+      // агрегированный риск: валюта — верхний уровень, тип инструмента — разбивка (UI-02, lib/instr.js)
+      const p = panel('Агрегированный риск: валюта × тип инструмента', '<span class="k-note">итог по валюте, из них — по типам · фильтр книг и портфелей шапки</span>');
+      p.querySelector('.bd').classList.add('flush', 'scroll');
+      view.appendChild(p); K.ccyKindTable(p.querySelector('.bd'));
     }
     if (tab === 'pos') {
       const p = panel('Позиции', '<span class="k-note">валюта → эмитент → флоатеры / фикс → срок до оферты</span>');

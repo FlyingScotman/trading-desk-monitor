@@ -545,11 +545,11 @@
             "required": false,
             "schema": {
               "type": "string",
-              "description": "Comma-separated: book, quality, asset_class, segment, issuer, ccy",
+              "description": "Comma-separated: book, quality, asset_class, segment, issuer, ccy, instr_kind",
               "default": "book",
               "title": "Dims"
             },
-            "description": "Comma-separated: book, quality, asset_class, segment, issuer, ccy"
+            "description": "Comma-separated: book, quality, asset_class, segment, issuer, ccy, instr_kind"
           }
         ],
         "responses": {
@@ -559,6 +559,100 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Aggregates"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run_id}/risk-table": {
+      "get": {
+        "summary": "Risk Table",
+        "description": "Aggregated risk: currency x instrument type (UI-02, ``concepts.risk_table``).",
+        "operationId": "risk_table_api_v1_runs__run_id__risk_table_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "attribution",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "legs",
+                "position"
+              ],
+              "type": "string",
+              "description": "where a cross-currency kind's risk goes (CCS, FX_FWD, FX_FUT, FX): legs: each measure in its own currency: DV01 by curve in the curve's, FX delta in its currency's; position count, notional, MV, CS01 and the OFZ basis in the position's; position: everything of a cross-currency kind in the position's currency (the report's CCY); its risk on another currency's curves is shown apart (dv01_foreign_rub), outside the block's DV01. Default 'legs', provisional (UI-02)",
+              "default": "legs",
+              "title": "Attribution"
+            },
+            "description": "where a cross-currency kind's risk goes (CCS, FX_FWD, FX_FUT, FX): legs: each measure in its own currency: DV01 by curve in the curve's, FX delta in its currency's; position count, notional, MV, CS01 and the OFZ basis in the position's; position: everything of a cross-currency kind in the position's currency (the report's CCY); its risk on another currency's curves is shown apart (dv01_foreign_rub), outside the block's DV01. Default 'legs', provisional (UI-02)"
+          },
+          {
+            "name": "book",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "comma-separated books; all when omitted",
+              "title": "Book"
+            },
+            "description": "comma-separated books; all when omitted"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskTable"
                 }
               }
             }
@@ -2581,6 +2675,34 @@
         ],
         "title": "ResultTotals"
       },
+      "RiskMissing": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "enum": [
+              "not_valued",
+              "reported_no_risk",
+              "no_risk"
+            ],
+            "title": "Reason"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "n": {
+            "type": "integer",
+            "title": "N"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reason",
+          "text",
+          "n"
+        ],
+        "title": "RiskMissing"
+      },
       "RiskPayload": {
         "properties": {
           "run_id": {
@@ -2791,6 +2913,342 @@
           "gamma"
         ],
         "title": "RiskPosition"
+      },
+      "RiskTable": {
+        "properties": {
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "attribution": {
+            "type": "string",
+            "enum": [
+              "legs",
+              "position"
+            ],
+            "title": "Attribution"
+          },
+          "attribution_rule": {
+            "type": "string",
+            "title": "Attribution Rule"
+          },
+          "attribution_provisional": {
+            "type": "boolean",
+            "title": "Attribution Provisional",
+            "description": "the rule is provisional: the owner decides (UI-02)"
+          },
+          "cross_ccy_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Cross Ccy Kinds",
+            "description": "the kinds the attribution rule applies to"
+          },
+          "kinds": {
+            "items": {
+              "$ref": "#/components/schemas/RiskTableKind"
+            },
+            "type": "array",
+            "title": "Kinds",
+            "description": "the classification's kinds, in the table's order"
+          },
+          "fx": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Fx"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/RiskTableRow"
+            },
+            "type": "array",
+            "title": "Rows"
+          },
+          "total": {
+            "$ref": "#/components/schemas/RiskTableTotal"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "attribution",
+          "attribution_rule",
+          "attribution_provisional",
+          "cross_ccy_kinds",
+          "kinds",
+          "fx",
+          "rows",
+          "total"
+        ],
+        "title": "RiskTable"
+      },
+      "RiskTableKind": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "group": {
+            "type": "string",
+            "title": "Group"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "group",
+          "label"
+        ],
+        "title": "RiskTableKind"
+      },
+      "RiskTableRow": {
+        "properties": {
+          "ccy": {
+            "type": "string",
+            "title": "Ccy"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "ccy",
+              "group",
+              "kind"
+            ],
+            "title": "Level"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "GOV",
+                  "SUB",
+                  "CORP",
+                  "DER",
+                  "OTH"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "n_positions": {
+            "type": "integer",
+            "title": "N Positions",
+            "description": "positions of this currency (by the attribution rule)"
+          },
+          "n_legs_only": {
+            "type": "integer",
+            "title": "N Legs Only",
+            "description": "positions of another currency with a risk here (attribution 'legs')"
+          },
+          "notional_ccy": {
+            "type": "number",
+            "title": "Notional Ccy"
+          },
+          "notional_rub": {
+            "type": "number",
+            "title": "Notional Rub"
+          },
+          "mv_rub": {
+            "type": "number",
+            "title": "Mv Rub"
+          },
+          "mv_ccy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mv Ccy",
+            "description": "null without the currency's rate"
+          },
+          "dv01_rub": {
+            "type": "number",
+            "title": "Dv01 Rub",
+            "description": "DV01 on the curves of the row's currency, RUB per bp"
+          },
+          "dv01_ccy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dv01 Ccy",
+            "description": "the same in the currency per bp; null without its rate"
+          },
+          "dv01_by_curve_rub": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Dv01 By Curve Rub"
+          },
+          "dv01_foreign_rub": {
+            "type": "number",
+            "title": "Dv01 Foreign Rub",
+            "description": "risk on another currency's curves kept here (attribution 'position'): in dv01_by_curve_rub, not in dv01_rub"
+          },
+          "ofz_basis_rub": {
+            "type": "number",
+            "title": "Ofz Basis Rub"
+          },
+          "cs01_rub": {
+            "type": "number",
+            "title": "Cs01 Rub"
+          },
+          "fx_delta_ccy": {
+            "type": "number",
+            "title": "Fx Delta Ccy"
+          },
+          "n_risk_missing": {
+            "type": "integer",
+            "title": "N Risk Missing",
+            "description": "positions whose risk is missing (never counted as a zero)"
+          },
+          "risk_missing": {
+            "items": {
+              "$ref": "#/components/schemas/RiskMissing"
+            },
+            "type": "array",
+            "title": "Risk Missing"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ccy",
+          "level",
+          "group",
+          "kind",
+          "label",
+          "n_positions",
+          "n_legs_only",
+          "notional_ccy",
+          "notional_rub",
+          "mv_rub",
+          "mv_ccy",
+          "dv01_rub",
+          "dv01_ccy",
+          "dv01_by_curve_rub",
+          "dv01_foreign_rub",
+          "ofz_basis_rub",
+          "cs01_rub",
+          "fx_delta_ccy",
+          "n_risk_missing",
+          "risk_missing"
+        ],
+        "title": "RiskTableRow",
+        "description": "One row of the table currency x instrument type (UI-02): a currency's total (``level`` ccy), a group of it\n(group) or an instrument kind (kind). DV01 is the block currency's own curves only."
+      },
+      "RiskTableTotal": {
+        "properties": {
+          "n_positions": {
+            "type": "integer",
+            "title": "N Positions"
+          },
+          "notional_rub": {
+            "type": "number",
+            "title": "Notional Rub"
+          },
+          "mv_rub": {
+            "type": "number",
+            "title": "Mv Rub"
+          },
+          "dv01_by_curve_rub": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Dv01 By Curve Rub"
+          },
+          "dv01_all_curves_rub": {
+            "type": "number",
+            "title": "Dv01 All Curves Rub",
+            "description": "the sum over curves of different currencies: not a currency's risk nor a hedge measure, labelled so"
+          },
+          "ofz_basis_rub": {
+            "type": "number",
+            "title": "Ofz Basis Rub"
+          },
+          "cs01_rub": {
+            "type": "number",
+            "title": "Cs01 Rub"
+          },
+          "fx_delta_rub": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fx Delta Rub",
+            "description": "net FX delta at the run's rates; null when a rate is missing"
+          },
+          "n_risk_missing": {
+            "type": "integer",
+            "title": "N Risk Missing"
+          }
+        },
+        "type": "object",
+        "required": [
+          "n_positions",
+          "notional_rub",
+          "mv_rub",
+          "dv01_by_curve_rub",
+          "dv01_all_curves_rub",
+          "ofz_basis_rub",
+          "cs01_rub",
+          "fx_delta_rub",
+          "n_risk_missing"
+        ],
+        "title": "RiskTableTotal",
+        "description": "Only what sums across currencies, in RUB."
       },
       "RunDetail": {
         "properties": {

@@ -8,7 +8,9 @@
  *  - кривые: RUB RUONIA, RUB KEY — как в прогоне; RUB OFZ страниц — базис ОФЗ − RUONIA (КБД минус RUONIA, б.п.),
  *    его риск — ofzSpr01 позиции по бакетам срока (ядро 0.33, extra.spread_buckets); риск прогона на «RUB OFZ» (КБД: только в день без RUONIA)
  *    добавлен к RUONIA; кривые валют USD/EUR/CNY — USD SOFR / EUR ESTR / CNY XCCY (точек нет, только риск);
- *  - тип: GOV PD/PK/IN/SOVFX, SUB FIX/FLT, CORP FIX/FLT, DER OTC/FX, OTH (api/concepts.kind_of);
+ *  - тип: GOV PD/PK/IN/SOVFX, SUB FIX/FLT, CORP FIX/FLT, DER OTC/FX, OTH (api/concepts.kind_of); тип инструмента
+ *    таблицы «валюта × тип» (ОФЗ-ПД, свопы, фьючерсы… по группе продукта отчёта) — lib/instr.js (api/concepts.instr_kind)
+ *    из instrType, assetClass, segment, productGroup (extra.reported.x_product_group) и fxDeltaBy позиции;
  *  - срок — до оферты или колла, по которым считается доходность, иначе до погашения;
  *  - у флоатера доходности нет (ytm = null), спред — дисконт-маржа ядра (extra.dm_bp: спред к кривой проекции; в
  *    прогоне до ядра 0.33 — Z-спред); G-спред — ядра (extra.g_spread_bp, определение MOEX), иначе MOEX;
@@ -183,6 +185,12 @@
       maturity: d.maturity || null, notional: num(d.notional) || 0, notionalRub: num(d.notionalRub) || 0, spreadBp: num(d.spreadBp),
       notValued: !!d.notValued, cpty: d.counterparty || null, portfolio: d.portfolio || null, quality: ex.quality || null,
     };
+    // для типа инструмента таблицы «валюта × тип» (lib/instr.js, api/concepts.instr_kind): поля факта и группа продукта отчёта
+    p.instrType = d.instrType || null; p.assetClass = d.assetClass || null; p.segment = d.segment || null;
+    p.productGroup = (ex.reported || {}).x_product_group || null;
+    p.ocp = !!(d.ocpTransfer || d.assetClass === 'Перенос ОВП');
+    p.accrualOnly = !!d.accrualOnly;  // HTM по начислению: рыночного риска нет по правилу, это не пропуск
+    p.fxDeltaBy = Object.fromEntries(Object.entries(d.fxDelta || {}).filter(([, v]) => num(v)).map(([c, v]) => [c, +v]));
     const b = M.book[d.book] || {};
     p.bookName = b.name || d.book; p.entity = b.entity || d.entity || '—'; p.desk = b.desk || '—';
     p.issuerName = d.issuer || d.counterparty || (group === 'DER' ? 'Деривативы' : '—');
