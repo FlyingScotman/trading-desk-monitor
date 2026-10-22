@@ -238,6 +238,30 @@ def warm_bodies(app: FastAPI) -> list[str]:
     return built
 
 
+def lan_names() -> list[str]:
+    """This computer's name and IPv4 addresses (not loopback) as colleagues reach it: what ``desk serve`` with
+    ``lan_access`` prints and the settings page shows. Best effort: [] when the name does not resolve."""
+    import socket
+
+    try:
+        name = socket.gethostname()
+        ips = socket.gethostbyname_ex(name)[2]
+    except OSError:
+        return []
+    return list(dict.fromkeys([name, *(ip for ip in ips if not ip.startswith("127."))]))
+
+
+class ClientDropped(logging.Filter):
+    """Drops the ``asyncio`` logger's tracebacks of a client that closed its connection first: on Windows the
+    proactor loop logs "ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the
+    remote host" (or 10053, aborted) when a browser drops a connection (a tab closed, a page left while it loads, an
+    idle keep-alive socket). Nothing failed and the request, if any, is over; every other record passes."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        exc = record.exc_info[1] if record.exc_info else None
+        return not isinstance(exc, (ConnectionResetError, ConnectionAbortedError))
+
+
 WARM_S = 20.0
 """How often ``serve`` checks whether the concept pages' bodies need building again."""
 
@@ -635,9 +659,11 @@ def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir:
     from ..update import restart_code
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    logging.getLogger("asyncio").addFilter(ClientDropped())  # WinError 10054 of a browser that left: not an error
     if snapshots is not None:
         jobs.Worker(store_url, SnapshotDir(snapshots)).start()
     app = create_app(store_url, static_dir, adapter_status=adapter_status)
+    app.state.listen_host = host  # the settings page tells "open to the network" from "saved, restart to apply"
     if autopilot is not None:
         app.state.autopilot = autopilot
         autopilot.start()

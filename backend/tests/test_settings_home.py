@@ -20,6 +20,7 @@ from desk.settings import (
     Settings,
     SettingsError,
     adapter_config_dir,
+    check_settings_doc,
     desk_home,
     load,
     read_settings_json,
@@ -458,3 +459,49 @@ def test_api_proxy_login_password_and_transport(client: TestClient, home: Path) 
     assert client.put("/api/v1/settings/proxy-password", json={"password": ""}).json()["proxy_password_set"] is False
     assert not (home / "proxy_password").exists()
     assert load(env(home)).hub_transport == "curl" and Settings().hub_transport == "auto"  # default
+
+
+# ---- network access (lan_access) -------------------------------------------------------------------------------
+
+
+def test_lan_access_is_off_by_default_and_follows_settings_json_and_env(home: Path) -> None:
+    e = {"DESK_HOME": str(home), "DESK_ENV_FILE": str(home / "none.env")}
+    assert load(e).lan_access is False
+    home.mkdir(parents=True)
+    (home / "settings.json").write_text('{"lan_access": true}', encoding="utf-8")
+    assert load(e).lan_access is True
+    assert load({**e, "DESK_LAN_ACCESS": "0"}).lan_access is False  # the environment wins
+    assert check_settings_doc({"lan_access": "yes"}) == ["lan_access: must be true or false"]
+
+
+def test_api_lan_access_round_trip_and_network_state(client: TestClient, home: Path) -> None:
+    j = client.get("/api/v1/settings").json()
+    assert j["effective"]["lan_access"] is False
+    assert j["network"]["listen_host"] is None and j["network"]["lan"] is False and j["network"]["port"] == 8000
+    j = client.put("/api/v1/settings", json={"lan_access": True}).json()
+    assert j["lan_access"] is True and j["effective"]["lan_access"] is True
+    assert json.loads((home / "settings.json").read_text(encoding="utf-8"))["lan_access"] is True
+    client.app.state.listen_host = "0.0.0.0"  # what serve() records: the running server is open to the network
+    assert client.get("/api/v1/settings").json()["network"]["lan"] is True
+    # open to the network, the settings stay this computer's
+    remote = TestClient(client.app, base_url="http://127.0.0.1:8000", client=("10.1.2.3", 50000))
+    assert remote.get("/api/v1/settings").status_code == 403
+    assert remote.get("/health/live").status_code == 200
+
+
+def test_desk_serve_listens_by_the_setting_unless_host_is_given(home: Path, monkeypatch) -> None:
+    import desk.api
+    from desk import cli
+    from desk.api import app as app_mod
+
+    got = []
+    monkeypatch.setattr(cli.store, "resolve_url", lambda s: "postgresql://unused")
+    monkeypatch.setattr(cli.store, "migrate", lambda url: None)
+    monkeypatch.setattr(desk.api, "serve", lambda url, host, port, **k: got.append((host, port)) or 0)
+    monkeypatch.setattr(app_mod, "lan_names", lambda: ["DESK-PC", "10.0.0.5"])
+    argv = ["serve", "--no-worker", "--no-autopilot"]
+    assert cli.main(argv) == 0 and got[-1] == ("127.0.0.1", 8100)
+    home.mkdir(parents=True)
+    (home / "settings.json").write_text('{"lan_access": true}', encoding="utf-8")
+    assert cli.main(argv) == 0 and got[-1] == ("0.0.0.0", 8100)
+    assert cli.main([*argv, "--host", "127.0.0.1"]) == 0 and got[-1] == ("127.0.0.1", 8100)  # --host wins

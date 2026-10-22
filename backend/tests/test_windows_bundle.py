@@ -194,3 +194,15 @@ def test_patch_zip_holds_only_changed_files_and_overlays_exactly(monkeypatch, tm
     monkeypatch.setattr(deskctl, "ROOT", root)
     deskctl.apply_patch_delete()
     assert tree(root) == new
+
+
+def test_start_leaves_the_listen_address_to_desk_serve(monkeypatch, tmp_path):
+    """No --host from the launcher: desk serve listens on 127.0.0.1, or on every interface with lan_access on."""
+    monkeypatch.setenv("DESK_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(deskctl, "ensure_env", lambda env: None)
+    monkeypatch.setattr(deskctl, "port_busy", lambda port: False)
+    monkeypatch.setattr(deskctl, "say", lambda *a: None)
+    cmds = []
+    monkeypatch.setattr(deskctl, "run_logged", lambda cmd, env, log, on_start=None: cmds.append(cmd) or 0)
+    assert deskctl.cmd_start([]) == 0
+    assert cmds[0][1:] == ["serve", "--port", str(deskctl.DEFAULT_PORT)]

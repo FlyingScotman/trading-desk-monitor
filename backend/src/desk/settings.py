@@ -68,6 +68,10 @@ layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub
                            other step (``desk.backfill``, R23; ``desk backfill`` does the same at once)
 * ``DESK_UPDATE_DIR``      the Windows bundle: a folder (a network share, say) holding update zips that the
                            settings page offers to install (``desk.update``); none by default
+* ``DESK_LAN_ACCESS``      (off) ``desk serve`` without ``--host`` listens on every network interface (0.0.0.0), so
+                           that colleagues open the pages at ``http://<this computer>:<port>/``; off: 127.0.0.1 only.
+                           Read when the server starts (a restart applies it). The settings, update and diagnostics
+                           routes answer this computer only either way; the pages and the API have no login
 
 Relative paths resolve against the repository (install) root, those of ``settings.json`` against
 ``<home>``. The proxy comes from the standard ``HTTPS_PROXY`` / ``NO_PROXY`` variables; ``settings.json``
@@ -117,6 +121,7 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "proxy_curves_for_risk": ("DESK_PROXY_CURVES_FOR_RISK", "bool"),
     "inbox_lookback_days": ("DESK_INBOX_LOOKBACK_DAYS", "int0"),
     "update_dir": ("DESK_UPDATE_DIR", "path"),
+    "lan_access": ("DESK_LAN_ACCESS", "bool"),
     "history_days": ("DESK_HISTORY_DAYS", "int0"),
     "history_bonds_from": ("DESK_HISTORY_BONDS_FROM", "date"),
     "history_rates_from": ("DESK_HISTORY_RATES_FROM", "date"),
@@ -193,6 +198,7 @@ class Settings:
     history_rates_from: date = date(2010, 1, 1)  # the hub's history API: KBD, curves, fixings, FX from
     private_adapter_default: bool = False  # private_adapter came from DESK_DEFAULT_PRIVATE_ADAPTER
     update_dir: Path | None = None  # update zips of the Windows bundle (desk.update)
+    lan_access: bool = False  # desk serve listens on 0.0.0.0, not 127.0.0.1: colleagues open the pages
     backfill: bool = True  # the autopilot computes the default runs of past dates (desk.backfill, R23)
     backfill_from: str = "2026-01-05"  # first date of the backfill (the hub's first eod_final close)
     backfill_budget_s: float = 600.0  # seconds of backfill runs per autopilot cycle (after every other step)
@@ -259,6 +265,8 @@ class Settings:
              else "off (proxies shown only)"),
             ("inbox_lookback_days", str(self.inbox_lookback_days) if self.inbox_lookback_days else "0 (no limit)"),
             ("update_dir", str(self.update_dir or "none")),
+            ("lan_access", "on (desk serve listens on every network interface)" if self.lan_access
+             else "off (this computer only)"),
             ("history_days", str(self.history_days) if self.history_days else "0 (off: the cached dates only)"),
             ("history_bonds_from", self.history_bonds_from.isoformat()),
             ("history_rates_from", self.history_rates_from.isoformat()),
@@ -564,6 +572,7 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         history_rates_from=day("DESK_HISTORY_RATES_FROM", defaults.history_rates_from),
         private_adapter_default=adapter_default,
         update_dir=_path(get("DESK_UPDATE_DIR")),
+        lan_access=flag("DESK_LAN_ACCESS", defaults.lan_access),
         backfill=flag("DESK_BACKFILL", defaults.backfill),
         backfill_from=backfill_from,
         backfill_budget_s=num("DESK_BACKFILL_BUDGET_S", defaults.backfill_budget_s),

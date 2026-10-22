@@ -297,3 +297,20 @@ def test_compat_parity_with_tdm_assemble(store_url, book, client, tmp_path):
     assert h[1]["pnlCum"] == h[0]["pnlOfficial"] + h[1]["pnlOfficial"] and h[0]["dv01"] and h[0]["cs01"]
     assert "keyhike" in [x["id"] for x in want["SCENARIOS"]]
     assert want["CURVES"] and want["ISSUERS"] and len(want["FX"]) > 1 and want["INDICES"] and want["BOOKS"]
+
+
+def test_client_dropped_connections_are_not_logged_as_errors():
+    """WinError 10054/10053 of a browser that left (asyncio's proactor loop on Windows) is filtered; the rest passes."""
+    import logging
+
+    from desk.api.app import ClientDropped
+
+    def rec(exc):
+        return logging.LogRecord("asyncio", logging.ERROR, __file__, 1,
+                                 "Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)",
+                                 None, (type(exc), exc, None) if exc else None)
+
+    f = ClientDropped()
+    assert not f.filter(rec(ConnectionResetError(10054, "An existing connection was forcibly closed")))
+    assert not f.filter(rec(ConnectionAbortedError(10053, "aborted")))
+    assert f.filter(rec(RuntimeError("boom"))) and f.filter(rec(None))

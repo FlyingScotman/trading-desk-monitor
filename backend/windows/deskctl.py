@@ -782,8 +782,9 @@ def cmd_start(args: list[str]) -> int:
     timed_out: list[bool] = []
 
     while True:
-        # DESK_RESTART_CODE: desk serve may exit with it (desk.update), here it means "start me again"
-        rc = run_logged([str(desk_exe()), "serve", "--host", "127.0.0.1", "--port", str(port)],
+        # DESK_RESTART_CODE: desk serve may exit with it (desk.update), here it means "start me again"; no --host:
+        # desk serve listens on 127.0.0.1, or on every interface when the setting lan_access is on (the settings page)
+        rc = run_logged([str(desk_exe()), "serve", "--port", str(port)],
                         {**env, "DESK_RESTART_CODE": str(RESTART)}, log, on_start=when_ready)
         if rc != RESTART:
             break

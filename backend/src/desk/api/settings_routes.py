@@ -113,12 +113,25 @@ def _effective(st: Settings) -> dict[str, Any]:
         "history_bonds_from": st.history_bonds_from.isoformat(), "history_rates_from": st.history_rates_from.isoformat(),
         "backfill": st.backfill, "backfill_from": st.backfill_from, "backfill_budget_s": st.backfill_budget_s,
         "logs_dir": str(st.logs_dir), "update_dir": str(st.update_dir) if st.update_dir else None,
+        "lan_access": st.lan_access,
     }
 
 
-def settings_payload() -> dict[str, Any]:
+def _network(request: Request | None) -> dict[str, Any]:
+    """What the running server listens on (``serve`` sets ``listen_host``; None: not run by ``desk serve``), its port
+    as this page reached it, and the names colleagues would use (``app.lan_names``): the page tells "open to the
+    network" from "saved, applies after a restart"."""
+    from .app import lan_names
+
+    host = getattr(request.app.state, "listen_host", None) if request is not None else None
+    return {"listen_host": host, "lan": host not in (None, "127.0.0.1", "localhost", "::1"),
+            "port": request.url.port if request is not None else None, "names": lan_names()}
+
+
+def settings_payload(request: Request | None = None) -> dict[str, Any]:
     """``GET /api/v1/settings``: the stored settings.json (I1 shape, unknown keys too) plus ``hub_token_set``,
-    ``home``, ``effective``, ``env_overrides`` (keys the process environment overrides) and ``error``."""
+    ``home``, ``effective``, ``env_overrides`` (keys the process environment overrides), ``network`` (``_network``)
+    and ``error``."""
     home = desk_home()
     error = None
     try:
@@ -134,16 +147,17 @@ def settings_payload() -> dict[str, Any]:
         stored["https_proxy"] = mask_proxy(stored["https_proxy"])
     return {**stored, "hub_token_set": bool(st and st.hub_token), "proxy_password_set": bool(st and st.proxy_password),
             "home": str(home),
-            "effective": _effective(st) if st else None, "env_overrides": env_overrides(), "error": error}
+            "effective": _effective(st) if st else None, "env_overrides": env_overrides(), "network": _network(request),
+            "error": error}
 
 
 @router.get("/api/v1/settings")
-def get_settings() -> dict[str, Any]:
-    return settings_payload()
+def get_settings(request: Request) -> dict[str, Any]:
+    return settings_payload(request)
 
 
 @router.put("/api/v1/settings")
-def put_settings(body: JsonBody) -> dict[str, Any]:
+def put_settings(body: JsonBody, request: Request) -> dict[str, Any]:
     """Merge into settings.json: a key with null is removed, absent keys and unknown keys are kept."""
     if "hub_token" in body:
         raise ApiError(422, "invalid_parameter", "the token is not a setting: PUT /api/v1/settings/hub-token")
@@ -157,7 +171,7 @@ def put_settings(body: JsonBody) -> dict[str, Any]:
     except SettingsError as e:
         raise ApiError(422, "invalid_parameter", str(e)) from None
     scan.forget_adapters()
-    return settings_payload()
+    return settings_payload(request)
 
 
 @router.put("/api/v1/settings/hub-token")

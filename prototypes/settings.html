@@ -279,6 +279,18 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
     </div>
   </section>
 
+  <!-- 5a. Доступ по сети -->
+  <section class="pnl" aria-labelledby="h-lan">
+    <div class="ph"><h2 id="h-lan">Доступ по сети</h2><span class="st" id="lan-st" hidden></span></div>
+    <div class="pb form">
+      <label for="lan_access">Открыть коллегам</label>
+      <div><label class="tgl"><input type="checkbox" id="lan_access" data-key="lan_access" data-off><span class="tgl-s"></span><span id="lan-lbl">выключено</span></label>
+        <p class="hint">Выключено — страницы открываются только на этом компьютере. Включено — сервер принимает подключения из сети, и коллеги открывают Desk Monitor по имени или адресу этого компьютера (ниже). Настройки, обновление программы и диагностика по-прежнему открываются только здесь. Входа по паролю нет: позиции и риски увидит любой, кто откроет адрес из сети.</p>
+        <p class="hint">Применяется после перезапуска сервера: закройте окно Desk Monitor и снова запустите <span class="mono">start.bat</span>. Если Windows спросит, разрешить ли Python доступ к сети, — разрешите. Если коллеги всё равно не открывают страницу — порт закрыт брандмауэром: <span class="mono">INSTALL_BACKEND_WINDOWS.md</span>, раздел «Доступ коллег по сети».</p>
+        <p class="hint" id="lan-urls" hidden></p></div>
+    </div>
+  </section>
+
   <!-- 6. Где лежат данные -->
   <section class="pnl" aria-labelledby="h-where">
     <div class="ph"><h2 id="h-where">Где лежат данные</h2><span class="muted">только чтение · действующие значения</span></div>
@@ -465,7 +477,7 @@ function render(d){
   $('env-note').textContent = env.length ? 'Заданы переменными окружения и имеют приоритет над этой страницей: ' + env.join(', ') : '';
   document.querySelectorAll('[data-key]').forEach(el => {
     const k = el.dataset.key, v = d[k];
-    if (el.type === 'checkbox') el.checked = v == null ? true : !!v;
+    if (el.type === 'checkbox') el.checked = v == null ? !('off' in el.dataset) : !!v;  // data-off: unset is off
     else if (el.tagName === 'SELECT') el.value = v == null ? el.options[0].value : v;
     else el.value = v == null ? '' : v;
     const lbl = el.closest('div'); const old = lbl && lbl.querySelector('.tag.env[data-for]'); if (old) old.remove();
@@ -474,6 +486,7 @@ function render(d){
   $('ap-lbl').textContent = $('autopilot').checked ? 'включено' : 'выключено';
   $('intraday-lbl').textContent = $('intraday').checked ? 'включено' : 'выключено';
   $('backfill-lbl').textContent = $('backfill').checked ? 'включено' : 'выключено';
+  lanState(d);
   $('cfg-default').textContent = (d.home || '') + (d.home && d.home.includes('\\') ? '\\' : '/') + 'adapter-config';
   $('token-file').textContent = eff.token_file || 'hub_token';
   const byDefault = !!eff.private_adapter_default && !d.private_adapter && !env.includes('private_adapter');
@@ -492,6 +505,22 @@ function render(d){
 $('autopilot').addEventListener('change', () => { $('ap-lbl').textContent = $('autopilot').checked ? 'включено' : 'выключено'; });
 $('intraday').addEventListener('change', () => { $('intraday-lbl').textContent = $('intraday').checked ? 'включено' : 'выключено'; });
 $('backfill').addEventListener('change', () => { $('backfill-lbl').textContent = $('backfill').checked ? 'включено' : 'выключено'; });
+$('lan_access').addEventListener('change', () => { $('lan-lbl').textContent = $('lan_access').checked ? 'включено' : 'выключено'; });
+
+// what the running server listens on (network.lan) against the saved setting (effective.lan_access): the latter
+// applies on the next start of desk serve
+function lanState(d){
+  const n = d.network || {}, want = !!(d.effective || {}).lan_access, st = $('lan-st'), urls = $('lan-urls');
+  $('lan-lbl').textContent = $('lan_access').checked ? 'включено' : 'выключено';
+  st.hidden = n.listen_host == null;  // not run by desk serve (a test client): nothing to tell
+  if (n.lan && want) { st.className = 'st ok'; st.textContent = 'открыто по сети'; }
+  else if (!n.lan && !want) { st.className = 'st'; st.textContent = 'только этот компьютер'; }
+  else { st.className = 'st wait'; st.textContent = want ? 'откроется после перезапуска' : 'закроется после перезапуска'; }
+  const port = n.port || location.port || '8100', names = (n.names || []).length ? n.names : ['<имя этого компьютера>'];
+  urls.hidden = !(n.lan || want); urls.textContent = '';
+  if (!urls.hidden) urls.append('Адрес для коллег: ', ...names.flatMap((x, i) =>
+    [i ? ' или ' : '', h('span', {class:'mono'}, 'http://' + x + ':' + port + '/desk-monitor.html')]));
+}
 
 function tokenState(set, source){
   const st = $('token-st');
@@ -524,14 +553,15 @@ const EFF = [
   ['autopilot','Автообновление'], ['intraday','Расчёт внутри дня'], ['autopilot_sync_last','Загружать последних дат'],
   ['inbox_lookback_days','Брать отчёты не старше, дней'], ['history_days','История котировок, рабочих дней'],
   ['history_bonds_from','История облигаций с'], ['history_rates_from','История ставок и курсов с'],
-  ['backfill','История прогонов'], ['backfill_from','История прогонов с даты'], ['backfill_budget_s','История прогонов: секунд за цикл'], ['logs_dir','Журналы']];
+  ['backfill','История прогонов'], ['backfill_from','История прогонов с даты'], ['backfill_budget_s','История прогонов: секунд за цикл'],
+  ['lan_access','Доступ по сети'], ['logs_dir','Журналы']];
 
 function renderEffective(eff){
   const tb = $('eff'); tb.textContent = '';
   EFF.forEach(([k, label]) => {
     let v = eff[k];
     if (Array.isArray(v)) v = v.length ? v.join('\n') : '—';
-    else if (typeof v === 'boolean') v = k === 'autopilot' || k === 'intraday' || k === 'backfill' ? (v ? 'включено' : 'выключено') : (v ? 'да' : 'нет');
+    else if (typeof v === 'boolean') v = k === 'autopilot' || k === 'intraday' || k === 'backfill' || k === 'lan_access' ? (v ? 'включено' : 'выключено') : (v ? 'да' : 'нет');
     else if (k === 'inbox_lookback_days' && v === 0) v = 'без ограничения';
     else if (k === 'history_days' && v === 0) v = 'не догружать';
     else if (v == null || v === '') v = '—';
@@ -576,6 +606,7 @@ function collect(){
   body.autopilot = $('autopilot').checked;
   body.intraday = $('intraday').checked;
   body.backfill = $('backfill').checked;
+  body.lan_access = $('lan_access').checked;
   const dirs = S.dirs.map(d => ({path:d.path.trim(), label:d.label.trim(), recursive:!!d.recursive})).filter(d => d.path);
   body.inbox_dirs = dirs.length ? dirs : null;
   return body;

@@ -616,7 +616,15 @@ def cmd_serve(a: argparse.Namespace) -> int:
 
     url = store.resolve_url(a.settings)
     store.migrate(url)
-    print(f"desk API on http://{a.host}:{a.port}/desk-monitor.html, store {mask_url(url)}")
+    host = a.host or ("0.0.0.0" if a.settings.lan_access else "127.0.0.1")  # lan_access: the settings page
+    print(f"desk API on http://{'127.0.0.1' if host == '0.0.0.0' else host}:{a.port}/desk-monitor.html, "
+          f"store {mask_url(url)}")
+    if host == "0.0.0.0":
+        from .api.app import lan_names
+
+        names = ", ".join(f"http://{n}:{a.port}/" for n in lan_names()) or f"http://<this computer>:{a.port}/"
+        print(f"network access on (lan_access): colleagues open {names}; settings, updates and diagnostics "
+              "answer this computer only")
     from .autopilot import Autopilot
     from .inbox import scan
 
@@ -627,7 +635,7 @@ def cmd_serve(a: argparse.Namespace) -> int:
         on = a.autopilot or a.settings.autopilot
         print(f"autopilot: {'on' if on else 'off in the settings'}, every {a.settings.inbox_poll_seconds:g} s")
     # not 0 when the settings page installs an update: the launcher (start.bat) restarts it (desk.update)
-    return serve(url, host=a.host, port=a.port, snapshots=None if a.no_worker else a.settings.snapshot_cache,
+    return serve(url, host=host, port=a.port, snapshots=None if a.no_worker else a.settings.snapshot_cache,
                  adapter_status=lambda: scan.adapter_line(scan.adapter(a.settings)), autopilot=ap)
 
 
@@ -833,7 +841,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="demo: the S1 demo book; test: the S3 test book (three books, coverage cases)")
     d.set_defaults(fn=cmd_demo_book)
     sv = sub.add_parser("serve", help="the desk API and the Desk Monitor prototype on the store")
-    sv.add_argument("--host", default="127.0.0.1")
+    sv.add_argument("--host", default=None,
+                    help="default 127.0.0.1; 0.0.0.0 (every network interface) when the setting lan_access is on")
     sv.add_argument("--port", type=int, default=8100)
     sv.add_argument("--no-worker", action="store_true",
                     help="no exact scenario worker (jobs stay queued); it reprices from DESK_SNAPSHOT_CACHE")
