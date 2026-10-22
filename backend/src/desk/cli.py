@@ -727,6 +727,9 @@ def cmd_user(a: argparse.Namespace) -> int:
             elif a.user_cmd == "unlock":
                 auth.update_user(con, name, actor=who, unlock=True)
                 print(f"{name}: unlocked")
+            elif a.user_cmd == "delete":
+                auth.delete_user(con, name, actor=who)
+                print(f"{name}: deleted")
         except auth.AuthError as e:
             print(f"desk user: {e}", file=sys.stderr)
             return 1
@@ -743,8 +746,7 @@ def firewall_command(port: int) -> str:
     """The Windows firewall rule letting colleagues reach the port (``deskctl firewall add`` runs the same)."""
     from . import lan
 
-    return (f'netsh advfirewall firewall add rule name="{lan.FIREWALL_RULE.format(port=port)}" dir=in action=allow '
-            f"protocol=TCP localport={port} profile=domain,private")
+    return lan.firewall_add_command(port)
 
 
 def cmd_lan(a: argparse.Namespace) -> int:
@@ -768,49 +770,37 @@ def cmd_lan(a: argparse.Namespace) -> int:
         return 1 if p and any(r["status"] != "ok" for r in [p["loopback"], *(p["lan"] if doc["network"] else [])]) \
             else 0
     if a.lan_cmd == "disable":
-        update_settings_json({"bind_host": "127.0.0.1", **({"auth": False} if a.auth_off else {})}, desk_home())
+        update_settings_json(lan.disable_changes(a.auth_off), desk_home())
         print("bind_host 127.0.0.1: this computer only" + ("; sign-in off" if a.auth_off else "; sign-in stays on")
-              + ". Restart Desk Monitor (stop.bat, start.bat).")
+              + ". Restart Desk Monitor (Settings -> «Доступ из сети» -> «Перезапустить сервер», or stop.bat, "
+                "start.bat).")
         return 0
-    if not a.self_signed and not a.plain_http and bool(a.cert) != bool(a.key):
-        print("desk lan enable: --cert and --key go together", file=sys.stderr)
-        return 2
-    if not (a.self_signed or a.cert or a.plain_http or (st.tls_cert and st.tls_key) or st.allow_plain_http):
-        print("desk lan enable: choose HTTPS (--self-signed, or --cert F --key F) or --plain-http", file=sys.stderr)
-        return 2
+    # the same changes as the settings page's «Доступ из сети» (desk.lan.enable_changes)
+    mode = "self_signed" if a.self_signed else "cert" if a.cert else "plain_http" if a.plain_http else None
+    if mode is None and a.key:
+        mode = "cert"  # --key without --cert: refused as a pair
     url = store.resolve_url(st)
-    store.migrate(url)
-    with store.connect(url) as con:
-        if not auth.has_admin(con):
-            print("desk lan enable: create the first admin first: desk user add NAME --role admin", file=sys.stderr)
-            return 1
-    changes: dict[str, Any] = {"auth": True, "bind_host": a.host}
-    if a.port:
-        changes["port"] = a.port
+    try:
+        store.migrate(url)
+        with store.connect(url) as con:
+            admin = auth.has_admin(con)
+        changes, info = lan.enable_changes(st, has_admin=admin, host=a.host, port=a.port, tls=mode, cert=a.cert,
+                                           key=a.key, names=a.name or [], admin_from_network=a.admin_from_network)
+    except lan.LanError as e:
+        print(f"desk lan enable: {e.en}", file=sys.stderr)
+        return e.exit
     port = a.port or st.port
-    if a.self_signed:
-        names = list(dict.fromkeys(n for n in (a.name or []) + auth.local_names() if n))
-        crt, key = auth.self_signed_cert(st.home / "tls", names)
-        changes.update(tls_cert=str(crt), tls_key=str(key), allow_plain_http=None)
-        print(f"self-signed certificate {crt} for {', '.join(names) or 'localhost'}")
+    if info.get("cert"):
+        print(f"self-signed certificate {info['cert']} for {', '.join(info['names']) or 'localhost'}")
         print("  browsers warn about it («Подключение не защищено»): each colleague confirms it once "
               "(«Дополнительно» -> «Перейти на сайт»), or IT issues a certificate of the corporate CA (--cert, --key)")
-    elif a.cert:
-        for f in (a.cert, a.key):
-            if not Path(f).is_file():
-                print(f"desk lan enable: {f} not found", file=sys.stderr)
-                return 2
-        changes.update(tls_cert=str(Path(a.cert).resolve()), tls_key=str(Path(a.key).resolve()),
-                       allow_plain_http=None)
-    elif a.plain_http:
-        changes.update(allow_plain_http=True, tls_cert=None, tls_key=None)
+    elif mode == "plain_http":
         print("plain HTTP on the network: passwords and data cross it unencrypted; the pages show a warning")
-    if a.admin_from_network is not None:
-        changes["admin_from_network"] = a.admin_from_network
     update_settings_json(changes, desk_home())
     st = load()
     tls = bool(st.tls_cert and st.tls_key)
-    print(f"sign-in on; listens on {st.bind_host}:{port}. Restart Desk Monitor (stop.bat, then start.bat).")
+    print(f"sign-in on; listens on {st.bind_host}:{port}. Restart Desk Monitor (Settings -> «Доступ из сети» -> "
+          "«Перезапустить сервер», or stop.bat, then start.bat).")
     print("colleagues open: " + ", ".join(_lan_urls(st.bind_host, port, tls)))
     print("Windows firewall, once, in a command prompt run as administrator: desk.bat firewall add")
     print(f"  (it runs: {firewall_command(port)})")
@@ -1084,7 +1074,8 @@ def main(argv: list[str] | None = None) -> int:
     ur.add_argument("role", choices=("viewer", "trader", "admin"))
     ur.set_defaults(fn=cmd_user)
     for verb, what in (("disable", "no sign-in (sessions closed); kept in the audit"), ("enable", "sign-in again"),
-                       ("unlock", "clear the lockout after wrong passwords")):
+                       ("unlock", "clear the lockout after wrong passwords"),
+                       ("delete", "remove the account for good (not the last active admin); the audit keeps its name")):
         uv = usub.add_parser(verb, help=what)
         uv.add_argument("name")
         uv.set_defaults(fn=cmd_user)

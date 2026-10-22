@@ -34,24 +34,28 @@ WILDCARD = ("0.0.0.0", "::")
 # kind: (short Russian label, hint); {port} is filled in
 STATUSES: dict[str, tuple[str, str]] = {
     "ok": ("отвечает", ("Сервер отвечает на этом адресе. Если коллеги всё равно не открывают: правило брандмауэра "
-                       "(desk.bat firewall add, от имени администратора) и прокси в их браузере (адрес - в исключения "
-                       "прокси). Проверка с этого же компьютера брандмауэр не проходит.")),
+                       "(«Доступ из сети» -> «Брандмауэр Windows» -> «Скопировать для ИТ», или desk.bat firewall add от "
+                       "имени администратора) и прокси в их браузере (адрес - в исключения прокси). Проверка с этого же "
+                       "компьютера брандмауэр не проходит.")),
     "other_server": ("отвечает другой сервер",
                      ("На этом адресе отвечает не этот Desk Monitor, а другой процесс (старый экземпляр или другая "
                      "программа). netstat -ano | findstr :{port} - все строки LISTENING; PID из последней колонки - в "
-                     "Диспетчере задач. Закройте лишний процесс или смените порт: desk.bat lan enable --port 8443.")),
+                     "Диспетчере задач. Закройте лишний процесс или смените порт («Доступ из сети» -> «Порт», или "
+                     "desk.bat lan enable --port 8443).")),
     "no_response": ("TCP есть, ответа нет",
                     ("Соединение установлено, но ответа нет: порт на этом адресе держит процесс, который не отвечает "
                     "(старый экземпляр, другая программа: netstat -ano | findstr :{port}), либо соединения перехватывает "
-                    "антивирус или защита рабочей станции. Попробуйте другой порт (desk.bat lan enable --self-signed "
-                    "--port 8443) или свой адрес вместо 0.0.0.0 (--host АДРЕС); serve.log покажет, дошёл ли запрос.")),
+                    "антивирус или защита рабочей станции. Попробуйте другой порт или свой адрес вместо 0.0.0.0 («Доступ "
+                    "из сети» -> «Порт», «Адрес»; или desk.bat lan enable --self-signed --port 8443 --host АДРЕС); "
+                    "serve.log покажет, дошёл ли запрос.")),
     "tls_error": ("ошибка HTTPS",
                   ("TCP есть, но HTTPS не договорился: на этом адресе сервер без HTTPS или чужой сертификат "
                   "(другая программа на порту {port}, перехват HTTPS антивирусом). netstat -ano | findstr :{port}.")),
     "http_error": ("ответ с ошибкой", "Сервер ответил, но не 200 на /health/live: подробности в serve.log."),
     "refused": ("отказ в соединении",
                 ("Порт {port} на этом адресе никто не слушает: Desk Monitor не запущен или слушает другой адрес "
-                "(desk.bat lan status: строка «listens on»; после desk.bat lan enable нужен перезапуск).")),
+                "(«Проверка доступа» или desk.bat lan status: строка «listens on»; новые настройки доступа действуют "
+                "после перезапуска).")),
     "timeout": ("нет TCP-соединения",
                 "Соединение не устанавливается за отведённое время: пакеты отбрасываются (брандмауэр, VPN, сеть)."),
     "error": ("ошибка", "Проверка не удалась: см. подробность."),
@@ -303,7 +307,8 @@ def status(settings: Any, *, host: str | None = None, port: int | None = None, t
         "addresses": [] if loop else lan_addresses(host),
         "cert": cert_info(settings.tls_cert, local_names()) if tls else None,
         "firewall": {"rule": FIREWALL_RULE.format(port=port), "present": firewall_rule(port, firewall_runner),
-                     "show": " ".join(f'"{a}"' if " " in a else a for a in firewall_rule_command(port))},
+                     "show": " ".join(f'"{a}"' if " " in a else a for a in firewall_rule_command(port)),
+                     "add": firewall_add_command(port)},
     }
     doc["probe"] = probe_all(host, port, tls, instance=instance, timeout=timeout) if run_probe else None
     return doc
@@ -343,3 +348,98 @@ def status_lines(doc: dict[str, Any]) -> list[str]:
         if doc["network"] and not p["lan"]:
             out.append("  no network address found for this computer")
     return out
+
+
+# ---- changing the access (desk lan enable / disable, the settings page's «Доступ из сети») ---------------------
+
+NETWORK_KEYS = ("auth", "bind_host", "port", "tls_cert", "tls_key", "allow_plain_http", "admin_from_network")
+"""The settings.json keys a change of the network access writes (all read when desk serve starts)."""
+TLS_MODES = ("self_signed", "cert", "plain_http")
+
+
+class LanError(ValueError):
+    """A refused change of the network access: ``ru`` for the settings page, ``en`` and ``exit`` for the CLI."""
+
+    def __init__(self, ru: str, en: str, exit: int = 2) -> None:
+        super().__init__(ru)
+        self.ru, self.en, self.exit = ru, en, exit
+
+
+def firewall_add_command(port: int) -> str:
+    """The Windows firewall rule letting colleagues reach the port, as one line for cmd (``deskctl firewall add``
+    runs the same; it needs administrator rights)."""
+    return (f'netsh advfirewall firewall add rule name="{FIREWALL_RULE.format(port=port)}" dir=in action=allow '
+            f"protocol=TCP localport={port} profile=domain,private")
+
+
+def enable_changes(settings: Any, *, has_admin: bool, host: str = "0.0.0.0", port: int | None = None,
+                   tls: str | None = None, cert: str | None = None, key: str | None = None,
+                   names: Iterable[str] = (), admin_from_network: bool | None = None) -> tuple[dict[str, Any], dict]:
+    """The settings.json changes of ``desk lan enable``: sign-in on, listen on ``host``, HTTPS or plain HTTP.
+    ``tls``: ``self_signed`` (a new certificate in ``<home>/tls`` for this computer's names and ``names``), ``cert``
+    (``cert`` and ``key``: PEM files, e.g. from the corporate CA), ``plain_http``, or None: keep what the settings
+    have (refused when they have neither). Refuses (``LanError``) without an active admin: after the restart nobody
+    could sign in. Returns (changes, info): ``info["cert"]`` and ``info["names"]`` when a certificate was made."""
+    if tls not in (None, *TLS_MODES):
+        raise LanError(f"режим {tls!r}: один из {', '.join(TLS_MODES)}", f"tls mode {tls!r}")
+    if tls == "cert" and not (cert and key):
+        raise LanError("сертификат и ключ указываются вместе", "--cert and --key go together")
+    if tls is None and not ((settings.tls_cert and settings.tls_key) or settings.allow_plain_http):
+        raise LanError("выберите HTTPS или HTTP без шифрования",
+                       "choose HTTPS (--self-signed, or --cert F --key F) or --plain-http")
+    if port is not None and not 1 <= int(port) <= 65535:
+        raise LanError("порт: число от 1 до 65535", "the port is a number from 1 to 65535")
+    if not has_admin:
+        raise LanError("сначала заведите администратора (раздел «Пользователи»): без него после перезапуска никто "
+                       "не сможет войти", "create the first admin first: desk user add NAME --role admin", 1)
+    changes: dict[str, Any] = {"auth": True, "bind_host": host}
+    info: dict[str, Any] = {}
+    if port:
+        changes["port"] = int(port)
+    if tls == "self_signed":
+        from .api.auth import self_signed_cert
+
+        wanted = list(dict.fromkeys(n for n in [*names, *local_names()] if n))
+        crt, pem = self_signed_cert(settings.home / "tls", wanted)
+        changes.update(tls_cert=str(crt), tls_key=str(pem), allow_plain_http=None)
+        info.update(cert=crt, names=wanted)
+    elif tls == "cert":
+        for f in (cert, key):
+            if not Path(str(f)).is_file():
+                raise LanError(f"файл {f} не найден", f"{f} not found")
+        changes.update(tls_cert=str(Path(str(cert)).resolve()), tls_key=str(Path(str(key)).resolve()),
+                       allow_plain_http=None)
+    elif tls == "plain_http":
+        changes.update(allow_plain_http=True, tls_cert=None, tls_key=None)
+    if admin_from_network is not None:
+        changes["admin_from_network"] = bool(admin_from_network)
+    return changes, info
+
+
+def disable_changes(auth_off: bool = False) -> dict[str, Any]:
+    """``desk lan disable``: 127.0.0.1 again (this computer only); sign-in stays on unless ``auth_off``."""
+    return {"bind_host": "127.0.0.1", **({"auth": False} if auth_off else {})}
+
+
+def listen_problem(host: str, port: int, *, current: dict[str, Any] | None = None) -> str | None:
+    """Why ``desk serve`` could not listen on ``host:port`` (and on 127.0.0.1 beside a specific address), in
+    Russian; None when it can. ``current``: what this server listens on (``app.state.listen``): on its own port
+    only the address is checked (the port is this server's). A check before the settings change, not a promise:
+    the launcher still rolls back a change the new server does not start with (``deskctl``)."""
+    hosts = [host] + ([] if is_loopback(host) or host in WILDCARD else ["127.0.0.1"])
+    same_port = bool(current) and int((current or {}).get("port") or 0) == int(port)
+    for h in hosts:
+        family = socket.AF_INET6 if ":" in h else socket.AF_INET
+        for p in ((0,) if same_port else (0, int(port))):
+            with socket.socket(family, socket.SOCK_STREAM) as s:
+                if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                try:
+                    s.bind((h.strip("[]"), p))
+                except OSError as e:
+                    if p == 0:
+                        return (f"адреса {h} нет у этого компьютера ({e.strerror or e}); выберите «все адреса» "
+                                "или адрес из списка")
+                    return (f"порт {port} на адресе {h} занят другой программой или закрыт Windows "
+                            f"({e.strerror or e}); выберите другой, например 8443")
+    return None
