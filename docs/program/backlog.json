@@ -628,7 +628,7 @@
       "title": "Implement organizational funding FX OCP HTM and official PnL",
       "phase": 5,
       "owner_role": "desk_implementer",
-      "status": "todo",
+      "status": "in_progress",
       "depends_on": [
         "DESK-02",
         "METHOD-01"
@@ -659,8 +659,9 @@
         "Official book/position/component coverage and corrections stay explicit; OCP trades are never fabricated"
       ],
       "evidence": [
-        "Not started in the backend: no rules module, funding in flash PnL is 0 (api/compat.py FUNDING_RULES, pnl/flash.py fx_funding)",
-        "Plan: docs/architecture/ROADMAP.md §0, firm-specific steps 1 (funding), 3 (OCP), 4 (cash), then official PnL; generic packages P1, P2 and wave B"
+        "Wave A generic parts done (22 October 2026, merged on claude/blissful-ramanujan-ukia51): P1 private contract 1.2 (FUTURES book type; ocp, cash_balances, pnl_official, trade_terms schemas; reference() entities and funding_rules; dataset storage, migration 0013; 08 rev 3) and P2 funding engine backend/src/desk/rules/funding.py (tests/test_rules_funding.py); desk/rules/reference.py turns reference() funding_rules and entities into the engine's FundingRules, entity types, write-off and bases (tests/test_rules_reference.py)",
+        "Not in runs yet: funding in flash PnL is still 0 until wave B1 (api/compat.py FUNDING_RULES, pnl/flash.py fx_funding); OCP, cash and official PnL are wave B2-B4",
+        "Plan: docs/architecture/ROADMAP.md §0, firm-specific steps 1 (funding), 3 (OCP), 4 (cash), then official PnL; wave B after wave A"
       ],
       "reviewer": null,
       "blocking_reason": null

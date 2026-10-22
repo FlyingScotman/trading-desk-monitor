@@ -3,5 +3,6 @@ rules as data (the private adapter's ``reference()``, ADR-008). No firm values l
 decision is a policy field with a provisional default (``funding.OPEN_DECISIONS``).
 
 - ``funding`` — the funding engine (FND-5): daily charge and accrual of positions, HTM lots, cash and REPO.
+- ``reference`` — the adapter's ``reference()`` funding rules and entities (private/1.2) as the engine's inputs.
 - ``rate_index`` — index fixings and FX rates in force on a day, behind injectable providers.
 """

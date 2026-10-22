@@ -1,11 +1,22 @@
 # Brief for the market-data hub
 
-As of 18 October 2026 (S4 items H16–H25 added 19 October). From the desk system (this repository) to the work on `market-data-server`. Each item has an ID, the reason, and a check. The hub's own `docs/STATUS.md` and `docs/SYSTEM_CONTEXT.md` remain the place where the hub tracks its state; copy the items you accept there.
+As of 18 October 2026 (S4 items H16–H25 added 19 October; status of 22 October below). From the desk system (this repository) to the work on `market-data-server`. Each item has an ID, the reason, and a check. The hub's own `docs/STATUS.md` and `docs/SYSTEM_CONTEXT.md` remain the place where the hub tracks its state; copy the items you accept there.
 
 Sources of the items:
 - [ADR-001](../adr/ADR-001-hosting-topology.md) as amended on 18 October: one hub on the VPS serves every consumer;
 - the S1/S2 findings and the S3 brief in [VERTICAL_SLICES](../VERTICAL_SLICES.md);
 - core 0.32's snapshot inputs (core `docs/portfolio-v3.md`).
+
+## Status (22 October 2026)
+
+Checked against the hub's `ROADMAP.md` and `docs/SYSTEM_CONTEXT.md` (hub branch `claude/blissful-ramanujan-ukia51`, `main` = release v0.3.2). Items marked **done** in the tables below:
+
+- **H0–H5**: the snapshot layer is merged, scheduled and in production since hub 0.1.3 (WEB-3); named scoped tokens; production last verified at **0.2.0** on 21 October ([E2E 21.10](../../program/E2E_LIVE_2026-10-21.md)).
+- **H16**: calendars to 2037 (WEB-15). **H20**: `Fixing.hub_ingested_at` (WEB-15, contract 1.2; `published_at` only when the source gives it). **H22**: `RUSFARIND` labelled `index`, the rate lists `pct` (WEB-15, 1.2). **H26**: published `eod_final` snapshots for every business date from 2026-01-05 (WEB-11).
+- Partly: H18/H19 (the curation mechanism `bond_terms_curated` is in WEB-18, its content is open); H14 (SOFR, €STR in contract 1.3, WEB-16, in v0.3.2, not installed in production). H6: `docs/SYSTEM_CONTEXT.md` rewritten on the hub's branch on 22 October.
+- Next on the desk's path (monitor ROADMAP revision 4, package P6): H11, H13, then H12, H10, SARON, H17, as contract `market_snapshot/1.4`.
+
+The section below is the 18 October view and is kept as it was.
 
 ## State seen from outside (18 October 2026)
 
@@ -19,12 +30,12 @@ Sources of the items:
 
 | ID | Item | Check |
 |---|---|---|
-| H0 | Push `claude/silly-tharp-ed59c7` to GitHub, so the snapshot layer is not on one machine only | The branch is visible on GitHub |
-| H1 | Merge the snapshot layer into `main`: contract `schemas/market_snapshot/v1` with fixtures, as-known-at readers (0500), `ops.published_snapshot` (0510), builders, jobs, `/v1/snapshots*`. Renumber its migrations after the current ones; the branch is based on an older `main` (finding F7). Release and deploy | `/health/ready` lists the new migrations; the hub CI rebuilds the golden fixtures byte for byte |
-| H2 | Read grant on `ops.published_snapshot` for the API's database role (service roles) | The list call answers 200 |
-| H3 | Schedule `snapshot_static` (daily) and `snapshot_market` for `eod_final` and `eod_preliminary`. Cut times come from `MDHUB_SNAPSHOT_*` until DEC04 | A new `eod_final` appears after every business day |
-| H4 | Publish `eod_final` once for the last ten business dates. They carry today's `known_at` (F6); this is accepted for testing | `GET /v1/snapshots?kind=market&cut_type=eod_final` lists ten dates |
-| H5 | Named tokens per consumer, each with the narrowest scope: `desk-dev` (`snapshots`) for the backend on a development machine; `dev-read` (`read`) for checks. This can be done now, before H1 | `/v1/coverage` answers 200 with `dev-read` |
+| H0 **done** | Push `claude/silly-tharp-ed59c7` to GitHub, so the snapshot layer is not on one machine only | The branch is visible on GitHub |
+| H1 **done** | Merge the snapshot layer into `main`: contract `schemas/market_snapshot/v1` with fixtures, as-known-at readers (0500), `ops.published_snapshot` (0510), builders, jobs, `/v1/snapshots*`. Renumber its migrations after the current ones; the branch is based on an older `main` (finding F7). Release and deploy | `/health/ready` lists the new migrations; the hub CI rebuilds the golden fixtures byte for byte |
+| H2 **done** | Read grant on `ops.published_snapshot` for the API's database role (service roles) | The list call answers 200 |
+| H3 **done** | Schedule `snapshot_static` (daily) and `snapshot_market` for `eod_final` and `eod_preliminary`. Cut times come from `MDHUB_SNAPSHOT_*` until DEC04 | A new `eod_final` appears after every business day |
+| H4 **done** | Publish `eod_final` once for the last ten business dates. They carry today's `known_at` (F6); this is accepted for testing | `GET /v1/snapshots?kind=market&cut_type=eod_final` lists ten dates |
+| H5 **done** | Named tokens per consumer, each with the narrowest scope: `desk-dev` (`snapshots`) for the backend on a development machine; `dev-read` (`read`) for checks. This can be done now, before H1 | `/v1/coverage` answers 200 with `dev-read` |
 
 ## Documentation
 
@@ -59,17 +70,17 @@ Evidence is from the dev snapshots of 09–15.10. Until each item lands, the bac
 
 | ID | Item | Evidence and the backend's workaround |
 |---|---|---|
-| H16 | **Calendars to at least 2037**, rule-based beyond the official lists, with `provisional_from` | Every calendar ends 2027-12-31, so the RUONIA OIS and key-rate curves lose 2Y–10Y (core refuses dates outside a calendar). The backend extends calendars provisionally (weekends and fixed public holidays) and records it in the lineage |
+| H16 **done** | **Calendars to at least 2037**, rule-based beyond the official lists, with `provisional_from` | Every calendar ends 2027-12-31, so the RUONIA OIS and key-rate curves lose 2Y–10Y (core refuses dates outside a calendar). The backend extends calendars provisionally (weekends and fixed public holidays) and records it in the lineage |
 | H17 | **Publish the SPFI (MOEX derivatives settlement) and RUONIA publication calendars** explicitly, and give the fixture calendars the same history as the snapshots | MOEX OIS RUONIA uses the joint SPFI + Moscow + RUONIA calendar. The backend maps SPFI to `MOEX_FORTS` and RUONIA to `RU_PRODUCTION` plus year-end days. `RU_PRODUCTION` follows the observed RUONIA days in past years, which is wrong for Moscow business days. The vendored fixture calendars start 2026-01-01, shorter than the 400-day fixing lookback |
 | H18 | **Floater conventions from the issue terms** (`status: curated`): fixing lag or lookback, averaging or compounding, fixing day, floor, cap, multiplier | 644 of 647 formulas are `inferred`; `lag_days` is set on 3, `averaging` on 1, floor/cap/multiplier/fixing day on none. The backend prices them on default conventions, checks against MOEX accrued, and flags "formula inferred" |
 | H19 | **Call schedules of perpetuals** (and of callables generally) | All 62 perpetuals carry `perpetual_no_call_date`; none has a scheduled call offer. The backend assumes a call date per DEC10 and flags it |
-| H20 | **Fixings with a publication time** (`published_at`), for every index, and dev snapshots that are point in time | Only RUONIA has `published_on`, a date without a time; `published_at` is always null. The dev snapshots carry `known_at` 2026-10-17 and rows dated after their business date (F6). The backend counts a same-day publication as not yet known |
+| H20 **done** | **Fixings with a publication time** (`published_at`), for every index, and dev snapshots that are point in time | Only RUONIA has `published_on`, a date without a time; `published_at` is always null. The dev snapshots carry `known_at` 2026-10-17 and rows dated after their business date (F6). The backend counts a same-day publication as not yet known |
 | H21 | **EOD swap marks with bid and ask** for RUONIA OIS and key-rate swaps | `ratescalcs` is a 09:00Z mark and is missing on 12–14.10; `otc_monitor` is mid-only and flagged stale "off-hours mark". On 15.10 the two sets have identical mids: check whether they are one feed. The backend prefers a set not flagged stale, then bid/ask, then the latest, and records the choice |
-| H22 | **Units of `RUSFARIND`** | Labelled `pct`, value 2521.53: looks like an index level |
+| H22 **done** | **Units of `RUSFARIND`** | Labelled `pct`, value 2521.53: looks like an index level |
 | H23 | **`known` coupons without an amount** | 6164 future `known` periods have a rate but no amount, mostly MBS and securitizations; RU000A1043Q6, RU000A1043S2 and RU000A10FEC5 end with a one-day 0.01 % stub without an amount. The backend computes the amount from the rate (RATE_ACT_365) and flags it |
 | H24 | **Price basis of amortized MBS** | RU000A0JV755 is quoted at 474 % of its current face of 48.64 RUB: the price looks like a percentage of the original face. The backend uses it as given |
 | H25 | **Static snapshots point in time, and the face on the static's own date** | Every dev market snapshot of 09–15.10 names a static snapshot of 17.10 (F6). On the dev data a static face still includes redemptions dated on the static's own date, and MOEX keeps the pre-final face on matured bonds (180 of 181). The backend now derives the face on the trade date from the redemption schedule and relies on that rule; please confirm it, or state the rule in the contract. If a same-day static already excludes them, payment-day amortizers drop from exact to market value |
-| H26 | **Published EOD snapshots back to 2026-01-01** | The desk backfills YTD runs and reconciles them with the official PnL from 1 January (ROADMAP rev. 3, slice S8). Each past date needs a published `eod_final` snapshot built as known at that date. Until then the backend backfills from the dev export |
+| H26 **done** | **Published EOD snapshots back to 2026-01-01** | The desk backfills YTD runs and reconciles them with the official PnL from 1 January (ROADMAP rev. 3, slice S8). Each past date needs a published `eod_final` snapshot built as known at that date. Until then the backend backfills from the dev export |
 
 ## Not hub work
 

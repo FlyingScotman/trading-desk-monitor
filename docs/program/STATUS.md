@@ -7,16 +7,17 @@ Task states were reconciled with the code of the four repositories on 22 October
 | Item | State |
 |---|---|
 | Monitor baseline | Source reviewed at a6ba30bf5573ada869a9594c3e69f73faf741ed2 (contract 1.3); the backend (`backend/src/desk`) has replaced the prototype store since S5 |
-| Financial library | `rub-fixed-income-core` 0.33.0, pinned by commit in `backend/pyproject.toml` |
+| Financial library | `rub-fixed-income-core` 0.33.0, pinned by commit in `backend/pyproject.toml`. Core **0.34.0** (commit `15f63e3`: CNY / USD / EUR bonds on their own currency's curve) awaits the monitor's pickup, core BACKLOG #124 (ROADMAP wave A P5) |
 | Market-data hub, VPS and domain | `market-data-hub` 0.2.0 in production on the VPS with HTTPS (checked 21 October 2026); 0.3.x and 0.4.0 in review, installed by the owner |
 | Public data API | `/v1/snapshots` and `/v1/history/*` with scoped tokens |
 | Local Windows calculation backend | Offline bundle installed at work (20 October 2026), updated by zip patches; real books run through the private adapter |
 | Hermes runtime agent | Not planned (ADR-001); AGENT-01 and AGENT-02 are kept as obsolete, state `blocked` |
 | Tests | See ORCHESTRATION_PLAN §1: backend `pytest`, root `unittest`, frontend `npm test` |
-| Tasks | 4 todo; 5 in progress; 1 in review; 16 done; 2 blocked (obsolete) |
+| Wave A (ROADMAP §0.2) | **Done** and merged on 22 October: P1 contract and SPI (private 1.2), P2 funding engine (`desk/rules/`, not wired into runs), P4 currency × instrument type table (UI-02, in review), P9 documents. Open: P3, P5 (core 0.34.0 pickup), P6 (hub), P7 (core), P8 (adapter A7) |
+| Tasks | 2 todo; 6 in progress; 2 in review; 16 done; 2 blocked (obsolete) |
 | Requirements | 61 tracked: 23 datasets, 26 calculation groups, 12 system requirements (requirements.csv, not re-verified) |
 
-Open tasks: DESK-03 (funding, FX, OCP, HTM and official PnL; nothing of it in the backend yet: funding in flash PnL is 0), UI-02 (currency × instrument type table), METHOD-01 (decisions, see DECISIONS.md), SCEN-01 (cancellation, historical scenarios, T3 presets), UI-01, OPS-01 (off-host hub backups, rollback rehearsal), PILOT-01 (needs official PnL), QA-01 (owner acceptance), RELEASE-01 and ACCEPT-01.
+Open tasks: DESK-03 (funding, FX, OCP, HTM and official PnL; the contract and the funding engine exist since wave A, but funding in flash PnL is 0 until wave B1), UI-02 (currency × instrument type table, in review: owner decisions on the currency of CCS / FX forwards / FX futures and on USD sovereigns), METHOD-01 (decisions, see DECISIONS.md), SCEN-01 (cancellation, historical scenarios, T3 presets), UI-01, OPS-01 (off-host hub backups, rollback rehearsal), PILOT-01 (needs official PnL), QA-01 (owner acceptance), RELEASE-01 and ACCEPT-01.
 
 Derivatives valued by core in the monitor are one canonical item, ROADMAP §2a (M6); CORE-03 is done on the core side only.
 

@@ -13,6 +13,7 @@ Ctrl+C stops the server and removes the database."""
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -90,6 +91,8 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as t:
         url = build(Path(t), api=not args.no_api)
+        # routes that read the settings themselves (the position card's flows) find the fixture snapshots
+        os.environ.setdefault("DESK_SNAPSHOT_CACHE", str(Path(t) / "cache"))
         print(f"serving on http://127.0.0.1:{args.port}/concepts/", flush=True)
         uvicorn.run(create_app(url), host="127.0.0.1", port=args.port, log_level="warning")
     return 0

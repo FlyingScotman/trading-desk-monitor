@@ -42,6 +42,8 @@ No firm-specific data is needed. File zones do not overlap within a wave; the sh
 | **P8 Adapter A7 on synthetic data** | In `trades-data-adapter`: reading and checking `entities.json`, `funding.json`, the book funding mode; `reference()` with `entities` and `funding_rules`; `describe()["settings_tabs"]`; synthetic samples only. Starts once P1 has fixed the SPI extension in 08 | `trades-data-adapter` |
 | **P9 Documents** | This revision; backlog and STATUS reconciled; DECISIONS canonical for the generic IDs, with the open questions; ORCHESTRATION_PLAN | `docs/` |
 
+**Wave A status (22 October 2026).** P1, P2, P4 and P9 are done and merged on `claude/blissful-ramanujan-ukia51`: private contract 1.2 with dataset storage (P1), the funding engine in `backend/src/desk/rules/` with `rules/reference.py` reading P1's `reference()` funding rules and entities (P2), the currency × instrument type table in the cockpit (P4, UI-02 in review), this revision (P9). P5 can start: core **0.34.0** (commit `15f63e3`) values CNY / USD / EUR bonds on their own currency's curve and awaits the monitor's pickup (core BACKLOG #124). Open: P3, P5, P6, P7, P8.
+
 Wave B, after wave A:
 
 | Package | What | Needs |
@@ -126,7 +128,7 @@ Status (22 October): A0 and A2 are done (positions at work); the OCP adapter (A4
 4. **Orchestrator: the day cycle** (§1) as a dependency graph, not a cron list: an arrival triggers the runs that depend on it, and a rerun supersedes. `desk backfill --from 2026-01-01`: EOD runs and flash PnL for every date with positions, then reconciliation for every date with official PnL.
 5. **`desk.pnl.reconcile`**: ours vs official per date × book × instrument, matched on trade or position keys. Break analysis as a substitution waterfall: swap in internal market data (Δ market data), official positions (Δ positions), CBR FX (Δ FX basis), cash flows and accrual convention (Δ carry), new-trade lines (Δ new trades); the remainder is unexplained. Each cause gets a confidence: *confirmed* (the swap closes the break within the DEC12 threshold), *likely*, *unexplained*. Component matching: our carry vs official accrual, our price effect vs price change, FX vs FX.
 6. **`desk.marketdata.internal`**: the internal overlay replaces hub inputs it covers (curve points, bond prices, FX), keeps the rest, and records which. The EOD-internal run is a separate run type with its own lineage.
-7. **`desk_rules`** (planned, not built; wave A P2 as `backend/src/desk/rules/`, location OQ-03): OCP, cash, funding, dual FX basis: methodology in `ORG_CONVENTIONS.md`, the organization's rules (modes, rates, spreads) as data from the private adapter (S9). Until B1, funding in runs is 0.
+7. **`desk_rules`** (`backend/src/desk/rules/`, location OQ-03; the funding engine and its reference-table reader are built in wave A P2, not wired into runs): OCP, cash, funding, dual FX basis: methodology in `ORG_CONVENTIONS.md`, the organization's rules (modes, rates, spreads) as data from the private adapter (S9). Until B1, funding in runs is 0.
 8. **Explain** on every snapshot (§1); intraday runs; SSE (S12).
 9. Carried from S4–S6: interface catalogue (`coverage`, `totals`), curve-spec mapping table, T3 presets, historical scenarios, custom scenarios, job cancel, worker out of the API process.
 
@@ -145,16 +147,16 @@ Real-data screens come first; the remaining prototype screens migrate after them
 
 ### market-data-server (hub)
 
-The list with checks is [briefs/HUB.md](briefs/HUB.md). Done: H1–H4 (snapshot layer, consumer token), H26 (EOD snapshots back to 2026-01-01, hub WEB-11), intraday cuts (S12), the history API (WEB-15). On the critical path now (wave A P6, §2a):
+The list with checks is [briefs/HUB.md](briefs/HUB.md). Done: H0–H5 (snapshot layer in production, consumer tokens), H16 (calendars to 2037), H20 (`hub_ingested_at`), H22 (`RUSFARIND` units), H26 (EOD snapshots from 2026-01-05, hub WEB-11), intraday cuts (S12), the history API (WEB-15); contract 1.3 (WEB-16, WEB-18) is in hub v0.3.2, production is at 0.2.0. On the critical path now (wave A P6, §2a):
 - H11 futures prices and H13 FX swaps / swap points with value dates in the market snapshot (today FX swaps are excluded with reason `fx_swap`);
 - H12 RUONIA index and declared gaps, H10 CPI levels, SARON, H17 publication calendars;
-- H10–H15 are **not yet in the hub's own `ROADMAP.md`** (its WEB-* items carry only the HS* static requests); P6 adds them there.
+- H10–H15, SARON and H17 are entered in the hub's own `ROADMAP.md` (section "TDM H10–H15, SARON, H17", hub branch `claude/blissful-ramanujan-ukia51`, 22 October), with their state checked against the hub's code.
 
 Bank-internal sources are not hub work: they enter through the private adapter.
 
 ### rub-fixed-income-core
 
-Plan: `rub-fixed-income-core/docs/PRODUCT_ROADMAP.md`. Desk items: [briefs/CORE.md](briefs/CORE.md); C1, C4, C7, C8 are done in 0.33 (C5 in part; core `docs/reviews/CORE_REVIEW_FOR_DESK_MONITOR.md` §6); C2, C3 (release tags), C6 remain. Wave A P7: #46, #49, #40, #103, #113, #102 (§0.2). Core #107 (result v3 in the desk) is the canonical item §2a. Reconciliation may add accrual-convention items once breaks are classified.
+Plan: `rub-fixed-income-core/docs/PRODUCT_ROADMAP.md`. Desk items: [briefs/CORE.md](briefs/CORE.md); C1, C4, C7, C8 are done in 0.33 (C5 in part; core `docs/reviews/CORE_REVIEW_FOR_DESK_MONITOR.md` §6); C2, C3 (release tags), C6 remain. Core 0.34.0 (commit `15f63e3`, foreign bonds on their own currency's curve) awaits the monitor's pickup: core BACKLOG #124, wave A P5. Wave A P7: #46, #49, #40, #103, #113, #102 (§0.2). Core #107 (result v3 in the desk) is the canonical item §2a. Reconciliation may add accrual-convention items once breaks are classified.
 
 ### pnl_tool
 
