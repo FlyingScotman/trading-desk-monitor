@@ -610,3 +610,22 @@ def test_release_assets_checks_the_zips_and_writes_the_manifests(tmp_path):
     full_zip(stage, dist / f"DeskMonitor-{bundle_version}.zip")
     with pytest.raises(SystemExit, match="tag"):
         release_assets.collect(dist, "v0.0.1")
+
+
+def test_release_notes_start_with_the_versions_changelog_section(tmp_path):
+    log = tmp_path / "CHANGELOG.md"
+    log.write_text("# Что нового\n\nintro\n\n## 1.2.10\n\n- новое\n\n## 1.2.1\n\n- старое\n", encoding="utf-8")
+    assert release_assets.changelog("1.2.10", log) == "- новое"
+    assert release_assets.changelog("1.2.1", log) == "- старое"
+    assert release_assets.changelog("1.2", log) == "" and release_assets.changelog("1.2.1", tmp_path / "no") == ""
+    version = release_assets.backend_version()
+    section = release_assets.changelog(version)
+    assert section, f"CHANGELOG.md has no section ## {version} for the release notes"
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    bundle_version = f"{version}-20261022-eeeeeee"
+    full_zip(stage_dir(tmp_path / "rel", tu.bundle(bundle_version)), dist / f"DeskMonitor-{bundle_version}.zip")
+    release_assets.write(dist, f"v{version}", REPO_NAME, "abc")
+    notes = (dist / "NOTES.md").read_text(encoding="utf-8")
+    assert notes.startswith(f"Desk Monitor {bundle_version}\n\n{section}\n\n---\n\n")
+    assert release.parse_sums(notes) == release.parse_sums((dist / "SHA256SUMS").read_text())

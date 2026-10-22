@@ -10,7 +10,8 @@ releases by that version and the commit date (``desk.update.compare``), so every
 ``DeskMonitor-<version>.zip`` of the tag's version, patches to that version, none with the private adapter: a public
 release never carries it; each zip reads as an update zip, ``desk.update.read_contents``) and writes next to them
 ``SHA256SUMS``, ``release.json`` (``desk.updater.release.release_doc``: what the updater reads first) and
-``NOTES.md`` (the release notes, the checksums included: the browser reads them through the API).
+``NOTES.md`` (the release notes, the checksums included: the browser reads them through the API). The notes start
+with the version's section of ``CHANGELOG.md`` (``## <backend version>``) when it has one.
 """
 
 from __future__ import annotations
@@ -91,7 +92,7 @@ def collect(dist: Path, tag: str) -> tuple[str, list[tuple[str, int, str]]]:
 NOTES = """\
 Desk Monitor {version}
 
-Установка из программы: Настройки → «Обновление программы» → «Обновить до …» (программа сама находит новую версию,
+{changes}Установка из программы: Настройки → «Обновление программы» → «Обновить до …» (программа сама находит новую версию,
 скачивает архив сервером или браузером, сверяет SHA-256 и перезапускается). Вручную: скачайте
 DeskMonitor-{version}.zip, распакуйте (INSTALL.txt внутри).
 
@@ -106,11 +107,31 @@ SHA-256:
 """
 
 
+def changelog(version: str, path: Path = REPO / "CHANGELOG.md") -> str:
+    """The body of the ``## <version>`` section of ``path`` (up to the next ``## ``), stripped; "" without one."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    out: list[str] | None = None
+    for ln in lines:
+        if ln.startswith("## "):
+            if out is not None:
+                break
+            if ln[3:].split()[:1] == [version]:
+                out = []
+        elif out is not None:
+            out.append(ln)
+    return "\n".join(out or []).strip()
+
+
 def write(dist: Path, tag: str, repo: str | None, commit: str | None) -> dict:
     version, files = collect(dist, tag)
     sums = release.sums_text(files)
     core = core_pin()
-    notes = NOTES.format(version=version, core=core, commit=commit or "?", sums=sums)
+    changes = changelog(tag.removeprefix("v"))
+    notes = NOTES.format(version=version, core=core, commit=commit or "?", sums=sums,
+                         changes=changes + "\n\n---\n\n" if changes else "")
     doc = release.release_doc(tag, version, files, commit=commit, core=core,
                               published_at=datetime.now(UTC).isoformat(timespec="seconds"),
                               notes=f"Desk Monitor {version}" + (f" ({repo})" if repo else ""))
