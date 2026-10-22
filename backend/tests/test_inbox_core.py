@@ -367,8 +367,8 @@ def test_controls_are_resummed_with_tolerance() -> None:
 
 def test_newer_minor_fields_are_dropped_with_a_warning() -> None:
     result = read([{**bond("B1", "S1"), "future_field": "1"}])
-    assert check_read(POS, HIT, result, books=BOOKS).status == "rejected"  # unknown in 1.1
-    c = check_read(POS, HIT, result, books=BOOKS, contract="private/1.2")
+    assert check_read(POS, HIT, result, books=BOOKS).status == "rejected"  # unknown in 1.2
+    c = check_read(POS, HIT, result, books=BOOKS, contract="private/1.3")
     assert c.status == "accepted" and [i["code"] for i in c.issues] == ["field_from_newer_contract"]
     assert "future_field" not in c.units[0]["rows"][0]
 
@@ -487,8 +487,9 @@ def test_adapter_error_for_an_unlisted_scope_rejects_that_unit() -> None:
 def test_schemas_are_package_data_equal_to_the_published_copy() -> None:
     pkg = Path(schema_module.__file__).parent / "schemas" / "v1"
     published = sorted(p.name for p in (REPO / "contract/private/v1").glob("*.schema.json"))
-    assert published == sorted(p.name for p in pkg.glob("*.schema.json")) == ["books.schema.json",
-                                                                             "positions.schema.json"]
+    assert published == sorted(p.name for p in pkg.glob("*.schema.json")) == [
+        f"{n}.schema.json" for n in ("books", "cash_balances", "entities", "funding_rules", "ocp", "pnl_official",
+                                     "positions", "trade_terms")]
     for name in published:
         assert (pkg / name).read_bytes() == (REPO / "contract/private/v1" / name).read_bytes(), name
     assert validate_row("trades", {"x": 1}) == ({}, [schema_module.RowError("dataset_not_supported", None)], 0)

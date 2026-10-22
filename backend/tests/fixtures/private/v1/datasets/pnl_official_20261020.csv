@@ -1,0 +1,4 @@
+﻿entity;book_id;line_id;position_id;trade_id;trade_version;source_instrument_id;isin;ccy;pnl_daily_rub;pnl_pl_daily_rub;pnl_oci_daily_rub;pnl_mtd_rub;pnl_ytd_rub;accrual_rpt;x_accounting_book
+ENT1;T1;K1;T1|SEC-26238;TR-1;2;SEC-26238;RU000A0JXFM1;RUB;125000.5;125000.5;0;900000;5000000;30000;AB1
+ENT1;T1;K2;;TR-2;1;SEC-29008;;RUB;-4000;-3000;-1000;;;;
+ENT1;D1;K3;;FX-1;;;;USD;20000;19000;0;;;;

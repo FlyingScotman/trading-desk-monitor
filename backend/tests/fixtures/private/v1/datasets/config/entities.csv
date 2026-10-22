@@ -1,0 +1,3 @@
+﻿entity;name;funding_scheme;pnl_sweep;active;valid_from
+ENT1;Entity one;by_book_type;;1;
+ENT2;Entity two;cash_balance;monthly;1;

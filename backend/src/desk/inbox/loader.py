@@ -42,7 +42,7 @@ class AdapterHandle:
     describe: dict = field(default_factory=dict)
     error: str | None = None     # "<code>[: detail]" when loading failed; then ingestion is off
     config_dir: str | None = None
-    warnings: tuple[str, ...] = ()  # optional describe() keys of a bad shape, ignored (config_files)
+    warnings: tuple[str, ...] = ()  # optional describe() keys of a bad shape, ignored (config_files, settings_tabs)
     inbox_dirs: tuple[str, ...] = ()  # passed to the adapter as ctx.inbox_dirs (08 §7)
 
     @property
@@ -161,6 +161,43 @@ def check_config_files(desc: object) -> tuple[list[dict], list[str]]:
     return out, warnings
 
 
+def check_settings_tabs(desc: object) -> tuple[list[dict], list[str]]:
+    """The optional ``describe()["settings_tabs"]`` (08 §4, SPI 1, since private/1.2): forms over the adapter's
+    ``config_files``, ``{id, title, file, schema, help}``. ``file`` names a usable ``config_files`` entry, ``schema`` is
+    a JSON Schema object the settings page renders and validates the file with (the backend stores none of it and
+    never interprets the file). Never fatal: a bad tab is left out with a warning, and the file stays editable as
+    raw JSON."""
+    raw = desc.get("settings_tabs") if isinstance(desc, dict) else None
+    if raw is None:
+        return [], []
+    if not isinstance(raw, list):
+        return [], ["settings_tabs: not a list, ignored"]
+    files = {f["name"] for f in check_config_files(desc)[0]}
+    out: list[dict] = []
+    warnings: list[str] = []
+    for i, t in enumerate(raw):
+        tab_id = t.get("id") if isinstance(t, dict) else None
+        if not (isinstance(tab_id, str) and CODE_RE.match(tab_id)):
+            warnings.append(f"settings_tabs[{i}]: id must match ^[a-z][a-z0-9_]{{1,40}}$, ignored")
+            continue
+        if any(o["id"] == tab_id for o in out):
+            warnings.append(f"settings_tabs[{i}]: {tab_id} declared twice, ignored")
+            continue
+        if t.get("file") not in files:
+            warnings.append(f"settings_tabs[{i}]: file must be a name of config_files, ignored")
+            continue
+        schema = t.get("schema")
+        if not (isinstance(schema, dict) and schema.get("type") == "object"):
+            warnings.append(f"settings_tabs[{i}]: schema must be a JSON Schema of type object, ignored")
+            continue
+        for key in ("title", "help"):
+            if t.get(key) is not None and not isinstance(t[key], str):
+                warnings.append(f"settings_tabs[{i}]: {key} must be str")
+        out.append({"id": tab_id, "title": t["title"] if isinstance(t.get("title"), str) else tab_id,
+                    "file": t["file"], "schema": schema, "help": t["help"] if isinstance(t.get("help"), str) else ""})
+    return out, warnings
+
+
 def _check_source(s: object) -> str | None:
     if not isinstance(s, dict) or not isinstance(s.get("source"), str) or not CODE_RE.match(s["source"]):
         return "source must be an id matching ^[a-z][a-z0-9_]{1,40}$"
@@ -251,4 +288,4 @@ def load_adapter(spec: str | None, config_dir: str | None, expected_sha256: str 
     if why:
         return fail(why, fingerprint=fp, describe=desc if isinstance(desc, dict) else {})
     return AdapterHandle(spec, desc["name"], desc["version"], fp, desc, None, config_dir,
-                         tuple(check_config_files(desc)[1]), inbox_dirs)
+                         (*check_config_files(desc)[1], *check_settings_tabs(desc)[1]), inbox_dirs)
