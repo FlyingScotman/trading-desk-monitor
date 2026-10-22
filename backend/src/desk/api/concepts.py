@@ -782,7 +782,7 @@ KIND_GROUP = {k: g for k, g, _ in INSTR_KINDS}
 KIND_LABEL = {k: lab for k, _, lab in INSTR_KINDS}
 PRODUCT_KIND = {"irs": "IRS", "ccs": "CCS", "cds": "CDS", "trs": "TRS", "bond_future": "BOND_FUT",
                 "bond_forward": "BOND_FWD", "fx_future": "FX_FUT", "fx_ndf": "FX_FWD", "equity": "EQUITY"}
-"""The private adapter's ``x_product_group`` (``extra.reported``) -> kind. ``bond`` and ``bond_custom`` are bonds:
+"""The private adapter's ``x_product_group`` (``extra.reported.x``, ``product_group``) -> kind. ``bond`` and ``bond_custom`` are bonds:
 classified by the bond's own fields."""
 LEGACY_KIND = {"IRS": "IRS", "XCCY": "CCS", "CDS": "CDS"}
 """A legacy tdm store's instrument type -> kind."""
@@ -807,12 +807,23 @@ MISSING_TEXT = {"not_valued": "не оценена", "reported_no_risk": "оце
 GROUPS = ("GOV", "SUB", "CORP", "DER", "OTH")
 
 
+def product_group(rep: Any) -> str | None:
+    """The report's ``x_product_group`` of a position: a valued fact keeps the report's ``x_*`` fields under
+    ``extra.reported.x`` (``publish.tdm_run.reported`` of the stored row), an unvalued one's row has them flat."""
+    if not isinstance(rep, dict):
+        return None
+    pg = rep.get("x_product_group")
+    if pg is None and isinstance(rep.get("x"), dict):
+        pg = rep["x"].get("x_product_group")
+    return pg
+
+
 def instr_kind(f: dict[str, Any], gov_issuers: frozenset[str] | set[str] = frozenset()) -> str:
     """The table's instrument kind of a position's fact, or of an unvalued position's report row given as
     ``{"ccy", "asset_class" (bond | fx | otc | other), "extra": {"reported": {x_*}}}`` (no ``instr_type``).
     ``gov_issuers``: the run's issuers flagged as the Minfin (``gov_issuers``), for ``summary.is_minfin``."""
     ex = f.get("extra") if isinstance(f.get("extra"), dict) else {}
-    pg = (ex.get("reported") or {}).get("x_product_group")
+    pg = product_group(ex.get("reported"))
     it = f.get("instr_type")
     if pg in PRODUCT_KIND:
         return PRODUCT_KIND[pg]

@@ -158,11 +158,7 @@ def approx(con, run: dict[str, Any]) -> list[dict[str, Any]]:
                          "  OR fact->'extra'->>'not_exact_reason' LIKE 'no_trade_terms%%') ORDER BY ord",
                          (run["run_id"], ["exact", "assumed"])):
         f = r["fact"]
-        ex = f.get("extra") or {}
-        rep = ex.get("reported") or {}
-        if isinstance(rep.get("x"), dict):  # the fact keeps the report's x_* under reported.x
-            f = {**f, "extra": {**ex, "reported": {**rep, **rep["x"]}}}
-        kind = concepts.instr_kind(f)
+        kind = concepts.instr_kind(f)  # the report's x_* are under extra.reported.x (concepts.product_group)
         nr = (f.get("extra") or {}).get("not_exact_reason")
         no_terms = isinstance(nr, str) and nr.startswith("no_trade_terms")
         key = f"{r['quality']}|{kind}|{int(no_terms)}"

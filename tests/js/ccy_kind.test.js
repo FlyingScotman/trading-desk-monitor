@@ -28,9 +28,9 @@ const kindRows = b => b.groups.flatMap(g => g.kinds);
 t('тип инструмента: облигации по эмитенту и классу, деривативы по группе продукта, неизвестное — не выброшено', () => {
   const { M, I } = load(D => {
     const irs = D.positions.find(p => p.instrType === 'IRS');
-    Object.assign(irs, { instrType: 'OTC', extra: { reported: { x_product_group: 'irs' } } });  // склад деска
+    Object.assign(irs, { instrType: 'OTC', extra: { reported: { x: { x_product_group: 'irs' } } } });  // склад деска: x_* отчёта — в reported.x
     const otc = D.positions.find(p => p.instrType === 'CDS');
-    Object.assign(otc, { instrType: 'OTC', extra: { reported: { x_product_group: 'bond_future' } } });
+    Object.assign(otc, { instrType: 'OTC', extra: { reported: { x: { x_product_group: 'bond_future' } } } });
     const odd = D.positions.filter(p => p.instrType === 'CDS')[1];
     Object.assign(odd, { instrType: 'OTC', extra: { reported: {} } });
   });
@@ -46,6 +46,12 @@ t('тип инструмента: облигации по эмитенту и к
   assert.strictEqual(I.kindOf({ group: 'SUB', kind: 'FIX', assetClass: 'Муниципальные' }), 'MUNI');
   assert.strictEqual(I.kindOf({ group: 'CORP', kind: 'FIX', notValued: true }), 'BOND_NA');
   assert.strictEqual(I.kindOf({ group: 'DER', kind: 'XCCY' }), 'CCS');  // демо-набор mock.js
+  // группа продукта: x_* отчёта прогон хранит в extra.reported.x (api/concepts.product_group); плоская — тоже
+  assert.strictEqual(M.productGroup({ x: { x_product_group: 'irs' } }), 'irs');
+  assert.strictEqual(M.productGroup({ x_product_group: 'ccs' }), 'ccs');
+  assert.strictEqual(M.productGroup({ x: { x_product: 'Swap' } }), null); assert.strictEqual(M.productGroup(undefined), null);
+  const sw = M.positions.find(p => p.productGroup === 'irs' && p.instrType === 'OTC');
+  assert.ok(sw && I.kindOf(sw) === 'IRS', 'своп по отчёту — IRS, не «Не классифицировано»');
 });
 
 t('по ногам: риск валюты = риск по её кривым у всех позиций, CHF — не в рублях; итог валюты = сумма типов', () => {
@@ -97,9 +103,9 @@ t('в валюте строки: суммы валюты — в её едини�
 t('риска нет — «без риска» с причиной, не 0; FX-спот без процентного риска — не пропуск', () => {
   const { M, I } = load(D => {
     const x = D.positions.find(p => p.instrType === 'XCCY');
-    Object.assign(x, { instrType: 'OTC', risk: {}, dv01: 0, extra: { quality: 'reported_value', reported: { x_product_group: 'ccs' } } });
+    Object.assign(x, { instrType: 'OTC', risk: {}, dv01: 0, extra: { quality: 'reported_value', reported: { x: { x_product_group: 'ccs' } } } });
     D.positions.push({ id: 'NV1', book: x.book, ccy: 'RUB', instrType: null, segment: 'Деривативы', notValued: true, risk: {}, fxDelta: {},
-      extra: { quality: 'not_valued', reason: 'нет данных', reported: { x_product_group: 'irs' } }, pnl: { available: false } });
+      extra: { quality: 'not_valued', reason: 'нет данных', reported: { x: { x_product_group: 'irs' } } }, pnl: { available: false } });
   });
   const T = I.table(M.positions, { units: 'repr' });
   const rub = block(T, 'RUB'), irs = kindRows(rub).find(r => r.kind === 'IRS');

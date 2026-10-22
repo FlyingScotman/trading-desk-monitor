@@ -27,7 +27,7 @@ def der(pid, group, ccy, risk, fx_delta=None, it="OTC", quality="computed", **kw
     return {"position_id": pid, "fact": {
         "instr_type": it, "ccy": ccy, "notional": 1e6, "notional_rub": 1e6 * FX.get(ccy, 1.0), "mv_rub": 5.0,
         "cs01": 0.0, "ofz_spr01": 0.0, "risk": risk, "fx_delta": fx_delta or {},
-        "extra": {"quality": quality, **({"reported": {"x_product_group": group}} if group else {})}, **kw}}
+        "extra": {"quality": quality, **({"reported": {"x": {"x_product_group": group}}} if group else {})}, **kw}}
 
 
 @pytest.mark.parametrize(("fact", "want"), [
@@ -62,6 +62,24 @@ def der(pid, group, ccy, risk, fx_delta=None, it="OTC", quality="computed", **kw
 ])
 def test_instr_kind(fact, want):
     assert concepts.instr_kind(fact) == want
+
+
+def test_a_valued_fact_keeps_the_report_fields_under_reported_x():
+    # a valued position's fact keeps the report's x_* under extra.reported.x (tdm_run.reported of the stored row):
+    # a valued report-based swap is an IRS, not «Не классифицировано» (OTC) in the currency x type table
+    from desk.publish.tdm_run import reported
+
+    fact = {"instr_type": "OTC", "ccy": "RUB", "extra": {"quality": "reported_value",
+                                                         **reported({"amount_ccy": 1e8, "x": {"x_product_group": "irs"}})}}
+    assert fact["extra"]["reported"]["x"] == {"x_product_group": "irs"}
+    assert concepts.instr_kind(fact) == "IRS"
+    for pg, kind in concepts.PRODUCT_KIND.items():
+        nested = {"instr_type": "OTC", "extra": {"reported": {"x": {"x_product_group": pg}}}}
+        flat = {"instr_type": "OTC", "extra": {"reported": {"x_product_group": pg}}}
+        assert concepts.instr_kind(nested) == concepts.instr_kind(flat) == kind, pg
+    assert concepts.product_group({"x": {"x_product": "Swap"}}) is None and concepts.product_group(None) is None
+    t = concepts.risk_table([der("SW", "irs", "RUB", {"RUB RUONIA": {"2Y": 700.0}}, quality="reported_value")], FX)
+    assert {r["kind"] for r in t["rows"] if r["level"] == "kind"} == {"IRS"}
 
 
 def test_one_mapping_table():

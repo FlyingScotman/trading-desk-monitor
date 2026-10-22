@@ -13,7 +13,7 @@
  *    p.legs (extra.legs); DV01 и ОВП по валюте — «по ногам» (lib/instr.js: INSTR.dv01In / INSTR.fxIn);
  *  - тип: GOV PD/PK/IN/SOVFX (Минфин: в рублях ОФЗ, в валюте — «Минфин валютные», по эмитенту — R39), SUB FIX/FLT, CORP FIX/FLT, DER OTC/FX, OTH (api/concepts.kind_of); тип инструмента
  *    таблицы «валюта × тип» (ОФЗ-ПД, свопы, фьючерсы… по группе продукта отчёта) — lib/instr.js (api/concepts.instr_kind)
- *    из instrType, assetClass, segment, productGroup (extra.reported.x_product_group) и fxDeltaBy позиции;
+ *    из instrType, assetClass, segment, productGroup (x_product_group отчёта: M.productGroup) и fxDeltaBy позиции;
  *  - срок — до оферты или колла, по которым считается доходность, иначе до погашения;
  *  - у флоатера доходности нет (ytm = null), спред — дисконт-маржа ядра (extra.dm_bp: спред к кривой проекции; в
  *    прогоне до ядра 0.33 — Z-спред); G-спред — ядра (extra.g_spread_bp, определение MOEX), иначе MOEX;
@@ -192,6 +192,9 @@
   const MINFIN_CLASSES = { sovereign_fx: 1 }, NOT_MINFIN = { foreign_sovereign: 1 };
   M.isMinfinPos = p => !NOT_MINFIN[p.assetClass] && (p.segment === 'Гос' || !!GOV[p.assetClass] || !!MINFIN_CLASSES[p.assetClass]
     || !!(p.issuer && ((D.ISSUERS || {})[p.issuer] || {}).gov));
+  // группа продукта отчёта (api/concepts.product_group): поля x_* строки отчёта лежат в extra.reported.x (так их хранит
+  // прогон и у оценённой, и у не оценённой позиции); плоское extra.reported.x_product_group — тоже принимается
+  M.productGroup = rep => !rep || typeof rep !== 'object' ? null : rep.x_product_group || (rep.x && typeof rep.x === 'object' ? rep.x.x_product_group : null) || null;
   function kindOf(p) {  // api/concepts.kind_of
     if (p.instrType === 'FX') return ['DER', 'FX'];
     if (p.instrType === 'OTC') return ['DER', 'OTC'];
@@ -247,7 +250,7 @@
     p.name = p.alias || p.exchName;
     // для типа инструмента таблицы «валюта × тип» (lib/instr.js, api/concepts.instr_kind): поля факта и группа продукта отчёта
     p.instrType = d.instrType || null; p.assetClass = d.assetClass || null; p.segment = d.segment || null;
-    p.productGroup = (ex.reported || {}).x_product_group || null;
+    p.productGroup = M.productGroup(ex.reported);
     p.ocp = !!(d.ocpTransfer || d.assetClass === 'Перенос ОВП');
     p.accrualOnly = !!d.accrualOnly;  // HTM по начислению: рыночного риска нет по правилу, это не пропуск
     // FX-дельта по валютам (fx_delta {ccy} прогона): у форварда, свопа и кросса валют может быть несколько — не сворачиваем
