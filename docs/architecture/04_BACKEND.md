@@ -15,7 +15,7 @@ Today it exists as:
 | `backend/marketdata` | Hub client (list/fetch/verify/cache snapshots) and `adapters/mdhub_v1` (wire → core domain) per [02](02_MARKET_DATA_AND_CORE_CONTRACT.md). |
 | `backend/inbox` (was `private_inputs`) | Ingestion of bank files ([ADR-008](adr/ADR-008-private-adapter-boundary.md), [08](08_PRIVATE_ADAPTER_INTERFACE.md)): folder watcher, SHA-256 ledger and archive, adapter loader (`DESK_PRIVATE_ADAPTER`), validation against contract 1.4 private schemas, bitemporal revisions (§2), events. Firm-specific parsing lives in the private adapter, not here; the reference adapter reads canonical CSV. |
 | `backend/valuation` | Builds the per-run domain `MarketSnapshot` (curves, projections) through the curve cache; prices supported products with core; merges imported PV and risk for unsupported products; emits greeks in the desk factor format (`IR\|curve\|bucket`, `CS`, `FX\|ccy`). |
-| `backend/desk_rules` | Desk conventions (methodology in `ORG_CONVENTIONS.md`; the organization's own rules come from the private adapter as data, ADR-008): TRADING/HTM/DERIVS funding, CASH/REPO, OCP transfers, dual FX basis (market vs CBR), HTM treatment, carry/funding projections. **The only implementation of these rules in the system.** Open decisions (DEC01, DEC03, DEC06) are configuration, not code forks. |
+| `backend/desk_rules` — **planned, not built** (wave A package P2 as `backend/src/desk/rules/`, [ROADMAP](ROADMAP.md) §0; location: [DECISIONS](../program/DECISIONS.md) OQ-03) | Desk conventions (methodology in `ORG_CONVENTIONS.md`; the organization's own rules come from the private adapter as data, ADR-008): funding per mode (`book_type`; how many modes: OQ-01), CASH/REPO, OCP transfers, dual FX basis (market vs CBR), HTM treatment, carry/funding projections. Once built, it is meant to be **the only implementation of these rules in the system**. Open decisions (DEC01, DEC06) are configuration, not code forks. **Today** the backend has no rules module: funding in flash PnL is 0 (`api/compat.py` `FUNDING_RULES: []`, `pnl/flash.py` `fx_funding`), and the prototype `tdm/writer.py` `derive_funding` is the only funding implementation. |
 | `backend/scenarios` | Scenario definitions (presets, historical, per-user), canonical hashing, T3 batch scenarios, the T2 job worker, and the reference Taylor engine ([03](03_CALCULATION_SPLIT.md)). |
 | `backend/pnl` (later, M5) | PnL explain from runs T−1 and T, trades and cash events. The default uses attribution greeks frozen at T−1 EOD and a frozen attribution order; both are pending DEC05. Until M5, runs carry only flash PnL (change in value plus cash flows). Official PnL comparison and a break register (DEC12). Official PnL is the TradeLevel IFRS figure on the CBR basis, including funding (owner answer, Q8), fed by pnl_tool's TradeLevel reader. |
 | `backend/store` | PostgreSQL `desk` database: runs, positions, results, attachments, private revisions, curve cache, jobs ([ADR-006](adr/ADR-006-desk-store-postgres-bitemporal.md)). The backend owns the schema, with versioned migrations (for example Alembic) in this repository. |
@@ -27,7 +27,7 @@ flowchart TB
   ORCH --> PI[private_inputs]
   MD --> VAL[valuation<br/>core + imported]
   PI --> VAL
-  VAL --> RULES[desk_rules<br/>funding, OCP, FX basis, HTM, carry]
+  VAL --> RULES[desk_rules, planned<br/>funding, OCP, FX basis, HTM, carry]
   RULES --> SC[scenarios<br/>T3 batch]
   SC --> ST[(store)]
   RULES --> ST
@@ -70,9 +70,9 @@ A run is immutable once published. It records:
 
 Attachments to a run (official PnL, T2 scenario results, break notes) are separate append-only records with their own revision and author. A run never changes after it completes.
 
-## 4 Desk conventions: one implementation
+## 4 Desk conventions: one implementation (planned)
 
-`desk_rules` holds every organisation-specific rule. The mockups and the `tdm` prototype each contain partial copies; this module replaces both:
+This section is the target design; the module does not exist yet (§1). `desk_rules` will hold every organisation-specific rule, parameterised by the private adapter's data. The mockups and the `tdm` prototype each contain partial copies; this module replaces both:
 
 - **Funding:**
   - POS/HTM by position;
