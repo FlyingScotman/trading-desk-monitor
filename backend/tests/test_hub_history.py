@@ -319,6 +319,12 @@ def test_positions_history_deep_with_spreads_and_linkers(desk_on_api):
     assert ofz["zspr"][-1] is not None and "icpi" not in ofz and "dm" not in ofz
     assert flt["ytm"] is None  # no yield for a floater: a series empty on every date is sent as null (R23)
     assert flt["dm"][-1] is not None and flt["dm"][0] is None
+    # batch 1, item 6: the DM from the price on every date of the price history, the run's on its date
+    px = flt["dmPx"]
+    assert len(px) == len(h["dates"]) and px[0] is not None and px[-1] == pytest.approx(flt["dm"][-1], abs=0.01)
+    assert sum(v is not None for v in px) == sum(v is not None for v in flt["price"])
+    assert all(abs(v - flt["dm"][-1]) < 500 for v in px if v is not None)
+    assert "dmPx" not in ofz and "dmPx" not in lk
     assert lk["icpi"][0] is not None and lk["bei"][-1] is not None
     one_year = desk_on_api.get("/api/v1/history/positions?run_id=1").json()
     assert one_year["dates"][0] >= "2025-10-15"

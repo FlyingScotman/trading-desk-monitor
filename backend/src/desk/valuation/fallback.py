@@ -36,7 +36,8 @@ instead of RUONIA. MOEX publishes the accrued in the settlement currency (RUB fo
 bonds) and the price in % of the foreign face.
 
 Flash PnL of a position not exact on either date: ``simple_pnl``, q * (dirty_D - dirty_D-1) +
-received, all in ``other``. No decomposition is faked.
+received, all in ``other``. No decomposition is faked: only a foreign-face bond priced on both dates gets its carry
+at its own yield (``yield_pnl``, batch 1 item 5), and its FX revaluation goes to ``fx_gross`` (``pnl.direct``).
 """
 
 from __future__ import annotations
@@ -46,7 +47,7 @@ import statistics
 from bisect import bisect_left
 from collections import defaultdict
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from decimal import Decimal
 from itertools import chain
@@ -513,9 +514,11 @@ class SimplePnl(FlashPnl):
     note: str = ""
     flag: str = ""
     """Set when a model price is on either side: the PnL is then partly price discovery, not a market move."""
+    method: str = METHOD
+    """``METHOD``, or ``YIELD_METHOD`` with a foreign bond's carry at its yield (``yield_pnl``)."""
 
     def extra(self) -> dict[str, Any]:
-        return {"method": METHOD, "prev_date": self.prev_date.isoformat(), "received_rub": self.received_rub,
+        return {"method": self.method, "prev_date": self.prev_date.isoformat(), "received_rub": self.received_rub,
                 "total": self.total, "note": self.note, **({"flag": self.flag} if self.flag else {})}
 
 
@@ -524,6 +527,36 @@ def received_per_bond(t: BondTerms, d0: date, d1: date) -> float | None:
     amounts = [c.amount_per_bond for c in t.coupons if d0 < c.pay_date <= d1]
     amounts += [r.value_per_bond for r in t.redemptions if d0 < r.date <= d1]
     return None if any(a is None for a in amounts) else float(sum(amounts))  # type: ignore[arg-type]
+
+
+YIELD_METHOD = "desk-flash-yield-v1"
+YIELD_QUALITIES = ("market_value", "stale_price")
+"""The rungs with a price of the bond's own (today's or its last), so a yield to carry it at."""
+
+
+def yield_pnl(prev: BondValuation, cur: BondValuation, terms: BondTerms, prev_ctx: EodContext,
+              ctx: EodContext) -> SimplePnl:
+    """``simple_pnl``, with the carry of a foreign-face bond priced on both dates without a curve in its currency
+    (USD / EUR without ``proxy_curves_for_risk``, CNY on a date without the XCCY curve; batch 1, item 5): the D-1 PV in
+    its currency x ((1 + y)^(days / 365) - 1) at its D-1 yield (MOEX's effective yield: the coupon income and the pull
+    to the price at an unchanged yield), at today's market rate, goes from ``other`` to ``carry``. Without a curve
+    the yield move is not split between rates and spread: it stays in ``other`` with the prints, and
+    ``pnl.direct.split_fx`` then takes the FX revaluation out of ``other``. A RUB bond, a model price or a par proxy:
+    ``simple_pnl`` as is."""
+    pnl = simple_pnl(prev, cur, terms, ctx)
+    ccy = terms.face_unit or terms.currency or "RUB"
+    y = prev.ytm_pct
+    if ccy == "RUB" or prev.quality not in YIELD_QUALITIES or cur.quality not in YIELD_QUALITIES \
+            or y is None or not math.isfinite(y) or y <= -100:
+        return pnl
+    r0, r1 = fx_rate(prev_ctx, ccy), fx_rate(ctx, ccy)
+    if r0 is None or r1 is None:
+        return pnl
+    days = (cur.valuation_date - prev.valuation_date).days
+    carry = pnl.v0 / r0[0] * ((1 + y / 100) ** (days / 365) - 1) * r1[0]
+    return replace(pnl, carry=carry, other=pnl.other - carry, v_carry=pnl.v0 + carry, method=YIELD_METHOD,
+                   note=f"{pnl.note}; carry = PV D-1 {pnl.v0 / r0[0]:,.2f} {ccy} x ((1 + {y:g} %)^({days}/365) - 1) "
+                        f"x {r1[0]:g} (no {ccy} curve: the yield move stays in other)")
 
 
 def simple_pnl(prev: BondValuation, cur: BondValuation, terms: BondTerms, ctx: EodContext) -> SimplePnl:

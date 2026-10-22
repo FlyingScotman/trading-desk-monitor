@@ -33,8 +33,13 @@ V1          the D dirty price                                                   
 - ``other`` is what the D-1 position does not explain at the D market: a changed schedule
   (an offer passed, a new coupon fixed) or a quote whose price and accrued disagree.
 
-Check: ``carry + rolldown + rates + spread + other == q * (dirty_D - dirty_D-1) + received``,
-where both dirty prices come from the published valuations, not from the steps.
+- A foreign bond core values on its own curve on both dates (CNY on XCCY; USD / EUR on the par-yield proxies with
+  ``proxy_curves_for_risk``; batch 1, item 5) takes the same steps in its currency on that curve (its flows, PV and
+  Z-spread are in it); each component is converted at the D market rate, and the rate move on the D-1 PV,
+  ``fx_delta_ccy x (rate_D - rate_D-1)``, is ``fx_gross`` (``orchestrator.with_cbr`` adds ``fx_gross_cbr``).
+
+Check: ``carry + rolldown + rates + spread + other (+ fx_gross) == q * (dirty_D - dirty_D-1) + received``,
+where both dirty prices come from the published valuations (RUB), not from the steps.
 
 A position that is not priced on either date gets no PnL and a reason; it is never zeroed.
 """
@@ -68,6 +73,9 @@ from ..valuation.bonds import RISK_CURVES, SPREAD_CONVENTION, BondValuation, Flo
 METHOD = "desk-flash-exact-v2"
 """v2: on the bond's own curves (the RUONIA discount curve, a floater's projection curve reprojected); v1 repriced
 fixed flows on the KBD only."""
+METHOD_FX = "desk-flash-exact-fx-v1"
+"""A foreign bond valued by core on both dates (CNY on XCCY, USD / EUR on the proxies): the steps in its currency on
+its own curve, the rate move in ``fx_gross`` (``explain``)."""
 IDENTITY_TOLERANCE_RUB = 0.01
 PUBLISHED_TO_CORE = {v: k for k, v in RISK_CURVES.items()}
 
@@ -188,6 +196,14 @@ class FlashPnl:
     fx_gross_cbr: float | None = None
     """The same FX revaluation at the CBR rates in force (the official basis, DATA_CONTRACT §0.6); None for a RUB bond
     or without a CBR rate on either date."""
+    ccy: str = "RUB"
+    """A foreign bond explained by core in its currency (``explain``): its face currency; ``v0`` .. ``v1`` are then
+    in it, the components and ``received_rub`` (at the D rate) in RUB."""
+    fx_delta_ccy: float = 0.0
+    """A foreign bond: the FX delta of D-1 in its currency (the D-1 position PV, ``v0``), what ``fx_gross`` and
+    ``fx_gross_cbr`` multiply by the rate move."""
+    fx_rates: tuple[float, float] | None = None
+    """A foreign bond: the market rates of D-1 and D its valuations were converted at (RUB per unit)."""
 
     @property
     def explained(self) -> float:
@@ -200,12 +216,16 @@ class FlashPnl:
                 **({"fx_gross_cbr": self.fx_gross_cbr} if self.fx_gross_cbr is not None else {})}
 
     def extra(self) -> dict[str, Any]:
+        fx = {} if self.fx_rates is None else {
+            "ccy": self.ccy, "fx_rates": [self.fx_rates[0], self.fx_rates[1]], "fx_delta": self.fx_delta_ccy,
+            "note": f"in {self.ccy} on its own curve; components x the D rate {self.fx_rates[1]:g}, fx_gross = FX delta "
+                    f"D-1 {self.fx_delta_ccy:,.2f} {self.ccy} x ({self.fx_rates[1]:g} - {self.fx_rates[0]:g})"}
         return {
-            "method": METHOD, "prev_date": self.prev_date.isoformat(),
+            "method": METHOD_FX if self.fx_rates is not None else METHOD, "prev_date": self.prev_date.isoformat(),
             "prev_valuation_date": self.prev_valuation_date.isoformat(), "z0_bp": round(self.z0_bp, 4),
             "z1_bp": round(self.z1_bp, 4), "received_rub": self.received_rub, "total": self.total,
             "identity_error": self.identity_error, "rates_linear": self.rates_linear,
-            "prev_price_basis": self.price_basis[0],
+            "prev_price_basis": self.price_basis[0], **fx,
         }
 
 
@@ -264,6 +284,13 @@ def explain(prev: BondValuation, cur: BondValuation, curves: FlashCurves,
     two = proj is not None and proj != disc
     if missing := [c for c in (disc, *((proj,) if two else ())) if c not in curves.cur_curves]:
         raise NoPnl("curve_missing", f"{', '.join(missing)}: not built on both dates")
+    # A foreign bond (core 0.34): its flows and curve are in its currency, the steps too; the components are
+    # converted at the D rate and the rate move on the D-1 PV is fx_gross, so they add up to the RUB total.
+    fx = prev.foreign or cur.foreign
+    if fx and (prev.fx_rate is None or cur.fx_rate is None or prev.fx_rate[0] != cur.fx_rate[0]):
+        raise NoPnl("no_prev_fx_rate", f"{prev.secid}: core FX rate {prev.fx_rate} on {prev.valuation_date}, "
+                    f"{cur.fx_rate} on {cur.valuation_date}")
+    ccy, f0, f1 = (prev.fx_rate[0], prev.fx_rate[1], cur.fx_rate[1]) if fx else ("RUB", 1.0, 1.0)  # type: ignore[index]
     cache = cache or ShockedCurveCache()
     q, kind, flows = prev.quantity, prev.spread_kind, prev.cashflows
     s0, s1 = prev.valuation_date, cur.valuation_date
@@ -287,16 +314,18 @@ def explain(prev: BondValuation, cur: BondValuation, curves: FlashCurves,
     for c, bs in prev.risk().items():
         move = curves.zero_move_bp(PUBLISHED_TO_CORE.get(c, c))
         linear += sum(x * move.get(b, 0.0) for b, x in bs.items())
-    v1 = q * cur.dirty_rub + received
-    total = q * (cur.dirty_rub - prev.dirty_rub) + received
+    v1 = q * cur.dirty_rub / f1 + received
+    total = q * (cur.dirty_rub - prev.dirty_rub) + received * f1
     out = FlashPnl(
         secid=prev.secid, quantity=q, prev_date=curves.prev.trade_date, as_of=curves.cur.trade_date,
         prev_valuation_date=s0, valuation_date=s1, z0_bp=prev.z_spread_bp, z1_bp=cur.z_spread_bp,
         v0=v0, v_carry=v_carry, v_roll=v_roll, v_rates=v_rates, v_spread=v_spread, v1=v1,
-        received_rub=received,
-        carry=v_carry - v0, rolldown=v_roll - v_carry, rates=v_rates - v_roll, spread=v_spread - v_rates,
-        other=v1 - v_spread, total=total, identity_error=0.0, rates_linear=linear,
-        price_basis=(prev.price_basis, cur.price_basis),
+        received_rub=received * f1,
+        carry=(v_carry - v0) * f1, rolldown=(v_roll - v_carry) * f1, rates=(v_rates - v_roll) * f1,
+        spread=(v_spread - v_rates) * f1, other=(v1 - v_spread) * f1, total=total, identity_error=0.0,
+        rates_linear=linear, price_basis=(prev.price_basis, cur.price_basis),
+        fx_gross=v0 * (f1 - f0) if fx else 0.0,
+        **({"ccy": ccy, "fx_delta_ccy": v0, "fx_rates": (f0, f1)} if fx else {}),
     )
     err = out.explained - total
     object.__setattr__(out, "identity_error", err)

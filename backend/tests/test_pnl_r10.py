@@ -82,7 +82,9 @@ def test_split_fx_of_a_foreign_bond(ctx, prev):
     delta = Q * p_v.dirty_rub / USD_PREV_MKT
     assert pnl.fx_gross == pytest.approx(delta * (mkt - USD_PREV_MKT))
     assert pnl.fx_gross_cbr == pytest.approx(delta * (cbr - USD_PREV))
-    assert pnl.other + pnl.fx_gross == pytest.approx(pnl.total) and pnl.explained == pytest.approx(pnl.total)
+    # its carry at its yield (batch 1, item 5: ``fallback.yield_pnl``) is out of other too
+    assert pnl.carry > 0 and pnl.extra()["method"] == "desk-flash-yield-v1"
+    assert pnl.carry + pnl.other + pnl.fx_gross == pytest.approx(pnl.total) and pnl.explained == pytest.approx(pnl.total)
     t = pnl.as_tdm()
     assert t["fx_gross"] == pnl.fx_gross and t["fx_gross_cbr"] == pnl.fx_gross_cbr and FX_METHOD in pnl.extra()["note"]
     assert "MOEX 19:00" in pnl.extra()["note"] and "at CBR" in pnl.extra()["note"]

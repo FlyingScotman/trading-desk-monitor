@@ -56,3 +56,7 @@ class ScenarioEngineJs(unittest.TestCase):
     def test_desk_updater_browser_check(self):
         r = subprocess.run(["node", str(ROOT / "tests" / "js" / "desk_updater.test.js")], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_batch1_floater_dm_history(self):
+        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "batch1_dm.test.js")], capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

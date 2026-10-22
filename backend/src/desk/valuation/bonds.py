@@ -575,6 +575,10 @@ class BondValuation:
     extra: dict[str, Any] = field(default_factory=dict)
     """A derivative valued by core: what the run publishes in the row's ``extra`` beside the common fields (legs,
     OCP amounts, basis risk, fixing status, the core model flags, the reconciliation with the report)."""
+    fx_rate: tuple[str, float] | None = None
+    """A foreign bond valued by core: its currency and the rate its ``_rub`` amounts are converted at (core
+    ``CurrencyAmounts``, the run's market rate), so the flash PnL reprices it in its currency and books the rate move
+    in ``fx_gross`` (``pnl.flash.explain``); None for a RUB bond and off core."""
 
     @property
     def spread_curve(self) -> str | None:
@@ -812,6 +816,7 @@ def _valuation(prep: _Prepared, v: PositionValuation, quantity: float, guard: bo
         quality="assumed" if notes else "exact", assumptions=tuple(notes), discount_curve_id=v.curve_id,
         floater=floater, g_spread_bp=v.g_spread_bp, discount_margin_bp=v.discount_margin_bp,
         spread_buckets=dict(zip(RISK_BUCKETS, v.spread_buckets_rub)) if v.spread_buckets_rub else {},
+        fx_rate=(v.currency_amounts.currency, v.currency_amounts.rub_per_unit) if v.currency_amounts else None,
     )
     if v.factor_risk.has_second_order:
         # Core's full Hessian over its factors, renamed to the published curves; every curve is its own factor,

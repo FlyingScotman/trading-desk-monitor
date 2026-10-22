@@ -748,6 +748,14 @@
     if (p.zSpreadZ != null && p.dmSource !== 'z') out.push(['Z-спред к ' + to, f.bp(p.zSpreadZ) + ' <small>б.п. · как у фиксов</small>', false, K.tips.zdisc]);
     return out;
   };
+  // DM флоатера в истории (R35): DM ядра — только в дни прогонов (с появления позиции), оценка по цене MOEX (dmPx,
+  // пунктир) — за всю историю цены; без dmPx — как раньше (DM прогонов, иначе спред). cut — срез рядов, colors — цвета
+  K.dmSeries = (H, cut, colors) => {
+    const c = cut || (a => a), col = i => colors && colors[i] ? { color: colors[i] } : {};
+    if (!H.dmPx) return [Object.assign({ name: 'DM, б.п.', data: c(H.dm || H.spr), connectNulls: true }, col(0))];
+    return [Object.assign({ name: 'DM ядра (прогоны), б.п.', data: c(H.dm || H.dmPx.map(() => null)), connectNulls: true }, col(0)),
+      Object.assign({ name: 'DM по цене (оценка), б.п.', data: c(H.dmPx), connectNulls: true, lineStyle: { type: 'dashed', width: 1.2 } }, col(1))];
+  };
   // ноги FX-сделки (p.legs: extra.legs прогона или демо): даты, суммы, курс сделки и форварда, пойнты, расчёт, фиксинг
   K.legsHtml = p => {
     const L = p.legs || [], any = k => L.some(l => l[k] != null && l[k] !== '');
@@ -820,7 +828,7 @@
       const xs = H.dates, long = xs.length > 300;
       const S = mode === 'price' ? [{ name: 'Цена', data: H.price }]
         : mode === 'yield' ? [{ name: 'Доходность', data: H.ytm }, { name: 'ОФЗ на сроке', data: H.bench, lineStyle: { type: 'dashed', width: 1 } }]
-          : mode === 'spread' ? (isFloat ? [{ name: 'DM, б.п.', data: H.dm || H.spr, connectNulls: true }]
+          : mode === 'spread' ? (isFloat ? K.dmSeries(H)
             : [{ name: 'G-спред, б.п.', data: H.spr }].concat(H.zspr ? [{ name: 'Z-спред MOEX, б.п.', data: H.zspr }] : []))
             : mode === 'infl' ? [{ name: 'BEI, %', data: H.bei || [] }, { name: 'IR (реальная), %', data: H.ir || [] }].concat(H.cpi ? [{ name: 'ИПЦ г/г, %', data: H.cpi, step: 'end', lineStyle: { type: 'dashed', width: 1.2 } }] : [])
               : mode === 'dv01' ? [{ name: 'DV01, тыс ₽/бп', data: H.dv01.map(v => v / 1e3), step: 'end' }] : [{ name: 'Номинал, mm', data: H.notional.map(v => v / 1e6), step: 'end', areaStyle: { opacity: .15 } }];

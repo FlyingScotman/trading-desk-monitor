@@ -558,7 +558,9 @@
     const mv = dates.map((_, i) => p.group === 'DER' ? 0 : p.mv * sc(i) * (p.price && price[i] != null ? price[i] / p.price : 1));
     const curves = {};
     Object.keys(p.dv01ByCurve).forEach(c => { if (p.dv01ByCurve[c] && (M.curve[c] || {}).kind !== 'basis') curves[c] = dates.map((_, i) => p.dv01ByCurve[c] * sc(i)); });
-    return { dates, price, ytm, spr, notional, dv01, cs01, basis, mv, curves, bench, fromRuns: false };
+    // флоатер (R35): DM ядра — по прогонам последних недель, оценка по цене — за всю историю, как у живого прогона
+    const dm = p.cpn && p.cpn.type === 'float' ? { dm: spr.map((v, i) => i >= n - 15 ? v : null), dmPx: spr.slice() } : {};
+    return Object.assign({ dates, price, ytm, spr, notional, dv01, cs01, basis, mv, curves, bench, fromRuns: false }, dm);
   };
   M.histSource = 'positions';
 
