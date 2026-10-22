@@ -49,7 +49,7 @@ The order of work is set by [VERTICAL_SLICES.md](VERTICAL_SLICES.md). M1 and M3 
 | **M3 Interactive scenarios** | Taylor in the browser, exact reprice on the backend, first React screen | S6 | Done; T3 presets, historical scenarios, SSE open |
 | **M2' Real book** | Folder ingestion, positions adapter, EOD runs on the real book (§0 first), then the YTD backfill | S7a, S7b, S8 | **Next: §0** |
 | **M5 Official PnL and reconciliation** | Official PnL loaded; ours vs official per day, book, instrument; break analysis with causes and confidence; break register | S8, S10, S11 | |
-| **M2'' Desk rules** | OCP, cash, funding per `ORG_CONVENTIONS.md` on real data | S9 | Needs DEC01, DEC03, DEC06 |
+| **M2'' Desk rules** | OCP, cash, funding on real data: generic engine per `ORG_CONVENTIONS.md`, the organization's rules from the private adapter | S9 | Needs DEC01, DEC03, DEC06 |
 | **M8 Internal market data** | Internal EOD overlay, second EOD run, diff and notification | S10 | Needs the export format (owner, adapter A5) |
 | **M4 Intraday** | Intraday runs with explain on every snapshot; SSE; later trades every 1–2 h | S12, S13 | S13 waits for the trade export |
 | **M6 Coverage waves** | Derivatives and the hybrid book from term files | S14 | |
@@ -79,7 +79,7 @@ Its own `ROADMAP.md` holds the detail. Phases, in the order the backend needs th
 4. **Orchestrator: the day cycle** (§1) as a dependency graph, not a cron list: an arrival triggers the runs that depend on it, and a rerun supersedes. `desk backfill --from 2026-01-01`: EOD runs and flash PnL for every date with positions, then reconciliation for every date with official PnL.
 5. **`desk.pnl.reconcile`**: ours vs official per date × book × instrument, matched on trade or position keys. Break analysis as a substitution waterfall: swap in internal market data (Δ market data), official positions (Δ positions), CBR FX (Δ FX basis), cash flows and accrual convention (Δ carry), new-trade lines (Δ new trades); the remainder is unexplained. Each cause gets a confidence: *confirmed* (the swap closes the break within the DEC12 threshold), *likely*, *unexplained*. Component matching: our carry vs official accrual, our price effect vs price change, FX vs FX.
 6. **`desk.marketdata.internal`**: the internal overlay replaces hub inputs it covers (curve points, bond prices, FX), keeps the rest, and records which. The EOD-internal run is a separate run type with its own lineage.
-7. **`desk_rules`**: OCP, cash, funding, dual FX basis from `ORG_CONVENTIONS.md` (S9).
+7. **`desk_rules`**: OCP, cash, funding, dual FX basis: methodology in `ORG_CONVENTIONS.md`, the organization's rules (modes, rates, spreads) as data from the private adapter (S9).
 8. **Explain** on every snapshot (§1); intraday runs; SSE (S12).
 9. Carried from S4–S6: interface catalogue (`coverage`, `totals`), curve-spec mapping table, T3 presets, historical scenarios, custom scenarios, job cancel, worker out of the API process.
 
