@@ -42,9 +42,33 @@ ROWS_SQL = ("SELECT position_id, book_id, pv_rub, fact->'risk' AS risk, (fact->>
             " FROM run_position WHERE run_id = %s AND fact IS NOT NULL")
 
 
-def kind_of(f: dict[str, Any]) -> tuple[str, str]:
+MINFIN_INN = "7710168360"
+"""The INN of the Ministry of Finance of the Russian Federation (hub static ``issuers.inn``; the hub's own
+``is_sovereign`` flag and its bond classes ``ofz_*`` / ``sovereign_fx`` are derived from it)."""
+MINFIN_CLASSES = frozenset({"sovereign_fx"})
+"""Hub bond classes of the Minfin's foreign-currency bonds (Eurobonds and the replacement / FX bonds). ``tdm_run``
+has no label for them, so the fact's ``asset_class`` is the class itself (its segment ``Корп``)."""
+NOT_MINFIN_CLASSES = frozenset({"foreign_sovereign"})
+"""A foreign state's bonds (e.g. Belarus on MOEX): a sovereign, but never the Russian Minfin."""
+
+
+def is_minfin(f: dict[str, Any], gov_issuers: frozenset[str] | set[str] = frozenset()) -> bool:
+    """Whether a bond's fact is the Russian Minfin's (R39): identified by the issuer, not by an ISIN list. The issuer
+    is the Minfin when the run's issuer reference flags it (``gov_issuers``: the issuer keys with ``is_gov``, i.e. the
+    hub's ``is_sovereign``, which the hub sets for INN ``MINFIN_INN`` only -- the Amur region's Minfin is not one) or
+    the hub's bond class says so (OFZ: segment ``Гос`` / ``GOV_CLASSES``; ``MINFIN_CLASSES``), never for a foreign
+    sovereign (``NOT_MINFIN_CLASSES``)."""
+    ac = f.get("asset_class")
+    if ac in NOT_MINFIN_CLASSES:
+        return False
+    return (f.get("segment") == "Гос" or ac in GOV_CLASSES or ac in MINFIN_CLASSES
+            or (f.get("issuer") is not None and f.get("issuer") in gov_issuers))
+
+
+def kind_of(f: dict[str, Any], gov_issuers: frozenset[str] | set[str] = frozenset()) -> tuple[str, str]:
     """(group, kind) of a position's fact: GOV PD / PK / IN / SOVFX, SUB FIX / FLT, CORP FIX / FLT, DER OTC / FX,
-    OTH OTH. A floater is a bond whose coupon type is ``float``; a government bond in a foreign currency is SOVFX."""
+    OTH OTH. A floater is a bond whose coupon type is ``float``. The Minfin's bonds (``is_minfin``) are GOV: in
+    roubles an OFZ by its class, in a foreign currency SOVFX (the Minfin's Eurobonds and replacement bonds)."""
     it = f.get("instr_type")
     if it == "FX":
         return "DER", "FX"
@@ -54,7 +78,7 @@ def kind_of(f: dict[str, Any]) -> tuple[str, str]:
         return "OTH", "OTH"
     seg, ac = f.get("segment"), f.get("asset_class")
     flt = "FLT" if f.get("coupon_type") == "float" else "FIX"
-    if seg == "Гос" or ac in GOV_CLASSES:
+    if is_minfin(f, gov_issuers):
         if (f.get("ccy") or "RUB") != "RUB":
             return "GOV", "SOVFX"
         return "GOV", GOV_CLASSES.get(ac, "PD")

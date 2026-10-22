@@ -248,8 +248,8 @@ tr.row.sel td { background: var(--accent-bg); }
       onRow: r => { st.pos = r.id; save(); drawPos(); topTbl.redraw(); },
       columns: [
         { key: 'name', label: 'Позиция', fmt: (v, r) => esc(v) + ' <span class="mut3">' + esc(r.book) + '</span>' },
-        { key: 'ccy', label: 'Вал', fmt: (v, r) => K.ccyTag(r.ccy), val: r => M.ccyOrder[r.ccy] },
-        { key: 'kind', label: 'Тип', fmt: (v, r) => '<span class="tagc">' + esc(M.kindShort[r.kind]) + '</span>' },
+        K.posCols.ccy, K.posCols.issuer,
+        { key: 'kind', label: 'Тип', filter: r => M.kindLabel[r.kind] || r.kind, fmt: (v, r) => '<span class="tagc">' + esc(M.kindShort[r.kind]) + '</span>' },
         { key: 'not0', label: 'Номинал было', num: true, fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', title: 'mm в валюте бумаги на дату сравнения' },
         { key: 'nowN', label: 'стало', num: true, val: r => H[r.id].notional[LAST], fmt: v => f.mn(v, 0) },
         { key: 'dNot', label: 'Δ номинал', num: true, fmt: (v, r) => v ? f.mns(v, 0) : '<span class="mut3">·</span>', cls: v => f.cls(v), title: 'mm в валюте бумаги' },

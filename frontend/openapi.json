@@ -599,7 +599,7 @@
     "/api/v1/runs/{run_id}/risk-table": {
       "get": {
         "summary": "Risk Table",
-        "description": "Aggregated risk: currency x instrument type (UI-02, ``concepts.risk_table``).",
+        "description": "Aggregated risk as a matrix: currencies x instrument types (UI-02, R38; ``concepts.risk_table``).",
         "operationId": "risk_table_api_v1_runs__run_id__risk_table_get",
         "parameters": [
           {
@@ -3333,6 +3333,14 @@
             "title": "Kinds",
             "description": "the classification's kinds, in the table's order"
           },
+          "measures": {
+            "items": {
+              "$ref": "#/components/schemas/RiskTableMeasure"
+            },
+            "type": "array",
+            "title": "Measures",
+            "description": "the matrix's measures (one shown at a time)"
+          },
           "fx": {
             "additionalProperties": {
               "anyOf": [
@@ -3346,6 +3354,22 @@
             },
             "type": "object",
             "title": "Fx"
+          },
+          "ccys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Ccys",
+            "description": "the matrix's rows: currencies, RUB first"
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/RiskTableColumn"
+            },
+            "type": "array",
+            "title": "Columns",
+            "description": "the matrix's columns: the kinds present, in table order"
           },
           "rows": {
             "items": {
@@ -3366,11 +3390,96 @@
           "attribution_provisional",
           "cross_ccy_kinds",
           "kinds",
+          "measures",
           "fx",
+          "ccys",
+          "columns",
           "rows",
           "total"
         ],
-        "title": "RiskTable"
+        "title": "RiskTable",
+        "description": "The matrix currency x instrument type (R38): ``ccys`` its rows, ``columns`` the kinds present with their\ntotals over all currencies; a cell is the ``rows`` entry of level ``kind`` (ccy, kind), a row total the entry\nof level ``ccy``, the corner ``total``."
+      },
+      "RiskTableColumn": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "group": {
+            "type": "string",
+            "title": "Group"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "n_positions": {
+            "type": "integer",
+            "title": "N Positions"
+          },
+          "notional_rub": {
+            "type": "number",
+            "title": "Notional Rub"
+          },
+          "mv_rub": {
+            "type": "number",
+            "title": "Mv Rub"
+          },
+          "dv01_by_curve_rub": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Dv01 By Curve Rub"
+          },
+          "dv01_all_curves_rub": {
+            "type": "number",
+            "title": "Dv01 All Curves Rub",
+            "description": "the sum over curves of different currencies: labelled so"
+          },
+          "ofz_basis_rub": {
+            "type": "number",
+            "title": "Ofz Basis Rub"
+          },
+          "cs01_rub": {
+            "type": "number",
+            "title": "Cs01 Rub"
+          },
+          "fx_delta_rub": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fx Delta Rub",
+            "description": "net FX delta at the run's rates (RUB rows left out); null when a rate is missing"
+          },
+          "n_risk_missing": {
+            "type": "integer",
+            "title": "N Risk Missing"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "group",
+          "label",
+          "n_positions",
+          "notional_rub",
+          "mv_rub",
+          "dv01_by_curve_rub",
+          "dv01_all_curves_rub",
+          "ofz_basis_rub",
+          "cs01_rub",
+          "fx_delta_rub",
+          "n_risk_missing"
+        ],
+        "title": "RiskTableColumn",
+        "description": "A column of the matrix (R38): an instrument kind present, with its total over all currencies (what sums,\nin RUB)."
       },
       "RiskTableKind": {
         "properties": {
@@ -3394,6 +3503,45 @@
           "label"
         ],
         "title": "RiskTableKind"
+      },
+      "RiskTableMeasure": {
+        "properties": {
+          "measure": {
+            "type": "string",
+            "enum": [
+              "dv01",
+              "dv01_curve",
+              "cs01",
+              "ofz_basis",
+              "fx_delta",
+              "mv",
+              "notional",
+              "n_positions"
+            ],
+            "title": "Measure"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "across_ccys": {
+            "type": "string",
+            "enum": [
+              "yes",
+              "repr",
+              "labelled"
+            ],
+            "title": "Across Ccys",
+            "description": "whether the measure sums across currencies (the total row, in RUB): yes; repr only at the run's rates; labelled: sums, but over curves of different currencies, not a currency's risk"
+          }
+        },
+        "type": "object",
+        "required": [
+          "measure",
+          "label",
+          "across_ccys"
+        ],
+        "title": "RiskTableMeasure"
       },
       "RiskTableRow": {
         "properties": {

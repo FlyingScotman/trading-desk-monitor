@@ -152,7 +152,7 @@ export interface paths {
         };
         /**
          * Risk Table
-         * @description Aggregated risk: currency x instrument type (UI-02, ``concepts.risk_table``).
+         * @description Aggregated risk as a matrix: currencies x instrument types (UI-02, R38; ``concepts.risk_table``).
          */
         get: operations["risk_table_api_v1_runs__run_id__risk_table_get"];
         put?: never;
@@ -1029,7 +1029,12 @@ export interface components {
                 number
             ][];
         };
-        /** RiskTable */
+        /**
+         * RiskTable
+         * @description The matrix currency x instrument type (R38): ``ccys`` its rows, ``columns`` the kinds present with their
+         *     totals over all currencies; a cell is the ``rows`` entry of level ``kind`` (ccy, kind), a row total the entry
+         *     of level ``ccy``, the corner ``total``.
+         */
         RiskTable: {
             /** Run Id */
             run_id: number;
@@ -1055,13 +1060,67 @@ export interface components {
              * @description the classification's kinds, in the table's order
              */
             kinds: components["schemas"]["RiskTableKind"][];
+            /**
+             * Measures
+             * @description the matrix's measures (one shown at a time)
+             */
+            measures: components["schemas"]["RiskTableMeasure"][];
             /** Fx */
             fx: {
                 [key: string]: number | null;
             };
+            /**
+             * Ccys
+             * @description the matrix's rows: currencies, RUB first
+             */
+            ccys: string[];
+            /**
+             * Columns
+             * @description the matrix's columns: the kinds present, in table order
+             */
+            columns: components["schemas"]["RiskTableColumn"][];
             /** Rows */
             rows: components["schemas"]["RiskTableRow"][];
             total: components["schemas"]["RiskTableTotal"];
+        };
+        /**
+         * RiskTableColumn
+         * @description A column of the matrix (R38): an instrument kind present, with its total over all currencies (what sums,
+         *     in RUB).
+         */
+        RiskTableColumn: {
+            /** Kind */
+            kind: string;
+            /** Group */
+            group: string;
+            /** Label */
+            label: string;
+            /** N Positions */
+            n_positions: number;
+            /** Notional Rub */
+            notional_rub: number;
+            /** Mv Rub */
+            mv_rub: number;
+            /** Dv01 By Curve Rub */
+            dv01_by_curve_rub: {
+                [key: string]: number;
+            };
+            /**
+             * Dv01 All Curves Rub
+             * @description the sum over curves of different currencies: labelled so
+             */
+            dv01_all_curves_rub: number;
+            /** Ofz Basis Rub */
+            ofz_basis_rub: number;
+            /** Cs01 Rub */
+            cs01_rub: number;
+            /**
+             * Fx Delta Rub
+             * @description net FX delta at the run's rates (RUB rows left out); null when a rate is missing
+             */
+            fx_delta_rub: number | null;
+            /** N Risk Missing */
+            n_risk_missing: number;
         };
         /** RiskTableKind */
         RiskTableKind: {
@@ -1071,6 +1130,22 @@ export interface components {
             group: string;
             /** Label */
             label: string;
+        };
+        /** RiskTableMeasure */
+        RiskTableMeasure: {
+            /**
+             * Measure
+             * @enum {string}
+             */
+            measure: "dv01" | "dv01_curve" | "cs01" | "ofz_basis" | "fx_delta" | "mv" | "notional" | "n_positions";
+            /** Label */
+            label: string;
+            /**
+             * Across Ccys
+             * @description whether the measure sums across currencies (the total row, in RUB): yes; repr only at the run's rates; labelled: sums, but over curves of different currencies, not a currency's risk
+             * @enum {string}
+             */
+            across_ccys: "yes" | "repr" | "labelled";
         };
         /**
          * RiskTableRow

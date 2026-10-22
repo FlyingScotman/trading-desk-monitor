@@ -262,7 +262,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
 
   // ---------- наши против рынка ----------
   const rvCols = [
-    'name', 'rating', 'tenor', 'ytm',
+    'name', 'ccy', 'issuer', 'rating', 'tenor', 'ytm',
     { key: 'gspread', label: 'G-спред', num: true, fmt: v => f.bp(v) },
     { key: 'mkt', label: 'рынок', num: true, val: r => medOf(r.rating, r.tenor), fmt: v => v == null ? '—' : f.bp(v), title: 'медиана G-спреда рейтинга и срока' },
     { key: 'rv', label: 'разница', num: true, val: r => { const m = medOf(r.rating, r.tenor); return m == null || r.gspread == null ? null : r.gspread - m; }, fmt: v => v == null ? '—' : f.bps(v), style: v => v == null ? '' : K.heat(v, 120), title: '> 0 — бумага дешевле рынка (шире спред)' },

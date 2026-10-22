@@ -69,16 +69,16 @@
     }
     if (tab === 'ccy') {
       // агрегированный риск: валюта — верхний уровень, тип инструмента — разбивка (UI-02, lib/instr.js)
-      const p = panel('Агрегированный риск: валюта × тип инструмента', '<span class="k-note">итог по валюте, из них — по типам · фильтр книг и портфелей шапки</span>');
+      const p = panel('Агрегированный риск: валюта × тип инструмента', '<span class="k-note">по вертикали — валюта, по горизонтали — тип · одна мера · фильтр книг и портфелей шапки</span>');
       p.querySelector('.bd').classList.add('flush', 'scroll');
       view.appendChild(p); K.ccyKindTable(p.querySelector('.bd'));
     }
     if (tab === 'pos') {
-      const p = panel('Позиции', '<span class="k-note">валюта → эмитент → флоатеры / фикс → срок до оферты</span>');
+      const p = panel('Позиции', '<span class="k-note">плоская таблица: валюта и эмитент — обычные столбцы (сортировка, ⏷ фильтр); группы — переключателем</span>');
       p.querySelector('.bd').classList.add('flush'); view.appendChild(p);
       K.table(p.querySelector('.bd'), {
-        rowsFn: () => K.list(), groupBy: K.defaultGroups, stripe: r => K.issuerColor(r.issuer), maxHeight: 'calc(100vh - 290px)',
-        columns: K.cols(['name', 'kind', 'book', 'coupon', 'event', 'maturity', 'tenor', 'notional', 'price', 'ytm', 'spread', 'dur', 'dv01', 'cs01', 'carry', 'pnl', 'mv']),
+        rowsFn: () => K.list(), groupable: K.defaultGroups, stripe: r => K.issuerColor(r.issuer), maxHeight: 'calc(100vh - 290px)',
+        columns: K.cols(['name', 'ccy', 'issuer', 'kind', 'book', 'coupon', 'event', 'maturity', 'tenor', 'notional', 'price', 'ytm', 'spread', 'dur', 'dv01', 'cs01', 'carry', 'pnl', 'mv']),
       });
     }
     if (tab === 'pnl') {
@@ -91,8 +91,8 @@
       K.chart(el2, () => ({ grid: { left: 6, right: 10, top: 28, bottom: 4, containLabel: true }, legend: { top: 0 }, tooltip: { trigger: 'axis', valueFormatter: v => f.mns(v, 2) }, xAxis: { type: 'category', data: M.histDates, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', axisLabel: { formatter: v => f.mn(v, 0) } }, dataZoom: [{ type: 'inside', start: 60 }], series: keys.map(k => ({ name: names[k], type: 'bar', stack: 'p', data: M.hist.pnl[k] })).concat([{ name: 'Итого', type: 'line', data: M.hist.pnl.total, showSymbol: false, color: K.css('--fg') }]) }));
       const t = panel('PnL по позициям'); t.querySelector('.bd').classList.add('flush'); t.style.marginTop = '12px'; view.appendChild(t);
       K.table(t.querySelector('.bd'), {
-        rowsFn: () => K.list(), groupBy: [K.defaultGroups[0]], stripe: r => K.issuerColor(r.issuer), sort: [['pnl', 1]], maxHeight: '60vh',
-        columns: K.cols(['name', 'book', { key: 'pc', label: 'Кэрри', num: true, val: r => r.pnl.carry, fmt: f.k, cls: f.cls, sum: r => r.pnl.carry, unit: 'тыс ₽' }, { key: 'pr', label: 'Ставки', num: true, val: r => r.pnl.rates, fmt: f.k, cls: f.cls, sum: r => r.pnl.rates, unit: 'тыс ₽' }, { key: 'ps', label: 'Спред', num: true, val: r => r.pnl.spread, fmt: f.k, cls: f.cls, sum: r => r.pnl.spread, unit: 'тыс ₽' }, { key: 'pf', label: 'FX', num: true, val: r => r.pnl.fx, fmt: f.k, cls: f.cls, sum: r => r.pnl.fx, unit: 'тыс ₽' }, { key: 'pt', label: 'Сделки', num: true, val: r => r.pnl.trading, fmt: f.k, cls: f.cls, sum: r => r.pnl.trading, unit: 'тыс ₽' }, { key: 'po', label: 'Прочее', num: true, val: r => r.pnl.other, fmt: f.k, cls: f.cls, sum: r => r.pnl.other, unit: 'тыс ₽' }, 'pnl', 'pnlMtd']),
+        rowsFn: () => K.list(), groupable: [K.defaultGroups[0]], groupLabel: 'по валютам', stripe: r => K.issuerColor(r.issuer), sort: [['pnl', 1]], maxHeight: '60vh',
+        columns: K.cols(['name', 'ccy', 'issuer', 'book', { key: 'pc', label: 'Кэрри', num: true, val: r => r.pnl.carry, fmt: f.k, cls: f.cls, sum: r => r.pnl.carry, unit: 'тыс ₽' }, { key: 'pr', label: 'Ставки', num: true, val: r => r.pnl.rates, fmt: f.k, cls: f.cls, sum: r => r.pnl.rates, unit: 'тыс ₽' }, { key: 'ps', label: 'Спред', num: true, val: r => r.pnl.spread, fmt: f.k, cls: f.cls, sum: r => r.pnl.spread, unit: 'тыс ₽' }, { key: 'pf', label: 'FX', num: true, val: r => r.pnl.fx, fmt: f.k, cls: f.cls, sum: r => r.pnl.fx, unit: 'тыс ₽' }, { key: 'pt', label: 'Сделки', num: true, val: r => r.pnl.trading, fmt: f.k, cls: f.cls, sum: r => r.pnl.trading, unit: 'тыс ₽' }, { key: 'po', label: 'Прочее', num: true, val: r => r.pnl.other, fmt: f.k, cls: f.cls, sum: r => r.pnl.other, unit: 'тыс ₽' }, 'pnl', 'pnlMtd']),
       });
     }
     if (tab === 'hist') {

@@ -34,7 +34,11 @@ def der(pid, group, ccy, risk, fx_delta=None, it="OTC", quality="computed", **kw
     ({"instr_type": "BOND", "segment": "Гос", "asset_class": "ОФЗ-ПД"}, "OFZ_PD"),
     ({"instr_type": "BOND", "segment": "Гос", "asset_class": "ОФЗ-ПК", "coupon_type": "float"}, "OFZ_PK"),
     ({"instr_type": "BOND", "segment": "Гос", "asset_class": "ОФЗ-ИН"}, "OFZ_IN"),
-    ({"instr_type": "BOND", "segment": "Гос", "asset_class": "ОФЗ-ПД", "ccy": "USD"}, "SOV_FX"),
+    ({"instr_type": "BOND", "segment": "Гос", "asset_class": "ОФЗ-ПД", "ccy": "USD"}, "MINFIN_FX"),
+    # R39: the Minfin's FX bonds by the hub's class (derived from its INN), never a corporate or a foreign sovereign
+    ({"instr_type": "BOND", "segment": "Корп", "asset_class": "sovereign_fx", "ccy": "USD"}, "MINFIN_FX"),
+    ({"instr_type": "BOND", "segment": "Корп", "asset_class": "sovereign_fx", "ccy": "EUR"}, "MINFIN_FX"),
+    ({"instr_type": "BOND", "segment": "Корп", "asset_class": "foreign_sovereign", "ccy": "USD"}, "CORP_FIX"),
     ({"instr_type": "BOND", "segment": "Суб", "asset_class": "Субфедеральные"}, "SUBFED"),
     ({"instr_type": "BOND", "segment": "Суб", "asset_class": "Муниципальные"}, "MUNI"),
     ({"instr_type": "BOND", "segment": "Корп", "coupon_type": "float"}, "CORP_FLT"),
@@ -114,7 +118,7 @@ def test_legs_each_currency_on_its_own_curves():
     assert rub[("kind", "DER", "CCS")]["dv01_rub"] == pytest.approx(-380.0) and rub[("kind", "DER", "CCS")]["mv_rub"] == 0
     assert usd[("kind", "DER", "CCS")]["dv01_rub"] == pytest.approx(400.0)
     assert usd[("kind", "DER", "CCS")]["dv01_ccy"] == pytest.approx(400.0 / 80) and usd[("kind", "DER", "CCS")]["mv_rub"] == 5
-    assert usd[("kind", "DER", "FX_FUT")]["fx_delta_ccy"] == -5e6 and usd[("kind", "GOV", "SOV_FX")]["n_positions"] == 1
+    assert usd[("kind", "DER", "FX_FUT")]["fx_delta_ccy"] == -5e6 and usd[("kind", "GOV", "MINFIN_FX")]["n_positions"] == 1
     assert usd[("ccy", None, None)]["fx_delta_ccy"] == pytest.approx(1e6 + 1e6 - 5e6 + 2e6)
     assert all(r["dv01_foreign_rub"] == 0 for r in t["rows"])
     assert rub[("kind", "OTH", "UNCLASSIFIED")]["n_positions"] == 1  # shown, never dropped
@@ -160,6 +164,50 @@ def test_totals_only_where_they_sum():
     assert concepts.risk_table(ITEMS, {"USD": 80.0})["rows"][-1]["dv01_ccy"] is None
 
 
+def test_minfin_by_the_issuer():
+    # R39: the issuer the run's reference flags as the Minfin (is_gov: the hub's is_sovereign, INN 7710168360) makes a
+    # bond the Minfin's whatever its class says; in roubles an OFZ kind, in a foreign currency MINFIN_FX
+    eurobond = {"segment": "Корп", "asset_class": "corporate", "issuer": "Минфин России"}
+    gov = frozenset({"Минфин России"})
+    usd = {**bond("E", ccy="USD")["fact"], **eurobond}
+    assert concepts.instr_kind(usd) == "CORP_FIX"
+    assert concepts.instr_kind(usd, gov) == "MINFIN_FX"
+    assert concepts.instr_kind({**usd, "ccy": "RUB"}, gov) == "OFZ_PD"
+    assert concepts.instr_kind({**usd, "asset_class": "foreign_sovereign"}, gov) == "CORP_FIX"
+    regional = {"instr_type": "BOND", "segment": "Суб", "asset_class": "Субфедеральные",
+                "issuer": "Министерство финансов Амурской области"}
+    assert concepts.instr_kind(regional, gov) == "SUBFED"  # a regional Minfin is not the Minfin
+    t = concepts.risk_table([{"position_id": "E", "fact": usd}], FX, gov_issuers=gov)
+    assert [c["kind"] for c in t["columns"]] == ["MINFIN_FX"]
+    assert concepts.KIND_LABEL["MINFIN_FX"].startswith("Минфин")
+
+
+def test_matrix_rows_currencies_columns_kinds():
+    # R38: rows = currencies, columns = the kinds present; a cell = the (ccy, kind) row, a row total = the ccy row,
+    # a column total = the kind over all currencies (what sums, in RUB)
+    t = concepts.risk_table(ITEMS, FX)
+    assert t["ccys"] == ["RUB", "USD", "CNY", "CHF"]
+    order = [k for k, _, _ in concepts.INSTR_KINDS]
+    kinds = [c["kind"] for c in t["columns"]]
+    assert kinds == sorted(kinds, key=order.index)
+    assert set(kinds) == {r["kind"] for r in t["rows"] if r["level"] == "kind"}
+    cells = {(r["ccy"], r["kind"]): r for r in t["rows"] if r["level"] == "kind"}
+    for col in t["columns"]:
+        mine = [r for (_, k), r in cells.items() if k == col["kind"]]
+        for key in ("mv_rub", "notional_rub", "cs01_rub", "ofz_basis_rub"):
+            assert col[key] == pytest.approx(sum(r[key] for r in mine)), (col["kind"], key)
+        assert col["dv01_all_curves_rub"] == pytest.approx(sum(sum(r["dv01_by_curve_rub"].values()) for r in mine))
+    for key in ("mv_rub", "notional_rub", "cs01_rub", "dv01_all_curves_rub", "n_risk_missing"):
+        assert sum(c[key] for c in t["columns"]) == pytest.approx(t["total"][key]), key
+    assert sum(c["fx_delta_rub"] or 0.0 for c in t["columns"]) == pytest.approx(t["total"]["fx_delta_rub"])
+    ccs = next(c for c in t["columns"] if c["kind"] == "CCS")
+    assert ccs["n_positions"] == 1 and ccs["dv01_by_curve_rub"] == {"USD SOFR": 400.0, "RUB RUONIA": -380.0}
+    assert [m["measure"] for m in t["measures"]] == ["dv01", "dv01_curve", "cs01", "ofz_basis", "fx_delta", "mv",
+                                                       "notional", "n_positions"]
+    no_rate = concepts.risk_table(ITEMS, {"USD": 80.0})["columns"]
+    assert next(c for c in no_rate if c["kind"] == "FX_FWD")["fx_delta_rub"] is None  # CNY without its rate
+
+
 def test_route_and_dimension(store_url, book, client):  # noqa: F811
     rid = run(store_url, book)
     t = client.get(f"/api/v1/runs/{rid}/risk-table").json()
@@ -167,6 +215,8 @@ def test_route_and_dimension(store_url, book, client):  # noqa: F811
     assert t["attribution"] == "legs" and t["total"]["n_positions"] == len(ps)
     blocks = [r for r in t["rows"] if r["level"] == "ccy"]
     assert sum(r["n_positions"] for r in blocks) == len(ps)
+    assert t["ccys"] == [r["ccy"] for r in blocks] and sum(c["n_positions"] for c in t["columns"]) == len(ps)
+    assert "OFZ_PD" in {c["kind"] for c in t["columns"]}  # the Minfin's rouble bonds are OFZ kinds
     assert t["total"]["mv_rub"] == pytest.approx(sum(p["fact"]["mv_rub"] for p in ps if p["fact"]))
     assert t["total"]["n_risk_missing"] >= sum(p["fact"] is None for p in ps) >= 1  # the bond unknown to the static
     one = client.get(f"/api/v1/runs/{rid}/risk-table?attribution=position&book=OFZ").json()

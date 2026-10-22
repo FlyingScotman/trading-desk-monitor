@@ -250,10 +250,11 @@ def _py_grouped(con, run_id: int, names: list[str], cols: list[str]) -> list[dic
     An unvalued position has no fact: its key there is null."""
     sel = "".join(f"{c} AS s{i}, " for i, c in enumerate(cols))
     out: dict[tuple, dict[str, Any]] = {}
+    gov = concepts.gov_issuers(con, run_id)  # the Minfin's bonds by the issuer (instr_kind, R39)
     for r in con.execute(f"SELECT {sel}fact, pnl, pv_rub, dv01_rub, cs01_rub FROM run_position WHERE run_id = %s"
                          " ORDER BY ord", (run_id,)):
         sql_keys = iter(r[f"s{i}"] for i in range(len(cols)))
-        key = tuple(next(sql_keys) if d in DIMS else (PY_DIMS[d](r["fact"]) if r["fact"] is not None else None)
+        key = tuple(next(sql_keys) if d in DIMS else (PY_DIMS[d](r["fact"], gov) if r["fact"] is not None else None)
                     for d in names)
         g = out.setdefault(key, {**{f"k{i}": k for i, k in enumerate(key)}, "n_positions": 0, "n_valued": 0,
                                  "n_pnl": 0, **dict.fromkeys(("pv_rub", "dv01_rub", "cs01_rub", *PNL_KEYS))})
@@ -479,11 +480,12 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
                            f"{k}: {v}" for k, v in concepts.ATTRIBUTIONS.items())
                        + f". Default {concepts.ATTRIBUTION_DEFAULT!r}, provisional (UI-02)"),
                    book: str | None = Query(None, description="comma-separated books; all when omitted")):
-        """Aggregated risk: currency x instrument type (UI-02, ``concepts.risk_table``)."""
+        """Aggregated risk as a matrix: currencies x instrument types (UI-02, R38; ``concepts.risk_table``)."""
         run = _run_or_404(con, run_id)
         books = [b.strip() for b in book.split(",") if b.strip()] if book else None
         items, fx = concepts.risk_items(con, run, books)
-        return _cached(request, run, RiskTable(run_id=run_id, **concepts.risk_table(items, fx, attribution)))
+        gov = concepts.gov_issuers(con, run_id)
+        return _cached(request, run, RiskTable(run_id=run_id, **concepts.risk_table(items, fx, attribution, gov)))
 
     @app.get("/api/v1/runs/{run_id}/risk", response_model=RiskPayload)
     def risk(con: Con, run_id: int, request: Request):

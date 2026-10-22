@@ -192,14 +192,46 @@ class RiskTableKind(BaseModel):
     label: str
 
 
+class RiskTableColumn(BaseModel):
+    """A column of the matrix (R38): an instrument kind present, with its total over all currencies (what sums,
+    in RUB)."""
+    kind: str
+    group: str
+    label: str
+    n_positions: int
+    notional_rub: float
+    mv_rub: float
+    dv01_by_curve_rub: dict[str, float]
+    dv01_all_curves_rub: float = Field(description="the sum over curves of different currencies: labelled so")
+    ofz_basis_rub: float
+    cs01_rub: float
+    fx_delta_rub: float | None = Field(description="net FX delta at the run's rates (RUB rows left out); null when "
+                                       "a rate is missing")
+    n_risk_missing: int
+
+
+class RiskTableMeasure(BaseModel):
+    measure: Literal["dv01", "dv01_curve", "cs01", "ofz_basis", "fx_delta", "mv", "notional", "n_positions"]
+    label: str
+    across_ccys: Literal["yes", "repr", "labelled"] = Field(
+        description="whether the measure sums across currencies (the total row, in RUB): yes; repr only at the "
+        "run's rates; labelled: sums, but over curves of different currencies, not a currency's risk")
+
+
 class RiskTable(BaseModel):
+    """The matrix currency x instrument type (R38): ``ccys`` its rows, ``columns`` the kinds present with their
+    totals over all currencies; a cell is the ``rows`` entry of level ``kind`` (ccy, kind), a row total the entry
+    of level ``ccy``, the corner ``total``."""
     run_id: int
     attribution: Literal["legs", "position"]
     attribution_rule: str
     attribution_provisional: bool = Field(description="the rule is provisional: the owner decides (UI-02)")
     cross_ccy_kinds: list[str] = Field(description="the kinds the attribution rule applies to")
     kinds: list[RiskTableKind] = Field(description="the classification's kinds, in the table's order")
+    measures: list[RiskTableMeasure] = Field(description="the matrix's measures (one shown at a time)")
     fx: dict[str, float | None]
+    ccys: list[str] = Field(description="the matrix's rows: currencies, RUB first")
+    columns: list[RiskTableColumn] = Field(description="the matrix's columns: the kinds present, in table order")
     rows: list[RiskTableRow]
     total: RiskTableTotal
 

@@ -11,7 +11,7 @@
  *    иначе только риск); прочие кривые риска — своими строками со своей валютой (CNY implied, прокси, CHF…);
  *  - FX-дельта — по валютам (p.fxDeltaBy = fx_delta {ccy}); p.fxDelta — только в валюте позиции; ноги FX-сделки —
  *    p.legs (extra.legs); DV01 и ОВП по валюте — «по ногам» (lib/instr.js: INSTR.dv01In / INSTR.fxIn);
- *  - тип: GOV PD/PK/IN/SOVFX, SUB FIX/FLT, CORP FIX/FLT, DER OTC/FX, OTH (api/concepts.kind_of); тип инструмента
+ *  - тип: GOV PD/PK/IN/SOVFX (Минфин: в рублях ОФЗ, в валюте — «Минфин валютные», по эмитенту — R39), SUB FIX/FLT, CORP FIX/FLT, DER OTC/FX, OTH (api/concepts.kind_of); тип инструмента
  *    таблицы «валюта × тип» (ОФЗ-ПД, свопы, фьючерсы… по группе продукта отчёта) — lib/instr.js (api/concepts.instr_kind)
  *    из instrType, assetClass, segment, productGroup (extra.reported.x_product_group) и fxDeltaBy позиции;
  *  - срок — до оферты или колла, по которым считается доходность, иначе до погашения;
@@ -164,17 +164,23 @@
 
   // ---------- классификация ----------
   M.groupLabel = { GOV: 'Гос', SUB: 'Суб', CORP: 'Корп', DER: 'Деривативы', OTH: 'Прочее' };
-  M.kindLabel = { PD: 'ОФЗ-ПД (фикс)', PK: 'ОФЗ-ПК (флоатер)', IN: 'ОФЗ-ИН (линкер)', SOVFX: 'Суверен. валютные', FIX: 'Фикс', FLT: 'Флоатер', OTC: 'OTC (по отчёту)', FX: 'Валюта / FX', OTH: 'Прочее', IRS: 'IRS / OIS', KSW: 'Своп на КС', BAS: 'Базис КС/RUONIA', FXF: 'FX форвард', XCCY: 'XCCY' };
-  M.kindShort = { PD: 'ПД', PK: 'ПК', IN: 'ИН', SOVFX: 'Сув', FIX: 'Фикс', FLT: 'Флоат', OTC: 'OTC', FX: 'FX', OTH: 'Пр', IRS: 'IRS', KSW: 'КС-своп', BAS: 'Базис', FXF: 'FX fwd', XCCY: 'XCCY' };
+  M.kindLabel = { PD: 'ОФЗ-ПД (фикс)', PK: 'ОФЗ-ПК (флоатер)', IN: 'ОФЗ-ИН (линкер)', SOVFX: 'Минфин валютные', FIX: 'Фикс', FLT: 'Флоатер', OTC: 'OTC (по отчёту)', FX: 'Валюта / FX', OTH: 'Прочее', IRS: 'IRS / OIS', KSW: 'Своп на КС', BAS: 'Базис КС/RUONIA', FXF: 'FX форвард', XCCY: 'XCCY' };
+  M.kindShort = { PD: 'ПД', PK: 'ПК', IN: 'ИН', SOVFX: 'Минфин вал.', FIX: 'Фикс', FLT: 'Флоат', OTC: 'OTC', FX: 'FX', OTH: 'Пр', IRS: 'IRS', KSW: 'КС-своп', BAS: 'Базис', FXF: 'FX fwd', XCCY: 'XCCY' };
   M.typeRows = [
     { id: 'GOV.PD', group: 'GOV', kind: 'PD', label: 'ОФЗ-ПД' }, { id: 'GOV.PK', group: 'GOV', kind: 'PK', label: 'ОФЗ-ПК (флоатеры)' },
-    { id: 'GOV.IN', group: 'GOV', kind: 'IN', label: 'ОФЗ-ИН' }, { id: 'GOV.SOVFX', group: 'GOV', kind: 'SOVFX', label: 'Суверенные валютные' },
+    { id: 'GOV.IN', group: 'GOV', kind: 'IN', label: 'ОФЗ-ИН' }, { id: 'GOV.SOVFX', group: 'GOV', kind: 'SOVFX', label: 'Минфин валютные (евробонды, замещающие)' },
     { id: 'SUB.FIX', group: 'SUB', kind: 'FIX', label: 'Суб. фикс' }, { id: 'SUB.FLT', group: 'SUB', kind: 'FLT', label: 'Суб. флоатеры' },
     { id: 'CORP.FIX', group: 'CORP', kind: 'FIX', label: 'Корп. фикс' }, { id: 'CORP.FLT', group: 'CORP', kind: 'FLT', label: 'Корп. флоатеры' },
     { id: 'DER.OTC', group: 'DER', kind: 'OTC', label: 'OTC-деривативы (по отчёту)' }, { id: 'DER.FX', group: 'DER', kind: 'FX', label: 'Валюта / FX' },
     { id: 'OTH.OTH', group: 'OTH', kind: 'OTH', label: 'Прочее' },
   ];
   const GOV = { 'ОФЗ-ПД': 'PD', 'ОФЗ-АД': 'PD', 'ОФЗ-ПК': 'PK', 'ОФЗ-ИН': 'IN' };
+  // бумаги Минфина России (R39, api/concepts.is_minfin): по эмитенту, не по списку ISIN — флаг эмитента в справочнике
+  // прогона (gov: is_sovereign хаба, ИНН 7710168360) или класс хаба, выведенный из того же ИНН (ОФЗ: сегмент «Гос»,
+  // ОФЗ-*; валютные бумаги Минфина: sovereign_fx); иностранный суверен (foreign_sovereign) — не Минфин
+  const MINFIN_CLASSES = { sovereign_fx: 1 }, NOT_MINFIN = { foreign_sovereign: 1 };
+  M.isMinfinPos = p => !NOT_MINFIN[p.assetClass] && (p.segment === 'Гос' || !!GOV[p.assetClass] || !!MINFIN_CLASSES[p.assetClass]
+    || !!(p.issuer && ((D.ISSUERS || {})[p.issuer] || {}).gov));
   function kindOf(p) {  // api/concepts.kind_of
     if (p.instrType === 'FX') return ['DER', 'FX'];
     if (p.instrType === 'OTC') return ['DER', 'OTC'];
@@ -183,7 +189,7 @@
     if (!p.instrType && (p.segment === 'FX')) return ['DER', 'FX'];
     if (!p.instrType && p.segment === 'Прочее') return ['OTH', 'OTH'];
     const flt = p.couponType === 'float' ? 'FLT' : 'FIX';
-    if (p.segment === 'Гос' || GOV[p.assetClass]) return (p.ccy || 'RUB') !== 'RUB' ? ['GOV', 'SOVFX'] : ['GOV', GOV[p.assetClass] || 'PD'];
+    if (M.isMinfinPos(p)) return (p.ccy || 'RUB') !== 'RUB' ? ['GOV', 'SOVFX'] : ['GOV', GOV[p.assetClass] || 'PD'];
     if (p.segment === 'Суб') return ['SUB', flt];
     return ['CORP', flt];
   }
