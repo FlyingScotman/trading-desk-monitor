@@ -539,3 +539,73 @@ def test_a_patch_without_the_adapter_keeps_the_installed_one(old_new, tmp_path):
     patch = build.write_patch(old_zip, new, NEW, tmp_path, STAMP)
     doc = update.stage(patch, root, tmp_path / "home")
     assert doc["delete"] == ["app/prototypes/old.js"]
+
+
+# ---- a patch and another build of its base version (the 0.2.0 incident) -----------------------------------------
+
+
+def test_build_id_is_the_builders():
+    m = {"VERSION": "a" * 64, "wheelhouse/x.whl": "b" * 64, "adapter/pkg/__init__.py": "c" * 64,
+         "MANIFEST.sha256": "d" * 64}
+    assert update.build_id(m) == build.build_id(m) and len(update.build_id(m)) == 12
+    assert update.build_id(m) == update.build_id({k: v for k, v in m.items() if k.startswith(("V", "w"))})
+
+
+def test_a_patch_for_another_build_of_the_same_version_says_what_differs(old_new, tmp_path):
+    """The patch was made from a rebuild of the installed version: same VERSION, another core wheel. The message
+    names both builds, the file and both hashes, not the same version twice."""
+    root, _, _ = old_new
+    whl = "wheelhouse/desk_backend-0.1.0-py3-none-any.whl"
+    rebuilt = stage_dir(tmp_path / "rebuilt", bundle(OLD, {whl: b"wheel 1, rebuilt"}))
+    new_same_wheel = stage_dir(tmp_path / "new2", bundle(NEW, {whl: b"wheel 1, rebuilt",
+                                                               "app/prototypes/settings.html": b"<p>2</p>"}))
+    patch = build.write_patch(full_zip(rebuilt, tmp_path / "rebuilt.zip"), new_same_wheel, NEW, tmp_path, STAMP)
+    with update.open_zip(patch) as z:
+        c = update.read_contents(z)
+    assert c.base == OLD and c.base_builds == (build.base_from_zip(tmp_path / "rebuilt.zip").build,)
+    with pytest.raises(update.PatchBaseError) as e:
+        update.stage(patch, root, tmp_path / "home")
+    msg = str(e.value)
+    installed = update.build_id(update.installed_manifest(root))
+    assert f"для версии {OLD} (сборка {c.base_builds[0]})" in msg and f"установлена версия {OLD} (сборка {installed})" in msg
+    assert "Версия та же, но сборка другая" in msg and whl in msg
+    assert build.sha256(new_same_wheel / whl)[:12] in msg and build.sha256(root / whl)[:12] in msg
+    assert f"DeskMonitor-{NEW}.zip" in msg and msg.count(OLD) == 2
+    assert update.describe(patch, root, OLD)["error"] == msg
+
+
+def test_a_patch_only_needs_the_files_it_does_not_ship(old_new, tmp_path):
+    """Files the patch replaces may be anything installed (another build of them); the others must match."""
+    root, new, old_zip = old_new
+    patch = build.write_patch(old_zip, new, NEW, tmp_path, STAMP)
+    (root / "app/prototypes/settings.html").write_bytes(b"<p>another build</p>")  # the patch ships this one
+    have = update.installed_manifest(root)
+    have["app/prototypes/settings.html"] = build.sha256(root / "app/prototypes/settings.html")
+    (root / "MANIFEST.sha256").write_text("".join(f"{d}  {r}\n" for r, d in sorted(have.items())))
+    doc = update.stage(patch, root, tmp_path / "home")
+    assert "app/prototypes/settings.html" in doc["files"]
+
+
+def test_patches_leave_the_installed_adapter_alone(old_new, tmp_path):
+    """A patch of a with-adapter build carries no adapter files and no adapter lines; an older with-adapter patch
+    that lists adapter files without shipping them no longer demands the installed adapter to be that one."""
+    root, new, old_zip = old_new
+    (root / "adapter/pkg").mkdir(parents=True)
+    (root / "adapter/pkg/__init__.py").write_text("installed adapter, version 1")
+    (root / "adapter/pkg/old.py").write_text("x")
+    (new / "adapter/pkg").mkdir(parents=True)
+    (new / "adapter/pkg/__init__.py").write_text("adapter, version 2")
+    build.write_manifest(new, f"# DeskMonitor {NEW}\n")
+    patch = build.write_patch(old_zip, new, NEW, tmp_path, STAMP)
+    with zipfile.ZipFile(patch) as z:
+        assert not [n for n in z.namelist() if "/adapter/" in n]
+        assert b"adapter/" not in z.read("DeskMonitor/MANIFEST.sha256")
+    doc = update.stage(patch, root, tmp_path / "home")
+    assert not [r for r in [*doc["files"], *doc["delete"]] if r.startswith("adapter/")]
+    # the old form: the with-adapter manifest in the patch, the adapter not shipped (it did not change there)
+    legacy = tmp_path / "legacy.zip"
+    with zipfile.ZipFile(patch) as src, zipfile.ZipFile(legacy, "w") as dst:
+        for n in src.namelist():
+            dst.writestr(n, (new / "MANIFEST.sha256").read_bytes() if n.endswith("MANIFEST.sha256") else src.read(n))
+    doc = update.stage(legacy, root, tmp_path / "home")
+    assert not [r for r in [*doc["files"], *doc["delete"]] if r.startswith("adapter/")]

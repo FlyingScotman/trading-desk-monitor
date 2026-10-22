@@ -288,8 +288,12 @@ def _rmtree(p: Path) -> None:
 
 def apply_patch_delete() -> None:
     """A patch zip (``build_windows_bundle.py --patch-base``) lists in ``PATCH_DELETE.txt`` the files the new version
-    no longer has; delete them (inside this folder only), then the list."""
-    (ROOT / "PATCH_BASE.txt").unlink(missing_ok=True)  # the version the patch applies to: for the hot update only
+    no longer has; delete them (inside this folder only), then the list. ``PATCH_BASE.txt`` here means a patch was
+    just unpacked by hand: the files are checked against the new ``MANIFEST.sha256`` first (``check_unpacked``)."""
+    base = ROOT / "PATCH_BASE.txt"  # the build the patch applies to (the hot update checks it before installing)
+    if base.is_file():
+        check_unpacked(base)
+        base.unlink(missing_ok=True)
     listing = ROOT / "PATCH_DELETE.txt"
     if not listing.is_file():
         return
@@ -302,6 +306,29 @@ def apply_patch_delete() -> None:
         except OSError:
             pass
     listing.unlink(missing_ok=True)
+
+
+def check_unpacked(base: Path) -> list[str]:
+    """After a patch unpacked by hand: the files of ``MANIFEST.sha256`` (not ``python\\`` or ``adapter\\``) that
+    are missing or other than listed, i.e. the patch went over another build than the one it was made for; a
+    warning names them (the program usually still runs: same versions, other bytes). The differing paths."""
+    try:
+        lines = (ROOT / "MANIFEST.sha256").read_text(encoding="utf-8-sig").splitlines()
+        made_for = base.read_text(encoding="utf-8-sig").strip()
+    except OSError:
+        return []
+    bad = []
+    for line in lines:
+        digest, _, rel = line.partition("  ")
+        if line.startswith("#") or not rel or rel.startswith(("python/", "adapter/")) or rel == "MANIFEST.sha256":
+            continue
+        p = ROOT.joinpath(*rel.split("/"))
+        if not p.is_file() or sha256(p) != digest:
+            bad.append(rel)
+    if bad:
+        say(f"Внимание: заплатка сделана для {made_for}, а распакована поверх другой сборки: {len(bad)} файлов не "
+            f"совпадают с MANIFEST.sha256, например {bad[0]}. Надёжнее распаковать полный архив этой версии.")
+    return bad
 
 
 def sha256(p: Path) -> str:

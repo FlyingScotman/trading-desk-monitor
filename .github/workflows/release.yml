@@ -2,7 +2,8 @@ name: release
 
 # A version tag v<backend version> (backend/pyproject.toml) publishes a GitHub Release that the in-app updater
 # (backend/src/desk/updater) reads: the Windows bundle DeskMonitor-<version>.zip (never with the private adapter),
-# a patch from the previous release's bundle, SHA256SUMS, release.json and notes with the checksums.
+# patches from the previous release's published bundle and from the last delivered build (backend/tools/delivered),
+# SHA256SUMS, release.json and notes with the checksums.
 # Bump the version, commit, then:  git tag v0.3.0 && git push origin v0.3.0
 # Re-running for an existing tag (Actions -> release -> Run workflow) replaces its assets.
 
@@ -51,21 +52,30 @@ jobs:
           backend/.venv/bin/ruff check backend
           (cd backend && .venv/bin/python -m pytest -q -p no:cacheprovider)
           backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests
-      - name: The previous release's full bundle (base of the patch)
+      - name: The previous release's full bundle, as published (base of the patch)
+        # the patch is made against the bytes that were delivered, never a rebuild that only has the same version
         run: |
           mkdir -p prev
           prev=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 30 \
                    --json tagName --jq '.[].tagName' | grep -vxF "$TAG" | head -n 1 || true)
           if [ -n "$prev" ]; then
             echo "previous release: $prev"
-            gh release download "$prev" --repo "$GITHUB_REPOSITORY" --dir prev --pattern 'DeskMonitor-*.zip' || true
-            rm -f prev/DeskMonitor-patch-*.zip prev/*-with-adapter.zip
+            if gh release download "$prev" --repo "$GITHUB_REPOSITORY" --dir prev \
+                 --pattern 'DeskMonitor-*.zip' --pattern SHA256SUMS; then
+              rm -f prev/DeskMonitor-patch-*.zip prev/*-with-adapter.zip
+              (cd prev && sha256sum --check --ignore-missing --strict SHA256SUMS)
+            else
+              echo "::warning::no full zip of $prev downloaded: no patch from it (the updater installs the full zip)"
+              rm -f prev/*
+            fi
           fi
           ls -la prev
-      - name: Build the Windows bundle (and the patch)
+      - name: Build the Windows bundle (and the patches from the previous release and the last delivered build)
+        # --patch-from-delivered: also a patch from the newest backend/tools/delivered/<version>/ record (what the
+        # owner got outside the releases); one patch per base version, made to fit every known build of it
         run: |
           base=$(ls prev/DeskMonitor-*.zip 2>/dev/null | head -n 1 || true)
-          python3.11 backend/tools/build_windows_bundle.py --out dist ${base:+--patch-base "$base"}
+          python3.11 backend/tools/build_windows_bundle.py --out dist ${base:+--patch-base "$base"} --patch-from-delivered
           ls -la dist
       - name: SHA256SUMS, release.json, notes
         run: >
