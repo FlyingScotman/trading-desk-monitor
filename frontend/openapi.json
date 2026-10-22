@@ -3856,6 +3856,15 @@
             "type": "object",
             "title": "Fx",
             "default": {}
+          },
+          "basis": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Basis",
+            "description": "FX basis shift per currency, bp (core FXBASIS|<ccy>): exact repricing of FX derivatives only, the Taylor has no basis factor",
+            "default": {}
           }
         },
         "additionalProperties": false,

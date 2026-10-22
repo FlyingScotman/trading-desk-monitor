@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import psycopg
 from psycopg.types.json import Jsonb
@@ -174,6 +175,11 @@ class PositionInputs:
     books: dict[str, dict] = field(default_factory=dict)
     """Per book of the sets that has one, its ``book_rev`` in force on the valid date as known at ``known_at``
     (``current_books``: name, desk, book_type, entity, ...): what the run publishes as the book's reference."""
+    trade_terms: list[dict] = field(default_factory=list)
+    """private/1.2 ``trade_terms`` rows in force on the date for the books of the sets (``dataset_rows``): the FX
+    trades ``valuation.derivatives`` values from their terms."""
+    trade_terms_units: list[dict] = field(default_factory=list)
+    """Where those rows came from (``DatasetInputs.units``), for the run's lineage."""
 
 
 LEGACY_SOURCE = "load-positions"
@@ -215,15 +221,24 @@ def positions_for(con: psycopg.Connection, valid_date: date, *, known_at: dateti
             canon_extra[pid] = {k: str(v) for k, v in fields.items()}
             extra[pid] = {k: float(v) if isinstance(v, Decimal) else v for k, v in fields.items()}
             extra[pid].update({k: v for k, v in (("src", src), ("x", x)) if v is not None})
-    # legacy inputs hash as before S7a; inbox rows add their canonical v1 fields (not src, not x: 08 §6.6)
-    canon = json.dumps([rows, canon_extra] if canon_extra else rows, separators=(",", ":"), ensure_ascii=False,
-                       sort_keys=True)
     used = {b for _, b, *_ in sets}
+    # the FX trades of the books (private/1.2 trade_terms, a stock), valued from their terms (valuation.derivatives)
+    terms = dataset_rows(con, "trade_terms", valid_date, known_at=known_at)
+    trade_terms = [r for r in terms.rows if str(r.get("book_id")) in used]
+    canon_terms = sorted(json.dumps({k: v for k, v in r.items() if not k.startswith("_") and k != "x"},
+                                     sort_keys=True, default=str) for r in trade_terms)
+    # legacy inputs hash as before S7a; inbox rows add their canonical v1 fields (not src, not x: 08 §6.6); the
+    # trades' terms only when there are any (books without them keep their hash)
+    parts: Any = ([rows, canon_extra] if canon_extra else rows) if not canon_terms else [rows, canon_extra, canon_terms]
+    canon = json.dumps(parts, separators=(",", ":"), ensure_ascii=False, sort_keys=True)
     return PositionInputs(rows, ids, {b: d for _, b, d, *_ in sets}, known_at,  # type: ignore[arg-type]
                           hashlib.sha256(canon.encode()).hexdigest(), extra,
                           {b: {"source": src, "report_date": rd, "inbox_file_sha256": sha, "file_name": name}
                            for _, b, _, src, rd, sha, name in sets},
-                          {b["book_id"]: b for b in current_books(con, valid_date, known_at) if b["book_id"] in used})
+                          {b["book_id"]: b for b in current_books(con, valid_date, known_at) if b["book_id"] in used},
+                          trade_terms,
+                          [{k: (v.isoformat() if isinstance(v, date) else v) for k, v in u.items()}
+                           for u in terms.units if str((u["scope"] or {}).get("book_id")) in used])
 
 
 def current_sets(con: psycopg.Connection, valid_date: date) -> tuple[list[int], int]:

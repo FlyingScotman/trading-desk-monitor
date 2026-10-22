@@ -54,6 +54,15 @@ layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub
                            and the day's move of the run's USD / EUR curves, so the rates PnL and the scenario shifts
                            of USD/EUR risk use them. Off: they are shown on the market pages as proxies only and the
                            USD/EUR curves of the risk stay without points (R25)
+* ``DESK_FX_FOREIGN_CURVE`` (``fx_implied``) the curve of an FX forward's foreign leg: ``fx_implied`` (the curve implied
+                           from the CETS swap points and FORTS futures, ``<CCY> FX``) or ``xccy`` (CNY: the XCCY curve);
+                           the other is the fallback when absent. ``DESK_FX_IMPLIED_FUTURES`` (on): futures extend the
+                           implied curves past the last swap. ``DESK_FX_SPOT_SOURCE`` (``market``: the MOEX 19:00 chain
+                           of the bonds and the OCP; ``cets_tom``: the CETS TOM close). ``DESK_FX_UNLINKED_TERMS`` (off): a
+                           trade_terms trade no positions row names is valued as a row of its own.
+                           ``DESK_NDF_FIXING_SOURCES`` (``CBR=CBR,ЦБ=CBR,ЦБ РФ=CBR``): the report's NDF fixing source ->
+                           the hub's. ``DESK_FUTURES_BY_TICKER`` (off): a non-bond row naming a FORTS FX future by
+                           ticker is valued by core. All provisional (curves.fx.FxOptions; DECISIONS.md open questions)
 * ``DESK_INBOX_LOOKBACK_DAYS``  the inbox scan and the autopilot's hub sync take report files (by modification
                            time, then by the report date ``match`` gives) and hub dates at most this many days old
                            (35; 0: no limit); a folder holding years of reports is not read. The backfill
@@ -115,6 +124,12 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "autopilot_sync_last": ("DESK_AUTOPILOT_SYNC_LAST", "int"),
     "intraday": ("DESK_INTRADAY", "bool"),
     "proxy_curves_for_risk": ("DESK_PROXY_CURVES_FOR_RISK", "bool"),
+    "fx_foreign_curve": ("DESK_FX_FOREIGN_CURVE", "str"),
+    "fx_implied_futures": ("DESK_FX_IMPLIED_FUTURES", "bool"),
+    "fx_spot_source": ("DESK_FX_SPOT_SOURCE", "str"),
+    "fx_unlinked_terms": ("DESK_FX_UNLINKED_TERMS", "bool"),
+    "ndf_fixing_sources": ("DESK_NDF_FIXING_SOURCES", "str"),
+    "futures_by_ticker": ("DESK_FUTURES_BY_TICKER", "bool"),
     "inbox_lookback_days": ("DESK_INBOX_LOOKBACK_DAYS", "int0"),
     "update_dir": ("DESK_UPDATE_DIR", "path"),
     "history_days": ("DESK_HISTORY_DAYS", "int0"),
@@ -187,6 +202,13 @@ class Settings:
     autopilot_sync_last: int = 5
     intraday: bool = True  # the autopilot values today's book on the hub's intraday / preliminary cuts (R11)
     proxy_curves_for_risk: bool = False  # UST par / ECB AAA / Bund proxies as the run's USD/EUR curves (R25; not OIS)
+    # provisional FX choices (curves.fx.FxOptions; docs/program/DECISIONS.md open questions)
+    fx_foreign_curve: str = "fx_implied"  # an FX forward's foreign leg: fx_implied (swap points) or xccy (CNY)
+    fx_implied_futures: bool = True  # FORTS FX futures past the last swap point extend the FX-implied curves
+    fx_spot_source: str = "market"  # FX forwards' spot: market (MOEX 19:00 chain, as bonds) or cets_tom
+    fx_unlinked_terms: bool = False  # value a trade_terms trade no positions row names as a row of its own
+    ndf_fixing_sources: str = "CBR=CBR,ЦБ=CBR,ЦБ РФ=CBR"  # the report's NDF fixing source -> the hub's
+    futures_by_ticker: bool = False  # a non-bond row naming a FORTS FX future by ticker is valued by core (P3)
     inbox_lookback_days: int = 35  # report dates at most this many days old (R22); 0: no limit
     history_days: int = 260  # hub business dates of market history for the bond charts (~1 year); 0: the cache only
     history_bonds_from: date = date(2024, 1, 3)  # the hub's history API: bonds from (its bond EOD starts here)
@@ -257,6 +279,12 @@ class Settings:
             ("intraday", "on" if self.intraday else "off"),
             ("proxy_curves_for_risk", "on (UST par / ECB AAA / Bund, not OIS)" if self.proxy_curves_for_risk
              else "off (proxies shown only)"),
+            ("fx_foreign_curve", self.fx_foreign_curve + " (provisional)"),
+            ("fx_implied_futures", "on" if self.fx_implied_futures else "off"),
+            ("fx_spot_source", self.fx_spot_source),
+            ("fx_unlinked_terms", "on" if self.fx_unlinked_terms else "off"),
+            ("ndf_fixing_sources", self.ndf_fixing_sources),
+            ("futures_by_ticker", "on" if self.futures_by_ticker else "off"),
             ("inbox_lookback_days", str(self.inbox_lookback_days) if self.inbox_lookback_days else "0 (no limit)"),
             ("update_dir", str(self.update_dir or "none")),
             ("history_days", str(self.history_days) if self.history_days else "0 (off: the cached dates only)"),
@@ -493,6 +521,12 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
             raise SettingsError(f"{key}: expected 1/0, true/false, yes/no or on/off, not {v!r}")
         return v in _TRUE if v else default
 
+    def choice(key: str, default: str, allowed: tuple[str, ...]) -> str:
+        v = (get(key) or default).strip().lower()
+        if v not in allowed:
+            raise SettingsError(f"{key}: expected one of {', '.join(allowed)}, not {v!r}")
+        return v
+
     def day(key: str, default: date) -> date:
         v = (get(key) or "").strip()
         if v and not _is_date(v):
@@ -558,6 +592,12 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         autopilot_sync_last=count("DESK_AUTOPILOT_SYNC_LAST", defaults.autopilot_sync_last),
         intraday=flag("DESK_INTRADAY", defaults.intraday),
         proxy_curves_for_risk=flag("DESK_PROXY_CURVES_FOR_RISK", defaults.proxy_curves_for_risk),
+        fx_foreign_curve=choice("DESK_FX_FOREIGN_CURVE", defaults.fx_foreign_curve, ("fx_implied", "xccy")),
+        fx_implied_futures=flag("DESK_FX_IMPLIED_FUTURES", defaults.fx_implied_futures),
+        fx_spot_source=choice("DESK_FX_SPOT_SOURCE", defaults.fx_spot_source, ("market", "cets_tom")),
+        fx_unlinked_terms=flag("DESK_FX_UNLINKED_TERMS", defaults.fx_unlinked_terms),
+        ndf_fixing_sources=(get("DESK_NDF_FIXING_SOURCES") or defaults.ndf_fixing_sources).strip(),
+        futures_by_ticker=flag("DESK_FUTURES_BY_TICKER", defaults.futures_by_ticker),
         inbox_lookback_days=count("DESK_INBOX_LOOKBACK_DAYS", defaults.inbox_lookback_days, 0),
         history_days=count("DESK_HISTORY_DAYS", defaults.history_days, 0),
         history_bonds_from=day("DESK_HISTORY_BONDS_FROM", defaults.history_bonds_from),

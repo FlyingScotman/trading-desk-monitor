@@ -241,6 +241,8 @@ class ScenarioDefinition(BaseModel):
     ofzSpread: float = 0
     spreads: SpreadRules | None = None
     fx: dict[str, float] = {}
+    basis: dict[str, float] = Field(default={}, description="FX basis shift per currency, bp (core FXBASIS|<ccy>): "
+                                    "exact repricing of FX derivatives only, the Taylor has no basis factor")
 
 
 class ScenarioDefOut(BaseModel):

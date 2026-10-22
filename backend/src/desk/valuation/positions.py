@@ -12,11 +12,17 @@ core (``direct``). ``merge`` puts the two back in the inputs' order for ``desk_r
 - Unmapped bond (no instrument, or no number of bonds): rung ``reported_value``, the bank's own figure: ``mv_rub``,
   else ``mark_price_pct`` x face (+ ``accrued_ccy``) at the CBR rate; the report's risk (``reported_risk``) when it
   gives one, else none (DV01 and CS01 0). Nothing at all: not valued, reason ``unmapped_instrument``.
-- FX row: its FX delta is always the amount in currency (``tdm_run.direct_row``), no rates risk. Spot or cash (no
-  ``value_date``, or one not after the business date): PV = ``amount_ccy`` x the rate of the business date
+- FX or OTC row with its trade's terms (private/1.2 ``trade_terms``: an FX forward, NDF, FX swap or cross), or a FORTS
+  FX future named by ticker (setting ``futures_by_ticker``): valued by core ``value_portfolio`` v3
+  (``valuation.derivatives``): PV, rates risk on ``RUB RUONIA`` and the foreign curve, FX delta per currency (core's
+  spot equivalent), basis, fixing status. When core cannot (no curve, no spot, a fixing missing), the row keeps the
+  rule below with the reason first in its assumptions.
+- FX row without terms: its FX delta is the amount in currency (``tdm_run.direct_row``), no rates risk. Spot or cash
+  (no ``value_date``, or one not after the business date): PV = ``amount_ccy`` x the rate of the business date
   (``fallback.fx_rate``; RUB at 1), quality ``market_value``. A forward (``value_date`` after the business date: an
   NDF, an FX future, an unsettled leg): PV = the report's ``mv_rub`` (``reported_value``), else 0 (``assumed``, said
-  in the assumptions); its amount counts in the open currency position, never in MV.
+  in the assumptions), flagged ``no_trade_terms`` (the notional as FX delta, undiscounted); its amount counts in the
+  open currency position, never in MV.
 - OTC and other rows (and any asset class this module does not know): rung ``reported_value`` at the report's
   ``mv_rub``, with its risk (``reported_risk``): ``risk_dv01_rub`` in the rates bucket of ``RISK_BUCKETS`` whose pillar
   is nearest ``maturity_date`` (no maturity, or one already past: the shortest bucket, said in the assumptions), on
@@ -37,6 +43,7 @@ from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
 from ..inbox.schema import load_schema, norm_ccy
 from ..orchestrator import EodContext, Outcome
 from ..store import PositionInputs
+from . import derivatives as dv
 from .bonds import BondValuation, ccy_curve, face_on
 from .fallback import fx_rate
 
@@ -57,6 +64,12 @@ class BookPlan:
     """(position_id, book_id) of every input row, in ``inputs.rows`` order."""
     notes: dict[str, list[str]] = field(default_factory=dict)
     """position_id -> notes of a request (resolution, face, mismatch), added to its assumptions by ``merge``."""
+    core_result: Any = None
+    """The core result (v3) of the derivatives valued from their terms (``valuation.derivatives``), None without."""
+    unlinked_terms: list[str] = field(default_factory=list)
+    """``book|trade_id`` of the trade_terms trades no positions row names (not valued unless ``fx_unlinked_terms``)."""
+    added: list[str] = field(default_factory=list)
+    """Position IDs of the trades added with ``fx_unlinked_terms`` (rows of their own, in ``order`` and ``direct``)."""
 
 
 def _index(ctx: EodContext) -> dict[str, dict[str, str | None]]:
@@ -240,10 +253,99 @@ def normalised(x: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def plan(ctx: EodContext, inputs: PositionInputs) -> BookPlan:
-    """Requests for core and the outcomes of the rows valued here, in ``inputs.rows`` order."""
+NO_TERMS = "no_trade_terms"
+"""Reason of an FX forward row without its trade's terms: the report's value (or 0) and the notional as FX delta."""
+
+
+def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_order: bool
+                 ) -> dict[str, BondValuation | dv.NotValued]:
+    """The FX and OTC rows valued by core (``valuation.derivatives``): those with trade_terms, a FORTS FX future by
+    ticker (setting ``futures_by_ticker``), and with ``fx_unlinked_terms`` the trades no row names (added to the
+    plan as rows of their own). Returns per position ID the valuation or why core did not value it."""
+    opts = ctx.fx_options
+    rows = []
+    for pid, book, _, _ in inputs.rows:
+        x = inputs.extra.get(pid)
+        if x is not None and (x.get("asset_class") or "bond").lower() != "bond":
+            rows.append((pid, book, normalised(x)))
+    linked, unlinked = dv.link(rows, inputs.trade_terms)
+    p.unlinked_terms = sorted({f"{t.get('book_id')}|{t.get('trade_id')}" for t in unlinked})
+    reqs, out = [], {}
+    qty = {pid: q for pid, _, _, q in inputs.rows}
+    for pid, book, x in rows:
+        if pid in linked:
+            try:
+                reqs.append(dv.Request(pid, book, x, [dv.TermsLeg.of(t) for t in linked[pid]]))
+            except dv.NotValued as e:
+                out[pid] = e
+        elif opts.futures_by_ticker and (f := _future_row(ctx, x)) is not None:
+            n = qty.get(pid) if qty.get(pid) is not None else x.get("amount_ccy")
+            if n is None:
+                out[pid] = dv.NotValued("no_quantity", f"future {f['secid']}: no number of contracts")
+            else:
+                reqs.append(dv.Request(pid, book, x, future=f, contracts=float(n)))
+    if opts.unlinked_terms and unlinked:
+        trades: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+        for t in unlinked:
+            trades[(str(t.get("book_id")), str(t.get("trade_id")))].append(t)
+        for (book, trade), ts in sorted(trades.items()):
+            pid = f"{book}|{trade}"
+            try:
+                legs = [dv.TermsLeg.of(t) for t in ts]
+            except dv.NotValued as e:
+                p.unlinked_terms.append(f"{pid}: {e}")
+                continue
+            ccy = next((c for t in legs for c in (t.base, t.quote) if c != "RUB"), "RUB")
+            x = {"asset_class": "fx", "ccy": ccy, "deal_id": trade, "source_instrument_id": trade,
+                 "source_instrument_name": f"{legs[0].base}/{legs[0].quote} {legs[0].product} {trade}",
+                 "value_date": max(t.value_date for t in legs)}
+            inputs.extra[pid] = x
+            p.order.append((pid, book))
+            reqs.append(dv.Request(pid, book, x, legs))
+            p.added.append(pid)
+    valued, result = dv.value(ctx, reqs, options=opts, second_order=second_order)
+    p.core_result = result
+    return {**out, **valued}
+
+
+def _future_row(ctx: EodContext, x: dict[str, Any]) -> dict[str, Any] | None:
+    """The FORTS FX future a non-bond row names by ticker (``moex_secid``, else ``source_instrument_id``)."""
+    for k in ("moex_secid", "source_instrument_id"):
+        if x.get(k) and (f := ctx.market.future(str(x[k]))) is not None and f.get("is_fx"):
+            return f
+    return None
+
+
+def _core_outcome(v: BondValuation, result: Any) -> Outcome:
+    o = Outcome(None, None, None, valuation=v)  # type: ignore[arg-type]
+    o.core_result = result
+    return o
+
+
+def _not_by_core(o: Outcome, e: dv.NotValued) -> Outcome:
+    """A row core did not value from its terms: its earlier rule, the reason said."""
+    note = f"trade terms not valued by core ({e.reason}{': ' + e.detail if e.detail else ''}): the report's rule"
+    if o.valuation is not None:
+        o.valuation = replace(o.valuation, assumptions=(note, *o.valuation.assumptions))
+    o.reason = o.reason or e.reason
+    o.detail = o.detail or e.detail
+    return o
+
+
+def plan(ctx: EodContext, inputs: PositionInputs, *, second_order: bool = True) -> BookPlan:
+    """Requests for core and the outcomes of the rows valued here, in ``inputs.rows`` order (then the trades added
+    with ``fx_unlinked_terms``). The FX and OTC rows with trade terms (or an FX future by ticker) are valued by core
+    (``valuation.derivatives``); the others, and those core rejects, keep the rule of the module docstring."""
     p = BookPlan([], [], {}, [(pid, book) for pid, book, _, _ in inputs.rows])
     index = None
+    by_core = _derivatives(ctx, inputs, p, second_order)
+    for pid in p.added:
+        v = by_core.get(pid)
+        if isinstance(v, BondValuation):
+            p.direct[pid] = _core_outcome(v, p.core_result)
+        else:
+            p.direct[pid] = Outcome(None, None, None, reason=v.reason if v else "not_valued",  # type: ignore[arg-type]
+                                    detail=v.detail if v else "")
     for pid, _, secid, qty in inputs.rows:
         x = inputs.extra.get(pid)
         if x is None:  # a legacy row: a bond with secid and quantity
@@ -253,11 +355,22 @@ def plan(ctx: EodContext, inputs: PositionInputs) -> BookPlan:
         x = normalised(x)
         qty = None if qty is None else float(qty)
         kind = (x.get("asset_class") or "bond").lower()
+        core = by_core.get(pid)
+        if isinstance(core, BondValuation):
+            p.direct[pid] = _core_outcome(core, p.core_result)
+            continue
         if kind == "fx":
-            p.direct[pid] = _fx(ctx, x)
+            o = _fx(ctx, x)
+            if core is not None:
+                o = _not_by_core(o, core)
+            elif x.get("value_date") is not None and x["value_date"] > ctx.business_date and o.valuation is not None:
+                o = _not_by_core(o, dv.NotValued(NO_TERMS, "no trade_terms row names this position: FX delta = "
+                                                           "the notional, undiscounted"))
+            p.direct[pid] = o
             continue
         if kind != "bond":
-            p.direct[pid] = _otc(ctx, qty, x, kind)
+            o = _otc(ctx, qty, x, kind)
+            p.direct[pid] = _not_by_core(o, core) if core is not None else o
             continue
         notes = []
         if secid is None or secid not in ctx.static.bonds:

@@ -71,12 +71,13 @@ def test_key_rate_floater_projects_off_the_key_rate_curve(ctx, outs):
     assert v.accrued_rub == 8.98  # MOEX's; ours (10.36 * 26/30) agrees, so no mismatch flag
 
 
-def test_floater_without_moex_accrued_is_computed_and_flagged(ctx, outs):
+def test_floater_without_moex_accrued_is_computed_by_core(ctx, outs):
     o = outs[KEY]
     q = dataclasses.replace(o.quote, accrued_per_bond=None)
     (v,) = value_one(ctx, o.terms, q)
     assert v.accrued_rub == 8.98
-    assert v.assumptions[-1] == "accrued computed: no MOEX accrued"  # the published 10.36 pro rata
+    # the published 10.36 pro rata is exact (core 0.33): no assumption, the quality is not lowered
+    assert not any(a.startswith("accrued computed") for a in v.assumptions)
 
 
 def test_accrued_mismatch_keeps_the_valuation(ctx, outs):

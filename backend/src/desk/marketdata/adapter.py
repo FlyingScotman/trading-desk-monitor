@@ -193,21 +193,60 @@ def _easter(y: int) -> date:
     return date(y, month, day + 1)
 
 
+def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
+    """The ``n``-th ``weekday`` (Monday 0) of the month; ``n`` = -1: the last one."""
+    if n < 0:
+        d = (date(year + month // 12, month % 12 + 1, 1)) - timedelta(days=1)
+        return d - timedelta(days=(d.weekday() - weekday) % 7)
+    d = date(year, month, 1)
+    return d + timedelta(days=(weekday - d.weekday()) % 7 + 7 * (n - 1))
+
+
+def _observed(d: date) -> date:
+    """A US federal holiday on a Saturday is observed on the Friday, on a Sunday on the Monday."""
+    return d - timedelta(days=1) if d.weekday() == 5 else d + timedelta(days=1) if d.weekday() == 6 else d
+
+
+RUSSIAN_CALENDARS = ("MOEX_", "RU_")
+"""Calendar names (prefixes) extended by the fixed Russian public holidays (``RU_FIXED_HOLIDAYS``)."""
+
+
 def _rule_holidays(name: str, year: int) -> set[date]:
+    """Fixed-rule holidays of a calendar for a year past the hub's ``valid_to`` (provisional, ``core_calendar``).
+
+    Russian calendars (``RUSSIAN_CALENDARS``): the fixed public holidays. TARGET: 1 Jan, Good Friday, Easter Monday,
+    1 May, 25-26 Dec. US_FED: the eleven federal holidays (fixed dates observed off weekends, the n-th weekdays).
+    CH_ZURICH: 1-2 Jan, Good Friday, Easter Monday, 1 May, Ascension, Whit Monday, 1 Aug, 25-26 Dec. CN_INTERBANK: 1
+    Jan, 1 May and 1-3 Oct only (the lunar holidays and the make-up weekends are decreed yearly: unknown). Any other
+    calendar: weekends only, never another country's holidays."""
     if name == "TARGET":
         e = _easter(year)
         return {date(year, 1, 1), e - timedelta(days=2), e + timedelta(days=1), date(year, 5, 1),
                 date(year, 12, 25), date(year, 12, 26)}
-    return {date(year, m, d) for m, d in RU_FIXED_HOLIDAYS}
+    if name == "US_FED":
+        fixed = {_observed(date(year, m, d)) for m, d in ((1, 1), (6, 19), (7, 4), (11, 11), (12, 25))}
+        return fixed | {_nth_weekday(year, 1, 0, 3), _nth_weekday(year, 2, 0, 3), _nth_weekday(year, 5, 0, -1),
+                        _nth_weekday(year, 9, 0, 1), _nth_weekday(year, 10, 0, 2), _nth_weekday(year, 11, 3, 4)}
+    if name == "CH_ZURICH":
+        e = _easter(year)
+        return {date(year, 1, 1), date(year, 1, 2), e - timedelta(days=2), e + timedelta(days=1), date(year, 5, 1),
+                e + timedelta(days=39), e + timedelta(days=50), date(year, 8, 1), date(year, 12, 25),
+                date(year, 12, 26)}
+    if name == "CN_INTERBANK":
+        return {date(year, 1, 1), date(year, 5, 1), date(year, 10, 1), date(year, 10, 2), date(year, 10, 3)}
+    if name.startswith(RUSSIAN_CALENDARS):
+        return {date(year, m, d) for m, d in RU_FIXED_HOLIDAYS}
+    return set()
 
 
 def core_calendar(c: dict[str, Any]) -> tuple[BusinessCalendar, date | None]:
     """Core calendar of one hub calendar row and the date its days stop being official (``provisional_from``).
 
-    Past the hub's ``valid_to`` the calendar is extended to ``CALENDAR_HORIZON`` by fixed rules: weekends plus
-    the fixed Russian public holidays (TARGET: 1 Jan, Good Friday, Easter Monday, 1 May, 25-26 Dec). Holiday
-    transfers to weekdays are decreed yearly and unknown, so they are not modelled. ``provisional_from`` is the
-    hub's own or ``valid_to + 1``, whichever is earlier.
+    Past the hub's ``valid_to`` the calendar is extended to ``CALENDAR_HORIZON`` by its own fixed rules
+    (``_rule_holidays``: the fixed Russian public holidays for a Russian calendar, TARGET's, US_FED's, CH_ZURICH's,
+    CN_INTERBANK's fixed days; weekends only for a calendar without rules, never Russian holidays). Holiday transfers
+    to weekdays are decreed yearly and unknown, so they are not modelled. ``provisional_from`` is the hub's own or
+    ``valid_to + 1``, whichever is earlier.
     """
     vf, vt = date.fromisoformat(c["valid_from"]), date.fromisoformat(c["valid_to"])
     holidays = {date.fromisoformat(x) for x in c["holidays"]}
@@ -324,6 +363,10 @@ class MarketView:
         self.zcyc = d["zcyc_params"][0]
         self.fixings = d["fixings"]
         self.fx_rates = d["fx_rates"]
+        self.fx_swaps: list[dict[str, Any]] = d.get("fx_swaps") or []
+        """Contract 1.4: MOEX CETS swaps (swap points as published and per one unit); empty before 1.4."""
+        self.futures_prices: list[dict[str, Any]] = d.get("futures_prices") or []
+        """Contract 1.4: FORTS settlement prices of the business date (FX, rate and index futures)."""
         self.curve_quote_sets = d["curve_quote_sets"]
         self.stale = {ds["name"]: ds["stale_reasons"] for ds in snap.doc["datasets"] if ds["stale"]}
 
@@ -379,6 +422,64 @@ class MarketView:
             "cets_close": _f(tom[0].get("close_rub_per_unit") or tom[0].get("waprice_rub_per_unit")) if tom else None,
         }
 
+    def fx_settlement(self, ccy: str) -> tuple[date | None, tuple[str, ...]]:
+        """The TOM value date of ``ccy`` against RUB for trades of the business date (contract 1.4 ``settle_date`` of
+        the CETS TOM row; None when the hub did not observe it, or before 1.4) and the hub calendars whose joint
+        business days the pair settles on (``settlement_calendars``: MOEX_FX plus the currency's; ``("MOEX_FX",)``
+        before 1.4)."""
+        bd = self.business_date.isoformat()
+        rows = [r for r in self.fx_rates if r["kind"] == "moex_eod" and r["ccy"] == ccy and r.get("trade_date") == bd
+                and (r.get("tenor") or "").upper() == "TOM"]
+        rows.sort(key=lambda r: (r.get("board") != "CETS", r.get("settle_date") is None))
+        settle = next((date.fromisoformat(r["settle_date"]) for r in rows if r.get("settle_date")), None)
+        cals = next((tuple(r["settlement_calendars"]) for r in rows if r.get("settlement_calendars")), ("MOEX_FX",))
+        return settle, cals
+
+    def fx_swap_quotes(self, ccy: str) -> list[dict[str, Any]]:
+        """The business date's CETS swaps of ``ccy``/RUB with a price: per (near leg, far leg) the row with observed
+        settlement dates first, then board CETS, then the most trades. ``points`` is the close per one unit
+        (``close_rub_per_unit``; MOEX keeps a 0 close on a day with trades, then the weighted price)."""
+        bd = self.business_date.isoformat()
+        best: dict[tuple[str, str], tuple[tuple, dict[str, Any]]] = {}
+        for r in self.fx_swaps:
+            if r.get("base_ccy") != ccy or r.get("quote_ccy", "RUB") != "RUB" or r.get("trade_date") != bd:
+                continue
+            close, wap = _d(r.get("close_rub_per_unit")), _d(r.get("waprice_rub_per_unit"))
+            pts = close if close else wap
+            if pts is None or not r.get("near_leg") or not r.get("far_leg"):
+                continue
+            key = (r["near_leg"].upper(), r["far_leg"].upper())
+            rank = (r.get("near_settle_date") is None, r.get("board") != "CETS", -(r.get("num_trades") or 0))
+            if key not in best or rank < best[key][0]:
+                best[key] = (rank, {**r, "points": float(pts)})
+        return [v for _, v in sorted(best.values(), key=lambda x: (x[1]["near_leg"], x[1]["far_leg"]))]
+
+    def fx_futures(self, ccy: str) -> list[dict[str, Any]]:
+        """Dated FORTS FX futures on ``ccy``/RUB of the business date with a settlement price per one unit
+        (``settle_rub_per_unit``) and a delivery date, by delivery date."""
+        bd = self.business_date.isoformat()
+        rows = [r for r in self.futures_prices if r.get("is_fx") and r.get("base_ccy") == ccy
+                and (r.get("quote_ccy") or "RUB") == "RUB" and r.get("trade_date") == bd
+                and r.get("settle_rub_per_unit") and r.get("last_del_date") and r.get("contract_type") != "perpetual"]
+        return sorted(rows, key=lambda r: r["last_del_date"])
+
+    def future(self, secid: str) -> dict[str, Any] | None:
+        """The business date's FORTS row of a contract by its ticker (``SiZ6``), None when the snapshot has none."""
+        bd = self.business_date.isoformat()
+        return next((r for r in self.futures_prices if r.get("secid") == secid and r.get("trade_date") == bd), None)
+
+    def cbr_fixings(self) -> list[dict[str, Any]]:
+        """The CBR official rates of the snapshot as NDF fixings: (ccy, set date, RUB per one unit). A rate set on D is
+        the CBR fixing of D (in force on the next calendar day)."""
+        out = []
+        for r in self.fx_rates:
+            if r["kind"] != "cbr_official" or not r.get("set_date") or not r.get("rate_rub_per_unit"):
+                continue
+            d = date.fromisoformat(str(r["set_date"])[:10])
+            if d <= self.business_date:
+                out.append({"ccy": r["ccy"], "fixing_date": d, "rate": float(Decimal(r["rate_rub_per_unit"]))})
+        return out
+
 
 def price_observation(secid: str, basis: str, clean_pct: float, accrued: Decimal | None) -> BondPriceObservation:
     """The quote the backend selected, with the MOEX accrued as given (core does not recompute it; without
@@ -408,6 +509,13 @@ def put_offers(terms: BondTerms, after: date, offer: tuple[date, Decimal, str]) 
     chosen = cands.get(d)
     out[d] = CoreOffer(d, OfferKind.PUT, True, float(price), *(_window(chosen, d) if chosen else (None, None)))
     return tuple(out[k] for k in sorted(out))
+
+
+def bond_currency(terms: BondTerms) -> str:
+    """The currency core values a bond in: its face unit (a foreign-face bond: CNY, USD, EUR; its coupons and
+    redemptions are amounts in it, MOEX's price % of it), else its currency, else RUB (``RUR``/``SUR`` are RUB)."""
+    c = (terms.face_unit or terms.currency or "RUB").upper()
+    return "RUB" if c in ("RUR", "SUR") else c
 
 
 def core_instrument(terms: BondTerms, after: date, horizon: date, offer: tuple[date, Decimal, str] | None = None, *,
@@ -481,6 +589,7 @@ def core_instrument(terms: BondTerms, after: date, horizon: date, offer: tuple[d
     elif offer is not None and not redeem_at_horizon:
         offers = put_offers(terms, after, offer)
     return Instrument(
-        terms.secid, ProductType.FLOATING_BOND if isinstance(leg, FloatingCouponLeg) else ProductType.FIXED_BOND, "RUB", face, leg, principal,
+        terms.secid, ProductType.FLOATING_BOND if isinstance(leg, FloatingCouponLeg) else ProductType.FIXED_BOND,
+        bond_currency(terms), face, leg, principal,
         terms.calendar, offers=offers, settlement_lag_days=0, isin=terms.isin,
         issuer_id=None if terms.issuer_id is None else str(terms.issuer_id))
