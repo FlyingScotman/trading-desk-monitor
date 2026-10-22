@@ -48,7 +48,7 @@ This document complements, and does not replace, [EXECUTION_SPEC.md](../../progr
 | rub-fixed-income-core | **Good kernel, narrow scope** | Pure, strictly typed, well-tested math for *fixed-coupon RUB bonds* and their rates/spread risk. No floaters, FX, swaps on positions, carry/roll, holiday calendars, market-snapshot or portfolio abstraction. |
 | tdm (store + API) | **Good contract, weak time model** | Thorough versioned data contract and run lifecycle. It is a *results store plus backend-for-frontend*: it calculates no pricing or risk. Inputs are current-version only, published runs are mutated in place, and missing data becomes zero. |
 | Frontend prototypes | **Feature-rich, untrustworthy numbers** | Five screens with a lot of functionality: a good functional spec. But PnL nulls become zeros differently on each screen, two break thresholds coexist, history is fabricated under filters, and partial scenario results are labelled "full revaluation". |
-| PnL explain | **Does not exist** | `pnl_tool` is an *accounting-PnL analytics* tool for the bank's TradeLevel report, not an explain engine. Core has a Taylor-vs-exact building block. Nothing computes carry, rolldown, new trades, funding or residual. |
+| PnL explain | **Does not exist** | `pnl_tool` is an *accounting-PnL analytics* tool for the official trade-level PnL report, not an explain engine. Core has a Taylor-vs-exact building block. Nothing computes carry, rolldown, new trades, funding or residual. |
 
 **Your four-or-five-module picture is right**, with two corrections:
 
@@ -68,7 +68,7 @@ flowchart LR
   subgraph WORK["Work PC (private, localhost)"]
     CLI[mdhub-client<br/>typed, cached, ISIN/SECID map] --> ENG
     API -. broad bundle download only .-> CLI
-    FILES[internal files:<br/>positions, trades, OTC terms,<br/>funding, cash, official PnL] --> ADP[input adapters<br/>incl. pnl_tool TradeLevel reader]
+    FILES[internal files:<br/>positions, trades, OTC terms,<br/>funding, cash, official PnL] --> ADP[input adapters<br/>incl. pnl_tool official-PnL reader]
     ADP --> ENG[desk engine<br/>EOD job + scenario worker<br/>funding / OCP / HTM rules]
     CORE[(rub-fixed-income-core<br/>pure pricing + risk)] --> ENG
     ENG --> PNL[pnl explain module<br/>T-1 vs T, trades, official,<br/>breaks register]
@@ -217,9 +217,9 @@ The reviewed package is 4,081 lines in 18 modules. The roughly 86k lines on disk
 
 **Well done.** The best data-integrity engineering in the project:
 - SHA-256 idempotent imports.
-- Snapshot-boundary revisions (date + ENTITY + Book) with explicit overlap policies, so rows removed by a correction disappear.
+- Snapshot-boundary revisions (date + entity + book) with explicit overlap policies, so rows removed by a correction disappear.
 - No silent zeros; Decimal-exact storage.
-- A row-level IFRS = DFPL + OCI identity check.
+- A row-level check that the total equals its P&L and OCI parts.
 - A stdlib-only XLSX reader.
 - A privacy-preserving report profiler.
 
@@ -227,8 +227,8 @@ The reviewed package is 4,081 lines in 18 modules. The roughly 86k lines on disk
 
 | # | Issue |
 |---|---|
-| PNL-1 | **It is not PnL explain.** It works only on reported accounting PnL (IFRS/DFPL/OCI), with no positions, market data or risk. |
-| PNL-2 | **"Official PnL" is undefined across modules.** pnl_tool holds trade-level *accounting* PnL keyed by trade `Key`. tdm expects *management* PnL by position at CBR basis, including funding. Nobody has stated whether TradeLevel IFRS_Daily *is* `pnl_official`, whether its FX revaluation uses CBR rates, or whether it includes funding. **This blocks every reconciliation claim.** |
+| PNL-1 | **It is not PnL explain.** It works only on reported accounting PnL (total, P&L and OCI parts), with no positions, market data or risk. |
+| PNL-2 | **"Official PnL" is undefined across modules.** pnl_tool holds trade-level *accounting* PnL keyed by trade id. tdm expects *management* PnL by position at CBR basis, including funding. Nobody has stated whether the official trade-level PnL report's daily total *is* `pnl_official`, whether its FX revaluation uses CBR rates, or whether it includes funding. **This blocks every reconciliation claim.** |
 | PNL-3 | **No version control.** History exists only as zips in the project root. The code is audit-relevant. Keep the *data* local, but put the *code* in a local git repo with no remote; the existing `.gitignore` already excludes data. This needs your OK because `AGENTS.md` currently forbids it. |
 | PNL-4 | Byte-identical `readers.py` in two places. Minified-style JS (lines up to about 3,000 characters). Hard-coded `/Users/...` path in `package_delivery.py`. Windows runtime never tested. No volume test of the single-HTML design. |
 
@@ -254,7 +254,7 @@ The reviewed package is 4,081 lines in 18 modules. The roughly 86k lines on disk
    | pnl_tool | ≥3.10 |
 
    **The Python version on the work PC decides what is deployable.** Find it out now. The desk engine will need core, so it needs at least 3.11 plus numpy wheels on Windows, installed offline.
-5. **Identifiers.** tdm keys on ISIN, core on SECID, and the hub on both. Its export uses ISIN only when unique, otherwise SECID. PnL TradeLevel uses trade `Key` and Book. There is no mapping table anywhere. Make one canonical `instrument_id` rule and one ID map shipped with each snapshot.
+5. **Identifiers.** tdm keys on ISIN, core on SECID, and the hub on both. Its export uses ISIN only when unique, otherwise SECID. The official trade-level PnL report uses a trade id and a book. There is no mapping table anywhere. Make one canonical `instrument_id` rule and one ID map shipped with each snapshot.
 6. **Missing vs zero is the dominant correctness bug class.** It shows up in tdm, the frontend, the desk-history fallback and scenario results. Only the hub and pnl_tool handle it well, and core's `local_worker` has the right `Coverage` model. **Adopt one coverage vocabulary end to end:** `measured`, `zero`, `missing`, `pending`, `stale`, `estimated`, `official`, `partial(n/N)`.
 7. **Time model.** The hub is effectively bitemporal for market data, but not for static data. tdm has no knowledge time. The frontend has none. Replay of a past date (required for PnL explain and T+1) is impossible end to end until the hub's static data as-of reads (MD-4) and the run input pinning in tdm (BE-7) are both done.
 
@@ -359,7 +359,7 @@ All local, no new architecture:
   - a full-revaluation residual check using core's Taylor-vs-exact.
 - **Official-PnL adapter:**
   - reuse pnl_tool's XLSX reader and its snapshot/revision logic;
-  - a TradeLevel → `pnl_official` field map;
+  - a field map from the official trade-level PnL report to `pnl_official`;
   - a book/entity/position ID map;
   - **append-only revisions** (DEC11) in place of the current upsert.
 - **Break register:** a threshold per book (DEC12), notes and revisions, displayed in the PnL tab.
@@ -407,7 +407,7 @@ Existing DEC01–DEC12 stand. DEC05 (attribution), DEC01 (funding base), DEC04 (
 |---|---|---|
 | A1 | Consolidate core and market-data-hub under the FlyingScotman account or an organisation? When? | Pinning core in tdm, CI |
 | A2 | Work-PC Python version, and can numpy wheels be installed offline? | Desk engine packaging |
-| A3 | Is the TradeLevel report (IFRS_Daily) the official PnL, or is there a separate management PnL? CBR basis? Includes funding? | PnL reconciliation (PNL-2) |
+| A3 | Is the official trade-level PnL report (its daily total) the official PnL, or is there a separate management PnL? CBR basis? Includes funding? | PnL reconciliation (PNL-2) |
 | A4 | EOD-only, or intraday flash runs as well? | Engine performance target, UI polling |
 | A5 | Who builds RUONIA/KEY curves: core in the engine, or the hub publishing builds made with pinned core? | Historical scenarios, swap risk |
 | A6 | Price hierarchy for illiquid bonds, and are trader manual marks allowed? | Valuation, PnL |

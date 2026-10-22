@@ -27,7 +27,7 @@ Revision 1, 16 October 2026. This folder is the system-level architecture of the
 | **Frontend** | `trading_desk_monitor` (`prototypes/` today) | Screens for risk, PnL explain, scenarios, bonds | Visual mockups that define how the tool should look |
 | **Market data hub** | `market-data-server` (package `mdhub`) | Collects, validates, versions and serves public market and static data | Deployed on the VPS (hub 0.1.0, 18 October 2026). Collection is mature; the snapshot layer is not merged or deployed yet |
 | **Calculation core** | `rub-fixed-income-core` (package `rub_fixed_income`) | Pure pricing and risk library, with no I/O | v0.32.0 (18 October 2026): domain model, KBD, `value_portfolio`, horizon explain, and engines for every product of the book ([04](04_BACKEND.md) §7) |
-| **PnL tool** | `pnl_tool` (local, no git) | Standalone accounting-PnL dashboard over the bank's TradeLevel report | Standalone by design; to be connected later as the official-PnL source |
+| **PnL tool** | `pnl_tool` (local, no git) | Standalone accounting-PnL dashboard over the official trade-level PnL report | Standalone by design; to be connected later as the official-PnL source |
 
 ## Where documents live
 

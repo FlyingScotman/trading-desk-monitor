@@ -10,8 +10,8 @@ positions valued at the report's figure. Each is flagged with its method (``reas
   publishes ``fx_delta``) x the market rate move goes from ``other`` to ``fx_gross`` (x the CBR move:
   ``fx_gross_cbr``); the rest is the price move at today's rate plus the received flows. MOEX settles replacement
   bonds in RUB at the CBR rate of the settlement day T+1, set on D near the 19:00 market: valued at the CBR rate in
-  force on D (set on D-1) the price and the rate moved a day apart and FX and other cancelled (E2E 20.10: FX -187 mm,
-  other +119 mm on a market of -0.15 %).
+  force on D (set on D-1) the price and the rate moved a day apart and FX and other cancelled (E2E 20.10: large FX
+  and other of opposite signs on a nearly flat market).
 - Row valued at the report's figure (rung ``reported_value``: OTC, other, unmapped bonds, a forward with the
   report's mv_rub): today's reported PV - yesterday's for the same position_id, both from the reports (method
   ``desk-reported-v1``, flag «по отчёту»), all in ``other``. Trades of the day are inside it. None when the
