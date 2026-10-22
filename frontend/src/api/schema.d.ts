@@ -312,6 +312,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instruments/aliases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Aliases */
+        get: operations["list_aliases_api_v1_instruments_aliases_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instruments/aliases/{isin}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Alias History */
+        get: operations["alias_history_api_v1_instruments_aliases__isin__history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instruments/alias": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Alias
+         * @description Set or clear (blank or null) the alias of an ISIN. From this computer only until users exist; a change is recorded with who and when, a request that changes nothing is not.
+         */
+        put: operations["put_alias_api_v1_instruments_alias_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -350,6 +404,76 @@ export interface components {
             dims: string[];
             /** Rows */
             rows: components["schemas"]["AggregateRow"][];
+        };
+        /** AliasHistory */
+        AliasHistory: {
+            /** Isin */
+            isin: string;
+            /**
+             * Revisions
+             * @description Newest first
+             */
+            revisions: components["schemas"]["AliasRevision"][];
+        };
+        /** AliasIn */
+        AliasIn: {
+            /**
+             * Isin
+             * @description The security's ISIN (case and surrounding spaces ignored)
+             */
+            isin: string;
+            /**
+             * Alias
+             * @description The display name, at most 120 characters; null or blank clears it (the exchange name again)
+             */
+            alias?: string | null;
+        };
+        /** AliasList */
+        AliasList: {
+            /**
+             * Aliases
+             * @description The aliases in force, by ISIN
+             */
+            aliases: components["schemas"]["InstrumentAlias"][];
+        };
+        /** AliasRevision */
+        AliasRevision: {
+            /** Rev Id */
+            rev_id: number;
+            /**
+             * Alias
+             * @description null: the alias was cleared
+             */
+            alias: string | null;
+            /** Changed By */
+            changed_by: string;
+            /**
+             * Changed At
+             * Format: date-time
+             */
+            changed_at: string;
+        };
+        /** AliasState */
+        AliasState: {
+            /** Isin */
+            isin: string;
+            /**
+             * Alias
+             * @description In force after the request; null: none (the exchange name is shown)
+             */
+            alias: string | null;
+            /**
+             * Changed By
+             * @description Of the latest revision; null: the ISIN never had one
+             */
+            changed_by: string | null;
+            /** Changed At */
+            changed_at: string | null;
+            /**
+             * Changed
+             * @description False when the request set what was already in force (no revision)
+             */
+            changed: boolean;
         };
         /** AutopilotProgress */
         AutopilotProgress: {
@@ -550,6 +674,26 @@ export interface components {
             /** Details */
             details?: unknown;
         };
+        /** InstrumentAlias */
+        InstrumentAlias: {
+            /** Isin */
+            isin: string;
+            /**
+             * Alias
+             * @description The display name to show instead of the exchange name
+             */
+            alias: string;
+            /**
+             * Changed By
+             * @description Who set it: 'local' (this computer) until users exist
+             */
+            changed_by: string;
+            /**
+             * Changed At
+             * Format: date-time
+             */
+            changed_at: string;
+        };
         /** JobIn */
         JobIn: {
             /** Base Run Id */
@@ -680,6 +824,11 @@ export interface components {
             no_pnl: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Alias
+             * @description The display name a user gave fact.isin (PUT /api/v1/instruments/alias), in force now, old runs too; null: none, show fact.name
+             */
+            alias?: string | null;
         };
         /** PositionList */
         PositionList: {
@@ -2228,6 +2377,154 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Queued"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    list_aliases_api_v1_instruments_aliases_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AliasList"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    alias_history_api_v1_instruments_aliases__isin__history_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ISIN */
+                isin: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AliasHistory"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    put_alias_api_v1_instruments_alias_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AliasIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AliasState"];
                 };
             };
             /** @description Not Found */

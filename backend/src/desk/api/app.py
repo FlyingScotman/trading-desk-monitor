@@ -409,10 +409,12 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     def positions(con: Con, run_id: int, request: Request, book: str | None = None,
                   quality: str | None = Query(None, description="exact, assumed, market_value, ...")):
         run = _run_or_404(con, run_id)
-        sql, args = "SELECT * FROM run_position WHERE run_id = %s", [run_id]
+        sql = ("SELECT p.*, a.alias FROM run_position p"  # the alias in force now (alias_routes), not frozen
+               " LEFT JOIN instrument_alias a ON a.isin = p.fact->>'isin' WHERE p.run_id = %s")
+        args: list[Any] = [run_id]
         for col, v in (("book_id", book), ("quality", quality)):
             if v is not None:
-                sql += f" AND {col} = %s"
+                sql += f" AND p.{col} = %s"
                 args.append(v)
         rows = con.execute(sql + " ORDER BY ord", args).fetchall()  # whole: a book is <= 2k positions
         return _cached(request, run, PositionList(run_id=run_id, positions=[Position(**r) for r in rows]))
@@ -640,6 +642,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
             raise ApiError(404, "not_found", "no static snapshot facts in the store yet (after the next run)")
         return out
 
+    from .alias_routes import router as alias_router  # /api/v1/instruments/alias(es) (batch 1, item 3)
     from .diagnostics_routes import router as diagnostics_router
     from .market_history import router as market_history_router  # /api/v1/history/market, /status (R24)
     from .settings_routes import router as settings_router  # here: it imports ApiError from this module
@@ -650,6 +653,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     app.include_router(diagnostics_router, include_in_schema=False)
     app.include_router(market_history_router, include_in_schema=False)
     app.include_router(autopilot_router)
+    app.include_router(alias_router)
 
     built = Path(app_dir) if app_dir else static_root() / "frontend" / "dist"
     if built.is_dir():  # before "/": the frontend build, absent until npm run build
