@@ -145,6 +145,14 @@ def test_diagnostics_api_and_cli(diag_run, tmp_path, monkeypatch, capsys, stub):
     assert r.status_code == 200, r.text
     doc = r.json()
     assert doc["schema"] == "desk-diagnostics/1" and doc["hub"]["checked"] is False
+    assert doc["lan"]["bind"] == "loopback" and doc["lan"]["tls"] is False and "probe" not in doc["lan"]
+    app.state.lan_probe = {"at": "2026-10-22T10:00:00+00:00", "summary": "s",
+                           "loopback": {"address": "127.0.0.1", "status": "ok", "ms": 3, "detail": "HTTP 200"},
+                           "lan": [{"address": "10.1.2.3", "status": "no_response", "ms": 3000, "detail": "x"}]}
+    lan_doc = local.get("/api/v1/diagnostics", params={"hub": 0}).json()["lan"]
+    assert [r["status"] for r in lan_doc["probe"]["lan"]] == ["no_response"] and "10.1.2.3" not in str(lan_doc)
+    st = local.get("/api/v1/lan/status").json()  # the settings page's «Доступ из сети»
+    assert st["bind_host"] and st["probe"] is None and st["last"]["lan"][0]["status"] == "no_response"
     assert doc["app"]["pid_uptime_s"] is not None and doc["runs"]["last"][0]["run_id"] == 1
     assert doc["app"]["env"]["DESK_HUB_TOKEN"] == "set" and doc["app"]["env"]["DESK_INBOX_LOOKBACK_DAYS"] == "0"
     assert TOKEN not in r.text and str(tmp_path) not in r.text

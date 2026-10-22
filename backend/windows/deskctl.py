@@ -17,10 +17,13 @@ outside the bundle, so they survive updates.
 The .bat files only find a Python and call this; the logic is here, away from cmd.exe quoting.
 
 Address (batch 1, item 9): ``desk serve`` listens where the settings say (``bind_host``, ``port`` of settings.json,
-``DESK_PORT`` / ``--port`` here win for the port); a network address needs sign-in (``desk lan enable``), and the
-server then also listens on 127.0.0.1, so the health check and the browser opened here stay on 127.0.0.1 (https
-when ``tls_cert`` is set). ``firewall add`` adds the inbound rule colleagues need (``netsh advfirewall``, as
-administrator); without administrator rights it prints the command to run.
+``DESK_PORT`` / ``--port`` here win for the port); a network address needs sign-in (``desk lan enable``). The health
+check and the browser opened here use 127.0.0.1 (https when ``tls_cert`` is set) whatever the address: 0.0.0.0 covers
+it with the server's one listening socket, a specific address gets a 127.0.0.1 socket beside it in the same server
+(``desk.api.app.listen_sockets``). Once it answers, desk serve checks its own network addresses (no proxy) and
+prints the outcome with a hint in this window (``desk.lan``; again: ``desk.bat lan status``). ``firewall add`` adds
+the inbound rule colleagues need (``netsh advfirewall``, as administrator); without administrator rights it prints
+the command to run.
 
 Hot update (the settings page, ``desk.update``): ``desk serve`` checks an update zip, stages its changed files in
 ``<DESK_HOME>\\updates\\staged\\<version>\\``, writes ``updates\\pending.json`` and exits with ``RESTART``. ``start``
@@ -882,7 +885,9 @@ def cmd_start(args: list[str]) -> int:
         raise
     page = "concepts/index.html" if (home / "settings.json").is_file() else "settings.html"  # the monitors
     scheme = "https" if addr["tls"] else "http"
-    local = f"{scheme}://127.0.0.1:{port}"  # desk serve listens here whatever bind_host says (desk.api.app)
+    # desk serve answers here whatever bind_host says: 0.0.0.0 covers 127.0.0.1 with its one socket, a specific
+    # address gets a 127.0.0.1 socket beside it, in the same server and with the same TLS (desk.api.app.listen_sockets)
+    local = f"{scheme}://127.0.0.1:{port}"
     url = f"{local}/{page}"
     lan = not _loopback_host(addr["host"])
     if lan and not addr["auth"]:
@@ -908,6 +913,8 @@ def cmd_start(args: list[str]) -> int:
     if lan:
         say("  для коллег: " + ", ".join(f"{scheme}://{n}:{port}/" for n in lan_names(addr["host"])[:3])
             + "  (вход по паролю; правило брандмауэра: desk.bat firewall add от имени администратора)")
+        say("  после запуска сервер проверит свои сетевые адреса (строки «проверка адреса» ниже); "
+            "ещё раз и подробно: desk.bat lan status")
     say("Остановить: закройте это окно (или Ctrl+C, или stop.bat).")
     say()
 
