@@ -685,6 +685,33 @@
       "blocking_reason": null
     },
     {
+      "id": "UI-02",
+      "title": "Aggregated risk table: currency × instrument type",
+      "phase": 5,
+      "owner_role": "frontend_implementer",
+      "status": "todo",
+      "depends_on": [],
+      "requirement_ids": [
+        "S10",
+        "C11",
+        "C12"
+      ],
+      "deliverables": [
+        "Monitors (prototypes/concepts/) table of aggregated risk: currency as the top level, instrument type as the breakdown (RUB total, of which OFZ-PD, corporates, swaps, ...; USD total, of which corporates, futures, sovereigns, ...)",
+        "Columns: the risk measures the monitor already reports per position, summed (DV01 by curve and total, CS01, OFZ basis ofz_spr01, FX delta, MV, notional)",
+        "Drill-down from any cell to its positions, as in the other monitors"
+      ],
+      "acceptance": [
+        "Each currency is summed on its own curve and risk (A currency's curve is its own, R27): CHF and any currency other than USD, EUR and CNY never fall into RUB",
+        "A currency's total equals the sum of its instrument types and the cockpit's risk for that currency under the same filters",
+        "Instrument types as api/concepts.kind_of and lib/real.js; amounts in the currency's own units, with the report-currency switch applied explicitly",
+        "Missing risk is shown as missing with its reason, never as zero; the header's book and portfolio filters apply"
+      ],
+      "evidence": [],
+      "reviewer": null,
+      "blocking_reason": null
+    },
+    {
       "id": "OPS-01",
       "title": "Deploy reproducibly and prove backup restore and rollback",
       "phase": 5,

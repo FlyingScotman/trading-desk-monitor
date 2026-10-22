@@ -616,7 +616,7 @@ def cmd_serve(a: argparse.Namespace) -> int:
 
     url = store.resolve_url(a.settings)
     store.migrate(url)
-    print(f"desk API on http://{a.host}:{a.port}/desk-monitor.html, store {mask_url(url)}")
+    print(f"desk API on http://{a.host}:{a.port}/concepts/index.html, store {mask_url(url)}")
     from .autopilot import Autopilot
     from .inbox import scan
 

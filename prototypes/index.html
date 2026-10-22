@@ -29,12 +29,12 @@ td.err{white-space:normal;color:var(--bad)}
   <h1>Trading Desk Monitor</h1>
   <p class="sub">FI-деск: риски, PnL explain, фондирование, сценарии. Данные — из базы расчётов. Прогон, выбранный в строке вверху, общий для всех страниц.</p>
   <div class="grid">
-    <a class="card" href="desk-monitor.html"><b>Desk Monitor</b><span>Сводка, позиции, риски по кривым, экспозиции, фондирование, сценарии, PnL</span></a>
-    <a class="card" href="widget-board.html"><b>Widget Board</b><span>Свои доски из виджетов: утро, rates, credit, FX</span></a>
-    <a class="card" href="pivot-studio.html"><b>Pivot Studio</b><span>Сводные таблицы и тепловые карты по любым разрезам</span></a>
+    <a class="card" href="concepts/index.html"><b>Мониторы</b><span>13 мониторов: кокпит, лестница рисков, позиции, агрегатор, брифинг, календари, рынок, PnL explain, динамика, эмитенты</span></a>
     <a class="card" href="app/"><b>Сценарии (точно)</b><span>Taylor мгновенно, точная переоценка на бэкенде, невязка (React, S6)</span></a>
-    <a class="card" href="scenario-lab.html"><b>Scenario &amp; PnL Lab</b><span>Конструктор сценариев и разбор PnL explain</span></a>
+    <a class="card" href="settings.html"><b>Настройки</b><span>Хаб, папки отчётов, адаптер, автопилот</span></a>
   </div>
+  <!-- Ранние экраны (Desk Monitor, Widget Board, Pivot Studio, Scenario & PnL Lab) устарели 22.10.2026 и здесь не
+       перечислены; файлы остались, открываются по прямому адресу (README.md, «Устаревшие экраны»). -->
   <h2>Последние прогоны</h2>
   <div id="runs"><p class="note">Загрузка…</p></div>
 </main>
@@ -45,10 +45,10 @@ td.err{white-space:normal;color:var(--bad)}
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   if (!/^https?:$/.test(location.protocol)) { box.innerHTML = '<p class="note">Открыто как файл: страницы работают на демо-данных. Запустите сервер (run.bat), чтобы видеть данные из базы.</p>'; return; }
   function load() { fetch('api/v1/runs?limit=15').then(function (r) { return r.json(); }).then(function (j) {
-    if (!j.runs.length) { box.innerHTML = '<p class="note">В базе пока нет прогонов — как только автопилот посчитает первый день, данные появятся на страницах (ход — в строке автопилота вверху; <a href="settings.html">Настройки</a>). Демо-данные: <a href="desk-monitor.html?demo=1">desk-monitor.html?demo=1</a>.</p>'; return; }
+    if (!j.runs.length) { box.innerHTML = '<p class="note">В базе пока нет прогонов — как только автопилот посчитает первый день, данные появятся на страницах (ход — в строке автопилота вверху; <a href="settings.html">Настройки</a>). Демо-данные: <a href="concepts/index.html?demo=1">мониторы на демо-наборе</a>.</p>'; return; }
     box.innerHTML = '<table><thead><tr><th>#</th><th>Дата</th><th>Тип</th><th>Статус</th><th>Опубликован</th><th>Срез</th><th>Ошибка</th></tr></thead><tbody>' +
       j.runs.map(function (r) {
-        var link = r.status === 'complete' ? '<a href="desk-monitor.html?run_id=' + r.run_id + '">' + r.run_id + '</a>' : r.run_id;
+        var link = r.status === 'complete' ? '<a href="concepts/c01-cockpit.html?run_id=' + r.run_id + '" title="Кокпит на этом прогоне">' + r.run_id + '</a>' : r.run_id;
         return '<tr><td>' + link + '</td><td>' + esc(r.business_date || r.as_of) + '</td><td>' + esc(r.run_type) + '</td><td class="' + esc(r.status) + '">' + esc(r.status) +
           '</td><td>' + esc(String(r.completed_at || r.published_at || '').replace('T', ' ').slice(0, 19)) + '</td><td>' + esc(r.cut_type || r.source) + '</td><td class="err">' + esc(r.error) + '</td></tr>';
       }).join('') + '</tbody></table>';

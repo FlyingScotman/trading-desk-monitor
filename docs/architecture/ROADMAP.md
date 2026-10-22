@@ -92,8 +92,9 @@ Real-data screens come first; the remaining prototype screens migrate after them
 3. **Reconciliation**: the break waterfall per date and book, causes with confidence, instrument drill-down; the user sets a break's status (ours, finance, market data, timing, accepted) and a comment, kept in the break register.
 4. **Market data diff**: hub vs internal per curve point, bond price and FX rate, with the PnL impact of each difference.
 5. **PnL explain**: per snapshot, carry / rates / spread / FX / new trades / residual (from the prototype Scenario & PnL Lab).
-6. Desk Monitor in React with OCP and cash; then Pivot Studio, Widget Board, Bonds ([05](05_FRONTEND_INTEGRATION.md) §4).
+6. Desk Monitor in React with OCP and cash; then Pivot Studio, Widget Board, Bonds ([05](05_FRONTEND_INTEGRATION.md) §4). Since 22 October 2026 these prototype screens are deprecated in the UI; the monitors (`prototypes/concepts/`) are the base ([05](05_FRONTEND_INTEGRATION.md)).
 7. Live updates over SSE; run badge with age and coverage everywhere.
+8. **Aggregated risk table: currency × instrument type** (backlog UI-02), in the monitors: currency is the top level, instrument type the breakdown (RUB total, of which OFZ-PD, corporates, swaps, …; USD total, of which corporates, futures, sovereigns, …), with the risk the monitor reports per position summed (DV01 by curve and total, CS01, OFZ basis, FX delta, MV). Each currency on its own curve and risk ("A currency's curve is its own", R27): no currency falls into RUB.
 
 ### market-data-server (hub)
 

@@ -741,7 +741,7 @@ def cmd_start(args: list[str]) -> int:
         if verify:
             record_update(env, False, version(), "", str(e))
         raise
-    page = "desk-monitor.html" if (home / "settings.json").is_file() else "settings.html"
+    page = "concepts/index.html" if (home / "settings.json").is_file() else "settings.html"  # the monitors
     url = f"http://127.0.0.1:{port}/{page}"
     if not verify and port_busy(port):  # verify: the old server just closed it (a busy port fails desk serve)
         ours = bool(bundle_processes()[0])

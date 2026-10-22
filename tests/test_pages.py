@@ -8,6 +8,10 @@ ROOT = Path(__file__).resolve().parent.parent
 PROTO = ROOT / "prototypes"
 PAGES = ["index.html", "desk-monitor.html", "widget-board.html", "pivot-studio.html", "scenario-lab.html", "settings.html"]
 DATA_PAGES = ["desk-monitor.html", "widget-board.html", "pivot-studio.html", "scenario-lab.html"]
+# Основной набор — мониторы (concepts/), «Сценарии (точно)» (app/) и Настройки; ранние экраны устарели (22.10.2026):
+# файлы остаются и открываются по прямому адресу, но интерфейс их не предлагает (README.md, «Устаревшие экраны»)
+MAIN = ["concepts/index.html", "app/", "settings.html"]
+DEPRECATED = DATA_PAGES
 
 
 def scripts(html):
@@ -27,11 +31,26 @@ class Pages(unittest.TestCase):
         for f in (ROOT / "frontend" / "index.html", ROOT / "frontend" / "dist" / "index.html"):
             self.assertIn('<script src="../desk-nav.js"></script>', f.read_text(encoding="utf-8"), f)
 
-    def test_nav_links_every_page_relatively(self):
+    def test_nav_links_the_main_pages_relatively(self):
         nav = (PROTO / "desk-nav.js").read_text(encoding="utf-8")
-        for page in [p for p in PAGES if p != "index.html"] + ["app/"]:
+        for page in MAIN:
             self.assertIn(f"['{page}'", nav, page)
         self.assertNotIn("'/desk-", nav)  # относительные ссылки: работает и открытой как файл
+
+    def test_deprecated_screens_are_not_offered_but_kept(self):
+        nav = (PROTO / "desk-nav.js").read_text(encoding="utf-8")
+        pages = nav[nav.index("var PAGES = ["):nav.index("];", nav.index("var PAGES = ["))]
+        home = (PROTO / "index.html").read_text(encoding="utf-8")
+        for name in ("index.html", "lib/kit.js"):
+            home += (PROTO / "concepts" / name).read_text(encoding="utf-8")
+        for page in DEPRECATED:
+            self.assertNotIn(page, pages, page)
+            self.assertNotIn(f'href="{page}', home, page)
+            self.assertNotIn(f"../{page}", home, page)
+            html = (PROTO / page).read_text(encoding="utf-8")
+            self.assertIn("DEPRECATED", html[:400], page)  # помечен, но не удалён
+        for page in MAIN:
+            self.assertIn(f'href="{page}"', (PROTO / "index.html").read_text(encoding="utf-8"), page)
 
     def test_demo_badge_is_not_hard_coded(self):
         for name in PAGES:

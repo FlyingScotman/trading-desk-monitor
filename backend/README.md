@@ -60,14 +60,14 @@ Run EOD for each date, oldest first. `--book` loads the file into the store for 
 cd backend && .venv/bin/desk eod --date 2026-10-15 --book examples/test_book.csv --report-dir ../.devdata/reports
 ```
 
-`desk runs` lists the store's runs. Serve the desk API and the Desk Monitor on the store:
+`desk runs` lists the store's runs. Serve the desk API and the pages on the store:
 
 ```bash
 cd backend && .venv/bin/desk serve
 ```
 
 Then open:
-- http://127.0.0.1:8100/desk-monitor.html for the Desk Monitor on the latest default run (the picker at the bottom left switches runs); the API is under `/api/v1` (`/docs` for the OpenAPI);
+- http://127.0.0.1:8100/concepts/index.html for the monitors (the main set of screens, `prototypes/concepts/`) on the latest default run (the run chip in their header switches runs); the API is under `/api/v1` (`/docs` for the OpenAPI). The earlier prototype screens (Desk Monitor, Widget Board, Pivot Studio, Scenario & PnL Lab) are deprecated: no page links them, they open by direct URL (root `README.md`, «Устаревшие экраны»);
 - http://127.0.0.1:8100/app/ for the Scenario Lab (slice S6): pick a run and a preset or move the sliders, read the Taylor estimate (≈), then "Посчитать точно" for the exact repricing and its residual;
 - `.devdata/reports/validation_<date>.html` for the comparison with MOEX analytics over the whole bond universe.
 

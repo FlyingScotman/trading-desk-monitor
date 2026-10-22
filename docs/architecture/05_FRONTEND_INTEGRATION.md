@@ -9,6 +9,8 @@ The screens in `prototypes/` are **visual mockups**. They define what the tool s
 
 They are not the working application, and the calculations inside them are illustrative. Integration is done **by the backend**: the backend exposes a typed desk API and an event stream, and the frontend renders what it receives.
 
+**Deprecated in the UI (22 October 2026).** The main set of screens is now the monitors (`prototypes/concepts/`, C01–C13, §4a), with the React scenario screen (`/app/`) and the settings. The mockup screens above (Desk Monitor, Widget Board, Pivot Studio, Scenario & PnL Lab) are no longer linked from the navigation bar, the home page or the monitors; their files and tests stay, and they open by direct URL. The port order in §4 predates this. Which monitor replaces which: root `README.md`, «Устаревшие экраны».
+
 ## 1 Principles
 
 1. **The backend is the only data source.** The frontend calls the desk API only. The browser never calls the hub on the VPS; bond and market views go through a backend proxy that reads the snapshot cache.
