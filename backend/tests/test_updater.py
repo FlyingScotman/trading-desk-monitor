@@ -629,3 +629,30 @@ def test_release_notes_start_with_the_versions_changelog_section(tmp_path):
     notes = (dist / "NOTES.md").read_text(encoding="utf-8")
     assert notes.startswith(f"Desk Monitor {bundle_version}\n\n{section}\n\n---\n\n")
     assert release.parse_sums(notes) == release.parse_sums((dist / "SHA256SUMS").read_text())
+
+
+def test_a_patch_for_another_build_falls_back_to_the_full_zip(bundle_env, monkeypatch, tmp_path):
+    """The release's patch was made from another build of the installed version (same VERSION, other bytes): the
+    updater picks it, the base check refuses it, and the full zip of the release is downloaded, verified and
+    installed instead."""
+    whl = "wheelhouse/desk_backend-0.1.0-py3-none-any.whl"
+    other = stage_dir(tmp_path / "other-build", tu.bundle(OLD, {whl: b"wheel 1, another build"}))
+    new = stage_dir(tmp_path / "new-same-wheel", tu.bundle(NEW, {whl: b"wheel 1, another build",
+                                                                 "app/prototypes/settings.html": b"<p>2</p>"}))
+    full = full_zip(new, tmp_path / "full.zip").read_bytes()
+    patch = tu.build.write_patch(full_zip(other, tmp_path / "other.zip"), new, NEW, tmp_path, tu.STAMP).read_bytes()
+    pname, fname = f"DeskMonitor-patch-{OLD}-to-{NEW}.zip", f"DeskMonitor-{NEW}.zip"
+    doc = release.release_doc(TAG, NEW, [(fname, len(full), sha(full)), (pname, len(patch), sha(patch))])
+    files = {release.latest_url(REPO_NAME, release.RELEASE_JSON): json.dumps(doc).encode(), gh(fname): full,
+             gh(pname): patch}
+    fake = FakeNet(monkeypatch, files, {})
+    app, asked = _app()
+    c = client_for(app)
+    st = c.post("/api/v1/update/remote/check", json={}).json()
+    assert st["choice"]["asset"]["name"] == pname  # a patch from exactly the installed version string
+    c.post("/api/v1/update/remote/install", json={})
+    j = _wait(c, ("restarting", "failed"))
+    assert j["state"] == "restarting" and asked == [True], j
+    assert [u for _, u in fake.calls if u.endswith(".zip")][-2:] == [gh(pname), gh(fname)]
+    pending = c.get("/api/v1/update").json()["pending"]
+    assert pending["version"] == NEW and pending["kind"] == "full" and pending["source"] == fname

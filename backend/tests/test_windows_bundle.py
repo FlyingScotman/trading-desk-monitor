@@ -6,6 +6,8 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
+import shutil
 import types
 import zipfile
 from datetime import UTC, datetime
@@ -185,7 +187,8 @@ def test_patch_zip_holds_only_changed_files_and_overlays_exactly(monkeypatch, tm
         assert names == ["MANIFEST.sha256", "PATCH_BASE.txt", "PATCH_DELETE.txt", "PATCH_README.txt", "VERSION",
                          "app/new.js", "wheelhouse/desk_backend-0.1.0-py3-none-any.whl"]
         assert "1.1-b" in z.read("DeskMonitor/PATCH_README.txt").decode("utf-8-sig")
-        assert z.read("DeskMonitor/PATCH_BASE.txt") == b"1.0-a\n"
+        base_build = build.base_from_zip(base).build
+        assert z.read("DeskMonitor/PATCH_BASE.txt") == f"1.0-a (сборка {base_build})\n".encode()
         installed = tmp_path / "C"
         zipfile.ZipFile(base).extractall(installed)
         z.extractall(installed)
@@ -194,3 +197,233 @@ def test_patch_zip_holds_only_changed_files_and_overlays_exactly(monkeypatch, tm
     monkeypatch.setattr(deskctl, "ROOT", root)
     deskctl.apply_patch_delete()
     assert tree(root) == new
+
+
+# ---- reproducible builds ----------------------------------------------------------------------------------------
+
+
+def _wheel(path: Path, entries: list[tuple[str, bytes, int, tuple]], method=zipfile.ZIP_DEFLATED) -> Path:
+    """A wheel as a build backend may write it: ``entries`` (name, data, mode, date) in this order."""
+    with zipfile.ZipFile(path, "w", method) as z:
+        for name, data, mode, date in entries:
+            info = zipfile.ZipInfo(name, date)
+            info.external_attr, info.compress_type = mode << 16, method
+            z.writestr(info, data)
+    return path
+
+
+def test_normalize_wheel_gives_one_form_whatever_the_backend_wrote(tmp_path):
+    """The 0.2.0 incident: the core wheel of two builds of one commit differed only in its entries' times (the pip
+    cache kept a wheel built under another SOURCE_DATE_EPOCH) and modes (the checkout's umask)."""
+    files = [("pkg/__init__.py", b"x = 1\n"), ("pkg/tool.sh", b"#!/bin/sh\n"), ("pkg-1.0.dist-info/METADATA", b"m"),
+             ("pkg-1.0.dist-info/WHEEL", b"w"), ("pkg-1.0.dist-info/RECORD", b"r")]
+    a = _wheel(tmp_path / "a.whl", [(n, d, 0o100755 if n.endswith(".sh") else 0o100644, (2026, 10, 22, 8, 17, 12))
+                                    for n, d in files])
+    b = _wheel(tmp_path / "b.whl", [(n, d, 0o100775 if n.endswith(".sh") else 0o100664, (2026, 10, 19, 1, 2, 4))
+                                    for n, d in reversed(files)], zipfile.ZIP_STORED)
+    epoch = int(datetime(2026, 10, 1, tzinfo=UTC).timestamp())
+    build.normalize_wheel(a, tmp_path / "a2.whl", epoch)
+    build.normalize_wheel(b, tmp_path / "b2.whl", epoch)
+    assert (tmp_path / "a2.whl").read_bytes() == (tmp_path / "b2.whl").read_bytes()
+    with zipfile.ZipFile(tmp_path / "a2.whl") as z:
+        infos = z.infolist()
+        assert [i.filename for i in infos] == ["pkg/__init__.py", "pkg/tool.sh", "pkg-1.0.dist-info/METADATA",
+                                               "pkg-1.0.dist-info/WHEEL", "pkg-1.0.dist-info/RECORD"]
+        assert {i.date_time for i in infos} == {(2026, 10, 1, 0, 0, 0)}
+        assert [i.external_attr >> 16 & 0o777 for i in infos] == [0o644, 0o755, 0o644, 0o644, 0o644]
+        assert {n: z.read(n) for n in z.namelist()} == dict(files)  # contents (and so RECORD) untouched
+
+
+def _stage(root: Path, files: dict[str, bytes], order: list[str]) -> Path:
+    for i, rel in enumerate(order):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_bytes(files[rel])
+        os.utime(root / rel, (1_700_000_000 + 1000 * i,) * 2)
+        os.chmod(root / rel, 0o664 if i % 2 else 0o644)
+    build.write_manifest(root, f"# DeskMonitor {files['VERSION'].decode().strip()}, repository commit abc\n")
+    return root
+
+
+BUNDLE = {"VERSION": b"1.1-b\n", "start.bat": b"@echo off\r\n", "app/deskctl.py": b"print()\n",
+          "wheelhouse/requirements.txt": b"a==1\n", "wheelhouse/a-1-py3-none-any.whl": b"PK...",
+          "python/python.exe": b"MZ"}
+
+
+def test_same_files_give_byte_identical_bundles_and_manifests(tmp_path):
+    """Two builds of one commit (files written in another order, other mtimes and modes) give the same zips."""
+    stamp = build.zip_stamp(1_760_000_000)
+    s1 = _stage(tmp_path / "s1" / "DeskMonitor", BUNDLE, list(BUNDLE))
+    s2 = _stage(tmp_path / "s2" / "DeskMonitor", BUNDLE, list(reversed(BUNDLE)))
+    assert (s1 / "MANIFEST.sha256").read_bytes() == (s2 / "MANIFEST.sha256").read_bytes()
+    z1 = build.write_bundles(s1, "DeskMonitor-1.1-b", False, tmp_path / "o1", stamp)
+    z2 = build.write_bundles(s2, "DeskMonitor-1.1-b", False, tmp_path / "o2", stamp)
+    assert [p.read_bytes() for p in z1] == [p.read_bytes() for p in z2]
+    with zipfile.ZipFile(z1[0]) as z:
+        assert {i.external_attr >> 16 for i in z.infolist()} == {0o100644} and {i.create_system for i in z.infolist()} == {3}
+
+
+def test_our_wheels_are_built_by_uv_with_pinned_backends_and_the_commit_time(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_run(*cmd, cwd=None, env=None):
+        calls.append((cmd, env))
+        out = Path(cmd[cmd.index("--out-dir") + 1])
+        _wheel(out / "pkg-1.0-py3-none-any.whl", [("pkg/__init__.py", b"", 0o100664, (2026, 1, 1, 0, 0, 0))])
+        return ""
+
+    monkeypatch.setattr(build, "run", fake_run)
+    whl = build.build_wheel(tmp_path / "src", tmp_path, 1_760_000_000, {"PATH": "/bin"})
+    (cmd, env), = calls
+    assert cmd[:3] == ("uv", "build", "--wheel") and "--no-sources" in cmd and "--no-config" in cmd
+    assert cmd[cmd.index("--build-constraint") + 1] == str(build.CONSTRAINTS)
+    assert env["SOURCE_DATE_EPOCH"] == "1760000000" and env["PATH"] == "/bin"
+    with zipfile.ZipFile(whl) as z:
+        assert z.infolist()[0].date_time == build.zip_stamp(1_760_000_000)
+    pins = dict(ln.split("==") for ln in build.CONSTRAINTS.read_text().splitlines() if ln and not ln.startswith("#"))
+    assert {"hatchling", "setuptools"} <= set(pins)  # the backends of desk-backend / core and of the root package
+    src = (REPO / "backend/tools/build_windows_bundle.py").read_text(encoding="utf-8")
+    assert '"pip", "wheel"' not in src  # pip's wheel cache kept a core wheel of another build: never again
+
+
+@pytest.mark.bundle
+def test_a_real_wheel_build_is_reproducible(tmp_path):
+    """``pytest -m bundle`` (needs uv and PyPI for the pinned backends): the root package built twice, from two
+    copies with other mtimes and modes, gives the same bytes."""
+    import subprocess
+
+    epoch = int(subprocess.run(["git", "log", "-1", "--format=%ct"], cwd=REPO, capture_output=True, text=True,
+                               check=True).stdout)
+    wheels = []
+    for i in (1, 2):
+        src = tmp_path / f"src{i}"
+        shutil.copytree(REPO / "tdm", src / "tdm", ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copyfile(REPO / "pyproject.toml", src / "pyproject.toml")
+        for p in src.rglob("*"):
+            os.utime(p, (1_600_000_000 + i * 99_999,) * 2)
+            if p.is_file():
+                os.chmod(p, 0o664 if i == 2 else 0o644)
+        (tmp_path / f"out{i}").mkdir()
+        wheels.append(build.build_wheel(src, tmp_path / f"out{i}", epoch, dict(os.environ)))
+    assert wheels[0].name == wheels[1].name and wheels[0].read_bytes() == wheels[1].read_bytes()
+
+
+# ---- patch bases: delivered records -----------------------------------------------------------------------------
+
+
+def _full(tmp_path: Path, name: str, files: dict[str, bytes]) -> Path:
+    stage = _stage(tmp_path / name / "DeskMonitor", files, list(files))
+    return build.write_bundles(stage, f"DeskMonitor-{name}", False, tmp_path / "dist", build.zip_stamp(1_760_000_000))[0]
+
+
+def test_a_delivered_record_is_the_base_of_local_patches(tmp_path):
+    old = {**BUNDLE, "VERSION": b"1.0-a\n"}
+    delivered_zip = _full(tmp_path, "1.0-a", old)
+    rebuilt = _full(tmp_path, "1.0-a-rebuilt", {**old, "wheelhouse/a-1-py3-none-any.whl": b"PK rebuilt"})
+    folder = tmp_path / "delivered"
+    rec = build.record_delivered(delivered_zip, folder)
+    assert rec.parent == folder / "1.0-a" and rec.name == build.base_from_zip(delivered_zip).build + ".sha256"
+    assert build.base_from_record(rec).files == build.base_from_zip(delivered_zip).files
+    twin = tmp_path / "DeskMonitor-1.0-a-with-adapter.zip"  # the same build delivered as another zip: one record
+    shutil.copyfile(delivered_zip, twin)
+    assert build.record_delivered(twin, folder) == rec and len(list(rec.parent.iterdir())) == 1
+    assert [ln.split()[3] for ln in rec.read_text().splitlines() if ln.startswith("# delivered")] == \
+        [delivered_zip.name, twin.name]
+    assert build.record_delivered(twin, folder) == rec and rec.read_text().count("# delivered") == 2
+    assert build.newest_delivered(folder) == "1.0-a"
+    for v in ("0.9.0-20261002-bbbbbbb", "0.10.0-20261001-aaaaaaa", "0.9.0-20261003-ccccccc"):
+        (folder / v).mkdir()
+        (folder / v / "x.sha256").write_text(rec.read_text().replace("1.0-a", v))
+    assert build.newest_delivered(folder) == "0.10.0-20261001-aaaaaaa"  # by version, then by commit date
+    for v in ("0.9.0-20261002-bbbbbbb", "0.10.0-20261001-aaaaaaa", "0.9.0-20261003-ccccccc"):
+        shutil.rmtree(folder / v)
+
+    # a patch from the version name uses the record; from a rebuild of that version, it fits both builds
+    new = _stage(tmp_path / "new" / "DeskMonitor", {**BUNDLE, "app/deskctl.py": b"print(2)\n"}, list(BUNDLE))
+    by_name = build.load_bases(["1.0-a"], folder)
+    assert [b.source for b in by_name] == [str(rec)]
+    both = build.load_bases([str(rebuilt)], folder)
+    assert {b.build for b in both} == {build.base_from_zip(rebuilt).build, build.base_from_zip(delivered_zip).build}
+    (patch,) = build.write_patches(both, new, "1.1-b", tmp_path, build.zip_stamp(1_760_000_000))
+    with zipfile.ZipFile(patch) as z:
+        names = sorted(n.removeprefix("DeskMonitor/") for n in z.namelist())
+        base_txt = z.read("DeskMonitor/PATCH_BASE.txt").decode()
+    # the wheel differs from one of the two builds of 1.0-a: shipped, so the patch fits either install
+    assert "wheelhouse/a-1-py3-none-any.whl" in names and "app/deskctl.py" in names and "start.bat" not in names
+    assert base_txt.startswith("1.0-a (сборка ") and all(b.build in base_txt for b in both)
+    with pytest.raises(SystemExit):
+        build.load_bases(["0.0.1-nothing"], folder)
+    assert build.write_patches(build.load_bases([str(rebuilt)], folder), new, "1.0-a", tmp_path, (2026, 1, 1, 0, 0, 0)) == []
+
+
+def test_the_with_adapter_zip_is_the_public_one_plus_adapter_and_patches_leave_it_alone(tmp_path):
+    files = {**BUNDLE, "adapter/pkg/__init__.py": b"private", "adapter/README.md": b"r"}
+    stage = _stage(tmp_path / "s" / "DeskMonitor", files, list(files))
+    public, private = build.write_bundles(stage, "DeskMonitor-1.1-b", True, tmp_path / "dist",
+                                          build.zip_stamp(1_760_000_000))
+    assert private.name == "DeskMonitor-1.1-b-with-adapter.zip"
+    with zipfile.ZipFile(public) as z:
+        man = z.read("DeskMonitor/MANIFEST.sha256")
+        assert not [n for n in z.namelist() if "/adapter/" in n] and b"adapter/" not in man
+    # a public build of the same files without the adapter is byte-identical to the public zip written here
+    plain = _stage(tmp_path / "p" / "DeskMonitor", BUNDLE, list(BUNDLE))
+    (again,) = build.write_bundles(plain, "DeskMonitor-1.1-b", False, tmp_path / "dist2", build.zip_stamp(1_760_000_000))
+    assert again.read_bytes() == public.read_bytes()
+    # a with-adapter zip whose other files differ is refused
+    other = _stage(tmp_path / "o" / "DeskMonitor", {**files, "app/deskctl.py": b"other"}, list(files))
+    bad = tmp_path / "bad.zip"
+    build.write_zip(bad, build.bundle_entries(other, adapter=True), build.zip_stamp(1_760_000_000))
+    with pytest.raises(SystemExit, match="differ outside adapter"):
+        build.check_public_private(public, bad)
+    # the patch of a with-adapter build: no adapter files, its manifest without them (= the public patch)
+    old = _full(tmp_path, "1.0-a", {**BUNDLE, "VERSION": b"1.0-a\n"})
+    (tmp_path / "pp").mkdir()
+    p_private = build.write_patch(old, stage, "1.1-b", tmp_path / "pp", (2026, 1, 1, 0, 0, 0))
+    p_public = build.write_patch(old, plain, "1.1-b", tmp_path / "dist2", (2026, 1, 1, 0, 0, 0))
+    assert p_private.read_bytes() == p_public.read_bytes()
+    with zipfile.ZipFile(p_private) as z:
+        assert not [n for n in z.namelist() if "adapter" in n]
+        assert b"adapter/" not in z.read("DeskMonitor/MANIFEST.sha256")
+
+
+def test_from_bundle_makes_the_with_adapter_zip_of_a_published_one(tmp_path):
+    import argparse
+
+    public = _full(tmp_path, "1.1-b", BUNDLE)
+    a = argparse.Namespace(from_bundle=public, out=tmp_path / "out")
+    assert build.from_bundle(a, {"pkg/__init__.py": b"private"}, []) == 0
+    private = tmp_path / "out" / "DeskMonitor-1.1-b-with-adapter.zip"
+    build.check_public_private(public, private)
+    assert (tmp_path / "out" / "DeskMonitor-1.1-b.zip").read_bytes() == public.read_bytes()
+    with zipfile.ZipFile(private) as z:
+        assert z.read("DeskMonitor/adapter/pkg/__init__.py") == b"private"
+        assert b"adapter/pkg/__init__.py" in z.read("DeskMonitor/MANIFEST.sha256")
+    broken = tmp_path / "broken.zip"
+    with zipfile.ZipFile(public) as src, zipfile.ZipFile(broken, "w") as dst:
+        for n in src.namelist():
+            dst.writestr(n, b"changed" if n.endswith("deskctl.py") else src.read(n))
+    with pytest.raises(SystemExit, match="does not match"):
+        build.from_bundle(argparse.Namespace(from_bundle=broken, out=tmp_path / "out2"), {"pkg/__init__.py": b""}, [])
+
+
+def test_release_workflow_patches_from_the_published_release_and_the_delivered_record():
+    wf = (REPO / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert "gh release download" in wf and "SHA256SUMS" in wf and "sha256sum" in wf
+    assert "--patch-from-delivered" in wf and "--patch-base" in wf
+
+
+def test_a_patch_unpacked_by_hand_over_another_build_is_reported(monkeypatch, tmp_path):
+    old = {**BUNDLE, "VERSION": b"1.0-a\n"}
+    base = _full(tmp_path, "1.0-a", old)
+    new = _stage(tmp_path / "new" / "DeskMonitor", {**BUNDLE, "app/deskctl.py": b"print(2)\n"}, list(BUNDLE))
+    patch = build.write_patch(base, new, "1.1-b", tmp_path, (2026, 1, 1, 0, 0, 0))
+    said: list[str] = []
+    monkeypatch.setattr(deskctl, "say", said.append)
+    for name, wheel in (("same", old["wheelhouse/a-1-py3-none-any.whl"]), ("other", b"PK another build")):
+        root = tmp_path / name
+        zipfile.ZipFile(base).extractall(root)
+        (root / "DeskMonitor/wheelhouse/a-1-py3-none-any.whl").write_bytes(wheel)
+        zipfile.ZipFile(patch).extractall(root)
+        monkeypatch.setattr(deskctl, "ROOT", root / "DeskMonitor")
+        deskctl.apply_patch_delete()
+        assert not (root / "DeskMonitor/PATCH_BASE.txt").exists()
+    assert len(said) == 1 and "wheelhouse/a-1-py3-none-any.whl" in said[0] and "1.0-a (сборка" in said[0]

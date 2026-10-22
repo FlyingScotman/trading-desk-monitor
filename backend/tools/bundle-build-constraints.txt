@@ -1,0 +1,10 @@
+# The build backends of our pure-Python wheels in the Windows bundle (build_windows_bundle.py passes this to
+# uv build --build-constraint): their versions end up in the wheels (WHEEL, METADATA), so they are pinned for
+# reproducible builds. Bump them on purpose, in a commit of their own.
+hatchling==1.32.4
+packaging==26.3
+pathspec==1.1.1
+pluggy==1.7.0
+setuptools==84.2.1
+tomlkit==0.15.2
+trove-classifiers==2026.9.21.13
