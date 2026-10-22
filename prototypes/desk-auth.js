@@ -90,7 +90,7 @@
     } else {
       box.appendChild(el('b', {}, u.display_name || u.username));
       box.appendChild(el('span', {}, '· ' + (ROLE[u.role] || u.role)));
-      if (u.role === 'admin') box.appendChild(el('a', { href: '/users.html', title: 'Пользователи, роли, журнал действий' }, 'Пользователи'));
+      if (u.role === 'admin') box.appendChild(el('a', { href: '/settings.html#users', title: 'Пользователи, роли, журнал действий' }, 'Пользователи'));
       box.appendChild(el('a', { href: change, title: 'Сменить свой пароль' }, 'Пароль'));
     }
     var out = el('button', { type: 'button', title: 'Выйти из Desk Monitor' }, 'Выйти');

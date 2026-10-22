@@ -207,6 +207,7 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
 .savebar{position:fixed;left:50%;transform:translateX(-50%);bottom:16px;z-index:60;background:var(--panel);border:1px solid var(--line-2);border-radius:10px;box-shadow:var(--shadow);display:flex;align-items:center;gap:12px;padding:9px 12px 9px 16px;max-width:calc(100vw - 32px);flex-wrap:wrap}
 .toast{position:fixed;right:16px;bottom:16px;z-index:120;max-width:min(460px,calc(100vw - 32px));background:var(--panel);border:1px solid var(--line-2);border-left:3px solid var(--accent);border-radius:8px;box-shadow:var(--shadow);padding:10px 14px;font-size:12.5px}
 .toast.ok{border-left-color:var(--pos)} .toast.err{border-left-color:var(--neg)}
+#users-card .du > h2{display:none} /* заголовок раздела — h1 выше */
 </style>
 
 <div class="st-shell">
@@ -223,6 +224,8 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
     <a href="#auto" data-sec="auto"><svg viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3"/></svg><span class="lbl">Автообновление</span><span class="dot" data-nav="auto"></span></a>
     <a href="#up" data-sec="up"><svg viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10"/></svg><span class="lbl">Обновление программы</span><span class="nb" id="nav-ver"></span></a>
     <a href="#diag" data-sec="diag"><svg viewBox="0 0 16 16"><path d="M1.5 8.5h3l2-5 3 9 2-4h3"/></svg><span class="lbl">Диагностика</span></a>
+    <div class="grp" data-users-nav>Доступ</div>
+    <a href="#users" data-sec="users" data-users-nav><svg viewBox="0 0 16 16"><circle cx="6" cy="5.5" r="2.5"/><path d="M1.5 13.5c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4M10.5 3.2a2.5 2.5 0 0 1 0 4.6M12 9.8c1.5.5 2.5 1.8 2.5 3.7"/></svg><span class="lbl">Пользователи</span><span class="nb" id="nav-auth"></span></a>
     <div class="foot" id="home-note">Загрузка настроек…</div>
   </nav>
 
@@ -440,6 +443,20 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
       </div>
     </section>
 
+    <!-- ========== Пользователи (вход и доступ по сети, пакет 1 п. 9; раздел — desk-users.js) ========== -->
+    <section class="sec" id="sec-users" data-sec="users">
+      <div class="sec-h"><div><h1>Пользователи</h1><p>Кто входит в Desk Monitor и с какой ролью: просмотр, трейдер, администратор. Журнал действий — внизу.</p></div>
+        <div class="badges"><span class="badge st" id="auth-st">вход …</span></div></div>
+      <div class="note" id="users-off" hidden>
+        <b>Вход по паролю выключен</b> — Desk Monitor открыт только на этом компьютере, пользователи не нужны.
+        Чтобы пустить коллег по сети: заведите здесь себя администратором и коллег (или <span class="mono">desk.bat user add ИМЯ --role admin</span>),
+        затем включите вход и доступ из сети: <span class="mono">desk.bat lan enable --self-signed</span>, брандмауэр
+        (<span class="mono">desk.bat firewall add</span>) и перезапуск — по шагам в START_HERE.txt, раздел 9 «Доступ коллегам по сети».
+      </div>
+      <div class="note warn" id="users-denied" hidden>Пользователями управляет администратор.</div>
+      <div class="card" id="users-card"><section class="bd" data-desk-users></section></div>
+    </section>
+
     <!-- ========== Диагностика ========== -->
     <section class="sec" id="sec-diag" data-sec="diag">
       <div class="sec-h"><div><h1>Диагностика</h1><p>Файл для агента, загрузка позиций по книгам, ход истории прогонов и где что лежит.</p></div></div>
@@ -563,8 +580,8 @@ async function api(method, url, body){
   return j;
 }
 
-/* ---------- разделы: #hub, #adapter, #entities, #books, #funding, #auto, #up, #diag (и #dg, #rc, #bf, #eff внутри) ---------- */
-const SECTIONS = ['hub', 'adapter', 'entities', 'books', 'funding', 'auto', 'up', 'diag'];
+/* ---------- разделы: #hub, #adapter, #entities, #books, #funding, #auto, #up, #diag (и #dg, #rc, #bf, #eff внутри), #users ---------- */
+const SECTIONS = ['hub', 'adapter', 'entities', 'books', 'funding', 'auto', 'up', 'diag', 'users'];
 const INNER = {dg:'diag', rc:'diag', bf:'diag', eff:'diag', 'eff-card':'diag'};
 function show(hash){
   let id = (hash || '').replace(/^#/, ''), inner = null;
@@ -573,11 +590,41 @@ function show(hash){
   document.querySelectorAll('section.sec').forEach(s => s.classList.toggle('on', s.dataset.sec === id));
   document.querySelectorAll('.st-nav a[data-sec]').forEach(a => { a.classList.toggle('on', a.dataset.sec === id); if (a.dataset.sec === id) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   store.set('settings.sec', id);
+  if (id === 'users') usersSection();
   const cur = document.querySelector('.st-nav a.on');  // на телефоне разделы — полосой: выбранный виден
   if (cur && matchMedia('(max-width:860px)').matches) cur.parentNode.scrollLeft = cur.offsetLeft - 16;
   if (inner && $(inner)) setTimeout(() => $(inner).scrollIntoView({block:'start', behavior:'smooth'}), 30);
   else window.scrollTo(0, 0);
 }
+/* ---------- Пользователи: раздел desk-users.js (только администратор; вход выключен — объяснение, как включить) ---------- */
+let usersMounted = false;
+function authState(){  // desk-auth.js (подключает desk-nav.js): GET /api/v1/auth/state
+  const A = window.DESK_AUTH;
+  if (A && A.ready) return A.ready;
+  return fetch('/api/v1/auth/state', {headers:{'Accept':'application/json'}, cache:'no-store'}).then(r => r.ok ? r.json() : null, () => null);
+}
+function usersSection(){
+  if (usersMounted) return;
+  usersMounted = true;
+  authState().then(st => {
+    const on = !!(st && st.enabled), admin = !on || !!(st.user && st.user.role === 'admin');
+    $('auth-st').textContent = on ? 'вход по паролю включён' : 'вход выключен';
+    $('auth-st').className = 'badge st ' + (on ? 'ok' : '');
+    $('users-off').hidden = on;
+    $('users-denied').hidden = admin;
+    $('users-card').hidden = !admin;
+    if (!admin) return;
+    const slot = document.querySelector('#users-card [data-desk-users]');
+    const go = () => window.DeskUsers.mount(slot);
+    if (window.DeskUsers) return go();
+    const sc = document.createElement('script'); sc.src = 'desk-users.js'; sc.onload = go; document.head.appendChild(sc);
+  });
+}
+authState().then(st => {  // ссылка в навигации: при включённом входе — только администратору
+  const on = !!(st && st.enabled), admin = !on || !!(st.user && st.user.role === 'admin');
+  document.querySelectorAll('[data-users-nav]').forEach(e => { e.hidden = !admin; });
+  $('nav-auth').textContent = on ? 'вход' : '';
+});
 window.addEventListener('hashchange', () => show(location.hash));
 show(location.hash);
 

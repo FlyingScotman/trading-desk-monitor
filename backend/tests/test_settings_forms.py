@@ -235,3 +235,48 @@ def test_context_offers_books_seen_in_recent_positions_and_the_hubs_indices(home
     assert [(b["book_id"], b["last_date"], b["positions"]) for b in j["recent_books"]] == [
         ("NEW_BOOK", "2026-10-19", 3), ("T1", "2026-10-20", 2)]
     assert j["recent_books"][0]["entity"] == "ООО Ромашка" and j["recent_books"][1]["entity"] is None
+
+
+def test_with_sign_in_the_forms_are_the_admins_and_record_the_user(home: Path, store_url: str) -> None:
+    """The form routes sit behind the settings' guard (``auth.require_admin``): with sign-in on, only an admin checks
+    or saves, and the revision carries the user's name (sign-in off: ``local``, above); an alias edit likewise."""
+    from desk.api import auth
+
+    cfg = auth.AuthConfig(enabled=True, cache_s=0)
+    pw = {"boss": ("admin", "admin-pass-1"), "tom": ("trader", "trader-pass-1"), "vic": ("viewer", "viewer-pass-1")}
+    with psycopg.connect(store_url, autocommit=True) as con:
+        for n, (role, p) in pw.items():
+            auth.add_user(con, n, role, p, actor="test")
+
+    def signed_in(name: str) -> tuple[TestClient, dict[str, str]]:
+        c = TestClient(create_app(store_url, auth=cfg), base_url="http://desk.example:8100", client=("10.1.2.3", 50000))
+        assert c.post("/api/v1/auth/login", json={"username": name, "password": pw[name][1]}).status_code == 200
+        return c, {"X-CSRF-Token": c.cookies["desk_csrf"]}
+
+    doc = json.loads((home / "adapter-config" / "entities.json").read_text(encoding="utf-8"))
+    doc["entities"][0]["pnl_sweep"] = "daily"
+    for n in ("tom", "vic"):
+        c, h = signed_in(n)
+        for method, path, body in (("POST", "/api/v1/adapter/settings/entities/check", {"data": doc}),
+                                   ("PUT", "/api/v1/adapter/settings/entities", {"data": doc}),
+                                   ("GET", "/api/v1/adapter/settings-context", None),
+                                   ("GET", "/api/v1/adapter/config/entities.json/history", None)):
+            r = c.request(method, path, json=body, headers=h)
+            assert r.status_code == 403 and r.json()["code"] == "forbidden", (n, path, r.text)
+    c, h = signed_in("boss")
+    assert c.put("/api/v1/adapter/settings/entities", json={"data": doc}).status_code == 403  # no CSRF token
+    assert c.post("/api/v1/adapter/settings/entities/check", json={"data": doc}, headers=h).json()["ok"]
+    j = c.put("/api/v1/adapter/settings/entities", json={"data": doc}, headers=h).json()
+    assert j["revision"]["changed_by"] == "boss" and j["revision"]["via"] == "form"
+    doc["entities"][0]["pnl_sweep"] = "monthly"
+    j = c.put("/api/v1/adapter/config/entities.json", json={"text": file_text(doc)}, headers=h).json()
+    assert j["revision"]["changed_by"] == "boss" and j["revision"]["via"] == "raw"
+    revs = c.get("/api/v1/adapter/config/entities.json/history").json()["revisions"]
+    assert [(r["via"], r["changed_by"]) for r in revs] == [("raw", "boss"), ("form", "boss"), ("file", "file")]
+    with psycopg.connect(store_url, autocommit=True) as con:
+        assert con.execute("SELECT actor FROM audit_log WHERE action = 'adapter' AND ok ORDER BY audit_id").fetchall() == [
+            ("boss",)] * 3
+    c, h = signed_in("tom")
+    isin = "RU000A1038V6"
+    assert c.put("/api/v1/instruments/alias", json={"isin": isin, "alias": "Тест"}, headers=h).json()["changed_by"] == "tom"
+    assert [r["changed_by"] for r in c.get(f"/api/v1/instruments/aliases/{isin}/history").json()["revisions"]] == ["tom"]

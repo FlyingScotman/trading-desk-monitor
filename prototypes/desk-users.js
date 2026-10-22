@@ -5,7 +5,8 @@
  *
  * Где показывать: любой элемент с атрибутом data-desk-users (раздел встаёт в него при загрузке), например
  *   <section data-desk-users></section><script src="desk-users.js"></script>
- * или window.DeskUsers.mount(элемент). Страница users.html — он же отдельно; страница настроек может взять его так же.
+ * или window.DeskUsers.mount(элемент). Показывается в настройках, раздел «Пользователи» (settings.html#users;
+ * users.html переводит туда).
  */
 (function () {
   'use strict';

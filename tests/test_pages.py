@@ -95,6 +95,18 @@ class Pages(unittest.TestCase):
         self.assertIn('href="concepts/lib/kit.css"', html)
         self.assertIn("concepts-theme", html)  # та же тема, что у мониторов
 
+    def test_settings_page_hosts_the_users_section(self):
+        # пакет 1, п. 9: раздел «Пользователи» (desk-users.js) — в настройках, слева в навигации; users.html — переход туда
+        html = (PROTO / "settings.html").read_text(encoding="utf-8")
+        self.assertIn('href="#users" data-sec="users"', html)
+        self.assertRegex(html, r'<section class="sec" id="sec-users" data-sec="users"')
+        self.assertIn("<section class=\"bd\" data-desk-users>", html)
+        self.assertIn("'desk-users.js'", html)
+        self.assertIn("START_HERE.txt, раздел 9", html)  # вход выключен: как включить
+        users = (PROTO / "users.html").read_text(encoding="utf-8")
+        self.assertIn("settings.html#users", users)
+        self.assertIn("/settings.html#users", (PROTO / "desk-auth.js").read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

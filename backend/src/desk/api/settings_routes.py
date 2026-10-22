@@ -48,11 +48,11 @@ from ..settings import (
     write_proxy_password,
 )
 from .app import ApiError
-from .auth import require_admin
+from .auth import LOCAL, actor, require_admin
 
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
-LOCAL_USER = "local"
-"""``changed_by`` of a change from a loopback client while there are no users (as ``alias_routes``)."""
+LOCAL_USER = LOCAL
+"""``changed_by`` of a change while sign-in is off (this computer; as ``alias_routes``); with it on, the user's name."""
 RECENT_DAYS = 35
 """Books seen in positions of the last ``RECENT_DAYS`` days before the newest position date are offered."""
 CURRENCIES = ("RUB", "USD", "EUR", "CNY", "CHF", "GBP", "JPY", "HKD", "KZT", "AED", "TRY", "BYN", "INR")
@@ -366,7 +366,7 @@ def _store(request: Request, read_only: bool = True) -> psycopg.Connection:
 
 
 def _who(request: Request) -> str:
-    return LOCAL_USER  # shortcut: no users yet (05 §6); with roles, the user's name
+    return actor(request)  # the signed-in admin; LOCAL_USER while sign-in is off
 
 
 def _record(request: Request, path: Path, old: str | None, text: str, via: str,
