@@ -81,6 +81,8 @@ class Position(BaseModel):
     fact: dict[str, Any] | None = Field(description="The published position record (tdm position row format)")
     pnl: dict[str, Any] | None = Field(description="Flash PnL components plus extra; null without PnL")
     no_pnl: dict[str, Any] | None = Field(description="{reason, detail} when priced but without PnL")
+    alias: str | None = Field(None, description="The display name a user gave fact.isin (PUT /api/v1/instruments/"
+                                                "alias), in force now, old runs too; null: none, show fact.name")
 
 
 class PositionList(BaseModel):
