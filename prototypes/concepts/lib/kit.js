@@ -2,7 +2,7 @@
  * KIT — общие компоненты концептов (нужны mock.js и ../echarts.min.js).
  *
  *  KIT.f.*                — форматирование (тыс ₽/бп, mm, bn, б.п., даты)
- *  KIT.top({title, tag})  — шапка: дата среза, фильтр книг (общий для всех концептов), поиск, тема
+ *  KIT.top({title, tag})  — шапка: дата среза, фильтр книг и портфелей (общий для всех мониторов), поиск, тема
  *  KIT.list()             — позиции после фильтра шапки; KIT.onFilter(fn) — перерисовка при смене фильтра
  *  KIT.d(spec)            — кликабельная цифра: spec = {title, list|rows, val, fmt, unit, v?}; щелчок раскрывает вклад
  *  KIT.drill(spec)        — открыть разбор вклада (позиции, группировка по эмитенту/книге/валюте/типу/бакету)
@@ -131,6 +131,8 @@
   const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   K.css = css;
   K.ccyColor = c => css('--' + String(c).toLowerCase()) || css('--accent');
+  const CCY_NAMES = { RUB: 'Рубли', USD: 'Доллары', EUR: 'Евро', CNY: 'Юани', CHF: 'Франки', GBP: 'Фунты', HKD: 'Гонконгские доллары', JPY: 'Иены', AED: 'Дирхамы', KZT: 'Тенге', BYN: 'Белорусские рубли', TRY: 'Лиры', INR: 'Рупии' };
+  K.ccyName = c => CCY_NAMES[c] || c;
   K.ccyTag = c => '<span class="k-ccy" style="background:' + K.ccyColor(c) + '">' + c + '</span>';
   K.curveColors = { 'RUB RUONIA': '#4c9dff', 'RUB KEY': '#22c3d6', 'RUB OFZ': '#9b7bff', 'USD SOFR': '#3fb67a', 'EUR ESTR': '#d58cff', 'CNY XCCY': '#f0645a', 'CS01': '#e3b341' };
   K.PAL = ['#4c9dff', '#3fb67a', '#e3b341', '#f0645a', '#b48cff', '#22c3d6', '#ff8f3f', '#8bc34a', '#ef6fb0', '#7f8cff', '#c9a26b', '#5fd4a8', '#ff6b8b', '#a0b4c8'];
@@ -177,28 +179,46 @@
   K.onFilter = fn => K.on('filter', fn);
 
   // ---------- фильтр книг (верхний уровень) ----------
-  const filt = { entity: null, desk: null, books: null, ccy: null };
+  // portsOff — скрытые портфели (колонка Portfolio отчёта, x_portfolio адаптера; '—' — позиции без неё): новые
+  // портфели прогона видны, пока их не сняли; сохранённые, которых в прогоне нет, ни на что не влияют
+  const filt = { entity: null, desk: null, books: null, ccy: null, portsOff: null };
   try { Object.assign(filt, JSON.parse(localStorage.getItem('concepts-filter') || '{}')); } catch (e) { }
   K.filter = filt;
   K.setFilter = (patch) => { Object.assign(filt, patch); try { localStorage.setItem('concepts-filter', JSON.stringify(filt)); } catch (e) { } fire('filter'); renderFilterChips(); };
-  K.list = () => M.positions.filter(p => (!filt.entity || p.entity === filt.entity) && (!filt.desk || p.desk === filt.desk) && (!filt.books || !filt.books.length || filt.books.includes(p.book)) && (!filt.ccy || p.ccy === filt.ccy));
+  const portOf = p => p.portfolio || '—';
+  const PORTS = [...new Set(M.positions.map(portOf))].sort((a, b) => (a === '—') - (b === '—') || a.localeCompare(b, 'ru'));
+  const portsOff = () => (filt.portsOff || []).filter(v => PORTS.includes(v));
+  K.list = () => { const off = portsOff(); return M.positions.filter(p => (!filt.entity || p.entity === filt.entity) && (!filt.desk || p.desk === filt.desk) && (!filt.books || !filt.books.length || filt.books.includes(p.book)) && (!filt.ccy || p.ccy === filt.ccy) && (!off.length || !off.includes(portOf(p)))); };
   let chipsBox = null;
   // каскад: юрлицо → деск → книги; в каждом списке только варианты, совместимые с уже выбранным
   const booksIn = () => M.books.filter(b => (!filt.entity || b.entity === filt.entity) && (!filt.desk || b.desk === filt.desk));
-  const nPos = {}; M.positions.forEach(p => nPos[p.book] = (nPos[p.book] || 0) + 1);
+  const nPos = {}, nPort = {}; M.positions.forEach(p => { nPos[p.book] = (nPos[p.book] || 0) + 1; nPort[portOf(p)] = (nPort[portOf(p)] || 0) + 1; });
+  const portName = v => v === '—' ? 'без портфеля' : v;
   function renderFilterChips() {
     if (!chipsBox) return;
     const ent = M.entities;
     const desks = [...new Set(M.books.filter(b => !filt.entity || b.entity === filt.entity).map(b => b.desk))];
     const lbl = filt.books && filt.books.length ? (filt.books.length === 1 ? M.book[filt.books[0]].name : filt.books.length + ' книг') : 'все книги (' + booksIn().length + ')';
+    // чип портфелей — когда адаптер их передал (x_portfolio); у прогона без колонки все позиции «без портфеля»
+    const off = portsOff(), showPorts = PORTS.some(v => v !== '—');
+    const plbl = !off.length ? 'все портфели' : off.length === 1 ? 'без ' + portName(off[0]) : 'портфели: ' + (PORTS.length - off.length) + ' из ' + PORTS.length;
     chipsBox.innerHTML =
       '<span class="k-chip' + (filt.entity ? ' on' : '') + '" data-f="entity">' + (filt.entity ? esc(ent.find(e => e.id === filt.entity).name) : 'все юрлица') + ' ▾</span>' +
       '<span class="k-chip' + (filt.desk ? ' on' : '') + '" data-f="desk">' + (filt.desk ? esc(filt.desk) : 'все дески') + ' ▾</span>' +
       '<span class="k-chip' + (filt.books && filt.books.length ? ' on' : '') + '" data-f="books">' + esc(lbl) + ' ▾</span>' +
-      ((filt.entity || filt.desk || (filt.books && filt.books.length) || filt.ccy) ? '<span class="k-chip" data-f="reset"><span class="x">✕</span> сбросить</span>' : '');
+      (showPorts ? '<span class="k-chip' + (off.length ? ' on' : '') + '" data-f="ports" title="Портфель — колонка Portfolio отчёта о позициях">' + esc(plbl) + ' ▾</span>' : '') +
+      ((filt.entity || filt.desk || (filt.books && filt.books.length) || filt.ccy || off.length) ? '<span class="k-chip" data-f="reset"><span class="x">✕</span> сбросить</span>' : '');
     chipsBox.querySelectorAll('[data-f]').forEach(ch => ch.onclick = ev => {
       const k = ch.dataset.f;
-      if (k === 'reset') return K.setFilter({ entity: null, desk: null, books: null, ccy: null });
+      if (k === 'reset') return K.setFilter({ entity: null, desk: null, books: null, ccy: null, portsOff: null });
+      if (k === 'ports') {  // отмеченные — видны; щелчок снимает или возвращает портфель
+        const items = PORTS.map(v => ({ v, t: portName(v), sub: nPort[v] + ' поз', multi: true }));
+        menu(ch, items, PORTS.filter(v => !off.includes(v)), v => {
+          const s = new Set(off); s.has(v) ? s.delete(v) : s.add(v);
+          K.setFilter({ portsOff: s.size >= PORTS.length ? [] : [...s] });  // снять все — значит показать все
+        }, 'ports');
+        return ev.stopPropagation();
+      }
       const items = k === 'entity' ? [{ v: null, t: 'все юрлица' }].concat(ent.map(e => ({ v: e.id, t: e.name, sub: M.books.filter(b => b.entity === e.id).length + ' книг' })))
         : k === 'desk' ? [{ v: null, t: 'все дески' }].concat(desks.map(d => ({ v: d, t: d, sub: M.books.filter(b => b.desk === d && (!filt.entity || b.entity === filt.entity)).length + ' книг' })))
           : booksIn().map(b => ({ v: b.id, t: b.name, sub: b.id + ' · ' + b.desk + (filt.entity ? '' : ' · ' + M.entities.find(e => e.id === b.entity).name) + ' · ' + (nPos[b.id] || 0) + ' поз', multi: true, empty: !nPos[b.id] }));
@@ -212,19 +232,20 @@
           const ok = new Set(booksIn().map(b => b.id)); patch.books = (filt.books || []).filter(b => ok.has(b));
           K.setFilter(patch);
         }
-      }, k === 'books');
+      }, k === 'books' && 'books');
       ev.stopPropagation();
     });
   }
   let openMenu = null;
+  // multi — ключ чипа шапки ('books', 'ports'), меню которого переоткрывается после щелчка; у книг — поиск и «все / снять»
   function menu(anchor, items, cur, pick, multi) {
     if (openMenu) openMenu.remove();
     const m = h('div', 'k-panel'); m.style.cssText = 'position:fixed;z-index:140;min-width:220px;max-height:60vh;overflow:auto;box-shadow:var(--shadow);padding:4px 0';
     const r = anchor.getBoundingClientRect(); m.style.left = Math.min(r.left, innerWidth - 300) + 'px'; m.style.top = (r.bottom + 4) + 'px';
-    let rowsBox = m, q = multi ? (menu._q || '') : '';
-    const reopen = () => { m.remove(); openMenu = null; const nb = chipsBox.querySelector('[data-f=books]'); if (nb) nb.click(); };
+    let rowsBox = m, q = multi === 'books' ? (menu._q || '') : '';
+    const reopen = () => { m.remove(); openMenu = null; const nb = chipsBox.querySelector('[data-f=' + multi + ']'); if (nb) nb.click(); };
     const vis = () => items.filter(it => !q || (it.t + ' ' + (it.sub || '')).toLowerCase().includes(q));
-    if (multi) {
+    if (multi === 'books') {
       const tb = h('div'); tb.style.cssText = 'display:flex;gap:6px;padding:4px 8px 6px;border-bottom:1px solid var(--line);position:sticky;top:-4px;background:var(--panel)';
       const inp = h('input', 'k-input'); inp.placeholder = 'найти книгу…'; inp.value = q; inp.style.minWidth = '0'; inp.style.flex = '1';
       const all = h('button', 'k-btn', 'все видимые'), none = h('button', 'k-btn', 'снять');
@@ -287,12 +308,27 @@
     };
   }
 
+  // ход «Истории прогонов» (сервер досчитывает прошлые даты от самой ранней, R23): пока есть даты к расчёту, чип
+  // в шапке говорит, сколько готово, — история риска, MTD/YTD и изменения позиций прошлых дат появляются по мере расчёта
+  function backfillChip(bar) {
+    const ch = h('a', 'k-chip'); ch.href = '../settings.html#bf'; ch.style.cssText = 'display:none;text-decoration:none;border-color:var(--warn)';
+    bar.querySelector('[data-a=search]').before(ch);
+    const poll = () => fetch('../api/v1/backfill/status', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).then(j => {
+      if (!j || !j.enabled || !j.todo) { ch.style.display = 'none'; return; }
+      const all = j.done + j.todo + (j.failed || 0);
+      ch.style.display = ''; ch.textContent = '⟳ история: ' + j.done + ' из ' + all + ' дат';
+      ch.title = 'Сервер досчитывает прошлые даты с ' + j.from + ', от самой ранней: история риска, PnL с начала месяца и года и позиции прошлых дат появляются по мере расчёта (обновите страницу). Следующие: ' + (j.next || []).join(', ') + '. Подробности — Настройки → «История прогонов».';
+      setTimeout(poll, 120e3);
+    }).catch(() => { });
+    poll();
+  }
+
   // ---------- шапка ----------
   K.top = function (opt) {
     opt = opt || {};
     document.title = opt.title || document.title;
     const bar = h('div', 'k-top');
-    bar.innerHTML = '<div class="brand"><a href="index.html" title="Все концепты">◂ концепты</a><span>' + esc(opt.title || '') + '</span>' + (opt.tag ? '<span class="tag">' + esc(opt.tag) + '</span>' : '') + '</div>' +
+    bar.innerHTML = '<div class="brand"><a href="index.html" title="Все мониторы">◂ мониторы</a><span>' + esc(opt.title || '') + '</span>' + (opt.tag ? '<span class="tag">' + esc(opt.tag) + '</span>' : '') + '</div>' +
       '<div class="filters" style="display:flex;gap:6px;flex-wrap:wrap"></div><div class="sp"></div>' +
       (opt.extra || '') +
       '<span class="k-chip" data-a="repr" title="Валюта отчёта: все суммы деска пересчитываются по споту">в ' + K.repr + ' ' + K.SYM[K.repr] + ' ▾</span>' +
@@ -304,6 +340,7 @@
     bar.querySelector('[data-a=search]').onclick = () => K.palette();
     bar.querySelector('[data-a=theme]').onclick = K.toggleTheme;
     bindSrc(bar);
+    if (K.source === 'real') backfillChip(bar);
     const rc = bar.querySelector('[data-a=repr]');
     rc.onclick = e => { e.stopPropagation(); menu(rc, K.REPRS.map(c => ({ v: c, t: 'в ' + c + ' ' + K.SYM[c], sub: c === 'RUB' ? '' : 'курс ' + f.n(M.fx[c], 2) })), K.repr, v => { if (v !== K.repr) K.setRepr(v); }); };
     return bar;
@@ -395,14 +432,17 @@
         return;
       }
       let cum = 0;
-      body.innerHTML = '<table class="k-tbl"><thead><tr><th></th><th>' + (dim === 'pos' ? 'Позиция' : D[1][0].toUpperCase() + D[1].slice(1)) + '</th>' + (dim === 'pos' ? '<th>Книга</th><th>Ccy</th>' : '<th class="n">Позиций</th>') + '<th class="n">Вклад</th><th style="width:120px"></th><th class="n">Доля</th><th class="n">Накопл.</th></tr></thead><tbody>' +
+      // размер: у позиции — номинал в её валюте и MV, у группы — MV её позиций (у деривативов MV — их PV)
+      const mvOf = x => x.n.reduce((s, r) => s + (r.p.mv || 0), 0), mvTot = list.reduce((s, x) => s + mvOf(x), 0);
+      body.innerHTML = '<table class="k-tbl"><thead><tr><th></th><th>' + (dim === 'pos' ? 'Позиция' : D[1][0].toUpperCase() + D[1].slice(1)) + '</th>' + (dim === 'pos' ? '<th>Книга</th><th>Ccy</th><th class="n" title="в валюте позиции">Номинал</th>' : '<th class="n">Позиций</th>') + '<th class="n">MV, mm ₽</th><th class="n">Вклад</th><th style="width:120px"></th><th class="n">Доля</th><th class="n">Накопл.</th></tr></thead><tbody>' +
         list.map(x => {
           cum += Math.abs(x.v);
           const stripe = dim === 'issuer' || dim === 'pos' ? K.issuerColor(x.p.issuer) : dim === 'ccy' ? K.ccyColor(x.k) : 'transparent';
-          return '<tr class="row" data-k="' + esc(x.k) + '"><td class="stripe" style="background:' + stripe + '"></td><td>' + esc(x.label) + (dim === 'pos' ? ' <span class="mut3">' + esc(x.p.issuerName) + '</span>' : '') + '</td>' +
-            (dim === 'pos' ? '<td class="mut">' + esc(x.p.book) + '</td><td>' + K.ccyTag(x.p.ccy) + '</td>' : '<td class="n mut">' + x.n.length + '</td>') +
+          return '<tr class="row" data-k="' + esc(x.k) + '"><td class="stripe" style="background:' + stripe + '"></td><td style="max-width:240px;overflow:hidden;text-overflow:ellipsis" title="' + esc(x.label + (dim === 'pos' ? ' · ' + x.p.issuerName : '')) + '">' + esc(x.label) + (dim === 'pos' ? ' <span class="mut3">' + esc(x.p.issuerName) + '</span>' : '') + '</td>' +
+            (dim === 'pos' ? '<td class="mut">' + esc(x.p.book) + '</td><td>' + K.ccyTag(x.p.ccy) + '</td><td class="n">' + f.mn(x.p.notional, 2) + '<span class="mut3">mm ' + esc(x.p.ccy) + '</span></td>' : '<td class="n mut">' + x.n.length + '</td>') +
+            '<td class="n">' + (dim === 'pos' && x.p.mv == null ? '—' : f.mn(mvOf(x), 1)) + '</td>' +
             '<td class="n ' + f.cls(x.v) + '">' + fmt(x.v) + '</td><td>' + K.bar(x.v, max) + '</td><td class="n mut">' + Math.round(Math.abs(x.v) / absTot * 100) + '%</td><td class="n mut3">' + Math.round(cum / absTot * 100) + '%</td></tr>';
-        }).join('') + '</tbody><tfoot><tr><td></td><td>Итого</td><td colspan="' + (dim === 'pos' ? 2 : 1) + '"></td><td class="n ' + f.cls(tot) + '">' + fmt(tot) + '</td><td colspan="3"></td></tr></tfoot></table>';
+        }).join('') + '</tbody><tfoot><tr><td></td><td>Итого</td><td colspan="' + (dim === 'pos' ? 3 : 1) + '"></td><td class="n">' + f.mn(mvTot, 1) + '</td><td class="n ' + f.cls(tot) + '">' + fmt(tot) + '</td><td colspan="3"></td></tr></tfoot></table>';
       body.querySelectorAll('tr.row').forEach(tr => tr.onclick = () => {
         const x = g[tr.dataset.k];
         if (dim === 'pos') K.card(x.k); else K.drill(Object.assign({}, spec, { title: spec.title + ' · ' + x.label, rows: x.n, dim: 'pos' }));
@@ -579,7 +619,7 @@
     maturity: { key: 'maturity', label: 'Погашение', fmt: v => f.date(v) },
     offer: { key: 'offer', label: 'Оферта', fmt: (v, r) => v ? f.date(v) + ' <span class="mut3">' + (r.offerKind === 'put' ? 'P' : 'C') + '</span>' : '<span class="mut3">—</span>' },
     tenor: { key: 'tenor', label: 'Срок', num: true, fmt: v => f.yrs(v), title: 'до оферты, если есть, иначе до погашения' },
-    notional: { key: 'notional', label: 'Номинал', num: true, fmt: (v, r) => f.mn(v, 0) + ' <span class="mut3">' + r.ccy + '</span>', title: 'mm, в валюте бумаги' },
+    notional: { key: 'notional', label: 'Номинал', num: true, fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', title: 'в валюте бумаги' },
     mv: { key: 'mv', label: 'MV, mm ₽', num: true, fmt: v => f.mn(v, 0), sum: true, unit: 'mm ₽', sumFmt: v => f.mn(v, 0) },
     price: { key: 'price', label: 'Цена', num: true, fmt: v => f.px(v) },
     ytm: { key: 'ytm', label: 'Дох.', num: true, fmt: v => f.pct(v) },
@@ -600,7 +640,7 @@
   K.issuerOrder = (a, b) => { const r = x => x === 'Минфин' ? 0 : x === 'Деривативы' ? 2 : 1; return (r(a) - r(b)) || a.localeCompare(b, 'ru'); };
   // группировка по умолчанию: валюта → эмитент (у рублёвых эмитентов — флоатеры отдельно от фикса)
   K.defaultGroups = [
-    { key: r => r.ccy, label: k => K.ccyTag(k) + ' ' + ({ RUB: 'Рубли', USD: 'Доллары', EUR: 'Евро', CNY: 'Юани' }[k] || k), order: (a, b) => M.ccyOrder[a] - M.ccyOrder[b], color: k => K.ccyColor(k), span: 1 },
+    { key: r => r.ccy, label: k => K.ccyTag(k) + ' ' + K.ccyName(k), order: (a, b) => M.ccyOrder[a] - M.ccyOrder[b], color: k => K.ccyColor(k), span: 1 },
     { key: r => r.group === 'DER' ? 'Деривативы' : r.issuerName, label: (k, rows) => esc(k) + (rows[0].group === 'DER' ? ' <span class="mut3" style="font-weight:400">(по контрагентам)</span>' : ''), order: K.issuerOrder, color: (k, rows) => K.issuerColor(rows[0].issuer) },
   ];
 
@@ -642,7 +682,7 @@
       '<div class="k-fields">' + [['Итого день', pn.total], ['Кэрри', pn.carry], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx], ['Сделки', pn.trading], ['Прочее', pn.other], ['MTD', p.pnlMtd], ['YTD', p.pnlYtd]].map(([l, v]) => '<div><div class="l">' + l + '</div><div class="v ' + f.cls(v) + '">' + (Math.abs(v) >= 1e7 ? f.mns(v, 1) + ' <small>mm</small>' : f.ks(v)) + '</div></div>').join('') + '</div>' +
       '<div class="k-sec">История <span class="sp"></span><span class="hseg"></span></div><div class="hchart" style="height:230px"></div>' +
       '<div class="k-sec">Риск по бакетам <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽/бп</span></div><div class="rchart" style="height:200px"></div>' +
-      (isBond ? '<div class="k-sec">Ближайшие потоки</div><div class="cfs"></div>' : '');
+      (isBond ? '<div class="k-sec">Потоки</div><div class="cfs"></div>' : '');
     // история: у облигации вся (M.posHistory deep: с 2024 через API истории хаба), видно последний год, колесо и
     // ползунок — глубже; спред фикс-купона — G и Z (MOEX, к КБД), флоатера — DM (по прогонам); у линкера BEI и IR
     const H = M.posHistory(p.id, isBond ? { deep: true } : undefined);
@@ -671,11 +711,29 @@
     }));
     o.charts.push(rc);
     if (isBond) {
-      const cf = M.cashflows.filter(c => c.pos === p.id).slice(0, 8);
-      o.bd.querySelector('.cfs').innerHTML = cf.length ? '<table class="k-tbl"><thead><tr><th>Дата</th><th>Тип</th><th class="n">Сумма, ' + p.ccy + '</th><th class="n">≈ mm ₽</th></tr></thead><tbody>' +
-        cf.map(c => '<tr><td>' + f.date(c.date) + '</td><td>' + ({ cpn: 'купон', mat: 'погашение', put: 'пут-оферта', call: 'колл' }[c.kind]) + (c.est ? ' <span class="mut3">прогноз</span>' : '') + '</td><td class="n">' + f.n(c.amount, 0) + '</td><td class="n">' + f.mn(c.amountRub, 1) + '</td></tr>').join('') + '</tbody></table>' : '<div class="k-empty">нет потоков в горизонте</div>';
+      K.flows(o.bd.querySelector('.cfs'), p);
     }
     return o;
+  };
+
+  // все потоки позиции до погашения: на прогоне — график выпуска с сервера (M.posFlows), иначе потоки набора данных;
+  // потоки после оферты, к которой оценена бумага, приглушены: они будут, если бумагу не предъявят
+  // K.flows(el, p): сразу — потоки набора данных, затем, когда сервер ответит, — весь график
+  K.flows = function (el, p) {
+    el.innerHTML = K.flowsTable(p, M.cashflows.filter(c => c.pos === p.id), !!M.posFlows);
+    if (M.posFlows) M.posFlows(p.id).then(cf => { if (el.isConnected && el.dataset.pos === p.id) el.innerHTML = K.flowsTable(p, cf || M.cashflows.filter(c => c.pos === p.id)); });
+    el.dataset.pos = p.id;
+  };
+  K.flowsTable = function (p, cf, loading) {
+    const offer = p.offer || p.yieldDate || null;
+    const KIND = { cpn: 'купон', amort: 'амортизация', mat: 'погашение', put: 'пут-оферта', call: 'колл' };
+    if (!cf.length) return '<div class="k-empty">' + (loading ? 'загрузка потоков…' : 'нет потоков') + '</div>';
+    const sum = cf.reduce((s, c) => s + (c.kind === 'put' || c.kind === 'call' || c.amountRub == null ? 0 : c.amountRub), 0);
+    return '<div class="mut3" style="font-size:11px;margin-bottom:4px">' + (loading ? 'загрузка всех потоков… · ' : '') + cf.length + ' потоков до ' + f.date(cf[cf.length - 1].date) +
+      (offer ? ' · после оферты ' + f.date(offer) + ' — бледнее' : '') + ' · оферта — номинал к предъявлению, в сумму не входит</div>' +
+      '<div style="max-height:360px;overflow:auto"><table class="k-tbl"><thead><tr><th>Дата</th><th>Тип</th><th class="n">Сумма, ' + p.ccy + '</th><th class="n">≈ mm ₽</th></tr></thead><tbody>' +
+      cf.map(c => '<tr' + (offer && c.date > offer ? ' style="opacity:.55"' : '') + '><td>' + f.date(c.date) + '</td><td>' + (c.amort ? 'амортизация' : KIND[c.kind] || c.kind) + (c.est ? ' <span class="mut3">прогноз</span>' : '') + '</td><td class="n">' + f.n(c.amount, 0) + '</td><td class="n">' + f.mn(c.amountRub, 1) + '</td></tr>').join('') +
+      '</tbody><tfoot><tr><td></td><td>Итого без оферт</td><td></td><td class="n">' + f.mn(sum, 1) + '</td></tr></tfoot></table></div>';
   };
 
   // ---------- палитра поиска ----------
@@ -749,7 +807,7 @@
       };
       ccys.forEach(c => {
         const Lc = L.filter(p => p.ccy === c);
-        html += row(K.ccyTag(c) + ' ' + ({ RUB: 'Рубли', USD: 'Доллары', EUR: 'Евро', CNY: 'Юани' }[c]), Lc, 0, null, c);
+        html += row(K.ccyTag(c) + ' ' + K.ccyName(c), Lc, 0, null, c);
         K.GROUPS.forEach(g => {
           const Lg = Lc.filter(p => p.group === g); if (!Lg.length) return;
           const kinds = M.typeRows.filter(t => t.group === g && Lg.some(p => p.kind === t.kind));
@@ -853,6 +911,6 @@
   K.commands([
     { label: 'Сбросить фильтр книг', run: () => K.setFilter({ entity: null, desk: null, books: null, ccy: null }) },
     { label: 'Переключить тему', run: () => K.toggleTheme() },
-    { label: 'Все концепты', run: () => location.href = 'index.html' },
+    { label: 'Все мониторы', run: () => location.href = 'index.html' },
   ]);
 })();

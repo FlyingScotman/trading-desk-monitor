@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import logging
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -172,69 +173,102 @@ def _reference(data: dict[str, Any]):
     return build(Snapshot("", "static", "", "", None, {"data": data}))
 
 
+def _index(data: dict[str, Any]) -> tuple[dict[str, list[dict]], dict[str, list[dict]], dict[str, list[dict]]]:
+    """The static's coupon periods, redemptions and offers by secid."""
+    cpns: dict[str, list[dict]] = defaultdict(list)
+    reds: dict[str, list[dict]] = defaultdict(list)
+    offers: dict[str, list[dict]] = defaultdict(list)
+    for c in data.get("coupon_periods") or ():
+        cpns[c["secid"]].append(c)
+    for r in data.get("redemptions") or ():
+        reds[r["secid"]].append(r)
+    for o in data.get("offers") or ():
+        offers[o["secid"]].append(o)
+    return cpns, reds, offers
+
+
+def bond_flows(cpns: list[dict], reds: list[dict], offers: list[dict], face: float | None, lo: str, hi: str
+               ) -> list[tuple[str, str, float | None, bool]]:
+    """One bond's payments in ``(lo, hi]`` per bond, in its face currency: ``(date, kind, amount, est)`` (module
+    doc: a coupon not fixed yet takes the last published amount scaled by the face; an offer is the face outstanding
+    on its date)."""
+    out: list[tuple[str, str, float | None, bool]] = []
+    last: tuple[float, float | None] | None = None  # (amount per bond, its face) of the last fixed coupon
+    for c in sorted(cpns, key=lambda c: c["pay_date"]):
+        amt = _num(c.get("amount_per_bond"))
+        if amt is not None and amt > 0:
+            last = (amt, _num(c.get("face_value")))
+        if not (lo < c["pay_date"] <= hi):
+            continue
+        if amt is not None:
+            out.append((c["pay_date"], "cpn", amt, c.get("status") != "known"))
+        elif last is not None:
+            f = _num(c.get("face_value"))
+            out.append((c["pay_date"], "cpn", last[0] * (f / last[1] if f and last[1] else 1.0), True))
+        else:
+            out.append((c["pay_date"], "cpn", None, True))
+    for r in reds:
+        if lo < r["date"] <= hi:
+            out.append((r["date"], "mat" if r["kind"] == "maturity" else "amort", _num(r.get("value_per_bond")), False))
+    seen: set[tuple[str, str]] = set()
+    for o in offers:
+        d = o.get("offer_date")
+        if not d or not (lo < d <= hi) or o.get("status") != "scheduled" or o.get("type") not in ("put", "call"):
+            continue
+        # one offer from two sources (cbonds and MOEX ISS: 557 of 4 403 scheduled offers of the static of
+        # 21.10.2026) is one event: counted twice it doubled the possible volume of the market's offers
+        if (d, o["type"]) in seen:
+            continue
+        seen.add((d, o["type"]))
+        out_face = face
+        if out_face is not None:  # the face outstanding on the offer date: the face now less what is redeemed before
+            out_face -= sum(_num(r.get("value_per_bond")) or 0.0 for r in reds if lo < r["date"] < d)
+        out.append((d, o["type"], out_face, True))
+    return out
+
+
 def flows(data: dict[str, Any], facts: dict[str, dict[str, Any]], as_of: date,
           horizon_days: int = HORIZON_DAYS) -> list[dict[str, Any]]:
     """Payments of the bonds of ``facts`` in ``(as_of, as_of + horizon_days]`` (module doc); a foreign-face bond of a
     foreign issuer is left out."""
     lo, hi = as_of.isoformat(), (as_of + timedelta(days=horizon_days)).isoformat()
+    cpns, reds, offers = _index(data)
     out: list[dict[str, Any]] = []
-    reds: dict[str, list[dict]] = defaultdict(list)
-    for r in data.get("redemptions") or ():
-        reds[r["secid"]].append(r)
-    cpns: dict[str, list[dict]] = defaultdict(list)
-    for c in data.get("coupon_periods") or ():
-        cpns[c["secid"]].append(c)
-
-    def keep(f: dict[str, Any]) -> bool:
-        return not (f["market"] == "fx" and f["foreign_issuer"])
-
-    def add(sid: str, f: dict[str, Any], d: str, kind: str, per_bond: float | None, est: bool = False) -> None:
-        n = f["issue_size"]
-        out.append({"pay_date": d, "secid": sid, "kind": kind, "market": f["market"], "type": f["type"],
-                    "ccy": f["face_unit"], "per_bond": per_bond,
-                    "amount": per_bond * n if per_bond is not None and n is not None else None, "est": est})
-
     for sid, f in facts.items():
-        if not keep(f):
+        if f["market"] == "fx" and f["foreign_issuer"]:
             continue
-        rows = sorted(cpns.get(sid, ()), key=lambda c: c["pay_date"])
-        last: tuple[float, float | None] | None = None  # (amount per bond, its face) of the last fixed coupon
-        for c in rows:
-            amt = _num(c.get("amount_per_bond"))
-            if amt is not None and amt > 0:
-                last = (amt, _num(c.get("face_value")))
-            if not (lo < c["pay_date"] <= hi):
-                continue
-            if amt is not None:
-                add(sid, f, c["pay_date"], "cpn", amt, c.get("status") != "known")
-            elif last is not None:
-                face = _num(c.get("face_value"))
-                scale = face / last[1] if face and last[1] else 1.0
-                add(sid, f, c["pay_date"], "cpn", last[0] * scale, True)
-            else:
-                add(sid, f, c["pay_date"], "cpn", None, True)
-        for r in reds.get(sid, ()):
-            if lo < r["date"] <= hi:
-                add(sid, f, r["date"], "mat" if r["kind"] == "maturity" else "amort", _num(r.get("value_per_bond")))
-    seen: set[tuple[str, str, str]] = set()
-    for o in data.get("offers") or ():
-        f = facts.get(o["secid"])
-        d = o.get("offer_date")
-        if f is None or not keep(f) or not d or not (lo < d <= hi) or o.get("status") != "scheduled" \
-                or o.get("type") not in ("put", "call"):
-            continue
-        # one offer from two sources (cbonds and MOEX ISS: 557 of 4 403 scheduled offers of the static of
-        # 21.10.2026) is one event: counted twice it doubled the possible volume of the market's offers
-        if (key := (o["secid"], d, o["type"])) in seen:
-            continue
-        seen.add(key)
-        face = f["face"]
-        if face is not None:  # the face outstanding on the offer date: the face now less what is redeemed before
-            face -= sum(_num(r.get("value_per_bond")) or 0.0 for r in reds.get(o["secid"], ())
-                        if lo < r["date"] < d)
-        add(o["secid"], f, d, o["type"], face, True)
+        n = f["issue_size"]
+        for d, kind, per_bond, est in bond_flows(cpns.get(sid, []), reds.get(sid, []), offers.get(sid, []),
+                                                 f["face"], lo, hi):
+            out.append({"pay_date": d, "secid": sid, "kind": kind, "market": f["market"], "type": f["type"],
+                        "ccy": f["face_unit"], "per_bond": per_bond,
+                        "amount": per_bond * n if per_bond is not None and n is not None else None, "est": est})
     out.sort(key=lambda x: (x["pay_date"], x["secid"], x["kind"]))
     return out
+
+
+_SCHEDULES: dict[str, tuple] = {}
+"""Static snapshot id -> (coupons, redemptions, offers by secid; instruments by secid): the newest two read."""
+
+
+def schedule(snapshot_id: str, load: Callable[[], Snapshot], secid: str, as_of: date) -> dict[str, Any] | None:
+    """Every payment of one bond after ``as_of`` to its maturity, per bond (``bond_flows``), from the static snapshot
+    ``snapshot_id`` (``load`` reads it when it is not indexed yet): the card of a position, its whole schedule, not
+    the calendars' horizon. None when the static lacks the bond."""
+    got = _SCHEDULES.get(snapshot_id)
+    if got is None:
+        snap = load()
+        got = (_index(snap.data), {i["secid"]: i for i in snap.data.get("instruments") or ()})
+        while len(_SCHEDULES) >= 2:
+            _SCHEDULES.pop(next(iter(_SCHEDULES)))
+        _SCHEDULES[snapshot_id] = got
+    (cpns, reds, offers), instruments = got
+    i = instruments.get(secid)
+    if i is None:
+        return None
+    fl = bond_flows(cpns.get(secid, []), reds.get(secid, []), offers.get(secid, []), _num(i.get("face_value")),
+                    as_of.isoformat(), "9999-12-31")
+    return {"ccy": _face_unit(i), "maturity": i.get("maturity_date"), "flows": sorted(fl, key=lambda x: (x[0], x[1]))}
 
 
 def calendar(fl: list[dict[str, Any]], facts: dict[str, dict[str, Any]], as_of: date) -> dict[str, Any]:
