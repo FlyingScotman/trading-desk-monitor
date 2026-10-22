@@ -174,3 +174,18 @@ table.k-tbl.k-compact { width: auto; font-size: 12px; }
 /* KPI с несколькими валютами: значения переносятся, а не обрезаются */
 .k-kpi .v { white-space: normal; line-height: 1.2; }
 .k-kpi .s { white-space: normal; }
+/* имя бумаги: алиас, серое биржевое имя, правка на месте и история (R33) */
+.k-nm { display: inline-flex; align-items: baseline; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.k-exch { color: var(--fg-3); font-weight: 400; font-size: .82em; }
+.k-alias-tools { display: inline-flex; gap: 2px; }
+.k-ico { border: 0; background: none; color: var(--fg-3); cursor: pointer; font-size: 13px; line-height: 1; padding: 1px 4px; border-radius: 4px; }
+.k-ico:hover:not(:disabled) { color: var(--accent); background: var(--hover); }
+.k-ico:disabled { cursor: not-allowed; opacity: .45; }
+.k-alias-ed { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; font-weight: 400; }
+.k-alias-ed .k-input { min-width: 260px; font-size: 13px; }
+.k-alias-msg { font-size: 11px; flex-basis: 100%; }
+.k-alias-msg.warn { color: var(--warn); }
+.k-alias-pop { position: fixed; top: 80px; left: 40%; z-index: 300; width: 370px; max-height: 320px; overflow: auto; background: var(--panel); border: 1px solid var(--line-2); border-radius: 8px; box-shadow: var(--shadow); font-size: 12px; font-weight: 400; }
+.k-alias-pop .hd { padding: 8px 10px; border-bottom: 1px solid var(--line); font-weight: 600; }
+.k-alias-pop .bd { padding: 6px 10px 8px; }
+.k-alias-pop .ft { margin-top: 6px; font-size: 11px; }

@@ -25,6 +25,11 @@
  * дальше сразу все (страницы C11, C13 просят историю всех позиций). Кроме цен рынка в ней номинал, DV01, CS01,
  * базис, MV и DV01 по кривым каждого прогона (M.histSource = 'runs': история риска — настоящая, не «номинал ×
  * сегодняшние чувствительности»).
+ * Имена бумаг (батч 1, п. 3, R33): алиас по ISIN — GET /api/v1/instruments/aliases синхронно, до сборки позиций;
+ * p.name = алиас ?? биржевое имя (p.exchName), p.alias — алиас или null, поиск — по обоим (p.searchBase + алиас).
+ * Алиас не входит в строки прогона: тот же алиас — и у старых прогонов. Изменение — M.aliasApi.put (PUT
+ * /api/v1/instruments/alias, только с компьютера сервера: иначе 403 и карточка — только чтение), история —
+ * M.aliasApi.history; карточка (kit.js, K.aliasEdit) подставляет новое имя во все позиции бумаги.
  * Календарь рынка (M.marketCal) — тоже лениво, /api/v1/calendar/market: агрегаты по дням, типам и валютам из
  * статики хаба; строки за ячейкой — M.marketCal.flows({...}) тем же запросом с фильтром.
  * M.posHistory(id, { deep: true }) —
@@ -183,6 +188,28 @@
     return ['CORP', flt];
   }
 
+  // ---------- имена бумаг: алиасы по ISIN (R33) ----------
+  const LOOPBACK = /^(127\.\d+\.\d+\.\d+|localhost|\[?::1\]?)$/i;
+  M.aliases = {};
+  ((getJson('../api/v1/instruments/aliases') || {}).aliases || []).forEach(a => {
+    if (a && a.isin && a.alias) M.aliases[a.isin] = { alias: a.alias, changedBy: a.changed_by, changedAt: a.changed_at };
+  });
+  async function aliasCall(method, path, body) {
+    try {
+      const r = await fetch(path, method === 'PUT' ? { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
+      let j = null; try { j = await r.json(); } catch (e) { }
+      return { status: r.status, body: j };
+    } catch (e) { return { status: 0, body: { message: 'нет связи с сервером' } }; }
+  }
+  M.aliasApi = {
+    // менять можно только с компьютера сервера (local_only): с другого адреса — сразу только чтение, без запроса
+    editable: LOOPBACK.test(location.hostname || ''),
+    readOnlyReason: 'алиас меняется только на компьютере, где работает сервер деска (адрес 127.0.0.1)',
+    put: (isin, alias) => aliasCall('PUT', '../api/v1/instruments/alias', { isin, alias }),
+    history: isin => aliasCall('GET', '../api/v1/instruments/aliases/' + encodeURIComponent(isin) + '/history')
+      .then(r => r.status === 200 && r.body ? r.body.revisions : null),
+  };
+
   // ---------- позиции ----------
   const FREQ = { 12: 'M', 4: 'Q', 2: 'S', 1: 'A' };
   const IDX = { KEY_RATE: 'КС', 'КС': 'КС', RUONIA: 'RUONIA' };
@@ -194,10 +221,13 @@
     const [group, kind] = kindOf(d), ex = d.extra || {}, q = ex.quote || {}, xp = XP[d.id] || {};
     const isBond = group !== 'DER' && group !== 'OTH';
     const p = {
-      id: d.id, isin: d.isin || null, name: d.name || d.id, issuer: d.issuer || null, group, kind, ccy: d.ccy || 'RUB', book: d.book,
+      id: d.id, isin: d.isin || null, exchName: d.name || d.id, issuer: d.issuer || null, group, kind, ccy: d.ccy || 'RUB', book: d.book,
       maturity: d.maturity || null, notional: num(d.notional) || 0, notionalRub: num(d.notionalRub) || 0, spreadBp: num(d.spreadBp),
       notValued: !!d.notValued, cpty: d.counterparty || null, portfolio: d.portfolio || null, quality: ex.quality || null,
     };
+    // имя — алиас бумаги (R33) или биржевое; d.alias — если сервер когда-нибудь пришлёт его в данных прогона
+    p.alias = (p.isin && M.aliases[p.isin] && M.aliases[p.isin].alias) || d.alias || null;
+    p.name = p.alias || p.exchName;
     // для типа инструмента таблицы «валюта × тип» (lib/instr.js, api/concepts.instr_kind): поля факта и группа продукта отчёта
     p.instrType = d.instrType || null; p.assetClass = d.assetClass || null; p.segment = d.segment || null;
     p.productGroup = (ex.reported || {}).x_product_group || null;
@@ -283,7 +313,8 @@
     p.pnlMtd = num(xp.pnlMtd); p.pnlYtd = num(xp.pnlYtd);
     p.spreadChgBp = num(xp.spreadChgBp);
     p.tradedToday = !!(xp.trade || d.newToday); p.tradeToday = xp.trade || null;
-    p.searchText = [p.name, p.isin, p.issuerName, p.issuerFull, p.issuerGroup, p.latName, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio, p.rating, p.ratingAgency].join(' ').toLowerCase();
+    p.searchBase = [p.exchName, p.isin, p.issuerName, p.issuerFull, p.issuerGroup, p.latName, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio, p.rating, p.ratingAgency].join(' ').toLowerCase();
+    p.searchText = (p.alias ? p.alias.toLowerCase() + ' ' : '') + p.searchBase;  // как K.setAlias
     return p;
   });
   M.positions = positions;
@@ -426,14 +457,15 @@
     const held = new Set(c.held || []), k = RUB_K(), F = c.fields;
     const rows = (key, conv) => (c[key] || []).map(r => { const o = {}; F[key].forEach((f, i) => o[f] = r[i]); if (conv) conv(o); return o; });
     const posBySec = {}; D.positions.forEach(p => { if (p.instrumentId) posBySec[p.instrumentId] = p.id; });
+    const named = o => { const p = o.pos && M.pos[o.pos]; if (p && p.alias && o.name) o.name = p.alias; };  // алиас бумаги в портфеле (R33)
     calCache = {
       source: 'real', staticDate: c.staticDate, asOf: c.asOf, horizonEnd: c.horizonEnd, bigRub: c.bigRub * k,
       types: c.types.map(id => ({ id, label: c.typeLabels[id] || id })), ccys: c.ccys || [], coverage: c.coverage || {},
       rub: rows('rub', o => { o.amount *= k; o.bigAmount *= k; o.estAmount *= k; }),
       rubSector: rows('rubSector', o => { o.amount *= k; }),
-      rubBig: rows('rubBig', o => { o.amount *= k; o.held = held.has(o.secid); o.pos = posBySec[o.secid] || null; }),
+      rubBig: rows('rubBig', o => { o.amount *= k; o.held = held.has(o.secid); o.pos = posBySec[o.secid] || null; named(o); }),
       fx: rows('fx'), fxIssuers: rows('fxIssuers'),
-      fxEvents: rows('fxEvents', o => { o.held = held.has(o.secid); o.pos = posBySec[o.secid] || null; }),
+      fxEvents: rows('fxEvents', o => { o.held = held.has(o.secid); o.pos = posBySec[o.secid] || null; named(o); }),
       notes: ['календарь рынка — по статике хаба на ' + c.staticDate + ': купоны (ещё не объявленные — по последнему, «прогноз»), амортизации, погашения и оферты всех выпусков × объём выпуска MOEX'],
       flows(q) {  // строки за ячейкой: {market, from, to, type, kind, ccy, sector, big, issuer, secid}
         const qs = Object.entries(q || {}).filter(([, v]) => v != null && v !== false && v !== '').map(([a, v]) => a + '=' + encodeURIComponent(v)).join('&');
@@ -441,7 +473,7 @@
         if (!j) return { count: 0, amount: 0, rows: [] };
         const kk = q && q.market === 'rub' ? k : 1;
         j.amount = (j.amount || 0) * kk;
-        j.rows.forEach(r => { r.amount = r.amount == null ? null : r.amount * kk; r.pos = posBySec[r.secid] || null; });
+        j.rows.forEach(r => { r.amount = r.amount == null ? null : r.amount * kk; r.pos = posBySec[r.secid] || null; named(r); });
         return j;
       },
     };

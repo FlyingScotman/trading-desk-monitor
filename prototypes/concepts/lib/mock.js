@@ -11,7 +11,9 @@
  *  - срок бумаги — до ближайшей оферты, если она есть, иначе до погашения (p.tenor, p.event);
  *  - FX-дельта — по валютам (p.fxDeltaBy, как fx_delta {ccy} прогона; p.fxDelta — в валюте позиции): у кросса USD/CNY
  *    она в обеих валютах; у FX-форварда риск на двух кривых (иностранной и RUONIA), у FX-свопа — на implied-кривой
- *    юаня (CNY FWD); ноги FX-сделки — p.legs (как extra.legs прогона в lib/real.js); CHF-форвард — на своей кривой.
+ *    юаня (CNY FWD); ноги FX-сделки — p.legs (как extra.legs прогона в lib/real.js); CHF-форвард — на своей кривой;
+ *  - имя бумаги (R33): p.name = алиас ?? биржевое (p.exchName), поиск — по обоим; алиасы демо — в памяти страницы
+ *    (M.aliasApi как в lib/real.js, но без сервера: после перезагрузки — снова только примерный алиас ниже).
  */
 (function () {
   'use strict';
@@ -454,11 +456,40 @@
     // портфель (колонка Portfolio отчёта): HTM-книга — HTM, часть торговых бумаг — AFS, остальное — торговый
     const bt = (M.books.find(b => b.id === p.book) || {}).type;
     p.portfolio = bt === 'HTM' ? 'HTM' : bt === 'TRADING' && /[05]$/.test(p.id) ? 'AFS' : 'Торговый';
-    p.searchText = [p.name, p.isin, p.issuerName, p.issuerFull, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio].join(' ').toLowerCase();
+    p.exchName = p.name; p.alias = null;
+    p.searchBase = [p.name, p.isin, p.issuerName, p.issuerFull, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio].join(' ').toLowerCase();
+    p.searchText = p.searchBase;
     return p;
   });
   M.positions = positions;
   M.pos = Object.fromEntries(positions.map(p => [p.id, p]));
+
+  // ---------- имена бумаг: алиасы по ISIN в памяти (R33; на прогоне — таблица instrument_alias сервера) ----------
+  const now = () => new Date().toISOString();
+  const aliasRevs = { 'RU000A105RL4': [{ rev_id: 1, alias: 'Россия-2043 USD (евробонд)', changed_by: 'demo', changed_at: AS_OF + 'T09:00:00Z' }] };
+  M.aliases = {};
+  const applyAlias = (isin, alias) => {
+    const last = (aliasRevs[isin] || [])[0];
+    if (alias) M.aliases[isin] = { alias, changedBy: last.changed_by, changedAt: last.changed_at }; else delete M.aliases[isin];
+    positions.forEach(p => { if (p.isin === isin) { p.alias = alias || null; p.name = p.alias || p.exchName; p.searchText = (p.alias ? p.alias.toLowerCase() + ' ' : '') + p.searchBase; } });
+  };
+  Object.keys(aliasRevs).forEach(isin => applyAlias(isin, aliasRevs[isin][0].alias));
+  let revId = 1;
+  M.aliasApi = {
+    editable: true, demo: true,
+    readOnlyReason: '',
+    // как PUT /api/v1/instruments/alias: пробелы схлопываются, пустое — сброс, не длиннее 120 знаков
+    put(isin, raw) {
+      if (raw != null && /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(String(raw))) return Promise.resolve({ status: 422, body: { code: 'invalid_parameter', message: 'the alias has control characters' } });
+      const alias = raw == null ? null : String(raw).split(/\s+/).filter(Boolean).join(' ') || null;
+      if (alias && alias.length > 120) return Promise.resolve({ status: 422, body: { code: 'invalid_parameter', message: 'the alias is longer than 120 characters' } });
+      const revs = aliasRevs[isin] = aliasRevs[isin] || [], last = revs[0];
+      if ((last ? last.alias : null) === alias) return Promise.resolve({ status: 200, body: { isin, alias, changed_by: last && last.changed_by, changed_at: last && last.changed_at, changed: false } });
+      revs.unshift({ rev_id: ++revId, alias, changed_by: 'demo', changed_at: now() });
+      return Promise.resolve({ status: 200, body: { isin, alias, changed_by: 'demo', changed_at: revs[0].changed_at, changed: true } });
+    },
+    history: isin => Promise.resolve((aliasRevs[isin] || []).slice()),
+  };
 
   // сортировка по умолчанию: валюта → группа → эмитент → флоатер/фикс → срок до события
   const groupOrder = { GOV: 0, CORP: 1, DER: 2 };
@@ -585,7 +616,7 @@
       const t = yearsTo(put || mat);
       const ytm = (ccyN === 'CNY' ? 6.2 : ccyN === 'USD' ? 6.8 : 5.0) + t * 0.15 + (r() - 0.5) * 1.2 + (M.issuer[iss].rating < 'AA' ? 0 : 1.5);
       const b = { isin: 'RU000A10' + (hash(issName + s) % 9000 + 1000) + 'Z', issuer: iss, issuerName: issName, name: issName + ' ' + s, ccy: ccyN, origCcy: ccy, maturity: mat, put, freq, outstanding: out_, cpn: round(cpn, 2), ytm: round(ytm, 2), tenor: t, rating: M.issuer[iss].rating, sector: M.issuer[iss].sector };
-      b.held = positions.some(p => p.name.replace(/ CNY$/, '').indexOf(s.replace(/ CNY$/, '')) >= 0 && p.issuer === iss);
+      b.held = positions.some(p => p.exchName.replace(/ CNY$/, '').indexOf(s.replace(/ CNY$/, '')) >= 0 && p.issuer === iss);
       const step = 12 / FREQ[freq]; let d = mat; const cps = [];
       while (d > AS_OF) { cps.push(d); d = addMonths(d, -step); }
       b.coupons = cps.reverse();

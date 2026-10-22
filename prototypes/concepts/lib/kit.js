@@ -12,6 +12,8 @@
  *  KIT.chart(el, option)  — echarts с цветами темы; KIT.riskStack(el, opts) — риск по бакетам: стек кривых + итог + кумулятив
  *  KIT.seg(el, items, cur, fn) — переключатель режимов (таблица / график и т. п.)
  *  KIT.palette()          — поиск по всему (Ctrl+K или «/»): позиции, эмитенты, книги, команды страницы
+ *  KIT.aliasName(p), KIT.aliasBind(el, p, onSaved) — имя бумаги в карточке: алиас и серое биржевое имя, ✎ — правка на
+ *                           месте, ⟲ — история; KIT.setAlias(isin, alias) — подставить алиас во все позиции бумаги (R33)
  */
 (function () {
   'use strict';
@@ -665,7 +667,7 @@
   // стандартные колонки позиций (концепты берут нужные по ключу)
   K.posCols = {
     issuer: { key: 'issuerName', label: 'Эмитент', fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
-    name: { key: 'name', label: 'Бумага', fmt: (v, r) => esc(v) + (r.tradedToday ? ' <span class="k-tag" style="border-color:var(--warn);color:var(--warn)" title="сделки сегодня">сд</span>' : '') },
+    name: { key: 'name', label: 'Бумага', fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? ' <span class="k-tag" style="border-color:var(--warn);color:var(--warn)" title="сделки сегодня">сд</span>' : '') },
     isin: { key: 'isin', label: 'ISIN', fmt: v => '<span class="mono mut">' + esc(v || '—') + '</span>' },
     ccy: { key: 'ccy', label: 'Вал', fmt: (v, r) => K.ccyTag(r.ccy), val: r => M.ccyOrder[r.ccy] },
     kind: { key: 'kind', label: 'Тип', fmt: (v, r) => '<span class="tagc" style="border-color:' + K.kindColor[v] + '55">' + esc(M.kindShort[v]) + '</span>' },
@@ -769,7 +771,9 @@
   K.card = function (id) {
     const p = M.pos[id]; if (!p) return;
     const o = drawer(true); o.title = p.name; o.charts = [];
-    o.el.querySelector('.t').innerHTML = '<span style="color:' + K.issuerColor(p.issuer) + '">●</span> ' + esc(p.name) + ' ' + K.ccyTag(p.ccy);
+    const te = o.el.querySelector('.t');
+    te.innerHTML = '<span style="color:' + K.issuerColor(p.issuer) + '">●</span> ' + K.aliasName(p) + ' ' + K.ccyTag(p.ccy);
+    K.aliasBind(te, p, () => { o.title = p.name; });
     o.el.querySelector('.st').innerHTML = esc(p.issuerFull) + (p.isin ? ' · <span class="mono">' + esc(p.isin) + '</span>' : '') + ' · ' + esc(p.book) + ' — ' + esc(p.bookName) + ' · ' + esc(p.groupLabel) + ' / ' + esc(p.kindLabel);
     const isBond = !!p.cpn;
     const ev = { put: 'пут-оферта', call: 'колл-опцион', mat: 'погашение' }[p.event.kind];
@@ -837,6 +841,112 @@
       K.flows(o.bd.querySelector('.cfs'), p);
     }
     return o;
+  };
+
+  // ---------- имя бумаги: алиас по ISIN (батч 1, п. 3, R33) ----------
+  // p.name — алиас ?? биржевое имя (p.exchName); алиас хранится на сервере по ISIN (M.aliasApi: PUT
+  // /api/v1/instruments/alias, только с компьютера сервера; в демо — в памяти страницы) и подставляется во все позиции
+  // бумаги и на все экраны (события 'alias' и 'filter': страницы перерисовываются, поиск ищет по обоим именам)
+  K.setAlias = (isin, alias, meta) => {
+    alias = alias || null;
+    if (M.aliases) { if (alias) M.aliases[isin] = Object.assign({ alias }, meta || {}); else delete M.aliases[isin]; }
+    M.positions.forEach(p => {
+      if (p.isin !== isin) return;
+      p.alias = alias; p.name = alias || p.exchName;
+      p.searchText = (alias ? alias.toLowerCase() + ' ' : '') + (p.searchBase != null ? p.searchBase : p.searchText);
+    });
+    fire('alias'); fire('filter');
+  };
+  // ячейка «Бумага»: у бумаги с алиасом биржевое имя — в подсказке
+  K.nameCell = (r, v) => r && r.alias && r.exchName && r.exchName !== r.alias ? '<span title="' + esc('биржевое имя: ' + r.exchName) + '">' + esc(v == null ? r.name : v) + '</span>' : esc(v == null ? (r && r.name) : v);
+  const canAlias = p => !!(p && p.isin && M.aliasApi);
+  const aliasView = p => {
+    const ro = M.aliasApi && M.aliasApi.editable === false;
+    return '<span class="k-nm-v">' + esc(p.name) + '</span>' +
+      (p.alias && p.exchName && p.exchName !== p.alias ? ' <span class="k-exch" title="биржевое имя">' + esc(p.exchName) + '</span>' : '') +
+      (canAlias(p) ? '<span class="k-alias-tools">' +
+        '<button class="k-ico" data-al="edit"' + (ro ? ' disabled title="' + esc('только чтение: ' + M.aliasApi.readOnlyReason) + '"' : ' title="переименовать бумагу (алиас по ISIN — на всех экранах)"') + '>✎</button>' +
+        '<button class="k-ico" data-al="hist" title="история имени">⟲</button></span>' : '');
+  };
+  K.aliasName = p => '<span class="k-nm">' + aliasView(p) + '</span>';
+  const WHO = { local: 'этот компьютер', demo: 'демо' };
+  const stamp = s => { if (!s) return '—'; const d = new Date(s); if (isNaN(d)) return esc(s); const z = n => String(n).padStart(2, '0'); return z(d.getDate()) + '.' + z(d.getMonth() + 1) + '.' + d.getFullYear() + ' ' + z(d.getHours()) + ':' + z(d.getMinutes()); };
+  // ответы сервера (английские) — по-русски; незнакомое — как есть
+  const aliasWhy = m => [[/control characters/, 'в имени управляющие символы'], [/longer than (\d+)/, 'имя длиннее $1 знаков'],
+    [/not an ISIN/, 'ISIN бумаги не принят сервером'], [/invalid request parameters/, 'неверный запрос']].reduce((s, [re, ru]) => re.test(m) ? m.match(re)[0].replace(re, ru) : s, m);
+  let aliasPop = null;
+  function closeAliasPop() { if (aliasPop) { aliasPop.remove(); aliasPop = null; } }
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && aliasPop) { closeAliasPop(); e.stopImmediatePropagation(); e.preventDefault(); } }, true);
+  document.addEventListener('mousedown', e => { if (aliasPop && !aliasPop.contains(e.target) && !(e.target.closest && e.target.closest('[data-al=hist]'))) closeAliasPop(); }, true);
+  // история имени: всплывающий список ревизий (новые сверху)
+  K.aliasHistory = function (p, anchor) {
+    closeAliasPop();
+    const pop = aliasPop = h('div', 'k-alias-pop');
+    pop.innerHTML = '<div class="hd">История имени <span class="mono mut3">' + esc(p.isin) + '</span></div><div class="bd"><div class="mut3">загрузка…</div></div>';
+    document.body.appendChild(pop);
+    if (anchor && anchor.getBoundingClientRect) {
+      const r = anchor.getBoundingClientRect();
+      pop.style.top = Math.round(r.bottom + 4) + 'px';
+      pop.style.left = Math.round(Math.max(8, Math.min(r.left, (window.innerWidth || 1200) - 380))) + 'px';
+    }
+    return M.aliasApi.history(p.isin).then(revs => {
+      if (aliasPop !== pop) return;
+      const bd = pop.querySelector('.bd');
+      if (revs == null) { bd.innerHTML = '<div class="neg">история недоступна</div>'; return; }
+      bd.innerHTML = (revs.length ? '<table class="k-tbl k-compact"><tbody>' + revs.map(r => '<tr><td class="mut">' + stamp(r.changed_at) + '</td><td class="mut3">' + esc(WHO[r.changed_by] || r.changed_by || '—') + '</td><td>' +
+        (r.alias ? esc(r.alias) : '<span class="mut3">сброшено — биржевое имя</span>') + '</td></tr>').join('') + '</tbody></table>' : '<div class="mut3">имя не менялось</div>') +
+        '<div class="mut3 ft">биржевое имя: ' + esc(p.exchName || '—') + '</div>';
+    });
+  };
+  // правка на месте: el — заголовок с K.aliasName(p); onSaved — после сохранения (заголовок уже перерисован)
+  K.aliasBind = function (el, p, onSaved) {
+    const wrap = el && el.querySelector && el.querySelector('.k-nm');
+    if (!wrap || !canAlias(p)) return;
+    const view = () => { wrap.innerHTML = aliasView(p); wire(); };
+    function wire() {
+      const ed = wrap.querySelector('[data-al=edit]'), hs = wrap.querySelector('[data-al=hist]');
+      if (ed) ed.onclick = e => { e.stopPropagation(); edit(); };
+      if (hs) hs.onclick = e => { e.stopPropagation(); if (aliasPop) closeAliasPop(); else K.aliasHistory(p, hs); };
+    }
+    function edit() {
+      closeAliasPop();
+      wrap.innerHTML = '<span class="k-alias-ed"><input class="k-input" maxlength="120" placeholder="' + esc(p.exchName) + '" value="' + esc(p.alias || '') + '">' +
+        '<button class="k-btn pri" data-al="save">Сохранить</button>' + (p.alias ? '<button class="k-btn" data-al="clear" title="убрать алиас: снова биржевое имя">Биржевое имя</button>' : '') +
+        '<button class="k-btn" data-al="cancel">Отмена</button><span class="k-alias-msg mut3">пусто — биржевое имя · Enter — сохранить · Esc — отмена' + (M.aliasApi.demo ? ' · демо: до перезагрузки' : '') + '</span></span>';
+      const inp = wrap.querySelector('input'), msg = wrap.querySelector('.k-alias-msg');
+      const busy = b => wrap.querySelectorAll('button[data-al=save],button[data-al=clear],input').forEach(x => x.disabled = b);
+      const save = raw => {
+        busy(true); msg.className = 'k-alias-msg mut3'; msg.textContent = 'сохранение…';
+        return M.aliasApi.put(p.isin, raw).then(r => {
+          if (r.status === 200 && r.body) {
+            K.setAlias(p.isin, r.body.alias, { changedBy: r.body.changed_by, changedAt: r.body.changed_at });
+            view(); if (onSaved) onSaved(r.body);
+            return;
+          }
+          const why = aliasWhy((r.body && r.body.message) || ('ошибка ' + r.status));
+          if (r.status === 403) {  // не компьютер сервера: дальше только чтение, имя — как есть
+            M.aliasApi.editable = false;
+            msg.className = 'k-alias-msg warn'; msg.textContent = 'только чтение: ' + M.aliasApi.readOnlyReason;
+            wrap.querySelectorAll('button[data-al=save],button[data-al=clear],input').forEach(x => x.disabled = true);
+            return;
+          }
+          busy(false);
+          msg.className = 'k-alias-msg neg'; msg.textContent = (r.status === 422 ? 'не принято: ' : 'не сохранено: ') + why;
+          inp.focus();
+        });
+      };
+      inp.onkeydown = e => {
+        e.stopPropagation();  // Esc не закрывает карточку, стрелки и Enter не ходят по таблице (C03)
+        if (e.key === 'Enter') { e.preventDefault(); save(inp.value); }
+        if (e.key === 'Escape') { e.preventDefault(); view(); }
+      };
+      wrap.querySelector('[data-al=save]').onclick = e => { e.stopPropagation(); save(inp.value); };
+      const cl = wrap.querySelector('[data-al=clear]'); if (cl) cl.onclick = e => { e.stopPropagation(); save(null); };
+      wrap.querySelector('[data-al=cancel]').onclick = e => { e.stopPropagation(); view(); };
+      if (inp.focus) { inp.focus(); if (inp.select) inp.select(); }
+    }
+    wire();
+    return { edit, view };
   };
 
   // все потоки позиции до погашения: на прогоне — график выпуска с сервера (M.posFlows), иначе потоки набора данных;

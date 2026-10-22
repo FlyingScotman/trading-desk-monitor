@@ -106,7 +106,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   const evName = { put: 'пут', call: 'колл', mat: 'погаш' };
   const pnlCol = (key, label, k) => ({ label, num: true, val: r => r.pnl[k], fmt: v => '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.pnl[k], unit: 'тыс ₽', sfmt: f.k, title: 'тыс ₽' });
   const C = {
-    name: { label: 'Бумага', val: r => r.name, fmt: (v, r) => esc(v) + (r.tradedToday ? '<span class="k-tag sd" title="сделки сегодня">сд</span>' : '') },
+    name: { label: 'Бумага', val: r => r.name, fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? '<span class="k-tag sd" title="сделки сегодня">сд</span>' : '') },
     issuer: { label: 'Эмитент', val: r => r.issuerName, fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
     issuerFull: { label: 'Эмитент (полн.)', val: r => r.issuerFull, fmt: v => esc(v) },
     isin: { label: 'ISIN', val: r => r.isin, fmt: v => '<span class="mono mut3">' + esc(v || '—') + '</span>' },
@@ -306,10 +306,11 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     if (!p) { cur = null; $('.cd-hd').innerHTML = '<div class="cd-empty">выберите позицию в таблице</div>'; return; }
     cur = p;
     const isBond = !!p.cpn, isFloat = isBond && p.cpn.type === 'float';
-    $('.cd-hd').innerHTML = '<div class="t"><span style="color:' + K.issuerColor(p.issuer) + '">●</span>' + esc(p.name) + ' ' + K.ccyTag(p.ccy) + ' <span class="tagc" style="font-size:11px;font-weight:400;padding:0 6px;border:1px solid var(--line);border-radius:4px;color:var(--fg-2)">' + esc(p.kindLabel) + '</span></div>' +
+    $('.cd-hd').innerHTML = '<div class="t"><span style="color:' + K.issuerColor(p.issuer) + '">●</span>' + K.aliasName(p) + ' ' + K.ccyTag(p.ccy) + ' <span class="tagc" style="font-size:11px;font-weight:400;padding:0 6px;border:1px solid var(--line);border-radius:4px;color:var(--fg-2)">' + esc(p.kindLabel) + '</span></div>' +
       '<div class="st">' + esc(p.issuerFull) + (p.isin ? ' · <span class="mono">' + esc(p.isin) + '</span>' : '') + ' · ' + esc(p.book) + ' — ' + esc(p.bookName) + (p.rating !== '—' ? ' · ' + esc(p.rating) : '') + '</div>' +
       '<div class="acts"><button class="k-btn pri" data-a="full">Открыть полностью ↗</button>' + (p.issuer ? '<button class="k-btn" data-a="iss">Все бумаги эмитента</button>' : '') + '<button class="k-btn" data-a="book">Книга ' + esc(p.book) + '</button></div>';
     $('.cd-hd [data-a=full]').onclick = () => K.card(p.id);
+    K.aliasBind($('.cd-hd .t'), p);  // ✎ — алиас бумаги (R33): сохраняется по ISIN, имя меняется на всех экранах
     if (p.issuer) $('.cd-hd [data-a=iss]').onclick = () => K.drill({ title: 'Эмитент ' + p.issuerName + ' · MV', unit: 'mm ₽', fmt: v => f.mn(v, 1), list: K.list().filter(x => x.issuer === p.issuer), val: x => x.group === 'DER' ? x.notionalRub : x.mv });
     $('.cd-hd [data-a=book]').onclick = () => K.drill({ title: 'Книга ' + p.book + ' · DV01', unit: 'тыс ₽/бп', list: M.positions.filter(x => x.book === p.book), val: 'dv01' });
     // событие
@@ -373,6 +374,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     } else if (e.key === 'Enter' && st.sel) { K.card(st.sel); e.preventDefault(); }
   });
   K.onFilter(render);
+  K.on('alias', () => { if (st.sel) showCard(st.sel); });  // новое имя бумаги — в карточке справа
   K.on('theme', render);
   render();
 })();
