@@ -1,0 +1,11 @@
+{
+  "_comment": "Synthetic config of tests/test_settings_tabs.py and tests/test_fx_terms.py.",
+  "auto_books": false,
+  "sources": {
+    "positions_daily": true,
+    "fx_terms": true
+  },
+  "provisional_trade_terms": {
+    "enabled": false
+  }
+}

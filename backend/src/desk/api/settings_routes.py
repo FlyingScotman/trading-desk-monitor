@@ -1,5 +1,8 @@
 """Settings API (I5) behind the settings page ``/settings.html``: ``<home>/settings.json``, the hub token file,
-a hub check, and the private adapter's status and declared config files (08 §4 ``config_files``).
+a hub check, and the private adapter's status and declared config files (08 §4 ``config_files``), with forms over
+them (08 §4 ``settings_tabs``, FND-4): a check against the tab's schema and a dry run of the adapter's
+``reference()`` (``desk.settings_forms``), the write, its revisions in the store (``adapter_config_rev``, migration
+0018: who and when) and what the forms offer in their lists (books seen in recent positions, the hub's indices).
 
 Every route re-reads the settings (``desk.settings.load``), so an edit applies to the running server. The adapter
 is only ever called through the child-process runner (``desk.inbox.loader.load_adapter``), never imported here.
@@ -12,17 +15,22 @@ The token is accepted, stored and reported as set or not, never returned.
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import os
+import re
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlsplit
 
+import psycopg
 from fastapi import APIRouter, Body, Depends, Request
+from psycopg.rows import dict_row
 
+from .. import settings_forms
 from ..inbox import runner, scan
-from ..inbox.loader import CONFIG_NAME_RE, check_config_files, load_adapter
+from ..inbox.loader import CONFIG_NAME_RE, check_config_files, check_settings_tabs, load_adapter
 from ..marketdata import hubhistory
 from ..marketdata.hub import hub_check
 from ..settings import (
@@ -44,6 +52,11 @@ from ..settings import (
 from .app import ApiError
 
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
+LOCAL_USER = "local"
+"""``changed_by`` of a change from a loopback client while there are no users (as ``alias_routes``)."""
+RECENT_DAYS = 35
+"""Books seen in positions of the last ``RECENT_DAYS`` days before the newest position date are offered."""
+CURRENCIES = ("RUB", "USD", "EUR", "CNY", "CHF", "GBP", "JPY", "HKD", "KZT", "AED", "TRY", "BYN", "INR")
 JsonBody = Annotated[dict[str, Any], Body()]
 _LOOPBACK_NAMES = ("localhost", "127.0.0.1", "::1")
 
@@ -222,12 +235,14 @@ def get_adapter() -> dict[str, Any]:
     st = _settings()
     h, cfg = _handle(st)
     files, warnings = check_config_files(h.describe)
+    tabs = check_settings_tabs(h.describe)[0]  # its warnings are the handle's, in ``warnings`` below
     for f in files:
         f["exists"] = bool(cfg) and (cfg / f["name"]).is_file()
     return {"loaded": h.ok, "path": st.private_adapter or runner.REFERENCE_ADAPTER,
             "reference": st.private_adapter is None, "default": st.private_adapter_default, "name": h.name, "version": h.version,
             "fingerprint": h.fingerprint, "config_dir": str(cfg) if cfg else None,
-            "describe": h.describe or None, "config_files": files, "warnings": warnings, "error": h.error}
+            "describe": h.describe or None, "config_files": files, "settings_tabs": tabs,
+            "warnings": warnings + [w for w in h.warnings if w.startswith("settings_tabs")], "error": h.error}
 
 
 def _config_path(st: Settings, name: str) -> Path:
@@ -248,9 +263,17 @@ def _config_path(st: Settings, name: str) -> Path:
     return path
 
 
-def _config_payload(name: str, path: Path) -> dict[str, Any]:
-    text = path.read_text(encoding="utf-8-sig") if path.is_file() else None
-    return {"name": name, "path": str(path), "exists": text is not None, "text": text}
+def _sha(text: str | None) -> str | None:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest() if text is not None else None
+
+
+def _read(path: Path) -> str | None:
+    return path.read_text(encoding="utf-8-sig") if path.is_file() else None
+
+
+def _config_payload(name: str, path: Path, **more: Any) -> dict[str, Any]:
+    text = _read(path)
+    return {"name": name, "path": str(path), "exists": text is not None, "text": text, "sha256": _sha(text), **more}
 
 
 @router.get("/api/v1/adapter/config/{name}")
@@ -260,8 +283,10 @@ def get_adapter_config(name: str) -> dict[str, Any]:
 
 
 @router.put("/api/v1/adapter/config/{name}")
-def put_adapter_config(name: str, body: JsonBody) -> dict[str, Any]:
-    """Body ``{"text": "..."}``, stored as is (UTF-8); a ``*.json`` file must parse as JSON."""
+def put_adapter_config(name: str, body: JsonBody, request: Request) -> dict[str, Any]:
+    """Body ``{"text": "...", "base_sha256": "..."}``, stored as is (UTF-8); a ``*.json`` file must parse as
+    JSON. ``base_sha256`` (optional): the ``sha256`` the page read; another one on disk is a 409 (changed
+    meanwhile). Each write is a revision (``via`` raw), when the store is reachable."""
     st = _settings()
     path = _config_path(st, name)
     text = body.get("text")
@@ -275,6 +300,192 @@ def put_adapter_config(name: str, body: JsonBody) -> dict[str, Any]:
         except ValueError as e:
             details = {"line": getattr(e, "lineno", None), "column": getattr(e, "colno", None)}
             raise ApiError(422, "invalid_parameter", f"not valid JSON: {getattr(e, 'msg', e)}", details) from None
-    atomic_write_text(path, text if text.endswith("\n") else text + "\n")
+    _check_base(path, body)
+    return _write(request, path, text if text.endswith("\n") else text + "\n", "raw", None)
+
+
+def _check_base(path: Path, body: dict) -> None:
+    base = body.get("base_sha256")
+    if base is not None and base != _sha(_read(path)):
+        raise ApiError(409, "invalid_parameter", f"{path.name} was changed meanwhile: reload it and repeat the change")
+
+
+def _write(request: Request, path: Path, text: str, via: str, tab_id: str | None) -> dict[str, Any]:
+    old = _read(path)
+    atomic_write_text(path, text)
     scan.forget_adapters()  # the fingerprint covers the config folder
-    return _config_payload(name, path)
+    rev, error = _record(request, path, old, text, via, tab_id)
+    return _config_payload(path.name, path, revision=rev, history_error=error)
+
+
+# ---- settings tabs (08 §4 settings_tabs): forms over the config files ---------------------------------------------
+
+
+def _tab(st: Settings, tab_id: str) -> tuple[Any, dict, Path | None, Path]:
+    h, cfg = _handle(st)
+    tab = next((t for t in check_settings_tabs(h.describe)[0] if t["id"] == tab_id), None)
+    if tab is None:
+        raise ApiError(404, "not_found", f"the adapter declares no settings tab {tab_id}")
+    return h, tab, cfg, _config_path(st, tab["file"])
+
+
+def _data(body: dict) -> str:
+    if "data" not in body:
+        raise ApiError(422, "invalid_parameter", "data (the file as a JSON object) is required")
+    text = settings_forms.file_text(body["data"])
+    if len(text.encode("utf-8")) > MAX_CONFIG_BYTES:
+        raise ApiError(422, "invalid_parameter", f"larger than {MAX_CONFIG_BYTES // 1024 // 1024} MB")
+    return text
+
+
+def _blocking(i: dict) -> bool:
+    return i["severity"] == "error"
+
+
+@router.post("/api/v1/adapter/settings/{tab_id}/check")
+def check_settings_tab(tab_id: str, body: JsonBody) -> dict[str, Any]:
+    """Body ``{"data": {...}, "adapter": true}``: the issues of the schema check (``schema``) and, when it has no
+    error and ``adapter`` is not false, of the adapter's ``reference()`` over a copy of the config folder with the
+    file replaced (``adapter``, each with ``new``: not an issue of the current files), and ``text``, what a save
+    writes (for the diff). ``ok``: no schema error and no new adapter error."""
+    st = _settings()
+    h, tab, cfg, path = _tab(st, tab_id)
+    text = _data(body)
+    schema = settings_forms.check_schema(tab["schema"], body["data"])
+    out: dict[str, Any] = {"tab": tab_id, "file": tab["file"], "text": text,
+                           "current": _config_payload(tab["file"], path), "schema": schema, "adapter": [],
+                           "adapter_error": None, "adapter_checked": False}
+    if body.get("adapter", True) is not False and not any(_blocking(i) for i in schema):
+        run = settings_forms.dry_run(h, cfg, tab["file"], text)
+        out.update(adapter=run.issues, adapter_error=run.error, adapter_checked=run.error is None)
+    out["ok"] = not any(_blocking(i) for i in schema) and not any(_blocking(i) and i["new"] for i in out["adapter"])
+    return out
+
+
+@router.put("/api/v1/adapter/settings/{tab_id}")
+def put_settings_tab(tab_id: str, body: JsonBody, request: Request) -> dict[str, Any]:
+    """Body ``{"data": {...}, "base_sha256": "..."}``: written as two-space JSON when the schema check has no
+    error (422 with the issues in ``details.issues`` otherwise); 409 when the file changed since it was read
+    (``base_sha256`` null: the page read no file). A revision ``via`` form."""
+    st = _settings()
+    _h, tab, _cfg, path = _tab(st, tab_id)
+    text = _data(body)
+    issues = settings_forms.check_schema(tab["schema"], body["data"])
+    if any(_blocking(i) for i in issues):
+        raise ApiError(422, "invalid_parameter", f"{tab['file']}: the form has errors", {"issues": issues})
+    if "base_sha256" in body and body["base_sha256"] != _sha(_read(path)):
+        raise ApiError(409, "invalid_parameter", f"{path.name} was changed meanwhile: reload it and repeat the change")
+    return {**_write(request, path, text, "form", tab_id), "schema": issues}
+
+
+# ---- revisions (adapter_config_rev, migration 0018) -------------------------------------------------------------
+
+
+def _store(request: Request, read_only: bool = True) -> psycopg.Connection:
+    url = getattr(request.app.state, "store_url", None)
+    if not url:
+        raise psycopg.OperationalError("no store")
+    return psycopg.connect(url, row_factory=dict_row, autocommit=True, connect_timeout=3,
+                           options="-c default_transaction_read_only=on" if read_only else "")
+
+
+def _who(request: Request) -> str:
+    return LOCAL_USER  # shortcut: no users yet (05 §6); with roles, the user's name
+
+
+def _record(request: Request, path: Path, old: str | None, text: str, via: str,
+            tab_id: str | None) -> tuple[dict | None, str | None]:
+    """A revision of the write, after one of the previous content when that was changed outside the page (or never
+    recorded). Never fails the write: without the store the history misses it, and the answer says so."""
+    folder, name = str(path.parent), path.name
+    ins = ("INSERT INTO adapter_config_rev (config_dir, file_name, content, content_sha256, via, tab_id, changed_by) "
+           "VALUES (%s, %s, %s, %s, %s, %s, %s) "
+           "RETURNING rev_id, via, tab_id, changed_by, changed_at, content_sha256 AS sha256")
+    try:
+        with _store(request, read_only=False) as con, con.transaction():
+            last = con.execute("SELECT content_sha256 FROM adapter_config_rev WHERE config_dir = %s AND file_name = %s "
+                               "ORDER BY rev_id DESC LIMIT 1", (folder, name)).fetchone()
+            if old is not None and (last is None or last["content_sha256"] != _sha(old)):
+                con.execute(ins, (folder, name, old, _sha(old), "file", None, "file"))
+            rev = con.execute(ins, (folder, name, text, _sha(text), via, tab_id, _who(request))).fetchone()
+    except psycopg.Error as e:
+        return None, f"the history is not recorded: store unavailable ({type(e).__name__})"
+    return {**rev, "changed_at": rev["changed_at"].isoformat()}, None
+
+
+@router.get("/api/v1/adapter/config/{name}/history")
+def get_config_history(name: str, request: Request) -> dict[str, Any]:
+    """The revisions of a config file, newest first (100 at most), without their content; ``changed_outside``:
+    the file on disk is none of them (edited by hand since)."""
+    st = _settings()
+    path = _config_path(st, name)
+    current = _sha(_read(path))
+    try:
+        with _store(request) as con:
+            rows = con.execute(
+                "SELECT rev_id, via, tab_id, changed_by, changed_at, content_sha256 AS sha256, "
+                "octet_length(content) AS bytes FROM adapter_config_rev WHERE config_dir = %s AND file_name = %s "
+                "ORDER BY rev_id DESC LIMIT 100", (str(path.parent), name)).fetchall()
+    except psycopg.Error as e:
+        return {"name": name, "available": False, "error": f"store unavailable ({type(e).__name__})",
+                "revisions": [], "changed_outside": False}
+    revs = [{**r, "changed_at": r["changed_at"].isoformat(), "current": r["sha256"] == current} for r in rows]
+    return {"name": name, "available": True, "error": None, "revisions": revs,
+            "changed_outside": current is not None and bool(revs) and revs[0]["sha256"] != current}
+
+
+@router.get("/api/v1/adapter/config/{name}/history/{rev_id}")
+def get_config_revision(name: str, rev_id: int, request: Request) -> dict[str, Any]:
+    """One revision with its ``text`` (to compare or to load back into the form)."""
+    st = _settings()
+    path = _config_path(st, name)
+    try:
+        with _store(request) as con:
+            r = con.execute("SELECT rev_id, via, tab_id, changed_by, changed_at, content_sha256 AS sha256, "
+                            "content AS text FROM adapter_config_rev "
+                            "WHERE config_dir = %s AND file_name = %s AND rev_id = %s",
+                            (str(path.parent), name, rev_id)).fetchone()
+    except psycopg.Error as e:
+        raise ApiError(503, "store_unavailable", f"store unavailable ({type(e).__name__})") from None
+    if r is None:
+        raise ApiError(404, "not_found", f"{name}: no revision {rev_id}")
+    return {**r, "changed_at": r["changed_at"].isoformat()}
+
+
+# ---- what the forms offer --------------------------------------------------------------------------------------
+
+
+_RECENT_BOOKS = f"""
+WITH newest AS (SELECT max(valid_date) AS d FROM position_set),
+sets AS (
+    SELECT DISTINCT ON (ps.book_id) ps.book_id, ps.valid_date, ps.set_id, ps.source
+    FROM position_set ps, newest WHERE ps.valid_date >= newest.d - {RECENT_DAYS}
+    ORDER BY ps.book_id, ps.valid_date DESC, ps.revision DESC, ps.set_id DESC),
+books AS (SELECT DISTINCT ON (book_id) * FROM book_rev ORDER BY book_id, rev_id DESC)
+SELECT s.book_id, s.valid_date AS last_date, s.source,
+       (SELECT count(*) FROM position_input pi WHERE pi.set_id = s.set_id) AS positions,
+       b.name, b.desk, b.book_type, b.entity, b.trader
+FROM sets s LEFT JOIN books b USING (book_id) ORDER BY s.book_id"""
+
+
+@router.get("/api/v1/adapter/settings-context")
+def get_settings_context(request: Request) -> dict[str, Any]:
+    """Lists for the forms, from the store: ``recent_books`` (books with positions in the last weeks; the page marks
+    those no books.json entry names «не настроено»), ``indices`` (the hub's fixings) and ``currencies``. Without the
+    store: empty lists (the currencies: the usual ones) and ``error``."""
+    out: dict[str, Any] = {"recent_books": [], "indices": [], "currencies": list(CURRENCIES), "error": None,
+                           "recent_days": RECENT_DAYS}
+    try:
+        with _store(request) as con:
+            out["recent_books"] = [{**r, "last_date": r["last_date"].isoformat()} for r in con.execute(_RECENT_BOOKS)]
+            out["indices"] = [{"code": r["index_code"], "last": r["last"].isoformat() if r["last"] else None,
+                               "unit": r["unit"]} for r in con.execute(
+                "SELECT index_code, max(fixing_date) AS last, max(unit) AS unit FROM md_hub_fixing "
+                "GROUP BY index_code ORDER BY index_code")]
+            pairs = [r["pair"] for r in con.execute("SELECT DISTINCT pair FROM md_hub_fx")]
+    except psycopg.Error as e:
+        out["error"] = f"store unavailable ({type(e).__name__})"
+        return out
+    seen = {c for p in pairs for c in re.findall(r"[A-Z]{3}", p or "")}
+    out["currencies"] += sorted(seen - set(CURRENCIES))
+    return out

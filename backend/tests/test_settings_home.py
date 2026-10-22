@@ -385,7 +385,8 @@ def test_api_adapter_and_config_files(client: TestClient, home: Path, tmp_path: 
     fp = j["fingerprint"]
 
     assert client.get("/api/v1/adapter/config/books.json").json() == {
-        "name": "books.json", "path": str(home / "adapter-config" / "books.json"), "exists": False, "text": None}
+        "name": "books.json", "path": str(home / "adapter-config" / "books.json"), "exists": False, "text": None,
+        "sha256": None}
     r = client.put("/api/v1/adapter/config/books.json", json={"text": '{"books": [1,'})
     assert r.status_code == 422 and r.json()["details"]["line"] == 1
     assert not (home / "adapter-config" / "books.json").exists()

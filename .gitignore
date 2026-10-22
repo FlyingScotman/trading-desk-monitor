@@ -28,3 +28,4 @@ prototypes/concepts/.shots/
 
 # Snapshot folder listing index (desk.marketdata.bundle.MANIFEST_INDEX), written beside any bundle folder
 .manifests.json
+/.shots/

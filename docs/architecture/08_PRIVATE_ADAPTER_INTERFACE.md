@@ -123,8 +123,14 @@ def reference(ctx) -> dict: ...                      # §7; required when any so
   what reaches calculations goes through `reference()` (§7), validated by the contract schemas. Without the key,
   or for a tab of a bad shape (ignored with a warning, `desk.inbox.loader.check_settings_tabs`), the file stays
   editable as raw JSON. A change of a file changes the fingerprint (§2), so the next scan calls `reference()`.
-  Status 22.10.2026: the loader checks the key; the settings page still edits every file as raw JSON, the forms
-  come with the settings tabs work (A7, FND-4).
+  Status 22.10.2026 (FND-4, R40): the settings page renders each tab as a form (`prototypes/settings-forms.js`:
+  tables with a card per row, enums and the lists of entities, books, currencies and the hub's indices as
+  dropdowns, raw JSON under «Эксперт»). Before a write the backend checks the file against the tab's schema and runs
+  `reference()` over a copy of the config folder with the file replaced, so the page shows the adapter's own issue
+  codes, new ones apart (`POST /api/v1/adapter/settings/{tab}/check`, `desk.settings_forms`); the write
+  (`PUT /api/v1/adapter/settings/{tab}`) refuses a schema error and a file changed since it was read, and each
+  write is a revision in the store (`adapter_config_rev`, migration 0018: who and when). The page matches fields to
+  lists by name (`entity`, `ocp_to`, `book_id`, `ccy`, `index_code`); an adapter needs nothing beyond the schema.
 
 ## 5 `match(path, ctx)`
 

@@ -1,0 +1,79 @@
+{
+  "_comment": "Synthetic: invented rates and spreads, never the firm's (docs/ORG_RULES.md §2, §3, §9).",
+  "rules": [
+    {
+      "rule_id": "trading_rub",
+      "book_type": "TRADING",
+      "ccy": "RUB",
+      "basis": "mv_clean",
+      "rate_kind": "index_spread",
+      "index_code": "KEY_RATE",
+      "spread_bp": 100,
+      "day_count": "ACT/365"
+    },
+    {
+      "rule_id": "trading_rub",
+      "valid_from": "2026-10-19",
+      "book_type": "TRADING",
+      "ccy": "RUB",
+      "basis": "mv_clean",
+      "rate_kind": "index_spread",
+      "index_code": "KEY_RATE",
+      "spread_bp": 150,
+      "day_count": "ACT/365"
+    },
+    {
+      "rule_id": "trading_usd",
+      "book_type": "TRADING",
+      "ccy": "USD",
+      "basis": "mv_clean",
+      "rate_kind": "fixed",
+      "fixed_rate_pct": 5,
+      "day_count": "ACT/360"
+    },
+    {
+      "rule_id": "derivs_rub",
+      "book_type": "DERIVS",
+      "ccy": "RUB",
+      "basis": "cash",
+      "rate_kind": "index_spread",
+      "index_code": "RUONIA",
+      "spread_bp": 0,
+      "day_count": "ACT/365"
+    },
+    {
+      "rule_id": "futures",
+      "book_type": "FUTURES",
+      "basis": "none",
+      "rate_kind": "none"
+    },
+    {
+      "rule_id": "htm",
+      "book_type": "HTM",
+      "basis": "cost",
+      "rate_kind": "contract"
+    },
+    {
+      "rule_id": "ent2_cash",
+      "entity": "ENT2",
+      "ccy": "RUB",
+      "basis": "cash",
+      "rate_kind": "index_spread",
+      "index_code": "KEY_RATE",
+      "spread_bp": 100,
+      "day_count": "ACT/365"
+    },
+    {
+      "book_id": "T1",
+      "ccy": "CNY",
+      "basis": "mv_dirty",
+      "rate_kind": "fixed",
+      "fixed_rate_pct": "2.25"
+    }
+  ],
+  "bond_class_spreads": [],
+  "repo_policy": {
+    "rate": null,
+    "contract_rate_from_days": null
+  }
+}
