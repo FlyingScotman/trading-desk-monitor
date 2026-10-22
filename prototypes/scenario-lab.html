@@ -1121,6 +1121,12 @@ function renderExplain(){ renderRecon(); renderWaterfall(); renderHistory(); ren
 const CY = {id: D.CARRY_SCENARIOS[0].id, h: '3M', cfg: null};
 const CY_ON = [['RUONIA','RUONIA − КС (базис)', -100, 100], ['RUSFAR CNY','RUSFAR CNY', -300, 500], ['SOFR','SOFR', -200, 300], ['€STR','€STR', -200, 300], ['SARON','SARON', -100, 300]].filter(x => D.INDICES[x[0]] != null);
 const CY_FS = ['RUB','CNY'];
+// ставка hard ccy в сценарии; без неё — фикс. ставка торговых книг из справочника прогона (в демо — синтетическая)
+const hardNow = () => {
+  if (CY.cfg.hardCcy != null) return CY.cfg.hardCcy;
+  const r = (D.FUNDING_RULES || []).find(x => x.bookType === 'TRADING' && ['USD','EUR','CHF'].includes(x.ccy) && x.fixed != null);
+  return r ? r.fixed : 0;
+};
 const cyBase = () => ({ks:{mode:'flat'}});
 function cyLoad(id){
   const sc = D.CARRY_SCENARIOS.find(x => x.id === id) || D.CARRY_SCENARIOS[0];
@@ -1149,7 +1155,7 @@ function cyRenderBuilder(){
     : '<p class="note">До горизонта заседаний нет.</p>';
   $('#cy-on').innerHTML = CY_ON.map(([k, n, lo, hi]) => `<div class="row"><label title="${esc(k)} сейчас ${num(D.INDICES[k], 2)}%">${esc(n)}</label><input type="range" data-on="${esc(k)}" min="${lo}" max="${hi}" step="5" value="${CY.cfg.on[k] || 0}"><output class="num">${snum(CY.cfg.on[k] || 0)}</output></div>`).join('')
     + CY_FS.map(c => `<div class="row"><label title="Спред фондирования облигаций торговых книг в ${c}">Спред фонд. ${c}</label><input type="range" data-fs="${c}" min="-100" max="300" step="5" value="${CY.cfg.fundSpread[c] || 0}"><output class="num">${snum(CY.cfg.fundSpread[c] || 0)}</output></div>`).join('')
-    + `<div class="row"><label title="Фикс. ставка фондирования облигаций в USD/EUR/CHF">Hard ccy, %</label><input type="range" id="cy-hard" min="0" max="12" step="0.25" value="${CY.cfg.hardCcy != null ? CY.cfg.hardCcy : 5}"><output class="num">${num(CY.cfg.hardCcy != null ? CY.cfg.hardCcy : 5, 2)}%</output></div>`;
+    + `<div class="row"><label title="Фикс. ставка фондирования облигаций в USD/EUR/CHF">Hard ccy, %</label><input type="range" id="cy-hard" min="0" max="12" step="0.25" value="${hardNow()}"><output class="num">${num(hardNow(), 2)}%</output></div>`;
   $('#cy-roll').checked = !!CY.cfg.rolldown;
 }
 const CYK = [['income','Доход бумаг'],['funding','Фондирование бумаг'],['derivs','Кэрри деривативов'],['cash','Остатки ДС, РЕПО'],['rolldown','Ролл-даун']];
