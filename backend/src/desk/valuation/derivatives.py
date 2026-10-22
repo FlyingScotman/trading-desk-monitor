@@ -18,7 +18,7 @@ as core's ``FxSwap``):
   default CBR names -> ``CBR``, the CBR official rate set that day, ``curves.fx``). A published fixing freezes the leg
   (core: RUB risk only); a fixing due today and not yet published is projected (``fixing_pending``); one past without
   a fixing in the snapshot is a core rejection, so the row keeps the report's value. An NDF settled in another currency
-  than RUB, or a cross NDF, is not valued (core BACKLOG #127).
+  than RUB, or a cross NDF, is not valued (core BACKLOG #135).
 - X/Y without RUB: ``FxCrossForward`` (``FxCrossInstrument`` on the joint settlement calendar of X and Y).
 - The RUB leg is discounted on RUONIA OIS (``RUB RUONIA``), the foreign leg on the currency's curve
   (``FxMarket.fx_curve_ids``: setting ``fx_foreign_curve``, default the FX-implied curve ``<CCY> FX``; CNY's other
@@ -199,7 +199,7 @@ def core_legs(ctx: Any, leg: TermsLeg, iid: str, options: FxOptions, curve_of: d
     rub = leg.base == "RUB" or leg.quote == "RUB"
     if leg.ndf and (not rub or (leg.settle_ccy or "RUB") != "RUB"):
         raise NotValued("ndf_unsupported", f"{leg.label}: an NDF settled in {leg.settle_ccy} or a cross NDF "
-                                           "(core BACKLOG #127)")
+                                           "(core BACKLOG #135)")
     for c in (leg.base, leg.quote):
         if c != "RUB" and c not in ctx.fx.spots:
             raise NotValued("no_fx_spot", f"{c} on {bd}")

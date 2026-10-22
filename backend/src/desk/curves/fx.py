@@ -19,7 +19,7 @@
 - **Government par-yield proxies** (``USD UST``, ``EUR AAA``; ``usd_ust_par_proxy_v1``, ``eur_ecb_aaa_par_proxy_v1``):
   ``bootstrap_par_yield_curve`` of the hub's ``usd_ust_par`` / ``eur_aaa_par`` sets (percent / 100), dated the business
   date (the hub's set may be a day or two older: said in the lineage). Bonds use them only with the setting
-  ``proxy_curves_for_risk`` (core BACKLOG #124); they are never an FX forward's curve (a proxy needs a calibrated basis).
+  ``proxy_curves_for_risk`` (core BACKLOG #132); they are never an FX forward's curve (a proxy needs a calibrated basis).
 - **NDF fixings**: the CBR official rates of the snapshot as ``FxFixing(ccy, "CBR", set date, rate)``.
 
 Every core curve ID of a foreign curve is its published name (``IR|CNY FX|1Y``), so its risk needs no renaming. An input
@@ -68,7 +68,7 @@ FX_CURVE_KINDS = ("fx_implied", "xccy")
 """The curve an FX forward's foreign leg can be on (setting ``fx_foreign_curve``; the other is its fallback)."""
 PROXY_SPECS = {"usd_ust_par": ("USD", "USD UST", "usd_ust_par_proxy_v1"),
                "eur_aaa_par": ("EUR", "EUR AAA", "eur_ecb_aaa_par_proxy_v1")}
-"""Hub proxy quote set -> (currency, curve ID, core spec). ``eur_bund_par`` has no core spec (core BACKLOG #122)."""
+"""Hub proxy quote set -> (currency, curve ID, core spec). ``eur_bund_par`` has no core spec (core BACKLOG #130)."""
 XCCY_CURVE_ID, XCCY_SPEC = "CNY XCCY", "cny_ruonia_xccy_v1"
 CBR_SOURCE = "CBR"
 SPOT_SOURCES = ("market", "cets_tom")

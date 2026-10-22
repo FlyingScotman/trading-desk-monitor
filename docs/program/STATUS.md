@@ -7,7 +7,7 @@ Task states were reconciled with the code of the four repositories on 22 October
 | Item | State |
 |---|---|
 | Monitor baseline | Source reviewed at a6ba30bf5573ada869a9594c3e69f73faf741ed2 (contract 1.3); the backend (`backend/src/desk`) has replaced the prototype store since S5 |
-| Financial library | `rub-fixed-income-core` **0.35.0** (commit `f3cbabc`), pinned by commit in `backend/pyproject.toml`: CNY bonds on the XCCY curve and USD / EUR bonds on the par-yield proxies behind `proxy_curves_for_risk` (core BACKLOG #124), FX forwards, NDFs, swaps and crosses from `trade_terms` through `value_portfolio` v3 (`valuation/derivatives.py`; inputs `curves/fx.py` from hub contract 1.4). Provisional choices: [DECISIONS](DECISIONS.md) OQ-05…OQ-16 |
+| Financial library | `rub-fixed-income-core` **0.36.0** (commit `24fe776`), pinned by commit in `backend/pyproject.toml` (its KBD risk curve, KBD floaters and never-called perpetuals are not used yet: core BACKLOG #124, #128): CNY bonds on the XCCY curve and USD / EUR bonds on the par-yield proxies behind `proxy_curves_for_risk` (core BACKLOG #132), FX forwards, NDFs, swaps and crosses from `trade_terms` through `value_portfolio` v3 (`valuation/derivatives.py`; inputs `curves/fx.py` from hub contract 1.4). Provisional choices: [DECISIONS](DECISIONS.md) OQ-05…OQ-16 |
 | Market-data hub, VPS and domain | `market-data-hub` 0.2.0 in production on the VPS with HTTPS (checked 21 October 2026); 0.3.x and 0.4.0 in review, installed by the owner |
 | Public data API | `/v1/snapshots` and `/v1/history/*` with scoped tokens |
 | Local Windows calculation backend | Offline bundle installed at work (20 October 2026), updated by zip patches; real books run through the private adapter |

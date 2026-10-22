@@ -99,7 +99,7 @@ class EodContext:
     proxy_curves: bool = False
     """Setting ``proxy_curves_for_risk`` (default off): show the hub's government par-yield proxies (UST par, ECB AAA,
     Bund; contract 1.3) as the USD/EUR curves of the run, and discount USD / EUR bonds on them through core (``USD UST``,
-    ``EUR AAA``; core BACKLOG #124). Off: those curves stay without points and such bonds on their fallback rung."""
+    ``EUR AAA``; core BACKLOG #132). Off: those curves stay without points and such bonds on their fallback rung."""
     fx: fxcurves.FxMarket = field(default_factory=fxcurves.FxMarket)
     """The run's FX inputs in ``core_market`` (``curves.fx.with_fx``): foreign curves, spots, their lineage."""
     fx_options: fxcurves.FxOptions = field(default_factory=fxcurves.FxOptions)
@@ -294,7 +294,7 @@ def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: b
 
 def foreign_bond_curves(ctx: EodContext) -> dict[str, tuple[str, ...]]:
     """ccy -> the curves a foreign bond is discounted on, in order (core ``foreign_curves`` then its
-    ``foreign_curve_fallbacks``; core BACKLOG #124): CNY on the XCCY curve; USD and EUR on the government par-yield
+    ``foreign_curve_fallbacks``; core BACKLOG #132): CNY on the XCCY curve; USD and EUR on the government par-yield
     proxies only with the setting ``proxy_curves_for_risk``. A currency without one stays on the fallback ladder."""
     out: dict[str, tuple[str, ...]] = {"CNY": (fxcurves.XCCY_CURVE_ID,)}
     if ctx.proxy_curves:

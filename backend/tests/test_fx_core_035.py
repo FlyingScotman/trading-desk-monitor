@@ -1,4 +1,4 @@
-"""Core 0.35 FX inputs and FX derivatives from trade terms (WP-M1..M4, M6; core BACKLOG #124, #129).
+"""Core 0.35 FX inputs and FX derivatives from trade terms (WP-M1..M4, M6; core BACKLOG #132, #137).
 
 On the hub's contract 1.4 golden snapshot of 15.10.2026 (``fixtures/mdhub_v1_4``, vendored from the hub repository:
 CETS swap points of CNY, FORTS futures, settlement dates and calendars) and synthetic trades (invented amounts):
@@ -351,7 +351,7 @@ def test_curves_reference_and_fx_log(ctx, valued):
     assert math.isfinite(sum(r["mv_rub"] for r in rows))
 
 
-# --- foreign bonds on their own curve (core 0.34, BACKLOG #124) --------------------------------------------------
+# --- foreign bonds on their own curve (core 0.36, BACKLOG #132) --------------------------------------------------
 
 USD_BOND, CNY_BOND = "RU000A10BRM5", "RU000A0CNY01"
 UST = (("1M", 4.18), ("3M", 4.10), ("6M", 3.98), ("1Y", 3.81), ("2Y", 3.65), ("5Y", 3.68), ("10Y", 4.01))

@@ -42,7 +42,7 @@ No firm-specific data is needed. File zones do not overlap within a wave; the sh
 | **P8 Adapter A7 on synthetic data** | In `trades-data-adapter`: reading and checking `entities.json`, `funding.json`, the book funding mode; `reference()` with `entities` and `funding_rules`; `describe()["settings_tabs"]`; synthetic samples only. Starts once P1 has fixed the SPI extension in 08 | `trades-data-adapter` |
 | **P9 Documents** | This revision; backlog and STATUS reconciled; DECISIONS canonical for the generic IDs, with the open questions; ORCHESTRATION_PLAN | `docs/` |
 
-**Wave A status (22 October 2026).** P1, P2, P4 and P9 are done and merged on `claude/blissful-ramanujan-ukia51`: private contract 1.2 with dataset storage (P1), the funding engine in `backend/src/desk/rules/` with `rules/reference.py` reading P1's `reference()` funding rules and entities (P2), the currency × instrument type table in the cockpit (P4, UI-02 in review), this revision (P9). P5 can start: core **0.34.0** (commit `15f63e3`) values CNY / USD / EUR bonds on their own currency's curve and awaits the monitor's pickup (core BACKLOG #124). Open: P3, P5, P6, P7, P8.
+**Wave A status (22 October 2026).** P1, P2, P4 and P9 are done and merged on `claude/blissful-ramanujan-ukia51`: private contract 1.2 with dataset storage (P1), the funding engine in `backend/src/desk/rules/` with `rules/reference.py` reading P1's `reference()` funding rules and entities (P2), the currency × instrument type table in the cockpit (P4, UI-02 in review), this revision (P9). P5 can start: core **0.34.0** (commit `15f63e3`) values CNY / USD / EUR bonds on their own currency's curve and awaits the monitor's pickup (core BACKLOG #132). Open: P3, P5, P6, P7, P8.
 
 Wave B, after wave A:
 
@@ -168,7 +168,7 @@ Bank-internal sources are not hub work: they enter through the private adapter.
 
 ### rub-fixed-income-core
 
-Plan: `rub-fixed-income-core/docs/PRODUCT_ROADMAP.md`. Desk items: [briefs/CORE.md](briefs/CORE.md); C1, C4, C7, C8 are done in 0.33 (C5 in part; core `docs/reviews/CORE_REVIEW_FOR_DESK_MONITOR.md` §6); C2, C3 (release tags), C6 remain. Core 0.34.0 (commit `15f63e3`, foreign bonds on their own currency's curve) awaits the monitor's pickup: core BACKLOG #124, wave A P5. Wave A P7: #46, #49, #40, #103, #113, #102 (§0.2). Core #107 (result v3 in the desk) is the canonical item §2a. Reconciliation may add accrual-convention items once breaks are classified.
+Plan: `rub-fixed-income-core/docs/PRODUCT_ROADMAP.md`. Desk items: [briefs/CORE.md](briefs/CORE.md); C1, C4, C7, C8 are done in 0.33 (C5 in part; core `docs/reviews/CORE_REVIEW_FOR_DESK_MONITOR.md` §6); C2, C3 (release tags), C6 remain. Core 0.34.0 (commit `15f63e3`, foreign bonds on their own currency's curve) awaits the monitor's pickup: core BACKLOG #132, wave A P5. Wave A P7: #46, #49, #40, #103, #113, #102 (§0.2). Core #107 (result v3 in the desk) is the canonical item §2a. Reconciliation may add accrual-convention items once breaks are classified.
 
 ### pnl_tool
 

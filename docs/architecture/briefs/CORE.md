@@ -10,7 +10,7 @@ The items come from:
 
 Checked against core's `CHANGELOG.md` and `docs/BACKLOG.md` (branch `claude/blissful-ramanujan-ukia51`). Items marked **done** in the table below landed in core **0.33.0**: C1 (`Offer.window_start` / `window_end`, `horizon="open_put"`), C4 (`docs/SYSTEM_CONTEXT.md` refreshed against ADR-001), C7 (fixed bonds whose coupons are not known to the horizon are rejected or flagged), C8 (spread kind per instrument, `ValuationPolicy.spread_kind_for`). The backend pins 0.33.0 (commit `5ec23b3`).
 
-**Awaiting the desk:** core **0.34.0** (commit `15f63e3`): CNY / USD / EUR bonds on their own currency's curve (CNY on the XCCY curve, USD / EUR on the UST / ECB AAA proxies, explicit fallback curves). The monitor's pickup is core BACKLOG #124 (lift `not_rub` in `valuation/bonds.py`, build the foreign curves, map `IR|<curve>|<bucket>`, show `CurveUse.proxy`); it is not done yet.
+**Picked up:** core **0.36.0** (commit `24fe776`; the work that was numbered 0.34.0 / 0.35.0 on core's branch, `15f63e3` / `f3cbabc`, plus core's 0.34.0 and never-called perpetuals): CNY / USD / EUR bonds on their own currency's curve (core BACKLOG #132) and the FX book are in the backend. **Awaiting the desk:** the KBD as a risk curve and KBD floaters (core 0.34.0, option C; core BACKLOG #124: OFZ on `rub_ofz_kbd_v2`, KBD floaters off the fallback, `basis_view`) and never-called perpetuals (core BACKLOG #128: `ExerciseAssumption.never_called()` instead of `perpetual_call`); not started.
 
 ## The backend on 0.32.0
 

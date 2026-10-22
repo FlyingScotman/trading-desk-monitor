@@ -172,7 +172,7 @@ FOREIGN_BOND_CCYS = ("CNY", "USD", "EUR")
 
 def eligibility(terms: BondTerms) -> None:
     """A foreign-face bond (CNY, USD, EUR; MOEX's ``is_fx_face``, settled in RUB or in its currency) is in scope since
-    core 0.34 (BACKLOG #124): core discounts it on its currency's curve (``value_bonds``, ``foreign``). Another face
+    core 0.36 (BACKLOG #132): core discounts it on its currency's curve (``value_bonds``, ``foreign``). Another face
     currency stays ``not_rub``."""
     ccy = bond_currency(terms)
     if ccy != "RUB" and ccy not in FOREIGN_BOND_CCYS:

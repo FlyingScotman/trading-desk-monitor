@@ -44,14 +44,14 @@ Recorded on 22 October 2026 from the roadmap review. None is resolved here: each
 ## Open questions: provisional FX and derivative choices (core 0.35 pickup)
 
 Recorded on 22 October 2026 when the backend took up core 0.34/0.35 (foreign bond curves, FX forwards for any currency,
-crosses, NDF fixings; core BACKLOG #124, #129) and hub contract 1.4 (FX value dates, CETS swaps, FORTS futures). Each
+crosses, NDF fixings; core BACKLOG #132, #137) and hub contract 1.4 (FX value dates, CETS swaps, FORTS futures). Each
 choice is a working default, not a decision: where it can change it is a setting (`backend/src/desk/settings.py`,
 `curves.fx.FxOptions`), and the run's lineage (`fx.options`, `fx.curves`) records what was used. Code:
 `backend/src/desk/curves/fx.py`, `valuation/derivatives.py`, `valuation/bonds.py`.
 
 | ID | Question | Working default (setting) | Alternatives | Needed for |
 |---|---|---|---|---|
-| OQ-05 | Which curve is an FX forward's foreign leg on? | The curve implied from the exchange's swap points and futures, `<CCY> FX` (`fx_foreign_curve` = `fx_implied`); for CNY the XCCY curve is the fallback when the implied one is absent | `xccy` (CNY on the XCCY curve, the implied one as fallback); a government par-yield proxy is never used for FX products (it needs a calibrated basis, core #123) | FX forward PV and foreign-curve risk |
+| OQ-05 | Which curve is an FX forward's foreign leg on? | The curve implied from the exchange's swap points and futures, `<CCY> FX` (`fx_foreign_curve` = `fx_implied`); for CNY the XCCY curve is the fallback when the implied one is absent | `xccy` (CNY on the XCCY curve, the implied one as fallback); a government par-yield proxy is never used for FX products (it needs a calibrated basis, core #131) | FX forward PV and foreign-curve risk |
 | OQ-06 | What builds an FX-implied curve? | The exchange's swap points of the date, then the dated FX futures past the last swap point as outrights at their delivery date (`fx_implied_futures` on). A currency without a TOD/TOM swap gets an assumed anchor: a zero foreign rate from the business date to the spot date (said in the lineage and the positions' assumptions) | Swap points only; OTC outrights or a deposit curve for the short end | USD and EUR forwards (no exchange swap points) |
 | OQ-07 | Which spot do FX derivatives value from? | The market rate chain of DEC04 (`fx_spot_source` = `market`, as bonds and the OCP), value date the hub's TOM settlement date, else TOM on the joint settlement calendar | `cets_tom` (the exchange's TOM close); an OTC SPT convention for some currencies | FX forward PV, FX delta |
 | OQ-08 | Which RUB curve discounts the RUB leg? | RUONIA OIS (`RUB RUONIA`), as RUB bonds; no setting | The key-rate curve; a collateral-specific curve | RUB DV01 of the FX book |
