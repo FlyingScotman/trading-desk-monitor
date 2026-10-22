@@ -17,6 +17,11 @@ layout (``app/``, ``wheelhouse/``, ``adapter/``, ``python/`` and the root files)
 and a patch made for the installed files (the manifest's unchanged entries match the installed manifest).
 ``python/`` is never replaced while it runs the launcher: a zip that changes it is refused (the manual way).
 A full zip without ``adapter/`` keeps the installed adapter, and so does a patch built from a bundle without one.
+
+Rollback by hand (``stage_rollback``): the launcher keeps the files an update replaced in
+``<home>/updates/backup/<old version>/`` (the newest three); the backup made when the running version was installed
+is staged like an update back to the old version, through the same launcher (which backs up the current files in
+turn). The GitHub updater (``desk.updater``) downloads zips into the uploads folder and installs them the same way.
 """
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ import os
 import re
 import shutil
 import stat
+import threading
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -53,6 +59,7 @@ _RESERVED = re.compile(r"(?i)(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\..*)?")
 _VERSION_KEY = re.compile(r"(\d+(?:\.\d+)*)-(\d{8})-[0-9a-f]{7,40}(?:-dirty(\d{12}))?")
 _SHA = re.compile(r"[0-9a-f]{64}")
 _UPLOAD_CHARS = re.compile(r"[^A-Za-z0-9._+-]")
+INSTALL_LOCK = threading.Lock()  # one install (staging) at a time: the settings page's and the updater's
 
 
 class UpdateError(ValueError):
@@ -358,6 +365,63 @@ def request(staged: dict[str, Any], home: Path) -> None:
     keys = ("version", "from_version", "kind", "source", "staged")
     doc = {**{k: staged[k] for k in keys}, "requested_at": datetime.now().isoformat(timespec="seconds")}
     atomic_write_text(updates_dir(home) / "pending.json", json.dumps(doc, ensure_ascii=False, indent=1) + "\n")
+
+
+def rollback_point(root: Path, home: Path, thorough: bool = False) -> dict[str, Any] | None:
+    """The backup the launcher made when it installed the running version (``version`` it goes back to,
+    ``backup`` folder, ``replaced``, ``created``); None when there is none or it is incomplete (``thorough``:
+    every backed-up file is checked to be there, else only ``VERSION``: the page asks often)."""
+    current = installed_version(root)
+    folder = updates_dir(home) / "backup"
+    try:
+        dirs = sorted((d for d in folder.iterdir() if d.is_dir()), key=lambda d: d.stat().st_mtime, reverse=True)
+    except OSError:
+        return None
+    for d in dirs:
+        try:
+            rec = json.loads((d / "backup.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(rec, dict) or rec.get("to_version") != current or not isinstance(rec.get("version"), str):
+            continue
+        replaced, created = rec.get("replaced"), rec.get("created")
+        if not isinstance(replaced, list) or not isinstance(created, list):
+            continue
+        if any(not isinstance(r, str) or _bad_path(r) for r in [*replaced, *created]) or "VERSION" not in replaced \
+                or not all((d / "files" / r).is_file() for r in (replaced if thorough else ["VERSION"])):
+            continue
+        return {"version": rec["version"], "backup": str(d), "replaced": replaced, "created": created}
+    return None
+
+
+def stage_rollback(root: Path, home: Path) -> dict[str, Any]:
+    """Stage the return to the version before the running one from its backup (``rollback_point``), like
+    ``stage``; UpdateError when there is no backup."""
+    point = rollback_point(root, home, thorough=True)
+    if point is None:
+        raise UpdateError("Нет резервной копии предыдущей версии (её делает установка обновления; хранятся три "
+                          "последние). Установите нужную версию из архива.")
+    backup = Path(point["backup"]) / "files"
+    dest = updates_dir(home) / "staged" / f"rollback-{point['version']}"
+    if dest.exists():
+        shutil.rmtree(dest)
+    files = {}
+    try:
+        for rel in point["replaced"]:
+            if rel.startswith("python/"):
+                continue
+            (dest / "files" / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(backup / rel, dest / "files" / rel)
+            files[rel] = file_sha256(dest / "files" / rel)
+    except BaseException:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise
+    delete = sorted(rel for rel in point["created"] if not rel.startswith("python/") and (root / rel).is_file())
+    doc = {"version": point["version"], "from_version": installed_version(root), "kind": "rollback",
+           "base_version": None, "source": f"резервная копия {point['version']}", "files": files, "delete": delete,
+           "created_at": datetime.now().isoformat(timespec="seconds")}
+    atomic_write_text(dest / "update.json", json.dumps(doc, ensure_ascii=False, indent=1) + "\n")
+    return {**doc, "staged": str(dest)}
 
 
 def state(home: Path) -> dict[str, Any]:

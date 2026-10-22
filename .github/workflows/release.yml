@@ -1,0 +1,84 @@
+name: release
+
+# A version tag v<backend version> (backend/pyproject.toml) publishes a GitHub Release that the in-app updater
+# (backend/src/desk/updater) reads: the Windows bundle DeskMonitor-<version>.zip (never with the private adapter),
+# a patch from the previous release's bundle, SHA256SUMS, release.json and notes with the checksums.
+# Bump the version, commit, then:  git tag v0.3.0 && git push origin v0.3.0
+# Re-running for an existing tag (Actions -> release -> Run workflow) replaces its assets.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "existing tag to build and publish (v<backend version>)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+      - name: Python 3.11 with pip (the bundle builder downloads win_amd64 / cp311 wheels with it)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Python 3.12 venv with the backend (tests, the release tool)
+        working-directory: backend
+        run: |
+          uv venv -p 3.12 .venv
+          uv pip install -p .venv -e ".[dev]" -e ..
+      - name: The tag names the backend version
+        run: backend/.venv/bin/python backend/tools/release_assets.py check-tag --tag "$TAG"
+      - name: Lint and tests
+        run: |
+          backend/.venv/bin/ruff check backend
+          (cd backend && .venv/bin/python -m pytest -q -p no:cacheprovider)
+          backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests
+      - name: The previous release's full bundle (base of the patch)
+        run: |
+          mkdir -p prev
+          prev=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 30 \
+                   --json tagName --jq '.[].tagName' | grep -vxF "$TAG" | head -n 1 || true)
+          if [ -n "$prev" ]; then
+            echo "previous release: $prev"
+            gh release download "$prev" --repo "$GITHUB_REPOSITORY" --dir prev --pattern 'DeskMonitor-*.zip' || true
+            rm -f prev/DeskMonitor-patch-*.zip prev/*-with-adapter.zip
+          fi
+          ls -la prev
+      - name: Build the Windows bundle (and the patch)
+        run: |
+          base=$(ls prev/DeskMonitor-*.zip 2>/dev/null | head -n 1 || true)
+          python3.11 backend/tools/build_windows_bundle.py --out dist ${base:+--patch-base "$base"}
+          ls -la dist
+      - name: SHA256SUMS, release.json, notes
+        run: >
+          backend/.venv/bin/python backend/tools/release_assets.py write --dist dist --tag "$TAG"
+          --repo "$GITHUB_REPOSITORY" --commit "$(git rev-parse HEAD)"
+      - name: Publish the release
+        run: |
+          shopt -s nullglob
+          assets=(dist/DeskMonitor-*.zip dist/SHA256SUMS dist/release.json)
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${assets[@]}"
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file dist/NOTES.md
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --latest \
+              --title "Desk Monitor $TAG" --notes-file dist/NOTES.md "${assets[@]}"
+          fi

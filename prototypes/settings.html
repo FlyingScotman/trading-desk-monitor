@@ -301,6 +301,7 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
     <div class="ph"><h2 id="h-up">Обновление программы</h2><span class="muted">установлена <span class="mono" id="up-ver">…</span></span></div>
     <div class="pb">
       <div class="note warn" id="up-off" hidden></div>
+      <div id="up-gh" style="margin-top:10px"></div><!-- GitHub Releases: desk-updater.js -->
       <div class="form" style="margin-top:10px">
         <label for="up-dir">Папка с обновлениями</label>
         <div>
@@ -833,7 +834,7 @@ async function renderConfigFiles(a){
   async function install(it){
     const warn = it.compare === 'older' ? '\n\nВнимание: эта версия СТАРЕЕ установленной.' : it.compare === 'other' ? '\n\nДругая сборка: какая из версий новее, неизвестно.' : '';
     if (!confirm('Установить Desk Monitor ' + it.version + ' (' + (KIND[it.kind] || '') + ')?\nСервер перезапустится, это займёт около минуты; страница обновится сама.' + warn)) return;
-    const body = {source:it.source, name:it.name}, started = Date.now();
+    const body = {source:it.source, name:it.name, allow_downgrade:it.compare === 'older'}, started = Date.now();
     U.busy = true; render(U.data);
     progress(0, 'Проверяю архив…');
     try { const c = await api('POST', '/api/v1/update/check', body); if (c.error) throw new Error(c.error); }
@@ -903,6 +904,7 @@ async function renderConfigFiles(a){
   load();
 })();
 </script>
+<script src="desk-updater.js" data-mode="panel"></script>
 <script>
 'use strict';
 /* ---------- 8. Диагностика (R13): /api/v1/diagnostics builds a JSON of how the desk works here, without private

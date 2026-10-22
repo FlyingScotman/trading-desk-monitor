@@ -188,6 +188,8 @@
     run.appendChild(cur);
     st.appendChild(run);
     if (!http) return;
+    var up = el('script', { src: root + 'desk-updater.js', 'data-mode': 'nav', 'data-root': root });  // «Новая версия …»
+    document.head.appendChild(up);
 
     function picker() {
       fetch(root + 'api/v1/runs?limit=200&status=complete', { cache: 'no-store' })

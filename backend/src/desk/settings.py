@@ -68,6 +68,12 @@ layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub
                            other step (``desk.backfill``, R23; ``desk backfill`` does the same at once)
 * ``DESK_UPDATE_DIR``      the Windows bundle: a folder (a network share, say) holding update zips that the
                            settings page offers to install (``desk.update``); none by default
+* ``DESK_UPDATE_REPO``, ``DESK_UPDATE_TRANSPORT``, ``DESK_UPDATE_DOWNLOADS_DIR``, ``DESK_UPDATE_AUTO_CHECK``  the
+                           updater from GitHub Releases (``desk.updater``): the public repository ``owner/name``
+                           (default ``FlyingScotman/trading-desk-monitor``), how the server reaches GitHub (``auto``,
+                           ``python``, ``curl``, ``powershell``, or ``browser``: downloads by the browser only), the
+                           folder the browser saves downloads to (default: the Windows «Загрузки» folder), and the
+                           check for a new version when a page is opened (on; only in the Windows bundle)
 
 Relative paths resolve against the repository (install) root, those of ``settings.json`` against
 ``<home>``. The proxy comes from the standard ``HTTPS_PROXY`` / ``NO_PROXY`` variables; ``settings.json``
@@ -95,6 +101,9 @@ SETTINGS_FILE = "settings.json"
 TOKEN_FILE = "hub_token"
 PROXY_PASSWORD_FILE = "proxy_password"
 HUB_TRANSPORTS = ("auto", "python", "curl")
+UPDATE_TRANSPORTS = ("auto", "python", "curl", "powershell", "browser")
+DEFAULT_UPDATE_REPO = "FlyingScotman/trading-desk-monitor"
+_REPO_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}")
 ADAPTER_CONFIG_DIR = "adapter-config"
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 
@@ -117,6 +126,10 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "proxy_curves_for_risk": ("DESK_PROXY_CURVES_FOR_RISK", "bool"),
     "inbox_lookback_days": ("DESK_INBOX_LOOKBACK_DAYS", "int0"),
     "update_dir": ("DESK_UPDATE_DIR", "path"),
+    "update_repo": ("DESK_UPDATE_REPO", "str"),
+    "update_transport": ("DESK_UPDATE_TRANSPORT", "str"),
+    "update_downloads_dir": ("DESK_UPDATE_DOWNLOADS_DIR", "path"),
+    "update_auto_check": ("DESK_UPDATE_AUTO_CHECK", "bool"),
     "history_days": ("DESK_HISTORY_DAYS", "int0"),
     "history_bonds_from": ("DESK_HISTORY_BONDS_FROM", "date"),
     "history_rates_from": ("DESK_HISTORY_RATES_FROM", "date"),
@@ -193,6 +206,10 @@ class Settings:
     history_rates_from: date = date(2010, 1, 1)  # the hub's history API: KBD, curves, fixings, FX from
     private_adapter_default: bool = False  # private_adapter came from DESK_DEFAULT_PRIVATE_ADAPTER
     update_dir: Path | None = None  # update zips of the Windows bundle (desk.update)
+    update_repo: str = DEFAULT_UPDATE_REPO  # GitHub Releases of the monitor (desk.updater)
+    update_transport: str = "auto"  # how the server reaches GitHub; "browser": only the browser downloads
+    update_downloads_dir: Path | None = None  # the browser's downloads folder; None: the Windows default
+    update_auto_check: bool = True  # look for a new release when a page is opened (Windows bundle only)
     backfill: bool = True  # the autopilot computes the default runs of past dates (desk.backfill, R23)
     backfill_from: str = "2026-01-05"  # first date of the backfill (the hub's first eod_final close)
     backfill_budget_s: float = 600.0  # seconds of backfill runs per autopilot cycle (after every other step)
@@ -259,6 +276,10 @@ class Settings:
              else "off (proxies shown only)"),
             ("inbox_lookback_days", str(self.inbox_lookback_days) if self.inbox_lookback_days else "0 (no limit)"),
             ("update_dir", str(self.update_dir or "none")),
+            ("update_repo", self.update_repo),
+            ("update_transport", self.update_transport),
+            ("update_downloads_dir", str(self.update_downloads_dir or "default (the Windows Downloads folder)")),
+            ("update_auto_check", "on" if self.update_auto_check else "off"),
             ("history_days", str(self.history_days) if self.history_days else "0 (off: the cached dates only)"),
             ("history_bonds_from", self.history_bonds_from.isoformat()),
             ("history_rates_from", self.history_rates_from.isoformat()),
@@ -527,6 +548,14 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
     backfill_from = (get("DESK_BACKFILL_FROM") or defaults.backfill_from).strip()
     if not _is_date(backfill_from):
         raise SettingsError(f"DESK_BACKFILL_FROM (backfill_from) must be a date YYYY-MM-DD, not {backfill_from!r}")
+    update_repo = (get("DESK_UPDATE_REPO") or defaults.update_repo).strip()
+    if not _REPO_RE.fullmatch(update_repo):
+        raise SettingsError(f"DESK_UPDATE_REPO (update_repo) must be owner/name of a GitHub repository, "
+                            f"not {update_repo!r}")
+    update_transport = (get("DESK_UPDATE_TRANSPORT") or "auto").strip().lower()
+    if update_transport not in UPDATE_TRANSPORTS:
+        raise SettingsError(f"DESK_UPDATE_TRANSPORT (update_transport) must be one of "
+                            f"{', '.join(UPDATE_TRANSPORTS)}, not {update_transport!r}")
     store_url = get("DESK_STORE_URL")
     if store_url is not None and urlsplit(store_url).scheme not in ("postgresql", "postgres"):
         raise SettingsError("DESK_STORE_URL must be a postgresql:// URI")
@@ -564,6 +593,10 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         history_rates_from=day("DESK_HISTORY_RATES_FROM", defaults.history_rates_from),
         private_adapter_default=adapter_default,
         update_dir=_path(get("DESK_UPDATE_DIR")),
+        update_repo=update_repo,
+        update_transport=update_transport,
+        update_downloads_dir=_path(get("DESK_UPDATE_DOWNLOADS_DIR")),
+        update_auto_check=flag("DESK_UPDATE_AUTO_CHECK", defaults.update_auto_check),
         backfill=flag("DESK_BACKFILL", defaults.backfill),
         backfill_from=backfill_from,
         backfill_budget_s=num("DESK_BACKFILL_BUDGET_S", defaults.backfill_budget_s),
