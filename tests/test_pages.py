@@ -106,6 +106,21 @@ class Pages(unittest.TestCase):
         users = (PROTO / "users.html").read_text(encoding="utf-8")
         self.assertIn("settings.html#users", users)
         self.assertIn("/settings.html#users", (PROTO / "desk-auth.js").read_text(encoding="utf-8"))
+        self.assertIn("/api/v1/users/' + encodeURIComponent(u.username), null", (PROTO / "desk-users.js").read_text(encoding="utf-8"))
+
+    def test_settings_page_runs_the_server_without_the_command_line(self):
+        # «Доступ из сети» (desk-server.js, /api/v1/server): перезапуск, доступ коллегам, адреса, брандмауэр для ИТ,
+        # проверка доступа (#lan, прежде в «Диагностике»); старые ссылки #lan ведут сюда
+        html = (PROTO / "settings.html").read_text(encoding="utf-8")
+        self.assertIn('href="#net" data-sec="net"', html)
+        self.assertRegex(html, r'<section class="sec" id="net" data-sec="net"')
+        for anchor in ("srv-restart", "nf-apply", "net-urls", "fw", "lan", "lan-run", "rs"):
+            self.assertIn(f'id="{anchor}"', html, anchor)
+        self.assertIn("lan:'net'", html)
+        self.assertIn("'desk-server.js'", html)
+        js = (PROTO / "desk-server.js").read_text(encoding="utf-8")
+        for api in ("/api/v1/server/restart", "/api/v1/server/network", "/health/live", "X-Desk-Instance", "Скопировать для ИТ"):
+            self.assertIn(api, js, api)
 
 
 if __name__ == "__main__":
