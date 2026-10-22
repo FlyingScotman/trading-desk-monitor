@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
-  "plan_revision": "0.2",
-  "as_of": "2026-10-15",
+  "plan_revision": "0.3",
+  "as_of": "2026-10-22",
   "baseline_commit": "a6ba30bf5573ada869a9594c3e69f73faf741ed2",
   "state_authority": "backlog.json",
   "status_values": [
@@ -17,7 +17,7 @@
       "title": "Establish the canonical project control files",
       "phase": 0,
       "owner_role": "coordinator",
-      "status": "todo",
+      "status": "done",
       "depends_on": [],
       "requirement_ids": [
         "S12"
@@ -32,7 +32,10 @@
         "Validate task IDs dependencies requirement references and DAG",
         "Set task state from actual evidence and link reviewed changes; no secrets or work data in project files"
       ],
-      "evidence": [],
+      "evidence": [
+        "docs/program/ (this pack) and validation.json (14 October 2026)",
+        "Live plan: docs/architecture/ROADMAP.md; owner requests: docs/program/OWNER_REQUESTS.md; process: docs/program/ORCHESTRATION_PLAN.md"
+      ],
       "reviewer": null,
       "blocking_reason": null
     },
@@ -41,7 +44,7 @@
       "title": "Export the candidate library and existing collectors",
       "phase": 0,
       "owner_role": "existing_vps_operator",
-      "status": "todo",
+      "status": "done",
       "depends_on": [],
       "requirement_ids": [],
       "deliverables": [
@@ -54,7 +57,9 @@
         "Scan archive for secrets; list exclusions and unresolved provenance without printing secret values",
         "Record versions and distinguish synthetic/public fixtures from any unexportable data"
       ],
-      "evidence": [],
+      "evidence": [
+        "The library became the rub-fixed-income-core repository (pinned by commit in backend/pyproject.toml); the collectors became market-data-hub"
+      ],
       "reviewer": null,
       "blocking_reason": null
     },
@@ -63,7 +68,7 @@
       "title": "Audit the financial library against all requirements",
       "phase": 1,
       "owner_role": "quant_auditor",
-      "status": "todo",
+      "status": "done",
       "depends_on": [
         "CTRL-01",
         "EXPORT-01"
@@ -97,7 +102,10 @@
         "Run existing tests in a controlled environment and distinguish pre-existing failures",
         "Identify Windows risks before choosing a refactor; propose bounded extensions"
       ],
-      "evidence": [],
+      "evidence": [
+        "rub-fixed-income-core: docs/PRODUCT_ROADMAP.md (reconciled release by release to 0.33.0), docs/reviews/CORE_REVIEW_FOR_DESK_MONITOR.md (21 October 2026)",
+        "docs/architecture/reviews/2026-10-16_module_review.md; the separate library_audit.md was not produced, these documents replace it"
+      ],
       "reviewer": null,
       "blocking_reason": null
     },
@@ -106,7 +114,7 @@
       "title": "Freeze provider contracts and source ownership",
       "phase": 1,
       "owner_role": "data_architect",
-      "status": "todo",
+      "status": "done",
       "depends_on": [
         "CTRL-01"
       ],
@@ -149,7 +157,11 @@
         "Define effective/known dates revisions quality states overrides and immutable snapshot hashes",
         "Confirm actual VPS/domain budget/access and work connectivity test procedure"
       ],
-      "evidence": [],
+      "evidence": [
+        "market-data-hub: schemas/market_snapshot/v1 (public snapshot contract), docs/DESIGN.md",
+        "contract/private/v1 and docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md (private inputs, SPI v1)",
+        "docs/architecture/adr/ADR-001 (hosting), ADR-002 (snapshots), ADR-008 (private adapter boundary)"
+      ],
       "reviewer": null,
       "blocking_reason": null
     },
@@ -158,7 +170,7 @@
       "title": "Resolve initial financial conventions and tolerances",
       "phase": 1,
       "owner_role": "desk_owner_with_quant_reviewer",
-      "status": "todo",
+      "status": "in_progress",
       "depends_on": [
         "AUDIT-01",
         "DESIGN-01"
@@ -185,7 +197,10 @@
         "Do not treat open conventions or special-product proposals as accepted",
         "Only unresolved out-of-wave choices may remain deferred"
       ],
-      "evidence": [],
+      "evidence": [
+        "docs/program/DECISIONS.md revision 0.2 (22 October 2026): DEC03 answered by the organization's rules in the private adapter; DEC04 partly (R26: FX bonds and FX rows at the MOEX 19:00 rate)",
+        "Open: DEC01, DEC02, DEC05-DEC08, DEC10-DEC12 and the open questions OQ-01..OQ-04 in DECISIONS.md"
+      ],
       "reviewer": null,
       "blocking_reason": null
     },
@@ -194,7 +209,7 @@
       "title": "Provision the new VPS and HTTPS foundation",
       "phase": 2,
       "owner_role": "deployment_operator",
-      "status": "todo",
+      "status": "done",
       "depends_on": [
         "DESIGN-01"
       ],
@@ -210,7 +225,9 @@
         "Verify corporate-proxy/work access without disabling TLS checks",
         "Separate temporary provisioning privileges from persistent agent permissions"
       ],
-      "evidence": [],
+      "evidence": [
+        "market-data-hub: ROADMAP.md WEB-2, WEB-3 (VPS, HTTPS domain, PostgreSQL; production 0.2.0 checked 21 October 2026)"
+      ],
       "reviewer": null,
       "blocking_reason": null
     },
@@ -219,7 +236,7 @@
       "title": "Package the financial core for Linux and Windows",
       "phase": 2,
       "owner_role": "quant_implementer",
-      "status": "todo",
+      "status": "done",
       "depends_on": [
         "AUDIT-01"
       ],
@@ -237,7 +254,10 @@
         "Verify compiled dependencies and offline install on the actual supported Windows/Python target",
         "Document any unsupported dependency before further integration"
       ],
-      "evidence": [],
+      "evidence": [
+        "rub-fixed-income-core 0.33.0 pinned in backend/pyproject.toml; CI on Windows and Ubuntu since 0.9.0",
+        "backend/tools/build_windows_bundle.py: offline Python 3.11 win_amd64 bundle, delivered to the owner 20 October 2026"
+      ],
       "reviewer": null,
       "blocking_reason": null
     },
@@ -246,7 +266,7 @@
       "title": "Implement and verify the first bond and vanilla pricing capabilities",
       "phase": 3,
       "owner_role": "quant_implementer",
-      "status": "todo",
+      "status": "done",
       "depends_on": [
         "CORE-01",
         "METHOD-01"
@@ -271,7 +291,10 @@
         "Freeze calibrated spread correctly under shocks",
         "Meet declared instrument-specific tolerances and publish measured runtime"
       ],
-      "evidence": [],
+      "evidence": [
+        "rub-fixed-income-core 0.10-0.17 and 0.33 (MOEX goldens for accrued, yield, duration, G-spread)",
+        "Bonds valued by core value_portfolio in the monitor since S4 (docs/architecture/VERTICAL_SLICES.md)"
+      ],
       "reviewer": null,
       "blocking_reason": null
     },
@@ -280,7 +303,7 @@
       "title": "Implement deterministic market collectors and snapshots",
       "phase": 3,
       "owner_role": "data_implementer",
-      "status": "todo",
+      "status": "done",
       "depends_on": [
         "DESIGN-01"
       ],
@@ -308,7 +331,8 @@
         "P0: validate required RUONIA observation coverage against an official calendar; do not silently carry stale values across missing business days; distinguish key-rate change history."
       ],
       "evidence": [
-        "../../../rub-fixed-income-core/implementation/risk-worker/FIXING_AUDIT.md — confirmed missing-weekday RUONIA carry and absence of known-at filtering."
+        "../../../rub-fixed-income-core/implementation/risk-worker/FIXING_AUDIT.md — confirmed missing-weekday RUONIA carry and absence of known-at filtering.",
+        "market-data-hub: intraday, eod_preliminary, eod_final and static snapshots (docs/program/ORCHESTRATION_PLAN.md §0); WEB-11 (2026 finals republished), WEB-12"
       ],
       "reviewer": null,
       "blocking_reason": null
@@ -318,7 +342,7 @@
       "title": "Implement versioned static collection and quarantine",
       "phase": 3,
       "owner_role": "data_implementer",
-      "status": "todo",
+      "status": "done",
       "depends_on": [
         "DESIGN-01",
         "EXPORT-01"
@@ -341,7 +365,9 @@
         "Retain effective/known history and reject guessed missing economic terms",
         "Routine updates work without an LLM; difficult records are quarantined"
       ],
-      "evidence": [],
+      "evidence": [
+        "market-data-hub: static snapshot and WEB-13 (HS1-HS13, released); remaining curation (floater and call terms, ratings WEB-18) is tracked in the hub ROADMAP.md"
+      ],
       "reviewer": null,
       "blocking_reason": null
     },
@@ -350,7 +376,7 @@
       "title": "Implement the public data API and desktop client contract",
       "phase": 3,
       "owner_role": "api_implementer",
-      "status": "todo",
+      "status": "done",
       "depends_on": [
         "DESIGN-01"
       ],
@@ -369,7 +395,9 @@
         "External endpoints accept no portfolio or private scenario payload",
         "Provide readiness based on data availability not only process liveness"
       ],
-      "evidence": [],
+      "evidence": [
+        "market-data-hub: /v1/snapshots and /v1/history/* (0.2.0, docs/HISTORY_API.md), ETag/304; backend/src/desk/marketdata/hub.py, hubhistory.py"
+      ],
       "reviewer": null,
       "blocking_reason": null
     },
@@ -378,7 +406,7 @@
       "title": "Implement identity authorization and audit",
       "phase": 3,
       "owner_role": "api_implementer",
-      "status": "todo",
+      "status": "done",
       "depends_on": [
         "API-01"
       ],
@@ -396,7 +424,9 @@
         "Credentials absent from URLs logs errors and fixtures",
         "Audit successful/failed logins downloads revisions token administration and agent actions"
       ],
-      "evidence": [],
+      "evidence": [
+        "market-data-hub: src/mdhub/api/auth.py (named, scoped, expiring and revocable tokens), admin login with passkey and audit page (src/mdhub/admin)"
+      ],
       "reviewer": null,
       "blocking_reason": null
     },
@@ -405,7 +435,7 @@
       "title": "Build internal file adapters and broad snapshot downloader",
       "phase": 3,
       "owner_role": "desk_implementer",
-      "status": "todo",
+      "status": "done",
       "depends_on": [
         "DESIGN-01",
         "API-01"
@@ -435,7 +465,10 @@
         "Download broad universe only with scoped credentials and corporate trust",
         "Offline replay produces no external requests; no work logs or file uploads exist"
       ],
-      "evidence": [],
+      "evidence": [
+        "backend/src/desk/inbox (loader, runner, scan, conformance kit `desk adapter check`), private adapter SPI v1 (S7a)",
+        "backend/src/desk/marketdata/cache.py (snapshot cache and verification); column mapping in the adapter's config files, not in Python"
+      ],
       "reviewer": null,
       "blocking_reason": null
     },
@@ -444,7 +477,7 @@
       "title": "Prove one authenticated public snapshot through the local monitor",
       "phase": 3,
       "owner_role": "integration_implementer",
-      "status": "todo",
+      "status": "done",
       "depends_on": [
         "INFRA-01",
         "CORE-02",
@@ -468,7 +501,9 @@
         "No private or portfolio input is sent to the VPS",
         "Demonstrate stale/missing-source and invalid-credential behavior"
       ],
-      "evidence": [],
+      "evidence": [
+        "S3 live acceptance; docs/program/E2E_LIVE_2026-10-21.md (live hub through the local monitor)"
+      ],
       "reviewer": null,
       "blocking_reason": null
     },
@@ -477,7 +512,7 @@
       "title": "Backfill and validate historical market and static data",
       "phase": 4,
       "owner_role": "data_implementer",
-      "status": "todo",
+      "status": "done",
       "depends_on": [
         "DATA-01",
         "DATA-02",
@@ -508,7 +543,9 @@
         "P0: select fixing revisions by explicit decision/known-at time as well as fixing date; exclude future-known observations and corrections; bind immutable fixing snapshots to calculations."
       ],
       "evidence": [
-        "../../../rub-fixed-income-core/implementation/risk-worker/FIXING_AUDIT.md — a future-ingested fixing is visible to the current historical query."
+        "../../../rub-fixed-income-core/implementation/risk-worker/FIXING_AUDIT.md — a future-ingested fixing is visible to the current historical query.",
+        "market-data-hub: WEB-11 (202 final 2026 snapshots), history API from 2024-01-03 (WEB-15)",
+        "backend/src/desk/marketdata/history.py, hubhistory.py (R7, R24); core point-in-time FixingHistory (0.8, 0.26)"
       ],
       "reviewer": null,
       "blocking_reason": null
@@ -518,7 +555,7 @@
       "title": "Extend remaining required product and nonlinear risk coverage",
       "phase": 4,
       "owner_role": "quant_implementer",
-      "status": "todo",
+      "status": "done",
       "depends_on": [
         "CORE-02"
       ],
@@ -546,7 +583,9 @@
         "Unify fixing-aware floater APIs: distinguish known full coupon from benchmark fixing; combine realized and future accrual, freeze known fixings under curve shocks, validate contractual lag/day count/rounding and fail on missing history (C05; P1)."
       ],
       "evidence": [
-        "../../../rub-fixed-income-core/implementation/risk-worker/FIXING_AUDIT.md — 9 characterization cases; service already uses known RUONIA/key-rate history, low-level floater API lacks history input."
+        "../../../rub-fixed-income-core/implementation/risk-worker/FIXING_AUDIT.md — 9 characterization cases; service already uses known RUONIA/key-rate history, low-level floater API lacks history input.",
+        "rub-fixed-income-core 0.18-0.32: non-RUB bonds, FX forwards, swaps, linkers, CDS, XCCY, futures, repo; result contract v3 (0.29); floaters with point-in-time fixings (0.8, 0.26, 0.33)",
+        "Using these engines in the monitor is the canonical item M6 'Derivatives in core' in docs/architecture/ROADMAP.md §2a (not this task)"
       ],
       "reviewer": null,
       "blocking_reason": null
@@ -556,7 +595,7 @@
       "title": "Build local valuation run orchestration and lineage",
       "phase": 4,
       "owner_role": "desk_implementer",
-      "status": "todo",
+      "status": "done",
       "depends_on": [
         "DESK-01",
         "CORE-02",
@@ -578,7 +617,9 @@
         "Retain closed/traded positions needed for PnL",
         "Repeat identical frozen inputs deterministically; corrections create new valuation runs"
       ],
-      "evidence": [],
+      "evidence": [
+        "S5: desk Postgres store with run lineage (backend/src/desk/store, orchestrator.py, publish/), autopilot.py, backfill.py (R23)"
+      ],
       "reviewer": null,
       "blocking_reason": null
     },
@@ -617,7 +658,10 @@
         "HTM risk excluded and DERIVS cash/REPO use accepted bases",
         "Official book/position/component coverage and corrections stay explicit; OCP trades are never fabricated"
       ],
-      "evidence": [],
+      "evidence": [
+        "Not started in the backend: no rules module, funding in flash PnL is 0 (api/compat.py FUNDING_RULES, pnl/flash.py fx_funding)",
+        "Plan: docs/architecture/ROADMAP.md §0, firm-specific steps 1 (funding), 3 (OCP), 4 (cash), then official PnL; generic packages P1, P2 and wave B"
+      ],
       "reviewer": null,
       "blocking_reason": null
     },
@@ -649,7 +693,9 @@
         "Historical windows enforce coverage; carry is labelled frozen-portfolio approximation; broader R2 test coverage follows CORE-03"
       ],
       "evidence": [
-        "../../../rub-fixed-income-core/implementation/risk-worker/HANDOFF.md — local fixed-RUB worker and actual market-data-store response bridge; core main fdc7fd5198e6b0e1bf19b2a6e4f64cc29d86243e; 436 tests on fresh frozen Python 3.11; monitor wiring, queue/cancellation, funding/carry and Windows remain open."
+        "../../../rub-fixed-income-core/implementation/risk-worker/HANDOFF.md — local fixed-RUB worker and actual market-data-store response bridge; core main fdc7fd5198e6b0e1bf19b2a6e4f64cc29d86243e; 436 tests on fresh frozen Python 3.11; monitor wiring, queue/cancellation, funding/carry and Windows remain open.",
+        "S6: Taylor in the browser, exact repricing on the backend (backend/src/desk/scenario: exact.py, jobs.py, taylor.py), first React screen /app/",
+        "Open: job cancellation and timeouts, historical scenarios, T3 presets, worker outside the API process"
       ],
       "reviewer": null,
       "blocking_reason": null
@@ -659,7 +705,7 @@
       "title": "Reconcile all four screens with the new backend",
       "phase": 5,
       "owner_role": "frontend_implementer",
-      "status": "todo",
+      "status": "in_progress",
       "depends_on": [
         "DESK-03",
         "SCEN-01"
@@ -680,7 +726,10 @@
         "Pending official data is not shown as official zero and demo requires explicit selection",
         "No remote fonts scripts analytics or error upload in work operational mode"
       ],
-      "evidence": [],
+      "evidence": [
+        "Monitors C01-C13 (prototypes/concepts/) on the desk API; earlier four screens deprecated in the UI (R28, 22 October 2026)",
+        "Open: funding, OCP and official PnL displays (DESK-03), currency x instrument type table (UI-02)"
+      ],
       "reviewer": null,
       "blocking_reason": null
     },
@@ -716,7 +765,7 @@
       "title": "Deploy reproducibly and prove backup restore and rollback",
       "phase": 5,
       "owner_role": "deployment_operator",
-      "status": "todo",
+      "status": "in_progress",
       "depends_on": [
         "INFRA-01",
         "R0-01"
@@ -736,7 +785,10 @@
         "Independent watchdog and deterministic recovery operate without Hermes",
         "Read-only monitoring from another host detects total VPS/network loss"
       ],
-      "evidence": [],
+      "evidence": [
+        "market-data-hub: signed releases installed by the updater (WEB-3, 0.2.0), nightly PostgreSQL backups on the VPS",
+        "Open in market-data-hub ROADMAP.md: WEB-6 (off-host backups and restore proof), WEB-10 (isolated install/rollback rehearsal)"
+      ],
       "reviewer": null,
       "blocking_reason": null
     },
@@ -745,7 +797,7 @@
       "title": "Install Hermes with enforced production boundaries",
       "phase": 5,
       "owner_role": "deployment_operator",
-      "status": "todo",
+      "status": "blocked",
       "depends_on": [
         "INFRA-01",
         "OPS-01"
@@ -766,14 +818,14 @@
       ],
       "evidence": [],
       "reviewer": null,
-      "blocking_reason": null
+      "blocking_reason": "Obsolete: superseded by ADR-001 (16 October 2026), no Hermes runtime in the system. Kept for traceability; not planned."
     },
     {
       "id": "AGENT-02",
       "title": "Enable bounded public-data exception workflows",
       "phase": 6,
       "owner_role": "agent_workflow_implementer",
-      "status": "todo",
+      "status": "blocked",
       "depends_on": [
         "AGENT-01",
         "DATA-01",
@@ -797,14 +849,14 @@
       ],
       "evidence": [],
       "reviewer": null,
-      "blocking_reason": null
+      "blocking_reason": "Obsolete: superseded by ADR-001 (16 October 2026), no Hermes runtime in the system. Kept for traceability; not planned."
     },
     {
       "id": "QA-01",
       "title": "Produce and verify the Windows release candidate",
       "phase": 6,
       "owner_role": "independent_reviewer",
-      "status": "todo",
+      "status": "review",
       "depends_on": [
         "UI-01",
         "OPS-01",
@@ -827,7 +879,10 @@
         "Observe only authorized broad-data download and no private telemetry",
         "All R1 requirements meet explicit tolerances; no real work data in evidence"
       ],
-      "evidence": [],
+      "evidence": [
+        "Offline Windows bundle and zip patches (backend/tools/build_windows_bundle.py, backend/windows/), installed by the owner 20 October 2026; hot update R3",
+        "Waiting for the owner's acceptance (docs/program/OWNER_REQUESTS.md, requests in review)"
+      ],
       "reviewer": null,
       "blocking_reason": null
     },
@@ -836,7 +891,7 @@
       "title": "Validate the selected book inside the organization",
       "phase": 7,
       "owner_role": "desk_owner_or_internal_operator",
-      "status": "todo",
+      "status": "in_progress",
       "depends_on": [
         "QA-01"
       ],
@@ -856,7 +911,10 @@
         "Investigate every material difference internally and retain coverage gaps",
         "Include configured missing/stale failure path and T+1 correction behavior"
       ],
-      "evidence": [],
+      "evidence": [
+        "Real books run at work since 20 October 2026 through the private adapter (OWNER_REQUESTS R1, R22, R27)",
+        "Comparison with trusted internal sources needs the official PnL (ROADMAP M5)"
+      ],
       "reviewer": null,
       "blocking_reason": null
     },
