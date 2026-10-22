@@ -138,6 +138,70 @@ class Aggregates(BaseModel):
     rows: list[AggregateRow]
 
 
+class RiskMissing(BaseModel):
+    reason: Literal["not_valued", "reported_no_risk", "no_risk"]
+    text: str
+    n: int
+
+
+class RiskTableRow(BaseModel):
+    """One row of the table currency x instrument type (UI-02): a currency's total (``level`` ccy), a group of it
+    (group) or an instrument kind (kind). DV01 is the block currency's own curves only."""
+    ccy: str
+    level: Literal["ccy", "group", "kind"]
+    group: Literal["GOV", "SUB", "CORP", "DER", "OTH"] | None
+    kind: str | None
+    label: str | None
+    n_positions: int = Field(description="positions of this currency (by the attribution rule)")
+    n_legs_only: int = Field(description="positions of another currency with a risk here (attribution 'legs')")
+    notional_ccy: float
+    notional_rub: float
+    mv_rub: float
+    mv_ccy: float | None = Field(description="null without the currency's rate")
+    dv01_rub: float = Field(description="DV01 on the curves of the row's currency, RUB per bp")
+    dv01_ccy: float | None = Field(description="the same in the currency per bp; null without its rate")
+    dv01_by_curve_rub: dict[str, float]
+    dv01_foreign_rub: float = Field(description="risk on another currency's curves kept here (attribution "
+                                    "'position'): in dv01_by_curve_rub, not in dv01_rub")
+    ofz_basis_rub: float
+    cs01_rub: float
+    fx_delta_ccy: float
+    n_risk_missing: int = Field(description="positions whose risk is missing (never counted as a zero)")
+    risk_missing: list[RiskMissing]
+
+
+class RiskTableTotal(BaseModel):
+    """Only what sums across currencies, in RUB."""
+    n_positions: int
+    notional_rub: float
+    mv_rub: float
+    dv01_by_curve_rub: dict[str, float]
+    dv01_all_curves_rub: float = Field(description="the sum over curves of different currencies: not a currency's "
+                                       "risk nor a hedge measure, labelled so")
+    ofz_basis_rub: float
+    cs01_rub: float
+    fx_delta_rub: float | None = Field(description="net FX delta at the run's rates; null when a rate is missing")
+    n_risk_missing: int
+
+
+class RiskTableKind(BaseModel):
+    kind: str
+    group: str
+    label: str
+
+
+class RiskTable(BaseModel):
+    run_id: int
+    attribution: Literal["legs", "position"]
+    attribution_rule: str
+    attribution_provisional: bool = Field(description="the rule is provisional: the owner decides (UI-02)")
+    cross_ccy_kinds: list[str] = Field(description="the kinds the attribution rule applies to")
+    kinds: list[RiskTableKind] = Field(description="the classification's kinds, in the table's order")
+    fx: dict[str, float | None]
+    rows: list[RiskTableRow]
+    total: RiskTableTotal
+
+
 class LatestRun(BaseModel):
     run_id: int
     business_date: date

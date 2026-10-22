@@ -586,3 +586,241 @@ def _cpi_at(series: list[tuple[date, float]], d: date) -> float | None:
 
 def script(data: dict[str, Any]) -> str:
     return "window.DESK_EXTRAS = " + json.dumps(data, ensure_ascii=False, separators=(",", ":"), default=str) + ";\n"
+
+
+# ---- the aggregated risk table: currency x instrument type (UI-02; lib/instr.js mirrors it) ----
+
+INSTR_KINDS: tuple[tuple[str, str, str], ...] = (
+    ("OFZ_PD", "GOV", "ОФЗ-ПД"), ("OFZ_PK", "GOV", "ОФЗ-ПК (флоатеры)"), ("OFZ_IN", "GOV", "ОФЗ-ИН (линкеры)"),
+    ("SOV_FX", "GOV", "Суверенные валютные"),
+    ("SUBFED", "SUB", "Субфедеральные"), ("MUNI", "SUB", "Муниципальные"),
+    ("CORP_FIX", "CORP", "Корпоративные фикс"), ("CORP_FLT", "CORP", "Корпоративные флоатеры"),
+    ("SECUR", "CORP", "Секьюритизация (ИЦБ, ABS)"),
+    ("IRS", "DER", "Процентные свопы (IRS / OIS)"), ("CCS", "DER", "Валютно-процентные свопы (CCS)"),
+    ("CDS", "DER", "CDS"), ("TRS", "DER", "TRS"),
+    ("BOND_FUT", "DER", "Фьючерсы на облигации"), ("BOND_FWD", "DER", "Форварды на облигации"),
+    ("FX_FUT", "DER", "Валютные фьючерсы"), ("FX_FWD", "DER", "FX форварды / NDF"),
+    ("FX", "DER", "Валюта (спот, прочие FX)"), ("OCP", "DER", "Перенос ОВП"),
+    ("EQUITY", "OTH", "Акции"), ("BOND_NA", "OTH", "Облигации без класса (не сопоставлены)"),
+    ("UNCLASSIFIED", "OTH", "Не классифицировано"),
+)
+"""The instrument kinds of the table, in its order: (kind, group, label). The one mapping table of the
+classification: a bond by issuer type and coupon (``kind_of``, plus the static's class: subfederal / municipal,
+securitisation), a derivative or FX row by the adapter's product group (``PRODUCT_KIND``), else by the legacy tdm
+instrument type (``LEGACY_KIND``); what none of them names is ``UNCLASSIFIED`` (shown, never dropped). The group
+is ``kind_of``'s but for a legacy derivative (DER, not OTH) and an unmapped or unvalued bond (OTH, not CORP)."""
+KIND_GROUP = {k: g for k, g, _ in INSTR_KINDS}
+KIND_LABEL = {k: lab for k, _, lab in INSTR_KINDS}
+PRODUCT_KIND = {"irs": "IRS", "ccs": "CCS", "cds": "CDS", "trs": "TRS", "bond_future": "BOND_FUT",
+                "bond_forward": "BOND_FWD", "fx_future": "FX_FUT", "fx_ndf": "FX_FWD", "equity": "EQUITY"}
+"""The private adapter's ``x_product_group`` (``extra.reported``) -> kind. ``bond`` and ``bond_custom`` are bonds:
+classified by the bond's own fields."""
+LEGACY_KIND = {"IRS": "IRS", "XCCY": "CCS", "CDS": "CDS"}
+"""A legacy tdm store's instrument type -> kind."""
+BOND_KIND = {("GOV", "PD"): "OFZ_PD", ("GOV", "PK"): "OFZ_PK", ("GOV", "IN"): "OFZ_IN", ("GOV", "SOVFX"): "SOV_FX",
+             ("CORP", "FIX"): "CORP_FIX", ("CORP", "FLT"): "CORP_FLT"}
+CROSS_CCY_KINDS = ("CCS", "FX_FWD", "FX_FUT", "FX")
+"""Kinds whose risk lies in more than one currency: the attribution rule (``ATTRIBUTIONS``) decides where."""
+ATTRIBUTIONS = {
+    "legs": "each measure in its own currency: DV01 by curve in the curve's, FX delta in its currency's; "
+            "position count, notional, MV, CS01 and the OFZ basis in the position's",
+    "position": "everything of a cross-currency kind in the position's currency (the report's CCY); its risk on "
+                "another currency's curves is shown apart (dv01_foreign_rub), outside the block's DV01",
+}
+ATTRIBUTION_DEFAULT = "legs"
+"""Provisional (UI-02): the owner decides how a CCS, an FX forward or an FX future is attributed."""
+RISK_KINDS = frozenset(k for k, g, _ in INSTR_KINDS if g in ("GOV", "SUB", "CORP")) | {
+    "IRS", "CCS", "CDS", "TRS", "BOND_FUT", "BOND_FWD", "FX_FUT", "FX_FWD", "BOND_NA"}
+"""Kinds whose position always has a rate or spread risk: one without any is ``risk missing``, never a zero (but
+an accrual-only HTM bond: no market risk by the rule)."""
+MISSING_TEXT = {"not_valued": "не оценена", "reported_no_risk": "оценена по отчёту, риска в отчёте нет",
+                "no_risk": "риск не посчитан"}
+GROUPS = ("GOV", "SUB", "CORP", "DER", "OTH")
+
+
+def instr_kind(f: dict[str, Any]) -> str:
+    """The table's instrument kind of a position's fact, or of an unvalued position's report row given as
+    ``{"ccy", "asset_class" (bond | fx | otc | other), "extra": {"reported": {x_*}}}`` (no ``instr_type``)."""
+    ex = f.get("extra") if isinstance(f.get("extra"), dict) else {}
+    pg = (ex.get("reported") or {}).get("x_product_group")
+    it = f.get("instr_type")
+    if pg in PRODUCT_KIND:
+        return PRODUCT_KIND[pg]
+    if it in LEGACY_KIND:
+        return LEGACY_KIND[it]
+    if it is None and f.get("segment") is None:  # unvalued: its report row
+        it = {"fx": "FX", "otc": "OTC", "other": "OTHER"}.get(str(f.get("asset_class") or "").lower())
+        if it is None:
+            return "BOND_NA"
+    if it == "FX":
+        ocp = f.get("ocp_transfer") or ex.get("ocp_transfer") or f.get("asset_class") == "Перенос ОВП"
+        return "OCP" if ocp else "FX"
+    if it not in ("BOND", None):
+        return "UNCLASSIFIED"
+    if f.get("asset_class") == "Не сопоставлено":
+        return "BOND_NA"
+    g, k = kind_of(f)
+    if g == "SUB":
+        return "MUNI" if f.get("asset_class") == "Муниципальные" else "SUBFED"
+    if g == "CORP" and f.get("segment") == "Секьюритизация":
+        return "SECUR"
+    return BOND_KIND[(g, k)]
+
+
+def _curve_ccy(curve: str) -> str:
+    return curve.split()[0]
+
+
+def _cell() -> dict[str, Any]:
+    return {"ids": set(), "legs": set(), "notional_ccy": 0.0, "notional_rub": 0.0, "mv_rub": 0.0, "curves": {},
+            "foreign": 0.0, "basis": 0.0, "cs01": 0.0, "fx_delta_ccy": 0.0, "missing": {}}
+
+
+def _risk_curves(f: dict[str, Any]) -> dict[str, float]:
+    """A fact's DV01 by the pages' curve (``CURVE_MAP``: the KBD's rate risk is RUONIA's), finite and nonzero."""
+    out: dict[str, float] = {}
+    for curve, bk in (f.get("risk") or {}).items():
+        cid = CURVE_MAP.get(curve, curve)
+        out[cid] = out.get(cid, 0.0) + sum(v or 0.0 for v in (bk or {}).values())
+    return {c: v for c, v in out.items() if v and math.isfinite(v)}
+
+
+def risk_items(con, run: dict[str, Any], books: list[str] | None = None
+               ) -> tuple[list[dict[str, Any]], dict[str, float | None]]:
+    """The positions of a run for ``risk_table`` (an unvalued one with its report row: currency, asset class and
+    ``x_*``) and the run's RUB rates (the reference's; a currency it lacks at the rate its bonds were valued at,
+    ``extra.fx_rate``, as ``compat.assemble``)."""
+    rid = run["run_id"]
+    sql, args = "SELECT position_id, fact FROM run_position WHERE run_id = %s", [rid]
+    if books:
+        sql, args = sql + " AND book_id = ANY(%s)", [*args, books]
+    rows = con.execute(sql + " ORDER BY ord", args).fetchall()
+    unvalued = [r["position_id"] for r in rows if r["fact"] is None]
+    inputs = {i["position_id"]: i for i in con.execute(
+        "SELECT position_id, ccy, asset_class, x FROM position_input WHERE set_id = ANY(%s) AND position_id = ANY(%s)",
+        (run["position_set_ids"], unvalued))} if unvalued else {}
+    items = []
+    for r in rows:
+        if r["fact"] is not None:
+            items.append({"position_id": r["position_id"], "fact": r["fact"]})
+            continue
+        i = inputs.get(r["position_id"]) or {}
+        items.append({"position_id": r["position_id"], "fact": None,
+                      "input": {"ccy": i.get("ccy"), "asset_class": i.get("asset_class"),
+                                "extra": {"reported": i.get("x") or {}}}})
+    ref = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'fx'", (rid,)).fetchone()
+    fx: dict[str, float | None] = {r["ccy"]: r.get("rate") for r in (ref["data"] if ref else []) or []}
+    for it in items:
+        f = it["fact"] or {}
+        ex = f.get("extra") if isinstance(f.get("extra"), dict) else {}
+        if f.get("ccy") and fx.get(f["ccy"]) is None and ex.get("fx_rate"):
+            fx[f["ccy"]] = ex["fx_rate"]
+    return items, fx
+
+
+def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
+               attribution: str = ATTRIBUTION_DEFAULT) -> dict[str, Any]:
+    """The table currency x instrument type over a run's positions. ``items``: ``{"position_id", "fact"}`` of a
+    valued position, ``{"position_id", "fact": None, "input": <report row as for instr_kind>}`` of an unvalued
+    one; ``fx`` the run's RUB rate per currency. Amounts in RUB (``*_rub``); the notional and FX delta in the
+    currency (``*_ccy``), DV01 and MV too where its rate is known. Rows: one per currency (``level`` ccy), group
+    (group) and kind (kind) with a position or a risk there; ``total`` only what sums across currencies, DV01 over
+    the curves of different currencies only as ``dv01_all_curves_rub`` (labelled so, never as a currency's)."""
+    if attribution not in ATTRIBUTIONS:
+        raise ValueError(f"unknown attribution {attribution!r}")
+    cells: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def cell(ccy: str, kind: str) -> dict[str, Any]:
+        return cells.setdefault((ccy, kind), _cell())
+
+    every: set[str] = set()
+    for it in items:
+        pid, f = it["position_id"], it.get("fact")
+        every.add(pid)
+        if f is None:
+            inp = it.get("input") or {}
+            c = cell(inp.get("ccy") or "RUB", instr_kind({"asset_class": None, **inp}))
+            c["ids"].add(pid)
+            c["missing"]["not_valued"] = c["missing"].get("not_valued", 0) + 1
+            continue
+        kind, home = instr_kind(f), f.get("ccy") or "RUB"
+        legs = attribution == "legs" or kind not in CROSS_CCY_KINDS
+        c = cell(home, kind)
+        c["ids"].add(pid)
+        for key, src in (("notional_ccy", "notional"), ("notional_rub", "notional_rub"), ("mv_rub", "mv_rub"),
+                         ("cs01", "cs01"), ("basis", "ofz_spr01")):
+            c[key] += f.get(src) or 0.0
+        curves = _risk_curves(f)
+        for cid, v in curves.items():
+            cc = _curve_ccy(cid)
+            o = c if cc == home or not legs else cell(cc, kind)
+            o["curves"][cid] = o["curves"].get(cid, 0.0) + v
+            if o is not c:
+                o["legs"].add(pid)
+            elif cc != home:
+                c["foreign"] += v
+        for cc, amt in (f.get("fx_delta") or {}).items():
+            if not amt:
+                continue
+            if cc == home:
+                c["fx_delta_ccy"] += amt
+            elif legs:
+                o = cell(cc, kind)
+                o["legs"].add(pid)
+                o["fx_delta_ccy"] += amt
+            elif fx.get(cc) and fx.get(home):  # in the position's currency at the day's rates
+                c["fx_delta_ccy"] += amt * fx[cc] / fx[home]
+        if kind in RISK_KINDS and not (curves or f.get("cs01") or f.get("ofz_spr01") or f.get("accrual_only")):
+            why = "reported_no_risk" if (f.get("extra") or {}).get("quality") == "reported_value" else "no_risk"
+            c["missing"][why] = c["missing"].get(why, 0) + 1
+
+    def out(ccy: str, level: str, group: str | None, kind: str | None, cs: list[dict[str, Any]]) -> dict[str, Any]:
+        ids = set().union(*(c["ids"] for c in cs))
+        curves: dict[str, float] = {}
+        missing: dict[str, int] = {}
+        for c in cs:
+            for cid, v in c["curves"].items():
+                curves[cid] = curves.get(cid, 0.0) + v
+            for k, n in c["missing"].items():
+                missing[k] = missing.get(k, 0) + n
+        dv01 = sum(v for cid, v in curves.items() if _curve_ccy(cid) == ccy)
+        mv = sum(c["mv_rub"] for c in cs)
+        rate = 1.0 if ccy == "RUB" else fx.get(ccy)
+        return {"ccy": ccy, "level": level, "group": group, "kind": kind, "label": KIND_LABEL[kind] if kind else None,
+                "n_positions": len(ids), "n_legs_only": len(set().union(*(c["legs"] for c in cs)) - ids),
+                "notional_ccy": sum(c["notional_ccy"] for c in cs),
+                "notional_rub": sum(c["notional_rub"] for c in cs), "mv_rub": mv, "mv_ccy": mv / rate if rate else None,
+                "dv01_rub": dv01, "dv01_ccy": dv01 / rate if rate else None, "dv01_by_curve_rub": curves,
+                "dv01_foreign_rub": sum(c["foreign"] for c in cs), "ofz_basis_rub": sum(c["basis"] for c in cs),
+                "cs01_rub": sum(c["cs01"] for c in cs), "fx_delta_ccy": sum(c["fx_delta_ccy"] for c in cs),
+                "n_risk_missing": sum(missing.values()),
+                "risk_missing": [{"reason": k, "text": MISSING_TEXT[k], "n": n} for k, n in sorted(missing.items())]}
+
+    order = {k: i for i, (k, _, _) in enumerate(INSTR_KINDS)}
+    ccys = sorted({c for c, _ in cells}, key=lambda c: (c != "RUB", FX_CCYS.index(c) if c in FX_CCYS else 99, c))
+    rows: list[dict[str, Any]] = []
+    for ccy in ccys:
+        mine = {k: c for (cc, k), c in cells.items() if cc == ccy}
+        rows.append(out(ccy, "ccy", None, None, list(mine.values())))
+        for g in GROUPS:
+            kinds = sorted((k for k in mine if KIND_GROUP[k] == g), key=order.__getitem__)
+            if kinds:
+                rows.append(out(ccy, "group", g, None, [mine[k] for k in kinds]))
+                rows.extend(out(ccy, "kind", g, k, [mine[k]]) for k in kinds)
+    blocks = [r for r in rows if r["level"] == "ccy"]
+    curves_all: dict[str, float] = {}
+    for r in blocks:
+        for cid, v in r["dv01_by_curve_rub"].items():
+            curves_all[cid] = curves_all.get(cid, 0.0) + v
+    no_rate = [r["ccy"] for r in blocks if r["ccy"] != "RUB" and r["fx_delta_ccy"] and not fx.get(r["ccy"])]
+    total = {"n_positions": len(every), "notional_rub": sum(r["notional_rub"] for r in blocks),
+             "mv_rub": sum(r["mv_rub"] for r in blocks), "dv01_by_curve_rub": curves_all,
+             "dv01_all_curves_rub": sum(curves_all.values()),
+             "ofz_basis_rub": sum(r["ofz_basis_rub"] for r in blocks), "cs01_rub": sum(r["cs01_rub"] for r in blocks),
+             "fx_delta_rub": None if no_rate else sum(r["fx_delta_ccy"] * (fx.get(r["ccy"]) or 0.0)
+                                                      for r in blocks if r["ccy"] != "RUB"),
+             "n_risk_missing": sum(r["n_risk_missing"] for r in blocks)}
+    return {"attribution": attribution, "attribution_rule": ATTRIBUTIONS[attribution],
+            "attribution_provisional": True, "cross_ccy_kinds": list(CROSS_CCY_KINDS),
+            "kinds": [{"kind": k, "group": g, "label": lab} for k, g, lab in INSTR_KINDS],
+            "fx": {c: fx.get(c) for c in ccys if c != "RUB"}, "rows": rows, "total": total}

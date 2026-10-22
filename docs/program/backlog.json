@@ -689,7 +689,7 @@
       "title": "Aggregated risk table: currency × instrument type",
       "phase": 5,
       "owner_role": "frontend_implementer",
-      "status": "todo",
+      "status": "review",
       "depends_on": [],
       "requirement_ids": [
         "S10",
@@ -707,7 +707,9 @@
         "Instrument types as api/concepts.kind_of and lib/real.js; amounts in the currency's own units, with the report-currency switch applied explicitly",
         "Missing risk is shown as missing with its reason, never as zero; the header's book and portfolio filters apply"
       ],
-      "evidence": [],
+      "evidence": [
+        "C01 Кокпит, tab «Валюта × тип» (prototypes/concepts/lib/instr.js, mirrored by backend api/concepts.instr_kind / risk_table, GET /api/v1/runs/{id}/risk-table, aggregates dim instr_kind); tests backend/tests/test_risk_table.py, tests/js/ccy_kind.test.js. Owner decisions open: the currency attribution of CCS / FX forwards / FX futures (default 'legs', provisional) and what counts as a USD sovereign."
+      ],
       "reviewer": null,
       "blocking_reason": null
     },
