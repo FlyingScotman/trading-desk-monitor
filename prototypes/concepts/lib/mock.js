@@ -356,6 +356,12 @@
       p.zspread = p.cpn.type === 'linker' ? null : p.cpn.type === 'float' ? Math.round(p.spreadBp + (r() - 0.5) * 16)
         : Math.round(p.ccy === 'RUB' ? (p.ytm - curveAt('RUB RUONIA', p.tenor)) * 100 : p.spreadBp + (r() - 0.5) * 20);
       p.spreadLabel = p.cpn.type === 'float' ? 'DM' : 'Z';
+      // Z-спред к кривой дисконтирования (R32): у фикса — тот же Z, у флоатера на КС — DM + базис КС − RUONIA на сроке
+      // (купоны по прогнозу КС, дисконт по RUONIA), у флоатера на RUONIA — равен DM; как spreadBp ядра в прогоне
+      p.zSpreadZ = p.cpn.type === 'linker' ? null : p.cpn.type === 'float' && p.ccy === 'RUB' && p.cpn.index === 'КС'
+        ? Math.round(p.zspread + (curveAt('RUB KEY', Math.min(p.tenor, 3)) - curveAt('RUB RUONIA', Math.min(p.tenor, 3))) * 100) : p.zspread;
+      p.spreadCurve = p.ccy === 'RUB' && p.zSpreadZ != null ? 'RUB RUONIA' : null;
+      p.dmSource = p.cpn.type === 'float' ? 'core' : null;
       p.accruedPct = round(p.curCpn / f * r(), 3);
       const dirty = (p.price + p.accruedPct) / 100 * (p.indexation || 1);
       p.mvCcy = p.notional * dirty;
@@ -363,6 +369,9 @@
       p.accrued = p.notional * p.accruedPct / 100 * fx;
       const w = bucketWeights(p.tenor);
       const dv = -p.mv * p.mdur * 1e-4;
+      // спред-риск фикс-бумаги (базис ОФЗ, CS01) — +1 б.п. к годовому Z-спреду, DV01 — к непрерывной ставке кривой:
+      // |спред01| = |DV01| / (1 + R RUONIA на сроке), как в прогоне (R29)
+      const zr = 1 / (1 + curveAt('RUB RUONIA', p.tenor) / 100);
       if (p.ccy === 'RUB') {
         if (p.cpn.type === 'float') {
           const projCurve = p.cpn.index === 'КС' ? 'RUB KEY' : 'RUB RUONIA';
@@ -373,9 +382,9 @@
           if (p.group === 'GOV') bucketWeights(p.tenor).forEach((x, k) => p.risk['RUB OFZ'][k] += -p.mv * p.sprDur * 1e-4 * x);
         } else {
           w.forEach((x, k) => p.risk['RUB RUONIA'][k] += dv * x);
-          if (p.group === 'GOV') w.forEach((x, k) => p.risk['RUB OFZ'][k] += dv * x);
+          if (p.group === 'GOV') w.forEach((x, k) => p.risk['RUB OFZ'][k] += dv * x * zr);
         }
-        if (p.group === 'CORP') bucketWeights(p.tenor).forEach((x, k) => p.cs01b[k] += -p.mv * p.sprDur * 1e-4 * x);
+        if (p.group === 'CORP') bucketWeights(p.tenor).forEach((x, k) => p.cs01b[k] += -p.mv * p.sprDur * 1e-4 * x * (p.cpn.type === 'fix' ? zr : 1));
       } else {
         const cid = M.curves.find(c => c.ccy === p.ccy).id;
         w.forEach((x, k) => p.risk[cid][k] += dv * x);
@@ -416,7 +425,7 @@
       p.carryDay = p.kind === 'IRS' || p.kind === 'KSW' ? sgn * nrub * (p.rate - (p.kind === 'KSW' ? M.indices['КС'] : M.indices['RUONIA'])) / 100 / 365
         : p.kind === 'BAS' ? nrub * p.rate / 100 / 365 * 0.6 : -sgn * nrub * (M.indices['RUONIA'] - 5) / 100 / 365 * 0.15;
       p.rollDay = 0; p.cs01b.fill(0);
-      p.zspread = null; p.gspread = null;
+      p.zspread = null; p.zSpreadZ = null; p.gspread = null;
     }
     p.fxDelta = p.fxDeltaBy[p.ccy] || 0;            // в валюте позиции; все валюты — p.fxDeltaBy
     p.dv01ByCurve = {}; let tot = 0;

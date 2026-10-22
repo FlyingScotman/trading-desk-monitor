@@ -55,7 +55,8 @@
       BLOCKS.forEach(([ccy, curves]) => {
         const box = K.h('div', 'ccy-block');
         const pc = panel(K.ccyTag(ccy) + ' риск по бакетам', '<span class="mode"></span>');
-        const pt = panel(K.ccyTag(ccy) + ' кривая × бакет');
+        // у рублей — подсказка, в какой конвенции риск RUONIA и почему базис ОФЗ не равен ему (R29, R30)
+        const pt = panel(K.ccyTag(ccy) + ' кривая × бакет', ccy === 'RUB' ? '<span class="k-note">' + K.hint('RUONIA, базис ОФЗ, CS01 — как считаются', K.tips.ruonia + '\n\n' + K.tips.basis01 + '\n\n' + K.tips.cs01) + '</span>' : '');
         pt.querySelector('.bd').classList.add('flush', 'scroll');
         box.append(pc, pt); g.appendChild(box);
         const el = K.h('div', 'chart'); pc.querySelector('.bd').appendChild(el);
