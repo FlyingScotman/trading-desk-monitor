@@ -14,6 +14,8 @@
  *  KIT.palette()          — поиск по всему (Ctrl+K или «/»): позиции, эмитенты, книги, команды страницы
  *  KIT.aliasName(p), KIT.aliasBind(el, p, onSaved) — имя бумаги в карточке: алиас и серое биржевое имя, ✎ — правка на
  *                           месте, ⟲ — история; KIT.setAlias(isin, alias) — подставить алиас во все позиции бумаги (R33)
+ *  KIT.fundingLine(p), KIT.fundingPanel(el) — фондирование (B1): строка карточки позиции и панель кокпита по книгам,
+ *                           юрлицам и проблемам; «не настроено» — словами, не 0
  */
 (function () {
   'use strict';
@@ -36,13 +38,18 @@
     const sc = (o, keys) => keys.forEach(x => { if (o[x] != null) o[x] *= k; });
     const arr = a => a && a.forEach((v, i) => a[i] = v * k);
     M.positions.forEach(p => {
-      sc(p, ['mv', 'accrued', 'carryDay', 'rollDay', 'dv01', 'basis01', 'cs01', 'notionalRub', 'pnlMtd', 'pnlYtd']);
+      sc(p, ['mv', 'accrued', 'carryDay', 'rollDay', 'dv01', 'basis01', 'cs01', 'notionalRub', 'pnlMtd', 'pnlYtd', 'funding']);
       arr(p.cs01b); Object.keys(p.risk).forEach(c => arr(p.risk[c])); Object.keys(p.dv01ByCurve).forEach(c => p.dv01ByCurve[c] *= k);
       Object.keys(p.pnl).forEach(x => { if (typeof p.pnl[x] === 'number') p.pnl[x] *= k; });  // null (нет PnL) остаётся null
     });
     const H = M.hist; [H.dv01, H.dv01Book, H.mvType, H.mvCcy, H.pnl].forEach(g => Object.keys(g).forEach(x => arr(g[x]))); arr(H.cs01);
     M.cashflows.forEach(c => c.amountRub *= k);
     M.universeRub.forEach(b => b.size *= k);
+    if (M.funding) {  // фондирование прогона: итоги, книги (и накопленное с последнего списания), юрлица
+      const F = M.funding; sc(F, ['total', 'inPositions', 'bookLevel']);
+      Object.values(F.byBook || {}).forEach(b => { sc(b, ['total', 'inPositions', 'bookLevel']); if (b.writeOff) sc(b.writeOff, ['since_write_off']); });
+      Object.keys(F.byEntity || {}).forEach(e => { F.byEntity[e] *= k; });
+    }
   })(1 / M.fx[K.repr]);
   K.setRepr = c => { try { localStorage.setItem('concepts-repr', c); } catch (e) { } location.reload(); };
   // подписи «₽» в разметке страниц заменяются символом валюты отчёта
@@ -776,6 +783,41 @@
   };
 
   // ---------- карточка позиции ----------
+  // ---------- фондирование (B1): строка карточки позиции и панель кокпита ----------
+  // M.funding — фондирование прогона (real.js: D.fundingStatus; mock.js: демо); p.fundingInfo — extra.funding позиции.
+  // Не настроено / не посчитано — так и пишется, а не 0.
+  K.fundingStateText = { computed: 'посчитано', not_configured: 'не настроено', invalid_config: 'ошибка настроек', failed: 'ошибка расчёта', not_computed: 'не считалось', demo: 'демо' };
+  const fromRub = v => v == null ? null : v / (M.fx[K.repr] || 1);
+  K.fundingLine = function (p) {
+    const F = M.funding || {}, x = p.fundingInfo;
+    if (!x && !F.state) return '';
+    const st = x ? x.state : F.state;
+    let t;
+    if (st === 'funded') {
+      const l = (x.lines || [])[0] || {};
+      t = '<b class="' + f.cls(x.amount_rub) + '">' + f.ks(fromRub(x.amount_rub)) + '</b> тыс ₽ · ' + esc(l.rate_expr || '') + (l.days ? ' · ' + l.days + ' дн.' : '') + ' · ' + (x.in_pnl ? 'в кэрри позиции' : 'строкой книги (у позиции нет PnL)');
+    } else if (st === 'deferred' || st === 'not_funded') t = '0 · ' + esc(x.reason || '');
+    else if (st === 'problem') t = '<span style="color:var(--warn)">не посчитано: ' + esc(x.reason || '') + '</span>';
+    else if (st === 'demo') t = 'демо: в кэрри по ставке ' + (p.fundRate != null ? f.pct(p.fundRate) : '—');
+    else t = '<span style="color:var(--warn)">' + esc(K.fundingStateText[st] || st) + (F.text ? ' — ' + esc(F.text) : '') + '</span>';
+    return '<div class="k-note" style="margin-top:6px">Фондирование за период: ' + t + '</div>';
+  };
+  K.fundingPanel = function (el) {
+    const F = M.funding || { state: 'not_computed', text: 'нет данных о фондировании' };
+    const head = '<div class="k-note" style="padding:8px 10px">' + (F.state === 'computed' || F.state === 'demo'
+      ? (F.period ? 'период ' + f.dshort(F.period.start) + ' → ' + f.dshort(F.period.end) + ' (' + F.period.days + ' дн.) · ' : '') + 'итог <b class="' + f.cls(F.total) + '">' + f.mns(F.total, 2) + '</b> mm ₽, в кэрри позиций ' + f.mns(F.inPositions, 2) + ', строками книг ' + f.mns(F.bookLevel, 2) + (F.provisional && F.provisional.length ? ' · по умолчанию (не решено): ' + esc(F.provisional.join(', ')) : '')
+      : '<span style="color:var(--warn)">Фондирование ' + esc(K.fundingStateText[F.state] || F.state) + (F.text ? ': ' + esc(F.text) : '') + '</span> — в PnL его нет, а не 0') + '</div>';
+    const books = Object.entries(F.byBook || {}).sort((a, b) => (a[1].total || 0) - (b[1].total || 0));
+    const wo = w => !w ? '—' : w.periodicity == null ? '<span style="color:var(--warn)">не задано</span>' : esc(w.periodicity) + (w.last ? ' · ' + f.dshort(w.last) + ': ' + f.mns(w.since_write_off, 2) : '');
+    const tbl = books.length ? '<div class="k-tbl-wrap"><table class="k-tbl k-compact"><thead><tr><th>Книга</th><th>Юрлицо</th><th>База</th><th class="n">Итого, mm ₽</th><th class="n">в кэрри позиций</th><th class="n">строками книги</th><th>Списание · с него</th><th class="n">Проблем</th></tr></thead><tbody>' +
+      books.map(([b, v]) => '<tr><td>' + esc((M.book[b] || {}).name || b) + '</td><td class="mut">' + esc((M.book[b] || {}).entity || '—') + '</td><td class="mut">' + esc(v.base || '—') + '</td><td class="n ' + f.cls(v.total) + '">' + f.mns(v.total, 2) + '</td><td class="n">' + f.mns(v.inPositions, 2) + '</td><td class="n">' + f.mns(v.bookLevel, 2) + '</td><td class="mut">' + wo(v.writeOff) + '</td><td class="n">' + (v.problems || '') + '</td></tr>').join('') + '</tbody></table></div>' : '';
+    const ents = Object.entries(F.byEntity || {});
+    const ent = ents.length > 1 ? '<div class="k-note" style="padding:6px 10px">по юрлицам: ' + ents.map(([e, v]) => esc(e) + ' ' + f.mns(v, 2)).join(' · ') + '</div>' : '';
+    const pr = F.problems || [];
+    const probs = pr.length ? '<div class="k-sec" style="margin:10px 10px 4px">Проблемы фондирования · ' + pr.length + '</div><ul class="k-note" style="margin:0 0 8px;padding-left:28px">' + pr.slice(0, 30).map(x => '<li>' + esc(x.kind + ' ' + x.ref + ': ' + x.reason) + '</li>').join('') + (pr.length > 30 ? '<li>ещё ' + (pr.length - 30) + '</li>' : '') + '</ul>' : '';
+    el.innerHTML = head + tbl + ent + probs;
+  };
+
   K.card = function (id) {
     const p = M.pos[id]; if (!p) return;
     const o = drawer(true); o.title = p.name; o.charts = [];
@@ -813,7 +855,7 @@
       '<div class="k-sec">Параметры</div>' + K.fieldsHtml(fields) +
       (p.legs && p.legs.length ? '<div class="k-sec">Ноги сделки <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">' + p.legs.length + '</span></div>' + K.legsHtml(p) : '') +
       '<div class="k-sec">PnL <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽</span></div>' +
-      '<div class="k-fields">' + [['Итого день', pn.total], ['Кэрри', pn.carry], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx], ['Сделки', pn.trading], ['Прочее', pn.other], ['MTD', p.pnlMtd], ['YTD', p.pnlYtd]].map(([l, v]) => '<div><div class="l">' + l + '</div><div class="v ' + f.cls(v) + '">' + (Math.abs(v) >= 1e7 ? f.mns(v, 1) + ' <small>mm</small>' : f.ks(v)) + '</div></div>').join('') + '</div>' +
+      '<div class="k-fields">' + [['Итого день', pn.total], ['Кэрри', pn.carry], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx], ['Сделки', pn.trading], ['Прочее', pn.other], ['MTD', p.pnlMtd], ['YTD', p.pnlYtd]].map(([l, v]) => '<div><div class="l">' + l + '</div><div class="v ' + f.cls(v) + '">' + (Math.abs(v) >= 1e7 ? f.mns(v, 1) + ' <small>mm</small>' : f.ks(v)) + '</div></div>').join('') + '</div>' + K.fundingLine(p) +
       '<div class="k-sec">История <span class="sp"></span><span class="hseg"></span></div><div class="hchart" style="height:230px"></div>' +
       '<div class="k-sec">Риск по бакетам <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽/бп</span></div><div class="rchart" style="height:200px"></div>' +
       '<div class="k-sec">Риск по кривым и срокам <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽/бп · подпись — как считается</span></div>' + K.curveRiskTable(p) +

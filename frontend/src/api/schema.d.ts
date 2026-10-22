@@ -126,6 +126,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/funding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Funding
+         * @description The run's funding (B1): by book (with the write-off) and entity, its lines and problems; state
+         *     ``not_configured`` when the adapter gave no funding rules, ``not_computed`` for a run before B1.
+         */
+        get: operations["funding_api_v1_runs__run_id__funding_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}/aggregates": {
         parameters: {
             query?: never;
@@ -660,6 +681,38 @@ export interface components {
              */
             origin?: string | null;
         };
+        /** BookFunding */
+        BookFunding: {
+            /** Book Id */
+            book_id: string;
+            /** Entity */
+            entity: string | null;
+            /** Book Type */
+            book_type: string | null;
+            /**
+             * Base
+             * @description What the book type is funded on: mv_clean, mv_dirty, cash, cost, none
+             */
+            base: string | null;
+            /** Total */
+            total: number;
+            /** In Positions */
+            in_positions: number;
+            /** Book Level */
+            book_level: number;
+            /** Lines */
+            lines: number;
+            /**
+             * By Kind
+             * @description POS, HTM, CASH, ENTITY_CASH, REPO
+             */
+            by_kind: {
+                [key: string]: number;
+            };
+            /** Problems */
+            problems: number;
+            write_off: components["schemas"]["FundingWriteOff"] | null;
+        };
         /** ErrorOut */
         ErrorOut: {
             /**
@@ -673,6 +726,137 @@ export interface components {
             request_id: string;
             /** Details */
             details?: unknown;
+        };
+        /** FundingLineOut */
+        FundingLineOut: {
+            /** Key */
+            key: string;
+            /** Kind */
+            kind: string;
+            /** Ref */
+            ref: string;
+            /** Book Id */
+            book_id: string;
+            /** Book Type */
+            book_type: string;
+            /** Entity */
+            entity: string;
+            /** Ccy */
+            ccy: string;
+            /** Position Id */
+            position_id: string | null;
+            /** Base */
+            base: string;
+            /** Rate Expr */
+            rate_expr: string;
+            /**
+             * Rate Pct
+             * @description Rate of the period's last day, %
+             */
+            rate_pct: number;
+            /** Day Basis */
+            day_basis: string;
+            /**
+             * Body Ccy
+             * @description Funded body of the last day, signed (a long bond: negative)
+             */
+            body_ccy: number;
+            /** Body Rub */
+            body_rub: number;
+            /** Days */
+            days: number;
+            /**
+             * First Day
+             * Format: date
+             */
+            first_day: string;
+            /**
+             * Last Day
+             * Format: date
+             */
+            last_day: string;
+            /** Interest Ccy */
+            interest_ccy: number;
+            /** Interest Rub */
+            interest_rub: number;
+            /**
+             * In Position
+             * @description In the position's flash PnL (component funding)
+             */
+            in_position: boolean;
+            /** Note */
+            note: string;
+        };
+        /** FundingPeriod */
+        FundingPeriod: {
+            /**
+             * Start
+             * Format: date
+             * @description The previous business day (excluded)
+             */
+            start: string;
+            /**
+             * End
+             * Format: date
+             * @description The run's business date (included)
+             */
+            end: string;
+            /**
+             * Days
+             * @description Calendar days accrued
+             */
+            days: number;
+        };
+        /** FundingProblemOut */
+        FundingProblemOut: {
+            /** Kind */
+            kind: string;
+            /** Ref */
+            ref: string;
+            /** Reason */
+            reason: string;
+            /** Book Id */
+            book_id: string | null;
+        };
+        /** FundingTotals */
+        FundingTotals: {
+            /**
+             * Total
+             * @description All funding lines, RUB (a cost is negative)
+             */
+            total: number;
+            /**
+             * In Positions
+             * @description Of it, in the positions' flash PnL (component funding)
+             */
+            in_positions: number;
+            /**
+             * Book Level
+             * @description Of it, book-level lines: cash, closed positions, positions without PnL
+             */
+            book_level: number;
+            /** Lines */
+            lines: number;
+            /** Positions Funded */
+            positions_funded: number;
+        };
+        /** FundingWriteOff */
+        FundingWriteOff: {
+            /**
+             * Periodicity
+             * @description daily / monthly / quarterly / none; null: not set (a problem)
+             */
+            periodicity: string | null;
+            /**
+             * Last
+             * @description The last write-off date on or before the run's date
+             */
+            last: string | null;
+            /**
+             * Since Write Off
+             * @description Funding accrued since it, RUB (this and earlier default runs)
+             */
+            since_write_off: number | null;
         };
         /** InstrumentAlias */
         InstrumentAlias: {
@@ -1285,6 +1469,53 @@ export interface components {
             /** Log */
             log: components["schemas"]["LogLine"][];
         };
+        /**
+         * RunFunding
+         * @description The run's funding (wave B1, ``publish.funding_run``). ``state`` not_configured: the adapter gave no funding
+         *     rules, nothing is funded and nothing is shown as 0; not_computed: a run before B1.
+         */
+        RunFunding: {
+            /** Run Id */
+            run_id: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "computed" | "not_configured" | "invalid_config" | "failed" | "not_computed";
+            /** Text */
+            text: string;
+            period: components["schemas"]["FundingPeriod"] | null;
+            /** Reporting Ccy */
+            reporting_ccy: string;
+            totals: components["schemas"]["FundingTotals"] | null;
+            /** Books */
+            books: components["schemas"]["BookFunding"][];
+            /**
+             * Entities
+             * @description Funding by entity, RUB
+             */
+            entities: {
+                [key: string]: number;
+            };
+            /** Problems */
+            problems: components["schemas"]["FundingProblemOut"][];
+            /** Notes */
+            notes: string[];
+            /**
+             * Provisional
+             * @description Policy fields at the engine's provisional default (OPEN_DECISIONS)
+             */
+            provisional: string[];
+            /**
+             * Policy
+             * @description The FundingPolicy applied, with the source of each field
+             */
+            policy: {
+                [key: string]: unknown;
+            } | null;
+            /** Lines */
+            lines: components["schemas"]["FundingLineOut"][];
+        };
         /** RunHeader */
         RunHeader: {
             /** Run Id */
@@ -1883,6 +2114,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunPnl"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    funding_api_v1_runs__run_id__funding_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunFunding"];
                 };
             };
             /** @description Not Found */

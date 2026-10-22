@@ -34,7 +34,8 @@ EXCLUDED = {"runId": "the two stores number their runs independently",
             **dict.fromkeys(("cutType", "cutTs", "slice", "prevCutType", "pnlBasis"),
                             "the run's market slice (R11): the desk store's only")}
 R10_RUN = {"pnlAvailable", "pnlReason", "pnlReasonText", "pnlCoverage", "riskNotes",  # riskNotes: R14
-           "FX_SOURCE"}  # R26: the market rate's source (MOEX 19:00 ...)
+           "FX_SOURCE",  # R26: the market rate's source (MOEX 19:00 ...)
+           "fundingStatus"}  # B1: funding computed, or why not (not configured: no rules in the store)
 """window.DESK keys compat adds (R10: a missing PnL is said, not shown as 0); tdm's assembler has none."""
 R10_PNL = {"available", "reason", "reasonText", "reasonDetail", "method", "methodText", "flag", "reported"}
 """Keys of a position's ``pnl`` compat adds."""
@@ -275,8 +276,11 @@ def test_compat_parity_with_tdm_assemble(store_url, book, client, tmp_path):
     got["positions"] = got["positions"][:-1]
     assert [p["id"] for p in got["positions"]] == [p["id"] for p in want["positions"]]
     for a, b in zip(got["positions"], want["positions"], strict=True):  # tdm: a missing PnL as 0, compat: null
+        assert a["extra"].pop("funding")["state"] == "not_configured"  # B1: no funding rules in this store
         if a["pnl"]["available"]:
             assert a["pnl"]["reported"] == 0.0 and a["pnl"]["method"]
+            assert a["pnl"]["funding"] is None and b["pnl"]["funding"] == 0  # not configured: null, not 0
+            a["pnl"]["funding"] = b["pnl"]["funding"]
         else:
             assert a["pnl"]["reasonText"] and all(a["pnl"][k] is None for k in b["pnl"])
             assert not any(b["pnl"][k] for k in b["pnl"])

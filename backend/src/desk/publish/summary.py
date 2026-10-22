@@ -28,9 +28,10 @@ VERSION = 2  # 2: a floater's discount margin (pos[9])
 CURVE_MAP = {"RUB OFZ": "RUB RUONIA", "USD": "USD SOFR", "EUR": "EUR ESTR", "CNY": "CNY XCCY"}
 """A run's risk curve -> the concept pages' curve (``desk.api.concepts`` re-exports it; ``lib/real.js`` mirrors it).
 ``RUB OFZ`` (the KBD) carries a bond's rates risk only on a date without RUONIA OIS, so it is added to RUONIA."""
-PNL = {"carry": ("carry", "rolldown"), "rates": ("rates", "convexity"), "spread": ("spread",),
-       "fx": ("fx_gross", "fx_funding"), "trading": ("new_trades",), "other": ("funding", "other")}
-"""The pages' PnL factors from the run's components (``compat.PNL_KEYS``)."""
+PNL = {"carry": ("carry", "rolldown", "funding"), "rates": ("rates", "convexity"), "spread": ("spread",),
+       "fx": ("fx_gross", "fx_funding"), "trading": ("new_trades",), "other": ("other",)}
+"""The pages' PnL factors from the run's components (``compat.PNL_KEYS``): the carry is net of the position's funding
+(B1; a run before it has none, so its summary is unchanged)."""
 GOV_CLASSES = {"ОФЗ-ПД": "PD", "ОФЗ-АД": "PD", "ОФЗ-ПК": "PK", "ОФЗ-ИН": "IN"}
 
 ROWS_SQL = ("SELECT position_id, book_id, pv_rub, fact->'risk' AS risk, (fact->>'cs01')::float8 AS cs01,"

@@ -463,6 +463,19 @@
   });
   M.positions = positions;
   M.pos = Object.fromEntries(positions.map(p => [p.id, p]));
+  // ---------- фондирование (демо, B1): ставка фондирования × MV бумаг за день, в кэрри позиций (как carryDay) ----------
+  (function () {
+    const byBook = {}, byEntity = {}; let total = 0;
+    positions.forEach(p => {
+      if (p.group === 'DER' || p.fundRate == null || p.book === 'HTM') return;
+      const v = -p.mv * p.fundRate / 100 / 365, bk = M.book[p.book] || {};
+      const b = byBook[p.book] || (byBook[p.book] = { total: 0, inPositions: 0, bookLevel: 0, problems: 0, base: 'mv_clean', writeOff: null });
+      b.total += v; b.inPositions += v; total += v;
+      byEntity[bk.entity || '—'] = (byEntity[bk.entity || '—'] || 0) + v;
+    });
+    M.funding = { state: 'demo', text: 'демо-набор: ставка фондирования × MV, в кэрри позиций', period: null, total, inPositions: total,
+      bookLevel: 0, byBook, byEntity, problems: [], provisional: [] };
+  })();
 
   // ---------- имена бумаг: алиасы по ISIN в памяти (R33; на прогоне — таблица instrument_alias сервера) ----------
   const now = () => new Date().toISOString();

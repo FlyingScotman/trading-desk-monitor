@@ -1,6 +1,7 @@
 # 08 Private adapter interface (SPI v1)
 
-As of 22 October 2026, revision 3 (private contract 1.2: FUTURES books, the `ocp`, `cash_balances`, `pnl_official` and `trade_terms` schemas, `reference()` entities and funding rules, `describe()` settings tabs, multi-date cash history, adapter phases A7–A10; revision 2 of 19 October followed an independent review). Status: **accepted; both tracks build against it.** Decision: [ADR-008](adr/ADR-008-private-adapter-boundary.md). Owner of this document: the backend. A change here is a versioned change (§9).
+As of 22 October 2026, revision 4 (private contract 1.3: the `reference()` table `funding_policy` and
+`positions.purchase_accrued_ccy`, for the funding engine in the runs, wave B1; revision 3, contract 1.2: FUTURES books, the `ocp`, `cash_balances`, `pnl_official` and `trade_terms` schemas, `reference()` entities and funding rules, `describe()` settings tabs, multi-date cash history, adapter phases A7–A10; revision 2 of 19 October followed an independent review). Status: **accepted; both tracks build against it.** Decision: [ADR-008](adr/ADR-008-private-adapter-boundary.md). Owner of this document: the backend. A change here is a versioned change (§9).
 
 The desk's own data (positions, OCP and cash, official PnL, trade terms, trades, internal market data, and the firm's own rules: entities, book types, funding) arrives as bank reports. The backend reads them through a **private adapter**: a Python package that lives outside this repository and is plugged in by a path in the settings. This document is the whole contract between the two. Neither side needs to read the other's code.
 
@@ -242,17 +243,17 @@ Read-only; the backend builds it. An adapter must work when every lookup returns
 
 Because the adapter runs in a child process, `ctx.instruments` is served from a read-only index file that the backend writes before the call. The adapter cannot tell the difference.
 
-`reference(ctx)` returns reference rows the adapter owns: `{"books": [...]}` (§10), since 1.2 optionally `"entities": [...]` and `"funding_rules": [...]` (§10; absent: none, and the backend keeps what it stored before), optionally with `"issues": [...]` shaped as in §6.3 (for example a malformed line of its mapping file); an `error` there fails the reference call. It is **required** when any source emits `book_id`. The backend calls it at load time and on `desk inbox scan`, and stores a new revision only when the content changed. Each book row may carry `valid_from`; without it, a change applies from its `known_at`, so a later change of `book_type` does not rewrite history. A `book_id` that is not in `books` gets a unit-scoped `unknown_book` error, raised by the backend.
+`reference(ctx)` returns reference rows the adapter owns: `{"books": [...]}` (§10), since 1.2 optionally `"entities": [...]` and `"funding_rules": [...]`, since 1.3 `"funding_policy": [...]` (§10; absent: none, and the backend keeps what it stored before), optionally with `"issues": [...]` shaped as in §6.3 (for example a malformed line of its mapping file); an `error` there fails the reference call. It is **required** when any source emits `book_id`. The backend calls it at load time and on `desk inbox scan`, and stores a new revision only when the content changed. Each book row may carry `valid_from`; without it, a change applies from its `known_at`, so a later change of `book_type` does not rewrite history. A `book_id` that is not in `books` gets a unit-scoped `unknown_book` error, raised by the backend.
 
-`entities` and `funding_rules` are the firm's rules **as data** (adapter phase A7): the backend's funding engine is
+`entities`, `funding_rules` and `funding_policy` are the firm's rules **as data** (adapter phase A7): the backend's funding engine is
 generic and parameterised by them, never by firm constants in public code. They are stored like books, bitemporal
 (`reference_rev`; `store.current_reference(kind, on)`), a new revision only when a row changed. Unlike books they
 may carry history: several rows of one key with different `valid_from`, the one in force on date D being the
 latest `valid_from` <= D (a row without `valid_from` applies from its first revision on, a later change from the
 day it was recorded, as books). An invalid row, or a repeated (key, `valid_from`), is left out with an error issue
 and the rest is kept; a book or rule naming an entity that `entities` does not list gets `unknown_entity`, a rule
-naming an unknown book `unknown_book`, two rules with the same selectors and `valid_from` `ambiguous_rule` (all
-warnings). The kit (§8) prints the number of rows kept per table.
+naming an unknown book `unknown_book`, two rules with the same selectors and `valid_from` `ambiguous_rule`, a
+`funding_policy` setting given twice with different values `ambiguous_policy` (all warnings). The kit (§8) prints the number of rows kept per table.
 
 ## 8 Conformance kit
 
@@ -282,11 +283,11 @@ The summary holds counts and codes only. It has no values and no sheet names, an
 - **Private input contract** (`describe()["contract"]`, `private/<major>.<minor>`): the dataset schemas of §10, versioned on their own, separate from the public results contract (1.3/1.4).
   - The backend accepts its own major with any minor. Fields from a newer minor are dropped with a `field_from_newer_contract` warning; the file is not rejected.
   - A new optional field is a minor version; a renamed, retyped or newly required field is a major one.
-  - Minors so far: 1.0 (S7a); 1.1 adds the optional `positions` fields `maturity_date`, `risk_dv01_rub`, `risk_cs01_rub`; 1.2 (22.10.2026) adds `book_type` `FUTURES`, the schemas of `ocp`, `cash_balances` (with the optional key field `ledger`), `pnl_official` and the new dataset `trade_terms`, the optional reference tables `entities` and `funding_rules`, the optional `describe()["settings_tabs"]`, and multi-date `cash_balances`. The backend supports 1.2 and accepts 1.0 and 1.1 adapters unchanged.
+  - Minors so far: 1.0 (S7a); 1.1 adds the optional `positions` fields `maturity_date`, `risk_dv01_rub`, `risk_cs01_rub`; 1.2 (22.10.2026) adds `book_type` `FUTURES`, the schemas of `ocp`, `cash_balances` (with the optional key field `ledger`), `pnl_official` and the new dataset `trade_terms`, the optional reference tables `entities` and `funding_rules`, the optional `describe()["settings_tabs"]`, and multi-date `cash_balances`; 1.3 (22.10.2026, wave B1) adds the optional reference table `funding_policy` and the optional `positions` field `purchase_accrued_ccy`. The backend supports 1.3 and accepts 1.0–1.2 adapters unchanged (a 1.2 adapter without `funding_policy` gets the engine's provisional conventions, said in each run).
   - A new enum value (`FUTURES`) is a minor too: old adapters stay valid. An adapter that emits it needs a backend on 1.2; an older one rejects that book (`bad_value`), never silently re-types it.
 - The adapter's README states the lowest backend version it needs. `desk adapter check` prints the backend version, the SPI, the contract and the adapter fingerprint.
 
-## 10 Private input contract v1 (`private/1.2`)
+## 10 Private input contract v1 (`private/1.3`)
 
 The schemas live in `contract/private/v1/` (one per dataset and reference table, with a header-only CSV template each). The tables below are the design; the schema files are authoritative once written (S7a; `ocp`, `cash_balances`, `pnl_official`, `trade_terms`, `entities`, `funding_rules` since 1.2, and a test keeps each table equal to its schema). They extend contract 1.3 ([DATA_REQUIREMENTS](../DATA_REQUIREMENTS.md) §4) and supersede its templates (below). A dataset without a schema (`trades`, `internal_market`) is declared but its sources are rejected with `dataset_not_supported` until its slice.
 
@@ -321,7 +322,8 @@ Key: (`book_id`, `position_id`).
 | `value_date` | date | FX forwards and other dated rows. An `fx` row with a `value_date` after the business date is a forward (NDF, FX future, unsettled leg): its PV is `mv_rub` if given, else 0, and `amount_ccy` counts only in the FX delta (open currency position). Without it, or with one not after the business date, the row is cash: PV = amount × the rate of the day |
 | `deal_id` | str | OTC |
 | `mark_price_pct`, `accrued_ccy`, `mv_rub`, `book_value_rub` | num | Reconciliation |
-| `purchase_date`, `purchase_price_pct`, `purchase_yield_pct`, `contract_rate_pct` | | HTM, as in 1.3 |
+| `purchase_date`, `purchase_price_pct`, `purchase_yield_pct`, `contract_rate_pct` | | HTM, as in the public 1.3 template: the purchase lot the funding engine funds at `contract_rate_pct` from `purchase_price_pct` × the row's face |
+| `purchase_accrued_ccy` | num | HTM (since private 1.3): the accrued interest paid at purchase, for the whole row; funded until the coupon that returns it when `funding_policy.htm_base` is `cash_spent` |
 | `maturity_date` | date | OTC and other rows: final maturity, for the bucket of `risk_dv01_rub` |
 | `risk_dv01_rub`, `risk_cs01_rub` | num | The report's own risk of a row the backend does not value itself (OTC, other, an unmapped bond): RUB PV change for +1 bp parallel rates, resp. credit spread |
 
@@ -508,6 +510,36 @@ most specific wins: the one that gives the first selector, in the order `instrum
 then takes the lowest `rule_id` and flags it. Interest is simple, accrued per calendar day and converted to RUB by
 the engine; nothing here compounds. A position no rule applies to is not funded and is flagged by the engine.
 
+### `funding_policy` — from `reference()` (optional, since 1.3)
+
+The organisation's funding conventions that are not a rate: its answers to the open decisions the generic engine
+leaves as settings (DEC01 timing, OQ-02 HTM base, DEC03 REPO, FND-13/14 write-off). Key: `policy_id`, with
+`valid_from`. A row **without** `book_type` is firm-wide and gives any of the firm-wide fields; a row **with**
+`book_type` gives only that book type's `pnl_sweep`. A field no row gives keeps the engine's provisional default
+(`rules.funding.OPEN_DECISIONS`), shown as such in the run (`policy.provisional`); a setting two rows in force give
+with different values is `ambiguous_policy` (warning) and also keeps the default. The values are the engine's
+(`desk.rules.funding`), so a row maps one to one onto `FundingPolicy` (`rules.reference.apply_funding_policy`).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `policy_id` ● | str | The adapter's stable id of the row |
+| `valid_from` | date | First business date the row applies (§7) |
+| `active` | bool | Default true; false retires the row from `valid_from` on |
+| `book_type` | enum | As `books`: the row gives this book type's `pnl_sweep`; absent: a firm-wide row |
+| `pnl_sweep` | enum | With `book_type` only: `daily`, `monthly`, `quarterly`, `none`, how often the PnL of books of the type is written off (an entity's own `pnl_sweep` in `entities` wins) |
+| `htm_base` | enum | Firm-wide: `cash_spent` (the clean cost plus the accrued paid at purchase, `positions.purchase_accrued_ccy`, until the coupon that returns it) or `clean_cost` (OQ-02); absent: an HTM lot is not funded (a problem) |
+| `mv_base_date` | enum | Firm-wide: `previous_business_day` or `as_of`, whose MV funds the period (DEC01) |
+| `cash_base_date` | enum | Firm-wide: `previous_business_day` or `as_of`, whose cash balance funds the period (DEC01) |
+| `new_positions` | enum | Firm-wide: `next_period`, `last_day` or `full_period` (a position opened in the period, DEC01) |
+| `closed_positions` | enum | Firm-wide: `full_period` or `not_funded` (a position closed in the period, DEC01) |
+| `fx_date` | enum | Firm-wide: `as_of`, `previous_business_day` or `each_day`, the date of the CBR rate that converts interest to RUB (DEC01) |
+| `out_of_currency` | enum | Firm-wide: `security_ccy` or `settlement_ccy`, the funding currency of a bond settled in another currency |
+| `entity_cash_book_type` | enum | Firm-wide: the book type whose rules fund the cash of an entity of scheme `cash_balance`; absent: the rules that apply to the balance |
+| `repo_rate` | enum | Firm-wide: `contract` (the deal's rate) or `security` (the collateral's rate, as a bond of `repo_security_book_type`) (DEC03) |
+| `repo_contract_from_term_days` | int | Firm-wide: a REPO of at least this term (days) is funded at its contract rate even with `repo_rate` `security` (DEC03 residual) |
+| `repo_security_book_type` | enum | Firm-wide: the book type whose rules give "the collateral's rate"; absent: `TRADING` |
+| `write_off_date` | enum | Firm-wide: `last_calendar_day` or `last_business_day` of the write-off period |
+
 ### Differences from 1.3, settled here
 
 | 1.3 | Private contract v1 | Why |
@@ -548,8 +580,9 @@ Designs agreed in direction, without a schema yet; each becomes a minor with its
   (`sticky_internal`: the last internal EOD price holds until the next one and the hub's price does not replace it
   intraday), with `valid_from`. A security without a hub price is valued only at the internal price, else down the
   ladder with a warning.
-- `funding_rules` for REPO (the rate of the funded security, or the contract rate from a term threshold) and extra
-  spreads by bond class: new selectors, once the rules are settled.
+- Extra spreads by bond class for `funding_rules` (the engine's `ExtraSpread`): a new table or selector, once the
+  rules are settled. (The REPO policy, the security's rate or the contract rate from a term threshold, is
+  `funding_policy` since 1.3; the REPO deals themselves still need `trade_terms` `repo`.)
 - `trades`, `internal_market`: as designed above, with S13 and S10.
 
 The backend's current `desk load-positions` CSV (`position_id, book_id, secid, quantity_bonds`) stays for the synthetic books. The reference adapter reads canonical v1 CSV.
@@ -564,7 +597,7 @@ The backend's current `desk load-positions` CSV (`position_id, book_id, secid, q
 | **I4 OCP and cash** | S9 | A4 | reported OCP vs OCP derived from positions |
 | **I5 Internal market data** | S10 | A5 | EOD-internal run and the diff screen |
 | **I6 Trades** | S13 | A6 | intraday book = opening positions + trades |
-| **I7 Settings and rules** | `settings_tabs` (§4) on the settings page; `reference()` `entities`, `funding_rules` validated and stored (§7, 1.2); the generic funding engine reads them | A7: the tabs, `entities.json`, `funding.json`, FUTURES books | the tabs open and save; the engine's funding of a synthetic book on synthetic rules equals a hand calculation |
+| **I7 Settings and rules** | `settings_tabs` (§4) on the settings page; `reference()` `entities`, `funding_rules` (1.2) and `funding_policy` (1.3) validated and stored (§7); the generic funding engine reads them in every run (B1: `publish.funding_run`) | A7: the tabs, `entities.json`, `funding.json` (rules and the `funding_policy` conventions), FUTURES books, `purchase_accrued_ccy` of HTM rows | the tabs open and save; the engine's funding of a synthetic book on synthetic rules equals a hand calculation (`test_funding_run.py`) |
 | **I8 Cash balances** | `cash_balances` schema, storage and multi-date history (§6.1, 1.2); funding of cash-funded books (S9) | A8 | a day's balances equal the report; a history file fills the past dates; two ledgers side by side |
 | **I9 Trade terms** | `trade_terms` schema and storage (1.2, FX); valuation from terms by core (S14) | A9 | PV of FX forwards from terms vs `pv_rub`; the currency PV of legs enters the derived OCP |
 | **I10 Price policy** | `price_policy` (draft, §10) and the sticky internal price with S10 | A10 | a security on the list keeps its internal price intraday |

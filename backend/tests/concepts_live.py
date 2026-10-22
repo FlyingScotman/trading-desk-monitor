@@ -51,6 +51,17 @@ def build(tmp: Path, api: bool = True) -> str:
         write(hist, shifted(d, i + 2, known_at=f"{d}T17:00:00Z"))
     secids = sorted(prepare(SnapshotDir(FIX), DATE).static.bonds)
     settings = Settings(home=tmp / "home", snapshot_cache=cache)
+    with store.connect(url) as con:  # B1: synthetic books and funding rules, so the runs carry a funding block
+        store.store_books(con, [{"book_id": b, "name": n, "desk": "Rates", "book_type": "TRADING", "entity": "ДЕМО",
+                                 "active": True} for b, n in (("OFZ", "ОФЗ (демо)"), ("CORP", "Корпоративные (демо)"),
+                                                              ("CREDIT", "Кредит (демо)"))], "concepts_live")
+        store.store_reference(con, "funding_rules", [
+            {"rule_id": "trading_rub", "book_type": "TRADING", "ccy": "RUB", "basis": "mv_clean",
+             "rate_kind": "index_spread", "index_code": "KEY_RATE", "spread_bp": "100", "day_count": "ACT/365"}],
+            "concepts_live")
+        store.store_reference(con, "funding_policy", [{"policy_id": "firm", "htm_base": "clean_cost"},
+                                                      {"policy_id": "trading", "book_type": "TRADING",
+                                                       "pnl_sweep": "monthly"}], "concepts_live")
     for d, k in ((PREV, 1.0), (DATE, 1.25)):
         lines = ["position_id,book_id,secid,quantity_bonds"]
         for i, s in enumerate(secids):

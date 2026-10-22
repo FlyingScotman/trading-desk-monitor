@@ -367,7 +367,18 @@ def _reference_rule(kind: str, row: dict) -> str | None:
             return "index_spread needs index_code"
         if row["rate_kind"] == "fixed" and "fixed_rate_pct" not in row:
             return "fixed needs fixed_rate_pct"
+    if kind == "funding_policy":
+        if "book_type" in row and (wide := [f for f in POLICY_FIRM_WIDE if f in row]):
+            return f"{', '.join(wide)} take a row without book_type (firm-wide)"
+        if "pnl_sweep" in row and "book_type" not in row:
+            return "pnl_sweep needs book_type (an entity's own is entities.pnl_sweep)"
     return None
+
+
+POLICY_FIRM_WIDE = ("htm_base", "mv_base_date", "cash_base_date", "new_positions", "closed_positions", "fx_date",
+                    "out_of_currency", "entity_cash_book_type", "repo_rate", "repo_contract_from_term_days",
+                    "repo_security_book_type", "write_off_date")
+"""``funding_policy`` fields of the firm-wide row (no ``book_type``); ``pnl_sweep`` is per book type (private/1.3)."""
 
 
 FUNDING_SELECTORS = ("instrument_id", "book_id", "entity", "book_type", "ccy")
@@ -381,7 +392,8 @@ def check_reference_tables(result: Any) -> tuple[dict[str, list[dict] | None], l
     funding rules: a repeated key and ``valid_from``, since their history is rows with different ``valid_from``).
     Cross-checks are warnings: a book or rule naming an entity the ``entities`` table lacks (``unknown_entity``), a
     rule naming an unknown book (``unknown_book``), two rules with equal selectors and ``valid_from``
-    (``ambiguous_rule``)."""
+    (``ambiguous_rule``), a ``funding_policy`` setting given twice with different values for the same book type and
+    ``valid_from`` (``ambiguous_policy``)."""
     books, issues = check_reference(result)
     tables: dict[str, list[dict] | None] = {"books": books}
     if books is None:
@@ -413,6 +425,16 @@ def check_reference_tables(result: Any) -> tuple[dict[str, list[dict] | None], l
     for n in (n for n in selectors.values() if n > 1):
         issues.append(_issue("warning", "ambiguous_rule", None, None, "funding_rules: equal selectors and valid_from",
                              n))
+    settings: dict[tuple, set] = {}
+    for r in tables.get("funding_policy") or []:
+        if r.get("active", True) is not False:
+            for f in (*POLICY_FIRM_WIDE, "pnl_sweep"):
+                if f in r:
+                    settings.setdefault((r.get("valid_from"), r.get("book_type"), f), set()).add(r[f])
+    for (_, _, f), values in settings.items():
+        if len(values) > 1:  # the engine leaves such a setting at its default and says so (rules.reference)
+            issues.append(_issue("warning", "ambiguous_policy", None, None,
+                                 f"funding_policy: {f} set twice with different values on one valid_from"))
     return tables, issues
 
 

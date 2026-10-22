@@ -123,6 +123,93 @@ class RunPnl(BaseModel):
     totals: dict[str, PnlSums] = Field(description="Per book and _total")
 
 
+FundingState = Literal["computed", "not_configured", "invalid_config", "failed", "not_computed"]
+
+
+class FundingPeriod(BaseModel):
+    start: date = Field(description="The previous business day (excluded)")
+    end: date = Field(description="The run's business date (included)")
+    days: int = Field(description="Calendar days accrued")
+
+
+class FundingTotals(BaseModel):
+    total: float = Field(description="All funding lines, RUB (a cost is negative)")
+    in_positions: float = Field(description="Of it, in the positions' flash PnL (component funding)")
+    book_level: float = Field(description="Of it, book-level lines: cash, closed positions, positions without PnL")
+    lines: int
+    positions_funded: int
+
+
+class FundingWriteOff(BaseModel):
+    periodicity: str | None = Field(description="daily / monthly / quarterly / none; null: not set (a problem)")
+    last: date | None = Field(description="The last write-off date on or before the run's date")
+    since_write_off: float | None = Field(description="Funding accrued since it, RUB (this and earlier default runs)")
+
+
+class BookFunding(BaseModel):
+    book_id: str
+    entity: str | None
+    book_type: str | None
+    base: str | None = Field(description="What the book type is funded on: mv_clean, mv_dirty, cash, cost, none")
+    total: float
+    in_positions: float
+    book_level: float
+    lines: int
+    by_kind: dict[str, float] = Field(description="POS, HTM, CASH, ENTITY_CASH, REPO")
+    problems: int
+    write_off: FundingWriteOff | None
+
+
+class FundingLineOut(BaseModel):
+    key: str
+    kind: str
+    ref: str
+    book_id: str
+    book_type: str
+    entity: str
+    ccy: str
+    position_id: str | None
+    base: str
+    rate_expr: str
+    rate_pct: float = Field(description="Rate of the period's last day, %")
+    day_basis: str
+    body_ccy: float = Field(description="Funded body of the last day, signed (a long bond: negative)")
+    body_rub: float
+    days: int
+    first_day: date
+    last_day: date
+    interest_ccy: float
+    interest_rub: float
+    in_position: bool = Field(description="In the position's flash PnL (component funding)")
+    note: str
+
+
+class FundingProblemOut(BaseModel):
+    kind: str
+    ref: str
+    reason: str
+    book_id: str | None
+
+
+class RunFunding(BaseModel):
+    """The run's funding (wave B1, ``publish.funding_run``). ``state`` not_configured: the adapter gave no funding
+    rules, nothing is funded and nothing is shown as 0; not_computed: a run before B1."""
+
+    run_id: int
+    state: FundingState
+    text: str
+    period: FundingPeriod | None
+    reporting_ccy: str
+    totals: FundingTotals | None
+    books: list[BookFunding]
+    entities: dict[str, float] = Field(description="Funding by entity, RUB")
+    problems: list[FundingProblemOut]
+    notes: list[str]
+    provisional: list[str] = Field(description="Policy fields at the engine's provisional default (OPEN_DECISIONS)")
+    policy: dict[str, Any] | None = Field(description="The FundingPolicy applied, with the source of each field")
+    lines: list[FundingLineOut]
+
+
 class AggregateRow(BaseModel):
     key: dict[str, str | None]
     n_positions: int

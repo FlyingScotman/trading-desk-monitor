@@ -21,7 +21,8 @@ VALUATION_VERSION = 11  # 2: risk per curve (R8); 3: static display fields (R9 D
 # 10: core 0.35: CNY bonds on the XCCY curve (USD/EUR on the par proxies with proxy_curves_for_risk), FX forwards,
 # NDFs, swaps and crosses from trade_terms through core v3 (risk on both curves, FX delta per currency), exact accrued
 # 11: batch 1 item 5: a foreign bond's flash PnL decomposed (on core: in its currency on its own curve, the rate move
-# on the D-1 PV in fx_gross; on the fallback ladder: its carry at its yield), not all in other
+# on the D-1 PV in fx_gross; on the fallback ladder: its carry at its yield), not all in other; funding in the runs
+# (B1, publish.funding_run): the PnL component funding (the carry net of it), a funding block
 
 
 def logic_version() -> str:

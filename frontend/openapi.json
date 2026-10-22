@@ -525,6 +525,66 @@
         }
       }
     },
+    "/api/v1/runs/{run_id}/funding": {
+      "get": {
+        "summary": "Funding",
+        "description": "The run's funding (B1): by book (with the write-off) and entity, its lines and problems; state\n``not_configured`` when the adapter gave no funding rules, ``not_computed`` for a run before B1.",
+        "operationId": "funding_api_v1_runs__run_id__funding_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunFunding"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
     "/api/v1/runs/{run_id}/aggregates": {
       "get": {
         "summary": "Aggregates",
@@ -2272,6 +2332,101 @@
         ],
         "title": "BondHistoryPoint"
       },
+      "BookFunding": {
+        "properties": {
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "entity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entity"
+          },
+          "book_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Book Type"
+          },
+          "base": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base",
+            "description": "What the book type is funded on: mv_clean, mv_dirty, cash, cost, none"
+          },
+          "total": {
+            "type": "number",
+            "title": "Total"
+          },
+          "in_positions": {
+            "type": "number",
+            "title": "In Positions"
+          },
+          "book_level": {
+            "type": "number",
+            "title": "Book Level"
+          },
+          "lines": {
+            "type": "integer",
+            "title": "Lines"
+          },
+          "by_kind": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "By Kind",
+            "description": "POS, HTM, CASH, ENTITY_CASH, REPO"
+          },
+          "problems": {
+            "type": "integer",
+            "title": "Problems"
+          },
+          "write_off": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FundingWriteOff"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "book_id",
+          "entity",
+          "book_type",
+          "base",
+          "total",
+          "in_positions",
+          "book_level",
+          "lines",
+          "by_kind",
+          "problems",
+          "write_off"
+        ],
+        "title": "BookFunding"
+      },
       "ErrorOut": {
         "properties": {
           "code": {
@@ -2303,6 +2458,278 @@
           "request_id"
         ],
         "title": "ErrorOut"
+      },
+      "FundingLineOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "ref": {
+            "type": "string",
+            "title": "Ref"
+          },
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "book_type": {
+            "type": "string",
+            "title": "Book Type"
+          },
+          "entity": {
+            "type": "string",
+            "title": "Entity"
+          },
+          "ccy": {
+            "type": "string",
+            "title": "Ccy"
+          },
+          "position_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position Id"
+          },
+          "base": {
+            "type": "string",
+            "title": "Base"
+          },
+          "rate_expr": {
+            "type": "string",
+            "title": "Rate Expr"
+          },
+          "rate_pct": {
+            "type": "number",
+            "title": "Rate Pct",
+            "description": "Rate of the period's last day, %"
+          },
+          "day_basis": {
+            "type": "string",
+            "title": "Day Basis"
+          },
+          "body_ccy": {
+            "type": "number",
+            "title": "Body Ccy",
+            "description": "Funded body of the last day, signed (a long bond: negative)"
+          },
+          "body_rub": {
+            "type": "number",
+            "title": "Body Rub"
+          },
+          "days": {
+            "type": "integer",
+            "title": "Days"
+          },
+          "first_day": {
+            "type": "string",
+            "format": "date",
+            "title": "First Day"
+          },
+          "last_day": {
+            "type": "string",
+            "format": "date",
+            "title": "Last Day"
+          },
+          "interest_ccy": {
+            "type": "number",
+            "title": "Interest Ccy"
+          },
+          "interest_rub": {
+            "type": "number",
+            "title": "Interest Rub"
+          },
+          "in_position": {
+            "type": "boolean",
+            "title": "In Position",
+            "description": "In the position's flash PnL (component funding)"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "kind",
+          "ref",
+          "book_id",
+          "book_type",
+          "entity",
+          "ccy",
+          "position_id",
+          "base",
+          "rate_expr",
+          "rate_pct",
+          "day_basis",
+          "body_ccy",
+          "body_rub",
+          "days",
+          "first_day",
+          "last_day",
+          "interest_ccy",
+          "interest_rub",
+          "in_position",
+          "note"
+        ],
+        "title": "FundingLineOut"
+      },
+      "FundingPeriod": {
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "date",
+            "title": "Start",
+            "description": "The previous business day (excluded)"
+          },
+          "end": {
+            "type": "string",
+            "format": "date",
+            "title": "End",
+            "description": "The run's business date (included)"
+          },
+          "days": {
+            "type": "integer",
+            "title": "Days",
+            "description": "Calendar days accrued"
+          }
+        },
+        "type": "object",
+        "required": [
+          "start",
+          "end",
+          "days"
+        ],
+        "title": "FundingPeriod"
+      },
+      "FundingProblemOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "ref": {
+            "type": "string",
+            "title": "Ref"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "book_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Book Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "ref",
+          "reason",
+          "book_id"
+        ],
+        "title": "FundingProblemOut"
+      },
+      "FundingTotals": {
+        "properties": {
+          "total": {
+            "type": "number",
+            "title": "Total",
+            "description": "All funding lines, RUB (a cost is negative)"
+          },
+          "in_positions": {
+            "type": "number",
+            "title": "In Positions",
+            "description": "Of it, in the positions' flash PnL (component funding)"
+          },
+          "book_level": {
+            "type": "number",
+            "title": "Book Level",
+            "description": "Of it, book-level lines: cash, closed positions, positions without PnL"
+          },
+          "lines": {
+            "type": "integer",
+            "title": "Lines"
+          },
+          "positions_funded": {
+            "type": "integer",
+            "title": "Positions Funded"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "in_positions",
+          "book_level",
+          "lines",
+          "positions_funded"
+        ],
+        "title": "FundingTotals"
+      },
+      "FundingWriteOff": {
+        "properties": {
+          "periodicity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Periodicity",
+            "description": "daily / monthly / quarterly / none; null: not set (a problem)"
+          },
+          "last": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last",
+            "description": "The last write-off date on or before the run's date"
+          },
+          "since_write_off": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since Write Off",
+            "description": "Funding accrued since it, RUB (this and earlier default runs)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "periodicity",
+          "last",
+          "since_write_off"
+        ],
+        "title": "FundingWriteOff"
       },
       "InstrumentAlias": {
         "properties": {
@@ -3860,6 +4287,128 @@
           "log"
         ],
         "title": "RunDetail"
+      },
+      "RunFunding": {
+        "properties": {
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "computed",
+              "not_configured",
+              "invalid_config",
+              "failed",
+              "not_computed"
+            ],
+            "title": "State"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "period": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FundingPeriod"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reporting_ccy": {
+            "type": "string",
+            "title": "Reporting Ccy"
+          },
+          "totals": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FundingTotals"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "books": {
+            "items": {
+              "$ref": "#/components/schemas/BookFunding"
+            },
+            "type": "array",
+            "title": "Books"
+          },
+          "entities": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Entities",
+            "description": "Funding by entity, RUB"
+          },
+          "problems": {
+            "items": {
+              "$ref": "#/components/schemas/FundingProblemOut"
+            },
+            "type": "array",
+            "title": "Problems"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          },
+          "provisional": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Provisional",
+            "description": "Policy fields at the engine's provisional default (OPEN_DECISIONS)"
+          },
+          "policy": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy",
+            "description": "The FundingPolicy applied, with the source of each field"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/FundingLineOut"
+            },
+            "type": "array",
+            "title": "Lines"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "state",
+          "text",
+          "period",
+          "reporting_ccy",
+          "totals",
+          "books",
+          "entities",
+          "problems",
+          "notes",
+          "provisional",
+          "policy",
+          "lines"
+        ],
+        "title": "RunFunding",
+        "description": "The run's funding (wave B1, ``publish.funding_run``). ``state`` not_configured: the adapter gave no funding\nrules, nothing is funded and nothing is shown as 0; not_computed: a run before B1."
       },
       "RunHeader": {
         "properties": {

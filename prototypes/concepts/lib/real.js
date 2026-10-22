@@ -19,8 +19,10 @@
  *    прогоне до ядра 0.33 — Z-спред); G-спред — ядра (extra.g_spread_bp, определение MOEX), иначе MOEX;
  *  - CS01 и базис по бакетам срока — ядра (extra.spread_buckets: CS по бакетам пропорционально ставочному риску
  *    дисконтирования); в прогоне до ядра 0.33 — по двум соседним бакетам срока;
- *  - PnL: кэрри = carry + rolldown, ставки = rates + convexity, FX = fx, сделки = newTrades, прочее = funding + other +
- *    reported; итог = explained.
+ *  - PnL: кэрри = carry + rolldown + funding (кэрри за вычетом фондирования, B1), ставки = rates + convexity, FX = fx,
+ *    сделки = newTrades, прочее = other + reported; итог = explained. p.funding — фондирование позиции за период
+ *    (null — не посчитано: не настроено или проблема), p.fundingInfo — extra.funding (состояние, строки, причина);
+ *    M.funding — фондирование прогона (D.fundingStatus: состояние, итоги по книгам и юрлицам, проблемы).
  * История позиции (M.posHistory) — синхронный запрос /api/v1/history/positions: первые две позиции по одной,
  * дальше сразу все (страницы C11, C13 просят историю всех позиций). Кроме цен рынка в ней номинал, DV01, CS01,
  * базис, MV и DV01 по кривым каждого прогона (M.histSource = 'runs': история риска — настоящая, не «номинал ×
@@ -73,6 +75,12 @@
   (D.riskNotes || []).forEach(n => M.notes.push(n.text + (n.detail ? ' (' + n.detail + ')' : '')));
   if (!D.pnlAvailable && D.pnlReasonText) M.notes.push('PnL: ' + D.pnlReasonText);
   if (!window.DESK_EXTRAS) M.notes.push('нет данных /concepts-data.js: история, потоки и рынок пусты');
+  // фондирование прогона (B1, D.fundingStatus): не настроено / не посчитано — заметка в шапке, не 0
+  const FS = D.fundingStatus || { state: 'not_computed', text: 'прогон без расчёта фондирования' };
+  M.funding = { state: FS.state, text: FS.text, period: FS.period || null, total: num(FS.total), inPositions: num(FS.inPositions),
+    bookLevel: num(FS.bookLevel), byBook: FS.byBook || {}, byEntity: FS.byEntity || {}, problems: FS.problems || [], provisional: FS.provisional || [] };
+  if (FS.state !== 'computed') M.notes.push('Фондирование: ' + (FS.text || FS.state));
+  else if (M.funding.problems.length) M.notes.push('Фондирование: проблем ' + M.funding.problems.length + ' (кокпит, вкладка PnL)');
 
   // ---------- валюты, курсы, индексы ----------
   const BASE_CCY = ['RUB', 'USD', 'EUR', 'CNY'];
@@ -306,10 +314,12 @@
       p.carryDay = null; p.rollDay = null;
     } else {
       const z = v => v || 0;
-      p.pnl = { carry: z(e.carry) + z(e.rolldown), rates: z(e.rates) + z(e.convexity), spread: z(e.spread), fx: z(e.fx), trading: z(e.newTrades),
-        other: z(e.funding) + z(e.other) + z(e.reported), total: z(e.explained), available: true, method: e.methodText || e.method || null };
-      p.carryDay = (z(e.carry) + z(e.rolldown)) / accrualDays; p.rollDay = z(e.rolldown) / accrualDays;
+      p.pnl = { carry: z(e.carry) + z(e.rolldown) + z(e.funding), rates: z(e.rates) + z(e.convexity), spread: z(e.spread), fx: z(e.fx), trading: z(e.newTrades),
+        other: z(e.other) + z(e.reported), total: z(e.explained), available: true, method: e.methodText || e.method || null };
+      p.carryDay = (z(e.carry) + z(e.rolldown) + z(e.funding)) / accrualDays; p.rollDay = z(e.rolldown) / accrualDays;
     }
+    p.funding = e.available === false || !d.pnl ? null : num(e.funding);  // null: не посчитано (не настроено, проблема)
+    p.fundingInfo = ex.funding || null;
     p.pnlMtd = num(xp.pnlMtd); p.pnlYtd = num(xp.pnlYtd);
     p.spreadChgBp = num(xp.spreadChgBp);
     p.tradedToday = !!(xp.trade || d.newToday); p.tradeToday = xp.trade || null;

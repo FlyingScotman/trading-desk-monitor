@@ -165,10 +165,10 @@ class PositionInputs:
     """S7a: per position_id the private contract v1 fields beyond ``rows`` (08 §10 ``positions``) that the row has:
     asset_class, ccy, face_amount_ccy, face_outstanding_ccy, amount_ccy, value_date, deal_id, source_instrument_id,
     source_instrument_name, isin, regnum, moex_secid, mark_price_pct, accrued_ccy, mv_rub, book_value_rub,
-    purchase_*, contract_rate_pct, maturity_date, risk_dv01_rub, risk_cs01_rub, src, x (amounts as float, dates as
-    date). A position loaded by
-    ``desk load-positions`` has no entry (a bond with secid and quantity). In ``rows`` secid and quantity are None
-    when the inbox row has no resolved instrument or gives only a face amount."""
+    purchase_*, contract_rate_pct, maturity_date, risk_dv01_rub, risk_cs01_rub, purchase_accrued_ccy (1.3), src, x
+    (amounts as float, dates as date). A position loaded by ``desk load-positions`` has no entry (a bond with secid
+    and quantity). In ``rows`` secid and quantity are None when the inbox row has no resolved instrument or gives
+    only a face amount."""
     sources: dict[str, dict] = field(default_factory=dict)
     """S7a: per book the set's origin for lineage: {source, report_date, inbox_file_sha256, file_name}
     (``load-positions`` sets: no report date and no inbox file)."""
@@ -186,7 +186,7 @@ LEGACY_SOURCE = "load-positions"
 V1_COLUMNS = ("asset_class", "ccy", "face_amount_ccy", "face_outstanding_ccy", "amount_ccy", "value_date", "deal_id",
               "source_instrument_id", "source_instrument_name", "isin", "regnum", "moex_secid", "mark_price_pct",
               "accrued_ccy", "mv_rub", "book_value_rub", "purchase_date", "purchase_price_pct", "purchase_yield_pct",
-              "contract_rate_pct", "maturity_date", "risk_dv01_rub", "risk_cs01_rub")
+              "contract_rate_pct", "maturity_date", "risk_dv01_rub", "risk_cs01_rub", "purchase_accrued_ccy")
 """position_input columns of the private contract v1 beyond secid (instrument_id) and quantity."""
 CURRENT_SET = ("valid_date DESC, coalesce(priority, 0) DESC, report_date DESC NULLS LAST, report_ts DESC NULLS LAST,"
                " seq DESC NULLS LAST, generated_at DESC NULLS LAST, file_mtime DESC NULLS LAST, recorded_at DESC,"
@@ -296,7 +296,7 @@ def store_inbox_set(con: psycopg.Connection, *, book_id: str, valid_date: date, 
 
 _NUMERIC = {"face_amount_ccy", "face_outstanding_ccy", "amount_ccy", "mark_price_pct", "accrued_ccy", "mv_rub",
             "book_value_rub", "purchase_price_pct", "purchase_yield_pct", "contract_rate_pct", "risk_dv01_rub",
-            "risk_cs01_rub"}
+            "risk_cs01_rub", "purchase_accrued_ccy"}
 
 
 # --- books (08 §7, §10 books) --------------------------------------------------------------------------
