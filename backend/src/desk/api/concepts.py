@@ -35,11 +35,13 @@ import json
 import math
 from collections.abc import Callable
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any
 
 from psycopg.rows import tuple_row
 
 from ..marketdata import static_facts
+from ..marketdata.bundle import read_bundle
 from ..marketdata.history import RUB_SETTLEMENT, curve_rate, curve_rates_by_day, kbd, latest_market_day
 from ..publish import summary
 from ..publish.summary import CURVE_MAP, GOV_CLASSES, PNL, kind_of  # noqa: F401 - the pages' names, re-exported
@@ -361,6 +363,33 @@ def market_calendar(con, as_of: date, held: set[str] | None = None) -> dict[str,
     cal.update({"snapshotId": st["snapshot_id"], "staticDate": st["business_date"].isoformat(),
                 "held": sorted(h for h in (held or ()) if h)})
     return cal
+
+
+def position_flows(con, run: dict[str, Any], pid: str, snapshots: Path) -> dict[str, Any] | None:
+    """A bond position's whole schedule after the run's date (``static_facts.schedule`` of the static snapshot the read
+    model shows for the run, × the position's bonds): coupons, amortizations, maturity, and the put offers and calls
+    on the face outstanding then, in the face currency, signed by the side. The position card shows it; the stored
+    ``extra.cashflows`` stop at 18 months and at the offer the bond is priced to. None: not a bond, or the static
+    or its bundle is missing (the card then shows the stored flows)."""
+    row = con.execute("SELECT fact->>'instrument_id' AS secid, (fact->'extra'->>'quantity_bonds')::float8 AS q,"
+                      " fact->'extra'->>'offer_date' AS offer, fact->'extra'->>'offer_kind' AS offer_kind"
+                      " FROM run_position WHERE run_id = %s AND position_id = %s AND fact IS NOT NULL",
+                      (run["run_id"], pid)).fetchone()
+    if row is None or not row["secid"] or row["q"] is None:
+        return None
+    st = static_facts.static_for(con, run["business_date"])
+    if st is None:
+        return None
+    path = Path(snapshots) / f"{st['snapshot_id']}.json.gz"
+    if not path.is_file() and st["snapshot_id"] not in static_facts._SCHEDULES:
+        return None
+    sch = static_facts.schedule(st["snapshot_id"], lambda: read_bundle(path), row["secid"], run["business_date"])
+    if sch is None:
+        return None
+    q = row["q"]
+    return {"staticDate": st["business_date"].isoformat(), "ccy": sch["ccy"], "maturity": sch["maturity"],
+            "offer": row["offer"], "offerKind": row["offer_kind"],
+            "flows": [[d, kind, None if amt is None else amt * q, est] for d, kind, amt, est in sch["flows"]]}
 
 
 def held_secids(con, run_id: int) -> set[str]:

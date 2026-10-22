@@ -119,7 +119,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     event: { label: 'Ближайшее событие', val: r => r.event.date, title: 'оферта (пут/колл), если есть, иначе погашение',
       fmt: (v, r) => '<span class="' + (r.group !== 'DER' && r.tenor < 0.25 ? 'ev-soon' : 'mut3') + '">' + evName[r.event.kind] + '</span> ' + f.date(r.event.date) + ' <span class="mut3">' + f.yrs(r.tenor) + '</span>' },
     tenor: { label: 'Срок', num: true, val: r => r.tenor, fmt: v => f.yrs(v), title: 'до оферты, если есть, иначе до погашения' },
-    notional: { label: 'Номинал, mm', num: true, val: r => r.notional, fmt: (v, r) => f.mn(v, 0) + ' <span class="mut3">' + r.ccy + '</span>', title: 'в валюте бумаги' },
+    notional: { label: 'Номинал', num: true, val: r => r.notional, fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', title: 'в валюте бумаги' },
     mv: { label: 'MV, mm ₽', neutral: true, num: true, val: r => r.mv, fmt: v => f.mn(v, 0), sum: r => r.mv, unit: 'mm ₽', sfmt: v => f.mn(v, 0) },
     price: { label: 'Цена', num: true, val: r => r.price, fmt: v => f.px(v) },
     chg: { label: 'Δ цены', num: true, val: r => r.price == null ? null : r.price - r.prevPrice, fmt: v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.s(v, 2) + '</span>' },
@@ -283,7 +283,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     '<div class="k-sec">История <span class="sp"></span><span class="hseg"></span></div><div class="cd-h" style="height:180px"></div>' +
     '<div class="k-sec">PnL дня <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽</span></div><div class="cd-pnl"></div>' +
     '<div class="k-sec">Риск по бакетам <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽/бп</span></div><div class="cd-r" style="height:150px"></div>' +
-    '<div class="k-sec cfs-t">Ближайшие потоки</div><div class="cd-cfs"></div></div>';
+    '<div class="k-sec cfs-t">Потоки</div><div class="cd-cfs"></div></div>';
   const $ = s => card.querySelector(s);
   let cur = null, hmode = 'yield', prevSeg = null;
   const hChart = K.chart($('.cd-h'), () => {
@@ -350,10 +350,8 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     }
     hChart.redraw(); rChart.redraw();
     // потоки
-    const cf = M.cashflows.filter(c => c.pos === p.id).slice(0, 6);
     $('.cfs-t').style.display = isBond ? '' : 'none';
-    $('.cd-cfs').innerHTML = !isBond ? '' : cf.length ? '<table class="k-tbl"><thead><tr><th>Дата</th><th>Тип</th><th class="n">Сумма, ' + p.ccy + '</th><th class="n">≈ mm ₽</th></tr></thead><tbody>' +
-      cf.map(c => '<tr><td>' + f.date(c.date) + '</td><td>' + ({ cpn: 'купон', mat: 'погашение', put: 'пут-оферта', call: 'колл' }[c.kind]) + (c.est ? ' <span class="mut3">прогноз</span>' : '') + '</td><td class="n">' + f.n(c.amount, 0) + '</td><td class="n">' + f.mn(c.amountRub, 1) + '</td></tr>').join('') + '</tbody></table>' : '<div class="k-empty">нет потоков в горизонте 18 мес.</div>';
+    if (isBond) K.flows($('.cd-cfs'), p); else $('.cd-cfs').innerHTML = '';
   }
 
   // ---------- панель управления ----------

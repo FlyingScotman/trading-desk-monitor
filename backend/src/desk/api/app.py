@@ -556,6 +556,23 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         return cached_response(request, con, ("history", run["run_id"], tuple(wanted or ()), from_),
                                lambda: history_body(con, run, write_summaries, wanted, from_), "application/json")
 
+    @app.get("/api/v1/positions/flows", include_in_schema=False)
+    def position_flows(con: Con, id: str, run_id: int | None = None, as_of: date | None = None):
+        """A bond position's whole schedule after the run's date (``concepts.position_flows``): the position card."""
+        from ..settings import SettingsError, load
+
+        run = compat.resolve_run(con, as_of, run_id)
+        if run is None:
+            raise ApiError(404, "not_found", f"run {run_id} not found" if run_id else "no runs")
+        try:
+            snapshots = load().snapshot_cache
+        except SettingsError as e:
+            raise ApiError(500, "settings", str(e)) from None
+        out = concepts.position_flows(con, run, id, Path(snapshots))
+        if out is None:
+            raise ApiError(404, "not_found", "no schedule for this position (not a bond, or no static snapshot)")
+        return out
+
     @app.get("/api/v1/calendar/market", include_in_schema=False)
     def market_calendar(con: Con, request: Request, run_id: int | None = None, as_of: date | None = None,
                         market: str | None = Query(None, pattern="^(rub|fx)$", description="with it: the flows"),

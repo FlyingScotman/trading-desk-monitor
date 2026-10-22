@@ -17,7 +17,7 @@ from test_market_history import DATE, FIX, FLOATER, MARKET, OFZ, STATIC, USD_FAC
 from desk import VALUATION_VERSION, cli, store
 from desk.api import concepts, create_app
 from desk.marketdata import static_facts
-from desk.marketdata.bundle import read_bundle
+from desk.marketdata.bundle import Snapshot, read_bundle
 from desk.publish import summary
 from desk.settings import Settings
 
@@ -200,6 +200,25 @@ def test_market_calendar_endpoint_and_drill(desk):
     one = desk.get("/api/v1/calendar/market?market=rub&from=2026-10-16&to=2026-12-31&limit=2").json()
     assert len(one["rows"]) == 2 and one["count"] >= 2 and all("2026-10-16" <= r["date"] <= "2026-12-31" for r in one["rows"])
     assert desk.get("/api/v1/calendar/market?market=xx").status_code == 422
+
+
+def test_position_flows_the_whole_schedule_beyond_the_calendars_horizon(desk, store_url, tmp_path, monkeypatch):
+    """The card's flows: every payment to maturity × the position's bonds, the put inside; the run's stored flows stop
+    at 18 months (and at the offer the bond is priced to)."""
+    monkeypatch.setenv("DESK_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("DESK_SNAPSHOT_CACHE", str(tmp_path / "cache"))
+    j = desk.get("/api/v1/positions/flows?id=P4").json()
+    assert j["ccy"] == "RUB" and j["flows"] == sorted(j["flows"], key=lambda x: (x[0], x[1]))
+    assert all(d > DATE for d, *_ in j["flows"]) and j["flows"][-1][0] <= j["maturity"]
+    assert any(k == "put" and d > "2027-11-19" for d, k, *_ in j["flows"])  # beyond the calendars' 400 days
+    sched = static_facts.schedule("x", lambda: Snapshot("x", "static", "", DATE, None, static_11()), RZD,
+                                  date.fromisoformat(DATE))
+    assert [a * 4 for _d, _k, a, _e in sched["flows"]] == [x[2] for x in j["flows"]]  # per bond × 4 bonds
+    with store.connect(store_url) as con:
+        stored = con.execute("SELECT fact->'extra'->'cashflows' FROM run_position WHERE run_id = (SELECT max(run_id)"
+                             " FROM run) AND position_id = 'P4'").fetchone()[0]
+    assert len(j["flows"]) > len(stored)
+    assert desk.get("/api/v1/positions/flows?id=nope").status_code == 404
 
 
 def test_summaries_written_at_publication_and_rebuilt_when_missing(desk, store_url):

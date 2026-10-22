@@ -372,6 +372,18 @@
     meetings: CB.meetings || [], estimated: CB.estimated || [], past: CB.past || [], keyRate: CB.keyRate == null ? null : CB.keyRate,
   };
 
+  // ---------- все потоки позиции (лениво, карточка): /api/v1/positions/flows — график выпуска из статики хаба до
+  // погашения × бумаги позиции, оферты внутри; null — не облигация или статики нет (карточка берёт потоки прогона) ----------
+  const flowCache = {};
+  M.posFlows = function (id) {  // промис; повторно — из памяти
+    if (!flowCache[id]) flowCache[id] = fetch('../api/v1/positions/flows?' + runQ + '&id=' + encodeURIComponent(id)).then(r => r.ok ? r.json() : null).then(j => {
+      if (!j || !j.flows) return null;
+      const k = (M.toRepr && M.toRepr[j.ccy]) || M.fx[j.ccy] || 1;  // в валюту отчёта, как и всё на страницах
+      return j.flows.map(([date, kind, amount, est]) => ({ date, pos: id, kind, amort: kind === 'amort', ccy: j.ccy, amount, est, amountRub: amount == null ? null : amount * k }));
+    }).catch(() => null);
+    return flowCache[id];
+  };
+
   // ---------- календарь рынка (лениво: только страницам, которые его просят) ----------
   const RUB_K = () => (M.toRepr && M.toRepr.RUB) || 1;  // рублёвые суммы — в валюте отчёта, как и всё на страницах
   function getJson(path) {
