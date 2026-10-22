@@ -221,6 +221,30 @@ def test_position_flows_the_whole_schedule_beyond_the_calendars_horizon(desk, st
     assert desk.get("/api/v1/positions/flows?id=nope").status_code == 404
 
 
+def test_a_currency_curve_is_its_own_and_its_rate_published(desk, store_url):
+    """R27: a curve named by a currency is that currency's, not RUB's; a run that published only USD, EUR and CNY
+    (a CHF bond's curve went to RUB) is read with the rate its bonds were valued at."""
+    from desk.publish.tdm_run import row_currencies
+
+    assert row_currencies([{"ccy": "RUB", "risk": {"RUB RUONIA": {}}}, {"ccy": "CHF", "risk": {"CHF": {}},
+                                                                       "fx_delta": {"CHF": 1.0}}]) == ["RUB", "CHF"]
+    d = desk.get("/api/v1/compat/desk").json()
+    assert d["CURVES"]["USD"]["ccy"] == "USD" and d["FX"]["USD"]
+    with store.connect(store_url) as con:  # as an older run stored it: no USD rate, its curve in RUB
+        rid = con.execute("SELECT max(run_id) FROM run").fetchone()[0]
+        con.execute("ALTER TABLE run_reference DISABLE TRIGGER USER")  # a published run's rows are frozen
+        for kind, f in (("fx", lambda x: [r for r in x if r["ccy"] != "USD"]),
+                        ("curves", lambda x: [{**c, "ccy": "RUB"} if c["curve_id"] == "USD" else c for c in x])):
+            data = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = %s", (rid, kind)).fetchone()[0]
+            con.execute("UPDATE run_reference SET data = %s WHERE run_id = %s AND kind = %s",
+                        (json.dumps(f(data)), rid, kind))
+        con.execute("ALTER TABLE run_reference ENABLE TRIGGER USER")
+        rate = con.execute("SELECT fact->'extra'->>'fx_rate' FROM run_position WHERE run_id = %s AND position_id = 'P3'",
+                           (rid,)).fetchone()[0]
+    old = TestClient(create_app(store_url)).get(f"/api/v1/compat/desk?run_id={rid}").json()
+    assert old["CURVES"]["USD"]["ccy"] == "USD" and old["FX"]["USD"] == pytest.approx(float(rate))
+
+
 def test_summaries_written_at_publication_and_rebuilt_when_missing(desk, store_url):
     with store.connect(store_url) as con:
         ids = [r[0] for r in con.execute("SELECT run_id FROM run ORDER BY run_id")]

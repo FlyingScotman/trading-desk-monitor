@@ -131,6 +131,8 @@
   const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   K.css = css;
   K.ccyColor = c => css('--' + String(c).toLowerCase()) || css('--accent');
+  const CCY_NAMES = { RUB: 'Рубли', USD: 'Доллары', EUR: 'Евро', CNY: 'Юани', CHF: 'Франки', GBP: 'Фунты', HKD: 'Гонконгские доллары', JPY: 'Иены', AED: 'Дирхамы', KZT: 'Тенге', BYN: 'Белорусские рубли', TRY: 'Лиры', INR: 'Рупии' };
+  K.ccyName = c => CCY_NAMES[c] || c;
   K.ccyTag = c => '<span class="k-ccy" style="background:' + K.ccyColor(c) + '">' + c + '</span>';
   K.curveColors = { 'RUB RUONIA': '#4c9dff', 'RUB KEY': '#22c3d6', 'RUB OFZ': '#9b7bff', 'USD SOFR': '#3fb67a', 'EUR ESTR': '#d58cff', 'CNY XCCY': '#f0645a', 'CS01': '#e3b341' };
   K.PAL = ['#4c9dff', '#3fb67a', '#e3b341', '#f0645a', '#b48cff', '#22c3d6', '#ff8f3f', '#8bc34a', '#ef6fb0', '#7f8cff', '#c9a26b', '#5fd4a8', '#ff6b8b', '#a0b4c8'];
@@ -638,7 +640,7 @@
   K.issuerOrder = (a, b) => { const r = x => x === 'Минфин' ? 0 : x === 'Деривативы' ? 2 : 1; return (r(a) - r(b)) || a.localeCompare(b, 'ru'); };
   // группировка по умолчанию: валюта → эмитент (у рублёвых эмитентов — флоатеры отдельно от фикса)
   K.defaultGroups = [
-    { key: r => r.ccy, label: k => K.ccyTag(k) + ' ' + ({ RUB: 'Рубли', USD: 'Доллары', EUR: 'Евро', CNY: 'Юани' }[k] || k), order: (a, b) => M.ccyOrder[a] - M.ccyOrder[b], color: k => K.ccyColor(k), span: 1 },
+    { key: r => r.ccy, label: k => K.ccyTag(k) + ' ' + K.ccyName(k), order: (a, b) => M.ccyOrder[a] - M.ccyOrder[b], color: k => K.ccyColor(k), span: 1 },
     { key: r => r.group === 'DER' ? 'Деривативы' : r.issuerName, label: (k, rows) => esc(k) + (rows[0].group === 'DER' ? ' <span class="mut3" style="font-weight:400">(по контрагентам)</span>' : ''), order: K.issuerOrder, color: (k, rows) => K.issuerColor(rows[0].issuer) },
   ];
 
@@ -805,7 +807,7 @@
       };
       ccys.forEach(c => {
         const Lc = L.filter(p => p.ccy === c);
-        html += row(K.ccyTag(c) + ' ' + ({ RUB: 'Рубли', USD: 'Доллары', EUR: 'Евро', CNY: 'Юани' }[c]), Lc, 0, null, c);
+        html += row(K.ccyTag(c) + ' ' + K.ccyName(c), Lc, 0, null, c);
         K.GROUPS.forEach(g => {
           const Lg = Lc.filter(p => p.group === g); if (!Lg.length) return;
           const kinds = M.typeRows.filter(t => t.group === g && Lg.some(p => p.kind === t.kind));

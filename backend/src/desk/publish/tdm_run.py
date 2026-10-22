@@ -46,6 +46,7 @@ import math
 import re
 import subprocess
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from pathlib import Path
@@ -301,12 +302,25 @@ def store_core_results(db: str, outcomes: list[Outcome]) -> list[dict[str, str]]
     return stored
 
 
-def _fx_rows(ctx: EodContext, prev: MarketView | None) -> list[dict[str, Any]]:
+def row_currencies(rows: list[dict[str, Any]]) -> list[str]:
+    """The currencies of the rows: their own, their FX deltas' and their risk curves named by a currency (``USD``,
+    ``CHF``: ``bonds.ccy_curve``), in order of appearance."""
+    out: dict[str, None] = {}
+    for r in rows:
+        for c in [r.get("ccy"), *(r.get("fx_delta") or {}), *(r.get("risk") or {})]:
+            if isinstance(c, str) and len(c) == 3 and c.isalpha() and c.isupper():
+                out[c] = None
+    return list(out)
+
+
+def _fx_rows(ctx: EodContext, prev: MarketView | None, also: Iterable[str] = ()) -> list[dict[str, Any]]:
     """The run's rates (``mkt_fx``, DATA_CONTRACT §0.2): ``rate`` the market rate the flash PnL is in
     (``fallback.FX_MARKET``: MOEX 19:00, else 14:00, else CETS close, else CBR) with its ``rate_source``, and its move
-    on the previous date's by the same chain; ``rate_cbr`` the CBR rate in force, its move, and ``rate_cbr_next``."""
+    on the previous date's by the same chain; ``rate_cbr`` the CBR rate in force, its move, and ``rate_cbr_next``.
+    ``FX_CCYS`` and ``also``: every other currency of the run's rows (a CHF bond, R27), so that its amounts convert
+    and its curve is its own, not RUB's."""
     rows = []
-    for ccy in FX_CCYS:
+    for ccy in dict.fromkeys([*FX_CCYS, *(c for c in also if c != "RUB")]):
         now = ctx.market.fx(ccy)
         mkt = market_fx(now)
         if mkt is None:
@@ -604,7 +618,7 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
         fx = ctx.market.latest_fixing(code)
         if fx:
             indices.append({"index_name": name, "value": fx[1]})
-    rates_fx = _fx_rows(ctx, prev)
+    rates_fx = _fx_rows(ctx, prev, row_currencies(rows))
     reference = {
         "books": book_rows(used, inputs.books if inputs else {}),
         "issuers": list(issuers.values()),

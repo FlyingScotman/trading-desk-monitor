@@ -237,7 +237,19 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         curves[c["curve_id"]] = {"name": c["name"], "ccy": c["ccy"], "kind": c["kind"], "pts": pts}
         moves[c["curve_id"]] = mv
 
+    indices = {r["index_name"]: r["value"] for r in ref.get("indices", [])}
+
+    prows = con.execute("SELECT position_id, fact, pnl, no_pnl FROM run_position WHERE run_id = %s"
+                        " AND fact IS NOT NULL ORDER BY ord", (rid,)).fetchall()
     fxr = list({"RUB": RUB, **{r["ccy"]: r for r in ref.get("fx", [])}}.values())  # RUB first, as in tdm
+    # a run that published only USD, EUR and CNY (before R27): another currency's rate is the one its bonds were
+    # valued at (``extra.fx_rate``), its move unknown (0), so that its amounts convert and its curve is its own
+    have = {r["ccy"] for r in fxr}
+    for r in prows:
+        ccy, ex = r["fact"].get("ccy"), r["fact"].get("extra") or {}
+        if ccy and ccy not in have and isinstance(ex, dict) and ex.get("fx_rate"):
+            have.add(ccy)
+            fxr.append({"ccy": ccy, "rate": ex["fx_rate"], "rate_source": ex.get("fx_source"), "move_pct": 0.0})
     fx = {r["ccy"]: r["rate"] for r in fxr}
     fx_move = {r["ccy"]: r.get("move_pct") or 0 for r in fxr}
     fx_cbr = {r["ccy"]: r["rate_cbr"] if r.get("rate_cbr") is not None else r["rate"] for r in fxr}
@@ -247,10 +259,9 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
                    for r in fxr}
     # the market rate's source (R26: MOEX 19:00, else 14:00, else CETS close, else CBR); a run before it: unknown
     fx_source = {r["ccy"]: r.get("rate_source") for r in fxr if r["ccy"] != "RUB"}
-    indices = {r["index_name"]: r["value"] for r in ref.get("indices", [])}
-
-    prows = con.execute("SELECT position_id, fact, pnl, no_pnl FROM run_position WHERE run_id = %s"
-                        " AND fact IS NOT NULL ORDER BY ord", (rid,)).fetchall()
+    for cid, c in curves.items():  # a currency's curve published as RUB for want of its rate (before R27): its own
+        if c["ccy"] == "RUB" and cid != "RUB" and cid in fx:
+            c["ccy"] = cid
     has_bonds = {r["fact"]["book_id"] for r in prows if r["fact"].get("instr_type") == "BOND"}
     books = {}
     for r in ref.get("books", []):
