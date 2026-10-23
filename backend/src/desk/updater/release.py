@@ -15,6 +15,10 @@ allows it) and posted to the server. An asset's checksum comes from ``release.js
 into the release notes) and the API's own ``digest`` (GitHub computes it at upload); every one known must agree,
 and an asset without any checksum is never installed (``Asset.sha256`` None).
 
+A latest release without update files (made by hand on GitHub, or a tag without ``v`` the workflow ignores:
+``EmptyReleaseError``) is skipped: ``first_usable`` takes the newest earlier release that has them and keeps why the
+newer ones were skipped (``Release.skipped``). Nothing else is skipped: a checksum that disagrees stops the check.
+
 Asset addresses are only ever ``https://github.com/<repo>/releases/download/<tag>/<name>``: a posted document cannot
 make the server fetch anything else.
 """
@@ -23,6 +27,7 @@ from __future__ import annotations
 
 import re
 import urllib.parse
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -38,10 +43,27 @@ _PATCH = re.compile(r"DeskMonitor-patch-(?P<base>[0-9A-Za-z][0-9A-Za-z._+-]*?)-t
                     r"\.zip")
 _ASSET_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,199}")
 _TAG = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,99}")
+LIST_LIMIT = 10  # the releases the fallback looks through (newest first)
 
 
 class ReleaseError(ValueError):
     """The release cannot be used, in the owner's words."""
+
+
+class EmptyReleaseError(ReleaseError):
+    """The release has no update files (no full ``DeskMonitor-<version>.zip``): an earlier one may be used."""
+
+    def __init__(self, tag: str, message: str) -> None:
+        super().__init__(message)
+        self.tag = tag
+
+
+def empty_reason(tag: str) -> str:
+    """Why the release ``tag`` has no update files, and what to do, in the owner's words."""
+    why = (f"тег «{tag}» без «v»: файлы публикует только выпуск по тегу v<версия>, релиз, созданный вручную на GitHub, "
+           "остаётся пустым" if not tag.lower().startswith("v")
+           else "выпуск по тегу ещё идёт или не удался (GitHub → Actions → release)")
+    return f"Релиз {tag} без файлов обновления (нет release.json и DeskMonitor-<версия>.zip): {why}."
 
 
 @dataclass
@@ -71,6 +93,7 @@ class Release:
     adapter_included: bool = False
     core: str | None = None
     commit: str | None = None
+    skipped: list[dict[str, str]] = field(default_factory=list)  # newer releases without files: {tag, reason}
     extra: dict[str, Any] = field(default_factory=dict)
 
     def public(self) -> dict[str, Any]:
@@ -150,6 +173,10 @@ def latest_url(repo: str, name: str) -> str:
 
 def api_latest_url(repo: str) -> str:
     return f"https://api.github.com/repos/{repo}/releases/latest"
+
+
+def api_list_url(repo: str) -> str:
+    return f"https://api.github.com/repos/{repo}/releases?per_page={LIST_LIMIT}"
 
 
 def releases_page(repo: str) -> str:
@@ -257,6 +284,8 @@ def from_api(doc: object, repo: str, source: str = "api", sums_text: str | None 
         item = _asset(repo, tag, name, a.get("size"), sha, a.get("browser_download_url"))
         if item:
             assets.append(item)
+    if not any(a.kind == "full" for a in assets):
+        raise EmptyReleaseError(tag, empty_reason(tag))
     version = _full_version(assets)
     sums_asset = next((a for a in doc.get("assets") or [] if isinstance(a, dict) and a.get("name") == SUMS_NAME),
                       None)
@@ -265,6 +294,29 @@ def from_api(doc: object, repo: str, source: str = "api", sums_text: str | None 
                    assets=assets, source=source, notes=body[:4000],
                    adapter_included=any(a.name.endswith("-with-adapter.zip") for a in assets),
                    extra={"sums_url": download_url(repo, tag, SUMS_NAME) if sums_asset else None})
+
+
+def first_usable(docs: object, repo: str, source: str = "api",
+                 sums_for: Callable[[dict[str, Any]], str | None] | None = None,
+                 ) -> tuple[Release | None, list[dict[str, str]]]:
+    """The newest published release of ``docs`` (the API's release list, newest first) that has update files, its
+    ``skipped`` the newer ones without; (None, skipped) when none has. Drafts and pre-releases are passed over;
+    any other ReleaseError is raised (a checksum that disagrees is never skipped). ``sums_for(doc)``: the text of
+    that release's ``SHA256SUMS`` (fetched only for a release that is tried)."""
+    if not isinstance(docs, list):
+        raise ReleaseError("ответ GitHub API не похож на список релизов")
+    skipped: list[dict[str, str]] = []
+    for doc in docs[:LIST_LIMIT]:
+        if not isinstance(doc, dict) or doc.get("draft") or doc.get("prerelease"):
+            continue
+        try:
+            rel = from_api(doc, repo, source, sums_text=sums_for(doc) if sums_for else None)
+        except EmptyReleaseError as e:
+            skipped.append({"tag": e.tag, "reason": str(e)})
+            continue
+        rel.skipped = skipped
+        return rel, skipped
+    return None, skipped
 
 
 def _s(v: object) -> str | None:

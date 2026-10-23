@@ -222,6 +222,7 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
     <a href="#funding" data-sec="funding"><svg viewBox="0 0 16 16"><path d="M12.5 3.5l-9 9M5 6.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM11 12.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z"/></svg><span class="lbl">Фондирование</span><span class="nb" data-count="funding"></span><span class="dot" data-nav="funding"></span></a>
     <div class="grp">Работа</div>
     <a href="#auto" data-sec="auto"><svg viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3"/></svg><span class="lbl">Автообновление</span><span class="dot" data-nav="auto"></span></a>
+    <a href="#backup" data-sec="backup"><svg viewBox="0 0 16 16"><ellipse cx="8" cy="4" rx="5" ry="2"/><path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/></svg><span class="lbl">Резервные копии</span><span class="dot" data-nav="backup"></span></a>
     <a href="#up" data-sec="up"><svg viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10"/></svg><span class="lbl">Обновление программы</span><span class="nb" id="nav-ver"></span></a>
     <a href="#diag" data-sec="diag"><svg viewBox="0 0 16 16"><path d="M1.5 8.5h3l2-5 3 9 2-4h3"/></svg><span class="lbl">Диагностика</span></a>
     <div class="grp" data-users-nav>Доступ</div>
@@ -302,6 +303,9 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
             <label for="private_adapter_config">Папка настроек адаптера</label>
             <div><input class="inp mono" id="private_adapter_config" data-key="private_adapter_config" autocomplete="off">
               <p class="hint">Пусто — <span class="mono" id="cfg-default"></span> (создаётся сама). Здесь лежат файлы юрлиц, книг и фондирования.</p></div>
+            <label for="adapter_check_timeout_s">Проверка формы адаптером, секунд</label>
+            <div><input class="inp mono num" id="adapter_check_timeout_s" data-key="adapter_check_timeout_s" inputmode="decimal" placeholder="60">
+              <p class="hint">Пусто — 60. Сколько ждать адаптер, когда форма проверяет файл перед сохранением; сохранить можно и без проверки.</p></div>
           </div>
         </div>
       </div>
@@ -388,6 +392,13 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
             <p class="hint">Пусто — 600. Начатая дата всегда досчитывается.</p></div>
         </div>
       </div>
+    </section>
+
+    <!-- ========== Резервные копии базы (раздел — desk-backup.js; данные: /api/v1/backup, настройки backup_*) ========== -->
+    <section class="sec" id="sec-backup" data-sec="backup">
+      <div class="sec-h"><div><h1>Резервные копии</h1><p>Копия базы деска каждый день, проверка восстановления из копии и как восстановить данные.</p></div>
+        <div class="badges"><span class="badge st" id="bk-st">…</span></div></div>
+      <div data-desk-backup></div>
     </section>
 
     <!-- ========== Обновление программы (свои стиль и скрипт; данные: /api/v1/update; GitHub — desk-updater.js) ========== -->
@@ -646,7 +657,7 @@ show(location.hash);
 
 /* ---------- settings.json ---------- */
 const S = {data:null, dirs:[], dirty:false, adapter:null};
-const KEYS = ['hub_url','https_proxy','proxy_user','hub_transport','no_proxy','hub_ca_bundle','private_adapter','private_adapter_config','inbox_poll_seconds','autopilot_sync_last','inbox_lookback_days','history_days','history_bonds_from','history_rates_from','backfill_from','backfill_budget_s'];
+const KEYS = ['hub_url','https_proxy','proxy_user','hub_transport','no_proxy','hub_ca_bundle','private_adapter','private_adapter_config','inbox_poll_seconds','adapter_check_timeout_s','autopilot_sync_last','inbox_lookback_days','history_days','history_bonds_from','history_rates_from','backfill_from','backfill_budget_s'];
 
 function setDirty(v){
   S.dirty = v;
@@ -739,7 +750,7 @@ const EFF = [
   ['https_proxy','Прокси'], ['proxy_user','Логин прокси'], ['proxy_password_set','Пароль прокси задан'], ['hub_transport','Способ подключения'], ['no_proxy','Без прокси для'], ['snapshot_cache','Срезы маркет-даты'], ['snapshot_drop','Папка ручной загрузки срезов'],
   ['store','Хранилище'], ['pg_dir','Встроенная PostgreSQL'], ['db','SQLite (прототип)'], ['report_dir','Отчёты валидации'],
   ['private_adapter','Адаптер'], ['private_adapter_default','Адаптер из комплекта'], ['private_adapter_config','Папка настроек адаптера'], ['private_adapter_sha256','Закреплённый отпечаток адаптера'],
-  ['inbox_dirs','Папки с отчётами'], ['inbox_archive','Архив принятых файлов'], ['inbox_poll_seconds','Период опроса, сек'],
+  ['inbox_dirs','Папки с отчётами'], ['inbox_archive','Архив принятых файлов'], ['inbox_poll_seconds','Период опроса, сек'], ['adapter_check_timeout_s','Проверка формы адаптером, сек'],
   ['autopilot','Автообновление'], ['intraday','Расчёт внутри дня'], ['autopilot_sync_last','Загружать последних дат'],
   ['inbox_lookback_days','Брать отчёты не старше, дней'], ['history_days','История котировок, рабочих дней'],
   ['history_bonds_from','История облигаций с'], ['history_rates_from','История ставок и курсов с'],
@@ -773,10 +784,10 @@ function collect(){
       const n = Number(v);
       if (!Number.isInteger(n) || n < 0) throw new Error('Отчёты не старше: нужно целое число дней (0 — без ограничения)');
       body[k] = n;
-    } else if (k === 'backfill_budget_s') {
+    } else if (k === 'backfill_budget_s' || k === 'adapter_check_timeout_s') {
       if (!v) { body[k] = null; continue; }
       const n = Number(v.replace(',', '.'));
-      if (!isFinite(n) || n <= 0) throw new Error('История прогонов: нужно положительное число секунд');
+      if (!isFinite(n) || n <= 0) throw new Error((k === 'backfill_budget_s' ? 'История прогонов' : 'Проверка формы адаптером') + ': нужно положительное число секунд');
       body[k] = n;
     } else if (k === 'backfill_from') {
       if (!v) { body[k] = null; continue; }
@@ -1412,3 +1423,4 @@ function mountTabs(a, reload){
   if (/^https?:$/.test(location.protocol)) load(false);
 })();
 </script>
+<script src="desk-backup.js"></script>

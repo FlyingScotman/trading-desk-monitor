@@ -4,7 +4,9 @@
 settings' ``update_transport`` names one): ``release.json`` of the latest release at its stable address on
 github.com (no API, no rate limit), else the API. When no layer gets through, the page asks the API itself from the
 browser (``api.github.com`` answers CORS requests) and posts the document here (``take_browser_release``):
-``browser_check_due`` says when. A page opened in the Windows bundle starts a check in the background when the
+``browser_check_due`` says when. A latest release without update files (made by hand, a tag without ``v``) is not
+the end: the check says why and takes the newest earlier release that has them (``release.first_usable``); the
+check record keeps when GitHub was asked, through which layer, and what it answered (``notes``). A page opened in the Windows bundle starts a check in the background when the
 last one is older than ``CHECK_EVERY_S`` (``maybe_auto_check``); the shared navigation bar shows the new version.
 
 **Install** (``start_install``): the zip ``release.choose`` picks (a patch from exactly the installed version, else
@@ -42,10 +44,14 @@ from .release import (
     RELEASE_JSON,
     SUMS_NAME,
     Asset,
+    EmptyReleaseError,
     Release,
     ReleaseError,
     api_latest_url,
+    api_list_url,
     choose,
+    download_url,
+    first_usable,
     from_api,
     from_public,
     from_release_json,
@@ -128,8 +134,21 @@ def layers(st: Settings, home: Path) -> list[str]:
 # ---- check ------------------------------------------------------------------------------------------------------
 
 
-def _release_via(layer: str, ctx: net.Context, repo: str) -> Release | None:
-    """The latest release through ``layer``: release.json, else the API (with SHA256SUMS); None: no release."""
+def _latest(reason: str) -> str:
+    """«Релиз X …» of ``release.empty_reason`` as «Последний релиз X …»."""
+    return "Последний " + reason[:1].lower() + reason[1:]
+
+
+def _has(doc: object, name: str) -> bool:
+    return isinstance(doc, dict) and any(isinstance(a, dict) and a.get("name") == name
+                                         for a in doc.get("assets") or [])
+
+
+def _release_via(layer: str, ctx: net.Context, repo: str, notes: list[str] | None = None) -> Release | None:
+    """The latest release through ``layer``: release.json, else the API (with SHA256SUMS); None: no release. A
+    latest release without update files: the newest earlier one that has them (``Release.skipped`` says why),
+    ReleaseError when none has. ``notes`` gets what the owner should know about how the release was found."""
+    notes = notes if notes is not None else []
     try:
         doc = net.get_json(layer, ctx, latest_url(repo, RELEASE_JSON))
         return from_release_json(doc, repo)
@@ -143,12 +162,36 @@ def _release_via(layer: str, ctx: net.Context, repo: str) -> Release | None:
             return None  # the repository has no release yet
         raise
     sums = None
-    if any(isinstance(a, dict) and a.get("name") == SUMS_NAME for a in api.get("assets") or []):
+    if _has(api, SUMS_NAME):
         try:
             sums = net.get_text(layer, ctx, latest_url(repo, SUMS_NAME))
         except net.NetError:
             sums = None  # the API's own digest still checks
-    return from_api(api, repo, sums_text=sums)
+    try:
+        rel = from_api(api, repo, sums_text=sums)
+    except EmptyReleaseError as e:
+        empty = e
+    else:
+        notes.append(f"В последнем релизе {rel.tag} нет release.json: версия прочитана через GitHub API.")
+        return rel
+
+    def sums_of(doc: dict[str, Any]) -> str | None:
+        if not _has(doc, SUMS_NAME) or not isinstance(doc.get("tag_name"), str):
+            return None
+        try:
+            return net.get_text(layer, ctx, download_url(repo, doc["tag_name"], SUMS_NAME))
+        except net.NetError:
+            return None
+
+    listing = net.get_json(layer, ctx, api_list_url(repo), accept=API_ACCEPT)
+    rel, skipped = first_usable(listing, repo, sums_for=sums_of)
+    if not any(x["tag"] == empty.tag for x in skipped):
+        skipped.insert(0, {"tag": empty.tag, "reason": str(empty)})
+    if rel is None:
+        raise ReleaseError(f"{_latest(str(empty))} Более раннего релиза с файлами обновления на GitHub нет.")
+    rel.skipped = skipped
+    notes.append(f"{_latest(str(empty))} Предлагаю предыдущий релиз с файлами: {rel.tag}.")
+    return rel
 
 
 def check(st: Settings) -> dict[str, Any]:
@@ -161,18 +204,20 @@ def check(st: Settings) -> dict[str, Any]:
     try:
         for layer in order:
             t0 = time.monotonic()
+            notes: list[str] = []
             try:
-                rel = _release_via(layer, ctx, repo)
+                rel = _release_via(layer, ctx, repo, notes)
             except net.NetError as e:
                 attempts.append({"ok": False, "ms": int((time.monotonic() - t0) * 1000), **e.public()})
                 continue
             except ReleaseError as e:  # GitHub answered; the release itself is not usable
-                chk = {"ok": False, "at": now(), "layer": layer, "attempts": attempts,
-                       "error": {"code": "release", "message": str(e), "what": "релиз не подходит"}}
+                chk = {"ok": False, "at": now(), "layer": layer, "attempts": attempts, "notes": notes,
+                       "error": {"code": "release", "message": str(e), "what": "GitHub ответил, но релиз не подходит"}}
                 write_state(home, {"check": chk, "checked_at": now(), "prefer": layer, "repo": repo})
                 return chk
             attempts.append({"ok": True, "layer": layer, "ms": int((time.monotonic() - t0) * 1000)})
-            chk = {"ok": True, "at": now(), "layer": layer, "attempts": attempts, "error": None}
+            chk = {"ok": True, "at": now(), "layer": layer, "attempts": attempts, "error": None, "notes": notes,
+                   "found": rel.tag if rel else None}
             write_state(home, {"check": chk, "checked_at": now(), "prefer": layer, "repo": repo,
                                "release": rel.public() if rel else None, "no_release": rel is None})
             return chk
@@ -209,23 +254,32 @@ def _quiet_check(st: Settings) -> None:
 
 
 def take_browser_release(st: Settings, body: dict[str, Any]) -> dict[str, Any]:
-    """The browser's own API answer: ``{"release": <the API document>}``, ``{"none": true}`` (404: no release
-    yet) or ``{"error": "<why the browser could not ask>"}``. ReleaseError when the document does not read."""
+    """The browser's own API answer: ``{"releases": <the API's release list, newest first>}`` (the newest one with
+    update files is taken, ``release.first_usable``), ``{"release": <one API document>}``, ``{"none": true}`` (404:
+    no release yet) or ``{"error": "<why the browser could not ask>"}``. ReleaseError when the document does not
+    read or no release has update files."""
     home, repo = st.home, st.update_repo
     rec: dict[str, Any] = {"checked_at": now(), "ok": False, "error": None}
     changes: dict[str, Any] = {}
     if body.get("none") is True:
         rec["ok"] = True
         changes = {"release": None, "no_release": True, "release_from": "browser"}
-    elif "release" in body:
+    elif "release" in body or "releases" in body:
         try:
-            rel = from_api(body["release"], repo, source="browser")
+            if "releases" in body:
+                rel, skipped = first_usable(body["releases"], repo, source="browser")
+                if rel is None and skipped:
+                    raise ReleaseError(f"{_latest(skipped[0]['reason'])} Более раннего релиза с файлами "
+                                       "обновления на GitHub нет.")
+            else:
+                rel = from_api(body["release"], repo, source="browser")
         except ReleaseError as e:
             rec["error"] = str(e)
             write_state(home, {"browser": rec})
             raise
         rec["ok"] = True
-        changes = {"release": rel.public(), "no_release": False, "repo": repo}
+        changes = ({"release": rel.public(), "no_release": False, "repo": repo} if rel is not None
+                   else {"release": None, "no_release": True, "release_from": "browser"})
     else:
         rec["error"] = str(body.get("error") or "браузер не смог спросить GitHub API")[:300]
     return write_state(home, {"browser": rec, **changes})

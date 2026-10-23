@@ -163,7 +163,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   function renderList() {
     const max = Math.max(1, ...ISS.map(x => Math.abs(x.mv)));
     const drillCell = (key, fmt, unit, title) => (v, r) => K.d({ title: r.name + ' · ' + title, unit, fmt, list: r.list, val: key }, fmt(v), key === 'mv' ? '' : null);
-    listApi = K.table(document.getElementById('list'), {
+    listApi = K.table(document.getElementById('list'), { viewKey: 'c13-issuers',
       rows: ISS, maxHeight: 'calc(100vh - 140px)', sort: [['mv', -1]], onRow: r => select(r.id, false),
       rowCls: r => r.id === st.sel ? 'sel' : '',
       stripe: r => K.issuerColor(r.id),
@@ -256,7 +256,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     // наши бумаги
     const bp = panel('Наши бумаги эмитента', '<span class="k-note">по сроку до оферты · валюта — столбец; группы «валюта → фикс / флоатеры» — переключателем</span>'); dash.appendChild(bp);
     bp.querySelector('.bd').classList.add('flush');
-    K.table(bp.querySelector('.bd'), {
+    K.table(bp.querySelector('.bd'), { viewKey: 'c13-issuer-bonds',
       rows: L, search: L.length > 8, sort: [['tenor', 1]], stripe: p => K.kindColor[p.kind],
       groupable: [{ key: p => p.ccy + ' · ' + (p.cpn.type === 'float' ? 'флоатеры' : p.cpn.type === 'linker' ? 'линкеры' : 'фикс'), order: (a, b) => (M.ccyOrder[a.slice(0, 3)] - M.ccyOrder[b.slice(0, 3)]) || a.localeCompare(b, 'ru'), label: k => K.ccyTag(k.slice(0, 3)) + ' ' + esc(k.slice(6)), span: 2 }], groupLabel: 'валюта → фикс / флоатеры',
       columns: K.cols(['name', 'ccy', 'book', 'coupon', 'event', 'tenor', 'notional', 'price', 'ytm', 'spread', 'dur', 'cs01', 'dv01', 'pnl', 'mv']),

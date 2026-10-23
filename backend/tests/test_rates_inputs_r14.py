@@ -142,7 +142,7 @@ def test_key_rate_floater_proxy_splits_without_changing_the_total():
 
 def test_intraday_run_is_redone_when_the_previous_close_arrives_late(stub, tmp_path, store_url):
     """Monday's intraday run made before Friday's final close was published: the close arrives within the same
-    half-hour slot (no newer cut), and today's run is redone against it, positions still carried from 15.10."""
+    10-minute slot (no newer cut), and today's run is redone against it, positions still carried from 15.10."""
     s = cfg(tmp_path, store_url, stub)
     put(tmp_path, "positions_20261016.csv")
     publish(stub, MON, "intraday", "2026-10-19T07:00:00Z", 1)
@@ -152,7 +152,7 @@ def test_intraday_run_is_redone_when_the_previous_close_arrives_late(stub, tmp_p
     assert by["intraday"] == ("ok", ("19.10 10:00 МСК · внутри дня: run 2 (new cut); "
                                     "PnL от 15.10 (закрытие): нет закрытия 16.10")), by["intraday"]
     publish(stub, FRI, "eod_final", "2026-10-19T07:20:00Z", 3)  # Friday's close, published late
-    clock["t"] = at(MON, 10, 20)
+    clock["t"] = at(MON, 10, 13)
     st = ap.run_cycle()
     by = steps(st)
     assert "pulled 2026-10-16" in by["sync"][1]
@@ -162,7 +162,7 @@ def test_intraday_run_is_redone_when_the_previous_close_arrives_late(stub, tmp_p
     assert run_rows(store_url)[-1] == (4, MON, "INTRADAY", "intraday", FRI, "eod_final", None)
     assert st["latest_run"]["run_id"] == "4" and st["latest_run"]["pnl_basis"] is None
     assert TestClient(create_app(store_url)).get("/api/v1/compat/desk").json()["source"]["runId"] == 4
-    clock["t"] = at(MON, 10, 25)
+    clock["t"] = at(MON, 10, 14)
     assert steps(ap.run_cycle())["intraday"][1].startswith("up to date: run 4")
 
 

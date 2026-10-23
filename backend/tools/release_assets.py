@@ -44,6 +44,9 @@ def core_pin() -> str:
 
 def check_tag(tag: str, version: str | None = None) -> str:
     want = "v" + (version or backend_version())
+    if not tag.startswith("v"):
+        raise SystemExit(f"tag {tag!r} has no 'v': a release tag is {want!r}. A tag or a release made without the 'v' "
+                         "publishes no update files and the in-app updater skips it; delete it and push the v-tag")
     if tag != want:
         raise SystemExit(f"tag {tag!r}: a release tag must be {want!r} (backend/pyproject.toml); bump the version "
                          "there, commit, then tag")

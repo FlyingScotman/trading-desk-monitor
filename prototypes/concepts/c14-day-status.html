@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>C14 · Статус дня</title>
+<link rel="stylesheet" href="lib/kit.css">
+<style>
+.c14-days { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; align-items: stretch; }
+.c14-day { flex: none; min-width: 74px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--panel); padding: 4px 8px 5px; cursor: pointer; text-align: left; position: relative; }
+.c14-day:hover { border-color: var(--accent); }
+.c14-day.on { border-color: var(--accent); background: var(--accent-bg); }
+.c14-day .d { font-weight: 600; font-variant-numeric: tabular-nums; }
+.c14-day .s { font-size: 11px; color: var(--fg-3); white-space: nowrap; }
+.c14-day::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; border-radius: 2px; background: var(--c, var(--line-2)); }
+.st-ok { --c: var(--pos); } .st-warn { --c: var(--warn); } .st-bad { --c: var(--neg); }
+.c14-head { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+.c14-head .big { font-size: 20px; font-weight: 650; }
+.c14-badge { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--c); color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); white-space: nowrap; }
+.c14-list { margin: 4px 0 0; padding-left: 18px; }
+.c14-list li.bad { color: var(--neg); } .c14-list li.warn { color: var(--warn); }
+.c14-inputs { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); gap: 8px; }
+.c14-in { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--panel); position: relative; overflow: hidden; min-width: 0; }
+.c14-in::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--c, var(--line-2)); }
+.c14-in .l { font-size: 11px; color: var(--fg-2); text-transform: uppercase; letter-spacing: .05em; }
+.c14-in .v { font-size: 15px; font-weight: 600; margin-top: 2px; }
+.c14-in .s { font-size: 11.5px; color: var(--fg-2); margin-top: 2px; overflow-wrap: anywhere; }
+.c14-two { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+@media (max-width: 1100px) { .c14-two { grid-template-columns: 1fr; } }
+.k-tbl td.wrap { white-space: normal; min-width: 200px; }
+.c14-chain { font-variant-numeric: tabular-nums; }
+.c14-units td { background: var(--bg-2); font-size: 12px; }
+.c14-ev { display: flex; flex-direction: column; max-height: 560px; overflow: auto; }
+.c14-ev .e { display: grid; grid-template-columns: 10px 64px minmax(0, 1fr); gap: 8px; padding: 5px 12px; border-bottom: 1px solid var(--line); align-items: baseline; }
+.c14-ev .e.new { background: var(--accent-bg); }
+.c14-ev .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c, var(--fg-3)); display: inline-block; }
+.lv-info { --c: var(--fg-3); } .lv-warn { --c: var(--warn); } .lv-error { --c: var(--neg); }
+.c14-toast { position: fixed; right: 16px; bottom: 16px; z-index: 160; display: flex; flex-direction: column; gap: 8px; max-width: min(420px, calc(100vw - 32px)); }
+.c14-toast > div { background: var(--panel-2); border: 1px solid var(--line-2); border-left: 3px solid var(--c); border-radius: 6px; padding: 8px 12px; box-shadow: var(--shadow); font-size: 12.5px; cursor: pointer; }
+.c14-msg { padding: 24px; text-align: center; color: var(--fg-2); }
+@media (max-width: 720px) { .k-panel > .hd { flex-wrap: wrap; } .c14-ev .e { grid-template-columns: 10px 52px minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<div class="k-page">
+  <div class="c14-days" id="days" aria-label="Даты"></div>
+  <div id="view"><div class="c14-msg">загрузка…</div></div>
+</div>
+<div class="c14-toast" id="toast"></div>
+<script src="lib/boot.js"></script>
+<script src="lib/kit.js"></script>
+<script src="lib/instr.js"></script>
+<script>
+(function () {
+  'use strict';
+  // «Статус дня» (S7b, #25): по дате — что пришло, что отклонено и почему, какие прогоны кого заменили; лента событий.
+  // Данные: GET ../api/v1/inbox?on=, ../api/v1/inbox/days, ../api/v1/events (backend desk/daystatus.py). Лента пока
+  // опрашивается раз в 30 с (?after=последний id); SSE (#28) встанет на место poll() с тем же курсором.
+  const K = KIT, f = K.f, esc = K.esc;
+  K.top({ title: 'C14 · Статус дня', tag: 'что пришло, что отклонено, какие прогоны' });
+  const server = K.source === 'real' || K.source === 'empty';
+  const STATE = { ok: ['всё пришло', 'st-ok'], warn: ['есть замечания', 'st-warn'], bad: ['есть проблемы', 'st-bad'] };
+  const IN_STATE = { ok: ['принято', 'st-ok'], partial: ['принято частично', 'st-warn'], rejected: ['отклонено', 'st-bad'], superseded: ['заменено', 'st-warn'], missing: ['не приходило', ''] };
+  const RUN_STATUS = { complete: 'готов', failed: 'ошибка', loading: 'считается' };
+  const FLAG = { no_positions: 'нет позиций', not_in_run: 'не в расчёте', rows_differ: 'строк не столько', unit_rejected: 'книга отклонена' };
+  const view = document.getElementById('view'), daysEl = document.getElementById('days'), toastEl = document.getElementById('toast');
+  const u = new URL(location.href);
+  let on = u.searchParams.get('on') || null, doc = null, lastId = null, fresh = new Set();
+
+  const time = s => s ? new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+  const hm = s => s ? new Date(s).toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' }) : '';
+  const num = v => v == null ? '<span class="mut3">—</span>' : f.n(v, 0);
+  const scope = s => Object.entries(s || {}).map(([k, v]) => k === 'book_id' ? v : k + ' ' + v).join(', ') || 'весь файл';
+  function panel(title, extra) { const p = K.h('div', 'k-panel'); p.innerHTML = '<div class="hd"><h3>' + title + '</h3><span class="sp"></span>' + (extra || '') + '</div><div class="bd"></div>'; return p; }
+  function msg(t) { view.innerHTML = '<div class="k-panel"><div class="c14-msg">' + t + '</div></div>'; }
+
+  // ---------- данные: сервер или демо-набор ----------
+  function getJSON(path) {
+    return fetch('../' + path, { cache: 'no-store' }).then(r => {
+      if (r.status === 401 || r.status === 403) throw Object.assign(new Error('forbidden'), { forbidden: true });
+      if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+      return r.json();
+    });
+  }
+  function load() {
+    if (!server) { doc = DEMO.day; render(); renderDays(DEMO.days); return Promise.resolve(); }
+    const strip = getJSON('api/v1/inbox/days?n=45').then(ds => ds.days).catch(() => []);
+    return Promise.all([getJSON('api/v1/inbox' + (on ? '?on=' + on : '')), strip]).then(([d, ds]) => {
+      doc = d; on = d.date; if (lastId == null) lastId = d.last_event_id == null ? 0 : d.last_event_id; render(); renderDays(ds);
+    }).catch(e => {
+      if (e.forbidden) return msg('Нужно войти в монитор: статус дня открыт всем пользователям.');
+      msg('Не удалось загрузить статус дня' + (on ? ' за ' + esc(on) : '') + ': ' + esc(e.message) + '. Выберите другую дату.');
+      strip.then(renderDays);
+    });
+  }
+  function pick(d) {
+    on = d; const x = new URL(location.href); x.searchParams.set('on', d); history.replaceState(null, '', x.toString());
+    if (server) load(); else { doc = Object.assign({}, DEMO.day, { date: d }); render(); renderDays(DEMO.days); }
+  }
+
+  // ---------- полоса дат ----------
+  function renderDays(list) {
+    daysEl.innerHTML = list.slice(0, 45).map(x => {
+      const ins = x.inputs || {}, p = ins.positions || {}, rej = Object.values(ins).reduce((s, c) => s + (c.rejected || 0), 0);
+      const sub = (x.default_run_id ? '#' + x.default_run_id : x.runs ? x.runs + ' прог.' : 'нет прогона') + (rej ? ' · откл. ' + rej : p.accepted ? ' · поз.' : '');
+      return '<button class="c14-day st-' + x.state + (x.date === on ? ' on' : '') + '" data-d="' + x.date + '" title="' + esc((STATE[x.state] || [''])[0]) + '"><div class="d">' + f.dshort(x.date) + '</div><div class="s">' + esc(sub) + '</div></button>';
+    }).join('') + '<input class="k-input" type="date" id="pick" style="min-width:140px" title="Другая дата" value="' + esc(on || '') + '">';
+    daysEl.querySelectorAll('[data-d]').forEach(b => b.onclick = () => pick(b.dataset.d));
+    const ip = document.getElementById('pick'); ip.onchange = () => ip.value && pick(ip.value);
+    const sel = daysEl.querySelector('.on'); if (sel) sel.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  // ---------- экран даты ----------
+  function render() {
+    const d = doc, s = d.summary, [stT, stC] = STATE[s.state] || ['', ''];
+    view.innerHTML = '';
+    const wrap = K.h('div', 'k-grid');
+    // заголовок: дата, итог, проблемы и замечания
+    const hd = panel('Дата', '<span class="k-note">' + esc(d.adapter || '') + '</span>');
+    hd.querySelector('.bd').innerHTML = '<div class="c14-head"><div><div class="big">' + f.dshort(d.date) + ' ' + d.date.slice(0, 4) + '</div>' +
+      '<span class="c14-badge ' + stC + '">' + stT + '</span></div><div style="flex:1;min-width:260px">' +
+      (s.problems.length + s.warnings.length ? '<ul class="c14-list">' + s.problems.map(t => '<li class="bad">' + esc(t) + '</li>').join('') + s.warnings.map(t => '<li class="warn">' + esc(t) + '</li>').join('') + '</ul>' : '<span class="mut">Все входы на месте, основной прогон есть.</span>') +
+      '</div><div class="mut" style="font-size:12px">основной прогон: <b>' + (s.default_run_id ? '#' + s.default_run_id : '—') + '</b>' +
+      (s.current_run_id && s.current_run_id !== s.default_run_id ? '<br>показывается: #' + s.current_run_id : '') +
+      (s.default_run_id && server ? '<br><a href="c01-cockpit.html?run_id=' + s.default_run_id + '">открыть в кокпите ▸</a>' : '') + '</div></div>';
+    wrap.appendChild(hd);
+
+    // что пришло: наборы данных и закрытие хаба
+    const inp = panel('Что пришло', '<span class="k-note">наборы данных за дату · закрытие хаба в кэше</span>');
+    const m = d.market || {};
+    const mk = (cut, l) => { const x = m[cut]; return '<div class="c14-in ' + (x ? 'st-ok' : cut === 'eod_final' ? 'st-warn' : '') + '"><div class="l">' + l + '</div><div class="v">' + (x ? 'есть' : 'нет') + '</div><div class="s">' +
+      (x ? 'срез ' + time(x.cut_ts) + (x.known_at ? ' · получено ' + time(x.known_at) : '') + (x.corrections ? ' · исправлений ' + x.corrections : '') + (x.store ? ' · в базе: ' + esc(x.store.status) : '') : cut === 'eod_final' ? 'хаб ещё не опубликовал или не скачано' : '') + '</div></div>'; };
+    inp.querySelector('.bd').innerHTML = '<div class="c14-inputs">' + d.inputs.map(i => {
+      const [t, c] = IN_STATE[i.state] || [i.state, ''];
+      const sub = i.state === 'missing' ? 'за эту дату файлов не было' :
+        'частей: принято ' + i.units.accepted + (i.units.rejected ? ', отклонено ' + i.units.rejected : '') + (i.units.superseded ? ', заменено ' + i.units.superseded : '') +
+        ' · строк ' + f.n(i.rows.accepted, 0) + (i.rows.rejected ? ' (+' + f.n(i.rows.rejected, 0) + ' откл.)' : '') + (i.sources.length ? ' · ' + esc(i.sources.join(', ')) : '');
+      return '<div class="c14-in ' + c + '"><div class="l">' + esc(i.name) + '</div><div class="v">' + t + '</div><div class="s">' + sub + '</div></div>';
+    }).join('') + mk('eod_final', 'Закрытие хаба') + mk('eod_preliminary', 'Предв. закрытие') +
+      '<div class="c14-in' + (m.intraday && m.intraday.count ? ' st-ok' : '') + '"><div class="l">Срезы внутри дня</div><div class="v">' + ((m.intraday && m.intraday.count) || 0) + '</div><div class="s">' + (m.intraday && m.intraday.latest_cut_ts ? 'последний ' + hm(m.intraday.latest_cut_ts) + ' МСК' : '') + (m.error ? 'кэш снимков не прочитан: ' + esc(m.error) : '') + '</div></div></div>';
+    wrap.appendChild(inp);
+
+    const two = K.h('div', 'c14-two'); wrap.appendChild(two);
+    const left = K.h('div', 'k-grid'); two.appendChild(left);
+
+    // прогоны: кто кого заменил и что изменилось
+    const rp = panel('Прогоны', '<span class="k-note">кто кого заменил и почему</span>');
+    rp.querySelector('.bd').classList.add('flush', 'scroll');
+    rp.querySelector('.bd').innerHTML = d.runs.length ? '<table class="k-tbl"><thead><tr><th>#</th><th>Срез</th><th>Статус</th><th>Готов</th><th>Заменил</th><th>Заменён</th><th>Что изменилось</th></tr></thead><tbody>' +
+      d.runs.slice().reverse().map(r => '<tr><td class="mono">' + r.run_id + (r.is_default ? ' <span class="c14-badge st-ok" title="основной прогон даты">основной</span>' : r.is_current ? ' <span class="c14-badge st-warn" title="показывается до закрытия">текущий</span>' : '') + '</td>' +
+        '<td>' + esc(r.label) + '</td>' +
+        '<td class="' + (r.status === 'failed' ? 'neg' : '') + '"' + (r.error ? ' title="' + esc(r.error) + '"' : '') + '>' + esc(RUN_STATUS[r.status] || r.status) + (r.error ? ' ⓘ' : '') + '</td>' +
+        '<td class="mut">' + time(r.completed_at || r.started_at) + '</td>' +
+        '<td class="c14-chain">' + (r.supersedes_run_id ? '#' + r.supersedes_run_id : '<span class="mut3">—</span>') + '</td>' +
+        '<td class="c14-chain">' + (r.superseded_by.length ? r.superseded_by.map(x => '#' + x).join(', ') : '<span class="mut3">—</span>') + '</td>' +
+        '<td class="wrap mut">' + (r.changed_text.length ? esc(r.changed_text.join(', ')) : r.supersedes_run_id ? 'входы те же (пересчёт)' : '') + '</td></tr>').join('') + '</tbody></table>'
+      : '<div class="k-empty">Прогонов за эту дату нет</div>';
+    left.appendChild(rp);
+
+    // файлы: что пришло и что отклонено, с причинами
+    const fp = panel('Файлы отчётов', '<span class="k-note">строка — части файла (книги) и коды замечаний</span>');
+    fp.querySelector('.bd').classList.add('flush', 'scroll');
+    const lost = st => ['rejected', 'failed', 'timed_out', 'match_failed'].includes(st);
+    fp.querySelector('.bd').innerHTML = (d.files.length ? '<table class="k-tbl"><thead><tr><th>Пришёл</th><th>Файл</th><th>Источник</th><th>Статус</th><th class="n">Частей</th><th>Почему</th></tr></thead><tbody>' +
+      d.files.map((x, i) => {
+        const rejU = x.units.filter(v => v.status === 'rejected');
+        const why = x.why || (rejU.length ? 'отклонено: ' + rejU.map(v => scope(v.scope) + ' — ' + v.why).join('; ') : '');
+        return '<tr class="row" tabindex="0" aria-expanded="false" data-f="' + i + '"><td class="mut">' + time(x.at) + '</td><td>' + esc(x.name) + ' <span class="mut3 mono">' + esc(x.file) + '</span></td><td class="mut">' + esc(x.source || '—') + '</td>' +
+          '<td class="' + (lost(x.status) ? 'neg' : '') + '"' + (x.status === 'partially_accepted' ? ' style="color:var(--warn)"' : '') + '>' + esc(x.status_text) + '</td><td class="n">' + x.units.length + '</td><td class="wrap">' + esc(why) + '</td></tr>';
+      }).join('') + '</tbody></table>' : '<div class="k-empty">Файлов за эту дату не было</div>') +
+      (d.copies.length ? '<div style="padding:8px 12px;border-top:1px solid var(--line)"><b style="color:var(--warn)">Копии:</b> ' + d.copies.map(c => esc(c.name) + ' — ' + (c.kind === 'stale_copy' ? 'старая копия (содержимое отчёта за ' + f.date(c.content_report_date) + '): свежего отчёта нет' : 'повтор, ничего не загружено')).join('; ') + '</div>' : '');
+    fp.querySelectorAll('tr[data-f]').forEach(tr => tr.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); tr.click(); } });
+    fp.querySelectorAll('tr[data-f]').forEach(tr => tr.onclick = () => {
+      let nx = tr.nextElementSibling;
+      if (nx && nx.classList.contains('c14-units')) { while (nx && nx.classList.contains('c14-units')) { const r = nx; nx = nx.nextElementSibling; r.remove(); } tr.setAttribute('aria-expanded', 'false'); return; }
+      tr.setAttribute('aria-expanded', 'true');
+      const x = d.files[+tr.dataset.f];
+      const rows = x.units.map(v => '<tr class="c14-units"><td></td><td>' + esc(scope(v.scope)) + ' <span class="mut3">' + esc(v.dataset) + (v.valid_date && v.valid_date !== d.date ? ' · за ' + f.date(v.valid_date) : '') + '</span></td><td></td>' +
+        '<td class="' + (v.status === 'rejected' ? 'neg' : '') + '">' + esc({ accepted: 'принята', rejected: 'отклонена', superseded: 'заменена' }[v.status] || v.status) + '</td><td class="n">' + num(v.rows) + ' стр.</td>' +
+        '<td class="wrap">' + esc(v.why || '') + (v.issues.length ? ' <span class="mut3">' + v.issues.map(c => esc(c.code) + (c.count > 1 ? ' ×' + c.count : '')).join(', ') + '</span>' : '') + '</td></tr>').join('') +
+        (x.issues.length ? '<tr class="c14-units"><td></td><td colspan="5" class="wrap mut">по файлу: ' + x.issues.map(c => esc(c.text || c.code) + (c.count > 1 ? ' ×' + c.count : '')).join('; ') + '</td></tr>' : '');
+      tr.insertAdjacentHTML('afterend', rows || '<tr class="c14-units"><td></td><td colspan="5" class="mut">частей нет</td></tr>');
+    });
+    left.appendChild(fp);
+
+    // книги: куда ушли позиции (inbox reconcile)
+    const P = d.positions || { books: [] };
+    const bp = panel('Позиции по книгам', '<span class="k-note">в отчёте → принято → в расчёте' + (P.run_id ? ' #' + P.run_id : '') + '</span>');
+    bp.querySelector('.bd').classList.add('flush', 'scroll');
+    bp.querySelector('.bd').innerHTML = P.books.length ? '<table class="k-tbl"><thead><tr><th>Книга</th><th>Позиции на</th><th>Файл</th><th class="n">В отчёте</th><th class="n">Принято</th><th class="n">В расчёте</th><th class="n">Оценено</th><th>Замечания</th></tr></thead><tbody>' +
+      P.books.map(b => '<tr><td>' + esc(b.book_id) + (b.name && b.name !== b.book_id ? ' <span class="mut3">' + esc(b.name) + '</span>' : '') + '</td><td>' + (b.valid_date ? f.date(b.valid_date) + (b.age_days ? ' <span class="mut3">(' + b.age_days + ' дн.)</span>' : '') : '<span class="neg">нет</span>') + '</td>' +
+        '<td class="mut">' + esc(b.file || '—') + '</td><td class="n">' + num(b.rows_in_report) + '</td><td class="n">' + num(b.rows_accepted) + '</td><td class="n">' + num(b.rows_in_run) + '</td><td class="n">' + num(b.rows_valued) + '</td>' +
+        '<td class="wrap">' + b.flags.map(x => '<span class="c14-badge st-warn">' + esc(FLAG[x] || x) + '</span>').join(' ') + (Object.keys(b.issues || {}).length ? ' <span class="mut3">' + Object.entries(b.issues).map(([k, n]) => esc(k) + (n > 1 ? ' ×' + n : '')).join(', ') + '</span>' : '') + '</td></tr>').join('') + '</tbody></table>'
+      : '<div class="k-empty">Книг нет</div>';
+    left.appendChild(bp);
+
+    // лента событий даты
+    const ep = panel('События даты', server ? '<span class="k-note" id="live">обновляется раз в 30 с</span>' : '<span class="k-note">демо</span>');
+    ep.querySelector('.bd').classList.add('flush');
+    ep.querySelector('.bd').innerHTML = '<div class="c14-ev" id="ev"></div>';
+    two.appendChild(ep);
+    view.appendChild(wrap);
+    renderEvents();
+  }
+  function renderEvents() {
+    const el = document.getElementById('ev'); if (!el) return;
+    const E = (doc.events || []).slice().reverse();
+    el.innerHTML = E.length ? E.map(e => '<div class="e lv-' + e.level + (fresh.has(e.id) ? ' new' : '') + '"><span class="dot" title="' + esc(e.type) + '"></span><span class="mut mono" style="font-size:11.5px">' + time(e.at).replace(', ', ' ') + '</span><span>' + esc(e.text) + '</span></div>').join('') : '<div class="k-empty">Событий за дату нет</div>';
+  }
+
+  // ---------- уведомления: новые события (опрос; SSE — #28) ----------
+  function toast(e) {
+    const t = K.h('div'); t.style.setProperty('--c', e.level === 'error' ? 'var(--neg)' : e.level === 'warn' ? 'var(--warn)' : 'var(--accent)');
+    t.textContent = e.text; t.title = 'Открыть дату'; t.onclick = () => { t.remove(); if (e.valid_date) pick(e.valid_date); };
+    toastEl.appendChild(t); setTimeout(() => t.remove(), 12000);
+  }
+  function onEvents(list) {
+    if (!list.length) return;
+    lastId = list[list.length - 1].id;
+    list.forEach(e => { if (e.level !== 'info' || (e.type === 'run.published' && (e.detail || {}).run_type !== 'INTRADAY')) toast(e); });
+    if (list.some(e => e.valid_date === on)) { list.forEach(e => fresh.add(e.id)); load(); }
+  }
+  function poll() {
+    if (document.hidden || lastId == null) return;
+    getJSON('api/v1/events?after=' + lastId + '&limit=200').then(j => onEvents(j.events)).catch(() => { });
+  }
+  if (server) setInterval(poll, 30e3);
+
+  // ---------- демо-набор (файл или ?demo=1): вымышленный, форма ответа /api/v1/inbox ----------
+  const DEMO = (function () {
+    const D = '2026-10-20', at = (h, m) => D + 'T' + String(h - 3).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':00Z';
+    const ev = (id, h, m, type, level, text, extra) => Object.assign({ id, at: at(h, m), type, level, text, valid_date: D }, extra || {});
+    return {
+      day: {
+        date: D, adapter: 'ok demo_adapter 0.1.0', summary: { state: 'warn', problems: [], warnings: ['Позиции: принято частично', 'книг с замечаниями: 1'], default_run_id: 42, current_run_id: 42 },
+        inputs: [
+          { dataset: 'positions', name: 'Позиции', state: 'partial', units: { accepted: 3, rejected: 1, superseded: 0 }, rows: { accepted: 412, rejected: 18 }, sources: ['positions_daily'] },
+          { dataset: 'ocp', name: 'ОВП', state: 'ok', units: { accepted: 2, rejected: 0, superseded: 0 }, rows: { accepted: 9, rejected: 0 }, sources: ['ocp_daily'] },
+          { dataset: 'cash_balances', name: 'Остатки на счетах', state: 'ok', units: { accepted: 2, rejected: 0, superseded: 0 }, rows: { accepted: 14, rejected: 0 }, sources: ['cash_daily'] },
+          { dataset: 'pnl_official', name: 'Официальный PnL', state: 'missing', units: { accepted: 0, rejected: 0, superseded: 0 }, rows: { accepted: 0, rejected: 0 }, sources: [] },
+          { dataset: 'trade_terms', name: 'Условия сделок', state: 'missing', units: { accepted: 0, rejected: 0, superseded: 0 }, rows: { accepted: 0, rejected: 0 }, sources: [] }],
+        market: { eod_final: { snapshot_id: 'demo', cut_ts: at(19, 0), known_at: at(21, 40), corrections: 0, store: { status: 'loaded', rows: 2100 } }, eod_preliminary: { snapshot_id: 'demo0', cut_ts: at(19, 0), known_at: at(19, 25), corrections: 0 }, intraday: { count: 18, latest_cut_ts: at(18, 30) } },
+        runs: [
+          { run_id: 38, run_type: 'INTRADAY', label: '20.10 18:30 МСК · внутри дня', status: 'complete', started_at: at(18, 31), completed_at: at(18, 33), is_default: false, is_current: false, supersedes_run_id: null, superseded_by: [], changed_text: [], error: null },
+          { run_id: 40, run_type: 'EOD', label: '20.10 · закрытие предв.', status: 'complete', started_at: at(19, 30), completed_at: at(19, 34), is_default: false, is_current: false, supersedes_run_id: null, superseded_by: [42], changed_text: [], error: null },
+          { run_id: 41, run_type: 'EOD', label: '20.10 · закрытие', status: 'failed', started_at: at(21, 45), completed_at: null, is_default: false, is_current: false, supersedes_run_id: 40, superseded_by: [], changed_text: ['срез (окончательное закрытие вместо предварительного)'], error: 'orphaned: still loading after 01:00:00, reaped' },
+          { run_id: 42, run_type: 'EOD', label: '20.10 · закрытие', status: 'complete', started_at: at(22, 50), completed_at: at(22, 55), is_default: true, is_current: true, supersedes_run_id: 40, superseded_by: [], changed_text: ['срез (окончательное закрытие вместо предварительного)', 'позиции'], error: null }],
+        files: [
+          { file: 'a1b2c3d4e5f6', name: 'positions_20261021.csv', status: 'partially_accepted', status_text: 'принят частично', at: at(8, 5), source: 'positions_daily', why: null, issues: [],
+            units: [{ dataset: 'positions', scope: { book_id: 'B1' }, status: 'accepted', rows: 220, issues: [], why: null }, { dataset: 'positions', scope: { book_id: 'B2' }, status: 'rejected', rows: 18, issues: [{ severity: 'error', code: 'bad_number', count: 2, text: 'число не разобрано' }], why: 'число не разобрано' }, { dataset: 'positions', scope: { book_id: 'B3' }, status: 'accepted', rows: 192, issues: [], why: null }] },
+          { file: '0f9e8d7c6b5a', name: 'ocp_20261020.csv', status: 'accepted', status_text: 'принят', at: at(19, 10), source: 'ocp_daily', why: null, issues: [], units: [{ dataset: 'ocp', scope: { entity: 'E1' }, status: 'accepted', rows: 9, issues: [], why: null }] },
+          { file: '77aa66bb55cc', name: 'cash_20261020.csv', status: 'accepted', status_text: 'принят', at: at(19, 12), source: 'cash_daily', why: null, issues: [], units: [{ dataset: 'cash_balances', scope: { entity: 'E1' }, status: 'accepted', rows: 14, issues: [], why: null }] }],
+        copies: [],
+        positions: { run_id: 42, books: [
+          { book_id: 'B1', name: 'Демо-книга 1', valid_date: D, age_days: 0, file: 'positions_20261021.csv', rows_in_report: 220, rows_accepted: 220, rows_in_run: 220, rows_valued: 218, flags: [], issues: {} },
+          { book_id: 'B2', name: 'Демо-книга 2', valid_date: '2026-10-19', age_days: 1, file: 'positions_20261020.csv', rows_in_report: 17, rows_accepted: 17, rows_in_run: 17, rows_valued: 17, flags: ['unit_rejected'], issues: { bad_number: 2 } },
+          { book_id: 'B3', name: 'Демо-книга 3', valid_date: D, age_days: 0, file: 'positions_20261021.csv', rows_in_report: 192, rows_accepted: 192, rows_in_run: 192, rows_valued: 192, flags: [], issues: {} }] },
+        events: [
+          ev(1, 8, 5, 'input.partially_accepted', 'warn', 'Позиции за 20.10 · positions_daily: принят частично · принято 2, отклонено 1, строк 430'),
+          ev(2, 18, 33, 'run.published', 'info', 'Прогон внутри дня #38 за 20.10 опубликован'),
+          ev(3, 19, 10, 'input.accepted', 'info', 'ОВП за 20.10 · ocp_daily: принят · принято 2, строк 9'),
+          ev(4, 19, 12, 'input.accepted', 'info', 'Остатки на счетах за 20.10 · cash_daily: принят · принято 2, строк 14'),
+          ev(5, 19, 34, 'run.published', 'info', 'Прогон закрытия #40 за 20.10 (закрытие предв.) опубликован'),
+          ev(6, 22, 45, 'run.failed', 'error', 'Прогон закрытия #41 за 20.10 (закрытие) не удался'),
+          ev(7, 22, 55, 'run.published', 'info', 'Прогон закрытия #42 за 20.10 (закрытие) опубликован, заменил #40')],
+      },
+      days: [['2026-10-20', 'warn', 42, 0], ['2026-10-19', 'ok', 37, 0], ['2026-10-16', 'bad', null, 1], ['2026-10-15', 'ok', 31, 0], ['2026-10-14', 'ok', 29, 0]].map(([date, state, dr, rej]) =>
+        ({ date, state, default_run_id: dr, runs: dr ? 3 : 1, inputs: { positions: { accepted: 3 - rej, rejected: rej, superseded: 0 } } })),
+    };
+  })();
+
+  K.commands && K.commands([{ label: 'Статус дня: обновить', run: load }]);
+  load();
+})();
+</script>
+</body>
+</html>

@@ -122,6 +122,7 @@ schtasks /create /tn "Desk Monitor daily" /sc weekly /d MON,TUE,WED,THU,FRI /st 
 | данные и настройки (`DESK_HOME`) | `%LOCALAPPDATA%\DeskMonitor` = `C:\Users\<имя>\AppData\Local\DeskMonitor`; если в этом пути есть русские буквы (имя пользователя кириллицей) — `C:\DeskMonitorData`, доступная только вам: встроенный PostgreSQL не работает с такими путями |
 | настройки | `settings.json`, токен `hub_token`, файлы адаптера `adapter-config\` |
 | база (встроенный PostgreSQL) | `pg\` |
+| резервные копии базы | `backups\` (или папка из Настроек → «Резервные копии», лучше на другом диске); раз в день в 20:30 или при следующем запуске, хранятся 14; `desk.bat backup`, проверка восстановления `desk.bat restore` — START_HERE.txt, раздел 7а |
 | снапшоты, копии отчётов, отчёты сверки | `snapshots\`, `inbox-archive\`, `reports\` |
 | обновления из браузера (раздел 8) | `updates\`: `uploads\` (загруженные zip), `staged\` (подготовленные файлы), `backup\` (заменённые файлы трёх последних обновлений), `last.json` (итог последнего обновления) |
 | журналы | `logs\serve.log` (сервер), `logs\cycle.log` (`update_daily.bat`): при 20 МБ прежний журнал становится `*.log.1`; `logs\autopilot.log` — шаги каждого цикла автопилота (до 2 МБ, плюс три прежних `*.log.1`–`*.log.3`); `logs\update.log` — обновления из браузера |

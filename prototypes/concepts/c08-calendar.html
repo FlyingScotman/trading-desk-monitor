@@ -214,11 +214,15 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     const rows = a => a.map(x => ({ p: M.pos[x.pos], v: x.val }));
     const byKind = k => ev.filter(x => x.kind === k);
     const ccys = M.ccys.filter(c => ev.some(x => x.ccy === c));
-    const sub = a => ccys.filter(c => a.some(x => x.ccy === c)).map(c => c + ' ' + f.mn(sumBy(a.filter(x => x.ccy === c), x => x.amt), 1)).join(' · ');
+    // разбивка плитки строками (#103): суммы по валютам в родной валюте (mm RUB, mm USD …), не больше трёх строк;
+    // крупнейшие — по рублёвому эквиваленту (x.val), а не по сумме в родной валюте
+    const byCcy = (a, key) => ccys.reduce((o, c) => (o[c] = sumBy(a.filter(x => x.ccy === c), x => x[key]), o), {});
+    const sub = a => K.kpiCcyRows(byCcy(a, 'amt'), (c, v) => f.mn(v, 1) + K.kpiUnit('mm ' + esc(c)), 3, v => f.mn(v, 1) + ' mm', byCcy(a, 'val'));
+    const nEv = a => ' <span class="mut3" title="событий в горизонте">(' + a.length + ')</span>';
     const puts = byKind('put'), nextPut = puts[0];
     kpis.innerHTML = '<div class="k-kpis">' +
-      K.kpi('Всего поступлений', K.d({ title: 'Все потоки до ' + f.date(e), unit: 'mm ₽', fmt: v => f.mn(v, 1), rows: rows(ev), color: false }) + ' <span class="mut" style="font-size:11px">mm ₽</span>', ev.length + ' событий до ' + f.date(e)) +
-      ['cpn', 'mat', 'put', 'call'].map(k => { const a = byKind(k); return K.kpi('<span style="color:' + KC[k] + '">●</span> ' + KNP[k], a.length ? K.d({ title: KNP[k] + ' до ' + f.date(e), unit: 'mm ₽', fmt: v => f.mn(v, 1), rows: rows(a), color: false }) : '<span class="mut3">—</span>', a.length ? a.length + ' · ' + sub(a) + ' mm' : 'нет в горизонте'); }).join('') +
+      K.kpi('Всего поступлений', K.d({ title: 'Все потоки до ' + f.date(e), unit: 'mm ₽', fmt: v => f.mn(v, 1), rows: rows(ev), color: false }) + K.kpiUnit('mm ₽'), ev.length + ' событий до ' + f.date(e)) +
+      ['cpn', 'mat', 'put', 'call'].map(k => { const a = byKind(k); return K.kpi('<span style="color:' + KC[k] + '">●</span> ' + KNP[k] + (a.length ? nEv(a) : ''), a.length ? K.d({ title: KNP[k] + ' до ' + f.date(e), unit: 'mm ₽', fmt: v => f.mn(v, 1), rows: rows(a), color: false }) + K.kpiUnit('mm ₽') : '<span class="mut3">—</span>', a.length ? sub(a) : 'нет в горизонте'); }).join('') +
       K.kpi('Ближайшая оферта', nextPut ? '<span data-card="' + nextPut.pos + '" class="dr" style="color:var(--warn)">' + f.dshort(nextPut.date) + '</span>' : '<span class="mut3">—</span>', nextPut ? esc(nextPut.name) + ' · через ' + Math.round(U.yearsTo(nextPut.date) * 365.25) + ' дн' : 'нет в горизонте') +
       '</div>';
 
@@ -248,7 +252,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     // список по неделям
     const pt = panel('Все потоки по неделям'); view.appendChild(pt);
     pt.querySelector('.bd').classList.add('flush');
-    K.table(pt.querySelector('.bd'), {
+    K.table(pt.querySelector('.bd'), { viewKey: 'c08-flows-weekly',
       rows: ev, maxHeight: '60vh', sort: [['date', 1]], rowCls: r => r.kind === 'put' ? 'putrow' : '', onRow: r => K.card(r.pos),
       groupBy: [{ key: r => weekStart(r.date), order: (a, b) => a.localeCompare(b), fixed: true, span: 3, label: (k, a) => 'Неделя ' + f.dshort(k) + ' – ' + f.dshort(U.addDays(k, 6)) + (a.some(x => x.kind === 'put') ? '<span class="putb">оферта</span>' : '') + (a.some(x => cbr.has(x.date)) || [...Array(7)].some((_, i) => cbr.has(U.addDays(k, i))) ? '<span class="putb" style="color:var(--neg);border-color:var(--neg)">ЦБ</span>' : '') }],
       columns: [
@@ -315,7 +319,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     // оферты и погашения
     const pt = panel('Оферты, амортизации и погашения выпусков в ' + ccy, '<span class="k-note">купоны — в календаре и на графике</span>'); view.appendChild(pt);
     pt.querySelector('.bd').classList.add('flush');
-    K.table(pt.querySelector('.bd'), {
+    K.table(pt.querySelector('.bd'), { viewKey: 'c08-offers-redemptions',
       rows: C.fxEvents.filter(x => x.ccy === ccy && inH(x.date)).map((x, i) => Object.assign({ id: 'x' + i, val: x.amount }, x)), maxHeight: '55vh', sort: [['date', 1]], rowCls: r => r.kind === 'put' ? 'putrow' : '',
       onRow: r => { if (r.pos) K.card(r.pos); else open(r.name, { secid: r.secid }); },
       columns: [
