@@ -343,12 +343,15 @@
     const d = new Date(+new Date(t) + MSK_MS);
     return { iso: d.toISOString().slice(0, 10), dow: d.getUTCDay(), min: d.getUTCHours() * 60 + d.getUTCMinutes() + d.getUTCSeconds() / 60, hm: pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes()) };
   }
-  const CUT_TYPE = { eod_final: 'окончательное закрытие', eod_preliminary: 'предварительное закрытие', intraday: 'внутридневной срез' };
-  // тип данных прогона: {asOf, cutType, cutTs | time, marketDate, runType} → «23.10 · внутридневной срез 11:30»;
-  // рынок старше позиций (портфель дня на закрытии прошлого дня) — «позиции 23.10 · рынок 22.10 · окончательное закрытие»
+  const CUT_TYPE = { eod_final: 'окончательное закрытие', eod_preliminary: 'предварительное закрытие', intraday: 'внутридневной срез',
+    prev_close: 'закрытие прошлого дня' };
+  // тип данных прогона: {asOf, cutType, cutTs | time, marketDate, marketCutType, runType} → «23.10 · внутридневной срез 11:30»;
+  // рынок старше позиций (портфель дня на закрытии прошлого дня) — «позиции 23.10 · рынок 22.10 · окончательное закрытие»;
+  // утренний прогон (cutType prev_close, #21) называет тип своего закрытия (marketCutType: eod_final | eod_preliminary)
   K.dataLabel = function (r) {
     const time = r.cutType === 'intraday' ? (r.cutTs ? msk(r.cutTs).hm : r.time || '') : '';
-    const type = (CUT_TYPE[r.cutType] || r.cutType || '') + (time ? ' ' + time : '') + (r.runType === 'TEST' || r.runType === 'REPLAY' ? ' · ' + r.runType : '');
+    const cut = r.cutType === 'prev_close' && CUT_TYPE[r.marketCutType] ? r.marketCutType : r.cutType;
+    const type = (CUT_TYPE[cut] || cut || '') + (time ? ' ' + time : '') + (r.runType === 'TEST' || r.runType === 'REPLAY' ? ' · ' + r.runType : '');
     const date = ddmm(r.asOf), market = r.marketDate && r.asOf && r.marketDate < r.asOf ? ddmm(r.marketDate) : null;
     return { date, market, type, text: (market ? 'позиции ' + date + ' · рынок ' + market : date) + ' · ' + type };
   };
@@ -409,7 +412,7 @@
     return { next, warn, reason };
   };
   function runLabel() {
-    return K.dataLabel({ asOf: M.asOf, cutType: M.cut.type, cutTs: M.cut.ts, time: M.cut.time, marketDate: M.run && M.run.marketDate, runType: M.run && M.run.runType });
+    return K.dataLabel({ asOf: M.asOf, cutType: M.cut.type, cutTs: M.cut.ts, time: M.cut.time, marketDate: M.run && M.run.marketDate, marketCutType: M.run && M.run.marketCutType, runType: M.run && M.run.runType });
   }
   function srcChip() {
     const s = K.source, L = runLabel();

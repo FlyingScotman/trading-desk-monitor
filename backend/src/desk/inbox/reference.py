@@ -12,7 +12,8 @@ Files, all ``;``-separated UTF-8 with BOM, header = canonical field names (``x_*
   (the date in the name is the business date) and ``covers=listed``:
   ``ocp_YYYYMMDD.csv`` (source ``ocp_csv``, scope ``entity``, ``book_id``), ``cash_balances_YYYYMMDD.csv``
   (``cash_balances_csv``, ``entity``, ``book_id``), ``pnl_official_YYYYMMDD.csv`` (``pnl_official_csv``,
-  ``entity``, ``book_id``) and ``trade_terms_YYYYMMDD.csv`` (``trade_terms_csv``, ``book_id``). A
+  ``entity``, ``book_id``) and ``trade_terms_YYYYMMDD.csv`` (``trade_terms_csv``, ``book_id``; FX trades since
+  private/1.2, swap legs, REPO and HTM purchases since 1.4). A
   ``cash_balances`` or ``pnl_official`` file may hold several dates (a history): a ``_report_date`` column gives
   each row's date (08 §6.1); an empty cell is the date in the name.
 * ``books.csv`` in ``ctx.config_dir``: ``reference()["books"]``, its unreadable lines in ``["issues"]``. Without a
@@ -58,7 +59,7 @@ _TRUE, _FALSE = {"1", "true", "yes"}, {"0", "false", "no"}
 
 def describe() -> dict:
     return {
-        "name": "desk_reference", "version": "1.2.0", "spi": 1, "contract": "private/1.3",
+        "name": "desk_reference", "version": "1.2.0", "spi": 1, "contract": "private/1.4",
         "sources": [{"source": src, "dataset": ds, "time_basis": tb, "completeness": "full_snapshot",
                      "scope": scope, "covers": "listed"} for ds, (src, tb, scope) in _DATASETS.items()],
     }

@@ -1,6 +1,6 @@
 # 08 Private adapter interface (SPI v1)
 
-As of 22 October 2026, revision 4 (private contract 1.3: the `reference()` table `funding_policy` and
+As of 23 October 2026, revision 5 (private contract 1.4: `trade_terms` of interest rate and cross-currency swaps, REPO and HTM purchases, for the valuation of swaps by core and the funding of REPO and HTM lots; revision 4 of 22 October, contract 1.3: the `reference()` table `funding_policy` and
 `positions.purchase_accrued_ccy`, for the funding engine in the runs, wave B1; revision 3, contract 1.2: FUTURES books, the `ocp`, `cash_balances`, `pnl_official` and `trade_terms` schemas, `reference()` entities and funding rules, `describe()` settings tabs, multi-date cash history, adapter phases A7–A10; revision 2 of 19 October followed an independent review). Status: **accepted; both tracks build against it.** Decision: [ADR-008](adr/ADR-008-private-adapter-boundary.md). Owner of this document: the backend. A change here is a versioned change (§9).
 
 The desk's own data (positions, OCP and cash, official PnL, trade terms, trades, internal market data, and the firm's own rules: entities, book types, funding) arrives as bank reports. The backend reads them through a **private adapter**: a Python package that lives outside this repository and is plugged in by a path in the settings. This document is the whole contract between the two. Neither side needs to read the other's code.
@@ -289,11 +289,11 @@ The summary holds counts and codes only. It has no values and no sheet names, an
 - **Private input contract** (`describe()["contract"]`, `private/<major>.<minor>`): the dataset schemas of §10, versioned on their own, separate from the public results contract (1.3/1.4).
   - The backend accepts its own major with any minor. Fields from a newer minor are dropped with a `field_from_newer_contract` warning; the file is not rejected.
   - A new optional field is a minor version; a renamed, retyped or newly required field is a major one.
-  - Minors so far: 1.0 (S7a); 1.1 adds the optional `positions` fields `maturity_date`, `risk_dv01_rub`, `risk_cs01_rub`; 1.2 (22.10.2026) adds `book_type` `FUTURES`, the schemas of `ocp`, `cash_balances` (with the optional key field `ledger`), `pnl_official` and the new dataset `trade_terms`, the optional reference tables `entities` and `funding_rules`, the optional `describe()["settings_tabs"]`, and multi-date `cash_balances`; 1.3 (22.10.2026, wave B1) adds the optional reference table `funding_policy` and the optional `positions` field `purchase_accrued_ccy`. The backend supports 1.3 and accepts 1.0–1.2 adapters unchanged (a 1.2 adapter without `funding_policy` gets the engine's provisional conventions, said in each run).
+  - Minors so far: 1.0 (S7a); 1.1 adds the optional `positions` fields `maturity_date`, `risk_dv01_rub`, `risk_cs01_rub`; 1.2 (22.10.2026) adds `book_type` `FUTURES`, the schemas of `ocp`, `cash_balances` (with the optional key field `ledger`), `pnl_official` and the new dataset `trade_terms`, the optional reference tables `entities` and `funding_rules`, the optional `describe()["settings_tabs"]`, and multi-date `cash_balances`; 1.3 (22.10.2026, wave B1) adds the optional reference table `funding_policy` and the optional `positions` field `purchase_accrued_ccy`; 1.4 (23.10.2026) adds to `trade_terms` the `product_kind` values `irs`, `ois`, `ccs`, `repo` and `bond_purchase`, the `side` values `pay`, `receive`, `repo` and `reverse_repo`, and their optional fields (§10). The backend supports 1.4 and accepts 1.0–1.3 adapters unchanged (a 1.2 adapter without `funding_policy` gets the engine's provisional conventions, said in each run). A 1.4 adapter that emits the new products needs a backend on 1.4: an older one rejects those `trade_terms` units (`bad_value` of `product_kind`), as with `FUTURES`.
   - A new enum value (`FUTURES`) is a minor too: old adapters stay valid. An adapter that emits it needs a backend on 1.2; an older one rejects that book (`bad_value`), never silently re-types it.
 - The adapter's README states the lowest backend version it needs. `desk adapter check` prints the backend version, the SPI, the contract and the adapter fingerprint.
 
-## 10 Private input contract v1 (`private/1.3`)
+## 10 Private input contract v1 (`private/1.4`)
 
 The schemas live in `contract/private/v1/` (one per dataset and reference table, with a header-only CSV template each). The tables below are the design; the schema files are authoritative once written (S7a; `ocp`, `cash_balances`, `pnl_official`, `trade_terms`, `entities`, `funding_rules` since 1.2, and a test keeps each table equal to its schema). They extend contract 1.3 ([DATA_REQUIREMENTS](../DATA_REQUIREMENTS.md) §4) and supersede its templates (below). A dataset without a schema (`trades`, `internal_market`) is declared but its sources are rejected with `dataset_not_supported` until its slice.
 
@@ -396,10 +396,13 @@ The kit reports the share of PnL lines that join a position.
 ### `trade_terms` — stock; usually `full_snapshot`, scope `["book_id"]`, `covers = listed` (since 1.2)
 
 The economic terms of OTC trades the backend values itself from terms instead of taking the report's PV (adapter
-phase A9): their rates risk, the currency PV of their legs for the OCP, a reconciliation of PV. 1.2 defines FX
-forwards, NDFs and FX swaps; swaps (IRS, OIS, CCS), REPO and HTM purchase terms are later minors (drafts below).
-One row per trade, or per leg (`leg_id`) where a trade has several exchanges. A trade missing from a later
-snapshot of its book has matured or been closed. Key: (`trade_id`, `leg_id`).
+phase A9): their rates risk, the currency PV of their legs for the OCP, a reconciliation of PV; and the terms of
+the deals the funding engine funds at their own rate. 1.2 defines FX forwards, NDFs and FX swaps; 1.4 adds interest
+rate swaps (`irs`, `ois`), cross-currency swaps (`ccs`), REPO (`repo`) and HTM purchases (`bond_purchase`).
+One row per trade, or per leg (`leg_id`) where a trade has several exchanges or legs. A trade missing from a later
+snapshot of its book has matured or been closed. Key: (`trade_id`, `leg_id`). Amounts are unsigned: `side` gives
+the direction. Which fields a product needs is listed under the table; a field a product does not use is left
+out.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -409,23 +412,58 @@ snapshot of its book has matured or been closed. Key: (`trade_id`, `leg_id`).
 | `book_id` ● | str | |
 | `entity` | str | When the report has it |
 | `position_id` | str | The `positions` row this trade is valued under, when not its `trade_id` |
-| `product_kind` ● | enum | `fx_forward` (one exchange on `value_date`: a deliverable outright, or an NDF with `ndf`), `fx_swap` (one row per leg). Later minors add more |
+| `product_kind` ● | enum | `fx_forward` (one exchange on `value_date`: a deliverable outright, or an NDF with `ndf`), `fx_swap` (one row per leg); since 1.4 `irs` (a single-currency swap whose floating leg is not an overnight compounded index, e.g. the key rate average), `ois` (a single-currency swap on a compounded overnight index, e.g. RUONIA), `ccs` (a cross-currency swap), one row per leg; `repo` (one row per deal, both legs); `bond_purchase` (one HTM purchase lot) |
 | `source_product` | str | The report's own product code, as reported |
 | `trade_date` ● | date | |
 | `value_date` | date | The exchange's settlement date; for an NDF the settlement date of the difference. Required for every product of 1.2 |
 | `base_ccy`, `quote_ccy` | str | The pair: `contract_rate` is `quote_ccy` per one `base_ccy` (USD/RUB: base USD, quote RUB). Required for every product of 1.2 |
-| `side` | enum | `buy`, `sell`: the desk buys or sells `base_ccy` on `value_date` (and pays or receives `quote_ccy`). Required for every product of 1.2 |
+| `side` | enum | FX: `buy`, `sell`: the desk buys or sells `base_ccy` on `value_date` (and pays or receives `quote_ccy`). Required for every product of 1.2. Since 1.4: a swap leg `pay` or `receive` (the desk pays or receives the leg's interest and, with `notional_exchange`, its final notional); a REPO `repo` (the desk borrows cash against the security) or `reverse_repo` (lends cash); a `bond_purchase` `buy` (the default) |
 | `notional_base`, `notional_quote` | num | Unsigned amounts of the two legs, in `base_ccy` and `quote_ccy`. Required for every product of 1.2 |
 | `contract_rate` | num | The agreed rate, `quote_ccy` per `base_ccy`; when absent the backend uses `notional_quote / notional_base` |
 | `ndf` | bool | Non-deliverable: settled by the difference against the fixing, in `settle_ccy` (default false) |
 | `settle_ccy` | str | NDF: the settlement currency |
 | `fixing_date` | date | NDF: the fixing date; an NDF without it gets a warning `ndf_without_fixing` |
 | `fixing_source` | str | NDF: the fixing as the report names it (a central-bank rate, an exchange fixing); the backend maps it to a hub fixing |
+| `ccy` | str | Since 1.4: the currency of the row's amounts: a swap leg's currency, a REPO's cash, a purchase's face and accrued |
+| `notional_ccy` | num | Since 1.4: a swap leg's notional; a REPO's cash amount of the first leg |
+| `start_date` | date | Since 1.4: a swap leg's effective date (start of the first accrual period); a REPO's first-leg settlement |
+| `maturity_date` | date | Since 1.4: a swap leg's end date as the trade states it; a REPO's second-leg date (absent: an open REPO) |
+| `fixed_rate_pct` | num | Since 1.4: a fixed leg's rate; a fixed-rate REPO's rate |
+| `index_code` | str | Since 1.4: a floating leg's or floating REPO's index, as the hub's fixing index code (`KEY_RATE`, `RUONIA`, ...) the adapter maps the report's name to (as in `funding_rules`) |
+| `spread_bp` | num | Since 1.4: added to `index_code`; absent: 0 |
+| `payment_frequency` | str | Since 1.4: a swap leg's period between payments, a tenor `<n>D`, `<n>W`, `<n>M` or `<n>Y`, or `term` (one payment at maturity) |
+| `day_count` | enum | Since 1.4: `ACT/365` (fixed), `ACT/360`, `ACT/ACT` (ISDA), `30/360`, of a leg's or REPO's interest; absent: the backend's convention of the index or currency |
+| `notional_exchange` | enum | Since 1.4, `ccs`: `none`, `final`, `initial_and_final`: which notional exchanges the leg has; absent: not stated |
+| `source_instrument_id`, `source_instrument_name`, `isin`, `regnum`, `moex_secid`, `instrument_id` | str | Since 1.4: a REPO's security, a purchase's bond, as in `positions` (§6.1: `instrument_id` only from `ctx.instruments.lookup`) |
+| `quantity` | num | Since 1.4: number of bonds of a REPO's security or a purchase |
+| `face_amount_ccy` | num | Since 1.4: number of bonds × initial face, of a REPO's security or a purchase |
+| `purchase_price_pct`, `purchase_yield_pct` | num | Since 1.4, `bond_purchase`: the clean purchase price in % of the current face, and the yield at it, as in `positions` |
+| `contract_rate_pct` | num | Since 1.4, `bond_purchase`: the contract rate the lot is funded at, as in `positions` |
+| `purchase_accrued_ccy` | num | Since 1.4, `bond_purchase`: the accrued interest paid at purchase, for the whole lot, as in `positions` |
 | `counterparty_id` | str | As in the report or the adapter's mapping |
 | `pv_rub` | num | Reconciliation: the PV as the bank's system reports it |
 
-A row of 1.2 without `value_date`, `base_ccy`, `quote_ccy`, `side` or a notional is a `missing_required` error for
-its unit, as is an `fx_swap` row without `leg_id`; `base_ccy` = `quote_ccy` is `bad_value`.
+Rules beyond the schema (`desk.inbox.validate`), each an `error` for the row's unit unless said otherwise:
+- `fx_forward`, `fx_swap` (1.2): without `value_date`, `base_ccy`, `quote_ccy`, `side` or a notional
+  `missing_required`, as is an `fx_swap` row without `leg_id`; `base_ccy` = `quote_ccy` is `bad_value`; an NDF
+  without `fixing_date` a warning `ndf_without_fixing`.
+- `irs`, `ois`, `ccs` (1.4): a row is one leg and needs `leg_id`, `side` (`pay`, `receive`), `ccy`, `notional_ccy`,
+  `start_date` and `maturity_date` (`missing_required`), and exactly one of `fixed_rate_pct` (a fixed leg) and
+  `index_code` (a floating leg). A trade needs a `pay` and a `receive` leg (`missing_required`); the legs of an `irs`
+  or `ois` are in one currency, those of a `ccs` in two, and all rows of a `trade_id` have one `product_kind`
+  (`bad_value`).
+- `repo` (1.4): needs `side` (`repo`, `reverse_repo`), `ccy`, `notional_ccy`, `start_date` and exactly one of
+  `fixed_rate_pct` and `index_code`; a REPO without any instrument field is a warning `repo_without_security` (the
+  funding engine needs it for `funding_policy.repo_rate` `security`).
+- `bond_purchase` (1.4): needs `ccy`, `purchase_price_pct`, one instrument field and `quantity` or `face_amount_ccy`.
+  The purchase date is `trade_date`, its settlement `value_date`.
+- Every product: `side` of another product is `bad_value`, as is a negative `notional_ccy`, `quantity` or
+  `face_amount_ccy`, a non-zero `spread_bp` with `fixed_rate_pct`, and `maturity_date` not after `start_date`.
+
+Status 23.10.2026: the backend validates and stores the 1.4 rows (`dataset_rows`); valuation reads only the FX kinds
+(`valuation.derivatives`), so swaps from terms come with their slice (FlyingScotman/trading-desk-monitor#45), the funding of REPO and HTM lots from
+terms with the funding engine (FlyingScotman/trading-desk-monitor#55). The typed view `trade_terms_row` has the 1.4 fields as columns after the 1.2
+ones (migration 0020); every field is also in its `data`.
 
 ### `trades` — flow; `full_snapshot` per book for cumulative exports, or `increment` for deltas; `time_basis = intraday`
 
@@ -570,25 +608,24 @@ prototype `tdm`; for the backend the private contract replaces them:
 | `funding_rates.csv` | `reference()["funding_rules"]` (its selectors `book_type`, `book_id`, `entity`, `instrument_id`, `ccy` and rate `index_name` + `spread_bp` or `fixed_rate` carry over) |
 | `cash_balances.csv` | `cash_balances` |
 | `pnl_official.csv` | `pnl_official` |
-| `otc_deals.csv` | `trade_terms` (FX forwards since 1.2; swaps, CCS, CDS: later minors) and `positions` (`otc` rows with the report's PV and risk) |
-| `funding.csv` (REPO and funding deals) | `trade_terms` (REPO: a later minor) |
+| `otc_deals.csv` | `trade_terms` (FX forwards since 1.2; IRS, OIS, CCS since 1.4; CDS: a later minor) and `positions` (`otc` rows with the report's PV and risk) |
+| `funding.csv` (REPO and funding deals) | `trade_terms` (REPO since 1.4) |
 | `trades.csv` | `trades` |
 
-### Drafts (not in 1.2)
+### Drafts (not in 1.4)
 
 Designs agreed in direction, without a schema yet; each becomes a minor with its slice:
 
-- `trade_terms` for swaps (adapter A9): `product_kind` `irs`, `ois`, `ccs`, one row per leg (`leg_id` `pay`/`receive`)
-  with `notional`, `ccy`, `fixed_rate_pct` or `index_code` + `spread_bp`, `start_date`, `maturity_date`, payment
-  frequency and day count; REPO: `product_kind` `repo`, the security (`instrument_id`/`isin`), `repo_rate_pct`,
-  dates of both legs; HTM purchases: `product_kind` `bond_purchase` with purchase date, price and contract rate.
+- Done in 1.4: `trade_terms` for swaps, REPO and HTM purchases (above). The official names: a leg's direction is
+  `side` (`pay`, `receive`) and `leg_id` is the adapter's own code of the leg; the amount is `notional_ccy` (units in
+  names); a rate, of a swap leg and of a REPO alike, is `fixed_rate_pct` or `index_code` + `spread_bp`.
 - `price_policy` (adapter A10), a reference table: per security (`instrument_id`, falling back to `isin`) a `policy`
   (`sticky_internal`: the last internal EOD price holds until the next one and the hub's price does not replace it
   intraday), with `valid_from`. A security without a hub price is valued only at the internal price, else down the
   ladder with a warning.
 - Extra spreads by bond class for `funding_rules` (the engine's `ExtraSpread`): a new table or selector, once the
   rules are settled. (The REPO policy, the security's rate or the contract rate from a term threshold, is
-  `funding_policy` since 1.3; the REPO deals themselves still need `trade_terms` `repo`.)
+  `funding_policy` since 1.3; the REPO deals themselves are `trade_terms` `repo` since 1.4.)
 - `trades`, `internal_market`: as designed above, with S13 and S10.
 
 The backend's current `desk load-positions` CSV (`position_id, book_id, secid, quantity_bonds`) stays for the synthetic books. The reference adapter reads canonical v1 CSV.
@@ -605,7 +642,7 @@ The backend's current `desk load-positions` CSV (`position_id, book_id, secid, q
 | **I6 Trades** | S13 | A6 | intraday book = opening positions + trades |
 | **I7 Settings and rules** | `settings_tabs` (§4) on the settings page; `reference()` `entities`, `funding_rules` (1.2) and `funding_policy` (1.3) validated and stored (§7); the generic funding engine reads them in every run (B1: `publish.funding_run`) | A7: the tabs, `entities.json`, `funding.json` (rules and the `funding_policy` conventions), FUTURES books, `purchase_accrued_ccy` of HTM rows | the tabs open and save; the engine's funding of a synthetic book on synthetic rules equals a hand calculation (`test_funding_run.py`) |
 | **I8 Cash balances** | `cash_balances` schema, storage and multi-date history (§6.1, 1.2); funding of cash-funded books (S9) | A8 | a day's balances equal the report; a history file fills the past dates; two ledgers side by side |
-| **I9 Trade terms** | `trade_terms` schema and storage (1.2, FX); valuation from terms by core (S14) | A9 | PV of FX forwards from terms vs `pv_rub`; the currency PV of legs enters the derived OCP |
+| **I9 Trade terms** | `trade_terms` schema and storage (1.2, FX; 1.4 swaps, REPO, HTM purchases); valuation from terms by core (S14) | A9 | PV of FX forwards from terms vs `pv_rub`; the currency PV of legs enters the derived OCP |
 | **I10 Price policy** | `price_policy` (draft, §10) and the sticky internal price with S10 | A10 | a security on the list keeps its internal price intraday |
 
 Each point is done when the kit passes on the synthetic fixtures **and** the owner's dry run at work shows no `error` issues.

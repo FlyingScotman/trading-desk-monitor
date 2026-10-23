@@ -491,15 +491,21 @@ CURRENT_RUNS = ("SELECT DISTINCT ON (business_date) run_id FROM run"
                 " ORDER BY business_date, run_type = 'EOD' DESC, cut_type = 'eod_final' DESC, completed_at DESC,"
                 " run_id DESC")
 
-CUT_LABELS = {"intraday": "внутри дня", "eod_preliminary": "закрытие предв.", "eod_final": "закрытие"}
+CUT_LABELS = {"intraday": "внутри дня", "eod_preliminary": "закрытие предв.", "eod_final": "закрытие",
+              "prev_close": "закрытие пред. дня"}
 
 
 def slice_label(business_date: date | str, cut_type: str | None, cut_ts: datetime | str | None = None,
-                run_type: str | None = None) -> str:
+                run_type: str | None = None, market_close: dict[str, str] | None = None) -> str:
     """The run's market slice as the pages name it: «20.10 14:30 МСК · внутри дня», «19.10 · закрытие предв.»,
-    «19.10 · закрытие»; a TEST or REPLAY run adds its type."""
+    «19.10 · закрытие»; a TEST or REPLAY run adds its type. The morning run (cut ``prev_close``, #21: the book of
+    the date on the previous close, lineage ``market_close`` {date, cut_type}): «20.10 · закрытие 19.10»."""
     d = date.fromisoformat(business_date) if isinstance(business_date, str) else business_date
     day = f"{d:%d.%m}"
+    if cut_type == "prev_close" and market_close and market_close.get("date"):
+        md = date.fromisoformat(market_close["date"])
+        label = f"{day} · {CUT_LABELS.get(market_close.get('cut_type') or '', 'закрытие')} {md:%d.%m}"
+        return label + (f" · {run_type}" if run_type in ("TEST", "REPLAY") else "")
     if cut_type == "intraday" and cut_ts:
         ts = datetime.fromisoformat(cut_ts) if isinstance(cut_ts, str) else cut_ts
         day += f" {ts.astimezone(MSK):%H:%M} МСК"
@@ -559,9 +565,23 @@ def carried_spreads(con: psycopg.Connection, before: date) -> dict[str, CarriedS
             for s, z, d, rid, src, c in rows if math.isfinite(z)}
 
 
+RUN_EVENT_SQL = ("INSERT INTO event (type, valid_date, run_id, detail)"
+                 " SELECT %s, business_date, run_id, jsonb_build_object('run_type', run_type, 'cut_type', cut_type,"
+                 " 'supersedes_run_id', supersedes_run_id, 'cut_ts', cut_ts) FROM run WHERE run_id = ANY(%s)")
+
+
+def run_event(con: psycopg.Connection | psycopg.Cursor, type_: str, run_ids: list[int]) -> None:
+    """The feed's event of runs (migration 0019, ``desk.daystatus``): ``run.published`` when a run completes (in its
+    transaction), ``run.failed`` when it fails or is reaped; the run's date, type, cut and the run it supersedes."""
+    if run_ids:
+        con.execute(RUN_EVENT_SQL, (type_, list(run_ids)))
+
+
 def reap_orphans(con: psycopg.Connection, older_than: timedelta = timedelta(hours=1)) -> list[int]:
     """Runs still loading after ``older_than`` (a crashed or killed publisher) become failed."""
-    return [r[0] for r in con.execute(
+    ids = [r[0] for r in con.execute(
         "UPDATE run SET status = 'failed', error = 'orphaned: still loading after ' || %s::interval || ', reaped' "
         "WHERE status = 'loading' AND started_at < now() - %s::interval RETURNING run_id",
         (older_than, older_than))]
+    run_event(con, "run.failed", ids)
+    return ids
