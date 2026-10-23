@@ -146,10 +146,11 @@ def latest_run(con: psycopg.Connection) -> dict[str, Any] | None:
 class CycleLock:
     """The inter-process cycle lock ``<home>/cycle.lock``, non-blocking. ``msvcrt.locking`` on Windows,
     ``fcntl.flock`` elsewhere; the operating system releases it when the process dies, so a crashed cycle leaves
-    no stale lock. Two opens of the file exclude each other within one process too."""
+    no stale lock. Two opens of the file exclude each other within one process too. ``name``: another lock file of
+    the home folder (``desk.backup``'s ``backup.lock``)."""
 
-    def __init__(self, home: Path) -> None:
-        self.path = Path(home) / LOCK_FILE
+    def __init__(self, home: Path, name: str = LOCK_FILE) -> None:
+        self.path = Path(home) / name
         self._f: Any = None
 
     def acquire(self) -> bool:
