@@ -28,7 +28,7 @@ from rub_fixed_income import __version__ as CORE_VERSION
 from rub_fixed_income import portfolio_result_to_json
 
 from .. import __version__ as BACKEND_VERSION
-from .. import logic_version
+from .. import logic_version, store
 from ..marketdata.adapter import MarketView
 from ..orchestrator import EodContext, Outcome
 from ..store import PositionInputs
@@ -124,6 +124,7 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
     except Exception as e:
         con.execute("UPDATE run SET status = 'failed', error = %s WHERE run_id = %s",
                     (f"{type(e).__name__}: {e}"[:4000], run_id))
+        store.run_event(con, "run.failed", [run_id])
         raise
     return run_id, "complete", [m for level, m in content.log if level == "WARN"]
 
@@ -176,3 +177,4 @@ def _write(cur: psycopg.Cursor, run_id: int, positions: list[tuple[str, str, Out
                     [(run_id, s.secid, s.business_date, s.z_spread_bp, s.source) for s in spreads])
     cur.execute("UPDATE run SET status = 'complete', completed_at = now(), coverage = %s, totals = %s "
                 "WHERE run_id = %s", (_jsonb(coverage), _jsonb(totals), run_id))
+    store.run_event(cur, "run.published", [run_id])
