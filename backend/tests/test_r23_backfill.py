@@ -94,6 +94,29 @@ def test_logic_change_but_not_a_new_build_recomputes(tmp_path, cache, store_url,
     assert backfill.same_logic("0.1.0+v7+core1+build1", "0.1.0+v7+core1") and not backfill.same_logic("a+v6", "a+v7")
 
 
+def test_a_release_without_logic_changes_does_not_recompute_the_history(tmp_path, cache, store_url, monkeypatch):
+    """Issue #24: a new backend version (a release) with the same VALUATION_VERSION and core leaves the history alone;
+    the dates stamped by the older release count as current."""
+    import desk
+
+    load(store_url, tmp_path, "2026-10-14", 10)
+    s = settings(tmp_path, cache, store_url)
+    monkeypatch.delenv("DESK_BUNDLE_VERSION", raising=False)
+    with store.connect(store_url) as con:
+        backfill.run(s, backfill.plan(con, s, date(2026, 10, 14), date(2026, 10, 15)), store_url=store_url,
+                     out=lambda line: None)
+        monkeypatch.setattr(desk, "__version__", "9.9.9")  # the next release, same valuation and core
+        monkeypatch.setenv("DESK_BUNDLE_VERSION", "9.9.9-20261101-abc")
+        assert not backfill.plan(con, s, date(2026, 10, 14), date(2026, 10, 15)).todo
+    lv = desk.logic_version()
+    assert backfill.same_logic(lv, lv.replace("9.9.9", "0.2.3", 1).split("+build")[0] + "+build0.2.3-x")
+    assert not backfill.same_logic(lv, lv.replace(f"+v{desk.VALUATION_VERSION}", f"+v{desk.VALUATION_VERSION + 1}"))
+    assert not backfill.same_logic(lv, lv.replace("+core", "+core9", 1))
+    assert backfill.same_logic("0.2.3+v11+core0.35.0", "0.2.4+v11+core0.35.0+build0.2.4-20261022")
+    assert not backfill.same_logic("0.2.4+v11+core0.35.0", "0.2.4+v11+core0.36.0")
+    assert not backfill.same_logic("0.2.4+v11+core0.35.0", None) and backfill.same_logic(None, None)
+
+
 def test_a_failed_date_is_not_retried_on_the_same_inputs(tmp_path, cache, store_url, monkeypatch):
     load(store_url, tmp_path, "2026-10-14", 10)
     s = settings(tmp_path, cache, store_url)
@@ -114,6 +137,40 @@ def test_a_failed_date_is_not_retried_on_the_same_inputs(tmp_path, cache, store_
             ("2026-10-14", "failed"), ("2026-10-15", "done")]
         st = backfill.status(con, s, today=date(2026, 10, 15))
     assert st["failed"] == 1 and st["failed_dates"] == ["2026-10-14"] and st["oldest_run"] == "2026-10-15"
+
+
+def test_a_failed_date_is_retried_once_after_an_upgrade(tmp_path, cache, store_url, monkeypatch):
+    """#155: a date remembered as failed (``backfill.json``) on one program version is tried again once on the next
+    (another bundle VERSION: another ``logic_version()``), and stays failed within a version."""
+    load(store_url, tmp_path, "2026-10-14", 10)
+    s = settings(tmp_path, cache, store_url)
+    real = cli.eod_run
+    tried: list[str] = []
+
+    def flaky(settings, d, **kw):
+        tried.append(d)
+        if d == "2026-10-14":
+            raise ValueError("bad bundle")
+        return real(settings, d, **kw)
+
+    def status(con) -> dict[str, str]:
+        p = backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15))
+        return {d.date: d.status for d in p.days if d.status != "no_positions"}
+
+    monkeypatch.setattr(cli, "eod_run", flaky)
+    monkeypatch.setenv("DESK_BUNDLE_VERSION", "0.2.4-20261022-aaaaaaa")
+    with store.connect(store_url) as con:
+        backfill.run(s, backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15)), store_url=store_url,
+                     out=lambda line: None)
+        assert status(con) == {"2026-10-14": "failed", "2026-10-15": "done"}
+        monkeypatch.setenv("DESK_BUNDLE_VERSION", "0.2.5-20261023-bbbbbbb")  # the fixed program installed
+        assert status(con) == {"2026-10-14": "todo", "2026-10-15": "done"}  # the same build-less logic: 15.10 kept
+        monkeypatch.setattr(cli, "eod_run", lambda settings, d, **kw: (tried.append(d), real(settings, d, **kw))[1])
+        res = backfill.run(s, backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15)), store_url=store_url,
+                           out=lambda line: None)
+        assert res["done"] == ["2026-10-14"] and not res["failed"]
+        assert status(con) == {"2026-10-14": "done", "2026-10-15": "done"}
+    assert tried == ["2026-10-14", "2026-10-15", "2026-10-14"]
 
 
 @pytest.mark.parametrize("error", [

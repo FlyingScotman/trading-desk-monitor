@@ -38,6 +38,14 @@ class Pages(unittest.TestCase):
             self.assertIn("lib/instr.js", src, f.name)
             self.assertLess(src.index("lib/kit.js"), src.index("lib/instr.js"), f.name)
 
+    def test_day_status_polls_the_feed_from_an_empty_store(self):
+        # C14 (#25): на свежей базе событий нет (last_event_id = null); курсор ленты тогда 0, иначе опрос
+        # /api/v1/events?after= не начнётся и уведомления о первых событиях не придут
+        src = (PROTO / "concepts" / "c14-day-status.html").read_text(encoding="utf-8")
+        self.assertIn("lastId = d.last_event_id == null ? 0 : d.last_event_id", src)
+        self.assertRegex(src, r"function poll\(\) \{\s*if \(document\.hidden \|\| lastId == null\) return;")
+        self.assertIn("'api/v1/events?after=' + lastId", src)
+
     def test_monitor_tables_sort_groups_like_ordinary_fields(self):
         # R31: группы таблиц (валюта → эмитент…) сортируются щелчком по столбцу, как обычные поля, — общим правилом
         # KIT.groupKeys; ни один монитор не упорядочивает группы только своим порядком уровня
@@ -106,6 +114,78 @@ class Pages(unittest.TestCase):
         users = (PROTO / "users.html").read_text(encoding="utf-8")
         self.assertIn("settings.html#users", users)
         self.assertIn("/settings.html#users", (PROTO / "desk-auth.js").read_text(encoding="utf-8"))
+
+
+
+# Страницы открываются на рабочей машине без интернета: ни одного внешнего запроса при загрузке (#79). Шрифты лежат в
+# prototypes/fonts/ (OFL, @fontsource), сервер отдаёт их как /fonts/…; внешние ссылки <a href> — не загрузка, их можно
+# оставлять: браузер идёт по ним только по щелчку. Запросы из скриптов (fetch, EventSource, WebSocket) — загрузка
+SERVED = [PROTO, ROOT / "frontend" / "index.html", ROOT / "frontend" / "src", ROOT / "frontend" / "dist"]
+ASSET_EXT = {".html", ".css", ".js", ".ts", ".tsx"}
+CDN = re.compile(r"fonts\.googleapis\.com|fonts\.gstatic\.com|cdn\.jsdelivr\.net|unpkg\.com|cdnjs\.cloudflare\.com")
+EXTERNAL_LOAD = [
+    re.compile(r"<(?:link|script|img|iframe|source|audio|video)\b[^>]*\b(?:href|src)\s*=\s*[\"']?(?:https?:)?//", re.IGNORECASE),
+    re.compile(r"@import\s+(?:url\(\s*)?[\"']?(?:https?:)?//", re.IGNORECASE),
+    re.compile(r"url\(\s*[\"']?(?:https?:)?//", re.IGNORECASE),
+    re.compile(r"\b\w*fetch\(\s*[\"'`](?:https?:)?//", re.IGNORECASE),  # fetch('https://…'), ghFetch("http…")
+    re.compile(r"\bnew\s+(?:EventSource|WebSocket)\(\s*[\"'`](?:https?:|wss?:)?//"),
+]
+# Узкие исключения: файл → адреса, которые ему пока можно запрашивать. desk-updater.js — до #138: проверка
+# обновлений ходит в GitHub из браузера при загрузке страницы (автопроверка включена по умолчанию); после
+# исправления #138 исключение убрать
+ALLOWED = {
+    "prototypes/desk-updater.js": re.compile(
+        r"(?:https?:)?//(?:api\.github\.com|github\.com|release-assets\.githubusercontent\.com)/"),
+}
+FONTS = PROTO / "fonts"
+
+
+def served_assets():
+    for root in SERVED:
+        files = [root] if root.is_file() else sorted(root.rglob("*"))
+        for f in files:
+            if f.is_file() and f.suffix in ASSET_EXT and "node_modules" not in f.parts:
+                yield f
+
+
+class Offline(unittest.TestCase):
+    def test_no_external_urls_in_served_assets(self):
+        found = []
+        for f in served_assets():
+            text = f.read_text(encoding="utf-8", errors="replace")
+            name = f.relative_to(ROOT).as_posix()
+            allowed = ALLOWED.get(name)
+            for rx in [CDN, *EXTERNAL_LOAD]:
+                for m in rx.finditer(text):
+                    if allowed and allowed.match(text, m.end() - 2):  # m заканчивается на «//»
+                        continue
+                    found.append(f"{name}: {m.group(0)[:80]}")
+        self.assertEqual(found, [], "внешние запросы при загрузке страницы")
+
+    def test_local_fonts_are_complete(self):
+        css = (FONTS / "fonts.css").read_text(encoding="utf-8")
+        urls = re.findall(r"url\(([^)]+)\)", css)
+        self.assertTrue(urls)
+        for u in urls:
+            self.assertTrue(u.startswith("files/") and u.endswith(".woff2"), u)
+            self.assertTrue((FONTS / u).is_file(), u)
+        self.assertEqual(sorted(p.name for p in (FONTS / "files").iterdir()), sorted({u[6:] for u in urls}))
+        families = set(re.findall(r"font-family: '([^']+)'", css))
+        for fam in families:  # лицензия рядом со шрифтом (OFL 1.1 требует её при распространении)
+            lic = FONTS / "licenses" / (fam.lower().replace(" ", "-") + ".txt")
+            self.assertIn("SIL Open Font License", lic.read_text(encoding="utf-8"), fam)
+
+    def test_pages_link_the_local_fonts(self):
+        css = (FONTS / "fonts.css").read_text(encoding="utf-8")
+        pages = {PROTO / n: "fonts/fonts.css" for n in DATA_PAGES}
+        pages[PROTO / "concepts" / "index.html"] = "../fonts/fonts.css"
+        pages[ROOT / "frontend" / "index.html"] = "../fonts/fonts.css"  # /app/ → /fonts/ (как ../desk-nav.js)
+        pages[ROOT / "frontend" / "dist" / "index.html"] = "../fonts/fonts.css"
+        for page, href in pages.items():
+            html = page.read_text(encoding="utf-8")
+            self.assertIn(f'<link rel="stylesheet" href="{href}">', html, page)
+            for fam in re.findall(r'"((?:IBM Plex|Golos|Onest|JetBrains)[^"]*)"', html):
+                self.assertIn(f"font-family: '{fam}'", css, f"{page.name}: {fam}")
 
 
 if __name__ == "__main__":

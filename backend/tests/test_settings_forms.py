@@ -8,12 +8,14 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from collections.abc import Iterator
 from pathlib import Path
 
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
+from desk import settings_forms
 from desk.api.app import create_app
 from desk.inbox import scan
 from desk.settings_forms import check_schema, file_text
@@ -23,7 +25,7 @@ TABS = json.loads((FIX / "tda_settings_tabs.json").read_text(encoding="utf-8"))
 SCHEMA = {t["id"]: t["schema"] for t in TABS}
 FILES = ["books.json", "entities.json", "funding.json", "options.json"]
 
-ADAPTER = '''import json, os
+ADAPTER = '''import json, os, time
 SPI_VERSION = 1
 _HERE = os.path.dirname(__file__)
 TABS = json.load(open(os.path.join(_HERE, "tabs.json"), encoding="utf-8"))
@@ -53,6 +55,12 @@ def _rows(ctx, name, key):
 
 
 def reference(ctx):
+    _calls = os.path.join(os.path.dirname(_HERE), "reference_calls.log")  # outside the package: not fingerprinted
+    with open(_calls, "a", encoding="utf-8") as f:
+        f.write("%d\\n" % os.getpid())
+    _sleep = os.path.join(os.path.dirname(_HERE), "reference_sleep.txt")
+    if os.path.isfile(_sleep):
+        time.sleep(float(open(_sleep, encoding="utf-8").read()))
     books = [{k: v for k, v in b.items() if k != "codes"} for b in _rows(ctx, "books.json", "books") or []]
     ids = {b["book_id"] for b in books}
     issues = [{"severity": "warning", "code": "unknown_ocp_to", "src": b["_src"], "scope": {"book_id": b["book_id"]},
@@ -66,7 +74,7 @@ def reference(ctx):
 
 
 @pytest.fixture
-def home(tmp_path: Path, monkeypatch) -> Path:
+def home(tmp_path: Path, monkeypatch) -> Iterator[Path]:
     h = tmp_path / "home"
     monkeypatch.setenv("DESK_HOME", str(h))
     monkeypatch.setenv("DESK_ENV_FILE", str(tmp_path / "none.env"))
@@ -82,7 +90,9 @@ def home(tmp_path: Path, monkeypatch) -> Path:
         shutil.copy(FIX / name, cfg / name)
     (h / "settings.json").write_text(json.dumps({"private_adapter": str(pkg)}), encoding="utf-8")
     scan.forget_adapters()
-    return h
+    settings_forms.reset()
+    yield h
+    settings_forms.reset()
 
 
 def _client(url: str) -> TestClient:
@@ -167,6 +177,51 @@ def test_check_reports_schema_then_the_adapters_dry_run(client: TestClient, home
     assert not j["ok"] and any(i["code"] == "duplicate_key" and i["new"] for i in j["adapter"])
     assert client.post("/api/v1/adapter/settings/nope/check", json={"data": {}}).status_code == 404
     assert client.post("/api/v1/adapter/settings/books/check", json={}).status_code == 422
+
+
+def _calls(home: Path) -> list[str]:
+    log = home.parent / "reference_calls.log"
+    return log.read_text(encoding="utf-8").split() if log.exists() else []
+
+
+def test_check_runs_the_current_files_once_until_they_change(client: TestClient, home: Path) -> None:
+    """B2-11: the dry run of the current files is cached until the adapter or its config folder changes (one
+    ``reference()`` per check instead of two), and both runs go to one long-lived child, where the adapter may keep
+    caches of its own between calls (08 §2)."""
+    doc = books(home)
+    doc["books"][1]["ocp_to"] = "NOPE"
+    j = client.post("/api/v1/adapter/settings/books/check", json={"data": doc}).json()
+    assert j["adapter_checked"] and len(_calls(home)) == 2
+    doc["books"][1]["ocp_to"] = "NOPE2"
+    j = client.post("/api/v1/adapter/settings/books/check", json={"data": doc}).json()
+    assert j["adapter_checked"] and len(_calls(home)) == 3  # the current files' run is not repeated
+    assert any(i["code"] == "unknown_ocp_to" and i["new"] for i in j["adapter"])
+    assert len(set(_calls(home))) == 1  # one warm child for all of them
+    assert client.put("/api/v1/adapter/settings/books", json={"data": doc}).status_code == 200
+    j = client.post("/api/v1/adapter/settings/books/check", json={"data": doc}).json()
+    assert len(_calls(home)) == 5  # the files changed: the current files are run again
+    assert j["adapter_checked"] and not any(i["new"] for i in j["adapter"])  # the saved warning is now an old one
+
+
+def test_check_timeout_is_a_setting_and_never_blocks_a_save(client: TestClient, home: Path) -> None:
+    """B2-11: a slow ``reference()`` gives a plain reason (``adapter_error_code`` timeout with the limit, a setting),
+    the check does not wait twice for it, and the save does not depend on the check."""
+    settings = json.loads((home / "settings.json").read_text(encoding="utf-8"))
+    (home / "settings.json").write_text(json.dumps({**settings, "adapter_check_timeout_s": 0.3}), encoding="utf-8")
+    (home.parent / "reference_sleep.txt").write_text("1.0", encoding="utf-8")
+    doc = books(home)
+    doc["books"][0]["name"] = "Медленная"
+    j = client.post("/api/v1/adapter/settings/books/check", json={"data": doc}).json()
+    assert j["ok"] and not j["adapter_checked"] and j["schema"] == []
+    assert (j["adapter_error_code"], j["adapter_timeout_s"]) == ("timeout", 0.3)
+    assert len(_calls(home)) == 1  # the current files timed out: the candidate is not tried with the same limit
+    j = client.post("/api/v1/adapter/settings/books/check", json={"data": doc, "adapter": False}).json()
+    assert j["ok"] and not j["adapter_checked"] and j["adapter_error_code"] is None and len(_calls(home)) == 1
+    assert client.put("/api/v1/adapter/settings/books", json={"data": doc}).status_code == 200  # saved unchecked
+    (home / "settings.json").write_text(json.dumps({**settings, "adapter_check_timeout_s": 20}), encoding="utf-8")
+    doc["books"][0]["name"] = "Медленная 2"
+    j = client.post("/api/v1/adapter/settings/books/check", json={"data": doc}).json()
+    assert j["adapter_checked"] and j["adapter_error_code"] is None and j["adapter_timeout_s"] == 20
 
 
 def test_save_validates_guards_against_a_concurrent_edit_and_survives_no_store(client: TestClient, home: Path) -> None:

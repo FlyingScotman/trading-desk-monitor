@@ -318,7 +318,7 @@ def _gather(con: psycopg.Connection, period: F.AccrualPeriod, content_rows: list
     cash, units = _cash(con, period.end, inputs.known_at, books, [] if on_prev else problems)
     prev_cash, _ = _cash(con, period.start, inputs.known_at, books, problems if on_prev else []) \
         if cash is not None else (None, [])
-    notes.append("РЕПО: условий сделок РЕПО в контракте пока нет (08 §10, черновик trade_terms repo): не фондируются")
+    notes.append("РЕПО: условия сделок РЕПО (trade_terms repo, контракт private/1.4) движок пока не читает: не фондируются")
     return _Inputs(current, previous, unknown, lots, cash or [], prev_cash, problems, notes, units, prev_id)
 
 

@@ -867,17 +867,40 @@
   };
 
   /* ---------- проверка на сервере, предпросмотр, сохранение ---------- */
+  SF.checkingText = function (sec) { return 'Проверяю адаптером…' + (sec > 0 ? ' ' + sec + ' с' : ''); };
+  // почему адаптер не проверил файл — простыми словами (ответ /check: adapter_error_code, adapter_timeout_s)
+  SF.adapterReason = function (r) {
+    if (r.adapter_checked) return null;
+    if (r.adapter_error_code === 'timeout') return 'адаптер не успел за ' + r.adapter_timeout_s + ' с: папка с отчётами большая или сеть медленная. Можно сохранить без проверки или увеличить предел («Проверка формы адаптером, секунд» в настройках адаптера)';
+    if (r.adapter_error_code === 'failed') return 'адаптер завершился с ошибкой — подробности в журнале сервера; файл можно сохранить без проверки';
+    if (r.adapter_error_code === 'not_loaded') return 'адаптер не загружен — см. «Адаптер» в настройках';
+    return r.adapter_error ? r.adapter_error : 'проверка адаптером пропущена';
+  };
   F.review = function () {
     var self = this;
     if (this.expert && this.rawError) { if (this.o.showIssue) this.o.showIssue(this.rawError); return; }
-    var body = h('div', {}, h('p', { class: 'mut' }, 'Проверяю: схема формы, затем адаптер читает файл в копии папки настроек…'));
+    var started = Date.now(), ticker = null, done = false;
+    var status = h('p', { class: 'mut' }, SF.checkingText(0));
+    var body = h('div', {}, h('p', { class: 'mut' }, 'Схема формы, затем адаптер читает файл в копии папки настроек. Первая проверка после запуска сервера дольше: адаптер читает отчёты.'), status);
     var foot = h('div', { class: 'row' });
     var d = this.drawer('Проверка и сохранение', this.file, body, foot);
     d.el.classList.add('wide');
+    var stop = function () { done = true; if (ticker) { clearInterval(ticker); ticker = null; } };
+    d.onclose = stop;
+    ticker = setInterval(function () { status.textContent = SF.checkingText(Math.round((Date.now() - started) / 1000)); }, 1000);
+    // не ждать адаптер: сервер проверяет схему и при сохранении (422 при ошибках формы)
+    var skip = h('button', { class: 'ibtn', type: 'button', disabled: !!this.errors().length, onclick: function () {
+      stop(); skip.disabled = true; skip.textContent = 'Сохраняю…';
+      self.save().then(function (res) { d.close(); if (self.o.onSaved) self.o.onSaved(self, res); },
+        function (e) { skip.disabled = false; skip.textContent = 'Сохранить без проверки'; body.prepend(h('div', { class: 'note err' }, e.status === 409 ? 'Файл изменили, пока вы его правили. Закройте окно, нажмите «Отменить» и повторите правку.' : 'Не сохранено: ' + e.message)); });
+    } }, 'Сохранить без проверки');
+    foot.append(skip, h('span', { class: 'sp' }), h('span', { class: 'mut3' }, this.errors().length ? 'Сначала исправьте ошибки формы.' : 'Сохранить можно, не дожидаясь адаптера.'));
     this.o.api('POST', this.url('settings/' + this.tab.id + '/check'), { data: this.data }).then(function (r) {
+      if (done) return;
+      stop();
       self.check = r; self.render();
       self.renderReview(body, foot, r, d);
-    }, function (e) { body.textContent = ''; body.append(h('div', { class: 'note err' }, 'Проверка не удалась: ' + e.message)); });
+    }, function (e) { if (done) return; stop(); body.textContent = ''; body.append(h('div', { class: 'note err' }, 'Проверка не удалась: ' + e.message)); });
   };
   F.renderReview = function (body, foot, r, d) {
     var self = this, schemaIss = r.schema || [], mine = (r.adapter || []).filter(function (i) { return SF.issueFile(i) === self.file || SF.issueFile(i) === null; });
@@ -887,7 +910,7 @@
     body.textContent = ''; foot.textContent = '';
     var verdict = schemaErr.length ? ['bad', 'Есть ошибки формы — файл не будет сохранён, пока их не исправить.']
       : newErr.length ? ['bad', 'Адаптер не примет этот файл: справочник не обновится, монитор останется на прежних настройках.']
-      : !r.adapter_checked ? ['warn', 'Форма в порядке; адаптером не проверено' + (r.adapter_error ? ': ' + r.adapter_error : '') + '.']
+      : !r.adapter_checked ? ['warn', 'Форма в порядке; адаптером не проверено: ' + SF.adapterReason(r) + '.']
       : ['ok', 'Форма в порядке, адаптер принимает файл.'];
     body.append(h('div', { class: 'verdict ' + verdict[0] }, verdict[1]));
     var row = function (i) {

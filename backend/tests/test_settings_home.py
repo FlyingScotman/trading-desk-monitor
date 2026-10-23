@@ -424,6 +424,17 @@ def test_settings_page_is_served(client: TestClient) -> None:
     assert r.status_code == 200 and "Настройки" in r.text and "/api/v1/settings" in r.text
 
 
+def test_local_fonts_are_served() -> None:
+    """The pages' fonts come from this server (prototypes/fonts/, #79), not from the internet."""
+    c = TestClient(create_app("postgresql://unused"))
+    css = c.get("/fonts/fonts.css")
+    assert css.status_code == 200 and css.headers["content-type"].startswith("text/css")
+    first = css.text.split("url(", 1)[1].split(")", 1)[0]
+    font = c.get(f"/fonts/{first}")
+    assert font.status_code == 200 and font.headers["content-type"] == "font/woff2"
+    assert font.content[:4] == b"wOF2"
+
+
 def test_static_root_from_environment(home: Path, tmp_path: Path, monkeypatch) -> None:
     """The Windows bundle serves app\\prototypes and app\\frontend\\dist through DESK_STATIC_ROOT (start.bat)."""
     root = tmp_path / "app"

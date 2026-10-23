@@ -252,7 +252,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     // список по неделям
     const pt = panel('Все потоки по неделям'); view.appendChild(pt);
     pt.querySelector('.bd').classList.add('flush');
-    K.table(pt.querySelector('.bd'), {
+    K.table(pt.querySelector('.bd'), { viewKey: 'c08-flows-weekly',
       rows: ev, maxHeight: '60vh', sort: [['date', 1]], rowCls: r => r.kind === 'put' ? 'putrow' : '', onRow: r => K.card(r.pos),
       groupBy: [{ key: r => weekStart(r.date), order: (a, b) => a.localeCompare(b), fixed: true, span: 3, label: (k, a) => 'Неделя ' + f.dshort(k) + ' – ' + f.dshort(U.addDays(k, 6)) + (a.some(x => x.kind === 'put') ? '<span class="putb">оферта</span>' : '') + (a.some(x => cbr.has(x.date)) || [...Array(7)].some((_, i) => cbr.has(U.addDays(k, i))) ? '<span class="putb" style="color:var(--neg);border-color:var(--neg)">ЦБ</span>' : '') }],
       columns: [
@@ -319,7 +319,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     // оферты и погашения
     const pt = panel('Оферты, амортизации и погашения выпусков в ' + ccy, '<span class="k-note">купоны — в календаре и на графике</span>'); view.appendChild(pt);
     pt.querySelector('.bd').classList.add('flush');
-    K.table(pt.querySelector('.bd'), {
+    K.table(pt.querySelector('.bd'), { viewKey: 'c08-offers-redemptions',
       rows: C.fxEvents.filter(x => x.ccy === ccy && inH(x.date)).map((x, i) => Object.assign({ id: 'x' + i, val: x.amount }, x)), maxHeight: '55vh', sort: [['date', 1]], rowCls: r => r.kind === 'put' ? 'putrow' : '',
       onRow: r => { if (r.pos) K.card(r.pos); else open(r.name, { secid: r.secid }); },
       columns: [

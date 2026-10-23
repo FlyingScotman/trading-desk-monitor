@@ -68,8 +68,8 @@
   M.asOf = D.asOf;
   M.prevDate = D.prevDate;
   const src = D.source || {};
-  M.run = { id: src.runId, runType: src.runType, slice: src.slice, cutType: src.cutType, publishedAt: src.publishedAt, pnlBasis: src.pnlBasis };
-  M.cut = { type: src.cutType || 'eod_final', time: src.cutTs ? src.cutTs.slice(11, 16) : '', label: src.slice || src.cutType || '' };
+  M.run = { id: src.runId, runType: src.runType, slice: src.slice, cutType: src.cutType, publishedAt: src.publishedAt, pnlBasis: src.pnlBasis, marketDate: src.marketDate || null, marketCutType: src.marketCutType || null };
+  M.cut = { type: src.cutType || 'eod_final', time: src.cutTs ? src.cutTs.slice(11, 16) : '', ts: src.cutTs || null, label: src.slice || src.cutType || '' };
   M.notes = (X.notes || []).slice();
   const runQ = 'run_id=' + encodeURIComponent((D.source || {}).runId || '');
   (D.riskNotes || []).forEach(n => M.notes.push(n.text + (n.detail ? ' (' + n.detail + ')' : '')));
