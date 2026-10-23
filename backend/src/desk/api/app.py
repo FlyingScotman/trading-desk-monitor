@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import mimetypes
 import os
 import re
 import sys
@@ -66,6 +67,8 @@ from .models import (
 )
 
 log = logging.getLogger("desk.api")
+# the local fonts (prototypes/fonts/, #79): Python 3.11's table and a Windows registry may not know .woff2
+mimetypes.add_type("font/woff2", ".woff2")
 
 
 def static_root() -> Path:
