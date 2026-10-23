@@ -2917,6 +2917,20 @@
             ],
             "title": "Failed Dates"
           },
+          "problem_dates": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ProblemDate"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem Dates"
+          },
           "at": {
             "type": "string",
             "title": "At"
@@ -4354,6 +4368,42 @@
           "no_pnl"
         ],
         "title": "PositionPnl"
+      },
+      "ProblemDate": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "title": "Date"
+          },
+          "error": {
+            "type": "string",
+            "title": "Error"
+          },
+          "attempts": {
+            "type": "integer",
+            "title": "Attempts"
+          },
+          "next_attempt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt"
+          }
+        },
+        "type": "object",
+        "required": [
+          "date",
+          "error",
+          "attempts",
+          "next_attempt"
+        ],
+        "title": "ProblemDate",
+        "description": "A hub date whose sync failed and that waits for a retry (#146)."
       },
       "Queued": {
         "properties": {
