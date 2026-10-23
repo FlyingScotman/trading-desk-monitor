@@ -329,6 +329,7 @@ def _not_by_core(o: Outcome, e: dv.NotValued) -> Outcome:
         o.valuation = replace(o.valuation, assumptions=(note, *o.valuation.assumptions))
     o.reason = o.reason or e.reason
     o.detail = o.detail or e.detail
+    o.core_not_valued = (e.reason, e.detail)
     return o
 
 
@@ -345,7 +346,8 @@ def plan(ctx: EodContext, inputs: PositionInputs, *, second_order: bool = True) 
             p.direct[pid] = _core_outcome(v, p.core_result)
         else:
             p.direct[pid] = Outcome(None, None, None, reason=v.reason if v else "not_valued",  # type: ignore[arg-type]
-                                    detail=v.detail if v else "")
+                                    detail=v.detail if v else "",
+                                    core_not_valued=(v.reason, v.detail) if v else ("not_valued", ""))
     for pid, _, secid, qty in inputs.rows:
         x = inputs.extra.get(pid)
         if x is None:  # a legacy row: a bond with secid and quantity
@@ -370,6 +372,8 @@ def plan(ctx: EodContext, inputs: PositionInputs, *, second_order: bool = True) 
             continue
         if kind != "bond":
             o = _otc(ctx, qty, x, kind)
+            if core is None and kind == "otc":  # the report's value only: listed by publish.derivatives_parallel
+                o.core_not_valued = (NO_TERMS, "no trade_terms row names this position")
             p.direct[pid] = _not_by_core(o, core) if core is not None else o
             continue
         notes = []
