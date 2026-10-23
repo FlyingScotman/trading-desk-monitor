@@ -13,7 +13,11 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    snapshot drop folder, when set, is imported too. A hub error is the step's error: the cycle goes on with the
    cache. A date whose snapshot cannot be fetched (a hub error other than 401/403/404, a body that does not verify)
    fails alone (#20): it is named in the step's detail and ``failed_dates`` and asked again next cycle, the other dates
-   are synced and the later steps run; after ``MAX_DATE_FAILURES`` such dates the rest wait for the next cycle. Then the bundles of the cache not loaded yet go into the store's market history (``desk.marketdata.history``:
+   are synced and the later steps run; after ``MAX_DATE_FAILURES`` such dates the rest wait for the next cycle. A
+   failed date is then not asked again for ``RETRY_BACKOFF_S`` (growing with its attempts; per process, forgotten on
+   success) and goes after the other dates when asked again, so a date that stays broken does not take the limit in
+   every cycle (#146); the step lists it in ``problem_dates`` with its error, attempts and next attempt (a date of
+   ``desk cycle --date`` is asked anyway). Then the bundles of the cache not loaded yet go into the store's market history (``desk.marketdata.history``:
    the bond charts; one query when there is nothing new).
 2. **scan**: ``desk inbox scan`` (when inbox folders are set). Sync comes first: a ``start_of_day`` report needs a
    cached calendar covering its date and the day before, otherwise it waits (``waiting_calendar``).
@@ -116,6 +120,8 @@ PRELIM_FROM = dtime(19, 45)   # MSK: the hub's eod_preliminary cut of the day
 POLL_SLOT_S = 600             # the hub is asked for a newer cut of today at most once per 10-minute slot (#20)
 POLL_LAG_S = 300              # slots start 5 min after the cut times (:05, :15, ...): the hub publishes after its cut
 MAX_DATE_FAILURES = 2         # hub dates whose sync failed in a cycle before the rest wait for the next cycle (#20)
+# a hub date whose sync failed is asked again after these waits, by its failed attempts, the last one onwards (#146)
+RETRY_BACKOFF_S = (600, 1800, 7200, 21600)
 # the intraday step's ``reason`` (status ``steps[].reason``; the header shows why there is no run of today, #22)
 INTRADAY_REASONS = ("off", "before_open", "not_business_day", "no_positions", "no_cut_yet", "up_to_date", "ran",
                     "failed_before", "run_failed", "hub_error", "error")
@@ -245,6 +251,8 @@ class Autopilot:
         self._hub_failed = False               # this cycle's hub sync failed as a whole: no history step
         self._sync_failed: dict[str, str] = {}  # hub date -> its error, this cycle's sync (#20; the other dates ran)
         self._sync_later = 0                   # hub dates the sync left for the next cycle: no history step
+        # hub date -> {"error", "attempts", "next_attempt" (MSK datetime)}: failed dates waiting for a retry (#146)
+        self._sync_retry: dict[str, dict[str, Any]] = {}
         self._inbox_waiting = 0                # files the last scan left waiting for a calendar (R22)
         self._history_dates: tuple[float, int, list[tuple[str, str]]] | None = None
         self._static_polled = float("-inf")    # monotonic time the hub's newest static was last asked for (R25)
@@ -478,6 +486,8 @@ class Autopilot:
             "cycles": [dict(c, steps=[dict(s) for s in c["steps"]]) for c in self._cycles],
             "hub_failed_last_cycle": self._hub_failed, "sync_dates_left_for_next_cycle": self._sync_later,
             "hub_failed_dates": dict(sorted(self._sync_failed.items())),  # date -> error, the last cycle's sync (#20)
+            "hub_problem_dates": {p["date"]: {k: v for k, v in p.items() if k != "date"}
+                                  for p in self._problem_dates()},  # failed dates waiting for a retry (#146)
             "hub_dates_checked": len(self._checked),
             "hub_missing_dates": {d: round(now - t) for d, t in sorted(self._missing.items())},  # date -> age, s
             "failed_inputs": sorted(self._failed),  # dates (eod) and "<cut> <date>" (intraday) not retried as they are
@@ -509,7 +519,7 @@ class Autopilot:
                 parts.append(f"hub: {e}; the cached snapshots are used")
             if self._sync_failed:  # dates that failed alone (#20): the step's error, not the cycle's
                 status = "error"
-        failed = {"failed_dates": sorted(self._sync_failed)}
+        failed = {"failed_dates": sorted(self._sync_failed), "problem_dates": self._problem_dates()}
         if settings.snapshot_drop:
             if Path(settings.snapshot_drop).is_dir():
                 imported, rejected = cache.import_drop(Path(settings.snapshot_drop), Path(settings.snapshot_cache))
@@ -532,6 +542,19 @@ class Autopilot:
                 ["hub not configured (hub_url)" if hub else "hub off (--no-hub), no drop folder"]
                 + ([loaded] if loaded else [])), failed
         return status, "; ".join(parts + ([loaded] if loaded else [])), failed
+
+    def _problem_dates(self) -> list[dict[str, Any]]:
+        """The hub dates whose sync failed and that wait for a retry (#146), oldest first."""
+        return [{"date": d, "error": r["error"], "attempts": r["attempts"], "next_attempt": _iso(r["next_attempt"])}
+                for d, r in sorted(self._sync_retry.items())]
+
+    def _date_failed(self, d: str, e: Exception) -> None:
+        """A hub date whose sync failed: this cycle's ``failed_dates``, and not asked again before its wait (#146)."""
+        self._sync_failed[d] = f"{type(e).__name__}: {e}"
+        attempts = self._sync_retry.get(d, {}).get("attempts", 0) + 1
+        wait = RETRY_BACKOFF_S[min(attempts, len(RETRY_BACKOFF_S)) - 1]
+        self._sync_retry[d] = {"error": self._sync_failed[d], "attempts": attempts,
+                               "next_attempt": self._now() + timedelta(seconds=wait)}
 
     def _hub_sync(self, settings: Settings, con: psycopg.Connection | None, extra: list[str]) -> str:
         client = HubClient(settings)  # raises HubError without a token on the first request
@@ -569,11 +592,15 @@ class Autopilot:
         now = time.monotonic()
         for d in [d for d, t in self._missing.items() if now - t >= MISSING_TTL_S]:
             del self._missing[d]
+        for d in [d for d in self._sync_retry if d not in wanted]:  # no longer wanted: no longer a problem
+            del self._sync_retry[d]
+        wall = self._now()
+        waiting = sorted(d for d, r in self._sync_retry.items() if d not in extra and wall < r["next_attempt"])
         cached = set(SnapshotDir(Path(settings.snapshot_cache)).market_dates())
-        due = [d for d in wanted if d not in self._missing
+        due = [d for d in wanted if d not in self._missing and d not in waiting
                and (d not in cached or now - self._checked.get(d, float("-inf")) >= RECHECK_S)]
-        due.sort(reverse=True)  # newest first, then those not cached yet and those asked for (stable sort)
-        due.sort(key=lambda d: (d in cached, d not in extra))
+        due.sort(reverse=True)  # newest first, then those not cached yet and those asked for (stable sort),
+        due.sort(key=lambda d: (d in self._sync_retry and d not in extra, d in cached, d not in extra))  # failed last
         limit = max(n, 1) + SYNC_EXTRA
         todo, later = due[:limit], len(due) - min(len(due), limit)
         self._sync_later = later
@@ -589,12 +616,13 @@ class Autopilot:
                 if e.status in (401, 403):  # the token: every date would fail
                     raise
                 if e.status != 404:
-                    self._sync_failed[d] = f"{type(e).__name__}: {e}"
+                    self._date_failed(d, e)
                     continue
                 rows = []
             except (SnapshotError, OSError, ValueError) as e:  # this date's body: the other dates go on (#20)
-                self._sync_failed[d] = f"{type(e).__name__}: {e}"
+                self._date_failed(d, e)
                 continue
+            self._sync_retry.pop(d, None)
             self._checked[d] = time.monotonic()
             if not rows or not rows[0].market_id:  # no snapshot for this date on the hub: not asked again soon
                 self._missing[d] = time.monotonic()
@@ -609,6 +637,7 @@ class Autopilot:
                 + (f"; {static}" if static else "")
                 + (f"; no snapshot for {', '.join(missing)}" if missing else "")
                 + "".join(f"; failed {d} ({e})" for d, e in sorted(self._sync_failed.items()))
+                + (f"; retry later {', '.join(waiting)}" if waiting else "")
                 + f" ({len(wanted)} dates wanted, {len(todo)} asked"
                 + (f", {later} next cycle" if later else "") + ")")
 
@@ -673,7 +702,8 @@ class Autopilot:
             del self._missing[d]
         have = history.loaded_dates(con) | set(SnapshotDir(Path(settings.snapshot_cache)).market_dates())
         corrected = set(history.superseded_dates(con, latest))  # loaded, then corrected on the hub (WEB-11)
-        due = [d for d in dates if (d not in have or d in corrected) and d not in self._missing]  # cached: the sync
+        due = [d for d in dates if (d not in have or d in corrected) and d not in self._missing  # cached: the sync
+               and d not in self._sync_retry]  # failed in the sync: its retry is the sync's (#146)
         todo = due[:HISTORY_PER_CYCLE]
         loaded, missing = [], []
         for i, d in enumerate(todo):

@@ -801,6 +801,8 @@ export interface components {
             reason?: string | null;
             /** Failed Dates */
             failed_dates?: string[] | null;
+            /** Problem Dates */
+            problem_dates?: components["schemas"]["ProblemDate"][] | null;
             /** At */
             at: string;
         };
@@ -1310,6 +1312,20 @@ export interface components {
             no_pnl: {
                 [key: string]: unknown;
             } | null;
+        };
+        /**
+         * ProblemDate
+         * @description A hub date whose sync failed and that waits for a retry (#146).
+         */
+        ProblemDate: {
+            /** Date */
+            date: string;
+            /** Error */
+            error: string;
+            /** Attempts */
+            attempts: number;
+            /** Next Attempt */
+            next_attempt: string | null;
         };
         /** Queued */
         Queued: {
