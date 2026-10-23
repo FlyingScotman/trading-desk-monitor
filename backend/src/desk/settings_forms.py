@@ -16,9 +16,11 @@ the schema is a warning (the adapter strips it), never an error.
 The dry run (B2-11) runs ``reference()`` twice, on the current files and on the candidate. The current files'
 issues are kept until the adapter or its config folder changes (the handle's fingerprint covers both) or for
 ``BASE_TTL_S`` (the report folders the adapter may read are not fingerprinted), so a check costs one run, not two.
-Both runs go to one long-lived child (``runner.Worker``), kept warm between checks for ``WORKER_IDLE_S`` and
-restarted when the adapter's own files change: the import is paid once and the adapter may keep caches of its own
-between calls (08 §2), such as the reports it has already read. The limit of one run is the setting
+Both runs go to one long-lived child (``runner.Worker``) that stays running between checks: the import is paid once
+and the adapter may keep caches of its own between calls (08 §2), such as the reports it has already read. There is
+no idle timer: the child lives until the next check, which ends it and starts a new one when the previous check was
+more than ``WORKER_IDLE_S`` ago or the adapter's own files changed (``reset``, at the server's exit, ends it too).
+A timeout or a crash of a run kills it as well, and the next run starts a new one. The limit of one run is the setting
 ``adapter_check_timeout_s``; when the current files' run hits it, the candidate is not tried with the same limit.
 """
 
@@ -43,7 +45,7 @@ from .inbox.validate import check_reference_tables
 MAX_ISSUES = 500
 DRY_RUN_TIMEOUT_S = 60.0  # the default of the setting adapter_check_timeout_s: one reference() run
 BASE_TTL_S = 600.0       # the current files' issues are run again after this long even if nothing changed
-WORKER_IDLE_S = 600.0    # the warm child of the dry runs ends after this long without a check
+WORKER_IDLE_S = 600.0    # a check after a longer pause restarts the warm child (no timer: it waits for that check)
 MAX_COPY_BYTES = 8 * 1024 * 1024  # a config file larger than this is not copied for the dry run
 _SRC_ROW = re.compile(r"^R([0-9]+)$")
 _FIELD = re.compile(r"\bfield ([A-Za-z_][A-Za-z0-9_]*)")
