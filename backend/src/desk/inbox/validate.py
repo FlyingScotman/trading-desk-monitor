@@ -258,6 +258,16 @@ def _check(decl: dict, hit: dict, result: Any, books: list[dict] | None, contrac
             flag("error", "unknown_book", uk, src, "book_id not in reference() books")
         if not errs:
             units[uk]["rows"].append(norm)
+    for uk, u in units.items():  # trade_terms: the legs of a swap together (private/1.4)
+        if u["dataset"] != "trade_terms":
+            continue
+        trades: dict[str, list[dict]] = {}
+        for r in u["rows"]:
+            trades.setdefault(str(r["trade_id"]), []).append(r)
+        for legs in trades.values():
+            if any(r["product_kind"] in SWAP_KINDS for r in legs):
+                for severity, code, message, src in _swap_trade_rules(legs):
+                    flag(severity, code, uk, src, message)
     if known is not None:
         for uk, u in units.items():
             if "book_id" in u["scope"] and u["scope"]["book_id"] not in known:
@@ -336,6 +346,85 @@ def _check(decl: dict, hit: dict, result: Any, books: list[dict] | None, contrac
 
 FX_TERMS_FIELDS = ("value_date", "base_ccy", "quote_ccy", "side", "notional_base", "notional_quote")
 PNL_PARTS_TOLERANCE = Decimal("0.01")
+FX_KINDS = ("fx_forward", "fx_swap")
+SWAP_KINDS = ("irs", "ois", "ccs")
+SWAP_LEG_FIELDS = ("leg_id", "side", "ccy", "notional_ccy", "start_date", "maturity_date")
+REPO_FIELDS = ("side", "ccy", "notional_ccy", "start_date")
+INSTRUMENT_FIELDS = ("instrument_id", "isin", "regnum", "moex_secid", "source_instrument_id")
+TERMS_SIDES = {"fx_forward": ("buy", "sell"), "fx_swap": ("buy", "sell"), "irs": ("pay", "receive"),
+               "ois": ("pay", "receive"), "ccs": ("pay", "receive"), "repo": ("repo", "reverse_repo"),
+               "bond_purchase": ("buy",)}
+"""``trade_terms.side`` per ``product_kind`` (private/1.4): a value of another product is ``bad_value``."""
+UNSIGNED_TERMS = ("notional_ccy", "quantity", "face_amount_ccy")
+
+
+def _terms_rules(row: dict) -> list[tuple[str, str, str]]:
+    """The cross-field rules of one schema-valid ``trade_terms`` row (08 §10; FX 1.2, the rest 1.4)."""
+    out: list[tuple[str, str, str]] = []
+    kind = row["product_kind"]
+
+    def need(fields: tuple[str, ...], what: str) -> None:
+        missing = [f for f in fields if f not in row]
+        if missing:
+            out.append(("error", "missing_required", f"{what} needs {', '.join(missing)}"))
+
+    if "side" in row and row["side"] not in TERMS_SIDES[kind]:
+        out.append(("error", "bad_value", f"side of {kind} is one of {', '.join(TERMS_SIDES[kind])}"))
+    for f in UNSIGNED_TERMS:
+        a = amount(row[f]) if f in row else None
+        if a is not None and a < 0:
+            out.append(("error", "bad_value", f"{f} is unsigned (side gives the direction)"))
+    if kind in FX_KINDS:
+        missing = [f for f in FX_TERMS_FIELDS if f not in row]
+        if missing:
+            out.append(("error", "missing_required", f"an fx trade needs {', '.join(missing)}"))
+        elif row["base_ccy"] == row["quote_ccy"]:
+            out.append(("error", "bad_value", "base_ccy equals quote_ccy"))
+        if kind == "fx_swap" and "leg_id" not in row:
+            out.append(("error", "missing_required", "an fx_swap row is one leg and needs leg_id"))
+        if row.get("ndf") and "fixing_date" not in row:
+            out.append(("warning", "ndf_without_fixing", "an ndf without fixing_date"))
+        return out
+    if kind in SWAP_KINDS or kind == "repo":
+        need(SWAP_LEG_FIELDS if kind in SWAP_KINDS else REPO_FIELDS,
+             "a swap row is one leg and" if kind in SWAP_KINDS else "a repo")
+        fixed, index = "fixed_rate_pct" in row, "index_code" in row
+        if fixed == index:
+            out.append(("error", "missing_required" if not fixed else "bad_value",
+                        "a leg or repo has either fixed_rate_pct or index_code"))
+        if fixed and (amount(row.get("spread_bp")) or 0) != 0:
+            out.append(("error", "bad_value", "spread_bp goes with index_code, not fixed_rate_pct"))
+        if "start_date" in row and "maturity_date" in row and row["maturity_date"] <= row["start_date"]:
+            out.append(("error", "bad_value", "maturity_date is not after start_date"))
+        if kind == "repo" and not any(f in row for f in INSTRUMENT_FIELDS):
+            out.append(("warning", "repo_without_security", "a repo without its security"))
+    elif kind == "bond_purchase":
+        need(("ccy", "purchase_price_pct"), "a bond_purchase")
+        if not any(f in row for f in INSTRUMENT_FIELDS):
+            out.append(("error", "missing_required", f"a bond_purchase needs one of {', '.join(INSTRUMENT_FIELDS)}"))
+        if "quantity" not in row and "face_amount_ccy" not in row:
+            out.append(("error", "missing_required", "a bond_purchase needs quantity or face_amount_ccy"))
+    return out
+
+
+def _swap_trade_rules(rows: list[dict]) -> list[tuple[str, str, str, Any]]:
+    """(severity, code, message, src) of the rules across the legs of one swap trade (private/1.4): one
+    ``product_kind``, a ``pay`` and a ``receive`` leg, one currency for ``irs``/``ois``, two for ``ccs``."""
+    kinds = {r["product_kind"] for r in rows}
+    src = rows[0].get("_src")
+    if len(kinds) > 1:
+        return [("error", "bad_value", "the rows of one trade_id have different product_kind", src)]
+    kind = kinds.pop()
+    out: list[tuple[str, str, str, Any]] = []
+    sides = {r.get("side") for r in rows}
+    if not {"pay", "receive"} <= sides:
+        out.append(("error", "missing_required", "a swap needs a pay and a receive leg", src))
+    ccys = {r.get("ccy") for r in rows}
+    if kind == "ccs" and len(ccys) < 2:
+        out.append(("error", "bad_value", "a ccs has legs in two currencies", src))
+    elif kind != "ccs" and len(ccys) > 1:
+        out.append(("error", "bad_value", f"the legs of an {kind} are in one currency", src))
+    return out
 
 
 def _row_rules(dataset: str, row: dict) -> list[tuple[str, str, str]]:
@@ -347,16 +436,8 @@ def _row_rules(dataset: str, row: dict) -> list[tuple[str, str, str]]:
         if abs(total - pl - oci) > max(PNL_PARTS_TOLERANCE, Decimal("1e-8") * abs(total)):
             out.append(("warning", "pnl_parts_mismatch",
                         "pnl_daily_rub differs from pnl_pl_daily_rub + pnl_oci_daily_rub"))
-    elif dataset == "trade_terms" and row["product_kind"] in ("fx_forward", "fx_swap"):
-        missing = [f for f in FX_TERMS_FIELDS if f not in row]
-        if missing:
-            out.append(("error", "missing_required", f"an fx trade needs {', '.join(missing)}"))
-        elif row["base_ccy"] == row["quote_ccy"]:
-            out.append(("error", "bad_value", "base_ccy equals quote_ccy"))
-        if row["product_kind"] == "fx_swap" and "leg_id" not in row:
-            out.append(("error", "missing_required", "an fx_swap row is one leg and needs leg_id"))
-        if row.get("ndf") and "fixing_date" not in row:
-            out.append(("warning", "ndf_without_fixing", "an ndf without fixing_date"))
+    elif dataset == "trade_terms":
+        out += _terms_rules(row)
     return out
 
 

@@ -1,4 +1,4 @@
-"""Private contract 1.2 (work package P1) and 1.3 (B1: funding_policy): FUTURES books, the ocp, cash_balances, pnl_official and trade_terms
+"""Private contract 1.2 (work package P1), 1.3 (B1: funding_policy) and 1.4 (swap, REPO and HTM terms): FUTURES books, the ocp, cash_balances, pnl_official and trade_terms
 schemas, reference() entities and funding rules, describe() settings tabs, multi-date cash history, the generic
 dataset storage and the reference adapter over all of them. Synthetic data only."""
 
@@ -70,15 +70,16 @@ def test_new_schemas_equal_the_08_tables_and_their_templates(name: str) -> None:
     assert raw.startswith(b"\xef\xbb\xbf") and raw.endswith(b"\r\n") and raw.count(b"\n") == 1
     assert raw[3:].decode().strip().split(";") == schema_fields(name)[0]
     schema = json.loads((REPO / f"contract/private/v1/{name}.schema.json").read_text(encoding="utf-8"))
-    assert schema["$id"] == f"private/1.3/{name}" and schema["additionalProperties"] is False
+    since = "1.4" if name == "trade_terms" else "1.3"  # the minor that last changed the schema
+    assert schema["$id"] == f"private/{since}/{name}" and schema["additionalProperties"] is False
 
 
-def test_contract_is_1_3_and_keys_are_schema_fields() -> None:
-    assert CONTRACT == "private/1.3" and "cash_balances" in MULTI_DATE_DATASETS and "ocp" not in MULTI_DATE_DATASETS
+def test_contract_is_1_4_and_keys_are_schema_fields() -> None:
+    assert CONTRACT == "private/1.4" and "cash_balances" in MULTI_DATE_DATASETS and "ocp" not in MULTI_DATE_DATASETS
     for ds, keys in DATASET_KEYS.items():
         fields = schema_fields(ds)[0]
         assert not fields or set(keys) <= set(fields), ds  # trades: no schema yet
-    assert "## 10 Private input contract v1 (`private/1.3`)" in DOC.read_text(encoding="utf-8")
+    assert "## 10 Private input contract v1 (`private/1.4`)" in DOC.read_text(encoding="utf-8")
     for phase in ("A7", "A8", "A9", "A10"):
         assert phase in DOC.read_text(encoding="utf-8").split("## 11 Integration points", 1)[1].split("## 12", 1)[0]
 
@@ -157,7 +158,71 @@ def test_trade_terms_fx_rules() -> None:
     assert codes(near, {**near, "leg_id": "far", "side": "sell"}) == []
     assert codes(near, near) == [("error", "duplicate_key")]
     assert codes(fwd(product_kind="fx_swap")) == [("error", "missing_required")]
-    assert codes(fwd(product_kind="irs")) == [("error", "bad_value")]  # later minors
+    assert codes(fwd(product_kind="cds")) == [("error", "bad_value")]  # a later minor
+    assert codes(fwd(side="pay")) == [("error", "bad_value")]  # a swap leg's side, not an fx one
+
+
+def leg(**kw) -> dict:
+    return {"_src": "L3", "trade_id": "IRS-1", "leg_id": "fix", "book_id": "D1", "product_kind": "irs",
+            "trade_date": "2026-10-01", "side": "pay", "ccy": "rub", "notional_ccy": "1000000000",
+            "start_date": "2026-10-02", "maturity_date": "2028-10-02", "fixed_rate_pct": "14.25", **kw}
+
+
+def test_trade_terms_swaps_repo_and_htm_purchases_1_4() -> None:
+    d, scope = decl("trade_terms", ["book_id"]), [{"book_id": "D1"}]
+
+    def codes(*rows: dict) -> list[tuple[str, str]]:
+        c = check_read(d, HIT, result(list(rows), scope), books=BOOKS)
+        assert all("IRS-1" not in (i["message"] or "") and "14.25" not in (i["message"] or "") for i in c.issues)
+        return sorted((i["severity"], i["code"]) for i in c.issues)
+
+    flt = {k: v for k, v in leg(leg_id="flt", side="receive", index_code="KEY_RATE", spread_bp="0").items()
+           if k != "fixed_rate_pct"}
+    norm, errs, _ = validate_row("trade_terms", leg(payment_frequency="12M", day_count="ACT/ACT"))
+    assert errs == [] and norm["ccy"] == "RUB" and norm["notional_ccy"] == "1000000000"
+    for bad in ({"payment_frequency": "quarterly"}, {"payment_frequency": "0M"}, {"day_count": "ACT/365F"},
+                {"notional_exchange": "both"}, {"side": "short"}):
+        assert [e.code for e in validate_row("trade_terms", leg(**bad))[1]] == ["bad_value"], bad
+    assert codes(leg(), flt) == []
+    assert codes(leg(), {**flt, "product_kind": "ois", "index_code": "RUONIA"}) == [("error", "bad_value")]
+    assert codes(leg()) == [("error", "missing_required")]                       # no receive leg
+    assert codes(leg(), {**flt, "side": "pay"}) == [("error", "missing_required")]
+    assert codes(leg(), {**flt, "ccy": "USD"}) == [("error", "bad_value")]       # an irs is in one currency
+    ccs = [leg(product_kind="ccs"), {**flt, "product_kind": "ccs", "ccy": "CNY", "notional_exchange": "final"}]
+    assert codes(*ccs) == []
+    assert codes(ccs[0], {**ccs[1], "ccy": "RUB"}) == [("error", "bad_value")]   # a ccs has two currencies
+    no_leg = {k: v for k, v in leg().items() if k != "leg_id"}
+    assert codes(no_leg, {**flt, "trade_id": "IRS-1"}) == [("error", "missing_required")]
+    assert codes(leg(index_code="KEY_RATE"), flt) == [("error", "bad_value")]    # fixed and floating at once
+    assert codes({k: v for k, v in leg().items() if k != "fixed_rate_pct"}, flt) == [("error", "missing_required")]
+    assert codes(leg(spread_bp="5"), flt) == [("error", "bad_value")]
+    assert codes(leg(maturity_date="2026-10-02"), flt) == [("error", "bad_value")]
+    assert codes(leg(notional_ccy="-1"), flt) == [("error", "bad_value")]        # unsigned: side gives direction
+
+    repo = {"_src": "L4", "trade_id": "REPO-1", "book_id": "D1", "product_kind": "repo", "trade_date": "2026-10-20",
+            "side": "reverse_repo", "ccy": "RUB", "notional_ccy": "98000000", "start_date": "2026-10-21",
+            "maturity_date": "2026-11-18", "fixed_rate_pct": "16.4", "isin": "RU000SYN0001", "quantity": "100000"}
+    assert codes(repo) == []
+    assert codes({k: v for k, v in repo.items() if k != "maturity_date"}) == []  # an open repo
+    assert codes({k: v for k, v in repo.items() if k not in ("isin", "quantity")}) == [
+        ("warning", "repo_without_security")]
+    assert codes({**repo, "side": "buy"}) == [("error", "bad_value")]
+    assert codes({k: v for k, v in repo.items() if k != "notional_ccy"}) == [("error", "missing_required")]
+    flt_repo = {k: v for k, v in repo.items() if k != "fixed_rate_pct"}
+    assert codes({**flt_repo, "index_code": "RUONIA", "spread_bp": "-15"}) == []
+
+    htm = {"_src": "L5", "trade_id": "HTM-1", "book_id": "D1", "product_kind": "bond_purchase",
+           "trade_date": "2026-06-10", "value_date": "2026-06-11", "ccy": "RUB", "source_instrument_id": "SYN-2",
+           "face_amount_ccy": "50000000", "purchase_price_pct": "97.35", "contract_rate_pct": "16",
+           "purchase_accrued_ccy": "412000"}
+    assert codes(htm) == [] and codes({**htm, "side": "buy"}) == []
+    assert codes({**htm, "side": "sell"}) == [("error", "bad_value")]
+    assert codes({k: v for k, v in htm.items() if k != "source_instrument_id"}) == [("error", "missing_required")]
+    assert codes({k: v for k, v in htm.items() if k != "face_amount_ccy"}) == [("error", "missing_required")]
+    assert codes({k: v for k, v in htm.items() if k != "purchase_price_pct"}) == [("error", "missing_required")]
+
+    # a 1.3 adapter keeps working: its FX rows are valid as before (the new products are its own choice)
+    assert codes(fwd()) == []
 
 
 # ---- reference tables and settings tabs ----------------------------------------------------------------------------
@@ -219,7 +284,7 @@ def test_settings_tabs_are_checked_and_never_fatal() -> None:
 
 def test_reference_adapter_declares_every_dataset_and_reads_the_reference_tables(tmp_path: Path) -> None:
     h = load_adapter(None, str(DS_CONFIG), None)
-    assert h.ok and h.describe["contract"] == "private/1.3" and h.describe["sources"][0]["source"] == "positions_csv"
+    assert h.ok and h.describe["contract"] == "private/1.4" and h.describe["sources"][0]["source"] == "positions_csv"
     assert {s["dataset"] for s in h.describe["sources"]} == {"positions", "ocp", "cash_balances", "pnl_official",
                                                             "trade_terms"}
     rep = conformance.check(None, [str(DS)], stub_ctx=True, config_dir=str(DS_CONFIG))
@@ -231,6 +296,8 @@ def test_reference_adapter_declares_every_dataset_and_reads_the_reference_tables
     assert g["pnl_official_csv"].issues == {("warning", "pnl_parts_mismatch"): 1}
     assert g["trade_terms_csv"].statuses == {"partially_accepted": 1}
     assert g["trade_terms_csv"].units == {"accepted": 1, "rejected": 1}
+    t14 = rep.groups[("trade_terms_csv", "2026-10-21")]  # private/1.4: swap legs, a REPO, an HTM purchase
+    assert t14.statuses == {"accepted": 1} and t14.units == {"accepted": 2} and t14.rows == 8 and t14.issues == {}
     j = rep.to_json()
     assert j["reference"] == {"books": "<10", "entities": "<10", "funding_rules": "<10", "funding_policy": "<10"}
     assert "reference: books <10" in rep.text() and "ENT1" not in rep.text() and "KEY_RATE" not in rep.text()

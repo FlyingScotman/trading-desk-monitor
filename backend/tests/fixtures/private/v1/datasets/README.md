@@ -1,4 +1,4 @@
-# Canonical fixtures of private contract 1.2/1.3 (datasets beyond positions)
+# Canonical fixtures of private contract 1.2–1.4 (datasets beyond positions)
 
 Synthetic files in the canonical v1 CSV (`;`, UTF-8 with BOM, CRLF) for the reference adapter
 `desk.inbox.reference`. All `end_of_day`, so the date in the name is the business date and no calendar is
@@ -17,3 +17,4 @@ day) and `TRADING` swept monthly.
 | `cash_balances_20261020.csv` | a **multi-date** file: rows of 2026-10-16 (`_report_date`) and of the file's date; D1 RUB in two ledgers (S1, S2) |
 | `pnl_official_20261020.csv` | `trade_version` as an integer; K3's parts do not add up: `pnl_parts_mismatch` warning |
 | `trade_terms_20261020.csv` | a deliverable forward, an NDF with fixing, an FX swap as two legs (D1, accepted); F1's swap row without `leg_id` is an error, so F1 is rejected (`partially_accepted`) |
+| `trade_terms_20261021.csv` | private/1.4: an IRS (fixed against the key rate), an OIS on RUONIA with a spread, a CCS RUB/CNY with notional exchanges (D1, two legs each), a REPO and an HTM purchase lot (T1; the contract does not tie a product to a book type); all accepted |
