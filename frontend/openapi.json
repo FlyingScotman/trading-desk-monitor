@@ -2722,6 +2722,40 @@
         "title": "AutopilotRun",
         "description": "The newest run shown (R11: today's intraday run when there is one) and its market slice."
       },
+      "AutopilotSchedule": {
+        "properties": {
+          "intraday_from": {
+            "type": "string",
+            "title": "Intraday From"
+          },
+          "prelim_from": {
+            "type": "string",
+            "title": "Prelim From"
+          },
+          "poll_slot_s": {
+            "type": "integer",
+            "title": "Poll Slot S"
+          },
+          "poll_lag_s": {
+            "type": "integer",
+            "title": "Poll Lag S"
+          },
+          "warn_after": {
+            "type": "string",
+            "title": "Warn After"
+          }
+        },
+        "type": "object",
+        "required": [
+          "intraday_from",
+          "prelim_from",
+          "poll_slot_s",
+          "poll_lag_s",
+          "warn_after"
+        ],
+        "title": "AutopilotSchedule",
+        "description": "When the intraday step asks the hub (MSK): the header's «следующее обновление» and its warning (#22)."
+      },
       "AutopilotStatus": {
         "properties": {
           "enabled": {
@@ -2784,6 +2818,27 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/AutopilotProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "now": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Now"
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AutopilotSchedule"
               },
               {
                 "type": "null"

@@ -2,7 +2,9 @@
  * KIT — общие компоненты концептов (нужны mock.js и ../echarts.min.js).
  *
  *  KIT.f.*                — форматирование (тыс ₽/бп, mm, bn, б.п., даты)
- *  KIT.top({title, tag})  — шапка: дата среза, фильтр книг и портфелей (общий для всех мониторов), поиск, тема
+ *  KIT.top({title, tag})  — шапка: дата и тип данных, «следующее обновление» и предупреждение без среза дня (#22),
+ *                           фильтр книг и портфелей (общий для всех мониторов), поиск, тема
+ *  KIT.dataLabel(run), KIT.headerStatus(status, now) — тип данных прогона и состояние шапки по статусу автопилота
  *  KIT.list()             — позиции после фильтра шапки; KIT.onFilter(fn) — перерисовка при смене фильтра
  *  KIT.d(spec)            — кликабельная цифра: spec = {title, list|rows, val, fmt, unit, v?}; щелчок раскрывает вклад
  *  KIT.drill(spec)        — открыть разбор вклада (позиции, группировка по эмитенту/книге/валюте/типу/бакету)
@@ -327,12 +329,114 @@
 
   // ---------- источник данных: прогон из базы (desk serve) или демо-набор (lib/boot.js, lib/real.js) ----------
   K.source = window.CONCEPTS_SOURCE || 'file';
+  // ---------- #22: дата и тип данных, «следующее обновление», предупреждение без среза дня ----------
+  // Время — московское (UTC+3 круглый год). Расписание внутридневного шага автопилота — из GET autopilot/status
+  // (schedule; здесь — значения по умолчанию, как в desk.autopilot: срезы с 10:00, предварительное закрытие с 19:45,
+  // хаб спрашивается раз в 10 минут в :05, :15, …; без среза дня к 10:15 — предупреждение).
+  const MSK_MS = 3 * 3600e3, DOW = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+  const SCHEDULE = { intraday_from: '10:00', prelim_from: '19:45', poll_slot_s: 600, poll_lag_s: 300, warn_after: '10:15' };
+  const STALE_MS = 30 * 60e3;  // последний цикл автопилота старше — «автопилот не запускался с …»
+  const pad2 = n => String(n).padStart(2, '0'), ddmm = iso => iso ? iso.slice(8, 10) + '.' + iso.slice(5, 7) : '';
+  const hmMin = x => { const p = String(x).split(':'); return +p[0] * 60 + +p[1]; };
+  const minHm = v => pad2(Math.floor(v / 60) % 24) + ':' + pad2(Math.floor(v % 60));
+  function msk(t) {  // момент → день и минуты дня по МСК
+    const d = new Date(+new Date(t) + MSK_MS);
+    return { iso: d.toISOString().slice(0, 10), dow: d.getUTCDay(), min: d.getUTCHours() * 60 + d.getUTCMinutes() + d.getUTCSeconds() / 60, hm: pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes()) };
+  }
+  const CUT_TYPE = { eod_final: 'окончательное закрытие', eod_preliminary: 'предварительное закрытие', intraday: 'внутридневной срез' };
+  // тип данных прогона: {asOf, cutType, cutTs | time, marketDate, runType} → «23.10 · внутридневной срез 11:30»;
+  // рынок старше позиций (портфель дня на закрытии прошлого дня) — «позиции 23.10 · рынок 22.10 · окончательное закрытие»
+  K.dataLabel = function (r) {
+    const time = r.cutType === 'intraday' ? (r.cutTs ? msk(r.cutTs).hm : r.time || '') : '';
+    const type = (CUT_TYPE[r.cutType] || r.cutType || '') + (time ? ' ' + time : '') + (r.runType === 'TEST' || r.runType === 'REPLAY' ? ' · ' + r.runType : '');
+    const date = ddmm(r.asOf), market = r.marketDate && r.asOf && r.marketDate < r.asOf ? ddmm(r.marketDate) : null;
+    return { date, market, type, text: (market ? 'позиции ' + date + ' · рынок ' + market : date) + ' · ' + type };
+  };
+  // причина из шага intraday автопилота (steps[].reason, desk.autopilot.INTRADAY_REASONS) — простыми словами
+  K.INTRADAY_REASON = {
+    off: 'внутридневной расчёт выключен в настройках', before_open: 'автопилот ещё не проверял срез дня',
+    not_business_day: 'автопилот считает день нерабочим', no_positions: 'нет позиций в базе',
+    no_cut_yet: 'на хабе ещё нет среза', up_to_date: 'прогон дня посчитан — обновите страницу',
+    ran: 'прогон дня только что посчитан — обновите страницу',
+    failed_before: 'расчёт упал на этом срезе, повтор — когда изменятся данные', run_failed: 'расчёт упал',
+    hub_error: 'хаб не ответил', error: 'ошибка автопилота в шаге «внутри дня»'
+  };
+  // состояние шапки по статусу автопилота s (null — статус не получен) на момент now:
+  // { next: «следующее обновление ≈ 11:35» | «автообновление выключено» | null, warn: null | {text, title}, reason }.
+  // opt.lastReason — причина прошлого цикла: пока идёт новый, шага intraday в статусе ещё нет.
+  K.headerStatus = function (s, now, opt) {
+    opt = opt || {};
+    const sc = Object.assign({}, SCHEDULE, (s && s.schedule) || {}), m = msk(now);
+    const from = hmMin(sc.intraday_from), slot = sc.poll_slot_s / 60, lag = sc.poll_lag_s / 60;
+    const steps = (s && s.steps) || [], ist = steps.find(x => x.name === 'intraday');
+    const running = !!(s && s.state === 'running');
+    const reason = ist ? ist.reason || null : running ? opt.lastReason || null : null;
+    const business = m.dow >= 1 && m.dow <= 5 && reason !== 'not_business_day';
+    const lr = s && s.latest_run, ofToday = !!(lr && lr.as_of === m.iso);
+    const todayCut = ofToday && (lr.cut_type === 'intraday' || lr.cut_type === 'eod_preliminary');
+    const prelimDone = ofToday && lr.cut_type === 'eod_preliminary' && m.min >= hmMin(sc.prelim_from);
+    const slotAfter = t => lag + (Math.floor((t - lag) / slot) + 1) * slot;  // начало следующего слота опроса хаба
+    let next = null;
+    if (s && !s.enabled) next = 'автообновление выключено';
+    else if (s && reason === 'off') next = 'внутридневное обновление выключено';
+    else if (s) {
+      let at = !business || prelimDone ? null : slotAfter(Math.max(m.min, from - 1e-6));
+      if (at != null && at < 1440) next = minHm(at);
+      else {  // следующий рабочий день (пн–пт; праздники знает только сервер)
+        const d = new Date(m.iso + 'T00:00:00Z');
+        do d.setUTCDate(d.getUTCDate() + 1); while (d.getUTCDay() === 0 || d.getUTCDay() === 6);
+        next = DOW[d.getUTCDay()] + ' ' + ddmm(d.toISOString().slice(0, 10)) + ' ' + minHm(slotAfter(from - 1e-6));
+      }
+      next = 'следующее обновление ≈ ' + next;
+    }
+    let warn = null;
+    if (business && m.min >= hmMin(sc.warn_after) && !todayCut) {
+      let cause;
+      const bad = steps.find(x => x.status === 'error'), last = s && s.last_cycle_at;
+      if (!s) cause = 'сервер не ответил на запрос статуса автопилота';
+      else if (!s.enabled) cause = 'автопилот не работает';
+      else if (!running && last && +new Date(now) - +new Date(last) > STALE_MS) { const l = msk(last); cause = 'автопилот не запускался с ' + (l.iso === m.iso ? '' : ddmm(l.iso) + ' ') + l.hm; }
+      else if (reason) cause = K.INTRADAY_REASON[reason] || reason;
+      else if (ist) cause = ist.detail || 'шаг «внутри дня» не назвал причину';
+      else if (bad) cause = bad.name === 'store' ? 'нет связи с базой' : bad.name === 'settings' ? 'ошибка в файле настроек' : 'цикл автопилота упал (' + bad.name + ')';
+      else if (steps.some(x => x.name === 'cycle')) cause = 'цикл занят другим процессом';
+      else if (running) cause = 'идёт цикл автопилота';
+      else cause = steps.length ? 'хаб не настроен (Настройки)' : 'автопилот ещё не закончил ни одного цикла';
+      warn = { text: 'нет внутридневного среза за ' + ddmm(m.iso) + ': ' + cause,
+        title: 'Рабочий день, после ' + sc.warn_after + ' МСК, а прогона на срезе дня нет. Причина — из шага «внутри дня» автопилота' +
+          (ist && ist.detail ? ': ' + ist.detail : '') + (lr ? '. Последний прогон: ' + (lr.label || lr.as_of) : '') + '. Подробности — Настройки → «Автопилот».' };
+    }
+    return { next, warn, reason };
+  };
+  function runLabel() {
+    return K.dataLabel({ asOf: M.asOf, cutType: M.cut.type, cutTs: M.cut.ts, time: M.cut.time, marketDate: M.run && M.run.marketDate, runType: M.run && M.run.runType });
+  }
   function srcChip() {
-    const s = K.source;
-    if (s === 'real') return '<span class="k-chip asof" data-a="src" title="Прогон из базы: выбрать другой">срез <b>' + f.date(M.asOf) + '</b> · ' + esc(M.cut.label) + ' · #' + esc(M.run && M.run.id) + ' ▾</span>';
+    const s = K.source, L = runLabel();
+    const html = L.market ? 'позиции <b>' + esc(L.date) + '</b> · рынок <b>' + esc(L.market) + '</b> · ' + esc(L.type) : '<b>' + esc(L.date) + '</b> · ' + esc(L.type);
+    if (s === 'real') return '<span class="k-chip asof" data-a="src" title="Прогон из базы: ' + esc(M.cut.label) + (M.run.pnlBasis ? '; ' + esc(M.run.pnlBasis) : '') + '. Щелчок — выбрать другой">' + html + ' · #' + esc(M.run && M.run.id) + ' ▾</span>';
     const t = s === 'empty' ? 'прогонов нет — тестовые данные' : s === 'demo' ? 'тестовые данные' : 'демо (файл)';
     return '<span class="k-chip" data-a="src" style="border-color:var(--warn);color:var(--warn)" title="Вымышленный набор lib/mock.js">' + t + (s === 'file' ? '' : ' ▾') + '</span>' +
-      '<span class="asof">срез <b>' + f.date(M.asOf) + '</b> · ' + esc(M.cut.label) + '</span>';
+      '<span class="asof">' + html + '</span>';
+  }
+  // «следующее обновление» и предупреждение без среза дня: статус автопилота раз в минуту (прогон из базы)
+  function freshness(bar) {
+    const nx = h('span', 'k-fresh'), wr = h('a', 'k-chip k-warnchip');
+    nx.style.display = wr.style.display = 'none'; wr.href = '../settings.html';
+    bar.querySelector('[data-a=search]').before(wr, nx);
+    let lastReason = null;
+    const paint = (s, now) => {
+      const st = K.headerStatus(s, now, { lastReason });
+      if (st.reason) lastReason = st.reason;
+      nx.style.display = st.next ? '' : 'none'; nx.textContent = st.next || '';
+      nx.title = 'Когда автопилот спросит хаб о новом срезе (МСК); прогон появится через минуту-две после этого';
+      wr.style.display = st.warn ? '' : 'none';
+      if (st.warn) { wr.textContent = '⚠ ' + st.warn.text; wr.title = st.warn.title; }
+    };
+    const poll = () => fetch('../api/v1/autopilot/status', { cache: 'no-store' }).then(r => r.ok ? r.json() : null)
+      .then(j => paint(j, j && j.now ? new Date(j.now) : new Date()), () => paint(null, new Date()))
+      .catch(() => { }).then(() => setTimeout(poll, 60e3));
+    poll();
   }
   function go(sel) {  // как desk-nav.js: выбор в адресе и в localStorage (desk.run.v1), общий со страницами прогона
     try { if (Object.keys(sel).length) localStorage.setItem('desk.run.v1', JSON.stringify({ sel, at: Date.now() })); else localStorage.removeItem('desk.run.v1'); } catch (e) { }
@@ -429,7 +533,7 @@
     bar.querySelector('[data-a=search]').onclick = () => K.palette();
     bar.querySelector('[data-a=theme]').onclick = K.toggleTheme;
     bindSrc(bar);
-    if (K.source === 'real') backfillChip(bar);
+    if (K.source === 'real') { freshness(bar); backfillChip(bar); }
     const rc = bar.querySelector('[data-a=repr]');
     rc.onclick = e => { e.stopPropagation(); menu(rc, K.REPRS.map(c => ({ v: c, t: 'в ' + c + ' ' + K.SYM[c], sub: c === 'RUB' ? '' : 'курс ' + f.n(M.fx[c], 2) })), K.repr, v => { if (v !== K.repr) K.setRepr(v); }); };
     return bar;
