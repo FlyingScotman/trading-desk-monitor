@@ -1,5 +1,7 @@
 # Trading Desk Monitor project status
 
+> **Frozen 23.10.2026 / заморожено.** Список работ теперь ведётся в GitHub Issues — корень [«Дорожная карта программы»](https://github.com/FlyingScotman/trading-desk-monitor/issues/5), правила в [AGENTS.md](../../AGENTS.md). Открытые пункты отсюда перенесены в issues; новых записей сюда не добавляем. Документ остаётся как история и источник номеров (`R43`, `DEC05`).
+
 As of 22 October 2026. Generated from backlog.json revision 0.3.
 
 Task states were reconciled with the code of the four repositories on 22 October 2026 (monitor, `market-data-hub`, `rub-fixed-income-core`, `trades-data-adapter`). The backlog is the original planning pack: it records which of its tasks are done, but it is **not** the live plan. The live sequence is [ROADMAP.md](../architecture/ROADMAP.md) §0; the owner's requests and their states are in [OWNER_REQUESTS.md](OWNER_REQUESTS.md); the process is in [ORCHESTRATION_PLAN.md](ORCHESTRATION_PLAN.md).

@@ -1,5 +1,7 @@
 # Trading Desk Monitor execution pack
 
+> **23.10.2026:** `backlog.json` and `STATUS.md` are frozen; open work is tracked in GitHub Issues — root issue [«Дорожная карта программы»](https://github.com/FlyingScotman/trading-desk-monitor/issues/5), rules in the root [AGENTS.md](../../AGENTS.md).
+
 > **Superseded in part (16 October 2026).** Per [ADR-001](../architecture/adr/ADR-001-hosting-topology.md), the backend and frontend run on a **Windows server inside the work network**. One hub on a Linux VPS collects public data and serves several consumers; the backend pulls immutable snapshots from it (amended 18 October 2026). The Hermes runtime agent, the work-PC-only backend and the bulk-download parts of this pack no longer apply. The current architecture is in [docs/architecture/](../architecture/README.md). `DECISIONS.md` DEC01–DEC12 remain valid.
 
 
