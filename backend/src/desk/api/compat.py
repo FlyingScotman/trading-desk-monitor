@@ -438,6 +438,8 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
                    "publishedAt": completed.isoformat() if completed else None,
                    "libVersion": f"rub-fixed-income-core {run['core_version']}",
                    "marketSnapshot": run["market_snapshot_id"], "contractVersion": CONTRACT_VERSION,
+                   # how the run values OFZ (valuation.bonds.OFZ_SCHEME): "kbd_par" since 0.2.6, null before
+                   "ofzScheme": (run.get("lineage") or {}).get("ofz_scheme"),
                    **run_slice(run)},
     }
 

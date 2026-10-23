@@ -16,15 +16,19 @@ Steps:
    separate factor from its discount curve, so their basis risk is not netted away. Its rejections become
    ``Rejected("core_<code>")``. The hash-verified result (``rub-portfolio-risk-result.v2``) is returned for storage.
 
-**Discount curve** (owner's decision of 20.10, ORG_CONVENTIONS §4, DATA_CONTRACT §0.3): every RUB bond, OFZ and
-corporate, fixed and floater, is discounted on the RUONIA OIS curve (``RUONIA_OIS_CURVE_ID``, published ``RUB
-RUONIA``) plus its Z-spread calibrated to the market price: the OFZ spread to RUONIA (``ofz_spr01``) or the credit
-spread to RUONIA (CS01). So a fixed bond's rate DV01 is on ``RUB RUONIA``; a RUONIA floater projects and discounts
-on the same curve (one factor); a key-rate floater has ``RUB KEY`` (projection) and ``RUB RUONIA`` (discount). The
-KBD (``RUB OFZ``) stays the market curve of the G-spread, the curve chart and the bond history ("спред к КБД"):
-no bond carries DV01 on it, except on a date without a RUONIA OIS curve in the market (``discount_curve``): then
-the bonds are discounted on the KBD, their risk is on ``RUB OFZ`` and every valuation says so in ``assumptions``
-(quality ``assumed``), and the run goes on.
+**Discount curve** (owner's decisions of 20.10, 22.10 and 23.10, ORG_CONVENTIONS §4, DATA_CONTRACT §0.3, core
+``docs/proposals/ofz-curve-risk-factors.md``): a fixed-coupon OFZ (``OFZ_KBD_CLASSES``: PD, AD, IN) is discounted on
+the KBD (``KBD_CURVE_ID``, published ``RUB OFZ``, spec ``rub_ofz_kbd_v3``) plus its own Z-spread to it
+(``ofz_spr01``: the spread to the KBD); its rate DV01 is on ``RUB OFZ`` in par buckets 1Y-20Y+, the unit of RUONIA
+OIS, so the run publishes it once and the pages show it as RUONIA plus the par-par OFZ basis (``ofz_basis01``) or as
+the KBD. Every other RUB bond (corporates, OFZ-PK, floaters) is discounted on the RUONIA OIS curve
+(``RUONIA_OIS_CURVE_ID``, published ``RUB RUONIA``) plus its Z-spread calibrated to the market price (CS01 for credit,
+``ofz_spr01`` for an OFZ-PK); a RUONIA floater projects and discounts on the same curve (one factor); a key-rate
+floater has ``RUB KEY`` (projection) and ``RUB RUONIA`` (discount). The KBD stays the market curve of the G-spread,
+the curve chart and the bond history ("спред к КБД"). On a date without a RUONIA OIS curve in the market
+(``discount_curve``) every bond is discounted on the KBD, its risk is on ``RUB OFZ`` and every valuation says so in
+``assumptions`` (quality ``assumed``), and the run goes on. Until 0.2.5 every OFZ was on RUONIA and ``ofz_spr01`` was
+its spread to RUONIA (``OFZ_SCHEME``).
 
 **A bond is valued somehow rather than not at all** (the owner's rule). Below an exact valuation
 ``BondValuation.quality`` is ``assumed`` and ``assumptions`` says why, one short reason each:
@@ -120,7 +124,15 @@ RISK_CURVES = {KBD_CURVE_ID: OFZ_CURVE, RUONIA_OIS_CURVE_ID: RUONIA_CURVE, KEY_R
 floater has RUONIA OIS (discounting) and the key-rate projection, each with its own buckets, so its basis risk
 shows."""
 DISCOUNT_CURVE_ID = RUONIA_OIS_CURVE_ID
-"""The discount curve of RUB bonds (the owner's decision of 20.10); ``KBD_CURVE_ID`` when the market has none."""
+"""The discount curve of RUB bonds other than ``OFZ_KBD_CLASSES`` (the owner's decision of 20.10); ``KBD_CURVE_ID`` when
+the market has none."""
+OFZ_KBD_CLASSES = ("ofz_pd", "ofz_ad", "ofz_in")
+"""OFZ discounted on the KBD (option C, core 0.34+; par buckets, core 0.37.0): the fixed-coupon and indexed ones. An
+OFZ-PK (a RUONIA floater) stays on RUONIA OIS."""
+OFZ_SCHEME = "kbd_par"
+"""How the run values OFZ (the run's lineage ``ofz_scheme``, the pages' basis view): ``kbd_par`` -- on the KBD in par
+buckets, ``ofz_basis01`` the par-par basis, ``ofz_spr01`` the spread to the KBD (0.2.6); a run without it -- on RUONIA,
+``ofz_spr01`` the basis to RUONIA (until 0.2.5)."""
 
 
 def ccy_curve(ccy: str) -> str:
@@ -711,6 +723,7 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
             out[r.position_id] = Rejected("no_fx_rate", f"{ccy} on {market.business_date}")
     reqs = [r for r in requests if r.position_id not in out]
     instruments, quotes, positions, calls, ok, kinds = {}, {}, [], {}, {}, {}
+    on_kbd: set[str] = set()
     for r in reqs:
         s = r.schedule
         try:
@@ -726,6 +739,8 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
         ok[r.terms.secid] = prep
         instruments[inst.instrument_id] = inst
         kinds[inst.instrument_id] = "ofz" if r.terms.bond_class in OFZ_CLASSES else "credit"
+        if r.terms.bond_class in OFZ_KBD_CLASSES and bond_currency(r.terms) == "RUB":
+            on_kbd.add(inst.instrument_id)
         # no MOEX accrued: core's own (a floater's too since core 0.33); a foreign bond's in its currency
         quotes[inst.instrument_id] = price_observation(inst.instrument_id, r.price_basis, r.clean_pct,
                                                        quote_accrued(r, market))
@@ -741,6 +756,7 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
                              cap_floor_guard_bp=CAP_FLOOR_GUARD_BP if guard else None,
                              exercise_assumptions=tuple(calls.items()),
                              spread_kinds=tuple((i, k) for i, k in kinds.items() if k == "ofz"),
+                             curve_overrides=tuple((i, KBD_CURVE_ID) for i in sorted(on_kbd)) if disc != KBD_CURVE_ID else (),
                              g_spread_curve_id=KBD_CURVE_ID, discount_margin=True, spread_buckets=True,
                              foreign_curves=tuple((c, foreign[c][0]) for c in ccys),
                              foreign_curve_fallbacks=tuple((c, i) for c in ccys for i in foreign[c][1:]))

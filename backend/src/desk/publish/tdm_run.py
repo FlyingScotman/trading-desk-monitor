@@ -82,7 +82,14 @@ from ..pnl.flash import METHOD
 from ..pnl.reasons import CORE_FX_METHOD, FX_METHOD, NO_PNL_TEXT, REPORTED_METHOD, RUN_NO_PREV_MARKET
 from ..settings import REPO_ROOT
 from ..store import PositionInputs
-from ..valuation.bonds import OFZ_CURVE, RISK_CURVES, BondValuation, coupon_view, implied_frequency
+from ..valuation.bonds import (
+    OFZ_CURVE,
+    OFZ_KBD_CLASSES,
+    RISK_CURVES,
+    BondValuation,
+    coupon_view,
+    implied_frequency,
+)
 from ..valuation.fallback import METHOD as SIMPLE_METHOD
 from ..valuation.fallback import QUALITIES, SimplePnl, fx_rate, market_fx
 from ..valuation.positions import normalised
@@ -514,8 +521,9 @@ def _quote_extra(q: Any, sa: dict[str, Any]) -> dict[str, Any]:
 def core_analytics(v: BondValuation) -> dict[str, Any]:
     """Core 0.33's analytics of a valuation for ``extra`` (null fields left out): ``g_spread_bp`` (core's G-spread to
     the KBD, MOEX's definition, beside MOEX's own in ``quote.gspread_bp``), ``dm_bp`` (a floater's discount margin over
-    its projection curve) and ``spread_buckets`` (``cs01`` or ``ofz_spr01`` by ``RISK_BUCKETS``: CS01 by tenor, the
-    OFZ–RUONIA basis by tenor, R18), which sum to the row's ``cs01`` / ``ofz_spr01``."""
+    its projection curve) and ``spread_buckets`` (``cs01`` or ``ofz_spr01`` by ``RISK_BUCKETS``: CS01 by tenor, an OFZ's
+    spread to its discount curve by tenor: the KBD's since 0.2.6, RUONIA's before, R18), which sum to the row's
+    ``cs01`` / ``ofz_spr01``."""
     out: dict[str, Any] = {}
     if v.g_spread_bp is not None and math.isfinite(v.g_spread_bp):
         out["g_spread_bp"] = v.g_spread_bp
@@ -524,6 +532,17 @@ def core_analytics(v: BondValuation) -> dict[str, Any]:
     if v.spread_buckets:
         out["spread_buckets"] = {b: x for b, x in v.spread_buckets.items() if x}
     return out
+
+
+def ofz_basis(t: Any, v: BondValuation) -> dict[str, Any]:
+    """``ofz_basis01`` of an OFZ on the KBD (``valuation.bonds.OFZ_KBD_CLASSES``, a RUB face): its DV01 on ``RUB OFZ``,
+    the risk to the KBD's par yields moving against RUONIA OIS's (the par-par basis, core ``basis_view``: in the
+    «RUONIA + базис» view of the pages the same buckets are on RUONIA and on the basis); its buckets are the row's
+    ``risk["RUB OFZ"]``. Its presence marks a row of the KBD scheme (``bonds.OFZ_SCHEME``): until 0.2.5 an OFZ was on
+    RUONIA and its basis was ``ofz_spr01``. Empty for every other row."""
+    if t.bond_class not in OFZ_KBD_CLASSES or (t.face_unit or "RUB") != "RUB":
+        return {}
+    return {"ofz_basis01": math.fsum((v.risk().get(OFZ_CURVE) or {}).values()) + 0.0}
 
 
 def _f(x: Any) -> float | None:
@@ -584,6 +603,7 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
             **({"issue_size": float(t.issue_size)} if t.issue_size is not None else {}),
             **({"rating": rating} if rating else {}),
             "cashflows": cashflows(t, v, as_of, face_ccy, freq, cpn.pct), **_quote_extra(q, sa), **core_analytics(v),
+            **ofz_basis(t, v),
             **({"coupon_freq_source": "schedule"} if freq and not t.coupon_frequency else {}),
             **({"not_exact_reason": o.reason} if o.reason else {}),
             **({"fx_rate": fx[0], "fx_source": fx[1]} if fx else {}),

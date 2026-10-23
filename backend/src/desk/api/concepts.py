@@ -252,6 +252,7 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
         notes.append("заседаний ЦБ нет в данных: появятся после прогона на снимке с cbr_meetings")
     return {"runId": run["run_id"], "asOf": as_of.isoformat(), "histDates": dates,
             "hist": {"dv01": series("dv01"), "cs01": [s["cs01"] for s in sums], "basis01": [s["basis"] for s in sums],
+                     "ofzSpr01": [s.get("ofzSpr", 0.0) for s in sums],
                      "dv01Book": series("dv01Book"), "mvType": series("mvType"), "mvCcy": series("mvCcy"), "pnl": pnl},
             "histSource": "runs", "pnlPeriods": periods,
             "positions": positions, "cashflows": flows, **market,
@@ -586,6 +587,7 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
             s["cpi"].append(_cpi_at(cpi, d) if cpi and _linker(f) else None)
             for k, j in (("notional", 0), ("dv01", 1), ("cs01", 2), ("basis", 3), ("mv", 4)):
                 s[k].append(last[j] if last else None)
+            s["ofzSpr"].append(last[10] if last and len(last) > 10 else None)  # an OFZ's spread to the KBD (0.2.6)
             for c in last[8] if last else ():
                 cv.setdefault(c, [None] * i)
             for c, arr in cv.items():
@@ -602,7 +604,8 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
         for k in OPTIONAL:  # only when the bond has them: most series would be nulls
             if all(v is None for v in s[k]):
                 del s[k]
-        out: dict[str, Any] = {k: (_thin(v) if k in ("cs01", "basis", "bench", "ytm") else v) for k, v in s.items()}
+        out: dict[str, Any] = {k: (_thin(v) if k in ("cs01", "basis", "ofzSpr", "bench", "ytm") else v)
+                               for k, v in s.items()}
         out["curves"] = {c: v for c, v in cv.items() if any(v)}
         out["qty"], out["pt"] = qty, pts
         series[pid] = out
@@ -689,8 +692,9 @@ def point_flag(h: tuple, book_date: str | None, d: date, valued: bool) -> list[s
     return ["minor", "; ".join(notes)] if notes else None
 
 
-OPTIONAL = ("zspr", "dm", "dmPx", "icpi", "ir", "bei", "cpi")
-"""Series of ``positions_history`` given only when the position has a value: MOEX's Z-spread to the KBD, the desk's
+OPTIONAL = ("zspr", "dm", "dmPx", "icpi", "ir", "bei", "cpi", "ofzSpr")
+"""Series of ``positions_history`` given only when the position has a value (``ofzSpr``: an OFZ's spread risk to the
+KBD, runs of 0.2.6 on; ``basis`` is its par-par basis then, its spread to RUONIA before): MOEX's Z-spread to the KBD, the desk's
 discount margin of a floater (its run spread) and its estimate from the price on every date of the price history
 (``dm_from_price``), MOEX's linker analytics (contract 1.2), and for a linker CPI year on year as known on the date
 (R25)."""
@@ -854,7 +858,7 @@ def _curve_ccy(curve: str) -> str:
 
 def _cell() -> dict[str, Any]:
     return {"ids": set(), "legs": set(), "notional_ccy": 0.0, "notional_rub": 0.0, "mv_rub": 0.0, "curves": {},
-            "foreign": 0.0, "basis": 0.0, "cs01": 0.0, "fx_delta_ccy": 0.0, "missing": {}}
+            "foreign": 0.0, "basis": 0.0, "ofz_spr": 0.0, "cs01": 0.0, "fx_delta_ccy": 0.0, "missing": {}}
 
 
 def _risk_curves(f: dict[str, Any]) -> dict[str, float]:
@@ -907,7 +911,8 @@ def gov_issuers(con, run_id: int) -> frozenset[str]:
 
 MATRIX_MEASURES: tuple[tuple[str, str, str], ...] = (
     ("dv01", "DV01", "labelled"), ("dv01_curve", "DV01 по кривой", "yes"), ("cs01", "CS01", "yes"),
-    ("ofz_basis", "Базис ОФЗ", "yes"), ("fx_delta", "FX-дельта", "repr"), ("mv", "MV", "yes"),
+    ("ofz_basis", "Базис ОФЗ", "yes"), ("ofz_spread_kbd", "Спред ОФЗ к КБД", "yes"), ("fx_delta", "FX-дельта", "repr"),
+    ("mv", "MV", "yes"),
     ("notional", "Номинал", "yes"), ("n_positions", "Позиций", "yes"),
 )
 """The measures of the matrix (R38: one shown at a time), with whether a cell sums across currencies (the total row,
@@ -948,8 +953,11 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
         c = cell(home, kind)
         c["ids"].add(pid)
         for key, src in (("notional_ccy", "notional"), ("notional_rub", "notional_rub"), ("mv_rub", "mv_rub"),
-                         ("cs01", "cs01"), ("basis", "ofz_spr01")):
+                         ("cs01", "cs01")):
             c[key] += f.get(src) or 0.0
+        b, spr = summary.basis_of({"ofz_basis": (f.get("extra") or {}).get("ofz_basis01"), "ofz": f.get("ofz_spr01")})
+        c["basis"] += b
+        c["ofz_spr"] += spr or 0.0
         curves = _risk_curves(f)
         for cid, v in curves.items():
             cc = _curve_ccy(cid)
@@ -992,6 +1000,7 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
                 "notional_rub": sum(c["notional_rub"] for c in cs), "mv_rub": mv, "mv_ccy": mv / rate if rate else None,
                 "dv01_rub": dv01, "dv01_ccy": dv01 / rate if rate else None, "dv01_by_curve_rub": curves,
                 "dv01_foreign_rub": sum(c["foreign"] for c in cs), "ofz_basis_rub": sum(c["basis"] for c in cs),
+                "ofz_spread_kbd_rub": sum(c["ofz_spr"] for c in cs),
                 "cs01_rub": sum(c["cs01"] for c in cs), "fx_delta_ccy": sum(c["fx_delta_ccy"] for c in cs),
                 "n_risk_missing": sum(missing.values()),
                 "risk_missing": [{"reason": k, "text": MISSING_TEXT[k], "n": n} for k, n in sorted(missing.items())]}
@@ -1017,6 +1026,7 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
              "mv_rub": sum(r["mv_rub"] for r in blocks), "dv01_by_curve_rub": curves_all,
              "dv01_all_curves_rub": sum(curves_all.values()),
              "ofz_basis_rub": sum(r["ofz_basis_rub"] for r in blocks), "cs01_rub": sum(r["cs01_rub"] for r in blocks),
+             "ofz_spread_kbd_rub": sum(r["ofz_spread_kbd_rub"] for r in blocks),
              "fx_delta_rub": None if no_rate else sum(r["fx_delta_ccy"] * (fx.get(r["ccy"]) or 0.0)
                                                       for r in blocks if r["ccy"] != "RUB"),
              "n_risk_missing": sum(r["n_risk_missing"] for r in blocks)}
@@ -1034,6 +1044,7 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
             "notional_rub": sum(c["notional_rub"] for _, c in mine), "mv_rub": sum(c["mv_rub"] for _, c in mine),
             "dv01_by_curve_rub": curves, "dv01_all_curves_rub": sum(curves.values()),
             "ofz_basis_rub": sum(c["basis"] for _, c in mine), "cs01_rub": sum(c["cs01"] for _, c in mine),
+            "ofz_spread_kbd_rub": sum(c["ofz_spr"] for _, c in mine),
             "fx_delta_rub": None if any(not fx.get(cc) for cc, _ in fx_rows) else sum(v * fx[cc] for cc, v in fx_rows),
             "n_risk_missing": sum(sum(c["missing"].values()) for _, c in mine)})
     return {"attribution": attribution, "attribution_rule": ATTRIBUTIONS[attribution],

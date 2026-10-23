@@ -12,7 +12,8 @@ Checked against MOEX's own figures in the snapshot (core 0.33, the backend on it
   duration within 1.5 days of ``DURATION`` (MOEX's is at its published, rounded yield);
 - core's G-spread (to the KBD, on RUONIA discounting) is MOEX's definition: yield minus the KBD at the duration; a
   floater's discount margin is its Z-spread on one curve (RUONIA) and not on two (the key rate projected);
-- CS01 / OFZ basis by tenor bucket sums to the spread risk;
+- CS01 / an OFZ's spread to the KBD by tenor bucket sums to the spread risk; an OFZ's par buckets on the KBD sum to
+  its DV01 at its own yield within 1 % (0.2.6, #32);
 - the FX bonds' PnL 19.10 -> 20.10 at the MOEX 19:00 rate (owner, 21.10): FX +3,618 RUB on 1,000 bonds of
   RU000A10D806, not -74,036 at the CBR rate in force (the CBR move from 83.6177 to 82.8504 vs the market's from
   82.8504 to 82.8879); the CBR figure stays beside it as ``fx_gross_cbr``. Their carry at their yield (batch 1,
@@ -79,8 +80,15 @@ def test_g_spread_dm_and_spread_buckets(run):
                                               abs=1e-6)
         assert math.fsum(v.spread_buckets.values()) == pytest.approx(v.spread01_rub)
     assert outs["SU26238RMFS4"].valuation.g_spread_bp == pytest.approx(-22.28, abs=0.01)
-    sb = outs["SU26238RMFS4"].valuation.spread_buckets  # the OFZ–RUONIA basis of 1,000 bonds of a 2041 bullet
-    assert (round(sb["10Y"], 1), round(sb["15Y"], 1), round(sb["20Y+"], 1)) == (-62.6, -148.5, 0.0)
+    # 0.2.6 (#32): an OFZ on the KBD, par buckets (rub_ofz_kbd_v3); the spread to the KBD of 1,000 bonds of a 2041
+    # bullet split as its DV01 (until 0.2.5: the OFZ–RUONIA basis, 10Y -62.6, 15Y -148.5, 20Y+ 0.0)
+    v = outs["SU26238RMFS4"].valuation
+    sb = v.spread_buckets
+    assert v.discount_curve_id == "RUB_KBD" and set(v.risk()) == {"RUB OFZ"}
+    assert (round(sb["10Y"], 1), round(sb["15Y"], 1), round(sb["20Y+"], 1)) == (45.7, -406.6, 1.1)
+    for s in ("SU26238RMFS4", "SU26244RMFS2"):  # the par buckets sum to the DV01 at the bond's own yield (<= 1 %)
+        v = outs[s].valuation
+        assert v.dv01_rub == pytest.approx(-v.modified_duration * v.pv_rub * 1e-4, rel=0.01), s
     for s in ONE_CURVE:
         v = outs[s].valuation
         assert v.discount_margin_bp == pytest.approx(v.z_spread_bp, abs=1e-6), s

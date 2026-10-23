@@ -63,6 +63,7 @@ from rub_fixed_income import (
     ShockedCurveCache,
     ZcycParameters,
     kbd_discount_curve,
+    kbd_effective_yield,
     kbd_zero_rate_bp,
     roll_curve,
 )
@@ -85,6 +86,20 @@ class NoPnl(Exception):
         super().__init__(f"{reason}: {detail}" if detail else reason)
         self.reason = reason
         self.detail = detail
+
+
+def kbd_par_yield_bp(params: ZcycParameters, tenor_years: float) -> float:
+    """The KBD's par yield (bp) of an instrument paying an annual coupon to ``tenor_years``: ``(1 - DF(T)) / sum DF(i)``
+    over the whole years, ``DF(t) = exp(-zero(t) t)`` at ACT/365F times (``kbd_discount_curve``); below a year the
+    effective annual yield. What the par buckets of ``rub_ofz_kbd_v3`` move, to a few hundredths of a bp (core rolls
+    the coupon dates by the calendar, not by 365-day years)."""
+    if tenor_years < 1:
+        return kbd_effective_yield(params, tenor_years) * 1e4
+    n = round(tenor_years)
+
+    def df(t: float) -> float:
+        return math.exp(-kbd_zero_rate_bp(params, t) / 1e4 * t)
+    return (1 - df(n)) / math.fsum(df(i) for i in range(1, n + 1)) * 1e4
 
 
 def _zero(c: DiscountCurve, t: float) -> float:
@@ -139,12 +154,14 @@ class FlashCurves:
         return self.cur_curves[KBD_CURVE_ID]
 
     def zero_move_bp(self, curve_id: str = KBD_CURVE_ID) -> dict[str, float]:
-        """Continuously compounded zero-rate move per risk pillar at the same tenor, of ``curve_id`` (empty when the
-        curve is not on both dates). The KBD by its parameters; another curve at the pillar's date counted in days
-        (``round(t x 365.25)``) on its own time basis, as its bucket shifts read it."""
+        """The move per risk pillar at the same tenor of ``curve_id`` in the unit of its bucket DV01 (empty when the
+        curve is not on both dates): the KBD's par yield of an annual-coupon instrument by its parameters
+        (``kbd_par_yield_bp``, the unit of ``rub_ofz_kbd_v3``; the 1M-6M buckets carry no KBD risk); another curve's
+        continuously compounded zero rate at the pillar's date counted in days (``round(t x 365.25)``) on its own
+        time basis, as its bucket shifts read it."""
         if curve_id not in self._moves:
             if curve_id == KBD_CURVE_ID:
-                out = {b: kbd_zero_rate_bp(self.cur, t) - kbd_zero_rate_bp(self.prev, t)
+                out = {b: kbd_par_yield_bp(self.cur, t) - kbd_par_yield_bp(self.prev, t)
                        for b, t in zip(RISK_BUCKETS, RISK_PILLARS)}
             elif curve_id in self.cur_curves:
                 out = {b: (_zero(self.cur_curves[curve_id], t) - _zero(self.prev_curves[curve_id], t)) * 1e4

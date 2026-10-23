@@ -41,6 +41,7 @@ from .marketdata.reference import facts as reference_of
 from .pnl.direct import split_fx
 from .pnl.flash import FlashCurves, FlashPnl, NoPnl, explain
 from .valuation.bonds import (
+    OFZ_SCHEME,
     BondRequest,
     BondValuation,
     Rejected,
@@ -147,6 +148,7 @@ class EodContext:
             "hub": prov.get("hub"),
             "published_at": prov.get("published_at"),
             "curve_spec": KBD_SPEC,
+            "ofz_scheme": OFZ_SCHEME,
             "curve_model": KBD_MODEL_VERSION,
             "kbd_check_bp": round(self.kbd_check_bp, 6),
             "calendar": self.calendar.version,
@@ -238,7 +240,9 @@ def prepare(snapshots: SnapshotDir, business_date: str, cut_type: str = "eod_fin
     if check > KBD_TOLERANCE_BP:
         raise ValueError(f"KBD curve misses the published standard yields by {check:.3f} bp")
     cal, vf, vt = static.business_calendar("MOEX_STOCK")
-    return EodContext(snapshots, market, static, params, kbd_discount_curve(params), core_market, cal, (vf, vt),
+    # par buckets of the KBD (rub_ofz_kbd_v3), as core's: the risk of an OFZ on the fallback ladder sums with an exact one's
+    kbd = kbd_discount_curve(params, zero_shock="annual_par")
+    return EodContext(snapshots, market, static, params, kbd, core_market, cal, (vf, vt),
                       check, ShockedCurveCache(), rates_lineage, fx=fx_market, fx_options=fx_options)
 
 

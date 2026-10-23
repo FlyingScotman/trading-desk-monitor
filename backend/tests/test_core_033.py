@@ -20,7 +20,7 @@ import pytest
 from rub_fixed_income import RISK_BUCKETS, OfferKind, kbd_effective_yield
 from test_pnl_compare import _rows
 
-from desk.marketdata.adapter import Offer, core_instrument, put_offers
+from desk.marketdata.adapter import KBD_CURVE_ID, Offer, core_instrument, put_offers
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import prepare, value
 from desk.publish import tdm_run
@@ -42,10 +42,11 @@ def outs(ctx):
     return dict(zip(ids, value(ctx, [(s, 1000.0) for s in ids], fallback=False, second_order=True)))
 
 
-def test_g_spread_of_a_fixed_bond_from_core_on_ruonia_discounting(ctx, outs):
+def test_g_spread_of_a_fixed_bond_from_core_whatever_its_discount_curve(ctx, outs):
     for s in (OFZ, CORP):
         v = outs[s].valuation
-        assert v.discount_curve_id == bonds.DISCOUNT_CURVE_ID  # discounted on RUONIA OIS: core had no G-spread before
+        # an OFZ on the KBD (#32), a corporate on RUONIA OIS (core had no G-spread on it before 0.33)
+        assert v.discount_curve_id == (KBD_CURVE_ID if s == OFZ else bonds.DISCOUNT_CURVE_ID)
         # MOEX's definition: the effective yield minus the KBD at the Macaulay duration
         g = (v.ytm_pct / 100 - kbd_effective_yield(ctx.kbd, v.macaulay_years)) * 1e4
         assert v.g_spread_bp == pytest.approx(g, abs=1e-6)

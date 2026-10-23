@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import math
 import sqlite3
+from collections import Counter
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -22,7 +23,7 @@ from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import EodContext, Outcome, attach_pnl, prepare, value
 from desk.pnl.flash import FlashCurves, explain
 from desk.publish import tdm_run
-from desk.valuation.bonds import BondValuation, bond_request, value_bonds
+from desk.valuation.bonds import OFZ_KBD_CLASSES, BondValuation, bond_request, value_bonds
 
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1"
 DATE = "2026-10-15"
@@ -158,15 +159,21 @@ def test_coupon_received_in_the_window(ctx, outcomes):
     assert f.carry > f.received_rub * 0.5  # the coupon is carry, not a price drop
 
 
-def test_bonds_are_discounted_on_ruonia(outcomes):
-    """The owner's decision of 20.10: a fixed RUB bond, OFZ or corporate, has its Z-spread to RUONIA OIS and its
-    rate DV01 on RUB RUONIA, none on the KBD (RUB OFZ, a market curve now)."""
-    assert outcomes
+def test_ofz_on_the_kbd_the_rest_on_ruonia(outcomes):
+    """The owner's decisions of 20.10 and 23.10 (#32): a fixed-coupon OFZ has its Z-spread to the KBD and its rate
+    DV01 on RUB OFZ in par buckets 1Y-20Y+ (rub_ofz_kbd_v3: 1M-6M are 0); any other fixed RUB bond its Z-spread to
+    RUONIA OIS and its DV01 on RUB RUONIA. Neither is an assumption."""
+    kinds = Counter(o.terms.bond_class in OFZ_KBD_CLASSES for o in outcomes)
+    assert kinds[True] and kinds[False], kinds
     for o in outcomes:
         v = o.valuation
-        assert (v.discount_curve_id, v.spread_curve) == ("RUB_RUONIA_OIS", "RUB RUONIA"), o.secid
-        assert set(v.risk()) == {"RUB RUONIA"} and v.dv01_rub < 0 and v.spread01_rub < 0
-        assert not any("KBD" in a for a in v.assumptions)
+        ofz = o.terms.bond_class in OFZ_KBD_CLASSES
+        want = ("RUB_KBD", "RUB OFZ") if ofz else ("RUB_RUONIA_OIS", "RUB RUONIA")
+        assert (v.discount_curve_id, v.spread_curve) == want, o.secid
+        assert set(v.risk()) == {want[1]} and v.dv01_rub < 0 and v.spread01_rub < 0
+        assert v.quality == "exact" and not any("KBD" in a for a in v.assumptions)
+        if ofz:
+            assert all(v.buckets[b] == 0.0 for b in ("1M", "3M", "6M")) and v.spread_kind == "ofz"
 
 
 @pytest.mark.parametrize("secid,curves", [("SU29008RMFS8", {"RUB RUONIA"}),
@@ -197,7 +204,11 @@ def test_kbd_fallback_without_ruonia(ctx, outcomes):
     cur = [dataclasses.replace(o) for o in outcomes]
     attach_pnl(prev, prevs, ctx, cur)
     for o in cur:
-        assert o.pnl is not None and o.pnl.rates == 0.0 and o.pnl.other == pytest.approx(o.pnl.total)
+        assert o.pnl is not None
+        if o.terms.bond_class in OFZ_KBD_CLASSES:  # on the KBD on both dates: the exact explain
+            assert o.pnl.rates < 0 and abs(o.pnl.rates - o.pnl.rates_linear) < 0.02 * abs(o.pnl.rates_linear)
+            continue
+        assert o.pnl.rates == 0.0 and o.pnl.other == pytest.approx(o.pnl.total)
         assert "discounted on RUB OFZ" in o.pnl.note
     # both dates on the KBD: the exact explain on it, as before the switch
     prev2 = shifted_prev(ctx, ctx.business_date - timedelta(days=2), 2 * SHIFT_BP, kbd_only=True)

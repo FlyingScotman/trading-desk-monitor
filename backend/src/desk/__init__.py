@@ -10,7 +10,7 @@ __version__ = "0.2.5"
 # buckets, coverage). A run records ``logic_version()`` in its lineage; the autopilot recomputes the latest positions
 # date once when its default run was made by another logic version; the backfill (desk.backfill, R23) recomputes the
 # older dates in the background.
-VALUATION_VERSION = 11  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
+VALUATION_VERSION = 12  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
 # 4: RUB bonds discounted on RUONIA OIS + Z-spread, flash PnL on the bond's own curves;
 # 5: a key-rate floater on a fallback rung books its projection on RUB KEY, the run log names missing rates inputs
 # 6: a bond's offer, its next 18 months of flows and the day's quote (G-spread, volume) in extra (concept pages)
@@ -23,6 +23,8 @@ VALUATION_VERSION = 11  # 2: risk per curve (R8); 3: static display fields (R9 D
 # 11: batch 1 item 5: a foreign bond's flash PnL decomposed (on core: in its currency on its own curve, the rate move
 # on the D-1 PV in fx_gross; on the fallback ladder: its carry at its yield), not all in other; funding in the runs
 # (B1, publish.funding_run): the PnL component funding (the carry net of it), a funding block
+# 12: core 0.37 (#32): fixed-coupon OFZ discounted on the KBD (rub_ofz_kbd_v3, par buckets 1Y-20Y+), ofz_spr01 their
+# spread to the KBD, extra.ofz_basis01 the par-par basis; the fallback duration DV01 / (1 + y) (#36)
 
 
 def logic_version() -> str:
