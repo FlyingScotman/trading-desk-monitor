@@ -1191,13 +1191,16 @@ export interface components {
             position_id: string;
             /** Book Id */
             book_id: string;
-            /** Product */
+            /**
+             * Product
+             * @description Core's product (fx_forward, fx_swap, fx_ndf, fx_cross, fx_future; several joined by +), else <asset_class>_other
+             */
             product: string | null;
             /**
              * Status
              * @enum {string}
              */
-            status: "both" | "computed_only" | "imported_only" | "neither";
+            status: "both" | "computed_only" | "computed_invalid" | "imported_only" | "neither";
             /**
              * Used
              * @description The value the run publishes
@@ -1223,7 +1226,7 @@ export interface components {
             over?: boolean | null;
             /**
              * Reason
-             * @description Why core did not value the row
+             * @description Why core did not value the row (pv_not_finite: core's PV is not a finite number)
              */
             reason?: string | null;
         };

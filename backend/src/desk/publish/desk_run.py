@@ -23,15 +23,9 @@ from functools import partial
 from typing import Any
 
 import psycopg
-from psycopg.rows import tuple_row
 from psycopg.types.json import Jsonb
 from rub_fixed_income import __version__ as CORE_VERSION
-from rub_fixed_income import (
-    portfolio_result_from_json,
-    portfolio_result_to_json,
-    verify_portfolio_result,
-    verify_portfolio_result_v3,
-)
+from rub_fixed_income import portfolio_result_to_json
 
 from .. import __version__ as BACKEND_VERSION
 from .. import logic_version
@@ -97,10 +91,16 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
     funding = funding_run.compute(con, bd, prev, ctx.market, content.rows, content.reference["books"], inputs,
                                   {pid: o.terms for pid, _, o in positions if o.terms is not None})
     funding.apply(content.rows, content.reference, content.log)
-    parallel = derivatives_parallel.compare(positions, inputs.extra)
-    content.reference[derivatives_parallel.KIND] = parallel
-    if line := derivatives_parallel.log_line(parallel):
-        content.log.append(line)
+    try:  # a diagnostic: its failure is said in the run log, the run goes on without the block
+        parallel = derivatives_parallel.compare(positions, inputs.extra, inputs.trade_terms)
+        line = derivatives_parallel.log_line(parallel)
+    except Exception as e:  # noqa: BLE001
+        why = f"деривативы, ядро и отчёт параллельно: сравнение не построено ({type(e).__name__}: {e})"
+        content.log.append(("WARN", why))
+    else:
+        content.reference[derivatives_parallel.KIND] = parallel
+        if line:
+            content.log.append(line)
     lineage["funding"] = funding.lineage()
     run_id = con.execute(
         "INSERT INTO run (run_type, business_date, prev_date, cut_type, supersedes_run_id, market_snapshot_id,"
@@ -175,18 +175,3 @@ def _write(cur: psycopg.Cursor, run_id: int, positions: list[tuple[str, str, Out
                     [(run_id, s.secid, s.business_date, s.z_spread_bp, s.source) for s in spreads])
     cur.execute("UPDATE run SET status = 'complete', completed_at = now(), coverage = %s, totals = %s "
                 "WHERE run_id = %s", (_jsonb(coverage), _jsonb(totals), run_id))
-
-
-def read_core_results(con: psycopg.Connection, run_id: int) -> list[tuple[str, str, Any]]:
-    """(label, schema, result) of the core results stored with a run (bonds: v2, derivatives: v3), each parsed and
-    verified (schema and ``result_sha256``); a body that does not verify raises ``ValueError``."""
-    out = []
-    cur = con.cursor(row_factory=tuple_row)
-    for sha, label, body in cur.execute("SELECT result_sha256, label, body FROM run_core_result WHERE run_id = %s"
-                                        " ORDER BY label, result_sha256", (run_id,)).fetchall():
-        r = portfolio_result_from_json(body)
-        v3 = r.schema_version.endswith(".v3")
-        if r.result_sha256 != sha or not (verify_portfolio_result_v3(r) if v3 else verify_portfolio_result(r)):
-            raise ValueError(f"run {run_id}: core result {label} does not verify")
-        out.append((label, r.schema_version, r))
-    return out

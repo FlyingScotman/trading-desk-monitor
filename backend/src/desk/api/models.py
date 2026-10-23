@@ -216,14 +216,16 @@ class ParallelRow(BaseModel):
 
     position_id: str
     book_id: str
-    product: str | None
-    status: Literal["both", "computed_only", "imported_only", "neither"]
+    product: str | None = Field(description="Core's product (fx_forward, fx_swap, fx_ndf, fx_cross, fx_future; "
+                                "several joined by +), else <asset_class>_other")
+    status: Literal["both", "computed_only", "computed_invalid", "imported_only", "neither"]
     used: Literal["computed", "imported"] = Field(description="The value the run publishes")
     computed_pv_rub: float | None = Field(description="PV by core from the trade terms (result v3)")
     imported_pv_rub: float | None = Field(description="PV the report states (mv_rub, else the trades' pv_rub)")
     diff_rub: float | None = None
     over: bool | None = Field(None, description="diff above the tolerance")
-    reason: str | None = Field(None, description="Why core did not value the row")
+    reason: str | None = Field(None, description="Why core did not value the row (pv_not_finite: core's PV is not a "
+                                                 "finite number)")
 
 
 class RunDerivatives(BaseModel):

@@ -3720,13 +3720,15 @@
                 "type": "null"
               }
             ],
-            "title": "Product"
+            "title": "Product",
+            "description": "Core's product (fx_forward, fx_swap, fx_ndf, fx_cross, fx_future; several joined by +), else <asset_class>_other"
           },
           "status": {
             "type": "string",
             "enum": [
               "both",
               "computed_only",
+              "computed_invalid",
               "imported_only",
               "neither"
             ],
@@ -3798,7 +3800,7 @@
               }
             ],
             "title": "Reason",
-            "description": "Why core did not value the row"
+            "description": "Why core did not value the row (pv_not_finite: core's PV is not a finite number)"
           }
         },
         "type": "object",
