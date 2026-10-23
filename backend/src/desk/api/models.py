@@ -284,7 +284,11 @@ class RiskTableRow(BaseModel):
     dv01_by_curve_rub: dict[str, float]
     dv01_foreign_rub: float = Field(description="risk on another currency's curves kept here (attribution "
                                     "'position'): in dv01_by_curve_rub, not in dv01_rub")
-    ofz_basis_rub: float
+    ofz_basis_rub: float = Field(description="the OFZ basis to RUONIA OIS, RUB per bp: since 0.2.6 a fixed OFZ's par "
+                                 "DV01 on the KBD (RUB OFZ, also in dv01_by_curve_rub), an OFZ-PK's spread to RUONIA; "
+                                 "before, every OFZ's spread to RUONIA (ofz_spr01)")
+    ofz_spread_kbd_rub: float = Field(description="a fixed OFZ's own spread risk to the KBD (0.2.6), RUB per bp; 0 "
+                                      "in a run before it")
     cs01_rub: float
     fx_delta_ccy: float
     n_risk_missing: int = Field(description="positions whose risk is missing (never counted as a zero)")
@@ -299,7 +303,11 @@ class RiskTableTotal(BaseModel):
     dv01_by_curve_rub: dict[str, float]
     dv01_all_curves_rub: float = Field(description="the sum over curves of different currencies: not a currency's "
                                        "risk nor a hedge measure, labelled so")
-    ofz_basis_rub: float
+    ofz_basis_rub: float = Field(description="the OFZ basis to RUONIA OIS, RUB per bp: since 0.2.6 a fixed OFZ's par "
+                                 "DV01 on the KBD (RUB OFZ, also in dv01_by_curve_rub), an OFZ-PK's spread to RUONIA; "
+                                 "before, every OFZ's spread to RUONIA (ofz_spr01)")
+    ofz_spread_kbd_rub: float = Field(description="a fixed OFZ's own spread risk to the KBD (0.2.6), RUB per bp; 0 "
+                                      "in a run before it")
     cs01_rub: float
     fx_delta_rub: float | None = Field(description="net FX delta at the run's rates; null when a rate is missing")
     n_risk_missing: int
@@ -322,7 +330,11 @@ class RiskTableColumn(BaseModel):
     mv_rub: float
     dv01_by_curve_rub: dict[str, float]
     dv01_all_curves_rub: float = Field(description="the sum over curves of different currencies: labelled so")
-    ofz_basis_rub: float
+    ofz_basis_rub: float = Field(description="the OFZ basis to RUONIA OIS, RUB per bp: since 0.2.6 a fixed OFZ's par "
+                                 "DV01 on the KBD (RUB OFZ, also in dv01_by_curve_rub), an OFZ-PK's spread to RUONIA; "
+                                 "before, every OFZ's spread to RUONIA (ofz_spr01)")
+    ofz_spread_kbd_rub: float = Field(description="a fixed OFZ's own spread risk to the KBD (0.2.6), RUB per bp; 0 "
+                                      "in a run before it")
     cs01_rub: float
     fx_delta_rub: float | None = Field(description="net FX delta at the run's rates (RUB rows left out); null when "
                                        "a rate is missing")
@@ -330,7 +342,8 @@ class RiskTableColumn(BaseModel):
 
 
 class RiskTableMeasure(BaseModel):
-    measure: Literal["dv01", "dv01_curve", "cs01", "ofz_basis", "fx_delta", "mv", "notional", "n_positions"]
+    measure: Literal["dv01", "dv01_curve", "cs01", "ofz_basis", "ofz_spread_kbd", "fx_delta", "mv", "notional",
+                     "n_positions"]
     label: str
     across_ccys: Literal["yes", "repr", "labelled"] = Field(
         description="whether the measure sums across currencies (the total row, in RUB): yes; repr only at the "

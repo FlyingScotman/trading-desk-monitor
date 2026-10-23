@@ -95,7 +95,8 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         bd.innerHTML = '<div class="hudg">' +
           cell('PnL дня, mm', K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(k.pnl, 1)), 'MTD ' + K.d({ title: 'PnL MTD', unit: 'mm ₽', fmt: v => f.mns(v, 1), list: L, val: 'pnlMtd' }) + K.partial('mtd'), sp(H.pnl.total)) +
           cell('DV01, тыс/бп', K.d({ title: 'DV01 ставки', unit: 'тыс ₽/бп', list: L, val: 'dv01' }, null, ''), 'RUONIA ' + K.d({ title: 'DV01 RUONIA', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB RUONIA'] }, null, '') + ' · КС ' + K.d({ title: 'DV01 КС', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB KEY'] }, null, ''), sp(dvH, css('--accent'))) +
-          cell('CS01, тыс/бп', K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }, null, ''), 'базис ОФЗ ' + K.d({ title: 'Базис ОФЗ−RUONIA', unit: 'тыс ₽/бп', list: L, val: 'basis01' }, null, ''), sp(H.cs01, css('--warn'))) +
+          cell('CS01, тыс/бп', K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }, null, ''), (M.ofzView === 'kbd' ? 'спред ОФЗ к КБД ' + K.d({ title: 'Спред ОФЗ к КБД', unit: 'тыс ₽/бп', list: L, val: 'ofzSpr01' }, null, '')
+            : 'базис ОФЗ ' + K.d({ title: 'Базис ОФЗ−RUONIA', unit: 'тыс ₽/бп', list: L, val: 'basis01' }, null, '')), sp(H.cs01, css('--warn'))) +
           cell('Кэрри/день, тыс', K.d({ title: 'Кэрри за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }), 'в год ≈ ' + f.mn(k.carryDay * 365, 0) + ' mm', sp(H.pnl.carry, css('--pos'))) +
           cell('Облигации, bn', K.d({ title: 'MV облигаций', unit: 'bn ₽', fmt: v => f.bn(v, 1), list: bonds(L), val: 'mv', color: false }), M.ccys.map(c => c + ' ' + f.bn(k.byCcy[c].mv, 1)).join(' · ')) +
           cell('ОВП <a class="mut3" href="#fx" data-fxgo title="плитка «ОВП и курсы»">→</a>', K.fxMini(L), '') +  // R43: валюта на строку, мелкие — в «прочих»
@@ -205,7 +206,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const el = K.h('div', 'fill'); bd.appendChild(el);
         const isOfz = mode === 'OFZ';
         const today = isOfz ? M.ofzCurve : M.curve[mode].pts;
-        const chg = isOfz ? M.curve['RUB RUONIA'].chg.map((v, i) => v + M.curve['RUB OFZ'].chg[i]) : M.curve[mode].chg;
+        const chg = isOfz ? M.curve['RUB RUONIA'].chg.map((v, i) => v + K.basisCurve().chg[i]) : M.curve[mode].chg;
         const yest = today.map((v, i) => v - chg[i] / 100);
         const riskId = isOfz ? 'RUB OFZ' : mode;
         const c = small(el, () => ({ grid: { left: 4, right: 4, top: 22, bottom: 2, containLabel: true }, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis' },

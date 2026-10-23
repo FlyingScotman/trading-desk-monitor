@@ -30,7 +30,7 @@ def _model(ctx, o, carried=None, median_bp=MEDIAN_BP):
     """``o`` with no price in the window, priced on the model with the issuer median forced to ``median_bp``."""
     fb = _fb(ctx, [_History(ctx, 40)])
     fb.carried = {c.secid: c for c in carried or ()}
-    fb.medians = None if median_bp is None else {("issuer", o.terms.issuer_id): (median_bp, 3)}
+    fb.medians = None if median_bp is None else {("issuer", o.terms.issuer_id, "RUB_RUONIA_OIS"): (median_bp, 3)}
     return approximate(ctx, _outcome(o, "no_quote", quote=None), Q, fb), fb
 
 

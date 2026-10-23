@@ -378,9 +378,9 @@
       p.accrued = p.notional * p.accruedPct / 100 * fx;
       const w = bucketWeights(p.tenor);
       const dv = -p.mv * p.mdur * 1e-4;
-      // спред-риск фикс-бумаги (базис ОФЗ, CS01) — +1 б.п. к годовому Z-спреду, DV01 — к непрерывной ставке кривой:
-      // |спред01| = |DV01| / (1 + R RUONIA на сроке), как в прогоне (R29)
-      const zr = 1 / (1 + curveAt('RUB RUONIA', p.tenor) / 100);
+      // с 0.2.6 (#32) RUONIA и КБД — в par-котировках, спред — годовой Z: базис ОФЗ (par–par) равен DV01 ОФЗ на КБД,
+      // CS01 ≈ DV01 RUONIA (до 0.2.6 было |спред01| = |DV01| / (1 + R), R29)
+      const zr = 1;
       if (p.ccy === 'RUB') {
         if (p.cpn.type === 'float') {
           const projCurve = p.cpn.index === 'КС' ? 'RUB KEY' : 'RUB RUONIA';
@@ -441,6 +441,10 @@
     M.curves.forEach(c => { const s = p.risk[c.id].reduce((a, b) => a + b, 0); p.dv01ByCurve[c.id] = s; if (c.kind === 'rate') tot += s; });
     p.dv01 = tot;                                   // по ставкам (без базиса ОФЗ)
     p.basis01 = p.dv01ByCurve['RUB OFZ'];
+    // собственный спред фикс-ОФЗ к КБД (0.2.6): ≈ её DV01 на КБД, по тем же бакетам
+    const fixOfz = p.group === 'GOV' && p.ccy === 'RUB' && p.cpn && p.cpn.type === 'fix';
+    p.ofzSprb = fixOfz ? p.risk['RUB OFZ'].slice() : new Array(p.risk['RUB OFZ'].length).fill(0);
+    p.ofzSpr01 = fixOfz ? p.basis01 : 0;
     p.cs01 = p.cs01b.reduce((a, b) => a + b, 0);
     p.notionalRub = p.notional * M.fx[p.ccy];
     // PnL дня: разложение по факторам

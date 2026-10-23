@@ -146,7 +146,7 @@
       const v = M.sum(L, p => ratePnl(p, c.id));
       if (Math.abs(v) > 3e5) parts.push({ v, h: 'ставки ' + c.short + ' ' + mln('PnL от ' + c.short, L, p => ratePnl(p, c.id)) + ' <span class="mut">(' + c.short + ' ' + chgRange(c) + ' б.п.)</span>' });
     });
-    const bas = M.sum(L, p => ratePnl(p, 'RUB OFZ'));
+    const bas = M.ofzView === 'kbd' ? 0 : M.sum(L, p => ratePnl(p, 'RUB OFZ'));  // в виде «КБД» КБД — среди кривых ставок выше
     if (Math.abs(bas) > 3e5) parts.push({ v: bas, h: 'базис ОФЗ ' + mln('PnL от базиса ОФЗ − RUONIA', L, p => ratePnl(p, 'RUB OFZ')) + ' <span class="mut">(ОФЗ шире RUONIA на ' + chgRange(M.curve['RUB OFZ']) + ' б.п.)</span>' });
     [['carry', 'кэрри'], ['spread', 'кредитные спреды'], ['fx', 'курсы'], ['trading', 'сделки дня'], ['other', 'прочее']].forEach(([key, t]) => {
       const v = M.sum(L, p => p.pnl[key]); if (Math.abs(v) > 2e5) parts.push({ v, h: t + ' ' + mln('PnL · ' + t, L, p => p.pnl[key]) });
@@ -160,7 +160,8 @@
       '<p>За день ' + word(tot) + ' <b>' + f.mn(Math.abs(tot), 1) + ' mm</b>. Главное: ' + parts.slice(0, 3).map(x => x.h).join(', ') + '.' +
       (parts.length > 3 ? ' Остальное: ' + parts.slice(3).map(x => x.h).join(', ') + '.' : '') + '</p>' +
       '<p class="mut" style="font-size:13px">Риск на утро: DV01 по ставкам ' + dvx('DV01 ставки', L, 'dv01') + ', из них RUONIA ' + dvx('DV01 RUONIA', L, p => p.dv01ByCurve['RUB RUONIA']) +
-      ', КС ' + dvx('DV01 КС', L, p => p.dv01ByCurve['RUB KEY']) + '; базис ОФЗ ' + dvx('Базис ОФЗ − RUONIA', L, 'basis01') + '; CS01 ' + dvx('CS01', L, 'cs01') +
+      ', КС ' + dvx('DV01 КС', L, p => p.dv01ByCurve['RUB KEY']) + (M.ofzView === 'kbd' ? ', КБД ' + dvx('DV01 КБД', L, p => p.dv01ByCurve['RUB OFZ'])
+        : '; базис ОФЗ ' + dvx('Базис ОФЗ − RUONIA', L, 'basis01')) + '; спред ОФЗ к КБД ' + dvx('Спред ОФЗ к КБД', L, 'ofzSpr01') + '; CS01 ' + dvx('CS01', L, 'cs01') +
       '. Кэрри ' + K.d({ title: 'Кэрри за день', unit: 'тыс ₽', fmt: f.ks, list: L, val: 'carryDay' }) + '&nbsp;тыс в день.</p>' +
       '<div class="factors">' + [['Кэрри', 'carry'], ['Ставки', 'rates'], ['Спред', 'spread'], ['FX', 'fx'], ['Сделки', 'trading'], ['Прочее', 'other']].map(([t, key]) =>
         '<div class="factor"><div class="l">' + t + '</div><div class="v">' + K.d({ title: 'PnL · ' + t, unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl[key] }, null) + '</div></div>').join('') + '</div></section>';
@@ -254,7 +255,7 @@
     // ---------- 06 рынок ----------
     // фраза о ставках — по данным: направление по среднему сдвигу RUONIA OIS, бакет с наибольшим сдвигом, знак базиса
     function mktSentence() {
-      const r = M.curve['RUB RUONIA'], b = M.curve['RUB OFZ'], a = avgChg(r), ab = avgChg(b);
+      const r = M.curve['RUB RUONIA'], b = K.basisCurve(), a = avgChg(r), ab = avgChg(b);
       const head = noCurve(r) ? 'Ставки: кривой RUONIA OIS в прогоне нет' : (a > 0.5 ? 'Ставки выросли' : a < -0.5 ? 'Ставки снизились' : 'Ставки почти не изменились') + ': RUONIA OIS ' + chgRange(r) + ' б.п.' + (Math.abs(a) > 0.5 ? ' (сильнее всего ' + maxBucket(r) + ')' : '');
       return head + ', КС-свопы ' + chgRange(M.curve['RUB KEY']) + ', базис ОФЗ ' + chgRange(b) + (ab > 0.5 ? ' — ОФЗ слабее свопов.' : ab < -0.5 ? ' — ОФЗ сильнее свопов.' : '.');
     }
@@ -284,7 +285,7 @@
     });
     // график кривых
     const P = M.pillars;
-    const ru = M.curve['RUB RUONIA'], ks = M.curve['RUB KEY'], ba = M.curve['RUB OFZ'];
+    const ru = M.curve['RUB RUONIA'], ks = M.curve['RUB KEY'], ba = K.basisCurve();
     const ofzY = M.ofzCurve.map((v, i) => v - ru.chg[i] / 100 - ba.chg[i] / 100);
     K.chart(document.getElementById('curveChart'), () => ({
       grid: { left: 6, right: 6, top: 30, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 },

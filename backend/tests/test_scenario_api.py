@@ -59,8 +59,8 @@ def test_risk_payload_and_compat_scenarios(store_url, book, client):
     ps = client.get(f"/api/v1/runs/{rid}/positions").json()["positions"]
     assert p["run_id"] == rid and len(p["buckets"]) == 11
     assert p["curves"] == ["RUB KEY", "RUB OFZ", "RUB RUONIA", "USD"]  # the floaters' and the USD bond's too
-    # no bond is discounted on the KBD (RUB OFZ): it is a scenario curve without risk
-    assert {f.split("|")[1] for f in p["factors"] if f.startswith("IR|")} == set(p["curves"]) - {"RUB OFZ"}
+    # every curve carries risk: the fixed OFZ on the KBD (RUB OFZ, #32), the rest on RUONIA, KEY and USD
+    assert {f.split("|")[1] for f in p["factors"] if f.startswith("IR|")} == set(p["curves"])
     assert "CS" in p["factors"]
     assert [x["position_id"] for x in p["positions"]] == [x["position_id"] for x in ps if x["fact"]]
     n = len(p["factors"])

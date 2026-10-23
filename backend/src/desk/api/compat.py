@@ -50,6 +50,10 @@ RATING_RANK = {g: i for i, g in enumerate([*ratings.GRADES, ratings.NOT_RATED, r
 """The order of ``RATING_ORDER``: the grades best first (``marketdata.ratings.GRADES``), then б/р and нет данных."""
 RUB = {"ccy": "RUB", "rate": 1.0, "move_pct": 0.0, "rate_cbr": 1.0, "move_pct_cbr": 0.0, "rate_cbr_next": 1.0}
 CONTRACT_VERSION = "1.3"
+"""The tdm bundle contract (``tdm.CONTRACT_VERSION``, shared with tdm). Its shape did not change in 0.2.6, but
+``ofzSpr01`` of a fixed-coupon OFZ is its spread to the KBD from then on, no longer its basis to RUONIA: a reader
+tells them apart by ``source.ofzScheme`` (``kbd_par``; null before) and finds the basis in ``extra.ofz_basis01``
+(``contract/bundle.schema.json`` says so on ``ofz_spr01``)."""
 HISTORY_DAYS = 22  # tdm.assemble.HISTORY_DAYS
 
 RUONIA_DISCOUNT_VERSION = 4
@@ -438,6 +442,8 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
                    "publishedAt": completed.isoformat() if completed else None,
                    "libVersion": f"rub-fixed-income-core {run['core_version']}",
                    "marketSnapshot": run["market_snapshot_id"], "contractVersion": CONTRACT_VERSION,
+                   # how the run values OFZ (valuation.bonds.OFZ_SCHEME): "kbd_par" since 0.2.6, null before
+                   "ofzScheme": (run.get("lineage") or {}).get("ofz_scheme"),
                    **run_slice(run)},
     }
 

@@ -70,7 +70,8 @@ def test_missing_rates_inputs_are_named_and_the_risk_goes_where_it_says(tmp_path
         assert "риск отнесён на ОФЗ (RUB OFZ)" in notes[0]["text"] and "no ruonia_ois quote set" in notes[0]["detail"]
         assert notes[1]["curve"] == "RUB KEY" and notes[1]["detail"] is None
     outs = {o.secid: o for o in value(ctx, [(s, 1000.0) for s in (OFZ, CORP, KEY)])}
-    assert set(outs[OFZ].valuation.risk()) == set(outs[CORP].valuation.risk()) == {disc}
+    # a fixed-coupon OFZ is on the KBD in any case (#32); a corporate on the run's discount curve
+    assert set(outs[OFZ].valuation.risk()) == {"RUB OFZ"} and set(outs[CORP].valuation.risk()) == {disc}
     key = outs[KEY].valuation
     if not drop:
         assert key.quality in ("exact", "assumed") and set(key.risk()) == {"RUB KEY", "RUB RUONIA"}

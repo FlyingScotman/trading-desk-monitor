@@ -18,7 +18,7 @@ from desk.orchestrator import prepare, value
 from desk.publish import desk_run, tdm_run
 from desk.scenario import exact
 from desk.scenario.definition import RUB_CURVES, DefinitionError, definition_hash, normalize, own_spread_shock
-from desk.scenario.exact import reprice_run
+from desk.scenario.exact import REPRICED, reprice_run
 from desk.scenario.taylor import risk_payload, run_taylor
 from desk.valuation.bonds import SPREAD_CONVENTION
 
@@ -40,7 +40,7 @@ CASES = {
     "rub+50": {"curves": dict.fromkeys(RUB_CURVES, 50)},
     "basis": {"curves": {"RUB KEY": [50, 50, 45, 40, 30, 25, 20, 15, 10, 10, 10]}},
     "usd": {"curves": {"USD": [30, 30, 30, 25, 20, 20, 15, 15, 10, 10, 10]}, "fx": {"USD": 10}},
-    # RUONIA discounting (20.10): the KBD alone moves no bond
+    # the KBD alone moves the fixed-coupon OFZ only (#32)
     "kbd": {"curves": {"RUB OFZ": 100}},
 }
 
@@ -98,17 +98,19 @@ def test_taylor_matches_core_approximation(golden):
     _, ctx, run, rows, reference = golden
     (row,) = [r for r in rows if r["secid"] == OFZ]
     payload = risk_payload(run, [row], reference)
-    norm = normalize(KEYHIKE)
+    # the key-rate hike on the KBD: a fixed OFZ is discounted on it (#32), its par buckets are RUB OFZ's factors
+    norm = normalize({**KEYHIKE, "curves": {"RUB OFZ": KEYHIKE["curves"]["RUB RUONIA"]}})
     t = run_taylor(payload, norm)["positions"][0]
     (o,) = value(ctx, [(OFZ, row["quantity"])], second_order=True)
     v = o.valuation
-    engine = BondRiskEngine(BondRiskRequest(v.cashflows, v.valuation_date, ctx.discount[1], SPREAD_CONVENTION, "ofz",
+    assert v.discount_curve_id == "RUB_KBD"
+    engine = BondRiskEngine(BondRiskRequest(v.cashflows, v.valuation_date, ctx.curve, SPREAD_CONVENTION, "ofz",
                                             dirty_price_rub=v.dirty_rub, quantity=row["quantity"]))
-    core = engine.approximate(BondScenario(tuple(norm["curves"]["RUB RUONIA"]), norm["ofzSpread"]))
+    core = engine.approximate(BondScenario(tuple(norm["curves"]["RUB OFZ"]), norm["ofzSpread"]))
     assert t["total"] == pytest.approx(core.approximate_pnl_rub, rel=1e-6)
     assert t["convexity"] == pytest.approx(core.rates_gamma_pnl_rub + core.spread_gamma_pnl_rub
                                            + core.rates_spread_cross_pnl_rub, rel=1e-6)
-    assert t["second_order"] and t["max_move_bp"] == 200
+    assert t["second_order"] and t["max_move_bp"] == 150  # its largest move where it has risk: 1Y (KBD 1M-6M carry none)
 
 
 def test_reprice_run_parallel_bp_is_taylor(golden):
@@ -149,14 +151,15 @@ def test_reprice_run_keyhike(golden):
 def test_reprice_run_moves_each_curve_by_its_own_shifts(golden):
     """R8: core moves the RUONIA and key-rate curves by name and the KBD by RUB OFZ, each by its own vector only, as
     the Taylor moves each curve's factors: one bp on every RUB curve, and one curve alone, reprice the bonds as their
-    per-curve risk says. With RUONIA discounting (20.10) the KBD alone moves no bond, in Taylor and in core."""
+    per-curve risk says. The KBD alone moves the fixed-coupon OFZ (on it since #32) and no other bond."""
     snaps, _, run, rows, reference = golden
     sc = exact.core_scenario("x", normalize({"curves": {"RUB KEY": 2, "RUB OFZ": 1}}), 3.0)
     assert sc.shock.curve_shifts_bp == (1.0,) * 11 and sc.shock.spread_shift_bp == 3.0
     assert dict(sc.curve_shifts_bp) == {"RUB_KEY_RATE_PROJ": (2.0,) * 11, "RUB_RUONIA_OIS": (0.0,) * 11}
     floaters = {r["position_id"] for r in rows if r["secid"] in ("SU29008RMFS8", FLOATER)}
     assert len(floaters) == 2  # the OFZ-PK on RUONIA, the corporate on the key rate
-    assert not any("RUB OFZ" in r["fact"]["risk"] for r in rows)
+    on_kbd = {r["position_id"] for r in rows if "RUB OFZ" in r["fact"]["risk"]}
+    assert on_kbd and all(r["secid"].startswith("SU") for r in rows if r["position_id"] in on_kbd)
     for d in ({"curves": dict.fromkeys(RUB_CURVES, 1)}, {"curves": {"RUB KEY": 1}}, {"curves": {"RUB RUONIA": -1}}):
         res = reprice_run(snaps, run, rows, reference, d)
         moved = [p for p in res["positions"] if p["position_id"] in floaters and p["taylor"]["rates"]]
@@ -166,14 +169,24 @@ def test_reprice_run_moves_each_curve_by_its_own_shifts(golden):
                 assert abs(p["residual"]) <= 1e-3 * abs(p["taylor"]["total"]) + 1e-6, (d, p)
     kbd = reprice_run(snaps, run, rows, reference, {"curves": {"RUB OFZ": 100}})
     assert kbd["coverage"]["n_exact"] >= 8
-    assert all(p["taylor"]["total"] == 0 and (p["exact"] is None or abs(p["exact"]) < 1e-6) for p in kbd["positions"])
-    # a move of all RUB curves alike: the same total as the RUONIA move for a fixed bond (its only curve)
+    for p in kbd["positions"]:
+        if p["position_id"] in on_kbd and p["exact"] is None:  # an OFZ-IN on its fallback rung: Taylor only
+            assert p["code"] not in REPRICED and p["taylor"]["rates"], p
+        elif p["position_id"] in on_kbd:  # 100 bp of par yields: the Taylor (with its gamma) and core agree closely
+            assert p["exact"] * p["taylor"]["rates"] > 0
+            assert abs(p["residual"]) <= 1e-2 * abs(p["taylor"]["total"]), p
+        else:
+            assert p["taylor"]["total"] == 0 and (p["exact"] is None or abs(p["exact"]) < 1e-6), p
+    # a move of all RUB curves alike: for a fixed bond (one curve) the move of its own curve alone
     par = {p["position_id"]: p for p in reprice_run(snaps, run, rows, reference,
                                                     {"curves": dict.fromkeys(RUB_CURVES, 1)})["positions"]}
     ruonia = reprice_run(snaps, run, rows, reference, {"curves": {"RUB RUONIA": 1}})["positions"]
+    ofz = {p["position_id"]: p for p in reprice_run(snaps, run, rows, reference,
+                                                    {"curves": {"RUB OFZ": 1}})["positions"]}
     for p in ruonia:
         if p["exact"] is not None and p["position_id"] not in floaters:
-            assert par[p["position_id"]]["exact"] == pytest.approx(p["exact"], rel=1e-9, abs=1e-9)
+            own = ofz[p["position_id"]]["exact"] if p["position_id"] in on_kbd else p["exact"]
+            assert par[p["position_id"]]["exact"] == pytest.approx(own, rel=1e-9, abs=1e-6)
 
 
 def test_reprice_run_passes_the_fx_shocks(golden, monkeypatch):

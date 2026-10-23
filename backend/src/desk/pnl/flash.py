@@ -63,10 +63,12 @@ from rub_fixed_income import (
     ShockedCurveCache,
     ZcycParameters,
     kbd_discount_curve,
+    kbd_effective_yield,
     kbd_zero_rate_bp,
     roll_curve,
 )
 
+from ..curves.rates import RUONIA_OIS_CURVE_ID
 from ..marketdata.adapter import KBD_CURVE_ID
 from ..valuation.bonds import RISK_CURVES, SPREAD_CONVENTION, BondValuation, FloaterModel
 
@@ -85,6 +87,41 @@ class NoPnl(Exception):
         super().__init__(f"{reason}: {detail}" if detail else reason)
         self.reason = reason
         self.detail = detail
+
+
+def kbd_par_yield_bp(params: ZcycParameters, tenor_years: float) -> float:
+    """The KBD's par yield (bp) of an instrument paying an annual coupon to ``tenor_years``: ``(1 - DF(T)) / sum DF(i)``
+    over the whole years, ``DF(t) = exp(-zero(t) t)`` at ACT/365F times (``kbd_discount_curve``); below a year the
+    effective annual yield. Its level differs from core's par instruments by fractions of a bp (core rolls the coupon
+    dates by months and accrues ACT/365F, here whole years and an accrual of 1); in a day's move, what the linear check
+    uses, that difference cancels to a few hundredths of a bp."""
+    if tenor_years < 1:
+        return kbd_effective_yield(params, tenor_years) * 1e4
+    n = round(tenor_years)
+
+    def df(t: float) -> float:
+        return math.exp(-kbd_zero_rate_bp(params, t) / 1e4 * t)
+    return (1 - df(n)) / math.fsum(df(i) for i in range(1, n + 1)) * 1e4
+
+
+PAR_CURVES = frozenset({RUONIA_OIS_CURVE_ID})
+"""Curves whose bucket risk is in par quotes (``EodContext.quote_curves``), besides the KBD (``kbd_par_yield_bp``)."""
+
+
+def par_rate_bp(c: DiscountCurve, tenor_years: float) -> float:
+    """A curve's par rate (bp) at ``tenor_years``: the simple rate of one period to it below a year, else the par rate
+    of an annual-coupon instrument over the whole years, the OIS quotes' shape (one period to 1Y, annual beyond), from
+    the curve's discount factors at the pillars' days (``round(t x 365.25)``) and its time basis."""
+    yf = c.convention.time_day_count.year_fraction
+
+    def at(t: float) -> date:
+        return c.curve_date + timedelta(days=max(1, round(t * 365.25)))
+    if tenor_years < 1:
+        d = at(tenor_years)
+        return (1 / c.discount_factor(d) - 1) / yf(c.curve_date, d) * 1e4
+    ends = [at(i) for i in range(1, round(tenor_years) + 1)]
+    annuity = math.fsum(yf(s, e) * c.discount_factor(e) for s, e in zip([c.curve_date, *ends], ends))
+    return (1 - c.discount_factor(ends[-1])) / annuity * 1e4
 
 
 def _zero(c: DiscountCurve, t: float) -> float:
@@ -139,12 +176,18 @@ class FlashCurves:
         return self.cur_curves[KBD_CURVE_ID]
 
     def zero_move_bp(self, curve_id: str = KBD_CURVE_ID) -> dict[str, float]:
-        """Continuously compounded zero-rate move per risk pillar at the same tenor, of ``curve_id`` (empty when the
-        curve is not on both dates). The KBD by its parameters; another curve at the pillar's date counted in days
-        (``round(t x 365.25)``) on its own time basis, as its bucket shifts read it."""
+        """The move per risk pillar at the same tenor of ``curve_id`` in the unit of its bucket DV01 (empty when the
+        curve is not on both dates): the KBD's par yield of an annual-coupon instrument by its parameters
+        (``kbd_par_yield_bp``, the unit of ``rub_ofz_kbd_v3``; the 1M-6M buckets carry no KBD risk); the RUONIA OIS
+        curve's par rate (``par_rate_bp``: core bumps its quotes, ``EodContext.quote_curves``); another curve's
+        continuously compounded zero rate at the pillar's date counted in days (``round(t x 365.25)``) on its own
+        time basis, as its bucket shifts read it."""
         if curve_id not in self._moves:
             if curve_id == KBD_CURVE_ID:
-                out = {b: kbd_zero_rate_bp(self.cur, t) - kbd_zero_rate_bp(self.prev, t)
+                out = {b: kbd_par_yield_bp(self.cur, t) - kbd_par_yield_bp(self.prev, t)
+                       for b, t in zip(RISK_BUCKETS, RISK_PILLARS)}
+            elif curve_id in self.cur_curves and curve_id in PAR_CURVES:
+                out = {b: par_rate_bp(self.cur_curves[curve_id], t) - par_rate_bp(self.prev_curves[curve_id], t)
                        for b, t in zip(RISK_BUCKETS, RISK_PILLARS)}
             elif curve_id in self.cur_curves:
                 out = {b: (_zero(self.cur_curves[curve_id], t) - _zero(self.prev_curves[curve_id], t)) * 1e4

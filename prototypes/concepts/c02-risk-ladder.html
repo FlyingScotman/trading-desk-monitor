@@ -125,12 +125,14 @@
     // итоги в заголовке
     const tot = o.el.querySelector('.tot');
     tot.innerHTML = 'ставки <b>' + K.d({ title: ccy + ' · DV01 ставки', unit: 'тыс ₽/бп', list: L, val: p => RATE[ccy].reduce((s, id) => s + p.dv01ByCurve[id], 0) }, null, '') + '</b>' +
-      (ccy === 'RUB' ? ' · базис ОФЗ <b>' + K.d({ title: 'Базис ОФЗ−RUONIA', unit: 'тыс ₽/бп', list: L, val: 'basis01' }, null, '') + '</b>' : '') +
+      (ccy === 'RUB' && M.ofzView !== 'kbd' ? ' · базис ОФЗ <b>' + K.d({ title: 'Базис ОФЗ−RUONIA', unit: 'тыс ₽/бп', list: L, val: 'basis01' }, null, '') + '</b>' : '') +
+      (ccy === 'RUB' ? ' · спред ОФЗ к КБД <b>' + K.d({ title: 'Спред ОФЗ к КБД', unit: 'тыс ₽/бп', list: L, val: 'ofzSpr01' }, null, '') + '</b>' : '') +
       ' · CS01 <b>' + K.d({ title: ccy + ' · CS01', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === ccy), val: 'cs01' }, null, '') + '</b> <span class="mut3">тыс ₽/бп</span>';
     // переключатель метрики — только там, где он что-то меняет
     const metBox = o.el.querySelector('.met');
     if (['types', 'ladder', 'heat'].includes(st.view)) {
-      const mets = [['rates', 'ставки']].concat(ccy === 'RUB' ? [['basis', 'базис ОФЗ']] : []).concat([['cs01', 'CS01']]);
+      // в виде «КБД» базиса нет: КБД — среди кривых ставок
+      const mets = [['rates', 'ставки']].concat(ccy === 'RUB' && M.ofzView !== 'kbd' ? [['basis', 'базис ОФЗ']] : []).concat([['cs01', 'CS01']]);
       if (!mets.some(m => m[0] === st.metric)) st.metric = 'rates';
       K.seg(metBox, mets, st.metric, v => { st.metric = v; save(); renderSec(o); });
     } else metBox.innerHTML = '';

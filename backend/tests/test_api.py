@@ -33,7 +33,8 @@ QTY = 1000.0
 EXCLUDED = {"runId": "the two stores number their runs independently",
             "publishedAt": "publication time of each store's run",
             **dict.fromkeys(("cutType", "cutTs", "slice", "prevCutType", "pnlBasis", "marketDate", "marketCutType"),
-                            "the run's market slice (R11): the desk store's only")}
+                            "the run's market slice (R11): the desk store's only"),
+            "ofzScheme": "how the run values OFZ (#32, the pages' basis view): the desk store's only"}
 R10_RUN = {"pnlAvailable", "pnlReason", "pnlReasonText", "pnlCoverage", "riskNotes",  # riskNotes: R14
            "FX_SOURCE",  # R26: the market rate's source (MOEX 19:00 ...)
            "fundingStatus"}  # B1: funding computed, or why not (not configured: no rules in the store)

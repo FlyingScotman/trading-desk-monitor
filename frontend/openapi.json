@@ -3,7 +3,7 @@
   "info": {
     "title": "Desk API",
     "description": "Desk API v1 (docs/architecture/05 §2)",
-    "version": "0.2.5"
+    "version": "0.2.6"
   },
   "paths": {
     "/api/v1/auth/state": {
@@ -5066,7 +5066,13 @@
           },
           "ofz_basis_rub": {
             "type": "number",
-            "title": "Ofz Basis Rub"
+            "title": "Ofz Basis Rub",
+            "description": "the OFZ basis to RUONIA OIS, RUB per bp: since 0.2.6 a fixed OFZ's par DV01 on the KBD (RUB OFZ, also in dv01_by_curve_rub), an OFZ-PK's spread to RUONIA; before, every OFZ's spread to RUONIA (ofz_spr01)"
+          },
+          "ofz_spread_kbd_rub": {
+            "type": "number",
+            "title": "Ofz Spread Kbd Rub",
+            "description": "a fixed OFZ's own spread risk to the KBD (0.2.6), RUB per bp; 0 in a run before it"
           },
           "cs01_rub": {
             "type": "number",
@@ -5100,6 +5106,7 @@
           "dv01_by_curve_rub",
           "dv01_all_curves_rub",
           "ofz_basis_rub",
+          "ofz_spread_kbd_rub",
           "cs01_rub",
           "fx_delta_rub",
           "n_risk_missing"
@@ -5139,6 +5146,7 @@
               "dv01_curve",
               "cs01",
               "ofz_basis",
+              "ofz_spread_kbd",
               "fx_delta",
               "mv",
               "notional",
@@ -5289,7 +5297,13 @@
           },
           "ofz_basis_rub": {
             "type": "number",
-            "title": "Ofz Basis Rub"
+            "title": "Ofz Basis Rub",
+            "description": "the OFZ basis to RUONIA OIS, RUB per bp: since 0.2.6 a fixed OFZ's par DV01 on the KBD (RUB OFZ, also in dv01_by_curve_rub), an OFZ-PK's spread to RUONIA; before, every OFZ's spread to RUONIA (ofz_spr01)"
+          },
+          "ofz_spread_kbd_rub": {
+            "type": "number",
+            "title": "Ofz Spread Kbd Rub",
+            "description": "a fixed OFZ's own spread risk to the KBD (0.2.6), RUB per bp; 0 in a run before it"
           },
           "cs01_rub": {
             "type": "number",
@@ -5330,6 +5344,7 @@
           "dv01_by_curve_rub",
           "dv01_foreign_rub",
           "ofz_basis_rub",
+          "ofz_spread_kbd_rub",
           "cs01_rub",
           "fx_delta_ccy",
           "n_risk_missing",
@@ -5366,7 +5381,13 @@
           },
           "ofz_basis_rub": {
             "type": "number",
-            "title": "Ofz Basis Rub"
+            "title": "Ofz Basis Rub",
+            "description": "the OFZ basis to RUONIA OIS, RUB per bp: since 0.2.6 a fixed OFZ's par DV01 on the KBD (RUB OFZ, also in dv01_by_curve_rub), an OFZ-PK's spread to RUONIA; before, every OFZ's spread to RUONIA (ofz_spr01)"
+          },
+          "ofz_spread_kbd_rub": {
+            "type": "number",
+            "title": "Ofz Spread Kbd Rub",
+            "description": "a fixed OFZ's own spread risk to the KBD (0.2.6), RUB per bp; 0 in a run before it"
           },
           "cs01_rub": {
             "type": "number",
@@ -5397,6 +5418,7 @@
           "dv01_by_curve_rub",
           "dv01_all_curves_rub",
           "ofz_basis_rub",
+          "ofz_spread_kbd_rub",
           "cs01_rub",
           "fx_delta_rub",
           "n_risk_missing"

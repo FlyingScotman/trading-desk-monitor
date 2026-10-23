@@ -21,6 +21,8 @@ from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import Outcome, attach_pnl, prepare, value
 from desk.publish import tdm_run
 from desk.report import validation
+from desk.valuation import fallback
+from desk.valuation.bonds import DISCOUNT_CURVE_ID as RUONIA
 from desk.valuation.bonds import Rejected, face_on, fixed_schedule
 from desk.valuation.fallback import (
     FallbackContext,
@@ -88,7 +90,8 @@ def test_market_value_floater_on_duration(ctx, exact):
         assert v.dv01_rub < 0 and math.isclose(sum(v.buckets.values()), v.dv01_rub)
         assert sum(1 for x in v.buckets.values() if x) <= 2  # split between two pillars
         assert any("next reset" in a for a in v.assumptions)
-        assert (v.spread01_rub < v.dv01_rub) if kind == "credit" else v.spread01_rub == 0.0
+        # the spread risk keeps the full duration (an OFZ-PK's spread to RUONIA too, as core's ofz_spr01 since 0.2.6)
+        assert v.spread01_rub < v.dv01_rub
 
 
 def test_fx_bond_in_rub_at_the_market_rate(ctx, exact):
@@ -105,7 +108,8 @@ def test_fx_bond_in_rub_at_the_market_rate(ctx, exact):
     assert any("FX bond (USD)" in a and "MOEX 19:00" in a and "duration proxy on curve USD" in a for a in v.assumptions)
     # R8: rate risk from the MOEX duration, as a RUB bond's fallback, in RUB per bp, on the USD curve
     mac = float(o.quote.source_analytics["duration_days"]) / 365
-    assert v.macaulay_years == pytest.approx(mac) and v.dv01_rub == pytest.approx(-mac * v.pv_rub * 1e-4)
+    y = fallback._yield(o.quote.source_analytics) / 100  # the modified duration (#36): -Macaulay / (1 + y)
+    assert v.macaulay_years == pytest.approx(mac) and v.dv01_rub == pytest.approx(-mac / (1 + y) * v.pv_rub * 1e-4)
     assert set(v.risk()) == {"USD"} and sum(v.risk()["USD"].values()) == pytest.approx(v.dv01_rub)
     assert sum(1 for x in v.buckets.values() if x) <= 2 and v.spread01_rub == pytest.approx(v.dv01_rub)  # credit
     row = tdm_run.run_content(ctx, [("P1", "MIXED", replace(o, valuation=v))], None, {})
@@ -135,12 +139,21 @@ def test_market_fx_falls_back_14_cets_cbr_and_says_so():
     assert fx_rate(none, "USD") is None and fx_rate_cbr(none, "USD") is None and fx_rate(none, "RUB") == (1.0, "")
 
 
-    """R8 phase 1: an OFZ-IN keeps a nominal DV01 from its duration on the RUB discount curve (RUONIA), a proxy."""
 def test_ofz_in_nominal_proxy_is_flagged(exact):
-    """R8 phase 1: an OFZ-IN keeps a nominal DV01 from its duration on the RUB discount curve (RUONIA), said to be a proxy."""
+    """R8 phase 1: an OFZ-IN keeps a nominal DV01 from its duration on its discount curve (the KBD since 0.2.6, as
+    every fixed-coupon OFZ: ``bonds.OFZ_KBD_CLASSES``), said to be a proxy."""
     v = exact["SU52005RMFS4"].valuation
-    assert v.quality == "market_value" and set(v.risk()) == {"RUB RUONIA"} and v.dv01_rub < 0
+    assert v.quality == "market_value" and set(v.risk()) == {"RUB OFZ"} and v.dv01_rub < 0
     assert any("indexed face: a nominal-rate proxy" in a for a in v.assumptions)
+
+
+def test_short_ofz_proxy_has_no_kbd_risk_below_1y(ctx, exact):
+    """A duration proxy on the KBD keeps the par buckets of rub_ofz_kbd_v3: no risk in 1M-6M, it goes to 1Y."""
+    o = exact["SU52005RMFS4"]
+    sa = {**o.quote.source_analytics, "duration_days": 120}
+    v = approximate(ctx, _outcome(o, "test", quote=replace(o.quote, source_analytics=sa)), Q, _fb(ctx))
+    kbd = v.risk()["RUB OFZ"]
+    assert all(kbd[b] == 0.0 for b in fallback.KBD_SHORT) and kbd["1Y"] == pytest.approx(v.dv01_rub) and v.dv01_rub < 0
 
 
 def test_stale_price_within_the_window(ctx, exact):
@@ -153,8 +166,8 @@ def test_stale_price_within_the_window(ctx, exact):
 def test_model_price_on_issuer_median_z(ctx, exact):
     o = exact[RZD]
     fb = _fb(ctx, [_History(ctx, 40)])  # outside the window: no price
-    assert fb.median_z(o.terms, "credit") is None  # one exact corporate in the fixtures: too few for a median
-    fb.medians = {("issuer", o.terms.issuer_id): (o.valuation.z_spread_bp, 2)}
+    assert fb.median_z(o.terms, "credit", RUONIA) is None  # one exact corporate in the fixtures: too few for a median
+    fb.medians = {("issuer", o.terms.issuer_id, RUONIA): (o.valuation.z_spread_bp, 2)}
     v = approximate(ctx, _outcome(o, "no_quote", quote=None), Q, fb)
     assert v.quality == "model_price" and any("issuer median Z" in a for a in v.assumptions)
     # at its own Z the model gives back the exact price and risk

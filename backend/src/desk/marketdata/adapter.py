@@ -163,7 +163,10 @@ class BondQuote:
 
 OFZ_CLASSES = ("ofz_pd", "ofz_ad", "ofz_pk", "ofz_in")
 KBD_CURVE_ID = "RUB_KBD"
-KBD_SPEC = "rub_ofz_kbd_v1"
+KBD_SPEC = "rub_ofz_kbd_v3"
+"""The KBD's core spec (core 0.37.0): the curve values as before; its risk buckets are par yields of annual-coupon
+instruments 1Y-20Y+ on the curve, 1M-6M merged into 1Y (always 0), the unit and kind of factor of RUONIA OIS, so the
+OFZ basis to RUONIA is par against par (``basis_view``). ``v1`` (continuous zero) until 0.2.5."""
 ZCYC_KEYS = ("B1", "B2", "B3", "T1", *(f"G{i}" for i in range(1, 10)))
 
 PRICE_FIELDS = ("legal_close", "close", "waprice", "market_price2", "market_price3", "admitted_quote",

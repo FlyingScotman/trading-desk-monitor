@@ -24,10 +24,11 @@ reported_value  an instrument the static snapshot does not know (an unmapped ban
 ==============  ==============================================================================
 
 Risk of the priced rungs: with a usable fixed schedule, core ``BondRiskEngine`` calibrated to the
-dirty price (bucket DV01 and spread risk on the discount curve, as for exact bonds). Otherwise a duration
-estimate: MOEX ``duration_days``, else the time to the horizon; DV01 = -Macaulay * PV * 1e-4
-(the buckets bump continuous zero rates) split linearly between the two nearest pillars; CS01 =
-DV01 for credit, 0 for OFZ. A floater's rates duration is the time to its next reset (its CS01
+dirty price (bucket DV01 and spread risk on the discount curve, as for exact bonds: the KBD for ``OFZ_KBD_CLASSES``,
+``bond_discount``). Otherwise a duration estimate: MOEX ``duration_days``, else the time to the horizon; DV01 =
+-Macaulay / (1 + y) * PV * 1e-4 (the modified duration: core's buckets bump par quotes and the Z-spread is annual;
+until 0.2.5 -Macaulay * PV, about 15 % more, #36) split linearly between the two nearest pillars; the spread risk
+(CS01 for credit, the spread to the KBD for an OFZ) the same at the full duration. A floater's rates duration is the time to its next reset (its CS01
 keeps the full duration); a key-rate floater books it on two curves as core does an exact one
 (``key_rate_floater_proxy``, R15): the full duration on the discount curve, the projection on ``RUB KEY``. A bond with a foreign face is valued in RUB at the CBR rate (MOEX TOM
 when CBR is missing); core has no curve in its currency, so its rate risk is always the duration
@@ -64,9 +65,10 @@ from rub_fixed_income import (
 )
 
 from ..curves.rates import KEY_RATE_CURVE_ID
-from ..marketdata.adapter import OFZ_CLASSES, BondQuote, BondTerms, MarketView, core_instrument
+from ..marketdata.adapter import KBD_CURVE_ID, OFZ_CLASSES, BondQuote, BondTerms, MarketView, core_instrument
 from ..pnl.flash import FlashPnl, NoPnl
 from .bonds import (
+    OFZ_KBD_CLASSES,
     PRICE_BASIS_ORDER,
     RISK_CURVES,
     SPREAD_CONVENTION,
@@ -89,6 +91,9 @@ FALLBACK_BASES = (*PRICE_BASIS_ORDER, "market_price2", "market_price3", "admitte
 KEY_CURVE = RISK_CURVES[KEY_RATE_CURVE_ID]
 """The key-rate projection curve (``RUB KEY``): a key-rate floater on a fallback rung books its projection here."""
 LOOKBACK_DAYS = 30
+KBD_SHORT = ("1M", "3M", "6M")
+"""Buckets of the KBD that carry no risk (``rub_ofz_kbd_v3``: no OFZ there, merged into 1Y): a duration proxy on the KBD
+moves them into 1Y, as core's par buckets do."""
 MIN_BONDS = {"issuer": 3, "class": 3, "kind": 3}
 Z_BAND_BP = (-100.0, 2000.0)
 """Z-spreads outside are distressed names or bad prints, not a spread level for a model price."""
@@ -149,18 +154,20 @@ class FallbackContext:
             if (q := m.quote(terms)) is not None:
                 yield q
 
-    def median_z(self, terms: BondTerms, kind: str) -> tuple[float, str] | None:
+    def median_z(self, terms: BondTerms, kind: str, curve: str) -> tuple[float, str] | None:
+        """The day's median Z of the bond's issuer, else class, else spread kind, over the exact bonds discounted on the
+        same core curve ``curve`` (an OFZ-PD's Z is to the KBD, an OFZ-PK's to RUONIA: not one level)."""
         if self.medians is None:
             self.medians = _medians(self.ctx)
-        for key, label in ((("issuer", terms.issuer_id), "issuer"),
-                           (("class", terms.bond_class), terms.bond_class), (("kind", kind), kind)):
+        for key, label in ((("issuer", terms.issuer_id, curve), "issuer"),
+                           (("class", terms.bond_class, curve), terms.bond_class), (("kind", kind, curve), kind)):
             if key in self.medians:
                 z, n = self.medians[key]
                 return z, f"{label} median Z {z:.0f} bp ({n} bonds)"
         return None
 
 
-def _medians(ctx: EodContext) -> dict[tuple[str, Any], tuple[float, int]]:
+def _medians(ctx: EodContext) -> dict[tuple[str, Any, Any], tuple[float, int]]:
     reqs = []
     for t in ctx.static.bonds.values():
         q = ctx.market.quote(t)
@@ -171,13 +178,14 @@ def _medians(ctx: EodContext) -> dict[tuple[str, Any], tuple[float, int]]:
         except Rejected:
             continue
     valued, _ = value_bonds(ctx.core_market, reqs, cache=ctx.cache)
-    groups: dict[tuple[str, Any], list[float]] = defaultdict(list)
+    groups: dict[tuple[str, Any, Any], list[float]] = defaultdict(list)
     for r in reqs:
         v = valued.get(r.position_id)
         if isinstance(v, BondValuation) and v.quality == "exact" and math.isfinite(v.z_spread_bp) \
                 and Z_BAND_BP[0] <= v.z_spread_bp <= Z_BAND_BP[1] \
                 and (v.horizon_date - ctx.business_date).days >= MIN_HORIZON_DAYS:
-            for k in (("issuer", r.terms.issuer_id), ("class", r.terms.bond_class), ("kind", v.spread_kind)):
+            c = v.discount_curve_id
+            for k in (("issuer", r.terms.issuer_id, c), ("class", r.terms.bond_class, c), ("kind", v.spread_kind, c)):
                 if k[1] is not None:
                     groups[k].append(v.z_spread_bp)
     return {k: (statistics.median(zs), len(zs)) for k, zs in groups.items() if len(zs) >= MIN_BONDS[k[0]]}
@@ -245,9 +253,20 @@ def _schedule(t: BondTerms, d: date) -> tuple[Any, tuple[BondCashflow, ...], Any
     return s, tuple(BondCashflow(f.payment_date, f.amount) for f in flows), inst
 
 
-def _engine(ctx: EodContext, flows: tuple[BondCashflow, ...], kind: str, q: float, *,
+def bond_discount(ctx: EodContext, terms: BondTerms) -> tuple[str, Any, str | None]:
+    """The core curve a RUB bond of the ladder is discounted on, as on the exact path (``bonds.value_bonds``): the KBD
+    for ``OFZ_KBD_CLASSES``, else the run's (``EodContext.discount``: RUONIA OIS, the KBD on a date without it); what
+    core's risk engine takes for it (the KBD built with par buckets, RUONIA as its OIS bootstrap request:
+    ``EodContext.risk_curve``) and the note of a KBD fallback."""
+    if terms.bond_class in OFZ_KBD_CLASSES:
+        return KBD_CURVE_ID, ctx.curve, None
+    cid, built, note = ctx.discount
+    return cid, ctx.risk_curve(cid, built), note  # RUONIA by its OIS quotes, as on the exact path
+
+
+def _engine(ctx: EodContext, curve: Any, flows: tuple[BondCashflow, ...], kind: str, q: float, *,
             spread_bp: float | None = None, dirty: float | None = None) -> tuple[BondRiskEngine, Any]:
-    e = BondRiskEngine(BondRiskRequest(cashflows=flows, settlement_date=ctx.business_date, curve=ctx.discount[1],
+    e = BondRiskEngine(BondRiskRequest(cashflows=flows, settlement_date=ctx.business_date, curve=curve,
                                        spread_convention=SPREAD_CONVENTION,
                                        spread_kind=kind,  # type: ignore[arg-type]
                                        spread_bp=spread_bp, dirty_price_rub=dirty, quantity=q),
@@ -310,7 +329,7 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
     face_bd = face_on(t, bd)
     matured = not t.is_perpetual and (t.maturity_date is not None and t.maturity_date <= bd
                                       or face_bd is not None and face_bd <= 0)
-    disc_id, _, disc_note = ctx.discount
+    disc_id, disc_curve, disc_note = bond_discount(ctx, t) if face_ccy == "RUB" else ctx.discount
     disc = RISK_CURVES[disc_id]
     curve = disc if face_ccy == "RUB" else ccy_curve(face_ccy)
     if is_fx:
@@ -388,7 +407,7 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
         pv = q * dirty
         if sched is not None:
             try:
-                _, r = _engine(ctx, sched[1], kind, q, dirty=dirty)
+                _, r = _engine(ctx, disc_curve, sched[1], kind, q, dirty=dirty)
                 why.append(f"risk: {disc}, Z calibrated to this price on the fixed schedule"
                            + (f" ({disc_note})" if disc_note else ""))
                 bs = {b.bucket: b.dv01_rub for b in r.buckets}
@@ -414,22 +433,27 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
             note += f"; rates duration ~ time to next reset {coupon.pay_date}"
         if t.is_face_indexed:  # OFZ-IN (R8 phase 1): no real curve or inflation factor yet, see ORG_CONVENTIONS §4.1
             note += "; indexed face: a nominal-rate proxy, no real-rate and inflation split"
-        # bucket DV01 bumps continuously compounded zero rates: dPV ~ -Macaulay * PV, not modified duration
-        dv01, s01 = -rate_t * pv * 1e-4 + 0.0, -mac * pv * 1e-4 + 0.0
-        why.append(note + (f": DV01 split between the nearest pillars of {curve}" if rate_t else ": DV01 0"))
         yy = y / 100 if y is not None else 0.0 if is_fx else kbd_effective_yield(ctx.kbd, max(mac, 1 / 365))
+        # core's buckets bump par (RUONIA OIS, the KBD) and the Z-spread is annual: dPV ~ -Macaulay / (1 + y) * PV,
+        # the modified duration (-Macaulay * PV, a continuous-zero DV01, was about 15 % larger: #36)
+        dv01, s01 = -rate_t / (1 + yy) * pv * 1e-4 + 0.0, -mac / (1 + yy) * pv * 1e-4 + 0.0
+        why.append(note + (f": DV01 split between the nearest pillars of {curve}" if rate_t else ": DV01 0"))
         buckets = _split(rate_t, dv01) if rate_t else zero
         by_curve = {curve: buckets}
         if not is_fx and t.coupon_type == "floating" and coupon is not None and mac > rate_t \
                 and (t.floater_formula or {}).get("benchmark") == "KEY_RATE":
-            by_curve = key_rate_floater_proxy(curve, mac, rate_t, pv)
+            by_curve = key_rate_floater_proxy(curve, mac, rate_t, pv / (1 + yy))
             why.append(f"key-rate floater (R15): discounting {-mac:.2f} y on {curve}, projection "
                        f"+{mac:.2f} y / {-rate_t:.2f} y on {KEY_CURVE}; their sum is the DV01 to the reset")
+        if (kb := by_curve.get(RISK_CURVES[KBD_CURVE_ID])) is not None:  # the KBD has no risk below 1Y (v3: in 1Y)
+            by_curve[RISK_CURVES[KBD_CURVE_ID]] = {
+                b: (math.fsum(kb[k] for k in KBD_SHORT) + kb["1Y"] if b == "1Y" else 0.0 if b in KBD_SHORT else x)
+                for b, x in kb.items()}
+            buckets = {b: math.fsum(bs[b] for bs in by_curve.values()) for b in RISK_BUCKETS}
         return make(quality, price_basis=basis, clean_pct=clean, accrued_rub=acc, face_rub=face * fx_face[0],
                     dirty_rub=dirty, pv_rub=pv, ytm_pct=ytm, macaulay_years=mac,
                     modified_duration=mac / (1 + yy), z_spread_bp=math.nan, dv01_rub=dv01,
-                    buckets=buckets, curve_buckets=by_curve,
-                    spread01_rub=s01 if kind == "credit" else 0.0)
+                    buckets=buckets, curve_buckets=by_curve, spread01_rub=s01)
 
     priced = None  # ((engine, risk), Z, model_spread_source, assumption text)
     if sched is not None and (c := fb.carried.get(t.secid)) is not None and c.curve not in (None, disc):
@@ -440,13 +464,13 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
         # shortcut: a carried spread never refreshes from better information (new issuer peers, a market-wide
         # spread move) until the bond trades again, upgrade by moving it with its group's median change
         try:
-            priced = (_engine(ctx, sched[1], kind, q, spread_bp=c.z_spread_bp), c.z_spread_bp, c.source,
+            priced = (_engine(ctx, disc_curve, sched[1], kind, q, spread_bp=c.z_spread_bp), c.z_spread_bp, c.source,
                       f"Z {c.z_spread_bp:.0f} bp carried from {c.business_date} ({c.source})")
         except (ValueError, RuntimeError) as err:
             why.append(f"carried Z {c.z_spread_bp:.0f} bp from {c.business_date} failed ({err}): the day's median")
-    if sched is not None and priced is None and (med := fb.median_z(t, kind)) is not None:
+    if sched is not None and priced is None and (med := fb.median_z(t, kind, disc_id)) is not None:
         try:
-            priced = _engine(ctx, sched[1], kind, q, spread_bp=med[0]), med[0], f"{med[1]} on {bd}", med[1]
+            priced = _engine(ctx, disc_curve, sched[1], kind, q, spread_bp=med[0]), med[0], f"{med[1]} on {bd}", med[1]
         except (ValueError, RuntimeError):
             pass
     if sched is not None and priced is not None:

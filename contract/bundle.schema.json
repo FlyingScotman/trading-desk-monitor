@@ -753,7 +753,7 @@
        "number",
        "null"
       ],
-      "description": "1.3: ОФЗ — RUB за +1 б.п. спреда ОФЗ к RUONIA; прочие 0"
+      "description": "1.3: ОФЗ — RUB за +1 б.п. спреда ОФЗ к кривой её дисконтирования; прочие 0. До desk 0.2.6 — спред к RUONIA (базис ОФЗ); с 0.2.6 (source.ofzScheme = kbd_par у desk-data.js) у ОФЗ-ПД/АД/ИН — спред к КБД, их базис к RUONIA — extra.ofz_basis01; у ОФЗ-ПК — по-прежнему спред к RUONIA"
      },
      "accrual_only": {
       "type": [

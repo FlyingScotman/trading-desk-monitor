@@ -126,12 +126,12 @@ def test_floater_formula_fields_override_the_defaults(ctx):
 
 
 def test_floater_risk_stays_per_curve(ctx):
-    """R8 with RUONIA discounting (20.10): a fixed OFZ has its DV01 on RUB RUONIA; an OFZ-PK on RUONIA projects and
+    """R8 (20.10, #32): a fixed OFZ has its DV01 on RUB OFZ (the KBD, par buckets); an OFZ-PK on RUONIA projects and
     discounts on the same curve (one factor: a short rate risk to its next reset); a key-rate floater's discount
     (RUONIA) and projection (KEY) curves are separate factors, with their own buckets and their cross terms in the
     Hessian; the totals are their sums."""
     o_ofz, o_pk, o_key = value(ctx, [(s, 1000.0) for s in (OFZ, OFZ_PK, KEY)], second_order=True)
-    assert set(o_ofz.valuation.risk()) == {"RUB RUONIA"}
+    assert set(o_ofz.valuation.risk()) == {"RUB OFZ"}
     pk = o_pk.valuation
     assert set(pk.risk()) == {"RUB RUONIA"} and abs(pk.dv01_rub) < 0.5 * abs(pk.spread01_rub)
     assert {f.split("|")[1] for a, b, _ in pk.hessian for f in (a, b) if f.startswith("IR|")} == {"RUB RUONIA"}
@@ -153,7 +153,7 @@ def test_run_publishes_the_rates_curves(ctx):
     outs = value(ctx, [(s, 1000.0) for s in (OFZ, OFZ_PK, KEY)], second_order=True)
     c = tdm_run.run_content(ctx, [(f"P{i}", "OFZ", o) for i, o in enumerate(outs)], None, {})
     curves = {x["curve_id"]: x for x in c.reference["curves"]}
-    assert list(curves) == ["RUB OFZ", "RUB RUONIA", "RUB KEY"]  # the KBD stays a market curve, without risk
+    assert list(curves) == ["RUB OFZ", "RUB RUONIA", "RUB KEY"]  # the KBD: a market curve and the fixed OFZ's
     for cid in ("RUB RUONIA", "RUB KEY"):
         x = curves[cid]
         assert (x["ccy"], x["kind"], len(x["points"])) == ("RUB", "swap", 11)
@@ -163,8 +163,13 @@ def test_run_publishes_the_rates_curves(ctx):
     again = tdm_run.run_content(ctx, [(f"P{i}", "OFZ", o) for i, o in enumerate(outs)], ctx.market, {})
     assert again.reference["curves"][1]["points"] == curves["RUB RUONIA"]["points"]
     ofz, pk, key = c.rows
-    assert all(r["spread_type"] == "Z" and r["spread_curve"] == "RUB RUONIA" for r in c.rows)
-    assert set(ofz["risk"]) == set(pk["risk"]) == {"RUB RUONIA"} and set(key["risk"]) == {"RUB RUONIA", "RUB KEY"}
-    assert ofz["cs01"] == 0.0 and ofz["ofz_spr01"] < 0  # the OFZ spread to RUONIA, one number per bond
+    assert [(r["spread_type"], r["spread_curve"]) for r in c.rows] == [("Z", "RUB OFZ"), ("Z", "RUB RUONIA")] * 1 + [
+        ("Z", "RUB RUONIA")]
+    assert set(ofz["risk"]) == {"RUB OFZ"} and set(pk["risk"]) == {"RUB RUONIA"}
+    assert set(key["risk"]) == {"RUB RUONIA", "RUB KEY"}
+    assert ofz["cs01"] == 0.0 and ofz["ofz_spr01"] < 0  # the OFZ spread to the KBD, one number per bond (#32)
+    # the par-par basis: the fixed OFZ's DV01 on the KBD (the pages' «RUONIA + базис» view); none on an OFZ-PK
+    assert ofz["extra"]["ofz_basis01"] == pytest.approx(sum(ofz["risk"]["RUB OFZ"].values()))
+    assert "ofz_basis01" not in pk["extra"] and "ofz_basis01" not in key["extra"]
     assert key["dv01"] == pytest.approx(sum(sum(b.values()) for b in key["risk"].values()))
     assert {f.split("|")[1] for g in key["gamma"] for f in g[:2] if f.startswith("IR|")} == {"RUB RUONIA", "RUB KEY"}
