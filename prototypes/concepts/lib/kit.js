@@ -7,7 +7,8 @@
  *  KIT.d(spec)            — кликабельная цифра: spec = {title, list|rows, val, fmt, unit, v?}; щелчок раскрывает вклад
  *  KIT.drill(spec)        — открыть разбор вклада (позиции, группировка по эмитенту/книге/валюте/типу/бакету)
  *  KIT.card(id)           — карточка позиции: параметры, графики истории, риск по бакетам, потоки, PnL
- *  KIT.table(el, opts)    — таблица: группы, мультисортировка (Shift+щелчок; группы сортируются тем же столбцом), поиск, итоги с разбором
+ *  KIT.table(el, opts)    — таблица: группы, мультисортировка (Shift+щелчок; группы сортируются тем же столбцом), поиск, итоги с разбором;
+ *                           ширина и порядок колонок мышкой с запоминанием (KIT.viewStore), «⤓ CSV» — выгрузка
  *  KIT.tips, KIT.hint     — подсказки к мерам риска (конвенция DV01 RUONIA, Базис01, CS01, Z к RUONIA) и подпись с подсказкой
  *  KIT.chart(el, option)  — echarts с цветами темы; KIT.riskStack(el, opts) — риск по бакетам: стек кривых + итог + кумулятив
  *  KIT.seg(el, items, cur, fn) — переключатель режимов (таблица / график и т. п.)
@@ -717,12 +718,36 @@
     return 'table:' + page + '|' + anchor + '|' + opts.columns.map(c => c.key).join(',');
   };
 
+  // ---------- выгрузка таблиц в CSV (#110) ----------
+  // CSV для Excel с русскими региональными настройками: UTF-8 с BOM (иначе кириллица — кракозябры), разделитель
+  // «;» и десятичная запятая (так Excel с русской локалью раскладывает файл по колонкам и читает числа числами).
+  // Значения — как на экране (в единицах заголовка), числа — числами; текст, похожий на формулу, — с апострофом.
+  K.htmlText = s => String(s == null ? '' : s).replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
+  K.csvNum = t => {  // «−1,234.5» → «-1234,5»; «4.44%» → «4,44%»; не число — null
+    const m = /^([+−-]?)(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(%?)$/.exec(t);
+    return m ? (m[1] === '+' ? '' : m[1] ? '-' : '') + m[2].replace(/,/g, '') + (m[3] ? ',' + m[3].slice(1) : '') + m[4] : null;
+  };
+  K.csvCell = (t, num) => {
+    t = t == null ? '' : String(t);
+    if (num) { if (t === '—' || t === '·') return ''; const x = K.csvNum(t); if (x != null) return x; }
+    t = t.replace(/^[●■]\s*/, '');  // цветная метка эмитента / кривой — оформление
+    if (/^[=+\-@\t\r]/.test(t)) t = "'" + t;
+    return /[;"\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+  };
+  K.csvRun = () => ({ run_id: M.run && M.run.id != null ? String(M.run.id) : (K.source === 'real' ? '' : 'demo'), as_of: M.asOf || '' });
+  K.download = (name, text, type) => {
+    const a = document.createElement('a'), u = URL.createObjectURL(new Blob([text], { type: type || 'text/plain;charset=utf-8' }));
+    a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 1000);
+  };
+
   // ---------- таблица ----------
   // Раскладка (#102): граница заголовка — ширина, двойной щелчок по ней — по содержимому, перетаскивание заголовка —
   // порядок колонок; запоминается по ключу таблицы (K.tableKey) в K.viewStore, «⟲ вид» — сбросить.
   // opts: {columns:[{key,label,val(r),fmt(v,r),cls,title,sum:true|fn,drill:{title,unit,fmt,val}, w}], rows|rowsFn, groupBy:[{key(r),label(k,rows)}], search:bool,
   //        sort:[[key,dir]] (по умолчанию — строки в группах; щелчок по заголовку сортирует и группы, кроме groupBy[i].fixed), stripe(r)->color, onRow(r), rowCls(r), tools(el), maxHeight, footer:bool,
-  //        groupable:[уровни] — группировка по желанию (переключатель «плоская / валюта → эмитент»); по умолчанию таблица плоская (R37)}
+  //        groupable:[уровни] — группировка по желанию (переключатель «плоская / валюта → эмитент»); по умолчанию таблица плоская (R37),
+  //        viewKey — ключ раскладки (по умолчанию K.tableKey), title — название в CSV, fileName — основа имени файла CSV (латиницей)}
   K.table = function (el, opts) {
     const st = { sort: opts.sort ? opts.sort.slice() : [], q: '', collapsed: {}, groupSort: false, filters: {}, grouped: false };
     el.innerHTML = '';
@@ -748,10 +773,14 @@
     const fixedW = () => lay.w && Object.keys(lay.w).length > 0;
     const resetBtn = h('button', 'k-tbtn', '⟲ вид'); resetBtn.title = 'сбросить ширину и порядок колонок этой таблицы';
     resetBtn.onclick = () => { lay = {}; K.viewStore.reset(vkey); draw(); };
-    ctl.appendChild(resetBtn);
+    const csvBtn = h('button', 'k-tbtn', '⤓ CSV');
+    csvBtn.title = 'выгрузить в CSV (Excel): колонки — в текущем порядке, строки — после поиска, фильтров и сортировки; номер прогона и дата среза — в первой строке и в имени файла';
+    csvBtn.onclick = () => K.download(csvName(), '﻿' + csv(), 'text/csv;charset=utf-8');
+    ctl.append(csvBtn, resetBtn);
     const paintCtl = () => { resetBtn.style.display = fixedW() || (lay.order && lay.order.length) ? '' : 'none'; };
     const saveLay = () => { K.viewStore.set(vkey, lay); paintCtl(); };
     let noClickTill = 0;  // после перетаскивания щелчок по заголовку — не сортировка
+    let shown = [];       // строки на экране: после поиска, фильтров и сортировки (их и выгружает CSV)
     // видимые колонки в сохранённом порядке; новых в сохранённом порядке нет — они в конце, в исходном порядке
     const cols = () => {
       const C = opts.columns.filter(c => !c.hidden), o = lay.order;
@@ -771,6 +800,7 @@
       if (st.q) rows = rows.filter(r => (r.searchText || JSON.stringify(r)).toLowerCase().includes(st.q));
       const base = rows;
       rows = sorted(K.applyFilters(rows, st.filters, colOf));
+      shown = rows;
       const C = cols();
       const nf = Object.keys(st.filters).filter(k => st.filters[k]).length;
       if (fltChip) { fltChip.style.display = nf ? '' : 'none'; fltChip.innerHTML = '<span class="x">✕</span> фильтры (' + nf + ')'; }
@@ -894,8 +924,27 @@
         });
       });
     }
+    // ---------- CSV (#110) ----------
+    const csvTitle = () => K.htmlText(opts.title || (typeof document.title === 'string' ? document.title : '') || 'таблица');
+    function csv() {
+      const C = cols().filter(c => K.htmlText(c.label)), R = K.csvRun(), q = x => K.csvCell(x);  // без подписи — оформление (полоска доли)
+      const head = C.map(c => { const l = K.htmlText(c.label); return q(c.unit && !l.includes(',') ? l + ', ' + c.unit : l); });
+      const line = r => C.map(c => { const v = val(c, r); return K.csvCell(K.htmlText(c.fmt ? c.fmt(v, r) : v), c.num); }).join(';');
+      return ['run_id;' + q(R.run_id) + ';as_of;' + q(R.as_of) + ';таблица;' + q(csvTitle()) + ';строк;' + shown.length, '', head.join(';')]
+        .concat(shown.map(line)).join('\r\n') + '\r\n';
+    }
+    // имя файла — латиницей (кириллицу в имени скачивания браузер может заменить на «download»): страница, якорь
+    // таблицы (или opts.fileName), дата среза, прогон
+    function csvName() {
+      const R = K.csvRun();
+      let page = '', anchor = '';
+      try { page = (location.pathname || '').split('/').pop().replace(/\.html?$/, ''); } catch (e) { }
+      try { anchor = el.id || (el.closest && el.closest('[id]') ? el.closest('[id]').id : ''); } catch (e) { }
+      const base = (opts.fileName || [page || 'table', anchor].filter(Boolean).join('_')).replace(/[^A-Za-z0-9_.-]+/g, '_');
+      return 'tdm_' + base + '_' + (R.as_of || 'nodate') + '_run-' + (R.run_id || 'none').replace(/[^A-Za-z0-9_-]+/g, '_') + '.csv';
+    }
     draw();
-    const api = { redraw: draw, state: st, setSort: s => { st.sort = s; draw(); }, setFilter: (k, v) => { st.filters[k] = v; draw(); }, setGrouped: g => { st.grouped = !!g; draw(); }, el,
+    const api = { redraw: draw, state: st, csv, csvName, setSort: s => { st.sort = s; draw(); }, setFilter: (k, v) => { st.filters[k] = v; draw(); }, setGrouped: g => { st.grouped = !!g; draw(); }, el,
       viewKey: vkey, layout: () => JSON.parse(JSON.stringify(lay)), setLayout: v => { lay = v || {}; saveLay(); draw(); }, resetView: () => resetBtn.onclick() };
     if (opts.autoFilter !== false && !opts.rows) K.live(el, 'filter', draw);
     return api;
