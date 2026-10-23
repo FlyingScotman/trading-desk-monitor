@@ -204,7 +204,10 @@ UNITS_SQL = (
     "  WHERE status = 'superseded' GROUP BY 1, 2, 3")
 """Per (business date, dataset, status) the units and rows of the latest reading of each file. A scope unit (a book,
 an entity) counts once, by its last reading that was not superseded: a correction that replaced the same books does
-not count them twice; superseded units are counted as they are (what a newer report replaced)."""
+not count them twice; superseded units are counted as they are (what a newer report replaced). A book accepted
+from one file and rejected in a later one counts as rejected (the dataset then reads ``partial`` or ``rejected``)
+although the earlier positions stay in force: the signal is that the latest report of the book was lost; a book only
+in an older file keeps that file's reading."""
 
 
 def _units(con: psycopg.Connection, lo: date, hi: date) -> dict[tuple[date, str], dict[str, Any]]:
@@ -362,21 +365,41 @@ LOST = ("rejected", "failed", "timed_out", "match_failed")
 def _facts_empty() -> dict[str, Any]:
     return {"inputs": {}, "files_lost": 0, "stale_copies": 0, "runs": 0, "runs_failed": 0, "default_run_id": None,
             "current_run_id": None, "default_set_ids": None, "eod_final": False, "positions_in_force": False,
-            "run_behind": False}
+            "run_behind": False, "books_no_positions": 0, "books_rows_differ": 0}
 
 
-def _facts(con: psycopg.Connection, settings: Settings, lo: date, hi: date) -> dict[date, dict[str, Any]]:
+ROWS_DIFFER_SQL = (
+    f"WITH r AS (SELECT run_id, business_date, position_set_ids FROM run WHERE run_id IN ({store.DEFAULT_RUNS})"
+    "  AND business_date BETWEEN %s AND %s),"
+    " a AS (SELECT r.business_date AS d, s.book_id, count(i.set_id) AS n FROM r"
+    "  JOIN position_set s ON s.set_id = ANY(r.position_set_ids) LEFT JOIN position_input i ON i.set_id = s.set_id"
+    "  GROUP BY 1, 2),"
+    " b AS (SELECT r.business_date AS d, p.book_id, count(*) AS n FROM r JOIN run_position p USING (run_id) GROUP BY 1, 2)"
+    " SELECT coalesce(a.d, b.d), count(*) FROM a FULL JOIN b ON a.d = b.d AND a.book_id = b.book_id"
+    " WHERE coalesce(a.n, 0) <> coalesce(b.n, 0) GROUP BY 1")
+"""Per date the books whose rows in the default run differ from the rows of the position sets the run read: the
+run lost or added rows (``rows_differ`` of ``inbox.scan.reconcile``)."""
+
+
+def _facts(con: psycopg.Connection, settings: Settings, lo: date, hi: date, *,
+           every: bool = False) -> dict[date, dict[str, Any]]:
     """What the state of each business date from ``lo`` to ``hi`` is judged on (``_rate``), the same for one date
     (``day``) and for the strip (``days``): dataset states (``_units``), files lost (``LOST``, by the file's or a
     unit's date, as ``_files``), stale copies, runs (count, failed and not superseded, default, shown, whether the
-    default run read the position sets in force now), the final close in the cache, positions in force at all.
-    Only dates with anything on them."""
+    default run read the position sets in force now), the final close in the cache, positions in force at all, the
+    active books without positions and the books whose rows the default run lost (``reconcile``'s ``no_positions``
+    and ``rows_differ``). Only dates with anything on them, unless ``every`` (``day``: a date without inputs or runs
+    still has positions carried forward from earlier dates)."""
     from .marketdata.bundle import SnapshotDir
 
     out: dict[date, dict[str, Any]] = {}
 
     def g(d: date) -> dict[str, Any]:
         return out.setdefault(d, _facts_empty())
+
+    if every:
+        for i in range((hi - lo).days + 1):
+            g(lo + timedelta(days=i))
 
     for (d, ds), x in _units(con, lo, hi).items():
         g(d)["inputs"][ds] = x["n"]
@@ -405,9 +428,15 @@ def _facts(con: psycopg.Connection, settings: Settings, lo: date, hi: date) -> d
         d = date.fromisoformat(s)
         if lo <= d <= hi:
             g(d)["eod_final"] = True
-    first = con.execute("SELECT min(valid_date) FROM position_set").fetchone()[0]
+    for d, k in con.execute(ROWS_DIFFER_SQL, (lo, hi)):
+        if d in out:
+            out[d]["books_rows_differ"] = k
+    first_set = dict(con.execute("SELECT book_id, min(valid_date) FROM position_set GROUP BY 1").fetchall())
+    first = min(first_set.values(), default=None)
     for d, x in out.items():
         x["positions_in_force"] = first is not None and first <= d
+        x["books_no_positions"] = sum(1 for b in store.current_books(con, d) if b.get("active", True)
+                                      and (first_set.get(b["book_id"]) is None or first_set[b["book_id"]] > d))
         if x["default_run_id"]:
             ids = con.execute("SELECT position_set_ids FROM run WHERE run_id = %s", (x["default_run_id"],)).fetchone()[0]
             x["default_set_ids"] = sorted(ids or [])
@@ -418,8 +447,9 @@ def _facts(con: psycopg.Connection, settings: Settings, lo: date, hi: date) -> d
 def _rate(x: dict[str, Any]) -> dict[str, Any]:
     """The state of a date from its ``_facts``: ``bad`` (a dataset only rejected, no positions in force, a file lost,
     a failed run not superseded, no run shown), ``warn`` (a dataset partly rejected, a stale copy, no default run
-    while an intraday run is shown, the default run on older position sets, no final close), else ``ok``; with the
-    reasons. One rule for the strip and the date's headline."""
+    while an intraday run is shown, the default run on older position sets, an active book without positions, a book
+    whose rows the run lost, no final close), else ``ok``; with the reasons. One rule for the strip and the date's
+    headline."""
     bad, warn = [], []
     for ds in [*DATASETS, *sorted(set(x["inputs"]) - set(DATASETS))]:
         st = _input_state(x["inputs"].get(ds) or Counter())
@@ -440,6 +470,10 @@ def _rate(x: dict[str, Any]) -> dict[str, Any]:
         (warn if x["current_run_id"] else bad).append("нет основного прогона")
     elif x["run_behind"]:
         warn.append("позиции загружены после расчёта: прогон не пересчитан")
+    if x["positions_in_force"] and x["books_no_positions"]:
+        warn.append(f"книг без позиций: {x['books_no_positions']}")
+    if x["books_rows_differ"]:
+        warn.append(f"в прогоне не все строки позиций: книг {x['books_rows_differ']}")
     if not x["eod_final"]:
         warn.append("нет окончательного закрытия хаба")
     return {"state": "bad" if bad else "warn" if warn else "ok", "problems": bad, "warnings": warn}
@@ -456,7 +490,7 @@ def day(con: psycopg.Connection, settings: Settings, on: date | None = None) -> 
     files, copies, runs = _files(con, d), _copies(con, d), _runs(con, d)
     feed = events(con, on=d, limit=200)
     return {"date": d.isoformat(), "adapter": scan.adapter_line(scan.adapter(settings)),
-            "summary": {**_rate(_facts(con, settings, d, d).get(d) or _facts_empty()),
+            "summary": {**_rate(_facts(con, settings, d, d, every=True)[d]),
                         "default_run_id": next((r["run_id"] for r in runs if r["is_default"]), None),
                         "current_run_id": next((r["run_id"] for r in runs if r["is_current"]), None)},
             "inputs": inputs, "market": market, "runs": runs, "files": files, "copies": copies,

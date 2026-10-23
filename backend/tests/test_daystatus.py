@@ -86,7 +86,17 @@ def test_a_rejected_book_says_why_and_a_stale_copy_is_shown(con, tmp_path):
     assert list(by) == sorted(by, reverse=True) and "2026-10-15" in by  # the cached close counts
     assert by["2026-10-14"]["inputs"]["positions"]["rejected"] == 1 and by["2026-10-14"]["state"] == "bad"
     assert by["2026-10-15"]["eod_final"] is True and by["2026-10-15"]["runs"] == 0
+    # 15.10 has no file of its own: positions carried from 14.10 (B2's book was rejected there: none), no run yet
+    assert (by["2026-10-15"]["problems"], by["2026-10-15"]["warnings"]) == (["нет основного прогона"],
+                                                                            ["книг без позиций: 1"])
     assert_strip_matches_days(con, s, got)
+
+    # a date with nothing on it (Sunday 18.10): positions carried forward, not «нет позиций»
+    empty = daystatus.day(con, s, D("2026-10-18"))["summary"]
+    assert empty["problems"] == ["нет основного прогона"] and "нет позиций" not in empty["problems"]
+    assert "2026-10-18" not in by  # the strip lists dates with something on them only
+    before = daystatus.day(con, s, D("2026-10-01"))["summary"]  # before the first report: nothing in force
+    assert "нет позиций" in before["problems"]
 
     # a file lost by match (match_failed) that names the date is a problem of the date in both views
     sha = "f" * 64
@@ -143,6 +153,27 @@ def test_runs_supersede_with_what_changed_and_the_feed_pages_by_event_id(store_u
     assert d["summary"]["state"] == "ok" and d["summary"]["problems"] == d["summary"]["warnings"] == []
     strip = client.get("/api/v1/inbox/days", params={"to": "2026-10-15", "n": 1}).json()["days"]
     assert [(x["date"], x["state"], x["inputs"]["positions"]["accepted"]) for x in strip] == [("2026-10-15", "ok", 3)]
+
+    # reconcile's no_positions and rows_differ colour the date too, in the headline and in the strip
+    def both() -> tuple[dict, dict, dict]:
+        day = client.get("/api/v1/inbox", params={"on": "2026-10-15"}).json()
+        (row,) = client.get("/api/v1/inbox/days", params={"to": "2026-10-15", "n": 1}).json()["days"]
+        return day["summary"], row, {b["book_id"]: b["flags"] for b in day["positions"]["books"]}
+
+    with store.connect(store_url) as con:
+        store.store_books(con, [{"book_id": "B4", "name": "B4", "desk": "Rates", "book_type": "TRADING",
+                                 "entity": "ENT1", "active": True}], "test")
+    head, row, flags = both()
+    assert flags["B4"] == ["no_positions"]
+    assert head["state"] == row["state"] == "warn" and head["warnings"] == row["warnings"] == ["книг без позиций: 1"]
+    with store.connect(store_url) as con:  # one more row in B1's set than the run valued: the run lost a row
+        sid = con.execute("SELECT s.set_id FROM run r JOIN position_set s ON s.set_id = ANY(r.position_set_ids)"
+                          " WHERE r.run_id = 2 AND s.book_id = 'B1'").fetchone()[0]
+        con.execute("INSERT INTO position_input (set_id, position_id, secid, quantity) VALUES (%s, 'X1', 'X', 1)",
+                    (sid,))
+    head, row, flags = both()
+    assert flags["B1"] == ["rows_differ"]
+    assert head["warnings"] == row["warnings"] == ["книг без позиций: 1", "в прогоне не все строки позиций: книг 1"]
     types = [e["type"] for e in d["events"]]
     assert types.count("run.published") == 2 and "input.accepted" in types
     assert client.get("/api/v1/inbox", params={"on": "15.10"}).status_code == 400
