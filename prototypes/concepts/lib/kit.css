@@ -65,9 +65,15 @@ button { font: inherit; color: inherit; }
 .k-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
 .k-kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; min-width: 0; position: relative; overflow: hidden; }
 .k-kpi .l { font-size: 11px; color: var(--fg-2); text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.k-kpi .v { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; margin-top: 2px; }
-.k-kpi .s { font-size: 11px; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.k-kpi .v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.01em; white-space: nowrap; margin-top: 2px; }
+.k-kpi .v .u { font-size: 11px; font-weight: 500; color: var(--fg-2); letter-spacing: 0; }
+.k-kpi .s { font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.k-kpi .s .u { font-size: 10.5px; color: var(--fg-3); }
 .k-kpi .spark { position: absolute; right: 8px; bottom: 6px; opacity: .8; }
+/* разбивка под главной цифрой (B2-3, #103): как мини-таблица ОВП — подпись слева, цифра справа */
+.k-kb { border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 12px; font-weight: 500; line-height: 1.35; margin-top: 2px; }
+.k-kb td { padding: 0; white-space: nowrap; text-align: right; }
+.k-kb td.c { text-align: left; padding-right: 10px; font-weight: 600; color: var(--fg-2); }
 
 /* ---------- кликабельные цифры (разбор вклада) ---------- */
 .dr { cursor: pointer; border-bottom: 1px dotted var(--fg-3); }
@@ -188,7 +194,7 @@ body.k-col-moving, body.k-col-moving * { cursor: grabbing !important; user-selec
   .k-top .brand { white-space: normal; flex-wrap: wrap; }
   .k-top .brand .tag, .k-top .asof { display: none; }
   .k-page { padding: 10px 10px 30px; }
-  .k-kpi .v { font-size: 17px; }
+  .k-kpi .v { font-size: 19px; }
 }
 
 /* компактные таблицы рисков: по ширине содержимого, плотные строки */
