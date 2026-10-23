@@ -142,6 +142,56 @@ def test_failed_eod_is_not_retried_until_inputs_change(tmp_path, store_url, monk
     assert calls == ["2026-10-15", "2026-10-15"]
 
 
+def test_failed_eod_is_retried_once_after_an_upgrade(tmp_path, store_url, monkeypatch):
+    """#155: a date that failed on one program version is tried again once on the next (another bundle VERSION, so
+    another ``logic_version()``), not again within that version. Here without a restart (a restart forgets the failed
+    inputs anyway)."""
+    (tmp_path / "cache").mkdir()
+    for p in SNAPS.glob("*.json.gz"):
+        shutil.copy(p, tmp_path / "cache" / p.name)
+    put(tmp_path, "positions_20261016.csv")
+    calls = []
+    real = cli.eod_run
+
+    def broken(*a, **kw):
+        calls.append(a[1])
+        raise ValueError("time zone not recognized")
+
+    monkeypatch.setattr(cli, "eod_run", broken)
+    monkeypatch.setenv("DESK_BUNDLE_VERSION", "0.2.4-20261022-aaaaaaa")
+    ap = Autopilot(settings_loader=lambda: cfg(tmp_path, store_url), today=lambda: TODAY)
+    assert steps(ap.run_cycle())["eod"][0] == "error"
+    assert steps(ap.run_cycle())["eod"] == ("skipped", "2026-10-15 failed before on the same inputs, not retried")
+    assert calls == ["2026-10-15"]
+
+    monkeypatch.setattr(cli, "eod_run", lambda *a, **kw: (calls.append(a[1]), real(*a, **kw))[1])
+    monkeypatch.setenv("DESK_BUNDLE_VERSION", "0.2.5-20261023-bbbbbbb")  # the fixed program installed
+    assert steps(ap.run_cycle())["eod"] == ("ok", "2026-10-15 run 1 (no default run)")
+    assert steps(ap.run_cycle())["eod"][0] == "skipped" and calls == ["2026-10-15", "2026-10-15"]
+
+
+def test_failed_eod_on_a_new_version_is_not_retried_within_it(tmp_path, store_url, monkeypatch):
+    (tmp_path / "cache").mkdir()
+    for p in SNAPS.glob("*.json.gz"):
+        shutil.copy(p, tmp_path / "cache" / p.name)
+    put(tmp_path, "positions_20261016.csv")
+    calls = []
+
+    def broken(*a, **kw):
+        calls.append(a[1])
+        raise ValueError("boom")
+
+    monkeypatch.setattr(cli, "eod_run", broken)
+    monkeypatch.setenv("DESK_BUNDLE_VERSION", "0.2.4-20261022-aaaaaaa")
+    ap = Autopilot(settings_loader=lambda: cfg(tmp_path, store_url), today=lambda: TODAY)
+    ap.run_cycle()
+    monkeypatch.setenv("DESK_BUNDLE_VERSION", "0.2.5-20261023-bbbbbbb")
+    assert steps(ap.run_cycle())["eod"][0] == "error"  # tried once on the new version
+    for _ in range(2):
+        assert steps(ap.run_cycle())["eod"][0] == "skipped"
+    assert calls == ["2026-10-15", "2026-10-15"]
+
+
 def test_upgrade_recomputes_the_latest_positions_date_once(tmp_path, store_url, monkeypatch):
     """Runs record ``desk.logic_version()``; after an upgrade (another bundle VERSION, a bumped VALUATION_VERSION) the
     latest positions date is recomputed once."""
