@@ -79,12 +79,12 @@
       if (!L.some(p => RATE[c].some(id => p.dv01ByCurve[id]))) return;
       const curves = M.curves.filter(x => x.ccy === c);
       html += K.kpi(K.ccyTag(c) + ' DV01 ставки',
-        K.d({ title: c + ' · DV01 ставки', unit: 'тыс ₽/бп', list: L, val: p => RATE[c].reduce((s, id) => s + p.dv01ByCurve[id], 0) }, null, '') + ' <span class="mut" style="font-size:11px">тыс/бп</span>',
-        curves.length > 1 ? curves.map(x => esc(x.short) + ' ' + K.d({ title: x.name, unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve[x.id] }, null, '')).join(' · ') : 'CS01 ' + K.d({ title: c + ' · CS01', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === c), val: 'cs01' }, null, ''));
+        K.d({ title: c + ' · DV01 ставки', unit: 'тыс ₽/бп', list: L, val: p => RATE[c].reduce((s, id) => s + p.dv01ByCurve[id], 0) }, null, '') + K.kpiUnit('тыс/бп'),
+        curves.length > 1 ? curves.map(x => [esc(x.short), K.d({ title: x.name, unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve[x.id] }, null, '')]) : [['CS01', K.d({ title: c + ' · CS01', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === c), val: 'cs01' }, null, '')]]);
     });
     const short = p => ALLRATE.reduce((s, id) => s + sumArr(p.risk[id].slice(0, 4)), 0), long = p => ALLRATE.reduce((s, id) => s + sumArr(p.risk[id].slice(4)), 0);
     html += K.kpi('Короткий / длинный конец', K.d({ title: 'DV01 до 2Y включительно', unit: 'тыс ₽/бп', list: L, val: short }, null, '') + ' <span class="mut">/</span> ' + K.d({ title: 'DV01 дальше 2Y', unit: 'тыс ₽/бп', list: L, val: long }, null, ''), '≤ 2Y / > 2Y, все кривые');
-    html += K.kpi('CS01 всего', K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }, null, ''), M.ccys.map(c => c + ' ' + K.d({ title: 'CS01 ' + c, unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === c), val: 'cs01' }, null, '')).join(' · '));
+    html += K.kpi('CS01 всего', K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }, null, ''), K.kpiCcyRows(M.ccys.reduce((o, c) => (o[c] = M.sum(L.filter(p => p.ccy === c), p => p.cs01), o), {}), c => K.d({ title: 'CS01 ' + c, unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === c), val: 'cs01' }, null, ''), 3, f.dv));
     document.getElementById('strip').innerHTML = html;
   }
 
