@@ -310,6 +310,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/derivatives": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Derivatives
+         * @description Derivatives computed by core from their terms next to the report's PV, per position, book and product
+         *     (``publish.derivatives_parallel``); state ``not_computed`` for a run before the block.
+         */
+        get: operations["derivatives_api_v1_runs__run_id__derivatives_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}/aggregates": {
         parameters: {
             query?: never;
@@ -1188,6 +1209,54 @@ export interface components {
             /** Reason */
             reason: string;
         };
+        /**
+         * ParallelRow
+         * @description One derivative position valued two ways (``publish.derivatives_parallel``).
+         */
+        ParallelRow: {
+            /** Position Id */
+            position_id: string;
+            /** Book Id */
+            book_id: string;
+            /**
+             * Product
+             * @description Core's product (fx_forward, fx_swap, fx_ndf, fx_cross, fx_future; several joined by +), else <asset_class>_other
+             */
+            product: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "both" | "computed_only" | "computed_invalid" | "imported_only" | "neither";
+            /**
+             * Used
+             * @description The value the run publishes
+             * @enum {string}
+             */
+            used: "computed" | "imported";
+            /**
+             * Computed Pv Rub
+             * @description PV by core from the trade terms (result v3)
+             */
+            computed_pv_rub: number | null;
+            /**
+             * Imported Pv Rub
+             * @description PV the report states (mv_rub, else the trades' pv_rub)
+             */
+            imported_pv_rub: number | null;
+            /** Diff Rub */
+            diff_rub?: number | null;
+            /**
+             * Over
+             * @description diff above the tolerance
+             */
+            over?: boolean | null;
+            /**
+             * Reason
+             * @description Why core did not value the row (pv_not_finite: core's PV is not a finite number)
+             */
+            reason?: string | null;
+        };
         /** PasswordIn */
         PasswordIn: {
             /** Current Password */
@@ -1721,6 +1790,46 @@ export interface components {
             fx_delta_rub: number | null;
             /** N Risk Missing */
             n_risk_missing: number;
+        };
+        /**
+         * RunDerivatives
+         * @description Derivatives computed by core next to the report's PV, before a product is switched (TDM#49). ``state``
+         *     not_computed: a run before this block; sums are per status, money sums over the rows with both values.
+         */
+        RunDerivatives: {
+            /** Run Id */
+            run_id: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "computed" | "not_computed";
+            /** Tolerance */
+            tolerance: {
+                [key: string]: unknown;
+            } | null;
+            /** Totals */
+            totals: {
+                [key: string]: unknown;
+            } | null;
+            /** By Book */
+            by_book: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            };
+            /** By Product */
+            by_product: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            };
+            /** Reasons */
+            reasons: {
+                [key: string]: number;
+            };
+            /** Rows */
+            rows: components["schemas"]["ParallelRow"][];
         };
         /** RunDetail */
         RunDetail: {
@@ -3140,6 +3249,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunFunding"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    derivatives_api_v1_runs__run_id__derivatives_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunDerivatives"];
                 };
             };
             /** @description Not Found */
