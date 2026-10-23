@@ -176,7 +176,8 @@ def _error(request: Request, status: int, code: str, message: str, details: Any 
 def _header(row: dict[str, Any]) -> dict[str, Any]:
     basis = (row.get("lineage") or {}).get("pnl_basis") or {}
     return {**row, "as_of": row["business_date"], "published_at": row["completed_at"],
-            "label": compat.slice_label(row["business_date"], row["cut_type"], row.get("cut_ts"), row["run_type"]),
+            "label": compat.slice_label(row["business_date"], row["cut_type"], row.get("cut_ts"), row["run_type"],
+                                        (row.get("lineage") or {}).get("market_close")),
             "pnl_basis": basis.get("label")}
 
 

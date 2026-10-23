@@ -736,7 +736,7 @@ export interface components {
              * Step
              * @enum {string}
              */
-            step: "sync" | "scan" | "eod" | "intraday" | "history" | "backfill";
+            step: "sync" | "scan" | "eod" | "intraday" | "morning" | "history" | "backfill";
             /** Done */
             done: number;
             /** Total */
@@ -765,6 +765,10 @@ export interface components {
             label?: string | null;
             /** Pnl Basis */
             pnl_basis?: string | null;
+            /** Market Close */
+            market_close?: {
+                [key: string]: string;
+            } | null;
         };
         /** AutopilotStatus */
         AutopilotStatus: {

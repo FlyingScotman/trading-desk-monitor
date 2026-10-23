@@ -146,8 +146,8 @@ def test_failed_eod_is_not_retried_until_inputs_change(tmp_path, store_url, monk
 
 
 def test_upgrade_recomputes_the_latest_positions_date_once(tmp_path, store_url, monkeypatch):
-    """Runs record ``desk.logic_version()``; after an upgrade (another bundle VERSION, a bumped VALUATION_VERSION) the
-    latest positions date is recomputed once."""
+    """Runs record ``desk.logic_version()``; after an upgrade (a bumped VALUATION_VERSION) the latest positions date is
+    recomputed once; another bundle build of the same code (``+build``) recomputes nothing (``backfill.same_logic``)."""
     import desk
 
     (tmp_path / "cache").mkdir()
@@ -164,10 +164,9 @@ def test_upgrade_recomputes_the_latest_positions_date_once(tmp_path, store_url, 
 
     monkeypatch.setenv("DESK_BUNDLE_VERSION", "0.1.0-20261020-abc")  # a new bundle (deskctl sets it)
     assert desk.logic_version().endswith("+build0.1.0-20261020-abc")
-    assert steps(ap.run_cycle())["eod"] == ("ok", "2026-10-15 run 2 (program updated)")
-    assert steps(ap.run_cycle())["eod"][0] == "skipped"  # once
+    assert steps(ap.run_cycle())["eod"][0] == "skipped"  # a new build of the same code: no recompute (backfill.same_logic)
     monkeypatch.setattr(desk, "VALUATION_VERSION", desk.VALUATION_VERSION + 1)  # a hand-bumped logic version
-    assert steps(ap.run_cycle())["eod"] == ("ok", "2026-10-15 run 3 (program updated)")
+    assert steps(ap.run_cycle())["eod"] == ("ok", "2026-10-15 run 2 (program updated)")
     assert steps(ap.run_cycle())["eod"][0] == "skipped"
     with store.connect(store_url) as con:
         assert store.default_runs(con, date(2026, 10, 1))[date(2026, 10, 15)]["logic_version"] == desk.logic_version()
@@ -267,7 +266,8 @@ def test_api_status_and_run(tmp_path, store_url):
         assert st["enabled"] is True and st["state"] == "idle"
         assert st["message"] == "Не настроено: укажите маркет-дата сервер и папки с отчётами в Настройках"
         assert [(x["name"], x["status"]) for x in st["steps"]] == [("sync", "skipped"), ("scan", "skipped"),
-                                                                    ("eod", "skipped"), ("backfill", "skipped")]
+                                                                    ("eod", "skipped"), ("morning", "skipped"),
+                                                                    ("backfill", "skipped")]
         assert st["steps"][2]["detail"] == "no positions in the store"
         r = c.post("/api/v1/autopilot/run")
         assert r.status_code == 202 and r.json() == {"queued": True}

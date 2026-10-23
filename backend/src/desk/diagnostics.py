@@ -1048,7 +1048,7 @@ def run_summary(con: psycopg.Connection, r: dict[str, Any], scrub: Scrubber) -> 
     out: dict[str, Any] = {
         "run_id": r["run_id"], "as_of": _iso(r["business_date"]), "run_type": r["run_type"], "cut_type": r["cut_type"],
         "cut_ts": _iso(r["cut_ts"]), "label": store.slice_label(r["business_date"], r["cut_type"], r["cut_ts"],
-                                                                r["run_type"]),
+                                                                r["run_type"], lin.get("market_close")),
         "status": r["status"], "error": scrub.text(r["error"]) if r["error"] else None,
         "is_default": r["is_default"], "is_current": r["is_current"], "supersedes_run_id": r["supersedes_run_id"],
         "created_at": _iso(started), "completed_at": _iso(done),

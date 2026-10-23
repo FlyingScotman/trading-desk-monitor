@@ -22,7 +22,8 @@ class AutopilotStep(BaseModel):
     name: str
     status: Literal["ok", "skipped", "error"]
     detail: str
-    reason: str | None = None  # the intraday step: why there is (no) run of today, ``autopilot.INTRADAY_REASONS``
+    reason: str | None = None  # the intraday / morning step: why there is (no) run of today,
+    # ``autopilot.INTRADAY_REASONS`` / ``autopilot.MORNING_REASONS``
     failed_dates: list[str] | None = None  # the sync step: hub dates that failed alone this cycle (#20)
     at: str
 
@@ -38,10 +39,11 @@ class AutopilotRun(BaseModel):
     cut_ts: str | None = None
     label: str | None = None
     pnl_basis: str | None = None
+    market_close: dict[str, str] | None = None  # the morning run (cut_type prev_close, #21): {date, cut_type} of its close
 
 
 class AutopilotProgress(BaseModel):
-    step: Literal["sync", "scan", "eod", "intraday", "history", "backfill"]
+    step: Literal["sync", "scan", "eod", "intraday", "morning", "history", "backfill"]
     done: int
     total: int | None
     detail: str

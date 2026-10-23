@@ -2542,6 +2542,7 @@
               "scan",
               "eod",
               "intraday",
+              "morning",
               "history",
               "backfill"
             ],
@@ -2651,6 +2652,20 @@
               }
             ],
             "title": "Pnl Basis"
+          },
+          "market_close": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market Close"
           }
         },
         "type": "object",

@@ -196,7 +196,8 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             report_dir: str | Path | None = None, tdm: bool = False, db: str | Path | None = None,
             no_gamma: bool = False, no_pnl: bool = False, out: Callable[[str], None] = print,
             cut_type: str = "eod_final", market_snapshot_id: str | None = None,
-            contexts: ContextCache | None = None, read_model: bool = True) -> int | None:
+            contexts: ContextCache | None = None, read_model: bool = True,
+            on_close: tuple[str, str] | None = None) -> int | None:
     """The EOD run of date ``d`` (``desk eod`` without its hub pull; the autopilot calls it too): values the
     books of the store on the cached snapshot of ``d`` and publishes the run. Returns the desk run id, None when
     the store has no positions for the date. Raises on a missing snapshot or a failed publication.
@@ -211,20 +212,28 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
     prepares each date's market once (as the run's own date, then as the next date's previous one).
     ``read_model``: also put the run's static snapshot's facts (the market calendar, issuer groups, sectors) and
     the CBR meetings into the store's read model (``desk.marketdata.static_facts``); the backfill leaves them to the
-    latest date. After the publication the run's summary for the concept pages is written (``publish.summary``)."""
+    latest date. After the publication the run's summary for the concept pages is written (``publish.summary``).
+
+    ``on_close`` (the autopilot's morning run, #21): (date, cut) of an earlier close: the book of ``d`` valued on
+    that close, published as a ``run_type`` run of ``d`` with cut ``prev_close`` (lineage ``market_close``) and
+    without a flash PnL (the day's first intraday cut brings it)."""
     snapshots = snapshots or settings.snapshot_cache
     sd = SnapshotDir(Path(snapshots))
     t0 = time.perf_counter()
     prep = contexts.prepare if contexts is not None else prepare
     fx_options = fxcurves.options_from(settings)  # the provisional FX choices (curves.fx.FxOptions)
-    ctx = prep(sd, d, cut_type, market_snapshot_id=market_snapshot_id, fx_options=fx_options)
+    run_date = date.fromisoformat(d)
+    ctx = prep(sd, *(on_close or (d, cut_type)), market_snapshot_id=market_snapshot_id, fx_options=fx_options)
     # issuer names, groups, sectors and ratings: the newest static of the cache, not the market's own (R25)
     ctx = dataclasses.replace(ctx, reference=reference.facts(sd, ctx.static),
                               proxy_curves=bool(getattr(settings, "proxy_curves_for_risk", False)))
-    prev_cut = previous_market(sd, d)
+    prev_cut = None if on_close else previous_market(sd, d)
     prev_date = prev_cut[0] if prev_cut else None
     prev = MarketView(sd.market(*prev_cut)) if prev_cut else None
     basis = pnl_basis(ctx, prev_cut)
+    if on_close:
+        basis["label"] = (f"нет PnL: позиции {run_date:%d.%m} на закрытии {ctx.business_date:%d.%m}, "
+                          "PnL дня — с первого внутридневного среза")
     prov = sd.provenance(ctx.market.snapshot.id)
     origin = (f"hub {prov['hub']}, published {prov['published_at']} ({_age(prov['published_at'])})" if prov
               else f"local file, known_at {ctx.market.snapshot.doc.get('known_at')}")
@@ -274,11 +283,11 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             return None
         for b, vd in sorted(inputs.valid_dates.items()):
             src = inputs.sources.get(b) or {}
-            age = (ctx.business_date - vd).days
+            age = (run_date - vd).days
             out(f"  {b}: {src.get('source')} {src.get('file_name')}"
                 + (f", report {src['report_date']}" if src.get("report_date") else "")
                 + f", valid {vd}" + (f", carried {age} days" if age else ""))
-        carried = store.carried_spreads(con, before=ctx.business_date)
+        carried = store.carried_spreads(con, before=run_date)
         bp = pv1.plan(ctx, inputs, second_order=not no_gamma)
         if bp.unlinked_terms:
             out(f"WARN trade_terms: {len(bp.unlinked_terms)} trade(s) no positions row names, "
@@ -301,7 +310,9 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             dp = [o.pnl for o in bp.direct.values() if o.pnl]
             out(f"PnL without core: {len(dp)}/{sum(o.valuation is not None for o in bp.direct.values())} positions "
                 f"(by the rate move or the reports), total {sum(p.total for p in dp):,.0f} RUB")
-        if not prev_date:
+        if on_close:
+            out(f"no flash PnL: the book of {d} on the close of {ctx.business_date} (morning run)")
+        elif not prev_date:
             out(f"WARN no flash PnL: no eod_final or eod_preliminary market snapshot before {d} in {snapshots}")
         positions = pv1.merge(bp, outcomes)
         ok = sum(o.valuation is not None for _, _, o in positions)
@@ -309,7 +320,9 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
         out(f"book: {ok}/{len(positions)} positions valued (" + ", ".join(f"{q} {n}" for q, n in by_q.most_common())
             + f"), {len(carried)} carried spreads")
         run_id, status, warnings = desk_run.publish(con, ctx, positions, prev=prev, run_type=run_type,
-                                                    inputs=inputs, carried_from=carried, pnl_basis=basis)
+                                                    inputs=inputs, carried_from=carried, pnl_basis=basis,
+                                                    **({"business_date": run_date, "cut_type": "prev_close"}
+                                                       if on_close else {}))
         out(f"desk run {run_id}: {status}, {len(warnings)} warnings")
         for (m,) in con.execute("SELECT message FROM run_log WHERE run_id = %s AND message LIKE %s",
                                 (run_id, "справочник эмитентов%")):
