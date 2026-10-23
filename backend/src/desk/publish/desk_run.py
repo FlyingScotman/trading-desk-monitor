@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import math
 from collections import Counter, defaultdict
+from datetime import date
 from functools import partial
 from typing import Any
 
@@ -58,20 +59,22 @@ def _jsonb(x: Any) -> Jsonb:
 def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str, str, Outcome]], *,
             prev: MarketView | None, run_type: str = "EOD", inputs: PositionInputs,
             carried_from: dict[str, CarriedSpread] | None = None,
-            pnl_basis: dict[str, Any] | None = None, core_results: list[Any] | None = None
-            ) -> tuple[int, str, list[str]]:
+            pnl_basis: dict[str, Any] | None = None, core_results: list[Any] | None = None,
+            business_date: date | None = None, cut_type: str | None = None) -> tuple[int, str, list[str]]:
     """positions: (position_id, book_id, outcome) of ``inputs`` (``store.positions_for``); ``carried_from``:
     the carried spreads the valuation got; ``pnl_basis``: what the flash PnL is measured against
     (``desk.cli.pnl_basis``, lineage ``pnl_basis``); ``core_results``: core results of the run besides those its
     outcomes carry (``BookPlan.core_result``, the v3 result of the derivatives: stored next to the bonds' v2 results
     even when core valued none of its positions). Returns (run_id, status, warnings). An INTRADAY run supersedes
-    nothing: the older intraday runs of its date are deleted once it is complete (``store.prune_intraday``)."""
+    nothing: the older intraday runs of its date are deleted once it is complete (``store.prune_intraday``).
+    ``business_date`` / ``cut_type``: the morning run (#21), the book of ``business_date`` on the earlier close of
+    ``ctx`` as cut ``prev_close``; lineage ``market_close`` names that close."""
     outcomes = [o for _, _, o in positions]
     results = {r.result_sha256: r for r in [*(o.core_result for o in outcomes), *(core_results or ())] if r}
     bodies = {sha: portfolio_result_to_json(r).decode() for sha, r in results.items()}  # raises unless verified
     spreads = used_model_spreads(outcomes)
     carried = sum(1 for s in spreads if (c := (carried_from or {}).get(s.secid)) and c.z_spread_bp == s.z_spread_bp)
-    bd = ctx.business_date
+    bd = business_date or ctx.business_date
     lineage = {
         **ctx.lineage(), "backend_version": BACKEND_VERSION, "backend_git_sha": git_sha(),
         "core_version": CORE_VERSION, "logic_version": logic_version(),
@@ -88,6 +91,8 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
         "market_business_date": ctx.market.snapshot.business_date,  # the header shows it when older (#22)
         "pnl_basis": pnl_basis,
     }
+    if bd != ctx.business_date:  # the morning run (#21): the close the book of ``bd`` is valued on
+        lineage["market_close"] = {"date": ctx.business_date.isoformat(), "cut_type": ctx.market.snapshot.cut_type}
     content = run_content(ctx, positions, prev, lineage, inputs)
     funding = funding_run.compute(con, bd, prev, ctx.market, content.rows, content.reference["books"], inputs,
                                   {pid: o.terms for pid, _, o in positions if o.terms is not None})
@@ -114,7 +119,7 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
         " %(lineage)s, %(cut_ts)s, %(pcut)s) RETURNING run_id",
         {"type": run_type, "bd": bd, "prev": prev.business_date if prev else None,
          "cut_ts": lineage["cut_ts"], "pcut": prev.snapshot.cut_type if prev else None,
-         "cut": ctx.market.snapshot.cut_type, "m": ctx.market.snapshot.id, "s": ctx.static.snapshot.id,
+         "cut": cut_type or ctx.market.snapshot.cut_type, "m": ctx.market.snapshot.id, "s": ctx.static.snapshot.id,
          "pm": lineage["prev_market_snapshot_id"], "h": inputs.private_inputs_hash, "ids": inputs.set_ids,
          "known": inputs.known_at, "core": CORE_VERSION, "be": BACKEND_VERSION, "sha": lineage["backend_git_sha"],
          "lineage": _jsonb(lineage)}).fetchone()[0]
