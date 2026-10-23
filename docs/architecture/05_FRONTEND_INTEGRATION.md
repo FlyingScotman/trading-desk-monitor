@@ -38,7 +38,8 @@ REST JSON plus an event stream. The OpenAPI is generated from the backend (FastA
 | `/api/v1/market/bonds`, `/market/bonds/{secid}/history`, `/market/curves`, `/market/fx` | GET | Market views. When a run is selected, served from that run's pinned snapshot bundle, because the hub's live API supports as-known reads only for bond EOD and fixings. Otherwise read through to the hub's latest data |
 | `/api/v1/views` | GET, POST, PUT, DELETE | Saved screen layouts, pivot views, widget boards (per user, optionally shared) |
 | `/api/v1/export/{resource}` | GET (`format=csv\|xlsx`) | Exports stamped with `run_id`, cut and generation time |
-| `/api/v1/events` | GET (Server-Sent Events) | `run.published`, `run.failed`, `job.progress`, `job.done`, `official.attached`, `data.stale` |
+| `/api/v1/events` | GET (JSON pages since S7b; Server-Sent Events: #28) | The `event` table in `event_id` order: inbox status changes (`input.accepted`, `input.rejected`, `input.stale`, …, the dataset tells official PnL from positions), `run.published`, `run.failed`; later `job.progress`, `job.done`. `after` = the cursor (the SSE stream resumes from `Last-Event-ID` with it), `before`, `on`, `type` prefixes; each event has a `level` and a Russian `text` (`desk.daystatus`) |
+| `/api/v1/inbox`, `/api/v1/inbox/days` | GET (every user, viewers included: #25) | Day status (S7b): per date the inputs, hub closes, files with rejections and their reasons, runs and what superseded what, per book reconciliation; a line per date for the strip. The monitors' C14 |
 | `/health/live`, `/health/ready` | GET | Liveness; readiness (database, latest snapshot age, worker alive) |
 
 Notes:
