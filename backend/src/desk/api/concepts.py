@@ -643,7 +643,7 @@ def run_points(con, runs: list[dict[str, Any]], pids: list[str]
                ) -> tuple[dict[int, dict[str, Any]], dict[tuple[int, str], tuple]]:
     """What a history point of a position depends on beyond its numbers (R44): per run its cut when not the final
     close (``cut``: ``eod_preliminary`` when the date has no final one; an intraday cut for the run shown), the program that computed it when that is not the current one
-    (``old``: ``logic_version`` without the bundle build differs, ``backfill.same_logic``; the history of runs
+    (``old``: another valuation or core version, ``backfill.same_logic``; the history of runs
     recomputes such a date) and per book the date of the report its positions are from (``books``); per (run,
     position) the number of bonds, the quality, why it is not exact and the book."""
     from .. import logic_version

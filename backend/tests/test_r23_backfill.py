@@ -94,6 +94,29 @@ def test_logic_change_but_not_a_new_build_recomputes(tmp_path, cache, store_url,
     assert backfill.same_logic("0.1.0+v7+core1+build1", "0.1.0+v7+core1") and not backfill.same_logic("a+v6", "a+v7")
 
 
+def test_a_release_without_logic_changes_does_not_recompute_the_history(tmp_path, cache, store_url, monkeypatch):
+    """Issue #24: a new backend version (a release) with the same VALUATION_VERSION and core leaves the history alone;
+    the dates stamped by the older release count as current."""
+    import desk
+
+    load(store_url, tmp_path, "2026-10-14", 10)
+    s = settings(tmp_path, cache, store_url)
+    monkeypatch.delenv("DESK_BUNDLE_VERSION", raising=False)
+    with store.connect(store_url) as con:
+        backfill.run(s, backfill.plan(con, s, date(2026, 10, 14), date(2026, 10, 15)), store_url=store_url,
+                     out=lambda line: None)
+        monkeypatch.setattr(desk, "__version__", "9.9.9")  # the next release, same valuation and core
+        monkeypatch.setenv("DESK_BUNDLE_VERSION", "9.9.9-20261101-abc")
+        assert not backfill.plan(con, s, date(2026, 10, 14), date(2026, 10, 15)).todo
+    lv = desk.logic_version()
+    assert backfill.same_logic(lv, lv.replace("9.9.9", "0.2.3", 1).split("+build")[0] + "+build0.2.3-x")
+    assert not backfill.same_logic(lv, lv.replace(f"+v{desk.VALUATION_VERSION}", f"+v{desk.VALUATION_VERSION + 1}"))
+    assert not backfill.same_logic(lv, lv.replace("+core", "+core9", 1))
+    assert backfill.same_logic("0.2.3+v11+core0.35.0", "0.2.4+v11+core0.35.0+build0.2.4-20261022")
+    assert not backfill.same_logic("0.2.4+v11+core0.35.0", "0.2.4+v11+core0.36.0")
+    assert not backfill.same_logic("0.2.4+v11+core0.35.0", None) and backfill.same_logic(None, None)
+
+
 def test_a_failed_date_is_not_retried_on_the_same_inputs(tmp_path, cache, store_url, monkeypatch):
     load(store_url, tmp_path, "2026-10-14", 10)
     s = settings(tmp_path, cache, store_url)
