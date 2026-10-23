@@ -462,8 +462,8 @@ Rules beyond the schema (`desk.inbox.validate`), each an `error` for the row's u
 
 Status 23.10.2026: the backend validates and stores the 1.4 rows (`dataset_rows`); valuation reads only the FX kinds
 (`valuation.derivatives`), so swaps from terms come with their slice (TDM#45), the funding of REPO and HTM lots from
-terms with the funding engine (TDM#55). The typed view `trade_terms_row` keeps the 1.2 columns; every field is in
-its `data`.
+terms with the funding engine (TDM#55). The typed view `trade_terms_row` has the 1.4 fields as columns after the 1.2
+ones (migration 0020); every field is also in its `data`.
 
 ### `trades` — flow; `full_snapshot` per book for cumulative exports, or `increment` for deltas; `time_basis = intraday`
 
