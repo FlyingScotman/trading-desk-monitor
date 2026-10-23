@@ -58,4 +58,16 @@ t('прогон до 0.2.6: базис — прежний ofzSpr01 (спред �
   assert.ok(q.basis01 && q.ofzSpr01 === null, 'старый прогон: базис есть, спреда к КБД нет');
 });
 
+t('«КБД»: у ОФЗ-ПК риска КБД нет — её базис (спред к RUONIA) уходит в спред ОФЗ, RUONIA не трогается', () => {
+  const basisView = load(null).M, kbdView = load('kbd').M;
+  const pk = basisView.positions.find(p => p.group === 'GOV' && p.kind === 'PK' && p.basis01);
+  assert.ok(pk, 'в демо-прогоне есть ОФЗ-ПК с базисом');
+  const k = kbdView.pos[pk.id];
+  k.risk['RUB OFZ'].forEach(v => assert.strictEqual(v, 0));
+  pk.risk['RUB RUONIA'].forEach((v, i) => near(k.risk['RUB RUONIA'][i], v, 'RUONIA ' + i));
+  near(k.ofzSpr01, (pk.ofzSpr01 || 0) + pk.basis01, 'спред ОФЗ-ПК');
+  near(k.dv01, pk.dv01, 'DV01');
+  assert.strictEqual(k.basis01, 0);
+});
+
 console.log(n + ' tests passed');

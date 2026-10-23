@@ -126,7 +126,7 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     book: dict[str, float] = {}
     mv_type: dict[str, float] = {}
     mv_ccy: dict[str, float] = {}
-    cs01 = basis = ofz_spr = 0.0
+    cs01 = basis = basis_pk = ofz_spr = 0.0
     pnl: dict[str, float] | None = None
     pos: dict[str, list] = {}
     for x in rows:
@@ -144,6 +144,8 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         ofz_spr += spr or 0.0
         book[x["book_id"]] = book.get(x["book_id"], 0.0) + (x["dv01"] or 0.0)
         g, k = kind_of(f)
+        if (g, k) == ("GOV", "PK"):  # an OFZ-PK's basis is its own spread to RUONIA, no KBD risk (the KBD view)
+            basis_pk += b
         m = _mv(f, x["pv_rub"])
         mv_type[f"{g}.{k}"] = mv_type.get(f"{g}.{k}", 0.0) + m
         if x["instr_type"] == "BOND":
@@ -158,7 +160,8 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
                                  _r(m, 0), _r(p["total"], 0) if p else None, _r(x["price"], 4),
                                  _r(x["spread_bp"], 2), {c: round(v, 2) for c, v in curves.items() if v},
                                  _r(x.get("dm_bp"), 2), _r(spr, 2)]
-    return {"dv01": dv01, "cs01": cs01, "basis": basis, "ofzSpr": ofz_spr, "dv01Book": book, "mvType": mv_type,
+    return {"dv01": dv01, "cs01": cs01, "basis": basis, "basisPk": basis_pk, "ofzSpr": ofz_spr, "dv01Book": book,
+            "mvType": mv_type,
             "mvCcy": mv_ccy, "pnl": pnl, "pos": pos}
 
 

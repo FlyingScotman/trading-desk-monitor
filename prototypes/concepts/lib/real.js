@@ -142,6 +142,7 @@
     stub('USD SOFR', 'USD', 'USD'), stub('EUR ESTR', 'EUR', 'EUR'), stub('CNY XCCY', 'CNY', 'CNY'),
   ];
   const curveOf = c => CURVE_MAP[c] || c;
+  const isPk = p => p.group === 'GOV' && p.kind === 'PK';  // ОФЗ-ПК: флоатер на RUONIA, её базис — спред к RUONIA
   // кривые риска, которых страницы не знают (валюта вне USD/EUR/CNY и т. п.), — своими строками
   D.positions.forEach(p => Object.keys(p.risk || {}).forEach(c => {
     const id = curveOf(c);
@@ -331,8 +332,13 @@
     else if (p.basis01) split(p.basis01).forEach((x, k) => p.risk['RUB OFZ'][k] += x);
     p.cs01b = p.cs01 ? split(p.cs01) : zeros();
     p.ofzSprb = p.ofzSpr01 ? split(p.ofzSpr01) : zeros();
-    // вид «КБД»: базис — риск кривой КБД, RUONIA — без него (сумма DV01 та же); базиса как отдельной меры нет
-    if (M.ofzView === 'kbd') { p.risk['RUB RUONIA'] = p.risk['RUB RUONIA'].map((v, k) => v - p.risk['RUB OFZ'][k]); p.basis01 = 0; }
+    // вид «КБД»: базис фикс-ОФЗ — риск кривой КБД, RUONIA — без него (сумма DV01 та же); у ОФЗ-ПК базис — её собственный
+    // спред к RUONIA, риска КБД у неё нет: он идёт в спред ОФЗ. Базиса как отдельной меры нет
+    if (M.ofzView === 'kbd') {
+      if (isPk(p)) { p.ofzSprb = p.risk['RUB OFZ'].slice(); p.ofzSpr01 = (p.ofzSpr01 || 0) + p.basis01; p.risk['RUB OFZ'] = zeros(); }
+      else p.risk['RUB RUONIA'] = p.risk['RUB RUONIA'].map((v, k) => v - p.risk['RUB OFZ'][k]);
+      p.basis01 = 0;
+    }
     p.dv01ByCurve = {}; let tot = 0;
     M.curves.forEach(c => { const s = p.risk[c.id].reduce((a, v) => a + v, 0); p.dv01ByCurve[c.id] = s; if (c.kind === 'rate') tot += s; });
     p.dv01 = tot;
@@ -392,9 +398,14 @@
   // базис в истории — сводки прогонов (кривая «RUB OFZ» страниц: ofz_basis01 в прогоне 0.2.6+, ofzSpr01 до него);
   // в виде «КБД» — риск КБД, RUONIA без него
   if (H.basis01) M.hist.dv01['RUB OFZ'] = H.basis01.slice();
-  if (M.ofzView === 'kbd' && H.dv01 && H.basis01) M.hist.dv01['RUB RUONIA'] = M.hist.dv01['RUB RUONIA'].map((v, i) => v == null ? null : v - (M.hist.dv01['RUB OFZ'][i] || 0));
   M.hist.ofzSpr01 = H.ofzSpr01 ? H.ofzSpr01.map(v => v == null ? null : +v) : new Array(n).fill(0);
   if (!H.ofzSpr01) M.hist.ofzSpr01[n - 1] = sumBy(p => p.ofzSpr01);
+  if (M.ofzView === 'kbd' && H.dv01 && H.basis01) {  // КБД — базис без ОФЗ-ПК (basisPk01: её спред к RUONIA — в спред ОФЗ)
+    const pk = H.basisPk01 || [], O = M.hist.dv01;
+    O['RUB OFZ'] = H.basis01.map((v, i) => v == null ? null : v - (pk[i] || 0));
+    O['RUB RUONIA'] = O['RUB RUONIA'].map((v, i) => v == null ? null : v - (O['RUB OFZ'][i] || 0));
+    M.hist.ofzSpr01 = M.hist.ofzSpr01.map((v, i) => v == null ? null : v + (pk[i] || 0));
+  }
 
   // ---------- история позиции (лениво, синхронно) ----------
   const histCache = {}, deepCache = {}; let misses = 0, all = false;
@@ -412,7 +423,7 @@
     if (opts && opts.deep) {
       if (!(id in deepCache)) { const j = fetchHist([id], '2000-01-01'); deepCache[id] = j && j.series && j.series[id] ? Object.assign({ dates: j.dates, runAt: j.runAt }, j.series[id]) : null; }
       if (deepCache[id] && deepCache[id].dates.length) {
-        return conv(deepCache[id], { deep: true });
+        return conv(deepCache[id], { deep: true }, id);
       }
     }
     if (!histCache[id] && !all) {
@@ -426,11 +437,11 @@
       const c = {}; Object.keys(p.dv01ByCurve).forEach(id => { if (p.dv01ByCurve[id] && (id !== 'RUB OFZ' || M.ofzView === 'kbd')) c[id] = [p.dv01ByCurve[id]]; });
       return { dates: [M.asOf], price: [p.price], ytm: [p.ytm], spr: [p.zspread], notional: [p.notional], dv01: [p.dv01], cs01: [p.cs01], basis: [p.basis01], mv: [p.group === 'DER' ? Math.abs(p.notionalRub) : p.mv], curves: c, bench: [p.ccy === 'RUB' ? curveAt('OFZ', p.tenor) : null], fromRuns: true };
     }
-    return conv(s);
+    return conv(s, null, id);
   };
 
   // ряды истории позиции с сервера (null вместо пустого ряда) — в массивы страницы; DV01, риск и MV в валюте отчёта
-  function conv(s, extra) {
+  function conv(s, extra, id) {
     const k = (M.toRepr && M.toRepr.RUB) || 1;
     // сервер шлёт null вместо ряда без значений: здесь он снова массив (нули для риска, null для цен)
     const n = s.dates.length, nulls = () => new Array(n).fill(null);
@@ -441,9 +452,10 @@
       dv01: risk(s.dv01), cs01: risk(s.cs01), basis: risk(s.basis), mv: risk(s.mv), curves, bench: s.bench || nulls(), fromRuns: true }, extra || {});
     OPT.forEach(key => { if (s[key]) o[key] = s[key]; });
     if (o.ofzSpr) o.ofzSpr = sc(o.ofzSpr);
-    if (M.ofzView === 'kbd') {  // вид «КБД»: базис позиции — её риск на КБД, RUONIA — без него
-      const b = o.basis, ru = curves['RUB RUONIA'];
-      if (b.some(v => v)) { curves['RUB OFZ'] = b.slice(); if (ru) curves['RUB RUONIA'] = ru.map((v, i) => v == null ? null : v - (b[i] || 0)); }
+    if (M.ofzView === 'kbd') {  // вид «КБД»: базис фикс-ОФЗ — её риск на КБД, RUONIA — без него; у ОФЗ-ПК — спред ОФЗ
+      const b = o.basis, ru = curves['RUB RUONIA'], p = M.pos[id];
+      if (p && isPk(p)) o.ofzSpr = b.map((v, i) => v == null ? null : v + ((o.ofzSpr || [])[i] || 0));
+      else if (b.some(v => v)) { curves['RUB OFZ'] = b.slice(); if (ru) curves['RUB RUONIA'] = ru.map((v, i) => v == null ? null : v - (b[i] || 0)); }
       o.basis = b.map(v => v == null ? null : 0);
     }
     // на чём стоит точка (R44): прогон даты (runAt: null — прогона нет, значение перенесено), точки не по ядру (pt), бумаг

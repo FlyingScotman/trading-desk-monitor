@@ -252,7 +252,7 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
         notes.append("заседаний ЦБ нет в данных: появятся после прогона на снимке с cbr_meetings")
     return {"runId": run["run_id"], "asOf": as_of.isoformat(), "histDates": dates,
             "hist": {"dv01": series("dv01"), "cs01": [s["cs01"] for s in sums], "basis01": [s["basis"] for s in sums],
-                     "ofzSpr01": [s.get("ofzSpr", 0.0) for s in sums],
+                     "ofzSpr01": [s.get("ofzSpr", 0.0) for s in sums], "basisPk01": [s.get("basisPk", 0.0) for s in sums],
                      "dv01Book": series("dv01Book"), "mvType": series("mvType"), "mvCcy": series("mvCcy"), "pnl": pnl},
             "histSource": "runs", "pnlPeriods": periods,
             "positions": positions, "cashflows": flows, **market,
