@@ -139,6 +139,40 @@ def test_a_failed_date_is_not_retried_on_the_same_inputs(tmp_path, cache, store_
     assert st["failed"] == 1 and st["failed_dates"] == ["2026-10-14"] and st["oldest_run"] == "2026-10-15"
 
 
+def test_a_failed_date_is_retried_once_after_an_upgrade(tmp_path, cache, store_url, monkeypatch):
+    """#155: a date remembered as failed (``backfill.json``) on one program version is tried again once on the next
+    (another bundle VERSION: another ``logic_version()``), and stays failed within a version."""
+    load(store_url, tmp_path, "2026-10-14", 10)
+    s = settings(tmp_path, cache, store_url)
+    real = cli.eod_run
+    tried: list[str] = []
+
+    def flaky(settings, d, **kw):
+        tried.append(d)
+        if d == "2026-10-14":
+            raise ValueError("bad bundle")
+        return real(settings, d, **kw)
+
+    def status(con) -> dict[str, str]:
+        p = backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15))
+        return {d.date: d.status for d in p.days if d.status != "no_positions"}
+
+    monkeypatch.setattr(cli, "eod_run", flaky)
+    monkeypatch.setenv("DESK_BUNDLE_VERSION", "0.2.4-20261022-aaaaaaa")
+    with store.connect(store_url) as con:
+        backfill.run(s, backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15)), store_url=store_url,
+                     out=lambda line: None)
+        assert status(con) == {"2026-10-14": "failed", "2026-10-15": "done"}
+        monkeypatch.setenv("DESK_BUNDLE_VERSION", "0.2.5-20261023-bbbbbbb")  # the fixed program installed
+        assert status(con) == {"2026-10-14": "todo", "2026-10-15": "done"}  # the same build-less logic: 15.10 kept
+        monkeypatch.setattr(cli, "eod_run", lambda settings, d, **kw: (tried.append(d), real(settings, d, **kw))[1])
+        res = backfill.run(s, backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15)), store_url=store_url,
+                           out=lambda line: None)
+        assert res["done"] == ["2026-10-14"] and not res["failed"]
+        assert status(con) == {"2026-10-14": "done", "2026-10-15": "done"}
+    assert tried == ["2026-10-14", "2026-10-15", "2026-10-14"]
+
+
 @pytest.mark.parametrize("error", [
     pytest.param(lambda: __import__("psycopg").OperationalError("connection to server on socket failed"), id="store"),
     pytest.param(lambda: __import__("desk.marketdata.hub", fromlist=["HubError"]).HubError("hub unreachable"), id="hub"),

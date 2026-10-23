@@ -3,11 +3,12 @@ the stub hub of slice S3, the reference adapter and the canonical inbox fixtures
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
 import time
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,7 @@ FIX = Path(__file__).parent / "fixtures"
 PRIV, CONFIG, SNAPS = FIX / "private" / "v1", FIX / "private" / "v1" / "config", FIX / "mdhub_v1"
 TODAY = date(2026, 10, 19)
 STEP_KEYS = {"name", "status", "detail", "at"}
+OPTIONAL_STEP_KEYS = {"reason", "failed_dates"}  # the intraday step's reason, the sync step's failed dates (#20)
 server, stub = test_slice_s3.server, test_slice_s3.stub  # the stub hub's fixtures
 
 
@@ -111,7 +113,8 @@ def test_hub_down_still_scans_and_runs_on_the_cache(stub, tmp_path, store_url, m
     out = capsys.readouterr().out
     assert "sync: error - hub: 127.0.0.1 unreachable after 4 attempts" in out and "cached snapshots are used" in out
     assert "scan: ok" in out and "eod: ok - 2026-10-15 run 1 (no default run)" in out
-    assert "Ошибки: sync; latest run: 1 of 2026-10-15 (15.10 · закрытие)" in out
+    # the intraday step asks the hub itself (#20): an error too while the wall clock is in business hours
+    assert re.search(r"Ошибки: sync(, intraday)?; latest run: 1 of 2026-10-15 \(15.10 · закрытие\)", out), out
     assert TOKEN not in out
     assert runs(store_url) == [(1, date(2026, 10, 15), "EOD", "complete")]
     assert cli.main(["cycle", "--no-hub"]) == 0  # the hub skipped: nothing else to do
@@ -139,6 +142,56 @@ def test_failed_eod_is_not_retried_until_inputs_change(tmp_path, store_url, monk
     assert steps(st)["eod"] == ("skipped", "2026-10-15 failed before on the same inputs, not retried")
     put(tmp_path, "positions_20261016_2.csv")
     ap.run_cycle()
+    assert calls == ["2026-10-15", "2026-10-15"]
+
+
+def test_failed_eod_is_retried_once_after_an_upgrade(tmp_path, store_url, monkeypatch):
+    """#155: a date that failed on one program version is tried again once on the next (another bundle VERSION, so
+    another ``logic_version()``), not again within that version. Here without a restart (a restart forgets the failed
+    inputs anyway)."""
+    (tmp_path / "cache").mkdir()
+    for p in SNAPS.glob("*.json.gz"):
+        shutil.copy(p, tmp_path / "cache" / p.name)
+    put(tmp_path, "positions_20261016.csv")
+    calls = []
+    real = cli.eod_run
+
+    def broken(*a, **kw):
+        calls.append(a[1])
+        raise ValueError("time zone not recognized")
+
+    monkeypatch.setattr(cli, "eod_run", broken)
+    monkeypatch.setenv("DESK_BUNDLE_VERSION", "0.2.4-20261022-aaaaaaa")
+    ap = Autopilot(settings_loader=lambda: cfg(tmp_path, store_url), today=lambda: TODAY)
+    assert steps(ap.run_cycle())["eod"][0] == "error"
+    assert steps(ap.run_cycle())["eod"] == ("skipped", "2026-10-15 failed before on the same inputs, not retried")
+    assert calls == ["2026-10-15"]
+
+    monkeypatch.setattr(cli, "eod_run", lambda *a, **kw: (calls.append(a[1]), real(*a, **kw))[1])
+    monkeypatch.setenv("DESK_BUNDLE_VERSION", "0.2.5-20261023-bbbbbbb")  # the fixed program installed
+    assert steps(ap.run_cycle())["eod"] == ("ok", "2026-10-15 run 1 (no default run)")
+    assert steps(ap.run_cycle())["eod"][0] == "skipped" and calls == ["2026-10-15", "2026-10-15"]
+
+
+def test_failed_eod_on_a_new_version_is_not_retried_within_it(tmp_path, store_url, monkeypatch):
+    (tmp_path / "cache").mkdir()
+    for p in SNAPS.glob("*.json.gz"):
+        shutil.copy(p, tmp_path / "cache" / p.name)
+    put(tmp_path, "positions_20261016.csv")
+    calls = []
+
+    def broken(*a, **kw):
+        calls.append(a[1])
+        raise ValueError("boom")
+
+    monkeypatch.setattr(cli, "eod_run", broken)
+    monkeypatch.setenv("DESK_BUNDLE_VERSION", "0.2.4-20261022-aaaaaaa")
+    ap = Autopilot(settings_loader=lambda: cfg(tmp_path, store_url), today=lambda: TODAY)
+    ap.run_cycle()
+    monkeypatch.setenv("DESK_BUNDLE_VERSION", "0.2.5-20261023-bbbbbbb")
+    assert steps(ap.run_cycle())["eod"][0] == "error"  # tried once on the new version
+    for _ in range(2):
+        assert steps(ap.run_cycle())["eod"][0] == "skipped"
     assert calls == ["2026-10-15", "2026-10-15"]
 
 
@@ -231,7 +284,7 @@ def test_settings_switch_and_errors_in_status(tmp_path, store_url):
     assert st["state"] == "error" and steps(st)["store"][0] == "error" and steps(st)["sync"][0] == "skipped"
     assert set(st) == {"enabled", "state", "last_cycle_at", "last_ok_at", "message", "steps", "latest_run", "progress"}
     assert st["progress"] is None  # only while a cycle runs
-    assert all(set(x) == STEP_KEYS for x in st["steps"])
+    assert all(STEP_KEYS <= set(x) <= STEP_KEYS | OPTIONAL_STEP_KEYS for x in st["steps"])
     (tmp_path / "drop").mkdir()
     half = Settings(home=tmp_path / "home", store_url=store_url, snapshot_cache=tmp_path / "cache",
                     snapshot_drop=tmp_path / "drop")  # market data from a drop folder, no report folders
@@ -243,8 +296,12 @@ def test_api_status_and_run(tmp_path, store_url):
     app = create_app(store_url)
     c = TestClient(app)
     st = c.get("/api/v1/autopilot/status").json()
+    now = datetime.fromisoformat(st.pop("now"))  # #22: the server's clock and the intraday schedule, for the header
+    assert now.tzinfo is not None and abs((now - datetime.now(UTC)).total_seconds()) < 60
     assert st == {"enabled": False, "state": "idle", "last_cycle_at": None, "last_ok_at": None,
-                  "message": "Автопилот не запущен", "steps": [], "latest_run": None, "progress": None}
+                  "message": "Автопилот не запущен", "steps": [], "latest_run": None, "progress": None,
+                  "schedule": {"intraday_from": "10:00", "prelim_from": "19:45", "poll_slot_s": 600,
+                               "poll_lag_s": 300, "warn_after": "10:15"}}
     r = c.post("/api/v1/autopilot/run")
     assert r.status_code == 409 and r.json()["code"] == "invalid_parameter"
 

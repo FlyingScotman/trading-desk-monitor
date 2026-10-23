@@ -268,7 +268,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
     { key: 'rv', label: 'разница', num: true, val: r => { const m = medOf(r.rating, r.tenor); return m == null || r.gspread == null ? null : r.gspread - m; }, fmt: v => v == null ? '—' : f.bps(v), style: v => v == null ? '' : K.heat(v, 120), title: '> 0 — бумага дешевле рынка (шире спред)' },
     'mv',
   ];
-  K.table(document.getElementById('rv'), {
+  K.table(document.getElementById('rv'), { viewKey: 'c09-rv',
     rowsFn: () => K.list().filter(p => p.group === 'CORP' && p.ccy === 'RUB' && p.cpn.type === 'fix'), columns: K.cols(rvCols), sort: [['rv', -1]], stripe: r => K.issuerColor(r.issuer), maxHeight: '420px', footer: false,
   });
 
@@ -285,7 +285,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
   const movNote = () => { const d = MH && MH.periods && MH.periods[S.per]; document.getElementById('movNote').textContent = MH ? 'крупнейшие по обороту выпуски, изм. доходности' + (d ? ' к ' + f.date(d) : '') : 'крупные выпуски (> 8 bn), изм. доходности за день'; };
   if (MH && MH.bonds) K.seg(document.getElementById('cMov'), PER, S.per, v => { S.per = v; save(); mov = movRows(); mxChg = Math.max(1, ...mov.map(b => Math.abs(b.chgBp))); movNote(); movT.redraw(); cv.redraw(); });
   movNote();
-  const movT = K.table(document.getElementById('movers'), {
+  const movT = K.table(document.getElementById('movers'), { viewKey: 'c09-movers',
     rowsFn: () => mov, autoFilter: false, footer: false, sort: [['chgBp', -1]], maxHeight: '420px', onRow: () => { },
     columns: [
       { key: 'name', label: 'Выпуск' }, { key: 'sector', label: 'Сектор', fmt: v => '<span class="mut">' + esc(v) + '</span>' }, { key: 'rating', label: 'Рейтинг', fmt: v => '<b style="color:' + (RB.find(x => x[0] === rbOf(v)) || RB[4])[2] + '">●</b> ' + esc(v) },

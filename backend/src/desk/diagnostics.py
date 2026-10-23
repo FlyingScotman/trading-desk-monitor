@@ -69,7 +69,7 @@ from urllib.parse import urlsplit
 
 import psycopg
 
-from . import VALUATION_VERSION, __version__, store
+from . import VALUATION_VERSION, __version__, backup, store
 from .inbox.timesem import MSK
 from .settings import REPO_ROOT, Settings, SettingsError, env_overrides, load
 
@@ -1264,10 +1264,12 @@ def build(settings: Settings | None = None, *, store_url: str | None = None, aut
         section("runs", need_store(lambda c: runs_section(c, scrub)))
         section("db", need_store(lambda c: db_section(c, settings)))
         section("backfill", need_store(lambda c: backfill_section(settings, c)))
+        section("backup", lambda: backup.diagnostics(settings))
         doc["build"] = {"duration_s": round(time.perf_counter() - t_all, 2), "sections_s": times,
                         "store_error": scrub.text(store_error) if store_error else None, "hub_asked": bool(hub)}
         order = ("schema", "generated_at", "privacy", "app", "clock", "settings", "lan", "autopilot", "hub",
-                 "snapshots", "market_history", "static", "inbox", "positions", "runs", "backfill", "logs", "db", "build")
+                 "snapshots", "market_history", "static", "inbox", "positions", "runs", "backfill", "backup", "logs", "db",
+                 "build")
         doc = {k: doc[k] for k in order if k in doc}
         return scrub.doc(json.loads(json.dumps(doc, ensure_ascii=False, default=str)))
     finally:

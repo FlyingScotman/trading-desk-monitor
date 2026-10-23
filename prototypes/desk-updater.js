@@ -7,7 +7,9 @@
  * Проверка: GET api/v1/update/remote (сервер сам спрашивает GitHub, если пора). Если сервер до GitHub не достаёт
  * (browser_check_due), страница спрашивает GitHub API из браузера: api.github.com отвечает на CORS-запросы
  * (Access-Control-Allow-Origin: *). Запрос «простой» — только заголовок Accept, без предварительного OPTIONS, без
- * cookie и токена — и ответ уходит серверу (POST …/browser-release), разбирает его сервер.
+ * cookie и токена — и ответ уходит серверу (POST …/browser-release), разбирает его сервер. Спрашивается список
+ * последних релизов, а не только последний: если в последнем нет файлов обновления (создан вручную, тег без «v»),
+ * сервер берёт предыдущий с файлами и объясняет почему.
  * Сами файлы релиза браузер fetch()-ем не получит: github.com/…/releases/download отвечает 302 без CORS-заголовков,
  * хранилище release-assets.githubusercontent.com — тоже (проверено 22.10.2026). Поэтому кнопка запускает обычное
  * скачивание браузером, а сервер ждёт файл в папке «Загрузки», сверяет размер и SHA-256 с релизом и ставит.
@@ -52,13 +54,13 @@
     return (f || fetch)(url, { method: 'GET', headers: { Accept: 'application/vnd.github+json' }, credentials: 'omit', mode: 'cors', redirect: 'follow' });
   }
   function browserCheck(repo, f) {
-    return ghFetch('https://api.github.com/repos/' + repo + '/releases/latest', f).then(function (r) {
+    return ghFetch('https://api.github.com/repos/' + repo + '/releases?per_page=10', f).then(function (r) {
       if (r.status === 404) return { none: true };
       if (!r.ok) {
         var lim = r.headers.get('x-ratelimit-remaining') === '0';
         return { error: lim ? 'лимит GitHub API на внешний адрес сети исчерпан (60 запросов в час)' : 'GitHub API ответил HTTP ' + r.status };
       }
-      return r.json().then(function (j) { return { release: j }; });
+      return r.json().then(function (j) { return Array.isArray(j) && !j.length ? { none: true } : { releases: j }; });
     }, function (e) { return { error: 'GitHub API недоступен из браузера: ' + (e && e.message || e) }; });
   }
   function due(lastTs, now) { return !(lastTs > 0) || now - lastTs > BROWSER_EVERY; }
@@ -297,6 +299,19 @@
     return box;
   }
 
+  // когда GitHub спрашивали в последний раз (сервер или браузер — что позже), каким путём и с каким итогом
+  function lastCheck(st) {
+    var chk = st.check, br = st.browser;
+    var useBrowser = br && br.checked_at && br.checked_at > (st.checked_at || '');
+    var at = useBrowser ? br.checked_at : st.checked_at;
+    if (!at) return 'ещё не проверялось';
+    var ok = useBrowser ? br.ok : chk && chk.ok;
+    var via = useBrowser ? 'браузер' : chk && chk.layer ? 'сервер, ' + (LAYER[chk.layer] || chk.layer) : 'сервер';
+    var what = ok ? (st.release ? 'найден ' + st.release.tag : st.no_release ? 'релизов нет' : 'успешно')
+      : chk && chk.error && chk.error.code === 'release' && !useBrowser ? 'релиз не подходит' : 'не удалось';
+    return 'GitHub проверен ' + when(at) + ' (' + via + '): ' + what;
+  }
+
   function render(st) {
     P.st = st;
     var b = P.box;
@@ -308,14 +323,21 @@
       ch ? el('span', { 'class': ch.compare === 'newer' ? 'tag new' : 'tag', style: 'margin-left:6px' }, { newer: 'новее', same: 'установлена', older: 'старее', other: 'другая сборка' }[ch.compare] || ch.compare) : null));
     else if (st.no_release) head.append(el('span', { 'class': 'muted' }, 'релизов пока нет'));
     var chk = st.check, via = chk && chk.ok ? 'сервер, ' + (LAYER[chk.layer] || chk.layer) : st.browser && st.browser.ok ? 'браузер' : null;
-    head.append(el('span', { 'class': 'muted' }, st.checking ? 'проверяю…' : st.checked_at || (st.browser && st.browser.checked_at)
-      ? 'проверено ' + when((st.browser && st.browser.checked_at > (st.checked_at || '')) ? st.browser.checked_at : st.checked_at) + (via ? ' (' + via + ')' : '') : 'ещё не проверялось'));
+    head.append(el('span', { 'class': 'muted' }, st.checking ? 'проверяю…' : lastCheck(st)));
     b.append(head);
+    if (rel && rel.skipped && rel.skipped.length) {
+      b.append(el('div', { 'class': 'note warn', style: 'margin-top:4px' }, 'Последний релиз на GitHub ' + rel.skipped[0].tag +
+        ' без файлов обновления — предлагается предыдущий с файлами, ' + rel.tag + '. ' + rel.skipped[0].reason));
+    }
     if (chk && !chk.ok && chk.error) {
       var e = chk.error;
       b.append(el('div', { 'class': (st.browser && st.browser.ok) ? 'muted' : 'err', style: 'margin-top:4px' },
-        'Сервер до GitHub не достаёт: ' + (e.what || e.code || '') + (e.message ? ' — ' + e.message : '') +
+        (e.code === 'release' ? 'GitHub ответил, но релиз не подходит' : 'Сервер до GitHub не достаёт: ' + (e.what || e.code || '')) +
+        (e.message ? ' — ' + e.message : '') +
         (st.browser && st.browser.ok ? '. Версию узнал браузер; скачивать тоже будет браузер.' : '')));
+    }
+    if (chk && chk.notes && chk.notes.length && !(rel && rel.skipped && rel.skipped.length)) {
+      chk.notes.forEach(function (t) { b.append(el('div', { 'class': 'muted', style: 'margin-top:2px' }, t)); });
     }
     if (st.browser && st.browser.error && !(chk && chk.ok)) b.append(el('div', { 'class': 'err' }, st.browser.error));
 
@@ -364,6 +386,6 @@
   }
 
   function runMode(m) { if (m === 'panel') panel(); else nav(); }
-  window.DESK_UPDATER = { run: runMode, nav: nav, panel: panel, _test: { ghFetch: ghFetch, browserCheck: browserCheck, due: due } };
+  window.DESK_UPDATER = { run: runMode, nav: nav, panel: panel, _test: { ghFetch: ghFetch, browserCheck: browserCheck, due: due, lastCheck: lastCheck } };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { runMode(mode); }); else runMode(mode);
 })();
