@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import sys
 import time
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -246,8 +246,12 @@ def test_api_status_and_run(tmp_path, store_url):
     app = create_app(store_url)
     c = TestClient(app)
     st = c.get("/api/v1/autopilot/status").json()
+    now = datetime.fromisoformat(st.pop("now"))  # #22: the server's clock and the intraday schedule, for the header
+    assert now.tzinfo is not None and abs((now - datetime.now(UTC)).total_seconds()) < 60
     assert st == {"enabled": False, "state": "idle", "last_cycle_at": None, "last_ok_at": None,
-                  "message": "Автопилот не запущен", "steps": [], "latest_run": None, "progress": None}
+                  "message": "Автопилот не запущен", "steps": [], "latest_run": None, "progress": None,
+                  "schedule": {"intraday_from": "10:00", "prelim_from": "19:45", "poll_slot_s": 600,
+                               "poll_lag_s": 300, "warn_after": "10:15"}}
     r = c.post("/api/v1/autopilot/run")
     assert r.status_code == 409 and r.json()["code"] == "invalid_parameter"
 
