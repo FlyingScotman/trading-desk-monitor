@@ -708,21 +708,37 @@
       reset(key) { mem[key] = null; try { localStorage.removeItem(P + key); } catch (e) { } },
     };
   })();
-  // стабильный ключ таблицы: opts.viewKey, иначе страница + ближайший id в разметке + набор колонок (у одной таблицы с
-  // разными наборами колонок — разные раскладки: переключение меры не ломает ширины другой)
+  // стабильный ключ таблицы — без списка колонок (добавили колонку — раскладка не теряется, K.viewLayout сводит её с
+  // текущим набором): opts.viewKey (его передают все мониторы), иначе страница + ближайший id в разметке
   K.tableKey = (el, opts) => {
     if (opts.viewKey) return 'table:' + opts.viewKey;
     let page = '', anchor = '';
     try { page = (location.pathname || '').split('/').pop(); } catch (e) { }
     try { anchor = el.id || (el.closest && el.closest('[id]') ? el.closest('[id]').id : ''); } catch (e) { }
-    return 'table:' + page + '|' + anchor + '|' + opts.columns.map(c => c.key).join(',');
+    return 'table:' + page + '|' + anchor;
+  };
+  // раскладка из хранилища — чужие данные: только объект; order — строки известных колонок без повторов, w — известные
+  // колонки с конечной положительной шириной (32…2000 px); остальное отбрасывается, мусор даёт исходный вид
+  K.viewLayout = (v, keys) => {
+    const out = {}, known = new Set(keys);
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return out;
+    if (Array.isArray(v.order)) {
+      const o = [...new Set(v.order.filter(k => typeof k === 'string' && known.has(k)))];
+      if (o.length) out.order = o;
+    }
+    if (v.w && typeof v.w === 'object' && !Array.isArray(v.w)) {
+      const w = {};
+      Object.keys(v.w).forEach(k => { const x = v.w[k]; if (known.has(k) && typeof x === 'number' && isFinite(x) && x > 0) w[k] = Math.min(2000, Math.max(32, Math.round(x))); });
+      if (Object.keys(w).length) out.w = w;
+    }
+    return out;
   };
 
   // ---------- выгрузка таблиц в CSV (#110) ----------
   // CSV для Excel с русскими региональными настройками: UTF-8 с BOM (иначе кириллица — кракозябры), разделитель
   // «;» и десятичная запятая (так Excel с русской локалью раскладывает файл по колонкам и читает числа числами).
   // Значения — как на экране (в единицах заголовка), числа — числами; текст, похожий на формулу, — с апострофом.
-  K.htmlText = s => String(s == null ? '' : s).replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+  K.htmlText = s => String(s == null ? '' : s).replace(/<(?:[^>"']|"[^"]*"|'[^']*')*>/g, '').replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
   K.csvNum = t => {  // «−1,234.5» → «-1234,5»; «4.44%» → «4,44%»; не число — null
     const m = /^([+−-]?)(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(%?)$/.exec(t);
@@ -747,7 +763,7 @@
   // opts: {columns:[{key,label,val(r),fmt(v,r),cls,title,sum:true|fn,drill:{title,unit,fmt,val}, w}], rows|rowsFn, groupBy:[{key(r),label(k,rows)}], search:bool,
   //        sort:[[key,dir]] (по умолчанию — строки в группах; щелчок по заголовку сортирует и группы, кроме groupBy[i].fixed), stripe(r)->color, onRow(r), rowCls(r), tools(el), maxHeight, footer:bool,
   //        groupable:[уровни] — группировка по желанию (переключатель «плоская / валюта → эмитент»); по умолчанию таблица плоская (R37),
-  //        viewKey — ключ раскладки (по умолчанию K.tableKey), title — название в CSV, fileName — основа имени файла CSV (латиницей)}
+  //        viewKey — стабильный ключ раскладки латиницей, он же основа имени CSV (без него — страница + id, K.tableKey), title — название в CSV, fileName — основа имени файла CSV (латиницей)}
   K.table = function (el, opts) {
     const st = { sort: opts.sort ? opts.sort.slice() : [], q: '', collapsed: {}, groupSort: false, filters: {}, grouped: false };
     el.innerHTML = '';
@@ -769,13 +785,14 @@
     if (tools) { if (!opts.tools) { const sp = h('span'); sp.style.flex = '1'; tools.appendChild(sp); } tools.appendChild(ctl); }
     else { const bar = h('div', 'k-tbl-ctlbar'); bar.appendChild(ctl); el.appendChild(bar); }
     const vkey = K.tableKey(el, opts);
-    let lay = K.viewStore.get(vkey) || {};  // {order: [key], w: {key: px}}
-    const fixedW = () => lay.w && Object.keys(lay.w).length > 0;
+    const colKeys = () => opts.columns.map(c => c.key);
+    let lay = K.viewLayout(K.viewStore.get(vkey), colKeys());  // {order: [key], w: {key: px}} — проверенная форма
+    const fixedW = () => !!lay.w && cols().some(c => lay.w[c.key]);
     const resetBtn = h('button', 'k-tbtn', '⟲ вид'); resetBtn.title = 'сбросить ширину и порядок колонок этой таблицы';
     resetBtn.onclick = () => { lay = {}; K.viewStore.reset(vkey); draw(); };
     const csvBtn = h('button', 'k-tbtn', '⤓ CSV');
     csvBtn.title = 'выгрузить в CSV (Excel): колонки — в текущем порядке, строки — после поиска, фильтров и сортировки; номер прогона и дата среза — в первой строке и в имени файла';
-    csvBtn.onclick = () => K.download(csvName(), '﻿' + csv(), 'text/csv;charset=utf-8');
+    csvBtn.onclick = () => K.download(csvName(), '\uFEFF' + csv(), 'text/csv;charset=utf-8');
     ctl.append(csvBtn, resetBtn);
     const paintCtl = () => { resetBtn.style.display = fixedW() || (lay.order && lay.order.length) ? '' : 'none'; };
     const saveLay = () => { K.viewStore.set(vkey, lay); paintCtl(); };
@@ -820,6 +837,10 @@
       let body = '';
       const groups = opts.groupBy || (st.grouped && opts.groupable) || [];
       const nCols = C.length + (opts.stripe ? 1 : 0);
+      // подпись группы и «Итого» — в первой колонке без итога (колонку с итогом могли перенести на первое место, #102);
+      // span группы — только по колонкам без итога; если итог есть у всех колонок, подпись — в первой
+      const li = Math.max(0, C.findIndex(c => !c.sum));
+      const spanAt = G => { let n = 1; while (n < (G.span || 1) && li + n < C.length && !C[li + n].sum) n++; return n; };
       function emit(list, level, path) {
         if (level >= groups.length) { list.forEach(r => { body += '<tr class="row ' + (opts.rowCls ? opts.rowCls(r) : '') + '" data-id="' + esc(r.id) + '">' + (opts.stripe ? '<td class="stripe" style="background:' + opts.stripe(r) + '"></td>' : '') + C.map(c => cell(c, r)).join('') + '</tr>'; }); return; }
         const G = groups[level], buckets = new Map();
@@ -830,12 +851,12 @@
         keys.forEach(k => {
           const sub = buckets.get(k), p = path + '/' + k, col = st.collapsed[p] != null ? st.collapsed[p] : !!G.collapsed;
           body += '<tr class="grp l' + level + '" data-g="' + esc(p) + '">' + (opts.stripe ? '<td class="stripe" style="background:' + (G.color ? G.color(k, sub) : 'transparent') + '"></td>' : '') +
-            C.map((c, i) => i === 0 ? '<td colspan="' + (G.span || 1) + '" style="padding-left:' + (8 + level * 14) + 'px"><span class="tw">' + (col ? '▸' : '▾') + '</span>' + (G.label ? G.label(k, sub) : esc(k)) + ' <span class="mut3" style="font-weight:400">' + sub.length + '</span></td>' : (i < (G.span || 1) ? '' : sumCell(c, sub))).join('') + '</tr>';
+            C.map((c, i) => i === li ? '<td colspan="' + spanAt(G) + '" style="padding-left:' + (8 + level * 14) + 'px"><span class="tw">' + (col ? '▸' : '▾') + '</span>' + (G.label ? G.label(k, sub) : esc(k)) + ' <span class="mut3" style="font-weight:400">' + sub.length + '</span></td>' : (i > li && i < li + spanAt(G) ? '' : sumCell(c, sub))).join('') + '</tr>';
           if (!col) emit(sub, level + 1, p);
         });
       }
       emit(rows, 0, '');
-      const foot = opts.footer === false ? '' : '<tfoot><tr>' + (opts.stripe ? '<td></td>' : '') + C.map((c, i) => i === 0 ? '<td>Итого <span class="mut3" style="font-weight:400">' + rows.length + '</span></td>' : sumCell(c, rows)).join('') + '</tr></tfoot>';
+      const foot = opts.footer === false ? '' : '<tfoot><tr>' + (opts.stripe ? '<td></td>' : '') + C.map((c, i) => i === li ? '<td>Итого <span class="mut3" style="font-weight:400">' + rows.length + '</span></td>' : sumCell(c, rows)).join('') + '</tr></tfoot>';
       wrap.innerHTML = '<table class="k-tbl' + tw + '">' + cg + head + '<tbody>' + (body || '<tr><td colspan="' + nCols + '" class="k-empty">ничего не найдено</td></tr>') + '</tbody>' + foot + '</table>';
       wrap.querySelectorAll('th .k-flt').forEach(ic => ic.onclick = e => {
         e.stopPropagation();
@@ -857,7 +878,7 @@
     }
     // ---------- раскладка мышкой (#102) ----------
     const heads = () => [...wrap.querySelectorAll('th[data-k]')];
-    const tableW = () => Object.values(lay.w).reduce((s, v) => s + v, opts.stripe ? 4 : 0);
+    const tableW = () => cols().reduce((s, c) => s + (lay.w[c.key] || 100), opts.stripe ? 4 : 0);  // только видимые колонки
     // первый ресайз: ширины всех колонок — как сейчас на экране, дальше раскладка фиксированная
     function ensureW() { if (!fixedW()) { lay.w = {}; heads().forEach(th => { lay.w[th.dataset.k] = Math.round(th.getBoundingClientRect().width); }); } }
     function setW(k, w) {
@@ -933,19 +954,19 @@
       return ['run_id;' + q(R.run_id) + ';as_of;' + q(R.as_of) + ';таблица;' + q(csvTitle()) + ';строк;' + shown.length, '', head.join(';')]
         .concat(shown.map(line)).join('\r\n') + '\r\n';
     }
-    // имя файла — латиницей (кириллицу в имени скачивания браузер может заменить на «download»): страница, якорь
-    // таблицы (или opts.fileName), дата среза, прогон
+    // имя файла — латиницей (кириллицу в имени скачивания браузер может заменить на «download»): opts.fileName, иначе
+    // opts.viewKey, иначе страница и якорь таблицы; дальше дата среза и прогон
     function csvName() {
       const R = K.csvRun();
       let page = '', anchor = '';
       try { page = (location.pathname || '').split('/').pop().replace(/\.html?$/, ''); } catch (e) { }
       try { anchor = el.id || (el.closest && el.closest('[id]') ? el.closest('[id]').id : ''); } catch (e) { }
-      const base = (opts.fileName || [page || 'table', anchor].filter(Boolean).join('_')).replace(/[^A-Za-z0-9_.-]+/g, '_');
+      const base = (opts.fileName || opts.viewKey || [page || 'table', anchor].filter(Boolean).join('_')).replace(/[^A-Za-z0-9_.-]+/g, '_');
       return 'tdm_' + base + '_' + (R.as_of || 'nodate') + '_run-' + (R.run_id || 'none').replace(/[^A-Za-z0-9_-]+/g, '_') + '.csv';
     }
     draw();
     const api = { redraw: draw, state: st, csv, csvName, setSort: s => { st.sort = s; draw(); }, setFilter: (k, v) => { st.filters[k] = v; draw(); }, setGrouped: g => { st.grouped = !!g; draw(); }, el,
-      viewKey: vkey, layout: () => JSON.parse(JSON.stringify(lay)), setLayout: v => { lay = v || {}; saveLay(); draw(); }, resetView: () => resetBtn.onclick() };
+      viewKey: vkey, layout: () => JSON.parse(JSON.stringify(lay)), setLayout: v => { lay = K.viewLayout(v, colKeys()); saveLay(); draw(); }, resetView: () => resetBtn.onclick() };
     if (opts.autoFilter !== false && !opts.rows) K.live(el, 'filter', draw);
     return api;
   };

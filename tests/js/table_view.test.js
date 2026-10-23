@@ -48,20 +48,56 @@ t('#102: viewStore — get/set/reset поверх localStorage, недоступ
   assert.strictEqual(K2.viewStore.get('z'), null);
 });
 
-t('#102: ключ таблицы стабилен (страница, якорь, колонки); opts.viewKey — явный', () => {
+t('#102: ключ таблицы — без списка колонок; opts.viewKey — явный; все мониторы передают свой viewKey', () => {
   const { K } = load(new Map());
   const a = el(); a.id = 'list';
-  assert.strictEqual(K.tableKey(a, { columns: columns() }), 'table:c99.html|list|s,x,y');
+  assert.strictEqual(K.tableKey(a, { columns: columns() }), 'table:c99.html|list');
+  assert.strictEqual(K.tableKey(a, { columns: columns().slice(1) }), 'table:c99.html|list', 'другой набор колонок — тот же ключ');
   assert.strictEqual(K.tableKey(a, { columns: columns(), viewKey: 'mine' }), 'table:mine');
+  // у нескольких таблиц в одной панели без id ключ «страница + id» совпал бы: каждый вызов K.table на мониторах
+  // передаёт свой viewKey, и ключи не повторяются
+  const dir = path.join(__dirname, '..', '..', 'prototypes', 'concepts'), seen = new Set();
+  fs.readdirSync(dir).filter(f => /^c\d+.*\.html$/.test(f)).forEach(f => {
+    const src = fs.readFileSync(path.join(dir, f), 'utf8');
+    [...src.matchAll(/K\.table\([^{]*\{\s*(viewKey: '([a-z0-9-]+)')?/g)].forEach(m => {
+      assert.ok(m[2], f + ': K.table без viewKey');
+      assert.ok(!seen.has(m[2]), 'повтор viewKey ' + m[2]); seen.add(m[2]);
+    });
+  });
+  assert.ok(seen.size >= 16, 'вызовы найдены: ' + seen.size);
 });
 
-t('#102: порядок колонок из сохранённой раскладки, новые колонки — в конце, сброс возвращает исходный', () => {
+t('#102: раскладка из хранилища проверяется: мусор и старый формат не ломают таблицу', () => {
+  const { K } = load(new Map());
+  const keys = ['s', 'x', 'y'];
+  for (const bad of [5, 'abc', null, [], [1, 2], true, { order: 'abc' }, { w: 5 }, { w: [] }, { order: [1, null, {}] }])
+    same(K.viewLayout(bad, keys), {}, JSON.stringify(bad));
+  same(K.viewLayout({ order: ['y', 'nosuch', 'y', 7, 's'], w: { nosuch: 50, x: 120.4, y: -5, s: 'a', z: Infinity } }, keys),
+    { order: ['y', 's'], w: { x: 120 } }, 'неизвестные колонки и плохие ширины отброшены');
+  same(K.viewLayout({ w: { nosuch: 50 } }, keys), {}, 'ширины только чужих колонок — не фиксированная раскладка');
+  same(K.viewLayout({ w: { x: 1, y: 1e9 } }, keys), { w: { x: 32, y: 2000 } }, 'ширины в разумных пределах');
+  // таблица с мусором в хранилище рисуется в исходном виде, ширину потом задать можно
+  for (const raw of ['5', '"abc"', '{"w":{"nosuch":50}}', '{"order":"abc"}', 'not json']) {
+    const store = new Map([['tdm.view.v1:table:c99.html|tb', raw]]), { K: K2 } = load(store);
+    const box = el(); box.id = 'tb';
+    const api = K2.table(box, { rows, search: false, columns: columns() });
+    same(headKeys(box.children[0].innerHTML), ['s', 'x', 'y'], raw);
+    assert.ok(box.children[0].innerHTML.includes('<table class="k-tbl">'), raw + ': не фиксированная раскладка');
+    assert.doesNotThrow(() => api.setLayout({ w: { x: 90 } }), raw);
+    assert.ok(box.children[0].innerHTML.includes('<col data-k="x" style="width:90px">'), raw);
+  }
+});
+
+t('#102: порядок из сохранённой раскладки; добавленная колонка — в конце, пропавшая — забыта; сброс', () => {
   const store = new Map(), { K } = load(store);
   const box = el(); box.id = 'tb';
-  store.set('tdm.view.v1:table:c99.html|tb|s,x,y', JSON.stringify({ order: ['y', 's'] }));
+  // раскладку сохранили, когда колонки y ещё не было, а была колонка old
+  store.set('tdm.view.v1:table:c99.html|tb', JSON.stringify({ order: ['x', 'old', 's'], w: { x: 120, s: 200, old: 70 } }));
   const api = K.table(box, { rows, search: false, columns: columns() });
   const html = () => box.children[0].innerHTML;
-  same(headKeys(html()), ['y', 's', 'x']);
+  same(headKeys(html()), ['x', 's', 'y'], 'новая колонка y — в конце');
+  same(api.layout(), { order: ['x', 's'], w: { x: 120, s: 200 } }, 'old забыта');
+  assert.ok(html().includes('<table class="k-tbl k-fixed" style="width:420px">'), 'новая колонка — 100 px, ширина таблицы — по видимым');
   api.setLayout({ order: ['x', 'y', 's'], w: { x: 120, y: 80, s: 200 } });
   same(headKeys(html()), ['x', 'y', 's']);
   assert.ok(html().includes('<table class="k-tbl k-fixed" style="width:400px">'), 'ширины — фиксированная раскладка');
@@ -71,6 +107,30 @@ t('#102: порядок колонок из сохранённой раскла�
   same(headKeys(html()), ['s', 'x', 'y']);
   assert.ok(!store.has('tdm.view.v1:' + api.viewKey));
   assert.ok(html().includes('<table class="k-tbl">'));
+});
+
+t('#102: колонка с итогом на первом месте — итог в подвале и в строках групп не пропадает', () => {
+  const { K } = load(new Map());
+  const box = el(); box.id = 'tb';
+  const R = [{ id: 'a', g: 'A', x: 1000, s: 'один', y: 1 }, { id: 'b', g: 'A', x: 2000, s: 'два', y: 2 }, { id: 'c', g: 'B', x: 4000, s: 'три', y: 3 }];
+  const api = K.table(box, { rows: R, search: false, groupBy: [{ key: r => r.g, span: 2 }], columns: columns() });
+  const html = () => box.children[0].innerHTML;
+  const tds = tr => [...tr.matchAll(/<td[^>]*>[\s\S]*?<\/td>/g)].map(m => m[0]);
+  const foot = () => tds(/<tfoot><tr>([\s\S]*?)<\/tr><\/tfoot>/.exec(html())[1]);
+  const grp = () => [...html().matchAll(/<tr class="grp l0"[^>]*>([\s\S]*?)<\/tr>/g)].map(m => tds(m[1]));
+  // исходный порядок s, x, y: подпись в s; span 2 у группы урезан до колонок без итога — итог x виден
+  assert.ok(/Итого/.test(foot()[0]) && />7,000</.test(foot()[1]), foot().join(' '));
+  assert.ok(/colspan="1"/.test(grp()[0][0]) && />3,000</.test(grp()[0][1]), 'группа A: итог x ' + grp()[0].join(' '));
+  // x — первой: итог x на месте, «Итого» и подпись группы — в первой колонке без итога (s)
+  api.setLayout({ order: ['x', 's', 'y'] });
+  same(headKeys(html()), ['x', 's', 'y']);
+  assert.ok(/class="n[^"]*">7,000</.test(foot()[0]), 'итог x в подвале: ' + foot()[0]);
+  assert.ok(/Итого/.test(foot()[1]));
+  assert.strictEqual(foot().length, 3);
+  const g = grp();
+  assert.ok(/>3,000</.test(g[0][0]) && />4,000</.test(g[1][0]), 'итоги x в группах: ' + g.map(x => x[0]).join(' '));
+  assert.ok(/colspan="2"/.test(g[0][1]) && /A/.test(g[0][1]), 'подпись группы — в s, span по s и y (у y итога нет)');
+  assert.strictEqual(g[0].length, 2);
 });
 
 t('#110: CSV — run_id и as_of в первой строке и имени файла, единицы в заголовках, порядок колонок как на экране', () => {
@@ -89,6 +149,8 @@ t('#110: CSV — run_id и as_of в первой строке и имени фа
   assert.strictEqual(L[5], '');
   assert.strictEqual(L.length, 6);
   assert.strictEqual(api.csvName(), 'tdm_c99_csv_' + M.asOf + '_run-demo.csv');
+  const box2 = el();
+  assert.strictEqual(K.table(box2, { rows, search: false, viewKey: 'c99-list', columns: columns() }).csvName(), 'tdm_c99-list_' + M.asOf + '_run-demo.csv', 'имя — по viewKey');
   // прогон из базы: номер прогона
   M.run = { id: 4321 };
   assert.ok(api.csv().startsWith('run_id;4321;as_of;'));
@@ -109,6 +171,7 @@ t('#110: ячейки CSV — числа экрана в числа Excel, фо�
   assert.strictEqual(K.csvCell('@SUM(A1)'), "'@SUM(A1)");
   assert.strictEqual(K.csvCell('● Минфин'), 'Минфин', 'цветная метка — не данные');
   assert.strictEqual(K.htmlText('<b style="x">●</b> Минфин &amp; Ко <span class="mut3">RUB</span>'), '● Минфин & Ко RUB');
+  assert.strictEqual(K.htmlText('<span title="a > b">MV</span>'), 'MV', '«>» внутри атрибута');
 });
 
 console.log(n + ' tests passed');

@@ -242,7 +242,7 @@ tr.row.sel td { background: var(--accent-bg); }
     const P = document.getElementById('pTop');
     K.seg(P.querySelector('.m'), [['dv01', 'по ΔDV01'], ['trades', 'только со сделками'], ['market', 'по Δ доходности']], st.top, v => { st.top = v; save(); topTbl.setSort(sortFor()); topTbl.redraw(); });
     const sortFor = () => st.top === 'market' ? [['dY', -1]] : [['adv', -1]];
-    topTbl = K.table(P.querySelector('.bd'), {
+    topTbl = K.table(P.querySelector('.bd'), { viewKey: 'c11-top-changes',
       rowsFn: topRows, maxHeight: '460px', sort: sortFor(), stripe: r => K.issuerColor(r.issuer), autoFilter: false,
       rowCls: r => r.id === st.pos ? 'sel' : '',
       onRow: r => { st.pos = r.id; save(); drawPos(); topTbl.redraw(); },
