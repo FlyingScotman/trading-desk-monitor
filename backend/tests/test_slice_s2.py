@@ -165,9 +165,10 @@ def test_spread_is_the_z_change(ctx, outcomes):
         p = prev_outcome(prev, o)
         f = explain(p.valuation, o.valuation, flash_curves(prev, ctx))
         dz = o.valuation.z_spread_bp - p.valuation.z_spread_bp
-        # the same yield per tenor: no rate move, but for the RUONIA curve rebuilt from the same OIS quotes resolved
-        # from the day before (its quotes' calendar, a few RUB on a million: 0.2.6, EodContext.quote_curves)
-        assert abs(f.rates) < 5e-5 * abs(p.valuation.pv_rub)
+        # the same yield per tenor: no rate move; on RUONIA, rebuilt from the same OIS quotes resolved from the day
+        # before, its quotes' calendar moves a few RUB on a million (0.2.6, EodContext.quote_curves); the KBD none
+        on_kbd = o.valuation.discount_curve_id == KBD_CURVE_ID
+        assert abs(f.rates) < (1e-6 if on_kbd else 5e-5 * abs(p.valuation.pv_rub)), (o.secid, f.rates)
         assert f.spread * dz <= 0  # wider spread, lower value for a long position
         assert abs(f.spread - o.valuation.spread01_rub * dz) < 0.05 * abs(o.valuation.spread01_rub * dz) + 1e-6
 

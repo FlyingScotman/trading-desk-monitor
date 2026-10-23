@@ -91,6 +91,9 @@ FALLBACK_BASES = (*PRICE_BASIS_ORDER, "market_price2", "market_price3", "admitte
 KEY_CURVE = RISK_CURVES[KEY_RATE_CURVE_ID]
 """The key-rate projection curve (``RUB KEY``): a key-rate floater on a fallback rung books its projection here."""
 LOOKBACK_DAYS = 30
+KBD_SHORT = ("1M", "3M", "6M")
+"""Buckets of the KBD that carry no risk (``rub_ofz_kbd_v3``: no OFZ there, merged into 1Y): a duration proxy on the KBD
+moves them into 1Y, as core's par buckets do."""
 MIN_BONDS = {"issuer": 3, "class": 3, "kind": 3}
 Z_BAND_BP = (-100.0, 2000.0)
 """Z-spreads outside are distressed names or bad prints, not a spread level for a model price."""
@@ -442,6 +445,11 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
             by_curve = key_rate_floater_proxy(curve, mac, rate_t, pv / (1 + yy))
             why.append(f"key-rate floater (R15): discounting {-mac:.2f} y on {curve}, projection "
                        f"+{mac:.2f} y / {-rate_t:.2f} y on {KEY_CURVE}; their sum is the DV01 to the reset")
+        if (kb := by_curve.get(RISK_CURVES[KBD_CURVE_ID])) is not None:  # the KBD has no risk below 1Y (v3: in 1Y)
+            by_curve[RISK_CURVES[KBD_CURVE_ID]] = {
+                b: (math.fsum(kb[k] for k in KBD_SHORT) + kb["1Y"] if b == "1Y" else 0.0 if b in KBD_SHORT else x)
+                for b, x in kb.items()}
+            buckets = {b: math.fsum(bs[b] for bs in by_curve.values()) for b in RISK_BUCKETS}
         return make(quality, price_basis=basis, clean_pct=clean, accrued_rub=acc, face_rub=face * fx_face[0],
                     dirty_rub=dirty, pv_rub=pv, ytm_pct=ytm, macaulay_years=mac,
                     modified_duration=mac / (1 + yy), z_spread_bp=math.nan, dv01_rub=dv01,

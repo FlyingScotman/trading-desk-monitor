@@ -92,8 +92,9 @@ class NoPnl(Exception):
 def kbd_par_yield_bp(params: ZcycParameters, tenor_years: float) -> float:
     """The KBD's par yield (bp) of an instrument paying an annual coupon to ``tenor_years``: ``(1 - DF(T)) / sum DF(i)``
     over the whole years, ``DF(t) = exp(-zero(t) t)`` at ACT/365F times (``kbd_discount_curve``); below a year the
-    effective annual yield. What the par buckets of ``rub_ofz_kbd_v3`` move, to a few hundredths of a bp (core rolls
-    the coupon dates by the calendar, not by 365-day years)."""
+    effective annual yield. Its level differs from core's par instruments by fractions of a bp (core rolls the coupon
+    dates by months and accrues ACT/365F, here whole years and an accrual of 1); in a day's move, what the linear check
+    uses, that difference cancels to a few hundredths of a bp."""
     if tenor_years < 1:
         return kbd_effective_yield(params, tenor_years) * 1e4
     n = round(tenor_years)

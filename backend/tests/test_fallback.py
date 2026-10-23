@@ -147,6 +147,15 @@ def test_ofz_in_nominal_proxy_is_flagged(exact):
     assert any("indexed face: a nominal-rate proxy" in a for a in v.assumptions)
 
 
+def test_short_ofz_proxy_has_no_kbd_risk_below_1y(ctx, exact):
+    """A duration proxy on the KBD keeps the par buckets of rub_ofz_kbd_v3: no risk in 1M-6M, it goes to 1Y."""
+    o = exact["SU52005RMFS4"]
+    sa = {**o.quote.source_analytics, "duration_days": 120}
+    v = approximate(ctx, _outcome(o, "test", quote=replace(o.quote, source_analytics=sa)), Q, _fb(ctx))
+    kbd = v.risk()["RUB OFZ"]
+    assert all(kbd[b] == 0.0 for b in fallback.KBD_SHORT) and kbd["1Y"] == pytest.approx(v.dv01_rub) and v.dv01_rub < 0
+
+
 def test_stale_price_within_the_window(ctx, exact):
     o = exact[RZD]
     v = approximate(ctx, _outcome(o, "no_quote", quote=None), Q, _fb(ctx, [_History(ctx, 3)]))
