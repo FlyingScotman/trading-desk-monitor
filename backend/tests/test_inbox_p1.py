@@ -191,6 +191,13 @@ def test_trade_terms_swaps_repo_and_htm_purchases_1_4() -> None:
     ccs = [leg(product_kind="ccs"), {**flt, "product_kind": "ccs", "ccy": "CNY", "notional_exchange": "final"}]
     assert codes(*ccs) == []
     assert codes(ccs[0], {**ccs[1], "ccy": "RUB"}) == [("error", "bad_value")]   # a ccs has two currencies
+    third = {**ccs[1], "leg_id": "flt2", "ccy": "USD"}
+    assert codes(*ccs, third) == [("error", "bad_value")]                       # not three: exactly two
+    # a leg failing its schema is reported once: no echo that the trade lacks that leg
+    assert codes(leg(), {**flt, "side": "short"}) == [("error", "bad_value")]
+    assert codes(leg(), {**flt, "spread_bp": "x"}) == [("error", "bad_number")]
+    assert codes(leg(), {**flt, "side": "short"}, {**flt, "trade_id": "IRS-2", "leg_id": "x"}) == [
+        ("error", "bad_value"), ("error", "missing_required")]                  # another trade is still checked
     no_leg = {k: v for k, v in leg().items() if k != "leg_id"}
     assert codes(no_leg, {**flt, "trade_id": "IRS-1"}) == [("error", "missing_required")]
     assert codes(leg(index_code="KEY_RATE"), flt) == [("error", "bad_value")]    # fixed and floating at once

@@ -221,6 +221,7 @@ def _check(decl: dict, hit: dict, result: Any, books: list[dict] | None, contrac
 
     keys_seen: set[tuple] = set()
     by_dataset: dict[str, list[dict]] = {d: [] for d in datasets}
+    failed_terms: set[tuple] = set()  # (unit, trade_id) of trade_terms rows that failed their schema
     known = None if books is None else {b["book_id"] for b in books}
     for n, row in enumerate(rows, 1):
         bad = [k for k in row if k.startswith("_") and k not in RESERVED_KEYS]
@@ -258,13 +259,17 @@ def _check(decl: dict, hit: dict, result: Any, books: list[dict] | None, contrac
             flag("error", "unknown_book", uk, src, "book_id not in reference() books")
         if not errs:
             units[uk]["rows"].append(norm)
+        elif ds == "trade_terms":  # its schema error is the report; the swap's leg rules would only echo it
+            failed_terms.add((uk, str(row.get("trade_id"))))
     for uk, u in units.items():  # trade_terms: the legs of a swap together (private/1.4)
         if u["dataset"] != "trade_terms":
             continue
         trades: dict[str, list[dict]] = {}
         for r in u["rows"]:
             trades.setdefault(str(r["trade_id"]), []).append(r)
-        for legs in trades.values():
+        for trade_id, legs in trades.items():
+            if (uk, trade_id) in failed_terms:
+                continue
             if any(r["product_kind"] in SWAP_KINDS for r in legs):
                 for severity, code, message, src in _swap_trade_rules(legs):
                     flag(severity, code, uk, src, message)
@@ -420,8 +425,8 @@ def _swap_trade_rules(rows: list[dict]) -> list[tuple[str, str, str, Any]]:
     if not {"pay", "receive"} <= sides:
         out.append(("error", "missing_required", "a swap needs a pay and a receive leg", src))
     ccys = {r.get("ccy") for r in rows}
-    if kind == "ccs" and len(ccys) < 2:
-        out.append(("error", "bad_value", "a ccs has legs in two currencies", src))
+    if kind == "ccs" and len(ccys) != 2:
+        out.append(("error", "bad_value", "a ccs has legs in exactly two currencies", src))
     elif kind != "ccs" and len(ccys) > 1:
         out.append(("error", "bad_value", f"the legs of an {kind} are in one currency", src))
     return out
