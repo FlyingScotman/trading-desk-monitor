@@ -22,6 +22,8 @@ class AutopilotStep(BaseModel):
     name: str
     status: Literal["ok", "skipped", "error"]
     detail: str
+    reason: str | None = None  # the intraday step: why there is (no) run of today, ``autopilot.INTRADAY_REASONS``
+    failed_dates: list[str] | None = None  # the sync step: hub dates that failed alone this cycle (#20)
     at: str
 
 

@@ -678,6 +678,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         return out
 
     from .alias_routes import router as alias_router  # /api/v1/instruments/alias(es) (batch 1, item 3)
+    from .backup_routes import router as backup_router  # /api/v1/backup: backups, restore drill (desk.backup)
     from .daystatus_routes import public as daystatus_router  # /api/v1/inbox, /inbox/days, /events (S7b, #25)
     from .diagnostics_routes import router as diagnostics_router
     from .market_history import router as market_history_router  # /api/v1/history/market, /status (R24)
@@ -693,6 +694,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     app.include_router(market_history_router, include_in_schema=False)
     app.include_router(autopilot_router)
     app.include_router(alias_router)
+    app.include_router(backup_router, include_in_schema=False)  # local admin routes (settings «Резервные копии»)
 
     built = Path(app_dir) if app_dir else static_root() / "frontend" / "dist"
     if built.is_dir():  # before "/": the frontend build, absent until npm run build
