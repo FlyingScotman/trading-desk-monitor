@@ -170,7 +170,8 @@ t('#110: ячейки CSV — числа экрана в числа Excel (ам�
   assert.strictEqual(K.csvCell('+12', true), '12');
   assert.strictEqual(K.csvCell('0.75', true), '0.75');
   assert.strictEqual(K.csvCell('4.44%', true), '4.44%');
-  assert.strictEqual(K.csvCell('1.1г', true), '"=""1.1г"""', 'число с единицей в ячейке — текстом');
+  assert.strictEqual(K.csvCell('1.1г', true), '1.1г', 'число с единицей в ячейке — текстом, Excel его не преобразует');
+  assert.strictEqual(K.csvCell('1.1', false), '"=""1.1"""', 'число в текстовой колонке — защищено');
   assert.strictEqual(K.csvCell('·', true), '');
   assert.strictEqual(K.csvCell('—', true), '');
   // формулы: строковый литерал внутри ="…" не вычисляется; кавычки удвоены дважды (Excel и RFC 4180)
@@ -200,20 +201,40 @@ t('#110: даты в CSV — MM/DD/YYYY, век — из значения яче
   assert.strictEqual(K.csvCell('01.02.98', false, '1998-02-01'), '02/01/1998', 'век — из ISO-значения');
   assert.strictEqual(K.csvCell('15.03.29'), '03/15/2029', 'без значения — 20YY');
   assert.strictEqual(K.csvCell('15.03.2029'), '03/15/2029');
-  assert.strictEqual(K.csvCell('пут 15.03.29', false, '2029-03-15'), '"=""пут 03/15/2029"""', 'дата внутри текста — текстом');
-  assert.strictEqual(K.csvCell('15.03.29 C', false, '2029-03-15'), '"=""03/15/2029 C"""');
-  assert.strictEqual(K.csvCell('срез 21.10.2026 18:30'), '"=""срез 10/21/2026 18:30"""');
-  assert.strictEqual(K.csvCell('1.234.56'), '"=""1.234.56"""', 'не дата — не трогаем');
-  assert.strictEqual(K.csvCell('45.13.29'), '"=""45.13.29"""', 'месяц 13 — не дата');
+  assert.strictEqual(K.csvCell('пут 15.03.29', false, '2029-03-15'), 'пут 03/15/2029', 'дата внутри текста — текстом, как есть');
+  assert.strictEqual(K.csvCell('15.03.29 C', false, '2029-03-15'), '03/15/2029 C');
+  assert.strictEqual(K.csvCell('срез 21.10.2026 18:30'), 'срез 10/21/2026 18:30');
+  assert.strictEqual(K.csvCell('21.10.2026 18:30'), '"=""10/21/2026 18:30"""', 'дата со временем целиком — Excel преобразует');
+  assert.strictEqual(K.csvCell('1.234.56'), '1.234.56', 'не дата — не трогаем');
+  assert.strictEqual(K.csvCell('45.13.29'), '"=""45.13.29"""', 'месяц 13 — не переводим, но похоже на дату — защищено');
   assert.strictEqual(K.csvCell('—', false, null), '—');
 });
 
 t('#144: текстовые ячейки CSV не превращаются в Excel в числа и даты, числовые колонки — числа', () => {
   const { M, K } = load(new Map());
   // текст, который Excel с американскими настройками прочитал бы как число, дату, дробь, логическое значение или ошибку
-  const text = ['1,234', '5.2', '03-04', '3/4', '1-2', 'Mar-24', '1E5', '00123', '(123)', '$5', '12:30', 'TRUE', 'false', '#N/A',
-    'SU26238RMFS4', 'RU000A0JX0J2', '2Y', '1-3г'];
-  text.forEach(x => assert.strictEqual(K.csvCell(x), '"=""' + x + '"""', x));
+  // оборачивается: текст, который Excel с американскими настройками целиком прочитал бы как число, дату, время,
+  // логическое значение или ошибку
+  const conv = ['1,234', '5.2', '.5', '-5', '03-04', '3/4', '1-2', '2029-03-15', '1 1/2', 'Mar-24', '24 Mar', 'March 2024', 'sep 5, 2024',
+    '1E5', '1e-3', '00123', '(123)', '$5', '-$1,234.50', '12%', '12:30', '9:05:01', '1 pm', '3a', 'TRUE', 'false', '#N/A', '#DIV/0!'];
+  conv.forEach(x => {
+    assert.ok(K.csvExcelConverts(x), 'Excel преобразует: ' + x);
+    assert.strictEqual(K.csvCell(x), '"=""' + x + '"""', x);
+  });
+  // не оборачивается: цифры внутри слов, текст с единицами, коды; Excel оставляет их текстом
+  const keep = ['ОФЗ 26238', 'пут 03/15/2029', 'SU26238RMFS4', 'RU000A0JX0J2', '2Y', '1-3г', '5.0г', '12.00mm EUR', '2.95% A', '234 Z',
+    'КС+130 M', 'Россия-2043 USD', 'IRS RUONIA 5Y pay', 'May', 'Decimal 5', '1.234.56', 'v1.2.3', 'True story', '#1', 'Минфин'];
+  keep.forEach(x => {
+    assert.ok(!K.csvExcelConverts(x), 'Excel не преобразует: ' + x);
+    assert.strictEqual(K.csvCell(x), x, x);
+  });
+  assert.strictEqual(K.csvCell('Минфин, 26238'), '"Минфин, 26238"', 'как есть, в кавычках по RFC 4180');
+  // заголовки и название таблицы — без ="…", только защита от формул
+  assert.strictEqual(K.csvLabel('DV01, тыс ₽/бп'), '"DV01, тыс ₽/бп"');
+  assert.strictEqual(K.csvLabel('1-3'), '1-3');
+  assert.strictEqual(K.csvLabel('C06 · Плиточная доска'), 'C06 · Плиточная доска');
+  assert.strictEqual(K.csvLabel('=SUM(A1)'), "'=SUM(A1)");
+  assert.strictEqual(K.csvLabel('-1, x'), '"\'-1, x"');
   // таблица: текстовая колонка с кодами и числовая колонка; дата из ISO-значения
   const box = el();
   const tr = [{ code: '1,234', isin: 'RU000A0JX0J2', mat: '2029-03-15', v: -1234.5, note: 'пут' }, { code: '03-04', isin: 'SU26238RMFS4', mat: null, v: 0.25, note: '=1+1' }];
@@ -223,14 +244,14 @@ t('#144: текстовые ячейки CSV не превращаются в Ex
   const L = api.csv().split('\r\n');
   assert.strictEqual(L[0], 'run_id,demo,as_of,10/21/2026,таблица,таблица,строк,2');
   assert.strictEqual(L[2], 'Код,ISIN,Погашение,"MV, млн ₽",Заметка');
-  assert.strictEqual(L[3], '"=""1,234""","=""RU000A0JX0J2""",03/15/2029,-1234.5,пут');
-  assert.strictEqual(L[4], '"=""03-04""","=""SU26238RMFS4""",—,0.3,"=""=1+1"""');
+  assert.strictEqual(L[3], '"=""1,234""",RU000A0JX0J2,03/15/2029,-1234.5,пут');
+  assert.strictEqual(L[4], '"=""03-04""",SU26238RMFS4,—,0.3,"=""=1+1"""');
   // каждая строка — ровно 5 полей по RFC 4180
   const fields = s => { const out = []; let cur = '', q = false; for (let i = 0; i < s.length; i++) { const ch = s[i];
     if (q) { if (ch === '"' && s[i + 1] === '"') { cur += '"'; i++; } else if (ch === '"') q = false; else cur += ch; }
     else if (ch === '"') q = true; else if (ch === ',') { out.push(cur); cur = ''; } else cur += ch; } out.push(cur); return out; };
-  same(fields(L[3]), ['="1,234"', '="RU000A0JX0J2"', '03/15/2029', '-1234.5', 'пут']);
-  same(fields(L[4]), ['="03-04"', '="SU26238RMFS4"', '—', '0.3', '="=1+1"']);
+  same(fields(L[3]), ['="1,234"', 'RU000A0JX0J2', '03/15/2029', '-1234.5', 'пут']);
+  same(fields(L[4]), ['="03-04"', 'SU26238RMFS4', '—', '0.3', '="=1+1"']);
   assert.ok(!M.run);
 });
 

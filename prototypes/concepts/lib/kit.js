@@ -739,10 +739,10 @@
   // кириллица в заголовках — кракозябры), разделитель «,», десятичная точка, числа без разделителей тысяч и
   // с обычным минусом, даты MM/DD/YYYY, кавычки по RFC 4180. Значения — как на экране (в единицах заголовка):
   //   число — числом («−1,234.5» → -1234.5); дата — датой Excel (03/15/2029);
-  //   текст, который Excel превратил бы в число, дату или формулу (есть цифры, TRUE/FALSE, «#» или «= + - @»
-  //   в начале), — строковой формулой ="…" (#144): Excel показывает текст как есть, а формула из ячейки не
-  //   выполнится — она внутри строкового литерала. Литерал в формуле Excel — до 255 знаков: длиннее — как есть,
-  //   а начало «= + - @» — с апострофом.
+  //   текст в ячейке, который Excel целиком прочитал бы как число, дату, время, логическое значение (K.csvExcelConverts)
+  //   или формулу («= + - @» в начале), — строковой формулой ="…" (#144): Excel показывает текст как есть, а формула
+  //   не выполнится — она внутри строкового литерала. Литерал в формуле Excel — до 255 знаков: длиннее — как есть,
+  //   а начало «= + - @» — с апострофом. Остальной текст — как есть. Заголовки и название таблицы — K.csvLabel.
   K.htmlText = s => String(s == null ? '' : s).replace(/<(?:[^>"']|"[^"]*"|'[^']*')*>/g, '').replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
   K.csvNum = t => {  // «−1,234.5» → «-1234.5»; «+12» → «12»; «4.44%» → «4.44%»; не число — null
@@ -763,13 +763,33 @@
       (m, p, d, mo, y) => { const u = usDate(y.length === 2 ? '20' + y : y, mo, d); return u ? p + u : m; });
   };
   const csvQuote = t => /[,"\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;  // RFC 4180
+  const csvFormula = t => /^[=+\-@\t\r]/.test(t);
+  // текст, который Excel с американскими настройками целиком прочитает не как текст (#144): число (знак, скобки,
+  // $, разделители тысяч, ведущие нули, экспонента, %), дробь или дата из цифр (3/4, 03-04, 2029-03-15, 5.2.29),
+  // дата с месяцем словом (Mar-24, 24 Mar, March 2024), время (12:30, 1 pm), дата со временем, TRUE/FALSE,
+  // значение ошибки (#N/A). Текст с цифрами внутри слов («ОФЗ 26238», «пут 03/15/2029», ISIN) Excel не трогает.
+  const MON = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\.?';
+  const XL_NUM = /^[+-]?\(?[+-]?\$?\s*(?:\d[\d,]*(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?\s*%?\)?$/i,
+    XL_FRAC = /^\d+ \d+\/\d+$/,
+    XL_DATE = /^\d{1,4}[\/.-]\d{1,2}(?:[\/.-]\d{1,4})?$/,
+    XL_MDATE = new RegExp('^(?:\\d{1,4}[\\s/-])?' + MON + '(?:[\\s/,-]+\\d{1,4}){0,2}$', 'i'),
+    XL_TIME = /^\d{1,2}(?::\d{1,2}(?::\d{1,2}(?:\.\d+)?)?\s*(?:[ap]m?)?|\s*[ap]m?)$/i,
+    XL_ERR = /^#(?:n\/a|div\/0!|value!|ref!|name\?|num!|null!|getting_data|spill!|calc!)$/i;
+  K.csvExcelConverts = t => {
+    if (/^(?:true|false)$/i.test(t) || XL_ERR.test(t)) return true;
+    if (!/\d/.test(t)) return false;
+    const sp = t.split(' '), dt = sp.length === 2 && XL_TIME.test(sp[1]) ? sp[0] : null;  // «03/15/2029 18:30»
+    return XL_NUM.test(t) || XL_FRAC.test(t) || XL_DATE.test(t) || XL_MDATE.test(t) || XL_TIME.test(t) || (dt != null && (XL_DATE.test(dt) || XL_MDATE.test(dt)));
+  };
+  // заголовок колонки, название таблицы: Excel их не преобразует, нужна только защита от формул — апостроф
+  K.csvLabel = t => { t = t == null ? '' : String(t); return csvQuote(csvFormula(t) ? "'" + t : t); };
   K.csvCell = (t, num, raw) => {
     t = (t == null ? '' : String(t)).replace(/^[●■]\s*/, '');  // цветная метка эмитента / кривой — оформление
     if (num) { if (t === '—' || t === '·') return ''; const x = K.csvNum(t); if (x != null) return x; }
     t = K.csvDates(t, raw);
     if (/^\d{2}\/\d{2}\/\d{4}$/.test(t)) return t;  // дата целиком — датой Excel
-    const formula = /^[=+\-@\t\r]/.test(t);
-    if (formula || /\d/.test(t) || /^#/.test(t) || /^(true|false)$/i.test(t)) {
+    const formula = csvFormula(t);
+    if (formula || K.csvExcelConverts(t)) {
       if (t.length <= 255) return csvQuote('="' + t.replace(/"/g, '""') + '"');
       if (formula) t = "'" + t;
     }
@@ -972,7 +992,7 @@
     // ---------- CSV (#110) ----------
     const csvTitle = () => K.htmlText(opts.title || (typeof document.title === 'string' ? document.title : '') || 'таблица');
     function csv() {
-      const C = cols().filter(c => K.htmlText(c.label)), R = K.csvRun(), q = x => K.csvCell(x);  // без подписи — оформление (полоска доли)
+      const C = cols().filter(c => K.htmlText(c.label)), R = K.csvRun(), q = K.csvLabel;  // без подписи — оформление (полоска доли)
       const head = C.map(c => { const l = K.htmlText(c.label); return q(c.unit && !l.includes(',') ? l + ', ' + c.unit : l); });
       const line = r => C.map(c => { const v = val(c, r); return K.csvCell(K.htmlText(c.fmt ? c.fmt(v, r) : v), c.num, v); }).join(',');
       return ['run_id,' + (/^\d+$/.test(R.run_id) ? R.run_id : q(R.run_id)) + ',as_of,' + (K.csvDate(R.as_of) || q(R.as_of)) + ',таблица,' + q(csvTitle()) + ',строк,' + shown.length, '', head.join(',')]
