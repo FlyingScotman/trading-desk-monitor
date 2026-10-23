@@ -78,8 +78,8 @@ def test_publish_into_the_store(con, ctx, book, run_inputs):
     assert log[-2] == funding[0]
     assert [m for m in log if m not in funding][1:] == [m for _, m in content.log][1:]  # tdm's, after the lineage
     assert warnings == [m for level, m in content.log if level == "WARN"] + funding
-    assert {k for (k,) in q("SELECT kind FROM run_reference WHERE run_id = %s")} == {*tdm_run.REFERENCE_KINDS,
-                                                                                     "funding"}
+    assert {k for (k,) in q("SELECT kind FROM run_reference WHERE run_id = %s")} == {
+        *tdm_run.REFERENCE_KINDS, "funding", "derivatives_parallel"}
 
     fact = q("SELECT fact FROM run_position WHERE run_id = %s AND position_id = 'P00'")[0][0]
     row = next(r for r in content.rows if r["position_id"] == "P00")

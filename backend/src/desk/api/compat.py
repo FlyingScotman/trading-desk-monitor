@@ -85,12 +85,16 @@ def resolve_run(con, as_of: date | None = None, run_id: int | None = None) -> di
 
 def run_slice(run: dict[str, Any]) -> dict[str, Any]:
     """The run's market slice for ``source`` (R11): cut type and time, the label the pages show, and what the flash
-    PnL is measured against when it is not the previous business day's close."""
-    basis = (run.get("lineage") or {}).get("pnl_basis") or {}
+    PnL is measured against when it is not the previous business day's close; ``marketDate``: the market snapshot's
+    date (lineage ``market_business_date``, null for runs made before #22), older than the run's date when today's
+    book is valued on an earlier close: the header shows both dates."""
+    lineage = run.get("lineage") or {}
+    basis = lineage.get("pnl_basis") or {}
     cut_ts = run.get("cut_ts")
     return {"cutType": run["cut_type"], "cutTs": cut_ts.isoformat() if cut_ts else None,
             "slice": slice_label(run["business_date"], run["cut_type"], cut_ts, run["run_type"]),
-            "prevCutType": run.get("prev_cut_type"), "pnlBasis": basis.get("label")}
+            "prevCutType": run.get("prev_cut_type"), "pnlBasis": basis.get("label"),
+            "marketDate": lineage.get("market_business_date")}
 
 
 def _years(d0: str, d1: str | None) -> float | None:

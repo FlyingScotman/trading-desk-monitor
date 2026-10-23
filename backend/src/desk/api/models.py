@@ -211,6 +211,37 @@ class RunFunding(BaseModel):
     lines: list[FundingLineOut]
 
 
+class ParallelRow(BaseModel):
+    """One derivative position valued two ways (``publish.derivatives_parallel``)."""
+
+    position_id: str
+    book_id: str
+    product: str | None = Field(description="Core's product (fx_forward, fx_swap, fx_ndf, fx_cross, fx_future; "
+                                "several joined by +), else <asset_class>_other")
+    status: Literal["both", "computed_only", "computed_invalid", "imported_only", "neither"]
+    used: Literal["computed", "imported"] = Field(description="The value the run publishes")
+    computed_pv_rub: float | None = Field(description="PV by core from the trade terms (result v3)")
+    imported_pv_rub: float | None = Field(description="PV the report states (mv_rub, else the trades' pv_rub)")
+    diff_rub: float | None = None
+    over: bool | None = Field(None, description="diff above the tolerance")
+    reason: str | None = Field(None, description="Why core did not value the row (pv_not_finite: core's PV is not a "
+                                                 "finite number)")
+
+
+class RunDerivatives(BaseModel):
+    """Derivatives computed by core next to the report's PV, before a product is switched (TDM#49). ``state``
+    not_computed: a run before this block; sums are per status, money sums over the rows with both values."""
+
+    run_id: int
+    state: Literal["computed", "not_computed"]
+    tolerance: dict[str, Any] | None
+    totals: dict[str, Any] | None
+    by_book: dict[str, dict[str, Any]]
+    by_product: dict[str, dict[str, Any]]
+    reasons: dict[str, int]
+    rows: list[ParallelRow]
+
+
 class AggregateRow(BaseModel):
     key: dict[str, str | None]
     n_positions: int

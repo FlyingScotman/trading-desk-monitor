@@ -1,5 +1,5 @@
 """Intraday mode (R11): the autopilot's intraday step on the stub hub of slice S3. Today's book (the latest position
-sets, carried forward) valued on the hub's newest intraday cut of today, at most one hub question per half-hour slot,
+sets, carried forward) valued on the hub's newest intraday cut of today, at most one hub question per 10-minute slot,
 on the preliminary close in the evening, superseded by the eod_final run the next morning; one intraday run per day;
 the flash PnL basis named when it is not the previous business day's close; the setting off. The cuts are the
 2026-10-15 fixture shifted to other dates and cuts (``test_market_history.shifted``). Synthetic data only."""
@@ -128,12 +128,12 @@ def test_intraday_day_preliminary_evening_and_final_next_morning(stub, tmp_path,
         2, "INTRADAY", "intraday", "16.10 10:00 МСК · внутри дня", None)
 
     stub.requests.clear()
-    clock["t"] = at(FRI, 10, 20)  # the same half-hour slot: the hub is not asked again
+    clock["t"] = at(FRI, 10, 12)  # the same 10-minute slot: the hub is not asked again
     by = steps(ap.run_cycle())
     assert by["intraday"][0] == "ok" and by["intraday"][1].startswith("up to date: run 2 on 16.10 10:00 МСК")
     assert asked(stub, "intraday") == 0
     b = publish(stub, FRI, "intraday", "2026-10-16T07:30:00Z", 2)  # the 10:30 cut
-    clock["t"] = at(FRI, 10, 34)  # still the slot of 10:05
+    clock["t"] = at(FRI, 10, 14)  # still the slot of 10:05
     assert steps(ap.run_cycle())["intraday"][0] == "ok" and asked(stub, "intraday") == 0 and len(run_rows(store_url)) == 2
     clock["t"] = at(FRI, 10, 36)
     by = steps(ap.run_cycle())
@@ -270,3 +270,54 @@ def test_cache_prune_keeps_finals_today_and_shown_runs(tmp_path):
     assert sorted(gone) == sorted([ids["old"], ids["old_pre"]])
     left = {p.name.split(".")[0] for p in folder.iterdir() if p.name != MANIFEST_INDEX}  # the listing's index aside
     assert left == {test_slice_s3.MARKET, STATIC, ids["kept"], ids["new"]}
+
+
+def test_failed_sync_of_an_old_date_does_not_block_todays_intraday_run(stub, tmp_path, store_url):
+    """#20: the hub sync of one old date fails (a body that does not verify), today's intraday cut is on the hub:
+    the intraday run is still made, and the failed date is named apart in the sync step and the diagnostics."""
+    s = cfg(tmp_path, store_url, stub)
+    put(tmp_path, "positions_20261016.csv")
+    old = publish(stub, date(2026, 10, 14), "eod_final", "2026-10-15T05:00:00Z", -1)
+    stub.bundles[old] = gzip.compress(b"not the snapshot")  # 14.10 cannot be synced
+    publish(stub, FRI, "intraday", "2026-10-16T07:00:00Z", 1)
+    ap = Autopilot(settings_loader=lambda: s, now=lambda: at(FRI, 10, 6))
+    st = ap.run_cycle()
+    by = steps(st)
+    assert by["sync"][0] == "error" and "failed 2026-10-14 (" in by["sync"][1], by["sync"]
+    assert "pulled 2026-10-15" in by["sync"][1]
+    sync = next(x for x in st["steps"] if x["name"] == "sync")
+    assert sync["failed_dates"] == ["2026-10-14"]
+    assert by["eod"] == ("ok", "2026-10-15 run 1 (no default run)")
+    assert by["intraday"] == ("ok", "16.10 10:00 МСК · внутри дня: run 2 (new cut)"), by["intraday"]
+    intraday = next(x for x in st["steps"] if x["name"] == "intraday")
+    assert intraday["reason"] == "ran"
+    assert [r[2] for r in run_rows(store_url)] == ["EOD", "INTRADAY"]
+    diag = ap.diagnostics()
+    assert diag["hub_failed_last_cycle"] is False and list(diag["hub_failed_dates"]) == ["2026-10-14"]
+    app = create_app(store_url)
+    app.state.autopilot = ap
+    api = {x["name"]: x for x in TestClient(app).get("/api/v1/autopilot/status").json()["steps"]}
+    assert api["intraday"]["reason"] == "ran" and api["sync"]["failed_dates"] == ["2026-10-14"]
+    assert api["eod"]["reason"] is None and api["eod"]["failed_dates"] is None
+
+    stub.bundles[old] = body(cut_doc(date(2026, 10, 14), "eod_final", "2026-10-15T05:00:00Z", -1))[1]  # fixed
+    stub.rows = [r for r in stub.rows if r["snapshot_id"] != old]
+    fixed = publish(stub, date(2026, 10, 14), "eod_final", "2026-10-15T05:00:00Z", -1)
+    assert fixed == old
+    st = ap.run_cycle()  # the date failed last cycle: asked again, and the failure is forgotten
+    assert steps(st)["sync"][0] == "ok" and "failed" not in steps(st)["sync"][1]
+    assert ap.diagnostics()["hub_failed_dates"] == {}
+
+
+def test_intraday_waits_for_the_hub_with_a_reason(stub, tmp_path, store_url):
+    """The hub down: the intraday step says why (a machine-readable ``reason`` for the header, #22)."""
+    s = cfg(tmp_path, store_url, stub)
+    put(tmp_path, "positions_20261016.csv")
+    ap = Autopilot(settings_loader=lambda: s, now=lambda: at(FRI, 9, 0))
+    ap.run_cycle()
+    stub.fail = 1000
+    ap._now = lambda: at(FRI, 10, 6)
+    st = ap.run_cycle()
+    intraday = next(x for x in st["steps"] if x["name"] == "intraday")
+    assert intraday["status"] == "error" and intraday["reason"] == "hub_error", intraday
+    assert ap.diagnostics()["hub_failed_last_cycle"] is True

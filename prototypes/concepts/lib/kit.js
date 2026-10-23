@@ -2,7 +2,9 @@
  * KIT — общие компоненты концептов (нужны mock.js и ../echarts.min.js).
  *
  *  KIT.f.*                — форматирование (тыс ₽/бп, mm, bn, б.п., даты)
- *  KIT.top({title, tag})  — шапка: дата среза, фильтр книг и портфелей (общий для всех мониторов), поиск, тема
+ *  KIT.top({title, tag})  — шапка: дата и тип данных, «следующее обновление» и предупреждение без среза дня (#22),
+ *                           фильтр книг и портфелей (общий для всех мониторов), поиск, тема
+ *  KIT.dataLabel(run), KIT.headerStatus(status, now) — тип данных прогона и состояние шапки по статусу автопилота
  *  KIT.list()             — позиции после фильтра шапки; KIT.onFilter(fn) — перерисовка при смене фильтра
  *  KIT.d(spec)            — кликабельная цифра: spec = {title, list|rows, val, fmt, unit, v?}; щелчок раскрывает вклад
  *  KIT.drill(spec)        — открыть разбор вклада (позиции, группировка по эмитенту/книге/валюте/типу/бакету)
@@ -327,12 +329,114 @@
 
   // ---------- источник данных: прогон из базы (desk serve) или демо-набор (lib/boot.js, lib/real.js) ----------
   K.source = window.CONCEPTS_SOURCE || 'file';
+  // ---------- #22: дата и тип данных, «следующее обновление», предупреждение без среза дня ----------
+  // Время — московское (UTC+3 круглый год). Расписание внутридневного шага автопилота — из GET autopilot/status
+  // (schedule; здесь — значения по умолчанию, как в desk.autopilot: срезы с 10:00, предварительное закрытие с 19:45,
+  // хаб спрашивается раз в 10 минут в :05, :15, …; без среза дня к 10:15 — предупреждение).
+  const MSK_MS = 3 * 3600e3, DOW = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+  const SCHEDULE = { intraday_from: '10:00', prelim_from: '19:45', poll_slot_s: 600, poll_lag_s: 300, warn_after: '10:15' };
+  const STALE_MS = 30 * 60e3;  // последний цикл автопилота старше — «автопилот не запускался с …»
+  const pad2 = n => String(n).padStart(2, '0'), ddmm = iso => iso ? iso.slice(8, 10) + '.' + iso.slice(5, 7) : '';
+  const hmMin = x => { const p = String(x).split(':'); return +p[0] * 60 + +p[1]; };
+  const minHm = v => pad2(Math.floor(v / 60) % 24) + ':' + pad2(Math.floor(v % 60));
+  function msk(t) {  // момент → день и минуты дня по МСК
+    const d = new Date(+new Date(t) + MSK_MS);
+    return { iso: d.toISOString().slice(0, 10), dow: d.getUTCDay(), min: d.getUTCHours() * 60 + d.getUTCMinutes() + d.getUTCSeconds() / 60, hm: pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes()) };
+  }
+  const CUT_TYPE = { eod_final: 'окончательное закрытие', eod_preliminary: 'предварительное закрытие', intraday: 'внутридневной срез' };
+  // тип данных прогона: {asOf, cutType, cutTs | time, marketDate, runType} → «23.10 · внутридневной срез 11:30»;
+  // рынок старше позиций (портфель дня на закрытии прошлого дня) — «позиции 23.10 · рынок 22.10 · окончательное закрытие»
+  K.dataLabel = function (r) {
+    const time = r.cutType === 'intraday' ? (r.cutTs ? msk(r.cutTs).hm : r.time || '') : '';
+    const type = (CUT_TYPE[r.cutType] || r.cutType || '') + (time ? ' ' + time : '') + (r.runType === 'TEST' || r.runType === 'REPLAY' ? ' · ' + r.runType : '');
+    const date = ddmm(r.asOf), market = r.marketDate && r.asOf && r.marketDate < r.asOf ? ddmm(r.marketDate) : null;
+    return { date, market, type, text: (market ? 'позиции ' + date + ' · рынок ' + market : date) + ' · ' + type };
+  };
+  // причина из шага intraday автопилота (steps[].reason, desk.autopilot.INTRADAY_REASONS) — простыми словами
+  K.INTRADAY_REASON = {
+    off: 'внутридневной расчёт выключен в настройках', before_open: 'автопилот ещё не проверял срез дня',
+    not_business_day: 'автопилот считает день нерабочим', no_positions: 'нет позиций в базе',
+    no_cut_yet: 'на хабе ещё нет среза', up_to_date: 'прогон дня посчитан — обновите страницу',
+    ran: 'прогон дня только что посчитан — обновите страницу',
+    failed_before: 'расчёт упал на этом срезе, повтор — когда изменятся данные', run_failed: 'расчёт упал',
+    hub_error: 'хаб не ответил', error: 'ошибка автопилота в шаге «внутри дня»'
+  };
+  // состояние шапки по статусу автопилота s (null — статус не получен) на момент now:
+  // { next: «следующее обновление ≈ 11:35» | «автообновление выключено» | null, warn: null | {text, title}, reason }.
+  // opt.lastReason — причина прошлого цикла: пока идёт новый, шага intraday в статусе ещё нет.
+  K.headerStatus = function (s, now, opt) {
+    opt = opt || {};
+    const sc = Object.assign({}, SCHEDULE, (s && s.schedule) || {}), m = msk(now);
+    const from = hmMin(sc.intraday_from), slot = sc.poll_slot_s / 60, lag = sc.poll_lag_s / 60;
+    const steps = (s && s.steps) || [], ist = steps.find(x => x.name === 'intraday');
+    const running = !!(s && s.state === 'running');
+    const reason = ist ? ist.reason || null : running ? opt.lastReason || null : null;
+    const business = m.dow >= 1 && m.dow <= 5 && reason !== 'not_business_day';
+    const lr = s && s.latest_run, ofToday = !!(lr && lr.as_of === m.iso);
+    const todayCut = ofToday && (lr.cut_type === 'intraday' || lr.cut_type === 'eod_preliminary');
+    const prelimDone = ofToday && lr.cut_type === 'eod_preliminary' && m.min >= hmMin(sc.prelim_from);
+    const slotAfter = t => lag + (Math.floor((t - lag) / slot) + 1) * slot;  // начало следующего слота опроса хаба
+    let next = null;
+    if (s && !s.enabled) next = 'автообновление выключено';
+    else if (s && reason === 'off') next = 'внутридневное обновление выключено';
+    else if (s) {
+      let at = !business || prelimDone ? null : slotAfter(Math.max(m.min, from - 1e-6));
+      if (at != null && at < 1440) next = minHm(at);
+      else {  // следующий рабочий день (пн–пт; праздники знает только сервер)
+        const d = new Date(m.iso + 'T00:00:00Z');
+        do d.setUTCDate(d.getUTCDate() + 1); while (d.getUTCDay() === 0 || d.getUTCDay() === 6);
+        next = DOW[d.getUTCDay()] + ' ' + ddmm(d.toISOString().slice(0, 10)) + ' ' + minHm(slotAfter(from - 1e-6));
+      }
+      next = 'следующее обновление ≈ ' + next;
+    }
+    let warn = null;
+    if (business && m.min >= hmMin(sc.warn_after) && !todayCut) {
+      let cause;
+      const bad = steps.find(x => x.status === 'error'), last = s && s.last_cycle_at;
+      if (!s) cause = 'сервер не ответил на запрос статуса автопилота';
+      else if (!s.enabled) cause = 'автопилот не работает';
+      else if (!running && last && +new Date(now) - +new Date(last) > STALE_MS) { const l = msk(last); cause = 'автопилот не запускался с ' + (l.iso === m.iso ? '' : ddmm(l.iso) + ' ') + l.hm; }
+      else if (reason) cause = K.INTRADAY_REASON[reason] || reason;
+      else if (ist) cause = ist.detail || 'шаг «внутри дня» не назвал причину';
+      else if (bad) cause = bad.name === 'store' ? 'нет связи с базой' : bad.name === 'settings' ? 'ошибка в файле настроек' : 'цикл автопилота упал (' + bad.name + ')';
+      else if (steps.some(x => x.name === 'cycle')) cause = 'цикл занят другим процессом';
+      else if (running) cause = 'идёт цикл автопилота';
+      else cause = steps.length ? 'хаб не настроен (Настройки)' : 'автопилот ещё не закончил ни одного цикла';
+      warn = { text: 'нет внутридневного среза за ' + ddmm(m.iso) + ': ' + cause,
+        title: 'Рабочий день, после ' + sc.warn_after + ' МСК, а прогона на срезе дня нет. Причина — из шага «внутри дня» автопилота' +
+          (ist && ist.detail ? ': ' + ist.detail : '') + (lr ? '. Последний прогон: ' + (lr.label || lr.as_of) : '') + '. Подробности — Настройки → «Автопилот».' };
+    }
+    return { next, warn, reason };
+  };
+  function runLabel() {
+    return K.dataLabel({ asOf: M.asOf, cutType: M.cut.type, cutTs: M.cut.ts, time: M.cut.time, marketDate: M.run && M.run.marketDate, runType: M.run && M.run.runType });
+  }
   function srcChip() {
-    const s = K.source;
-    if (s === 'real') return '<span class="k-chip asof" data-a="src" title="Прогон из базы: выбрать другой">срез <b>' + f.date(M.asOf) + '</b> · ' + esc(M.cut.label) + ' · #' + esc(M.run && M.run.id) + ' ▾</span>';
+    const s = K.source, L = runLabel();
+    const html = L.market ? 'позиции <b>' + esc(L.date) + '</b> · рынок <b>' + esc(L.market) + '</b> · ' + esc(L.type) : '<b>' + esc(L.date) + '</b> · ' + esc(L.type);
+    if (s === 'real') return '<span class="k-chip asof" data-a="src" title="Прогон из базы: ' + esc(M.cut.label) + (M.run.pnlBasis ? '; ' + esc(M.run.pnlBasis) : '') + '. Щелчок — выбрать другой">' + html + ' · #' + esc(M.run && M.run.id) + ' ▾</span>';
     const t = s === 'empty' ? 'прогонов нет — тестовые данные' : s === 'demo' ? 'тестовые данные' : 'демо (файл)';
     return '<span class="k-chip" data-a="src" style="border-color:var(--warn);color:var(--warn)" title="Вымышленный набор lib/mock.js">' + t + (s === 'file' ? '' : ' ▾') + '</span>' +
-      '<span class="asof">срез <b>' + f.date(M.asOf) + '</b> · ' + esc(M.cut.label) + '</span>';
+      '<span class="asof">' + html + '</span>';
+  }
+  // «следующее обновление» и предупреждение без среза дня: статус автопилота раз в минуту (прогон из базы)
+  function freshness(bar) {
+    const nx = h('span', 'k-fresh'), wr = h('a', 'k-chip k-warnchip');
+    nx.style.display = wr.style.display = 'none'; wr.href = '../settings.html';
+    bar.querySelector('[data-a=search]').before(wr, nx);
+    let lastReason = null;
+    const paint = (s, now) => {
+      const st = K.headerStatus(s, now, { lastReason });
+      if (st.reason) lastReason = st.reason;
+      nx.style.display = st.next ? '' : 'none'; nx.textContent = st.next || '';
+      nx.title = 'Когда автопилот спросит хаб о новом срезе (МСК); прогон появится через минуту-две после этого';
+      wr.style.display = st.warn ? '' : 'none';
+      if (st.warn) { wr.textContent = '⚠ ' + st.warn.text; wr.title = st.warn.title; }
+    };
+    const poll = () => fetch('../api/v1/autopilot/status', { cache: 'no-store' }).then(r => r.ok ? r.json() : null)
+      .then(j => paint(j, j && j.now ? new Date(j.now) : new Date()), () => paint(null, new Date()))
+      .catch(() => { }).then(() => setTimeout(poll, 60e3));
+    poll();
   }
   function go(sel) {  // как desk-nav.js: выбор в адресе и в localStorage (desk.run.v1), общий со страницами прогона
     try { if (Object.keys(sel).length) localStorage.setItem('desk.run.v1', JSON.stringify({ sel, at: Date.now() })); else localStorage.removeItem('desk.run.v1'); } catch (e) { }
@@ -429,7 +533,7 @@
     bar.querySelector('[data-a=search]').onclick = () => K.palette();
     bar.querySelector('[data-a=theme]').onclick = K.toggleTheme;
     bindSrc(bar);
-    if (K.source === 'real') backfillChip(bar);
+    if (K.source === 'real') { freshness(bar); backfillChip(bar); }
     const rc = bar.querySelector('[data-a=repr]');
     rc.onclick = e => { e.stopPropagation(); menu(rc, K.REPRS.map(c => ({ v: c, t: 'в ' + c + ' ' + K.SYM[c], sub: c === 'RUB' ? '' : 'курс ' + f.n(M.fx[c], 2) })), K.repr, v => { if (v !== K.repr) K.setRepr(v); }); };
     return bar;
@@ -734,22 +838,66 @@
     return out;
   };
 
-  // ---------- выгрузка таблиц в CSV (#110) ----------
-  // CSV для Excel с русскими региональными настройками: UTF-8 с BOM (иначе кириллица — кракозябры), разделитель
-  // «;» и десятичная запятая (так Excel с русской локалью раскладывает файл по колонкам и читает числа числами).
-  // Значения — как на экране (в единицах заголовка), числа — числами; текст, похожий на формулу, — с апострофом.
+  // ---------- выгрузка таблиц в CSV (#110, #144) ----------
+  // CSV для Excel с американскими региональными настройками (решение владельца, #110): UTF-8 с BOM (иначе
+  // кириллица в заголовках — кракозябры), разделитель «,», десятичная точка, числа без разделителей тысяч и
+  // с обычным минусом, даты MM/DD/YYYY, кавычки по RFC 4180. Значения — как на экране (в единицах заголовка):
+  //   число — числом («−1,234.5» → -1234.5); дата — датой Excel (03/15/2029);
+  //   текст в ячейке, который Excel целиком прочитал бы как число, дату, время, логическое значение (K.csvExcelConverts)
+  //   или формулу («= + - @» в начале), — строковой формулой ="…" (#144): Excel показывает текст как есть, а формула
+  //   не выполнится — она внутри строкового литерала. Литерал в формуле Excel — до 255 знаков: длиннее — как есть,
+  //   а начало «= + - @» — с апострофом. Остальной текст — как есть. Заголовки и название таблицы — K.csvLabel.
   K.htmlText = s => String(s == null ? '' : s).replace(/<(?:[^>"']|"[^"]*"|'[^']*')*>/g, '').replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
-  K.csvNum = t => {  // «−1,234.5» → «-1234,5»; «4.44%» → «4,44%»; не число — null
+  K.csvNum = t => {  // «−1,234.5» → «-1234.5»; «+12» → «12»; «4.44%» → «4.44%»; не число — null
     const m = /^([+−-]?)(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(%?)$/.exec(t);
-    return m ? (m[1] === '+' ? '' : m[1] ? '-' : '') + m[2].replace(/,/g, '') + (m[3] ? ',' + m[3].slice(1) : '') + m[4] : null;
+    return m ? (m[1] === '+' ? '' : m[1] ? '-' : '') + m[2].replace(/,/g, '') + (m[3] || '') + m[4] : null;
   };
-  K.csvCell = (t, num) => {
-    t = t == null ? '' : String(t);
+  const usDate = (y, mo, d) => (+mo >= 1 && +mo <= 12 && +d >= 1 && +d <= 31) ? mo + '/' + d + '/' + y : null;
+  K.csvDate = s => {  // «2029-03-15» (ISO, можно со временем) → «03/15/2029»; не дата — null
+    const m = /^(\d{4})-(\d{2})-(\d{2})(?:$|[T ])/.exec(s == null ? '' : String(s));
+    return m ? usDate(m[1], m[2], m[3]) : null;
+  };
+  // даты экрана (K.f.date «15.03.29», а также «15.03.2029») → MM/DD/YYYY. raw — значение ячейки до форматирования:
+  // если это ISO-дата, век берётся из неё; иначе двузначный год — 20YY
+  K.csvDates = (t, raw) => {
+    const iso = K.csvDate(raw);
+    if (iso) t = t.split(f.date(String(raw).slice(0, 10))).join(iso);
+    return t.replace(/(^|[^\d.,])(\d{2})\.(\d{2})\.(\d{4}|\d{2})(?!\d|\.\d)/g,
+      (m, p, d, mo, y) => { const u = usDate(y.length === 2 ? '20' + y : y, mo, d); return u ? p + u : m; });
+  };
+  const csvQuote = t => /[,"\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;  // RFC 4180
+  const csvFormula = t => /^[=+\-@\t\r]/.test(t);
+  // текст, который Excel с американскими настройками целиком прочитает не как текст (#144): число (знак, скобки,
+  // $, разделители тысяч, ведущие нули, экспонента, %), дробь или дата из цифр (3/4, 03-04, 2029-03-15, 5.2.29),
+  // дата с месяцем словом (Mar-24, 24 Mar, March 2024), время (12:30, 1 pm), дата со временем, TRUE/FALSE,
+  // значение ошибки (#N/A). Текст с цифрами внутри слов («ОФЗ 26238», «пут 03/15/2029», ISIN) Excel не трогает.
+  const MON = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\.?';
+  const XL_NUM = /^[+-]?\(?[+-]?\$?\s*(?:\d[\d,]*(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?\s*%?\)?$/i,
+    XL_FRAC = /^\d+ \d+\/\d+$/,
+    XL_DATE = /^\d{1,4}[\/.-]\d{1,2}(?:[\/.-]\d{1,4})?$/,
+    XL_MDATE = new RegExp('^(?:\\d{1,4}[\\s/-])?' + MON + '(?:[\\s/,-]+\\d{1,4}){0,2}$', 'i'),
+    XL_TIME = /^\d{1,2}(?::\d{1,2}(?::\d{1,2}(?:\.\d+)?)?\s*(?:[ap]m?)?|\s*[ap]m?)$/i,
+    XL_ERR = /^#(?:n\/a|div\/0!|value!|ref!|name\?|num!|null!|getting_data|spill!|calc!)$/i;
+  K.csvExcelConverts = t => {
+    if (/^(?:true|false)$/i.test(t) || XL_ERR.test(t)) return true;
+    if (!/\d/.test(t)) return false;
+    const sp = t.split(' '), dt = sp.length === 2 && XL_TIME.test(sp[1]) ? sp[0] : null;  // «03/15/2029 18:30»
+    return XL_NUM.test(t) || XL_FRAC.test(t) || XL_DATE.test(t) || XL_MDATE.test(t) || XL_TIME.test(t) || (dt != null && (XL_DATE.test(dt) || XL_MDATE.test(dt)));
+  };
+  // заголовок колонки, название таблицы: Excel их не преобразует, нужна только защита от формул — апостроф
+  K.csvLabel = t => { t = t == null ? '' : String(t); return csvQuote(csvFormula(t) ? "'" + t : t); };
+  K.csvCell = (t, num, raw) => {
+    t = (t == null ? '' : String(t)).replace(/^[●■]\s*/, '');  // цветная метка эмитента / кривой — оформление
     if (num) { if (t === '—' || t === '·') return ''; const x = K.csvNum(t); if (x != null) return x; }
-    t = t.replace(/^[●■]\s*/, '');  // цветная метка эмитента / кривой — оформление
-    if (/^[=+\-@\t\r]/.test(t)) t = "'" + t;
-    return /[;"\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+    t = K.csvDates(t, raw);
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(t)) return t;  // дата целиком — датой Excel
+    const formula = csvFormula(t);
+    if (formula || K.csvExcelConverts(t)) {
+      if (t.length <= 255) return csvQuote('="' + t.replace(/"/g, '""') + '"');
+      if (formula) t = "'" + t;
+    }
+    return csvQuote(t);
   };
   K.csvRun = () => ({ run_id: M.run && M.run.id != null ? String(M.run.id) : (K.source === 'real' ? '' : 'demo'), as_of: M.asOf || '' });
   K.download = (name, text, type) => {
@@ -948,14 +1096,15 @@
     // ---------- CSV (#110) ----------
     const csvTitle = () => K.htmlText(opts.title || (typeof document.title === 'string' ? document.title : '') || 'таблица');
     function csv() {
-      const C = cols().filter(c => K.htmlText(c.label)), R = K.csvRun(), q = x => K.csvCell(x);  // без подписи — оформление (полоска доли)
+      const C = cols().filter(c => K.htmlText(c.label)), R = K.csvRun(), q = K.csvLabel;  // без подписи — оформление (полоска доли)
       const head = C.map(c => { const l = K.htmlText(c.label); return q(c.unit && !l.includes(',') ? l + ', ' + c.unit : l); });
-      const line = r => C.map(c => { const v = val(c, r); return K.csvCell(K.htmlText(c.fmt ? c.fmt(v, r) : v), c.num); }).join(';');
-      return ['run_id;' + q(R.run_id) + ';as_of;' + q(R.as_of) + ';таблица;' + q(csvTitle()) + ';строк;' + shown.length, '', head.join(';')]
+      const line = r => C.map(c => { const v = val(c, r); return K.csvCell(K.htmlText(c.fmt ? c.fmt(v, r) : v), c.num, v); }).join(',');
+      return ['run_id,' + (/^\d+$/.test(R.run_id) ? R.run_id : q(R.run_id)) + ',as_of,' + (K.csvDate(R.as_of) || q(R.as_of)) + ',таблица,' + q(csvTitle()) + ',строк,' + shown.length, '', head.join(',')]
         .concat(shown.map(line)).join('\r\n') + '\r\n';
     }
     // имя файла — латиницей (кириллицу в имени скачивания браузер может заменить на «download»): opts.fileName, иначе
-    // opts.viewKey, иначе страница и якорь таблицы; дальше дата среза и прогон
+    // opts.viewKey, иначе страница и якорь таблицы; дальше дата среза и прогон. Дата среза в имени — ISO (YYYY-MM-DD),
+    // а не MM/DD/YYYY: «/» в имени файла недопустим, ISO однозначен в любой локали и файлы сортируются по дате
     function csvName() {
       const R = K.csvRun();
       let page = '', anchor = '';
