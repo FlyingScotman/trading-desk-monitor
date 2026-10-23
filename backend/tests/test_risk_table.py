@@ -176,7 +176,7 @@ def test_missing_risk_is_missing_not_zero():
 def test_totals_only_where_they_sum():
     t = concepts.risk_table(ITEMS, FX)["total"]
     assert set(t) == {"n_positions", "notional_rub", "mv_rub", "dv01_by_curve_rub", "dv01_all_curves_rub",
-                      "ofz_basis_rub", "cs01_rub", "fx_delta_rub", "n_risk_missing"}  # no "dv01_rub" of all
+                      "ofz_basis_rub", "ofz_spread_kbd_rub", "cs01_rub", "fx_delta_rub", "n_risk_missing"}  # no "dv01_rub" of all
     assert t["fx_delta_rub"] == pytest.approx((1e6 + 1e6 - 5e6 + 2e6) * 80 + 7e6 * 11 + 1e6 * 100)
     assert concepts.risk_table(ITEMS, {"USD": 80.0})["total"]["fx_delta_rub"] is None  # a rate missing: no sum
     assert concepts.risk_table(ITEMS, {"USD": 80.0})["rows"][-1]["dv01_ccy"] is None
@@ -220,8 +220,8 @@ def test_matrix_rows_currencies_columns_kinds():
     assert sum(c["fx_delta_rub"] or 0.0 for c in t["columns"]) == pytest.approx(t["total"]["fx_delta_rub"])
     ccs = next(c for c in t["columns"] if c["kind"] == "CCS")
     assert ccs["n_positions"] == 1 and ccs["dv01_by_curve_rub"] == {"USD SOFR": 400.0, "RUB RUONIA": -380.0}
-    assert [m["measure"] for m in t["measures"]] == ["dv01", "dv01_curve", "cs01", "ofz_basis", "fx_delta", "mv",
-                                                       "notional", "n_positions"]
+    assert [m["measure"] for m in t["measures"]] == ["dv01", "dv01_curve", "cs01", "ofz_basis", "ofz_spread_kbd",
+                                                       "fx_delta", "mv", "notional", "n_positions"]
     no_rate = concepts.risk_table(ITEMS, {"USD": 80.0})["columns"]
     assert next(c for c in no_rate if c["kind"] == "FX_FWD")["fx_delta_rub"] is None  # CNY without its rate
 
