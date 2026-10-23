@@ -12,25 +12,40 @@ The schema check is the JSON-Schema (draft 2020-12) subset the adapter's tabs us
 ``propertyNames``, ``items``, ``pattern``, ``minLength``, ``minimum`` / ``maximum`` (and the exclusive ones),
 ``format: date``. As in the adapter, null is the same as absent unless the type allows null; a property outside
 the schema is a warning (the adapter strips it), never an error.
+
+The dry run (B2-11) runs ``reference()`` twice, on the current files and on the candidate. The current files'
+issues are kept until the adapter or its config folder changes (the handle's fingerprint covers both) or for
+``BASE_TTL_S`` (the report folders the adapter may read are not fingerprinted), so a check costs one run, not two.
+Both runs go to one long-lived child (``runner.Worker``) that stays running between checks: the import is paid once
+and the adapter may keep caches of its own between calls (08 §2), such as the reports it has already read. There is
+no idle timer: the child lives until the next check, which ends it and starts a new one when the previous check was
+more than ``WORKER_IDLE_S`` ago or the adapter's own files changed (``reset``, at the server's exit, ends it too).
+A timeout or a crash of a run kills it as well, and the next run starts a new one. The limit of one run is the setting
+``adapter_check_timeout_s``; when the current files' run hits it, the candidate is not tried with the same limit.
 """
 
 from __future__ import annotations
 
+import atexit
 import dataclasses
 import json
 import re
 import shutil
 import tempfile
+import threading
+import time
 from datetime import date
 from pathlib import Path
 from typing import Any
 
-from .inbox import runner
+from .inbox import loader, runner
 from .inbox.spi import AdapterFailure
 from .inbox.validate import check_reference_tables
 
 MAX_ISSUES = 500
-DRY_RUN_TIMEOUT_S = 30.0
+DRY_RUN_TIMEOUT_S = 60.0  # the default of the setting adapter_check_timeout_s: one reference() run
+BASE_TTL_S = 600.0       # the current files' issues are run again after this long even if nothing changed
+WORKER_IDLE_S = 600.0    # a check after a longer pause restarts the warm child (no timer: it waits for that check)
 MAX_COPY_BYTES = 8 * 1024 * 1024  # a config file larger than this is not copied for the dry run
 _SRC_ROW = re.compile(r"^R([0-9]+)$")
 _FIELD = re.compile(r"\bfield ([A-Za-z_][A-Za-z0-9_]*)")
@@ -184,6 +199,46 @@ def file_text(data: Any) -> str:
 class DryRun:
     issues: list[dict]          # of the candidate, each with ``new``: not in the current config's issues
     error: str | None = None    # the dry run could not be made (the adapter failed, no reference(), ...)
+    code: str | None = None     # why, for the page: timeout | failed | not_loaded
+
+
+_lock = threading.Lock()
+_base: dict[tuple, tuple[float, frozenset]] = {}  # the current files' issue keys, see the module's docstring
+_warm: dict[str, Any] = {"worker": None, "key": None, "used": 0.0}
+
+
+def reset() -> None:
+    """Ends the warm child and forgets the cached runs (tests; the server's exit)."""
+    with _lock:
+        _close_worker()
+        _base.clear()
+
+
+def _close_worker() -> None:
+    w, _warm["worker"], _warm["key"] = _warm["worker"], None, None
+    if w is not None:
+        w.close()
+
+
+atexit.register(reset)
+
+
+def _adapter_key(handle: Any) -> tuple:
+    """What the warm child holds: the adapter's own files (not the config folder, which changes with every save)."""
+    try:
+        return handle.spec, loader.fingerprint(handle.spec or None, None)
+    except Exception:  # noqa: BLE001 - a module spec the parent cannot resolve: its name and version only
+        return handle.spec, handle.version
+
+
+def _worker(handle: Any) -> runner.Worker:
+    key, now = _adapter_key(handle), time.monotonic()
+    if _warm["worker"] is not None and (_warm["key"] != key or now - _warm["used"] > WORKER_IDLE_S):
+        _close_worker()
+    if _warm["worker"] is None:
+        _warm["worker"], _warm["key"] = runner.Worker(), key
+    _warm["used"] = now
+    return _warm["worker"]
 
 
 def _copy_config(cfg: Path | None, dest: Path) -> None:
@@ -207,27 +262,42 @@ def _key(i: dict) -> tuple:
     return (i["severity"], i["code"], i["src"], i["message"], json.dumps(i["scope"], sort_keys=True))
 
 
-def _reference_issues(handle: Any, config_dir: str | None) -> list[dict]:
+def _reference_issues(handle: Any, config_dir: str | None, timeout_s: float) -> list[dict]:
     h = dataclasses.replace(handle, config_dir=config_dir)
-    result = runner.call_reference(h, None, DRY_RUN_TIMEOUT_S)
+    result = runner.call_reference(h, None, timeout_s, worker=_worker(handle))
     return [_plain_issue(i) for i in check_reference_tables(result)[1]]
 
 
-def dry_run(handle: Any, cfg: Path | None, name: str, text: str) -> DryRun:
+def _failure(f: AdapterFailure) -> DryRun:
+    return DryRun([], f"reference() failed: {f.kind} {f.type}", "timeout" if f.kind == "timed_out" else "failed")
+
+
+def dry_run(handle: Any, cfg: Path | None, name: str, text: str, timeout_s: float = DRY_RUN_TIMEOUT_S) -> DryRun:
     """``reference()`` of the adapter over a copy of the config folder with ``name`` replaced by ``text``, and of
-    the folder as it is: the candidate's issues, each marked ``new`` when the current files do not have it."""
+    the folder as it is (cached, see the module's docstring): the candidate's issues, each marked ``new`` when the
+    current files do not have it. ``timeout_s`` bounds each run."""
     if not handle.ok:
-        return DryRun([], f"the adapter is not loaded: {handle.error}")
-    try:
-        base = {_key(i) for i in _reference_issues(handle, str(cfg) if cfg else None)}
-    except AdapterFailure:
-        base = set()  # the current config already fails: every issue of the candidate is worth showing
-    with tempfile.TemporaryDirectory(prefix="desk-settings-check-") as d:
-        tmp = Path(d)
-        _copy_config(cfg, tmp)
-        (tmp / name).write_text(text, encoding="utf-8")
-        try:
-            found = _reference_issues(handle, str(tmp))
-        except AdapterFailure as f:
-            return DryRun([], f"reference() failed: {f.kind} {f.type}")
+        return DryRun([], f"the adapter is not loaded: {handle.error}", "not_loaded")
+    with _lock:
+        key = (handle.spec, handle.fingerprint, str(cfg) if cfg else None, tuple(getattr(handle, "inbox_dirs", ())))
+        hit = _base.get(key)
+        if hit is not None and time.monotonic() - hit[0] <= BASE_TTL_S:
+            base = hit[1]
+        else:
+            try:
+                base = frozenset(_key(i) for i in _reference_issues(handle, str(cfg) if cfg else None, timeout_s))
+                _base.clear()  # one folder is edited at a time: only its latest state is worth keeping
+                _base[key] = (time.monotonic(), base)
+            except AdapterFailure as f:
+                if f.kind == "timed_out":
+                    return _failure(f)  # the candidate would hit the same limit: say so now, not after a second wait
+                base = frozenset()  # the current config already fails: every issue of the candidate is worth showing
+        with tempfile.TemporaryDirectory(prefix="desk-settings-check-") as d:
+            tmp = Path(d)
+            _copy_config(cfg, tmp)
+            (tmp / name).write_text(text, encoding="utf-8")
+            try:
+                found = _reference_issues(handle, str(tmp), timeout_s)
+            except AdapterFailure as f:
+                return _failure(f)
     return DryRun([{**i, "new": _key(i) not in base} for i in found])
