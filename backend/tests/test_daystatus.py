@@ -84,8 +84,32 @@ def test_a_rejected_book_says_why_and_a_stale_copy_is_shown(con, tmp_path):
     got = daystatus.days(con, s, D("2026-10-20"), 10)
     by = {x["date"]: x for x in got["days"]}
     assert list(by) == sorted(by, reverse=True) and "2026-10-15" in by  # the cached close counts
-    assert by["2026-10-14"]["inputs"]["positions"]["rejected"] == 1 and by["2026-10-14"]["state"] == "warn"
+    assert by["2026-10-14"]["inputs"]["positions"]["rejected"] == 1 and by["2026-10-14"]["state"] == "bad"
     assert by["2026-10-15"]["eod_final"] is True and by["2026-10-15"]["runs"] == 0
+    assert_strip_matches_days(con, s, got)
+
+    # a file lost by match (match_failed) that names the date is a problem of the date in both views
+    sha = "f" * 64
+    con.execute("INSERT INTO inbox_file (sha256, path, name, size_bytes, mtime) VALUES (%s, 'x', 'x.csv', 1, now())",
+                (sha,))
+    con.execute("INSERT INTO inbox_file_status (sha256, status, adapter_fingerprint, path, valid_date)"
+                " VALUES (%s, 'match_failed', 'fp', 'x', '2026-10-16')", (sha,))
+    got = daystatus.days(con, s, D("2026-10-20"), 10)
+    strip = next(x for x in got["days"] if x["date"] == "2026-10-16")
+    assert strip["files_lost"] == 1 and "файлов с ошибкой: 1" in strip["problems"] and strip["state"] == "bad"
+    assert_strip_matches_days(con, s, got)
+
+    # n calendar days ending on to, not n + 1
+    one = daystatus.days(con, s, D("2026-10-15"), 1)
+    assert one["from"] == one["to"] == "2026-10-15" and [x["date"] for x in one["days"]] == ["2026-10-15"]
+    assert daystatus.days(con, s, D("2026-10-20"), 30)["from"] == "2026-09-21"
+
+
+def assert_strip_matches_days(con, s, got) -> None:
+    """The strip (days) and each date's headline (day) judge a date by one rule."""
+    for x in got["days"]:
+        head = daystatus.day(con, s, D(x["date"]))["summary"]
+        assert (x["state"], x["problems"], x["warnings"]) == (head["state"], head["problems"], head["warnings"]), x["date"]
 
 
 def test_runs_supersede_with_what_changed_and_the_feed_pages_by_event_id(store_url, tmp_path, monkeypatch):
@@ -114,6 +138,11 @@ def test_runs_supersede_with_what_changed_and_the_feed_pages_by_event_id(store_u
     assert files["positions_20261016_2.csv"]["status"] == "accepted"
     pos = next(i for i in d["inputs"] if i["dataset"] == "positions")
     assert pos["state"] == "ok" and pos["stored_sets"] >= 1 and pos["stored_rows"] > 0
+    # the correction replaced the books of the original: each of B1, B2, B3 counts once, not twice
+    assert pos["units"] == {"accepted": 3, "rejected": 0, "superseded": 0}
+    assert d["summary"]["state"] == "ok" and d["summary"]["problems"] == d["summary"]["warnings"] == []
+    strip = client.get("/api/v1/inbox/days", params={"to": "2026-10-15", "n": 1}).json()["days"]
+    assert [(x["date"], x["state"], x["inputs"]["positions"]["accepted"]) for x in strip] == [("2026-10-15", "ok", 3)]
     types = [e["type"] for e in d["events"]]
     assert types.count("run.published") == 2 and "input.accepted" in types
     assert client.get("/api/v1/inbox", params={"on": "15.10"}).status_code == 400
@@ -128,6 +157,7 @@ def test_runs_supersede_with_what_changed_and_the_feed_pages_by_event_id(store_u
     assert pub[-1]["text"] == "Прогон закрытия #2 за 15.10 (закрытие) опубликован, заменил #1"
     runs = client.get("/api/v1/events", params={"type": "run."}).json()["events"]
     assert [e["run_id"] for e in runs] == [1, 2]
+    assert client.get("/api/v1/events", params={"type": "run"}).json()["events"] == runs  # a prefix with or without "."
     assert client.get("/api/v1/events", params={"after": pub[-1]["id"]}).json()["events"] == []
     first = client.get("/api/v1/events", params={"after": 0, "limit": 1}).json()
     assert len(first["events"]) == 1 and first["has_more"] and first["events"][0]["id"] == ids[0]

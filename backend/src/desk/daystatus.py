@@ -77,6 +77,9 @@ EVENT_TEXT = {
     "input.duplicate": "повтор",
 }
 
+UNIT_STATUS = {"accepted": "принято", "rejected": "отклонено", "superseded": "заменено"}
+"""A file's parts (books, entities) by status, as the feed counts them."""
+
 RUN_CHANGES = {"positions": "позиции", "market": "снимок рынка", "prev_market": "снимок прошлого дня",
                "program": "версия программы", "cut": "срез (окончательное закрытие вместо предварительного)"}
 
@@ -114,7 +117,7 @@ def event_text(e: dict[str, Any]) -> str:
     s = f"{name}{on}" + (f" · {e['source']}" if e.get("source") else "") + ": " + EVENT_TEXT.get(t, t)
     c = e.get("counts") or {}
     units = c.get("units") or {}
-    parts = [f"{FILE_STATUS.get(k, k) if k != 'accepted' else 'принято'} {n}" for k, n in units.items()]
+    parts = [f"{UNIT_STATUS.get(k, k)} {n}" for k, n in units.items()]
     if c.get("rows") is not None:
         parts.append(f"строк {c['rows']}")
     if t == "input.stale" and c.get("content_report_date"):
@@ -134,8 +137,8 @@ def events(con: psycopg.Connection, *, after: int | None = None, before: int | N
            types: list[str] | None = None, limit: int = 100) -> dict[str, Any]:
     """A page of the feed in ``event_id`` order (module doc). ``after``: the events after it, oldest first, at most
     ``limit`` (``has_more``: more follow); otherwise the newest ``limit`` (before ``before``), still oldest first
-    (``has_more``: older ones remain). ``on``: of this business date only; ``types``: type prefixes (``run.``,
-    ``input.rejected``). ``last_id``: the newest event in the store, whatever the filter: where a stream starts."""
+    (``has_more``: older ones remain). ``on``: of this business date only; ``types``: type prefixes, each matched
+    as the start of the type (``run`` and ``run.`` give ``run.published`` and ``run.failed``; ``input.rejected``). ``last_id``: the newest event in the store, whatever the filter: where a stream starts."""
     where, args = [], []
     if after is not None:
         where.append("event_id > %s")
@@ -148,7 +151,7 @@ def events(con: psycopg.Connection, *, after: int | None = None, before: int | N
         args.append(on)
     if types:
         where.append("(" + " OR ".join("type LIKE %s" for _ in types) + ")")
-        args += [t.replace("%", "").replace("_", r"\_") + ("%" if t.endswith(".") else "") for t in types]
+        args += [t.replace("%", "").replace("_", r"\_") + "%" for t in types]
     sql = ("SELECT event_id, at, type, source, dataset, valid_date, sha256, counts, run_id, detail FROM event"
            + (" WHERE " + " AND ".join(where) if where else "")
            + f" ORDER BY event_id {'ASC' if after is not None else 'DESC'} LIMIT %s")
@@ -191,18 +194,41 @@ def _market(settings: Settings, con: psycopg.Connection, day: date) -> dict[str,
     return out
 
 
+UNITS_SQL = (
+    f"WITH u AS (SELECT u.unit_id, u.dataset, u.valid_date, u.scope, u.status, u.row_count, l.source FROM {LATEST} l"
+    " JOIN inbox_unit u USING (status_id) WHERE u.valid_date BETWEEN %(lo)s AND %(hi)s)"
+    " SELECT valid_date, dataset, status, count(*), sum(row_count), array_agg(DISTINCT source) FROM"
+    " (SELECT DISTINCT ON (dataset, valid_date, scope) * FROM u WHERE status <> 'superseded'"
+    "  ORDER BY dataset, valid_date, scope, unit_id DESC) last GROUP BY 1, 2, 3"
+    " UNION ALL SELECT valid_date, dataset, status, count(*), sum(row_count), array_agg(DISTINCT source) FROM u"
+    "  WHERE status = 'superseded' GROUP BY 1, 2, 3")
+"""Per (business date, dataset, status) the units and rows of the latest reading of each file. A scope unit (a book,
+an entity) counts once, by its last reading that was not superseded: a correction that replaced the same books does
+not count them twice; superseded units are counted as they are (what a newer report replaced)."""
+
+
+def _units(con: psycopg.Connection, lo: date, hi: date) -> dict[tuple[date, str], dict[str, Any]]:
+    out: dict[tuple[date, str], dict[str, Any]] = {}
+    for d, ds, st, n, rows, srcs in con.execute(UNITS_SQL, {"lo": lo, "hi": hi}):
+        x = out.setdefault((d, ds), {"n": Counter(), "rows": Counter(), "sources": set()})
+        x["n"][st] += n
+        x["rows"][st] += int(rows or 0)
+        x["sources"].update(v for v in srcs if v)
+    return out
+
+
+def _input_state(n: Counter) -> str:
+    """A dataset's state for a date from its scope units: ``missing``, ``rejected`` (only rejected), ``partial``,
+    ``ok`` or ``superseded`` (only superseded)."""
+    acc, rej, sup = n["accepted"], n["rejected"], n["superseded"]
+    return ("missing" if not (acc or rej or sup) else "rejected" if rej and not acc
+            else "partial" if rej else "ok" if acc else "superseded")
+
+
 def _inputs(con: psycopg.Connection, day: date) -> list[dict[str, Any]]:
-    """Per dataset what the latest reading of each file gave for ``day``: units accepted, rejected, superseded, their
-    rows, the sources; the sets stored for the date (positions: the books whose set is of this date)."""
-    units: dict[str, Counter] = defaultdict(Counter)
-    sources: dict[str, set] = defaultdict(set)
-    for ds, st, n, rows, src in con.execute(
-            f"SELECT u.dataset, u.status, count(*), sum(u.row_count), l.source FROM {LATEST} l"
-            " JOIN inbox_unit u USING (status_id) WHERE u.valid_date = %s GROUP BY 1, 2, 5", (day,)):
-        units[ds][st] += n
-        units[ds][f"{st}_rows"] += int(rows or 0)
-        if src:
-            sources[ds].add(src)
+    """Per dataset what arrived for ``day`` (``UNITS_SQL``): scope units accepted, rejected, superseded, their rows,
+    the sources; the sets stored for the date (positions: the books whose set is of this date)."""
+    units = {ds: x for (_, ds), x in _units(con, day, day).items()}
     stored = {"positions": con.execute(
         "WITH s AS (SELECT DISTINCT ON (book_id) set_id FROM position_set WHERE valid_date = %s"
         f" ORDER BY book_id, {store.CURRENT_SET})"
@@ -215,15 +241,12 @@ def _inputs(con: psycopg.Connection, day: date) -> list[dict[str, Any]]:
         stored[ds] = (n, int(rows or 0))
     out = []
     for ds in [*DATASETS, *sorted(set(units) - set(DATASETS))]:
-        u = units.get(ds, Counter())
-        acc, rej, sup = u["accepted"], u["rejected"], u["superseded"]
-        state = ("missing" if not (acc or rej or sup) else "rejected" if rej and not acc
-                 else "partial" if rej else "ok" if acc else "superseded")
+        u = units.get(ds) or {"n": Counter(), "rows": Counter(), "sources": set()}
         n_sets, n_rows = stored.get(ds) or (0, 0)
-        out.append({"dataset": ds, "name": DATASET_NAMES.get(ds, ds), "state": state,
-                    "units": {"accepted": acc, "rejected": rej, "superseded": sup},
-                    "rows": {"accepted": u["accepted_rows"], "rejected": u["rejected_rows"]},
-                    "sources": sorted(sources.get(ds, ())), "stored_sets": n_sets or 0, "stored_rows": n_rows or 0})
+        out.append({"dataset": ds, "name": DATASET_NAMES.get(ds, ds), "state": _input_state(u["n"]),
+                    "units": {k: u["n"][k] for k in ("accepted", "rejected", "superseded")},
+                    "rows": {"accepted": u["rows"]["accepted"], "rejected": u["rows"]["rejected"]},
+                    "sources": sorted(u["sources"]), "stored_sets": n_sets or 0, "stored_rows": n_rows or 0})
     return out
 
 
@@ -332,36 +355,94 @@ def _runs(con: psycopg.Connection, day: date) -> list[dict[str, Any]]:
     return out
 
 
-def _summary(inputs: list[dict], market: dict, runs: list[dict], files: list[dict], copies: list[dict],
-             books: list[dict]) -> dict[str, Any]:
-    """The headline: ``state`` bad (a rejected input, a failed run, no run), warn (partial, a stale copy, a book
-    flagged, no final close), ok; with the reasons."""
+LOST = ("rejected", "failed", "timed_out", "match_failed")
+"""File statuses that lost a report (a file that touched the date and ended so is a problem of the date)."""
+
+
+def _facts_empty() -> dict[str, Any]:
+    return {"inputs": {}, "files_lost": 0, "stale_copies": 0, "runs": 0, "runs_failed": 0, "default_run_id": None,
+            "current_run_id": None, "default_set_ids": None, "eod_final": False, "positions_in_force": False,
+            "run_behind": False}
+
+
+def _facts(con: psycopg.Connection, settings: Settings, lo: date, hi: date) -> dict[date, dict[str, Any]]:
+    """What the state of each business date from ``lo`` to ``hi`` is judged on (``_rate``), the same for one date
+    (``day``) and for the strip (``days``): dataset states (``_units``), files lost (``LOST``, by the file's or a
+    unit's date, as ``_files``), stale copies, runs (count, failed and not superseded, default, shown, whether the
+    default run read the position sets in force now), the final close in the cache, positions in force at all.
+    Only dates with anything on them."""
+    from .marketdata.bundle import SnapshotDir
+
+    out: dict[date, dict[str, Any]] = {}
+
+    def g(d: date) -> dict[str, Any]:
+        return out.setdefault(d, _facts_empty())
+
+    for (d, ds), x in _units(con, lo, hi).items():
+        g(d)["inputs"][ds] = x["n"]
+    for d, k in con.execute(
+            f"SELECT d, count(DISTINCT sha256) FROM (SELECT l.sha256, l.valid_date AS d FROM {LATEST} l"
+            "  WHERE l.status = ANY(%(st)s) AND l.valid_date BETWEEN %(lo)s AND %(hi)s"
+            f" UNION SELECT l.sha256, u.valid_date FROM {LATEST} l JOIN inbox_unit u USING (status_id)"
+            "  WHERE l.status = ANY(%(st)s) AND u.valid_date BETWEEN %(lo)s AND %(hi)s) x GROUP BY 1",
+            {"st": list(LOST), "lo": lo, "hi": hi}):
+        g(d)["files_lost"] = k
+    for d, k in con.execute("SELECT valid_date, count(*) FROM inbox_sighting WHERE kind = 'stale_copy'"
+                            " AND valid_date BETWEEN %s AND %s GROUP BY 1", (lo, hi)):
+        g(d)["stale_copies"] = k
+    for d, k, failed, dflt, cur in con.execute(
+            "SELECT business_date, count(*), count(*) FILTER (WHERE status = 'failed' AND NOT EXISTS (SELECT 1 FROM run"
+            " x WHERE x.supersedes_run_id = r.run_id)),"
+            f" max(run_id) FILTER (WHERE run_id IN ({store.DEFAULT_RUNS})),"
+            f" max(run_id) FILTER (WHERE run_id IN ({store.CURRENT_RUNS}))"
+            " FROM run r WHERE business_date BETWEEN %s AND %s AND run_type <> 'TEST' GROUP BY 1", (lo, hi)):
+        g(d).update(runs=k, runs_failed=failed, default_run_id=dflt, current_run_id=cur)
+    try:
+        finals = set(SnapshotDir(Path(settings.snapshot_cache)).market_dates("eod_final"))
+    except (OSError, ValueError):
+        finals = set()
+    for s in finals:
+        d = date.fromisoformat(s)
+        if lo <= d <= hi:
+            g(d)["eod_final"] = True
+    first = con.execute("SELECT min(valid_date) FROM position_set").fetchone()[0]
+    for d, x in out.items():
+        x["positions_in_force"] = first is not None and first <= d
+        if x["default_run_id"]:
+            ids = con.execute("SELECT position_set_ids FROM run WHERE run_id = %s", (x["default_run_id"],)).fetchone()[0]
+            x["default_set_ids"] = sorted(ids or [])
+            x["run_behind"] = x["default_set_ids"] != store.current_sets(con, d)[0]
+    return out
+
+
+def _rate(x: dict[str, Any]) -> dict[str, Any]:
+    """The state of a date from its ``_facts``: ``bad`` (a dataset only rejected, no positions in force, a file lost,
+    a failed run not superseded, no run shown), ``warn`` (a dataset partly rejected, a stale copy, no default run
+    while an intraday run is shown, the default run on older position sets, no final close), else ``ok``; with the
+    reasons. One rule for the strip and the date's headline."""
     bad, warn = [], []
-    by = {i["dataset"]: i for i in inputs}
-    for i in inputs:
-        if i["state"] == "rejected":
-            bad.append(f"{i['name']}: отклонено")
-        elif i["state"] == "partial":
-            warn.append(f"{i['name']}: принято частично")
-    if by["positions"]["state"] == "missing" and not any(b.get("valid_date") for b in books):
+    for ds in [*DATASETS, *sorted(set(x["inputs"]) - set(DATASETS))]:
+        st = _input_state(x["inputs"].get(ds) or Counter())
+        name = DATASET_NAMES.get(ds, ds)
+        if st == "rejected":
+            bad.append(f"{name}: отклонено")
+        elif st == "partial":
+            warn.append(f"{name}: принято частично")
+    if not x["positions_in_force"]:
         bad.append("нет позиций")
-    lost = [f for f in files if f["status"] in ("rejected", "failed", "timed_out", "match_failed")]
-    if lost:
-        bad.append(f"файлов с ошибкой: {len(lost)}")
-    if any(c["kind"] == "stale_copy" for c in copies):
+    if x["files_lost"]:
+        bad.append(f"файлов с ошибкой: {x['files_lost']}")
+    if x["stale_copies"]:
         warn.append("старая копия отчёта под новым именем")
-    if any(r["status"] == "failed" and not r["superseded_by"] for r in runs):
+    if x["runs_failed"]:
         bad.append("прогон не удался")
-    if not any(r["is_default"] for r in runs):
-        (warn if any(r["is_current"] for r in runs) else bad).append("нет основного прогона")
-    if not market.get("eod_final"):
+    if not x["default_run_id"]:
+        (warn if x["current_run_id"] else bad).append("нет основного прогона")
+    elif x["run_behind"]:
+        warn.append("позиции загружены после расчёта: прогон не пересчитан")
+    if not x["eod_final"]:
         warn.append("нет окончательного закрытия хаба")
-    flagged = sum(1 for b in books if b.get("flags"))
-    if flagged:
-        warn.append(f"книг с замечаниями: {flagged}")
-    return {"state": "bad" if bad else "warn" if warn else "ok", "problems": bad, "warnings": warn,
-            "default_run_id": next((r["run_id"] for r in runs if r["is_default"]), None),
-            "current_run_id": next((r["run_id"] for r in runs if r["is_current"]), None)}
+    return {"state": "bad" if bad else "warn" if warn else "ok", "problems": bad, "warnings": warn}
 
 
 def day(con: psycopg.Connection, settings: Settings, on: date | None = None) -> dict[str, Any]:
@@ -375,7 +456,9 @@ def day(con: psycopg.Connection, settings: Settings, on: date | None = None) -> 
     files, copies, runs = _files(con, d), _copies(con, d), _runs(con, d)
     feed = events(con, on=d, limit=200)
     return {"date": d.isoformat(), "adapter": scan.adapter_line(scan.adapter(settings)),
-            "summary": _summary(inputs, market, runs, files, copies, rec["books"]),
+            "summary": {**_rate(_facts(con, settings, d, d).get(d) or _facts_empty()),
+                        "default_run_id": next((r["run_id"] for r in runs if r["is_default"]), None),
+                        "current_run_id": next((r["run_id"] for r in runs if r["is_current"]), None)},
             "inputs": inputs, "market": market, "runs": runs, "files": files, "copies": copies,
             "positions": {k: rec[k] for k in ("run_id", "since", "books", "totals", "losses")},
             "events": feed["events"], "events_more": feed["has_more"], "last_event_id": feed["last_id"],
@@ -383,48 +466,16 @@ def day(con: psycopg.Connection, settings: Settings, on: date | None = None) -> 
 
 
 def days(con: psycopg.Connection, settings: Settings, to: date | None = None, n: int = 30) -> dict[str, Any]:
-    """``GET /api/v1/inbox/days``: the business dates from ``to`` (default today, Moscow) ``n`` calendar days back
-    that have anything (an input unit, a run, a cached close), newest first: per dataset the units accepted and
-    rejected, the runs (default, failed), whether the final close is cached, and a ``state`` like ``day``'s."""
-    from .marketdata.bundle import SnapshotDir
-
+    """``GET /api/v1/inbox/days``: the ``n`` calendar days ending on ``to`` (default today, Moscow), those with
+    anything (an input unit, a file lost, a stale copy, a run, a cached close), newest first: per dataset the scope
+    units accepted, rejected and superseded, the runs, whether the final close is cached, and the date's ``state``
+    with its reasons, by the same rule as ``day`` (``_facts``, ``_rate``)."""
     to = to or datetime.now(UTC).astimezone(store.MSK).date()
-    lo = to - timedelta(days=n)
-    out: dict[date, dict[str, Any]] = {}
-
-    def g(d: date) -> dict[str, Any]:
-        return out.setdefault(d, {"date": d.isoformat(), "inputs": {}, "runs": 0, "runs_failed": 0,
-                                  "default_run_id": None, "eod_final": False, "files_lost": 0})
-
-    for d, ds, st, k in con.execute(
-            f"SELECT u.valid_date, u.dataset, u.status, count(*) FROM {LATEST} l JOIN inbox_unit u USING (status_id)"
-            " WHERE u.valid_date BETWEEN %s AND %s GROUP BY 1, 2, 3", (lo, to)):
-        g(d)["inputs"].setdefault(ds, Counter())[st] += k
-    for d, k in con.execute(f"SELECT valid_date, count(*) FROM {LATEST} l WHERE valid_date BETWEEN %s AND %s"
-                            " AND status IN ('rejected', 'failed', 'timed_out') GROUP BY 1", (lo, to)):
-        g(d)["files_lost"] = k
-    for d, k, failed, dflt in con.execute(
-            "SELECT business_date, count(*), count(*) FILTER (WHERE status = 'failed' AND NOT EXISTS (SELECT 1 FROM run"
-            " x WHERE x.supersedes_run_id = r.run_id)),"
-            f" max(run_id) FILTER (WHERE run_id IN ({store.DEFAULT_RUNS})) FROM run r"
-            " WHERE business_date BETWEEN %s AND %s AND run_type <> 'TEST' GROUP BY 1", (lo, to)):
-        x = g(d)
-        x.update(runs=k, runs_failed=failed, default_run_id=dflt)
-    try:
-        finals = set(SnapshotDir(Path(settings.snapshot_cache)).market_dates("eod_final"))
-    except (OSError, ValueError):
-        finals = set()
-    for s in finals:
-        d = date.fromisoformat(s)
-        if lo <= d <= to:
-            g(d)["eod_final"] = True
+    lo = to - timedelta(days=n - 1)
     rows = []
-    for d in sorted(out, reverse=True):
-        x = out[d]
-        ins = {ds: {"accepted": c["accepted"], "rejected": c["rejected"], "superseded": c["superseded"]}
-               for ds, c in sorted(x["inputs"].items())}
-        rejected = any(c["rejected"] for c in ins.values())
-        bad = x["files_lost"] or x["runs_failed"] or any(c["rejected"] and not c["accepted"] for c in ins.values())
-        warn = rejected or not x["eod_final"] or not x["default_run_id"]
-        rows.append({**x, "inputs": ins, "state": "bad" if bad else "warn" if warn else "ok"})
+    for d, x in sorted(_facts(con, settings, lo, to).items(), reverse=True):
+        rows.append({"date": d.isoformat(), "inputs": {ds: {k: c[k] for k in ("accepted", "rejected", "superseded")}
+                                                       for ds, c in sorted(x["inputs"].items())},
+                     "runs": x["runs"], "runs_failed": x["runs_failed"], "default_run_id": x["default_run_id"],
+                     "eod_final": x["eod_final"], "files_lost": x["files_lost"], **_rate(x)})
     return {"from": lo.isoformat(), "to": to.isoformat(), "days": rows}
