@@ -170,7 +170,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const key = { dv01: p => p.dv01, cs01: p => p.cs01, pnl: p => p.pnl.total }[mode];
         const L = K.list().filter(p => key(p)).sort((a, b) => Math.abs(key(b)) - Math.abs(key(a))).slice(0, 25);
         const metric = mode === 'pnl' ? 'pnl' : mode;
-        K.table(bd, { viewKey: 'c06-top-by-size', rows: L, search: false, footer: false, stripe: r => K.issuerColor(r.issuer), columns: K.cols(['name', ccyCol, 'issuer', 'kind', 'tenor', metric, mode === 'dv01' ? 'cs01' : 'dv01']) });
+        K.table(bd, { viewKey: 'c06-top-by-size-' + mode, rows: L, search: false, footer: false, stripe: r => K.issuerColor(r.issuer), columns: K.cols(['name', ccyCol, 'issuer', 'kind', 'tenor', metric, mode === 'dv01' ? 'cs01' : 'dv01']) });
       },
     },
     events: {

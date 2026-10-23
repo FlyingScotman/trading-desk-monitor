@@ -882,7 +882,7 @@
     // первый ресайз: ширины всех колонок — как сейчас на экране, дальше раскладка фиксированная
     function ensureW() { if (!fixedW()) { lay.w = {}; heads().forEach(th => { lay.w[th.dataset.k] = Math.round(th.getBoundingClientRect().width); }); } }
     function setW(k, w) {
-      lay.w[k] = Math.max(32, Math.round(w));
+      lay.w[k] = Math.min(2000, Math.max(32, Math.round(w)));  // пределы — как в K.viewLayout
       const col = wrap.querySelector('col[data-k="' + CSS.escape(k) + '"]'), t = wrap.querySelector('table');
       if (col) col.style.width = lay.w[k] + 'px';
       if (t) t.style.width = tableW() + 'px';
@@ -896,7 +896,7 @@
       let w = 0;
       wrap.querySelectorAll('th .k-rsz').forEach(x => { x.style.display = 'none'; });  // ручка — во всю ячейку, не в счёт
       cells.forEach(c => { rg.selectNodeContents(c); const cs = getComputedStyle(c); w = Math.max(w, rg.getBoundingClientRect().width + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight)); });
-      ensureW(); lay.w[k] = Math.max(32, Math.ceil(w) + 4); saveLay(); draw();
+      ensureW(); lay.w[k] = Math.min(2000, Math.max(32, Math.ceil(w) + 4)); saveLay(); draw();
     }
     function drag(e, onMove, onUp) {
       const mv = ev => onMove(ev), up = ev => { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); onUp(ev); };
