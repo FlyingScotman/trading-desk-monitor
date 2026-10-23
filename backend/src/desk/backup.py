@@ -13,6 +13,12 @@ the schema migrations, the size and the SHA-256 of the file.
   recent ``backup_time`` (local, default 20:30), so a computer that was off at that time backs up as soon as the
   server starts next. ``desk cycle`` (``update_daily.bat``) makes the due backup too. A failure is tried again
   after ``RETRY_S``. One backup at a time per home folder, across processes (``<home>/backup.lock``).
+* **Access**: a dump holds the positions and the runs. On POSIX the backup folder is made 0700 and every dump,
+  ``.partial`` and ``.json`` is created 0600 (before ``pg_dump`` writes a byte). Windows has no such modes: a file
+  takes the access list of its folder, so the default folder (``<home>/backups``, ``%LOCALAPPDATA%`` of the user's
+  profile) is readable by this user only, while a new folder in the root of another disk (``D:\\DeskBackup``) or a
+  network share usually is readable by every user of the computer or the share. ``status`` reports
+  ``dir_private`` False for a folder outside the user's profile and the settings page and START_HERE 7а warn.
 * **Retention**: the newest ``backup_keep`` (default 14) nightly and manual dumps stay, older ones are deleted
   after each new backup; the newest ``KEEP_PRE_RESTORE`` pre-restore dumps stay apart from them.
 * **Restore drill** (``restore_check``; ``desk restore``, the settings page's «Проверить восстановление»): the
@@ -22,7 +28,9 @@ the schema migrations, the size and the SHA-256 of the file.
 * **Restore** (``restore_replace``; ``desk restore FILE --replace``, from the command line only, with the server
   stopped): the drill first; then the explicit confirmation; then a ``pre-restore`` dump of the live database
   (no dump, no restore); then the live database is renamed ``<db>_before_restore`` (the previous one of that name
-  dropped) and the checked scratch database takes its name. Nothing is overwritten in place.
+  dropped) and the checked scratch database takes its name. Nothing is overwritten in place. ``backup.lock`` is held
+  from the drill through the confirmation, the pre-restore dump and the switch, so no other drill or backup can
+  touch the scratch database while the owner reads the report.
 
 ``pg_dump`` and ``pg_restore`` come from the embedded PostgreSQL (``pgserver``'s ``pginstall/bin``, the same
 version as the server), else from ``PATH`` (a ``DESK_STORE_URL`` server).
@@ -179,6 +187,58 @@ def find(settings: Settings, which: str | None) -> Path:
     return p
 
 
+def in_user_profile(folder: Path | str, env: Any = None) -> bool | None:
+    """Windows: whether ``folder`` lies inside the user's profile (``USERPROFILE``, ``LOCALAPPDATA``), whose access list
+    lets only this user (and administrators) read it; None when the profile is unknown. Pure path arithmetic
+    (``ntpath``), so it runs on any OS."""
+    import ntpath
+
+    env = os.environ if env is None else env
+    target = ntpath.normcase(ntpath.abspath(str(folder))) if ntpath.isabs(str(folder)) else None
+    roots = [ntpath.normcase(ntpath.abspath(r)) for r in (env.get("USERPROFILE"), env.get("LOCALAPPDATA")) if r]
+    if target is None or not roots:
+        return None
+    for root in roots:
+        try:
+            if ntpath.commonpath([target, root]) == root:
+                return True
+        except ValueError:  # another drive or a share
+            continue
+    return False
+
+
+def dir_private(folder: Path) -> bool | None:
+    """Whether only this user reads the backup folder: Windows, inside the profile (``in_user_profile``); POSIX,
+    the folder's mode gives group and others nothing (None while it does not exist yet: it is created 0700)."""
+    if os.name == "nt":
+        return in_user_profile(folder)
+    try:
+        return Path(folder).stat().st_mode & 0o077 == 0
+    except OSError:
+        return None
+
+
+def _private_dir(folder: Path) -> None:
+    """Create the backup folder; on POSIX mode 0700 (also tightened when it exists and is ours to change)."""
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if os.name != "nt":
+        try:
+            os.chmod(folder, 0o700)
+        except OSError:  # a folder of another owner (a mounted share): the files are 0600 all the same
+            log.warning("backup folder mode not changed: %s", folder)
+
+
+def _private_file(path: Path) -> None:
+    """An empty file, mode 0600 on POSIX, created before a tool writes into it (pg_dump truncates and keeps the
+    mode), so the data is never readable by others, not even for a moment."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        if os.name != "nt":
+            os.fchmod(fd, 0o600)
+    finally:
+        os.close(fd)
+
+
 def same_disk(a: Path, b: Path) -> bool | None:
     """Whether two folders are on one disk (None: unknown). A network share (``\\\\server\\share``) is another disk."""
     def existing(p: Path) -> Path | None:
@@ -309,15 +369,16 @@ def hold_serve_lock(home: Path) -> bool:
 
 
 def create(settings: Settings, url: str | None = None, kind: str = "manual", *, now: datetime | None = None,
-           folder: Path | None = None, prune_after: bool = True) -> Backup:
+           folder: Path | None = None, prune_after: bool = True, held: Any = None) -> Backup:
     """One backup of the store's database into ``folder`` (default ``backup_dir``); retention after it.
-    BackupError when another backup runs or any step fails (nothing half-written is left)."""
+    BackupError when another backup runs or any step fails (nothing half-written is left). ``held``: the
+    ``backup.lock`` the caller already holds (a restore); it is neither taken nor released here."""
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {KINDS}")
     url = url or store.resolve_url(settings)
     folder = Path(folder or backup_dir(settings))
-    lock = _lock(settings.home)
-    if not lock.acquire():
+    lock = held or _lock(settings.home)
+    if held is None and not lock.acquire():
         raise BackupError("another backup is running")
     t0 = time.monotonic()
     try:
@@ -327,7 +388,8 @@ def create(settings: Settings, url: str | None = None, kind: str = "manual", *, 
                                         "error": str(e)})
         raise
     finally:
-        lock.release()
+        if held is None:
+            lock.release()
     removed = prune(folder, settings.backup_keep) if prune_after else []
     _record(settings.home, "last", {"at": datetime.now().isoformat(timespec="seconds"), "ok": True, "kind": kind,
                                     "file": b.name, "size": b.size, "seconds": round(time.monotonic() - t0, 1),
@@ -338,7 +400,7 @@ def create(settings: Settings, url: str | None = None, kind: str = "manual", *, 
 
 def _dump(url: str, folder: Path, kind: str, now: datetime) -> Backup:
     try:
-        folder.mkdir(parents=True, exist_ok=True)
+        _private_dir(folder)
     except OSError as e:
         raise BackupError(f"cannot create the backup folder {folder}: {e}") from None
     name = f"desk-{now:%Y%m%d-%H%M%S}-{kind}.dump"
@@ -348,6 +410,10 @@ def _dump(url: str, folder: Path, kind: str, now: datetime) -> Backup:
         final = folder / f"desk-{(now + timedelta(seconds=n)):%Y%m%d-%H%M%S}-{kind}.dump"
         n += 1
     partial = final.with_name(final.name + ".partial")
+    try:
+        _private_file(partial)
+    except OSError as e:
+        raise BackupError(f"cannot write {partial}: {e}") from None
     try:
         with psycopg.connect(url) as con:  # a transaction held open: the snapshot pg_dump dumps
             con.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
@@ -371,7 +437,7 @@ def _dump(url: str, folder: Path, kind: str, now: datetime) -> Backup:
         meta = {"format": 1, "kind": kind, "created": now.isoformat(timespec="seconds"), "database": db_name(url),
                 "version": _version(), "schema": schema[-1] if schema else None, "migrations": schema,
                 "tables": counts, "entries": entries, "size": partial.stat().st_size, "sha256": _sha256(partial)}
-        atomic_write_text(_meta_path(final), json.dumps(meta, ensure_ascii=False, indent=1) + "\n")
+        atomic_write_text(_meta_path(final), json.dumps(meta, ensure_ascii=False, indent=1) + "\n", private=True)
         os.replace(partial, final)
     except (BackupError, OSError) as e:
         partial.unlink(missing_ok=True)
@@ -529,10 +595,12 @@ def other_sessions(url: str) -> int:
 
 
 def restore_check(settings: Settings, url: str | None, dump: Path, *, keep_scratch: bool = False,
-                  out: Callable[[str], None] | None = None) -> dict[str, Any]:
+                  out: Callable[[str], None] | None = None, held: Any = None) -> dict[str, Any]:
     """The restore drill: ``dump`` restored into ``<db>_restore_check`` and checked (see the module doc). Returns a
-    report; ``ok`` False lists the ``problems``. The scratch database is dropped unless ``keep_scratch``.
-    BackupError when the drill cannot run at all (no tools, the server unreachable, another drill running)."""
+    report; ``ok`` False lists the ``problems``. The scratch database is dropped unless ``keep_scratch``, before
+    ``backup.lock`` is released. ``held``: the ``backup.lock`` the caller holds and keeps holding (a restore, which
+    goes on with the scratch database). BackupError when the drill cannot run at all (no tools, the server
+    unreachable, another drill running)."""
     say = out or (lambda _line: None)
     url = url or store.resolve_url(settings)
     dump = Path(dump)
@@ -543,12 +611,13 @@ def restore_check(settings: Settings, url: str | None, dump: Path, *, keep_scrat
                               "scratch": scratch, "started": datetime.now().isoformat(timespec="seconds"),
                               "problems": [], "warnings": [], "tables": {}, "meta": bool(meta)}
     problems, warnings = report["problems"], report["warnings"]
-    lock = _lock(settings.home)
-    if not lock.acquire():
+    lock = held or _lock(settings.home)
+    if held is None and not lock.acquire():
         raise BackupError("a backup or another restore check is running")
     t0 = time.monotonic()
     if not dump.is_file():
-        lock.release()
+        if held is None:
+            lock.release()
         raise BackupError(f"backup file not found: {dump}")
     try:
         if meta.get("sha256"):
@@ -602,13 +671,16 @@ def restore_check(settings: Settings, url: str | None, dump: Path, *, keep_scrat
     except BackupError as e:  # a damaged archive, a failed step: the drill's finding, not a crash
         problems.append(str(e))
     finally:
-        lock.release()
-        if not keep_scratch:
-            try:
-                with _admin(url) as con:
-                    _drop(con, scratch)
-            except psycopg.Error:
-                log.warning("scratch database %s not dropped", scratch, exc_info=True)
+        try:
+            if not keep_scratch:
+                try:
+                    with _admin(url) as con:
+                        _drop(con, scratch)
+                except psycopg.Error:
+                    log.warning("scratch database %s not dropped", scratch, exc_info=True)
+        finally:
+            if held is None:
+                lock.release()
     report["ok"] = not problems
     report["seconds"] = round(time.monotonic() - t0, 1)
     if meta.get("created"):
@@ -636,7 +708,13 @@ def restore_replace(settings: Settings, url: str | None, dump: Path, *, confirm:
         if not cycle.acquire():
             raise BackupError("an autopilot cycle is running (desk cycle, update_daily.bat): wait for it to end")
         try:
-            return _replace(settings, url, dump, confirm=confirm, actor=actor, out=out)
+            backups = _lock(settings.home)  # held through the drill, the confirmation, the dump and the switch
+            if not backups.acquire():
+                raise BackupError("a backup or a restore check is running: wait for it to end, then run this again")
+            try:
+                return _replace(settings, url, dump, confirm=confirm, actor=actor, out=out, held=backups)
+            finally:
+                backups.release()
         finally:
             cycle.release()
     finally:
@@ -644,14 +722,16 @@ def restore_replace(settings: Settings, url: str | None, dump: Path, *, confirm:
 
 
 def _replace(settings: Settings, url: str, dump: Path, *, confirm: Callable[[dict[str, Any]], bool], actor: str,
-             out: Callable[[str], None] | None) -> dict[str, Any]:
+             out: Callable[[str], None] | None, held: Any) -> dict[str, Any]:
+    """The restore itself, ``held`` (``backup.lock``) taken by the caller: nobody else drops or refills the scratch
+    database between the drill and the switch, the owner's confirmation included."""
     say = out or (lambda _line: None)
     live = db_name(url)
     scratch, previous = live + SCRATCH_SUFFIX, live + PREVIOUS_SUFFIX
     if n := other_sessions(url):
         raise BackupError(f"{n} other connection(s) to the database {live}: stop the server first (stop.bat), "
                           "then run this again")
-    report = restore_check(settings, url, dump, keep_scratch=True, out=out)
+    report = restore_check(settings, url, dump, keep_scratch=True, out=out, held=held)
     try:
         if not report["ok"]:
             raise BackupError("the restore check failed, the live data is unchanged: " + "; ".join(report["problems"]))
@@ -663,7 +743,7 @@ def _replace(settings: Settings, url: str, dump: Path, *, confirm: Callable[[dic
         if not confirm(report):
             raise BackupError("not confirmed: the live data is unchanged")
         say("pre-restore backup of the live database ...")
-        pre = create(settings, url, "pre-restore", prune_after=False)
+        pre = create(settings, url, "pre-restore", prune_after=False, held=held)
         report["pre_restore"] = str(pre.path)
         if n := other_sessions(url):
             raise BackupError(f"{n} connection(s) to {live} opened meanwhile: stop the server (stop.bat) and run "
@@ -721,6 +801,7 @@ def status(settings: Settings, job: dict[str, Any] | None = None, now: datetime 
         tools_ok, tools_error = False, str(e)
     return {"enabled": settings.backup, "time": settings.backup_time, "keep": settings.backup_keep,
             "dir": str(folder), "dir_set": settings.backup_dir is not None, "same_disk": disk,
+            "dir_private": dir_private(folder),
             "store": "external" if settings.store_url else "embedded", "tools": tools_ok, "tools_error": tools_error,
             "next_at": (n.isoformat(timespec="seconds") if (n := next_at(settings, now)) else None),
             "newest_age_hours": age_h, "stale": settings.backup and (age_h is None or age_h > 26),
@@ -734,7 +815,8 @@ def diagnostics(settings: Settings, now: datetime | None = None) -> dict[str, An
     st = status(settings, now=now)
     last, check = st["last"] or {}, st["last_check"] or {}
     return {"enabled": st["enabled"], "time": st["time"], "keep": st["keep"], "dir_set": st["dir_set"],
-            "same_disk": st["same_disk"], "tools": st["tools"], "count": len(st["backups"]),
+            "same_disk": st["same_disk"], "dir_private": st["dir_private"], "tools": st["tools"],
+            "count": len(st["backups"]),
             "total_mb": round(st["total_size"] / 1e6, 1), "newest_age_hours": st["newest_age_hours"],
             "stale": st["stale"], "last_ok": last.get("ok"), "last_at": last.get("at"),
             "last_error": (last.get("error") or "")[:200] or None, "last_check_ok": check.get("ok"),

@@ -55,6 +55,7 @@
     root.innerHTML =
       '<div class="note err" id="bk-err" hidden></div>' +
       '<div class="note warn" id="bk-disk" hidden></div>' +
+      '<div class="note warn" id="bk-priv" hidden></div>' +
       '<div class="card"><div class="hd"><h2>Расписание</h2><span class="mut3" id="bk-next"></span></div>' +
       '<div class="bd form">' +
       '<label for="bk-on">Ежедневная копия</label><div><label class="tgl"><input type="checkbox" id="bk-on"><span class="tgl-s"></span><span id="bk-on-l"></span></label>' +
@@ -62,7 +63,7 @@
       'Если в это время компьютер был выключен — копия будет сделана сразу при следующем запуске.</p></div>' +
       '<label for="bk-time">Время</label><div><input class="inp mono" id="bk-time" type="time" style="width:130px"><p class="hint">Пусто — 20:30, время этого компьютера.</p></div>' +
       '<label for="bk-keep">Хранить копий</label><div><input class="inp mono num" id="bk-keep" inputmode="numeric" placeholder="14"><p class="hint">Пусто — 14 последних (ежедневные и сделанные вручную); старые удаляются после каждой новой. Копии «перед восстановлением» — отдельно, 3 последние.</p></div>' +
-      '<label for="bk-dir">Папка</label><div><input class="inp mono" id="bk-dir" autocomplete="off" placeholder=""><p class="hint">Лучше на другом диске или в сетевой папке: если откажет диск с базой, копия на нём же пропадёт вместе с ней. Пусто — папка backups в папке данных.</p></div>' +
+      '<label for="bk-dir">Папка</label><div><input class="inp mono" id="bk-dir" autocomplete="off" placeholder=""><p class="hint">Лучше на другом диске или в сетевой папке: если откажет диск с базой, копия на нём же пропадёт вместе с ней. В копиях позиции: папка должна быть доступна только вам — новая папка в корне диска (D:\\DeskBackup) или сетевая папка обычно открыта всем пользователям компьютера, проверьте её «Свойства → Безопасность». Пусто — папка backups в папке данных (доступна только вам).</p></div>' +
       '<span></span><div class="bk-row"><button class="btn" id="bk-save" type="button">Сохранить расписание</button><span id="bk-save-msg" class="muted"></span></div>' +
       '</div></div>' +
       '<div class="card"><div class="hd"><h2>Копии</h2><span class="mut3" id="bk-sum"></span><span class="sp"></span>' +
@@ -128,6 +129,11 @@
     $('bk-disk').hidden = !s.same_disk;
     $('bk-disk').textContent = s.same_disk ? 'Копии лежат на том же диске, что и база: если диск откажет, пропадут и данные, и копии. ' +
       'Укажите в «Папке» другой диск (например D:\\DeskBackup) или сетевую папку.' : '';
+    var open = s.dir_private === false;  // Windows: outside the user's profile; POSIX: the folder is readable by others
+    $('bk-priv').hidden = !open;
+    $('bk-priv').textContent = open ? 'В копиях позиции и данные прогонов, а папку копий, похоже, могут читать и другие пользователи ' +
+      'этого компьютера или сетевой папки. Выберите папку, которую читаете только вы (свойства папки → «Безопасность»), ' +
+      'или оставьте поле «Папка» пустым: папка backups в папке данных доступна только вам.' : '';
     $('bk-next').textContent = s.enabled ? (s.next_at ? 'следующая: ' + when(s.next_at) : '') : 'выключено';
     var on = $('bk-on'); if (document.activeElement !== on && !S.dirty) { on.checked = s.enabled; $('bk-on-l').textContent = s.enabled ? 'включена' : 'выключена'; }
     $('bk-dir').placeholder = s.dir_set ? '' : s.dir;

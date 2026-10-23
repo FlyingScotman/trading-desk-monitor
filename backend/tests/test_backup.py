@@ -97,6 +97,48 @@ def test_one_backup_at_a_time(store_url, tmp_path):
         lock.release()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX modes")
+def test_backups_are_readable_by_the_owner_only(store_url, tmp_path, monkeypatch):
+    """The folder 0700, the dump, its .partial (before pg_dump writes a byte) and the .json 0600, whatever the
+    umask would give (PR #142 review)."""
+    _fill(store_url)
+    s = _settings(tmp_path)
+    seen = {}
+    real_run = backup._run
+
+    def run(cmd, **kw):
+        if Path(cmd[0]).stem == "pg_dump":
+            partial = Path(next(a for a in cmd if a.startswith("--file="))[len("--file="):])
+            seen["partial"] = partial.stat().st_mode & 0o777
+        return real_run(cmd, **kw)
+
+    monkeypatch.setattr(backup, "_run", run)
+    old = os.umask(0o022)
+    try:
+        b = backup.create(s, store_url)
+    finally:
+        os.umask(old)
+    assert seen["partial"] == 0o600
+    assert s.backup_dir.stat().st_mode & 0o777 == 0o700
+    assert b.path.stat().st_mode & 0o777 == 0o600
+    assert b.path.with_suffix(".json").stat().st_mode & 0o777 == 0o600
+    assert backup.status(s)["dir_private"] is True and backup.diagnostics(s)["dir_private"] is True
+    s.backup_dir.chmod(0o755)  # an existing folder others can read is tightened by the next backup
+    assert backup.dir_private(s.backup_dir) is False
+    backup.create(s, store_url)
+    assert s.backup_dir.stat().st_mode & 0o777 == 0o700
+
+
+def test_windows_folder_inside_the_profile_counts_as_private():
+    env = {"USERPROFILE": r"C:\Users\trader", "LOCALAPPDATA": r"C:\Users\trader\AppData\Local"}
+    assert backup.in_user_profile(r"C:\Users\trader\AppData\Local\DeskMonitor\backups", env) is True
+    assert backup.in_user_profile(r"c:\users\TRADER\Documents\copies", env) is True
+    assert backup.in_user_profile(r"C:\Users\trader2\backups", env) is False
+    assert backup.in_user_profile(r"D:\DeskBackup", env) is False
+    assert backup.in_user_profile(r"\\server\share\desk", env) is False
+    assert backup.in_user_profile(r"D:\DeskBackup", {}) is None
+
+
 def test_retention_keeps_the_newest_and_the_pre_restore_dumps_apart(tmp_path):
     folder = tmp_path / "b"
     folder.mkdir()
@@ -284,6 +326,65 @@ def test_restore_replace_changes_nothing_unconfirmed_or_with_the_server_running(
         with pytest.raises(backup.BackupError, match="stop the server first"):
             backup.restore_replace(s, store_url, b.path, confirm=lambda r: pytest.fail("asked"))
     assert _count(store_url, "audit_log") == 5
+
+
+def test_restore_replace_holds_the_backup_lock_while_it_waits_for_the_confirmation(store_url, tmp_path):
+    """While the owner reads the report, no other drill can drop or refill the scratch database and no backup can
+    start; after the confirmation the copy that was checked becomes live (PR #142 review)."""
+    _fill(store_url)
+    s = _settings(tmp_path)
+    b = backup.create(s, store_url, now=datetime(2026, 10, 23, 9, 0, 0))
+    _fill(store_url, 2, start=10)
+    other = backup.create(s, store_url, now=datetime(2026, 10, 23, 10, 0, 0))  # 5 positions, the wrong copy
+    scratch = backup.db_name(store_url) + backup.SCRATCH_SUFFIX
+    during = {}
+
+    def confirm(report):
+        during["scratch"] = scratch in _dbs(store_url)
+        with pytest.raises(backup.BackupError, match="another restore check is running"):
+            backup.restore_check(s, store_url, other.path)  # the race of the review: refused, scratch untouched
+        with pytest.raises(backup.BackupError, match="another backup is running"):
+            backup.create(s, store_url)
+        during["lock_free"] = backup._lock(s.home).acquire()
+        return True
+
+    rep = backup.restore_replace(s, store_url, b.path, confirm=confirm)
+    assert during == {"scratch": True, "lock_free": False}
+    assert rep["ok"] and _count(store_url, "position_input") == 3  # the confirmed copy, not the other one
+    lock = backup._lock(s.home)
+    assert lock.acquire()  # released afterwards
+    lock.release()
+    # a refusal releases it too
+    with pytest.raises(backup.BackupError, match="not confirmed"):
+        backup.restore_replace(s, store_url, b.path, confirm=lambda r: False)
+    assert lock.acquire()
+    lock.release()
+    # a backup or a drill already running: the restore is refused before it asks
+    assert lock.acquire()
+    try:
+        with pytest.raises(backup.BackupError, match="a backup or a restore check is running"):
+            backup.restore_replace(s, store_url, b.path, confirm=lambda r: pytest.fail("asked"))
+    finally:
+        lock.release()
+
+
+def test_restore_check_drops_the_scratch_database_before_releasing_the_lock(store_url, tmp_path, monkeypatch):
+    s = _settings(tmp_path)
+    b = backup.create(s, store_url)
+    real_drop = backup._drop
+    held = []
+
+    def drop(con, name):
+        probe = backup._lock(s.home)
+        free = probe.acquire()
+        if free:
+            probe.release()
+        held.append(not free)
+        real_drop(con, name)
+
+    monkeypatch.setattr(backup, "_drop", drop)
+    assert backup.restore_check(s, store_url, b.path)["ok"]
+    assert held and all(held)  # every drop, the last one included, ran under backup.lock
 
 
 def test_restore_replace_refuses_a_failed_check(store_url, tmp_path):
