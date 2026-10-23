@@ -797,6 +797,10 @@ export interface components {
             status: "ok" | "skipped" | "error";
             /** Detail */
             detail: string;
+            /** Reason */
+            reason?: string | null;
+            /** Failed Dates */
+            failed_dates?: string[] | null;
             /** At */
             at: string;
         };
