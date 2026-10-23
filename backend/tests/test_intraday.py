@@ -309,9 +309,76 @@ def test_failed_sync_of_an_old_date_does_not_block_todays_intraday_run(stub, tmp
     stub.rows = [r for r in stub.rows if r["snapshot_id"] != old]
     fixed = publish(stub, date(2026, 10, 14), "eod_final", "2026-10-15T05:00:00Z", -1)
     assert fixed == old
+    ap._now = lambda: at(FRI, 10, 17)  # after the failed date's 10-minute wait (#146)
     st = ap.run_cycle()  # the date failed last cycle: asked again, and the failure is forgotten
     assert steps(st)["sync"][0] == "ok" and "failed" not in steps(st)["sync"][1]
-    assert ap.diagnostics()["hub_failed_dates"] == {}
+    assert "2026-10-14" in SnapshotDir(tmp_path / "cache").market_dates()
+    assert ap.diagnostics()["hub_failed_dates"] == {} and ap.diagnostics()["hub_problem_dates"] == {}
+
+
+def test_permanently_broken_dates_back_off_and_do_not_hold_up_the_other_dates(stub, tmp_path, store_url):
+    """#146: two hub dates whose snapshots never verify do not take the ``MAX_DATE_FAILURES`` limit in every cycle:
+    after failing they wait for a retry that grows with the attempts, the other dates load in the next cycle and
+    the history step runs; the broken dates are retried after their wait, listed with their attempts and the
+    time of their next attempt, and load once the hub fixes them."""
+    s = cfg(tmp_path, store_url, stub)
+    put(tmp_path, "positions_20261016.csv")
+    bad = {}
+    for d, step in ((date(2026, 10, 14), -1), (date(2026, 10, 13), -2)):  # the two newest dates not cached yet
+        bad[d.isoformat()] = publish(stub, d, "eod_final", f"{d}T05:00:00Z", step)
+        stub.bundles[bad[d.isoformat()]] = gzip.compress(b"not the snapshot")
+    good = [date(2026, 10, 12), date(2026, 10, 9)]  # older than the broken ones: asked after them
+    for d, step in zip(good, (-3, -4), strict=True):
+        publish(stub, d, "eod_final", f"{d}T05:00:00Z", step)
+    clock = {"t": at(FRI, 9, 0)}
+    ap = Autopilot(settings_loader=lambda: s, now=lambda: clock["t"])
+    by = steps(ap.run_cycle())  # 15.10, then the two broken dates take the limit: the good ones next cycle
+    assert by["sync"][0] == "error" and "2 next cycle" in by["sync"][1], by["sync"]
+    assert by["eod"] == ("ok", "2026-10-15 run 1 (no default run)")
+
+    def cached() -> set[str]:
+        return set(SnapshotDir(tmp_path / "cache").market_dates())
+
+    clock["t"] = at(FRI, 9, 1)
+    st = ap.run_cycle()  # the broken dates wait for their retry: the good dates load, the history step runs
+    by = steps(st)
+    assert {d.isoformat() for d in good} <= cached(), by["sync"]
+    assert by["sync"][0] == "ok" and "next cycle" not in by["sync"][1], by["sync"]
+    assert by["history"][0] != "skipped", by["history"]
+    sync = next(x for x in st["steps"] if x["name"] == "sync")
+    assert sync["failed_dates"] == []
+    assert [(p["date"], p["attempts"], p["next_attempt"]) for p in sync["problem_dates"]] == [
+        ("2026-10-13", 1, "2026-10-16T09:10:00+03:00"), ("2026-10-14", 1, "2026-10-16T09:10:00+03:00")]
+    assert all(p["error"].startswith("SnapshotError: ") for p in sync["problem_dates"])
+    diag = ap.diagnostics()["hub_problem_dates"]
+    assert list(diag) == ["2026-10-13", "2026-10-14"] and diag["2026-10-14"]["attempts"] == 1
+
+    stub.requests.clear()
+    clock["t"] = at(FRI, 9, 9)
+    ap.run_cycle()  # still waiting: the hub is not asked for them
+    assert not any(f"/{sid}/bundle" in r for r in stub.requests for sid in bad.values())
+
+    clock["t"] = at(FRI, 9, 11)
+    st = ap.run_cycle()  # retried after 10 minutes, still broken: the next wait is 30 minutes
+    sync = next(x for x in st["steps"] if x["name"] == "sync")
+    assert sync["status"] == "error" and sync["failed_dates"] == ["2026-10-13", "2026-10-14"]
+    assert [(p["attempts"], p["next_attempt"]) for p in sync["problem_dates"]] == [
+        (2, "2026-10-16T09:41:00+03:00")] * 2
+
+    old = bad["2026-10-14"]  # the hub fixes 14.10
+    stub.bundles[old] = body(cut_doc(date(2026, 10, 14), "eod_final", "2026-10-14T05:00:00Z", -1))[1]
+    clock["t"] = at(FRI, 9, 42)
+    st = ap.run_cycle()
+    sync = next(x for x in st["steps"] if x["name"] == "sync")
+    assert "2026-10-14" in cached() and sync["failed_dates"] == ["2026-10-13"]
+    assert [(p["date"], p["attempts"], p["next_attempt"]) for p in sync["problem_dates"]] == [
+        ("2026-10-13", 3, "2026-10-16T11:42:00+03:00")]
+    assert list(ap.diagnostics()["hub_problem_dates"]) == ["2026-10-13"]
+    app = create_app(store_url)
+    app.state.autopilot = ap
+    api = {x["name"]: x for x in TestClient(app).get("/api/v1/autopilot/status").json()["steps"]}
+    assert [p["date"] for p in api["sync"]["problem_dates"]] == ["2026-10-13"]
+    assert api["eod"]["problem_dates"] is None
 
 
 def test_intraday_waits_for_the_hub_with_a_reason(stub, tmp_path, store_url):
