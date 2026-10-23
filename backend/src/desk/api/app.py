@@ -701,6 +701,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     from .daystatus_routes import public as daystatus_router  # /api/v1/inbox, /inbox/days, /events (S7b, #25)
     from .diagnostics_routes import router as diagnostics_router
     from .market_history import router as market_history_router  # /api/v1/history/market, /status (R24)
+    from .server_routes import router as server_router  # /api/v1/server: restart, network (settings page)
     from .settings_routes import router as settings_router  # here: it imports ApiError from this module
     from .update_routes import router as update_router
     from .updater_routes import router as updater_router  # GitHub Releases (desk.updater)
@@ -709,6 +710,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     app.include_router(update_router, include_in_schema=False)
     app.include_router(updater_router, include_in_schema=False)
     app.include_router(diagnostics_router, include_in_schema=False)
+    app.include_router(server_router, include_in_schema=False)
     app.include_router(daystatus_router, include_in_schema=False)
     app.include_router(market_history_router, include_in_schema=False)
     app.include_router(autopilot_router)
@@ -827,9 +829,9 @@ def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir:
     asked: list[bool] = []
 
     def exit_for_restart() -> None:
-        time.sleep(0.5)  # the install response reaches the page first
+        time.sleep(0.5)  # the install (or restart) response reaches the page first
         if autopilot is not None:
-            log.info("restart for an update: waiting for the autopilot's cycle to end")
+            log.info("restart: waiting for the autopilot's cycle to end")
             autopilot.stop(timeout=300)
         server.should_exit = True
 

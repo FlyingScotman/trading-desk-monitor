@@ -1,6 +1,6 @@
 /*
- * Раздел «Пользователи» (пакет 1, п. 9): список, добавление, роль, отключение, сброс пароля, снятие блокировки и
- * журнал действий. Самостоятельный: свой стиль, свои запросы (/api/v1/users, /api/v1/audit, только администратор;
+ * Раздел «Пользователи» (пакет 1, п. 9): список, добавление, роль, отключение, удаление, сброс пароля, снятие блокировки
+ * и журнал действий. Самостоятельный: свой стиль, свои запросы (/api/v1/users, /api/v1/audit, только администратор;
  * при выключенном входе — только с этого компьютера), CSRF-заголовок ставит сам.
  *
  * Где показывать: любой элемент с атрибутом data-desk-users (раздел встаёт в него при загрузке), например
@@ -15,7 +15,8 @@
   var ROLE_HINT = { viewer: 'видит все страницы', trader: '+ точные сценарии, «Обновить» автопилота, алиасы', admin: '+ настройки, адаптер, обновления, пользователи' };
   var ACT = { login: 'вход', login_failed: 'неудачный вход', logout: 'выход', user_add: 'новый пользователь', user_change: 'изменён пользователь',
     password_reset: 'сброс пароля', password_change: 'смена пароля', settings: 'настройки', adapter: 'адаптер', update: 'обновление',
-    alias: 'алиас', scenario_job: 'точный сценарий', autopilot_run: 'цикл автопилота' };
+    alias: 'алиас', scenario_job: 'точный сценарий', autopilot_run: 'цикл автопилота', user_delete: 'удалён пользователь',
+    server_restart: 'перезапуск сервера', network_change: 'доступ из сети' };
 
   var css = '.du{font:13px/1.4 var(--font-ui,var(--font-sans,system-ui,-apple-system,"Segoe UI",sans-serif));color:var(--fg,var(--text,#1b2129))}' +
     '.du h2{font-size:15px;margin:0 0 6px}.du h3{font-size:13px;margin:16px 0 6px}' +
@@ -128,6 +129,14 @@
         });
         a.appendChild(tog);
       }
+      if (u.username !== me) {
+        var del = el('button', { type: 'button', title: 'Удалить учётную запись совсем (в журнале действий имя останется). Чтобы только запретить вход — «Отключить».' }, 'Удалить');
+        del.addEventListener('click', function () {
+          if (!confirm('Удалить пользователя ' + u.username + ' совсем?\nЕго сеансы закроются, вернуть учётную запись нельзя (можно завести заново). Чтобы только запретить вход, нажмите «Отключить».')) return;
+          act('DELETE', '/api/v1/users/' + encodeURIComponent(u.username), null, u.username + ': удалён');
+        });
+        a.appendChild(del);
+      }
       if (u.locked) {
         var un = el('button', { type: 'button' }, 'Снять блокировку');
         un.addEventListener('click', function () { act('PATCH', '/api/v1/users/' + encodeURIComponent(u.username), { unlock: true }, u.username + ': блокировка снята'); });
@@ -140,7 +149,7 @@
       return Promise.all([api('GET', '/api/v1/users'), api('GET', '/api/v1/auth/state').catch(function () { return null; })]).then(function (r) {
         var j = r[0], st = r[1] || {}, me = st.user && st.user.username;
         note.textContent = st.enabled ? 'Вход по паролю включён: коллеги входят под своими именами. Пароли хранятся только в виде хэша (Argon2id).'
-          : 'Вход по паролю выключен: Desk Monitor открыт только на этом компьютере. Заведите администратора и пользователей здесь, затем включите вход: desk.bat lan enable --self-signed и перезапуск (START_HERE.txt, «Доступ коллегам по сети»).';
+          : 'Вход по паролю выключен: Desk Monitor открыт только на этом компьютере. Заведите администратора и пользователей здесь, затем включите доступ в разделе «Доступ из сети» (Настройки → «Доступ из сети» → «Применить и перезапустить»).';
         list.innerHTML = '';
         if (!j.users.length) { list.appendChild(el('p', { 'class': 'du-note' }, 'Пользователей пока нет.')); return; }
         var t = el('table'), hd = el('tr');
