@@ -100,7 +100,7 @@ def test_a_release_document_cannot_point_the_server_elsewhere():
         doc["assets"][0]["browser_download_url"] = url
         with pytest.raises(release.ReleaseError):
             release.from_api(doc, REPO_NAME)
-    with pytest.raises(release.ReleaseError, match="нет архива"):
+    with pytest.raises(release.EmptyReleaseError, match="без файлов обновления"):
         release.from_api(api_doc({"notes.txt": b"x"}), REPO_NAME)
     with pytest.raises(release.ReleaseError, match="черновик"):
         release.from_api({**api_doc({name: b"z"}), "prerelease": True}, REPO_NAME)
@@ -351,6 +351,71 @@ def test_check_falls_back_to_the_api_and_reports_no_release(bundle_env, monkeypa
     assert service.check(st)["ok"] and service.status(st, True, None)["no_release"]
 
 
+def test_an_empty_latest_release_is_explained_and_the_previous_one_offered(bundle_env, monkeypatch):
+    """A release made by hand on GitHub (tag ``0.2.2`` without ``v``: the workflow never ran) has no files: the
+    check says so and offers the newest earlier release that has them; with none, it says that too."""
+    z, name = bundle_env["zip"], bundle_env["name"]
+    empty = {"tag_name": "0.2.2", "draft": False, "prerelease": False, "body": "", "assets": []}
+    good = api_doc({name: z, "SHA256SUMS": b"s"})
+    files = {release.api_latest_url(REPO_NAME): json.dumps(empty).encode(),
+             release.api_list_url(REPO_NAME): json.dumps([empty, good]).encode(),
+             gh("SHA256SUMS"): f"{sha(z)}  {name}\n".encode(), gh(name): z}
+    fake = FakeNet(monkeypatch, files, {})
+    st = load()
+    chk = service.check(st)
+    assert chk["ok"] and chk["found"] == TAG and (gh("SHA256SUMS")) in [u for _, u in fake.calls]
+    assert any("0.2.2 без файлов обновления" in n and TAG in n for n in chk["notes"]), chk["notes"]
+    s = service.status(st, True, None)
+    assert s["release"]["tag"] == TAG and s["update_available"] and s["choice"]["asset"]["url"] == gh(name)
+    assert [x["tag"] for x in s["release"]["skipped"]] == ["0.2.2"]
+    assert "без «v»" in s["release"]["skipped"][0]["reason"]
+    app, asked = _app()  # and it installs from that earlier release
+    c = client_for(app)
+    assert c.post("/api/v1/update/remote/install", json={}).status_code == 202
+    assert _wait(c)["state"] == "restarting" and asked
+
+    files[release.api_list_url(REPO_NAME)] = json.dumps([empty]).encode()  # nothing earlier with files
+    FakeNet(monkeypatch, files, {})
+    chk = service.check(st)
+    assert not chk["ok"] and chk["error"]["code"] == "release"
+    assert "Последний релиз 0.2.2 без файлов обновления" in chk["error"]["message"]
+    assert "Более раннего релиза" in chk["error"]["message"]
+
+
+def test_first_usable_skips_only_releases_without_files():
+    z = b"zip"
+    name = f"DeskMonitor-{NEW}.zip"
+    empty_v = {"tag_name": "v0.2.5", "draft": False, "prerelease": False, "assets": [
+        {"name": "notes.txt", "size": 3, "browser_download_url": gh("notes.txt", "v0.2.5")}]}
+    draft = {**api_doc({name: z}, tag="v0.3.0"), "draft": True}
+    pre = {**api_doc({name: z}, tag="v0.2.9"), "prerelease": True}
+    good = api_doc({name: z})
+    rel, skipped = release.first_usable([draft, pre, empty_v, good], REPO_NAME)
+    assert rel is not None and rel.tag == TAG and rel.skipped == skipped and [x["tag"] for x in skipped] == ["v0.2.5"]
+    assert "выпуск по тегу ещё идёт или не удался" in skipped[0]["reason"]
+    assert release.from_public(rel.public()).skipped == skipped  # kept in the state file
+    assert release.first_usable([pre], REPO_NAME) == (None, [])
+    bad = api_doc({name: z}, tag="v0.2.6", body=f"{'0' * 64}  {name}")  # its checksums disagree: never skipped
+    with pytest.raises(release.ReleaseError, match="не совпадают"):
+        release.first_usable([empty_v, bad, good], REPO_NAME)
+    with pytest.raises(release.ReleaseError):
+        release.first_usable({"message": "Not Found"}, REPO_NAME)
+
+
+def test_the_browser_posts_the_release_list(bundle_env):
+    z, name = bundle_env["zip"], bundle_env["name"]
+    empty = {"tag_name": "0.2.2", "draft": False, "prerelease": False, "assets": []}
+    c = client_for(_app()[0])
+    s = c.post("/api/v1/update/remote/browser-release", json={"releases": [empty, api_doc({name: z})]}).json()
+    assert s["release"]["tag"] == TAG and s["release"]["source"] == "browser" and s["update_available"]
+    assert s["release"]["skipped"][0]["tag"] == "0.2.2" and s["browser"]["ok"]
+    r = c.post("/api/v1/update/remote/browser-release", json={"releases": [empty]})
+    assert r.status_code == 422 and "без файлов обновления" in r.json()["message"]
+    pre = {**api_doc({name: z}), "prerelease": True}
+    s = c.post("/api/v1/update/remote/browser-release", json={"releases": [pre]}).json()
+    assert s["no_release"] and s["release"] is None
+
+
 def test_when_no_layer_works_the_browser_checks(bundle_env, monkeypatch):
     FakeNet(monkeypatch, {}, {"python": "proxy_auth", "curl": "proxy_auth", "powershell": "dns"})
     st = load()
@@ -592,6 +657,8 @@ def test_release_assets_checks_the_zips_and_writes_the_manifests(tmp_path):
     full_zip(stage, dist / f"DeskMonitor-{bundle_version}.zip")
     with pytest.raises(SystemExit, match="must be"):
         release_assets.check_tag("v9.9.9")
+    with pytest.raises(SystemExit, match="has no 'v'"):
+        release_assets.check_tag(version)
     doc = release_assets.write(dist, f"v{version}", REPO_NAME, "abc")
     assert doc["version"] == bundle_version and doc["assets"][0]["kind"] == "full" and not doc["adapter_included"]
     sums = (dist / "SHA256SUMS").read_text()

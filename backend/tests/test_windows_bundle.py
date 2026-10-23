@@ -8,6 +8,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import types
 import zipfile
 from datetime import UTC, datetime
@@ -409,6 +410,24 @@ def test_release_workflow_patches_from_the_published_release_and_the_delivered_r
     wf = (REPO / ".github/workflows/release.yml").read_text(encoding="utf-8")
     assert "gh release download" in wf and "SHA256SUMS" in wf and "sha256sum" in wf
     assert "--patch-from-delivered" in wf and "--patch-base" in wf
+
+
+def test_a_tag_without_v_fails_its_own_workflow_and_v_tags_are_left_to_the_release(tmp_path):
+    """Issue #75: a tag ``0.2.2`` (no ``v``) never ran release.yml and left an empty release; tag-format.yml fails on
+    such a tag (pushed, or a release made by hand) with what to do; release.yml still runs on v-tags only."""
+    wf = (REPO / ".github/workflows/tag-format.yml").read_text(encoding="utf-8")
+    assert 'tags: ["*", "!v*"]' in wf and "types: [published]" in wf
+    assert "!startsWith(github.event.release.tag_name, 'v')" in wf and "exit 1" in wf and "::error" in wf
+    rel = (REPO / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert 'tags: ["v*"]' in rel and "check-tag" in rel
+    script = wf.split("run: |\n", 1)[1]
+    script = "\n".join(ln[10:] for ln in script.splitlines())
+
+    summary = tmp_path / "summary.md"
+    r = subprocess.run(["bash", "-e", "-c", script], capture_output=True, text=True, check=False,
+                       env={**os.environ, "TAG": "0.2.2", "GITHUB_STEP_SUMMARY": str(summary)})
+    assert r.returncode == 1 and "::error title=Release tag without v::tag '0.2.2' has no 'v'" in r.stdout
+    assert "do not create releases by hand" in summary.read_text(encoding="utf-8")
 
 
 def test_a_patch_unpacked_by_hand_over_another_build_is_reported(monkeypatch, tmp_path):
