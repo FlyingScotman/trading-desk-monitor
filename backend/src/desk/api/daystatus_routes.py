@@ -1,12 +1,14 @@
 """Day status (S7b, issue #25; ``desk.daystatus``): the monitors' «Статус дня» screen.
 
 * ``GET /api/v1/inbox?on=YYYY-MM-DD``: the date's inputs, closes, files, rejections with their reasons, runs and what
-  superseded what, per book where the positions went (``inbox.scan.reconcile``), the date's events. Book ids and file
-  names: local only, like ``/api/v1/inbox/reconcile`` (this computer while sign-in is off, else an admin).
-* ``GET /api/v1/inbox/days?to=&n=``: a line per business date for the screen's strip; local only as well.
-* ``GET /api/v1/events?after=&before=&on=&type=&limit=``: the event feed (JSON pages by ``event_id``), readable by
-  every signed-in user: codes, counts, dates and run ids, no file names. The SSE stream of #28 reuses
-  ``daystatus.events`` with ``after`` = ``Last-Event-ID``.
+  superseded what, per book where the positions went (``inbox.scan.reconcile``), the date's events.
+* ``GET /api/v1/inbox/days?to=&n=``: a line per business date for the screen's strip.
+* ``GET /api/v1/events?after=&before=&on=&type=&limit=``: the event feed (JSON pages by ``event_id``). The SSE
+  stream of #28 reuses ``daystatus.events`` with ``after`` = ``Last-Event-ID``.
+
+All three are read routes like the runs: every signed-in user, the ``viewer`` role included (owner's decision in #25:
+nothing of the day status is hidden from viewers, book ids, file names and sources included); with sign-in off, this
+computer, as every other page.
 """
 
 from __future__ import annotations
@@ -14,14 +16,12 @@ from __future__ import annotations
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from .. import daystatus, store
 from ..settings import SettingsError, load
-from .settings_routes import local_only
 
-admin = APIRouter(dependencies=[Depends(local_only)])
 public = APIRouter()
 NO_STORE = {"Cache-Control": "no-store"}
 
@@ -45,7 +45,7 @@ def _url(request: Request):
     return settings, request.app.state.store_url or store.resolve_url(settings)
 
 
-@admin.get("/api/v1/inbox")
+@public.get("/api/v1/inbox")
 def get_day(request: Request, on: str | None = None) -> JSONResponse:
     """The day status of ``on`` (default: the date of the latest default run, else today, Moscow)."""
     day = _date(on, "on")
@@ -54,7 +54,7 @@ def get_day(request: Request, on: str | None = None) -> JSONResponse:
         return _json(daystatus.day(con, settings, day))
 
 
-@admin.get("/api/v1/inbox/days")
+@public.get("/api/v1/inbox/days")
 def get_days(request: Request, to: str | None = None, n: Annotated[int, Query(ge=1, le=400)] = 30) -> JSONResponse:
     """The dates ``n`` calendar days back from ``to`` (default today) with anything on them, newest first."""
     day = _date(to, "to")

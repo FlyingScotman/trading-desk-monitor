@@ -89,7 +89,7 @@
     return Promise.all([getJSON('api/v1/inbox' + (on ? '?on=' + on : '')), strip]).then(([d, ds]) => {
       doc = d; on = d.date; if (lastId == null) lastId = d.last_event_id == null ? 0 : d.last_event_id; render(); renderDays(ds);
     }).catch(e => {
-      if (e.forbidden) return msg('Статус дня (имена файлов и книги) открыт на компьютере с монитором или администратору.');
+      if (e.forbidden) return msg('Нужно войти в монитор: статус дня открыт всем пользователям.');
       msg('Не удалось загрузить статус дня' + (on ? ' за ' + esc(on) : '') + ': ' + esc(e.message) + '. Выберите другую дату.');
       strip.then(renderDays);
     });

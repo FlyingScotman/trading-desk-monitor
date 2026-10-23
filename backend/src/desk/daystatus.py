@@ -7,7 +7,7 @@ cache, the report files that touched the date with their units and issue codes (
 (``stale_copy``: yesterday's file under today's name, 08 §13), the date's runs with what superseded what and what
 changed between them, its events, and per book where the positions went (``inbox.scan.reconcile``, reused, not
 repeated). ``days(con, settings, to, n)`` is ``GET /api/v1/inbox/days``: one line per date for the screen's strip.
-Codes, counts, book ids and file names: the owner's own view (local only, like ``/api/v1/inbox/reconcile``); no row
+Codes, counts, book ids, file names and sources, for every signed-in user (the owner's decision in #25); no row
 values and no issue messages (08 §6.8).
 
 ``events(con, ...)`` is ``GET /api/v1/events``: the ``event`` table (inbox status changes since S7a, runs since

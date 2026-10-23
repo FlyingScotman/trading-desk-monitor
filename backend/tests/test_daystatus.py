@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from desk import cli, daystatus, store
-from desk.api import create_app
+from desk.api import auth, create_app
 from desk.inbox import scan
 from desk.settings import Settings
 
@@ -196,9 +196,20 @@ def test_runs_supersede_with_what_changed_and_the_feed_pages_by_event_id(store_u
     assert [e["id"] for e in older["events"]] == [ids[-2]] and older["has_more"]
     assert client.get("/api/v1/events", params={"on": "2026-10-14"}).json()["events"] == []
 
-    remote = TestClient(create_app(store_url), base_url="http://10.0.0.7:8000", client=("10.0.0.7", 50000))
-    assert remote.get("/api/v1/inbox").status_code == 403  # book ids and file names: this computer only
-    assert remote.get("/api/v1/inbox/days").status_code == 403
+    # sign-in on: a viewer reads the whole day status from another computer (the owner's decision in #25)
+    with store.connect(store_url) as con:
+        auth.add_user(con, "vic", "viewer", "viewer-pass-1", actor="test")
+    remote = TestClient(create_app(store_url, auth=auth.AuthConfig(enabled=True)), base_url="http://10.0.0.7:8000",
+                        client=("10.0.0.7", 50000))
+    for path in ("/api/v1/inbox", "/api/v1/inbox/days", "/api/v1/events"):
+        assert remote.get(path).status_code == 401, path  # not signed in
+    assert remote.post("/api/v1/auth/login", json={"username": "vic", "password": "viewer-pass-1"}).status_code == 200
+    seen = remote.get("/api/v1/inbox", params={"on": "2026-10-15"}).json()
+    assert seen["files"][0]["name"].startswith("positions_") and seen["positions"]["books"][0]["book_id"] == "B1"
+    assert remote.get("/api/v1/inbox/days", params={"to": "2026-10-15"}).status_code == 200
+    srcs = {e["source"] for e in remote.get("/api/v1/events", params={"type": "input."}).json()["events"]}
+    assert srcs == set(seen["inputs"][0]["sources"]) and None not in srcs  # sources stay in the feed for every user
+    assert remote.get("/concepts/c14-day-status.html").status_code == 200
 
 
 def test_a_reaped_run_writes_run_failed(con):
