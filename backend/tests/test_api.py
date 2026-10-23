@@ -6,7 +6,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import json
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 import psycopg
@@ -18,6 +18,7 @@ from tdm.db import connect
 from test_slice_s2 import prev_outcome, shifted_prev
 
 from desk.api import create_app
+from desk.api.compat import run_slice
 from desk.marketdata.adapter import MarketView
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import Outcome, attach_pnl, prepare, value
@@ -31,7 +32,7 @@ QTY = 1000.0
 # Keys of window.DESK.source the parity test leaves out; everything else must be equal.
 EXCLUDED = {"runId": "the two stores number their runs independently",
             "publishedAt": "publication time of each store's run",
-            **dict.fromkeys(("cutType", "cutTs", "slice", "prevCutType", "pnlBasis"),
+            **dict.fromkeys(("cutType", "cutTs", "slice", "prevCutType", "pnlBasis", "marketDate", "marketCutType"),
                             "the run's market slice (R11): the desk store's only")}
 R10_RUN = {"pnlAvailable", "pnlReason", "pnlReasonText", "pnlCoverage", "riskNotes",  # riskNotes: R14
            "FX_SOURCE",  # R26: the market rate's source (MOEX 19:00 ...)
@@ -124,6 +125,25 @@ def test_run_detail_lineage_and_log(store_url, book, client):
     r = client.get("/api/v1/runs/999999", headers={"X-Request-ID": "abc-123"})
     assert assert_error(r, 404, "not_found")["request_id"] == "abc-123"
     assert_error(client.get("/api/v1/runs/nope"), 422, "invalid_parameter")
+
+
+def test_run_market_date_for_the_header(store_url, book, client):
+    """#22: the run records its market snapshot's date (lineage ``market_business_date``) and window.DESK's
+    ``source.marketDate`` says it, so the header shows both dates when the market is older than the positions."""
+    rid = run(store_url, book)
+    ctx = book[0]
+    assert client.get(f"/api/v1/runs/{rid}").json()["lineage"]["market_business_date"] == \
+        ctx.market.snapshot.business_date == DATE
+    assert client.get(f"/api/v1/compat/desk?run_id={rid}").json()["source"]["marketDate"] == DATE
+    base = {"business_date": date(2026, 10, 23), "cut_type": "eod_final", "cut_ts": None, "run_type": "EOD"}
+    older = run_slice({**base, "lineage": {"market_business_date": "2026-10-22"}})  # the morning run on D-1 (#21)
+    assert older["marketDate"] == "2026-10-22" and older["slice"] == "23.10 · закрытие"
+    assert run_slice({**base, "lineage": {}})["marketDate"] is None  # a run made before #22
+    morning = run_slice({**base, "cut_type": "prev_close", "run_type": "INTRADAY", "lineage": {
+        "market_business_date": "2026-10-22", "market_close": {"date": "2026-10-22", "cut_type": "eod_preliminary"}}})
+    assert (morning["cutType"], morning["slice"], morning["marketDate"], morning["marketCutType"]) == (
+        "prev_close", "23.10 · закрытие предв. 22.10", "2026-10-22", "eod_preliminary")  # the morning run (#21)
+    assert older["marketCutType"] is None
 
 
 def test_positions_keep_nulls(store_url, book, client):
