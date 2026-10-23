@@ -530,7 +530,7 @@
         "type": "string",
         "minLength": 1
        },
-       "title": "Settle Type, означающие NDF"
+       "title": "Типы расчёта, означающие NDF"
       },
       "rate_tolerance": {
        "type": "number",

@@ -75,7 +75,7 @@ The backend is driven by data arriving, not by a clock. Business date **D**:
 |---|---|---|---|
 | Morning D | Positions report as of 00:00 of D (= close of the previous business day) | Load a revision. The close of D−1 is now known, so the EOD run of D−1 is rerun on it and supersedes the evening run made on the opening book | "Positions D received"; position diff vs the book the evening run used |
 | Morning D (owner pulls it) | OCP and cash report | Load; compare reported OCP with OCP derived from positions | OCP and cash per book; OCP break if any |
-| Morning D | Official PnL for D−1 (TradeLevel, T+1) | Load as an append-only revision; reconcile against our EOD D−1 on hub data and on internal data; run break analysis | Breaks for D−1 with causes and confidence; YTD ours vs official |
+| Morning D | Official PnL for D−1 (the official trade-level PnL report, T+1) | Load as an append-only revision; reconcile against our EOD D−1 on hub data and on internal data; run break analysis | Breaks for D−1 with causes and confidence; YTD ours vs official |
 | During D | Hub intraday cuts; later trade exports every 1–2 h | Intraday run on the opening book (+ trades once they exist): PV, risk, flash PnL and explain | Intraday PnL with snapshot age |
 | Evening D | Hub EOD snapshot (preliminary, then final) | EOD run D on the opening book (+ trades): flash PnL and explain | Flash PnL D |
 | Evening / night D | Internal EOD market data | EOD-internal run D: the same book on the internal overlay; diff vs the hub run | Notification; market-data diff per instrument and curve |
@@ -121,7 +121,7 @@ Its own `ROADMAP.md` holds the detail. Phases, in the order the backend needs th
 | A0 | Repository, rules (no real data in Git), SPI v1 skeleton loadable from a path (`DESK_PRIVATE_ADAPTER`) | I1 |
 | A1 | Metadata profiler v2 over all report families at once; the owner runs it at work and returns `metadata.zip` | — |
 | A2 | Positions adapter (bonds and FX), security-id and book mapping | I2 (S7a) |
-| A3 | Official PnL adapter (TradeLevel), reusing pnl_tool's hardened reader | I3 (S8) |
+| A3 | Official PnL adapter (the official trade-level PnL report), reusing pnl_tool's hardened reader | I3 (S8) |
 | A4 | OCP and cash adapter | I4 (S9) |
 | A5 | Internal market data: agree an export format with the owner, then its adapter | I5 (S10) |
 | A6 | Trades adapter, once the hourly export exists | I6 (S13) |
@@ -180,7 +180,7 @@ Stays local and unchanged. Its XLSX reader, SHA-256 idempotent import, snapshot-
 |---|---|---|---|
 | Q1 | Where do positions and trades come from? | **Answered (19 October 2026)** for the daily book: a morning positions report and a separate OCP and cash report, dropped into folders. Intraday trade exports (every 1–2 h) will come later | Folder ingestion through the private adapter (ADR-008); without trades, intraday reprices the opening book |
 | Q2, Q2a | Hosting | Answered: Windows inside; one hub on the VPS | [ADR-001](adr/ADR-001-hosting-topology.md) |
-| Q3, Q6–Q9 | Licensing, products, Python, official PnL, frontend | Answered (16 October 2026) | Unchanged; official PnL = TradeLevel IFRS on the CBR basis, including funding |
+| Q3, Q6–Q9 | Licensing, products, Python, official PnL, frontend | Answered (16 October 2026) | Unchanged; official PnL = the official trade-level PnL report on the CBR basis; its composition is in the private adapter (`docs/ORG_RULES.md`) |
 | Q4 | Proxy facts | **Open** | Blocks the snapshot pull from inside; the drop folder is the fallback |
 | Q10 | Which date does the morning positions report describe? | **Answered (19 October 2026):** positions as of 00:00 of D, so the close of the previous business day (`time_basis = start_of_day`, 08 §6.5). Whether positions opened and closed within a day appear is unknown | The morning file reruns the EOD of D−1. Intraday round trips: the profiler (A1) looks for zero-quantity rows; otherwise they reach us only through official PnL or the trade feed |
 | Q11 | Format of the internal EOD market data | **Open**; the adapter repository proposes a template (A5) | S10 |

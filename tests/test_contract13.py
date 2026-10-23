@@ -200,7 +200,7 @@ class Rules(unittest.TestCase):
         {"book_id": "SECUR", "ccy": "RUB", "index_name": "КС", "spread_bp": 50, "note": "книга"},
         {"instrument_id": "RU000A1", "ccy": "RUB", "index_name": "КС", "spread_bp": 10, "note": "бумага"},
         {"entity": "Дочерний банк", "instrument_id": "ИЦБ 2Р-12R", "ccy": "RUB", "index_name": "КС", "spread_bp": 20, "note": "юрлицо × бумага"},
-        {"book_type": "TRADING", "ccy": "USD", "fixed_rate": 5.0, "note": "hard ccy"},
+        {"book_type": "TRADING", "ccy": "USD", "fixed_rate": 6.0, "note": "hard ccy"},
     ]
 
     def pick(self, book, ccy="RUB", pos=None):
@@ -259,7 +259,7 @@ class Derivation(Base):
             run.add_indices([{"index_name": "КС", "value": 17.0}, {"index_name": "SOFR", "value": 4.4}, {"index_name": "RUONIA", "value": 15.0}])
             run.add_funding_rules(rules if rules is not None else [
                 {"book_type": "TRADING", "ccy": "RUB", "index_name": "КС", "spread_bp": 30},
-                {"book_type": "TRADING", "ccy": "USD", "fixed_rate": 5.0}])
+                {"book_type": "TRADING", "ccy": "USD", "fixed_rate": 6.0}])
             run.add_positions(positions)
             self.made = run.derive_funding()
         return run
@@ -285,7 +285,7 @@ class Derivation(Base):
     def test_pos_hard_ccy_interest_in_rub_at_cbr(self):
         self.publish([bond("U1", "OFZ", "USD", 1e6)])
         f = self.lines()["POS|U1"]
-        self.assertAlmostEqual(f["pnl"]["carry"], -1e6 * 79.0 * 5.0 * 3 / 100 / 365, places=6)   # процент в RUB по курсу ЦБ
+        self.assertAlmostEqual(f["pnl"]["carry"], -1e6 * 79.0 * 6.0 * 3 / 100 / 365, places=6)   # процент в RUB по курсу ЦБ
         gross = -1e6 * 80.0 * 0.01 / 1.01
         self.assertAlmostEqual(f["pnl"]["fxGross"], gross, places=6)
         self.assertAlmostEqual(f["pnl"]["fxAllocated"], gross, places=6)

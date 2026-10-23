@@ -206,7 +206,7 @@
       'Частые причины: цена закрытия не совпала с моделью (неликвид, модельная цена), фиксинг флоатера, сделки внутри дня, нелинейность (выпуклость) при сдвиге &gt; 10 б.п.</p><div class="tb"></div>';
     ob.classList.add('flush'); ob.querySelector('.lead').style.padding = '10px 12px 0';
     const C = (key, label, fn, extra) => Object.assign({ key, label, num: true, val: fn, fmt: v => u.fmts(v), cls: v => f.cls(v), sum: fn, unit: u.unit, sumFmt: v => u.fmts(v) }, extra || {});
-    K.table(ob.querySelector('.tb'), {
+    K.table(ob.querySelector('.tb'), { viewKey: 'c10-unexplained',
       rowsFn: () => ranked.slice(0, 25), autoFilter: false, search: false, stripe: r => K.issuerColor(r.issuer), maxHeight: '420px',
       columns: K.cols(['name', 'ccy', 'issuer', 'book',
         C('ptot', 'PnL итог', p => val(p, 'total')),

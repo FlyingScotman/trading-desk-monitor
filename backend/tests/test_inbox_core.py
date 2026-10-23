@@ -367,8 +367,8 @@ def test_controls_are_resummed_with_tolerance() -> None:
 
 def test_newer_minor_fields_are_dropped_with_a_warning() -> None:
     result = read([{**bond("B1", "S1"), "future_field": "1"}])
-    assert check_read(POS, HIT, result, books=BOOKS).status == "rejected"  # unknown in 1.3
-    c = check_read(POS, HIT, result, books=BOOKS, contract="private/1.4")
+    assert check_read(POS, HIT, result, books=BOOKS).status == "rejected"  # unknown in 1.4
+    c = check_read(POS, HIT, result, books=BOOKS, contract="private/1.5")
     assert c.status == "accepted" and [i["code"] for i in c.issues] == ["field_from_newer_contract"]
     assert "future_field" not in c.units[0]["rows"][0]
 

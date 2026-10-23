@@ -69,7 +69,7 @@ from urllib.parse import urlsplit
 
 import psycopg
 
-from . import VALUATION_VERSION, __version__, store
+from . import VALUATION_VERSION, __version__, backup, store
 from .inbox.timesem import MSK
 from .settings import REPO_ROOT, Settings, SettingsError, env_overrides, load
 
@@ -1048,7 +1048,7 @@ def run_summary(con: psycopg.Connection, r: dict[str, Any], scrub: Scrubber) -> 
     out: dict[str, Any] = {
         "run_id": r["run_id"], "as_of": _iso(r["business_date"]), "run_type": r["run_type"], "cut_type": r["cut_type"],
         "cut_ts": _iso(r["cut_ts"]), "label": store.slice_label(r["business_date"], r["cut_type"], r["cut_ts"],
-                                                                r["run_type"]),
+                                                                r["run_type"], lin.get("market_close")),
         "status": r["status"], "error": scrub.text(r["error"]) if r["error"] else None,
         "is_default": r["is_default"], "is_current": r["is_current"], "supersedes_run_id": r["supersedes_run_id"],
         "created_at": _iso(started), "completed_at": _iso(done),
@@ -1264,10 +1264,12 @@ def build(settings: Settings | None = None, *, store_url: str | None = None, aut
         section("runs", need_store(lambda c: runs_section(c, scrub)))
         section("db", need_store(lambda c: db_section(c, settings)))
         section("backfill", need_store(lambda c: backfill_section(settings, c)))
+        section("backup", lambda: backup.diagnostics(settings))
         doc["build"] = {"duration_s": round(time.perf_counter() - t_all, 2), "sections_s": times,
                         "store_error": scrub.text(store_error) if store_error else None, "hub_asked": bool(hub)}
         order = ("schema", "generated_at", "privacy", "app", "clock", "settings", "lan", "autopilot", "hub",
-                 "snapshots", "market_history", "static", "inbox", "positions", "runs", "backfill", "logs", "db", "build")
+                 "snapshots", "market_history", "static", "inbox", "positions", "runs", "backfill", "backup", "logs", "db",
+                 "build")
         doc = {k: doc[k] for k in order if k in doc}
         return scrub.doc(json.loads(json.dumps(doc, ensure_ascii=False, default=str)))
     finally:

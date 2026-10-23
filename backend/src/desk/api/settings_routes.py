@@ -95,7 +95,8 @@ def _effective(st: Settings) -> dict[str, Any]:
         "private_adapter_config": str(st.private_adapter_config) if st.private_adapter_config else None,
         "private_adapter_sha256": st.private_adapter_sha256,
         "inbox_dirs": [str(d) for d in st.inbox_dirs], "inbox_archive": str(st.inbox_archive),
-        "inbox_poll_seconds": st.inbox_poll_seconds, "autopilot": st.autopilot,
+        "inbox_poll_seconds": st.inbox_poll_seconds, "adapter_check_timeout_s": st.adapter_check_timeout_s,
+        "autopilot": st.autopilot,
         "autopilot_sync_last": st.autopilot_sync_last, "intraday": st.intraday,
         "inbox_lookback_days": st.inbox_lookback_days,
         "history_days": st.history_days,
@@ -323,17 +324,21 @@ def check_settings_tab(tab_id: str, body: JsonBody) -> dict[str, Any]:
     """Body ``{"data": {...}, "adapter": true}``: the issues of the schema check (``schema``) and, when it has no
     error and ``adapter`` is not false, of the adapter's ``reference()`` over a copy of the config folder with the
     file replaced (``adapter``, each with ``new``: not an issue of the current files), and ``text``, what a save
-    writes (for the diff). ``ok``: no schema error and no new adapter error."""
+    writes (for the diff). ``ok``: no schema error and no new adapter error. When the adapter could not check it,
+    ``adapter_error`` says why and ``adapter_error_code`` is ``timeout`` (over ``adapter_timeout_s``, the setting
+    ``adapter_check_timeout_s``), ``failed`` or ``not_loaded``. A save (PUT) never depends on this check."""
     st = _settings()
     h, tab, cfg, path = _tab(st, tab_id)
     text = _data(body)
     schema = settings_forms.check_schema(tab["schema"], body["data"])
     out: dict[str, Any] = {"tab": tab_id, "file": tab["file"], "text": text,
                            "current": _config_payload(tab["file"], path), "schema": schema, "adapter": [],
-                           "adapter_error": None, "adapter_checked": False}
+                           "adapter_error": None, "adapter_error_code": None, "adapter_checked": False,
+                           "adapter_timeout_s": st.adapter_check_timeout_s}
     if body.get("adapter", True) is not False and not any(_blocking(i) for i in schema):
-        run = settings_forms.dry_run(h, cfg, tab["file"], text)
-        out.update(adapter=run.issues, adapter_error=run.error, adapter_checked=run.error is None)
+        run = settings_forms.dry_run(h, cfg, tab["file"], text, st.adapter_check_timeout_s)
+        out.update(adapter=run.issues, adapter_error=run.error, adapter_error_code=run.code,
+                   adapter_checked=run.error is None)
     out["ok"] = not any(_blocking(i) for i in schema) and not any(_blocking(i) and i["new"] for i in out["adapter"])
     return out
 

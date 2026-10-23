@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import mimetypes
 import os
 import re
 import sys
@@ -54,6 +55,7 @@ from .models import (
     Ready,
     RiskPayload,
     RiskTable,
+    RunDerivatives,
     RunDetail,
     RunFunding,
     RunHeader,
@@ -66,6 +68,8 @@ from .models import (
 )
 
 log = logging.getLogger("desk.api")
+# the local fonts (prototypes/fonts/, #79): Python 3.11's table and a Windows registry may not know .woff2
+mimetypes.add_type("font/woff2", ".woff2")
 
 
 def static_root() -> Path:
@@ -176,7 +180,8 @@ def _error(request: Request, status: int, code: str, message: str, details: Any 
 def _header(row: dict[str, Any]) -> dict[str, Any]:
     basis = (row.get("lineage") or {}).get("pnl_basis") or {}
     return {**row, "as_of": row["business_date"], "published_at": row["completed_at"],
-            "label": compat.slice_label(row["business_date"], row["cut_type"], row.get("cut_ts"), row["run_type"]),
+            "label": compat.slice_label(row["business_date"], row["cut_type"], row.get("cut_ts"), row["run_type"],
+                                        (row.get("lineage") or {}).get("market_close")),
             "pnl_basis": basis.get("label")}
 
 
@@ -473,6 +478,20 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
                           (run_id,)).fetchone()
         return _cached(request, run, funding_out(run_id, row["data"] if row else None))
 
+    @app.get("/api/v1/runs/{run_id}/derivatives", response_model=RunDerivatives)
+    def derivatives(con: Con, run_id: int, request: Request):
+        """Derivatives computed by core from their terms next to the report's PV, per position, book and product
+        (``publish.derivatives_parallel``); state ``not_computed`` for a run before the block."""
+        run = _run_or_404(con, run_id)
+        row = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'derivatives_parallel'",
+                          (run_id,)).fetchone()
+        b = row["data"] if row else None
+        out = RunDerivatives(run_id=run_id, state="computed" if b else "not_computed",
+                             tolerance=(b or {}).get("tolerance"), totals=(b or {}).get("totals"),
+                             by_book=(b or {}).get("by_book") or {}, by_product=(b or {}).get("by_product") or {},
+                             reasons=(b or {}).get("reasons") or {}, rows=(b or {}).get("rows") or [])
+        return _cached(request, run, out)
+
     @app.get("/api/v1/runs/{run_id}/aggregates", response_model=Aggregates)
     def aggregates(con: Con, run_id: int, request: Request,
                    dims: str = Query("book", description="Comma-separated: " + ", ".join([*DIMS, *PY_DIMS]))):
@@ -678,6 +697,8 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         return out
 
     from .alias_routes import router as alias_router  # /api/v1/instruments/alias(es) (batch 1, item 3)
+    from .backup_routes import router as backup_router  # /api/v1/backup: backups, restore drill (desk.backup)
+    from .daystatus_routes import public as daystatus_router  # /api/v1/inbox, /inbox/days, /events (S7b, #25)
     from .diagnostics_routes import router as diagnostics_router
     from .market_history import router as market_history_router  # /api/v1/history/market, /status (R24)
     from .server_routes import router as server_router  # /api/v1/server: restart, network (settings page)
@@ -690,9 +711,11 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     app.include_router(updater_router, include_in_schema=False)
     app.include_router(diagnostics_router, include_in_schema=False)
     app.include_router(server_router, include_in_schema=False)
+    app.include_router(daystatus_router, include_in_schema=False)
     app.include_router(market_history_router, include_in_schema=False)
     app.include_router(autopilot_router)
     app.include_router(alias_router)
+    app.include_router(backup_router, include_in_schema=False)  # local admin routes (settings «Резервные копии»)
 
     built = Path(app_dir) if app_dir else static_root() / "frontend" / "dist"
     if built.is_dir():  # before "/": the frontend build, absent until npm run build

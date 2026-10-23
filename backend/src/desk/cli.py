@@ -27,6 +27,9 @@
     desk diagnostics [--out FILE] [--no-hub]       how the desk works here, without private data (R13)
     desk history status [--json]         the market history read from the hub's history API (R24) and why not
     desk history sync [--budget S]       fetch it now, for at most S seconds (default 600; resumable)
+    desk backup [--list] [--dir D]       pg_dump of the store into the backup folder now (desk.backup); --list: the backups
+    desk restore [FILE] [--replace] [--yes]   restore drill of FILE (default the newest) into a scratch database;
+                                         --replace: then, confirmed and with the server stopped, make it the live data
 
 Defaults for the snapshot folder, the run store and the report folder come from
 :mod:`desk.settings` (``DESK_*`` variables or ``backend/.env``); ``desk config`` prints them.
@@ -196,7 +199,8 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             report_dir: str | Path | None = None, tdm: bool = False, db: str | Path | None = None,
             no_gamma: bool = False, no_pnl: bool = False, out: Callable[[str], None] = print,
             cut_type: str = "eod_final", market_snapshot_id: str | None = None,
-            contexts: ContextCache | None = None, read_model: bool = True) -> int | None:
+            contexts: ContextCache | None = None, read_model: bool = True,
+            on_close: tuple[str, str] | None = None) -> int | None:
     """The EOD run of date ``d`` (``desk eod`` without its hub pull; the autopilot calls it too): values the
     books of the store on the cached snapshot of ``d`` and publishes the run. Returns the desk run id, None when
     the store has no positions for the date. Raises on a missing snapshot or a failed publication.
@@ -211,20 +215,28 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
     prepares each date's market once (as the run's own date, then as the next date's previous one).
     ``read_model``: also put the run's static snapshot's facts (the market calendar, issuer groups, sectors) and
     the CBR meetings into the store's read model (``desk.marketdata.static_facts``); the backfill leaves them to the
-    latest date. After the publication the run's summary for the concept pages is written (``publish.summary``)."""
+    latest date. After the publication the run's summary for the concept pages is written (``publish.summary``).
+
+    ``on_close`` (the autopilot's morning run, #21): (date, cut) of an earlier close: the book of ``d`` valued on
+    that close, published as a ``run_type`` run of ``d`` with cut ``prev_close`` (lineage ``market_close``) and
+    without a flash PnL (the day's first intraday cut brings it)."""
     snapshots = snapshots or settings.snapshot_cache
     sd = SnapshotDir(Path(snapshots))
     t0 = time.perf_counter()
     prep = contexts.prepare if contexts is not None else prepare
     fx_options = fxcurves.options_from(settings)  # the provisional FX choices (curves.fx.FxOptions)
-    ctx = prep(sd, d, cut_type, market_snapshot_id=market_snapshot_id, fx_options=fx_options)
+    run_date = date.fromisoformat(d)
+    ctx = prep(sd, *(on_close or (d, cut_type)), market_snapshot_id=market_snapshot_id, fx_options=fx_options)
     # issuer names, groups, sectors and ratings: the newest static of the cache, not the market's own (R25)
     ctx = dataclasses.replace(ctx, reference=reference.facts(sd, ctx.static),
                               proxy_curves=bool(getattr(settings, "proxy_curves_for_risk", False)))
-    prev_cut = previous_market(sd, d)
+    prev_cut = None if on_close else previous_market(sd, d)
     prev_date = prev_cut[0] if prev_cut else None
     prev = MarketView(sd.market(*prev_cut)) if prev_cut else None
     basis = pnl_basis(ctx, prev_cut)
+    if on_close:
+        basis["label"] = (f"нет PnL: позиции {run_date:%d.%m} на закрытии {ctx.business_date:%d.%m}, "
+                          "PnL дня — с первого внутридневного среза")
     prov = sd.provenance(ctx.market.snapshot.id)
     origin = (f"hub {prov['hub']}, published {prov['published_at']} ({_age(prov['published_at'])})" if prov
               else f"local file, known_at {ctx.market.snapshot.doc.get('known_at')}")
@@ -274,11 +286,11 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             return None
         for b, vd in sorted(inputs.valid_dates.items()):
             src = inputs.sources.get(b) or {}
-            age = (ctx.business_date - vd).days
+            age = (run_date - vd).days
             out(f"  {b}: {src.get('source')} {src.get('file_name')}"
                 + (f", report {src['report_date']}" if src.get("report_date") else "")
                 + f", valid {vd}" + (f", carried {age} days" if age else ""))
-        carried = store.carried_spreads(con, before=ctx.business_date)
+        carried = store.carried_spreads(con, before=run_date)
         bp = pv1.plan(ctx, inputs, second_order=not no_gamma)
         if bp.unlinked_terms:
             out(f"WARN trade_terms: {len(bp.unlinked_terms)} trade(s) no positions row names, "
@@ -301,7 +313,9 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             dp = [o.pnl for o in bp.direct.values() if o.pnl]
             out(f"PnL without core: {len(dp)}/{sum(o.valuation is not None for o in bp.direct.values())} positions "
                 f"(by the rate move or the reports), total {sum(p.total for p in dp):,.0f} RUB")
-        if not prev_date:
+        if on_close:
+            out(f"no flash PnL: the book of {d} on the close of {ctx.business_date} (morning run)")
+        elif not prev_date:
             out(f"WARN no flash PnL: no eod_final or eod_preliminary market snapshot before {d} in {snapshots}")
         positions = pv1.merge(bp, outcomes)
         ok = sum(o.valuation is not None for _, _, o in positions)
@@ -309,7 +323,10 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
         out(f"book: {ok}/{len(positions)} positions valued (" + ", ".join(f"{q} {n}" for q, n in by_q.most_common())
             + f"), {len(carried)} carried spreads")
         run_id, status, warnings = desk_run.publish(con, ctx, positions, prev=prev, run_type=run_type,
-                                                    inputs=inputs, carried_from=carried, pnl_basis=basis)
+                                                    inputs=inputs, carried_from=carried, pnl_basis=basis,
+                                                    core_results=[bp.core_result] if bp.core_result else None,
+                                                    **({"business_date": run_date, "cut_type": "prev_close"}
+                                                       if on_close else {}))
         out(f"desk run {run_id}: {status}, {len(warnings)} warnings")
         for (m,) in con.execute("SELECT message FROM run_log WHERE run_id = %s AND message LIKE %s",
                                 (run_id, "справочник эмитентов%")):
@@ -661,6 +678,14 @@ def cmd_serve(a: argparse.Namespace) -> int:
     if ap is not None:
         on = a.autopilot or a.settings.autopilot
         print(f"autopilot: {'on' if on else 'off in the settings'}, every {a.settings.inbox_poll_seconds:g} s")
+    from . import backup
+
+    # the daily backup (desk.backup): a thread of this server, no Windows service or scheduled task needed
+    backup.Scheduler(store_url=url).start()
+    if not backup.hold_serve_lock(st.home):
+        print("note: another desk serve of this data folder runs (serve.lock)")
+    print(f"backup: {'daily at ' + st.backup_time + ', keep ' + str(st.backup_keep) if st.backup else 'off'}, "
+          f"in {backup.backup_dir(st)}")
     # not 0 when the settings page installs an update: the launcher (start.bat) restarts it (desk.update)
     return serve(url, host=host, port=port, snapshots=None if a.no_worker else a.settings.snapshot_cache,
                  adapter_status=lambda: scan.adapter_line(scan.adapter(a.settings)), autopilot=ap,
@@ -816,6 +841,9 @@ def cmd_cycle(a: argparse.Namespace) -> int:
     lr = st["latest_run"]
     print(f"{st['message']}; latest run: "
           + (f"{lr['run_id']} of {lr['as_of']} ({lr.get('label')}), {lr['created_at']}" if lr else "none"))
+    from . import backup
+
+    backup.run_due(a.settings, url, out=print)  # the daily backup when due (desk serve not running at its time)
     return 1 if st["state"] == "error" else 0
 
 
@@ -897,6 +925,108 @@ def cmd_diagnostics(a: argparse.Namespace) -> int:
               "or amounts; send this file to the agent")
     else:
         sys.stdout.write(text)
+    return 0
+
+
+def _mb(n: int | None) -> str:
+    return "-" if n is None else f"{n / 1e6:,.1f} MB"
+
+
+def cmd_backup(a: argparse.Namespace) -> int:
+    """``desk backup``: a backup now (``desk.backup.create``, kind manual); ``--list``: the backups and the state."""
+    from . import backup
+
+    st = a.settings
+    folder = Path(a.dir) if a.dir else backup.backup_dir(st)
+    if a.list:
+        rows = backup.list_backups(folder)
+        print(f"backup folder {folder}: {len(rows)} backups, {_mb(sum(b.size for b in rows))}"
+              + ("" if st.backup else "; the daily backup is off (setting backup)"))
+        for b in rows:
+            t = b.meta.get("tables") or {}
+            print(f"  {b.name:<40} {_mb(b.size):>11}  " + (f"{sum(t.values()):>10,} rows, {t.get('run', 0)} runs"
+                                                          if t else "no .json beside it"))
+        doc = backup.status(st)
+        if doc["same_disk"]:
+            print("WARNING: the backups are on the store's disk: a disk failure loses both; set another disk or a "
+                  "network share (Settings -> «Резервные копии», or the setting backup_dir)")
+        if doc["last_check"]:
+            c = doc["last_check"]
+            print(f"last restore check {c['started']}: {c['file']} " + ("ok" if c["ok"] else "FAILED: "
+                                                                           + "; ".join(c.get("problems") or [])))
+        return 0
+    url = store.resolve_url(st)
+    try:
+        b = backup.create(st, url, "manual", folder=folder)
+    except backup.BackupError as e:
+        print(f"desk backup: {e}", file=sys.stderr)
+        return 1
+    t = b.meta.get("tables") or {}
+    print(f"backup {b.path} ({_mb(b.size)}): {len(t)} tables, {sum(t.values()):,} rows")
+    if backup.status(st)["same_disk"] and not a.dir:
+        print("WARNING: on the store's disk; set another disk or a network share (setting backup_dir)")
+    return 0
+
+
+def _confirm_restore(a: argparse.Namespace, report: dict[str, Any]) -> bool:
+    from . import backup
+
+    live = report.get("live_tables") or {}
+    print()
+    print(f"The check passed: {report['file']} restored into a scratch database, {report.get('rows', 0):,} rows in "
+          f"{len(report['tables'])} tables"
+          + (f", runs up to {report['runs'][1]}" if report.get("runs") and report["runs"][1] else "") + ".")
+    print(f"The live database now has {sum(live.values()):,} rows" + (f", {live.get('run', 0)} runs" if live else "")
+          + ". Replacing it puts the backup's data in its place: what was written after the backup is gone from the "
+          "live data (a pre-restore backup of it is made first).")
+    if a.yes:
+        return True
+    try:
+        answer = input(f"Type {backup.CONFIRM_WORD} to replace the live data, anything else to stop: ")
+    except EOFError:
+        return False
+    return answer.strip().lower() == backup.CONFIRM_WORD
+
+
+def cmd_restore(a: argparse.Namespace) -> int:
+    """``desk restore``: the restore drill (scratch database, row counts, migrations); ``--replace``: then the live
+    data, confirmed, after a pre-restore backup (``desk.backup.restore_replace``)."""
+    from . import backup
+
+    st = a.settings
+    try:
+        dump = backup.find(st, a.file)
+        url = store.resolve_url(st)
+        print(f"backup {dump}")
+        if a.replace:
+            rep = backup.restore_replace(st, url, dump, confirm=lambda r: _confirm_restore(a, r), actor=_cli_actor(),
+                                         out=lambda s: print("  " + s))
+        else:
+            rep = backup.restore_check(st, url, dump, keep_scratch=a.keep_scratch, out=lambda s: print("  " + s))
+    except backup.BackupError as e:
+        print(f"desk restore: {e}", file=sys.stderr)
+        return 1
+    if a.json:
+        print(json.dumps(rep, ensure_ascii=False, indent=1, default=str))
+    for w in rep["warnings"]:
+        print(f"warning: {w}")
+    if not rep["ok"]:
+        print("RESTORE CHECK FAILED:")
+        for p in rep["problems"]:
+            print(f"  - {p}")
+        return 1
+    print(f"restore check ok in {rep['seconds']:g} s: {len(rep['tables'])} tables, {rep.get('rows', 0):,} rows"
+          + (" (equal to the counts at backup time)" if rep["meta"] else "")
+          + (f"; runs: {rep['runs'][0]}, latest {rep['runs'][1]}" if rep.get("runs") and rep["runs"][1] else "")
+          + (f"; migrations applied to the copy: {', '.join(rep['migrated'])}" if rep.get("migrated") else ""))
+    if a.replace:
+        print(f"RESTORED: the live database is now the backup's data. Before it: {rep['pre_restore']} and the database "
+              f"{rep['previous']} (kept until the next restore). Start Desk Monitor again (start.bat).")
+    elif a.keep_scratch:
+        print(f"the scratch database {rep['scratch']} is kept (desk restore again drops it)")
+    else:
+        print("the live data was not touched; to replace it with this backup: stop.bat, then "
+              "desk.bat restore " + dump.name + " --replace")
     return 0
 
 
@@ -1110,6 +1240,19 @@ def main(argv: list[str] | None = None) -> int:
     ld.set_defaults(fn=cmd_lan)
     c = sub.add_parser("config", help="print the effective settings (token masked)")
     c.set_defaults(fn=cmd_config)
+    bk = sub.add_parser("backup", help="back the desk store up now (pg_dump into the backup folder, desk.backup)")
+    bk.add_argument("--list", action="store_true", help="list the backups and the last restore check instead")
+    bk.add_argument("--dir", help="another folder for this backup (default: the setting backup_dir, else "
+                    "<home>/backups)")
+    bk.set_defaults(fn=cmd_backup)
+    rs = sub.add_parser("restore", help="restore check of a backup into a scratch database; --replace: then make it "
+                        "the live data (server stopped, confirmed, after a pre-restore backup)")
+    rs.add_argument("file", nargs="?", help="a backup file or its name in the backup folder (default: the newest)")
+    rs.add_argument("--replace", action="store_true", help="after the check, replace the live data (stop.bat first)")
+    rs.add_argument("--yes", action="store_true", help="with --replace: do not ask for the confirmation")
+    rs.add_argument("--keep-scratch", action="store_true", help="keep the scratch database after the check")
+    rs.add_argument("--json", action="store_true", help="also print the report as JSON")
+    rs.set_defaults(fn=cmd_restore)
     a = ap.parse_args(argv)
     try:
         return int(a.fn(a))

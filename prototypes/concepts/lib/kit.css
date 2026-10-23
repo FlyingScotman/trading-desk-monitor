@@ -36,6 +36,8 @@ button { font: inherit; color: inherit; }
 .k-top .sp { flex: 1; }
 .k-top .asof { color: var(--fg-2); font-size: 12px; white-space: nowrap; }
 .k-top .asof b { color: var(--fg); font-weight: 600; }
+.k-top .k-fresh { color: var(--fg-3); font-size: 12px; white-space: nowrap; }
+.k-top .k-warnchip { border-color: var(--warn); color: var(--warn); text-decoration: none; white-space: normal; }
 .k-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--line-2); border-radius: 999px; background: var(--panel); cursor: pointer; font-size: 12px; white-space: nowrap; user-select: none; }
 .k-chip:hover { border-color: var(--accent); }
 .k-chip.on { background: var(--accent-bg); border-color: var(--accent); color: var(--fg); }
@@ -65,9 +67,15 @@ button { font: inherit; color: inherit; }
 .k-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
 .k-kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; min-width: 0; position: relative; overflow: hidden; }
 .k-kpi .l { font-size: 11px; color: var(--fg-2); text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.k-kpi .v { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; margin-top: 2px; }
-.k-kpi .s { font-size: 11px; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.k-kpi .v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.01em; white-space: nowrap; margin-top: 2px; }
+.k-kpi .v .u { font-size: 11px; font-weight: 500; color: var(--fg-2); letter-spacing: 0; }
+.k-kpi .s { font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.k-kpi .s .u { font-size: 10.5px; color: var(--fg-3); }
 .k-kpi .spark { position: absolute; right: 8px; bottom: 6px; opacity: .8; }
+/* разбивка под главной цифрой (B2-3, #103): как мини-таблица ОВП — подпись слева, цифра справа */
+.k-kb { border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 12px; font-weight: 500; line-height: 1.35; margin-top: 2px; }
+.k-kb td { padding: 0; white-space: nowrap; text-align: right; }
+.k-kb td.c { text-align: left; padding-right: 10px; font-weight: 600; color: var(--fg-2); }
 
 /* ---------- кликабельные цифры (разбор вклада) ---------- */
 .dr { cursor: pointer; border-bottom: 1px dotted var(--fg-3); }
@@ -109,6 +117,19 @@ table.k-tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-si
 .k-tbl td.stripe { padding: 0; width: 4px; min-width: 4px; }
 .k-tbl .tagc { display: inline-block; padding: 0 6px; border-radius: 4px; font-size: 11px; background: var(--panel-2); border: 1px solid var(--line); color: var(--fg-2); }
 .k-tbl-tools { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+/* раскладка таблиц (#102): граница заголовка — ширина, перетаскивание заголовка — порядок; кнопки вида */
+.k-tbl th .k-rsz { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; z-index: 3; }
+.k-tbl th .k-rsz:hover, body.k-col-resizing .k-tbl th .k-rsz:hover { background: var(--accent); opacity: .5; }
+.k-tbl th.k-drag { opacity: .45; }
+table.k-tbl.k-fixed { table-layout: fixed; }
+table.k-tbl.k-fixed th, table.k-tbl.k-fixed td { overflow: hidden; text-overflow: ellipsis; }
+body.k-col-resizing, body.k-col-resizing * { cursor: col-resize !important; user-select: none; }
+body.k-col-moving, body.k-col-moving * { cursor: grabbing !important; user-select: none; }
+.k-col-ind { position: fixed; width: 2px; background: var(--accent); z-index: 150; pointer-events: none; }
+.k-tbl-ctl { display: inline-flex; gap: 6px; align-items: center; }
+.k-tbl-ctlbar { display: flex; justify-content: flex-end; padding: 2px 6px; position: sticky; bottom: 0; left: 0; z-index: 3; background: var(--panel); }
+.k-tbtn { padding: 1px 7px; border: 1px solid var(--line); border-radius: 5px; background: transparent; color: var(--fg-3); cursor: pointer; font-size: 11px; line-height: 16px; }
+.k-tbtn:hover { color: var(--fg); border-color: var(--accent); }
 .k-input { background: var(--bg); border: 1px solid var(--line-2); border-radius: 6px; padding: 4px 8px; color: var(--fg); font: inherit; min-width: 160px; }
 .k-input:focus { outline: none; border-color: var(--accent); }
 .k-ccy { display: inline-block; font: 600 10.5px var(--mono); padding: 0 5px; border-radius: 3px; color: #fff; }
@@ -173,9 +194,9 @@ table.k-tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-si
 @media (max-width: 720px) {
   .k-top { padding: 6px 10px; }
   .k-top .brand { white-space: normal; flex-wrap: wrap; }
-  .k-top .brand .tag, .k-top .asof { display: none; }
+  .k-top .brand .tag, .k-top span.asof:not(.k-chip), .k-top .k-fresh { display: none; }
   .k-page { padding: 10px 10px 30px; }
-  .k-kpi .v { font-size: 17px; }
+  .k-kpi .v { font-size: 19px; }
 }
 
 /* компактные таблицы рисков: по ширине содержимого, плотные строки */

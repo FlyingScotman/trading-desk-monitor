@@ -45,6 +45,8 @@ layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub
 * ``DESK_INBOX_POLL_SECONDS``, ``DESK_ADAPTER_MATCH_TIMEOUT_S``, ``DESK_ADAPTER_READ_TIMEOUT_S``,
   ``DESK_INBOX_MAX_FILE_MB``  watcher period (60), adapter timeouts (10 per match batch, 600 per read) and
                            the largest file offered (500)
+* ``DESK_ADAPTER_CHECK_TIMEOUT_S``  the limit of one ``reference()`` run when a settings form checks a file with
+                           the adapter (60; ``desk.settings_forms``); a save never waits for the check
 * ``DESK_AUTOPILOT``, ``DESK_AUTOPILOT_SYNC_LAST``  the ``desk serve`` autopilot (on) and the number of
                            latest hub dates it keeps in sync (5)
 * ``DESK_INTRADAY``        the autopilot's intraday step (on): today's book on the hub's intraday cuts every half
@@ -75,6 +77,10 @@ layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub
                            default runs of the past business dates from this date (2026-01-05, the hub's first
                            eod_final close) with positions, at most this many seconds a cycle (600), after every
                            other step (``desk.backfill``, R23; ``desk backfill`` does the same at once)
+* ``DESK_BACKUP``, ``DESK_BACKUP_DIR``, ``DESK_BACKUP_KEEP``, ``DESK_BACKUP_TIME``  the daily backup of the desk store
+                           (``desk.backup``; on): ``pg_dump`` into this folder (default ``<home>/backups``; better
+                           another disk or a network share), the newest 14 kept, made by ``desk serve`` at the first
+                           check after this local time (20:30) or at its next start when the computer was off
 * ``DESK_UPDATE_DIR``      the Windows bundle: a folder (a network share, say) holding update zips that the
                            settings page offers to install (``desk.update``); none by default
 * ``DESK_UPDATE_REPO``, ``DESK_UPDATE_TRANSPORT``, ``DESK_UPDATE_DOWNLOADS_DIR``, ``DESK_UPDATE_AUTO_CHECK``  the
@@ -135,6 +141,7 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "private_adapter_config": ("DESK_PRIVATE_ADAPTER_CONFIG", "path"),
     "inbox_dirs": ("DESK_INBOX_DIRS", "dirs"),
     "inbox_poll_seconds": ("DESK_INBOX_POLL_SECONDS", "num"),
+    "adapter_check_timeout_s": ("DESK_ADAPTER_CHECK_TIMEOUT_S", "num"),
     "autopilot": ("DESK_AUTOPILOT", "bool"),
     "autopilot_sync_last": ("DESK_AUTOPILOT_SYNC_LAST", "int"),
     "intraday": ("DESK_INTRADAY", "bool"),
@@ -157,6 +164,11 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "backfill": ("DESK_BACKFILL", "bool"),
     "backfill_from": ("DESK_BACKFILL_FROM", "date"),
     "backfill_budget_s": ("DESK_BACKFILL_BUDGET_S", "num"),
+    # backups of the desk store (desk.backup)
+    "backup": ("DESK_BACKUP", "bool"),
+    "backup_dir": ("DESK_BACKUP_DIR", "path"),
+    "backup_keep": ("DESK_BACKUP_KEEP", "int"),
+    "backup_time": ("DESK_BACKUP_TIME", "str"),
     # users and network access (api/auth.py); read when desk serve starts
     "auth": ("DESK_AUTH", "bool"),
     "bind_host": ("DESK_BIND_HOST", "str"),
@@ -227,6 +239,7 @@ class Settings:
     inbox_poll_seconds: float = 60.0
     adapter_match_timeout_s: float = 60.0  # per match call (50 files); the worker start-up is apart (R22)
     adapter_read_timeout_s: float = 600.0
+    adapter_check_timeout_s: float = 60.0  # one reference() run of a settings form's check (desk.settings_forms)
     inbox_max_file_mb: float = 500.0
     home: Path = None  # type: ignore[assignment]  # None: desk_home()
     autopilot: bool = True
@@ -253,6 +266,10 @@ class Settings:
     backfill: bool = True  # the autopilot computes the default runs of past dates (desk.backfill, R23)
     backfill_from: str = "2026-01-05"  # first date of the backfill (the hub's first eod_final close)
     backfill_budget_s: float = 600.0  # seconds of backfill runs per autopilot cycle (after every other step)
+    backup: bool = True  # the daily backup of the desk store by desk serve (desk.backup)
+    backup_dir: Path | None = None  # None: <home>/backups; better another disk or a network share
+    backup_keep: int = 14  # nightly and manual backups kept, the newest
+    backup_time: str = "20:30"  # local time of the daily backup (made at the next start when the computer was off)
     # users and network access (desk.api.auth; DECISIONS DEC13): read by desk serve when it starts
     auth: bool = False  # sign-in with the monitor's own accounts; off: this computer only
     bind_host: str = "127.0.0.1"  # the address desk serve listens on; another than loopback needs auth
@@ -320,6 +337,7 @@ class Settings:
             ("inbox_poll_seconds", f"{self.inbox_poll_seconds:g}"),
             ("adapter_match_timeout_s", f"{self.adapter_match_timeout_s:g}"),
             ("adapter_read_timeout_s", f"{self.adapter_read_timeout_s:g}"),
+            ("adapter_check_timeout_s", f"{self.adapter_check_timeout_s:g}"),
             ("inbox_max_file_mb", f"{self.inbox_max_file_mb:g}"),
             ("autopilot", "on" if self.autopilot else "off"),
             ("autopilot_sync_last", str(self.autopilot_sync_last)),
@@ -343,6 +361,8 @@ class Settings:
             ("history_rates_from", self.history_rates_from.isoformat()),
             ("backfill", (f"on from {self.backfill_from}, {self.backfill_budget_s:g} s a cycle" if self.backfill
                           else "off")),
+            ("backup", (f"on at {self.backup_time}, keep {self.backup_keep}, in "
+                        f"{self.backup_dir or self.home / 'backups'}") if self.backup else "off"),
             ("auth", "on (sign-in with the monitor's accounts)" if self.auth else "off (this computer only)"),
             ("bind_host", f"{self.bind_host}:{self.port}"),
             ("tls", f"{self.tls_cert} / {self.tls_key}" if self.tls_cert else "off (HTTP)"),
@@ -636,6 +656,11 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
     tls_cert, tls_key = _path(get("DESK_TLS_CERT")), _path(get("DESK_TLS_KEY"))
     if bool(tls_cert) != bool(tls_key):
         raise SettingsError("tls_cert and tls_key (DESK_TLS_CERT, DESK_TLS_KEY) go together: set both or neither")
+    backup_time = (get("DESK_BACKUP_TIME") or defaults.backup_time).strip()
+    m = re.fullmatch(r"([01]?\d|2[0-3]):([0-5]\d)", backup_time)
+    if not m:
+        raise SettingsError(f"DESK_BACKUP_TIME (backup_time) must be HH:MM, 00:00..23:59, not {backup_time!r}")
+    backup_time = f"{int(m.group(1)):02d}:{m.group(2)}"
     store_url = get("DESK_STORE_URL")
     if store_url is not None and urlsplit(store_url).scheme not in ("postgresql", "postgres"):
         raise SettingsError("DESK_STORE_URL must be a postgresql:// URI")
@@ -661,6 +686,7 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         inbox_poll_seconds=num("DESK_INBOX_POLL_SECONDS", defaults.inbox_poll_seconds),
         adapter_match_timeout_s=num("DESK_ADAPTER_MATCH_TIMEOUT_S", defaults.adapter_match_timeout_s),
         adapter_read_timeout_s=num("DESK_ADAPTER_READ_TIMEOUT_S", defaults.adapter_read_timeout_s),
+        adapter_check_timeout_s=num("DESK_ADAPTER_CHECK_TIMEOUT_S", defaults.adapter_check_timeout_s),
         inbox_max_file_mb=num("DESK_INBOX_MAX_FILE_MB", defaults.inbox_max_file_mb),
         home=home,
         autopilot=flag("DESK_AUTOPILOT", defaults.autopilot),
@@ -686,6 +712,10 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         backfill=flag("DESK_BACKFILL", defaults.backfill),
         backfill_from=backfill_from,
         backfill_budget_s=num("DESK_BACKFILL_BUDGET_S", defaults.backfill_budget_s),
+        backup=flag("DESK_BACKUP", defaults.backup),
+        backup_dir=_path(get("DESK_BACKUP_DIR")),
+        backup_keep=count("DESK_BACKUP_KEEP", defaults.backup_keep),
+        backup_time=backup_time,
         auth=flag("DESK_AUTH", defaults.auth),
         bind_host=bind_host.strip("[]"),
         port=port,
