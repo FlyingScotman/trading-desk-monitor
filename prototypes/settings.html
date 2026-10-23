@@ -226,6 +226,7 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
     <a href="#up" data-sec="up"><svg viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10"/></svg><span class="lbl">Обновление программы</span><span class="nb" id="nav-ver"></span></a>
     <a href="#diag" data-sec="diag"><svg viewBox="0 0 16 16"><path d="M1.5 8.5h3l2-5 3 9 2-4h3"/></svg><span class="lbl">Диагностика</span></a>
     <div class="grp" data-users-nav>Доступ</div>
+    <a href="#net" data-sec="net" data-users-nav><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c1.8 1.7 2.6 3.7 2.6 6S9.8 12.3 8 14M8 2C6.2 3.7 5.4 5.7 5.4 8s.8 4.3 2.6 6"/></svg><span class="lbl">Доступ из сети</span><span class="dot" data-nav="net"></span></a>
     <a href="#users" data-sec="users" data-users-nav><svg viewBox="0 0 16 16"><circle cx="6" cy="5.5" r="2.5"/><path d="M1.5 13.5c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4M10.5 3.2a2.5 2.5 0 0 1 0 4.6M12 9.8c1.5.5 2.5 1.8 2.5 3.7"/></svg><span class="lbl">Пользователи</span><span class="nb" id="nav-auth"></span></a>
     <div class="foot" id="home-note">Загрузка настроек…</div>
   </nav>
@@ -454,15 +455,119 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
       </div>
     </section>
 
+    <!-- ========== Доступ из сети: перезапуск сервера, доступ коллегам, адреса, брандмауэр (desk-server.js; данные:
+         /api/v1/server — то же, что desk.bat lan enable / lan disable; проверка доступа: /api/v1/lan/status) ========== -->
+    <section class="sec" id="net" data-sec="net">
+      <style>
+        #net .nf-warn .note{margin:10px 0 0}
+        #net .form .chk + .chk{margin-left:14px}
+        #rs{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:16px}
+        #rs .rs-box{background:var(--panel);border:1px solid var(--line-2);border-radius:10px;box-shadow:var(--shadow);padding:18px 20px;max-width:560px;width:100%}
+        #rs h3{margin:0 0 10px;font-size:15px}
+        #rs .up-steps{list-style:none;margin:0 0 10px;padding:0;display:flex;gap:6px 18px;flex-wrap:wrap}
+        #rs .up-steps li{display:inline-flex;align-items:center;gap:6px;color:var(--fg-3)}
+        #rs .up-steps li::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--line-2)}
+        #rs .up-steps li.on{color:var(--fg)} #rs .up-steps li.on::before{background:var(--warn)}
+        #rs .up-steps li.done{color:var(--pos)} #rs .up-steps li.done::before{background:var(--pos)}
+        #rs .up-steps li.fail{color:var(--neg)} #rs .up-steps li.fail::before{background:var(--neg)}
+        #rs #rs-addr{margin:8px 0 0;word-break:break-all}
+      </style>
+      <div class="sec-h"><div><h1>Доступ из сети</h1><p>Пустить коллег в Desk Monitor с их компьютеров, сменить порт или шифрование, перезапустить сервер — без командной строки.</p></div>
+        <div class="badges"><span class="badge st" id="net-st">…</span></div></div>
+      <div class="note warn" id="net-denied" hidden></div>
+      <div id="net-main">
+      <div class="note warn" id="net-pending" hidden></div>
+      <div class="note" id="net-last" hidden></div>
+
+      <div class="card" id="srv">
+        <div class="hd"><h2>Сервер</h2><span class="sp"></span><button class="ibtn" id="srv-restart" type="button">Перезапустить сервер</button></div>
+        <div class="bd"><div class="kv" id="srv-kv"></div><p class="hint" id="srv-hint"></p></div>
+      </div>
+
+      <div class="card" id="net-form">
+        <div class="hd"><h2>Настройки доступа</h2><span class="mut3">действуют после перезапуска</span></div>
+        <div class="bd">
+          <div class="form">
+            <label for="nf-lan">Доступ коллегам</label>
+            <div><label class="tgl"><input type="checkbox" id="nf-lan"><span class="tgl-s"></span><span id="nf-lan-l"></span></label>
+              <p class="hint">Коллеги открывают Desk Monitor в своём браузере по имени этого компьютера и входят под своими именами и паролями (раздел «Пользователи»).</p></div>
+            <label class="nf-on">Шифрование</label>
+            <div class="nf-on"><label class="chk"><input type="radio" name="nf-mode" value="https"> HTTPS (рекомендуется)</label><label class="chk"><input type="radio" name="nf-mode" value="http"> HTTP без шифрования</label>
+              <p class="hint">HTTPS шифрует пароли и данные. Сертификат создаётся здесь сам; браузер коллеги один раз предупредит о нём.</p></div>
+            <label class="nf-on">Сертификат</label>
+            <div class="nf-on" id="nf-cert-row"><div id="nf-cert"></div>
+              <label class="chk" style="margin-top:6px"><input type="checkbox" id="nf-regen"> создать сертификат заново</label>
+              <p class="hint">Нужно, если сменилось имя или адрес компьютера (браузер пишет, что сертификат «для другого сайта») или срок вышел.</p></div>
+            <label for="nf-port">Порт</label>
+            <div><input class="inp mono num" id="nf-port" inputmode="numeric" autocomplete="off">
+              <span class="tag env" id="nf-port-lock" hidden>задан при запуске (start.bat --port или DESK_PORT)</span>
+              <p class="hint">Обычно 8100. Другой — если этот занят другой программой или закрыт (например, 8443). Правило брандмауэра нужно на новый порт.</p></div>
+            <label class="nf-on" for="nf-host">Адрес</label>
+            <div class="nf-on"><select class="inp" id="nf-host" style="max-width:360px"></select>
+              <input class="inp mono" id="nf-host-x" hidden placeholder="10.1.2.3" autocomplete="off" style="max-width:220px;margin-top:6px">
+              <p class="hint">«Все адреса» подходит почти всегда. Один адрес — если на «всех» коллеги не открывают (см. «Проверка доступа» ниже).</p></div>
+            <label class="nf-on" for="nf-afn">Настройки с других компьютеров</label>
+            <div class="nf-on"><label class="tgl"><input type="checkbox" id="nf-afn"><span class="tgl-s"></span><span id="nf-afn-l"></span></label>
+              <p class="hint">Может ли администратор открывать настройки, обновления и пользователей со своего компьютера. Выключено — только здесь.</p></div>
+            <label class="nf-off">Вход по паролю</label>
+            <div class="nf-off"><label class="chk"><input type="checkbox" id="nf-authoff"> тоже выключить (только этот компьютер, без имён и паролей)</label></div>
+          </div>
+          <div class="nf-warn" id="nf-warn"></div>
+          <div class="row" style="margin-top:12px">
+            <button class="btn" id="nf-apply" type="button">Применить и перезапустить</button>
+            <button class="ibtn" id="nf-save" type="button" title="Сохранить сейчас, а перезапустить позже">Только сохранить</button>
+            <button class="lnk" id="nf-reset" type="button" hidden>отменить изменения</button>
+            <span id="nf-msg" class="muted"></span>
+          </div>
+          <p class="hint">Если сервер не запустится с новыми настройками (порт занят, сертификат не подошёл), вернутся прежние; на этом компьютере Desk Monitor открывается всегда. Из командной строки то же: <span class="mono">desk.bat lan enable --self-signed</span>, <span class="mono">desk.bat lan disable</span> (START_HERE.txt, раздел 9).</p>
+        </div>
+      </div>
+
+      <div class="card" id="net-urls">
+        <div class="hd"><h2>Адреса для коллег</h2></div>
+        <div class="bd" id="net-urls-list"></div>
+      </div>
+
+      <div class="card" id="fw">
+        <div class="hd"><h2>Брандмауэр Windows</h2><span class="mut3">нужны права администратора компьютера</span></div>
+        <div class="bd" id="fw-body"></div>
+      </div>
+
+      <!-- Проверка доступа (desk lan status; данные: /api/v1/lan/status) -->
+      <div class="card" id="lan">
+        <style>
+          #lan .pr{margin:2px 0}
+          #lan .pr b{font-weight:500}
+          #lan .pr.bad b{color:var(--neg)} #lan .pr.ok b{color:var(--pos)}
+          #lan .pr .hint{margin:2px 0 6px 0}
+        </style>
+        <div class="hd"><h2>Проверка доступа</h2><span class="mut3" id="lan-when"></span><span class="sp"></span><button class="ibtn" id="lan-run" type="button">Проверить сейчас</button></div>
+        <div class="bd">
+          <p class="hint" style="margin:0 0 8px">Сервер проверяет сам себя с этого компьютера (без прокси) на 127.0.0.1 и на каждом сетевом адресе — то же, что <span class="mono">desk.bat lan status</span>. Брандмауэр такая проверка не проходит: «отвечает» значит, что сервер слушает адрес; если коллеги всё равно не открывают — правило брандмауэра выше или прокси в их браузере. <span id="lan-msg" class="muted"></span></p>
+          <table class="t"><tbody id="lan-rows"></tbody></table>
+          <div id="lan-probe" style="margin-top:8px"></div>
+        </div>
+      </div>
+      </div>
+    </section>
+
+    <div id="rs" hidden role="dialog" aria-modal="true" aria-labelledby="rs-t"><div class="rs-box">
+      <h3 id="rs-t">Перезапуск сервера</h3>
+      <ol class="up-steps" id="rs-steps"><li>остановка</li><li>запуск</li><li>проверка</li><li>готово</li></ol>
+      <div id="rs-msg" class="muted"></div>
+      <div id="rs-addr" class="mono"></div>
+      <div class="row" style="margin-top:12px"><a class="btn" id="rs-open" hidden>Открыть новый адрес</a><button class="ibtn" id="rs-close" type="button" hidden>Закрыть</button></div>
+    </div></div>
+
     <!-- ========== Пользователи (вход и доступ по сети, пакет 1 п. 9; раздел — desk-users.js) ========== -->
     <section class="sec" id="sec-users" data-sec="users">
       <div class="sec-h"><div><h1>Пользователи</h1><p>Кто входит в Desk Monitor и с какой ролью: просмотр, трейдер, администратор. Журнал действий — внизу.</p></div>
         <div class="badges"><span class="badge st" id="auth-st">вход …</span></div></div>
       <div class="note" id="users-off" hidden>
         <b>Вход по паролю выключен</b> — Desk Monitor открыт только на этом компьютере, пользователи не нужны.
-        Чтобы пустить коллег по сети: заведите здесь себя администратором и коллег (или <span class="mono">desk.bat user add ИМЯ --role admin</span>),
-        затем включите вход и доступ из сети: <span class="mono">desk.bat lan enable --self-signed</span>, брандмауэр
-        (<span class="mono">desk.bat firewall add</span>) и перезапуск — по шагам в START_HERE.txt, раздел 9 «Доступ коллегам по сети».
+        Чтобы пустить коллег по сети: заведите здесь себя администратором и коллег, затем включите доступ в разделе
+        <a href="#net">«Доступ из сети»</a> (кнопка «Применить и перезапустить») и попросите ИТ открыть порт в брандмауэре —
+        текст для ИТ там же. По шагам: START_HERE.txt, раздел 9 «Доступ коллегам по сети».
       </div>
       <div class="note warn" id="users-denied" hidden>Пользователями управляет администратор.</div>
       <div class="card" id="users-card"><section class="bd" data-desk-users></section></div>
@@ -470,7 +575,7 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
 
     <!-- ========== Диагностика ========== -->
     <section class="sec" id="sec-diag" data-sec="diag">
-      <div class="sec-h"><div><h1>Диагностика</h1><p>Файл для агента, доступ из сети, загрузка позиций по книгам, ход истории прогонов и где что лежит.</p></div></div>
+      <div class="sec-h"><div><h1>Диагностика</h1><p>Файл для агента, загрузка позиций по книгам, ход истории прогонов и где что лежит.</p></div></div>
 
       <!-- Диагностика (R13; свои стиль и скрипт; данные: /api/v1/diagnostics) -->
       <div class="card" id="dg">
@@ -491,21 +596,7 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
         </div>
       </div>
 
-      <!-- Доступ из сети (desk lan status; данные: /api/v1/lan/status) -->
-      <div class="card" id="lan">
-        <style>
-          #lan .pr{margin:2px 0}
-          #lan .pr b{font-weight:500}
-          #lan .pr.bad b{color:var(--neg)} #lan .pr.ok b{color:var(--pos)}
-          #lan .pr .hint{margin:2px 0 6px 0}
-        </style>
-        <div class="hd"><h2>Доступ из сети</h2><span class="mut3" id="lan-when"></span><span class="sp"></span><button class="ibtn" id="lan-run" type="button">Проверить сейчас</button></div>
-        <div class="bd">
-          <p class="hint" style="margin:0 0 8px">Адрес, HTTPS и сертификат, правило брандмауэра, адреса для коллег и проверка этого сервера с этого же компьютера (без прокси) — то же, что <span class="mono">desk.bat lan status</span>. Как включить доступ: START_HERE.txt, раздел 9. <span id="lan-msg" class="muted"></span></p>
-          <table class="t"><tbody id="lan-rows"></tbody></table>
-          <div id="lan-probe" style="margin-top:8px"></div>
-        </div>
-      </div>
+      <div class="note">Доступ из сети и его проверка — в разделе <a href="#net">«Доступ из сети»</a>.</div>
 
       <!-- Загрузка позиций (R22; данные: /api/v1/inbox/reconcile) -->
       <div class="card" id="rc">
@@ -607,9 +698,10 @@ async function api(method, url, body){
   return j;
 }
 
-/* ---------- разделы: #hub, #adapter, #entities, #books, #funding, #auto, #up, #diag (и #dg, #lan, #rc, #bf, #eff внутри), #users ---------- */
-const SECTIONS = ['hub', 'adapter', 'entities', 'books', 'funding', 'auto', 'up', 'diag', 'users'];
-const INNER = {dg:'diag', lan:'diag', rc:'diag', bf:'diag', eff:'diag', 'eff-card':'diag'};
+/* ---------- разделы: #hub, #adapter, #entities, #books, #funding, #auto, #up, #diag (и #dg, #rc, #bf, #eff внутри),
+   #net (и #srv, #lan, #fw внутри), #users ---------- */
+const SECTIONS = ['hub', 'adapter', 'entities', 'books', 'funding', 'auto', 'up', 'diag', 'net', 'users'];
+const INNER = {dg:'diag', rc:'diag', bf:'diag', eff:'diag', 'eff-card':'diag', lan:'net', srv:'net', fw:'net', 'net-urls':'net'};
 function show(hash){
   let id = (hash || '').replace(/^#/, ''), inner = null;
   if (INNER[id]) { inner = id; id = INNER[id]; }
@@ -618,6 +710,7 @@ function show(hash){
   document.querySelectorAll('.st-nav a[data-sec]').forEach(a => { a.classList.toggle('on', a.dataset.sec === id); if (a.dataset.sec === id) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   store.set('settings.sec', id);
   if (id === 'users') usersSection();
+  if (id === 'net') netSection();
   const cur = document.querySelector('.st-nav a.on');  // на телефоне разделы — полосой: выбранный виден
   if (cur && matchMedia('(max-width:860px)').matches) cur.parentNode.scrollLeft = cur.offsetLeft - 16;
   if (inner && $(inner)) setTimeout(() => $(inner).scrollIntoView({block:'start', behavior:'smooth'}), 30);
@@ -646,6 +739,11 @@ function usersSection(){
     if (window.DeskUsers) return go();
     const sc = document.createElement('script'); sc.src = 'desk-users.js'; sc.onload = go; document.head.appendChild(sc);
   });
+}
+/* ---------- Доступ из сети: раздел desk-server.js (перезапуск, сеть, адреса, брандмауэр; только администратор) ---------- */
+function netSection(){
+  if (window.DeskServer) return window.DeskServer.mount();
+  const sc = document.createElement('script'); sc.src = 'desk-server.js'; sc.onload = () => window.DeskServer.mount(); document.head.appendChild(sc);
 }
 authState().then(st => {  // ссылка в навигации: при включённом входе — только администратору
   const on = !!(st && st.enabled), admin = !on || !!(st.user && st.user.role === 'admin');
@@ -1373,7 +1471,7 @@ function mountTabs(a, reload){
 /* ---------- Доступ из сети: /api/v1/lan/status (desk lan status) — адрес, HTTPS, сертификат, брандмауэр, адреса для коллег;
    проверка при запуске сервера (last) и по «Проверить сейчас» (probe=1) ---------- */
 (function lanStatus(){
-  const FW = {true:'есть', false:'нет — desk.bat firewall add (от имени администратора)', null:'неизвестно (не Windows)'};
+  const FW = {true:'есть', false:'нет — текст для ИТ в «Брандмауэр Windows» выше', null:'неизвестно (не Windows)'};
   function rows(s){
     const out = [
       ['Слушает', s.bind_host + ':' + s.port + (s.network ? (s.bind_host === '0.0.0.0' || s.bind_host === '::' ? ' — все адреса этого компьютера и 127.0.0.1' : ' и 127.0.0.1') : ' — только этот компьютер')],
@@ -1382,7 +1480,7 @@ function mountTabs(a, reload){
     ];
     const c = s.cert;
     if (c) out.push(['Сертификат', !c.exists ? 'файл не найден' : c.error ? c.error
-      : 'до ' + c.not_after + '; имена: ' + c.sans.join(', ') + (c.missing.length ? '\nнет в сертификате (браузер предупредит): ' + c.missing.join(', ') + ' — новый: desk.bat lan enable --self-signed' : '')]);
+      : 'до ' + c.not_after + '; имена: ' + c.sans.join(', ') + (c.missing.length ? '\nнет в сертификате (браузер предупредит): ' + c.missing.join(', ') + ' — новый: «создать сертификат заново» выше' : '')]);
     if (s.network) {
       out.push(['Брандмауэр', '«' + s.firewall.rule + '»: ' + FW[String(s.firewall.present)]]);
       out.push(['Адреса для коллег', s.urls.join('\n') || '—']);
