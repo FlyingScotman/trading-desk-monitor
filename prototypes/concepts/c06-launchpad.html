@@ -116,7 +116,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
       render(bd, mode) {
         const list = () => K.list().filter(p => p.ccy !== 'RUB' && p.group !== 'DER');
         if (mode === 'table') {
-          K.table(bd, { rows: list(), search: false, footer: true, stripe: r => K.ccyColor(r.ccy), sort: [['dv01', 1]], columns: K.cols(['name', ccyCol, 'issuer', 'tenor', 'ytm', 'dv01', 'cs01']) });
+          K.table(bd, { viewKey: 'c06-fx-bonds', rows: list(), search: false, footer: true, stripe: r => K.ccyColor(r.ccy), sort: [['dv01', 1]], columns: K.cols(['name', ccyCol, 'issuer', 'tenor', 'ytm', 'dv01', 'cs01']) });
           return;
         }
         const el = K.h('div', 'fill'); bd.appendChild(el); stack(el, { curves: ['USD SOFR', 'EUR ESTR', 'CNY XCCY'], list });
@@ -141,7 +141,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const L = K.list().slice().sort((a, b) => Math.abs(b.pnl.total) - Math.abs(a.pnl.total)).slice(0, 12);
         if (mode === 'table') {
           const pc = (key, label) => ({ key: 'p' + key, label, num: true, val: r => r.pnl[key], fmt: f.k, cls: f.cls });
-          K.table(bd, { rows: L, search: false, footer: false, stripe: r => K.issuerColor(r.issuer), columns: K.cols(['name', ccyCol, 'issuer', pc('total', 'Итого'), pc('carry', 'Кэрри'), pc('rates', 'Ставки'), pc('spread', 'Спред'), pc('fx', 'FX')]) });
+          K.table(bd, { viewKey: 'c06-pnl-top', rows: L, search: false, footer: false, stripe: r => K.issuerColor(r.issuer), columns: K.cols(['name', ccyCol, 'issuer', pc('total', 'Итого'), pc('carry', 'Кэрри'), pc('rates', 'Ставки'), pc('spread', 'Спред'), pc('fx', 'FX')]) });
           return;
         }
         const el = K.h('div', 'fill'); bd.appendChild(el);
@@ -170,7 +170,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const key = { dv01: p => p.dv01, cs01: p => p.cs01, pnl: p => p.pnl.total }[mode];
         const L = K.list().filter(p => key(p)).sort((a, b) => Math.abs(key(b)) - Math.abs(key(a))).slice(0, 25);
         const metric = mode === 'pnl' ? 'pnl' : mode;
-        K.table(bd, { rows: L, search: false, footer: false, stripe: r => K.issuerColor(r.issuer), columns: K.cols(['name', ccyCol, 'issuer', 'kind', 'tenor', metric, mode === 'dv01' ? 'cs01' : 'dv01']) });
+        K.table(bd, { viewKey: 'c06-top-by-size-' + mode, rows: L, search: false, footer: false, stripe: r => K.issuerColor(r.issuer), columns: K.cols(['name', ccyCol, 'issuer', 'kind', 'tenor', metric, mode === 'dv01' ? 'cs01' : 'dv01']) });
       },
     },
     events: {
