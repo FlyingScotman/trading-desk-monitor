@@ -222,6 +222,7 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
     <a href="#funding" data-sec="funding"><svg viewBox="0 0 16 16"><path d="M12.5 3.5l-9 9M5 6.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM11 12.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z"/></svg><span class="lbl">Фондирование</span><span class="nb" data-count="funding"></span><span class="dot" data-nav="funding"></span></a>
     <div class="grp">Работа</div>
     <a href="#auto" data-sec="auto"><svg viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3"/></svg><span class="lbl">Автообновление</span><span class="dot" data-nav="auto"></span></a>
+    <a href="#backup" data-sec="backup"><svg viewBox="0 0 16 16"><ellipse cx="8" cy="4" rx="5" ry="2"/><path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/></svg><span class="lbl">Резервные копии</span><span class="dot" data-nav="backup"></span></a>
     <a href="#up" data-sec="up"><svg viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10"/></svg><span class="lbl">Обновление программы</span><span class="nb" id="nav-ver"></span></a>
     <a href="#diag" data-sec="diag"><svg viewBox="0 0 16 16"><path d="M1.5 8.5h3l2-5 3 9 2-4h3"/></svg><span class="lbl">Диагностика</span></a>
     <div class="grp" data-users-nav>Доступ</div>
@@ -388,6 +389,13 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
             <p class="hint">Пусто — 600. Начатая дата всегда досчитывается.</p></div>
         </div>
       </div>
+    </section>
+
+    <!-- ========== Резервные копии базы (раздел — desk-backup.js; данные: /api/v1/backup, настройки backup_*) ========== -->
+    <section class="sec" id="sec-backup" data-sec="backup">
+      <div class="sec-h"><div><h1>Резервные копии</h1><p>Копия базы деска каждый день, проверка восстановления из копии и как восстановить данные.</p></div>
+        <div class="badges"><span class="badge st" id="bk-st">…</span></div></div>
+      <div data-desk-backup></div>
     </section>
 
     <!-- ========== Обновление программы (свои стиль и скрипт; данные: /api/v1/update; GitHub — desk-updater.js) ========== -->
@@ -1412,3 +1420,4 @@ function mountTabs(a, reload){
   if (/^https?:$/.test(location.protocol)) load(false);
 })();
 </script>
+<script src="desk-backup.js"></script>
