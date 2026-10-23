@@ -1,5 +1,10 @@
-# Project document instructions
+# Program documents
 
-Every time you give the user a shell/CLI command, explain every command, subcommand, argument, flag, operator, and other non-obvious syntax. Never provide an unexplained shell command.
+Общие инструкции для агентов — корневой [AGENTS.md](../../AGENTS.md): правила проекта и порядок ведения задач в
+GitHub Issues. Документы этой папки — пакет планирования 14–22.10.2026; открытые пункты из `backlog.json`,
+`OWNER_REQUESTS.md` и `STATUS.md` перенесены в GitHub Issues (корень —
+[«Дорожная карта программы»](https://github.com/FlyingScotman/trading-desk-monitor/issues/5)), новых пунктов сюда не
+добавляем.
 
-These are program documents inside FlyingScotman/trading_desk_monitor. Fixed Income Core remains in FiveLimaGolf/rub-fixed-income-core. PNL is local-only and must not be published to a Git repository. Read GITHUB_SETUP.md before changing repository ownership or authentication.
+Репозитории: монитор — FlyingScotman/trading-desk-monitor (публичный), ядро — FlyingScotman/rub-fixed-income-core.
+`GITHUB_SETUP.md` описывает настройку от 15.10 и устарел в части владельцев репозиториев.
