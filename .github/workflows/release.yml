@@ -6,6 +6,8 @@ name: release
 # SHA256SUMS, release.json and notes with the checksums.
 # Bump the version, commit, then:  git tag v0.3.0 && git push origin v0.3.0
 # Re-running for an existing tag (Actions -> release -> Run workflow) replaces its assets.
+# Only a v-tag starts this workflow: a tag without v (or a release made by hand on GitHub) stays empty; tag-format.yml
+# fails on such a tag with what to do, and check-tag below rejects a non-v tag given to Run workflow.
 
 on:
   push:
@@ -54,10 +56,11 @@ jobs:
           backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests
       - name: The previous release's full bundle, as published (base of the patch)
         # the patch is made against the bytes that were delivered, never a rebuild that only has the same version
+        # (v-tags only: a release with a tag without v was made by hand and has no bundle)
         run: |
           mkdir -p prev
           prev=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 30 \
-                   --json tagName --jq '.[].tagName' | grep -vxF "$TAG" | head -n 1 || true)
+                   --json tagName --jq '.[].tagName' | grep -vxF "$TAG" | grep '^v' | head -n 1 || true)
           if [ -n "$prev" ]; then
             echo "previous release: $prev"
             if gh release download "$prev" --repo "$GITHUB_REPOSITORY" --dir prev \
