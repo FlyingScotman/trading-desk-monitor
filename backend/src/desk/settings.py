@@ -45,6 +45,8 @@ layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub
 * ``DESK_INBOX_POLL_SECONDS``, ``DESK_ADAPTER_MATCH_TIMEOUT_S``, ``DESK_ADAPTER_READ_TIMEOUT_S``,
   ``DESK_INBOX_MAX_FILE_MB``  watcher period (60), adapter timeouts (10 per match batch, 600 per read) and
                            the largest file offered (500)
+* ``DESK_ADAPTER_CHECK_TIMEOUT_S``  the limit of one ``reference()`` run when a settings form checks a file with
+                           the adapter (60; ``desk.settings_forms``); a save never waits for the check
 * ``DESK_AUTOPILOT``, ``DESK_AUTOPILOT_SYNC_LAST``  the ``desk serve`` autopilot (on) and the number of
                            latest hub dates it keeps in sync (5)
 * ``DESK_INTRADAY``        the autopilot's intraday step (on): today's book on the hub's intraday cuts every half
@@ -139,6 +141,7 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "private_adapter_config": ("DESK_PRIVATE_ADAPTER_CONFIG", "path"),
     "inbox_dirs": ("DESK_INBOX_DIRS", "dirs"),
     "inbox_poll_seconds": ("DESK_INBOX_POLL_SECONDS", "num"),
+    "adapter_check_timeout_s": ("DESK_ADAPTER_CHECK_TIMEOUT_S", "num"),
     "autopilot": ("DESK_AUTOPILOT", "bool"),
     "autopilot_sync_last": ("DESK_AUTOPILOT_SYNC_LAST", "int"),
     "intraday": ("DESK_INTRADAY", "bool"),
@@ -236,6 +239,7 @@ class Settings:
     inbox_poll_seconds: float = 60.0
     adapter_match_timeout_s: float = 60.0  # per match call (50 files); the worker start-up is apart (R22)
     adapter_read_timeout_s: float = 600.0
+    adapter_check_timeout_s: float = 60.0  # one reference() run of a settings form's check (desk.settings_forms)
     inbox_max_file_mb: float = 500.0
     home: Path = None  # type: ignore[assignment]  # None: desk_home()
     autopilot: bool = True
@@ -333,6 +337,7 @@ class Settings:
             ("inbox_poll_seconds", f"{self.inbox_poll_seconds:g}"),
             ("adapter_match_timeout_s", f"{self.adapter_match_timeout_s:g}"),
             ("adapter_read_timeout_s", f"{self.adapter_read_timeout_s:g}"),
+            ("adapter_check_timeout_s", f"{self.adapter_check_timeout_s:g}"),
             ("inbox_max_file_mb", f"{self.inbox_max_file_mb:g}"),
             ("autopilot", "on" if self.autopilot else "off"),
             ("autopilot_sync_last", str(self.autopilot_sync_last)),
@@ -681,6 +686,7 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         inbox_poll_seconds=num("DESK_INBOX_POLL_SECONDS", defaults.inbox_poll_seconds),
         adapter_match_timeout_s=num("DESK_ADAPTER_MATCH_TIMEOUT_S", defaults.adapter_match_timeout_s),
         adapter_read_timeout_s=num("DESK_ADAPTER_READ_TIMEOUT_S", defaults.adapter_read_timeout_s),
+        adapter_check_timeout_s=num("DESK_ADAPTER_CHECK_TIMEOUT_S", defaults.adapter_check_timeout_s),
         inbox_max_file_mb=num("DESK_INBOX_MAX_FILE_MB", defaults.inbox_max_file_mb),
         home=home,
         autopilot=flag("DESK_AUTOPILOT", defaults.autopilot),

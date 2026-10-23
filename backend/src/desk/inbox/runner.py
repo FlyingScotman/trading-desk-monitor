@@ -463,9 +463,12 @@ def call_read(handle: Any, path: str, hit: dict, instruments_index: str | Path |
     return _result(_call(_request(handle, "read", instruments_index, path=path, hit=hit), timeout_s))
 
 
-def call_reference(handle: Any, instruments_index: str | Path | None, timeout_s: float) -> Any:
-    """The raw ``reference(ctx)`` result; raises ``AdapterFailure``."""
-    return _result(_call(_request(handle, "reference", instruments_index), timeout_s))
+def call_reference(handle: Any, instruments_index: str | Path | None, timeout_s: float,
+                   worker: Worker | None = None) -> Any:
+    """The raw ``reference(ctx)`` result; raises ``AdapterFailure``. With ``worker``, the call goes to that long-lived
+    child (the settings forms keep one warm between checks) instead of the pool or a one-shot child."""
+    req = _request(handle, "reference", instruments_index)
+    return _result(worker.call(req, timeout_s) if worker is not None else _call(req, timeout_s))
 
 
 if __name__ == "__main__":

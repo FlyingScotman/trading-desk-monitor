@@ -303,6 +303,9 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
             <label for="private_adapter_config">Папка настроек адаптера</label>
             <div><input class="inp mono" id="private_adapter_config" data-key="private_adapter_config" autocomplete="off">
               <p class="hint">Пусто — <span class="mono" id="cfg-default"></span> (создаётся сама). Здесь лежат файлы юрлиц, книг и фондирования.</p></div>
+            <label for="adapter_check_timeout_s">Проверка формы адаптером, секунд</label>
+            <div><input class="inp mono num" id="adapter_check_timeout_s" data-key="adapter_check_timeout_s" inputmode="decimal" placeholder="60">
+              <p class="hint">Пусто — 60. Сколько ждать адаптер, когда форма проверяет файл перед сохранением; сохранить можно и без проверки.</p></div>
           </div>
         </div>
       </div>
@@ -654,7 +657,7 @@ show(location.hash);
 
 /* ---------- settings.json ---------- */
 const S = {data:null, dirs:[], dirty:false, adapter:null};
-const KEYS = ['hub_url','https_proxy','proxy_user','hub_transport','no_proxy','hub_ca_bundle','private_adapter','private_adapter_config','inbox_poll_seconds','autopilot_sync_last','inbox_lookback_days','history_days','history_bonds_from','history_rates_from','backfill_from','backfill_budget_s'];
+const KEYS = ['hub_url','https_proxy','proxy_user','hub_transport','no_proxy','hub_ca_bundle','private_adapter','private_adapter_config','inbox_poll_seconds','adapter_check_timeout_s','autopilot_sync_last','inbox_lookback_days','history_days','history_bonds_from','history_rates_from','backfill_from','backfill_budget_s'];
 
 function setDirty(v){
   S.dirty = v;
@@ -747,7 +750,7 @@ const EFF = [
   ['https_proxy','Прокси'], ['proxy_user','Логин прокси'], ['proxy_password_set','Пароль прокси задан'], ['hub_transport','Способ подключения'], ['no_proxy','Без прокси для'], ['snapshot_cache','Срезы маркет-даты'], ['snapshot_drop','Папка ручной загрузки срезов'],
   ['store','Хранилище'], ['pg_dir','Встроенная PostgreSQL'], ['db','SQLite (прототип)'], ['report_dir','Отчёты валидации'],
   ['private_adapter','Адаптер'], ['private_adapter_default','Адаптер из комплекта'], ['private_adapter_config','Папка настроек адаптера'], ['private_adapter_sha256','Закреплённый отпечаток адаптера'],
-  ['inbox_dirs','Папки с отчётами'], ['inbox_archive','Архив принятых файлов'], ['inbox_poll_seconds','Период опроса, сек'],
+  ['inbox_dirs','Папки с отчётами'], ['inbox_archive','Архив принятых файлов'], ['inbox_poll_seconds','Период опроса, сек'], ['adapter_check_timeout_s','Проверка формы адаптером, сек'],
   ['autopilot','Автообновление'], ['intraday','Расчёт внутри дня'], ['autopilot_sync_last','Загружать последних дат'],
   ['inbox_lookback_days','Брать отчёты не старше, дней'], ['history_days','История котировок, рабочих дней'],
   ['history_bonds_from','История облигаций с'], ['history_rates_from','История ставок и курсов с'],
@@ -781,10 +784,10 @@ function collect(){
       const n = Number(v);
       if (!Number.isInteger(n) || n < 0) throw new Error('Отчёты не старше: нужно целое число дней (0 — без ограничения)');
       body[k] = n;
-    } else if (k === 'backfill_budget_s') {
+    } else if (k === 'backfill_budget_s' || k === 'adapter_check_timeout_s') {
       if (!v) { body[k] = null; continue; }
       const n = Number(v.replace(',', '.'));
-      if (!isFinite(n) || n <= 0) throw new Error('История прогонов: нужно положительное число секунд');
+      if (!isFinite(n) || n <= 0) throw new Error((k === 'backfill_budget_s' ? 'История прогонов' : 'Проверка формы адаптером') + ': нужно положительное число секунд');
       body[k] = n;
     } else if (k === 'backfill_from') {
       if (!v) { body[k] = null; continue; }
