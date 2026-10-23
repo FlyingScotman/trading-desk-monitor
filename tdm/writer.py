@@ -50,7 +50,9 @@ RULE_COLS = ["book_type", "desk", "book_id", "entity", "instrument_id", "ccy", "
 SCEN_COLS = ["rates", "spread", "fx_gross", "fx_funding", "convexity", "fx_cross", "total"]
 GAMMA_FACTOR = re.compile(r"^(IR\|[^|]+\|[^|]+|CS|FX\|[A-Z]{3})$")
 
-# Конвенции фондирования (docs/ORG_CONVENTIONS.md §1): O/N-индексы остатков ДС, базы начисления, бенчмарки
+# Демо-значения по умолчанию (синтетические, не правила организации; docs/ORG_CONVENTIONS.md §1): O/N-индекс остатка ДС,
+# когда справочник funding_rules не дал правила, базы начисления, бенчмарки. Настоящие правила приходят из адаптера
+# справочником funding_rules (план адаптера, фаза A7).
 ON_INDEX = {"RUB": "RUONIA", "CNY": "RUSFAR CNY", "USD": "SOFR", "EUR": "€STR", "CHF": "SARON"}
 DAY_BASIS = {"RUB": 365, "CNY": 365, "USD": 360, "EUR": 360, "CHF": 360}   # остатки ДС и РЕПО; POS / HTM — 365 (процент в RUB)
 BENCH_POS = {"RUB": "КС", "CNY": "RUSFAR CNY"}
@@ -108,7 +110,7 @@ def resolve_funding_rule(rules, book, ccy, position=None):
 
 
 def rule_expr(r):
-    """Подпись ставки: 'КС + 0.30%', '5.00% фикс', 'RUONIA'."""
+    """Подпись ставки: 'КС + 0.30%', '6.00% фикс', 'RUONIA'."""
     if _nz(r.get("fixed_rate")) is not None:
         return f"{r['fixed_rate']:.2f}% фикс"
     s = r.get("spread_bp") or 0
