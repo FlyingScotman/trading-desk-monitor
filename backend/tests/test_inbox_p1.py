@@ -403,13 +403,15 @@ def test_trade_terms_1_4_rows_in_the_typed_view(con, tmp_path: Path) -> None:
     r = scan.scan(con, _settings(tmp_path, inbox))
     assert r.ok and r.files == {"accepted": 1}, r.text()
     got = con.execute("SELECT trade_id, leg_id, product_kind, side, ccy, notional_ccy, fixed_rate_pct, index_code,"
-                      " spread_bp, maturity_date, isin, quantity, purchase_price_pct, ndf FROM trade_terms_row"
+                      " spread_bp, maturity_date, isin, quantity, purchase_price_pct, source_instrument_name, ndf"
+                      " FROM trade_terms_row"
                       " ORDER BY trade_id, leg_id").fetchall()
     rows = {(t, leg): rest for t, leg, *rest in got}
     assert len(rows) == 8
     assert rows[("OIS-1", "flt")][:7] == ["ois", "pay", "RUB", 500000000, None, "RUONIA", -10]
     assert rows[("REPO-1", None)][0] == "repo" and rows[("REPO-1", None)][7] == D("2026-11-18")
     assert rows[("HTM-1", None)][2] == "RUB" and str(rows[("HTM-1", None)][10]) == "97.35"
+    assert rows[("HTM-1", None)][11] == "SYN BOND 2" and rows[("IRS-1", "fix")][11] is None
     assert all(x[-1] is False for x in rows.values())  # the 1.2 columns stay as they were
 
 

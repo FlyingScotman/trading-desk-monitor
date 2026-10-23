@@ -23,5 +23,6 @@ SELECT s.set_id, s.valid_date, s.source, s.revision, r.row_no, r.data->>'trade_i
        (r.data->>'purchase_price_pct')::numeric AS purchase_price_pct,
        (r.data->>'purchase_yield_pct')::numeric AS purchase_yield_pct,
        (r.data->>'contract_rate_pct')::numeric AS contract_rate_pct,
-       (r.data->>'purchase_accrued_ccy')::numeric AS purchase_accrued_ccy
+       (r.data->>'purchase_accrued_ccy')::numeric AS purchase_accrued_ccy,
+       r.data->>'source_instrument_name' AS source_instrument_name
 FROM dataset_row r JOIN dataset_set s USING (set_id) WHERE s.dataset = 'trade_terms';

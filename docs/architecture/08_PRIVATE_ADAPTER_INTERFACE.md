@@ -461,8 +461,8 @@ Rules beyond the schema (`desk.inbox.validate`), each an `error` for the row's u
   `face_amount_ccy`, a non-zero `spread_bp` with `fixed_rate_pct`, and `maturity_date` not after `start_date`.
 
 Status 23.10.2026: the backend validates and stores the 1.4 rows (`dataset_rows`); valuation reads only the FX kinds
-(`valuation.derivatives`), so swaps from terms come with their slice (TDM#45), the funding of REPO and HTM lots from
-terms with the funding engine (TDM#55). The typed view `trade_terms_row` has the 1.4 fields as columns after the 1.2
+(`valuation.derivatives`), so swaps from terms come with their slice (FlyingScotman/trading-desk-monitor#45), the funding of REPO and HTM lots from
+terms with the funding engine (FlyingScotman/trading-desk-monitor#55). The typed view `trade_terms_row` has the 1.4 fields as columns after the 1.2
 ones (migration 0020); every field is also in its `data`.
 
 ### `trades` — flow; `full_snapshot` per book for cumulative exports, or `increment` for deltas; `time_basis = intraday`
@@ -616,9 +616,9 @@ prototype `tdm`; for the backend the private contract replaces them:
 
 Designs agreed in direction, without a schema yet; each becomes a minor with its slice:
 
-- Done in 1.4: `trade_terms` for swaps, REPO and HTM purchases (above). Against the draft: a leg's direction is
-  `side` (`pay`, `receive`), so `leg_id` stays the adapter's own code; `notional` is `notional_ccy` (units in names);
-  the REPO rate is `fixed_rate_pct` or `index_code` + `spread_bp`, not `repo_rate_pct`, so a floating REPO fits.
+- Done in 1.4: `trade_terms` for swaps, REPO and HTM purchases (above). The official names: a leg's direction is
+  `side` (`pay`, `receive`) and `leg_id` is the adapter's own code of the leg; the amount is `notional_ccy` (units in
+  names); a rate, of a swap leg and of a REPO alike, is `fixed_rate_pct` or `index_code` + `spread_bp`.
 - `price_policy` (adapter A10), a reference table: per security (`instrument_id`, falling back to `isin`) a `policy`
   (`sticky_internal`: the last internal EOD price holds until the next one and the hub's price does not replace it
   intraday), with `valid_from`. A security without a hub price is valued only at the internal price, else down the
