@@ -196,7 +196,7 @@
     document.getElementById('crumb').innerHTML = '<b>' + path + '</b> · ' + n.list.length + ' поз · ' + SIZES[S.size].t + ' ' + SIZES[S.size].fmt(n.value);
     document.getElementById('crumb2').innerHTML = path;
     const el = document.getElementById('members');
-    K.table(el, {
+    K.table(el, { viewKey: 'c07-members',
       rows: n.list.slice().sort((a, b) => SIZES[S.size].v(b) - SIZES[S.size].v(a)), autoFilter: false, stripe: r => K.issuerColor(r.issuer), maxHeight: '360px',
       columns: K.cols(['name', 'ccy', 'issuer', 'kind', 'book', 'tenor', 'ytm', 'spread', 'mv', 'dv01', 'cs01', 'carry', 'pnl']),
     });

@@ -7,7 +7,8 @@
  *  KIT.d(spec)            — кликабельная цифра: spec = {title, list|rows, val, fmt, unit, v?}; щелчок раскрывает вклад
  *  KIT.drill(spec)        — открыть разбор вклада (позиции, группировка по эмитенту/книге/валюте/типу/бакету)
  *  KIT.card(id)           — карточка позиции: параметры, графики истории, риск по бакетам, потоки, PnL
- *  KIT.table(el, opts)    — таблица: группы, мультисортировка (Shift+щелчок; группы сортируются тем же столбцом), поиск, итоги с разбором
+ *  KIT.table(el, opts)    — таблица: группы, мультисортировка (Shift+щелчок; группы сортируются тем же столбцом), поиск, итоги с разбором;
+ *                           ширина и порядок колонок мышкой с запоминанием (KIT.viewStore), «⤓ CSV» — выгрузка
  *  KIT.tips, KIT.hint     — подсказки к мерам риска (конвенция DV01 RUONIA, Базис01, CS01, Z к RUONIA) и подпись с подсказкой
  *  KIT.chart(el, option)  — echarts с цветами темы; KIT.riskStack(el, opts) — риск по бакетам: стек кривых + итог + кумулятив
  *  KIT.seg(el, items, cur, fn) — переключатель режимов (таблица / график и т. п.)
@@ -691,10 +692,78 @@
     return m;
   };
 
+  // ---------- вид таблиц и панелей: get / set / reset по ключу (#102) ----------
+  // Отдельный маленький слой, чтобы перевести хранение на сервер по пользователю (#109, /api/v1/views), не трогая
+  // таблицы: сейчас — localStorage браузера (живёт по адресу страницы), чтение и запись в try/catch (в приватном окне
+  // и без доступа к хранилищу вид просто не запоминается). Значение — JSON-объект; get отдаёт копию или null.
+  K.viewStore = (() => {
+    const P = 'tdm.view.v1:', mem = {};
+    return {
+      get(key) {
+        let s = mem[key];
+        if (s === undefined) { try { s = localStorage.getItem(P + key); } catch (e) { s = null; } }
+        try { return s ? JSON.parse(s) : null; } catch (e) { return null; }
+      },
+      set(key, val) { const s = JSON.stringify(val); mem[key] = s; try { localStorage.setItem(P + key, s); } catch (e) { } },
+      reset(key) { mem[key] = null; try { localStorage.removeItem(P + key); } catch (e) { } },
+    };
+  })();
+  // стабильный ключ таблицы — без списка колонок (добавили колонку — раскладка не теряется, K.viewLayout сводит её с
+  // текущим набором): opts.viewKey (его передают все мониторы), иначе страница + ближайший id в разметке
+  K.tableKey = (el, opts) => {
+    if (opts.viewKey) return 'table:' + opts.viewKey;
+    let page = '', anchor = '';
+    try { page = (location.pathname || '').split('/').pop(); } catch (e) { }
+    try { anchor = el.id || (el.closest && el.closest('[id]') ? el.closest('[id]').id : ''); } catch (e) { }
+    return 'table:' + page + '|' + anchor;
+  };
+  // раскладка из хранилища — чужие данные: только объект; order — строки известных колонок без повторов, w — известные
+  // колонки с конечной положительной шириной (32…2000 px); остальное отбрасывается, мусор даёт исходный вид
+  K.viewLayout = (v, keys) => {
+    const out = {}, known = new Set(keys);
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return out;
+    if (Array.isArray(v.order)) {
+      const o = [...new Set(v.order.filter(k => typeof k === 'string' && known.has(k)))];
+      if (o.length) out.order = o;
+    }
+    if (v.w && typeof v.w === 'object' && !Array.isArray(v.w)) {
+      const w = {};
+      Object.keys(v.w).forEach(k => { const x = v.w[k]; if (known.has(k) && typeof x === 'number' && isFinite(x) && x > 0) w[k] = Math.min(2000, Math.max(32, Math.round(x))); });
+      if (Object.keys(w).length) out.w = w;
+    }
+    return out;
+  };
+
+  // ---------- выгрузка таблиц в CSV (#110) ----------
+  // CSV для Excel с русскими региональными настройками: UTF-8 с BOM (иначе кириллица — кракозябры), разделитель
+  // «;» и десятичная запятая (так Excel с русской локалью раскладывает файл по колонкам и читает числа числами).
+  // Значения — как на экране (в единицах заголовка), числа — числами; текст, похожий на формулу, — с апострофом.
+  K.htmlText = s => String(s == null ? '' : s).replace(/<(?:[^>"']|"[^"]*"|'[^']*')*>/g, '').replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
+  K.csvNum = t => {  // «−1,234.5» → «-1234,5»; «4.44%» → «4,44%»; не число — null
+    const m = /^([+−-]?)(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(%?)$/.exec(t);
+    return m ? (m[1] === '+' ? '' : m[1] ? '-' : '') + m[2].replace(/,/g, '') + (m[3] ? ',' + m[3].slice(1) : '') + m[4] : null;
+  };
+  K.csvCell = (t, num) => {
+    t = t == null ? '' : String(t);
+    if (num) { if (t === '—' || t === '·') return ''; const x = K.csvNum(t); if (x != null) return x; }
+    t = t.replace(/^[●■]\s*/, '');  // цветная метка эмитента / кривой — оформление
+    if (/^[=+\-@\t\r]/.test(t)) t = "'" + t;
+    return /[;"\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+  };
+  K.csvRun = () => ({ run_id: M.run && M.run.id != null ? String(M.run.id) : (K.source === 'real' ? '' : 'demo'), as_of: M.asOf || '' });
+  K.download = (name, text, type) => {
+    const a = document.createElement('a'), u = URL.createObjectURL(new Blob([text], { type: type || 'text/plain;charset=utf-8' }));
+    a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 1000);
+  };
+
   // ---------- таблица ----------
+  // Раскладка (#102): граница заголовка — ширина, двойной щелчок по ней — по содержимому, перетаскивание заголовка —
+  // порядок колонок; запоминается по ключу таблицы (K.tableKey) в K.viewStore, «⟲ вид» — сбросить.
   // opts: {columns:[{key,label,val(r),fmt(v,r),cls,title,sum:true|fn,drill:{title,unit,fmt,val}, w}], rows|rowsFn, groupBy:[{key(r),label(k,rows)}], search:bool,
   //        sort:[[key,dir]] (по умолчанию — строки в группах; щелчок по заголовку сортирует и группы, кроме groupBy[i].fixed), stripe(r)->color, onRow(r), rowCls(r), tools(el), maxHeight, footer:bool,
-  //        groupable:[уровни] — группировка по желанию (переключатель «плоская / валюта → эмитент»); по умолчанию таблица плоская (R37)}
+  //        groupable:[уровни] — группировка по желанию (переключатель «плоская / валюта → эмитент»); по умолчанию таблица плоская (R37),
+  //        viewKey — стабильный ключ раскладки латиницей, он же основа имени CSV (без него — страница + id, K.tableKey), title — название в CSV, fileName — основа имени файла CSV (латиницей)}
   K.table = function (el, opts) {
     const st = { sort: opts.sort ? opts.sort.slice() : [], q: '', collapsed: {}, groupSort: false, filters: {}, grouped: false };
     el.innerHTML = '';
@@ -711,7 +780,31 @@
       if (opts.tools) { const sp = h('span'); sp.style.flex = '1'; tools.appendChild(sp); opts.tools(tools); }
     }
     const wrap = h('div', 'k-tbl-wrap'); if (opts.maxHeight) wrap.style.maxHeight = opts.maxHeight; el.appendChild(wrap);
-    const cols = () => opts.columns.filter(c => !c.hidden);
+    // кнопки вида: в строке инструментов, а у таблиц без неё — узкой строкой под таблицей
+    const ctl = h('span', 'k-tbl-ctl');
+    if (tools) { if (!opts.tools) { const sp = h('span'); sp.style.flex = '1'; tools.appendChild(sp); } tools.appendChild(ctl); }
+    else { const bar = h('div', 'k-tbl-ctlbar'); bar.appendChild(ctl); el.appendChild(bar); }
+    const vkey = K.tableKey(el, opts);
+    const colKeys = () => opts.columns.map(c => c.key);
+    let lay = K.viewLayout(K.viewStore.get(vkey), colKeys());  // {order: [key], w: {key: px}} — проверенная форма
+    const fixedW = () => !!lay.w && cols().some(c => lay.w[c.key]);
+    const resetBtn = h('button', 'k-tbtn', '⟲ вид'); resetBtn.title = 'сбросить ширину и порядок колонок этой таблицы';
+    resetBtn.onclick = () => { lay = {}; K.viewStore.reset(vkey); draw(); };
+    const csvBtn = h('button', 'k-tbtn', '⤓ CSV');
+    csvBtn.title = 'выгрузить в CSV (Excel): колонки — в текущем порядке, строки — после поиска, фильтров и сортировки; номер прогона и дата среза — в первой строке и в имени файла';
+    csvBtn.onclick = () => K.download(csvName(), '\uFEFF' + csv(), 'text/csv;charset=utf-8');
+    ctl.append(csvBtn, resetBtn);
+    const paintCtl = () => { resetBtn.style.display = fixedW() || (lay.order && lay.order.length) ? '' : 'none'; };
+    const saveLay = () => { K.viewStore.set(vkey, lay); paintCtl(); };
+    let noClickTill = 0;  // после перетаскивания щелчок по заголовку — не сортировка
+    let shown = [];       // строки на экране: после поиска, фильтров и сортировки (их и выгружает CSV)
+    // видимые колонки в сохранённом порядке; новых в сохранённом порядке нет — они в конце, в исходном порядке
+    const cols = () => {
+      const C = opts.columns.filter(c => !c.hidden), o = lay.order;
+      if (!o || !o.length) return C;
+      const ix = c => { const i = o.indexOf(c.key); return i < 0 ? 1e6 : i; };
+      return C.map((c, i) => [c, i]).sort((a, b) => (ix(a[0]) - ix(b[0])) || (a[1] - b[1])).map(x => x[0]);
+    };
     const val = (c, r) => c.val ? c.val(r) : r[c.key];
     // колонка для сортировки строк и групп: значение и, если у колонки есть итог, слагаемое суммы группы
     const colOf = k => { const c = opts.columns.find(x => x.key === k); return c ? { val: r => val(c, r), sum: c.sum ? (typeof c.sum === 'function' ? c.sum : r => val(c, r) || 0) : null, filter: c.filter, key: c.key } : null; };
@@ -724,10 +817,14 @@
       if (st.q) rows = rows.filter(r => (r.searchText || JSON.stringify(r)).toLowerCase().includes(st.q));
       const base = rows;
       rows = sorted(K.applyFilters(rows, st.filters, colOf));
+      shown = rows;
       const C = cols();
       const nf = Object.keys(st.filters).filter(k => st.filters[k]).length;
       if (fltChip) { fltChip.style.display = nf ? '' : 'none'; fltChip.innerHTML = '<span class="x">✕</span> фильтры (' + nf + ')'; }
-      const head = '<thead><tr>' + (opts.stripe ? '<th class="stripe"></th>' : '') + C.map(c => { const si = st.sort.findIndex(s => s[0] === c.key); return '<th class="sortable ' + (c.num ? 'n' : '') + '" data-k="' + c.key + '" title="' + esc(c.title || '') + '"' + (c.w ? ' style="width:' + c.w + '"' : '') + '>' + (c.tip ? '<span class="k-hint">' + c.label + '</span>' : c.label) + (si >= 0 ? '<span class="si">' + (st.sort[si][1] > 0 ? '▲' : '▼') + (st.sort.length > 1 ? si + 1 : '') + '</span>' : '') + K.fltIcon(c, st.filters) + '</th>'; }).join('') + '</tr></thead>';
+      const head = '<thead><tr>' + (opts.stripe ? '<th class="stripe"></th>' : '') + C.map(c => { const si = st.sort.findIndex(s => s[0] === c.key); return '<th class="sortable ' + (c.num ? 'n' : '') + '" data-k="' + c.key + '" title="' + esc(c.title || '') + '"' + (c.w && !fixedW() ? ' style="width:' + c.w + '"' : '') + '>' + (c.tip ? '<span class="k-hint">' + c.label + '</span>' : c.label) + (si >= 0 ? '<span class="si">' + (st.sort[si][1] > 0 ? '▲' : '▼') + (st.sort.length > 1 ? si + 1 : '') + '</span>' : '') + K.fltIcon(c, st.filters) + '<span class="k-rsz" data-rsz="' + esc(c.key) + '" title="ширина: тянуть · двойной щелчок — по содержимому"></span></th>'; }).join('') + '</tr></thead>';
+      // заданные ширины: фиксированная раскладка по colgroup, таблица — шириной суммы колонок
+      const cg = fixedW() ? '<colgroup>' + (opts.stripe ? '<col style="width:4px">' : '') + C.map(c => '<col data-k="' + esc(c.key) + '" style="width:' + (lay.w[c.key] || 100) + 'px">').join('') + '</colgroup>' : '';
+      const tw = fixedW() ? ' k-fixed" style="width:' + C.reduce((s, c) => s + (lay.w[c.key] || 100), opts.stripe ? 4 : 0) + 'px' : '';
       const cell = (c, r) => { const v = val(c, r); return '<td class="' + (c.num ? 'n ' : '') + (c.cls ? (typeof c.cls === 'function' ? c.cls(v, r) : c.cls) : '') + '"' + (c.style ? ' style="' + c.style(v, r) + '"' : '') + '>' + (c.fmt ? c.fmt(v, r) : esc(v)) + '</td>'; };
       const sumCell = (c, list) => {
         if (!c.sum) return '<td></td>';
@@ -740,6 +837,10 @@
       let body = '';
       const groups = opts.groupBy || (st.grouped && opts.groupable) || [];
       const nCols = C.length + (opts.stripe ? 1 : 0);
+      // подпись группы и «Итого» — в первой колонке без итога (колонку с итогом могли перенести на первое место, #102);
+      // span группы — только по колонкам без итога; если итог есть у всех колонок, подпись — в первой
+      const li = Math.max(0, C.findIndex(c => !c.sum));
+      const spanAt = G => { let n = 1; while (n < (G.span || 1) && li + n < C.length && !C[li + n].sum) n++; return n; };
       function emit(list, level, path) {
         if (level >= groups.length) { list.forEach(r => { body += '<tr class="row ' + (opts.rowCls ? opts.rowCls(r) : '') + '" data-id="' + esc(r.id) + '">' + (opts.stripe ? '<td class="stripe" style="background:' + opts.stripe(r) + '"></td>' : '') + C.map(c => cell(c, r)).join('') + '</tr>'; }); return; }
         const G = groups[level], buckets = new Map();
@@ -750,30 +851,122 @@
         keys.forEach(k => {
           const sub = buckets.get(k), p = path + '/' + k, col = st.collapsed[p] != null ? st.collapsed[p] : !!G.collapsed;
           body += '<tr class="grp l' + level + '" data-g="' + esc(p) + '">' + (opts.stripe ? '<td class="stripe" style="background:' + (G.color ? G.color(k, sub) : 'transparent') + '"></td>' : '') +
-            C.map((c, i) => i === 0 ? '<td colspan="' + (G.span || 1) + '" style="padding-left:' + (8 + level * 14) + 'px"><span class="tw">' + (col ? '▸' : '▾') + '</span>' + (G.label ? G.label(k, sub) : esc(k)) + ' <span class="mut3" style="font-weight:400">' + sub.length + '</span></td>' : (i < (G.span || 1) ? '' : sumCell(c, sub))).join('') + '</tr>';
+            C.map((c, i) => i === li ? '<td colspan="' + spanAt(G) + '" style="padding-left:' + (8 + level * 14) + 'px"><span class="tw">' + (col ? '▸' : '▾') + '</span>' + (G.label ? G.label(k, sub) : esc(k)) + ' <span class="mut3" style="font-weight:400">' + sub.length + '</span></td>' : (i > li && i < li + spanAt(G) ? '' : sumCell(c, sub))).join('') + '</tr>';
           if (!col) emit(sub, level + 1, p);
         });
       }
       emit(rows, 0, '');
-      const foot = opts.footer === false ? '' : '<tfoot><tr>' + (opts.stripe ? '<td></td>' : '') + C.map((c, i) => i === 0 ? '<td>Итого <span class="mut3" style="font-weight:400">' + rows.length + '</span></td>' : sumCell(c, rows)).join('') + '</tr></tfoot>';
-      wrap.innerHTML = '<table class="k-tbl">' + head + '<tbody>' + (body || '<tr><td colspan="' + nCols + '" class="k-empty">ничего не найдено</td></tr>') + '</tbody>' + foot + '</table>';
+      const foot = opts.footer === false ? '' : '<tfoot><tr>' + (opts.stripe ? '<td></td>' : '') + C.map((c, i) => i === li ? '<td>Итого <span class="mut3" style="font-weight:400">' + rows.length + '</span></td>' : sumCell(c, rows)).join('') + '</tr></tfoot>';
+      wrap.innerHTML = '<table class="k-tbl' + tw + '">' + cg + head + '<tbody>' + (body || '<tr><td colspan="' + nCols + '" class="k-empty">ничего не найдено</td></tr>') + '</tbody>' + foot + '</table>';
       wrap.querySelectorAll('th .k-flt').forEach(ic => ic.onclick = e => {
         e.stopPropagation();
         const c = opts.columns.find(x => x.key === ic.dataset.flt);
         K.colFilter(ic, K.fltItems(K.applyFilters(base, st.filters, colOf, c.key), c), st.filters[c.key] || null, v => { st.filters[c.key] = v; draw(); });
       });
       wrap.querySelectorAll('th.sortable').forEach(th => th.onclick = e => {
+        if (Date.now() < noClickTill) return;
         const k = th.dataset.k, i = st.sort.findIndex(s => s[0] === k);
         if (e.shiftKey) { if (i >= 0) { if (st.sort[i][1] > 0) st.sort[i][1] = -1; else st.sort.splice(i, 1); } else st.sort.push([k, 1]); }
         else st.sort = i >= 0 && st.sort.length === 1 ? (st.sort[0][1] > 0 ? [[k, -1]] : []) : [[k, 1]];
         st.groupSort = true;
         draw();
       });
+      bindLayout();
+      paintCtl();
       wrap.querySelectorAll('tr.grp').forEach(tr => tr.onclick = e => { if (e.target.closest('[data-dr]')) return; const p = tr.dataset.g; const G = groups[(p.match(/\//g) || []).length - 1]; const cur = st.collapsed[p] != null ? st.collapsed[p] : !!(G && G.collapsed); st.collapsed[p] = !cur; draw(); });
       wrap.querySelectorAll('tr.row').forEach(tr => tr.onclick = e => { if (e.target.closest('[data-dr]')) return; const id = tr.dataset.id; const r = rows.find(x => String(x.id) === id); if (opts.onRow) opts.onRow(r); else if (M.pos[id]) K.card(id); });
     }
+    // ---------- раскладка мышкой (#102) ----------
+    const heads = () => [...wrap.querySelectorAll('th[data-k]')];
+    const tableW = () => cols().reduce((s, c) => s + (lay.w[c.key] || 100), opts.stripe ? 4 : 0);  // только видимые колонки
+    // первый ресайз: ширины всех колонок — как сейчас на экране, дальше раскладка фиксированная
+    function ensureW() { if (!fixedW()) { lay.w = {}; heads().forEach(th => { lay.w[th.dataset.k] = Math.round(th.getBoundingClientRect().width); }); } }
+    function setW(k, w) {
+      lay.w[k] = Math.min(2000, Math.max(32, Math.round(w)));  // пределы — как в K.viewLayout
+      const col = wrap.querySelector('col[data-k="' + CSS.escape(k) + '"]'), t = wrap.querySelector('table');
+      if (col) col.style.width = lay.w[k] + 'px';
+      if (t) t.style.width = tableW() + 'px';
+    }
+    // ширина по содержимому: самая широкая ячейка колонки (заголовок, строки, итог) без обрезки
+    function fitW(k) {
+      const th = heads().find(x => x.dataset.k === k); if (!th) return;
+      const i = th.cellIndex, cells = [th];
+      wrap.querySelectorAll('tbody tr.row, tfoot tr').forEach((tr, n) => { if (n < 2000 && tr.cells[i]) cells.push(tr.cells[i]); });
+      const rg = document.createRange();
+      let w = 0;
+      wrap.querySelectorAll('th .k-rsz').forEach(x => { x.style.display = 'none'; });  // ручка — во всю ячейку, не в счёт
+      cells.forEach(c => { rg.selectNodeContents(c); const cs = getComputedStyle(c); w = Math.max(w, rg.getBoundingClientRect().width + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight)); });
+      ensureW(); lay.w[k] = Math.min(2000, Math.max(32, Math.ceil(w) + 4)); saveLay(); draw();
+    }
+    function drag(e, onMove, onUp) {
+      const mv = ev => onMove(ev), up = ev => { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); onUp(ev); };
+      document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
+    }
+    function bindLayout() {
+      wrap.querySelectorAll('th .k-rsz').forEach(hd => {
+        const k = hd.dataset.rsz;
+        hd.onclick = e => e.stopPropagation();
+        hd.ondblclick = e => { e.stopPropagation(); fitW(k); };
+        hd.onmousedown = e => {
+          if (e.button !== 0) return;
+          e.preventDefault(); e.stopPropagation();
+          if (!fixedW()) { ensureW(); draw(); }
+          const x0 = e.clientX, w0 = lay.w[k];
+          document.body.classList.add('k-col-resizing');
+          drag(e, ev => setW(k, w0 + ev.clientX - x0), ev => {
+            document.body.classList.remove('k-col-resizing');
+            if (ev.clientX !== x0) { noClickTill = Date.now() + 300; saveLay(); }
+          });
+        };
+      });
+      // перенос: заголовок тянут больше чем на 6px — колонка встаёт туда, где отпустили (синяя черта — место)
+      heads().forEach(th => th.onmousedown = e => {
+        if (e.button !== 0 || e.target.closest('.k-rsz, .k-flt')) return;
+        const k = th.dataset.k, x0 = e.clientX, ths = heads();
+        let ind = null, to = null;
+        drag(e, ev => {
+          if (!ind && Math.abs(ev.clientX - x0) < 6) return;
+          ev.preventDefault();
+          if (!ind) { ind = h('div', 'k-col-ind'); document.body.appendChild(ind); th.classList.add('k-drag'); document.body.classList.add('k-col-moving'); }
+          to = ths.findIndex(t => { const r = t.getBoundingClientRect(); return ev.clientX < r.left + r.width / 2; });
+          if (to < 0) to = ths.length;
+          const r = ths[Math.min(to, ths.length - 1)].getBoundingClientRect(), wr = wrap.getBoundingClientRect();
+          ind.style.left = ((to < ths.length ? r.left : r.right) - 1) + 'px';
+          ind.style.top = wr.top + 'px'; ind.style.height = Math.min(wr.height, innerHeight - wr.top) + 'px';
+        }, () => {
+          if (!ind) return;
+          ind.remove(); th.classList.remove('k-drag'); document.body.classList.remove('k-col-moving');
+          noClickTill = Date.now() + 300;
+          const keys = ths.map(t => t.dataset.k), from = keys.indexOf(k);
+          let at = to > from ? to - 1 : to;
+          if (to == null || at === from) return;
+          keys.splice(from, 1); keys.splice(at, 0, k);
+          lay.order = keys; saveLay(); draw();
+        });
+      });
+    }
+    // ---------- CSV (#110) ----------
+    const csvTitle = () => K.htmlText(opts.title || (typeof document.title === 'string' ? document.title : '') || 'таблица');
+    function csv() {
+      const C = cols().filter(c => K.htmlText(c.label)), R = K.csvRun(), q = x => K.csvCell(x);  // без подписи — оформление (полоска доли)
+      const head = C.map(c => { const l = K.htmlText(c.label); return q(c.unit && !l.includes(',') ? l + ', ' + c.unit : l); });
+      const line = r => C.map(c => { const v = val(c, r); return K.csvCell(K.htmlText(c.fmt ? c.fmt(v, r) : v), c.num); }).join(';');
+      return ['run_id;' + q(R.run_id) + ';as_of;' + q(R.as_of) + ';таблица;' + q(csvTitle()) + ';строк;' + shown.length, '', head.join(';')]
+        .concat(shown.map(line)).join('\r\n') + '\r\n';
+    }
+    // имя файла — латиницей (кириллицу в имени скачивания браузер может заменить на «download»): opts.fileName, иначе
+    // opts.viewKey, иначе страница и якорь таблицы; дальше дата среза и прогон
+    function csvName() {
+      const R = K.csvRun();
+      let page = '', anchor = '';
+      try { page = (location.pathname || '').split('/').pop().replace(/\.html?$/, ''); } catch (e) { }
+      try { anchor = el.id || (el.closest && el.closest('[id]') ? el.closest('[id]').id : ''); } catch (e) { }
+      const base = (opts.fileName || opts.viewKey || [page || 'table', anchor].filter(Boolean).join('_')).replace(/[^A-Za-z0-9_.-]+/g, '_');
+      return 'tdm_' + base + '_' + (R.as_of || 'nodate') + '_run-' + (R.run_id || 'none').replace(/[^A-Za-z0-9_-]+/g, '_') + '.csv';
+    }
     draw();
-    const api = { redraw: draw, state: st, setSort: s => { st.sort = s; draw(); }, setFilter: (k, v) => { st.filters[k] = v; draw(); }, setGrouped: g => { st.grouped = !!g; draw(); }, el };
+    const api = { redraw: draw, state: st, csv, csvName, setSort: s => { st.sort = s; draw(); }, setFilter: (k, v) => { st.filters[k] = v; draw(); }, setGrouped: g => { st.grouped = !!g; draw(); }, el,
+      viewKey: vkey, layout: () => JSON.parse(JSON.stringify(lay)), setLayout: v => { lay = K.viewLayout(v, colKeys()); saveLay(); draw(); }, resetView: () => resetBtn.onclick() };
     if (opts.autoFilter !== false && !opts.rows) K.live(el, 'filter', draw);
     return api;
   };
@@ -1347,8 +1540,26 @@
     return c;
   };
 
-  // KPI-плитка; spec — для разбора по щелчку
-  K.kpi = (label, valueHtml, sub, spark, tip) => '<div class="k-kpi"><div class="l">' + K.hint(label, tip) + '</div><div class="v">' + valueHtml + '</div><div class="s">' + (sub || '&nbsp;') + '</div>' + (spark || '') + '</div>';
+  // KPI-плитка; spec — для разбора по щелчку. sub — строка или разбивка-массив [[подпись, значение], …] (B2-3, #103):
+  // строки в стиле плитки ОВП — подпись слева, цифра справа, табличные цифры.
+  K.kpiRows = rows => '<table class="k-kb"><tbody>' + rows.map(r => '<tr' + (r[2] ? ' title="' + esc(r[2]) + '"' : '') + '><td class="c">' + r[0] + '</td><td>' + r[1] + '</td></tr>').join('') + '</tbody></table>';
+  K.kpi = (label, valueHtml, sub, spark, tip) => '<div class="k-kpi"><div class="l">' + K.hint(label, tip) + '</div><div class="v">' + valueHtml + '</div><div class="s">' +
+    (Array.isArray(sub) ? (sub.length ? K.kpiRows(sub) : '<span class="mut3">—</span>') : (sub || '&nbsp;')) + '</div>' + (spark || '') + '</div>';
+  K.kpiUnit = u => ' <span class="u">' + u + '</span>';
+  // разбивка по валютам: не больше n строк (по умолчанию 3, #103). Валюты по |rank| (по умолчанию — по самим значениям;
+  // для сумм в родных валютах передают рублёвый эквивалент), показываются значения vals. Если валют больше n —
+  // первые n−1 строками, остальные одной строкой «+N» с подсказкой. Точные нули не показываются; значения, которые
+  // в формате fmt округляются до нуля, — в «+N», как «прочие» у ОВП.
+  K.kpiCcyRows = (vals, cell, n, fmt, rank) => {
+    rank = rank || vals; n = n || 3;
+    const zero = v => /^[−+-]?0(?:[.,]0*)?(?:\s|$)/.test(String(fmt(v)).trim());  // fmt может нести единицу: «0.0 mm»
+    const R = M.ccys.map(c => ({ c, v: vals[c] || 0, r: rank[c] || 0 })).filter(x => Math.abs(x.v) > 1e-9)
+      .sort((a, b) => (Math.abs(b.r) - Math.abs(a.r)) || a.c.localeCompare(b.c));
+    const big = R.filter(x => !zero(x.v)), minor = R.filter(x => zero(x.v));
+    const top = big.length + (minor.length ? 1 : 0) > n ? big.slice(0, n - 1) : big, rest = big.slice(top.length).concat(minor);
+    return top.map(x => [esc(x.c), cell(x.c, x.v)])
+      .concat(rest.length ? [['<span class="mut3">+' + rest.length + '</span>', '<span class="mut3">' + esc(rest.map(x => x.c).join(', ')) + '</span>', rest.map(x => x.c + ' ' + fmt(x.v)).join(' · ')]] : []);
+  };
 
   // ---------- ОВП в шапке (R43) ----------
   // Мини-таблица: валюта на строку — сумма в валюте (mm) и эквивалент в валюте отчёта, по |эквиваленту| по убыванию,
@@ -1384,12 +1595,21 @@
       const L = K.list(), k = M.kpis(L);
       const pnlH = M.hist.pnl.total.slice(-30);
       el.innerHTML = '<div class="k-kpis">' +
-        K.kpi('PnL дня', K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(k.pnl, 1) + ' mm'), 'MTD ' + K.d({ title: 'PnL MTD', unit: 'mm ₽', fmt: v => f.mns(v, 1), list: L, val: 'pnlMtd' }) + K.partial('mtd') + ' · YTD ' + K.d({ title: 'PnL YTD', unit: 'mm ₽', fmt: v => f.mns(v, 0), list: L, val: 'pnlYtd' }) + K.partial('ytd'), K.spark(pnlH, 70, 20)) +
-        K.kpi('DV01 ставки', K.d({ title: 'DV01 ставки (все кривые)', unit: 'тыс ₽/бп', list: L, val: 'dv01' }) + ' <span class="mut" style="font-size:11px">тыс/бп</span>', M.ccys.map(c => c + ' ' + K.d({ title: 'DV01 ' + c + ' (кривые ' + c + ')', unit: 'тыс ₽/бп', list: L, val: p => INSTR.dv01In(p, c) }, null, '')).join(' · '), null, K.tips.dv01) +
-        K.kpi('RUONIA · КС', K.d({ title: 'DV01 RUONIA', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB RUONIA'] }) + ' · ' + K.d({ title: 'DV01 КС', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB KEY'] }), K.hint('базис ОФЗ', K.tips.basis01) + ' ' + K.d({ title: 'Базис ОФЗ−RUONIA', unit: 'тыс ₽/бп', list: L, val: 'basis01' }, null, ''), null, K.tips.ruonia + '\n\n' + K.tips.basis01) +
-        K.kpi('CS01', K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }), 'корп. RUB ' + K.d({ title: 'CS01 корп RUB', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === 'RUB'), val: 'cs01' }, null, '') + ' · вал. ' + K.d({ title: 'CS01 валютные', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy !== 'RUB'), val: 'cs01' }, null, ''), null, K.tips.cs01) +
-        K.kpi('Кэрри / день', K.d({ title: 'Кэрри за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }) + ' <span class="mut" style="font-size:11px">тыс</span>', 'в год ≈ ' + f.mn(k.carryDay * 365, 0) + ' mm') +
-        K.kpi('Облигации MV', K.d({ title: 'MV облигаций', unit: 'bn ₽', fmt: v => f.bn(v, 1), list: L.filter(p => p.group !== 'DER'), val: 'mv', color: false }) + ' <span class="mut" style="font-size:11px">bn</span>', M.ccys.map(c => c + ' ' + f.bn(k.byCcy[c].mv, 1)).join(' · ')) +
+        K.kpi('PnL дня', K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(k.pnl, 1)) + K.kpiUnit('mm'),
+          [['MTD', K.d({ title: 'PnL MTD', unit: 'mm ₽', fmt: v => f.mns(v, 1), list: L, val: 'pnlMtd' }) + K.partial('mtd')],
+           ['YTD', K.d({ title: 'PnL YTD', unit: 'mm ₽', fmt: v => f.mns(v, 0), list: L, val: 'pnlYtd' }) + K.partial('ytd')]], K.spark(pnlH, 64, 20)) +
+        K.kpi('DV01 ставки', K.d({ title: 'DV01 ставки (все кривые)', unit: 'тыс ₽/бп', list: L, val: 'dv01' }) + K.kpiUnit('тыс/бп'),
+          K.kpiCcyRows(M.ccys.reduce((o, c) => (o[c] = k.byCcy[c].dv01, o), {}), c => K.d({ title: 'DV01 ' + c + ' (кривые ' + c + ')', unit: 'тыс ₽/бп', list: L, val: p => INSTR.dv01In(p, c) }), 3, f.dv), null, K.tips.dv01) +
+        K.kpi('DV01 RUONIA', K.d({ title: 'DV01 RUONIA', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB RUONIA'] }) + K.kpiUnit('тыс/бп'),
+          [['КС', K.d({ title: 'DV01 КС', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB KEY'] })],
+           [K.hint('базис ОФЗ', K.tips.basis01), K.d({ title: 'Базис ОФЗ−RUONIA', unit: 'тыс ₽/бп', list: L, val: 'basis01' })]], null, K.tips.ruonia + '\n\n' + K.tips.basis01) +
+        K.kpi('CS01', K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }) + K.kpiUnit('тыс/бп'),
+          [['корп. RUB', K.d({ title: 'CS01 корп RUB', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === 'RUB'), val: 'cs01' })],
+           ['вал.', K.d({ title: 'CS01 валютные', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy !== 'RUB'), val: 'cs01' })]], null, K.tips.cs01) +
+        K.kpi('Кэрри / день', K.d({ title: 'Кэрри за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }) + K.kpiUnit('тыс'),
+          [['в год ≈', '<span class="' + f.cls(k.carryDay) + '">' + f.mn(k.carryDay * 365, 0) + '</span> <span class="u">mm</span>']]) +
+        K.kpi('Облигации MV', K.d({ title: 'MV облигаций', unit: 'bn ₽', fmt: v => f.bn(v, 1), list: L.filter(p => p.group !== 'DER'), val: 'mv', color: false }) + K.kpiUnit('bn'),
+          K.kpiCcyRows(M.ccys.reduce((o, c) => (o[c] = k.byCcy[c].mv, o), {}), (c, v) => f.bn(v, 1), 3, v => f.bn(v, 1))) +
         '<div class="k-kpi k-fxk"><div class="l">' + K.hint('ОВП', K.tips.fxMini) + '</div><div class="v">' + K.fxMini(L) + '</div><div class="s"><a class="go" href="c06-launchpad.html#fx" title="плитка «ОВП и курсы»: бонды и деривативы по валютам, курсы, PnL FX">подробно (C06) →</a></div></div>' +
         '</div>';
     }
