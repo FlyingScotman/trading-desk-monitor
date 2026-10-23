@@ -326,6 +326,57 @@ def test_publish_fx_book_through_the_store_and_the_api(ctx, store_url):
     assert basis["FXB|T1"]["taylor"]["total"] == 0.0 and basis["FXB|T2"]["exact"] == 0.0  # USD: no CNY basis
 
 
+def test_derivatives_parallel_and_v3_next_to_v2(ctx, store_url):
+    """TDM#49: the derivatives' v3 result is stored with the run (also when no outcome carries it) and reads back
+    verified; the run's block lists each derivative computed by core next to the report's PV."""
+    from fastapi.testclient import TestClient
+
+    from desk import store
+    from desk.api import create_app
+    from desk.publish import derivatives_parallel, desk_run
+
+    extra = {"FXB|T1": {"asset_class": "fx", "ccy": "CNY", "amount_ccy": 10e6, "deal_id": "T1", "mv_rub": "1000"},
+             "FXB|T8": {"asset_class": "fx", "ccy": "EUR", "amount_ccy": 1e6, "value_date": date(2027, 1, 20),
+                        "deal_id": "T8", "mv_rub": 5000.0},
+             "FXB|IRS": {"asset_class": "otc", "ccy": "RUB", "source_instrument_id": "IRS", "mv_rub": -20.0},
+             "FXB|NOTERMS": {"asset_class": "fx", "ccy": "USD", "amount_ccy": 2e6, "value_date": date(2027, 1, 20)}}
+    inp = inputs(list(extra), extra, [BOOK[0], BOOK[-1]])
+    bp = pv1.plan(ctx, inp)
+    positions = pv1.merge(bp, [])
+    block = derivatives_parallel.compare(positions, extra)
+    rows = {r["position_id"]: r for r in block["rows"]}
+    t1 = rows["FXB|T1"]
+    assert t1["status"] == "both" and t1["used"] == "computed" and t1["imported_pv_rub"] == 1000.0
+    assert t1["diff_rub"] == pytest.approx(t1["computed_pv_rub"] - 1000.0) and t1["product"] == "fx_forward"
+    assert (rows["FXB|T8"]["status"], rows["FXB|T8"]["reason"], rows["FXB|T8"]["used"]) == (
+        "imported_only", "no_foreign_curve", "imported")
+    assert (rows["FXB|IRS"]["status"], rows["FXB|IRS"]["reason"]) == ("imported_only", pv1.NO_TERMS)
+    assert (rows["FXB|NOTERMS"]["status"], rows["FXB|NOTERMS"]["reason"]) == ("neither", pv1.NO_TERMS)
+    t = block["totals"]
+    assert (t["n"], t["both"], t["imported_only"], t["neither"]) == (4, 1, 2, 1)
+    assert t["abs_diff_rub"] == pytest.approx(abs(t1["diff_rub"])) and t["n_over"] == int(t1["over"])
+    assert block["by_book"]["FXB"]["n"] == 4 and block["reasons"] == {pv1.NO_TERMS: 2, "no_foreign_curve": 1}
+    level, text = derivatives_parallel.log_line(block)
+    assert "обе оценки у 1" in text and "только отчёт 2" in text and level in ("INFO", "WARN")
+    assert derivatives_parallel.log_line(derivatives_parallel.compare([], {})) is None
+
+    for _, _, o in positions:  # the v3 result is the plan's, stored even when no outcome carries it
+        o.core_result = None
+    with store.connect(store_url) as con:
+        rid, status, _ = desk_run.publish(con, ctx, positions, prev=None, inputs=inp, core_results=[bp.core_result])
+        stored = desk_run.read_core_results(con, rid)
+        logs = [m for (m,) in con.execute("SELECT message FROM run_log WHERE run_id = %s", (rid,))]
+    assert status == "complete" and [(label, schema) for label, schema, _ in stored] == [
+        ("derivatives", "rub-portfolio-risk-result.v3")]
+    assert stored[0][2].result_sha256 == bp.core_result.result_sha256
+    assert any(m.startswith("деривативы, ядро и отчёт параллельно") for m in logs)
+    c = TestClient(create_app(store_url))
+    got = c.get(f"/api/v1/runs/{rid}/derivatives").json()
+    assert got["state"] == "computed" and got["totals"]["both"] == 1 and len(got["rows"]) == 4
+    assert got["rows"][0]["position_id"] in extra and got["tolerance"]["provisional"] is True
+    assert c.get("/api/v1/runs/999999/derivatives").status_code == 404
+
+
 def t1_basis(got):
     return got["FXB|T1"]["fact"]["extra"]["basis01"]["CNY"]
 

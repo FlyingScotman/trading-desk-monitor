@@ -23,9 +23,15 @@ from functools import partial
 from typing import Any
 
 import psycopg
+from psycopg.rows import tuple_row
 from psycopg.types.json import Jsonb
 from rub_fixed_income import __version__ as CORE_VERSION
-from rub_fixed_income import portfolio_result_to_json
+from rub_fixed_income import (
+    portfolio_result_from_json,
+    portfolio_result_to_json,
+    verify_portfolio_result,
+    verify_portfolio_result_v3,
+)
 
 from .. import __version__ as BACKEND_VERSION
 from .. import logic_version
@@ -33,7 +39,7 @@ from ..marketdata.adapter import MarketView
 from ..orchestrator import EodContext, Outcome
 from ..store import PositionInputs
 from ..valuation.fallback import CarriedSpread, used_model_spreads
-from . import funding_run
+from . import derivatives_parallel, funding_run
 from .tdm_run import RunContent, git_sha, run_content
 
 PNL_KEYS = ("carry", "rolldown", "rates", "spread", "other", "fx_gross", "funding", "total")
@@ -58,13 +64,16 @@ def _jsonb(x: Any) -> Jsonb:
 def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str, str, Outcome]], *,
             prev: MarketView | None, run_type: str = "EOD", inputs: PositionInputs,
             carried_from: dict[str, CarriedSpread] | None = None,
-            pnl_basis: dict[str, Any] | None = None) -> tuple[int, str, list[str]]:
+            pnl_basis: dict[str, Any] | None = None, core_results: list[Any] | None = None
+            ) -> tuple[int, str, list[str]]:
     """positions: (position_id, book_id, outcome) of ``inputs`` (``store.positions_for``); ``carried_from``:
     the carried spreads the valuation got; ``pnl_basis``: what the flash PnL is measured against
-    (``desk.cli.pnl_basis``, lineage ``pnl_basis``). Returns (run_id, status, warnings). An INTRADAY run supersedes
+    (``desk.cli.pnl_basis``, lineage ``pnl_basis``); ``core_results``: core results of the run besides those its
+    outcomes carry (``BookPlan.core_result``, the v3 result of the derivatives: stored next to the bonds' v2 results
+    even when core valued none of its positions). Returns (run_id, status, warnings). An INTRADAY run supersedes
     nothing: the older intraday runs of its date are deleted once it is complete (``store.prune_intraday``)."""
     outcomes = [o for _, _, o in positions]
-    results = {o.core_result.result_sha256: o.core_result for o in outcomes if o.core_result}
+    results = {r.result_sha256: r for r in [*(o.core_result for o in outcomes), *(core_results or ())] if r}
     bodies = {sha: portfolio_result_to_json(r).decode() for sha, r in results.items()}  # raises unless verified
     spreads = used_model_spreads(outcomes)
     carried = sum(1 for s in spreads if (c := (carried_from or {}).get(s.secid)) and c.z_spread_bp == s.z_spread_bp)
@@ -88,6 +97,10 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
     funding = funding_run.compute(con, bd, prev, ctx.market, content.rows, content.reference["books"], inputs,
                                   {pid: o.terms for pid, _, o in positions if o.terms is not None})
     funding.apply(content.rows, content.reference, content.log)
+    parallel = derivatives_parallel.compare(positions, inputs.extra)
+    content.reference[derivatives_parallel.KIND] = parallel
+    if line := derivatives_parallel.log_line(parallel):
+        content.log.append(line)
     lineage["funding"] = funding.lineage()
     run_id = con.execute(
         "INSERT INTO run (run_type, business_date, prev_date, cut_type, supersedes_run_id, market_snapshot_id,"
@@ -162,3 +175,18 @@ def _write(cur: psycopg.Cursor, run_id: int, positions: list[tuple[str, str, Out
                     [(run_id, s.secid, s.business_date, s.z_spread_bp, s.source) for s in spreads])
     cur.execute("UPDATE run SET status = 'complete', completed_at = now(), coverage = %s, totals = %s "
                 "WHERE run_id = %s", (_jsonb(coverage), _jsonb(totals), run_id))
+
+
+def read_core_results(con: psycopg.Connection, run_id: int) -> list[tuple[str, str, Any]]:
+    """(label, schema, result) of the core results stored with a run (bonds: v2, derivatives: v3), each parsed and
+    verified (schema and ``result_sha256``); a body that does not verify raises ``ValueError``."""
+    out = []
+    cur = con.cursor(row_factory=tuple_row)
+    for sha, label, body in cur.execute("SELECT result_sha256, label, body FROM run_core_result WHERE run_id = %s"
+                                        " ORDER BY label, result_sha256", (run_id,)).fetchall():
+        r = portfolio_result_from_json(body)
+        v3 = r.schema_version.endswith(".v3")
+        if r.result_sha256 != sha or not (verify_portfolio_result_v3(r) if v3 else verify_portfolio_result(r)):
+            raise ValueError(f"run {run_id}: core result {label} does not verify")
+        out.append((label, r.schema_version, r))
+    return out

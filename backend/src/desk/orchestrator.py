@@ -77,6 +77,9 @@ class Outcome:
     no_pnl: NoPnl | None = None
     core_result: PortfolioRiskResult | None = None
     """The core result this valuation comes from (shared by the positions of one core call)."""
+    core_not_valued: tuple[str, str] | None = None
+    """(reason, detail) of a derivative row that is not valued by core from trade terms (none, or core could not):
+    its value is the report's (``valuation.positions``); ``publish.derivatives_parallel`` lists it."""
 
 
 @dataclass

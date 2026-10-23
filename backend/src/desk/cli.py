@@ -309,7 +309,8 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
         out(f"book: {ok}/{len(positions)} positions valued (" + ", ".join(f"{q} {n}" for q, n in by_q.most_common())
             + f"), {len(carried)} carried spreads")
         run_id, status, warnings = desk_run.publish(con, ctx, positions, prev=prev, run_type=run_type,
-                                                    inputs=inputs, carried_from=carried, pnl_basis=basis)
+                                                    inputs=inputs, carried_from=carried, pnl_basis=basis,
+                                                    core_results=[bp.core_result] if bp.core_result else None)
         out(f"desk run {run_id}: {status}, {len(warnings)} warnings")
         for (m,) in con.execute("SELECT message FROM run_log WHERE run_id = %s AND message LIKE %s",
                                 (run_id, "справочник эмитентов%")):
