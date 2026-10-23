@@ -10,6 +10,8 @@
   внутренних отчётов и систем, реальные позиции и PnL) живут только в приватном
   [trades-data-adapter](https://github.com/FlyingScotman/trades-data-adapter) — ADR-008
   (`docs/architecture/adr/ADR-008-private-adapter-boundary.md`). PnL-данные не публикуются ни в один Git-репозиторий.
+  CI проверяет отслеживаемые файлы на запрещённые слова (`tools/check_banned_terms.sh`); сам список — только в секрете
+  репозитория `BANNED_TERMS`, в репозиторий его не копировать.
 - Ядро — [FlyingScotman/rub-fixed-income-core](https://github.com/FlyingScotman/rub-fixed-income-core), версия
   закреплена в `backend/pyproject.toml`. Хаб — [FlyingScotman/market-data-hub](https://github.com/FlyingScotman/market-data-hub).
 - Архитектура — `docs/architecture/`; решения владельца — `docs/program/DECISIONS.md`.

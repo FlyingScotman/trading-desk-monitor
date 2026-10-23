@@ -9,9 +9,11 @@
  *  - fxDelta — позиция в единицах валюты (+ = длинная валюта);
  *  - funding.amount < 0 — привлечение, > 0 — размещение.
  *
- * Модель организации (docs/ORG_CONVENTIONS.md):
+ * Демо-модель по общей методике docs/ORG_CONVENTIONS.md. Индексы, спреды, фикс. ставки и базы фондирования —
+ * синтетические демо-значения, не правила какой-либо организации; настоящие правила задаёт приватный адаптер
+ * (справочник funding_rules, план адаптера, фаза A7):
  *  - книги TRADING: каждая облигация фондируется ежедневно на чистую MV в своей валюте
- *    (RUB — КС + спред, CNY — RUSFAR CNY + спред, USD/EUR/CHF — фикс. 5 %), процент платится в RUB;
+ *    (демо: RUB — КС + спред, CNY — RUSFAR CNY + спред, USD/EUR/CHF — фикс. 6 %), процент платится в RUB;
  *    вечером ОВП книги облигаций передаётся в книгу деривативов (FXB) сделкой T+1;
  *  - книги DERIVS: фондирование по остаткам денежных средств в каждой валюте по O/N-ставке;
  *  - книга HTM: контрактная ставка на чистую цену покупки, PnL — только начисление, вне DV01;
@@ -497,12 +499,13 @@
   // ---------- ставки фондирования (справочник funding_rates, docs/DATA_REQUIREMENTS.md) ----------
   // Правило подходит, если все заданные поля совпали; побеждает самое конкретное:
   // бумага (16) > книга (8) > юрлицо (4) > деск (2) > режим книги (1). Ставка = индекс + спред или фикс.
+  // Все индексы, спреды и фикс. ставки ниже — синтетические демо-значения (docs/ORG_CONVENTIONS.md).
   const FUNDING_RULES = [
     { bookType: 'TRADING', ccy: 'RUB', index: 'КС', spreadBp: 30, note: 'спред деска' },
     { bookType: 'TRADING', ccy: 'CNY', index: 'RUSFAR CNY', spreadBp: 60, note: 'спред деска' },
-    { bookType: 'TRADING', ccy: 'USD', fixed: 5.00, note: 'hard ccy' },
-    { bookType: 'TRADING', ccy: 'EUR', fixed: 5.00, note: 'hard ccy' },
-    { bookType: 'TRADING', ccy: 'CHF', fixed: 5.00, note: 'hard ccy' },
+    { bookType: 'TRADING', ccy: 'USD', fixed: 6.00, note: 'hard ccy' },
+    { bookType: 'TRADING', ccy: 'EUR', fixed: 6.00, note: 'hard ccy' },
+    { bookType: 'TRADING', ccy: 'CHF', fixed: 6.00, note: 'hard ccy' },
     { book: 'SECUR', ccy: 'RUB', index: 'КС', spreadBp: 50, note: 'особая ставка книги' },
     { entity: E2, instrument: 'ИЦБ ДОМ.РФ 2Р-12R', ccy: 'RUB', index: 'КС', spreadBp: 20, note: 'особый спред юрлица по бумаге' },
     { bookType: 'DERIVS', ccy: 'RUB', index: 'RUONIA', spreadBp: 0 },
@@ -528,10 +531,10 @@
   const pctTxt = x => x.toFixed(2) + '%';
   const ruleExpr = r => r.fixed != null ? pctTxt(r.fixed) + ' фикс' : r.index + (r.spreadBp ? (r.spreadBp > 0 ? ' + ' : ' − ') + pctTxt(Math.abs(r.spreadBp) / 100) : '');
   const ruleRate = r => r.fixed != null ? r.fixed : INDICES[r.index] + r.spreadBp / 100;
-  // базы начисления (предположение, docs/ORG_CONVENTIONS.md §1.6): процент по облигациям платится в RUB → 365;
+  // базы начисления (демо-значения, docs/ORG_CONVENTIONS.md §1.6): процент по облигациям платится в RUB → 365;
   // остатки ДС деривативов — по валюте
   const DAY_BASIS = { RUB: 365, CNY: 365, USD: 360, EUR: 360, CHF: 360 };
-  // бенчмарк стоимости фондирования: облигации RUB — КС, CNY — RUSFAR CNY, hard ccy — нет (фикс. ставка); деривативы — O/N своей валюты (RUB — RUONIA)
+  // бенчмарк стоимости фондирования (демо): облигации RUB — КС, CNY — RUSFAR CNY, hard ccy — нет (фикс. ставка); деривативы — O/N своей валюты (RUB — RUONIA)
   const BENCH_POS = { RUB: 'КС', CNY: 'RUSFAR CNY' };
 
   // ---------- передача ОВП книг облигаций в книгу деривативов (сделка вечером, T+1) ----------

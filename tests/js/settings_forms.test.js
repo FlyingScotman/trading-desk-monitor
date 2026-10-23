@@ -166,7 +166,7 @@ t('фондирование: история ставок по rule_id и сво�
   const M = SF.fundingMatrix(rules, '2026-10-22', ['TRADING', 'HTM', 'DERIVS', 'FUTURES']);
   eq(plain(M.cols), ['RUB', 'USD', '*']);
   assert.strictEqual(M.cell('TRADING', 'RUB').text, 'KEY_RATE + 150 б.п.');
-  assert.strictEqual(M.cell('TRADING', 'USD').text, '5 % фикс');
+  assert.strictEqual(M.cell('TRADING', 'USD').text, '6 % фикс');
   assert.strictEqual(M.cell('HTM', '*').text, 'контрактная');
   assert.strictEqual(M.cell('HTM', 'RUB'), null);
   assert.ok(M.special.some(x => x.current.entity === 'ENT2'));  // частное правило юрлица — не в сводке
