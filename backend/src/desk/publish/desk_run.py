@@ -86,6 +86,7 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
                          for sha, r in results.items()],
         "model_spreads": {"carried": carried, "new": len(spreads) - carried},
         "cut_ts": ctx.market.snapshot.doc.get("cut_ts"),
+        "market_business_date": ctx.market.snapshot.business_date,  # the header shows it when older (#22)
         "pnl_basis": pnl_basis,
     }
     if bd != ctx.business_date:  # the morning run (#21): the close the book of ``bd`` is valued on

@@ -770,6 +770,22 @@ export interface components {
                 [key: string]: string;
             } | null;
         };
+        /**
+         * AutopilotSchedule
+         * @description When the intraday step asks the hub (MSK): the header's «следующее обновление» and its warning (#22).
+         */
+        AutopilotSchedule: {
+            /** Intraday From */
+            intraday_from: string;
+            /** Prelim From */
+            prelim_from: string;
+            /** Poll Slot S */
+            poll_slot_s: number;
+            /** Poll Lag S */
+            poll_lag_s: number;
+            /** Warn After */
+            warn_after: string;
+        };
         /** AutopilotStatus */
         AutopilotStatus: {
             /** Enabled */
@@ -789,6 +805,9 @@ export interface components {
             steps: components["schemas"]["AutopilotStep"][];
             latest_run: components["schemas"]["AutopilotRun"] | null;
             progress?: components["schemas"]["AutopilotProgress"] | null;
+            /** Now */
+            now?: string | null;
+            schedule?: components["schemas"]["AutopilotSchedule"] | null;
         };
         /** AutopilotStep */
         AutopilotStep: {

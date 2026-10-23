@@ -5,6 +5,7 @@ The thread is ``request.app.state.autopilot`` (``serve`` sets it); without one t
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Literal
 
 import psycopg
@@ -12,7 +13,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException
 
-from ..autopilot import idle_status, latest_run
+from ..autopilot import INTRADAY_FROM, POLL_LAG_S, POLL_SLOT_S, PRELIM_FROM, idle_status, latest_run
 from .auth import trader_guard
 
 router = APIRouter(tags=["autopilot"])
@@ -49,6 +50,21 @@ class AutopilotProgress(BaseModel):
     detail: str
 
 
+class AutopilotSchedule(BaseModel):
+    """When the intraday step asks the hub (MSK): the header's «следующее обновление» and its warning (#22)."""
+
+    intraday_from: str  # the first intraday cut of a business day
+    prelim_from: str    # the eod_preliminary cut
+    poll_slot_s: int    # the hub is asked at most once per slot
+    poll_lag_s: int     # slots start this long after the slot times (:05, :15, ...)
+    warn_after: str     # no intraday run of today by then: the header warns, with the intraday step's reason
+
+
+WARN_AFTER = "10:15"  # #22: the first cut is 10:00, its run is expected by then
+SCHEDULE = {"intraday_from": f"{INTRADAY_FROM:%H:%M}", "prelim_from": f"{PRELIM_FROM:%H:%M}",
+            "poll_slot_s": POLL_SLOT_S, "poll_lag_s": POLL_LAG_S, "warn_after": WARN_AFTER}
+
+
 class AutopilotStatus(BaseModel):
     enabled: bool
     state: Literal["idle", "running", "error"]
@@ -58,6 +74,8 @@ class AutopilotStatus(BaseModel):
     steps: list[AutopilotStep]
     latest_run: AutopilotRun | None
     progress: AutopilotProgress | None = None  # while a cycle runs: its step, done of total, detail
+    now: str | None = None  # the server's clock: the header computes against it, not the browser's (#22)
+    schedule: AutopilotSchedule | None = None
 
 
 class Queued(BaseModel):
@@ -73,7 +91,7 @@ def autopilot_status(request: Request):
             st["latest_run"] = latest_run(con)
     except psycopg.Error:
         pass
-    return st
+    return {**st, "now": datetime.now(UTC).isoformat(), "schedule": SCHEDULE}
 
 
 @router.post("/api/v1/autopilot/run", response_model=Queued, status_code=202,
