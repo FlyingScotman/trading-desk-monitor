@@ -28,7 +28,7 @@
       "ccy": "USD",
       "basis": "mv_clean",
       "rate_kind": "fixed",
-      "fixed_rate_pct": 5,
+      "fixed_rate_pct": 6,
       "day_count": "ACT/360"
     },
     {

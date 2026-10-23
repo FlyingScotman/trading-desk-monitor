@@ -622,7 +622,7 @@ attach_official_pnl(r"C:\tdm\data\tdm.sqlite", run_id=run.run_id)
 
 ### 5.2 JSON-пакет (любой язык)
 
-Один файл на прогон, схема — `contract/bundle.schema.json`, пример — `fixtures/demo_bundle.json`.
+Один файл на прогон, схема — `contract/bundle.schema.json`, пример — `fixtures/demo_bundle.json`. Все значения в примере, включая ставки и спреды фондирования, — синтетические демо-данные; настоящие правила фондирования приходят из приватного адаптера (`funding_rules`, план адаптера, фаза A7).
 
 ```json
 {
@@ -637,7 +637,7 @@ attach_official_pnl(r"C:\tdm\data\tdm.sqlite", run_id=run.run_id)
   "fx":        [ { "ccy": "USD", "rate": 81.45, "move_pct": 0.62, "rate_cbr": 81.12, "move_pct_cbr": 0.48, "rate_cbr_next": 81.47 } ],
   "indices":   [ { "index_name": "КС", "value": 14.50 }, { "index_name": "RUONIA", "value": 14.32 } ],
   "funding_rules": [ { "book_type": "TRADING", "ccy": "RUB", "index_name": "КС", "spread_bp": 30, "note": "спред деска" },
-                     { "book_type": "TRADING", "ccy": "USD", "fixed_rate": 5.0, "note": "hard ccy" } ],
+                     { "book_type": "TRADING", "ccy": "USD", "fixed_rate": 6.0, "note": "hard ccy" } ],
   "positions": [ {
       "position_id": "SU26242", "book_id": "OFZ", "instr_type": "BOND", "asset_class": "ОФЗ-ПД", "segment": "Гос",
       "name": "ОФЗ 26242", "isin": "SU26242RMFS0", "issuer": "Минфин РФ", "ccy": "RUB", "maturity": "2029-08-29",

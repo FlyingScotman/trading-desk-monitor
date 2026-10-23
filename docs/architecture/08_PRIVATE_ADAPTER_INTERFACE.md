@@ -379,7 +379,7 @@ One row per report line. Book totals are sums; the report's own totals go to `co
 | `product_family`, `product_type`, `product_subtype` | str | The report's classification |
 | `ccy` | str | The instrument's currency (a slice; the primary amounts are already RUB) |
 | `long_short`, `buy_sell` | str | As reported |
-| `pnl_daily_rub` ● | num | Official daily PnL (TradeLevel IFRS), RUB |
+| `pnl_daily_rub` ● | num | Official daily PnL (the total of the official trade-level PnL report), RUB |
 | `pnl_pl_daily_rub` ●, `pnl_oci_daily_rub` ● | num | Its P&L and OCI parts. The backend checks `pnl_daily_rub = pnl_pl_daily_rub + pnl_oci_daily_rub` per line (tolerance max(0.01, 1e-8 × \|total\|)) and records a mismatch as a warning `pnl_parts_mismatch` |
 | `pnl_mtd_rub`, `pnl_ytd_rub` | num | As reported; never summed across dates |
 | `accrual_rpt`, `price_change_rpt`, `fx_reval_rpt`, `premium_discount_rpt`, `new_trades_rpt`, `commission_rpt`, `brokerage_rpt`, `reserves_rpt`, `other_mtm_rpt`, `dividend_rpt` | num | Components in report units, not confirmed as RUB. Evidence for break analysis; the backend does not assume they add up to `pnl_daily_rub` |
