@@ -734,22 +734,46 @@
     return out;
   };
 
-  // ---------- выгрузка таблиц в CSV (#110) ----------
-  // CSV для Excel с русскими региональными настройками: UTF-8 с BOM (иначе кириллица — кракозябры), разделитель
-  // «;» и десятичная запятая (так Excel с русской локалью раскладывает файл по колонкам и читает числа числами).
-  // Значения — как на экране (в единицах заголовка), числа — числами; текст, похожий на формулу, — с апострофом.
+  // ---------- выгрузка таблиц в CSV (#110, #144) ----------
+  // CSV для Excel с американскими региональными настройками (решение владельца, #110): UTF-8 с BOM (иначе
+  // кириллица в заголовках — кракозябры), разделитель «,», десятичная точка, числа без разделителей тысяч и
+  // с обычным минусом, даты MM/DD/YYYY, кавычки по RFC 4180. Значения — как на экране (в единицах заголовка):
+  //   число — числом («−1,234.5» → -1234.5); дата — датой Excel (03/15/2029);
+  //   текст, который Excel превратил бы в число, дату или формулу (есть цифры, TRUE/FALSE, «#» или «= + - @»
+  //   в начале), — строковой формулой ="…" (#144): Excel показывает текст как есть, а формула из ячейки не
+  //   выполнится — она внутри строкового литерала. Литерал в формуле Excel — до 255 знаков: длиннее — как есть,
+  //   а начало «= + - @» — с апострофом.
   K.htmlText = s => String(s == null ? '' : s).replace(/<(?:[^>"']|"[^"]*"|'[^']*')*>/g, '').replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
-  K.csvNum = t => {  // «−1,234.5» → «-1234,5»; «4.44%» → «4,44%»; не число — null
+  K.csvNum = t => {  // «−1,234.5» → «-1234.5»; «+12» → «12»; «4.44%» → «4.44%»; не число — null
     const m = /^([+−-]?)(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(%?)$/.exec(t);
-    return m ? (m[1] === '+' ? '' : m[1] ? '-' : '') + m[2].replace(/,/g, '') + (m[3] ? ',' + m[3].slice(1) : '') + m[4] : null;
+    return m ? (m[1] === '+' ? '' : m[1] ? '-' : '') + m[2].replace(/,/g, '') + (m[3] || '') + m[4] : null;
   };
-  K.csvCell = (t, num) => {
-    t = t == null ? '' : String(t);
+  const usDate = (y, mo, d) => (+mo >= 1 && +mo <= 12 && +d >= 1 && +d <= 31) ? mo + '/' + d + '/' + y : null;
+  K.csvDate = s => {  // «2029-03-15» (ISO, можно со временем) → «03/15/2029»; не дата — null
+    const m = /^(\d{4})-(\d{2})-(\d{2})(?:$|[T ])/.exec(s == null ? '' : String(s));
+    return m ? usDate(m[1], m[2], m[3]) : null;
+  };
+  // даты экрана (K.f.date «15.03.29», а также «15.03.2029») → MM/DD/YYYY. raw — значение ячейки до форматирования:
+  // если это ISO-дата, век берётся из неё; иначе двузначный год — 20YY
+  K.csvDates = (t, raw) => {
+    const iso = K.csvDate(raw);
+    if (iso) t = t.split(f.date(String(raw).slice(0, 10))).join(iso);
+    return t.replace(/(^|[^\d.,])(\d{2})\.(\d{2})\.(\d{4}|\d{2})(?!\d|\.\d)/g,
+      (m, p, d, mo, y) => { const u = usDate(y.length === 2 ? '20' + y : y, mo, d); return u ? p + u : m; });
+  };
+  const csvQuote = t => /[,"\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;  // RFC 4180
+  K.csvCell = (t, num, raw) => {
+    t = (t == null ? '' : String(t)).replace(/^[●■]\s*/, '');  // цветная метка эмитента / кривой — оформление
     if (num) { if (t === '—' || t === '·') return ''; const x = K.csvNum(t); if (x != null) return x; }
-    t = t.replace(/^[●■]\s*/, '');  // цветная метка эмитента / кривой — оформление
-    if (/^[=+\-@\t\r]/.test(t)) t = "'" + t;
-    return /[;"\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+    t = K.csvDates(t, raw);
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(t)) return t;  // дата целиком — датой Excel
+    const formula = /^[=+\-@\t\r]/.test(t);
+    if (formula || /\d/.test(t) || /^#/.test(t) || /^(true|false)$/i.test(t)) {
+      if (t.length <= 255) return csvQuote('="' + t.replace(/"/g, '""') + '"');
+      if (formula) t = "'" + t;
+    }
+    return csvQuote(t);
   };
   K.csvRun = () => ({ run_id: M.run && M.run.id != null ? String(M.run.id) : (K.source === 'real' ? '' : 'demo'), as_of: M.asOf || '' });
   K.download = (name, text, type) => {
@@ -950,12 +974,13 @@
     function csv() {
       const C = cols().filter(c => K.htmlText(c.label)), R = K.csvRun(), q = x => K.csvCell(x);  // без подписи — оформление (полоска доли)
       const head = C.map(c => { const l = K.htmlText(c.label); return q(c.unit && !l.includes(',') ? l + ', ' + c.unit : l); });
-      const line = r => C.map(c => { const v = val(c, r); return K.csvCell(K.htmlText(c.fmt ? c.fmt(v, r) : v), c.num); }).join(';');
-      return ['run_id;' + q(R.run_id) + ';as_of;' + q(R.as_of) + ';таблица;' + q(csvTitle()) + ';строк;' + shown.length, '', head.join(';')]
+      const line = r => C.map(c => { const v = val(c, r); return K.csvCell(K.htmlText(c.fmt ? c.fmt(v, r) : v), c.num, v); }).join(',');
+      return ['run_id,' + (/^\d+$/.test(R.run_id) ? R.run_id : q(R.run_id)) + ',as_of,' + (K.csvDate(R.as_of) || q(R.as_of)) + ',таблица,' + q(csvTitle()) + ',строк,' + shown.length, '', head.join(',')]
         .concat(shown.map(line)).join('\r\n') + '\r\n';
     }
     // имя файла — латиницей (кириллицу в имени скачивания браузер может заменить на «download»): opts.fileName, иначе
-    // opts.viewKey, иначе страница и якорь таблицы; дальше дата среза и прогон
+    // opts.viewKey, иначе страница и якорь таблицы; дальше дата среза и прогон. Дата среза в имени — ISO (YYYY-MM-DD),
+    // а не MM/DD/YYYY: «/» в имени файла недопустим, ISO однозначен в любой локали и файлы сортируются по дате
     function csvName() {
       const R = K.csvRun();
       let page = '', anchor = '';
