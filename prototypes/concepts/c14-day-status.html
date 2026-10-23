@@ -85,9 +85,14 @@
   }
   function load() {
     if (!server) { doc = DEMO.day; render(); renderDays(DEMO.days); return Promise.resolve(); }
-    return Promise.all([getJSON('api/v1/inbox' + (on ? '?on=' + on : '')), getJSON('api/v1/inbox/days?n=45')]).then(([d, ds]) => {
-      doc = d; on = d.date; if (lastId == null) lastId = d.last_event_id; render(); renderDays(ds.days);
-    }).catch(e => e.forbidden ? msg('Статус дня (имена файлов и книги) открыт на компьютере с монитором или администратору.') : msg('Не удалось загрузить статус дня: ' + esc(e.message)));
+    const strip = getJSON('api/v1/inbox/days?n=45').then(ds => ds.days).catch(() => []);
+    return Promise.all([getJSON('api/v1/inbox' + (on ? '?on=' + on : '')), strip]).then(([d, ds]) => {
+      doc = d; on = d.date; if (lastId == null) lastId = d.last_event_id == null ? 0 : d.last_event_id; render(); renderDays(ds);
+    }).catch(e => {
+      if (e.forbidden) return msg('Статус дня (имена файлов и книги) открыт на компьютере с монитором или администратору.');
+      msg('Не удалось загрузить статус дня' + (on ? ' за ' + esc(on) : '') + ': ' + esc(e.message) + '. Выберите другую дату.');
+      strip.then(renderDays);
+    });
   }
   function pick(d) {
     on = d; const x = new URL(location.href); x.searchParams.set('on', d); history.replaceState(null, '', x.toString());
@@ -161,13 +166,15 @@
       d.files.map((x, i) => {
         const rejU = x.units.filter(v => v.status === 'rejected');
         const why = x.why || (rejU.length ? 'отклонено: ' + rejU.map(v => scope(v.scope) + ' — ' + v.why).join('; ') : '');
-        return '<tr class="row" data-f="' + i + '"><td class="mut">' + time(x.at) + '</td><td>' + esc(x.name) + ' <span class="mut3 mono">' + esc(x.file) + '</span></td><td class="mut">' + esc(x.source || '—') + '</td>' +
-          '<td class="' + (lost(x.status) ? 'neg' : x.status === 'partially_accepted' ? '' : '') + '"' + (x.status === 'partially_accepted' ? ' style="color:var(--warn)"' : '') + '>' + esc(x.status_text) + '</td><td class="n">' + x.units.length + '</td><td class="wrap">' + esc(why) + '</td></tr>';
+        return '<tr class="row" tabindex="0" aria-expanded="false" data-f="' + i + '"><td class="mut">' + time(x.at) + '</td><td>' + esc(x.name) + ' <span class="mut3 mono">' + esc(x.file) + '</span></td><td class="mut">' + esc(x.source || '—') + '</td>' +
+          '<td class="' + (lost(x.status) ? 'neg' : '') + '"' + (x.status === 'partially_accepted' ? ' style="color:var(--warn)"' : '') + '>' + esc(x.status_text) + '</td><td class="n">' + x.units.length + '</td><td class="wrap">' + esc(why) + '</td></tr>';
       }).join('') + '</tbody></table>' : '<div class="k-empty">Файлов за эту дату не было</div>') +
       (d.copies.length ? '<div style="padding:8px 12px;border-top:1px solid var(--line)"><b style="color:var(--warn)">Копии:</b> ' + d.copies.map(c => esc(c.name) + ' — ' + (c.kind === 'stale_copy' ? 'старая копия (содержимое отчёта за ' + f.date(c.content_report_date) + '): свежего отчёта нет' : 'повтор, ничего не загружено')).join('; ') + '</div>' : '');
+    fp.querySelectorAll('tr[data-f]').forEach(tr => tr.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); tr.click(); } });
     fp.querySelectorAll('tr[data-f]').forEach(tr => tr.onclick = () => {
-      const nx = tr.nextElementSibling;
-      if (nx && nx.classList.contains('c14-units')) { nx.remove(); return; }
+      let nx = tr.nextElementSibling;
+      if (nx && nx.classList.contains('c14-units')) { while (nx && nx.classList.contains('c14-units')) { const r = nx; nx = nx.nextElementSibling; r.remove(); } tr.setAttribute('aria-expanded', 'false'); return; }
+      tr.setAttribute('aria-expanded', 'true');
       const x = d.files[+tr.dataset.f];
       const rows = x.units.map(v => '<tr class="c14-units"><td></td><td>' + esc(scope(v.scope)) + ' <span class="mut3">' + esc(v.dataset) + (v.valid_date && v.valid_date !== d.date ? ' · за ' + f.date(v.valid_date) : '') + '</span></td><td></td>' +
         '<td class="' + (v.status === 'rejected' ? 'neg' : '') + '">' + esc({ accepted: 'принята', rejected: 'отклонена', superseded: 'заменена' }[v.status] || v.status) + '</td><td class="n">' + num(v.rows) + ' стр.</td>' +
@@ -211,7 +218,7 @@
   function onEvents(list) {
     if (!list.length) return;
     lastId = list[list.length - 1].id;
-    list.forEach(e => { if (e.level !== 'info' || e.type === 'run.published') toast(e); });
+    list.forEach(e => { if (e.level !== 'info' || (e.type === 'run.published' && (e.detail || {}).run_type !== 'INTRADAY')) toast(e); });
     if (list.some(e => e.valid_date === on)) { list.forEach(e => fresh.add(e.id)); load(); }
   }
   function poll() {
@@ -250,7 +257,7 @@
           { book_id: 'B2', name: 'Демо-книга 2', valid_date: '2026-10-19', age_days: 1, file: 'positions_20261020.csv', rows_in_report: 17, rows_accepted: 17, rows_in_run: 17, rows_valued: 17, flags: ['unit_rejected'], issues: { bad_number: 2 } },
           { book_id: 'B3', name: 'Демо-книга 3', valid_date: D, age_days: 0, file: 'positions_20261021.csv', rows_in_report: 192, rows_accepted: 192, rows_in_run: 192, rows_valued: 192, flags: [], issues: {} }] },
         events: [
-          ev(1, 8, 5, 'input.partially_accepted', 'warn', 'Позиции за 20.10 · positions_daily: принят частично · принято 2, отклонён 1, строк 430'),
+          ev(1, 8, 5, 'input.partially_accepted', 'warn', 'Позиции за 20.10 · positions_daily: принят частично · принято 2, отклонено 1, строк 430'),
           ev(2, 18, 33, 'run.published', 'info', 'Прогон внутри дня #38 за 20.10 опубликован'),
           ev(3, 19, 10, 'input.accepted', 'info', 'ОВП за 20.10 · ocp_daily: принят · принято 2, строк 9'),
           ev(4, 19, 12, 'input.accepted', 'info', 'Остатки на счетах за 20.10 · cash_daily: принят · принято 2, строк 14'),
