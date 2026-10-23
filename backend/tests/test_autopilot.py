@@ -27,7 +27,7 @@ FIX = Path(__file__).parent / "fixtures"
 PRIV, CONFIG, SNAPS = FIX / "private" / "v1", FIX / "private" / "v1" / "config", FIX / "mdhub_v1"
 TODAY = date(2026, 10, 19)
 STEP_KEYS = {"name", "status", "detail", "at"}
-OPTIONAL_STEP_KEYS = {"reason", "failed_dates"}  # the intraday step's reason, the sync step's failed dates (#20)
+OPTIONAL_STEP_KEYS = {"reason", "failed_dates", "problem_dates"}  # intraday reason; sync failed, problem dates
 server, stub = test_slice_s3.server, test_slice_s3.stub  # the stub hub's fixtures
 
 

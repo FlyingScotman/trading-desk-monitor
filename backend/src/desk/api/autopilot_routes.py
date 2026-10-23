@@ -19,6 +19,15 @@ from .auth import trader_guard
 router = APIRouter(tags=["autopilot"])
 
 
+class ProblemDate(BaseModel):
+    """A hub date whose sync failed and that waits for a retry (#146)."""
+
+    date: str
+    error: str
+    attempts: int
+    next_attempt: str | None
+
+
 class AutopilotStep(BaseModel):
     name: str
     status: Literal["ok", "skipped", "error"]
@@ -26,6 +35,7 @@ class AutopilotStep(BaseModel):
     reason: str | None = None  # the intraday / morning step: why there is (no) run of today,
     # ``autopilot.INTRADAY_REASONS`` / ``autopilot.MORNING_REASONS``
     failed_dates: list[str] | None = None  # the sync step: hub dates that failed alone this cycle (#20)
+    problem_dates: list[ProblemDate] | None = None  # the sync step: failed dates waiting for a retry (#146)
     at: str
 
 
