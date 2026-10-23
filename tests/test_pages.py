@@ -111,6 +111,7 @@ class Pages(unittest.TestCase):
 
 # Страницы открываются на рабочей машине без интернета: ни одного внешнего запроса при загрузке (#79). Шрифты лежат в
 # prototypes/fonts/ (OFL, @fontsource), сервер отдаёт их как /fonts/…; внешние ссылки <a href> — не загрузка, их можно
+# оставлять: браузер идёт по ним только по щелчку. Запросы из скриптов (fetch, EventSource, WebSocket) — загрузка
 SERVED = [PROTO, ROOT / "frontend" / "index.html", ROOT / "frontend" / "src", ROOT / "frontend" / "dist"]
 ASSET_EXT = {".html", ".css", ".js", ".ts", ".tsx"}
 CDN = re.compile(r"fonts\.googleapis\.com|fonts\.gstatic\.com|cdn\.jsdelivr\.net|unpkg\.com|cdnjs\.cloudflare\.com")
@@ -118,7 +119,16 @@ EXTERNAL_LOAD = [
     re.compile(r"<(?:link|script|img|iframe|source|audio|video)\b[^>]*\b(?:href|src)\s*=\s*[\"']?(?:https?:)?//", re.IGNORECASE),
     re.compile(r"@import\s+(?:url\(\s*)?[\"']?(?:https?:)?//", re.IGNORECASE),
     re.compile(r"url\(\s*[\"']?(?:https?:)?//", re.IGNORECASE),
+    re.compile(r"\b\w*fetch\(\s*[\"'`](?:https?:)?//", re.IGNORECASE),  # fetch('https://…'), ghFetch("http…")
+    re.compile(r"\bnew\s+(?:EventSource|WebSocket)\(\s*[\"'`](?:https?:|wss?:)?//"),
 ]
+# Узкие исключения: файл → адреса, которые ему пока можно запрашивать. desk-updater.js — до #138: проверка
+# обновлений ходит в GitHub из браузера при загрузке страницы (автопроверка включена по умолчанию); после
+# исправления #138 исключение убрать
+ALLOWED = {
+    "prototypes/desk-updater.js": re.compile(
+        r"(?:https?:)?//(?:api\.github\.com|github\.com|release-assets\.githubusercontent\.com)/"),
+}
 FONTS = PROTO / "fonts"
 
 
@@ -135,8 +145,13 @@ class Offline(unittest.TestCase):
         found = []
         for f in served_assets():
             text = f.read_text(encoding="utf-8", errors="replace")
+            name = f.relative_to(ROOT).as_posix()
+            allowed = ALLOWED.get(name)
             for rx in [CDN, *EXTERNAL_LOAD]:
-                found += [f"{f.relative_to(ROOT)}: {m.group(0)[:80]}" for m in rx.finditer(text)]
+                for m in rx.finditer(text):
+                    if allowed and allowed.match(text, m.end() - 2):  # m заканчивается на «//»
+                        continue
+                    found.append(f"{name}: {m.group(0)[:80]}")
         self.assertEqual(found, [], "внешние запросы при загрузке страницы")
 
     def test_local_fonts_are_complete(self):
