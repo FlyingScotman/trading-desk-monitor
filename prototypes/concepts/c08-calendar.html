@@ -214,11 +214,12 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     const rows = a => a.map(x => ({ p: M.pos[x.pos], v: x.val }));
     const byKind = k => ev.filter(x => x.kind === k);
     const ccys = M.ccys.filter(c => ev.some(x => x.ccy === c));
-    const sub = a => ccys.filter(c => a.some(x => x.ccy === c)).map(c => c + ' ' + f.mn(sumBy(a.filter(x => x.ccy === c), x => x.amt), 1)).join(' · ');
+    // разбивка плитки строками (#103): число событий и суммы по валютам — две крупнейшие, остальные строкой «+N»
+    const sub = a => [['событий', String(a.length)]].concat(K.kpiCcyRows(ccys.reduce((o, c) => (o[c] = sumBy(a.filter(x => x.ccy === c), x => x.amt), o), {}), (c, v) => f.mn(v, 1), 2, v => f.mn(v, 1)));
     const puts = byKind('put'), nextPut = puts[0];
     kpis.innerHTML = '<div class="k-kpis">' +
       K.kpi('Всего поступлений', K.d({ title: 'Все потоки до ' + f.date(e), unit: 'mm ₽', fmt: v => f.mn(v, 1), rows: rows(ev), color: false }) + ' <span class="mut" style="font-size:11px">mm ₽</span>', ev.length + ' событий до ' + f.date(e)) +
-      ['cpn', 'mat', 'put', 'call'].map(k => { const a = byKind(k); return K.kpi('<span style="color:' + KC[k] + '">●</span> ' + KNP[k], a.length ? K.d({ title: KNP[k] + ' до ' + f.date(e), unit: 'mm ₽', fmt: v => f.mn(v, 1), rows: rows(a), color: false }) : '<span class="mut3">—</span>', a.length ? a.length + ' · ' + sub(a) + ' mm' : 'нет в горизонте'); }).join('') +
+      ['cpn', 'mat', 'put', 'call'].map(k => { const a = byKind(k); return K.kpi('<span style="color:' + KC[k] + '">●</span> ' + KNP[k], a.length ? K.d({ title: KNP[k] + ' до ' + f.date(e), unit: 'mm ₽', fmt: v => f.mn(v, 1), rows: rows(a), color: false }) + K.kpiUnit('mm') : '<span class="mut3">—</span>', a.length ? sub(a) : 'нет в горизонте'); }).join('') +
       K.kpi('Ближайшая оферта', nextPut ? '<span data-card="' + nextPut.pos + '" class="dr" style="color:var(--warn)">' + f.dshort(nextPut.date) + '</span>' : '<span class="mut3">—</span>', nextPut ? esc(nextPut.name) + ' · через ' + Math.round(U.yearsTo(nextPut.date) * 365.25) + ' дн' : 'нет в горизонте') +
       '</div>';
 
