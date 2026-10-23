@@ -44,13 +44,15 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    preliminary bundles of dates older than ``KEEP_CUT_DAYS`` leave the cache (``cache.prune``) unless a shown run
    reads them. The next morning the date's ``eod_final`` EOD run (step 3) supersedes both.
    **morning** (#21, with or without the hub): on a business day from ``MORNING_FROM`` (07:00 MSK; earlier once a
-   position set of today is in the store), until today has a run on its own market (an EOD run, an intraday cut's
+   current position set has report date today, e.g. today's ``start_of_day`` report, valid the day before), until today has a run on its own market (an EOD run, an intraday cut's
    run), today's book (``store.current_sets``) valued on the previous business day's close in the cache (its
    ``eod_final``, else its ``eod_preliminary``): ``cli.eod_run(on_close=...)``, an INTRADAY run of today with
    ``cut_type`` ``prev_close``, lineage ``market_close`` {date, cut_type}, no flash PnL (``pnl_basis`` says why), its
    label «16.10 · закрытие 15.10» (``store.slice_label``). Made again only when the position sets, the close or the
    logic (``backfill.same_logic``) change, the earlier morning run deleted (``store.prune_intraday``); the first
-   intraday cut's run deletes it the same way. Its status carries a ``reason`` (``MORNING_REASONS``).
+   intraday cut's run deletes it the same way. While the inbox is still draining (as step 3, R22) it waits. No run
+   when the cache lacks the previous business day's close, even with an older one: the issue asks for D-1's close;
+   the ``intraday`` setting does not turn it off. Its status carries a ``reason`` (``MORNING_REASONS``).
 5. **history** (with the hub and ``history_days`` > 0): market history older than the cache for the bond charts,
    from the hub's history API when it serves the token (``desk.marketdata.hubhistory``: bonds from
    ``history_bonds_from``, KBD, curves, fixings and FX from ``history_rates_from``; ``hubhistory.BUDGET_S`` seconds a
@@ -131,7 +133,7 @@ INTRADAY_REASONS = ("off", "before_open", "not_business_day", "no_positions", "n
 MORNING_FROM = dtime(7, 0)    # MSK: the morning run of a business day is made from then (#21; earlier on its own book)
 # the morning step's ``reason`` (status ``steps[].reason``, #21/#22)
 MORNING_REASONS = ("not_business_day", "before_morning", "no_positions", "no_close", "superseded", "up_to_date",
-                   "ran", "failed_before", "run_failed", "error")
+                   "inbox_backlog", "ran", "failed_before", "run_failed", "error")
 KEEP_CUT_DAYS = 3             # intraday and preliminary bundles of older dates leave the cache
 STATIC_POLL_S = 300.0         # the hub's newest static is asked for at most this often (R25: reference facts, ratings)
 
@@ -1009,8 +1011,9 @@ class Autopilot:
         ids, n = store.current_sets(con, today)
         if not n:
             return "skipped", "no positions in the store", "no_positions"
-        if now.time() < MORNING_FROM and not con.execute(
-                "SELECT EXISTS (SELECT 1 FROM position_set WHERE valid_date = %s)", (today,)).fetchone()[0]:
+        if now.time() < MORNING_FROM and not con.execute(  # a report of today is in: its start_of_day report has
+                "SELECT EXISTS (SELECT 1 FROM position_set WHERE set_id = ANY(%s)"  # valid_date D-1, report_date D
+                " AND (report_date = %s OR valid_date = %s))", (ids, today, today)).fetchone()[0]:
             return "skipped", f"before {MORNING_FROM:%H:%M} MSK", "before_morning"
         expected = today - timedelta(days=1)
         for _ in range(31):  # the previous business day
@@ -1033,6 +1036,9 @@ class Autopilot:
         label = store.slice_label(today, "prev_close", None, None, {"date": close[0], "cut_type": close[1]})
         if why is None:
             return "ok", f"up to date: run {last[0]} on {label}", "up_to_date"
+        if self._inbox_waiting and self._sync_later:  # as the eod step (R22): not once per revision of the backlog
+            return "skipped", (f"{label}: after the inbox backlog ({self._inbox_waiting} files wait for a calendar, "
+                               f"{self._sync_later} hub dates next cycle)"), "inbox_backlog"
         sig = (snap, tuple(ids), logic)
         if self._failed.get(f"prev_close {today}") == sig:
             return "skipped", f"{label} failed before on the same inputs, not retried", "failed_before"

@@ -338,52 +338,70 @@ def test_morning_run_on_the_previous_close_without_the_hub(stub, tmp_path, store
     """#21: the morning of a business day D, the positions of D in the store, no cut of D on the hub (the hub even
     down): a run of D on the previous business day's close, labelled so, made once (not every cycle), made again on
     a new revision of the book; the first intraday cut of D replaces it; the next morning's close of D runs as
-    before and the next day gets its own morning run."""
+    before and the next day gets its own morning run. Before 07:00 only once a report of D is in (a start_of_day
+    report of D: valid D-1, report date D)."""
     s = cfg(tmp_path, store_url, stub)
-    put(tmp_path, "positions_20261016.csv")
+    put(tmp_path, "positions_20261015.csv")  # start_of_day 15.10: valid 14.10, nothing of 16.10 yet
     fin = publish(stub, date(2026, 10, 15), "eod_final", "2026-10-16T05:00:00Z", 0)
     clock = {"t": at(FRI, 6, 30)}
     ap = Autopilot(settings_loader=lambda: s, now=lambda: clock["t"])
     by = steps(ap.run_cycle())
     assert by["eod"] == ("ok", "2026-10-15 run 1 (no default run)")
-    assert by["morning"][0] == "skipped" and morning_rows(store_url) == []
+    assert by["morning"] == ("skipped", "before 07:00 MSK") and morning_rows(store_url) == []
 
     stub.fail = 1000  # the hub is down: the morning run does not need it
-    clock["t"] = at(FRI, 7, 5)
+    put(tmp_path, "positions_20261016.csv")  # the start_of_day report of 16.10 (valid 15.10): before 07:00 too
+    clock["t"] = at(FRI, 6, 45)
     st = ap.run_cycle()
     by = steps(st)
     assert by["sync"][0] == "error" and by["intraday"][0] == "skipped"
-    assert by["morning"] == ("ok", "16.10 · закрытие 15.10: run 2 (no run of 2026-10-16 yet)"), by["morning"]
+    assert by["eod"] == ("ok", "2026-10-15 run 2 (positions changed)"), by["eod"]
+    assert by["morning"] == ("ok", "16.10 · закрытие 15.10: run 3 (no run of 2026-10-16 yet)"), by["morning"]
     morning = next(x for x in st["steps"] if x["name"] == "morning")
     assert morning["reason"] == "ran"
     mid = SnapshotDir(tmp_path / "cache").market_id("2026-10-15")
     assert mid == fin
-    assert morning_rows(store_url) == [(2, FRI, "INTRADAY", "prev_close", fin, None,
+    assert morning_rows(store_url) == [(3, FRI, "INTRADAY", "prev_close", fin, None,
                                         {"date": "2026-10-15", "cut_type": "eod_final"})]
     lr = st["latest_run"]
     assert (lr["run_id"], lr["as_of"], lr["cut_type"], lr["label"], lr["market_close"]) == (
-        "2", "2026-10-16", "prev_close", "16.10 · закрытие 15.10", {"date": "2026-10-15", "cut_type": "eod_final"})
+        "3", "2026-10-16", "prev_close", "16.10 · закрытие 15.10", {"date": "2026-10-15", "cut_type": "eod_final"})
     assert lr["pnl_basis"].startswith("нет PnL")
     api = TestClient(create_app(store_url))
     d = api.get("/api/v1/runs/default").json()
-    assert (d["run_id"], d["is_current"], d["is_default"], d["label"]) == (2, True, False, "16.10 · закрытие 15.10")
-    assert api.get("/api/v1/compat/desk").json()["source"]["slice"] == "16.10 · закрытие пред. дня"  # date: #22
+    assert (d["run_id"], d["is_current"], d["is_default"], d["label"]) == (3, True, False, "16.10 · закрытие 15.10")
+    src = api.get("/api/v1/compat/desk").json()["source"]  # the header's «позиции 16.10 · рынок 15.10 · ...» (#22)
+    assert (src["cutType"], src["slice"], src["marketDate"], src["marketCutType"]) == (
+        "prev_close", "16.10 · закрытие 15.10", "2026-10-15", "eod_final")
     assert api.get("/api/v1/autopilot/status").json()["latest_run"]["market_close"] == {
         "date": "2026-10-15", "cut_type": "eod_final"}
 
     for hh, mm in ((7, 15), (7, 25), (9, 55)):  # the next cycles: up to date, no new run
         clock["t"] = at(FRI, hh, mm)
         st = ap.run_cycle()
-        assert steps(st)["morning"][0] == "ok" and steps(st)["morning"][1].startswith("up to date: run 2"), st
+        assert steps(st)["morning"][0] == "ok" and steps(st)["morning"][1].startswith("up to date: run 3"), st
         assert next(x for x in st["steps"] if x["name"] == "morning")["reason"] == "up_to_date"
     assert len(morning_rows(store_url)) == 1
 
     put(tmp_path, "positions_20261016_2.csv")  # a new revision of the book: the morning run again, the old one gone
+    scan_step = ap._scan
+
+    def backlog(*a):  # the inbox still draining (R22): the morning run waits for it, as the older eod dates
+        out = scan_step(*a)
+        ap._inbox_waiting, ap._sync_later = 3, 2
+        return out
+    ap._scan = backlog
+    clock["t"] = at(FRI, 9, 56)
+    st = ap.run_cycle()
+    assert steps(st)["eod"] == ("ok", "2026-10-15 run 4 (positions changed)"), steps(st)["eod"]
+    assert steps(st)["morning"][0] == "skipped" and next(
+        x for x in st["steps"] if x["name"] == "morning")["reason"] == "inbox_backlog", steps(st)
+    assert [r[0] for r in morning_rows(store_url)] == [3]
+    ap._scan = scan_step
     clock["t"] = at(FRI, 9, 58)
     by = steps(ap.run_cycle())
-    assert by["eod"] == ("ok", "2026-10-15 run 3 (positions changed)"), by["eod"]
-    assert by["morning"] == ("ok", "16.10 · закрытие 15.10: run 4 (positions changed); removed run 2"), by["morning"]
-    assert [r[0] for r in morning_rows(store_url)] == [4]
+    assert by["morning"] == ("ok", "16.10 · закрытие 15.10: run 5 (positions changed); removed run 3"), by["morning"]
+    assert [r[0] for r in morning_rows(store_url)] == [5]
 
     stub.fail = 0
     publish(stub, FRI, "intraday", "2026-10-16T07:00:00Z", 1)
