@@ -13,6 +13,7 @@ from .assemble import assemble, resolve_run
 from .db import connect, init_db
 
 STATIC_EXT = {".html", ".js", ".css", ".json", ".png", ".jpg", ".svg", ".ico", ".woff2"}  # .jpg: miniatures of the monitors
+mimetypes.add_type("font/woff2", ".woff2")  # шрифты prototypes/fonts/ (#79): в таблице Python 3.11 и реестре Windows может не быть
 _cache, _cache_lock = {}, threading.Lock()  # (run_id, версия сценариев) -> JSON
 
 
