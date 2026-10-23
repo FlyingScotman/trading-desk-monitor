@@ -1351,15 +1351,21 @@
   // строки в стиле плитки ОВП — подпись слева, цифра справа, табличные цифры.
   K.kpiRows = rows => '<table class="k-kb"><tbody>' + rows.map(r => '<tr' + (r[2] ? ' title="' + esc(r[2]) + '"' : '') + '><td class="c">' + r[0] + '</td><td>' + r[1] + '</td></tr>').join('') + '</tbody></table>';
   K.kpi = (label, valueHtml, sub, spark, tip) => '<div class="k-kpi"><div class="l">' + K.hint(label, tip) + '</div><div class="v">' + valueHtml + '</div><div class="s">' +
-    (Array.isArray(sub) ? K.kpiRows(sub) : (sub || '&nbsp;')) + '</div>' + (spark || '') + '</div>';
+    (Array.isArray(sub) ? (sub.length ? K.kpiRows(sub) : '<span class="mut3">—</span>') : (sub || '&nbsp;')) + '</div>' + (spark || '') + '</div>';
   K.kpiUnit = u => ' <span class="u">' + u + '</span>';
-  // разбивка по валютам: ненулевые по |значению|, первые n строками, остальные — одной строкой «+N прочих» с подсказкой
-  K.kpiCcyRows = (vals, cell, n, fmt) => {
-    const R = M.ccys.map(c => ({ c, v: vals[c] || 0 })).filter(r => Math.abs(r.v) > 1e-9).sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
-    n = n || 3;
-    const top = R.length > n + 1 ? R.slice(0, n) : R, rest = R.slice(top.length);
-    return top.map(r => [esc(r.c), cell(r.c, r.v)])
-      .concat(rest.length ? [['<span class="mut3">+' + rest.length + '</span>', '<span class="mut3">' + esc(rest.map(r => r.c).join(', ')) + '</span>', rest.map(r => r.c + ' ' + fmt(r.v)).join(' · ')]] : []);
+  // разбивка по валютам: не больше n строк (по умолчанию 3, #103). Валюты по |rank| (по умолчанию — по самим значениям;
+  // для сумм в родных валютах передают рублёвый эквивалент), показываются значения vals. Если валют больше n —
+  // первые n−1 строками, остальные одной строкой «+N» с подсказкой. Точные нули не показываются; значения, которые
+  // в формате fmt округляются до нуля, — в «+N», как «прочие» у ОВП.
+  K.kpiCcyRows = (vals, cell, n, fmt, rank) => {
+    rank = rank || vals; n = n || 3;
+    const zero = v => /^[−+-]?0(?:[.,]0*)?(?:\s|$)/.test(String(fmt(v)).trim());  // fmt может нести единицу: «0.0 mm»
+    const R = M.ccys.map(c => ({ c, v: vals[c] || 0, r: rank[c] || 0 })).filter(x => Math.abs(x.v) > 1e-9)
+      .sort((a, b) => (Math.abs(b.r) - Math.abs(a.r)) || a.c.localeCompare(b.c));
+    const big = R.filter(x => !zero(x.v)), minor = R.filter(x => zero(x.v));
+    const top = big.length + (minor.length ? 1 : 0) > n ? big.slice(0, n - 1) : big, rest = big.slice(top.length).concat(minor);
+    return top.map(x => [esc(x.c), cell(x.c, x.v)])
+      .concat(rest.length ? [['<span class="mut3">+' + rest.length + '</span>', '<span class="mut3">' + esc(rest.map(x => x.c).join(', ')) + '</span>', rest.map(x => x.c + ' ' + fmt(x.v)).join(' · ')]] : []);
   };
 
   // ---------- ОВП в шапке (R43) ----------

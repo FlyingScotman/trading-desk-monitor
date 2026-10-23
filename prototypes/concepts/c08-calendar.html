@@ -214,12 +214,15 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     const rows = a => a.map(x => ({ p: M.pos[x.pos], v: x.val }));
     const byKind = k => ev.filter(x => x.kind === k);
     const ccys = M.ccys.filter(c => ev.some(x => x.ccy === c));
-    // разбивка плитки строками (#103): число событий и суммы по валютам — две крупнейшие, остальные строкой «+N»
-    const sub = a => [['событий', String(a.length)]].concat(K.kpiCcyRows(ccys.reduce((o, c) => (o[c] = sumBy(a.filter(x => x.ccy === c), x => x.amt), o), {}), (c, v) => f.mn(v, 1), 2, v => f.mn(v, 1)));
+    // разбивка плитки строками (#103): суммы по валютам в родной валюте (mm RUB, mm USD …), не больше трёх строк;
+    // крупнейшие — по рублёвому эквиваленту (x.val), а не по сумме в родной валюте
+    const byCcy = (a, key) => ccys.reduce((o, c) => (o[c] = sumBy(a.filter(x => x.ccy === c), x => x[key]), o), {});
+    const sub = a => K.kpiCcyRows(byCcy(a, 'amt'), (c, v) => f.mn(v, 1) + K.kpiUnit('mm ' + esc(c)), 3, v => f.mn(v, 1) + ' mm', byCcy(a, 'val'));
+    const nEv = a => ' <span class="mut3" title="событий в горизонте">(' + a.length + ')</span>';
     const puts = byKind('put'), nextPut = puts[0];
     kpis.innerHTML = '<div class="k-kpis">' +
-      K.kpi('Всего поступлений', K.d({ title: 'Все потоки до ' + f.date(e), unit: 'mm ₽', fmt: v => f.mn(v, 1), rows: rows(ev), color: false }) + ' <span class="mut" style="font-size:11px">mm ₽</span>', ev.length + ' событий до ' + f.date(e)) +
-      ['cpn', 'mat', 'put', 'call'].map(k => { const a = byKind(k); return K.kpi('<span style="color:' + KC[k] + '">●</span> ' + KNP[k], a.length ? K.d({ title: KNP[k] + ' до ' + f.date(e), unit: 'mm ₽', fmt: v => f.mn(v, 1), rows: rows(a), color: false }) + K.kpiUnit('mm') : '<span class="mut3">—</span>', a.length ? sub(a) : 'нет в горизонте'); }).join('') +
+      K.kpi('Всего поступлений', K.d({ title: 'Все потоки до ' + f.date(e), unit: 'mm ₽', fmt: v => f.mn(v, 1), rows: rows(ev), color: false }) + K.kpiUnit('mm ₽'), ev.length + ' событий до ' + f.date(e)) +
+      ['cpn', 'mat', 'put', 'call'].map(k => { const a = byKind(k); return K.kpi('<span style="color:' + KC[k] + '">●</span> ' + KNP[k] + (a.length ? nEv(a) : ''), a.length ? K.d({ title: KNP[k] + ' до ' + f.date(e), unit: 'mm ₽', fmt: v => f.mn(v, 1), rows: rows(a), color: false }) + K.kpiUnit('mm ₽') : '<span class="mut3">—</span>', a.length ? sub(a) : 'нет в горизонте'); }).join('') +
       K.kpi('Ближайшая оферта', nextPut ? '<span data-card="' + nextPut.pos + '" class="dr" style="color:var(--warn)">' + f.dshort(nextPut.date) + '</span>' : '<span class="mut3">—</span>', nextPut ? esc(nextPut.name) + ' · через ' + Math.round(U.yearsTo(nextPut.date) * 365.25) + ' дн' : 'нет в горизонте') +
       '</div>';
 
