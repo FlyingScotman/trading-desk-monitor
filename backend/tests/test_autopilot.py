@@ -3,6 +3,7 @@ the stub hub of slice S3, the reference adapter and the canonical inbox fixtures
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -26,6 +27,7 @@ FIX = Path(__file__).parent / "fixtures"
 PRIV, CONFIG, SNAPS = FIX / "private" / "v1", FIX / "private" / "v1" / "config", FIX / "mdhub_v1"
 TODAY = date(2026, 10, 19)
 STEP_KEYS = {"name", "status", "detail", "at"}
+OPTIONAL_STEP_KEYS = {"reason", "failed_dates"}  # the intraday step's reason, the sync step's failed dates (#20)
 server, stub = test_slice_s3.server, test_slice_s3.stub  # the stub hub's fixtures
 
 
@@ -111,7 +113,8 @@ def test_hub_down_still_scans_and_runs_on_the_cache(stub, tmp_path, store_url, m
     out = capsys.readouterr().out
     assert "sync: error - hub: 127.0.0.1 unreachable after 4 attempts" in out and "cached snapshots are used" in out
     assert "scan: ok" in out and "eod: ok - 2026-10-15 run 1 (no default run)" in out
-    assert "Ошибки: sync; latest run: 1 of 2026-10-15 (15.10 · закрытие)" in out
+    # the intraday step asks the hub itself (#20): an error too while the wall clock is in business hours
+    assert re.search(r"Ошибки: sync(, intraday)?; latest run: 1 of 2026-10-15 \(15.10 · закрытие\)", out), out
     assert TOKEN not in out
     assert runs(store_url) == [(1, date(2026, 10, 15), "EOD", "complete")]
     assert cli.main(["cycle", "--no-hub"]) == 0  # the hub skipped: nothing else to do
@@ -281,7 +284,7 @@ def test_settings_switch_and_errors_in_status(tmp_path, store_url):
     assert st["state"] == "error" and steps(st)["store"][0] == "error" and steps(st)["sync"][0] == "skipped"
     assert set(st) == {"enabled", "state", "last_cycle_at", "last_ok_at", "message", "steps", "latest_run", "progress"}
     assert st["progress"] is None  # only while a cycle runs
-    assert all(set(x) == STEP_KEYS for x in st["steps"])
+    assert all(STEP_KEYS <= set(x) <= STEP_KEYS | OPTIONAL_STEP_KEYS for x in st["steps"])
     (tmp_path / "drop").mkdir()
     half = Settings(home=tmp_path / "home", store_url=store_url, snapshot_cache=tmp_path / "cache",
                     snapshot_drop=tmp_path / "drop")  # market data from a drop folder, no report folders
