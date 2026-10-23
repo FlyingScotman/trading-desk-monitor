@@ -555,9 +555,23 @@ def carried_spreads(con: psycopg.Connection, before: date) -> dict[str, CarriedS
             for s, z, d, rid, src, c in rows if math.isfinite(z)}
 
 
+RUN_EVENT_SQL = ("INSERT INTO event (type, valid_date, run_id, detail)"
+                 " SELECT %s, business_date, run_id, jsonb_build_object('run_type', run_type, 'cut_type', cut_type,"
+                 " 'supersedes_run_id', supersedes_run_id, 'cut_ts', cut_ts) FROM run WHERE run_id = ANY(%s)")
+
+
+def run_event(con: psycopg.Connection | psycopg.Cursor, type_: str, run_ids: list[int]) -> None:
+    """The feed's event of runs (migration 0019, ``desk.daystatus``): ``run.published`` when a run completes (in its
+    transaction), ``run.failed`` when it fails or is reaped; the run's date, type, cut and the run it supersedes."""
+    if run_ids:
+        con.execute(RUN_EVENT_SQL, (type_, list(run_ids)))
+
+
 def reap_orphans(con: psycopg.Connection, older_than: timedelta = timedelta(hours=1)) -> list[int]:
     """Runs still loading after ``older_than`` (a crashed or killed publisher) become failed."""
-    return [r[0] for r in con.execute(
+    ids = [r[0] for r in con.execute(
         "UPDATE run SET status = 'failed', error = 'orphaned: still loading after ' || %s::interval || ', reaped' "
         "WHERE status = 'loading' AND started_at < now() - %s::interval RETURNING run_id",
         (older_than, older_than))]
+    run_event(con, "run.failed", ids)
+    return ids

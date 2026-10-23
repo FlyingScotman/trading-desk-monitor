@@ -678,6 +678,8 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         return out
 
     from .alias_routes import router as alias_router  # /api/v1/instruments/alias(es) (batch 1, item 3)
+    from .daystatus_routes import admin as daystatus_admin  # /api/v1/inbox, /inbox/days (S7b, #25)
+    from .daystatus_routes import public as events_router  # /api/v1/events
     from .diagnostics_routes import router as diagnostics_router
     from .market_history import router as market_history_router  # /api/v1/history/market, /status (R24)
     from .settings_routes import router as settings_router  # here: it imports ApiError from this module
@@ -688,6 +690,8 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     app.include_router(update_router, include_in_schema=False)
     app.include_router(updater_router, include_in_schema=False)
     app.include_router(diagnostics_router, include_in_schema=False)
+    app.include_router(daystatus_admin, include_in_schema=False)
+    app.include_router(events_router, include_in_schema=False)
     app.include_router(market_history_router, include_in_schema=False)
     app.include_router(autopilot_router)
     app.include_router(alias_router)
