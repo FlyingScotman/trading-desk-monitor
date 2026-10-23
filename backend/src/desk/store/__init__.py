@@ -32,6 +32,10 @@ from ..valuation.fallback import CarriedSpread
 MIGRATIONS = Path(__file__).parent / "migrations"
 DEV_PGDATA = REPO_ROOT / ".devdata" / "desk_pg"  # the dev checkout's Settings.pg_dir (.devdata/pg: hub seed, ADR-006)
 MSK = timezone(timedelta(hours=3), "MSK")
+# The Moscow day of recorded_at in SQL: a fixed offset, not the named zone Europe/Moscow, which the embedded
+# Postgres of the Windows bundle does not know (no time zone data, #155). Moscow has had no DST since 2014. An
+# INTERVAL offset is east of UTC (a POSIX string offset such as '-03' would be the other way round).
+MSK_DAY = "(recorded_at AT TIME ZONE INTERVAL '+03:00')::date"
 _LOCK = 0x6465736B  # "desk": one migrator at a time
 
 
@@ -333,7 +337,7 @@ def current_books(con: psycopg.Connection, on: date, known_at: datetime | None =
     rows = con.execute(
         f"SELECT DISTINCT ON (book_id) {cols} FROM (SELECT *, coalesce(valid_from, CASE WHEN rev_id ="
         " min(rev_id) OVER (PARTITION BY book_id) THEN '-infinity'::date"
-        " ELSE (recorded_at AT TIME ZONE 'Europe/Moscow')::date END) AS eff FROM book_rev WHERE recorded_at <= %s) b"
+        f" ELSE {MSK_DAY} END) AS eff FROM book_rev WHERE recorded_at <= %s) b"
         " WHERE eff <= %s ORDER BY book_id, eff DESC, rev_id DESC", (known_at, on)).fetchall()
     return [{k: v.isoformat() if isinstance(v, date) else v for k, v in zip(BOOK_FIELDS, r) if v is not None}
             for r in rows]
@@ -464,7 +468,7 @@ def current_reference(con: psycopg.Connection, kind: str, on: date, known_at: da
     rows = con.execute(
         "SELECT DISTINCT ON (ref_key) content FROM (SELECT *, coalesce(valid_from, CASE WHEN rev_id ="
         " min(rev_id) OVER (PARTITION BY ref_key) THEN '-infinity'::date"
-        " ELSE (recorded_at AT TIME ZONE 'Europe/Moscow')::date END) AS eff FROM reference_rev"
+        f" ELSE {MSK_DAY} END) AS eff FROM reference_rev"
         " WHERE kind = %s AND recorded_at <= %s) r WHERE eff <= %s ORDER BY ref_key, eff DESC, rev_id DESC",
         (kind, known_at, on)).fetchall()
     return [c for (c,) in rows]
