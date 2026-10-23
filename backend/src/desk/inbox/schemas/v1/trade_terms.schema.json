@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "private/1.3/trade_terms",
+  "$id": "private/1.4/trade_terms",
   "title": "trade_terms row",
-  "description": "Private input contract v1 (docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md §10). One row as the adapter emits it. An optional field may be absent or null (the same thing); the empty string is invalid everywhere. Raw firm values go in x_* keys; _src is the row's location in the report, without sheet names.",
+  "description": "Private input contract v1 (docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md §10; FX since 1.2, swaps, REPO and HTM purchases since 1.4). One row as the adapter emits it. An optional field may be absent or null (the same thing); the empty string is invalid everywhere. Raw firm values go in x_* keys; _src is the row's location in the report, without sheet names.",
   "type": "object",
   "required": [
     "_src",
@@ -41,7 +41,12 @@
     "product_kind": {
       "enum": [
         "fx_forward",
-        "fx_swap"
+        "fx_swap",
+        "irs",
+        "ois",
+        "ccs",
+        "repo",
+        "bond_purchase"
       ]
     },
     "source_product": {
@@ -62,7 +67,11 @@
     "side": {
       "enum": [
         "buy",
-        "sell"
+        "sell",
+        "pay",
+        "receive",
+        "repo",
+        "reverse_repo"
       ]
     },
     "notional_base": {
@@ -86,6 +95,83 @@
     },
     "fixing_source": {
       "$ref": "#/$defs/str"
+    },
+    "ccy": {
+      "$ref": "#/$defs/ccy"
+    },
+    "notional_ccy": {
+      "$ref": "#/$defs/amount"
+    },
+    "start_date": {
+      "$ref": "#/$defs/date"
+    },
+    "maturity_date": {
+      "$ref": "#/$defs/date"
+    },
+    "fixed_rate_pct": {
+      "$ref": "#/$defs/amount"
+    },
+    "index_code": {
+      "$ref": "#/$defs/str"
+    },
+    "spread_bp": {
+      "$ref": "#/$defs/amount"
+    },
+    "payment_frequency": {
+      "type": "string",
+      "pattern": "^([1-9][0-9]{0,2}[DWMY]|term)$",
+      "description": "a tenor <n>D, <n>W, <n>M or <n>Y between payments, or term (one payment at maturity)"
+    },
+    "day_count": {
+      "enum": [
+        "ACT/365",
+        "ACT/360",
+        "ACT/ACT",
+        "30/360"
+      ]
+    },
+    "notional_exchange": {
+      "enum": [
+        "none",
+        "final",
+        "initial_and_final"
+      ]
+    },
+    "source_instrument_id": {
+      "$ref": "#/$defs/str"
+    },
+    "source_instrument_name": {
+      "$ref": "#/$defs/str"
+    },
+    "isin": {
+      "$ref": "#/$defs/str"
+    },
+    "regnum": {
+      "$ref": "#/$defs/str"
+    },
+    "moex_secid": {
+      "$ref": "#/$defs/str"
+    },
+    "instrument_id": {
+      "$ref": "#/$defs/str"
+    },
+    "quantity": {
+      "$ref": "#/$defs/amount"
+    },
+    "face_amount_ccy": {
+      "$ref": "#/$defs/amount"
+    },
+    "purchase_price_pct": {
+      "$ref": "#/$defs/amount"
+    },
+    "purchase_yield_pct": {
+      "$ref": "#/$defs/amount"
+    },
+    "contract_rate_pct": {
+      "$ref": "#/$defs/amount"
+    },
+    "purchase_accrued_ccy": {
+      "$ref": "#/$defs/amount"
     },
     "counterparty_id": {
       "$ref": "#/$defs/str"

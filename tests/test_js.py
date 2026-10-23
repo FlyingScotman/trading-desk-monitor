@@ -57,6 +57,10 @@ class ScenarioEngineJs(unittest.TestCase):
         r = subprocess.run(["node", str(ROOT / "tests" / "js" / "history_coverage.test.js")], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
+    def test_header_status(self):  # #22: дата и тип данных, «следующее обновление», предупреждение без среза
+        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "header_status.test.js")], capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
     def test_desk_updater_browser_check(self):
         r = subprocess.run(["node", str(ROOT / "tests" / "js" / "desk_updater.test.js")], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -75,4 +79,8 @@ class ScenarioEngineJs(unittest.TestCase):
 
     def test_settings_forms(self):
         r = subprocess.run(["node", str(ROOT / "tests" / "js" / "settings_forms.test.js")], capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_table_view_and_export(self):  # #102, #110
+        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "table_view.test.js")], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

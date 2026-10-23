@@ -32,6 +32,10 @@ from ..valuation.fallback import CarriedSpread
 MIGRATIONS = Path(__file__).parent / "migrations"
 DEV_PGDATA = REPO_ROOT / ".devdata" / "desk_pg"  # the dev checkout's Settings.pg_dir (.devdata/pg: hub seed, ADR-006)
 MSK = timezone(timedelta(hours=3), "MSK")
+# The Moscow day of recorded_at in SQL: a fixed offset, not the named zone Europe/Moscow, which the embedded
+# Postgres of the Windows bundle does not know (no time zone data, #155). Moscow has had no DST since 2014. An
+# INTERVAL offset is east of UTC (a POSIX string offset such as '-03' would be the other way round).
+MSK_DAY = "(recorded_at AT TIME ZONE INTERVAL '+03:00')::date"
 _LOCK = 0x6465736B  # "desk": one migrator at a time
 
 
@@ -333,7 +337,7 @@ def current_books(con: psycopg.Connection, on: date, known_at: datetime | None =
     rows = con.execute(
         f"SELECT DISTINCT ON (book_id) {cols} FROM (SELECT *, coalesce(valid_from, CASE WHEN rev_id ="
         " min(rev_id) OVER (PARTITION BY book_id) THEN '-infinity'::date"
-        " ELSE (recorded_at AT TIME ZONE 'Europe/Moscow')::date END) AS eff FROM book_rev WHERE recorded_at <= %s) b"
+        f" ELSE {MSK_DAY} END) AS eff FROM book_rev WHERE recorded_at <= %s) b"
         " WHERE eff <= %s ORDER BY book_id, eff DESC, rev_id DESC", (known_at, on)).fetchall()
     return [{k: v.isoformat() if isinstance(v, date) else v for k, v in zip(BOOK_FIELDS, r) if v is not None}
             for r in rows]
@@ -464,7 +468,7 @@ def current_reference(con: psycopg.Connection, kind: str, on: date, known_at: da
     rows = con.execute(
         "SELECT DISTINCT ON (ref_key) content FROM (SELECT *, coalesce(valid_from, CASE WHEN rev_id ="
         " min(rev_id) OVER (PARTITION BY ref_key) THEN '-infinity'::date"
-        " ELSE (recorded_at AT TIME ZONE 'Europe/Moscow')::date END) AS eff FROM reference_rev"
+        f" ELSE {MSK_DAY} END) AS eff FROM reference_rev"
         " WHERE kind = %s AND recorded_at <= %s) r WHERE eff <= %s ORDER BY ref_key, eff DESC, rev_id DESC",
         (kind, known_at, on)).fetchall()
     return [c for (c,) in rows]
@@ -487,15 +491,21 @@ CURRENT_RUNS = ("SELECT DISTINCT ON (business_date) run_id FROM run"
                 " ORDER BY business_date, run_type = 'EOD' DESC, cut_type = 'eod_final' DESC, completed_at DESC,"
                 " run_id DESC")
 
-CUT_LABELS = {"intraday": "внутри дня", "eod_preliminary": "закрытие предв.", "eod_final": "закрытие"}
+CUT_LABELS = {"intraday": "внутри дня", "eod_preliminary": "закрытие предв.", "eod_final": "закрытие",
+              "prev_close": "закрытие пред. дня"}
 
 
 def slice_label(business_date: date | str, cut_type: str | None, cut_ts: datetime | str | None = None,
-                run_type: str | None = None) -> str:
+                run_type: str | None = None, market_close: dict[str, str] | None = None) -> str:
     """The run's market slice as the pages name it: «20.10 14:30 МСК · внутри дня», «19.10 · закрытие предв.»,
-    «19.10 · закрытие»; a TEST or REPLAY run adds its type."""
+    «19.10 · закрытие»; a TEST or REPLAY run adds its type. The morning run (cut ``prev_close``, #21: the book of
+    the date on the previous close, lineage ``market_close`` {date, cut_type}): «20.10 · закрытие 19.10»."""
     d = date.fromisoformat(business_date) if isinstance(business_date, str) else business_date
     day = f"{d:%d.%m}"
+    if cut_type == "prev_close" and market_close and market_close.get("date"):
+        md = date.fromisoformat(market_close["date"])
+        label = f"{day} · {CUT_LABELS.get(market_close.get('cut_type') or '', 'закрытие')} {md:%d.%m}"
+        return label + (f" · {run_type}" if run_type in ("TEST", "REPLAY") else "")
     if cut_type == "intraday" and cut_ts:
         ts = datetime.fromisoformat(cut_ts) if isinstance(cut_ts, str) else cut_ts
         day += f" {ts.astimezone(MSK):%H:%M} МСК"
@@ -555,9 +565,23 @@ def carried_spreads(con: psycopg.Connection, before: date) -> dict[str, CarriedS
             for s, z, d, rid, src, c in rows if math.isfinite(z)}
 
 
+RUN_EVENT_SQL = ("INSERT INTO event (type, valid_date, run_id, detail)"
+                 " SELECT %s, business_date, run_id, jsonb_build_object('run_type', run_type, 'cut_type', cut_type,"
+                 " 'supersedes_run_id', supersedes_run_id, 'cut_ts', cut_ts) FROM run WHERE run_id = ANY(%s)")
+
+
+def run_event(con: psycopg.Connection | psycopg.Cursor, type_: str, run_ids: list[int]) -> None:
+    """The feed's event of runs (migration 0019, ``desk.daystatus``): ``run.published`` when a run completes (in its
+    transaction), ``run.failed`` when it fails or is reaped; the run's date, type, cut and the run it supersedes."""
+    if run_ids:
+        con.execute(RUN_EVENT_SQL, (type_, list(run_ids)))
+
+
 def reap_orphans(con: psycopg.Connection, older_than: timedelta = timedelta(hours=1)) -> list[int]:
     """Runs still loading after ``older_than`` (a crashed or killed publisher) become failed."""
-    return [r[0] for r in con.execute(
+    ids = [r[0] for r in con.execute(
         "UPDATE run SET status = 'failed', error = 'orphaned: still loading after ' || %s::interval || ', reaped' "
         "WHERE status = 'loading' AND started_at < now() - %s::interval RETURNING run_id",
         (older_than, older_than))]
+    run_event(con, "run.failed", ids)
+    return ids

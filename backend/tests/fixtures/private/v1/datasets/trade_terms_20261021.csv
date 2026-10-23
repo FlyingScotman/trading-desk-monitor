@@ -1,0 +1,9 @@
+﻿trade_id;leg_id;trade_version;book_id;entity;position_id;product_kind;source_product;trade_date;value_date;base_ccy;quote_ccy;side;notional_base;notional_quote;contract_rate;ndf;settle_ccy;fixing_date;fixing_source;ccy;notional_ccy;start_date;maturity_date;fixed_rate_pct;index_code;spread_bp;payment_frequency;day_count;notional_exchange;source_instrument_id;source_instrument_name;isin;regnum;moex_secid;instrument_id;quantity;face_amount_ccy;purchase_price_pct;purchase_yield_pct;contract_rate_pct;purchase_accrued_ccy;counterparty_id;pv_rub
+IRS-1;fix;1;D1;ENT1;;irs;IRSKR;2026-09-01;;;;pay;;;;;;;;RUB;1000000000;2026-09-02;2028-09-02;14.25;;;12M;ACT/ACT;;;;;;;;;;;;;;CP-A;-1250000
+IRS-1;flt;1;D1;ENT1;;irs;IRSKR;2026-09-01;;;;receive;;;;;;;;RUB;1000000000;2026-09-02;2028-09-02;;KEY_RATE;;3M;ACT/ACT;;;;;;;;;;;;;;CP-A;
+OIS-1;fix;;D1;;;ois;;2026-10-01;;;;receive;;;;;;;;RUB;500000000;2026-10-02;2027-10-04;15.1;;;term;ACT/365;;;;;;;;;;;;;;;
+OIS-1;flt;;D1;;;ois;;2026-10-01;;;;pay;;;;;;;;RUB;500000000;2026-10-02;2027-10-04;;RUONIA;-10;term;ACT/365;;;;;;;;;;;;;;;
+CCS-1;rub;;D1;;;ccs;;2026-08-03;;;;receive;;;;;;;;RUB;830000000;2026-08-05;2027-08-05;;RUONIA;25;3M;ACT/365;initial_and_final;;;;;;;;;;;;;;
+CCS-1;cny;;D1;;;ccs;;2026-08-03;;;;pay;;;;;;;;CNY;71000000;2026-08-05;2027-08-05;3.5;;;3M;ACT/360;initial_and_final;;;;;;;;;;;;;;
+REPO-1;;;T1;ENT1;;repo;REPO;2026-10-20;;;;repo;;;;;;;;RUB;98000000;2026-10-21;2026-11-18;16.4;;;;ACT/365;;SYN-1;;RU000SYN0001;;;;100000;;;;;;;
+HTM-1;;;T1;ENT1;;bond_purchase;;2026-06-10;2026-06-11;;;buy;;;;;;;;rub;;;;;;;;;;SYN-2;SYN BOND 2;RU000SYN0002;;;;50000;50000000;97.35;15.2;16;412000;;

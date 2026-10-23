@@ -1193,6 +1193,66 @@
         }
       }
     },
+    "/api/v1/runs/{run_id}/derivatives": {
+      "get": {
+        "summary": "Derivatives",
+        "description": "Derivatives computed by core from their terms next to the report's PV, per position, book and product\n(``publish.derivatives_parallel``); state ``not_computed`` for a run before the block.",
+        "operationId": "derivatives_api_v1_runs__run_id__derivatives_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDerivatives"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
     "/api/v1/runs/{run_id}/aggregates": {
       "get": {
         "summary": "Aggregates",
@@ -2542,6 +2602,7 @@
               "scan",
               "eod",
               "intraday",
+              "morning",
               "history",
               "backfill"
             ],
@@ -2651,6 +2712,20 @@
               }
             ],
             "title": "Pnl Basis"
+          },
+          "market_close": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market Close"
           }
         },
         "type": "object",
@@ -2661,6 +2736,40 @@
         ],
         "title": "AutopilotRun",
         "description": "The newest run shown (R11: today's intraday run when there is one) and its market slice."
+      },
+      "AutopilotSchedule": {
+        "properties": {
+          "intraday_from": {
+            "type": "string",
+            "title": "Intraday From"
+          },
+          "prelim_from": {
+            "type": "string",
+            "title": "Prelim From"
+          },
+          "poll_slot_s": {
+            "type": "integer",
+            "title": "Poll Slot S"
+          },
+          "poll_lag_s": {
+            "type": "integer",
+            "title": "Poll Lag S"
+          },
+          "warn_after": {
+            "type": "string",
+            "title": "Warn After"
+          }
+        },
+        "type": "object",
+        "required": [
+          "intraday_from",
+          "prelim_from",
+          "poll_slot_s",
+          "poll_lag_s",
+          "warn_after"
+        ],
+        "title": "AutopilotSchedule",
+        "description": "When the intraday step asks the hub (MSK): the header's «следующее обновление» and its warning (#22)."
       },
       "AutopilotStatus": {
         "properties": {
@@ -2729,6 +2838,27 @@
                 "type": "null"
               }
             ]
+          },
+          "now": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Now"
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AutopilotSchedule"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -2761,6 +2891,45 @@
           "detail": {
             "type": "string",
             "title": "Detail"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "failed_dates": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed Dates"
+          },
+          "problem_dates": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ProblemDate"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem Dates"
           },
           "at": {
             "type": "string",
@@ -3641,6 +3810,121 @@
         ],
         "title": "MissingPosition"
       },
+      "ParallelRow": {
+        "properties": {
+          "position_id": {
+            "type": "string",
+            "title": "Position Id"
+          },
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "product": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product",
+            "description": "Core's product (fx_forward, fx_swap, fx_ndf, fx_cross, fx_future; several joined by +), else <asset_class>_other"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "both",
+              "computed_only",
+              "computed_invalid",
+              "imported_only",
+              "neither"
+            ],
+            "title": "Status"
+          },
+          "used": {
+            "type": "string",
+            "enum": [
+              "computed",
+              "imported"
+            ],
+            "title": "Used",
+            "description": "The value the run publishes"
+          },
+          "computed_pv_rub": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed Pv Rub",
+            "description": "PV by core from the trade terms (result v3)"
+          },
+          "imported_pv_rub": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Imported Pv Rub",
+            "description": "PV the report states (mv_rub, else the trades' pv_rub)"
+          },
+          "diff_rub": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diff Rub"
+          },
+          "over": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Over",
+            "description": "diff above the tolerance"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason",
+            "description": "Why core did not value the row (pv_not_finite: core's PV is not a finite number)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "position_id",
+          "book_id",
+          "product",
+          "status",
+          "used",
+          "computed_pv_rub",
+          "imported_pv_rub"
+        ],
+        "title": "ParallelRow",
+        "description": "One derivative position valued two ways (``publish.derivatives_parallel``)."
+      },
       "PasswordIn": {
         "properties": {
           "current_password": {
@@ -4084,6 +4368,42 @@
           "no_pnl"
         ],
         "title": "PositionPnl"
+      },
+      "ProblemDate": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "title": "Date"
+          },
+          "error": {
+            "type": "string",
+            "title": "Error"
+          },
+          "attempts": {
+            "type": "integer",
+            "title": "Attempts"
+          },
+          "next_attempt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt"
+          }
+        },
+        "type": "object",
+        "required": [
+          "date",
+          "error",
+          "attempts",
+          "next_attempt"
+        ],
+        "title": "ProblemDate",
+        "description": "A hub date whose sync failed and that waits for a retry (#146)."
       },
       "Queued": {
         "properties": {
@@ -5029,6 +5349,89 @@
         ],
         "title": "RiskTableTotal",
         "description": "Only what sums across currencies, in RUB."
+      },
+      "RunDerivatives": {
+        "properties": {
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "computed",
+              "not_computed"
+            ],
+            "title": "State"
+          },
+          "tolerance": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tolerance"
+          },
+          "totals": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Totals"
+          },
+          "by_book": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "object",
+            "title": "By Book"
+          },
+          "by_product": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "object",
+            "title": "By Product"
+          },
+          "reasons": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Reasons"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ParallelRow"
+            },
+            "type": "array",
+            "title": "Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "state",
+          "tolerance",
+          "totals",
+          "by_book",
+          "by_product",
+          "reasons",
+          "rows"
+        ],
+        "title": "RunDerivatives",
+        "description": "Derivatives computed by core next to the report's PV, before a product is switched (TDM#49). ``state``\nnot_computed: a run before this block; sums are per status, money sums over the rows with both values."
       },
       "RunDetail": {
         "properties": {

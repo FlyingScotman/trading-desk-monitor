@@ -77,6 +77,10 @@ layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub
                            default runs of the past business dates from this date (2026-01-05, the hub's first
                            eod_final close) with positions, at most this many seconds a cycle (600), after every
                            other step (``desk.backfill``, R23; ``desk backfill`` does the same at once)
+* ``DESK_BACKUP``, ``DESK_BACKUP_DIR``, ``DESK_BACKUP_KEEP``, ``DESK_BACKUP_TIME``  the daily backup of the desk store
+                           (``desk.backup``; on): ``pg_dump`` into this folder (default ``<home>/backups``; better
+                           another disk or a network share), the newest 14 kept, made by ``desk serve`` at the first
+                           check after this local time (20:30) or at its next start when the computer was off
 * ``DESK_UPDATE_DIR``      the Windows bundle: a folder (a network share, say) holding update zips that the
                            settings page offers to install (``desk.update``); none by default
 * ``DESK_UPDATE_REPO``, ``DESK_UPDATE_TRANSPORT``, ``DESK_UPDATE_DOWNLOADS_DIR``, ``DESK_UPDATE_AUTO_CHECK``  the
@@ -160,6 +164,11 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "backfill": ("DESK_BACKFILL", "bool"),
     "backfill_from": ("DESK_BACKFILL_FROM", "date"),
     "backfill_budget_s": ("DESK_BACKFILL_BUDGET_S", "num"),
+    # backups of the desk store (desk.backup)
+    "backup": ("DESK_BACKUP", "bool"),
+    "backup_dir": ("DESK_BACKUP_DIR", "path"),
+    "backup_keep": ("DESK_BACKUP_KEEP", "int"),
+    "backup_time": ("DESK_BACKUP_TIME", "str"),
     # users and network access (api/auth.py); read when desk serve starts
     "auth": ("DESK_AUTH", "bool"),
     "bind_host": ("DESK_BIND_HOST", "str"),
@@ -257,6 +266,10 @@ class Settings:
     backfill: bool = True  # the autopilot computes the default runs of past dates (desk.backfill, R23)
     backfill_from: str = "2026-01-05"  # first date of the backfill (the hub's first eod_final close)
     backfill_budget_s: float = 600.0  # seconds of backfill runs per autopilot cycle (after every other step)
+    backup: bool = True  # the daily backup of the desk store by desk serve (desk.backup)
+    backup_dir: Path | None = None  # None: <home>/backups; better another disk or a network share
+    backup_keep: int = 14  # nightly and manual backups kept, the newest
+    backup_time: str = "20:30"  # local time of the daily backup (made at the next start when the computer was off)
     # users and network access (desk.api.auth; DECISIONS DEC13): read by desk serve when it starts
     auth: bool = False  # sign-in with the monitor's own accounts; off: this computer only
     bind_host: str = "127.0.0.1"  # the address desk serve listens on; another than loopback needs auth
@@ -348,6 +361,8 @@ class Settings:
             ("history_rates_from", self.history_rates_from.isoformat()),
             ("backfill", (f"on from {self.backfill_from}, {self.backfill_budget_s:g} s a cycle" if self.backfill
                           else "off")),
+            ("backup", (f"on at {self.backup_time}, keep {self.backup_keep}, in "
+                        f"{self.backup_dir or self.home / 'backups'}") if self.backup else "off"),
             ("auth", "on (sign-in with the monitor's accounts)" if self.auth else "off (this computer only)"),
             ("bind_host", f"{self.bind_host}:{self.port}"),
             ("tls", f"{self.tls_cert} / {self.tls_key}" if self.tls_cert else "off (HTTP)"),
@@ -641,6 +656,11 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
     tls_cert, tls_key = _path(get("DESK_TLS_CERT")), _path(get("DESK_TLS_KEY"))
     if bool(tls_cert) != bool(tls_key):
         raise SettingsError("tls_cert and tls_key (DESK_TLS_CERT, DESK_TLS_KEY) go together: set both or neither")
+    backup_time = (get("DESK_BACKUP_TIME") or defaults.backup_time).strip()
+    m = re.fullmatch(r"([01]?\d|2[0-3]):([0-5]\d)", backup_time)
+    if not m:
+        raise SettingsError(f"DESK_BACKUP_TIME (backup_time) must be HH:MM, 00:00..23:59, not {backup_time!r}")
+    backup_time = f"{int(m.group(1)):02d}:{m.group(2)}"
     store_url = get("DESK_STORE_URL")
     if store_url is not None and urlsplit(store_url).scheme not in ("postgresql", "postgres"):
         raise SettingsError("DESK_STORE_URL must be a postgresql:// URI")
@@ -692,6 +712,10 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         backfill=flag("DESK_BACKFILL", defaults.backfill),
         backfill_from=backfill_from,
         backfill_budget_s=num("DESK_BACKFILL_BUDGET_S", defaults.backfill_budget_s),
+        backup=flag("DESK_BACKUP", defaults.backup),
+        backup_dir=_path(get("DESK_BACKUP_DIR")),
+        backup_keep=count("DESK_BACKUP_KEEP", defaults.backup_keep),
+        backup_time=backup_time,
         auth=flag("DESK_AUTH", defaults.auth),
         bind_host=bind_host.strip("[]"),
         port=port,

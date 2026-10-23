@@ -85,7 +85,7 @@
     return e;
   }
   var dt = function (d) { return d ? String(d).slice(0, 10).split('-').reverse().join('.') : ''; };
-  var CUTS = { intraday: 'внутри дня', eod_preliminary: 'закрытие предв.', eod_final: 'закрытие' };
+  var CUTS = { intraday: 'внутри дня', eod_preliminary: 'закрытие предв.', eod_final: 'закрытие', prev_close: 'закрытие пред. дня' };
   var msk = function (ts) { var t = new Date(ts).getTime(); return isNaN(t) ? '' : new Date(t + 3 * 3600e3).toISOString().slice(11, 16) + ' МСК'; };
   // срез прогона: дата, для внутридневного — время среза по Москве, и вид среза (сервер присылает его же в label)
   function sliceLabel(day, cut, cutTs, type) {
