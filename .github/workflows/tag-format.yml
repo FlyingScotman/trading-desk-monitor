@@ -1,0 +1,30 @@
+name: tag-format
+
+# A release tag is v<backend version> (release.yml runs only on v* tags). A tag without the v, or a release created
+# by hand on GitHub with such a tag, publishes no update files: the release stays empty and the in-app updater skips
+# it (issues #74, #75). This workflow makes that visible: it fails with what to do instead. Valid v-tags are not
+# touched here (release.yml checks them against backend/pyproject.toml).
+
+on:
+  push:
+    tags: ["*", "!v*"]
+  release:
+    types: [published]
+
+permissions: {}
+
+jobs:
+  tag-format:
+    if: github.event_name == 'push' || !startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TAG: ${{ github.event.release.tag_name || github.ref_name }}
+    steps:
+      - name: A release tag must start with v
+        run: |
+          msg="tag '$TAG' has no 'v': release.yml publishes the update files (zip, SHA256SUMS, release.json) only for a tag v<version> (backend/pyproject.toml), so this release stays empty and the in-app updater skips it. Delete this release and the tag '$TAG', then create the tag v<version> (git tag v<version> <commit> && git push origin v<version>); do not create releases by hand on GitHub."
+          echo "::error title=Release tag without v::$msg"
+          echo "### Release tag without \`v\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+          exit 1
