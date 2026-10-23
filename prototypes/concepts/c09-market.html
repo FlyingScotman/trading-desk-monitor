@@ -181,7 +181,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
   // изменение кривой за период — обе даты из истории (один источник котировок, одна интерполяция), б.п.
   const hd = id => { const a = hcAt(id, 'asOf'), b = hcAt(id, S.per); return a && b ? a.map((v, k) => v == null || b[k] == null ? null : Math.round((v - b[k]) * 1000) / 10) : null; };
   const cv = K.chart(document.getElementById('curves'), () => {
-    const R = M.curve['RUB RUONIA'], KS = M.curve['RUB KEY'], B = M.curve['RUB OFZ'];
+    const R = M.curve['RUB RUONIA'], KS = M.curve['RUB KEY'], B = K.basisCurve();
     const yd0 = c => c.pts.map((v, k) => v - c.chg[k] / 100);
     const histId = { 'RUB RUONIA': 'RUB RUONIA', 'RUB KEY': 'RUB KEY' };
     const yd = c => (histId[c.id] && hcAt(c.id, S.per)) || yd0(c);

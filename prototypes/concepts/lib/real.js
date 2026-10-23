@@ -5,9 +5,11 @@
  * что именно отсутствует, перечислено в MOCK.notes и видно в шапке (kit.js).
  *
  * Соответствия (держать в согласии с api/concepts.py):
- *  - кривые: RUB RUONIA, RUB KEY — как в прогоне; RUB OFZ страниц — базис ОФЗ − RUONIA (КБД минус RUONIA, б.п.),
- *    его риск — ofzSpr01 позиции по бакетам срока (ядро 0.33, extra.spread_buckets); риск прогона на «RUB OFZ» (КБД: только в день без RUONIA)
- *    добавлен к RUONIA; кривые валют USD/EUR/CNY — USD SOFR / EUR ESTR / CNY XCCY (точки — если прогон их публикует,
+ *  - кривые: RUB RUONIA, RUB KEY — как в прогоне; RUB OFZ страниц — по виду риска ОФЗ (M.ofzView, переключатель в шапке, #32):
+ *    «RUONIA + базис» (по умолчанию) — базис ОФЗ − RUONIA (КБД минус RUONIA, б.п.), риск прогона на «RUB OFZ» (КБД) добавлен
+ *    к RUONIA, а риск базиса — в прогоне 0.2.6+ par-DV01 ОФЗ на КБД (extra.ofz_basis01, бакеты — risk["RUB OFZ"]), в прогоне
+ *    до 0.2.6 — ofzSpr01 (спред ОФЗ к RUONIA) по бакетам срока (extra.spread_buckets); «КБД» — та же кривая КБД как кривая
+ *    ставок: её риск — базис, RUONIA — без него. p.ofzSpr01 — собственный спред ОФЗ к КБД (0.2.6+; null — прогон до 0.2.6); кривые валют USD/EUR/CNY — USD SOFR / EUR ESTR / CNY XCCY (точки — если прогон их публикует,
  *    иначе только риск); прочие кривые риска — своими строками со своей валютой (CNY implied, прокси, CHF…);
  *  - FX-дельта — по валютам (p.fxDeltaBy = fx_delta {ccy}); p.fxDelta — только в валюте позиции; ноги FX-сделки —
  *    p.legs (extra.legs); DV01 и ОВП по валюте — «по ногам» (lib/instr.js: INSTR.dv01In / INSTR.fxIn);
@@ -71,6 +73,11 @@
   M.run = { id: src.runId, runType: src.runType, slice: src.slice, cutType: src.cutType, publishedAt: src.publishedAt, pnlBasis: src.pnlBasis, marketDate: src.marketDate || null, marketCutType: src.marketCutType || null };
   M.cut = { type: src.cutType || 'eod_final', time: src.cutTs ? src.cutTs.slice(11, 16) : '', ts: src.cutTs || null, label: src.slice || src.cutType || '' };
   M.notes = (X.notes || []).slice();
+  // вид риска ОФЗ (#32): 'basis' — «RUONIA + базис» (по умолчанию), 'kbd' — ОФЗ на кривой КБД (kit.js: K.setOfzView)
+  M.ofzView = 'basis';
+  try { if (localStorage.getItem('concepts-ofz-view') === 'kbd') M.ofzView = 'kbd'; } catch (e) { }
+  M.ofzScheme = (D.source || {}).ofzScheme || null;  // 'kbd_par': ОФЗ на КБД в par-бакетах (0.2.6); null — прогон до 0.2.6
+  if (M.ofzView === 'kbd' && !M.ofzScheme) M.notes.push('прогон до 0.2.6: ОФЗ в нём на RUONIA, вид «КБД» приближённый (риск КБД = базис ОФЗ к RUONIA)');
   const runQ = 'run_id=' + encodeURIComponent((D.source || {}).runId || '');
   (D.riskNotes || []).forEach(n => M.notes.push(n.text + (n.detail ? ' (' + n.detail + ')' : '')));
   if (!D.pnlAvailable && D.pnlReasonText) M.notes.push('PnL: ' + D.pnlReasonText);
@@ -124,11 +131,14 @@
     return hasPts(c) ? { id, ccy, name: c.name || id, short, kind: 'rate', pts: pts(s), chg: chg(s) }
       : { id, ccy, name: ccy + ' (кривой нет, риск по дюрации)', short, kind: 'rate', pts: new Array(NB).fill(null), chg: zeros() }; };
   const kbd = pts('RUB OFZ'), ruo = pts('RUB RUONIA');
+  // базис ОФЗ − RUONIA как рыночная кривая (уровень, б.п., и его изменение) — в любом виде риска (M.basisCurve: рынок, утро)
+  const basisCurve = { id: 'RUB OFZ', ccy: 'RUB', name: 'Базис ОФЗ − RUONIA', short: 'ОФЗ-базис', kind: 'basis',
+    pts: kbd.map((v, i) => v != null && ruo[i] != null ? (v - ruo[i]) * 100 : null), chg: chg('RUB OFZ').map((v, i) => v - chg('RUB RUONIA')[i]) };
+  M.basisCurve = basisCurve;
   M.curves = [
     { id: 'RUB RUONIA', ccy: 'RUB', name: (C['RUB RUONIA'] || {}).name || 'RUONIA OIS', short: 'RUONIA', kind: 'rate', pts: ruo, chg: chg('RUB RUONIA') },
     { id: 'RUB KEY', ccy: 'RUB', name: (C['RUB KEY'] || {}).name || 'Ключевая ставка (КС)', short: 'КС', kind: 'rate', pts: pts('RUB KEY'), chg: chg('RUB KEY') },
-    { id: 'RUB OFZ', ccy: 'RUB', name: 'Базис ОФЗ − RUONIA', short: 'ОФЗ-базис', kind: 'basis',
-      pts: kbd.map((v, i) => v != null && ruo[i] != null ? (v - ruo[i]) * 100 : null), chg: chg('RUB OFZ').map((v, i) => v - chg('RUB RUONIA')[i]) },
+    M.ofzView === 'kbd' ? { id: 'RUB OFZ', ccy: 'RUB', name: 'ОФЗ (КБД MOEX)', short: 'КБД', kind: 'rate', pts: kbd, chg: chg('RUB OFZ') } : basisCurve,
     stub('USD SOFR', 'USD', 'USD'), stub('EUR ESTR', 'EUR', 'EUR'), stub('CNY XCCY', 'CNY', 'CNY'),
   ];
   const curveOf = c => CURVE_MAP[c] || c;
@@ -307,14 +317,22 @@
     // риск по кривым
     p.risk = {}; M.curves.forEach(c => p.risk[c.id] = zeros());
     Object.entries(d.risk || {}).forEach(([c, arr]) => { const id = curveOf(c); arr.forEach((v, k) => p.risk[id][k] += v || 0); });
-    p.basis01 = num(d.ofzSpr01) || 0;
+    // базис ОФЗ (#32): в прогоне 0.2.6+ — par-DV01 ОФЗ на КБД (extra.ofz_basis01, бакеты — его риск на КБД), ofzSpr01 —
+    // собственный спред бумаги к КБД; в прогоне до 0.2.6 (и у ОФЗ-ПК) ofzSpr01 — спред к RUONIA, он и есть базис
+    const kbdScheme = ex.ofz_basis01 != null;
+    p.basis01 = kbdScheme ? (num(ex.ofz_basis01) || 0) : (num(d.ofzSpr01) || 0);
+    p.ofzSpr01 = kbdScheme ? (num(d.ofzSpr01) || 0) : (M.ofzScheme ? 0 : null);
     p.cs01 = num(d.cs01) || 0;
     // по бакетам — ядра (spread_buckets: сумма = ofzSpr01 или cs01); без них — по двум соседним бакетам срока
     const sb = ex.spread_buckets, w = bucketWeights(p.tenor);
     const split = tot => sb ? M.buckets.map(b => (num(sb[b]) || 0)) : w.map(x => tot * x);
     p.spreadBucketsSource = sb ? 'core' : 'tenor';
-    if (p.basis01) split(p.basis01).forEach((x, k) => p.risk['RUB OFZ'][k] += x);
+    if (kbdScheme) ((d.risk || {})['RUB OFZ'] || []).forEach((v, k) => p.risk['RUB OFZ'][k] += v || 0);
+    else if (p.basis01) split(p.basis01).forEach((x, k) => p.risk['RUB OFZ'][k] += x);
     p.cs01b = p.cs01 ? split(p.cs01) : zeros();
+    p.ofzSprb = p.ofzSpr01 ? split(p.ofzSpr01) : zeros();
+    // вид «КБД»: базис — риск кривой КБД, RUONIA — без него (сумма DV01 та же); базиса как отдельной меры нет
+    if (M.ofzView === 'kbd') { p.risk['RUB RUONIA'] = p.risk['RUB RUONIA'].map((v, k) => v - p.risk['RUB OFZ'][k]); p.basis01 = 0; }
     p.dv01ByCurve = {}; let tot = 0;
     M.curves.forEach(c => { const s = p.risk[c.id].reduce((a, v) => a + v, 0); p.dv01ByCurve[c.id] = s; if (c.kind === 'rate') tot += s; });
     p.dv01 = tot;
@@ -371,8 +389,12 @@
     pnl: series(H.pnl, ['carry', 'rates', 'spread', 'fx', 'trading', 'other', 'total'], k => sumBy(p => p.pnl[k])),
   };
   if (!H.cs01) M.hist.cs01[n - 1] = sumBy(p => p.cs01);
-  // базис в истории — по ofzSpr01 прогонов (кривая «RUB OFZ» страниц)
+  // базис в истории — сводки прогонов (кривая «RUB OFZ» страниц: ofz_basis01 в прогоне 0.2.6+, ofzSpr01 до него);
+  // в виде «КБД» — риск КБД, RUONIA без него
   if (H.basis01) M.hist.dv01['RUB OFZ'] = H.basis01.slice();
+  if (M.ofzView === 'kbd' && H.dv01 && H.basis01) M.hist.dv01['RUB RUONIA'] = M.hist.dv01['RUB RUONIA'].map((v, i) => v == null ? null : v - (M.hist.dv01['RUB OFZ'][i] || 0));
+  M.hist.ofzSpr01 = H.ofzSpr01 ? H.ofzSpr01.map(v => v == null ? null : +v) : new Array(n).fill(0);
+  if (!H.ofzSpr01) M.hist.ofzSpr01[n - 1] = sumBy(p => p.ofzSpr01);
 
   // ---------- история позиции (лениво, синхронно) ----------
   const histCache = {}, deepCache = {}; let misses = 0, all = false;
@@ -385,7 +407,7 @@
       return JSON.parse(x.responseText);
     } catch (e) { return null; }
   }
-  const OPT = ['zspr', 'dm', 'dmPx', 'icpi', 'ir', 'bei', 'cpi'];
+  const OPT = ['zspr', 'dm', 'dmPx', 'icpi', 'ir', 'bei', 'cpi', 'ofzSpr'];
   M.posHistory = function (id, opts) {
     if (opts && opts.deep) {
       if (!(id in deepCache)) { const j = fetchHist([id], '2000-01-01'); deepCache[id] = j && j.series && j.series[id] ? Object.assign({ dates: j.dates, runAt: j.runAt }, j.series[id]) : null; }
@@ -401,7 +423,7 @@
     }
     const p = M.pos[id], s = histCache[id];
     if (!s || !s.dates.length) {
-      const c = {}; Object.keys(p.dv01ByCurve).forEach(id => { if (p.dv01ByCurve[id] && id !== 'RUB OFZ') c[id] = [p.dv01ByCurve[id]]; });
+      const c = {}; Object.keys(p.dv01ByCurve).forEach(id => { if (p.dv01ByCurve[id] && (id !== 'RUB OFZ' || M.ofzView === 'kbd')) c[id] = [p.dv01ByCurve[id]]; });
       return { dates: [M.asOf], price: [p.price], ytm: [p.ytm], spr: [p.zspread], notional: [p.notional], dv01: [p.dv01], cs01: [p.cs01], basis: [p.basis01], mv: [p.group === 'DER' ? Math.abs(p.notionalRub) : p.mv], curves: c, bench: [p.ccy === 'RUB' ? curveAt('OFZ', p.tenor) : null], fromRuns: true };
     }
     return conv(s);
@@ -418,6 +440,12 @@
     const o = Object.assign({ dates: s.dates, price: s.price || nulls(), ytm: s.ytm || nulls(), spr: s.spr || nulls(), notional: s.notional || nulls(),
       dv01: risk(s.dv01), cs01: risk(s.cs01), basis: risk(s.basis), mv: risk(s.mv), curves, bench: s.bench || nulls(), fromRuns: true }, extra || {});
     OPT.forEach(key => { if (s[key]) o[key] = s[key]; });
+    if (o.ofzSpr) o.ofzSpr = sc(o.ofzSpr);
+    if (M.ofzView === 'kbd') {  // вид «КБД»: базис позиции — её риск на КБД, RUONIA — без него
+      const b = o.basis, ru = curves['RUB RUONIA'];
+      if (b.some(v => v)) { curves['RUB OFZ'] = b.slice(); if (ru) curves['RUB RUONIA'] = ru.map((v, i) => v == null ? null : v - (b[i] || 0)); }
+      o.basis = b.map(v => v == null ? null : 0);
+    }
     // на чём стоит точка (R44): прогон даты (runAt: null — прогона нет, значение перенесено), точки не по ядру (pt), бумаг
     if (s.runAt) o.runAt = s.runAt;
     if (s.pt) o.pt = s.pt;
@@ -527,7 +555,7 @@
   M.kpis = function (list) {
     list = list || positions;
     const S = f => M.sum(list, f);
-    const k = { dv01: S('dv01'), cs01: S('cs01'), basis01: S('basis01'), mvBonds: S(p => p.group === 'DER' ? 0 : p.mv), pnl: S(p => p.pnl.total), carryDay: S('carryDay'),
+    const k = { dv01: S('dv01'), cs01: S('cs01'), basis01: S('basis01'), ofzSpr01: S('ofzSpr01'), mvBonds: S(p => p.group === 'DER' ? 0 : p.mv), pnl: S(p => p.pnl.total), carryDay: S('carryDay'),
       pnlMtd: S('pnlMtd'), pnlYtd: S('pnlYtd'), byCcy: {}, byCurve: {} };
     // по ногам (lib/instr.js): DV01 — по валюте кривой, FX-дельта — по своей валюте; MV — в валюте позиции
     const I = window.INSTR;

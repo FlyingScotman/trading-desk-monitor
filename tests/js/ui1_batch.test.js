@@ -31,15 +31,16 @@ function load(data) {
 const order = html => [...html.matchAll(/<tr class="(grp l(\d)|row[^"]*)"[^>]*data-(?:g|id)="([^"]+)"/g)].map(m => m[2] != null ? 'g' + m[2] + ':' + m[3].split('/').pop() : m[3]);
 const groupsAt = (html, l) => order(html).filter(x => x.startsWith('g' + l + ':')).map(x => x.slice(3));
 
-t('подсказки: DV01 RUONIA — бамп нулевой ставки, не котировок; базис и CS01 — годовой Z, ≈ DV01 / (1 + R)', () => {
+t('подсказки (0.2.6, #32): DV01 RUONIA — бамп котировок OIS; базис — par–par к КБД; спред к КБД и КБД — свои', () => {
   const { K } = load();
-  assert.ok(/непрерывной нулевой ставке/.test(K.tips.ruonia) && /Котировки не бампаются/.test(K.tips.ruonia) && /ACT\/365F/.test(K.tips.ruonia));
+  assert.ok(/котировках OIS/.test(K.tips.ruonia) && /пересобирается/.test(K.tips.ruonia) && /до 0\.2\.6/i.test(K.tips.ruonia));
   assert.ok(/1M…20Y\+/.test(K.tips.ruonia) && /треугольными/.test(K.tips.ruonia) && /центральная разность/.test(K.tips.ruonia));
-  assert.ok(/годовое начисление/.test(K.tips.basis01) && /\/ \(1 \+ R\)/.test(K.tips.basis01) && /ОФЗ-ПК/.test(K.tips.basis01));
-  assert.ok(/\/ \(1 \+ R\)/.test(K.tips.cs01));
+  assert.ok(/par–par/.test(K.tips.basis01) && /КБД/.test(K.tips.basis01) && /ОФЗ-ПК/.test(K.tips.basis01));
+  assert.ok(/≈ DV01 RUONIA/.test(K.tips.cs01) && /ACT\/365F/.test(K.tips.ofzSpr01) && /rub_ofz_kbd_v3/.test(K.tips.kbd));
+  assert.strictEqual(K.curveTip('OFZSPR'), K.tips.ofzSpr01);
   assert.ok(K.tips.dv01.includes(K.tips.ruonia));
   // заголовки колонок и ячейки KPI — с подсказкой
-  for (const k of ['dv01', 'cs01', 'basis01', 'zdisc']) assert.ok(K.posCols[k].tip && K.posCols[k].title.length > 80, k);
+  for (const k of ['dv01', 'cs01', 'basis01', 'ofzSpr01', 'zdisc']) assert.ok(K.posCols[k].tip && K.posCols[k].title.length > 80, k);
   assert.ok(K.kpi('X', '1', '', '', 'подсказка').includes('class="k-hint" title="подсказка"'));
   assert.ok(K.fieldsHtml([['DV01', '1', false, 'как считается'], ['MV', '2']]).includes('<div class="l"><span class="k-hint" title="как считается">DV01</span></div>'));
   assert.ok(K.fieldsHtml([['MV', '2']]).includes('<div class="l">MV</div>'));
@@ -47,14 +48,13 @@ t('подсказки: DV01 RUONIA — бамп нулевой ставки, н�
   assert.ok(K.curveTip('RUB RUONIA').endsWith(K.tips.ruonia));
 });
 
-t('демо: базис ОФЗ и CS01 фикс-бумаг — DV01 / (1 + R RUONIA на сроке), как на прогоне (R29)', () => {
+t('демо (0.2.6): базис фикс-ОФЗ par–par равен её DV01 RUONIA (в виде «RUONIA + базис»), спред к КБД — свой', () => {
   const { M } = load();
   const fixGov = M.positions.filter(p => p.group === 'GOV' && p.ccy === 'RUB' && p.cpn && p.cpn.type === 'fix' && p.basis01);
   assert.ok(fixGov.length >= 3);
   for (const p of fixGov) {
-    const want = 1 / (1 + M.curveAt('RUB RUONIA', p.tenor) / 100);
-    assert.ok(Math.abs(p.basis01 / p.dv01ByCurve['RUB RUONIA'] - want) < 1e-9, p.name);
-    assert.ok(Math.abs(p.basis01) < Math.abs(p.dv01ByCurve['RUB RUONIA']), 'базис меньше DV01: ' + p.name);
+    assert.ok(Math.abs(p.basis01 / p.dv01ByCurve['RUB RUONIA'] - 1) < 1e-9, p.name);
+    assert.ok(p.ofzSpr01 && Math.abs(p.ofzSpr01 - p.basis01) < 1e-9, 'спред к КБД: ' + p.name);
   }
 });
 

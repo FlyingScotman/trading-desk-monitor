@@ -118,11 +118,11 @@ t('R38: на странице — мера одна, по горизонтали
   assert.ok(/Итого, все валюты/.test(mx(box)));
   I.state.measure = 'curve'; I.state.curve = 'USD SOFR'; K.ccyKindTable(box);
   assert.ok(/Итого, все валюты \(в USD\)/.test(mx(box)), 'DV01 одной кривой — в её валюте');
-  assert.strictEqual(JSON.stringify(I.MEASURES.map(m => m.id)), JSON.stringify(['dv01', 'curve', 'cs01', 'basis', 'fx', 'mv', 'notional', 'n']));
+  assert.strictEqual(JSON.stringify(I.MEASURES.map(m => m.id)), JSON.stringify(['dv01', 'curve', 'cs01', 'basis', 'ofzSpr', 'fx', 'mv', 'notional', 'n']));
   // меры совпадают с API (api/concepts.MATRIX_MEASURES)
   const py = fs.readFileSync(path.join(__dirname, '..', '..', 'backend', 'src', 'desk', 'api', 'concepts.py'), 'utf8');
   const pm = [...py.slice(py.indexOf('MATRIX_MEASURES:'), py.indexOf('"""The measures of the matrix')).matchAll(/\("(\w+)", "([^"]+)", "(\w+)"\)/g)].map(m => [m[1], m[3]]);
-  const MAP = { dv01: 'dv01', dv01_curve: 'curve', cs01: 'cs01', ofz_basis: 'basis', fx_delta: 'fx', mv: 'mv', notional: 'notional', n_positions: 'n' };
+  const MAP = { dv01: 'dv01', dv01_curve: 'curve', cs01: 'cs01', ofz_basis: 'basis', ofz_spread_kbd: 'ofzSpr', fx_delta: 'fx', mv: 'mv', notional: 'notional', n_positions: 'n' };
   assert.strictEqual(JSON.stringify(pm.map(x => MAP[x[0]])), JSON.stringify(I.MEASURES.map(m => m.id)));
   // DV01 по всем валютам — с пометкой и там и там (API — всегда в рублях; на странице «repr» — только в валюте отчёта)
   pm.filter(([, a]) => a === 'labelled').forEach(([id]) => assert.strictEqual(I.MEASURE[MAP[id]].across, 'labelled', id));

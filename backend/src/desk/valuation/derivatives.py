@@ -366,7 +366,8 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
     if not instruments:
         return out, None
     used = {RUONIA_OIS_CURVE_ID, *curve_of.values(), *(a for _, a in fallbacks)}
-    snap = replace(ctx.core_market, quotes=(), fixings=(), curves=tuple(c for c in ctx.core_market.curves
+    # risk on RUONIA in its OIS par quotes, as the bonds' (EodContext.quote_curves)
+    snap = replace(ctx.risk_market, quotes=(), fixings=(), curves=tuple(c for c in ctx.risk_market.curves
                                                                          if c.curve_id in used),
                    calendars=(*ctx.core_market.calendars, *calendars.values()),
                    futures_quotes=tuple(quotes))

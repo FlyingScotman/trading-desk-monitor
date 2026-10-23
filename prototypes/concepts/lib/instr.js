@@ -88,7 +88,7 @@
   I.missing = function (p, kind) {
     if (p.notValued) return 'not_valued';
     if (p.accrualOnly || !I.RISK_KINDS.has(kind || I.kindOf(p))) return null;  // HTM по начислению — без риска по правилу
-    const any = Object.values(p.dv01ByCurve || {}).some(v => v) || p.cs01 || p.basis01;
+    const any = Object.values(p.dv01ByCurve || {}).some(v => v) || p.cs01 || p.basis01 || p.ofzSpr01;
     if (any) return null;
     return p.quality === 'reported_value' ? 'reported_no_risk' : 'no_risk';
   };
@@ -132,6 +132,7 @@
       add(c, 'mv', p, (p.mv || 0) * k(home));
       add(c, 'cs01', p, (p.cs01 || 0) * k(home));
       add(c, 'basis', p, (p.basis01 || 0) * k(home));
+      add(c, 'ofzSpr', p, (p.ofzSpr01 || 0) * k(home));
       Object.entries(p.dv01ByCurve || {}).forEach(([id, v]) => {
         if (!v || !rate(id)) return;
         const cc = curveCcy(id), o = (cc === home || !legs) ? c : cell(cc, kind);
@@ -205,7 +206,8 @@
     { id: 'dv01', label: 'DV01', what: 'dv', risk: true, across: 'labelled', tip: 'DV01 по кривым валюты строки (ставки, без базиса ОФЗ)' },
     { id: 'curve', label: 'DV01 по кривой', what: 'dv', risk: true, across: 'yes', tip: 'DV01 одной кривой: в валюте кривой' },
     { id: 'cs01', label: 'CS01', what: 'dv', risk: true, across: 'repr' },
-    { id: 'basis', label: 'Базис ОФЗ', what: 'dv', across: 'repr', tip: 'ofz_spr01: базис ОФЗ − RUONIA' },
+    { id: 'basis', label: 'Базис ОФЗ', what: 'dv', across: 'repr', tip: 'базис ОФЗ − RUONIA, par–par: DV01 ОФЗ на КБД (прогоны 0.2.6+; до них — спред ОФЗ к RUONIA). В виде «КБД» — 0: риск ОФЗ на кривой КБД' },
+    { id: 'ofzSpr', label: 'Спред ОФЗ к КБД', what: 'dv', across: 'repr', tip: 'собственный Z-спред ОФЗ к КБД, тыс ₽/бп (прогоны 0.2.6+)' },
     { id: 'fx', label: 'FX-дельта', what: 'mm', across: 'repr', tip: 'Открытая валютная позиция: сумма в валюте (в валюте отчёта — по споту)' },
     { id: 'mv', label: 'MV', what: 'mm', across: 'repr' },
     { id: 'notional', label: 'Номинал', what: 'mm', across: 'repr' },
@@ -277,7 +279,7 @@
         } else html = K.d({ title: plain(title) + ' · ' + ms.label + (curve ? ' ' + curve : ''), unit: unitTxt(c), fmt, rows: r.m[mm] || [], color: ms.id === 'mv' || ms.id === 'notional' ? false : undefined }, null);
         if (ms.risk && r.missing.length) html += '<sup class="mut" style="color:var(--warn)" title="' + esc('без риска ' + r.missing.length + ' поз.: ' + reasons(r.missing)) + '">*</sup>';
         if (opt.mark) html += opt.mark;
-        const heat = opt.total || ms.what === 'n' ? '' : (ms.risk || ms.id === 'basis' ? K.heatRisk : K.heatMono)(v * (own ? ((M.toRepr && M.toRepr[c]) || 1) : 1), max);
+        const heat = opt.total || ms.what === 'n' ? '' : (ms.risk || ms.id === 'basis' || ms.id === 'ofzSpr' ? K.heatRisk : K.heatMono)(v * (own ? ((M.toRepr && M.toRepr[c]) || 1) : 1), max);
         return '<td class="n"' + (heat || opt.total ? ' style="' + heat + (opt.total ? ';font-weight:600' : '') + '"' : '') + '>' + html + '</td>';
       };
       // заголовок: группы типов (Минфин, Корпоративные, Деривативы…) и типы

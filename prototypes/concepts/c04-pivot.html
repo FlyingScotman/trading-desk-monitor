@@ -91,10 +91,12 @@
   const one = fn => p => [{ v: fn(p) }];
   const MEAS = {
     dv01: { label: 'DV01 ставки', unit: 'тыс ₽/бп', fmt: f.dv, kind: 'risk', parts: curveParts(rateIds) },
-    dvall: { label: 'DV01 + базис ОФЗ', unit: 'тыс ₽/бп', fmt: f.dv, kind: 'risk', parts: curveParts(M.curves.map(c => c.id)) },
+    dvall: { label: M.ofzView === 'kbd' ? 'DV01 все кривые' : 'DV01 + базис ОФЗ', unit: 'тыс ₽/бп', fmt: f.dv, kind: 'risk', parts: curveParts(M.curves.map(c => c.id)) },
     ruonia: { label: 'DV01 RUONIA', unit: 'тыс ₽/бп', fmt: f.dv, kind: 'risk', parts: curveParts(['RUB RUONIA']) },
     key: { label: 'DV01 КС', unit: 'тыс ₽/бп', fmt: f.dv, kind: 'risk', parts: curveParts(['RUB KEY']) },
-    basis01: { label: 'Базис ОФЗ01', unit: 'тыс ₽/бп', fmt: f.dv, kind: 'risk', parts: curveParts(['RUB OFZ']) },
+    // в виде «КБД» (#32) риск кривой «RUB OFZ» — DV01 КБД, а не базис
+    basis01: { label: M.ofzView === 'kbd' ? 'DV01 КБД (ОФЗ)' : 'Базис ОФЗ01', unit: 'тыс ₽/бп', fmt: f.dv, kind: 'risk', parts: curveParts(['RUB OFZ']) },
+    ofzSpr01: { label: 'Спред ОФЗ к КБД01', unit: 'тыс ₽/бп', fmt: f.dv, kind: 'risk', parts: p => (p.ofzSprb || []).map((v, k) => ({ curve: 'RUB OFZ', bucket: k, v })).filter(x => x.v) },
     cs01: { label: 'CS01', unit: 'тыс ₽/бп', fmt: f.dv, kind: 'risk', parts: p => p.cs01b.map((v, k) => ({ curve: 'CS01', bucket: k, v })).filter(x => x.v) },
     mv: { label: 'MV облигаций', unit: 'mm ₽', fmt: v => f.mn(v, 0), kind: 'size', parts: one(p => p.group === 'DER' ? 0 : p.mv) },
     notional: { label: 'Номинал', unit: 'mm ₽', fmt: v => f.mn(v, 0), kind: 'size', parts: one(p => p.notionalRub) },

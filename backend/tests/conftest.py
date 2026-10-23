@@ -8,7 +8,21 @@ from collections.abc import Iterator
 
 import pytest
 
+import desk.orchestrator as orch
 from desk.store import MIGRATIONS, migrate
+
+SHARED_CACHE = orch.ShockedCurveCache(max_entries=200_000)
+"""One cache of shocked curves for the session (``orchestrator.new_cache``): the RUONIA OIS curve is rebootstrapped per
+bucket shift (~0.1 s each, 245 with the Hessian) and the tests' contexts repeat the same curves; a shared cache never
+changes a number (core keys it by curve content and shift)."""
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _shared_curve_cache() -> Iterator[None]:
+    mp = pytest.MonkeyPatch()
+    mp.setattr(orch, "new_cache", lambda: SHARED_CACHE)
+    yield
+    mp.undo()
 
 
 @pytest.fixture(scope="session")

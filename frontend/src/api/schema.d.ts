@@ -126,7 +126,11 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Remove User
+         * @description Delete an account (not oneself, not the last active admin); disabling keeps it instead.
+         */
+        delete: operations["remove_user_api_v1_users__username__delete"];
         options?: never;
         head?: never;
         /** Change User */
@@ -1665,8 +1669,16 @@ export interface components {
              * @description the sum over curves of different currencies: labelled so
              */
             dv01_all_curves_rub: number;
-            /** Ofz Basis Rub */
+            /**
+             * Ofz Basis Rub
+             * @description the OFZ basis to RUONIA OIS, RUB per bp: since 0.2.6 a fixed OFZ's par DV01 on the KBD (RUB OFZ, also in dv01_by_curve_rub), an OFZ-PK's spread to RUONIA; before, every OFZ's spread to RUONIA (ofz_spr01)
+             */
             ofz_basis_rub: number;
+            /**
+             * Ofz Spread Kbd Rub
+             * @description a fixed OFZ's own spread risk to the KBD (0.2.6), RUB per bp; 0 in a run before it
+             */
+            ofz_spread_kbd_rub: number;
             /** Cs01 Rub */
             cs01_rub: number;
             /**
@@ -1692,7 +1704,7 @@ export interface components {
              * Measure
              * @enum {string}
              */
-            measure: "dv01" | "dv01_curve" | "cs01" | "ofz_basis" | "fx_delta" | "mv" | "notional" | "n_positions";
+            measure: "dv01" | "dv01_curve" | "cs01" | "ofz_basis" | "ofz_spread_kbd" | "fx_delta" | "mv" | "notional" | "n_positions";
             /** Label */
             label: string;
             /**
@@ -1761,8 +1773,16 @@ export interface components {
              * @description risk on another currency's curves kept here (attribution 'position'): in dv01_by_curve_rub, not in dv01_rub
              */
             dv01_foreign_rub: number;
-            /** Ofz Basis Rub */
+            /**
+             * Ofz Basis Rub
+             * @description the OFZ basis to RUONIA OIS, RUB per bp: since 0.2.6 a fixed OFZ's par DV01 on the KBD (RUB OFZ, also in dv01_by_curve_rub), an OFZ-PK's spread to RUONIA; before, every OFZ's spread to RUONIA (ofz_spr01)
+             */
             ofz_basis_rub: number;
+            /**
+             * Ofz Spread Kbd Rub
+             * @description a fixed OFZ's own spread risk to the KBD (0.2.6), RUB per bp; 0 in a run before it
+             */
+            ofz_spread_kbd_rub: number;
             /** Cs01 Rub */
             cs01_rub: number;
             /** Fx Delta Ccy */
@@ -1795,8 +1815,16 @@ export interface components {
              * @description the sum over curves of different currencies: not a currency's risk nor a hedge measure, labelled so
              */
             dv01_all_curves_rub: number;
-            /** Ofz Basis Rub */
+            /**
+             * Ofz Basis Rub
+             * @description the OFZ basis to RUONIA OIS, RUB per bp: since 0.2.6 a fixed OFZ's par DV01 on the KBD (RUB OFZ, also in dv01_by_curve_rub), an OFZ-PK's spread to RUONIA; before, every OFZ's spread to RUONIA (ofz_spr01)
+             */
             ofz_basis_rub: number;
+            /**
+             * Ofz Spread Kbd Rub
+             * @description a fixed OFZ's own spread risk to the KBD (0.2.6), RUB per bp; 0 in a run before it
+             */
+            ofz_spread_kbd_rub: number;
             /** Cs01 Rub */
             cs01_rub: number;
             /**
@@ -2713,6 +2741,53 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["UserRow"];
                 };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    remove_user_api_v1_users__username__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                username: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Not Found */
             404: {

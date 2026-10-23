@@ -41,11 +41,11 @@
     const sc = (o, keys) => keys.forEach(x => { if (o[x] != null) o[x] *= k; });
     const arr = a => a && a.forEach((v, i) => a[i] = v * k);
     M.positions.forEach(p => {
-      sc(p, ['mv', 'accrued', 'carryDay', 'rollDay', 'dv01', 'basis01', 'cs01', 'notionalRub', 'pnlMtd', 'pnlYtd', 'funding']);
-      arr(p.cs01b); Object.keys(p.risk).forEach(c => arr(p.risk[c])); Object.keys(p.dv01ByCurve).forEach(c => p.dv01ByCurve[c] *= k);
+      sc(p, ['mv', 'accrued', 'carryDay', 'rollDay', 'dv01', 'basis01', 'ofzSpr01', 'cs01', 'notionalRub', 'pnlMtd', 'pnlYtd', 'funding']);
+      arr(p.cs01b); arr(p.ofzSprb); Object.keys(p.risk).forEach(c => arr(p.risk[c])); Object.keys(p.dv01ByCurve).forEach(c => p.dv01ByCurve[c] *= k);
       Object.keys(p.pnl).forEach(x => { if (typeof p.pnl[x] === 'number') p.pnl[x] *= k; });  // null (нет PnL) остаётся null
     });
-    const H = M.hist; [H.dv01, H.dv01Book, H.mvType, H.mvCcy, H.pnl].forEach(g => Object.keys(g).forEach(x => arr(g[x]))); arr(H.cs01);
+    const H = M.hist; [H.dv01, H.dv01Book, H.mvType, H.mvCcy, H.pnl].forEach(g => Object.keys(g).forEach(x => arr(g[x]))); arr(H.cs01); arr(H.ofzSpr01);
     M.cashflows.forEach(c => c.amountRub *= k);
     M.universeRub.forEach(b => b.size *= k);
     if (M.funding) {  // фондирование прогона: итоги, книги (и накопленное с последнего списания), юрлица
@@ -55,6 +55,11 @@
     }
   })(1 / M.fx[K.repr]);
   K.setRepr = c => { try { localStorage.setItem('concepts-repr', c); } catch (e) { } location.reload(); };
+  // вид риска ОФЗ (#32; lib/real.js: M.ofzView): «RUONIA + базис» — по умолчанию, «КБД» — ОФЗ на своей кривой
+  K.OFZ_VIEWS = { basis: 'RUONIA + базис', kbd: 'КБД' };
+  // базис ОФЗ − RUONIA как рыночная кривая (уровни и изменения в б.п.) — при любом виде риска; в демо — кривая страниц
+  K.basisCurve = () => M.basisCurve || M.curve['RUB OFZ'];
+  K.setOfzView = v => { try { localStorage.setItem('concepts-ofz-view', v); } catch (e) { } location.reload(); };
   // подписи «₽» в разметке страниц заменяются символом валюты отчёта
   if (K.repr !== 'RUB') {
     const sym = K.SYM[K.repr], re = /₽/g;
@@ -140,23 +145,28 @@
   const h = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
   K.h = h;
 
-  // ---------- подсказки к мерам риска (R29, R30): в какой конвенции риск RUONIA и почему базис ОФЗ с ним не совпадает ----------
-  // Так считает монитор на ядре (backend: orchestrator передаёт ядру уже построенную кривую RUONIA OIS, поэтому бамп —
-  // нулевой ставки, а не котировок; valuation/bonds.py: Z-спред годовой, ACT/365F). Сверка на прогоне фикстур —
-  // docs/program/OWNER_REQUESTS.md R29: у фикс-бумаг Базис01 / DV01 = 1 / (1 + R) с точностью 0,2 %.
+  // ---------- подсказки к мерам риска (R29, R30, #32): в какой конвенции риск RUONIA и КБД, что такое базис ОФЗ ----------
+  // Так считает монитор на ядре 0.37 (0.2.6, решение владельца 23.10: риск всех кривых — в par-котировках): RUONIA OIS ядру
+  // передаётся запросом бутстрэпа (orchestrator: EodContext.quote_curves), бакет сдвигает котировки OIS и кривая пересобирается;
+  // КБД — спека rub_ofz_kbd_v3 (par-доходности инструментов с годовым купоном 1Y–20Y+); фикс-ОФЗ дисконтируются по КБД.
   K.tips = {
-    ruonia: 'Риск RUONIA (R30) — в нулевых ставках, не в котировках OIS: к непрерывной нулевой ставке кривой RUONIA OIS ' +
-      '(бутстрэп котировок MOEX OIS RUONIA, log-linear по DF, flat-forward за последним узлом, время ACT/365F) ' +
-      'прибавляется +1 б.п. по 11 бакетам 1M…20Y+ с треугольными весами (на любом сроке сумма весов — 1), центральная разность. ' +
-      'Котировки не бампаются, кривая не пересобирается, Z-спред бумаги держится. Кривая КС (проекция флоатеров на КС) — так же. ' +
-      'В день без кривой RUONIA бумаги дисконтируются по КБД, и этот риск — к КБД.',
-    basis01: 'Базис01 (ОФЗ − RUONIA), тыс ₽/бп: +1 б.п. к Z-спреду ОФЗ к RUONIA разом по всем срокам; кривая RUONIA стоит. ' +
-      'Z-спред — годовое начисление, ACT/365F, прибавляется к годовой нулевой ставке RUONIA; по бакетам — пропорционально риску дисконтирования (ядро).\n' +
-      'Поэтому он не равен DV01 RUONIA (R29): +1 б.п. к непрерывной ставке — это +(1 + R) б.п. к годовой, и у фикс-ОФЗ ' +
-      '|Базис01| ≈ |DV01 RUONIA| / (1 + R), R — ставка RUONIA на сроке бумаги: на 13–14 % меньше при ставках 15–16 %. ' +
-      'У ОФЗ-ПК (флоатер на RUONIA) DV01 ≈ 0 — купон растёт вместе с кривой, а Базис01 — весь спредовый риск.',
-    cs01: 'CS01, тыс ₽/бп: +1 б.п. к кредитному Z-спреду к RUONIA (годовой, ACT/365F) разом по всем срокам, кривая стоит — ' +
-      'как Базис01 у ОФЗ; у фикс-бумаг ≈ DV01 RUONIA / (1 + R), R — ставка RUONIA на сроке (R29).',
+    ruonia: 'Риск RUONIA — в котировках OIS: +1 б.п. к par-котировкам MOEX OIS RUONIA по 11 бакетам 1M…20Y+ с треугольными весами ' +
+      '(на любом сроке сумма весов — 1), кривая пересобирается (log-linear по DF, flat-forward за последним узлом), центральная разность; ' +
+      'Z-спред бумаги держится. Кривая КС (проекция флоатеров на КС) пока — +1 б.п. к нулевой ставке. ' +
+      'В виде «RUONIA + базис» в RUONIA входит и риск КБД у ОФЗ: сдвиг RUONIA двигает КБД вместе с ней. ' +
+      'В день без кривой RUONIA бумаги дисконтируются по КБД. До 0.2.6 бамп RUONIA был по непрерывной нулевой ставке (DV01 на ~14 % больше).',
+    basis01: 'Базис01 (ОФЗ − RUONIA), тыс ₽/бп: риск ОФЗ к движению par-доходностей КБД против котировок OIS RUONIA — par–par ' +
+      'по срокам, как swap spread (ядро 0.37, basis_view). Это DV01 ОФЗ на кривой КБД (par-бакеты 1Y–20Y+, 1M–6M у КБД слиты в 1Y): ' +
+      'в виде «RUONIA + базис» он же входит в RUONIA. Собственный спред бумаги к КБД — отдельно, «Спред к КБД01». ' +
+      'У ОФЗ-ПК (флоатер на RUONIA) базис — его спред к RUONIA. В прогонах до 0.2.6 базис — +1 б.п. к Z-спреду ОФЗ к RUONIA.',
+    ofzSpr01: 'Спред к КБД01, тыс ₽/бп: +1 б.п. к собственному Z-спреду ОФЗ к КБД (годовой, ACT/365F) разом по всем срокам, ' +
+      'кривые стоят; по бакетам — пропорционально риску дисконтирования (ядро). Сценарий «спред ОФЗ» двигает его. ' +
+      'Есть у ОФЗ на КБД с прогонов 0.2.6; у ОФЗ-ПК весь спред — в базисе.',
+    kbd: 'Кривая ОФЗ (КБД MOEX): риск — +1 б.п. к par-доходности инструмента с годовым купоном на КБД по бакетам 1Y–20Y+ ' +
+      '(1M–6M слиты в 1Y: ОФЗ там нет), кривая не перестраивается — локальный оверлей годовых нулевых ставок (ядро 0.37, rub_ofz_kbd_v3). ' +
+      'Фикс-ОФЗ (ПД, АД, ИН) дисконтируются по КБД + своему Z-спреду. В виде «RUONIA + базис» этот же риск — RUONIA плюс базис ОФЗ.',
+    cs01: 'CS01, тыс ₽/бп: +1 б.п. к кредитному Z-спреду к RUONIA (годовой, ACT/365F) разом по всем срокам, кривая стоит; ' +
+      'у фикс-бумаг ≈ DV01 RUONIA (оба — к годовым ставкам).',
   };
   K.tips.dv01 = 'DV01 ставок, тыс ₽/бп: сумма бакетов по кривым ставок (RUONIA, КС, валютные), без базиса ОФЗ и CS01.\n' + K.tips.ruonia;
   K.tips.zdisc = 'Z-спред к кривой дисконтирования (RUONIA OIS; в день без неё — к КБД), б.п., годовой, ACT/365F (R32): у фикс-бумаги — ' +
@@ -170,7 +180,8 @@
     'за период — около нуля всегда. Основной риск флоатера — спредовый: CS01 (базис у ОФЗ-ПК) и DM — по всему сроку до погашения, ' +
     'он больше. Плавное снижение к нулю — подход фиксации купона, ступень — изменение числа бумаг (видно в «на 1 бумагу» и подсказке).';
   // подсказка к кривой риска: RUONIA и КС — конвенция бампа, базис ОФЗ, CS01; прочие — название кривой
-  K.curveTip = id => id === 'CS01' ? K.tips.cs01 : id === 'RUB OFZ' || (M.curve[id] && M.curve[id].kind === 'basis') ? K.tips.basis01
+  K.curveTip = id => id === 'CS01' ? K.tips.cs01 : id === 'OFZSPR' ? K.tips.ofzSpr01
+    : id === 'RUB OFZ' && M.ofzView === 'kbd' ? K.tips.kbd : id === 'RUB OFZ' || (M.curve[id] && M.curve[id].kind === 'basis') ? K.tips.basis01
     : id === 'RUB RUONIA' || id === 'RUB KEY' ? (M.curve[id] ? M.curve[id].name + '.\n' : '') + K.tips.ruonia
       : (M.curve[id] ? M.curve[id].name + ': +1 б.п. к нулевой ставке кривой по бакетам' : '');
   // подпись с подсказкой (title): пунктир снизу, курсор «?» (K.tip — другое: плавающая подсказка у мыши)
@@ -185,7 +196,7 @@
   const CCY_NAMES = { RUB: 'Рубли', USD: 'Доллары', EUR: 'Евро', CNY: 'Юани', CHF: 'Франки', GBP: 'Фунты', HKD: 'Гонконгские доллары', JPY: 'Иены', AED: 'Дирхамы', KZT: 'Тенге', BYN: 'Белорусские рубли', TRY: 'Лиры', INR: 'Рупии' };
   K.ccyName = c => CCY_NAMES[c] || c;
   K.ccyTag = c => '<span class="k-ccy" style="background:' + K.ccyColor(c) + '">' + c + '</span>';
-  K.curveColors = { 'RUB RUONIA': '#4c9dff', 'RUB KEY': '#22c3d6', 'RUB OFZ': '#9b7bff', 'USD SOFR': '#3fb67a', 'EUR ESTR': '#d58cff', 'CNY XCCY': '#f0645a', 'CS01': '#e3b341' };
+  K.curveColors = { 'RUB RUONIA': '#4c9dff', 'RUB KEY': '#22c3d6', 'RUB OFZ': '#9b7bff', 'USD SOFR': '#3fb67a', 'EUR ESTR': '#d58cff', 'CNY XCCY': '#f0645a', 'CS01': '#e3b341', 'OFZSPR': '#c98a3a' };
   K.PAL = ['#4c9dff', '#3fb67a', '#e3b341', '#f0645a', '#b48cff', '#22c3d6', '#ff8f3f', '#8bc34a', '#ef6fb0', '#7f8cff', '#c9a26b', '#5fd4a8', '#ff6b8b', '#a0b4c8'];
   // кривые прогона, которых нет в списке цветов (CNY implied, прокси, CHF…), — цвет из палитры, детерминированно по имени
   M.curves.forEach(c => { if (!K.curveColors[c.id]) K.curveColors[c.id] = K.PAL[(M.util && M.util.hash ? M.util.hash(c.id) : c.id.length) % K.PAL.length]; });
@@ -526,6 +537,7 @@
     bar.innerHTML = '<div class="brand"><a href="index.html" title="Все мониторы">◂ мониторы</a><span>' + esc(opt.title || '') + '</span>' + (opt.tag ? '<span class="tag">' + esc(opt.tag) + '</span>' : '') + '</div>' +
       '<div class="filters" style="display:flex;gap:6px;flex-wrap:wrap"></div><div class="sp"></div>' +
       (opt.extra || '') +
+      '<span class="k-chip" data-a="ofzview" title="Как показан риск ОФЗ: «RUONIA + базис» — RUONIA и базис ОФЗ к ней (par–par), «КБД» — ОФЗ на своей кривой">ОФЗ: ' + K.OFZ_VIEWS[M.ofzView || 'basis'] + ' ▾</span>' +
       '<span class="k-chip" data-a="repr" title="Валюта отчёта: все суммы деска пересчитываются по споту">в ' + K.repr + ' ' + K.SYM[K.repr] + ' ▾</span>' +
       srcChip() + (M.notes && M.notes.length ? '<span class="k-chip" data-a="notes" title="Чего нет в данных прогона" style="border-color:var(--warn)">ⓘ ' + M.notes.length + '</span>' : '') +
       '<button class="k-btn" data-a="search">Поиск <span class="k-kbd">Ctrl K</span></button>' +
@@ -537,6 +549,8 @@
     bar.querySelector('[data-a=theme]').onclick = K.toggleTheme;
     bindSrc(bar);
     if (K.source === 'real') { freshness(bar); backfillChip(bar); }
+    const oc = bar.querySelector('[data-a=ofzview]');
+    oc.onclick = e => { e.stopPropagation(); menu(oc, Object.keys(K.OFZ_VIEWS).map(v => ({ v, t: K.OFZ_VIEWS[v], sub: v === 'basis' ? 'по умолчанию' : '' })), M.ofzView || 'basis', v => { if (v !== (M.ofzView || 'basis')) K.setOfzView(v); }); };
     const rc = bar.querySelector('[data-a=repr]');
     rc.onclick = e => { e.stopPropagation(); menu(rc, K.REPRS.map(c => ({ v: c, t: 'в ' + c + ' ' + K.SYM[c], sub: c === 'RUB' ? '' : 'курс ' + f.n(M.fx[c], 2) })), K.repr, v => { if (v !== K.repr) K.setRepr(v); }); };
     return bar;
@@ -1149,6 +1163,7 @@
     dv01: { key: 'dv01', label: 'DV01', num: true, fmt: v => f.dv(v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽/бп', title: K.tips.dv01, tip: true },
     cs01: { key: 'cs01', label: 'CS01', num: true, fmt: v => f.dv(v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽/бп', title: K.tips.cs01, tip: true },
     basis01: { key: 'basis01', label: 'Базис01', num: true, fmt: v => v ? f.dv(v) : '<span class="mut3">·</span>', sum: true, unit: 'тыс ₽/бп', title: K.tips.basis01, tip: true },
+    ofzSpr01: { key: 'ofzSpr01', label: 'Спред к КБД01', num: true, fmt: v => v ? f.dv(v) : '<span class="mut3">·</span>', sum: true, unit: 'тыс ₽/бп', title: K.tips.ofzSpr01, tip: true },
     carry: { key: 'carryDay', label: 'Кэрри/д', num: true, fmt: v => f.k(v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽', title: 'тыс ₽ в день' },
     pnl: { key: 'pnl', label: 'PnL дня', num: true, val: r => r.pnl.total, fmt: v => f.k(v), cls: v => f.cls(v), sum: r => r.pnl.total, unit: 'тыс ₽' },
     pnlMtd: { key: 'pnlMtd', label: 'PnL MTD', num: true, fmt: v => f.mn(v, 1), cls: v => f.cls(v), sum: true, unit: 'mm ₽', sumFmt: v => f.mn(v, 1) },
@@ -1193,6 +1208,7 @@
     if (rate.length > 1) rows.push({ id: 'Σ', label: 'Σ ставки', vals: M.buckets.map((_, k) => rate.reduce((s, c) => s + p.risk[c.id][k], 0)), tot: true });
     basis.forEach(c => rows.push({ id: c.id, label: c.short, vals: p.risk[c.id] }));
     if (p.cs01b && p.cs01b.some(v => Math.abs(v) >= 1)) rows.push({ id: 'CS01', label: 'CS01', vals: p.cs01b });
+    if (p.ofzSprb && p.ofzSprb.some(v => Math.abs(v) >= 1)) rows.push({ id: 'OFZSPR', label: 'спред к КБД', vals: p.ofzSprb });
     if (!rows.length) return '<div class="k-empty">нет риска ставок и спреда</div>';
     const ks = M.buckets.map((_, k) => k).filter(k => rows.some(r => Math.abs(r.vals[k]) >= 1));
     const cell = v => '<td class="n ' + (Math.abs(v) >= 1 ? f.cls(v) : '') + '">' + (Math.abs(v) >= 1 ? f.dv(v) : '<span class="mut3">·</span>') + '</td>';
@@ -1343,7 +1359,8 @@
       ['Купон', '<span class="mono">' + esc(p.couponFmt) + '</span>'], ['Текущий купон', f.pct(p.curCpn) + (p.cpn.type === 'float' ? ' <small>прогноз</small>' : '')],
       ['Ближайшее событие', f.date(p.event.date) + ' <small>' + ev + ', ' + f.yrs(p.tenor) + '</small>'], ['Погашение', f.date(p.maturity) + ' <small>' + f.yrs(p.yearsToMat) + '</small>'],
       ['DV01 ставки', K.d({ title: 'DV01 ' + p.name, unit: 'тыс ₽/бп', rows: [{ p, v: p.dv01 }] }, f.dv(p.dv01), '') + ' <small>тыс ₽/бп</small>', false, K.tips.dv01], ['CS01', f.dv(p.cs01) + ' <small>тыс ₽/бп</small>', false, K.tips.cs01],
-      ['Базис ОФЗ01', p.basis01 ? f.dv(p.basis01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.basis01], ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽ (фонд. ' + f.pct(p.fundRate) + ')</small>'],
+      ['Базис ОФЗ01', p.basis01 ? f.dv(p.basis01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.basis01],
+      ['Спред к КБД01', p.ofzSpr01 ? f.dv(p.ofzSpr01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.ofzSpr01], ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽ (фонд. ' + f.pct(p.fundRate) + ')</small>'],
       ['НКД', f.mn(p.accrued, 2) + ' <small>mm ₽</small>'], ['Рейтинг / сектор', '<span title="' + esc(K.ratingTip(p.rating, p.ratingInfo)) + '">' + esc(K.ratingText(p.rating, p.ratingInfo)) + '</span> <small>' + esc(p.sector) + '</small>'],
     ] : [
       ['Номинал', f.mn(p.notional, 0) + ' <small>mm ' + p.ccy + '</small>'], ['MTM', f.mn(p.mv, 1) + ' <small>mm ₽</small>'],
@@ -1754,7 +1771,10 @@
           K.kpiCcyRows(M.ccys.reduce((o, c) => (o[c] = k.byCcy[c].dv01, o), {}), c => K.d({ title: 'DV01 ' + c + ' (кривые ' + c + ')', unit: 'тыс ₽/бп', list: L, val: p => INSTR.dv01In(p, c) }), 3, f.dv), null, K.tips.dv01) +
         K.kpi('DV01 RUONIA', K.d({ title: 'DV01 RUONIA', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB RUONIA'] }) + K.kpiUnit('тыс/бп'),
           [['КС', K.d({ title: 'DV01 КС', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB KEY'] })],
-           [K.hint('базис ОФЗ', K.tips.basis01), K.d({ title: 'Базис ОФЗ−RUONIA', unit: 'тыс ₽/бп', list: L, val: 'basis01' })]], null, K.tips.ruonia + '\n\n' + K.tips.basis01) +
+           M.ofzView === 'kbd' ? [K.hint('КБД', K.tips.kbd), K.d({ title: 'DV01 КБД (ОФЗ)', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB OFZ'] })]
+             : [K.hint('базис ОФЗ', K.tips.basis01), K.d({ title: 'Базис ОФЗ−RUONIA', unit: 'тыс ₽/бп', list: L, val: 'basis01' })],
+           [K.hint('спред к КБД', K.tips.ofzSpr01), K.d({ title: 'Спред ОФЗ к КБД', unit: 'тыс ₽/бп', list: L, val: 'ofzSpr01' })]], null,
+          K.tips.ruonia + '\n\n' + (M.ofzView === 'kbd' ? K.tips.kbd : K.tips.basis01)) +
         K.kpi('CS01', K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }) + K.kpiUnit('тыс/бп'),
           [['корп. RUB', K.d({ title: 'CS01 корп RUB', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === 'RUB'), val: 'cs01' })],
            ['вал.', K.d({ title: 'CS01 валютные', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy !== 'RUB'), val: 'cs01' })]], null, K.tips.cs01) +

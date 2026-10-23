@@ -88,3 +88,7 @@ class ScenarioEngineJs(unittest.TestCase):
     def test_table_view_and_export(self):  # #102, #110
         r = subprocess.run(["node", str(ROOT / "tests" / "js" / "table_view.test.js")], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_ofz_risk_view(self):  # #32: «RUONIA + базис» / «КБД»
+        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "ofz_view.test.js")], capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

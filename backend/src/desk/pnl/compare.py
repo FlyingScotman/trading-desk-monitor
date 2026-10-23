@@ -1,8 +1,8 @@
 """The flash PnL both ways: ``desk.pnl.flash`` vs core ``explain_horizon_pnl`` (slice S4 step 4).
 
 Core is run per bond on the D-1 instrument (the backend's ``core_instrument`` after the D-1
-trade date), from the D-1 discount curve to the D one (``fallback.bond_discount``: the KBD for a fixed-coupon
-OFZ, else ``EodContext.discount``: RUONIA OIS, the KBD on a date without it), with both spreads calibrated by core to the two published dirty prices; its per-bond amounts are
+trade date), from the D-1 discount curve to the D one (``_built``: the KBD for a fixed-coupon OFZ, else
+``EodContext.discount``: RUONIA OIS, the KBD on a date without it), with both spreads calibrated by core to the two published dirty prices; its per-bond amounts are
 scaled by the quantity here. The table says "KBD" for that curve; on RUONIA both sides roll it by ``roll_curve``.
 
 Definitions side by side (``q`` and ``received`` omitted; ``z0``/``z1`` flash's calibrated
@@ -39,6 +39,7 @@ realised over the day against the forwards carry assumed are in ``rates``, as in
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from rub_fixed_income import (
     CoreRejection,
@@ -50,8 +51,7 @@ from rub_fixed_income import (
 
 from ..marketdata.adapter import core_instrument
 from ..orchestrator import EodContext, Outcome
-from ..valuation.bonds import SPREAD_CONVENTION, Rejected, discount_curve, fixed_schedule
-from ..valuation.fallback import bond_discount
+from ..valuation.bonds import OFZ_KBD_CLASSES, SPREAD_CONVENTION, Rejected, discount_curve, fixed_schedule
 
 COMPONENTS = ("carry", "rolldown", "rates", "spread", "other")
 
@@ -118,8 +118,7 @@ def compare(prev_ctx: EodContext, prev_outcomes: list[Outcome], ctx: EodContext,
                 inst, extra = core_instrument(p.terms, pv.valuation_date, pv.horizon_date,
                                               None if offer is None else (offer[0], offer[1], "offer"),
                                               coupons=s.coupons), {}
-            x = explain_horizon_pnl(inst, bond_discount(prev_ctx, p.terms)[1], bond_discount(ctx, p.terms)[1],
-                                    prev_ctx.calendar,
+            x = explain_horizon_pnl(inst, _built(prev_ctx, p.terms), _built(ctx, p.terms), prev_ctx.calendar,
                                     start_dirty_price_rub=pv.dirty_rub, end_dirty_price_rub=v.dirty_rub,
                                     spread_convention=SPREAD_CONVENTION,
                                     redemption_horizon="maturity" if offer is None else "open_put",
@@ -150,3 +149,8 @@ def _floater_inputs(inst, prev: MarketSnapshot, cur: MarketSnapshot, guard_bp: f
             raise ValueError(f"projection curve {pid} not built on both dates")
         out.update(projection_curve=a, end_projection_curve=b)
     return out
+
+
+def _built(ctx: EodContext, terms: Any) -> Any:
+    """The built curve a bond is discounted on (``fallback.bond_discount``, built: core's explain reprices)."""
+    return ctx.curve if terms.bond_class in OFZ_KBD_CLASSES else ctx.discount[1]

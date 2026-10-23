@@ -252,11 +252,13 @@ def _schedule(t: BondTerms, d: date) -> tuple[Any, tuple[BondCashflow, ...], Any
 
 def bond_discount(ctx: EodContext, terms: BondTerms) -> tuple[str, Any, str | None]:
     """The core curve a RUB bond of the ladder is discounted on, as on the exact path (``bonds.value_bonds``): the KBD
-    for ``OFZ_KBD_CLASSES``, else the run's (``EodContext.discount``: RUONIA OIS, the KBD on a date without it); the
-    built curve and the note of a KBD fallback."""
+    for ``OFZ_KBD_CLASSES``, else the run's (``EodContext.discount``: RUONIA OIS, the KBD on a date without it); what
+    core's risk engine takes for it (the KBD built with par buckets, RUONIA as its OIS bootstrap request:
+    ``EodContext.risk_curve``) and the note of a KBD fallback."""
     if terms.bond_class in OFZ_KBD_CLASSES:
         return KBD_CURVE_ID, ctx.curve, None
-    return ctx.discount
+    cid, built, note = ctx.discount
+    return cid, ctx.risk_curve(cid, built), note  # RUONIA by its OIS quotes, as on the exact path
 
 
 def _engine(ctx: EodContext, curve: Any, flows: tuple[BondCashflow, ...], kind: str, q: float, *,
