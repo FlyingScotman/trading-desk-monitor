@@ -466,6 +466,60 @@
             "description": "Service Unavailable"
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Remove User",
+        "description": "Delete an account (not oneself, not the last active admin); disabling keeps it instead.",
+        "operationId": "remove_user_api_v1_users__username__delete",
+        "parameters": [
+          {
+            "name": "username",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Username"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
       }
     },
     "/api/v1/users/{username}/password": {
@@ -2602,6 +2656,7 @@
               "scan",
               "eod",
               "intraday",
+              "morning",
               "history",
               "backfill"
             ],
@@ -2711,6 +2766,20 @@
               }
             ],
             "title": "Pnl Basis"
+          },
+          "market_close": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market Close"
           }
         },
         "type": "object",
@@ -2901,6 +2970,20 @@
               }
             ],
             "title": "Failed Dates"
+          },
+          "problem_dates": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ProblemDate"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem Dates"
           },
           "at": {
             "type": "string",
@@ -4339,6 +4422,42 @@
           "no_pnl"
         ],
         "title": "PositionPnl"
+      },
+      "ProblemDate": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "title": "Date"
+          },
+          "error": {
+            "type": "string",
+            "title": "Error"
+          },
+          "attempts": {
+            "type": "integer",
+            "title": "Attempts"
+          },
+          "next_attempt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt"
+          }
+        },
+        "type": "object",
+        "required": [
+          "date",
+          "error",
+          "attempts",
+          "next_attempt"
+        ],
+        "title": "ProblemDate",
+        "description": "A hub date whose sync failed and that waits for a retry (#146)."
       },
       "Queued": {
         "properties": {

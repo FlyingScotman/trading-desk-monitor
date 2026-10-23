@@ -47,6 +47,14 @@ t('рынок старше позиций (утренний прогон на з
   assert.strictEqual(K.dataLabel({ asOf: '2026-10-22', cutType: 'eod_final', marketDate: '2026-10-22' }).market, null);
 });
 
+t('утренний прогон (cutType prev_close, #21): тип закрытия из marketCutType, без сырого кода', () => {
+  const L = o => K.dataLabel(Object.assign({ asOf: '2026-10-23', cutType: 'prev_close', marketDate: '2026-10-22' }, o)).text;
+  assert.strictEqual(L({ marketCutType: 'eod_final' }), 'позиции 23.10 · рынок 22.10 · окончательное закрытие');
+  assert.strictEqual(L({ marketCutType: 'eod_preliminary' }), 'позиции 23.10 · рынок 22.10 · предварительное закрытие');
+  assert.strictEqual(L({}), 'позиции 23.10 · рынок 22.10 · закрытие прошлого дня');
+  assert.ok(!L({}).includes('prev_close'));
+});
+
 t('предупреждение: рабочий день после 10:15 без сегодняшнего среза — причина из шага intraday', () => {
   const now = msk('2026-10-23T10:20:00');  // пятница
   const W = r => K.headerStatus(st(r), now).warn;

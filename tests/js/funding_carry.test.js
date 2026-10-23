@@ -16,7 +16,7 @@ let n = 0; const t = (name, f) => { f(); n++; console.log('ok', name); };
 
 t('облигация торговой книги фондируется на чистую MV в своей валюте по ставке валюты', () => {
   const p = by('Газпром ЗО27-1-Д'), f = D.funding.find(x => x.positionId === p.id);
-  assert.strictEqual(f.kind, 'POS'); assert.strictEqual(f.ccy, 'USD'); assert.strictEqual(f.rate, 5);
+  assert.strictEqual(f.kind, 'POS'); assert.strictEqual(f.ccy, 'USD'); assert.strictEqual(f.rate, 6);
   near(f.amount, -(p.mv - p.notional * p.accrued / 100), 1e-6, 'тело = −чистая MV');
   const r = D.funding.find(x => x.positionId === by('ОФЗ 26242').id);
   near(r.rate, D.INDICES['КС'] + 0.30, 1e-9, 'RUB: КС + спред деска');
@@ -30,7 +30,7 @@ t('облигация торговой книги фондируется на ч
 
 t('процент по фондированию — в RUB по курсу ЦБ, в PnL самой бумаги', () => {
   const p = by('Газпром ЗО27-1-Д'), f = D.funding.find(x => x.positionId === p.id);
-  near(f.pnl.carry, f.amount * D.FX_CBR.USD * 5 / 100 / 365 * D.accrualDays, 1e-6, 'кэрри фондирования');
+  near(f.pnl.carry, f.amount * D.FX_CBR.USD * 6 / 100 / 365 * D.accrualDays, 1e-6, 'кэрри фондирования');
   near(p.pnl.funding, f.pnl.carry, 1e-9, 'компонента funding');
   near(p.pnl.fxFunding, f.pnl.fxGross, 1e-9, 'переоценка тела — в fx бумаги');
   assert.ok(Math.abs(p.pnl.fx) < Math.abs(p.pnl.fxGross) * 0.05, 'FX бумаги почти гасится своим фондированием');

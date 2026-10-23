@@ -33,6 +33,15 @@ up every file it replaces or deletes into ``updates\\backup\\<old version>\\``, 
 venv and starts the new server, and once that answers ``/health/live`` it confirms the update. When the child ends
 without confirming (no answer within ``UPDATE_TIMEOUT_S``, a failed install), this launcher restores the backup and
 starts the old version again. ``updates\\last.json`` keeps the outcome for the settings page.
+
+Restart from the settings page («Доступ из сети», ``desk.restart``): desk serve exits with ``RESTART`` and no
+``pending.json``; ``start`` reads the settings again (the page may have changed the address, port or HTTPS; a port
+given as ``start --port N`` stays) and starts it. A network change the page staged in ``restart\\network.json``
+(the previous values of the keys it changed, backups of the certificate files) is confirmed once the new server
+answers ``/health/live`` on 127.0.0.1 within ``NETWORK_TIMEOUT_S``; when it exits or does not answer, those values
+and files are written back and the server starts as it was. A start after a plain restart that fails goes back to
+the network settings of the last server that answered (``restart\\good.json``). ``restart\\last.json`` keeps the
+outcome for the page.
 """
 
 from __future__ import annotations
@@ -884,13 +893,13 @@ def cmd_start(args: list[str]) -> int:
             record_update(env, False, version(), "", str(e))
         raise
     page = "concepts/index.html" if (home / "settings.json").is_file() else "settings.html"  # the monitors
-    scheme = "https" if addr["tls"] else "http"
-    # desk serve answers here whatever bind_host says: 0.0.0.0 covers 127.0.0.1 with its one socket, a specific
-    # address gets a 127.0.0.1 socket beside it, in the same server and with the same TLS (desk.api.app.listen_sockets)
-    local = f"{scheme}://127.0.0.1:{port}"
-    url = f"{local}/{page}"
-    lan = not _loopback_host(addr["host"])
-    if lan and not addr["auth"]:
+    pinned = port if args[:1] == ["--port"] and len(args) > 1 else None  # start.bat --port N: the page cannot change it
+    if network_pending(env) is not None and not startable(addr):  # a change from the page that cannot start
+        rollback_network(env, "адрес в сети без входа по паролю")
+        addr = serve_settings(env, home)
+        port = pinned or addr["port"]
+    _, local, url = addresses(addr, port, page)
+    if not startable(addr):
         raise Fail(f"В настройках адрес {addr['host']} (доступ из сети), а вход по паролю выключен: сервер так не "
                    "запустится. Создайте администратора и включите вход: desk.bat user add ИМЯ --role admin, затем "
                    "desk.bat lan enable --self-signed. Или верните адрес 127.0.0.1: desk.bat lan disable.")
@@ -909,39 +918,33 @@ def cmd_start(args: list[str]) -> int:
                    f"set DESK_PORT=8001, затем start.bat из того же окна.")
     log = home / "logs" / "serve.log"
     say(f"  журнал: {log}")
-    say(f"  адрес: {url}")
-    if lan:
-        say("  для коллег: " + ", ".join(f"{scheme}://{n}:{port}/" for n in lan_names(addr["host"])[:3])
-            + "  (вход по паролю; правило брандмауэра: desk.bat firewall add от имени администратора)")
-        say("  после запуска сервер проверит свои сетевые адреса (строки «проверка адреса» ниже); "
-            "ещё раз и подробно: desk.bat lan status")
+    say_address(addr, port, url)
     say("Остановить: закройте это окно (или Ctrl+C, или stop.bat).")
     say()
 
     browse = not verify  # after an update the settings page reloads itself
-
-    def when_ready(proc: subprocess.Popen) -> None:
-        # the first start of PostgreSQL may take a while; a new version that does not answer is rolled back
-        deadline = time.monotonic() + (UPDATE_TIMEOUT_S if verify else 300)
-        while time.monotonic() < deadline and proc.poll() is None:
-            if _no_proxy_get(f"{local}/health/live"):
-                if verify:
-                    confirm_update(env)
-                if browse:
-                    webbrowser.open(url)
-                return
-            time.sleep(1)
-        if verify and proc.poll() is None:
-            timed_out.append(True)
-            proc.kill()
-
-    timed_out: list[bool] = []
-
+    restarted = False  # the server runs again after a restart from the settings page
     while True:
-        # DESK_RESTART_CODE: desk serve may exit with it (desk.update), here it means "start me again"
-        # the address is the settings' bind_host (desk serve reads it; it refuses a network one without sign-in)
-        rc = run_logged([str(desk_exe()), "serve", "--port", str(port)],
-                        {**env, "DESK_RESTART_CODE": str(RESTART)}, log, on_start=when_ready)
+        # DESK_RESTART_CODE: desk serve may exit with it (desk.update, desk.restart), here it means "start me
+        # again"; the address is the settings' bind_host (desk serve reads it; it refuses a network one without
+        # sign-in). A network change from the page (restart\network.json) is confirmed once this server answers,
+        # else rolled back, as is any other start after a restart that does not answer (rollback_network)
+        net = network_pending(env)
+        run = serve_once(env, log, port, local, url, pinned=pinned, verify=verify, browse=browse, net=net,
+                         restarted=restarted)
+        rc = run["rc"]
+        if verify and rc != RESTART:
+            break
+        if not run["answered"] and rc not in STOPPED and (net is not None or restarted):
+            why = (f"сервер не ответил за {NETWORK_TIMEOUT_S} с" if run["timed_out"]
+                   else f"сервер не запустился, код {rc}")
+            if rollback_network(env, why):
+                addr = serve_settings(env, home)
+                port = pinned or addr["port"]
+                _, local, url = addresses(addr, port, page)
+                say_address(addr, port, url)
+                restarted = False  # the old settings: a failure now is reported, not rolled back again
+                continue
         if rc != RESTART:
             break
         if verify and (updates_dir(env) / "applying.json").exists():
@@ -952,13 +955,170 @@ def cmd_start(args: list[str]) -> int:
             return child
         env = desk_environ()  # the old version again, or the same one restarted
         ensure_env(env)
+        restarted = True
+        old = url
+        addr = serve_settings(env, home)  # the settings page may have changed the address, port or HTTPS
+        if not startable(addr):
+            if not rollback_network(env, "адрес в сети без входа по паролю"):
+                raise Fail(f"В настройках адрес {addr['host']} (доступ из сети), а вход по паролю выключен: сервер "
+                           "так не запустится. Верните адрес 127.0.0.1: desk.bat lan disable.")
+            addr = serve_settings(env, home)
+        port = pinned or addr["port"]
+        _, local, url = addresses(addr, port, page)
+        if url != old:
+            say_address(addr, port, url)
     if rc in STOPPED:
         say("Сервер остановлен.")
         return 0
     if verify and (updates_dir(env) / "applying.json").exists():
-        record_update(env, False, version(), "", f"сервер не ответил за {UPDATE_TIMEOUT_S} с" if timed_out
+        record_update(env, False, version(), "", f"сервер не ответил за {UPDATE_TIMEOUT_S} с" if run["timed_out"]
                       else f"сервер остановился с ошибкой, код {rc}")
     raise Fail(f"Сервер остановился с ошибкой (код {rc}); подробности выше и в {log}")
+
+
+def addresses(addr: dict, port: int, page: str) -> tuple[str, str, str]:
+    """(scheme, the server on 127.0.0.1, the page to open). desk serve answers on 127.0.0.1 whatever bind_host says:
+    0.0.0.0 covers it with its one socket, a specific address gets a 127.0.0.1 socket beside it, in the same server
+    and with the same TLS (desk.api.app.listen_sockets)."""
+    scheme = "https" if addr["tls"] else "http"
+    local = f"{scheme}://127.0.0.1:{port}"
+    return scheme, local, f"{local}/{page}"
+
+
+def startable(addr: dict) -> bool:
+    """desk serve refuses a network address without sign-in (desk.api.auth.check_bind)."""
+    return _loopback_host(addr["host"]) or addr["auth"]
+
+
+def say_address(addr: dict, port: int, url: str) -> None:
+    say(f"  адрес: {url}")
+    if not _loopback_host(addr["host"]):
+        scheme = "https" if addr["tls"] else "http"
+        say("  для коллег: " + ", ".join(f"{scheme}://{n}:{port}/" for n in lan_names(addr["host"])[:3])
+            + "  (вход по паролю; правило брандмауэра: desk.bat firewall add от имени администратора)")
+        say("  после запуска сервер проверит свои сетевые адреса (строки «проверка адреса» ниже); "
+            "ещё раз и подробно: Настройки -> «Доступ из сети» или desk.bat lan status")
+
+
+def serve_once(env: dict[str, str], log: Path, port: int, local: str, url: str, *, pinned: int | None = None,
+               verify: bool = False, browse: bool = False, net: dict | None = None, restarted: bool = False) -> dict:
+    """One run of desk serve until it exits: ``{"rc", "answered", "timed_out"}``. Once it answers /health/live on
+    127.0.0.1: the hot update is confirmed (``verify``), the network change from the page (``net``) or the restart is
+    recorded, the browser opens (``browse``). A new version or a network change that does not answer in time is
+    stopped (and then rolled back by the caller)."""
+    out = {"rc": None, "answered": False, "timed_out": False}
+    limit = UPDATE_TIMEOUT_S if verify else NETWORK_TIMEOUT_S if net is not None else 300
+
+    def when_ready(proc: subprocess.Popen) -> None:
+        # the first start of PostgreSQL may take a while; a new version that does not answer is rolled back
+        deadline = time.monotonic() + limit
+        while time.monotonic() < deadline and proc.poll() is None:
+            if _no_proxy_get(f"{local}/health/live"):
+                out["answered"] = True
+                if verify:
+                    confirm_update(env)
+                if net is not None:
+                    confirm_network(env, url)
+                elif restarted:
+                    record_restart(env, "restart", True, "Сервер перезапущен.", url)
+                save_good(env)
+                if browse:
+                    webbrowser.open(url)
+                return
+            time.sleep(1)
+        if (verify or net is not None) and proc.poll() is None:
+            out["timed_out"] = True
+            proc.kill()
+
+    serve_env = {**env, "DESK_RESTART_CODE": str(RESTART), **({"DESK_PORT": str(pinned)} if pinned else {})}
+    out["rc"] = run_logged([str(desk_exe()), "serve", "--port", str(port)], serve_env, log, on_start=when_ready)
+    return out
+
+
+# ---- restart from the settings page (desk.restart: <DESK_HOME>\restart\network.json, last.json, good.json)
+
+NETWORK_KEYS = ("auth", "bind_host", "port", "tls_cert", "tls_key", "allow_plain_http", "admin_from_network")
+NETWORK_TIMEOUT_S = 180  # a server started with new network settings answers 127.0.0.1 within this, or is rolled back
+
+
+def restart_dir(env: dict[str, str]) -> Path:
+    return Path(env["DESK_HOME"]) / "restart"
+
+
+def network_pending(env: dict[str, str]) -> dict | None:
+    """The network change the settings page staged before its restart (desk.restart.stage_network_change)."""
+    doc = _read_json(restart_dir(env) / "network.json")
+    return doc if isinstance(doc, dict) and isinstance(doc.get("previous"), dict) else None
+
+
+def record_restart(env: dict[str, str], kind: str, ok: bool, message: str, address: str | None = None) -> None:
+    """The outcome the settings page shows (``restart\\last.json``), also in ``logs\\update.log``."""
+    update_log(env, message)
+    _write_json(restart_dir(env) / "last.json", {"kind": kind, "ok": ok, "message": message, "address": address,
+                                                 "at": datetime.now().isoformat(timespec="seconds")})
+
+
+def _settings_doc(env: dict[str, str]) -> dict:
+    doc = _read_json(Path(env["DESK_HOME"]) / "settings.json")
+    return doc if isinstance(doc, dict) else {}
+
+
+def _write_settings(env: dict[str, str], doc: dict) -> None:
+    path = Path(env["DESK_HOME"]) / "settings.json"
+    tmp = path.with_name(path.name + ".desk-restore")
+    tmp.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def save_good(env: dict[str, str]) -> None:
+    """The network settings a server answered with (``restart\\good.json``): what a failed start after a restart
+    from the page goes back to when no change of its own was staged."""
+    doc = _settings_doc(env)
+    _write_json(restart_dir(env) / "good.json", {k: doc.get(k) for k in NETWORK_KEYS})
+
+
+def confirm_network(env: dict[str, str], url: str) -> None:
+    """The server answers with the new network settings: they stay."""
+    state = network_pending(env) or {}
+    exp = state.get("expect") if isinstance(state.get("expect"), dict) else {}
+    where = f"{exp.get('host')}:{exp.get('port')}" if exp.get("host") else url
+    record_restart(env, "network", True, f"Новые настройки сети работают ({where}). Адрес на этом компьютере: {url}",
+                   url)
+    (restart_dir(env) / "network.json").unlink(missing_ok=True)
+
+
+def rollback_network(env: dict[str, str], why: str) -> bool:
+    """A server started after a restart from the page did not answer: write back the previous values of the
+    network settings (``network.json``'s, else those of the last server that answered, ``good.json``) and the
+    certificate files it replaced. False when there is nothing to go back to (the caller reports the failure)."""
+    state = network_pending(env)
+    doc = _settings_doc(env)
+    if state is not None:
+        previous = state["previous"]
+        files = [f for f in state.get("files") or [] if isinstance(f, dict)]
+    else:
+        good = _read_json(restart_dir(env) / "good.json")
+        if not isinstance(good, dict) or all(doc.get(k) == good.get(k) for k in NETWORK_KEYS):
+            return False
+        previous, files = {k: good.get(k) for k in NETWORK_KEYS}, []
+    for k, v in previous.items():
+        if k not in NETWORK_KEYS:
+            continue
+        if v is None:
+            doc.pop(k, None)
+        else:
+            doc[k] = v
+    _write_settings(env, doc)
+    for f in files:
+        if f.get("backup") and f.get("target") and Path(str(f["backup"])).is_file():
+            try:
+                _copy(Path(str(f["backup"])), Path(str(f["target"])))
+            except OSError as e:
+                update_log(env, f"  не удалось вернуть файл {f['target']}: {e}")
+    (restart_dir(env) / "network.json").unlink(missing_ok=True)
+    record_restart(env, "network", False, f"Новые настройки сети не заработали ({why}); возвращены прежние, сервер "
+                   "запускается с ними. Подробности: logs\\serve.log в папке данных.")
+    return True
 
 
 def cmd_stop(_args: list[str]) -> int:

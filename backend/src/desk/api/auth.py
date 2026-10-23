@@ -25,7 +25,8 @@ Mechanics, all from maintained libraries (ADR04: no custom cryptography):
   ``desk_csrf`` cookie: ``prototypes/desk-auth.js``) and, when the browser sends one, an ``Origin`` of this site;
 * login throttling: ``login_max_failures`` wrong passwords lock the account for ``login_lockout_minutes``; an address
   with too many failures in that window gets 429 without a password check;
-* audit (``audit_log``): logins, logouts, user changes, settings / adapter / update writes, scenario jobs, alias edits.
+* audit (``audit_log``): logins, logouts, user changes and deletions, settings / adapter / update writes, scenario
+  jobs, alias edits, server restarts and network access changes (``desk.api.server_routes``).
 
 The first admin: ``desk user add NAME --role admin`` (the installer's guide), or the setup form of the login page,
 which only a loopback client may use while no active admin exists (``POST /api/v1/auth/setup``).
@@ -317,6 +318,24 @@ def update_user(con: psycopg.Connection, username: str, *, actor: str, role: str
             audit(con, actor, "user_change", name, ip=ip,
                   detail={k: v for k, v in changes.items() if k != "failed_logins"})
     return get_user(con, name)  # type: ignore[return-value]
+
+
+def delete_user(con: psycopg.Connection, username: str, *, actor: str, ip: str | None = None) -> None:
+    """Remove an account for good (its sessions go with it; the audit log keeps its name). Not oneself, not the
+    last active admin: nobody could administer the monitor afterwards."""
+    name = normalize_username(username)
+    with con.transaction():
+        row = _cur(con).execute("SELECT user_id, role, active FROM app_user WHERE username = %s FOR UPDATE",
+                                (name,)).fetchone()
+        if row is None:
+            raise AuthError(f"пользователя {name} нет", 404)
+        if name == actor:
+            raise AuthError("нельзя удалить самого себя", 409)
+        if row["role"] == "admin" and row["active"] and _last_admin(con, name):
+            raise AuthError("это последний активный администратор: сначала назначьте другого", 409)
+        revoke_user_sessions(con, row["user_id"])
+        con.execute("DELETE FROM app_user WHERE user_id = %s", (row["user_id"],))
+        audit(con, actor, "user_delete", name, ip=ip, detail={"role": row["role"]})
 
 
 def set_password(con: psycopg.Connection, username: str, password: str, *, actor: str, must_change: bool = False,
@@ -966,6 +985,16 @@ def change_user(request: Request, username: str, body: UserPatch, admin: Admin,
                            display_name=body.display_name, unlock=body.unlock, ip=client_ip(request))
     except AuthError as e:
         raise _err(e) from None
+
+
+@router.delete("/api/v1/users/{username}", status_code=204)
+def remove_user(request: Request, username: str, admin: Admin, con: RW):
+    """Delete an account (not oneself, not the last active admin); disabling keeps it instead."""
+    try:
+        delete_user(con, username, actor=actor(request), ip=client_ip(request))
+    except AuthError as e:
+        raise _err(e) from None
+    return Response(status_code=204)
 
 
 @router.post("/api/v1/users/{username}/password", status_code=204)

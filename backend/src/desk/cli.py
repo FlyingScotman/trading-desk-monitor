@@ -199,7 +199,8 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             report_dir: str | Path | None = None, tdm: bool = False, db: str | Path | None = None,
             no_gamma: bool = False, no_pnl: bool = False, out: Callable[[str], None] = print,
             cut_type: str = "eod_final", market_snapshot_id: str | None = None,
-            contexts: ContextCache | None = None, read_model: bool = True) -> int | None:
+            contexts: ContextCache | None = None, read_model: bool = True,
+            on_close: tuple[str, str] | None = None) -> int | None:
     """The EOD run of date ``d`` (``desk eod`` without its hub pull; the autopilot calls it too): values the
     books of the store on the cached snapshot of ``d`` and publishes the run. Returns the desk run id, None when
     the store has no positions for the date. Raises on a missing snapshot or a failed publication.
@@ -214,20 +215,28 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
     prepares each date's market once (as the run's own date, then as the next date's previous one).
     ``read_model``: also put the run's static snapshot's facts (the market calendar, issuer groups, sectors) and
     the CBR meetings into the store's read model (``desk.marketdata.static_facts``); the backfill leaves them to the
-    latest date. After the publication the run's summary for the concept pages is written (``publish.summary``)."""
+    latest date. After the publication the run's summary for the concept pages is written (``publish.summary``).
+
+    ``on_close`` (the autopilot's morning run, #21): (date, cut) of an earlier close: the book of ``d`` valued on
+    that close, published as a ``run_type`` run of ``d`` with cut ``prev_close`` (lineage ``market_close``) and
+    without a flash PnL (the day's first intraday cut brings it)."""
     snapshots = snapshots or settings.snapshot_cache
     sd = SnapshotDir(Path(snapshots))
     t0 = time.perf_counter()
     prep = contexts.prepare if contexts is not None else prepare
     fx_options = fxcurves.options_from(settings)  # the provisional FX choices (curves.fx.FxOptions)
-    ctx = prep(sd, d, cut_type, market_snapshot_id=market_snapshot_id, fx_options=fx_options)
+    run_date = date.fromisoformat(d)
+    ctx = prep(sd, *(on_close or (d, cut_type)), market_snapshot_id=market_snapshot_id, fx_options=fx_options)
     # issuer names, groups, sectors and ratings: the newest static of the cache, not the market's own (R25)
     ctx = dataclasses.replace(ctx, reference=reference.facts(sd, ctx.static),
                               proxy_curves=bool(getattr(settings, "proxy_curves_for_risk", False)))
-    prev_cut = previous_market(sd, d)
+    prev_cut = None if on_close else previous_market(sd, d)
     prev_date = prev_cut[0] if prev_cut else None
     prev = MarketView(sd.market(*prev_cut)) if prev_cut else None
     basis = pnl_basis(ctx, prev_cut)
+    if on_close:
+        basis["label"] = (f"нет PnL: позиции {run_date:%d.%m} на закрытии {ctx.business_date:%d.%m}, "
+                          "PnL дня — с первого внутридневного среза")
     prov = sd.provenance(ctx.market.snapshot.id)
     origin = (f"hub {prov['hub']}, published {prov['published_at']} ({_age(prov['published_at'])})" if prov
               else f"local file, known_at {ctx.market.snapshot.doc.get('known_at')}")
@@ -277,11 +286,11 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             return None
         for b, vd in sorted(inputs.valid_dates.items()):
             src = inputs.sources.get(b) or {}
-            age = (ctx.business_date - vd).days
+            age = (run_date - vd).days
             out(f"  {b}: {src.get('source')} {src.get('file_name')}"
                 + (f", report {src['report_date']}" if src.get("report_date") else "")
                 + f", valid {vd}" + (f", carried {age} days" if age else ""))
-        carried = store.carried_spreads(con, before=ctx.business_date)
+        carried = store.carried_spreads(con, before=run_date)
         bp = pv1.plan(ctx, inputs, second_order=not no_gamma)
         if bp.unlinked_terms:
             out(f"WARN trade_terms: {len(bp.unlinked_terms)} trade(s) no positions row names, "
@@ -304,7 +313,9 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             dp = [o.pnl for o in bp.direct.values() if o.pnl]
             out(f"PnL without core: {len(dp)}/{sum(o.valuation is not None for o in bp.direct.values())} positions "
                 f"(by the rate move or the reports), total {sum(p.total for p in dp):,.0f} RUB")
-        if not prev_date:
+        if on_close:
+            out(f"no flash PnL: the book of {d} on the close of {ctx.business_date} (morning run)")
+        elif not prev_date:
             out(f"WARN no flash PnL: no eod_final or eod_preliminary market snapshot before {d} in {snapshots}")
         positions = pv1.merge(bp, outcomes)
         ok = sum(o.valuation is not None for _, _, o in positions)
@@ -313,7 +324,9 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             + f"), {len(carried)} carried spreads")
         run_id, status, warnings = desk_run.publish(con, ctx, positions, prev=prev, run_type=run_type,
                                                     inputs=inputs, carried_from=carried, pnl_basis=basis,
-                                                    core_results=[bp.core_result] if bp.core_result else None)
+                                                    core_results=[bp.core_result] if bp.core_result else None,
+                                                    **({"business_date": run_date, "cut_type": "prev_close"}
+                                                       if on_close else {}))
         out(f"desk run {run_id}: {status}, {len(warnings)} warnings")
         for (m,) in con.execute("SELECT message FROM run_log WHERE run_id = %s AND message LIKE %s",
                                 (run_id, "справочник эмитентов%")):
@@ -739,6 +752,9 @@ def cmd_user(a: argparse.Namespace) -> int:
             elif a.user_cmd == "unlock":
                 auth.update_user(con, name, actor=who, unlock=True)
                 print(f"{name}: unlocked")
+            elif a.user_cmd == "delete":
+                auth.delete_user(con, name, actor=who)
+                print(f"{name}: deleted")
         except auth.AuthError as e:
             print(f"desk user: {e}", file=sys.stderr)
             return 1
@@ -755,8 +771,7 @@ def firewall_command(port: int) -> str:
     """The Windows firewall rule letting colleagues reach the port (``deskctl firewall add`` runs the same)."""
     from . import lan
 
-    return (f'netsh advfirewall firewall add rule name="{lan.FIREWALL_RULE.format(port=port)}" dir=in action=allow '
-            f"protocol=TCP localport={port} profile=domain,private")
+    return lan.firewall_add_command(port)
 
 
 def cmd_lan(a: argparse.Namespace) -> int:
@@ -780,49 +795,37 @@ def cmd_lan(a: argparse.Namespace) -> int:
         return 1 if p and any(r["status"] != "ok" for r in [p["loopback"], *(p["lan"] if doc["network"] else [])]) \
             else 0
     if a.lan_cmd == "disable":
-        update_settings_json({"bind_host": "127.0.0.1", **({"auth": False} if a.auth_off else {})}, desk_home())
+        update_settings_json(lan.disable_changes(a.auth_off), desk_home())
         print("bind_host 127.0.0.1: this computer only" + ("; sign-in off" if a.auth_off else "; sign-in stays on")
-              + ". Restart Desk Monitor (stop.bat, start.bat).")
+              + ". Restart Desk Monitor (Settings -> «Доступ из сети» -> «Перезапустить сервер», or stop.bat, "
+                "start.bat).")
         return 0
-    if not a.self_signed and not a.plain_http and bool(a.cert) != bool(a.key):
-        print("desk lan enable: --cert and --key go together", file=sys.stderr)
-        return 2
-    if not (a.self_signed or a.cert or a.plain_http or (st.tls_cert and st.tls_key) or st.allow_plain_http):
-        print("desk lan enable: choose HTTPS (--self-signed, or --cert F --key F) or --plain-http", file=sys.stderr)
-        return 2
+    # the same changes as the settings page's «Доступ из сети» (desk.lan.enable_changes)
+    mode = "self_signed" if a.self_signed else "cert" if a.cert else "plain_http" if a.plain_http else None
+    if mode is None and a.key:
+        mode = "cert"  # --key without --cert: refused as a pair
     url = store.resolve_url(st)
-    store.migrate(url)
-    with store.connect(url) as con:
-        if not auth.has_admin(con):
-            print("desk lan enable: create the first admin first: desk user add NAME --role admin", file=sys.stderr)
-            return 1
-    changes: dict[str, Any] = {"auth": True, "bind_host": a.host}
-    if a.port:
-        changes["port"] = a.port
+    try:
+        store.migrate(url)
+        with store.connect(url) as con:
+            admin = auth.has_admin(con)
+        changes, info = lan.enable_changes(st, has_admin=admin, host=a.host, port=a.port, tls=mode, cert=a.cert,
+                                           key=a.key, names=a.name or [], admin_from_network=a.admin_from_network)
+    except lan.LanError as e:
+        print(f"desk lan enable: {e.en}", file=sys.stderr)
+        return e.exit
     port = a.port or st.port
-    if a.self_signed:
-        names = list(dict.fromkeys(n for n in (a.name or []) + auth.local_names() if n))
-        crt, key = auth.self_signed_cert(st.home / "tls", names)
-        changes.update(tls_cert=str(crt), tls_key=str(key), allow_plain_http=None)
-        print(f"self-signed certificate {crt} for {', '.join(names) or 'localhost'}")
+    if info.get("cert"):
+        print(f"self-signed certificate {info['cert']} for {', '.join(info['names']) or 'localhost'}")
         print("  browsers warn about it («Подключение не защищено»): each colleague confirms it once "
               "(«Дополнительно» -> «Перейти на сайт»), or IT issues a certificate of the corporate CA (--cert, --key)")
-    elif a.cert:
-        for f in (a.cert, a.key):
-            if not Path(f).is_file():
-                print(f"desk lan enable: {f} not found", file=sys.stderr)
-                return 2
-        changes.update(tls_cert=str(Path(a.cert).resolve()), tls_key=str(Path(a.key).resolve()),
-                       allow_plain_http=None)
-    elif a.plain_http:
-        changes.update(allow_plain_http=True, tls_cert=None, tls_key=None)
+    elif mode == "plain_http":
         print("plain HTTP on the network: passwords and data cross it unencrypted; the pages show a warning")
-    if a.admin_from_network is not None:
-        changes["admin_from_network"] = a.admin_from_network
     update_settings_json(changes, desk_home())
     st = load()
     tls = bool(st.tls_cert and st.tls_key)
-    print(f"sign-in on; listens on {st.bind_host}:{port}. Restart Desk Monitor (stop.bat, then start.bat).")
+    print(f"sign-in on; listens on {st.bind_host}:{port}. Restart Desk Monitor (Settings -> «Доступ из сети» -> "
+          "«Перезапустить сервер», or stop.bat, then start.bat).")
     print("colleagues open: " + ", ".join(_lan_urls(st.bind_host, port, tls)))
     print("Windows firewall, once, in a command prompt run as administrator: desk.bat firewall add")
     print(f"  (it runs: {firewall_command(port)})")
@@ -1201,7 +1204,8 @@ def main(argv: list[str] | None = None) -> int:
     ur.add_argument("role", choices=("viewer", "trader", "admin"))
     ur.set_defaults(fn=cmd_user)
     for verb, what in (("disable", "no sign-in (sessions closed); kept in the audit"), ("enable", "sign-in again"),
-                       ("unlock", "clear the lockout after wrong passwords")):
+                       ("unlock", "clear the lockout after wrong passwords"),
+                       ("delete", "remove the account for good (not the last active admin); the audit keeps its name")):
         uv = usub.add_parser(verb, help=what)
         uv.add_argument("name")
         uv.set_defaults(fn=cmd_user)

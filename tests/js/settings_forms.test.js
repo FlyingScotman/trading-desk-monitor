@@ -166,10 +166,23 @@ t('фондирование: история ставок по rule_id и сво�
   const M = SF.fundingMatrix(rules, '2026-10-22', ['TRADING', 'HTM', 'DERIVS', 'FUTURES']);
   eq(plain(M.cols), ['RUB', 'USD', '*']);
   assert.strictEqual(M.cell('TRADING', 'RUB').text, 'KEY_RATE + 150 б.п.');
-  assert.strictEqual(M.cell('TRADING', 'USD').text, '5 % фикс');
+  assert.strictEqual(M.cell('TRADING', 'USD').text, '6 % фикс');
   assert.strictEqual(M.cell('HTM', '*').text, 'контрактная');
   assert.strictEqual(M.cell('HTM', 'RUB'), null);
   assert.ok(M.special.some(x => x.current.entity === 'ENT2'));  // частное правило юрлица — не в сводке
+});
+
+t('проверка адаптером: ход в секундах и причина отказа простыми словами (B2-11)', () => {
+  assert.strictEqual(SF.checkingText(0), 'Проверяю адаптером…');
+  assert.strictEqual(SF.checkingText(12), 'Проверяю адаптером… 12 с');
+  const slow = SF.adapterReason({ adapter_checked: false, adapter_error_code: 'timeout', adapter_timeout_s: 60, adapter_error: 'reference() failed: timed_out timeout' });
+  assert.ok(slow.includes('не успел за 60 с'), slow);
+  assert.ok(slow.includes('сохранить без проверки'), slow);
+  assert.ok(!slow.includes('reference()'), slow);  // без внутренних слов
+  assert.ok(SF.adapterReason({ adapter_checked: false, adapter_error_code: 'failed', adapter_error: 'reference() failed: failed ValueError' }).includes('ошибкой'));
+  assert.ok(SF.adapterReason({ adapter_checked: false, adapter_error_code: 'not_loaded', adapter_error: 'the adapter is not loaded: x' }).includes('не загружен'));
+  assert.strictEqual(SF.adapterReason({ adapter_checked: false, adapter_error_code: null, adapter_error: null }), 'проверка адаптером пропущена');
+  assert.strictEqual(SF.adapterReason({ adapter_checked: true }), null);
 });
 
 console.log(n + ' tests ok');

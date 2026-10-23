@@ -32,7 +32,7 @@ QTY = 1000.0
 # Keys of window.DESK.source the parity test leaves out; everything else must be equal.
 EXCLUDED = {"runId": "the two stores number their runs independently",
             "publishedAt": "publication time of each store's run",
-            **dict.fromkeys(("cutType", "cutTs", "slice", "prevCutType", "pnlBasis", "marketDate"),
+            **dict.fromkeys(("cutType", "cutTs", "slice", "prevCutType", "pnlBasis", "marketDate", "marketCutType"),
                             "the run's market slice (R11): the desk store's only")}
 R10_RUN = {"pnlAvailable", "pnlReason", "pnlReasonText", "pnlCoverage", "riskNotes",  # riskNotes: R14
            "FX_SOURCE",  # R26: the market rate's source (MOEX 19:00 ...)
@@ -139,6 +139,11 @@ def test_run_market_date_for_the_header(store_url, book, client):
     older = run_slice({**base, "lineage": {"market_business_date": "2026-10-22"}})  # the morning run on D-1 (#21)
     assert older["marketDate"] == "2026-10-22" and older["slice"] == "23.10 · закрытие"
     assert run_slice({**base, "lineage": {}})["marketDate"] is None  # a run made before #22
+    morning = run_slice({**base, "cut_type": "prev_close", "run_type": "INTRADAY", "lineage": {
+        "market_business_date": "2026-10-22", "market_close": {"date": "2026-10-22", "cut_type": "eod_preliminary"}}})
+    assert (morning["cutType"], morning["slice"], morning["marketDate"], morning["marketCutType"]) == (
+        "prev_close", "23.10 · закрытие предв. 22.10", "2026-10-22", "eod_preliminary")  # the morning run (#21)
+    assert older["marketCutType"] is None
 
 
 def test_positions_keep_nulls(store_url, book, client):

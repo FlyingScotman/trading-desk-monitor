@@ -27,7 +27,9 @@ VALUATION_VERSION = 11  # 2: risk per curve (R8); 3: static display fields (R9 D
 
 def logic_version() -> str:
     """``<backend version>+v<VALUATION_VERSION>+core<core version>``, and ``+build<bundle VERSION>`` when run from the
-    Windows bundle (``DESK_BUNDLE_VERSION``, set by deskctl): another value means the code that computes runs changed."""
+    Windows bundle (``DESK_BUNDLE_VERSION``, set by deskctl): the program that made a run. Whether two values compute
+    the same numbers is ``backfill.same_logic``: only ``VALUATION_VERSION`` and the core version count, so a release
+    without changes to the computation does not recompute the history (issue #24)."""
     from rub_fixed_income import __version__ as core
 
     v = f"{__version__}+v{VALUATION_VERSION}+core{core}"

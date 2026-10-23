@@ -27,7 +27,7 @@ Revision 1, 16 October 2026 (component map and interface catalogue refreshed 22 
 | **Frontend** | `trading_desk_monitor` (`prototypes/` today) | Screens for risk, PnL explain, scenarios, bonds | The monitors (`prototypes/concepts/`) on the desk API are the interface; the earlier screens are deprecated |
 | **Market data hub** | `market-data-server` (package `mdhub`) | Collects, validates, versions and serves public market and static data | Deployed on the VPS: hub **0.2.0** in production with the snapshot layer and the history API (verified 21 October 2026, [E2E](../program/E2E_LIVE_2026-10-21.md)). `main` is release v0.3.2 (contract 1.3), installed by the owner |
 | **Calculation core** | `rub-fixed-income-core` (package `rub_fixed_income`) | Pure pricing and risk library, with no I/O | 0.35.0 pinned (22 October 2026): domain model, KBD, `value_portfolio`, horizon explain, and engines for every product of the book ([04](04_BACKEND.md) §7); foreign bonds on their own currency's curve (0.34) and FX forwards for any currency, crosses and NDF fixings (0.35) are used by the backend |
-| **PnL tool** | `pnl_tool` (local, no git) | Standalone accounting-PnL dashboard over the bank's TradeLevel report | Standalone by design; to be connected later as the official-PnL source |
+| **PnL tool** | `pnl_tool` (local, no git) | Standalone accounting-PnL dashboard over the official trade-level PnL report | Standalone by design; to be connected later as the official-PnL source |
 
 ## Where documents live
 

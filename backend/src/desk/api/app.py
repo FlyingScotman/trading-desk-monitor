@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import mimetypes
 import os
 import re
 import sys
@@ -67,6 +68,8 @@ from .models import (
 )
 
 log = logging.getLogger("desk.api")
+# the local fonts (prototypes/fonts/, #79): Python 3.11's table and a Windows registry may not know .woff2
+mimetypes.add_type("font/woff2", ".woff2")
 
 
 def static_root() -> Path:
@@ -177,7 +180,8 @@ def _error(request: Request, status: int, code: str, message: str, details: Any 
 def _header(row: dict[str, Any]) -> dict[str, Any]:
     basis = (row.get("lineage") or {}).get("pnl_basis") or {}
     return {**row, "as_of": row["business_date"], "published_at": row["completed_at"],
-            "label": compat.slice_label(row["business_date"], row["cut_type"], row.get("cut_ts"), row["run_type"]),
+            "label": compat.slice_label(row["business_date"], row["cut_type"], row.get("cut_ts"), row["run_type"],
+                                        (row.get("lineage") or {}).get("market_close")),
             "pnl_basis": basis.get("label")}
 
 
@@ -694,8 +698,10 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
     from .alias_routes import router as alias_router  # /api/v1/instruments/alias(es) (batch 1, item 3)
     from .backup_routes import router as backup_router  # /api/v1/backup: backups, restore drill (desk.backup)
+    from .daystatus_routes import public as daystatus_router  # /api/v1/inbox, /inbox/days, /events (S7b, #25)
     from .diagnostics_routes import router as diagnostics_router
     from .market_history import router as market_history_router  # /api/v1/history/market, /status (R24)
+    from .server_routes import router as server_router  # /api/v1/server: restart, network (settings page)
     from .settings_routes import router as settings_router  # here: it imports ApiError from this module
     from .update_routes import router as update_router
     from .updater_routes import router as updater_router  # GitHub Releases (desk.updater)
@@ -704,6 +710,8 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     app.include_router(update_router, include_in_schema=False)
     app.include_router(updater_router, include_in_schema=False)
     app.include_router(diagnostics_router, include_in_schema=False)
+    app.include_router(server_router, include_in_schema=False)
+    app.include_router(daystatus_router, include_in_schema=False)
     app.include_router(market_history_router, include_in_schema=False)
     app.include_router(autopilot_router)
     app.include_router(alias_router)
@@ -821,9 +829,9 @@ def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir:
     asked: list[bool] = []
 
     def exit_for_restart() -> None:
-        time.sleep(0.5)  # the install response reaches the page first
+        time.sleep(0.5)  # the install (or restart) response reaches the page first
         if autopilot is not None:
-            log.info("restart for an update: waiting for the autopilot's cycle to end")
+            log.info("restart: waiting for the autopilot's cycle to end")
             autopilot.stop(timeout=300)
         server.should_exit = True
 

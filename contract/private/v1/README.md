@@ -1,4 +1,4 @@
-# Private input contract v1 (`private/1.3`)
+# Private input contract v1 (`private/1.4`)
 
 The rows a private adapter emits, one JSON Schema per dataset (`<dataset>.schema.json`) and per reference table of
 `reference()`, authoritative over the design tables of [08 §10](../../../docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md):
@@ -10,7 +10,7 @@ The rows a private adapter emits, one JSON Schema per dataset (`<dataset>.schema
 | `ocp` | the open currency position as the bank reports it (stock) | 1.2 |
 | `cash_balances` | cash balances per book, account and ledger (stock; a file may hold a history, 08 §6.1) | 1.2 |
 | `pnl_official` | the official daily PnL, one row per report line (flow) | 1.2 |
-| `trade_terms` | economic terms of OTC trades: FX forwards, NDFs, FX swap legs (stock) | 1.2 |
+| `trade_terms` | economic terms of OTC trades: FX forwards, NDFs, FX swap legs (stock) | 1.2 (1.4: IRS, OIS and CCS legs, REPO, HTM purchases) |
 | `entities` | `reference()["entities"]`: legal entities and their funding scheme (optional) | 1.2 |
 | `funding_rules` | `reference()["funding_rules"]`: funding basis and rate per selectors, with history (optional) | 1.2 |
 | `funding_policy` | `reference()["funding_policy"]`: the funding conventions that are not a rate (HTM base, timing, REPO policy, write-off), with history (optional) | 1.3 |
@@ -50,7 +50,15 @@ write-off periodicity per book type and its date; 08 §10) and the optional `pos
 provisional conventions and say so (`policy.provisional` of the run's funding block), and an HTM lot is a problem
 until `htm_base` is given.
 
+Minor 1.4 is additive too: `trade_terms` gains the `product_kind` values `irs`, `ois`, `ccs` (one row per leg),
+`repo` and `bond_purchase`, the `side` values `pay`, `receive`, `repo`, `reverse_repo`, and their optional fields
+(`ccy`, `notional_ccy`, `start_date`, `maturity_date`, `fixed_rate_pct`, `index_code`, `spread_bp`,
+`payment_frequency`, `day_count`, `notional_exchange`, the instrument fields, `quantity`, `face_amount_ccy` and the
+HTM purchase fields of `positions`). Which product needs which field is in 08 §10 under the `trade_terms` table. A
+1.0–1.3 adapter stays valid; one that emits the new products needs a backend on 1.4 (an older one rejects those
+units with `bad_value`). The backend stores them; valuation of swaps and funding of REPO and HTM lots from these
+terms come with their slices.
+
 Open points (the contract leaves them to the adapter's data and to later minors, 08 §10 "Drafts"): which ledger of
 `cash_balances` is authoritative on a break; the hub fixing a `trade_terms.fixing_source` maps to; the default day
-count of a `funding_rules` row without `day_count`; REPO and swap terms (the REPO *policy* is `funding_policy` since
-1.3); extra spreads by bond class; the `price_policy` table.
+count of a `funding_rules` row without `day_count`; extra spreads by bond class; the `price_policy` table.

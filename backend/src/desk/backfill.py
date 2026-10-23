@@ -18,8 +18,8 @@ upgrade recomputes only the latest date. Nothing ever computed an older date.
    book whose report did not come that day is carried forward from its last report, as every run does; a date
    before the first report of every book has no positions and no run. A date needs a run when it has none, or its
    default run read other position sets, another market snapshot (a hub correction), another previous close, or was
-   made by another ``logic_version()`` without its ``+build`` part (``same_logic``: a new valuation, backend or core
-   version recomputes the history, a new Windows bundle of the same code does not). Otherwise it is skipped: nothing
+   made by another valuation or core version (``same_logic``: ``VALUATION_VERSION`` and the core version of
+   ``logic_version()`` recompute the history; a new release or Windows bundle of the same computation does not). Otherwise it is skipped: nothing
    is computed twice.
 3. **runs**, oldest first: the date's bundle and the previous date's (flash PnL) from the hub when not cached
    (``cache.sync``), then ``cli.eod_run``, the code path of every EOD run. The prepared market of a date is kept for
@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -136,11 +137,23 @@ def hub_rows(client: Any, date_from: date) -> list[tuple[str, str]]:
     return out
 
 
+def logic_key(v: str | None) -> str | None:
+    """What of a ``logic_version()`` value decides the numbers: ``v<VALUATION_VERSION>+core<core version>``, without
+    the backend version and the bundle build (a release without changes to the computation, issue #24). The values
+    stamped by older releases have the same parts, so they need no migration. A value without them is kept whole
+    (less its build)."""
+    if not v:
+        return v
+    v = v.split("+build", 1)[0]
+    val = re.search(r"(?:^|\+)v(\d+)(?=\+|$)", v)
+    core = re.search(r"\+core(.+)$", v)
+    return f"v{val.group(1)}+core{core.group(1)}" if val and core else v
+
+
 def same_logic(a: str | None, b: str | None) -> bool:
-    """Two ``logic_version()`` values compute the same numbers: equal once the bundle build is dropped."""
-    def strip(v: str | None) -> str | None:
-        return v.split("+build", 1)[0] if v else v
-    return strip(a) == strip(b)
+    """Two ``logic_version()`` values compute the same numbers: the same ``logic_key`` (VALUATION_VERSION and the
+    core version)."""
+    return logic_key(a) == logic_key(b)
 
 
 def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: date,
