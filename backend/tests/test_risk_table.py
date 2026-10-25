@@ -395,3 +395,7 @@ def test_the_run_summary_keeps_the_ofz_ruonia_risk():
     assert s["ofzRuo"] == pytest.approx(-3050.0 - 1000.0)  # what the «КБД» view takes off RUONIA
     assert s["pos"]["NEW"][11] == pytest.approx(-3050.0) and s["pos"]["OLD"][11] is None
     assert s["pos"]["NEW"][1] == pytest.approx(-3050.0) and s["pos"]["NEW"][3] == pytest.approx(-3000.0)
+    # a run before 0.2.6 has no OFZ on the KBD: ofzRuo is null, so the «КБД» history takes its basis off RUONIA as
+    # before (0.0 would leave RUONIA whole and count the OFZ twice)
+    early = summary.build([row("OLD", {"RUB RUONIA": {"7Y": -3000.0}}, None, None)])
+    assert early["ofzRuo"] is None and early["dv01"] == pytest.approx({"RUB RUONIA": -3000.0})

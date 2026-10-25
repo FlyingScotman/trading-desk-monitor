@@ -20,7 +20,8 @@ row without ``ofz_ruonia01`` has its KBD risk there, the basis again: variant P)
 OFZ's RUONIA risk (``ofzRuo``: ``ofz_ruo``, else the basis) with the basis on the KBD.
 A position's ``basis`` is ``basis_of`` as it is, an OFZ-IN's nominal proxy included (the pages tell it by the position,
 ``ofz_in_proxy``); the run's sum ``basis`` leaves the proxies out, ``basisIn`` is their sum (TDM#173); ``ofzRuo`` sums the
-RUONIA risk of the OFZ whose basis is in ``basis`` (an OFZ-PK's basis is its own spread, it has none)."""
+RUONIA risk of the OFZ whose basis is in ``basis`` (an OFZ-PK's basis is its own spread, it has none); it is null in a
+run with no OFZ on the KBD (before 0.2.6), whose KBD view takes the basis off RUONIA as before."""
 
 from __future__ import annotations
 
@@ -149,6 +150,7 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     mv_type: dict[str, float] = {}
     mv_ccy: dict[str, float] = {}
     cs01 = basis = basis_pk = basis_in = ofz_spr = ofz_ruo = 0.0
+    kbd_ofz = False  # a run before 0.2.6 has no OFZ on the KBD: its ofzRuo is null, not 0 (the pages read null)
     pnl: dict[str, float] | None = None
     pos: dict[str, list] = {}
     for x in rows:
@@ -170,6 +172,7 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         else:
             basis += b
             if x.get("ofz_basis") is not None:  # an OFZ on the KBD: its RUONIA risk, the basis again without one (P)
+                kbd_ofz = True
                 ofz_ruo += x["ofz_ruo"] if x.get("ofz_ruo") is not None else b
         if (g, k) == ("GOV", "PK"):  # an OFZ-PK's basis is its own spread to RUONIA, no KBD risk (the KBD view)
             basis_pk += b
@@ -188,7 +191,7 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
                                  _r(x["spread_bp"], 2), {c: round(v, 2) for c, v in curves.items() if v},
                                  _r(x.get("dm_bp"), 2), _r(spr, 2), _r(x.get("ofz_ruo"), 2)]
     return {"dv01": dv01, "cs01": cs01, "basis": basis, "basisPk": basis_pk, "basisIn": basis_in, "ofzSpr": ofz_spr,
-            "ofzRuo": ofz_ruo,
+            "ofzRuo": ofz_ruo if kbd_ofz else None,
             "dv01Book": book,
             "mvType": mv_type,
             "mvCcy": mv_ccy, "pnl": pnl, "pos": pos}
