@@ -515,16 +515,49 @@
   };
 
   // ход «Истории прогонов» (сервер досчитывает прошлые даты от самой ранней, R23): пока есть даты к расчёту, чип
-  // в шапке говорит, сколько готово, — история риска, MTD/YTD и изменения позиций прошлых дат появляются по мере расчёта
+  // в шапке говорит, сколько готово, — история риска, MTD/YTD и изменения позиций прошлых дат появляются по мере расчёта.
+  // #23/#163: «догрузка истории N из M · K не сходятся» — K: даты, которые бэкфилл пометил проблемными (не сходятся
+  // после двух прогонов, упали, раз за разом упираются в базу или сеть), и даты хаба, которые не загружаются (шаг sync,
+  // problem_dates: ошибка, попытки, следующая попытка); в подсказке — даты и причины. Серый — остались только такие даты.
+  // j — GET /api/v1/backfill/status; null — индикатора нет.
+  const dmy = iso => iso ? iso.slice(8, 10) + '.' + iso.slice(5, 7) + '.' + iso.slice(0, 4) : '';
+  const BF_WHY = { 'no default run': 'нет прогона', 'positions changed': 'изменились позиции', 'market snapshot changed': 'исправлен рынок',
+    'previous snapshot changed': 'изменилось прошлое закрытие', 'program updated': 'обновилась программа' };
+  K.backfillStatus = function (j) {
+    if (!j) return null;
+    const on = j.enabled !== false, todo = on ? j.todo || 0 : 0, seen = {}, lines = [];
+    (on ? j.problem_dates || [] : []).forEach(p => {
+      seen[p.date] = 1;
+      lines.push(dmy(p.date) + ' — ' + (p.error && p.error.indexOf('does not converge') === 0 ? 'не сходится после пересчёта (' + (BF_WHY[p.why] || p.why) + ')'
+        : (BF_WHY[p.why] || p.why || 'расчёт упал') + (p.error ? ': ' + p.error : '')) + (p.attempts ? ', попыток: ' + p.attempts : ''));
+    });
+    (j.hub_problem_dates || []).forEach(p => {
+      if (seen[p.date]) return;
+      seen[p.date] = 1;
+      const nx = p.next_attempt ? msk(p.next_attempt) : null;
+      lines.push(dmy(p.date) + ' — с хаба не загружается: ' + (p.error || 'ошибка') + ', попыток: ' + p.attempts + (nx ? ', следующая попытка ' + ddmm(nx.iso) + ' ' + nx.hm : ''));
+    });
+    const k = lines.length;
+    if (!todo && !k) return null;
+    const total = j.total != null ? j.total : (j.done || 0) + (j.todo || 0) + (j.failed || 0), grey = !todo;
+    const eta = todo && j.eta_s ? (j.eta_s < 5400 ? Math.max(1, Math.round(j.eta_s / 60)) + ' мин' : Math.round(j.eta_s / 3600) + ' ч') : null;
+    const title = (grey ? 'Остались только даты, которые не сходятся: их расчёт не получается, сервер пробует снова, когда изменятся данные или программа. '
+      : 'Сервер досчитывает прошлые даты с ' + dmy(j.from) + ', от самой ранней: история риска, PnL с начала месяца и года и позиции прошлых дат появляются по мере расчёта (обновите страницу). ' +
+        'Следующие: ' + (j.next || []).map(dmy).join(', ') + '.' + (eta ? ' Осталось расчёта ≈ ' + eta + ' (по одной дате за раз, между циклами автопилота).' : '') + ' ') +
+      (k ? '\nНе сходятся (' + k + '):\n' + lines.slice(0, 15).join('\n') + (k > 15 ? '\n… ещё ' + (k - 15) : '') + '\n' : '') +
+      'Подробности — Настройки → «История прогонов».';
+    return { text: '⟳ догрузка истории ' + (j.done || 0) + ' из ' + total + (k ? ' · ' + k + ' не сходятся' : ''), title, grey };
+  };
   function backfillChip(bar) {
     const ch = h('a', 'k-chip'); ch.href = '../settings.html#bf'; ch.style.cssText = 'display:none;text-decoration:none;border-color:var(--warn)';
     bar.querySelector('[data-a=search]').before(ch);
     const poll = () => fetch('../api/v1/backfill/status', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).then(j => {
-      if (!j || !j.enabled || !j.todo) { ch.style.display = 'none'; return; }
-      const all = j.done + j.todo + (j.failed || 0);
-      ch.style.display = ''; ch.textContent = '⟳ история: ' + j.done + ' из ' + all + ' дат';
-      ch.title = 'Сервер досчитывает прошлые даты с ' + j.from + ', от самой ранней: история риска, PnL с начала месяца и года и позиции прошлых дат появляются по мере расчёта (обновите страницу). Следующие: ' + (j.next || []).join(', ') + '. Подробности — Настройки → «История прогонов».';
-      setTimeout(poll, 120e3);
+      const s = K.backfillStatus(j);
+      if (s) {
+        ch.style.display = ''; ch.textContent = s.text; ch.title = s.title;
+        ch.style.borderColor = s.grey ? 'var(--line)' : 'var(--warn)'; ch.style.color = s.grey ? 'var(--fg-3)' : '';
+      } else ch.style.display = 'none';
+      if (s) setTimeout(poll, 120e3);
     }).catch(() => { });
     poll();
   }
