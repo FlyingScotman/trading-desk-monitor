@@ -225,7 +225,7 @@
       const heat = st.metric === 'cs01' ? v => K.heatMono(v, max, '227,179,65') : v => K.heatRisk(v, max);
       const groups = ['DER', 'GOV', 'SUB', 'CORP', 'OTH'];
       const tot = M.buckets.map((_, k) => rows.reduce((s, r) => s + r.vals[k], 0)); let c = 0; const cum = tot.map(v => c += v);
-      let html = '<table class="k-tbl"><thead><tr><th>Тип · ' + METN[st.metric] + '</th>' + M.buckets.map(b => '<th class="n">' + b + '</th>').join('') + '<th class="n">Итого</th><th>Профиль</th></tr></thead><tbody>';
+      let html = '<table class="k-tbl" data-vk="c02-heat-' + ccy + '" data-title="Риск по типам и срокам, ' + ccy + '"><thead><tr><th>Тип · ' + METN[st.metric] + '</th>' + M.buckets.map(b => '<th class="n">' + b + '</th>').join('') + '<th class="n">Итого</th><th>Профиль</th></tr></thead><tbody>';
       groups.forEach(g => {
         const gr = rows.filter(r => r.t.group === g); if (!gr.length) return;
         const glist = gr.flatMap(r => r.list);
@@ -241,10 +241,11 @@
       html += '</tbody><tfoot><tr><td>Итого</td>' + tot.map((v, k) => '<td class="n">' + K.d({ title: ccy + ' · ' + METN[st.metric] + ' · ' + M.buckets[k], unit: 'тыс ₽/бп', dim: 'kind', rows: bucketRows(L, ccy, st.metric, k) }, null, '') + '</td>').join('') + '<td class="n">' + f.dv(sumArr(tot)) + '</td><td></td></tr>' +
         '<tr><td class="mut">кумулятив</td>' + cum.map(v => '<td class="n mut">' + f.dv(v) + '</td>').join('') + '<td></td><td></td></tr></tfoot></table>';
       bd.innerHTML = html;
+      K.tableToolsAll(bd);
     }
     if (st.view === 'table') {
       const el = K.h('div'); bd.appendChild(el);
-      K.bucketTable(el, ccy, { cs01: true });
+      K.bucketTable(el, ccy, { cs01: true, viewKey: 'c02-buckets-' + ccy });
     }
   }
   function profile(vals, max, color) {
@@ -265,11 +266,12 @@
     const max = Math.max(1, ...rows.flatMap(r => r.vals.map(Math.abs)));
     const heat = issMet === 'cs01' ? v => K.heatMono(v, max, '227,179,65') : v => K.heatRisk(v, max);
     const nm = issMet === 'cs01' ? 'CS01' : 'DV01';
-    bd.innerHTML = '<table class="k-tbl"><thead><tr><th>Эмитент</th><th>Рейт.</th><th>Вал.</th>' + M.buckets.map(b => '<th class="n">' + b + '</th>').join('') + '<th class="n">' + nm + '</th><th class="n">MV, mm ₽</th></tr></thead><tbody>' +
+    bd.innerHTML = '<table class="k-tbl" data-vk="c02-issuer-tenor" data-title="Эмитент × срок, ' + nm + ', тыс ₽/бп"><thead><tr><th>Эмитент</th><th>Рейт.</th><th>Вал.</th>' + M.buckets.map(b => '<th class="n">' + b + '</th>').join('') + '<th class="n">' + nm + '</th><th class="n">MV, mm ₽</th></tr></thead><tbody>' +
       rows.map(r => '<tr><td class="lbl"><b style="color:' + K.issuerColor(r.id) + '">●</b> ' + esc(r.iss.short) + ' <span class="mut3">' + esc(r.iss.sector) + '</span></td><td class="mut">' + esc(r.iss.rating) + '</td><td>' + [...new Set(r.list.map(p => p.ccy))].sort((a, b) => M.ccyOrder[a] - M.ccyOrder[b]).map(K.ccyTag).join(' ') + '</td>' +
         r.vals.map((v, k) => '<td class="n" style="' + heat(v) + '">' + (Math.abs(v) < 300 ? '<span class="mut3">·</span>' : K.d({ title: r.iss.short + ' · ' + nm + ' · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: r.list.map(p => ({ p, v: val(p, k) })) }, null, '')) + '</td>').join('') +
         '<td class="n"><b>' + K.d({ title: r.iss.short + ' · ' + nm, unit: 'тыс ₽/бп', rows: r.list.map(p => ({ p, v: M.buckets.reduce((s, _, k) => s + val(p, k), 0) })) }, null, '') + '</b></td><td class="n mut">' + f.mn(M.sum(r.list, 'mv'), 0) + '</td></tr>').join('') +
       '</tbody></table>' + (n > 18 ? '<div class="iss-more"><a href="#" id="issMore">' + (issAll ? 'показать первые 18' : 'показать всех (' + n + ')') + '</a></div>' : '');
+    K.tableToolsAll(bd);
     const a = bd.querySelector('#issMore'); if (a) a.onclick = e => { e.preventDefault(); issAll = !issAll; drawIssuers(); };
   }
   K.seg(document.querySelector('#iss .met'), [['cs01', 'CS01'], ['dv01', 'DV01 ставки']], issMet, v => { issMet = v; drawIssuers(); });
@@ -337,9 +339,10 @@
     const types = M.typeRows.map(t => ({ t, xs: simRes.filter(x => typeOf(x.p) === t.id) })).filter(r => r.xs.some(x => Math.abs(x.t) > 1));
     const mx = Math.max(1, ...types.map(r => Math.abs(M.sum(r.xs, 't'))));
     const cell = (xs, key, title) => { const v = M.sum(xs, key); return Math.abs(v) < 500 ? '<span class="mut3">·</span>' : K.d({ title, unit: 'mm ₽', fmt: v => f.mns(v, 1), rows: xs.map(x => ({ p: x.p, v: x[key] })) }); };
-    bd.querySelector('.stbl').innerHTML = '<table class="k-tbl"><thead><tr><th>Тип</th><th class="n">Ставки</th><th class="n">Базис</th><th class="n">Спреды</th><th class="n">Итого, mm ₽</th><th style="width:90px"></th></tr></thead><tbody>' +
+    bd.querySelector('.stbl').innerHTML = '<table class="k-tbl" data-vk="c02-shift-types" data-title="Сдвиг кривых: эффект по типам, mm ₽"><thead><tr><th>Тип</th><th class="n">Ставки</th><th class="n">Базис</th><th class="n">Спреды</th><th class="n">Итого, mm ₽</th><th style="width:90px"></th></tr></thead><tbody>' +
       types.map(r => { const v = M.sum(r.xs, 't'); return '<tr><td class="lbl"><b style="color:' + K.kindColor[r.t.kind] + '">●</b> ' + esc(r.t.label) + '</td><td class="n">' + cell(r.xs, 'r', r.t.label + ' · ставки') + '</td><td class="n">' + cell(r.xs, 'b', r.t.label + ' · базис') + '</td><td class="n">' + cell(r.xs, 'c', r.t.label + ' · спреды') + '</td><td class="n"><b>' + cell(r.xs, 't', r.t.label + ' · итого') + '</b></td><td>' + K.bar(v, mx) + '</td></tr>'; }).join('') +
       '</tbody><tfoot><tr><td>Итого</td><td class="n">' + f.mns(T('r'), 1) + '</td><td class="n">' + f.mns(T('b'), 1) + '</td><td class="n">' + f.mns(T('c'), 1) + '</td><td class="n ' + f.cls(T('t')) + '">' + f.mns(T('t'), 1) + '</td><td></td></tr></tfoot></table>';
+    K.tableToolsAll(bd.querySelector('.stbl'));
     if (simChart) simChart.redraw();
   }
 
