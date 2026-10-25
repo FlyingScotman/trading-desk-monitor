@@ -86,7 +86,9 @@ def ctx():
     return prepare(SnapshotDir(SNAPS), DATE.isoformat())
 
 
-def _scan(con, tmp_path: Path, policy: bool = True, rules: bool = True) -> None:
+def _scan(con, tmp_path: Path, policy: bool = True, rules: bool = True,
+          cash: tuple[tuple[str, str], ...] = (("cash_balances_20261014.csv", CASH1),
+                                               ("cash_balances_20261015.csv", CASH2))) -> None:
     cfg, inbox = tmp_path / "cfg", tmp_path / "in"
     cfg.mkdir()
     inbox.mkdir()
@@ -95,13 +97,12 @@ def _scan(con, tmp_path: Path, policy: bool = True, rules: bool = True) -> None:
         if text:
             _csv(cfg / name, text)
     # positions are start_of_day: the file of the 15th is the book of the 14th (and the 16th's of the 15th)
-    for name, text in (("positions_20261015.csv", DAY1), ("positions_20261016.csv", DAY2),
-                       ("cash_balances_20261014.csv", CASH1), ("cash_balances_20261015.csv", CASH2)):
+    for name, text in (("positions_20261015.csv", DAY1), ("positions_20261016.csv", DAY2), *cash):
         _csv(inbox / name, text)
     s = Settings(snapshot_cache=SNAPS, inbox_dirs=(inbox,), inbox_archive=tmp_path / "archive", private_adapter=None,
                  private_adapter_config=cfg, inbox_poll_seconds=0, inbox_lookback_days=0)
     r = scan.scan(con, s)
-    assert r.ok and r.files == {"accepted": 4}, r.text()
+    assert r.ok and r.files == {"accepted": 2 + len(cash)}, r.text()
 
 
 def _runs(con, ctx) -> tuple[int, int, list]:
@@ -327,3 +328,39 @@ def test_period_start(store_url, ctx):
         assert funding_run.period_start(con, DATE, view) == PREV
         assert funding_run.period_start(con, date(2026, 10, 19), None) == date(2026, 10, 16)  # Monday: the Friday
         assert funding_run.period_start(con, DATE, None) == DATE - timedelta(days=1)
+
+
+# ---- B3 cash (#61): a history file, balances by ledger -----------------------------------------------------------
+
+CASH_HISTORY = """_report_date;entity;book_id;ccy;account_id;balance_ccy;ledger
+2026-10-14;ENT1;D1;RUB;MAIN;-60000000;S1
+2026-10-14;ENT1;D1;RUB;MARGIN;-40000000;S1
+2026-10-14;ENT1;D1;RUB;MAIN;-100000000;S2
+2026-10-14;ENT2;C1;RUB;MAIN;50000000;S1
+2026-10-14;ENT2;C1;RUB;MAIN;49000000;S2
+2026-10-14;ENT1;T1;RUB;MAIN;7000000;S1
+;ENT1;D1;RUB;MAIN;-120000000;S1
+;ENT1;D1;RUB;MAIN;-120000000;S2
+;ENT2;C1;RUB;MAIN;55000000;S1
+;ENT2;C1;RUB;MAIN;55000000;S2
+"""
+
+
+def test_cash_history_and_ledgers_fund_the_cash_books(store_url, ctx, tmp_path):
+    """One multi-date file of the 15th carries the 14th's balances too (08 §6.1): the previous-day base of the 15th's
+    period. Two ledgers that agree (D1: S1's two accounts sum to S2's one) fund the book; two that disagree (C1 of the
+    entity funded on its whole cash) are a problem, not funded, and not reported a second time as missing cash."""
+    with store.connect(store_url) as con:
+        _scan(con, tmp_path, cash=(("cash_balances_20261015.csv", CASH_HISTORY),))
+        _, rid2, _ = _runs(con, ctx)
+    f = TestClient(create_app(store_url)).get(f"/api/v1/runs/{rid2}/funding").json()
+    assert f["state"] == "computed"
+    lines = {x["ref"]: x for x in f["lines"]}
+    ruo = ctx.market.latest_fixing("RUONIA")[1] / 100
+    assert lines["D1|RUB"]["body_ccy"] == pytest.approx(-100_000_000)  # the 14th's, from the history rows
+    assert lines["D1|RUB"]["interest_rub"] == pytest.approx(-100_000_000 * ruo / 365)
+    assert "C1|RUB" not in lines and "T1|RUB" not in lines
+    probs = [(p["kind"], p["ref"], p["reason"]) for p in f["problems"]]
+    assert len(probs) == 1 and probs[0][:2] == ("CASH", "C1|RUB")
+    assert "расхождение" in probs[0][2] and "S1, S2" in probs[0][2] and "1,000,000.00 RUB" in probs[0][2]
+    assert {b["book_id"]: b["problems"] for b in f["books"]}["C1"] == 1

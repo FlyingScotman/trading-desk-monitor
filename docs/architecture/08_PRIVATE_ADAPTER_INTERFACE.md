@@ -361,7 +361,7 @@ delivered at once.
 | `account_id` ● | str | The account or ledger line; a constant if the report has one line per currency |
 | `balance_ccy` ● | num | `+` placed, `−` borrowed |
 | `account_kind` | str | For example settlement, margin, nostro |
-| `ledger` | str | The bookkeeping system the balance comes from, as the adapter codes it, when the same balance is reported by more than one system (their reconciliation is a backend screen, S9). Which system is authoritative on a break is not part of the contract |
+| `ledger` | str | The bookkeeping system the balance comes from, as the adapter codes it, when the same balance is reported by more than one system (their reconciliation is a backend screen, S9: the monitors' C15, `desk.cash`). Which system is authoritative on a break is not part of the contract: the backend compares the ledgers' sums per (`entity`, `book_id`, `ccy`) over the accounts, and a balance whose ledgers differ by more than max(0.01, 1e-8 × |balance|) (the rule of §6.4) has no known value, so it is not funded and is a funding problem; ledgers that agree, or one ledger alone, give the balance |
 
 ### `pnl_official` — flow; `full_snapshot`, scope `["entity", "book_id"]`, `time_basis = end_of_day`; may be multi-date (§6.1)
 

@@ -530,13 +530,18 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
                        + ", ".join(concepts.CROSS_CCY_KINDS) + "): " + "; ".join(
                            f"{k}: {v}" for k, v in concepts.ATTRIBUTIONS.items())
                        + f". Default {concepts.ATTRIBUTION_DEFAULT!r}, provisional (UI-02)"),
-                   book: str | None = Query(None, description="comma-separated books; all when omitted")):
+                   book: str | None = Query(None, description="comma-separated books; all when omitted"),
+                   ofz_view: Literal["kbd", "basis"] = Query(
+                       concepts.OFZ_VIEW_DEFAULT, description="how the OFZ risk is shown, as the monitors' switch "
+                       "(TDM#173): " + "; ".join(f"{k}: {v}" for k, v in concepts.OFZ_VIEWS.items())
+                       + f". Default {concepts.OFZ_VIEW_DEFAULT!r}: its fields add up without counting a risk twice")):
         """Aggregated risk as a matrix: currencies x instrument types (UI-02, R38; ``concepts.risk_table``)."""
         run = _run_or_404(con, run_id)
         books = [b.strip() for b in book.split(",") if b.strip()] if book else None
         items, fx = concepts.risk_items(con, run, books)
         gov = concepts.gov_issuers(con, run_id)
-        return _cached(request, run, RiskTable(run_id=run_id, **concepts.risk_table(items, fx, attribution, gov)))
+        return _cached(request, run, RiskTable(run_id=run_id,
+                                               **concepts.risk_table(items, fx, attribution, gov, ofz_view)))
 
     @app.get("/api/v1/runs/{run_id}/risk", response_model=RiskPayload)
     def risk(con: Con, run_id: int, request: Request):
@@ -698,6 +703,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
     from .alias_routes import router as alias_router  # /api/v1/instruments/alias(es) (batch 1, item 3)
     from .backup_routes import router as backup_router  # /api/v1/backup: backups, restore drill (desk.backup)
+    from .cash_routes import public as cash_router  # /api/v1/cash: balances and ledger breaks (B3, #61)
     from .daystatus_routes import public as daystatus_router  # /api/v1/inbox, /inbox/days, /events (S7b, #25)
     from .diagnostics_routes import router as diagnostics_router
     from .market_history import router as market_history_router  # /api/v1/history/market, /status (R24)
@@ -712,6 +718,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     app.include_router(diagnostics_router, include_in_schema=False)
     app.include_router(server_router, include_in_schema=False)
     app.include_router(daystatus_router, include_in_schema=False)
+    app.include_router(cash_router, include_in_schema=False)
     app.include_router(market_history_router, include_in_schema=False)
     app.include_router(autopilot_router)
     app.include_router(alias_router)
