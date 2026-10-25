@@ -139,6 +139,24 @@ t('#131 + #153: CSV ручной таблицы — отрицательные �
   }
 });
 
+t('#131 + #105: CSV ручной таблицы — единица второй строкой шапки через запятую, без повтора; валюта отчёта', () => {
+  const head = [['Книга', { h: 'DV01<span class="k-thu">тыс ₽/бп</span>', cls: 'n' }, { h: 'MV, mm ₽<span class="k-thu">mm ₽</span>', cls: 'n' }, { h: 'Итого, mm ₽', cls: 'n' }]];
+  const body = [['A', { h: '1', cls: 'n' }, { h: '2', cls: 'n' }, { h: '3', cls: 'n' }]];
+  const rub = load(new Map()).K;
+  const L = rub.tableCsv(table({ head, body }), { title: 'Кэрри, тыс ₽' }).split('\r\n');
+  assert.strictEqual(L[2], 'Книга,"DV01, тыс ₽/бп","MV, mm ₽","Итого, mm ₽"', 'единица не задваивается');
+  assert.ok(L[0].includes('таблица,"Кэрри, тыс ₽"'));
+  // отчёт в долларах: «₽» в подписях и названии — символ валюты отчёта (K.u)
+  const usd = load(new Map([['concepts-repr', 'USD']])).K;
+  assert.strictEqual(usd.repr, 'USD');
+  const U = usd.tableCsv(table({ head, body }), { title: 'Кэрри, тыс ₽' }).split('\r\n');
+  assert.strictEqual(U[2], 'Книга,"DV01, тыс $/бп","MV, mm $","Итого, mm $"');
+  assert.ok(U[0].includes('таблица,"Кэрри, тыс $"'));
+  assert.ok(!U.join('\n').includes('₽'));
+  // ключ ширины — без единицы: не зависит от валюты отчёта
+  same(usd.colKeys(table({ head }).tHead.rows[0].cells), ['h:Книга', 'h:DV01', 'h:MV, mm ₽', 'h:Итого, mm ₽']);
+});
+
 t('#131: K.tableTools — кнопки под таблицей, ширина колонок запоминается по viewKey, сброс, повторный вызов', () => {
   const store = new Map(), { K } = load(store);
   const mk = () => table({ head: [['Книга', { h: 'MV', cls: 'n', k: 'mv' }, 'Прим.']], body: [['A', { h: '1', cls: 'n' }, 'x']] });
