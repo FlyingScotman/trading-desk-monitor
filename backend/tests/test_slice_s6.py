@@ -334,3 +334,11 @@ def test_parity_fixture_is_current(golden):
     sector = next(c for c in doc["cases"] if c["name"] == "sector")
     s02 = next(x for x in sector["expected"]["positions"] if x["position_id"] == "S02")
     assert s02["spread"] == pytest.approx(-21.5 * (0.5 * 412.25 + 300 + 40))
+
+
+def test_exact_context_takes_the_runs_curve_risk_unit(golden):
+    """#171: a run made with ``quote_curve_risk`` (its lineage flag, ``scenario.jobs``) is repriced with its curves in
+    the same unit as its Taylor factors; a run without the flag, as before."""
+    snaps, _, run, *_ = golden
+    assert not exact._context(snaps, run, None).quote_curve_risk
+    assert exact._context(snaps, {**run, "quote_curve_risk": True}, None).quote_curve_risk

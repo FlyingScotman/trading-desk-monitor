@@ -538,3 +538,53 @@ def test_foreign_bonds_on_their_own_curve(tmp_path):
     ref = {c["curve_id"]: c for c in tdm_run.curves_reference(replace(ctx, proxy_curves=True), None, rows, [])}
     assert ref["USD UST"]["ccy"] == "USD" and ref["USD UST"]["kind"] == "bond" and ref["CNY XCCY"]["ccy"] == "CNY"
     assert "валютные облигации: CNY XCCY exact 1, USD UST assumed 1" in tdm_run.fx_log(ctx, pos)[0][1]
+
+
+def test_quote_curve_risk_behind_its_setting(ctx, tmp_path):
+    """#171, core 0.38 ``quote_curve_risk``: with the setting, the risk of the foreign curves core can rebuild from their
+    quotes is in those quotes (an FX product's CNY XCCY buckets, a bond's on a USD proxy); PV is the same, the unit and
+    the job ID change, and the run's lineage says which unit each curve is in. Off (the default) every call keeps its
+    snapshot, policy and bytes; a RUB-only book keeps them with the setting too."""
+    from rub_fixed_income import ParYieldCurveRequest, XccyCurveBootstrapRequest
+
+    from desk.orchestrator import value
+
+    assert not ctx.quote_curve_risk and ctx.fx_risk_market == ctx.risk_market
+    assert isinstance(ctx.fx.quote_entries["CNY XCCY"].curve, XccyCurveBootstrapRequest)
+    assert ctx.lineage()["quote_curve_risk"] is False and ctx.curve_units()["CNY XCCY"] == "zero"
+    on = replace(ctx, quote_curve_risk=True)
+    assert on.lineage()["curve_units"] == {"RUB OFZ": "kbd_par", "RUB KEY": "zero", "RUB RUONIA": "ois_quote",
+                                           "BYN FX": "zero", "CNY FX": "zero", "CNY XCCY": "xccy_quote_fx",
+                                           "USD FX": "zero"}
+    # bonds: the XCCY curve stays built (core 0.38 takes XCCY quotes for FX products only)
+    assert on.risk_market.curve("CNY XCCY") == ctx.core_market.curve("CNY XCCY")
+    assert isinstance(on.fx_risk_market.curve("CNY XCCY").curve, XccyCurveBootstrapRequest)
+    rub = [value(c, [("SU26238RMFS4", 10.0)], fallback=False, second_order=True)[0] for c in (ctx, on)]
+    assert rub[0].core_result.job_id == rub[1].core_result.job_id
+    xccy = fxcurves.FxOptions(foreign_curve="xccy")
+    rows = [BOOK[0], BOOK[2], BOOK[3]]
+    (off_v, off_r), (on_v, on_r) = (dv.value(c, requests(rows), options=xccy) for c in (ctx, on))
+    assert off_r.job_id != on_r.job_id
+    for pid in ("P-T1", "P-T3"):
+        a, b = off_v[pid], on_v[pid]
+        assert b.pv_rub == pytest.approx(a.pv_rub, abs=1e-6)
+        assert "quote_curve" in b.extra["core"]["model_flags"] and "quote_curve" not in a.extra["core"]["model_flags"]
+        x0, x1 = (sum(v.curve_buckets["CNY XCCY"].values()) for v in (a, b))
+        assert x1 != pytest.approx(x0, rel=1e-4) and x1 == pytest.approx(x0, rel=0.05)  # another unit, the same size
+    # USD on the UST proxy (proxy_curves_for_risk): its par yields with the setting
+    sd = synthetic_dir(tmp_path)
+    base = replace(prepare(sd, DATE), proxy_curves=True)
+    assert isinstance(base.fx.quote_entries["USD UST"].curve, ParYieldCurveRequest)
+    out = {}
+    for flag in (False, True):
+        c = replace(base, quote_curve_risk=flag)
+        out[flag] = {o.secid: o for o in value(c, [(USD_BOND, 10.0), (CNY_BOND, 10.0)])}
+        assert c.curve_units()["USD UST"] == ("par_yield_quote" if flag else "zero")
+    for s, unit in ((USD_BOND, "par_yield_quote"), (CNY_BOND, "continuous_zero")):
+        a, b = out[False][s].valuation, out[True][s].valuation
+        assert b.pv_rub == pytest.approx(a.pv_rub, abs=1e-6)
+        (row,) = [p for p in out[True][s].core_result.positions if p.instrument_id.startswith(s)]
+        assert row.curve_basis == unit
+    usd0, usd1 = (sum(out[f][USD_BOND].valuation.risk()["USD UST"].values()) for f in (False, True))
+    assert usd1 != pytest.approx(usd0, rel=1e-4) and usd1 == pytest.approx(usd0, rel=0.05)
+    assert out[True][CNY_BOND].valuation.risk() == out[False][CNY_BOND].valuation.risk()  # a CNY bond: the built curve

@@ -53,8 +53,10 @@ from rub_fixed_income import (
     FxForwardLeg,
     FxFuturesContract,
     FxFuturesInstrument,
+    ParYieldCurveRequest,
     Position,
     ValuationPolicy,
+    XccyCurveBootstrapRequest,
     joint_calendar,
     value_portfolio,
 )
@@ -366,13 +368,17 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
     if not instruments:
         return out, None
     used = {RUONIA_OIS_CURVE_ID, *curve_of.values(), *(a for _, a in fallbacks)}
-    # risk on RUONIA in its OIS par quotes, as the bonds' (EodContext.quote_curves)
-    snap = replace(ctx.risk_market, quotes=(), fixings=(), curves=tuple(c for c in ctx.risk_market.curves
-                                                                         if c.curve_id in used),
+    # risk on RUONIA in its OIS par quotes, as the bonds' (EodContext.quote_curves); with the setting quote_curve_risk
+    # the CNY XCCY curve as its par quotes too (EodContext.fx_risk_market), rebuilt by core on every shock
+    market = ctx.fx_risk_market
+    snap = replace(market, quotes=(), fixings=(), curves=tuple(c for c in market.curves if c.curve_id in used),
                    calendars=(*ctx.core_market.calendars, *calendars.values()),
                    futures_quotes=tuple(quotes))
+    # core's quote_curve_risk only when the call holds quotes it takes for them: a call without keeps its job ID
+    quoted = any(isinstance(c.curve, XccyCurveBootstrapRequest | ParYieldCurveRequest) for c in snap.curves)
     policy = ValuationPolicy(RUONIA_OIS_CURVE_ID, include_second_order=second_order,
-                             fx_curve_fallbacks=tuple(fallbacks))
+                             fx_curve_fallbacks=tuple(fallbacks),
+                             quote_curve_risk=ctx.quote_curve_risk and quoted)
     result = value_portfolio(run_id=f"desk-eod-{bd}-derivatives", as_of=ctx.core_market.known_at, snapshot=snap,
                              instruments=instruments, positions=positions, policy=policy, scenarios=scenarios)
     acc: dict[str, _Acc] = defaultdict(_Acc)

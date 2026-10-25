@@ -169,14 +169,16 @@
   const h = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
   K.h = h;
 
-  // ---------- подсказки к мерам риска (R29, R30, #32): в какой конвенции риск RUONIA и КБД, что такое базис ОФЗ ----------
-  // Так считает монитор на ядре 0.37 (0.2.6, решение владельца 23.10: риск всех кривых — в par-котировках): RUONIA OIS ядру
+  // ---------- подсказки к мерам риска (R29, R30, #32, #171): в какой конвенции риск RUONIA, КБД, КС и валютных кривых ----------
+  // Так считает монитор на ядре 0.38 (решение владельца 23.10: риск всех кривых — в par-котировках): RUONIA OIS ядру
   // передаётся запросом бутстрэпа (orchestrator: EodContext.quote_curves), бакет сдвигает котировки OIS и кривая пересобирается;
   // КБД — спека rub_ofz_kbd_v3 (par-доходности инструментов с годовым купоном 1Y–20Y+); фикс-ОФЗ дисконтируются по КБД.
+  // Валютные кривые — по M.curveUnits прогона (orchestrator.EodContext.curve_units; настройка quote_curve_risk, #171).
   K.tips = {
     ruonia: 'Риск RUONIA — в котировках OIS: +1 б.п. к par-котировкам MOEX OIS RUONIA по 11 бакетам 1M…20Y+ с треугольными весами ' +
       '(на любом сроке сумма весов — 1), кривая пересобирается (log-linear по DF, flat-forward за последним узлом), центральная разность; ' +
-      'Z-спред бумаги держится. Кривая КС (проекция флоатеров на КС) пока — +1 б.п. к нулевой ставке. ' +
+      'Z-спред бумаги держится. Кривая КС (проекция флоатеров на КС) — +1 б.п. к нулевой ставке: в котировках IRS KEYRATE ' +
+      'ядро 0.38 считает риск свопов и фьючерсов на КС, а не проекцию флоатера, поэтому у флоатера на КС ноги в разных единицах. ' +
       'В виде «RUONIA + базис» в RUONIA входит и риск КБД у ОФЗ: сдвиг RUONIA двигает КБД вместе с ней. ' +
       'В день без кривой RUONIA бумаги дисконтируются по КБД. До 0.2.6 бамп RUONIA был по непрерывной нулевой ставке (DV01 на ~14 % больше).',
     basis01: 'Базис01 (ОФЗ − RUONIA), тыс ₽/бп: риск ОФЗ к движению par-доходностей КБД против котировок OIS RUONIA — par–par ' +
@@ -209,7 +211,16 @@
   K.curveTip = id => id === 'CS01' ? K.tips.cs01 : id === 'OFZSPR' ? K.tips.ofzSpr01
     : id === 'RUB OFZ' && M.ofzView === 'kbd' ? K.tips.kbd : id === 'RUB OFZ' || (M.curve[id] && M.curve[id].kind === 'basis') ? K.tips.basis01
     : id === 'RUB RUONIA' || id === 'RUB KEY' ? (M.curve[id] ? M.curve[id].name + '.\n' : '') + K.tips.ruonia
-      : (M.curve[id] ? M.curve[id].name + ': +1 б.п. к нулевой ставке кривой по бакетам' : '');
+      : (M.curve[id] ? M.curve[id].name + ': ' + (K.UNIT_TIPS[(M.curveUnits || {})[id]] || K.UNIT_TIPS.zero) : '');
+  // единица бакета валютной кривой в прогоне (M.curveUnits; прогоны до #171 — нулевые ставки)
+  K.UNIT_TIPS = {
+    zero: '+1 б.п. к нулевой ставке кривой по бакетам (кривая не пересобирается)',
+    par_yield_quote: '+1 б.п. к par-доходностям прокси (котировки хаба) по бакетам, кривая пересобирается — риск в котировках ' +
+      '(ядро 0.38, настройка quote_curve_risk). Прокси — не OIS-кривая (proxy_curves_for_risk).',
+    xccy_quote_fx: 'у FX-сделок — +1 б.п. к par-котировкам XCCY CNY/RUB по бакетам, кривая пересобирается (ядро 0.38, настройка ' +
+      'quote_curve_risk); у облигаций в CNY — +1 б.п. к нулевой ставке построенной кривой: котировки XCCY ядро 0.38 берёт только ' +
+      'для FX-сделок, поэтому DV01 облигаций и FX-сделок на этой кривой — в разных единицах.',
+  };
   // подпись с подсказкой (title): пунктир снизу, курсор «?» (K.tip — другое: плавающая подсказка у мыши)
   K.hint = (label, tip) => tip ? '<span class="k-hint" title="' + esc(tip) + '">' + label + '</span>' : label;
   // поля карточки: [подпись, значение, во всю ширину, подсказка]
@@ -1412,8 +1423,11 @@
 
   // ---------- история позиции по прогонам: на чём стоит точка (R44; api/concepts.positions_history) ----------
   // H.runAt[i] — прогон даты (null: прогона нет), H.pt[i] — [вид, текст] точки не по ядру, H.qty — бумаг по прогонам
-  const PT_LABEL = { old: 'прошлая версия программы', method: 'другой метод оценки', unvalued: 'не оценена', gap: 'нет прогона за дату', minor: 'замечание', before: 'до истории прогонов' };
-  K.histPoint = (H, i) => {
+  const PT_LABEL = { old: 'прошлая версия программы', unit: 'другая единица риска', method: 'другой метод оценки', unvalued: 'не оценена', gap: 'нет прогона за дату', minor: 'замечание', before: 'до истории прогонов' };
+  // r.unit (#171): риск валютных кривых прогона в другой единице, чем у показанного (настройка quote_curve_risk) — для DV01
+  // позиции с риском на валютной кривой точка как у прошлой версии (пунктир); у рублёвой позиции единица та же
+  const foreignRisk = H => Object.keys(H.curves || {}).some(c => !/^RUB /.test(c));
+  K.histPoint = (H, i, mode) => {
     const RA = H.runAt; if (!RA) return null;
     if (H._first == null) H._first = RA.findIndex(Boolean);
     const r = RA[i], pt = H.pt && H.pt[i];
@@ -1424,6 +1438,7 @@
     if (pt && pt[0] !== 'minor') return { k: pt[0], t: pt[1] + (r.old ? '; прогон версии ' + r.old : '') };
     if (pt && pt[1]) notes.push(pt[1]);
     if (r.old) return { k: 'old', t: 'посчитано версией ' + r.old + ' — пересчитается историей прогонов' + (notes.length ? '; ' + notes.join('; ') : '') };
+    if (r.unit && (mode == null || mode === 'dv01') && foreignRisk(H)) return { k: 'unit', t: r.unit + ' — DV01 через эту дату сравнивать с поправкой' + (notes.length ? '; ' + notes.join('; ') : '') };
     return notes.length ? { k: 'minor', t: notes.join('; ') } : null;
   };
   // ряды DV01 / номинала / DM позиции: { series, tooltip, note }. opt.perBond — DV01 на 1 бумагу (₽/бп): видно, что
@@ -1434,8 +1449,9 @@
     const raw = (mode === 'dm' ? H.dm : mode === 'dv01' ? H.dv01 : H.notional) || [];
     const name = mode === 'dm' ? 'DM, б.п.' : mode === 'notional' ? 'Номинал, mm ' + (opt.ccy || 'в валюте бумаги') : per ? 'DV01, ₽/бп на 1 бумагу' : 'DV01, тыс ₽/бп';
     const val = i => { const v = raw[i]; if (v == null) return RA && RA[i] && mode !== 'dm' ? 0 : null; if (per) { const q = H.qty[i]; return q ? v / q : null; } return mode === 'dv01' ? v / 1e3 : mode === 'notional' ? v / 1e6 : v; };
-    const P = xs.map((_, i) => K.histPoint(H, i)), V = xs.map((_, i) => val(i));
+    const P = xs.map((_, i) => K.histPoint(H, i, mode)), V = xs.map((_, i) => val(i));
     const main = V.map((v, i) => !P[i] || P[i].k === 'minor' ? v : null), old = V.map((v, i) => P[i] && P[i].k === 'old' ? v : null);
+    const unit = V.map((v, i) => P[i] && P[i].k === 'unit' ? v : null);
     const iso = a => a.map((v, i) => v != null && a[i - 1] == null && a[i + 1] == null ? [i, v] : null).filter(Boolean);  // одиночная точка линией не видна
     const pts = k => V.map((v, i) => P[i] && P[i].k === k && v != null ? [i, v] : null).filter(Boolean);
     const step = mode === 'dm' ? false : 'end', warn = css('--warn') || '#e3b341', c0 = opt.color || css('--accent');
@@ -1443,6 +1459,8 @@
       .concat(iso(main).length ? [{ type: 'scatter', name, data: iso(main), symbolSize: 4, color: c0 }] : [])
       .concat(old.some(v => v != null) ? [{ type: 'line', name: 'прошлая версия расчёта', data: old, step, connectNulls: mode === 'dm', showSymbol: false, lineStyle: { width: 1.2, type: 'dashed' }, color: css('--fg-3') }] : [])
       .concat(iso(old).length ? [{ type: 'scatter', name: 'прошлая версия расчёта', data: iso(old), symbolSize: 4, color: css('--fg-3') }] : [])
+      .concat(unit.some(v => v != null) ? [{ type: 'line', name: 'другая единица риска', data: unit, step, showSymbol: false, lineStyle: { width: 1.2, type: 'dashed' }, color: warn }] : [])
+      .concat(iso(unit).length ? [{ type: 'scatter', name: 'другая единица риска', data: iso(unit), symbolSize: 4, color: warn }] : [])
       .concat(pts('method').length ? [{ type: 'scatter', name: 'другой метод оценки', data: pts('method'), symbol: 'diamond', symbolSize: 7, color: warn }] : []);
     // замечания (допущение ядра, позиции книги из прошлого отчёта, предварительное закрытие) — в подсказке, без маркера
     const at = Object.fromEntries(xs.map((d, i) => [d, i]));
@@ -1456,9 +1474,10 @@
     } };
     // покрытие ряда: с первой точки, где позиция есть
     const from = V.findIndex((v, i) => (v != null && v !== 0) || (P[i] && P[i].k === 'unvalued'));
-    const cnt = { clean: 0, old: 0, method: 0, unvalued: 0, gap: 0 };
+    const cnt = { clean: 0, old: 0, unit: 0, method: 0, unvalued: 0, gap: 0 };
     if (from >= 0) for (let i = from; i < xs.length; i++) { const k = P[i] ? P[i].k : 'clean'; if (k === 'minor') cnt.clean++; else if (k === 'gap') { if (raw[i] != null) cnt.gap++; } else if (k in cnt) cnt[k]++; }
     const note = !RA ? '' : 'Точки ряда: ' + cnt.clean + ' — ядро на прогоне своей даты' + (cnt.old ? ' · ' + cnt.old + ' — прошлой версией программы (пунктир)' : '') +
+      (cnt.unit ? ' · ' + cnt.unit + ' — с риском валютных кривых в другой единице (пунктир; настройка quote_curve_risk)' : '') +
       (cnt.method ? ' · ' + cnt.method + ' — другим методом (◆, причина в подсказке)' : '') + (cnt.unvalued ? ' · ' + cnt.unvalued + ' — позиция не оценена (разрыв)' : '') +
       (cnt.gap ? ' · ' + cnt.gap + ' — прогона за дату нет (разрыв)' : '') + (cnt.old || cnt.gap ? '. Досчитать: ' + K.noteHtml(BF) : '') +
       (mode === 'dv01' && H.qty ? '. Тренд риска на бумагу и размер позиции различает «на 1 бумагу»; число бумаг и его изменение — в подсказке' : '');

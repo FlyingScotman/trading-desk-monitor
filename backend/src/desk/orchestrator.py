@@ -114,6 +114,15 @@ class EodContext:
     and the curve is rebootstrapped, the unit of the KBD's par buckets (``rub_ofz_kbd_v3``). ``core_market`` keeps the
     built curves (the curve chart, the flash PnL, the FX curves); ``risk_market`` swaps these in for the core calls
     that publish risk. Until 0.2.6 RUONIA's buckets moved its continuous zero rate (R30), about 14 % more DV01."""
+    quote_curve_risk: bool = False
+    """Setting ``quote_curve_risk`` (default off; core 0.38 ``ValuationPolicy.quote_curve_risk``, issue #171): the risk of
+    the foreign curves core can take in their quotes (``FxMarket.quote_entries``) is in those quotes, as RUONIA's: the
+    USD / EUR par-yield proxies (``USD UST``, ``EUR AAA``) for every position on them (``risk_market``), the CNY XCCY
+    par quotes for the FX products whose foreign curve it is (``fx_risk_market``; a CNY bond stays on the built curve,
+    core 0.38 takes XCCY quotes for FX products only). PV and carry are unchanged; the buckets change unit
+    (``curve_units``). The key-rate curve stays on its zero rates: core takes KRS quotes for key-rate swaps and
+    KEYRATE futures (``rub_key_rate_swap_v1``), which the desk does not value, not as the projection of a key-rate
+    floater (``rub_key_rate_projection_v1``)."""
 
     @property
     def reference_facts(self) -> Reference:
@@ -125,11 +134,40 @@ class EodContext:
 
     @property
     def risk_market(self) -> MarketSnapshot:
-        """``core_market`` with ``quote_curves`` in place of their built curves: what risk is valued on."""
-        if not self.quote_curves:
-            return self.core_market
+        """``core_market`` with ``quote_curves`` in place of their built curves (and, with ``quote_curve_risk``, the
+        proxies' par yields): what risk is valued on."""
         q = {c.curve_id: c for c in self.quote_curves}
+        if self.quote_curve_risk:
+            q.update((i, e) for i, e in self.fx.quote_entries.items() if i != fxcurves.XCCY_CURVE_ID)
+        return self._with(q)
+
+    @property
+    def fx_risk_market(self) -> MarketSnapshot:
+        """``risk_market`` and, with ``quote_curve_risk``, the CNY XCCY par quotes in place of the built curve: what the
+        FX products are valued on (``valuation.derivatives``; core rebuilds the quotes on every shock)."""
+        q = {c.curve_id: c for c in self.quote_curves}
+        if self.quote_curve_risk:
+            q.update(self.fx.quote_entries)
+        return self._with(q)
+
+    def _with(self, q: dict[str, CurveEntry]) -> MarketSnapshot:
+        if not q:
+            return self.core_market
         return replace(self.core_market, curves=tuple(q.get(c.curve_id, c) for c in self.core_market.curves))
+
+    def curve_units(self) -> dict[str, str]:
+        """Published curve -> the unit of its risk buckets in this run (the run's lineage ``curve_units``; the pages'
+        tips, the history's mark of a change of unit, issue #171): ``kbd_par`` (the KBD's par yields, 1Y-20Y+),
+        ``ois_quote`` (RUONIA's OIS par quotes), ``par_yield_quote`` (a proxy's par yields), ``xccy_quote_fx`` (the
+        FX products' CNY buckets in the XCCY par quotes, a CNY bond's in the built curve's zero rates), ``zero`` (the
+        continuous zero rate of the built curve)."""
+        quoted = {c.curve_id for c in self.quote_curves}
+        out = {"RUB OFZ": "kbd_par", "RUB KEY": "zero",
+               "RUB RUONIA": "ois_quote" if rates.RUONIA_OIS_CURVE_ID in quoted else "zero"}
+        for cid, c in sorted(self.fx.curves.items()):
+            q = self.quote_curve_risk and cid in self.fx.quote_entries
+            out[cid] = ("par_yield_quote" if c.proxy else "xccy_quote_fx") if q else "zero"
+        return out
 
     def risk_curve(self, curve_id: str, built: DiscountCurve) -> Any:
         """The source core's risk engine takes for ``curve_id``: its bootstrap request when it is a quote curve,
@@ -174,6 +212,8 @@ class EodContext:
             "calendar_provisional_from": self.static.provisional_from(),
             "rates": self.rates,
             "fx": self.fx.lineage,
+            "quote_curve_risk": self.quote_curve_risk,
+            "curve_units": self.curve_units(),
             "stale_datasets": self.market.stale,
         }
 
@@ -310,7 +350,8 @@ def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: b
         except Rejected as e:
             o.reason, o.detail = e.reason, e.detail
     valued, results = value_bonds(ctx.risk_market, todo, second_order=second_order, cache=ctx.cache,
-                                  scenarios=scenarios, foreign=foreign_bond_curves(ctx))
+                                  scenarios=scenarios, foreign=foreign_bond_curves(ctx),
+                                  quote_curve_risk=ctx.quote_curve_risk)
     by_pid = {p.position_id: r for r in results for p in r.positions}
     for pid, v in valued.items():
         o = out[index[pid]]

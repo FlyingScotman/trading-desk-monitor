@@ -21,6 +21,12 @@
   date (the hub's set may be a day or two older: said in the lineage). Bonds use them only with the setting
   ``proxy_curves_for_risk`` (core BACKLOG #132); they are never an FX forward's curve (a proxy needs a calibrated basis).
 - **NDF fixings**: the CBR official rates of the snapshot as ``FxFixing(ccy, "CBR", set date, rate)``.
+- **Quote curves** (``FxMarket.quote_entries``, core 0.38, issue #171): the CNY XCCY par quotes
+  (``XccyCurveBootstrapRequest``) and the proxies' par yields (``ParYieldCurveRequest``) the curves above are built from,
+  under the same curve IDs. ``core_market`` keeps the built curves; with the setting ``quote_curve_risk``
+  (``orchestrator.EodContext.quote_curve_risk``) core takes the risk of those curves in their quotes: the proxies for
+  every position on them, the XCCY quotes for the FX products only (a CNY bond needs the built curve in core 0.38). The
+  XCCY quotes are offered only on the FX spot's value date (core checks it); otherwise the lineage says why.
 
 Every core curve ID of a foreign curve is its published name (``IR|CNY FX|1Y``), so its risk needs no renaming. An input
 that cannot be built is left out with its error in the lineage; the positions that need it are then valued on their
@@ -147,6 +153,9 @@ class FxMarket:
     rates: dict[str, tuple[float, str]] = field(default_factory=dict)
     """ccy -> (RUB per unit, source) of the spot."""
     lineage: dict[str, Any] = field(default_factory=dict)
+    quote_entries: dict[str, CurveEntry] = field(default_factory=dict)
+    """By curve ID: the quotes a curve of ``curves`` is built from (``XCCY_CURVE_ID``: ``XccyCurveBootstrapRequest``; a
+    proxy: ``ParYieldCurveRequest``), for core's risk in quotes (module docstring, "Quote curves")."""
 
     def curve(self, ccy: str, kind: str) -> ForeignCurve | None:
         return next((c for c in self.curves.values() if c.ccy == ccy and c.kind == kind), None)
@@ -242,7 +251,7 @@ def _implied(market: Any, ccy: str, spot: FxSpot, cal: BusinessCalendar, rub: Di
 
 
 def _xccy(market: Any, static: Any, spot: FxSpot, rub: DiscountCurve, bd: date
-          ) -> tuple[DiscountCurve, dict[str, Any]]:
+          ) -> tuple[DiscountCurve, XccyCurveBootstrapRequest, dict[str, Any]]:
     qs, lineage = rates.select_quote_set(market.snapshot, "cny_ruonia_xccy")
     parts = [ar.calendar(static.snapshot, n) for n in ("MOEX_FORTS", "RU_PRODUCTION", "CN_INTERBANK")]
     parts.append(rates.ruonia_calendar(static.snapshot, bd))
@@ -265,7 +274,7 @@ def _xccy(market: Any, static: Any, spot: FxSpot, rub: DiscountCurve, bd: date
     lineage.update(status="ok", spec_id=XCCY_SPEC, tenors_used=[q.tenor for q in quotes], tenors_dropped=dropped,
                    notional_fx_rate="spot (provisional)", last_node=curve.nodes[-1][0].isoformat(),
                    calendar=cal.version)
-    return curve, lineage
+    return curve, request, lineage
 
 
 def _tenor(q: dict[str, Any]) -> str | None:
@@ -279,7 +288,8 @@ def _tenor(q: dict[str, Any]) -> str | None:
     return None
 
 
-def _proxy(market: Any, dataset: str, spec: str, bd: date) -> tuple[DiscountCurve, dict[str, Any]] | None:
+def _proxy(market: Any, dataset: str, spec: str, bd: date
+           ) -> tuple[DiscountCurve, ParYieldCurveRequest, dict[str, Any]] | None:
     from decimal import Decimal
 
     sets = [s for s in market.curve_quote_sets if s.get("dataset") == dataset and s.get("quotes")]
@@ -295,8 +305,9 @@ def _proxy(market: Any, dataset: str, spec: str, bd: date) -> tuple[DiscountCurv
             dropped[str(q.get("tenor"))] = "no tenor or mid"
             continue
         quotes[t] = ParYieldQuote(t, float(Decimal(str(m)) / 100))
-    curve = bootstrap_par_yield_curve(ParYieldCurveRequest(spec, bd, tuple(quotes.values())))
-    return curve, {"status": "ok", "spec_id": spec, "dataset": dataset, "source": s.get("source"),
+    request = ParYieldCurveRequest(spec, bd, tuple(quotes.values()))
+    curve = bootstrap_par_yield_curve(request)
+    return curve, request, {"status": "ok", "spec_id": spec, "dataset": dataset, "source": s.get("source"),
                    "quote_date": s.get("snapshot_date"), "dated": bd.isoformat(), "tenors_used": list(quotes),
                    "tenors_dropped": dropped, "proxy": True,
                    **({"stale": f"quotes of {s.get('snapshot_date')} dated {bd}"}
@@ -351,8 +362,14 @@ def with_fx(market: Any, static: Any, core: MarketSnapshot, fx_rates: dict[str, 
                 lin["curves"][cid] = {"status": "error", "error": str(e)}
     if "CNY" in out.spots and rub_curve is not None:
         try:
-            built, info = _xccy(market, static, out.spots["CNY"], rub_curve, bd)
+            built, request, info = _xccy(market, static, out.spots["CNY"], rub_curve, bd)
             curves.append(CurveEntry(XCCY_CURVE_ID, XCCY_SPEC, built))
+            spot = out.spots["CNY"]
+            if (request.spot_rate, request.spot_value_date) == (spot.rub_per_unit, spot.value_date):
+                out.quote_entries[XCCY_CURVE_ID] = CurveEntry(XCCY_CURVE_ID, XCCY_SPEC, request)
+            else:  # core takes XCCY quotes for an FX product only on the snapshot spot (its value date)
+                info["quote_curve"] = (f"no: the quotes' spot date {request.spot_value_date} is not the FX spot's "
+                                       f"{spot.value_date}")
             bases.append(FxBasis("CNY", XCCY_CURVE_ID, 0.0))  # an FX forward on XCCY: zero basis (provisional)
             out.curves[XCCY_CURVE_ID] = ForeignCurve(XCCY_CURVE_ID, "CNY", "xccy", XCCY_SPEC,
                                                      "CNY: XCCY к RUONIA (MOEX XCS CNYRUB)", built)
@@ -370,8 +387,9 @@ def with_fx(market: Any, static: Any, core: MarketSnapshot, fx_rates: dict[str, 
         if got is None:
             continue
         curves.append(CurveEntry(cid, spec, got[0]))
+        out.quote_entries[cid] = CurveEntry(cid, spec, got[1])
         out.curves[cid] = ForeignCurve(cid, ccy, "proxy", spec, f"{ccy}: {proxies.label(dataset)}", got[0])
-        lin["curves"][cid] = got[1]
+        lin["curves"][cid] = got[2]
     fixings = {}
     for f in market.cbr_fixings():
         fixings[(f["ccy"], f["fixing_date"])] = FxFixing(f["ccy"], CBR_SOURCE, f["fixing_date"], f["rate"])

@@ -24,6 +24,7 @@ Taylor has no basis factor, so its effect is all in the residual) on the run's m
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 from rub_fixed_income import RISK_BUCKETS, BondScenario, PortfolioScenario
@@ -72,9 +73,13 @@ def core_scenario(name: str, norm: Mapping[str, Any], ds: float) -> PortfolioSce
 
 
 def _context(snapshots: SnapshotDir, run: Mapping[str, Any], ctx_cache: dict | None) -> EodContext:
+    """The run's context on its own snapshot, with its risk in the unit the run's was (``quote_curve_risk`` of its
+    lineage, issue #171: a curve the run took in its quotes is shifted in its quotes, as its Taylor factors)."""
     if ctx_cache is not None and run["run_id"] in ctx_cache:
         return ctx_cache[run["run_id"]]
     ctx = prepare(snapshots, str(run["business_date"]), run["cut_type"], market_snapshot_id=run["market_snapshot_id"])
+    if run.get("quote_curve_risk"):
+        ctx = replace(ctx, quote_curve_risk=True)
     if ctx_cache is not None:
         # shortcut: at most CTX_CACHE_SIZE prepared runs, oldest out; upgrade to an LRU sized by memory when
         # the worker serves many runs at once.
@@ -87,7 +92,8 @@ def _context(snapshots: SnapshotDir, run: Mapping[str, Any], ctx_cache: dict | N
 def reprice_run(snapshots: SnapshotDir, run: Mapping[str, Any], rows: list[Mapping[str, Any]],
                 reference: Mapping[str, list], definition: Mapping[str, Any],
                 ctx_cache: dict | None = None) -> dict[str, Any]:
-    """``run``: ``run_id``, ``business_date`` (a date), ``cut_type``, ``market_snapshot_id``; ``rows``:
+    """``run``: ``run_id``, ``business_date`` (a date), ``cut_type``, ``market_snapshot_id`` (and ``quote_curve_risk``,
+    the run's lineage flag: absent is off); ``rows``:
     ``run_position`` dicts (``position_id``, ``book_id``, ``secid``, ``quantity``, ``quality``, ``pv_rub``,
     ``fact``); ``reference``: ``run_reference`` data by kind. Raises ``DefinitionError`` on a bad definition,
     ``SnapshotError`` when the run's snapshots are not in ``snapshots``. Returns the result JSON."""

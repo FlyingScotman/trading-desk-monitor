@@ -444,6 +444,8 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
                    "marketSnapshot": run["market_snapshot_id"], "contractVersion": CONTRACT_VERSION,
                    # how the run values OFZ (valuation.bonds.OFZ_SCHEME): "kbd_par" since 0.2.6, null before
                    "ofzScheme": (run.get("lineage") or {}).get("ofz_scheme"),
+                   # the unit of each curve's buckets (orchestrator.EodContext.curve_units, #171): null before
+                   "curveUnits": (run.get("lineage") or {}).get("curve_units"),
                    **run_slice(run)},
     }
 

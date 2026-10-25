@@ -83,6 +83,7 @@ from rub_fixed_income import (
     ObservationShift,
     ObservationWindow,
     Offer,
+    ParYieldCurveRequest,
     PortfolioRiskResult,
     Position,
     PositionValuation,
@@ -698,7 +699,7 @@ def inexact_accrual(r: BondRequest, inst: Instrument, after: date) -> str | None
 
 def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_order: bool = False,
                 cache: ShockedCurveCache | None = None, scenarios: tuple = (),
-                foreign: dict[str, tuple[str, ...]] | None = None,
+                foreign: dict[str, tuple[str, ...]] | None = None, quote_curve_risk: bool = False,
                 ) -> tuple[dict[str, BondValuation | Rejected], list[PortfolioRiskResult]]:
     """Value ``requests`` on ``market`` (a core snapshot without quotes, with the curves and fixings
     floaters need), in one core call (the spread kind per bond: ``spread_kinds``). Returns the valuation or the
@@ -706,7 +707,9 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
     ``PortfolioScenario``) go to the core call. ``foreign``: ccy -> the curve IDs a foreign bond of that currency is
     discounted on, in order (core ``foreign_curves``, then ``foreign_curve_fallbacks``;
     ``orchestrator.foreign_bond_curves``); a foreign bond of a currency without one is ``Rejected("no_foreign_curve")``
-    (the fallback ladder values it)."""
+    (the fallback ladder values it). ``quote_curve_risk`` (``EodContext.quote_curve_risk``): core's
+    ``ValuationPolicy.quote_curve_risk`` when the call holds a curve as par-yield quotes (a proxy of ``risk_market``),
+    so its risk is in those quotes; a call without one keeps its policy and its bytes."""
     foreign = foreign or {}
     out: dict[str, BondValuation | Rejected] = {}
     results = []
@@ -769,6 +772,8 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
                                 or c.curve_id in keep),
                    fx=tuple(x for x in market.fx if x.currency in ccys), fx_spots=(), fx_bases=(), fx_fixings=())
     proxies = {c.curve_id for c in market.curves if c.spec_id.endswith("_par_proxy_v1")}
+    if quote_curve_risk and any(isinstance(c.curve, ParYieldCurveRequest) for c in snap.curves):
+        policy = replace(policy, quote_curve_risk=True)
     result = value_portfolio(run_id=f"desk-eod-{market.business_date}-book", as_of=market.known_at,
                              snapshot=replace(snap, quotes=tuple(quotes.values())),
                              instruments=list(instruments.values()), positions=positions, policy=policy,
