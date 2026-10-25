@@ -2,6 +2,7 @@
  * KIT — общие компоненты концептов (нужны mock.js и ../echarts.min.js).
  *
  *  KIT.f.*                — форматирование (тыс ₽/бп, mm, bn, б.п., даты)
+ *  KIT.negFmt, KIT.setNegFmt(v) — отрицательные числа: 'acc' — (1,234.5) красным (по умолчанию), 'minus' — −1,234.5
  *  KIT.top({title, tag})  — шапка: дата и тип данных, «следующее обновление» и предупреждение без среза дня (#22),
  *                           фильтр книг и портфелей (общий для всех мониторов), поиск, тема
  *  KIT.dataLabel(run), KIT.headerStatus(status, now) — тип данных прогона и состояние шапки по статусу автопилота
@@ -54,6 +55,16 @@
       Object.keys(F.byEntity || {}).forEach(e => { F.byEntity[e] *= k; });
     }
   })(1 / M.fx[K.repr]);
+  // подпись единицы в валюте отчёта: «тыс ₽/бп» → «тыс $/бп» (для canvas графиков и title; в разметке «₽» и так
+  // подменяется ниже)
+  K.u = s => s == null ? '' : String(s).replace(/₽/g, K.SYM[K.repr]);
+  // что меняет валюта отчёта (#105): показывается в подсказке и в меню переключателя. Соглашение подписей: символ
+  // валюты — валюта отчёта, сумма пересчитана; код (RUB, USD…) — своя валюта, не пересчитывается
+  K.REPR_NOTE = [
+    ['пересчитываются по споту', 'MV, DV01, CS01, базис и спред к КБД, PnL (день, MTD, YTD), кэрри, потоки, фондирование, ≈ ОВП, объёмы и выплаты рублёвого рынка'],
+    ['в своей валюте', 'номинал бумаги (mm RUB, mm USD…), ОВП «mm в вал.», оборот рынка (mm RUB), цены, доходности и спреды (%, б.п.), курсы'],
+    ['подписи', 'символ (' + K.SYM[K.repr] + ') — валюта отчёта; код валюты (RUB, USD…) — своя валюта суммы'],
+  ];
   K.setRepr = c => { try { localStorage.setItem('concepts-repr', c); } catch (e) { } location.reload(); };
   // вид риска ОФЗ (#32; lib/real.js: M.ofzView): «RUONIA + базис» — по умолчанию, «КБД» — ОФЗ на своей кривой
   K.OFZ_VIEWS = { basis: 'RUONIA + базис', kbd: 'КБД' };
@@ -72,7 +83,19 @@
 
   // ---------- форматирование ----------
   // формат чисел: запятая — разделитель тысяч, точка — дробной части (1,234.56)
-  const grp = (v, d) => { if (v == null || !isFinite(v)) return '—'; const s = Math.abs(v).toFixed(d || 0).split('.'); s[0] = s[0].replace(/\B(?=(\d{3})+(?!\d))/g, ','); return (v < 0 && /[1-9]/.test(s.join('')) ? '−' : '') + s.join('.'); };
+  // отрицательные (#153) — настройка интерфейса K.negFmt: 'acc' — бухгалтерский формат (1,234.5), красным (по
+  // умолчанию), 'minus' — −1,234.5. Хранится в K.viewStore (ключ 'ui:numfmt'), меняется кнопкой в шапке без
+  // перезагрузки (K.setNegFmt). CSV — всегда с обычным минусом (K.withNegFmt). Ноль, в том числе отрицательное число,
+  // округлённое до нуля, — без знака и без скобок; null / NaN — «—». suf — единица, которая в скобках стоит внутри:
+  // (4.44%), (1.2 bn)
+  K.NEG_FMTS = [['acc', '(1,234.5)'], ['minus', '−1,234.5']];
+  K.negFmt = 'acc';
+  const grp = (v, d, suf) => {
+    if (v == null || !isFinite(v)) return '—';
+    const s = Math.abs(v).toFixed(d || 0).split('.'); s[0] = s[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    const t = s.join('.') + (suf || '');
+    return v < 0 && /[1-9]/.test(s.join('')) ? (K.negFmt === 'minus' ? '−' + t : '(' + t + ')') : t;
+  };
   // в валюте отчёта, отличной от рубля, суммы в тысячах мелкие: показываем с одним знаком после точки
   const KD = K.repr === 'RUB' ? 0 : 1;
   const sgn = (v, d) => (v > 0 ? '+' : '') + grp(v, d);
@@ -85,9 +108,10 @@
     bn: (v, d) => grp(v / 1e9, d == null ? 2 : d),
     bp: v => v == null ? '—' : grp(v, 0),
     bps: v => v == null ? '—' : sgn(v, 0),
-    pct: (v, d) => v == null ? '—' : grp(v, d == null ? 2 : d) + '%',
+    pct: (v, d) => v == null ? '—' : grp(v, d == null ? 2 : d, '%'),
+    pcts: (v, d) => v == null ? '—' : (v > 0 ? '+' : '') + grp(v, d == null ? 2 : d, '%'),
     px: v => v == null ? '—' : grp(v, 3),
-    money: v => { if (v == null || !isFinite(v)) return '—'; const a = Math.abs(v); return a >= 1e9 ? grp(v / 1e9, 2) + ' bn' : a >= 1e6 ? grp(v / 1e6, 1) + ' mm' : a >= 1e3 ? grp(v / 1e3, 0) + 'k' : grp(v, 0); },
+    money: v => { if (v == null || !isFinite(v)) return '—'; const a = Math.abs(v); return a >= 1e9 ? grp(v / 1e9, 2, ' bn') : a >= 1e6 ? grp(v / 1e6, 1, ' mm') : a >= 1e3 ? grp(v / 1e3, 0, 'k') : grp(v, 0); },
     moneys: v => (v > 0 ? '+' : '') + f.money(v),
     dv: v => grp(v / 1e3, KD),                    // DV01 в тыс ₽/бп
     dvs: v => sgn(v / 1e3, KD),
@@ -111,9 +135,9 @@
     if (!P) return '';
     const cs = (ccys || M.ccys).filter(c => c !== 'RUB' && P.rate[c] != null);
     if (!cs.length) return '';
-    return 'PnL FX по курсу ' + cs.map(c => c + ' ' + f.n(P.rate[c], c === 'CNY' ? 4 : 2) + ' ' + f.s(P.chgPct[c], 2) + '%' +
+    return 'PnL FX по курсу ' + cs.map(c => c + ' ' + f.n(P.rate[c], c === 'CNY' ? 4 : 2) + ' ' + f.pcts(P.chgPct[c], 2) +
       (P.source && P.source[c] && P.source[c] !== P.label ? ' (' + K.esc(P.source[c]) + ')' : '') +
-      (C && C !== P && C.rate[c] != null ? ' · ЦБ ' + f.n(C.rate[c], c === 'CNY' ? 4 : 2) + ' ' + f.s(C.chgPct[c], 2) + '%' : '')).join(', ') +
+      (C && C !== P && C.rate[c] != null ? ' · ЦБ ' + f.n(C.rate[c], c === 'CNY' ? 4 : 2) + ' ' + f.pcts(C.chgPct[c], 2) : '')).join(', ') +
       ' — ' + K.esc(P.label) + (C && C !== P ? '; курс ЦБ (действующий на дату) — для официального PnL' : '');
   };
   // разрез, которого в данных нет (секторов и рейтингов в статике хаба нет): у всех позиций «—» / «без рейтинга»
@@ -237,7 +261,9 @@
 
   // ---------- события ----------
   const subs = {};
-  function fire(ev) { (subs[ev] || []).forEach(fn => { try { fn(); } catch (e) { console.error(e); } }); }
+  // по копии списка: подписка K.live, чей элемент удалён, отписывается во время рассылки — без копии forEach
+  // пропустил бы следующего подписчика (страница не перерисовалась бы при второй смене фильтра или формата)
+  function fire(ev) { (subs[ev] || []).slice().forEach(fn => { try { fn(); } catch (e) { console.error(e); } }); }
   // подписка; возвращает функцию отписки
   K.on = (ev, fn) => { (subs[ev] = subs[ev] || []).push(fn); return () => { const a = subs[ev], i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); }; };
   // перерисовка блока, пока его элемент в документе; отписывается, когда элемент удалён
@@ -573,21 +599,29 @@
       '<div class="filters" style="display:flex;gap:6px;flex-wrap:wrap"></div><div class="sp"></div>' +
       (opt.extra || '') +
       '<span class="k-chip" data-a="ofzview" title="Как показан риск ОФЗ: «RUONIA + базис» — RUONIA и базис ОФЗ к ней (par–par), «КБД» — ОФЗ на своей кривой">ОФЗ: ' + K.OFZ_VIEWS[M.ofzView || 'basis'] + ' ▾</span>' +
-      '<span class="k-chip" data-a="repr" title="Валюта отчёта: все суммы деска пересчитываются по споту">в ' + K.repr + ' ' + K.SYM[K.repr] + ' ▾</span>' +
+      '<span class="k-chip" data-a="repr" title="' + esc('Валюта отчёта.\n' + K.REPR_NOTE.map(x => x[0][0].toUpperCase() + x[0].slice(1) + ': ' + x[1] + '.').join('\n')) + '">в ' + K.repr + ' ' + K.SYM[K.repr] + ' ▾</span>' +
       srcChip() + (M.notes && M.notes.length ? '<span class="k-chip" data-a="notes" title="Чего нет в данных прогона" style="border-color:var(--warn)">ⓘ ' + M.notes.length + '</span>' : '') +
       '<button class="k-btn" data-a="search">Поиск <span class="k-kbd">Ctrl K</span></button>' +
+      '<button class="k-btn" data-a="numfmt"></button>' +
       '<button class="k-btn" data-a="theme" title="Светлая / тёмная тема">◐</button>';
     document.body.prepend(bar);
     if (/^https?:$/.test(location.protocol) && !window.DESK_AUTH) document.head.appendChild(Object.assign(document.createElement('script'), { src: '../desk-auth.js' }));  // вход: пользователь, «Выйти», CSRF
     chipsBox = bar.querySelector('.filters'); renderFilterChips();
     bar.querySelector('[data-a=search]').onclick = () => K.palette();
     bar.querySelector('[data-a=theme]').onclick = K.toggleTheme;
+    const nb = bar.querySelector('[data-a=numfmt]');  // формат отрицательных чисел (#153): щелчок — другой формат
+    const paintNeg = () => {
+      nb.textContent = K.negFmt === 'acc' ? '(1)' : '−1';
+      nb.title = 'Отрицательные числа: ' + (K.negFmt === 'acc' ? '(1,234.5) красным' : '−1,234.5') + '. Щелчок — ' + (K.negFmt === 'acc' ? 'со знаком минус' : 'в скобках (бухгалтерский формат)') + '; в CSV — всегда минус';
+    };
+    paintNeg(); nb.onclick = () => K.setNegFmt(K.negFmt === 'acc' ? 'minus' : 'acc'); K.on('numfmt', paintNeg);
     bindSrc(bar);
     if (K.source === 'real') { freshness(bar); backfillChip(bar); }
     const oc = bar.querySelector('[data-a=ofzview]');
     oc.onclick = e => { e.stopPropagation(); menu(oc, Object.keys(K.OFZ_VIEWS).map(v => ({ v, t: K.OFZ_VIEWS[v], sub: v === 'basis' ? 'по умолчанию' : '' })), M.ofzView || 'basis', v => { if (v !== (M.ofzView || 'basis')) K.setOfzView(v); }); };
     const rc = bar.querySelector('[data-a=repr]');
-    rc.onclick = e => { e.stopPropagation(); menu(rc, K.REPRS.map(c => ({ v: c, t: 'в ' + c + ' ' + K.SYM[c], sub: c === 'RUB' ? '' : 'курс ' + f.n(M.fx[c], 2) })), K.repr, v => { if (v !== K.repr) K.setRepr(v); }); };
+    rc.onclick = e => { e.stopPropagation(); const m = menu(rc, K.REPRS.map(c => ({ v: c, t: 'в ' + c + ' ' + K.SYM[c], sub: c === 'RUB' ? '' : 'курс ' + f.n(M.fx[c], 2) })), K.repr, v => { if (v !== K.repr) K.setRepr(v); });
+      if (m) { const n = h('div', 'k-repr-note'); n.innerHTML = K.REPR_NOTE.map(x => '<div><b>' + esc(x[0]) + ':</b> ' + esc(x[1]) + '</div>').join(''); m.appendChild(n); } };
     return bar;
   };
 
@@ -668,7 +702,7 @@
         const L = list.slice(0, 30).reverse();
         const c = K.chart(el, () => ({
           grid: { left: 10, right: 60, top: 10, bottom: 20, containLabel: true },
-          xAxis: { type: 'value', axisLabel: { formatter: v => fmt(v) } }, yAxis: { type: 'category', data: L.map(x => x.label.length > 34 ? x.label.slice(0, 33) + '…' : x.label) },
+          xAxis: { type: 'value', unit: spec.unit, axisLabel: { formatter: v => fmt(v) } }, yAxis: { type: 'category', data: L.map(x => x.label.length > 34 ? x.label.slice(0, 33) + '…' : x.label) },
           tooltip: { trigger: 'axis', valueFormatter: v => fmt(v) },
           series: [{ type: 'bar', data: L.map(x => ({ value: x.v, itemStyle: { color: dim === 'ccy' ? K.ccyColor(x.k) : dim === 'issuer' ? K.issuerColor(x.p.issuer) : (x.v >= 0 ? css('--pos') : css('--neg')) } })), label: { show: true, position: 'right', formatter: p => fmt(p.value), color: css('--fg-2'), fontSize: 11 } }],
         }));
@@ -707,12 +741,35 @@
     const a = Array.isArray(ax) ? ax : [ax];
     a.forEach(x => { if (!x) return; x.axisLine = Object.assign({ lineStyle: { color: css('--line-2') } }, x.axisLine); x.splitLine = Object.assign({ lineStyle: { color: css('--line') } }, x.splitLine); x.axisLabel = Object.assign({ color: css('--fg-2') }, x.axisLabel); x.nameTextStyle = Object.assign({ color: css('--fg-3') }, x.nameTextStyle); });
   }
+  // единица оси (#105): ось значений с {unit: 'тыс ₽/бп'} получает подпись — у вертикальной над осью, у
+  // горизонтальной под подписями делений; место под подпись добавляется к отступу сетки. «₽» — валюта отчёта (K.u):
+  // график рисуется на canvas, подмена символа в разметке до него не доходит
+  function axisUnits(o) {
+    const arr = ax => (Array.isArray(ax) ? ax : [ax]).filter(Boolean);
+    let top = 0, bottom = false;
+    arr(o.yAxis).forEach((x, i) => {
+      if (x.unit && !x.name) { x.name = K.u(x.unit); x.nameLocation = 'end'; if (x.nameGap == null) x.nameGap = 7; x.nameTextStyle = Object.assign({ align: i ? 'right' : 'left', fontSize: 10, color: css('--fg-3') }, x.nameTextStyle); top = Math.max(top, 16 + x.nameGap - 7); }
+      delete x.unit;
+    });
+    arr(o.xAxis).forEach(x => {
+      if (x.unit && !x.name && x.type === 'value') { x.name = K.u(x.unit); x.nameLocation = 'middle'; x.nameGap = 24; x.nameTextStyle = Object.assign({ fontSize: 10, color: css('--fg-3') }, x.nameTextStyle); bottom = true; }
+      delete x.unit;
+    });
+    // легенда сверху над подписью оси — в одну строку (прокрутка), иначе перенос легенды наезжает на подпись
+    if (top && o.legend && !Array.isArray(o.legend) && o.legend.orient !== 'vertical' && o.legend.bottom == null) o.legend = Object.assign({ type: 'scroll' }, o.legend);
+    if (o.grid && !Array.isArray(o.grid)) {
+      o.grid = Object.assign({}, o.grid);
+      if (top && typeof o.grid.top === 'number') o.grid.top += top;
+      if (bottom) o.grid.bottom = (typeof o.grid.bottom === 'number' ? o.grid.bottom : 0) + 18;
+    }
+  }
+  K.axisUnits = axisUnits;
   K.chart = function (el, optFn) {
     if (!window.echarts) { el.innerHTML = '<div class="k-empty">нет echarts</div>'; return { on() { }, dispose() { }, setOption() { } }; }
     let c = echarts.init(el, null, { renderer: 'canvas' });
     const build = () => {
       const o = Object.assign(K.chartBase(), typeof optFn === 'function' ? optFn() : optFn);
-      axisTheme(o.xAxis); axisTheme(o.yAxis);
+      axisUnits(o); axisTheme(o.xAxis); axisTheme(o.yAxis);
       if (o.tooltip) o.tooltip = Object.assign({ backgroundColor: css('--panel-2'), borderColor: css('--line-2'), textStyle: { color: css('--fg'), fontSize: 12 }, confine: true }, o.tooltip);
       if (o.legend) o.legend = Object.assign({ textStyle: { color: css('--fg-2') }, inactiveColor: css('--fg-3'), itemWidth: 12, itemHeight: 8 }, o.legend);
       return o;
@@ -754,7 +811,7 @@
           : { top: 0, left: 0, data: names.concat(['итог бакета', 'кумулятив']) },
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: ps => { const k = ps[0].dataIndex; return '<b>' + M.buckets[k] + '</b><br>' + ps.map(p => p.marker + p.seriesName + ': <b>' + f.dv(p.value) + '</b>').join('<br>') + '<br><span style="opacity:.6">тыс ₽/бп · щелчок — вклад позиций</span>'; } },
         xAxis: { type: 'category', data: M.buckets },
-        yAxis: [{ type: 'value', axisLabel: { formatter: v => f.dv(v) } }, { type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => f.dv(v), color: css('--warn') } }],
+        yAxis: [{ type: 'value', unit: 'тыс ₽/бп', axisLabel: { formatter: v => f.dv(v) } }, { type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => f.dv(v), color: css('--warn') } }],
         series: ids.map((id, i) => ({ name: id === 'CS01' ? 'CS01' : M.curve[id].short, type: 'bar', stack: id !== 'CS01' && M.curve[id].kind === 'rate' ? 'r' : 'x' + i, barMaxWidth: 38, data: cur.data[i], itemStyle: { color: K.curveColors[id] } }))
           .concat([{ name: 'итог бакета', type: 'scatter', symbol: 'diamond', symbolSize: 11, data: cur.tot, itemStyle: { color: css('--fg'), borderColor: css('--bg'), borderWidth: 1 }, z: 5, label: { show: opts.labels !== false, position: 'top', formatter: p => Math.abs(p.value) < 500 ? '' : f.dv(p.value), color: css('--fg-2'), fontSize: 10 } },
           { name: 'кумулятив', type: 'line', yAxisIndex: opts.cumSameAxis ? 0 : 1, smooth: false, data: cur.cum, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2, type: 'dashed', color: css('--warn') }, itemStyle: { color: css('--warn') }, z: 4 }]),
@@ -864,6 +921,61 @@
       reset(key) { mem[key] = null; try { localStorage.removeItem(P + key); } catch (e) { } },
     };
   })();
+  // ---------- формат отрицательных чисел (#153) ----------
+  // настройка — в том же слое вида (ключ 'ui:numfmt', {neg: 'acc' | 'minus'}); чужое значение — по умолчанию 'acc'
+  const NEG_KEY = 'ui:numfmt', negOk = v => K.NEG_FMTS.some(x => x[0] === v);
+  { const s = K.viewStore.get(NEG_KEY); if (s && negOk(s.neg)) K.negFmt = s.neg; }
+  // сменить формат: запомнить и перерисовать без перезагрузки — блоки страниц перерисовываются по событию 'filter'
+  // (K.onFilter, K.live), графики — по K.charts; подписчики 'numfmt' — то, что от фильтра не зависит (кнопка шапки)
+  K.setNegFmt = v => {
+    if (!negOk(v) || v === K.negFmt) return;
+    K.negFmt = v; K.viewStore.set(NEG_KEY, { neg: v });
+    fire('numfmt'); fire('filter');
+    K.charts.forEach(c => c.redraw && c.redraw());
+    if (typeof document.querySelectorAll === 'function') K.accMarkAll(document);
+  };
+  // выполнить fn с другим форматом отрицательных (CSV — всегда 'minus'); настройка после вызова — прежняя
+  K.withNegFmt = (v, fn) => { const old = K.negFmt; K.negFmt = v; try { return fn(); } finally { K.negFmt = old; } };
+  // красный цвет и выравнивание в бухгалтерском формате — по тексту цифры, а не в каждом форматтере: форматтеры
+  // отдают простой текст (он идёт и в подписи графиков, и в title), а мониторы рисуют таблицы сами. Где «(…)» —
+  // это число: числовая ячейка td.n, кликабельная цифра .dr, значение плитки и поля карточки. Текст, который
+  // начинается с числа в скобках, — отрицательное (k-accn, красным); числовая ячейка, в которой только
+  // неотрицательное число, — k-accp: невидимая «)» после числа, цифры столбца стоят ровно под скобками
+  K.ACC_SEL = 'td.n, .dr, .k-kpi .v, .k-fields .v';
+  K.accClass = text => {
+    if (K.negFmt !== 'acc') return '';
+    const t = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+    if (/^\(\d[\d,]*(?:\.\d+)?[^()]*\)/.test(t)) return 'k-accn';
+    if (/^\+?\d[\d,]*(?:\.\d+)?%?$/.test(t)) return 'k-accp';
+    return '';
+  };
+  // смысловой цвет страницы важнее бухгалтерского красного (#103): классы знака и изменения (pos, neg, chg-up,
+  // chg-dn — у доходности рост красный, падение зелёное) и фон тепловой карты (K.heat в style) — у самого элемента
+  // или у его ячейки; такая цифра остаётся в скобках, но красной не становится
+  K.ACC_KEEP = ['pos', 'neg', 'chg-up', 'chg-dn'];
+  K.accKeep = e => {
+    for (let x = e, i = 0; x && i < 4; x = x.parentElement, i++) {
+      if (x.classList && K.ACC_KEEP.some(c => x.classList.contains(c))) return true;
+      const st = x.getAttribute && x.getAttribute('style');
+      if (st && /(^|;)\s*(background|color)\s*:/.test(st)) return true;
+      if (x.tagName === 'TD' || x.tagName === 'TH') break;
+    }
+    return false;
+  };
+  const accMark = e => { const c = K.accClass(e.textContent); e.classList.toggle('k-accn', c === 'k-accn' && !K.accKeep(e)); e.classList.toggle('k-accp', c === 'k-accp' && e.tagName === 'TD'); };
+  K.accMarkAll = root => { const r = root || document; if (r.matches && r.matches(K.ACC_SEL)) accMark(r); if (r.querySelectorAll) r.querySelectorAll(K.ACC_SEL).forEach(accMark); };
+  if (typeof MutationObserver === 'function' && typeof requestAnimationFrame === 'function') {
+    // разметку меняют страницы и компоненты: новые узлы и узлы с изменённым текстом размечаются в следующем кадре
+    let todo = new Set(), queued = false;
+    const flush = () => {
+      queued = false; const L = [...todo]; todo = new Set();
+      L.forEach(n => { if (n.isConnected) { K.accMarkAll(n); const up = n.parentElement && n.parentElement.closest(K.ACC_SEL); if (up) accMark(up); } });
+    };
+    new MutationObserver(ms => {
+      ms.forEach(m => { const n = m.type === 'characterData' ? m.target.parentElement : m.target; if (n && n.nodeType === 1) todo.add(n); });
+      if (!queued && todo.size) { queued = true; requestAnimationFrame(flush); }
+    }).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+  }
   // стабильный ключ таблицы — без списка колонок (добавили колонку — раскладка не теряется, K.viewLayout сводит её с
   // текущим набором): opts.viewKey (его передают все мониторы), иначе страница + ближайший id в разметке
   K.tableKey = (el, opts) => {
@@ -901,9 +1013,11 @@
   //   а начало «= + - @» — с апострофом. Остальной текст — как есть. Заголовки и название таблицы — K.csvLabel.
   K.htmlText = s => String(s == null ? '' : s).replace(/<(?:[^>"']|"[^"]*"|'[^']*')*>/g, '').replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
-  K.csvNum = t => {  // «−1,234.5» → «-1234.5»; «+12» → «12»; «4.44%» → «4.44%»; не число — null
-    const m = /^([+−-]?)(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(%?)$/.exec(t);
-    return m ? (m[1] === '+' ? '' : m[1] ? '-' : '') + m[2].replace(/,/g, '') + (m[3] || '') + m[4] : null;
+  K.csvNum = t => {  // «−1,234.5» и «(1,234.5)» → «-1234.5»; «+12» → «12»; «4.44%» → «4.44%»; не число — null
+    const a = /^\(([^()]*)\)$/.exec(t), u = a ? a[1] : t;  // бухгалтерский формат (#153): скобки — минус
+    const m = /^([+−-]?)(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(%?)$/.exec(u);
+    if (!m || (a && m[1])) return null;
+    return (m[1] === '+' ? '' : m[1] || a ? '-' : '') + m[2].replace(/,/g, '') + (m[3] || '') + m[4];
   };
   const usDate = (y, mo, d) => (+mo >= 1 && +mo <= 12 && +d >= 1 && +d <= 31) ? mo + '/' + d + '/' + y : null;
   K.csvDate = s => {  // «2029-03-15» (ISO, можно со временем) → «03/15/2029»; не дата — null
@@ -958,6 +1072,9 @@
   };
 
   // ---------- таблица ----------
+  // единица колонки (#105): opts.columns[].unit, если её нет в подписи (подпись с «,» — «MV, mm ₽» — уже с единицей);
+  // в шапке таблицы — второй строкой под подписью, в CSV — в заголовке через запятую
+  K.colUnit = c => c && c.unit && !K.htmlText(c.label).includes(',') ? c.unit : '';
   // Раскладка (#102): граница заголовка — ширина, двойной щелчок по ней — по содержимому, перетаскивание заголовка —
   // порядок колонок; запоминается по ключу таблицы (K.tableKey) в K.viewStore, «⟲ вид» — сбросить.
   // opts: {columns:[{key,label,val(r),fmt(v,r),cls,title,sum:true|fn,drill:{title,unit,fmt,val}, w}], rows|rowsFn, groupBy:[{key(r),label(k,rows)}], search:bool,
@@ -1021,7 +1138,7 @@
       const C = cols();
       const nf = Object.keys(st.filters).filter(k => st.filters[k]).length;
       if (fltChip) { fltChip.style.display = nf ? '' : 'none'; fltChip.innerHTML = '<span class="x">✕</span> фильтры (' + nf + ')'; }
-      const head = '<thead><tr>' + (opts.stripe ? '<th class="stripe"></th>' : '') + C.map(c => { const si = st.sort.findIndex(s => s[0] === c.key); return '<th class="sortable ' + (c.num ? 'n' : '') + '" data-k="' + c.key + '" title="' + esc(c.title || '') + '"' + (c.w && !fixedW() ? ' style="width:' + c.w + '"' : '') + '>' + (c.tip ? '<span class="k-hint">' + c.label + '</span>' : c.label) + (si >= 0 ? '<span class="si">' + (st.sort[si][1] > 0 ? '▲' : '▼') + (st.sort.length > 1 ? si + 1 : '') + '</span>' : '') + K.fltIcon(c, st.filters) + '<span class="k-rsz" data-rsz="' + esc(c.key) + '" title="ширина: тянуть · двойной щелчок — по содержимому"></span></th>'; }).join('') + '</tr></thead>';
+      const head = '<thead><tr>' + (opts.stripe ? '<th class="stripe"></th>' : '') + C.map(c => { const si = st.sort.findIndex(s => s[0] === c.key); return '<th class="sortable ' + (c.num ? 'n' : '') + '" data-k="' + c.key + '" title="' + esc(c.title || '') + '"' + (c.w && !fixedW() ? ' style="width:' + c.w + '"' : '') + '>' + (c.tip ? '<span class="k-hint">' + c.label + '</span>' : c.label) + (si >= 0 ? '<span class="si">' + (st.sort[si][1] > 0 ? '▲' : '▼') + (st.sort.length > 1 ? si + 1 : '') + '</span>' : '') + K.fltIcon(c, st.filters) + (K.colUnit(c) ? '<span class="k-thu">' + esc(K.colUnit(c)) + '</span>' : '') + '<span class="k-rsz" data-rsz="' + esc(c.key) + '" title="ширина: тянуть · двойной щелчок — по содержимому"></span></th>'; }).join('') + '</tr></thead>';
       // заданные ширины: фиксированная раскладка по colgroup, таблица — шириной суммы колонок
       const cg = fixedW() ? '<colgroup>' + (opts.stripe ? '<col style="width:4px">' : '') + C.map(c => '<col data-k="' + esc(c.key) + '" style="width:' + (lay.w[c.key] || 100) + 'px">').join('') + '</colgroup>' : '';
       const tw = fixedW() ? ' k-fixed" style="width:' + C.reduce((s, c) => s + (lay.w[c.key] || 100), opts.stripe ? 4 : 0) + 'px' : '';
@@ -1149,9 +1266,11 @@
     const csvTitle = () => K.htmlText(opts.title || (typeof document.title === 'string' ? document.title : '') || 'таблица');
     function csv() {
       const C = cols().filter(c => K.htmlText(c.label)), R = K.csvRun(), q = K.csvLabel;  // без подписи — оформление (полоска доли)
-      const head = C.map(c => { const l = K.htmlText(c.label); return q(c.unit && !l.includes(',') ? l + ', ' + c.unit : l); });
-      const line = r => C.map(c => { const v = val(c, r); return K.csvCell(K.htmlText(c.fmt ? c.fmt(v, r) : v), c.num, v); }).join(',');
-      return ['run_id,' + (/^\d+$/.test(R.run_id) ? R.run_id : q(R.run_id)) + ',as_of,' + (K.csvDate(R.as_of) || q(R.as_of)) + ',таблица,' + q(csvTitle()) + ',строк,' + shown.length, '', head.join(',')]
+      // «₽» в подписи — валюта отчёта: в разметке символ подменяет MutationObserver, в CSV — K.u (#105)
+      const head = C.map(c => { const l = K.htmlText(c.label), u = K.colUnit(c); return q(K.u(u ? l + ', ' + u : l)); });
+      // числа — с обычным минусом при любой настройке формата отрицательных (#153)
+      const line = r => C.map(c => { const v = val(c, r); return K.csvCell(K.htmlText(K.withNegFmt('minus', () => c.fmt ? c.fmt(v, r) : v)), c.num, v); }).join(',');
+      return ['run_id,' + (/^\d+$/.test(R.run_id) ? R.run_id : q(R.run_id)) + ',as_of,' + (K.csvDate(R.as_of) || q(R.as_of)) + ',таблица,' + q(K.u(csvTitle())) + ',строк,' + shown.length, '', head.join(',')]
         .concat(shown.map(line)).join('\r\n') + '\r\n';
     }
     // имя файла — латиницей (кириллицу в имени скачивания браузер может заменить на «download»): opts.fileName, иначе
@@ -1169,6 +1288,7 @@
     const api = { redraw: draw, state: st, csv, csvName, setSort: s => { st.sort = s; draw(); }, setFilter: (k, v) => { st.filters[k] = v; draw(); }, setGrouped: g => { st.grouped = !!g; draw(); }, el,
       viewKey: vkey, layout: () => JSON.parse(JSON.stringify(lay)), setLayout: v => { lay = K.viewLayout(v, colKeys()); saveLay(); draw(); }, resetView: () => resetBtn.onclick() };
     if (opts.autoFilter !== false && !opts.rows) K.live(el, 'filter', draw);
+    else K.live(el, 'numfmt', draw);  // формат отрицательных чисел (#153): таблица без перерисовки по фильтру
     return api;
   };
 
@@ -1188,13 +1308,13 @@
     tenor: { key: 'tenor', label: 'Срок', num: true, fmt: v => f.yrs(v), title: 'до оферты, если есть, иначе до погашения' },
     notional: { key: 'notional', label: 'Номинал', num: true, fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', title: 'в валюте бумаги' },
     mv: { key: 'mv', label: 'MV, mm ₽', num: true, fmt: v => f.mn(v, 0), sum: true, unit: 'mm ₽', sumFmt: v => f.mn(v, 0) },
-    price: { key: 'price', label: 'Цена', num: true, fmt: v => f.px(v) },
+    price: { key: 'price', label: 'Цена', num: true, unit: '% ном.', fmt: v => f.px(v) },
     ytm: { key: 'ytm', label: 'Дох.', num: true, fmt: v => f.pct(v) },
-    spread: { key: 'zspread', label: 'Спред', num: true, fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : f.bp(v) + ' <span class="mut3">' + (r.spreadLabel || '') + '</span>', title: 'Z-спред к RUONIA (фикс) / дисконт-маржа (флоатер)' },
+    spread: { key: 'zspread', label: 'Спред', num: true, unit: 'б.п.', fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : f.bp(v) + ' <span class="mut3">' + (r.spreadLabel || '') + '</span>', title: 'Z-спред к RUONIA (фикс) / дисконт-маржа (флоатер)' },
     // Z-спред к кривой дисконтирования (RUONIA) у фикс-бумаг и флоатеров (у флоатера — купоны по прогнозу): сравнимы между собой (R32)
-    zdisc: { key: 'zdisc', label: 'Z к RUONIA', num: true, val: r => r.zSpreadZ, fmt: v => v == null ? '<span class="mut3">—</span>' : f.bp(v), title: K.zdiscTip, tip: true },
-    gspread: { key: 'gspread', label: 'G-спред', num: true, fmt: v => f.bp(v) },
-    dur: { key: 'mdur', label: 'Дюр.', num: true, fmt: v => v == null ? '—' : f.n(v, 2) },
+    zdisc: { key: 'zdisc', label: 'Z к RUONIA', num: true, unit: 'б.п.', val: r => r.zSpreadZ, fmt: v => v == null ? '<span class="mut3">—</span>' : f.bp(v), title: K.zdiscTip, tip: true },
+    gspread: { key: 'gspread', label: 'G-спред', num: true, unit: 'б.п.', fmt: v => f.bp(v) },
+    dur: { key: 'mdur', label: 'Дюр.', num: true, unit: 'лет', fmt: v => v == null ? '—' : f.n(v, 2) },
     dv01: { key: 'dv01', label: 'DV01', num: true, fmt: v => f.dv(v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽/бп', title: K.tips.dv01, tip: true },
     cs01: { key: 'cs01', label: 'CS01', num: true, fmt: v => f.dv(v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽/бп', title: K.tips.cs01, tip: true },
     basis01: { key: 'basis01', label: 'Базис01', num: true, fmt: v => v ? f.dv(v) : '<span class="mut3">·</span>', sum: true, unit: 'тыс ₽/бп', title: K.tips.basis01, tip: true },
@@ -1345,7 +1465,7 @@
     opt = opt || {};
     const xs = H.dates, RA = H.runAt, per = mode === 'dv01' && opt.perBond && H.qty;
     const raw = (mode === 'dm' ? H.dm : mode === 'dv01' ? H.dv01 : H.notional) || [];
-    const name = mode === 'dm' ? 'DM, б.п.' : mode === 'notional' ? 'Номинал, mm' : per ? 'DV01, ₽/бп на 1 бумагу' : 'DV01, тыс ₽/бп';
+    const name = mode === 'dm' ? 'DM, б.п.' : mode === 'notional' ? 'Номинал, mm ' + (opt.ccy || 'в валюте бумаги') : per ? 'DV01, ₽/бп на 1 бумагу' : 'DV01, тыс ₽/бп';
     const val = i => { const v = raw[i]; if (v == null) return RA && RA[i] && mode !== 'dm' ? 0 : null; if (per) { const q = H.qty[i]; return q ? v / q : null; } return mode === 'dv01' ? v / 1e3 : mode === 'notional' ? v / 1e6 : v; };
     const P = xs.map((_, i) => K.histPoint(H, i)), V = xs.map((_, i) => val(i));
     const main = V.map((v, i) => !P[i] || P[i].k === 'minor' ? v : null), old = V.map((v, i) => P[i] && P[i].k === 'old' ? v : null);
@@ -1364,7 +1484,7 @@
       const i = at[(ps[0] || {}).axisValue]; if (i == null) return '';
       const q = H.qty && H.qty[i], q0 = H.qty && i > 0 ? H.qty[i - 1] : null, pt = P[i];
       return '<b>' + esc(f.date(xs[i])) + '</b><br>' + esc(name) + ': <b>' + fmt(pt && (pt.k === 'gap' || pt.k === 'unvalued' || pt.k === 'before') ? null : V[i]) + '</b>' +
-        (q != null ? '<br><span style="opacity:.75">бумаг: ' + f.n(q) + (q0 != null && Math.abs(q - q0) > 1e-6 ? ' (' + f.s(q - q0) + ' к ' + esc(f.date(xs[i - 1])) + ')' : '') + '</span>' : '') +
+        (q != null ? '<br><span style="opacity:.75">бумаг: ' + f.n(q) + (q0 != null && Math.abs(q - q0) > 1e-6 ? ' · ' + f.s(q - q0) + ' к ' + esc(f.date(xs[i - 1])) : '') + '</span>' : '') +
         (pt && pt.k !== 'before' ? '<br><span style="color:' + warn + '">' + esc(PT_LABEL[pt.k]) + ': ' + esc(pt.t) + '</span>' : '');
     } };
     // покрытие ряда: с первой точки, где позиция есть
@@ -1416,7 +1536,7 @@
       '<div class="k-sec">Параметры</div>' + K.fieldsHtml(fields) +
       (p.legs && p.legs.length ? '<div class="k-sec">Ноги сделки <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">' + p.legs.length + '</span></div>' + K.legsHtml(p) : '') +
       '<div class="k-sec">PnL <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽</span></div>' +
-      '<div class="k-fields">' + [['Итого день', pn.total], ['Кэрри', pn.carry], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx], ['Сделки', pn.trading], ['Прочее', pn.other], ['MTD', p.pnlMtd], ['YTD', p.pnlYtd]].map(([l, v]) => '<div><div class="l">' + l + '</div><div class="v ' + f.cls(v) + '">' + (Math.abs(v) >= 1e7 ? f.mns(v, 1) + ' <small>mm</small>' : f.ks(v)) + '</div></div>').join('') + '</div>' + K.fundingLine(p) +
+      '<div class="k-fields">' + [['Итого день', pn.total], ['Кэрри', pn.carry], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx], ['Сделки', pn.trading], ['Прочее', pn.other], ['MTD', p.pnlMtd], ['YTD', p.pnlYtd]].map(([l, v]) => '<div><div class="l">' + l + '</div><div class="v ' + f.cls(v) + '">' + (Math.abs(v) >= 1e7 ? f.mns(v, 1) + ' <small>mm ₽</small>' : f.ks(v) + ' <small>тыс ₽</small>') + '</div></div>').join('') + '</div>' + K.fundingLine(p) +
       '<div class="k-sec">История <span class="sp"></span><span class="hunit" style="margin-right:6px"></span><span class="hseg"></span></div><div class="hchart" style="height:230px"></div><div class="hnote mut3" style="font-size:11.5px;line-height:1.45;margin:4px 0 0"></div>' +
       '<div class="k-sec">Риск по бакетам <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽/бп</span></div><div class="rchart" style="height:200px"></div>' +
       '<div class="k-sec">Риск по кривым и срокам <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽/бп · подпись — как считается</span></div>' + K.curveRiskTable(p) +
@@ -1433,7 +1553,7 @@
       const xs = H.dates, long = xs.length > 300;
       // ряды по прогонам (R44): точка — прогон своей даты; прошлой версией — пунктиром, другим методом — маркером,
       // без прогона или без оценки — разрыв (причина в подсказке)
-      const R = mode === 'dv01' || mode === 'notional' || (mode === 'spread' && isFloat && H.dm) ? K.runSeries(H, mode === 'spread' ? 'dm' : mode, { color: K.issuerColor(p.issuer), perBond: unit === 'bond' }) : null;
+      const R = mode === 'dv01' || mode === 'notional' || (mode === 'spread' && isFloat && H.dm) ? K.runSeries(H, mode === 'spread' ? 'dm' : mode, { ccy: p.ccy, color: K.issuerColor(p.issuer), perBond: unit === 'bond' }) : null;
       if (R && mode === 'spread' && H.dmPx) {  // R35: DM ядра по прогонам (R44) и оценка по цене за всю историю пунктиром
         R.series.forEach(x => { if (x.name === 'DM, б.п.') x.name = 'DM ядра (прогоны), б.п.'; });
         R.series.push({ type: 'line', name: 'DM по цене (оценка), б.п.', data: H.dmPx, connectNulls: true, showSymbol: false, lineStyle: { type: 'dashed', width: 1.2 }, color: css('--fg-3') });
@@ -1447,7 +1567,7 @@
           : mode === 'spread' ? (isFloat ? K.dmSeries(H)
             : [{ name: 'G-спред, б.п.', data: H.spr }].concat(H.zspr ? [{ name: 'Z-спред MOEX, б.п.', data: H.zspr }] : []))
             : mode === 'infl' ? [{ name: 'BEI, %', data: H.bei || [] }, { name: 'IR (реальная), %', data: H.ir || [] }].concat(H.cpi ? [{ name: 'ИПЦ г/г, %', data: H.cpi, step: 'end', lineStyle: { type: 'dashed', width: 1.2 } }] : [])
-              : mode === 'dv01' ? [{ name: 'DV01, тыс ₽/бп', data: H.dv01.map(v => v / 1e3), step: 'end' }] : [{ name: 'Номинал, mm', data: H.notional.map(v => v / 1e6), step: 'end', areaStyle: { opacity: .15 } }];
+              : mode === 'dv01' ? [{ name: 'DV01, тыс ₽/бп', data: H.dv01.map(v => v / 1e3), step: 'end' }] : [{ name: 'Номинал, mm ' + p.ccy, data: H.notional.map(v => v / 1e6), step: 'end', areaStyle: { opacity: .15 } }];
       return { grid: { left: 6, right: 10, top: 26, bottom: long ? 30 : 4, containLabel: true }, legend: { top: 0, left: 0 }, tooltip: R ? R.tooltip : { trigger: 'axis' }, xAxis: { type: 'category', data: xs, axisLabel: { formatter: v => f.dshort(v) } }, yAxis: { type: 'value', scale: true }, series: S.map((s, i) => Object.assign({ type: 'line', showSymbol: false, lineStyle: { width: 1.6 }, color: i ? css('--fg-3') : K.issuerColor(p.issuer) }, s)),
         dataZoom: long ? [{ type: 'inside', startValue: xs.length - 260 }, { type: 'slider', height: 14, bottom: 4, startValue: xs.length - 260, labelFormatter: (i, v) => f.dshort(v) }] : [{ type: 'inside' }] };
     });
@@ -1458,7 +1578,7 @@
     const cids = M.curves.filter(c => p.risk[c.id].some(v => Math.abs(v) > 1)).map(c => c.id);
     const rc = K.chart(o.bd.querySelector('.rchart'), () => ({
       grid: { left: 6, right: 10, top: 26, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis', valueFormatter: v => f.dv(v) },
-      xAxis: { type: 'category', data: M.buckets }, yAxis: { type: 'value', axisLabel: { formatter: v => f.dv(v) } },
+      xAxis: { type: 'category', data: M.buckets }, yAxis: { type: 'value', unit: 'тыс ₽/бп', axisLabel: { formatter: v => f.dv(v) } },
       series: cids.map(id => ({ name: M.curve[id].short, type: 'bar', stack: 'a', data: p.risk[id], itemStyle: { color: K.curveColors[id] } })).concat(p.cs01 ? [{ name: 'CS01', type: 'bar', data: p.cs01b, itemStyle: { color: K.curveColors.CS01 } }] : []),
     }));
     o.charts.push(rc);
@@ -1654,7 +1774,7 @@
       const num = (v, spec, bold) => Math.abs(v) < 500 ? '<span class="mut3">·</span>' : (bold ? '<b>' : '') + K.d(spec, null, '') + (bold ? '</b>' : '');
       let html = '<table class="k-tbl k-compact"><thead><tr><th>Валюта / тип</th><th class="n" title="' + esc(K.tips.dv01) + '"><span class="k-hint">DV01</span></th>' +
         curCols.map(c => '<th class="n" title="' + esc(K.curveTip(c.id) || c.name) + '">' + (ccys.length > 1 ? '<span class="mut3">' + c.ccy + '</span> ' : '') + esc(c.short) + '</th>').join('') +
-        '<th class="n" title="' + esc(K.tips.cs01) + '"><span class="k-hint">CS01</span></th><th class="n">MV, mm</th></tr></thead><tbody>';
+        '<th class="n" title="' + esc(K.tips.cs01) + '"><span class="k-hint">CS01</span></th><th class="n">MV, mm ₽</th></tr></thead><tbody>';
       const row = (label, list, lvl, color, ccy) => {
         const dv = M.sum(list, 'dv01'), cs = M.sum(list, 'cs01'), mv = M.sum(list, p => p.group === 'DER' ? 0 : p.mv);
         const rowBg = mode === 'type' ? (color ? tint(color, 0.10) : ccy ? tint(K.ccyColor(ccy), 0.16) : '') : '';
@@ -1725,8 +1845,8 @@
       const cols = vals.map(v => v >= 0 ? css('--pos') : css('--neg')).concat([css('--accent')]);
       const lo = Math.min(0, ...segs.map(x => Math.min(x[0], x[1]))), hi = Math.max(0, ...segs.map(x => Math.max(x[0], x[1])));
       return {
-        grid: { left: 6, right: 10, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'item', formatter: p => (keys[p.dataIndex] ? keys[p.dataIndex][1] : 'Итого') + ': <b>' + f.mns(p.dataIndex < vals.length ? vals[p.dataIndex] : run, 2) + '</b> mm' },
-        xAxis: { type: 'category', data: keys.map(k => k[1]).concat(['Итого']) }, yAxis: { type: 'value', min: lo, max: hi, scale: false, axisLabel: { formatter: v => f.mn(v, 0) } },
+        grid: { left: 6, right: 10, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'item', formatter: p => (keys[p.dataIndex] ? keys[p.dataIndex][1] : 'Итого') + ': <b>' + f.mns(p.dataIndex < vals.length ? vals[p.dataIndex] : run, 2) + '</b> mm ₽' },
+        xAxis: { type: 'category', data: keys.map(k => k[1]).concat(['Итого']) }, yAxis: { type: 'value', unit: 'mm ₽', nameGap: 20, min: lo, max: hi, scale: false, axisLabel: { formatter: v => f.mn(v, 0) } },
         series: [{
           type: 'custom', data: segs.map((s, i) => [i, s[0], s[1]]),
           renderItem: (params, api) => {
@@ -1800,23 +1920,23 @@
       const L = K.list(), k = M.kpis(L);
       const pnlH = M.hist.pnl.total.slice(-30);
       el.innerHTML = '<div class="k-kpis">' +
-        K.kpi('PnL дня', K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(k.pnl, 1)) + K.kpiUnit('mm'),
+        K.kpi('PnL дня', K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(k.pnl, 1)) + K.kpiUnit('mm ₽'),
           [['MTD', K.d({ title: 'PnL MTD', unit: 'mm ₽', fmt: v => f.mns(v, 1), list: L, val: 'pnlMtd' }) + K.partial('mtd')],
            ['YTD', K.d({ title: 'PnL YTD', unit: 'mm ₽', fmt: v => f.mns(v, 0), list: L, val: 'pnlYtd' }) + K.partial('ytd')]], K.spark(pnlH, 64, 20)) +
-        K.kpi('DV01 ставки', K.d({ title: 'DV01 ставки (все кривые)', unit: 'тыс ₽/бп', list: L, val: 'dv01' }) + K.kpiUnit('тыс/бп'),
+        K.kpi('DV01 ставки', K.d({ title: 'DV01 ставки (все кривые)', unit: 'тыс ₽/бп', list: L, val: 'dv01' }) + K.kpiUnit('тыс ₽/бп'),
           K.kpiCcyRows(M.ccys.reduce((o, c) => (o[c] = k.byCcy[c].dv01, o), {}), c => K.d({ title: 'DV01 ' + c + ' (кривые ' + c + ')', unit: 'тыс ₽/бп', list: L, val: p => INSTR.dv01In(p, c) }), 3, f.dv), null, K.tips.dv01) +
-        K.kpi('DV01 RUONIA', K.d({ title: 'DV01 RUONIA', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB RUONIA'] }) + K.kpiUnit('тыс/бп'),
+        K.kpi('DV01 RUONIA', K.d({ title: 'DV01 RUONIA', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB RUONIA'] }) + K.kpiUnit('тыс ₽/бп'),
           [['КС', K.d({ title: 'DV01 КС', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB KEY'] })],
            M.ofzView === 'kbd' ? [K.hint('КБД', K.tips.kbd), K.d({ title: 'DV01 КБД (ОФЗ)', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB OFZ'] })]
              : [K.hint('базис ОФЗ', K.tips.basis01), K.d({ title: 'Базис ОФЗ−RUONIA', unit: 'тыс ₽/бп', list: L, val: 'basis01' })],
            [K.hint('спред к КБД', K.tips.ofzSpr01), K.d({ title: 'Спред ОФЗ к КБД', unit: 'тыс ₽/бп', list: L, val: 'ofzSpr01' })]], null,
           K.tips.ruonia + '\n\n' + (M.ofzView === 'kbd' ? K.tips.kbd : K.tips.basis01)) +
-        K.kpi('CS01', K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }) + K.kpiUnit('тыс/бп'),
+        K.kpi('CS01', K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }) + K.kpiUnit('тыс ₽/бп'),
           [['корп. RUB', K.d({ title: 'CS01 корп RUB', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === 'RUB'), val: 'cs01' })],
            ['вал.', K.d({ title: 'CS01 валютные', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy !== 'RUB'), val: 'cs01' })]], null, K.tips.cs01) +
-        K.kpi('Кэрри / день', K.d({ title: 'Кэрри за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }) + K.kpiUnit('тыс'),
-          [['в год ≈', '<span class="' + f.cls(k.carryDay) + '">' + f.mn(k.carryDay * 365, 0) + '</span> <span class="u">mm</span>']]) +
-        K.kpi('Облигации MV', K.d({ title: 'MV облигаций', unit: 'bn ₽', fmt: v => f.bn(v, 1), list: L.filter(p => p.group !== 'DER'), val: 'mv', color: false }) + K.kpiUnit('bn'),
+        K.kpi('Кэрри / день', K.d({ title: 'Кэрри за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }) + K.kpiUnit('тыс ₽'),
+          [['в год ≈', '<span class="' + f.cls(k.carryDay) + '">' + f.mn(k.carryDay * 365, 0) + '</span> <span class="u">mm ₽</span>']]) +
+        K.kpi('Облигации MV', K.d({ title: 'MV облигаций', unit: 'bn ₽', fmt: v => f.bn(v, 1), list: L.filter(p => p.group !== 'DER'), val: 'mv', color: false }) + K.kpiUnit('bn ₽'),
           K.kpiCcyRows(M.ccys.reduce((o, c) => (o[c] = k.byCcy[c].mv, o), {}), (c, v) => f.bn(v, 1), 3, v => f.bn(v, 1))) +
         '<div class="k-kpi k-fxk"><div class="l">' + K.hint('ОВП', K.tips.fxMini) + '</div><div class="v">' + K.fxMini(L) + '</div><div class="s"><a class="go" href="c06-launchpad.html#fx" title="плитка «ОВП и курсы»: бонды и деривативы по валютам, курсы, PnL FX">подробно (C06) →</a></div></div>' +
         '</div>';
