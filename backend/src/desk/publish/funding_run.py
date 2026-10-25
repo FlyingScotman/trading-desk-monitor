@@ -19,9 +19,12 @@ result in the run's publication.
 - HTM purchase lots: the positions of a ``cost`` book type with the report's ``purchase_date``,
   ``purchase_price_pct`` (on the row's face), ``contract_rate_pct`` and, for ``htm_base`` ``cash_spent``, the
   ``purchase_accrued_ccy`` of private/1.3, funded until the first coupon after the purchase (the bond's schedule);
-- cash: ``cash_balances`` in force on ``D`` and on the start (a stock, carried forward), summed per book and currency
-  over its accounts; a balance reported by several ledgers is a problem (which ledger is authoritative is not in the
-  contract). A book funded on its cash with no balance is a problem, not a 0;
+- cash: ``cash_balances`` in force on ``D`` and on the start (a stock, carried forward; a multi-date file's history
+  gives the start's balance too), summed per book and currency over its accounts (``desk.cash.balances``). A balance
+  several ledgers report is funded when they agree within ``cash.TOLERANCE``; when they disagree it is a problem and
+  not funded (which ledger is authoritative is not in the contract: the conservative default of ``desk.cash``). A
+  book funded on its cash (its book type's base ``cash``, or every book of an entity of scheme ``cash_balance``)
+  with no balance is a problem, not a 0;
 - REPO: none (the contract has no REPO terms yet: 08 §10 drafts), said in the notes;
 - index fixings and FX: the hub fixings of both markets in percent (``rate_index.FixingTable``, a value older than
   ``FIXING_MAX_AGE_DAYS`` is none) and the CBR official rates in force (``FxTable``, the reporting currency RUB).
@@ -54,7 +57,7 @@ from typing import Any
 
 import psycopg
 
-from .. import store
+from .. import cash, store
 from ..marketdata.adapter import MarketView
 from ..rules import funding as F
 from ..rules.rate_index import FixingTable, FxTable
@@ -221,28 +224,26 @@ class _Inputs:
 
 def _cash(con: psycopg.Connection, d: date, known_at: Any, books: dict[str, dict], problems: list[F.FundingProblem]
           ) -> tuple[list[F.CashBalance] | None, list[dict]]:
-    """``cash_balances`` in force on ``d``, per (book, currency) summed over its accounts; None without any unit."""
-    ds = store.dataset_rows(con, "cash_balances", d, known_at=known_at)
-    if not ds.units:
+    """``cash_balances`` in force on ``d``, per (book, currency) summed over its accounts and compared across ledgers
+    (``desk.cash``: a break is a problem, not a balance); None without any unit."""
+    bals, units_read = cash.balances(con, d, known_at=known_at)
+    if not units_read:
         return None, []
-    sums: dict[tuple[str, str, str], dict[str | None, float]] = defaultdict(lambda: defaultdict(float))
-    for r in ds.rows:
-        sums[(str(r["entity"]), str(r["book_id"]), str(r["ccy"]))][r.get("ledger")] += float(Decimal(r["balance_ccy"]))
     out = []
-    for (entity, book, ccy), by_ledger in sorted(sums.items()):
-        ref = f"{book}|{ccy}"
-        if len(by_ledger) > 1:
-            problems.append(F.FundingProblem(F.LineKind.CASH, ref, "остаток в нескольких учётных системах ("
-                                             + ", ".join(sorted(str(x) for x in by_ledger)) + "): какая основная — "
-                                             "не задано"))
+    for b in bals:
+        ref = f"{b.book_id}|{b.ccy}"
+        if b.known is None:  # a break between ledgers: no balance is known (desk.cash, the conservative default)
+            problems.append(F.FundingProblem(
+                F.LineKind.CASH, ref, f"расхождение остатка между учётными системами ({', '.join(b.ledgers())}) "
+                f"на {_f(b.diff):,.2f} {b.ccy}: какая основная — не задано, не фондируется (экран C15)"))
             continue
-        bt = (books.get(book) or {}).get("book_type")
+        bt = (books.get(b.book_id) or {}).get("book_type")
         if not bt:
-            problems.append(F.FundingProblem(F.LineKind.CASH, ref, f"книга {book} без book_type"))
+            problems.append(F.FundingProblem(F.LineKind.CASH, ref, f"книга {b.book_id} без book_type"))
             continue
-        out.append(F.CashBalance(book, bt, entity, ccy, next(iter(by_ledger.values()))))
+        out.append(F.CashBalance(b.book_id, bt, b.entity, b.ccy, float(b.known)))
     units = [{"scope": u["scope"], "valid_date": _jsonable(u["valid_date"]), "set_id": u["set_id"],
-              "row_count": u["row_count"]} for u in ds.units]
+              "row_count": u["row_count"]} for u in units_read]
     return out, units
 
 
@@ -429,6 +430,7 @@ def _compute(con: psycopg.Connection, on: date, prev: MarketView | None, market:
     # books funded on their cash that have no balance in the snapshot the policy reads
     snap = inp.previous_cash if pol.cash_base_date is F.BaseDate.PREVIOUS else inp.cash
     with_cash = {c.book_id for c in snap or ()}
+    with_cash |= {p.ref.split("|", 1)[0] for p in problems if p.kind is F.LineKind.CASH and "|" in p.ref}  # said
     for b in sorted(run_book_ids | {c.book_id for c in inp.cash}):
         m = books.get(b) or {}
         etype = (entities or {}).get(m.get("entity") or "", F.EntityType.MAIN) if entities else F.EntityType.MAIN
