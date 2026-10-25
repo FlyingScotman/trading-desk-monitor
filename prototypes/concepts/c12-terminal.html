@@ -332,7 +332,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
         const S = ids.map(ser);
         const row = K.h('div', 'row2'); bd.appendChild(row); const a = K.h('div'), b = K.h('div'); row.append(a, b);
         const c = K.chart(ch(a, 280), () => ({ grid: { left: 6, right: 6, top: 28, bottom: 4, containLabel: true }, legend: { top: 0 }, tooltip: { trigger: 'axis' },
-          xAxis: { type: 'category', data: M.buckets }, yAxis: [{ type: 'value', scale: true }, { type: 'value', splitLine: { show: false }, axisLabel: { formatter: v => v + 'бп' } }],
+          xAxis: { type: 'category', data: M.buckets }, yAxis: [{ type: 'value', scale: true }, { type: 'value', splitLine: { show: false }, axisLabel: { formatter: v => f.n(v) + ' бп' } }],
           series: S.flatMap((s, i) => [
             { name: s.name, type: 'line', data: s.pts.map(v => +v.toFixed(3)), symbolSize: 5, color: K.curveColors[s.risk] || K.PAL[i] },
             { name: s.name + ' вчера', type: 'line', data: s.pts.map((v, k) => +(v - s.chg[k] / (s.unit === 'бп' ? 1 : 100)).toFixed(3)), showSymbol: false, lineStyle: { type: 'dashed', width: 1 }, color: K.curveColors[s.risk] || K.PAL[i], opacity: .5 },

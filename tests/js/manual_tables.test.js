@@ -119,6 +119,26 @@ t('#131: CSV ручной таблицы — как на экране: числ�
   same(K.tableCsv(T3, {}).split('\r\n').slice(3, 5), ['03/15/2029', '03/15/1999']);
 });
 
+t('#131 + #153: CSV ручной таблицы — отрицательные с обычным минусом и в режиме «(1)», и в режиме «−1»', () => {
+  const { K } = load(new Map());
+  const neg = (fm, x) => fm === 'acc' ? '(' + x + ')' : '−' + x;
+  const rows = fm => [[{ h: neg(fm, '1,234.5'), cls: 'n' }, { h: neg(fm, '4.44%'), cls: 'n' }, { h: neg(fm, '1.50 bn'), cls: 'n' },
+    { h: '<span class="dr">' + neg(fm, '7') + '</span>', cls: 'n' }, { h: '2.5', cls: 'n' }, '(3 поз.)', { h: '94.58 ' + neg(fm, '0.12%'), cls: 'n' }]];
+  // таблица нарисована в текущем режиме: K.negFmt тот же, что при отрисовке
+  const csvOf = fm => { K.negFmt = fm; return K.tableCsv(table({ head: [['a', 'b', 'c', 'd', 'e', 'f', 'g']], body: rows(fm) }), {}).split('\r\n')[3]; };
+  assert.strictEqual(csvOf('acc'), '-1234.5,-4.44%,"=""-1.50 bn""",-7,2.5,(3 поз.),94.58 -0.12%');
+  assert.strictEqual(csvOf('minus'), csvOf('acc'), 'одинаково в обоих режимах');
+  // в режиме «−1» скобки в числовой ячейке — не минус (их рисует не формат отрицательных)
+  K.negFmt = 'minus';
+  assert.strictEqual(K.tableCsv(table({ head: [['a']], body: [[{ h: '12 (3)', cls: 'n' }]] }), {}).split('\r\n')[3], '12 (3)');
+  // K.table выгружает в режиме «−1» при любой настройке
+  for (const fm of ['acc', 'minus']) {
+    K.negFmt = fm;
+    const api = K.table(el(), { rows: [{ id: 'a', x: -1234.5 }], search: false, viewKey: 'c99-neg-' + fm, columns: [{ key: 'x', label: 'X', num: true, fmt: v => K.f.n(v, 1) }] });
+    assert.strictEqual(api.csv().split('\r\n')[3], '-1234.5', fm);
+  }
+});
+
 t('#131: K.tableTools — кнопки под таблицей, ширина колонок запоминается по viewKey, сброс, повторный вызов', () => {
   const store = new Map(), { K } = load(store);
   const mk = () => table({ head: [['Книга', { h: 'MV', cls: 'n', k: 'mv' }, 'Прим.']], body: [['A', { h: '1', cls: 'n' }, 'x']] });

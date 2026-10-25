@@ -101,7 +101,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
           cell('Облигации, bn', K.d({ title: 'MV облигаций', unit: 'bn ₽', fmt: v => f.bn(v, 1), list: bonds(L), val: 'mv', color: false }), M.ccys.map(c => c + ' ' + f.bn(k.byCcy[c].mv, 1)).join(' · ')) +
           cell('ОВП <a class="mut3" href="#fx" data-fxgo title="плитка «ОВП и курсы»">→</a>', K.fxMini(L), '') +  // R43: валюта на строку, мелкие — в «прочих»
           cell('КС · RUONIA', f.pct(M.indices['КС']) + ' <span class="mut" style="font-size:12px">' + f.pct(M.indices['RUONIA']) + '</span>', esc(M.cbr.next.label) + ' ' + f.dshort(M.cbr.next.date)) +
-          cell('USD/RUB · CNY/RUB', f.n(M.fx.USD, 2) + ' <span class="mut" style="font-size:12px">' + f.n(M.fx.CNY, 2) + '</span>', '<span class="' + f.cls(M.fxChgPct.USD) + '">' + f.s(M.fxChgPct.USD, 2) + '%</span> · <span class="' + f.cls(M.fxChgPct.CNY) + '">' + f.s(M.fxChgPct.CNY, 2) + '%</span>') +
+          cell('USD/RUB · CNY/RUB', f.n(M.fx.USD, 2) + ' <span class="mut" style="font-size:12px">' + f.n(M.fx.CNY, 2) + '</span>', '<span class="' + f.cls(M.fxChgPct.USD) + '">' + f.pcts(M.fxChgPct.USD, 2) + '</span> · <span class="' + f.cls(M.fxChgPct.CNY) + '">' + f.pcts(M.fxChgPct.CNY, 2) + '</span>') +
           '</div>';
       },
     },
@@ -211,10 +211,10 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const yest = today.map((v, i) => v - chg[i] / 100);
         const riskId = isOfz ? 'RUB OFZ' : mode;
         const c = small(el, () => ({ grid: { left: 4, right: 4, top: 22, bottom: 2, containLabel: true }, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis' },
-          xAxis: { type: 'category', data: M.buckets }, yAxis: [{ type: 'value', scale: true, axisLabel: { formatter: v => v.toFixed(1) + '%' } }, { type: 'value', splitLine: { show: false }, axisLabel: { formatter: v => v + 'бп' } }],
+          xAxis: { type: 'category', data: M.buckets }, yAxis: [{ type: 'value', scale: true, axisLabel: { formatter: v => f.pct(v, 1) } }, { type: 'value', splitLine: { show: false }, axisLabel: { formatter: v => f.n(v) + ' бп' } }],
           series: [{ name: 'изм., б.п.', type: 'bar', yAxisIndex: 1, data: chg, itemStyle: { color: css('--fg-3'), opacity: .45 }, barMaxWidth: 18 },
-            { name: 'вчера', type: 'line', data: yest.map(v => +v.toFixed(3)), showSymbol: false, lineStyle: { type: 'dashed', width: 1.2 }, color: css('--fg-3'), tooltip: { valueFormatter: v => v.toFixed(2) + '%' } },
-            { name: 'сегодня', type: 'line', data: today.map(v => +v.toFixed(3)), symbolSize: 5, color: K.curveColors[riskId] || css('--accent'), tooltip: { valueFormatter: v => v.toFixed(2) + '%' } }] }));
+            { name: 'вчера', type: 'line', data: yest.map(v => +v.toFixed(3)), showSymbol: false, lineStyle: { type: 'dashed', width: 1.2 }, color: css('--fg-3'), tooltip: { valueFormatter: v => f.pct(v) } },
+            { name: 'сегодня', type: 'line', data: today.map(v => +v.toFixed(3)), symbolSize: 5, color: K.curveColors[riskId] || css('--accent'), tooltip: { valueFormatter: v => f.pct(v) } }] }));
         c.on('click', pp => { const k = pp.dataIndex; K.drill({ title: 'Риск ' + (isOfz ? 'базис ОФЗ' : M.curve[mode].short) + ' · ' + M.buckets[k] + ' (изм. ' + chg[k] + ' бп)', unit: 'тыс ₽/бп', rows: K.list().map(p => ({ p, v: p.risk[riskId][k] })) }); });
       },
     },
@@ -239,7 +239,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const part = (c, der) => L.filter(p => (p.group === 'DER') === der && INSTR.fxIn(p, c));
         if (mode === 'table') {
           bd.innerHTML = '<table class="k-tbl" data-vk="c06-fx-position" data-title="ОВП по валютам"><thead><tr><th>Вал</th><th class="n">Курс</th><th class="n">Бонды</th><th class="n">Дерив.</th><th class="n">ОВП</th><th class="n" title="тыс ₽">PnL FX</th></tr></thead><tbody>' +
-            C.map(c => '<tr><td>' + K.ccyTag(c) + '</td><td class="n">' + f.n(M.fx[c], 2) + ' <span class="' + f.cls(M.fxChgPct[c]) + '" style="font-size:10.5px">' + f.s(M.fxChgPct[c], 2) + '%</span></td>' +
+            C.map(c => '<tr><td>' + K.ccyTag(c) + '</td><td class="n">' + f.n(M.fx[c], 2) + ' <span class="' + f.cls(M.fxChgPct[c]) + '" style="font-size:10.5px">' + f.pcts(M.fxChgPct[c], 2) + '</span></td>' +
               '<td class="n">' + K.d({ title: 'FX дельта бондов ' + c, unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: part(c, false), val: fx(c) }) + '</td>' +
               '<td class="n">' + K.d({ title: 'FX дельта деривативов ' + c, unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: part(c, true), val: fx(c) }) + '</td>' +
               '<td class="n"><b>' + K.d({ title: 'ОВП ' + c, unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: L, val: fx(c) }) + '</b></td>' +
