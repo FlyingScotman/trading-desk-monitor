@@ -1289,9 +1289,11 @@
   // ISO-значение для века дат; строка с data-csv-skip (раскрытые подробности) и колонка без заголовка и без текста
   // (полоска, спарклайн) не выгружаются; colspan — пустыми ячейками, у заголовка с colspan подписи колонок можно дать
   // в data-csv="a|b|c". Таблица внутри ячейки другой таблицы — со своей строкой кнопок прямо под ней.
-  // Строка кнопок встаёт после прокручиваемого контейнера таблицы (не внутри: там закреплена строка «Итого») и не
-  // закрепляется. Ширина колонки хранится по её ключу: data-k у заголовка, иначе текст заголовка — сменился набор
-  // колонок (матрица по валютам, сводная) — ширина остаётся у своей колонки.
+  // Строка кнопок — сразу после таблицы, в том же контейнере (сетка страницы не меняется, при перерисовке контейнера
+  // уходит вместе с таблицей); в прокручиваемом контейнере закреплена внизу, а закреплённая строка «Итого» стоит над
+  // ней (kit.css, table.k-tooled tfoot). Ширина колонки хранится по её ключу: data-k у заголовка, иначе текст
+  // заголовка без единицы и символа валюты — сменился набор колонок (матрица по валютам, сводная) или валюта
+  // отчёта — ширина остаётся у своей колонки.
   const rowsOf = sec => sec ? [...sec.rows] : [];
   const cellsOf = tr => {  // ячейки строки с учётом colspan: пропуски — null
     const out = [];
@@ -1304,6 +1306,7 @@
     const l = K.htmlText((th.innerHTML || '').replace(/<span class="k-thu">[\s\S]*?<\/span>/g, '')), u = m ? K.htmlText(m[1]) : '';
     return u && !l.includes(',') ? l + ', ' + u : l;
   };
+  K.accToMinus = t => String(t).replace(/^\((\d[\d,]*(?:\.\d+)?[^()]*)\)$/, '-$1').replace(/\((\d[\d,]*(?:\.\d+)?%?)\)/g, '-$1');
   K.tableCsv = (table, opts) => {
     opts = opts || {};
     const tx = c => c ? K.htmlText(c.innerHTML) : '';
@@ -1324,10 +1327,13 @@
     const one = c => {
       if (!c) return '';
       const num = /(^|\s)n(\s|$)/.test(c.className || ''), d = c.dataset || {};
-      // таблица нарисована в текущем формате отрицательных (#153): в режиме «(1)» число в скобках в числовой ячейке —
-      // отрицательное («(1.50 bn)» → «-1.50 bn», «94.58 (0.12%)» → «94.58 -0.12%»), и CSV одинаков в обоих режимах
-      const acc = num && K.negFmt === 'acc';
-      const t = acc ? tx(c).replace(/^\((\d[\d,]*(?:\.\d+)?[^()]*)\)$/, '-$1').replace(/(^|\s)\((\d[\d,]*(?:\.\d+)?%?)\)(?=\s|$)/g, '$1-$2') : tx(c);
+      // таблица нарисована в текущем формате отрицательных (#153), перерисовать её в другом формате нельзя (это HTML
+      // страницы): в режиме «(1)» число в скобках в числовой ячейке — отрицательное, как его пишет режим «−1»:
+      // «(1.50 bn)» → «-1.50 bn», «94.58 (0.12%)» → «94.58 -0.12%», «(1,500.00)mm RUB» → «-1,500.00mm RUB»,
+      // «(2,010)+5бп» → «-2,010+5бп», «124(1)бп» → «124-1бп» (сдвиг кривой под цифрой); CSV одинаков в обоих режимах
+      // в тексте (пояснение «ставки (1.6)» на C05) — только дробное число или с разделителем тысяч: «(2029)», «(3 поз.)»
+      // остаются как есть
+      const t = K.negFmt !== 'acc' ? tx(c) : num ? K.accToMinus(tx(c)) : tx(c).replace(/\((\d{1,3}(?:,\d{3})*\.\d+%?|\d{1,3}(?:,\d{3})+%?)\)/g, '-$1');
       return d.date ? K.csvDateCell(d.date, t, num) : K.csvCell(t, num, d.v);
     };
     return K.csvBuild(K.u(K.csvTitle(opts)), head ? keep.map(i => K.csvLabel(K.u(head[i] || ''))) : null, body.map(r => keep.map(i => one(r[i])).join(',')));
@@ -1338,30 +1344,13 @@
     if (table.__kt) return table.__kt;  // повторный вызов без перерисовки — та же строка кнопок и те же ручки
     const vkey = 'table:' + opts.viewKey;
     const bar = h('div', 'k-tbl-ctlbar k-tbl-ctlbar-m'), ctl = h('span', 'k-tbl-ctl'); bar.dataset.vk = vkey; bar.appendChild(ctl);
-    // строка кнопок — после прокручиваемого контейнера таблицы (в пределах панели), иначе сразу после таблицы.
-    // Таблицу часто рисуют в ещё не вставленный в страницу элемент: тогда место уточняется, когда она попадёт в
-    // страницу (наблюдатель ниже вызывает place)
-    let note = null;
-    const place = () => {
-      let anchor = table;
-      for (let p = table.parentElement, i = 0; p && i < 6 && p !== document.body && !/^T[DH]$/.test(p.tagName) && !(p.classList && (p.classList.contains('k-panel') || p.classList.contains('k-drawer'))); p = p.parentElement, i++)
-        if (K.scrolls(p)) { anchor = p; break; }
-      if (!anchor.parentElement) { if (!bar.parentElement) table.after(bar); return; }
-      // строка кнопок прежней отрисовки (контейнер перерисован, а она осталась снаружи) — убрать
-      [...anchor.parentElement.children].forEach(x => { if (x !== anchor && x !== bar && x.dataset && x.dataset.vk === vkey) x.remove(); });
-      // в контейнере несколько таблиц — у кнопок подпись, чьи они
-      const many = anchor !== table && opts.title && anchor.querySelectorAll && anchor.querySelectorAll('table').length > 1;
-      if (many && !note) { note = h('span', 'k-note', K.esc(K.u(opts.title))); bar.insertBefore(note, ctl); }
-      if (!many && note) { note.remove(); note = null; }
-      if (anchor.nextElementSibling !== bar) anchor.after(bar);
-    };
     const csv = () => K.tableCsv(table, opts), csvName = () => K.csvFileName(table, opts);
     const csvBtn = h('button', 'k-tbtn', '⤓ CSV');
     csvBtn.title = 'выгрузить в CSV (Excel): таблица как на экране; номер прогона и дата среза — в первой строке и в имени файла';
     csvBtn.onclick = e => { e.stopPropagation(); K.download(csvName(), '﻿' + csv(), 'text/csv;charset=utf-8'); };
     const resetBtn = h('button', 'k-tbtn', '⟲ вид'); resetBtn.title = 'сбросить ширину колонок этой таблицы';
     ctl.append(csvBtn, resetBtn);
-    place();
+    table.after(bar);
     table.classList.add('k-tooled');
     const hd = rowsOf(table.tHead), hr = hd.length ? hd[hd.length - 1] : null;
     const ths = hr ? [...hr.cells] : [];
@@ -1382,7 +1371,7 @@
     const save = () => { K.viewStore.set(vkey, lay); paint(); };
     const reset = () => { lay = {}; K.viewStore.reset(vkey); apply(); };
     resetBtn.onclick = e => { e.stopPropagation(); reset(); };
-    const api = table.__kt = { csv, csvName, viewKey: vkey, el: table, bar, place, layout: () => JSON.parse(JSON.stringify(lay)), resetView: reset,
+    const api = table.__kt = { csv, csvName, viewKey: vkey, el: table, bar, layout: () => JSON.parse(JSON.stringify(lay)), resetView: reset,
       setLayout: v => { lay = canW ? K.viewLayout(v, keys) : {}; save(); apply(); } };
     if (!canW) { paint(); return api; }
     table.classList.add('k-rszable');
@@ -1425,35 +1414,26 @@
   // все ручные таблицы в контейнере, размеченные data-vk="ключ" (и data-title="название в CSV") — после отрисовки
   K.tableToolsAll = root => [...root.querySelectorAll('table[data-vk]')].map(t => K.tableTools(t, { viewKey: t.dataset.vk, title: t.dataset.title }));
   // ключи колонок для ширины: data-k, иначе текст заголовка (повтор — с номером), пустой заголовок — по месту
+  const SYM_RE = new RegExp('[' + Object.values(K.SYM).join('').replace(/[$]/g, '\\$') + ']', 'g');
   K.colKeys = ths => {
     const seen = {};
     return ths.map((th, i) => {
       if (th.dataset && th.dataset.k) return th.dataset.k;
-      const t = K.htmlText(th.innerHTML.replace(/<span class="k-thu">[\s\S]*?<\/span>/g, ''));  // без единицы: ширина не зависит от валюты отчёта
+      // без единицы второй строки и с «¤» вместо символа валюты: ширина не зависит от валюты отчёта (#105)
+      const t = K.htmlText(th.innerHTML.replace(/<span class="k-thu">[\s\S]*?<\/span>/g, '')).replace(SYM_RE, '¤');
       if (!t) return 'c' + i;
       seen[t] = (seen[t] || 0) + 1;
       return 'h:' + t + (seen[t] > 1 ? '#' + seen[t] : '');
     });
   };
-  // прокручиваемый элемент: класс scroll / k-tbl-wrap, overflow в style или (на странице) в стилях
-  K.scrolls = el => {
-    if (!el || !el.classList) return false;
-    if (el.classList.contains('scroll') || el.classList.contains('k-tbl-wrap')) return true;
-    const s = el.style || {};
-    if (/auto|scroll/.test((s.overflow || '') + (s.overflowY || '') + (s.overflowX || ''))) return true;
-    if (!el.isConnected) return false;
-    try { const cs = getComputedStyle(el); return /auto|scroll/.test((cs.overflowY || '') + (cs.overflowX || '')); } catch (e) { return false; }
-  };
   // таблица с data-vk получает кнопки, как только попадает в страницу — даже если отрисовка забыла K.tableToolsAll;
-  // у таблицы с кнопками уточняется место строки кнопок (прокручиваемый контейнер виден только в странице)
-  K.tableToolsAuto = node => {
-    if (!node || node.nodeType !== 1) return;
-    const one = t => { if (t.__kt) t.__kt.place(); else if (t.dataset && t.dataset.vk) K.tableTools(t, { viewKey: t.dataset.vk, title: t.dataset.title }); };
-    if (node.tagName === 'TABLE') { one(node); return; }
-    if (node.querySelectorAll) [...node.querySelectorAll('table[data-vk], table.k-tooled')].forEach(one);
-  };
+  // таблицу убрали из страницы (смена режима: таблица → график), а строка кнопок осталась — строка уходит с ней
+  const tablesIn = (node, sel) => !node || node.nodeType !== 1 ? [] : node.tagName === 'TABLE' ? [node] : node.querySelectorAll ? [...node.querySelectorAll(sel)] : [];
+  K.tableToolsAuto = node => tablesIn(node, 'table[data-vk]').forEach(t => { if (!t.__kt && t.dataset && t.dataset.vk) K.tableTools(t, { viewKey: t.dataset.vk, title: t.dataset.title }); });
+  K.tableToolsGone = node => tablesIn(node, 'table.k-tooled').forEach(t => { const b = t.__kt && t.__kt.bar; if (b && !t.isConnected && b.isConnected) b.remove(); });
   try {
-    new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(K.tableToolsAuto))).observe(document.documentElement, { childList: true, subtree: true });
+    new MutationObserver(ms => ms.forEach(m => { m.removedNodes.forEach(K.tableToolsGone); m.addedNodes.forEach(K.tableToolsAuto); }))
+      .observe(document.documentElement, { childList: true, subtree: true });
   } catch (e) { }
 
   // стандартные колонки позиций (концепты берут нужные по ключу)

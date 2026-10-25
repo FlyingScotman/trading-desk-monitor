@@ -123,10 +123,13 @@ t('#131 + #153: CSV ручной таблицы — отрицательные �
   const { K } = load(new Map());
   const neg = (fm, x) => fm === 'acc' ? '(' + x + ')' : '−' + x;
   const rows = fm => [[{ h: neg(fm, '1,234.5'), cls: 'n' }, { h: neg(fm, '4.44%'), cls: 'n' }, { h: neg(fm, '1.50 bn'), cls: 'n' },
-    { h: '<span class="dr">' + neg(fm, '7') + '</span>', cls: 'n' }, { h: '2.5', cls: 'n' }, '(3 поз.)', { h: '94.58 ' + neg(fm, '0.12%'), cls: 'n' }]];
-  // таблица нарисована в текущем режиме: K.negFmt тот же, что при отрисовке
-  const csvOf = fm => { K.negFmt = fm; return K.tableCsv(table({ head: [['a', 'b', 'c', 'd', 'e', 'f', 'g']], body: rows(fm) }), {}).split('\r\n')[3]; };
-  assert.strictEqual(csvOf('acc'), '-1234.5,-4.44%,"=""-1.50 bn""",-7,2.5,(3 поз.),94.58 -0.12%');
+    { h: '<span class="dr">' + neg(fm, '7') + '</span>', cls: 'n' }, { h: '2.5', cls: 'n' }, '(3 поз.)', 'fwd ' + neg(fm, '16.3') + ', ставки ' + neg(fm, '1.6') + ' (2029)', { h: '94.58 ' + neg(fm, '0.12%'), cls: 'n' },
+    { h: neg(fm, '1,500.00') + '<span class="mut3">mm RUB</span>', cls: 'n' }, { h: neg(fm, '2,010') + '<small>+5бп</small>', cls: 'n' },
+    { h: '124<small>' + neg(fm, '1') + 'бп</small>', cls: 'n' }, { h: '·<small>' + neg(fm, '3') + 'бп</small>', cls: 'n' }]];
+  // таблица нарисована в текущем режиме: K.negFmt тот же, что при отрисовке; C03 «Номинал» и C10 «кривая × бакет» —
+  // число со склеенной единицей
+  const csvOf = fm => { K.negFmt = fm; return K.tableCsv(table({ head: [['a', 'b', 'c', 'd', 'e', 'f', 'f2', 'g', 'h', 'i', 'j', 'k']], body: rows(fm) }), {}).split('\r\n')[3]; };
+  assert.strictEqual(csvOf('acc'), '-1234.5,-4.44%,"=""-1.50 bn""",-7,2.5,(3 поз.),"fwd -16.3, ставки -1.6 (2029)",94.58 -0.12%,"=""-1,500.00mm RUB""","=""-2,010+5бп""",124-1бп,·-3бп');
   assert.strictEqual(csvOf('minus'), csvOf('acc'), 'одинаково в обоих режимах');
   // в режиме «−1» скобки в числовой ячейке — не минус (их рисует не формат отрицательных)
   K.negFmt = 'minus';
@@ -153,8 +156,9 @@ t('#131 + #105: CSV ручной таблицы — единица второй 
   assert.strictEqual(U[2], 'Книга,"DV01, тыс $/бп","MV, mm $","Итого, mm $"');
   assert.ok(U[0].includes('таблица,"Кэрри, тыс $"'));
   assert.ok(!U.join('\n').includes('₽'));
-  // ключ ширины — без единицы: не зависит от валюты отчёта
-  same(usd.colKeys(table({ head }).tHead.rows[0].cells), ['h:Книга', 'h:DV01', 'h:MV, mm ₽', 'h:Итого, mm ₽']);
+  // ключ ширины — без единицы и с «¤» вместо символа валюты: не зависит от валюты отчёта
+  same(usd.colKeys(table({ head }).tHead.rows[0].cells), ['h:Книга', 'h:DV01', 'h:MV, mm ¤', 'h:Итого, mm ¤']);
+  same(usd.colKeys(table({ head: [['Книга', 'MV, mm $']] }).tHead.rows[0].cells), ['h:Книга', 'h:MV, mm ¤'], 'символ уже подменён на странице — тот же ключ');
 });
 
 t('#131: K.tableTools — кнопки под таблицей, ширина колонок запоминается по viewKey, сброс, повторный вызов', () => {
@@ -211,24 +215,23 @@ t('#131: K.tableTools — кнопки под таблицей, ширина к�
   same(K.colKeys(table({ head: [['', 'Δ', 'Δ', { h: 'x', k: 'kx' }]] }).tHead.rows[0].cells), ['c0', 'h:Δ', 'h:Δ#2', 'kx']);
 });
 
-t('#131: строка кнопок — после прокручиваемого контейнера (не закрывает закреплённое «Итого»), прежняя убирается', () => {
+t('#131: строка кнопок — сразу после таблицы в её контейнере (сетка страницы не меняется), «Итого» — над ней', () => {
   const { K } = load(new Map());
-  const panel = el(); panel.classList.add('k-panel');
-  const sc = el(); sc.classList.add('scroll'); panel.appendChild(sc);
-  const mk = () => { const T = table({ head: [['a']], body: [['1']], foot: [['Итого']] }); sc.children = []; sc.appendChild(T.parent); return T; };
-  let T = mk();
-  K.tableTools(T, { viewKey: 'c99-scroll', title: 'Т' });
-  const bars = () => panel.children.filter(c => c.dataset.vk === 'table:c99-scroll');
-  assert.strictEqual(bars().length, 1); assert.strictEqual(sc.nextElementSibling, bars()[0], 'сразу после контейнера, вне его');
-  assert.ok(bars()[0].classList.contains('k-tbl-ctlbar-m'), 'не закреплена');
-  T = mk(); K.tableTools(T, { viewKey: 'c99-scroll' });  // перерисовка содержимого контейнера
-  assert.strictEqual(bars().length, 1, 'строка прежней отрисовки убрана');
-  // overflow в style — тоже прокручиваемый; без прокрутки — сразу после таблицы
-  assert.ok(K.scrolls(Object.assign(el(), { style: { overflow: 'auto' } })));
-  assert.ok(!K.scrolls(el()));
+  // C03: прокручиваемый блоттер — ячейка сетки страницы; строка кнопок остаётся внутри него, рядом с таблицей
+  const grid = el(), side = el(), sc = el(); sc.classList.add('c3-tbl'); grid.append(sc, side);
+  const T = table({ head: [['a']], body: [['1']], foot: [['Итого']] }); sc.children = []; sc.appendChild(T);
+  K.tableTools(T, { viewKey: 'c99-grid' });
+  same(grid.children.map(c => c === sc ? 'scroller' : c === side ? 'side' : 'other'), ['scroller', 'side'], 'у сетки те же ячейки');
+  assert.strictEqual(T.nextElementSibling, T.__kt.bar, 'строка — сразу после таблицы');
+  assert.strictEqual(T.__kt.bar.parent, sc);
+  // «Итого» закреплено над строкой кнопок, а строка у коротких таблиц брифинга — просто под таблицей
+  const css = P('concepts/lib/kit.css');
+  assert.ok(/\.k-tbl-ctlbar-m \{ height: 24px;/.test(css) && /table\.k-tooled tfoot td \{ bottom: 24px; \}/.test(css));
+  assert.ok(/table\.mini \+ \.k-tbl-ctlbar-m \{ position: static;/.test(css));
+  assert.ok(!/^\.k-tbl-ctlbar-m \{[^}]*position/m.test(css), 'в прокручиваемом контейнере строка закреплена, как у K.table');
 });
 
-t('#131: таблица с data-vk получает кнопки сама, как только попадает в страницу', () => {
+t('#131: таблица с data-vk получает кнопки сама; ушла со страницы — строка кнопок уходит с ней', () => {
   const { K } = load(new Map());
   assert.ok(observed, 'наблюдатель зарегистрирован');
   same(observed[2], { childList: true, subtree: true });
@@ -236,20 +239,19 @@ t('#131: таблица с data-vk получает кнопки сама, ка�
   const host = el(), A = table({ head: [['a']], body: [['1']] }), B = table({ head: [['b']], body: [['2']] });
   A.dataset.vk = 'c99-auto-a'; B.dataset.vk = 'c99-auto-b'; host.appendChild(A.parent);
   host.querySelectorAll = sel => /table\[data-vk\]/.test(sel) ? [A] : [];
-  cb([{ addedNodes: [host] }, { addedNodes: [B] }, { addedNodes: [{ nodeType: 3 }] }]);
+  cb([{ addedNodes: [host], removedNodes: [] }, { addedNodes: [B], removedNodes: [] }, { addedNodes: [{ nodeType: 3 }], removedNodes: [] }]);
   assert.ok(A.__kt && A.nextElementSibling.dataset.vk === 'table:c99-auto-a');
   assert.ok(B.__kt && B.nextElementSibling.dataset.vk === 'table:c99-auto-b');
-  const before = A.__kt; cb([{ addedNodes: [host] }]);
+  const before = A.__kt; cb([{ addedNodes: [host], removedNodes: [] }]);
   assert.strictEqual(A.__kt, before, 'повторно не подключается');
-  // таблицу нарисовали в элемент вне страницы, потом вставили в прокручиваемый контейнер: строка кнопок переезжает за него
-  const T = table({ head: [['a']], body: [['1']], foot: [['Итого']] }), box = T.parent;
-  K.tableTools(T, { viewKey: 'c99-late' });
-  assert.strictEqual(T.nextElementSibling.dataset.vk, 'table:c99-late');
-  const panel = el(), sc = el(); sc.classList.add('scroll'); panel.appendChild(sc); sc.appendChild(box);
-  box.querySelectorAll = sel => /k-tooled/.test(sel) ? [T] : [];
-  cb([{ addedNodes: [box] }]);
-  assert.strictEqual(sc.nextElementSibling && sc.nextElementSibling.dataset.vk, 'table:c99-late');
-  assert.ok(!box.children.some(c => c.dataset.vk), 'внутри контейнера строки кнопок больше нет');
+  // смена режима «таблица → график» убрала только таблицу: строка кнопок (её CSV — скрытая таблица) уходит тоже
+  const box = A.parent, bar = A.__kt.bar;
+  A.remove(); A.isConnected = false;
+  cb([{ addedNodes: [], removedNodes: [A] }]);
+  assert.ok(!box.children.includes(bar), 'строки кнопок без таблицы нет');
+  // таблица на месте (перенос внутри страницы) — строка остаётся
+  const bbar = B.__kt.bar; cb([{ addedNodes: [], removedNodes: [B] }]);
+  assert.ok(B.parent.children.includes(bbar));
   // подписи колонок под общим заголовком с colspan (C05 «Кривые»): data-csv
   const C = table({ head: [['', '1Y', { h: 'неделя', span: 2 }]], body: [['RUONIA', '15.00', '+5', '+7']] });
   C.tHead.rows[0].cells[2].dataset.csv = 'неделя 1Y|неделя 5Y';
