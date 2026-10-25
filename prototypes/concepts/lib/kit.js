@@ -2,6 +2,7 @@
  * KIT — общие компоненты концептов (нужны mock.js и ../echarts.min.js).
  *
  *  KIT.f.*                — форматирование (тыс ₽/бп, mm, bn, б.п., даты)
+ *  KIT.negFmt, KIT.setNegFmt(v) — отрицательные числа: 'acc' — (1,234.5) красным (по умолчанию), 'minus' — −1,234.5
  *  KIT.top({title, tag})  — шапка: дата и тип данных, «следующее обновление» и предупреждение без среза дня (#22),
  *                           фильтр книг и портфелей (общий для всех мониторов), поиск, тема
  *  KIT.dataLabel(run), KIT.headerStatus(status, now) — тип данных прогона и состояние шапки по статусу автопилота
@@ -72,7 +73,19 @@
 
   // ---------- форматирование ----------
   // формат чисел: запятая — разделитель тысяч, точка — дробной части (1,234.56)
-  const grp = (v, d) => { if (v == null || !isFinite(v)) return '—'; const s = Math.abs(v).toFixed(d || 0).split('.'); s[0] = s[0].replace(/\B(?=(\d{3})+(?!\d))/g, ','); return (v < 0 && /[1-9]/.test(s.join('')) ? '−' : '') + s.join('.'); };
+  // отрицательные (#153) — настройка интерфейса K.negFmt: 'acc' — бухгалтерский формат (1,234.5), красным (по
+  // умолчанию), 'minus' — −1,234.5. Хранится в K.viewStore (ключ 'ui:numfmt'), меняется кнопкой в шапке без
+  // перезагрузки (K.setNegFmt). CSV — всегда с обычным минусом (K.withNegFmt). Ноль, в том числе отрицательное число,
+  // округлённое до нуля, — без знака и без скобок; null / NaN — «—». suf — единица, которая в скобках стоит внутри:
+  // (4.44%), (1.2 bn)
+  K.NEG_FMTS = [['acc', '(1,234.5)'], ['minus', '−1,234.5']];
+  K.negFmt = 'acc';
+  const grp = (v, d, suf) => {
+    if (v == null || !isFinite(v)) return '—';
+    const s = Math.abs(v).toFixed(d || 0).split('.'); s[0] = s[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    const t = s.join('.') + (suf || '');
+    return v < 0 && /[1-9]/.test(s.join('')) ? (K.negFmt === 'minus' ? '−' + t : '(' + t + ')') : t;
+  };
   // в валюте отчёта, отличной от рубля, суммы в тысячах мелкие: показываем с одним знаком после точки
   const KD = K.repr === 'RUB' ? 0 : 1;
   const sgn = (v, d) => (v > 0 ? '+' : '') + grp(v, d);
@@ -85,9 +98,10 @@
     bn: (v, d) => grp(v / 1e9, d == null ? 2 : d),
     bp: v => v == null ? '—' : grp(v, 0),
     bps: v => v == null ? '—' : sgn(v, 0),
-    pct: (v, d) => v == null ? '—' : grp(v, d == null ? 2 : d) + '%',
+    pct: (v, d) => v == null ? '—' : grp(v, d == null ? 2 : d, '%'),
+    pcts: (v, d) => v == null ? '—' : (v > 0 ? '+' : '') + grp(v, d == null ? 2 : d, '%'),
     px: v => v == null ? '—' : grp(v, 3),
-    money: v => { if (v == null || !isFinite(v)) return '—'; const a = Math.abs(v); return a >= 1e9 ? grp(v / 1e9, 2) + ' bn' : a >= 1e6 ? grp(v / 1e6, 1) + ' mm' : a >= 1e3 ? grp(v / 1e3, 0) + 'k' : grp(v, 0); },
+    money: v => { if (v == null || !isFinite(v)) return '—'; const a = Math.abs(v); return a >= 1e9 ? grp(v / 1e9, 2, ' bn') : a >= 1e6 ? grp(v / 1e6, 1, ' mm') : a >= 1e3 ? grp(v / 1e3, 0, 'k') : grp(v, 0); },
     moneys: v => (v > 0 ? '+' : '') + f.money(v),
     dv: v => grp(v / 1e3, KD),                    // DV01 в тыс ₽/бп
     dvs: v => sgn(v / 1e3, KD),
@@ -111,9 +125,9 @@
     if (!P) return '';
     const cs = (ccys || M.ccys).filter(c => c !== 'RUB' && P.rate[c] != null);
     if (!cs.length) return '';
-    return 'PnL FX по курсу ' + cs.map(c => c + ' ' + f.n(P.rate[c], c === 'CNY' ? 4 : 2) + ' ' + f.s(P.chgPct[c], 2) + '%' +
+    return 'PnL FX по курсу ' + cs.map(c => c + ' ' + f.n(P.rate[c], c === 'CNY' ? 4 : 2) + ' ' + f.pcts(P.chgPct[c], 2) +
       (P.source && P.source[c] && P.source[c] !== P.label ? ' (' + K.esc(P.source[c]) + ')' : '') +
-      (C && C !== P && C.rate[c] != null ? ' · ЦБ ' + f.n(C.rate[c], c === 'CNY' ? 4 : 2) + ' ' + f.s(C.chgPct[c], 2) + '%' : '')).join(', ') +
+      (C && C !== P && C.rate[c] != null ? ' · ЦБ ' + f.n(C.rate[c], c === 'CNY' ? 4 : 2) + ' ' + f.pcts(C.chgPct[c], 2) : '')).join(', ') +
       ' — ' + K.esc(P.label) + (C && C !== P ? '; курс ЦБ (действующий на дату) — для официального PnL' : '');
   };
   // разрез, которого в данных нет (секторов и рейтингов в статике хаба нет): у всех позиций «—» / «без рейтинга»
@@ -237,7 +251,9 @@
 
   // ---------- события ----------
   const subs = {};
-  function fire(ev) { (subs[ev] || []).forEach(fn => { try { fn(); } catch (e) { console.error(e); } }); }
+  // по копии списка: подписка K.live, чей элемент удалён, отписывается во время рассылки — без копии forEach
+  // пропустил бы следующего подписчика (страница не перерисовалась бы при второй смене фильтра или формата)
+  function fire(ev) { (subs[ev] || []).slice().forEach(fn => { try { fn(); } catch (e) { console.error(e); } }); }
   // подписка; возвращает функцию отписки
   K.on = (ev, fn) => { (subs[ev] = subs[ev] || []).push(fn); return () => { const a = subs[ev], i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); }; };
   // перерисовка блока, пока его элемент в документе; отписывается, когда элемент удалён
@@ -543,12 +559,19 @@
       '<span class="k-chip" data-a="repr" title="Валюта отчёта: все суммы деска пересчитываются по споту">в ' + K.repr + ' ' + K.SYM[K.repr] + ' ▾</span>' +
       srcChip() + (M.notes && M.notes.length ? '<span class="k-chip" data-a="notes" title="Чего нет в данных прогона" style="border-color:var(--warn)">ⓘ ' + M.notes.length + '</span>' : '') +
       '<button class="k-btn" data-a="search">Поиск <span class="k-kbd">Ctrl K</span></button>' +
+      '<button class="k-btn" data-a="numfmt"></button>' +
       '<button class="k-btn" data-a="theme" title="Светлая / тёмная тема">◐</button>';
     document.body.prepend(bar);
     if (/^https?:$/.test(location.protocol) && !window.DESK_AUTH) document.head.appendChild(Object.assign(document.createElement('script'), { src: '../desk-auth.js' }));  // вход: пользователь, «Выйти», CSRF
     chipsBox = bar.querySelector('.filters'); renderFilterChips();
     bar.querySelector('[data-a=search]').onclick = () => K.palette();
     bar.querySelector('[data-a=theme]').onclick = K.toggleTheme;
+    const nb = bar.querySelector('[data-a=numfmt]');  // формат отрицательных чисел (#153): щелчок — другой формат
+    const paintNeg = () => {
+      nb.textContent = K.negFmt === 'acc' ? '(1)' : '−1';
+      nb.title = 'Отрицательные числа: ' + (K.negFmt === 'acc' ? '(1,234.5) красным' : '−1,234.5') + '. Щелчок — ' + (K.negFmt === 'acc' ? 'со знаком минус' : 'в скобках (бухгалтерский формат)') + '; в CSV — всегда минус';
+    };
+    paintNeg(); nb.onclick = () => K.setNegFmt(K.negFmt === 'acc' ? 'minus' : 'acc'); K.on('numfmt', paintNeg);
     bindSrc(bar);
     if (K.source === 'real') { freshness(bar); backfillChip(bar); }
     const oc = bar.querySelector('[data-a=ofzview]');
@@ -831,6 +854,61 @@
       reset(key) { mem[key] = null; try { localStorage.removeItem(P + key); } catch (e) { } },
     };
   })();
+  // ---------- формат отрицательных чисел (#153) ----------
+  // настройка — в том же слое вида (ключ 'ui:numfmt', {neg: 'acc' | 'minus'}); чужое значение — по умолчанию 'acc'
+  const NEG_KEY = 'ui:numfmt', negOk = v => K.NEG_FMTS.some(x => x[0] === v);
+  { const s = K.viewStore.get(NEG_KEY); if (s && negOk(s.neg)) K.negFmt = s.neg; }
+  // сменить формат: запомнить и перерисовать без перезагрузки — блоки страниц перерисовываются по событию 'filter'
+  // (K.onFilter, K.live), графики — по K.charts; подписчики 'numfmt' — то, что от фильтра не зависит (кнопка шапки)
+  K.setNegFmt = v => {
+    if (!negOk(v) || v === K.negFmt) return;
+    K.negFmt = v; K.viewStore.set(NEG_KEY, { neg: v });
+    fire('numfmt'); fire('filter');
+    K.charts.forEach(c => c.redraw && c.redraw());
+    if (typeof document.querySelectorAll === 'function') K.accMarkAll(document);
+  };
+  // выполнить fn с другим форматом отрицательных (CSV — всегда 'minus'); настройка после вызова — прежняя
+  K.withNegFmt = (v, fn) => { const old = K.negFmt; K.negFmt = v; try { return fn(); } finally { K.negFmt = old; } };
+  // красный цвет и выравнивание в бухгалтерском формате — по тексту цифры, а не в каждом форматтере: форматтеры
+  // отдают простой текст (он идёт и в подписи графиков, и в title), а мониторы рисуют таблицы сами. Где «(…)» —
+  // это число: числовая ячейка td.n, кликабельная цифра .dr, значение плитки и поля карточки. Текст, который
+  // начинается с числа в скобках, — отрицательное (k-accn, красным); числовая ячейка, в которой только
+  // неотрицательное число, — k-accp: невидимая «)» после числа, цифры столбца стоят ровно под скобками
+  K.ACC_SEL = 'td.n, .dr, .k-kpi .v, .k-fields .v';
+  K.accClass = text => {
+    if (K.negFmt !== 'acc') return '';
+    const t = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+    if (/^\(\d[\d,]*(?:\.\d+)?[^()]*\)/.test(t)) return 'k-accn';
+    if (/^\+?\d[\d,]*(?:\.\d+)?%?$/.test(t)) return 'k-accp';
+    return '';
+  };
+  // смысловой цвет страницы важнее бухгалтерского красного (#103): классы знака и изменения (pos, neg, chg-up,
+  // chg-dn — у доходности рост красный, падение зелёное) и фон тепловой карты (K.heat в style) — у самого элемента
+  // или у его ячейки; такая цифра остаётся в скобках, но красной не становится
+  K.ACC_KEEP = ['pos', 'neg', 'chg-up', 'chg-dn'];
+  K.accKeep = e => {
+    for (let x = e, i = 0; x && i < 4; x = x.parentElement, i++) {
+      if (x.classList && K.ACC_KEEP.some(c => x.classList.contains(c))) return true;
+      const st = x.getAttribute && x.getAttribute('style');
+      if (st && /(^|;)\s*(background|color)\s*:/.test(st)) return true;
+      if (x.tagName === 'TD' || x.tagName === 'TH') break;
+    }
+    return false;
+  };
+  const accMark = e => { const c = K.accClass(e.textContent); e.classList.toggle('k-accn', c === 'k-accn' && !K.accKeep(e)); e.classList.toggle('k-accp', c === 'k-accp' && e.tagName === 'TD'); };
+  K.accMarkAll = root => { const r = root || document; if (r.matches && r.matches(K.ACC_SEL)) accMark(r); if (r.querySelectorAll) r.querySelectorAll(K.ACC_SEL).forEach(accMark); };
+  if (typeof MutationObserver === 'function' && typeof requestAnimationFrame === 'function') {
+    // разметку меняют страницы и компоненты: новые узлы и узлы с изменённым текстом размечаются в следующем кадре
+    let todo = new Set(), queued = false;
+    const flush = () => {
+      queued = false; const L = [...todo]; todo = new Set();
+      L.forEach(n => { if (n.isConnected) { K.accMarkAll(n); const up = n.parentElement && n.parentElement.closest(K.ACC_SEL); if (up) accMark(up); } });
+    };
+    new MutationObserver(ms => {
+      ms.forEach(m => { const n = m.type === 'characterData' ? m.target.parentElement : m.target; if (n && n.nodeType === 1) todo.add(n); });
+      if (!queued && todo.size) { queued = true; requestAnimationFrame(flush); }
+    }).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+  }
   // стабильный ключ таблицы — без списка колонок (добавили колонку — раскладка не теряется, K.viewLayout сводит её с
   // текущим набором): opts.viewKey (его передают все мониторы), иначе страница + ближайший id в разметке
   K.tableKey = (el, opts) => {
@@ -868,9 +946,11 @@
   //   а начало «= + - @» — с апострофом. Остальной текст — как есть. Заголовки и название таблицы — K.csvLabel.
   K.htmlText = s => String(s == null ? '' : s).replace(/<(?:[^>"']|"[^"]*"|'[^']*')*>/g, '').replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
-  K.csvNum = t => {  // «−1,234.5» → «-1234.5»; «+12» → «12»; «4.44%» → «4.44%»; не число — null
-    const m = /^([+−-]?)(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(%?)$/.exec(t);
-    return m ? (m[1] === '+' ? '' : m[1] ? '-' : '') + m[2].replace(/,/g, '') + (m[3] || '') + m[4] : null;
+  K.csvNum = t => {  // «−1,234.5» и «(1,234.5)» → «-1234.5»; «+12» → «12»; «4.44%» → «4.44%»; не число — null
+    const a = /^\(([^()]*)\)$/.exec(t), u = a ? a[1] : t;  // бухгалтерский формат (#153): скобки — минус
+    const m = /^([+−-]?)(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(%?)$/.exec(u);
+    if (!m || (a && m[1])) return null;
+    return (m[1] === '+' ? '' : m[1] || a ? '-' : '') + m[2].replace(/,/g, '') + (m[3] || '') + m[4];
   };
   const usDate = (y, mo, d) => (+mo >= 1 && +mo <= 12 && +d >= 1 && +d <= 31) ? mo + '/' + d + '/' + y : null;
   K.csvDate = s => {  // «2029-03-15» (ISO, можно со временем) → «03/15/2029»; не дата — null
@@ -1117,7 +1197,8 @@
     function csv() {
       const C = cols().filter(c => K.htmlText(c.label)), R = K.csvRun(), q = K.csvLabel;  // без подписи — оформление (полоска доли)
       const head = C.map(c => { const l = K.htmlText(c.label); return q(c.unit && !l.includes(',') ? l + ', ' + c.unit : l); });
-      const line = r => C.map(c => { const v = val(c, r); return K.csvCell(K.htmlText(c.fmt ? c.fmt(v, r) : v), c.num, v); }).join(',');
+      // числа — с обычным минусом при любой настройке формата отрицательных (#153)
+      const line = r => C.map(c => { const v = val(c, r); return K.csvCell(K.htmlText(K.withNegFmt('minus', () => c.fmt ? c.fmt(v, r) : v)), c.num, v); }).join(',');
       return ['run_id,' + (/^\d+$/.test(R.run_id) ? R.run_id : q(R.run_id)) + ',as_of,' + (K.csvDate(R.as_of) || q(R.as_of)) + ',таблица,' + q(csvTitle()) + ',строк,' + shown.length, '', head.join(',')]
         .concat(shown.map(line)).join('\r\n') + '\r\n';
     }
@@ -1136,6 +1217,7 @@
     const api = { redraw: draw, state: st, csv, csvName, setSort: s => { st.sort = s; draw(); }, setFilter: (k, v) => { st.filters[k] = v; draw(); }, setGrouped: g => { st.grouped = !!g; draw(); }, el,
       viewKey: vkey, layout: () => JSON.parse(JSON.stringify(lay)), setLayout: v => { lay = K.viewLayout(v, colKeys()); saveLay(); draw(); }, resetView: () => resetBtn.onclick() };
     if (opts.autoFilter !== false && !opts.rows) K.live(el, 'filter', draw);
+    else K.live(el, 'numfmt', draw);  // формат отрицательных чисел (#153): таблица без перерисовки по фильтру
     return api;
   };
 
@@ -1331,7 +1413,7 @@
       const i = at[(ps[0] || {}).axisValue]; if (i == null) return '';
       const q = H.qty && H.qty[i], q0 = H.qty && i > 0 ? H.qty[i - 1] : null, pt = P[i];
       return '<b>' + esc(f.date(xs[i])) + '</b><br>' + esc(name) + ': <b>' + fmt(pt && (pt.k === 'gap' || pt.k === 'unvalued' || pt.k === 'before') ? null : V[i]) + '</b>' +
-        (q != null ? '<br><span style="opacity:.75">бумаг: ' + f.n(q) + (q0 != null && Math.abs(q - q0) > 1e-6 ? ' (' + f.s(q - q0) + ' к ' + esc(f.date(xs[i - 1])) + ')' : '') + '</span>' : '') +
+        (q != null ? '<br><span style="opacity:.75">бумаг: ' + f.n(q) + (q0 != null && Math.abs(q - q0) > 1e-6 ? ' · ' + f.s(q - q0) + ' к ' + esc(f.date(xs[i - 1])) : '') + '</span>' : '') +
         (pt && pt.k !== 'before' ? '<br><span style="color:' + warn + '">' + esc(PT_LABEL[pt.k]) + ': ' + esc(pt.t) + '</span>' : '');
     } };
     // покрытие ряда: с первой точки, где позиция есть

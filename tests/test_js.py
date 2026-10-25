@@ -92,3 +92,7 @@ class ScenarioEngineJs(unittest.TestCase):
     def test_ofz_risk_view(self):  # #32: «RUONIA + базис» / «КБД»
         r = subprocess.run(["node", str(ROOT / "tests" / "js" / "ofz_view.test.js")], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_negative_number_format(self):  # #153: (1,234.5) красным / −1,234.5; CSV — с минусом
+        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "neg_format.test.js")], capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
