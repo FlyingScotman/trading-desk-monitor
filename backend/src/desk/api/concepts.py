@@ -253,6 +253,7 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
     return {"runId": run["run_id"], "asOf": as_of.isoformat(), "histDates": dates,
             "hist": {"dv01": series("dv01"), "cs01": [s["cs01"] for s in sums], "basis01": [s["basis"] for s in sums],
                      "ofzSpr01": [s.get("ofzSpr", 0.0) for s in sums], "basisPk01": [s.get("basisPk", 0.0) for s in sums],
+                     "basisIn01": [s.get("basisIn", 0.0) for s in sums],
                      "dv01Book": series("dv01Book"), "mvType": series("mvType"), "mvCcy": series("mvCcy"), "pnl": pnl},
             "histSource": "runs", "pnlPeriods": periods,
             "positions": positions, "cashflows": flows, **market,
@@ -806,6 +807,22 @@ RISK_KINDS = frozenset(k for k, g, _ in INSTR_KINDS if g in ("GOV", "SUB", "CORP
     "IRS", "CCS", "CDS", "TRS", "BOND_FUT", "BOND_FWD", "FX_FUT", "FX_FWD", "BOND_NA"}
 """Kinds whose position always has a rate or spread risk: one without any is ``risk missing``, never a zero (but
 an accrual-only HTM bond: no market risk by the rule)."""
+OFZ_VIEWS = {
+    "kbd": "«КБД»: an OFZ's rate risk on its own curve, the KBD (RUB OFZ in dv01_by_curve_rub), RUONIA without it; no "
+           "OFZ basis (ofz_basis_rub 0): every DV01 and spread field adds up once. An OFZ-PK has no KBD risk: its basis "
+           "(its spread to RUONIA) is in ofz_spread_kbd_rub. A run before 0.2.6 had its OFZ on RUONIA: their KBD risk "
+           "is approximated by their basis to RUONIA (ofz_view_note)",
+    "basis": "«RUONIA + базис» (the monitors' default): an OFZ's KBD risk on RUONIA (moving RUONIA moves the KBD with "
+             "it) and the OFZ basis to RUONIA OIS apart (ofz_basis_rub): two factors, the same risk seen twice -- never "
+             "add ofz_basis_rub to the DV01 fields",
+}
+"""How the risk table shows the OFZ risk (TDM#173; the monitors' switch «ОФЗ: RUONIA + базис / КБД», ``lib/real.js``
+``M.ofzView``). The DV01 by currency (``dv01_rub``) and over all curves is the same in both."""
+OFZ_VIEW_DEFAULT = "kbd"
+"""The API's default (TDM#173): the view whose fields add up without counting the KBD risk twice; the «RUONIA + базис»
+view (the monitors' default) only when asked for by name."""
+OFZ_VIEW_APPROX = ("a run before 0.2.6: its OFZ were on RUONIA, their KBD risk in the «КБД» view is their basis to "
+                   "RUONIA (ofz_spr01), moved off RUONIA")
 MISSING_TEXT = {"not_valued": "не оценена", "reported_no_risk": "оценена по отчёту, риска в отчёте нет",
                 "no_risk": "риск не посчитан"}
 GROUPS = ("GOV", "SUB", "CORP", "DER", "OTH")
@@ -858,14 +875,16 @@ def _curve_ccy(curve: str) -> str:
 
 def _cell() -> dict[str, Any]:
     return {"ids": set(), "legs": set(), "notional_ccy": 0.0, "notional_rub": 0.0, "mv_rub": 0.0, "curves": {},
-            "foreign": 0.0, "basis": 0.0, "ofz_spr": 0.0, "cs01": 0.0, "fx_delta_ccy": 0.0, "missing": {}}
+            "foreign": 0.0, "basis": 0.0, "in_proxy": 0.0, "ofz_spr": 0.0, "cs01": 0.0, "fx_delta_ccy": 0.0,
+            "missing": {}}
 
 
-def _risk_curves(f: dict[str, Any]) -> dict[str, float]:
-    """A fact's DV01 by the pages' curve (``CURVE_MAP``: the KBD's rate risk is RUONIA's), finite and nonzero."""
+def _risk_curves(f: dict[str, Any], kbd: bool = False) -> dict[str, float]:
+    """A fact's DV01 by the pages' curve (``CURVE_MAP``: the KBD's rate risk is RUONIA's; with ``kbd``, the «КБД» view,
+    it stays on ``RUB OFZ``), finite and nonzero."""
     out: dict[str, float] = {}
     for curve, bk in (f.get("risk") or {}).items():
-        cid = CURVE_MAP.get(curve, curve)
+        cid = curve if kbd and curve == "RUB OFZ" else CURVE_MAP.get(curve, curve)
         out[cid] = out.get(cid, 0.0) + sum(v or 0.0 for v in (bk or {}).values())
     return {c: v for c, v in out.items() if v and math.isfinite(v)}
 
@@ -921,7 +940,8 @@ DV01 over the curves of different currencies sums, but is not a currency's risk 
 
 
 def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
-               attribution: str = ATTRIBUTION_DEFAULT, gov_issuers: frozenset[str] = frozenset()) -> dict[str, Any]:
+               attribution: str = ATTRIBUTION_DEFAULT, gov_issuers: frozenset[str] = frozenset(),
+               ofz_view: str = OFZ_VIEW_DEFAULT) -> dict[str, Any]:
     """The table currency x instrument type over a run's positions, as a matrix (R38): ``ccys`` are its rows,
     ``columns`` the instrument kinds present (in ``INSTR_KINDS`` order, with each kind's total over all currencies:
     what sums, in RUB), a cell is the ``rows`` entry of level ``kind`` (ccy, kind), a row total the entry of level
@@ -930,9 +950,16 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
     one; ``fx`` the run's RUB rate per currency. Amounts in RUB (``*_rub``); the notional and FX delta in the
     currency (``*_ccy``), DV01 and MV too where its rate is known. Rows: one per currency (``level`` ccy), group
     (group) and kind (kind) with a position or a risk there; ``total`` only what sums across currencies, DV01 over
-    the curves of different currencies only as ``dv01_all_curves_rub`` (labelled so, never as a currency's)."""
+    the curves of different currencies only as ``dv01_all_curves_rub`` (labelled so, never as a currency's).
+    ``ofz_view`` (``OFZ_VIEWS``, TDM#173) says where an OFZ's KBD risk is, as the monitors' switch does: ``kbd`` on
+    ``RUB OFZ`` with no basis, ``basis`` on RUONIA plus the OFZ basis (``ofz_basis_rub``). An OFZ-IN's nominal proxy
+    (``summary.ofz_in_proxy``) is never a basis: its rate risk is where the view puts the KBD, ``dv01_ofz_in_proxy_rub``
+    says how much of it is the proxy (a memo, already in the DV01)."""
     if attribution not in ATTRIBUTIONS:
         raise ValueError(f"unknown attribution {attribution!r}")
+    if ofz_view not in OFZ_VIEWS:
+        raise ValueError(f"unknown ofz_view {ofz_view!r}")
+    kbd, approx = ofz_view == "kbd", False
     cells: dict[tuple[str, str], dict[str, Any]] = {}
 
     def cell(ccy: str, kind: str) -> dict[str, Any]:
@@ -955,10 +982,23 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
         for key, src in (("notional_ccy", "notional"), ("notional_rub", "notional_rub"), ("mv_rub", "mv_rub"),
                          ("cs01", "cs01")):
             c[key] += f.get(src) or 0.0
-        b, spr = summary.basis_of({"ofz_basis": (f.get("extra") or {}).get("ofz_basis01"), "ofz": f.get("ofz_spr01")})
-        c["basis"] += b
+        ex = f.get("extra") if isinstance(f.get("extra"), dict) else {}
+        b, spr = summary.basis_of({"ofz_basis": ex.get("ofz_basis01"), "ofz": f.get("ofz_spr01")})
+        # «КБД»: the run's KBD risk of an OFZ of the KBD scheme stays on RUB OFZ (as lib/real.js: another row's, e.g. a
+        # corporate's on a date without RUONIA, is on RUONIA in both views)
+        curves = _risk_curves(f, kbd and ex.get("ofz_basis01") is not None)
+        if summary.ofz_in_proxy(kind == "OFZ_IN", ex.get("ofz_basis01"), ex.get("quality")):
+            c["in_proxy"] += b  # a linker's nominal DV01 on the KBD: in the DV01 (RUONIA or RUB OFZ), not a basis
+        elif not kbd:
+            c["basis"] += b
+        elif kind == "OFZ_PK":  # «КБД»: an OFZ-PK has no KBD risk, its basis is its own spread to RUONIA
+            spr = (spr or 0.0) + b
+        elif ex.get("ofz_basis01") is None and b:  # a run before 0.2.6: the OFZ on RUONIA, its KBD risk ~ its basis
+            curves = {**curves, "RUB OFZ": curves.get("RUB OFZ", 0.0) + b,
+                      "RUB RUONIA": curves.get("RUB RUONIA", 0.0) - b}
+            curves = {cid: v for cid, v in curves.items() if v}
+            approx = True
         c["ofz_spr"] += spr or 0.0
-        curves = _risk_curves(f)
         for cid, v in curves.items():
             cc = _curve_ccy(cid)
             o = c if cc == home or not legs else cell(cc, kind)
@@ -1000,7 +1040,7 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
                 "notional_rub": sum(c["notional_rub"] for c in cs), "mv_rub": mv, "mv_ccy": mv / rate if rate else None,
                 "dv01_rub": dv01, "dv01_ccy": dv01 / rate if rate else None, "dv01_by_curve_rub": curves,
                 "dv01_foreign_rub": sum(c["foreign"] for c in cs), "ofz_basis_rub": sum(c["basis"] for c in cs),
-                "ofz_spread_kbd_rub": sum(c["ofz_spr"] for c in cs),
+                "ofz_spread_kbd_rub": sum(c["ofz_spr"] for c in cs), "dv01_ofz_in_proxy_rub": sum(c["in_proxy"] for c in cs),
                 "cs01_rub": sum(c["cs01"] for c in cs), "fx_delta_ccy": sum(c["fx_delta_ccy"] for c in cs),
                 "n_risk_missing": sum(missing.values()),
                 "risk_missing": [{"reason": k, "text": MISSING_TEXT[k], "n": n} for k, n in sorted(missing.items())]}
@@ -1027,6 +1067,7 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
              "dv01_all_curves_rub": sum(curves_all.values()),
              "ofz_basis_rub": sum(r["ofz_basis_rub"] for r in blocks), "cs01_rub": sum(r["cs01_rub"] for r in blocks),
              "ofz_spread_kbd_rub": sum(r["ofz_spread_kbd_rub"] for r in blocks),
+             "dv01_ofz_in_proxy_rub": sum(r["dv01_ofz_in_proxy_rub"] for r in blocks),
              "fx_delta_rub": None if no_rate else sum(r["fx_delta_ccy"] * (fx.get(r["ccy"]) or 0.0)
                                                       for r in blocks if r["ccy"] != "RUB"),
              "n_risk_missing": sum(r["n_risk_missing"] for r in blocks)}
@@ -1045,11 +1086,15 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
             "dv01_by_curve_rub": curves, "dv01_all_curves_rub": sum(curves.values()),
             "ofz_basis_rub": sum(c["basis"] for _, c in mine), "cs01_rub": sum(c["cs01"] for _, c in mine),
             "ofz_spread_kbd_rub": sum(c["ofz_spr"] for _, c in mine),
+            "dv01_ofz_in_proxy_rub": sum(c["in_proxy"] for _, c in mine),
             "fx_delta_rub": None if any(not fx.get(cc) for cc, _ in fx_rows) else sum(v * fx[cc] for cc, v in fx_rows),
             "n_risk_missing": sum(sum(c["missing"].values()) for _, c in mine)})
     return {"attribution": attribution, "attribution_rule": ATTRIBUTIONS[attribution],
             "attribution_provisional": True, "cross_ccy_kinds": list(CROSS_CCY_KINDS),
+            "ofz_view": ofz_view, "ofz_view_rule": OFZ_VIEWS[ofz_view],
+            "ofz_view_note": OFZ_VIEW_APPROX if approx else None,
             "kinds": [{"kind": k, "group": g, "label": lab} for k, g, lab in INSTR_KINDS],
-            "measures": [{"measure": m, "label": lab, "across_ccys": a} for m, lab, a in MATRIX_MEASURES],
+            "measures": [{"measure": m, "label": lab, "across_ccys": a} for m, lab, a in MATRIX_MEASURES
+                         if not (kbd and m == "ofz_basis")],
             "fx": {c: fx.get(c) for c in ccys if c != "RUB"}, "ccys": ccys, "columns": columns, "rows": rows,
             "total": total}

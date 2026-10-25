@@ -296,7 +296,7 @@ def test_reference_adapter_declares_every_dataset_and_reads_the_reference_tables
                                                             "trade_terms"}
     rep = conformance.check(None, [str(DS)], stub_ctx=True, config_dir=str(DS_CONFIG))
     assert rep.ok, rep.text()
-    assert rep.reference == {"books": 4, "entities": 2, "funding_rules": 7, "funding_policy": 2}
+    assert rep.reference == {"books": 4, "entities": 2, "funding_rules": 9, "funding_policy": 2}
     g = {k[0]: v for k, v in rep.groups.items() if k[1] == "2026-10-20"}
     assert g["ocp_csv"].statuses == {"accepted": 1} and g["ocp_csv"].units == {"accepted": 2}
     assert g["cash_balances_csv"].units == {"accepted": 3} and g["cash_balances_csv"].rows == 6
@@ -344,7 +344,7 @@ def test_scan_stores_the_datasets_with_revisions_and_stock_flow_reads(con, tmp_p
     r = scan.scan(con, s)
     assert r.ok and r.files == {"accepted": 3, "partially_accepted": 1}, r.text()
     assert r.units == {"accepted": 8, "rejected": 1} and r.revisions == 8
-    assert r.reference_revised == {"entities": 2, "funding_rules": 7, "funding_policy": 2} and "reference revised" in r.text()
+    assert r.reference_revised == {"entities": 2, "funding_rules": 9, "funding_policy": 2} and "reference revised" in r.text()
 
     ocp = store.dataset_rows(con, "ocp", D("2026-10-20"))
     assert sorted((x["book_id"], x["ccy"], x["ocp_ccy"]) for x in ocp.rows) == [("D1", "CNY", "-2500000.5"),
