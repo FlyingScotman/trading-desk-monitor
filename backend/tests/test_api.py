@@ -23,6 +23,7 @@ from desk.marketdata.adapter import MarketView
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import Outcome, attach_pnl, prepare, value
 from desk.publish import tdm_run
+from desk.rules import ocp as ocp_rules
 from desk.store import MIGRATIONS
 
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1"
@@ -299,6 +300,8 @@ def test_compat_parity_with_tdm_assemble(store_url, book, client, tmp_path):
     assert [p["id"] for p in got["positions"]] == [p["id"] for p in want["positions"]]
     for a, b in zip(got["positions"], want["positions"], strict=True):  # tdm: a missing PnL as 0, compat: null
         assert a["extra"].pop("funding")["state"] == "not_configured"  # B1: no funding rules in this store
+        if a.get("fxDelta"):  # B2: a row with an FX delta has its OCP component (tdm has none)
+            assert a["extra"].pop("ocp")["component"] in ocp_rules.COMPONENTS
         if a["pnl"]["available"]:
             assert a["pnl"]["reported"] == 0.0 and a["pnl"]["method"]
             assert a["pnl"]["funding"] is None and b["pnl"]["funding"] == 0  # not configured: null, not 0

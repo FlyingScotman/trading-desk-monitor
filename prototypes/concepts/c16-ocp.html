@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>C16 · ОВП</title>
+<link rel="stylesheet" href="lib/kit.css">
+<style>
+.c16-head { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+.c16-head .big { font-size: 20px; font-weight: 650; }
+.c16-badge { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--c); color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); white-space: nowrap; }
+.st-ok { --c: var(--pos); } .st-warn { --c: var(--warn); } .st-bad { --c: var(--neg); } .st-none { --c: var(--fg-3); }
+.c16-list { margin: 4px 0 0; padding-left: 18px; font-size: 12.5px; }
+.c16-list li.warn { color: var(--warn); }
+.c16-ccys { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr)); gap: 8px; }
+.c16-ccy { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--panel); position: relative; overflow: hidden; min-width: 0; }
+.c16-ccy::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--c, var(--line-2)); }
+.c16-ccy .l { font-size: 11px; color: var(--fg-2); text-transform: uppercase; letter-spacing: .05em; }
+.c16-ccy .v { font-size: 16px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.c16-ccy .s { font-size: 11.5px; color: var(--fg-2); margin-top: 4px; display: grid; grid-template-columns: 1fr auto; gap: 1px 10px; font-variant-numeric: tabular-nums; }
+.k-tbl td.wrap { white-space: normal; min-width: 200px; }
+.k-tbl tr.over td { background: color-mix(in srgb, var(--neg) 7%, transparent); }
+.c16-sub td { background: var(--bg-2); font-size: 12px; }
+.c16-msg { padding: 24px; text-align: center; color: var(--fg-2); }
+.c16-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+@media (max-width: 1100px) { .c16-two { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .k-panel > .hd { flex-wrap: wrap; } }
+</style>
+</head>
+<body>
+<div class="k-page">
+  <div id="view"><div class="c16-msg">загрузка…</div></div>
+</div>
+<script src="lib/boot.js"></script>
+<script src="lib/kit.js"></script>
+<script src="lib/instr.js"></script>
+<script>
+(function () {
+  'use strict';
+  // «ОВП» (B2, trading-desk-monitor#59): ОВП из позиций по слагаемым (кэш и к расчёту, PV валютных ног, фьючерсы,
+  // облигации, пассив фондирования, прочее, перенос ОВП), сверка с отчётом ОВП по каждой валюте на уровне отчёта
+  // (книга или юрлицо), брейк с разложением по слагаемым и подсказками, перенос ОВП по книгам.
+  // Данные: GET ../api/v1/runs/{run_id}/ocp (backend desk/publish/ocp_run.py, движок desk/rules/ocp.py); в демо —
+  // вымышленный набор той же формы. Состав ОВП в отчётах организации — только в приватном адаптере (TDM#60).
+  const M = MOCK, K = KIT, f = K.f, esc = K.esc;
+  K.top({ title: 'C16 · ОВП', tag: 'ОВП из позиций против отчёта, перенос ОВП' });
+  const server = K.source === 'real';
+  const view = document.getElementById('view');
+  const STATE = { computed: ['сверено с отчётом', 'st-ok'], no_report: ['отчёта ОВП нет', 'st-warn'], failed: ['ошибка расчёта', 'st-bad'], not_computed: ['прогон до расчёта ОВП', 'st-none'] };
+  const amt = v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.s(v, 0) + '</span>';
+  const scopeOf = x => x.book_id ? esc(x.book_id) + ((M.book && M.book[x.book_id] && M.book[x.book_id].name && M.book[x.book_id].name !== x.book_id) ? ' <span class="mut3">' + esc(M.book[x.book_id].name) + '</span>' : '') : 'юрлицо ' + esc(x.entity);
+  function panel(title, note) { const p = K.h('div', 'k-panel'); p.innerHTML = '<div class="hd"><h3>' + title + '</h3><span class="sp"></span>' + (note ? '<span class="k-note">' + note + '</span>' : '') + '</div><div class="bd"></div>'; return p; }
+  function msg(t) { view.innerHTML = '<div class="k-panel"><div class="c16-msg">' + t + '</div></div>'; }
+
+  function load() {
+    if (!server) { render(DEMO); return; }
+    fetch('../api/v1/runs/' + encodeURIComponent(M.run.id) + '/ocp', { cache: 'no-store' }).then(r => {
+      if (r.status === 401 || r.status === 403) throw Object.assign(new Error('forbidden'), { forbidden: true });
+      if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+      return r.json();
+    }).then(render).catch(e => e.forbidden ? msg('Нужно войти в монитор.') : msg('Не удалось загрузить ОВП прогона #' + esc(M.run.id) + ': ' + esc(e.message)));
+  }
+
+  function render(d) {
+    const C = {}; (d.components || []).forEach(c => { C[c.key] = c.name; });
+    const keys = (d.components || []).map(c => c.key);
+    const inRep = new Set(((d.policy || {}).report_components) || keys);
+    const [stT, stC] = STATE[d.state] || [d.state, 'st-none'];
+    const t = d.totals || {};
+    view.innerHTML = '';
+    const wrap = K.h('div', 'k-grid');
+
+    // итог: статус, брейки, что взято по умолчанию
+    const hd = panel('ОВП на ' + f.dshort(d.as_of), server ? 'прогон #' + esc(M.run.id) : 'демо');
+    const prov = ((d.policy || {}).decisions) || [];
+    hd.querySelector('.bd').innerHTML = '<div class="c16-head"><div><span class="c16-badge ' + (t.breaks ? 'st-bad' : stC) + '">' + (t.breaks ? 'брейков: ' + t.breaks : stT) + '</span>' +
+      '<div class="mut" style="font-size:12px;margin-top:4px">' + esc(d.text) + '</div></div>' +
+      '<div style="flex:1;min-width:260px">' + (prov.length ? '<div class="mut" style="font-size:12px">Пока не решено владельцем — взято по умолчанию (provisional):</div><ul class="c16-list">' +
+        prov.map(x => '<li class="warn" title="' + esc(x.question) + '"><b>' + esc(x.field) + '</b> — ' + esc(x.provisional) + ' <span class="mut3">(' + esc(x.ref) + ')</span></li>').join('') + '</ul>' : '') +
+      ((d.notes || []).length ? '<ul class="c16-list">' + d.notes.map(n => '<li>' + esc(n) + '</li>').join('') + '</ul>' : '') + '</div>' +
+      '<div class="mut" style="font-size:12px">в отчёт входят: ' + esc(keys.filter(k => inRep.has(k)).map(k => C[k]).join(', ') || '—') + '</div></div>';
+    wrap.appendChild(hd);
+
+    // ОВП деска по валютам и слагаемым
+    const cp = panel('ОВП из позиций по валютам', 'в единицах валюты; + длинная позиция');
+    const ccys = Object.entries(d.by_ccy || {});
+    cp.querySelector('.bd').innerHTML = ccys.length ? '<div class="c16-ccys">' + ccys.map(([c, x]) => {
+      const br = (t.by_ccy || {})[c];
+      return '<div class="c16-ccy ' + (br && br.breaks ? 'st-bad' : br ? 'st-ok' : '') + '"><div class="l">' + esc(c) + (br && br.breaks ? ' · брейков ' + br.breaks : '') + '</div><div class="v">' + amt(x.total) + '</div>' +
+        '<div class="mut3" style="font-size:11px">' + (x.total_rub != null ? f.mns(x.total_rub, 1) + ' mm ₽ по ' + f.n(x.rate, 4) : 'курса нет') + '</div>' +
+        '<div class="s">' + keys.filter(k => x.components[k]).map(k => '<span>' + esc(C[k]) + '</span><span>' + amt(x.components[k]) + '</span>').join('') + '</div></div>';
+    }).join('') + '</div>' : '<div class="k-empty">Валютных позиций нет</div>';
+    wrap.appendChild(cp);
+
+    // сверка с отчётом
+    const rp = panel('Сверка: отчёт против позиций', 'разница = отчёт − слагаемые, входящие в отчёт; щелчок — разложение');
+    rp.querySelector('.bd').classList.add('flush', 'scroll');
+    const R = d.reconciliation || [];
+    rp.querySelector('.bd').innerHTML = R.length ? '<table class="k-tbl"><thead><tr><th>Уровень</th><th>Валюта</th><th class="n">Отчёт</th><th class="n">Из позиций (в отчёте)</th><th class="n">Разница</th><th class="n">Вне отчёта</th><th>Объяснение</th></tr></thead><tbody>' +
+      R.map((x, i) => {
+        const out = Object.entries(x.not_in_report || {});
+        return '<tr class="row' + (x.over ? ' over' : '') + '" tabindex="0" aria-expanded="false" data-r="' + i + '"><td>' + scopeOf(x) + (x.in_report_file ? '' : ' <span class="mut3" title="в отчёте нет строки этой валюты: 0">нет строки</span>') + '</td><td>' + esc(x.ccy) + '</td>' +
+          '<td class="n">' + amt(x.reported) + '</td><td class="n">' + amt(x.in_report) + '</td><td class="n"><b>' + amt(x.break) + '</b></td>' +
+          '<td class="n">' + (out.length ? out.map(([k, v]) => '<span title="' + esc(C[k]) + '">' + amt(v) + '</span>').join(' ') : '<span class="mut3">—</span>') + '</td>' +
+          '<td class="wrap">' + (x.over ? (x.hints.length ? esc(x.hints.join('; ')) : '<span style="color:var(--neg)">не объяснено слагаемыми</span>') : '<span class="mut">в пределах допуска</span>') + '</td></tr>';
+      }).join('') + '</tbody></table>' : '<div class="k-empty">' + (d.state === 'no_report' ? 'Отчёта ОВП на дату нет: сравнивать не с чем' : 'Сравнений нет') + '</div>';
+    rp.querySelectorAll('tr[data-r]').forEach(tr => {
+      tr.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); tr.click(); } };
+      tr.onclick = () => {
+        let nx = tr.nextElementSibling;
+        if (nx && nx.classList.contains('c16-sub')) { while (nx && nx.classList.contains('c16-sub')) { const r = nx; nx = nx.nextElementSibling; r.remove(); } tr.setAttribute('aria-expanded', 'false'); return; }
+        tr.setAttribute('aria-expanded', 'true');
+        const x = R[+tr.dataset.r];
+        const rows = keys.filter(k => x.components[k]).map(k => '<tr class="c16-sub"><td></td><td colspan="3">' + esc(C[k]) + (inRep.has(k) ? '' : ' <span class="mut3">вне отчёта</span>') + '</td><td class="n">' + amt(x.components[k]) + '</td><td colspan="2"></td></tr>').join('') +
+          '<tr class="c16-sub"><td></td><td colspan="3" class="mut">всего из позиций · строки отчёта: ' + esc((x.src || []).join(', ') || '—') + (x.valid_date && x.valid_date !== d.as_of ? ' · отчёт от ' + f.date(x.valid_date) : '') + '</td><td class="n">' + amt(x.derived) + '</td><td colspan="2"></td></tr>';
+        tr.insertAdjacentHTML('afterend', rows);
+      };
+    });
+    wrap.appendChild(rp);
+
+    const two = K.h('div', 'c16-two'); wrap.appendChild(two);
+    // перенос ОВП
+    const tp = panel('Перенос ОВП', 'до переноса → перенесено → осталось; курс и дата — из сделки');
+    tp.querySelector('.bd').classList.add('flush', 'scroll');
+    const T = d.transfers || [];
+    tp.querySelector('.bd').innerHTML = T.length ? '<table class="k-tbl"><thead><tr><th>Книга → куда</th><th>Валюта</th><th class="n">До</th><th class="n">Перенесено</th><th class="n">Осталось</th><th class="n">Курс</th><th>Валютирование</th></tr></thead><tbody>' +
+      T.map(x => '<tr class="' + (x.over ? 'over' : '') + '"><td>' + esc(x.book_id) + ' → ' + esc(x.ocp_to || '—') + '</td><td>' + esc(x.ccy) + '</td><td class="n">' + amt(x.before) + '</td><td class="n">' + (x.deals.length ? amt(x.transferred) : '<span class="mut3" title="сделок переноса нет">нет сделок</span>') + '</td><td class="n"><b>' + amt(x.after) + '</b></td>' +
+        '<td class="n">' + (x.rate != null ? f.n(x.rate, 4) : '<span class="mut3">—</span>') + '</td><td>' + (x.value_date ? f.date(x.value_date) : '<span class="mut3">—</span>') + '</td></tr>').join('') + '</tbody></table>'
+      : '<div class="k-empty">Книг с переносом ОВП нет</div>';
+    two.appendChild(tp);
+
+    // по книгам и вне отчёта
+    const bp = panel('ОВП по книгам', (d.outside_report || []).length ? 'книг вне отчёта: ' + d.outside_report.length : '');
+    bp.querySelector('.bd').classList.add('flush', 'scroll');
+    const outside = new Set((d.outside_report || []).map(x => x.book_id + '|' + x.ccy));
+    const B = d.by_book || [];
+    bp.querySelector('.bd').innerHTML = B.length ? '<table class="k-tbl"><thead><tr><th>Книга</th><th>Валюта</th><th class="n">ОВП</th><th>Слагаемые</th></tr></thead><tbody>' +
+      B.map(x => '<tr><td>' + scopeOf(x) + (outside.has(x.book_id + '|' + x.ccy) ? ' <span class="mut3" title="ни одна часть отчёта ОВП не покрывает книгу">вне отчёта</span>' : '') + '</td><td>' + esc(x.ccy) + '</td><td class="n">' + amt(x.total) + '</td>' +
+        '<td class="wrap mut">' + keys.filter(k => x.components[k]).map(k => esc(C[k]) + ' ' + f.s(x.components[k], 0)).join(' · ') + '</td></tr>').join('') + '</tbody></table>'
+      : '<div class="k-empty">Книг с валютной позицией нет</div>';
+    two.appendChild(bp);
+    view.appendChild(wrap);
+  }
+
+  // ---------- демо-набор (файл или ?demo=1): вымышленный, форма ответа /api/v1/runs/{id}/ocp ----------
+  const DEMO = (function () {
+    const comps = [['cash', 'кэш и к расчёту'], ['fx_legs', 'PV валютных ног'], ['futures', 'фьючерсы'], ['bonds', 'облигации'], ['funding', 'пассив фондирования'], ['other', 'прочее'], ['transfers', 'перенос ОВП']].map(([key, name]) => ({ key, name }));
+    const d1 = { cash: 1050000, fx_legs: 250000, transfers: -900000 };
+    return {
+      state: 'computed', text: 'ОВП из позиций сверено с отчётом ОВП', as_of: M.asOf || '2026-10-15', reporting_ccy: 'RUB', components: comps,
+      policy: { report_components: comps.map(c => c.key), provisional: ['amount_basis', 'report_components', 'transfer_rule'],
+        decisions: [{ field: 'amount_basis', ref: 'OQ-11, TDM#60', question: 'ОВП деривативов: номинал или спот-эквивалент', provisional: 'spot_equivalent (core fx_delta)' },
+          { field: 'report_components', ref: 'TDM#37', question: 'Какие слагаемые входят в отчёт ОВП', provisional: 'все: любая разница — брейк' },
+          { field: 'transfer_rule', ref: 'DEC06, TDM#60', question: 'Какие сделки — перенос ОВП', provisional: 'internal_counterparty (контрагент — книга ocp_to)' }] },
+      by_ccy: { USD: { components: { cash: 1050000, fx_legs: 250000, bonds: 1000500, funding: -1000000 }, total: 1300500, rate: 81.2, total_rub: 1300500 * 81.2 },
+        CNY: { components: { futures: 1000000 }, total: 1000000, rate: 11.4, total_rub: 11.4e6 } },
+      by_book: [{ entity: 'ENT1', book_id: 'B1', ccy: 'USD', components: { bonds: 1000500, funding: -1000000 }, total: 500 },
+        { entity: 'ENT1', book_id: 'B2', ccy: 'USD', components: d1, total: 400000, ocp_to: 'B3' },
+        { entity: 'ENT1', book_id: 'B3', ccy: 'USD', components: { transfers: 900000 }, total: 900000 },
+        { entity: 'ENT2', book_id: 'B4', ccy: 'CNY', components: { futures: 1000000 }, total: 1000000 }],
+      reconciliation: [
+        { level: 'book', entity: 'ENT1', book_id: 'B2', ccy: 'USD', reported: 150000, in_report_file: true, src: ['L2'], derived: 400000, components: d1, in_report: 400000, not_in_report: {}, break: -250000, over: true, hints: ['без слагаемого «PV валютных ног» сходится: отчёт, похоже, его не включает'], valid_date: '2026-10-15' },
+        { level: 'book', entity: 'ENT1', book_id: 'B1', ccy: 'USD', reported: 0, in_report_file: false, src: [], derived: 500, components: { bonds: 1000500, funding: -1000000 }, in_report: 500, not_in_report: {}, break: -500, over: false, hints: [], valid_date: '2026-10-15' }],
+      outside_report: [{ entity: 'ENT1', book_id: 'B3', ccy: 'USD', derived: 900000, components: { transfers: 900000 } }, { entity: 'ENT2', book_id: 'B4', ccy: 'CNY', derived: 1000000, components: { futures: 1000000 } }],
+      transfers: [{ book_id: 'B2', entity: 'ENT1', ocp_to: 'B3', ccy: 'USD', before: 1300000, transferred: -900000, after: 400000, expected: -1300000, gap: 400000, over: true, rate: 81.25, value_date: '2026-10-16', deals: [{ position_id: 'B2|XFER', amount: -900000, trade_ids: ['XF-1'], counterparty: 'B3', rate: 81.25, value_date: '2026-10-16' }] },
+        { book_id: 'B3', entity: 'ENT1', ocp_to: 'B2', ccy: 'USD', before: 0, transferred: 900000, after: 900000, expected: 0, gap: 900000, over: false, rate: 81.25, value_date: '2026-10-16', deals: [{ position_id: 'B3|XFER', amount: 900000, trade_ids: ['XF-2'], counterparty: 'B2', rate: 81.25, value_date: '2026-10-16' }] }],
+      report: { units: [], rows: 1 }, totals: { breaks: 1, comparisons: 2, by_ccy: { USD: { reported: 150000, derived: 400500, in_report: 400500, break: -250500, breaks: 1 } } },
+      notes: ['демо: вымышленные книги и суммы'],
+    };
+  })();
+
+  K.commands && K.commands([{ label: 'ОВП: обновить', run: load }]);
+  load();
+})();
+</script>
+</body>
+</html>

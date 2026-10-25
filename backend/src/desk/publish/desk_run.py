@@ -12,6 +12,10 @@ Funding (B1, ``funding_run``): computed on the run's content before the run row 
 ``run_reference`` kind ``funding``, its summary lineage ``funding``, its lines in the run log, a position's
 ``fact.extra.funding`` and the ``funding`` component of its PnL (absent, not 0, when funding is not configured or the
 position has a problem). The book totals' ``pnl.funding`` sums it and ``pnl.total`` is net of it.
+
+OCP (B2, ``ocp_run``, TDM#59): computed after funding on the same content; its block is the ``run_reference`` kind
+``ocp`` (the derived OCP by component, the reconciliation with the reported ``ocp``, the transfers), its summary
+lineage ``ocp``, its lines in the run log, a position's ``fact.extra.ocp`` (and ``extra.ocp_transfer``).
 """
 
 from __future__ import annotations
@@ -34,7 +38,7 @@ from ..marketdata.adapter import MarketView
 from ..orchestrator import EodContext, Outcome
 from ..store import PositionInputs
 from ..valuation.fallback import CarriedSpread, used_model_spreads
-from . import derivatives_parallel, funding_run
+from . import derivatives_parallel, funding_run, ocp_run
 from .tdm_run import RunContent, git_sha, run_content
 
 PNL_KEYS = ("carry", "rolldown", "rates", "spread", "other", "fx_gross", "funding", "total")
@@ -97,6 +101,8 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
     funding = funding_run.compute(con, bd, prev, ctx.market, content.rows, content.reference["books"], inputs,
                                   {pid: o.terms for pid, _, o in positions if o.terms is not None})
     funding.apply(content.rows, content.reference, content.log)
+    ocp = ocp_run.compute(con, bd, ctx.market, content.rows, content.reference, inputs)
+    ocp.apply(content.rows, content.reference, content.log)
     try:  # a diagnostic: its failure is said in the run log, the run goes on without the block
         parallel = derivatives_parallel.compare(positions, inputs.extra, inputs.trade_terms)
         line = derivatives_parallel.log_line(parallel)
@@ -108,6 +114,7 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
         if line:
             content.log.append(line)
     lineage["funding"] = funding.lineage()
+    lineage["ocp"] = ocp.lineage()
     run_id = con.execute(
         "INSERT INTO run (run_type, business_date, prev_date, cut_type, supersedes_run_id, market_snapshot_id,"
         " static_snapshot_id, prev_market_snapshot_id, private_inputs_hash, position_set_ids, positions_known_at,"

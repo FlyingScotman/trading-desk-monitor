@@ -21,8 +21,9 @@ shape, with no FX revaluation and no FX delta: OQ-04), ``fundingPnl`` and ``fund
 ``inPositions``: what is in the positions' PnL), ``FUNDING_RULES`` (the adapter's rules the run used), a position's
 ``pnl.funding`` (null, not 0, without funding: not configured, a problem) and ``fundingStatus`` (``fundingStatus``:
 state ``computed`` / ``not_configured`` / ``invalid_config`` / ``failed`` / ``not_computed``, its text, totals by
-book and entity, problems), the one key compat adds for it. compat, removed with window.DESK (M7); never extended
-otherwise."""
+book and entity, problems), the one key compat adds for it. OCP (B2, ``publish.ocp_run``): ``OCP_TRANSFERS`` from the
+run's transfer deals and a transfer deal's ``ocpTransfer``; the OCP screen reads ``/api/v1/runs/{id}/ocp``. compat,
+removed with window.DESK (M7); never extended otherwise."""
 
 from __future__ import annotations
 
@@ -430,7 +431,7 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         "FX_CBR_NEXT": fx_cbr_next, "FX_SOURCE": fx_source,
         "INDICES": indices, "ISSUERS": issuers, "RATING_ORDER": rating_order,
         "BOOKS": books, "SCENARIOS": scenarios, "scenarioResults": {},
-        "JTD_RECOVERY": 0.0, "FUNDING_RULES": funding["rules"], "OCP_TRANSFERS": [],
+        "JTD_RECOVERY": 0.0, "FUNDING_RULES": funding["rules"], "OCP_TRANSFERS": ocp_transfers(ref.get("ocp")),
         "CBR_MEETINGS": [], "CARRY_SCENARIOS": DEFAULT_CARRY, "CARRY_HORIZONS": CARRY_HORIZONS,
         "official": {"asOf": as_of, "received": any(p["pnl"]["official"] is not None for p in positions),
                      "basis": "CBR", "receivedAt": None},
@@ -448,6 +449,17 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
                    "curveUnits": (run.get("lineage") or {}).get("curve_units"),
                    **run_slice(run)},
     }
+
+
+def ocp_transfers(block: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The run's OCP transfers (``publish.ocp_run`` block ``transfers``, B2) as window.DESK's ``OCP_TRANSFERS``,
+    in tdm's shape (``run_ocp_transfer``, ``prototypes/data.js``): one row per **source** book (its ``ocp_to`` set in
+    the books) and currency with a transfer deal; ``amount`` the OCP moved, signed as the OCP before the transfer
+    (= -the deals' amount); the receiving book's mirror deal has no row. A run before B2, a book with no deal or
+    without ``ocp_to``: none."""
+    return [{"from": t["book_id"], "to": t["ocp_to"], "ccy": t["ccy"], "amount": -t["transferred"],
+             "before": t["before"], "rate": t.get("rate"), "valueDate": t.get("value_date")}
+            for t in (block or {}).get("transfers") or [] if t.get("deals") and t.get("source") and t.get("ocp_to")]
 
 
 FUNDING_TYPES = {"POS": "Фондирование позиции (MV)", "HTM": "FTP HTM (контракт)", "CASH": "Остаток ДС",

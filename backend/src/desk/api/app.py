@@ -32,6 +32,7 @@ from starlette.exceptions import HTTPException
 
 from .. import __version__, lan
 from ..marketdata import history
+from ..publish import ocp_run
 from ..publish.funding_run import NOT_COMPUTED, REPORTING_CCY, STATUS_TEXT
 from ..scenario import jobs
 from ..scenario.definition import definition_hash, normalize
@@ -60,6 +61,7 @@ from .models import (
     RunFunding,
     RunHeader,
     RunList,
+    RunOcp,
     RunPnl,
     RunStatus,
     RunType,
@@ -292,6 +294,13 @@ def funding_out(run_id: int, block: dict[str, Any] | None) -> RunFunding:
         provisional=(policy or {}).get("provisional") or [], policy=policy, lines=b.get("lines") or [])
 
 
+def ocp_out(run_id: int, block: dict[str, Any] | None) -> RunOcp:
+    """``RunOcp`` of a run's OCP block (``publish.ocp_run``); a run before B2 has none."""
+    b = block or ocp_run.empty_block(ocp_run.NOT_COMPUTED, ocp_run.STATUS_TEXT[ocp_run.NOT_COMPUTED])
+    return RunOcp(run_id=run_id, state=b["status"], **{k: b.get(k) for k in RunOcp.model_fields
+                                                       if k not in ("run_id", "state")})
+
+
 def _total(components: dict[str, Any] | None) -> float | None:
     return sum(components.get(k) or 0.0 for k in PNL_KEYS) if components else None
 
@@ -477,6 +486,16 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         row = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'funding'",
                           (run_id,)).fetchone()
         return _cached(request, run, funding_out(run_id, row["data"] if row else None))
+
+    @app.get("/api/v1/runs/{run_id}/ocp", response_model=RunOcp)
+    def ocp(con: Con, run_id: int, request: Request):
+        """The run's OCP (B2, TDM#59): derived from positions by component (cash and to be settled, PV of the FX
+        legs, futures, bonds, their funding liability, other, OCP transfers), reconciled per currency with the
+        reported ``ocp`` at the report's level, the breaks with their explanation and the transfers per book; state
+        ``no_report`` without a report in force, ``not_computed`` for a run before B2."""
+        run = _run_or_404(con, run_id)
+        row = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'ocp'", (run_id,)).fetchone()
+        return _cached(request, run, ocp_out(run_id, row["data"] if row else None))
 
     @app.get("/api/v1/runs/{run_id}/derivatives", response_model=RunDerivatives)
     def derivatives(con: Con, run_id: int, request: Request):

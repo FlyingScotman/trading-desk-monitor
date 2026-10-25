@@ -75,11 +75,14 @@ def test_publish_into_the_store(con, ctx, book, run_inputs):
     log = [m for (m,) in q("SELECT message FROM run_log WHERE run_id = %s ORDER BY seq")]
     funding = [m for m in log if m.startswith("фондирование")]  # B1: the desk store's own lines, before the last
     assert funding == [funding_run.STATUS_TEXT["not_configured"] + "; фондирование не посчитано, в PnL его нет (не 0)"]
-    assert log[-2] == funding[0]
-    assert [m for m in log if m not in funding][1:] == [m for _, m in content.log][1:]  # tdm's, after the lineage
+    ocp = [m for m in log if m.startswith("ОВП")]  # B2: after funding, before the last
+    assert ocp and ocp[0].startswith("ОВП из позиций") and log[-2] == ocp[-1]
+    assert log[-2 - len(ocp)] == funding[0]
+    own = funding + ocp
+    assert [m for m in log if m not in own][1:] == [m for _, m in content.log][1:]  # tdm's, after the lineage
     assert warnings == [m for level, m in content.log if level == "WARN"] + funding
     assert {k for (k,) in q("SELECT kind FROM run_reference WHERE run_id = %s")} == {
-        *tdm_run.REFERENCE_KINDS, "funding", "derivatives_parallel"}
+        *tdm_run.REFERENCE_KINDS, "funding", "ocp", "derivatives_parallel"}
 
     fact = q("SELECT fact FROM run_position WHERE run_id = %s AND position_id = 'P00'")[0][0]
     row = next(r for r in content.rows if r["position_id"] == "P00")
