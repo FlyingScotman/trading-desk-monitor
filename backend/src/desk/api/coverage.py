@@ -33,6 +33,17 @@ CAUSES: dict[str, tuple[str, str]] = {
     "no_quantity": ("облигация без количества бумаг и без MV в отчёте", "в отчёте нужны Quantity или номинал"),
     "no_fx_rate": ("нет курса валюты строки в срезе хаба", "курс ЦБ приходит со срезом хаба: desk sync за дату"),
     "fx_row_without_ccy_or_amount": ("FX-строка без валюты или суммы", "проверьте строку отчёта (CCY, Quantity)"),
+    # a row with trade terms core does not value (valuation.derivatives, TDM#45) and no MV in the report
+    "ccs_unsupported": (("валютно-процентный своп (CCS): условия сделки есть, но ядро в мониторе их пока не "
+                        "оценивает; MV в отчёте нет"), "до оценки ядром — " + REPORT_MV),
+    "basis_swap_unsupported": (("базисный своп (обе ноги плавающие): ядро в мониторе их пока не оценивает; MV в "
+                               "отчёте нет"), "до оценки ядром — " + REPORT_MV),
+    "repo_open": (("открытое РЕПО (без даты окончания): для оценки ядром нужна предполагаемая дата окончания, она не "
+                  "задана; MV в отчёте нет"), "дата второй части в условиях сделки (maturity_date) — или " + REPORT_MV),
+    "no_fixings": (("нет фиксингов индекса сделки в срезе хаба (или индекс без фиксингов в мониторе, напр. RUSFAR); "
+                   "MV в отчёте нет"), "фиксинги приходят со срезом хаба: desk sync за дату — или " + REPORT_MV),
+    "no_key_rate_curve": ("нет кривой ключевой ставки в срезе хаба за дату (котировки IRS KEYRATE); MV в отчёте нет",
+                          "кривая строится из среза хаба: desk sync за дату — или " + REPORT_MV),
 }
 """Reason code -> (why, what to do) of an unvalued row whatever its kind."""
 
@@ -67,8 +78,8 @@ def cause(code: str, kind: str, product: str | None, futures_by_ticker: bool | N
             return ("bond_derivative", "фьючерс / форвард на облигации: ядро их пока не оценивает, MV в отчёте нет",
                     REPORT_MV)
         if product and "repo" in product.lower():
-            return ("repo", "РЕПО: денежная сделка, рыночного риска в мониторе нет; MV в отчёте нет",
-                    "в риск не входит; сумма — " + REPORT_MV)
+            return ("repo", ("РЕПО ждёт условий сделки (trade_terms): ядро оценит его по ним (PV, риск ставок); "
+                    "MV в отчёте нет"), "до условий сделки — " + REPORT_MV)
         return ("no_report_mv", "оценки нет: MV в отчёте нет", REPORT_MV)
     return (code or "unknown", f"не оценено ({code or 'причина не записана'})", "журнал прогона: Диагностика")
 

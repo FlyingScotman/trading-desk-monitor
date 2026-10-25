@@ -53,7 +53,11 @@ from desk.marketdata.bundle import Snapshot
 
 RUONIA_OIS_SPEC = "rub_ruonia_ois_moex_v2"
 KEY_RATE_PROJECTION_SPEC = "rub_key_rate_projection_v1"
+KEY_RATE_SWAP_SPEC = "rub_key_rate_swap_v1"
 RUONIA_OIS_CURVE_ID, KEY_RATE_CURVE_ID = "RUB_RUONIA_OIS", "RUB_KEY_RATE_PROJ"
+KEY_RATE_SWAP_CURVE_ID = "RUB_KEY_RATE_SWAP"
+"""The key-rate forward curve itself (spec ``rub_key_rate_swap_v1``, dated the business date): what core projects a
+key-rate swap on (``valuation.derivatives``); the floaters project on ``KEY_RATE_CURVE_ID``, built from it."""
 SELECTION_RULE = "business-date sets; not stale > bid_ask_mid > latest fetched_at"
 RUONIA_MAX_UNPUBLISHED_DAYS = 1
 """RUONIA of day D is published on D+1, so one trailing business day may be unpublished."""
@@ -77,6 +81,8 @@ class RatesCurve:
     entry: CurveEntry
     curve: DiscountCurve
     lineage: dict[str, Any]
+    swap_entry: CurveEntry | None = None
+    """``key_rate_projection`` only: the rebased key-rate forward curve as a ``rub_key_rate_swap_v1`` entry."""
 
 
 def ruonia_calendar(static: Snapshot, since: date) -> tuple[BusinessCalendar, date | None]:
@@ -218,7 +224,8 @@ def key_rate_projection(market: Snapshot, static: Snapshot, discount: DiscountCu
         max_repricing_error_bp=built.mid.max_repricing_error_bp, usable=built.usable,
         segments=[{"start": s.start_date.isoformat(), "end": s.end_date.isoformat(), "rate": s.rate,
                    "tenor": s.pillar_tenor} for s in fwd.segments])
-    return RatesCurve(CurveEntry(curve_id, KEY_RATE_PROJECTION_SPEC, curve), curve, lineage)
+    return RatesCurve(CurveEntry(curve_id, KEY_RATE_PROJECTION_SPEC, curve), curve, lineage,
+                      CurveEntry(KEY_RATE_SWAP_CURVE_ID, KEY_RATE_SWAP_SPEC, fwd))
 
 
 def fixing_entries(market: Snapshot, static: Snapshot,

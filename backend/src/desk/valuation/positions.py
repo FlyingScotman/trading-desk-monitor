@@ -12,11 +12,12 @@ core (``direct``). ``merge`` puts the two back in the inputs' order for ``desk_r
 - Unmapped bond (no instrument, or no number of bonds): rung ``reported_value``, the bank's own figure: ``mv_rub``,
   else ``mark_price_pct`` x face (+ ``accrued_ccy``) at the CBR rate; the report's risk (``reported_risk``) when it
   gives one, else none (DV01 and CS01 0). Nothing at all: not valued, reason ``unmapped_instrument``.
-- FX or OTC row with its trade's terms (private/1.2 ``trade_terms``: an FX forward, NDF, FX swap or cross), or a FORTS
-  FX future named by ticker (setting ``futures_by_ticker``): valued by core ``value_portfolio`` v3
-  (``valuation.derivatives``): PV, rates risk on ``RUB RUONIA`` and the foreign curve, FX delta per currency (core's
-  spot equivalent), basis, fixing status. When core cannot (no curve, no spot, a fixing missing), the row keeps the
-  rule below with the reason first in its assumptions.
+- FX or OTC row with its trade's terms (private/1.2 ``trade_terms``: an FX forward, NDF, FX swap or cross; since 1.4
+  an IRS / OIS on RUONIA or the key rate, a REPO), or a FORTS FX future named by ticker (setting
+  ``futures_by_ticker``): valued by core ``value_portfolio`` v3 (``valuation.derivatives``): PV, rates risk per curve
+  (``RUB RUONIA``, the foreign curve, ``RUB KEY``), FX delta per currency (core's spot equivalent), basis, fixing
+  status. When core cannot (no curve, no spot, a fixing missing, a CCS), the row keeps the rule below with the reason
+  first in its assumptions.
 - FX row without terms: its FX delta is the amount in currency (``tdm_run.direct_row``), no rates risk. Spot or cash
   (no ``value_date``, or one not after the business date): PV = ``amount_ccy`` x the rate of the business date
   (``fallback.fx_rate``; RUB at 1), quality ``market_value``. A forward (``value_date`` after the business date: an
@@ -275,7 +276,7 @@ def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_or
     for pid, book, x in rows:
         if pid in linked:
             try:
-                reqs.append(dv.Request(pid, book, x, [dv.TermsLeg.of(t) for t in linked[pid]]))
+                reqs.append(dv.request_of(pid, book, x, linked[pid]))
             except dv.NotValued as e:
                 out[pid] = e
         elif opts.futures_by_ticker and (f := _future_row(ctx, x)) is not None:
@@ -323,10 +324,15 @@ def _core_outcome(v: BondValuation, result: Any) -> Outcome:
 
 
 def _not_by_core(o: Outcome, e: dv.NotValued) -> Outcome:
-    """A row core did not value from its terms: its earlier rule, the reason said."""
+    """A row core did not value from its terms: its earlier rule, the reason said. When that rule finds no value
+    either (``no_reported_value``: no mv_rub), the row's reason is core's (``ccs_unsupported``, ``repo_open``, ...):
+    the terms are there, so «waiting for the terms» would be wrong (``api.coverage``); the report's gap goes in the
+    detail."""
     note = f"trade terms not valued by core ({e.reason}{': ' + e.detail if e.detail else ''}): the report's rule"
     if o.valuation is not None:
         o.valuation = replace(o.valuation, assumptions=(note, *o.valuation.assumptions))
+    if o.valuation is None and o.reason == "no_reported_value":
+        o.reason, o.detail = e.reason, "; ".join(x for x in (e.detail, o.detail) if x)
     o.reason = o.reason or e.reason
     o.detail = o.detail or e.detail
     o.core_not_valued = (e.reason, e.detail)
