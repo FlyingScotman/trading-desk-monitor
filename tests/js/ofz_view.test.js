@@ -10,7 +10,7 @@ const near = (a, b, msg) => assert.ok(Math.abs(a - b) <= 1e-9 * Math.max(1, Math
 
 const KBD = [0, 0, 0, 0, 120, 250, 900, 1800, 400, 0, 0].map(v => -v);  // par-бакеты КБД: 1M–6M нули
 const SPR = -3000;  // спред к КБД
-function load(view, scheme = 'kbd_par') {
+function load(view, scheme = 'kbd_par', more) {
   const ctx = { window: {}, console, location: { href: 'http://x/', search: '', hostname: 'x' },
     localStorage: { getItem: k => (k === 'concepts-ofz-view' ? view : null), setItem() {} } };
   ctx.window = ctx;
@@ -22,6 +22,7 @@ function load(view, scheme = 'kbd_par') {
   p.risk = { 'RUB OFZ': KBD.slice() };
   p.ofzSpr01 = SPR;
   p.extra = Object.assign({}, p.extra, { ofz_basis01: KBD.reduce((a, b) => a + b, 0), spread_buckets: null });
+  if (more) more(D, ctx);
   vm.runInContext(P('concepts/lib/real.js'), ctx);
   return { M: ctx.window.MOCK, id: p.id };
 }
@@ -68,6 +69,38 @@ t('«КБД»: у ОФЗ-ПК риска КБД нет — её базис (сп
   near(k.ofzSpr01, (pk.ofzSpr01 || 0) + pk.basis01, 'спред ОФЗ-ПК');
   near(k.dv01, pk.dv01, 'DV01');
   assert.strictEqual(k.basis01, 0);
+});
+
+// #173: ОФЗ-ИН схемы КБД без оценки ядром — номинальный прокси по дюрации на КБД, не базис: в «RUONIA + базис» — только
+// в RUONIA (p.ofzIn01 — сколько), в «КБД» — на кривой КБД; в истории прогонов basis01 без неё (basisIn01 — отдельно)
+const LIN = [0, 0, 0, 0, 0, 0, 700, 0, 0, 0, 0].map(v => -v);
+const linker = (D, ctx) => {
+  const q = D.positions.filter(p => p.assetClass === 'ОФЗ-ПД')[1];  // вторая ОФЗ-ПД демо-прогона — линкер на прокси
+  q.assetClass = 'ОФЗ-ИН'; q.risk = { 'RUB OFZ': LIN.slice() }; q.ofzSpr01 = -650;
+  q.extra = Object.assign({}, q.extra, { ofz_basis01: sum(LIN), quality: 'market_value', spread_buckets: null });
+  ctx.LIN_ID = q.id;
+  ctx.window.DESK_EXTRAS = { histDates: ['2026-10-22', '2026-10-23'], hist: { dv01: { 'RUB RUONIA': [-9000, -9100] },
+    basis01: [-3000, -3100], basisPk01: [-200, -200], basisIn01: [-700, -700], ofzSpr01: [0, 0] } };
+};
+t('#173 «RUONIA + базис»: ОФЗ-ИН (прокси) — в RUONIA, не в базисе; ofzIn01 — доля прокси', () => {
+  const ctx = {}; const { M } = load(null, 'kbd_par', (D, c) => { linker(D, c); ctx.id = c.LIN_ID; });
+  const p = M.pos[ctx.id];
+  assert.strictEqual(p.group + '.' + p.kind, 'GOV.IN');
+  assert.strictEqual(p.basis01, 0);
+  near(p.ofzIn01, sum(LIN), 'ofzIn01');
+  LIN.forEach((v, k) => { near(p.risk['RUB RUONIA'][k], v, 'RUONIA ' + k); near(p.risk['RUB OFZ'][k], 0, 'базис ' + k); });
+  near(p.dv01, sum(LIN), 'DV01');
+  near(p.ofzSpr01, -650, 'спред к КБД');
+  assert.deepStrictEqual(Array.from(M.hist.dv01['RUB OFZ']), [-3000, -3100]);  // базис без прокси ОФЗ-ИН
+});
+t('#173 «КБД»: ОФЗ-ИН (прокси) — на кривой КБД, RUONIA без неё; в истории КБД = базис − ОФЗ-ПК + ОФЗ-ИН', () => {
+  const ctx = {}; const { M } = load('kbd', 'kbd_par', (D, c) => { linker(D, c); ctx.id = c.LIN_ID; });
+  const p = M.pos[ctx.id];
+  assert.strictEqual(p.basis01, 0);
+  LIN.forEach((v, k) => { near(p.risk['RUB RUONIA'][k], 0, 'RUONIA ' + k); near(p.risk['RUB OFZ'][k], v, 'КБД ' + k); });
+  near(p.dv01, sum(LIN), 'DV01');
+  assert.deepStrictEqual(Array.from(M.hist.dv01['RUB OFZ']), [-3000 + 200 - 700, -3100 + 200 - 700]);
+  assert.deepStrictEqual(Array.from(M.hist.dv01['RUB RUONIA']), [-9000 + 3500, -9100 + 3600]);
 });
 
 console.log(n + ' tests passed');
