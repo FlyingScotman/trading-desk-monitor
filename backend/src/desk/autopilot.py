@@ -11,9 +11,10 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    the first one; ``desk cycle --date`` apart), at most ``autopilot_sync_last + SYNC_EXTRA`` dates per cycle (the
    rest next cycle), and a date the hub has no snapshot for is not asked again for ``MISSING_TTL_S``. The
    snapshot drop folder, when set, is imported too. A hub error is the step's error: the cycle goes on with the
-   cache. The hub down (no answer or a 5xx after the client's retries, ``HubUnavailable``) is the hub's, not a date's:
-   the sync stops there, and the later steps of the cycle (intraday, history, backfill) do not ask it again (intraday:
-   reason ``hub_error``) until the next cycle, so a cycle spends one retry series on a hub that is down (#147). A date
+   cache. The hub down (no answer or a 5xx after the client's retries, ``HubUnavailable``): the sync stops there, and
+   the later steps of the cycle (intraday, history, backfill) do not ask it again (intraday: reason ``hub_error``)
+   until the next cycle, so a cycle spends one retry series on a hub that is down (#147); no answer at all is the
+   hub's alone, a 5xx for a date's snapshot is that date's failure too (below: its retry waits). A date
    whose snapshot cannot be fetched (another hub error than 401/403/404, a body that does not verify)
    fails alone (#20): it is named in the step's detail and ``failed_dates`` and asked again next cycle, the other dates
    are synced and the later steps run; after ``MAX_DATE_FAILURES`` such dates the rest wait for the next cycle. A
@@ -638,9 +639,14 @@ class Autopilot:
             try:
                 rows = cache.sync(client, Path(settings.snapshot_cache), [d])
             except HubError as e:
-                # the token: every date would fail; the hub down after its retries: not this date's fault (#147)
-                if e.status in (401, 403) or isinstance(e, HubUnavailable):
+                # the token: every date would fail; no answer after the retries: the hub is down, not the date (#147)
+                if e.status in (401, 403) or isinstance(e, HubUnavailable) and e.last_status is None:
                     raise
+                if isinstance(e, HubUnavailable):  # 5xx after the retries: the date fails (#146) and the hub is not
+                    self._date_failed(d, e)  # asked again this cycle (#147): one retry series, the rest next cycle
+                    self._hub_down = str(e)
+                    self._sync_later = later = later + len(todo) - i - 1
+                    break
                 if e.status != 404:
                     self._date_failed(d, e)
                     continue
@@ -658,7 +664,7 @@ class Autopilot:
         if todo:
             self._progress("sync", len(todo), len(todo), "")
         latest = hub_dates[0] if hub_dates else "none"
-        static = self._newest_static(settings, con, client)
+        static = "" if self._hub_down else self._newest_static(settings, con, client)
         return (f"hub {client.host}: latest {latest}; " + (f"pulled {', '.join(pulled)}" if pulled else "up to date")
                 + (f"; {static}" if static else "")
                 + (f"; no snapshot for {', '.join(missing)}" if missing else "")

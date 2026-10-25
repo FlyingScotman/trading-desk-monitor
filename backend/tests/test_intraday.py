@@ -26,7 +26,7 @@ from desk.inbox import scan
 from desk.inbox.timesem import MSK
 from desk.marketdata import cache
 from desk.marketdata.bundle import MANIFEST_INDEX, SnapshotDir, previous_market
-from desk.marketdata.hub import HubClient
+from desk.marketdata.hub import HubClient, PythonTransport, TransportError
 from desk.settings import JSON_KEYS, Settings, check_settings_doc, load
 
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1"
@@ -396,10 +396,12 @@ def test_intraday_waits_for_the_hub_with_a_reason(stub, tmp_path, store_url):
     assert ap.diagnostics()["hub_failed_last_cycle"] is True
 
 
-def test_hub_down_after_the_date_list_costs_one_retry_series_a_cycle(stub, tmp_path, store_url, monkeypatch):
-    """#147: the hub answers the date list, then 503 on every request (down after its retries): the cycle spends
-    one retry series on it, not one per step (the sync's dates, intraday, history, backfill). The later steps do
-    not ask the hub (``hub_error``) and ask again next cycle."""
+@pytest.mark.parametrize("down", ["503", "no answer"])
+def test_hub_down_after_the_date_list_costs_one_retry_series_a_cycle(stub, tmp_path, store_url, monkeypatch, down):
+    """#147: the hub answers the date list, then fails every request after the client's retries (a 503, or no
+    answer at all): the cycle spends one retry series on it, not one per step (the sync's dates, intraday, history,
+    backfill). The later steps do not ask the hub (``hub_error``) and ask again next cycle. A 503 for the date is
+    the date's failure too (its retry waits, #146); no answer is the hub's alone: no wait for the date."""
     s = cfg(tmp_path, store_url, stub)
     (tmp_path / "cache").mkdir()
     for p in FIX.glob("*.json.gz"):  # 15.10 cached: the scan and the EOD run go on without the hub
@@ -407,32 +409,84 @@ def test_hub_down_after_the_date_list_costs_one_retry_series_a_cycle(stub, tmp_p
     put(tmp_path, "positions_20261016.csv")
     publish(stub, FRI, "intraday", "2026-10-16T07:00:00Z", 1)
     stub.page = 100  # the date list in one request
-    listed, down = cache.hub_dates, 10**6
+    listed, get, refused = cache.hub_dates, PythonTransport.get, []
+
+    def no_answer(self, url, *a, **kw):
+        refused.append(url)
+        raise TransportError("connection refused")
 
     def then_down(client, *a, **kw):
         dates = list(listed(client, *a, **kw))
-        stub.fail = down  # the list answered: the hub goes down
+        if down == "503":  # the list answered: the hub goes down
+            stub.fail = 10**6
+        else:
+            monkeypatch.setattr(PythonTransport, "get", no_answer)
         yield from dates
 
     monkeypatch.setattr(cache, "hub_dates", then_down)
     ap = Autopilot(settings_loader=lambda: s, now=lambda: at(FRI, 10, 6))
     st = ap.run_cycle()
-    failed = down - stub.fail  # requests that got a 503
-    assert failed <= HubClient.retries + 1, f"{failed} failed requests: more than one retry series"
+    failed = 10**6 - stub.fail if down == "503" else len(refused)  # requests the hub did not serve
+    assert 0 < failed <= HubClient.retries + 1, f"{failed} failed requests: more than one retry series"
     by = steps(st)
     assert by["sync"][0] == "error" and "unreachable after" in by["sync"][1], by["sync"]
     assert by["eod"] == ("ok", "2026-10-15 run 1 (no default run)")  # the cycle goes on with the cache
     intraday = next(x for x in st["steps"] if x["name"] == "intraday")
     assert intraday["status"] == "skipped" and intraday["reason"] == "hub_error", intraday
     assert by["history"][0] == "skipped" and st["message"] == "Ошибки: sync", st["message"]
-    assert not ap._sync_retry  # the hub down is not the date's fault: no backoff of the date (#146)
+    if down == "503":  # the date failed: it waits for its retry (#146)
+        assert [(p["date"], p["attempts"]) for p in ap._problem_dates()] == [("2026-10-15", 1)]
+    else:  # the hub down is not the date's fault: no wait for it
+        assert not ap._sync_retry
 
     monkeypatch.setattr(cache, "hub_dates", listed)
+    monkeypatch.setattr(PythonTransport, "get", get)
     stub.fail = 0  # back up: the next cycle asks again
     st = ap.run_cycle()
     by = steps(st)
     assert by["sync"][0] == "ok", by["sync"]
     assert by["intraday"][0] == "ok" and "внутри дня: run 3 (new cut)" in by["intraday"][1], by["intraday"]
+
+
+def test_a_date_the_hub_always_answers_503_backs_off_and_the_other_dates_sync(stub, tmp_path, store_url):
+    """#147 with #146: the hub answers the list, but one date's bundle gets a 503 every time. The cycle stops at
+    it (one retry series, the later steps do not ask the hub), the date waits for its retry and is listed in
+    ``problem_dates``; the next cycle syncs the other dates, and the date is asked again after its wait."""
+    s = cfg(tmp_path, store_url, stub)
+    put(tmp_path, "positions_20261016.csv")
+    bad = publish(stub, date(2026, 10, 14), "eod_final", "2026-10-14T05:00:00Z", -1)
+    stub.broken.add(bad)
+    good = [date(2026, 10, 13), date(2026, 10, 12)]  # older than the broken one: asked after it
+    for d, step in zip(good, (-2, -3), strict=True):
+        publish(stub, d, "eod_final", f"{d}T05:00:00Z", step)
+    clock = {"t": at(FRI, 9, 0)}
+    ap = Autopilot(settings_loader=lambda: s, now=lambda: clock["t"])
+    st = ap.run_cycle()  # 15.10 pulled, 14.10 fails: the rest next cycle
+    by = steps(st)
+    assert sum(f"/{bad}/" in r for r in stub.requests) == HubClient.retries + 1  # one retry series
+    assert by["sync"][0] == "error" and "failed 2026-10-14" in by["sync"][1] and "2 next cycle" in by["sync"][1]
+    assert by["eod"] == ("ok", "2026-10-15 run 1 (no default run)")
+    assert by["history"][0] == "skipped", by["history"]
+
+    def cached() -> set[str]:
+        return set(SnapshotDir(tmp_path / "cache").market_dates())
+
+    stub.requests.clear()
+    clock["t"] = at(FRI, 9, 1)
+    st = ap.run_cycle()  # 14.10 waits for its retry: the other dates sync, the hub is not asked for 14.10
+    sync = next(x for x in st["steps"] if x["name"] == "sync")
+    assert {d.isoformat() for d in good} <= cached(), sync["detail"]
+    assert sync["status"] == "ok" and sync["failed_dates"] == [], sync
+    assert not any(f"/{bad}/" in r for r in stub.requests)
+    assert [(p["date"], p["attempts"], p["next_attempt"]) for p in sync["problem_dates"]] == [
+        ("2026-10-14", 1, "2026-10-16T09:10:00+03:00")]
+    assert sync["problem_dates"][0]["error"].startswith("HubUnavailable: ")
+
+    clock["t"] = at(FRI, 9, 11)
+    st = ap.run_cycle()  # asked again after 10 minutes, still a 503: the next wait is 30 minutes
+    sync = next(x for x in st["steps"] if x["name"] == "sync")
+    assert sync["failed_dates"] == ["2026-10-14"]
+    assert [(p["attempts"], p["next_attempt"]) for p in sync["problem_dates"]] == [(2, "2026-10-16T09:41:00+03:00")]
 
 
 def morning_rows(store_url: str) -> list[tuple]:

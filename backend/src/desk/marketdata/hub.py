@@ -74,7 +74,12 @@ class HubError(RuntimeError):
 
 
 class HubUnavailable(HubError):
-    """No answer or a 5xx from the hub after the retries: the hub is down, not one request's fault (#147)."""
+    """No answer or a 5xx from the hub after the retries: the hub is down, not one request's fault (#147).
+    ``last_status``: the last attempt's 5xx, None when it got no HTTP answer at all."""
+
+    def __init__(self, message: str, last_status: int | None = None) -> None:
+        super().__init__(message)
+        self.last_status = last_status
 
 
 @dataclass
@@ -407,7 +412,7 @@ class HubClient:
         url = self.url + path + (f"?{query}" if query else "")
         if auth and not self._token:
             raise HubError("hub token not configured; set DESK_HUB_TOKEN_FILE (or DESK_HUB_TOKEN)")
-        last = ""
+        last, last_status = "", None
         attempt = 0
         while attempt <= self.retries:
             if attempt:
@@ -422,7 +427,7 @@ class HubClient:
                         continue
                     if e.proxy_status == 407:
                         raise self._proxy_refused(407, e.schemes) from None
-                last = str(e)
+                last, last_status = str(e), None
                 continue
             if r.status == 407:  # a plain-HTTP proxy's answer
                 if self._switch_to_curl():
@@ -437,8 +442,8 @@ class HubClient:
                 return r
             if r.status < 500:
                 raise HubError(f"{path}: {r.status} {_message(r)}", r.status)
-            last = f"{r.status} {_message(r)}"
-        raise HubUnavailable(f"{self.host} unreachable after {self.retries + 1} attempts: {last}")
+            last, last_status = f"{r.status} {_message(r)}", r.status
+        raise HubUnavailable(f"{self.host} unreachable after {self.retries + 1} attempts: {last}", last_status)
 
     def _get(self, path: str, params: dict[str, Any] | None = None, *, auth: bool = True) -> tuple[bytes, Any]:
         r = self._fetch(path, params, auth=auth)
