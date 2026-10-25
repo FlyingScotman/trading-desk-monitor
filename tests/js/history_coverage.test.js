@@ -114,6 +114,16 @@ t('R45: курс нужен — предупреждение остаётся; �
   assert.ok(h.includes('<a href="../settings.html#bf">Настройки → «История прогонов»</a>') && h.includes('&lt;b&gt;'), h);
 });
 
+t('#174: подсказка точки называет срез по-русски, без машинных имён; предварительное закрытие — как было', () => {
+  const { K } = load();
+  const tip = cut => K.histPoint({ dates: ['2026-06-10'], runAt: [{ id: 1, cut }] }, 0).t;
+  assert.strictEqual(tip('prev_close'), 'закрытие прошлого дня');
+  assert.strictEqual(tip('intraday'), 'внутридневной срез');
+  assert.strictEqual(tip('eod_preliminary'), 'предварительное закрытие (финального среза за дату нет)');
+  assert.strictEqual(tip('custom_cut'), 'срез custom_cut', 'неизвестный тип — как есть');
+  ['prev_close', 'intraday'].forEach(c => assert.ok(!/prev_close|intraday|срез prev|срез intra/.test(tip(c)), tip(c)));
+});
+
 (async () => {
   for (const [name, f] of tests) { await f(); n++; console.log('ok', name); }
   console.log(n + ' tests passed');
