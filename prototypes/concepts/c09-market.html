@@ -191,25 +191,25 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
       const dates = [...new Set(lines.flatMap(([, c]) => c.series.dates))].sort();
       const at = (c, t) => { const m = {}; c.series.dates.forEach((d, i) => m[d] = c.series[t][i]); return dates.map(d => m[d] == null ? null : m[d]); };
       return { grid: { left: 8, right: 12, top: 34, bottom: 22, containLabel: true }, legend: { top: 4, left: 8, type: 'scroll' }, tooltip: { trigger: 'axis', valueFormatter: v => f.pct(v) },
-        xAxis: { type: 'category', data: dates, axisLabel: { formatter: v => f.dshort(v) } }, yAxis: { type: 'value', scale: true, axisLabel: { formatter: v => f.n(v, 1) } },
+        xAxis: { type: 'category', data: dates, axisLabel: { formatter: v => f.dshort(v) } }, yAxis: { type: 'value', unit: '%', scale: true, axisLabel: { formatter: v => f.n(v, 1) } },
         dataZoom: [{ type: 'inside' }, { type: 'slider', height: 12, bottom: 2 }],
         series: lines.flatMap(([n, c, col]) => [{ name: n + ' 1Y', type: 'line', data: at(c, '1Y'), color: col, showSymbol: false, connectNulls: true, lineStyle: { width: 1.2, type: 'dotted' } },
           { name: n + ' 5Y', type: 'line', data: at(c, '5Y'), color: col, showSymbol: false, connectNulls: true, lineStyle: { width: 1.8 } }]) };
     }
     const base = { grid: { left: 8, right: 12, top: 34, bottom: 6, containLabel: true }, legend: { top: 4, left: 8, type: 'scroll' }, tooltip: { trigger: 'axis' }, xAxis: { type: 'category', data: M.buckets } };
     if (S.curve === 'lvl') return Object.assign(base, {
-      tooltip: { trigger: 'axis', valueFormatter: v => f.pct(v) }, yAxis: { type: 'value', scale: true, axisLabel: { formatter: v => f.n(v, 1) } },
+      tooltip: { trigger: 'axis', valueFormatter: v => f.pct(v) }, yAxis: { type: 'value', unit: '%', scale: true, axisLabel: { formatter: v => f.n(v, 1) } },
       series: [['ОФЗ', M.ofzCurve, ofzY, '#9b7bff'], ['RUONIA', R.pts, yd(R), K.curveColors['RUB RUONIA']], ['КС', KS.pts, yd(KS), K.curveColors['RUB KEY']]].flatMap(([n, a, b, c]) => [
         { name: n, type: 'line', data: a, color: c, symbolSize: 4, lineStyle: { width: 2 } },
         { name: n + ' ' + perLbl(), type: 'line', data: b, color: c, showSymbol: false, lineStyle: { width: 1, type: 'dotted' } }]),
     });
     if (S.curve === 'chg') return Object.assign(base, {
-      tooltip: { trigger: 'axis', valueFormatter: v => f.bps(v) + ' б.п.' }, yAxis: { type: 'value', axisLabel: { formatter: v => f.n(v) } },
+      tooltip: { trigger: 'axis', valueFormatter: v => f.bps(v) + ' б.п.' }, yAxis: { type: 'value', unit: 'б.п.', axisLabel: { formatter: v => f.n(v) } },
       series: [['ОФЗ', hd('OFZ') || M.pillars.map((_, k) => R.chg[k] + B.chg[k]), '#9b7bff'], ['RUONIA', hd('RUB RUONIA') || R.chg, K.curveColors['RUB RUONIA']],
         ['КС', hd('RUB KEY') || KS.chg, K.curveColors['RUB KEY']]].map(([n, d, c]) => ({ name: n + ' ' + ({ '1D': 'за день', '1W': 'за неделю', '1M': 'за месяц', '3M': 'за 3 мес', YTD: 'с начала года' })[S.per], type: 'bar', data: d, color: c, barMaxWidth: 14 })),
     });
     return Object.assign(base, {
-      tooltip: { trigger: 'axis', valueFormatter: v => f.bp(v) + ' б.п.' }, yAxis: { type: 'value' },
+      tooltip: { trigger: 'axis', valueFormatter: v => f.bp(v) + ' б.п.' }, yAxis: { type: 'value', unit: 'б.п.' },
       series: [{ name: 'базис ОФЗ − RUONIA', type: 'bar', data: B.pts.map(v => ({ value: v, itemStyle: { color: v >= 0 ? '#9b7bff' : K.css('--warn') } })), barMaxWidth: 22, label: { show: true, position: 'top', fontSize: 10, color: K.css('--fg-2') } },
       { name: 'вчера', type: 'line', data: B.pts.map((v, k) => v - B.chg[k]), color: K.css('--fg-3'), lineStyle: { type: 'dotted' }, symbolSize: 4 }],
     });
@@ -264,9 +264,9 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
   // ---------- наши против рынка ----------
   const rvCols = [
     'name', 'ccy', 'issuer', 'rating', 'tenor', 'ytm',
-    { key: 'gspread', label: 'G-спред', num: true, fmt: v => f.bp(v) },
-    { key: 'mkt', label: 'рынок', num: true, val: r => medOf(r.rating, r.tenor), fmt: v => v == null ? '—' : f.bp(v), title: 'медиана G-спреда рейтинга и срока' },
-    { key: 'rv', label: 'разница', num: true, val: r => { const m = medOf(r.rating, r.tenor); return m == null || r.gspread == null ? null : r.gspread - m; }, fmt: v => v == null ? '—' : f.bps(v), style: v => v == null ? '' : K.heat(v, 120), title: '> 0 — бумага дешевле рынка (шире спред)' },
+    { key: 'gspread', label: 'G-спред', num: true, unit: 'б.п.', fmt: v => f.bp(v) },
+    { key: 'mkt', label: 'рынок', num: true, unit: 'б.п.', val: r => medOf(r.rating, r.tenor), fmt: v => v == null ? '—' : f.bp(v), title: 'медиана G-спреда рейтинга и срока' },
+    { key: 'rv', label: 'разница', num: true, unit: 'б.п.', val: r => { const m = medOf(r.rating, r.tenor); return m == null || r.gspread == null ? null : r.gspread - m; }, fmt: v => v == null ? '—' : f.bps(v), style: v => v == null ? '' : K.heat(v, 120), title: '> 0 — бумага дешевле рынка (шире спред)' },
     'mv',
   ];
   K.table(document.getElementById('rv'), { viewKey: 'c09-rv',
@@ -292,9 +292,9 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
       { key: 'name', label: 'Выпуск' }, { key: 'sector', label: 'Сектор', fmt: v => '<span class="mut">' + esc(v) + '</span>' }, { key: 'rating', label: 'Рейтинг', fmt: v => '<b style="color:' + (RB.find(x => x[0] === rbOf(v)) || RB[4])[2] + '">●</b> ' + esc(v) },
       { key: 'ytm', label: 'Доходность', num: true, fmt: v => f.pct(v) },
       { key: 'chgBp', label: 'Изм., б.п.', num: true, fmt: v => f.bps(v), style: v => K.heat(-v, mxChg), title: 'рост доходности — красный' },
-      { key: 'chgPx', label: 'Изм. цены', num: true, fmt: v => v == null ? '—' : f.s(v, 2), title: 'изменение чистой цены, п.п.' },
+      { key: 'chgPx', label: 'Изм. цены', num: true, unit: 'п.п.', fmt: v => v == null ? '—' : f.s(v, 2), title: 'изменение чистой цены, п.п.' },
       { key: 'bar', label: '', val: r => r.chgBp, fmt: v => K.bar(-v, mxChg) },
-      { key: 'vol', label: 'Оборот, mm', num: true, fmt: v => f.mn(v, 0) },
+      { key: 'vol', label: 'Оборот, mm RUB', num: true, fmt: v => f.mn(v, 0) },
     ],
   });
 

@@ -93,12 +93,12 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const sp = (a, c) => mode === 'spark' ? K.spark(a.slice(-40), 64, 18, c) : '';
         const cell = (l, v, s, spark) => '<div><div class="l">' + l + '</div><div class="spk"><span class="v">' + v + '</span>' + (spark || '') + '</div><div class="s">' + (s || '&nbsp;') + '</div></div>';
         bd.innerHTML = '<div class="hudg">' +
-          cell('PnL дня, mm', K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(k.pnl, 1)), 'MTD ' + K.d({ title: 'PnL MTD', unit: 'mm ₽', fmt: v => f.mns(v, 1), list: L, val: 'pnlMtd' }) + K.partial('mtd'), sp(H.pnl.total)) +
-          cell('DV01, тыс/бп', K.d({ title: 'DV01 ставки', unit: 'тыс ₽/бп', list: L, val: 'dv01' }, null, ''), 'RUONIA ' + K.d({ title: 'DV01 RUONIA', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB RUONIA'] }, null, '') + ' · КС ' + K.d({ title: 'DV01 КС', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB KEY'] }, null, ''), sp(dvH, css('--accent'))) +
-          cell('CS01, тыс/бп', K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }, null, ''), (M.ofzView === 'kbd' ? 'спред ОФЗ к КБД ' + K.d({ title: 'Спред ОФЗ к КБД', unit: 'тыс ₽/бп', list: L, val: 'ofzSpr01' }, null, '')
+          cell('PnL дня, mm ₽', K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(k.pnl, 1)), 'MTD ' + K.d({ title: 'PnL MTD', unit: 'mm ₽', fmt: v => f.mns(v, 1), list: L, val: 'pnlMtd' }) + K.partial('mtd'), sp(H.pnl.total)) +
+          cell('DV01, тыс ₽/бп', K.d({ title: 'DV01 ставки', unit: 'тыс ₽/бп', list: L, val: 'dv01' }, null, ''), 'RUONIA ' + K.d({ title: 'DV01 RUONIA', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB RUONIA'] }, null, '') + ' · КС ' + K.d({ title: 'DV01 КС', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB KEY'] }, null, ''), sp(dvH, css('--accent'))) +
+          cell('CS01, тыс ₽/бп', K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }, null, ''), (M.ofzView === 'kbd' ? 'спред ОФЗ к КБД ' + K.d({ title: 'Спред ОФЗ к КБД', unit: 'тыс ₽/бп', list: L, val: 'ofzSpr01' }, null, '')
             : 'базис ОФЗ ' + K.d({ title: 'Базис ОФЗ−RUONIA', unit: 'тыс ₽/бп', list: L, val: 'basis01' }, null, '')), sp(H.cs01, css('--warn'))) +
-          cell('Кэрри/день, тыс', K.d({ title: 'Кэрри за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }), 'в год ≈ ' + f.mn(k.carryDay * 365, 0) + ' mm', sp(H.pnl.carry, css('--pos'))) +
-          cell('Облигации, bn', K.d({ title: 'MV облигаций', unit: 'bn ₽', fmt: v => f.bn(v, 1), list: bonds(L), val: 'mv', color: false }), M.ccys.map(c => c + ' ' + f.bn(k.byCcy[c].mv, 1)).join(' · ')) +
+          cell('Кэрри/день, тыс ₽', K.d({ title: 'Кэрри за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }), 'в год ≈ ' + f.mn(k.carryDay * 365, 0) + ' mm ₽', sp(H.pnl.carry, css('--pos'))) +
+          cell('Облигации MV, bn ₽', K.d({ title: 'MV облигаций', unit: 'bn ₽', fmt: v => f.bn(v, 1), list: bonds(L), val: 'mv', color: false }), M.ccys.map(c => c + ' ' + f.bn(k.byCcy[c].mv, 1)).join(' · ')) +
           cell('ОВП <a class="mut3" href="#fx" data-fxgo title="плитка «ОВП и курсы»">→</a>', K.fxMini(L), '') +  // R43: валюта на строку, мелкие — в «прочих»
           cell('КС · RUONIA', f.pct(M.indices['КС']) + ' <span class="mut" style="font-size:12px">' + f.pct(M.indices['RUONIA']) + '</span>', esc(M.cbr.next.label) + ' ' + f.dshort(M.cbr.next.date)) +
           cell('USD/RUB · CNY/RUB', f.n(M.fx.USD, 2) + ' <span class="mut" style="font-size:12px">' + f.n(M.fx.CNY, 2) + '</span>', '<span class="' + f.cls(M.fxChgPct.USD) + '">' + f.pcts(M.fxChgPct.USD, 2) + '</span> · <span class="' + f.cls(M.fxChgPct.CNY) + '">' + f.pcts(M.fxChgPct.CNY, 2) + '</span>') +
@@ -131,7 +131,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const L = K.list(), rows = M.typeRows.filter(t => L.some(p => p.group + '.' + p.kind === t.id)).reverse();
         const lst = t => L.filter(p => p.group + '.' + p.kind === t.id);
         const c = small(el, () => ({ grid: { left: 4, right: 14, top: 22, bottom: 2, containLabel: true }, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.dv(v) },
-          xAxis: { type: 'value', axisLabel: { formatter: v => f.dv(v) } }, yAxis: { type: 'category', data: rows.map(t => t.label), axisLabel: { fontSize: 10 } },
+          xAxis: { type: 'value', unit: 'тыс ₽/бп', axisLabel: { formatter: v => f.dv(v) } }, yAxis: { type: 'category', data: rows.map(t => t.label), axisLabel: { fontSize: 10 } },
           series: [{ name: 'DV01', type: 'bar', data: rows.map(t => sumL(lst(t), 'dv01')), itemStyle: { color: css('--accent') } }, { name: 'CS01', type: 'bar', data: rows.map(t => sumL(lst(t), 'cs01')), itemStyle: { color: css('--warn') } }] }));
         c.on('click', pp => { const t = rows[pp.dataIndex]; K.drill({ title: t.label + ' · ' + pp.seriesName, unit: 'тыс ₽/бп', list: lst(t), val: pp.seriesIndex ? 'cs01' : 'dv01' }); });
       },
@@ -147,8 +147,8 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         }
         const el = K.h('div', 'fill'); bd.appendChild(el);
         const R = L.slice().reverse();
-        const c = small(el, () => ({ grid: { left: 4, right: 46, top: 4, bottom: 2, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.mns(v, 2) + ' mm' },
-          xAxis: { type: 'value', axisLabel: { formatter: v => f.mn(v, 0) } }, yAxis: { type: 'category', data: R.map(p => p.name.length > 22 ? p.name.slice(0, 21) + '…' : p.name), axisLabel: { fontSize: 10 } },
+        const c = small(el, () => ({ grid: { left: 4, right: 46, top: 4, bottom: 2, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.mns(v, 2) + ' mm ₽' },
+          xAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } }, yAxis: { type: 'category', data: R.map(p => p.name.length > 22 ? p.name.slice(0, 21) + '…' : p.name), axisLabel: { fontSize: 10 } },
           series: [{ type: 'bar', data: R.map(p => ({ value: p.pnl.total, itemStyle: { color: p.pnl.total >= 0 ? css('--pos') : css('--neg') } })), label: { show: true, position: 'right', fontSize: 10, color: css('--fg-2'), formatter: p => f.mns(p.value, 1) } }] }));
         c.on('click', pp => K.card(R[pp.dataIndex].id));
       },
@@ -161,7 +161,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const keys = [['carry', 'Кэрри'], ['rates', 'Ставки'], ['spread', 'Спред'], ['fx', 'FX'], ['trading', 'Сделки'], ['other', 'Прочее']];
         const n = 30, xs = M.histDates.slice(-n);
         small(el, () => ({ grid, legend: { top: 0, left: 0, itemGap: 6, type: 'scroll' }, tooltip: { trigger: 'axis', valueFormatter: v => f.mns(v, 2) },
-          xAxis: { type: 'category', data: xs, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', axisLabel: { formatter: v => f.mn(v, 0) } },
+          xAxis: { type: 'category', data: xs, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } },
           series: keys.map(([k, t]) => ({ name: t, type: 'bar', stack: 'p', data: M.hist.pnl[k].slice(-n) })).concat([{ name: 'Итого', type: 'line', showSymbol: false, data: M.hist.pnl.total.slice(-n), color: css('--fg') }]) }));
       },
     },
@@ -193,8 +193,8 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const el = K.h('div', 'fill'); bd.appendChild(el);
         const days = []; for (let d = M.util.addDays(M.asOf, 1); d <= end; d = M.util.addDays(d, 1)) days.push(d);
         const kinds = [['cpn', 'купоны', css('--accent')], ['put', 'оферты', css('--warn')], ['call', 'коллы', '#ff8f3f'], ['mat', 'погашения', css('--pos')]];
-        const c = small(el, () => ({ grid, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.mn(v, 1) + ' mm' },
-          xAxis: { type: 'category', data: days, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', axisLabel: { formatter: v => f.mn(v, 0) } },
+        const c = small(el, () => ({ grid, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.mn(v, 1) + ' mm ₽' },
+          xAxis: { type: 'category', data: days, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } },
           series: kinds.map(([k, t, col]) => ({ name: t, type: 'bar', stack: 'e', itemStyle: { color: col }, data: days.map(d => M.sum(cf.filter(c => c.date === d && c.kind === k), 'amountRub')),
             markLine: k === 'cpn' && cbr.length ? { symbol: 'none', silent: true, lineStyle: { color: css('--neg'), type: 'dashed' }, label: { formatter: 'ЦБ', color: css('--neg') }, data: cbr.map(d => ({ xAxis: d })) } : undefined })) }));
         c.on('click', pp => { const d = days[pp.dataIndex], k = kinds[pp.seriesIndex][0]; const rows = cf.filter(x => x.date === d && x.kind === k).map(x => ({ p: M.pos[x.pos], v: x.amountRub })); if (rows.length) K.drill({ title: kinds[pp.seriesIndex][1] + ' ' + f.dshort(d), unit: 'mm ₽', fmt: v => f.mn(v, 1), rows }); });
@@ -225,7 +225,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const g = {}; bonds(K.list()).filter(p => !M.isMinfin(p.issuer) || mode !== 'cs01').forEach(p => { (g[p.issuer] = g[p.issuer] || { id: p.issuer, name: p.issuerName, v: 0, L: [] }).v += val(p); g[p.issuer].L.push(p); });
         const R = Object.values(g).sort((a, b) => Math.abs(b.v) - Math.abs(a.v)).slice(0, 14).reverse();
         const c = small(el, () => ({ grid: { left: 4, right: 50, top: 4, bottom: 2, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: fm },
-          xAxis: { type: 'value', axisLabel: { formatter: fm } }, yAxis: { type: 'category', data: R.map(x => x.name), axisLabel: { fontSize: 10 } },
+          xAxis: { type: 'value', unit: mode === 'mv' ? 'mm ₽' : 'тыс ₽/бп', axisLabel: { formatter: fm } }, yAxis: { type: 'category', data: R.map(x => x.name), axisLabel: { fontSize: 10 } },
           series: [{ type: 'bar', data: R.map(x => ({ value: x.v, itemStyle: { color: K.issuerColor(x.id) } })), label: { show: true, position: 'right', fontSize: 10, color: css('--fg-2'), formatter: p => fm(p.value) } }] }));
         c.on('click', pp => { const x = R[pp.dataIndex]; K.drill({ title: x.name + ' · ' + mode.toUpperCase(), unit: mode === 'mv' ? 'mm ₽' : 'тыс ₽/бп', fmt: fm, list: x.L, val }); });
       },
@@ -250,7 +250,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         }
         const el = K.h('div', 'fill'); bd.appendChild(el);
         const c = small(el, () => ({ grid, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.mn(v, 1) + ' mm ₽' },
-          xAxis: { type: 'category', data: C }, yAxis: { type: 'value', axisLabel: { formatter: v => f.mn(v, 0) } },
+          xAxis: { type: 'category', data: C }, yAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } },
           series: [['бонды', false, css('--accent')], ['деривативы', true, css('--warn')]].map(([n, der, col]) => ({ name: n, type: 'bar', stack: 'o', itemStyle: { color: col }, data: C.map(c => M.sum(part(c, der), p => INSTR.fxIn(p, c) * M.toRepr[c])) })) }));
         c.on('click', pp => { const cc = C[pp.dataIndex], der = pp.seriesIndex === 1; K.drill({ title: 'ОВП ' + cc + ' · ' + pp.seriesName, unit: 'mm ₽', fmt: v => f.mn(v, 1), list: part(cc, der), val: p => INSTR.fxIn(p, cc) * M.toRepr[cc] }); });
       },
@@ -261,14 +261,14 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const L = K.list(), books = M.books.filter(b => L.some(p => p.book === b.id));
         const lst = b => L.filter(p => p.book === b.id);
         if (mode === 'table') {
-          bd.innerHTML = '<table class="k-tbl"><thead><tr><th>Книга</th><th class="n">Кэрри/д, тыс</th><th class="n">≈ год, mm</th><th class="n">DV01</th><th class="n">MV, mm</th></tr></thead><tbody>' +
+          bd.innerHTML = '<table class="k-tbl"><thead><tr><th>Книга</th><th class="n">Кэрри/д, тыс ₽</th><th class="n">≈ год, mm ₽</th><th class="n">DV01, тыс ₽/бп</th><th class="n">MV, mm ₽</th></tr></thead><tbody>' +
             books.map(b => { const l = lst(b), cd = M.sum(l, 'carryDay'); return '<tr><td>' + esc(b.id) + ' <span class="mut3">' + esc(b.name) + '</span></td><td class="n">' + K.d({ title: 'Кэрри ' + b.id, unit: 'тыс ₽', fmt: f.k, list: l, val: 'carryDay' }) + '</td><td class="n mut">' + f.mn(cd * 365, 0) + '</td><td class="n">' + K.d({ title: 'DV01 ' + b.id, unit: 'тыс ₽/бп', list: l, val: 'dv01' }, null, '') + '</td><td class="n">' + K.d({ title: 'MV ' + b.id, unit: 'mm ₽', fmt: v => f.mn(v, 0), list: bonds(l), val: 'mv', color: false }) + '</td></tr>'; }).join('') + '</tbody></table>';
           return;
         }
         const el = K.h('div', 'fill'); bd.appendChild(el);
         const R = books.slice().reverse();
         const c = small(el, () => ({ grid: { left: 4, right: 44, top: 4, bottom: 2, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.k(v) + ' тыс ₽' },
-          xAxis: { type: 'value', axisLabel: { formatter: f.k } }, yAxis: { type: 'category', data: R.map(b => b.id), axisLabel: { fontSize: 10 } },
+          xAxis: { type: 'value', unit: 'тыс ₽', axisLabel: { formatter: f.k } }, yAxis: { type: 'category', data: R.map(b => b.id), axisLabel: { fontSize: 10 } },
           series: [{ type: 'bar', data: R.map(b => { const v = M.sum(lst(b), 'carryDay'); return { value: v, itemStyle: { color: v >= 0 ? css('--pos') : css('--neg') } }; }), label: { show: true, position: 'right', fontSize: 10, color: css('--fg-2'), formatter: p => f.k(p.value) } }] }));
         c.on('click', pp => { const b = R[pp.dataIndex]; K.drill({ title: 'Кэрри ' + b.name, unit: 'тыс ₽', fmt: f.k, list: lst(b), val: 'carryDay' }); });
       },
