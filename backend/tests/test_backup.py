@@ -411,6 +411,63 @@ def test_urls_and_disks(tmp_path):
     assert backup.parse_name("desk-20261023-203000-weekly.dump") is None
 
 
+def test_split_password_takes_the_password_out_of_the_url():
+    assert backup.split_password("postgresql://u:p%40ss@h:5432/desk") == ("postgresql://u@h:5432/desk", "p@ss")
+    assert backup.split_password("postgresql://u@h/desk?password=pw&sslmode=require") == \
+        ("postgresql://u@h/desk?sslmode=require", "pw")
+    assert backup.split_password("postgresql://:pw@h/desk") == ("postgresql://h/desk", "pw")
+    assert backup.split_password("postgresql://postgres:@/desk?host=/tmp/x") == \
+        ("postgresql://postgres@/desk?host=/tmp/x", None)
+    assert backup.split_password("postgresql://u@h/desk") == ("postgresql://u@h/desk", None)
+    assert backup.split_password("postgresql:///desk?host=/tmp/x") == ("postgresql:///desk?host=/tmp/x", None)
+
+
+SECRET = "s3cr3t-pw@149"
+
+
+def test_the_password_stays_out_of_the_tools_arguments_and_the_messages(store_url, tmp_path, monkeypatch, caplog):
+    """backup, restore check and replace with a password in the store URL: the client tools get it in PGPASSWORD of
+    their own environment, never in their arguments; reports, the state file and the log do not hold it
+    (trading-desk-monitor#149). The embedded server trusts local connections, so any password connects."""
+    assert "postgres:@" in store_url
+    url = store_url.replace("postgres:@", "postgres:s3cr3t-pw%40149@")
+    _fill(url)
+    s = _settings(tmp_path)
+    calls = []
+    real = subprocess.run
+
+    def spy(cmd, *a, **kw):
+        calls.append((list(cmd), (kw.get("env") or {}).get("PGPASSWORD")))
+        return real(cmd, *a, **kw)
+
+    monkeypatch.setattr(backup.subprocess, "run", spy)
+    caplog.set_level("DEBUG")
+    b = backup.create(s, url)
+    check = backup.restore_check(s, url, b.path)
+    rep = backup.restore_replace(s, url, b.path, confirm=lambda r: True)
+    assert check["ok"] and rep["ok"]
+    tools = [(Path(c[0]).stem, pw) for c, pw in calls if any(a.startswith("--dbname=") for a in c)]
+    assert {t for t, _ in tools} == {"pg_dump", "pg_restore"} and all(pw == SECRET for _, pw in tools)
+    for cmd, _ in calls:
+        assert not any(SECRET in a or "s3cr3t" in a for a in cmd), cmd
+    text = json.dumps([check, rep, backup.read_state(s.home), b.meta], default=str) + caplog.text
+    assert "s3cr3t" not in text
+
+
+def test_a_failed_migration_of_the_restored_copy_is_reported_without_the_password(store_url, tmp_path, monkeypatch):
+    url = store_url.replace("postgres:@", "postgres:s3cr3t-pw%40149@")
+    s = _settings(tmp_path)
+    b = backup.create(s, url)
+
+    def fail(u):
+        raise psycopg.OperationalError(f"connection to {u} failed")
+
+    monkeypatch.setattr(backup.store, "migrate", fail)
+    rep = backup.restore_check(s, url, b.path)
+    assert not rep["ok"] and "migrations fail" in rep["problems"][0]
+    assert "s3cr3t" not in json.dumps(rep) and "***" in rep["problems"][0]
+
+
 def test_backup_settings(tmp_path, monkeypatch):
     home = tmp_path / "home"
     monkeypatch.setenv("DESK_HOME", str(home))

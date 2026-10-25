@@ -52,7 +52,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 import psycopg
 from psycopg import sql
@@ -137,6 +137,29 @@ def with_db(url: str, name: str) -> str:
         q = [(k, name if k == "dbname" else v) for k, v in q]
         return urlunsplit((u.scheme, u.netloc, u.path, urlencode(q, safe="/:"), u.fragment))
     return urlunsplit((u.scheme, u.netloc, "/" + name, u.query, u.fragment))
+
+
+def split_password(url: str) -> tuple[str, str | None]:
+    """``url`` without its password (of ``user:password@`` or a ``password=`` parameter) and the password, or None:
+    a client tool gets the URL as an argument, which every user of the computer sees in the process list, and the
+    password in ``PGPASSWORD`` of its own environment (trading-desk-monitor#149)."""
+    u = urlsplit(url)
+    password = None
+    netloc = u.netloc
+    userinfo, at, hostport = netloc.rpartition("@")
+    if at and ":" in userinfo:
+        user, _, pw = userinfo.partition(":")
+        password = unquote(pw) or None
+        netloc = f"{user}@{hostport}" if user else hostport
+    query = u.query
+    q = parse_qsl(u.query, keep_blank_values=True)
+    if any(k == "password" for k, _ in q):
+        password = [v for k, v in q if k == "password"][-1] or password
+        query = urlencode([(k, v) for k, v in q if k != "password"], safe="/:")
+    if netloc == u.netloc and query == u.query:
+        return url, password
+    return f"{u.scheme}://{netloc}{u.path}" + (f"?{query}" if query else "") + (f"#{u.fragment}" if u.fragment else ""), \
+        password
 
 
 def parse_name(name: str) -> tuple[datetime, str] | None:
@@ -261,10 +284,14 @@ def same_disk(a: Path, b: Path) -> bool | None:
 # ---- running the PostgreSQL tools ---------------------------------------------------------------------------------
 
 
-def _run(cmd: list[str], *, timeout: float = DUMP_TIMEOUT_S) -> subprocess.CompletedProcess:
-    """A PostgreSQL client tool, without a console window on Windows; the connection URI is never logged."""
+def _run(cmd: list[str], *, timeout: float = DUMP_TIMEOUT_S, password: str | None = None) -> subprocess.CompletedProcess:
+    """A PostgreSQL client tool, without a console window on Windows; the connection URI is never logged. ``cmd``
+    holds no password (``split_password``): ``password`` goes in ``PGPASSWORD`` of the tool's own environment, a copy
+    of this process's (Windows too), never in the arguments."""
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     env = {**os.environ, "PGCONNECT_TIMEOUT": "10"}
+    if password is not None:
+        env["PGPASSWORD"] = password
     try:
         return subprocess.run(cmd, capture_output=True, timeout=timeout, check=False, creationflags=flags, env=env)
     except subprocess.TimeoutExpired:
@@ -420,8 +447,9 @@ def _dump(url: str, folder: Path, kind: str, now: datetime) -> Backup:
             snapshot = con.execute("SELECT pg_export_snapshot()").fetchone()[0]
             counts = table_counts(con)
             schema = _schema(con)
+            dsn, password = split_password(url)
             proc = _run([str(tool("pg_dump")), "--format=custom", f"--snapshot={snapshot}", f"--file={partial}",
-                         f"--dbname={url}"])
+                         f"--dbname={dsn}"], password=password)
             con.rollback()
     except psycopg.Error as e:
         partial.unlink(missing_ok=True)
@@ -635,8 +663,9 @@ def restore_check(settings: Settings, url: str | None, dump: Path, *, keep_scrat
             _drop(con, scratch)
             con.execute(sql.SQL("CREATE DATABASE {} ENCODING 'UTF8' TEMPLATE template0").format(sql.Identifier(scratch)))
         say(f"restoring into the scratch database {scratch} ...")
+        dsn, password = split_password(scratch_url)
         proc = _run([str(tool("pg_restore")), "--no-owner", "--no-privileges", "--exit-on-error",
-                     f"--dbname={scratch_url}", str(dump)])
+                     f"--dbname={dsn}", str(dump)], password=password)
         if proc.returncode != 0:
             problems.append(f"pg_restore failed: {_err(proc)}")
         else:
@@ -667,7 +696,7 @@ def restore_check(settings: Settings, url: str | None, dump: Path, *, keep_scrat
                 try:
                     report["migrated"] = store.migrate(scratch_url)
                 except psycopg.Error as e:
-                    problems.append(f"this program's migrations fail on the restored copy: {e}".strip())
+                    problems.append(f"this program's migrations fail on the restored copy: {mask_url(str(e))}".strip())
     except BackupError as e:  # a damaged archive, a failed step: the drill's finding, not a crash
         problems.append(str(e))
     finally:
