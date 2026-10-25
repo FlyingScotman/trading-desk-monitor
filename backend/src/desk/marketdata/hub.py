@@ -73,6 +73,10 @@ class HubError(RuntimeError):
         self.status = status
 
 
+class HubUnavailable(HubError):
+    """No answer or a 5xx from the hub after the retries: the hub is down, not one request's fault (#147)."""
+
+
 @dataclass
 class Response:
     status: int
@@ -434,7 +438,7 @@ class HubClient:
             if r.status < 500:
                 raise HubError(f"{path}: {r.status} {_message(r)}", r.status)
             last = f"{r.status} {_message(r)}"
-        raise HubError(f"{self.host} unreachable after {self.retries + 1} attempts: {last}")
+        raise HubUnavailable(f"{self.host} unreachable after {self.retries + 1} attempts: {last}")
 
     def _get(self, path: str, params: dict[str, Any] | None = None, *, auth: bool = True) -> tuple[bytes, Any]:
         r = self._fetch(path, params, auth=auth)

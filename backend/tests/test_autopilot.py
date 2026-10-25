@@ -3,12 +3,12 @@ the stub hub of slice S3, the reference adapter and the canonical inbox fixtures
 
 from __future__ import annotations
 
-import re
 import shutil
 import subprocess
 import sys
 import time
 from datetime import UTC, date, datetime, timedelta
+from datetime import time as dtime
 from pathlib import Path
 
 import pytest
@@ -20,6 +20,7 @@ from desk import autopilot, cli, store
 from desk.api import create_app
 from desk.autopilot import LOCK_FILE, Autopilot, CycleLock, progress_text
 from desk.inbox import scan
+from desk.inbox.timesem import MSK
 from desk.marketdata import cache
 from desk.settings import Settings
 
@@ -109,12 +110,16 @@ def test_hub_down_still_scans_and_runs_on_the_cache(stub, tmp_path, store_url, m
                  "DESK_INBOX_ARCHIVE": str(tmp_path / "archive"), "DESK_PRIVATE_ADAPTER_CONFIG": str(CONFIG),
                  "DESK_INBOX_POLL_SECONDS": "0", "DESK_INBOX_LOOKBACK_DAYS": "0"}.items():
         monkeypatch.setenv(k, v)
+    init = Autopilot.__init__  # desk cycle's clock fixed in business hours, whenever the test runs (#147)
+    monkeypatch.setattr(Autopilot, "__init__", lambda self, **kw: init(
+        self, **{"now": lambda: datetime.combine(TODAY, dtime(12, 0), MSK), **kw}))
     assert cli.main(["cycle"]) == 1  # desk cycle: the step error is the exit code
     out = capsys.readouterr().out
     assert "sync: error - hub: 127.0.0.1 unreachable after 4 attempts" in out and "cached snapshots are used" in out
     assert "scan: ok" in out and "eod: ok - 2026-10-15 run 1 (no default run)" in out
-    # the intraday step asks the hub itself (#20): an error too while the wall clock is in business hours
-    assert re.search(r"Ошибки: sync(, intraday)?; latest run: 1 of 2026-10-15 \(15.10 · закрытие\)", out), out
+    # the sync found the hub down: the intraday step does not ask it again this cycle (#147)
+    assert "intraday: skipped - hub down this cycle" in out
+    assert "Ошибки: sync; latest run: 1 of 2026-10-15 (15.10 · закрытие)" in out, out
     assert TOKEN not in out
     assert runs(store_url) == [(1, date(2026, 10, 15), "EOD", "complete")]
     assert cli.main(["cycle", "--no-hub"]) == 0  # the hub skipped: nothing else to do

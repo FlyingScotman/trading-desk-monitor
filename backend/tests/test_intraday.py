@@ -26,6 +26,7 @@ from desk.inbox import scan
 from desk.inbox.timesem import MSK
 from desk.marketdata import cache
 from desk.marketdata.bundle import MANIFEST_INDEX, SnapshotDir, previous_market
+from desk.marketdata.hub import HubClient
 from desk.settings import JSON_KEYS, Settings, check_settings_doc, load
 
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1"
@@ -389,10 +390,49 @@ def test_intraday_waits_for_the_hub_with_a_reason(stub, tmp_path, store_url):
     ap.run_cycle()
     stub.fail = 1000
     ap._now = lambda: at(FRI, 10, 6)
-    st = ap.run_cycle()
+    st = ap.run_cycle()  # the sync found the hub down: the intraday step does not ask it again this cycle (#147)
     intraday = next(x for x in st["steps"] if x["name"] == "intraday")
-    assert intraday["status"] == "error" and intraday["reason"] == "hub_error", intraday
+    assert intraday["status"] == "skipped" and intraday["reason"] == "hub_error", intraday
     assert ap.diagnostics()["hub_failed_last_cycle"] is True
+
+
+def test_hub_down_after_the_date_list_costs_one_retry_series_a_cycle(stub, tmp_path, store_url, monkeypatch):
+    """#147: the hub answers the date list, then 503 on every request (down after its retries): the cycle spends
+    one retry series on it, not one per step (the sync's dates, intraday, history, backfill). The later steps do
+    not ask the hub (``hub_error``) and ask again next cycle."""
+    s = cfg(tmp_path, store_url, stub)
+    (tmp_path / "cache").mkdir()
+    for p in FIX.glob("*.json.gz"):  # 15.10 cached: the scan and the EOD run go on without the hub
+        shutil.copy(p, tmp_path / "cache" / p.name)
+    put(tmp_path, "positions_20261016.csv")
+    publish(stub, FRI, "intraday", "2026-10-16T07:00:00Z", 1)
+    stub.page = 100  # the date list in one request
+    listed, down = cache.hub_dates, 10**6
+
+    def then_down(client, *a, **kw):
+        dates = list(listed(client, *a, **kw))
+        stub.fail = down  # the list answered: the hub goes down
+        yield from dates
+
+    monkeypatch.setattr(cache, "hub_dates", then_down)
+    ap = Autopilot(settings_loader=lambda: s, now=lambda: at(FRI, 10, 6))
+    st = ap.run_cycle()
+    failed = down - stub.fail  # requests that got a 503
+    assert failed <= HubClient.retries + 1, f"{failed} failed requests: more than one retry series"
+    by = steps(st)
+    assert by["sync"][0] == "error" and "unreachable after" in by["sync"][1], by["sync"]
+    assert by["eod"] == ("ok", "2026-10-15 run 1 (no default run)")  # the cycle goes on with the cache
+    intraday = next(x for x in st["steps"] if x["name"] == "intraday")
+    assert intraday["status"] == "skipped" and intraday["reason"] == "hub_error", intraday
+    assert by["history"][0] == "skipped" and st["message"] == "Ошибки: sync", st["message"]
+    assert not ap._sync_retry  # the hub down is not the date's fault: no backoff of the date (#146)
+
+    monkeypatch.setattr(cache, "hub_dates", listed)
+    stub.fail = 0  # back up: the next cycle asks again
+    st = ap.run_cycle()
+    by = steps(st)
+    assert by["sync"][0] == "ok", by["sync"]
+    assert by["intraday"][0] == "ok" and "внутри дня: run 3 (new cut)" in by["intraday"][1], by["intraday"]
 
 
 def morning_rows(store_url: str) -> list[tuple]:
