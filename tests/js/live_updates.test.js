@@ -1,6 +1,7 @@
-// #28: живые обновления мониторов (prototypes/concepts/lib/live.js) — подписка на ленту /api/v1/events по SSE с
-// откатом на опрос, курсор без повторов; реакция страницы прогона на run.published (одна точка выбора: полоса или
-// переключение, по умолчанию полоса); список типов ленты сверяется с бэкендом.
+// #28: живые обновления мониторов (prototypes/concepts/lib/live.js) — одно соединение на браузер (вкладка-лидер по
+// Web Locks держит поток SSE и раздаёт события через BroadcastChannel), откат на опрос, курсор без повторов; реакция
+// страницы прогона на run.published (одна точка выбора: переключение — решение владельца 25.10 — или полоса; прогон
+// берётся у сервера, latest_run); список типов ленты сверяется с бэкендом.
 //   node --test tests/js/live_updates.test.js
 'use strict';
 const test = require('node:test');
@@ -14,31 +15,61 @@ class FakeES {
   emit(t, data, id) {
     const m = { data: JSON.stringify(data), lastEventId: id == null ? '' : String(id) };
     (this.on[t] || []).forEach(f => f(m));
-    if (!this.on[t] && this.onmessage && t === 'message') this.onmessage(m);
   }
   close() { this.closed = true; this.readyState = 2; }
 }
+FakeES.all = [];
 
-// контекст страницы: fetch отвечает из pages (по пути запроса), EventSource — FakeES (или нет)
+// браузер: общие для его вкладок BroadcastChannel и Web Locks (замок — очередь запросов, как navigator.locks)
+function browser() {
+  const chans = new Set();
+  class BC {
+    constructor(name) { this.name = name; chans.add(this); }
+    postMessage(d) {
+      const data = JSON.parse(JSON.stringify(d));
+      for (const c of chans) if (c !== this && c.name === this.name) setTimeout(() => c.onmessage && chans.has(c) && c.onmessage({ data }), 0);
+    }
+    close() { chans.delete(this); }
+  }
+  const waiting = [];
+  let held = false;
+  const locks = {
+    request(name, o, cb) {
+      return new Promise((res, rej) => {
+        const w = () => {
+          held = true;
+          Promise.resolve(cb()).then(() => { held = false; res(); const n = waiting.shift(); if (n) n(); });
+        };
+        if (o.signal) o.signal.addEventListener('abort', () => { const i = waiting.indexOf(w); if (i >= 0) { waiting.splice(i, 1); rej(new Error('AbortError')); } });
+        if (!held) w(); else waiting.push(w);
+      });
+    }
+  };
+  return { BroadcastChannel: BC, locks };
+}
+
+// вкладка: fetch отвечает из respond (по пути запроса); br — браузер (null: без Web Locks и BroadcastChannel)
 function load(opt) {
   opt = opt || {};
-  FakeES.all = [];
   const calls = [];
   const ctx = {
-    console, URL, setTimeout, clearTimeout, JSON,
+    console, URL, setTimeout, clearTimeout, JSON, AbortController,
     fetch: p => {
       calls.push(p);
       const r = opt.respond ? opt.respond(p) : { events: [], has_more: false, last_id: 0 };
+      if (r && r.status) return Promise.resolve({ ok: false, status: r.status, json: () => Promise.resolve({}) });
       return Promise.resolve({ ok: true, json: () => Promise.resolve(r) });
     },
-    document: { hidden: false },
+    document: { hidden: !!opt.hidden },
     localStorage: { getItem: k => (opt.store || {})[k] ?? null, setItem() {}, removeItem() {} },
   };
   if (opt.es !== false) ctx.EventSource = FakeES;
+  const br = opt.br === undefined ? browser() : opt.br;
+  if (br) { ctx.BroadcastChannel = br.BroadcastChannel; ctx.navigator = { locks: br.locks }; }
   ctx.window = ctx;
   vm.createContext(ctx);
   vm.runInContext(SRC, ctx);
-  return { L: ctx.DESK_LIVE, calls, ctx };
+  return { L: ctx.DESK_LIVE, calls, ctx, br };
 }
 const tick = (ms = 0) => new Promise(r => setTimeout(r, ms));
 const ev = (id, type, extra) => Object.assign({ id, type: type || 'input.accepted', text: 'e' + id }, extra || {});
@@ -55,13 +86,13 @@ test('типы ленты: все, что пишет бэкенд (EventSource �
   for (const t of written) assert.ok(L.TYPES.includes(t), 'нет в DESK_LIVE.TYPES: ' + t);
 });
 
-test('реакция: одна точка выбора, по умолчанию полоса; переопределение этого браузера', () => {
+test('реакция: одна точка выбора, по умолчанию автопереключение (владелец, 25.10); переопределение этого браузера', () => {
   const { L } = load();
-  assert.strictEqual(L.REACTION, 'banner');
-  assert.strictEqual(L.reaction({ getItem: () => null }), 'banner');
-  assert.strictEqual(L.reaction({ getItem: () => 'switch' }), 'switch');
-  assert.strictEqual(L.reaction({ getItem: () => 'всё сразу' }), 'banner');
-  assert.strictEqual(L.reaction({ getItem: () => { throw new Error('blocked'); } }), 'banner');
+  assert.strictEqual(L.REACTION, 'switch');
+  assert.strictEqual(L.reaction({ getItem: () => null }), 'switch');
+  assert.strictEqual(L.reaction({ getItem: () => 'banner' }), 'banner');
+  assert.strictEqual(L.reaction({ getItem: () => 'всё сразу' }), 'switch');
+  assert.strictEqual(L.reaction({ getItem: () => { throw new Error('blocked'); } }), 'switch');
 });
 
 test('новый прогон: не тот, что на экране, не тестовый, не досчёт прошлой даты', () => {
@@ -77,7 +108,7 @@ test('новый прогон: не тот, что на экране, не те�
   assert.ok(L.newRun(pub(1, '2026-10-01', 'EOD'), { source: 'empty' }), 'прогонов не было: любой новый');
 });
 
-test('решение: полоса по умолчанию; переключение только без закреплённого прогона и один раз на прогон', () => {
+test('решение: полоса только в режиме banner или по закреплённому прогону; переключение только без закреплённого прогона и один раз на прогон', () => {
   const { L } = load();
   const e = { run_id: 43 };
   assert.strictEqual(L.decide('banner', { pinned: false }, e, null), 'banner');
@@ -87,45 +118,119 @@ test('решение: полоса по умолчанию; переключен
   assert.strictEqual(L.decide('switch', { pinned: false }, e, '41'), 'switch');
 });
 
-test('SSE: курсор в адресе, hello — режим sse, события по порядку и без повторов', async () => {
-  const { L, calls } = load();
+test('прогон, на который переходить, говорит сервер (latest_run): опубликован не показываемый — ничего (R11)', () => {
+  const { L: L0 } = load();
+  const L = { target: (...a) => JSON.parse(JSON.stringify(L0.target(...a))) };  // объекты другого контекста vm
+  const ctx = { source: 'real', runId: '42' };
+  const e = { run_id: 43, text: 'Прогон внутри дня #43' };
+  assert.deepStrictEqual(L.target(e, { run_id: '42', label: '20.10 · закрытие' }, ctx), null, 'показываемый не сменился');
+  assert.deepStrictEqual(L.target(e, { run_id: '43', label: '21.10 · закрытие' }, ctx), { run_id: '43', text: '21.10 · закрытие · #43' });
+  assert.deepStrictEqual(L.target(e, null, ctx), null, 'прогонов нет');
+  assert.deepStrictEqual(L.target(e, undefined, ctx), { run_id: 43, text: 'Прогон внутри дня #43' }, 'статус не получен: по событию');
+  assert.deepStrictEqual(L.target(e, { run_id: '43' }, { source: 'empty' }), { run_id: '43', text: '#43' });
+});
+
+test('типы вкладки: префиксы через запятую, как ?type= ленты', () => {
+  const { L } = load();
+  assert.ok(L.want({ type: 'run.published' }, 'run.'));
+  assert.ok(L.want({ type: 'run.published' }, 'input.rejected, run'));
+  assert.ok(!L.want({ type: 'input.accepted' }, 'run.published'));
+  assert.ok(L.want({ type: 'input.accepted' }, ''));
+});
+
+test('лидер: поток без фильтра, курсор в адресе, hello — режим sse, свои типы по порядку и без повторов', async () => {
+  FakeES.all = [];
+  const { L } = load();
   const got = [], modes = [];
   const sub = L.subscribe({ after: 10, types: 'run.', onEvents: l => got.push(...l.map(e => e.id)), onMode: m => modes.push(m) });
+  await tick(5);
+  assert.ok(sub.leader());
   const es = FakeES.all[0];
-  assert.strictEqual(es.url, '../api/v1/events/stream?after=10&type=run.');
+  assert.strictEqual(es.url, '../api/v1/events/stream?after=10');  // все типы: поток один на все вкладки
   es.emit('hello', { after: 10 });
   assert.deepStrictEqual(modes, ['sse']);
   es.emit('run.published', ev(11, 'run.published'), 11);
   es.emit('run.published', ev(11, 'run.published'), 11);  // повтор — не доставляется
-  es.emit('input.rejected', ev(12, 'input.rejected'), 12);
-  assert.deepStrictEqual(got, [11, 12]);
-  assert.strictEqual(sub.cursor(), 12);
-  assert.strictEqual(calls.length, 0, 'с курсором и SSE опроса нет');
+  es.emit('input.rejected', ev(12, 'input.rejected'), 12);  // не свой тип: курсор идёт, onEvents не зовётся
+  es.emit('run.failed', ev(13, 'run.failed'), 13);
+  assert.deepStrictEqual(got, [11, 13]);
+  assert.strictEqual(sub.cursor(), 13);
   sub.stop();
   assert.ok(es.closed);
 });
 
-test('откат на опрос: поток закрыт (401/404/не event-stream) — опрос с курсора, страницы has_more подряд', async () => {
+test('семь вкладок одного браузера — один поток; закрылся лидер — поток у следующей вкладки с её курсора', async () => {
+  FakeES.all = [];
+  const br = browser();
+  const tabs = [];
+  for (let i = 0; i < 7; i++) {
+    const { L, calls } = load({ br });
+    const got = [], modes = [];
+    tabs.push({ sub: L.subscribe({ after: 20, onEvents: l => got.push(...l.map(e => e.id)), onMode: m => modes.push(m) }), got, modes, calls });
+  }
+  await tick(5);
+  assert.strictEqual(FakeES.all.length, 1, 'одно соединение на браузер');
+  assert.deepStrictEqual(tabs.map(t => t.sub.leader()), [true, false, false, false, false, false, false]);
+  const es = FakeES.all[0];
+  es.emit('hello', { after: 20 });
+  es.emit('run.published', ev(21, 'run.published'), 21);
+  await tick(5);
+  for (const t of tabs) assert.deepStrictEqual(t.got, [21]);
+  assert.ok(tabs.slice(1).every(t => t.modes[0] === 'sse'), 'режим лидера виден всем вкладкам');
+  tabs[0].sub.stop();  // вкладка-лидер закрылась
+  await tick(5);
+  assert.ok(es.closed);
+  assert.strictEqual(FakeES.all.length, 2);
+  assert.ok(tabs[1].sub.leader());
+  assert.strictEqual(FakeES.all[1].url, '../api/v1/events/stream?after=21');  // без пропусков
+  FakeES.all[1].emit('hello', { after: 21 });
+  FakeES.all[1].emit('run.failed', ev(22, 'run.failed'), 22);
+  await tick(5);
+  for (const t of tabs.slice(1)) assert.deepStrictEqual(t.got, [21, 22]);
+  tabs.forEach(t => t.sub.stop());
+});
+
+test('новая вкладка-слушатель один раз дочитывает ленту от своего курсора, рассылка не дублирует', async () => {
+  FakeES.all = [];
+  const br = browser();
+  const a = load({ br });
+  const leader = a.L.subscribe({ after: 30, onEvents() {} });
+  await tick(5);
+  const b = load({ br, respond: p => /after=29&limit=500/.test(p) ? { events: [ev(30), ev(31)], has_more: false, last_id: 31 } : { events: [], has_more: false, last_id: 31 } });
+  const got = [];
+  const sub = b.L.subscribe({ after: 29, onEvents: l => got.push(...l.map(e => e.id)) });
+  FakeES.all[0].emit('input.accepted', ev(31), 31);  // приходит, пока слушатель дочитывает: ждёт очереди
+  await tick(10);
+  assert.deepStrictEqual(got, [30, 31]);
+  assert.deepStrictEqual(b.calls, ['../api/v1/events?after=29&limit=500']);
+  sub.stop(); leader.stop();
+});
+
+test('откат на опрос: поток закрыт (401/404/не event-stream) — лидер опрашивает с курсора, has_more подряд', async () => {
+  FakeES.all = [];
   const pages = { 12: { events: [ev(13), ev(14)], has_more: true, last_id: 15 }, 14: { events: [ev(15)], has_more: false, last_id: 15 } };
-  const { L, calls } = load({ respond: p => pages[+/after=(\d+)/.exec(p)[1]] || { events: [], has_more: false, last_id: 15 } });
+  const { L, calls } = load({ respond: p => /limit=500/.test(p) ? { events: [], has_more: false, last_id: 15 } : pages[+/after=(\d+)/.exec(p)[1]] || { events: [], has_more: false, last_id: 15 } });
   const got = [], modes = [];
   const sub = L.subscribe({ after: 12, onEvents: l => got.push(...l.map(e => e.id)), onMode: m => modes.push(m), pollMs: 10 });
+  await tick(5);
   const es = FakeES.all[0];
   es.readyState = 2; es.onerror();
   await tick(5);
   assert.deepStrictEqual(modes, ['poll']);
   assert.ok(es.closed);
   assert.deepStrictEqual(got, [13, 14, 15]);
-  assert.deepStrictEqual(calls.slice(0, 2), ['../api/v1/events?after=12&limit=200', '../api/v1/events?after=14&limit=200']);
+  assert.ok(calls.includes('../api/v1/events?after=12&limit=200') && calls.includes('../api/v1/events?after=14&limit=200'), calls.join(' '));
   await tick(30);
-  assert.ok(calls.some(c => c === '../api/v1/events?after=15&limit=200'), 'дальше опрос с последнего id: ' + calls.join(' '));
+  assert.ok(calls.includes('../api/v1/events?after=15&limit=200'), 'дальше опрос с последнего id: ' + calls.join(' '));
   sub.stop();
 });
 
 test('откат на опрос: три обрыва подряд без hello, или hello не пришёл (прокси копит ответ)', async () => {
+  FakeES.all = [];
   let { L } = load();
   const modes = [];
   let sub = L.subscribe({ after: 1, onEvents() {}, onMode: m => modes.push(m), pollMs: 1e4 });
+  await tick(5);
   let es = FakeES.all[0];
   es.emit('hello', { after: 1 });
   es.onerror(); es.emit('hello', { after: 1 });  // сервер закрыл ответ по сроку, браузер переподключился: не обрыв
@@ -135,18 +240,47 @@ test('откат на опрос: три обрыва подряд без hello,
   assert.deepStrictEqual(modes, ['sse', 'poll']);
   sub.stop();
 
+  FakeES.all = [];
   ({ L } = load());
   L.HELLO_MS = 5;
   const m2 = [];
   sub = L.subscribe({ after: 1, onEvents() {}, onMode: m => m2.push(m), pollMs: 1e4 });
-  await tick(20);
+  await tick(30);
   assert.deepStrictEqual(m2, ['poll']);
   assert.ok(FakeES.all[0].closed);
   sub.stop();
 });
 
-test('без EventSource — сразу опрос; без курсора — сначала last_id ленты, старое не приходит', async () => {
-  const { L, calls } = load({ es: false, respond: p => /limit=1$/.test(p) ? { events: [ev(30)], has_more: true, last_id: 30 } : { events: [], has_more: false, last_id: 30 } });
+test('истекла сессия: опрос получает 401 — режим signed-out, после входа снова poll', async () => {
+  FakeES.all = [];
+  let status = 401;
+  const { L } = load({ es: false, respond: p => /limit=200/.test(p) && status ? { status } : { events: [], has_more: false, last_id: 5 } });
+  const modes = [];
+  const sub = L.subscribe({ after: 5, onEvents() {}, onMode: m => modes.push(m), pollMs: 10 });
+  await tick(5);
+  assert.deepStrictEqual(modes, ['poll', 'signed-out']);
+  status = 0;
+  await tick(30);
+  assert.deepStrictEqual(modes.slice(0, 3), ['poll', 'signed-out', 'poll']);
+  sub.stop();
+});
+
+test('без Web Locks и BroadcastChannel — потока нет совсем: опрашивает только видимая вкладка', async () => {
+  FakeES.all = [];
+  const hidden = load({ br: null, hidden: true });
+  const s1 = hidden.L.subscribe({ after: 3, types: 'run.', onEvents() {}, pollMs: 1e4 });
+  const shown = load({ br: null });
+  const s2 = shown.L.subscribe({ after: 3, types: 'run.', onEvents() {}, pollMs: 1e4 });
+  await tick(5);
+  assert.strictEqual(FakeES.all.length, 0, 'EventSource есть, но поток в каждой вкладке занял бы соединения');
+  assert.deepStrictEqual(hidden.calls, []);
+  assert.deepStrictEqual(shown.calls, ['../api/v1/events?after=3&type=run.&limit=200']);
+  s1.stop(); s2.stop();
+});
+
+test('без курсора — сначала last_id ленты, старое не приходит', async () => {
+  FakeES.all = [];
+  const { L, calls } = load({ es: false, br: null, respond: p => /limit=1$/.test(p) ? { events: [ev(30)], has_more: true, last_id: 30 } : { events: [], has_more: false, last_id: 30 } });
   const got = [], modes = [];
   const sub = L.subscribe({ onEvents: l => got.push(...l), onMode: m => modes.push(m), pollMs: 1e4 });
   await tick(5);

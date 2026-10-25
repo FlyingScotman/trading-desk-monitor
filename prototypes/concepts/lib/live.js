@@ -2,36 +2,49 @@
  * Живые обновления мониторов (#28): лента событий сервера /api/v1/events без перезагрузки страницы.
  *
  * DESK_LIVE.subscribe({ types, after, onEvents, onMode, base, pollMs }) — подписка на ленту:
- *  - SSE: EventSource на ../api/v1/events/stream?after=&type= (backend desk/api/daystatus_routes.py). Сервер сначала
- *    шлёт hello, потом события (id: = event_id, event: = тип, data: = событие, как в JSON-ленте), молчание
+ *  - одно соединение на браузер: у Chromium по HTTP/1.1 не больше 6 соединений на сервер на все вкладки, и поток
+ *    в каждой вкладке занял бы их все (ревью #191). Вкладка-лидер (Web Locks: navigator.locks, замок
+ *    'desk-live-leader') держит поток и раздаёт события остальным вкладкам через BroadcastChannel 'desk-live';
+ *    закрылась вкладка-лидер — замок переходит к следующей, та продолжает со своего курсора. Новая вкладка-слушатель
+ *    один раз дочитывает ленту JSON-запросом от своего курсора;
+ *  - поток лидера: EventSource на ../api/v1/events/stream?after= (backend desk/api/daystatus_routes.py). Сервер
+ *    сначала шлёт hello, потом события (id: = event_id, event: = тип, data: = событие, как в JSON-ленте), молчание
  *    прерывает комментариями keep-alive и раз в 10 минут закрывает ответ: браузер переподключается сам и шлёт
  *    Last-Event-ID, пропущенное приходит;
- *  - откат на опрос GET ../api/v1/events?after=<курсор> (раз в pollMs, по умолчанию 30 с, только видимая вкладка),
- *    если EventSource нет, поток не открылся (ответ не text/event-stream, 401/404), соединение рвётся три раза
- *    подряд без hello или hello не пришёл за 10 с (прокси копит ответ). Из опроса раз в 5 минут снова пробуем SSE;
+ *  - лидер переходит на опрос GET ../api/v1/events?after=<курсор> (раз в pollMs, по умолчанию 30 с), если
+ *    EventSource нет, поток не открылся (ответ не text/event-stream, 401/404), рвётся три раза подряд без hello
+ *    или hello не пришёл за 10 с (прокси копит ответ). Из опроса раз в 5 минут снова пробует поток;
+ *  - без Web Locks или BroadcastChannel (старый браузер) потока нет совсем: опрашивает только видимая вкладка;
  *  - курсор — id последнего полученного события (после подписки: last_id ленты, если after не дан); onEvents(list)
- *    получает новые события по порядку, без повторов при переходе между SSE и опросом. onMode('sse' | 'poll').
- *  Возвращает { stop(), mode(), cursor() }.
+ *    получает новые события своих типов (префиксы types) по порядку, без повторов. onMode('sse' | 'poll' |
+ *    'signed-out': сервер ответил 401/403, сессия истекла — лента стоит, пока не войти снова).
+ *  Возвращает { stop(), mode(), cursor(), leader() }.
  *
  * Реакция страницы прогона на run.published: ОДНА ТОЧКА ВЫБОРА — DESK_LIVE.REACTION (ниже):
- *  - 'banner' (по умолчанию): полоса под шапкой «Доступен новый прогон … — показать», страница не меняется под
- *    пользователем;
- *  - 'switch': страница сама переходит на новый прогон (перезагрузка на «последний прогон»), один раз на прогон.
+ *  - 'switch' (по умолчанию, решение владельца 25.10, #28): страница сама переходит на новый прогон (перезагрузка
+ *    на «последний прогон»), один раз на прогон: петли перезагрузок нет (после перезагрузки лента начинается
+ *    с текущего момента, а sessionStorage помнит прогон, на который уже переключались);
+ *  - 'banner': полоса под шапкой «Доступен новый прогон … — показать», страница не меняется под пользователем.
+ *  Какой прогон новый, говорит сервер: GET ../api/v1/autopilot/status → latest_run, прогон, который откроет
+ *  «последний прогон» (R11: основной прогон даты, иначе внутридневной). Если это прогон на экране (опубликован
+ *  не показываемый прогон), ничего не происходит: перезагрузка показала бы то же самое.
  *  Закреплённый прогон (?run_id= / ?as_of= или выбор, запомненный на 12 часов) никогда не переключается сам: только
- *  полоса «Показать последний». Выбор по умолчанию ждёт решения владельца (#28); в этом браузере его можно
- *  переопределить: localStorage 'desk.live.reaction' = 'banner' | 'switch'.
+ *  полоса «Показать последний». В этом браузере выбор можно переопределить: localStorage 'desk.live.reaction' =
+ *  'banner' | 'switch'.
  *  Страницы с прогоном (K.source 'real' или 'empty') подписываются сами после загрузки; страница со своей
  *  обработкой ленты (C14) ставит DESK_LIVE.manual = true до DOMContentLoaded.
  *
- * Чистые функции для тестов (tests/js/live_updates.test.js): newRun, decide, reaction.
+ * Чистые функции для тестов (tests/js/live_updates.test.js): newRun, target, decide, reaction, want.
  */
 (function () {
   'use strict';
   if (typeof window !== 'undefined' && window.DESK_LIVE) return;
   const L = {};
-  L.REACTION = 'banner';  // 'banner' | 'switch' — дефолт ждёт решения владельца (#28)
+  L.REACTION = 'switch';  // 'switch' | 'banner' — автопереключение по решению владельца 25.10 (#28)
   L.REACTIONS = ['banner', 'switch'];
   L.KEY = 'desk.live.reaction';
+  L.LOCK = 'desk-live-leader';
+  L.CHANNEL = 'desk-live';
   // типы ленты (desk/daystatus.py: LEVELS, EVENT_TEXT; inbox/scan.py; store.run_event): EventSource отдаёт событие
   // с полем event: только подписчику на этот тип, поэтому список нужен целиком (tests/js/live_updates.test.js
   // сверяет его с бэкендом)
@@ -52,6 +65,12 @@
     return L.REACTION;
   };
 
+  // событие нужных типов: префиксы через запятую, как ?type= ленты (daystatus.events)
+  L.want = function (e, types) {
+    const p = String(types || '').split(',').map(s => s.trim()).filter(Boolean);
+    return !p.length || p.some(t => String(e.type).indexOf(t) === 0);
+  };
+
   // run.published, которого нет на экране и который не старше его даты (досчёт истории публикует прошлые даты)
   // ctx: { source: 'real' | 'empty', runId, asOf }
   L.newRun = function (e, ctx) {
@@ -63,6 +82,15 @@
     return !(e.valid_date && ctx.asOf && e.valid_date < ctx.asOf);
   };
 
+  // на какой прогон переходить по новому прогону e: latest — latest_run статуса автопилота (что откроет «последний
+  // прогон»), undefined — статус не получен. null — ничего не делать: «последний» и есть прогон на экране (R11)
+  L.target = function (e, latest, ctx) {
+    if (latest === undefined) return { run_id: e.run_id, text: e.text };
+    if (!latest) return null;
+    if (ctx.source === 'real' && String(latest.run_id) === String(ctx.runId)) return null;
+    return { run_id: latest.run_id, text: (latest.label ? latest.label + ' · ' : '') + '#' + latest.run_id };
+  };
+
   // что делать с новым прогоном: 'banner' | 'switch'; закреплённый выбор — только полоса; переключение — один раз
   // на прогон (switched: id, на который страница уже переключалась в этой вкладке)
   L.decide = function (mode, ctx, e, switched) {
@@ -72,38 +100,57 @@
 
   // ---------- подписка ----------
   L.subscribe = function (opt) {
-    const base = opt.base == null ? '../' : opt.base, pollMs = opt.pollMs || 30e3;
-    const typeQ = opt.types ? '&type=' + encodeURIComponent(opt.types) : '';
-    let cursor = opt.after == null ? null : +opt.after, mode = null, es = null, timer = null, hello = null, retry = null, stopped = false, errors = 0;
-    const getJSON = p => fetch(base + p, { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error(r.status + ''); return r.json(); });
-    function setMode(m) { if (m !== mode) { mode = m; if (opt.onMode) opt.onMode(m); } }
-    function deliver(list) {
+    const base = opt.base == null ? '../' : opt.base, pollMs = opt.pollMs || 30e3, types = opt.types || '';
+    const W = typeof window !== 'undefined' ? window : {};
+    const nav = W.navigator || (typeof navigator !== 'undefined' ? navigator : null);
+    const shared = !opt.noShare && !!W.BroadcastChannel && !!(nav && nav.locks && nav.locks.request);
+    let cursor = opt.after == null ? null : +opt.after, mode = null, es = null, timer = null, hello = null, retry = null;
+    let stopped = false, errors = 0, lead = false, ch = null, release = null, abort = null, catching = false, queue = [];
+    const getJSON = p => fetch(base + p, { cache: 'no-store' }).then(r => {
+      if (!r.ok) throw Object.assign(new Error(r.status + ''), { status: r.status });
+      return r.json();
+    });
+    function setMode(m, quiet) {
+      if (m === mode) return;
+      mode = m;
+      if (lead && ch && !quiet) ch.postMessage({ kind: 'mode', mode: m });
+      if (opt.onMode) opt.onMode(m);
+    }
+    // events — все события ленты (лидер и рассылка) или уже отобранные сервером (опрос без лидера): курсор идёт по
+    // всем, onEvents получает свои типы
+    function deliver(list, fromLeader) {
       const fresh = list.filter(e => cursor == null || e.id > cursor);
       if (!fresh.length) return;
       cursor = fresh[fresh.length - 1].id;
-      try { opt.onEvents(fresh); } catch (err) { console.error(err); }
+      if (lead && ch && !fromLeader) ch.postMessage({ kind: 'events', list: fresh });
+      const mine = fresh.filter(e => L.want(e, types));
+      if (mine.length) try { opt.onEvents(mine); } catch (err) { console.error(err); }
     }
     function closeSSE() { if (es) { es.close(); es = null; } clearTimeout(hello); }
+    // запросы лидера — без фильтра типов (события нужны всем вкладкам); опрос без лидера — со своими типами
+    const typeQ = () => !lead && types ? '&type=' + encodeURIComponent(types) : '';
     function poll() {
       clearTimeout(timer);
       if (stopped) return;
-      const next = () => { if (!stopped && mode === 'poll') timer = setTimeout(poll, pollMs); };
-      if (typeof document !== 'undefined' && document.hidden) return next();
-      const page = () => getJSON('api/v1/events?after=' + cursor + typeQ + '&limit=200').then(j => {
+      const next = () => { if (!stopped && (mode === 'poll' || mode === 'signed-out')) timer = setTimeout(poll, pollMs); };
+      // без лидера опрашивает только видимая вкладка; лидер опрашивает и скрытым: он один на браузер
+      if (!lead && typeof document !== 'undefined' && document.hidden) return next();
+      const page = () => getJSON('api/v1/events?after=' + cursor + typeQ() + '&limit=200').then(j => {
+        if (mode === 'signed-out') setMode('poll');
         deliver(j.events || []);
         if (j.has_more && !stopped) return page();
       });
-      page().catch(() => { }).then(next);
+      page().catch(err => { if (err && (err.status === 401 || err.status === 403)) setMode('signed-out'); }).then(next);
     }
     function toPoll() {
       closeSSE(); setMode('poll'); poll();
-      if (typeof window !== 'undefined' && window.EventSource && !opt.noSSE) { clearTimeout(retry); retry = setTimeout(() => { if (!stopped && mode === 'poll') sse(); }, L.RETRY_SSE_MS); }
+      if (lead && W.EventSource) { clearTimeout(retry); retry = setTimeout(() => { if (!stopped && lead && mode !== 'sse') sse(); }, L.RETRY_SSE_MS); }
     }
     function sse() {
       if (stopped) return;
-      if (typeof window === 'undefined' || !window.EventSource || opt.noSSE) return toPoll();
+      if (!lead || !W.EventSource) return toPoll();
       closeSSE(); clearTimeout(timer); errors = 0;
-      es = new window.EventSource(base + 'api/v1/events/stream?after=' + cursor + typeQ);
+      es = new W.EventSource(base + 'api/v1/events/stream?after=' + cursor);
       const armHello = () => { clearTimeout(hello); hello = setTimeout(toPoll, L.HELLO_MS); };
       armHello();
       es.addEventListener('hello', () => { clearTimeout(hello); errors = 0; setMode('sse'); });
@@ -117,16 +164,47 @@
         armHello();
       };
     }
+    function becomeLeader() {
+      return new Promise(res => {
+        if (stopped) return res();
+        release = res; lead = true;
+        mode = null; sse();
+      });
+    }
+    function join() {
+      ch = new W.BroadcastChannel(L.CHANNEL);
+      ch.onmessage = m => {
+        const d = m.data || {};
+        if (d.kind === 'events' && !lead) { if (catching) queue.push(d.list); else deliver(d.list, true); }
+        else if (d.kind === 'mode' && !lead) setMode(d.mode, true);
+        else if (d.kind === 'who' && lead && mode) ch.postMessage({ kind: 'mode', mode });
+      };
+      // слушатель: один раз дочитать ленту от своего курсора, потом — рассылка лидера
+      catching = true;
+      getJSON('api/v1/events?after=' + cursor + '&limit=500').then(j => { if (!lead) deliver(j.events || []); }, () => { })
+        .then(() => { catching = false; queue.splice(0).forEach(l => { if (!lead) deliver(l, true); }); });
+      ch.postMessage({ kind: 'who' });
+      abort = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      nav.locks.request(L.LOCK, abort ? { signal: abort.signal } : {}, becomeLeader).catch(() => { });
+    }
+    function begin() { if (shared) join(); else toPoll(); }
     function start() {
-      if (cursor != null) return sse();
-      getJSON('api/v1/events?limit=1').then(j => { cursor = j.last_id == null ? 0 : j.last_id; sse(); })
+      if (cursor != null) return begin();
+      getJSON('api/v1/events?limit=1').then(j => { cursor = j.last_id == null ? 0 : j.last_id; begin(); })
         .catch(() => { timer = setTimeout(start, pollMs); });
     }
     start();
     return {
-      stop() { stopped = true; closeSSE(); clearTimeout(timer); clearTimeout(retry); },
+      stop() {
+        stopped = true; closeSSE(); clearTimeout(timer); clearTimeout(retry);
+        if (abort) abort.abort();
+        if (release) release();
+        if (ch) ch.close();
+        lead = false;
+      },
       mode: () => mode,
-      cursor: () => cursor
+      cursor: () => cursor,
+      leader: () => lead
     };
   };
 
@@ -144,7 +222,7 @@
     } catch (e) { return id === undefined ? null : undefined; }
   }
   let bar = null;
-  function banner(e, ctx) {
+  function banner(t, ctx) {
     if (!bar) {
       const st = document.createElement('style');
       st.textContent = '.k-live{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:6px 14px;background:var(--accent-bg);border-bottom:1px solid var(--accent);font-size:12.5px}' +
@@ -154,21 +232,30 @@
       const top = document.querySelector('.k-top');
       if (top) top.after(bar); else document.body.prepend(bar);
     }
-    bar.innerHTML = '<span class="t">Доступен новый прогон: ' + esc(e.text || ('#' + e.run_id)) + '</span>' +
+    bar.innerHTML = '<span class="t">Доступен новый прогон: ' + esc(t.text || ('#' + t.run_id)) + '</span>' +
       '<button class="k-btn" data-a="show">' + (ctx.pinned ? 'Показать последний' : 'Показать') + '</button>' +
       '<button class="k-btn" data-a="close" title="Скрыть до следующего прогона">✕</button>';
     bar.querySelector('[data-a=show]').onclick = () => ctx.pinned ? goLatest() : location.reload();
     bar.querySelector('[data-a=close]').onclick = () => { bar.remove(); bar = null; };
   }
+  function latestRun(base) {  // undefined — статус не получен
+    return fetch(base + 'api/v1/autopilot/status', { cache: 'no-store' }).then(r => r.ok ? r.json() : undefined)
+      .then(j => j && typeof j === 'object' ? j.latest_run || null : undefined, () => undefined);
+  }
   L.watchRuns = function (ctx) {
+    let busy = Promise.resolve();
     return L.subscribe({
       types: 'run.published',
       onEvents(list) {
         const runs = list.filter(e => L.newRun(e, ctx));
         if (!runs.length) return;
         const e = runs[runs.length - 1];
-        if (L.decide(L.reaction(), ctx, e, switched()) === 'switch') { switched(e.run_id); location.reload(); return; }
-        banner(e, ctx);
+        busy = busy.then(() => latestRun('../')).then(lr => {
+          const t = L.target(e, lr, ctx);
+          if (!t) return;
+          if (L.decide(L.reaction(), ctx, t, switched()) === 'switch') { switched(t.run_id); location.reload(); return; }
+          banner(t, ctx);
+        });
       }
     });
   };

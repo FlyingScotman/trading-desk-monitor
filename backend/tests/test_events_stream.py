@@ -11,6 +11,7 @@ import json
 import threading
 import time
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
@@ -115,60 +116,109 @@ def test_a_backlog_longer_than_a_page_comes_whole_and_in_order(store_url, client
         assert [int(e["id"]) for e in parse(r.read().decode())[0]] == ids
 
 
-class Spy:
-    """``store.connect`` that remembers its connections: the stream must close its one connection."""
 
-    def __init__(self, url: str):
-        self.connect, self.cons = store.connect, []
+
+def test_a_stream_far_behind_the_shared_window_reads_its_gap_itself(store_url, client):
+    ids = [add(store_url) for _ in range(9)]
+    client.app.state.events_stream = routes.StreamConfig(poll_s=0.02, keepalive_s=1, lifetime_s=0.3, page=2, keep=3)
+    with client.stream("GET", "/api/v1/events/stream") as r:  # the reader starts at the newest event
+        assert parse(r.read().decode())[0] == []
+    with client.stream("GET", "/api/v1/events/stream", params={"after": ids[1]}) as r:
+        assert [int(e["id"]) for e in parse(r.read().decode())[0]] == ids[2:]
+
+
+class Spy:
+    """``store.connect`` that remembers its connections, and how many were open at once."""
+
+    def __init__(self):
+        self.connect, self.cons, self.most = store.connect, [], 0
 
     def __call__(self, url: str):
         c = self.connect(url)
         self.cons.append(c)
         return c
 
-
-def run(agen, n: int | None = None) -> list[str]:
-    async def go():
-        out = []
-        async for chunk in agen:
-            out.append(chunk)
-            if n is not None and len(out) >= n:
-                await agen.aclose()  # what a client that leaves does to the response's body
-                break
-        return out
-    return asyncio.run(go())
+    def sample(self) -> int:
+        n = sum(not c.closed for c in self.cons)
+        self.most = max(self.most, n)
+        return n
 
 
-def test_the_stream_ends_and_closes_its_connection_when_the_client_leaves_or_the_server_stops(store_url, monkeypatch):
-    add(store_url)
-    spy = Spy(store_url)
+async def here() -> bool:
+    return False
+
+
+async def left() -> bool:
+    return True
+
+
+def test_open_streams_share_one_reader_and_hold_no_connection_between_reads(store_url, monkeypatch):
+    spy = Spy()
     monkeypatch.setattr(routes.store, "connect", spy)
-    slow = routes.StreamConfig(poll_s=0.01, keepalive_s=60, lifetime_s=60)
+    cfg = routes.StreamConfig(poll_s=0.05, keepalive_s=60, lifetime_s=60)
 
-    async def here() -> bool:
-        return False
+    async def go():
+        feed = routes.Feed(store_url, cfg)
+        await feed.start()
+        streams = [routes.stream(feed, None, None, here, lambda: False) for _ in range(5)]
+        got: list[list[str]] = [[] for _ in streams]
 
-    async def left() -> bool:
-        return True
+        async def read(i, s):
+            async for chunk in s:
+                got[i].append(chunk)
 
-    # the client has gone: only the greeting, then the end
-    out = run(routes.stream(store_url, 0, None, slow, left, lambda: False))
-    assert len(out) == 1 and out[0].startswith("retry:")
-    # the server is shutting down (serve's app.state.stopping)
-    stop = [False]
-    agen = routes.stream(store_url, 0, None, slow, here, lambda: stop[0])
+        tasks = [asyncio.create_task(read(i, s)) for i, s in enumerate(streams)]
+        idle = []
+        for _ in range(40):  # 0.4 s: about eight reads of the feed
+            await asyncio.sleep(0.01)
+            idle.append(spy.sample())
+        await asyncio.to_thread(add, store_url, "run.published", run_id=3, dataset=None, source=None,
+                                detail={"run_type": "EOD"})
+        await asyncio.sleep(0.2)
+        for t in tasks:
+            t.cancel()  # the clients leave: the bodies are cancelled
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.sleep(0.1)
+        return feed, got, idle
 
-    async def until_stopped():
+    feed, got, idle = asyncio.run(go())
+    assert all(any(c.startswith("id: ") and "run.published" in c for c in g) for g in got)  # every stream got it
+    assert spy.most <= 1  # one reader: one short connection at a time, whatever the number of streams
+    assert idle.count(0) > len(idle) // 2  # between reads no connection is open
+    assert len(spy.cons) <= 1 + 0.6 / 0.05 + 3  # reads of one reader, not five
+    assert all(c.closed for c in spy.cons)
+    assert feed.users == 0 and feed.task is None  # the last stream gone, the reader stops
+
+
+def test_the_stream_ends_when_the_client_leaves_or_the_server_stops(store_url):
+    add(store_url)
+    cfg = routes.StreamConfig(poll_s=0.01, keepalive_s=60, lifetime_s=60)
+
+    async def go():
+        feed = routes.Feed(store_url, cfg)
+        out = [c async for c in routes.stream(feed, 0, None, left, lambda: False)]
+        assert len(out) == 1 and out[0].startswith("retry:")  # the client has gone: the greeting, then the end
+        stop = [False]
         got = []
-        async for chunk in agen:
+        async for chunk in routes.stream(feed, 0, None, here, lambda: stop[0]):  # serve's app.state.stopping
             got.append(chunk)
-            stop[0] = chunk.startswith("id: ")  # after the first event: the next turn sees the server stopping
-        return got
-    got = asyncio.run(until_stopped())
-    assert len(got) == 2 and got[1].startswith("id: ")
-    # the body cancelled mid-stream (the client's socket closed): finally still closes the connection
-    run(routes.stream(store_url, 0, None, slow, here, lambda: False), n=2)
-    assert len(spy.cons) == 3 and all(c.closed for c in spy.cons)
+            stop[0] = chunk.startswith("id: ")
+        assert len(got) == 2 and got[1].startswith("id: ")
+        assert feed.users == 0
+
+    asyncio.run(go())
+
+
+def test_a_store_that_is_down_gives_503_before_the_stream_starts(store_url, monkeypatch):
+    app = create_app(store_url)
+    app.state.events_stream = FAST
+
+    def down(url):
+        raise psycopg.OperationalError("connection refused")
+
+    monkeypatch.setattr(routes.store, "connect", down)
+    r = TestClient(app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000)).get("/api/v1/events/stream")
+    assert r.status_code == 503 and r.json()["code"] == "store_unavailable"
 
 
 def test_signed_in_users_only_when_sign_in_is_on(store_url):

@@ -68,7 +68,7 @@
   const view = document.getElementById('view'), daysEl = document.getElementById('days'), toastEl = document.getElementById('toast');
   const u = new URL(location.href);
   let on = u.searchParams.get('on') || null, doc = null, lastId = null, fresh = new Set(), liveMode = null;
-  const LIVE_NOTE = { sse: 'обновляется сразу', poll: 'обновляется раз в 30 с', null: 'подключение к ленте…' };
+  const LIVE_NOTE = { sse: 'обновляется сразу', poll: 'обновляется раз в 30 с', 'signed-out': 'лента остановлена: сессия истекла, войдите снова', null: 'подключение к ленте…' };
 
   const time = s => s ? new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
   const hm = s => s ? new Date(s).toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' }) : '';
@@ -225,7 +225,7 @@
   }
   function live() {  // один раз, когда известен курсор (last_event_id первого ответа)
     if (!server || !LIVE) return;
-    LIVE.subscribe({ after: lastId, onEvents, onMode: m => { liveMode = m; const n = document.getElementById('live'); if (n) n.textContent = LIVE_NOTE[m]; } });
+    LIVE.page = LIVE.subscribe({ after: lastId, onEvents, onMode: m => { liveMode = m; const n = document.getElementById('live'); if (n) n.textContent = LIVE_NOTE[m]; } });
   }
 
   // ---------- демо-набор (файл или ?demo=1): вымышленный, форма ответа /api/v1/inbox ----------

@@ -44,7 +44,7 @@ class Pages(unittest.TestCase):
         # уведомления о первых событиях не придут
         src = (PROTO / "concepts" / "c14-day-status.html").read_text(encoding="utf-8")
         self.assertIn("lastId = d.last_event_id == null ? 0 : d.last_event_id; live();", src)
-        self.assertIn("LIVE.subscribe({ after: lastId, onEvents", src)
+        self.assertIn("LIVE.page = LIVE.subscribe({ after: lastId, onEvents", src)
         live = (PROTO / "concepts" / "lib" / "live.js").read_text(encoding="utf-8")
         self.assertIn("'api/v1/events/stream?after=' + cursor", live)
         self.assertIn("'api/v1/events?after=' + cursor", live)
