@@ -887,7 +887,7 @@ def cmd_backfill(a: argparse.Namespace) -> int:
                 waited = True
             time.sleep(5)
         try:
-            one = backfill.Plan(p.date_from, p.date_to, [day], p.hub)
+            one = backfill.Plan(p.date_from, p.date_to, [day], p.hub, p.rows)
             res = backfill.run(st, one, store_url=url, client=client, out=print, contexts=contexts)
         finally:
             lock.release()
@@ -895,6 +895,8 @@ def cmd_backfill(a: argparse.Namespace) -> int:
         failed += len(res["failed"])
         for d, err in res["failed"]:
             print(f"  {d} FAILED: {err}")
+        for d in res["unconverged"]:
+            print(f"  {d} still stale after its run: tried again next time (#23)")
         for d in res["skipped"]:
             print(f"  {d} skipped: its bundle is not cached and the hub is off")
         el = time.perf_counter() - t0
