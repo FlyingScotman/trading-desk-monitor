@@ -13,7 +13,9 @@ pages' DV01 is), ``basis`` the OFZ basis to RUONIA (``basis_of``), ``mv`` as the
 RUB, a derivative's or FX row's notional in RUB), ``pnl`` the day's total over the pages' factors (null without a flash
 PnL), ``dm_bp`` a floater's discount margin (core 0.33; null for a fixed bond and in a run before it), ``ofz_spr`` an
 OFZ's spread risk to the KBD (0.2.6, ``basis_of``; null in a run before it). Curves are the pages' ids
-(``CURVE_MAP``): the «RUONIA + базис» view, an OFZ's KBD risk on RUONIA (the KBD view is RUONIA minus the basis)."""
+(``CURVE_MAP``): the «RUONIA + базис» view, an OFZ's KBD risk on RUONIA (the KBD view is RUONIA minus the basis).
+A position's ``basis`` is ``basis_of`` as it is, an OFZ-IN's nominal proxy included (the pages tell it by the position,
+``ofz_in_proxy``); the run's sum ``basis`` leaves the proxies out, ``basisIn`` is their sum (TDM#173)."""
 
 from __future__ import annotations
 
@@ -25,7 +27,8 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
-VERSION = 3  # 2: a floater's discount margin (pos[9]); 3: the OFZ basis of the KBD scheme, the spread to the KBD
+VERSION = 4  # 2: a floater's discount margin (pos[9]); 3: the OFZ basis of the KBD scheme, the spread to the KBD;
+# 4: an OFZ-IN's nominal proxy out of the run's basis (basisIn, TDM#173)
 CURVE_MAP = {"RUB OFZ": "RUB RUONIA", "USD": "USD SOFR", "EUR": "EUR ESTR", "CNY": "CNY XCCY"}
 """A run's risk curve -> the concept pages' curve (``desk.api.concepts`` re-exports it; ``lib/real.js`` mirrors it).
 ``RUB OFZ`` (the KBD: a fixed-coupon OFZ's rates risk since 0.2.6, every bond's on a date without RUONIA OIS) is added
@@ -42,7 +45,7 @@ ROWS_SQL = ("SELECT position_id, book_id, pv_rub, fact->'risk' AS risk, (fact->>
             " (fact->>'notional')::float8 AS notional, (fact->>'notional_rub')::float8 AS notional_rub,"
             " (fact->>'price')::float8 AS price, (fact->>'spread_bp')::float8 AS spread_bp,"
             " (fact->>'dv01')::float8 AS dv01, (fact->'extra'->>'dm_bp')::float8 AS dm_bp, pnl,"
-            " (fact->'extra'->>'ofz_basis01')::float8 AS ofz_basis"
+            " (fact->'extra'->>'ofz_basis01')::float8 AS ofz_basis, fact->'extra'->>'quality' AS quality"
             " FROM run_position WHERE run_id = %s AND fact IS NOT NULL")
 
 
@@ -116,6 +119,17 @@ def basis_of(x: dict[str, Any]) -> tuple[float, float | None]:
     return x["ofz"] or 0.0, None
 
 
+def ofz_in_proxy(is_in: bool, ofz_basis: float | None, quality: str | None) -> bool:
+    """Whether an OFZ's par-par basis (``basis_of``) is an OFZ-IN's nominal proxy (TDM#173): an OFZ-IN (``is_in``: kind
+    ``("GOV", "IN")``, a linker) of the KBD scheme (``ofz_basis`` present) that core did not value (``quality`` not
+    ``exact``). Core has no real-rate curve or inflation factor yet (TDM#38), so the fallback books the linker's nominal
+    duration on the KBD: its KBD DV01 is a nominal-rate proxy, not a basis to RUONIA. It is left out of the OFZ basis
+    and shown apart (the run's ``basisIn``, the risk table's ``dv01_ofz_in_proxy_rub``, the pages' ``ofzIn01``); its rate
+    risk stays where the view puts the KBD (RUONIA in «RUONIA + базис», ``RUB OFZ`` in «КБД»). ``lib/real.js``
+    mirrors it (``isInProxy``)."""
+    return is_in and ofz_basis is not None and quality != "exact"
+
+
 def _r(v: float | None, nd: int) -> float | None:
     return None if v is None or not math.isfinite(v) else round(v, nd)
 
@@ -126,7 +140,7 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     book: dict[str, float] = {}
     mv_type: dict[str, float] = {}
     mv_ccy: dict[str, float] = {}
-    cs01 = basis = basis_pk = ofz_spr = 0.0
+    cs01 = basis = basis_pk = basis_in = ofz_spr = 0.0
     pnl: dict[str, float] | None = None
     pos: dict[str, list] = {}
     for x in rows:
@@ -140,10 +154,13 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
             dv01[c] = dv01.get(c, 0.0) + v
         cs01 += x["cs01"] or 0.0
         b, spr = basis_of(x)
-        basis += b
         ofz_spr += spr or 0.0
         book[x["book_id"]] = book.get(x["book_id"], 0.0) + (x["dv01"] or 0.0)
         g, k = kind_of(f)
+        if ofz_in_proxy((g, k) == ("GOV", "IN"), x.get("ofz_basis"), x.get("quality")):
+            basis_in += b  # an OFZ-IN's nominal proxy: not a basis (TDM#173)
+        else:
+            basis += b
         if (g, k) == ("GOV", "PK"):  # an OFZ-PK's basis is its own spread to RUONIA, no KBD risk (the KBD view)
             basis_pk += b
         m = _mv(f, x["pv_rub"])
@@ -160,7 +177,8 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
                                  _r(m, 0), _r(p["total"], 0) if p else None, _r(x["price"], 4),
                                  _r(x["spread_bp"], 2), {c: round(v, 2) for c, v in curves.items() if v},
                                  _r(x.get("dm_bp"), 2), _r(spr, 2)]
-    return {"dv01": dv01, "cs01": cs01, "basis": basis, "basisPk": basis_pk, "ofzSpr": ofz_spr, "dv01Book": book,
+    return {"dv01": dv01, "cs01": cs01, "basis": basis, "basisPk": basis_pk, "basisIn": basis_in, "ofzSpr": ofz_spr,
+            "dv01Book": book,
             "mvType": mv_type,
             "mvCcy": mv_ccy, "pnl": pnl, "pos": pos}
 
