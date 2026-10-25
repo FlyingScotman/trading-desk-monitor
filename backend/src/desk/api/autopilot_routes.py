@@ -13,7 +13,15 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException
 
-from ..autopilot import INTRADAY_FROM, POLL_LAG_S, POLL_SLOT_S, PRELIM_FROM, idle_status, latest_run
+from ..autopilot import (
+    INTRADAY_FROM,
+    POLL_LAG_S,
+    POLL_SLOT_S,
+    PRELIM_FROM,
+    WARN_AFTER,
+    idle_status,
+    latest_run,
+)
 from .auth import trader_guard
 
 router = APIRouter(tags=["autopilot"])
@@ -70,9 +78,9 @@ class AutopilotSchedule(BaseModel):
     warn_after: str     # no intraday run of today by then: the header warns, with the intraday step's reason
 
 
-WARN_AFTER = "10:15"  # #22: the first cut is 10:00, its run is expected by then
+# warn_after (#22): the first cut is 10:00, its run is expected by then; the status message says so too (#156)
 SCHEDULE = {"intraday_from": f"{INTRADAY_FROM:%H:%M}", "prelim_from": f"{PRELIM_FROM:%H:%M}",
-            "poll_slot_s": POLL_SLOT_S, "poll_lag_s": POLL_LAG_S, "warn_after": WARN_AFTER}
+            "poll_slot_s": POLL_SLOT_S, "poll_lag_s": POLL_LAG_S, "warn_after": f"{WARN_AFTER:%H:%M}"}
 
 
 class AutopilotStatus(BaseModel):

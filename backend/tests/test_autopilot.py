@@ -119,7 +119,9 @@ def test_hub_down_still_scans_and_runs_on_the_cache(stub, tmp_path, store_url, m
     assert runs(store_url) == [(1, date(2026, 10, 15), "EOD", "complete")]
     assert cli.main(["cycle", "--no-hub"]) == 0  # the hub skipped: nothing else to do
     out = capsys.readouterr().out
-    assert "sync: skipped" in out and "eod: skipped" in out and "Данные актуальны" in out
+    assert "sync: skipped" in out and "eod: skipped" in out
+    # the wall clock: on a business day after 10:15 no run of today is not current (#156)
+    assert re.search(r"Данные (актуальны|устарели: нет прогона за \d\d\.\d\d)", out), out
 
 
 def test_failed_eod_is_not_retried_until_inputs_change(tmp_path, store_url, monkeypatch):
