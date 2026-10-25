@@ -177,6 +177,14 @@ def _why_no_run(steps: list[dict[str, Any]]) -> str:
     return ""
 
 
+def _cached(cache_dir: Path, row: dict[str, Any]) -> bool:
+    """The market snapshot of a hub list row and the static snapshot it names are in the cache: ``cache.fetch_row``
+    does not ask the hub for them."""
+    static = row.get("static_snapshot_id")
+    return cache.bundle_path(cache_dir, row["snapshot_id"]).exists() and (
+        not static or (cache.bundle_path(cache_dir, static).exists() and (cache_dir / f"{static}.hub.json").exists()))
+
+
 def latest_run(con: psycopg.Connection) -> dict[str, Any] | None:
     """The run shown for the latest business date (``store.CURRENT_RUNS``: its default run, else its intraday run):
     {run_id, as_of, created_at, run_type, cut_type, cut_ts, label, pnl_basis, market_close} (I4, R11), None without
@@ -1005,7 +1013,8 @@ class Autopilot:
                   ran: list[str]) -> tuple[str, str, dict[str, str]]:
         """Today's book on the hub's newest intraday (from 19:45: preliminary) cut of today; see the module doc.
         The status, the detail and {"reason": one of ``INTRADAY_REASONS``}. The step asks the hub itself: the sync
-        step's outcome (a failed older date, #20) does not stop it."""
+        step's outcome (a failed older date, #20) does not stop it, the hub found down this cycle does (``hub_error``,
+        #147; a cut already cached still runs)."""
         status, detail, reason = self._intraday_step(settings, con, url, ran)
         return status, detail, {"reason": reason}
 
@@ -1074,7 +1083,7 @@ class Autopilot:
             return "skipped", f"{cut} {sid[:12]} failed before on the same inputs, not retried", "failed_before"
         cache_dir = Path(settings.snapshot_cache)
         if row is not None and sid == row["snapshot_id"]:
-            if self._hub_down:
+            if self._hub_down and not _cached(cache_dir, row):  # a cached cut needs no hub: it runs (#147)
                 return "skipped", f"hub down this cycle, {cut} {sid[:12]} fetched next cycle", "hub_error"
             self._progress("intraday", 0, 1, "загрузка среза")
             try:

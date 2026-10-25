@@ -396,6 +396,25 @@ def test_intraday_waits_for_the_hub_with_a_reason(stub, tmp_path, store_url):
     assert ap.diagnostics()["hub_failed_last_cycle"] is True
 
 
+def test_hub_down_still_reruns_intraday_on_a_cached_cut(stub, tmp_path, store_url):
+    """#147 (review of #207): the hub found down this cycle stops the intraday step only when it would have to ask
+    the hub for the cut. A cut already in the cache runs as before: a new revision of the book is valued on it."""
+    s = cfg(tmp_path, store_url, stub)
+    put(tmp_path, "positions_20261016.csv")
+    clock = {"t": at(FRI, 10, 6)}
+    ap = Autopilot(settings_loader=lambda: s, now=lambda: clock["t"])
+    publish(stub, FRI, "intraday", "2026-10-16T07:00:00Z", 1)
+    st = ap.run_cycle()
+    assert steps(st)["intraday"][0] == "ok" and "(new cut)" in steps(st)["intraday"][1], steps(st)
+    put(tmp_path, "positions_20261016_2.csv")  # a new revision of the book
+    stub.fail = 10**6  # the hub down: the sync finds it so
+    clock["t"] = at(FRI, 10, 7)  # the same 10-minute slot: the cut known, cached
+    st = ap.run_cycle()
+    assert steps(st)["sync"][0] == "error"
+    intraday = next(x for x in st["steps"] if x["name"] == "intraday")
+    assert intraday["status"] == "ok" and "(positions changed)" in intraday["detail"], intraday
+
+
 @pytest.mark.parametrize("down", ["503", "no answer"])
 def test_hub_down_after_the_date_list_costs_one_retry_series_a_cycle(stub, tmp_path, store_url, monkeypatch, down):
     """#147: the hub answers the date list, then fails every request after the client's retries (a 503, or no
