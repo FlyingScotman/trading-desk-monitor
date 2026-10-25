@@ -588,3 +588,36 @@ def test_quote_curve_risk_behind_its_setting(ctx, tmp_path):
     usd0, usd1 = (sum(out[f][USD_BOND].valuation.risk()["USD UST"].values()) for f in (False, True))
     assert usd1 != pytest.approx(usd0, rel=1e-4) and usd1 == pytest.approx(usd0, rel=0.05)
     assert out[True][CNY_BOND].valuation.risk() == out[False][CNY_BOND].valuation.risk()  # a CNY bond: the built curve
+
+
+def test_rub_ofz_scenario_moves_no_foreign_curve(tmp_path):
+    """TDM#220: core gives a scenario's unnamed shock (``RUB OFZ``, the KBD) to every curve it does not name, so a
+    «RUB OFZ»-only scenario moved a CNY bond's XCCY curve and the FX legs' foreign curves (``CNY FX``), which the Taylor
+    does not move. ``core_scenario`` names every curve of the run (``run_curves``, zeros by default): the shock reaches
+    the KBD alone. A CNY bond and an FX forward keep their PV; their Taylor is 0, so the residual is 0 too."""
+    from desk.orchestrator import value
+    from desk.scenario import exact
+    from desk.scenario.definition import normalize
+
+    sd = synthetic_dir(tmp_path)
+    ctx = prepare(sd, DATE)
+    norm = normalize({"curves": {"RUB OFZ": 100}})  # the KBD's 1M-6M are not shifted: a forward past a year
+    LONG = terms("T9", "CNY", "RUB", "buy", 10e6, 135e6, "2028-10-17")
+    named = exact.run_curves(ctx)
+    assert {"CNY XCCY", "CNY FX", RUONIA_OIS_CURVE_ID} <= set(named) and "RUB_KBD" in named
+
+    def pnl(curves):
+        sc = exact.core_scenario("x", norm, 0.0, curves)
+        (o,) = value(ctx, [(CNY_BOND, 10.0)], position_ids=["B"], fallback=False, scenarios=(sc,))
+        assert o.valuation is not None and o.valuation.discount_curve_id == "CNY XCCY", o.reason
+        bond = o.core_result.scenarios[0].positions[0].pnl_rub
+        _, res = dv.value(ctx, requests([LONG]), options=fxcurves.FxOptions(), scenarios=(sc,))
+        return bond, sum(p.pnl_rub for p in res.scenarios[0].positions)
+
+    bond, fwd = pnl(())  # before the fix: only the RUB curves named, the shock moved the foreign ones
+    assert abs(bond) > 1.0 and abs(fwd) > 1.0
+    assert pnl(named) == (0.0, 0.0)
+    sc = exact.core_scenario("x", norm, 0.0, named)
+    shifts = dict(sc.curve_shifts_bp)
+    assert "RUB_KBD" not in shifts and shifts["CNY XCCY"] == shifts["CNY FX"] == (0.0,) * 11
+    assert shifts["RUB_KEY_RATE_SWAP"] == shifts["RUB_KEY_RATE_PROJ"]  # a key-rate swap's curve moves with RUB KEY

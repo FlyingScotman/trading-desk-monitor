@@ -355,3 +355,43 @@ def test_the_run_summary_keeps_the_ofz_in_proxy_out_of_the_basis():
     assert s["basis"] == pytest.approx(-3000.0) and s["basisIn"] == pytest.approx(-600.0)
     assert s["dv01"] == pytest.approx({"RUB RUONIA": -3600.0}) and s["ofzSpr"] == pytest.approx(-3050.0)
     assert s["pos"]["IN"][3] == pytest.approx(-600.0)  # a position's basis_of as it is: the pages tell it by kind
+
+
+# TDM#213 (0.2.7, core 0.39): an OFZ's RUONIA and basis risk are two computed risks. The row keeps them in the
+# scenarios' coordinates (valuation.bonds.ofz_levels): RUB OFZ the basis (the KBD's par risk), RUB RUONIA RUONIA minus
+# it, extra.ofz_ruonia01 the RUONIA risk. RUONIA -3050 (3Y -1030, 7Y -2020), basis -3000 (3Y -1000, 7Y -2000).
+COMPUTED = bond("PD", seg="Гос", ac="ОФЗ-ПД", cs01=0.0, dv01=-3050.0, ofz_spr01=-2500.0,
+                risk={"RUB OFZ": {"3Y": -1000.0, "7Y": -2000.0}, "RUB RUONIA": {"3Y": -30.0, "7Y": -20.0}},
+                extra={"ofz_basis01": -3000.0, "ofz_ruonia01": -3050.0, "quality": "exact"})
+
+
+def test_ofz_in_ruonia_basis_two_computed_risks():
+    basis = concepts.risk_table([COMPUTED, bond("CORP")], FX, ofz_view="basis")
+    kbd = concepts.risk_table([COMPUTED, bond("CORP")], FX, ofz_view="kbd")
+    b, k = (rows_of(t, "RUB")[("kind", "GOV", "OFZ_PD")] for t in (basis, kbd))
+    # «RUONIA + базис»: its RUONIA risk on RUONIA, the basis apart; «КБД»: its KBD par risk (the basis), no RUONIA
+    assert b["dv01_by_curve_rub"] == pytest.approx({"RUB RUONIA": -3050.0}) and b["ofz_basis_rub"] == pytest.approx(-3000.0)
+    assert k["dv01_by_curve_rub"] == pytest.approx({"RUB OFZ": -3000.0}) and k["ofz_basis_rub"] == 0
+    assert b["dv01_rub"] == pytest.approx(-3050.0) and k["dv01_rub"] == pytest.approx(-3000.0)
+    assert basis["ofz_view_note"] is None and kbd["ofz_view_note"] is None
+    # a row of 0.2.6 (or an OFZ off core): its RUONIA is its basis again, the basis view says so
+    old = concepts.risk_table(KBD_RUN, FX, ofz_view="basis")
+    assert old["ofz_view_note"] and "1 OFZ" in old["ofz_view_note"] and "variant P" in old["ofz_view_note"]
+
+
+def test_the_run_summary_keeps_the_ofz_ruonia_risk():
+    from desk.publish import summary
+
+    def row(pid, risk, ofz_basis, ofz_ruo):
+        return {"position_id": pid, "book_id": "B", "pv_rub": 1e6, "risk": risk, "cs01": 0.0, "ofz": -2500.0,
+                "instr_type": "BOND", "segment": "Гос", "asset_class": "ОФЗ-ПД", "coupon_type": "fix", "ccy": "RUB",
+                "notional": 1e6, "notional_rub": 1e6, "price": 100.0, "spread_bp": 0.0, "dv01": None, "dm_bp": None,
+                "pnl": None, "ofz_basis": ofz_basis, "quality": "exact", "ofz_ruo": ofz_ruo}
+
+    f = COMPUTED["fact"]
+    s = summary.build([row("NEW", f["risk"], -3000.0, -3050.0), row("OLD", {"RUB OFZ": {"7Y": -1000.0}}, -1000.0, None)])
+    # the pages' RUONIA (the «RUONIA + базис» view): the new OFZ's RUONIA risk, the old one's KBD risk
+    assert s["dv01"] == pytest.approx({"RUB RUONIA": -3050.0 - 1000.0}) and s["basis"] == pytest.approx(-4000.0)
+    assert s["ofzRuo"] == pytest.approx(-3050.0 - 1000.0)  # what the «КБД» view takes off RUONIA
+    assert s["pos"]["NEW"][11] == pytest.approx(-3050.0) and s["pos"]["OLD"][11] is None
+    assert s["pos"]["NEW"][1] == pytest.approx(-3050.0) and s["pos"]["NEW"][3] == pytest.approx(-3000.0)

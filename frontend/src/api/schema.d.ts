@@ -1808,7 +1808,7 @@ export interface components {
             cross_ccy_kinds: string[];
             /**
              * Ofz View
-             * @description where an OFZ's KBD risk is (TDM#173): kbd, on RUB OFZ with no basis (every field adds up once); basis, on RUONIA plus the OFZ basis apart (ofz_basis_rub: the same risk again, not to add)
+             * @description how an OFZ's risk is shown (TDM#173, TDM#213): kbd, its KBD par risk on RUB OFZ with no basis (every field adds up once); basis, its RUONIA risk on RUONIA plus the OFZ basis apart (ofz_basis_rub: another factor, as CS01, not to add to the DV01)
              * @enum {string}
              */
             ofz_view: "kbd" | "basis";
@@ -1816,7 +1816,7 @@ export interface components {
             ofz_view_rule: string;
             /**
              * Ofz View Note
-             * @description set when the view is approximate (a run before 0.2.6 in 'kbd')
+             * @description set when the view is approximate (a run before 0.2.6 in 'kbd'; in 'basis' an OFZ whose RUONIA risk is its basis again: a run of 0.2.6, an OFZ off core)
              */
             ofz_view_note: string | null;
             /**
@@ -1867,7 +1867,7 @@ export interface components {
             mv_rub: number;
             /**
              * Dv01 By Curve Rub
-             * @description DV01 by curve, RUB per bp: the monitors' curve ids; an OFZ's KBD risk on RUB OFZ in the ofz_view 'kbd', on RUB RUONIA in 'basis'
+             * @description DV01 by curve, RUB per bp: the monitors' curve ids; an OFZ's KBD risk on RUB OFZ in the ofz_view 'kbd', its RUONIA risk on RUB RUONIA in 'basis' (since 0.2.7 computed apart from the basis; in 0.2.6 its KBD risk)
              */
             dv01_by_curve_rub: {
                 [key: string]: number;
@@ -1879,7 +1879,7 @@ export interface components {
             dv01_all_curves_rub: number;
             /**
              * Ofz Basis Rub
-             * @description the OFZ basis to RUONIA OIS, RUB per bp, in the ofz_view 'basis' only (0 in 'kbd'): since 0.2.6 a fixed OFZ's par DV01 on the KBD, the same risk the view has in dv01_by_curve_rub['RUB RUONIA'] (a second factor: never add it to the DV01), an OFZ-PK's spread to RUONIA; before, every OFZ's spread to RUONIA (ofz_spr01). Never an OFZ-IN's nominal proxy (dv01_ofz_in_proxy_rub)
+             * @description the OFZ basis to RUONIA OIS, RUB per bp, in the ofz_view 'basis' only (0 in 'kbd'): since 0.2.7 a fixed OFZ's risk to the KBD's par yields with RUONIA held (its KBD par risk), computed apart from its RUONIA risk in dv01_by_curve_rub['RUB RUONIA'] (TDM#213; in 0.2.6 the same risk again); a second factor, as CS01: never add it to the DV01. An OFZ-PK's spread to RUONIA; before 0.2.6, every OFZ's spread to RUONIA (ofz_spr01). Never an OFZ-IN's nominal proxy (dv01_ofz_in_proxy_rub)
              */
             ofz_basis_rub: number;
             /**
@@ -1979,7 +1979,7 @@ export interface components {
             dv01_ccy: number | null;
             /**
              * Dv01 By Curve Rub
-             * @description DV01 by curve, RUB per bp: the monitors' curve ids; an OFZ's KBD risk on RUB OFZ in the ofz_view 'kbd', on RUB RUONIA in 'basis'
+             * @description DV01 by curve, RUB per bp: the monitors' curve ids; an OFZ's KBD risk on RUB OFZ in the ofz_view 'kbd', its RUONIA risk on RUB RUONIA in 'basis' (since 0.2.7 computed apart from the basis; in 0.2.6 its KBD risk)
              */
             dv01_by_curve_rub: {
                 [key: string]: number;
@@ -1991,7 +1991,7 @@ export interface components {
             dv01_foreign_rub: number;
             /**
              * Ofz Basis Rub
-             * @description the OFZ basis to RUONIA OIS, RUB per bp, in the ofz_view 'basis' only (0 in 'kbd'): since 0.2.6 a fixed OFZ's par DV01 on the KBD, the same risk the view has in dv01_by_curve_rub['RUB RUONIA'] (a second factor: never add it to the DV01), an OFZ-PK's spread to RUONIA; before, every OFZ's spread to RUONIA (ofz_spr01). Never an OFZ-IN's nominal proxy (dv01_ofz_in_proxy_rub)
+             * @description the OFZ basis to RUONIA OIS, RUB per bp, in the ofz_view 'basis' only (0 in 'kbd'): since 0.2.7 a fixed OFZ's risk to the KBD's par yields with RUONIA held (its KBD par risk), computed apart from its RUONIA risk in dv01_by_curve_rub['RUB RUONIA'] (TDM#213; in 0.2.6 the same risk again); a second factor, as CS01: never add it to the DV01. An OFZ-PK's spread to RUONIA; before 0.2.6, every OFZ's spread to RUONIA (ofz_spr01). Never an OFZ-IN's nominal proxy (dv01_ofz_in_proxy_rub)
              */
             ofz_basis_rub: number;
             /**
@@ -2029,7 +2029,7 @@ export interface components {
             mv_rub: number;
             /**
              * Dv01 By Curve Rub
-             * @description DV01 by curve, RUB per bp: the monitors' curve ids; an OFZ's KBD risk on RUB OFZ in the ofz_view 'kbd', on RUB RUONIA in 'basis'
+             * @description DV01 by curve, RUB per bp: the monitors' curve ids; an OFZ's KBD risk on RUB OFZ in the ofz_view 'kbd', its RUONIA risk on RUB RUONIA in 'basis' (since 0.2.7 computed apart from the basis; in 0.2.6 its KBD risk)
              */
             dv01_by_curve_rub: {
                 [key: string]: number;
@@ -2041,7 +2041,7 @@ export interface components {
             dv01_all_curves_rub: number;
             /**
              * Ofz Basis Rub
-             * @description the OFZ basis to RUONIA OIS, RUB per bp, in the ofz_view 'basis' only (0 in 'kbd'): since 0.2.6 a fixed OFZ's par DV01 on the KBD, the same risk the view has in dv01_by_curve_rub['RUB RUONIA'] (a second factor: never add it to the DV01), an OFZ-PK's spread to RUONIA; before, every OFZ's spread to RUONIA (ofz_spr01). Never an OFZ-IN's nominal proxy (dv01_ofz_in_proxy_rub)
+             * @description the OFZ basis to RUONIA OIS, RUB per bp, in the ofz_view 'basis' only (0 in 'kbd'): since 0.2.7 a fixed OFZ's risk to the KBD's par yields with RUONIA held (its KBD par risk), computed apart from its RUONIA risk in dv01_by_curve_rub['RUB RUONIA'] (TDM#213; in 0.2.6 the same risk again); a second factor, as CS01: never add it to the DV01. An OFZ-PK's spread to RUONIA; before 0.2.6, every OFZ's spread to RUONIA (ofz_spr01). Never an OFZ-IN's nominal proxy (dv01_ofz_in_proxy_rub)
              */
             ofz_basis_rub: number;
             /**
@@ -3825,7 +3825,7 @@ export interface operations {
                 attribution?: "legs" | "position";
                 /** @description comma-separated books; all when omitted */
                 book?: string | null;
-                /** @description how the OFZ risk is shown, as the monitors' switch (TDM#173): kbd: «КБД»: an OFZ's rate risk on its own curve, the KBD (RUB OFZ in dv01_by_curve_rub), RUONIA without it; no OFZ basis (ofz_basis_rub 0): every DV01 and spread field adds up once. An OFZ-PK has no KBD risk: its basis (its spread to RUONIA) is in ofz_spread_kbd_rub. A run before 0.2.6 had its OFZ on RUONIA: their KBD risk is approximated by their basis to RUONIA (ofz_view_note); basis: «RUONIA + базис» (the monitors' default): an OFZ's KBD risk on RUONIA (moving RUONIA moves the KBD with it) and the OFZ basis to RUONIA OIS apart (ofz_basis_rub): two factors, the same risk seen twice -- never add ofz_basis_rub to the DV01 fields. Default 'kbd': its fields add up without counting a risk twice */
+                /** @description how the OFZ risk is shown, as the monitors' switch (TDM#173, TDM#213): kbd: «КБД»: an OFZ's rate risk on its own curve, the KBD's par yields (RUB OFZ in dv01_by_curve_rub), RUONIA without it; no OFZ basis (ofz_basis_rub 0): every DV01 and spread field adds up once. An OFZ-PK has no KBD risk: its basis (its spread to RUONIA) is in ofz_spread_kbd_rub. A run before 0.2.6 had its OFZ on RUONIA: their KBD risk is approximated by their basis to RUONIA (ofz_view_note); basis: «RUONIA + базис» (the monitors' default): an OFZ's risk to RUONIA OIS quotes with the basis held (in dv01_by_curve_rub['RUB RUONIA']) and its risk to the OFZ basis, the KBD's par yields with RUONIA held (ofz_basis_rub): two computed risks to two factors (0.2.7, core 0.39), like DV01 and CS01. Their sum is no rate DV01 (it moves the KBD twice): never add ofz_basis_rub to the DV01 fields. The DV01 here is the OFZ's RUONIA risk, a few tenths of a percent off its KBD risk in «КБД». A run of 0.2.6 (and an OFZ off core) has its KBD risk on RUONIA and again as the basis (ofz_view_note). Default 'kbd': its fields add up without a second rate factor */
                 ofz_view?: "kbd" | "basis";
             };
             header?: never;
