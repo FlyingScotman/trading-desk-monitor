@@ -842,9 +842,10 @@ OFZ_VIEWS = {
 """How the risk table shows the OFZ risk (TDM#173, TDM#213; the monitors' switch «ОФЗ: RUONIA + базис / КБД»,
 ``lib/real.js`` ``M.ofzView``). The DV01 of an OFZ in RUONIA + basis is its RUONIA risk in «RUONIA + базис» and its
 basis risk (the KBD's par risk) in «КБД»; with the basis a copy of the KBD risk (a run of 0.2.6) both are the same."""
-OFZ_VIEW_DEFAULT = "kbd"
-"""The API's default (TDM#173): the view whose fields add up without a second rate factor; the «RUONIA + базис»
-view (the monitors' default) only when asked for by name. Under review in TDM#205 now that the two risks are computed."""
+OFZ_VIEW_DEFAULT = "basis"
+"""The API's default, the monitors' one (the owner's decision in TDM#205): «RUONIA + базис», two computed risks since
+0.2.7 (TDM#213), as the API of 0.2.6 gave; «КБД» (TDM#173), where every field adds up without a second rate factor,
+when asked for by name."""
 OFZ_VIEW_APPROX = ("a run before 0.2.6: its OFZ were on RUONIA, their KBD risk in the «КБД» view is their basis to "
                    "RUONIA (ofz_spr01), moved off RUONIA")
 OFZ_VIEW_P = ("{n} OFZ without a computed RUONIA risk (a run of 0.2.6 or an OFZ off core): their RUONIA risk is their "

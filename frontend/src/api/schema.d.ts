@@ -2475,7 +2475,8 @@ export interface components {
         /**
          * ScenarioDefinition
          * @description The prototype scenario shape. curves: bp per RISK_BUCKETS pillar (11) or one number for all, per
-         *     published curve ("RUB RUONIA" the RUB bonds' discount curve, "RUB KEY", "RUB OFZ" the KBD, a currency's
+         *     published curve ("RUB RUONIA" the RUB bonds' discount curve, "RUB KEY", "RUB OFZ" a shift of the OFZ yields,
+         *     the KBD's par yields (TDM#226: an OFZ in RUONIA + basis moves its basis by RUB OFZ - RUB RUONIA), a currency's
          *     "USD"...), each moving only by its own vector; ofzSpread: OFZ Z-spread to RUONIA, bp; fx: % against RUB (+ = weaker rouble). Returned
          *     normalized: 11-pillar lists, zeros and empty entries left out.
          */
@@ -3825,7 +3826,7 @@ export interface operations {
                 attribution?: "legs" | "position";
                 /** @description comma-separated books; all when omitted */
                 book?: string | null;
-                /** @description how the OFZ risk is shown, as the monitors' switch (TDM#173, TDM#213): kbd: «КБД»: an OFZ's rate risk on its own curve, the KBD's par yields (RUB OFZ in dv01_by_curve_rub), RUONIA without it; no OFZ basis (ofz_basis_rub 0): every DV01 and spread field adds up once. An OFZ-PK has no KBD risk: its basis (its spread to RUONIA) is in ofz_spread_kbd_rub. A run before 0.2.6 had its OFZ on RUONIA: their KBD risk is approximated by their basis to RUONIA (ofz_view_note); basis: «RUONIA + базис» (the monitors' default): an OFZ's risk to RUONIA OIS quotes with the basis held (in dv01_by_curve_rub['RUB RUONIA']) and its risk to the OFZ basis, the KBD's par yields with RUONIA held (ofz_basis_rub): two computed risks to two factors (0.2.7, core 0.39), like DV01 and CS01. Their sum is no rate DV01 (it moves the KBD twice): never add ofz_basis_rub to the DV01 fields. The DV01 here is the OFZ's RUONIA risk, a few tenths of a percent off its KBD risk in «КБД». A run of 0.2.6 (and an OFZ off core) has its KBD risk on RUONIA and again as the basis (ofz_view_note). Default 'kbd': its fields add up without a second rate factor */
+                /** @description how the OFZ risk is shown, as the monitors' switch (TDM#173, TDM#213): kbd: «КБД»: an OFZ's rate risk on its own curve, the KBD's par yields (RUB OFZ in dv01_by_curve_rub), RUONIA without it; no OFZ basis (ofz_basis_rub 0): every DV01 and spread field adds up once. An OFZ-PK has no KBD risk: its basis (its spread to RUONIA) is in ofz_spread_kbd_rub. A run before 0.2.6 had its OFZ on RUONIA: their KBD risk is approximated by their basis to RUONIA (ofz_view_note); basis: «RUONIA + базис» (the monitors' default): an OFZ's risk to RUONIA OIS quotes with the basis held (in dv01_by_curve_rub['RUB RUONIA']) and its risk to the OFZ basis, the KBD's par yields with RUONIA held (ofz_basis_rub): two computed risks to two factors (0.2.7, core 0.39), like DV01 and CS01. Their sum is no rate DV01 (it moves the KBD twice): never add ofz_basis_rub to the DV01 fields. The DV01 here is the OFZ's RUONIA risk, a few tenths of a percent off its KBD risk in «КБД». A run of 0.2.6 (and an OFZ off core) has its KBD risk on RUONIA and again as the basis (ofz_view_note). Default 'basis', the monitors' view (TDM#205) */
                 ofz_view?: "kbd" | "basis";
             };
             header?: never;

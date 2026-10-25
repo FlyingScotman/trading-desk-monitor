@@ -84,7 +84,7 @@ export function ScenarioEditor({ presets, presetId, onPreset, buckets, curves, c
           <Slider id="add" label="Параллельно" min={-500} max={500} value={add} onChange={v => onChange({ base, add: v })}
             title={`Параллельная надбавка ко всем бакетам рублёвых кривых (${RUB_CURVES.join(', ')})`} />
           <select className="sel" value={curve} onChange={e => onCurve(e.target.value)} aria-label="Кривая">
-            {curves.map(c => <option key={c} value={c}>{c}</option>)}
+            {curves.map(c => <option key={c} value={c}>{c === 'RUB OFZ' ? `${c} — доходности ОФЗ (КБД)` : c}</option>)}
           </select>
           <div className="buckets" role="group" aria-label="Шок по бакетам, б.п.">
             {buckets.map((b, i) => (
@@ -97,7 +97,8 @@ export function ScenarioEditor({ presets, presetId, onPreset, buckets, curves, c
             ))}
           </div>
           <p className="note">Итоговый вектор шока кривой {curve}; каждая кривая сдвигается только своим вектором
-            (флоатер видит базис). Правка бакета — Enter или уход из поля.</p>
+            (флоатер видит базис).{curve === 'RUB OFZ' && <> RUB OFZ — сдвиг доходностей ОФЗ (КБД): базис ОФЗ к RUONIA
+            сдвигается на RUB OFZ − RUB RUONIA.</>} Правка бакета — Enter или уход из поля.</p>
         </div>
       </div>
 
