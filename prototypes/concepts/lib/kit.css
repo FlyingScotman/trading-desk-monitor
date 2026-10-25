@@ -118,11 +118,13 @@ table.k-tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-si
 .k-tbl .tagc { display: inline-block; padding: 0 6px; border-radius: 4px; font-size: 11px; background: var(--panel-2); border: 1px solid var(--line); color: var(--fg-2); }
 .k-tbl-tools { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 /* раскладка таблиц (#102): граница заголовка — ширина, перетаскивание заголовка — порядок; кнопки вида */
-.k-tbl th .k-rsz { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; z-index: 3; }
-.k-tbl th .k-rsz:hover, body.k-col-resizing .k-tbl th .k-rsz:hover { background: var(--accent); opacity: .5; }
+/* ручные таблицы (#131, KIT.tableTools): заголовок — опора ручки ширины (у .k-tbl он уже sticky) */
+table.k-rszable:not(.k-tbl) th { position: relative; }
+.k-tbl th .k-rsz, table.k-rszable th .k-rsz { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; z-index: 3; }
+.k-tbl th .k-rsz:hover, table.k-rszable th .k-rsz:hover, body.k-col-resizing .k-tbl th .k-rsz:hover { background: var(--accent); opacity: .5; }
 .k-tbl th.k-drag { opacity: .45; }
-table.k-tbl.k-fixed { table-layout: fixed; }
-table.k-tbl.k-fixed th, table.k-tbl.k-fixed td { overflow: hidden; text-overflow: ellipsis; }
+table.k-fixed { table-layout: fixed; }
+table.k-fixed th, table.k-fixed td { overflow: hidden; text-overflow: ellipsis; }
 body.k-col-resizing, body.k-col-resizing * { cursor: col-resize !important; user-select: none; }
 body.k-col-moving, body.k-col-moving * { cursor: grabbing !important; user-select: none; }
 .k-col-ind { position: fixed; width: 2px; background: var(--accent); z-index: 150; pointer-events: none; }

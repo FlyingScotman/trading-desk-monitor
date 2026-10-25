@@ -246,9 +246,10 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     const po = panel('<span style="color:var(--warn)">●</span> Оферты и коллы — точки решения'); col.appendChild(po);
     po.querySelector('.bd').classList.add('flush', 'scroll'); po.querySelector('.bd').style.maxHeight = '320px';
     const L = K.list().filter(p => p.event && (p.event.kind === 'put' || p.event.kind === 'call')).sort((a, b) => a.event.date.localeCompare(b.event.date));
-    po.querySelector('.bd').innerHTML = L.length ? '<table class="mini"><thead><tr><th>Дата</th><th class="n">Дней</th><th>Бумага</th><th class="n">Номинал</th><th class="n">Цена</th><th class="n">Дох.</th><th class="n">Спред</th></tr></thead><tbody>' +
+    po.querySelector('.bd').innerHTML = L.length ? '<table class="mini" data-vk="c08-offers-calls" data-title="Оферты и коллы"><thead><tr><th>Дата</th><th class="n">Дней</th><th>Бумага</th><th class="n">Номинал</th><th class="n">Цена</th><th class="n">Дох.</th><th class="n">Спред</th></tr></thead><tbody>' +
       L.map(p => { const dd = Math.round(U.yearsTo(p.event.date) * 365.25), inH = p.event.date <= e; return '<tr data-card="' + p.id + '"' + (inH ? '' : ' style="opacity:.55"') + '><td>' + f.date(p.event.date) + ' <span class="mut3">' + (p.event.kind === 'put' ? 'пут' : 'колл') + '</span></td><td class="n ' + (dd <= 45 ? 'soon' : '') + '">' + dd + '</td><td><b style="color:' + K.issuerColor(p.issuer) + '">●</b> ' + esc(p.name) + '</td><td class="n">' + f.mn(p.notional, 0) + '<span class="mut3">mm ' + p.ccy + '</span></td><td class="n ' + (p.price < 100 ? 'neg' : 'pos') + '">' + f.px(p.price) + '</td><td class="n">' + f.pct(p.ytm) + '</td><td class="n">' + f.bp(p.zspread) + '</td></tr>'; }).join('') + '</tbody></table>' +
       '<div class="k-note" style="padding:6px 10px">цена ниже 100 у пут-оферты — бумагу выгодно предъявить; бледные — за горизонтом</div>' : '<div class="k-empty">нет оферт</div>';
+    K.tableToolsAll(po.querySelector('.bd'));
     // список по неделям
     const pt = panel('Все потоки по неделям'); view.appendChild(pt);
     pt.querySelector('.bd').classList.add('flush');
@@ -256,7 +257,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
       rows: ev, maxHeight: '60vh', sort: [['date', 1]], rowCls: r => r.kind === 'put' ? 'putrow' : '', onRow: r => K.card(r.pos),
       groupBy: [{ key: r => weekStart(r.date), order: (a, b) => a.localeCompare(b), fixed: true, span: 3, label: (k, a) => 'Неделя ' + f.dshort(k) + ' – ' + f.dshort(U.addDays(k, 6)) + (a.some(x => x.kind === 'put') ? '<span class="putb">оферта</span>' : '') + (a.some(x => cbr.has(x.date)) || [...Array(7)].some((_, i) => cbr.has(U.addDays(k, i))) ? '<span class="putb" style="color:var(--neg);border-color:var(--neg)">ЦБ</span>' : '') }],
       columns: [
-        { key: 'date', label: 'Дата', fmt: v => f.date(v) + ' <span class="mut3">' + WD[U.parse(v).getDay()] + '</span>' },
+        { key: 'date', label: 'Дата', date: true, fmt: v => f.date(v) + ' <span class="mut3">' + WD[U.parse(v).getDay()] + '</span>' },
         { key: 'kind', label: 'Событие', fmt: (v, r) => '<span class="kb" style="--c:' + KC[v] + '">' + KN[v] + '</span>' + (r.est ? ' <span class="mut3">прогноз</span>' : '') },
         { key: 'name', label: 'Бумага', fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
         { key: 'ccy', label: 'Вал', fmt: (v, r) => K.ccyTag(r.ccy), val: r => M.ccyOrder[r.ccy] },
@@ -284,6 +285,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
       const j = C.flows(Object.assign({ market: 'fx', ccy, from, to: e }, q));
       const bd = sheet(esc(title), j.count + ' событий · ' + fmt(j.amount) + ' ' + unit + (j.count > j.rows.length ? ' · показаны крупнейшие ' + j.rows.length : ''));
       bd.innerHTML = flowsTable(j.rows, { fmt: v => f.mn(v, 1), unit });
+      K.tableToolsAll(bd);
     };
     const perCcy = ccys.map(c => { const a = C.fx.filter(r => r.ccy === c && inH(r.date)); return { c, cpn: sumBy(a.filter(r => r.kind === 'cpn'), r => r.amount), red: sumBy(a.filter(r => r.kind !== 'cpn'), r => r.amount) }; });
     const nB = M.universeFx.filter(b => b.ccy === ccy);
@@ -323,7 +325,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
       rows: C.fxEvents.filter(x => x.ccy === ccy && inH(x.date)).map((x, i) => Object.assign({ id: 'x' + i, val: x.amount }, x)), maxHeight: '55vh', sort: [['date', 1]], rowCls: r => r.kind === 'put' ? 'putrow' : '',
       onRow: r => { if (r.pos) K.card(r.pos); else open(r.name, { secid: r.secid }); },
       columns: [
-        { key: 'date', label: 'Дата', fmt: v => f.date(v) },
+        { key: 'date', label: 'Дата', date: true, fmt: v => f.date(v) },
         { key: 'days', label: 'Дней', num: true, val: r => Math.round(U.yearsTo(r.date) * 365.25), fmt: v => '<span class="' + (v <= 30 ? 'soon' : '') + '">' + v + '</span>' },
         { key: 'kind', label: 'Событие', fmt: v => '<span class="kb" style="--c:' + KC[v] + '">' + KN[v] + '</span>' },
         { key: 'name', label: 'Выпуск', fmt: (v, r) => esc(v) + (r.held ? ' <span class="held">в портфеле</span>' : '') },
@@ -359,9 +361,10 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
       if (fromRows) j.rows.forEach(r => add(r.type, r.kind, r.amount, 1));
       else C.rub.filter(ok).forEach(r => add(r.type, r.kind, st.big ? r.bigAmount : r.amount, st.big ? r.bigCount : r.count));
       const mx = Math.max(1, ...Object.values(g).map(x => x.cpn + x.red));
-      bd.innerHTML = '<div class="k-sec">По типу' + (fromRows && j.count > j.rows.length ? ' (крупнейшие ' + j.rows.length + ')' : '') + '</div><table class="mini"><thead><tr><th>Тип</th><th class="n">Событий</th><th class="n">Купоны</th><th class="n">Погаш. + оферты</th><th style="width:30%"></th></tr></thead><tbody>' +
+      bd.innerHTML = '<div class="k-sec">По типу' + (fromRows && j.count > j.rows.length ? ' (крупнейшие ' + j.rows.length + ')' : '') + '</div><table class="mini" data-vk="c08-sheet-bytype" data-title="Выплаты по типу"><thead><tr><th>Тип</th><th class="n">Событий</th><th class="n">Купоны</th><th class="n">Погаш. + оферты</th><th style="width:30%"></th></tr></thead><tbody>' +
         C.types.filter(t => g[t.id]).map(t => { const x = g[t.id]; return '<tr><td><b style="color:' + TYPE_C[t.id] + '">■</b> ' + esc(t.label) + '</td><td class="n mut">' + x.n + '</td><td class="n">' + fmt(x.cpn) + '</td><td class="n">' + fmt(x.red) + '</td><td>' + K.bar(x.cpn + x.red, mx, true) + '</td></tr>'; }).join('') + '</tbody></table>' +
         '<div class="k-sec">Выпуски</div>' + flowsTable(j.rows, { fmt: v => f.bn(v, 2), unit, type: true });
+      K.tableToolsAll(bd);
     };
     const kp = (label, a, sub, q) => K.kpi(label, a.length ? '<span class="dr" data-q=\'' + JSON.stringify(q) + '\' data-t="' + esc(label.replace(/<[^>]+>/g, '').replace('● ', '').replace('■ ', '')) + '">' + fmt(sumBy(a, x => x.val)) + '</span> <span class="mut" style="font-size:11px">bn</span>' : '<span class="mut3">—</span>', sub);
     const red1 = t => red.filter(x => x.type === t);
@@ -385,9 +388,10 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     const grid = types.map(t => cats.map(c => sumBy(what.filter(x => x.type === t && pkey(x.date, P) === c), x => x.val)));
     const mx = Math.max(1, ...grid.flat());
     const tb = K.h('div'); ph.querySelector('.bd').appendChild(tb);
-    tb.innerHTML = '<table class="k-tbl heat"><thead><tr><th>Тип</th>' + cats.map(c => '<th class="n">' + plabel(c, P) + '</th>').join('') + '<th class="n">Итого</th></tr></thead><tbody>' +
+    tb.innerHTML = '<table class="k-tbl heat" data-vk="c08-type-period" data-title="Тип × период, bn ₽"><thead><tr><th>Тип</th>' + cats.map(c => '<th class="n">' + plabel(c, P) + '</th>').join('') + '<th class="n">Итого</th></tr></thead><tbody>' +
       types.map((t, i) => '<tr><td><b style="color:' + TYPE_C[t] + '">■</b> ' + esc(TL[t]) + '</td>' + grid[i].map((v, j) => '<td class="n' + (v ? ' c' : '') + '" data-i="' + i + '" data-j="' + j + '" style="' + K.heatMono(v, mx) + '">' + (v ? f.bn(v, 1) : '<span class="mut3">·</span>') + '</td>').join('') + '<td class="n"><b>' + f.bn(grid[i].reduce((a, c) => a + c, 0), 1) + '</b></td></tr>').join('') +
       '</tbody><tfoot><tr><td>Итого</td>' + cats.map((c, j) => '<td class="n">' + f.bn(grid.reduce((s, r) => s + r[j], 0), 1) + '</td>').join('') + '<td class="n">' + f.bn(grid.flat().reduce((a, c) => a + c, 0), 1) + '</td></tr></tfoot></table>';
+    K.tableToolsAll(tb);
     tb.querySelectorAll('td.c').forEach(td => td.onclick = () => { const i = +td.dataset.i, j = +td.dataset.j; open(TL[types[i]] + ' · ' + plabel(cats[j], P), Object.assign({ type: types[i], kind: whatKind }, prange(cats[j], P, e))); });
     // по секторам (месяцы горизонта)
     const m0 = M.asOf.slice(0, 7), m1 = e.slice(0, 7), sec = {};
@@ -396,7 +400,8 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     const secL = Object.values(sec).filter(x => x.n).sort((a, b) => b.v - a.v).slice(0, 10);
     const smx = Math.max(1, ...secL.map(x => x.v));
     const sb = K.h('div'); sb.style.padding = '0 0 8px'; ph.querySelector('.bd').appendChild(sb);
-    sb.innerHTML = '<div class="k-sec" style="padding:0 10px">По секторам эмитентов</div><table class="mini"><tbody>' + secL.map((x, i) => '<tr data-i="' + i + '" style="cursor:pointer"><td>' + esc(x.k) + ' <span class="mut3">' + x.n + '</span></td><td class="n">' + f.bn(x.v, 1) + '</td><td style="width:45%">' + K.bar(x.v, smx, true) + '</td></tr>').join('') + '</tbody></table>';
+    sb.innerHTML = '<div class="k-sec" style="padding:0 10px">По секторам эмитентов</div><table class="mini" data-vk="c08-sectors" data-title="По секторам эмитентов, bn ₽"><tbody>' + secL.map((x, i) => '<tr data-i="' + i + '" style="cursor:pointer"><td>' + esc(x.k) + ' <span class="mut3">' + x.n + '</span></td><td class="n">' + f.bn(x.v, 1) + '</td><td style="width:45%">' + K.bar(x.v, smx, true) + '</td></tr>').join('') + '</tbody></table>';
+    K.tableToolsAll(sb);
     sb.querySelectorAll('tr[data-i]').forEach(tr => tr.onclick = () => { const x = secL[+tr.dataset.i]; open(whatLabel + ' · ' + x.k, { sector: x.k, kind: whatKind }); });
 
     const row2 = K.h('div', 'c8-row'); view.appendChild(row2);
@@ -406,16 +411,16 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     const pb = panel('Крупные погашения и оферты', '<span class="k-note">выпуски ≥ ' + f.bn(C.bigRub, 0) + ' bn в обращении</span>'); row2.appendChild(pb);
     pb.querySelector('.bd').classList.add('flush', 'scroll'); pb.querySelector('.bd').style.maxHeight = '520px';
     const bigList = C.rubBig.filter(x => inH(x.date));
-    pb.querySelector('.bd').innerHTML = bigList.length ? '<table class="mini"><thead><tr><th>Дата</th><th>Событие</th><th>Выпуск</th><th>Тип</th><th class="n">Объём, bn</th></tr></thead><tbody>' +
-      bigList.map(x => '<tr' + (x.pos ? ' data-card="' + x.pos + '"' : '') + '><td>' + f.date(x.date) + '</td><td><span class="kb" style="--c:' + KC[x.kind] + '">' + KN[x.kind] + '</span></td><td>' + esc(x.name) + (x.held ? ' <span class="held">в портфеле</span>' : '') + '</td><td><b style="color:' + TYPE_C[x.type] + '">■</b> ' + esc(TL[x.type] || x.type) + '</td><td class="n"><b>' + f.bn(x.amount, 1) + '</b></td></tr>').join('') + '</tbody></table>' +
+    pb.querySelector('.bd').innerHTML = bigList.length ? '<table class="mini" data-vk="c08-big-redemptions" data-title="Крупные погашения и оферты"><thead><tr><th>Дата</th><th>Событие</th><th>Выпуск</th><th>Тип</th><th class="n">Объём, bn</th></tr></thead><tbody>' +
+      bigList.map(x => '<tr' + (x.pos ? ' data-card="' + x.pos + '"' : '') + '><td data-date="' + x.date + '">' + f.date(x.date) + '</td><td><span class="kb" style="--c:' + KC[x.kind] + '">' + KN[x.kind] + '</span></td><td>' + esc(x.name) + (x.held ? ' <span class="held">в портфеле</span>' : '') + '</td><td><b style="color:' + TYPE_C[x.type] + '">■</b> ' + esc(TL[x.type] || x.type) + '</td><td class="n"><b>' + f.bn(x.amount, 1) + '</b></td></tr>').join('') + '</tbody></table>' +
       '<div class="k-note" style="padding:6px 10px">' + bigList.length + ' событий за горизонт; остальное — в агрегатах</div>' : '<div class="k-empty">в горизонте нет</div>';
   }
 
   // строки выплат рынка (разбор ячейки): дата, событие, выпуск, эмитент, тип или валюта, сумма
   function flowsTable(rows, o) {
     if (!rows.length) return '<div class="k-empty">нет выплат</div>';
-    return '<table class="mini"><thead><tr><th>Дата</th><th>Событие</th><th>Выпуск</th><th>Эмитент</th>' + (o.type ? '<th>Тип</th>' : '') + '<th class="n">Сумма, ' + o.unit + '</th></tr></thead><tbody>' +
-      rows.map(x => '<tr' + (x.pos ? ' data-card="' + x.pos + '"' : '') + '><td>' + f.date(x.date) + '</td><td><span class="kb" style="--c:' + KC[x.kind] + '">' + KN[x.kind] + '</span>' + (x.est ? ' <span class="mut3" title="купон ещё не объявлен (по последнему) или оферта: возможный объём">≈</span>' : '') + '</td><td>' + esc(x.name) + (x.held ? ' <span class="held">в портфеле</span>' : '') + '</td><td class="mut">' + esc(x.issuer || '—') + '</td>' +
+    return '<table class="mini" data-vk="c08-sheet-flows" data-title="Выплаты выпусков"><thead><tr><th>Дата</th><th>Событие</th><th>Выпуск</th><th>Эмитент</th>' + (o.type ? '<th>Тип</th>' : '') + '<th class="n">Сумма, ' + o.unit + '</th></tr></thead><tbody>' +
+      rows.map(x => '<tr' + (x.pos ? ' data-card="' + x.pos + '"' : '') + '><td data-date="' + x.date + '">' + f.date(x.date) + '</td><td><span class="kb" style="--c:' + KC[x.kind] + '">' + KN[x.kind] + '</span>' + (x.est ? ' <span class="mut3" title="купон ещё не объявлен (по последнему) или оферта: возможный объём">≈</span>' : '') + '</td><td>' + esc(x.name) + (x.held ? ' <span class="held">в портфеле</span>' : '') + '</td><td class="mut">' + esc(x.issuer || '—') + '</td>' +
         (o.type ? '<td><b style="color:' + (TYPE_C[x.type] || '#888') + '">■</b> ' + esc(((M.marketCal.types.find(t => t.id === x.type)) || {}).label || x.type) + '</td>' : '') + '<td class="n"><b>' + (x.amount == null ? '—' : o.fmt(x.amount)) + '</b></td></tr>').join('') + '</tbody></table>';
   }
   // границы периода (неделя или месяц) в пределах горизонта: для запроса строк

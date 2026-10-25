@@ -147,7 +147,7 @@
     // прогоны: кто кого заменил и что изменилось
     const rp = panel('Прогоны', '<span class="k-note">кто кого заменил и почему</span>');
     rp.querySelector('.bd').classList.add('flush', 'scroll');
-    rp.querySelector('.bd').innerHTML = d.runs.length ? '<table class="k-tbl"><thead><tr><th>#</th><th>Срез</th><th>Статус</th><th>Готов</th><th>Заменил</th><th>Заменён</th><th>Что изменилось</th></tr></thead><tbody>' +
+    rp.querySelector('.bd').innerHTML = d.runs.length ? '<table class="k-tbl" data-vk="c14-runs" data-title="Прогоны"><thead><tr><th>#</th><th>Срез</th><th>Статус</th><th>Готов</th><th>Заменил</th><th>Заменён</th><th>Что изменилось</th></tr></thead><tbody>' +
       d.runs.slice().reverse().map(r => '<tr><td class="mono">' + r.run_id + (r.is_default ? ' <span class="c14-badge st-ok" title="основной прогон даты">основной</span>' : r.is_current ? ' <span class="c14-badge st-warn" title="показывается до закрытия">текущий</span>' : '') + '</td>' +
         '<td>' + esc(r.label) + '</td>' +
         '<td class="' + (r.status === 'failed' ? 'neg' : '') + '"' + (r.error ? ' title="' + esc(r.error) + '"' : '') + '>' + esc(RUN_STATUS[r.status] || r.status) + (r.error ? ' ⓘ' : '') + '</td>' +
@@ -156,13 +156,14 @@
         '<td class="c14-chain">' + (r.superseded_by.length ? r.superseded_by.map(x => '#' + x).join(', ') : '<span class="mut3">—</span>') + '</td>' +
         '<td class="wrap mut">' + (r.changed_text.length ? esc(r.changed_text.join(', ')) : r.supersedes_run_id ? 'входы те же (пересчёт)' : '') + '</td></tr>').join('') + '</tbody></table>'
       : '<div class="k-empty">Прогонов за эту дату нет</div>';
+    K.tableToolsAll(rp.querySelector('.bd'));
     left.appendChild(rp);
 
     // файлы: что пришло и что отклонено, с причинами
     const fp = panel('Файлы отчётов', '<span class="k-note">строка — части файла (книги) и коды замечаний</span>');
     fp.querySelector('.bd').classList.add('flush', 'scroll');
     const lost = st => ['rejected', 'failed', 'timed_out', 'match_failed'].includes(st);
-    fp.querySelector('.bd').innerHTML = (d.files.length ? '<table class="k-tbl"><thead><tr><th>Пришёл</th><th>Файл</th><th>Источник</th><th>Статус</th><th class="n">Частей</th><th>Почему</th></tr></thead><tbody>' +
+    fp.querySelector('.bd').innerHTML = (d.files.length ? '<table class="k-tbl" data-vk="c14-files" data-title="Файлы отчётов"><thead><tr><th>Пришёл</th><th>Файл</th><th>Источник</th><th>Статус</th><th class="n">Частей</th><th>Почему</th></tr></thead><tbody>' +
       d.files.map((x, i) => {
         const rejU = x.units.filter(v => v.status === 'rejected');
         const why = x.why || (rejU.length ? 'отклонено: ' + rejU.map(v => scope(v.scope) + ' — ' + v.why).join('; ') : '');
@@ -170,6 +171,7 @@
           '<td class="' + (lost(x.status) ? 'neg' : '') + '"' + (x.status === 'partially_accepted' ? ' style="color:var(--warn)"' : '') + '>' + esc(x.status_text) + '</td><td class="n">' + x.units.length + '</td><td class="wrap">' + esc(why) + '</td></tr>';
       }).join('') + '</tbody></table>' : '<div class="k-empty">Файлов за эту дату не было</div>') +
       (d.copies.length ? '<div style="padding:8px 12px;border-top:1px solid var(--line)"><b style="color:var(--warn)">Копии:</b> ' + d.copies.map(c => esc(c.name) + ' — ' + (c.kind === 'stale_copy' ? 'старая копия (содержимое отчёта за ' + f.date(c.content_report_date) + '): свежего отчёта нет' : 'повтор, ничего не загружено')).join('; ') + '</div>' : '');
+    K.tableToolsAll(fp.querySelector('.bd'));
     fp.querySelectorAll('tr[data-f]').forEach(tr => tr.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); tr.click(); } });
     fp.querySelectorAll('tr[data-f]').forEach(tr => tr.onclick = () => {
       let nx = tr.nextElementSibling;
@@ -188,11 +190,12 @@
     const P = d.positions || { books: [] };
     const bp = panel('Позиции по книгам', '<span class="k-note">в отчёте → принято → в расчёте' + (P.run_id ? ' #' + P.run_id : '') + '</span>');
     bp.querySelector('.bd').classList.add('flush', 'scroll');
-    bp.querySelector('.bd').innerHTML = P.books.length ? '<table class="k-tbl"><thead><tr><th>Книга</th><th>Позиции на</th><th>Файл</th><th class="n">В отчёте</th><th class="n">Принято</th><th class="n">В расчёте</th><th class="n">Оценено</th><th>Замечания</th></tr></thead><tbody>' +
+    bp.querySelector('.bd').innerHTML = P.books.length ? '<table class="k-tbl" data-vk="c14-books" data-title="Позиции по книгам"><thead><tr><th>Книга</th><th>Позиции на</th><th>Файл</th><th class="n">В отчёте</th><th class="n">Принято</th><th class="n">В расчёте</th><th class="n">Оценено</th><th>Замечания</th></tr></thead><tbody>' +
       P.books.map(b => '<tr><td>' + esc(b.book_id) + (b.name && b.name !== b.book_id ? ' <span class="mut3">' + esc(b.name) + '</span>' : '') + '</td><td>' + (b.valid_date ? f.date(b.valid_date) + (b.age_days ? ' <span class="mut3">(' + b.age_days + ' дн.)</span>' : '') : '<span class="neg">нет</span>') + '</td>' +
         '<td class="mut">' + esc(b.file || '—') + '</td><td class="n">' + num(b.rows_in_report) + '</td><td class="n">' + num(b.rows_accepted) + '</td><td class="n">' + num(b.rows_in_run) + '</td><td class="n">' + num(b.rows_valued) + '</td>' +
         '<td class="wrap">' + b.flags.map(x => '<span class="c14-badge st-warn">' + esc(FLAG[x] || x) + '</span>').join(' ') + (Object.keys(b.issues || {}).length ? ' <span class="mut3">' + Object.entries(b.issues).map(([k, n]) => esc(k) + (n > 1 ? ' ×' + n : '')).join(', ') + '</span>' : '') + '</td></tr>').join('') + '</tbody></table>'
       : '<div class="k-empty">Книг нет</div>';
+    K.tableToolsAll(bp.querySelector('.bd'));
     left.appendChild(bp);
 
     // лента событий даты

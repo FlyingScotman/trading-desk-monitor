@@ -129,9 +129,10 @@
       const mxT = Math.max(1, ...rows.map(r => Math.abs(r.tot)));
       const stripe = r => dim === 'ccy' ? K.ccyColor(r.k) : dim === 'issuer' ? K.issuerColor(r.p.issuer) : dim === 'kind' ? K.kindColor[r.p.kind] : 'transparent';
       const cell = (title, list, k, max, cls) => { const v = M.sum(list, p => val(p, k)); return '<td class="n ' + (cls || '') + '" style="' + K.heat(v, max) + '">' + (Math.abs(v) < (mode === 'day' ? 500 : 5e4) ? '<span class="mut3">·</span>' : K.d({ title, unit: u.unit, fmt: u.fmts, list, val: p => val(p, k) }, u.fmt(v), '')) + '</td>'; };
-      mxb.innerHTML = '<table class="k-tbl mx"><thead><tr><th></th><th>' + D[1][0].toUpperCase() + D[1].slice(1) + '</th>' + FAC.map(([k, t]) => '<th class="n">' + t + '</th>').join('') + '<th class="n">Итого</th></tr></thead><tbody>' +
+      mxb.innerHTML = '<table class="k-tbl mx" data-vk="c10-factor-matrix" data-title="PnL по факторам"><thead><tr><th></th><th>' + D[1][0].toUpperCase() + D[1].slice(1) + '</th>' + FAC.map(([k, t]) => '<th class="n">' + t + '</th>').join('') + '<th class="n">Итого</th></tr></thead><tbody>' +
         rows.map(r => '<tr><td class="stripe" style="background:' + stripe(r) + '"></td><td class="lbl">' + esc(r.label) + ' <span class="mut3">' + r.list.length + '</span></td>' + FAC.map(([k, t]) => cell(r.label + ' · ' + t, r.list, k, mx)).join('') + cell(r.label + ' · итог', r.list, 'total', mxT, 'tot') + '</tr>').join('') +
         '</tbody><tfoot><tr><td></td><td>Итого</td>' + FAC.map(([k, t]) => '<td class="n">' + K.d({ title: 'PnL · ' + t, unit: u.unit, fmt: u.fmts, list: L, val: p => val(p, k) }, u.fmt(M.sum(L, p => val(p, k)))) + '</td>').join('') + '<td class="n tot">' + K.d({ title: 'PnL итог', unit: u.unit, fmt: u.fmts, list: L, val: p => val(p, 'total') }, u.fmt(tot)) + '</td></tr></tfoot></table>';
+      K.tableToolsAll(mxb);
     }
     drawMx();
 
@@ -142,9 +143,10 @@
       const s = arr.reduce((a, x) => a + x.v, 0), top = arr.slice(0, 6), mx = Math.max(1, ...top.map(x => Math.abs(x.v)));
       const conc = arr.length ? Math.round(top.reduce((a, x) => a + Math.abs(x.v), 0) / arr.reduce((a, x) => a + Math.abs(x.v), 0) * 100) : 0;
       return '<div class="k-panel"><div class="hd"><h3><b style="color:' + FCOL[k] + '">■</b> ' + t + '</h3><span class="sp"></span>' + K.d({ title: 'PnL · ' + t, unit: u.unit, fmt: u.fmts, list: L, val: p => val(p, k) }, u.fmts(s)) + '</div><div class="bd">' +
-        (top.length ? '<table>' + top.map(x => '<tr data-card="' + x.p.id + '"><td style="width:3px;padding:0;background:' + K.issuerColor(x.p.issuer) + '"></td><td class="nm">' + esc(x.p.name) + '</td><td class="n ' + f.cls(x.v) + '">' + u.fmts(x.v) + '</td><td style="width:70px">' + K.bar(x.v, mx) + '</td></tr>').join('') + '</table>' +
+        (top.length ? '<table data-vk="c10-top-' + k + '" data-title="Главные вклады · ' + t + '">' + top.map(x => '<tr data-card="' + x.p.id + '"><td style="width:3px;padding:0;background:' + K.issuerColor(x.p.issuer) + '"></td><td class="nm">' + esc(x.p.name) + '</td><td class="n ' + f.cls(x.v) + '">' + u.fmts(x.v) + '</td><td style="width:70px">' + K.bar(x.v, mx) + '</td></tr>').join('') + '</table>' +
           '<div class="k-note" style="padding:4px 10px 0">топ-6 = ' + conc + '% оборота · всего ' + arr.length + ' поз.</div>' : '<div class="k-empty">нет вклада</div>') + '</div></div>';
     }).join('') + '</div>';
+    K.tableToolsAll(fp.querySelector('.bd'));
     page.appendChild(fp);
 
     // ---------- ставки: кривая × бакет + история ----------
@@ -156,11 +158,12 @@
       const cv = cs.map(c => M.buckets.map((_, k) => M.sum(L, p => ratePnl(p, c.id, k))));
       const mx = Math.max(1, ...cv.flat().map(Math.abs));
       const colT = M.buckets.map((_, k) => cv.reduce((s, r) => s + r[k], 0));
-      rp.querySelector('.bd').innerHTML = '<table class="k-tbl rc"><thead><tr><th>Кривая</th>' + M.buckets.map(b => '<th class="n">' + b + '</th>').join('') + '<th class="n">Итого</th></tr></thead><tbody>' +
+      rp.querySelector('.bd').innerHTML = '<table class="k-tbl rc" data-vk="c10-rates-curve-bucket" data-title="PnL ставок: кривая × бакет, тыс ₽"><thead><tr><th>Кривая</th>' + M.buckets.map(b => '<th class="n">' + b + '</th>').join('') + '<th class="n">Итого</th></tr></thead><tbody>' +
         cs.map((c, i) => '<tr><td><b style="color:' + K.curveColors[c.id] + '">■</b> ' + esc(c.short) + '</td>' + cv[i].map((v, k) => '<td class="n" style="' + K.heat(v, mx) + '">' + (Math.abs(v) < 1e3 ? '<span class="mut3">·</span>' : K.d({ title: 'PnL ' + c.short + ' · ' + M.buckets[k], unit: 'тыс ₽', fmt: f.ks, rows: L.map(p => ({ p, v: ratePnl(p, c.id, k) })) }, f.k(v), '')) + '<small>' + (c.chg[k] ? f.bps(c.chg[k]) + 'бп' : '') + '</small></td>').join('') +
           '<td class="n tot"><b>' + K.d({ title: 'PnL ' + c.short, unit: 'тыс ₽', fmt: f.ks, rows: L.map(p => ({ p, v: M.buckets.reduce((s, _, k) => s + ratePnl(p, c.id, k), 0) })) }, null) + '</b></td></tr>').join('') +
         '</tbody><tfoot><tr><td>Σ</td>' + colT.map((v, k) => '<td class="n">' + K.d({ title: 'PnL ставок · ' + M.buckets[k], unit: 'тыс ₽', fmt: f.ks, rows: L.map(p => ({ p, v: cs.reduce((s, c) => s + ratePnl(p, c.id, k), 0) })) }, f.k(v)) + '</td>').join('') + '<td class="n">' + f.k(colT.reduce((a, b) => a + b, 0)) + '</td></tr></tfoot></table>' +
         '<div class="k-note" style="padding:6px 10px">Подпись под цифрой — сдвиг кривой за день. Базис ОФЗ — отдельной строкой (ОФЗ = RUONIA + базис).</div>';
+      K.tableToolsAll(rp.querySelector('.bd'));
     })();
 
     const hp = panel('История PnL, 130 дней', '<span class="k-note">весь деск · щелчок по дню — разложение</span>'); g2.appendChild(hp);

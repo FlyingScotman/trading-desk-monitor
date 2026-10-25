@@ -45,7 +45,7 @@
     if (tab === 'risk') {
       const top = panel('Сводная таблица рисков');
       top.querySelector('.bd').classList.add('flush', 'scroll');
-      view.appendChild(top); K.riskMatrix(top.querySelector('.bd'));
+      view.appendChild(top); K.riskMatrix(top.querySelector('.bd'), { viewKey: 'c01-risk-matrix' });
       const g = K.h('div', 'k-grid'); g.style.marginTop = '12px'; view.appendChild(g);
       // блок валюты — все кривые этой валюты из данных прогона (curve.ccy: у кривой валюта — своя), не список: новая
       // кривая (implied CNY, прокси USD/EUR, CHF) попадает в блок своей валюты сама; рубли, доллары, юани, евро — первыми
@@ -64,7 +64,7 @@
         const ids = () => curves.concat(withCs ? ['CS01'] : []);
         let ch = K.riskStack(el, { curves: ids(), ccy });
         K.seg(pc.querySelector('.mode'), [['r', 'ставки'], ['rc', '+ CS01']], 'r', v => { withCs = v === 'rc'; ch.dispose(); ch = K.riskStack(el, { curves: ids(), ccy }); });
-        K.bucketTable(pt.querySelector('.bd'), ccy, { cs01: true });
+        K.bucketTable(pt.querySelector('.bd'), ccy, { cs01: true, viewKey: 'c01-buckets-' + ccy });
       });
     }
     if (tab === 'ccy') {

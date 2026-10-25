@@ -11,6 +11,7 @@
  *  KIT.card(id)           — карточка позиции: параметры, графики истории, риск по бакетам, потоки, PnL
  *  KIT.table(el, opts)    — таблица: группы, мультисортировка (Shift+щелчок; группы сортируются тем же столбцом), поиск, итоги с разбором;
  *                           ширина и порядок колонок мышкой с запоминанием (KIT.viewStore), «⤓ CSV» — выгрузка
+ *  KIT.tableTools(el, opts) — то же для таблиц, свёрстанных вручную: «⤓ CSV» и ширина колонок с запоминанием (#131)
  *  KIT.tips, KIT.hint     — подсказки к мерам риска (конвенция DV01 RUONIA, Базис01, CS01, Z к RUONIA) и подпись с подсказкой
  *  KIT.chart(el, option)  — echarts с цветами темы; KIT.riskStack(el, opts) — риск по бакетам: стек кривых + итог + кумулятив
  *  KIT.seg(el, items, cur, fn) — переключатель режимов (таблица / график и т. п.)
@@ -870,7 +871,12 @@
     const m = /^([+−-]?)(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(%?)$/.exec(t);
     return m ? (m[1] === '+' ? '' : m[1] ? '-' : '') + m[2].replace(/,/g, '') + (m[3] || '') + m[4] : null;
   };
-  const usDate = (y, mo, d) => (+mo >= 1 && +mo <= 12 && +d >= 1 && +d <= 31) ? mo + '/' + d + '/' + y : null;
+  // день проверяется по длине месяца с учётом високосных лет (#161): «31.02.29» — не дата, остаётся текстом (и защищён)
+  const usDate = (y, mo, d) => {
+    const Y = +y, m = +mo, D = +d, leap = (Y % 4 === 0 && Y % 100 !== 0) || Y % 400 === 0;
+    if (!(m >= 1 && m <= 12 && D >= 1)) return null;
+    return D <= [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1] ? mo + '/' + d + '/' + y : null;
+  };
   K.csvDate = s => {  // «2029-03-15» (ISO, можно со временем) → «03/15/2029»; не дата — null
     const m = /^(\d{4})-(\d{2})-(\d{2})(?:$|[T ])/.exec(s == null ? '' : String(s));
     return m ? usDate(m[1], m[2], m[3]) : null;
@@ -892,20 +898,21 @@
   const MON = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\.?';
   const XL_NUM = /^[+-]?\(?[+-]?\$?\s*(?:\d[\d,]*(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?\s*%?\)?$/i,
     XL_FRAC = /^\d+ \d+\/\d+$/,
-    XL_DATE = /^\d{1,4}[\/.-]\d{1,2}(?:[\/.-]\d{1,4})?$/,
+    XL_DATE = /^\d{1,4}[\/.-]\d{1,2}(?:[\/.-]\d{1,4})?$|^\d{1,2}[\/-]\d{4}$/,  // и месяц с годом: 12/2029
     XL_MDATE = new RegExp('^(?:\\d{1,4}[\\s/-])?' + MON + '(?:[\\s/,-]+\\d{1,4}){0,2}$', 'i'),
     XL_TIME = /^\d{1,2}(?::\d{1,2}(?::\d{1,2}(?:\.\d+)?)?\s*(?:[ap]m?)?|\s*[ap]m?)$/i,
     XL_ERR = /^#(?:n\/a|div\/0!|value!|ref!|name\?|num!|null!|getting_data|spill!|calc!)$/i;
   K.csvExcelConverts = t => {
     if (/^(?:true|false)$/i.test(t) || XL_ERR.test(t)) return true;
     if (!/\d/.test(t)) return false;
-    const sp = t.split(' '), dt = sp.length === 2 && XL_TIME.test(sp[1]) ? sp[0] : null;  // «03/15/2029 18:30»
+    const i = t.indexOf(' '), dt = i > 0 && XL_TIME.test(t.slice(i + 1)) ? t.slice(0, i) : null;  // «03/15/2029 18:30», «1/2/2024 10:30 AM»
     return XL_NUM.test(t) || XL_FRAC.test(t) || XL_DATE.test(t) || XL_MDATE.test(t) || XL_TIME.test(t) || (dt != null && (XL_DATE.test(dt) || XL_MDATE.test(dt)));
   };
   // заголовок колонки, название таблицы: Excel их не преобразует, нужна только защита от формул — апостроф
   K.csvLabel = t => { t = t == null ? '' : String(t); return csvQuote(csvFormula(t) ? "'" + t : t); };
   K.csvCell = (t, num, raw) => {
     t = (t == null ? '' : String(t)).replace(/^[●■]\s*/, '');  // цветная метка эмитента / кривой — оформление
+    t = t.replace(/\u2212/g, '-');  // юникодный минус экрана — обычным и в тексте («−27 Z»), как в числах (#161)
     if (num) { if (t === '—' || t === '·') return ''; const x = K.csvNum(t); if (x != null) return x; }
     t = K.csvDates(t, raw);
     if (/^\d{2}\/\d{2}\/\d{4}$/.test(t)) return t;  // дата целиком — датой Excel
@@ -915,6 +922,28 @@
       if (formula) t = "'" + t;
     }
     return csvQuote(t);
+  };
+  // колонка-дата: в CSV — дата из ISO-значения ячейки (opts.date у колонки K.table, data-date у
+  // ячейки ручной таблицы), без дня недели и прочих подписей экрана (#161); не ISO-дата — как обычная ячейка
+  K.csvDateCell = (iso, t, num) => K.csvDate(iso) || K.csvCell(t, num, iso);
+  // текст CSV: первая строка — номер прогона, дата среза, название таблицы и число строк, пустая строка, заголовок
+  // (у таблицы без заголовка — нет), строки; BOM добавляется при скачивании
+  K.csvTitle = opts => K.htmlText(opts.title || (typeof document.title === 'string' ? document.title : '') || 'таблица');
+  K.csvBuild = (title, head, lines) => {
+    const R = K.csvRun(), q = K.csvLabel;
+    return ['run_id,' + (/^\d+$/.test(R.run_id) ? R.run_id : q(R.run_id)) + ',as_of,' + (K.csvDate(R.as_of) || q(R.as_of)) + ',таблица,' + q(title) + ',строк,' + lines.length, '']
+      .concat(head ? [head.join(',')] : [], lines).join('\r\n') + '\r\n';
+  };
+  // имя файла — латиницей (кириллицу в имени скачивания браузер может заменить на «download»): opts.fileName, иначе
+  // opts.viewKey, иначе страница и якорь таблицы; дальше дата среза и прогон. Дата среза в имени — ISO (YYYY-MM-DD),
+  // а не MM/DD/YYYY: «/» в имени файла недопустим, ISO однозначен в любой локали и файлы сортируются по дате
+  K.csvFileName = (el, opts) => {
+    const R = K.csvRun();
+    let page = '', anchor = '';
+    try { page = (location.pathname || '').split('/').pop().replace(/\.html?$/, ''); } catch (e) { }
+    try { anchor = el.id || (el.closest && el.closest('[id]') ? el.closest('[id]').id : ''); } catch (e) { }
+    const base = (opts.fileName || opts.viewKey || [page || 'table', anchor].filter(Boolean).join('_')).replace(/[^A-Za-z0-9_.-]+/g, '_');
+    return 'tdm_' + base + '_' + (R.as_of || 'nodate') + '_run-' + (R.run_id || 'none').replace(/[^A-Za-z0-9_-]+/g, '_') + '.csv';
   };
   K.csvRun = () => ({ run_id: M.run && M.run.id != null ? String(M.run.id) : (K.source === 'real' ? '' : 'demo'), as_of: M.asOf || '' });
   K.download = (name, text, type) => {
@@ -928,6 +957,7 @@
   // opts: {columns:[{key,label,val(r),fmt(v,r),cls,title,sum:true|fn,drill:{title,unit,fmt,val}, w}], rows|rowsFn, groupBy:[{key(r),label(k,rows)}], search:bool,
   //        sort:[[key,dir]] (по умолчанию — строки в группах; щелчок по заголовку сортирует и группы, кроме groupBy[i].fixed), stripe(r)->color, onRow(r), rowCls(r), tools(el), maxHeight, footer:bool,
   //        groupable:[уровни] — группировка по желанию (переключатель «плоская / валюта → эмитент»); по умолчанию таблица плоская (R37),
+  //        колонка: date:true — колонка-дата (в CSV дата из ISO-значения, без подписей экрана),
   //        viewKey — стабильный ключ раскладки латиницей, он же основа имени CSV (без него — страница + id, K.tableKey), title — название в CSV, fileName — основа имени файла CSV (латиницей)}
   K.table = function (el, opts) {
     const st = { sort: opts.sort ? opts.sort.slice() : [], q: '', collapsed: {}, groupSort: false, filters: {}, grouped: false };
@@ -1111,31 +1141,127 @@
       });
     }
     // ---------- CSV (#110) ----------
-    const csvTitle = () => K.htmlText(opts.title || (typeof document.title === 'string' ? document.title : '') || 'таблица');
+    // колонка с date: true — в CSV дата из ISO-значения ячейки, без подписей экрана (день недели и т. п., #161)
     function csv() {
-      const C = cols().filter(c => K.htmlText(c.label)), R = K.csvRun(), q = K.csvLabel;  // без подписи — оформление (полоска доли)
+      const C = cols().filter(c => K.htmlText(c.label)), q = K.csvLabel;  // без подписи — оформление (полоска доли)
       const head = C.map(c => { const l = K.htmlText(c.label); return q(c.unit && !l.includes(',') ? l + ', ' + c.unit : l); });
-      const line = r => C.map(c => { const v = val(c, r); return K.csvCell(K.htmlText(c.fmt ? c.fmt(v, r) : v), c.num, v); }).join(',');
-      return ['run_id,' + (/^\d+$/.test(R.run_id) ? R.run_id : q(R.run_id)) + ',as_of,' + (K.csvDate(R.as_of) || q(R.as_of)) + ',таблица,' + q(csvTitle()) + ',строк,' + shown.length, '', head.join(',')]
-        .concat(shown.map(line)).join('\r\n') + '\r\n';
+      const line = r => C.map(c => { const v = val(c, r), t = K.htmlText(c.fmt ? c.fmt(v, r) : v); return c.date ? K.csvDateCell(v, t, c.num) : K.csvCell(t, c.num, v); }).join(',');
+      return K.csvBuild(K.csvTitle(opts), head, shown.map(line));
     }
-    // имя файла — латиницей (кириллицу в имени скачивания браузер может заменить на «download»): opts.fileName, иначе
-    // opts.viewKey, иначе страница и якорь таблицы; дальше дата среза и прогон. Дата среза в имени — ISO (YYYY-MM-DD),
-    // а не MM/DD/YYYY: «/» в имени файла недопустим, ISO однозначен в любой локали и файлы сортируются по дате
-    function csvName() {
-      const R = K.csvRun();
-      let page = '', anchor = '';
-      try { page = (location.pathname || '').split('/').pop().replace(/\.html?$/, ''); } catch (e) { }
-      try { anchor = el.id || (el.closest && el.closest('[id]') ? el.closest('[id]').id : ''); } catch (e) { }
-      const base = (opts.fileName || opts.viewKey || [page || 'table', anchor].filter(Boolean).join('_')).replace(/[^A-Za-z0-9_.-]+/g, '_');
-      return 'tdm_' + base + '_' + (R.as_of || 'nodate') + '_run-' + (R.run_id || 'none').replace(/[^A-Za-z0-9_-]+/g, '_') + '.csv';
-    }
+    const csvName = () => K.csvFileName(el, opts);
     draw();
     const api = { redraw: draw, state: st, csv, csvName, setSort: s => { st.sort = s; draw(); }, setFilter: (k, v) => { st.filters[k] = v; draw(); }, setGrouped: g => { st.grouped = !!g; draw(); }, el,
       viewKey: vkey, layout: () => JSON.parse(JSON.stringify(lay)), setLayout: v => { lay = K.viewLayout(v, colKeys()); saveLay(); draw(); }, resetView: () => resetBtn.onclick() };
     if (opts.autoFilter !== false && !opts.rows) K.live(el, 'filter', draw);
     return api;
   };
+
+  // ---------- ручные таблицы (#131) ----------
+  // Таблицы, свёрстанные строкой HTML (матрицы, плитки, короткие списки), получают то же, что K.table: «⤓ CSV» и ширину
+  // колонок мышкой (граница заголовка — тянуть, двойной щелчок — по содержимому) с запоминанием в K.viewStore по
+  // viewKey, «⟲ вид» — сбросить. Порядок колонок переставляет только K.table: строки ручных таблиц собраны из HTML.
+  // Вызывать после каждой отрисовки: K.tableTools(таблица или её контейнер, {viewKey (уникальный, латиницей), title,
+  // fileName, resize: false — без ширины}). CSV — из того, что на экране (свёрнутые строки не попадают): числовые
+  // ячейки (класс n) — числами, data-date="YYYY-MM-DD" у ячейки — дата без подписей, data-v — ISO-значение для века
+  // дат; колонка без заголовка и без текста (полоска, спарклайн) не выгружается; colspan — пустыми ячейками.
+  const rowsOf = sec => sec ? [...sec.rows] : [];
+  const cellsOf = tr => {  // ячейки строки с учётом colspan: пропуски — null
+    const out = [];
+    [...tr.cells].forEach(c => { out.push(c); for (let i = 1; i < (c.colSpan || 1); i++) out.push(null); });
+    return out;
+  };
+  K.tableCsv = (table, opts) => {
+    opts = opts || {};
+    const tx = c => c ? K.htmlText(c.innerHTML) : '';
+    const hd = rowsOf(table.tHead), hr = hd.length ? hd[hd.length - 1] : null;
+    const skip = tr => tr.hidden || (tr.style && tr.style.display === 'none') || (tr.cells.length === 1 && /(^|\s)k-empty(\s|$)/.test(tr.cells[0].className || ''));
+    const body = [...table.tBodies].reduce((a, b) => a.concat(rowsOf(b)), []).concat(rowsOf(table.tFoot)).filter(tr => !skip(tr)).map(cellsOf);
+    const head = hr ? cellsOf(hr) : null;
+    const n = Math.max(head ? head.length : 0, ...body.map(r => r.length), 0);
+    const keep = [];
+    for (let i = 0; i < n; i++) if ((head && tx(head[i])) || body.some(r => tx(r[i]))) keep.push(i);
+    const one = c => {
+      if (!c) return '';
+      const num = /(^|\s)n(\s|$)/.test(c.className || ''), d = c.dataset || {}, t = tx(c);
+      return d.date ? K.csvDateCell(d.date, t, num) : K.csvCell(t, num, d.v);
+    };
+    return K.csvBuild(K.csvTitle(opts), head ? keep.map(i => K.csvLabel(tx(head[i]))) : null, body.map(r => keep.map(i => one(r[i])).join(',')));
+  };
+  K.tableTools = (t, opts) => {
+    const table = t && (t.tagName === 'TABLE' ? t : t.querySelector('table'));
+    if (!table) return null;
+    const vkey = 'table:' + opts.viewKey;
+    const nx = table.nextElementSibling;
+    if (nx && nx.dataset && nx.dataset.vk === vkey) nx.remove();  // повторный вызов без перерисовки — одна строка кнопок
+    const bar = h('div', 'k-tbl-ctlbar'), ctl = h('span', 'k-tbl-ctl'); bar.dataset.vk = vkey; bar.appendChild(ctl);
+    const csv = () => K.tableCsv(table, opts), csvName = () => K.csvFileName(table, opts);
+    const csvBtn = h('button', 'k-tbtn', '⤓ CSV');
+    csvBtn.title = 'выгрузить в CSV (Excel): таблица как на экране; номер прогона и дата среза — в первой строке и в имени файла';
+    csvBtn.onclick = e => { e.stopPropagation(); K.download(csvName(), '﻿' + csv(), 'text/csv;charset=utf-8'); };
+    const resetBtn = h('button', 'k-tbtn', '⟲ вид'); resetBtn.title = 'сбросить ширину колонок этой таблицы';
+    ctl.append(csvBtn, resetBtn);
+    table.after(bar);
+    const hd = rowsOf(table.tHead), hr = hd.length ? hd[hd.length - 1] : null;
+    const ths = hr ? [...hr.cells] : [];
+    // ширина — по колонкам строки заголовка; заголовок в несколько строк или с colspan (матрица с группами) — без ширины
+    const canW = opts.resize !== false && ths.length > 0 && hd.length === 1 && ths.every(th => (th.colSpan || 1) === 1);
+    const keys = ths.map((th, i) => (th.dataset && th.dataset.k) || 'c' + i);
+    let lay = canW ? K.viewLayout(K.viewStore.get(vkey), keys) : {};
+    const paint = () => { resetBtn.style.display = lay.w ? '' : 'none'; };
+    const apply = () => {
+      const old = table.querySelector('colgroup.k-cg'); if (old) old.remove();
+      if (!lay.w) { table.classList.remove('k-fixed'); table.style.width = ''; paint(); return; }
+      const cg = h('colgroup', 'k-cg');
+      keys.forEach(k => { const c = document.createElement('col'); c.style.width = (lay.w[k] || 100) + 'px'; cg.appendChild(c); });
+      table.insertBefore(cg, table.firstChild);
+      table.classList.add('k-fixed'); table.style.width = keys.reduce((s, k) => s + (lay.w[k] || 100), 0) + 'px';
+      paint();
+    };
+    const save = () => { K.viewStore.set(vkey, lay); paint(); };
+    const reset = () => { lay = {}; K.viewStore.reset(vkey); apply(); };
+    resetBtn.onclick = e => { e.stopPropagation(); reset(); };
+    const api = { csv, csvName, viewKey: vkey, el: table, layout: () => JSON.parse(JSON.stringify(lay)), resetView: reset,
+      setLayout: v => { lay = canW ? K.viewLayout(v, keys) : {}; save(); apply(); } };
+    if (!canW) { paint(); return api; }
+    table.classList.add('k-rszable');
+    let noClickTill = 0;  // после перетаскивания щелчок — не сортировка и не переход
+    table.addEventListener('click', e => { if (Date.now() < noClickTill) { e.stopPropagation(); e.preventDefault(); } }, true);
+    const ensureW = () => { if (!lay.w) { lay.w = {}; ths.forEach((th, i) => { lay.w[keys[i]] = Math.max(32, Math.round(th.getBoundingClientRect().width)); }); apply(); } };
+    const setW = (k, w) => { lay.w[k] = Math.min(2000, Math.max(32, Math.round(w))); apply(); };  // пределы — как в K.viewLayout
+    ths.forEach((th, i) => {
+      const k = keys[i], hdl = h('span', 'k-rsz'); hdl.title = 'ширина: тянуть · двойной щелчок — по содержимому';
+      th.appendChild(hdl);
+      hdl.onclick = e => e.stopPropagation();
+      hdl.ondblclick = e => {
+        e.stopPropagation();
+        const rg = document.createRange(), cells = [th];
+        [...table.rows].forEach(tr => { const c = cellsOf(tr)[i]; if (c && c !== th && (c.colSpan || 1) === 1) cells.push(c); });
+        let w = 0;
+        hdl.style.display = 'none';  // ручка — во всю ячейку, не в счёт
+        cells.slice(0, 2000).forEach(c => { rg.selectNodeContents(c); const cs = getComputedStyle(c); w = Math.max(w, rg.getBoundingClientRect().width + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight)); });
+        hdl.style.display = '';
+        ensureW(); setW(k, Math.ceil(w) + 4); save();
+      };
+      hdl.onmousedown = e => {
+        if (e.button !== 0) return;
+        e.preventDefault(); e.stopPropagation();
+        ensureW();
+        const x0 = e.clientX, w0 = lay.w[k];
+        document.body.classList.add('k-col-resizing');
+        const mv = ev => setW(k, w0 + ev.clientX - x0), up = ev => {
+          document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up);
+          document.body.classList.remove('k-col-resizing');
+          if (ev.clientX !== x0) noClickTill = Date.now() + 300;
+          save();
+        };
+        document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
+      };
+    });
+    apply();
+    return api;
+  };
+  // все ручные таблицы в контейнере, размеченные data-vk="ключ" (и data-title="название в CSV") — после отрисовки
+  K.tableToolsAll = root => [...root.querySelectorAll('table[data-vk]')].map(t => K.tableTools(t, { viewKey: t.dataset.vk, title: t.dataset.title }));
 
   // стандартные колонки позиций (концепты берут нужные по ключу)
   K.posCols = {
@@ -1286,6 +1412,7 @@
     const pr = F.problems || [];
     const probs = pr.length ? '<div class="k-sec" style="margin:10px 10px 4px">Проблемы фондирования · ' + pr.length + '</div><ul class="k-note" style="margin:0 0 8px;padding-left:28px">' + pr.slice(0, 30).map(x => '<li>' + esc(x.kind + ' ' + x.ref + ': ' + x.reason) + '</li>').join('') + (pr.length > 30 ? '<li>ещё ' + (pr.length - 30) + '</li>' : '') + '</ul>' : '';
     el.innerHTML = head + tbl + ent + probs;
+    K.tableTools(el, { viewKey: 'funding-books', title: 'Фондирование по книгам, mm ₽' });
   };
 
   // ---------- история позиции по прогонам: на чём стоит точка (R44; api/concepts.positions_history) ----------
@@ -1641,6 +1768,7 @@
       });
       html += '</tbody><tfoot>' + row('Итого', L, 0).replace('<tr class="grp"', '<tr') + '</tfoot></table>';
       box.innerHTML = html;
+      K.tableTools(box, { viewKey: opt.viewKey || 'risk-matrix', title: 'Матрица рисков, тыс ₽/бп' });
     }
     draw(); K.live(el, 'filter', draw); K.live(el, 'theme', draw); K.live(el, 'riskcolor', () => { draw(); const b = bar.querySelector('.k-seg'); if (b) b.querySelectorAll('button').forEach((x, i) => x.classList.toggle('on', K.RISK_COLOR[i][0] === K.riskColor)); });
     return { redraw: draw };
@@ -1671,6 +1799,7 @@
         }).join('') +
         '</tbody><tfoot><tr><td>Σ ставки</td><td class="n">' + f.dv(tot.reduce((a, b) => a + b, 0)) + '</td>' + tot.map((v, k) => '<td class="n">' + K.d({ title: ccy + ' ставки · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: rateRows(k) }, null, '') + '</td>').join('') + '</tr>' +
         '<tr><td class="mut">кумулятив</td><td></td>' + cum.map((v, k) => '<td class="n mut">' + K.d({ title: ccy + ' кумулятив до ' + M.buckets[k], unit: 'тыс ₽/бп', rows: rateRows(k, true) }, null, '') + '</td>').join('') + '</tr></tfoot></table></div>';
+      K.tableTools(el, { viewKey: opt.viewKey || 'buckets-' + ccy, title: 'Риск ' + ccy + ': кривая × бакет, тыс ₽/бп' });
     }
     draw(); K.live(el, 'filter', draw); K.live(el, 'theme', draw); K.live(el, 'riskcolor', draw);
     return { redraw: draw };

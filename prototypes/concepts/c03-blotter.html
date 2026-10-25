@@ -235,6 +235,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     const foot = '<tfoot><tr><td></td><td colspan="' + span + '">Итого <span class="mut3" style="font-weight:400">' + L.length + ' поз.</span></td>' + CL.slice(span).map(c => sumCell(c, L, 'Итого')).join('') + '</tr></tfoot>';
     const sc = tbl.scrollTop;
     tbl.innerHTML = '<table class="k-tbl">' + head + '<tbody>' + (body || '<tr><td colspan="' + (CL.length + 1) + '" class="k-empty">ничего не найдено</td></tr>') + '</tbody>' + foot + '</table>';
+    K.tableTools(tbl, { viewKey: 'c03-blotter', title: 'Блоттер позиций' });
     tbl.scrollTop = sc;
     tbl.querySelectorAll('th .k-flt').forEach(ic => ic.onclick = e => {
       e.stopPropagation();

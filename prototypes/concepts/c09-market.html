@@ -255,9 +255,10 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
     const mx = Math.max(...vals);
     // строки с выпусками рынка или нашими позициями (грейдов шкалы 24 — пустые не показываем)
     const shown = RATINGS.filter(r => TBK.some((_, i) => (grid[r + '|' + i] || []).length) || K.list().some(p => rk(p.rating) === r && p.ccy === 'RUB' && p.group === 'CORP'));
-    document.getElementById('sprtab').innerHTML = (NO_RATINGS ? '<div class="k-note" style="padding:6px 10px">нет данных по рейтингам: хаб их не публикует — медиана G-спреда всех корпоративных фикс-выпусков срока</div>' : '') + '<table class="k-tbl sp"><thead><tr><th>Рейтинг</th>' + TBK.map(x => '<th class="n">' + x[1] + '</th>').join('') + '<th class="n">выпусков</th></tr></thead><tbody>' +
+    document.getElementById('sprtab').innerHTML = (NO_RATINGS ? '<div class="k-note" style="padding:6px 10px">нет данных по рейтингам: хаб их не публикует — медиана G-спреда всех корпоративных фикс-выпусков срока</div>' : '') + '<table class="k-tbl sp" data-vk="c09-rating-spreads" data-title="G-спред по рейтингу и сроку"><thead><tr><th>Рейтинг</th>' + TBK.map(x => '<th class="n">' + x[1] + '</th>').join('') + '<th class="n">выпусков</th></tr></thead><tbody>' +
       shown.map(r => { const all = TBK.map((_, i) => grid[r + '|' + i] || []); const n = all.reduce((s, a) => s + a.length, 0); const ourN = K.list().filter(p => rk(p.rating) === r && p.ccy === 'RUB' && p.group === 'CORP').length;
         return '<tr><td><b style="color:' + (RB.find(x => x[0] === rbOf(r)) || RB[4])[2] + '">●</b> ' + r + (ourN ? ' <span class="k-tag" title="наших позиций">наши ' + ourN + '</span>' : '') + '</td>' + all.map(a => { const m = med(a); return '<td class="n" style="' + K.heatMono(m, mx, '227,160,60') + '" title="' + a.length + ' выпусков">' + (m == null ? '<span class="mut3">·</span>' : f.bp(m)) + '</td>'; }).join('') + '<td class="n mut">' + n + '</td></tr>'; }).join('') + '</tbody></table>';
+    K.tableToolsAll(document.getElementById('sprtab'));
   })();
 
   // ---------- наши против рынка ----------
