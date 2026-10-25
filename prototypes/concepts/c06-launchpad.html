@@ -265,6 +265,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         if (mode === 'table') {
           bd.innerHTML = '<table class="k-tbl" data-vk="c06-carry-books" data-title="Кэрри по книгам"><thead><tr><th>Книга</th><th class="n">Кэрри/д, тыс</th><th class="n">≈ год, mm</th><th class="n">DV01</th><th class="n">MV, mm</th></tr></thead><tbody>' +
             books.map(b => { const l = lst(b), cd = M.sum(l, 'carryDay'); return '<tr><td>' + esc(b.id) + ' <span class="mut3">' + esc(b.name) + '</span></td><td class="n">' + K.d({ title: 'Кэрри ' + b.id, unit: 'тыс ₽', fmt: f.k, list: l, val: 'carryDay' }) + '</td><td class="n mut">' + f.mn(cd * 365, 0) + '</td><td class="n">' + K.d({ title: 'DV01 ' + b.id, unit: 'тыс ₽/бп', list: l, val: 'dv01' }, null, '') + '</td><td class="n">' + K.d({ title: 'MV ' + b.id, unit: 'mm ₽', fmt: v => f.mn(v, 0), list: bonds(l), val: 'mv', color: false }) + '</td></tr>'; }).join('') + '</tbody></table>';
+          K.tableToolsAll(bd);
           return;
         }
         const el = K.h('div', 'fill'); bd.appendChild(el);

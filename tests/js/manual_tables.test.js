@@ -11,13 +11,13 @@ const same = (a, b, m) => assert.strictEqual(JSON.stringify(a), JSON.stringify(b
 
 // маленький DOM: столько, сколько нужно K.table и K.tableTools без вёрстки
 function el(tag) {
-  const e = { tagName: (tag || 'div').toUpperCase(), style: {}, dataset: {}, children: [], innerHTML: '', className: '', isConnected: true, parent: null,
+  const e = { nodeType: 1, tagName: (tag || 'div').toUpperCase(), style: {}, dataset: {}, children: [], innerHTML: '', className: '', isConnected: true, parent: null, get parentElement() { return e.parent; },
     classList: { add(c) { if (!e.classList.contains(c)) e.className = (e.className + ' ' + c).trim(); }, remove(c) { e.className = e.className.split(' ').filter(x => x !== c).join(' '); },
       toggle() {}, contains(c) { return e.className.split(' ').includes(c); } },
     appendChild(c) { c.parent = e; e.children.push(c); return c; }, append(...c) { c.forEach(x => e.appendChild(x)); },
     insertBefore(c, ref) { c.parent = e; const i = e.children.indexOf(ref); e.children.splice(i < 0 ? 0 : i, 0, c); return c; },
     remove() { if (e.parent) { const i = e.parent.children.indexOf(e); if (i >= 0) e.parent.children.splice(i, 1); } },
-    after(c) { const p = e.parent; c.parent = p; p.children.splice(p.children.indexOf(e) + 1, 0, c); },
+    after(c) { if (c.parent) c.remove(); const p = e.parent; c.parent = p; p.children.splice(p.children.indexOf(e) + 1, 0, c); },
     get nextElementSibling() { const p = e.parent; return p ? p.children[p.children.indexOf(e) + 1] || null : null; },
     querySelector(sel) { const tg = { 'colgroup.k-cg': 'COLGROUP', table: 'TABLE' }[sel]; return tg ? e.children.find(c => c.tagName === tg) || null : null; },
     querySelectorAll() { return []; }, addEventListener() {}, setAttribute() {}, getBoundingClientRect: () => ({ width: 80 }) };
@@ -36,11 +36,12 @@ function table(spec) {
   const host = el('div'); host.appendChild(T);
   return T;
 }
+let observed = null;  // наблюдатель kit.js: [callback, target, options]
 function load(store) {
   const document = { addEventListener() {}, removeEventListener() {}, createElement: el, documentElement: el(), body: el(), querySelector() { return null; }, querySelectorAll() { return []; }, getElementById: () => el() };
   const localStorage = { getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k) };
   const ctx = { window: {}, document, URLSearchParams, console, location: { href: 'http://x/concepts/c99.html', pathname: '/concepts/c99.html', search: '', hostname: 'x' }, setTimeout,
-    localStorage, getComputedStyle: () => ({ getPropertyValue: () => '#888888' }), MutationObserver: class { observe() {} } };
+    localStorage, getComputedStyle: () => ({ getPropertyValue: () => '#888888' }), MutationObserver: class { constructor(cb) { this.cb = cb; } observe(target, o) { observed = [this.cb, target, o]; } } };
   ctx.window = ctx;
   vm.createContext(ctx);
   vm.runInContext(P('concepts/lib/mock.js'), ctx);
@@ -124,15 +125,16 @@ t('#131: K.tableTools — кнопки под таблицей, ширина к�
   const api = K.tableTools(T.parent, { viewKey: 'c99-manual', title: 'Ручная' });
   assert.strictEqual(api.viewKey, 'table:c99-manual');
   const bar = T.nextElementSibling;
-  assert.ok(bar && bar.className === 'k-tbl-ctlbar' && bar.dataset.vk === 'table:c99-manual', 'строка кнопок — сразу после таблицы');
+  assert.ok(bar && bar.classList.contains('k-tbl-ctlbar') && bar.dataset.vk === 'table:c99-manual', 'строка кнопок — сразу после таблицы');
   same(bar.children[0].children.map(b => b.innerHTML), ['⤓ CSV', '⟲ вид']);
   assert.strictEqual(bar.children[0].children[1].style.display, 'none', 'без своей ширины «⟲ вид» скрыт');
   assert.ok(T.tHead.rows[0].cells.every(th => th.children.some(c => c.className === 'k-rsz')), 'у каждого заголовка — ручка ширины');
   assert.ok(T.classList.contains('k-rszable'));
   same(api.layout(), {});
   // ширина: ключ колонки — data-k, иначе номер; мусор и чужие колонки отброшены (K.viewLayout)
-  api.setLayout({ w: { c0: 150, mv: 90.6, nosuch: 50, c2: -1 }, order: ['mv'] });
-  same(JSON.parse(store.get('tdm.view.v1:table:c99-manual')), { order: ['mv'], w: { c0: 150, mv: 91 } });
+  // ключ колонки — data-k, иначе текст заголовка: другой набор колонок — ширина остаётся у своей колонки
+  api.setLayout({ w: { 'h:Книга': 150, mv: 90.6, nosuch: 50, 'h:Прим.': -1 }, order: ['mv'] });
+  same(JSON.parse(store.get('tdm.view.v1:table:c99-manual')), { order: ['mv'], w: { 'h:Книга': 150, mv: 91 } });
   assert.ok(T.classList.contains('k-fixed'));
   assert.strictEqual(T.style.width, (150 + 91 + 100) + 'px', 'колонка без ширины — 100px');
   const cg = T.children.find(c => c.tagName === 'COLGROUP');
@@ -143,10 +145,11 @@ t('#131: K.tableTools — кнопки под таблицей, ширина к�
   assert.ok(T.classList.contains('k-fixed'));
   same(T.children.find(c => c.tagName === 'COLGROUP').children.map(c => c.style.width), ['150px', '91px', '100px']);
   assert.strictEqual(T.nextElementSibling.children[0].children[1].style.display, '', '«⟲ вид» виден');
-  // повторный вызов без перерисовки — строка кнопок одна, colgroup один
-  K.tableTools(T, { viewKey: 'c99-manual' });
-  assert.strictEqual(T.parent.children.filter(c => c.className === 'k-tbl-ctlbar').length, 1);
+  // повторный вызов без перерисовки — та же строка кнопок, colgroup один, ручка ширины у заголовка одна
+  assert.strictEqual(K.tableTools(T, { viewKey: 'c99-manual' }), api2);
+  assert.strictEqual(T.parent.children.filter(c => c.classList.contains('k-tbl-ctlbar')).length, 1);
   assert.strictEqual(T.children.filter(c => c.tagName === 'COLGROUP').length, 1);
+  assert.ok(T.tHead.rows[0].cells.every(th => th.children.filter(c => c.className === 'k-rsz').length === 1));
   api2.resetView();
   assert.ok(!store.has('tdm.view.v1:table:c99-manual'));
   assert.ok(!T.classList.contains('k-fixed'));
@@ -165,6 +168,53 @@ t('#131: K.tableTools — кнопки под таблицей, ширина к�
   assert.ok(r.csv().startsWith('run_id,demo,as_of,10/21/2026,таблица,Таблица A,строк,1'));
   assert.strictEqual(r.csvName(), 'tdm_c99-a_2026-10-21_run-demo.csv');
   assert.strictEqual(K.tableTools(el(), { viewKey: 'x' }), null, 'нет таблицы — ничего');
+  // колонки с одинаковым заголовком и без заголовка
+  same(K.colKeys(table({ head: [['', 'Δ', 'Δ', { h: 'x', k: 'kx' }]] }).tHead.rows[0].cells), ['c0', 'h:Δ', 'h:Δ#2', 'kx']);
+});
+
+t('#131: строка кнопок — после прокручиваемого контейнера (не закрывает закреплённое «Итого»), прежняя убирается', () => {
+  const { K } = load(new Map());
+  const panel = el(); panel.classList.add('k-panel');
+  const sc = el(); sc.classList.add('scroll'); panel.appendChild(sc);
+  const mk = () => { const T = table({ head: [['a']], body: [['1']], foot: [['Итого']] }); sc.children = []; sc.appendChild(T.parent); return T; };
+  let T = mk();
+  K.tableTools(T, { viewKey: 'c99-scroll', title: 'Т' });
+  const bars = () => panel.children.filter(c => c.dataset.vk === 'table:c99-scroll');
+  assert.strictEqual(bars().length, 1); assert.strictEqual(sc.nextElementSibling, bars()[0], 'сразу после контейнера, вне его');
+  assert.ok(bars()[0].classList.contains('k-tbl-ctlbar-m'), 'не закреплена');
+  T = mk(); K.tableTools(T, { viewKey: 'c99-scroll' });  // перерисовка содержимого контейнера
+  assert.strictEqual(bars().length, 1, 'строка прежней отрисовки убрана');
+  // overflow в style — тоже прокручиваемый; без прокрутки — сразу после таблицы
+  assert.ok(K.scrolls(Object.assign(el(), { style: { overflow: 'auto' } })));
+  assert.ok(!K.scrolls(el()));
+});
+
+t('#131: таблица с data-vk получает кнопки сама, как только попадает в страницу', () => {
+  const { K } = load(new Map());
+  assert.ok(observed, 'наблюдатель зарегистрирован');
+  same(observed[2], { childList: true, subtree: true });
+  const [cb] = observed;
+  const host = el(), A = table({ head: [['a']], body: [['1']] }), B = table({ head: [['b']], body: [['2']] });
+  A.dataset.vk = 'c99-auto-a'; B.dataset.vk = 'c99-auto-b'; host.appendChild(A.parent);
+  host.querySelectorAll = sel => /table\[data-vk\]/.test(sel) ? [A] : [];
+  cb([{ addedNodes: [host] }, { addedNodes: [B] }, { addedNodes: [{ nodeType: 3 }] }]);
+  assert.ok(A.__kt && A.nextElementSibling.dataset.vk === 'table:c99-auto-a');
+  assert.ok(B.__kt && B.nextElementSibling.dataset.vk === 'table:c99-auto-b');
+  const before = A.__kt; cb([{ addedNodes: [host] }]);
+  assert.strictEqual(A.__kt, before, 'повторно не подключается');
+  // таблицу нарисовали в элемент вне страницы, потом вставили в прокручиваемый контейнер: строка кнопок переезжает за него
+  const T = table({ head: [['a']], body: [['1']], foot: [['Итого']] }), box = T.parent;
+  K.tableTools(T, { viewKey: 'c99-late' });
+  assert.strictEqual(T.nextElementSibling.dataset.vk, 'table:c99-late');
+  const panel = el(), sc = el(); sc.classList.add('scroll'); panel.appendChild(sc); sc.appendChild(box);
+  box.querySelectorAll = sel => /k-tooled/.test(sel) ? [T] : [];
+  cb([{ addedNodes: [box] }]);
+  assert.strictEqual(sc.nextElementSibling && sc.nextElementSibling.dataset.vk, 'table:c99-late');
+  assert.ok(!box.children.some(c => c.dataset.vk), 'внутри контейнера строки кнопок больше нет');
+  // подписи колонок под общим заголовком с colspan (C05 «Кривые»): data-csv
+  const C = table({ head: [['', '1Y', { h: 'неделя', span: 2 }]], body: [['RUONIA', '15.00', '+5', '+7']] });
+  C.tHead.rows[0].cells[2].dataset.csv = 'неделя 1Y|неделя 5Y';
+  assert.strictEqual(K.tableCsv(C, {}).split('\r\n')[2], ',1Y,неделя 1Y,неделя 5Y');
 });
 
 t('#131: у всех таблиц мониторов есть CSV; ключи раскладки уникальны среди K.table и ручных таблиц', () => {

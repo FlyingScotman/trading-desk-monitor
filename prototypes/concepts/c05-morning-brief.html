@@ -33,8 +33,6 @@
 .mini tr[data-card] { cursor: pointer; }
 .mini tr[data-card]:hover td { background: var(--hover); }
 .mini .why { color: var(--fg-3); font-size: 11.5px; }
-/* кнопки таблиц (#131): страница-документ прокручивается целиком — строка кнопок под таблицей, не у края окна */
-.mini + .k-tbl-ctlbar { position: static; background: transparent; }
 .mini td.name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 .cap { font-size: 12px; color: var(--fg-2); margin: 0 0 6px; font-weight: 600; }
 .alerts { display: flex; flex-direction: column; gap: 6px; }
@@ -133,7 +131,7 @@
     return '<div style="display:grid;grid-template-columns:minmax(0,1fr);gap:12px;margin-top:12px"><div><div class="cap">Ставки и курсы <span class="mut3">· изменения в б.п. (курсы — в %) к ' + ['1D', '1W', '1M', 'YTD'].map(p => f.dshort(MH.periods[p])).join(' / ') + '</span></div>' +
       '<table class="mini" data-vk="c05-rates-fx" data-title="Ставки и курсы"><thead><tr><th></th><th class="n">сейчас</th><th class="n">день</th><th class="n">неделя</th><th class="n">месяц</th><th class="n">с н.г.</th><th>полгода</th></tr></thead><tbody>' + rows + fx + '</tbody></table></div>' +
       (cv ? '<div><div class="cap">Кривые: уровень 1Y / 5Y / 10Y и сдвиг, б.п.</div><table class="mini" data-vk="c05-curves" data-title="Кривые: уровень и сдвиг, б.п."><thead><tr><th></th>' + T.map(t => '<th class="n">' + t + 'Y</th>').join('') +
-        ['неделя', 'месяц', 'с н.г.'].map(p => '<th class="n" colspan="3">' + p + '</th>').join('') + '</tr></thead><tbody>' + cv + '</tbody></table></div>' : '') + '</div>';
+        ['неделя', 'месяц', 'с н.г.'].map(p => '<th class="n" colspan="3" data-csv="' + T.map(t => p + ' ' + t + 'Y').join('|') + '">' + p + '</th>').join('') + '</tr></thead><tbody>' + cv + '</tbody></table></div>' : '') + '</div>';
   }
 
   function render() {

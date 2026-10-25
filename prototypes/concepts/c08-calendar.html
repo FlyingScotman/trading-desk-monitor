@@ -419,7 +419,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
   // строки выплат рынка (разбор ячейки): дата, событие, выпуск, эмитент, тип или валюта, сумма
   function flowsTable(rows, o) {
     if (!rows.length) return '<div class="k-empty">нет выплат</div>';
-    return '<table class="mini" data-vk="c08-sheet-flows" data-title="Выплаты выпусков"><thead><tr><th>Дата</th><th>Событие</th><th>Выпуск</th><th>Эмитент</th>' + (o.type ? '<th>Тип</th>' : '') + '<th class="n">Сумма, ' + o.unit + '</th></tr></thead><tbody>' +
+    return '<table class="mini" data-vk="c08-sheet-flows-' + (o.type ? 'rub' : 'fx') + '" data-title="Выплаты выпусков"><thead><tr><th>Дата</th><th>Событие</th><th>Выпуск</th><th>Эмитент</th>' + (o.type ? '<th>Тип</th>' : '') + '<th class="n">Сумма, ' + o.unit + '</th></tr></thead><tbody>' +
       rows.map(x => '<tr' + (x.pos ? ' data-card="' + x.pos + '"' : '') + '><td data-date="' + x.date + '">' + f.date(x.date) + '</td><td><span class="kb" style="--c:' + KC[x.kind] + '">' + KN[x.kind] + '</span>' + (x.est ? ' <span class="mut3" title="купон ещё не объявлен (по последнему) или оферта: возможный объём">≈</span>' : '') + '</td><td>' + esc(x.name) + (x.held ? ' <span class="held">в портфеле</span>' : '') + '</td><td class="mut">' + esc(x.issuer || '—') + '</td>' +
         (o.type ? '<td><b style="color:' + (TYPE_C[x.type] || '#888') + '">■</b> ' + esc(((M.marketCal.types.find(t => t.id === x.type)) || {}).label || x.type) + '</td>' : '') + '<td class="n"><b>' + (x.amount == null ? '—' : o.fmt(x.amount)) + '</b></td></tr>').join('') + '</tbody></table>';
   }

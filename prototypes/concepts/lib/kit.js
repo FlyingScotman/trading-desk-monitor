@@ -1160,10 +1160,15 @@
   // Таблицы, свёрстанные строкой HTML (матрицы, плитки, короткие списки), получают то же, что K.table: «⤓ CSV» и ширину
   // колонок мышкой (граница заголовка — тянуть, двойной щелчок — по содержимому) с запоминанием в K.viewStore по
   // viewKey, «⟲ вид» — сбросить. Порядок колонок переставляет только K.table: строки ручных таблиц собраны из HTML.
-  // Вызывать после каждой отрисовки: K.tableTools(таблица или её контейнер, {viewKey (уникальный, латиницей), title,
-  // fileName, resize: false — без ширины}). CSV — из того, что на экране (свёрнутые строки не попадают): числовые
-  // ячейки (класс n) — числами, data-date="YYYY-MM-DD" у ячейки — дата без подписей, data-v — ISO-значение для века
-  // дат; колонка без заголовка и без текста (полоска, спарклайн) не выгружается; colspan — пустыми ячейками.
+  // Таблица с data-vk="ключ" (и data-title="название в CSV") получает их сама, как только попадает в страницу
+  // (наблюдатель ниже); явно — K.tableTools(таблица или её контейнер, {viewKey (уникальный, латиницей), title, fileName,
+  // resize: false — без ширины}) или K.tableToolsAll(контейнер). CSV — из того, что на экране (свёрнутые строки не
+  // попадают): числовые ячейки (класс n) — числами, data-date="YYYY-MM-DD" у ячейки — дата без подписей, data-v —
+  // ISO-значение для века дат; колонка без заголовка и без текста (полоска, спарклайн) не выгружается; colspan — пустыми
+  // ячейками, у заголовка с colspan подписи колонок можно дать в data-csv="a|b|c".
+  // Строка кнопок встаёт после прокручиваемого контейнера таблицы (не внутри: там закреплена строка «Итого») и не
+  // закрепляется. Ширина колонки хранится по её ключу: data-k у заголовка, иначе текст заголовка — сменился набор
+  // колонок (матрица по валютам, сводная) — ширина остаётся у своей колонки.
   const rowsOf = sec => sec ? [...sec.rows] : [];
   const cellsOf = tr => {  // ячейки строки с учётом colspan: пропуски — null
     const out = [];
@@ -1176,36 +1181,60 @@
     const hd = rowsOf(table.tHead), hr = hd.length ? hd[hd.length - 1] : null;
     const skip = tr => tr.hidden || (tr.style && tr.style.display === 'none') || (tr.cells.length === 1 && /(^|\s)k-empty(\s|$)/.test(tr.cells[0].className || ''));
     const body = [...table.tBodies].reduce((a, b) => a.concat(rowsOf(b)), []).concat(rowsOf(table.tFoot)).filter(tr => !skip(tr)).map(cellsOf);
-    const head = hr ? cellsOf(hr) : null;
+    let head = null;
+    if (hr) {
+      head = [];
+      [...hr.cells].forEach(c => {
+        const span = c.colSpan || 1, parts = c.dataset && c.dataset.csv ? c.dataset.csv.split('|') : null;
+        for (let i = 0; i < span; i++) head.push(parts ? parts[i] || '' : i ? '' : tx(c));
+      });
+    }
     const n = Math.max(head ? head.length : 0, ...body.map(r => r.length), 0);
     const keep = [];
-    for (let i = 0; i < n; i++) if ((head && tx(head[i])) || body.some(r => tx(r[i]))) keep.push(i);
+    for (let i = 0; i < n; i++) if ((head && head[i]) || body.some(r => tx(r[i]))) keep.push(i);
     const one = c => {
       if (!c) return '';
       const num = /(^|\s)n(\s|$)/.test(c.className || ''), d = c.dataset || {}, t = tx(c);
       return d.date ? K.csvDateCell(d.date, t, num) : K.csvCell(t, num, d.v);
     };
-    return K.csvBuild(K.csvTitle(opts), head ? keep.map(i => K.csvLabel(tx(head[i]))) : null, body.map(r => keep.map(i => one(r[i])).join(',')));
+    return K.csvBuild(K.csvTitle(opts), head ? keep.map(i => K.csvLabel(head[i] || '')) : null, body.map(r => keep.map(i => one(r[i])).join(',')));
   };
   K.tableTools = (t, opts) => {
     const table = t && (t.tagName === 'TABLE' ? t : t.querySelector('table'));
     if (!table) return null;
+    if (table.__kt) return table.__kt;  // повторный вызов без перерисовки — та же строка кнопок и те же ручки
     const vkey = 'table:' + opts.viewKey;
-    const nx = table.nextElementSibling;
-    if (nx && nx.dataset && nx.dataset.vk === vkey) nx.remove();  // повторный вызов без перерисовки — одна строка кнопок
-    const bar = h('div', 'k-tbl-ctlbar'), ctl = h('span', 'k-tbl-ctl'); bar.dataset.vk = vkey; bar.appendChild(ctl);
+    const bar = h('div', 'k-tbl-ctlbar k-tbl-ctlbar-m'), ctl = h('span', 'k-tbl-ctl'); bar.dataset.vk = vkey; bar.appendChild(ctl);
+    // строка кнопок — после прокручиваемого контейнера таблицы (в пределах панели), иначе сразу после таблицы.
+    // Таблицу часто рисуют в ещё не вставленный в страницу элемент: тогда место уточняется, когда она попадёт в
+    // страницу (наблюдатель ниже вызывает place)
+    let note = null;
+    const place = () => {
+      let anchor = table;
+      for (let p = table.parentElement, i = 0; p && i < 6 && p !== document.body && !(p.classList && (p.classList.contains('k-panel') || p.classList.contains('k-drawer'))); p = p.parentElement, i++)
+        if (K.scrolls(p)) { anchor = p; break; }
+      if (!anchor.parentElement) { if (!bar.parentElement) table.after(bar); return; }
+      // строка кнопок прежней отрисовки (контейнер перерисован, а она осталась снаружи) — убрать
+      [...anchor.parentElement.children].forEach(x => { if (x !== anchor && x !== bar && x.dataset && x.dataset.vk === vkey) x.remove(); });
+      // в контейнере несколько таблиц — у кнопок подпись, чьи они
+      const many = anchor !== table && opts.title && anchor.querySelectorAll && anchor.querySelectorAll('table').length > 1;
+      if (many && !note) { note = h('span', 'k-note', K.esc(opts.title)); bar.insertBefore(note, ctl); }
+      if (!many && note) { note.remove(); note = null; }
+      if (anchor.nextElementSibling !== bar) anchor.after(bar);
+    };
     const csv = () => K.tableCsv(table, opts), csvName = () => K.csvFileName(table, opts);
     const csvBtn = h('button', 'k-tbtn', '⤓ CSV');
     csvBtn.title = 'выгрузить в CSV (Excel): таблица как на экране; номер прогона и дата среза — в первой строке и в имени файла';
     csvBtn.onclick = e => { e.stopPropagation(); K.download(csvName(), '﻿' + csv(), 'text/csv;charset=utf-8'); };
     const resetBtn = h('button', 'k-tbtn', '⟲ вид'); resetBtn.title = 'сбросить ширину колонок этой таблицы';
     ctl.append(csvBtn, resetBtn);
-    table.after(bar);
+    place();
+    table.classList.add('k-tooled');
     const hd = rowsOf(table.tHead), hr = hd.length ? hd[hd.length - 1] : null;
     const ths = hr ? [...hr.cells] : [];
     // ширина — по колонкам строки заголовка; заголовок в несколько строк или с colspan (матрица с группами) — без ширины
     const canW = opts.resize !== false && ths.length > 0 && hd.length === 1 && ths.every(th => (th.colSpan || 1) === 1);
-    const keys = ths.map((th, i) => (th.dataset && th.dataset.k) || 'c' + i);
+    const keys = K.colKeys(ths);
     let lay = canW ? K.viewLayout(K.viewStore.get(vkey), keys) : {};
     const paint = () => { resetBtn.style.display = lay.w ? '' : 'none'; };
     const apply = () => {
@@ -1220,7 +1249,7 @@
     const save = () => { K.viewStore.set(vkey, lay); paint(); };
     const reset = () => { lay = {}; K.viewStore.reset(vkey); apply(); };
     resetBtn.onclick = e => { e.stopPropagation(); reset(); };
-    const api = { csv, csvName, viewKey: vkey, el: table, layout: () => JSON.parse(JSON.stringify(lay)), resetView: reset,
+    const api = table.__kt = { csv, csvName, viewKey: vkey, el: table, bar, place, layout: () => JSON.parse(JSON.stringify(lay)), resetView: reset,
       setLayout: v => { lay = canW ? K.viewLayout(v, keys) : {}; save(); apply(); } };
     if (!canW) { paint(); return api; }
     table.classList.add('k-rszable');
@@ -1262,6 +1291,37 @@
   };
   // все ручные таблицы в контейнере, размеченные data-vk="ключ" (и data-title="название в CSV") — после отрисовки
   K.tableToolsAll = root => [...root.querySelectorAll('table[data-vk]')].map(t => K.tableTools(t, { viewKey: t.dataset.vk, title: t.dataset.title }));
+  // ключи колонок для ширины: data-k, иначе текст заголовка (повтор — с номером), пустой заголовок — по месту
+  K.colKeys = ths => {
+    const seen = {};
+    return ths.map((th, i) => {
+      if (th.dataset && th.dataset.k) return th.dataset.k;
+      const t = K.htmlText(th.innerHTML);
+      if (!t) return 'c' + i;
+      seen[t] = (seen[t] || 0) + 1;
+      return 'h:' + t + (seen[t] > 1 ? '#' + seen[t] : '');
+    });
+  };
+  // прокручиваемый элемент: класс scroll / k-tbl-wrap, overflow в style или (на странице) в стилях
+  K.scrolls = el => {
+    if (!el || !el.classList) return false;
+    if (el.classList.contains('scroll') || el.classList.contains('k-tbl-wrap')) return true;
+    const s = el.style || {};
+    if (/auto|scroll/.test((s.overflow || '') + (s.overflowY || '') + (s.overflowX || ''))) return true;
+    if (!el.isConnected) return false;
+    try { const cs = getComputedStyle(el); return /auto|scroll/.test((cs.overflowY || '') + (cs.overflowX || '')); } catch (e) { return false; }
+  };
+  // таблица с data-vk получает кнопки, как только попадает в страницу — даже если отрисовка забыла K.tableToolsAll;
+  // у таблицы с кнопками уточняется место строки кнопок (прокручиваемый контейнер виден только в странице)
+  K.tableToolsAuto = node => {
+    if (!node || node.nodeType !== 1) return;
+    const one = t => { if (t.__kt) t.__kt.place(); else if (t.dataset && t.dataset.vk) K.tableTools(t, { viewKey: t.dataset.vk, title: t.dataset.title }); };
+    if (node.tagName === 'TABLE') { one(node); return; }
+    if (node.querySelectorAll) [...node.querySelectorAll('table[data-vk], table.k-tooled')].forEach(one);
+  };
+  try {
+    new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(K.tableToolsAuto))).observe(document.documentElement, { childList: true, subtree: true });
+  } catch (e) { }
 
   // стандартные колонки позиций (концепты берут нужные по ключу)
   K.posCols = {
