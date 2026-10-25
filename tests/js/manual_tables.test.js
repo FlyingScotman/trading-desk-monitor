@@ -111,7 +111,8 @@ t('#131: CSV ручной таблицы — как на экране: числ�
   assert.strictEqual(L[5], 'Итого,,-1234.5,');
   assert.strictEqual(L.length, 7, 'скрытая строка не попала; файл кончается CRLF');
   // таблица без заголовка и с «ничего не найдено»
-  const T2 = table({ body: [['A', { h: '1,000', cls: 'n' }], [{ h: 'ничего не найдено', cls: 'k-empty', span: 2 }]] });
+  // и строка раскрытых подробностей (data-csv-skip, C15) не выгружается
+  const T2 = table({ body: [['A', { h: '1,000', cls: 'n' }], { cells: [{ h: '<table><tr><td>счёт</td></tr></table>', span: 2 }], tr: { dataset: { csvSkip: '1' } } }, [{ h: 'ничего не найдено', cls: 'k-empty', span: 2 }]] });
   same(K.tableCsv(T2, {}).split('\r\n').slice(1), ['', 'A,1000', '']);
   // дата экрана без data-date: двузначный год — 20YY; data-v даёт век
   const T3 = table({ head: [['Д']], body: [['15.03.29'], [{ h: '15.03.99', v: '1999-03-15' }]] });

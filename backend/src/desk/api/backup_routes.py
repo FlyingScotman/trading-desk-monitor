@@ -20,7 +20,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Body, Depends, Request
 
 from .. import backup, store
-from ..settings import SettingsError, load
+from ..settings import SettingsError, load, mask_url
 from .app import ApiError
 from .auth import _audit_quietly, actor, client_ip
 from .settings_routes import local_only
@@ -66,7 +66,8 @@ def _start(kind: str, fn, store_url: str, who: str, ip: str | None, target: str)
             detail = {k: result.get(k) for k in ("file", "size", "rows", "problems") if result.get(k) is not None}
         except Exception as e:  # noqa: BLE001 - shown on the page
             with _lock:
-                job.update(state="error", error=f"{e}" if isinstance(e, backup.BackupError) else f"{type(e).__name__}: {e}")
+                job.update(state="error", error=mask_url(f"{e}" if isinstance(e, backup.BackupError)
+                                                         else f"{type(e).__name__}: {e}"))
             detail = {"error": job["error"][:300]}
         finally:
             with _lock:

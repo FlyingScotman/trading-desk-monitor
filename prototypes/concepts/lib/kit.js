@@ -159,7 +159,9 @@
     basis01: 'Базис01 (ОФЗ − RUONIA), тыс ₽/бп: риск ОФЗ к движению par-доходностей КБД против котировок OIS RUONIA — par–par ' +
       'по срокам, как swap spread (ядро 0.37, basis_view). Это DV01 ОФЗ на кривой КБД (par-бакеты 1Y–20Y+, 1M–6M у КБД слиты в 1Y): ' +
       'в виде «RUONIA + базис» он же входит в RUONIA. Собственный спред бумаги к КБД — отдельно, «Спред к КБД01». ' +
-      'У ОФЗ-ПК (флоатер на RUONIA) базис — его спред к RUONIA. В прогонах до 0.2.6 базис — +1 б.п. к Z-спреду ОФЗ к RUONIA.',
+      'У ОФЗ-ПК (флоатер на RUONIA) базис — его спред к RUONIA. ОФЗ-ИН в базис не входит: ядро линкеры пока не считает (#38), ' +
+      'её DV01 на КБД — номинальный прокси по дюрации, он только в риске ставок (в RUONIA или на КБД, по виду). ' +
+      'В прогонах до 0.2.6 базис — +1 б.п. к Z-спреду ОФЗ к RUONIA.',
     ofzSpr01: 'Спред к КБД01, тыс ₽/бп: +1 б.п. к собственному Z-спреду ОФЗ к КБД (годовой, ACT/365F) разом по всем срокам, ' +
       'кривые стоят; по бакетам — пропорционально риску дисконтирования (ядро). Сценарий «спред ОФЗ» двигает его. ' +
       'Есть у ОФЗ на КБД с прогонов 0.2.6; у ОФЗ-ПК весь спред — к RUONIA: в виде «RUONIA + базис» он в базисе, в виде «КБД» — здесь.',
@@ -1164,8 +1166,9 @@
   // (наблюдатель ниже); явно — K.tableTools(таблица или её контейнер, {viewKey (уникальный, латиницей), title, fileName,
   // resize: false — без ширины}) или K.tableToolsAll(контейнер). CSV — из того, что на экране (свёрнутые строки не
   // попадают): числовые ячейки (класс n) — числами, data-date="YYYY-MM-DD" у ячейки — дата без подписей, data-v —
-  // ISO-значение для века дат; колонка без заголовка и без текста (полоска, спарклайн) не выгружается; colspan — пустыми
-  // ячейками, у заголовка с colspan подписи колонок можно дать в data-csv="a|b|c".
+  // ISO-значение для века дат; строка с data-csv-skip (раскрытые подробности) и колонка без заголовка и без текста
+  // (полоска, спарклайн) не выгружаются; colspan — пустыми ячейками, у заголовка с colspan подписи колонок можно дать
+  // в data-csv="a|b|c". Таблица внутри ячейки другой таблицы — со своей строкой кнопок прямо под ней.
   // Строка кнопок встаёт после прокручиваемого контейнера таблицы (не внутри: там закреплена строка «Итого») и не
   // закрепляется. Ширина колонки хранится по её ключу: data-k у заголовка, иначе текст заголовка — сменился набор
   // колонок (матрица по валютам, сводная) — ширина остаётся у своей колонки.
@@ -1179,7 +1182,7 @@
     opts = opts || {};
     const tx = c => c ? K.htmlText(c.innerHTML) : '';
     const hd = rowsOf(table.tHead), hr = hd.length ? hd[hd.length - 1] : null;
-    const skip = tr => tr.hidden || (tr.style && tr.style.display === 'none') || (tr.cells.length === 1 && /(^|\s)k-empty(\s|$)/.test(tr.cells[0].className || ''));
+    const skip = tr => tr.hidden || (tr.dataset && tr.dataset.csvSkip) || (tr.style && tr.style.display === 'none') || (tr.cells.length === 1 && /(^|\s)k-empty(\s|$)/.test(tr.cells[0].className || ''));
     const body = [...table.tBodies].reduce((a, b) => a.concat(rowsOf(b)), []).concat(rowsOf(table.tFoot)).filter(tr => !skip(tr)).map(cellsOf);
     let head = null;
     if (hr) {
@@ -1211,7 +1214,7 @@
     let note = null;
     const place = () => {
       let anchor = table;
-      for (let p = table.parentElement, i = 0; p && i < 6 && p !== document.body && !(p.classList && (p.classList.contains('k-panel') || p.classList.contains('k-drawer'))); p = p.parentElement, i++)
+      for (let p = table.parentElement, i = 0; p && i < 6 && p !== document.body && !/^T[DH]$/.test(p.tagName) && !(p.classList && (p.classList.contains('k-panel') || p.classList.contains('k-drawer'))); p = p.parentElement, i++)
         if (K.scrolls(p)) { anchor = p; break; }
       if (!anchor.parentElement) { if (!bar.parentElement) table.after(bar); return; }
       // строка кнопок прежней отрисовки (контейнер перерисован, а она осталась снаружи) — убрать

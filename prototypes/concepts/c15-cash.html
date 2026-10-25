@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>C15 · Остатки и расхождения</title>
+<link rel="stylesheet" href="lib/kit.css">
+<style>
+.c15-days { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; align-items: stretch; }
+.c15-day { flex: none; min-width: 74px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--panel); padding: 4px 8px 5px; cursor: pointer; text-align: left; position: relative; color: var(--fg); }
+.c15-day:hover { border-color: var(--accent); }
+.c15-day.on { border-color: var(--accent); background: var(--accent-bg); }
+.c15-day .d { font-weight: 600; font-variant-numeric: tabular-nums; }
+.c15-day .s { font-size: 11px; color: var(--fg-3); white-space: nowrap; }
+.c15-day::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; border-radius: 2px; background: var(--c, var(--line-2)); }
+.st-match, .st-single { --c: var(--pos); } .st-one_ledger { --c: var(--warn); } .st-break { --c: var(--neg); }
+.c15-head { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+.c15-head .big { font-size: 20px; font-weight: 650; }
+.c15-badge { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--c); color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); white-space: nowrap; }
+.c15-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 150px), 1fr)); gap: 8px; flex: 1; min-width: 260px; }
+.c15-tile { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; background: var(--panel); position: relative; overflow: hidden; cursor: pointer; }
+.c15-tile.on { border-color: var(--accent); background: var(--accent-bg); }
+.c15-tile::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--c, var(--line-2)); }
+.c15-tile .l { font-size: 11.5px; color: var(--fg-2); } .c15-tile .v { font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.c15-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.c15-sub td { background: var(--bg-2); font-size: 12px; vertical-align: top; }
+.c15-sub .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 14px; padding: 4px 0; }
+@media (max-width: 900px) { .c15-sub .grid { grid-template-columns: 1fr; } }
+.c15-spark { width: 100%; height: 90px; display: block; }
+.c15-msg { padding: 24px; text-align: center; color: var(--fg-2); }
+.k-tbl td.wrap { white-space: normal; min-width: 160px; }
+.k-tbl tr.row { cursor: pointer; }
+.led-0 { --lc: var(--accent); } .led-1 { --lc: var(--warn); } .led-2 { --lc: var(--pos); } .led-3 { --lc: var(--fg-2); }
+.c15-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--lc); margin-right: 4px; }
+@media (max-width: 720px) { .k-panel > .hd { flex-wrap: wrap; } }
+</style>
+</head>
+<body>
+<div class="k-page">
+  <div class="c15-days" id="days" aria-label="Даты"></div>
+  <div id="view"><div class="c15-msg">загрузка…</div></div>
+</div>
+<script src="lib/boot.js"></script>
+<script src="lib/kit.js"></script>
+<script src="lib/instr.js"></script>
+<script>
+(function () {
+  'use strict';
+  // «Остатки и расхождения» (B3, #61): остатки на счетах по книгам и валютам с историей; сверка одного остатка между
+  // учётными системами (поле ledger контракта, 08 §10). Данные: GET ../api/v1/cash?on=&days= (backend desk/cash.py).
+  // Какая система основная — не задано: на расхождении остатка нет, и фондирование по нему не считается.
+  const K = KIT, f = K.f, esc = K.esc;
+  K.top({ title: 'C15 · Остатки и расхождения', tag: 'остатки по книгам, сверка учётных систем' });
+  const server = K.source === 'real' || K.source === 'empty';
+  const STATUS = { match: 'сходится', break: 'расхождение', one_ledger: 'только в одной системе', single: 'одна система' };
+  const view = document.getElementById('view'), daysEl = document.getElementById('days');
+  const u = new URL(location.href);
+  let on = u.searchParams.get('on') || null, doc = null, filter = u.searchParams.get('status') || 'all', q = '';
+  const open = new Set();
+
+  const amt = v => v == null ? '<span class="mut3">—</span>' : f.n(v, 2);
+  const ledName = l => l === '' ? 'без системы' : l;
+  function panel(title, extra) { const p = K.h('div', 'k-panel'); p.innerHTML = '<div class="hd"><h3>' + title + '</h3><span class="sp"></span>' + (extra || '') + '</div><div class="bd"></div>'; return p; }
+  function msg(t) { view.innerHTML = '<div class="k-panel"><div class="c15-msg">' + t + '</div></div>'; }
+
+  // ---------- данные: сервер или демо-набор ----------
+  function getJSON(path) {
+    return fetch('../' + path, { cache: 'no-store' }).then(r => {
+      if (r.status === 401 || r.status === 403) throw Object.assign(new Error('forbidden'), { forbidden: true });
+      if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+      return r.json();
+    });
+  }
+  function load() {
+    if (!server) { doc = DEMO(on); on = doc.date; render(); return Promise.resolve(); }
+    return getJSON('api/v1/cash?days=30' + (on ? '&on=' + on : '')).then(d => { doc = d; on = d.date; render(); }).catch(e => {
+      if (e.forbidden) return msg('Нужно войти в монитор: экран остатков открыт всем пользователям.');
+      msg('Не удалось загрузить остатки' + (on ? ' за ' + esc(on) : '') + ': ' + esc(e.message) + '.');
+    });
+  }
+  function pick(d) {
+    on = d; open.clear(); const x = new URL(location.href); x.searchParams.set('on', d); history.replaceState(null, '', x.toString()); load();
+  }
+
+  // ---------- полоса дат: по каждой дате с остатками — сколько расхождений ----------
+  function renderDays(list) {
+    daysEl.innerHTML = list.map(x => {
+      const st = x.break ? 'break' : x.one_ledger ? 'one_ledger' : 'match';
+      const sub = x.break ? 'расх. ' + x.break : x.balances + ' ост.' + (x.one_ledger ? ' · одна ' + x.one_ledger : '');
+      return '<button class="c15-day st-' + st + (x.date === on ? ' on' : '') + '" data-d="' + x.date + '"><div class="d">' + f.dshort(x.date) + '</div><div class="s">' + sub + '</div></button>';
+    }).join('') + '<input class="k-input" type="date" id="pick" style="min-width:140px" title="Другая дата" value="' + esc(on || '') + '">';
+    daysEl.querySelectorAll('[data-d]').forEach(b => b.onclick = () => pick(b.dataset.d));
+    const ip = document.getElementById('pick'); ip.onchange = () => ip.value && pick(ip.value);
+    const sel = daysEl.querySelector('.on'); if (sel) sel.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  // ---------- история одного остатка: линия на систему ----------
+  function spark(hist, ledgers) {
+    const W = 420, H = 90, P = 6, pts = hist.filter(h => h.by_ledger);
+    if (pts.length < 2) return '<div class="mut3">история — одна дата</div>';
+    const vals = pts.flatMap(h => Object.values(h.by_ledger)); let lo = Math.min(...vals), hi = Math.max(...vals);
+    if (hi === lo) { hi += 1; lo -= 1; }
+    const x = i => P + i * (W - 2 * P) / (pts.length - 1), y = v => H - P - (v - lo) * (H - 2 * P) / (hi - lo);
+    const lines = ledgers.map((l, k) => {
+      const seg = pts.map((h, i) => h.by_ledger[l] == null ? null : x(i).toFixed(1) + ',' + y(h.by_ledger[l]).toFixed(1)).filter(Boolean);
+      return '<polyline class="led-' + (k % 4) + '" fill="none" stroke="var(--lc)" stroke-width="1.6" points="' + seg.join(' ') + '"/>';
+    }).join('');
+    const marks = pts.map((h, i) => h.status === 'break' ? '<circle cx="' + x(i).toFixed(1) + '" cy="' + (P).toFixed(1) + '" r="3" fill="var(--neg)"><title>' + esc(h.date) + ': расхождение</title></circle>' : '').join('');
+    return '<svg class="c15-spark" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" role="img" aria-label="История остатка">' + lines + marks + '</svg>' +
+      '<div class="mut3" style="display:flex;justify-content:space-between;font-size:11px"><span>' + f.date(pts[0].date) + '</span><span>' + f.date(pts[pts.length - 1].date) + '</span></div>';
+  }
+  function detail(r, ledgers, cols) {
+    const acc = '<table class="k-tbl" data-vk="c15-accounts" data-title="Счета: ' + esc(r.book_id) + ' ' + esc(r.ccy) + '"><thead><tr><th>Система</th><th>Счёт</th><th>Вид</th><th class="n">Остаток</th></tr></thead><tbody>' +
+      r.accounts.map(a => '<tr><td><span class="c15-dot led-' + (ledgers.indexOf(a.ledger) % 4) + '"></span>' + esc(ledName(a.ledger)) + '</td><td class="mono">' + esc(a.account_id || '') + '</td><td class="mut">' + esc(a.account_kind || '') + '</td><td class="n">' + amt(a.balance_ccy) + '</td></tr>').join('') + '</tbody></table>';
+    const hist = '<table class="k-tbl" data-vk="c15-history" data-title="История остатка: ' + esc(r.book_id) + ' ' + esc(r.ccy) + '"><thead><tr><th>Дата</th>' + ledgers.map(l => '<th class="n">' + esc(ledName(l)) + '</th>').join('') + '<th>Статус</th></tr></thead><tbody>' +
+      r.history.slice().reverse().map(h => '<tr><td>' + f.date(h.date) + (h.valid_date && h.valid_date !== h.date ? ' <span class="mut3" title="перенесён с даты остатка">← ' + f.date(h.valid_date) + '</span>' : '') + '</td>' +
+        ledgers.map(l => '<td class="n">' + amt(h.by_ledger[l]) + '</td>').join('') + '<td><span class="c15-badge st-' + h.status + '">' + esc(STATUS[h.status] || h.status) + '</span></td></tr>').join('') + '</tbody></table>';
+    return '<tr class="c15-sub" data-csv-skip="1"><td colspan="' + cols + '"><div class="grid"><div><b>Счета</b>' + acc + '</div><div><b>История</b>' + spark(r.history, ledgers) + hist + '</div></div></td></tr>';
+  }
+
+  // ---------- экран даты ----------
+  function render() {
+    const d = doc, s = d.summary, L = d.ledgers;
+    renderDays(d.days || []);
+    view.innerHTML = '';
+    const wrap = K.h('div', 'k-grid');
+    const hd = panel('Дата', '<span class="k-note">допуск: max(' + f.n(d.tolerance.abs_ccy, 2) + ', ' + d.tolerance.rel + ' × остаток) в валюте остатка</span>');
+    const brk = Object.entries(s.breaks_by_ccy || {}).map(([c, v]) => f.n(v, 2) + ' ' + esc(c)).join(', ');
+    const tile = (key, label, v) => '<div class="c15-tile st-' + key + (filter === key ? ' on' : '') + '" data-f="' + key + '" role="button" tabindex="0"><div class="l">' + label + '</div><div class="v">' + v + '</div></div>';
+    hd.querySelector('.bd').innerHTML = '<div class="c15-head"><div><div class="big">' + f.dshort(d.date) + ' ' + d.date.slice(0, 4) + '</div>' +
+      '<span class="c15-badge st-' + (s.break ? 'break' : s.one_ledger ? 'one_ledger' : 'match') + '">' + (s.break ? 'есть расхождения' : s.balances ? 'расхождений нет' : 'остатков нет') + '</span>' +
+      '<div class="mut" style="font-size:12px;margin-top:6px">книг ' + s.books + ' · систем ' + L.length + (brk ? '<br>расхождения: <b class="neg">' + brk + '</b>' : '') + '</div></div>' +
+      '<div class="c15-tiles">' + tile('all', 'Все остатки', s.balances) + tile('break', 'Расхождения', s.break) + tile('one_ledger', 'Только в одной системе', s.one_ledger) +
+      tile('match', 'Сходятся', s.match) + tile('single', 'Одна система', s.single) + '</div></div>' +
+      '<div class="mut" style="font-size:12px;margin-top:8px">' + esc(d.default_rule || '') + '.</div>';
+    hd.querySelectorAll('[data-f]').forEach(t => { t.onclick = () => { filter = filter === t.dataset.f ? 'all' : t.dataset.f; render(); }; t.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); t.click(); } }; });
+    wrap.appendChild(hd);
+
+    const tp = panel('Остатки по книгам', '<span class="c15-bar"><input class="k-input" id="q" placeholder="книга, юрлицо, валюта" value="' + esc(q) + '" style="min-width:180px"></span>');
+    tp.querySelector('.bd').classList.add('flush', 'scroll');
+    const ql = q.toLowerCase();
+    const rows = d.rows.filter(r => (filter === 'all' || r.status === filter) &&
+      (!ql || [r.entity, r.book_id, r.book_name, r.ccy].some(x => x && String(x).toLowerCase().includes(ql))));
+    const cols = 7 + L.length;
+    tp.querySelector('.bd').innerHTML = rows.length ? '<table class="k-tbl" data-vk="c15-balances" data-title="Остатки по книгам"><thead><tr><th>Юрлицо</th><th>Книга</th><th>Валюта</th>' +
+      L.map((l, k) => '<th class="n"><span class="c15-dot led-' + (k % 4) + '"></span>' + esc(ledName(l)) + '</th>').join('') +
+      '<th class="n">Остаток</th><th class="n">Разница</th><th>Статус</th><th>На дату</th></tr></thead><tbody>' +
+      rows.map(r => '<tr class="row" tabindex="0" aria-expanded="' + open.has(r.key) + '" data-k="' + esc(r.key) + '"><td>' + esc(r.entity) + '</td><td>' + esc(r.book_id) +
+        (r.book_name && r.book_name !== r.book_id ? ' <span class="mut3">' + esc(r.book_name) + '</span>' : '') + (r.book_type ? ' <span class="mut3 mono">' + esc(r.book_type) + '</span>' : '') + '</td><td>' + esc(r.ccy) + '</td>' +
+        L.map(l => '<td class="n">' + amt(r.by_ledger[l]) + '</td>').join('') +
+        '<td class="n"><b>' + amt(r.known) + '</b></td><td class="n ' + (r.status === 'break' ? 'neg' : '') + '">' + amt(r.diff) + '</td>' +
+        '<td><span class="c15-badge st-' + r.status + '">' + esc(r.status_text || STATUS[r.status]) + '</span></td>' +
+        '<td class="mut">' + f.date(r.valid_date) + (r.age_days ? ' <span class="mut3">(' + r.age_days + ' дн.)</span>' : '') + '</td></tr>' +
+        (open.has(r.key) ? detail(r, L, cols) : '')).join('') + '</tbody></table>'
+      : '<div class="k-empty">' + (d.rows.length ? 'Под фильтр ничего не попало' : 'Остатков на эту дату нет: отчёт об остатках не загружен') + '</div>';
+    K.tableToolsAll(tp.querySelector('.bd'));
+    tp.querySelectorAll('tr[data-k]').forEach(tr => {
+      tr.onclick = () => { const k = tr.dataset.k; open.has(k) ? open.delete(k) : open.add(k); render(); };
+      tr.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); tr.click(); } };
+    });
+    wrap.appendChild(tp);
+    view.appendChild(wrap);
+    const qi = document.getElementById('q');
+    qi.oninput = () => { q = qi.value; const pos = qi.selectionStart; render(); const n = document.getElementById('q'); n.focus(); n.setSelectionRange(pos, pos); };
+  }
+
+  // ---------- демо-набор (файл или ?demo=1): вымышленный, форма ответа /api/v1/cash ----------
+  function DEMO(want) {
+    const dates = ['2026-10-14', '2026-10-15', '2026-10-16', '2026-10-19', '2026-10-20'];
+    const D = dates.includes(want) ? want : dates[dates.length - 1];
+    const book = { B1: ['Демо-книга деривативов', 'DERIVS'], B2: ['Демо-книга облигаций', 'TRADING'], X1: ['Книга прочего юрлица', 'TRADING'] };
+    // (юрлицо, книга, валюта) → по датам остатки систем S1, S2
+    const series = [
+      ['E1', 'B1', 'RUB', [[-50e6, -50e6], [-52e6, -51.99e6], [-52e6, -52e6], [-53.5e6, -53.5e6], [-54e6, -54e6]]],
+      ['E1', 'B1', 'USD', [[400e3, null], [410e3, null], [405e3, null], [420e3, null], [418e3, null]]],
+      ['E1', 'B2', 'RUB', [[7e6, 7e6], [6e6, 6e6], [6.5e6, 6.5e6], [6.5e6, 6.48e6], [6.2e6, 6.1e6]]],
+      ['E2', 'X1', 'RUB', [[125e6], [125e6], [126e6], [126e6], [127e6]]]];
+    const status = (e, v) => v.length === 1 ? 'single' : v[1] == null ? 'one_ledger' : Math.abs(v[0] - v[1]) <= 0.01 ? 'match' : 'break';
+    const led = v => v.length === 1 ? { '': v[0] } : Object.assign({ S1: v[0] }, v[1] == null ? {} : { S2: v[1] });
+    const at = i => series.map(([e, b, c, vs]) => { const by = led(vs[i]), st = status(e, vs[i]), xs = Object.values(by);
+      return { key: e + '|' + b + '|' + c, entity: e, book_id: b, ccy: c, by_ledger: by, status: st, known: st === 'break' ? null : xs.reduce((a, x) => a + x, 0) / xs.length, diff: xs.length > 1 ? Math.max(...xs) - Math.min(...xs) : null }; });
+    const iD = dates.indexOf(D), cur = at(iD);
+    const cnt = list => ({ match: 0, break: 0, one_ledger: 0, single: 0, ...list.reduce((a, r) => (a[r.status] = (a[r.status] || 0) + 1, a), {}) });
+    const rows = cur.map(r => Object.assign(r, {
+      book_name: book[r.book_id][0], book_type: book[r.book_id][1], status_text: STATUS[r.status], valid_date: D, age_days: 0,
+      accounts: Object.entries(r.by_ledger).map(([l, v]) => ({ account_id: 'MAIN', account_kind: 'settlement', ledger: l, balance_ccy: v })),
+      history: dates.slice(0, iD + 1).map((d, i) => { const x = at(i).find(y => y.key === r.key); return { date: d, status: x.status, known: x.known, by_ledger: x.by_ledger, valid_date: d }; }) }));
+    const bbc = {}; cur.filter(r => r.status === 'break').forEach(r => bbc[r.ccy] = (bbc[r.ccy] || 0) + r.diff);
+    return {
+      date: D, ledgers: ['', 'S1', 'S2'], tolerance: { abs_ccy: 0.01, rel: 1e-8 },
+      summary: Object.assign({ balances: cur.length, books: 3, units: 3, breaks_by_ccy: bbc }, cnt(cur)), rows,
+      days: dates.map((d, i) => Object.assign({ date: d, balances: series.length }, cnt(at(i)))).reverse(),
+      default_rule: 'расхождение: остатка нет (основная система не задана), фондирование по нему не считается',
+    };
+  }
+
+  load();
+})();
+</script>
+</body>
+</html>
