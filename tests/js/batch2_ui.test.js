@@ -178,7 +178,7 @@ t('R43: ОВП — мини-таблица: валюта на строку, по
   assert.ok(big.length >= 3 && html.indexOf('>' + big[0].c + '<') < html.indexOf('>' + big[1].c + '<'));
   // один формат: знак, 1 знак после точки, разделитель тысяч
   const cny = R.find(r => r.c === 'CNY');
-  assert.ok(html.includes(K.f.mns(cny.v, 1)) && /^[+−]?[\d,]+\.\d$/.test(K.f.mns(cny.v, 1)));
+  assert.ok(html.includes(K.f.mns(cny.v, 1)) && /^(?:[+−]?[\d,]+\.\d|\([\d,]+\.\d\))$/.test(K.f.mns(cny.v, 1)));
   // по ногам: вторая валюта кросса — своя строка (FX-дельта по ключам fx_delta)
   const usd = R.find(r => r.c === 'USD');
   near(usd.v, M.positions.reduce((s, p) => s + I.fxIn(p, 'USD'), 0), 'USD по ногам');

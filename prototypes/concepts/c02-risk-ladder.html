@@ -79,12 +79,12 @@
       if (!L.some(p => RATE[c].some(id => p.dv01ByCurve[id]))) return;
       const curves = M.curves.filter(x => x.ccy === c);
       html += K.kpi(K.ccyTag(c) + ' DV01 ставки',
-        K.d({ title: c + ' · DV01 ставки', unit: 'тыс ₽/бп', list: L, val: p => RATE[c].reduce((s, id) => s + p.dv01ByCurve[id], 0) }, null, '') + K.kpiUnit('тыс/бп'),
+        K.d({ title: c + ' · DV01 ставки', unit: 'тыс ₽/бп', list: L, val: p => RATE[c].reduce((s, id) => s + p.dv01ByCurve[id], 0) }, null, '') + K.kpiUnit('тыс ₽/бп'),
         curves.length > 1 ? curves.map(x => [esc(x.short), K.d({ title: x.name, unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve[x.id] }, null, '')]) : [['CS01', K.d({ title: c + ' · CS01', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === c), val: 'cs01' }, null, '')]]);
     });
     const short = p => ALLRATE.reduce((s, id) => s + sumArr(p.risk[id].slice(0, 4)), 0), long = p => ALLRATE.reduce((s, id) => s + sumArr(p.risk[id].slice(4)), 0);
-    html += K.kpi('Короткий / длинный конец', K.d({ title: 'DV01 до 2Y включительно', unit: 'тыс ₽/бп', list: L, val: short }, null, '') + ' <span class="mut">/</span> ' + K.d({ title: 'DV01 дальше 2Y', unit: 'тыс ₽/бп', list: L, val: long }, null, ''), '≤ 2Y / > 2Y, все кривые');
-    html += K.kpi('CS01 всего', K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }, null, ''), K.kpiCcyRows(M.ccys.reduce((o, c) => (o[c] = M.sum(L.filter(p => p.ccy === c), p => p.cs01), o), {}), c => K.d({ title: 'CS01 ' + c, unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === c), val: 'cs01' }, null, ''), 3, f.dv));
+    html += K.kpi('Короткий / длинный конец', K.d({ title: 'DV01 до 2Y включительно', unit: 'тыс ₽/бп', list: L, val: short }, null, '') + ' <span class="mut">/</span> ' + K.d({ title: 'DV01 дальше 2Y', unit: 'тыс ₽/бп', list: L, val: long }, null, '') + K.kpiUnit('тыс ₽/бп'), '≤ 2Y / > 2Y, все кривые');
+    html += K.kpi('CS01 всего', K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }, null, '') + K.kpiUnit('тыс ₽/бп'), K.kpiCcyRows(M.ccys.reduce((o, c) => (o[c] = M.sum(L.filter(p => p.ccy === c), p => p.cs01), o), {}), c => K.d({ title: 'CS01 ' + c, unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === c), val: 'cs01' }, null, ''), 3, f.dv));
     document.getElementById('strip').innerHTML = html;
   }
 
@@ -153,7 +153,7 @@
           legend: { top: 0, left: 0, type: 'scroll', data: rows.map(r => r.t.label).concat(['итог', 'кумулятив']) },
           tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.dv(v) },
           xAxis: { type: 'category', data: M.buckets },
-          yAxis: [{ type: 'value', axisLabel: { formatter: v => f.dv(v) } }, { type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => f.dv(v), color: css('--warn') } }],
+          yAxis: [{ type: 'value', unit: 'тыс ₽/бп', axisLabel: { formatter: v => f.dv(v) } }, { type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => f.dv(v), color: css('--warn') } }],
           series: rows.map(r => ({ name: r.t.label, type: 'bar', stack: 's', barMaxWidth: 38, data: r.vals, itemStyle: { color: K.kindColor[r.t.kind] } }))
             .concat([{ name: 'итог', type: 'scatter', symbol: 'diamond', symbolSize: 11, data: tot, itemStyle: { color: css('--fg'), borderColor: css('--bg'), borderWidth: 1 }, z: 5, label: { show: true, position: 'top', formatter: p => f.dv(p.value), color: css('--fg-2'), fontSize: 10 } },
             { name: 'кумулятив', type: 'line', yAxisIndex: 1, data: cum, symbolSize: 4, lineStyle: { width: 2, type: 'dashed', color: css('--warn') }, itemStyle: { color: css('--warn') }, z: 4 }]),
@@ -206,7 +206,7 @@
         return {
           grid: { left: 8, right: 10, top: 34, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 },
           tooltip: { trigger: 'axis', valueFormatter: v => f.dv(v) },
-          xAxis: { type: 'category', data: M.buckets, boundaryGap: false }, yAxis: { type: 'value', axisLabel: { formatter: v => f.dv(v) } },
+          xAxis: { type: 'category', data: M.buckets, boundaryGap: false }, yAxis: { type: 'value', unit: 'тыс ₽/бп', axisLabel: { formatter: v => f.dv(v) } },
           series: cs.map((c, i) => ({ name: c.short + (c.kind === 'basis' ? ' (базис)' : ''), type: 'line', data: cum[i], symbolSize: 4, lineStyle: { width: 1.6, type: c.kind === 'basis' ? 'dotted' : 'solid' }, color: K.curveColors[c.id] }))
             .concat(cs.filter(c => c.kind === 'rate').length > 1 ? [{ name: 'Σ ставки', type: 'line', data: tot, symbolSize: 5, lineStyle: { width: 2.5 }, color: css('--fg'), areaStyle: { opacity: .08 } }] : []),
         };
@@ -265,7 +265,7 @@
     const max = Math.max(1, ...rows.flatMap(r => r.vals.map(Math.abs)));
     const heat = issMet === 'cs01' ? v => K.heatMono(v, max, '227,179,65') : v => K.heatRisk(v, max);
     const nm = issMet === 'cs01' ? 'CS01' : 'DV01';
-    bd.innerHTML = '<table class="k-tbl"><thead><tr><th>Эмитент</th><th>Рейт.</th><th>Вал.</th>' + M.buckets.map(b => '<th class="n">' + b + '</th>').join('') + '<th class="n">' + nm + '</th><th class="n">MV, mm</th></tr></thead><tbody>' +
+    bd.innerHTML = '<table class="k-tbl"><thead><tr><th>Эмитент</th><th>Рейт.</th><th>Вал.</th>' + M.buckets.map(b => '<th class="n">' + b + '</th>').join('') + '<th class="n">' + nm + '</th><th class="n">MV, mm ₽</th></tr></thead><tbody>' +
       rows.map(r => '<tr><td class="lbl"><b style="color:' + K.issuerColor(r.id) + '">●</b> ' + esc(r.iss.short) + ' <span class="mut3">' + esc(r.iss.sector) + '</span></td><td class="mut">' + esc(r.iss.rating) + '</td><td>' + [...new Set(r.list.map(p => p.ccy))].sort((a, b) => M.ccyOrder[a] - M.ccyOrder[b]).map(K.ccyTag).join(' ') + '</td>' +
         r.vals.map((v, k) => '<td class="n" style="' + heat(v) + '">' + (Math.abs(v) < 300 ? '<span class="mut3">·</span>' : K.d({ title: r.iss.short + ' · ' + nm + ' · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: r.list.map(p => ({ p, v: val(p, k) })) }, null, '')) + '</td>').join('') +
         '<td class="n"><b>' + K.d({ title: r.iss.short + ' · ' + nm, unit: 'тыс ₽/бп', rows: r.list.map(p => ({ p, v: M.buckets.reduce((s, _, k) => s + val(p, k), 0) })) }, null, '') + '</b></td><td class="n mut">' + f.mn(M.sum(r.list, 'mv'), 0) + '</td></tr>').join('') +
@@ -311,8 +311,8 @@
       const sc = M.buckets.map((_, k) => M.sum(R, x => inScope(x.p.ccy) ? x.p.cs01b[k] * sim.credit : 0));
       return {
         animation: false, grid: { left: 6, right: 8, top: 28, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 },
-        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: ps => '<b>' + M.buckets[ps[0].dataIndex] + '</b><br>' + ps.map(p => p.marker + p.seriesName + ': <b>' + (p.seriesName === 'сдвиг, б.п.' ? f.s(p.value, 0) : f.mns(p.value, 2) + ' mm') + '</b>').join('<br>') },
-        xAxis: { type: 'category', data: M.buckets }, yAxis: [{ type: 'value', axisLabel: { formatter: v => f.mn(v, 0) } }, { type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => f.s(v, 0), color: css('--fg-3') } }],
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: ps => '<b>' + M.buckets[ps[0].dataIndex] + '</b><br>' + ps.map(p => p.marker + p.seriesName + ': <b>' + (p.seriesName === 'сдвиг, б.п.' ? f.s(p.value, 0) : f.mns(p.value, 2) + ' mm ₽') + '</b>').join('<br>') },
+        xAxis: { type: 'category', data: M.buckets }, yAxis: [{ type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } }, { type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => f.s(v, 0), color: css('--fg-3') } }],
         series: [
           { name: 'ставки', type: 'bar', stack: 'p', data: sr, itemStyle: { color: K.curveColors['RUB RUONIA'] } },
           { name: 'базис', type: 'bar', stack: 'p', data: sb, itemStyle: { color: K.curveColors['RUB OFZ'] } },
@@ -337,7 +337,7 @@
     const types = M.typeRows.map(t => ({ t, xs: simRes.filter(x => typeOf(x.p) === t.id) })).filter(r => r.xs.some(x => Math.abs(x.t) > 1));
     const mx = Math.max(1, ...types.map(r => Math.abs(M.sum(r.xs, 't'))));
     const cell = (xs, key, title) => { const v = M.sum(xs, key); return Math.abs(v) < 500 ? '<span class="mut3">·</span>' : K.d({ title, unit: 'mm ₽', fmt: v => f.mns(v, 1), rows: xs.map(x => ({ p: x.p, v: x[key] })) }); };
-    bd.querySelector('.stbl').innerHTML = '<table class="k-tbl"><thead><tr><th>Тип</th><th class="n">Ставки</th><th class="n">Базис</th><th class="n">Спреды</th><th class="n">Итого, mm</th><th style="width:90px"></th></tr></thead><tbody>' +
+    bd.querySelector('.stbl').innerHTML = '<table class="k-tbl"><thead><tr><th>Тип</th><th class="n">Ставки</th><th class="n">Базис</th><th class="n">Спреды</th><th class="n">Итого, mm ₽</th><th style="width:90px"></th></tr></thead><tbody>' +
       types.map(r => { const v = M.sum(r.xs, 't'); return '<tr><td class="lbl"><b style="color:' + K.kindColor[r.t.kind] + '">●</b> ' + esc(r.t.label) + '</td><td class="n">' + cell(r.xs, 'r', r.t.label + ' · ставки') + '</td><td class="n">' + cell(r.xs, 'b', r.t.label + ' · базис') + '</td><td class="n">' + cell(r.xs, 'c', r.t.label + ' · спреды') + '</td><td class="n"><b>' + cell(r.xs, 't', r.t.label + ' · итого') + '</b></td><td>' + K.bar(v, mx) + '</td></tr>'; }).join('') +
       '</tbody><tfoot><tr><td>Итого</td><td class="n">' + f.mns(T('r'), 1) + '</td><td class="n">' + f.mns(T('b'), 1) + '</td><td class="n">' + f.mns(T('c'), 1) + '</td><td class="n ' + f.cls(T('t')) + '">' + f.mns(T('t'), 1) + '</td><td></td></tr></tfoot></table>';
     if (simChart) simChart.redraw();
