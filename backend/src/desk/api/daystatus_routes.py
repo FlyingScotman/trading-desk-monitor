@@ -126,6 +126,7 @@ class Feed:
         self.base = 0  # every event after base that the reader has read is in recent
         self.recent: deque[dict[str, Any]] = deque(maxlen=cfg.keep)
         self.cond = asyncio.Condition()
+        self.starting = asyncio.Lock()
         self.users = 0
         self.task: asyncio.Task | None = None
 
@@ -135,12 +136,15 @@ class Feed:
             return daystatus.events(con, after=after, limit=limit)
 
     async def start(self) -> None:
-        """Where the window starts: the newest event now. Raises the store's error before the response starts
-        (a 503 ``store_unavailable``, not a broken 200)."""
-        if self.last is None:
-            last = (await anyio.to_thread.run_sync(self.read, None, 1))["last_id"] or 0
-            if self.last is None:
-                self.last = self.base = last
+        """Where the window starts: the newest event now, read again whenever the reader is not running (after
+        an idle spell ``last`` is old: a stream «from now» would replay what came meanwhile). Raises the store's
+        error before the response starts (a 503 ``store_unavailable``, not a broken 200)."""
+        async with self.starting:  # one read for streams that open together (the first one starts the reader)
+            if self.last is None or self.task is None:
+                last = (await anyio.to_thread.run_sync(self.read, None, 1))["last_id"] or 0
+                if self.task is None:  # the window restarts here: a stream from further back reads its gap itself
+                    self.recent.clear()
+                    self.last = self.base = last
 
     def since(self, pos: int) -> list[dict[str, Any]] | None:
         """The window's events after ``pos``; None when ``pos`` is older than the window."""
@@ -155,6 +159,10 @@ class Feed:
                     page = await anyio.to_thread.run_sync(self.read, self.last, self.cfg.page)
                 except psycopg.Error as e:  # the store went away: the streams keep their keep-alives, the reader retries
                     log.warning("event stream: the feed not read (%s: %s)", type(e).__name__, e)
+                    await asyncio.sleep(self.cfg.poll_s)
+                    continue
+                except Exception:  # anything else: logged, and the reader goes on (it must not stop silently)
+                    log.exception("event stream: the feed not read")
                     await asyncio.sleep(self.cfg.poll_s)
                     continue
                 if page["events"]:

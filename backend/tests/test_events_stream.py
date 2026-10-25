@@ -185,9 +185,75 @@ def test_open_streams_share_one_reader_and_hold_no_connection_between_reads(stor
     assert all(any(c.startswith("id: ") and "run.published" in c for c in g) for g in got)  # every stream got it
     assert spy.most <= 1  # one reader: one short connection at a time, whatever the number of streams
     assert idle.count(0) > len(idle) // 2  # between reads no connection is open
-    assert len(spy.cons) <= 1 + 0.6 / 0.05 + 3  # reads of one reader, not five
+    assert len(spy.cons) <= 6 + 0.8 / 0.05  # reads of one reader (and each start), not five readers (~60)
     assert all(c.closed for c in spy.cons)
     assert feed.users == 0 and feed.task is None  # the last stream gone, the reader stops
+
+
+async def first(agen, n: int) -> list[str]:
+    """The first ``n`` chunks of a stream, then the client leaves."""
+    out = []
+    async for chunk in agen:
+        out.append(chunk)
+        if len(out) >= n:
+            break
+    await agen.aclose()
+    return out
+
+
+def hello_after(chunk: str) -> int:
+    return json.loads(chunk.split("data: ", 1)[1])["after"]
+
+
+def test_from_now_after_the_reader_was_idle_starts_at_the_newest_event(store_url):
+    # review of #191: «from now» after an idle spell gave the old cursor and replayed what came meanwhile
+    cfg = routes.StreamConfig(poll_s=0.02, keepalive_s=60, lifetime_s=60)
+    old = add(store_url)
+
+    async def go():
+        feed = routes.Feed(store_url, cfg)
+        (hello,) = await first(routes.stream(feed, None, None, here, lambda: False), 1)
+        assert hello_after(hello) == old
+        await asyncio.sleep(0.1)
+        assert feed.task is None  # no streams: the reader has stopped
+        new = [await asyncio.to_thread(add, store_url) for _ in range(2)]
+        # from now, not from before the idle spell: the greeting, then the next event, not 6 and 7 again
+        task = asyncio.create_task(first(routes.stream(feed, None, None, here, lambda: False), 2))
+        await asyncio.sleep(0.1)
+        later = await asyncio.to_thread(add, store_url)
+        hello, nxt = await asyncio.wait_for(task, 5)
+        assert hello_after(hello) == new[-1]
+        assert nxt.startswith(f"id: {later}\n")
+
+    asyncio.run(go())
+
+
+def test_the_reader_logs_an_unexpected_error_and_goes_on(store_url, caplog):
+    cfg = routes.StreamConfig(poll_s=0.02, keepalive_s=60, lifetime_s=60)
+
+    async def go():
+        feed = routes.Feed(store_url, cfg)
+        await feed.start()
+        read, fails = feed.read, [2]
+
+        def flaky(after, limit):
+            if after is not None and fails[0]:  # the reader's reads, not start()
+                fails[0] -= 1
+                raise RuntimeError("not the store")
+            return read(after, limit)
+
+        feed.read = flaky
+        agen = routes.stream(feed, None, None, here, lambda: False)
+        task = asyncio.create_task(first(agen, 2))
+        await asyncio.sleep(0.1)  # the reader failed twice meanwhile
+        eid = await asyncio.to_thread(add, store_url, "run.published", run_id=8, dataset=None, source=None,
+                                      detail={"run_type": "EOD"})
+        got = await asyncio.wait_for(task, 5)
+        return got, eid, fails[0]
+
+    got, eid, left = asyncio.run(go())
+    assert left == 0 and got[1].startswith(f"id: {eid}\n")  # the event came after the errors: the reader lives
+    assert sum("the feed not read" in r.message for r in caplog.records) == 2
 
 
 def test_the_stream_ends_when_the_client_leaves_or_the_server_stops(store_url):

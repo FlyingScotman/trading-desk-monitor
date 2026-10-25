@@ -290,3 +290,30 @@ test('без курсора — сначала last_id ленты, старое 
   assert.deepStrictEqual(got, []);
   sub.stop();
 });
+
+test('реакция по шагам (L.react): переключение, полоса, сверка после загрузки; ошибка звена не останавливает следующие', async () => {
+  const { L } = load();
+  const calls = [];
+  const deps = (lr, sw) => ({
+    latest: () => Promise.resolve(lr), storage: { getItem: () => null },
+    reload: () => calls.push('reload'), banner: t => calls.push('banner ' + t.run_id),
+    switched: id => { if (id === undefined) return sw; calls.push('switched ' + id); }
+  });
+  const real = { source: 'real', runId: '42', pinned: false };
+  const e = { type: 'run.published', run_id: 43, text: 't' };
+  assert.strictEqual(await L.react(e, real, deps({ run_id: '43' }, null)), 'switch');
+  assert.deepStrictEqual(calls.splice(0), ['switched 43', 'reload']);
+  assert.strictEqual(await L.react(e, real, deps({ run_id: '43' }, '43')), 'banner', 'уже переключались: без петли');
+  assert.strictEqual(await L.react(e, { ...real, pinned: true }, deps({ run_id: '43' }, null)), 'banner');
+  assert.strictEqual(await L.react(e, real, deps({ run_id: '42' }, null)), 'none', 'R11: показываемый не сменился');
+  calls.splice(0);
+  // сверка после загрузки (e = null): прогон, опубликованный, пока страница грузилась
+  assert.strictEqual(await L.react(null, real, deps({ run_id: '44' }, null)), 'switch');
+  assert.strictEqual(await L.react(null, real, deps({ run_id: '42' }, null)), 'none');
+  assert.strictEqual(await L.react(null, real, deps(undefined, null)), 'none', 'статус не получен — ничего');
+  assert.strictEqual(await L.react(null, real, deps({ run_id: '44' }, '44')), 'none', 'сверка полосу не показывает');
+  // ошибка в звене (banner упал): промис отклонён; watchRuns ловит его в .catch и ждёт следующего прогона
+  const bad = Object.assign(deps({ run_id: '45' }, '45'), { banner: () => { throw new Error('boom'); } });
+  await assert.rejects(L.react(e, real, bad), /boom/);
+  assert.match(SRC, /busy = busy\.then\(\(\) => L\.react\(e, ctx, d\)\)\.catch\(/);
+});

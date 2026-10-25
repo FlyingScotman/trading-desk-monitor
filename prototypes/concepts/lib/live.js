@@ -23,7 +23,9 @@
  * Реакция страницы прогона на run.published: ОДНА ТОЧКА ВЫБОРА — DESK_LIVE.REACTION (ниже):
  *  - 'switch' (по умолчанию, решение владельца 25.10, #28): страница сама переходит на новый прогон (перезагрузка
  *    на «последний прогон»), один раз на прогон: петли перезагрузок нет (после перезагрузки лента начинается
- *    с текущего момента, а sessionStorage помнит прогон, на который уже переключались);
+ *    с текущего момента, а sessionStorage помнит прогон, на который уже переключались). Скрытая вкладка
+ *    перезагружается, когда её покажут. После загрузки страница один раз сверяет свой прогон с latest_run: прогон,
+ *    опубликованный, пока она грузилась, тоже переключает;
  *  - 'banner': полоса под шапкой «Доступен новый прогон … — показать», страница не меняется под пользователем.
  *  Какой прогон новый, говорит сервер: GET ../api/v1/autopilot/status → latest_run, прогон, который откроет
  *  «последний прогон» (R11: основной прогон даты, иначе внутридневной). Если это прогон на экране (опубликован
@@ -34,7 +36,7 @@
  *  Страницы с прогоном (K.source 'real' или 'empty') подписываются сами после загрузки; страница со своей
  *  обработкой ленты (C14) ставит DESK_LIVE.manual = true до DOMContentLoaded.
  *
- * Чистые функции для тестов (tests/js/live_updates.test.js): newRun, target, decide, reaction, want.
+ * Чистые функции для тестов (tests/js/live_updates.test.js): newRun, target, decide, reaction, want, react.
  */
 (function () {
   'use strict';
@@ -242,20 +244,35 @@
     return fetch(base + 'api/v1/autopilot/status', { cache: 'no-store' }).then(r => r.ok ? r.json() : undefined)
       .then(j => j && typeof j === 'object' ? j.latest_run || null : undefined, () => undefined);
   }
+  // скрытая вкладка перезагружается, когда её покажут: не все вкладки разом и не под руками у пользователя
+  function reloadWhenSeen() {
+    if (typeof document === 'undefined' || !document.hidden) return location.reload();
+    const f = () => { if (!document.hidden) { document.removeEventListener('visibilitychange', f); location.reload(); } };
+    document.addEventListener('visibilitychange', f);
+  }
+  // реакция на новый прогон e (null — сверка после загрузки: не опубликован ли прогон, пока страница грузилась);
+  // d — зависимости (тесты подменяют): latest() → latest_run | null | undefined, reload, banner, switched
+  L.react = function (e, ctx, d) {
+    return d.latest().then(lr => {
+      const t = e ? L.target(e, lr, ctx) : lr && L.target({}, lr, ctx);
+      if (!t) return 'none';
+      if (L.decide(L.reaction(d.storage), ctx, t, d.switched()) === 'switch') { d.switched(t.run_id); d.reload(); return 'switch'; }
+      if (!e) return 'none';  // сверка при загрузке полосу не показывает (закреплённый прогон сверку не делает)
+      d.banner(t, ctx); return 'banner';
+    });
+  };
   L.watchRuns = function (ctx) {
+    const d = { latest: () => latestRun('../'), reload: reloadWhenSeen, banner, switched };
     let busy = Promise.resolve();
+    // одно звено не должно остановить реакцию на следующие прогоны (ревью #191)
+    const queue = e => { busy = busy.then(() => L.react(e, ctx, d)).catch(err => console.error(err)); };
+    // курсор ленты берётся после того, как страница получила прогон: прогон, опубликованный в это окно, ловит сверка
+    if (!ctx.pinned && ctx.source === 'real') queue(null);
     return L.subscribe({
       types: 'run.published',
       onEvents(list) {
         const runs = list.filter(e => L.newRun(e, ctx));
-        if (!runs.length) return;
-        const e = runs[runs.length - 1];
-        busy = busy.then(() => latestRun('../')).then(lr => {
-          const t = L.target(e, lr, ctx);
-          if (!t) return;
-          if (L.decide(L.reaction(), ctx, t, switched()) === 'switch') { switched(t.run_id); location.reload(); return; }
-          banner(t, ctx);
-        });
+        if (runs.length) queue(runs[runs.length - 1]);
       }
     });
   };
