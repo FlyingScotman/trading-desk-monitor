@@ -55,9 +55,10 @@
 (function () {
   'use strict';
   // «Статус дня» (S7b, #25): по дате — что пришло, что отклонено и почему, какие прогоны кого заменили; лента событий.
-  // Данные: GET ../api/v1/inbox?on=, ../api/v1/inbox/days, ../api/v1/events (backend desk/daystatus.py). Лента пока
-  // опрашивается раз в 30 с (?after=последний id); SSE (#28) встанет на место poll() с тем же курсором.
-  const K = KIT, f = K.f, esc = K.esc;
+  // Данные: GET ../api/v1/inbox?on=, ../api/v1/inbox/days, ../api/v1/events (backend desk/daystatus.py). Новые
+  // события — lib/live.js (#28): SSE ../api/v1/events/stream, при недоступности — опрос раз в 30 с; курсор — last_event_id.
+  const K = KIT, f = K.f, esc = K.esc, LIVE = window.DESK_LIVE;
+  if (LIVE) LIVE.manual = true;  // своя обработка ленты: уведомления и перечитывание даты, без полосы «новый прогон»
   K.top({ title: 'C14 · Статус дня', tag: 'что пришло, что отклонено, какие прогоны' });
   const server = K.source === 'real' || K.source === 'empty';
   const STATE = { ok: ['всё пришло', 'st-ok'], warn: ['есть замечания', 'st-warn'], bad: ['есть проблемы', 'st-bad'] };
@@ -66,7 +67,8 @@
   const FLAG = { no_positions: 'нет позиций', not_in_run: 'не в расчёте', rows_differ: 'строк не столько', unit_rejected: 'книга отклонена' };
   const view = document.getElementById('view'), daysEl = document.getElementById('days'), toastEl = document.getElementById('toast');
   const u = new URL(location.href);
-  let on = u.searchParams.get('on') || null, doc = null, lastId = null, fresh = new Set();
+  let on = u.searchParams.get('on') || null, doc = null, lastId = null, fresh = new Set(), liveMode = null;
+  const LIVE_NOTE = { sse: 'обновляется сразу', poll: 'обновляется раз в 30 с', null: 'подключение к ленте…' };
 
   const time = s => s ? new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
   const hm = s => s ? new Date(s).toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' }) : '';
@@ -87,7 +89,7 @@
     if (!server) { doc = DEMO.day; render(); renderDays(DEMO.days); return Promise.resolve(); }
     const strip = getJSON('api/v1/inbox/days?n=45').then(ds => ds.days).catch(() => []);
     return Promise.all([getJSON('api/v1/inbox' + (on ? '?on=' + on : '')), strip]).then(([d, ds]) => {
-      doc = d; on = d.date; if (lastId == null) lastId = d.last_event_id == null ? 0 : d.last_event_id; render(); renderDays(ds);
+      doc = d; on = d.date; if (lastId == null) { lastId = d.last_event_id == null ? 0 : d.last_event_id; live(); } render(); renderDays(ds);
     }).catch(e => {
       if (e.forbidden) return msg('Нужно войти в монитор: статус дня открыт всем пользователям.');
       msg('Не удалось загрузить статус дня' + (on ? ' за ' + esc(on) : '') + ': ' + esc(e.message) + '. Выберите другую дату.');
@@ -196,7 +198,7 @@
     left.appendChild(bp);
 
     // лента событий даты
-    const ep = panel('События даты', server ? '<span class="k-note" id="live">обновляется раз в 30 с</span>' : '<span class="k-note">демо</span>');
+    const ep = panel('События даты', server ? '<span class="k-note" id="live">' + LIVE_NOTE[liveMode] + '</span>' : '<span class="k-note">демо</span>');
     ep.querySelector('.bd').classList.add('flush');
     ep.querySelector('.bd').innerHTML = '<div class="c14-ev" id="ev"></div>';
     two.appendChild(ep);
@@ -209,7 +211,7 @@
     el.innerHTML = E.length ? E.map(e => '<div class="e lv-' + e.level + (fresh.has(e.id) ? ' new' : '') + '"><span class="dot" title="' + esc(e.type) + '"></span><span class="mut mono" style="font-size:11.5px">' + time(e.at).replace(', ', ' ') + '</span><span>' + esc(e.text) + '</span></div>').join('') : '<div class="k-empty">Событий за дату нет</div>';
   }
 
-  // ---------- уведомления: новые события (опрос; SSE — #28) ----------
+  // ---------- уведомления: новые события (lib/live.js: SSE, иначе опрос) ----------
   function toast(e) {
     const t = K.h('div'); t.style.setProperty('--c', e.level === 'error' ? 'var(--neg)' : e.level === 'warn' ? 'var(--warn)' : 'var(--accent)');
     t.textContent = e.text; t.title = 'Открыть дату'; t.onclick = () => { t.remove(); if (e.valid_date) pick(e.valid_date); };
@@ -221,11 +223,10 @@
     list.forEach(e => { if (e.level !== 'info' || (e.type === 'run.published' && (e.detail || {}).run_type !== 'INTRADAY')) toast(e); });
     if (list.some(e => e.valid_date === on)) { list.forEach(e => fresh.add(e.id)); load(); }
   }
-  function poll() {
-    if (document.hidden || lastId == null) return;
-    getJSON('api/v1/events?after=' + lastId + '&limit=200').then(j => onEvents(j.events)).catch(() => { });
+  function live() {  // один раз, когда известен курсор (last_event_id первого ответа)
+    if (!server || !LIVE) return;
+    LIVE.subscribe({ after: lastId, onEvents, onMode: m => { liveMode = m; const n = document.getElementById('live'); if (n) n.textContent = LIVE_NOTE[m]; } });
   }
-  if (server) setInterval(poll, 30e3);
 
   // ---------- демо-набор (файл или ?demo=1): вымышленный, форма ответа /api/v1/inbox ----------
   const DEMO = (function () {

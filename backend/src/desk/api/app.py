@@ -825,6 +825,9 @@ def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir:
     server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, access_log=False, loop=server_loop(),
                                            ssl_certfile=str(tls[0]) if tls else None,
                                            ssl_keyfile=str(tls[1]) if tls else None))
+    # the event stream (/api/v1/events/stream, #28) ends its responses when the server exits: uvicorn waits for
+    # open responses on shutdown, and an endless one would hold a restart
+    app.state.stopping = lambda: server.should_exit
     restart = restart_code()
     asked: list[bool] = []
 

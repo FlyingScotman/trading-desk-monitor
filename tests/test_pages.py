@@ -39,12 +39,15 @@ class Pages(unittest.TestCase):
             self.assertLess(src.index("lib/kit.js"), src.index("lib/instr.js"), f.name)
 
     def test_day_status_polls_the_feed_from_an_empty_store(self):
-        # C14 (#25): на свежей базе событий нет (last_event_id = null); курсор ленты тогда 0, иначе опрос
-        # /api/v1/events?after= не начнётся и уведомления о первых событиях не придут
+        # C14 (#25): на свежей базе событий нет (last_event_id = null); курсор ленты тогда 0, иначе подписка
+        # (lib/live.js, #28: SSE /api/v1/events/stream?after=, запасной опрос /api/v1/events?after=) не начнётся и
+        # уведомления о первых событиях не придут
         src = (PROTO / "concepts" / "c14-day-status.html").read_text(encoding="utf-8")
-        self.assertIn("lastId = d.last_event_id == null ? 0 : d.last_event_id", src)
-        self.assertRegex(src, r"function poll\(\) \{\s*if \(document\.hidden \|\| lastId == null\) return;")
-        self.assertIn("'api/v1/events?after=' + lastId", src)
+        self.assertIn("lastId = d.last_event_id == null ? 0 : d.last_event_id; live();", src)
+        self.assertIn("LIVE.subscribe({ after: lastId, onEvents", src)
+        live = (PROTO / "concepts" / "lib" / "live.js").read_text(encoding="utf-8")
+        self.assertIn("'api/v1/events/stream?after=' + cursor", live)
+        self.assertIn("'api/v1/events?after=' + cursor", live)
 
     def test_monitor_tables_sort_groups_like_ordinary_fields(self):
         # R31: группы таблиц (валюта → эмитент…) сортируются щелчком по столбцу, как обычные поля, — общим правилом
