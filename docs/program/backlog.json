@@ -1,15 +1,18 @@
 {
+  "frozen": "Frozen 23.10.2026 / заморожено. Work is tracked in GitHub Issues: root https://github.com/FlyingScotman/trading-desk-monitor/issues/5, rules in AGENTS.md. Open tasks moved to the issues listed in each task's 'issues'; their state at the freeze is kept in 'status_at_freeze'. AGENT-01 and AGENT-02 are not planned (ADR-001). Do not add or update tasks here; the file stays as history and the source of the stable IDs (backlog: <ID>).",
   "schema_version": "1.0",
   "plan_revision": "0.3",
   "as_of": "2026-10-22",
   "baseline_commit": "a6ba30bf5573ada869a9594c3e69f73faf741ed2",
-  "state_authority": "backlog.json",
+  "state_authority": "GitHub Issues",
   "status_values": [
     "todo",
     "in_progress",
     "review",
     "done",
-    "blocked"
+    "blocked",
+    "moved_to_issues",
+    "not_planned"
   ],
   "tasks": [
     {
@@ -170,7 +173,7 @@
       "title": "Resolve initial financial conventions and tolerances",
       "phase": 1,
       "owner_role": "desk_owner_with_quant_reviewer",
-      "status": "in_progress",
+      "status": "moved_to_issues",
       "depends_on": [
         "AUDIT-01",
         "DESIGN-01"
@@ -202,7 +205,16 @@
         "Open: DEC01, DEC02, DEC05-DEC08, DEC10-DEC12 and the open questions OQ-01..OQ-04 in DECISIONS.md"
       ],
       "reviewer": null,
-      "blocking_reason": null
+      "blocking_reason": null,
+      "status_at_freeze": "in_progress",
+      "issues": [
+        "FlyingScotman/trading-desk-monitor#16",
+        "FlyingScotman/trading-desk-monitor#53",
+        "FlyingScotman/trading-desk-monitor#91",
+        "FlyingScotman/trading-desk-monitor#64",
+        "FlyingScotman/trading-desk-monitor#60",
+        "FlyingScotman/trading-desk-monitor#50"
+      ]
     },
     {
       "id": "INFRA-01",
@@ -628,7 +640,7 @@
       "title": "Implement organizational funding FX OCP HTM and official PnL",
       "phase": 5,
       "owner_role": "desk_implementer",
-      "status": "in_progress",
+      "status": "moved_to_issues",
       "depends_on": [
         "DESK-02",
         "METHOD-01"
@@ -664,14 +676,24 @@
         "Plan: docs/architecture/ROADMAP.md §0, firm-specific steps 1 (funding), 3 (OCP), 4 (cash), then official PnL; wave B after wave A"
       ],
       "reviewer": null,
-      "blocking_reason": null
+      "blocking_reason": null,
+      "status_at_freeze": "in_progress",
+      "issues": [
+        "FlyingScotman/trading-desk-monitor#6",
+        "FlyingScotman/trading-desk-monitor#8",
+        "FlyingScotman/trading-desk-monitor#9",
+        "FlyingScotman/trading-desk-monitor#10",
+        "FlyingScotman/trading-desk-monitor#52",
+        "FlyingScotman/trading-desk-monitor#54",
+        "FlyingScotman/trading-desk-monitor#167"
+      ]
     },
     {
       "id": "SCEN-01",
       "title": "Implement local exact scenarios and tested carry approximations",
       "phase": 5,
       "owner_role": "desk_implementer_with_quant_reviewer",
-      "status": "in_progress",
+      "status": "moved_to_issues",
       "depends_on": [
         "DESK-03",
         "CORE-02"
@@ -699,14 +721,22 @@
         "Open: job cancellation and timeouts, historical scenarios, T3 presets, worker outside the API process"
       ],
       "reviewer": null,
-      "blocking_reason": null
+      "blocking_reason": null,
+      "status_at_freeze": "in_progress",
+      "issues": [
+        "FlyingScotman/trading-desk-monitor#14",
+        "FlyingScotman/trading-desk-monitor#68",
+        "FlyingScotman/trading-desk-monitor#69",
+        "FlyingScotman/trading-desk-monitor#70",
+        "FlyingScotman/trading-desk-monitor#71"
+      ]
     },
     {
       "id": "UI-01",
       "title": "Reconcile all four screens with the new backend",
       "phase": 5,
       "owner_role": "frontend_implementer",
-      "status": "in_progress",
+      "status": "moved_to_issues",
       "depends_on": [
         "DESK-03",
         "SCEN-01"
@@ -732,14 +762,22 @@
         "Open: funding, OCP and official PnL displays (DESK-03), currency x instrument type table (UI-02)"
       ],
       "reviewer": null,
-      "blocking_reason": null
+      "blocking_reason": null,
+      "status_at_freeze": "in_progress",
+      "issues": [
+        "FlyingScotman/trading-desk-monitor#51",
+        "FlyingScotman/trading-desk-monitor#59",
+        "FlyingScotman/trading-desk-monitor#106",
+        "FlyingScotman/trading-desk-monitor#107",
+        "FlyingScotman/trading-desk-monitor#168"
+      ]
     },
     {
       "id": "UI-02",
       "title": "Aggregated risk table: currency × instrument type",
       "phase": 5,
       "owner_role": "frontend_implementer",
-      "status": "review",
+      "status": "moved_to_issues",
       "depends_on": [],
       "requirement_ids": [
         "S10",
@@ -761,14 +799,19 @@
         "C01 Кокпит, tab «Валюта × тип» (prototypes/concepts/lib/instr.js, mirrored by backend api/concepts.instr_kind / risk_table, GET /api/v1/runs/{id}/risk-table, aggregates dim instr_kind); tests backend/tests/test_risk_table.py, tests/js/ccy_kind.test.js. Owner decisions open: the currency attribution of CCS / FX forwards / FX futures (default 'legs', provisional) and what counts as a USD sovereign."
       ],
       "reviewer": null,
-      "blocking_reason": null
+      "blocking_reason": null,
+      "status_at_freeze": "review",
+      "issues": [
+        "FlyingScotman/trading-desk-monitor#92",
+        "FlyingScotman/trading-desk-monitor#88"
+      ]
     },
     {
       "id": "OPS-01",
       "title": "Deploy reproducibly and prove backup restore and rollback",
       "phase": 5,
       "owner_role": "deployment_operator",
-      "status": "in_progress",
+      "status": "moved_to_issues",
       "depends_on": [
         "INFRA-01",
         "R0-01"
@@ -793,14 +836,22 @@
         "Open in market-data-hub ROADMAP.md: WEB-6 (off-host backups and restore proof), WEB-10 (isolated install/rollback rehearsal)"
       ],
       "reviewer": null,
-      "blocking_reason": null
+      "blocking_reason": null,
+      "status_at_freeze": "in_progress",
+      "issues": [
+        "FlyingScotman/market-data-hub#32",
+        "FlyingScotman/market-data-hub#13",
+        "FlyingScotman/market-data-hub#63",
+        "FlyingScotman/market-data-hub#85",
+        "FlyingScotman/market-data-hub#62"
+      ]
     },
     {
       "id": "AGENT-01",
       "title": "Install Hermes with enforced production boundaries",
       "phase": 5,
       "owner_role": "deployment_operator",
-      "status": "blocked",
+      "status": "not_planned",
       "depends_on": [
         "INFRA-01",
         "OPS-01"
@@ -821,14 +872,16 @@
       ],
       "evidence": [],
       "reviewer": null,
-      "blocking_reason": "Obsolete: superseded by ADR-001 (16 October 2026), no Hermes runtime in the system. Kept for traceability; not planned."
+      "blocking_reason": "Obsolete: superseded by ADR-001 (16 October 2026), no Hermes runtime in the system. Kept for traceability; not planned.",
+      "status_at_freeze": "blocked",
+      "issues": []
     },
     {
       "id": "AGENT-02",
       "title": "Enable bounded public-data exception workflows",
       "phase": 6,
       "owner_role": "agent_workflow_implementer",
-      "status": "blocked",
+      "status": "not_planned",
       "depends_on": [
         "AGENT-01",
         "DATA-01",
@@ -852,14 +905,16 @@
       ],
       "evidence": [],
       "reviewer": null,
-      "blocking_reason": "Obsolete: superseded by ADR-001 (16 October 2026), no Hermes runtime in the system. Kept for traceability; not planned."
+      "blocking_reason": "Obsolete: superseded by ADR-001 (16 October 2026), no Hermes runtime in the system. Kept for traceability; not planned.",
+      "status_at_freeze": "blocked",
+      "issues": []
     },
     {
       "id": "QA-01",
       "title": "Produce and verify the Windows release candidate",
       "phase": 6,
       "owner_role": "independent_reviewer",
-      "status": "review",
+      "status": "moved_to_issues",
       "depends_on": [
         "UI-01",
         "OPS-01",
@@ -887,14 +942,19 @@
         "Waiting for the owner's acceptance (docs/program/OWNER_REQUESTS.md, requests in review)"
       ],
       "reviewer": null,
-      "blocking_reason": null
+      "blocking_reason": null,
+      "status_at_freeze": "review",
+      "issues": [
+        "FlyingScotman/trading-desk-monitor#15",
+        "FlyingScotman/trading-desk-monitor#88"
+      ]
     },
     {
       "id": "PILOT-01",
       "title": "Validate the selected book inside the organization",
       "phase": 7,
       "owner_role": "desk_owner_or_internal_operator",
-      "status": "in_progress",
+      "status": "moved_to_issues",
       "depends_on": [
         "QA-01"
       ],
@@ -919,14 +979,18 @@
         "Comparison with trusted internal sources needs the official PnL (ROADMAP M5)"
       ],
       "reviewer": null,
-      "blocking_reason": null
+      "blocking_reason": null,
+      "status_at_freeze": "in_progress",
+      "issues": [
+        "FlyingScotman/trading-desk-monitor#89"
+      ]
     },
     {
       "id": "RELEASE-01",
       "title": "Release R1 and hand over operations",
       "phase": 8,
       "owner_role": "coordinator_with_deployment_operator",
-      "status": "todo",
+      "status": "moved_to_issues",
       "depends_on": [
         "PILOT-01",
         "AGENT-02"
@@ -945,14 +1009,18 @@
       ],
       "evidence": [],
       "reviewer": null,
-      "blocking_reason": null
+      "blocking_reason": null,
+      "status_at_freeze": "todo",
+      "issues": [
+        "FlyingScotman/trading-desk-monitor#90"
+      ]
     },
     {
       "id": "ACCEPT-01",
       "title": "Close remaining contract 1.3 scope and traceability",
       "phase": 9,
       "owner_role": "coordinator_with_independent_reviewer",
-      "status": "todo",
+      "status": "moved_to_issues",
       "depends_on": [
         "RELEASE-01",
         "CORE-03",
@@ -973,7 +1041,11 @@
       ],
       "evidence": [],
       "reviewer": null,
-      "blocking_reason": null
+      "blocking_reason": null,
+      "status_at_freeze": "todo",
+      "issues": [
+        "FlyingScotman/trading-desk-monitor#90"
+      ]
     }
   ]
 }
