@@ -880,7 +880,20 @@
     if (/^\+?\d[\d,]*(?:\.\d+)?%?$/.test(t)) return 'k-accp';
     return '';
   };
-  const accMark = e => { const c = K.accClass(e.textContent); e.classList.toggle('k-accn', c === 'k-accn'); e.classList.toggle('k-accp', c === 'k-accp' && e.tagName === 'TD'); };
+  // смысловой цвет страницы важнее бухгалтерского красного (#103): классы знака и изменения (pos, neg, chg-up,
+  // chg-dn — у доходности рост красный, падение зелёное) и фон тепловой карты (K.heat в style) — у самого элемента
+  // или у его ячейки; такая цифра остаётся в скобках, но красной не становится
+  K.ACC_KEEP = ['pos', 'neg', 'chg-up', 'chg-dn'];
+  K.accKeep = e => {
+    for (let x = e, i = 0; x && i < 4; x = x.parentElement, i++) {
+      if (x.classList && K.ACC_KEEP.some(c => x.classList.contains(c))) return true;
+      const st = x.getAttribute && x.getAttribute('style');
+      if (st && /(^|;)\s*(background|color)\s*:/.test(st)) return true;
+      if (x.tagName === 'TD' || x.tagName === 'TH') break;
+    }
+    return false;
+  };
+  const accMark = e => { const c = K.accClass(e.textContent); e.classList.toggle('k-accn', c === 'k-accn' && !K.accKeep(e)); e.classList.toggle('k-accp', c === 'k-accp' && e.tagName === 'TD'); };
   K.accMarkAll = root => { const r = root || document; if (r.matches && r.matches(K.ACC_SEL)) accMark(r); if (r.querySelectorAll) r.querySelectorAll(K.ACC_SEL).forEach(accMark); };
   if (typeof MutationObserver === 'function' && typeof requestAnimationFrame === 'function') {
     // разметку меняют страницы и компоненты: новые узлы и узлы с изменённым текстом размечаются в следующем кадре
@@ -1202,6 +1215,7 @@
     const api = { redraw: draw, state: st, csv, csvName, setSort: s => { st.sort = s; draw(); }, setFilter: (k, v) => { st.filters[k] = v; draw(); }, setGrouped: g => { st.grouped = !!g; draw(); }, el,
       viewKey: vkey, layout: () => JSON.parse(JSON.stringify(lay)), setLayout: v => { lay = K.viewLayout(v, colKeys()); saveLay(); draw(); }, resetView: () => resetBtn.onclick() };
     if (opts.autoFilter !== false && !opts.rows) K.live(el, 'filter', draw);
+    else K.live(el, 'numfmt', draw);  // формат отрицательных чисел (#153): таблица без перерисовки по фильтру
     return api;
   };
 
@@ -1397,7 +1411,7 @@
       const i = at[(ps[0] || {}).axisValue]; if (i == null) return '';
       const q = H.qty && H.qty[i], q0 = H.qty && i > 0 ? H.qty[i - 1] : null, pt = P[i];
       return '<b>' + esc(f.date(xs[i])) + '</b><br>' + esc(name) + ': <b>' + fmt(pt && (pt.k === 'gap' || pt.k === 'unvalued' || pt.k === 'before') ? null : V[i]) + '</b>' +
-        (q != null ? '<br><span style="opacity:.75">бумаг: ' + f.n(q) + (q0 != null && Math.abs(q - q0) > 1e-6 ? ' (' + f.s(q - q0) + ' к ' + esc(f.date(xs[i - 1])) + ')' : '') + '</span>' : '') +
+        (q != null ? '<br><span style="opacity:.75">бумаг: ' + f.n(q) + (q0 != null && Math.abs(q - q0) > 1e-6 ? ' · ' + f.s(q - q0) + ' к ' + esc(f.date(xs[i - 1])) : '') + '</span>' : '') +
         (pt && pt.k !== 'before' ? '<br><span style="color:' + warn + '">' + esc(PT_LABEL[pt.k]) + ': ' + esc(pt.t) + '</span>' : '');
     } };
     // покрытие ряда: с первой точки, где позиция есть
