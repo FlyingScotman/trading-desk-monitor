@@ -14,10 +14,11 @@ row per derivative position:
 - ``neither``: not valued by core and no PV in the report.
 
 ``used`` says which value the run publishes: today core's whenever it values the row, the report's otherwise
-(``valuation.positions``); a per-product switch comes with the products (TDM#45). ``product`` (also the key of
-``by_product``) is one scheme for all rows: core's product of a valued row (``fx_forward``, ``fx_swap``, ``fx_ndf``,
-``fx_cross``, ``fx_future``, several joined by ``+``); for a row core did not value, the same names from its linked
-trade terms, else ``<asset_class>_other`` in lower case (``fx_other``, ``otc_other``; ``other`` without a class). A
+(``valuation.positions``), for every product (TDM#45: interest rate swaps and REPO too; a CCS stays the report's,
+reason ``ccs_unsupported``). ``product`` (also the key of ``by_product``) is one scheme for all rows: core's product of
+a valued row (``fx_forward``, ``fx_swap``, ``fx_ndf``, ``fx_cross``, ``fx_future``, ``irs``, ``ois``, ``repo``, several
+joined by ``+``); for a row core did not value, the same names from its linked trade terms (``ccs`` too), else
+``<asset_class>_other`` in lower case (``fx_other``, ``otc_other``; ``other`` without a class). A
 difference is ``over`` the tolerance when it exceeds the larger of ``abs_rub`` and ``rel`` x |imported|; the
 tolerance is provisional (a setting once the owner fixes it). The block holds the run's own numbers only, like
 ``run_position``.
@@ -52,7 +53,10 @@ def _sums() -> dict[str, Any]:
 
 
 def _terms_product(t: dict[str, Any]) -> str:
-    """Core's product name of a trade_terms row (``valuation.derivatives``: NDF, swap leg, outright)."""
+    """Core's product name of a trade_terms row (``valuation.derivatives``: NDF, swap leg, outright; an interest rate
+    swap, a CCS, a REPO by its ``product_kind``)."""
+    if t.get("product_kind") in ("irs", "ois", "ccs", "repo"):
+        return str(t["product_kind"])
     if t.get("ndf"):
         return "fx_ndf"
     return "fx_swap" if t.get("product_kind") == "fx_swap" or t.get("leg_id") else "fx_forward"

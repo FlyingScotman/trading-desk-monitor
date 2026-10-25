@@ -114,6 +114,9 @@ class EodContext:
     and the curve is rebootstrapped, the unit of the KBD's par buckets (``rub_ofz_kbd_v3``). ``core_market`` keeps the
     built curves (the curve chart, the flash PnL, the FX curves); ``risk_market`` swaps these in for the core calls
     that publish risk. Until 0.2.6 RUONIA's buckets moved its continuous zero rate (R30), about 14 % more DV01."""
+    swap_curves: tuple[CurveEntry, ...] = ()
+    """Curves only a derivative reads, kept out of ``core_market`` so the bonds' inputs stay as they are: the key-rate
+    forward curve (``rates.KEY_RATE_SWAP_CURVE_ID``, ``rub_key_rate_swap_v1``) a key-rate swap projects on."""
 
     @property
     def reference_facts(self) -> Reference:
@@ -193,7 +196,7 @@ def new_cache() -> ShockedCurveCache:
 
 
 def with_rates(market: MarketView, static: StaticView, core: MarketSnapshot
-               ) -> tuple[MarketSnapshot, dict[str, Any], tuple[CurveEntry, ...]]:
+               ) -> tuple[MarketSnapshot, dict[str, Any], tuple[CurveEntry, ...], tuple[CurveEntry, ...]]:
     """``core`` plus the RUONIA OIS curve (built once), the key-rate projection off it and the RUONIA and
     key-rate fixings. An input that cannot be built is left out with its error in the lineage: the floaters
     that need it are then rejected by core with the reason, the rest of the book is unaffected.
@@ -203,8 +206,9 @@ def with_rates(market: MarketView, static: StaticView, core: MarketSnapshot
     built; ``no_discount``: the key-rate curve needs the RUONIA OIS curve), ``codes`` for the run log and the pages
     (``rates.input_notes``) and ``coverage``, the hub's own list of the present and missing quote-set series.
     ``curve_error`` keeps the first error message (the RUONIA one, else the key-rate one). The third element: the
-    RUONIA OIS curve as its bootstrap request (``EodContext.quote_curves``), empty without it."""
-    curves, lineage, fixings = list(core.curves), {}, ()
+    RUONIA OIS curve as its bootstrap request (``EodContext.quote_curves``), empty without it; the fourth: the key-rate
+    forward curve for key-rate swaps (``EodContext.swap_curves``), empty without the key-rate curve."""
+    curves, lineage, fixings, swap_curves = list(core.curves), {}, (), ()
     status: dict[str, str] = {}
     lineage["coverage"] = rates.quote_set_coverage(market.snapshot)
     ois = None
@@ -222,6 +226,7 @@ def with_rates(market: MarketView, static: StaticView, core: MarketSnapshot
         try:
             kr = rates.key_rate_projection(market.snapshot, static.snapshot, ois.curve)
             curves.append(kr.entry)
+            swap_curves = (kr.swap_entry,) if kr.swap_entry is not None else ()
             lineage["key_rate"] = {k: v for k, v in kr.lineage.items() if k != "segments"}
             status["key_rate_swap"] = "ok"
         except (rates.RatesInputError, SnapshotError, CoreRejection, ValueError) as e:
@@ -236,7 +241,8 @@ def with_rates(market: MarketView, static: StaticView, core: MarketSnapshot
         status["fixings"] = "error"
     lineage["status"] = status
     lineage["codes"] = rates.input_codes(status)
-    return replace(core, curves=tuple(curves), fixings=fixings), lineage, (ois.entry,) if ois else ()
+    return (replace(core, curves=tuple(curves), fixings=fixings), lineage, (ois.entry,) if ois else (),
+            swap_curves)
 
 
 def market_rates(market: MarketView) -> dict[str, tuple[float, str] | None]:
@@ -261,7 +267,7 @@ def prepare(snapshots: SnapshotDir, business_date: str, cut_type: str = "eod_fin
     market = MarketView(snap)
     assert snap.static_snapshot_id
     static = StaticView(snapshots.get(snap.static_snapshot_id))
-    core_market, rates_lineage, quote_curves = with_rates(market, static, market.core_market(static))
+    core_market, rates_lineage, quote_curves, swap_curves = with_rates(market, static, market.core_market(static))
     fx_options = fx_options or fxcurves.FxOptions()
     core_market, fx_market = fxcurves.with_fx(market, static, core_market, market_rates(market), fx_options)
     params = market.zcyc_parameters()
@@ -273,7 +279,7 @@ def prepare(snapshots: SnapshotDir, business_date: str, cut_type: str = "eod_fin
     kbd = kbd_discount_curve(params, zero_shock="annual_par")
     return EodContext(snapshots, market, static, params, kbd, core_market, cal, (vf, vt),
                       check, new_cache(), rates_lineage, fx=fx_market, fx_options=fx_options,
-                      quote_curves=quote_curves)
+                      quote_curves=quote_curves, swap_curves=swap_curves)
 
 
 def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: bool = False,
