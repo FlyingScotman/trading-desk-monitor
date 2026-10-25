@@ -123,14 +123,20 @@ t('#131 + #153: CSV ручной таблицы — отрицательные �
   const { K } = load(new Map());
   const neg = (fm, x) => fm === 'acc' ? '(' + x + ')' : '−' + x;
   const rows = fm => [[{ h: neg(fm, '1,234.5'), cls: 'n' }, { h: neg(fm, '4.44%'), cls: 'n' }, { h: neg(fm, '1.50 bn'), cls: 'n' },
-    { h: '<span class="dr">' + neg(fm, '7') + '</span>', cls: 'n' }, { h: '2.5', cls: 'n' }, '(3 поз.)', 'fwd ' + neg(fm, '16.3') + ', ставки ' + neg(fm, '1.6') + ' (2029)', { h: '94.58 ' + neg(fm, '0.12%'), cls: 'n' },
+    { h: '<span class="dr">' + neg(fm, '7') + '</span>', cls: 'n' }, { h: '2.5', cls: 'n' }, '(3 поз.)', 'fwd <span class="k-num' + (fm === 'acc' ? ' k-accn' : '') + '">' + neg(fm, '16.3') + '</span>, 98.399 (0.28) (2029)', { h: '94.58 ' + neg(fm, '0.12%'), cls: 'n' },
     { h: neg(fm, '1,500.00') + '<span class="mut3">mm RUB</span>', cls: 'n' }, { h: neg(fm, '2,010') + '<small>+5бп</small>', cls: 'n' },
     { h: '124<small>' + neg(fm, '1') + 'бп</small>', cls: 'n' }, { h: '·<small>' + neg(fm, '3') + 'бп</small>', cls: 'n' }]];
   // таблица нарисована в текущем режиме: K.negFmt тот же, что при отрисовке; C03 «Номинал» и C10 «кривая × бакет» —
   // число со склеенной единицей
   const csvOf = fm => { K.negFmt = fm; return K.tableCsv(table({ head: [['a', 'b', 'c', 'd', 'e', 'f', 'f2', 'g', 'h', 'i', 'j', 'k']], body: rows(fm) }), {}).split('\r\n')[3]; };
-  assert.strictEqual(csvOf('acc'), '-1234.5,-4.44%,"=""-1.50 bn""",-7,2.5,(3 поз.),"fwd -16.3, ставки -1.6 (2029)",94.58 -0.12%,"=""-1,500.00mm RUB""","=""-2,010+5бп""",124-1бп,·-3бп');
+  assert.strictEqual(csvOf('acc'), '-1234.5,-4.44%,"=""-1.50 bn""",-7,2.5,(3 поз.),"fwd -16.3, 98.399 (0.28) (2029)",94.58 -0.12%,"=""-1,500.00mm RUB""","=""-2,010+5бп""",124-1бп,·-3бп');
   assert.strictEqual(csvOf('minus'), csvOf('acc'), 'одинаково в обоих режимах');
+  // текст без метки k-accn — как есть в обоих режимах: скобки там поставил не формат отрицательных (Bid/Ask «98.399 (0.28)»,
+  // пояснение без разметки числа)
+  for (const fm of ['acc', 'minus']) {
+    K.negFmt = fm;
+    assert.strictEqual(K.tableCsv(table({ head: [['a', 'b']], body: [['98.399 (0.28)', 'ставки (1.6)']] }), {}).split('\r\n')[3], '98.399 (0.28),ставки (1.6)', fm);
+  }
   // в режиме «−1» скобки в числовой ячейке — не минус (их рисует не формат отрицательных)
   K.negFmt = 'minus';
   assert.strictEqual(K.tableCsv(table({ head: [['a']], body: [[{ h: '12 (3)', cls: 'n' }]] }), {}).split('\r\n')[3], '12 (3)');

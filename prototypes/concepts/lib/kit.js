@@ -909,7 +909,8 @@
   // это число: числовая ячейка td.n, кликабельная цифра .dr, значение плитки и поля карточки. Текст, который
   // начинается с числа в скобках, — отрицательное (k-accn, красным); числовая ячейка, в которой только
   // неотрицательное число, — k-accp: невидимая «)» после числа, цифры столбца стоят ровно под скобками
-  K.ACC_SEL = 'td.n, .dr, .k-kpi .v, .k-fields .v';
+  // .k-num — число форматтера внутри текста (пояснение «ставки (1.6)» на C05): так его знак виден и в CSV (K.tableCsv)
+  K.ACC_SEL = 'td.n, .dr, .k-kpi .v, .k-fields .v, .k-num';
   K.accClass = text => {
     if (K.negFmt !== 'acc') return '';
     const t = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
@@ -1306,6 +1307,7 @@
     const l = K.htmlText((th.innerHTML || '').replace(/<span class="k-thu">[\s\S]*?<\/span>/g, '')), u = m ? K.htmlText(m[1]) : '';
     return u && !l.includes(',') ? l + ', ' + u : l;
   };
+  K.accMarkedToMinus = html => String(html == null ? '' : html).replace(/(<[a-z]+\b[^>]*\bclass="[^"]*\bk-accn\b[^"]*"[^>]*>)\s*\((\d[\d,]*(?:\.\d+)?[^()<]*)\)/gi, '$1-$2');
   K.accToMinus = t => String(t).replace(/^\((\d[\d,]*(?:\.\d+)?[^()]*)\)$/, '-$1').replace(/\((\d[\d,]*(?:\.\d+)?%?)\)/g, '-$1');
   K.tableCsv = (table, opts) => {
     opts = opts || {};
@@ -1331,9 +1333,9 @@
       // страницы): в режиме «(1)» число в скобках в числовой ячейке — отрицательное, как его пишет режим «−1»:
       // «(1.50 bn)» → «-1.50 bn», «94.58 (0.12%)» → «94.58 -0.12%», «(1,500.00)mm RUB» → «-1,500.00mm RUB»,
       // «(2,010)+5бп» → «-2,010+5бп», «124(1)бп» → «124-1бп» (сдвиг кривой под цифрой); CSV одинаков в обоих режимах
-      // в тексте (пояснение «ставки (1.6)» на C05) — только дробное число или с разделителем тысяч: «(2029)», «(3 поз.)»
-      // остаются как есть
-      const t = K.negFmt !== 'acc' ? tx(c) : num ? K.accToMinus(tx(c)) : tx(c).replace(/\((\d{1,3}(?:,\d{3})*\.\d+%?|\d{1,3}(?:,\d{3})+%?)\)/g, '-$1');
+      // В текстовой ячейке скобки — минус только там, где их поставил формат отрицательных: в элементе с меткой k-accn
+      // (её ставит раскраска K.accMarkAll); «98.399 (0.28)», «(2029)», «(3 поз.)» без метки остаются как есть
+      const t = K.negFmt !== 'acc' ? tx(c) : num ? K.accToMinus(tx(c)) : K.htmlText(K.accMarkedToMinus(c.innerHTML));
       return d.date ? K.csvDateCell(d.date, t, num) : K.csvCell(t, num, d.v);
     };
     return K.csvBuild(K.u(K.csvTitle(opts)), head ? keep.map(i => K.csvLabel(K.u(head[i] || ''))) : null, body.map(r => keep.map(i => one(r[i])).join(',')));

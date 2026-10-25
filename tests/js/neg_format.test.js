@@ -116,7 +116,7 @@ t('красный и выравнивание — по тексту цифры (
   assert.strictEqual(K.accClass('(сд)'), '');
   assert.strictEqual(K.accClass('—'), '');
   assert.strictEqual(K.accClass(null), '');
-  assert.strictEqual(K.ACC_SEL, 'td.n, .dr, .k-kpi .v, .k-fields .v');
+  assert.strictEqual(K.ACC_SEL, 'td.n, .dr, .k-kpi .v, .k-fields .v, .k-num');
   K.setNegFmt('minus');
   assert.strictEqual(K.accClass('(1,234.5)'), '', 'формат «минус» — классы снимаются');
   assert.strictEqual(K.accClass('1'), '');
