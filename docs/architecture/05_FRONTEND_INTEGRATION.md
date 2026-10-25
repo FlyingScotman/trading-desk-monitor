@@ -40,6 +40,7 @@ REST JSON plus an event stream. The OpenAPI is generated from the backend (FastA
 | `/api/v1/export/{resource}` | GET (`format=csv\|xlsx`) | Exports stamped with `run_id`, cut and generation time |
 | `/api/v1/events` | GET (JSON pages since S7b; Server-Sent Events: #28) | The `event` table in `event_id` order: inbox status changes (`input.accepted`, `input.rejected`, `input.stale`, …, the dataset tells official PnL from positions), `run.published`, `run.failed`; later `job.progress`, `job.done`. `after` = the cursor (the SSE stream resumes from `Last-Event-ID` with it), `before`, `on`, `type` prefixes; each event has a `level` and a Russian `text` (`desk.daystatus`) |
 | `/api/v1/inbox`, `/api/v1/inbox/days` | GET (every user, viewers included: #25) | Day status (S7b): per date the inputs, hub closes, files with rejections and their reasons, runs and what superseded what, per book reconciliation; a line per date for the strip. The monitors' C14 |
+| `/api/v1/cash` | GET (every user, as the day status: #61) | Cash (B3, `desk.cash`): the `cash_balances` in force on `on` per (entity, book, currency) by ledger, with status `match` / `break` / `one_ledger` / `single`, accounts, a history over the last `days` dates with cash, a line per date for the strip. The monitors' C15 |
 | `/health/live`, `/health/ready` | GET | Liveness; readiness (database, latest snapshot age, worker alive) |
 
 Notes:
