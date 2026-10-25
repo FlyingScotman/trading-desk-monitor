@@ -184,7 +184,7 @@ tr.row.sel td { background: var(--accent-bg); }
           '<td class="n mut">' + K.d({ title: x.n.replace(/<[^>]+>/g, '').trim() + ' на ' + f.date(DATES[i0]), unit, fmt: fm, rows: atRows(L, x.fn, i0) }, null, '') + '</td>' +
           '<td class="n">' + K.d({ title: x.n.replace(/<[^>]+>/g, '').trim() + ' сегодня', unit, fmt: fm, rows: atRows(L, x.fn, LAST) }, null, '') + '</td>' +
           '<td class="n">' + (Math.abs(x.d) < 1 ? '<span class="mut3">·</span>' : K.d({ title: 'Δ ' + x.n.replace(/<[^>]+>/g, '').trim() + ' с ' + f.date(DATES[i0]), unit, fmt: fms, rows: L.map(p => ({ p, v: x.fn(p, LAST) - x.fn(p, i0) })) }, null, '')) + '</td>' +
-          '<td class="n mut">' + (pct == null || Math.abs(x.d) < 1 ? '' : f.s(pct, 0) + '%') + '</td><td>' + K.bar(x.d, mx) + '</td></tr>';
+          '<td class="n mut">' + (pct == null || Math.abs(x.d) < 1 ? '' : f.pcts(pct, 0)) + '</td><td>' + K.bar(x.d, mx) + '</td></tr>';
       });
     });
     bd.innerHTML = html + '</tbody></table>';
