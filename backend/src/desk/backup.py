@@ -151,11 +151,18 @@ def split_password(url: str) -> tuple[str, str | None]:
         user, _, pw = userinfo.partition(":")
         password = unquote(pw) or None
         netloc = f"{user}@{hostport}" if user else hostport
-    query = u.query
-    q = parse_qsl(u.query, keep_blank_values=True)
-    if any(k == "password" for k, _ in q):
-        password = [v for k, v in q if k == "password"][-1] or password
-        query = urlencode([(k, v) for k, v in q if k != "password"], safe="/:")
+    # the other parameters keep their encoding as written: libpq decodes %XX only, not "+" (urlencode would write a
+    # space as "+"), so the query is filtered segment by segment, not decoded and encoded again
+    keep, pw_params = [], []
+    for part in u.query.split("&") if u.query else []:
+        key, _, value = part.partition("=")
+        if unquote(key) == "password":
+            pw_params.append(unquote(value))
+        else:
+            keep.append(part)
+    query = "&".join(keep) if pw_params else u.query
+    if pw_params:
+        password = pw_params[-1] or password
     if netloc == u.netloc and query == u.query:
         return url, password
     return f"{u.scheme}://{netloc}{u.path}" + (f"?{query}" if query else "") + (f"#{u.fragment}" if u.fragment else ""), \

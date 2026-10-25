@@ -415,6 +415,9 @@ def test_split_password_takes_the_password_out_of_the_url():
     assert backup.split_password("postgresql://u:p%40ss@h:5432/desk") == ("postgresql://u@h:5432/desk", "p@ss")
     assert backup.split_password("postgresql://u@h/desk?password=pw&sslmode=require") == \
         ("postgresql://u@h/desk?sslmode=require", "pw")
+    # the other parameters keep their encoding: libpq decodes %20, not "+" (PR #179 review); "+" is no space
+    assert backup.split_password("postgresql://u@h/desk?password=p%2Bw+x&options=-c%20search_path%3Ddesk") == \
+        ("postgresql://u@h/desk?options=-c%20search_path%3Ddesk", "p+w+x")
     assert backup.split_password("postgresql://:pw@h/desk") == ("postgresql://h/desk", "pw")
     assert backup.split_password("postgresql://postgres:@/desk?host=/tmp/x") == \
         ("postgresql://postgres@/desk?host=/tmp/x", None)
