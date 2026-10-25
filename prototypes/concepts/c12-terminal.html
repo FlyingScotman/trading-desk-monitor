@@ -199,11 +199,11 @@ body { font-family: var(--mono); font-size: 12.5px; }
     const g = {}; L.forEach(p => { const k = D[1](p); (g[k] = g[k] || []).push(p); });
     const keys = Object.keys(g).sort((a, b) => Math.abs(M.sum(g[b], cols[0].val)) - Math.abs(M.sum(g[a], cols[0].val)));
     const max = Math.max(1, ...keys.map(k => Math.abs(M.sum(g[k], cols[0].val))));
-    bd.innerHTML = '<table class="k-tbl"><thead><tr><th>' + D[0] + '</th><th class="n">поз</th>' + cols.map(c => '<th class="n">' + c.label + '</th>').join('') + '<th style="width:140px"></th></tr></thead><tbody>' +
+    bd.innerHTML = '<table class="k-tbl"><thead><tr><th>' + D[0] + '</th><th class="n">поз</th>' + cols.map(c => '<th class="n">' + c.label + (K.colUnit(c) ? '<span class="k-thu">' + esc(K.colUnit(c)) + '</span>' : '') + '</th>').join('') + '<th style="width:140px"></th></tr></thead><tbody>' +
       keys.map(k => '<tr><td>' + (dim === 'issuer' ? '<b style="color:' + K.issuerColor(g[k][0].issuer) + '">●</b> ' : dim === 'ccy' ? K.ccyTag(k) + ' ' : '') + esc(dim === 'ccy' ? '' : k) + '</td><td class="n mut">' + g[k].length + '</td>' +
-        cols.map(c => '<td class="n">' + K.d({ title: c.label + ' · ' + k, unit: c.unit, fmt: c.fmt, list: g[k], val: c.val }, null, c.neutral ? '' : undefined) + '</td>').join('') +
+        cols.map(c => '<td class="n">' + K.d({ title: c.label.replace(/, .*$/, '') + ' · ' + k, unit: c.unit, fmt: c.fmt, list: g[k], val: c.val }, null, c.neutral ? '' : undefined) + '</td>').join('') +
         '<td>' + K.bar(M.sum(g[k], cols[0].val), max) + '</td></tr>').join('') +
-      '</tbody><tfoot><tr><td>Итого</td><td class="n">' + L.length + '</td>' + cols.map(c => '<td class="n">' + K.d({ title: c.label + ' · всего', unit: c.unit, fmt: c.fmt, list: L, val: c.val }, null, c.neutral ? '' : undefined) + '</td>').join('') + '<td></td></tr></tfoot></table>';
+      '</tbody><tfoot><tr><td>Итого</td><td class="n">' + L.length + '</td>' + cols.map(c => '<td class="n">' + K.d({ title: c.label.replace(/, .*$/, '') + ' · всего', unit: c.unit, fmt: c.fmt, list: L, val: c.val }, null, c.neutral ? '' : undefined) + '</td>').join('') + '<td></td></tr></tfoot></table>';
   }
   const RISK_COLS = [
     { label: 'DV01', unit: 'тыс ₽/бп', val: 'dv01', neutral: 1 }, { label: 'RUONIA', unit: 'тыс ₽/бп', val: p => p.dv01ByCurve['RUB RUONIA'], neutral: 1 }, { label: 'КС', unit: 'тыс ₽/бп', val: p => p.dv01ByCurve['RUB KEY'], neutral: 1 },
@@ -329,7 +329,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
         const S = ids.map(ser);
         const row = K.h('div', 'row2'); bd.appendChild(row); const a = K.h('div'), b = K.h('div'); row.append(a, b);
         const c = K.chart(ch(a, 280), () => ({ grid: { left: 6, right: 6, top: 28, bottom: 4, containLabel: true }, legend: { top: 0 }, tooltip: { trigger: 'axis' },
-          xAxis: { type: 'category', data: M.buckets }, yAxis: [{ type: 'value', scale: true }, { type: 'value', splitLine: { show: false }, axisLabel: { formatter: v => f.n(v) + ' бп' } }],
+          xAxis: { type: 'category', data: M.buckets }, yAxis: [{ type: 'value', unit: S.every(s => s.unit === S[0].unit) ? (S[0].unit === 'бп' ? 'б.п.' : S[0].unit) : null, scale: true }, { type: 'value', splitLine: { show: false }, axisLabel: { formatter: v => f.n(v) + ' бп' } }],
           series: S.flatMap((s, i) => [
             { name: s.name, type: 'line', data: s.pts.map(v => +v.toFixed(3)), symbolSize: 5, color: K.curveColors[s.risk] || K.PAL[i] },
             { name: s.name + ' вчера', type: 'line', data: s.pts.map((v, k) => +(v - s.chg[k] / (s.unit === 'бп' ? 1 : 100)).toFixed(3)), showSymbol: false, lineStyle: { type: 'dashed', width: 1 }, color: K.curveColors[s.risk] || K.PAL[i], opacity: .5 },

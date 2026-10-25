@@ -50,7 +50,14 @@ t('оси графиков: {unit} → подпись оси и место по�
   assert.strictEqual(o.xAxis.nameLocation, 'middle');
   assert.ok(!('unit' in o.yAxis[0]) && !('unit' in o.xAxis), 'unit — не опция echarts, убирается');
   assert.strictEqual(o.yAxis[1].name, undefined);
-  assert.strictEqual(o.grid.top, 42); assert.strictEqual(o.grid.bottom, 22);
+  assert.strictEqual(o.grid.top, 44); assert.strictEqual(o.grid.bottom, 22);
+  // легенда сверху — в одну строку (перенос наехал бы на подпись оси); подпись выше подписей столбцов — nameGap
+  const lg = { grid: { top: 18 }, legend: { top: 0, left: 0 }, yAxis: { type: 'value', unit: 'mm ₽', nameGap: 20 } };
+  K.axisUnits(lg);
+  assert.strictEqual(lg.legend.type, 'scroll');
+  assert.strictEqual(lg.yAxis.nameGap, 20); assert.strictEqual(lg.grid.top, 18 + 16 + 13);
+  const side = { legend: { orient: 'vertical', left: 0 }, yAxis: { type: 'value', unit: 'mm ₽' } }; K.axisUnits(side);
+  assert.strictEqual(side.legend.type, undefined, 'вертикальная легенда сбоку не меняется');
   assert.deepStrictEqual([grid.top, grid.bottom], [28, 4], 'общий объект сетки страницы не меняется');
   const p = { grid: { top: 10 }, yAxis: { type: 'value', name: 'своё', unit: 'mm ₽' } };
   K.axisUnits(p);
@@ -101,20 +108,35 @@ t('переключатель валюты отчёта объясняет, чт
   const { K } = load('USD');
   const txt = K.REPR_NOTE.map(x => x.join(' ')).join('\n');
   ['MV', 'DV01', 'PnL', 'кэрри', 'потоки'].forEach(w => assert.ok(txt.includes(w), w));
-  ['номинал', 'цены', 'доходности', 'курсы', 'bn RUB'].forEach(w => assert.ok(txt.includes(w), w));
+  ['номинал', 'цены', 'доходности', 'курсы', 'оборот рынка (mm RUB)', 'рублёвого рынка'].forEach(w => assert.ok(txt.includes(w), w));
   assert.ok(txt.includes('символ ($)'), 'символ текущей валюты отчёта');
   const src = P('lib/kit.js');
   assert.ok(src.includes("data-a=\"repr\" title=\"' + esc('Валюта отчёта.") && src.includes('k-repr-note'));
 });
 
-t('рублёвый рынок (календарь, обороты) — в RUB: в валюту отчёта не пересчитывается', () => {
+t('рублёвый рынок: суммы календаря пересчитаны в валюту отчёта — «bn ₽» (при USD «bn $»); оборот — в RUB', () => {
   const c08 = P('c08-calendar.html'), c09 = P('c09-market.html');
-  assert.ok(!/bn ₽/.test(c08), 'c08: рынок — bn RUB, не bn ₽');
-  assert.ok(c08.includes("unit = 'bn RUB'"));
+  assert.ok(c08.includes("unit = 'bn ₽'") && !/bn RUB/.test(c08), 'c08: рынок подписан символом валюты отчёта');
+  assert.strictEqual(load('USD').K.u('bn ₽'), 'bn $');
+  // календарь рынка (демо: lib/mock.js marketCal; прогон: lib/real.js RUB_K) — в валюте отчёта
+  const rub = load().M, usd = load('USD').M;
+  const a = rub.marketCal.rub[0], b = usd.marketCal.rub[0];
+  assert.ok(a.amount > 0 && Math.abs(b.amount - a.amount * usd.toRepr.RUB) < 1e-6 * a.amount, 'пересчитано: ' + a.amount + ' → ' + b.amount);
+  assert.ok(Math.abs(b.amount - a.amount) > 0.5 * a.amount, 'в USD сумма иная, чем в рублях');
+  assert.ok(/RUB_K = \(\) => \(M\.toRepr && M\.toRepr\.RUB\)/.test(P('lib/real.js')), 'прогон: тот же пересчёт');
+  // оборот рынка (C09) — не пересчитывается: «mm RUB»
   assert.ok(c09.includes("label: 'Оборот, mm RUB'"));
-  // и правда не пересчитывается: kit.js при смене валюты отчёта не трогает календарь рынка
-  const conv = P('lib/kit.js').match(/\(function convert\(k\) \{[\s\S]*?\}\)\(1 \/ M\.fx\[K\.repr\]\);/)[0];
-  assert.ok(!/marketCal|C\.rub/.test(conv));
+  assert.strictEqual(JSON.stringify(usd.marketMovers.map(x => x.vol)), JSON.stringify(rub.marketMovers.map(x => x.vol)));
+  assert.ok(!/\bvalue\b/.test(P('lib/kit.js').match(/\(function convert\(k\) \{[\s\S]*?\}\)\(1 \/ M\.fx\[K\.repr\]\);/)[0]), 'convert() не трогает оборот');
+});
+
+t('CSV: «₽» в заголовках и названии — символ валюты отчёта', () => {
+  const { K } = load('USD');
+  const api = K.table(el(), { rows: [{ id: 'a', x: 1, y: 2 }], search: false, viewKey: 'u105-usd', title: 'MV, mm ₽',
+    columns: [{ key: 'x', label: 'MV, mm ₽', num: true }, { key: 'y', label: 'DV01', num: true, unit: 'тыс ₽/бп' }] });
+  const L = api.csv().split('\r\n');
+  assert.ok(L[0].includes('"MV, mm $"'), L[0]);
+  assert.strictEqual(L[2], '"MV, mm $","DV01, тыс $/бп"');
 });
 
 console.log(n + ' tests passed');

@@ -61,8 +61,8 @@
   // что меняет валюта отчёта (#105): показывается в подсказке и в меню переключателя. Соглашение подписей: символ
   // валюты — валюта отчёта, сумма пересчитана; код (RUB, USD…) — своя валюта, не пересчитывается
   K.REPR_NOTE = [
-    ['пересчитываются по споту', 'MV, DV01, CS01, базис и спред к КБД, PnL (день, MTD, YTD), кэрри, потоки, фондирование, ≈ ОВП'],
-    ['в своей валюте', 'номинал бумаги (mm RUB, mm USD…), ОВП «mm в вал.», цены, доходности и спреды (%, б.п.), курсы, рублёвый рынок (bn RUB)'],
+    ['пересчитываются по споту', 'MV, DV01, CS01, базис и спред к КБД, PnL (день, MTD, YTD), кэрри, потоки, фондирование, ≈ ОВП, объёмы и выплаты рублёвого рынка'],
+    ['в своей валюте', 'номинал бумаги (mm RUB, mm USD…), ОВП «mm в вал.», оборот рынка (mm RUB), цены, доходности и спреды (%, б.п.), курсы'],
     ['подписи', 'символ (' + K.SYM[K.repr] + ') — валюта отчёта; код валюты (RUB, USD…) — своя валюта суммы'],
   ];
   K.setRepr = c => { try { localStorage.setItem('concepts-repr', c); } catch (e) { } location.reload(); };
@@ -713,18 +713,20 @@
   // график рисуется на canvas, подмена символа в разметке до него не доходит
   function axisUnits(o) {
     const arr = ax => (Array.isArray(ax) ? ax : [ax]).filter(Boolean);
-    let top = false, bottom = false;
+    let top = 0, bottom = false;
     arr(o.yAxis).forEach((x, i) => {
-      if (x.unit && !x.name) { x.name = K.u(x.unit); x.nameLocation = 'end'; x.nameGap = 7; x.nameTextStyle = Object.assign({ align: i ? 'right' : 'left', fontSize: 10, color: css('--fg-3') }, x.nameTextStyle); top = true; }
+      if (x.unit && !x.name) { x.name = K.u(x.unit); x.nameLocation = 'end'; if (x.nameGap == null) x.nameGap = 7; x.nameTextStyle = Object.assign({ align: i ? 'right' : 'left', fontSize: 10, color: css('--fg-3') }, x.nameTextStyle); top = Math.max(top, 16 + x.nameGap - 7); }
       delete x.unit;
     });
     arr(o.xAxis).forEach(x => {
       if (x.unit && !x.name && x.type === 'value') { x.name = K.u(x.unit); x.nameLocation = 'middle'; x.nameGap = 24; x.nameTextStyle = Object.assign({ fontSize: 10, color: css('--fg-3') }, x.nameTextStyle); bottom = true; }
       delete x.unit;
     });
+    // легенда сверху над подписью оси — в одну строку (прокрутка), иначе перенос легенды наезжает на подпись
+    if (top && o.legend && !Array.isArray(o.legend) && o.legend.orient !== 'vertical' && o.legend.bottom == null) o.legend = Object.assign({ type: 'scroll' }, o.legend);
     if (o.grid && !Array.isArray(o.grid)) {
       o.grid = Object.assign({}, o.grid);
-      if (top && typeof o.grid.top === 'number') o.grid.top += 14;
+      if (top && typeof o.grid.top === 'number') o.grid.top += top;
       if (bottom) o.grid.bottom = (typeof o.grid.bottom === 'number' ? o.grid.bottom : 0) + 18;
     }
   }
@@ -1231,10 +1233,11 @@
     const csvTitle = () => K.htmlText(opts.title || (typeof document.title === 'string' ? document.title : '') || 'таблица');
     function csv() {
       const C = cols().filter(c => K.htmlText(c.label)), R = K.csvRun(), q = K.csvLabel;  // без подписи — оформление (полоска доли)
-      const head = C.map(c => { const l = K.htmlText(c.label), u = K.colUnit(c); return q(u ? l + ', ' + u : l); });
+      // «₽» в подписи — валюта отчёта: в разметке символ подменяет MutationObserver, в CSV — K.u (#105)
+      const head = C.map(c => { const l = K.htmlText(c.label), u = K.colUnit(c); return q(K.u(u ? l + ', ' + u : l)); });
       // числа — с обычным минусом при любой настройке формата отрицательных (#153)
       const line = r => C.map(c => { const v = val(c, r); return K.csvCell(K.htmlText(K.withNegFmt('minus', () => c.fmt ? c.fmt(v, r) : v)), c.num, v); }).join(',');
-      return ['run_id,' + (/^\d+$/.test(R.run_id) ? R.run_id : q(R.run_id)) + ',as_of,' + (K.csvDate(R.as_of) || q(R.as_of)) + ',таблица,' + q(csvTitle()) + ',строк,' + shown.length, '', head.join(',')]
+      return ['run_id,' + (/^\d+$/.test(R.run_id) ? R.run_id : q(R.run_id)) + ',as_of,' + (K.csvDate(R.as_of) || q(R.as_of)) + ',таблица,' + q(K.u(csvTitle())) + ',строк,' + shown.length, '', head.join(',')]
         .concat(shown.map(line)).join('\r\n') + '\r\n';
     }
     // имя файла — латиницей (кириллицу в имени скачивания браузер может заменить на «download»): opts.fileName, иначе
@@ -1810,7 +1813,7 @@
       const lo = Math.min(0, ...segs.map(x => Math.min(x[0], x[1]))), hi = Math.max(0, ...segs.map(x => Math.max(x[0], x[1])));
       return {
         grid: { left: 6, right: 10, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'item', formatter: p => (keys[p.dataIndex] ? keys[p.dataIndex][1] : 'Итого') + ': <b>' + f.mns(p.dataIndex < vals.length ? vals[p.dataIndex] : run, 2) + '</b> mm ₽' },
-        xAxis: { type: 'category', data: keys.map(k => k[1]).concat(['Итого']) }, yAxis: { type: 'value', unit: 'mm ₽', min: lo, max: hi, scale: false, axisLabel: { formatter: v => f.mn(v, 0) } },
+        xAxis: { type: 'category', data: keys.map(k => k[1]).concat(['Итого']) }, yAxis: { type: 'value', unit: 'mm ₽', nameGap: 20, min: lo, max: hi, scale: false, axisLabel: { formatter: v => f.mn(v, 0) } },
         series: [{
           type: 'custom', data: segs.map((s, i) => [i, s[0], s[1]]),
           renderItem: (params, api) => {
