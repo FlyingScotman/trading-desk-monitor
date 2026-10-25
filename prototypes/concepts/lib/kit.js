@@ -1365,7 +1365,8 @@
     const r = RA[i], pt = H.pt && H.pt[i];
     if (!r) return i < H._first || H._first < 0 ? { k: 'before', t: 'прогонов до этой даты нет' } : { k: 'gap', t: 'прогона за дату нет — значения риска за неё нет (не переносим с прошлого прогона)' };
     const notes = [];
-    if (r.cut) notes.push(r.cut === 'eod_preliminary' ? 'предварительное закрытие (финального среза за дату нет)' : 'срез ' + r.cut);
+    // тип среза — словарём шапки (CUT_TYPE, #174); marketCutType утреннего прогона positions_history не отдаёт
+    if (r.cut) notes.push(r.cut === 'eod_preliminary' ? 'предварительное закрытие (финального среза за дату нет)' : CUT_TYPE[r.cut] || 'срез ' + r.cut);
     if (pt && pt[0] !== 'minor') return { k: pt[0], t: pt[1] + (r.old ? '; прогон версии ' + r.old : '') };
     if (pt && pt[1]) notes.push(pt[1]);
     if (r.old) return { k: 'old', t: 'посчитано версией ' + r.old + ' — пересчитается историей прогонов' + (notes.length ? '; ' + notes.join('; ') : '') };
