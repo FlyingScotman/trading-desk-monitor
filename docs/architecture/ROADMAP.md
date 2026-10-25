@@ -67,6 +67,13 @@ need `trade_terms` `repo` (a later minor). The private adapter (A7) must emit `f
 | B5 Day status | S7b: `/api/v1/inbox`, `/api/v1/events`, screen | P1 |
 | B6 Hub panel and OTC history | Hub WEB-7, WEB-13 | — |
 
+**B3 status (25 October 2026, issue #61): built on synthetic data.** `desk.cash` compares the `cash_balances` in force
+on a date per (entity, book, currency) across ledgers (`match`, `break`, `one_ledger`, `single`); `/api/v1/cash` and
+the monitors' C15 show the balances, accounts, history and breaks. The funding run reads its cash through it: a
+balance whose ledgers disagree is a problem and not funded (no ledger is authoritative in the contract: the
+conservative default), agreeing ledgers fund the book. Acceptance on real data waits for the adapter's cash report
+(A8) and DEC01.
+
 ## 1 The desk's day
 
 The backend is driven by data arriving, not by a clock. Business date **D**:

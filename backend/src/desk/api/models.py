@@ -354,6 +354,19 @@ class RiskMissing(BaseModel):
     n: int
 
 
+OFZ_BASIS = ("the OFZ basis to RUONIA OIS, RUB per bp, in the ofz_view 'basis' only (0 in 'kbd'): since 0.2.6 a "
+             "fixed OFZ's par DV01 on the KBD, the same risk the view has in dv01_by_curve_rub['RUB RUONIA'] (a second "
+             "factor: never add it to the DV01), an OFZ-PK's spread to RUONIA; before, every OFZ's spread to RUONIA "
+             "(ofz_spr01). Never an OFZ-IN's nominal proxy (dv01_ofz_in_proxy_rub)")
+OFZ_SPREAD_KBD = ("a fixed OFZ's own spread risk to the KBD (0.2.6), RUB per bp; in the ofz_view 'kbd' also an OFZ-PK's "
+                  "spread to RUONIA (its basis in 'basis'); 0 in a run before 0.2.6")
+BY_CURVE = ("DV01 by curve, RUB per bp: the monitors' curve ids; an OFZ's KBD risk on RUB OFZ in the ofz_view 'kbd', on "
+            "RUB RUONIA in 'basis'")
+OFZ_IN_PROXY = ("of which an OFZ-IN's nominal-rate proxy, RUB per bp (TDM#173): a linker core does not value yet (TDM#38), "
+                "its duration on the KBD. Already in dv01_by_curve_rub (RUB RUONIA in the ofz_view 'basis', RUB OFZ in "
+                "'kbd') and dv01_rub, never in ofz_basis_rub: a memo, not a risk to add")
+
+
 class RiskTableRow(BaseModel):
     """One row of the table currency x instrument type (UI-02): a currency's total (``level`` ccy), a group of it
     (group) or an instrument kind (kind). DV01 is the block currency's own curves only."""
@@ -370,14 +383,12 @@ class RiskTableRow(BaseModel):
     mv_ccy: float | None = Field(description="null without the currency's rate")
     dv01_rub: float = Field(description="DV01 on the curves of the row's currency, RUB per bp")
     dv01_ccy: float | None = Field(description="the same in the currency per bp; null without its rate")
-    dv01_by_curve_rub: dict[str, float]
+    dv01_by_curve_rub: dict[str, float] = Field(description=BY_CURVE)
     dv01_foreign_rub: float = Field(description="risk on another currency's curves kept here (attribution "
                                     "'position'): in dv01_by_curve_rub, not in dv01_rub")
-    ofz_basis_rub: float = Field(description="the OFZ basis to RUONIA OIS, RUB per bp: since 0.2.6 a fixed OFZ's par "
-                                 "DV01 on the KBD (RUB OFZ, also in dv01_by_curve_rub), an OFZ-PK's spread to RUONIA; "
-                                 "before, every OFZ's spread to RUONIA (ofz_spr01)")
-    ofz_spread_kbd_rub: float = Field(description="a fixed OFZ's own spread risk to the KBD (0.2.6), RUB per bp; 0 "
-                                      "in a run before it")
+    ofz_basis_rub: float = Field(description=OFZ_BASIS)
+    ofz_spread_kbd_rub: float = Field(description=OFZ_SPREAD_KBD)
+    dv01_ofz_in_proxy_rub: float = Field(description=OFZ_IN_PROXY)
     cs01_rub: float
     fx_delta_ccy: float
     n_risk_missing: int = Field(description="positions whose risk is missing (never counted as a zero)")
@@ -389,14 +400,12 @@ class RiskTableTotal(BaseModel):
     n_positions: int
     notional_rub: float
     mv_rub: float
-    dv01_by_curve_rub: dict[str, float]
+    dv01_by_curve_rub: dict[str, float] = Field(description=BY_CURVE)
     dv01_all_curves_rub: float = Field(description="the sum over curves of different currencies: not a currency's "
                                        "risk nor a hedge measure, labelled so")
-    ofz_basis_rub: float = Field(description="the OFZ basis to RUONIA OIS, RUB per bp: since 0.2.6 a fixed OFZ's par "
-                                 "DV01 on the KBD (RUB OFZ, also in dv01_by_curve_rub), an OFZ-PK's spread to RUONIA; "
-                                 "before, every OFZ's spread to RUONIA (ofz_spr01)")
-    ofz_spread_kbd_rub: float = Field(description="a fixed OFZ's own spread risk to the KBD (0.2.6), RUB per bp; 0 "
-                                      "in a run before it")
+    ofz_basis_rub: float = Field(description=OFZ_BASIS)
+    ofz_spread_kbd_rub: float = Field(description=OFZ_SPREAD_KBD)
+    dv01_ofz_in_proxy_rub: float = Field(description=OFZ_IN_PROXY)
     cs01_rub: float
     fx_delta_rub: float | None = Field(description="net FX delta at the run's rates; null when a rate is missing")
     n_risk_missing: int
@@ -417,13 +426,11 @@ class RiskTableColumn(BaseModel):
     n_positions: int
     notional_rub: float
     mv_rub: float
-    dv01_by_curve_rub: dict[str, float]
+    dv01_by_curve_rub: dict[str, float] = Field(description=BY_CURVE)
     dv01_all_curves_rub: float = Field(description="the sum over curves of different currencies: labelled so")
-    ofz_basis_rub: float = Field(description="the OFZ basis to RUONIA OIS, RUB per bp: since 0.2.6 a fixed OFZ's par "
-                                 "DV01 on the KBD (RUB OFZ, also in dv01_by_curve_rub), an OFZ-PK's spread to RUONIA; "
-                                 "before, every OFZ's spread to RUONIA (ofz_spr01)")
-    ofz_spread_kbd_rub: float = Field(description="a fixed OFZ's own spread risk to the KBD (0.2.6), RUB per bp; 0 "
-                                      "in a run before it")
+    ofz_basis_rub: float = Field(description=OFZ_BASIS)
+    ofz_spread_kbd_rub: float = Field(description=OFZ_SPREAD_KBD)
+    dv01_ofz_in_proxy_rub: float = Field(description=OFZ_IN_PROXY)
     cs01_rub: float
     fx_delta_rub: float | None = Field(description="net FX delta at the run's rates (RUB rows left out); null when "
                                        "a rate is missing")
@@ -448,6 +455,11 @@ class RiskTable(BaseModel):
     attribution_rule: str
     attribution_provisional: bool = Field(description="the rule is provisional: the owner decides (UI-02)")
     cross_ccy_kinds: list[str] = Field(description="the kinds the attribution rule applies to")
+    ofz_view: Literal["kbd", "basis"] = Field(description="where an OFZ's KBD risk is (TDM#173): kbd, on RUB OFZ with "
+                                              "no basis (every field adds up once); basis, on RUONIA plus the OFZ "
+                                              "basis apart (ofz_basis_rub: the same risk again, not to add)")
+    ofz_view_rule: str
+    ofz_view_note: str | None = Field(description="set when the view is approximate (a run before 0.2.6 in 'kbd')")
     kinds: list[RiskTableKind] = Field(description="the classification's kinds, in the table's order")
     measures: list[RiskTableMeasure] = Field(description="the matrix's measures (one shown at a time)")
     fx: dict[str, float | None]

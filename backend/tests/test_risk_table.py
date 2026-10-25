@@ -129,7 +129,9 @@ def test_legs_each_currency_on_its_own_curves():
         for key in ("dv01_rub", "mv_rub", "cs01_rub", "ofz_basis_rub", "fx_delta_ccy", "notional_rub"):
             assert rs[("ccy", None, None)][key] == pytest.approx(sum(r[key] for r in kinds)), (ccy, key)
     assert rub[("group", "GOV", None)]["dv01_rub"] == pytest.approx(-3000.0)
-    assert rub[("kind", "GOV", "OFZ_PD")]["ofz_basis_rub"] == pytest.approx(-2500.0)
+    assert rub[("kind", "GOV", "OFZ_PD")]["ofz_basis_rub"] == 0  # the default view, «КБД»: no basis (TDM#173)
+    assert rows_of(concepts.risk_table(ITEMS, FX, ofz_view="basis"), "RUB")[("kind", "GOV", "OFZ_PD")][
+        "ofz_basis_rub"] == pytest.approx(-2500.0)
     # the RUB legs of the future and the CCS are in RUB, their USD legs, FX delta, notional and MV in USD
     assert rub[("kind", "DER", "FX_FUT")]["dv01_rub"] == pytest.approx(-30.0)
     assert rub[("kind", "DER", "FX_FUT")]["n_positions"] == 0 and rub[("kind", "DER", "FX_FUT")]["n_legs_only"] == 1
@@ -176,7 +178,8 @@ def test_missing_risk_is_missing_not_zero():
 def test_totals_only_where_they_sum():
     t = concepts.risk_table(ITEMS, FX)["total"]
     assert set(t) == {"n_positions", "notional_rub", "mv_rub", "dv01_by_curve_rub", "dv01_all_curves_rub",
-                      "ofz_basis_rub", "ofz_spread_kbd_rub", "cs01_rub", "fx_delta_rub", "n_risk_missing"}  # no "dv01_rub" of all
+                      "ofz_basis_rub", "ofz_spread_kbd_rub", "dv01_ofz_in_proxy_rub", "cs01_rub", "fx_delta_rub",
+                      "n_risk_missing"}  # no "dv01_rub" of all
     assert t["fx_delta_rub"] == pytest.approx((1e6 + 1e6 - 5e6 + 2e6) * 80 + 7e6 * 11 + 1e6 * 100)
     assert concepts.risk_table(ITEMS, {"USD": 80.0})["total"]["fx_delta_rub"] is None  # a rate missing: no sum
     assert concepts.risk_table(ITEMS, {"USD": 80.0})["rows"][-1]["dv01_ccy"] is None
@@ -203,7 +206,7 @@ def test_minfin_by_the_issuer():
 def test_matrix_rows_currencies_columns_kinds():
     # R38: rows = currencies, columns = the kinds present; a cell = the (ccy, kind) row, a row total = the ccy row,
     # a column total = the kind over all currencies (what sums, in RUB)
-    t = concepts.risk_table(ITEMS, FX)
+    t = concepts.risk_table(ITEMS, FX, ofz_view="basis")
     assert t["ccys"] == ["RUB", "USD", "CNY", "CHF"]
     order = [k for k, _, _ in concepts.INSTR_KINDS]
     kinds = [c["kind"] for c in t["columns"]]
@@ -212,7 +215,7 @@ def test_matrix_rows_currencies_columns_kinds():
     cells = {(r["ccy"], r["kind"]): r for r in t["rows"] if r["level"] == "kind"}
     for col in t["columns"]:
         mine = [r for (_, k), r in cells.items() if k == col["kind"]]
-        for key in ("mv_rub", "notional_rub", "cs01_rub", "ofz_basis_rub"):
+        for key in ("mv_rub", "notional_rub", "cs01_rub", "ofz_basis_rub", "ofz_spread_kbd_rub", "dv01_ofz_in_proxy_rub"):
             assert col[key] == pytest.approx(sum(r[key] for r in mine)), (col["kind"], key)
         assert col["dv01_all_curves_rub"] == pytest.approx(sum(sum(r["dv01_by_curve_rub"].values()) for r in mine))
     for key in ("mv_rub", "notional_rub", "cs01_rub", "dv01_all_curves_rub", "n_risk_missing"):
@@ -222,6 +225,8 @@ def test_matrix_rows_currencies_columns_kinds():
     assert ccs["n_positions"] == 1 and ccs["dv01_by_curve_rub"] == {"USD SOFR": 400.0, "RUB RUONIA": -380.0}
     assert [m["measure"] for m in t["measures"]] == ["dv01", "dv01_curve", "cs01", "ofz_basis", "ofz_spread_kbd",
                                                        "fx_delta", "mv", "notional", "n_positions"]
+    # «КБД» (the default): no basis measure, the OFZ's risk on its curve
+    assert "ofz_basis" not in [m["measure"] for m in concepts.risk_table(ITEMS, FX)["measures"]]
     no_rate = concepts.risk_table(ITEMS, {"USD": 80.0})["columns"]
     assert next(c for c in no_rate if c["kind"] == "FX_FWD")["fx_delta_rub"] is None  # CNY without its rate
 
@@ -240,6 +245,18 @@ def test_route_and_dimension(store_url, book, client):  # noqa: F811
     one = client.get(f"/api/v1/runs/{rid}/risk-table?attribution=position&book=OFZ").json()
     assert one["attribution"] == "position" and one["total"]["n_positions"] == sum(p["book_id"] == "OFZ" for p in ps)
     assert client.get(f"/api/v1/runs/{rid}/risk-table?attribution=x").status_code == 422
+    # TDM#173: the OFZ view is named in the answer; «КБД» by default, «RUONIA + базис» on request, the DV01 the same
+    basis = client.get(f"/api/v1/runs/{rid}/risk-table?ofz_view=basis").json()
+    assert t["ofz_view"] == "kbd" and basis["ofz_view"] == "basis" and t["ofz_view_rule"] != basis["ofz_view_rule"]
+    assert t["total"]["ofz_basis_rub"] == 0 and basis["total"]["ofz_basis_rub"] != 0  # the golden book has OFZ
+    pk = next(r for r in basis["rows"] if r["level"] == "kind" and r["kind"] == "OFZ_PK")["ofz_basis_rub"]
+    assert t["total"]["dv01_ofz_in_proxy_rub"] < 0  # the golden book's OFZ-IN: a nominal proxy, out of the basis
+    assert next(r for r in basis["rows"] if r["level"] == "kind" and r["kind"] == "OFZ_IN")["ofz_basis_rub"] == 0
+    assert t["total"]["dv01_by_curve_rub"]["RUB OFZ"] == pytest.approx(
+        basis["total"]["ofz_basis_rub"] - pk + t["total"]["dv01_ofz_in_proxy_rub"])
+    assert "RUB OFZ" not in basis["total"]["dv01_by_curve_rub"]
+    assert t["total"]["dv01_all_curves_rub"] == pytest.approx(basis["total"]["dv01_all_curves_rub"])
+    assert client.get(f"/api/v1/runs/{rid}/risk-table?ofz_view=both").status_code == 422
     rows = client.get(f"/api/v1/runs/{rid}/aggregates?dims=ccy,instr_kind").json()["rows"]
     assert sum(r["n_positions"] for r in rows) == len(ps)
     want = {concepts.instr_kind(p["fact"]) for p in ps if p["fact"]} | {None}
@@ -250,3 +267,91 @@ def test_route_and_dimension(store_url, book, client):  # noqa: F811
             next(r["pv_rub"] or 0 for r in sql if r["key"]["ccy"] == ccy))
     spec = client.get("/openapi.json").json()
     assert "instr_kind" in spec["paths"]["/api/v1/runs/{run_id}/aggregates"]["get"]["parameters"][1]["description"]
+
+
+# TDM#173: the OFZ view of the risk table and the OFZ-IN's nominal proxy. A run of 0.2.6: a fixed OFZ on the KBD (risk on
+# RUB OFZ, its par DV01 there is the basis ofz_basis01, ofz_spr01 its spread to the KBD), an OFZ-PK on RUONIA (its
+# basis is its spread to RUONIA), an OFZ-IN valued by the fallback (a nominal duration proxy on the KBD), a corporate
+KBD_RUN = [
+    bond("PD", seg="Гос", ac="ОФЗ-ПД", cs01=0.0, risk={"RUB OFZ": {"3Y": -1000.0, "7Y": -2000.0}},
+         ofz_spr01=-2500.0, extra={"ofz_basis01": -3000.0, "quality": "exact"}),
+    bond("PK", seg="Гос", ac="ОФЗ-ПК", cpn="float", cs01=0.0, dv01=-20.0, ofz_spr01=-400.0,
+         extra={"quality": "exact"}),
+    bond("IN", seg="Гос", ac="ОФЗ-ИН", cs01=0.0, risk={"RUB OFZ": {"5Y": -600.0}}, ofz_spr01=-550.0,
+         extra={"ofz_basis01": -600.0, "quality": "market_value"}),
+    bond("CORP"),
+    der("IRS", "irs", "RUB", {"RUB RUONIA": {"2Y": 700.0}}),
+]
+
+
+def test_ofz_view_kbd_counts_each_risk_once():
+    t = concepts.risk_table(KBD_RUN, FX)  # the default: «КБД»
+    assert t["ofz_view"] == "kbd" and t["ofz_view_note"] is None
+    rub = rows_of(t, "RUB")[("ccy", None, None)]
+    assert rub["dv01_by_curve_rub"] == pytest.approx({"RUB OFZ": -3600.0, "RUB RUONIA": -20.0 - 1000.0 + 700.0})
+    assert rub["ofz_basis_rub"] == 0 and t["total"]["ofz_basis_rub"] == 0
+    assert rub["ofz_spread_kbd_rub"] == pytest.approx(-2500.0 - 550.0 - 400.0)  # the OFZ-PK's spread to RUONIA too
+    assert rub["dv01_ofz_in_proxy_rub"] == pytest.approx(-600.0)  # a memo: already on RUB OFZ
+    # the per-curve DV01 plus the basis field: every bp of risk once
+    assert sum(rub["dv01_by_curve_rub"].values()) + rub["ofz_basis_rub"] == pytest.approx(rub["dv01_rub"])
+    assert rows_of(t, "RUB")[("kind", "GOV", "OFZ_IN")]["dv01_by_curve_rub"] == {"RUB OFZ": -600.0}
+
+
+def test_ofz_view_basis_and_the_ofz_in_proxy_out_of_the_basis():
+    t = concepts.risk_table(KBD_RUN, FX, ofz_view="basis")
+    kbd = concepts.risk_table(KBD_RUN, FX)
+    assert t["ofz_view"] == "basis" and "never add" in t["ofz_view_rule"]
+    rs = rows_of(t, "RUB")
+    rub = rs[("ccy", None, None)]
+    assert rub["dv01_by_curve_rub"] == pytest.approx({"RUB RUONIA": -3600.0 - 20.0 - 1000.0 + 700.0})
+    # the basis: the fixed OFZ's KBD DV01 and the OFZ-PK's spread to RUONIA, never the OFZ-IN's nominal proxy
+    assert rub["ofz_basis_rub"] == pytest.approx(-3000.0 - 400.0)
+    assert rs[("kind", "GOV", "OFZ_IN")]["ofz_basis_rub"] == 0
+    assert rs[("kind", "GOV", "OFZ_IN")]["dv01_ofz_in_proxy_rub"] == pytest.approx(-600.0)
+    assert rs[("kind", "GOV", "OFZ_IN")]["dv01_by_curve_rub"] == {"RUB RUONIA": -600.0}
+    assert rub["ofz_spread_kbd_rub"] == pytest.approx(-2500.0 - 550.0)
+    # the DV01 is the same in both views: only where the KBD risk is shown moves
+    for key in ("dv01_rub", "dv01_ofz_in_proxy_rub", "cs01_rub"):
+        assert rub[key] == pytest.approx(rows_of(kbd, "RUB")[("ccy", None, None)][key]), key
+    assert t["total"]["dv01_all_curves_rub"] == pytest.approx(kbd["total"]["dv01_all_curves_rub"])
+    # the KBD view's RUB OFZ is the basis view's basis without the OFZ-PK plus the OFZ-IN proxy
+    assert kbd["total"]["dv01_by_curve_rub"]["RUB OFZ"] == pytest.approx(
+        t["total"]["ofz_basis_rub"] + 400.0 + t["total"]["dv01_ofz_in_proxy_rub"])
+    with pytest.raises(ValueError):
+        concepts.risk_table(KBD_RUN, FX, ofz_view="both")
+
+
+def test_an_ofz_in_core_values_is_a_basis_again():
+    # once core values a linker (TDM#38, quality exact) its KBD risk is no longer a nominal proxy
+    exact = bond("IN", seg="Гос", ac="ОФЗ-ИН", cs01=0.0, risk={"RUB OFZ": {"5Y": -600.0}}, ofz_spr01=-550.0,
+                 extra={"ofz_basis01": -600.0, "quality": "exact"})
+    t = concepts.risk_table([exact], FX, ofz_view="basis")["total"]
+    assert t["ofz_basis_rub"] == pytest.approx(-600.0) and t["dv01_ofz_in_proxy_rub"] == 0
+    old = bond("IN", seg="Гос", ac="ОФЗ-ИН", cs01=0.0, ofz_spr01=-550.0, extra={"quality": "market_value"})
+    assert concepts.risk_table([old], FX, ofz_view="basis")["total"]["ofz_basis_rub"] == pytest.approx(-550.0)
+
+
+def test_ofz_view_kbd_of_a_run_before_0_2_6_is_approximate():
+    # until 0.2.5 every OFZ was on RUONIA and ofz_spr01 was its basis: the «КБД» view moves it off RUONIA, says so
+    t = concepts.risk_table(ITEMS, FX)
+    assert t["ofz_view_note"] and "0.2.6" in t["ofz_view_note"]
+    ofz = rows_of(t, "RUB")[("kind", "GOV", "OFZ_PD")]
+    assert ofz["dv01_by_curve_rub"] == pytest.approx({"RUB OFZ": -2500.0, "RUB RUONIA": -500.0})
+    assert ofz["dv01_rub"] == pytest.approx(-3000.0) and ofz["ofz_basis_rub"] == 0
+    assert concepts.risk_table(ITEMS, FX, ofz_view="basis")["ofz_view_note"] is None
+
+
+def test_the_run_summary_keeps_the_ofz_in_proxy_out_of_the_basis():
+    from desk.publish import summary
+
+    def row(pid, ac, ofz_basis, quality, risk, ofz=0.0):
+        return {"position_id": pid, "book_id": "B", "pv_rub": 1e6, "risk": risk, "cs01": 0.0, "ofz": ofz,
+                "instr_type": "BOND", "segment": "Гос", "asset_class": ac, "coupon_type": "fix", "ccy": "RUB",
+                "notional": 1e6, "notional_rub": 1e6, "price": 100.0, "spread_bp": 0.0, "dv01": None, "dm_bp": None,
+                "pnl": None, "ofz_basis": ofz_basis, "quality": quality}
+
+    s = summary.build([row("PD", "ОФЗ-ПД", -3000.0, "exact", {"RUB OFZ": {"7Y": -3000.0}}, -2500.0),
+                       row("IN", "ОФЗ-ИН", -600.0, "market_value", {"RUB OFZ": {"5Y": -600.0}}, -550.0)])
+    assert s["basis"] == pytest.approx(-3000.0) and s["basisIn"] == pytest.approx(-600.0)
+    assert s["dv01"] == pytest.approx({"RUB RUONIA": -3600.0}) and s["ofzSpr"] == pytest.approx(-3050.0)
+    assert s["pos"]["IN"][3] == pytest.approx(-600.0)  # a position's basis_of as it is: the pages tell it by kind
