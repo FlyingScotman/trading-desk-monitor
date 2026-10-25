@@ -291,7 +291,7 @@
       grid: { left: 6, right: 6, top: 30, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 },
       tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '—' : f.n(v, 2) },
       xAxis: { type: 'category', data: M.buckets },
-      yAxis: [{ type: 'value', scale: true, axisLabel: { formatter: v => f.n(v, 1) + '%' } }, { type: 'value', name: 'Δ б.п.', splitLine: { show: false } }],
+      yAxis: [{ type: 'value', scale: true, axisLabel: { formatter: v => f.pct(v, 1) } }, { type: 'value', name: 'Δ б.п.', splitLine: { show: false } }],
       series: [
         { name: 'RUONIA', type: 'line', data: ru.pts, color: K.curveColors['RUB RUONIA'], showSymbol: false, lineStyle: { width: 2 } },
         { name: 'RUONIA вчера', type: 'line', data: ru.pts.map((v, i) => v - ru.chg[i] / 100), color: K.curveColors['RUB RUONIA'], showSymbol: false, lineStyle: { width: 1, type: 'dashed' } },

@@ -127,7 +127,11 @@ t('красный и выравнивание — по тексту цифры (
 
 t('разметка DOM: K.accMarkAll ставит и снимает классы', () => {
   const { K } = load(new Map());
-  const mk = (tag, text) => { const c = new Set(); return { tagName: tag, textContent: text, classList: { toggle: (k, on) => on ? c.add(k) : c.delete(k) }, has: k => c.has(k) }; };
+  const mk = (tag, text, cls, style, parent) => {
+    const c = new Set(cls || []);
+    return { tagName: tag, textContent: text, parentElement: parent || null, getAttribute: k => k === 'style' ? style || null : null,
+      classList: { toggle: (k, on) => on ? c.add(k) : c.delete(k), contains: k => c.has(k) }, has: k => c.has(k) };
+  };
   const a = mk('TD', '(1,234.5)'), b = mk('TD', '1,234.5'), d = mk('SPAN', '7');
   const root = { querySelectorAll: sel => { assert.strictEqual(sel, K.ACC_SEL); return [a, b, d]; } };
   K.accMarkAll(root);
@@ -136,6 +140,24 @@ t('разметка DOM: K.accMarkAll ставит и снимает класс�
   assert.ok(!d.has('k-accp'), 'невидимая «)» — только в ячейке таблицы');
   K.withNegFmt('minus', () => K.accMarkAll(root));
   assert.ok(!a.has('k-accn') && !b.has('k-accp'), '«минус» — классы сняты');
+});
+
+t('смысловой цвет страницы важнее бухгалтерского красного (#103): chg-up/chg-dn, pos/neg, фон heat', () => {
+  const { K } = load(new Map());
+  const mk = (tag, text, cls, style, parent) => {
+    const c = new Set(cls || []);
+    return { tagName: tag, textContent: text, parentElement: parent || null, getAttribute: k => k === 'style' ? style || null : null,
+      classList: { toggle: (k, on) => on ? c.add(k) : c.delete(k), contains: k => c.has(k) }, has: k => c.has(k) };
+  };
+  const dn = mk('TD', '(20)', ['n', 'chg-dn']), up = mk('TD', '(5)', ['n', 'chg-up']);
+  const heat = mk('TD', '(1)', ['n'], 'background:rgba(63,182,122,.3)');
+  const tdChg = mk('TD', '(3)', ['n', 'chg-dn']), drIn = mk('SPAN', '(3)', ['dr'], null, tdChg);
+  const tr = mk('TR', ''), plainTd = mk('TD', '(7)', ['n'], null, tr), drPlain = mk('SPAN', '(7)', ['dr'], null, plainTd);
+  const all = [dn, up, heat, tdChg, drIn, plainTd, drPlain];
+  K.accMarkAll({ querySelectorAll: () => all });
+  [dn, up, heat, tdChg, drIn].forEach(e => assert.ok(!e.has('k-accn'), e.textContent + ' — свой цвет страницы'));
+  assert.ok(plainTd.has('k-accn') && drPlain.has('k-accn'), 'без смыслового цвета — красным');
+  assert.ok(/(^|,\s*)\.k-accn\s*[,{]/m.test(P('concepts/lib/kit.css')));
 });
 
 t('CSV: всегда обычный минус, без скобок, при любой настройке', () => {

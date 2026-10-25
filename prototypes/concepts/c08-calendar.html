@@ -433,6 +433,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     else renderRub(view, kpis);
   }
   K.onFilter(() => { if (st.mode === 'pf') render(); });
+  K.on('numfmt', () => { if (st.mode !== 'pf') render(); });  // рынок (fx, rub) от фильтра не зависит (#153)
   K.commands([['pf', 'Наш портфель'], ['fx', 'Валютные бонды РФ'], ['rub', 'Рублёвый рынок']].map(([k, t]) => ({ label: 'Календарь: ' + t, run: () => { st.mode = k; save(); render(); } })));
   render();
 })();
