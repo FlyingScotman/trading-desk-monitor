@@ -31,11 +31,12 @@ function load(data) {
 const order = html => [...html.matchAll(/<tr class="(grp l(\d)|row[^"]*)"[^>]*data-(?:g|id)="([^"]+)"/g)].map(m => m[2] != null ? 'g' + m[2] + ':' + m[3].split('/').pop() : m[3]);
 const groupsAt = (html, l) => order(html).filter(x => x.startsWith('g' + l + ':')).map(x => x.slice(3));
 
-t('подсказки (0.2.6, #32): DV01 RUONIA — бамп котировок OIS; базис — par–par к КБД; спред к КБД и КБД — свои', () => {
+t('подсказки (0.2.6, #32; 0.2.7, #213): DV01 RUONIA — бамп котировок OIS; базис — к par КБД при неизменной RUONIA, свой риск ядра; спред к КБД и КБД — свои', () => {
   const { K } = load();
   assert.ok(/котировках OIS/.test(K.tips.ruonia) && /пересобирается/.test(K.tips.ruonia) && /до 0\.2\.6/i.test(K.tips.ruonia));
   assert.ok(/1M…20Y\+/.test(K.tips.ruonia) && /треугольными/.test(K.tips.ruonia) && /центральная разность/.test(K.tips.ruonia));
-  assert.ok(/par–par/.test(K.tips.basis01) && /КБД/.test(K.tips.basis01) && /ОФЗ-ПК/.test(K.tips.basis01));
+  assert.ok(/par-доходностям КБД/.test(K.tips.basis01) && /при неизменных котировках OIS RUONIA/.test(K.tips.basis01)
+    && /два разных риска/.test(K.tips.basis01) && /ZX/.test(K.tips.basis01) && /ОФЗ-ПК/.test(K.tips.basis01));
   assert.ok(/≈ DV01 RUONIA/.test(K.tips.cs01) && /ACT\/365F/.test(K.tips.ofzSpr01) && /rub_ofz_kbd_v3/.test(K.tips.kbd));
   assert.strictEqual(K.curveTip('OFZSPR'), K.tips.ofzSpr01);
   assert.ok(K.tips.dv01.includes(K.tips.ruonia));

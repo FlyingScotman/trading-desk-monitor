@@ -7,15 +7,21 @@ hundreds of thousands of rows at a year of runs; a run never changes, so its sum
 (``ensure``: by ``desk eod`` right after the publication, by the API for a run of an older version on first read)
 and the pages read one row per run.
 
-Per position (``pos``): ``[face, dv01, cs01, basis, mv, pnl, price, spread_bp, {curve: dv01}, dm_bp, ofz_spr]`` with
+Per position (``pos``): ``[face, dv01, cs01, basis, mv, pnl, price, spread_bp, {curve: dv01}, dm_bp, ofz_spr, ofz_ruo]``
+with
 ``face`` the fact's ``notional`` (face currency), ``dv01`` the sum of its risk by curve (RUB per bp, the same sum the
 pages' DV01 is), ``basis`` the OFZ basis to RUONIA (``basis_of``), ``mv`` as the type series count it (a bond's PV in
 RUB, a derivative's or FX row's notional in RUB), ``pnl`` the day's total over the pages' factors (null without a flash
 PnL), ``dm_bp`` a floater's discount margin (core 0.33; null for a fixed bond and in a run before it), ``ofz_spr`` an
-OFZ's spread risk to the KBD (0.2.6, ``basis_of``; null in a run before it). Curves are the pages' ids
-(``CURVE_MAP``): the «RUONIA + базис» view, an OFZ's KBD risk on RUONIA (the KBD view is RUONIA minus the basis).
+OFZ's spread risk to the KBD (0.2.6, ``basis_of``; null in a run before it), ``ofz_ruo`` an OFZ's RUONIA risk computed
+apart from its basis (``extra.ofz_ruonia01``, TDM#213; null without it). Curves are the pages' ids (``CURVE_MAP``): the
+«RUONIA + базис» view, an OFZ's RUONIA risk on RUONIA (its row's ``RUB RUONIA`` plus ``RUB OFZ``: the RUONIA risk; a
+row without ``ofz_ruonia01`` has its KBD risk there, the basis again: variant P). The KBD view is RUONIA minus the
+OFZ's RUONIA risk (``ofzRuo``: ``ofz_ruo``, else the basis) with the basis on the KBD.
 A position's ``basis`` is ``basis_of`` as it is, an OFZ-IN's nominal proxy included (the pages tell it by the position,
-``ofz_in_proxy``); the run's sum ``basis`` leaves the proxies out, ``basisIn`` is their sum (TDM#173)."""
+``ofz_in_proxy``); the run's sum ``basis`` leaves the proxies out, ``basisIn`` is their sum (TDM#173); ``ofzRuo`` sums the
+RUONIA risk of the OFZ whose basis is in ``basis`` (an OFZ-PK's basis is its own spread, it has none); it is null in a
+run with no OFZ on the KBD (before 0.2.6), whose KBD view takes the basis off RUONIA as before."""
 
 from __future__ import annotations
 
@@ -27,12 +33,14 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
-VERSION = 4  # 2: a floater's discount margin (pos[9]); 3: the OFZ basis of the KBD scheme, the spread to the KBD;
-# 4: an OFZ-IN's nominal proxy out of the run's basis (basisIn, TDM#173)
+VERSION = 5  # 2: a floater's discount margin (pos[9]); 3: the OFZ basis of the KBD scheme, the spread to the KBD;
+# 4: an OFZ-IN's nominal proxy out of the run's basis (basisIn, TDM#173); 5: an OFZ's RUONIA risk apart from its basis
+# (ofzRuo, pos[11]; TDM#213)
 CURVE_MAP = {"RUB OFZ": "RUB RUONIA", "USD": "USD SOFR", "EUR": "EUR ESTR", "CNY": "CNY XCCY"}
 """A run's risk curve -> the concept pages' curve (``desk.api.concepts`` re-exports it; ``lib/real.js`` mirrors it).
-``RUB OFZ`` (the KBD: a fixed-coupon OFZ's rates risk since 0.2.6, every bond's on a date without RUONIA OIS) is added
-to RUONIA: the pages' default «RUONIA + базис» view, where moving RUONIA moves the KBD with it."""
+``RUB OFZ`` (the KBD: a fixed-coupon OFZ's rates risk since 0.2.6, its basis in RUONIA + basis since 0.2.7, every bond's
+on a date without RUONIA OIS) is added to RUONIA: the pages' default «RUONIA + базис» view, where moving RUONIA moves the
+KBD with it (a row in RUONIA + basis: its ``RUB RUONIA`` plus ``RUB OFZ`` is its RUONIA risk, ``valuation.bonds.ofz_levels``)."""
 PNL = {"carry": ("carry", "rolldown", "funding"), "rates": ("rates", "convexity"), "spread": ("spread",),
        "fx": ("fx_gross", "fx_funding"), "trading": ("new_trades",), "other": ("other",)}
 """The pages' PnL factors from the run's components (``compat.PNL_KEYS``): the carry is net of the position's funding
@@ -45,7 +53,8 @@ ROWS_SQL = ("SELECT position_id, book_id, pv_rub, fact->'risk' AS risk, (fact->>
             " (fact->>'notional')::float8 AS notional, (fact->>'notional_rub')::float8 AS notional_rub,"
             " (fact->>'price')::float8 AS price, (fact->>'spread_bp')::float8 AS spread_bp,"
             " (fact->>'dv01')::float8 AS dv01, (fact->'extra'->>'dm_bp')::float8 AS dm_bp, pnl,"
-            " (fact->'extra'->>'ofz_basis01')::float8 AS ofz_basis, fact->'extra'->>'quality' AS quality"
+            " (fact->'extra'->>'ofz_basis01')::float8 AS ofz_basis, fact->'extra'->>'quality' AS quality,"
+            " (fact->'extra'->>'ofz_ruonia01')::float8 AS ofz_ruo"
             " FROM run_position WHERE run_id = %s AND fact IS NOT NULL")
 
 
@@ -140,7 +149,8 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     book: dict[str, float] = {}
     mv_type: dict[str, float] = {}
     mv_ccy: dict[str, float] = {}
-    cs01 = basis = basis_pk = basis_in = ofz_spr = 0.0
+    cs01 = basis = basis_pk = basis_in = ofz_spr = ofz_ruo = 0.0
+    kbd_ofz = False  # a run before 0.2.6 has no OFZ on the KBD: its ofzRuo is null, not 0 (the pages read null)
     pnl: dict[str, float] | None = None
     pos: dict[str, list] = {}
     for x in rows:
@@ -161,6 +171,9 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
             basis_in += b  # an OFZ-IN's nominal proxy: not a basis (TDM#173)
         else:
             basis += b
+            if x.get("ofz_basis") is not None:  # an OFZ on the KBD: its RUONIA risk, the basis again without one (P)
+                kbd_ofz = True
+                ofz_ruo += x["ofz_ruo"] if x.get("ofz_ruo") is not None else b
         if (g, k) == ("GOV", "PK"):  # an OFZ-PK's basis is its own spread to RUONIA, no KBD risk (the KBD view)
             basis_pk += b
         m = _mv(f, x["pv_rub"])
@@ -176,8 +189,9 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         pos[x["position_id"]] = [_r(x["notional"], 2), _r(sum(curves.values()), 2), _r(x["cs01"], 2), _r(b, 2),
                                  _r(m, 0), _r(p["total"], 0) if p else None, _r(x["price"], 4),
                                  _r(x["spread_bp"], 2), {c: round(v, 2) for c, v in curves.items() if v},
-                                 _r(x.get("dm_bp"), 2), _r(spr, 2)]
+                                 _r(x.get("dm_bp"), 2), _r(spr, 2), _r(x.get("ofz_ruo"), 2)]
     return {"dv01": dv01, "cs01": cs01, "basis": basis, "basisPk": basis_pk, "basisIn": basis_in, "ofzSpr": ofz_spr,
+            "ofzRuo": ofz_ruo if kbd_ofz else None,
             "dv01Book": book,
             "mvType": mv_type,
             "mvCcy": mv_ccy, "pnl": pnl, "pos": pos}

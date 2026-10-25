@@ -4,7 +4,7 @@ version = "0.2.6"
 description = "Trading Desk Monitor backend: hub snapshots -> core valuation -> desk runs"
 requires-python = ">=3.11"
 dependencies = [
-    "rub-fixed-income-core==0.38.0",
+    "rub-fixed-income-core==0.39.0",
     "trading-desk-monitor",
     "psycopg[binary]>=3.2",
     "fastapi>=0.115",
@@ -29,7 +29,7 @@ desk = "desk.cli:main"
 # plain clone of this repository builds. Production pins a wheel built from that commit (06 §7).
 # To work on core and the backend together, override locally (not committed):
 #   uv pip install -e ../../rub-fixed-income-core
-rub-fixed-income-core = { git = "https://github.com/FlyingScotman/rub-fixed-income-core.git", rev = "4827c52a6e089cc9535389b6c26b8c59fbc7c035" }
+rub-fixed-income-core = { git = "https://github.com/FlyingScotman/rub-fixed-income-core.git", rev = "ae5f40f57db44c771dca986b9e34a73d845a2fa6" }
 trading-desk-monitor = { path = "..", editable = true }
 
 [build-system]

@@ -103,4 +103,63 @@ t('#173 «КБД»: ОФЗ-ИН (прокси) — на кривой КБД, RUO
   assert.deepStrictEqual(Array.from(M.hist.dv01['RUB RUONIA']), [-9000 + 3500, -9100 + 3600]);
 });
 
+// #213 (0.2.7): риск RUONIA и риск базиса ОФЗ посчитаны ядром порознь. Строка прогона — в координатах сценариев:
+// risk["RUB OFZ"] — базис (par-риск КБД), risk["RUB RUONIA"] — RUONIA минус базис, extra.ofz_ruonia01 — риск RUONIA
+const RUO = [-0.4, -0.1, -1.3, 2.2, 1.4, 5.0, 11.0, 25.0, 41.0, -400.5, -1.1];
+const BAS = [0, 0, 0, 0.0, 2.1, 5.4, 12.4, 27.5, 46.2, -411.4, 1.1];
+const computed = (D) => {
+  const p = D.positions[0];
+  p.risk = { 'RUB OFZ': BAS.slice(), 'RUB RUONIA': RUO.map((v, k) => v - BAS[k]) };
+  p.extra = Object.assign({}, p.extra, { ofz_basis01: sum(BAS), ofz_ruonia01: sum(RUO) });
+  D.positions = [p];
+};
+t('#213 «RUONIA + базис»: RUONIA ОФЗ — её риск RUONIA, базис — её риск базиса: два разных риска, DV01 = RUONIA', () => {
+  const { M, id } = load(null, 'ruonia_basis', computed);
+  const p = M.pos[id];
+  RUO.forEach((v, k) => near(p.risk['RUB RUONIA'][k], v, 'RUONIA ' + k));
+  BAS.forEach((v, k) => near(p.risk['RUB OFZ'][k], v, 'базис ' + k));
+  near(p.dv01, sum(RUO), 'DV01 = риск RUONIA');
+  near(p.basis01, sum(BAS), 'базис01');
+  near(p.ofzRuo01, sum(RUO), 'ofzRuo01');
+  assert.ok(Math.abs(p.basis01 - p.dv01) > 1e-6, 'риски разные');
+  assert.ok(!M.notes.some(x => /прогон 0\.2\.6/.test(x)));
+  assert.ok(load(null).M.notes.some(x => /прогон 0\.2\.6: риск ОФЗ к RUONIA/.test(x)));  // kbd_par: приближение
+});
+t('#213 «КБД»: у ОФЗ RUONIA нет совсем, на КБД — её базис (par-риск КБД); DV01 = риск КБД', () => {
+  const { M, id } = load('kbd', 'ruonia_basis', computed);
+  const p = M.pos[id];
+  RUO.forEach((v, k) => near(p.risk['RUB RUONIA'][k], 0, 'RUONIA ' + k));
+  BAS.forEach((v, k) => near(p.risk['RUB OFZ'][k], v, 'КБД ' + k));
+  near(p.dv01, sum(BAS), 'DV01 = риск КБД');
+  assert.strictEqual(p.basis01, 0);
+});
+t('#213 история «КБД»: из RUONIA вычитается риск RUONIA ОФЗ (ofzRuo01), а не её базис; без него — как раньше', () => {
+  const hist = (ruo) => (D, ctx) => {
+    computed(D);
+    ctx.window.DESK_EXTRAS = { histDates: ['2026-10-22', '2026-10-23'], hist: { dv01: { 'RUB RUONIA': [-9000, -9100] },
+      basis01: [-3000, -3100], basisPk01: [0, 0], basisIn01: [0, 0], ofzSpr01: [0, 0], ...(ruo ? { ofzRuo01: ruo } : {}) } };
+  };
+  let O = load('kbd', 'ruonia_basis', hist([-3010, null])).M.hist.dv01;
+  assert.deepStrictEqual(Array.from(O['RUB OFZ']), [-3000, -3100]);
+  assert.deepStrictEqual(Array.from(O['RUB RUONIA']), [-9000 + 3010, -9100 + 3100]);  // null: сводка без него — базис
+  O = load('kbd', 'ruonia_basis', hist(null)).M.hist.dv01;
+  assert.deepStrictEqual(Array.from(O['RUB RUONIA']), [-9000 + 3000, -9100 + 3100]);
+});
+
+t('#213 история позиции: «RUONIA + базис» — RUONIA и базис как в прогонах; «КБД» — RUONIA минус её риск RUONIA (ofzRuo)', () => {
+  const xhr = (id) => function () {
+    this.open = () => {};
+    this.send = () => { this.status = 200; this.responseText = JSON.stringify({ dates: ['2026-10-22', '2026-10-23'], runAt: [null, null],
+      series: { [id]: { price: [100, 101], notional: [1, 1], dv01: [-505, -506], basis: [-500, -501], ofzRuo: [-505, null],
+        curves: { 'RUB RUONIA': [-505, -506] } } } }); };
+  };
+  const run = view => { let id; const { M } = load(view, 'ruonia_basis', (D, ctx) => { computed(D); id = D.positions[0].id; ctx.XMLHttpRequest = xhr(id); }); return M.posHistory(id); };
+  const b = run(null);  // до #213 здесь падало: «p is not defined»
+  assert.deepStrictEqual(Array.from(b.curves['RUB RUONIA']), [-505, -506]);
+  assert.deepStrictEqual(Array.from(b.basis), [-500, -501]);
+  const k = run('kbd');
+  assert.deepStrictEqual(Array.from(k.curves['RUB RUONIA']), [0, -506 + 501]);  // null: прогон без ofzRuo — базис
+  assert.deepStrictEqual(Array.from(k.curves['RUB OFZ']), [-500, -501]);
+});
+
 console.log(n + ' tests passed');

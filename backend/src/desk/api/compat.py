@@ -54,7 +54,10 @@ CONTRACT_VERSION = "1.3"
 """The tdm bundle contract (``tdm.CONTRACT_VERSION``, shared with tdm). Its shape did not change in 0.2.6, but
 ``ofzSpr01`` of a fixed-coupon OFZ is its spread to the KBD from then on, no longer its basis to RUONIA: a reader
 tells them apart by ``source.ofzScheme`` (``kbd_par``; null before) and finds the basis in ``extra.ofz_basis01``
-(``contract/bundle.schema.json`` says so on ``ofz_spr01``)."""
+(``contract/bundle.schema.json`` says so on ``ofz_spr01``). Nor in 0.2.7 (``ruonia_basis``, TDM#213): a fixed OFZ's
+``risk`` also has ``RUB RUONIA`` (its RUONIA risk minus its basis, ``valuation.bonds.ofz_levels``) beside ``RUB OFZ``
+(its basis risk, the KBD's par risk) and ``dv01`` is their sum, its RUONIA risk (``extra.ofz_ruonia01``); its ``gamma``
+is over the same factors. The reader tells such a row by ``extra.ofz_ruonia01``."""
 HISTORY_DAYS = 22  # tdm.assemble.HISTORY_DAYS
 
 RUONIA_DISCOUNT_VERSION = 4
@@ -443,7 +446,8 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
                    "publishedAt": completed.isoformat() if completed else None,
                    "libVersion": f"rub-fixed-income-core {run['core_version']}",
                    "marketSnapshot": run["market_snapshot_id"], "contractVersion": CONTRACT_VERSION,
-                   # how the run values OFZ (valuation.bonds.OFZ_SCHEME): "kbd_par" since 0.2.6, null before
+                   # how the run values OFZ (valuation.bonds.OFZ_SCHEME): "ruonia_basis" since 0.2.7, "kbd_par" in
+                   # 0.2.6 (and a run without RUONIA OIS quotes), null before
                    "ofzScheme": (run.get("lineage") or {}).get("ofz_scheme"),
                    # the unit of each curve's buckets (orchestrator.EodContext.curve_units, #171): null before
                    "curveUnits": (run.get("lineage") or {}).get("curve_units"),

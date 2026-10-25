@@ -27,7 +27,7 @@ import math
 from pathlib import Path
 
 import pytest
-from rub_fixed_income import kbd_effective_yield
+from rub_fixed_income import RISK_BUCKETS, kbd_effective_yield
 
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import attach_pnl, prepare, value
@@ -84,7 +84,16 @@ def test_g_spread_dm_and_spread_buckets(run):
     # bullet split as its DV01 (until 0.2.5: the OFZ–RUONIA basis, 10Y -62.6, 15Y -148.5, 20Y+ 0.0)
     v = outs["SU26238RMFS4"].valuation
     sb = v.spread_buckets
-    assert v.discount_curve_id == "RUB_KBD" and set(v.risk()) == {"RUB OFZ"}
+    assert v.discount_curve_id == "RUB_KBD" and set(v.risk()) == {"RUB OFZ", "RUB RUONIA"}
+    # 0.2.7 (#213, core 0.39): RUONIA and the basis two computed risks (RUB/bp of 1,000 bonds); the row in the scenarios'
+    # coordinates: RUB OFZ the basis (the KBD's par risk), RUB RUONIA RUONIA minus it, their sum the RUONIA risk
+    ruo, bas = v.ofz_ruonia, v.risk()["RUB OFZ"]
+    assert (round(math.fsum(ruo.values()), 1), round(math.fsum(bas.values()), 1)) == (-317.9, -316.6)
+    assert (round(ruo["15Y"], 1), round(bas["15Y"], 1), round(ruo["10Y"], 1), round(bas["10Y"], 1)) == (
+        -400.5, -411.4, 41.0, 46.2)
+    assert v.dv01_rub == pytest.approx(math.fsum(ruo.values()))
+    for b in RISK_BUCKETS:
+        assert v.risk()["RUB RUONIA"][b] + bas[b] == pytest.approx(ruo[b], abs=1e-9)
     assert (round(sb["10Y"], 1), round(sb["15Y"], 1), round(sb["20Y+"], 1)) == (45.7, -406.6, 1.1)
     for s in ("SU26238RMFS4", "SU26244RMFS2"):  # the par buckets sum to the DV01 at the bond's own yield (<= 1 %)
         v = outs[s].valuation
@@ -118,3 +127,17 @@ def test_fx_bonds_pnl_at_the_19_00_rate(run):
         delta = q.v0 / (82.8504 if ccy == "USD" else 12.4176)  # the D-1 FX delta at the 19.10 19:00 rate
         now = ctx.market.fx(ccy)["moex_19"]
         assert q.fx_gross == pytest.approx(delta * (now - (82.8504 if ccy == "USD" else 12.4176)), rel=1e-9), s
+
+
+def test_flash_pnl_of_an_ofz_splits_its_linear_rates_by_ruonia_and_basis(run):
+    """#213: an OFZ in RUONIA + basis: the first-order check of its rates PnL (``rates_linear``: its basis risk, the
+    KBD's par risk, x the KBD's par move, as before) by its two factors, RUONIA (its RUONIA risk x the OIS par move) and
+    the basis (the rest)."""
+    _, outs = run
+    for s in ("SU26238RMFS4", "SU26244RMFS2"):
+        p = outs[s].pnl
+        ruo, bas = p.rates_linear_ofz
+        assert ruo + bas == pytest.approx(p.rates_linear, rel=1e-12, abs=1e-9), s
+        assert p.extra()["rates_linear_ruonia"] == ruo and p.extra()["rates_linear_basis"] == bas
+        assert abs(p.rates_linear - p.rates) < 0.2 * abs(p.rates), s  # a first-order check of a sub-bp day
+    assert outs["RU000A10AS02"].pnl.rates_linear_ofz is None

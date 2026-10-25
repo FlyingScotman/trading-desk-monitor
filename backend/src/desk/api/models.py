@@ -355,14 +355,15 @@ class RiskMissing(BaseModel):
     n: int
 
 
-OFZ_BASIS = ("the OFZ basis to RUONIA OIS, RUB per bp, in the ofz_view 'basis' only (0 in 'kbd'): since 0.2.6 a "
-             "fixed OFZ's par DV01 on the KBD, the same risk the view has in dv01_by_curve_rub['RUB RUONIA'] (a second "
-             "factor: never add it to the DV01), an OFZ-PK's spread to RUONIA; before, every OFZ's spread to RUONIA "
+OFZ_BASIS = ("the OFZ basis to RUONIA OIS, RUB per bp, in the ofz_view 'basis' only (0 in 'kbd'): since 0.2.7 a fixed "
+             "OFZ's risk to the KBD's par yields with RUONIA held (its KBD par risk), computed apart from its RUONIA "
+             "risk in dv01_by_curve_rub['RUB RUONIA'] (TDM#213; in 0.2.6 the same risk again); a second factor, as "
+             "CS01: never add it to the DV01. An OFZ-PK's spread to RUONIA; before 0.2.6, every OFZ's spread to RUONIA "
              "(ofz_spr01). Never an OFZ-IN's nominal proxy (dv01_ofz_in_proxy_rub)")
 OFZ_SPREAD_KBD = ("a fixed OFZ's own spread risk to the KBD (0.2.6), RUB per bp; in the ofz_view 'kbd' also an OFZ-PK's "
                   "spread to RUONIA (its basis in 'basis'); 0 in a run before 0.2.6")
-BY_CURVE = ("DV01 by curve, RUB per bp: the monitors' curve ids; an OFZ's KBD risk on RUB OFZ in the ofz_view 'kbd', on "
-            "RUB RUONIA in 'basis'")
+BY_CURVE = ("DV01 by curve, RUB per bp: the monitors' curve ids; an OFZ's KBD risk on RUB OFZ in the ofz_view 'kbd', its "
+            "RUONIA risk on RUB RUONIA in 'basis' (since 0.2.7 computed apart from the basis; in 0.2.6 its KBD risk)")
 OFZ_IN_PROXY = ("of which an OFZ-IN's nominal-rate proxy, RUB per bp (TDM#173): a linker core does not value yet (TDM#38), "
                 "its duration on the KBD. Already in dv01_by_curve_rub (RUB RUONIA in the ofz_view 'basis', RUB OFZ in "
                 "'kbd') and dv01_rub, never in ofz_basis_rub: a memo, not a risk to add")
@@ -456,11 +457,14 @@ class RiskTable(BaseModel):
     attribution_rule: str
     attribution_provisional: bool = Field(description="the rule is provisional: the owner decides (UI-02)")
     cross_ccy_kinds: list[str] = Field(description="the kinds the attribution rule applies to")
-    ofz_view: Literal["kbd", "basis"] = Field(description="where an OFZ's KBD risk is (TDM#173): kbd, on RUB OFZ with "
-                                              "no basis (every field adds up once); basis, on RUONIA plus the OFZ "
-                                              "basis apart (ofz_basis_rub: the same risk again, not to add)")
+    ofz_view: Literal["kbd", "basis"] = Field(description="how an OFZ's risk is shown (TDM#173, TDM#213): kbd, its KBD "
+                                              "par risk on RUB OFZ with no basis (every field adds up once); basis, "
+                                              "its RUONIA risk on RUONIA plus the OFZ basis apart (ofz_basis_rub: "
+                                              "another factor, as CS01, not to add to the DV01)")
     ofz_view_rule: str
-    ofz_view_note: str | None = Field(description="set when the view is approximate (a run before 0.2.6 in 'kbd')")
+    ofz_view_note: str | None = Field(description="set when the view is approximate (a run before 0.2.6 in 'kbd'; in "
+                                                  "'basis' an OFZ whose RUONIA risk is its basis again: a run of 0.2.6, "
+                                                  "an OFZ off core)")
     kinds: list[RiskTableKind] = Field(description="the classification's kinds, in the table's order")
     measures: list[RiskTableMeasure] = Field(description="the matrix's measures (one shown at a time)")
     fx: dict[str, float | None]

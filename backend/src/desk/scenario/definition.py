@@ -9,9 +9,11 @@ The definition keeps the prototype shape (``prototypes/data.js``), so the protot
      "basis": {"CNY": bp, ...}}
 
 A curve is a published curve of the run (R8): ``RUB RUONIA`` the discount curve of every RUB bond (and a RUONIA
-floater's projection), ``RUB KEY`` a key-rate floater's projection, ``RUB OFZ`` the KBD (a market curve: no bond
-is discounted on it unless the date has no RUONIA curve, so a shock of it alone moves nothing else), ``USD``
-and the like a currency's curve; each moves only by its own vector. The preset moves of
+floater's projection), ``RUB KEY`` a key-rate floater's projection, ``RUB OFZ`` the KBD's par yields (a fixed-coupon OFZ is
+discounted on it, #32; every bond on a date without the RUONIA curve), ``USD`` and the like a currency's curve; each
+moves only by its own vector. An OFZ valued in RUONIA + basis (TDM#213) moves by ``RUB RUONIA`` with its basis moved by
+``RUB OFZ - RUB RUONIA`` (``exact.core_scenario``), so ``RUB OFZ`` alone is the basis scenario and a move of all rates
+moves the OFZ by RUONIA, the basis held. The preset moves of
 all rates shift the three RUB curves alike; the basis preset only ``RUB KEY`` (store migration 0008).
 ``ofzSpread`` is the OFZ Z-spread to RUONIA (ORG_CONVENTIONS §4). ``basis`` shifts the FX basis of a currency
 (core ``FXBASIS|<ccy>``, bp) for the exact repricing of FX derivatives only (the Taylor has no basis factor).

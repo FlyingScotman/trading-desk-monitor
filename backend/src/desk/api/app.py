@@ -552,8 +552,8 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
                    book: str | None = Query(None, description="comma-separated books; all when omitted"),
                    ofz_view: Literal["kbd", "basis"] = Query(
                        concepts.OFZ_VIEW_DEFAULT, description="how the OFZ risk is shown, as the monitors' switch "
-                       "(TDM#173): " + "; ".join(f"{k}: {v}" for k, v in concepts.OFZ_VIEWS.items())
-                       + f". Default {concepts.OFZ_VIEW_DEFAULT!r}: its fields add up without counting a risk twice")):
+                       "(TDM#173, TDM#213): " + "; ".join(f"{k}: {v}" for k, v in concepts.OFZ_VIEWS.items())
+                       + f". Default {concepts.OFZ_VIEW_DEFAULT!r}: its fields add up without a second rate factor")):
         """Aggregated risk as a matrix: currencies x instrument types (UI-02, R38; ``concepts.risk_table``)."""
         run = _run_or_404(con, run_id)
         books = [b.strip() for b in book.split(",") if b.strip()] if book else None

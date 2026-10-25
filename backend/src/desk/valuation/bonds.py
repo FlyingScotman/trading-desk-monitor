@@ -19,9 +19,12 @@ Steps:
 **Discount curve** (owner's decisions of 20.10, 22.10 and 23.10, ORG_CONVENTIONS §4, DATA_CONTRACT §0.3, core
 ``docs/proposals/ofz-curve-risk-factors.md``): a fixed-coupon OFZ (``OFZ_KBD_CLASSES``: PD, AD, IN) is discounted on
 the KBD (``KBD_CURVE_ID``, published ``RUB OFZ``, spec ``rub_ofz_kbd_v3``) plus its own Z-spread to it
-(``ofz_spr01``: the spread to the KBD); its rate DV01 is on ``RUB OFZ`` in par buckets 1Y-20Y+, the unit of RUONIA
-OIS, so the run publishes it once and the pages show it as RUONIA plus the par-par OFZ basis (``ofz_basis01``) or as
-the KBD. Every other RUB bond (corporates, OFZ-PK, floaters) is discounted on the RUONIA OIS curve
+(``ofz_spr01``: the spread to the KBD). Its rate risk is two computed risks (core 0.39, ``OFZ_BASIS_IDS``, TDM#213):
+to RUONIA's OIS quotes with the basis held (``BondValuation.ofz_ruonia``) and to the basis, the KBD's par yields
+1Y-20Y+ with RUONIA held (``ofz_basis01``; equal to the KBD's par risk to the bit). The row publishes them in the
+scenarios' coordinates (``ofz_levels``): ``RUB OFZ`` the basis risk (a move of the KBD's par yields), ``RUB RUONIA``
+the RUONIA risk minus it, so its sum over the curves is the RUONIA risk and a scenario on ``RUB OFZ`` and ``RUB
+RUONIA`` reprices as core does; the pages show it as RUONIA plus the basis or as the KBD. Every other RUB bond (corporates, OFZ-PK, floaters) is discounted on the RUONIA OIS curve
 (``RUONIA_OIS_CURVE_ID``, published ``RUB RUONIA``) plus its Z-spread calibrated to the market price (CS01 for credit,
 ``ofz_spr01`` for an OFZ-PK); a RUONIA floater projects and discounts on the same curve (one factor); a key-rate
 floater has ``RUB KEY`` (projection) and ``RUB RUONIA`` (discount). The KBD stays the market curve of the G-spread,
@@ -67,12 +70,14 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from rub_fixed_income import (
+    OFZ_BASIS_CURVE_BASIS,
     RISK_BUCKETS,
     AccountingCategory,
     BondCashflow,
     BusinessCalendar,
     CoreRejection,
     CouponRateBounds,
+    CurveBootstrapRequest,
     DayCount,
     ExerciseAssumption,
     FixedCouponLeg,
@@ -83,6 +88,7 @@ from rub_fixed_income import (
     ObservationShift,
     ObservationWindow,
     Offer,
+    OfzBasisIds,
     ParYieldCurveRequest,
     PortfolioRiskResult,
     Position,
@@ -130,10 +136,18 @@ the market has none."""
 OFZ_KBD_CLASSES = ("ofz_pd", "ofz_ad", "ofz_in")
 """OFZ discounted on the KBD (option C, core 0.34+; par buckets, core 0.37.0): the fixed-coupon and indexed ones. An
 OFZ-PK (a RUONIA floater) stays on RUONIA OIS."""
-OFZ_SCHEME = "kbd_par"
-"""How the run values OFZ (the run's lineage ``ofz_scheme``, the pages' basis view): ``kbd_par`` -- on the KBD in par
-buckets, ``ofz_basis01`` the par-par basis, ``ofz_spr01`` the spread to the KBD (0.2.6); a run without it -- on RUONIA,
-``ofz_spr01`` the basis to RUONIA (until 0.2.5)."""
+OFZ_SCHEME, OFZ_SCHEME_P = "ruonia_basis", "kbd_par"
+"""How the run values OFZ (the run's lineage ``ofz_scheme``, the pages' basis view): ``ruonia_basis`` -- on the KBD, the
+risk two computed risks, to RUONIA's OIS quotes and to the basis (core 0.39, TDM#213; a row in it has
+``extra.ofz_ruonia01``); ``kbd_par`` (``OFZ_SCHEME_P``, 0.2.6, and a run of 0.2.7 without RUONIA OIS quotes) -- on the
+KBD in par buckets, ``ofz_basis01`` the par risk on the KBD and the pages' RUONIA the same risk again (core
+``basis_view``, variant P: RUONIA ≡ basis bucket by bucket), ``ofz_spr01`` the spread to the KBD; a run without it --
+on RUONIA, ``ofz_spr01`` the basis to RUONIA (until 0.2.5)."""
+OFZ_BASIS_ID = "RUB_OFZ_BASIS"
+"""Core's name of the OFZ basis factor (``IR|RUB_OFZ_BASIS|<bucket>``, core ``OfzBasisIds.basis_id``): not a snapshot
+curve. It never reaches a row (``ofz_levels`` takes it to ``RUB OFZ``); a scenario names it (``scenario.exact``)."""
+OFZ_BASIS_IDS = OfzBasisIds(KBD_CURVE_ID, RUONIA_OIS_CURVE_ID, OFZ_BASIS_ID)
+"""Core ``ValuationPolicy.ofz_basis`` of a core call that holds the RUONIA OIS curve as quotes (``value_bonds``)."""
 
 
 def ccy_curve(ccy: str) -> str:
@@ -592,6 +606,10 @@ class BondValuation:
     """A foreign bond valued by core: its currency and the rate its ``_rub`` amounts are converted at (core
     ``CurrencyAmounts``, the run's market rate), so the flash PnL reprices it in its currency and books the rate move
     in ``fx_gross`` (``pnl.flash.explain``); None for a RUB bond and off core."""
+    ofz_ruonia: dict[str, float] = field(default_factory=dict)
+    """An OFZ on the KBD valued in RUONIA + basis (``OFZ_BASIS_IDS``, TDM#213): its RUONIA risk by bucket, to RUONIA's
+    OIS quotes with the basis held (core ``IR|RUB_RUONIA_OIS|*``); its basis risk is ``curve_buckets["RUB OFZ"]`` and
+    ``curve_buckets["RUB RUONIA"]`` is the difference (``ofz_levels``). Empty for every other bond."""
 
     @property
     def spread_curve(self) -> str | None:
@@ -700,7 +718,7 @@ def inexact_accrual(r: BondRequest, inst: Instrument, after: date) -> str | None
 def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_order: bool = False,
                 cache: ShockedCurveCache | None = None, scenarios: tuple = (),
                 foreign: dict[str, tuple[str, ...]] | None = None, quote_curve_risk: bool = False,
-                ) -> tuple[dict[str, BondValuation | Rejected], list[PortfolioRiskResult]]:
+                ofz_basis: bool = True) -> tuple[dict[str, BondValuation | Rejected], list[PortfolioRiskResult]]:
     """Value ``requests`` on ``market`` (a core snapshot without quotes, with the curves and fixings
     floaters need), in one core call (the spread kind per bond: ``spread_kinds``). Returns the valuation or the
     rejection per position ID, and the core results (one, or none without a valuable request). ``scenarios`` (core
@@ -709,7 +727,12 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
     ``orchestrator.foreign_bond_curves``); a foreign bond of a currency without one is ``Rejected("no_foreign_curve")``
     (the fallback ladder values it). ``quote_curve_risk`` (``EodContext.quote_curve_risk``): core's
     ``ValuationPolicy.quote_curve_risk`` when the call holds a curve as par-yield quotes (a proxy of ``risk_market``),
-    so its risk is in those quotes; a call without one keeps its policy and its bytes."""
+    so its risk is in those quotes; a call without one keeps its policy and its bytes. ``ofz_basis``
+    (``EodContext.ofz_basis``): an OFZ on the KBD in RUONIA + basis (core ``ValuationPolicy.ofz_basis``, ``OFZ_BASIS_IDS``)
+    when ``market`` holds the RUONIA OIS curve as its quotes (``EodContext.risk_market``); off, or on built curves (the
+    fallback ladder's medians), on the KBD alone (variant P, ``OFZ_SCHEME_P``). Fixed flows take core's closed form
+    (``risk_method`` and ``second_order_method`` ``analytic``): equal to the bumps up to their O(bump²) error, and the
+    RUONIA + basis Hessian by bumps is about 1 060 repricings per bond."""
     foreign = foreign or {}
     out: dict[str, BondValuation | Rejected] = {}
     results = []
@@ -774,6 +797,10 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
     proxies = {c.curve_id for c in market.curves if c.spec_id.endswith("_par_proxy_v1")}
     if quote_curve_risk and any(isinstance(c.curve, ParYieldCurveRequest) for c in snap.curves):
         policy = replace(policy, quote_curve_risk=True)
+    if ofz_basis and on_kbd and disc == RUONIA_OIS_CURVE_ID and any(
+            c.curve_id == RUONIA_OIS_CURVE_ID and isinstance(c.curve, CurveBootstrapRequest) for c in snap.curves):
+        policy = replace(policy, ofz_basis=OFZ_BASIS_IDS)
+    policy = replace(policy, risk_method="analytic", second_order_method="analytic")
     result = value_portfolio(run_id=f"desk-eod-{market.business_date}-book", as_of=market.known_at,
                              snapshot=replace(snap, quotes=tuple(quotes.values())),
                              instruments=list(instruments.values()), positions=positions, policy=policy,
@@ -816,6 +843,11 @@ def _valuation(prep: _Prepared, v: PositionValuation, quantity: float, guard: bo
         offer = inst.horizon(v.horizon, v.settlement_date)[1] if v.horizon in ("confirmed_put", "open_put") else None
         floater = FloaterModel(inst, offer, v.horizon_date, CAP_FLOOR_GUARD_BP if guard else None)
     first = v.factor_risk.first_order_by_factor()
+    hess = v.factor_risk.hessian_by_factor() if v.factor_risk.has_second_order else {}
+    ruonia: dict[str, float] = {}
+    if v.curve_basis == OFZ_BASIS_CURVE_BASIS:
+        ruonia = {b: first.get(f"IR|{RUONIA_OIS_CURVE_ID}|{b}", 0.0) for b in RISK_BUCKETS}
+        first, hess = ofz_levels(first, hess)
     by_curve: dict[str, dict[str, float]] = {}
     for f, x in first.items():
         if f.startswith("IR|"):
@@ -838,11 +870,12 @@ def _valuation(prep: _Prepared, v: PositionValuation, quantity: float, guard: bo
         floater=floater, g_spread_bp=v.g_spread_bp, discount_margin_bp=v.discount_margin_bp,
         spread_buckets=dict(zip(RISK_BUCKETS, v.spread_buckets_rub)) if v.spread_buckets_rub else {},
         fx_rate=(v.currency_amounts.currency, v.currency_amounts.rub_per_unit) if v.currency_amounts else None,
+        ofz_ruonia=ruonia,
     )
     if v.factor_risk.has_second_order:
         # Core's full Hessian over its factors, renamed to the published curves; every curve is its own factor,
         # so a floater keeps the cross terms of its discount and projection curves.
-        for (a, b), x in v.factor_risk.hessian_by_factor().items():
+        for (a, b), x in hess.items():
             fa, fb = sorted((_factor(a), _factor(b)))
             out.hessian.append((fa, fb, x))
         # every curve moved in parallel together: the convexity of the yield
@@ -850,6 +883,46 @@ def _valuation(prep: _Prepared, v: PositionValuation, quantity: float, guard: bo
                           if a.startswith("IR|") and b.startswith("IR|"))
         out.curve_convexity = rates * 1e8 / v.pv_rub if v.pv_rub else None
     return out
+
+
+def ofz_levels(first: dict[str, float], hessian: dict[tuple[str, str], float]
+               ) -> tuple[dict[str, float], dict[tuple[str, str], float]]:
+    """An OFZ's risk in RUONIA + basis (core factors ``r_b = IR|RUB_RUONIA_OIS|b``, ``q_b = IR|RUB_OFZ_BASIS|b``, ``CS``)
+    in the scenarios' coordinates: RUONIA ``r`` and the KBD's par level ``o = r + q`` (``IR|RUB_KBD|b``, published
+    ``RUB OFZ``). The change of variables ``q = o - r`` is linear, so the first order and the Hessian are exact in both:
+    ``dV/do = dV/dq`` (the basis risk, the KBD's par risk), ``dV/dr|o = dV/dr - dV/dq``, ``H' = M^T H M``.
+
+    Why (TDM#213): a scenario and the Taylor move the published curves (``scenario.definition``), where ``RUB OFZ`` is
+    the KBD's par yields and a move of all rates shifts ``RUB OFZ`` and ``RUB RUONIA`` alike; in these coordinates the
+    move is RUONIA by ``r`` and the basis by ``o - r`` (``scenario.exact.core_scenario``), and the sum of a row's risk
+    over the curves is its RUONIA risk, what a move of all rates does (no factor counted twice). ``hessian``: core's
+    ``hessian_by_factor`` (each pair once); the result likewise (the Hessian's zeros left out)."""
+    kbd = f"IR|{KBD_CURVE_ID}|"
+
+    def parts(f: str) -> tuple[tuple[str, float], ...]:  # a coordinate y as the core factors z: z = M y
+        if f.startswith(f"IR|{RUONIA_OIS_CURVE_ID}|"):
+            b = f.rsplit("|", 1)[1]
+            return (f, 1.0), (f"IR|{OFZ_BASIS_ID}|{b}", -1.0)
+        if f.startswith(kbd):
+            return ((f"IR|{OFZ_BASIS_ID}|{f.rsplit('|', 1)[1]}", 1.0),)
+        return ((f, 1.0),)
+
+    def y_of(f: str) -> str:
+        return kbd + f.rsplit("|", 1)[1] if f.startswith(f"IR|{OFZ_BASIS_ID}|") else f
+
+    ys = sorted({y_of(f) for f in first} | {y_of(f) for ab in hessian for f in ab}
+                | {f"IR|{RUONIA_OIS_CURVE_ID}|{f.rsplit('|', 1)[1]}" for f in first if f.startswith(f"IR|{OFZ_BASIS_ID}|")})
+    sym: dict[tuple[str, str], float] = {}
+    for (a, b), x in hessian.items():
+        sym[a, b] = sym[b, a] = x
+    g = {y: math.fsum(c * first.get(z, 0.0) for z, c in parts(y)) for y in ys}
+    h = {}
+    for i, a in enumerate(ys):
+        for b in ys[i:]:
+            x = math.fsum(ca * cb * sym.get((za, zb), 0.0) for za, ca in parts(a) for zb, cb in parts(b))
+            if x:
+                h[a, b] = x
+    return g, h
 
 
 def _factor(name: str) -> str:

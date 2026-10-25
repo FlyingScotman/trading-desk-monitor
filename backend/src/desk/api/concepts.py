@@ -254,6 +254,7 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
             "hist": {"dv01": series("dv01"), "cs01": [s["cs01"] for s in sums], "basis01": [s["basis"] for s in sums],
                      "ofzSpr01": [s.get("ofzSpr", 0.0) for s in sums], "basisPk01": [s.get("basisPk", 0.0) for s in sums],
                      "basisIn01": [s.get("basisIn", 0.0) for s in sums],
+                     "ofzRuo01": [s.get("ofzRuo") for s in sums],
                      "dv01Book": series("dv01Book"), "mvType": series("mvType"), "mvCcy": series("mvCcy"), "pnl": pnl},
             "histSource": "runs", "pnlPeriods": periods,
             "positions": positions, "cashflows": flows, **market,
@@ -589,6 +590,7 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
             for k, j in (("notional", 0), ("dv01", 1), ("cs01", 2), ("basis", 3), ("mv", 4)):
                 s[k].append(last[j] if last else None)
             s["ofzSpr"].append(last[10] if last and len(last) > 10 else None)  # an OFZ's spread to the KBD (0.2.6)
+            s["ofzRuo"].append(last[11] if last and len(last) > 11 else None)  # its RUONIA risk apart (0.2.7, TDM#213)
             for c in last[8] if last else ():
                 cv.setdefault(c, [None] * i)
             for c, arr in cv.items():
@@ -710,9 +712,10 @@ def point_flag(h: tuple, book_date: str | None, d: date, valued: bool) -> list[s
     return ["minor", "; ".join(notes)] if notes else None
 
 
-OPTIONAL = ("zspr", "dm", "dmPx", "icpi", "ir", "bei", "cpi", "ofzSpr")
+OPTIONAL = ("zspr", "dm", "dmPx", "icpi", "ir", "bei", "cpi", "ofzSpr", "ofzRuo")
 """Series of ``positions_history`` given only when the position has a value (``ofzSpr``: an OFZ's spread risk to the
-KBD, runs of 0.2.6 on; ``basis`` is its par-par basis then, its spread to RUONIA before): MOEX's Z-spread to the KBD, the desk's
+KBD, runs of 0.2.6 on; ``basis`` is its par-par basis then, its spread to RUONIA before; ``ofzRuo``: its RUONIA risk
+computed apart from the basis, runs of 0.2.7 on, TDM#213: what the «КБД» view takes off RUONIA, the basis before): MOEX's Z-spread to the KBD, the desk's
 discount margin of a floater (its run spread) and its estimate from the price on every date of the price history
 (``dm_from_price``), MOEX's linker analytics (contract 1.2), and for a linker CPI year on year as known on the date
 (R25)."""
@@ -825,21 +828,27 @@ RISK_KINDS = frozenset(k for k, g, _ in INSTR_KINDS if g in ("GOV", "SUB", "CORP
 """Kinds whose position always has a rate or spread risk: one without any is ``risk missing``, never a zero (but
 an accrual-only HTM bond: no market risk by the rule)."""
 OFZ_VIEWS = {
-    "kbd": "«КБД»: an OFZ's rate risk on its own curve, the KBD (RUB OFZ in dv01_by_curve_rub), RUONIA without it; no "
-           "OFZ basis (ofz_basis_rub 0): every DV01 and spread field adds up once. An OFZ-PK has no KBD risk: its basis "
-           "(its spread to RUONIA) is in ofz_spread_kbd_rub. A run before 0.2.6 had its OFZ on RUONIA: their KBD risk "
-           "is approximated by their basis to RUONIA (ofz_view_note)",
-    "basis": "«RUONIA + базис» (the monitors' default): an OFZ's KBD risk on RUONIA (moving RUONIA moves the KBD with "
-             "it) and the OFZ basis to RUONIA OIS apart (ofz_basis_rub): two factors, the same risk seen twice -- never "
-             "add ofz_basis_rub to the DV01 fields",
+    "kbd": "«КБД»: an OFZ's rate risk on its own curve, the KBD's par yields (RUB OFZ in dv01_by_curve_rub), RUONIA "
+           "without it; no OFZ basis (ofz_basis_rub 0): every DV01 and spread field adds up once. An OFZ-PK has no KBD "
+           "risk: its basis (its spread to RUONIA) is in ofz_spread_kbd_rub. A run before 0.2.6 had its OFZ on RUONIA: "
+           "their KBD risk is approximated by their basis to RUONIA (ofz_view_note)",
+    "basis": "«RUONIA + базис» (the monitors' default): an OFZ's risk to RUONIA OIS quotes with the basis held (in "
+             "dv01_by_curve_rub['RUB RUONIA']) and its risk to the OFZ basis, the KBD's par yields with RUONIA held "
+             "(ofz_basis_rub): two computed risks to two factors (0.2.7, core 0.39), like DV01 and CS01. Their sum is no "
+             "rate DV01 (it moves the KBD twice): never add ofz_basis_rub to the DV01 fields. The DV01 here is the OFZ's "
+             "RUONIA risk, a few tenths of a percent off its KBD risk in «КБД». A run of 0.2.6 (and an OFZ off core) "
+             "has its KBD risk on RUONIA and again as the basis (ofz_view_note)",
 }
-"""How the risk table shows the OFZ risk (TDM#173; the monitors' switch «ОФЗ: RUONIA + базис / КБД», ``lib/real.js``
-``M.ofzView``). The DV01 by currency (``dv01_rub``) and over all curves is the same in both."""
+"""How the risk table shows the OFZ risk (TDM#173, TDM#213; the monitors' switch «ОФЗ: RUONIA + базис / КБД»,
+``lib/real.js`` ``M.ofzView``). The DV01 of an OFZ in RUONIA + basis is its RUONIA risk in «RUONIA + базис» and its
+basis risk (the KBD's par risk) in «КБД»; with the basis a copy of the KBD risk (a run of 0.2.6) both are the same."""
 OFZ_VIEW_DEFAULT = "kbd"
-"""The API's default (TDM#173): the view whose fields add up without counting the KBD risk twice; the «RUONIA + базис»
-view (the monitors' default) only when asked for by name."""
+"""The API's default (TDM#173): the view whose fields add up without a second rate factor; the «RUONIA + базис»
+view (the monitors' default) only when asked for by name. Under review in TDM#205 now that the two risks are computed."""
 OFZ_VIEW_APPROX = ("a run before 0.2.6: its OFZ were on RUONIA, their KBD risk in the «КБД» view is their basis to "
                    "RUONIA (ofz_spr01), moved off RUONIA")
+OFZ_VIEW_P = ("{n} OFZ without a computed RUONIA risk (a run of 0.2.6 or an OFZ off core): their RUONIA risk is their "
+              "KBD risk and the basis the same risk again (core basis_view, variant P)")
 MISSING_TEXT = {"not_valued": "не оценена", "reported_no_risk": "оценена по отчёту, риска в отчёте нет",
                 "no_risk": "риск не посчитан"}
 GROUPS = ("GOV", "SUB", "CORP", "DER", "OTH")
@@ -968,15 +977,15 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
     currency (``*_ccy``), DV01 and MV too where its rate is known. Rows: one per currency (``level`` ccy), group
     (group) and kind (kind) with a position or a risk there; ``total`` only what sums across currencies, DV01 over
     the curves of different currencies only as ``dv01_all_curves_rub`` (labelled so, never as a currency's).
-    ``ofz_view`` (``OFZ_VIEWS``, TDM#173) says where an OFZ's KBD risk is, as the monitors' switch does: ``kbd`` on
-    ``RUB OFZ`` with no basis, ``basis`` on RUONIA plus the OFZ basis (``ofz_basis_rub``). An OFZ-IN's nominal proxy
+    ``ofz_view`` (``OFZ_VIEWS``, TDM#173, TDM#213) says where an OFZ's risk is, as the monitors' switch does: ``kbd`` its
+    KBD par risk on ``RUB OFZ`` with no basis, ``basis`` its RUONIA risk on RUONIA plus the OFZ basis (``ofz_basis_rub``). An OFZ-IN's nominal proxy
     (``summary.ofz_in_proxy``) is never a basis: its rate risk is where the view puts the KBD, ``dv01_ofz_in_proxy_rub``
     says how much of it is the proxy (a memo, already in the DV01)."""
     if attribution not in ATTRIBUTIONS:
         raise ValueError(f"unknown attribution {attribution!r}")
     if ofz_view not in OFZ_VIEWS:
         raise ValueError(f"unknown ofz_view {ofz_view!r}")
-    kbd, approx = ofz_view == "kbd", False
+    kbd, approx, n_p = ofz_view == "kbd", False, 0
     cells: dict[tuple[str, str], dict[str, Any]] = {}
 
     def cell(ccy: str, kind: str) -> dict[str, Any]:
@@ -1004,10 +1013,13 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
         # «КБД»: the run's KBD risk of an OFZ of the KBD scheme stays on RUB OFZ (as lib/real.js: another row's, e.g. a
         # corporate's on a date without RUONIA, is on RUONIA in both views)
         curves = _risk_curves(f, kbd and ex.get("ofz_basis01") is not None)
+        if kbd and ex.get("ofz_ruonia01") is not None:  # RUONIA + basis: the row's RUB RUONIA is RUONIA - basis
+            curves.pop("RUB RUONIA", None)  # (bonds.ofz_levels), the KBD view keeps its basis, the KBD's par risk
         if summary.ofz_in_proxy(kind == "OFZ_IN", ex.get("ofz_basis01"), ex.get("quality")):
             c["in_proxy"] += b  # a linker's nominal DV01 on the KBD: in the DV01 (RUONIA or RUB OFZ), not a basis
         elif not kbd:
             c["basis"] += b
+            n_p += ex.get("ofz_basis01") is not None and ex.get("ofz_ruonia01") is None
         elif kind == "OFZ_PK":  # «КБД»: an OFZ-PK has no KBD risk, its basis is its own spread to RUONIA
             spr = (spr or 0.0) + b
         elif ex.get("ofz_basis01") is None and b:  # a run before 0.2.6: the OFZ on RUONIA, its KBD risk ~ its basis
@@ -1109,7 +1121,7 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
     return {"attribution": attribution, "attribution_rule": ATTRIBUTIONS[attribution],
             "attribution_provisional": True, "cross_ccy_kinds": list(CROSS_CCY_KINDS),
             "ofz_view": ofz_view, "ofz_view_rule": OFZ_VIEWS[ofz_view],
-            "ofz_view_note": OFZ_VIEW_APPROX if approx else None,
+            "ofz_view_note": OFZ_VIEW_APPROX if approx else OFZ_VIEW_P.format(n=n_p) if n_p else None,
             "kinds": [{"kind": k, "group": g, "label": lab} for k, g, lab in INSTR_KINDS],
             "measures": [{"measure": m, "label": lab, "across_ccys": a} for m, lab, a in MATRIX_MEASURES
                          if not (kbd and m == "ofz_basis")],

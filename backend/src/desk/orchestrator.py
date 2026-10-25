@@ -42,6 +42,7 @@ from .pnl.direct import split_fx
 from .pnl.flash import FlashCurves, FlashPnl, NoPnl, explain
 from .valuation.bonds import (
     OFZ_SCHEME,
+    OFZ_SCHEME_P,
     BondRequest,
     BondValuation,
     Rejected,
@@ -128,6 +129,19 @@ class EodContext:
     (``rub_key_rate_projection_v1``); the desk's key-rate swaps (#45) project on the built forward curve
     (``swap_curves``), so their key-rate risk is in its forward segments, not in KRS quotes, with the setting too."""
 
+    ofz_basis: bool = True
+    """An OFZ on the KBD valued in RUONIA + basis (core 0.39 ``ValuationPolicy.ofz_basis``, TDM#213: its RUONIA and basis
+    risk both computed; ``valuation.bonds.OFZ_SCHEME``) when the RUONIA OIS curve is in its quotes (``quote_curves``).
+    Off: the KBD alone, the basis view a copy of its par risk (``OFZ_SCHEME_P``, 0.2.6): what the exact scenario of a
+    0.2.6 run reprices on (``scenario.exact._context``)."""
+
+    @property
+    def ofz_scheme(self) -> str:
+        """The run's lineage ``ofz_scheme`` (``valuation.bonds.OFZ_SCHEME``): RUONIA + basis when its OFZ can be valued
+        so (``ofz_basis`` and RUONIA OIS quotes), else the KBD alone."""
+        quoted = any(c.curve_id == rates.RUONIA_OIS_CURVE_ID for c in self.quote_curves)
+        return OFZ_SCHEME if self.ofz_basis and quoted else OFZ_SCHEME_P
+
     @property
     def reference_facts(self) -> Reference:
         return self.reference if self.reference is not None else reference_of(None, self.static)
@@ -209,7 +223,7 @@ class EodContext:
             "hub": prov.get("hub"),
             "published_at": prov.get("published_at"),
             "curve_spec": KBD_SPEC,
-            "ofz_scheme": OFZ_SCHEME,
+            "ofz_scheme": self.ofz_scheme,
             "curve_model": KBD_MODEL_VERSION,
             "kbd_check_bp": round(self.kbd_check_bp, 6),
             "calendar": self.calendar.version,
@@ -358,7 +372,7 @@ def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: b
             o.reason, o.detail = e.reason, e.detail
     valued, results = value_bonds(ctx.risk_market, todo, second_order=second_order, cache=ctx.cache,
                                   scenarios=scenarios, foreign=foreign_bond_curves(ctx),
-                                  quote_curve_risk=ctx.quote_curve_risk)
+                                  quote_curve_risk=ctx.quote_curve_risk, ofz_basis=ctx.ofz_basis)
     by_pid = {p.position_id: r for r in results for p in r.positions}
     for pid, v in valued.items():
         o = out[index[pid]]

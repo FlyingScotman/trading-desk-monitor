@@ -550,13 +550,19 @@ def core_analytics(v: BondValuation) -> dict[str, Any]:
 
 def ofz_basis(t: Any, v: BondValuation) -> dict[str, Any]:
     """``ofz_basis01`` of an OFZ on the KBD (``valuation.bonds.OFZ_KBD_CLASSES``, a RUB face): its DV01 on ``RUB OFZ``,
-    the risk to the KBD's par yields moving against RUONIA OIS's (the par-par basis, core ``basis_view``: in the
-    «RUONIA + базис» view of the pages the same buckets are on RUONIA and on the basis); its buckets are the row's
+    the risk to the KBD's par yields moving against RUONIA OIS's (the par-par basis); its buckets are the row's
     ``risk["RUB OFZ"]``. Its presence marks a row of the KBD scheme (``bonds.OFZ_SCHEME``): until 0.2.5 an OFZ was on
-    RUONIA and its basis was ``ofz_spr01``. Empty for every other row."""
+    RUONIA and its basis was ``ofz_spr01``. ``ofz_ruonia01`` (TDM#213, core 0.39): its RUONIA risk, computed apart from
+    the basis (to RUONIA's OIS quotes, the basis held); the row's risk is in the scenarios' coordinates
+    (``bonds.ofz_levels``), so ``risk["RUB RUONIA"]`` is the RUONIA risk minus the basis and its sum over the curves is
+    ``ofz_ruonia01``. Without it (0.2.6, an OFZ on a fallback rung) the pages' RUONIA is the basis again (variant P).
+    Empty for every other row."""
     if t.bond_class not in OFZ_KBD_CLASSES or (t.face_unit or "RUB") != "RUB":
         return {}
-    return {"ofz_basis01": math.fsum((v.risk().get(OFZ_CURVE) or {}).values()) + 0.0}
+    out = {"ofz_basis01": math.fsum((v.risk().get(OFZ_CURVE) or {}).values()) + 0.0}
+    if v.ofz_ruonia:
+        out["ofz_ruonia01"] = math.fsum(v.ofz_ruonia.values()) + 0.0
+    return out
 
 
 def _f(x: Any) -> float | None:

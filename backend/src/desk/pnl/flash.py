@@ -29,7 +29,9 @@ V1          the D dirty price                                                   
   A floater's fixings published between D-1 and D enter here.
 - ``rates`` and ``spread`` are full repricings, so their second-order effects are inside
   them; ``convexity`` stays 0 on purpose. ``rates_linear`` (Σ over the curves of the D-1 bucket DV01 x that
-  curve's continuous zero-rate move per pillar) is ``rates`` to first order.
+  curve's move per pillar in the unit of its buckets) is ``rates`` to first order. An OFZ in RUONIA + basis (TDM#213):
+  its basis risk (the KBD's par risk) x the KBD's par move, split by its factors (``rates_linear_ofz``): RUONIA (its
+  RUONIA risk x the OIS par move) and the basis (the rest); ``rates`` itself is the full repricing of the KBD's move.
 - ``other`` is what the D-1 position does not explain at the D market: a changed schedule
   (an offer passed, a new coupon fixed) or a quote whose price and accrued disagree.
 
@@ -247,6 +249,13 @@ class FlashPnl:
     ``fx_gross_cbr`` multiply by the rate move."""
     fx_rates: tuple[float, float] | None = None
     """A foreign bond: the market rates of D-1 and D its valuations were converted at (RUB per unit)."""
+    rates_linear_ofz: tuple[float, float] | None = None
+    """An OFZ in RUONIA + basis (``BondValuation.ofz_ruonia``, TDM#213): ``rates_linear`` by its two factors, RUONIA (its
+    D-1 RUONIA risk x the OIS par move) and the basis (the rest). ``rates_linear`` is its basis risk (the KBD's par risk)
+    x the KBD's par move: the day moved the KBD itself, and a RUONIA move with the KBD's par yields unchanged moves the
+    bond by nothing to first order (its RUONIA risk is its basis risk x the KBD's par move per OIS quote), not by its row's
+    ``RUB RUONIA`` (RUONIA minus the basis: the scenarios' coordinates, ``valuation.bonds.ofz_levels``). None for every
+    other bond."""
 
     @property
     def explained(self) -> float:
@@ -268,6 +277,8 @@ class FlashPnl:
             "prev_valuation_date": self.prev_valuation_date.isoformat(), "z0_bp": round(self.z0_bp, 4),
             "z1_bp": round(self.z1_bp, 4), "received_rub": self.received_rub, "total": self.total,
             "identity_error": self.identity_error, "rates_linear": self.rates_linear,
+            **({"rates_linear_ruonia": self.rates_linear_ofz[0], "rates_linear_basis": self.rates_linear_ofz[1]}
+               if self.rates_linear_ofz is not None else {}),
             "prev_price_basis": self.price_basis[0], **fx,
         }
 
@@ -353,10 +364,17 @@ def explain(prev: BondValuation, cur: BondValuation, curves: FlashCurves,
         v_spread = pv(s1, curves.cur_curves, cur.z_spread_bp, True) + received
     except (ValueError, RuntimeError, CoreRejection) as e:
         raise NoPnl("core_error", str(e)) from e
-    linear = 0.0
+    linear, kbd = 0.0, RISK_CURVES[KBD_CURVE_ID]
     for c, bs in prev.risk().items():
+        if prev.ofz_ruonia and c != kbd:  # an OFZ in RUONIA + basis: the KBD's own move is its first order (below)
+            continue
         move = curves.zero_move_bp(PUBLISHED_TO_CORE.get(c, c))
         linear += sum(x * move.get(b, 0.0) for b, x in bs.items())
+    ofz = None
+    if prev.ofz_ruonia:  # RUONIA + basis: the day moved the KBD itself (dK), so B dK; RUONIA's part R dO, the rest basis
+        d_ois = curves.zero_move_bp(RUONIA_OIS_CURVE_ID)
+        ruonia = math.fsum(x * d_ois.get(b, 0.0) for b, x in prev.ofz_ruonia.items())
+        ofz = (ruonia, linear - ruonia)
     v1 = q * cur.dirty_rub / f1 + received
     total = q * (cur.dirty_rub - prev.dirty_rub) + received * f1
     out = FlashPnl(
@@ -366,7 +384,7 @@ def explain(prev: BondValuation, cur: BondValuation, curves: FlashCurves,
         received_rub=received * f1,
         carry=(v_carry - v0) * f1, rolldown=(v_roll - v_carry) * f1, rates=(v_rates - v_roll) * f1,
         spread=(v_spread - v_rates) * f1, other=(v1 - v_spread) * f1, total=total, identity_error=0.0,
-        rates_linear=linear, price_basis=(prev.price_basis, cur.price_basis),
+        rates_linear=linear, price_basis=(prev.price_basis, cur.price_basis), rates_linear_ofz=ofz,
         fx_gross=v0 * (f1 - f0) if fx else 0.0,
         **({"ccy": ccy, "fx_delta_ccy": v0, "fx_rates": (f0, f1)} if fx else {}),
     )

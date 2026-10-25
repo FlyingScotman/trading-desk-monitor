@@ -9,7 +9,10 @@
  *    «RUONIA + базис» (по умолчанию) — базис ОФЗ − RUONIA (КБД минус RUONIA, б.п.), риск прогона на «RUB OFZ» (КБД) добавлен
  *    к RUONIA, а риск базиса — в прогоне 0.2.6+ par-DV01 ОФЗ на КБД (extra.ofz_basis01, бакеты — risk["RUB OFZ"]), в прогоне
  *    до 0.2.6 — ofzSpr01 (спред ОФЗ к RUONIA) по бакетам срока (extra.spread_buckets); «КБД» — та же кривая КБД как кривая
- *    ставок: её риск — базис, RUONIA — без него. p.ofzSpr01 — собственный спред ОФЗ к КБД (0.2.6+; null — прогон до 0.2.6); кривые валют USD/EUR/CNY — USD SOFR / EUR ESTR / CNY XCCY (точки — если прогон их публикует,
+ *    ставок: её риск — базис, RUONIA — без него. С 0.2.7 (#213, extra.ofz_ruonia01 у строки) риск RUONIA и риск базиса ОФЗ —
+ *    два разных риска ядра: строка прогона хранит их в координатах сценариев (risk["RUB OFZ"] — базис, risk["RUB RUONIA"] —
+ *    RUONIA минус базис), поэтому в «RUONIA + базис» RUONIA = сумма обеих кривых строки (её риск RUONIA), а в «КБД» у ОФЗ
+ *    RUONIA нет совсем (вычитается весь её риск RUONIA, p.ofzRuo01). В прогоне 0.2.6 RUONIA ОФЗ = её базис (приближение). p.ofzSpr01 — собственный спред ОФЗ к КБД (0.2.6+; null — прогон до 0.2.6); кривые валют USD/EUR/CNY — USD SOFR / EUR ESTR / CNY XCCY (точки — если прогон их публикует,
  *    иначе только риск); прочие кривые риска — своими строками со своей валютой (CNY implied, прокси, CHF…);
  *  - FX-дельта — по валютам (p.fxDeltaBy = fx_delta {ccy}); p.fxDelta — только в валюте позиции; ноги FX-сделки —
  *    p.legs (extra.legs); DV01 и ОВП по валюте — «по ногам» (lib/instr.js: INSTR.dv01In / INSTR.fxIn);
@@ -80,6 +83,8 @@
   // единица бакетов по кривым прогона (#171; orchestrator.EodContext.curve_units): kit.js K.curveTip; null — прогон до неё
   M.curveUnits = (D.source || {}).curveUnits || null;
   if (M.ofzView === 'kbd' && !M.ofzScheme) M.notes.push('прогон до 0.2.6: ОФЗ в нём на RUONIA, вид «КБД» приближённый (риск КБД = базис ОФЗ к RUONIA)');
+  // 'ruonia_basis' (0.2.7, #213): риск RUONIA и базис ОФЗ посчитаны ядром порознь; 'kbd_par' (0.2.6) — RUONIA ОФЗ = её базис
+  if (M.ofzView === 'basis' && M.ofzScheme === 'kbd_par') M.notes.push('прогон 0.2.6: риск ОФЗ к RUONIA в нём — тот же риск, что базис (приближение); с 0.2.7 они посчитаны порознь');
   const runQ = 'run_id=' + encodeURIComponent((D.source || {}).runId || '');
   (D.riskNotes || []).forEach(n => M.notes.push(n.text + (n.detail ? ' (' + n.detail + ')' : '')));
   if (!D.pnlAvailable && D.pnlReasonText) M.notes.push('PnL: ' + D.pnlReasonText);
@@ -327,6 +332,7 @@
     // базис ОФЗ (#32): в прогоне 0.2.6+ — par-DV01 ОФЗ на КБД (extra.ofz_basis01, бакеты — его риск на КБД), ofzSpr01 —
     // собственный спред бумаги к КБД; в прогоне до 0.2.6 (и у ОФЗ-ПК) ofzSpr01 — спред к RUONIA, он и есть базис
     const kbdScheme = ex.ofz_basis01 != null, inProxy = isInProxy(p, ex);
+    p.ofzRuo01 = num(ex.ofz_ruonia01);  // 0.2.7+ (#213): риск RUONIA ОФЗ, посчитанный отдельно от базиса; null — его нет
     p.basis01 = kbdScheme ? (num(ex.ofz_basis01) || 0) : (num(d.ofzSpr01) || 0);
     p.ofzIn01 = inProxy ? p.basis01 : 0;  // ОФЗ-ИН: номинальный прокси на КБД (#173) — уже в DV01, не базис
     if (inProxy) p.basis01 = 0;
@@ -347,7 +353,9 @@
       if (isPk(p)) { p.ofzSprb = p.risk['RUB OFZ'].slice(); p.ofzSpr01 = (p.ofzSpr01 || 0) + p.basis01; p.risk['RUB OFZ'] = zeros(); }
       else {
         if (inProxy) p.risk['RUB OFZ'] = kbdb;  // ОФЗ-ИН: базиса нет, на КБД — её риск прогона
-        p.risk['RUB RUONIA'] = p.risk['RUB RUONIA'].map((v, k) => v - p.risk['RUB OFZ'][k]);
+        // RUONIA ОФЗ: 0.2.7+ — её риск RUONIA (обе кривые строки: RUONIA − базис и базис), иначе — тот же риск КБД
+        const ruo = zeros(); if (p.ofzRuo01 != null) ['RUB RUONIA', 'RUB OFZ'].forEach(c => ((d.risk || {})[c] || []).forEach((v, k) => ruo[k] += v || 0));
+        p.risk['RUB RUONIA'] = p.risk['RUB RUONIA'].map((v, k) => v - (p.ofzRuo01 != null ? ruo[k] : p.risk['RUB OFZ'][k]));
       }
       p.basis01 = 0;
     }
@@ -414,9 +422,10 @@
   M.hist.ofzSpr01 = H.ofzSpr01 ? H.ofzSpr01.map(v => v == null ? null : +v) : new Array(n).fill(0);
   if (!H.ofzSpr01) M.hist.ofzSpr01[n - 1] = sumBy(p => p.ofzSpr01);
   if (M.ofzView === 'kbd' && H.dv01 && H.basis01) {  // КБД — базис без ОФЗ-ПК (basisPk01: её спред к RUONIA — в спред ОФЗ)
-    const pk = H.basisPk01 || [], lin = H.basisIn01 || [], O = M.hist.dv01;
+    // из RUONIA — риск RUONIA ОФЗ (ofzRuo01, сводка 5+, #213: посчитанный отдельно, у прогона 0.2.6 — базис) и прокси ОФЗ-ИН
+    const pk = H.basisPk01 || [], lin = H.basisIn01 || [], ruo = H.ofzRuo01 || [], O = M.hist.dv01;
     O['RUB OFZ'] = H.basis01.map((v, i) => v == null ? null : v - (pk[i] || 0) + (lin[i] || 0));
-    O['RUB RUONIA'] = O['RUB RUONIA'].map((v, i) => v == null ? null : v - (O['RUB OFZ'][i] || 0));
+    O['RUB RUONIA'] = O['RUB RUONIA'].map((v, i) => v == null ? null : v - (ruo[i] != null ? ruo[i] + (lin[i] || 0) : (O['RUB OFZ'][i] || 0)));
     M.hist.ofzSpr01 = M.hist.ofzSpr01.map((v, i) => v == null ? null : v + (pk[i] || 0));
   }
 
@@ -431,7 +440,7 @@
       return JSON.parse(x.responseText);
     } catch (e) { return null; }
   }
-  const OPT = ['zspr', 'dm', 'dmPx', 'icpi', 'ir', 'bei', 'cpi', 'ofzSpr'];
+  const OPT = ['zspr', 'dm', 'dmPx', 'icpi', 'ir', 'bei', 'cpi', 'ofzSpr', 'ofzRuo'];
   M.posHistory = function (id, opts) {
     if (opts && opts.deep) {
       if (!(id in deepCache)) { const j = fetchHist([id], '2000-01-01'); deepCache[id] = j && j.series && j.series[id] ? Object.assign({ dates: j.dates, runAt: j.runAt }, j.series[id]) : null; }
@@ -465,10 +474,13 @@
       dv01: risk(s.dv01), cs01: risk(s.cs01), basis: risk(s.basis), mv: risk(s.mv), curves, bench: s.bench || nulls(), fromRuns: true }, extra || {});
     OPT.forEach(key => { if (s[key]) o[key] = s[key]; });
     if (o.ofzSpr) o.ofzSpr = sc(o.ofzSpr);
+    if (o.ofzRuo) o.ofzRuo = sc(o.ofzRuo);
+    const p = M.pos[id];  // до #213 объявлялась только в ветке «КБД»: в «RUONIA + базис» история позиции падала
     if (M.ofzView === 'kbd') {  // вид «КБД»: базис фикс-ОФЗ — её риск на КБД, RUONIA — без него; у ОФЗ-ПК — спред ОФЗ
-      const b = o.basis, ru = curves['RUB RUONIA'], p = M.pos[id];
+      // из RUONIA — её риск RUONIA (ofzRuo, прогоны 0.2.7+, #213), в прогоне без него — тот же риск, что базис
+      const b = o.basis, ru = curves['RUB RUONIA'], r = o.ofzRuo || [];
       if (p && isPk(p)) o.ofzSpr = b.map((v, i) => v == null ? null : v + ((o.ofzSpr || [])[i] || 0));
-      else if (b.some(v => v)) { curves['RUB OFZ'] = b.slice(); if (ru) curves['RUB RUONIA'] = ru.map((v, i) => v == null ? null : v - (b[i] || 0)); }
+      else if (b.some(v => v)) { curves['RUB OFZ'] = b.slice(); if (ru) curves['RUB RUONIA'] = ru.map((v, i) => v == null ? null : v - (r[i] != null ? r[i] : (b[i] || 0))); }
       o.basis = b.map(v => v == null ? null : 0);
     } else if (p && p.ofzIn01) o.basis = o.basis.map(v => v == null ? null : 0);  // ОФЗ-ИН: прокси на КБД — не базис (#173)
     // на чём стоит точка (R44): прогон даты (runAt: null — прогона нет, значение перенесено), точки не по ядру (pt), бумаг

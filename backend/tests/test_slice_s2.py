@@ -195,10 +195,11 @@ def test_ofz_on_the_kbd_the_rest_on_ruonia(outcomes):
         ofz = o.terms.bond_class in OFZ_KBD_CLASSES
         want = ("RUB_KBD", "RUB OFZ") if ofz else ("RUB_RUONIA_OIS", "RUB RUONIA")
         assert (v.discount_curve_id, v.spread_curve) == want, o.secid
-        assert set(v.risk()) == {want[1]} and v.dv01_rub < 0 and v.spread01_rub < 0
+        assert set(v.risk()) == ({want[1], "RUB RUONIA"} if ofz else {want[1]}) and v.dv01_rub < 0 and v.spread01_rub < 0
         assert v.quality == "exact" and not any("KBD" in a for a in v.assumptions)
-        if ofz:
-            assert all(v.buckets[b] == 0.0 for b in ("1M", "3M", "6M")) and v.spread_kind == "ofz"
+        if ofz:  # RUONIA + basis (#213): the basis (RUB OFZ) has no 1M-6M risk, RUONIA does; dv01 = the RUONIA risk
+            assert all(v.risk()["RUB OFZ"][b] == 0.0 for b in ("1M", "3M", "6M")) and v.spread_kind == "ofz"
+            assert v.ofz_ruonia and v.dv01_rub == pytest.approx(math.fsum(v.ofz_ruonia.values()))
 
 
 @pytest.mark.parametrize("secid,curves", [("SU29008RMFS8", {"RUB RUONIA"}),

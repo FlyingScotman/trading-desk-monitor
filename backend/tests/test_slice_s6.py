@@ -116,19 +116,21 @@ def test_taylor_matches_core_approximation(golden):
 
 def test_reprice_run_parallel_bp_is_taylor(golden):
     snaps, _, run, rows, reference = golden
+    dv01 = {r["position_id"]: r["fact"]["dv01"] for r in rows}
     for bp in (1, -1):
         res = reprice_run(snaps, run, rows, reference, {"curves": {"RUB RUONIA": bp}})
         covered = [p for p in res["positions"] if p["exact"] is not None]
         assert len(covered) == res["coverage"]["n_exact"] >= 8
-        for p in covered:
-            assert abs(p["residual"]) <= 1e-3 * abs(p["taylor"]["total"]) + 1e-9, p
+        for p in covered:  # + an OFZ's RUONIA rows: core's closed form is central differences of the rebuilt OIS
+            # curve there (core docs/ofz-basis.md, ~3e-6 of its DV01 at 1 bp), and RUONIA alone moves it by RUONIA - basis
+            assert abs(p["residual"]) <= 1e-3 * abs(p["taylor"]["total"]) + 5e-6 * abs(dv01[p["position_id"]]) + 1e-9, p
 
 
 def test_reprice_run_keyhike(golden):
     snaps, _, run, rows, reference = golden
     cache: dict = {}
     res = reprice_run(snaps, run, rows, reference, KEYHIKE, cache)
-    assert res["method"] == "desk-scenario-exact-v2" and res["definition_hash"] == definition_hash(normalize(KEYHIKE))
+    assert res["method"] == "desk-scenario-exact-v3" and res["definition_hash"] == definition_hash(normalize(KEYHIKE))
     by_q = {r["position_id"]: r["quality"] for r in rows}
     fallback = sorted(pid for pid, q in by_q.items() if q not in ("exact", "assumed"))
     cov = res["coverage"]
@@ -152,22 +154,29 @@ def test_reprice_run_keyhike(golden):
 def test_reprice_run_moves_each_curve_by_its_own_shifts(golden):
     """R8: core moves the RUONIA and key-rate curves by name and the KBD by RUB OFZ, each by its own vector only, as
     the Taylor moves each curve's factors: one bp on every RUB curve, and one curve alone, reprice the bonds as their
-    per-curve risk says. The KBD alone moves the fixed-coupon OFZ (on it since #32) and no other bond."""
+    per-curve risk says. The KBD alone moves the fixed-coupon OFZ (on it since #32) and no other bond: with RUONIA held
+    it is the OFZ basis (TDM#213), its risk the KBD's par risk; RUONIA moves the OFZ by RUONIA with the basis held
+    (``RUB OFZ - RUB RUONIA``), so a move of every RUB curve alike is the OFZ's RUONIA risk."""
     snaps, _, run, rows, reference = golden
-    sc = exact.core_scenario("x", normalize({"curves": {"RUB KEY": 2, "RUB OFZ": 1}}), 3.0)
+    sc = exact.core_scenario("x", normalize({"curves": {"RUB KEY": 2, "RUB OFZ": 1, "RUB RUONIA": 0.5}}), 3.0)
     assert sc.shock.curve_shifts_bp == (0.0,) * 3 + (1.0,) * 8 and sc.shock.spread_shift_bp == 3.0  # KBD: no 1M-6M
-    assert dict(sc.curve_shifts_bp) == {"RUB_KEY_RATE_PROJ": (2.0,) * 11, "RUB_RUONIA_OIS": (0.0,) * 11}
+    assert dict(sc.curve_shifts_bp) == {"RUB_KEY_RATE_PROJ": (2.0,) * 11, "RUB_RUONIA_OIS": (0.5,) * 11,
+                                        "RUB_OFZ_BASIS": (0.0,) * 3 + (0.5,) * 8}  # the basis: KBD - RUONIA
+    dv01 = {r["position_id"]: r["fact"]["dv01"] for r in rows}
     floaters = {r["position_id"] for r in rows if r["secid"] in ("SU29008RMFS8", FLOATER)}
     assert len(floaters) == 2  # the OFZ-PK on RUONIA, the corporate on the key rate
     on_kbd = {r["position_id"] for r in rows if "RUB OFZ" in r["fact"]["risk"]}
     assert on_kbd and all(r["secid"].startswith("SU") for r in rows if r["position_id"] in on_kbd)
+    computed = {r["position_id"]: r["fact"]["extra"] for r in rows if "ofz_ruonia01" in r["fact"]["extra"]}
+    assert computed and set(computed) <= on_kbd
     for d in ({"curves": dict.fromkeys(RUB_CURVES, 1)}, {"curves": {"RUB KEY": 1}}, {"curves": {"RUB RUONIA": -1}}):
         res = reprice_run(snaps, run, rows, reference, d)
         moved = [p for p in res["positions"] if p["position_id"] in floaters and p["taylor"]["rates"]]
         assert moved and all(p["exact"] is not None for p in moved)
         for p in res["positions"]:
             if p["exact"] is not None:
-                assert abs(p["residual"]) <= 1e-3 * abs(p["taylor"]["total"]) + 1e-6, (d, p)
+                assert abs(p["residual"]) <= 1e-3 * abs(p["taylor"]["total"]) + 5e-6 * abs(dv01[p["position_id"]]) \
+                    + 1e-6, (d, p)
     kbd = reprice_run(snaps, run, rows, reference, {"curves": {"RUB OFZ": 100}})
     assert kbd["coverage"]["n_exact"] >= 8
     for p in kbd["positions"]:
@@ -178,16 +187,24 @@ def test_reprice_run_moves_each_curve_by_its_own_shifts(golden):
             assert abs(p["residual"]) <= 1e-2 * abs(p["taylor"]["total"]), p
         else:
             assert p["taylor"]["total"] == 0 and (p["exact"] is None or abs(p["exact"]) < 1e-6), p
-    # a move of all RUB curves alike: for a fixed bond (one curve) the move of its own curve alone
+    # a move of all RUB curves alike: for a fixed bond (one curve) the move of its own curve alone; for an OFZ in
+    # RUONIA + basis its RUONIA risk (the basis held), the KBD alone its basis risk (RUONIA held), two computed risks
     par = {p["position_id"]: p for p in reprice_run(snaps, run, rows, reference,
                                                     {"curves": dict.fromkeys(RUB_CURVES, 1)})["positions"]}
     ruonia = reprice_run(snaps, run, rows, reference, {"curves": {"RUB RUONIA": 1}})["positions"]
     ofz = {p["position_id"]: p for p in reprice_run(snaps, run, rows, reference,
                                                     {"curves": {"RUB OFZ": 1}})["positions"]}
     for p in ruonia:
-        if p["exact"] is not None and p["position_id"] not in floaters:
-            own = ofz[p["position_id"]]["exact"] if p["position_id"] in on_kbd else p["exact"]
-            assert par[p["position_id"]]["exact"] == pytest.approx(own, rel=1e-9, abs=1e-6)
+        pid = p["position_id"]
+        if p["exact"] is None or pid in floaters:
+            continue
+        if pid in computed:
+            assert par[pid]["exact"] == pytest.approx(computed[pid]["ofz_ruonia01"], rel=1e-3)
+            assert ofz[pid]["exact"] == pytest.approx(computed[pid]["ofz_basis01"], rel=1e-3)
+            assert par[pid]["exact"] != pytest.approx(ofz[pid]["exact"], rel=1e-5)  # not one risk seen twice
+        else:
+            own = ofz[pid]["exact"] if pid in on_kbd else p["exact"]
+            assert par[pid]["exact"] == pytest.approx(own, rel=1e-9, abs=1e-6)
 
 
 def test_kbd_short_end_is_dropped_before_core(golden):
