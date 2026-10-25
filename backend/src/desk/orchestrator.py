@@ -187,7 +187,8 @@ def check_against_standard_yields(params: ZcycParameters, standard_yields: list[
 def new_cache() -> ShockedCurveCache:
     """A run's cache of shocked curves (core ``ShockedCurveCache``: by curve content and shift, bounded, never changes a
     number). With RUONIA in its OIS quotes (``EodContext.quote_curves``) a run rebootstraps the curve once per bucket
-    shift: about 25 times for the first order and 245 with the Hessian, ~0.1 s each, whatever the number of positions.
+    shift: about 25 times for the first order and 245 with the Hessian, whatever the number of positions: ~0.08 s each
+    on core 0.37, ~5-10 ms on core 0.38 (the same curves to the bit; a Hessian run of the live fixture 21.8 s -> 2.9 s).
     The test session shares one (``tests/conftest.py``): its contexts repeat the same curves."""
     return ShockedCurveCache()
 

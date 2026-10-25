@@ -43,17 +43,28 @@ CTX_CACHE_SIZE = 2
 NAMED_CURVES = tuple((core, published) for core, published in RISK_CURVES.items() if published != OFZ_CURVE)
 """(core curve ID, published curve) moved by name; the KBD is the shock's own curve (a bond whose discount curve
 is named moves it by its name)."""
+KBD_SHORT_BUCKETS = ("1M", "3M", "6M")
+"""The KBD's buckets without an instrument (``rub_ofz_kbd_v3``, par yields 1Y-20Y+): core 0.38 refuses a scenario whose
+shift there is neither 0 nor the 1Y shift (``InvalidTerms``; 0.37 dropped it), so ``kbd_shock`` sets them to 0."""
+
+
+def kbd_shock(shifts: tuple[float, ...]) -> tuple[float, ...]:
+    """``RUB OFZ`` shifts as core takes them on the KBD: 1M-6M set to 0, 1Y and beyond as given. Below 1Y the KBD's
+    par overlay follows the 1Y shift whatever they are, and the Taylor has no KBD risk there, so the scenario means the
+    same."""
+    return tuple(0.0 if b in KBD_SHORT_BUCKETS else x for b, x in zip(RISK_BUCKETS, shifts))
 
 
 def core_scenario(name: str, norm: Mapping[str, Any], ds: float) -> PortfolioScenario:
     """The core scenario of a normalized definition for an own spread shock ``ds``: every curve core values with
-    moves by its published curve's shifts only (0 when the definition has none)."""
+    moves by its published curve's shifts only (0 when the definition has none); ``RUB OFZ`` (the KBD) without its
+    1M-6M shifts (``kbd_shock``)."""
     curves, zero = norm.get("curves", {}), (0.0,) * len(RISK_BUCKETS)
     rub = {c for _, c in NAMED_CURVES} | {OFZ_CURVE}
     # a foreign curve's core ID is its published name (curves.fx: CNY FX, CNY XCCY, USD UST); a currency's curve
     # without points (USD: a duration proxy) has no core curve, and core ignores a shift of a curve it does not have
     foreign = tuple((c, tuple(v)) for c, v in curves.items() if c not in rub)
-    return PortfolioScenario(name=name, shock=BondScenario(tuple(curves.get(OFZ_CURVE, zero)), ds),
+    return PortfolioScenario(name=name, shock=BondScenario(kbd_shock(tuple(curves.get(OFZ_CURVE, zero))), ds),
                              fx_shocks_pct=tuple(norm.get("fx", {}).items()),
                              curve_shifts_bp=(*((core, tuple(curves.get(c, zero))) for core, c in NAMED_CURVES),
                                               *foreign),
