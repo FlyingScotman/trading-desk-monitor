@@ -81,8 +81,8 @@
   // ---------- помощники ----------
   const ratePnl = (p, cid) => p.risk[cid].reduce((s, v, k) => s + v * M.curve[cid].chg[k], 0);
   // mm ₽ со знаком, кликабельно
-  const mln = (title, list, val, d) => K.d({ title, unit: 'mm ₽', fmt: v => f.mns(v, d == null ? 1 : d), list, val }) + '&nbsp;mm';
-  const dvx = (title, list, val) => K.d({ title, unit: 'тыс ₽/бп', list, val }, null, '') + '&nbsp;тыс/бп';
+  const mln = (title, list, val, d) => K.d({ title, unit: 'mm ₽', fmt: v => f.mns(v, d == null ? 1 : d), list, val }) + '&nbsp;mm ₽';
+  const dvx = (title, list, val) => K.d({ title, unit: 'тыс ₽/бп', list, val }, null, '') + '&nbsp;тыс ₽/бп';
   // диапазон сдвига кривой по бакетам, б.п. (до 0.1); у кривой без точек (USD/CNY в прогоне без кривых хаба) — «нет данных»
   const noCurve = c => !c || c.pts.every(v => v == null);
   const chgRange = c => { if (noCurve(c)) return 'нет данных'; const a = c.chg.filter(x => x).map(v => Math.round(v * 10) / 10).filter(x => x); if (!a.length) return '0'; const mn = Math.min(...a), mx = Math.max(...a); const s = v => (v > 0 ? '+' : '') + v; return mn === mx ? s(mn) : s(mn) + '…' + s(mx); };
@@ -157,12 +157,12 @@
       '<h2><span class="no">01</span> Итог дня <span class="sp"></span><span class="k-note">' + f.date(M.asOf) + ', ' + esc(M.cut.label) + ' · к закрытию ' + f.date(M.prevDate) + '</span></h2>' +
       '<div class="hl"><span class="big ' + f.cls(tot) + '">' + K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(tot, 1)) + ' <span style="font-size:18px;font-weight:500" class="mut">mm ₽</span></span>' +
       '<span class="sub">MTD <b>' + mln('PnL MTD', L, 'pnlMtd') + '</b>' + K.partial('mtd') + ' · YTD <b>' + mln('PnL YTD', L, 'pnlYtd', 0) + '</b>' + K.partial('ytd') + '</span></div>' +
-      '<p>За день ' + word(tot) + ' <b>' + f.mn(Math.abs(tot), 1) + ' mm</b>. Главное: ' + parts.slice(0, 3).map(x => x.h).join(', ') + '.' +
+      '<p>За день ' + word(tot) + ' <b>' + f.mn(Math.abs(tot), 1) + ' mm ₽</b>. Главное: ' + parts.slice(0, 3).map(x => x.h).join(', ') + '.' +
       (parts.length > 3 ? ' Остальное: ' + parts.slice(3).map(x => x.h).join(', ') + '.' : '') + '</p>' +
       '<p class="mut" style="font-size:13px">Риск на утро: DV01 по ставкам ' + dvx('DV01 ставки', L, 'dv01') + ', из них RUONIA ' + dvx('DV01 RUONIA', L, p => p.dv01ByCurve['RUB RUONIA']) +
       ', КС ' + dvx('DV01 КС', L, p => p.dv01ByCurve['RUB KEY']) + (M.ofzView === 'kbd' ? ', КБД ' + dvx('DV01 КБД', L, p => p.dv01ByCurve['RUB OFZ'])
         : '; базис ОФЗ ' + dvx('Базис ОФЗ − RUONIA', L, 'basis01')) + '; спред ОФЗ к КБД ' + dvx('Спред ОФЗ к КБД', L, 'ofzSpr01') + '; CS01 ' + dvx('CS01', L, 'cs01') +
-      '. Кэрри ' + K.d({ title: 'Кэрри за день', unit: 'тыс ₽', fmt: f.ks, list: L, val: 'carryDay' }) + '&nbsp;тыс в день.</p>' +
+      '. Кэрри ' + K.d({ title: 'Кэрри за день', unit: 'тыс ₽', fmt: f.ks, list: L, val: 'carryDay' }) + '&nbsp;тыс ₽ в день.</p>' +
       '<div class="factors">' + [['Кэрри', 'carry'], ['Ставки', 'rates'], ['Спред', 'spread'], ['FX', 'fx'], ['Сделки', 'trading'], ['Прочее', 'other']].map(([t, key]) =>
         '<div class="factor"><div class="l">' + t + '</div><div class="v">' + K.d({ title: 'PnL · ' + t, unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl[key] }, null) + '</div></div>').join('') + '</div></section>';
 
@@ -178,9 +178,9 @@
     const dvSumAll = s => M.curves.filter(c => c.kind === 'rate').reduce((a, c) => a + H.dv01[c.id][s], 0);
     const dvDay = dvSumAll(n - 1) - dvSumAll(n - 2), dvWeek = dvSumAll(n - 1) - dvSumAll(n - 6);
     html += '<section id="s2"><h2><span class="no">02</span> Что изменилось в риске <span class="sp"></span><span class="k-note">тыс ₽/бп · история — по всему деску</span></h2>' +
-      '<p>DV01 по ставкам за день ' + (dvDay < 0 ? 'удлинился' : 'укоротился') + ' на <b>' + f.dv(Math.abs(dvDay)) + '</b> тыс/бп, за неделю — на <b>' + f.dv(Math.abs(dvWeek)) + '</b> (' + (dvWeek < 0 ? 'длиннее' : 'короче') + '). ' +
-      (traded.length ? 'Сегодня сделки по ' + plural(traded.length, 'позиции', 'позициям', 'позициям') + ' добавили ' + K.d({ title: 'Изменение DV01 от сделок дня', unit: 'тыс ₽/бп', rows: traded.map(p => ({ p, v: tradeDv(p) })) }, null, '') + ' тыс/бп; остальное — движение рынка и старение позиций.' : 'Сделок сегодня нет — изменение от рынка и старения позиций.') +
-      ' RUONIA за день ' + f.dvs(dDay) + ' тыс/бп.</p>' +
+      '<p>DV01 по ставкам за день ' + (dvDay < 0 ? 'удлинился' : 'укоротился') + ' на <b>' + f.dv(Math.abs(dvDay)) + '</b> тыс ₽/бп, за неделю — на <b>' + f.dv(Math.abs(dvWeek)) + '</b> (' + (dvWeek < 0 ? 'длиннее' : 'короче') + '). ' +
+      (traded.length ? 'Сегодня сделки по ' + plural(traded.length, 'позиции', 'позициям', 'позициям') + ' добавили ' + K.d({ title: 'Изменение DV01 от сделок дня', unit: 'тыс ₽/бп', rows: traded.map(p => ({ p, v: tradeDv(p) })) }, null, '') + ' тыс ₽/бп; остальное — движение рынка и старение позиций.' : 'Сделок сегодня нет — изменение от рынка и старения позиций.') +
+      ' RUONIA за день ' + f.dvs(dDay) + ' тыс ₽/бп.</p>' +
       '<table class="mini"><thead><tr><th>Фактор</th><th class="n">Сейчас</th><th class="n">Δ день</th><th class="n">Δ неделя</th><th class="n">Δ месяц</th><th>30 дней</th><th class="n">min … max (130д)</th></tr></thead><tbody>' +
       rowsChg.map(r => {
         const s = r.ser, d1 = s[n - 1] - s[n - 2], d5 = s[n - 1] - s[n - 6], d21 = s[n - 1] - s[n - 22];
@@ -198,7 +198,7 @@
     const lst = (arr) => '<table class="mini"><tbody>' + arr.map(p => '<tr data-card="' + p.id + '"><td style="width:4px;padding:0;background:' + K.issuerColor(p.issuer) + '"></td><td class="name">' + esc(p.name) + ' <span class="mut3">' + esc(p.book) + '</span><div class="why">' + why(p) + '</div></td><td class="n ' + f.cls(p.pnl.total) + '"><b>' + f.mns(p.pnl.total, 1) + '</b></td><td style="width:90px">' + K.bar(p.pnl.total, mx) + '</td></tr>').join('') + '</tbody></table>';
     const share = (top.concat(bot)).reduce((s, p) => s + Math.abs(p.pnl.total), 0) / Math.max(1, L.reduce((s, p) => s + Math.abs(p.pnl.total), 0));
     html += '<section id="s3"><h2><span class="no">03</span> Главные вклады <span class="sp"></span><span class="k-note">mm ₽ · щелчок — карточка позиции</span></h2>' +
-      '<p>Десять позиций ниже дают <b>' + Math.round(share * 100) + '%</b> всего оборота PnL (сумма модулей). Больше всех ' + (bot[0] ? 'потеряла <b data-card="' + bot[0].id + '" style="cursor:pointer">' + esc(bot[0].name) + '</b> (' + f.mns(bot[0].pnl.total, 1) + ' mm)' : '') + (top[0] ? ', заработала <b data-card="' + top[0].id + '" style="cursor:pointer">' + esc(top[0].name) + '</b> (' + f.mns(top[0].pnl.total, 1) + ' mm)' : '') + '. ' +
+      '<p>Десять позиций ниже дают <b>' + Math.round(share * 100) + '%</b> всего оборота PnL (сумма модулей). Больше всех ' + (bot[0] ? 'потеряла <b data-card="' + bot[0].id + '" style="cursor:pointer">' + esc(bot[0].name) + '</b> (' + f.mns(bot[0].pnl.total, 1) + ' mm ₽)' : '') + (top[0] ? ', заработала <b data-card="' + top[0].id + '" style="cursor:pointer">' + esc(top[0].name) + '</b> (' + f.mns(top[0].pnl.total, 1) + ' mm ₽)' : '') + '. ' +
       'Полный список — ' + K.d({ title: 'PnL дня по позициям', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, 'все ' + L.length + ' позиций', '') + '.</p>' +
       '<div class="two"><div><div class="cap neg">▼ Потери</div>' + lst(bot) + '</div><div><div class="cap pos">▲ Заработок</div>' + lst(top) + '</div></div></section>';
 
@@ -215,7 +215,7 @@
     const cbrIn = M.cbr.meetings.find(d => d > M.asOf);
     html += '<section id="s4"><h2><span class="no">04</span> На горизонте 2 недели <span class="sp"></span><span class="k-note">' + f.date(M.asOf) + ' — ' + f.date(end) + '</span></h2>' +
       '<p>' + (M.cbr.next && M.cbr.next.date ? '<b>' + f.dshort(M.cbr.next.date) + ' — ' + esc(M.cbr.next.label) + '</b> (через ' + plural(daysTo(M.cbr.next.date), 'день', 'дня', 'дней') + '): ' + K.cbrLine() + ' ' : '<span class="mut">Календаря заседаний ЦБ в данных нет.</span> ') +
-      'Риск к КС на сроке до 1 года: ' + K.d({ title: 'КС до 1Y', unit: 'тыс ₽/бп', list: L, val: p => p.risk['RUB KEY'].slice(0, M.buckets.indexOf('1Y') + 1).reduce((a, b) => a + b, 0) }, null, '') + ' тыс/бп, RUONIA до 1 года: ' + K.d({ title: 'RUONIA до 1Y', unit: 'тыс ₽/бп', list: L, val: p => p.risk['RUB RUONIA'].slice(0, M.buckets.indexOf('1Y') + 1).reduce((a, b) => a + b, 0) }, null, '') + ' тыс/бп. ' +
+      'Риск к КС на сроке до 1 года: ' + K.d({ title: 'КС до 1Y', unit: 'тыс ₽/бп', list: L, val: p => p.risk['RUB KEY'].slice(0, M.buckets.indexOf('1Y') + 1).reduce((a, b) => a + b, 0) }, null, '') + ' тыс ₽/бп, RUONIA до 1 года: ' + K.d({ title: 'RUONIA до 1Y', unit: 'тыс ₽/бп', list: L, val: p => p.risk['RUB RUONIA'].slice(0, M.buckets.indexOf('1Y') + 1).reduce((a, b) => a + b, 0) }, null, '') + ' тыс ₽/бп. ' +
       'Купонов придёт на ' + K.d({ title: 'Купоны за 2 недели', unit: 'mm ₽', fmt: v => f.mn(v, 1), rows: cpnRub.map(c => ({ p: M.pos[c.pos], v: c.amountRub })), color: false }) + ' mm ₽ по ' + plural(new Set(cpnRub.map(c => c.pos)).size, 'бумаге', 'бумагам', 'бумагам') +
       (big.length ? '; погашения и оферты — ' + K.d({ title: 'Погашения и оферты', unit: 'mm ₽', fmt: v => f.mn(v, 1), rows: big.map(c => ({ p: M.pos[c.pos], v: c.amountRub })), color: false }) + ' mm ₽.' : '; погашений и оферт нет.') +
       (nextOffers[0] ? ' Ближайшая оферта — <b data-card="' + nextOffers[0].id + '" style="cursor:pointer">' + esc(nextOffers[0].name) + '</b>, ' + f.date(nextOffers[0].event.date) + ' (через ' + plural(daysTo(nextOffers[0].event.date), 'день', 'дня', 'дней') + ').' : '') + '</p>' +
@@ -243,7 +243,7 @@
     const conc = Object.entries(byIss).map(([id, arr]) => ({ id, arr, mv: M.sum(arr, 'mv') })).filter(x => !M.isMinfin(x.id) && x.mv / mvB > 0.05).sort((a, b) => b.mv - a.mv);
     if (conc.length) alerts.push({ c: '', i: '◔', h: 'Концентрация: ' + conc.map(x => '<b>' + esc(M.issuer[x.id].short) + '</b> ' + K.d({ title: 'Эмитент ' + M.issuer[x.id].short + ' · MV', unit: 'mm ₽', fmt: v => f.mn(v, 0), list: x.arr, val: 'mv', color: false }, Math.round(x.mv / mvB * 100) + '%', '')).join(', ') + ' облигаций по MV (порог 5%, без Минфина).' });
     const wide = bonds.filter(p => p.zspread != null && p.zspread >= 300).sort((a, b) => b.zspread - a.zspread);
-    if (wide.length) alerts.push({ c: '', i: '↔', h: 'Широкие спреды (≥ 300 б.п.): <b>' + wide.length + '</b> бумаг, CS01 ' + K.d({ title: 'CS01 бумаг со спредом ≥ 300', unit: 'тыс ₽/бп', list: wide, val: 'cs01' }, null, '') + ' тыс/бп.' + '<div class="lst">' + wide.map(p => '<span data-card="' + p.id + '">' + esc(p.name) + ' ' + Math.round(p.zspread) + '</span>').join(' · ') + '</div>' });
+    if (wide.length) alerts.push({ c: '', i: '↔', h: 'Широкие спреды (≥ 300 б.п.): <b>' + wide.length + '</b> бумаг, CS01 ' + K.d({ title: 'CS01 бумаг со спредом ≥ 300', unit: 'тыс ₽/бп', list: wide, val: 'cs01' }, null, '') + ' тыс ₽/бп.' + '<div class="lst">' + wide.map(p => '<span data-card="' + p.id + '">' + esc(p.name) + ' ' + Math.round(p.zspread) + '</span>').join(' · ') + '</div>' });
     const moved = bonds.filter(p => Math.abs(p.spreadChgBp || 0) >= 5).sort((a, b) => Math.abs(b.spreadChgBp) - Math.abs(a.spreadChgBp));
     if (moved.length) alerts.push({ c: '', i: '⇅', h: 'Спред сдвинулся на 5+ б.п.: <b>' + moved.length + '</b> бумаг, PnL от спреда ' + K.d({ title: 'PnL спреда · сдвиг ≥ 5 б.п.', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: moved, val: p => p.pnl.spread }) + ' mm.' + '<div class="lst">' + moved.slice(0, 10).map(p => '<span data-card="' + p.id + '">' + esc(p.name) + ' <span class="' + (p.spreadChgBp > 0 ? 'chg-up' : 'chg-dn') + '">' + f.bps(p.spreadChgBp) + '</span></span>').join(' · ') + '</div>' });
     if (traded.length) alerts.push({ c: 'info', i: '✎', h: 'Сделки сегодня: <b>' + traded.length + '</b>, PnL сделок ' + K.d({ title: 'PnL сделок дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: traded, val: p => p.pnl.trading }) + ' mm.' + '<div class="lst">' + traded.map(p => '<span data-card="' + p.id + '">' + esc(p.name) + ' ' + (p.tradeToday.qty > 0 ? '+' : '') + f.mn(p.tradeToday.qty, 0) + '</span>').join(' · ') + '</div>' });

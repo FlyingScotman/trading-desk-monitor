@@ -207,7 +207,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
   }
   const RISK_COLS = [
     { label: 'DV01', unit: 'тыс ₽/бп', val: 'dv01', neutral: 1 }, { label: 'RUONIA', unit: 'тыс ₽/бп', val: p => p.dv01ByCurve['RUB RUONIA'], neutral: 1 }, { label: 'КС', unit: 'тыс ₽/бп', val: p => p.dv01ByCurve['RUB KEY'], neutral: 1 },
-    { label: 'Базис ОФЗ', unit: 'тыс ₽/бп', val: 'basis01', neutral: 1 }, { label: 'CS01', unit: 'тыс ₽/бп', val: 'cs01', neutral: 1 }, { label: 'MV, mm', unit: 'mm ₽', fmt: v => f.mn(v, 0), val: p => p.group === 'DER' ? 0 : p.mv, neutral: 1 },
+    { label: 'Базис ОФЗ', unit: 'тыс ₽/бп', val: 'basis01', neutral: 1 }, { label: 'CS01', unit: 'тыс ₽/бп', val: 'cs01', neutral: 1 }, { label: 'MV, mm ₽', unit: 'mm ₽', fmt: v => f.mn(v, 0), val: p => p.group === 'DER' ? 0 : p.mv, neutral: 1 },
   ];
   const PNL_COLS = [['total', 'Итого'], ['carry', 'Кэрри'], ['rates', 'Ставки'], ['spread', 'Спред'], ['fx', 'FX'], ['trading', 'Сделки'], ['other', 'Прочее']].map(([k, l]) => ({ label: l, unit: 'тыс ₽', fmt: f.k, val: p => p.pnl[k] }));
 
@@ -262,7 +262,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
         let L = K.list(); if (o.ccy) L = L.filter(p => p.ccy === o.ccy);
         if (o.flags.hist) {
           const keys = ['carry', 'rates', 'spread', 'fx', 'trading', 'other'], names = { carry: 'Кэрри', rates: 'Ставки', spread: 'Спред', fx: 'FX', trading: 'Сделки', other: 'Прочее' };
-          K.chart(ch(bd, 300), () => ({ grid: { left: 6, right: 10, top: 28, bottom: 4, containLabel: true }, legend: { top: 0 }, tooltip: { trigger: 'axis', valueFormatter: v => f.mns(v, 2) }, xAxis: { type: 'category', data: M.histDates, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', axisLabel: { formatter: v => f.mn(v, 0) } }, dataZoom: [{ type: 'inside', start: 50 }], series: keys.map(k => ({ name: names[k], type: 'bar', stack: 'p', data: M.hist.pnl[k] })).concat([{ name: 'Итого', type: 'line', data: M.hist.pnl.total, showSymbol: false, color: css('--fg') }]) }));
+          K.chart(ch(bd, 300), () => ({ grid: { left: 6, right: 10, top: 28, bottom: 4, containLabel: true }, legend: { top: 0 }, tooltip: { trigger: 'axis', valueFormatter: v => f.mns(v, 2) }, xAxis: { type: 'category', data: M.histDates, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } }, dataZoom: [{ type: 'inside', start: 50 }], series: keys.map(k => ({ name: names[k], type: 'bar', stack: 'p', data: M.hist.pnl[k] })).concat([{ name: 'Итого', type: 'line', data: M.hist.pnl.total, showSymbol: false, color: css('--fg') }]) }));
           return 'PnL за 130 дней, mm ₽ (по всему деску)';
         }
         if (o.flags.top || o.n) {
@@ -303,7 +303,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
         const row = K.h('div', 'row2'); bd.appendChild(row); const a = K.h('div'), b = K.h('div'); b.style.cssText = 'overflow:auto;max-height:' + (hh + 20) + 'px'; row.append(a, b);
         const kinds = [['cpn', 'купоны', css('--accent')], ['put', 'оферты', css('--warn')], ['call', 'коллы', '#ff8f3f'], ['mat', 'погашения', css('--pos')]];
         const c = K.chart(ch(a, hh), () => ({ grid: { left: 6, right: 10, top: 28, bottom: 4, containLabel: true }, legend: { top: 0 }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.mn(v, 1) + ' mm ₽' },
-          xAxis: { type: 'category', data: wk, axisLabel: { formatter: v => 'нед ' + f.dshort(v) } }, yAxis: { type: 'value', axisLabel: { formatter: v => f.mn(v, 0) } },
+          xAxis: { type: 'category', data: wk, axisLabel: { formatter: v => 'нед ' + f.dshort(v) } }, yAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } },
           series: kinds.map(([k, t, col]) => ({ name: t, type: 'bar', stack: 'w', itemStyle: { color: col }, data: wk.map(w => M.sum(weeks[w].filter(x => x.kind === k), 'amountRub')) })) }));
         c.on('click', pp => { const w = wk[pp.dataIndex], k = kinds[pp.seriesIndex]; const rows = weeks[w].filter(x => x.kind === k[0]).map(x => ({ p: M.pos[x.pos], v: x.amountRub })); if (rows.length) K.drill({ title: k[1] + ' · неделя ' + f.dshort(w), unit: 'mm ₽', fmt: v => f.mn(v, 1), rows }); });
         b.innerHTML = '<table class="k-tbl"><thead><tr><th>Дата</th><th>Бумага</th><th>Событие</th><th class="n">mm ₽</th></tr></thead><tbody>' +

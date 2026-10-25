@@ -263,9 +263,9 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
   // ---------- наши против рынка ----------
   const rvCols = [
     'name', 'ccy', 'issuer', 'rating', 'tenor', 'ytm',
-    { key: 'gspread', label: 'G-спред', num: true, fmt: v => f.bp(v) },
-    { key: 'mkt', label: 'рынок', num: true, val: r => medOf(r.rating, r.tenor), fmt: v => v == null ? '—' : f.bp(v), title: 'медиана G-спреда рейтинга и срока' },
-    { key: 'rv', label: 'разница', num: true, val: r => { const m = medOf(r.rating, r.tenor); return m == null || r.gspread == null ? null : r.gspread - m; }, fmt: v => v == null ? '—' : f.bps(v), style: v => v == null ? '' : K.heat(v, 120), title: '> 0 — бумага дешевле рынка (шире спред)' },
+    { key: 'gspread', label: 'G-спред', num: true, unit: 'б.п.', fmt: v => f.bp(v) },
+    { key: 'mkt', label: 'рынок', num: true, unit: 'б.п.', val: r => medOf(r.rating, r.tenor), fmt: v => v == null ? '—' : f.bp(v), title: 'медиана G-спреда рейтинга и срока' },
+    { key: 'rv', label: 'разница', num: true, unit: 'б.п.', val: r => { const m = medOf(r.rating, r.tenor); return m == null || r.gspread == null ? null : r.gspread - m; }, fmt: v => v == null ? '—' : f.bps(v), style: v => v == null ? '' : K.heat(v, 120), title: '> 0 — бумага дешевле рынка (шире спред)' },
     'mv',
   ];
   K.table(document.getElementById('rv'), { viewKey: 'c09-rv',
@@ -291,9 +291,9 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
       { key: 'name', label: 'Выпуск' }, { key: 'sector', label: 'Сектор', fmt: v => '<span class="mut">' + esc(v) + '</span>' }, { key: 'rating', label: 'Рейтинг', fmt: v => '<b style="color:' + (RB.find(x => x[0] === rbOf(v)) || RB[4])[2] + '">●</b> ' + esc(v) },
       { key: 'ytm', label: 'Доходность', num: true, fmt: v => f.pct(v) },
       { key: 'chgBp', label: 'Изм., б.п.', num: true, fmt: v => f.bps(v), style: v => K.heat(-v, mxChg), title: 'рост доходности — красный' },
-      { key: 'chgPx', label: 'Изм. цены', num: true, fmt: v => v == null ? '—' : f.s(v, 2), title: 'изменение чистой цены, п.п.' },
+      { key: 'chgPx', label: 'Изм. цены', num: true, unit: 'п.п.', fmt: v => v == null ? '—' : f.s(v, 2), title: 'изменение чистой цены, п.п.' },
       { key: 'bar', label: '', val: r => r.chgBp, fmt: v => K.bar(-v, mxChg) },
-      { key: 'vol', label: 'Оборот, mm', num: true, fmt: v => f.mn(v, 0) },
+      { key: 'vol', label: 'Оборот, mm RUB', num: true, fmt: v => f.mn(v, 0) },
     ],
   });
 
