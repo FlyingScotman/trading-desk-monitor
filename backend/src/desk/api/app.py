@@ -530,13 +530,18 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
                        + ", ".join(concepts.CROSS_CCY_KINDS) + "): " + "; ".join(
                            f"{k}: {v}" for k, v in concepts.ATTRIBUTIONS.items())
                        + f". Default {concepts.ATTRIBUTION_DEFAULT!r}, provisional (UI-02)"),
-                   book: str | None = Query(None, description="comma-separated books; all when omitted")):
+                   book: str | None = Query(None, description="comma-separated books; all when omitted"),
+                   ofz_view: Literal["kbd", "basis"] = Query(
+                       concepts.OFZ_VIEW_DEFAULT, description="how the OFZ risk is shown, as the monitors' switch "
+                       "(TDM#173): " + "; ".join(f"{k}: {v}" for k, v in concepts.OFZ_VIEWS.items())
+                       + f". Default {concepts.OFZ_VIEW_DEFAULT!r}: its fields add up without counting a risk twice")):
         """Aggregated risk as a matrix: currencies x instrument types (UI-02, R38; ``concepts.risk_table``)."""
         run = _run_or_404(con, run_id)
         books = [b.strip() for b in book.split(",") if b.strip()] if book else None
         items, fx = concepts.risk_items(con, run, books)
         gov = concepts.gov_issuers(con, run_id)
-        return _cached(request, run, RiskTable(run_id=run_id, **concepts.risk_table(items, fx, attribution, gov)))
+        return _cached(request, run, RiskTable(run_id=run_id,
+                                               **concepts.risk_table(items, fx, attribution, gov, ofz_view)))
 
     @app.get("/api/v1/runs/{run_id}/risk", response_model=RiskPayload)
     def risk(con: Con, run_id: int, request: Request):
