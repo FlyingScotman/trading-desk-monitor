@@ -314,6 +314,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/ocp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ocp
+         * @description The run's OCP (B2, TDM#59): derived from positions by component (cash and to be settled, PV of the FX
+         *     legs, futures, bonds, their funding liability, other, OCP transfers), reconciled per currency with the
+         *     reported ``ocp`` at the report's level, the breaks with their explanation and the transfers per book; state
+         *     ``no_report`` without a report in force, ``not_computed`` for a run before B2.
+         */
+        get: operations["ocp_api_v1_runs__run_id__ocp_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}/derivatives": {
         parameters: {
             query?: never;
@@ -1214,6 +1237,167 @@ export interface components {
             position_id: string;
             /** Reason */
             reason: string;
+        };
+        /**
+         * OcpComparison
+         * @description The reported OCP against the OCP derived from positions, at the level of the report (a book or an entity).
+         */
+        OcpComparison: {
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "book" | "entity";
+            /** Entity */
+            entity: string;
+            /** Book Id */
+            book_id: string | null;
+            /** Ccy */
+            ccy: string;
+            /**
+             * Reported
+             * @description ocp_ccy of the report (0: a covered scope without a row of the currency)
+             */
+            reported: number;
+            /** Reported Rub */
+            reported_rub: number | null;
+            /** Reported Rate */
+            reported_rate: number | null;
+            /**
+             * In Report File
+             * @description The report has a row of this scope and currency
+             */
+            in_report_file: boolean;
+            /** Src */
+            src: string[];
+            /**
+             * Derived
+             * @description All components
+             */
+            derived: number;
+            /** Components */
+            components: {
+                [key: string]: number;
+            };
+            /**
+             * In Report
+             * @description The components the report holds (policy report_components)
+             */
+            in_report: number;
+            /**
+             * Not In Report
+             * @description The components outside the report: the explained part
+             */
+            not_in_report: {
+                [key: string]: number;
+            };
+            /**
+             * Break
+             * @description reported - in_report
+             */
+            break: number;
+            /** Break Rub */
+            break_rub?: number | null;
+            /**
+             * Over
+             * @description |break| above the tolerance
+             */
+            over: boolean;
+            /**
+             * Hints
+             * @description Which component (or sign) would close the break
+             */
+            hints: string[];
+            /** Set Id */
+            set_id: number | null;
+            /** Valid Date */
+            valid_date: string | null;
+        };
+        /** OcpLineOut */
+        OcpLineOut: {
+            /**
+             * Key
+             * @description position_id, CASH|<book>|<ccy>|<account>, FUND|<position_id>
+             */
+            key: string;
+            /**
+             * Component
+             * @description cash, fx_legs, futures, bonds, funding, other, transfers
+             */
+            component: string;
+            /** Book Id */
+            book_id: string;
+            /** Entity */
+            entity: string;
+            /** Ccy */
+            ccy: string;
+            /**
+             * Amount
+             * @description Signed, units of the currency: + long
+             */
+            amount: number;
+            /** Position Id */
+            position_id: string | null;
+            /**
+             * Basis
+             * @description spot_equivalent, nominal, notional, amount, balance, liability, mv
+             */
+            basis: string;
+            /** Note */
+            note: string;
+        };
+        /** OcpTransfer */
+        OcpTransfer: {
+            /** Book Id */
+            book_id: string;
+            /** Entity */
+            entity: string | null;
+            /** Ocp To */
+            ocp_to: string | null;
+            /** Ccy */
+            ccy: string;
+            /**
+             * Before
+             * @description The book's derived OCP without the transfer deals
+             */
+            before: number;
+            /** Transferred */
+            transferred: number;
+            /** After */
+            after: number;
+            /**
+             * Expected
+             * @description transfer_target full: -before
+             */
+            expected: number | null;
+            /**
+             * Gap
+             * @description What the transfer left (after)
+             */
+            gap: number | null;
+            /** Over */
+            over: boolean;
+            /** Rate */
+            rate: number | null;
+            /** Value Date */
+            value_date: string | null;
+            /** Deals */
+            deals: components["schemas"]["OcpTransferDeal"][];
+        };
+        /** OcpTransferDeal */
+        OcpTransferDeal: {
+            /** Position Id */
+            position_id: string | null;
+            /** Amount */
+            amount: number;
+            /** Trade Ids */
+            trade_ids: string[];
+            /** Counterparty */
+            counterparty: string | null;
+            /** Rate */
+            rate: number | null;
+            /** Value Date */
+            value_date: string | null;
         };
         /**
          * ParallelRow
@@ -2136,6 +2320,74 @@ export interface components {
              * @description Pass as cursor for the next page; null on the last page
              */
             next_cursor: number | null;
+        };
+        /**
+         * RunOcp
+         * @description The run's OCP (wave B2, TDM#59, ``publish.ocp_run``): derived from positions by component, reconciled with the
+         *     reported ``ocp`` and the OCP transfers. ``state`` no_report: no ``ocp`` unit in force (derived only);
+         *     not_computed: a run before B2. ``policy.provisional``: the conventions at a provisional default (TDM#60).
+         */
+        RunOcp: {
+            /** Run Id */
+            run_id: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "computed" | "no_report" | "failed" | "not_computed";
+            /** Text */
+            text: string;
+            /** As Of */
+            as_of: string | null;
+            /** Reporting Ccy */
+            reporting_ccy: string;
+            /** Components */
+            components: {
+                [key: string]: string;
+            }[];
+            /** Policy */
+            policy: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * By Ccy
+             * @description The desk's derived OCP: components, total, rate, total_rub
+             */
+            by_ccy: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            };
+            /** By Book */
+            by_book: {
+                [key: string]: unknown;
+            }[];
+            /** Lines */
+            lines: components["schemas"]["OcpLineOut"][];
+            /** Reconciliation */
+            reconciliation: components["schemas"]["OcpComparison"][];
+            /**
+             * Outside Report
+             * @description Derived OCP of books no report unit covers
+             */
+            outside_report: {
+                [key: string]: unknown;
+            }[];
+            /** Transfers */
+            transfers: components["schemas"]["OcpTransfer"][];
+            /**
+             * Report
+             * @description The report's units in force and its number of rows
+             */
+            report: {
+                [key: string]: unknown;
+            };
+            /** Totals */
+            totals: {
+                [key: string]: unknown;
+            } | null;
+            /** Notes */
+            notes: string[];
         };
         /** RunPnl */
         RunPnl: {
@@ -3340,6 +3592,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunFunding"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    ocp_api_v1_runs__run_id__ocp_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunOcp"];
                 };
             };
             /** @description Not Found */

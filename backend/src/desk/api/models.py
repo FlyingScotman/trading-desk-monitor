@@ -242,6 +242,95 @@ class RunDerivatives(BaseModel):
     rows: list[ParallelRow]
 
 
+OcpState = Literal["computed", "no_report", "failed", "not_computed"]
+
+
+class OcpLineOut(BaseModel):
+    key: str = Field(description="position_id, CASH|<book>|<ccy>|<account>, FUND|<position_id>")
+    component: str = Field(description="cash, fx_legs, futures, bonds, funding, other, transfers")
+    book_id: str
+    entity: str
+    ccy: str
+    amount: float = Field(description="Signed, units of the currency: + long")
+    position_id: str | None
+    basis: str = Field(description="spot_equivalent, nominal, notional, amount, balance, liability, mv")
+    note: str
+
+
+class OcpComparison(BaseModel):
+    """The reported OCP against the OCP derived from positions, at the level of the report (a book or an entity)."""
+
+    level: Literal["book", "entity"]
+    entity: str
+    book_id: str | None
+    ccy: str
+    reported: float = Field(description="ocp_ccy of the report (0: a covered scope without a row of the currency)")
+    reported_rub: float | None
+    reported_rate: float | None
+    in_report_file: bool = Field(description="The report has a row of this scope and currency")
+    src: list[str]
+    derived: float = Field(description="All components")
+    components: dict[str, float]
+    in_report: float = Field(description="The components the report holds (policy report_components)")
+    not_in_report: dict[str, float] = Field(description="The components outside the report: the explained part")
+    break_: float = Field(alias="break", description="reported - in_report")
+    break_rub: float | None = None
+    over: bool = Field(description="|break| above the tolerance")
+    hints: list[str] = Field(description="Which component (or sign) would close the break")
+    set_id: int | None
+    valid_date: date | None
+
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+
+class OcpTransferDeal(BaseModel):
+    position_id: str | None
+    amount: float
+    trade_ids: list[str]
+    counterparty: str | None
+    rate: float | None
+    value_date: date | None
+
+
+class OcpTransfer(BaseModel):
+    book_id: str
+    entity: str | None
+    ocp_to: str | None
+    ccy: str
+    before: float = Field(description="The book's derived OCP without the transfer deals")
+    transferred: float
+    after: float
+    expected: float | None = Field(description="transfer_target full: -before")
+    gap: float | None = Field(description="What the transfer left (after)")
+    over: bool
+    rate: float | None
+    value_date: date | None
+    deals: list[OcpTransferDeal]
+
+
+class RunOcp(BaseModel):
+    """The run's OCP (wave B2, TDM#59, ``publish.ocp_run``): derived from positions by component, reconciled with the
+    reported ``ocp`` and the OCP transfers. ``state`` no_report: no ``ocp`` unit in force (derived only);
+    not_computed: a run before B2. ``policy.provisional``: the conventions at a provisional default (TDM#60)."""
+
+    run_id: int
+    state: OcpState
+    text: str
+    as_of: date | None
+    reporting_ccy: str
+    components: list[dict[str, str]]
+    policy: dict[str, Any] | None
+    by_ccy: dict[str, dict[str, Any]] = Field(description="The desk's derived OCP: components, total, rate, total_rub")
+    by_book: list[dict[str, Any]]
+    lines: list[OcpLineOut]
+    reconciliation: list[OcpComparison]
+    outside_report: list[dict[str, Any]] = Field(description="Derived OCP of books no report unit covers")
+    transfers: list[OcpTransfer]
+    report: dict[str, Any] = Field(description="The report's units in force and its number of rows")
+    totals: dict[str, Any] | None
+    notes: list[str]
+
+
 class AggregateRow(BaseModel):
     key: dict[str, str | None]
     n_positions: int

@@ -46,6 +46,14 @@ class Pages(unittest.TestCase):
         self.assertRegex(src, r"function poll\(\) \{\s*if \(document\.hidden \|\| lastId == null\) return;")
         self.assertIn("'api/v1/events?after=' + lastId", src)
 
+    def test_ocp_screen_reads_the_runs_ocp(self):
+        # C16 (#59): ОВП прогона из /api/v1/runs/{run_id}/ocp (backend publish/ocp_run.py); в галерее мониторов
+        src = (PROTO / "concepts" / "c16-ocp.html").read_text(encoding="utf-8")
+        self.assertIn("'../api/v1/runs/' + encodeURIComponent(M.run.id) + '/ocp'", src)
+        self.assertIn("const server = K.source === 'real'", src)
+        self.assertIn("['c16-ocp', 'C16', 'ОВП'", (PROTO / "concepts" / "index.html").read_text(encoding="utf-8"))
+        self.assertTrue((PROTO / "concepts" / "thumbs" / "c16-ocp.jpg").is_file())
+
     def test_monitor_tables_sort_groups_like_ordinary_fields(self):
         # R31: группы таблиц (валюта → эмитент…) сортируются щелчком по столбцу, как обычные поля, — общим правилом
         # KIT.groupKeys; ни один монитор не упорядочивает группы только своим порядком уровня

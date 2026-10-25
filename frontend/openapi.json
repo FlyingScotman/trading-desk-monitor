@@ -1247,6 +1247,66 @@
         }
       }
     },
+    "/api/v1/runs/{run_id}/ocp": {
+      "get": {
+        "summary": "Ocp",
+        "description": "The run's OCP (B2, TDM#59): derived from positions by component (cash and to be settled, PV of the FX\nlegs, futures, bonds, their funding liability, other, OCP transfers), reconciled per currency with the\nreported ``ocp`` at the report's level, the breaks with their explanation and the transfers per book; state\n``no_report`` without a report in force, ``not_computed`` for a run before B2.",
+        "operationId": "ocp_api_v1_runs__run_id__ocp_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunOcp"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
     "/api/v1/runs/{run_id}/derivatives": {
       "get": {
         "summary": "Derivatives",
@@ -3864,6 +3924,432 @@
         ],
         "title": "MissingPosition"
       },
+      "OcpComparison": {
+        "properties": {
+          "level": {
+            "type": "string",
+            "enum": [
+              "book",
+              "entity"
+            ],
+            "title": "Level"
+          },
+          "entity": {
+            "type": "string",
+            "title": "Entity"
+          },
+          "book_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Book Id"
+          },
+          "ccy": {
+            "type": "string",
+            "title": "Ccy"
+          },
+          "reported": {
+            "type": "number",
+            "title": "Reported",
+            "description": "ocp_ccy of the report (0: a covered scope without a row of the currency)"
+          },
+          "reported_rub": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reported Rub"
+          },
+          "reported_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reported Rate"
+          },
+          "in_report_file": {
+            "type": "boolean",
+            "title": "In Report File",
+            "description": "The report has a row of this scope and currency"
+          },
+          "src": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Src"
+          },
+          "derived": {
+            "type": "number",
+            "title": "Derived",
+            "description": "All components"
+          },
+          "components": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Components"
+          },
+          "in_report": {
+            "type": "number",
+            "title": "In Report",
+            "description": "The components the report holds (policy report_components)"
+          },
+          "not_in_report": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Not In Report",
+            "description": "The components outside the report: the explained part"
+          },
+          "break": {
+            "type": "number",
+            "title": "Break",
+            "description": "reported - in_report"
+          },
+          "break_rub": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Break Rub"
+          },
+          "over": {
+            "type": "boolean",
+            "title": "Over",
+            "description": "|break| above the tolerance"
+          },
+          "hints": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Hints",
+            "description": "Which component (or sign) would close the break"
+          },
+          "set_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Set Id"
+          },
+          "valid_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Date"
+          }
+        },
+        "type": "object",
+        "required": [
+          "level",
+          "entity",
+          "book_id",
+          "ccy",
+          "reported",
+          "reported_rub",
+          "reported_rate",
+          "in_report_file",
+          "src",
+          "derived",
+          "components",
+          "in_report",
+          "not_in_report",
+          "break",
+          "over",
+          "hints",
+          "set_id",
+          "valid_date"
+        ],
+        "title": "OcpComparison",
+        "description": "The reported OCP against the OCP derived from positions, at the level of the report (a book or an entity)."
+      },
+      "OcpLineOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key",
+            "description": "position_id, CASH|<book>|<ccy>|<account>, FUND|<position_id>"
+          },
+          "component": {
+            "type": "string",
+            "title": "Component",
+            "description": "cash, fx_legs, futures, bonds, funding, other, transfers"
+          },
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "entity": {
+            "type": "string",
+            "title": "Entity"
+          },
+          "ccy": {
+            "type": "string",
+            "title": "Ccy"
+          },
+          "amount": {
+            "type": "number",
+            "title": "Amount",
+            "description": "Signed, units of the currency: + long"
+          },
+          "position_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position Id"
+          },
+          "basis": {
+            "type": "string",
+            "title": "Basis",
+            "description": "spot_equivalent, nominal, notional, amount, balance, liability, mv"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "component",
+          "book_id",
+          "entity",
+          "ccy",
+          "amount",
+          "position_id",
+          "basis",
+          "note"
+        ],
+        "title": "OcpLineOut"
+      },
+      "OcpTransfer": {
+        "properties": {
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "entity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entity"
+          },
+          "ocp_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ocp To"
+          },
+          "ccy": {
+            "type": "string",
+            "title": "Ccy"
+          },
+          "before": {
+            "type": "number",
+            "title": "Before",
+            "description": "The book's derived OCP without the transfer deals"
+          },
+          "transferred": {
+            "type": "number",
+            "title": "Transferred"
+          },
+          "after": {
+            "type": "number",
+            "title": "After"
+          },
+          "expected": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected",
+            "description": "transfer_target full: -before"
+          },
+          "gap": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gap",
+            "description": "What the transfer left (after)"
+          },
+          "over": {
+            "type": "boolean",
+            "title": "Over"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate"
+          },
+          "value_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value Date"
+          },
+          "deals": {
+            "items": {
+              "$ref": "#/components/schemas/OcpTransferDeal"
+            },
+            "type": "array",
+            "title": "Deals"
+          }
+        },
+        "type": "object",
+        "required": [
+          "book_id",
+          "entity",
+          "ocp_to",
+          "ccy",
+          "before",
+          "transferred",
+          "after",
+          "expected",
+          "gap",
+          "over",
+          "rate",
+          "value_date",
+          "deals"
+        ],
+        "title": "OcpTransfer"
+      },
+      "OcpTransferDeal": {
+        "properties": {
+          "position_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position Id"
+          },
+          "amount": {
+            "type": "number",
+            "title": "Amount"
+          },
+          "trade_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Trade Ids"
+          },
+          "counterparty": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counterparty"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate"
+          },
+          "value_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value Date"
+          }
+        },
+        "type": "object",
+        "required": [
+          "position_id",
+          "amount",
+          "trade_ids",
+          "counterparty",
+          "rate",
+          "value_date"
+        ],
+        "title": "OcpTransferDeal"
+      },
       "ParallelRow": {
         "properties": {
           "position_id": {
@@ -6094,6 +6580,159 @@
           "next_cursor"
         ],
         "title": "RunList"
+      },
+      "RunOcp": {
+        "properties": {
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "computed",
+              "no_report",
+              "failed",
+              "not_computed"
+            ],
+            "title": "State"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of"
+          },
+          "reporting_ccy": {
+            "type": "string",
+            "title": "Reporting Ccy"
+          },
+          "components": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Components"
+          },
+          "policy": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy"
+          },
+          "by_ccy": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "object",
+            "title": "By Ccy",
+            "description": "The desk's derived OCP: components, total, rate, total_rub"
+          },
+          "by_book": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "By Book"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/OcpLineOut"
+            },
+            "type": "array",
+            "title": "Lines"
+          },
+          "reconciliation": {
+            "items": {
+              "$ref": "#/components/schemas/OcpComparison"
+            },
+            "type": "array",
+            "title": "Reconciliation"
+          },
+          "outside_report": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Outside Report",
+            "description": "Derived OCP of books no report unit covers"
+          },
+          "transfers": {
+            "items": {
+              "$ref": "#/components/schemas/OcpTransfer"
+            },
+            "type": "array",
+            "title": "Transfers"
+          },
+          "report": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Report",
+            "description": "The report's units in force and its number of rows"
+          },
+          "totals": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Totals"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "state",
+          "text",
+          "as_of",
+          "reporting_ccy",
+          "components",
+          "policy",
+          "by_ccy",
+          "by_book",
+          "lines",
+          "reconciliation",
+          "outside_report",
+          "transfers",
+          "report",
+          "totals",
+          "notes"
+        ],
+        "title": "RunOcp",
+        "description": "The run's OCP (wave B2, TDM#59, ``publish.ocp_run``): derived from positions by component, reconciled with the\nreported ``ocp`` and the OCP transfers. ``state`` no_report: no ``ocp`` unit in force (derived only);\nnot_computed: a run before B2. ``policy.provisional``: the conventions at a provisional default (TDM#60)."
       },
       "RunPnl": {
         "properties": {
