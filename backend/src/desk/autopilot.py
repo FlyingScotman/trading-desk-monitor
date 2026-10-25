@@ -29,8 +29,8 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    on (at most ``MAX_EOD_DATES``, the latest positions date always) that has positions in the store, the EOD run of
    ``desk eod`` when the date has no default run, or its default run read other position sets (a new revision of a
    book), another market snapshot (a correction) or another previous snapshot (the flash PnL); the latest positions
-   date also when its default run was made by another ``desk.logic_version()`` (an upgrade: older dates are not
-   recomputed, to keep it cheap; ``backfill.same_logic``: a new bundle build of the same code recomputes nothing). Oldest first, except that the latest positions date goes first while it has no
+   date also when its default run was made by another ``desk.logic_version()`` (an upgrade: the older dates are the
+   backfill step's, after the other steps; ``backfill.same_logic``: a new bundle build of the same code recomputes nothing). Oldest first, except that the latest positions date goes first while it has no
    default run at all (a first launch, a new day): the current position shows before the backlog is done (its model
    prices then carry spreads from the runs that existed when it ran). While the inbox is still draining (the scan
    left files waiting for a calendar and the sync left hub dates for the next cycle), only the latest positions
@@ -71,9 +71,12 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    them. The lookback above does not apply: these dates feed no run.
 6. **backfill** (setting ``backfill``, R23; ``desk.backfill``): the default runs of the past business dates with
    positions from ``backfill_from`` on: once per start date and adapter the inbox reads the older reports; then the
-   dates whose run is missing or stale run, oldest first, for at most ``backfill_budget_s`` seconds a cycle, up to the
-   day before the eod step's first date (those dates are the eod step's). Last in the cycle, after the EOD, intraday and history steps, so the latest date never waits for it; not while the inbox
-   backlog drains (R22). The hub's date list is read once per ``RECHECK_S``.
+   dates whose run is missing or stale run, oldest first, for at most ``backfill_budget_s`` seconds a cycle, up to
+   today: every date its plan calls stale, also inside the eod step's window (#23: an upgrade recomputes there only
+   the latest positions date, and these dates stayed stale while the backfill stopped at the window), but the dates
+   the eod step ran or failed (a date is not tried twice a cycle, nor again on inputs the eod step failed on). Last in the cycle, after the EOD, intraday and history steps, so the latest date never waits for it; not while the inbox
+   backlog drains (R22). The hub's date list is read once per ``RECHECK_S``, less the dates the sync step cannot load
+   (its ``problem_dates``): no run and no previous close on them until they load.
 7. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
    ``progress`` ({"step": "sync"|"scan"|"eod"|"intraday"|"history"|"backfill", "done": int, "total": int|null, "detail": str})
    follow it live: hub dates fetched of those to fetch, report files done of those offered, EOD dates run of those
@@ -312,7 +315,7 @@ class Autopilot:
         self._static_polled = float("-inf")    # monotonic time the hub's newest static was last asked for (R25)
         self._backfill_rows: tuple[float, str, list[tuple[str, str]]] | None = None  # (listed at, from, hub rows)
         self._contexts: Any = None  # the backfill's prepared dates, kept between its runs (cli.ContextCache)
-        self._eod_from: str | None = None  # the oldest date the eod step keeps current, this cycle
+        self._eod_tried: set[str] = set()  # the dates the eod step ran, failed or left as failed before, this cycle
         # (listed at, depth, [(hub date, its current snapshot id)] newest first)
         self._poll_slot: tuple | None = None   # (date, cut, slot) the hub was last asked for a cut of today in
         self._polled: dict[tuple, dict | None] = {}  # (date, cut) -> the hub's newest row of that cut, when asked
@@ -854,8 +857,9 @@ class Autopilot:
         if not settings.inbox_dirs and con.execute("SELECT NOT EXISTS (SELECT 1 FROM position_set)").fetchone()[0]:
             return "skipped", "no positions in the store"
         d_from, today = backfill.start_date(settings), self._today()
-        if self._eod_from:  # the eod step's dates are its own: a date it failed is not tried twice a cycle
-            today = min(today, date.fromisoformat(self._eod_from) - timedelta(days=1))
+        # the dates the eod step ran, failed or skipped as failed before on the same inputs, this cycle: not tried
+        # again here (a date out of its window, or whose inputs changed, is the backfill's again)
+        exclude = set(self._eod_tried)
         parts = []
         line = backfill.inbox(con, settings, d_from,
                               progress=lambda done, total, detail: self._progress("backfill", done, total, "отчёты"))
@@ -869,22 +873,26 @@ class Autopilot:
                     or now - self._backfill_rows[0] >= RECHECK_S):
                 self._progress("backfill", 0, None, "список дат хаба")
                 self._backfill_rows = (now, d_from.isoformat(), backfill.hub_rows(client, d_from))
-            rows = self._backfill_rows[2]
+            # the hub dates the sync cannot load (#146) are left out: neither run nor anyone's previous close until
+            # they load, as in the eod step's runs on the cache (#163: they are shown with the dates that do not converge)
+            rows = [r for r in self._backfill_rows[2] if r[0] not in self._sync_retry]
         p = backfill.plan(con, settings, d_from, today, rows)
         s = p.summary()
         span = (f"{s['from']}..{s['to']}: {s['done']} of {s['dates'] - s['no_positions'] - s['no_market']} dates with "
                 f"positions have their run" + (f", {s['failed']} failed before" if s["failed"] else ""))
-        if not p.todo:
+        if not [d for d in p.todo if d.date not in exclude]:
             return "ok", "; ".join(parts + [f"up to date ({span})"])
         if self._contexts is None:
             self._contexts = ContextCache()
         res = backfill.run(settings, p, store_url=url, client=client, budget_s=float(settings.backfill_budget_s),
-                           out=self._eod_line, contexts=self._contexts,
+                           out=self._eod_line, contexts=self._contexts, exclude=exclude,
                            progress=lambda i, n, d: self._progress("backfill", i, n, d))
         if res["done"]:
             ran.append(f"история {len(res['done'])} дат")
             parts.append(f"ran {len(res['done'])} dates ({res['done'][0]}..{res['done'][-1]}) in {res['seconds']} s")
         parts += [f"{d} failed ({e})" for d, e in res["failed"][:5]]
+        if res["unconverged"]:
+            parts.append(f"still stale after the run, tried again next cycle: {', '.join(res['unconverged'][:5])}")
         if res["skipped"]:
             parts.append(f"{len(res['skipped'])} dates not cached and no hub")
         if res["left"]:
@@ -909,7 +917,7 @@ class Autopilot:
              ran: list[str]) -> tuple[str, str]:
         from .cli import eod_run
 
-        self._eod_from = None
+        self._eod_tried = set()
 
         today = self._today()
         pdates = store.position_dates(con, today - timedelta(days=WINDOW_DAYS))
@@ -922,7 +930,6 @@ class Autopilot:
         cached = sd.market_dates()
         dates = [d for d in cached if max(start, first) <= d <= today.isoformat()][-MAX_EOD_DATES:]
         dates = sorted(set(dates) | {d for d in (latest_valid, *extra) if d in cached and d >= first})
-        self._eod_from = max(start, first)  # the backfill step leaves this date on to this step
         if not dates:
             return "skipped", f"no cached eod_final snapshot from {max(start, first)} on"
         runs = store.default_runs(con, date.fromisoformat(dates[0]))
@@ -946,6 +953,7 @@ class Autopilot:
                 continue
             sig = (tuple(ids), snap, prev, logic)
             if self._failed_before(d, sig, store.slice_label(d, "eod_final")):
+                self._eod_tried.add(d)  # not the backfill's either this cycle (#23)
                 notes.append(f"{d} failed before on the same inputs, not retried")
                 continue
             todo.append((d, why, sig))
@@ -958,6 +966,7 @@ class Autopilot:
                              f"a calendar, {self._sync_later} hub dates next cycle)")
         for i, (d, why, sig) in enumerate(todo):
             self._progress("eod", i + 1, len(todo), d)
+            self._eod_tried.add(d)
             self._emit(f"eod {d}: {why}")
             log.info("autopilot: eod %s (%s)", d, why)
             try:
