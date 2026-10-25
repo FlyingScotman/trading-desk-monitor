@@ -149,13 +149,13 @@ def test_ocp_end_to_end_inbox_run_api(store_url, ctx, tmp_path):
     assert any(m.startswith("ОВП из позиций: USD") for m in log)
     assert [w for w in warnings if w.startswith("ОВП: брейк D1 USD")]
 
-    # window.DESK: the transfer and the deal's flag
+    # window.DESK, in tdm's shape (run_ocp_transfer, prototypes/data.js): the source book only, the amount moved
+    # signed as the OCP before the transfer; the receiving book's mirror deal has no row
     desk = c.get(f"/api/v1/compat/desk?run_id={rid}").json()
     assert desk["OCP_TRANSFERS"] == [
-        {"from": "D1", "to": "X1", "ccy": "USD", "amount": -900_000.0, "before": pytest.approx(t["before"]),
-         "rate": 81.25, "valueDate": "2026-10-16"},
-        {"from": "X1", "to": "D1", "ccy": "USD", "amount": 900_000.0, "before": 0.0, "rate": 81.25,
-         "valueDate": "2026-10-16"}]
+        {"from": "D1", "to": "X1", "ccy": "USD", "amount": 900_000.0, "before": pytest.approx(t["before"]),
+         "rate": 81.25, "valueDate": "2026-10-16"}]
+    assert all(x["to"] in desk["BOOKS"] for x in desk["OCP_TRANSFERS"])  # desk-monitor.html names D.BOOKS[t.to]
     dp = {p["id"]: p for p in desk["positions"]}
     assert dp["D1|XFER"].get("ocpTransfer") is True and not dp["D1|USD"].get("ocpTransfer")
 

@@ -1352,8 +1352,16 @@ export interface components {
             book_id: string;
             /** Entity */
             entity: string | null;
-            /** Ocp To */
+            /**
+             * Ocp To
+             * @description The book's ocp_to; a receiving book: the deals' counterparty book
+             */
             ocp_to: string | null;
+            /**
+             * Source
+             * @description The book transfers its OCP (its ocp_to is set); false: it receives
+             */
+            source: boolean;
             /** Ccy */
             ccy: string;
             /**

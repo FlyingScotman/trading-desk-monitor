@@ -295,7 +295,8 @@ class OcpTransferDeal(BaseModel):
 class OcpTransfer(BaseModel):
     book_id: str
     entity: str | None
-    ocp_to: str | None
+    ocp_to: str | None = Field(description="The book's ocp_to; a receiving book: the deals' counterparty book")
+    source: bool = Field(description="The book transfers its OCP (its ocp_to is set); false: it receives")
     ccy: str
     before: float = Field(description="The book's derived OCP without the transfer deals")
     transferred: float

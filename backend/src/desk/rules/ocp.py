@@ -7,7 +7,8 @@ the organization's answers live in the private adapter. Until they arrive, every
 **Lines.** Each published row of the run with an FX exposure gives one ``OcpLine`` per foreign currency (the
 reporting currency has no OCP), in one component (``COMPONENTS``):
 
-- ``cash`` — cash and to be settled: the ``cash_balances`` in force (``OcpPolicy.cash_from_balances``) and the FX
+- ``cash`` — cash and to be settled: the ``cash_balances`` in force (``OcpPolicy.cash_from_balances``; the known
+  balance of ``desk.cash`` per book and currency, a ledger break left out with a note) and the FX
   rows valued without core whose value date is none or within ``settle_window_bd`` business days (a balance, a
   TOD/TOM/spot deal not settled yet): the row's amount;
 - ``fx_legs`` — PV of the currency legs: an FX derivative valued by core from its terms (forward, swap, NDF,
@@ -26,7 +27,8 @@ reporting currency has no OCP), in one component (``COMPONENTS``):
 
 **Reconciliation** at the level the report has (08 §10 ``ocp``): a report unit whose scope names a book covers
 that book; a unit of an entity covers the entity's books. Its rows with a ``book_id`` are compared per book, rows
-without per entity. A currency on one side only is 0 on the other (``full_snapshot``; a covered unit without rows
+without per entity over the entity's books no row names (an entity unit naming books without such rows: its other
+books per book too). A currency on one side only is 0 on the other (``full_snapshot``; a covered unit without rows
 is an OCP of 0 in every currency). For each (scope, currency): ``reported`` (``ocp_ccy``, signed, ``+`` long),
 ``derived`` by component, ``in_report`` = the components ``report_components`` says the report holds, and
 ``break`` = reported - in_report, ``over`` when ``|break| > tolerance_ccy``. The components outside the report are
@@ -54,6 +56,7 @@ from enum import Enum
 from itertools import combinations
 from typing import Any
 
+from .. import cash
 from .funding import FundingLiability, OpenDecision
 
 COMPONENTS = ("cash", "fx_legs", "futures", "bonds", "funding", "other", "transfers")
@@ -219,20 +222,29 @@ def is_transfer(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], book
     return bool(partners) and any(str(t.get("counterparty_id") or "") in partners for t in terms)
 
 
+def _amounts(x: Mapping[str, Any] | None, policy: OcpPolicy) -> dict[str, float]:
+    """A per-currency amount map without the reporting currency, none and non-finite values."""
+    out = {}
+    for c, v in (x or {}).items():
+        f = _f(v)
+        if c != policy.reporting_ccy and f is not None and math.isfinite(f):
+            out[c] = f
+    return out
+
+
 def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[str, Any]],
              on: date, policy: OcpPolicy) -> tuple[str | None, dict[str, float], str, str]:
     """(component, amount per currency, basis, note) of a published row; component None: no OCP (a RUB row, an
     NDF left out)."""
     ex = row.get("extra") or {}
-    delta = {c: float(v) for c, v in (row.get("fx_delta") or {}).items()
-             if c != policy.reporting_ccy and v is not None and math.isfinite(float(v))}
+    delta = _amounts(row.get("fx_delta"), policy)
     core = ex.get("core") or {}
     product = str(core.get("product") or "")
     ndf = "fx_ndf" in product or any(_truthy(t.get("ndf")) for t in terms)
     if core:
         basis = policy.amount_basis.value
         if policy.amount_basis is AmountBasis.NOMINAL:
-            delta = {c: float(v) for c, v in (ex.get("ocp_amount") or {}).items() if c != policy.reporting_ccy}
+            delta = _amounts(ex.get("ocp_amount"), policy)
     elif row.get("instr_type") == "BOND":
         basis = "mv"
     else:
@@ -277,22 +289,27 @@ def position_lines(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mappin
     return lines, per_pos, notes
 
 
-def cash_lines(cash_rows: Iterable[Mapping[str, Any]], books: Mapping[str, Mapping[str, Any]],
-               policy: OcpPolicy = PROVISIONAL_POLICY) -> list[OcpLine]:
-    """The ``cash_balances`` rows in force in foreign currencies, summed per (book, currency, account, ledger)."""
+def cash_lines(cash_rows: Iterable[Mapping[str, Any]], policy: OcpPolicy = PROVISIONAL_POLICY
+               ) -> tuple[list[OcpLine], list[str]]:
+    """The ``cash_balances`` rows in force in foreign currencies as one line per (entity, book, currency): its
+    *known* balance by ``desk.cash.compare`` (the same balance reported by several ledgers counts once: their common
+    value). A balance whose ledgers disagree (``break``) has no known value: it is left out and said in the notes
+    (conservative default of ``desk.cash``, never the larger, the smaller or the first ledger)."""
     if not policy.cash_from_balances:
-        return []
-    sums: dict[tuple[str, str, str, str, str], float] = defaultdict(float)
-    for r in cash_rows:
-        ccy, a = str(r.get("ccy") or ""), _f(r.get("balance_ccy"))
-        if not ccy or ccy == policy.reporting_ccy or a is None:
+        return [], []
+    rows = [r for r in cash_rows if r.get("ccy") and r.get("ccy") != policy.reporting_ccy
+            and _f(r.get("balance_ccy")) is not None]
+    lines, notes = [], []
+    for b in cash.compare(rows):
+        if (known := b.known) is None:
+            notes.append(f"остаток {b.book_id} {b.ccy} не включён в ОВП: системы учёта расходятся ("
+                         + ", ".join(b.ledgers()) + ")")
             continue
-        book = str(r.get("book_id"))
-        entity = str(r.get("entity") or (books.get(book) or {}).get("entity") or "—")
-        sums[(book, entity, ccy, str(r.get("account_id") or ""), str(r.get("ledger") or ""))] += a
-    return [OcpLine("CASH|" + "|".join(k for k in (b, c, acc, led) if k), "cash", b, e, c, a, None, "balance",
-                    "остаток на счёте" + (f" {acc}" if acc else ""))
-            for (b, e, c, acc, led), a in sorted(sums.items()) if a]
+        if known:
+            n = len(b.by_ledger)
+            lines.append(OcpLine(f"CASH|{b.book_id}|{b.ccy}", "cash", b.book_id, b.entity, b.ccy, float(known), None,
+                                 "balance", "остаток на счетах" + (f" ({n} системы учёта сходятся)" if n > 1 else "")))
+    return lines, notes
 
 
 def liability_lines(liabilities: Iterable[FundingLiability], policy: OcpPolicy = PROVISIONAL_POLICY
@@ -357,13 +374,18 @@ def reconcile(lines: Sequence[OcpLine], report_rows: Sequence[Mapping[str, Any]]
         rows = rows_by_set.get(u.get("set_id"), [])
         books_in = ({str(book)} if book else {b for b, e in entity_of.items() if e == str(entity)})
         covered |= books_in
-        per_book = bool(book) or any(r.get("book_id") for r in rows)
+        # rows with a book are compared per book; a unit of an entity whose rows have no book, per entity. A unit of
+        # an entity with both kinds: its books named by a row per book, the entity's other books with the rows
+        # without a book, at the entity level
+        named = {str(r["book_id"]) for r in rows if r.get("book_id")}
+        entity_rows = not book and any(not r.get("book_id") for r in rows)
         reported: dict[tuple[str | None, str], dict[str, Any]] = {}
         for r in rows:
             ccy, a = str(r.get("ccy") or ""), _f(r.get("ocp_ccy"))
             if not ccy or a is None:
                 continue
-            key = (str(r.get("book_id") or book) if per_book else None, ccy)
+            rb = r.get("book_id") or book
+            key = (str(rb) if rb else None, ccy)
             x = reported.setdefault(key, {"ocp_ccy": 0.0, "ocp_rub": None, "rate": None, "src": []})
             x["ocp_ccy"] += a
             if (rub := _f(r.get("ocp_rub"))) is not None:
@@ -374,8 +396,9 @@ def reconcile(lines: Sequence[OcpLine], report_rows: Sequence[Mapping[str, Any]]
         parts_by: dict[tuple[str | None, str], dict[str, float]] = defaultdict(lambda: defaultdict(float))
         for (_, b, ccy), parts in derived.items():
             if b in books_in:
+                at = b if (book or b in named or (named and not entity_rows)) else None
                 for c, v in parts.items():
-                    parts_by[(b if per_book else None, ccy)][c] += v
+                    parts_by[(at, ccy)][c] += v
         for key in sorted(set(reported) | set(parts_by), key=lambda k: (str(k[0]), k[1])):
             b, ccy = key
             parts = {c: parts_by[key][c] for c in COMPONENTS if abs(parts_by[key].get(c, 0.0)) > 0}
@@ -384,7 +407,7 @@ def reconcile(lines: Sequence[OcpLine], report_rows: Sequence[Mapping[str, Any]]
             brk = rep["ocp_ccy"] - in_report
             over = abs(brk) > policy.tolerance_ccy
             out.append({
-                "level": "book" if per_book else "entity", "entity": str(entity or entity_of.get(b or "", "—")),
+                "level": "book" if b is not None else "entity", "entity": str(entity or entity_of.get(b or "", "—")),
                 "book_id": b, "ccy": ccy, "reported": rep["ocp_ccy"], "reported_rub": rep["ocp_rub"],
                 "reported_rate": rep["rate"], "in_report_file": key in reported, "src": rep["src"][:20],
                 "derived": _sum(parts), "components": parts, "in_report": in_report,
@@ -431,7 +454,7 @@ def transfers(lines: Sequence[OcpLine], books: Mapping[str, Mapping[str, Any]],
         out.append({"book_id": b, "entity": m.get("entity"), "ocp_to": m.get("ocp_to") or (
             next(iter(cps)) if len(cps) == 1 else None), "ccy": ccy, "before": r["before"],
             "transferred": r["transferred"], "after": after, "expected": expected,
-            "gap": after if expected is not None else None,
+            "gap": after if expected is not None else None, "source": bool(m.get("ocp_to")),
             "over": expected is not None and abs(after) > policy.tolerance_ccy and bool(m.get("ocp_to")),
             "rate": next((d["rate"] for d in r["deals"] if d["rate"] is not None), None),
             "value_date": next((d["value_date"] for d in r["deals"] if d["value_date"]), None),
@@ -470,6 +493,7 @@ def compute_ocp(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[s
     """The whole OCP of a run: lines, per position, the reconciliation with the report and the transfers."""
     tb = terms_by_position(rows, terms)
     lines, per_pos, notes = position_lines(rows, books, tb, on, policy)
-    lines += cash_lines(cash, books, policy) + liability_lines(liabilities, policy)
+    cl, cash_notes = cash_lines(cash, policy)
+    lines += cl + liability_lines(liabilities, policy)
     comps, outside = reconcile(lines, report_rows, report_units, books, policy)
-    return OcpResult(lines, per_pos, comps, outside, transfers(lines, books, tb, policy), notes)
+    return OcpResult(lines, per_pos, comps, outside, transfers(lines, books, tb, policy), notes + cash_notes)

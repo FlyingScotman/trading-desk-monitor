@@ -8,6 +8,7 @@ from datetime import date
 
 import pytest
 
+from desk.api.compat import ocp_transfers
 from desk.rules import ocp as O
 from desk.rules.funding import FundingLiability
 
@@ -132,6 +133,45 @@ def test_transfers():
     none = O.OcpPolicy(transfer_rule=O.TransferRule.NONE)
     r = run(report(0), none)
     assert r.per_position["D1|XFER"]["component"] == "cash" and not any(x["deals"] for x in r.transfers)
+
+
+def test_cash_by_ledger_counts_a_balance_once_and_leaves_a_break_out():
+    # the same balance reported by two bookkeeping systems (desk.cash): agreeing, it counts once; disagreeing, it has
+    # no known value and is left out with a note (never the larger, the smaller or the first)
+    two = [{"entity": "ENT1", "book_id": "D1", "ccy": "USD", "account_id": "MAIN", "balance_ccy": "100", "ledger": L}
+           for L in ("L1", "L2")]
+    lines, notes = O.cash_lines(two)
+    assert [(x.book_id, x.ccy, x.amount) for x in lines] == [("D1", "USD", 100.0)] and notes == []
+    split = [{**two[0], "account_id": "A"}, {**two[0], "account_id": "B", "balance_ccy": "50"}, two[1]]
+    lines, notes = O.cash_lines(split)  # L1 over two accounts = 150, L2 = 100: a break
+    assert lines == [] and len(notes) == 1 and "D1 USD" in notes[0] and "L1, L2" in notes[0]
+    r = O.compute_ocp([], BOOKS, ON, cash=split)
+    assert not r.lines and r.notes == notes
+
+
+def test_entity_unit_with_and_without_books():
+    # one entity unit: a row per book for D1 and an entity-level row for the entity's other books (T1, X1)
+    units = [{"scope": {"entity": "ENT1"}, "set_id": 9, "valid_date": ON, "row_count": 2}]
+    rows = [{"entity": "ENT1", "book_id": "D1", "ccy": "USD", "ocp_ccy": "50000", "_set_id": 9},
+            {"entity": "ENT1", "ccy": "USD", "ocp_ccy": "620500", "_set_id": 9}]
+    c = {(x["level"], x["book_id"]): x for x in run(rows, units=units).comparisons}
+    assert set(c) == {("book", "D1"), ("entity", None)}
+    assert c[("book", "D1")]["break"] == pytest.approx(0)
+    assert c[("entity", None)]["break"] == pytest.approx(0) and c[("entity", None)]["in_report_file"]
+
+
+def test_nominal_basis_skips_missing_amounts():
+    rows = [core_row("D1|FWD", "D1", {"USD": 490_000.0}, "fx_forward", {"USD": None, "CNY": float("nan"), "EUR": 5.0})]
+    r = O.compute_ocp(rows, BOOKS, ON, policy=O.OcpPolicy(amount_basis=O.AmountBasis.NOMINAL))
+    assert [(x.ccy, x.amount) for x in r.lines] == [("EUR", 5.0)]
+
+
+def test_compat_transfers_in_tdm_shape():
+    t = run(report(0)).transfers
+    assert ocp_transfers({"transfers": t}) == [{"from": "D1", "to": "X1", "ccy": "USD", "amount": 620_000.0,
+                                                "before": pytest.approx(670_000), "rate": 81.25,
+                                                "valueDate": "2026-10-16"}]
+    assert ocp_transfers(None) == [] and ocp_transfers({"transfers": [{**t[0], "ocp_to": None}]}) == []
 
 
 def test_provisional_conventions():

@@ -1366,7 +1366,7 @@ function rExpo(){
   $('ex-ocp-books').innerHTML = obk.length ? `<table class="t"><thead><tr><th>Книга</th><th>Режим</th>${CCYS.map(c => `<th class="n">${c}</th>`).join('')}<th class="n">Нетто, млн ₽ экв.</th><th>Передача сегодня → T+1</th></tr></thead><tbody>` +
     obk.map(b => { const x = ob[b], tr = (D.OCP_TRANSFERS || []).filter(t => t.from === b);
       return `<tr><td>${esc(D.BOOKS[b].name)}</td><td class="muted">${esc(BT_LABEL[D.BOOKS[b].bookType] || '')}</td>${CCYS.map(c => `<td class="n${nc(x[c] || 0)}">${x[c] ? M(x[c],2,true) : '<span class="muted">—</span>'}</td>`).join('')}<td class="n${nc(sum(CCYS, c => (x[c] || 0) * D.FX[c]))}"><b>${M(sum(CCYS, c => (x[c] || 0) * D.FX[c]),1,true)}</b></td>` +
-        `<td class="muted">${tr.length ? tr.map(t => `${M(t.amount,2)} млн ${t.ccy} → ${esc(D.BOOKS[t.to].name)} по ${num(t.rate,2)}`).join('; ') : ''}</td></tr>`; }).join('') + '</tbody></table>'
+        `<td class="muted">${tr.length ? tr.map(t => `${M(t.amount,2)} млн ${t.ccy} → ${esc((D.BOOKS[t.to] || {}).name || t.to || '—')}${t.rate != null ? ' по ' + num(t.rate,2) : ''}`).join('; ') : ''}</td></tr>`; }).join('') + '</tbody></table>'
     : '<p class="note" style="padding:10px">Нет валютных позиций в фильтре.</p>';
 }
 

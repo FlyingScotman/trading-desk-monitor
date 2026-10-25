@@ -450,12 +450,14 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
 
 
 def ocp_transfers(block: dict[str, Any] | None) -> list[dict[str, Any]]:
-    """The run's OCP transfers (``publish.ocp_run`` block ``transfers``, B2) as window.DESK's ``OCP_TRANSFERS``
-    (tdm's ``run_ocp_transfer``): per book and currency with a transfer deal, the amount moved and the OCP before it.
-    A run before B2, or a book with no deal: none."""
-    return [{"from": t["book_id"], "to": t.get("ocp_to"), "ccy": t["ccy"], "amount": t["transferred"],
+    """The run's OCP transfers (``publish.ocp_run`` block ``transfers``, B2) as window.DESK's ``OCP_TRANSFERS``,
+    in tdm's shape (``run_ocp_transfer``, ``prototypes/data.js``): one row per **source** book (its ``ocp_to`` set in
+    the books) and currency with a transfer deal; ``amount`` the OCP moved, signed as the OCP before the transfer
+    (= -the deals' amount); the receiving book's mirror deal has no row. A run before B2, a book with no deal or
+    without ``ocp_to``: none."""
+    return [{"from": t["book_id"], "to": t["ocp_to"], "ccy": t["ccy"], "amount": -t["transferred"],
              "before": t["before"], "rate": t.get("rate"), "valueDate": t.get("value_date")}
-            for t in (block or {}).get("transfers") or [] if t.get("deals")]
+            for t in (block or {}).get("transfers") or [] if t.get("deals") and t.get("source") and t.get("ocp_to")]
 
 
 FUNDING_TYPES = {"POS": "Фондирование позиции (MV)", "HTM": "FTP HTM (контракт)", "CASH": "Остаток ДС",
