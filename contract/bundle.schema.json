@@ -630,7 +630,7 @@
      },
      "risk": {
       "type": "object",
-      "description": "{curve_id: {bucket: dv01}}",
+      "description": "{curve_id: {bucket: dv01}}. С desk 0.2.7 (extra.ofz_ruonia01 у строки, source.ofzScheme = ruonia_basis у desk-data.js) у ОФЗ-ПД/АД/ИН на КБД: RUB OFZ — риск базиса (par-доходности КБД при неизменной RUONIA, равен par-риску КБД), RUB RUONIA — риск RUONIA (котировки OIS при неизменном базисе) минус риск базиса; сумма по кривым — риск RUONIA (extra.ofz_ruonia01), сценарий по RUB OFZ и RUB RUONIA считается по ним точно",
       "additionalProperties": {
        "type": "object",
        "propertyNames": {
