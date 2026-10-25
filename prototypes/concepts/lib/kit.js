@@ -548,7 +548,7 @@
         'Следующие: ' + (j.next || []).map(dmy).join(', ') + '.' + (eta ? ' Осталось расчёта ≈ ' + eta + ' (по одной дате за раз, между циклами автопилота).' : '') + ' ') +
       (k ? '\nНе сходятся (' + k + '):\n' + lines.slice(0, 15).join('\n') + (k > 15 ? '\n… ещё ' + (k - 15) : '') + '\n' : '') +
       'Подробности — Настройки → «История прогонов».';
-    return { text: '⟳ догрузка истории ' + (j.done || 0) + ' из ' + total + (k ? ' · ' + k + ' не сходятся' : ''), title, grey };
+    return { text: '⟳ догрузка истории ' + (j.done || 0) + ' из ' + total + (k ? ' · ' + k + (k % 10 === 1 && k % 100 !== 11 ? ' не сходится' : ' не сходятся') : ''), title, grey };
   };
   function backfillChip(bar) {
     const ch = h('a', 'k-chip'); ch.href = '../settings.html#bf'; ch.style.cssText = 'display:none;text-decoration:none;border-color:var(--warn)';

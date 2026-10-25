@@ -301,7 +301,7 @@ class Autopilot:
         self._static_polled = float("-inf")    # monotonic time the hub's newest static was last asked for (R25)
         self._backfill_rows: tuple[float, str, list[tuple[str, str]]] | None = None  # (listed at, from, hub rows)
         self._contexts: Any = None  # the backfill's prepared dates, kept between its runs (cli.ContextCache)
-        self._eod_tried: set[str] = set()  # the dates the eod step ran or failed this cycle: not the backfill's
+        self._eod_tried: set[str] = set()  # the dates the eod step ran, failed or left as failed before, this cycle
         # (listed at, depth, [(hub date, its current snapshot id)] newest first)
         self._poll_slot: tuple | None = None   # (date, cut, slot) the hub was last asked for a cut of today in
         self._polled: dict[tuple, dict | None] = {}  # (date, cut) -> the hub's newest row of that cut, when asked
@@ -827,8 +827,9 @@ class Autopilot:
         if not settings.inbox_dirs and con.execute("SELECT NOT EXISTS (SELECT 1 FROM position_set)").fetchone()[0]:
             return "skipped", "no positions in the store"
         d_from, today = backfill.start_date(settings), self._today()
-        # the dates the eod step ran or failed (this cycle, or on the same inputs before) are not tried again here
-        exclude = self._eod_tried | {d for d in self._failed if " " not in d}
+        # the dates the eod step ran, failed or skipped as failed before on the same inputs, this cycle: not tried
+        # again here (a date out of its window, or whose inputs changed, is the backfill's again)
+        exclude = set(self._eod_tried)
         parts = []
         line = backfill.inbox(con, settings, d_from,
                               progress=lambda done, total, detail: self._progress("backfill", done, total, "отчёты"))
@@ -922,6 +923,7 @@ class Autopilot:
                 continue
             sig = (tuple(ids), snap, prev, logic)
             if self._failed_before(d, sig, store.slice_label(d, "eod_final")):
+                self._eod_tried.add(d)  # not the backfill's either this cycle (#23)
                 notes.append(f"{d} failed before on the same inputs, not retried")
                 continue
             todo.append((d, why, sig))

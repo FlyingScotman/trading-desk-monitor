@@ -61,7 +61,7 @@ t('остались только проблемные даты — серый б
   assert.strictEqual(K.backfillStatus(null), null);
   // только даты хаба (бэкфилл выключен или досчитан) — индикатор есть, серый
   const h = K.backfillStatus(bf({ enabled: false, todo: 0, failed: 0, done: 204, hub_problem_dates: hub }));
-  assert.ok(h && h.grey && h.text.endsWith('· 1 не сходятся') && h.title.includes('16.10.2026'), h && h.text);
+  assert.ok(h && h.grey && h.text.endsWith('· 1 не сходится') && h.title.includes('16.10.2026'), h && h.text);
   assert.strictEqual(K.backfillStatus(bf({ enabled: false, problem_dates: prob })), null);  // бэкфилл выключен
 });
 

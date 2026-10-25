@@ -325,6 +325,28 @@ def test_autopilot_recomputes_stale_dates_inside_the_eod_window(tmp_path, cache,
     assert b["detail"].startswith("up to date (2026-10-01..2026-10-20: 4 of 4 dates"), b["detail"]
 
 
+def test_a_date_the_eod_step_failed_on_other_inputs_is_the_backfills(tmp_path, cache, store_url, monkeypatch):
+    """#23 (review of #209): the backfill leaves out only the dates the eod step ran, failed or skipped as failed
+    before this cycle. A date the eod step failed once on other inputs (its key stays in ``_failed`` until a restart)
+    and does not take this cycle is the backfill's: it used to be left out for good, the backfill saying «up to date»
+    while the plan kept it stale."""
+    import desk
+
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, cache, store_url, backfill_from="2026-10-01")
+    monkeypatch.delenv("DESK_BUNDLE_VERSION", raising=False)
+    ap = Autopilot(settings_loader=lambda: s, store_url=store_url, today=lambda: date(2026, 10, 20))
+    ap.run_cycle(hub=False)
+    ap._failed["2026-10-13"] = ((), "an older snapshot", None, "an older logic")  # failed once, on other inputs
+    monkeypatch.setattr(desk, "VALUATION_VERSION", desk.VALUATION_VERSION + 1)  # an upgrade: 12.10 the eod step's
+    for _ in range(2):
+        ap.run_cycle(hub=False)
+    with store.connect(store_url) as con:
+        run = store.default_runs(con, date(2026, 10, 1))[date(2026, 10, 13)]
+        assert run["logic_version"] == desk.logic_version()
+        assert not backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 20)).todo
+
+
 def _stale_after_run(monkeypatch, bad: str) -> list[str]:
     """``cli.eod_run`` whose run of ``bad`` is stamped with an old logic version: the date never becomes current."""
     from desk.publish import desk_run
