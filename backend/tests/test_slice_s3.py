@@ -40,13 +40,15 @@ ROWS = [{"snapshot_id": MARKET, "kind": "market", "cut_type": "eod_final", "busi
 class Stub(ThreadingHTTPServer):
     """Knobs: ``snapshots`` (False = hub without the snapshot layer), ``status`` (forced code for
     /v1), ``fail`` (5xx answers before success), ``body`` (override bundle bytes), ``rows`` (the list, the
-    fixtures' by default) and ``bundles`` (more bundle bodies by id: other cuts and dates)."""
+    fixtures' by default), ``bundles`` (more bundle bodies by id: other cuts and dates) and ``broken`` (snapshot ids
+    whose requests always get a 503)."""
 
     def reset(self) -> None:
         self.snapshots, self.status, self.fail, self.body, self.page = True, None, 0, None, 1
         self.requests: list[str] = []
         self.rows: list[dict] = list(ROWS)
         self.bundles: dict[str, bytes] = {}
+        self.broken: set[str] = set()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -80,8 +82,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(401, {"error": {"status": 401, "message": "unauthorized"}})
         if s.status:
             return self._json(s.status, {"error": {"status": s.status, "message": "forced"}})
-        if s.fail:
-            s.fail -= 1
+        if s.fail or any(f"/{sid}/" in u.path for sid in s.broken):
+            s.fail = max(s.fail - 1, 0)
             return self._json(503, {"error": {"status": 503, "message": "database unavailable"}})
         if u.path == "/v1/snapshots":
             rows = [{**r, "superseded_by": next((o["snapshot_id"] for o in s.rows if o.get("supersedes")
