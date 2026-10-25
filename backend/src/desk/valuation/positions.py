@@ -324,10 +324,15 @@ def _core_outcome(v: BondValuation, result: Any) -> Outcome:
 
 
 def _not_by_core(o: Outcome, e: dv.NotValued) -> Outcome:
-    """A row core did not value from its terms: its earlier rule, the reason said."""
+    """A row core did not value from its terms: its earlier rule, the reason said. When that rule finds no value
+    either (``no_reported_value``: no mv_rub), the row's reason is core's (``ccs_unsupported``, ``repo_open``, ...):
+    the terms are there, so «waiting for the terms» would be wrong (``api.coverage``); the report's gap goes in the
+    detail."""
     note = f"trade terms not valued by core ({e.reason}{': ' + e.detail if e.detail else ''}): the report's rule"
     if o.valuation is not None:
         o.valuation = replace(o.valuation, assumptions=(note, *o.valuation.assumptions))
+    if o.valuation is None and o.reason == "no_reported_value":
+        o.reason, o.detail = e.reason, "; ".join(x for x in (e.detail, o.detail) if x)
     o.reason = o.reason or e.reason
     o.detail = o.detail or e.detail
     o.core_not_valued = (e.reason, e.detail)

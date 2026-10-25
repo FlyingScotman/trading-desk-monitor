@@ -121,6 +121,22 @@ def test_what_core_does_not_value_keeps_the_report(plan):
         assert o.valuation is None or o.valuation.assumptions[0].startswith(f"trade terms not valued by core ({reason}")
 
 
+def test_unvalued_reason_is_cores_not_waiting_for_terms(plan):
+    """PR #199 review: a row with terms core does not value and no mv_rub is unvalued for core's reason, which the
+    coverage screen explains (not «a swap waiting for its terms»); the report's gap stays in the detail."""
+    from desk.api import coverage
+
+    c1 = plan.direct["C1"]  # a CCS without mv_rub
+    assert c1.valuation is None and c1.reason == "ccs_unsupported" and "no mv_rub" in c1.detail
+    assert plan.direct["R3"].reason == "repo_open"  # an open REPO with mv_rub: the report's value, core's reason
+    for code in ("ccs_unsupported", "basis_swap_unsupported", "repo_open", "no_fixings", "no_key_rate_curve"):
+        key, why, todo = coverage.cause(code, "IRS", None, None)
+        assert key == code and "trade_terms" not in why and todo
+    assert "условий сделки" in coverage.cause("no_reported_value", "IRS", None, None)[1]  # no terms at all: as before
+    repo = coverage.cause("no_reported_value", "UNCLASSIFIED", "REPO", None)
+    assert repo[0] == "repo" and "рыночного риска" not in repo[1]
+
+
 def test_parallel_report_both_and_imported_only(plan, ctx):
     inp = inputs()
     block = derivatives_parallel.compare(pv1.merge(plan, []), inp.extra, inp.trade_terms)
