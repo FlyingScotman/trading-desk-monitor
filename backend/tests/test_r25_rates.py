@@ -154,6 +154,9 @@ def test_proxy_helpers_and_setting(tmp_path):
         ("eur_bund_par", [(2.0, 2.5)])
     assert not load({"DESK_HOME": str(tmp_path)}).proxy_curves_for_risk
     assert load({"DESK_HOME": str(tmp_path), "DESK_PROXY_CURVES_FOR_RISK": "1"}).proxy_curves_for_risk
+    # #171: the foreign curves' risk in their quotes, off by default
+    assert not load({"DESK_HOME": str(tmp_path)}).quote_curve_risk
+    assert load({"DESK_HOME": str(tmp_path), "DESK_QUOTE_CURVE_RISK": "1"}).quote_curve_risk
 
 
 def test_run_publishes_the_13_fixings(tmp_path):

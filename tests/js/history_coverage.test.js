@@ -124,6 +124,31 @@ t('#174: подсказка точки называет срез по-русск
   ['prev_close', 'intraday'].forEach(c => assert.ok(!/prev_close|intraday|срез prev|срез intra/.test(tip(c)), tip(c)));
 });
 
+t('#171: прогон с риском валютных кривых в другой единице — пунктир у DV01 позиции на валютной кривой, не у рублёвой', () => {
+  const { K, M } = load();
+  const U = 'риск валютных кривых в котировках (прокси USD/EUR; CNY XCCY у FX-сделок), у показанного прогона — в нулевых ставках';
+  const base = { dates: ['2026-06-10', '2026-06-11', '2026-06-12'], runAt: [{ id: 1, unit: U }, { id: 2, unit: U, old: '0.2.6 (оценка v12, ядро 0.37.0)' }, { id: 3 }],
+    dv01: [-10000, -10500, -11000], notional: [1e6, 1e6, 1e6] };
+  const fx = Object.assign({ curves: { 'RUB RUONIA': [1, 1, 1], 'CNY XCCY': [1, 1, 1] } }, base);
+  const rub = Object.assign({ curves: { 'RUB RUONIA': [1, 1, 1] } }, base);
+  const kinds = (H, mode) => H.dates.map((_, i) => (K.histPoint(H, i, mode) || { k: 'clean' }).k);
+  assert.deepStrictEqual(kinds(fx, 'dv01'), ['unit', 'old', 'clean'], 'прошлая версия важнее единицы');
+  assert.deepStrictEqual(kinds(rub, 'dv01'), ['clean', 'old', 'clean'], 'у рублёвой позиции единица та же');
+  assert.deepStrictEqual(kinds(fx, 'notional'), ['clean', 'old', 'clean'], 'номинал от единицы риска не зависит');
+  const R = K.runSeries(fx, 'dv01');
+  const u = R.series.find(s => s.name === 'другая единица риска' && s.type === 'line');
+  assert.strictEqual(u.lineStyle.type, 'dashed'); assert.strictEqual(u.data[0], -10); assert.strictEqual(R.series[0].data[0], null);
+  assert.ok(R.note.includes('1 — с риском валютных кривых в другой единице'), R.note);
+  assert.ok(R.tooltip.formatter([{ axisValue: '2026-06-10' }]).includes('другая единица риска'));
+  // подсказка кривой — по единице прогона (M.curveUnits); прогон без неё — нулевые ставки
+  M.curve['USD UST'] = { name: 'USD: прокси (UST par), не OIS' }; M.curve['CNY XCCY'] = { name: 'CNY: XCCY к RUONIA' };
+  assert.ok(K.curveTip('USD UST').includes('к нулевой ставке'), K.curveTip('USD UST'));
+  M.curveUnits = { 'USD UST': 'par_yield_quote', 'CNY XCCY': 'xccy_quote_fx' };
+  assert.ok(K.curveTip('USD UST').includes('par-доходностям прокси') && K.curveTip('USD UST').includes('quote_curve_risk'));
+  assert.ok(K.curveTip('CNY XCCY').includes('у FX-сделок') && K.curveTip('CNY XCCY').includes('в разных единицах'));
+  assert.ok(K.tips.ruonia.includes('IRS KEYRATE') && !K.tips.ruonia.includes('пока'), 'КС: почему ещё в нулевых ставках');
+});
+
 (async () => {
   for (const [name, f] of tests) { await f(); n++; console.log('ok', name); }
   console.log(n + ' tests passed');

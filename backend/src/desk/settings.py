@@ -146,6 +146,7 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "autopilot_sync_last": ("DESK_AUTOPILOT_SYNC_LAST", "int"),
     "intraday": ("DESK_INTRADAY", "bool"),
     "proxy_curves_for_risk": ("DESK_PROXY_CURVES_FOR_RISK", "bool"),
+    "quote_curve_risk": ("DESK_QUOTE_CURVE_RISK", "bool"),
     "fx_foreign_curve": ("DESK_FX_FOREIGN_CURVE", "str"),
     "fx_implied_futures": ("DESK_FX_IMPLIED_FUTURES", "bool"),
     "fx_spot_source": ("DESK_FX_SPOT_SOURCE", "str"),
@@ -246,6 +247,9 @@ class Settings:
     autopilot_sync_last: int = 5
     intraday: bool = True  # the autopilot values today's book on the hub's intraday / preliminary cuts (R11)
     proxy_curves_for_risk: bool = False  # UST par / ECB AAA / Bund proxies as the run's USD/EUR curves (R25; not OIS)
+    # the risk of the USD/EUR proxies (all positions) and of CNY XCCY (FX products) in their par quotes, core 0.38
+    # (orchestrator.EodContext.quote_curve_risk, #171); off: their zero rates, as before
+    quote_curve_risk: bool = False
     # provisional FX choices (curves.fx.FxOptions; docs/program/DECISIONS.md open questions)
     fx_foreign_curve: str = "fx_implied"  # an FX forward's foreign leg: fx_implied (swap points) or xccy (CNY)
     fx_implied_futures: bool = True  # FORTS FX futures past the last swap point extend the FX-implied curves
@@ -344,6 +348,8 @@ class Settings:
             ("intraday", "on" if self.intraday else "off"),
             ("proxy_curves_for_risk", "on (UST par / ECB AAA / Bund, not OIS)" if self.proxy_curves_for_risk
              else "off (proxies shown only)"),
+            ("quote_curve_risk", "on (USD/EUR proxies, CNY XCCY for FX: risk in par quotes)" if self.quote_curve_risk
+             else "off (foreign curves: zero rates)"),
             ("fx_foreign_curve", self.fx_foreign_curve + " (provisional)"),
             ("fx_implied_futures", "on" if self.fx_implied_futures else "off"),
             ("fx_spot_source", self.fx_spot_source),
@@ -693,6 +699,7 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         autopilot_sync_last=count("DESK_AUTOPILOT_SYNC_LAST", defaults.autopilot_sync_last),
         intraday=flag("DESK_INTRADAY", defaults.intraday),
         proxy_curves_for_risk=flag("DESK_PROXY_CURVES_FOR_RISK", defaults.proxy_curves_for_risk),
+        quote_curve_risk=flag("DESK_QUOTE_CURVE_RISK", defaults.quote_curve_risk),
         fx_foreign_curve=choice("DESK_FX_FOREIGN_CURVE", defaults.fx_foreign_curve, ("fx_implied", "xccy")),
         fx_implied_futures=flag("DESK_FX_IMPLIED_FUTURES", defaults.fx_implied_futures),
         fx_spot_source=choice("DESK_FX_SPOT_SOURCE", defaults.fx_spot_source, ("market", "cets_tom")),

@@ -77,6 +77,8 @@
   M.ofzView = 'basis';
   try { if (localStorage.getItem('concepts-ofz-view') === 'kbd') M.ofzView = 'kbd'; } catch (e) { }
   M.ofzScheme = (D.source || {}).ofzScheme || null;  // 'kbd_par': ОФЗ на КБД в par-бакетах (0.2.6); null — прогон до 0.2.6
+  // единица бакетов по кривым прогона (#171; orchestrator.EodContext.curve_units): kit.js K.curveTip; null — прогон до неё
+  M.curveUnits = (D.source || {}).curveUnits || null;
   if (M.ofzView === 'kbd' && !M.ofzScheme) M.notes.push('прогон до 0.2.6: ОФЗ в нём на RUONIA, вид «КБД» приближённый (риск КБД = базис ОФЗ к RUONIA)');
   const runQ = 'run_id=' + encodeURIComponent((D.source || {}).runId || '');
   (D.riskNotes || []).forEach(n => M.notes.push(n.text + (n.detail ? ' (' + n.detail + ')' : '')));

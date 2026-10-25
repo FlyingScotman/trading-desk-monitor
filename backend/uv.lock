@@ -323,7 +323,7 @@ requires-dist = [
     { name = "pgserver", marker = "extra == 'dev'", specifier = ">=0.1.4" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "rub-fixed-income-core", git = "https://github.com/FlyingScotman/rub-fixed-income-core.git?rev=a74b59f2a0e6724ef1e448dfc559086b420a0400" },
+    { name = "rub-fixed-income-core", git = "https://github.com/FlyingScotman/rub-fixed-income-core.git?rev=4827c52a6e089cc9535389b6c26b8c59fbc7c035" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "trading-desk-monitor", editable = "../" },
     { name = "truststore", specifier = ">=0.10" },
@@ -922,8 +922,8 @@ wheels = [
 
 [[package]]
 name = "rub-fixed-income-core"
-version = "0.37.0"
-source = { git = "https://github.com/FlyingScotman/rub-fixed-income-core.git?rev=a74b59f2a0e6724ef1e448dfc559086b420a0400#a74b59f2a0e6724ef1e448dfc559086b420a0400" }
+version = "0.38.0"
+source = { git = "https://github.com/FlyingScotman/rub-fixed-income-core.git?rev=4827c52a6e089cc9535389b6c26b8c59fbc7c035#4827c52a6e089cc9535389b6c26b8c59fbc7c035" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
