@@ -502,7 +502,10 @@ const NORAT_POS = P.filter(p => p.rating && !U.isRated(p.rating) && p.cs01), NOR
 const RAT_KEYS = RAT_G.concat(NORAT ? [U.NO_RATING] : []);
 const posById = {}; P.forEach(p => posById[p.id] = p);
 const DV = U.bucketMatrix(P);
-// в редакторе — только кривые, на которых есть риск (КБД 'RUB OFZ' — рыночная кривая: риск ОФЗ на RUONIA + спред ОФЗ)
+// в редакторе — только кривые, на которых есть риск. 'RUB OFZ' — сдвиг доходностей ОФЗ (КБД), что бы ни делала RUONIA:
+// ОФЗ в RUONIA + базис двигается по RUONIA, а её базис — на «RUB OFZ» − «RUB RUONIA» (#226)
+const CURVE_HINT = { 'RUB OFZ': 'сдвиг доходностей ОФЗ (КБД): уровень КБД; базис ОФЗ сдвигается на «RUB OFZ» − «RUB RUONIA»' };
+const curveTitle = c => CURVE_HINT[c] ? `${D.CURVES[c].name} — ${CURVE_HINT[c]}` : D.CURVES[c].name;
 const CK = Object.keys(D.CURVES).filter(c => DV[c] && DV[c].some(v => Math.abs(v) > 1));
 const RUBC = ['RUB RUONIA','RUB KEY'].filter(c => CK.includes(c));
 const FXC = Object.keys(D.FX).filter(c => c !== 'RUB');
@@ -637,10 +640,10 @@ function renderTabs(){
   $('#ctabs').innerHTML = CK.map(c => {
     const a = S.ed.curves[c], mx = a.reduce((m, v) => Math.abs(v) > Math.abs(m) ? v : m, 0);
     const linked = S.link && RUBC.includes(S.cur) && RUBC.includes(c) && c !== S.cur;
-    return `<button class="ctab${linked ? ' linked' : ''}" role="tab" data-c="${esc(c)}" aria-selected="${c === S.cur}" title="${esc(D.CURVES[c].name)}"><span class="n">${esc(c)}</span><span class="m">${spark(a)}<span>${snum(mx)}</span></span></button>`;
+    return `<button class="ctab${linked ? ' linked' : ''}" role="tab" data-c="${esc(c)}" aria-selected="${c === S.cur}" title="${esc(curveTitle(c))}"><span class="n">${esc(c)}</span><span class="m">${spark(a)}<span>${snum(mx)}</span></span></button>`;
   }).join('');
   const cv = D.CURVES[S.cur];
-  $('#cur-name').innerHTML = `${esc(S.cur)}<small>${esc(cv.name)} · ${cv.ccy}</small>`;
+  $('#cur-name').innerHTML = `${esc(S.cur)}<small>${esc(curveTitle(S.cur))} · ${cv.ccy}</small>`;
   document.querySelectorAll('#scale-seg button').forEach(b => b.setAttribute('aria-pressed', +b.dataset.d === S.scale));
 }
 $('#ctabs').addEventListener('click', e => { const b = e.target.closest('.ctab'); if (!b) return; S.cur = b.dataset.c; S.lastShape = null; S.heatSel = null; autoScale(); renderTabs(); renderEditor(); renderShapes(); });
