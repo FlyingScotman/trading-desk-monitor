@@ -407,6 +407,14 @@ def book_rows(used: list[str], meta: dict[str, dict]) -> list[dict[str, Any]]:
     return [row(b) for b in BOOKS if b in used] + [row(b) for b in used if b not in BOOKS]
 
 
+def rates_side(extra: dict[str, Any]) -> str:
+    """The side of a row of swaps or REPOs valued by core: ``PAY`` / ``REC`` (the fixed leg, as tdm's IRS), ``REPO`` /
+    ``REVERSE_REPO``; ``MIXED`` when its trades differ."""
+    sides = {"PAY" if s["side"] == "payer" else "REC" for s in extra.get("swaps") or ()}
+    sides |= {str(r["side"]).upper() for r in extra.get("repos") or ()}
+    return sides.pop() if len(sides) == 1 else "MIXED"
+
+
 def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, Any], qty: float | None
                ) -> dict[str, Any]:
     """An FX row, an unmapped bond or an OTC/other row (``valuation.positions``): PV, FX delta in currency (an FX
@@ -428,14 +436,18 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
     if rate is None:
         why.append(f"no {ccy} rate on {ctx.business_date}: shown in RUB")
         ccy, rate, amount = "RUB", 1.0, None  # the face is in the foreign currency: the notional is the MV
+    core = bool(v.extra.get("core"))  # a derivative valued by core from its terms (valuation.derivatives)
+    # a swap or a REPO valued by core: its notional (a REPO's signed cash) and its maturity are the terms'
+    rates_core = core and bool(v.extra.get("swaps") or v.extra.get("repos"))
+    if rates_core:
+        ccy, rate, amount = "RUB", 1.0, v.quantity
     if amount is None:
         amount = v.pv_rub / rate
         why.append("notional unknown: the market value is shown")
-    core = bool(v.extra.get("core"))  # a derivative valued by core from its terms (valuation.derivatives)
     vd = x.get("value_date")
     if core and v.horizon_kind == "value_date":
         vd = v.horizon_date
-    mat = x.get("maturity_date") or vd
+    mat = v.horizon_date if rates_core else x.get("maturity_date") or vd
     name = x.get("source_instrument_name") or (f"{ccy} {vd or 'spot'}" if fx else x.get("source_instrument_id"))
     if kind == "bond":  # unmapped: the bank's name (D6), else its ISIN
         name = (name or x.get("isin") or pid) + FROM_REPORT
@@ -444,11 +456,13 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
     else:
         delta = {ccy: amount if fx else v.pv_rub / rate} if ccy != "RUB" else {}
     return {
-        "position_id": pid, "book_id": book, "instr_type": "FX" if core else itype, "asset_class": aclass,
+        "position_id": pid, "book_id": book, "instr_type": "FX" if core and not rates_core else itype,
+        "asset_class": aclass,
         "segment": segment, "name": name or pid, "isin": x.get("isin"), "issuer": None, "ccy": ccy,
         "maturity": mat.isoformat() if mat else None,
         "tenor_y": (mat - ctx.business_date).days / 365.25 if mat and (core or not fx) else None,
-        "side": ("BUY" if amount >= 0 else "SELL") if fx or core else "long" if amount >= 0 else "short",
+        "side": rates_side(v.extra) if rates_core else ("BUY" if amount >= 0 else "SELL") if fx or core
+        else "long" if amount >= 0 else "short",
         "notional": amount, "notional_rub": amount * rate, "price": _num(v.clean_pct), "mv": v.pv_rub / rate,
         "mv_rub": v.pv_rub, "dv01": v.dv01_rub, "cs01": v.spread01_rub, "ofz_spr01": 0.0,
         "risk": risk_by_curve(v), "gamma": [[a, b, g] for a, b, g in v.hessian] if core else [],

@@ -114,6 +114,19 @@ class EodContext:
     and the curve is rebootstrapped, the unit of the KBD's par buckets (``rub_ofz_kbd_v3``). ``core_market`` keeps the
     built curves (the curve chart, the flash PnL, the FX curves); ``risk_market`` swaps these in for the core calls
     that publish risk. Until 0.2.6 RUONIA's buckets moved its continuous zero rate (R30), about 14 % more DV01."""
+    swap_curves: tuple[CurveEntry, ...] = ()
+    """Curves only a derivative reads, kept out of ``core_market`` so the bonds' inputs stay as they are: the key-rate
+    forward curve (``rates.KEY_RATE_SWAP_CURVE_ID``, ``rub_key_rate_swap_v1``) a key-rate swap projects on."""
+    quote_curve_risk: bool = False
+    """Setting ``quote_curve_risk`` (default off; core 0.38 ``ValuationPolicy.quote_curve_risk``, issue #171): the risk of
+    the foreign curves core can take in their quotes (``FxMarket.quote_entries``) is in those quotes, as RUONIA's: the
+    USD / EUR par-yield proxies (``USD UST``, ``EUR AAA``) for every position on them (``risk_market``), the CNY XCCY
+    par quotes for the FX products whose foreign curve it is (``fx_risk_market``; a CNY bond stays on the built curve,
+    core 0.38 takes XCCY quotes for FX products only). PV and carry are unchanged; the buckets change unit
+    (``curve_units``). The key-rate curve stays on its zero rates: core takes KRS quotes for key-rate swaps and
+    KEYRATE futures (``rub_key_rate_swap_v1``), not as the projection of a key-rate floater
+    (``rub_key_rate_projection_v1``); the desk's key-rate swaps (#45) project on the built forward curve
+    (``swap_curves``), so their key-rate risk is in its forward segments, not in KRS quotes, with the setting too."""
 
     @property
     def reference_facts(self) -> Reference:
@@ -125,11 +138,40 @@ class EodContext:
 
     @property
     def risk_market(self) -> MarketSnapshot:
-        """``core_market`` with ``quote_curves`` in place of their built curves: what risk is valued on."""
-        if not self.quote_curves:
-            return self.core_market
+        """``core_market`` with ``quote_curves`` in place of their built curves (and, with ``quote_curve_risk``, the
+        proxies' par yields): what risk is valued on."""
         q = {c.curve_id: c for c in self.quote_curves}
+        if self.quote_curve_risk:
+            q.update((i, e) for i, e in self.fx.quote_entries.items() if i != fxcurves.XCCY_CURVE_ID)
+        return self._with(q)
+
+    @property
+    def fx_risk_market(self) -> MarketSnapshot:
+        """``risk_market`` and, with ``quote_curve_risk``, the CNY XCCY par quotes in place of the built curve: what the
+        FX products are valued on (``valuation.derivatives``; core rebuilds the quotes on every shock)."""
+        q = {c.curve_id: c for c in self.quote_curves}
+        if self.quote_curve_risk:
+            q.update(self.fx.quote_entries)
+        return self._with(q)
+
+    def _with(self, q: dict[str, CurveEntry]) -> MarketSnapshot:
+        if not q:
+            return self.core_market
         return replace(self.core_market, curves=tuple(q.get(c.curve_id, c) for c in self.core_market.curves))
+
+    def curve_units(self) -> dict[str, str]:
+        """Published curve -> the unit of its risk buckets in this run (the run's lineage ``curve_units``; the pages'
+        tips, the history's mark of a change of unit, issue #171): ``kbd_par`` (the KBD's par yields, 1Y-20Y+),
+        ``ois_quote`` (RUONIA's OIS par quotes), ``par_yield_quote`` (a proxy's par yields), ``xccy_quote_fx`` (the
+        FX products' CNY buckets in the XCCY par quotes, a CNY bond's in the built curve's zero rates), ``zero`` (the
+        continuous zero rate of the built curve)."""
+        quoted = {c.curve_id for c in self.quote_curves}
+        out = {"RUB OFZ": "kbd_par", "RUB KEY": "zero",
+               "RUB RUONIA": "ois_quote" if rates.RUONIA_OIS_CURVE_ID in quoted else "zero"}
+        for cid, c in sorted(self.fx.curves.items()):
+            q = self.quote_curve_risk and cid in self.fx.quote_entries
+            out[cid] = ("par_yield_quote" if c.proxy else "xccy_quote_fx") if q else "zero"
+        return out
 
     def risk_curve(self, curve_id: str, built: DiscountCurve) -> Any:
         """The source core's risk engine takes for ``curve_id``: its bootstrap request when it is a quote curve,
@@ -174,6 +216,8 @@ class EodContext:
             "calendar_provisional_from": self.static.provisional_from(),
             "rates": self.rates,
             "fx": self.fx.lineage,
+            "quote_curve_risk": self.quote_curve_risk,
+            "curve_units": self.curve_units(),
             "stale_datasets": self.market.stale,
         }
 
@@ -187,13 +231,14 @@ def check_against_standard_yields(params: ZcycParameters, standard_yields: list[
 def new_cache() -> ShockedCurveCache:
     """A run's cache of shocked curves (core ``ShockedCurveCache``: by curve content and shift, bounded, never changes a
     number). With RUONIA in its OIS quotes (``EodContext.quote_curves``) a run rebootstraps the curve once per bucket
-    shift: about 25 times for the first order and 245 with the Hessian, ~0.1 s each, whatever the number of positions.
+    shift: about 25 times for the first order and 245 with the Hessian, whatever the number of positions: ~0.08 s each
+    on core 0.37, ~5-10 ms on core 0.38 (the same curves to the bit; a Hessian run of the live fixture 21.8 s -> 2.9 s).
     The test session shares one (``tests/conftest.py``): its contexts repeat the same curves."""
     return ShockedCurveCache()
 
 
 def with_rates(market: MarketView, static: StaticView, core: MarketSnapshot
-               ) -> tuple[MarketSnapshot, dict[str, Any], tuple[CurveEntry, ...]]:
+               ) -> tuple[MarketSnapshot, dict[str, Any], tuple[CurveEntry, ...], tuple[CurveEntry, ...]]:
     """``core`` plus the RUONIA OIS curve (built once), the key-rate projection off it and the RUONIA and
     key-rate fixings. An input that cannot be built is left out with its error in the lineage: the floaters
     that need it are then rejected by core with the reason, the rest of the book is unaffected.
@@ -203,8 +248,9 @@ def with_rates(market: MarketView, static: StaticView, core: MarketSnapshot
     built; ``no_discount``: the key-rate curve needs the RUONIA OIS curve), ``codes`` for the run log and the pages
     (``rates.input_notes``) and ``coverage``, the hub's own list of the present and missing quote-set series.
     ``curve_error`` keeps the first error message (the RUONIA one, else the key-rate one). The third element: the
-    RUONIA OIS curve as its bootstrap request (``EodContext.quote_curves``), empty without it."""
-    curves, lineage, fixings = list(core.curves), {}, ()
+    RUONIA OIS curve as its bootstrap request (``EodContext.quote_curves``), empty without it; the fourth: the key-rate
+    forward curve for key-rate swaps (``EodContext.swap_curves``), empty without the key-rate curve."""
+    curves, lineage, fixings, swap_curves = list(core.curves), {}, (), ()
     status: dict[str, str] = {}
     lineage["coverage"] = rates.quote_set_coverage(market.snapshot)
     ois = None
@@ -222,6 +268,7 @@ def with_rates(market: MarketView, static: StaticView, core: MarketSnapshot
         try:
             kr = rates.key_rate_projection(market.snapshot, static.snapshot, ois.curve)
             curves.append(kr.entry)
+            swap_curves = (kr.swap_entry,) if kr.swap_entry is not None else ()
             lineage["key_rate"] = {k: v for k, v in kr.lineage.items() if k != "segments"}
             status["key_rate_swap"] = "ok"
         except (rates.RatesInputError, SnapshotError, CoreRejection, ValueError) as e:
@@ -236,7 +283,8 @@ def with_rates(market: MarketView, static: StaticView, core: MarketSnapshot
         status["fixings"] = "error"
     lineage["status"] = status
     lineage["codes"] = rates.input_codes(status)
-    return replace(core, curves=tuple(curves), fixings=fixings), lineage, (ois.entry,) if ois else ()
+    return (replace(core, curves=tuple(curves), fixings=fixings), lineage, (ois.entry,) if ois else (),
+            swap_curves)
 
 
 def market_rates(market: MarketView) -> dict[str, tuple[float, str] | None]:
@@ -261,7 +309,7 @@ def prepare(snapshots: SnapshotDir, business_date: str, cut_type: str = "eod_fin
     market = MarketView(snap)
     assert snap.static_snapshot_id
     static = StaticView(snapshots.get(snap.static_snapshot_id))
-    core_market, rates_lineage, quote_curves = with_rates(market, static, market.core_market(static))
+    core_market, rates_lineage, quote_curves, swap_curves = with_rates(market, static, market.core_market(static))
     fx_options = fx_options or fxcurves.FxOptions()
     core_market, fx_market = fxcurves.with_fx(market, static, core_market, market_rates(market), fx_options)
     params = market.zcyc_parameters()
@@ -273,7 +321,7 @@ def prepare(snapshots: SnapshotDir, business_date: str, cut_type: str = "eod_fin
     kbd = kbd_discount_curve(params, zero_shock="annual_par")
     return EodContext(snapshots, market, static, params, kbd, core_market, cal, (vf, vt),
                       check, new_cache(), rates_lineage, fx=fx_market, fx_options=fx_options,
-                      quote_curves=quote_curves)
+                      quote_curves=quote_curves, swap_curves=swap_curves)
 
 
 def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: bool = False,
@@ -309,7 +357,8 @@ def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: b
         except Rejected as e:
             o.reason, o.detail = e.reason, e.detail
     valued, results = value_bonds(ctx.risk_market, todo, second_order=second_order, cache=ctx.cache,
-                                  scenarios=scenarios, foreign=foreign_bond_curves(ctx))
+                                  scenarios=scenarios, foreign=foreign_bond_curves(ctx),
+                                  quote_curve_risk=ctx.quote_curve_risk)
     by_pid = {p.position_id: r for r in results for p in r.positions}
     for pid, v in valued.items():
         o = out[index[pid]]

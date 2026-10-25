@@ -106,7 +106,8 @@ def test_taylor_matches_core_approximation(golden):
     assert v.discount_curve_id == "RUB_KBD"
     engine = BondRiskEngine(BondRiskRequest(v.cashflows, v.valuation_date, ctx.curve, SPREAD_CONVENTION, "ofz",
                                             dirty_price_rub=v.dirty_rub, quantity=row["quantity"]))
-    core = engine.approximate(BondScenario(tuple(norm["curves"]["RUB OFZ"]), norm["ofzSpread"]))
+    # core 0.38 refuses the KBD's 1M-6M unless 0 or the 1Y shift: as the exact repricing (exact.kbd_shock)
+    core = engine.approximate(BondScenario(exact.kbd_shock(tuple(norm["curves"]["RUB OFZ"])), norm["ofzSpread"]))
     assert t["total"] == pytest.approx(core.approximate_pnl_rub, rel=1e-6)
     assert t["convexity"] == pytest.approx(core.rates_gamma_pnl_rub + core.spread_gamma_pnl_rub
                                            + core.rates_spread_cross_pnl_rub, rel=1e-6)
@@ -154,7 +155,7 @@ def test_reprice_run_moves_each_curve_by_its_own_shifts(golden):
     per-curve risk says. The KBD alone moves the fixed-coupon OFZ (on it since #32) and no other bond."""
     snaps, _, run, rows, reference = golden
     sc = exact.core_scenario("x", normalize({"curves": {"RUB KEY": 2, "RUB OFZ": 1}}), 3.0)
-    assert sc.shock.curve_shifts_bp == (1.0,) * 11 and sc.shock.spread_shift_bp == 3.0
+    assert sc.shock.curve_shifts_bp == (0.0,) * 3 + (1.0,) * 8 and sc.shock.spread_shift_bp == 3.0  # KBD: no 1M-6M
     assert dict(sc.curve_shifts_bp) == {"RUB_KEY_RATE_PROJ": (2.0,) * 11, "RUB_RUONIA_OIS": (0.0,) * 11}
     floaters = {r["position_id"] for r in rows if r["secid"] in ("SU29008RMFS8", FLOATER)}
     assert len(floaters) == 2  # the OFZ-PK on RUONIA, the corporate on the key rate
@@ -187,6 +188,30 @@ def test_reprice_run_moves_each_curve_by_its_own_shifts(golden):
         if p["exact"] is not None and p["position_id"] not in floaters:
             own = ofz[p["position_id"]]["exact"] if p["position_id"] in on_kbd else p["exact"]
             assert par[p["position_id"]]["exact"] == pytest.approx(own, rel=1e-9, abs=1e-6)
+
+
+def test_kbd_short_end_is_dropped_before_core(golden):
+    """Core 0.38 refuses a scenario on the par-yield KBD (``rub_ofz_kbd_v3``) whose 1M-6M shifts are neither 0 nor its
+    1Y shift (``InvalidTerms``, the position ``CALCULATION_FAILED``); 0.37 dropped them. ``core_scenario`` sets them to
+    0, so a KBD shock with an uneven short end reprices the OFZ exactly, as the same shock without it (below 1Y the
+    overlay follows 1Y) and as the Taylor (no KBD risk there)."""
+    snaps, _, run, rows, reference = golden
+    tail = [200.0] * 8
+    uneven = {"curves": {"RUB OFZ": [300.0, 250.0, 225.0, *tail]}}
+    sc = exact.core_scenario("x", normalize(uneven), 0.0)
+    assert sc.shock.curve_shifts_bp == (0.0, 0.0, 0.0, *tail)
+    on_kbd = {r["position_id"] for r in rows if "RUB OFZ" in r["fact"]["risk"]}
+    res = {p["position_id"]: p for p in reprice_run(snaps, run, rows, reference, uneven)["positions"]}
+    flat = {p["position_id"]: p for p in reprice_run(snaps, run, rows, reference,
+                                                      {"curves": {"RUB OFZ": [0.0, 0.0, 0.0, *tail]}})["positions"]}
+    par = {p["position_id"]: p for p in reprice_run(snaps, run, rows, reference,
+                                                     {"curves": {"RUB OFZ": 200}})["positions"]}
+    repriced = [pid for pid in on_kbd if res[pid]["quality"] in REPRICED]
+    assert repriced
+    for pid in repriced:
+        assert res[pid]["exact"] is not None and res[pid]["code"] is None, res[pid]
+        assert res[pid]["exact"] == flat[pid]["exact"] == pytest.approx(par[pid]["exact"], rel=1e-12)
+        assert res[pid]["taylor"] == flat[pid]["taylor"]
 
 
 def test_reprice_run_passes_the_fx_shocks(golden, monkeypatch):
@@ -309,3 +334,11 @@ def test_parity_fixture_is_current(golden):
     sector = next(c for c in doc["cases"] if c["name"] == "sector")
     s02 = next(x for x in sector["expected"]["positions"] if x["position_id"] == "S02")
     assert s02["spread"] == pytest.approx(-21.5 * (0.5 * 412.25 + 300 + 40))
+
+
+def test_exact_context_takes_the_runs_curve_risk_unit(golden):
+    """#171: a run made with ``quote_curve_risk`` (its lineage flag, ``scenario.jobs``) is repriced with its curves in
+    the same unit as its Taylor factors; a run without the flag, as before."""
+    snaps, _, run, *_ = golden
+    assert not exact._context(snaps, run, None).quote_curve_risk
+    assert exact._context(snaps, {**run, "quote_curve_risk": True}, None).quote_curve_risk

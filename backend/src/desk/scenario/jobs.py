@@ -78,7 +78,8 @@ def run_once(con: psycopg.Connection, snapshots: SnapshotDir, ctx_cache: dict | 
         return None
     jid, rid = job["job_id"], job["base_run_id"]
     try:
-        run = cur.execute("SELECT run_id, business_date, cut_type, market_snapshot_id FROM run"
+        run = cur.execute("SELECT run_id, business_date, cut_type, market_snapshot_id,"
+                          " (lineage->>'quote_curve_risk')::boolean AS quote_curve_risk FROM run"
                           " WHERE run_id = %s", (rid,)).fetchone()
         rows = cur.execute("SELECT position_id, book_id, secid, quantity, quality, pv_rub, fact"
                            " FROM run_position WHERE run_id = %s AND fact IS NOT NULL ORDER BY ord",

@@ -229,7 +229,8 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
     ctx = prep(sd, *(on_close or (d, cut_type)), market_snapshot_id=market_snapshot_id, fx_options=fx_options)
     # issuer names, groups, sectors and ratings: the newest static of the cache, not the market's own (R25)
     ctx = dataclasses.replace(ctx, reference=reference.facts(sd, ctx.static),
-                              proxy_curves=bool(getattr(settings, "proxy_curves_for_risk", False)))
+                              proxy_curves=bool(getattr(settings, "proxy_curves_for_risk", False)),
+                              quote_curve_risk=bool(getattr(settings, "quote_curve_risk", False)))
     prev_cut = None if on_close else previous_market(sd, d)
     prev_date = prev_cut[0] if prev_cut else None
     prev = MarketView(sd.market(*prev_cut)) if prev_cut else None
@@ -887,7 +888,7 @@ def cmd_backfill(a: argparse.Namespace) -> int:
                 waited = True
             time.sleep(5)
         try:
-            one = backfill.Plan(p.date_from, p.date_to, [day], p.hub)
+            one = backfill.Plan(p.date_from, p.date_to, [day], p.hub, p.rows)
             res = backfill.run(st, one, store_url=url, client=client, out=print, contexts=contexts)
         finally:
             lock.release()
@@ -895,6 +896,8 @@ def cmd_backfill(a: argparse.Namespace) -> int:
         failed += len(res["failed"])
         for d, err in res["failed"]:
             print(f"  {d} FAILED: {err}")
+        for d in res["unconverged"]:
+            print(f"  {d} still stale after its run: tried again next time (#23)")
         for d in res["skipped"]:
             print(f"  {d} skipped: its bundle is not cached and the hub is off")
         el = time.perf_counter() - t0

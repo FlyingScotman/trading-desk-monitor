@@ -110,7 +110,7 @@ tr.row.sel td { background: var(--accent-bg); }
         animation: false, grid: { left: 6, right: 10, top: 30, bottom: 4, containLabel: true }, legend: { top: 0, left: 0, type: 'scroll' },
         tooltip: { trigger: 'axis', valueFormatter: opts.fmt, axisPointer: { type: opts.bars ? 'shadow' : 'line' } },
         xAxis: { type: 'category', data: I.map(i => f.dshort(DATES[i])), boundaryGap: !!opts.bars },
-        yAxis: [{ type: 'value', scale: !opts.stack, axisLabel: { formatter: opts.fmt } }].concat(opts.y2 ? [{ type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: opts.fmt, color: css('--fg-3') } }] : []),
+        yAxis: [{ type: 'value', unit: opts.unit, scale: !opts.stack, axisLabel: { formatter: opts.fmt } }].concat(opts.y2 ? [{ type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: opts.fmt, color: css('--fg-3') } }] : []),
         dataZoom: [{ type: 'inside' }],
         series: S.map((s, k) => Object.assign({ type: 'line', showSymbol: false, lineStyle: { width: 1.6 }, markLine: k === 0 ? mark : undefined }, opts.stack ? { stack: 'a', areaStyle: { opacity: .55 }, lineStyle: { width: 0.8 } } : {}, s)),
       };
@@ -132,7 +132,7 @@ tr.row.sel td { background: var(--accent-bg); }
   function drawRisk() {
     K.seg(pRisk.querySelector('.m'), RISKM, st.risk, v => { st.risk = v; save(); chRisk.redraw(); });
     let defs = [];
-    chRisk = series(pRisk.querySelector('.chart'), () => { const L = K.list(); defs = riskDefs(L); return defs.map(([n, fn, c]) => ({ name: n, data: agg(L, fn), color: c })); }, { fmt: v => f.dv(v) });
+    chRisk = series(pRisk.querySelector('.chart'), () => { const L = K.list(); defs = riskDefs(L); return defs.map(([n, fn, c]) => ({ name: n, data: agg(L, fn), color: c })); }, { fmt: v => f.dv(v), unit: 'тыс ₽/бп' });
     chRisk.on('click', pp => {
       const i = idxs()[pp.dataIndex], d = defs[pp.seriesIndex]; if (!d) return;
       K.drill({ title: d[0] + ' на ' + f.date(DATES[i]), unit: 'тыс ₽/бп', rows: atRows(K.list(), d[1], i), note: REAL ? 'по прогону даты' : 'восстановлено по номиналам' });
@@ -152,7 +152,7 @@ tr.row.sel td { background: var(--accent-bg); }
   function drawMv() {
     K.seg(pMv.querySelector('.m'), MVM, st.mv, v => { st.mv = v; save(); chMv.redraw(); });
     let defs = [];
-    chMv = series(pMv.querySelector('.chart'), () => { const L = K.list(); defs = mvDefs(L); return defs.map(([n, fn, c]) => ({ name: n, data: agg(L, fn), color: c })); }, { fmt: v => f.bn(v, 1), stack: true });
+    chMv = series(pMv.querySelector('.chart'), () => { const L = K.list(); defs = mvDefs(L); return defs.map(([n, fn, c]) => ({ name: n, data: agg(L, fn), color: c })); }, { fmt: v => f.bn(v, 1), unit: 'bn ₽', stack: true });
     chMv.on('click', pp => {
       const i = idxs()[pp.dataIndex], d = defs[pp.seriesIndex]; if (!d) return;
       K.drill({ title: 'MV · ' + d[0] + ' на ' + f.date(DATES[i]), unit: 'mm ₽', fmt: v => f.mn(v, 0), rows: atRows(K.list(), d[1], i), color: false });
@@ -172,7 +172,7 @@ tr.row.sel td { background: var(--accent-bg); }
       ['Объём по валютам, mm ₽', M.ccys.filter(c => L.some(p => p.ccy === c && p.group !== 'DER')).map(c => [K.ccyTag(c), (p, i) => p.ccy === c ? V.mv(p, i) : 0]), v => f.mn(v, 0), v => f.mns(v, 0), 'mm ₽'],
       ['Номинал деривативов, mm ₽', M.typeRows.filter(t => t.group === 'DER' && L.some(p => p.group + '.' + p.kind === t.id)).map(t => ['<b style="color:' + K.kindColor[t.kind] + '">●</b> ' + esc(t.label), (p, i) => p.group + '.' + p.kind === t.id ? V.notional(p, i) : 0]), v => f.mn(v, 0), v => f.mns(v, 0), 'mm ₽'],
     ];
-    let html = '<table class="k-tbl cmp"><thead><tr><th></th><th class="n">' + f.date(DATES[i0]) + '</th><th class="n">Сегодня</th><th class="n">Δ</th><th class="n">Δ %</th><th style="width:110px"></th></tr></thead><tbody>';
+    let html = '<table class="k-tbl cmp" data-vk="c11-compare" data-title="Сравнение с датой"><thead><tr><th></th><th class="n">' + f.date(DATES[i0]) + '</th><th class="n">Сегодня</th><th class="n">Δ</th><th class="n">Δ %</th><th style="width:110px"></th></tr></thead><tbody>';
     sections.forEach(([title, defs, fm, fms, unit]) => {
       if (!defs.length) return;
       const vals = defs.map(([n, fn]) => { const a = M.sum(L, p => fn(p, i0)), b = M.sum(L, p => fn(p, LAST)); return { n, fn, a, b, d: b - a }; });
@@ -184,10 +184,11 @@ tr.row.sel td { background: var(--accent-bg); }
           '<td class="n mut">' + K.d({ title: x.n.replace(/<[^>]+>/g, '').trim() + ' на ' + f.date(DATES[i0]), unit, fmt: fm, rows: atRows(L, x.fn, i0) }, null, '') + '</td>' +
           '<td class="n">' + K.d({ title: x.n.replace(/<[^>]+>/g, '').trim() + ' сегодня', unit, fmt: fm, rows: atRows(L, x.fn, LAST) }, null, '') + '</td>' +
           '<td class="n">' + (Math.abs(x.d) < 1 ? '<span class="mut3">·</span>' : K.d({ title: 'Δ ' + x.n.replace(/<[^>]+>/g, '').trim() + ' с ' + f.date(DATES[i0]), unit, fmt: fms, rows: L.map(p => ({ p, v: x.fn(p, LAST) - x.fn(p, i0) })) }, null, '')) + '</td>' +
-          '<td class="n mut">' + (pct == null || Math.abs(x.d) < 1 ? '' : f.s(pct, 0) + '%') + '</td><td>' + K.bar(x.d, mx) + '</td></tr>';
+          '<td class="n mut">' + (pct == null || Math.abs(x.d) < 1 ? '' : f.pcts(pct, 0)) + '</td><td>' + K.bar(x.d, mx) + '</td></tr>';
       });
     });
     bd.innerHTML = html + '</tbody></table>';
+    K.tableToolsAll(bd);
   }
 
   // ---------- PnL ----------
@@ -205,9 +206,9 @@ tr.row.sel td { background: var(--accent-bg); }
         : [{ name: 'PnL дня', type: 'bar', data: I.map(i => ({ value: M.hist.pnl.total[hi(i)], itemStyle: { color: M.hist.pnl.total[hi(i)] >= 0 ? css('--pos') : css('--neg') } })) }];
       return {
         animation: false, grid: { left: 6, right: 10, top: 30, bottom: 4, containLabel: true }, legend: { top: 0, left: 0, type: 'scroll' },
-        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.mns(v, 2) + ' mm' },
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.mns(v, 2) + ' mm ₽' },
         xAxis: { type: 'category', data: I.map(i => f.dshort(DATES[i])) },
-        yAxis: [{ type: 'value', axisLabel: { formatter: v => f.mn(v, 0) } }, { type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => f.mn(v, 0), color: css('--fg-3') } }],
+        yAxis: [{ type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } }, { type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => f.mn(v, 0), color: css('--fg-3') } }],
         dataZoom: [{ type: 'inside' }],
         series: bars.concat([{ name: 'накопленный', type: 'line', yAxisIndex: 1, data: cum, showSymbol: false, lineStyle: { width: 2 }, color: css('--fg') }]),
       };
@@ -251,13 +252,13 @@ tr.row.sel td { background: var(--accent-bg); }
         K.posCols.ccy, K.posCols.issuer,
         { key: 'kind', label: 'Тип', filter: r => M.kindLabel[r.kind] || r.kind, fmt: (v, r) => '<span class="tagc">' + esc(M.kindShort[r.kind]) + '</span>' },
         { key: 'not0', label: 'Номинал было', num: true, fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', title: 'mm в валюте бумаги на дату сравнения' },
-        { key: 'nowN', label: 'стало', num: true, val: r => H[r.id].notional[LAST], fmt: v => f.mn(v, 0) },
-        { key: 'dNot', label: 'Δ номинал', num: true, fmt: (v, r) => v ? f.mns(v, 0) : '<span class="mut3">·</span>', cls: v => f.cls(v), title: 'mm в валюте бумаги' },
+        { key: 'nowN', label: 'стало', num: true, unit: 'mm в вал.', val: r => H[r.id].notional[LAST], fmt: v => f.mn(v, 0) },
+        { key: 'dNot', label: 'Δ номинал', num: true, unit: 'mm в вал.', fmt: (v, r) => v ? f.mns(v, 0) : '<span class="mut3">·</span>', cls: v => f.cls(v), title: 'mm в валюте бумаги' },
         { key: 'adv', label: 'ΔDV01', num: true, val: r => Math.abs(r.dDv), fmt: (v, r) => Math.abs(r.dDv) < 500 ? '<span class="mut3">·</span>' : f.dvs(r.dDv), sum: r => r.dDv, sumFmt: v => f.dvs(v), unit: 'тыс ₽/бп', drillTitle: 'ΔDV01 за период' },
-        { key: 'dMv', label: 'ΔMV, mm', num: true, fmt: v => Math.abs(v) < 5e5 ? '<span class="mut3">·</span>' : f.mns(v, 0), sum: true, sumFmt: v => f.mns(v, 0), unit: 'mm ₽', drillTitle: 'ΔMV за период' },
+        { key: 'dMv', label: 'ΔMV, mm ₽', num: true, fmt: v => Math.abs(v) < 5e5 ? '<span class="mut3">·</span>' : f.mns(v, 0), sum: true, sumFmt: v => f.mns(v, 0), unit: 'mm ₽', drillTitle: 'ΔMV за период' },
         { key: 'dY', label: 'Δдох., бп', num: true, fmt: v => v == null ? '<span class="mut3">—</span>' : f.bps(v), cls: v => f.cls(-v) },
-        { key: 'dS', label: 'Δспред', num: true, fmt: v => v == null ? '<span class="mut3">—</span>' : f.bps(v), cls: v => f.cls(-v) },
-        { key: 'dP', label: 'Δцена', num: true, fmt: v => v == null ? '<span class="mut3">—</span>' : f.s(v, 2), cls: v => f.cls(v) },
+        { key: 'dS', label: 'Δспред', num: true, unit: 'б.п.', fmt: v => v == null ? '<span class="mut3">—</span>' : f.bps(v), cls: v => f.cls(-v) },
+        { key: 'dP', label: 'Δцена', num: true, unit: 'п.п.', fmt: v => v == null ? '<span class="mut3">—</span>' : f.s(v, 2), cls: v => f.cls(v) },
       ],
     });
   }
@@ -279,8 +280,8 @@ tr.row.sel td { background: var(--accent-bg); }
     bd.innerHTML = '<div class="pv-hd"><input class="k-input" list="posList" placeholder="найти позицию: бумага, ISIN, эмитент…" value=""><datalist id="posList">' + K.list().map(q => '<option value="' + esc(q.name) + '">' + esc(q.issuerName + ' · ' + q.book + ' · ' + q.ccy) + '</option>').join('') + '</datalist>' +
       '<b style="color:' + K.issuerColor(p.issuer) + '">●</b> <b>' + esc(p.name) + '</b> ' + K.ccyTag(p.ccy) + ' <span class="mut">' + esc(p.book) + '</span><span style="flex:1"></span><button class="k-btn" data-card="' + p.id + '">Карточка</button></div>' +
       '<div class="pv-sum">' + [
-        ['Номинал, mm', f.mn(x.notional[LAST], 0), d(x.notional[i0], x.notional[LAST], v => f.mns(v, 0))],
-        ['DV01, тыс/бп', f.dv(V.dv01(p, LAST)), d(V.dv01(p, i0), V.dv01(p, LAST), f.dvs)],
+        ['Номинал, mm ' + p.ccy, f.mn(x.notional[LAST], 0), d(x.notional[i0], x.notional[LAST], v => f.mns(v, 0))],
+        ['DV01, тыс ₽/бп', f.dv(V.dv01(p, LAST)), d(V.dv01(p, i0), V.dv01(p, LAST), f.dvs)],
       ].concat(isB ? [
         ['Цена', f.px(pLast(p, x)), d(x.price[i0], pLast(p, x), v => f.s(v, 2))],
         ['Доходность', f.pct(yLast(p, x)), d(x.ytm[i0], yLast(p, x), v => f.s(v * 100, 0) + ' бп')],

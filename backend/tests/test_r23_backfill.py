@@ -238,7 +238,7 @@ def test_autopilot_step_after_the_eod_step_within_its_budget(tmp_path, cache, st
     ap.run_cycle(hub=False)
     st = ap.run_cycle(hub=False)
     b = next(x for x in st["steps"] if x["name"] == "backfill")
-    assert b["detail"].startswith("up to date (2026-10-01..2026-10-14: 3 of 3 dates")  # 15.10: the eod step's
+    assert b["detail"].startswith("up to date (2026-10-01..2026-11-30: 4 of 4 dates")  # 15.10 by the eod step (#23)
     assert default_dates(store_url) == DATES[1:]
     off = settings(tmp_path, cache, store_url, backfill=False)
     st = Autopilot(settings_loader=lambda: off, store_url=store_url, today=lambda: date(2026, 11, 30)).run_cycle(hub=False)
@@ -300,3 +300,166 @@ def test_status_api_and_diagnostics(tmp_path, cache, store_url, monkeypatch):
     assert st["oldest_run"] is None and st["first_positions"] == "2026-10-14"
     doc = diagnostics.build(store_url=store_url, hub=False)
     assert doc["backfill"]["todo"] == 2 and doc["backfill"]["run_summaries"] == {"written": 0, "complete_runs": 0}
+
+
+def test_autopilot_recomputes_stale_dates_inside_the_eod_window(tmp_path, cache, store_url, monkeypatch):
+    """#23: after an upgrade the eod step recomputes only the latest positions date, and the backfill used to stop at
+    the eod step's first date, so the other dates of the eod window stayed stale for good («194 of 195» while
+    ``desk backfill --dry-run`` listed them). Every date the backfill's plan calls stale is now run by some step."""
+    import desk
+
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, cache, store_url, backfill_from="2026-10-01")
+    monkeypatch.delenv("DESK_BUNDLE_VERSION", raising=False)
+    ap = Autopilot(settings_loader=lambda: s, store_url=store_url, today=lambda: date(2026, 10, 20))
+    ap.run_cycle(hub=False)
+    assert default_dates(store_url) == DATES[1:]  # 12.10-15.10: all inside the eod window (from 06.10)
+    monkeypatch.setattr(desk, "VALUATION_VERSION", desk.VALUATION_VERSION + 1)  # an upgrade
+    for _ in range(2):
+        ap.run_cycle(hub=False)
+    with store.connect(store_url) as con:
+        runs = store.default_runs(con, date(2026, 10, 1))
+        assert {d.isoformat(): r["logic_version"] for d, r in runs.items()} == {d: desk.logic_version() for d in DATES[1:]}
+        assert not backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 20)).todo
+    b = next(x for x in ap.status()["steps"] if x["name"] == "backfill")
+    assert b["detail"].startswith("up to date (2026-10-01..2026-10-20: 4 of 4 dates"), b["detail"]
+
+
+def test_a_date_the_eod_step_failed_on_other_inputs_is_the_backfills(tmp_path, cache, store_url, monkeypatch):
+    """#23 (review of #209): the backfill leaves out only the dates the eod step ran, failed or skipped as failed
+    before this cycle. A date the eod step failed once on other inputs (its key stays in ``_failed`` until a restart)
+    and does not take this cycle is the backfill's: it used to be left out for good, the backfill saying «up to date»
+    while the plan kept it stale."""
+    import desk
+
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, cache, store_url, backfill_from="2026-10-01")
+    monkeypatch.delenv("DESK_BUNDLE_VERSION", raising=False)
+    ap = Autopilot(settings_loader=lambda: s, store_url=store_url, today=lambda: date(2026, 10, 20))
+    ap.run_cycle(hub=False)
+    ap._failed["2026-10-13"] = ((), "an older snapshot", None, "an older logic")  # failed once, on other inputs
+    monkeypatch.setattr(desk, "VALUATION_VERSION", desk.VALUATION_VERSION + 1)  # an upgrade: 12.10 the eod step's
+    for _ in range(2):
+        ap.run_cycle(hub=False)
+    with store.connect(store_url) as con:
+        run = store.default_runs(con, date(2026, 10, 1))[date(2026, 10, 13)]
+        assert run["logic_version"] == desk.logic_version()
+        assert not backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 20)).todo
+
+
+def _stale_after_run(monkeypatch, bad: str) -> list[str]:
+    """``cli.eod_run`` whose run of ``bad`` is stamped with an old logic version: the date never becomes current."""
+    from desk.publish import desk_run
+
+    real, stamp = cli.eod_run, desk_run.logic_version
+    tried: list[str] = []
+
+    def run(settings, d, **kw):
+        tried.append(d)
+        monkeypatch.setattr(desk_run, "logic_version", (lambda: "0.0.1+v1+core0") if d == bad else stamp)
+        return real(settings, d, **kw)
+
+    monkeypatch.setattr(cli, "eod_run", run)
+    return tried
+
+
+def test_a_date_that_does_not_converge_is_a_problem_date_after_two_runs(tmp_path, cache, store_url, monkeypatch,
+                                                                        caplog):
+    """#23: a date still stale after its run is checked against the plan again, the differing field logged; after two
+    runs it is a problem date with its reason (not tried again on the same inputs); the queue goes on meanwhile."""
+    load(store_url, tmp_path, "2026-10-13", 10)
+    s = settings(tmp_path, cache, store_url)
+    tried = _stale_after_run(monkeypatch, "2026-10-13")
+
+    def plan():
+        with store.connect(store_url) as con:
+            return backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15))
+
+    caplog.set_level("WARNING", logger="desk.backfill")
+    res = backfill.run(s, plan(), store_url=store_url, out=lambda line: None)
+    assert res["done"] == ["2026-10-14", "2026-10-15"] and not res["failed"] and res["unconverged"] == ["2026-10-13"]
+    assert "2026-10-13" in caplog.text and "program updated" in caplog.text and "logic_version" in caplog.text
+    assert [(d.date, d.status) for d in plan().days if d.status != "no_positions"] == [
+        ("2026-10-13", "todo"), ("2026-10-14", "done"), ("2026-10-15", "done")]
+    res = backfill.run(s, plan(), store_url=store_url, out=lambda line: None)
+    assert [d for d, _ in res["failed"]] == ["2026-10-13"] and "program updated" in res["failed"][0][1]
+    assert [(d.date, d.status) for d in plan().days if d.status != "no_positions"] == [
+        ("2026-10-13", "failed"), ("2026-10-14", "done"), ("2026-10-15", "done")]
+    res = backfill.run(s, plan(), store_url=store_url, out=lambda line: None)
+    assert not res["done"] and not res["failed"] and tried == ["2026-10-13", "2026-10-14", "2026-10-15", "2026-10-13"]
+    with store.connect(store_url) as con:
+        st = backfill.status(con, s, today=date(2026, 10, 15))
+    assert st["total"] == 3 and st["done"] == 2 and st["failed"] == 1
+    assert [(p["date"], p["why"], p["attempts"]) for p in st["problem_dates"]] == [("2026-10-13", "program updated", 2)]
+    assert "does not converge" in st["problem_dates"][0]["error"]
+
+
+def test_a_run_that_created_nothing_is_a_failed_date(tmp_path, cache, store_url, monkeypatch):
+    load(store_url, tmp_path, "2026-10-14", 10)
+    s = settings(tmp_path, cache, store_url)
+    real = cli.eod_run
+    monkeypatch.setattr(cli, "eod_run", lambda settings, d, **kw: None if d == "2026-10-14" else real(settings, d, **kw))
+    with store.connect(store_url) as con:
+        res = backfill.run(s, backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15)), store_url=store_url,
+                           out=lambda line: None)
+        assert [d for d, _ in res["failed"]] == ["2026-10-14"] and "no run" in res["failed"][0][1]
+        assert res["done"] == ["2026-10-15"] and res["left"] == 0
+        st = backfill.status(con, s, today=date(2026, 10, 15))
+    assert st["failed_dates"] == ["2026-10-14"] and st["problem_dates"][0]["date"] == "2026-10-14"
+
+
+def test_a_date_that_keeps_failing_on_the_network_stops_holding_the_queue(tmp_path, cache, store_url, monkeypatch):
+    """#23: a store or network error stops the run (the next dates would hit it too) and is not remembered as a
+    failed date; when one date keeps hitting it run after run, the queue goes past it, the date a problem date."""
+    from desk.marketdata.hub import HubError
+
+    load(store_url, tmp_path, "2026-10-13", 10)
+    s = settings(tmp_path, cache, store_url)
+    real = cli.eod_run
+
+    def flaky(settings, d, **kw):
+        if d == "2026-10-14":
+            raise HubError("bundle: 502 bad gateway", status=502)
+        return real(settings, d, **kw)
+
+    monkeypatch.setattr(cli, "eod_run", flaky)
+
+    def run():
+        with store.connect(store_url) as con:
+            return backfill.run(s, backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15)), store_url=store_url,
+                                out=lambda line: None)
+
+    assert run()["done"] == ["2026-10-13"]  # 15.10 waits: the hub may be down as a whole
+    res = run()
+    assert res["done"] == ["2026-10-15"] and [d for d, _ in res["failed"]] == ["2026-10-14"]
+    with store.connect(store_url) as con:
+        st = backfill.status(con, s, today=date(2026, 10, 15))
+    assert st["todo"] == 1 and [(p["date"], p["attempts"]) for p in st["problem_dates"]] == [("2026-10-14", 2)]
+    monkeypatch.setattr(cli, "eod_run", real)
+    assert run()["done"] == ["2026-10-14"]
+    with store.connect(store_url) as con:
+        assert backfill.status(con, s, today=date(2026, 10, 15))["problem_dates"] == []
+
+
+def test_backfill_status_route_lists_the_hub_problem_dates(tmp_path, cache, store_url, monkeypatch):
+    """#163: the hub dates the sync step cannot load (``problem_dates``) come with the backfill's status, so the
+    header's indicator counts them among the dates that do not converge."""
+    from fastapi.testclient import TestClient
+
+    from desk.api import create_app
+
+    load(store_url, tmp_path, "2026-10-14", 10)
+    for k, v in {"DESK_ENV_FILE": str(tmp_path / "none.env"), "DESK_STORE_URL": store_url, "DESK_HOME": str(tmp_path / "h"),
+                 "DESK_SNAPSHOT_CACHE": str(cache), "DESK_BACKFILL_FROM": "2026-10-01"}.items():
+        monkeypatch.setenv(k, v)
+    prob = {"date": "2026-10-16", "error": "SnapshotError: digest", "attempts": 3, "next_attempt": "2026-10-20T10:00:00+00:00"}
+
+    class Thread:
+        def status(self):
+            return {"steps": [{"name": "sync", "status": "ok", "detail": "", "problem_dates": [prob], "at": ""}]}
+
+    app = create_app(store_url)
+    client = TestClient(app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
+    assert client.get("/api/v1/backfill/status").json()["hub_problem_dates"] == []
+    app.state.autopilot = Thread()
+    assert client.get("/api/v1/backfill/status").json()["hub_problem_dates"] == [prob]

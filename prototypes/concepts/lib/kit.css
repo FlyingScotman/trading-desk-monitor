@@ -24,7 +24,11 @@ body { background: var(--bg); color: var(--fg); font: 13px/1.45 system-ui, -appl
 a { color: var(--accent); text-decoration: none; }
 button { font: inherit; color: inherit; }
 .num, td.n, th.n { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
-.pos { color: var(--pos); } .neg { color: var(--neg); } .mut { color: var(--fg-2); } .mut3 { color: var(--fg-3); }
+.pos { color: var(--pos); } .neg { color: var(--neg); }
+/* бухгалтерский формат (#153, K.accClass): отрицательное «(1,234.5)» — красным; у неотрицательного числа в
+   числовой ячейке — невидимая «)», цифры столбца стоят ровно под скобками */
+.k-accn, td.n.k-accn, .k-tbl td.n.k-accn { color: var(--neg); }
+td.n.k-accp::after { content: ')'; visibility: hidden; } .mut { color: var(--fg-2); } .mut3 { color: var(--fg-3); }
 .mono { font-family: var(--mono); }
 .hide { display: none !important; }
 
@@ -87,7 +91,10 @@ table.k-tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-si
 .k-tbl th { position: sticky; top: 0; z-index: 2; background: var(--panel-2); color: var(--fg-2); font-weight: 500; text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line-2); white-space: nowrap; user-select: none; }
 .k-tbl th.sortable { cursor: pointer; }
 .k-tbl th.sortable:hover { color: var(--fg); }
+.k-repr-note { max-width: 320px; white-space: normal; padding: 6px 12px 4px; margin-top: 4px; border-top: 1px solid var(--line); font-size: 11px; color: var(--fg-2); line-height: 1.35; }
+.k-repr-note > div + div { margin-top: 3px; }  /* что меняет валюта отчёта (#105) */
 .k-tbl th .si { font-size: 10px; color: var(--accent); margin-left: 3px; }
+.k-tbl th .k-thu { display: block; font-size: 10px; font-weight: 400; color: var(--fg-3); line-height: 1.1; }  /* единица колонки (#105) */
 /* фильтр по значениям столбца (R37): ⏷ в заголовке, активный — цветом акцента */
 .k-tbl th .k-flt { font-size: 10px; margin-left: 4px; opacity: .35; cursor: pointer; padding: 0 2px; }
 .k-tbl th:hover .k-flt { opacity: .85; }
@@ -118,16 +125,24 @@ table.k-tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-si
 .k-tbl .tagc { display: inline-block; padding: 0 6px; border-radius: 4px; font-size: 11px; background: var(--panel-2); border: 1px solid var(--line); color: var(--fg-2); }
 .k-tbl-tools { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 /* раскладка таблиц (#102): граница заголовка — ширина, перетаскивание заголовка — порядок; кнопки вида */
-.k-tbl th .k-rsz { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; z-index: 3; }
-.k-tbl th .k-rsz:hover, body.k-col-resizing .k-tbl th .k-rsz:hover { background: var(--accent); opacity: .5; }
+/* ручные таблицы (#131, KIT.tableTools): заголовок — опора ручки ширины (у .k-tbl он уже sticky) */
+table.k-rszable:not(.k-tbl) th { position: relative; }
+.k-tbl th .k-rsz, table.k-rszable th .k-rsz { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; z-index: 3; }
+.k-tbl th .k-rsz:hover, table.k-rszable th .k-rsz:hover, body.k-col-resizing .k-tbl th .k-rsz:hover { background: var(--accent); opacity: .5; }
 .k-tbl th.k-drag { opacity: .45; }
-table.k-tbl.k-fixed { table-layout: fixed; }
-table.k-tbl.k-fixed th, table.k-tbl.k-fixed td { overflow: hidden; text-overflow: ellipsis; }
+table.k-fixed { table-layout: fixed; }
+table.k-fixed th, table.k-fixed td { overflow: hidden; text-overflow: ellipsis; }
 body.k-col-resizing, body.k-col-resizing * { cursor: col-resize !important; user-select: none; }
 body.k-col-moving, body.k-col-moving * { cursor: grabbing !important; user-select: none; }
 .k-col-ind { position: fixed; width: 2px; background: var(--accent); z-index: 150; pointer-events: none; }
 .k-tbl-ctl { display: inline-flex; gap: 6px; align-items: center; }
 .k-tbl-ctlbar { display: flex; justify-content: flex-end; padding: 2px 6px; position: sticky; bottom: 0; left: 0; z-index: 3; background: var(--panel); }
+/* строка кнопок ручной таблицы (#131, KIT.tableTools) — сразу после таблицы; в прокручиваемом контейнере закреплена
+   внизу (как у K.table), а закреплённая строка «Итого» таблицы стоит над ней, а не под ней */
+.k-tbl-ctlbar-m { height: 24px; box-sizing: border-box; align-items: center; }
+table.k-tooled tfoot td { bottom: 24px; }
+/* короткие таблицы без «Итого» в тексте страницы (брифинг C05, списки C08) — строка просто под таблицей */
+table.mini + .k-tbl-ctlbar-m { position: static; background: transparent; }
 .k-tbtn { padding: 1px 7px; border: 1px solid var(--line); border-radius: 5px; background: transparent; color: var(--fg-3); cursor: pointer; font-size: 11px; line-height: 16px; }
 .k-tbtn:hover { color: var(--fg); border-color: var(--accent); }
 .k-input { background: var(--bg); border: 1px solid var(--line-2); border-radius: 6px; padding: 4px 8px; color: var(--fg); font: inherit; min-width: 160px; }

@@ -3,7 +3,8 @@
  *  - открыто через сервер (desk serve, http/https): прогон из базы — ../desk-data.js (window.DESK) и
  *    ../concepts-data.js (window.DESK_EXTRAS: история, потоки, рынок), из них lib/real.js собирает window.MOCK;
  *    прогона нет (база пуста) — real.js подставляет демо-набор и говорит об этом в шапке;
- *  - ?demo=1 или открыто как файл (file://): демо-набор lib/mock.js.
+ *    и lib/live.js (#28: лента событий по SSE или опросом, полоса «доступен новый прогон»);
+ *  - ?demo=1 или открыто как файл (file://): демо-набор lib/mock.js, без живых обновлений.
  * Выбранный прогон — как у остальных страниц (desk-nav.js): ?run_id= / ?as_of= / ?demo=1 в адресе, иначе выбор,
  * запомненный в localStorage (desk.run.v1, 12 часов).
  */
@@ -24,5 +25,6 @@
   }
   var q = ['run_id', 'as_of'].filter(function (k) { return sel[k]; }).map(function (k) { return k + '=' + encodeURIComponent(sel[k]); }).join('&');
   q = q ? '?' + q : '';
-  document.write('<script src="../desk-data.js' + q + '"><\/script><script src="../concepts-data.js' + q + '"><\/script><script src="lib/real.js"><\/script>');
+  // lib/live.js — живые обновления (#28): лента событий сервера, «доступен новый прогон»
+  document.write('<script src="../desk-data.js' + q + '"><\/script><script src="../concepts-data.js' + q + '"><\/script><script src="lib/real.js"><\/script><script src="lib/live.js"><\/script>');
 })();

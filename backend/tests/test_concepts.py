@@ -170,6 +170,27 @@ def test_positions_history_points(desk, store_url):
     assert flag((5, "par_proxy", "core_x", "OFZ"), None, date(2026, 10, 15), True)[0] == "method"
 
 
+def test_positions_history_marks_another_curve_risk_unit(desk, store_url):
+    """#171: a run made with the other setting ``quote_curve_risk`` than the shown run's has its foreign curves' risk
+    in another unit (quotes, zero rates): its points say so (``unit``), by the run's own lineage flag; the program is
+    the same (no ``old``)."""
+    with store.connect(store_url) as con:
+        con.execute("ALTER TABLE run DISABLE TRIGGER USER")  # a published run is frozen
+        prev, cur = (r[0] for r in con.execute("SELECT run_id FROM run ORDER BY business_date"))
+        assert con.execute("SELECT lineage->'quote_curve_risk' FROM run WHERE run_id = %s", (cur,)).fetchone()[0] \
+            is False  # the default: off, recorded
+        con.execute("UPDATE run SET lineage = jsonb_set(lineage, '{quote_curve_risk}', 'true') WHERE run_id = %s",
+                    (prev,))
+    ra = TestClient(create_app(store_url)).get("/api/v1/history/positions").json()["runAt"]
+    assert ra[-2]["unit"] == concepts.UNIT_TEXT[True] and "old" not in ra[-2] and "unit" not in ra[-1]
+    with store.connect(store_url) as con:  # the shown run in quotes: the earlier one is in zero rates
+        con.execute("UPDATE run SET lineage = jsonb_set(lineage, '{quote_curve_risk}', 'true') WHERE run_id = %s",
+                    (cur,))
+        con.execute("UPDATE run SET lineage = lineage - 'quote_curve_risk' WHERE run_id = %s", (prev,))
+    ra = TestClient(create_app(store_url)).get("/api/v1/history/positions").json()["runAt"]
+    assert ra[-2]["unit"] == concepts.UNIT_TEXT[False] and "unit" not in ra[-1]
+
+
 def test_unknown_days_and_old_runs_note(desk, store_url):
     """R44/R45: the year to date is not partial for want of history before the year's first close (2026: 5 January,
     after the New Year holidays); a history computed partly by an older program says so and where to recompute it."""

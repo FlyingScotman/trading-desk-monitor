@@ -55,9 +55,10 @@
 (function () {
   'use strict';
   // «Статус дня» (S7b, #25): по дате — что пришло, что отклонено и почему, какие прогоны кого заменили; лента событий.
-  // Данные: GET ../api/v1/inbox?on=, ../api/v1/inbox/days, ../api/v1/events (backend desk/daystatus.py). Лента пока
-  // опрашивается раз в 30 с (?after=последний id); SSE (#28) встанет на место poll() с тем же курсором.
-  const K = KIT, f = K.f, esc = K.esc;
+  // Данные: GET ../api/v1/inbox?on=, ../api/v1/inbox/days, ../api/v1/events (backend desk/daystatus.py). Новые
+  // события — lib/live.js (#28): SSE ../api/v1/events/stream, при недоступности — опрос раз в 30 с; курсор — last_event_id.
+  const K = KIT, f = K.f, esc = K.esc, LIVE = window.DESK_LIVE;
+  if (LIVE) LIVE.manual = true;  // своя обработка ленты: уведомления и перечитывание даты, без полосы «новый прогон»
   K.top({ title: 'C14 · Статус дня', tag: 'что пришло, что отклонено, какие прогоны' });
   const server = K.source === 'real' || K.source === 'empty';
   const STATE = { ok: ['всё пришло', 'st-ok'], warn: ['есть замечания', 'st-warn'], bad: ['есть проблемы', 'st-bad'] };
@@ -66,7 +67,8 @@
   const FLAG = { no_positions: 'нет позиций', not_in_run: 'не в расчёте', rows_differ: 'строк не столько', unit_rejected: 'книга отклонена' };
   const view = document.getElementById('view'), daysEl = document.getElementById('days'), toastEl = document.getElementById('toast');
   const u = new URL(location.href);
-  let on = u.searchParams.get('on') || null, doc = null, lastId = null, fresh = new Set();
+  let on = u.searchParams.get('on') || null, doc = null, lastId = null, fresh = new Set(), liveMode = null;
+  const LIVE_NOTE = { sse: 'обновляется сразу', poll: 'обновляется раз в 30 с', 'signed-out': 'лента остановлена: сессия истекла, войдите снова', null: 'подключение к ленте…' };
 
   const time = s => s ? new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
   const hm = s => s ? new Date(s).toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' }) : '';
@@ -87,7 +89,7 @@
     if (!server) { doc = DEMO.day; render(); renderDays(DEMO.days); return Promise.resolve(); }
     const strip = getJSON('api/v1/inbox/days?n=45').then(ds => ds.days).catch(() => []);
     return Promise.all([getJSON('api/v1/inbox' + (on ? '?on=' + on : '')), strip]).then(([d, ds]) => {
-      doc = d; on = d.date; if (lastId == null) lastId = d.last_event_id == null ? 0 : d.last_event_id; render(); renderDays(ds);
+      doc = d; on = d.date; if (lastId == null) { lastId = d.last_event_id == null ? 0 : d.last_event_id; live(); } render(); renderDays(ds);
     }).catch(e => {
       if (e.forbidden) return msg('Нужно войти в монитор: статус дня открыт всем пользователям.');
       msg('Не удалось загрузить статус дня' + (on ? ' за ' + esc(on) : '') + ': ' + esc(e.message) + '. Выберите другую дату.');
@@ -147,7 +149,7 @@
     // прогоны: кто кого заменил и что изменилось
     const rp = panel('Прогоны', '<span class="k-note">кто кого заменил и почему</span>');
     rp.querySelector('.bd').classList.add('flush', 'scroll');
-    rp.querySelector('.bd').innerHTML = d.runs.length ? '<table class="k-tbl"><thead><tr><th>#</th><th>Срез</th><th>Статус</th><th>Готов</th><th>Заменил</th><th>Заменён</th><th>Что изменилось</th></tr></thead><tbody>' +
+    rp.querySelector('.bd').innerHTML = d.runs.length ? '<table class="k-tbl" data-vk="c14-runs" data-title="Прогоны"><thead><tr><th>#</th><th>Срез</th><th>Статус</th><th>Готов</th><th>Заменил</th><th>Заменён</th><th>Что изменилось</th></tr></thead><tbody>' +
       d.runs.slice().reverse().map(r => '<tr><td class="mono">' + r.run_id + (r.is_default ? ' <span class="c14-badge st-ok" title="основной прогон даты">основной</span>' : r.is_current ? ' <span class="c14-badge st-warn" title="показывается до закрытия">текущий</span>' : '') + '</td>' +
         '<td>' + esc(r.label) + '</td>' +
         '<td class="' + (r.status === 'failed' ? 'neg' : '') + '"' + (r.error ? ' title="' + esc(r.error) + '"' : '') + '>' + esc(RUN_STATUS[r.status] || r.status) + (r.error ? ' ⓘ' : '') + '</td>' +
@@ -156,13 +158,14 @@
         '<td class="c14-chain">' + (r.superseded_by.length ? r.superseded_by.map(x => '#' + x).join(', ') : '<span class="mut3">—</span>') + '</td>' +
         '<td class="wrap mut">' + (r.changed_text.length ? esc(r.changed_text.join(', ')) : r.supersedes_run_id ? 'входы те же (пересчёт)' : '') + '</td></tr>').join('') + '</tbody></table>'
       : '<div class="k-empty">Прогонов за эту дату нет</div>';
+    K.tableToolsAll(rp.querySelector('.bd'));
     left.appendChild(rp);
 
     // файлы: что пришло и что отклонено, с причинами
     const fp = panel('Файлы отчётов', '<span class="k-note">строка — части файла (книги) и коды замечаний</span>');
     fp.querySelector('.bd').classList.add('flush', 'scroll');
     const lost = st => ['rejected', 'failed', 'timed_out', 'match_failed'].includes(st);
-    fp.querySelector('.bd').innerHTML = (d.files.length ? '<table class="k-tbl"><thead><tr><th>Пришёл</th><th>Файл</th><th>Источник</th><th>Статус</th><th class="n">Частей</th><th>Почему</th></tr></thead><tbody>' +
+    fp.querySelector('.bd').innerHTML = (d.files.length ? '<table class="k-tbl" data-vk="c14-files" data-title="Файлы отчётов"><thead><tr><th>Пришёл</th><th>Файл</th><th>Источник</th><th>Статус</th><th class="n">Частей</th><th>Почему</th></tr></thead><tbody>' +
       d.files.map((x, i) => {
         const rejU = x.units.filter(v => v.status === 'rejected');
         const why = x.why || (rejU.length ? 'отклонено: ' + rejU.map(v => scope(v.scope) + ' — ' + v.why).join('; ') : '');
@@ -170,6 +173,7 @@
           '<td class="' + (lost(x.status) ? 'neg' : '') + '"' + (x.status === 'partially_accepted' ? ' style="color:var(--warn)"' : '') + '>' + esc(x.status_text) + '</td><td class="n">' + x.units.length + '</td><td class="wrap">' + esc(why) + '</td></tr>';
       }).join('') + '</tbody></table>' : '<div class="k-empty">Файлов за эту дату не было</div>') +
       (d.copies.length ? '<div style="padding:8px 12px;border-top:1px solid var(--line)"><b style="color:var(--warn)">Копии:</b> ' + d.copies.map(c => esc(c.name) + ' — ' + (c.kind === 'stale_copy' ? 'старая копия (содержимое отчёта за ' + f.date(c.content_report_date) + '): свежего отчёта нет' : 'повтор, ничего не загружено')).join('; ') + '</div>' : '');
+    K.tableToolsAll(fp.querySelector('.bd'));
     fp.querySelectorAll('tr[data-f]').forEach(tr => tr.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); tr.click(); } });
     fp.querySelectorAll('tr[data-f]').forEach(tr => tr.onclick = () => {
       let nx = tr.nextElementSibling;
@@ -188,15 +192,16 @@
     const P = d.positions || { books: [] };
     const bp = panel('Позиции по книгам', '<span class="k-note">в отчёте → принято → в расчёте' + (P.run_id ? ' #' + P.run_id : '') + '</span>');
     bp.querySelector('.bd').classList.add('flush', 'scroll');
-    bp.querySelector('.bd').innerHTML = P.books.length ? '<table class="k-tbl"><thead><tr><th>Книга</th><th>Позиции на</th><th>Файл</th><th class="n">В отчёте</th><th class="n">Принято</th><th class="n">В расчёте</th><th class="n">Оценено</th><th>Замечания</th></tr></thead><tbody>' +
+    bp.querySelector('.bd').innerHTML = P.books.length ? '<table class="k-tbl" data-vk="c14-books" data-title="Позиции по книгам"><thead><tr><th>Книга</th><th>Позиции на</th><th>Файл</th><th class="n">В отчёте</th><th class="n">Принято</th><th class="n">В расчёте</th><th class="n">Оценено</th><th>Замечания</th></tr></thead><tbody>' +
       P.books.map(b => '<tr><td>' + esc(b.book_id) + (b.name && b.name !== b.book_id ? ' <span class="mut3">' + esc(b.name) + '</span>' : '') + '</td><td>' + (b.valid_date ? f.date(b.valid_date) + (b.age_days ? ' <span class="mut3">(' + b.age_days + ' дн.)</span>' : '') : '<span class="neg">нет</span>') + '</td>' +
         '<td class="mut">' + esc(b.file || '—') + '</td><td class="n">' + num(b.rows_in_report) + '</td><td class="n">' + num(b.rows_accepted) + '</td><td class="n">' + num(b.rows_in_run) + '</td><td class="n">' + num(b.rows_valued) + '</td>' +
         '<td class="wrap">' + b.flags.map(x => '<span class="c14-badge st-warn">' + esc(FLAG[x] || x) + '</span>').join(' ') + (Object.keys(b.issues || {}).length ? ' <span class="mut3">' + Object.entries(b.issues).map(([k, n]) => esc(k) + (n > 1 ? ' ×' + n : '')).join(', ') + '</span>' : '') + '</td></tr>').join('') + '</tbody></table>'
       : '<div class="k-empty">Книг нет</div>';
+    K.tableToolsAll(bp.querySelector('.bd'));
     left.appendChild(bp);
 
     // лента событий даты
-    const ep = panel('События даты', server ? '<span class="k-note" id="live">обновляется раз в 30 с</span>' : '<span class="k-note">демо</span>');
+    const ep = panel('События даты', server ? '<span class="k-note" id="live">' + LIVE_NOTE[liveMode] + '</span>' : '<span class="k-note">демо</span>');
     ep.querySelector('.bd').classList.add('flush');
     ep.querySelector('.bd').innerHTML = '<div class="c14-ev" id="ev"></div>';
     two.appendChild(ep);
@@ -209,7 +214,7 @@
     el.innerHTML = E.length ? E.map(e => '<div class="e lv-' + e.level + (fresh.has(e.id) ? ' new' : '') + '"><span class="dot" title="' + esc(e.type) + '"></span><span class="mut mono" style="font-size:11.5px">' + time(e.at).replace(', ', ' ') + '</span><span>' + esc(e.text) + '</span></div>').join('') : '<div class="k-empty">Событий за дату нет</div>';
   }
 
-  // ---------- уведомления: новые события (опрос; SSE — #28) ----------
+  // ---------- уведомления: новые события (lib/live.js: SSE, иначе опрос) ----------
   function toast(e) {
     const t = K.h('div'); t.style.setProperty('--c', e.level === 'error' ? 'var(--neg)' : e.level === 'warn' ? 'var(--warn)' : 'var(--accent)');
     t.textContent = e.text; t.title = 'Открыть дату'; t.onclick = () => { t.remove(); if (e.valid_date) pick(e.valid_date); };
@@ -221,11 +226,10 @@
     list.forEach(e => { if (e.level !== 'info' || (e.type === 'run.published' && (e.detail || {}).run_type !== 'INTRADAY')) toast(e); });
     if (list.some(e => e.valid_date === on)) { list.forEach(e => fresh.add(e.id)); load(); }
   }
-  function poll() {
-    if (document.hidden || lastId == null) return;
-    getJSON('api/v1/events?after=' + lastId + '&limit=200').then(j => onEvents(j.events)).catch(() => { });
+  function live() {  // один раз, когда известен курсор (last_event_id первого ответа)
+    if (!server || !LIVE) return;
+    LIVE.page = LIVE.subscribe({ after: lastId, onEvents, onMode: m => { liveMode = m; const n = document.getElementById('live'); if (n) n.textContent = LIVE_NOTE[m]; } });
   }
-  if (server) setInterval(poll, 30e3);
 
   // ---------- демо-набор (файл или ?demo=1): вымышленный, форма ответа /api/v1/inbox ----------
   const DEMO = (function () {

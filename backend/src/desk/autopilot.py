@@ -11,7 +11,11 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    the first one; ``desk cycle --date`` apart), at most ``autopilot_sync_last + SYNC_EXTRA`` dates per cycle (the
    rest next cycle), and a date the hub has no snapshot for is not asked again for ``MISSING_TTL_S``. The
    snapshot drop folder, when set, is imported too. A hub error is the step's error: the cycle goes on with the
-   cache. A date whose snapshot cannot be fetched (a hub error other than 401/403/404, a body that does not verify)
+   cache. The hub down (no answer or a 5xx after the client's retries, ``HubUnavailable``): the sync stops there, and
+   the later steps of the cycle (intraday, history, backfill) do not ask it again (intraday: reason ``hub_error``)
+   until the next cycle, so a cycle spends one retry series on a hub that is down (#147); no answer at all is the
+   hub's alone, a 5xx for a date's snapshot is that date's failure too (below: its retry waits). A date
+   whose snapshot cannot be fetched (another hub error than 401/403/404, a body that does not verify)
    fails alone (#20): it is named in the step's detail and ``failed_dates`` and asked again next cycle, the other dates
    are synced and the later steps run; after ``MAX_DATE_FAILURES`` such dates the rest wait for the next cycle. A
    failed date is then not asked again for ``RETRY_BACKOFF_S`` (growing with its attempts; per process, forgotten on
@@ -25,8 +29,8 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    on (at most ``MAX_EOD_DATES``, the latest positions date always) that has positions in the store, the EOD run of
    ``desk eod`` when the date has no default run, or its default run read other position sets (a new revision of a
    book), another market snapshot (a correction) or another previous snapshot (the flash PnL); the latest positions
-   date also when its default run was made by another ``desk.logic_version()`` (an upgrade: older dates are not
-   recomputed, to keep it cheap; ``backfill.same_logic``: a new bundle build of the same code recomputes nothing). Oldest first, except that the latest positions date goes first while it has no
+   date also when its default run was made by another ``desk.logic_version()`` (an upgrade: the older dates are the
+   backfill step's, after the other steps; ``backfill.same_logic``: a new bundle build of the same code recomputes nothing). Oldest first, except that the latest positions date goes first while it has no
    default run at all (a first launch, a new day): the current position shows before the backlog is done (its model
    prices then carry spreads from the runs that existed when it ran). While the inbox is still draining (the scan
    left files waiting for a calendar and the sync left hub dates for the next cycle), only the latest positions
@@ -37,7 +41,8 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    (the latest position sets, carried forward: ``store.positions_for``) valued on the hub's newest ``intraday``
    cut of today, from 19:45 on its ``eod_preliminary`` cut: the EOD code path (``cli.eod_run``) on another market
    snapshot, an INTRADAY run (a preliminary one is an EOD run, the date's default until the final). The step asks
-   the hub itself, whatever the sync step's outcome (a failed older date never blocks it, #20): one list call
+   the hub itself, whatever the sync step's outcome (a failed older date never blocks it, #20; the hub found down
+   this cycle does, ``hub_error``, #147): one list call
    (``latest=true``) at most once per 10-minute slot (``POLL_SLOT_S``, starting ``POLL_LAG_S`` after the slot
    times), and for the preliminary cut only until today has a run on it; a run is made
    only for a cut newer than the last run's, when the position sets changed, or when the previous close it is measured
@@ -66,15 +71,21 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    them. The lookback above does not apply: these dates feed no run.
 6. **backfill** (setting ``backfill``, R23; ``desk.backfill``): the default runs of the past business dates with
    positions from ``backfill_from`` on: once per start date and adapter the inbox reads the older reports; then the
-   dates whose run is missing or stale run, oldest first, for at most ``backfill_budget_s`` seconds a cycle, up to the
-   day before the eod step's first date (those dates are the eod step's). Last in the cycle, after the EOD, intraday and history steps, so the latest date never waits for it; not while the inbox
-   backlog drains (R22). The hub's date list is read once per ``RECHECK_S``.
+   dates whose run is missing or stale run, oldest first, for at most ``backfill_budget_s`` seconds a cycle, up to
+   today: every date its plan calls stale, also inside the eod step's window (#23: an upgrade recomputes there only
+   the latest positions date, and these dates stayed stale while the backfill stopped at the window), but the dates
+   the eod step ran or failed (a date is not tried twice a cycle, nor again on inputs the eod step failed on). Last in the cycle, after the EOD, intraday and history steps, so the latest date never waits for it; not while the inbox
+   backlog drains (R22). The hub's date list is read once per ``RECHECK_S``, less the dates the sync step cannot load
+   (its ``problem_dates``): no run and no previous close on them until they load.
 7. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
    ``progress`` ({"step": "sync"|"scan"|"eod"|"intraday"|"history"|"backfill", "done": int, "total": int|null, "detail": str})
    follow it live: hub dates fetched of those to fetch, report files done of those offered, EOD dates run of those
    to run, history dates loaded of those to load. ``latest_run`` is the newest run shown (``store.CURRENT_RUNS``:
    today's intraday run until there is an EOD run of a later date), with its slice (``run_type``, ``cut_type``,
-   ``cut_ts``, ``label``).
+   ``cut_ts``, ``label``). After a cycle, ``message`` is never «Данные актуальны» while a run is skipped as failed
+   before on the same inputs («Ошибка: прогон <срез> падает (<ошибка>)», state ``error``; the error is known when the
+   run failed in this process) or while a business day past ``WARN_AFTER`` (10:15 MSK, the header's warning, #22)
+   shows no run of today («Данные устарели: нет прогона за DD.MM (<why>)», #156).
 
 Settings are read again at the start of every cycle (``desk.settings.load``), so edits apply without a restart.
 Errors are caught per step, logged (``desk.autopilot`` and ``<home>/logs/autopilot.log``) and shown in the status;
@@ -108,7 +119,7 @@ from .inbox.timesem import MSK
 from .marketdata import cache, history, hubhistory, static_facts
 from .marketdata.adapter import StaticView
 from .marketdata.bundle import SnapshotDir, SnapshotError, previous_market
-from .marketdata.hub import HubClient, HubError
+from .marketdata.hub import HubClient, HubError, HubUnavailable
 from .settings import Settings, load
 
 log = logging.getLogger("desk.autopilot")
@@ -136,6 +147,7 @@ RETRY_BACKOFF_S = (600, 1800, 7200, 21600)
 # the intraday step's ``reason`` (status ``steps[].reason``; the header shows why there is no run of today, #22)
 INTRADAY_REASONS = ("off", "before_open", "not_business_day", "no_positions", "no_cut_yet", "up_to_date", "ran",
                     "failed_before", "run_failed", "hub_error", "error")
+WARN_AFTER = dtime(10, 15)    # MSK: a business day with no run of today by then is not «актуальны» (#156; the header, #22)
 MORNING_FROM = dtime(7, 0)    # MSK: the morning run of a business day is made from then (#21; earlier on its own book)
 # the morning step's ``reason`` (status ``steps[].reason``, #21/#22)
 MORNING_REASONS = ("not_business_day", "before_morning", "no_positions", "no_close", "superseded", "up_to_date",
@@ -150,6 +162,30 @@ LATEST_RUN = ("SELECT run_id, business_date, completed_at, run_type, cut_type, c
 
 def _iso(ts: datetime | None) -> str | None:
     return ts.isoformat(timespec="seconds") if ts else None
+
+
+def _short(text: str, limit: int = 200) -> str:
+    """An error for the status line: one line, at most ``limit`` characters."""
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def _why_no_run(steps: list[dict[str, Any]]) -> str:
+    """Why there is no run of today, for the status line (#156): the intraday step's detail, else the morning
+    step's, when the step did not report a run; empty otherwise."""
+    for name in ("intraday", "morning"):
+        s = next((x for x in steps if x["name"] == name), None)
+        if s is not None and s.get("reason") not in ("ran", "up_to_date", "superseded"):
+            return f" ({'внутри дня' if name == 'intraday' else 'утренний прогон'}: {_short(s['detail'])})"
+    return ""
+
+
+def _cached(cache_dir: Path, row: dict[str, Any]) -> bool:
+    """The market snapshot of a hub list row and the static snapshot it names are in the cache: ``cache.fetch_row``
+    does not ask the hub for them."""
+    static = row.get("static_snapshot_id")
+    return cache.bundle_path(cache_dir, row["snapshot_id"]).exists() and (
+        not static or (cache.bundle_path(cache_dir, static).exists() and (cache_dir / f"{static}.hub.json").exists()))
 
 
 def latest_run(con: psycopg.Connection) -> dict[str, Any] | None:
@@ -263,9 +299,13 @@ class Autopilot:
         self._wake, self._stop = threading.Event(), threading.Event()
         self._thread: threading.Thread | None = None
         self._failed: dict[str, tuple] = {}
+        self._fail_errors: dict[str, str] = {}  # the keys of ``_failed`` -> the error of their failed run (#156)
+        self._failing: list[tuple[str, str | None]] = []  # this cycle's runs skipped as failed before: (slice, error)
+        self._no_run_today: str | None = None  # this cycle: a business day after WARN_AFTER without a run of it
         self._checked: dict[str, float] = {}   # hub date -> monotonic time it was last asked of the hub
         self._missing: dict[str, float] = {}   # hub date -> monotonic time the hub had no snapshot for it
         self._hub_failed = False               # this cycle's hub sync failed as a whole: no history step
+        self._hub_down = ""                    # this cycle: the hub down after its retries, not asked again (#147)
         self._sync_failed: dict[str, str] = {}  # hub date -> its error, this cycle's sync (#20; the other dates ran)
         self._sync_later = 0                   # hub dates the sync left for the next cycle: no history step
         # hub date -> {"error", "attempts", "next_attempt" (MSK datetime)}: failed dates waiting for a retry (#146)
@@ -275,7 +315,7 @@ class Autopilot:
         self._static_polled = float("-inf")    # monotonic time the hub's newest static was last asked for (R25)
         self._backfill_rows: tuple[float, str, list[tuple[str, str]]] | None = None  # (listed at, from, hub rows)
         self._contexts: Any = None  # the backfill's prepared dates, kept between its runs (cli.ContextCache)
-        self._eod_from: str | None = None  # the oldest date the eod step keeps current, this cycle
+        self._eod_tried: set[str] = set()  # the dates the eod step ran, failed or left as failed before, this cycle
         # (listed at, depth, [(hub date, its current snapshot id)] newest first)
         self._poll_slot: tuple | None = None   # (date, cut, slot) the hub was last asked for a cut of today in
         self._polled: dict[tuple, dict | None] = {}  # (date, cut) -> the hub's newest row of that cut, when asked
@@ -378,6 +418,7 @@ class Autopilot:
         except Exception as e:  # noqa: BLE001 - no store: the hub sync still runs
             steps.append(self._step("store", "error", f"{type(e).__name__}: {e}"))
         ran: list[str] = []
+        self._failing, self._no_run_today = [], None
         try:
             steps.append(self._guard("sync", lambda: self._sync(settings, con, extra, hub)))
             if con is not None:
@@ -396,10 +437,39 @@ class Autopilot:
                     latest = None
                 with self._lock:
                     self._status["latest_run"] = latest
+                self._no_run_today = self._stale(settings, latest)
         finally:
             if con is not None:
                 con.close()
         return self._finish(started, steps, ran, settings)
+
+    def _stale(self, settings: Settings, latest: dict[str, Any] | None) -> str | None:
+        """«DD.MM» of today when it is a business day, the Moscow clock is past ``WARN_AFTER`` and no run of today is
+        shown (``latest_run`` of an earlier date or none: the header's warning, #22), else None (#156)."""
+        now = self._now().astimezone(MSK)
+        today = now.date()
+        if now.time() < WARN_AFTER or (latest is not None and latest["as_of"] >= today.isoformat()):
+            return None
+        try:
+            if not self._business_day(settings, today):
+                return None
+        except Exception as e:  # noqa: BLE001 - only for the status line: weekdays
+            log.warning("autopilot: business day of %s not known: %s", today, e)
+            if today.weekday() >= 5:
+                return None
+        return f"{today:%d.%m}"
+
+    def _fail(self, key: str, sig: tuple, e: Exception) -> None:
+        """A run failed on ``sig``: not retried until its inputs change; its error kept for the status (#156)."""
+        self._failed[key] = sig
+        self._fail_errors[key] = f"{type(e).__name__}: {e}"
+
+    def _failed_before(self, key: str, sig: tuple, label: str) -> bool:
+        """The run failed before on the same inputs: not retried, and the cycle's status says so (#156)."""
+        if self._failed.get(key) != sig:
+            return False
+        self._failing.append((label, self._fail_errors.get(key)))
+        return True
 
     def _latest(self, settings: Settings) -> dict[str, str] | None:
         """The latest run shown read on a connection of its own (a skipped cycle has none); the last known one
@@ -416,19 +486,28 @@ class Autopilot:
         missing = [] if settings is None else [
             what for what, ok in (("маркет-дата сервер", settings.hub_url or settings.snapshot_drop),
                                   ("папки с отчётами", settings.inbox_dirs)) if not ok]
+        # a run skipped as failed before is a problem, not «актуальны» (#156): it fails on these inputs every cycle
+        failing = [] if settings is None else self._failing
+        stale = None if settings is None else self._no_run_today
         if errors:
             msg = "Ошибки: " + ", ".join(errors)
+        elif failing:  # the error of a run that failed in an earlier cycle of this process, when known
+            label, err = failing[0]
+            msg = f"Ошибка: прогон {label} падает" + (f" ({_short(err)})" if err else "") \
+                + (f"; ещё прогонов: {len(failing) - 1}" if len(failing) > 1 else "")
         elif ran:
             msg = "Пересчитано: " + ", ".join(ran)
         elif len(missing) == 2:  # first launch: say what to do, not that all is well
             msg = "Не настроено: укажите маркет-дата сервер и папки с отчётами в Настройках"
+        elif stale:  # a business day after 10:15 without a run of today: not current, whatever the steps say (#156)
+            msg = f"Данные устарели: нет прогона за {stale}" + _why_no_run(steps)
         elif missing:
             msg = f"Данные актуальны (не настроено: {missing[0]})"
         else:
             msg = "Данные актуальны"
-        upd: dict[str, Any] = {"state": "error" if errors else "idle", "last_cycle_at": _iso(started),
+        upd: dict[str, Any] = {"state": "error" if errors or failing else "idle", "last_cycle_at": _iso(started),
                                "message": msg, "steps": steps, "progress": None}
-        if not errors:
+        if not (errors or failing):
             upd["last_ok_at"] = _iso(started)
         self._update(**upd)
         self._cycles.append({"started_at": _iso(started), "duration_s": round((datetime.now(UTC) - started)
@@ -528,12 +607,14 @@ class Autopilot:
     def _sync(self, settings: Settings, con: psycopg.Connection | None, extra: list[str],
               hub: bool) -> tuple[str, str, dict[str, Any]]:
         parts, status = [], "ok"
-        self._hub_failed, self._sync_later, self._sync_failed = False, 0, {}
+        self._hub_failed, self._sync_later, self._sync_failed, self._hub_down = False, 0, {}, ""
         if hub and settings.hub_url:
             try:
                 parts.append(self._hub_sync(settings, con, extra))
             except (HubError, SnapshotError, OSError, ValueError) as e:
                 status, self._hub_failed = "error", True
+                if isinstance(e, HubUnavailable):  # the later steps of the cycle do not ask it again (#147)
+                    self._hub_down = str(e)
                 parts.append(f"hub: {e}; the cached snapshots are used")
             if self._sync_failed:  # dates that failed alone (#20): the step's error, not the cycle's
                 status = "error"
@@ -631,8 +712,14 @@ class Autopilot:
             try:
                 rows = cache.sync(client, Path(settings.snapshot_cache), [d])
             except HubError as e:
-                if e.status in (401, 403):  # the token: every date would fail
+                # the token: every date would fail; no answer after the retries: the hub is down, not the date (#147)
+                if e.status in (401, 403) or isinstance(e, HubUnavailable) and e.last_status is None:
                     raise
+                if isinstance(e, HubUnavailable):  # 5xx after the retries: the date fails (#146) and the hub is not
+                    self._date_failed(d, e)  # asked again this cycle (#147): one retry series, the rest next cycle
+                    self._hub_down = str(e)
+                    self._sync_later = later = later + len(todo) - i - 1
+                    break
                 if e.status != 404:
                     self._date_failed(d, e)
                     continue
@@ -650,7 +737,7 @@ class Autopilot:
         if todo:
             self._progress("sync", len(todo), len(todo), "")
         latest = hub_dates[0] if hub_dates else "none"
-        static = self._newest_static(settings, con, client)
+        static = "" if self._hub_down else self._newest_static(settings, con, client)
         return (f"hub {client.host}: latest {latest}; " + (f"pulled {', '.join(pulled)}" if pulled else "up to date")
                 + (f"; {static}" if static else "")
                 + (f"; no snapshot for {', '.join(missing)}" if missing else "")
@@ -670,6 +757,8 @@ class Autopilot:
         try:
             got = cache.newest_static(client, Path(settings.snapshot_cache))
         except Exception as e:  # noqa: BLE001 - the dates are synced; the reference facts wait for the next poll
+            if isinstance(e, HubUnavailable):
+                self._hub_down = str(e)
             return f"newest static not fetched: {type(e).__name__}: {e}"
         if got is None or not got.static_id:
             return ""
@@ -689,15 +778,21 @@ class Autopilot:
         Only after a sync that reached the hub and left nothing for the next cycle: the regular dates come first."""
         if self._hub_failed:
             return "skipped", "the hub sync failed this cycle"
+        if self._hub_down:
+            return "skipped", f"the hub is down this cycle (hub_error: {self._hub_down})"
         if self._sync_later:
             return "skipped", f"after the sync ({self._sync_later} dates next cycle)"
         client = HubClient(settings)
-        rep = hubhistory.sync(con, client, today=self._today(), bonds_from=settings.history_bonds_from,
-                              rates_from=settings.history_rates_from, held=hubhistory.held_secids(con),
-                              progress=lambda i, n, d: self._progress("history", i, n, d))
-        if rep.available:
-            return ("error" if rep.errors else "ok"), rep.text()
-        status, detail = self._history_bundles(settings, con, client)
+        try:
+            rep = hubhistory.sync(con, client, today=self._today(), bonds_from=settings.history_bonds_from,
+                                  rates_from=settings.history_rates_from, held=hubhistory.held_secids(con),
+                                  progress=lambda i, n, d: self._progress("history", i, n, d))
+            if rep.available:
+                return ("error" if rep.errors else "ok"), rep.text()
+            status, detail = self._history_bundles(settings, con, client)
+        except HubUnavailable as e:  # the backfill does not ask it again this cycle (#147)
+            self._hub_down = str(e)
+            raise
         return status, f"{detail}; {rep.text()}"
 
     def _history_bundles(self, settings: Settings, con: psycopg.Connection, client: HubClient) -> tuple[str, str]:
@@ -762,37 +857,42 @@ class Autopilot:
         if not settings.inbox_dirs and con.execute("SELECT NOT EXISTS (SELECT 1 FROM position_set)").fetchone()[0]:
             return "skipped", "no positions in the store"
         d_from, today = backfill.start_date(settings), self._today()
-        if self._eod_from:  # the eod step's dates are its own: a date it failed is not tried twice a cycle
-            today = min(today, date.fromisoformat(self._eod_from) - timedelta(days=1))
+        # the dates the eod step ran, failed or skipped as failed before on the same inputs, this cycle: not tried
+        # again here (a date out of its window, or whose inputs changed, is the backfill's again)
+        exclude = set(self._eod_tried)
         parts = []
         line = backfill.inbox(con, settings, d_from,
                               progress=lambda done, total, detail: self._progress("backfill", done, total, "отчёты"))
         if line:
             parts.append(line)
         client, rows = None, None
-        if hub and settings.hub_url and not self._hub_failed:
+        if hub and settings.hub_url and not self._hub_failed and not self._hub_down:
             client = HubClient(settings)
             now = time.monotonic()
             if (self._backfill_rows is None or self._backfill_rows[1] != d_from.isoformat()
                     or now - self._backfill_rows[0] >= RECHECK_S):
                 self._progress("backfill", 0, None, "список дат хаба")
                 self._backfill_rows = (now, d_from.isoformat(), backfill.hub_rows(client, d_from))
-            rows = self._backfill_rows[2]
+            # the hub dates the sync cannot load (#146) are left out: neither run nor anyone's previous close until
+            # they load, as in the eod step's runs on the cache (#163: they are shown with the dates that do not converge)
+            rows = [r for r in self._backfill_rows[2] if r[0] not in self._sync_retry]
         p = backfill.plan(con, settings, d_from, today, rows)
         s = p.summary()
         span = (f"{s['from']}..{s['to']}: {s['done']} of {s['dates'] - s['no_positions'] - s['no_market']} dates with "
                 f"positions have their run" + (f", {s['failed']} failed before" if s["failed"] else ""))
-        if not p.todo:
+        if not [d for d in p.todo if d.date not in exclude]:
             return "ok", "; ".join(parts + [f"up to date ({span})"])
         if self._contexts is None:
             self._contexts = ContextCache()
         res = backfill.run(settings, p, store_url=url, client=client, budget_s=float(settings.backfill_budget_s),
-                           out=self._eod_line, contexts=self._contexts,
+                           out=self._eod_line, contexts=self._contexts, exclude=exclude,
                            progress=lambda i, n, d: self._progress("backfill", i, n, d))
         if res["done"]:
             ran.append(f"история {len(res['done'])} дат")
             parts.append(f"ran {len(res['done'])} dates ({res['done'][0]}..{res['done'][-1]}) in {res['seconds']} s")
         parts += [f"{d} failed ({e})" for d, e in res["failed"][:5]]
+        if res["unconverged"]:
+            parts.append(f"still stale after the run, tried again next cycle: {', '.join(res['unconverged'][:5])}")
         if res["skipped"]:
             parts.append(f"{len(res['skipped'])} dates not cached and no hub")
         if res["left"]:
@@ -817,7 +917,7 @@ class Autopilot:
              ran: list[str]) -> tuple[str, str]:
         from .cli import eod_run
 
-        self._eod_from = None
+        self._eod_tried = set()
 
         today = self._today()
         pdates = store.position_dates(con, today - timedelta(days=WINDOW_DAYS))
@@ -830,7 +930,6 @@ class Autopilot:
         cached = sd.market_dates()
         dates = [d for d in cached if max(start, first) <= d <= today.isoformat()][-MAX_EOD_DATES:]
         dates = sorted(set(dates) | {d for d in (latest_valid, *extra) if d in cached and d >= first})
-        self._eod_from = max(start, first)  # the backfill step leaves this date on to this step
         if not dates:
             return "skipped", f"no cached eod_final snapshot from {max(start, first)} on"
         runs = store.default_runs(con, date.fromisoformat(dates[0]))
@@ -853,7 +952,8 @@ class Autopilot:
             if why is None:
                 continue
             sig = (tuple(ids), snap, prev, logic)
-            if self._failed.get(d) == sig:
+            if self._failed_before(d, sig, store.slice_label(d, "eod_final")):
+                self._eod_tried.add(d)  # not the backfill's either this cycle (#23)
                 notes.append(f"{d} failed before on the same inputs, not retried")
                 continue
             todo.append((d, why, sig))
@@ -866,6 +966,7 @@ class Autopilot:
                              f"a calendar, {self._sync_later} hub dates next cycle)")
         for i, (d, why, sig) in enumerate(todo):
             self._progress("eod", i + 1, len(todo), d)
+            self._eod_tried.add(d)
             self._emit(f"eod {d}: {why}")
             log.info("autopilot: eod %s (%s)", d, why)
             try:
@@ -873,7 +974,7 @@ class Autopilot:
                               out=self._eod_line)
             except Exception as e:
                 log.exception("autopilot: eod %s failed", d)
-                self._failed[d] = sig
+                self._fail(d, sig, e)
                 failed.append(f"{d} failed ({type(e).__name__}: {e})")
                 continue
             self._failed.pop(d, None)
@@ -921,7 +1022,8 @@ class Autopilot:
                   ran: list[str]) -> tuple[str, str, dict[str, str]]:
         """Today's book on the hub's newest intraday (from 19:45: preliminary) cut of today; see the module doc.
         The status, the detail and {"reason": one of ``INTRADAY_REASONS``}. The step asks the hub itself: the sync
-        step's outcome (a failed older date, #20) does not stop it."""
+        step's outcome (a failed older date, #20) does not stop it, the hub found down this cycle does (``hub_error``,
+        #147; a cut already cached still runs)."""
         status, detail, reason = self._intraday_step(settings, con, url, ran)
         return status, detail, {"reason": reason}
 
@@ -950,12 +1052,16 @@ class Autopilot:
         slot = (today, cut, int((now.timestamp() - POLL_LAG_S) // POLL_SLOT_S))
         asked = False
         if self._poll_slot != slot and not (cut == "eod_preliminary" and last):
+            if self._hub_down:  # an earlier step found the hub down: asked again next cycle (#147)
+                return "skipped", f"hub down this cycle, {cut} cut of {today} asked next cycle", "hub_error"
             self._progress("intraday", 0, None, "срез хаба")
             self._polled = {k: v for k, v in self._polled.items() if k[0] == today}
             try:  # not remembered as asked on an error: asked again next cycle
                 self._polled[(today, cut)] = next(HubClient(settings).list_snapshots(
                     kind="market", cut_type=cut, business_date=today.isoformat(), latest=True), None)
             except (HubError, OSError, ValueError) as e:
+                if isinstance(e, HubUnavailable):
+                    self._hub_down = str(e)
                 return "error", f"hub: {cut} cut of {today} not listed ({e})", "hub_error"
             self._poll_slot, asked = slot, True
         row = self._polled.get((today, cut))
@@ -981,16 +1087,20 @@ class Autopilot:
             return "skipped", f"no {cut} cut of {today} on the hub yet ({when})", "no_cut_yet"
         sid, why = target
         sig = (cut, sid, tuple(ids), prev_id, logic_version())
-        if self._failed.get(f"{cut} {today}") == sig:
+        label = store.slice_label(today, cut, row.get("cut_ts") if row and sid == row["snapshot_id"] else last[2])
+        if self._failed_before(f"{cut} {today}", sig, label):
             return "skipped", f"{cut} {sid[:12]} failed before on the same inputs, not retried", "failed_before"
         cache_dir = Path(settings.snapshot_cache)
         if row is not None and sid == row["snapshot_id"]:
+            if self._hub_down and not _cached(cache_dir, row):  # a cached cut needs no hub: it runs (#147)
+                return "skipped", f"hub down this cycle, {cut} {sid[:12]} fetched next cycle", "hub_error"
             self._progress("intraday", 0, 1, "загрузка среза")
             try:
                 cache.fetch_row(HubClient(settings), cache_dir, row)
             except (HubError, SnapshotError, OSError, ValueError) as e:
+                if isinstance(e, HubUnavailable):
+                    self._hub_down = str(e)
                 return "error", f"hub: {cut} {sid[:12]} not fetched ({e})", "hub_error"
-        label = store.slice_label(today, cut, row.get("cut_ts") if row and sid == row["snapshot_id"] else last[2])
         self._progress("intraday", 0, 1, label)
         self._emit(f"intraday {label}: {why}")
         log.info("autopilot: intraday %s %s (%s)", cut, sid[:12], why)
@@ -999,7 +1109,7 @@ class Autopilot:
                           out=self._eod_line, cut_type=cut, market_snapshot_id=sid, run_type=rtype)
         except Exception as e:
             log.exception("autopilot: intraday %s failed", label)
-            self._failed[f"{cut} {today}"] = sig
+            self._fail(f"{cut} {today}", sig, e)
             return "error", f"{label} failed ({type(e).__name__}: {e})", "run_failed"
         self._failed.pop(f"{cut} {today}", None)
         if rid is None:
@@ -1071,7 +1181,7 @@ class Autopilot:
             return "skipped", (f"{label}: after the inbox backlog ({self._inbox_waiting} files wait for a calendar, "
                                f"{self._sync_later} hub dates next cycle)"), "inbox_backlog"
         sig = (snap, tuple(ids), logic)
-        if self._failed.get(f"prev_close {today}") == sig:
+        if self._failed_before(f"prev_close {today}", sig, label):
             return "skipped", f"{label} failed before on the same inputs, not retried", "failed_before"
         self._progress("morning", 0, 1, label)
         self._emit(f"morning {label}: {why}")
@@ -1082,7 +1192,7 @@ class Autopilot:
                           market_snapshot_id=snap)
         except Exception as e:
             log.exception("autopilot: morning %s failed", label)
-            self._failed[f"prev_close {today}"] = sig
+            self._fail(f"prev_close {today}", sig, e)
             return "error", f"{label} failed ({type(e).__name__}: {e})", "run_failed"
         self._failed.pop(f"prev_close {today}", None)
         if rid is None:

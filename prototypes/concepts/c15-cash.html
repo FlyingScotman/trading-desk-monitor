@@ -111,12 +111,12 @@
       '<div class="mut3" style="display:flex;justify-content:space-between;font-size:11px"><span>' + f.date(pts[0].date) + '</span><span>' + f.date(pts[pts.length - 1].date) + '</span></div>';
   }
   function detail(r, ledgers, cols) {
-    const acc = '<table class="k-tbl"><thead><tr><th>Система</th><th>Счёт</th><th>Вид</th><th class="n">Остаток</th></tr></thead><tbody>' +
+    const acc = '<table class="k-tbl" data-vk="c15-accounts" data-title="Счета: ' + esc(r.book_id) + ' ' + esc(r.ccy) + '"><thead><tr><th>Система</th><th>Счёт</th><th>Вид</th><th class="n">Остаток</th></tr></thead><tbody>' +
       r.accounts.map(a => '<tr><td><span class="c15-dot led-' + (ledgers.indexOf(a.ledger) % 4) + '"></span>' + esc(ledName(a.ledger)) + '</td><td class="mono">' + esc(a.account_id || '') + '</td><td class="mut">' + esc(a.account_kind || '') + '</td><td class="n">' + amt(a.balance_ccy) + '</td></tr>').join('') + '</tbody></table>';
-    const hist = '<table class="k-tbl"><thead><tr><th>Дата</th>' + ledgers.map(l => '<th class="n">' + esc(ledName(l)) + '</th>').join('') + '<th>Статус</th></tr></thead><tbody>' +
+    const hist = '<table class="k-tbl" data-vk="c15-history" data-title="История остатка: ' + esc(r.book_id) + ' ' + esc(r.ccy) + '"><thead><tr><th>Дата</th>' + ledgers.map(l => '<th class="n">' + esc(ledName(l)) + '</th>').join('') + '<th>Статус</th></tr></thead><tbody>' +
       r.history.slice().reverse().map(h => '<tr><td>' + f.date(h.date) + (h.valid_date && h.valid_date !== h.date ? ' <span class="mut3" title="перенесён с даты остатка">← ' + f.date(h.valid_date) + '</span>' : '') + '</td>' +
         ledgers.map(l => '<td class="n">' + amt(h.by_ledger[l]) + '</td>').join('') + '<td><span class="c15-badge st-' + h.status + '">' + esc(STATUS[h.status] || h.status) + '</span></td></tr>').join('') + '</tbody></table>';
-    return '<tr class="c15-sub"><td colspan="' + cols + '"><div class="grid"><div><b>Счета</b>' + acc + '</div><div><b>История</b>' + spark(r.history, ledgers) + hist + '</div></div></td></tr>';
+    return '<tr class="c15-sub" data-csv-skip="1"><td colspan="' + cols + '"><div class="grid"><div><b>Счета</b>' + acc + '</div><div><b>История</b>' + spark(r.history, ledgers) + hist + '</div></div></td></tr>';
   }
 
   // ---------- экран даты ----------
@@ -143,7 +143,7 @@
     const rows = d.rows.filter(r => (filter === 'all' || r.status === filter) &&
       (!ql || [r.entity, r.book_id, r.book_name, r.ccy].some(x => x && String(x).toLowerCase().includes(ql))));
     const cols = 7 + L.length;
-    tp.querySelector('.bd').innerHTML = rows.length ? '<table class="k-tbl"><thead><tr><th>Юрлицо</th><th>Книга</th><th>Валюта</th>' +
+    tp.querySelector('.bd').innerHTML = rows.length ? '<table class="k-tbl" data-vk="c15-balances" data-title="Остатки по книгам"><thead><tr><th>Юрлицо</th><th>Книга</th><th>Валюта</th>' +
       L.map((l, k) => '<th class="n"><span class="c15-dot led-' + (k % 4) + '"></span>' + esc(ledName(l)) + '</th>').join('') +
       '<th class="n">Остаток</th><th class="n">Разница</th><th>Статус</th><th>На дату</th></tr></thead><tbody>' +
       rows.map(r => '<tr class="row" tabindex="0" aria-expanded="' + open.has(r.key) + '" data-k="' + esc(r.key) + '"><td>' + esc(r.entity) + '</td><td>' + esc(r.book_id) +
@@ -154,6 +154,7 @@
         '<td class="mut">' + f.date(r.valid_date) + (r.age_days ? ' <span class="mut3">(' + r.age_days + ' дн.)</span>' : '') + '</td></tr>' +
         (open.has(r.key) ? detail(r, L, cols) : '')).join('') + '</tbody></table>'
       : '<div class="k-empty">' + (d.rows.length ? 'Под фильтр ничего не попало' : 'Остатков на эту дату нет: отчёт об остатках не загружен') + '</div>';
+    K.tableToolsAll(tp.querySelector('.bd'));
     tp.querySelectorAll('tr[data-k]').forEach(tr => {
       tr.onclick = () => { const k = tr.dataset.k; open.has(k) ? open.delete(k) : open.add(k); render(); };
       tr.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); tr.click(); } };

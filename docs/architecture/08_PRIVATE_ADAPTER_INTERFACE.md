@@ -460,9 +460,14 @@ Rules beyond the schema (`desk.inbox.validate`), each an `error` for the row's u
 - Every product: `side` of another product is `bad_value`, as is a negative `notional_ccy`, `quantity` or
   `face_amount_ccy`, a non-zero `spread_bp` with `fixed_rate_pct`, and `maturity_date` not after `start_date`.
 
-Status 23.10.2026: the backend validates and stores the 1.4 rows (`dataset_rows`); valuation reads only the FX kinds
-(`valuation.derivatives`), so swaps from terms come with their slice (FlyingScotman/trading-desk-monitor#45), the funding of REPO and HTM lots from
-terms with the funding engine (FlyingScotman/trading-desk-monitor#55). The typed view `trade_terms_row` has the 1.4 fields as columns after the 1.2
+Status 25.10.2026: the backend validates and stores the 1.4 rows (`dataset_rows`). Valuation
+(`valuation.derivatives`, FlyingScotman/trading-desk-monitor#45) reads the FX kinds, `irs` / `ois` on `RUONIA` or
+`KEY_RATE` in RUB (core's swap, risk per curve) and `repo` with a `maturity_date` (fixed, or `RUONIA` / `KEY_RATE`);
+a `ccs`, a swap with two floating legs, an open REPO and a REPO on another index keep the report's value with the
+reason (`ccs_unsupported`, `basis_swap_unsupported`, `repo_open`, `no_fixings`). A swap leg's `payment_frequency`
+and `day_count` replace the exchange convention of its index (absent: that convention, provisional); `30/360` and
+day or week frequencies are not valued. The funding of REPO and HTM lots from terms comes with the funding engine
+(FlyingScotman/trading-desk-monitor#55). The typed view `trade_terms_row` has the 1.4 fields as columns after the 1.2
 ones (migration 0020); every field is also in its `data`.
 
 ### `trades` — flow; `full_snapshot` per book for cumulative exports, or `increment` for deltas; `time_basis = intraday`

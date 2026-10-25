@@ -2,8 +2,9 @@
 preview, or as a file to save (``download=1``: ``desk-diagnostics-<UTC>.json``). Local only, like the settings
 routes: the document has no private data, but it does describe this machine's setup.
 
-``GET /api/v1/backfill/status`` (R23) is the settings page's «История прогонов»: ``desk.backfill.status`` (dates
-and counts, the store and the cache only, no hub call).
+``GET /api/v1/backfill/status`` (R23) is the settings page's «История прогонов» and the header's indicator:
+``desk.backfill.status`` (dates and counts, the store and the cache only, no hub call) and ``hub_problem_dates``, the
+autopilot sync step's ``problem_dates`` (#163).
 
 ``GET /api/v1/inbox/reconcile`` (R22) is the settings page's «Загрузка позиций»: ``desk inbox reconcile`` as JSON,
 book ids and file names included (the owner's own machine, local only).
@@ -93,7 +94,11 @@ def get_backfill_status(request: Request) -> Response:
     with store.connect(request.app.state.store_url or store.resolve_url(settings)) as con:
         doc = backfill.status(con, settings)
     ap = getattr(request.app.state, "autopilot", None)
+    steps = ap.status().get("steps", []) if ap is not None else []
     if ap is not None:
-        doc["step"] = next((x for x in ap.status().get("steps", []) if x["name"] == "backfill"), None)
+        doc["step"] = next((x for x in steps if x["name"] == "backfill"), None)
+    # the hub dates the sync step cannot load, waiting for a retry (#146): the header counts them among the dates
+    # that do not converge (#163)
+    doc["hub_problem_dates"] = next((x.get("problem_dates") or [] for x in steps if x["name"] == "sync"), [])
     return Response(json.dumps(doc, ensure_ascii=False, default=str), media_type="application/json; charset=utf-8",
                     headers={"Cache-Control": "no-store"})
