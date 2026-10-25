@@ -214,6 +214,16 @@ def test_leg_conventions_from_the_terms(ctx):
         dv.SwapTerms.of([TERMS[0], {**TERMS[1], "index_code": "MOSPRIME"}])
 
 
+def test_quote_curve_risk_leaves_swaps_and_repos_as_they_are(ctx, plan):
+    """Core 0.38 ``quote_curve_risk`` (#219): swaps and REPOs read no foreign curve, and the key-rate swap projects on
+    the built forward curve, so the setting changes neither their PV nor their risk."""
+    on = pv1.plan(replace(ctx, quote_curve_risk=True), inputs(TERMS, ("S1", "K1", "R2"))).direct
+    for pid in ("S1", "K1", "R2"):
+        a, b = plan.direct[pid].valuation, on[pid].valuation
+        assert b.pv_rub == pytest.approx(a.pv_rub) and b.curve_buckets.keys() == a.curve_buckets.keys()
+        assert b.dv01_rub == pytest.approx(a.dv01_rub)
+
+
 def test_without_the_key_rate_curve_key_rate_swaps_keep_the_report(ctx):
     v = pv1.plan(replace(ctx, swap_curves=()), inputs(TERMS, ("K1", "S1"))).direct
     assert v["K1"].core_not_valued[0] == "no_key_rate_curve" and v["S1"].valuation.extra["core"]["product"] == "ois"

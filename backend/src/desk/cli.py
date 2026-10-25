@@ -229,7 +229,8 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
     ctx = prep(sd, *(on_close or (d, cut_type)), market_snapshot_id=market_snapshot_id, fx_options=fx_options)
     # issuer names, groups, sectors and ratings: the newest static of the cache, not the market's own (R25)
     ctx = dataclasses.replace(ctx, reference=reference.facts(sd, ctx.static),
-                              proxy_curves=bool(getattr(settings, "proxy_curves_for_risk", False)))
+                              proxy_curves=bool(getattr(settings, "proxy_curves_for_risk", False)),
+                              quote_curve_risk=bool(getattr(settings, "quote_curve_risk", False)))
     prev_cut = None if on_close else previous_market(sd, d)
     prev_date = prev_cut[0] if prev_cut else None
     prev = MarketView(sd.market(*prev_cut)) if prev_cut else None

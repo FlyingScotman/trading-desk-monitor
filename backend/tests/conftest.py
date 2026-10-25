@@ -13,7 +13,7 @@ from desk.store import MIGRATIONS, migrate
 
 SHARED_CACHE = orch.ShockedCurveCache(max_entries=200_000)
 """One cache of shocked curves for the session (``orchestrator.new_cache``): the RUONIA OIS curve is rebootstrapped per
-bucket shift (~0.1 s each, 245 with the Hessian) and the tests' contexts repeat the same curves; a shared cache never
+bucket shift (245 with the Hessian; ~0.08 s each on core 0.37, ~5-10 ms on 0.38) and the tests' contexts repeat the same curves; a shared cache never
 changes a number (core keys it by curve content and shift)."""
 
 

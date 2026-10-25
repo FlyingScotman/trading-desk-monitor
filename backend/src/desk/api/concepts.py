@@ -643,21 +643,33 @@ def _logic_label(v: str | None) -> str:
     return parts[0] + (f" (оценка v{ver}" + (f", ядро {core}" if core else "") + ")" if ver else "")
 
 
+UNIT_TEXT = {True: "риск валютных кривых в котировках (прокси USD/EUR; CNY XCCY у FX-сделок), у показанного прогона — "
+                   "в нулевых ставках",
+             False: "риск валютных кривых в нулевых ставках, у показанного прогона — в котировках (прокси USD/EUR; "
+                    "CNY XCCY у FX-сделок)"}
+"""``unit`` of a history point (``run_points``): its run's foreign curves' risk is in another unit than the shown run's
+(the setting ``quote_curve_risk``, issue #171), by its run's own flag."""
+
+
 def run_points(con, runs: list[dict[str, Any]], pids: list[str]
                ) -> tuple[dict[int, dict[str, Any]], dict[tuple[int, str], tuple]]:
     """What a history point of a position depends on beyond its numbers (R44): per run its cut when not the final
     close (``cut``: ``eod_preliminary`` when the date has no final one; an intraday cut for the run shown), the program that computed it when that is not the current one
     (``old``: another valuation or core version, ``backfill.same_logic``; the history of runs
-    recomputes such a date) and per book the date of the report its positions are from (``books``); per (run,
-    position) the number of bonds, the quality, why it is not exact and the book."""
+    recomputes such a date), the unit of its foreign curves' risk when it is not the shown run's (``unit``: the
+    setting ``quote_curve_risk``, run lineage, issue #171; the program is the same, so the history of runs does not
+    recompute it) and per book the date of the report its positions are from (``books``); per (run, position) the
+    number of bonds, the quality, why it is not exact and the book. ``runs``: the shown run last (``_runs``)."""
     from .. import logic_version
     from ..backfill import same_logic
 
     now = logic_version()
     meta: dict[int, dict[str, Any]] = {}
     ids = [r["run_id"] for r in runs]
+    quoted: dict[int, bool] = {}
     for r in con.execute(
             "SELECT r.run_id, r.cut_type, r.lineage->>'logic_version' AS logic,"
+            " coalesce((r.lineage->>'quote_curve_risk')::boolean, false) AS quoted,"
             " (SELECT jsonb_object_agg(s.book_id, s.valid_date) FROM position_set s"
             "  WHERE s.set_id = ANY(r.position_set_ids)) AS books FROM run r WHERE r.run_id = ANY(%s)", (ids,)):
         m: dict[str, Any] = {"books": r["books"] or {}}
@@ -666,6 +678,11 @@ def run_points(con, runs: list[dict[str, Any]], pids: list[str]
         if not same_logic(r["logic"], now):
             m["old"] = _logic_label(r["logic"])
         meta[r["run_id"]] = m
+        quoted[r["run_id"]] = r["quoted"]
+    shown = quoted.get(ids[-1], False) if ids else False
+    for rid, q in quoted.items():
+        if q != shown:
+            meta[rid]["unit"] = UNIT_TEXT[q]
     held: dict[tuple[int, str], tuple] = {}
     with con.cursor(row_factory=tuple_row) as cur:
         for rid, pid, n, quality, why, book in cur.execute(

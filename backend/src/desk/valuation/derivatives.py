@@ -85,6 +85,7 @@ from rub_fixed_income import (
     FxFuturesContract,
     FxFuturesInstrument,
     InterestRateSwap,
+    ParYieldCurveRequest,
     Position,
     RepoDayBasis,
     RepoInstrument,
@@ -92,6 +93,7 @@ from rub_fixed_income import (
     SwapInstrument,
     SwapLegSchedule,
     ValuationPolicy,
+    XccyCurveBootstrapRequest,
     joint_calendar,
     swap_convention,
     value_portfolio,
@@ -772,16 +774,22 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
              and (c := i.projection_curve_id) is not None}
     fixing_ids = {f for i in instruments if isinstance(i, (SwapInstrument, RepoInstrument))
                   and (f := i.fixing_id) is not None}
-    # risk on RUONIA in its OIS par quotes, as the bonds' (EodContext.quote_curves); the fixings only a swap or a REPO
-    # reads (point-in-time, with RUONIA's declared unpublished day), so an FX book's inputs stay as they were
-    snap = replace(ctx.risk_market, quotes=(),
+    # risk on RUONIA in its OIS par quotes, as the bonds' (EodContext.quote_curves); with the setting quote_curve_risk
+    # the CNY XCCY curve as its par quotes too (EodContext.fx_risk_market), rebuilt by core on every shock. The fixings
+    # only a swap or a REPO reads (point-in-time, with RUONIA's declared unpublished day), so an FX book's inputs stay
+    # as they were; the key-rate forward curve of a key-rate swap from EodContext.swap_curves
+    market = ctx.fx_risk_market
+    snap = replace(market, quotes=(),
                    fixings=tuple(f for f in ctx.core_market.fixings if f.fixing_id in fixing_ids),
-                   curves=(*(c for c in ctx.risk_market.curves if c.curve_id in used),
+                   curves=(*(c for c in market.curves if c.curve_id in used),
                            *(c for c in ctx.swap_curves if c.curve_id in used)),
                    calendars=(*ctx.core_market.calendars, *calendars.values()),
                    futures_quotes=tuple(quotes))
+    # core's quote_curve_risk only when the call holds quotes it takes for them: a call without keeps its job ID
+    quoted = any(isinstance(c.curve, XccyCurveBootstrapRequest | ParYieldCurveRequest) for c in snap.curves)
     policy = ValuationPolicy(RUONIA_OIS_CURVE_ID, include_second_order=second_order,
-                             fx_curve_fallbacks=tuple(fallbacks))
+                             fx_curve_fallbacks=tuple(fallbacks),
+                             quote_curve_risk=ctx.quote_curve_risk and quoted)
     result = value_portfolio(run_id=f"desk-eod-{bd}-derivatives", as_of=ctx.core_market.known_at, snapshot=snap,
                              instruments=instruments, positions=positions, policy=policy, scenarios=scenarios)
     acc: dict[str, _Acc] = defaultdict(_Acc)

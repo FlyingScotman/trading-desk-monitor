@@ -208,7 +208,8 @@
       });
     });
     const foot = '<tfoot><tr><td>Итого</td>' + (A.dc === 'none' ? '' : C.map(c => cellHtml(A, A.get(ALL, ALL, c), title(A, ALL, ALL, c), false, 1)).join('')) + cellHtml(A, A.get(ALL, ALL, ALL), title(A, ALL, ALL, ALL), false, 1, 'tot') + '<td></td></tr></tfoot>';
-    out.innerHTML = '<div class="c4-view"><table class="k-tbl">' + head + '<tbody>' + (body || '<tr><td colspan="99" class="k-empty">пусто</td></tr>') + '</tbody>' + foot + '</table></div>';
+    out.innerHTML = '<div class="c4-view"><table class="k-tbl" data-vk="c04-pivot" data-title="Сводная таблица">' + head + '<tbody>' + (body || '<tr><td colspan="99" class="k-empty">пусто</td></tr>') + '</tbody>' + foot + '</table></div>';
+    K.tableToolsAll(out);
     out.querySelectorAll('tr.r1').forEach(tr => tr.onclick = e => { if (e.target.closest('[data-dr]')) return; st.col[tr.dataset.k] = !st.col[tr.dataset.k]; render(); });
   }
   function seriesColor(A, c, i) {
