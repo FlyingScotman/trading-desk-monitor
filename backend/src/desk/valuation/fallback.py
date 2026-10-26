@@ -65,7 +65,16 @@ from rub_fixed_income import (
 )
 
 from ..curves.rates import KEY_RATE_CURVE_ID
-from ..marketdata.adapter import KBD_CURVE_ID, OFZ_CLASSES, BondQuote, BondTerms, MarketView, core_instrument
+from ..marketdata.adapter import (
+    KBD_CURVE_ID,
+    OFZ_CLASSES,
+    BondQuote,
+    BondTerms,
+    MarketView,
+    bond_currency,
+    core_instrument,
+    settlement_currency,
+)
 from ..pnl.flash import FlashPnl, NoPnl
 from .bonds import (
     OFZ_KBD_CLASSES,
@@ -321,8 +330,8 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
     kind = "ofz" if t.bond_class in OFZ_CLASSES else "credit"
     why = [f"not exact: {outcome.reason}{': ' + outcome.detail if outcome.detail else ''}"
            ] if outcome.reason else []
-    face_ccy = t.face_unit or t.currency or "RUB"
-    fx_face, fx_acc = fx_rate(ctx, face_ccy), fx_rate(ctx, t.currency or face_ccy)
+    face_ccy = bond_currency(t)
+    fx_face, fx_acc = fx_rate(ctx, face_ccy), fx_rate(ctx, settlement_currency(t))
     if fx_face is None or fx_acc is None:
         return None
     is_fx = face_ccy != "RUB"
@@ -507,8 +516,8 @@ def par_proxy(ctx: EodContext, outcome: Outcome, quantity: float, note: str) -> 
     assert t is not None
     today = quote if quote and quote.trade_date == bd else None
     face = today.face_value if today and today.face_value else face_on(t, bd)
-    fx_face = fx_rate(ctx, t.face_unit or t.currency or "RUB")
-    fx_acc = fx_rate(ctx, t.currency or t.face_unit or "RUB")
+    fx_face = fx_rate(ctx, bond_currency(t))
+    fx_acc = fx_rate(ctx, settlement_currency(t))
     matured = not t.is_perpetual and (t.maturity_date is not None and t.maturity_date <= bd
                                       or face is not None and face <= 0)
     if matured:
@@ -568,7 +577,7 @@ def yield_pnl(prev: BondValuation, cur: BondValuation, terms: BondTerms, prev_ct
     ``pnl.direct.split_fx`` then takes the FX revaluation out of ``other``. A RUB bond, a model price or a par proxy:
     ``simple_pnl`` as is."""
     pnl = simple_pnl(prev, cur, terms, ctx)
-    ccy = terms.face_unit or terms.currency or "RUB"
+    ccy = bond_currency(terms)
     y = prev.ytm_pct
     if ccy == "RUB" or prev.quality not in YIELD_QUALITIES or cur.quality not in YIELD_QUALITIES \
             or y is None or not math.isfinite(y) or y <= -100:
@@ -592,7 +601,7 @@ def simple_pnl(prev: BondValuation, cur: BondValuation, terms: BondTerms, ctx: E
     per_bond = received_per_bond(terms, d0, d1)
     if per_bond is None:
         raise NoPnl("received_unknown", f"a coupon or redemption in ({d0}, {d1}] has no amount")
-    fx = fx_rate(ctx, terms.face_unit or terms.currency or "RUB")
+    fx = fx_rate(ctx, bond_currency(terms))
     q = cur.quantity
     received = q * per_bond * (fx[0] if fx else 1.0)
     total = q * (cur.dirty_rub - prev.dirty_rub) + received
