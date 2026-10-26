@@ -14,8 +14,8 @@
  * Прогон назван своим срезом рынка (R11): «20.10 14:30 МСК · внутри дня» (портфель дня на внутридневном срезе
  * хаба), «19.10 · закрытие предв.», «19.10 · закрытие»; «последний прогон» — самый новый показываемый (днём —
  * внутридневной). Если PnL посчитан не к закрытию предыдущего рабочего дня, это сказано в подсказке.
- * Фильтр Desk Monitor, который страница применила к своим данным (DESK.scope, desk-scope.js), виден здесь же:
- * что выбрано, сколько позиций, «изменить» (Desk Monitor) и ✕ (снять на всех страницах).
+ * Фильтр, который Scenario Lab применил к своим данным (DESK.scope, desk-scope.js; сохранён ещё удалённым Desk Monitor),
+ * виден здесь же: что выбрано, сколько позиций и ✕ (снять на всех страницах).
  * Вход (desk-auth.js, подключается отсюда сразу): CSRF-заголовок изменяющих запросов, пользователь и «Выйти» в строке.
  * window.DESK_NAV: { sel, pinned, href(page), select(sel) }.
  */
@@ -31,9 +31,8 @@
     au.src = root + 'desk-auth.js';
     (document.head || document.documentElement).appendChild(au);
   }
-  // Основной набор — мониторы (concepts/). Ранние экраны (desk-monitor.html, widget-board.html, pivot-studio.html,
-  // scenario-lab.html) устарели (22.10.2026): в строке их нет, открываются только по прямому адресу (README.md,
-  // «Устаревшие экраны»).
+  // Основной набор — мониторы (concepts/). Устаревший scenario-lab.html в строке не показан, открывается только по
+  // прямому адресу (README.md, «Устаревшие экраны»).
   var PAGES = [
     ['concepts/index.html', 'Мониторы', '13 мониторов на реальных данных: кокпит, риски, позиции, PnL, календари, рынок, история'],
     ['app/', 'Сценарии (точно)', 'Тейлор и точная переоценка на сервере'],
@@ -127,7 +126,7 @@
     'text-transform:uppercase;border-radius:2px;white-space:nowrap}' +
     '#desk-nav .dn-scope{display:inline-flex;align-items:center;gap:6px;min-width:0;padding:0 0 0 8px;border-left:2px solid var(--n-acc)}' +
     '#desk-nav .dn-scope b{color:var(--n-fg);font-weight:600;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
-    '#desk-nav .dn-scope a{padding:0;border:0;color:var(--n-acc)}#desk-nav .dn-scope button{padding:0 5px;line-height:1.2}' +
+    '#desk-nav .dn-scope button{padding:0 5px;line-height:1.2}' +
     '#desk-nav .dn-ap{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}' +
     '#desk-nav .dn-ap[hidden]{display:none}' +
     '#desk-nav .dn-ap b{color:var(--n-fg);font-weight:500}' +
@@ -175,11 +174,10 @@
     }
     var sc = D && !empty && D.scope && D.scope.state;
     if (sc && sc.active) {
-      var f = el('span', { 'class': 'dn-scope', title: 'Фильтр Desk Monitor действует и здесь: ' + sc.label + '. Позиций ' + sc.n + ' из ' + sc.total });
+      var f = el('span', { 'class': 'dn-scope', title: 'Действует сохранённый фильтр позиций: ' + sc.label + '. Позиций ' + sc.n + ' из ' + sc.total });
       f.appendChild(el('span', {}, 'Фильтр: '));
       f.appendChild(el('b', {}, sc.label));
       f.appendChild(el('span', { 'class': 'dn-m' }, sc.n + ' из ' + sc.total + ' поз.'));
-      f.appendChild(el('a', { href: href('desk-monitor.html'), title: 'Изменить фильтр в Desk Monitor' }, 'изменить'));
       var x = el('button', { type: 'button', title: 'Снять фильтр на всех страницах', 'aria-label': 'Снять фильтр' }, '✕');
       x.addEventListener('click', function () { D.scope.clear(); });
       f.appendChild(x);

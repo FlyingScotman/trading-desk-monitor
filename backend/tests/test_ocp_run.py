@@ -155,7 +155,7 @@ def test_ocp_end_to_end_inbox_run_api(store_url, ctx, tmp_path):
     assert desk["OCP_TRANSFERS"] == [
         {"from": "D1", "to": "X1", "ccy": "USD", "amount": 900_000.0, "before": pytest.approx(t["before"]),
          "rate": 81.25, "valueDate": "2026-10-16"}]
-    assert all(x["to"] in desk["BOOKS"] for x in desk["OCP_TRANSFERS"])  # desk-monitor.html names D.BOOKS[t.to]
+    assert all(x["to"] in desk["BOOKS"] for x in desk["OCP_TRANSFERS"])  # the removed Desk Monitor named D.BOOKS[t.to]
     dp = {p["id"]: p for p in desk["positions"]}
     assert dp["D1|XFER"].get("ocpTransfer") is True and not dp["D1|USD"].get("ocpTransfer")
 

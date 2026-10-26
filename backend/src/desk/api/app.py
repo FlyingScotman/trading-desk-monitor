@@ -103,6 +103,19 @@ class Revalidated(StaticFiles):
         return response
 
 
+REMOVED_SCREENS = {"/desk-monitor.html": "/concepts/c01-cockpit.html", "/widget-board.html": "/concepts/c06-launchpad.html",
+                   "/pivot-studio.html": "/concepts/c04-pivot.html"}
+"""The early screens removed in #292 → the monitors that replace them (a 302, the query kept: ``?run_id=``). The
+redirects stay one release, for bookmarks; then they are removed too."""
+
+
+def _redirect_to(target: str):
+    def redirect(request: Request) -> RedirectResponse:
+        return RedirectResponse(target + (f"?{request.url.query}" if request.url.query else ""), status_code=302)
+
+    return redirect
+
+
 class BodyCache:
     """The concept pages' responses (megabytes of JSON a year of runs) by request key: the body, its gzip and its
     ETag, valid while the store's ``concepts.fingerprint`` is the same (a new run, market date, static snapshot or
@@ -891,6 +904,10 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
             return RedirectResponse("/app/" + (f"?{request.url.query}" if request.url.query else ""))
 
         app.mount("/app", Revalidated(directory=built, html=True), name="app")
+    # the removed early screens (#292): their old addresses (bookmarks) lead to the monitors that replace them, run
+    # selection kept. For one release, then this goes too
+    for old, new in REMOVED_SCREENS.items():
+        app.add_api_route(old, _redirect_to(new), methods=["GET"], include_in_schema=False)
     static = Path(static_dir) if static_dir else static_root() / "prototypes"
     if static.is_dir():  # an installed wheel has no prototypes/
         app.mount("/", Revalidated(directory=static, html=True), name="static")

@@ -53,7 +53,7 @@ def test_card_coupon_fields(store_url, ctx):
 
 def test_pages_are_revalidated(store_url):
     client = TestClient(create_app(store_url))
-    for page in ("/desk-monitor.html", "/desk-util.js", "/"):
+    for page in ("/concepts/index.html", "/desk-util.js", "/"):
         r = client.get(page)
         assert r.status_code == 200 and r.headers["cache-control"] == "no-cache", page
         again = client.get(page, headers={"If-None-Match": r.headers["etag"]})
