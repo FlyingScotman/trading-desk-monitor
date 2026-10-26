@@ -193,8 +193,8 @@ tr.row.sel td { background: var(--accent-bg); }
 
   // ---------- PnL ----------
   const pPnl = document.getElementById('pPnl'); let chPnl;
-  const PK = [['carry', 'Кэрри'], ['rates', 'Ставки'], ['spread', 'Спред'], ['fx', 'FX'], ['trading', 'Сделки'], ['other', 'Прочее']];
-  const PC = { carry: '#3fb67a', rates: '#4c9dff', spread: '#e3b341', fx: '#b48cff', trading: '#ff8f3f', other: '#a0b4c8' };
+  const PK = K.PNL_FACTORS;  // фондирование — свой ряд (#168), кэрри без него
+  const PC = Object.assign({}, K.PNL_COLORS, { trading: '#ff8f3f' });
   function drawPnl() {
     K.seg(pPnl.querySelector('.m'), [['factors', 'по факторам'], ['total', 'итог']], st.pnl, v => { st.pnl = v; save(); chPnl.redraw(); });
     // PnL — по датам прогонов (M.histDates): дата оси без прогона в столбцах не показана
@@ -206,7 +206,7 @@ tr.row.sel td { background: var(--accent-bg); }
         : [{ name: 'PnL дня', type: 'bar', data: I.map(i => ({ value: M.hist.pnl.total[hi(i)], itemStyle: { color: M.hist.pnl.total[hi(i)] >= 0 ? css('--pos') : css('--neg') } })) }];
       return {
         animation: false, grid: { left: 6, right: 10, top: 30, bottom: 4, containLabel: true }, legend: { top: 0, left: 0, type: 'scroll' },
-        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.mns(v, 2) + ' mm ₽' },
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => v == null ? '—' : f.mns(v, 2) + ' mm ₽' },  // null: не посчитано (фондирование)
         xAxis: { type: 'category', data: I.map(i => f.dshort(DATES[i])) },
         yAxis: [{ type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } }, { type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => f.mn(v, 0), color: css('--fg-3') } }],
         dataZoom: [{ type: 'inside' }],
@@ -289,7 +289,8 @@ tr.row.sel td { background: var(--accent-bg); }
       ] : []).concat(isB && (x.icpi || x.cpi) ? [  // линкер: ICPI MOEX и ИПЦ г/г, известный на дату (R25)
         ['ICPI', x.icpi ? f.n(lastOf(x.icpi), 4) : '—', x.icpi ? d(x.icpi[i0], lastOf(x.icpi), v => f.s(v, 4)) : '—'],
         ['ИПЦ г/г', x.cpi ? f.pct(lastOf(x.cpi)) : '—', x.cpi ? d(x.cpi[i0], lastOf(x.cpi), v => f.s(v * 100, 0) + ' бп') : '—'],
-      ] : []).map(([l, v, dd]) => '<div><div class="l">' + l + '</div><div class="v">' + v + '</div><div class="l">с ' + f.date(DATES[i0]) + ': ' + dd + '</div></div>').join('') + '</div><div class="chart" style="height:250px"></div>';
+      ] : []).map(([l, v, dd]) => '<div><div class="l">' + l + '</div><div class="v">' + v + '</div><div class="l">с ' + f.date(DATES[i0]) + ': ' + dd + '</div></div>').join('') + '</div><div class="chart" style="height:250px"></div>'
+      + (x.dmNote && st.pm === 'spr' ? '<div class="mut" style="margin-top:4px">' + esc(x.dmNote) + '</div>' : '');  // #33: почему у флоатера нет DM
     const inp = bd.querySelector('input');
     inp.onchange = () => { const q = K.list().find(z => z.name === inp.value) || K.list().find(z => z.searchText.includes(inp.value.toLowerCase())); if (q) { st.pos = q.id; save(); drawPos(); if (topTbl) topTbl.redraw(); } };
     // цена, доходность, спред — вся история бумаги (API истории хаба, с 2024), не только дни прогонов

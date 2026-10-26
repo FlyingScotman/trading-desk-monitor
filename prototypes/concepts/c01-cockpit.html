@@ -78,7 +78,7 @@
       p.querySelector('.bd').classList.add('flush'); view.appendChild(p);
       K.table(p.querySelector('.bd'), { viewKey: 'c01-positions',
         rowsFn: () => K.list(), groupable: K.defaultGroups, stripe: r => K.issuerColor(r.issuer), maxHeight: 'calc(100vh - 290px)',
-        columns: K.cols(['name', 'ccy', 'issuer', 'kind', 'book', 'coupon', 'event', 'maturity', 'tenor', 'notional', 'price', 'ytm', 'spread', 'dur', 'dv01', 'cs01', 'carry', 'pnl', 'mv']),
+        columns: K.cols(['name', 'ccy', 'issuer', 'kind', 'book', 'coupon', 'event', 'maturity', 'tenor', 'notional', 'price', 'ytm', 'spread', 'dur', 'dv01', 'cs01', 'carry', 'funding', 'pnl', 'mv']),
       });
     }
     if (tab === 'pnl') {
@@ -87,14 +87,14 @@
       const el = K.h('div', 'chart'); w.querySelector('.bd').appendChild(el); K.pnlWaterfall(el);
       const hp = panel('PnL за 130 дней'); g.appendChild(hp);
       const el2 = K.h('div', 'chart'); hp.querySelector('.bd').appendChild(el2);
-      const keys = ['carry', 'rates', 'spread', 'fx', 'trading', 'other'], names = { carry: 'Кэрри', rates: 'Ставки', spread: 'Спред', fx: 'FX', trading: 'Сделки', other: 'Прочее' };
-      K.chart(el2, () => ({ grid: { left: 6, right: 10, top: 28, bottom: 4, containLabel: true }, legend: { top: 0 }, tooltip: { trigger: 'axis', valueFormatter: v => f.mns(v, 2) }, xAxis: { type: 'category', data: M.histDates, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } }, dataZoom: [{ type: 'inside', start: 60 }], series: keys.map(k => ({ name: names[k], type: 'bar', stack: 'p', data: M.hist.pnl[k] })).concat([{ name: 'Итого', type: 'line', data: M.hist.pnl.total, showSymbol: false, color: K.css('--fg') }]) }));
-      const fp = panel('Фондирование', '<span class="k-note">по книгам и юрлицам · в кэрри позиций и строками книг</span>'); fp.style.marginTop = '12px'; fp.querySelector('.bd').classList.add('flush'); view.appendChild(fp);
+      const keys = K.PNL_FACTORS.map(x => x[0]), names = Object.fromEntries(K.PNL_FACTORS);
+      K.chart(el2, () => ({ grid: { left: 6, right: 10, top: 28, bottom: 4, containLabel: true }, legend: { top: 0 }, tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '—' : f.mns(v, 2) }, xAxis: { type: 'category', data: M.histDates, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } }, dataZoom: [{ type: 'inside', start: 60 }], series: keys.map(k => ({ name: names[k], type: 'bar', stack: 'p', data: M.hist.pnl[k], itemStyle: { color: K.PNL_COLORS[k] } })).concat([{ name: 'Итого', type: 'line', data: M.hist.pnl.total, showSymbol: false, color: K.css('--fg') }]) }));
+      const fp = panel('Фондирование', '<span class="k-note">по книгам и юрлицам · в PnL позиций (строка «Фондирование», не в кэрри) и строками книг</span>'); fp.style.marginTop = '12px'; fp.querySelector('.bd').classList.add('flush'); view.appendChild(fp);
       K.fundingPanel(fp.querySelector('.bd'));
       const t = panel('PnL по позициям'); t.querySelector('.bd').classList.add('flush'); t.style.marginTop = '12px'; view.appendChild(t);
       K.table(t.querySelector('.bd'), { viewKey: 'c01-pnl',
         rowsFn: () => K.list(), groupable: [K.defaultGroups[0]], groupLabel: 'по валютам', stripe: r => K.issuerColor(r.issuer), sort: [['pnl', 1]], maxHeight: '60vh',
-        columns: K.cols(['name', 'ccy', 'issuer', 'book', { key: 'pc', label: 'Кэрри', num: true, val: r => r.pnl.carry, fmt: f.k, cls: f.cls, sum: r => r.pnl.carry, unit: 'тыс ₽' }, { key: 'pr', label: 'Ставки', num: true, val: r => r.pnl.rates, fmt: f.k, cls: f.cls, sum: r => r.pnl.rates, unit: 'тыс ₽' }, { key: 'ps', label: 'Спред', num: true, val: r => r.pnl.spread, fmt: f.k, cls: f.cls, sum: r => r.pnl.spread, unit: 'тыс ₽' }, { key: 'pf', label: 'FX', num: true, val: r => r.pnl.fx, fmt: f.k, cls: f.cls, sum: r => r.pnl.fx, unit: 'тыс ₽' }, { key: 'pt', label: 'Сделки', num: true, val: r => r.pnl.trading, fmt: f.k, cls: f.cls, sum: r => r.pnl.trading, unit: 'тыс ₽' }, { key: 'po', label: 'Прочее', num: true, val: r => r.pnl.other, fmt: f.k, cls: f.cls, sum: r => r.pnl.other, unit: 'тыс ₽' }, 'pnl', 'pnlMtd']),
+        columns: K.cols(['name', 'ccy', 'issuer', 'book', { key: 'pc', label: 'Кэрри', num: true, val: r => r.pnl.carry, fmt: f.k, cls: f.cls, sum: r => r.pnl.carry, unit: 'тыс ₽', title: K.tips.carry, tip: true }, { key: 'pfu', label: 'Фондирование', num: true, nullable: true, val: r => r.pnl.funding, fmt: v => v == null ? '—' : f.k(v), cls: f.cls, sum: r => r.pnl.funding, unit: 'тыс ₽', title: K.tips.funding, tip: true }, { key: 'pr', label: 'Ставки', num: true, val: r => r.pnl.rates, fmt: f.k, cls: f.cls, sum: r => r.pnl.rates, unit: 'тыс ₽' }, { key: 'ps', label: 'Спред', num: true, val: r => r.pnl.spread, fmt: f.k, cls: f.cls, sum: r => r.pnl.spread, unit: 'тыс ₽' }, { key: 'pf', label: 'FX', num: true, val: r => r.pnl.fx, fmt: f.k, cls: f.cls, sum: r => r.pnl.fx, unit: 'тыс ₽' }, { key: 'pt', label: 'Сделки', num: true, val: r => r.pnl.trading, fmt: f.k, cls: f.cls, sum: r => r.pnl.trading, unit: 'тыс ₽' }, { key: 'po', label: 'Прочее', num: true, val: r => r.pnl.other, fmt: f.k, cls: f.cls, sum: r => r.pnl.other, unit: 'тыс ₽' }, 'pnl', 'pnlMtd']),
       });
     }
     if (tab === 'hist') {

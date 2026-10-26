@@ -20,7 +20,8 @@ instead of showing a curve as silently zero. Funding (B1, ``publish.funding_run`
 shape; a bond's line has its currency liability in ``fxLiability`` and its FX revaluation, in the position's PnL, in
 ``pnl.fxAllocated``, TDM#54), ``fundingPnl`` and ``fundingPnlByBook`` (the book-level lines;
 ``inPositions``: what is in the positions' PnL), ``FUNDING_RULES`` (the adapter's rules the run used), a position's
-``pnl.funding`` (null, not 0, without funding: not configured, a problem) and ``fundingStatus`` (``fundingStatus``:
+``pnl.funding`` (null, not 0, without funding: not configured, a problem; the pages show it apart from the carry,
+TDM#168) and ``fundingStatus`` (``fundingStatus``:
 state ``computed`` / ``not_configured`` / ``invalid_config`` / ``failed`` / ``not_computed``, its text, totals by
 book and entity, problems), the one key compat adds for it. OCP (B2, ``publish.ocp_run``): ``OCP_TRANSFERS`` from the
 run's transfer deals and a transfer deal's ``ocpTransfer``; the OCP screen reads ``/api/v1/runs/{id}/ocp``. compat,
