@@ -484,6 +484,138 @@
   });
   M.positions = positions;
   M.pos = Object.fromEntries(positions.map(p => [p.id, p]));
+  // ---------- прогнозное кэрри (C17, #66): ответ GET /api/v1/concepts/carry той же формы (api/models.py CarryOut,
+  // формат #297: dv01, cs01, fxRate, inCcy у позиции; funding группы — позиций с прогнозом, fundingTotal, netKnown, B1 строгое;
+  // заседания на год с inHorizon),
+  // суммы в рублях — из рублёвых величин позиций, снятых здесь, до пересчёта в валюту отчёта (kit.js). Синтетика:
+  // кэрри ≈ купон + pull + roll-down по кривой RUONIA, roll по спреду (spread=curve) — CS01 × сдвиг по кривой рейтинга;
+  // без прогноза — деривативы, валютные бумаги и пара бумаг с оценкой ниже точной; у одной книги фондирование
+  // не настроено (null); остатки ДС двух книг — строки без позиции. M.forwardCarryDemo(o) — o как CARRY.query,
+  // o.funding = 'not_configured' — фондирование не настроено целиком ----------
+  (function () {
+    const base = positions.map(p => ({ id: p.id, book: p.book, entity: p.entity, ccy: p.ccy, group: p.group, kind: p.kind, isin: p.isin,
+      mv: p.mv, dv01: p.dv01, cs01: p.cs01 || p.ofzSpr01 || 0, ytm: p.ytm, curCpn: p.curCpn, mdur: p.mdur, tenor: p.tenor, years: p.yearsToMat,
+      flt: !!(p.cpn && p.cpn.type === 'float'), rating: p.rating, fundRate: p.fundRate }));
+    const NO_RULE_BOOK = 'IC-BND', DEFAULT_RATE_ENTITY = 'AM';
+    const days = (a, b) => Math.round((parse(b) - parse(a)) / 864e5);
+    const nextWd = s => { let d = addDays(s, 1); while ([0, 6].includes(parse(d).getDay())) d = addDays(d, 1); return d; };
+    const PREM = { 'AAA': 0.9, 'AA+': 1.3, 'AA': 1.7, 'AA-': 2.2, 'A+': 2.9, 'A': 3.6, 'A-': 4.4, 'BBB+': 5.5, 'BBB': 6.8 };
+    M.forwardCarryDemo = function (o) {
+      o = o || {};
+      const h = o.horizon || '3M', mo = { '1M': 1, '3M': 3, '6M': 6, '1Y': 12 }[String(h).toUpperCase()];
+      const hdate = mo ? addMonths(AS_OF, mo) : h, N = days(AS_OF, hdate), dt = N / 365;
+      const ks = o.ks === 'steps' ? 'steps' : 'flat', spread = o.spread === 'curve' ? 'curve' : 'held';
+      const steps = ks === 'steps' ? (o.steps || []) : [];
+      const year = [addMonths(AS_OF, 12), hdate].sort()[1];
+      const all = M.cbr.meetings.map(d => ({ date: d, effective: nextWd(d), estimated: d > '2027-01-01' })).filter(m => m.effective > AS_OF && m.effective <= year)
+        .map((m, i) => Object.assign(m, { stepBp: +(steps[i] || 0), inHorizon: m.effective <= hdate }));
+      const ms = all.filter(m => m.inHorizon);
+      const KS0 = M.indices['КС'];
+      const path = [{ date: AS_OF, keyRatePct: KS0 }]; let ks1 = KS0;
+      if (ks === 'steps') ms.forEach(m => { ks1 = Math.max(0, ks1 + m.stepBp / 100); path.push({ date: m.effective, keyRatePct: Math.round(ks1 * 1e6) / 1e6 }); });
+      // средний сдвиг КС за период, п.п.: шаг × доля периода после даты вступления
+      const shift = path.slice(1).reduce((s, x, i) => s + (x.keyRatePct - path[i].keyRatePct) * (days(x.date, hdate) + 1) / N, 0);
+      const noFunding = o.funding === 'not_configured';
+      const out = [];
+      base.forEach(b => {
+        const r = rng('c17' + b.id), x = { positionId: b.id, bookId: b.book, entity: b.entity, secid: b.group === 'DER' ? null : b.isin, ccy: b.ccy,
+          kind: window.INSTR && M.pos[b.id] ? window.INSTR.kindOf(M.pos[b.id]) : b.kind, quality: 'exact',
+          dv01: b.dv01, cs01: b.cs01, fxRate: M.fx[b.ccy] || 1, inCcy: null,
+          carry: null, coupon: null, pull: null, rolldown: null, funding: null, net: null, fundingState: 'funded', fundingSource: 'adapter',
+          fundingRate: null, fundingRuleId: null, fundingNote: null, spreadRoll: null, spreadRollBp: null, spreadCurve: null, carryMethod: null, code: null, detail: null };
+        // кэрри
+        if (b.group === 'DER') x.code = 'not_a_bond';
+        else if (b.ccy !== 'RUB') x.code = 'core_unsupported_product';
+        else if (b.id === 'P013' || b.id === 'P047') { x.code = 'par_proxy'; x.quality = 'par_proxy'; }
+        else if (b.id === 'P033') { x.code = 'base_mismatch'; x.detail = 'core\'s start PV differs from the run\'s'; }
+        else {
+          const y = b.ytm != null ? b.ytm : b.curCpn, cpn = b.curCpn != null ? b.curCpn : y;
+          if (b.years != null && b.years * 365 < N) {  // погашается до горизонта: как деньги
+            const t = b.years;
+            x.coupon = b.mv * cpn / 100 * t; x.pull = b.mv * (y - cpn) / 100 * t; x.rolldown = 0; x.carryMethod = 'redeemed';
+          } else {
+            x.coupon = b.mv * cpn / 100 * dt; x.pull = b.mv * (y - cpn) / 100 * dt;
+            const dy = b.flt ? 0 : (curveAt('RUB RUONIA', Math.max(b.tenor - dt, 0.05)) - curveAt('RUB RUONIA', b.tenor)) * 100;
+            x.rolldown = b.dv01 * dy * (0.8 + 0.4 * r()); x.carryMethod = 'core';
+          }
+          x.carry = x.coupon + x.pull + x.rolldown;
+          if (spread === 'curve') {
+            if (x.carryMethod === 'redeemed') x.spreadCurve = 'redeemed';
+            else if (b.group === 'GOV') x.spreadCurve = 'ofz_held';
+            else if (b.flt) x.spreadCurve = 'floater_held';
+            else if (!PREM[b.rating]) x.spreadCurve = 'no_peer_curve';
+            else {
+              x.spreadCurve = b.rating === 'A+' ? 'A (для A+)' : b.rating;
+              x.spreadRollBp = -PREM[b.rating] * 8 * Math.min(dt, b.tenor);
+              x.spreadRoll = b.cs01 * x.spreadRollBp; x.carry += x.spreadRoll;
+            }
+          }
+        }
+        // фондирование
+        if (b.group === 'DER') { x.fundingState = 'not_funded'; x.fundingSource = 'none'; x.funding = 0; x.fundingNote = 'не облигация: фондируется по правилам книги (остатки ДС), а не по MV'; }
+        else if (b.book === NO_RULE_BOOK) { x.fundingState = 'not_configured'; x.fundingSource = 'none'; x.fundingNote = 'нет правила фондирования книги и ставки по умолчанию'; }
+        else if (b.book === 'HTM') { x.fundingSource = 'contract'; x.fundingRate = (KS0 - 0.25).toFixed(2) + '% contract'; x.fundingRuleId = 'htm'; x.funding = -b.mv * (KS0 - 0.25) / 100 * dt; }
+        else {
+          const rub = b.ccy === 'RUB', rate = b.fundRate + (rub ? shift : 0);
+          x.funding = -b.mv * rate / 100 * dt;
+          x.fundingRate = rub ? 'KEY_RATE + 25 bp' : b.ccy === 'CNY' ? 'RUSFAR_CNY + 40 bp' : '5.00% fixed';
+          if (b.entity === DEFAULT_RATE_ENTITY) { x.fundingSource = 'default'; x.fundingRuleId = 'default'; x.fundingNote = 'рыночная ставка по умолчанию'; }
+          else x.fundingRuleId = rub ? 'trading_rub' : 'trading_' + b.ccy.toLowerCase();
+        }
+        if (noFunding) { x.funding = null; x.fundingState = 'not_configured'; x.fundingSource = 'none'; x.fundingRate = null; x.fundingRuleId = null; x.fundingNote = null; }
+        x.net = x.carry == null || x.funding == null ? null : x.carry + x.funding;
+        x.inCcy = Object.fromEntries(['carry', 'coupon', 'pull', 'rolldown', 'spreadRoll', 'funding', 'net'].map(k => [k, x[k] == null ? null : x[k] / x.fxRate]));
+        out.push(x);
+      });
+      // остатки ДС: строки без позиции (книга деривативов и юрлицо УК), RUONIA идёт за КС
+      const ruo = M.indices.RUONIA + shift;
+      const cash = noFunding ? [] : [
+        { book: 'RATES', entity: 'BANK', ccy: 'RUB', kind: 'CASH', amount: 1.8e9 * ruo / 100 * dt, rateExpr: 'RUONIA', ruleId: 'derivs_rub', ruleSource: 'adapter', defaultRate: false },
+        { book: 'FXB', entity: 'BANK', ccy: 'USD', kind: 'CASH', amount: -12e6 * M.fx.USD * 4.1 / 100 * dt, rateExpr: 'SOFR', ruleId: 'derivs_usd', ruleSource: 'adapter', defaultRate: false },
+        { book: 'AM-DER', entity: 'AM', ccy: 'RUB', kind: 'ENTITY_CASH', amount: -2.5e8 * (KS0 + shift) / 100 * dt, rateExpr: 'KEY_RATE', ruleId: 'default', ruleSource: 'default', defaultRate: true },
+      ];
+      // итоги — как assemble сервера (scenario/carry.py)
+      const SUMS = ['carry', 'coupon', 'pull', 'rolldown', 'spreadRoll'];
+      const grp = () => Object.assign(Object.fromEntries(SUMS.concat(['dv01', 'cs01', 'funding', 'fundingNoCarry', 'fundingBookLevel', 'fundingTotal', 'net', 'netKnown']).map(k => [k, null])),
+        { nPositions: 0, nCovered: 0, nNotCovered: 0, nFunded: 0, nFundingMissing: 0, nCoveredNoFunding: 0, nNoCarryNoFunding: 0 });
+      const add = (g, k, v) => { if (v != null) g[k] = (g[k] || 0) + v; };
+      const G = { book: {}, entity: {}, ccy: {}, kind: {} }, tot = grp(), at = (d, k) => G[d][k] || (G[d][k] = grp());
+      out.forEach(x => [tot, at('book', x.bookId), at('entity', x.entity || '—'), at('ccy', x.ccy || '—'), at('kind', x.kind || '—')].forEach(g => {
+        g.nPositions++; g[x.carry != null ? 'nCovered' : 'nNotCovered']++; SUMS.forEach(k => add(g, k, x[k])); add(g, 'dv01', x.dv01); add(g, 'cs01', x.cs01);
+        if (x.funding != null) { add(g, x.carry != null ? 'funding' : 'fundingNoCarry', x.funding); g.nFunded += x.fundingState === 'funded'; if (x.carry != null) add(g, 'netKnown', x.carry + x.funding); }
+        else { g.nFundingMissing++; g.nCoveredNoFunding += x.carry != null; g.nNoCarryNoFunding += x.carry == null && !noFunding; }
+      }));
+      cash.forEach(c => [tot, at('book', c.book), at('entity', c.entity), at('ccy', c.ccy)].forEach(g => { g.fundingBookLevel = (g.fundingBookLevel || 0) + c.amount; }));
+      // как _close сервера: fundingTotal = funding + fundingNoCarry + fundingBookLevel; net — правило B1, строгое: у позиции
+      // без прогноза фондирование null — fundingNoCarry, fundingTotal и net группы null
+      const close = g => {
+        const strict = g.nNoCarryNoFunding;
+        if (strict) g.fundingNoCarry = null;
+        if (!noFunding && !strict) { g.fundingBookLevel = g.fundingBookLevel || 0; g.fundingTotal = (g.funding || 0) + (g.fundingNoCarry || 0) + g.fundingBookLevel; }
+        if (!noFunding) g.fundingBookLevel = g.fundingBookLevel || 0;
+        if (!noFunding && !strict && g.carry != null && g.funding != null && !g.nCoveredNoFunding) g.net = g.carry + g.fundingTotal;
+        return g;
+      };
+      const sorted = o2 => Object.fromEntries(Object.keys(o2).sort().map(k => [k, close(o2[k])]));
+      const notes = ['демо: суммы синтетические (купон, pull и roll-down по кривой RUONIA), той же формы, что ответ сервера',
+        'кэрри = полное изменение стоимости при кривых, перенесённых в горизонт: полученные купоны + изменение грязной цены',
+        'купоны флоатеров — прогноз по кривой прогона; путь КС влияет только на фондирование',
+        'без прогноза: оценки ниже точной, деривативы (кэрри свопов и РЕПО пока не подключено), валютные облигации',
+        ks === 'flat' ? 'КС и индексы — на уровне даты прогона весь период' : 'КС по заседаниям ЦБ: шаг с даты вступления решения; RUONIA идёт за КС с сегодняшним спредом (допущение)',
+        spread === 'curve' ? 'спред по кривой эмитентов того же рейтинга (spread=curve): roll по спреду = CS01 × сдвиг, входит в кэрри; ОФЗ и флоатеры — спред держится'
+          : 'спред держится (spread=held): roll по спреду не считается',
+        'фондирование: позиции и остатки ДС держатся до горизонта, курсы — на дату прогона'];
+      if (out.some(x => x.carryMethod === 'redeemed')) notes.push('бумаги, погашаемые до горизонта: кэрри = полученные купоны и погашение минус грязная стоимость на дату прогона');
+      return {
+        method: 'desk-forward-carry-v1', runId: null, asOf: AS_OF, horizonDate: hdate, days: N, reportingCcy: 'RUB', ks, spread,
+        spreadCurves: spread === 'curve' ? Object.keys(PREM).map(g => ({ grade: g, issues: 12, points: [[1, PREM[g] * 80], [3, PREM[g] * 96]] })) : [],
+        meetings: all, keyRatePath: path,
+        fundingStatus: noFunding ? 'not_configured' : 'computed', fundingText: noFunding ? 'фондирование не настроено: нет правил и ставки по умолчанию' : 'фондирование посчитано',
+        positions: out, totals: close(tot), byBook: sorted(G.book), byEntity: sorted(G.entity), byCcy: sorted(G.ccy), byKind: sorted(G.kind),
+        fundingBookLevel: cash, fundingProblems: [], provisional: [], notes,
+      };
+    };
+  })();
   // ---------- свопы и РЕПО, оценённые ядром (#201): та же форма, что lib/real.js собирает из extra.swaps / extra.repos /
   // extra.index_fixings; одна сделка — с предварительными условиями (quality 'assumed'), у RUONIA — объявленный
   // неопубликованный день и пропуск внутри истории ----------

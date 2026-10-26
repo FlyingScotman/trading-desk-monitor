@@ -7,6 +7,7 @@
 //   node tests/js/history_coverage.test.js
 'use strict';
 const fs = require('fs'), path = require('path'), vm = require('vm'), assert = require('assert');
+const { loadRun } = require('./fixtures/concepts_run');
 const P = f => fs.readFileSync(path.join(__dirname, '..', '..', 'prototypes', f), 'utf8');
 let n = 0; const tests = [];
 const t = (name, f) => tests.push([name, f]);
@@ -17,7 +18,7 @@ function el() {
     appendChild(c) { this.children.push(c); return c; }, append(...c) { this.children.push(...c); },
     querySelector() { return null; }, querySelectorAll() { return []; }, addEventListener() {}, setAttribute() {}, remove() {} };
 }
-// opts.extras — window.DESK_EXTRAS; opts.patch(D) — правка window.DESK до real.js
+// opts.extras — window.DESK_EXTRAS; opts.patch(D) — правка window.CONCEPTS_RUN до real.js
 function load(opts) {
   opts = opts || {};
   const document = { addEventListener() {}, createElement: el, documentElement: el(), body: el(), querySelector() { return null; }, querySelectorAll() { return []; }, getElementById: () => el() };
@@ -27,13 +28,13 @@ function load(opts) {
     XMLHttpRequest: XHR };
   ctx.window = ctx;
   vm.createContext(ctx);
-  vm.runInContext(P('data.js'), ctx);
-  if (opts.patch) opts.patch(ctx.window.DESK);
+  loadRun(ctx);
+  if (opts.patch) opts.patch(ctx.window.CONCEPTS_RUN);
   if (opts.extras) ctx.window.DESK_EXTRAS = opts.extras;
   vm.runInContext(P('concepts/lib/real.js'), ctx);
   vm.runInContext(P('concepts/lib/kit.js'), ctx);
   vm.runInContext(P('concepts/lib/instr.js'), ctx);
-  return { M: ctx.window.MOCK, K: ctx.window.KIT, D: ctx.window.DESK };
+  return { M: ctx.window.MOCK, K: ctx.window.KIT, D: ctx.window.CONCEPTS_RUN };
 }
 
 // ряд флоатера на 8 датах: 0 — до истории прогонов, 1 — прогон прошлой версии, 2..3 — прогоны текущей, 4 — даты без
@@ -147,6 +148,16 @@ t('#171: прогон с риском валютных кривых в друг�
   assert.ok(K.curveTip('USD UST').includes('par-доходностям прокси') && K.curveTip('USD UST').includes('quote_curve_risk'));
   assert.ok(K.curveTip('CNY XCCY').includes('у FX-сделок') && K.curveTip('CNY XCCY').includes('в разных единицах'));
   assert.ok(K.tips.ruonia.includes('IRS KEYRATE') && !K.tips.ruonia.includes('пока'), 'КС: почему ещё в нулевых ставках');
+});
+
+t('#291: заседания ЦБ — M.cbr.schedule из concepts.cbr(); C17 берёт их оттуда, без window.DESK', () => {
+  const schedule = [{ date: '2026-10-24', effective: '2026-10-27', estimated: false }, { date: '2027-02-13', effective: '2027-02-16', estimated: true }];
+  let { M } = load({ extras: { cbr: { meetings: ['2026-10-24', '2027-02-13'], estimated: ['2027-02-13'], schedule } } });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(M.cbr.schedule)), schedule);
+  ({ M } = load({ extras: { cbr: { meetings: ['2026-10-24'] } } }));
+  assert.strictEqual(M.cbr.schedule, null, 'сервер до #289: календаря нет — C17 строит его из meetings');
+  const c17 = P('concepts/c17-forward-carry.html');
+  assert.ok(/M\.cbr\.schedule/.test(c17) && !/window\.DESK\b(?!_)/.test(c17));
 });
 
 (async () => {

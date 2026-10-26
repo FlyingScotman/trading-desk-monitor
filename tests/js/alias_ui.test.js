@@ -4,6 +4,7 @@
 //   node tests/js/alias_ui.test.js
 'use strict';
 const fs = require('fs'), path = require('path'), vm = require('vm'), assert = require('assert');
+const { loadRun } = require('./fixtures/concepts_run');
 const P = f => fs.readFileSync(path.join(__dirname, '..', '..', 'prototypes', f), 'utf8');
 let n = 0; const tests = [];
 const t = (name, f) => tests.push([name, f]);
@@ -31,11 +32,11 @@ function load(opts) {
     XMLHttpRequest: XHR, fetch: opts.fetch };
   ctx.window = ctx;
   vm.createContext(ctx);
-  if (opts.real) { vm.runInContext(P('data.js'), ctx); vm.runInContext(P('concepts/lib/real.js'), ctx); }
+  if (opts.real) { loadRun(ctx); vm.runInContext(P('concepts/lib/real.js'), ctx); }
   else vm.runInContext(P('concepts/lib/mock.js'), ctx);
   vm.runInContext(P('concepts/lib/kit.js'), ctx);
   vm.runInContext(P('concepts/lib/instr.js'), ctx);
-  return { M: ctx.window.MOCK, K: ctx.window.KIT, D: ctx.window.DESK, urls };
+  return { M: ctx.window.MOCK, K: ctx.window.KIT, D: ctx.window.CONCEPTS_RUN, urls };
 }
 
 t('прогон: алиас по ISIN — вместо биржевого имени, поиск по обоим, бумаги без алиаса как были', () => {

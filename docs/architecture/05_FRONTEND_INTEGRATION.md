@@ -88,7 +88,7 @@ Notes:
 
 ## 4a Interface concepts on real data
 
-The concepts (`prototypes/concepts/`, owner feedback 21.10) run on the demo set and on real runs alike: `lib/real.js` maps `window.DESK` plus `window.DESK_EXTRAS` (`/concepts-data.js`) onto the demo set's shape, so a concept page needs no code for the data source. Rules it keeps:
+The concepts (`prototypes/concepts/`, owner feedback 21.10) run on the demo set and on real runs alike: `lib/real.js` maps `window.CONCEPTS_RUN` (`/concepts-run.js`, #291; `window.DESK` before it) plus `window.DESK_EXTRAS` (`/concepts-data.js`) onto the demo set's shape, so a concept page needs no code for the data source. Rules it keeps:
 - absent data is null and named in the header's notes, never a made-up number (ratings, foreign curves' points; the market's sectors, sizes and coupons until the static snapshot's facts are in, R23);
 - a floater has no yield: its spread is the discount margin;
 - the OFZ curve of the concepts is the basis OFZ − RUONIA (the run's KBD minus RUONIA OIS), its risk the positions' `ofzSpr01` by tenor; risk the run booked on the KBD (a date without RUONIA) is added to RUONIA;

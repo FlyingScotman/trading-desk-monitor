@@ -1,5 +1,5 @@
 /*
- * window.MOCK из настоящего прогона: window.DESK (/desk-data.js, api/compat.py) и window.DESK_EXTRAS
+ * window.MOCK из настоящего прогона: window.CONCEPTS_RUN (/concepts-run.js, api/concepts_run.py) и window.DESK_EXTRAS
  * (/concepts-data.js, api/concepts.py). Та же форма, что у демо-набора lib/mock.js, поэтому страницы концептов
  * работают на ней без изменений. Чего в данных нет — честный null (страницы показывают «—»), а не выдуманное число;
  * что именно отсутствует, перечислено в MOCK.notes и видно в шапке (kit.js).
@@ -54,9 +54,9 @@
  */
 (function () {
   'use strict';
-  const D = window.DESK, X = window.DESK_EXTRAS || {};
-  if (!D) {  // в базе нет прогона: демо-набор, шапка скажет об этом
-    window.CONCEPTS_SOURCE = window.DESK_EMPTY ? 'empty' : 'demo';
+  const D = window.CONCEPTS_RUN, X = window.DESK_EXTRAS || {};
+  if (!D) {  // в базе нет прогона (сервер ставит CONCEPTS_RUN_EMPTY = {reason, message}): демо-набор, шапка скажет об этом
+    window.CONCEPTS_SOURCE = window.CONCEPTS_RUN_EMPTY ? 'empty' : 'demo';
     document.write('<script src="lib/mock.js"><\/script>');
     return;
   }
@@ -328,6 +328,8 @@
     p.issuerName = d.issuer || d.counterparty || (group === 'DER' ? 'Деривативы' : '—');
     p.issuerFull = d.issuer || (d.counterparty ? 'Контрагент: ' + d.counterparty : p.issuerName);
     p.sector = NO(d.sector) || (group === 'DER' ? 'Деривативы' : '—'); p.rating = NO(d.rating) || '—';
+    // причина неточной оценки (extra прогона): список «не оценены / оценены не ядром» (kit.js, K.posList)
+    p.estReason = ex.reason || ex.not_exact_reason || (Array.isArray(ex.assumptions) ? ex.assumptions.join('; ') : '') || '';
     p.ratingInfo = d.ratingInfo || null; p.ratingAgency = (d.ratingInfo || {}).agency || null;  // рейтинг деска (R25)
     p.issuerGroup = d.issuerGroup && d.issuerGroup !== d.issuer ? d.issuerGroup : null;
     p.latName = ex.lat_name || null; p.issueSize = num(ex.issue_size);
@@ -608,6 +610,8 @@
     next: CB.next ? Object.assign({}, CB.next, { consensus: CB.next.consensus || 'нет данных', priced: CB.next.priced || 'нет данных' })
       : { date: null, label: 'нет календаря заседаний ЦБ', consensus: '—', priced: '—' },
     meetings: CB.meetings || [], estimated: CB.estimated || [], past: CB.past || [], keyRate: CB.keyRate == null ? null : CB.keyRate,
+    // весь календарь заседаний (#289): [{date, effective, estimated}]; null — сервер до #289
+    schedule: Array.isArray(CB.schedule) ? CB.schedule : null,
   };
 
   // ---------- все потоки позиции (лениво, карточка): /api/v1/positions/flows — график выпуска из статики хаба до

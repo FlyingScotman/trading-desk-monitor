@@ -5,6 +5,7 @@
 'use strict';
 const test = require('node:test');
 const fs = require('fs'), path = require('path'), vm = require('vm'), assert = require('assert');
+const { loadRun } = require('./fixtures/concepts_run');
 const P = f => fs.readFileSync(path.join(__dirname, '..', '..', 'prototypes', f), 'utf8');
 
 function el() {
@@ -20,9 +21,9 @@ function loadKit(withRun, store) {  // store — содержимое localStora
     getComputedStyle: () => ({ getPropertyValue: () => '#888' }), MutationObserver: class { observe() {} } };
   ctx.window = ctx;
   vm.createContext(ctx);
-  if (withRun) {  // прогон из базы: демо-прогон prototypes/data.js через lib/real.js
-    vm.runInContext(P('data.js'), ctx);
-    withRun(ctx.window.DESK);
+  if (withRun) {  // прогон из базы: демо-прогон tests/js/fixtures/concepts-run.json через lib/real.js
+    loadRun(ctx);
+    withRun(ctx.window.CONCEPTS_RUN);
     vm.runInContext(P('concepts/lib/real.js'), ctx);
   } else vm.runInContext(P('concepts/lib/mock.js'), ctx);
   vm.runInContext(P('concepts/lib/kit.js'), ctx);

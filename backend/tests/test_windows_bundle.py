@@ -281,14 +281,14 @@ def test_our_wheels_are_built_by_uv_with_pinned_backends_and_the_commit_time(mon
     with zipfile.ZipFile(whl) as z:
         assert z.infolist()[0].date_time == build.zip_stamp(1_760_000_000)
     pins = dict(ln.split("==") for ln in build.CONSTRAINTS.read_text().splitlines() if ln and not ln.startswith("#"))
-    assert {"hatchling", "setuptools"} <= set(pins)  # the backends of desk-backend / core and of the root package
+    assert "hatchling" in pins and "setuptools" not in pins  # the backend of desk-backend and core; no root package
     src = (REPO / "backend/tools/build_windows_bundle.py").read_text(encoding="utf-8")
     assert '"pip", "wheel"' not in src  # pip's wheel cache kept a core wheel of another build: never again
 
 
 @pytest.mark.bundle
 def test_a_real_wheel_build_is_reproducible(tmp_path):
-    """``pytest -m bundle`` (needs uv and PyPI for the pinned backends): the root package built twice, from two
+    """``pytest -m bundle`` (needs uv and PyPI for the pinned backends): desk-backend built twice, from two
     copies with other mtimes and modes, gives the same bytes."""
     import subprocess
 
@@ -297,8 +297,8 @@ def test_a_real_wheel_build_is_reproducible(tmp_path):
     wheels = []
     for i in (1, 2):
         src = tmp_path / f"src{i}"
-        shutil.copytree(REPO / "tdm", src / "tdm", ignore=shutil.ignore_patterns("__pycache__"))
-        shutil.copyfile(REPO / "pyproject.toml", src / "pyproject.toml")
+        shutil.copytree(REPO / "backend/src", src / "src", ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copyfile(REPO / "backend/pyproject.toml", src / "pyproject.toml")
         for p in src.rglob("*"):
             os.utime(p, (1_600_000_000 + i * 99_999,) * 2)
             if p.is_file():
