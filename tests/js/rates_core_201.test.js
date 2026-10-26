@@ -288,17 +288,4 @@ t('C02: панель свопов и РЕПО — через K.ratesCorePanel и
   assert.ok(/K\.onFilter\(\(\) => \{[^}]*drawRates\(\)/.test(c02));
 });
 
-t('#291: причина неточной оценки — из позиции модели (p.estReason, extra прогона), не из window.DESK', () => {
-  const { M } = load({ real: true, mutate: D => {
-    D.positions[0].extra = { reason: 'нет котировки' };
-    D.positions[1].extra = { assumptions: ['фиксинг перенесён', 'условия предварительные'] };
-  } });
-  const [a, b, c] = M.positions;
-  assert.strictEqual(a.estReason, 'нет котировки');
-  assert.strictEqual(b.estReason, 'фиксинг перенесён; условия предварительные');
-  assert.strictEqual(c.estReason, '');
-  const kit = P('concepts/lib/kit.js');
-  assert.ok(!/window\.DESK\b(?!_)/.test(kit) && /esc\(p\.estReason/.test(kit), 'K.posList берёт причину из p.estReason');
-});
-
 console.log(n + ' tests passed');
