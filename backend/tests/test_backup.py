@@ -396,6 +396,56 @@ def test_restore_replace_refuses_a_failed_check(store_url, tmp_path):
     assert backup.db_name(store_url) + backup.SCRATCH_SUFFIX not in _dbs(store_url)
 
 
+def test_an_autovacuum_worker_is_no_other_connection(tmp_path):
+    """An autovacuum worker in the live database is listed in pg_stat_activity with its datname, yet it is the
+    server's own process: a restore must not refuse for it (ALTER DATABASE ... RENAME stops it itself); a client
+    still counts (trading-desk-monitor#300, #305: on the tests' server, with hundreds of databases, a worker visits
+    one every fraction of a second, so the restores of the password test and of the unconfirmed one could refuse now
+    and then). Its own server, so the autovacuum settings change nothing elsewhere; a slowed vacuum of a ballast
+    table keeps one worker in the database."""
+    pgserver = pytest.importorskip("pgserver")
+    server = pgserver.get_server(tmp_path / "pg", cleanup_mode="stop")
+    try:
+        server.psql("ALTER SYSTEM SET autovacuum_naptime = 1;")
+        server.psql("SELECT pg_reload_conf();")
+        server.psql("CREATE DATABASE desk_av;")
+        url = server.get_uri("desk_av")
+        store.migrate(url)
+        _fill(url)
+        with psycopg.connect(url, autocommit=True) as con:
+            con.execute("CREATE TABLE ballast (n int) WITH (autovacuum_vacuum_threshold = 0,"
+                        " autovacuum_vacuum_scale_factor = 0, autovacuum_vacuum_cost_delay = 100,"
+                        " autovacuum_vacuum_cost_limit = 1)")
+            con.execute("INSERT INTO ballast SELECT generate_series(1, 200000)")
+            con.execute("DELETE FROM ballast")
+
+        def workers() -> int:
+            """The worker vacuuming the ballast (not one that analyses a catalog table and is gone a moment later)."""
+            with backup._admin(url) as con:
+                return con.execute("SELECT count(*) FROM pg_stat_activity WHERE datname = %s"
+                                   " AND backend_type = 'autovacuum worker' AND query LIKE %s",
+                                   ("desk_av", "autovacuum: VACUUM %ballast%")).fetchone()[0]
+
+        deadline = time.monotonic() + 60
+        while not workers():
+            assert time.monotonic() < deadline, "no autovacuum worker came to the database"
+            time.sleep(0.1)
+        assert backup.other_sessions(url) == 0
+        assert workers()  # still there: the count above saw it and left it out
+        s = _settings(tmp_path)
+        b = backup.create(s, url)
+        with pytest.raises(backup.BackupError, match="not confirmed"):  # the refusal of #305 came before this
+            backup.restore_replace(s, url, b.path, confirm=lambda r: False)
+        assert workers()
+        rep = backup.restore_replace(s, url, b.path, confirm=lambda r: True)
+        assert rep["ok"] and rep["previous"] == "desk_av" + backup.PREVIOUS_SUFFIX
+        with psycopg.connect(url) as held:  # a client still counts
+            held.execute("SELECT 1")
+            assert backup.other_sessions(url) == 1
+    finally:
+        server.cleanup()
+
+
 # ---- helpers, settings -----------------------------------------------------------------------------------------
 
 

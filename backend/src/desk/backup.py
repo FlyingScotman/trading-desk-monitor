@@ -623,10 +623,12 @@ def _exists(con: psycopg.Connection, name: str) -> bool:
 
 
 def other_sessions(url: str) -> int:
-    """Connections to the live database other than this one (a running ``desk serve``, a ``desk cycle``)."""
+    """Connections to the live database other than this one (a running ``desk serve``, a ``desk cycle``). An
+    autovacuum worker is no connection: the server starts one in every database now and then and lists it with its
+    datname, and ``ALTER DATABASE ... RENAME`` stops it by itself (trading-desk-monitor#300)."""
     with _admin(url) as con:
-        return con.execute("SELECT count(*) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()",
-                           (db_name(url),)).fetchone()[0]
+        return con.execute("SELECT count(*) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()"
+                           " AND backend_type <> 'autovacuum worker'", (db_name(url),)).fetchone()[0]
 
 
 def restore_check(settings: Settings, url: str | None, dump: Path, *, keep_scratch: bool = False,
