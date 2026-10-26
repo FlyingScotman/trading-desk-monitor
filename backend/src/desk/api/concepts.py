@@ -51,6 +51,7 @@ from ..marketdata.bundle import read_bundle
 from ..marketdata.history import RUB_SETTLEMENT, curve_rate, curve_rates_by_day, kbd, latest_market_day
 from ..publish import summary
 from ..publish.summary import CURVE_MAP, GOV_CLASSES, PNL, is_minfin, kind_of  # noqa: F401 - the pages' names
+from ..scenario.carry import meetings
 from ..store import DEFAULT_RUNS
 
 HIST_RUNS = 260
@@ -274,9 +275,11 @@ def old_runs(con, runs: list[dict[str, Any]]) -> int:
 
 def cbr(con, as_of: date) -> dict[str, Any]:
     """The CBR meetings of the newest market snapshot loaded (``md_cbr_meeting``): ``next`` (date, label, whether
-    the date is the hub's estimate, the key rate in force), ``meetings`` (the dates after ``as_of``), ``past`` (the
-    decisions on or before it, newest first, at most 12). Consensus and the rate the curve prices are not in the data
-    (null)."""
+    the date is the hub's estimate, the key rate in force), ``meetings`` (the dates after ``as_of``), ``schedule``
+    (the meetings that take effect after ``as_of``, in order: ``date`` the decision, ``effective`` from when it applies,
+    ``estimated`` the hub's estimated date; ``scenario.carry.meetings``, the key-rate path's, as window.DESK's
+    ``CBR_MEETINGS``, TDM#289), ``past`` (the decisions on or before it, newest first, at most 12). Consensus and the
+    rate the curve prices are not in the data (null)."""
     rows = con.execute("SELECT * FROM md_cbr_meeting ORDER BY meeting_date").fetchall()
     d = as_of.isoformat()
     ahead = [r for r in rows if r["meeting_date"].isoformat() > d]
@@ -290,7 +293,9 @@ def cbr(con, as_of: date) -> dict[str, Any]:
                                                                        else ""),
                "estimated": bool(a["is_estimated"]), "keyRate": key, "consensus": None, "priced": None}
     names = {"hike": "повышение", "cut": "снижение", "hold": "без изменений"}
-    return {"next": nxt, "meetings": [r["meeting_date"].isoformat() for r in ahead],
+    schedule = [{"date": m.date.isoformat(), "effective": m.effective.isoformat(), "estimated": m.estimated}
+                for m in meetings(rows, as_of)]
+    return {"next": nxt, "meetings": [r["meeting_date"].isoformat() for r in ahead], "schedule": schedule,
             "estimated": [r["meeting_date"].isoformat() for r in ahead if r["is_estimated"]],
             "past": [{"date": r["meeting_date"].isoformat(), "decision": r["decision"],
                       "decisionText": names.get(r["decision"], r["decision"]), "rate": r["decision_rate_pct"],

@@ -30,23 +30,20 @@ removed with window.DESK (M7); never extended otherwise."""
 from __future__ import annotations
 
 import math
-import re
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
 from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
 
-from ..curves.rates import input_notes
 from ..marketdata import ratings
 from ..pnl.reasons import METHOD_TEXT, REPORTED_METHOD, RUN_NO_POSITION_PNL, RUN_NO_PREV_MARKET, no_pnl_text
 from ..publish.funding_run import NOT_COMPUTED, STATUS_TEXT
 from ..scenario.carry import HORIZONS as carry_horizons
 from ..scenario.carry import meeting_rows, meetings
-from ..store import CURRENT_RUNS, DEFAULT_RUNS, slice_label
+from ..store import CURRENT_RUNS, DEFAULT_RUNS, slice_label  # noqa: F401 - re-exported, as before
+from .runs import PNL_KEYS, RUONIA_DISCOUNT_VERSION, resolve_run, risk_notes, run_slice  # noqa: F401 - moved (TDM#289)
 
-PNL_KEYS = ("carry", "rolldown", "rates", "spread", "fx_gross", "fx_funding", "funding", "convexity",
-            "new_trades", "other")
 CARRY_HORIZONS = [list(h) for h in carry_horizons]  # the forward carry's (scenario.carry.HORIZONS)
 DEFAULT_CARRY = [{"id": "flat", "name": "КС без изменений", "ks": {"mode": "flat"}}]
 RATINGS = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-", "BB+", "BB", "BB-", "B+", "B",
@@ -63,55 +60,6 @@ tells them apart by ``source.ofzScheme`` (``kbd_par``; null before) and finds th
 (its basis risk, the KBD's par risk) and ``dv01`` is their sum, its RUONIA risk (``extra.ofz_ruonia01``); its ``gamma``
 is over the same factors. The reader tells such a row by ``extra.ofz_ruonia01``."""
 HISTORY_DAYS = 22  # tdm.assemble.HISTORY_DAYS
-
-RUONIA_DISCOUNT_VERSION = 4
-"""``VALUATION_VERSION`` from which RUB bonds are discounted on RUONIA OIS (an older run has its risk on RUB OFZ)."""
-
-
-def risk_notes(run: dict[str, Any]) -> list[dict[str, Any]]:
-    """``riskNotes`` of a run: ``{code, curve, text, detail}`` per rates input its market lacked (``rates.input_notes``:
-    ``curve_missing:ruonia_ois`` and so on) and ``run_before_ruonia`` for a run made by a logic version before the
-    RUONIA discounting (only the latest positions date is recomputed after an upgrade)."""
-    lin = run.get("lineage") or {}
-    out = input_notes(lin.get("rates"), run["business_date"])
-    m = re.search(r"\+v(\d+)", lin.get("logic_version") or "")
-    if m and int(m.group(1)) < RUONIA_DISCOUNT_VERSION:
-        out.append({"code": "run_before_ruonia", "curve": "RUB RUONIA", "detail": lin.get("logic_version"),
-                    "text": "прогон посчитан до перехода на дисконтирование по RUONIA — риск облигаций на ОФЗ "
-                            "(RUB OFZ); после обновления пересчитывается только последняя дата"})
-    return out
-
-
-def resolve_run(con, as_of: date | None = None, run_id: int | None = None) -> dict[str, Any] | None:
-    """As tdm.assemble.resolve_run: the complete run run_id, else the run shown for as_of, else the newest run shown
-    (``CURRENT_RUNS``, R11: a date's default run, otherwise its intraday run: today's book on the latest cut)."""
-    if run_id:
-        return con.execute("SELECT * FROM run WHERE run_id = %s AND status = 'complete'",
-                           (run_id,)).fetchone()
-    if as_of:
-        return con.execute(f"SELECT * FROM run WHERE run_id IN ({CURRENT_RUNS}) AND business_date = %s",
-                           (as_of,)).fetchone()
-    return con.execute(f"SELECT * FROM run WHERE run_id IN ({CURRENT_RUNS})"
-                       " ORDER BY business_date DESC LIMIT 1").fetchone()
-
-
-def run_slice(run: dict[str, Any]) -> dict[str, Any]:
-    """The run's market slice for ``source`` (R11): cut type and time, the label the pages show, and what the flash
-    PnL is measured against when it is not the previous business day's close; ``marketDate``: the market snapshot's
-    date (lineage ``market_business_date``, null for runs made before #22), older than the run's date when today's
-    book is valued on an earlier close: the header shows both dates. The morning run (cut ``prev_close``, #21):
-    ``marketDate`` / ``marketCutType`` from its lineage ``market_close`` (the close's date and ``eod_final`` /
-    ``eod_preliminary``), its slice «16.10 · закрытие 15.10»."""
-    lineage = run.get("lineage") or {}
-    basis = lineage.get("pnl_basis") or {}
-    close = lineage.get("market_close") or {}
-    cut_ts = run.get("cut_ts")
-    return {"cutType": run["cut_type"], "cutTs": cut_ts.isoformat() if cut_ts else None,
-            "slice": slice_label(run["business_date"], run["cut_type"], cut_ts, run["run_type"], close or None),
-            "prevCutType": run.get("prev_cut_type"), "pnlBasis": basis.get("label"),
-            "marketDate": close.get("date") or lineage.get("market_business_date"),
-            "marketCutType": close.get("cut_type")}
-
 
 def _years(d0: str, d1: str | None) -> float | None:
     try:
