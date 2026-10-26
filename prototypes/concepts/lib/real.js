@@ -688,43 +688,55 @@
   };
   /* #309: сервер не отдал прогон — /concepts-run.js ответил 401, 5xx, не дошёл (сеть) или пришёл не тем (страница
    * входа прокси и т. п.: ни CONCEPTS_RUN, ни CONCEPTS_RUN_EMPTY). Это не демо: демо-набор — только по выбору (?demo=1,
-   * файл). Код ответа тегу скрипта не виден, поэтому вход проверяется по /api/v1/auth/state: вход включён, а
-   * пользователя нет — сессия кончилась, переход на вход (как desk-auth.js) и полоса «войдите снова»; иначе — полоса
-   * «данные не загрузились» (источник 'error'). Вместо монитора — только полоса: остаток разметки страницы после этого
-   * скрипта уходит в скрытый <plaintext> (разбор HTML дальше идёт как текст), поэтому lib/live.js, kit.js и код
-   * страницы не выполняются и чужих цифр на ней нет (window.stop() не годится: Chrome тогда не доводит загрузку до load). */
+   * файл). Сразу, синхронно — полоса «Данные не загрузились» (источник 'error') вместо монитора; остаток разметки
+   * страницы после этого скрипта уходит в скрытый <plaintext> (разбор HTML дальше идёт как текст), поэтому lib/live.js,
+   * kit.js и код страницы не выполняются и чужих цифр на ней нет (window.stop() не годится: Chrome тогда не доводит
+   * загрузку до load). Код ответа тегу скрипта не виден, поэтому потом, асинхронно (fetch с таймаутом AUTH_WAIT_MS),
+   * спрашивается /api/v1/auth/state: 401 или «вход включён, пользователя нет» — сессия кончилась: полоса «войдите
+   * снова» (источник 'auth') и переход на вход, как desk-auth.js; ошибка или таймаут — полоса остаётся как есть.
+   * Выход из полосы: «Повторить», «Последний прогон» (снимает выбор прогона: run_id / as_of и desk.run.v1 — если
+   * выбранный прогон стабильно не отдаётся, «Повторить» ведёт к той же ошибке), «Открыть тестовые данные», «◂ мониторы». */
   function loadFailed() {
-    let auth = null;
-    try {
-      const x = new XMLHttpRequest(); x.open('GET', '../api/v1/auth/state', false); x.setRequestHeader('Accept', 'application/json'); x.send();
-      if (x.status === 200) auth = JSON.parse(x.responseText);
-    } catch (e) { /* сервер не ответил и на это — сбой связи */ }
-    const login = !!(auth && auth.enabled && !auth.user);
-    window.CONCEPTS_SOURCE = login ? 'auth' : 'error';
+    const AUTH_WAIT_MS = 3000;
+    window.CONCEPTS_SOURCE = 'error';
+    try { if (localStorage.getItem('concepts-theme') === 'light') document.documentElement.setAttribute('data-theme', 'light'); } catch (e) { }  // тема пользователя, как initTheme kit.js
     const here = location.pathname + location.search + location.hash, toLogin = '/login.html?next=' + encodeURIComponent(here);
     const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const sel = window.CONCEPTS_SEL || {}, what = sel.run_id ? 'прогон #' + sel.run_id : sel.as_of ? 'прогон за ' + sel.as_of : 'прогон';
-    const demo = new URL(location.href); demo.searchParams.delete('run_id'); demo.searchParams.delete('as_of'); demo.searchParams.set('demo', '1');
+    const url = drop => { const u = new URL(location.href); ['run_id', 'as_of', 'demo'].forEach(k => u.searchParams.delete(k)); if (!drop) u.searchParams.set('demo', '1'); return u.pathname + u.search + u.hash; };
     const box = document.createElement('div');
-    box.className = 'k-loadfail'; box.setAttribute('role', 'alert'); box.dataset.source = window.CONCEPTS_SOURCE;
-    box.style.cssText = 'max-width:640px;margin:48px auto;padding:16px 20px;border:1px solid var(--neg,#c0392b);border-radius:4px;' +
+    box.className = 'k-loadfail'; box.setAttribute('role', 'alert'); box.dataset.source = 'error';
+    box.style.cssText = 'box-sizing:border-box;max-width:640px;margin:48px auto;padding:16px 20px;border:1px solid var(--neg,#c0392b);border-radius:4px;' +
       'background:var(--panel,#fff);color:var(--fg,#1b2129);font:14px/1.5 system-ui,"Segoe UI",sans-serif';
-    const btn = 'font:inherit;padding:3px 10px;margin-right:8px;cursor:pointer';
-    box.innerHTML = login
-      ? '<b style="font-size:16px">Сессия закончилась — войдите снова</b><p>Сервер не отдал ' + esc(what) + ' без входа. Переходим на страницу входа…</p>' +
-        '<a href="' + esc(toLogin) + '" style="' + btn + '">Войти</a>'
-      : '<b style="font-size:16px;color:var(--neg,#c0392b)">Данные не загрузились</b><p>Сервер не отдал ' + esc(what) +
-        ' (/concepts-run.js): ошибка сервера или нет связи с ним. Цифр на экране нет: тестовые данные вместо прогона не подставляются, чтобы их не приняли за настоящие.</p>' +
-        '<button type="button" data-a="retry" style="' + btn + '">Повторить</button>' +
-        '<a href="' + esc(demo.pathname + demo.search) + '" style="' + btn + '">Открыть тестовые данные</a>';
-    const put = () => {
-      Array.from(document.body.children).forEach(n => { if (n.tagName !== 'SCRIPT') n.style.display = 'none'; });
-      document.body.appendChild(box);
-      const r = box.querySelector('[data-a=retry]'); if (r) r.onclick = () => location.reload();
+    const wrap = document.createElement('div'); wrap.style.cssText = 'padding:0 16px';  // 16 px по бокам на узком экране
+    wrap.appendChild(box);
+    const btn = 'display:inline-block;font:inherit;padding:3px 10px;margin:4px 8px 0 0;cursor:pointer';
+    box.innerHTML = '<b data-k="title" style="font-size:16px;color:var(--neg,#c0392b)">Данные не загрузились</b><p data-k="text">Сервер не отдал ' + esc(what) +
+      ' (/concepts-run.js): ошибка сервера или нет связи с ним. Цифр на экране нет: тестовые данные вместо прогона не подставляются, чтобы их не приняли за настоящие.</p>' +
+      '<div data-k="acts"><button type="button" data-a="retry" style="' + btn + '">Повторить</button>' +
+      (sel.run_id || sel.as_of ? '<a data-a="latest" href="' + esc(url(true)) + '" style="' + btn + '" title="Снять выбор прогона и открыть последний">Последний прогон</a>' : '') +
+      '<a data-a="demo" href="' + esc(url(false)) + '" style="' + btn + '">Открыть тестовые данные</a>' +
+      '<a data-a="index" href="index.html" style="' + btn + '">◂ мониторы</a></div>';
+    box.querySelector('[data-a=retry]').onclick = () => location.reload();
+    const latest = box.querySelector('[data-a=latest]');
+    if (latest) latest.onclick = () => { try { localStorage.removeItem('desk.run.v1'); } catch (e) { } };  // переход — по href
+    Array.from(document.body.children).forEach(n => { if (n.tagName !== 'SCRIPT') n.style.display = 'none'; });
+    document.body.appendChild(wrap);
+    console.warn('concepts: данные не загрузились — ' + what);
+    const loginNeeded = () => {
+      window.CONCEPTS_SOURCE = 'auth'; box.dataset.source = 'auth';
+      box.querySelector('[data-k=title]').textContent = 'Сессия закончилась — войдите снова';
+      box.querySelector('[data-k=text]').textContent = 'Сервер не отдал ' + what + ' без входа. Переходим на страницу входа…';
+      box.querySelector('[data-k=acts]').innerHTML = '<a href="' + esc(toLogin) + '" style="' + btn + '">Войти</a>';
+      location.href = toLogin;
     };
-    if (document.body) put(); else document.addEventListener('DOMContentLoaded', put);
-    console.warn('concepts: ' + (login ? 'нужен вход' : 'данные не загрузились') + ' — ' + what);
-    if (login) location.href = toLogin;
+    try {
+      const ac = window.AbortController ? new AbortController() : null, timer = setTimeout(() => ac && ac.abort(), AUTH_WAIT_MS);
+      fetch('../api/v1/auth/state', { cache: 'no-store', headers: { Accept: 'application/json' }, signal: ac ? ac.signal : undefined })
+        .then(r => r.status === 401 ? { enabled: true, user: null } : r.ok ? r.json() : null)
+        .then(a => { clearTimeout(timer); if (a && a.enabled && !a.user) loginNeeded(); })
+        .catch(() => clearTimeout(timer));  // сбой или таймаут: остаётся «Данные не загрузились»
+    } catch (e) { }
     document.write('<plaintext hidden style="display:none">');  // конец: остальное — текст, не код (см. выше)
   }
 })();

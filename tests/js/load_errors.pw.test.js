@@ -18,9 +18,12 @@ const ORIGIN = 'http://desk.test';
 const TYPES = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png' };
 const PAGES = fs.readdirSync(path.join(ROOT, 'concepts')).filter(f => /^c\d\d-.*\.html$/.test(f));
 
-// run: { status, body } ответа /concepts-run.js или 'abort' (сеть); auth — ответ /api/v1/auth/state
-async function open(browser, file, { run, auth, query = '' } = {}) {
-  const ctx = await browser.newContext(), pg = await ctx.newPage();
+// run: { status, body } ответа /concepts-run.js или 'abort' (сеть); data — то же для /concepts-data.js;
+// auth — тело ответа /api/v1/auth/state, { status } или 'hang' (не отвечает); store — localStorage до загрузки;
+// viewport — размер окна
+async function open(browser, file, { run, data, auth, store, viewport, query = '' } = {}) {
+  const ctx = await browser.newContext(viewport ? { viewport } : {}), pg = await ctx.newPage();
+  if (store) await ctx.addInitScript(s => { for (const k in s) localStorage.setItem(k, s[k]); }, store);
   const errors = [];
   pg.on('pageerror', e => errors.push('pageerror: ' + e.message));
   pg.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push('console: ' + m.text()); });
@@ -31,8 +34,15 @@ async function open(browser, file, { run, auth, query = '' } = {}) {
       if (run === 'abort') return route.abort('connectionrefused');
       return route.fulfill(Object.assign({ status: 200, contentType: 'application/javascript' }, run || { body: 'window.CONCEPTS_RUN = ' + RUN + ';' }));
     }
-    if (u.pathname === '/concepts-data.js') return route.fulfill({ status: 200, contentType: 'application/javascript', body: 'window.DESK_EXTRAS = { notes: [] };' });
-    if (u.pathname === '/api/v1/auth/state') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(auth || { enabled: false, user: null }) });
+    if (u.pathname === '/concepts-data.js') {
+      if (data === 'abort') return route.abort('connectionrefused');
+      return route.fulfill(Object.assign({ status: 200, contentType: 'application/javascript', body: 'window.DESK_EXTRAS = { notes: [] };' }, data || {}));
+    }
+    if (u.pathname === '/api/v1/auth/state') {
+      if (auth === 'hang') return;  // не отвечает никогда: страница не должна ждать
+      if (auth && auth.status) return route.fulfill({ status: auth.status, contentType: 'application/json', body: '{}' });
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(auth || { enabled: false, user: null }) });
+    }
     if (u.pathname.startsWith('/api/')) return route.fulfill({ status: 404, contentType: 'application/json', body: '{"detail":"нет в тесте"}' });
     if (u.pathname === '/login.html') return route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>Вход</title><p>вход</p>' });
     const f = path.join(ROOT, decodeURIComponent(u.pathname));
@@ -72,9 +82,63 @@ test('#309 и #308 в браузере', { skip: pw ? false : 'нет Playwright
       assert.strictEqual(s.source, 'error');
       assert.ok(s.fail.includes('прогон #7'), s.fail);
       assert.ok(await pg.$('.k-loadfail [data-a=retry]'));
-      assert.strictEqual(await pg.getAttribute('.k-loadfail a', 'href'), '/concepts/c01-cockpit.html?demo=1');
+      assert.strictEqual(await pg.getAttribute('.k-loadfail [data-a=demo]', 'href'), '/concepts/c01-cockpit.html?demo=1');
+      assert.strictEqual(await pg.getAttribute('.k-loadfail [data-a=index]', 'href'), 'index.html');
       assert.deepStrictEqual(errors, []);
       await ctx.close();
+    });
+    await t.test('«Последний прогон»: снимает run_id / as_of из адреса и выбор desk.run.v1', async () => {
+      const saved = JSON.stringify({ sel: { run_id: '7' }, at: Date.now() });
+      let { pg, ctx } = await open(browser, 'c02-risk-ladder.html', { run: { status: 500, body: '' }, query: '?run_id=7&x=1#k', store: { 'desk.run.v1': saved } });
+      assert.strictEqual(await pg.getAttribute('.k-loadfail [data-a=latest]', 'href'), '/concepts/c02-risk-ladder.html?x=1#k');
+      await pg.click('.k-loadfail [data-a=latest]');
+      await pg.waitForURL(u => !/run_id/.test(u));
+      await ctx.close();
+      // выбор только из localStorage (адрес без run_id): ссылка тоже есть, щелчок очищает desk.run.v1
+      ({ pg, ctx } = await open(browser, 'c02-risk-ladder.html', { run: { status: 500, body: '' }, store: { 'desk.run.v1': saved } }));
+      assert.ok((await look(pg)).fail.includes('прогон #7'));
+      await pg.evaluate(() => { document.querySelector('.k-loadfail [data-a=latest]').href = '#stay'; });  // без перехода: addInitScript снова записал бы выбор
+      await pg.click('.k-loadfail [data-a=latest]');
+      assert.strictEqual(await pg.evaluate(() => localStorage.getItem('desk.run.v1')), null);
+      await ctx.close();
+    });
+    await t.test('auth/state не отвечает: полоса уже на экране, остаётся «Данные не загрузились»', async () => {
+      const t0 = Date.now();
+      const { pg, ctx, errors } = await open(browser, 'c01-cockpit.html', { run: { status: 500, body: '' }, auth: 'hang' });
+      assert.ok(Date.now() - t0 < 2500, 'страница не ждёт auth/state');
+      assert.strictEqual((await look(pg)).source, 'error');
+      await pg.waitForTimeout(3300);  // таймаут запроса входа (3 с) прошёл
+      const s = await look(pg);
+      assert.strictEqual(s.source, 'error');
+      assert.ok(s.fail.includes('Данные не загрузились'));
+      assert.deepStrictEqual(errors, []);
+      await ctx.close();
+    });
+    await t.test('auth/state ответил 500: «Данные не загрузились»; 401 — «войдите снова» и вход', async () => {
+      let { pg, ctx } = await open(browser, 'c01-cockpit.html', { run: { status: 500, body: '' }, auth: { status: 500 } });
+      assert.strictEqual((await look(pg)).source, 'error');
+      await ctx.close();
+      ({ pg, ctx } = await open(browser, 'c01-cockpit.html', { run: { status: 401, body: '' }, auth: { status: 401 } }));
+      await pg.waitForURL(/\/login\.html/);
+      await ctx.close();
+    });
+    await t.test('полоса — в теме пользователя (светлая) и с полями 16 px на 390 px', async () => {
+      const { pg, ctx } = await open(browser, 'c01-cockpit.html', { run: { status: 500, body: '' }, store: { 'concepts-theme': 'light' }, viewport: { width: 390, height: 800 } });
+      assert.strictEqual(await pg.evaluate(() => document.documentElement.getAttribute('data-theme')), 'light');
+      const r = await pg.evaluate(() => { const b = document.querySelector('.k-loadfail').getBoundingClientRect(); return [b.left, innerWidth - b.right, document.documentElement.scrollWidth, innerWidth]; });
+      assert.ok(r[0] >= 16 && r[1] >= 16, 'поля ' + r);
+      assert.strictEqual(r[2], r[3], 'без прокрутки вбок');
+      await ctx.close();
+    });
+    await t.test('не загрузился только /concepts-data.js: монитор на прогоне, причина — в «Чего нет в данных»', async () => {
+      for (const data of [{ status: 500, body: '' }, 'abort']) {
+        const { pg, ctx, errors } = await open(browser, 'c01-cockpit.html', { data });
+        const s = await look(pg);
+        assert.strictEqual(s.source, 'real'); assert.strictEqual(s.fail, null);
+        assert.ok(await pg.evaluate(() => MOCK.notes.some(n => n.includes('/concepts-data.js не загрузился'))));
+        assert.deepStrictEqual(errors, []);
+        await ctx.close();
+      }
     });
     await t.test('401 при включённом входе: переход на /login.html?next=эта страница', async () => {
       const { pg, ctx } = await open(browser, 'c06-launchpad.html', { run: { status: 401, body: '{"detail":"нужен вход"}' }, auth: { enabled: true, user: null }, query: '?run_id=3' });
@@ -101,7 +165,7 @@ test('#309 и #308 в браузере', { skip: pw ? false : 'нет Playwright
       s = await look(r.pg);
       assert.strictEqual(s.source, 'empty'); assert.strictEqual(s.fail, null); await r.ctx.close();
     });
-    await t.test('#308: прогон без кривой RUONIA и без точек КС — C06 и C12 не падают, вместо графика «нет»', async () => {
+    await t.test('#308: прогон без кривой RUONIA и без точек КС — C05, C06, C09, C12 не падают, «вчера» без выдуманных точек', async () => {
       const D = JSON.parse(RUN);
       delete D.CURVES['RUB RUONIA'];
       D.CURVES['RUB KEY'].pts = D.CURVES['RUB KEY'].pts.map(() => null);
@@ -120,8 +184,22 @@ test('#309 и #308 в браузере', { skip: pw ? false : 'нет Playwright
       ({ pg, ctx, errors } = await open(browser, 'c12-terminal.html', { run }));
       const inp = await pg.$('input');
       await inp.fill('кривая'); await inp.press('Enter'); await pg.waitForTimeout(300);
+      assert.ok((await look(pg)).text.includes('кривой RUONIA нет в этом прогоне'));
       assert.deepStrictEqual(errors, []);
       await ctx.close();
+      // C05 «Кривые RUB» и C09 «Кривые» (уровни): линия «вчера» есть только там, где есть «сегодня»; null − Δ давало
+      // точки около 0 % (−Δ/100) — ставки здесь все выше 1 %
+      for (const [file, id] of [['c05-morning-brief.html', 'curveChart'], ['c09-market.html', 'curves']]) {
+        ({ pg, ctx, errors } = await open(browser, file, { run }));
+        const ser = await pg.evaluate(id => echarts.getInstanceByDom(document.getElementById(id)).getOption().series
+          .filter(x => x.type === 'line').map(x => [x.name, x.data.map(v => v && typeof v === 'object' ? v.value : v)]), id);
+        assert.ok(ser.length >= 4, file + ': линии ' + ser.map(x => x[0]));
+        for (const [name, d] of ser) assert.ok(d.every(v => v == null || v > 1), file + ' ' + name + ': ' + d);
+        const ruo = ser.filter(x => /RUONIA/.test(x[0]));
+        assert.ok(ruo.length && ruo.every(x => x[1].every(v => v == null)), file + ': RUONIA нет — и «вчера» нет');
+        assert.deepStrictEqual(errors, [], file);
+        await ctx.close();
+      }
     });
   } finally {
     await browser.close();
