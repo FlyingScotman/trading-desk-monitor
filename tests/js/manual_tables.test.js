@@ -267,8 +267,8 @@ t('#131: таблица с data-vk получает кнопки сама; уш�
 t('#131: у всех таблиц мониторов есть CSV; ключи раскладки уникальны среди K.table и ручных таблиц', () => {
   const dir = path.join(__dirname, '..', '..', 'prototypes', 'concepts'), seen = new Map();
   const add = (k, where) => { assert.ok(!seen.has(k), 'повтор ключа ' + k + ': ' + where + ' и ' + seen.get(k)); seen.set(k, where); };
-  // таблицы, которые CSV не нужен: справка команд терминала; eventsTable C08 не вызывается
-  const exempt = { 'c12-terminal.html': ['<table class="k-tbl help">'], 'c08-calendar.html': ['<table class="mini">'], 'c03-blotter.html': ['<table class="k-tbl">'] };
+  // таблицы, которые CSV не нужен: справка команд терминала
+  const exempt = { 'c12-terminal.html': ['<table class="k-tbl help">'], 'c03-blotter.html': ['<table class="k-tbl">'] };
   const files = fs.readdirSync(dir).filter(f => /^c\d+.*\.html$/.test(f));
   files.forEach(f => {
     const src = fs.readFileSync(path.join(dir, f), 'utf8');

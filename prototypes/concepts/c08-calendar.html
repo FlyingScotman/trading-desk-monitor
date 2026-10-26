@@ -183,11 +183,6 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
   }
   function closeSheet() { if (sheetEl) { sheetEl.scrim.remove(); sheetEl.d.remove(); sheetEl = null; } }
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && sheetEl && document.querySelectorAll('.k-drawer').length === 1) closeSheet(); }, true);
-  function eventsTable(a, o) {
-    return '<table class="mini"><thead><tr><th>Дата</th><th>Событие</th><th>Бумага</th>' + (o.rating ? '<th>Рейтинг</th>' : '<th>Вал</th>') + '<th class="n">Сумма</th><th class="n">' + o.unitCol + '</th></tr></thead><tbody>' +
-      a.map(x => '<tr' + (x.pos ? ' data-card="' + x.pos + '"' : '') + '><td>' + f.date(x.date) + '</td><td><span class="kb" style="--c:' + KC[x.kind] + '">' + KN[x.kind] + '</span></td><td>' + esc(x.name) + (x.held ? ' <span class="held">в портфеле</span>' : '') + '</td>' +
-        (o.rating ? '<td class="mut">' + esc(x.rating) + '</td>' : '<td>' + K.ccyTag(x.ccy) + '</td>') + '<td class="n">' + f.mn(x.amt, 1) + '<span class="mut3">mm ' + x.ccy + '</span></td><td class="n"><b>' + o.fmt(x.val) + '</b></td></tr>').join('') + '</tbody></table>';
-  }
 
   // ---------- панель управления ----------
   const bar = document.getElementById('bar');
