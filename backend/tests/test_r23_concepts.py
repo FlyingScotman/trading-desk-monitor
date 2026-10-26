@@ -308,14 +308,17 @@ def test_market_fixture_is_the_one_shifted():
 
 
 def test_serve_builds_the_newest_runs_bodies_ahead(desk, store_url, monkeypatch):
+    from desk.api import concepts_run
     from desk.api.app import warm_bodies
 
     app = create_app(store_url)
-    assert warm_bodies(app) == ["desk", "extras", "history", "calendar"]
+    assert warm_bodies(app) == ["desk", "run", "extras", "history", "calendar"]
     assert warm_bodies(app) == []  # nothing changed
     calls = []
     monkeypatch.setattr(concepts, "extras", lambda *a, **kw: calls.append(1))
     assert TestClient(app).get("/concepts-data.js").status_code == 200 and not calls  # served from the cache
+    monkeypatch.setattr(concepts_run, "assemble", lambda *a, **kw: calls.append(1))
+    assert TestClient(app).get("/concepts-run.js").status_code == 200 and not calls
 
 
 def test_desk_data_js_cached_but_not_stored_by_the_browser(desk, store_url, monkeypatch):
