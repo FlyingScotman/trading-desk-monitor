@@ -920,12 +920,12 @@
       let cum = 0;
       // размер: у позиции — номинал в её валюте и MV, у группы — MV её позиций (у деривативов MV — их PV)
       const mvOf = x => x.n.reduce((s, r) => s + (r.p.mv || 0), 0), mvTot = list.reduce((s, x) => s + mvOf(x), 0);
-      body.innerHTML = '<table class="k-tbl"><thead><tr><th></th><th>' + (dim === 'pos' ? 'Позиция' : D[1][0].toUpperCase() + D[1].slice(1)) + '</th>' + (dim === 'pos' ? '<th>Книга</th><th>Ccy</th><th class="n" title="в валюте позиции">Номинал</th>' : '<th class="n">Позиций</th>') + '<th class="n">MV, mm ₽</th><th class="n">Вклад</th><th style="width:120px"></th><th class="n">Доля</th><th class="n">Накопл.</th></tr></thead><tbody>' +
+      body.innerHTML = '<table class="k-tbl"><thead><tr><th></th><th>' + (dim === 'pos' ? 'Позиция' : D[1][0].toUpperCase() + D[1].slice(1)) + '</th>' + (dim === 'pos' ? '<th>Книга</th><th>Ccy</th><th class="n" title="в валюте позиции" data-csv="Номинал, mm">Номинал</th>' : '<th class="n">Позиций</th>') + '<th class="n">MV, mm ₽</th><th class="n">Вклад</th><th style="width:120px"></th><th class="n">Доля</th><th class="n">Накопл.</th></tr></thead><tbody>' +
         list.map(x => {
           cum += Math.abs(x.v);
           const stripe = dim === 'issuer' || dim === 'pos' ? K.issuerColor(x.p.issuer) : dim === 'ccy' ? K.ccyColor(x.k) : 'transparent';
           return '<tr class="row" data-k="' + esc(x.k) + '"><td class="stripe" style="background:' + stripe + '"></td><td style="max-width:240px;overflow:hidden;text-overflow:ellipsis" title="' + esc(x.label + (dim === 'pos' ? ' · ' + x.p.issuerName : '')) + '">' + esc(x.label) + (dim === 'pos' ? ' <span class="mut3">' + esc(x.p.issuerName) + '</span>' : '') + '</td>' +
-            (dim === 'pos' ? '<td class="mut">' + esc(x.p.book) + '</td><td>' + K.ccyTag(x.p.ccy) + '</td><td class="n">' + f.mn(x.p.notional, 2) + '<span class="mut3">mm ' + esc(x.p.ccy) + '</span></td>' : '<td class="n mut">' + x.n.length + '</td>') +
+            (dim === 'pos' ? '<td class="mut">' + esc(x.p.book) + '</td><td>' + K.ccyTag(x.p.ccy) + '</td><td class="n"' + K.csvv(() => f.mn(x.p.notional, 2)) + '>' + f.mn(x.p.notional, 2) + '<span class="mut3">mm ' + esc(x.p.ccy) + '</span></td>' : '<td class="n mut">' + x.n.length + '</td>') +
             '<td class="n">' + (dim === 'pos' && x.p.mv == null ? '—' : f.mn(mvOf(x), 1)) + '</td>' +
             '<td class="n ' + f.cls(x.v) + '">' + fmt(x.v) + '</td><td>' + K.bar(x.v, max) + '</td><td class="n mut">' + Math.round(Math.abs(x.v) / absTot * 100) + '%</td><td class="n mut3">' + Math.round(cum / absTot * 100) + '%</td></tr>';
         }).join('') + '</tbody><tfoot><tr><td></td><td>Итого</td><td colspan="' + (dim === 'pos' ? 3 : 1) + '"></td><td class="n">' + f.mn(mvTot, 1) + '</td><td class="n ' + f.cls(tot) + '">' + fmt(tot) + '</td><td colspan="3"></td></tr></tfoot></table>';
@@ -1556,10 +1556,12 @@
     [...tr.cells].forEach(c => { out.push(c); for (let i = 1; i < (c.colSpan || 1); i++) out.push(null); });
     return out;
   };
-  // подпись колонки для CSV: единица второй строкой шапки (span.k-thu, #105) — через запятую, как у K.table
+  // подпись колонки для CSV: единица второй строкой шапки (span.k-thu, #105) — через запятую, как у K.table;
+  // значок фильтра (span.k-flt, «⏷») и метка сортировки (span.si, «▲1») — оформление, в CSV не идут (#258)
+  const TH_DECOR = /<span class="(?:k-flt|si)\b[^"]*"[^>]*>[\s\S]*?<\/span>/g;
   K.thText = th => {
-    const m = /<span class="k-thu">([\s\S]*?)<\/span>/.exec(th.innerHTML || '');
-    const l = K.htmlText((th.innerHTML || '').replace(/<span class="k-thu">[\s\S]*?<\/span>/g, '')), u = m ? K.htmlText(m[1]) : '';
+    const x = (th.innerHTML || '').replace(TH_DECOR, ''), m = /<span class="k-thu">([\s\S]*?)<\/span>/.exec(x);
+    const l = K.htmlText(x.replace(/<span class="k-thu">[\s\S]*?<\/span>/g, '')), u = m ? K.htmlText(m[1]) : '';
     return u && !l.includes(',') ? l + ', ' + u : l;
   };
   // «(1.5)» → «-1.5» в элементе с меткой data-kneg (K.accMark, #222) или k-accn: скобка может стоять и во вложенном
@@ -1587,17 +1589,29 @@
     const hd = rowsOf(table.tHead), hr = hd.length ? hd[hd.length - 1] : null;
     const skip = tr => tr.hidden || (tr.dataset && tr.dataset.csvSkip) || (tr.style && tr.style.display === 'none') || (tr.cells.length === 1 && /(^|\s)k-empty(\s|$)/.test(tr.cells[0].className || ''));
     const body = [...table.tBodies].reduce((a, b) => a.concat(rowsOf(b)), []).concat(rowsOf(table.tFoot)).filter(tr => !skip(tr)).map(cellsOf);
+    // подписи CSV у заголовка с data-csv="a|b": по одной на колонку экрана; лишние (больше, чем colspan) — колонки
+    // CSV сразу за последней колонкой заголовка (#258: «Номинал, mm|Вал» — число и валюта по отдельности)
     let head = null;
+    const extra = [];  // extra[i] — подписи колонок CSV, которые идут за колонкой экрана i
     if (hr) {
       head = [];
       [...hr.cells].forEach(c => {
         const span = c.colSpan || 1, parts = c.dataset && c.dataset.csv ? c.dataset.csv.split('|') : null;
         for (let i = 0; i < span; i++) head.push(parts ? parts[i] || '' : i ? '' : K.thText(c));
+        if (parts && parts.length > span) extra[head.length - 1] = parts.slice(span);
       });
     }
     const n = Math.max(head ? head.length : 0, ...body.map(r => r.length), 0);
     const keep = [];
-    for (let i = 0; i < n; i++) if ((head && head[i]) || body.some(r => tx(r[i]))) keep.push(i);
+    for (let i = 0; i < n; i++) if ((head && head[i]) || extra[i] || body.some(r => tx(r[i]))) keep.push(i);
+    // ячейка с data-csv="число|валюта" (K.csvv) — значения CSV вместо текста экрана («250mm RUB» → 250 и RUB, #258):
+    // первое — в колонку ячейки (у числовой — числом), остальные — в дополнительные колонки заголовка
+    const cellVals = (c, x) => {
+      const d = (c && c.dataset) || {};
+      if (d.csv == null) return [one(c)].concat(Array(x).fill(''));
+      const parts = String(d.csv).split('|');
+      return [K.csvCell(parts[0], /(^|\s)n(\s|$)/.test(c.className || ''), d.v)].concat(Array.from({ length: x }, (_, j) => K.csvCell(parts[j + 1] || '', false)));
+    };
     const one = c => {
       if (!c) return '';
       const num = /(^|\s)n(\s|$)/.test(c.className || ''), d = c.dataset || {};
@@ -1610,8 +1624,13 @@
       const t = K.negFmt !== 'acc' ? tx(c) : num ? K.accToMinus(tx(c)) : K.htmlText(K.accMarkedToMinus(c.innerHTML));
       return d.date ? K.csvDateCell(d.date, t, num) : K.csvCell(t, num, d.v);
     };
-    return K.csvBuild(K.u(K.csvTitle(opts)), head ? keep.map(i => K.csvLabel(K.u(head[i] || ''))) : null, body.map(r => keep.map(i => one(r[i])).join(',')));
+    const cols = i => [head[i] || ''].concat(extra[i] || []);
+    return K.csvBuild(K.u(K.csvTitle(opts)), head ? [].concat(...keep.map(cols)).map(l => K.csvLabel(K.u(l))) : null,
+      body.map(r => [].concat(...keep.map(i => cellVals(r[i], extra[i] ? extra[i].length : 0))).join(',')));
   };
+  // атрибут data-csv ячейки ручной таблицы (K.tableCsv, #258): fn() — значение или массив значений CSV; считается в
+  // формате «−1» с обычным минусом, так что CSV не зависит от формата отрицательных на экране
+  K.csvv = fn => ' data-csv="' + esc([].concat(K.withNegFmt('minus', fn)).join('|').replace(/−/g, '-')) + '"';
   K.tableTools = (t, opts) => {
     const table = t && (t.tagName === 'TABLE' ? t : t.querySelector('table'));
     if (!table) return null;
@@ -1895,7 +1914,8 @@
     offer: { key: 'offer', label: 'Оферта', date: true, fmt: v => v ? f.date(v) : '<span class="mut3">—</span>' },
     offerKind: { key: 'offerKind', label: 'Вид оферты', filter: r => K.offerKindText(r.offerKind) || '—', val: r => r.offer ? r.offerKind : null, fmt: v => v ? esc(K.offerKindText(v)) : '<span class="mut3">—</span>' },
     tenor: { key: 'tenor', label: 'Срок', num: true, fmt: v => f.yrs(v), title: 'до оферты, если есть, иначе до погашения' },
-    notional: { key: 'notional', label: 'Номинал', num: true, fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', title: 'в валюте бумаги' },
+    // в CSV — число в mm валюты бумаги («Номинал, mm»), валюта — в колонке «Вал» (#258, как «Сумма» C08)
+    notional: { key: 'notional', label: 'Номинал', num: true, unit: 'mm', fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', csvFmt: v => f.mn(v, 2), title: 'в валюте бумаги' },
     mv: { key: 'mv', label: 'MV, mm ₽', num: true, fmt: v => f.mn(v, 0), sum: true, unit: 'mm ₽', sumFmt: v => f.mn(v, 0) },
     price: { key: 'price', label: 'Цена', num: true, unit: '% ном.', fmt: v => f.px(v) },
     ytm: { key: 'ytm', label: 'Дох.', num: true, fmt: v => f.pct(v) },
@@ -1982,19 +2002,21 @@
   K.legsHtml = p => {
     const L = p.legs || [], any = k => L.some(l => l[k] != null && l[k] !== '');
     const LEG = { single: '—', near: 'ближняя', far: 'дальняя' }, SET = { deliverable: 'поставка', cash: 'расчётный (NDF)' };
-    const amt = (c, v) => v == null ? '—' : f.mn(v, 2) + ' <small>mm ' + esc(c || '') + '</small>';
+    const amt = (c, v) => v == null ? '—' : f.mn(v, 2) + ' <small>mm ' + esc(c || '') + '</small>', amtCsv = v => v == null ? '' : f.mn(v, 2);
     const rate = v => v == null ? '—' : f.n(v, 4);
     const fwd = l => l.fwdRate != null ? l.fwdRate : l.forwardRate;
     const cols = [['Нога', l => esc(LEG[l.leg] || l.leg || '—')], ['Валютирование', l => l.valueDate ? f.date(l.valueDate) : '—', l => l.valueDate],
-      ['Покупка', l => amt(l.buyCcy, l.buyAmount)], ['Продажа', l => amt(l.sellCcy, l.sellAmount)],
+      // в CSV сумма — числом в mm («Покупка, mm»), валюта — своей колонкой за ней (#258)
+      ['Покупка', l => amt(l.buyCcy, l.buyAmount), null, ['Покупка, mm', 'Вал покупки'], l => [amtCsv(l.buyAmount), l.buyCcy || '']],
+      ['Продажа', l => amt(l.sellCcy, l.sellAmount), null, ['Продажа, mm', 'Вал продажи'], l => [amtCsv(l.sellAmount), l.sellCcy || '']],
       ['Курс сделки', l => rate(l.contractRate) + (l.rateQuote ? ' <small>' + esc(l.rateQuote) + '</small>' : '')]]
       .concat(L.some(l => fwd(l) != null) ? [['Форвард', l => rate(fwd(l))]] : [])
       .concat(any('points') ? [['Пойнты', l => l.points == null ? '—' : f.s(l.points, 4)]] : [])
       .concat(any('settlement') ? [['Расчёт', l => esc(SET[l.settlement] || l.settlement || '—') + (l.settlementCcy ? ' <small>в ' + esc(l.settlementCcy) + '</small>' : '')]] : [])
       .concat(any('fixingDate') ? [['Фиксинг', l => l.fixingDate ? f.date(l.fixingDate) + (l.fixingSource ? ' <small>' + esc(l.fixingSource) + '</small>' : '') + (l.fixingRate != null ? ' <small>' + rate(l.fixingRate) + '</small>' : '') : '—']] : [])
       .concat(any('paymentDate') ? [['Выплата', l => l.paymentDate ? f.date(l.paymentDate) : '—', l => l.paymentDate]] : []);
-    return '<div class="k-tbl-wrap"><table class="k-tbl k-compact k-legs"><thead><tr>' + cols.map(c => '<th' + (c[0] === 'Нога' || c[0] === 'Расчёт' ? '' : ' class="n"') + '>' + c[0] + '</th>').join('') + '</tr></thead><tbody>' +
-      L.map(l => '<tr>' + cols.map(c => '<td' + (c[0] === 'Нога' || c[0] === 'Расчёт' ? '' : ' class="n"') + (c[2] && c[2](l) ? ' data-date="' + esc(c[2](l)) + '"' : '') + '>' + c[1](l) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>';
+    return '<div class="k-tbl-wrap"><table class="k-tbl k-compact k-legs"><thead><tr>' + cols.map(c => '<th' + (c[0] === 'Нога' || c[0] === 'Расчёт' ? '' : ' class="n"') + (c[3] ? ' data-csv="' + esc(c[3].join('|')) + '"' : '') + '>' + c[0] + '</th>').join('') + '</tr></thead><tbody>' +
+      L.map(l => '<tr>' + cols.map(c => '<td' + (c[0] === 'Нога' || c[0] === 'Расчёт' ? '' : ' class="n"') + (c[2] && c[2](l) ? ' data-date="' + esc(c[2](l)) + '"' : '') + (c[4] ? K.csvv(() => c[4](l)) : '') + '>' + c[1](l) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>';
   };
 
   // ---------- карточка позиции ----------

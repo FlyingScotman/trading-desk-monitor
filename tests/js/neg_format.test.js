@@ -206,4 +206,15 @@ t('шапка: кнопка формата отрицательных чисел
   assert.ok(src.includes('data-a="numfmt"') && /K\.setNegFmt\(K\.negFmt === 'acc' \? 'minus' : 'acc'\)/.test(src));
 });
 
+t('#262: C16 перерисовывается при смене формата отрицательных — из последнего ответа, без нового запроса', () => {
+  const src = P('concepts/c16-ocp.html');
+  assert.ok(/function render\(d\) \{\n\s+last = d;/.test(src), 'render запоминает ответ');
+  assert.ok(src.includes("K.on('numfmt', () => { if (last) render(last); });"), 'подписка на numfmt');
+  // подписчики 'numfmt' вызываются K.setNegFmt
+  const { K } = load(new Map());
+  let calls = 0; K.on('numfmt', () => calls++);
+  K.setNegFmt(K.negFmt === 'acc' ? 'minus' : 'acc');
+  assert.strictEqual(calls, 1);
+});
+
 console.log(n + ' tests passed');

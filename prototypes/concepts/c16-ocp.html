@@ -62,7 +62,9 @@
     }).then(render).catch(e => e.forbidden ? msg('Нужно войти в монитор.') : msg('Не удалось загрузить ОВП прогона #' + esc(M.run.id) + ': ' + esc(e.message)));
   }
 
+  let last = null;  // последний ответ: смена формата отрицательных перерисовывает его без нового запроса (#262)
   function render(d) {
+    last = d;
     const C = {}; (d.components || []).forEach(c => { C[c.key] = c.name; });
     const keys = (d.components || []).map(c => c.key);
     const inRep = new Set(((d.policy || {}).report_components) || keys);
@@ -172,6 +174,8 @@
   })();
 
   K.commands && K.commands([{ label: 'ОВП: обновить', run: load }]);
+  // формат отрицательных «(1) / −1» (#153): перерисовать в новом формате, как остальные мониторы (#262)
+  K.on('numfmt', () => { if (last) render(last); });
   load();
 })();
 </script>

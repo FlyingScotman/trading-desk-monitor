@@ -23,10 +23,10 @@ function el(tag) {
     querySelectorAll() { return []; }, addEventListener() {}, setAttribute() {}, getBoundingClientRect: () => ({ width: 80 }) };
   return e;
 }
-// таблица из описания строк: [[html | {h, cls, span, date, v}]]
+// таблица из описания строк: [[html | {h, cls, span, date, v, k, csv}]]
 function table(spec) {
   const T = el('table');
-  const cell = (tag, c) => { const x = el(tag); if (typeof c === 'string') x.innerHTML = c; else { x.innerHTML = c.h || ''; x.className = c.cls || ''; x.colSpan = c.span || 1; if (c.date) x.dataset.date = c.date; if (c.v) x.dataset.v = c.v; if (c.k) x.dataset.k = c.k; } if (!x.colSpan) x.colSpan = 1; return x; };
+  const cell = (tag, c) => { const x = el(tag); if (typeof c === 'string') x.innerHTML = c; else { x.innerHTML = c.h || ''; x.className = c.cls || ''; x.colSpan = c.span || 1; if (c.date) x.dataset.date = c.date; if (c.v) x.dataset.v = c.v; if (c.k) x.dataset.k = c.k; if (c.csv != null) x.dataset.csv = c.csv; } if (!x.colSpan) x.colSpan = 1; return x; };
   const row = (tag, cells, o) => { const r = el('tr'); r.cells = cells.map(c => cell(tag, c)); r.cells.forEach(c => r.appendChild(c)); Object.assign(r, o || {}); return r; };
   const sec = rows => rows ? { rows } : null;
   T.tHead = spec.head ? sec(spec.head.map(h => row('th', h))) : null;
@@ -360,6 +360,46 @@ t('#131: у всех таблиц мониторов есть CSV; ключи р
     [...src.matchAll(/K\.(riskMatrix|bucketTable)\(([^;]*);/g)].forEach(m => assert.ok(/viewKey: '/.test(m[2]), f + ': ' + m[1] + ' без viewKey'));
   });
   assert.ok(seen.size >= 50, 'ключей найдено: ' + seen.size);
+});
+
+t('#258: значок фильтра и метка сортировки в заголовке — не в CSV', () => {
+  const { K } = load(new Map());
+  const T = table({ head: [['Эмитент' + K.fltIcon({ key: 'issuer', filter: true }, { issuer: new Set(['x']) }), 'Вал' + K.fltIcon({ key: 'ccy', filter: true }, {}) + '<span class="si">▲1</span>', 'Бумага']], body: [['A', 'RUB', 'Б']] });
+  assert.strictEqual(K.tableCsv(T, {}).split('\r\n')[2], 'Эмитент,Вал,Бумага');
+  // C03: заголовок блоттера — со значком фильтра (K.fltIcon) и меткой сортировки (span.si)
+  const c03 = P('concepts/c03-blotter.html');
+  assert.ok(/K\.fltIcon\(c, st\.filters\) \+ '<\/th>'/.test(c03) && /'<span class="si">'/.test(c03));
+});
+
+t('#258: число с единицей и валютой — в CSV числом, единица в заголовке, валюта своей колонкой', () => {
+  const { K } = load(new Map());
+  const attr = s => K.htmlText(/ data-csv="([^"]*)"/.exec(s)[1]);  // значение атрибута, как его отдаёт dataset
+  for (const fm of ['acc', 'minus']) {
+    K.negFmt = fm;
+    const v = attr(K.csvv(() => [K.f.mn(-1.25e9, 0), 'RUB']));
+    assert.strictEqual(v, '-1,250|RUB', fm + ': значения data-csv — в формате «−1»');
+    // ручная таблица: заголовок «Номинал, mm|Вал» — две колонки CSV, ячейка с data-csv — число и валюта
+    const T = table({ head: [['Дата', { h: 'Номинал', cls: 'n', csv: 'Номинал, mm|Вал' }, { h: 'Цена', cls: 'n' }]],
+      body: [[{ h: '11.03.27', date: '2027-03-11' }, { h: K.f.mn(-1.25e9, 0) + '<span class="mut3">mm RUB</span>', cls: 'n', csv: v }, { h: '99.5', cls: 'n' }],
+        [{ h: '20.04.27', date: '2027-04-20' }, { h: '450<span class="mut3">mm USD</span>', cls: 'n', csv: '450|USD' }, { h: '—', cls: 'n' }]],
+      foot: [['Итого', { h: '', cls: 'n' }, { h: '', cls: 'n' }]] });
+    same(K.tableCsv(T, {}).split('\r\n').slice(2, 6), ['Дата,"Номинал, mm",Вал,Цена', '03/11/2027,-1250,RUB,99.5', '04/20/2027,450,USD,', 'Итого,,,'], fm);
+    // K.table: «Номинал» позиций (K.posCols.notional) — как «Сумма» C08 (#257): число в mm, валюта — в колонке «Вал»
+    const api = K.table(el(), { rows: [{ id: 'a', ccy: 'RUB', notional: -9e9 }, { id: 'b', ccy: 'USD', notional: 25e6 }], search: false, viewKey: 'c99-ntl-' + fm, columns: K.cols(['ccy', 'notional']) });
+    same(api.csv().split('\r\n').slice(2, 5), ['Вал,"Номинал, mm"', 'RUB,-9000.00', 'USD,25.00'], fm);
+    // ноги сделки в карточке: «Покупка» и «Продажа» — число в mm и валюта отдельно
+    const legs = K.legsHtml({ legs: [{ leg: 'near', valueDate: '2026-11-02', buyCcy: 'USD', buyAmount: 1e6, sellCcy: 'RUB', sellAmount: 9e7, contractRate: 90 }, { leg: 'far', buyCcy: 'RUB', buyAmount: null, sellCcy: 'USD', sellAmount: -1.5e6 }] });
+    assert.ok(legs.includes('<th class="n" data-csv="Покупка, mm|Вал покупки">Покупка</th><th class="n" data-csv="Продажа, mm|Вал продажи">Продажа</th>'), fm);
+    assert.ok(legs.includes(' data-csv="1.00|USD">1.00 <small>mm USD</small>') && legs.includes(' data-csv="90.00|RUB">'), fm);
+    assert.ok(legs.includes(' data-csv="|RUB">—') && legs.includes(' data-csv="-1.50|USD">'), fm + ': пустая сумма — пустая ячейка, отрицательная — с минусом');
+  }
+  K.negFmt = 'acc';
+  // страницы: C08 «Оферты и коллы», C13 «События эмитента», C03 «Номинал», разбор вклада
+  const c08 = P('concepts/c08-calendar.html'), c13 = P('concepts/c13-issuers.html'), c03 = P('concepts/c03-blotter.html'), kit = P('concepts/lib/kit.js');
+  assert.ok(c08.includes('<th class="n" data-csv="Номинал, mm|Вал">Номинал</th>') && c08.includes(`<td class="n"' + K.csvv(() => [f.mn(p.notional, 0), p.ccy]) + '>' + f.mn(p.notional, 0) + '<span class="mut3">mm '`));
+  assert.ok(c13.includes('<th class="n" data-csv="Сумма, mm|Вал">Сумма</th>') && c13.includes(`<td class="n"' + K.csvv(() => [f.mn(c.amount, 1), c.ccy]) + '>'`));
+  assert.ok(/notional: \{[^\n]*csvHead: 'Номинал, mm', csvFmt: v => f\.mn\(v, 2\)/.test(c03) && c03.includes("(c.csvHead ? ' data-csv=\"' + esc(c.csvHead) + '\"' : '')") && c03.includes('(c.csvFmt ? K.csvv(() => c.csvFmt(v, r)) : \'\')'));
+  assert.ok(kit.includes('<th class="n" title="в валюте позиции" data-csv="Номинал, mm">Номинал</th>') && kit.includes(`<td class="n"' + K.csvv(() => f.mn(x.p.notional, 2)) + '>'`), 'разбор вклада');
 });
 
 console.log(n + ' tests passed');
