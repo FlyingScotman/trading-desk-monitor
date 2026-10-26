@@ -163,7 +163,7 @@
       ', КС ' + dvx('DV01 КС', L, p => p.dv01ByCurve['RUB KEY']) + (M.ofzView === 'kbd' ? ', КБД ' + dvx('DV01 КБД', L, p => p.dv01ByCurve['RUB OFZ'])
         : '; базис ОФЗ ' + dvx('Базис ОФЗ − RUONIA', L, 'basis01')) + '; спред ОФЗ к КБД ' + dvx('Спред ОФЗ к КБД', L, 'ofzSpr01') + '; CS01 ' + dvx('CS01', L, 'cs01') +
       '. ' + K.hint('Кэрри', K.tips.carry) + ' ' + K.d({ title: 'Кэрри за день (без фондирования)', unit: 'тыс ₽', fmt: f.ks, list: L, val: 'carryDay' }) + '&nbsp;тыс ₽ в день, ' +
-      K.hint('фондирование', K.tips.funding) + ' ' + K.d({ title: 'Фондирование за день', unit: 'тыс ₽', fmt: f.ks, list: L, val: 'fundingDay' }) + '&nbsp;тыс ₽ в день.</p>' +
+      K.hint('фондирование', K.tips.funding) + ' ' + K.d({ title: 'Фондирование за день', unit: 'тыс ₽', fmt: f.ks, list: L, val: 'fundingDay', nullable: true }) + '&nbsp;тыс ₽ в день.</p>' +
       '<div class="factors">' + K.PNL_FACTORS.map(([key, t]) =>
         '<div class="factor"><div class="l">' + K.hint(t, K.tips[key]) + '</div><div class="v">' + K.d({ title: 'PnL · ' + t, unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl[key] }, null) + '</div></div>').join('') + '</div></section>';
 

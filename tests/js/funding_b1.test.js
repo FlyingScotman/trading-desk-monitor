@@ -145,5 +145,16 @@ t('#168: история — фондирование не посчитано (п
   }
 });
 
+t('#168: итог фондирования по группе, где оно нигде не посчитано, — «—», а не 0; где посчитано хоть у одной — число', () => {
+  const { M, K } = load({ real: true, mutate: D => D.positions.forEach(p => { if (p.pnl) p.pnl.funding = null; }) });
+  const spec = list => ({ title: 'Фондирование', unit: 'тыс ₽', fmt: K.f.k, list, val: 'fundingDay', nullable: true });
+  assert.ok(K.d(spec(M.positions)).includes('—') && !K.d(spec(M.positions)).includes('data-dr'), K.d(spec(M.positions)));
+  assert.ok(K.posCols.funding.nullable);
+  const { M: M2, K: K2 } = load({ real: true });
+  const html = K2.d(spec(M2.positions)); assert.ok(html.includes('data-dr') && !/>—</.test(html), html);
+  // без nullable — прежнее поведение (0), как у остальных мер
+  assert.ok(K.d({ title: 'x', fmt: K.f.k, list: M.positions, val: 'fundingDay' }).includes('data-dr'));
+});
+
 for (const [name, f] of tests) { f(); n++; console.log('ok', name); }
 console.log(n + ' tests passed');

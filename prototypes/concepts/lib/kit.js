@@ -661,6 +661,9 @@
   // ---------- кликабельные цифры ----------
   const reg = []; K._reg = reg;
   K.d = function (spec, text, cls) {
+    // spec.nullable (#168, фондирование): ни одно значение не посчитано (все null) — «—», а не 0
+    if (spec.nullable && text == null && (spec.rows ? spec.rows.every(r => r.v == null) : spec.list && spec.list.every(p => (typeof spec.val === 'function' ? spec.val(p) : p[spec.val]) == null)))
+      return '<span class="mut3" title="не посчитано">—</span>';
     const id = reg.push(spec) - 1;
     const v = spec.v != null ? spec.v : spec.rows ? spec.rows.reduce((a, r) => a + (r.v || 0), 0) : (spec.list ? M.sum(spec.list, spec.val) : null);
     const t = text != null ? text : (spec.fmt || f.dv)(v);
@@ -1211,6 +1214,7 @@
       const cell = (c, r) => { const v = val(c, r); return '<td class="' + (c.num ? 'n ' : '') + (c.cls ? (typeof c.cls === 'function' ? c.cls(v, r) : c.cls) : '') + '"' + (c.style ? ' style="' + c.style(v, r) + '"' : '') + '>' + (c.fmt ? c.fmt(v, r) : esc(v)) + '</td>'; };
       const sumCell = (c, list) => {
         if (!c.sum) return '<td></td>';
+        if (c.nullable && list.every(r => val(c, r) == null)) return '<td class="n"><span class="mut3" title="не посчитано">—</span></td>';  // #168
         const fn = typeof c.sum === 'function' ? c.sum : r => val(c, r) || 0;
         const tot = list.reduce((s, r) => s + fn(r), 0);
         const fm = c.sumFmt || c.fmt || (v => f.n(v));
@@ -1702,7 +1706,7 @@
     basis01: { key: 'basis01', label: 'Базис01', num: true, fmt: v => v ? f.dv(v) : '<span class="mut3">·</span>', sum: true, unit: 'тыс ₽/бп', title: K.tips.basis01, tip: true },
     ofzSpr01: { key: 'ofzSpr01', label: 'Спред к КБД01', num: true, fmt: v => v ? f.dv(v) : '<span class="mut3">·</span>', sum: true, unit: 'тыс ₽/бп', title: K.tips.ofzSpr01, tip: true },
     carry: { key: 'carryDay', label: 'Кэрри/д', num: true, fmt: v => f.k(v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽', title: 'тыс ₽ в день. ' + K.tips.carry, tip: true },
-    funding: { key: 'fundingDay', label: 'Фондир./д', num: true, fmt: v => v == null ? '<span class="mut3">—</span>' : f.k(v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽', title: 'Фондирование, тыс ₽ в день. ' + K.tips.funding, tip: true },
+    funding: { key: 'fundingDay', label: 'Фондир./д', num: true, nullable: true, fmt: v => v == null ? '<span class="mut3">—</span>' : f.k(v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽', title: 'Фондирование, тыс ₽ в день. ' + K.tips.funding, tip: true },
     pnl: { key: 'pnl', label: 'PnL дня', num: true, val: r => r.pnl.total, fmt: v => f.k(v), cls: v => f.cls(v), sum: r => r.pnl.total, unit: 'тыс ₽' },
     pnlMtd: { key: 'pnlMtd', label: 'PnL MTD', num: true, fmt: v => f.mn(v, 1), cls: v => f.cls(v), sum: true, unit: 'mm ₽', sumFmt: v => f.mn(v, 1) },
     rating: { key: 'rating', label: 'Рейтинг', filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
@@ -2333,7 +2337,7 @@
           [['корп. RUB', K.d({ title: 'CS01 корп RUB', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === 'RUB'), val: 'cs01' })],
            ['вал.', K.d({ title: 'CS01 валютные', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy !== 'RUB'), val: 'cs01' })]], null, K.tips.cs01) +
         K.kpi('Кэрри / день', K.d({ title: 'Кэрри за день (без фондирования)', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }) + K.kpiUnit('тыс ₽'),
-          [[K.hint('фондирование', K.tips.funding), K.d({ title: 'Фондирование за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'fundingDay' })],
+          [[K.hint('фондирование', K.tips.funding), K.d({ title: 'Фондирование за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'fundingDay', nullable: true })],
            ['в год ≈', '<span class="' + f.cls(k.carryDay) + '">' + f.mn(k.carryDay * 365, 0) + '</span> <span class="u">mm ₽</span>']], null, K.tips.carry) +
         K.kpi('Облигации MV', K.d({ title: 'MV облигаций', unit: 'bn ₽', fmt: v => f.bn(v, 1), list: L.filter(p => p.group !== 'DER'), val: 'mv', color: false }) + K.kpiUnit('bn ₽'),
           K.kpiCcyRows(M.ccys.reduce((o, c) => (o[c] = k.byCcy[c].mv, o), {}), (c, v) => f.bn(v, 1), 3, v => f.bn(v, 1))) +

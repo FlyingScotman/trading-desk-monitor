@@ -106,7 +106,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   // ---------- колонки ----------
   const hist = {}; const H = id => hist[id] || (hist[id] = M.posHistory(id));
   const evName = { put: 'пут', call: 'колл', mat: 'погаш' };
-  const pnlCol = (key, label, k, tip) => ({ label, num: true, val: r => r.pnl[k], fmt: v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.pnl[k], unit: 'тыс ₽', sfmt: f.k, title: tip ? 'тыс ₽. ' + tip : 'тыс ₽', tip: !!tip });
+  const pnlCol = (key, label, k, tip) => ({ label, num: true, nullable: k === 'funding', val: r => r.pnl[k], fmt: v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.pnl[k], unit: 'тыс ₽', sfmt: f.k, title: tip ? 'тыс ₽. ' + tip : 'тыс ₽', tip: !!tip });
   const C = {
     name: { label: 'Бумага', val: r => r.name, fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? '<span class="k-tag sd" title="сделки сегодня">сд</span>' : '') },
     issuer: { label: 'Эмитент', filter: true, title: 'эмитент (у деривативов — контрагент)', val: r => r.issuerName, fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
@@ -140,7 +140,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     ofzSpr01: { label: 'Спред к КБД01', neutral: true, num: true, val: r => r.ofzSpr01, fmt: v => v ? f.dv(v) : '<span class="mut3">·</span>', sum: r => r.ofzSpr01, unit: 'тыс ₽/бп', sfmt: f.dv, title: K.tips.ofzSpr01, tip: true },
     fund: { label: 'Фонд.', num: true, val: r => r.fundRate, fmt: v => v == null ? '<span class="mut3">—</span>' : f.pct(v), title: 'ставка фондирования, % годовых. ' + K.tips.fundRate.trim() },
     carry: { label: 'Кэрри/д', num: true, val: r => r.carryDay, fmt: v => '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.carryDay, unit: 'тыс ₽', sfmt: f.k, title: 'тыс ₽ в день. ' + K.tips.carry, tip: true },
-    funding: { label: 'Фондир./д', num: true, val: r => r.fundingDay, fmt: v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.fundingDay, unit: 'тыс ₽', sfmt: f.k, title: 'Фондирование, тыс ₽ в день. ' + K.tips.funding, tip: true },
+    funding: { label: 'Фондир./д', num: true, nullable: true, val: r => r.fundingDay, fmt: v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.fundingDay, unit: 'тыс ₽', sfmt: f.k, title: 'Фондирование, тыс ₽ в день. ' + K.tips.funding, tip: true },
     pc: pnlCol('pc', 'Кэрри', 'carry', K.tips.carry), pfu: pnlCol('pfu', 'Фондирование', 'funding', K.tips.funding), pr: pnlCol('pr', 'Ставки', 'rates'), ps: pnlCol('ps', 'Спред', 'spread'), pf: pnlCol('pf', 'FX', 'fx'), pt: pnlCol('pt', 'Сделки', 'trading'), po: pnlCol('po', 'Прочее', 'other'),
     pnl: { label: 'PnL дня', num: true, val: r => r.pnl.total, fmt: v => '<b class="' + f.cls(v) + '">' + f.k(v) + '</b>', sum: r => r.pnl.total, unit: 'тыс ₽', sfmt: f.k, title: 'тыс ₽' },
     pnlMtd: { label: 'MTD', num: true, val: r => r.pnlMtd, fmt: v => '<span class="' + f.cls(v) + '">' + f.mn(v, 1) + '</span>', sum: r => r.pnlMtd, unit: 'mm ₽', sfmt: v => f.mn(v, 1), title: 'mm ₽' },
@@ -196,7 +196,8 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   let visible = [];
   function sumCell(c, list, title) {
     if (!c.sum) return '<td></td>';
-    const tot = list.reduce((s, r) => s + c.sum(r), 0);
+    if (c.nullable && list.length && list.every(r => c.val(r) == null)) return '<td class="n"><span class="mut3" title="не посчитано">—</span></td>';  // #168
+    const tot = list.reduce((s, r) => s + (c.sum(r) || 0), 0);
     if (!list.length) return '<td></td>';
     return '<td class="n">' + K.d({ title: title + ' · ' + c.label, unit: c.unit, fmt: c.sfmt, rows: list.map(p => ({ p, v: c.sum(p) })) }, c.sfmt(tot), c.neutral ? '' : null) + '</td>';
   }

@@ -193,7 +193,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     if (!x) { dash.innerHTML = '<div class="k-panel"><div class="k-empty">нет эмитентов под фильтром</div></div>'; return; }
     const L = x.list, col = K.issuerColor(x.id), totMv = sumBy(ISS, i => i.mv);
     const wavg = (fn) => { const a = L.filter(p => fn(p) != null); const w = sumBy(a, p => Math.abs(p.mv)); return w ? sumBy(a, p => fn(p) * Math.abs(p.mv)) / w : null; };
-    const D = (title, val, fmt, unit, cls) => K.d({ title: x.name + ' · ' + title, unit, fmt, list: L, val }, null, cls);
+    const D = (title, val, fmt, unit, cls) => K.d({ title: x.name + ' · ' + title, unit, fmt, list: L, val, nullable: val === 'fundingDay' }, null, cls);
     const nFlt = L.filter(p => p.cpn && p.cpn.type === 'float').length;
     // шапка
     const hp = K.h('div', 'k-panel'); dash.appendChild(hp);
