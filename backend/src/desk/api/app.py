@@ -836,7 +836,9 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
     @app.get("/api/v1/positions/flows", include_in_schema=False)
     def position_flows(con: Con, id: str, run_id: int | None = None, as_of: date | None = None):
-        """A bond position's whole schedule after the run's date (``concepts.position_flows``): the position card."""
+        """A bond position's whole schedule after the run's date (``concepts.position_flows``): the position card.
+        No schedule (not a bond, no hub static) is 200 with empty ``flows`` and a ``reason`` (#288); 404 — no such run
+        or position."""
         from ..settings import SettingsError, load
 
         run = resolve_run(con, as_of, run_id)
@@ -848,7 +850,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
             raise ApiError(500, "settings", str(e)) from None
         out = concepts.position_flows(con, run, id, Path(snapshots))
         if out is None:
-            raise ApiError(404, "not_found", "no schedule for this position (not a bond, or no static snapshot)")
+            raise ApiError(404, "not_found", f"no position {id} in run {run['run_id']}")
         return out
 
     @app.get("/api/v1/calendar/market", include_in_schema=False)
