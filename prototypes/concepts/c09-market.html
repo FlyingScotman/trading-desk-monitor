@@ -183,11 +183,12 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
   const cv = K.chart(document.getElementById('curves'), () => {
     const R = M.curve['RUB RUONIA'], KS = M.curve['RUB KEY'], B = K.basisCurve();
     // нет точки кривой — нет и «вчера» (null, разрыв): null − Δ дало бы выдуманное −Δ около нуля (#308, B1)
-    const yd0 = c => c.pts.map((v, k) => v == null ? null : v - c.chg[k] / 100);
+    // нет сдвига кривой в прогоне — тоже нет «вчера» (null), а не копия сегодняшней (#322)
+    const yd0 = c => K.yest(c.pts, c.chg);
     const histId = { 'RUB RUONIA': 'RUB RUONIA', 'RUB KEY': 'RUB KEY' };
     const yd = c => (histId[c.id] && hcAt(c.id, S.per)) || yd0(c);
-    // ОФЗ вчера = КБД сегодня − Δ ОФЗ (Δ RUONIA + Δ базиса, б.п.): не зависит от того, есть ли в прогоне точки RUONIA (#308)
-    const ofzY = hcAt('OFZ', S.per) || M.ofzCurve.map((v, k) => v == null ? null : v - (R.chg[k] + B.chg[k]) / 100);
+    // ОФЗ вчера = КБД сегодня − Δ КБД (б.п.): не зависит от того, есть ли в прогоне точки RUONIA (#308); сдвига КБД нет — null (#322)
+    const ofzChg = K.ofzChg(), ofzY = hcAt('OFZ', S.per) || K.yest(M.ofzCurve, ofzChg);
     if (S.curve === 'hist' && HC['RUB RUONIA']) {  // как менялись кривые: 1Y и 5Y RUONIA OIS, КС-свопов и КБД за два года
       const lines = [['RUONIA', HC['RUB RUONIA'], K.curveColors['RUB RUONIA']], ['КС', HC['RUB KEY'], K.curveColors['RUB KEY']], ['ОФЗ', HC.OFZ, '#9b7bff']].filter(x => x[1]);
       const dates = [...new Set(lines.flatMap(([, c]) => c.series.dates))].sort();
@@ -205,15 +206,20 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
         { name: n, type: 'line', data: a, color: c, symbolSize: 4, lineStyle: { width: 2 } },
         { name: n + ' ' + perLbl(), type: 'line', data: b, color: c, showSymbol: false, lineStyle: { width: 1, type: 'dotted' } }]),
     });
-    if (S.curve === 'chg') return Object.assign(base, {
-      tooltip: { trigger: 'axis', valueFormatter: v => f.bps(v) + ' б.п.' }, yAxis: { type: 'value', unit: 'б.п.', axisLabel: { formatter: v => f.n(v) } },
-      series: [['ОФЗ', hd('OFZ') || M.pillars.map((_, k) => R.chg[k] + B.chg[k]), '#9b7bff'], ['RUONIA', hd('RUB RUONIA') || R.chg, K.curveColors['RUB RUONIA']],
-        ['КС', hd('RUB KEY') || KS.chg, K.curveColors['RUB KEY']]].map(([n, d, c]) => ({ name: n + ' ' + ({ '1D': 'за день', '1W': 'за неделю', '1M': 'за месяц', '3M': 'за 3 мес', YTD: 'с начала года' })[S.per], type: 'bar', data: d, color: c, barMaxWidth: 14 })),
-    });
+    if (S.curve === 'chg') {
+      const cs = [['ОФЗ', hd('OFZ') || ofzChg, '#9b7bff'], ['RUONIA', hd('RUB RUONIA') || R.chg, K.curveColors['RUB RUONIA']], ['КС', hd('RUB KEY') || KS.chg, K.curveColors['RUB KEY']]];
+      // ни одного сдвига (CURVE_MOVES пуст или без этих кривых) — словами, а не нулевыми столбцами (#322, B1)
+      const none = cs.every(x => K.noMoves(x[1]));
+      return Object.assign(base, {
+        graphic: none ? [{ type: 'text', left: 'center', top: 'middle', style: { text: 'сдвигов нет в прогоне', fill: K.css('--fg-3'), fontSize: 13 } }] : [],
+        tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '—' : f.bps(v) + ' б.п.' }, yAxis: { type: 'value', unit: 'б.п.', axisLabel: { formatter: v => f.n(v) } },
+        series: cs.map(([n, d, c]) => ({ name: n + ' ' + ({ '1D': 'за день', '1W': 'за неделю', '1M': 'за месяц', '3M': 'за 3 мес', YTD: 'с начала года' })[S.per], type: 'bar', data: d, color: c, barMaxWidth: 14 })),
+      });
+    }
     return Object.assign(base, {
       tooltip: { trigger: 'axis', valueFormatter: v => f.bp(v) + ' б.п.' }, yAxis: { type: 'value', unit: 'б.п.' },
       series: [{ name: 'базис ОФЗ − RUONIA', type: 'bar', data: B.pts.map(v => ({ value: v, itemStyle: { color: v >= 0 ? '#9b7bff' : K.css('--warn') } })), barMaxWidth: 22, label: { show: true, position: 'top', fontSize: 10, color: K.css('--fg-2') } },
-      { name: 'вчера', type: 'line', data: B.pts.map((v, k) => v == null ? null : v - B.chg[k]), color: K.css('--fg-3'), lineStyle: { type: 'dotted' }, symbolSize: 4 }],
+      { name: 'вчера', type: 'line', data: K.yest(B.pts, B.chg, 1), color: K.css('--fg-3'), lineStyle: { type: 'dotted' }, symbolSize: 4 }],
     });
   });
   const curveModes = [['lvl', 'уровни'], ['chg', MH && HC['RUB RUONIA'] ? 'изменение' : 'изм. дня'], ['basis', 'базис ОФЗ']].concat(HC['RUB RUONIA'] ? [['hist', 'динамика']] : []);

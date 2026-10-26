@@ -74,7 +74,7 @@
     entity: { label: 'Юрлицо', key: p => p.entity, lbl: k => esc(M.entities.find(e => e.id === k).name), txt: k => M.entities.find(e => e.id === k).name },
     rating: { label: 'Рейтинг', key: p => p.rating, order: idxOrder(RAT) },
     sector: { label: 'Сектор', key: p => p.sector },
-    cpn: { label: 'Тип купона', key: p => p.group === 'DER' ? 'дериватив' : ({ fix: 'фикс', float: 'флоатер', linker: 'линкер' })[p.cpn.type], order: idxOrder(['фикс', 'флоатер', 'линкер', 'дериватив']) },
+    cpn: { label: 'Тип купона', key: p => p.group === 'DER' ? 'дериватив' : ({ fix: 'фикс', float: 'флоатер', linker: 'линкер' })[K.cpnType(p)] || 'без купона', order: idxOrder(['фикс', 'флоатер', 'линкер', 'дериватив', 'без купона']) },
     tenor: { label: 'Срок до события', key: p => K.tenorBucket(p.tenor), order: idxOrder(TBO) },
     evmonth: { label: 'Месяц события', key: p => { const m = p.event.date.slice(0, 7); return m <= horizon ? m : 'позже'; }, txt: k => k === 'позже' ? 'позже 24 мес.' : MON[+k.slice(5) - 1] + ' ' + k.slice(2, 4), order: (a, b) => a === 'позже' ? 1 : b === 'позже' ? -1 : a.localeCompare(b) },
     evkind: { label: 'Вид события', key: p => ({ put: 'пут-оферта', call: 'колл', mat: 'погашение' })[p.event.kind], order: idxOrder(['пут-оферта', 'колл', 'погашение']), color: k => ({ 'пут-оферта': '#e3b341', 'колл': '#b48cff', 'погашение': '#4c9dff' })[k] },

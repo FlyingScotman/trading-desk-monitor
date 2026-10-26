@@ -87,7 +87,8 @@
   const dvx = (title, list, val) => K.d({ title, unit: 'тыс ₽/бп', list, val }, null, '') + '&nbsp;тыс ₽/бп';
   // диапазон сдвига кривой по бакетам, б.п. (до 0.1); у кривой без точек (USD/CNY в прогоне без кривых хаба) — «нет данных»
   const noCurve = c => !c || c.pts.every(v => v == null);
-  const chgRange = c => { if (noCurve(c)) return 'нет данных'; const a = c.chg.filter(x => x).map(v => Math.round(v * 10) / 10).filter(x => x); if (!a.length) return '0'; const mn = Math.min(...a), mx = Math.max(...a); const s = v => (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v); return mn === mx ? s(mn) : s(mn) + '…' + s(mx); };
+  // нет сдвигов кривой в прогоне — тоже «нет данных», не «0» (#322)
+  const chgRange = c => { if (noCurve(c) || K.noMoves(c.chg)) return 'нет данных'; const a = c.chg.filter(x => x).map(v => Math.round(v * 10) / 10).filter(x => x); if (!a.length) return '0'; const mn = Math.min(...a), mx = Math.max(...a); const s = v => (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v); return mn === mx ? s(mn) : s(mn) + '…' + s(mx); };
   const avgChg = c => noCurve(c) ? 0 : c.chg.reduce((a, v) => a + (v || 0), 0) / Math.max(1, c.chg.length);
   const maxBucket = c => { let k = 0; c.chg.forEach((v, i) => { if (Math.abs(v || 0) > Math.abs(c.chg[k] || 0)) k = i; }); return M.buckets[k]; };
   const plural = (n, a, b, c) => { const m = n % 10, h = n % 100; return n + ' ' + (m === 1 && h !== 11 ? a : m >= 2 && m <= 4 && (h < 10 || h >= 20) ? b : c); };
@@ -293,15 +294,18 @@
     const P = M.pillars;
     const ru = M.curve['RUB RUONIA'], ks = M.curve['RUB KEY'], ba = K.basisCurve();
     // нет точки кривой — нет и «вчера» (null, разрыв): null − Δ дало бы выдуманное −Δ около нуля (#308, B1)
-    const ofzY = M.ofzCurve.map((v, i) => v == null ? null : v - ru.chg[i] / 100 - ba.chg[i] / 100);
+    // и нет сдвига — нет «вчера» (#322): кривая «вчера» не совпадает с сегодняшней; ОФЗ вчера = КБД − Δ КБД
+    const ofzY = K.yest(M.ofzCurve, K.ofzChg()), noMv = K.noMoves(ru.chg) && K.noMoves(ks.chg);
     K.chart(document.getElementById('curveChart'), () => ({
       grid: { left: 6, right: 6, top: 30, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 },
+      // сдвигов RUONIA и КС нет в прогоне — словами вместо столбцов Δ (#322)
+      graphic: noMv ? [{ type: 'text', right: 50, top: 34, style: { text: 'сдвигов нет в прогоне', fill: K.css('--fg-3'), fontSize: 11 } }] : [],
       tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '—' : f.n(v, 2) },
       xAxis: { type: 'category', data: M.buckets },
       yAxis: [{ type: 'value', scale: true, axisLabel: { formatter: v => f.pct(v, 1) } }, { type: 'value', name: 'Δ б.п.', splitLine: { show: false } }],
       series: [
         { name: 'RUONIA', type: 'line', data: ru.pts, color: K.curveColors['RUB RUONIA'], showSymbol: false, lineStyle: { width: 2 } },
-        { name: 'RUONIA вчера', type: 'line', data: ru.pts.map((v, i) => v == null ? null : v - ru.chg[i] / 100), color: K.curveColors['RUB RUONIA'], showSymbol: false, lineStyle: { width: 1, type: 'dashed' } },
+        { name: 'RUONIA вчера', type: 'line', data: K.yest(ru.pts, ru.chg), color: K.curveColors['RUB RUONIA'], showSymbol: false, lineStyle: { width: 1, type: 'dashed' } },
         { name: 'ОФЗ', type: 'line', data: M.ofzCurve, color: K.curveColors['RUB OFZ'], showSymbol: false, lineStyle: { width: 2 } },
         { name: 'ОФЗ вчера', type: 'line', data: ofzY, color: K.curveColors['RUB OFZ'], showSymbol: false, lineStyle: { width: 1, type: 'dashed' } },
         { name: 'Δ RUONIA', type: 'bar', yAxisIndex: 1, data: ru.chg, color: K.curveColors['RUB RUONIA'], itemStyle: { opacity: .22 }, barGap: 0, barMaxWidth: 9 },
