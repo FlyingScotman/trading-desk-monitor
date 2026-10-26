@@ -14,20 +14,20 @@ def test_defaults_without_env_file(tmp_path: Path) -> None:
     assert s.hub_url is None  # the hub address is per installation, never a default
     assert s.hub_token is None and s.hub_token_source == "not set"
     assert s.snapshot_cache == REPO_ROOT / ".devdata" / "snapshots"
-    assert s.db == REPO_ROOT / ".devdata" / "tdm.sqlite"
+    assert not hasattr(s, "db")  # the tdm SQLite store is gone (#294)
 
 
 def test_env_file_and_environment_precedence(tmp_path: Path) -> None:
     env = tmp_path / "desk.env"
     env.write_text(
         "# comment\nDESK_HUB_URL=https://hub.example/\nDESK_SNAPSHOT_CACHE=cache  # inline\n"
-        "DESK_DB='/abs/run.sqlite'\nDESK_HUB_TIMEOUT_S=5\n",
+        "DESK_REPORT_DIR='/abs/reports'\nDESK_HUB_TIMEOUT_S=5\n",
         encoding="utf-8",
     )
     s = load({"DESK_ENV_FILE": str(env), "DESK_HUB_TIMEOUT_S": "7"})
     assert s.hub_url == "https://hub.example"
     assert s.snapshot_cache == REPO_ROOT / "cache"
-    assert s.db == Path("/abs/run.sqlite")
+    assert s.report_dir == Path("/abs/reports")
     assert s.hub_timeout_s == 7.0
 
 

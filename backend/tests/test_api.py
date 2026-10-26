@@ -9,6 +9,7 @@ import json
 from datetime import date, timedelta
 from pathlib import Path
 
+import legacy_tdm
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
@@ -22,7 +23,6 @@ from desk.api.compat import run_slice
 from desk.marketdata.adapter import MarketView
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import Outcome, attach_pnl, prepare, value
-from desk.publish import tdm_run
 from desk.rules import ocp as ocp_rules
 from desk.settings import update_settings_json
 from desk.store import MIGRATIONS
@@ -256,9 +256,9 @@ def test_desk_data_js_without_runs_gives_the_empty_state_not_the_demo(client):
 
 
 def test_compat_parity_with_tdm_assemble(store_url, book, client, tmp_path, monkeypatch):
-    """The same outcomes through tdm_run.publish into a tdm store and through insert_run into the desk
-    store, on the synthetic previous date of S2 and on the fixture date: tdm.assemble.assemble on the first
-    equals the compat adapter on the second, history included."""
+    """The same outcomes through legacy_tdm.publish (the tdm writer the backend dropped in #294) into a tdm store
+    and through insert_run into the desk store, on the synthetic previous date of S2 and on the fixture date:
+    tdm.assemble.assemble on the first equals the compat adapter on the second, history included."""
     home = tmp_path / "home"  # the market default rate off (#237): no funding at all, as tdm
     home.mkdir()
     monkeypatch.setenv("DESK_HOME", str(home))
@@ -268,9 +268,9 @@ def test_compat_parity_with_tdm_assemble(store_url, book, client, tmp_path, monk
     early.business_date = view.business_date
     early = dataclasses.replace(ctx, market=early)  # the same outcomes, one business date earlier
     db = tmp_path / "tdm.sqlite"
-    assert tdm_run.publish(str(db), early, [p[:3] for p in positions], prev=None)[1] == "complete"
+    assert legacy_tdm.publish(str(db), early, [p[:3] for p in positions], prev=None)[1] == "complete"
     insert_run(store_url, early, positions, None)
-    tdm_id, status, _ = tdm_run.publish(str(db), ctx, [p[:3] for p in positions], prev=view)
+    tdm_id, status, _ = legacy_tdm.publish(str(db), ctx, [p[:3] for p in positions], prev=view)
     assert status == "complete"
     with psycopg.connect(store_url) as pg, connect(db) as con:  # the presets, as the tdm store would hold them
         con.executemany("INSERT INTO scenario_def (scenario_id, name, ord, definition_json, active, updated_at,"

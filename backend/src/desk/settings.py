@@ -9,8 +9,8 @@ server picks up edits without a restart. ``backend/.env.example`` lists every va
 version unpacked anywhere finds the same settings and data: ``DESK_HOME`` (environment or env file),
 else ``%LOCALAPPDATA%\\DeskMonitor`` on Windows, else ``<repo>/.devdata`` in a git checkout (the dev
 layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub_token``,
-``adapter-config/``, ``snapshots/``, ``inbox-archive/``, ``pg/`` (embedded store), ``tdm.sqlite`` and
-``logs/``; the dev checkout keeps its old names ``.devdata/inbox`` and ``.devdata/desk_pg``.
+``adapter-config/``, ``snapshots/``, ``inbox-archive/``, ``pg/`` (embedded store) and ``logs/``; the dev
+checkout keeps its old names ``.devdata/inbox`` and ``.devdata/desk_pg``.
 
 * ``DESK_HUB_URL``         hub base URL, set per installation (no default: the address is
                            never kept in the repository); HTTPS only, plain HTTP is
@@ -30,8 +30,6 @@ layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub
 * ``DESK_SNAPSHOT_DROP``   folder an operator fills by hand when the hub is unreachable (ADR-001)
 * ``DESK_STORE_URL``       desk store, a libpq URI ``postgresql://user:password@host:5432/desk``
                            (slice S5). Unset: an embedded server in ``<home>/pg`` (pgserver)
-* ``DESK_DB``              the ``tdm`` SQLite prototype store (default ``<home>/tdm.sqlite``),
-                           written by ``desk eod --tdm`` during the transition
 * ``DESK_REPORT_DIR``      validation reports (none by default; ``<home>/reports`` is the usual place)
 * ``DESK_PRIVATE_ADAPTER`` the private adapter (08 §2): a package directory or a module name; unset: the
                            folder in ``DESK_DEFAULT_PRIVATE_ADAPTER`` (process environment only, set by the
@@ -231,7 +229,6 @@ class Settings:
     snapshot_cache: Path = None  # type: ignore[assignment]  # None: <home>/snapshots
     snapshot_drop: Path | None = None
     store_url: str | None = field(default=None, repr=False)
-    db: Path = None  # type: ignore[assignment]  # None: <home>/tdm.sqlite
     report_dir: Path | None = None
     private_adapter: str | None = None
     private_adapter_config: Path | None = None  # load() defaults it to <home>/adapter-config
@@ -291,8 +288,7 @@ class Settings:
     def __post_init__(self) -> None:
         object.__setattr__(self, "home", Path(self.home) if self.home is not None else desk_home())
         dev = self.home == DEV_HOME  # the dev checkout keeps its old folder names
-        for name, leaf in (("snapshot_cache", "snapshots"), ("db", "tdm.sqlite"),
-                           ("inbox_archive", "inbox" if dev else "inbox-archive")):
+        for name, leaf in (("snapshot_cache", "snapshots"), ("inbox_archive", "inbox" if dev else "inbox-archive")):
             if getattr(self, name) is None:
                 object.__setattr__(self, name, self.home / leaf)
 
@@ -331,7 +327,6 @@ class Settings:
             ("snapshot_cache", str(self.snapshot_cache)),
             ("snapshot_drop", str(self.snapshot_drop or "none")),
             ("store_url", mask_url(self.store_url) if self.store_url else f"not set: embedded store ({self.pg_dir})"),
-            ("db", str(self.db)),
             ("report_dir", str(self.report_dir or "none")),
             ("private_adapter", (self.private_adapter + (" (bundle default)" if self.private_adapter_default else ""))
              if self.private_adapter else "reference (desk.inbox.reference)"),
@@ -684,7 +679,6 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         snapshot_cache=_path(get("DESK_SNAPSHOT_CACHE")) or defaults.snapshot_cache,
         snapshot_drop=_path(get("DESK_SNAPSHOT_DROP")),
         store_url=store_url,
-        db=_path(get("DESK_DB")) or defaults.db,
         report_dir=_path(get("DESK_REPORT_DIR")),
         private_adapter=adapter,
         private_adapter_config=_path(get("DESK_PRIVATE_ADAPTER_CONFIG")) or home / ADAPTER_CONFIG_DIR,

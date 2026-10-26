@@ -89,7 +89,7 @@ def _effective(st: Settings) -> dict[str, Any]:
         "hub_transport": st.hub_transport, "proxy_user": st.proxy_user, "proxy_password_set": bool(st.proxy_password),
         "snapshot_cache": str(st.snapshot_cache), "snapshot_drop": str(st.snapshot_drop) if st.snapshot_drop else None,
         "store": mask_url(st.store_url) if st.store_url else f"embedded: {st.pg_dir}",
-        "pg_dir": str(st.pg_dir), "db": str(st.db), "report_dir": str(st.report_dir) if st.report_dir else None,
+        "pg_dir": str(st.pg_dir), "report_dir": str(st.report_dir) if st.report_dir else None,
         "private_adapter": st.private_adapter or runner.REFERENCE_ADAPTER,
         "private_adapter_default": st.private_adapter_default,
         "private_adapter_config": str(st.private_adapter_config) if st.private_adapter_config else None,

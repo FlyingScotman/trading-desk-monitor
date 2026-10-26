@@ -4,8 +4,7 @@ coupon checks the backend keeps, and the stored hash-verified core result."""
 from __future__ import annotations
 
 import dataclasses
-import json
-import sqlite3
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -17,10 +16,12 @@ from rub_fixed_income import (
     portfolio_result_from_json,
 )
 
+from desk import store
 from desk.marketdata.adapter import core_instrument
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import prepare, value
-from desk.publish import tdm_run
+from desk.publish import desk_run
+from desk.store import PositionInputs
 from desk.valuation.bonds import fixed_schedule
 
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1"
@@ -97,19 +98,21 @@ def test_one_core_call_for_the_book_with_the_spread_kind_per_bond(ctx):
     assert outs[0].valuation.pv_rub == pytest.approx(outs[2].valuation.pv_rub * -10 / 3)
 
 
-def test_core_result_is_stored_hash_verified(ctx, tmp_path):
+def test_core_result_is_stored_hash_verified(ctx, store_url):
     outs = value(ctx, [(OFZ, 10.0), (CORP, 5.0)], second_order=True)
-    db = tmp_path / "tdm.sqlite"
-    run_id, status, _ = tdm_run.publish(str(db), ctx, [("P1", "OFZ", outs[0]), ("P2", "CORP", outs[1])], prev=None)
+    rows = [("P1", "OFZ", OFZ, 10.0), ("P2", "CORP", CORP, 5.0)]
+    inp = PositionInputs(rows, [], {b: date.fromisoformat(DATE) for _, b, *_ in rows}, datetime.now(UTC), "0" * 64,
+                         {}, {})
+    with store.connect(store_url) as con:
+        run_id, status, _ = desk_run.publish(con, ctx, [("P1", "OFZ", outs[0]), ("P2", "CORP", outs[1])], prev=None,
+                                             inputs=inp)
+        lineage = con.execute("SELECT lineage FROM run WHERE run_id = %s", (run_id,)).fetchone()[0]
+        stored = con.execute("SELECT result_sha256, body FROM run_core_result WHERE run_id = %s", (run_id,)).fetchall()
     assert status == "complete"
-    lineage = json.loads(sqlite3.connect(db).execute("SELECT comment FROM calc_run WHERE run_id=?",
-                                                     (run_id,)).fetchone()[0])
-    stored = lineage["core_results"]
-    assert {s["result_sha256"] for s in stored} == {o.core_result.result_sha256 for o in outs}
-    for s in stored:
-        path = Path(s["path"])
-        assert path.parent == tmp_path / "results" and path.name == f"{s['result_sha256']}.json"
-        r = portfolio_result_from_json(path.read_bytes())  # raises unless the hash verifies
-        assert r.result_sha256 == s["result_sha256"] and r.schema_version == "rub-portfolio-risk-result.v2"
+    shas = {o.core_result.result_sha256 for o in outs}
+    assert {s["result_sha256"] for s in lineage["core_results"]} == {s for s, _ in stored} == shas
+    for sha, body in stored:
+        r = portfolio_result_from_json(body.encode())  # raises unless the hash verifies
+        assert r.result_sha256 == sha and r.schema_version == "rub-portfolio-risk-result.v2"
     with pytest.raises(ValueError):
-        portfolio_result_from_json(path.read_bytes().replace(b'"pv_rub":', b'"pv_rub":1', 1))
+        portfolio_result_from_json(body.encode().replace(b'"pv_rub":', b'"pv_rub":1', 1))

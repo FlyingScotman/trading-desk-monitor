@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import dataclasses
 import math
-import sqlite3
 from collections import Counter
 from datetime import date, timedelta
 from decimal import Decimal
@@ -24,13 +23,13 @@ from rub_fixed_income import (
     kbd_discount_curve,
     resolve_tenor,
 )
+from run_checks import consistency, content, warnings
 
 import desk.orchestrator as orch
 from desk.marketdata.adapter import KBD_CURVE_ID, KBD_SPEC, MarketView
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import EodContext, Outcome, attach_pnl, prepare, value
 from desk.pnl.flash import FlashCurves, explain
-from desk.publish import tdm_run
 from desk.valuation.bonds import OFZ_KBD_CLASSES, BondValuation, bond_request, value_bonds
 
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1"
@@ -243,7 +242,7 @@ def test_kbd_fallback_without_ruonia(ctx, outcomes):
     assert abs(f.rates - f.rates_linear) < 0.02 * abs(f.rates_linear) and abs(f.other) < 1e-6
 
 
-def test_not_priced_previous_day_gets_no_pnl_and_a_warning(ctx, outcomes, tmp_path):
+def test_not_priced_previous_day_gets_no_pnl_and_a_warning(ctx, outcomes):
     prev = shifted_prev(ctx, ctx.business_date - timedelta(days=1))
     prevs = [prev_outcome(prev, o) for o in outcomes]
     gone = next(i for i, o in enumerate(outcomes) if o.valuation)
@@ -252,17 +251,15 @@ def test_not_priced_previous_day_gets_no_pnl_and_a_warning(ctx, outcomes, tmp_pa
     attach_pnl(prev, prevs, ctx, cur)
     assert cur[gone].pnl is None and cur[gone].no_pnl.reason == "not_priced_prev"
 
-    db = tmp_path / "tdm.sqlite"
     positions = [(f"P{i}", "OFZ" if o.secid.startswith("SU") else "CORP", o) for i, o in enumerate(cur)]
     prev_view = MarketView(ctx.market.snapshot)
     prev_view.business_date = prev.kbd.trade_date
-    run_id, status, warnings = tdm_run.publish(str(db), ctx, positions, prev=prev_view)
-    assert status == "complete"
-    con = sqlite3.connect(db)
-    n_pnl = con.execute("SELECT COUNT(*) FROM position_pnl WHERE run_id=?", (run_id,)).fetchone()[0]
-    assert n_pnl == sum(o.pnl is not None for o in cur)
-    carry, rates = con.execute("SELECT SUM(carry), SUM(rates) FROM position_pnl WHERE run_id=?", (run_id,)).fetchone()
-    assert carry == pytest.approx(sum(o.pnl.carry for o in cur if o.pnl))
-    assert rates == pytest.approx(sum(o.pnl.rates for o in cur if o.pnl))
-    assert any(f"P{gone} " in w and "not_priced_prev" in w for w in warnings)
-    assert any("1 позиций без PnL" in w for w in warnings)
+    c = content(ctx, positions, prev=prev_view)
+    assert consistency(c) == []
+    pnl = [r["pnl"] for r in c.rows if r.get("pnl") is not None]
+    assert len(pnl) == sum(o.pnl is not None for o in cur)
+    assert sum(p["carry"] for p in pnl) == pytest.approx(sum(o.pnl.carry for o in cur if o.pnl))
+    assert sum(p["rates"] for p in pnl) == pytest.approx(sum(o.pnl.rates for o in cur if o.pnl))
+    assert any(f"P{gone} " in w and "not_priced_prev" in w for w in warnings(c))
+    # one published row without PnL: the position not priced the day before (no PnL, never 0)
+    assert [r["position_id"] for r in c.rows if r.get("pnl") is None] == [f"P{gone}"]
