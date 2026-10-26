@@ -54,6 +54,11 @@ td.n.k-accp::after { content: ')'; visibility: hidden; } .mut { color: var(--fg-
 /* покрытие «N/M поз.» — только на широком экране: уже 1440 px шапка с ним переносится в третью строку (ревью #254);
    оно есть в подсказке и в панели */
 @media (max-width: 1440px) { .k-top .k-runage .cv { display: none; } }
+/* меню вида ⚙ (#255): поле порога — подпись слева, число и единица справа */
+.k-viewmenu .k-viewf { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+.k-viewmenu .k-viewf > span:first-child { flex: 1; min-width: 0; }
+.k-viewmenu .k-viewf input { flex: none; width: 64px; min-width: 0; }
+.k-viewmenu .k-viewf .mut3 { white-space: nowrap; }
 .k-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--line-2); border-radius: 999px; background: var(--panel); cursor: pointer; font-size: 12px; white-space: nowrap; user-select: none; }
 .k-chip:hover { border-color: var(--accent); }
 .k-chip.on { background: var(--accent-bg); border-color: var(--accent); color: var(--fg); }
