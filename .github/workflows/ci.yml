@@ -54,3 +54,5 @@ jobs:
           echo "NODE_PATH=$RUNNER_TEMP/pw/node_modules" >> "$GITHUB_ENV"
       - name: Smoke of the monitors (every concept page, fails on any console error)
         run: node prototypes/concepts/tools/smoke.js "$RUNNER_TEMP/shots"
+      - name: Browser tests of the monitors (Playwright; skipped by the plain JS step without it)
+        run: node --test tests/js/*.pw.test.js

@@ -55,11 +55,12 @@
 (function () {
   'use strict';
   const D = window.CONCEPTS_RUN, X = window.DESK_EXTRAS || {};
-  if (!D) {  // в базе нет прогона (сервер ставит CONCEPTS_RUN_EMPTY = {reason, message}): демо-набор, шапка скажет об этом
-    window.CONCEPTS_SOURCE = window.CONCEPTS_RUN_EMPTY ? 'empty' : 'demo';
+  if (!D && window.CONCEPTS_RUN_EMPTY) {  // в базе нет прогона (сервер ставит CONCEPTS_RUN_EMPTY = {reason, message}): демо-набор, шапка скажет об этом
+    window.CONCEPTS_SOURCE = 'empty';
     document.write('<script src="lib/mock.js"><\/script>');
     return;
   }
+  if (!D) { loadFailed(); return; }
   window.CONCEPTS_SOURCE = 'real';
   const M = window.MOCK = {};
 
@@ -94,7 +95,7 @@
   const runQ = 'run_id=' + encodeURIComponent((D.source || {}).runId || '');
   (D.riskNotes || []).forEach(n => M.notes.push(n.text + (n.detail ? ' (' + n.detail + ')' : '')));
   if (!D.pnlAvailable && D.pnlReasonText) M.notes.push('PnL: ' + D.pnlReasonText);
-  if (!window.DESK_EXTRAS) M.notes.push('нет данных /concepts-data.js: история, потоки и рынок пусты');
+  if (!window.DESK_EXTRAS) M.notes.push((window.CONCEPTS_LOAD_ERROR || {}).data ? '/concepts-data.js не загрузился (ошибка сервера или нет связи): история, потоки и рынок пусты' : 'нет данных /concepts-data.js: история, потоки и рынок пусты');
   // фондирование прогона (B1, D.fundingStatus): не настроено / не посчитано — заметка в шапке, не 0
   const FS = D.fundingStatus || { state: 'not_computed', text: 'прогон без расчёта фондирования' };
   M.funding = { state: FS.state, text: FS.text, period: FS.period || null, total: num(FS.total), inPositions: num(FS.inPositions),
@@ -696,4 +697,63 @@
     M.curves.forEach(c => k.byCurve[c.id] = S(p => p.dv01ByCurve[c.id]));
     return k;
   };
+  /* #309: сервер не отдал прогон — /concepts-run.js ответил 401, 5xx, не дошёл (сеть) или пришёл не тем (страница
+   * входа прокси и т. п.: ни CONCEPTS_RUN, ни CONCEPTS_RUN_EMPTY). Это не демо: демо-набор — только по выбору (?demo=1,
+   * файл). Сразу, синхронно — полоса «Данные не загрузились» (источник 'error') вместо монитора; остаток разметки
+   * страницы после этого скрипта уходит в скрытый <plaintext> (разбор HTML дальше идёт как текст), поэтому lib/live.js,
+   * kit.js и код страницы не выполняются и чужих цифр на ней нет (window.stop() не годится: Chrome тогда не доводит
+   * загрузку до load). Код ответа тегу скрипта не виден, поэтому потом, асинхронно (fetch с таймаутом AUTH_WAIT_MS),
+   * спрашивается /api/v1/auth/state: 401 или «вход включён, пользователя нет» — сессия кончилась: полоса «войдите
+   * снова» (источник 'auth') и переход на вход, как desk-auth.js; ошибка или таймаут — полоса остаётся как есть.
+   * Выход из полосы: «Повторить», «Последний прогон» (снимает выбор прогона: run_id / as_of и desk.run.v1 — если
+   * выбранный прогон стабильно не отдаётся, «Повторить» ведёт к той же ошибке), «Открыть тестовые данные», «◂ мониторы». */
+  function loadFailed() {
+    const AUTH_WAIT_MS = 3000;
+    window.CONCEPTS_SOURCE = 'error';
+    try { if (localStorage.getItem('concepts-theme') === 'light') document.documentElement.setAttribute('data-theme', 'light'); } catch (e) { }  // тема пользователя, как initTheme kit.js
+    const here = location.pathname + location.search + location.hash, toLogin = '/login.html?next=' + encodeURIComponent(here);
+    const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const sel = window.CONCEPTS_SEL || {}, what = sel.run_id ? 'прогон #' + sel.run_id : sel.as_of ? 'прогон за ' + sel.as_of : 'прогон';
+    const url = drop => { const u = new URL(location.href); ['run_id', 'as_of', 'demo'].forEach(k => u.searchParams.delete(k)); if (!drop) u.searchParams.set('demo', '1'); return u.pathname + u.search + u.hash; };
+    const box = document.createElement('div');
+    box.className = 'k-loadfail'; box.setAttribute('role', 'alert'); box.dataset.source = 'error';
+    box.style.cssText = 'box-sizing:border-box;max-width:640px;margin:48px auto;padding:16px 20px;border:1px solid var(--neg,#c0392b);border-radius:4px;' +
+      'background:var(--panel,#fff);color:var(--fg,#1b2129);font:14px/1.5 system-ui,"Segoe UI",sans-serif';
+    const wrap = document.createElement('div'); wrap.style.cssText = 'padding:0 16px';  // 16 px по бокам на узком экране
+    wrap.appendChild(box);
+    const btn = 'display:inline-block;font:inherit;padding:3px 10px;margin:4px 8px 0 0;cursor:pointer';
+    box.innerHTML = '<b data-k="title" style="font-size:16px;color:var(--neg,#c0392b)">Данные не загрузились</b><p data-k="text">Сервер не отдал ' + esc(what) +
+      ' (/concepts-run.js): ошибка сервера или нет связи с ним. Цифр на экране нет: тестовые данные вместо прогона не подставляются, чтобы их не приняли за настоящие.</p>' +
+      '<div data-k="acts"><button type="button" data-a="retry" style="' + btn + '">Повторить</button>' +
+      (sel.run_id || sel.as_of ? '<a data-a="latest" href="' + esc(url(true)) + '" style="' + btn + '" title="Снять выбор прогона и открыть последний">Последний прогон</a>' : '') +
+      '<a data-a="demo" href="' + esc(url(false)) + '" style="' + btn + '">Открыть тестовые данные</a>' +
+      '<a data-a="index" href="index.html" style="' + btn + '">◂ мониторы</a></div>';
+    box.querySelector('[data-a=retry]').onclick = () => location.reload();
+    const latest = box.querySelector('[data-a=latest]');
+    // выбор прогона снять, затем открыть страницу заново: если прогон был выбран только в desk.run.v1, ссылка совпадает
+    // с текущим адресом, и с #… в нём браузер не перезагрузил бы страницу, а лишь перешёл к якорю
+    if (latest) latest.onclick = e => {
+      try { localStorage.removeItem('desk.run.v1'); } catch (err) { }
+      e.preventDefault();
+      if (latest.href === location.href) location.reload(); else location.assign(latest.href);
+    };
+    Array.from(document.body.children).forEach(n => { if (n.tagName !== 'SCRIPT') n.style.display = 'none'; });
+    document.body.appendChild(wrap);
+    console.warn('concepts: данные не загрузились — ' + what);
+    const loginNeeded = () => {
+      window.CONCEPTS_SOURCE = 'auth'; box.dataset.source = 'auth';
+      box.querySelector('[data-k=title]').textContent = 'Сессия закончилась — войдите снова';
+      box.querySelector('[data-k=text]').textContent = 'Сервер не отдал ' + what + ' без входа. Переходим на страницу входа…';
+      box.querySelector('[data-k=acts]').innerHTML = '<a href="' + esc(toLogin) + '" style="' + btn + '">Войти</a>';
+      location.href = toLogin;
+    };
+    try {
+      const ac = window.AbortController ? new AbortController() : null, timer = setTimeout(() => ac && ac.abort(), AUTH_WAIT_MS);
+      fetch('../api/v1/auth/state', { cache: 'no-store', headers: { Accept: 'application/json' }, signal: ac ? ac.signal : undefined })
+        .then(r => r.status === 401 ? { enabled: true, user: null } : r.ok ? r.json() : null)
+        .then(a => { clearTimeout(timer); if (a && a.enabled && !a.user) loginNeeded(); })
+        .catch(() => clearTimeout(timer));  // сбой или таймаут: остаётся «Данные не загрузились»
+    } catch (e) { }
+    document.write('<plaintext hidden style="display:none">');  // конец: остальное — текст, не код (см. выше)
+  }
 })();

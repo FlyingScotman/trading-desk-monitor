@@ -334,13 +334,15 @@ body { font-family: var(--mono); font-size: 12.5px; }
         const c = K.chart(ch(a, 280), () => ({ grid: { left: 6, right: 6, top: 28, bottom: 4, containLabel: true }, legend: { top: 0 }, tooltip: { trigger: 'axis' },
           xAxis: { type: 'category', data: M.buckets }, yAxis: [{ type: 'value', unit: S.every(s => s.unit === S[0].unit) ? (S[0].unit === 'бп' ? 'б.п.' : S[0].unit) : null, scale: true }, { type: 'value', splitLine: { show: false }, axisLabel: { formatter: v => f.n(v) + ' бп' } }],
           series: S.flatMap((s, i) => [
-            { name: s.name, type: 'line', data: s.pts.map(v => +v.toFixed(3)), symbolSize: 5, color: K.curveColors[s.risk] || K.PAL[i] },
-            { name: s.name + ' вчера', type: 'line', data: s.pts.map((v, k) => +(v - s.chg[k] / (s.unit === 'бп' ? 1 : 100)).toFixed(3)), showSymbol: false, lineStyle: { type: 'dashed', width: 1 }, color: K.curveColors[s.risk] || K.PAL[i], opacity: .5 },
+            { name: s.name, type: 'line', data: s.pts.map(v => v == null ? null : +v.toFixed(3)), symbolSize: 5, color: K.curveColors[s.risk] || K.PAL[i] },
+            { name: s.name + ' вчера', type: 'line', data: s.pts.map((v, k) => v == null ? null : +(v - s.chg[k] / (s.unit === 'бп' ? 1 : 100)).toFixed(3)), showSymbol: false, lineStyle: { type: 'dashed', width: 1 }, color: K.curveColors[s.risk] || K.PAL[i], opacity: .5 },
           ]).concat(S.length === 1 ? [{ name: 'изм., бп', type: 'bar', yAxisIndex: 1, data: S[0].chg, itemStyle: { color: css('--fg-3'), opacity: .4 }, barMaxWidth: 16 }] : []) }));
         c.on('click', pp => { const s = S[Math.floor(pp.seriesIndex / 2)] || S[0], k = pp.dataIndex; K.drill({ title: 'Риск ' + s.name + ' · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: K.list().map(p => ({ p, v: p.risk[s.risk][k] })) }); });
         b.innerHTML = '<table class="k-tbl" data-vk="c12-curves" data-title="Кривые: уровень, изменение и наш риск"><thead><tr><th>Кривая</th>' + M.buckets.map(x => '<th class="n">' + x + '</th>').join('') + '</tr></thead><tbody>' +
           S.map(s => '<tr><td>' + esc(s.name) + '</td>' + s.pts.map(v => '<td class="n">' + f.n(v, 2) + '</td>').join('') + '</tr><tr><td class="mut">изм., бп</td>' + s.chg.map(v => '<td class="n ' + f.cls(v) + '">' + f.s(v, 0) + '</td>').join('') + '</tr>' +
             '<tr><td class="mut">наш риск</td>' + M.buckets.map((_, k) => '<td class="n">' + K.d({ title: 'Риск ' + s.name + ' · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: K.list().map(p => ({ p, v: p.risk[s.risk][k] })) }, null, '') + '</td>').join('') + '</tr>').join('') + '</tbody></table>' +
+          // кривой без единой точки в прогоне нет (#308: старый прогон) — словами, а не пустой линией
+          S.filter(s => s.pts.every(v => v == null)).map(s => '<div class="k-note" style="margin-top:6px;color:var(--warn)">кривой ' + esc(s.name) + ' нет в этом прогоне</div>').join('') +
           '<div class="k-note" style="margin-top:6px">щелчок по точке кривой — вклад позиций в риск этого бакета</div>';
         K.tableToolsAll(b);
         return S.map(s => s.name).join(' · ') + ': сегодня (сплошная) / вчера (пунктир)';

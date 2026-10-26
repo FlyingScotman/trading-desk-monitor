@@ -5,6 +5,9 @@
  *    прогона нет (база пуста: window.CONCEPTS_RUN_EMPTY) — real.js подставляет демо-набор и говорит об этом в шапке;
  *    и lib/live.js (#28: лента событий по SSE или опросом, полоса «доступен новый прогон»);
  *  - ?demo=1 или открыто как файл (file://): демо-набор lib/mock.js, без живых обновлений.
+ *  - сервер не отдал прогон (#309: 401 — сессия кончилась, 5xx, сеть): это не демо. Тег скрипта /concepts-run.js
+ *    (/concepts-data.js) отмечает ошибку в window.CONCEPTS_LOAD_ERROR, lib/real.js показывает вместо монитора
+ *    «данные не загрузились» (источник 'error') или ведёт на вход; демо-цифры не подставляются.
  * Выбранный прогон — как у остальных страниц (desk-nav.js): ?run_id= / ?as_of= / ?demo=1 в адресе, иначе выбор,
  * запомненный в localStorage (desk.run.v1, 12 часов).
  */
@@ -25,6 +28,11 @@
   }
   var q = ['run_id', 'as_of'].filter(function (k) { return sel[k]; }).map(function (k) { return k + '=' + encodeURIComponent(sel[k]); }).join('&');
   q = q ? '?' + q : '';
+  // ошибка загрузки (#309): тег скрипта не сообщает код ответа, только сам факт; что это было (вход или сбой),
+  // lib/real.js выясняет по /api/v1/auth/state
+  window.CONCEPTS_LOAD_ERROR = null;
+  window.conceptsLoadFailed = function (what) { (window.CONCEPTS_LOAD_ERROR = window.CONCEPTS_LOAD_ERROR || {})[what] = true; };
+  var tag = function (src, what) { return '<script src="' + src + '" onerror="conceptsLoadFailed(\'' + what + '\')"><\/script>'; };
   // lib/live.js — живые обновления (#28): лента событий сервера, «доступен новый прогон»
-  document.write('<script src="../concepts-run.js' + q + '"><\/script><script src="../concepts-data.js' + q + '"><\/script><script src="lib/real.js"><\/script><script src="lib/live.js"><\/script>');
+  document.write(tag('../concepts-run.js' + q, 'run') + tag('../concepts-data.js' + q, 'data') + '<script src="lib/real.js"><\/script><script src="lib/live.js"><\/script>');
 })();

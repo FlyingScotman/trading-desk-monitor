@@ -292,7 +292,8 @@
     // график кривых
     const P = M.pillars;
     const ru = M.curve['RUB RUONIA'], ks = M.curve['RUB KEY'], ba = K.basisCurve();
-    const ofzY = M.ofzCurve.map((v, i) => v - ru.chg[i] / 100 - ba.chg[i] / 100);
+    // нет точки кривой — нет и «вчера» (null, разрыв): null − Δ дало бы выдуманное −Δ около нуля (#308, B1)
+    const ofzY = M.ofzCurve.map((v, i) => v == null ? null : v - ru.chg[i] / 100 - ba.chg[i] / 100);
     K.chart(document.getElementById('curveChart'), () => ({
       grid: { left: 6, right: 6, top: 30, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 },
       tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '—' : f.n(v, 2) },
@@ -300,7 +301,7 @@
       yAxis: [{ type: 'value', scale: true, axisLabel: { formatter: v => f.pct(v, 1) } }, { type: 'value', name: 'Δ б.п.', splitLine: { show: false } }],
       series: [
         { name: 'RUONIA', type: 'line', data: ru.pts, color: K.curveColors['RUB RUONIA'], showSymbol: false, lineStyle: { width: 2 } },
-        { name: 'RUONIA вчера', type: 'line', data: ru.pts.map((v, i) => v - ru.chg[i] / 100), color: K.curveColors['RUB RUONIA'], showSymbol: false, lineStyle: { width: 1, type: 'dashed' } },
+        { name: 'RUONIA вчера', type: 'line', data: ru.pts.map((v, i) => v == null ? null : v - ru.chg[i] / 100), color: K.curveColors['RUB RUONIA'], showSymbol: false, lineStyle: { width: 1, type: 'dashed' } },
         { name: 'ОФЗ', type: 'line', data: M.ofzCurve, color: K.curveColors['RUB OFZ'], showSymbol: false, lineStyle: { width: 2 } },
         { name: 'ОФЗ вчера', type: 'line', data: ofzY, color: K.curveColors['RUB OFZ'], showSymbol: false, lineStyle: { width: 1, type: 'dashed' } },
         { name: 'Δ RUONIA', type: 'bar', yAxisIndex: 1, data: ru.chg, color: K.curveColors['RUB RUONIA'], itemStyle: { opacity: .22 }, barGap: 0, barMaxWidth: 9 },
