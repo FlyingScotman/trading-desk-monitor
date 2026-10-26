@@ -87,7 +87,8 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
       const nCds = list.filter(isCds).length;
       const o = { id, name: i.short, full: i.name, sector: i.sector, rating: i.rating, ratingInfo: i.ratingInfo, list, n: list.length - nCds, nCds,
         mv: sumBy(list, p => p.mv), cs01: sumBy(list, p => p.cs01), dv01: sumBy(list, p => p.dv01), basis01: sumBy(list, p => p.basis01),
-        pnl: sumBy(list, p => p.pnl.total), carry: sumBy(list, p => p.carryDay), funding: sumBy(list, p => p.fundingDay), mtd: sumBy(list, p => p.pnlMtd), ytd: sumBy(list, p => p.pnlYtd),
+        // PnL, кэрри, фондирование: ни у одной бумаги не посчитано — null («—»), а не 0 (B1, #333)
+        pnl: M.sum(list, p => p.pnl.total), carry: M.sum(list, p => p.carryDay), funding: M.sum(list, p => p.fundingDay), mtd: M.sum(list, 'pnlMtd'), ytd: M.sum(list, 'pnlYtd'),
         ccys: [...new Set(list.map(p => p.ccy))].sort((a, b) => M.ccyOrder[a] - M.ccyOrder[b]) };
       o.searchText = (o.name + ' ' + o.full + ' ' + o.sector + ' ' + o.rating + ' ' + o.ccys.join(' ')).toLowerCase();
       return o;
@@ -129,13 +130,16 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     // Парето
     const corp = SRC.slice().sort((a, b) => Math.abs(b[st.meas]) - Math.abs(a[st.meas]));
     const top = corp.slice(0, 15), tot = sumBy(corp, x => Math.abs(x[st.meas])) || 1;
-    let c = 0; const cum = top.map(x => (c += Math.abs(x[st.meas])) / tot * 100);
+    // мера не посчитана ни у одного эмитента (PnL в прогоне без PnL, B1) — накопленной доли нет: null, а не 0%
+    const none = SRC.every(x => x[st.meas] == null);
+    let c = 0; const cum = top.map(x => none ? null : (c += Math.abs(x[st.meas] || 0)) / tot * 100);
+    const pctOr = v => v == null ? '—' : Math.round(v) + '%';
     const pc = K.chart(document.getElementById('pareto'), () => ({
       grid: { left: 6, right: 6, top: 12, bottom: 4, containLabel: true },
-      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: ps => { const x = top[ps[0].dataIndex]; return '<b>' + esc(x.full) + '</b><br>' + m.t + ': <b>' + m.fmt(x[st.meas]) + '</b> ' + m.unit + '<br>доля ' + Math.round(Math.abs(x[st.meas]) / tot * 100) + '% · накопленно ' + Math.round(cum[ps[0].dataIndex]) + '%'; } },
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: ps => { const x = top[ps[0].dataIndex]; return '<b>' + esc(x.full) + '</b><br>' + m.t + ': <b>' + m.fmt(x[st.meas]) + '</b> ' + m.unit + '<br>доля ' + pctOr(x[st.meas] == null ? null : Math.abs(x[st.meas]) / tot * 100) + ' · накопленно ' + pctOr(cum[ps[0].dataIndex]); } },
       xAxis: { type: 'category', data: top.map(x => x.name), axisLabel: { rotate: 35, fontSize: 10, interval: 0 } },
       yAxis: [{ type: 'value', axisLabel: { formatter: x => K.tick(x, m.sc) } }, { type: 'value', max: 100, min: 0, splitLine: { show: false }, axisLabel: { formatter: '{value}%', color: K.css('--warn') } }],
-      series: [{ type: 'bar', barMaxWidth: 28, data: top.map(x => ({ value: m.abs ? Math.abs(x[st.meas]) : x[st.meas], itemStyle: { color: K.issuerColor(x.id), opacity: x.id === st.sel ? 1 : .75, borderColor: x.id === st.sel ? K.css('--fg') : 'transparent', borderWidth: 1.5 } })) },
+      series: [{ type: 'bar', barMaxWidth: 28, data: top.map(x => ({ value: x[st.meas] == null ? null : m.abs ? Math.abs(x[st.meas]) : x[st.meas], itemStyle: { color: K.issuerColor(x.id), opacity: x.id === st.sel ? 1 : .75, borderColor: x.id === st.sel ? K.css('--fg') : 'transparent', borderWidth: 1.5 } })) },
         { type: 'line', yAxisIndex: 1, data: cum, symbolSize: 4, lineStyle: { type: 'dashed', width: 2, color: K.css('--warn') }, itemStyle: { color: K.css('--warn') } }],
     }));
     pc.on('click', pp => select(top[pp.dataIndex].id, true));

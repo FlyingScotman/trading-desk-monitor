@@ -1012,9 +1012,10 @@
     if (spec.nullable && text == null && (spec.rows ? spec.rows.every(r => r.v == null) : spec.list && spec.list.every(p => (typeof spec.val === 'function' ? spec.val(p) : p[spec.val]) == null)))
       return '<span class="mut3" title="не посчитано">—</span>';
     const id = reg.push(spec) - 1;
-    const v = spec.v != null ? spec.v : spec.rows ? spec.rows.reduce((a, r) => a + (r.v || 0), 0) : (spec.list ? M.sum(spec.list, spec.val) : null);
-    // сумма по списку, где ни одно значение не посчитано (M.sum → null, #327), — «—», а не 0 (разбор по щелчку остаётся)
-    if (text == null && v == null && spec.list && spec.list.length) text = '<span class="mut3" title="не посчитано">—</span>';
+    const v = spec.v != null ? spec.v : spec.rows ? M.sum(spec.rows, 'v') : (spec.list ? M.sum(spec.list, spec.val) : null);
+    // сумма по строкам или списку, где ни одно значение не посчитано (M.sum → null, #327, #333), — «—», а не 0
+    // (разбор по щелчку остаётся); посчитана часть — сумма посчитанных, как раньше
+    if (text == null && v == null && (spec.rows || spec.list || []).length) text = '<span class="mut3" title="не посчитано">—</span>';
     const t = text != null ? text : (spec.fmt || f.dv)(v);
     return '<span class="dr ' + (cls != null ? cls : (spec.color === false ? '' : f.cls(v))) + '" data-dr="' + id + '">' + t + '</span>';
   };
@@ -1066,9 +1067,12 @@
     // счётная мера: деления только целые
     const sc = spec.sc != null ? spec.sc : spec.fmt ? null : 1e3, axFmt = sc != null ? v => K.tick(v, sc) : K.tickOf(fmt);
     // строки: [{p, v}] — из spec.rows или spec.list+val
-    const rows = (spec.rows || spec.list.map(p => ({ p, v: typeof spec.val === 'function' ? spec.val(p) : p[spec.val] }))).filter(r => r.v && Math.abs(r.v) > 1e-9);
-    const tot = rows.reduce((s, r) => s + r.v, 0);
-    o.el.querySelector('.t').innerHTML = esc(spec.title) + ' <span class="' + f.cls(tot) + '">' + fmt(tot) + '</span> <span class="mut" style="font-size:12px;font-weight:400">' + esc(spec.unit || '') + '</span>';
+    const all = spec.rows || spec.list.map(p => ({ p, v: typeof spec.val === 'function' ? spec.val(p) : p[spec.val] }));
+    const rows = all.filter(r => r.v && Math.abs(r.v) > 1e-9);
+    // ни одно значение не посчитано (все null, #333, B1) — итог «—», а не 0
+    const tot = all.length && M.sum(all, 'v') == null ? null : rows.reduce((s, r) => s + r.v, 0);
+    const fmtTot = v => v == null ? '<span class="mut3" title="не посчитано">—</span>' : fmt(v);
+    o.el.querySelector('.t').innerHTML = esc(spec.title) + ' <span class="' + f.cls(tot) + '">' + fmtTot(tot) + '</span> <span class="mut" style="font-size:12px;font-weight:400">' + esc(spec.unit || '') + '</span>';
     o.el.querySelector('.st').textContent = rows.length + ' позиций дают вклад' + (spec.note ? ' · ' + spec.note : '');
     let dim = spec.dim || 'pos', q = '', view = 'table';
     const tools = h('div', '', ''); tools.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px';
@@ -1110,7 +1114,7 @@
             (dim === 'pos' ? '<td class="mut">' + esc(x.p.book) + '</td><td>' + K.ccyTag(x.p.ccy) + '</td><td class="n"' + K.csvv(() => f.mn(x.p.notional, 2)) + '>' + f.mn(x.p.notional, 2) + '<span class="mut3">mm ' + esc(x.p.ccy) + '</span></td>' : '<td class="n mut">' + x.n.length + '</td>') +
             '<td class="n">' + (dim === 'pos' && x.p.mv == null ? '—' : f.mn(mvOf(x), 1)) + '</td>' +
             '<td class="n ' + f.cls(x.v) + '">' + fmt(x.v) + '</td><td>' + K.bar(x.v, max) + '</td><td class="n mut">' + Math.round(Math.abs(x.v) / absTot * 100) + '%</td><td class="n mut3">' + Math.round(cum / absTot * 100) + '%</td></tr>';
-        }).join('') + '</tbody><tfoot><tr><td></td><td>Итого</td><td colspan="' + (dim === 'pos' ? 3 : 1) + '"></td><td class="n">' + f.mn(mvTot, 1) + '</td><td class="n ' + f.cls(tot) + '">' + fmt(tot) + '</td><td colspan="3"></td></tr></tfoot></table>';
+        }).join('') + '</tbody><tfoot><tr><td></td><td>Итого</td><td colspan="' + (dim === 'pos' ? 3 : 1) + '"></td><td class="n">' + f.mn(mvTot, 1) + '</td><td class="n ' + f.cls(tot) + '">' + fmtTot(tot) + '</td><td colspan="3"></td></tr></tfoot></table>';
       // CSV разбора (#184): то, что на экране, — разрез и фильтр. Колонки без заголовка (цветная полоска слева и
       // столбик вклада) не выгружаются, «Доля» и «Накопл.» — выгружаются. Колонки у разрезов разные — ключ ширины
       // свой у каждого разреза
@@ -1597,6 +1601,8 @@
         if (!c.sum) return '<td></td>';
         if (c.nullable && list.every(r => val(c, r) == null)) return '<td class="n"><span class="mut3" title="не посчитано">—</span></td>';  // #168
         const fn = typeof c.sum === 'function' ? c.sum : r => val(c, r) || 0;
+        // ни одно слагаемое не посчитано (все null, #333, B1) — итог и итог группы «—», а не 0; посчитана часть — как раньше
+        if (list.length && M.sum(list, typeof c.sum === 'function' ? c.sum : r => val(c, r)) == null) return '<td class="n"><span class="mut3" title="не посчитано">—</span></td>';
         const tot = list.reduce((s, r) => s + fn(r), 0);
         const fm = c.sumFmt || c.fmt || (v => f.n(v));
         if (c.drill !== false && list.length && list[0].searchText) return '<td class="n">' + K.d({ title: (c.drillTitle || c.label.replace(/<[^>]+>/g, '')), unit: c.unit, fmt: v => fm(v, {}), rows: list.map(p => ({ p, v: fn(p) })) }, fm(tot, {})) + '</td>';

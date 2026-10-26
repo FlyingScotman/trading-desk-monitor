@@ -85,11 +85,14 @@
   };
   // база нормировки цвета: MV для облигаций, номинал для деривативов
   const base = p => p.group === 'DER' ? Math.abs(p.notionalRub) * 0.02 : Math.abs(p.mv);
+  // сумма с единицей; не посчитана — «—» без единицы
+  const unitOr = (v, fmt, u) => v == null ? '—' : fmt(v) + ' ' + u;
+  // PnL и кэрри узла: не посчитаны ни у одной позиции — null («—», серый), а не 0 (B1, #333)
   const COLORS = {
-    pnl: { t: 'PnL дня', div: true, unit: 'б.п. к MV', agg: L => { const b = M.sum(L, base); return b ? M.sum(L, p => p.pnl.total) / b * 1e4 : 0; }, fmt: v => f.s(v, 1) + ' б.п.', abs: L => f.mns(M.sum(L, p => p.pnl.total), 2) + ' mm ₽' },
+    pnl: { t: 'PnL дня', div: true, unit: 'б.п. к MV', agg: L => { const b = M.sum(L, base), v = M.sum(L, p => p.pnl.total); return v == null ? null : b ? v / b * 1e4 : 0; }, fmt: v => f.s(v, 1) + ' б.п.', abs: L => unitOr(M.sum(L, p => p.pnl.total), v => f.mns(v, 2), 'mm ₽') },
     spr: { t: 'Δ спреда', div: true, inv: true, unit: 'б.п. (рост — красный)', agg: L => wavg(L.filter(p => p.group === 'CORP' || p.group === 'SUB'), p => p.spreadChgBp), fmt: v => f.s(v, 1) + ' б.п.' },
     ytm: { t: 'доходность', div: false, unit: '%', agg: L => wavg(L.filter(p => p.group !== 'DER' && p.kind !== 'IN'), p => p.ytm), fmt: v => f.pct(v) },
-    carry: { t: 'кэрри', div: true, unit: '% годовых к MV, без фондирования', agg: L => { const b = M.sum(L, base); return b ? M.sum(L, 'carryDay') * 365 / b * 100 : 0; }, fmt: v => f.pcts(v, 2), abs: L => f.ks(M.sum(L, 'carryDay')) + ' тыс ₽/д' },
+    carry: { t: 'кэрри', div: true, unit: '% годовых к MV, без фондирования', agg: L => { const b = M.sum(L, base), v = M.sum(L, 'carryDay'); return v == null ? null : b ? v * 365 / b * 100 : 0; }, fmt: v => f.pcts(v, 2), abs: L => unitOr(M.sum(L, 'carryDay'), f.ks, 'тыс ₽/д') },
     // фондирование: не посчитано ни у одной позиции узла — null («—», серый), а не 0
     funding: { t: 'фондир.', div: true, unit: '% годовых к MV', agg: L => { const F = L.filter(p => p.fundingDay != null), b = M.sum(F, base); return F.length && b ? M.sum(F, 'fundingDay') * 365 / b * 100 : null; }, fmt: v => f.pcts(v, 2), abs: L => L.some(p => p.fundingDay != null) ? f.ks(M.sum(L, p => p.fundingDay || 0)) + ' тыс ₽/д' : '—' },
     tenor: { t: 'срок до события', div: false, unit: 'лет', agg: L => wavg(L, p => p.tenor), fmt: v => f.yrs(v) },

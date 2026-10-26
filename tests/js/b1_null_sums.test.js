@@ -4,6 +4,7 @@
 //  - #322: изменение кривой, которого нет в CURVE_MOVES, — null (lib/real.js chg), «вчера» по нему не строится (K.yest),
 //    Δ ОФЗ — Δ КБД прогона (K.ofzChg), «сдвигов нет» — K.noMoves;
 //  - #325: K.cpnType — тип купона или null у позиции без купона; в фикстуре есть такая позиция с эмитентом.
+//  - #333: K.d по строкам (rows), где ни одно значение не посчитано, — «—», а не «0»; часть посчитана — сумма посчитанных.
 // Браузерная часть (страницы C01–C17) — b1_null_sums.pw.test.js.
 //   node tests/js/b1_null_sums.test.js
 'use strict';
@@ -64,6 +65,16 @@ t('#327: фондирование не посчитано ни у одной п�
   const { M: M2 } = load({ real: true, mutate: D => D.positions.forEach((p, i) => { if (p.pnl) p.pnl.funding = i === 0 ? -1000 : null; }) });
   const x = M2.sumX(M2.positions, p => p.pnl.funding);
   assert.strictEqual(x.v, -1000); assert.strictEqual(x.n, 1); assert.strictEqual(x.miss, M2.positions.length - 1);
+});
+
+t('#333: K.d по строкам (rows) — все null: «—», а не «0»; часть посчитана — сумма посчитанных', () => {
+  const { M, K } = load({ real: true });
+  const p = M.positions[0];
+  const html = K.d({ title: 'PnL', fmt: K.f.k, rows: [{ p, v: null }, { p, v: null }] });
+  assert.ok(html.includes('—') && html.includes('data-dr') && !/>0</.test(html), html);
+  assert.ok(/>2<\/span>$/.test(K.d({ title: 'PnL', fmt: K.f.k, rows: [{ p, v: 2000 }, { p, v: null }] })), 'часть посчитана — 2');
+  assert.ok(/>0<\/span>$/.test(K.d({ title: 'PnL', fmt: K.f.k, rows: [{ p, v: 0 }, { p, v: null }] })), 'посчитанный 0 — это 0');
+  assert.ok(K.d({ title: 'PnL', fmt: K.f.k, rows: [{ p, v: null }] }, '1.5').includes('>1.5<'), 'текст задан — он и остаётся');
 });
 
 t('#327: водопад — K.wfTip(null) «—», K.wfLabel(null) пустая; числа — как раньше', () => {
