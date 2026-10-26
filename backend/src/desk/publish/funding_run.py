@@ -8,8 +8,12 @@ result in the run's publication.
   (private/1.3, on ``D``). ``rules.reference.policy_from_reference`` and ``apply_funding_policy`` make the engine's
   ``FundingPolicy``: the base of each book type and the write-off from the adapter, every other convention the
   adapter's when ``funding_policy`` gives it, else the engine's provisional default (``rules.funding.OPEN_DECISIONS``;
-  the block's ``policy.provisional`` lists them). **No funding rule in force: "not configured"**, said in the run log,
-  the block and the pages, and nothing of funding is published as 0;
+  the block's ``policy.provisional`` lists them);
+- the monitor's funding settings (``desk.funding_settings``, #237): its rules (a rule marked override, then the
+  adapter's, then the settings', ``rules.funding.RuleTier``), its book type bases and conventions under the adapter's,
+  and the **market default rate** (by default RUB at RUONIA, CNY at RUSFARCNY) for a line no rule covers, named
+  «рыночная ставка по умолчанию» on the line, the position and the pages. **No rule in force anywhere and the default
+  rate off: "not configured"**, said in the run log, the block and the pages, and nothing of funding is published as 0;
 - the period (previous business day, ``D``]: its start is the previous market's date, else the previous default run's,
   else the weekday before;
 - positions: the run's bond rows (``tdm_run.run_content``) with their MV in their currency and the accrued (core: the
@@ -57,12 +61,13 @@ from typing import Any
 
 import psycopg
 
-from .. import cash, store
+from .. import cash, funding_settings, store
 from ..marketdata.adapter import MarketView
 from ..rules import funding as F
 from ..rules.rate_index import FixingTable, FxTable
 from ..rules.reference import (
     apply_funding_policy,
+    bases_from_reference,
     entities_from_reference,
     funding_rules_from_reference,
     policy_from_reference,
@@ -73,7 +78,8 @@ COMPUTED, NOT_CONFIGURED, INVALID, FAILED, NOT_COMPUTED = (
     "computed", "not_configured", "invalid_config", "failed", "not_computed")
 STATUS_TEXT = {
     COMPUTED: "фондирование посчитано",
-    NOT_CONFIGURED: "фондирование не настроено: адаптер не передал правил фондирования (reference() funding_rules)",
+    NOT_CONFIGURED: "фондирование не настроено: нет правил фондирования (ни от адаптера, ни в настройках), а рыночная "
+                    "ставка по умолчанию выключена (настройки, раздел «Фондирование»)",
     INVALID: "фондирование не посчитано: правила фондирования адаптера противоречат друг другу",
     FAILED: "фондирование не посчитано: ошибка расчёта",
     NOT_COMPUTED: "прогон без расчёта фондирования (до B1)",
@@ -204,7 +210,8 @@ def _position(row: dict[str, Any], books: dict[str, dict]) -> tuple[F.FundingPos
     else:
         acc = _f((ex.get("reported") or {}).get("accrued_ccy"))
     pos = F.FundingPosition(row["position_id"], row["book_id"], b.get("book_type") or "", b.get("entity") or "—", ccy,
-                            mv - (acc or 0.0), acc or 0.0, instrument_id=row.get("instrument_id"))
+                            mv - (acc or 0.0), acc or 0.0, instrument_id=row.get("instrument_id"),
+                            security_class=row.get("asset_class"))
     return pos, None if acc is not None else "accrued unknown"
 
 
@@ -331,7 +338,13 @@ def _line_json(x: F.FundingLine, in_position: bool, note: str = "") -> dict[str,
             "body_ccy": last.body, "body_rub": last.body * last.fx, "days": len(x.days),
             "first_day": x.days[0].day.isoformat(), "last_day": last.day.isoformat(),
             "interest_ccy": x.interest, "interest_rub": x.interest_reporting, "in_position": in_position,
-            "note": "; ".join(n for n in (x.note, note) if n)}
+            "note": "; ".join(n for n in (x.note, note) if n), **_rule_json(x)}
+
+
+def _rule_json(x: F.FundingLine) -> dict[str, Any]:
+    """Which rule gave the line's rate (#237): its id, its source (adapter, settings, settings_override, default,
+    contract) and whether it is the market default rate."""
+    return {"rule_id": x.rule_id, "rule_source": x.rule_source, "default_rate": x.default_rate}
 
 
 def _since_write_off(con: psycopg.Connection, on: date, books: dict[str, date | None]) -> dict[str, dict[str, float]]:
@@ -362,12 +375,14 @@ def _empty_block(status: str, text: str, period: F.AccrualPeriod | None, **kw: A
 
 def compute(con: psycopg.Connection, on: date, prev: MarketView | None, market: MarketView,
             content_rows: list[dict[str, Any]], run_books: list[dict[str, Any]], inputs: store.PositionInputs,
-            terms: dict[str, Any] | None = None) -> RunFunding:
+            terms: dict[str, Any] | None = None, settings: funding_settings.FundingSettings | None = None) -> RunFunding:
     """Funding of the run of ``on`` (see the module docstring). ``content_rows`` and ``run_books``:
     ``RunContent.rows`` and ``RunContent.reference["books"]``; ``terms``: position_id -> the bond's ``BondTerms``
-    (an HTM lot's coupon date and maturity)."""
+    (an HTM lot's coupon date and maturity); ``settings``: the funding settings (default: the current ones,
+    ``funding_settings.load``)."""
     try:
-        return _compute(con, on, prev, market, content_rows, run_books, inputs, terms or {})
+        fs = settings if settings is not None else funding_settings.load()
+        return _compute(con, on, prev, market, content_rows, run_books, inputs, terms or {}, fs)
     except Exception as e:  # noqa: BLE001 - funding never fails the run; it says why it has none
         text = f"{STATUS_TEXT[FAILED]}: {type(e).__name__}: {e}"
         pids = {r["position_id"] for r in content_rows}
@@ -376,38 +391,81 @@ def compute(con: psycopg.Connection, on: date, prev: MarketView | None, market: 
                           log=[("WARN", text[:2000])])
 
 
+@dataclass
+class RunPolicy:
+    """``run_policy``: the funding policy of a run, or why there is none (status ``not_configured`` / ``invalid_config``,
+    ``policy`` None)."""
+
+    status: str
+    text: str
+    policy: F.FundingPolicy | None = None
+    entities: dict[str, F.EntityType] | None = None
+    source: dict[str, str] = field(default_factory=dict)
+    """Per policy field: where it came from (``funding_policy:<id>``, settings, settings_override, DEC01)."""
+    conflicts: tuple[str, ...] = ()
+    entity_rows: list[dict] = field(default_factory=list)
+    policy_rows: list[dict] = field(default_factory=list)
+
+
+def configured(rule_rows: list[dict], fs: funding_settings.FundingSettings) -> bool:
+    """Funding is configured: an adapter rule in force, a settings rule, or the market default rate on (#237)."""
+    return any(r.get("active", True) is not False for r in rule_rows) or bool(fs.active_rules) or fs.default_enabled
+
+
+def run_policy(con: psycopg.Connection, on: date, known_at: Any, fs: funding_settings.FundingSettings,
+               rule_rows: list[dict] | None = None) -> RunPolicy:
+    """The funding policy of the run of ``on``, one for the funding and the currency funding liability
+    (``fx_liability``): the adapter's bases and entities, the settings' bases and conventions under them
+    (``FundingSettings.apply``, DEC01's clean TRADING base), the adapter's ``funding_policy`` over all.
+    ``rule_rows``: the adapter's rules (default: those in force on ``on``)."""
+    if rule_rows is None:
+        rule_rows = store.current_reference(con, "funding_rules", on, known_at)
+    if not configured(rule_rows, fs):
+        return RunPolicy(NOT_CONFIGURED, STATUS_TEXT[NOT_CONFIGURED])
+    entity_rows = store.current_reference(con, "entities", on, known_at)
+    policy_rows = store.current_reference(con, "funding_policy", on, known_at)
+    try:
+        base, settings_source = fs.apply(bases_from_reference(rule_rows), policy_from_reference(rule_rows, entity_rows))
+    except ValueError as e:
+        return RunPolicy(INVALID, f"{STATUS_TEXT[INVALID]}: {e}")
+    settings = apply_funding_policy(policy_rows, base)
+    types, _ = entities_from_reference(entity_rows)
+    return RunPolicy(COMPUTED, STATUS_TEXT[COMPUTED], settings.policy, types or None,
+                     {**settings_source, **settings.source}, settings.conflicts, entity_rows, policy_rows)
+
+
 def _compute(con: psycopg.Connection, on: date, prev: MarketView | None, market: MarketView,
              content_rows: list[dict[str, Any]], run_books: list[dict[str, Any]], inputs: store.PositionInputs,
-             terms: dict[str, Any]) -> RunFunding:
+             terms: dict[str, Any], fs: funding_settings.FundingSettings) -> RunFunding:
     period = F.AccrualPeriod(period_start(con, on, prev), on)
     known_at = inputs.known_at
     rule_rows = _rules_in_period(con, period, known_at)
     pids = [r["position_id"] for r in content_rows]
-    if not any(r.get("active", True) is not False for r in rule_rows):
-        text = STATUS_TEXT[NOT_CONFIGURED]
-        return RunFunding(NOT_CONFIGURED, _empty_block(NOT_CONFIGURED, text, period),
+    default = fs.describe()
+    settings_log = [("WARN", f"фондирование: настройки фондирования не прочитаны, взяты умолчания: {fs.error}")] \
+        if fs.error else []
+    rp = run_policy(con, on, known_at, fs, rule_rows)
+    if rp.status == NOT_CONFIGURED:
+        text = rp.text
+        return RunFunding(NOT_CONFIGURED, _empty_block(NOT_CONFIGURED, text, period, default_rate=default),
                           {p: {"state": NOT_CONFIGURED, "amount_rub": None, "reason": text} for p in pids},
-                          log=[("WARN", text + "; фондирование не посчитано, в PnL его нет (не 0)")])
-    entity_rows = store.current_reference(con, "entities", on, known_at)
-    policy_rows = store.current_reference(con, "funding_policy", on, known_at)
-    try:
-        base_policy = policy_from_reference(rule_rows, entity_rows)
-    except ValueError as e:
-        text = f"{STATUS_TEXT[INVALID]}: {e}"
-        return RunFunding(INVALID, _empty_block(INVALID, text, period),
+                          log=[*settings_log, ("WARN", text + "; фондирование не посчитано, в PnL его нет (не 0)")])
+    if rp.status == INVALID:
+        text = rp.text
+        return RunFunding(INVALID, _empty_block(INVALID, text, period, default_rate=default),
                           {p: {"state": PROBLEM, "amount_rub": None, "reason": text} for p in pids},
-                          log=[("WARN", text)])
-    settings = apply_funding_policy(policy_rows, base_policy)
-    pol = settings.policy
-    rules = funding_rules_from_reference(rule_rows)
-    types, _ = entities_from_reference(entity_rows)
-    entities = types or None
+                          log=[*settings_log, ("WARN", text)])
+    assert rp.policy is not None
+    pol, entity_rows, policy_rows = rp.policy, rp.entity_rows, rp.policy_rows
+    own = fs.rules()
+    rules = F.FundingRules(rates=(*funding_rules_from_reference(rule_rows).rates, *own.rates))
+    entities = rp.entities
     books = {b["book_id"]: b for b in store.current_books(con, on, known_at)}  # also books with only cash
     books.update({b["book_id"]: b for b in run_books})  # the run's own reference (store metadata, else demo books)
     run_book_ids = {r["book_id"] for r in content_rows}
     inp = _gather(con, period, content_rows, inputs, terms, books, pol)
     problems = list(inp.problems)
-    problems += [F.FundingProblem(F.LineKind.POS, "*", c) for c in settings.conflicts]
+    problems += [F.FundingProblem(F.LineKind.POS, "*", c) for c in rp.conflicts]
     # a clean-MV base needs the accrued: a position without it is not funded on a guess
     clean = {p.position_id for p in [*inp.current, *(inp.previous or [])] if p.position_id in inp.unknown_accrued
              and pol.base_by_book_type.get(p.book_type) is F.FundingBase.MV_CLEAN}
@@ -462,9 +520,12 @@ def _compute(con: psycopg.Connection, on: date, prev: MarketView | None, market:
         if by_pos.get(pid):
             amt = math.fsum(x.interest_reporting for x in by_pos[pid])
             st = {"state": FUNDED, "amount_rub": amt, "in_pnl": pid in has_pnl,
+                  "rule_source": by_pos[pid][0].rule_source,
+                  "default_rate": any(x.default_rate for x in by_pos[pid]),
                   "lines": [{"kind": x.kind.value, "base": x.base.value, "rate_expr": x.rate_expr,
                              "rate_pct": x.days[-1].rate * 100, "ccy": x.ccy, "body_ccy": x.days[-1].body,
-                             "days": len(x.days), "interest_ccy": x.interest, "interest_rub": x.interest_reporting}
+                             "days": len(x.days), "interest_ccy": x.interest, "interest_rub": x.interest_reporting,
+                             **_rule_json(x)}
                             for x in by_pos[pid]]}
             if pid in has_pnl:
                 pnl_funding[pid] = amt
@@ -522,8 +583,9 @@ def _compute(con: psycopg.Connection, on: date, prev: MarketView | None, market:
     for x in res.lines:
         by_entity[x.entity] += x.interest_reporting
     total = math.fsum(x.interest_reporting for x in res.lines)
+    n_default = sum(1 for x in res.lines if x.default_rate)
     in_pos = math.fsum(j["interest_rub"] for j in lines_json if j["in_position"])
-    source = dict(settings.source)
+    source = dict(rp.source)
     for bt in pol.base_by_book_type:
         source.setdefault(f"base_by_book_type[{bt}]", "funding_rules" if bt in {
             r.get("book_type") for r in rule_rows if r.get("basis")} else "default")
@@ -537,18 +599,29 @@ def _compute(con: psycopg.Connection, on: date, prev: MarketView | None, market:
                    "book_id": _problem_book(p, book_of)} for p in problems],
         notes=[*inp.notes, *res.notes],
         policy={**pol.lineage(), "source": source, "provisional": provisional},
-        rules=rule_rows, daily_by_book={b: dict(d) for b, d in daily.items()},
+        rules=[*({**r, "source": "adapter"} for r in rule_rows), *fs.rule_rows,
+               *({"rule_id": r.note, "ccy": r.ccy, "rate_kind": "fixed" if r.fixed_rate is not None else "index_spread",
+                  "index_code": r.index, "spread_bp": r.spread_bp if r.index else None,
+                  "fixed_rate_pct": r.fixed_rate * 100 if r.fixed_rate is not None else None, "source": "default",
+                  "note": F.DEFAULT_RATE_LABEL} for r in fs.default_rules())],
+        default_rate={**default, "lines": n_default, "positions": sum(
+            1 for s in per_pos.values() if s.get("default_rate"))},
+        daily_by_book={b: dict(d) for b, d in daily.items()},
         inputs={"previous_run_id": inp.previous_run_id, "cash_units": inp.cash_units, "htm_lots": len(inp.lots),
                 "entities": len(entity_rows), "funding_policy": len(policy_rows),
                 "fixings": list(fixings.indices)})
     block = _jsonable(block)
-    log = [("INFO", f"фондирование {period.start} -> {on} ({len(period.days)} дн.): итог {total:,.0f} ₽, в PnL позиций "
+    log = [*settings_log, ("INFO", f"фондирование {period.start} -> {on} ({len(period.days)} дн.): итог {total:,.0f} ₽, в PnL позиций "
                     f"{in_pos:,.0f} ₽ ({len(pnl_funding)} поз.), строками книг {total - in_pos:,.0f} ₽; строк "
                     f"{len(res.lines)}, проблем {len(problems)}; по умолчанию (provisional): "
                     + (", ".join(provisional) or "нет"))]
     log += [("WARN", f"фондирование: {p.kind.value} {p.ref}: {p.reason}") for p in problems[:LOG_PROBLEMS]]
     if len(problems) > LOG_PROBLEMS:
         log.append(("WARN", f"фондирование: ещё {len(problems) - LOG_PROBLEMS} проблем (в блоке funding прогона)"))
+    if n_default:
+        log.append(("INFO", f"фондирование: {n_default} строк по рыночной ставке по умолчанию ("
+                            + ", ".join(f"{c} {v['expr']}" for c, v in default["by_ccy"].items() if v["expr"])
+                            + "), не трансфертной: правил адаптера и настроек для них нет"))
     log += [("INFO", f"фондирование: {n}") for n in block["notes"]]
     return RunFunding(COMPUTED, block, _jsonable(per_pos), pnl_funding, log)
 
@@ -569,10 +642,10 @@ def _provisional(source: dict[str, str], rule_rows: list[dict], entity_rows: lis
     active = [r for r in rule_rows if r.get("active", True) is not False]
     for d in F.OPEN_DECISIONS:
         f = d.field
-        if f == "base_by_book_type['TRADING']":
-            given = source.get("base_by_book_type[TRADING]") == "funding_rules"
+        if f == "base_by_book_type['TRADING']":  # the settings' or DEC01's base is a decision, not a default
+            given = source.get("base_by_book_type[TRADING]", "default") != "default"
         elif f == "base_by_book_type":
-            given = all(v == "funding_rules" for k, v in source.items() if k.startswith("base_by_book_type["))
+            given = all(v != "default" for k, v in source.items() if k.startswith("base_by_book_type["))
         elif f == "day_count":
             given = all(r.get("day_count") for r in active if r.get("rate_kind") in ("index_spread", "fixed"))
         elif f == "write_off":

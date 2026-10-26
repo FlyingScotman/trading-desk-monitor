@@ -113,6 +113,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from . import funding_settings
 from .inbox.runner import is_path_spec
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -472,6 +473,7 @@ def check_settings_doc(doc: object) -> list[str]:
                     errors.append(f"{key}[{i}]: label must be a string")
                 elif not isinstance(d.get("recursive"), (bool, type(None))):
                     errors.append(f"{key}[{i}]: recursive must be true or false")
+    errors += funding_settings.check(doc.get(funding_settings.KEY))  # the funding settings (#237): an object
     return errors
 
 

@@ -183,6 +183,12 @@ class FundingLineOut(BaseModel):
     interest_rub: float
     in_position: bool = Field(description="In the position's flash PnL (component funding)")
     note: str
+    rule_id: str | None = Field(default=None, description="The rule that gave the rate (of the last day); null: the "
+                                                          "line's contract rate")
+    rule_source: str = Field(default="adapter", description="adapter, settings, settings_override, default (the market "
+                                                            "default rate of the settings), contract")
+    default_rate: bool = Field(default=False, description="Funded at the market default rate («рыночная ставка по "
+                                                          "умолчанию»), not at a transfer rate")
 
 
 class FundingProblemOut(BaseModel):
@@ -231,8 +237,9 @@ class FxLiability(BaseModel):
 
 
 class RunFunding(BaseModel):
-    """The run's funding (wave B1, ``publish.funding_run``). ``state`` not_configured: the adapter gave no funding
-    rules, nothing is funded and nothing is shown as 0; not_computed: a run before B1."""
+    """The run's funding (wave B1, ``publish.funding_run``). ``state`` not_configured: no funding rule (adapter
+    or settings) and the market default rate off, nothing is funded and nothing is shown as 0; not_computed: a run
+    before B1."""
 
     run_id: int
     state: FundingState
@@ -247,6 +254,8 @@ class RunFunding(BaseModel):
     provisional: list[str] = Field(description="Policy fields at the engine's provisional default (OPEN_DECISIONS)")
     policy: dict[str, Any] | None = Field(description="The FundingPolicy applied, with the source of each field")
     lines: list[FundingLineOut]
+    default_rate: dict[str, Any] | None = Field(default=None, description="The market default rate of the settings in "
+                                                "force (by currency), and how many lines and positions it funded")
     fx_liability: FxLiability | None = Field(None, description="The bonds' currency funding liability (TDM#54); "
                                                                "null for a run before it")
 

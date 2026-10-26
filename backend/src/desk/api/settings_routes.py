@@ -26,7 +26,7 @@ import psycopg
 from fastapi import APIRouter, Body, Depends, Request
 from psycopg.rows import dict_row
 
-from .. import settings_forms
+from .. import funding_settings, settings_forms
 from ..inbox import runner, scan
 from ..inbox.loader import CONFIG_NAME_RE, check_config_files, check_settings_tabs, load_adapter
 from ..marketdata import hubhistory
@@ -188,6 +188,48 @@ def test_hub() -> dict[str, Any]:
         return {"ok": False, "host": None, "health": None, "token_accepted": False, "latest": None, "error": str(e),
                 "transport": None}
     return hub_check(st, retries=1)
+
+
+# ---- funding (#237) -------------------------------------------------------------------------------------------
+
+
+def _funding_payload() -> dict[str, Any]:
+    """``GET /api/v1/settings/funding``: the stored ``funding`` object (null: not set), the effective one over the
+    defaults, the market default rate in force and what the form offers."""
+    try:
+        stored = read_settings_json(desk_home()).get(funding_settings.KEY)
+    except SettingsError:
+        stored = None
+    fs = funding_settings.from_doc(stored)
+    return {"stored": stored, "effective": {"default_rate": fs.default_rate, "default_rate_by_ccy": fs.default_rate_by_ccy,
+                                            "rules": [{k: v for k, v in r.items() if k != "source"} for r in fs.rule_rows],
+                                            "policy": fs.policy},
+            "default": fs.describe(), "error": fs.error, "options": funding_settings.options()}
+
+
+@router.get("/api/v1/settings/funding")
+def get_funding_settings() -> dict[str, Any]:
+    return _funding_payload()
+
+
+@router.put("/api/v1/settings/funding")
+def put_funding_settings(body: JsonBody) -> dict[str, Any]:
+    """Replace the ``funding`` object of settings.json (checked by ``funding_settings.check``); the next run uses it."""
+    try:
+        update_settings_json({funding_settings.KEY: body}, desk_home())
+    except SettingsError as e:
+        raise ApiError(422, "invalid_parameter", str(e)) from None
+    return _funding_payload()
+
+
+@router.delete("/api/v1/settings/funding")
+def delete_funding_settings() -> dict[str, Any]:
+    """Back to the defaults (``funding_settings.DEFAULTS``)."""
+    try:
+        update_settings_json({funding_settings.KEY: None}, desk_home())
+    except SettingsError as e:
+        raise ApiError(422, "invalid_parameter", str(e)) from None
+    return _funding_payload()
 
 
 # ---- adapter -------------------------------------------------------------------------------------------------

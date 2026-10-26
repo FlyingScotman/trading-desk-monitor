@@ -52,7 +52,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, timedelta
 from enum import StrEnum
 from itertools import pairwise
-from typing import Any
+from typing import Any, ClassVar
 
 from .rate_index import FxProvider, RateIndexProvider
 
@@ -312,15 +312,32 @@ REPO. For parity checks, not a decision."""
 
 
 # ---------------------------------------------------------------------------------------------- rules
-_WEIGHTS = (("instrument_id", 16), ("book_id", 8), ("entity", 4), ("ccy", 2), ("book_type", 1))
+_WEIGHTS = (("instrument_id", 64), ("book_id", 32), ("entity", 16), ("security_class", 8), ("ccy", 4), ("kind", 2),
+            ("book_type", 1))
+
+
+class RuleTier:
+    """Where a rule comes from, in the order they are tried (#237): a settings rule marked to override the adapter's,
+    the adapter's ``funding_rules``, a settings rule, the market default rate of the settings. A lower tier wins
+    whatever the specificity; within a tier the most specific rule."""
+
+    OVERRIDE, ADAPTER, SETTINGS, DEFAULT = 0, 1, 2, 3
+    SOURCE: ClassVar[dict[int, str]] = {OVERRIDE: "settings_override", ADAPTER: "adapter", SETTINGS: "settings",
+                                        DEFAULT: "default"}
+
+
+DEFAULT_RATE_LABEL = "рыночная ставка по умолчанию"
+"""How the market default rate of the settings is named in the run and on the pages, apart from a transfer rate."""
 
 
 @dataclass(frozen=True)
 class FundingRule:
-    """One funding rate: ``index`` + ``spread_bp`` or ``fixed_rate`` (decimal), for the positions its
-    selectors match (None: any). Valid on [``valid_from``, ``valid_to``); a rule with the same selectors and
-    a later ``valid_from`` supersedes it. The most specific valid rule wins (instrument 16 > book 8 >
-    entity 4 > currency 2 > book type 1); at equal weight the first in the list."""
+    """One funding rate: ``index`` + ``spread_bp``, ``fixed_rate`` (decimal) or ``contract`` (the HTM lot's or the
+    REPO deal's own rate), for the lines its selectors match (None: any; ``kind`` a ``LineKind``, ``security_class``
+    the bond's class). Valid on [``valid_from``, ``valid_to``); a rule with the same tier and selectors and a later
+    ``valid_from`` supersedes it. The rule of the lowest ``tier`` wins (``RuleTier``), within it the most specific
+    (instrument 64 > book 32 > entity 16 > security class 8 > currency 4 > line kind 2 > book type 1); at equal
+    weight the first in the list."""
 
     ccy: str | None = None
     book_type: str | None = None
@@ -334,18 +351,26 @@ class FundingRule:
     valid_to: date | None = None
     day_basis: DayBasis | None = None
     note: str = ""
+    security_class: str | None = None
+    kind: LineKind | None = None
+    contract: bool = False
+    tier: int = RuleTier.ADAPTER
 
     def __post_init__(self) -> None:
-        if (self.index is None) == (self.fixed_rate is None):
-            raise ValueError("a funding rule has exactly one of index and fixed_rate")
-        if self.fixed_rate is not None and self.spread_bp:
-            raise ValueError("a fixed funding rate takes no spread")
+        if (self.index is not None) + (self.fixed_rate is not None) + self.contract != 1:
+            raise ValueError("a funding rule has exactly one of index, fixed_rate and contract")
+        if self.spread_bp and self.index is None:
+            raise ValueError(f"a {'fixed' if self.fixed_rate is not None else 'contract'} funding rate takes no spread")
         if self.valid_to is not None and self.valid_to <= self.valid_from:
             raise ValueError("valid_to must be after valid_from")
 
     @property
-    def selector(self) -> tuple[str | None, ...]:
-        return tuple(getattr(self, k) for k, _ in _WEIGHTS)
+    def selector(self) -> tuple[Any, ...]:
+        return (self.tier, *(getattr(self, k) for k, _ in _WEIGHTS))
+
+    @property
+    def source(self) -> str:
+        return RuleTier.SOURCE.get(self.tier, "adapter")
 
     @property
     def weight(self) -> int:
@@ -359,12 +384,16 @@ class FundingRule:
 
     @property
     def expr(self) -> str:
-        """'KEY_RATE + 150 bp', 'RUONIA', '5.00% fixed'."""
-        if self.fixed_rate is not None:
-            return f"{self.fixed_rate:.2%} fixed"
-        if not self.spread_bp:
-            return str(self.index)
-        return f"{self.index} {'+' if self.spread_bp > 0 else '-'} {abs(self.spread_bp):g} bp"
+        """'KEY_RATE + 150 bp', 'RUONIA', '5.00% fixed', 'contract'; the default rate with its label."""
+        if self.contract:
+            e = "contract"
+        elif self.fixed_rate is not None:
+            e = f"{self.fixed_rate:.2%} fixed"
+        elif not self.spread_bp:
+            e = str(self.index)
+        else:
+            e = f"{self.index} {'+' if self.spread_bp > 0 else '-'} {abs(self.spread_bp):g} bp"
+        return f"{e} ({DEFAULT_RATE_LABEL})" if self.tier == RuleTier.DEFAULT else e
 
 
 @dataclass(frozen=True)
@@ -383,19 +412,25 @@ class FundingRules:
     extra_spreads: tuple[ExtraSpread, ...] = ()
 
     def resolve(self, on: date, *, ccy: str, book_type: str, entity: str, book_id: str,
-                instrument_id: str | None = None) -> FundingRule | None:
+                instrument_id: str | None = None, security_class: str | None = None,
+                kind: LineKind | None = None, max_tier: int | None = None,
+                contracts: bool = False) -> FundingRule | None:
+        """The rule of a line on ``on`` (``FundingRule``); ``max_tier``: only rules of this tier or a lower one;
+        ``contracts``: also ``contract`` rules (only a line with a contract rate of its own, an HTM lot or a REPO
+        deal, asks for them: for any other line such a rule is no rate and is skipped, as if absent)."""
         facts = {"ccy": ccy, "book_type": book_type, "entity": entity, "book_id": book_id,
-                 "instrument_id": instrument_id}
-        latest: dict[tuple[str | None, ...], tuple[int, FundingRule]] = {}
+                 "instrument_id": instrument_id, "security_class": security_class, "kind": kind}
+        latest: dict[tuple[Any, ...], tuple[int, FundingRule]] = {}
         for i, r in enumerate(self.rates):
-            if not r.valid_on(on) or not r.matches(facts):
+            if not r.valid_on(on) or not r.matches(facts) or (max_tier is not None and r.tier > max_tier) \
+                    or (r.contract and not contracts):
                 continue
             k = r.selector
             if k not in latest or r.valid_from > latest[k][1].valid_from:
                 latest[k] = (i, r)
         if not latest:
             return None
-        return min(latest.values(), key=lambda t: (-t[1].weight, t[0]))[1]
+        return min(latest.values(), key=lambda t: (t[1].tier, -t[1].weight, t[0]))[1]
 
     def extra_spread_bp(self, on: date, bond_type: str | None, ccy: str) -> float:
         """The latest valid extra spread of the bond type, the currency's own before an any-currency one."""
@@ -425,6 +460,7 @@ class FundingPosition:
     instrument_id: str | None = None
     bond_type: str | None = None
     settlement_ccy: str | None = None
+    security_class: str | None = None
     purchase_accrued: float = 0.0
     """The accrued paid at the purchase and not returned by a coupon yet, in the position currency, signed as the
     position. It is in the currency liability over a clean base (``funding_liabilities``: funded at a zero rate, owner's
@@ -528,6 +564,15 @@ class FundingLine:
     days: tuple[DailyAccrual, ...]
     position_id: str | None = None
     note: str = ""
+    rule_id: str | None = None
+    """The rule that gave the rate of the last day (its ``note``); None: a contract rate without a rule."""
+    rule_source: str = "contract"
+    """``RuleTier.SOURCE`` of that rule (adapter, settings, settings_override, default), else ``contract``."""
+
+    @property
+    def default_rate(self) -> bool:
+        """Funded at the settings' market default rate, not at a transfer rate."""
+        return self.rule_source == RuleTier.SOURCE[RuleTier.DEFAULT]
 
     @property
     def key(self) -> str:
@@ -613,7 +658,7 @@ class _Missing(Exception):
     pass
 
 
-RateOf = Callable[[date], tuple[float, str, DayBasis | None]]
+RateOf = Callable[[date], tuple[float, str, DayBasis | None, FundingRule | None]]
 
 
 def _by_id(items: Iterable[Any], attr: str | Callable[[Any], Any], what: str) -> dict[Any, Any]:
@@ -662,35 +707,68 @@ class _Engine:
         return v
 
     def rule_rate(self, *, ccy: str, book_type: str, entity: str, book_id: str, instrument_id: str | None = None,
-                  bond_type: str | None = None) -> RateOf:
-        def rate_of(day: date) -> tuple[float, str, DayBasis | None]:
+                  bond_type: str | None = None, security_class: str | None = None,
+                  kind: LineKind | None = None) -> RateOf:
+        def rate_of(day: date) -> tuple[float, str, DayBasis | None, FundingRule | None]:
             rule = self.rules.resolve(day, ccy=ccy, book_type=book_type, entity=entity, book_id=book_id,
-                                      instrument_id=instrument_id)
+                                      instrument_id=instrument_id, security_class=security_class, kind=kind)
             if rule is None:
                 raise _Missing(f"no funding rule for {book_type} {book_id} {ccy} on {day}")
-            if rule.fixed_rate is not None:
-                r = rule.fixed_rate
-            else:
-                v = self.rates.rate(str(rule.index), day)
-                if v is None:
-                    raise _Missing(f"no {rule.index} value in force on {day}")
-                r = v + rule.spread_bp * BP
-            extra = self.rules.extra_spread_bp(day, bond_type, ccy)
-            expr = rule.expr + (f" + extra {extra:g} bp" if extra else "")
-            return r + extra * BP, expr, rule.day_basis
+            return self.rule_value(rule, day, bond_type, ccy)
         return rate_of
+
+    def rule_value(self, rule: FundingRule, day: date, bond_type: str | None, ccy: str
+                   ) -> tuple[float, str, DayBasis | None, FundingRule]:
+        if rule.contract:
+            raise _Missing(f"rule {rule.note or '?'}: a contract rate, and the line has no contract")
+        if rule.fixed_rate is not None:
+            r = rule.fixed_rate
+        else:
+            v = self.rates.rate(str(rule.index), day)
+            if v is None:
+                raise _Missing(f"no {rule.index} value in force on {day}")
+            r = v + rule.spread_bp * BP
+        extra = self.rules.extra_spread_bp(day, bond_type, ccy)
+        expr = rule.expr + (f" + extra {extra:g} bp" if extra else "")
+        return r + extra * BP, expr, rule.day_basis, rule
 
     @staticmethod
     def fixed(rate: float, label: str) -> RateOf:
-        return lambda day: (rate, f"{rate:.2%} {label}", None)
+        return lambda day: (rate, f"{rate:.2%} {label}", None, None)
+
+    def own_rate(self, kind: LineKind, contract_rate: float | None, label: str, *, ccy: str, book_type: str,
+                 entity: str, book_id: str, instrument_id: str | None = None, own: Callable[[FundingRule], bool]
+                 ) -> RateOf:
+        """The rate of a line that has a contract rate of its own (an HTM lot, a REPO deal) on each day: a rule of the
+        adapter or the settings that ``own`` accepts (one naming the line's kind, say) and that is not ``contract``,
+        else the contract rate, else the market default rate (``RuleTier.DEFAULT``), else a problem. Rules ``own``
+        does not accept (a ruble rule of no book type for an HTM lot, say) do not take part: they cannot shadow one
+        it accepts, nor the contract rule that names the line's own rate."""
+        mine = FundingRules(tuple(r for r in self.rules.rates if r.tier < RuleTier.DEFAULT and (r.contract or own(r))))
+        defaults = FundingRules(tuple(r for r in self.rules.rates if r.tier == RuleTier.DEFAULT))
+
+        def rate_of(day: date) -> tuple[float, str, DayBasis | None, FundingRule | None]:
+            kw = {"ccy": ccy, "book_type": book_type, "entity": entity, "book_id": book_id,
+                  "instrument_id": instrument_id, "kind": kind}
+            rule = mine.resolve(day, contracts=True, **kw)
+            if rule is not None and not rule.contract:
+                return self.rule_value(rule, day, None, ccy)
+            if contract_rate is not None:
+                return contract_rate, f"{contract_rate:.2%} {label}", None, rule
+            if rule is None:  # an explicit "contract" rule without a rate is a problem
+                default = defaults.resolve(day, **kw)
+                if default is not None:
+                    return self.rule_value(default, day, None, ccy)
+            raise _Missing("no contract rate")
+        return rate_of
 
     def add(self, kind: LineKind, ref: str, *, book_id: str, book_type: str, entity: str, ccy: str,
             base: FundingBase, bodies: Sequence[tuple[date, float]], rate_of: RateOf,
             position_id: str | None = None, note: str = "") -> None:
-        days, expr = [], ""
+        days, expr, rule = [], "", None
         try:
             for day, body in bodies:
-                rate, expr, basis = rate_of(day)
+                rate, expr, basis, rule = rate_of(day)
                 basis = basis or self.policy.day_count.basis(kind, ccy)
                 days.append(DailyAccrual(day, body, rate, basis, body * rate / basis.denominator,
                                          self.fx_on(ccy, day)))
@@ -699,7 +777,8 @@ class _Engine:
             return
         if days:
             self.lines.append(FundingLine(kind, ref, book_id, book_type, entity, ccy, base, expr, tuple(days),
-                                          position_id, note))
+                                          position_id, note, rule.note if rule else None,
+                                          rule.source if rule else "contract"))
 
     # -- line kinds
     def positions(self, current: Sequence[FundingPosition], previous: Sequence[FundingPosition] | None) -> None:
@@ -758,15 +837,13 @@ class _Engine:
         self.add(LineKind.POS, p.position_id, book_id=p.book_id, book_type=p.book_type, entity=p.entity, ccy=ccy,
                  base=base, bodies=[(d, -mv) for d in sched], position_id=p.position_id, note=note,
                  rate_of=self.rule_rate(ccy=ccy, book_type=p.book_type, entity=p.entity, book_id=p.book_id,
-                                        instrument_id=p.instrument_id, bond_type=p.bond_type))
+                                        instrument_id=p.instrument_id, bond_type=p.bond_type,
+                                        security_class=p.security_class, kind=LineKind.POS))
 
     def htm(self, lots: Sequence[HtmLot]) -> None:
         _by_id(lots, "lot_id", "HTM lot")
         for lot in lots:
             if self.entity_type(lot.entity, LineKind.HTM, lot.lot_id) is not EntityType.MAIN:
-                continue
-            if lot.contract_rate is None:
-                self.problems.append(FundingProblem(LineKind.HTM, lot.lot_id, "no contract rate"))
                 continue
             if self.policy.htm_base is None:
                 self.problems.append(FundingProblem(LineKind.HTM, lot.lot_id, "no HTM base configured (htm_base)"))
@@ -781,7 +858,10 @@ class _Engine:
                       if d > lot.purchase_date and (lot.maturity is None or d <= lot.maturity)]
             self.add(LineKind.HTM, lot.lot_id, book_id=lot.book_id, book_type=lot.book_type, entity=lot.entity,
                      ccy=lot.ccy, base=FundingBase.COST, bodies=bodies, position_id=lot.position_id,
-                     rate_of=self.fixed(lot.contract_rate, "contract"), note=f"htm_base={self.policy.htm_base}")
+                     rate_of=self.own_rate(LineKind.HTM, lot.contract_rate, "contract", ccy=lot.ccy,
+                                           book_type=lot.book_type, entity=lot.entity, book_id=lot.book_id,
+                                           own=lambda r: r.kind is LineKind.HTM or r.book_type is not None),
+                     note=f"htm_base={self.policy.htm_base}")
 
     def cash(self, current: Sequence[CashBalance], previous: Sequence[CashBalance] | None) -> None:
         pol = self.policy
@@ -808,7 +888,8 @@ class _Engine:
                 kind, rule_type = LineKind.CASH, c.book_type
             self.add(kind, ref, book_id=c.book_id, book_type=c.book_type, entity=c.entity, ccy=c.ccy,
                      base=FundingBase.CASH, bodies=[(d, c.balance) for d in self.period.days],
-                     rate_of=self.rule_rate(ccy=c.ccy, book_type=rule_type, entity=c.entity, book_id=c.book_id))
+                     rate_of=self.rule_rate(ccy=c.ccy, book_type=rule_type, entity=c.entity, book_id=c.book_id,
+                                            kind=kind))
 
     def repos(self, deals: Sequence[RepoDeal]) -> None:
         _by_id(deals, "deal_id", "REPO deal")
@@ -817,11 +898,14 @@ class _Engine:
             if self.entity_type(r.entity, LineKind.REPO, r.deal_id) is not EntityType.MAIN:
                 continue
             mode = pol.rate_for(r.term_days)
-            if mode is RepoRate.CONTRACT:
-                if r.contract_rate is None:
-                    self.problems.append(FundingProblem(LineKind.REPO, r.deal_id, "no contract rate"))
-                    continue
-                rate_of = self.fixed(r.contract_rate, "REPO contract")
+            named = self.rules.resolve(r.start_date, ccy=r.ccy, book_type=r.book_type, entity=r.entity,
+                                       book_id=r.book_id, instrument_id=r.collateral_id, kind=LineKind.REPO,
+                                       max_tier=RuleTier.SETTINGS)
+            if mode is RepoRate.CONTRACT or (named is not None and named.kind is LineKind.REPO):
+                # a rule naming REPO (the settings') prices the deal; else its contract rate, else the default rate
+                rate_of = self.own_rate(LineKind.REPO, r.contract_rate, "REPO contract", ccy=r.ccy,
+                                        book_type=r.book_type, entity=r.entity, book_id=r.book_id,
+                                        instrument_id=r.collateral_id, own=lambda x: x.kind is LineKind.REPO)
             else:
                 rate_of = self.rule_rate(ccy=r.ccy, book_type=pol.security_rate_book_type, entity=r.entity,
                                          book_id=r.book_id, instrument_id=r.collateral_id,

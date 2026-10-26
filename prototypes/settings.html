@@ -338,6 +338,28 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
     </section>
     <section class="sec" id="sec-funding" data-sec="funding">
       <div class="sec-h"><div><h1>Фондирование</h1><p>Ставки фондирования по типу книги и валюте: индекс + спред или фикс, база дней. Смена ставки — новая строка с датой «действует с», прежняя остаётся в истории.</p></div></div>
+      <!-- #237: ставка по умолчанию и правила монитора (settings.json, ключ funding; /api/v1/settings/funding) -->
+      <div class="card" id="fs-card">
+        <div class="hd"><h2>Ставка по умолчанию и правила монитора</h2><span class="mut3" id="fs-st"></span><span class="sp"></span>
+          <button class="lnk" id="fs-reset" type="button">вернуть умолчания</button><button class="ibtn" id="fs-save" type="button">Сохранить</button></div>
+        <div class="bd form">
+          <label for="fs-kind">Рыночная ставка по умолчанию, рубль</label>
+          <div><div class="row"><select class="inp" id="fs-kind" style="max-width:240px"></select>
+              <input class="inp mono" id="fs-index" placeholder="индекс: RUONIA, KEY_RATE…" style="max-width:180px" autocomplete="off">
+              <input class="inp mono num" id="fs-spread" placeholder="спред, б.п." inputmode="decimal" style="max-width:120px">
+              <input class="inp mono num" id="fs-fixed" placeholder="ставка, %" inputmode="decimal" style="max-width:120px"></div>
+            <p class="hint" id="fs-hint"></p>
+            <details class="more"><summary>Как применяется</summary><p>Порядок: правило настроек с отметкой «главнее адаптера» → правило адаптера → правило настроек → рыночная ставка по умолчанию. Ставка по умолчанию помечается в прогоне и на экранах как «рыночная ставка по умолчанию», это не трансфертная ставка. «Не фондировать» и ни одного правила — прогон пишет «фондирование не настроено». Изменение действует со следующего прогона.</p></details></div>
+          <label>По валютам</label>
+          <div><table class="t"><thead><tr><th>Валюта</th><th>Ставка</th><th>Индекс</th><th>Спред, б.п.</th><th>Ставка, %</th><th></th></tr></thead><tbody id="fs-ccy"></tbody></table>
+            <button class="lnk" id="fs-ccy-add" type="button">+ валюта</button>
+            <p class="hint">Рублёвая ставка к валютной позиции не применяется: валюта без строки здесь и без правила — проблема фондирования.</p></div>
+          <label>Правила</label>
+          <div style="overflow-x:auto"><table class="t"><thead><tr><th>Код</th><th>Тип книги</th><th>Юрлицо</th><th>Книга</th><th>Класс бумаг</th><th>Что</th><th>Валюта</th><th>Ставка</th><th>Индекс</th><th>Спред, б.п.</th><th>Ставка, %</th><th>База</th><th>С даты</th><th>Главнее адаптера</th><th>Действует</th><th></th></tr></thead><tbody id="fs-rules"></tbody></table>
+            <button class="lnk" id="fs-rule-add" type="button">+ правило</button>
+            <p class="hint">Пустое поле — любое значение. Что: POS — облигация по MV, HTM — лот HTM (вместо ставки договора), CASH — остаток книги, ENTITY_CASH — остаток юрлица, REPO — сделка РЕПО. Ставка «contract» — ставка договора, «none» — без ставки, только база типа книги.</p></div>
+        </div>
+      </div>
       <div data-tab-slot="funding"></div>
     </section>
 
@@ -1099,6 +1121,84 @@ async function renderConfigFiles(a, tabFiles){
     } catch(e) { msg.className = 'err'; msg.textContent = e.message; }
   }
 }
+
+/* ---------- фондирование монитора (#237): ставка по умолчанию, ставки по валютам, правила ---------- */
+const FSX = {data:null, ccy:[], rules:[]};
+const num_ = (v, what) => { v = String(v == null ? '' : v).trim().replace(',', '.'); if (!v) return null; const n = Number(v); if (!isFinite(n)) throw new Error(what + ': нужно число'); return n; };
+function fsRateRow(r){  // {kind, index, spread_bp, fixed_rate_pct} -> поля ввода
+  const o = FSX.data.options, kind = h('select', {class:'inp'}, ...o.default_kinds.map(k => h('option', {value:k.value}, k.text)));
+  kind.value = r.kind || 'none';
+  const idx = h('input', {class:'inp mono', value:r.index || '', placeholder:'индекс', style:'max-width:150px'});
+  const sp = h('input', {class:'inp mono num', value:r.spread_bp == null ? '' : r.spread_bp, style:'max-width:90px'});
+  const fx = h('input', {class:'inp mono num', value:r.fixed_rate_pct == null ? '' : r.fixed_rate_pct, style:'max-width:90px'});
+  const sync = () => { idx.disabled = kind.value !== 'index_spread'; fx.disabled = kind.value !== 'fixed'; sp.disabled = kind.value === 'fixed' || kind.value === 'none'; };
+  kind.addEventListener('change', sync); sync();
+  return {kind, idx, sp, fx, get(){ const k = kind.value, x = {kind:k};
+    if (k === 'index_spread') x.index = idx.value.trim();
+    if (k === 'fixed') x.fixed_rate_pct = num_(fx.value, 'ставка');
+    else if (k !== 'none') { const s = num_(sp.value, 'спред'); if (s) x.spread_bp = s; }
+    return x; }};
+}
+function fsRender(){
+  const d = FSX.data, e = d.effective, o = d.options;
+  $('fs-hint').textContent = o.hint;
+  $('fs-st').textContent = d.error ? 'ошибка в настройках: ' + d.error : d.stored ? 'задано' : 'умолчания';
+  const k = $('fs-kind'); k.textContent = ''; o.default_kinds.forEach(x => k.append(h('option', {value:x.value}, x.text)));
+  const r = e.default_rate || {}; k.value = r.kind || 'none';
+  $('fs-index').value = r.index || ''; $('fs-spread').value = r.spread_bp || ''; $('fs-fixed').value = r.fixed_rate_pct == null ? '' : r.fixed_rate_pct;
+  fsSyncMain();
+  FSX.ccy = Object.entries(e.default_rate_by_ccy || {}).map(([c, x]) => ({ccy:c, row:fsRateRow(x)}));
+  FSX.rules = (e.rules || []).map(x => Object.assign({}, x));
+  fsDrawCcy(); fsDrawRules();
+}
+function fsSyncMain(){ const v = $('fs-kind').value; $('fs-index').disabled = v !== 'index_spread'; $('fs-fixed').disabled = v !== 'fixed'; $('fs-spread').disabled = v === 'fixed' || v === 'none'; }
+$('fs-kind').addEventListener('change', fsSyncMain);
+function fsDrawCcy(){
+  const tb = $('fs-ccy'); tb.textContent = '';
+  if (!FSX.ccy.length) tb.append(h('tr', {}, h('td', {colspan:6, class:'muted'}, 'Валютных ставок нет.')));
+  FSX.ccy.forEach((c, i) => tb.append(h('tr', {},
+    h('td', {}, h('input', {class:'inp mono', value:c.ccy, placeholder:'USD', style:'max-width:70px', oninput:ev => { c.ccy = ev.target.value.trim().toUpperCase(); }})),
+    h('td', {}, c.row.kind), h('td', {}, c.row.idx), h('td', {}, c.row.sp), h('td', {}, c.row.fx),
+    h('td', {}, h('button', {class:'x del', type:'button', title:'Убрать', onclick:() => { FSX.ccy.splice(i, 1); fsDrawCcy(); }}, '×')))));
+}
+const FS_COLS = [['rule_id','text'], ['book_type','text'], ['entity','text'], ['book_id','text'], ['security_class','list'], ['kind','line'], ['ccy','text'],
+  ['rate_kind','rate'], ['index_code','text'], ['spread_bp','num'], ['fixed_rate_pct','num'], ['basis','basis'], ['valid_from','date'], ['override','bool'], ['active','bool']];
+function fsDrawRules(){
+  const tb = $('fs-rules'), o = FSX.data.options; tb.textContent = '';
+  if (!FSX.rules.length) tb.append(h('tr', {}, h('td', {colspan:FS_COLS.length + 1, class:'muted'}, 'Правил нет: действуют правила адаптера и ставка по умолчанию.')));
+  const sel = (vals, v, on) => { const s = h('select', {class:'inp', onchange:ev => on(ev.target.value || null)}, h('option', {value:''}, '—'), ...vals.map(x => h('option', {value:x}, x))); s.value = v == null ? '' : v; return s; };
+  FSX.rules.forEach((r, i) => tb.append(h('tr', {}, ...FS_COLS.map(([k, t]) => {
+    const set = v => { if (v == null || v === '') delete r[k]; else r[k] = v; };
+    if (t === 'bool') return h('td', {}, h('input', {type:'checkbox', checked:k === 'active' ? r[k] !== false : !!r[k], onchange:ev => { r[k] = ev.target.checked; }}));
+    if (t === 'line') return h('td', {}, sel(o.line_kinds, r[k], set));
+    if (t === 'rate') return h('td', {}, sel(o.rate_kinds, r[k], set));
+    if (t === 'basis') return h('td', {}, sel(o.bases, r[k], set));
+    if (t === 'list') return h('td', {}, sel(o.security_classes, r[k], set));
+    return h('td', {}, h('input', {class:'inp mono' + (t === 'num' ? ' num' : ''), value:r[k] == null ? '' : r[k], placeholder:t === 'date' ? 'ГГГГ-ММ-ДД' : '', style:'min-width:' + (t === 'num' ? 70 : 90) + 'px',
+      oninput:ev => { r[k] = t === 'num' ? ev.target.value : ev.target.value.trim(); if (r[k] === '') delete r[k]; }}));
+  }), h('td', {}, h('button', {class:'x del', type:'button', title:'Убрать правило', onclick:() => { FSX.rules.splice(i, 1); fsDrawRules(); }}, '×')))));
+}
+$('fs-ccy-add').addEventListener('click', () => { FSX.ccy.push({ccy:'', row:fsRateRow({kind:'fixed'})}); fsDrawCcy(); });
+$('fs-rule-add').addEventListener('click', () => { FSX.rules.push({rule_id:'r' + (FSX.rules.length + 1), rate_kind:'fixed', active:true}); fsDrawRules(); });
+function fsCollect(){
+  const k = $('fs-kind').value, dr = {kind:k};
+  if (k === 'index_spread') dr.index = $('fs-index').value.trim();
+  if (k === 'fixed') dr.fixed_rate_pct = num_($('fs-fixed').value, 'Ставка по умолчанию');
+  else if (k !== 'none') { const s = num_($('fs-spread').value, 'Спред'); if (s) dr.spread_bp = s; }
+  const by = {}; FSX.ccy.forEach(c => { if (c.ccy) by[c.ccy] = c.row.get(); });
+  const rules = FSX.rules.map(r => { const x = {}; for (const [k2, t] of FS_COLS) { const v = r[k2]; if (v == null || v === '') continue; x[k2] = t === 'num' ? num_(v, k2) : v; } return x; });
+  return {default_rate:dr, default_rate_by_ccy:by, rules, policy:(FSX.data.effective || {}).policy || {}};
+}
+async function fsLoad(){ try { FSX.data = await api('GET', '/api/v1/settings/funding'); fsRender(); } catch(e) { $('fs-st').textContent = 'не загружено: ' + e.message; } }
+$('fs-save').addEventListener('click', async () => {
+  try { FSX.data = await api('PUT', '/api/v1/settings/funding', fsCollect()); fsRender(); toast('Фондирование: настройки сохранены, действуют со следующего прогона', 'ok'); }
+  catch(e) { toast('Фондирование не сохранено: ' + e.message, 'err'); }
+});
+$('fs-reset').addEventListener('click', async () => {
+  if (!confirm('Вернуть ставки по умолчанию и удалить правила монитора?')) return;
+  try { FSX.data = await api('DELETE', '/api/v1/settings/funding', {}); fsRender(); toast('Фондирование: умолчания', 'ok'); } catch(e) { toast(e.message, 'err'); }
+});
+fsLoad();
 
 /* ---------- формы адаптера: юрлица, книги, фондирование, источники (settings-forms.js) ---------- */
 const FORMS = {};

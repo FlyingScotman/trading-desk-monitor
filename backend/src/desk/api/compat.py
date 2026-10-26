@@ -501,6 +501,7 @@ def funding_view(block: dict[str, Any] | None, fx: dict[str, float]) -> dict[str
             "pnl": {"carry": x["interest_rub"], "fx": fxa, "fxCbr": fxa_cbr, "fxGross": fxa, "fxGrossCbr": fxa_cbr,
                     "fxAllocated": fxa, "inPosition": in_pos},
             **({"ruleNote": x["note"]} if x.get("note") else {}),
+            "rule": x.get("rule_id"), "ruleSource": x.get("rule_source"), "defaultRate": bool(x.get("default_rate")),
         })
         b = by_book.setdefault(x["book_id"], {"carry": 0.0, "fx": 0.0, "fxCbr": 0.0, "fxAllocated": 0.0,
                                               "inPositions": 0.0})
@@ -512,14 +513,15 @@ def funding_view(block: dict[str, Any] | None, fx: dict[str, float]) -> dict[str
         pnl["carry"] += x["interest_rub"]
     rules = []
     for r in block.get("rules") or []:
-        if r.get("active", True) is False:
+        if r.get("active", True) is False or r.get("source") == "default":  # the default: status.defaultRate
             continue
         x = {"bookType": r.get("book_type"), "book": r.get("book_id"), "entity": r.get("entity"),
              "instrument": r.get("instrument_id"), "ccy": r.get("ccy"), "index": r.get("index_code"),
              "spreadBp": float(r["spread_bp"]) if r.get("spread_bp") is not None else None,
              "fixed": float(r["fixed_rate_pct"]) if r.get("fixed_rate_pct") is not None else None,
              "note": r.get("rule_id"), "basis": r.get("basis"), "rateKind": r.get("rate_kind"),
-             "validFrom": r.get("valid_from")}
+             "validFrom": r.get("valid_from"), "source": r.get("source"),
+             "securityClass": r.get("security_class"), "kind": r.get("kind"), "override": r.get("override")}
         rules.append({k: v for k, v in x.items() if v is not None and v != ""})
     totals = block.get("totals")
     status = {
@@ -533,5 +535,6 @@ def funding_view(block: dict[str, Any] | None, fx: dict[str, float]) -> dict[str
         "problems": [{"kind": p["kind"], "ref": p["ref"], "book": p.get("book_id"), "reason": p["reason"]}
                      for p in block.get("problems") or []],
         "notes": block.get("notes") or [], "provisional": (block.get("policy") or {}).get("provisional") or [],
+        "defaultRate": block.get("default_rate"),
     }
     return {"lines": lines, "pnl": pnl, "by_book": by_book, "rules": rules, "status": status}

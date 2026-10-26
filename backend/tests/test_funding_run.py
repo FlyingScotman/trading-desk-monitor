@@ -73,6 +73,20 @@ def _csv(path: Path, text: str) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _home(tmp_path, monkeypatch):
+    """A settings folder of its own: the funding settings (#237) are the defaults unless a test writes them."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("DESK_HOME", str(home))
+    return home
+
+
+def _funding_settings(home: Path, funding: dict) -> None:
+    from desk.settings import update_settings_json
+    update_settings_json({"funding": funding}, home)
+
+
+@pytest.fixture(autouse=True)
 def _fresh_process():
     for memo in (scan._handles, scan._last_seen, scan._static_seen):
         memo.clear()
@@ -220,7 +234,14 @@ def test_funding_end_to_end_inbox_run_api(store_url, ctx, tmp_path):
     assert desk["fundingPnlByBook"]["T1"]["carry"] == pytest.approx(closed["interest_rub"] + sum(
         lines[k]["interest_rub"] for k in ("T1|26238",) if k not in with_pnl))
     assert all(x["fxDelta"] == {} for x in desk["funding"])  # OQ-04 open: no funding liability in the FX delta
-    assert {r["note"] for r in desk["FUNDING_RULES"]} == {"trading_rub", "htm", "derivs_rub", "futures", "ent2_cash"}
+    assert {r["note"] for r in desk["FUNDING_RULES"] if r["source"] == "adapter"} == {
+        "trading_rub", "htm", "derivs_rub", "futures", "ent2_cash"}
+    # the market default rate is in the status, not in the rules; every line here has an adapter rule (the HTM lot:
+    # its contract rate)
+    assert not [r for r in desk["FUNDING_RULES"] if r["source"] == "default"] and fs["defaultRate"]["enabled"]
+    assert f["default_rate"]["lines"] == 0 and not any(x["default_rate"] for x in f["lines"])
+    assert held["rule_source"] == "adapter" and held["rule_id"] == "trading_rub"
+    assert (htm["rule_source"], htm["rule_id"]) == ("adapter", "htm")  # the adapter's contract rule
     dp = {p["id"]: p for p in desk["positions"]}
     for k in with_pnl:
         assert dp[k]["pnl"]["funding"] == pytest.approx(lines[k]["interest_rub"])
@@ -229,7 +250,9 @@ def test_funding_end_to_end_inbox_run_api(store_url, ctx, tmp_path):
     assert not [w for w in warnings if w.startswith("фондирование")]
 
 
-def test_not_configured_is_said_and_not_zero(store_url, ctx, tmp_path):
+def test_not_configured_is_said_and_not_zero(store_url, ctx, tmp_path, _home):
+    """No rule anywhere and the market default rate switched off in the settings: "not configured", never 0."""
+    _funding_settings(_home, {"default_rate": {"kind": "none"}, "default_rate_by_ccy": {}})
     with store.connect(store_url) as con:
         _scan(con, tmp_path, policy=False, rules=False)
         _, rid, warnings = _runs(con, ctx)
@@ -244,6 +267,68 @@ def test_not_configured_is_said_and_not_zero(store_url, ctx, tmp_path):
     assert desk["fundingStatus"]["state"] == "not_configured" and desk["fundingStatus"]["total"] is None
     assert all(p["pnl"]["funding"] is None for p in desk["positions"])
     assert desk["funding"] == [] and desk["FUNDING_RULES"] == []
+
+
+def test_default_rate_without_adapter_rules(store_url, ctx, tmp_path):
+    """#237: the adapter gives no funding rule, the settings nothing: funding at the market default rate (RUB RUONIA),
+    named so on the line, the position and window.DESK (C01), the TRADING base clean (DEC01)."""
+    with store.connect(store_url) as con:
+        _scan(con, tmp_path, policy=False, rules=False)
+        rid1, rid2, warnings = _runs(con, ctx)
+    c = TestClient(create_app(store_url))
+    f = c.get(f"/api/v1/runs/{rid2}/funding").json()
+    assert f["state"] == "computed" and f["policy"]["source"]["base_by_book_type[TRADING]"] == "DEC01"
+    lines = {x["ref"]: x for x in f["lines"]}
+    ruo = ctx.market.latest_fixing("RUONIA")[1] / 100
+    prev_facts = {p["position_id"]: p["fact"] for p in c.get(f"/api/v1/runs/{rid1}/positions").json()["positions"]}
+    x = prev_facts["T1|26238"]
+    held = lines["T1|26238"]
+    assert held["rate_expr"] == "RUONIA (рыночная ставка по умолчанию)" and held["base"] == "mv_clean"
+    assert (held["rule_source"], held["rule_id"], held["default_rate"]) == ("default", "default:RUB", True)
+    assert held["interest_rub"] == pytest.approx(-(x["mv"] - x["extra"]["quantity_bonds"] * x["accrued"]) * ruo / 365)
+    assert lines["D1|RUB"]["default_rate"] and lines["D1|RUB"]["interest_rub"] == pytest.approx(-100_000_000 * ruo / 365)
+    # the HTM lot keeps its contract rate (the adapter's htm_base is not given: a problem, never a guess)
+    assert ("HTM", "H1|29008") in {(p["kind"], p["ref"]) for p in f["problems"]}
+    d = f["default_rate"]
+    assert d["enabled"] and d["label"] == "рыночная ставка по умолчанию" and d["by_ccy"]["RUB"]["kind"] == "ruonia"
+    assert d["lines"] == sum(1 for x in f["lines"] if x["default_rate"]) >= 2 and d["positions"] >= 1
+    pos = {p["position_id"]: p for p in c.get(f"/api/v1/runs/{rid2}/positions").json()["positions"]}
+    st = pos["T1|26238"]["fact"]["extra"]["funding"]
+    assert st["state"] == "funded" and st["default_rate"] and st["rule_source"] == "default"
+    assert st["lines"][0]["rate_expr"].endswith("(рыночная ставка по умолчанию)")
+    desk = c.get(f"/api/v1/compat/desk?run_id={rid2}").json()
+    assert desk["fundingStatus"]["state"] == "computed"
+    assert desk["fundingStatus"]["defaultRate"]["by_ccy"]["RUB"]["expr"] == "RUONIA (рыночная ставка по умолчанию)"
+    assert {x["id"]: x["defaultRate"] for x in desk["funding"]}["POS|T1|26238"] is True
+    assert desk["FUNDING_RULES"] == []  # no rule: the default rate is the status's defaultRate
+    with store.connect(store_url) as con:
+        log = [m for (m,) in con.execute("SELECT message FROM run_log WHERE run_id = %s ORDER BY seq", (rid2,))]
+    assert any("по рыночной ставке по умолчанию" in m for m in log)
+    assert not any(w.startswith("фондирование не настроено") for w in warnings)
+
+
+def test_settings_rules_in_the_run_precedence(store_url, ctx, tmp_path, _home):
+    """#237: a settings rule applies where the adapter has none, yields to the adapter's rule, and an override rule
+    wins over it; the line says which rule applied."""
+    _funding_settings(_home, {"rules": [
+        {"rule_id": "s_trading", "book_type": "TRADING", "ccy": "RUB", "rate_kind": "fixed", "fixed_rate_pct": 9},
+        {"rule_id": "s_t1", "book_id": "T1", "override": True, "rate_kind": "fixed", "fixed_rate_pct": 12},
+        {"rule_id": "s_derivs", "book_type": "DERIVS", "ccy": "RUB", "rate_kind": "fixed", "fixed_rate_pct": 7},
+    ], "default_rate": {"kind": "none"}, "default_rate_by_ccy": {}})
+    with store.connect(store_url) as con:
+        _scan(con, tmp_path)
+        _, rid2, _ = _runs(con, ctx)
+    f = TestClient(create_app(store_url)).get(f"/api/v1/runs/{rid2}/funding").json()
+    lines = {x["ref"]: x for x in f["lines"]}
+    held = lines["T1|26238"]  # override: over the adapter's trading_rub
+    assert (held["rule_id"], held["rule_source"], held["rate_pct"]) == ("s_t1", "settings_override", pytest.approx(12))
+    d1 = lines["D1|RUB"]  # the adapter's derivs_rub holds against the settings' s_derivs
+    assert (d1["rule_id"], d1["rule_source"]) == ("derivs_rub", "adapter")
+    assert f["default_rate"]["enabled"] is False and f["default_rate"]["lines"] == 0
+    desk = TestClient(create_app(store_url)).get(f"/api/v1/compat/desk?run_id={rid2}").json()
+    src = {r["note"]: r["source"] for r in desk["FUNDING_RULES"]}
+    assert (src["s_t1"], src["s_trading"], src["trading_rub"]) == ("settings_override", "settings", "adapter")
+    assert {x["id"]: x["ruleSource"] for x in desk["funding"]}["POS|T1|26238"] == "settings_override"
 
 
 def test_rules_without_policy_take_the_provisional_conventions(store_url, ctx, tmp_path):

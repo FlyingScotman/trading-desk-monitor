@@ -32,9 +32,10 @@ def tables() -> dict:
 
 def test_funding_rules_from_the_fixture(tables: dict) -> None:
     rules = funding_rules_from_reference(tables["funding_rules"])
-    # contract (HTM lots) and none (futures) are not rates
-    assert sorted(r.note for r in rules.rates) == ["derivs_rub", "derivs_usd", "ent2_cash", "ent2_cash_usd",
+    # none (futures) is not a rate; contract (HTM lots: the lot's own rate) is a contract rule (#237)
+    assert sorted(r.note for r in rules.rates) == ["derivs_rub", "derivs_usd", "ent2_cash", "ent2_cash_usd", "htm",
                                                    "trading_rub", "trading_rub", "trading_usd"]
+    assert [r.contract for r in rules.rates if r.note == "htm"] == [True]
     old, new = sorted((r for r in rules.rates if r.note == "trading_rub"), key=lambda r: r.valid_from)
     assert (old.valid_from, old.valid_to, new.valid_from, new.valid_to) == (date.min, D("2026-10-19"),
                                                                             D("2026-10-19"), None)
@@ -43,7 +44,7 @@ def test_funding_rules_from_the_fixture(tables: dict) -> None:
     assert rules.resolve(D("2026-10-20"), **kw).expr == "KEY_RATE + 150 bp"
     usd = rules.resolve(D("2026-10-20"), **{**kw, "ccy": "USD"})
     assert usd.fixed_rate == pytest.approx(0.06) and usd.day_basis is DayBasis.ACT_360
-    # the entity's cash rule outranks the book type's (entity 4 + ccy 2 > book type 1 + ccy 2)
+    # the entity's cash rule outranks the book type's (entity 16 + ccy 4 > book type 1 + ccy 4)
     assert rules.resolve(D("2026-10-20"), **{**kw, "entity": "ENT2", "book_id": "C1"}).note == "ent2_cash"
     # B3 (#61): the history file's USD balances have their rates too (a cash book, the other entity)
     assert rules.resolve(D("2026-10-21"), **{**kw, "entity": "ENT2", "book_id": "C1", "ccy": "USD"}).note \

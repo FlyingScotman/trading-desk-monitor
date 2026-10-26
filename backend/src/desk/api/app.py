@@ -292,6 +292,7 @@ def funding_out(run_id: int, block: dict[str, Any] | None) -> RunFunding:
                for k, v in sorted((b.get("by_book") or {}).items())],
         entities=b.get("by_entity") or {}, problems=b.get("problems") or [], notes=b.get("notes") or [],
         provisional=(policy or {}).get("provisional") or [], policy=policy, lines=b.get("lines") or [],
+        default_rate=b.get("default_rate"),
         fx_liability=b.get("fx_liability"))
 
 

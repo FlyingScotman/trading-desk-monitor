@@ -98,7 +98,7 @@
   // фондирование прогона (B1, D.fundingStatus): не настроено / не посчитано — заметка в шапке, не 0
   const FS = D.fundingStatus || { state: 'not_computed', text: 'прогон без расчёта фондирования' };
   M.funding = { state: FS.state, text: FS.text, period: FS.period || null, total: num(FS.total), inPositions: num(FS.inPositions),
-    bookLevel: num(FS.bookLevel), byBook: FS.byBook || {}, byEntity: FS.byEntity || {}, problems: FS.problems || [], provisional: FS.provisional || [] };
+    bookLevel: num(FS.bookLevel), byBook: FS.byBook || {}, byEntity: FS.byEntity || {}, problems: FS.problems || [], provisional: FS.provisional || [], defaultRate: FS.defaultRate || null };
   if (FS.state !== 'computed') M.notes.push('Фондирование: ' + (FS.text || FS.state));
   else if (M.funding.problems.length) M.notes.push('Фондирование: проблем ' + M.funding.problems.length + ' (кокпит, вкладка PnL)');
 

@@ -24,6 +24,7 @@ from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import Outcome, attach_pnl, prepare, value
 from desk.publish import tdm_run
 from desk.rules import ocp as ocp_rules
+from desk.settings import update_settings_json
 from desk.store import MIGRATIONS
 
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1"
@@ -254,10 +255,14 @@ def test_desk_data_js_without_runs_gives_the_empty_state_not_the_demo(client):
     assert client.get("/desk-monitor.html").status_code == 200
 
 
-def test_compat_parity_with_tdm_assemble(store_url, book, client, tmp_path):
+def test_compat_parity_with_tdm_assemble(store_url, book, client, tmp_path, monkeypatch):
     """The same outcomes through tdm_run.publish into a tdm store and through insert_run into the desk
     store, on the synthetic previous date of S2 and on the fixture date: tdm.assemble.assemble on the first
     equals the compat adapter on the second, history included."""
+    home = tmp_path / "home"  # the market default rate off (#237): no funding at all, as tdm
+    home.mkdir()
+    monkeypatch.setenv("DESK_HOME", str(home))
+    update_settings_json({"funding": {"default_rate": {"kind": "none"}, "default_rate_by_ccy": {}}}, home)
     ctx, positions, view = book
     early = copy.copy(ctx.market)
     early.business_date = view.business_date
