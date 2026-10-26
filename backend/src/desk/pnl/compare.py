@@ -137,14 +137,18 @@ def compare(prev_ctx: EodContext, prev_outcomes: list[Outcome], ctx: EodContext,
 
 def _floater_inputs(inst, prev: MarketSnapshot, cur: MarketSnapshot, guard_bp: float | None) -> dict:
     """``explain_horizon_pnl``'s floater arguments: the fixings known on each date and, when the leg projects off
-    another curve than the discount curve (a key-rate floater), that curve on each date."""
+    another curve than the discount curve (a key-rate floater, a KBD floater: TDM#33), that curve on each date; the
+    KBD is in the market as its ZCYC parameters, built here as core builds it to project (``projection_curve``)."""
     leg = inst.coupon_leg
     assert isinstance(leg, FloatingCouponLeg)
     out = {"fixings": prev.point_in_time_fixing(leg.fixing_id), "end_fixings": cur.point_in_time_fixing(leg.fixing_id),
            "strike_guard_bp": guard_bp}
     pid = leg.projection_curve_id
     if pid is not None and pid != discount_curve(prev)[0]:
-        a, b = ({c.curve_id: c.curve for c in m.curves}.get(pid) for m in (prev, cur))
+        if leg.rule.index == "kbd":
+            a, b = (m.projection_curve(pid, "kbd") for m in (prev, cur))
+        else:
+            a, b = ({c.curve_id: c.curve for c in m.curves}.get(pid) for m in (prev, cur))
         if not isinstance(a, DiscountCurve) or not isinstance(b, DiscountCurve):
             raise ValueError(f"projection curve {pid} not built on both dates")
         out.update(projection_curve=a, end_projection_curve=b)
