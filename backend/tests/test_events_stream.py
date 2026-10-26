@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from types import SimpleNamespace
 
 import psycopg
 import pytest
@@ -21,11 +22,14 @@ from desk.api import daystatus_routes as routes
 FAST = routes.StreamConfig(poll_s=0.02, keepalive_s=0.1, lifetime_s=0.5, retry_ms=1500)
 
 
+CONNECT = store.connect  # the test's own writes: not counted by a Spy on ``store.connect`` (#338)
+
+
 def add(url: str, type_: str = "input.accepted", **kw) -> int:
     cols = {"type": type_, "source": "demo_source", "dataset": "positions", "valid_date": "2026-10-20", **kw}
     if "detail" in cols:
         cols["detail"] = json.dumps(cols["detail"])
-    with store.connect(url) as con:
+    with CONNECT(url) as con:
         names = ", ".join(cols)
         marks = ", ".join("%s" for _ in cols)
         return con.execute(f"INSERT INTO event ({names}) VALUES ({marks}) RETURNING event_id",
@@ -65,12 +69,20 @@ def test_the_stream_sends_what_the_feed_pages_give_and_resumes_after_last_event_
     ids = [add(store_url), add(store_url, "input.rejected"),
            add(store_url, "run.published", run_id=7, dataset=None, source=None,
                detail={"run_type": "EOD", "cut_type": "eod_final", "supersedes_run_id": 5})]
+    # #338: the client reads until the keep-alive has come, not for the stream's lifetime (a backlog sent late on a
+    # slow runner left less than keepalive_s of it); the lifetime only bounds a stream that never sends one
+    client.app.state.events_stream = routes.StreamConfig(poll_s=0.02, keepalive_s=0.05, lifetime_s=30, retry_ms=1500)
+    body = ""
     with client.stream("GET", "/api/v1/events/stream", params={"after": ids[0]}) as r:
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("text/event-stream")
         assert "no-store" in r.headers["cache-control"] and r.headers["x-accel-buffering"] == "no"
         assert "content-encoding" not in r.headers  # never gzipped: the events go out as they come
-        events, comments = parse(r.read().decode())
+        for chunk in r.iter_text():  # one chunk per message the server sends
+            body += chunk
+            if chunk.startswith(": keep-alive"):
+                break
+    events, comments = parse(body)
     assert [int(e["id"]) for e in events] == ids[1:]
     assert [e["event"] for e in events] == ["input.rejected", "run.published"]
     page = client.get("/api/v1/events", params={"after": ids[0]}).json()["events"]
@@ -79,6 +91,8 @@ def test_the_stream_sends_what_the_feed_pages_give_and_resumes_after_last_event_
     assert comments[:2] == ["retry 1500", f"hello after {ids[0]}"]
     assert "keep-alive" in comments  # quiet after the backlog: a comment, not silence
 
+    # the streams below are read to their end: their events are the backlog, sent before the lifetime is checked
+    client.app.state.events_stream = FAST
     # a reconnect: Last-Event-ID (what EventSource sends) wins over the URL's after
     with client.stream("GET", "/api/v1/events/stream", params={"after": 0},
                        headers={"Last-Event-ID": str(ids[1])}) as r:
@@ -128,20 +142,24 @@ def test_a_stream_far_behind_the_shared_window_reads_its_gap_itself(store_url, c
 
 
 class Spy:
-    """``store.connect`` that remembers its connections, and how many were open at once."""
+    """``store.connect`` that remembers its connections, and how many were open at once (counted as each one opens,
+    #338: not sampled in a window of time). A connection is listed before it is made: two that open together see
+    each other."""
+
+    OPENING = SimpleNamespace(closed=False)
 
     def __init__(self):
         self.connect, self.cons, self.most = store.connect, [], 0
 
     def __call__(self, url: str):
-        c = self.connect(url)
-        self.cons.append(c)
+        slot = len(self.cons)
+        self.cons.append(self.OPENING)
+        self.most = max(self.most, self.open())
+        self.cons[slot] = c = self.connect(url)
         return c
 
-    def sample(self) -> int:
-        n = sum(not c.closed for c in self.cons)
-        self.most = max(self.most, n)
-        return n
+    def open(self) -> int:
+        return sum(not c.closed for c in self.cons)
 
 
 async def until(cond, timeout: float = 5) -> None:
@@ -172,9 +190,18 @@ def test_open_streams_share_one_reader_and_hold_no_connection_between_reads(stor
     spy = Spy()
     monkeypatch.setattr(routes.store, "connect", spy)
     cfg = routes.StreamConfig(poll_s=0.05, keepalive_s=60, lifetime_s=60)
+    sleep, naps, reader = asyncio.sleep, [], []
+
+    async def nap(delay, *a, **kw):  # the reader's sleep between reads: how many connections are open then (#338)
+        if reader and asyncio.current_task() is reader[0].task:
+            naps.append(spy.open())
+        return await sleep(delay, *a, **kw)
+
+    monkeypatch.setattr(routes.asyncio, "sleep", nap)
 
     async def go():
         feed = routes.Feed(store_url, cfg)
+        reader.append(feed)
         await feed.start()
         streams = [routes.stream(feed, None, None, here, lambda: False) for _ in range(5)]
         got: list[list[str]] = [[] for _ in streams]
@@ -186,10 +213,8 @@ def test_open_streams_share_one_reader_and_hold_no_connection_between_reads(stor
         t0 = time.monotonic()
         tasks = [asyncio.create_task(read(i, s)) for i, s in enumerate(streams)]
         await until(lambda: all(got))  # every stream has its greeting: its cursor is set before the run comes
-        idle = []
-        for _ in range(40):  # 0.4 s: about eight reads of the feed
-            await asyncio.sleep(0.01)
-            idle.append(spy.sample())
+        n = len(spy.cons)
+        await until(lambda: len(spy.cons) >= n + 4)  # quiet: the reader reads and sleeps (#338: not a window)
         await asyncio.to_thread(add, store_url, "run.published", run_id=3, dataset=None, source=None,
                                 detail={"run_type": "EOD"})
         await until(lambda: all(any("run.published" in c for c in g) for g in got))
@@ -197,12 +222,12 @@ def test_open_streams_share_one_reader_and_hold_no_connection_between_reads(stor
             t.cancel()  # the clients leave: the bodies are cancelled
         await asyncio.gather(*tasks, return_exceptions=True)
         await stopped(feed)
-        return feed, got, idle, time.monotonic() - t0
+        return feed, got, time.monotonic() - t0
 
-    feed, got, idle, took = asyncio.run(go())
+    feed, got, took = asyncio.run(go())
     assert all(any(c.startswith("id: ") and "run.published" in c for c in g) for g in got)  # every stream got it
     assert spy.most <= 1  # one reader: one short connection at a time, whatever the number of streams
-    assert idle.count(0) > len(idle) // 2  # between reads no connection is open
+    assert len(naps) >= 3 and set(naps) == {0}  # while the reader sleeps no connection is open: none held
     assert len(spy.cons) <= 6 + took / 0.05 + 2  # reads of one reader (and each start), not five readers
     assert all(c.closed for c in spy.cons)
     assert feed.users == 0 and feed.task is None  # the last stream gone, the reader stops
