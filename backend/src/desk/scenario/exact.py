@@ -25,6 +25,9 @@ FX derivatives valued by core from their terms (``valuation.derivatives``) are r
 (``extra.legs``), with the curves, the FX moves (``fx``) and the FX basis shifts (``basis``: ``FXBASIS|<ccy>``, bp; the
 Taylor has no basis factor, so its effect is all in the residual) on the run's market and the FX settings' defaults
 (a run made with other FX settings may not reproduce its base PV: ``base_mismatch``, Taylor only).
+
+FX is net of a foreign-currency bond's funding liability (TDM#249): the bond is repriced gross by core and its
+liability (``extra.fx_liability``) moves by the same FX shock (``liability_pnl``), as the Taylor's net ``fx_delta``.
 """
 
 from __future__ import annotations
@@ -90,6 +93,21 @@ def core_scenario(name: str, norm: Mapping[str, Any], ds: float, core_curves: It
                              fx_shocks_pct=tuple(norm.get("fx", {}).items()),
                              curve_shifts_bp=tuple(named.items()),
                              basis_shifts_bp=tuple((f"FXBASIS|{c}", bp) for c, bp in norm.get("basis", {}).items()))
+
+
+def liability_pnl(fact: Mapping[str, Any], norm: Mapping[str, Any]) -> float:
+    """The FX shock's PnL on a foreign-currency bond's funding liability (``extra.fx_liability``, TDM#54, TDM#249): its
+    amount in the currency (negative: the desk owes it) x the run's rate x the shock. Scenarios take FX net of the
+    funding, as the OCP and the flash PnL (``fx_gross + fx_funding``): the Taylor's ``FX|ccy`` reads the row's
+    ``fx_delta``, net of the liability since #248, so the exact repricing of the bond (gross: core values the bond
+    alone) adds the liability's own move to match. 0 without a computed liability or a shock of its currency."""
+    ex = fact.get("extra") or {}
+    lb = ex.get("fx_liability") or {}
+    shock = (norm.get("fx") or {}).get(lb.get("ccy"))
+    rate = ex.get("fx_rate")
+    if lb.get("state") != "computed" or not lb.get("amount_ccy") or not shock or not rate:
+        return 0.0
+    return lb["amount_ccy"] * rate * shock / 100.0
 
 
 def run_curves(ctx: EodContext) -> tuple[str, ...]:
@@ -183,7 +201,7 @@ def reprice_run(snapshots: SnapshotDir, run: Mapping[str, Any], rows: list[Mappi
                     if s.pnl_rub is None:
                         code[pid] = f"core_{(s.code or 'failed').lower()}"
                     else:
-                        exact[pid] = s.pnl_rub
+                        exact[pid] = s.pnl_rub + liability_pnl(facts[pid], norm)
     positions, totals = [], {}
     for p, t in zip(payload["positions"], taylor["positions"]):
         pid = p["position_id"]

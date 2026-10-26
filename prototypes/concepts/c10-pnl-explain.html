@@ -11,7 +11,7 @@
 .bar2 .sp { flex: 1; }
 .g2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); gap: 12px; }
 .g2b { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 12px; }
-@media (max-width: 1150px) { .g2, .g2b { grid-template-columns: 1fr; } }
+@media (max-width: 1150px) { .g2, .g2b { grid-template-columns: minmax(0, 1fr); } }
 .fac { display: grid; grid-template-columns: repeat(auto-fill, minmax(212px, 1fr)); gap: 10px; }
 .fac .k-panel .bd { padding: 4px 0 6px; }
 .fac table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
@@ -31,7 +31,7 @@
 .dayinfo .row { display: grid; grid-template-columns: 70px 1fr 70px; gap: 6px; align-items: center; padding: 2px 0; }
 .dayinfo .row .n { text-align: right; font-variant-numeric: tabular-nums; }
 .hist-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 12px; }
-@media (max-width: 900px) { .hist-wrap { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .hist-wrap { grid-template-columns: minmax(0, 1fr); } }
 .lead { font-size: 13.5px; margin: 0 0 8px; color: var(--fg-2); }
 .lead b { color: var(--fg); }
 </style>
@@ -98,7 +98,7 @@
         grid: { left: 6, right: 10, top: 22, bottom: 4, containLabel: true },
         tooltip: { trigger: 'item', formatter: p => (FAC[p.dataIndex] ? FAC[p.dataIndex][1] : 'Итого') + ': <b>' + f.mns(p.value[3], 2) + '</b> mm ₽' },
         xAxis: { type: 'category', data: FAC.map(x => x[0] === 'funding' ? 'Фондир.' : x[1]).concat(['Итого']), axisLabel: { interval: 0, fontSize: 10 } },
-        yAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } },
+        yAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => K.tick(v, 1e6) } },
         series: [{
           type: 'custom', data, encode: { x: 0, y: [1, 2] },
           renderItem: (params, api) => {
@@ -177,7 +177,7 @@
         grid: { left: 6, right: 6, top: 28, bottom: 4, containLabel: true }, legend: { top: 0, left: 0, type: 'scroll' },
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => v == null ? '—' : f.mns(v, 2) },  // null: фактор не посчитан (фондирование до B1)
         xAxis: { type: 'category', data: M.histDates, axisLabel: { formatter: f.dshort } },
-        yAxis: [{ type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } }, { type: 'value', splitLine: { show: false }, axisLabel: { formatter: v => f.mn(v, 0), color: K.css('--warn') } }],
+        yAxis: [{ type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => K.tick(v, 1e6) } }, { type: 'value', splitLine: { show: false }, axisLabel: { formatter: v => K.tick(v, 1e6), color: K.css('--warn') } }],
         dataZoom: [{ type: 'inside', start: mode === 'mtd' ? Math.max(0, (monthStart - 3) / n * 100) : 55 }],
         series: FAC.map(([k, t]) => ({ name: t, type: 'bar', stack: 'p', data: HP[k], color: FCOL[k], barMaxWidth: 14 }))
           .concat([{ name: 'накопл.', type: 'line', yAxisIndex: 1, data: cum, showSymbol: false, color: K.css('--warn'), lineStyle: { width: 1.6 },

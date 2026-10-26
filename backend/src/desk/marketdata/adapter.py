@@ -514,11 +514,21 @@ def put_offers(terms: BondTerms, after: date, offer: tuple[date, Decimal, str]) 
     return tuple(out[k] for k in sorted(out))
 
 
+def ccy_code(code: str | None, default: str = "RUB") -> str:
+    """A currency code as the desk names it: upper case, MOEX's ``RUR``/``SUR`` as RUB; ``default`` when none."""
+    c = (code or default).upper()
+    return "RUB" if c in ("RUR", "SUR") else c
+
+
 def bond_currency(terms: BondTerms) -> str:
     """The currency core values a bond in: its face unit (a foreign-face bond: CNY, USD, EUR; its coupons and
     redemptions are amounts in it, MOEX's price % of it), else its currency, else RUB (``RUR``/``SUR`` are RUB)."""
-    c = (terms.face_unit or terms.currency or "RUB").upper()
-    return "RUB" if c in ("RUR", "SUR") else c
+    return ccy_code(terms.face_unit or terms.currency)
+
+
+def settlement_currency(terms: BondTerms) -> str:
+    """The currency MOEX quotes a bond's accrued in: its currency (``RUR``/``SUR``: RUB), else its face currency."""
+    return ccy_code(terms.currency) if terms.currency else bond_currency(terms)
 
 
 def core_instrument(terms: BondTerms, after: date, horizon: date, offer: tuple[date, Decimal, str] | None = None, *,

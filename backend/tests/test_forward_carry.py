@@ -380,3 +380,4 @@ def test_spread_modes_on_a_stored_run(store_url, ctx, tmp_path):
     assert p["D1|USD"]["spreadCurve"] == "not_covered" and curve["totals"]["spreadRoll"] is None
     assert curve["totals"]["carry"] == pytest.approx(held["totals"]["carry"])  # nothing rolled: the same carry
     assert any("spread=curve" in n for n in curve["notes"])
+    assert any("переносится на Z-спред через CS01, первое приближение" in n for n in curve["notes"])  # TDM#281

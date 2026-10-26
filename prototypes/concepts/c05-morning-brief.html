@@ -25,7 +25,9 @@
 .factor .l { font-size: 11px; color: var(--fg-2); }
 .factor .v { font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
 .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
-@media (max-width: 860px) { .two { grid-template-columns: 1fr; } .hl .big { font-size: 30px; } }
+@media (max-width: 860px) { .two { grid-template-columns: minmax(0, 1fr); } .hl .big { font-size: 30px; } }
+/* узкий экран (#263): широкая таблица прокручивается вбок сама, а не вся страница */
+@media (max-width: 720px) { .brief table.mini { display: block; overflow-x: auto; } }
 .mini { width: 100%; border-collapse: collapse; font-size: 13px; }
 .mini th { text-align: left; font-weight: 500; color: var(--fg-2); font-size: 11.5px; padding: 4px 6px; border-bottom: 1px solid var(--line-2); white-space: nowrap; }
 .mini td { padding: 4px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: middle; }
