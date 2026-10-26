@@ -78,6 +78,14 @@
   K.OFZ_VIEWS = { basis: 'RUONIA + базис', kbd: 'КБД' };
   // базис ОФЗ − RUONIA как рыночная кривая (уровни и изменения в б.п.) — при любом виде риска; в демо — кривая страниц
   K.basisCurve = () => M.basisCurve || M.curve['RUB OFZ'];
+  // Δ ОФЗ (КБД) за день, б.п.: из прогона (M.ofzChg), в демо — Δ RUONIA + Δ базиса; нет сдвига — null (#322, B1)
+  K.ofzChg = () => M.ofzChg || M.curve['RUB RUONIA'].chg.map((v, i) => v == null || K.basisCurve().chg[i] == null ? null : v + K.basisCurve().chg[i]);
+  // кривая «вчера» = сегодня − Δ/div (Δ в б.п., уровни в %: div 100): нет точки или сдвига — null, разрыв (#308, #322)
+  K.yest = (pts, chg, div) => pts.map((v, i) => v == null || chg[i] == null ? null : v - chg[i] / (div || 100));
+  // сдвигов кривой нет в прогоне (CURVE_MOVES без неё): ни одного посчитанного изменения
+  K.noMoves = chg => !chg || chg.every(v => v == null);
+  // тип купона позиции ('fix', 'float', 'linker', …) или null: у позиции не облигации и не дериватива купона нет (#325)
+  K.cpnType = p => (p && p.cpn && p.cpn.type) || null;
   K.setOfzView = v => { try { localStorage.setItem('concepts-ofz-view', v); } catch (e) { } location.reload(); };
   // подписи «₽» в разметке страниц заменяются символом валюты отчёта
   if (K.repr !== 'RUB') {
@@ -107,13 +115,15 @@
   // в валюте отчёта, отличной от рубля, суммы в тысячах мелкие: показываем с одним знаком после точки
   const KD = K.repr === 'RUB' ? 0 : 1;
   const sgn = (v, d) => (v > 0 ? '+' : '') + grp(v, d);
+  // масштаб (тыс, mm, bn) — после проверки на null: null / 1e6 = 0 дал бы «0.0» вместо «—» (#327, B1)
+  const sc = (fn, k) => (v, d) => v == null ? '—' : fn(v / k, d);
   const f = K.f = {
     n: grp, s: sgn,
-    k: v => grp(v / 1e3, KD),                     // тыс
-    ks: v => sgn(v / 1e3, KD),
-    mn: (v, d) => grp(v / 1e6, d == null ? 1 : d),
-    mns: (v, d) => sgn(v / 1e6, d == null ? 1 : d),
-    bn: (v, d) => grp(v / 1e9, d == null ? 2 : d),
+    k: v => sc(grp, 1e3)(v, KD),                  // тыс
+    ks: v => sc(sgn, 1e3)(v, KD),
+    mn: (v, d) => sc(grp, 1e6)(v, d == null ? 1 : d),
+    mns: (v, d) => sc(sgn, 1e6)(v, d == null ? 1 : d),
+    bn: (v, d) => sc(grp, 1e9)(v, d == null ? 2 : d),
     bp: v => v == null ? '—' : grp(v, 0),
     bps: v => v == null ? '—' : sgn(v, 0),
     pct: (v, d) => v == null ? '—' : grp(v, d == null ? 2 : d, '%'),
@@ -121,8 +131,8 @@
     px: v => v == null ? '—' : grp(v, 3),
     money: v => { if (v == null || !isFinite(v)) return '—'; const a = Math.abs(v); return a >= 1e9 ? grp(v / 1e9, 2, ' bn') : a >= 1e6 ? grp(v / 1e6, 1, ' mm') : a >= 1e3 ? grp(v / 1e3, 0, 'k') : grp(v, 0); },
     moneys: v => (v > 0 ? '+' : '') + f.money(v),
-    dv: v => grp(v / 1e3, KD),                    // DV01 в тыс ₽/бп
-    dvs: v => sgn(v / 1e3, KD),
+    dv: v => sc(grp, 1e3)(v, KD),                 // DV01 в тыс ₽/бп
+    dvs: v => sc(sgn, 1e3)(v, KD),
     date: s => s ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(2, 4) : '—',
     dshort: s => { if (!s) return '—'; const m = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']; return (+s.slice(8, 10)) + ' ' + m[+s.slice(5, 7) - 1]; },
     yrs: t => t == null ? '—' : t < 1 ? Math.round(t * 12) + 'м' : grp(t, 1) + 'г',
@@ -138,15 +148,21 @@
   // подпись столбца PnL-водопада, mm (#272): знаков после точки столько, чтобы малый фактор не превращался в «+0.0»
   // (от 1 mm — один, от 0.1 — два, меньше — три). Фактор без подписи, если он и с тремя знаками равен нулю (меньше 500
   // в валюте отчёта) или подпись шире room — ширины столбца в px (K.labelWidth): иначе она слипается с соседней.
-  // total — «Итого»: подписан всегда, не больше двух знаков, как цифра PnL дня в KPI. Точное значение — K.wfTip
+  // total — «Итого»: подписан всегда; от 1 mm — один знак, меньше — два (PnL дня в KPI — всегда два). Точное значение —
+  // K.wfTip. Не посчитано (null, #327) — без подписи: столбца нет, «—» рисует водопад
   K.wfLabel = (v, room, total) => {
-    const x = (v || 0) / 1e6, a = Math.abs(x);
+    if (v == null || !isFinite(v)) return '';
+    const x = v / 1e6, a = Math.abs(x);
     if (!total && a < 5e-4) return '';
     const t = sgn(x, a >= 0.95 ? 1 : total || a >= 0.095 ? 2 : 3);
     return !total && room && K.labelWidth(t, 11) > room ? '' : t;
   };
   // значение столбца водопада в подсказке, mm: без порога, от 1 mm — два знака, меньше — три
-  K.wfTip = v => { const x = (v || 0) / 1e6; return sgn(x, Math.abs(x) >= 0.95 ? 2 : 3); };
+  K.wfTip = v => { if (v == null || !isFinite(v)) return '—'; const x = v / 1e6; return sgn(x, Math.abs(x) >= 0.95 ? 2 : 3); };  // не посчитано — «—» (#327)
+  // столбец водопада без значения (#327): «—» на уровне нарастающего итога, вместо прямоугольника
+  // признак неполноты суммы (M.sumX, #327): посчитано не у всех позиций — «не посчитано у N из M позиций»
+  K.missNote = x => x && x.miss && x.n ? ' <span class="mut3">· не посчитано у ' + x.miss + ' из ' + (x.n + x.miss) + ' поз.</span>' : '';
+  K.wfNull = (api, i, y, fill) => { const a = api.coord([i, y]); return { type: 'text', style: { x: a[0], y: a[1] - 4, text: '—', fill, fontSize: 11, align: 'center', verticalAlign: 'bottom' } }; };
   // заседание ЦБ одной фразой: консенсус и ожидание кривой, если они есть в данных, иначе ставка и прошлое решение
   K.cbrLine = () => {
     const c = M.cbr || {}, n = c.next || {}, last = (c.past || [])[0];
@@ -991,6 +1007,8 @@
       return '<span class="mut3" title="не посчитано">—</span>';
     const id = reg.push(spec) - 1;
     const v = spec.v != null ? spec.v : spec.rows ? spec.rows.reduce((a, r) => a + (r.v || 0), 0) : (spec.list ? M.sum(spec.list, spec.val) : null);
+    // сумма по списку, где ни одно значение не посчитано (M.sum → null, #327), — «—», а не 0 (разбор по щелчку остаётся)
+    if (text == null && v == null && spec.list && spec.list.length) text = '<span class="mut3" title="не посчитано">—</span>';
     const t = text != null ? text : (spec.fmt || f.dv)(v);
     return '<span class="dr ' + (cls != null ? cls : (spec.color === false ? '' : f.cls(v))) + '" data-dr="' + id + '">' + t + '</span>';
   };
@@ -2696,19 +2714,21 @@
   K.pnlWaterfall = function (el, opt) {
     const keys = K.PNL_FACTORS;
     const cats = keys.map(k => k[0] === 'funding' ? 'Фондир.' : k[1]).concat(['Итого']);
-    let L, stag = false;
+    let L, stag = false, sx = [];
     const need = () => Math.max(...cats.map(s => K.labelWidth(s, 10))) + K.WF_GAP;
     const narrow = () => el.clientWidth > 0 && (el.clientWidth - K.WF_AXIS) / cats.length < need();
     const c = K.chart(el, () => {
       L = K.list(); stag = narrow();
-      const vals = keys.map(([k]) => M.sum(L, p => p.pnl[k]));
+      sx = keys.map(([k]) => M.sumX(L, p => p.pnl[k]));
+      const vals = sx.map(x => x.v);  // null — фактор не посчитан ни у одной позиции (#327)
       // отрезки [от, до]: стек ECharts раскладывает отрицательные значения отдельно, поэтому рисуем прямоугольники сами
-      let run = 0; const segs = vals.map(v => { const s = [run, run + v]; run += v; return s; });
-      segs.push([0, run]);
+      let run = 0; const segs = vals.map(v => { const s = [run, run + (v || 0)]; run += v || 0; return s; });
+      if (vals.every(v => v == null)) run = null;  // ни один фактор не посчитан — и «Итого» нет
+      segs.push([0, run || 0]);
       const cols = vals.map(v => v >= 0 ? css('--pos') : css('--neg')).concat([css('--accent')]);
       const lo = Math.min(0, ...segs.map(x => Math.min(x[0], x[1]))), hi = Math.max(0, ...segs.map(x => Math.max(x[0], x[1])));
       return {
-        grid: { left: 6, right: 10, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'item', formatter: p => (keys[p.dataIndex] ? keys[p.dataIndex][1] : 'Итого') + ': <b>' + K.wfTip(p.dataIndex < vals.length ? vals[p.dataIndex] : run) + '</b> mm ₽' },
+        grid: { left: 6, right: 10, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'item', formatter: p => (keys[p.dataIndex] ? keys[p.dataIndex][1] : 'Итого') + ': <b>' + K.wfTip(p.dataIndex < vals.length ? vals[p.dataIndex] : run) + '</b> mm ₽' + K.missNote(sx[p.dataIndex]) },
         xAxis: { type: 'category', data: cats, axisLabel: { interval: 0, fontSize: 10, formatter: (v, i) => stag && i % 2 ? '\n' + v : v } }, yAxis: { type: 'value', unit: 'mm ₽', nameGap: 20, min: lo, max: hi, scale: false, axisLabel: { formatter: v => K.tick(v, 1e6), hideOverlap: true, showMinLabel: !lo, showMaxLabel: !hi } },
         series: [{
           type: 'custom', data: segs.map((s, i) => [i, s[0], s[1]]),
@@ -2716,6 +2736,7 @@
             const i = api.value(0), a = api.coord([i, api.value(1)]), b = api.coord([i, api.value(2)]), w = Math.min(48, api.size([1, 0])[0] * 0.6);
             const y0 = Math.min(a[1], b[1]), hh = Math.max(1, Math.abs(a[1] - b[1]));
             const v = i < vals.length ? vals[i] : run;
+            if (v == null) return { type: 'group', children: [K.wfNull(api, i, api.value(2), css('--fg-3'))] };
             return { type: 'group', children: [
               { type: 'rect', shape: { x: a[0] - w / 2, y: y0, width: w, height: hh }, style: { fill: cols[i] } },
               { type: 'text', style: { x: a[0], y: y0 - 4, text: K.wfLabel(v, api.size([1, 0])[0] - 1, i === vals.length), fill: css('--fg-2'), fontSize: 11, align: 'center', verticalAlign: 'bottom' } }] };
@@ -2803,7 +2824,7 @@
            ['вал.', K.d({ title: 'CS01 валютные', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy !== 'RUB'), val: 'cs01' })]], null, K.tips.cs01) +
         K.kpi('Кэрри / день', K.d({ title: 'Кэрри за день (без фондирования)', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }) + K.kpiUnit('тыс ₽'),
           [[K.hint('фондирование', K.tips.funding), K.d({ title: 'Фондирование за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'fundingDay', nullable: true })],
-           ['в год ≈', '<span class="' + f.cls(k.carryDay) + '">' + f.mn(k.carryDay * 365, 0) + '</span> <span class="u">mm ₽</span>']], null, K.tips.carry) +
+           ['в год ≈', '<span class="' + f.cls(k.carryDay) + '">' + f.mn(k.carryDay == null ? null : k.carryDay * 365, 0) + '</span> <span class="u">mm ₽</span>']], null, K.tips.carry) +
         K.kpi('Облигации MV', K.d({ title: 'MV облигаций', unit: 'bn ₽', fmt: v => f.bn(v, 1), list: L.filter(p => p.group !== 'DER'), val: 'mv', color: false }) + K.kpiUnit('bn ₽'),
           K.kpiCcyRows(M.ccys.reduce((o, c) => (o[c] = k.byCcy[c].mv, o), {}), (c, v) => f.bn(v, 1), 3, v => f.bn(v, 1))) +
         '<div class="k-kpi k-fxk"><div class="l">' + K.hint('ОВП', K.tips.fxMini) + '</div><div class="v">' + K.fxMini(L) + '</div><div class="s"><a class="go" href="c06-launchpad.html#fx" title="плитка «ОВП и курсы»: бонды и деривативы по валютам, курсы, PnL FX">подробно (C06) →</a></div></div>' +

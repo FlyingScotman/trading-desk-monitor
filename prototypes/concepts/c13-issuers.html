@@ -263,7 +263,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     bp.querySelector('.bd').classList.add('flush');
     K.table(bp.querySelector('.bd'), { viewKey: 'c13-issuer-bonds',
       rows: L, search: L.length > 8, sort: [['tenor', 1]], stripe: p => K.kindColor[p.kind],
-      groupable: [{ key: p => p.ccy + ' · ' + (p.cpn.type === 'float' ? 'флоатеры' : p.cpn.type === 'linker' ? 'линкеры' : 'фикс'), order: (a, b) => (M.ccyOrder[a.slice(0, 3)] - M.ccyOrder[b.slice(0, 3)]) || a.localeCompare(b, 'ru'), label: k => K.ccyTag(k.slice(0, 3)) + ' ' + esc(k.slice(6)), span: 2 }], groupLabel: 'валюта → фикс / флоатеры',
+      groupable: [{ key: p => p.ccy + ' · ' + (K.cpnType(p) === 'float' ? 'флоатеры' : K.cpnType(p) === 'linker' ? 'линкеры' : K.cpnType(p) ? 'фикс' : 'без купона'), order: (a, b) => (M.ccyOrder[a.slice(0, 3)] - M.ccyOrder[b.slice(0, 3)]) || a.localeCompare(b, 'ru'), label: k => K.ccyTag(k.slice(0, 3)) + ' ' + esc(k.slice(6)), span: 2 }], groupLabel: 'валюта → фикс / флоатеры',
       columns: K.cols(['name', 'ccy', 'book', 'coupon', 'event', 'tenor', 'notional', 'price', 'ytm', 'spread', 'dur', 'cs01', 'dv01', 'pnl', 'mv']),
     });
     // события + PnL

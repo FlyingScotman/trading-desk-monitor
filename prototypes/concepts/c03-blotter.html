@@ -171,7 +171,8 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   // ---------- группировки ----------
   const CCYN = { RUB: 'Рубли', USD: 'Доллары', EUR: 'Евро', CNY: 'Юани' };
   const TBO = ['< 6м', '6м–1г', '1–2г', '2–3г', '3–5г', '5–7г', '7–10г', '10г+'];
-  const fixFloat = r => r.group === 'DER' ? M.kindShort[r.kind] : r.cpn.type === 'float' ? 'Флоатеры' : r.cpn.type === 'linker' ? 'Линкеры' : 'Фикс';
+  // без купона (не облигация и не дериватив, #325) — по виду позиции
+  const fixFloat = r => { const t = K.cpnType(r); return r.group === 'DER' || !t ? M.kindShort[r.kind] || 'Прочее' : t === 'float' ? 'Флоатеры' : t === 'linker' ? 'Линкеры' : 'Фикс'; };
   const FFO = ['Фикс', 'Флоатеры', 'Линкеры'];
   const lvCcy = { key: r => r.ccy, label: k => K.ccyTag(k) + ' ' + CCYN[k], order: (a, b) => M.ccyOrder[a] - M.ccyOrder[b], color: k => K.ccyColor(k) };
   const GROUPS = {
@@ -334,7 +335,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     const p = id ? M.pos[id] : null;
     if (!p) { cur = null; $('.cd-hd').innerHTML = '<div class="cd-empty">выберите позицию в таблице</div>'; return; }
     cur = p;
-    const isBond = !!p.cpn, isFloat = isBond && p.cpn.type === 'float';
+    const isBond = !!p.cpn, isFloat = K.cpnType(p) === 'float';
     $('.cd-hd').innerHTML = '<div class="t"><span style="color:' + K.issuerColor(p.issuer) + '">●</span>' + K.aliasName(p) + ' ' + K.ccyTag(p.ccy) + ' <span class="tagc" style="font-size:11px;font-weight:400;padding:0 6px;border:1px solid var(--line);border-radius:4px;color:var(--fg-2)">' + esc(p.kindLabel) + '</span></div>' +
       '<div class="st">' + esc(p.issuerFull) + (p.isin ? ' · <span class="mono">' + esc(p.isin) + '</span>' : '') + ' · ' + esc(p.book) + ' — ' + esc(p.bookName) + (p.rating !== '—' ? ' · ' + esc(p.rating) : '') + '</div>' +
       '<div class="acts"><button class="k-btn pri" data-a="full">Открыть полностью ↗</button>' + (p.issuer ? '<button class="k-btn" data-a="iss">Все бумаги эмитента</button>' : '') + '<button class="k-btn" data-a="book">Книга ' + esc(p.book) + '</button></div>';
@@ -352,7 +353,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
       ['Цена', f.px(p.price) + ' <small class="' + f.cls(p.price - p.prevPrice) + '">' + f.s(p.price - p.prevPrice, 2) + '</small>'], ['Bid / Ask', '<small>' + f.px(p.bid) + ' / ' + f.px(p.ask) + '</small>'],
       ['Доходность', isFloat ? '<span class="mut3">—</span> <small>флоатер: смотрим DM</small>' : f.pct(p.ytm) + ' <small>к ' + (p.event.kind === 'mat' ? 'погаш.' : 'оферте') + '</small>'], ...K.spreadFields(p),
       ['G-спред к ОФЗ', f.bp(p.gspread) + ' <small>б.п.</small>'],
-      ['Купон', '<span class="mono">' + esc(p.couponFmt) + '</span>'], ['Текущий купон', f.pct(p.curCpn) + (p.cpn.type === 'float' ? ' <small>прогноз</small>' : '')],
+      ['Купон', '<span class="mono">' + esc(p.couponFmt) + '</span>'], ['Текущий купон', f.pct(p.curCpn) + (isFloat ? ' <small>прогноз</small>' : '')],
       ['Мод. дюрация', p.mdur == null ? '—' : f.n(p.mdur, 2)], ['DV01', f.dv(p.dv01) + ' <small>тыс ₽/бп</small>', false, K.tips.dv01],
       ['CS01', f.dv(p.cs01) + ' <small>тыс ₽/бп</small>', false, K.tips.cs01], ['Базис ОФЗ01', p.basis01 ? f.dv(p.basis01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.basis01],
       ['Спред к КБД01', p.ofzSpr01 ? f.dv(p.ofzSpr01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.ofzSpr01],

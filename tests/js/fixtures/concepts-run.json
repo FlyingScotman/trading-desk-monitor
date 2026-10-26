@@ -6948,6 +6948,52 @@
     "explained": 0
    },
    "ocpTransfer": true
+  },
+  {
+   "id": 104,
+   "book": "CORP_RUB",
+   "assetClass": "Прочее",
+   "segment": "Прочее",
+   "instrType": "OTHER",
+   "name": "Эмитент 01 прочее-01",
+   "isin": "RU000ATF0EQ1",
+   "issuer": "Эмитент 01",
+   "issuerGroup": "Группа 01",
+   "sector": "Транспорт",
+   "rating": "AAA",
+   "ccy": "RUB",
+   "maturity": null,
+   "tenorY": null,
+   "couponType": null,
+   "coupon": null,
+   "index": null,
+   "margin": null,
+   "notional": 50000000,
+   "price": null,
+   "mv": 50000000,
+   "mvRub": 50000000,
+   "ytm": null,
+   "spreadBp": null,
+   "mdur": null,
+   "cs01": 0,
+   "ofzSpr01": 0,
+   "risk": {},
+   "fxDelta": {},
+   "newToday": false,
+   "entity": "Головной банк",
+   "portfolio": "Торговый",
+   "pnl": {
+    "carry": 0,
+    "rolldown": 0,
+    "rates": 0,
+    "convexity": 0,
+    "spread": 0,
+    "fx": 0,
+    "funding": 0,
+    "newTrades": 0,
+    "other": 1250000,
+    "explained": 1250000
+   }
   }
  ]
 }

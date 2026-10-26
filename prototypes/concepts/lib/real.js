@@ -140,15 +140,19 @@
   // исходная кривая прогона для кривой страниц: она сама или её псевдоним из CURVE_MAP (первая с точками)
   const srcOf = id => [id].concat(Object.keys(CURVE_MAP).filter(k => CURVE_MAP[k] === id && k !== 'RUB OFZ')).find(k => hasPts(C[k])) || id;
   const pts = id => (C[id] && C[id].pts) ? C[id].pts.map(num) : new Array(NB).fill(null);
-  const chg = id => (MV[id] || zeros()).map(v => num(v) || 0);
+  // изменение кривой за день, б.п.; кривой нет в CURVE_MOVES (или точки) — null, а не 0 (#322, B1): «вчера» по ней не
+  // строится, столбцов «изм. дня» нет. В PnL от ставок (риск × сдвиг) null даёт 0 — вклада нет, как и раньше
+  const nulls = () => new Array(NB).fill(null);
+  const chg = id => MV[id] ? M.buckets.map((_, k) => num(MV[id][k])) : nulls();
   const stub = (id, ccy, short) => { const s = srcOf(id), c = C[s];
     return hasPts(c) ? { id, ccy, name: c.name || id, short, kind: 'rate', pts: pts(s), chg: chg(s) }
-      : { id, ccy, name: ccy + ' (кривой нет, риск по дюрации)', short, kind: 'rate', pts: new Array(NB).fill(null), chg: zeros() }; };
+      : { id, ccy, name: ccy + ' (кривой нет, риск по дюрации)', short, kind: 'rate', pts: nulls(), chg: nulls() }; };
   const kbd = pts('RUB OFZ'), ruo = pts('RUB RUONIA');
   // базис ОФЗ − RUONIA как рыночная кривая (уровень, б.п., и его изменение) — в любом виде риска (M.basisCurve: рынок, утро)
   const basisCurve = { id: 'RUB OFZ', ccy: 'RUB', name: 'Базис ОФЗ − RUONIA', short: 'ОФЗ-базис', kind: 'basis',
-    pts: kbd.map((v, i) => v != null && ruo[i] != null ? (v - ruo[i]) * 100 : null), chg: chg('RUB OFZ').map((v, i) => v - chg('RUB RUONIA')[i]) };
+    pts: kbd.map((v, i) => v != null && ruo[i] != null ? (v - ruo[i]) * 100 : null), chg: chg('RUB OFZ').map((v, i) => v == null || chg('RUB RUONIA')[i] == null ? null : v - chg('RUB RUONIA')[i]) };
   M.basisCurve = basisCurve;
+  M.ofzChg = chg('RUB OFZ');  // Δ КБД, б.п. (K.ofzChg): есть и без сдвига RUONIA
   M.curves = [
     { id: 'RUB RUONIA', ccy: 'RUB', name: (C['RUB RUONIA'] || {}).name || 'RUONIA OIS', short: 'RUONIA', kind: 'rate', pts: ruo, chg: chg('RUB RUONIA') },
     { id: 'RUB KEY', ccy: 'RUB', name: (C['RUB KEY'] || {}).name || 'Ключевая ставка (КС)', short: 'КС', kind: 'rate', pts: pts('RUB KEY'), chg: chg('RUB KEY') },
@@ -498,7 +502,8 @@
     dv01Book: series(H.dv01Book, M.books.map(b => b.id), id => sumBy(p => p.book === id ? p.dv01 : 0)),
     mvType: series(H.mvType, M.typeRows.map(t => t.id), id => sumBy(p => p.group + '.' + p.kind === id ? (p.group === 'DER' ? Math.abs(p.notionalRub) : p.mv) : 0)),
     mvCcy: series(H.mvCcy, M.ccys, c => sumBy(p => p.ccy === c && p.group !== 'DER' ? p.mv : 0)),
-    pnl: series(H.pnl, ['carry', 'funding', 'rates', 'spread', 'fx', 'trading', 'other', 'total'], k => sumBy(p => p.pnl[k])),
+    // сегодня без истории: фактор, не посчитанный ни у одной позиции, — null, а не 0 (#327, B1)
+    pnl: series(H.pnl, ['carry', 'funding', 'rates', 'spread', 'fx', 'trading', 'other', 'total'], k => positions.some(p => p.pnl[k] != null) ? sumBy(p => p.pnl[k]) : null),
   };
   if (!H.cs01) M.hist.cs01[n - 1] = sumBy(p => p.cs01);
   // базис в истории — сводки прогонов (кривая «RUB OFZ» страниц: ofz_basis01 в прогоне 0.2.6+, ofzSpr01 до него);
@@ -685,7 +690,16 @@
   }
   function modDur(cpn, y, T, f) { const h = 0.01; return (priceFromYield(cpn, y - h, T, f) - priceFromYield(cpn, y + h, T, f)) / (2 * h) / priceFromYield(cpn, y, T, f) * 100; }
   M.math = { priceFromYield, modDur };
-  M.sum = (arr, f) => arr.reduce((s, x) => s + ((typeof f === 'function' ? f(x) : x[f]) || 0), 0);
+  // сумма по списку с «не посчитано» (#327, B1; как nullable #168): null не превращается в 0. Ни одно значение не
+  // посчитано — null (у пустого списка — 0); посчитана часть — сумма посчитанных. M.sumX — то же с признаком
+  // неполноты: { v, n — сколько посчитано, miss — сколько нет }
+  M.sumX = (arr, f) => {
+    const g = typeof f === 'function' ? f : x => x[f];
+    let s = 0, n = 0;
+    arr.forEach(x => { const v = g(x); if (v != null && !Number.isNaN(v)) { s += v; n++; } });
+    return { v: n || !arr.length ? s : null, n, miss: arr.length - n };
+  };
+  M.sum = (arr, f) => M.sumX(arr, f).v;
   M.kpis = function (list) {
     list = list || positions;
     const S = f => M.sum(list, f);
