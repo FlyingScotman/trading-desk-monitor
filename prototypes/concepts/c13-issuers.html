@@ -75,13 +75,17 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 
   // ---------- агрегаты по эмитентам ----------
   let ISS = [];
+  // CDS на эмитента (#348): кредитный риск эмитента — в его списке и суммах (MV, CS01, PnL), но отдельно от облигаций:
+  // свой счётчик, пометка «CDS» и своя группа в «Наших бумагах». Позиции эмитента — по p.issuer, не по группе вида
+  const isCds = p => p.instrType === 'CDS' || p.productGroup === 'cds';
   function build() {
-    const L = K.list().filter(p => p.group !== 'DER' && p.issuer);
+    const L = K.list().filter(p => p.issuer);
     const g = {};
     L.forEach(p => (g[p.issuer] = g[p.issuer] || []).push(p));
     ISS = Object.entries(g).map(([id, list]) => {
       const i = M.issuer[id];
-      const o = { id, name: i.short, full: i.name, sector: i.sector, rating: i.rating, ratingInfo: i.ratingInfo, list, n: list.length,
+      const nCds = list.filter(isCds).length;
+      const o = { id, name: i.short, full: i.name, sector: i.sector, rating: i.rating, ratingInfo: i.ratingInfo, list, n: list.length - nCds, nCds,
         mv: sumBy(list, p => p.mv), cs01: sumBy(list, p => p.cs01), dv01: sumBy(list, p => p.dv01), basis01: sumBy(list, p => p.basis01),
         // PnL, кэрри, фондирование: ни у одной бумаги не посчитано — null («—»), а не 0 (B1, #333)
         pnl: M.sum(list, p => p.pnl.total), carry: M.sum(list, p => p.carryDay), funding: M.sum(list, p => p.fundingDay), mtd: M.sum(list, 'pnlMtd'), ytd: M.sum(list, 'pnlYtd'),
@@ -102,7 +106,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     const mf = ISS.find(x => M.isMinfin(x.id));
     const pct = (a, b) => b ? Math.round(a / b * 100) + '%' : '—';
     document.getElementById('kpis').innerHTML = '<div class="k-kpis">' +
-      K.kpi('Эмитентов', String(ISS.length), corp.length + ' без Минфина · ' + L.length + ' бумаг') +
+      K.kpi('Эмитентов', String(ISS.length), corp.length + ' без Минфина · ' + sumBy(ISS, x => x.n) + ' бумаг' + (L.some(isCds) ? ' · ' + L.filter(isCds).length + ' CDS' : '')) +
       K.kpi('Топ-10 корп. в MV', K.d({ title: 'Топ-10 эмитентов по MV', unit: 'mm ₽', fmt: v => f.mn(v, 0), list: t10.flatMap(x => x.list), val: 'mv', dim: 'issuer', color: false }, pct(sumBy(t10, x => x.mv), corpMv)), 'от корпоративной MV ' + f.bn(corpMv, 1) + ' bn ₽') +
       K.kpi('Топ-10 в CS01', K.d({ title: 'Топ-10 эмитентов по CS01', unit: 'тыс ₽/бп', list: t10cs.flatMap(x => x.list), val: 'cs01', dim: 'issuer', color: false }, pct(sumBy(t10cs, x => x.cs01), totCs)), 'CS01 всего ' + f.dv(totCs) + ' тыс ₽/бп') +
       K.kpi('Крупнейший корп.', top ? '<span class="dr" data-iss="' + top.id + '" style="color:' + K.issuerColor(top.id) + '">' + esc(top.name) + '</span>' : '—', top ? pct(top.mv, corpMv) + ' корп. MV · ' + f.mn(top.mv, 0) + ' mm ₽' : '') +
@@ -178,7 +182,8 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
       columns: [
         { key: 'name', label: 'Эмитент', fmt: (v, r) => '<b>' + esc(v) + '</b> <span class="mtag">' + r.ccys.join(' ') + '</span>' },
         { key: 'rating', label: 'Рейт.', val: r => K.ratingRank(r.rating), fmt: (v, r) => '<span class="mut" title="' + esc(K.ratingTip(r.rating, r.ratingInfo)) + '">' + esc(K.ratingText(r.rating, r.ratingInfo)) + '</span>' },
-        { key: 'n', label: 'Бум.', num: true, fmt: v => '<span class="mut">' + v + '</span>' },
+        { key: 'n', label: 'Бум.', num: true, title: 'облигаций эмитента; CDS на эмитента — отдельно', fmt: (v, r) => '<span class="mut">' + v + '</span>' + (r.nCds ? ' <span class="mtag" data-cds="' + r.nCds + '">+' + r.nCds + ' CDS</span>' : ''),
+          csvExtra: ['CDS'], csvFmt: (v, r) => [v, r.nCds || 0] },  // в CSV «Бум.» — число, CDS — своей колонкой
         { key: 'mv', label: 'MV, mm ₽', num: true, fmt: drillCell('mv', v => f.mn(v, 0), 'mm ₽', 'MV'), sum: true, drill: false, sumFmt: v => f.mn(v, 0) },
         { key: 'share', label: '', val: r => r.mv, fmt: (v) => K.bar(v, max, true), w: '70px' },
         { key: 'cs01', label: 'CS01', num: true, unit: 'тыс ₽/бп', fmt: drillCell('cs01', f.dv, 'тыс ₽/бп', 'CS01'), sum: true, drill: false, sumFmt: f.dv },
@@ -205,7 +210,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     const nFlt = L.filter(p => p.cpn && p.cpn.type === 'float').length;
     // шапка
     const hp = K.h('div', 'k-panel'); dash.appendChild(hp);
-    hp.innerHTML = '<div class="bd"><div class="ihd"><span class="sw" style="background:' + col + '"></span><div style="flex:1;min-width:220px"><div class="nm">' + esc(x.full) + '</div><div class="full">' + esc(x.sector) + ' · рейтинг <span title="' + esc(K.ratingTip(x.rating, x.ratingInfo)) + '">' + esc(K.ratingText(x.rating, x.ratingInfo)) + '</span> · ' + x.n + ' бумаг (' + (x.n - nFlt) + ' фикс, ' + nFlt + ' флоатеры) · ' + x.ccys.map(K.ccyTag).join(' ') + '</div></div>' +
+    hp.innerHTML = '<div class="bd"><div class="ihd"><span class="sw" style="background:' + col + '"></span><div style="flex:1;min-width:220px"><div class="nm">' + esc(x.full) + '</div><div class="full">' + esc(x.sector) + ' · рейтинг <span title="' + esc(K.ratingTip(x.rating, x.ratingInfo)) + '">' + esc(K.ratingText(x.rating, x.ratingInfo)) + '</span> · ' + x.n + ' бумаг (' + (x.n - nFlt) + ' фикс, ' + nFlt + ' флоатеры)' + (x.nCds ? ' · <span class="k-tag">CDS</span> ' + x.nCds : '') + ' · ' + x.ccys.map(K.ccyTag).join(' ') + '</div></div>' +
       '<div class="k-tags">' + [...new Set(L.map(p => p.book))].map(b => '<span class="k-tag">' + esc(b) + '</span>').join('') + '</div></div>' +
       '<div class="k-fields" style="margin-top:10px">' + [
         ['MV', D('MV', 'mv', v => f.mn(v, 0), 'mm ₽', '') + ' <small>mm ₽ · ' + Math.round(x.mv / totMv * 100) + '% книги</small>'],
@@ -259,7 +264,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     const rel = K.h('div', 'ch'); rp.querySelector('.bd').appendChild(rel);
     const cids = M.curves.filter(c => L.some(p => p.risk[c.id].some(v => Math.abs(v) > 1))).map(c => c.id);
     const sel = x.id;
-    const rs = K.riskStack(rel, { curves: cids.concat(L.some(p => p.cs01) ? ['CS01'] : []), list: () => K.list().filter(p => p.issuer === sel && p.group !== 'DER'), labels: false });
+    const rs = K.riskStack(rel, { curves: cids.concat(L.some(p => p.cs01) ? ['CS01'] : []), list: () => K.list().filter(p => p.issuer === sel), labels: false });
     curRs = rs; fixRs();
     dashCharts.push(rs);
     // наши бумаги
@@ -267,8 +272,9 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     bp.querySelector('.bd').classList.add('flush');
     K.table(bp.querySelector('.bd'), { viewKey: 'c13-issuer-bonds',
       rows: L, search: L.length > 8, sort: [['tenor', 1]], stripe: p => K.kindColor[p.kind],
-      groupable: [{ key: p => p.ccy + ' · ' + (K.cpnType(p) === 'float' ? 'флоатеры' : K.cpnType(p) === 'linker' ? 'линкеры' : K.cpnType(p) ? 'фикс' : 'без купона'), order: (a, b) => (M.ccyOrder[a.slice(0, 3)] - M.ccyOrder[b.slice(0, 3)]) || a.localeCompare(b, 'ru'), label: k => K.ccyTag(k.slice(0, 3)) + ' ' + esc(k.slice(6)), span: 2 }], groupLabel: 'валюта → фикс / флоатеры',
-      columns: K.cols(['name', 'ccy', 'book', 'coupon', 'event', 'tenor', 'notional', 'price', 'ytm', 'spread', 'dur', 'cs01', 'dv01', 'pnl', 'mv']),
+      groupable: [{ key: p => p.ccy + ' · ' + (isCds(p) ? 'CDS' : K.cpnType(p) === 'float' ? 'флоатеры' : K.cpnType(p) === 'linker' ? 'линкеры' : K.cpnType(p) ? 'фикс' : 'без купона'), order: (a, b) => (M.ccyOrder[a.slice(0, 3)] - M.ccyOrder[b.slice(0, 3)]) || a.localeCompare(b, 'ru'), label: k => K.ccyTag(k.slice(0, 3)) + ' ' + esc(k.slice(6)), span: 2 }], groupLabel: 'валюта → фикс / флоатеры',
+      columns: K.cols(['name', { key: 'cds', label: 'Вид', val: p => isCds(p) ? 'CDS' : 'облигация', filter: true,
+        fmt: v => v === 'CDS' ? '<span class="k-tag">CDS</span>' : '<span class="mut3">облигация</span>' }, 'ccy', 'book', 'coupon', 'event', 'tenor', 'notional', 'price', 'ytm', 'spread', 'dur', 'cs01', 'dv01', 'pnl', 'mv']),
     });
     // события + PnL
     const two2 = K.h('div', 'c13-two'); dash.appendChild(two2);
