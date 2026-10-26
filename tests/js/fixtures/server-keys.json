@@ -150,9 +150,45 @@
   "name",
   "pts"
  ],
+ "extraRead": [
+  "assumptions",
+  "core",
+  "dm_bp",
+  "funding",
+  "g_spread_bp",
+  "horizon_kind",
+  "index_fixings",
+  "issue_size",
+  "lat_name",
+  "legs",
+  "not_exact_reason",
+  "offer_date",
+  "offer_kind",
+  "ofz_basis01",
+  "ofz_ruonia01",
+  "pv_diff_rub",
+  "quality",
+  "quote",
+  "reason",
+  "reported",
+  "reported_pv_rub",
+  "repos",
+  "spread_buckets",
+  "swaps"
+ ],
  "ids": {
-  "CURVES": "^[A-Z]{3}( \\S.*)?$",
-  "risk": "^[A-Z]{3}( \\S.*)?$",
-  "fxDelta": "^[A-Z]{3}$"
+  "curvePattern": "^[A-Z]{3}( [A-Z][A-Z0-9]*)*$",
+  "curves": [
+   "RUB KEY",
+   "RUB OFZ",
+   "RUB RUONIA",
+   "USD"
+  ],
+  "ccys": [
+   "CNY",
+   "EUR",
+   "RUB",
+   "USD"
+  ]
  }
 }

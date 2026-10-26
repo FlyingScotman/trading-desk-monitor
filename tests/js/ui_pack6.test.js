@@ -37,13 +37,16 @@ function load(repr) {
 
 t('#326: K.spark — пропуск ряда даёт разрыв линии, а не точку NaN; пустой ряд — без линии', () => {
   const { K } = load();
-  const d = s => (/ d="([^"]*)"/.exec(s) || [])[1];
+  // d — линия, dd — одиночные точки (второй путь, class="dots")
+  const d = s => (/<path fill[^>]* d="([^"]*)"/.exec(s) || [])[1], dd = s => (/<path class="dots"[^>]* d="([^"]*)"/.exec(s) || [])[1];
   const full = K.spark([1, 2, 3, 2], 30, 10, '#000');
-  assert.ok(/^M[\d.]+,[\d.]+(L[\d.]+,[\d.]+){3}$/.test(d(full)), full);
+  assert.ok(/^M[\d.]+,[\d.]+(L[\d.]+,[\d.]+){3}$/.test(d(full)) && !dd(full), full);
   const gap = K.spark([1, null, 3, 2, NaN, 4, undefined], 60, 10, '#000');
   assert.ok(!/NaN|undefined/.test(gap), gap);
-  assert.strictEqual((d(gap).match(/M/g) || []).length, 3, 'три куска: [1], [3, 2], [4]');
-  assert.ok(d(gap).startsWith('M0.0,') && d(gap).includes('M20.0,') && d(gap).includes('M50.0,'), 'x — по месту точки в ряду, пропуски не сдвигают');
+  assert.ok(/^M20\.0,[\d.]+L30\.0,[\d.]+$/.test(d(gap)), 'линия — кусок [3, 2]: ' + gap);
+  assert.ok(/^M0\.0,[\d.]+h0M50\.0,[\d.]+h0$/.test(dd(gap)), 'одиночные [1] и [4] — точками, x по месту в ряду: ' + gap);
+  const dots = K.spark([1, null, 2, null, 3], 40, 10, '#000');
+  assert.ok(!d(dots) && /^M0\.0,[\d.]+h0M20\.0,[\d.]+h0M40\.0,[\d.]+h0$/.test(dd(dots)) && /class="dots"[^>]*stroke-width="2\.6" stroke-linecap="round"/.test(dots), 'одиночная точка между пропусками видна: ' + dots);
   assert.ok(!/NaN/.test(K.spark([null, null, 5, 5], 20, 10, '#000')), 'ровный ряд после пропусков');
   assert.strictEqual(K.spark([null, null, null], 20, 10), '');
   assert.strictEqual(K.spark([null, 7, null], 20, 10), '', 'одна непустая точка — линии нет');
@@ -67,9 +70,21 @@ t('#321: K.tickOf — деления оси с масштабом формата
   assert.deepStrictEqual([0, 1e5, 2e5, 3e5].map(ax), ['0', '0.1', '0.2', '0.3']);
   assert.deepStrictEqual([0, 1e3, 2e3].map(K.tickOf(K.f.k)), ['0', '1', '2']);
   const kit = P('lib/kit.js'), c04 = P('c04-pivot.html'), c08 = P('c08-calendar.html');
-  assert.ok(kit.includes("xAxis: { type: 'value', unit: spec.unit, axisLabel: { formatter: K.tickOf(fmt), hideOverlap: true } }"), 'разбор');
-  assert.ok(c04.includes("axisLabel: { formatter: K.tickOf(A.meas.fmt), hideOverlap: true }"), 'C04');
-  assert.ok(c08.includes("axisLabel: { formatter: K.tickOf(o.fmt) }") && c08.includes("unit: 'mm ' + ccy, axisLabel: { formatter: v => K.tick(v), hideOverlap: true }"), 'C08');
+  // явный масштаб (ревью PR #328): разбор — spec.sc, C04 — meas.sc, C08 — o.sc; K.tickOf — запасной путь
+  assert.ok(kit.includes("const sc = spec.sc != null ? spec.sc : spec.fmt ? null : 1e3, axFmt = sc != null ? v => K.tick(v, sc) : K.tickOf(fmt);") &&
+    kit.includes("xAxis: { type: 'value', unit: spec.unit, minInterval: spec.int ? 1 : 0, axisLabel: { formatter: axFmt, hideOverlap: true } }"), 'разбор');
+  assert.ok(c04.includes("minInterval: A.meas.int ? 1 : 0, axisLabel: { formatter: v => K.tick(v, A.meas.sc), hideOverlap: true }"), 'C04');
+  const meas = c04.slice(c04.indexOf('const MEAS = {'), c04.indexOf('FACT.forEach(([k, t]) => MEAS['));
+  const lines = meas.split('\n').filter(l => / fmt: /.test(l));
+  assert.ok(lines.length >= 14 && lines.every(l => / sc: 1(e[369])?, /.test(l)), 'у каждой меры C04 — sc');
+  assert.ok(/count: \{[^\n]*sc: 1, int: true,/.test(meas), 'счётная мера — целые деления');
+  assert.ok(/MEAS\['pnl_' \+ k\] = \{[^\n]*fmt: f\.k, sc: 1e3,/.test(c04), 'факторы PnL');
+  assert.strictEqual((c04.match(/sc: (A\.)?meas\.sc, int: (A\.)?meas\.int, rows:/g) || []).length, 4, 'разбор из C04 — с масштабом меры');
+  // масштаб мер C04 совпадает с тем, что даёт их формат
+  const { K: KR } = load('RUB'), fr = KR.f;
+  [[fr.dv, 1e3], [v => fr.mn(v, 0), 1e6], [fr.k, 1e3], [v => fr.mn(v, 1), 1e6], [v => fr.n(v), 1]].forEach(([fmt, sc]) => assert.strictEqual(KR.tickOf(fmt)(sc * 7), '7'));
+  assert.ok(c08.includes("axisLabel: { formatter: o.sc != null ? v => K.tick(v, o.sc) : K.tickOf(o.fmt) }") && c08.includes("unit: 'mm ' + ccy, axisLabel: { formatter: v => K.tick(v), hideOverlap: true }"), 'C08');
+  assert.strictEqual((c08.match(/stackChart\(el, [^\n]*\{ fmt[^\n]*?, sc: 1e[69], unit/g) || []).length, 3, 'C08: у всех stackChart — sc');
   assert.ok(!/axisLabel: \{ formatter: v => (fmt|A\.meas\.fmt|o\.fmt|f\.n)\(v/.test(kit + c04 + c08), 'нет осей через формат меры');
 });
 
@@ -107,13 +122,16 @@ t('#317: C03 — у «Δ цены» в CSV единица; C14/C16 — раск�
 t('#324: server-keys.json — вложенные уровни extra, curve и шаблоны id; фикстура в них укладывается', () => {
   assert.ok(SERVER_KEYS.extra.includes('legs') && SERVER_KEYS.extra.includes('funding') && SERVER_KEYS.extra.includes('reason'));
   assert.deepStrictEqual(SERVER_KEYS.curve, ['ccy', 'kind', 'name', 'pts']);
-  assert.deepStrictEqual(Object.keys(SERVER_KEYS.ids), ['CURVES', 'risk', 'fxDelta']);
+  assert.deepStrictEqual(Object.keys(SERVER_KEYS.ids), ['curvePattern', 'curves', 'ccys']);
+  assert.ok(SERVER_KEYS.ids.curves.includes('RUB OFZ') && SERVER_KEYS.ids.ccys.includes('USD'));
   assert.deepStrictEqual(unknownKeys(loadRun(context())), []);
-  // всё, что lib/real.js читает из extra позиции, сервер может отдать (EXTRA_KEYS_READ бэкенд-теста)
+  // контракт EXTRA_KEYS_READ (backend api/concepts_run.py, в файле — extraRead) равен тому, что lib/real.js читает из
+  // extra позиции: и ключ, который страница перестала читать, и ключ, которого нет в контракте, роняют тест
   const real = P('lib/real.js'), read = new Set();
   for (const m of real.matchAll(/\b(?:ex|extra|d\.extra)\.([a-z][a-z0-9_]*)/g)) read.add(m[1]);
   assert.ok(read.size > 10);
-  assert.deepStrictEqual([...read].filter(k => !SERVER_KEYS.extra.includes(k)).sort(), []);
+  assert.deepStrictEqual([...read].sort(), SERVER_KEYS.extraRead);
+  assert.deepStrictEqual(SERVER_KEYS.extraRead.filter(k => !SERVER_KEYS.extra.includes(k)), []);
 });
 
 t('#324: тест, дописавший неизвестное поле во вложенную структуру прогона, падает на чтении прогона', () => {
@@ -128,12 +146,27 @@ t('#324: тест, дописавший неизвестное поле во в�
     [D => { withRisk(D).risk.ruonia = D.BUCKETS.map(() => 0); }, /risk\.ruonia/],
     [D => { D.positions[0].fxDelta = { usd: 1 }; }, /fxDelta\.usd/],
     [D => { D.positions[0].fxDelta = { USD: { delta: 1 } }; }, /fxDelta\.USD/],
+    // ревью PR #328: опечатка в id кривой, неизвестная валюта, NaN, extra не объект, форма кривой
+    [D => { withRisk(D).risk['RUB FOO'] = D.BUCKETS.map(() => 0); }, /risk\.RUB FOO/],
+    [D => { withRisk(D).risk['RUB OFZ '] = D.BUCKETS.map(() => 0); }, /risk\.RUB OFZ /],
+    [D => { withRisk(D).risk['RUB OFZ'] = D.BUCKETS.map(() => true); }, /risk\.RUB OFZ/],
+    [D => { D.positions[0].fxDelta = { XXX: 1 }; }, /fxDelta\.XXX/],
+    [D => { D.positions[0].fxDelta = { USD: NaN }; }, /fxDelta\.USD/],
+    [D => { D.positions[0].fxDelta = { USD: Infinity }; }, /fxDelta\.USD/],
+    [D => { D.positions[0].extra = ['x']; }, /extra\./],
+    [D => { D.positions[0].extra = 'x'; }, /extra\./],
+    [D => { D.CURVES['RUB OFZ'].pts = {}; }, /CURVES\.RUB OFZ/],
+    [D => { D.CURVES['RUB OFZ'].pts = D.CURVES['RUB OFZ'].pts.slice(1); }, /CURVES\.RUB OFZ/],
+    [D => { D.CURVES['RUB OFZ'].ccy = 'rub'; }, /CURVES\.RUB OFZ/],
+    [D => { D.CURVES['RUB OFZ'].name = null; }, /CURVES\.RUB OFZ/],
+    [D => { D.CURVES['RUB OFZ '] = D.CURVES['RUB OFZ']; }, /CURVES\.RUB OFZ /],
   ];
   bad.forEach(([mutate, re]) => assert.throws(() => real(mutate), e => /server-keys\.json/.test(e.message) && re.test(e.message), String(mutate)));
-  // то, что сервер отдаёт, разрешено: новая кривая с риском, FX-дельта, extra из контракта страниц
+  // то, что сервер отдаёт, разрешено: новая кривая с риском, FX-дельта в валюте из FX прогона, extra из контракта страниц
   assert.ok(real(D => {
     D.CURVES['CNY FWD'] = { name: 'CNY implied', ccy: 'CNY', kind: 'swap', pts: D.BUCKETS.map(() => 5) };
-    Object.assign(withRisk(D), { fxDelta: { USD: 1e6 }, extra: { legs: [], reason: 'x', funding: { state: 'x' } } });
+    D.FX.KZT = 0.16;
+    Object.assign(withRisk(D), { fxDelta: { USD: 1e6, CNY: -2, KZT: 3 }, extra: { legs: [], reason: 'x', funding: { state: 'x' } } });
     withRisk(D).risk['CNY FWD'] = D.BUCKETS.map((b, i) => i ? 0 : null);
   }).positions.length);
 });

@@ -44,6 +44,13 @@ PNL_AMOUNTS = ("carry", "rolldown", "rates", "spread", "fx", "funding", "convexi
 PNL_KEYS_READ = (*PNL_AMOUNTS, "available", "reasonText", "method", "methodText")
 """A position's ``pnl`` as the pages read it: the amounts (all null without PnL, R10), whether it has one, why not and
 by which method."""
+EXTRA_KEYS_READ = ("assumptions", "core", "dm_bp", "funding", "g_spread_bp", "horizon_kind", "index_fixings",
+                   "issue_size", "lat_name", "legs", "not_exact_reason", "offer_date", "offer_kind", "ofz_basis01",
+                   "ofz_ruonia01", "pv_diff_rub", "quality", "quote", "reason", "reported", "reported_pv_rub", "repos",
+                   "spread_buckets", "swaps")
+"""The keys of a position's ``extra`` (the row's own, passed through) that ``lib/real.js`` reads, some only on rows
+a plain bond book does not have: an FX deal's ``legs``, a rates-core trade's ``swaps`` / ``repos`` / ``core``, a
+not-valued row's ``reported``. ``tests/js/ui_pack6.test.js`` keeps it equal to what ``real.js`` reads (TDM#324)."""
 NOT_VALUED_KIND = {"otc": ("OTC-деривативы", "Деривативы"), "other": ("Прочее", "Прочее"), "fx": ("Валюта", "FX")}
 """asset_class of an unvalued report row -> (asset class, segment), as compat."""
 INPUT_FIELDS = ("asset_class", "ccy", "source_instrument_id", "source_instrument_name", "isin", "deal_id",
