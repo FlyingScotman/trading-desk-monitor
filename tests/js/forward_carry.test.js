@@ -164,3 +164,26 @@ test('причины «нет прогноза» и фильтры строк б
   assert.ok(C.keep({ books: ['C1'] }, {})({ book: 'C1', ccy: 'RUB' }));
   assert.ok(!C.keep({ desk: 'Rates' }, { X: { desk: 'Credit' } })({ book: 'X', ccy: 'RUB' }));
 });
+
+test('флоатеры: знаменатель CS01, итог портфеля — по фиксам, флоатеры отдельно', () => {
+  const d = M.forwardCarryDemo({});
+  const rows = model(d);
+  const flt = rows.filter(r => r.covered && r.floater), fix = rows.filter(r => r.covered && !r.floater);
+  assert.ok(flt.length && fix.length);
+  flt.forEach(r => {
+    assert.strictEqual(r.denom, 'CS01');
+    assert.strictEqual(r.p.cpn.type, 'float');
+    if (r.cs01) near(r.carryDv01, r.carry / Math.abs(r.cs01), 'флоатер: кэрри / |CS01|');
+  });
+  fix.forEach(r => { assert.strictEqual(r.denom, 'DV01'); if (r.dv01) near(r.carryDv01, r.carry / Math.abs(r.dv01), 'фикс: кэрри / |DV01|'); });
+  // CS01 = 0 или нет — «—» (null)
+  const one = cs01 => { const p = Object.assign({}, flt[0].p, { cs01 }); return C.rows({ fundingStatus: 'computed', positions: [flt[0].raw] }, { pos: { [p.id]: p } })[0]; };
+  assert.strictEqual(one(0).carryDv01, null);
+  assert.strictEqual(one(null).carryDv01, null);
+  const s = C.sums(rows, true);
+  near(s.carryDv01, fix.reduce((a, r) => a + r.carry, 0) / Math.abs(fix.reduce((a, r) => a + (r.dv01 || 0), 0)), 'итог по фиксам без флоатеров');
+  near(s.carryCs01Flt, flt.reduce((a, r) => a + r.carry, 0) / Math.abs(flt.reduce((a, r) => a + (r.cs01 || 0), 0)), 'флоатеры: кэрри / |CS01|');
+  assert.strictEqual(s.nFlt + s.nFix, s.nCovered);
+  // строки остатков ДС — без знаменателя
+  assert.ok(rows.filter(r => r.isCash).every(r => r.denom === null && r.carryDv01 === null));
+});

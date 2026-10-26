@@ -41,6 +41,8 @@
 .c17-meet input { width: 74px; text-align: right; min-width: 0; }
 .c17-notes { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--fg-2); }
 .c17-notes li { margin: 2px 0; overflow-wrap: anywhere; }
+/* плитка «Кэрри / DV01»: строки разбивки переносятся на узком экране */
+.k-kpis .k-kpi:last-child .k-kb td { white-space: normal; }
 .c17-focus .k-fields { margin-top: 4px; }
 .c17-link { cursor: pointer; color: var(--accent); }
 @media (max-width: 720px) {
@@ -87,7 +89,8 @@
     net: 'Нетто = Кэрри + Фондирование. У группы в нетто входит и фондирование позиций без прогноза кэрри и остатков ДС (строка «фондирование без прогноза кэрри»). ' +
       '«—» — у позиции с прогнозом фондирование не посчитано: нетто не подменяется кэрри.',
     dv01: 'Кэрри / |DV01|, б.п.: на сколько б.п. ставки могут уйти против позиции за горизонт, пока переоценка не съест кэрри. DV01 — ставочный риск прогона (без CS01 и базиса ОФЗ). ' +
-      'У группы — сумма кэрри / |сумма DV01| позиций с прогнозом.',
+      'У флоатеров знаменатель — CS01 (метка «CS»): их основной риск спредовый, ставочный DV01 мал. CS01 = 0 или нет — «—». ' +
+      'Итог портфеля — по фиксам (сумма кэрри / |сумма DV01|, без флоатеров), флоатеры — отдельно: кэрри / |сумма CS01|.',
     rest: 'Фондирование позиций без прогноза кэрри (деривативы, валютные бумаги, оценки ниже точной) и строк без позиции (остатки ДС книг и юрлиц). ' +
       'Оно входит в нетто группы, а в колонку кэрри — нет.',
     roll: 'Roll по спреду: бумага сдвигается по кривой G-спредов бумаг того же рейтинга (как C09) к своему сроку на горизонте; CS01 × сдвиг. Уже входит в кэрри. ' +
@@ -216,7 +219,8 @@
       K.kpi('Фондирование', !fundOk ? '<span class="mut3" title="' + esc(resp.fundingText || '') + '">не настроено</span>' : kd('Фондирование до ' + f.date(resp.horizonDate), r => r.covered ? r.funding : null, S.fundingCovered),
         fundOk ? 'позиций с прогнозом' + (S.nFundingMissing ? ' · ' + S.nFundingMissing + ' не посчитано' : '') : esc(C.FUNDING_STATUS[resp.fundingStatus] || ''), '', TIP.funding) +
       K.kpi('Нетто', kd('Нетто до ' + f.date(resp.horizonDate), r => r.net, S.net), S.net == null ? (fundOk ? 'без книг без фондирования: ' + f.mn(S.netPartial, DIGB) : 'нет фондирования') : 'кэрри + всё фондирование', '', TIP.net) +
-      K.kpi('Кэрри / DV01', S.carryDv01 == null ? '<span class="mut3">—</span>' : f.n(S.carryDv01, 0) + K.kpiUnit('б.п.'), 'DV01 позиций с прогнозом ' + f.dv(S.dv01) + ' тыс ₽/бп', '', TIP.dv01);
+      K.kpi('Кэрри / DV01', S.carryDv01 == null ? '<span class="mut3">—</span>' : f.n(S.carryDv01, 0) + K.kpiUnit('б.п.'),
+        [['без флоатеров · DV01', f.dv(S.dv01) + ' <span class="u">тыс ₽/бп</span>'], ['флоатеры: Кэрри/CS01', S.carryCs01Flt == null ? '—' : f.n(S.carryCs01Flt, 0) + ' <span class="u">б.п.</span>', 'кэрри флоатеров / |CS01 флоатеров|']], '', TIP.dv01);
     wrap.appendChild(kp);
 
     // сумма на глазах
@@ -265,7 +269,9 @@
               : '<span class="mut3" title="' + esc(r.fundingNote || '') + '">' + (r.fundingState === 'not_configured' ? 'не настроено' : r.fundingState === 'problem' ? '— ⚠' : '—') + '</span>' }),
           // нетто группы: «—», если у позиции с прогнозом нет фондирования (NaN → «—»); иначе кэрри + всё фондирование
           money('net', 'Нетто', r => r.net, { title: TIP.net, tip: true, sum: r => r.covered && r.funding == null ? NaN : (r.carry || 0) + (r.funding || 0) }),
-          { key: 'cdv', label: 'Кэрри/DV01', num: true, val: r => r.carryDv01, fmt: v => bp(v), cls: v => v == null ? '' : f.cls(v), unit: 'б.п.', title: TIP.dv01, tip: true },
+          { key: 'cdv', label: 'Кэрри/DV01', num: true, val: r => r.carryDv01, csvFmt: v => bp(v),
+            fmt: (v, r) => bp(v) + (r.floater && r.covered ? ' <span class="k-tag" title="флоатер: кэрри / |CS01|">CS</span>' : ''), cls: v => v == null ? '' : f.cls(v), unit: 'б.п.', title: TIP.dv01, tip: true },
+          { key: 'den', label: 'Знаменатель', val: r => r.covered ? r.denom : null, filter: true, fmt: v => v ? '<span class="mut">' + v + '</span>' : '<span class="mut3">—</span>', title: 'Знаменатель «Кэрри/DV01»: DV01 ставок, у флоатеров — CS01' },
           { key: 'why', label: 'Оценка', val: QUAL, filter: true,
             cls: 'c17-why', fmt: (v, r) => '<span title="' + esc([r.detail, r.spreadCurve ? 'спред: ' + C.spreadText(r.spreadCurve) + (r.spreadRollBp != null ? ' (' + f.s(r.spreadRollBp, 1) + ' б.п.)' : '') : ''].filter(Boolean).join('\n')) + '"' + (r.covered ? ' class="mut"' : '') + '>' + esc(v) + '</span>' +
               (r.spreadRoll != null ? ' <span class="mut3" title="roll по спреду, входит в кэрри">roll ' + f.mn(r.spreadRoll, DIG) + '</span>' : '') },
@@ -293,7 +299,7 @@
     const np = panel('Допущения расчёта', '<span class="k-note">' + esc(resp.method || '') + '</span>');
     const notes = (resp.notes || []).slice();
     notes.unshift('На экране «Кэрри» — одна колонка (решение 26.10): полное изменение стоимости при кривых, перенесённых в горизонт; купон, pull и roll-down отдельно не показываются (в ответе API они есть). Фондирование — отдельно, нетто — их сумма.');
-    notes.push('DV01 для «Кэрри/DV01» — ставочный риск позиций того же прогона (в ответе сервера его нет).');
+    notes.push('Знаменатель «Кэрри/DV01» — риск позиций того же прогона (в ответе сервера его нет): DV01 ставок, у флоатеров — CS01; итог портфеля — по фиксам, флоатеры — отдельной строкой.');
     if ((resp.provisional || []).length) notes.push('Поля политики фондирования по умолчанию движка (предварительно): ' + resp.provisional.join(', '));
     if ((resp.fundingProblems || []).length) notes.push('Проблемы фондирования: ' + resp.fundingProblems.length + ' — ' + resp.fundingProblems.slice(0, 5).map(x => (x.ref || '') + ': ' + (x.reason || '')).join('; '));
     np.querySelector('.bd').innerHTML = '<ul class="c17-notes">' + notes.map(n => '<li>' + esc(n) + '</li>').join('') + '</ul>';
@@ -308,7 +314,7 @@
       ['Кэрри', r.covered ? mn(r.carry) + ' <small>mm ₽</small>' : '<span class="mut3">нет прогноза</span> <small>' + esc(r.reason) + '</small>', false, TIP.carry],
       ['Фондирование', r.funding != null ? mn(r.funding) + ' <small>mm ₽ · ' + esc([r.fundingRate, C.FUNDING_SOURCE[r.fundingSource]].filter(Boolean).join(' · ')) + '</small>' : '<span class="mut3">' + esc(C.FUNDING_STATE[r.fundingState] || '—') + '</span> <small>' + esc(r.fundingNote || '') + '</small>', false, TIP.funding],
       ['Нетто', mn(r.net) + ' <small>mm ₽</small>', false, TIP.net],
-      ['Кэрри / DV01', bp(r.carryDv01) + ' <small>б.п.</small>', false, TIP.dv01],
+      [r.floater ? 'Кэрри / CS01' : 'Кэрри / DV01', bp(r.carryDv01) + ' <small>б.п.' + (r.floater ? ' · флоатер: знаменатель CS01' : '') + '</small>', false, TIP.dv01],
       ['Roll по спреду', r.spreadRoll != null ? mn(r.spreadRoll) + ' <small>mm ₽ · ' + f.s(r.spreadRollBp, 1) + ' б.п. по кривой ' + esc(r.spreadCurve || '') + '</small>' : '<span class="mut3">' + esc(resp.spread === 'curve' ? C.spreadText(r.spreadCurve) || '—' : 'спред держится') + '</span>', false, TIP.roll],
       ['Оценка', esc(QUAL(r))],
     ]);

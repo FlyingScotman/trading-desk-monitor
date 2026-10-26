@@ -84,7 +84,9 @@
   // ---------- строки ----------
   // opts: { pos: {id: позиция модели монитора (M.pos)}, k: множитель рубли → валюта показа, books: {id: книга},
   //         kindLabel: код → подпись }
-  // dv01 — из модели монитора (того же прогона): в ответе сервера его нет; dv01 уже в валюте показа
+  // dv01 и cs01 — из модели монитора (того же прогона): в ответе сервера их нет; уже в валюте показа.
+  // Знаменатель «кэрри на единицу риска» (решение координатора по #286): у флоатера (p.cpn.type 'float' модели
+  // монитора) основной риск спредовый — CS01, у остальных — DV01 ставок
   C.rows = function (resp, opts) {
     opts = opts || {};
     const P = opts.pos || {}, k = opts.k == null ? 1 : opts.k, B = opts.books || {}, KL = opts.kindLabel || (x => x);
@@ -94,6 +96,8 @@
       const p = P[x.positionId] || null, b = B[x.bookId] || {};
       const carry = m(x.carry), funding = ok ? m(x.funding) : null;
       const dv01 = p && p.dv01 != null && isFinite(p.dv01) ? p.dv01 : null;
+      const cs01 = p && p.cs01 != null && isFinite(p.cs01) ? p.cs01 : null;
+      const floater = C.isFloater(p);
       const r = {
         id: x.positionId, p, name: p ? p.name : (x.secid || x.positionId), secid: x.secid, issuer: p ? p.issuer : null,
         book: x.bookId, bookName: p ? p.bookName : (b.name || x.bookId), entity: x.entity || (p && p.entity) || b.entity || '—',
@@ -104,7 +108,7 @@
         fundingSource: x.fundingSource, fundingRate: x.fundingRate || null, fundingRuleId: x.fundingRuleId || null, fundingNote: x.fundingNote || null,
         spreadRoll: m(x.spreadRoll), spreadRollBp: x.spreadRollBp == null ? null : x.spreadRollBp, spreadCurve: x.spreadCurve || null,
         carryMethod: x.carryMethod || null, code: x.code || null, detail: x.detail || null, reason: C.reasonText(x.code),
-        dv01, carryDv01: C.perDv01(carry, dv01),
+        dv01, cs01, floater, denom: floater ? 'CS01' : 'DV01', carryDv01: C.perDv01(carry, floater ? cs01 : dv01),
         raw: x,
       };
       r.searchText = [r.name, r.id, r.secid, r.book, r.bookName, r.entity, r.ccy, r.kindLabel, r.reason, p && p.searchText].filter(Boolean).join(' ').toLowerCase();
@@ -113,6 +117,7 @@
   };
   // кэрри на единицу DV01, б.п.: на сколько б.п. ставки могут уйти против позиции за горизонт, пока переоценка не
   // съест кэрри (кэрри / |DV01|); DV01 ≈ 0 (флоатер без риска, своп с нулевым риском) — нет
+  C.isFloater = p => !!(p && p.cpn && p.cpn.type === 'float');
   C.perDv01 = (carry, dv01) => carry == null || dv01 == null || Math.abs(dv01) < 1e-6 ? null : carry / Math.abs(dv01);
 
   // строки фондирования без позиции (остатки ДС книги или юрлица): псевдострока таблицы, в валюте показа; в кэрри
@@ -129,7 +134,7 @@
         covered: false, carry: null, funding: x.amount == null ? null : x.amount * k, net: null, fundingState: 'funded', fundingSource: x.ruleSource || 'none',
         fundingRate: x.rateExpr || null, fundingRuleId: x.ruleId || null, fundingNote: x.defaultRate ? 'рыночная ставка по умолчанию' : null,
         spreadRoll: null, spreadRollBp: null, spreadCurve: null, carryMethod: null, code: null, detail: null,
-        reason: 'строка фондирования без позиции: в кэрри не входит', dv01: null, carryDv01: null, raw: x };
+        reason: 'строка фондирования без позиции: в кэрри не входит', dv01: null, cs01: null, floater: false, denom: null, carryDv01: null, raw: x };
       r.searchText = [r.name, r.book, r.bookName, r.entity, r.ccy, 'остатки'].join(' ').toLowerCase();
       return r;
     });
@@ -141,13 +146,15 @@
   // funding сервера), null, если у позиции с прогнозом фондирования нет или оно не посчитано вовсе
   C.sums = function (rows, fundingOk) {
     const s = { n: 0, nCovered: 0, nNotCovered: 0, nFundingMissing: 0, carry: 0, fundingCovered: 0, fundingNoCarry: 0, fundingCash: 0,
-      spreadRoll: null, dv01: 0, netPartial: 0, notCovered: [], fundingMissing: [], nCash: 0 };
+      spreadRoll: null, dv01: 0, carryFix: 0, nFix: 0, cs01Flt: 0, carryFlt: 0, nFlt: 0, netPartial: 0, notCovered: [], fundingMissing: [], nCash: 0 };
     rows.forEach(r => {
       if (r.isCash) { s.nCash++; if (r.funding != null) s.fundingCash += r.funding; return; }
       s.n++;
       if (r.covered) {
         s.nCovered++; s.carry += r.carry;
-        if (r.dv01 != null) s.dv01 += r.dv01;
+        // кэрри/DV01 итога — по фиксам (без флоатеров), флоатеры — кэрри/CS01 отдельно
+        if (r.floater) { s.nFlt++; s.carryFlt += r.carry; if (r.cs01 != null) s.cs01Flt += r.cs01; }
+        else { s.nFix++; s.carryFix += r.carry; if (r.dv01 != null) s.dv01 += r.dv01; }
         if (r.spreadRoll != null) s.spreadRoll = (s.spreadRoll || 0) + r.spreadRoll;
         if (r.funding != null) { s.fundingCovered += r.funding; s.netPartial += r.carry + r.funding; } else { s.nFundingMissing++; s.fundingMissing.push(r); }
       } else {
@@ -165,7 +172,8 @@
       s.net = s.nFundingMissing ? null : (s.carry || 0) + s.funding;
       s.netPartial += s.fundingRest;
     }
-    s.carryDv01 = C.perDv01(s.carry, s.nCovered ? s.dv01 : null);
+    s.carryDv01 = C.perDv01(s.carryFix, s.nFix ? s.dv01 : null);
+    s.carryCs01Flt = C.perDv01(s.carryFlt, s.nFlt ? s.cs01Flt : null);
     return s;
   };
 
