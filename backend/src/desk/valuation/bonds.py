@@ -15,6 +15,9 @@ Steps:
    published curve IDs (``RISK_CURVES``): a floater's projection curve (the key-rate projection) is a
    separate factor from its discount curve, so their basis risk is not netted away. Its rejections become
    ``Rejected("core_<code>")``. The hash-verified result (``rub-portfolio-risk-result.v2``) is returned for storage.
+3. ``horizon_bonds`` (the forward carry, TDM#66): core ``horizon_portfolio`` on the same inputs (``core_call``, shared
+   with ``value_bonds`` so a carry is computed on exactly what was valued): each spread calibrated to its quote and
+   held, the curves static; per position the carry, the roll-down and the coupon income (``BondCarry``).
 
 **Discount curve** (owner's decisions of 20.10, 22.10 and 23.10, ORG_CONVENTIONS §4, DATA_CONTRACT §0.3, core
 ``docs/proposals/ofz-curve-risk-factors.md``): a fixed-coupon OFZ (``OFZ_KBD_CLASSES``: PD, AD, IN) is discounted on
@@ -91,13 +94,17 @@ from rub_fixed_income import (
     Offer,
     OfzBasisIds,
     ParYieldCurveRequest,
+    PortfolioHorizonResult,
     PortfolioRiskResult,
     Position,
+    PositionHorizon,
     PositionValuation,
     RateAccrualCouponLeg,
     ShockedCurveCache,
     ValuationPolicy,
     ZSpreadConvention,
+    clean_price_pct_to_dirty_rub,
+    horizon_portfolio,
     value_portfolio,
 )
 from rub_fixed_income import __version__ as CORE_VERSION
@@ -693,6 +700,9 @@ class _Prepared:
     notes: list[str]
     accrued: float
     """Core's (``Instrument.accrued``), to check the MOEX accrued."""
+    coupons: tuple[tuple[date, float], ...] = ()
+    """The coupon part of ``flows`` by payment date (``horizon_bonds``: the coupon income of a bond redeemed before
+    the horizon)."""
 
 
 def _split_assumed(inst: Instrument, s: FixedSchedule, after: date) -> tuple[Instrument, tuple]:
@@ -730,7 +740,8 @@ def _prepare(r: BondRequest, market: MarketSnapshot) -> _Prepared:
             notes.append(f"accrued computed: no MOEX accrued, {why}")
     elif abs(round(accrued - float(moex), 2)) > ACCRUED_TOLERANCE_RUB:
         notes.append(f"accrued mismatch vs MOEX {accrued - float(moex):+.2f} {ccy} (ours {accrued:.2f})")
-    return _Prepared(r, inst, tuple(BondCashflow(f.payment_date, f.amount) for f in flows), notes, accrued)
+    return _Prepared(r, inst, tuple(BondCashflow(f.payment_date, f.amount) for f in flows), notes, accrued,
+                     tuple((f.payment_date, f.coupon) for f in flows))
 
 
 def quote_accrued(r: BondRequest, market: MarketSnapshot) -> Decimal | None:
@@ -778,10 +789,60 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
     when ``market`` holds the RUONIA OIS curve as its quotes (``EodContext.risk_market``); off, or on built curves (the
     fallback ladder's medians), on the KBD alone (variant P, ``OFZ_SCHEME_P``). Fixed flows take core's closed form
     (``risk_method`` and ``second_order_method`` ``analytic``): equal to the bumps up to their O(bump²) error, and the
-    RUONIA + basis Hessian by bumps is about 1 060 repricings per bond."""
-    foreign = foreign or {}
-    out: dict[str, BondValuation | Rejected] = {}
+    RUONIA + basis Hessian by bumps is about 1 060 repricings per bond. The core inputs are ``core_call``'s, which
+    ``horizon_bonds`` shares."""
+    call = core_call(market, requests, second_order=second_order, foreign=foreign,
+                     quote_curve_risk=quote_curve_risk, ofz_basis=ofz_basis)
+    out: dict[str, BondValuation | Rejected] = dict(call.out)
     results = []
+    if call.policy is None:
+        return out, results
+    result = value_portfolio(run_id=f"desk-eod-{market.business_date}-book", as_of=market.known_at,
+                             snapshot=call.snapshot, instruments=list(call.instruments.values()),
+                             positions=call.positions, policy=call.policy, scenarios=scenarios, curve_cache=cache)
+    results.append(result)
+    for rej in result.coverage.rejections:
+        out[rej.position_id] = Rejected(f"core_{rej.code.lower()}", rej.message)
+    rows = {v.position_id: v for v in result.positions}
+    for p in call.positions:
+        if p.position_id in rows:
+            v = rows[p.position_id]
+            note = call.disc_note if v.curve_id == call.disc else foreign_curve_note(v, v.curve_id in call.proxies)
+            out[p.position_id] = _valuation(call.prepared[p.instrument_id], v, p.quantity, call.guard, note)
+    return out, results
+
+
+@dataclass
+class CoreCall:
+    """The inputs of one core portfolio call over a run's bond requests (``core_call``): what ``value_bonds`` gives
+    ``value_portfolio`` and ``horizon_bonds`` gives ``horizon_portfolio``, so a carry is computed on exactly the
+    instruments, quotes, curves and policy the valuation was."""
+
+    out: dict[str, Rejected]
+    """The requests refused before core (a stale quote, a foreign bond without its curve or rate, invalid terms)."""
+    prepared: dict[str, _Prepared]
+    """By instrument ID (the secid): the core instrument, its flows and notes."""
+    instruments: dict[str, Instrument]
+    positions: list[Position]
+    snapshot: MarketSnapshot
+    """``market`` with the quotes and only the inputs the call needs."""
+    policy: ValuationPolicy | None
+    """None: no request reaches core (``positions`` empty)."""
+    guard: bool
+    disc: str
+    disc_note: str | None
+    proxies: set[str]
+
+
+def core_call(market: MarketSnapshot, requests: list[BondRequest], *, second_order: bool = False,
+              foreign: dict[str, tuple[str, ...]] | None = None, quote_curve_risk: bool = False,
+              ofz_basis: bool = True) -> CoreCall:
+    """The core inputs of ``requests`` on ``market`` (see ``value_bonds`` for the parameters): the refusals before
+    core, the instruments (a call's trailing assumed coupons as its ``ExerciseAssumption``), the quotes, one position
+    per request and the policy (the spread kind per bond, the KBD for ``OFZ_KBD_CLASSES``, the foreign curves, the
+    RUONIA + basis scheme when ``market`` holds the RUONIA OIS quotes)."""
+    foreign = foreign or {}
+    out: dict[str, Rejected] = {}
     disc, disc_note = discount_curve(market)
     for r in requests:  # core values at the business date; the MOEX accrued is as of the trade date
         ccy = bond_currency(r.terms)
@@ -819,7 +880,7 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
         positions.append(Position(r.position_id, inst.instrument_id, r.quantity, "desk", AccountingCategory.TRADING,
                                   inst.currency))
     if not positions:
-        return out, results
+        return CoreCall(out, ok, instruments, positions, market, None, False, disc, disc_note, set())
     guard = any(i.coupon_leg.rule.bounds for i in instruments.values()  # type: ignore[union-attr]
                 if isinstance(i.coupon_leg, FloatingCouponLeg))
     ccys = sorted({i.currency for i in instruments.values()} - {"RUB"})
@@ -851,20 +912,111 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
             c.curve_id == RUONIA_OIS_CURVE_ID and isinstance(c.curve, CurveBootstrapRequest) for c in snap.curves):
         policy = replace(policy, ofz_basis=OFZ_BASIS_IDS)
     policy = replace(policy, risk_method="analytic", second_order_method="analytic")
-    result = value_portfolio(run_id=f"desk-eod-{market.business_date}-book", as_of=market.known_at,
-                             snapshot=replace(snap, quotes=tuple(quotes.values())),
-                             instruments=list(instruments.values()), positions=positions, policy=policy,
-                             scenarios=scenarios, curve_cache=cache)
-    results.append(result)
+    return CoreCall(out, ok, instruments, positions, replace(snap, quotes=tuple(quotes.values())), policy, guard,
+                    disc, disc_note, proxies)
+
+
+@dataclass(frozen=True)
+class BondCarry:
+    """One position's carry to a horizon by core ``horizon_portfolio`` (RUB, signed by quantity), split so that
+    ``total = coupon + pull + rolldown``.
+
+    Core holds the Z-spread calibrated to the quote and the curves static: ``carry`` (core ``carry_rub``) is
+    ``pv_forward + received - pv_start``, the return at today's forwards, and ``rolldown`` (core ``rolldown_rub``) is
+    ``pv_rolled - pv_forward``, the gain of the curve keeping its shape in calendar days. Both are dirty values, so
+    the accrued interest is inside them; ``coupon`` takes it out as the coupon income of the horizon: the coupons
+    received (core ``coupons_received_rub``) plus the change of the accrued coupon from the start settlement to the
+    horizon settlement (core ``accrued_end_rub - accrued_start_rub``; a floater's from ``Instrument.accrued`` on the
+    run's market, which core leaves to the caller). ``pull`` is the rest of core's carry (``carry - coupon``): the
+    clean price's drift at the held spread on today's forwards, the pull to par included."""
+
+    position_id: str
+    total: float
+    """``carry + rolldown`` (core ``horizon_pnl_rub``): the bond's return to the horizon before funding."""
+    coupon: float
+    pull: float
+    rolldown: float
+    carry: float
+    """Core's ``carry_rub`` (``coupon + pull``)."""
+    received: float
+    """Coupons and principal paid to the horizon settlement (core ``received_rub``)."""
+    pv_start: float
+    horizon_settlement: date
+    redemption_date: date
+    spread_bp: float | None
+    """Core's calibrated spread; None for ``method`` ``redeemed`` (no spread is needed)."""
+    method: str = "core"
+    """``core`` (``horizon_portfolio``) or ``redeemed``: the bond pays its last flow by the horizon, which core does
+    not carry (it needs flows left after the horizon), so the backend takes it as cash: ``total = received - pv_start``
+    (every coupon and redemption paid in (start, horizon], not reinvested), ``coupon`` = the coupons received minus the
+    accrued bought at the start, ``pull`` the rest (the redemption against the clean price), ``rolldown`` 0."""
+
+
+def horizon_bonds(market: MarketSnapshot, requests: list[BondRequest], horizon_date: date, *,
+                  cache: ShockedCurveCache | None = None, foreign: dict[str, tuple[str, ...]] | None = None,
+                  quote_curve_risk: bool = False, ofz_basis: bool = True
+                  ) -> tuple[dict[str, BondCarry | Rejected], PortfolioHorizonResult | None]:
+    """Carry and roll-down of ``requests`` from ``market``'s business date to ``horizon_date``: one core
+    ``horizon_portfolio`` call on the inputs ``value_bonds`` values them on (``core_call``), each spread calibrated
+    to its quote and held, the curves static (``BondCarry``). A bond whose last flow is paid by the horizon, which core
+    refuses (it carries a bond only while it has flows left after the horizon), is carried as cash by the backend
+    (``_redeemed``, ``BondCarry.method`` ``redeemed``). Any other refusal before core or by core is a ``Rejected``
+    (``core_<code>``). Returns the core result too (None without a request core takes)."""
+    call = core_call(market, requests, foreign=foreign, quote_curve_risk=quote_curve_risk, ofz_basis=ofz_basis)
+    out: dict[str, BondCarry | Rejected] = dict(call.out)
+    if call.policy is None:
+        return out, None
+    result = horizon_portfolio(snapshot=call.snapshot, instruments=list(call.instruments.values()),
+                               positions=call.positions, policy=call.policy, horizon_date=horizon_date,
+                               curve_cache=cache)
+    positions = {p.position_id: p for p in call.positions}
     for rej in result.coverage.rejections:
+        if "redeemed before the horizon" in rej.message:  # all its flows by the horizon: carried as cash
+            p = positions[rej.position_id]
+            try:
+                out[rej.position_id] = _redeemed(call.prepared[p.instrument_id], p, call.snapshot, horizon_date)
+                continue
+            except (CoreRejection, ValueError) as e:
+                rej = replace(rej, message=f"{rej.message}; as cash: {e}")
         out[rej.position_id] = Rejected(f"core_{rej.code.lower()}", rej.message)
-    rows = {v.position_id: v for v in result.positions}
-    for p in positions:
-        if p.position_id in rows:
-            v = rows[p.position_id]
-            note = disc_note if v.curve_id == disc else foreign_curve_note(v, v.curve_id in proxies)
-            out[p.position_id] = _valuation(ok[p.instrument_id], v, p.quantity, guard, note)
-    return out, results
+    for h in result.positions:
+        try:
+            out[h.position_id] = _carry(call.prepared[h.instrument_id], h, call.snapshot)
+        except (CoreRejection, ValueError) as e:  # a floater's accrued at the horizon (its projection)
+            out[h.position_id] = Rejected("core_accrued_failed", str(e))
+    return out, result
+
+
+def _redeemed(prep: _Prepared, p: Position, market: MarketSnapshot, horizon_date: date) -> BondCarry:
+    """``BondCarry`` of a bond whose last flow is paid by the horizon (``method`` ``redeemed``): its flows to the horizon
+    (``_Prepared.flows``, the redemption at its offer or call when it is priced to one; a floater's projected on the
+    run's curves) received as cash against its dirty value at the start, as core prices it (the quote's clean price on
+    the outstanding face plus the quote's accrued, else core's own)."""
+    start = market.business_date  # core settles a bond on the trade date (settlement lag 0, module docstring)
+    quote = market.quote(p.instrument_id)
+    accrued = quote.accrued_per_bond if quote.accrued_per_bond is not None else prep.accrued
+    dirty = clean_price_pct_to_dirty_rub(quote.clean_price_pct, prep.instrument.outstanding_face(start), accrued)
+    flows = [f for f in prep.flows if start < f.payment_date <= horizon_date]
+    if not flows or any(f.payment_date > horizon_date for f in prep.flows):
+        raise ValueError("flows left after the horizon")
+    q = p.quantity
+    received = math.fsum(f.amount for f in flows) * q
+    coupon = (math.fsum(c for d, c in prep.coupons if start < d <= horizon_date) - accrued) * q
+    total = received - dirty * q
+    last = max(f.payment_date for f in flows)
+    return BondCarry(p.position_id, total, coupon, total - coupon, 0.0, total, received, dirty * q, last, last, None,
+                     "redeemed")
+
+
+def _carry(prep: _Prepared, h: PositionHorizon, market: MarketSnapshot) -> BondCarry:
+    b, q = h.per_bond, h.quantity
+    start, end = b.accrued_start_rub, b.accrued_end_rub
+    if start is None or end is None:  # a floater: core leaves its accrued to the caller
+        start = prep.instrument.accrued(b.settlement_date, market)
+        end = prep.instrument.accrued(b.horizon_settlement_date, market)
+    coupon = (b.coupons_received_rub + end - start) * q
+    return BondCarry(h.position_id, h.horizon_pnl_rub, coupon, h.carry_rub - coupon, h.rolldown_rub, h.carry_rub,
+                     h.received_rub, b.pv_start_rub * q, b.horizon_settlement_date, b.redemption_date, b.spread_bp)
 
 
 def _foreign_id(curve_id: str) -> bool:

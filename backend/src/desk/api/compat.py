@@ -41,11 +41,13 @@ from ..curves.rates import input_notes
 from ..marketdata import ratings
 from ..pnl.reasons import METHOD_TEXT, REPORTED_METHOD, RUN_NO_POSITION_PNL, RUN_NO_PREV_MARKET, no_pnl_text
 from ..publish.funding_run import NOT_COMPUTED, STATUS_TEXT
+from ..scenario.carry import HORIZONS as carry_horizons
+from ..scenario.carry import meeting_rows, meetings
 from ..store import CURRENT_RUNS, DEFAULT_RUNS, slice_label
 
 PNL_KEYS = ("carry", "rolldown", "rates", "spread", "fx_gross", "fx_funding", "funding", "convexity",
             "new_trades", "other")
-CARRY_HORIZONS = [["1M", 1], ["3M", 3], ["6M", 6], ["1Y", 12]]
+CARRY_HORIZONS = [list(h) for h in carry_horizons]  # the forward carry's (scenario.carry.HORIZONS)
 DEFAULT_CARRY = [{"id": "flat", "name": "КС без изменений", "ks": {"mode": "flat"}}]
 RATINGS = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-", "BB+", "BB", "BB-", "B+", "B",
            "B-", "CCC", "D"]  # tdm ref_rating seed order
@@ -437,7 +439,8 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         "INDICES": indices, "ISSUERS": issuers, "RATING_ORDER": rating_order,
         "BOOKS": books, "SCENARIOS": scenarios, "scenarioResults": {},
         "JTD_RECOVERY": 0.0, "FUNDING_RULES": funding["rules"], "OCP_TRANSFERS": ocp_transfers(ref.get("ocp")),
-        "CBR_MEETINGS": [], "CARRY_SCENARIOS": DEFAULT_CARRY, "CARRY_HORIZONS": CARRY_HORIZONS,
+        "CBR_MEETINGS": cbr_meetings(con, run["business_date"]), "CARRY_SCENARIOS": DEFAULT_CARRY,
+        "CARRY_HORIZONS": CARRY_HORIZONS,
         "official": {"asOf": as_of, "received": any(p["pnl"]["official"] is not None for p in positions),
                      "basis": "CBR", "receivedAt": None},
         "positions": positions, "riskNotes": risk_notes(run),
@@ -455,6 +458,15 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
                    "curveUnits": (run.get("lineage") or {}).get("curve_units"),
                    **run_slice(run)},
     }
+
+
+def cbr_meetings(con, as_of: date) -> list[dict[str, Any]]:
+    """window.DESK ``CBR_MEETINGS``: the CBR key-rate meetings that take effect after ``as_of`` (``md_cbr_meeting``, the
+    newest market snapshot's; ``scenario.carry.meetings``), in order, as the Scenario & PnL Lab's key-rate path reads
+    them (``desk-util.js`` ``ksPath``, ``scenario-lab.html`` ``cyMeetings``: ``date`` the decision, ``effective`` from
+    when it applies; ``estimated`` the hub's estimated date). Empty before the read model has the meetings."""
+    return [{"date": m.date.isoformat(), "effective": m.effective.isoformat(), "estimated": m.estimated}
+            for m in meetings(meeting_rows(con, None), as_of)]
 
 
 def ocp_transfers(block: dict[str, Any] | None) -> list[dict[str, Any]]:

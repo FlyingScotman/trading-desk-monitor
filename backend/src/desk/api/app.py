@@ -34,7 +34,7 @@ from .. import __version__, lan
 from ..marketdata import history
 from ..publish import ocp_run
 from ..publish.funding_run import NOT_COMPUTED, REPORTING_CCY, STATUS_TEXT
-from ..scenario import jobs
+from ..scenario import carry, jobs
 from ..scenario.definition import definition_hash, normalize
 from ..scenario.taylor import risk_payload
 from ..settings import REPO_ROOT
@@ -47,6 +47,7 @@ from .models import (
     Aggregates,
     BondHistory,
     BookFunding,
+    CarryOut,
     ErrorOut,
     JobIn,
     PnlSums,
@@ -155,9 +156,11 @@ def cached_body(request: Request, con, key: tuple, build: Callable[[], bytes],
     return body, gz
 
 
-def cached_response(request: Request, con, key: tuple, build: Callable[[], bytes], media_type: str) -> Response:
-    """``build()`` once per store state (``BodyCache``); a 304 for the browser's ETag, the gzip when it accepts it."""
-    body, gz, tag = _body_cached(request.app.state.body_cache, con, key, build)
+def cached_response(request: Request, con, key: tuple, build: Callable[[], bytes], media_type: str,
+                    cache: BodyCache | None = None) -> Response:
+    """``build()`` once per store state (``BodyCache``, the app's ``body_cache`` unless ``cache``); a 304 for the
+    browser's ETag, the gzip when it accepts it."""
+    body, gz, tag = _body_cached(cache or request.app.state.body_cache, con, key, build)
     headers = {"ETag": tag, "Cache-Control": "no-cache", "Vary": "Accept-Encoding"}
     if tag in [t.strip() for t in request.headers.get("if-none-match", "").split(",")]:
         return Response(status_code=304, headers=headers)
@@ -338,6 +341,8 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     app.state.instance = uuid.uuid4().hex[:16]  # /health/live's X-Desk-Instance: the LAN self-check knows its server
     app.state.lan_probe = None  # desk.lan.probe_all once serve has started (the settings page's «Сеть»)
     app.state.body_cache = BodyCache()
+    app.state.carry_cache = BodyCache(carry.CACHE_SIZE)  # the forward carry's bodies (TDM#66), apart from the pages'
+    app.state.carry_ctx = {}  # the runs' contexts the forward carry rebuilt (scenario.exact._context)
     app.state.auth = auth or authn.AuthConfig()
 
     def write_summaries(ids: list[int]) -> None:  # the API's connections are read-only (concepts.Writer)
@@ -668,6 +673,55 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         if run is None:
             return Response("/* no run: window.DESK_EXTRAS not set */\n", media_type=JS, headers=NO_STORE)
         return cached_response(request, con, ("extras", run["run_id"]), lambda: extras_body(con, run, write_summaries), JS)
+
+    @app.get("/api/v1/concepts/carry", response_model=CarryOut,
+             description="The forward carry of a run to a horizon (TDM#66, ``scenario.carry``): per position core's "
+                         "horizon carry (coupon, pull, roll-down; the spread held, the curves static) and the funding "
+                         "of the period apart (TDM#168), net their sum; totals by book, entity, currency and kind. "
+                         "Funding not configured: null, not 0")
+    def concepts_carry(con: Con, request: Request,
+                       run: int | None = Query(None, description="run_id; default: the run shown (as_of's, else the "
+                                               "newest), as the concept pages"),
+                       as_of: date | None = None,
+                       horizon: str = Query("3M", description=", ".join(k for k, _ in carry.HORIZONS)
+                                            + " (months after the run date) or an ISO date after it"),
+                       ks: Literal["flat", "steps"] = Query("flat", description="the key-rate path of the funding: "
+                                                            "flat (every index at the run date's value) or steps "
+                                                            "(a step per CBR meeting)"),
+                       steps: str | None = Query(None, description="ks=steps: bp per CBR meeting after the run "
+                                                 "date, comma-separated, in meeting order (missing: 0)"),
+                       spread: Literal["held", "curve"] = Query("held", description="held: each bond's spread held; "
+                                                                "curve: it rolls along its rating grade's median "
+                                                                "G-spread curve (spreadRoll, in carry)")):
+        from .. import funding_settings
+        from ..marketdata.bundle import SnapshotDir, SnapshotError
+        from ..settings import SettingsError, load
+
+        r = compat.resolve_run(con, as_of, run)
+        if r is None:
+            raise ApiError(404, "not_found", f"run {run} not found" if run else "no runs")
+        try:
+            path = carry.parse_steps(steps) if ks == "steps" else ()
+            hdate = carry.horizon_date(r["business_date"], horizon)
+        except carry.CarryError as e:
+            raise ApiError(422, "invalid_parameter", str(e)) from None
+        try:
+            snapshots = SnapshotDir(Path(load().snapshot_cache))
+        except SettingsError as e:
+            raise ApiError(500, "settings", str(e)) from None
+        fund = funding_settings.load()  # the run's own rates (TDM#237): read per request, as the runs do
+        gov = concepts.gov_issuers(con, r["run_id"])
+
+        def build() -> bytes:
+            body = carry.forward_carry(con, snapshots, r, hdate.isoformat(), ks, path, settings=fund, spread=spread,
+                                       kind_of=lambda f: concepts.instr_kind(f, gov), ctx_cache=app.state.carry_ctx)
+            return CarryOut(**body).model_dump_json().encode()
+
+        try:
+            return cached_response(request, con, ("carry", r["run_id"], hdate, ks, path, spread, carry.settings_digest(fund)), build,
+                                   "application/json", app.state.carry_cache)
+        except SnapshotError as e:
+            raise ApiError(404, "not_found", f"the run's snapshots are not in the cache: {e}") from None
 
     @app.get("/api/v1/history/positions", include_in_schema=False)
     def positions_history(con: Con, request: Request, run_id: int | None = None, as_of: date | None = None,
