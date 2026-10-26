@@ -19,6 +19,8 @@
  *  KIT.palette()          — поиск по всему (Ctrl+K или «/»): позиции, эмитенты, книги, команды страницы
  *  KIT.aliasName(p), KIT.aliasBind(el, p, onSaved) — имя бумаги в карточке: алиас и серое биржевое имя, ✎ — правка на
  *                           месте, ⟲ — история; KIT.setAlias(isin, alias) — подставить алиас во все позиции бумаги (R33)
+ *  KIT.ratesCorePanel(el), KIT.ratesCoreModel(list) — свопы и РЕПО, оценённые ядром (#201): фиксинги RUONIA / КС, ядро и
+ *                           отчёт, риск по кривым RUONIA и КС, «предварительно» (quality assumed); нет данных — словами
  *  KIT.fundingLine(p), KIT.fundingPanel(el) — фондирование (B1): строка карточки позиции и панель кокпита по книгам,
  *                           юрлицам и проблемам; «не настроено» — словами, не 0
  */
@@ -1488,6 +1490,113 @@
     new MutationObserver(ms => ms.forEach(m => { m.removedNodes.forEach(K.tableToolsGone); m.addedNodes.forEach(K.tableToolsAuto); }))
       .observe(document.documentElement, { childList: true, subtree: true });
   } catch (e) { }
+
+  // ---------- свопы и РЕПО, оценённые ядром (#201): панель C02 ----------
+  // данные: p.ratesCore (extra.swaps / extra.repos / extra.index_fixings, lib/real.js), M.indexFixings (фиксинги прогона),
+  // M.derivParallel() — параллельный отчёт /api/v1/runs/{id}/derivatives (ядро и отчёт по позициям, допуск, причины).
+  // Суммы ядра и отчёта — в рублях прогона, на экране — в валюте отчёта (как все суммы страниц); риск — p.dv01ByCurve.
+  // K.ratesCoreModel(list) — строки панели: позиции, оценённые ядром, и строки параллельного отчёта «по отчёту» (CCS,
+  // открытое РЕПО…); K.ratesCorePanel(el) — фиксинги, итоги, таблица позиций и таблица сделок (K.table: CSV, ширина).
+  K.RC_IDX = { RUONIA: 'RUONIA', KEY_RATE: 'КС' };
+  const RC_PROD = { irs: 'IRS', ois: 'OIS', repo: 'РЕПО', ccs: 'CCS' };
+  K.RC_SIDE = { payer: 'плачу фикс', receiver: 'получаю фикс', repo: 'РЕПО (привлечение)', reverse_repo: 'обратное РЕПО (размещение)' };
+  const RC_REASON = { ccs_unsupported: 'CCS ядром пока не оценивается', basis_swap_unsupported: 'базисный своп (две плавающие ноги) ядром пока не оценивается',
+    repo_open: 'открытое РЕПО: нет даты окончания (её задаёт владелец)', no_fixings: 'нет фиксингов индекса в прогоне', pv_not_finite: 'ядро дало нечисловую оценку',
+    swap_frequency_unsupported: 'частота выплат не поддерживается', day_count_unsupported: 'база начисления не поддерживается', swap_index_unsupported: 'индекс не поддерживается',
+    swap_ccy_unsupported: 'валюта свопа не RUB', repo_ccy_unsupported: 'валюта РЕПО не RUB', terms_incomplete: 'условия сделки неполные', terms_invalid: 'условия сделки не приняты ядром', settled: 'сделка исполнена' };
+  K.rcReason = c => !c ? '' : RC_REASON[c] || (/^core_/.test(c) ? 'ядро отклонило: ' + c.slice(5) : c);
+  const rcProd = s => s ? String(s).split('+').map(x => RC_PROD[x] || x).join(' + ') : '—';
+  const RK = () => (M.toRepr && M.toRepr.RUB) || 1;
+  const rcMoney = v => v == null || !isFinite(v) ? '<span class="mut3">—</span>' : f.mn(v * RK(), 2);
+  K.rcProv = a => '<span class="k-tag k-prov" title="' + esc('Условия предварительные (оценка ядра с допущениями, quality assumed): цифры не окончательные.' + (a && a.length ? '\n• ' + a.join('\n• ') : '')) + '">предварительно</span>';
+  K.rcFixingsHtml = () => {
+    const F = Object.values(M.indexFixings || {});
+    if (!F.length) return '<div class="k-rcfix"><span class="mut">Фиксинги индексов: свопы и РЕПО прогона историю фиксингов не читали (нет начавшихся свопов и плавающих РЕПО).</span></div>';
+    return F.map(x => {
+      const nm = K.RC_IDX[x.id] || x.id, un = x.unpublished || [], ms = x.missing || [];
+      return '<div class="k-rcfix ' + (ms.length ? 'bad' : un.length ? 'warn' : '') + '"><b>' + esc(nm) + '</b>: последний фиксинг ' + f.date(x.latest) + ' — <b>' + f.pct(x.latestRate, 2) + '</b>' +
+        (x.knownAt ? ' <span class="mut3">(на срез ' + esc(String(x.knownAt).slice(0, 16).replace('T', ' ')) + ' UTC)</span>' : '') +
+        (un.length ? '<br><span class="w">⚠ не опубликован за ' + un.map(f.date).join(', ') + ': перенесён фиксинг ' + f.date(x.latest) +
+          ' (объявлено' + (x.maxUnpublished != null ? ', не больше ' + x.maxUnpublished + ' раб. дн.' : '') + ')</span>' : '') +
+        (ms.length ? '<br><span class="b">⚠ пропуски в истории: ' + ms.map(f.date).join(', ') + ' — своп или РЕПО, который читает эти дни, ядро не оценивает (остаётся по отчёту)</span>' : '') +
+        (!un.length && !ms.length ? ' <span class="mut3">· пропусков нет</span>' : '') + '</div>';
+    }).join('');
+  };
+  K.ratesCoreModel = list => {
+    const L = list || K.list(), all = L.length === M.positions.length;  // без фильтра шапки: строки отчёта без позиции — тоже
+    const par = M.derivParallel ? M.derivParallel() : null, parBy = {}, prow = (par && par.rows) || [];
+    prow.forEach(r => { if (r.positionId != null) parBy[r.positionId] = r; });
+    const core = L.filter(p => p.ratesCore), ids = new Set(L.map(p => p.id));
+    const rateProd = r => /(^|\+)(irs|ois|repo|ccs)(\+|$)/.test(r.product || '');
+    const byReport = prow.filter(r => r.used === 'imported' && rateProd(r) && (M.pos[r.positionId] ? ids.has(r.positionId) : all));
+    const rows = core.map(p => {
+      const c = p.ratesCore, pr = parBy[p.id] || {}, sides = [...new Set(c.trades.map(t => K.RC_SIDE[t.side] || t.side).filter(Boolean))];
+      const diff = c.pvDiff != null ? c.pvDiff : c.pv != null && c.reportedPv != null ? c.pv - c.reportedPv : null;
+      return { id: p.id, name: p.name, book: p.book, product: c.product || c.trades.map(t => t.product).join('+'), side: sides.join(', ') || '—',
+        maturity: p.maturity, pv: c.pv, rep: c.reportedPv, diff, over: pr.over == null ? null : pr.over, ruo: p.dv01ByCurve['RUB RUONIA'] || 0, key: p.dv01ByCurve['RUB KEY'] || 0,
+        prov: !!c.provisional, assumptions: c.assumptions || [], src: 'ядро', reason: null };
+    }).concat(byReport.map(r => { const p = M.pos[r.positionId];
+      return { id: r.positionId, name: p ? p.name : r.positionId, book: r.book, product: r.product, side: '—', maturity: p ? p.maturity : null, pv: null, rep: r.imported, diff: null,
+        over: null, ruo: p ? p.dv01ByCurve['RUB RUONIA'] || 0 : 0, key: p ? p.dv01ByCurve['RUB KEY'] || 0 : 0, prov: false, assumptions: [], src: 'по отчёту', reason: r.reason }; }));
+    const trades = core.flatMap(p => p.ratesCore.trades.map(t => Object.assign({ id: p.id, pos: p.name, prov: !!p.ratesCore.provisional, assumptions: p.ratesCore.assumptions || [] }, t)));
+    return { core, byReport, rows, trades, tolerance: (par && par.tolerance) || null };
+  };
+  K.ratesCorePanel = (el, list) => {
+    const R = K.ratesCoreModel(list), { core, byReport, rows, trades } = R;
+    el.innerHTML = '';
+    if (!rows.length) {
+      K.noData(el, 'в прогоне нет свопов и РЕПО, оценённых ядром (extra.swaps / extra.repos): прогон до оценки свопов ядром или в нём нет условий сделок');
+      if (Object.keys(M.indexFixings || {}).length) el.innerHTML = K.rcFixingsHtml() + el.innerHTML;
+      return R;
+    }
+    const nProv = rows.filter(r => r.prov).length, tol = R.tolerance;
+    const S = k => rows.reduce((s, r) => s + (r[k] || 0), 0), held = rows.map(r => M.pos[r.id]).filter(Boolean);  // риск — всех строк таблицы
+    const top = h('div');
+    top.innerHTML = K.rcFixingsHtml() + '<div class="k-rcstrip">' +
+      K.kpi('Позиций', String(rows.length), 'ядром ' + core.length + (byReport.length ? ' · по отчёту ' + byReport.length : '') + (nProv ? ' · <span style="color:var(--warn)">предварительно ' + nProv + '</span>' : '')) +
+      K.kpi('Ядро − отчёт', '<span class="' + f.cls(S('diff')) + '">' + rcMoney(S('diff')) + '</span>' + K.kpiUnit('mm ₽'),
+        'оценённые ядром: ядро ' + rcMoney(S('pv')) + ' · отчёт ' + rcMoney(core.reduce((s, p) => s + (p.ratesCore.reportedPv || 0), 0)) + ' mm ₽' +
+        (tol ? '<br>допуск: max(' + f.n(tol.abs_rub * RK(), 0) + ' ₽, ' + f.n(tol.rel * 100, 0) + '% |отчёта|)' + (tol.provisional ? ', предварительный' : '') : '')) +
+      K.kpi('DV01 RUONIA', K.d({ title: 'Свопы и РЕПО · DV01 RUONIA', unit: 'тыс ₽/бп', list: held, val: p => p.dv01ByCurve['RUB RUONIA'] }, null, '') + K.kpiUnit('тыс ₽/бп'), 'кривая «RUB RUONIA»') +
+      K.kpi('DV01 КС', K.d({ title: 'Свопы и РЕПО · DV01 КС', unit: 'тыс ₽/бп', list: held, val: p => p.dv01ByCurve['RUB KEY'] }, null, '') + K.kpiUnit('тыс ₽/бп'), 'кривая «RUB KEY»') + '</div>';
+    const pos = h('div'), sub = h('div', 'k-rcsub', 'Сделки: условия и оценка ядром'), trd = h('div');
+    el.append(top, pos, sub, trd);
+    const mcol = (key, label, title) => ({ key, label, num: true, unit: 'mm ₽', sum: true, title, fmt: v => rcMoney(v), cls: v => f.cls(v) });
+    const dvcol = (key, label, title) => ({ key, label, num: true, unit: 'тыс ₽/бп', sum: true, title, fmt: v => f.dv(v), cls: v => f.cls(v) });
+    K.table(pos, { viewKey: 'c02-rates-core', title: 'Свопы и РЕПО: оценка ядром и из отчёта', search: false, rows,
+      columns: [
+        { key: 'name', label: 'Позиция', fmt: (v, r) => esc(v) + (r && r.prov ? K.rcProv(r.assumptions) : '') },
+        { key: 'book', label: 'Книга' },
+        { key: 'product', label: 'Продукт', fmt: v => esc(rcProd(v)) },
+        { key: 'side', label: 'Сторона' },
+        { key: 'maturity', label: 'Погашение', date: true, fmt: v => f.date(v) },
+        mcol('pv', 'Ядро', 'PV ядра из условий сделки, mm ₽ (в валюте отчёта)'),
+        mcol('rep', 'Отчёт', 'PV из отчёта (mv_rub строки, иначе сумма pv_rub сделок), mm ₽'),
+        { key: 'diff', label: 'Ядро − отчёт', num: true, unit: 'mm ₽', sum: true, title: 'Разница PV ядра и отчёта; ⚠ — выше допуска параллельного отчёта', cls: v => f.cls(v),
+          fmt: (v, r) => rcMoney(v) + (r && r.over ? ' <span title="выше допуска" style="color:var(--warn)">⚠</span>' : '') },
+        dvcol('ruo', 'DV01 RUONIA', 'Риск по кривой «RUB RUONIA», тыс ₽/бп'),
+        dvcol('key', 'DV01 КС', 'Риск по кривой «RUB KEY» (форвардная кривая КС), тыс ₽/бп'),
+        { key: 'src', label: 'Оценка', fmt: (v, r) => r && r.reason ? '<span class="mut" title="' + esc(r.reason) + '">по отчёту: ' + esc(K.rcReason(r.reason)) + '</span>' : esc(v || '') },
+      ] });
+    K.table(trd, { viewKey: 'c02-rates-trades', title: 'Свопы и РЕПО: сделки', search: false, rows: trades,
+      columns: [
+        { key: 'tradeId', label: 'Сделка', fmt: (v, r) => esc(v || '—') + (r && r.prov ? K.rcProv(r.assumptions) : '') },
+        { key: 'pos', label: 'Позиция' },
+        { key: 'product', label: 'Продукт', fmt: v => esc(rcProd(v)) },
+        { key: 'index', label: 'Индекс', fmt: v => esc(v ? K.RC_IDX[v] || v : 'фикс') },
+        { key: 'side', label: 'Сторона', fmt: v => esc(K.RC_SIDE[v] || v || '—') },
+        { key: 'notional', label: 'Номинал', num: true, unit: 'mm ₽', title: 'Номинал свопа; у РЕПО — денежная сумма первой части, mm ₽', fmt: v => rcMoney(v) },
+        { key: 'fixedRate', label: 'Фикс', num: true, unit: '%', fmt: v => f.pct(v, 2) },
+        { key: 'spreadBp', label: 'Спред', num: true, unit: 'б.п.', fmt: v => f.bp(v) },
+        { key: 'parRate', label: 'Par', num: true, unit: '%', title: 'Par-ставка свопа по ядру, %', fmt: v => f.pct(v, 2) },
+        { key: 'start', label: 'Начало', date: true, fmt: v => f.date(v) },
+        { key: 'end', label: 'Окончание', date: true, fmt: v => f.date(v) },
+        mcol('pv', 'Ядро', 'PV сделки по ядру, mm ₽'),
+        mcol('reportedPv', 'Отчёт', 'PV сделки из отчёта (pv_rub условий сделки), mm ₽'),
+        mcol('diff', 'Ядро − отчёт', 'Разница PV ядра и отчёта по сделке, mm ₽'),
+      ] });
+    return R;
+  };
 
   // стандартные колонки позиций (концепты берут нужные по ключу)
   K.posCols = {

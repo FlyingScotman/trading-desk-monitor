@@ -44,6 +44,7 @@
   <div class="strip" id="strip"></div>
   <div class="k-panel" id="sim"><div class="hd"><h3>Сдвиг кривых → PnL</h3><span class="k-note">линейно: DV01 × сдвиг, без выпуклости</span><span class="sp"></span><span class="scope"></span></div><div class="bd"></div></div>
   <div id="secs" class="k-grid"></div>
+  <div class="k-panel" id="rates"><div class="hd"><h3>Свопы и РЕПО: оценка ядром</h3><span class="k-note">ядро и отчёт, риск по кривым RUONIA и КС, фиксинги индексов · щелчок по строке — карточка позиции</span></div><div class="bd"></div></div>
   <div class="k-panel" id="iss"><div class="hd"><h3>Эмитент × срок</h3><span class="k-note">тыс ₽/бп · щелчок по клетке — позиции</span><span class="sp"></span><span class="met"></span></div><div class="bd flush scroll"></div></div>
 </div>
 <script src="../echarts.min.js"></script>
@@ -346,10 +347,15 @@
     if (simChart) simChart.redraw();
   }
 
-  buildSim(); drawStrip(); buildSections(); drawIssuers();
-  K.onFilter(() => { drawStrip(); buildSections(); drawIssuers(); updSim(); });
+  // ---------- свопы и РЕПО: оценка ядром (#201; kit.js K.ratesCorePanel) ----------
+  // фиксинги RUONIA / КС, ядро и отчёт по позициям и сделкам, риск по кривым RUONIA и КС, «предварительно»
+  const drawRates = () => K.ratesCorePanel(document.querySelector('#rates .bd'));
+
+  buildSim(); drawStrip(); buildSections(); drawRates(); drawIssuers();
+  K.onFilter(() => { drawStrip(); buildSections(); drawRates(); drawIssuers(); updSim(); });
   K.on('theme', () => { secObjs.forEach(o => { if (['heat', 'ladder'].includes(state[o.ccy].view)) renderSec(o); }); drawIssuers(); });
   K.commands(M.ccys.map(c => ({ label: 'Риск ' + c + ': к секции', run: () => { const o = secObjs.find(x => x.ccy === c); if (o) o.el.scrollIntoView({ behavior: 'smooth' }); } })));
+  K.commands([{ label: 'Свопы и РЕПО: оценка ядром и фиксинги', run: () => document.getElementById('rates').scrollIntoView({ behavior: 'smooth' }) }]);
 })();
 </script>
 </body>
