@@ -280,8 +280,9 @@
     let busy = Promise.resolve();
     // одно звено не должно остановить реакцию на следующие прогоны (ревью #191)
     const queue = e => { busy = busy.then(() => L.react(e, ctx, d)).catch(err => console.error(err)); };
-    // курсор ленты берётся после того, как страница получила прогон: прогон, опубликованный в это окно, ловит сверка
-    if (!ctx.pinned && ctx.source === 'real') queue(null);
+    // курсор ленты берётся после того, как страница получила прогон: прогон, опубликованный в это окно, ловит сверка;
+    // и у пустой страницы (#319): первый прогон, вышедший между ответом /concepts-run.js и подпиской, не пропускается
+    if (!ctx.pinned) queue(null);
     return L.subscribe({
       types: 'run.published',
       onEvents(list) {

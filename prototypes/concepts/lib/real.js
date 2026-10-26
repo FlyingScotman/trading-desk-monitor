@@ -756,12 +756,12 @@
   function noRun(E) {
     const sel = window.CONCEPTS_SEL || {}, found = E.reason === 'not_found';
     const title = !found ? 'Прогонов ещё нет' : sel.run_id ? 'Прогон #' + sel.run_id + ' не найден' : sel.as_of ? 'Прогона за ' + sel.as_of + ' нет' : 'Прогон не найден';
-    const text = (!found ? 'Запустите автопилот или загрузите отчёты: монитор покажет первый прогон, как только он будет опубликован.'
+    const text = (!found ? 'Запустите автопилот или загрузите отчёты (Настройки): монитор покажет первый прогон, как только он будет опубликован.'
       : 'Сервер: ' + (E.message || 'прогон не найден') + '. Откройте последний прогон или выберите другой.') +
       ' Цифр на экране нет: тестовые данные вместо прогона не подставляются, чтобы их не приняли за настоящие.';
     const day = 'c14-day-status.html' + (found && sel.as_of ? '?on=' + encodeURIComponent(sel.as_of) : '');
     bar({ source: 'empty', cls: 'k-norun', color: 'var(--warn,#b7791f)', title, text, latest: found,
-      extra: (esc, btn) => '<a data-a="day" href="' + esc(day) + '" style="' + btn + '" title="Что пришло за дату, что отклонено и почему">Статус дня</a>' },
+      extra: (esc, btn) => (found ? '' : '<a data-a="settings" href="../settings.html" style="' + btn + '" title="Автопилот и загрузка отчётов">Настройки</a>') + '<a data-a="day" href="' + esc(day) + '" style="' + btn + '" title="Что пришло за дату, что отклонено и почему">Статус дня</a>' },
       '<script src="lib/live.js"><\/script>');
     console.warn('concepts: ' + title + (E.message ? ' — ' + E.message : ''));
   }

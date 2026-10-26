@@ -6,7 +6,7 @@
 // --login USER:PASSWORD: sign in first (desk serve with sign-in on, backend api/auth.py); the pages share the session
 // --all-runs (with --base, #308): every page on every run of the server (GET /api/v1/runs, oldest first) with ?run_id=,
 //   then once more without it (the default run); a console error or an uncaught exception on any run fails the page
-// --run ID (with --base): every page on that one run (?run_id=ID)
+// --run ID (with --base): every page on that one run (?run_id=ID); a run the server does not have — the empty state (#319)
 // Playwright: the global install of the dev machine, otherwise a resolvable `playwright` (CI: NODE_PATH)
 const { chromium } = (() => { try { return require('/opt/node22/lib/node_modules/playwright'); } catch (e) { return require('playwright'); } })();
 const path = require('path'), fs = require('fs');
@@ -48,7 +48,10 @@ if (!pages.length) pages = fs.readdirSync(dir).filter(f => /\.html$/.test(f));
     await pg.goto(base ? base + name + (run ? '?run_id=' + encodeURIComponent(run) : '') : 'file://' + path.join(dir, name));
     await pg.waitForTimeout(900);
     const src = await pg.evaluate(() => window.CONCEPTS_SOURCE || null);
-    if (base && /^c\d/.test(name) && src !== 'real') errs.push('data source: ' + src + ', not the server run');
+    // --run ID несуществующего прогона (#319): сервер отвечает not_found — мониторы показывают пустое состояние
+    // (.k-norun), C14 / C15 работают без прогона; это не ошибка, остальное проверяется как обычно (390 px и т. д.)
+    const norun = run && src === 'empty' && await pg.evaluate(() => !!document.querySelector('.k-norun') || document.documentElement.getAttribute('data-run') === 'optional');
+    if (base && /^c\d/.test(name) && src !== 'real' && !norun) errs.push('data source: ' + src + ', not the server run');
     await pg.screenshot({ path: shot('') });
     const dr = await pg.$('[data-dr]');
     if (dr) { await dr.click(); await pg.waitForTimeout(300); await pg.screenshot({ path: shot('-drill') }); await pg.keyboard.press('Escape'); }
@@ -84,7 +87,7 @@ if (!pages.length) pages = fs.readdirSync(dir).filter(f => /\.html$/.test(f));
       else if (m[0] < 0 || m[1] > 390) errs.push('390px: меню ⚙ за краем окна ' + m.join('…'));
       await narrow('меню ⚙'); await pg.keyboard.press('Escape');
     }
-    console.log((errs.length ? 'FAIL ' : 'ok   ') + name + (run ? ' run ' + run : '') + (dr ? ' drill' : ' -') + (row ? ' card' : ' -') + ' 390' + (nTabs ? '×' + nTabs : '') + (errs.length ? '\n   ' + errs.slice(0, 5).join('\n   ') : ''));
+    console.log((errs.length ? 'FAIL ' : 'ok   ') + name + (run ? ' run ' + run : '') + (norun ? ' (нет прогона: пустое состояние)' : '') + (dr ? ' drill' : ' -') + (row ? ' card' : ' -') + ' 390' + (nTabs ? '×' + nTabs : '') + (errs.length ? '\n   ' + errs.slice(0, 5).join('\n   ') : ''));
     if (errs.length) bad++;
     await pg.close();
   }

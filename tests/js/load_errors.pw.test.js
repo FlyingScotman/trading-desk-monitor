@@ -22,14 +22,16 @@ const PAGES = fs.readdirSync(path.join(ROOT, 'concepts')).filter(f => /^c\d\d-.*
 
 // run: { status, body } ответа /concepts-run.js или 'abort' (сеть), либо функция (URL запроса) → такой ответ;
 // data — то же для /concepts-data.js; auth — тело ответа /api/v1/auth/state, { status } или 'hang' (не отвечает);
-// store — localStorage до первой загрузки (один раз: перезагрузка его не восстанавливает); viewport — размер окна
-async function open(browser, file, { run, data, auth, store, viewport, query = '' } = {}) {
+// store — localStorage до первой загрузки (один раз на контекст: ни перезагрузка, ни новая вкладка его не восстанавливают);
+// api — { путь: тело JSON } ответов /api/… (остальные — 404); viewport — размер окна. Подмена — на весь контекст
+// (ctx.route): новая вкладка (Ctrl-щелчок) открывается на тех же ответах
+async function open(browser, file, { run, data, auth, store, viewport, api = {}, query = '' } = {}) {
   const ctx = await browser.newContext(viewport ? { viewport } : {}), pg = await ctx.newPage();
-  if (store) await ctx.addInitScript(s => { if (sessionStorage.getItem('test.store')) return; sessionStorage.setItem('test.store', '1'); for (const k in s) localStorage.setItem(k, s[k]); }, store);
+  if (store) await ctx.addInitScript(s => { if (localStorage.getItem('test.store')) return; localStorage.setItem('test.store', '1'); for (const k in s) localStorage.setItem(k, s[k]); }, store);
   const errors = [];
   pg.on('pageerror', e => errors.push('pageerror: ' + e.message));
   pg.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push('console: ' + m.text()); });
-  await pg.route('**/*', route => {
+  await ctx.route('**/*', route => {
     const u = new URL(route.request().url());
     if (u.origin !== ORIGIN) return route.abort();
     if (u.pathname === '/concepts-run.js') {
@@ -46,6 +48,7 @@ async function open(browser, file, { run, data, auth, store, viewport, query = '
       if (auth && auth.status) return route.fulfill({ status: auth.status, contentType: 'application/json', body: '{}' });
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(auth || { enabled: false, user: null }) });
     }
+    if (api[u.pathname]) return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(api[u.pathname]) });
     if (u.pathname.startsWith('/api/')) return route.fulfill({ status: 404, contentType: 'application/json', body: '{"detail":"нет в тесте"}' });
     if (u.pathname === '/login.html') return route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>Вход</title><p>вход</p>' });
     const f = path.join(ROOT, decodeURIComponent(u.pathname));
@@ -213,6 +216,7 @@ test('#309 и #308 в браузере', { skip: pw ? false : 'нет Playwright
             assert.strictEqual(await href('demo'), '/concepts/' + file + '?demo=1', file);
             assert.strictEqual(await href('index'), 'index.html', file);
             assert.strictEqual(await href('day'), c.day, file);
+            assert.strictEqual(await href('settings'), c.latest ? null : '../settings.html', file + ': «Настройки» (автопилот) — только без прогонов');
             assert.strictEqual(await href('latest'), c.latest ? '/concepts/' + file : null, file);
             assert.ok(await pg.evaluate(() => !!(window.DESK_LIVE && DESK_LIVE.page)), file + ': ждёт первого прогона (lib/live.js)');
           }
@@ -237,25 +241,48 @@ test('#309 и #308 в браузере', { skip: pw ? false : 'нет Playwright
       assert.strictEqual(await pg.evaluate(() => localStorage.getItem('desk.run.v1')), null);
       await ctx.close();
     });
-    await t.test('#319: Ctrl / Shift-щелчок по «Последний прогон» — новая вкладка, эта не перезагружается', async () => {
+    await t.test('#319: Ctrl / Shift / средняя кнопка по «Последний прогон» — новая вкладка на последнем прогоне, эта не перезагружается', async () => {
       const saved = JSON.stringify({ sel: { run_id: '7' }, at: Date.now() });
       const cases = [[{ status: 500, body: '' }, '.k-loadfail'], [{ status: 200, body: EMPTY('not_found', 'прогон 7 не найден') }, '.k-norun']];
       for (const [spec, sel] of cases) {
-        for (const mod of ['Control', 'Shift']) {
+        for (const how of [{ modifiers: ['Control'] }, { modifiers: ['Shift'] }, { button: 'middle' }]) {
+          const tag = sel + ' ' + JSON.stringify(how);
           const run = u => u.searchParams.get('run_id') === '7' ? spec : null;  // прогон #7 не отдаётся, последний — да
           const { pg, ctx } = await open(browser, 'c01-cockpit.html', { run, query: '?run_id=7', store: { 'desk.run.v1': saved } });
           await pg.waitForLoadState('load'); await pg.evaluate(() => { window.__stay = 1; });
-          const opened = ctx.waitForEvent('page', { timeout: 20000 });
-          await pg.click(sel + ' [data-a=latest]', { modifiers: [mod] });
-          const np = await opened;
-          await np.waitForLoadState();
-          await pg.waitForTimeout(300);
-          assert.strictEqual(await pg.evaluate(() => window.__stay), 1, sel + ' ' + mod + ': вкладка не перезагрузилась');
-          assert.ok(/run_id=7/.test(pg.url()), sel + ' ' + mod + ': адрес вкладки тот же');
-          assert.ok(!/run_id/.test(np.url()), sel + ' ' + mod + ': новая вкладка — последний прогон: ' + np.url());
-          assert.strictEqual(await pg.evaluate(() => localStorage.getItem('desk.run.v1')), null, 'выбор снят и для новой вкладки');
+          const [np] = await Promise.all([ctx.waitForEvent('page'), pg.click(sel + ' [data-a=latest]', how)]);
+          await np.waitForURL(u => u.pathname === '/concepts/c01-cockpit.html' && !u.searchParams.has('run_id'));
+          await np.waitForLoadState('load');
+          assert.strictEqual(await np.evaluate(() => window.CONCEPTS_SOURCE), 'real', tag + ': новая вкладка — последний прогон');
+          assert.strictEqual(await pg.evaluate(() => window.__stay), 1, tag + ': вкладка не перезагрузилась');
+          assert.ok(/run_id=7/.test(pg.url()), tag + ': адрес вкладки тот же');
+          assert.strictEqual(await pg.evaluate(() => localStorage.getItem('desk.run.v1')), null, tag + ': выбор снят и для новой вкладки');
           await ctx.close();
         }
+      }
+    });
+    await t.test('#319: прогон вышел, пока пустая страница грузилась, — она переходит на него (сверка после загрузки)', async () => {
+      let n = 0;
+      const run = () => n++ ? null : { status: 200, body: EMPTY('no_runs', 'нет опубликованных прогонов') };  // первый ответ — пусто, дальше прогон
+      const { pg, ctx, errors } = await open(browser, 'c01-cockpit.html', { run, api: { '/api/v1/autopilot/status': { latest_run: { run_id: 1, label: 'тест' } } } });
+      await pg.waitForFunction(() => window.CONCEPTS_SOURCE === 'real', null, { timeout: 5000 });
+      assert.strictEqual(n, 2, 'одна перезагрузка');
+      assert.deepStrictEqual(errors, []);
+      await ctx.close();
+      // прогонов всё ещё нет (latest_run: null) — остаётся пустое состояние, без перезагрузок
+      let m = 0;
+      const r2 = await open(browser, 'c01-cockpit.html', { run: () => (m++, { status: 200, body: EMPTY('no_runs', 'нет опубликованных прогонов') }), api: { '/api/v1/autopilot/status': { latest_run: null } } });
+      await r2.pg.waitForTimeout(800);
+      assert.strictEqual(m, 1); assert.strictEqual((await look(r2.pg)).source, 'empty');
+      await r2.ctx.close();
+    });
+    await t.test('#319: CSV C14 и C15 без прогона — без номера и даты демо-набора', async () => {
+      for (const file of OPTIONAL) {
+        const { pg, ctx } = await open(browser, file, { run: { status: 200, body: EMPTY('no_runs', 'нет опубликованных прогонов') } });
+        const c = await pg.evaluate(() => ({ head: KIT.csvBuild('т', ['a'], ['1']).split('\r\n')[0], name: KIT.csvFileName(document.body, { fileName: 'x' }) }));
+        assert.ok(c.head.startsWith('run_id,,as_of,,'), file + ': ' + c.head);
+        assert.strictEqual(c.name, 'tdm_x_nodate_run-none.csv', file);
+        await ctx.close();
       }
     });
     await t.test('#308: прогон без кривой RUONIA и без точек КС — C05, C06, C09, C12 не падают, «вчера» без выдуманных точек', async () => {
