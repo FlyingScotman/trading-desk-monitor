@@ -108,3 +108,77 @@ def test_a_floater_without_dm_says_why():
     assert dm_missing(fb) == ("DM нет: ни в одном прогоне истории флоатер не оценён ядром (оценка по рыночной стоимости "
                               "(без ядра); floater_benchmark_unsupported)")
     assert dm_missing({"ccy": "USD", "extra": {}}) == "DM по цене считается только у рублёвых флоатеров"
+
+
+def _window_ctx(monkeypatch, history: bool):
+    """The floater fixed 3 publication days before its next period (from 19.10): on 15.10 that fixing (14.10) has
+    passed and MOEX has not published the coupon. ``history``: the KBD of 07.10-14.10 in the cache (the 15.10
+    parameters dated those days: the fixture has one date)."""
+    import dataclasses
+    from datetime import date, timedelta
+
+    from desk.curves import rates
+
+    snaps = SnapshotDir(FIX)
+    get, cache = snaps.get, {}
+    snaps.get = lambda i: cache.setdefault(i, get(i))  # type: ignore[method-assign]
+    market = snaps.market("2026-10-15", "eod_final")
+    static = snaps.get(market.static_snapshot_id)
+    next(f for f in static.data["floater_formulas"] if f["secid"] == KEY).update({**TERMS, "fixing_offset": 3})
+    if history:
+        z = market.data["zcyc_params"][0]
+        base = rates.zcyc_parameters(z["trade_date"], z["params"])
+        days = [date(2026, 10, 15) - timedelta(days=i) for i in range(1, 9)]
+        hist = {d: dataclasses.replace(base, trade_date=d) for d in days if d.weekday() < 5}
+        monkeypatch.setattr(rates, "kbd_history", lambda *a: hist)
+    return prepare(snaps, "2026-10-15")
+
+
+def test_a_coupon_fixed_but_not_published_comes_from_the_kbd_history(monkeypatch):
+    """Review of #245: between the next period's fixing and MOEX publishing its coupon core takes the fixing from the
+    KBD history of earlier snapshots (``rates.kbd_history``); without it the bond falls to the fallback ladder for
+    those days of every period, saying why."""
+    ctx = _window_ctx(monkeypatch, history=True)
+    (o,) = value(ctx, [(KEY, 1000.0)], fallback=False)
+    assert o.valuation is not None and o.valuation.quality == "exact", o.detail
+    assert ctx.rates["fixings"]["KBD"]["rows"] == 6 and ctx.rates["fixings"]["KBD"]["latest"] == "2026-10-14"
+    assert math.fsum(o.valuation.curve_buckets["RUB OFZ"].values()) > 0
+
+
+def test_without_the_kbd_history_the_window_is_a_rejection(monkeypatch):
+    from desk.curves import rates
+
+    monkeypatch.setattr(rates, "kbd_history", lambda *a: {})
+    ctx = _window_ctx(monkeypatch, history=False)
+    (o,) = value(ctx, [(KEY, 1000.0)], fallback=False)
+    assert o.valuation is None and o.reason == "core_missing_market_data"
+
+
+def test_kbd_history_reads_the_last_dates_of_the_cache():
+    """``kbd_history``: the last ``max fixing_offset + 5`` market dates before the run, eod_final before preliminary."""
+    from datetime import date
+
+    from desk.curves import rates
+    from desk.marketdata.bundle import SnapshotError
+
+    snaps = SnapshotDir(FIX)
+    real = snaps.market("2026-10-15", "eod_final")
+    zcyc = real.data["zcyc_params"][0]
+    dates = [f"2026-10-{d:02d}" for d in (1, 2, 5, 6, 7, 8, 9, 12, 13, 14, 15)]
+
+    class Fake:
+        def market_dates(self, cut):
+            return dates if cut == "eod_final" else ["2026-10-14"]
+
+        def market_id(self, d, cut):
+            if cut == "eod_final" and d == "2026-10-14":
+                raise SnapshotError("no final")
+            return f"{cut}-{d}"
+
+        def get(self, sid):
+            return type("M", (), {"data": {"zcyc_params": [{**zcyc, "trade_date": sid[-10:]}]}})()
+
+    static = type("S", (), {"data": {"floater_formulas": [{"benchmark": "ZCYC", "fixing_offset": 2}]}})()
+    h = rates.kbd_history(Fake(), "2026-10-15", static)
+    assert sorted(h) == [date(2026, 10, d) for d in (6, 7, 8, 9, 12, 13, 14)]  # 2 + 5 dates, the 14th preliminary
+    assert rates.kbd_history(Fake(), "2026-10-15", type("S", (), {"data": {"floater_formulas": []}})()) == {}

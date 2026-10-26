@@ -21,6 +21,7 @@ so every tenor to 10Y is scheduled. A quote whose dates still fall outside is dr
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Literal
@@ -37,10 +38,12 @@ from rub_fixed_income import (
     KeyRateCurveBuildRequest,
     KeyRateSwapQuote,
     OisQuote,
+    ZcycParameters,
     bootstrap_discount_curve,
     build_key_rate_forward_curve,
     forward_curve,
     joint_calendar,
+    kbd_effective_yield,
     key_rate_projection_curve,
     ois_curve_convention,
     ois_quote_periods,
@@ -49,7 +52,8 @@ from rub_fixed_income import (
 )
 
 from desk.marketdata import adapter_rates as ar
-from desk.marketdata.bundle import Snapshot
+from desk.marketdata.adapter import zcyc_parameters
+from desk.marketdata.bundle import Snapshot, SnapshotError
 
 RUONIA_OIS_SPEC = "rub_ruonia_ois_moex_v2"
 KEY_RATE_PROJECTION_SPEC = "rub_key_rate_projection_v1"
@@ -228,14 +232,16 @@ def key_rate_projection(market: Snapshot, static: Snapshot, discount: DiscountCu
                       CurveEntry(KEY_RATE_SWAP_CURVE_ID, KEY_RATE_SWAP_SPEC, fwd))
 
 
-def fixing_entries(market: Snapshot, static: Snapshot,
-                   known_at: datetime | None = None) -> tuple[tuple[FixingEntry, ...], dict[str, Any]]:
+def fixing_entries(market: Snapshot, static: Snapshot, known_at: datetime | None = None,
+                   kbd_history: Mapping[date, ZcycParameters] | None = None
+                   ) -> tuple[tuple[FixingEntry, ...], dict[str, Any]]:
     """RUONIA and KEY_RATE histories as known at ``known_at`` (default: the snapshot's ``known_at``).
 
     Kept: rows dated before the business date (core values from it on), published by ``known_at``:
     ``published_at <= known_at``, or, with only a ``published_on`` date, ``published_on`` before the
     ``known_at`` date (the time that day is unknown, so the same day counts as not yet published).
-    RUONIA rows before its calendar's ``valid_from`` are dropped (core cannot check them).
+    RUONIA rows before its calendar's ``valid_from`` are dropped (core cannot check them). ``kbd_history``: the KBD
+    parameters of earlier days (``kbd_history``), the KBD floaters' past fixings (``kbd_fixing_entries``).
     """
     bd = date.fromisoformat(market.business_date)
     cut = known_at or ar.known_at(market)
@@ -265,7 +271,7 @@ def fixing_entries(market: Snapshot, static: Snapshot,
             info["missing_business_days"] = [d.isoformat() for d in days if cal.is_business_day(d) and d not in have]
             info["unpublished_business_days"] = [d.isoformat() for d in history.unpublished_business_days]
         lineage[code] = info
-    kbd, kbd_lineage = kbd_fixing_entries(market, static, bd, cut)
+    kbd, kbd_lineage = kbd_fixing_entries(market, static, bd, cut, kbd_history or {})
     if kbd:
         lineage["KBD"] = kbd_lineage
     return (*entries, *kbd), lineage
@@ -282,21 +288,66 @@ def kbd_tenors(static: Snapshot) -> tuple[float, ...]:
                          if f.get("benchmark") == "ZCYC" and f.get("benchmark_tenor_years") is not None}))
 
 
-def kbd_fixing_entries(market: Snapshot, static: Snapshot, bd: date, cut: datetime
-                       ) -> tuple[tuple[FixingEntry, ...], dict[str, Any]]:
+def kbd_fixing_entries(market: Snapshot, static: Snapshot, bd: date, cut: datetime,
+                       history: Mapping[date, ZcycParameters]) -> tuple[tuple[FixingEntry, ...], dict[str, Any]]:
     """One KBD history per tenor of the static's KBD floaters (TDM#33; core keeps the KBD index per constant maturity,
-    ``kbd_fixing_id``), on the ZCYC publication calendar (MOEX_STOCK: a day with an end-of-day ZCYC
-    is a trading day). Empty: the snapshot carries the day's ZCYC only, not its history, so a coupon whose fixing day
-    has passed must be published by MOEX (the running coupon of a floater fixed in advance always is); one that is not
-    is core's rejection and the bond goes to the fallback ladder, saying why."""
+    ``kbd_fixing_id``), on the ZCYC publication calendar (MOEX_STOCK: a day with an end-of-day ZCYC is a trading day):
+    its rows the KBD's effective annual zero yield at the tenor (core ``kbd_effective_yield``) of each earlier day of
+    ``history`` (``kbd_history``: the end-of-day ZCYC of the cache's earlier market snapshots). Core takes a coupon
+    whose fixing day has passed from them: the next period's coupon fixed N publication days before it starts and
+    not yet published by MOEX (without them the bond fell to the fallback ladder for those days of every period). A
+    day the cache lacks is a gap: a coupon fixed on it is core's rejection, the bond on the fallback ladder saying
+    why."""
     tenors = kbd_tenors(static)
     if not tenors:
         return (), {}
     cal, _ = ar.calendar(static, "MOEX_STOCK")
-    out = tuple(FixingEntry(kbd_fixing_id(t), FixingHistory("kbd", bd, (), cal, market.id, 0, cut.isoformat(),
-                                                            tenor_years=t)) for t in tenors)
-    return out, {"tenors": list(tenors), "rows": 0, "calendar": cal.version,
-                 "note": "no ZCYC history in the snapshot: past fixings come from the published coupons"}
+    days = sorted(d for d in history if d < bd)
+    out = tuple(FixingEntry(kbd_fixing_id(t), FixingHistory(
+        "kbd", bd, tuple((d, kbd_effective_yield(history[d], t)) for d in days), cal, market.id, 0, cut.isoformat(),
+        tenor_years=t)) for t in tenors)
+    return out, {"tenors": list(tenors), "rows": len(days), "first": days[0].isoformat() if days else None,
+                 "latest": days[-1].isoformat() if days else None, "calendar": cal.version}
+
+
+KBD_HISTORY_EXTRA_DAYS = 5
+"""Publication days of KBD history beyond the largest ``fixing_offset`` of the static's KBD floaters (``kbd_history``):
+a coupon fixed that many days before a period starting after the business date may still be unpublished."""
+_KBD_PARAMS: dict[str, ZcycParameters] = {}
+"""Snapshot id -> its KBD parameters: a market bundle is read once per process for its history (a backfill values
+hundreds of dates); bounded by ``_KBD_PARAMS_SIZE``, oldest out."""
+_KBD_PARAMS_SIZE = 256
+
+
+def kbd_history(snapshots: Any, business_date: str, static: Snapshot) -> dict[date, ZcycParameters]:
+    """The end-of-day KBD parameters of the cache's market snapshots of the last ``max fixing_offset +
+    KBD_HISTORY_EXTRA_DAYS`` market dates before ``business_date`` (``eod_final``, else ``eod_preliminary``), for the
+    KBD floaters' past fixings (``kbd_fixing_entries``); empty without a KBD floater in the static. ``snapshots``: a
+    ``SnapshotDir``. A snapshot that cannot be read is left out (a gap)."""
+    offsets = [int(f["fixing_offset"]) for f in static.data.get("floater_formulas") or ()
+               if f.get("benchmark") == "ZCYC" and f.get("fixing_offset") is not None]
+    if not offsets:
+        return {}
+    dates = sorted({d for cut in ("eod_final", "eod_preliminary") for d in snapshots.market_dates(cut)
+                    if d < business_date})[-(max(offsets) + KBD_HISTORY_EXTRA_DAYS):]
+    out: dict[date, ZcycParameters] = {}
+    for d in dates:
+        for cut in ("eod_final", "eod_preliminary"):
+            try:
+                sid = snapshots.market_id(d, cut)
+            except SnapshotError:
+                continue
+            if sid not in _KBD_PARAMS:
+                try:
+                    z = snapshots.get(sid).data["zcyc_params"][0]
+                    _KBD_PARAMS[sid] = zcyc_parameters(z["trade_date"], z["params"], sid)
+                except (SnapshotError, KeyError, IndexError, ValueError):
+                    break
+                while len(_KBD_PARAMS) > _KBD_PARAMS_SIZE:
+                    del _KBD_PARAMS[next(iter(_KBD_PARAMS))]
+            out[_KBD_PARAMS[sid].trade_date] = _KBD_PARAMS[sid]
+            break
+    return out
 
 
 # ---- what a run lacks (R14, R15): codes for the run log, the pages and the diagnostics

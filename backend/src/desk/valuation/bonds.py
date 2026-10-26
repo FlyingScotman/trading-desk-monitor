@@ -227,7 +227,7 @@ def eligibility(terms: BondTerms) -> None:
         if f.get("spread_bp") is None:
             raise Rejected("floater_formula_incomplete", f"{f['status']} formula without a spread")
         if f["benchmark"] == "ZCYC" and (f.get("benchmark_tenor_years") is None or f.get("fixing_offset") is None
-                                         or f.get("fixing_offset_unit", "zcyc_publication_days") not in KBD_FIXING_UNITS):
+                                         or (f.get("fixing_offset_unit") or "zcyc_publication_days") not in KBD_FIXING_UNITS):
             raise Rejected("floater_formula_incomplete",
                            f"KBD floater without its tenor or fixing rule (contract 1.4): tenor "
                            f"{f.get('benchmark_tenor_years')}, offset {f.get('fixing_offset')} {f.get('fixing_offset_unit')}")
