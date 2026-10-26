@@ -147,7 +147,7 @@ t('смысловой цвет страницы важнее бухгалтер�
   const mk = (tag, text, cls, style, parent) => {
     const c = new Set(cls || []);
     return { tagName: tag, textContent: text, parentElement: parent || null, getAttribute: k => k === 'style' ? style || null : null,
-      classList: { toggle: (k, on) => on ? c.add(k) : c.delete(k), contains: k => c.has(k) }, has: k => c.has(k) };
+      classList: { toggle: (k, on) => on ? c.add(k) : c.delete(k), contains: k => c.has(k) }, has: k => c.has(k), dataset: {} };
   };
   const dn = mk('TD', '(20)', ['n', 'chg-dn']), up = mk('TD', '(5)', ['n', 'chg-up']);
   const heat = mk('TD', '(1)', ['n'], 'background:rgba(63,182,122,.3)');
@@ -157,6 +157,11 @@ t('смысловой цвет страницы важнее бухгалтер�
   K.accMarkAll({ querySelectorAll: () => all });
   [dn, up, heat, tdChg, drIn].forEach(e => assert.ok(!e.has('k-accn'), e.textContent + ' — свой цвет страницы'));
   assert.ok(plainTd.has('k-accn') && drPlain.has('k-accn'), 'без смыслового цвета — красным');
+  // метка «отформатировано как отрицательное» для CSV (#222) — независимо от цвета
+  all.forEach(e => assert.ok('kneg' in e.dataset, e.textContent + ' — data-kneg'));
+  const pos = mk('TD', '1,234.5', ['n']); K.accMarkAll({ querySelectorAll: () => [pos] }); assert.ok(!('kneg' in pos.dataset));
+  K.withNegFmt('minus', () => K.accMarkAll({ querySelectorAll: () => all }));
+  all.forEach(e => assert.ok(!('kneg' in e.dataset), e.textContent + ' — «минус»: метки нет'));
   assert.ok(/(^|,\s*)\.k-accn\s*[,{]/m.test(P('concepts/lib/kit.css')));
 });
 
