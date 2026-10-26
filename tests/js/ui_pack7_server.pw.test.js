@@ -113,6 +113,17 @@ test('#334, #336 в браузере', { skip: pw ? false : 'нет Playwright' 
         }, d.issuer);
         assert.ok(m.tag && /^\+\d+ CDS$/.test(m.tag), d.issuer + ': ' + JSON.stringify(m));
         assert.ok(m.row.includes(m.cs01) && m.cs01 !== m.noCds, d.issuer + ': CS01 с CDS: ' + JSON.stringify(m));
+        // CSV списка эмитентов: «Бум.» — число (облигации), CDS — своей колонкой сразу за ней, а не «22 +1 CDS»
+        const [dl] = await Promise.all([pg.waitForEvent('download'), pg.locator('#list').getByText('⤓ CSV').first().click()]);
+        const csv = fs.readFileSync(await dl.path(), 'utf8');
+        const rows = csv.replace(/^﻿/, '').split(/\r?\n/).map(l => l.match(/("([^"]|"")*"|[^,]*)(,|$)/g).map(x => x.replace(/,$/, '').replace(/^"|"$/g, '').replace(/""/g, '"')));
+        const hi = rows.findIndex(r => r.includes('Бум.')), head = rows[hi], ib = head.indexOf('Бум.');
+        assert.strictEqual(head[ib + 1], 'CDS', 'колонка CDS за «Бум.»: ' + head);
+        const name = await pg.evaluate(iss => MOCK.issuer[iss].short, d.issuer);
+        const line = rows.slice(hi + 1).find(r => (r[head.indexOf('Эмитент')] || '').startsWith(name + ' '));  // «Минфин РФ RUB USD»: имя и валюты
+        assert.ok(line, d.issuer + ': строка эмитента в CSV');
+        assert.ok(/^\d+$/.test(line[ib]) && /^[1-9]\d*$/.test(line[ib + 1]), d.issuer + ': ' + line.slice(ib, ib + 2));
+        assert.ok(rows.slice(hi + 1).every(r => r.length < 2 || !/CDS/.test(r[ib])), 'нет «+N CDS» в «Бум.»');
         assert.deepStrictEqual(errors, [], d.issuer); await ctx.close();
       }
     });

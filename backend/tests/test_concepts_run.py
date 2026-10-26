@@ -135,6 +135,9 @@ def test_moves_null_when_the_run_has_none(store_url, book):  # noqa: F811
            "move_pct_cbr": None, "rate_cbr_next": 12.4}
     eur = {"ccy": "EUR", "rate": 100.0, "rate_source": "MOEX 19:00", "move_pct": 0.0, "prev_rate": 100.0,
            "prev_rate_source": "MOEX 19:00", "rate_cbr": 100.1, "move_pct_cbr": 0.0, "rate_cbr_next": 100.1}
+    # KZT: a previous rate, but no move stored (null): null, not 0 (a regression «x or 0» fails here)
+    kzt = {"ccy": "KZT", "rate": 0.18, "rate_source": "MOEX 19:00", "move_pct": None, "prev_rate": 0.18,
+           "prev_rate_source": "MOEX 19:00", "rate_cbr": 0.18, "move_pct_cbr": None, "rate_cbr_next": 0.18}
     with psycopg.connect(store_url, row_factory=dict_row) as con:
         stored = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'curves'", (early,)).fetchone()
         assert any(p.get("move_bp") == 0 for c in stored["data"] for p in c["points"])  # stored as 0
@@ -143,20 +146,21 @@ def test_moves_null_when_the_run_has_none(store_url, book):  # noqa: F811
         for r in (early, rid):
             con.execute("DELETE FROM run_reference WHERE run_id = %s AND kind = 'fx'", (r,))
             con.execute("INSERT INTO run_reference (run_id, kind, data) VALUES (%s, 'fx', %s)",
-                        (r, json.dumps([usd, cny, eur])))
+                        (r, json.dumps([usd, cny, eur, kzt])))
     c = TestClient(create_app(store_url))
     no_prev = c.get(f"/api/v1/concepts/run?run_id={early}").json()
     assert no_prev["prevDate"] is None and no_prev["CURVE_MOVES"]
     assert all(v is None for mv in no_prev["CURVE_MOVES"].values() for v in mv)
-    assert no_prev["FX_MOVE_PCT"] == no_prev["FX_CBR_MOVE_PCT"] == {"RUB": 0, "USD": None, "CNY": None, "EUR": None}
+    assert no_prev["FX_MOVE_PCT"] == no_prev["FX_CBR_MOVE_PCT"] == {"RUB": 0, "USD": None, "CNY": None, "EUR": None,
+                                                                     "KZT": None}
 
     got = c.get(f"/api/v1/concepts/run?run_id={rid}").json()
     assert got["prevDate"] is not None
     ofz = got["CURVE_MOVES"]["RUB OFZ"]
     assert all(v is not None for v in ofz), ofz  # the KBD's move, on the previous market's KBD
     # a real 0 stays 0, not null (a regression «x or None» fails here)
-    assert got["FX_MOVE_PCT"] == {"RUB": 0, "USD": 0.5, "CNY": None, "EUR": 0}
-    assert got["FX_CBR_MOVE_PCT"] == {"RUB": 0, "USD": 0.4, "CNY": None, "EUR": 0}
+    assert got["FX_MOVE_PCT"] == {"RUB": 0, "USD": 0.5, "CNY": None, "EUR": 0, "KZT": None}
+    assert got["FX_CBR_MOVE_PCT"] == {"RUB": 0, "USD": 0.4, "CNY": None, "EUR": 0, "KZT": None}
     assert got["FX_MOVE_PCT"]["EUR"] is not None and got["FX_CBR_MOVE_PCT"]["EUR"] is not None
     # the stored reference: one point without its move, the next one unmoved (move_bp 0); a position in a currency the
     # reference lacks, its rate from ``extra.fx_rate`` (its move unknown), with risk on a curve the reference lacks

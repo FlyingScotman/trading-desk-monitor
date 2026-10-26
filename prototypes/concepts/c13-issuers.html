@@ -182,7 +182,8 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
       columns: [
         { key: 'name', label: 'Эмитент', fmt: (v, r) => '<b>' + esc(v) + '</b> <span class="mtag">' + r.ccys.join(' ') + '</span>' },
         { key: 'rating', label: 'Рейт.', val: r => K.ratingRank(r.rating), fmt: (v, r) => '<span class="mut" title="' + esc(K.ratingTip(r.rating, r.ratingInfo)) + '">' + esc(K.ratingText(r.rating, r.ratingInfo)) + '</span>' },
-        { key: 'n', label: 'Бум.', num: true, title: 'облигаций эмитента; CDS на эмитента — отдельно', fmt: (v, r) => '<span class="mut">' + v + '</span>' + (r.nCds ? ' <span class="mtag" data-cds="' + r.nCds + '">+' + r.nCds + ' CDS</span>' : '') },
+        { key: 'n', label: 'Бум.', num: true, title: 'облигаций эмитента; CDS на эмитента — отдельно', fmt: (v, r) => '<span class="mut">' + v + '</span>' + (r.nCds ? ' <span class="mtag" data-cds="' + r.nCds + '">+' + r.nCds + ' CDS</span>' : ''),
+          csvExtra: ['CDS'], csvFmt: (v, r) => [v, r.nCds || 0] },  // в CSV «Бум.» — число, CDS — своей колонкой
         { key: 'mv', label: 'MV, mm ₽', num: true, fmt: drillCell('mv', v => f.mn(v, 0), 'mm ₽', 'MV'), sum: true, drill: false, sumFmt: v => f.mn(v, 0) },
         { key: 'share', label: '', val: r => r.mv, fmt: (v) => K.bar(v, max, true), w: '70px' },
         { key: 'cs01', label: 'CS01', num: true, unit: 'тыс ₽/бп', fmt: drillCell('cs01', f.dv, 'тыс ₽/бп', 'CS01'), sum: true, drill: false, sumFmt: f.dv },
