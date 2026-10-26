@@ -868,9 +868,8 @@ OFZ_VIEW_DEFAULT = "basis"
 when asked for by name."""
 OFZ_VIEW_APPROX = ("a run before 0.2.6: its OFZ were on RUONIA, their KBD risk in the «КБД» view is their basis to "
                    "RUONIA (ofz_spr01), moved off RUONIA")
-OFZ_VIEW_P = ("{n} OFZ or KBD floaters without a computed RUONIA risk (a run of 0.2.6, an OFZ off core, a KBD floater's "
-              "coupons, TDM#33): their RUONIA risk is their KBD risk and the basis the same risk again (core basis_view, "
-              "variant P)")
+OFZ_VIEW_P = ("{n} OFZ or KBD floaters without a computed RUONIA risk (a run of 0.2.6, an OFZ or a KBD floater off core):"
+              " their RUONIA risk is their KBD risk and the basis the same risk again (core basis_view, variant P)")
 MISSING_TEXT = {"not_valued": "не оценена", "reported_no_risk": "оценена по отчёту, риска в отчёте нет",
                 "no_risk": "риск не посчитан"}
 GROUPS = ("GOV", "SUB", "CORP", "DER", "OTH")
