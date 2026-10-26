@@ -304,11 +304,19 @@ test('нестрогий ответ сервера (main без nNoCarryNoFundin
   near(w.netKnown, REAL.totals.netKnown, 'netKnown — частичная сумма');
 });
 
-test('позиций без прогноза нет — «позиции без прогноза» «—»; USD: итоги сервера и строки в пределах ε; noFilter', () => {
+test('позиций без прогноза нет — «позиции без прогноза» 0, есть с null — «—»; USD: итоги сервера и строки в пределах ε; noFilter', () => {
+  // позиций без прогноза нет: сумма по пустому множеству — 0 (и по строкам, и по итогам сервера с fundingNoCarry null)
   const rows = model(REAL).filter(r => r.covered || r.isCash);
   const s = C.sums(rows, true);
-  assert.strictEqual(s.nNotCovered, 0); assert.strictEqual(s.fundingNoCarry, null);
+  assert.strictEqual(s.nNotCovered, 0); assert.strictEqual(s.fundingNoCarry, 0);
   near(s.funding, s.fundingCovered + s.fundingCash, 'всё фондирование без «без прогноза»');
+  const t0 = Object.assign({}, REAL.totals, { fundingNoCarry: null, nNotCovered: 0 });
+  assert.strictEqual(C.withServer(C.sums(rows, true), t0, 1).fundingNoCarry, 0);
+  // есть позиция без прогноза с null — «—»
+  const d1 = JSON.parse(JSON.stringify(REAL));
+  Object.assign(d1.positions.find(p => p.positionId === 'D1|USD'), { funding: null, fundingState: 'problem' });
+  const s1 = C.sums(model(d1), true);
+  assert.strictEqual(s1.nNotCovered, 1); assert.strictEqual(s1.fundingNoCarry, null);
   // USD: суммы строк по inCcy и рубли сервера × курс демо — совпадают до ε (в демо курс прогона = курс монитора)
   const d = M.forwardCarryDemo({}), k = 1 / M.fx.USD;
   const ru = C.rows(d, { pos: M.pos, k, books: M.book, repr: 'USD' }).concat(C.cashRows(d, { k, books: M.book }));

@@ -187,7 +187,6 @@
       s.net = s.nFundingMissing || s.nNoCarryNoFunding || !s.nCovered ? null : s.carry + s.funding;
     }
     if (!s.nCovered && s.netKnown === 0) s.netKnown = null;
-    if (!s.nNotCovered) s.fundingNoCarry = null;  // позиций без прогноза нет — «—», как у сервера
     s.carryDv01 = C.perDv01(s.carryFix, s.nFix ? s.dv01 : null);
     s.carryCs01Flt = C.perDv01(s.carryFlt, s.nFlt ? s.cs01Flt : null);
     return s;
@@ -201,13 +200,19 @@
     if (s.nNoCarryNoFunding) { s.fundingNoCarry = null; s.fundingRest = null; s.funding = null; s.net = null; }
     return s;
   };
+  // позиций без прогноза нет: сумма по пустому множеству — 0, не «—» (сервер тогда отдаёт fundingNoCarry null);
+  // «—» — только когда такие позиции есть и у них фондирование null (strictNoCarry)
+  C.emptyNoCarry = s => {
+    if (s.fundingOk && s.fundingNoCarry == null && !s.nNoCarryNoFunding && s.funding != null) s.fundingNoCarry = 0;
+    return s;
+  };
   C.withServer = function (s, g, k) {
     if (!g) return s;
     const m = v => v == null ? null : v * (k == null ? 1 : k);
     return Object.assign(s, { carry: m(g.carry), spreadRoll: m(g.spreadRoll), fundingCovered: m(g.funding), fundingNoCarry: m(g.fundingNoCarry),
       fundingCash: m(g.fundingBookLevel), fundingRest: g.fundingTotal == null ? null : m((g.fundingNoCarry || 0) + (g.fundingBookLevel || 0)),
       funding: m(g.fundingTotal), net: m(g.net), netKnown: m(g.netKnown), nCovered: g.nCovered, nNotCovered: g.nNotCovered, nFundingMissing: g.nCoveredNoFunding,
-      nNoCarryNoFunding: g.nNoCarryNoFunding == null ? s.nNoCarryNoFunding : g.nNoCarryNoFunding, server: true }) && C.strictNoCarry(s);
+      nNoCarryNoFunding: g.nNoCarryNoFunding == null ? s.nNoCarryNoFunding : g.nNoCarryNoFunding, server: true }) && C.strictNoCarry(C.emptyNoCarry(s));
   };
 
   // слагаемые итогов колонок таблицы (K.table: NaN → «—»), по тому же правилу, что C.sums и сервер:
