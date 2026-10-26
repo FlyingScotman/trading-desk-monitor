@@ -7,6 +7,7 @@
 //   node tests/js/rates_core_201.test.js
 'use strict';
 const fs = require('fs'), path = require('path'), vm = require('vm'), assert = require('assert');
+const { loadRun } = require('./fixtures/concepts_run');
 const P = f => fs.readFileSync(path.join(__dirname, '..', '..', 'prototypes', f), 'utf8');
 let n = 0; const t = (name, f) => { f(); n++; console.log('ok', name); };
 const NB = 11, at = (k, v) => Array.from({ length: NB }, (_, i) => i === k ? v : 0);
@@ -34,12 +35,12 @@ function load(opts) {
   ctx.window = ctx;
   vm.createContext(ctx);
   if (opts.real) {
-    vm.runInContext(P('data.js'), ctx);
-    if (opts.mutate) opts.mutate(ctx.window.DESK);
+    loadRun(ctx);
+    if (opts.mutate) opts.mutate(ctx.window.CONCEPTS_RUN);
     vm.runInContext(P('concepts/lib/real.js'), ctx);
   } else vm.runInContext(P('concepts/lib/mock.js'), ctx);
   vm.runInContext(P('concepts/lib/kit.js'), ctx);
-  return { M: ctx.window.MOCK, K: ctx.window.KIT, D: ctx.window.DESK, asked };
+  return { M: ctx.window.MOCK, K: ctx.window.KIT, D: ctx.window.CONCEPTS_RUN, asked };
 }
 
 // строки прогона в форме tdm_run.direct_row (backend valuation/derivatives.py: _swap_fact, _repo_fact, index_fixings)
@@ -285,6 +286,19 @@ t('C02: панель свопов и РЕПО — через K.ratesCorePanel и
   const c02 = P('concepts/c02-risk-ladder.html');
   assert.ok(c02.includes('id="rates"') && /K\.ratesCorePanel\(document\.querySelector\('#rates \.bd'\)\)/.test(c02));
   assert.ok(/K\.onFilter\(\(\) => \{[^}]*drawRates\(\)/.test(c02));
+});
+
+t('#291: причина неточной оценки — из позиции модели (p.estReason, extra прогона), не из window.DESK', () => {
+  const { M } = load({ real: true, mutate: D => {
+    D.positions[0].extra = { reason: 'нет котировки' };
+    D.positions[1].extra = { assumptions: ['фиксинг перенесён', 'условия предварительные'] };
+  } });
+  const [a, b, c] = M.positions;
+  assert.strictEqual(a.estReason, 'нет котировки');
+  assert.strictEqual(b.estReason, 'фиксинг перенесён; условия предварительные');
+  assert.strictEqual(c.estReason, '');
+  const kit = P('concepts/lib/kit.js');
+  assert.ok(!/window\.DESK\b(?!_)/.test(kit) && /esc\(p\.estReason/.test(kit), 'K.posList берёт причину из p.estReason');
 });
 
 console.log(n + ' tests passed');

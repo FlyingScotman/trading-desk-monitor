@@ -5,6 +5,7 @@
 // kit.js грузится в vm с заглушкой DOM: K.table пишет разметку в innerHTML, её и проверяем.
 'use strict';
 const fs = require('fs'), path = require('path'), vm = require('vm'), assert = require('assert');
+const { loadRun } = require('./fixtures/concepts_run');
 const P = f => fs.readFileSync(path.join(__dirname, '..', '..', 'prototypes', f), 'utf8');
 let n = 0; const t = (name, f) => { f(); n++; console.log('ok', name); };
 const NB = 11, at = (k, v) => Array.from({ length: NB }, (_, i) => i === k ? v : 0);
@@ -21,7 +22,7 @@ function load(data) {
     localStorage: { getItem() { return null; }, setItem() {} }, getComputedStyle: () => ({ getPropertyValue: () => '#888' }), MutationObserver: class { observe() {} } };
   ctx.window = ctx;  // как в браузере: window.INSTR — это и глобальный INSTR (карточка kit.js)
   vm.createContext(ctx);
-  if (data) { vm.runInContext(P('data.js'), ctx); data(ctx.window.DESK); vm.runInContext(P('concepts/lib/real.js'), ctx); }
+  if (data) { data(loadRun(ctx)); vm.runInContext(P('concepts/lib/real.js'), ctx); }
   else vm.runInContext(P('concepts/lib/mock.js'), ctx);
   vm.runInContext(P('concepts/lib/kit.js'), ctx);
   vm.runInContext(P('concepts/lib/instr.js'), ctx);

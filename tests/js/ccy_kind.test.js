@@ -2,9 +2,10 @@
 // тип инструмента по одной таблице соответствий, отнесение многовалютных инструментов к валюте (по ногам / по валюте
 // сделки), риск валюты = риск по её кривым, итоги валюты = сумма типов, риск без данных — «без риска», а не 0.
 //   node tests/js/ccy_kind.test.js
-// Демо-прогон window.DESK (prototypes/data.js) через lib/real.js (как прогон из базы), затем lib/instr.js без kit.js.
+// Демо-прогон window.CONCEPTS_RUN (tests/js/fixtures/concepts-run.json) через lib/real.js (как прогон из базы), затем lib/instr.js без kit.js.
 'use strict';
 const fs = require('fs'), path = require('path'), vm = require('vm'), assert = require('assert');
+const { loadRun } = require('./fixtures/concepts_run');
 const P = f => fs.readFileSync(path.join(__dirname, '..', '..', 'prototypes', f), 'utf8');
 let n = 0; const t = (name, f) => { f(); n++; console.log('ok', name); };
 const same = (a, b, msg) => assert.strictEqual(JSON.stringify(a), JSON.stringify(b), msg);
@@ -13,8 +14,8 @@ const near = (a, b, msg) => assert.ok(Math.abs(a - b) <= 1e-6 * Math.max(1, Math
 function load(mutate) {
   const ctx = { window: {}, URLSearchParams, console, location: { href: 'http://x/' } };
   vm.createContext(ctx);
-  vm.runInContext(P('data.js'), ctx);
-  if (mutate) mutate(ctx.window.DESK);
+  loadRun(ctx);
+  if (mutate) mutate(ctx.window.CONCEPTS_RUN);
   vm.runInContext(P('concepts/lib/real.js'), ctx);
   const M = ctx.window.MOCK;
   M.toRepr = {}; Object.keys(M.fx).forEach(c => M.toRepr[c] = M.fx[c]);  // как kit.js в рублях
