@@ -110,6 +110,30 @@ test('настройка порогов (#255): меню вида, 0 выклю�
   assert.deepStrictEqual([K.runAge().fresh_min, K.runAge().max_days], [90, 3]);
 });
 
+test('max_days — календарные дни по МСК, не 72 часа (#255)', () => {
+  const pub = '2026-10-22T09:00:00+03:00';  // четверг утром
+  assert.strictEqual(K.runBadge({ publishedAt: pub }, msk('2026-10-25T23:30:00')).level, 'ok', 'воскресенье: 3 дня, хотя прошло 86 ч');
+  assert.strictEqual(K.runBadge({ publishedAt: '2026-10-22T23:50:00+03:00' }, msk('2026-10-26T00:10:00')).level, 'stale', 'понедельник 00:10: 4 дня, хотя прошло 72 ч 20 мин');
+  assert.strictEqual(K.runBadge({ publishedAt: '2026-10-22T23:50:00+03:00' }, msk('2026-10-25T23:59:00')).level, 'ok');
+  // граница дня — по МСК, а не по UTC: 22.10 01:00 МСК = 21.10 22:00 UTC
+  assert.strictEqual(K.runBadge({ publishedAt: '2026-10-22T01:00:00+03:00' }, msk('2026-10-25T22:00:00')).level, 'ok');
+});
+
+test('setRunAge меняет только переданный порог и хранит только отличия от умолчания', () => {
+  const store = {}, KEY = 'tdm.view.v1:ui:runage';
+  const { K: K1 } = loadKit(null, store);
+  K1.setRunAge({ fresh_min: 45 });
+  assert.deepStrictEqual(JSON.parse(store[KEY]), { fresh_min: 45 }, 'дни не записаны');
+  K1.setRunAge({ max_days: 5 });
+  assert.deepStrictEqual(JSON.parse(store[KEY]), { fresh_min: 45, max_days: 5 }, 'минуты не тронуты');
+  K1.setRunAge({ fresh_min: '90' });
+  assert.deepStrictEqual(JSON.parse(store[KEY]), { max_days: 5 }, 'вернули умолчание — ключ убран');
+  K1.RUN_AGE.fresh_min = 60;  // умолчание сменили в новой версии — дошло, раз минуты не меняли
+  assert.strictEqual(K1.runAge().fresh_min, 60);
+  K1.setRunAge({ max_days: 3 });
+  assert.strictEqual(KEY in store, false, 'всё по умолчанию — записи нет');
+});
+
 test('настройка порогов хранится в localStorage (tdm.view.v1:ui:runage); испорченное значение — умолчание', () => {
   const store = {};
   const { K: K1 } = loadKit(null, store);
