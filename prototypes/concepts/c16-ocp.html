@@ -97,7 +97,7 @@
     const rp = panel('Сверка: отчёт против позиций', 'разница = отчёт − слагаемые, входящие в отчёт; щелчок — разложение');
     rp.querySelector('.bd').classList.add('flush', 'scroll');
     const R = d.reconciliation || [];
-    rp.querySelector('.bd').innerHTML = R.length ? '<table class="k-tbl"><thead><tr><th>Уровень</th><th>Валюта</th><th class="n">Отчёт</th><th class="n">Из позиций (в отчёте)</th><th class="n">Разница</th><th class="n">Вне отчёта</th><th>Объяснение</th></tr></thead><tbody>' +
+    rp.querySelector('.bd').innerHTML = R.length ? '<table class="k-tbl" data-vk="c16-recon" data-title="Сверка ОВП: отчёт против позиций"><thead><tr><th>Уровень</th><th>Валюта</th><th class="n">Отчёт</th><th class="n">Из позиций (в отчёте)</th><th class="n">Разница</th><th class="n">Вне отчёта</th><th>Объяснение</th></tr></thead><tbody>' +
       R.map((x, i) => {
         const out = Object.entries(x.not_in_report || {});
         return '<tr class="row' + (x.over ? ' over' : '') + '" tabindex="0" aria-expanded="false" data-r="' + i + '"><td>' + scopeOf(x) + (x.in_report_file ? '' : ' <span class="mut3" title="в отчёте нет строки этой валюты: 0">нет строки</span>') + '</td><td>' + esc(x.ccy) + '</td>' +
@@ -124,7 +124,7 @@
     const tp = panel('Перенос ОВП', 'до переноса → перенесено → осталось; курс и дата — из сделки');
     tp.querySelector('.bd').classList.add('flush', 'scroll');
     const T = d.transfers || [];
-    tp.querySelector('.bd').innerHTML = T.length ? '<table class="k-tbl"><thead><tr><th>Книга → куда</th><th>Валюта</th><th class="n">До</th><th class="n">Перенесено</th><th class="n">Осталось</th><th class="n">Курс</th><th>Валютирование</th></tr></thead><tbody>' +
+    tp.querySelector('.bd').innerHTML = T.length ? '<table class="k-tbl" data-vk="c16-transfers" data-title="Перенос ОВП"><thead><tr><th>Книга → куда</th><th>Валюта</th><th class="n">До</th><th class="n">Перенесено</th><th class="n">Осталось</th><th class="n">Курс</th><th>Валютирование</th></tr></thead><tbody>' +
       T.map(x => '<tr class="' + (x.over ? 'over' : '') + '"><td>' + esc(x.book_id) + ' → ' + esc(x.ocp_to || '—') + '</td><td>' + esc(x.ccy) + '</td><td class="n">' + amt(x.before) + '</td><td class="n">' + (x.deals.length ? amt(x.transferred) : '<span class="mut3" title="сделок переноса нет">нет сделок</span>') + '</td><td class="n"><b>' + amt(x.after) + '</b></td>' +
         '<td class="n">' + (x.rate != null ? f.n(x.rate, 4) : '<span class="mut3">—</span>') + '</td><td>' + (x.value_date ? f.date(x.value_date) : '<span class="mut3">—</span>') + '</td></tr>').join('') + '</tbody></table>'
       : '<div class="k-empty">Книг с переносом ОВП нет</div>';
@@ -135,12 +135,13 @@
     bp.querySelector('.bd').classList.add('flush', 'scroll');
     const outside = new Set((d.outside_report || []).map(x => x.book_id + '|' + x.ccy));
     const B = d.by_book || [];
-    bp.querySelector('.bd').innerHTML = B.length ? '<table class="k-tbl"><thead><tr><th>Книга</th><th>Валюта</th><th class="n">ОВП</th><th>Слагаемые</th></tr></thead><tbody>' +
+    bp.querySelector('.bd').innerHTML = B.length ? '<table class="k-tbl" data-vk="c16-by-book" data-title="ОВП по книгам"><thead><tr><th>Книга</th><th>Валюта</th><th class="n">ОВП</th><th>Слагаемые</th></tr></thead><tbody>' +
       B.map(x => '<tr><td>' + scopeOf(x) + (outside.has(x.book_id + '|' + x.ccy) ? ' <span class="mut3" title="ни одна часть отчёта ОВП не покрывает книгу">вне отчёта</span>' : '') + '</td><td>' + esc(x.ccy) + '</td><td class="n">' + amt(x.total) + '</td>' +
         '<td class="wrap mut">' + keys.filter(k => x.components[k]).map(k => esc(C[k]) + ' ' + f.s(x.components[k], 0)).join(' · ') + '</td></tr>').join('') + '</tbody></table>'
       : '<div class="k-empty">Книг с валютной позицией нет</div>';
     two.appendChild(bp);
     view.appendChild(wrap);
+    K.tableToolsAll(wrap);
   }
 
   // ---------- демо-набор (файл или ?demo=1): вымышленный, форма ответа /api/v1/runs/{id}/ocp ----------
