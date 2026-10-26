@@ -5,8 +5,8 @@
 // края, у вертикального — ниже нижнего; подпись не заходит на подписи категорий (K.barGap) и не уходит за край
 // графика. CSV C03: «Δ цены, % ном.» — число без «+» и без единицы (#110, #131) в любом формате отрицательных. Ошибок
 // консоли нет. Страницы открываются как файлы (file://), данные — демо-набор.
-//   node --test tests/js/ui_pack7.pw.test.js
-// Снимки: UI_PACK7_SHOTS=<папка> node --test tests/js/ui_pack7.pw.test.js
+//   node --test tests/js/ui_pack7_polish.pw.test.js
+// Снимки: UI_PACK7_SHOTS=<папка> node --test tests/js/ui_pack7_polish.pw.test.js
 // Нужен Playwright, который находит require('playwright') (NODE_PATH, как в CI); без него тест пропускается.
 'use strict';
 const test = require('node:test');

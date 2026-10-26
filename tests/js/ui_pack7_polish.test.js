@@ -1,8 +1,8 @@
 // Мониторы (prototypes/concepts): подпись отрицательного столбца бара у его конца — общий помощник K.barEnd в C06, C13
-// и разборе K.drill (#329; геометрия в браузере — ui_pack7.pw.test.js); сверка фикстуры с сервером строже (#337):
+// и разборе K.drill (#329; геометрия в браузере — ui_pack7_polish.pw.test.js); сверка фикстуры с сервером строже (#337):
 // валюта и вид кривой, коды валют в FX, fxDelta и ccy позиции, курсы FX, вложенные структуры extra, сверка
 // EXTRA_KEYS_READ без комментариев real.js.
-//   node tests/js/ui_pack7.test.js
+//   node tests/js/ui_pack7_polish.test.js
 'use strict';
 const fs = require('fs'), path = require('path'), vm = require('vm'), assert = require('assert');
 const { loadRun, unknownKeys, jsCode, SERVER_KEYS } = require('./fixtures/concepts_run');
