@@ -18,12 +18,12 @@ const ORIGIN = 'http://desk.test';
 const TYPES = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png' };
 const PAGES = fs.readdirSync(path.join(ROOT, 'concepts')).filter(f => /^c\d\d-.*\.html$/.test(f));
 
-// run: { status, body } ответа /concepts-run.js или 'abort' (сеть); data — то же для /concepts-data.js;
-// auth — тело ответа /api/v1/auth/state, { status } или 'hang' (не отвечает); store — localStorage до загрузки;
-// viewport — размер окна
+// run: { status, body } ответа /concepts-run.js или 'abort' (сеть), либо функция (URL запроса) → такой ответ;
+// data — то же для /concepts-data.js; auth — тело ответа /api/v1/auth/state, { status } или 'hang' (не отвечает);
+// store — localStorage до первой загрузки (один раз: перезагрузка его не восстанавливает); viewport — размер окна
 async function open(browser, file, { run, data, auth, store, viewport, query = '' } = {}) {
   const ctx = await browser.newContext(viewport ? { viewport } : {}), pg = await ctx.newPage();
-  if (store) await ctx.addInitScript(s => { for (const k in s) localStorage.setItem(k, s[k]); }, store);
+  if (store) await ctx.addInitScript(s => { if (sessionStorage.getItem('test.store')) return; sessionStorage.setItem('test.store', '1'); for (const k in s) localStorage.setItem(k, s[k]); }, store);
   const errors = [];
   pg.on('pageerror', e => errors.push('pageerror: ' + e.message));
   pg.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push('console: ' + m.text()); });
@@ -31,8 +31,9 @@ async function open(browser, file, { run, data, auth, store, viewport, query = '
     const u = new URL(route.request().url());
     if (u.origin !== ORIGIN) return route.abort();
     if (u.pathname === '/concepts-run.js') {
-      if (run === 'abort') return route.abort('connectionrefused');
-      return route.fulfill(Object.assign({ status: 200, contentType: 'application/javascript' }, run || { body: 'window.CONCEPTS_RUN = ' + RUN + ';' }));
+      const spec = typeof run === 'function' ? run(u) : run;
+      if (spec === 'abort') return route.abort('connectionrefused');
+      return route.fulfill(Object.assign({ status: 200, contentType: 'application/javascript' }, spec || { body: 'window.CONCEPTS_RUN = ' + RUN + ';' }));
     }
     if (u.pathname === '/concepts-data.js') {
       if (data === 'abort') return route.abort('connectionrefused');
@@ -94,13 +95,20 @@ test('#309 и #308 в браузере', { skip: pw ? false : 'нет Playwright
       await pg.click('.k-loadfail [data-a=latest]');
       await pg.waitForURL(u => !/run_id/.test(u));
       await ctx.close();
-      // выбор только из localStorage (адрес без run_id): ссылка тоже есть, щелчок очищает desk.run.v1
-      ({ pg, ctx } = await open(browser, 'c02-risk-ladder.html', { run: { status: 500, body: '' }, store: { 'desk.run.v1': saved } }));
-      assert.ok((await look(pg)).fail.includes('прогон #7'));
-      await pg.evaluate(() => { document.querySelector('.k-loadfail [data-a=latest]').href = '#stay'; });  // без перехода: addInitScript снова записал бы выбор
-      await pg.click('.k-loadfail [data-a=latest]');
-      assert.strictEqual(await pg.evaluate(() => localStorage.getItem('desk.run.v1')), null);
-      await ctx.close();
+      // выбор только из localStorage, в адресе #… (C04, C06): ссылка совпадает с текущим адресом — щелчок всё равно
+      // перезагружает страницу (не переход к якорю), очищает desk.run.v1 и открывает последний прогон
+      for (const hash of ['#x', '']) {
+        const run7 = u => u.searchParams.get('run_id') === '7' ? { status: 500, body: '' } : null;  // прогон #7 не отдаётся, последний — да
+        ({ pg, ctx } = await open(browser, 'c02-risk-ladder.html' + hash, { run: run7, store: { 'desk.run.v1': saved } }));
+        assert.ok((await look(pg)).fail.includes('прогон #7'), hash);
+        await Promise.all([pg.waitForEvent('load'), pg.click('.k-loadfail [data-a=latest]')]);
+        await pg.waitForTimeout(300);
+        const s = await look(pg);
+        assert.strictEqual(s.source, 'real', hash + ': открыт последний прогон');
+        assert.strictEqual(s.fail, null, hash);
+        assert.strictEqual(await pg.evaluate(() => localStorage.getItem('desk.run.v1')), null, hash);
+        await ctx.close();
+      }
     });
     await t.test('auth/state не отвечает: полоса уже на экране, остаётся «Данные не загрузились»', async () => {
       const t0 = Date.now();
@@ -197,6 +205,17 @@ test('#309 и #308 в браузере', { skip: pw ? false : 'нет Playwright
         for (const [name, d] of ser) assert.ok(d.every(v => v == null || v > 1), file + ' ' + name + ': ' + d);
         const ruo = ser.filter(x => /RUONIA/.test(x[0]));
         assert.ok(ruo.length && ruo.every(x => x[1].every(v => v == null)), file + ': RUONIA нет — и «вчера» нет');
+        if (file.startsWith('c09')) {  // C09: «ОФЗ вчера» считается и без RUONIA (КБД − Δ ОФЗ); режимы «изм. дня» и «базис ОФЗ»
+          const ofz = ser.find(x => x[0] === 'ОФЗ')[1], ofzY = ser.find(x => /^ОФЗ /.test(x[0]))[1];
+          assert.ok(ofzY.every((v, k) => (v == null) === (ofz[k] == null)), 'C09 ОФЗ вчера: ' + ofzY);
+          for (const mode of ['изм. дня', 'базис ОФЗ']) {
+            await pg.locator('#cCurve button', { hasText: mode }).click(); await pg.waitForTimeout(200);
+          }
+          const bas = await pg.evaluate(() => echarts.getInstanceByDom(document.getElementById('curves')).getOption().series
+            .map(x => [x.name, x.data.map(v => v && typeof v === 'object' ? v.value : v)]));
+          const today = bas.find(x => /базис/.test(x[0]))[1], yest = bas.find(x => x[0] === 'вчера')[1];
+          assert.ok(yest.every((v, k) => (v == null) === (today[k] == null)), 'C09 базис: «вчера» только там, где есть «сегодня»: ' + yest);
+        }
         assert.deepStrictEqual(errors, [], file);
         await ctx.close();
       }

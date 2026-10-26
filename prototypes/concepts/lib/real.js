@@ -730,7 +730,13 @@
       '<a data-a="index" href="index.html" style="' + btn + '">◂ мониторы</a></div>';
     box.querySelector('[data-a=retry]').onclick = () => location.reload();
     const latest = box.querySelector('[data-a=latest]');
-    if (latest) latest.onclick = () => { try { localStorage.removeItem('desk.run.v1'); } catch (e) { } };  // переход — по href
+    // выбор прогона снять, затем открыть страницу заново: если прогон был выбран только в desk.run.v1, ссылка совпадает
+    // с текущим адресом, и с #… в нём браузер не перезагрузил бы страницу, а лишь перешёл к якорю
+    if (latest) latest.onclick = e => {
+      try { localStorage.removeItem('desk.run.v1'); } catch (err) { }
+      e.preventDefault();
+      if (latest.href === location.href) location.reload(); else location.assign(latest.href);
+    };
     Array.from(document.body.children).forEach(n => { if (n.tagName !== 'SCRIPT') n.style.display = 'none'; });
     document.body.appendChild(wrap);
     console.warn('concepts: данные не загрузились — ' + what);

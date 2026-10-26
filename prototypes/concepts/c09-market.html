@@ -186,7 +186,8 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
     const yd0 = c => c.pts.map((v, k) => v == null ? null : v - c.chg[k] / 100);
     const histId = { 'RUB RUONIA': 'RUB RUONIA', 'RUB KEY': 'RUB KEY' };
     const yd = c => (histId[c.id] && hcAt(c.id, S.per)) || yd0(c);
-    const ofzY = hcAt('OFZ', S.per) || M.pillars.map((_, k) => { const r = yd0(R)[k]; return r == null || B.pts[k] == null ? null : r + (B.pts[k] - B.chg[k]) / 100; });
+    // ОФЗ вчера = КБД сегодня − Δ ОФЗ (Δ RUONIA + Δ базиса, б.п.): не зависит от того, есть ли в прогоне точки RUONIA (#308)
+    const ofzY = hcAt('OFZ', S.per) || M.ofzCurve.map((v, k) => v == null ? null : v - (R.chg[k] + B.chg[k]) / 100);
     if (S.curve === 'hist' && HC['RUB RUONIA']) {  // как менялись кривые: 1Y и 5Y RUONIA OIS, КС-свопов и КБД за два года
       const lines = [['RUONIA', HC['RUB RUONIA'], K.curveColors['RUB RUONIA']], ['КС', HC['RUB KEY'], K.curveColors['RUB KEY']], ['ОФЗ', HC.OFZ, '#9b7bff']].filter(x => x[1]);
       const dates = [...new Set(lines.flatMap(([, c]) => c.series.dates))].sort();
