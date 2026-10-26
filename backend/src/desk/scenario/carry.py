@@ -80,6 +80,9 @@ METHOD = "desk-forward-carry-v1"
 HORIZONS = (("1M", 1), ("3M", 3), ("6M", 6), ("1Y", 12))
 """The named horizons (window.DESK ``CARRY_HORIZONS``): months after the run date."""
 KS_MODES = ("flat", "steps")
+MEETINGS_MONTHS = 12
+"""The CBR meetings listed (``meetings``): those taking effect within this many months of the run date, or to the
+horizon when it is later; the steps apply to those within the horizon."""
 SPREAD_MODES = ("held", "curve")
 """``held``: each bond's spread is held (core's horizon carry); ``curve``: it rolls along its peers' curve
 (``spread_rolls``, the owner's answer of 26.10)."""
@@ -358,7 +361,10 @@ def _forward_funding(con: psycopg.Connection, run: Mapping[str, Any], ctx: EodCo
         pid = r["position_id"]
         if by_pos.get(pid):
             lines = by_pos[pid]
+            ccy = (r.get("fact") or {}).get("ccy")
             st = {"state": FUNDED, "amount": math.fsum(x.interest_reporting for x in lines),
+                  "amountCcy": math.fsum(x.interest for x in lines) if ccy and all(x.ccy == ccy for x in lines)
+                  else None,
                   "source": lines[0].rule_source, "ruleId": "; ".join(dict.fromkeys(x.rule_id or "" for x in lines))
                   or None, "rateExpr": "; ".join(dict.fromkeys(x.rate_expr for x in lines)),
                   "ratePct": lines[-1].days[-1].rate * 100}
@@ -377,7 +383,7 @@ def _forward_funding(con: psycopg.Connection, run: Mapping[str, Any], ctx: EodCo
                    else f"тип книги {bt or '—'}: база {b.value if b else '—'}"
                    if (r.get("fact") or {}).get("instr_type") == "BOND"
                    else "не облигация: фондируется по правилам книги (остатки ДС), а не по MV")
-            st = {"state": NOT_FUNDED, "amount": 0.0, "source": "none", "reason": why}
+            st = {"state": NOT_FUNDED, "amount": 0.0, "amountCcy": 0.0, "source": "none", "reason": why}
         per[pid] = st
     notes = [(f"фондирование {on} -> {hdate} ({len(period.days)} дн.): позиции и остатки ДС держатся до горизонта, "
               "новых и закрытых нет; FX по курсам ЦБ на дату прогона; ставки — как в прогоне: правила адаптера и "
@@ -398,12 +404,16 @@ def _forward_funding(con: psycopg.Connection, run: Mapping[str, Any], ctx: EodCo
 
 # ---------------------------------------------------------------------------------------------- the response
 SUMS = {"carry": "carry", "coupon": "coupon", "pull": "pull", "rolldown": "rolldown", "spreadRoll": "spread_roll"}
-"""Response key -> ``PositionCarry`` field summed by group."""
+"""Response key -> ``PositionCarry`` field summed over a group's covered positions."""
+CCY_KEYS = ("carry", "coupon", "pull", "rolldown", "spreadRoll", "funding", "net")
+"""A position's amounts also given in its currency (``inCcy``)."""
 
 
 def _group() -> dict[str, Any]:
-    return {**dict.fromkeys((*SUMS, "funding", "fundingNoCarry", "net")), "fundingBookLevel": 0.0,
-            "nPositions": 0, "nCovered": 0, "nNotCovered": 0, "nFunded": 0, "nFundingMissing": 0}
+    return {**dict.fromkeys((*SUMS, "dv01", "cs01", "funding", "fundingNoCarry", "fundingBookLevel", "fundingTotal",
+                             "net", "netKnown")),
+            "nPositions": 0, "nCovered": 0, "nNotCovered": 0, "nFunded": 0, "nFundingMissing": 0,
+            "nCoveredNoFunding": 0}
 
 
 def _add(g: dict[str, Any], k: str, v: float | None) -> None:
@@ -412,20 +422,40 @@ def _add(g: dict[str, Any], k: str, v: float | None) -> None:
 
 
 def _close(g: dict[str, Any], funding_ok: bool) -> dict[str, Any]:
-    if funding_ok and g["fundingBookLevel"]:
-        _add(g, "funding", g["fundingBookLevel"])
-    g["net"] = None if g["carry"] is None or g["funding"] is None else g["carry"] + g["funding"]
+    """The group's funding total and net (``assemble``): ``fundingTotal = funding + fundingNoCarry +
+    fundingBookLevel`` and ``net = carry + fundingTotal``, null (rule B1) while the funding is not computed, nothing is
+    covered or a covered position's funding is unknown; ``netKnown`` then still sums the positions with both."""
+    if funding_ok:
+        g["fundingBookLevel"] = g["fundingBookLevel"] or 0.0
+        g["fundingTotal"] = math.fsum(v or 0.0 for v in (g["funding"], g["fundingNoCarry"], g["fundingBookLevel"]))
+    if funding_ok and g["carry"] is not None and g["funding"] is not None and not g["nCoveredNoFunding"]:
+        g["net"] = g["carry"] + g["fundingTotal"]
     return g
 
 
-def assemble(run: Mapping[str, Any], hdate: date, ks: str, used: Sequence[tuple[Meeting, float]],
+def _fx_rate(fact: Mapping[str, Any]) -> float | None:
+    """RUB per unit of the position's currency the run used (its ``mv_rub`` / ``mv`` pair, as the monitor's
+    ``mvRub`` / ``mv``); 1 for RUB, None when the row says neither."""
+    if (fact.get("ccy") or "RUB") == "RUB":
+        return 1.0
+    mv, rub = fact.get("mv"), fact.get("mv_rub")
+    return float(rub) / float(mv) if mv and rub is not None else None
+
+
+def assemble(run: Mapping[str, Any], hdate: date, ks: str, used: Sequence[tuple[Meeting, float, bool]],
              carries: Sequence[PositionCarry], funding: ForwardFunding, entity_of: Mapping[str, str | None],
              kind_of: Callable[[dict[str, Any] | None], str | None], key_rate: list[dict[str, Any]],
              notes: Sequence[str]) -> dict[str, Any]:
-    """The response body: per position, the totals by book, entity, currency and instrument kind and overall. A
-    group's ``carry`` sums its covered positions, its ``funding`` all of its funding (positions and, for a book, an
-    entity, a currency and the total, the lines without a position: ``fundingBookLevel``), ``net = carry + funding``
-    (null while either is); ``fundingNoCarry`` is the part of ``funding`` of positions without a carry forecast."""
+    """The response body: per position, the totals by book, entity, currency and instrument kind and overall.
+
+    A group's ``carry`` (and its parts) sums its covered positions; its funding is split in three, so that
+    ``net = carry + funding + fundingNoCarry + fundingBookLevel`` (``fundingTotal`` the last three, a null part 0):
+    ``funding`` of its covered positions, ``fundingNoCarry`` of its positions without a carry forecast,
+    ``fundingBookLevel`` of the lines without a position (cash balances; a book, an entity, a currency and the total
+    have them). ``net`` is null (rule B1) while the funding is not computed or a covered position's funding is unknown
+    (``nCoveredNoFunding``); ``netKnown`` sums ``carry + funding`` of the positions that have both. ``dv01`` and
+    ``cs01`` sum every position of the group that has them, as the monitor's totals. ``used``: (meeting, step bp,
+    within the horizon)."""
     ok = funding.status == COMPUTED
     positions = []
     groups: dict[str, dict[str, dict[str, Any]]] = {k: defaultdict(_group) for k in ("book", "entity", "ccy", "kind")}
@@ -436,9 +466,19 @@ def assemble(run: Mapping[str, Any], hdate: date, ks: str, used: Sequence[tuple[
         amount = f.get("amount") if ok else None
         net = None if c.carry is None or amount is None else c.carry + amount
         ent, ccy, kind = entity_of.get(c.book_id), fact.get("ccy"), kind_of(c.fact) if c.fact else None
+        dv01 = fact.get("dv01")
+        cs01 = fact.get("cs01") or fact.get("ofz_spr01") if c.fact else None
+        rate = _fx_rate(fact) if c.fact else None
+        rub = {"carry": c.carry, "coupon": c.coupon, "pull": c.pull, "rolldown": c.rolldown,
+               "spreadRoll": c.spread_roll, "funding": amount, "net": net}
+        in_ccy = {k: None if v is None or not rate else v / rate for k, v in rub.items()}
+        if ok and f.get("amountCcy") is not None:  # the funding lines' own interest in the currency
+            in_ccy["funding"] = f["amountCcy"]
+            in_ccy["net"] = None if in_ccy["carry"] is None else in_ccy["carry"] + f["amountCcy"]
         positions.append({"positionId": c.position_id, "bookId": c.book_id, "entity": ent, "secid": c.secid,
                           "ccy": ccy, "kind": kind, "quality": c.quality, "carry": c.carry, "coupon": c.coupon,
                           "pull": c.pull, "rolldown": c.rolldown, "funding": amount, "net": net,
+                          "dv01": dv01, "cs01": cs01, "fxRate": rate, "inCcy": in_ccy,
                           "fundingState": f.get("state") or NOT_CONFIGURED, "fundingSource": f.get("source") or "none",
                           "fundingRate": f.get("rateExpr"), "fundingRuleId": f.get("ruleId"),
                           "fundingNote": f.get("note") or f.get("reason"),
@@ -450,23 +490,27 @@ def assemble(run: Mapping[str, Any], hdate: date, ks: str, used: Sequence[tuple[
             g["nCovered" if c.carry is not None else "nNotCovered"] += 1
             for k, attr in SUMS.items():
                 _add(g, k, getattr(c, attr))
+            _add(g, "dv01", dv01)
+            _add(g, "cs01", cs01)
             if amount is not None:
-                _add(g, "funding", amount)
+                _add(g, "funding" if c.carry is not None else "fundingNoCarry", amount)
                 g["nFunded"] += f.get("state") == FUNDED
-                if c.carry is None:
-                    _add(g, "fundingNoCarry", amount)
+                if c.carry is not None:
+                    _add(g, "netKnown", c.carry + amount)
             else:
                 g["nFundingMissing"] += 1
+                g["nCoveredNoFunding"] += c.carry is not None
     if ok:
         for x in funding.book_level:
             for g in (total, groups["book"][x["book"]], groups["entity"][x["entity"] or "—"],
                       groups["ccy"][x["ccy"] or "—"]):
-                g["fundingBookLevel"] += x["amount"]
+                g["fundingBookLevel"] = (g["fundingBookLevel"] or 0.0) + x["amount"]
     return {
         "method": METHOD, "runId": run["run_id"], "asOf": run["business_date"].isoformat(),
         "horizonDate": hdate.isoformat(), "days": (hdate - run["business_date"]).days, "reportingCcy": "RUB",
         "ks": ks, "meetings": [{"date": m.date.isoformat(), "effective": m.effective.isoformat(),
-                                "estimated": m.estimated, "stepBp": bp} for m, bp in used],
+                                "estimated": m.estimated, "stepBp": bp, "inHorizon": inside}
+                               for m, bp, inside in used],
         "keyRatePath": key_rate,
         "fundingStatus": funding.status, "fundingText": funding.text,
         "positions": positions,
@@ -526,12 +570,15 @@ def _forward_carry(con: psycopg.Connection, snapshots: SnapshotDir, run: Mapping
     carries = bond_carry(ctx, rows, hdate)
     curves = spread_rolls(ctx, carries, hdate) if spread == "curve" else {}
     on = run["business_date"]
-    ms = [m for m in meetings(meeting_rows(con, ctx), on) if m.effective <= hdate]
-    if ks == "steps" and len(steps) > len(ms):
-        steps = steps[:len(ms)]  # steps beyond the horizon's meetings do not apply
-    used = [(m, steps[i] if ks == "steps" and i < len(steps) else 0.0) for i, m in enumerate(ms)]
+    # the meetings of a year from the run date (or to the horizon when it is later), in order: step i is the i-th
+    # meeting's; those after the horizon are listed (inHorizon false) and their steps do not apply
+    year = max(hdate, add_months(on, MEETINGS_MONTHS))
+    every = [m for m in meetings(meeting_rows(con, ctx), on) if m.effective <= year]
+    listed = [(m, float(steps[i]) if ks == "steps" and i < len(steps) else 0.0, m.effective <= hdate)
+              for i, m in enumerate(every)]
+    ms = [m for m, _, inside in listed if inside]
     table = FR.fixing_table([ctx.market])
-    rates = _rates(ks, table, on, [bp for _, bp in used], ms)
+    rates = _rates(ks, table, on, [bp for _, bp, inside in listed if inside], ms)
     funding = forward_funding(con, run, ctx, rows, hdate, rates, settings)
     ks0 = table.rate("KEY_RATE", on)
     key_rate = [{"date": on.isoformat(), "keyRatePct": None if ks0 is None else round(ks0 * 100, 6)}]
@@ -540,7 +587,8 @@ def _forward_carry(con: psycopg.Connection, snapshots: SnapshotDir, run: Mapping
     notes = [("кэрри: ядро horizon_portfolio на рынке прогона; спред каждой бумаги откалиброван к цене прогона и "
              "держится, кривые стоят (форварды кривой реализуются, roll-down — форма кривой сохраняется)"),
              ("купон = полученные купоны + изменение НКД; pull = остальное изменение цены по форвардам при том же "
-             "спреде; кэрри = купон + pull + roll-down"),
+             "спреде; " + ("кэрри = купон + pull + roll-down + spreadRoll (roll по кривой спредов)"
+                           if spread == "curve" else "кэрри = купон + pull + roll-down")),
              "купоны флоатеров — прогноз по кривой прогона; путь КС влияет только на фондирование",
              ("без прогноза: оценки ниже точной, отчётные позиции, деривативы (кэрри свопов и РЕПО пока не "
              "подключено)")]
@@ -553,7 +601,7 @@ def _forward_carry(con: psycopg.Connection, snapshots: SnapshotDir, run: Mapping
     else:
         notes.append("КС по заседаниям ЦБ: шаг с даты вступления решения, не ниже 0; RUONIA и другие рублёвые "
                      "индексы денежного рынка идут за КС с сегодняшним спредом к ней (допущение), прочие стоят")
-    if any(m.estimated for m, _ in used):
+    if any(m.estimated for m in ms):
         notes.append("часть дат заседаний ЦБ ориентировочная")
     books = run_books(con, run)
     entity_of = {r["book_id"]: (books.get(r["book_id"]) or {}).get("entity") for r in rows}
@@ -567,7 +615,7 @@ def _forward_carry(con: psycopg.Connection, snapshots: SnapshotDir, run: Mapping
                      "(DM) — спред держится")
     else:
         notes.append("спред держится (spread=held): spreadRoll не считается")
-    out = assemble(run, hdate, ks, used, carries, funding, entity_of, kind_of, key_rate, notes)
+    out = assemble(run, hdate, ks, listed, carries, funding, entity_of, kind_of, key_rate, notes)
     out["spread"] = spread
     out["spreadCurves"] = [c.json() for _, c in sorted(curves.items(), key=lambda x: GRADES.index(x[0]))]
     return out
