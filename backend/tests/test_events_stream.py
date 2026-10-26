@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from types import SimpleNamespace
 
 import psycopg
 import pytest
@@ -142,16 +143,23 @@ def test_a_stream_far_behind_the_shared_window_reads_its_gap_itself(store_url, c
 
 class Spy:
     """``store.connect`` that remembers its connections, and how many were open at once (counted as each one opens,
-    #338: not sampled in a window of time)."""
+    #338: not sampled in a window of time). A connection is listed before it is made: two that open together see
+    each other."""
+
+    OPENING = SimpleNamespace(closed=False)
 
     def __init__(self):
         self.connect, self.cons, self.most = store.connect, [], 0
 
     def __call__(self, url: str):
-        self.most = max(self.most, 1 + sum(not c.closed for c in self.cons))
-        c = self.connect(url)
-        self.cons.append(c)
+        slot = len(self.cons)
+        self.cons.append(self.OPENING)
+        self.most = max(self.most, self.open())
+        self.cons[slot] = c = self.connect(url)
         return c
+
+    def open(self) -> int:
+        return sum(not c.closed for c in self.cons)
 
 
 async def until(cond, timeout: float = 5) -> None:
@@ -182,9 +190,18 @@ def test_open_streams_share_one_reader_and_hold_no_connection_between_reads(stor
     spy = Spy()
     monkeypatch.setattr(routes.store, "connect", spy)
     cfg = routes.StreamConfig(poll_s=0.05, keepalive_s=60, lifetime_s=60)
+    sleep, naps, reader = asyncio.sleep, [], []
+
+    async def nap(delay, *a, **kw):  # the reader's sleep between reads: how many connections are open then (#338)
+        if reader and asyncio.current_task() is reader[0].task:
+            naps.append(spy.open())
+        return await sleep(delay, *a, **kw)
+
+    monkeypatch.setattr(routes.asyncio, "sleep", nap)
 
     async def go():
         feed = routes.Feed(store_url, cfg)
+        reader.append(feed)
         await feed.start()
         streams = [routes.stream(feed, None, None, here, lambda: False) for _ in range(5)]
         got: list[list[str]] = [[] for _ in streams]
@@ -197,8 +214,7 @@ def test_open_streams_share_one_reader_and_hold_no_connection_between_reads(stor
         tasks = [asyncio.create_task(read(i, s)) for i, s in enumerate(streams)]
         await until(lambda: all(got))  # every stream has its greeting: its cursor is set before the run comes
         n = len(spy.cons)
-        await until(lambda: len(spy.cons) >= n + 4)  # quiet: the reader reads again and again (#338: not a window)
-        idle = spy.cons[n:n + 3]  # three reads while every stream waits; each opened after the one before closed
+        await until(lambda: len(spy.cons) >= n + 4)  # quiet: the reader reads and sleeps (#338: not a window)
         await asyncio.to_thread(add, store_url, "run.published", run_id=3, dataset=None, source=None,
                                 detail={"run_type": "EOD"})
         await until(lambda: all(any("run.published" in c for c in g) for g in got))
@@ -206,12 +222,12 @@ def test_open_streams_share_one_reader_and_hold_no_connection_between_reads(stor
             t.cancel()  # the clients leave: the bodies are cancelled
         await asyncio.gather(*tasks, return_exceptions=True)
         await stopped(feed)
-        return feed, got, idle, time.monotonic() - t0
+        return feed, got, time.monotonic() - t0
 
-    feed, got, idle, took = asyncio.run(go())
+    feed, got, took = asyncio.run(go())
     assert all(any(c.startswith("id: ") and "run.published" in c for c in g) for g in got)  # every stream got it
     assert spy.most <= 1  # one reader: one short connection at a time, whatever the number of streams
-    assert len(idle) == 3 and all(c.closed for c in idle)  # a connection per read, closed: none held between reads
+    assert len(naps) >= 3 and set(naps) == {0}  # while the reader sleeps no connection is open: none held
     assert len(spy.cons) <= 6 + took / 0.05 + 2  # reads of one reader (and each start), not five readers
     assert all(c.closed for c in spy.cons)
     assert feed.users == 0 and feed.task is None  # the last stream gone, the reader stops
