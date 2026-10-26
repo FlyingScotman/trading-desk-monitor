@@ -176,6 +176,55 @@
   "spread_buckets",
   "swaps"
  ],
+ "extraNested": {
+  "funding": [
+   "amount_rub",
+   "default_rate",
+   "in_pnl",
+   "lines",
+   "reason",
+   "rule_source",
+   "state"
+  ],
+  "funding.lines[]": [
+   "base",
+   "body_ccy",
+   "ccy",
+   "days",
+   "default_rate",
+   "interest_ccy",
+   "interest_rub",
+   "kind",
+   "rate_expr",
+   "rate_pct",
+   "rule_id",
+   "rule_source"
+  ],
+  "legs[]": [
+   "base_forward_rate",
+   "buy_amount",
+   "buy_ccy",
+   "contract_rate",
+   "core_rate_quote",
+   "df",
+   "fixing_date",
+   "fixing_rate",
+   "fixing_source",
+   "fwd_rate",
+   "leg",
+   "payment_date",
+   "points",
+   "pv_rub",
+   "quote_forward_rate",
+   "rate_quote",
+   "sell_amount",
+   "sell_ccy",
+   "settlement",
+   "settlement_ccy",
+   "trade_id",
+   "value_date"
+  ]
+ },
  "ids": {
   "curvePattern": "^[A-Z]{3}( [A-Z][A-Z0-9]*)*$",
   "curves": [
@@ -189,6 +238,11 @@
    "EUR",
    "RUB",
    "USD"
+  ],
+  "ccyPattern": "^[A-Z]{3}$",
+  "curveKinds": [
+   "bond",
+   "swap"
   ]
  }
 }

@@ -53,6 +53,22 @@ EXTRA_KEYS_READ = ("assumptions", "core", "dm_bp", "funding", "g_spread_bp", "ho
 """The keys of a position's ``extra`` (the row's own, passed through) that ``lib/real.js`` reads, some only on rows
 a plain bond book does not have: an FX deal's ``legs``, a rates-core trade's ``swaps`` / ``repos`` / ``core``, a
 not-valued row's ``reported``. ``tests/js/ui_pack6.test.js`` keeps it equal to what ``real.js`` reads (TDM#324)."""
+EXTRA_NESTED_KEYS = {
+    "funding": ("amount_rub", "default_rate", "in_pnl", "lines", "reason", "rule_source", "state"),
+    "funding.lines[]": ("base", "body_ccy", "ccy", "days", "default_rate", "interest_ccy", "interest_rub", "kind",
+                        "rate_expr", "rate_pct", "rule_id", "rule_source"),
+    "legs[]": ("base_forward_rate", "buy_amount", "buy_ccy", "contract_rate", "core_rate_quote", "df", "fixing_date",
+               "fixing_rate", "fixing_source", "fwd_rate", "leg", "payment_date", "points", "pv_rub",
+               "quote_forward_rate", "rate_quote", "sell_amount", "sell_ccy", "settlement", "settlement_ccy",
+               "trade_id", "value_date"),
+}
+"""The keys of the nested structures of a position's ``extra`` the pages read (TDM#337): ``funding`` an object
+(``publish.funding_run``: a position's state, amount and lines), ``funding.lines[]`` and ``legs[]`` (an FX deal's,
+``valuation.derivatives._ui_leg``) lists of objects. A test checks them against the golden answers and ``_ui_leg``."""
+CURVE_KINDS = ("bond", "swap")
+"""``kind`` of an entry of ``CURVES``: ``publish.tdm_run.curves_reference`` gives a bond curve (the KBD, a proxy, a
+currency's curve) or a swap curve (OIS, key rate, core's foreign curves); a risk curve the reference lacks is a bond
+curve here."""
 NOT_VALUED_KIND = {"otc": ("OTC-деривативы", "Деривативы"), "other": ("Прочее", "Прочее"), "fx": ("Валюта", "FX")}
 """asset_class of an unvalued report row -> (asset class, segment), as compat."""
 INPUT_FIELDS = ("asset_class", "ccy", "source_instrument_id", "source_instrument_name", "isin", "deal_id",

@@ -363,6 +363,65 @@
     const lg = Math.log10(1e9 / parseFloat(s.replace(/[^\d.]/g, '')));
     return isFinite(lg) && lg >= 0 && Math.abs(lg - Math.round(lg)) < 1e-9 ? v => K.tick(v, Math.pow(10, Math.round(lg))) : fmt;
   };
+  // подпись столбца у его конца (#329): label элемента data бара. Подпись ряда с position 'right' ('top') ECharts ставит
+  // справа (сверху) от прямоугольника, а у отрицательного столбца это сторона нуля — подпись налезает на ось и на
+  // соседний положительный столбец. У отрицательного — 'left' (горизонтальный бар) или 'bottom' (вертикальный, vert).
+  // Применение: data: L.map(x => ({ value: x.v, label: K.barEnd(x.v) })) при label ряда { show: true, position: 'right' }
+  K.barEnd = (v, vert) => ({ position: v < 0 ? (vert ? 'bottom' : 'left') : (vert ? 'top' : 'right') });
+  // место под подписи столбцов у их концов (#329): опция графика barFit: true (K.chart) — boundaryGap оси значений
+  // считается по ширине (у вертикального бара — высоте) самой длинной подписи, K.labelWidth, и по размеру области
+  // столбцов: ширина графика без полей grid и самой длинной подписи категорий (высота — без полей и строки подписей
+  // категорий). Подпись отрицательного столбца (K.barEnd) стоит за нулём — слева или снизу, где подписи категорий,
+  // поэтому ось расширяется в эту сторону на ширину подписи; подпись положительного — в поле grid (right / top), ось
+  // расширяется, только если она шире поля. Запас 30 % — на округление оси ECharts (конец оси уходит до деления, и
+  // пикселей на единицу становится меньше). Под подписи — не больше K.BAR_FIT_MAX (40 %) области: столбцы остаются
+  // читаемыми и в узкой плитке (C06 при окне 1024). Подпись, которой при этом места не хватило, не рисуется (label
+  // show: false у элемента) — значение остаётся в подсказке. Размер графика 0 (скрыт) — четверть размаха под
+  // отрицательные, как раньше. K.chart пересчитывает отступ при изменении размера графика
+  K.BAR_FIT_MAX = 0.4;
+  K.barFit = (el, o) => {
+    const one = a => (Array.isArray(a) ? (a.length === 1 ? a[0] : null) : a);
+    const xa = one(o.xAxis), ya = one(o.yAxis);
+    if (!xa || !ya) return o;
+    const vert = xa.type === 'category', cat = vert ? xa : ya, val = vert ? ya : xa;
+    if (cat.type !== 'category' || val.type !== 'value') return o;
+    const g = Object.assign({ left: 0, right: 0, top: 0, bottom: 0 }, o.grid), n = x => (typeof x === 'number' ? x : 0);
+    const catPx = (cat.axisLabel && cat.axisLabel.fontSize) || 12;
+    const catW = Math.max(0, ...(cat.data || []).map(s => K.labelWidth(String(s && typeof s === 'object' ? s.value : s), catPx)));
+    const room = vert ? n(el.clientHeight) - n(g.top) - n(g.bottom) - catPx * 1.3 - 8 : n(el.clientWidth) - n(g.left) - n(g.right) - catW - 8;
+    const need = [0, 0], vals = [], items = [], pad = n(vert ? g.top : g.right);
+    (o.series || []).forEach(s => {
+      if (s.type !== 'bar') return;
+      const lab = s.label || {}, px = lab.fontSize || 12;
+      (s.data || []).forEach((d, i) => {
+        const v = d != null && typeof d === 'object' ? d.value : d;
+        if (v == null || !isFinite(v)) return;
+        vals.push(+v);
+        if (!lab.show || (d && d.label && d.label.show === false)) return;
+        const t = K.htmlText(typeof lab.formatter === 'function' ? lab.formatter({ value: v, data: d }) : v);
+        if (!t) return;
+        const size = (vert ? px * 1.3 : K.labelWidth(t, px)) + 7;  // подпись и её отступ от столбца (5 px)
+        items.push({ s, i, v: +v, size });
+        if (v < 0) need[0] = Math.max(need[0], size); else need[1] = Math.max(need[1], size - pad);
+      });
+    });
+    if (!vals.length || !(need[0] > 0 || need[1] > 0)) return o;
+    const lo = Math.min(0, ...vals), hi = Math.max(0, ...vals), span = Math.max(...vals) - Math.min(...vals);
+    if (!(room > 40) || !(span > 0) || !(hi > lo)) { if (need[0] > 0) val.boundaryGap = ['25%', 0]; return o; }
+    // доли области под подписи (с запасом), из них — запас по краям оси в единицах ряда и доля размаха данных
+    let f = need.map(x => Math.max(0, x) * 1.3 / room);
+    const tot = f[0] + f[1]; if (tot > K.BAR_FIT_MAX) f = f.map(x => x * K.BAR_FIT_MAX / tot);
+    const axis = (hi - lo) / (1 - f[0] - f[1]), a0 = lo - f[0] * axis, a1 = hi + f[1] * axis;
+    val.boundaryGap = f.map(x => (x * axis / span * 100).toFixed(2) + '%');
+    // подпись, которой не хватило места до края оси (до округления ECharts: оно место только добавляет), — без подписи
+    items.forEach(({ s, i, v, size }) => {
+      const free = (v < 0 ? v - a0 : a1 - v) / axis * room + (v < 0 ? 0 : pad);
+      if (free >= size) return;
+      const d = s.data[i];
+      s.data[i] = d != null && typeof d === 'object' ? Object.assign({}, d, { label: Object.assign({}, d.label, { show: false }) }) : { value: d, label: { show: false } };
+    });
+    return o;
+  };
 
   // ---------- тема ----------
   K.theme = () => document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
@@ -1094,10 +1153,10 @@
         body.innerHTML = ''; const el = h('div'); el.style.height = Math.max(240, Math.min(list.length, 30) * 22 + 40) + 'px'; body.appendChild(el);
         const L = list.slice(0, 30).reverse();
         const c = K.chart(el, () => ({
-          grid: { left: 10, right: 60, top: 10, bottom: 20, containLabel: true },
+          barFit: true, grid: { left: 10, right: 60, top: 10, bottom: 20, containLabel: true },
           xAxis: { type: 'value', unit: spec.unit, minInterval: spec.int ? 1 : 0, axisLabel: { formatter: axFmt, hideOverlap: true } }, yAxis: { type: 'category', data: L.map(x => x.label.length > 34 ? x.label.slice(0, 33) + '…' : x.label) },
           tooltip: { trigger: 'axis', valueFormatter: v => fmt(v) },
-          series: [{ type: 'bar', data: L.map(x => ({ value: x.v, itemStyle: { color: dim === 'ccy' ? K.ccyColor(x.k) : dim === 'issuer' ? K.issuerColor(x.p.issuer) : (x.v >= 0 ? css('--pos') : css('--neg')) } })), label: { show: true, position: 'right', formatter: p => fmt(p.value), color: css('--fg-2'), fontSize: 11 } }],
+          series: [{ type: 'bar', data: L.map(x => ({ value: x.v, itemStyle: { color: dim === 'ccy' ? K.ccyColor(x.k) : dim === 'issuer' ? K.issuerColor(x.p.issuer) : (x.v >= 0 ? css('--pos') : css('--neg')) }, label: K.barEnd(x.v) })), label: { show: true, position: 'right', formatter: p => fmt(p.value), color: css('--fg-2'), fontSize: 11 } }],
         }));
         c.on('click', pp => { const x = L[pp.dataIndex]; if (dim === 'pos') K.card(x.k); else K.drill(Object.assign({}, spec, { title: spec.title + ' · ' + x.label, rows: x.n, dim: 'pos' })); });
         o.charts = [c];
@@ -1163,16 +1222,17 @@
   K.axisUnits = axisUnits;
   K.chart = function (el, optFn) {
     if (!window.echarts) { el.innerHTML = '<div class="k-empty">нет echarts</div>'; return { on() { }, dispose() { }, setOption() { } }; }
-    let c = echarts.init(el, null, { renderer: 'canvas' });
+    let c = echarts.init(el, null, { renderer: 'canvas' }), fit = false;
     const build = () => {
       const o = Object.assign(K.chartBase(), typeof optFn === 'function' ? optFn() : optFn);
       axisUnits(o); axisTheme(o.xAxis); axisTheme(o.yAxis);
+      if (o.barFit) { delete o.barFit; fit = true; K.barFit(el, o); }  // место под подписи столбцов (#329)
       if (o.tooltip) o.tooltip = Object.assign({ backgroundColor: css('--panel-2'), borderColor: css('--line-2'), textStyle: { color: css('--fg'), fontSize: 12 }, confine: true }, o.tooltip);
       if (o.legend) o.legend = Object.assign({ textStyle: { color: css('--fg-2') }, inactiveColor: css('--fg-3'), itemWidth: 12, itemHeight: 8 }, o.legend);
       return o;
     };
     c.setOption(build());
-    const ro = new ResizeObserver(() => c.resize()); ro.observe(el);
+    const ro = new ResizeObserver(() => { c.resize(); if (fit && typeof optFn === 'function') c.setOption(build()); }); ro.observe(el);
     const w = { on: (...a) => c.on(...a), setOption: (o, x) => c.setOption(o, x), raw: c, redraw: () => { if (typeof optFn === 'function') c.setOption(build(), true); }, dispose: () => { ro.disconnect(); c.dispose(); const i = K.charts.indexOf(w); if (i >= 0) K.charts.splice(i, 1); }, update: fn => { optFn = fn; c.setOption(build(), true); } };
     K.charts.push(w);
     return w;

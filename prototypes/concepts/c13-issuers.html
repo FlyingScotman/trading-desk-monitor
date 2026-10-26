@@ -152,9 +152,9 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     const sec = agg(p => p.sector), secK = Object.keys(sec).sort((a, b) => Math.abs(sumBy(sec[a], m.val)) - Math.abs(sumBy(sec[b], m.val)));
     if (NOSEC) K.noData(document.getElementById('sector'), 'секторов эмитентов в статике хаба нет'); else {
     const sc = K.chart(document.getElementById('sector'), () => ({
-      grid: { left: 6, right: 40, top: 6, bottom: 4, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: x => m.fmt(x) + ' ' + m.unit },
+      barFit: true, grid: { left: 6, right: 40, top: 6, bottom: 4, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: x => m.fmt(x) + ' ' + m.unit },
       xAxis: { type: 'value', splitNumber: 3, axisLabel: { formatter: x => K.tick(x, m.sc), hideOverlap: true } }, yAxis: { type: 'category', data: secK, axisLabel: { fontSize: 10.5 } },
-      series: [{ type: 'bar', barMaxWidth: 16, data: secK.map(k => sumBy(sec[k], m.val)), itemStyle: { color: K.css('--accent') }, label: { show: true, position: 'right', fontSize: 10, color: K.css('--fg-2'), formatter: p => m.fmt(p.value) } }],
+      series: [{ type: 'bar', barMaxWidth: 16, data: secK.map(k => { const v = sumBy(sec[k], m.val); return { value: v, label: K.barEnd(v) }; }), itemStyle: { color: K.css('--accent') }, label: { show: true, position: 'right', fontSize: 10, color: K.css('--fg-2'), formatter: p => m.fmt(p.value) } }],
     }));
     sc.on('click', pp => K.drill({ title: 'Сектор «' + secK[pp.dataIndex] + '» · ' + m.t, unit: m.unit, fmt: m.fmt, list: sec[secK[pp.dataIndex]], val: m.val, dim: 'issuer' }));
     stripCharts.push(sc); }
@@ -162,9 +162,9 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     if (NORAT) K.noData(document.getElementById('rating'), 'рейтингов в статике хаба нет'); else {
     // подпись столбца — у его конца: у отрицательного (CS01) — снизу, а не над нулём (#321)
     const rc = K.chart(document.getElementById('rating'), () => ({
-      grid: { left: 6, right: 6, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: x => m.fmt(x) + ' ' + m.unit },
+      barFit: true, grid: { left: 6, right: 6, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: x => m.fmt(x) + ' ' + m.unit },
       xAxis: { type: 'category', data: ratK }, yAxis: { type: 'value', axisLabel: { formatter: x => K.tick(x, m.sc) } },
-      series: [{ type: 'bar', barMaxWidth: 30, data: ratK.map(r => { const v = sumBy(rat[r], m.val); return { value: v, itemStyle: { color: (K.RATING_BUCKETS.find(b => b[0] === r) || [])[1] }, label: { position: v < 0 ? 'bottom' : 'top' } }; }), label: { show: true, position: 'top', fontSize: 10, color: K.css('--fg-2'), formatter: p => m.fmt(p.value) } }],
+      series: [{ type: 'bar', barMaxWidth: 30, data: ratK.map(r => { const v = sumBy(rat[r], m.val); return { value: v, itemStyle: { color: (K.RATING_BUCKETS.find(b => b[0] === r) || [])[1] }, label: K.barEnd(v, true) }; }), label: { show: true, position: 'top', fontSize: 10, color: K.css('--fg-2'), formatter: p => m.fmt(p.value) } }],
     }));
     rc.on('click', pp => K.drill({ title: 'Рейтинг ' + ratK[pp.dataIndex] + ' · ' + m.t, unit: m.unit, fmt: m.fmt, list: rat[ratK[pp.dataIndex]], val: m.val, dim: 'issuer' }));
     stripCharts.push(rc); }
