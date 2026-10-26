@@ -3636,6 +3636,99 @@
         ],
         "title": "BookFunding"
       },
+      "CarryCcyAmounts": {
+        "properties": {
+          "carry": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Carry"
+          },
+          "coupon": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coupon"
+          },
+          "pull": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pull"
+          },
+          "rolldown": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rolldown"
+          },
+          "spreadRoll": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spreadroll"
+          },
+          "funding": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Funding"
+          },
+          "net": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net"
+          }
+        },
+        "type": "object",
+        "required": [
+          "carry",
+          "coupon",
+          "pull",
+          "rolldown",
+          "spreadRoll",
+          "funding",
+          "net"
+        ],
+        "title": "CarryCcyAmounts",
+        "description": "A position's amounts in its own currency (``CarryPosition.inCcy``): the RUB amounts at the run's rate\n(``fxRate``, held to the horizon); the funding the lines' own interest when they are in that currency."
+      },
       "CarryMeeting": {
         "properties": {
           "date": {
@@ -3655,7 +3748,13 @@
           "stepBp": {
             "type": "number",
             "title": "Stepbp",
-            "description": "The key-rate step applied from the effective date (0 with ks=flat)"
+            "description": "The key-rate step requested for this meeting, bp (the steps parameter maps to the meetings in this order; 0 with ks=flat or none given); applied from the effective date when inHorizon"
+          },
+          "inHorizon": {
+            "type": "boolean",
+            "title": "Inhorizon",
+            "description": "The meeting takes effect by the horizon (its step applies)",
+            "default": true
           }
         },
         "type": "object",
@@ -3726,7 +3825,7 @@
             },
             "type": "array",
             "title": "Meetings",
-            "description": "The CBR meetings that take effect in (asOf, horizonDate]"
+            "description": "The CBR meetings that take effect within a year of asOf (or to the horizon when later), in order; steps map to them in this order, those with inHorizon false do not apply"
           },
           "keyRatePath": {
             "items": {
@@ -3990,6 +4089,53 @@
             "title": "Net",
             "description": "carry + funding; null while either is"
           },
+          "dv01": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dv01",
+            "description": "The run row's DV01, RUB per bp (as the monitor shows it); null for a position the run did not value"
+          },
+          "cs01": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cs01",
+            "description": "The run row's spread risk, RUB per bp: its CS01 (credit), else its OFZ spread risk (ofz_spr01); for a floater the spread is its DM's"
+          },
+          "fxRate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fxrate",
+            "description": "RUB per unit of ccy the run used (its mv_rub / mv; 1 for RUB), held to the horizon: inCcy = the RUB amounts / fxRate"
+          },
+          "inCcy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CarryCcyAmounts"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "carry, coupon, pull, rolldown, spreadRoll, funding, net in the position's currency (ccy), beside the RUB fields"
+          },
           "fundingState": {
             "type": "string",
             "enum": [
@@ -4144,7 +4290,7 @@
           "code"
         ],
         "title": "CarryPosition",
-        "description": "One position's carry to the horizon, RUB, signed. ``carry = coupon + pull + rolldown`` (core\n``horizon_portfolio``, the spread held, the curves static); null with ``code`` when there is no forecast."
+        "description": "One position's carry to the horizon, RUB, signed (``inCcy``: in its currency).\n``carry = coupon + pull + rolldown`` (core ``horizon_portfolio``, the curves carried), ``+ spreadRoll`` with\nspread=curve; null with ``code`` when there is no forecast."
       },
       "CarrySums": {
         "properties": {
@@ -4157,7 +4303,8 @@
                 "type": "null"
               }
             ],
-            "title": "Carry"
+            "title": "Carry",
+            "description": "Sum over the covered positions (coupon + pull + rolldown + spreadRoll)"
           },
           "coupon": {
             "anyOf": [
@@ -4203,6 +4350,30 @@
             ],
             "title": "Spreadroll"
           },
+          "dv01": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dv01",
+            "description": "Sum of the positions' DV01 (every position that has one)"
+          },
+          "cs01": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cs01",
+            "description": "Sum of the positions' cs01 (every position that has one)"
+          },
           "funding": {
             "anyOf": [
               {
@@ -4213,7 +4384,7 @@
               }
             ],
             "title": "Funding",
-            "description": "All of the group's funding: its positions' and its lines without a position (fundingBookLevel)"
+            "description": "Funding of the covered positions (those with a carry forecast)"
           },
           "fundingNoCarry": {
             "anyOf": [
@@ -4225,11 +4396,31 @@
               }
             ],
             "title": "Fundingnocarry",
-            "description": "The part of funding of positions without a carry forecast"
+            "description": "Funding of the positions without a carry forecast"
           },
           "fundingBookLevel": {
-            "type": "number",
-            "title": "Fundingbooklevel"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fundingbooklevel",
+            "description": "Funding lines without a position (cash balances, an entity's cash): a book, an entity, a currency and the total have them; null while the funding is not computed"
+          },
+          "fundingTotal": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fundingtotal",
+            "description": "funding + fundingNoCarry + fundingBookLevel; null while the funding is not computed"
           },
           "net": {
             "anyOf": [
@@ -4241,7 +4432,19 @@
               }
             ],
             "title": "Net",
-            "description": "carry + funding; null while either is"
+            "description": "carry + fundingTotal; null (rule B1) while the funding is not computed, nothing is covered or a covered position's funding is unknown (nCoveredNoFunding)"
+          },
+          "netKnown": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Netknown",
+            "description": "Sum of carry + funding of the positions that have both: the net of what is known when net is null"
           },
           "nPositions": {
             "type": "integer",
@@ -4262,6 +4465,12 @@
           "nFundingMissing": {
             "type": "integer",
             "title": "Nfundingmissing"
+          },
+          "nCoveredNoFunding": {
+            "type": "integer",
+            "title": "Ncoverednofunding",
+            "description": "Covered positions whose funding is unknown (net is then null)",
+            "default": 0
           }
         },
         "type": "object",
@@ -4281,7 +4490,8 @@
           "nFunded",
           "nFundingMissing"
         ],
-        "title": "CarrySums"
+        "title": "CarrySums",
+        "description": "A group's sums, RUB. ``net = carry + funding + fundingNoCarry + fundingBookLevel`` (= ``carry +\nfundingTotal``; a null part counts 0) whenever ``net`` is not null."
       },
       "ErrorOut": {
         "properties": {

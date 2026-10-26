@@ -206,6 +206,9 @@ def test_forward_funding_flat_and_steps(store_url, ctx, tmp_path):
     assert pf["D1|USD"]["carry"] is None and pf["D1|USD"]["code"] == "market_value"  # an FX row on its report value
     first = up["meetings"][0]
     assert first["stepBp"] == 100 and all(m["stepBp"] == 0 for m in up["meetings"][1:])
+    # TDM#287: a year of meetings, the ones after the 1M horizon listed and not applied
+    assert first["inHorizon"] and any(not m["inHorizon"] for m in up["meetings"])
+    assert all(m["effective"] <= "2027-10-15" for m in up["meetings"])
     n = (H1M - date.fromisoformat(first["effective"])).days + 1
     assert pu["T1|26238"]["funding"] - held["funding"] == pytest.approx(-clean * 0.01 * n / 365)
     assert pu["H1|29008"]["funding"] == pytest.approx(pf["H1|29008"]["funding"])  # the contract rate
@@ -219,9 +222,30 @@ def test_forward_funding_flat_and_steps(store_url, ctx, tmp_path):
     t = flat["totals"]
     assert t["nPositions"] == 5 and t["nCovered"] + t["nNotCovered"] == 5
     assert t["carry"] == pytest.approx(math.fsum(p["carry"] for p in flat["positions"] if p["carry"] is not None))
-    assert t["funding"] == pytest.approx(math.fsum(p["funding"] or 0.0 for p in flat["positions"])
-                                         + sum(cash.values()))
-    assert t["net"] == pytest.approx(t["carry"] + t["funding"])
+    covered = [p for p in flat["positions"] if p["carry"] is not None]
+    assert t["funding"] == pytest.approx(math.fsum(p["funding"] for p in covered))
+    assert t["fundingNoCarry"] == pytest.approx(math.fsum(p["funding"] or 0.0 for p in flat["positions"]
+                                                          if p["carry"] is None))
+    assert t["fundingBookLevel"] == pytest.approx(sum(cash.values()))
+    assert t["netKnown"] == pytest.approx(math.fsum(p["net"] for p in covered))
+    for g in [t, *(v for k in ("byBook", "byEntity", "byCcy", "byKind") for v in flat[k].values())]:
+        # TDM#287: the identity of every group, the null parts 0
+        parts = (g["funding"] or 0.0) + (g["fundingNoCarry"] or 0.0) + g["fundingBookLevel"]
+        assert g["fundingTotal"] == pytest.approx(parts)
+        if g["net"] is not None:
+            assert g["net"] == pytest.approx(g["carry"] + parts) and g["nCoveredNoFunding"] == 0
+        else:
+            assert g["carry"] is None  # every covered position is funded here: only a group without a forecast
+    assert t["net"] is not None and t["dv01"] == pytest.approx(math.fsum(p["dv01"] or 0.0 for p in flat["positions"]))
+    ofz = pf["T1|26238"]  # the monitor's DV01, the OFZ spread risk as cs01; a RUB position in RUB
+    with store.connect(store_url) as con:
+        fact = con.execute("SELECT fact FROM run_position WHERE run_id = %s AND position_id = 'T1|26238'",
+                           (rid,)).fetchone()[0]
+    assert ofz["dv01"] == fact["dv01"] and ofz["cs01"] == fact["ofz_spr01"] != 0 and ofz["fxRate"] == 1.0
+    assert ofz["inCcy"] == pytest.approx({k: ofz[k] for k in ("carry", "coupon", "pull", "rolldown", "funding", "net")}
+                                         | {"spreadRoll": None})
+    usd = pf["D1|USD"]
+    assert usd["ccy"] == "USD" and usd["fxRate"] > 1 and usd["inCcy"]["funding"] == 0.0
     assert flat["byBook"]["D1"]["fundingBookLevel"] == pytest.approx(cash[("D1", "CASH")])
     assert flat["byEntity"]["ENT1"]["nPositions"] == 4 and flat["byEntity"]["ENT2"]["nPositions"] == 1
     assert flat["byBook"]["T1"]["carry"] == pytest.approx(pf["T1|26238"]["carry"] + (pf["T1|XR1"]["carry"] or 0.0))
@@ -374,6 +398,8 @@ def test_spread_modes_on_a_stored_run(store_url, ctx, tmp_path):
         held = _carry(con, rid)
         curve = carry.forward_carry(con, SnapshotDir(SNAPS), _run(con, rid), "1M", spread="curve", settings=_fs())
     assert held["spread"] == "held" and held["spreadCurves"] == []
+    assert any("кэрри = купон + pull + roll-down + spreadRoll" in n for n in curve["notes"])
+    assert not any("spreadRoll (roll" in n for n in held["notes"])
     assert all(p["spreadRoll"] is None and p["spreadCurve"] is None for p in held["positions"])
     p = {x["positionId"]: x for x in curve["positions"]}
     assert p["T1|26238"]["spreadCurve"] == "ofz_held" and p["T1|XR1"]["spreadCurve"] == "floater_held"
@@ -381,3 +407,28 @@ def test_spread_modes_on_a_stored_run(store_url, ctx, tmp_path):
     assert curve["totals"]["carry"] == pytest.approx(held["totals"]["carry"])  # nothing rolled: the same carry
     assert any("spread=curve" in n for n in curve["notes"])
     assert any("переносится на Z-спред через CS01, первое приближение" in n for n in curve["notes"])  # TDM#281
+
+
+def test_group_net_with_partial_funding_and_amounts_in_ccy():
+    """Rule B1 (TDM#287): a group whose covered position has no funding has no net, netKnown sums the positions with
+    both; a position's amounts in its currency at the run's rate (mv_rub / mv)."""
+    run = {"run_id": 1, "business_date": DATE}
+    usd = {"ccy": "USD", "mv": 1000.0, "mv_rub": 90000.0, "dv01": -5.0, "cs01": -2.0}
+    rub = {"ccy": "RUB", "mv": 5000.0, "mv_rub": 5000.0, "dv01": -1.0, "cs01": 0.0, "ofz_spr01": -0.5}
+    cs = [carry.PositionCarry("a", "B", "X", "exact", usd, carry=900.0, coupon=800.0, pull=100.0, rolldown=0.0),
+          carry.PositionCarry("b", "B", "Y", "exact", rub, carry=50.0, coupon=40.0, pull=5.0, rolldown=5.0),
+          carry.PositionCarry("c", "C", "Z", "exact", rub, carry=30.0, coupon=30.0, pull=0.0, rolldown=0.0)]
+    funding = carry.ForwardFunding("computed", "", {
+        "a": {"state": "funded", "amount": -450.0, "amountCcy": -5.0, "source": "adapter"},
+        "b": {"state": "problem", "amount": None, "source": "none", "reason": "no rule"},
+        "c": {"state": "funded", "amount": -10.0, "amountCcy": -10.0, "source": "adapter"}})
+    out = carry.assemble(run, H1M, "flat", [], cs, funding, {"B": "E", "C": "E"}, lambda f: None, [], [])
+    b = out["byBook"]["B"]
+    assert b["net"] is None and b["nCoveredNoFunding"] == 1 and b["netKnown"] == pytest.approx(900.0 - 450.0)
+    assert out["byBook"]["C"]["net"] == pytest.approx(20.0) and out["totals"]["net"] is None
+    assert out["totals"]["netKnown"] == pytest.approx(450.0 + 20.0)
+    assert b["dv01"] == -6.0 and b["cs01"] == -2.5  # the OFZ spread risk where cs01 is 0
+    a = out["positions"][0]
+    assert a["fxRate"] == 90.0 and a["inCcy"] == pytest.approx({"carry": 10.0, "coupon": 800 / 90, "pull": 100 / 90,
+                                                               "rolldown": 0.0, "spreadRoll": None,
+                                                               "funding": -5.0, "net": 5.0})

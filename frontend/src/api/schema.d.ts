@@ -1044,6 +1044,27 @@ export interface components {
             problems: number;
             write_off: components["schemas"]["FundingWriteOff"] | null;
         };
+        /**
+         * CarryCcyAmounts
+         * @description A position's amounts in its own currency (``CarryPosition.inCcy``): the RUB amounts at the run's rate
+         *     (``fxRate``, held to the horizon); the funding the lines' own interest when they are in that currency.
+         */
+        CarryCcyAmounts: {
+            /** Carry */
+            carry: number | null;
+            /** Coupon */
+            coupon: number | null;
+            /** Pull */
+            pull: number | null;
+            /** Rolldown */
+            rolldown: number | null;
+            /** Spreadroll */
+            spreadRoll: number | null;
+            /** Funding */
+            funding: number | null;
+            /** Net */
+            net: number | null;
+        };
         /** CarryMeeting */
         CarryMeeting: {
             /**
@@ -1060,9 +1081,15 @@ export interface components {
             estimated: boolean;
             /**
              * Stepbp
-             * @description The key-rate step applied from the effective date (0 with ks=flat)
+             * @description The key-rate step requested for this meeting, bp (the steps parameter maps to the meetings in this order; 0 with ks=flat or none given); applied from the effective date when inHorizon
              */
             stepBp: number;
+            /**
+             * Inhorizon
+             * @description The meeting takes effect by the horizon (its step applies)
+             * @default true
+             */
+            inHorizon?: boolean;
         };
         /**
          * CarryOut
@@ -1107,7 +1134,7 @@ export interface components {
             }[];
             /**
              * Meetings
-             * @description The CBR meetings that take effect in (asOf, horizonDate]
+             * @description The CBR meetings that take effect within a year of asOf (or to the horizon when later), in order; steps map to them in this order, those with inHorizon false do not apply
              */
             meetings: components["schemas"]["CarryMeeting"][];
             /**
@@ -1167,8 +1194,9 @@ export interface components {
         };
         /**
          * CarryPosition
-         * @description One position's carry to the horizon, RUB, signed. ``carry = coupon + pull + rolldown`` (core
-         *     ``horizon_portfolio``, the spread held, the curves static); null with ``code`` when there is no forecast.
+         * @description One position's carry to the horizon, RUB, signed (``inCcy``: in its currency).
+         *     ``carry = coupon + pull + rolldown`` (core ``horizon_portfolio``, the curves carried), ``+ spreadRoll`` with
+         *     spread=curve; null with ``code`` when there is no forecast.
          */
         CarryPosition: {
             /** Positionid */
@@ -1219,6 +1247,23 @@ export interface components {
              */
             net: number | null;
             /**
+             * Dv01
+             * @description The run row's DV01, RUB per bp (as the monitor shows it); null for a position the run did not value
+             */
+            dv01?: number | null;
+            /**
+             * Cs01
+             * @description The run row's spread risk, RUB per bp: its CS01 (credit), else its OFZ spread risk (ofz_spr01); for a floater the spread is its DM's
+             */
+            cs01?: number | null;
+            /**
+             * Fxrate
+             * @description RUB per unit of ccy the run used (its mv_rub / mv; 1 for RUB), held to the horizon: inCcy = the RUB amounts / fxRate
+             */
+            fxRate?: number | null;
+            /** @description carry, coupon, pull, rolldown, spreadRoll, funding, net in the position's currency (ccy), beside the RUB fields */
+            inCcy?: components["schemas"]["CarryCcyAmounts"] | null;
+            /**
              * Fundingstate
              * @enum {string}
              */
@@ -1266,9 +1311,16 @@ export interface components {
             /** Detail */
             detail?: string | null;
         };
-        /** CarrySums */
+        /**
+         * CarrySums
+         * @description A group's sums, RUB. ``net = carry + funding + fundingNoCarry + fundingBookLevel`` (= ``carry +
+         *     fundingTotal``; a null part counts 0) whenever ``net`` is not null.
+         */
         CarrySums: {
-            /** Carry */
+            /**
+             * Carry
+             * @description Sum over the covered positions (coupon + pull + rolldown + spreadRoll)
+             */
             carry: number | null;
             /** Coupon */
             coupon: number | null;
@@ -1279,22 +1331,45 @@ export interface components {
             /** Spreadroll */
             spreadRoll: number | null;
             /**
+             * Dv01
+             * @description Sum of the positions' DV01 (every position that has one)
+             */
+            dv01?: number | null;
+            /**
+             * Cs01
+             * @description Sum of the positions' cs01 (every position that has one)
+             */
+            cs01?: number | null;
+            /**
              * Funding
-             * @description All of the group's funding: its positions' and its lines without a position (fundingBookLevel)
+             * @description Funding of the covered positions (those with a carry forecast)
              */
             funding: number | null;
             /**
              * Fundingnocarry
-             * @description The part of funding of positions without a carry forecast
+             * @description Funding of the positions without a carry forecast
              */
             fundingNoCarry: number | null;
-            /** Fundingbooklevel */
-            fundingBookLevel: number;
+            /**
+             * Fundingbooklevel
+             * @description Funding lines without a position (cash balances, an entity's cash): a book, an entity, a currency and the total have them; null while the funding is not computed
+             */
+            fundingBookLevel: number | null;
+            /**
+             * Fundingtotal
+             * @description funding + fundingNoCarry + fundingBookLevel; null while the funding is not computed
+             */
+            fundingTotal?: number | null;
             /**
              * Net
-             * @description carry + funding; null while either is
+             * @description carry + fundingTotal; null (rule B1) while the funding is not computed, nothing is covered or a covered position's funding is unknown (nCoveredNoFunding)
              */
             net: number | null;
+            /**
+             * Netknown
+             * @description Sum of carry + funding of the positions that have both: the net of what is known when net is null
+             */
+            netKnown?: number | null;
             /** Npositions */
             nPositions: number;
             /** Ncovered */
@@ -1305,6 +1380,12 @@ export interface components {
             nFunded: number;
             /** Nfundingmissing */
             nFundingMissing: number;
+            /**
+             * Ncoverednofunding
+             * @description Covered positions whose funding is unknown (net is then null)
+             * @default 0
+             */
+            nCoveredNoFunding?: number;
         };
         /** ErrorOut */
         ErrorOut: {
