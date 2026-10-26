@@ -17,7 +17,8 @@ and a PnL by the reports (``pnl.reasons.REPORTED_METHOD``) is in ``pnl.reported`
 has null PnL for a run where no position has one. ``riskNotes`` (R14, R15): what the run's risk by curve lacks (a
 rates curve missing from the hub's snapshot, a run made before the RUONIA discounting), so the risk views say it
 instead of showing a curve as silently zero. Funding (B1, ``publish.funding_run``): ``funding`` (the lines, in tdm's
-shape, with no FX revaluation and no FX delta: OQ-04), ``fundingPnl`` and ``fundingPnlByBook`` (the book-level lines;
+shape; a bond's line has its currency liability in ``fxLiability`` and its FX revaluation, in the position's PnL, in
+``pnl.fxAllocated``, TDM#54), ``fundingPnl`` and ``fundingPnlByBook`` (the book-level lines;
 ``inPositions``: what is in the positions' PnL), ``FUNDING_RULES`` (the adapter's rules the run used), a position's
 ``pnl.funding`` (null, not 0, without funding: not configured, a problem; the pages show it apart from the carry,
 TDM#168) and ``fundingStatus`` (``fundingStatus``:
@@ -480,8 +481,15 @@ def funding_view(block: dict[str, Any] | None, fx: dict[str, float]) -> dict[str
     if not block:
         block = {"status": NOT_COMPUTED, "text": STATUS_TEXT[NOT_COMPUTED]}
     lines, by_book, pnl = [], {}, {"carry": 0.0, "fx": 0.0, "fxCbr": 0.0}
+    liab = (block.get("fx_liability") or {}).get("positions") or {}
     for x in block.get("lines") or []:
         in_pos = bool(x.get("in_position"))
+        # a bond's currency liability (publish.fx_liability): already inside the position's fxDelta, which is net of it,
+        # so the line's fxDelta stays empty (the pages add the lines' fxDelta to the positions': it would count twice)
+        lb = liab.get(x.get("position_id") or "") if x["kind"] == "POS" else None
+        lb = lb if lb and lb.get("state") == "computed" else None
+        fxa = (lb.get("fx_funding") or 0.0) if lb and in_pos else 0.0
+        fxa_cbr = lb.get("fx_funding_cbr") if lb and in_pos and lb.get("fx_funding_cbr") is not None else fxa
         lines.append({
             "id": x["key"], "book": x["book_id"], "kind": x["kind"], "positionId": x.get("position_id"),
             "type": FUNDING_TYPES.get(x["kind"], x["kind"]), "ccy": x["ccy"], "amount": x["body_ccy"],
@@ -489,14 +497,16 @@ def funding_view(block: dict[str, Any] | None, fx: dict[str, float]) -> dict[str
             "rate": x["rate_pct"], "rateExpr": x["rate_expr"], "benchmark": None,
             "dayBasis": 360 if x.get("day_basis") == "ACT/360" else 365, "start": x["first_day"],
             "maturity": None, "tenorY": 1 / 365, "counterparty": None, "collateral": None, "fxDelta": {},
-            "pnl": {"carry": x["interest_rub"], "fx": 0.0, "fxCbr": 0.0, "fxGross": 0.0, "fxGrossCbr": 0.0,
-                    "fxAllocated": 0.0, "inPosition": in_pos},
+            **({"fxLiability": {lb["ccy"]: lb["amount_ccy"]}} if lb else {}),
+            "pnl": {"carry": x["interest_rub"], "fx": fxa, "fxCbr": fxa_cbr, "fxGross": fxa, "fxGrossCbr": fxa_cbr,
+                    "fxAllocated": fxa, "inPosition": in_pos},
             **({"ruleNote": x["note"]} if x.get("note") else {}),
         })
         b = by_book.setdefault(x["book_id"], {"carry": 0.0, "fx": 0.0, "fxCbr": 0.0, "fxAllocated": 0.0,
                                               "inPositions": 0.0})
         if in_pos:
             b["inPositions"] += x["interest_rub"]
+            b["fxAllocated"] += fxa
             continue
         b["carry"] += x["interest_rub"]
         pnl["carry"] += x["interest_rub"]

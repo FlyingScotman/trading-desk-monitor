@@ -302,6 +302,8 @@ def test_compat_parity_with_tdm_assemble(store_url, book, client, tmp_path):
         assert a["extra"].pop("funding")["state"] == "not_configured"  # B1: no funding rules in this store
         if a.get("fxDelta"):  # B2: a row with an FX delta has its OCP component (tdm has none)
             assert a["extra"].pop("ocp")["component"] in ocp_rules.COMPONENTS
+        if a["instrType"] == "BOND" and a["ccy"] != "RUB":  # TDM#54: no rules, no liability: the FX delta as tdm's
+            assert a["extra"].pop("fx_liability")["state"] == "not_configured"
         if a["pnl"]["available"]:
             assert a["pnl"]["reported"] == 0.0 and a["pnl"]["method"]
             assert a["pnl"]["funding"] is None and b["pnl"]["funding"] == 0  # not configured: null, not 0

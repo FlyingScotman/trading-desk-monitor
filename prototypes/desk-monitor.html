@@ -621,9 +621,20 @@ const naHtml = tip => `<span class="na" title="${esc(tip)}">—</span>`;
 const partHtml = pc => pc.partial ? `<span class="part" title="${esc(pc.tip)}">частично: ${pc.n} из ${pc.m} ${plural(pc.m,'позиции','позиций','позиций')}</span>` : '';
 // сумма по позициям с PnL; null — ни у одной позиции PnL не посчитан
 const pnlSum = (list, f) => list.some(U.pnlOk) ? sum(list.filter(U.pnlOk), f) : null;
+// подсказка карточки облигации: из чего её ОВП (только то, что посчитано в прогоне)
+const liabNote = p => { const x = p.extra && p.extra.fx_liability;
+  if (!x) return 'ОВП бумаги — её FX-дельта (грязная MV в валюте); валютного пассива в прогоне нет.';
+  if (x.state !== 'computed') return 'Валютного пассива нет (' + (x.reason || x.state) + '): ОВП бумаги — грязная MV в валюте.';
+  return 'Валютный пассив ' + M(-x.amount_ccy,2) + ' млн ' + x.ccy + ' = чистая MV + НКД при покупке (' + (x.basis_text || '') + '; предварительно: по текущей чистой MV, а не по цене покупки). ОВП бумаги = грязная MV − пассив = ' + M(x.fx_delta_net,2,true) + ' млн ' + x.ccy + ': НКД после покупки и купоны — PnL.'; };
+// валютный пассив фондирования облигации (прогон монитора, extra.fx_liability, TDM#54): fxDelta позиции уже за его
+// вычетом (грязная MV − пассив); пассив = чистая MV + НКД при покупке. 0 — пассива нет (причина в extra.fx_liability).
+const fxLiab = (p, c) => { const x = p.extra && p.extra.fx_liability; return x && x.state === 'computed' && x.ccy === c ? x.amount_ccy || 0 : 0; };
+// ОВП по слагаемым: облигации — грязная MV в валюте, «Фондирование» — валютный пассив (из позиции; у выгрузки tdm —
+// строки фондирования), «Перенос ОВП» — сделки переноса (у книги-источника и зеркальная у получателя: по деску в сумме 0).
+// Нетто с фондированием = облигации + пассив + перенос + деривативы + FX; пассив входит один раз.
 function ocpParts(list){
   const o = {}; CCYS.forEach(c => { o[c] = {bond:0, der:0, fx:0, xfer:0, fund:0}; });
-  list.forEach(p => { for (const c in p.fxDelta) { if (!o[c]) continue; const k = p.ocpTransfer ? 'xfer' : p.instrType === 'BOND' ? 'bond' : p.instrType === 'FX' ? 'fx' : 'der'; o[c][k] += p.fxDelta[c]; } });
+  list.forEach(p => { for (const c in p.fxDelta) { if (!o[c]) continue; const k = p.ocpTransfer ? 'xfer' : p.instrType === 'BOND' ? 'bond' : p.instrType === 'FX' ? 'fx' : 'der', lb = fxLiab(p, c); o[c][k] += p.fxDelta[c] - lb; o[c].fund += lb; } });
   FU().forEach(f => { for (const c in f.fxDelta) if (o[c]) o[c].fund += f.fxDelta[c]; });
   CCYS.forEach(c => { const x = o[c]; x.net = x.bond + x.der + x.fx + x.xfer + (S.withFunding ? x.fund : 0); });
   return o;
@@ -704,7 +715,7 @@ function renderKpi(){
   <div class="kpi"><div class="kl"><span>CS01 итого</span><span></span></div>
     <div class="kv${nc(cs)}">${M(cs,2)}<small>млн ₽/б.п.</small></div>
     <div class="ks">${unfiltered() ? chg(cs,'cs01') : ''}<span title="Чувствительность ОФЗ к их спреду относительно кривой, на которой считан риск ставок">спред ОФЗ <span class="num${nc(ofz)}">${M(ofz,2)}</span></span>${spark(h.map(x => x.cs01), 66, 18)}</div></div>
-  <div class="kpi wide"><div class="kl"><span>ОВП ${S.withFunding ? 'с фондированием' : 'без фондирования'}</span><span>млн вал. · млн ₽ экв.</span></div>
+  <div class="kpi wide"><div class="kl"><span title="ОВП = облигации (грязная MV в валюте${S.withFunding ? ' − валютный пассив фондирования: чистая MV + НКД при покупке' : ''}) + деривативы и FX (FX-дельта) + сделки переноса ОВП. Облигация без пассива (фондирование не настроено, проблема) — по грязной MV.">ОВП ${S.withFunding ? 'с фондированием' : 'без фондирования'}</span><span>млн вал. · млн ₽ экв.</span></div>
     <div class="ocp">${CCYS.map(c => `<span>${c}</span><span class="num${nc(o[c].net)}">${M(o[c].net,1,true)}</span><span class="num muted">${num(o[c].net * D.FX[c] / 1e6,0,true)} млн ₽</span>`).join('')}</div></div>
   <div class="kpi"><div class="kl"><span>PnL дня</span><span>флэш · рынок</span></div>
     <div class="kv${nc(flash)}">${flash == null ? naHtml(pc.tip) : M(flash,1,true)}<small>млн ₽</small></div>
@@ -1182,7 +1193,7 @@ function openDrawer(id){
       <dl class="kvl"><div><dt>Тип</dt><dd>${esc(own.type)}</dd></div><div><dt>Тело</dt><dd>${M(own.amount,2)} млн ${own.ccy} (${M(own.amountRub,1)} млн ₽)</dd></div>
       <div><dt>Ставка</dt><dd>${esc(own.rateExpr)} = ${num(own.rate,2)}%</dd></div><div><dt>К бенчмарку (${esc(own.benchmark || 'КС')})</dt><dd>${bmk != null ? num((own.rate - bmk) * 100,0,true) + ' б.п.' : '—'}</dd></div>
       <div><dt>За день</dt><dd class="${nc(own.pnl.carry)}">${K(own.pnl.carry,0,true)} тыс ₽</dd></div><div><dt>Пересчёт</dt><dd>${own.kind === 'HTM' ? 'фикс. до ' + dt(own.maturity) : 'ежедневно к чистой MV'}</dd></div></dl>
-      <p class="note" style="margin-top:6px">${own.kind === 'HTM' ? 'Контрактная ставка зафиксирована при покупке; база — чистая цена покупки.' : 'Процент платится в RUB по курсу ЦБ' + (own.ccy !== 'RUB' ? '; тело — в ' + own.ccy + ', поэтому FX бумаги гасится её фондированием, остаток ОВП (НКД, PnL) вечером уходит в книгу деривативов.' : '.')}</p></div>` : ''}
+      <p class="note" style="margin-top:6px">${own.kind === 'HTM' ? 'Контрактная ставка зафиксирована при покупке; база — чистая цена покупки.' : 'Процент платится в RUB по курсу ЦБ и ОВП не меняет' + (own.ccy !== 'RUB' ? '. ' + liabNote(p) : '.')}</p></div>` : ''}
     <div class="dr-s"><h4>Книга «${esc(bk.name)}» · ${esc(BT_LABEL[bk.bookType] || '')}</h4>
       <dl class="kvl" style="margin-bottom:8px"><div><dt>MV облигаций книги</dt><dd>${BN(bookMv,2)} млрд ₽</dd></div><div><dt>Фондирование нетто</dt><dd>${BN(bookFund,2)} млрд ₽</dd></div>
       <div><dt>Разрыв</dt><dd class="${nc(bookMv - bookFund)}">${BN(bookMv - bookFund,2,true)} млрд ₽</dd></div><div><dt>Фондир. бумаг / книги за день</dt><dd>${M(D.fundingPnlByBook[p.book].inPositions || 0,2)} / ${M(D.fundingPnlByBook[p.book].carry,2)} млн</dd></div></dl>
@@ -1359,8 +1370,8 @@ function rExpo(){
   }));
   $('ex-ocp').innerHTML = `<table class="t"><thead><tr><th>Вал.</th>${PARTS.map(x => `<th class="n">${x[1]}</th>`).join('')}<th class="n">Нетто${S.withFunding ? '' : ' (без фонд.)'}</th><th class="n">Нетто, млн ₽</th></tr></thead><tbody>` +
     CCYS.map(c => `<tr><td>${c}</td>${PARTS.map(x => `<td class="n${nc(o[c][x[0]])}${x[0] === 'fund' && !S.withFunding ? ' muted' : ''}">${M(o[c][x[0]],1,true)}</td>`).join('')}<td class="n${nc(o[c].net)}"><b>${M(o[c].net,1,true)}</b></td><td class="n${nc(o[c].net)}">${num(o[c].net * D.FX[c] / 1e6,0,true)}</td></tr>`).join('') + '</tbody></table>';
-  // по книгам: нетто ОВП с фондированием
-  const ob = {}; l.forEach(p => { for (const c in p.fxDelta) { (ob[p.book] = ob[p.book] || {})[c] = (ob[p.book][c] || 0) + p.fxDelta[c]; } });
+  // по книгам: нетто ОВП с фондированием (fxDelta облигации — за вычетом пассива), без фондирования — пассив возвращается
+  const ob = {}; l.forEach(p => { for (const c in p.fxDelta) { (ob[p.book] = ob[p.book] || {})[c] = (ob[p.book][c] || 0) + p.fxDelta[c] - (S.withFunding ? 0 : fxLiab(p, c)); } });
   if (S.withFunding) FU().forEach(f => { for (const c in f.fxDelta) { (ob[f.book] = ob[f.book] || {})[c] = (ob[f.book][c] || 0) + f.fxDelta[c]; } });
   const obk = ALL_BOOKS.filter(b => ob[b] && CCYS.some(c => Math.abs(ob[b][c] || 0) > 1));
   $('ex-ocp-books').innerHTML = obk.length ? `<table class="t"><thead><tr><th>Книга</th><th>Режим</th>${CCYS.map(c => `<th class="n">${c}</th>`).join('')}<th class="n">Нетто, млн ₽ экв.</th><th>Передача сегодня → T+1</th></tr></thead><tbody>` +
