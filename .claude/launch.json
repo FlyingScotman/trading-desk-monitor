@@ -12,22 +12,6 @@
       "port": 8767
     },
     {
-      "name": "desk-monitor-dev",
-      "runtimeExecutable": "backend/.venv/bin/python",
-      "runtimeArgs": [
-        "-m",
-        "tdm",
-        "--db",
-        ".devdata/tdm.sqlite",
-        "serve",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "8765"
-      ],
-      "port": 8765
-    },
-    {
       "name": "validation-reports",
       "runtimeExecutable": "backend/.venv/bin/python",
       "runtimeArgs": [
