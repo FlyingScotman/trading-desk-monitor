@@ -275,18 +275,21 @@ def test_upgrade_leaves_older_dates_alone(tmp_path, monkeypatch):
 
 
 def test_settings_switch_and_errors_in_status(tmp_path, store_url):
+    def early() -> datetime:  # a business day before WARN_AFTER: «актуальны» is about the steps, whenever it runs (#240)
+        return datetime.combine(TODAY, dtime(9, 0), MSK)
+
     off = Settings(home=tmp_path / "home", store_url=store_url, snapshot_cache=tmp_path / "cache", autopilot=False)
-    st = Autopilot(settings_loader=lambda: off).run_cycle()  # a thread that follows the flag does nothing while off
+    st = Autopilot(settings_loader=lambda: off, now=early).run_cycle()  # a thread following the flag: nothing while off
     assert st["message"] == "Автопилот выключен в настройках" and not st["steps"]
-    assert Autopilot(settings_loader=lambda: off, force=True).run_cycle()["steps"]  # desk cycle: runs anyway
+    assert Autopilot(settings_loader=lambda: off, force=True, now=early).run_cycle()["steps"]  # desk cycle: runs anyway
 
     def bad():
         raise RuntimeError("settings.json: bad JSON")
 
-    st = Autopilot(settings_loader=bad).run_cycle()
+    st = Autopilot(settings_loader=bad, now=early).run_cycle()
     assert st["state"] == "error" and steps(st) == {"settings": ("error", "RuntimeError: settings.json: bad JSON")}
     st = Autopilot(settings_loader=lambda: Settings(home=tmp_path / "home", store_url="postgresql://127.0.0.1:1/none",
-                                                    snapshot_cache=tmp_path / "cache")).run_cycle()
+                                                    snapshot_cache=tmp_path / "cache"), now=early).run_cycle()
     assert st["state"] == "error" and steps(st)["store"][0] == "error" and steps(st)["sync"][0] == "skipped"
     assert set(st) == {"enabled", "state", "last_cycle_at", "last_ok_at", "message", "steps", "latest_run", "progress"}
     assert st["progress"] is None  # only while a cycle runs
@@ -294,7 +297,7 @@ def test_settings_switch_and_errors_in_status(tmp_path, store_url):
     (tmp_path / "drop").mkdir()
     half = Settings(home=tmp_path / "home", store_url=store_url, snapshot_cache=tmp_path / "cache",
                     snapshot_drop=tmp_path / "drop")  # market data from a drop folder, no report folders
-    assert Autopilot(settings_loader=lambda: half).run_cycle()["message"] == (
+    assert Autopilot(settings_loader=lambda: half, now=early).run_cycle()["message"] == (
         "Данные актуальны (не настроено: папки с отчётами)")
 
 
