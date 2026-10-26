@@ -1347,7 +1347,7 @@ export interface components {
             funding: number | null;
             /**
              * Fundingnocarry
-             * @description Funding of the positions without a carry forecast
+             * @description Funding of the positions without a carry forecast; null when one of them has an unknown funding (nNoCarryNoFunding)
              */
             fundingNoCarry: number | null;
             /**
@@ -1357,12 +1357,12 @@ export interface components {
             fundingBookLevel: number | null;
             /**
              * Fundingtotal
-             * @description funding + fundingNoCarry + fundingBookLevel; null while the funding is not computed
+             * @description funding + fundingNoCarry + fundingBookLevel; null while the funding is not computed or fundingNoCarry is null
              */
             fundingTotal?: number | null;
             /**
              * Net
-             * @description carry + fundingTotal; null (rule B1) while the funding is not computed, nothing is covered or a covered position's funding is unknown (nCoveredNoFunding)
+             * @description carry + fundingTotal; null (rule B1) while the funding is not computed, nothing is covered, or any position's funding is unknown (nCoveredNoFunding, nNoCarryNoFunding)
              */
             net: number | null;
             /**
@@ -1386,6 +1386,12 @@ export interface components {
              * @default 0
              */
             nCoveredNoFunding?: number;
+            /**
+             * Nnocarrynofunding
+             * @description Positions without a carry forecast whose funding is unknown: then fundingNoCarry, fundingTotal and net are null (rule B1 applied strictly)
+             * @default 0
+             */
+            nNoCarryNoFunding?: number;
         };
         /** ErrorOut */
         ErrorOut: {

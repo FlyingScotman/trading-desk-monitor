@@ -4396,7 +4396,7 @@
               }
             ],
             "title": "Fundingnocarry",
-            "description": "Funding of the positions without a carry forecast"
+            "description": "Funding of the positions without a carry forecast; null when one of them has an unknown funding (nNoCarryNoFunding)"
           },
           "fundingBookLevel": {
             "anyOf": [
@@ -4420,7 +4420,7 @@
               }
             ],
             "title": "Fundingtotal",
-            "description": "funding + fundingNoCarry + fundingBookLevel; null while the funding is not computed"
+            "description": "funding + fundingNoCarry + fundingBookLevel; null while the funding is not computed or fundingNoCarry is null"
           },
           "net": {
             "anyOf": [
@@ -4432,7 +4432,7 @@
               }
             ],
             "title": "Net",
-            "description": "carry + fundingTotal; null (rule B1) while the funding is not computed, nothing is covered or a covered position's funding is unknown (nCoveredNoFunding)"
+            "description": "carry + fundingTotal; null (rule B1) while the funding is not computed, nothing is covered, or any position's funding is unknown (nCoveredNoFunding, nNoCarryNoFunding)"
           },
           "netKnown": {
             "anyOf": [
@@ -4470,6 +4470,12 @@
             "type": "integer",
             "title": "Ncoverednofunding",
             "description": "Covered positions whose funding is unknown (net is then null)",
+            "default": 0
+          },
+          "nNoCarryNoFunding": {
+            "type": "integer",
+            "title": "Nnocarrynofunding",
+            "description": "Positions without a carry forecast whose funding is unknown: then fundingNoCarry, fundingTotal and net are null (rule B1 applied strictly)",
             "default": 0
           }
         },
