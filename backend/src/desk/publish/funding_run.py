@@ -42,7 +42,7 @@ type is not funded on MV, an entity funded on its cash, not a bond) / ``problem`
 ``not_funded``, absent (null) for ``problem`` and ``not_configured``. The flash PnL's components then sum to the PnL net
 of funding (on the pages the carry is without it and the funding its own factor, TDM#168). A funding line of a position without a flash PnL, of a closed position,
 of cash or of an entity is a book-level line (``in_position`` false): the block's totals are ``in_positions`` +
-``book_level``. The currency funding liability of the foreign bonds (OQ-04), the bonds' FX delta net of it and its FX
+``book_level``. The currency OCP liability of the foreign bonds (OQ-04, OQ-17), the bonds' FX delta net of it and its FX
 revaluation (``fx_funding``) are ``publish.fx_liability`` (the block's ``fx_liability``), computed after this one.
 
 The run never fails on funding: an error is status ``failed`` with its type and message in the log.

@@ -1188,8 +1188,8 @@ export interface components {
         };
         /**
          * FxLiability
-         * @description The currency funding liability of the run's foreign-currency bonds; ``provisional``: what the rule takes until
-         *     the owner answers.
+         * @description The currency OCP liability of the run's foreign-currency bonds; ``provisional``: what the rule takes until the
+         *     data has more (the residual of past days does not accumulate).
          */
         FxLiability: {
             /** Status */
@@ -1216,7 +1216,7 @@ export interface components {
         };
         /**
          * FxLiabilityPosition
-         * @description A foreign-currency bond's currency funding liability (``publish.fx_liability``, OQ-04, TDM#54).
+         * @description A foreign-currency bond's currency OCP liability (``publish.fx_liability``, OQ-04, OQ-17, TDM#54, TDM#266).
          */
         FxLiabilityPosition: {
             /**
@@ -1234,25 +1234,38 @@ export interface components {
              * @description The liability, signed (a long bond: negative)
              */
             amount_ccy?: number | null;
+            /**
+             * Reference
+             * @description What the liability is: the dirty MV of the previous business day (the last OCP transfer), the purchase cost (a position new on the day), today's dirty MV (no previous day: OCP 0)
+             */
+            reference?: ("prev_dirty_mv" | "purchase_cost" | "current_dirty_mv") | null;
+            /**
+             * Reference Mv Ccy
+             * @description That dirty MV (or cost) in the currency, signed
+             */
+            reference_mv_ccy?: number | null;
+            /**
+             * Reference Date
+             * @description The previous business day, for prev_dirty_mv
+             */
+            reference_date?: string | null;
+            /** Reference Text */
+            reference_text?: string | null;
             /** Clean Mv Ccy */
             clean_mv_ccy?: number | null;
-            /**
-             * Purchase Accrued Ccy
-             * @description The accrued paid at the purchase in the liability (funded at a zero rate); null on a dirty base
-             */
-            purchase_accrued_ccy?: number | null;
-            /**
-             * Purchase Accrued Basis
-             * @description report / estimated_from_purchase_date / returned_by_coupon / unknown / dirty_base
-             */
-            purchase_accrued_basis?: string | null;
-            /** Basis Text */
-            basis_text?: string | null;
             /** Accrued Ccy */
             accrued_ccy?: number | null;
             /** Dirty Mv Ccy */
             dirty_mv_ccy?: number | null;
-            /** Base */
+            /**
+             * Coupons Ccy
+             * @description Coupons received on the day in the currency, in the OCP
+             */
+            coupons_ccy?: number | null;
+            /**
+             * Base
+             * @description The funding base (the rate's body, DEC01); not the liability's
+             */
             base?: string | null;
             /**
              * Fx Delta Gross
@@ -1261,12 +1274,12 @@ export interface components {
             fx_delta_gross?: number | null;
             /**
              * Fx Delta Net
-             * @description The published FX delta: dirty MV + liability
+             * @description The published FX delta (OCP): dirty MV + liability + coupons of the day, the FX PnL since the last transfer
              */
             fx_delta_net?: number | null;
             /**
              * Fx Funding
-             * @description FX revaluation of the D-1 liability in the PnL, RUB
+             * @description FX revaluation of the liability held over the day (the D-1 dirty MV) in the PnL, RUB
              */
             fx_funding?: number | null;
             /** Fx Funding Cbr */
@@ -2371,7 +2384,7 @@ export interface components {
             default_rate?: {
                 [key: string]: unknown;
             } | null;
-            /** @description The bonds' currency funding liability (TDM#54); null for a run before it */
+            /** @description The bonds' currency OCP liability (TDM#54, #266); null for a run before it */
             fx_liability?: components["schemas"]["FxLiability"] | null;
         };
         /** RunHeader */
