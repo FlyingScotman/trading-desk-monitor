@@ -377,22 +377,23 @@
   // пикселей на единицу становится меньше). Под подписи — не больше K.BAR_FIT_MAX (40 %) области: столбцы остаются
   // читаемыми и в узкой плитке (C06 при окне 1024). Подпись, которой при этом места снаружи не хватило, встаёт внутрь
   // столбца, у его конца (insideRight / insideLeft, у вертикального — insideTop / insideBottom; #352) — цветом,
-  // контрастным к столбцу (K.inkOn), с обводкой цвета столбца, если столбец длиннее подписи (с запасом K.BAR_IN_PAD,
-  // длина — по оси после округления ECharts, K.niceExtent). Не влезает и внутрь — не рисуется (label show: false у элемента), значение остаётся в подсказке.
-  // Подписи делений оси значений, которые наезжают друг на друга, ECharts прячет (axisLabel.hideOverlap, #351). Подписи
-  // категорий горизонтального бара — не шире K.BAR_CAT_MAX графика, длинные обрезаются с «…».
+  // контрастным к столбцу (K.inkOn), с обводкой цвета столбца, если столбец длиннее подписи на K.BAR_IN_PAD. Не влезает
+  // и внутрь — не рисуется (label show: false у элемента), значение остаётся в подсказке. Если подписям столбцов не
+  // хватает места, подписи категорий горизонтального бара обрезаются до K.BAR_CAT_MAX ширины графика (K.fitLabels).
+  // Подписи делений горизонтальной оси значений — через равный шаг, ноль подписан всегда (K.tickEvery, #351).
   // Размер графика 0 (скрыт) — четверть размаха под отрицательные, как раньше. K.chart пересчитывает отступ при
   // изменении размера графика
   K.BAR_FIT_MAX = 0.4;
   K.BAR_IN_PAD = 1.1;
   // концы оси значений, как их округляет ECharts (интервал «красивый»: 1, 2, 3, 5, 10 × 10^n от размаха / splitNumber,
-  // концы — кратные интервалу); a0 ≤ 0 ≤ a1
+  // концы — кратные интервалу); a0 ≤ 0 ≤ a1. → [начало, конец, интервал]
   K.niceExtent = (a0, a1, split) => {
     const raw = (a1 - a0) / (split || 5);
     if (!(raw > 0)) return [a0, a1];
     const e = Math.floor(Math.log10(raw)), fr = raw / Math.pow(10, e), nf = fr < 1.5 ? 1 : fr < 2.5 ? 2 : fr < 4 ? 3 : fr < 7 ? 5 : 10;
     const step = nf * Math.pow(10, e);
-    return [Math.floor(a0 / step + 1e-9) * step, Math.ceil(a1 / step - 1e-9) * step];
+    const r12 = x => Number(x.toPrecision(12));
+    return [r12(Math.floor(a0 / step + 1e-9) * step), r12(Math.ceil(a1 / step - 1e-9) * step), r12(step)];
   };
   K.BAR_CAT_MAX = 0.4;
   // цвет текста поверх заливки color (#352): белый или чёрный — у какого контраст (WCAG) больше; цвет не
@@ -408,27 +409,66 @@
   K.contrast = (a, b) => { const x = K.rgbOf(a), y = K.rgbOf(b); if (!x || !y) return null; const p = K.luminance(x), q = K.luminance(y); return (Math.max(p, q) + 0.05) / (Math.min(p, q) + 0.05); };
   K.INK = ['#ffffff', '#000000'];  // чистые белый и чёрный: у любой заливки контраст с одним из них не меньше 4.58
   K.inkOn = c => { if (!K.rgbOf(c)) return null; return K.contrast(K.INK[0], c) >= K.contrast(K.INK[1], c) ? K.INK[0] : K.INK[1]; };
+  // подписи делений горизонтальной оси значений (#351). Деления и концы оси — как у ECharts (K.niceExtent, шаг
+  // закрепляется: interval), подписаны деления через одно, два… — кратные шагу подписи: самому мелкому из 1, 2, 3, 4, 5,
+  // 10, 20 шагов делений, при котором соседние подписи не ближе K.TICK_GAP px. Ноль кратен любому шагу — подписан
+  // всегда, подписи идут равномерно, и прятать ECharts нечего (подписи «0 10,000 30,000» без 20,000 не бывает).
+  // a0 ≤ 0 ≤ a1 — концы данных с запасом, px — ширина области столбцов, fmt — формат подписи.
+  // → {interval, every} — шаг делений и шаг подписей
+  K.TICK_GAP = 10;
+  K.tickEvery = (a0, a1, px, fmt, size, split) => {
+    const ne = K.niceExtent(a0, a1, split), step = ne[2];
+    if (!(step > 0) || !(px > 0)) return null;
+    const r12 = x => Number(x.toPrecision(12)), k = Math.round((ne[1] - ne[0]) / step), ppu = px / (ne[1] - ne[0]);
+    let w = 0; for (let j = 0; j <= k; j++) { const v = r12(ne[0] + j * step); try { w = Math.max(w, K.labelWidth(K.htmlText(fmt(v)), size || 12)); } catch (e) { } }
+    for (const m of [1, 2, 3, 4, 5, 10, 20]) if (m * step * ppu >= w + K.TICK_GAP || m === 20) return { interval: step, every: r12(m * step) };
+    return null;
+  };
+  // подписи категорий не шире w px (#352): середина — «…», начало и конец имени остаются, чтобы обрезанные подписи
+  // разных столбцов не совпадали (у позиций разнятся хвосты: выпуск, срок, buy / sell); совпали — больше хвоста
+  K.fitLabels = (L, w, px) => {
+    const cut = (t, k, tail) => t.slice(0, k - tail) + '…' + t.slice(t.length - tail);
+    const fit = (t, share) => {
+      if (K.labelWidth(t, px) <= w) return t;
+      for (let k = t.length - 1; k > 1; k--) { const c = cut(t, k, Math.max(1, Math.round(k * share))); if (K.labelWidth(c, px) <= w) return c; }
+      return t.slice(0, 1) + '…';
+    };
+    let out = L.map(t => fit(t, 0.4));
+    for (const share of [0.55, 0.7, 0.85]) {
+      const cnt = new Map(); out.forEach(x => cnt.set(x, (cnt.get(x) || 0) + 1));
+      if (![...cnt.values()].some(c => c > 1)) break;
+      out = out.map((x, i) => (cnt.get(x) > 1 ? fit(L[i], share) : x));
+    }
+    return out;
+  };
   K.barFit = (el, o) => {
     const one = a => (Array.isArray(a) ? (a.length === 1 ? a[0] : null) : a);
     const xa = one(o.xAxis), ya = one(o.yAxis);
     if (!xa || !ya) return o;
     const vert = xa.type === 'category', cat = vert ? xa : ya, val = vert ? ya : xa;
     if (cat.type !== 'category' || val.type !== 'value') return o;
-    // подписи делений оси значений не слипаются (#351): те, что наезжают на соседнюю, ECharts прячет — в узкой плитке
-    // остаются крайние и ноль, а число делений и шаг оси прежние (меньше делений — грубее шаг и шире ось). Поля подписи
-    // (padding по 3 px по бокам у горизонтального бара) входят в её прямоугольник, только если у неё есть фон (zrender), —
-    // фон прозрачный; так между соседними подписями не меньше 6 px, а не вплотную («010»)
-    val.axisLabel = Object.assign({ hideOverlap: true }, vert ? {} : { padding: [0, 3], backgroundColor: 'rgba(0,0,0,0)' }, val.axisLabel);
+    // запасной вариант (#351): подпись деления, которая всё-таки наезжает на соседнюю, ECharts прячет
+    val.axisLabel = Object.assign({ hideOverlap: true }, val.axisLabel);
     const g = Object.assign({ left: 0, right: 0, top: 0, bottom: 0 }, o.grid), n = x => (typeof x === 'number' ? x : 0);
-    const catPx = (cat.axisLabel && cat.axisLabel.fontSize) || 12;
-    let catW = Math.max(0, ...(cat.data || []).map(s => K.labelWidth(String(s && typeof s === 'object' ? s.value : s), catPx)));
-    // подписи категорий горизонтального бара — не шире K.BAR_CAT_MAX ширины графика (#352): длинные обрезаются с «…»
-    // (полное имя — в подсказке), иначе в узкой плитке столбцам и их подписям не остаётся места
+    const catPx = (cat.axisLabel && cat.axisLabel.fontSize) || 12, cfm = cat.axisLabel && typeof cat.axisLabel.formatter === 'function' ? cat.axisLabel.formatter : null;
+    const catT = (cat.data || []).map((x, i) => { const v = x && typeof x === 'object' ? x.value : x; return cfm ? K.htmlText(cfm(v, i)) : String(v); });
+    const catFull = Math.max(0, ...catT.map(t => K.labelWidth(t, catPx)));
     const wide = n(el.clientWidth) - n(g.left) - n(g.right), capW = Math.max(48, Math.round(wide * K.BAR_CAT_MAX));
-    if (!vert && wide > 0 && catW > capW) { cat.axisLabel = Object.assign({}, cat.axisLabel, { width: capW, overflow: 'truncate', ellipsis: '…' }); catW = capW; }
-    const room = vert ? n(el.clientHeight) - n(g.top) - n(g.bottom) - catPx * 1.3 - 8 : n(el.clientWidth) - n(g.left) - n(g.right) - catW - 8;
-    const need = [0, 0], vals = [], items = [], pad = n(vert ? g.top : g.right);
-    const pal = o.color || K.PAL || [];
+    const roomOf = cw => (vert ? n(el.clientHeight) - n(g.top) - n(g.bottom) - catPx * 1.3 - 8 : wide - cw - 8);
+    // деления горизонтальной оси (#351): шаг делений закреплён (interval), подписаны кратные шагу подписи (K.tickEvery)
+    const vfm = typeof val.axisLabel.formatter === 'function' ? val.axisLabel.formatter : v => (window.echarts && echarts.format ? echarts.format.addCommas(v) : String(v));
+    const ticks = (a0, a1, room) => {
+      if (vert || val.min != null || val.max != null || val.interval != null || val.minInterval > 0) return;  // шаг задан страницей
+      const t = K.tickEvery(a0, a1, room, vfm, val.axisLabel.fontSize || 12, val.splitNumber);
+      if (!t) return;
+      // концы оси и шаг — явно (как округлил бы ECharts): запас под подписи не зависит от размаха данных (у одного
+      // столбца он нулевой, и boundaryGap ничего бы не дал)
+      const ne = K.niceExtent(a0, a1, val.splitNumber);
+      val.min = ne[0]; val.max = ne[1]; val.interval = t.interval; delete val.boundaryGap;
+      const on = v => Math.abs(v / t.every - Math.round(v / t.every)) < 1e-6;
+      val.axisLabel = Object.assign({}, val.axisLabel, { formatter: (v, i) => (on(v) ? vfm(v, i) : '') });
+    };
+    const items = [], vals = [], pad = n(vert ? g.top : g.right), pal = o.color || K.PAL || [];
     let si = -1;
     (o.series || []).forEach(s => {
       si++;
@@ -441,57 +481,79 @@
         if (!lab.show || (d && d.label && d.label.show === false)) return;
         const t = K.htmlText(typeof lab.formatter === 'function' ? lab.formatter({ value: v, data: d }) : v);
         if (!t) return;
-        const size = (vert ? px * 1.3 : K.labelWidth(t, px)) + 7;  // подпись и её отступ от столбца (5 px)
+        // подпись и её отступ от столбца (5 px); у отрицательного горизонтального — ещё 4 px до подписей категорий
+        const size = (vert ? px * 1.3 : K.labelWidth(t, px)) + 7 + (!vert && v < 0 ? 4 : 0);
         items.push({ s, i, v: +v, size, color: (d && typeof d === 'object' && d.itemStyle && d.itemStyle.color) || sc });
-        if (v < 0) need[0] = Math.max(need[0], size); else need[1] = Math.max(need[1], size - pad);
       });
     });
-    const lo = Math.min(0, ...vals), hi = Math.max(0, ...vals), span = Math.max(...vals) - Math.min(...vals);
     if (!vals.length) return o;
-    if (!(need[0] > 0 || need[1] > 0)) return o;
-    if (!(room > 40) || !(span > 0) || !(hi > lo)) { if (need[0] > 0) val.boundaryGap = ['25%', 0]; return o; }
-    // доли области под подписи (с запасом 30 %), из них — запас по краям оси в единицах ряда и доля размаха данных.
-    // Подписи короткого столбца место отчасти уже дают более длинные столбцы той же стороны: запас нужен на ширину
-    // подписи без расстояния от конца столбца до края данных (px на единицу — по предыдущему приближению). Подпись,
-    // которой места снаружи не хватило, не держит запас: отступ пересчитывается по оставшимся снаружи, пока набор не
-    // перестанет меняться
-    const layout = outs => {
-      let out = outs, f = [0, 0], axis = hi - lo, a0 = lo, a1 = hi;
-      for (let it = 0; it <= outs.length; it++) {
-        for (let k = 0; k < 4; k++) {
-          const ppu = room / axis, nd = [0, 0];
-          out.forEach(x => { if (x.v < 0) nd[0] = Math.max(nd[0], x.size * 1.3 - (x.v - lo) * ppu); else nd[1] = Math.max(nd[1], (x.size - pad) * 1.3 - (hi - x.v) * ppu); });
-          f = nd.map(x => Math.max(0, x) / room);
-          const tot = f[0] + f[1]; if (tot > K.BAR_FIT_MAX) f = f.map(x => x * K.BAR_FIT_MAX / tot);
-          axis = (hi - lo) / (1 - f[0] - f[1]); a0 = lo - f[0] * axis; a1 = hi + f[1] * axis;
-        }
-        const keep = out.filter(x => (x.v < 0 ? x.v - a0 : a1 - x.v) / axis * room + (x.v < 0 ? 0 : pad) >= x.size);
-        if (keep.length === out.length) break;
-        out = keep;
-      }
-      return { f, axis, a0, a1, out: new Set(out) };
-    };
-    // Подпись, которой снаружи нет места, — внутрь столбца, у его конца, если столбец длиннее подписи на K.BAR_IN_PAD
-    // (длина — по оси после округления ECharts, K.niceExtent: оно ось удлиняет, а столбцы укорачивает); иначе без
-    // подписи. Внутрь — самые длинные столбцы каждой стороны (k0 отрицательных, k1 положительных): из раскладок
-    // выбирается та, где подписаны самые крупные по модулю столбцы (вес подписи убывает с местом по модулю), при
-    // равенстве — где меньше подписей внутри
+    const lo = Math.min(0, ...vals), hi = Math.max(0, ...vals), span = Math.max(...vals) - Math.min(...vals);
     const rank = new Map(items.slice().sort((x, y) => Math.abs(y.v) - Math.abs(x.v)).map((x, j) => [x, Math.pow(2, -Math.min(j, 60))]));
     const side = [items.filter(x => x.v < 0).sort((x, y) => x.v - y.v), items.filter(x => x.v >= 0).sort((x, y) => y.v - x.v)];
-    let best = null;
-    plans: for (let k0 = 0; k0 <= Math.min(side[0].length, 12); k0++) for (let k1 = 0; k1 <= Math.min(side[1].length, 12); k1++) {
-      const inn = side[0].slice(0, k0).concat(side[1].slice(0, k1)), L = layout(items.filter(x => !inn.includes(x)));
-      const ne = K.niceExtent(L.a0, L.a1, val.splitNumber), nAxis = ne[1] - ne[0];
-      L.inside = new Set(inn.filter(x => K.inkOn(x.color) && Math.abs(x.v) / nAxis * room / K.BAR_IN_PAD >= x.size));
-      L.score = items.reduce((t, x) => t + (L.out.has(x) || L.inside.has(x) ? rank.get(x) : 0), 0);
-      if (!best || L.score > best.score + 1e-12 || (Math.abs(L.score - best.score) <= 1e-12 && L.inside.size < best.inside.size)) best = L;
-      if (k0 === 0 && k1 === 0 && L.out.size === items.length) break plans;  // все снаружи — лучше не будет
+    // раскладка подписей при ширине подписей категорий cw: доли области под подписи (с запасом 30 %), из них — запас
+    // по краям оси в единицах ряда. Подписи короткого столбца место отчасти уже дают более длинные столбцы той же
+    // стороны: запас нужен на ширину подписи без расстояния от конца столбца до края данных (px на единицу — по
+    // предыдущему приближению). Подпись, которой места снаружи не хватило, не держит запас: отступ пересчитывается по
+    // оставшимся снаружи, пока набор не перестанет меняться
+    const plan = cw => {
+      const room = roomOf(cw);
+      if (!items.length || !(room > 40) || (vert && !(span > 0)) || !(hi > lo)) return { room, bad: true, out: new Set(items), inside: new Set(), score: -1 };
+      const layout = outs => {
+        let out = outs, f = [0, 0], axis = hi - lo, a0 = lo, a1 = hi;
+        for (let it = 0; it <= outs.length; it++) {
+          for (let k = 0; k < 4; k++) {
+            const ppu = room / axis, nd = [0, 0];
+            out.forEach(x => { if (x.v < 0) nd[0] = Math.max(nd[0], x.size * 1.3 - (x.v - lo) * ppu); else nd[1] = Math.max(nd[1], (x.size - pad) * 1.3 - (hi - x.v) * ppu); });
+            f = nd.map(x => Math.max(0, x) / room);
+            const tot = f[0] + f[1]; if (tot > K.BAR_FIT_MAX) f = f.map(x => x * K.BAR_FIT_MAX / tot);
+            axis = (hi - lo) / (1 - f[0] - f[1]); a0 = lo - f[0] * axis; a1 = hi + f[1] * axis;
+          }
+          // место до края оси — после округления оси до деления (K.niceExtent; у горизонтального бара шаг закреплён), с
+          // запасом 10 % на неточность ширины области (её считает ECharts по подписям осей, containLabel)
+          const ex = K.niceExtent(a0, a1, val.splitNumber), ea = ex[1] - ex[0];
+          const keep = out.filter(x => (x.v < 0 ? x.v - ex[0] : ex[1] - x.v) / ea * room + (x.v < 0 ? 0 : pad) >= x.size * 1.1);
+          if (keep.length === out.length) break;
+          out = keep;
+        }
+        return { room, f, axis, a0, a1, out: new Set(out) };
+      };
+      // Подпись, которой снаружи нет места, — внутрь столбца, у его конца, если столбец длиннее подписи на
+      // K.BAR_IN_PAD (длина — по оси после округления ECharts, K.niceExtent); иначе без подписи. Внутрь — самые длинные столбцы каждой стороны (k0 отрицательных, k1
+      // положительных): из раскладок выбирается та, где подписаны самые крупные по модулю столбцы (вес подписи убывает
+      // с местом по модулю), при равенстве — где меньше подписей внутри
+      let best = null;
+      plans: for (let k0 = 0; k0 <= Math.min(side[0].length, 12); k0++) for (let k1 = 0; k1 <= Math.min(side[1].length, 12); k1++) {
+        const inn = side[0].slice(0, k0).concat(side[1].slice(0, k1)), L = layout(items.filter(x => !inn.includes(x)));
+        const ne = K.niceExtent(L.a0, L.a1, val.splitNumber), nAxis = ne[1] - ne[0];
+        L.inside = new Set(inn.filter(x => K.inkOn(x.color) && Math.abs(x.v) / nAxis * room / K.BAR_IN_PAD >= x.size));
+        L.score = items.reduce((t, x) => t + (L.out.has(x) || L.inside.has(x) ? rank.get(x) : 0), 0);
+        if (!best || L.score > best.score + 1e-12 || (Math.abs(L.score - best.score) <= 1e-12 && L.inside.size < best.inside.size)) best = L;
+        if (k0 === 0 && k1 === 0 && L.out.size === items.length) break plans;  // все снаружи — лучше не будет
+      }
+      return best;
+    };
+    // подписи категорий горизонтального бара обрезаются до K.BAR_CAT_MAX ширины (K.fitLabels, «…» в середине; полное
+    // имя — в подсказке), только если без обрезки подписям столбцов не хватает места, а с обрезкой подписано больше
+    let P = plan(catFull);
+    if (!vert && wide > 0 && catFull > capW && items.length && (P.bad || P.out.size < items.length)) {
+      const Q = plan(capW);
+      if (!Q.bad && (P.bad || Q.score > P.score + 1e-12)) {
+        P = Q;
+        const short = K.fitLabels(catT, capW, catPx);
+        cat.axisLabel = Object.assign({}, cat.axisLabel, { formatter: (v, i) => (i != null && short[i] != null ? short[i] : v) });
+      }
     }
-    val.boundaryGap = best.f.map(x => (x * best.axis / span * 100).toFixed(2) + '%');
+    if (P.bad) {
+      if (items.some(x => x.v < 0) && !(P.room > 40)) val.boundaryGap = ['25%', 0];
+      else if (P.room > 40) ticks(lo, hi, P.room);
+      return o;
+    }
+    if (P.f[0] > 0 || P.f[1] > 0) val.boundaryGap = P.f.map(x => (x * P.axis / span * 100).toFixed(2) + '%');
+    ticks(P.a0, P.a1, P.room);
     items.forEach(x => {
-      if (best.out.has(x)) return;
+      if (P.out.has(x)) return;
       const { s, i, v, color } = x, d = s.data[i];
-      const label = best.inside.has(x)
+      const label = P.inside.has(x)
         ? { show: true, position: vert ? (v < 0 ? 'insideBottom' : 'insideTop') : (v < 0 ? 'insideLeft' : 'insideRight'), color: K.inkOn(color), textBorderColor: color, textBorderWidth: 2 }
         : { show: false };
       s.data[i] = d != null && typeof d === 'object' ? Object.assign({}, d, { label: Object.assign({}, d.label, label) }) : { value: d, label };
@@ -1371,12 +1433,13 @@
 
   // ---------- сортировка строк и групп (R31) ----------
   // итог группы или таблицы по столбцу: сумма посчитанных слагаемых sum(r); ни одно не посчитано (все null, #333, B1)
-  // или у столбца nullable все значения nul(r) пусты (#168) — null, на экране «—». Один расчёт для ячейки итога
-  // (K.table, C03) и сортировки групп (K.groupKeys, #347)
+  // или у столбца nullable все значения nul(r) пусты (#168) — null, на экране «—». Слагаемое NaN — «итог не посчитан»
+  // (C17, CARRY.colSum: нетто позиции без фондирования, строгое B1) — тоже null при любых остальных. Один расчёт для
+  // ячейки итога (K.table, C03) и сортировки групп (K.groupKeys, #347)
   K.groupTotal = (list, sum, nul) => {
     if (nul && list.every(r => nul(r) == null)) return null;
     let t = 0, n = 0;
-    list.forEach(r => { const v = sum(r); if (v != null && !Number.isNaN(v)) { t += v; n++; } });
+    for (const r of list) { const v = sum(r); if (Number.isNaN(v)) return null; if (v != null) { t += v; n++; } }
     return n || !list.length ? t : null;
   };
   // значения: пустые — в конец при любом направлении, строки — по алфавиту, числа — по величине

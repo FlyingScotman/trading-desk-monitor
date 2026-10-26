@@ -4,8 +4,12 @@
 //   снаружи у конца столбца или внутри него, у конца, — и читается: контраст с фоном плитки (снаружи) или с цветом
 //   столбца (внутри) не меньше 4.5. Узкий график с подписями с обеих сторон (собран на странице через K.chart, barFit):
 //   подписи длинных столбцов — внутри, целиком в прямоугольнике столбца, контрастные;
-// - #351: подписи делений осей и прочие тексты графиков с барами на C06, C13 и C09 («базис ОФЗ − RUONIA») не
-//   наезжают друг на друга;
+// - #351: подписи делений осей и прочие тексты графиков с барами на C06, C13, C09 («базис ОФЗ − RUONIA») и в разборе
+//   не наезжают друг на друга; у горизонтальных баров подписи делений видны (не меньше двух), ноль подписан, подписи
+//   идут через равный шаг;
+// - #352: подписи категорий горизонтальных баров различимы (разные категории — разные подписи, и в разборе по
+//   позициям на 390); при 1280 и шире подписи «Топ вклада» C06 не обрезаны;
+// - #347: на C17 в демо итог «Нетто» таблицы позиций — «—» (у позиций с прогнозом нет фондирования, B1);
 // - #349: на C09 подпись отрицательного столбца базиса — ниже его нижнего края и не ниже области столбцов,
 //   положительного — выше верхнего.
 // Геометрия — по элементам ECharts после отрисовки. Ошибок консоли нет. Страницы открываются как файлы (file://).
@@ -72,6 +76,35 @@ const texts = (pg, root) => pg.evaluate(sel => {
   });
   return out;
 }, root);
+// горизонтальные бары внутри root: подписи делений оси значений, которые видны на экране (значение и текст), концы оси,
+// подписи категорий на экране (исходная — из data, показанная) и полные подписи категорий (data)
+const hbars = (pg, root) => pg.evaluate(sel => {
+  const out = [];
+  document.querySelectorAll(sel + '[_echarts_instance_], ' + sel + ' [_echarts_instance_]').forEach(el => {
+    const inst = echarts.getInstanceByDom(el), opt = inst && inst.getOption();
+    if (!opt || !el.clientWidth || !(opt.series || []).some(s => s.type === 'bar') || !(opt.yAxis || [])[0] || opt.yAxis[0].type !== 'category' || opt.xAxis.length !== 1) return;
+    const shown = new Map();
+    inst.getZr().storage.getDisplayList().forEach(e => { if (e.style && typeof e.style.text === 'string' && e.style.text && !e.ignore && !e.invisible) shown.set(e.style.text, (shown.get(e.style.text) || 0) + 1); });
+    const take = t => { const n = shown.get(t) || 0; if (!n) return false; shown.set(t, n - 1); return true; };
+    const xa = inst.getModel().getComponent('xAxis').axis, ya = inst.getModel().getComponent('yAxis').axis;
+    const ticks = xa.getViewLabels().filter(l => l.formattedLabel !== '' && take(l.formattedLabel)).map(l => ({ v: +l.tickValue, t: l.formattedLabel }));
+    const cats = ya.getViewLabels().filter(l => take(l.formattedLabel)).map(l => ({ raw: String(l.rawLabel), t: l.formattedLabel }));
+    out.push({ el: el.id || el.parentElement.id || el.className, W: el.clientWidth, ext: xa.scale.getExtent(), ticks, cats, data: (opt.yAxis[0].data || []).map(x => String(x && typeof x === 'object' ? x.value : x)), n: (opt.yAxis[0].data || []).length });
+  });
+  return out;
+}, root);
+// #351: подписи делений видны, ноль подписан (если он на оси), подписи через равный шаг; #352: подписи категорий
+// различимы — у разных категорий разные подписи на экране
+const axesOk = (G, what, opt) => G.forEach(x => {
+  const s = what + ' ' + x.el + ' ' + JSON.stringify({ ext: x.ext, ticks: x.ticks.map(t => t.t) });
+  assert.ok(x.ticks.length >= 2, s + ': подписей делений не меньше двух');
+  if (x.ext[0] <= 0 && x.ext[1] >= 0) assert.ok(x.ticks.some(t => t.v === 0), s + ': ноль подписан');
+  const d = x.ticks.slice(1).map((t, i) => t.v - x.ticks[i].v);
+  assert.ok(d.every(v => Math.abs(v - d[0]) <= 1e-9 * Math.abs(d[0])), s + ': подписи делений через равный шаг');
+  const by = new Map(); x.cats.forEach(c => { if (!by.has(c.t)) by.set(c.t, new Set()); by.get(c.t).add(c.raw); });
+  by.forEach((raws, t) => assert.strictEqual(raws.size, 1, what + ' ' + x.el + ': подпись «' + t + '» у разных категорий ' + [...raws].join(' | ')));
+  if (opt && opt.full) x.cats.forEach(c => assert.strictEqual(c.t, c.raw, what + ' ' + x.el + ': подпись категории не обрезана'));
+});
 const lum = c => { const m = /(\d+(?:\.\d+)?)\D+(\d+(?:\.\d+)?)\D+(\d+(?:\.\d+)?)/.exec(c) || []; let rgb = m.slice(1, 4).map(Number); if (/^#/.test(c)) { let h = c.slice(1); if (h.length <= 4) h = h.split('').map(x => x + x).join(''); rgb = [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16)); } const l = rgb.map(x => { x /= 255; return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); }); return 0.2126 * l[0] + 0.7152 * l[1] + 0.0722 * l[2]; };
 const contrast = (a, b) => { const p = lum(a), q = lum(b); return (Math.max(p, q) + 0.05) / (Math.min(p, q) + 0.05); };
 const inside = x => /^inside/.test(x.pos || '');
@@ -148,12 +181,23 @@ for (const [w, h] of SIZES) for (const theme of ['dark', 'light']) for (const re
         assert.ok(tc.filter(x => !x.shown).length <= 3, 'C06 «Топ вклад»: спрятано ' + tc.filter(x => !x.shown).length);
       }
       noOverlap(await texts(pg, 'body'), 'C06');
+      // деления осей и подписи категорий: «Топ вклад», «Концентрация» (все меры), «Кэрри и фондирование»; при 1280 и
+      // шире подписи «Топ вклада» не обрезаны (места хватает)
+      const c06h = await hbars(pg, 'body');
+      assert.ok(c06h.length >= 3, 'C06: три горизонтальных бара');
+      axesOk(c06h, 'C06');
+      if (w >= 1280) axesOk(c06h.filter(x => x.n === 12), 'C06 «Топ вклад»', { full: true });
       await shot('c06');
+      for (const mode of ['cs01', 'dv01']) {
+        await open('c06-launchpad.html', () => window.KIT && document.querySelector('[_echarts_instance_]'), { 'c06-modes': JSON.stringify({ issuers: mode }) });
+        axesOk(await hbars(pg, 'body'), 'C06 (' + mode + ')');
+      }
+      await open('c06-launchpad.html', () => window.KIT && document.querySelector('[_echarts_instance_]'));
 
       // узкий график с подписями с обеих сторон: длинные столбцы — подпись внутри, у конца, контрастно
       await pg.evaluate(() => {
         const d = document.createElement('div'); d.id = 'pack8probe';
-        d.style.cssText = 'position:fixed;left:0;top:0;width:160px;height:220px;z-index:999;background:var(--panel)';
+        d.style.cssText = 'position:fixed;left:0;top:0;width:150px;height:220px;z-index:999;background:var(--panel)';
         document.body.appendChild(d);
         const vals = [-17.7, -16.2, 18.9, 2, -0.5, -9.1, 15.2];
         KIT.chart(d, () => ({ barFit: true, grid: { left: 4, right: 4, top: 4, bottom: 2, containLabel: true },
@@ -176,7 +220,32 @@ for (const [w, h] of SIZES) for (const theme of ['dark', 'light']) for (const re
           L.filter(x => x.shown).forEach(x => labelOk(x, 'C13 ' + meas));
           noOverlap(await texts(pg, sel), 'C13 ' + sel + ' ' + meas);
         }
+        axesOk(await hbars(pg, '#sector'), 'C13 сектора ' + meas);
       }
+
+      // разбор «из чего цифра» по позициям, вид «график» (#352: обрезанные подписи различимы; #351: деления)
+      // сектор с самым крупным по модулю итогом, MV и PnL дня (много позиций, у многих общее начало имени: «Минфин РФ …»,
+      // «Газпром капитал …»; в PnL — и отрицательные столбцы)
+      for (const meas of ['mv', 'pnl']) {
+        await open('c13-issuers.html', () => window.KIT && document.querySelector('#sector[_echarts_instance_]'), { c13: JSON.stringify({ meas }) });
+        await pg.evaluate(() => {
+          const inst = echarts.getInstanceByDom(document.querySelector('#sector')), data = inst.getModel().getSeriesByIndex(0).getData();
+          let i = 0; for (let k = 0; k < data.count(); k++) if (Math.abs(data.get(data.mapDimension('x'), k)) > Math.abs(data.get(data.mapDimension('x'), i))) i = k;
+          inst.trigger('click', { componentType: 'series', seriesIndex: 0, dataIndex: i, value: data.get(data.mapDimension('x'), i) });
+        });
+        await pg.waitForSelector('.k-drawer');
+        await pg.click('.k-drawer button:has-text("позиции")');
+        await pg.click('.k-drawer button:has-text("график")');
+        await pg.waitForFunction(() => document.querySelector('.k-drawer [_echarts_instance_]'));
+        await settle(pg);
+        const dr = await hbars(pg, '.k-drawer');
+        assert.strictEqual(dr.length, 1, 'разбор ' + meas + ': график');
+        assert.ok(dr[0].n >= 8, 'разбор по позициям: позиций ' + dr[0].n);
+        axesOk(dr, 'разбор ' + meas);
+        noOverlap(await texts(pg, '.k-drawer'), 'разбор ' + meas);
+        await shot('drill-' + meas);
+      }
+
 
       // C09 «базис ОФЗ − RUONIA» (#349): подпись у конца столбца, отрицательного — снизу; тексты не наезжают
       await open('c09-market.html', () => window.KIT && document.querySelector('#curves[_echarts_instance_]'), { 'c09-state': JSON.stringify({ curve: 'basis' }) });
@@ -187,6 +256,19 @@ for (const [w, h] of SIZES) for (const theme of ['dark', 'light']) for (const re
       c09.filter(x => x.shown && x.v < 0).forEach(x => assert.strictEqual(x.pos, 'bottom', 'C09: отрицательный — снизу'));
       noOverlap(await texts(pg, '#curves'), 'C09 базис');
       await shot('c09');
+
+      // C17 (#347, B1): в демо у позиций с прогнозом нет фондирования — итог «Нетто» в таблице «—», а не число
+      await open('c17-forward-carry.html', () => window.KIT && document.querySelector('table.k-tbl tfoot'));
+      const foot = await pg.evaluate(() => {
+        const t = [...document.querySelectorAll('table.k-tbl')].find(x => x.tFoot && [...x.tHead.rows[0].cells].some(c => c.textContent.trim().startsWith('Нетто')));
+        if (!t) return null;
+        const hc = [...t.tHead.rows[0].cells], fc = [...t.tFoot.rows[0].cells];
+        const at = name => { const i = hc.findIndex(c => c.textContent.trim().startsWith(name)); return i >= 0 && fc[i] ? fc[i].textContent.trim() : null; };
+        return { net: at('Нетто'), funding: at('Фондирование'), carry: at('Кэрри'), n: hc.length === fc.length };
+      });
+      assert.ok(foot && foot.n, 'C17: таблица позиций с итогом ' + JSON.stringify(foot));
+      assert.strictEqual(foot.net, '—', 'C17: итог «Нетто» ' + JSON.stringify(foot));
+      assert.ok(/\d/.test(foot.funding) && /\d/.test(foot.carry), 'C17: итоги «Кэрри» и «Фондирование» — числа ' + JSON.stringify(foot));
       assert.deepStrictEqual(errors, []);
     } finally {
       await browser.close();
