@@ -108,7 +108,7 @@ test('фондирование null: «не настроено», нетто «�
   // группы: у книги без правил нетто «—», у остальных — число
   const g = C.groups(rows, 'book', true);
   assert.strictEqual(g.find(x => x.key === 'IC-BND').sums.net, null);
-  assert.ok(g.filter(x => x.key !== 'IC-BND').every(x => x.sums.net != null));
+  assert.ok(g.filter(x => x.key !== 'IC-BND').every(x => x.sums.nCovered ? x.sums.net != null : x.sums.net === null), 'без позиций с прогнозом — null, как у сервера');
   // не настроено целиком: всё фондирование null, остатков ДС нет, нетто null
   const nc = M.forwardCarryDemo({ funding: 'not_configured' });
   const rn = model(nc), sn = C.sums(rn, nc.fundingStatus === 'computed');
@@ -181,9 +181,45 @@ test('флоатеры: знаменатель CS01, итог портфеля �
   assert.strictEqual(one(0).carryDv01, null);
   assert.strictEqual(one(null).carryDv01, null);
   const s = C.sums(rows, true);
-  near(s.carryDv01, fix.reduce((a, r) => a + r.carry, 0) / Math.abs(fix.reduce((a, r) => a + (r.dv01 || 0), 0)), 'итог по фиксам без флоатеров');
-  near(s.carryCs01Flt, flt.reduce((a, r) => a + r.carry, 0) / Math.abs(flt.reduce((a, r) => a + (r.cs01 || 0), 0)), 'флоатеры: кэрри / |CS01|');
-  assert.strictEqual(s.nFlt + s.nFix, s.nCovered);
+  // позиция без знаменателя (0 или нет) не входит ни в числитель, ни в знаменатель: ОФЗ-ПК с CS01 = 0
+  const has = (r, d) => d != null && Math.abs(d) >= 1e-6;
+  const fixD = fix.filter(r => has(r, r.dv01)), fltD = flt.filter(r => has(r, r.cs01)), pk = flt.filter(r => r.kind === 'OFZ_PK' && !r.cs01);
+  assert.ok(pk.length && pk.every(r => r.carryDv01 === null), 'ОФЗ-ПК: CS01 = 0, в строке «—»');
+  near(s.carryDv01, fixD.reduce((a, r) => a + r.carry, 0) / Math.abs(fixD.reduce((a, r) => a + r.dv01, 0)), 'итог по фиксам без флоатеров');
+  near(s.carryCs01Flt, fltD.reduce((a, r) => a + r.carry, 0) / Math.abs(fltD.reduce((a, r) => a + r.cs01, 0)), 'флоатеры: кэрри / |CS01| без ОФЗ-ПК');
+  const naive = flt.reduce((a, r) => a + r.carry, 0) / Math.abs(fltD.reduce((a, r) => a + r.cs01, 0));
+  assert.ok(Math.abs(naive - s.carryCs01Flt) > 1, 'кэрри ОФЗ-ПК в числитель не попадает');
+  assert.strictEqual(s.nFlt, fltD.length); assert.strictEqual(s.nFix, fixD.length);
   // строки остатков ДС — без знаменателя
   assert.ok(rows.filter(r => r.isCash).every(r => r.denom === null && r.carryDv01 === null));
+});
+
+test('нетто группы: нет позиций с прогнозом или фондирование null у позиции без прогноза — «—»; группы = byBook сервера', () => {
+  const d = M.forwardCarryDemo({});
+  const rows = model(d);
+  // фильтр USD: позиций с прогнозом нет — кэрри и нетто null, как у сервера (net null, пока carry null)
+  const usd = C.sums(rows.filter(r => r.ccy === 'USD'), true);
+  assert.strictEqual(usd.nCovered, 0); assert.strictEqual(usd.carry, null); assert.strictEqual(usd.net, null);
+  assert.strictEqual(d.byCcy.USD.net, null);
+  // позиция без прогноза с фондированием null (problem): нетто «—», она в списке для баннера
+  const d2 = JSON.parse(JSON.stringify(M.forwardCarryDemo({})));
+  d2.positions.forEach(p => { if (p.bookId === 'IC-BND') Object.assign(p, { funding: -1000, net: p.carry == null ? null : p.carry - 1000, fundingState: 'funded' }); });
+  const nc = d2.positions.find(p => p.carry == null && p.funding != null);
+  Object.assign(nc, { funding: null, fundingState: 'problem', fundingNote: 'нет правила для строки' });
+  const s2 = C.sums(model(d2), true);
+  assert.strictEqual(s2.nFundingMissing, 0); assert.strictEqual(s2.nFundingMissingNoCarry, 1);
+  assert.strictEqual(s2.net, null);
+  assert.strictEqual(s2.fundingMissing.length, 1); assert.strictEqual(s2.fundingMissing[0].id, nc.positionId);
+  // без пропусков: группы по книгам — как byBook сервера (демо считает его как assemble); с пропусками — нетто «—»
+  const d3 = JSON.parse(JSON.stringify(M.forwardCarryDemo({ horizon: '6M' })));
+  d3.positions.forEach(p => { if (p.bookId === 'IC-BND') Object.assign(p, { funding: -1000, net: p.carry == null ? null : p.carry - 1000, fundingState: 'funded' }); });
+  const srv = M.forwardCarryDemo({ horizon: '6M' }).byBook;
+  C.groups(model(d3), 'book', true).forEach(g => {
+    const b = g.key === 'IC-BND' ? null : srv[g.key];
+    if (!b) return;
+    if (b.carry == null) assert.strictEqual(g.sums.carry, null, g.key); else near(g.sums.carry, b.carry, g.key + ' кэрри');
+    near(g.sums.funding, b.funding, g.key + ' фондирование');
+    if (b.net == null) assert.strictEqual(g.sums.net, null, g.key + ' нетто null'); else near(g.sums.net, b.net, g.key + ' нетто');
+  });
+  C.groups(rows, 'book', true).filter(g => g.key === 'IC-BND').forEach(g => assert.strictEqual(g.sums.net, null, 'книга с null-фондированием'));
 });

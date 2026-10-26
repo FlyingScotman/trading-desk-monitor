@@ -26,7 +26,7 @@
 .c17-sumwrap { display: flex; gap: 10px 28px; flex-wrap: wrap; align-items: flex-start; }
 .c17-sumwrap .side { flex: 1; min-width: 220px; font-size: 12px; color: var(--fg-2); }
 .c17-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
-@media (max-width: 1100px) { .c17-two { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) { .c17-two { grid-template-columns: minmax(0, 1fr); } }
 .c17-lead { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .c17-lead td { padding: 3px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .c17-lead td.nm { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
@@ -41,8 +41,8 @@
 .c17-meet input { width: 74px; text-align: right; min-width: 0; }
 .c17-notes { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--fg-2); }
 .c17-notes li { margin: 2px 0; overflow-wrap: anywhere; }
-/* плитка «Кэрри / DV01»: строки разбивки переносятся на узком экране */
-.k-kpis .k-kpi:last-child .k-kb td { white-space: normal; }
+/* плитки: строки разбивки под цифрой переносятся на узком экране */
+.k-kpis .k-kb td { white-space: normal; }
 .c17-focus .k-fields { margin-top: 4px; }
 .c17-link { cursor: pointer; color: var(--accent); }
 @media (max-width: 720px) {
@@ -87,10 +87,11 @@
       'Фондирование в кэрри не входит — это отдельная колонка (#168). Считает ядро (horizon_portfolio) на рынке прогона.',
     funding: K.tips.funding + '\nЗа период (дата прогона, горизонт]: позиции и остатки держатся, ставки — по пути КС. «не настроено» — нет правил фондирования, а не 0.',
     net: 'Нетто = Кэрри + Фондирование. У группы в нетто входит и фондирование позиций без прогноза кэрри и остатков ДС (строка «фондирование без прогноза кэрри»). ' +
-      '«—» — у позиции с прогнозом фондирование не посчитано: нетто не подменяется кэрри.',
+      '«—» — у какой-нибудь позиции группы фондирование не посчитано (нетто не подменяется кэрри) или в группе нет позиций с прогнозом кэрри.',
     dv01: 'Кэрри / |DV01|, б.п.: на сколько б.п. ставки могут уйти против позиции за горизонт, пока переоценка не съест кэрри. DV01 — ставочный риск прогона (без CS01 и базиса ОФЗ). ' +
       'У флоатеров знаменатель — CS01 (метка «CS»): их основной риск спредовый, ставочный DV01 мал. CS01 = 0 или нет — «—». ' +
-      'Итог портфеля — по фиксам (сумма кэрри / |сумма DV01|, без флоатеров), флоатеры — отдельно: кэрри / |сумма CS01|.',
+      'Итог портфеля — по фиксам (сумма кэрри / |сумма DV01|, без флоатеров), флоатеры — отдельно: кэрри / |сумма CS01|; позиции без знаменателя (0 или нет) не входят ни в числитель, ни в знаменатель. ' +
+      'Сумма DV01 (CS01) — со взаимозачётом: длинные и короткие позиции и хеджи гасят друг друга, поэтому у почти закрытого риска отношение может быть огромным.',
     rest: 'Фондирование позиций без прогноза кэрри (деривативы, валютные бумаги, оценки ниже точной) и строк без позиции (остатки ДС книг и юрлиц). ' +
       'Оно входит в нетто группы, а в колонку кэрри — нет.',
     roll: 'Roll по спреду: бумага сдвигается по кривой G-спредов бумаг того же рейтинга (как C09) к своему сроку на горизонте; CS01 × сдвиг. Уже входит в кэрри. ' +
@@ -203,11 +204,14 @@
     // баннер: фондирование не посчитано целиком или у части позиций с прогнозом
     if (!fundOk) ban.insertAdjacentHTML('beforeend', '<div class="c17-ban"><b>' + esc(C.FUNDING_STATUS[resp.fundingStatus] || resp.fundingStatus) + '.</b> ' + (resp.fundingText && resp.fundingText !== C.FUNDING_STATUS[resp.fundingStatus] ? esc(resp.fundingText) + '. ' : '') +
       'Нетто не показывается: без фондирования это было бы кэрри. Правила фондирования — <a href="../settings.html">Настройки</a>.</div>');
-    else if (S.nFundingMissing) {
+    else if (S.fundingMissing.length) {
+      // позиции с прогнозом и без него: у любой фондирование null — нетто группы «—»
       const books = [...new Set(S.fundingMissing.map(r => r.book))];
-      ban.insertAdjacentHTML('beforeend', '<div class="c17-ban"><b>Фондирование не посчитано у ' + S.nFundingMissing + ' поз. с прогнозом</b> (' + books.map(esc).join(', ') + '): ' +
+      ban.insertAdjacentHTML('beforeend', '<div class="c17-ban"><b>Фондирование не посчитано у ' + S.fundingMissing.length + ' поз.</b>' +
+        (S.nFundingMissing && S.nFundingMissingNoCarry ? ' (' + S.nFundingMissing + ' с прогнозом кэрри, ' + S.nFundingMissingNoCarry + ' без)' : S.nFundingMissingNoCarry ? ' без прогноза кэрри' : ' с прогнозом кэрри') +
+        ', книги ' + books.map(esc).join(', ') + ': ' +
         esc([...new Set(S.fundingMissing.map(r => r.fundingNote || C.FUNDING_STATE[r.fundingState] || r.fundingState))].join('; ')) +
-        '. Нетто этих книг и итога — «—»; без них — ' + f.mn(S.netPartial, DIGB) + ' mm ₽.</div>');
+        '. Нетто этих книг и итога — «—»; без этих позиций — ' + f.mn(S.netPartial, DIGB) + ' mm ₽.</div>');
     }
     body.innerHTML = '';
     const wrap = h('div', 'k-grid'); body.appendChild(wrap);
@@ -223,9 +227,11 @@
     };
     kp.innerHTML =
       K.kpi('Кэрри', kd('Кэрри до ' + f.date(resp.horizonDate), r => r.carry, S.carry), S.nCovered + ' поз. с прогнозом' + (S.nNotCovered ? ' · ' + S.nNotCovered + ' без' : ''), '', TIP.carry) +
-      K.kpi('Фондирование', !fundOk ? '<span class="mut3" title="' + esc(resp.fundingText || '') + '">не настроено</span>' : kd('Фондирование до ' + f.date(resp.horizonDate), r => r.covered ? r.funding : null, S.fundingCovered),
-        fundOk ? 'позиций с прогнозом' + (S.nFundingMissing ? ' · ' + S.nFundingMissing + ' не посчитано' : '') : esc(C.FUNDING_STATUS[resp.fundingStatus] || ''), '', TIP.funding) +
-      K.kpi('Нетто', kd('Нетто до ' + f.date(resp.horizonDate), r => r.net, S.net), S.net == null ? (fundOk ? 'без книг без фондирования: ' + f.mn(S.netPartial, DIGB) : 'нет фондирования') : 'кэрри + всё фондирование', '', TIP.net) +
+      // всё фондирование группы (как итог колонки «Фондирование»): Кэрри + Фондирование = Нетто; разбивка — строками
+      K.kpi('Фондирование', !fundOk ? '<span class="mut3" title="' + esc(resp.fundingText || '') + '">не настроено</span>' : kd('Фондирование до ' + f.date(resp.horizonDate), r => r.funding, S.funding),
+        fundOk ? [['с прогнозом кэрри', f.mn(S.fundingCovered, DIGB)], ['без прогноза и остатки ДС', f.mn(S.fundingRest, DIGB), TIP.rest]].concat(S.fundingMissing.length ? [['не посчитано', S.fundingMissing.length + ' поз.']] : [])
+          : esc(C.FUNDING_STATUS[resp.fundingStatus] || ''), '', TIP.funding) +
+      K.kpi('Нетто', kd('Нетто до ' + f.date(resp.horizonDate), r => r.net, S.net), S.net == null ? (!fundOk ? 'нет фондирования' : !S.nCovered ? 'нет позиций с прогнозом' : 'без ' + S.fundingMissing.length + ' поз. без фондирования: ' + f.mn(S.netPartial, DIGB)) : 'кэрри + фондирование', '', TIP.net) +
       K.kpi('Кэрри / DV01', S.carryDv01 == null ? '<span class="mut3">—</span>' : f.n(S.carryDv01, 0) + K.kpiUnit('б.п.'),
         [['без флоатеров · DV01', f.dv(S.dv01) + ' <span class="u">тыс ₽/бп</span>'], ['флоатеры: Кэрри/CS01', S.carryCs01Flt == null ? '—' : f.n(S.carryCs01Flt, 0) + ' <span class="u">б.п.</span>', 'кэрри флоатеров / |CS01 флоатеров|']], '', TIP.dv01);
     wrap.appendChild(kp);
@@ -236,13 +242,13 @@
     sp.querySelector('.bd').innerHTML = '<div class="c17-sumwrap"><div class="c17-sum">' +
       line('Кэрри', S.carry, '', TIP.carry) +
       (resp.spread === 'curve' ? line('из них roll по спреду', S.spreadRoll || 0, 'sub', TIP.roll) : '<div class="sub">' + K.hint('из них roll по спреду', TIP.roll) + '</div><div class="n sub"><span class="mut3" title="спред держится: переключите «roll по спреду»">не учтён</span></div>') +
-      (fundOk ? line('Фондирование', S.fundingCovered, '', TIP.funding) : '<div>' + K.hint('Фондирование', TIP.funding) + '</div><div class="n"><span class="mut3">не настроено</span></div>') +
+      (fundOk ? line('Фондирование позиций с прогнозом', S.fundingCovered, '', TIP.funding) : '<div>' + K.hint('Фондирование', TIP.funding) + '</div><div class="n"><span class="mut3">не настроено</span></div>') +
       (fundOk ? line('фондирование без прогноза кэрри', S.fundingRest, '', TIP.rest) +
         line('позиции без прогноза', S.fundingNoCarry, 'sub') + line('остатки ДС', S.fundingCash, 'sub') : '') +
       line('Нетто', S.net, 'tot', TIP.net) +
       '</div><div class="side">' +
       (S.nNotCovered ? '<div><span class="c17-link" data-a="nc">' + S.nNotCovered + ' поз. без прогноза кэрри</span> — в кэрри не входят, их фондирование — в строке «без прогноза». Причины — в колонке «Оценка».</div>' : '<div>Прогноз есть у всех позиций.</div>') +
-      (fundOk && S.nFundingMissing ? '<div style="margin-top:4px;color:var(--warn)">' + S.nFundingMissing + ' поз. с прогнозом без фондирования: нетто — «—».</div>' : '') +
+      (fundOk && S.fundingMissing.length ? '<div style="margin-top:4px;color:var(--warn)">' + S.fundingMissing.length + ' поз. без фондирования: нетто — «—».</div>' : '') +
       '<div style="margin-top:4px">Прогон ' + (server ? '#' + esc(resp.runId) : 'демо') + ' на ' + f.date(resp.asOf) + ' → горизонт ' + f.date(resp.horizonDate) + ' (' + resp.days + ' дн.). Суммы — в ' + K.repr + ', пересчёт из рублей по курсу прогона.</div>' +
       '</div></div>';
     const ncl = sp.querySelector('[data-a=nc]');
@@ -262,11 +268,11 @@
       const G = st.dim === 'none' ? null : [{ key: r => r[st.dim] || '—', label: k => esc(st.dim === 'book' ? k + (M.book[k] && M.book[k].name !== k ? ' · ' + M.book[k].name : '') : st.dim === 'entity' ? entName(k) : st.dim === 'kind' ? KIND(k) : k) }];
       const money = (key, label, val, extra) => Object.assign({ key, label, num: true, val, nullable: true, drill: false, unit: 'mm ₽', fmt: v => mn(v), cls: v => v == null ? '' : f.cls(v), sum: r => val(r) || 0, sumFmt: v => mn(v) }, extra || {});
       K.table(tp.querySelector('.bd'), {
-        viewKey: 'c17-positions', title: 'Прогнозное кэрри до ' + resp.horizonDate + ', mm ' + K.repr, rowsFn, maxHeight: '620px',
+        viewKey: 'c17-positions', title: 'Прогнозное кэрри до ' + resp.horizonDate + ', mm ₽', rowsFn, maxHeight: '620px',
         groupBy: G, stripe: r => r.isCash ? 'transparent' : K.issuerColor(r.issuer), rowCls: r => r.covered ? '' : 'c17-nc', sort: [['net', -1]],
         footCount: rows => rows.filter(r => !r.isCash).length + ' поз.',
         columns: [
-          { key: 'name', label: 'Позиция', val: r => r.name, fmt: (v, r) => esc(v) + (r.ccy && r.ccy !== '—' ? ' ' + K.ccyTag(r.ccy) : ''), w: '220px' },
+          { key: 'name', label: 'Позиция', val: r => r.name, fmt: (v, r) => esc(v) + (r.ccy && r.ccy !== '—' ? ' ' + K.ccyTag(r.ccy) : ''), csvFmt: v => v, w: '220px' },
           { key: 'book', label: 'Книга', val: r => r.book, filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
           { key: 'entity', label: 'Юрлицо', val: r => r.entity, filter: true, fmt: v => '<span class="mut">' + esc(entName(v)) + '</span>' },
           { key: 'kind', label: 'Тип', val: r => r.kindLabel, filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
@@ -275,7 +281,7 @@
             fmt: (v, r) => v != null ? '<span title="' + esc([r.fundingRate, C.FUNDING_SOURCE[r.fundingSource], r.fundingNote].filter(Boolean).join(' · ')) + '">' + f.mn(v, DIG) + '</span>'
               : '<span class="mut3" title="' + esc(r.fundingNote || '') + '">' + (r.fundingState === 'not_configured' ? 'не настроено' : r.fundingState === 'problem' ? '— ⚠' : '—') + '</span>' }),
           // нетто группы: «—», если у позиции с прогнозом нет фондирования (NaN → «—»); иначе кэрри + всё фондирование
-          money('net', 'Нетто', r => r.net, { title: TIP.net, tip: true, sum: r => r.covered && r.funding == null ? NaN : (r.carry || 0) + (r.funding || 0) }),
+          money('net', 'Нетто', r => r.net, { title: TIP.net, tip: true, sum: r => !r.isCash && r.funding == null ? NaN : (r.carry || 0) + (r.funding || 0) }),
           { key: 'cdv', label: 'Кэрри/DV01', num: true, val: r => r.carryDv01, csvFmt: v => bp(v),
             fmt: (v, r) => bp(v) + (r.floater && r.covered ? ' <span class="k-tag" title="флоатер: кэрри / |CS01|">CS</span>' : ''), cls: v => v == null ? '' : f.cls(v), unit: 'б.п.', title: TIP.dv01, tip: true },
           { key: 'den', label: 'Знаменатель', val: r => r.covered ? r.denom : null, filter: true, fmt: v => v ? '<span class="mut">' + v + '</span>' : '<span class="mut3">—</span>', title: 'Знаменатель «Кэрри/DV01»: DV01 ставок, у флоатеров — CS01' },
@@ -292,7 +298,7 @@
     const lead = (title, list, vk) => {
       const p = panel(title, '<span class="k-note">нетто, mm ₽</span>'); p.querySelector('.bd').classList.add('flush');
       const mx = Math.max(1, ...list.map(r => Math.abs(r.net)));
-      p.querySelector('.bd').innerHTML = list.length ? '<div style="overflow-x:auto"><table class="c17-lead k-tbl" data-vk="' + vk + '" data-title="' + esc(title) + ', mm ' + K.repr + '"><thead><tr><th></th><th>Позиция</th><th>Книга</th><th class="n">Кэрри</th><th class="n">Фондир.</th><th class="n">Нетто</th><th></th></tr></thead><tbody>' +
+      p.querySelector('.bd').innerHTML = list.length ? '<div style="overflow-x:auto"><table class="c17-lead k-tbl" data-vk="' + vk + '" data-title="' + esc(title) + ', mm ₽"><thead><tr><th></th><th>Позиция</th><th>Книга</th><th class="n">Кэрри</th><th class="n">Фондир.</th><th class="n">Нетто</th><th></th></tr></thead><tbody>' +
         list.map(r => '<tr' + (r.p ? ' data-card="' + esc(r.id) + '"' : '') + '><td style="width:3px;padding:0;background:' + K.issuerColor(r.issuer) + '"></td><td class="nm" title="' + esc(r.name) + '">' + esc(r.name) + '</td><td class="mut">' + esc(r.book) + '</td>' +
           '<td class="n">' + mn(r.carry) + '</td><td class="n">' + mn(r.funding) + '</td><td class="n ' + f.cls(r.net) + '"><b>' + f.mn(r.net, DIG) + '</b></td><td style="width:70px">' + K.bar(r.net, mx) + '</td></tr>').join('') + '</tbody></table></div>'
         : '<div class="k-empty">нет позиций с нетто ' + (vk.endsWith('top') ? '&gt; 0' : '&lt; 0') + '</div>';

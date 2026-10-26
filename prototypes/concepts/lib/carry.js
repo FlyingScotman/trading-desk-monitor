@@ -85,7 +85,7 @@
   // opts: { pos: {id: позиция модели монитора (M.pos)}, k: множитель рубли → валюта показа, books: {id: книга},
   //         kindLabel: код → подпись }
   // dv01 и cs01 — из модели монитора (того же прогона): в ответе сервера их нет; уже в валюте показа.
-  // Знаменатель «кэрри на единицу риска» (решение координатора по #286): у флоатера (p.cpn.type 'float' модели
+  // Знаменатель «кэрри на единицу риска» (решение по #66): у флоатера (p.cpn.type 'float' модели
   // монитора) основной риск спредовый — CS01, у остальных — DV01 ставок
   C.rows = function (resp, opts) {
     opts = opts || {};
@@ -118,7 +118,7 @@
   // кэрри на единицу DV01, б.п.: на сколько б.п. ставки могут уйти против позиции за горизонт, пока переоценка не
   // съест кэрри (кэрри / |DV01|); DV01 ≈ 0 (флоатер без риска, своп с нулевым риском) — нет
   C.isFloater = p => !!(p && p.cpn && p.cpn.type === 'float');
-  C.perDv01 = (carry, dv01) => carry == null || dv01 == null || Math.abs(dv01) < 1e-6 ? null : carry / Math.abs(dv01);
+  C.perDv01 = (carry, dv01) => carry == null || dv01 == null || Math.abs(dv01) < C.MIN_DEN ? null : carry / Math.abs(dv01);
 
   // строки фондирования без позиции (остатки ДС книги или юрлица): псевдострока таблицы, в валюте показа; в кэрри
   // не входит, в фондирование и нетто группы — входит (как у сервера: fundingBookLevel)
@@ -140,12 +140,14 @@
     });
   };
 
+  // знаменатель меньше этого (0, пусто) — отношения нет
+  C.MIN_DEN = 1e-6;
   // итоги группы по строкам C.rows и C.cashRows; fundingOk — fundingStatus === 'computed'. Кэрри — позиции
   // с прогнозом; фондирование — их же (fundingCovered); fundingRest — «фондирование без прогноза кэрри»: позиции
   // без прогноза (fundingNoCarry) и остатки ДС (fundingCash); net = carry + fundingCovered + fundingRest (= carry +
   // funding сервера), null, если у позиции с прогнозом фондирования нет или оно не посчитано вовсе
   C.sums = function (rows, fundingOk) {
-    const s = { n: 0, nCovered: 0, nNotCovered: 0, nFundingMissing: 0, carry: 0, fundingCovered: 0, fundingNoCarry: 0, fundingCash: 0,
+    const s = { n: 0, nCovered: 0, nNotCovered: 0, nFundingMissing: 0, nFundingMissingNoCarry: 0, carry: 0, fundingCovered: 0, fundingNoCarry: 0, fundingCash: 0,
       spreadRoll: null, dv01: 0, carryFix: 0, nFix: 0, cs01Flt: 0, carryFlt: 0, nFlt: 0, netPartial: 0, notCovered: [], fundingMissing: [], nCash: 0 };
     rows.forEach(r => {
       if (r.isCash) { s.nCash++; if (r.funding != null) s.fundingCash += r.funding; return; }
@@ -153,13 +155,16 @@
       if (r.covered) {
         s.nCovered++; s.carry += r.carry;
         // кэрри/DV01 итога — по фиксам (без флоатеров), флоатеры — кэрри/CS01 отдельно
-        if (r.floater) { s.nFlt++; s.carryFlt += r.carry; if (r.cs01 != null) s.cs01Flt += r.cs01; }
-        else { s.nFix++; s.carryFix += r.carry; if (r.dv01 != null) s.dv01 += r.dv01; }
+        // позиция без знаменателя (0 или нет) не входит ни в числитель, ни в знаменатель
+        const den = r.floater ? r.cs01 : r.dv01;
+        if (den != null && Math.abs(den) >= C.MIN_DEN) {
+          if (r.floater) { s.nFlt++; s.carryFlt += r.carry; s.cs01Flt += den; } else { s.nFix++; s.carryFix += r.carry; s.dv01 += den; }
+        }
         if (r.spreadRoll != null) s.spreadRoll = (s.spreadRoll || 0) + r.spreadRoll;
         if (r.funding != null) { s.fundingCovered += r.funding; s.netPartial += r.carry + r.funding; } else { s.nFundingMissing++; s.fundingMissing.push(r); }
       } else {
         s.nNotCovered++; s.notCovered.push(r);
-        if (r.funding != null) s.fundingNoCarry += r.funding;
+        if (r.funding != null) s.fundingNoCarry += r.funding; else { s.nFundingMissingNoCarry++; s.fundingMissing.push(r); }
       }
     });
     s.fundingOk = !!fundingOk;
@@ -169,7 +174,9 @@
     } else {
       s.fundingRest = s.fundingNoCarry + s.fundingCash;  // «фондирование без прогноза кэрри»
       s.funding = s.fundingCovered + s.fundingRest;
-      s.net = s.nFundingMissing ? null : (s.carry || 0) + s.funding;
+      // нетто: «—», если у какой-нибудь позиции фондирования нет (с прогнозом или без) или в группе нет ни одной
+      // позиции с прогнозом (как сервер: net null, пока carry null)
+      s.net = s.nFundingMissing || s.nFundingMissingNoCarry || !s.nCovered ? null : s.carry + s.funding;
       s.netPartial += s.fundingRest;
     }
     s.carryDv01 = C.perDv01(s.carryFix, s.nFix ? s.dv01 : null);
