@@ -112,8 +112,8 @@
         if (nx && nx.classList.contains('c16-sub')) { while (nx && nx.classList.contains('c16-sub')) { const r = nx; nx = nx.nextElementSibling; r.remove(); } tr.setAttribute('aria-expanded', 'false'); return; }
         tr.setAttribute('aria-expanded', 'true');
         const x = R[+tr.dataset.r];
-        const rows = keys.filter(k => x.components[k]).map(k => '<tr class="c16-sub"><td></td><td colspan="3">' + esc(C[k]) + (inRep.has(k) ? '' : ' <span class="mut3">вне отчёта</span>') + '</td><td class="n">' + amt(x.components[k]) + '</td><td colspan="2"></td></tr>').join('') +
-          '<tr class="c16-sub"><td></td><td colspan="3" class="mut">всего из позиций · строки отчёта: ' + esc((x.src || []).join(', ') || '—') + (x.valid_date && x.valid_date !== d.as_of ? ' · отчёт от ' + f.date(x.valid_date) : '') + '</td><td class="n">' + amt(x.derived) + '</td><td colspan="2"></td></tr>';
+        const rows = keys.filter(k => x.components[k]).map(k => '<tr class="c16-sub" data-csv-skip="1"><td></td><td colspan="3">' + esc(C[k]) + (inRep.has(k) ? '' : ' <span class="mut3">вне отчёта</span>') + '</td><td class="n">' + amt(x.components[k]) + '</td><td colspan="2"></td></tr>').join('') +
+          '<tr class="c16-sub" data-csv-skip="1"><td></td><td colspan="3" class="mut">всего из позиций · строки отчёта: ' + esc((x.src || []).join(', ') || '—') + (x.valid_date && x.valid_date !== d.as_of ? ' · отчёт от ' + f.date(x.valid_date) : '') + '</td><td class="n">' + amt(x.derived) + '</td><td colspan="2"></td></tr>';
         tr.insertAdjacentHTML('afterend', rows);
       };
     });

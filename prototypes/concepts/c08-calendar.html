@@ -241,8 +241,8 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     const po = panel('<span style="color:var(--warn)">●</span> Оферты и коллы — точки решения'); col.appendChild(po);
     po.querySelector('.bd').classList.add('flush', 'scroll'); po.querySelector('.bd').style.maxHeight = '320px';
     const L = K.list().filter(p => p.event && (p.event.kind === 'put' || p.event.kind === 'call')).sort((a, b) => a.event.date.localeCompare(b.event.date));
-    po.querySelector('.bd').innerHTML = L.length ? '<table class="mini" data-vk="c08-offers-calls" data-title="Оферты и коллы"><thead><tr><th>Дата</th><th class="n">Дней</th><th>Бумага</th><th class="n">Номинал</th><th class="n">Цена</th><th class="n">Дох.</th><th class="n">Спред</th></tr></thead><tbody>' +
-      L.map(p => { const dd = Math.round(U.yearsTo(p.event.date) * 365.25), inH = p.event.date <= e; return '<tr data-card="' + p.id + '"' + (inH ? '' : ' style="opacity:.55"') + '><td>' + f.date(p.event.date) + ' <span class="mut3">' + (p.event.kind === 'put' ? 'пут' : 'колл') + '</span></td><td class="n ' + (dd <= 45 ? 'soon' : '') + '">' + dd + '</td><td><b style="color:' + K.issuerColor(p.issuer) + '">●</b> ' + esc(p.name) + '</td><td class="n">' + f.mn(p.notional, 0) + '<span class="mut3">mm ' + p.ccy + '</span></td><td class="n ' + (p.price < 100 ? 'neg' : 'pos') + '">' + f.px(p.price) + '</td><td class="n">' + f.pct(p.ytm) + '</td><td class="n">' + f.bp(p.zspread) + '</td></tr>'; }).join('') + '</tbody></table>' +
+    po.querySelector('.bd').innerHTML = L.length ? '<table class="mini" data-vk="c08-offers-calls" data-title="Оферты и коллы"><thead><tr><th>Дата</th><th>Вид</th><th class="n">Дней</th><th>Бумага</th><th class="n">Номинал</th><th class="n">Цена</th><th class="n">Дох.</th><th class="n">Спред</th></tr></thead><tbody>' +
+      L.map(p => { const dd = Math.round(U.yearsTo(p.event.date) * 365.25), inH = p.event.date <= e; return '<tr data-card="' + p.id + '"' + (inH ? '' : ' style="opacity:.55"') + '><td data-date="' + p.event.date + '">' + f.date(p.event.date) + '</td><td class="mut3">' + K.offerKindText(p.event.kind) + '</td><td class="n ' + (dd <= 45 ? 'soon' : '') + '">' + dd + '</td><td><b style="color:' + K.issuerColor(p.issuer) + '">●</b> ' + esc(p.name) + '</td><td class="n">' + f.mn(p.notional, 0) + '<span class="mut3">mm ' + p.ccy + '</span></td><td class="n ' + (p.price < 100 ? 'neg' : 'pos') + '">' + f.px(p.price) + '</td><td class="n">' + f.pct(p.ytm) + '</td><td class="n">' + f.bp(p.zspread) + '</td></tr>'; }).join('') + '</tbody></table>' +
       '<div class="k-note" style="padding:6px 10px">цена ниже 100 у пут-оферты — бумагу выгодно предъявить; бледные — за горизонтом</div>' : '<div class="k-empty">нет оферт</div>';
     K.tableToolsAll(po.querySelector('.bd'));
     // список по неделям
@@ -256,7 +256,8 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
         { key: 'kind', label: 'Событие', fmt: (v, r) => '<span class="kb" style="--c:' + KC[v] + '">' + KN[v] + '</span>' + (r.est ? ' <span class="mut3">прогноз</span>' : '') },
         { key: 'name', label: 'Бумага', fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
         { key: 'ccy', label: 'Вал', fmt: (v, r) => K.ccyTag(r.ccy), val: r => M.ccyOrder[r.ccy] },
-        { key: 'amt', label: 'Сумма', num: true, fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + (r.ccy || '') + '</span>' },
+        // в CSV — число (mm в валюте выпуска), валюта — в колонке «Вал» (#183)
+        { key: 'amt', label: 'Сумма', num: true, unit: 'mm', fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + (r.ccy || '') + '</span>', csvFmt: v => f.mn(v, 2) },
         { key: 'val', label: '≈ mm ₽', num: true, fmt: v => f.mn(v, 1), sum: true, drill: false },
         { key: 'book', label: 'Книга', fmt: v => '<span class="mut">' + esc(v) + '</span>' },
       ],

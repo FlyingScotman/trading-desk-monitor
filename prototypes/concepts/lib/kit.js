@@ -760,6 +760,8 @@
             '<td class="n">' + (dim === 'pos' && x.p.mv == null ? '—' : f.mn(mvOf(x), 1)) + '</td>' +
             '<td class="n ' + f.cls(x.v) + '">' + fmt(x.v) + '</td><td>' + K.bar(x.v, max) + '</td><td class="n mut">' + Math.round(Math.abs(x.v) / absTot * 100) + '%</td><td class="n mut3">' + Math.round(cum / absTot * 100) + '%</td></tr>';
         }).join('') + '</tbody><tfoot><tr><td></td><td>Итого</td><td colspan="' + (dim === 'pos' ? 3 : 1) + '"></td><td class="n">' + f.mn(mvTot, 1) + '</td><td class="n ' + f.cls(tot) + '">' + fmt(tot) + '</td><td colspan="3"></td></tr></tfoot></table>';
+      // CSV разбора (#184): то, что на экране, — разрез и фильтр; полоска и столбик доли не выгружаются
+      K.tableTools(body, { viewKey: 'drill', title: spec.title + ' · ' + D[1] + (spec.unit ? ', ' + spec.unit : '') });
       body.querySelectorAll('tr.row').forEach(tr => tr.onclick = () => {
         const x = g[tr.dataset.k];
         if (dim === 'pos') K.card(x.k); else K.drill(Object.assign({}, spec, { title: spec.title + ' · ' + x.label, rows: x.n, dim: 'pos' }));
@@ -1704,6 +1706,7 @@
   };
 
   // стандартные колонки позиций (концепты берут нужные по ключу)
+  K.offerKindText = k => ({ put: 'пут', call: 'колл' })[k] || k || '';
   K.posCols = {
     // валюта и эмитент — обычные столбцы (R37): сортировка и фильтр по значениям, как у остальных
     issuer: { key: 'issuerName', label: 'Эмитент', filter: true, title: 'эмитент (у деривативов — контрагент)', fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
@@ -1715,7 +1718,9 @@
     coupon: { key: 'couponFmt', label: 'Купон', fmt: v => '<span class="mono">' + esc(v || '—') + '</span>' },
     event: { key: 'event', label: 'Событие', val: r => r.event.date, fmt: (v, r) => '<span class="mut3">' + ({ put: 'пут', call: 'колл', mat: 'погаш' }[r.event.kind]) + '</span> ' + f.date(r.event.date) },
     maturity: { key: 'maturity', label: 'Погашение', fmt: v => f.date(v) },
-    offer: { key: 'offer', label: 'Оферта', fmt: (v, r) => v ? f.date(v) + ' <span class="mut3">' + (r.offerKind === 'put' ? 'P' : 'C') + '</span>' : '<span class="mut3">—</span>' },
+    // дата оферты — колонкой-датой (в CSV — дата Excel), вид оферты — своей колонкой (#183)
+    offer: { key: 'offer', label: 'Оферта', date: true, fmt: v => v ? f.date(v) : '<span class="mut3">—</span>' },
+    offerKind: { key: 'offerKind', label: 'Вид оферты', filter: r => K.offerKindText(r.offerKind) || '—', val: r => r.offer ? r.offerKind : null, fmt: v => v ? esc(K.offerKindText(v)) : '<span class="mut3">—</span>' },
     tenor: { key: 'tenor', label: 'Срок', num: true, fmt: v => f.yrs(v), title: 'до оферты, если есть, иначе до погашения' },
     notional: { key: 'notional', label: 'Номинал', num: true, fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', title: 'в валюте бумаги' },
     mv: { key: 'mv', label: 'MV, mm ₽', num: true, fmt: v => f.mn(v, 0), sum: true, unit: 'mm ₽', sumFmt: v => f.mn(v, 0) },
@@ -1807,16 +1812,16 @@
     const amt = (c, v) => v == null ? '—' : f.mn(v, 2) + ' <small>mm ' + esc(c || '') + '</small>';
     const rate = v => v == null ? '—' : f.n(v, 4);
     const fwd = l => l.fwdRate != null ? l.fwdRate : l.forwardRate;
-    const cols = [['Нога', l => esc(LEG[l.leg] || l.leg || '—')], ['Валютирование', l => l.valueDate ? f.date(l.valueDate) : '—'],
+    const cols = [['Нога', l => esc(LEG[l.leg] || l.leg || '—')], ['Валютирование', l => l.valueDate ? f.date(l.valueDate) : '—', l => l.valueDate],
       ['Покупка', l => amt(l.buyCcy, l.buyAmount)], ['Продажа', l => amt(l.sellCcy, l.sellAmount)],
       ['Курс сделки', l => rate(l.contractRate) + (l.rateQuote ? ' <small>' + esc(l.rateQuote) + '</small>' : '')]]
       .concat(L.some(l => fwd(l) != null) ? [['Форвард', l => rate(fwd(l))]] : [])
       .concat(any('points') ? [['Пойнты', l => l.points == null ? '—' : f.s(l.points, 4)]] : [])
       .concat(any('settlement') ? [['Расчёт', l => esc(SET[l.settlement] || l.settlement || '—') + (l.settlementCcy ? ' <small>в ' + esc(l.settlementCcy) + '</small>' : '')]] : [])
       .concat(any('fixingDate') ? [['Фиксинг', l => l.fixingDate ? f.date(l.fixingDate) + (l.fixingSource ? ' <small>' + esc(l.fixingSource) + '</small>' : '') + (l.fixingRate != null ? ' <small>' + rate(l.fixingRate) + '</small>' : '') : '—']] : [])
-      .concat(any('paymentDate') ? [['Выплата', l => l.paymentDate ? f.date(l.paymentDate) : '—']] : []);
-    return '<div class="k-tbl-wrap"><table class="k-tbl k-compact"><thead><tr>' + cols.map(c => '<th' + (c[0] === 'Нога' || c[0] === 'Расчёт' ? '' : ' class="n"') + '>' + c[0] + '</th>').join('') + '</tr></thead><tbody>' +
-      L.map(l => '<tr>' + cols.map(c => '<td' + (c[0] === 'Нога' || c[0] === 'Расчёт' ? '' : ' class="n"') + '>' + c[1](l) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>';
+      .concat(any('paymentDate') ? [['Выплата', l => l.paymentDate ? f.date(l.paymentDate) : '—', l => l.paymentDate]] : []);
+    return '<div class="k-tbl-wrap"><table class="k-tbl k-compact k-legs"><thead><tr>' + cols.map(c => '<th' + (c[0] === 'Нога' || c[0] === 'Расчёт' ? '' : ' class="n"') + '>' + c[0] + '</th>').join('') + '</tr></thead><tbody>' +
+      L.map(l => '<tr>' + cols.map(c => '<td' + (c[0] === 'Нога' || c[0] === 'Расчёт' ? '' : ' class="n"') + (c[2] && c[2](l) ? ' data-date="' + esc(c[2](l)) + '"' : '') + '>' + c[1](l) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>';
   };
 
   // ---------- карточка позиции ----------
@@ -1921,6 +1926,14 @@
     return { series, tooltip, note };
   };
 
+  // таблицы карточки позиции (#184): ноги сделки, риск по кривым и срокам, потоки — «⤓ CSV» и ширина колонок, как у
+  // ручных таблиц мониторов (K.tableTools). Ключ раскладки — по виду таблицы (ширина общая для всех позиций, в полной
+  // карточке и в карточке C03), имя файла — с ISIN позиции (иначе с её номером), название в CSV — с именем позиции
+  K.CARD_TABLES = [['table.k-legs', 'card-legs', 'Ноги сделки'], ['table.k-crisk', 'card-curve-risk', 'Риск по кривым и срокам, тыс ₽/бп'], ['table.k-cflows', 'card-flows', 'Потоки']];
+  K.cardTableTools = (root, p) => K.CARD_TABLES.forEach(([sel, key, title]) => {
+    const t = root && root.querySelector && root.querySelector(sel);
+    if (t) K.tableTools(t, { viewKey: key, title: title + ': ' + K.htmlText(p.name), fileName: key + '_' + (p.isin || p.id) });
+  });
   K.card = function (id) {
     const p = M.pos[id]; if (!p) return;
     const o = drawer(true); o.title = p.name; o.charts = [];
@@ -2008,6 +2021,7 @@
       series: cids.map(id => ({ name: M.curve[id].short, type: 'bar', stack: 'a', data: p.risk[id], itemStyle: { color: K.curveColors[id] } })).concat(p.cs01 ? [{ name: 'CS01', type: 'bar', data: p.cs01b, itemStyle: { color: K.curveColors.CS01 } }] : []),
     }));
     o.charts.push(rc);
+    K.cardTableTools(o.bd, p);
     if (isBond) {
       K.flows(o.bd.querySelector('.cfs'), p);
     }
@@ -2125,7 +2139,8 @@
   // K.flows(el, p): сразу — потоки набора данных, затем, когда сервер ответит, — весь график
   K.flows = function (el, p) {
     el.innerHTML = K.flowsTable(p, M.cashflows.filter(c => c.pos === p.id), !!M.posFlows);
-    if (M.posFlows) M.posFlows(p.id).then(cf => { if (el.isConnected && el.dataset.pos === p.id) el.innerHTML = K.flowsTable(p, cf || M.cashflows.filter(c => c.pos === p.id)); });
+    K.cardTableTools(el, p);
+    if (M.posFlows) M.posFlows(p.id).then(cf => { if (el.isConnected && el.dataset.pos === p.id) { el.innerHTML = K.flowsTable(p, cf || M.cashflows.filter(c => c.pos === p.id)); K.cardTableTools(el, p); } });
     el.dataset.pos = p.id;
   };
   K.flowsTable = function (p, cf, loading) {
@@ -2135,8 +2150,8 @@
     const sum = cf.reduce((s, c) => s + (c.kind === 'put' || c.kind === 'call' || c.amountRub == null ? 0 : c.amountRub), 0);
     return '<div class="mut3" style="font-size:11px;margin-bottom:4px">' + (loading ? 'загрузка всех потоков… · ' : '') + cf.length + ' потоков до ' + f.date(cf[cf.length - 1].date) +
       (offer ? ' · после оферты ' + f.date(offer) + ' — бледнее' : '') + ' · оферта — номинал к предъявлению, в сумму не входит</div>' +
-      '<div style="max-height:360px;overflow:auto"><table class="k-tbl"><thead><tr><th>Дата</th><th>Тип</th><th class="n">Сумма, ' + p.ccy + '</th><th class="n">≈ mm ₽</th></tr></thead><tbody>' +
-      cf.map(c => '<tr' + (offer && c.date > offer ? ' style="opacity:.55"' : '') + '><td>' + f.date(c.date) + '</td><td>' + (c.amort ? 'амортизация' : KIND[c.kind] || c.kind) + (c.est ? ' <span class="mut3">прогноз</span>' : '') + '</td><td class="n">' + f.n(c.amount, 0) + '</td><td class="n">' + f.mn(c.amountRub, 1) + '</td></tr>').join('') +
+      '<div style="max-height:360px;overflow:auto"><table class="k-tbl k-cflows"><thead><tr><th>Дата</th><th>Тип</th><th class="n">Сумма, ' + p.ccy + '</th><th class="n">≈ mm ₽</th></tr></thead><tbody>' +
+      cf.map(c => '<tr' + (offer && c.date > offer ? ' style="opacity:.55"' : '') + '><td data-date="' + esc(c.date) + '">' + f.date(c.date) + '</td><td>' + (c.amort ? 'амортизация' : KIND[c.kind] || c.kind) + (c.est ? ' <span class="mut3">прогноз</span>' : '') + '</td><td class="n">' + f.n(c.amount, 0) + '</td><td class="n">' + f.mn(c.amountRub, 1) + '</td></tr>').join('') +
       '</tbody><tfoot><tr><td></td><td>Итого без оферт</td><td></td><td class="n">' + f.mn(sum, 1) + '</td></tr></tfoot></table></div>';
   };
 
