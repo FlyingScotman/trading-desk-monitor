@@ -389,7 +389,7 @@
       issuer: null, issuerGroup: null, sector: null, rating: null, ccy, maturity, tenorY: T,
       couponType: 'fix', coupon: fixed, index: idxName, side, notional, price: null,
       mv: mvCcy, mvRub: mvCcy * FX[ccy], ytm: par, spreadBp: null, mdur: null,
-      dv01, cs01: 0, risk, fxDelta: {}, jtd: 0, counterparty: opts.cpty || 'НКЦ (клиринг)', newToday: !!opts.newToday,
+      dv01, cs01: 0, risk, fxDelta: {}, jtd: 0, counterparty: opts.cpty || 'ЦК (клиринг)', newToday: !!opts.newToday,
       // pay-fixed = короткая фиксированная облигация → отрицательная выпуклость
       gamma: gammaRows(risk, -sgn * notional * FX[ccy] * bondMath(T, fixed, 2, par / 100).convexity * 1e-8, false, ccy !== 'RUB' ? ccy : null, 0),
     });
@@ -480,7 +480,7 @@
       ccy, maturity: valueDate, tenorY: T, couponType: null, coupon: null, index: null, side: amountFx > 0 ? 'BUY' : 'SELL',
       notional: amountFx, price: rate, mv: mvRub / FX[ccy], mvRub, ytm: null, spreadBp: null, mdur: null,
       dv01: Object.values(risk).reduce((s, v) => s + v.reduce((a, b) => a + b, 0), 0), cs01: 0, risk, fxDelta, jtd: 0,
-      counterparty: opts.cpty || 'Мосбиржа', newToday: !!opts.newToday,
+      counterparty: opts.cpty || 'Биржа', newToday: !!opts.newToday,
     });
   }
   fx('FXB', 'USDRUB', 'TOM', 9.5 * mm, 81.10, '2026-10-14');
