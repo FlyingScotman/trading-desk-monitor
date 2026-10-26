@@ -3,13 +3,10 @@ into the desk store (store_rows.insert_run). The previous date is the synthetic 
 
 from __future__ import annotations
 
-import copy
 import dataclasses
-import json
 from datetime import date, timedelta
 from pathlib import Path
 
-import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from store_rows import insert_run
@@ -20,27 +17,12 @@ from desk.api.compat import run_slice
 from desk.marketdata.adapter import MarketView
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import Outcome, attach_pnl, prepare, value
-from desk.rules import ocp as ocp_rules
-from desk.settings import update_settings_json
 from desk.store import MIGRATIONS
 
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1"
 STATIC = Path(__file__).resolve().parents[2] / "prototypes"
 DATE = "2026-10-15"
 QTY = 1000.0
-# Keys of window.DESK.source the parity test leaves out; everything else must be equal.
-EXCLUDED = {"runId": "the two stores number their runs independently",
-            "publishedAt": "publication time of each store's run",
-            **dict.fromkeys(("cutType", "cutTs", "slice", "prevCutType", "pnlBasis", "marketDate", "marketCutType"),
-                            "the run's market slice (R11): the desk store's only"),
-            "ofzScheme": "how the run values OFZ (#32, the pages' basis view): the desk store's only",
-            "curveUnits": "the unit of each curve's buckets (#171, the pages' tips): the desk store's only"}
-R10_RUN = {"pnlAvailable", "pnlReason", "pnlReasonText", "pnlCoverage", "riskNotes",  # riskNotes: R14
-           "FX_SOURCE",  # R26: the market rate's source (MOEX 19:00 ...)
-           "fundingStatus"}  # B1: funding computed, or why not (not configured: no rules in the store)
-"""window.DESK keys compat adds (R10: a missing PnL is said, not shown as 0); tdm's assembler has none."""
-R10_PNL = {"available", "reason", "reasonText", "reasonDetail", "method", "methodText", "flag", "reported"}
-"""Keys of a position's ``pnl`` compat adds."""
 
 
 @pytest.fixture(scope="module")
@@ -250,89 +232,3 @@ def test_desk_data_js_without_runs_gives_the_empty_state_not_the_demo(client):
     assert client.get("/desk-empty.js").status_code == 200
     assert_error(client.get("/api/v1/compat/desk"), 404, "not_found")
     assert client.get("/desk-monitor.html").status_code == 200
-
-
-def test_compat_parity_with_tdm_assemble(store_url, book, client, tmp_path, monkeypatch):
-    """The same outcomes through legacy_tdm.publish (the tdm writer the backend dropped in #294) into a tdm store
-    and through insert_run into the desk store, on the synthetic previous date of S2 and on the fixture date:
-    tdm.assemble.assemble on the first equals the compat adapter on the second, history included. The ``tdm`` package
-    left the repository (#295): skipped without it; the test goes with compat (#293)."""
-    pytest.importorskip("tdm")
-    import legacy_tdm
-    from tdm.assemble import assemble, resolve_run
-    from tdm.db import connect
-
-    home = tmp_path / "home"  # the market default rate off (#237): no funding at all, as tdm
-    home.mkdir()
-    monkeypatch.setenv("DESK_HOME", str(home))
-    update_settings_json({"funding": {"default_rate": {"kind": "none"}, "default_rate_by_ccy": {}}}, home)
-    ctx, positions, view = book
-    early = copy.copy(ctx.market)
-    early.business_date = view.business_date
-    early = dataclasses.replace(ctx, market=early)  # the same outcomes, one business date earlier
-    db = tmp_path / "tdm.sqlite"
-    assert legacy_tdm.publish(str(db), early, [p[:3] for p in positions], prev=None)[1] == "complete"
-    insert_run(store_url, early, positions, None)
-    tdm_id, status, _ = legacy_tdm.publish(str(db), ctx, [p[:3] for p in positions], prev=view)
-    assert status == "complete"
-    with psycopg.connect(store_url) as pg, connect(db) as con:  # the presets, as the tdm store would hold them
-        con.executemany("INSERT INTO scenario_def (scenario_id, name, ord, definition_json, active, updated_at,"
-                        " kind, description) VALUES (?, ?, ?, ?, ?, '-', ?, ?)",
-                        [(i, n, o, json.dumps(d, ensure_ascii=False), int(a), k, desc) for i, n, o, d, a, k, desc in
-                         pg.execute("SELECT scenario_id, name, ord, definition, active, kind, description"
-                                    " FROM scenario_def")])
-    con = connect(db, readonly=True)
-    want = json.loads(json.dumps(assemble(con, resolve_run(con))))
-    con.close()
-    rid = run(store_url, book, cut_type="eod_preliminary")
-    run(store_url, book, run_type="TEST")
-    js = client.get("/desk-data.js").text
-    assert js.startswith("window.DESK = ") and js.endswith(";\n")
-    got = json.loads(js[len("window.DESK = "):-2])
-    assert got == client.get(f"/api/v1/compat/desk?as_of={DATE}").json() == \
-        client.get(f"/api/v1/compat/desk?run_id={rid}").json()
-    assert got["source"]["runId"] == rid and want["source"]["runId"] == tdm_id
-    for key in EXCLUDED:
-        got["source"].pop(key), want["source"].pop(key, None)
-    assert set(got) - R10_RUN == set(want)
-    assert got["pnlAvailable"] and got["pnlReason"] is None and got["pnlCoverage"]["withPnl"] > 0
-    for k in want:
-        if k != "positions":
-            assert got[k] == want[k], k
-    nv = [p for p in got["positions"] if p.get("notValued")]  # compat lists the unvalued position, tdm does not
-    assert len(nv) == 1 and nv[0]["mvRub"] is None and nv[0]["extra"]["quality"] == "not_valued"
-    assert nv[0]["extra"]["reason"] and not nv[0]["risk"] and nv[0]["dv01"] == 0 and got["positions"][-1] is nv[0]
-    assert nv[0]["pnl"]["available"] is False and nv[0]["pnl"]["reason"] == "not_valued"
-    assert nv[0]["pnl"]["explained"] is None and nv[0]["pnl"]["carry"] is None
-    got["positions"] = got["positions"][:-1]
-    assert [p["id"] for p in got["positions"]] == [p["id"] for p in want["positions"]]
-    for a, b in zip(got["positions"], want["positions"], strict=True):  # tdm: a missing PnL as 0, compat: null
-        assert a["extra"].pop("funding")["state"] == "not_configured"  # B1: no funding rules in this store
-        if a.get("fxDelta"):  # B2: a row with an FX delta has its OCP component (tdm has none)
-            assert a["extra"].pop("ocp")["component"] in ocp_rules.COMPONENTS
-        if a["instrType"] == "BOND" and a["ccy"] != "RUB":  # TDM#54: no rules, no liability: the FX delta as tdm's
-            assert a["extra"].pop("fx_liability")["state"] == "not_configured"
-        if a["pnl"]["available"]:
-            assert a["pnl"]["reported"] == 0.0 and a["pnl"]["method"]
-            assert a["pnl"]["funding"] is None and b["pnl"]["funding"] == 0  # not configured: null, not 0
-            a["pnl"]["funding"] = b["pnl"]["funding"]
-        else:
-            assert a["pnl"]["reasonText"] and all(a["pnl"][k] is None for k in b["pnl"])
-            assert not any(b["pnl"][k] for k in b["pnl"])
-            a["pnl"] = {**b["pnl"]}
-        for k in R10_PNL & set(a["pnl"]):
-            a["pnl"].pop(k)
-    for a, b in zip(got["positions"], want["positions"], strict=True):
-        if b.get("couponType") == "fix" and a.get("couponType") not in ("fix", "float"):
-            a = {**a, "couponType": "fix"}  # tdm knows fix/float only; the desk store keeps the hub's type (D5)
-        assert a == b,(a["id"], {f: (a.get(f), b.get(f)) for f in set(a) | set(b) if a.get(f) != b.get(f)})
-    w = want["positions"]  # the comparison covered PnL, fallback rungs, gamma, bucket risk, reference data
-    assert len(w) == len(positions) - 1  # the unvalued position is in neither
-    assert any(p["pnl"]["explained"] for p in w) and any(not p["pnl"]["explained"] for p in w)
-    assert {p["extra"]["quality"] for p in w} >= {"exact", "assumed", "market_value"}
-    assert any(p["gamma"] for p in w) and any(p["risk"] for p in w)
-    h = want["history"]
-    assert [x["date"] for x in h] == [view.business_date.isoformat(), DATE] and h[0]["pnlOfficial"]
-    assert h[1]["pnlCum"] == h[0]["pnlOfficial"] + h[1]["pnlOfficial"] and h[0]["dv01"] and h[0]["cs01"]
-    assert "keyhike" in [x["id"] for x in want["SCENARIOS"]]
-    assert want["CURVES"] and want["ISSUERS"] and len(want["FX"]) > 1 and want["INDICES"] and want["BOOKS"]

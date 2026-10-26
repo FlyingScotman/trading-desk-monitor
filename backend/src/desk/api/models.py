@@ -806,14 +806,16 @@ class CarrySums(BaseModel):
     dv01: float | None = Field(None, description="Sum of the positions' DV01 (every position that has one)")
     cs01: float | None = Field(None, description="Sum of the positions' cs01 (every position that has one)")
     funding: float | None = Field(description="Funding of the covered positions (those with a carry forecast)")
-    fundingNoCarry: float | None = Field(description="Funding of the positions without a carry forecast")
+    fundingNoCarry: float | None = Field(description="Funding of the positions without a carry forecast; null when "
+                                         "one of them has an unknown funding (nNoCarryNoFunding)")
     fundingBookLevel: float | None = Field(description="Funding lines without a position (cash balances, an "
                                            "entity's cash): a book, an entity, a currency and the total have them; "
                                            "null while the funding is not computed")
     fundingTotal: float | None = Field(None, description="funding + fundingNoCarry + fundingBookLevel; null while "
-                                       "the funding is not computed")
+                                       "the funding is not computed or fundingNoCarry is null")
     net: float | None = Field(description="carry + fundingTotal; null (rule B1) while the funding is not computed, "
-                              "nothing is covered or a covered position's funding is unknown (nCoveredNoFunding)")
+                              "nothing is covered, or any position's funding is unknown (nCoveredNoFunding, "
+                              "nNoCarryNoFunding)")
     netKnown: float | None = Field(None, description="Sum of carry + funding of the positions that have both: the "
                                    "net of what is known when net is null")
     nPositions: int
@@ -822,6 +824,8 @@ class CarrySums(BaseModel):
     nFunded: int
     nFundingMissing: int
     nCoveredNoFunding: int = Field(0, description="Covered positions whose funding is unknown (net is then null)")
+    nNoCarryNoFunding: int = Field(0, description="Positions without a carry forecast whose funding is unknown: then "
+                                   "fundingNoCarry, fundingTotal and net are null (rule B1 applied strictly)")
 
 
 class CarryMeeting(BaseModel):

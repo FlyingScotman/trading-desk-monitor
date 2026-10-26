@@ -510,6 +510,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/concepts/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Concepts Run Json
+         * @description The monitors' data of a run (``window.CONCEPTS_RUN``, ``/concepts-run.js``; TDM#289): the run's dates and PnL state, buckets, curves, FX, indices, issuers, books, risk notes, funding status, source and positions, as ``lib/real.js`` reads them. 404 without a run (``details.reason``: no_runs, not_found)
+         */
+        get: operations["concepts_run_json_api_v1_concepts_run_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/concepts/carry": {
         parameters: {
             query?: never;
@@ -1347,7 +1367,7 @@ export interface components {
             funding: number | null;
             /**
              * Fundingnocarry
-             * @description Funding of the positions without a carry forecast
+             * @description Funding of the positions without a carry forecast; null when one of them has an unknown funding (nNoCarryNoFunding)
              */
             fundingNoCarry: number | null;
             /**
@@ -1357,12 +1377,12 @@ export interface components {
             fundingBookLevel: number | null;
             /**
              * Fundingtotal
-             * @description funding + fundingNoCarry + fundingBookLevel; null while the funding is not computed
+             * @description funding + fundingNoCarry + fundingBookLevel; null while the funding is not computed or fundingNoCarry is null
              */
             fundingTotal?: number | null;
             /**
              * Net
-             * @description carry + fundingTotal; null (rule B1) while the funding is not computed, nothing is covered or a covered position's funding is unknown (nCoveredNoFunding)
+             * @description carry + fundingTotal; null (rule B1) while the funding is not computed, nothing is covered, or any position's funding is unknown (nCoveredNoFunding, nNoCarryNoFunding)
              */
             net: number | null;
             /**
@@ -1386,6 +1406,12 @@ export interface components {
              * @default 0
              */
             nCoveredNoFunding?: number;
+            /**
+             * Nnocarrynofunding
+             * @description Positions without a carry forecast whose funding is unknown: then fundingNoCarry, fundingTotal and net are null (rule B1 applied strictly)
+             * @default 0
+             */
+            nNoCarryNoFunding?: number;
         };
         /** ErrorOut */
         ErrorOut: {
@@ -4637,6 +4663,57 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    concepts_run_json_api_v1_concepts_run_get: {
+        parameters: {
+            query?: {
+                /** @description default: the run shown (as_of's, else the newest), as ``/concepts-run.js`` and the concept pages */
+                run_id?: number | null;
+                as_of?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
                 };
             };
             /** @description Not Found */

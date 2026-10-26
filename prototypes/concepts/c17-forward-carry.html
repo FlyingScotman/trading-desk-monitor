@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>C17 · Прогнозное кэрри</title>
+<link rel="stylesheet" href="lib/kit.css">
+<style>
+.c17-ctl { display: flex; gap: 8px 14px; align-items: center; flex-wrap: wrap; }
+.c17-ctl .grp { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; min-width: 0; }
+.c17-ctl .lbl { color: var(--fg-2); font-size: 12px; }
+.c17-ctl input[type=date] { min-width: 0; width: 140px; }
+.c17-busy { display: none; align-items: center; gap: 8px; color: var(--fg-2); font-size: 12px; }
+.c17-busy.on { display: inline-flex; }
+.c17-busy i { width: 12px; height: 12px; border: 2px solid var(--line-2); border-top-color: var(--accent); border-radius: 50%; animation: c17spin .8s linear infinite; }
+@keyframes c17spin { to { transform: rotate(360deg); } }
+#body.loading { opacity: .55; pointer-events: none; transition: opacity .15s; }
+.c17-ban { border: 1px solid var(--warn); border-left-width: 4px; background: color-mix(in srgb, var(--warn) 9%, transparent); border-radius: 6px; padding: 8px 12px; font-size: 12.5px; overflow-wrap: anywhere; }
+.c17-ban.err { border-color: var(--neg); background: color-mix(in srgb, var(--neg) 8%, transparent); }
+.c17-ban b { color: var(--fg); }
+.c17-sum { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 14px; font-variant-numeric: tabular-nums; font-size: 13px; max-width: 560px; }
+.c17-sum .n { text-align: right; white-space: nowrap; }
+.c17-sum .tot { border-top: 1px solid var(--line-2); padding-top: 3px; font-weight: 650; }
+.c17-sum .sub { color: var(--fg-2); padding-left: 14px; font-size: 12px; }
+.c17-sumwrap { display: flex; gap: 10px 28px; flex-wrap: wrap; align-items: flex-start; }
+.c17-sumwrap .side { flex: 1; min-width: 220px; font-size: 12px; color: var(--fg-2); }
+.c17-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+@media (max-width: 1100px) { .c17-two { grid-template-columns: minmax(0, 1fr); } }
+.c17-lead { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.c17-lead td { padding: 3px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.c17-lead td.nm { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.c17-lead tr[data-card] { cursor: pointer; }
+.c17-lead tr[data-card]:hover td { background: var(--hover); }
+.k-tbl tr.c17-nc td { color: var(--fg-3); }
+.k-tbl tr.c17-nc td .k-ccy { opacity: .6; }
+.k-tbl td.c17-why { white-space: normal; min-width: 160px; max-width: 320px; font-size: 12px; }
+.c17-meet { border-collapse: collapse; font-size: 12.5px; }
+.c17-meet th, .c17-meet td { padding: 3px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; text-align: left; }
+.c17-meet td.n, .c17-meet th.n { text-align: right; }
+.c17-meet input { width: 74px; text-align: right; min-width: 0; }
+.c17-notes { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--fg-2); }
+.c17-notes li { margin: 2px 0; overflow-wrap: anywhere; }
+/* плитки: строки разбивки под цифрой переносятся на узком экране */
+.k-kpis .k-kb td { white-space: normal; }
+.c17-focus .k-fields { margin-top: 4px; }
+.c17-link { cursor: pointer; color: var(--accent); }
+@media (max-width: 720px) {
+  .k-panel > .hd { flex-wrap: wrap; }
+  .c17-ctl .grp { width: 100%; }
+  .k-tbl-tools .k-note { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="k-page" id="page">
+  <div class="k-panel"><div class="bd"><div class="c17-ctl" id="ctl"></div><div id="steps" style="margin-top:8px"></div></div></div>
+  <div id="ban"></div>
+  <div id="body"><div class="k-panel"><div class="k-empty">загрузка…</div></div></div>
+</div>
+<script src="../echarts.min.js"></script>
+<script src="lib/boot.js"></script>
+<script src="lib/kit.js"></script>
+<script src="lib/instr.js"></script>
+<script src="lib/carry.js"></script>
+<script>
+(function () {
+  'use strict';
+  // C17 «Прогнозное кэрри» (#66, #72): кэрри, фондирование и нетто позиций до горизонта по прогону на экране.
+  // Данные: GET ../api/v1/concepts/carry (backend scenario/carry.py) — асинхронно, с индикатором; разбор — lib/carry.js
+  // (CARRY). В демо — M.forwardCarryDemo (lib/mock.js) той же формы. «Кэрри» — одна колонка: полное изменение стоимости
+  // при кривых, перенесённых в горизонт (решение владельца 26.10); фондирование — отдельно (#168); нетто — их сумма.
+  // Новый прогон: lib/live.js переключает незакреплённую страницу на него (перезагрузка), и кэрри запрашивается заново.
+  const M = MOCK, K = KIT, C = CARRY, f = K.f, esc = K.esc, h = K.h;
+  K.top({ title: 'C17 · Прогнозное кэрри', tag: 'кэрри, фондирование и нетто до горизонта' });
+  const server = K.source === 'real';
+  const RK = () => (M.toRepr && M.toRepr.RUB) || 1;          // рубли ответа → валюта показа
+  const DIG = K.repr === 'RUB' ? 2 : 3, DIGB = K.repr === 'RUB' ? 1 : 2;
+  const mn = v => v == null || !isFinite(v) ? '<span class="mut3">—</span>' : f.mn(v, DIG);
+  const bp = v => v == null || !isFinite(v) ? '<span class="mut3">—</span>' : f.n(v, 0);
+  const KIND = k => k === 'CASH' ? 'остатки ДС' : (window.INSTR && INSTR.SHORT[k]) || k || '—';
+  const QUAL = r => r.isCash ? 'остатки ДС' : r.covered ? (r.carryMethod === 'redeemed' ? 'погашается до горизонта' : r.quality === 'assumed' ? 'с допущениями' : 'точная') : r.reason;
+  const entName = e => ((M.entities || []).find(x => x.id === e) || {}).name || e;
+  const TIP = {
+    carry: 'Кэрри до горизонта: полное изменение стоимости позиции, если кривые перенести на дату горизонта, — полученные купоны и изменение грязной цены ' +
+      '(купон, приближение к номиналу, roll-down по кривой). В режиме «roll по спреду» в него входит и сдвиг спреда по кривой бумаг того же рейтинга. ' +
+      'Фондирование в кэрри не входит — это отдельная колонка (#168). Считает ядро (horizon_portfolio) на рынке прогона.',
+    funding: K.tips.funding + '\nЗа период (дата прогона, горизонт]: позиции и остатки держатся, ставки — по пути КС. «не настроено» — нет правил фондирования, а не 0.',
+    net: 'Нетто = Кэрри + Фондирование. У группы в нетто входит и фондирование позиций без прогноза кэрри и остатков ДС (строка «фондирование без прогноза кэрри»). ' +
+      '«—» — у какой-нибудь позиции группы (с прогнозом или без) фондирование не посчитано или в группе нет позиций с прогнозом кэрри (правило B1). ' +
+      'Нетто не подменяется кэрри; нетто позиций с кэрри и фондированием — в подписи.',
+    dv01: 'Кэрри / |DV01|, б.п.: на сколько б.п. ставки могут уйти против позиции за горизонт, пока переоценка не съест кэрри. DV01 — ставочный риск прогона (без CS01 и базиса ОФЗ). ' +
+      'У флоатеров знаменатель — CS01 (метка «CS»): их основной риск спредовый, ставочный DV01 мал. CS01 = 0 или нет — «—». ' +
+      'Итог портфеля — по фиксам (сумма кэрри / |сумма DV01|, без флоатеров), флоатеры — отдельно: кэрри / |сумма CS01|; позиции без знаменателя (0 или нет) не входят ни в числитель, ни в знаменатель. ' +
+      'Сумма DV01 (CS01) — со взаимозачётом: длинные и короткие позиции и хеджи гасят друг друга, поэтому у почти закрытого риска отношение может быть огромным.',
+    rest: 'Фондирование позиций без прогноза кэрри (деривативы, валютные бумаги, оценки ниже точной) и строк без позиции (остатки ДС книг и юрлиц). ' +
+      'Оно входит в нетто группы, а в колонку кэрри — нет.',
+    roll: 'Roll по спреду: бумага сдвигается по кривой G-спредов бумаг того же рейтинга (как C09) к своему сроку на горизонте; CS01 × сдвиг. Уже входит в кэрри. ' +
+      'ОФЗ и флоатеры держат спред.',
+  };
+
+  if (K.repr !== 'RUB') TIP.funding += '\nВ ' + K.repr + ': итог — рубли сервера по курсу монитора, строки позиций в ' + K.repr + ' — суммы сервера в своей валюте (курс прогона); возможна небольшая разница.';
+  // ---------- состояние (запоминается в браузере) ----------
+  const st = { horizon: '3M', ks: 'flat', spread: 'held', steps: {}, dim: 'none', show: 'all' };
+  try { Object.assign(st, JSON.parse(localStorage.getItem('c17-state') || '{}')); } catch (e) { }
+  const save = () => { try { localStorage.setItem('c17-state', JSON.stringify(st)); } catch (e) { } };
+  const qs = new URLSearchParams(location.search);
+  const focusId = qs.get('pos');
+  const demoFunding = qs.get('funding');  // демо: ?funding=not_configured — фондирование не настроено целиком
+  if (!C.HORIZONS.includes(st.horizon) && !C.ISO.test(st.horizon)) st.horizon = '3M';
+  if (C.ISO.test(st.horizon) && st.horizon <= M.asOf) st.horizon = '3M';
+  let resp = null, err = null, ctrl = null, seq = 0, timer = null;
+  const cache = new Map();
+  // заседания ЦБ для шагов КС: из ответов сервера (meetings — до горизонта, с датой вступления) и из M.cbr (весь
+  // календарь, если он есть: дата вступления — следующий рабочий день, как у сервера без даты хаба). window.DESK не
+  // читаем (его выводят, #107)
+  const nextWd = d => { let x = M.util.addDays(d, 1); while ([0, 6].includes(new Date(x + 'T00:00:00').getDay())) x = M.util.addDays(x, 1); return x; };
+  const est = new Set((M.cbr && M.cbr.estimated) || []);
+  const cbrList = () => ((M.cbr && M.cbr.meetings) || []).filter(d => C.ISO.test(d)).map(d => ({ date: d, effective: nextWd(d), estimated: est.has(d) }));
+  const known = () => C.meetingList([...cache.values()].map(r => r.meetings).concat([cbrList()]));
+  // шаги сопоставляются заседаниям по порядку, как у сервера: его список (meetings последнего ответа), пока ответа нет — известные
+  const stepList = () => resp && resp.meetings && resp.meetings.length ? C.meetingList([resp.meetings].concat(resp.meetings.some(m => m.inHorizon === false) ? [] : [known()])) : known();
+  const params = () => ({ run: server && M.run ? M.run.id : null, horizon: st.horizon, ks: st.ks, spread: st.spread, steps: C.stepsFor(stepList(), st.steps, M.asOf) });
+
+  // ---------- запрос: асинхронно, последний выигрывает ----------
+  const busy = h('span', 'c17-busy', '<i></i><span>считается…</span>');
+  function load() {
+    const o = params(), key = C.query(o) + (demoFunding ? '&funding=' + demoFunding : '');
+    if (cache.has(key)) { resp = cache.get(key); err = null; render(); return; }
+    const my = ++seq;
+    if (ctrl) ctrl.abort();
+    ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    busy.classList.add('on'); document.getElementById('body').classList.add('loading');
+    const p = server ? C.load(o, { signal: ctrl && ctrl.signal })
+      : new Promise(res => setTimeout(() => res(JSON.parse(JSON.stringify(M.forwardCarryDemo(Object.assign({ funding: demoFunding }, o))))), 120));
+    p.then(j => { if (my !== seq) return; cache.set(key, j); resp = j; err = null; })
+      // заседания стали известны из ответа: шаги, заданные по ним, — новым запросом
+      .then(() => { if (my === seq && !err && C.query(params()) !== C.query(o)) setTimeout(load, 0); })
+      .catch(e => { if (my !== seq || (e && e.name === 'AbortError')) return; err = e; })
+      .then(() => { if (my !== seq) return; busy.classList.remove('on'); document.getElementById('body').classList.remove('loading'); render(); });
+  }
+  const later = () => { clearTimeout(timer); timer = setTimeout(load, 350); };
+
+  // ---------- шапка: горизонт, спред, путь КС ----------
+  const ctl = document.getElementById('ctl');
+  function drawCtl() {
+    ctl.innerHTML = '<span class="grp"><span class="lbl">Горизонт</span><span class="hz"></span><input type="date" class="k-input hd" title="Своя дата горизонта: после даты прогона, не дальше трёх лет"><span class="mut hdate"></span></span>' +
+      '<span class="grp"><span class="lbl">Спред</span><span class="sp"></span></span>' +
+      '<span class="grp"><span class="lbl">Путь КС</span><span class="ks"></span></span>';
+    ctl.appendChild(busy);
+    const iso = C.ISO.test(st.horizon);
+    K.seg(ctl.querySelector('.hz'), C.HORIZONS.map(x => [x, x]).concat(iso ? [[st.horizon, f.date(st.horizon)]] : []), st.horizon, v => { st.horizon = v; save(); drawCtl(); load(); });
+    const hd = ctl.querySelector('.hd');
+    hd.min = M.util.addDays(M.asOf, 1); hd.max = M.util.addDays(M.asOf, 3 * 366);
+    if (iso) hd.value = st.horizon;
+    hd.onchange = () => { if (C.ISO.test(hd.value) && hd.value > M.asOf) { st.horizon = hd.value; save(); drawCtl(); load(); } };
+    K.seg(ctl.querySelector('.sp'), C.SPREADS, st.spread, v => { st.spread = v; save(); load(); }).title = TIP.roll;
+    K.seg(ctl.querySelector('.ks'), C.KS, st.ks, v => { st.ks = v; save(); drawSteps(); load(); });
+    paintHdate();
+  }
+  function paintHdate() {
+    const el = ctl.querySelector('.hdate');
+    if (el) el.textContent = resp ? 'до ' + f.date(resp.horizonDate) + ' · ' + resp.days + ' дн.' : '';
+  }
+  // таблица «заседание → изменение, б.п.» (путь steps): заседания из ответов сервера и M.cbr (known), до горизонта;
+  // по умолчанию шаг 0
+  function drawSteps() {
+    const box = document.getElementById('steps');
+    if (st.ks !== 'steps') { box.innerHTML = ''; return; }
+    const hdate = resp ? resp.horizonDate : null;
+    // ответ на текущий горизонт есть — заседания до горизонта только из него (порядок шагов — как у сервера)
+    const all = (resp && resp.meetings ? resp.meetings : known()).filter(m => m.effective > M.asOf);
+    const ms = all.filter(m => m.inHorizon != null ? m.inHorizon : !hdate || m.effective <= hdate);
+    const beyond = hdate && known().some(m => m.effective > hdate);
+    const path = resp && resp.ks === 'steps' ? resp.keyRatePath || [] : [];
+    const ksAfter = m => { const x = path.find(p => p.date === m.effective); return x ? x.keyRatePct : null; };
+    const ks0 = path.length ? path[0].keyRatePct : M.indices['КС'];
+    box.innerHTML = ms.length ? '<div style="overflow-x:auto"><table class="c17-meet" data-vk="c17-meetings" data-title="Путь КС по заседаниям ЦБ"><thead><tr><th>Заседание ЦБ</th><th>Действует с</th><th class="n">Изменение, б.п.</th><th class="n">КС после, %</th></tr></thead><tbody>' +
+      ms.map(m => '<tr><td>' + f.date(m.date) + (m.estimated ? ' <span class="mut3" title="дата ориентировочная">≈</span>' : '') + '</td><td class="mut">' + f.date(m.effective) + '</td>' +
+        '<td class="n"><input class="k-input" type="number" step="25" min="-2000" max="2000" data-m="' + esc(m.date) + '" value="' + (+st.steps[m.date] || 0) + '" aria-label="Изменение КС на заседании ' + esc(f.date(m.date)) + ', б.п."></td>' +
+        '<td class="n">' + (ksAfter(m) != null ? f.n(ksAfter(m), 2) : '<span class="mut3">—</span>') + '</td></tr>').join('') +
+      '</tbody></table></div><div class="k-note" style="margin-top:4px">КС сейчас ' + f.n(ks0, 2) + '%. Шаг — с даты вступления решения; RUONIA и рублёвые индексы идут за КС с сегодняшним спредом. ' +
+      'Путь КС меняет только фондирование. ' + (beyond ? 'Заседания после горизонта не влияют на расчёт. ' : '') + '<span class="c17-link" data-a="zero">Обнулить шаги</span></div>'
+      : '<div class="k-note">До горизонта заседаний ЦБ нет' + (resp ? '' : ' (или их ещё нет в данных)') + ': путь КС = КС стоит.</div>';
+    K.tableToolsAll(box);
+    box.querySelectorAll('input[data-m]').forEach(i => i.oninput = () => { st.steps[i.dataset.m] = Math.max(-2000, Math.min(2000, +i.value || 0)); save(); later(); });
+    const z = box.querySelector('[data-a=zero]'); if (z) z.onclick = () => { st.steps = {}; save(); drawSteps(); load(); };
+  }
+
+  // ---------- тело ----------
+  function panel(title, extra, cls) { const p = h('div', 'k-panel ' + (cls || '')); p.innerHTML = '<div class="hd"><h3>' + title + '</h3><span class="sp"></span>' + (extra || '') + '</div><div class="bd"></div>'; return p; }
+  function model() {
+    const opts = { pos: M.pos, k: RK(), books: M.book, kindLabel: KIND, repr: K.repr };
+    const keepIds = new Set(K.list().map(p => p.id)), keep = C.keep(K.filter, M.book);
+    const rows = C.rows(resp, opts).filter(r => r.p ? keepIds.has(r.id) : keep(r));
+    return rows.concat(C.cashRows(resp, opts).filter(keep));
+  }
+  function render() {
+    paintHdate(); drawSteps();
+    const ban = document.getElementById('ban'), body = document.getElementById('body');
+    K.charts.slice().forEach(c => c.dispose());
+    if (err) {
+      const why = err.status === 404 ? 'сервер не нашёл прогон или снэпшоты его рынка (или эндпоинта ещё нет на сервере)' : err.status === 422 ? 'параметры не приняты' : err.status === 401 || err.status === 403 ? 'нужно войти в монитор' : 'ошибка запроса';
+      ban.innerHTML = '<div class="c17-ban err"><b>Прогнозное кэрри не загружено</b>: ' + esc(why) + '. <span class="mut">' + esc(err.text || err.message || '') + '</span></div>';
+      if (!resp) { body.innerHTML = ''; return; }
+    } else ban.innerHTML = '';
+    if (!resp) return;
+    const R = model(), fundOk = resp.fundingStatus === 'computed';
+    // без общих фильтров — итоги сервера; с фильтрами — по строкам, по тому же правилу
+    const S = C.noFilter(K.filter) ? C.withServer(C.sums(R, fundOk), resp.totals, RK()) : C.sums(R, fundOk);
+    const pos = R.filter(r => !r.isCash);
+    // баннер: фондирование не посчитано целиком или у части позиций с прогнозом
+    if (!fundOk) ban.insertAdjacentHTML('beforeend', '<div class="c17-ban"><b>' + esc(C.FUNDING_STATUS[resp.fundingStatus] || resp.fundingStatus) + '.</b> ' + (resp.fundingText && resp.fundingText !== C.FUNDING_STATUS[resp.fundingStatus] ? esc(resp.fundingText) + '. ' : '') +
+      'Нетто не показывается: без фондирования это было бы кэрри. Правила фондирования — <a href="../settings.html">Настройки</a>.</div>');
+    else if (S.fundingMissing.length) {
+      // позиции с прогнозом и без него: у любой фондирование null — нетто группы «—»
+      const books = [...new Set(S.fundingMissing.map(r => r.book))];
+      ban.insertAdjacentHTML('beforeend', '<div class="c17-ban"><b>Фондирование не посчитано у ' + S.fundingMissing.length + ' поз.</b>' +
+        (S.nFundingMissing && S.nNoCarryNoFunding ? ' (' + S.nFundingMissing + ' с прогнозом кэрри, ' + S.nNoCarryNoFunding + ' без)' : S.nNoCarryNoFunding ? ' без прогноза кэрри' : ' с прогнозом кэрри') +
+        ', книги ' + books.map(esc).join(', ') + ': ' +
+        esc([...new Set(S.fundingMissing.map(r => r.fundingNote || C.FUNDING_STATE[r.fundingState] || r.fundingState))].join('; ')) +
+        '. Нетто этих книг и итога — «—»; нетто позиций с кэрри и фондированием — ' + f.mn(S.netKnown, DIGB) + ' mm ₽.' + '</div>');
+    }
+    body.innerHTML = '';
+    const wrap = h('div', 'k-grid'); body.appendChild(wrap);
+    if (focusId) focusPanel(wrap, R);
+
+    // плитки
+    const kp = h('div', 'k-kpis');
+    // плитка: итог, щелчок — разбор по позициям; строки остатков ДС (и позиции вне модели монитора) — псевдопозициями,
+    // чтобы итог разбора сходился с плиткой
+    const pseudo = r => ({ id: r.id, name: r.name, issuer: null, issuerName: r.isCash ? 'остатки ДС' : r.name, book: r.book, bookName: r.bookName, ccy: r.ccy,
+      group: 'OTH', kind: r.kind, groupLabel: r.isCash ? 'Остатки ДС' : 'Прочее', kindLabel: r.kindLabel, tenor: 0, mv: null, notional: null, searchText: r.searchText });
+    const kd = (title, val, tot) => {
+      if (tot == null) return '<span class="mut3">—</span>';
+      const rows = R.filter(r => val(r) != null).map(r => ({ p: r.p || pseudo(r), v: val(r) }));
+      return (rows.length ? K.d({ title, unit: 'mm ₽', fmt: v => f.mn(v, DIG), rows }, f.mn(tot, DIGB), f.cls(tot)) : '<span class="' + f.cls(tot) + '">' + f.mn(tot, DIGB) + '</span>') + K.kpiUnit('mm ₽');
+    };
+    kp.innerHTML =
+      K.kpi('Кэрри', kd('Кэрри до ' + f.date(resp.horizonDate), r => r.isCash ? null : r.carry, S.carry), S.nCovered + ' поз. с прогнозом' + (S.nNotCovered ? ' · ' + S.nNotCovered + ' без' : ''), '', TIP.carry) +
+      // всё фондирование группы (как итог колонки «Фондирование»): Кэрри + Фондирование = Нетто; разбивка — строками
+      K.kpi('Фондирование', !fundOk ? '<span class="mut3" title="' + esc(resp.fundingText || '') + '">не настроено</span>' : kd('Фондирование до ' + f.date(resp.horizonDate), r => r.funding, S.funding),
+        fundOk ? [['с прогнозом кэрри', S.nCovered ? f.mn(S.fundingCovered, DIGB) : '—'], ['без прогноза и остатки ДС', f.mn(S.fundingRest, DIGB), TIP.rest]].concat(S.fundingMissing.length ? [['не посчитано', S.fundingMissing.length + ' поз.']] : [])
+          : esc(C.FUNDING_STATUS[resp.fundingStatus] || ''), '', TIP.funding) +
+      K.kpi('Нетто', kd('Нетто до ' + f.date(resp.horizonDate), r => r.carry == null && r.funding == null ? null : (r.carry || 0) + (r.funding || 0), S.net), S.net == null ? (!fundOk ? 'нет фондирования' : !S.nCovered ? 'нет позиций с прогнозом' : 'известно по позициям с фондированием: ' + f.mn(S.netKnown, DIGB)) : 'кэрри + фондирование', '', TIP.net) +
+      K.kpi('Кэрри / DV01', S.carryDv01 == null ? '<span class="mut3">—</span>' : f.n(S.carryDv01, 0) + K.kpiUnit('б.п.'),
+        [['без флоатеров · DV01', f.dv(S.dv01) + ' <span class="u">тыс ₽/бп</span>'], ['флоатеры: Кэрри/CS01', S.carryCs01Flt == null ? '—' : f.n(S.carryCs01Flt, 0) + ' <span class="u">б.п.</span>', 'кэрри флоатеров / |CS01 флоатеров|']], '', TIP.dv01);
+    wrap.appendChild(kp);
+
+    // сумма на глазах
+    const sp = panel('Итог до ' + f.date(resp.horizonDate), '<span class="k-note">mm ₽ · ' + (resp.ks === 'steps' ? 'КС по заседаниям' : 'КС стоит') + ' · ' + (resp.spread === 'curve' ? 'roll по спреду' : 'спред держится') + '</span>');
+    const line = (l, v, cls, tip) => '<div class="' + (cls || '') + '">' + K.hint(l, tip) + '</div><div class="n ' + (cls || '') + ' ' + (v == null ? '' : f.cls(v)) + '">' + (v == null ? '<span class="mut3">—</span>' : f.mn(v, DIG)) + '</div>';
+    sp.querySelector('.bd').innerHTML = '<div class="c17-sumwrap"><div class="c17-sum">' +
+      line('Кэрри', S.carry, '', TIP.carry) +
+      (resp.spread === 'curve' ? line('из них roll по спреду', S.spreadRoll || 0, 'sub', TIP.roll) : '<div class="sub">' + K.hint('из них roll по спреду', TIP.roll) + '</div><div class="n sub"><span class="mut3" title="спред держится: переключите «roll по спреду»">не учтён</span></div>') +
+      (fundOk ? line('Фондирование позиций с прогнозом', S.fundingCovered, '', TIP.funding) : '<div>' + K.hint('Фондирование', TIP.funding) + '</div><div class="n"><span class="mut3">не настроено</span></div>') +
+      (fundOk ? line('фондирование без прогноза кэрри', S.fundingRest, '', TIP.rest) +
+        line('позиции без прогноза', S.fundingNoCarry, 'sub') + line('остатки ДС', S.fundingCash, 'sub') : '') +
+      line('Нетто', S.net, 'tot', TIP.net) +
+      '</div><div class="side">' +
+      (S.nNotCovered ? '<div><span class="c17-link" data-a="nc">' + S.nNotCovered + ' поз. без прогноза кэрри</span> — в кэрри не входят, их фондирование — в строке «без прогноза». Причины — в колонке «Оценка».</div>' : '<div>Прогноз есть у всех позиций.</div>') +
+      (fundOk && S.fundingMissing.length ? '<div style="margin-top:4px;color:var(--warn)">' + (S.nFundingMissing ? S.nFundingMissing + ' поз. с прогнозом без фондирования: нетто — «—».' : '') + (S.nNoCarryNoFunding ? ' ' + S.nNoCarryNoFunding + ' поз. без прогноза без фондирования: фондирование без прогноза и нетто — «—».' : '') + '</div>' : '') +
+      '<div style="margin-top:4px">Прогон ' + (server ? '#' + esc(resp.runId) : 'демо') + ' на ' + f.date(resp.asOf) + ' → горизонт ' + f.date(resp.horizonDate) + ' (' + resp.days + ' дн.). Суммы — в ' + K.repr + ', пересчёт из рублей по курсу прогона.</div>' +
+      '</div></div>';
+    const ncl = sp.querySelector('[data-a=nc]');
+    if (ncl) ncl.onclick = () => { st.show = 'nc'; save(); drawTable(); tp.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+    wrap.appendChild(sp);
+
+    // таблица позиций
+    const tp = panel('Позиции', '<span class="k-note">mm ₽ · щелчок по строке — карточка</span>');
+    tp.querySelector('.bd').classList.add('flush');
+    tp.querySelector('.hd').insertAdjacentHTML('beforeend', '<span class="shw"></span><span class="dim"></span>');
+    wrap.appendChild(tp);
+    const DIMS = [['none', 'без групп']].concat(C.DIMS);
+    K.seg(tp.querySelector('.dim'), DIMS, st.dim, v => { st.dim = v; save(); drawTable(); });
+    function drawTable() {
+      K.seg(tp.querySelector('.shw'), [['all', 'все'], ['cov', 'с прогнозом'], ['nc', 'без прогноза']], st.show, v => { st.show = v; save(); drawTable(); });
+      const rowsFn = () => R.filter(r => st.show === 'all' || (st.show === 'cov' ? r.covered : !r.covered));
+      const G = st.dim === 'none' ? null : [{ key: r => r[st.dim] || '—', label: k => esc(st.dim === 'book' ? k + (M.book[k] && M.book[k].name !== k ? ' · ' + M.book[k].name : '') : st.dim === 'entity' ? entName(k) : st.dim === 'kind' ? KIND(k) : k) }];
+      const money = (key, label, val, extra) => Object.assign({ key, label, num: true, val, nullable: true, drill: false, unit: 'mm ₽', fmt: v => mn(v), cls: v => v == null ? '' : f.cls(v), sum: r => val(r) || 0, sumFmt: v => mn(v) }, extra || {});
+      K.table(tp.querySelector('.bd'), {
+        viewKey: 'c17-positions', title: 'Прогнозное кэрри до ' + resp.horizonDate + ', mm ₽', rowsFn, maxHeight: '620px',
+        groupBy: G, stripe: r => r.isCash ? 'transparent' : K.issuerColor(r.issuer), rowCls: r => r.covered ? '' : 'c17-nc', sort: [['net', -1]],
+        footCount: rows => rows.filter(r => !r.isCash).length + ' поз.',
+        columns: [
+          { key: 'name', label: 'Позиция', val: r => r.name, fmt: (v, r) => esc(v) + (r.ccy && r.ccy !== '—' ? ' ' + K.ccyTag(r.ccy) : ''), csvFmt: v => v, w: '220px' },
+          { key: 'book', label: 'Книга', val: r => r.book, filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
+          { key: 'entity', label: 'Юрлицо', val: r => r.entity, filter: true, fmt: v => '<span class="mut">' + esc(entName(v)) + '</span>' },
+          { key: 'kind', label: 'Тип', val: r => r.kindLabel, filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
+          money('carry', 'Кэрри', r => r.carry, { title: TIP.carry, tip: true }),
+          money('funding', 'Фондирование', r => r.funding, { title: TIP.funding, tip: true, sum: C.colSum.funding,
+            fmt: (v, r) => v != null ? '<span title="' + esc([r.fundingRate, C.FUNDING_SOURCE[r.fundingSource], r.fundingNote].filter(Boolean).join(' · ')) + '">' + f.mn(v, DIG) + '</span>'
+              : '<span class="mut3" title="' + esc(r.fundingNote || '') + '">' + (r.fundingState === 'not_configured' ? 'не настроено' : r.fundingState === 'problem' ? '— ⚠' : '—') + '</span>' }),
+          // нетто группы: «—», если у позиции с прогнозом нет фондирования (NaN → «—»); иначе кэрри + всё фондирование
+          money('net', 'Нетто', r => r.net, { title: TIP.net, tip: true, sum: C.colSum.net }),
+          { key: 'cdv', label: 'Кэрри/DV01', num: true, val: r => r.carryDv01, csvFmt: v => bp(v),
+            fmt: (v, r) => bp(v) + (r.floater && r.covered ? ' <span class="k-tag" title="флоатер: кэрри / |CS01|">CS</span>' : ''), cls: v => v == null ? '' : f.cls(v), unit: 'б.п.', title: TIP.dv01, tip: true },
+          { key: 'den', label: 'Знаменатель', val: r => r.covered ? r.denom : null, filter: true, fmt: v => v ? '<span class="mut">' + v + '</span>' : '<span class="mut3">—</span>', title: 'Знаменатель «Кэрри/DV01»: DV01 ставок, у флоатеров — CS01' },
+          { key: 'why', label: 'Оценка', val: QUAL, filter: true,
+            cls: 'c17-why', fmt: (v, r) => '<span title="' + esc([r.detail, r.spreadCurve ? 'спред: ' + C.spreadText(r.spreadCurve) + (r.spreadRollBp != null ? ' (' + f.s(r.spreadRollBp, 1) + ' б.п.)' : '') : ''].filter(Boolean).join('\n')) + '"' + (r.covered ? ' class="mut"' : '') + '>' + esc(v) + '</span>' +
+              (r.spreadRoll != null ? ' <span class="mut3" title="roll по спреду, входит в кэрри">roll ' + f.mn(r.spreadRoll, DIG) + '</span>' : '') },
+        ],
+      });
+    }
+    drawTable();
+
+    // лидеры и аутсайдеры по нетто
+    const L = C.leaders(pos, 10), two = h('div', 'c17-two');
+    const lead = (title, list, vk) => {
+      const p = panel(title, '<span class="k-note">нетто, mm ₽</span>'); p.querySelector('.bd').classList.add('flush');
+      const mx = Math.max(1, ...list.map(r => Math.abs(r.net)));
+      p.querySelector('.bd').innerHTML = list.length ? '<div style="overflow-x:auto"><table class="c17-lead k-tbl" data-vk="' + vk + '" data-title="' + esc(title) + ', mm ₽"><thead><tr><th></th><th>Позиция</th><th>Книга</th><th class="n">Кэрри</th><th class="n">Фондир.</th><th class="n">Нетто</th><th></th></tr></thead><tbody>' +
+        list.map(r => '<tr' + (r.p ? ' data-card="' + esc(r.id) + '"' : '') + '><td style="width:3px;padding:0;background:' + K.issuerColor(r.issuer) + '"></td><td class="nm" title="' + esc(r.name) + '">' + esc(r.name) + '</td><td class="mut">' + esc(r.book) + '</td>' +
+          '<td class="n">' + mn(r.carry) + '</td><td class="n">' + mn(r.funding) + '</td><td class="n ' + f.cls(r.net) + '"><b>' + f.mn(r.net, DIG) + '</b></td><td style="width:70px">' + K.bar(r.net, mx) + '</td></tr>').join('') + '</tbody></table></div>'
+        : '<div class="k-empty">нет позиций с нетто ' + (vk.endsWith('top') ? '&gt; 0' : '&lt; 0') + '</div>';
+      return p;
+    };
+    two.append(lead('Лидеры по нетто', L.top, 'c17-top'), lead('Аутсайдеры по нетто', L.bottom, 'c17-bottom'));
+    wrap.appendChild(two);
+    K.tableToolsAll(two);
+
+    // допущения сервера
+    const np = panel('Допущения расчёта', '<span class="k-note">' + esc(resp.method || '') + '</span>');
+    const notes = (resp.notes || []).slice();
+    notes.unshift('На экране «Кэрри» — одна колонка (решение 26.10): полное изменение стоимости при кривых, перенесённых в горизонт; купон, pull и roll-down отдельно не показываются (в ответе API они есть). Фондирование — отдельно, нетто — их сумма.');
+    if (K.repr !== 'RUB') notes.push('Валюта показа ' + K.repr + ': итоги — рубли сервера по курсу монитора, а строки позиций в ' + K.repr + ' — суммы сервера в своей валюте (inCcy, курс прогона). Если курсы различаются, итог колонки и сумма строк могут немного разойтись.');
+    notes.push('Знаменатель «Кэрри/DV01» — риск позиции из ответа сервера (dv01, cs01): DV01 ставок, у флоатеров — CS01; итог портфеля — по фиксам, флоатеры — отдельной строкой.');
+    if ((resp.provisional || []).length) notes.push('Поля политики фондирования по умолчанию движка (предварительно): ' + resp.provisional.join(', '));
+    if ((resp.fundingProblems || []).length) notes.push('Проблемы фондирования: ' + resp.fundingProblems.length + ' — ' + resp.fundingProblems.slice(0, 5).map(x => (x.ref || '') + ': ' + (x.reason || '')).join('; '));
+    np.querySelector('.bd').innerHTML = '<ul class="c17-notes">' + notes.map(n => '<li>' + esc(n) + '</li>').join('') + '</ul>';
+    wrap.appendChild(np);
+  }
+  // позиция из карточки (?pos=): её кэрри, фондирование и нетто отдельной панелью
+  function focusPanel(wrap, R) {
+    const r = R.find(x => x.id === focusId);
+    const p = panel('Позиция: ' + esc(r ? r.name : focusId), r && r.p ? '<button class="k-btn" data-card="' + esc(r.id) + '">карточка</button>' : '', 'c17-focus');
+    if (!r) { p.querySelector('.bd').innerHTML = '<div class="k-note">Позиции нет в ответе или она скрыта фильтрами в шапке.</div>'; wrap.appendChild(p); return; }
+    p.querySelector('.bd').innerHTML = K.fieldsHtml([
+      ['Кэрри', r.covered ? mn(r.carry) + ' <small>mm ₽</small>' : '<span class="mut3">нет прогноза</span> <small>' + esc(r.reason) + '</small>', false, TIP.carry],
+      ['Фондирование', r.funding != null ? mn(r.funding) + ' <small>mm ₽ · ' + esc([r.fundingRate, C.FUNDING_SOURCE[r.fundingSource]].filter(Boolean).join(' · ')) + '</small>' : '<span class="mut3">' + esc(C.FUNDING_STATE[r.fundingState] || '—') + '</span> <small>' + esc(r.fundingNote || '') + '</small>', false, TIP.funding],
+      ['Нетто', mn(r.net) + ' <small>mm ₽</small>', false, TIP.net],
+      [r.floater ? 'Кэрри / CS01' : 'Кэрри / DV01', bp(r.carryDv01) + ' <small>б.п.' + (r.floater ? ' · флоатер: знаменатель CS01' : '') + '</small>', false, TIP.dv01],
+      ['Roll по спреду', r.spreadRoll != null ? mn(r.spreadRoll) + ' <small>mm ₽ · ' + f.s(r.spreadRollBp, 1) + ' б.п. по кривой ' + esc(r.spreadCurve || '') + '</small>' : '<span class="mut3">' + esc(resp.spread === 'curve' ? C.spreadText(r.spreadCurve) || '—' : 'спред держится') + '</span>', false, TIP.roll],
+      ['Оценка', esc(QUAL(r))],
+    ].concat(r.inCcy && r.ccy !== 'RUB' ? [['В валюте позиции', ['кэрри ' + f.mn(r.inCcy.carry, DIG), 'фондирование ' + f.mn(r.inCcy.funding, DIG), 'нетто ' + f.mn(r.inCcy.net, DIG)].join(' · ') +
+      ' <small>mm ' + esc(r.ccy) + ' · курс прогона ' + f.n(r.fxRate, 4) + '</small>', true, 'Суммы сервера в валюте позиции (inCcy): рубли по курсу прогона, фондирование — проценты строк в их валюте.']] : []));
+    wrap.appendChild(p);
+  }
+
+  drawCtl(); drawSteps(); load();
+  K.onFilter(render);
+  K.on('theme', render);
+  K.on('numfmt', render);
+  K.commands(C.HORIZONS.map(x => ({ label: 'Кэрри: горизонт ' + x, run: () => { st.horizon = x; save(); drawCtl(); load(); } }))
+    .concat([{ label: 'Кэрри: спред держится', run: () => { st.spread = 'held'; save(); drawCtl(); load(); } }, { label: 'Кэрри: roll по спреду', run: () => { st.spread = 'curve'; save(); drawCtl(); load(); } }]));
+})();
+</script>
+</body>
+</html>
