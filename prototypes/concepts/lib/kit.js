@@ -204,7 +204,9 @@
     kbd: 'Кривая ОФЗ (КБД MOEX): риск — +1 б.п. к par-доходности инструмента с годовым купоном на КБД по бакетам 1Y–20Y+ ' +
       '(1M–6M слиты в 1Y: ОФЗ там нет), кривая не перестраивается — локальный оверлей годовых нулевых ставок (ядро 0.37, rub_ofz_kbd_v3). ' +
       'Фикс-ОФЗ (ПД, АД, ИН) дисконтируются по КБД + своему Z-спреду. В виде «RUONIA + базис» он — базис ОФЗ (тот же риск), ' +
-      'а риск RUONIA посчитан отдельно (с 0.2.7): поэтому DV01 в двух видах отличается на доли процента.',
+      'а риск RUONIA посчитан отдельно (с 0.2.7): поэтому DV01 в двух видах отличается на доли процента. ' +
+      'КБД-флоатеры (#33): купоны проецируются по КБД — это их риск к базису ОФЗ; дисконт — RUONIA + Z. Риск RUONIA их проекции ' +
+      'ядро 0.39 отдельно не считает: в виде «RUONIA + базис» RUONIA = дисконт + проекция (приближение, вариант P; точный — с ядром 0.40).',
     cs01: 'CS01, тыс ₽/бп: +1 б.п. к кредитному Z-спреду к RUONIA (годовой, ACT/365F) разом по всем срокам, кривая стоит; ' +
       'у фикс-бумаг ≈ DV01 RUONIA (оба — к годовым ставкам).',
     // кэрри и фондирование — разные строки (#168): кэрри без фондирования, фондирование — рядом, своей строкой
@@ -1960,7 +1962,8 @@
         const tf = R.tooltip.formatter, at = Object.fromEntries(H.dates.map((d, i) => [d, i]));
         R.tooltip.formatter = ps => { const i = at[(ps[0] || {}).axisValue], v = i == null ? null : H.dmPx[i]; return tf(ps) + (v != null ? '<br>DM по цене (оценка): <b>' + f.n(v, 1) + '</b>' : ''); };
       }
-      hnote.innerHTML = R ? R.note + (isFloat && mode === 'dv01' ? '<div style="margin-top:3px">' + esc(K.tips.floaterDv01) + '</div>' : '') : '';
+      hnote.innerHTML = R ? R.note + (isFloat && mode === 'dv01' ? '<div style="margin-top:3px">' + esc(K.tips.floaterDv01) + '</div>' : '')
+        + (isFloat && mode === 'spread' && H.dmNote ? '<div style="margin-top:3px">' + esc(H.dmNote) + '</div>' : '') : '';  // #33: почему DM нет
       hunit.style.display = mode === 'dv01' && perBondOk ? '' : 'none';
       const S = R ? R.series : mode === 'price' ? [{ name: 'Цена', data: H.price }]
         : mode === 'yield' ? [{ name: 'Доходность', data: H.ytm }, { name: 'ОФЗ на сроке', data: H.bench, lineStyle: { type: 'dashed', width: 1 } }]
