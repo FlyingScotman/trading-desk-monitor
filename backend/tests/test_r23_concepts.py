@@ -218,7 +218,11 @@ def test_position_flows_the_whole_schedule_beyond_the_calendars_horizon(desk, st
         stored = con.execute("SELECT fact->'extra'->'cashflows' FROM run_position WHERE run_id = (SELECT max(run_id)"
                              " FROM run) AND position_id = 'P4'").fetchone()[0]
     assert len(j["flows"]) > len(stored)
-    assert desk.get("/api/v1/positions/flows?id=nope").status_code == 404
+    assert desk.get("/api/v1/positions/flows?id=nope").status_code == 404  # no such position
+    # #288: no hub static is an answer, not an error — 200, no flows and why (the card says it in words)
+    monkeypatch.setattr(static_facts, "static_for", lambda *_a: None)
+    r = desk.get("/api/v1/positions/flows?id=P4")
+    assert r.status_code == 200 and r.json() == {"flows": [], "reason": "no_static"}
 
 
 def test_a_currency_curve_is_its_own_and_its_rate_published(desk, store_url):

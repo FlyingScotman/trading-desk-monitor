@@ -130,10 +130,14 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     price: { label: 'Цена', num: true, val: r => r.price, fmt: v => f.px(v) },
     chg: { label: 'Δ цены', num: true, val: r => r.price == null ? null : r.price - r.prevPrice, fmt: v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.s(v, 2) + '</span>' },
     bidask: { label: 'Bid / Ask', num: true, val: r => r.bid, fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : '<span class="mut">' + f.px(r.bid) + ' / ' + f.px(r.ask) + '</span>' },
+    // в CSV — изменение цены за 30 дней числом (то же значение, что у сортировки, #277)
     spark: { label: 'Цена 30д', val: r => { if (r.price == null) return null; const a = H(r.id).price; return a[a.length - 1] - a[a.length - 31]; }, title: 'сортировка — по изменению за 30 дней',
+      csvHead: 'Δ цены за 30д, % ном.', csvNum: true, csvFmt: v => v == null ? '' : f.n(v, 3),
       fmt: (v, r) => r.price == null ? '<span class="mut3">—</span>' : K.spark(H(r.id).price.slice(-30), 70, 16, v >= 0 ? K.css('--pos') : K.css('--neg')) },
     ytm: { label: 'Дох.', num: true, val: r => r.ytm, fmt: v => f.pct(v) },
-    spread: { label: 'Спред', num: true, val: r => r.zspread, fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : f.bp(v) + ' <span class="mut3">' + (r.spreadLabel || '') + '</span>', title: 'Z-спред к RUONIA (фикс) / дисконт-маржа (флоатер), б.п.' },
+    // в CSV — число, вид спреда (Z / DM) — своей колонкой «Вид спреда» за ним (#276)
+    spread: { label: 'Спред', num: true, val: r => r.zspread, fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : f.bp(v) + ' <span class="mut3">' + (r.spreadLabel || '') + '</span>', title: 'Z-спред к RUONIA (фикс) / дисконт-маржа (флоатер), б.п.',
+      csvHead: 'Спред, б.п.|Вид спреда', csvFmt: (v, r) => v == null ? ['', ''] : [f.bp(v), r.spreadLabel || ''] },
     zdisc: { label: 'Z к RUONIA', num: true, val: r => r.zSpreadZ, fmt: v => v == null ? '<span class="mut3">—</span>' : f.bp(v), title: K.tips.zdisc, tip: true },
     gspread: { label: 'G-спред', num: true, val: r => r.gspread, fmt: v => v == null ? '<span class="mut3">—</span>' : f.bp(v), title: 'к кривой ОФЗ, б.п.' },
     dur: { label: 'Дюр.', num: true, val: r => r.mdur, fmt: v => v == null ? '<span class="mut3">—</span>' : f.n(v, 2) },
@@ -217,7 +221,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     const leaf = r => {
       visible.push(r.id);
       return '<tr class="row' + (r.id === st.sel ? ' sel' : '') + '" data-id="' + r.id + '" style="--tint:' + tintOf(r) + '"><td class="stripe" style="background:' + colorOf(r) + '"></td>' +
-        CL.map(c => { const v = c.val(r); return '<td class="' + (c.num ? 'n' : '') + '"' + (c.date && v ? ' data-date="' + esc(v) + '"' : '') + (c.csvFmt ? K.csvv(() => c.csvFmt(v, r)) : '') + '>' + (c.fmt ? c.fmt(v, r) : esc(v)) + '</td>'; }).join('') + '</tr>';
+        CL.map(c => { const v = c.val(r); return '<td class="' + (c.num ? 'n' : '') + '"' + (c.date && v ? ' data-date="' + esc(v) + '"' : '') + (c.csvFmt ? K.csvv(() => c.csvFmt(v, r)) : '') + (c.csvNum ? ' data-csv-n' : '') + '>' + (c.fmt ? c.fmt(v, r) : esc(v)) + '</td>'; }).join('') + '</tr>';
     };
     function emit(list, level, path, title) {
       if (level >= G.length) { list.forEach(r => body += leaf(r)); return; }
@@ -230,7 +234,8 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
         const sub = m.get(k), p = path + '/' + k, col = !!st.collapsed[p];
         const lbl = g.label ? g.label(k, sub) : esc(k);
         const t = (title ? title + ' · ' : '') + String(k);
-        body += '<tr class="grp l' + Math.min(level, 2) + '" data-g="' + esc(p) + '"><td class="stripe" style="background:' + (g.color ? g.color(k, sub) : 'transparent') + '"></td>' +
+        // строка группы — оформление: в CSV не идёт, как группы K.table (#277)
+        body += '<tr class="grp l' + Math.min(level, 2) + '" data-g="' + esc(p) + '" data-csv-skip="1"><td class="stripe" style="background:' + (g.color ? g.color(k, sub) : 'transparent') + '"></td>' +
           '<td colspan="' + span + '" style="padding-left:' + (7 + level * 14) + 'px"><span class="gl"><span class="tw">' + (col ? '▸' : '▾') + '</span>' + lbl + ' <span class="mut3" style="font-weight:400">' + sub.length + '</span></span></td>' +
           CL.slice(span).map(c => sumCell(c, sub, t)).join('') + '</tr>';
         if (!col) emit(sub, level + 1, p, t);
