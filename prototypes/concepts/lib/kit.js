@@ -920,7 +920,7 @@
       let cum = 0;
       // размер: у позиции — номинал в её валюте и MV, у группы — MV её позиций (у деривативов MV — их PV)
       const mvOf = x => x.n.reduce((s, r) => s + (r.p.mv || 0), 0), mvTot = list.reduce((s, x) => s + mvOf(x), 0);
-      body.innerHTML = '<table class="k-tbl"><thead><tr><th></th><th>' + (dim === 'pos' ? 'Позиция' : D[1][0].toUpperCase() + D[1].slice(1)) + '</th>' + (dim === 'pos' ? '<th>Книга</th><th>Ccy</th><th class="n" title="в валюте позиции" data-csv="Номинал, mm">Номинал</th>' : '<th class="n">Позиций</th>') + '<th class="n">MV, mm ₽</th><th class="n">Вклад</th><th style="width:120px"></th><th class="n">Доля</th><th class="n">Накопл.</th></tr></thead><tbody>' +
+      body.innerHTML = '<table class="k-tbl"><thead><tr><th></th><th>' + (dim === 'pos' ? 'Позиция' : D[1][0].toUpperCase() + D[1].slice(1)) + '</th>' + (dim === 'pos' ? '<th>Книга</th><th>Ccy</th><th class="n" title="в валюте позиции" data-csv="Номинал, mm в вал.">Номинал</th>' : '<th class="n">Позиций</th>') + '<th class="n">MV, mm ₽</th><th class="n">Вклад</th><th style="width:120px"></th><th class="n">Доля</th><th class="n">Накопл.</th></tr></thead><tbody>' +
         list.map(x => {
           cum += Math.abs(x.v);
           const stripe = dim === 'issuer' || dim === 'pos' ? K.issuerColor(x.p.issuer) : dim === 'ccy' ? K.ccyColor(x.k) : 'transparent';
@@ -1590,7 +1590,7 @@
     const skip = tr => tr.hidden || (tr.dataset && tr.dataset.csvSkip) || (tr.style && tr.style.display === 'none') || (tr.cells.length === 1 && /(^|\s)k-empty(\s|$)/.test(tr.cells[0].className || ''));
     const body = [...table.tBodies].reduce((a, b) => a.concat(rowsOf(b)), []).concat(rowsOf(table.tFoot)).filter(tr => !skip(tr)).map(cellsOf);
     // подписи CSV у заголовка с data-csv="a|b": по одной на колонку экрана; лишние (больше, чем colspan) — колонки
-    // CSV сразу за последней колонкой заголовка (#258: «Номинал, mm|Вал» — число и валюта по отдельности)
+    // CSV сразу за последней колонкой заголовка (#258: «Номинал, mm в вал.|Вал» — число и валюта по отдельности)
     let head = null;
     const extra = [];  // extra[i] — подписи колонок CSV, которые идут за колонкой экрана i
     if (hr) {
@@ -1605,12 +1605,13 @@
     const keep = [];
     for (let i = 0; i < n; i++) if ((head && head[i]) || extra[i] || body.some(r => tx(r[i]))) keep.push(i);
     // ячейка с data-csv="число|валюта" (K.csvv) — значения CSV вместо текста экрана («250mm RUB» → 250 и RUB, #258):
-    // первое — в колонку ячейки (у числовой — числом), остальные — в дополнительные колонки заголовка
+    // первое — в колонку ячейки (у числовой — числом, с data-date — датой), остальные — в дополнительные колонки
+    // заголовка (число — числом, остальное — текстом)
     const cellVals = (c, x) => {
       const d = (c && c.dataset) || {};
       if (d.csv == null) return [one(c)].concat(Array(x).fill(''));
-      const parts = String(d.csv).split('|');
-      return [K.csvCell(parts[0], /(^|\s)n(\s|$)/.test(c.className || ''), d.v)].concat(Array.from({ length: x }, (_, j) => K.csvCell(parts[j + 1] || '', false)));
+      const parts = String(d.csv).split('|'), num = /(^|\s)n(\s|$)/.test(c.className || '');
+      return [d.date ? K.csvDateCell(d.date, parts[0], num) : K.csvCell(parts[0], num, d.v)].concat(Array.from({ length: x }, (_, j) => K.csvCell(parts[j + 1] || '', true)));
     };
     const one = c => {
       if (!c) return '';
@@ -1629,7 +1630,11 @@
       body.map(r => [].concat(...keep.map(i => cellVals(r[i], extra[i] ? extra[i].length : 0))).join(',')));
   };
   // атрибут data-csv ячейки ручной таблицы (K.tableCsv, #258): fn() — значение или массив значений CSV; считается в
-  // формате «−1» с обычным минусом, так что CSV не зависит от формата отрицательных на экране
+  // формате «−1» с обычным минусом, так что CSV не зависит от формата отрицательных на экране. Значения соединяются
+  // через «|», поэтому «|» внутри значения разорвёт его на две колонки. Первое значение — колонка самой ячейки
+  // (data-date ячейки по-прежнему делает его датой), следующие — дополнительные колонки, которые объявляет заголовок
+  // (data-csv="a|b" у th: подписей больше, чем colspan). Значений больше, чем колонок у заголовка, — лишние
+  // отбрасываются; меньше — пустые ячейки
   K.csvv = fn => ' data-csv="' + esc([].concat(K.withNegFmt('minus', fn)).join('|').replace(/−/g, '-')) + '"';
   K.tableTools = (t, opts) => {
     const table = t && (t.tagName === 'TABLE' ? t : t.querySelector('table'));
@@ -1914,8 +1919,8 @@
     offer: { key: 'offer', label: 'Оферта', date: true, fmt: v => v ? f.date(v) : '<span class="mut3">—</span>' },
     offerKind: { key: 'offerKind', label: 'Вид оферты', filter: r => K.offerKindText(r.offerKind) || '—', val: r => r.offer ? r.offerKind : null, fmt: v => v ? esc(K.offerKindText(v)) : '<span class="mut3">—</span>' },
     tenor: { key: 'tenor', label: 'Срок', num: true, fmt: v => f.yrs(v), title: 'до оферты, если есть, иначе до погашения' },
-    // в CSV — число в mm валюты бумаги («Номинал, mm»), валюта — в колонке «Вал» (#258, как «Сумма» C08)
-    notional: { key: 'notional', label: 'Номинал', num: true, unit: 'mm', fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', csvFmt: v => f.mn(v, 2), title: 'в валюте бумаги' },
+    // в CSV — число в mm валюты бумаги («Номинал, mm в вал.», как в легенде единиц и на C11), валюта — в колонке «Вал» (#258)
+    notional: { key: 'notional', label: 'Номинал', num: true, unit: 'mm в вал.', fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', csvFmt: v => f.mn(v, 2), title: 'в валюте бумаги' },
     mv: { key: 'mv', label: 'MV, mm ₽', num: true, fmt: v => f.mn(v, 0), sum: true, unit: 'mm ₽', sumFmt: v => f.mn(v, 0) },
     price: { key: 'price', label: 'Цена', num: true, unit: '% ном.', fmt: v => f.px(v) },
     ytm: { key: 'ytm', label: 'Дох.', num: true, fmt: v => f.pct(v) },
@@ -2003,17 +2008,20 @@
     const L = p.legs || [], any = k => L.some(l => l[k] != null && l[k] !== '');
     const LEG = { single: '—', near: 'ближняя', far: 'дальняя' }, SET = { deliverable: 'поставка', cash: 'расчётный (NDF)' };
     const amt = (c, v) => v == null ? '—' : f.mn(v, 2) + ' <small>mm ' + esc(c || '') + '</small>', amtCsv = v => v == null ? '' : f.mn(v, 2);
-    const rate = v => v == null ? '—' : f.n(v, 4);
+    const rate = v => v == null ? '—' : f.n(v, 4), rateCsv = v => v == null ? '' : f.n(v, 4);
     const fwd = l => l.fwdRate != null ? l.fwdRate : l.forwardRate;
     const cols = [['Нога', l => esc(LEG[l.leg] || l.leg || '—')], ['Валютирование', l => l.valueDate ? f.date(l.valueDate) : '—', l => l.valueDate],
-      // в CSV сумма — числом в mm («Покупка, mm»), валюта — своей колонкой за ней (#258)
-      ['Покупка', l => amt(l.buyCcy, l.buyAmount), null, ['Покупка, mm', 'Вал покупки'], l => [amtCsv(l.buyAmount), l.buyCcy || '']],
-      ['Продажа', l => amt(l.sellCcy, l.sellAmount), null, ['Продажа, mm', 'Вал продажи'], l => [amtCsv(l.sellAmount), l.sellCcy || '']],
-      ['Курс сделки', l => rate(l.contractRate) + (l.rateQuote ? ' <small>' + esc(l.rateQuote) + '</small>' : '')]]
+      // в CSV сумма — числом в mm валюты («Покупка, mm в вал.»), валюта — своей колонкой за ней; курс — числом,
+      // котировка (CNY/RUB) — своей колонкой; у расчёта и фиксинга подписи — тоже своими колонками (#258)
+      ['Покупка', l => amt(l.buyCcy, l.buyAmount), null, ['Покупка, mm в вал.', 'Вал покупки'], l => [amtCsv(l.buyAmount), l.buyCcy || '']],
+      ['Продажа', l => amt(l.sellCcy, l.sellAmount), null, ['Продажа, mm в вал.', 'Вал продажи'], l => [amtCsv(l.sellAmount), l.sellCcy || '']],
+      ['Курс сделки', l => rate(l.contractRate) + (l.rateQuote ? ' <small>' + esc(l.rateQuote) + '</small>' : ''), null, ['Курс сделки', 'Котировка'], l => [rateCsv(l.contractRate), l.rateQuote || '']]]
       .concat(L.some(l => fwd(l) != null) ? [['Форвард', l => rate(fwd(l))]] : [])
       .concat(any('points') ? [['Пойнты', l => l.points == null ? '—' : f.s(l.points, 4)]] : [])
-      .concat(any('settlement') ? [['Расчёт', l => esc(SET[l.settlement] || l.settlement || '—') + (l.settlementCcy ? ' <small>в ' + esc(l.settlementCcy) + '</small>' : '')]] : [])
-      .concat(any('fixingDate') ? [['Фиксинг', l => l.fixingDate ? f.date(l.fixingDate) + (l.fixingSource ? ' <small>' + esc(l.fixingSource) + '</small>' : '') + (l.fixingRate != null ? ' <small>' + rate(l.fixingRate) + '</small>' : '') : '—']] : [])
+      .concat(any('settlement') ? [['Расчёт', l => esc(SET[l.settlement] || l.settlement || '—') + (l.settlementCcy ? ' <small>в ' + esc(l.settlementCcy) + '</small>' : ''), null,
+        ['Расчёт', 'Вал расчёта'], l => [SET[l.settlement] || l.settlement || '', l.settlementCcy || '']]] : [])
+      .concat(any('fixingDate') ? [['Фиксинг', l => l.fixingDate ? f.date(l.fixingDate) + (l.fixingSource ? ' <small>' + esc(l.fixingSource) + '</small>' : '') + (l.fixingRate != null ? ' <small>' + rate(l.fixingRate) + '</small>' : '') : '—', l => l.fixingDate,
+        ['Фиксинг', 'Источник фиксинга', 'Курс фиксинга'], l => [l.fixingDate ? f.date(l.fixingDate) : '', l.fixingSource || '', rateCsv(l.fixingRate)]]] : [])
       .concat(any('paymentDate') ? [['Выплата', l => l.paymentDate ? f.date(l.paymentDate) : '—', l => l.paymentDate]] : []);
     return '<div class="k-tbl-wrap"><table class="k-tbl k-compact k-legs"><thead><tr>' + cols.map(c => '<th' + (c[0] === 'Нога' || c[0] === 'Расчёт' ? '' : ' class="n"') + (c[3] ? ' data-csv="' + esc(c[3].join('|')) + '"' : '') + '>' + c[0] + '</th>').join('') + '</tr></thead><tbody>' +
       L.map(l => '<tr>' + cols.map(c => '<td' + (c[0] === 'Нога' || c[0] === 'Расчёт' ? '' : ' class="n"') + (c[2] && c[2](l) ? ' data-date="' + esc(c[2](l)) + '"' : '') + (c[4] ? K.csvv(() => c[4](l)) : '') + '>' + c[1](l) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>';

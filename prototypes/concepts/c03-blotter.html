@@ -124,8 +124,8 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     event: { label: 'Ближайшее событие', val: r => r.event.date, title: 'оферта (пут/колл), если есть, иначе погашение',
       fmt: (v, r) => '<span class="' + (r.group !== 'DER' && r.tenor < 0.25 ? 'ev-soon' : 'mut3') + '">' + evName[r.event.kind] + '</span> ' + f.date(r.event.date) + ' <span class="mut3">' + f.yrs(r.tenor) + '</span>' },
     tenor: { label: 'Срок', num: true, val: r => r.tenor, fmt: v => f.yrs(v), title: 'до оферты, если есть, иначе до погашения' },
-    // в CSV — число в mm валюты бумаги (заголовок «Номинал, mm»), валюта — в колонке «Вал» (#258)
-    notional: { label: 'Номинал', num: true, val: r => r.notional, fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', csvHead: 'Номинал, mm', csvFmt: v => f.mn(v, 2), title: 'в валюте бумаги' },
+    // в CSV — число в mm валюты бумаги (заголовок «Номинал, mm в вал.»), валюта — в колонке «Вал» (#258)
+    notional: { label: 'Номинал', num: true, val: r => r.notional, fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', csvHead: 'Номинал, mm в вал.', csvFmt: v => f.mn(v, 2), title: 'в валюте бумаги' },
     mv: { label: 'MV, mm ₽', neutral: true, num: true, val: r => r.mv, fmt: v => f.mn(v, 0), sum: r => r.mv, unit: 'mm ₽', sfmt: v => f.mn(v, 0) },
     price: { label: 'Цена', num: true, val: r => r.price, fmt: v => f.px(v) },
     chg: { label: 'Δ цены', num: true, val: r => r.price == null ? null : r.price - r.prevPrice, fmt: v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.s(v, 2) + '</span>' },

@@ -170,11 +170,11 @@ t('#183: дата оферты — в CSV датой Excel, вид оферты 
   assert.ok(!/['"]P['"]/.test(String(K.posCols.offer.fmt)), 'на экране дата без «P/C»');
   // C08 «Все потоки по неделям»: сумма — число (mm в валюте выпуска), валюта — в колонке «Вал»
   const c08 = P('concepts/c08-calendar.html');
-  const amt = /\{ key: 'amt', label: 'Сумма', num: true, unit: 'mm', fmt: \(v, r\) => (.*?), csvFmt: v => f\.mn\(v, 2\) \}/.exec(c08);
+  const amt = /\{ key: 'amt', label: 'Сумма', num: true, unit: 'mm в вал.', fmt: \(v, r\) => (.*?), csvFmt: v => f\.mn\(v, 2\) \}/.exec(c08);
   assert.ok(amt, 'C08: у «Суммы» — единица и csvFmt');
   const fl = K.table(el(), { rows: [{ id: 'a', ccy: 'RUB', amt: 27.74e6 }], search: false, viewKey: 'c99-amt',
-    columns: [{ key: 'ccy', label: 'Вал', fmt: (v, r) => K.ccyTag(r.ccy) }, { key: 'amt', label: 'Сумма', num: true, unit: 'mm', fmt: (v, r) => K.f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', csvFmt: v => K.f.mn(v, 2) }] });
-  same(fl.csv().split('\r\n').slice(2, 4), ['Вал,"Сумма, mm"', 'RUB,27.74']);
+    columns: [{ key: 'ccy', label: 'Вал', fmt: (v, r) => K.ccyTag(r.ccy) }, { key: 'amt', label: 'Сумма', num: true, unit: 'mm в вал.', fmt: (v, r) => K.f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', csvFmt: v => K.f.mn(v, 2) }] });
+  same(fl.csv().split('\r\n').slice(2, 4), ['Вал,"Сумма, mm в вал."', 'RUB,27.74']);
   // C08 «Оферты и коллы»: дата — data-date, вид — своя колонка
   assert.ok(/<th>Дата<\/th><th>Вид<\/th><th class="n">Дней<\/th>/.test(c08));
   assert.ok(/<td data-date="' \+ esc\(p\.event\.date\) \+ '">' \+ f\.date\(p\.event\.date\) \+ '<\/td><td class="mut3">' \+ K\.offerKindText\(p\.event\.kind\) \+ '<\/td>/.test(c08));
@@ -378,28 +378,38 @@ t('#258: число с единицей и валютой — в CSV число�
     K.negFmt = fm;
     const v = attr(K.csvv(() => [K.f.mn(-1.25e9, 0), 'RUB']));
     assert.strictEqual(v, '-1,250|RUB', fm + ': значения data-csv — в формате «−1»');
-    // ручная таблица: заголовок «Номинал, mm|Вал» — две колонки CSV, ячейка с data-csv — число и валюта
-    const T = table({ head: [['Дата', { h: 'Номинал', cls: 'n', csv: 'Номинал, mm|Вал' }, { h: 'Цена', cls: 'n' }]],
+    // ручная таблица: заголовок «Номинал, mm в вал.|Вал» — две колонки CSV, ячейка с data-csv — число и валюта
+    const T = table({ head: [['Дата', { h: 'Номинал', cls: 'n', csv: 'Номинал, mm в вал.|Вал' }, { h: 'Цена', cls: 'n' }]],
       body: [[{ h: '11.03.27', date: '2027-03-11' }, { h: K.f.mn(-1.25e9, 0) + '<span class="mut3">mm RUB</span>', cls: 'n', csv: v }, { h: '99.5', cls: 'n' }],
         [{ h: '20.04.27', date: '2027-04-20' }, { h: '450<span class="mut3">mm USD</span>', cls: 'n', csv: '450|USD' }, { h: '—', cls: 'n' }]],
       foot: [['Итого', { h: '', cls: 'n' }, { h: '', cls: 'n' }]] });
-    same(K.tableCsv(T, {}).split('\r\n').slice(2, 6), ['Дата,"Номинал, mm",Вал,Цена', '03/11/2027,-1250,RUB,99.5', '04/20/2027,450,USD,', 'Итого,,,'], fm);
+    same(K.tableCsv(T, {}).split('\r\n').slice(2, 6), ['Дата,"Номинал, mm в вал.",Вал,Цена', '03/11/2027,-1250,RUB,99.5', '04/20/2027,450,USD,', 'Итого,,,'], fm);
     // K.table: «Номинал» позиций (K.posCols.notional) — как «Сумма» C08 (#257): число в mm, валюта — в колонке «Вал»
     const api = K.table(el(), { rows: [{ id: 'a', ccy: 'RUB', notional: -9e9 }, { id: 'b', ccy: 'USD', notional: 25e6 }], search: false, viewKey: 'c99-ntl-' + fm, columns: K.cols(['ccy', 'notional']) });
-    same(api.csv().split('\r\n').slice(2, 5), ['Вал,"Номинал, mm"', 'RUB,-9000.00', 'USD,25.00'], fm);
+    same(api.csv().split('\r\n').slice(2, 5), ['Вал,"Номинал, mm в вал."', 'RUB,-9000.00', 'USD,25.00'], fm);
     // ноги сделки в карточке: «Покупка» и «Продажа» — число в mm и валюта отдельно
     const legs = K.legsHtml({ legs: [{ leg: 'near', valueDate: '2026-11-02', buyCcy: 'USD', buyAmount: 1e6, sellCcy: 'RUB', sellAmount: 9e7, contractRate: 90 }, { leg: 'far', buyCcy: 'RUB', buyAmount: null, sellCcy: 'USD', sellAmount: -1.5e6 }] });
-    assert.ok(legs.includes('<th class="n" data-csv="Покупка, mm|Вал покупки">Покупка</th><th class="n" data-csv="Продажа, mm|Вал продажи">Продажа</th>'), fm);
+    assert.ok(legs.includes('<th class="n" data-csv="Покупка, mm в вал.|Вал покупки">Покупка</th><th class="n" data-csv="Продажа, mm в вал.|Вал продажи">Продажа</th>'), fm);
     assert.ok(legs.includes(' data-csv="1.00|USD">1.00 <small>mm USD</small>') && legs.includes(' data-csv="90.00|RUB">'), fm);
     assert.ok(legs.includes(' data-csv="|RUB">—') && legs.includes(' data-csv="-1.50|USD">'), fm + ': пустая сумма — пустая ячейка, отрицательная — с минусом');
+    // курс сделки — числом, котировка — своей колонкой; расчёт и фиксинг — подписи своими колонками, фиксинг — датой
+    const ndf = K.legsHtml({ legs: [{ leg: 'single', valueDate: '2026-11-21', buyCcy: 'CNY', buyAmount: 3e8, sellCcy: 'RUB', sellAmount: 3.459e9, contractRate: 11.53, rateQuote: 'CNY/RUB',
+      settlement: 'cash', settlementCcy: 'RUB', fixingDate: '2026-11-19', fixingSource: 'ЦБ', fixingRate: 11.41 }] });
+    assert.ok(ndf.includes('<th class="n" data-csv="Курс сделки|Котировка">Курс сделки</th>') && ndf.includes(' data-csv="11.5300|CNY/RUB">11.5300 <small>CNY/RUB</small>'), fm);
+    assert.ok(ndf.includes('<th data-csv="Расчёт|Вал расчёта">Расчёт</th>') && ndf.includes(' data-csv="расчётный (NDF)|RUB">'), fm);
+    assert.ok(ndf.includes('<th class="n" data-csv="Фиксинг|Источник фиксинга|Курс фиксинга">Фиксинг</th>') && ndf.includes(' data-date="2026-11-19" data-csv="19.11.26|ЦБ|11.4100">'), fm);
   }
+  // ячейка с data-csv и data-date: первое значение — датой, лишние значения сверх колонок заголовка отбрасываются
+  const F = table({ head: [[{ h: 'Фиксинг', cls: 'n', csv: 'Фиксинг|Источник фиксинга|Курс фиксинга' }, { h: 'Курс сделки', cls: 'n', csv: 'Курс сделки|Котировка' }]],
+    body: [[{ h: '19.11.26 ЦБ 11.4100', cls: 'n', date: '2026-11-19', csv: '19.11.26|ЦБ|11.4100' }, { h: '11.5300 CNY/RUB', cls: 'n', csv: '11.5300|CNY/RUB|лишнее' }]] });
+  same(K.tableCsv(F, {}).split('\r\n').slice(2, 4), ['Фиксинг,Источник фиксинга,Курс фиксинга,Курс сделки,Котировка', '11/19/2026,ЦБ,11.4100,11.5300,CNY/RUB']);
   K.negFmt = 'acc';
   // страницы: C08 «Оферты и коллы», C13 «События эмитента», C03 «Номинал», разбор вклада
   const c08 = P('concepts/c08-calendar.html'), c13 = P('concepts/c13-issuers.html'), c03 = P('concepts/c03-blotter.html'), kit = P('concepts/lib/kit.js');
-  assert.ok(c08.includes('<th class="n" data-csv="Номинал, mm|Вал">Номинал</th>') && c08.includes(`<td class="n"' + K.csvv(() => [f.mn(p.notional, 0), p.ccy]) + '>' + f.mn(p.notional, 0) + '<span class="mut3">mm '`));
-  assert.ok(c13.includes('<th class="n" data-csv="Сумма, mm|Вал">Сумма</th>') && c13.includes(`<td class="n"' + K.csvv(() => [f.mn(c.amount, 1), c.ccy]) + '>'`));
-  assert.ok(/notional: \{[^\n]*csvHead: 'Номинал, mm', csvFmt: v => f\.mn\(v, 2\)/.test(c03) && c03.includes("(c.csvHead ? ' data-csv=\"' + esc(c.csvHead) + '\"' : '')") && c03.includes('(c.csvFmt ? K.csvv(() => c.csvFmt(v, r)) : \'\')'));
-  assert.ok(kit.includes('<th class="n" title="в валюте позиции" data-csv="Номинал, mm">Номинал</th>') && kit.includes(`<td class="n"' + K.csvv(() => f.mn(x.p.notional, 2)) + '>'`), 'разбор вклада');
+  assert.ok(c08.includes('<th class="n" data-csv="Номинал, mm в вал.|Вал">Номинал</th>') && c08.includes(`<td class="n"' + K.csvv(() => [f.mn(p.notional, 0), p.ccy]) + '>' + f.mn(p.notional, 0) + '<span class="mut3">mm '`));
+  assert.ok(c13.includes('<th class="n" data-csv="Сумма, mm в вал.|Вал">Сумма</th>') && c13.includes(`<td class="n"' + K.csvv(() => [f.mn(c.amount, 1), c.ccy]) + '>'`));
+  assert.ok(/notional: \{[^\n]*csvHead: 'Номинал, mm в вал.', csvFmt: v => f\.mn\(v, 2\)/.test(c03) && c03.includes("(c.csvHead ? ' data-csv=\"' + esc(c.csvHead) + '\"' : '')") && c03.includes('(c.csvFmt ? K.csvv(() => c.csvFmt(v, r)) : \'\')'));
+  assert.ok(kit.includes('<th class="n" title="в валюте позиции" data-csv="Номинал, mm в вал.">Номинал</th>') && kit.includes(`<td class="n"' + K.csvv(() => f.mn(x.p.notional, 2)) + '>'`), 'разбор вклада');
 });
 
 console.log(n + ' tests passed');
