@@ -65,6 +65,10 @@ class ScenarioEngineJs(unittest.TestCase):
         r = subprocess.run(["node", str(ROOT / "tests" / "js" / "header_status.test.js")], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
+    def test_run_badge(self):  # #192: бейдж прогона в шапке — возраст публикации, что вошло, событие desk:live
+        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "run_badge.test.js")], capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
     def test_backfill_indicator(self):  # #23, #163: «догрузка истории N из M · K не сходятся», подсказка с датами
         r = subprocess.run(["node", str(ROOT / "tests" / "js" / "backfill_indicator.test.js")], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
