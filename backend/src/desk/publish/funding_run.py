@@ -391,6 +391,49 @@ def compute(con: psycopg.Connection, on: date, prev: MarketView | None, market: 
                           log=[("WARN", text[:2000])])
 
 
+@dataclass
+class RunPolicy:
+    """``run_policy``: the funding policy of a run, or why there is none (status ``not_configured`` / ``invalid_config``,
+    ``policy`` None)."""
+
+    status: str
+    text: str
+    policy: F.FundingPolicy | None = None
+    entities: dict[str, F.EntityType] | None = None
+    source: dict[str, str] = field(default_factory=dict)
+    """Per policy field: where it came from (``funding_policy:<id>``, settings, settings_override, DEC01)."""
+    conflicts: tuple[str, ...] = ()
+    entity_rows: list[dict] = field(default_factory=list)
+    policy_rows: list[dict] = field(default_factory=list)
+
+
+def configured(rule_rows: list[dict], fs: funding_settings.FundingSettings) -> bool:
+    """Funding is configured: an adapter rule in force, a settings rule, or the market default rate on (#237)."""
+    return any(r.get("active", True) is not False for r in rule_rows) or bool(fs.active_rules) or fs.default_enabled
+
+
+def run_policy(con: psycopg.Connection, on: date, known_at: Any, fs: funding_settings.FundingSettings,
+               rule_rows: list[dict] | None = None) -> RunPolicy:
+    """The funding policy of the run of ``on``, one for the funding and the currency funding liability
+    (``fx_liability``): the adapter's bases and entities, the settings' bases and conventions under them
+    (``FundingSettings.apply``, DEC01's clean TRADING base), the adapter's ``funding_policy`` over all.
+    ``rule_rows``: the adapter's rules (default: those in force on ``on``)."""
+    if rule_rows is None:
+        rule_rows = store.current_reference(con, "funding_rules", on, known_at)
+    if not configured(rule_rows, fs):
+        return RunPolicy(NOT_CONFIGURED, STATUS_TEXT[NOT_CONFIGURED])
+    entity_rows = store.current_reference(con, "entities", on, known_at)
+    policy_rows = store.current_reference(con, "funding_policy", on, known_at)
+    try:
+        base, settings_source = fs.apply(bases_from_reference(rule_rows), policy_from_reference(rule_rows, entity_rows))
+    except ValueError as e:
+        return RunPolicy(INVALID, f"{STATUS_TEXT[INVALID]}: {e}")
+    settings = apply_funding_policy(policy_rows, base)
+    types, _ = entities_from_reference(entity_rows)
+    return RunPolicy(COMPUTED, STATUS_TEXT[COMPUTED], settings.policy, types or None,
+                     {**settings_source, **settings.source}, settings.conflicts, entity_rows, policy_rows)
+
+
 def _compute(con: psycopg.Connection, on: date, prev: MarketView | None, market: MarketView,
              content_rows: list[dict[str, Any]], run_books: list[dict[str, Any]], inputs: store.PositionInputs,
              terms: dict[str, Any], fs: funding_settings.FundingSettings) -> RunFunding:
@@ -401,34 +444,28 @@ def _compute(con: psycopg.Connection, on: date, prev: MarketView | None, market:
     default = fs.describe()
     settings_log = [("WARN", f"фондирование: настройки фондирования не прочитаны, взяты умолчания: {fs.error}")] \
         if fs.error else []
-    if not any(r.get("active", True) is not False for r in rule_rows) and not fs.active_rules \
-            and not fs.default_enabled:
-        text = STATUS_TEXT[NOT_CONFIGURED]
+    rp = run_policy(con, on, known_at, fs, rule_rows)
+    if rp.status == NOT_CONFIGURED:
+        text = rp.text
         return RunFunding(NOT_CONFIGURED, _empty_block(NOT_CONFIGURED, text, period, default_rate=default),
                           {p: {"state": NOT_CONFIGURED, "amount_rub": None, "reason": text} for p in pids},
                           log=[*settings_log, ("WARN", text + "; фондирование не посчитано, в PnL его нет (не 0)")])
-    entity_rows = store.current_reference(con, "entities", on, known_at)
-    policy_rows = store.current_reference(con, "funding_policy", on, known_at)
-    try:
-        adapter_bases = bases_from_reference(rule_rows)
-        base_policy, settings_source = fs.apply(adapter_bases, policy_from_reference(rule_rows, entity_rows))
-    except ValueError as e:
-        text = f"{STATUS_TEXT[INVALID]}: {e}"
+    if rp.status == INVALID:
+        text = rp.text
         return RunFunding(INVALID, _empty_block(INVALID, text, period, default_rate=default),
                           {p: {"state": PROBLEM, "amount_rub": None, "reason": text} for p in pids},
                           log=[*settings_log, ("WARN", text)])
-    settings = apply_funding_policy(policy_rows, base_policy)
-    pol = settings.policy
+    assert rp.policy is not None
+    pol, entity_rows, policy_rows = rp.policy, rp.entity_rows, rp.policy_rows
     own = fs.rules()
     rules = F.FundingRules(rates=(*funding_rules_from_reference(rule_rows).rates, *own.rates))
-    types, _ = entities_from_reference(entity_rows)
-    entities = types or None
+    entities = rp.entities
     books = {b["book_id"]: b for b in store.current_books(con, on, known_at)}  # also books with only cash
     books.update({b["book_id"]: b for b in run_books})  # the run's own reference (store metadata, else demo books)
     run_book_ids = {r["book_id"] for r in content_rows}
     inp = _gather(con, period, content_rows, inputs, terms, books, pol)
     problems = list(inp.problems)
-    problems += [F.FundingProblem(F.LineKind.POS, "*", c) for c in settings.conflicts]
+    problems += [F.FundingProblem(F.LineKind.POS, "*", c) for c in rp.conflicts]
     # a clean-MV base needs the accrued: a position without it is not funded on a guess
     clean = {p.position_id for p in [*inp.current, *(inp.previous or [])] if p.position_id in inp.unknown_accrued
              and pol.base_by_book_type.get(p.book_type) is F.FundingBase.MV_CLEAN}
@@ -548,7 +585,7 @@ def _compute(con: psycopg.Connection, on: date, prev: MarketView | None, market:
     total = math.fsum(x.interest_reporting for x in res.lines)
     n_default = sum(1 for x in res.lines if x.default_rate)
     in_pos = math.fsum(j["interest_rub"] for j in lines_json if j["in_position"])
-    source = {**settings_source, **settings.source}
+    source = dict(rp.source)
     for bt in pol.base_by_book_type:
         source.setdefault(f"base_by_book_type[{bt}]", "funding_rules" if bt in {
             r.get("book_type") for r in rule_rows if r.get("basis")} else "default")

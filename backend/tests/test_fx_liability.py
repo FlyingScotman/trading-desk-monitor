@@ -183,13 +183,23 @@ POSITIONS = ("book_id;position_id;asset_class;source_instrument_id;isin;ccy;quan
              f"T1;T1|USD;bond;SEC-USD;{USD_BOND};USD;1000;2026-10-01;1500\n")
 
 
-def test_run_publishes_the_bond_net_of_its_liability(store_url, ctx, tmp_path):
+@pytest.fixture(autouse=True)
+def _home(tmp_path, monkeypatch):
+    """A settings folder of its own: the funding settings (#237) are the defaults unless a test writes them."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("DESK_HOME", str(home))
+    return home
+
+
+def _publish(store_url, ctx, tmp_path, cfg_files):
+    """Scan the config and the USD bond's positions, publish the run of ``ON``: (fact, lineage, log, run id)."""
     for memo in (scan._handles, scan._last_seen, scan._static_seen):
         memo.clear()
     cfg, inbox = tmp_path / "cfg", tmp_path / "in"
     cfg.mkdir()
     inbox.mkdir()
-    for name, text in CFG.items():
+    for name, text in cfg_files.items():
         (cfg / name).write_bytes((BOM + text.replace("\n", "\r\n")).encode())
     (inbox / "positions_20261016.csv").write_bytes((BOM + POSITIONS.replace("\n", "\r\n")).encode())
     s = Settings(snapshot_cache=Path(__file__).parent / "fixtures" / "mdhub_v1", inbox_dirs=(inbox,),
@@ -207,6 +217,11 @@ def test_run_publishes_the_bond_net_of_its_liability(store_url, ctx, tmp_path):
         log = [m for (m,) in con.execute("SELECT message FROM run_log WHERE run_id = %s ORDER BY seq", (rid,))]
     for memo in (scan._handles, scan._last_seen, scan._static_seen):
         memo.clear()
+    return fact, lin, log, rid
+
+
+def test_run_publishes_the_bond_net_of_its_liability(store_url, ctx, tmp_path):
+    fact, lin, log, rid = _publish(store_url, ctx, tmp_path, CFG)
     x = fact["extra"]["fx_liability"]
     assert x["state"] == "computed" and x["ccy"] == "USD" and x["purchase_accrued_basis"] == "report"
     assert x["amount_ccy"] == pytest.approx(-(x["clean_mv_ccy"] + 1500))
@@ -265,3 +280,50 @@ def test_purchase_accrued_is_in_the_liability_not_in_the_funding_body():
     assert line.interest == pytest.approx(-1e6 * 0.0365 / 365)  # interest on the clean MV
     (x,), _ = F.funding_liabilities([p], policy=TRADING)
     assert x.amount == pytest.approx(-1_005_000)  # clean MV + the accrued paid at the purchase
+
+
+# ---- #237: the liability takes the run's funding policy, the settings' and the default rate's included ---------------
+
+NO_RULES = {k: v for k, v in CFG.items() if k != "funding_rules.csv"}
+
+
+def test_liability_without_adapter_rules_at_the_default_rate(store_url, ctx, tmp_path):
+    """No adapter rule, the default settings (the market default rate on): funding is configured, the TRADING base is
+    DEC01's clean MV, so the bond's liability is computed (clean MV plus the purchase accrued), not "not configured"."""
+    fact, lin, _, _ = _publish(store_url, ctx, tmp_path, NO_RULES)
+    x = fact["extra"]["fx_liability"]
+    assert lin["fx_liability"]["status"] == "computed" and x["state"] == "computed" and x["base"] == "mv_clean"
+    assert x["amount_ccy"] == pytest.approx(-(x["clean_mv_ccy"] + 1500))
+    assert fact["fx_delta"]["USD"] == pytest.approx(x["accrued_ccy"] - 1500)  # not the whole dirty MV
+
+
+def test_liability_takes_the_settings_base(store_url, ctx, tmp_path, _home):
+    """The TRADING base given by a settings rule only (default rate off): the liability is on it, not "none"."""
+    from desk.settings import update_settings_json
+    update_settings_json({"funding": {"default_rate": {"kind": "none"}, "default_rate_by_ccy": {}, "rules": [
+        {"rule_id": "s_trading", "book_type": "TRADING", "basis": "mv_dirty", "rate_kind": "none"}]}}, _home)
+    fact, lin, _, _ = _publish(store_url, ctx, tmp_path, NO_RULES)
+    x = fact["extra"]["fx_liability"]
+    assert lin["fx_liability"]["status"] == "computed" and x["state"] == "computed" and x["base"] == "mv_dirty"
+    assert x["amount_ccy"] == pytest.approx(-x["dirty_mv_ccy"]) and fact["fx_delta"]["USD"] == pytest.approx(0)
+
+
+def test_liability_not_configured_only_without_any_rule_and_default(store_url, ctx, tmp_path, _home):
+    from desk.settings import update_settings_json
+    update_settings_json({"funding": {"default_rate": {"kind": "none"}, "default_rate_by_ccy": {}}}, _home)
+    fact, lin, _, _ = _publish(store_url, ctx, tmp_path, NO_RULES)
+    assert lin["fx_liability"]["status"] == "not_configured"
+    assert fact["extra"]["fx_liability"]["state"] == "not_configured"
+
+
+def test_cny_bond_liability_from_the_shared_policy(store_url):
+    """A CNY bond of a TRADING book, no adapter rule, the default settings (CNY at RUSFARCNY): the shared policy
+    (``funding_run.run_policy``) gives DEC01's clean base, the liability is the clean MV."""
+    from desk import funding_settings
+    with store.connect(store_url) as con:
+        rp = fx_liability.resolve_policy(con, ON, None, funding_settings.from_doc(None))
+    assert rp.status == "computed" and rp.policy.base_by_book_type["TRADING"] is F.FundingBase.MV_CLEAN
+    per = fx_liability.liabilities([bond_row("T1|CNY", ccy="CNY")], BOOKS, {}, {}, ON, rp.policy, rp.entities)
+    x = per["T1|CNY"]
+    assert x["state"] == "computed" and x["ccy"] == "CNY"
+    assert x["amount_ccy"] == pytest.approx(-1_000_000.0) and x["clean_mv_ccy"] == pytest.approx(1_000_000.0)

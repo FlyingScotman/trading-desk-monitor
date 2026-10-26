@@ -51,10 +51,9 @@ from typing import Any
 
 import psycopg
 
-from .. import store
+from .. import funding_settings, store
 from ..marketdata.adapter import MarketView
 from ..rules import funding as F
-from ..rules.reference import apply_funding_policy, entities_from_reference, policy_from_reference
 from ..valuation.bonds import current_period
 from ..valuation.fallback import market_fx
 from . import funding_run
@@ -65,8 +64,8 @@ COMPUTED, NOT_CONFIGURED, INVALID, FAILED = "computed", "not_configured", "inval
 NONE, PROBLEM = "none", "problem"
 STATUS_TEXT = {
     COMPUTED: "валютный пассив фондирования облигаций посчитан, FX-дельта облигаций — за его вычетом",
-    NOT_CONFIGURED: "валютный пассив не посчитан: фондирование не настроено (нет funding_rules); FX-дельта облигаций — "
-                    "грязная MV",
+    NOT_CONFIGURED: "валютный пассив не посчитан: фондирование не настроено (нет правил ни от адаптера, ни в настройках, "
+                    "ставка по умолчанию выключена); FX-дельта облигаций — грязная MV",
     INVALID: "валютный пассив не посчитан: правила фондирования противоречат друг другу; FX-дельта облигаций — "
              "грязная MV",
     FAILED: "валютный пассив не посчитан: ошибка расчёта; FX-дельта облигаций — грязная MV",
@@ -128,19 +127,13 @@ class _Policy:
     text: str
 
 
-def resolve_policy(con: psycopg.Connection, on: date, known_at: Any) -> _Policy:
-    """The funding policy of the run's funding on ``on`` (as ``funding_run``), or why there is none."""
-    rules = store.current_reference(con, "funding_rules", on, known_at)
-    if not any(r.get("active", True) is not False for r in rules):
-        return _Policy(None, None, NOT_CONFIGURED, STATUS_TEXT[NOT_CONFIGURED])
-    entity_rows = store.current_reference(con, "entities", on, known_at)
-    try:
-        base = policy_from_reference(rules, entity_rows)
-    except ValueError as e:
-        return _Policy(None, None, INVALID, f"{STATUS_TEXT[INVALID]} ({e})")
-    pol = apply_funding_policy(store.current_reference(con, "funding_policy", on, known_at), base).policy
-    types, _ = entities_from_reference(entity_rows)
-    return _Policy(pol, types or None, COMPUTED, STATUS_TEXT[COMPUTED])
+def resolve_policy(con: psycopg.Connection, on: date, known_at: Any,
+                   fs: funding_settings.FundingSettings | None = None) -> _Policy:
+    """The funding policy of the run's funding on ``on`` (``funding_run.run_policy``: the adapter's and the settings'
+    rules, bases and conventions, #237), or why there is none."""
+    rp = funding_run.run_policy(con, on, known_at, fs if fs is not None else funding_settings.load())
+    text = STATUS_TEXT[rp.status] + (f" ({rp.text})" if rp.status == INVALID else "")
+    return _Policy(rp.policy, rp.entities, rp.status, text)
 
 
 def liabilities(rows: list[dict[str, Any]], books: Mapping[str, Mapping[str, Any]], extra: Mapping[str, Mapping],
