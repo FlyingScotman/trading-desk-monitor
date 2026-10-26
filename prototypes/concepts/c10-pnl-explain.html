@@ -57,11 +57,16 @@
   const DAYS_MTD = 15, mtdCache = {};
   function mtd(p) {
     if (mtdCache[p.id]) return mtdCache[p.id];
-    // фондирование не посчитано (null) — и в MTD null, а не 0 (#327, B1)
-    const o = { carry: p.pnl.carry * DAYS_MTD, funding: p.pnl.funding == null ? null : p.pnl.funding * DAYS_MTD, trading: p.pnl.trading * 3 };
-    const rest = p.pnlMtd - o.carry - (o.funding || 0) - o.trading, ks = ['rates', 'spread', 'fx', 'other'];
-    const W = ks.reduce((s, k) => s + Math.abs(p.pnl[k]), 0);
-    ks.forEach(k => o[k] = W ? rest * Math.abs(p.pnl[k]) / W : (k === 'other' ? rest : 0));
+    // не посчитано (null: фактор дня или PnL MTD) — и в MTD null, а не 0 (#327, B1)
+    const x = (v, m) => v == null ? null : v * m;
+    const o = { carry: x(p.pnl.carry, DAYS_MTD), funding: x(p.pnl.funding, DAYS_MTD), trading: x(p.pnl.trading, 3) };
+    const ks = ['rates', 'spread', 'fx', 'other'];
+    if (p.pnlMtd == null) ks.forEach(k => o[k] = null);
+    else {
+      const rest = p.pnlMtd - (o.carry || 0) - (o.funding || 0) - (o.trading || 0);
+      const W = ks.reduce((s, k) => s + Math.abs(p.pnl[k] || 0), 0);
+      ks.forEach(k => o[k] = W ? rest * Math.abs(p.pnl[k] || 0) / W : (k === 'other' ? rest : 0));
+    }
     return (mtdCache[p.id] = o);
   }
   const val = (p, k) => k === 'total' ? (mode === 'day' ? p.pnl.total : p.pnlMtd) : (mode === 'day' ? p.pnl[k] : mtd(p)[k]);
@@ -146,9 +151,9 @@
     const fp = panel('Главные вклады по факторам', '<span class="k-note">' + u.unit + ' · топ-6 по модулю · щелчок — карточка</span>');
     fp.querySelector('.bd').innerHTML = '<div class="fac">' + FAC.map(([k, t]) => {
       const arr = L.map(p => ({ p, v: val(p, k) })).filter(x => Math.abs(x.v) > 1).sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
-      const s = arr.reduce((a, x) => a + x.v, 0), top = arr.slice(0, 6), mx = Math.max(1, ...top.map(x => Math.abs(x.v)));
+      const s = M.sum(L, p => val(p, k)), top = arr.slice(0, 6), mx = Math.max(1, ...top.map(x => Math.abs(x.v)));
       const conc = arr.length ? Math.round(top.reduce((a, x) => a + Math.abs(x.v), 0) / arr.reduce((a, x) => a + Math.abs(x.v), 0) * 100) : 0;
-      return '<div class="k-panel"><div class="hd"><h3><b style="color:' + FCOL[k] + '">■</b> ' + t + '</h3><span class="sp"></span>' + K.d({ title: 'PnL · ' + t, unit: u.unit, fmt: u.fmts, list: L, val: p => val(p, k) }, u.fmts(s)) + '</div><div class="bd">' +
+      return '<div class="k-panel"><div class="hd"><h3><b style="color:' + FCOL[k] + '">■</b> ' + t + '</h3><span class="sp"></span>' + K.d({ title: 'PnL · ' + t, unit: u.unit, fmt: u.fmts, list: L, val: p => val(p, k) }, s == null ? NA : u.fmts(s)) + '</div><div class="bd">' +
         (top.length ? '<table data-vk="c10-top-' + k + '" data-title="Главные вклады · ' + t + '">' + top.map(x => '<tr data-card="' + x.p.id + '"><td style="width:3px;padding:0;background:' + K.issuerColor(x.p.issuer) + '"></td><td class="nm">' + esc(x.p.name) + '</td><td class="n ' + f.cls(x.v) + '">' + u.fmts(x.v) + '</td><td style="width:70px">' + K.bar(x.v, mx) + '</td></tr>').join('') + '</table>' +
           '<div class="k-note" style="padding:4px 10px 0">топ-6 = ' + conc + '% оборота · всего ' + arr.length + ' поз.</div>' : '<div class="k-empty">нет вклада</div>') + '</div></div>';
     }).join('') + '</div>';
@@ -198,7 +203,7 @@
       info.innerHTML = '<div style="font-weight:600;margin-bottom:2px">' + f.date(M.histDates[i]) + (last ? ' · сегодня' : '') + '</div><div class="' + f.cls(HP.total[i]) + '" style="font-size:20px;font-weight:650;margin-bottom:6px">' + f.mns(HP.total[i], 2) + ' <span class="mut" style="font-size:12px">mm ₽</span></div>' +
         parts.map(([k, t, v]) => '<div class="row"><span><b style="color:' + FCOL[k] + '">■</b> ' + t + '</span>' + K.bar(v, mx) + '<span class="n ' + f.cls(v) + '">' + (v == null ? '—' : last ? K.d({ title: 'PnL дня · ' + t, unit: 'тыс ₽', fmt: f.ks, list: K.list(), val: p => p.pnl[k] }, f.mns(v, 2), f.cls(v)) : f.mns(v, 2)) + '</span></div>').join('') +
         '<div class="k-note" style="margin-top:8px">' + (last ? 'сегодня — цифры раскрываются по позициям' : 'по прошлым дням хранится только разложение деска') + '</div>' +
-        '<div class="k-note">с начала окна: ' + f.mns(HP.total.slice(0, i + 1).reduce((a, b) => a + b, 0), 1) + ' mm ₽</div>';
+        '<div class="k-note">с начала окна: ' + f.mns(HP.total.slice(0, i + 1).some(v => v != null) ? HP.total.slice(0, i + 1).reduce((a, b) => a + (b || 0), 0) : null, 1) + ' mm ₽</div>';
     }
     showDay(selDay);
     hc.raw.getZr().on('click', e => { const pt = [e.offsetX, e.offsetY]; if (!hc.raw.containPixel('grid', pt)) return; const i = Math.round(hc.raw.convertFromPixel({ xAxisIndex: 0 }, pt[0])); if (i >= 0 && i < n) { showDay(i); hc.raw.setOption({ series: FAC.map(() => ({})).concat([{}, { symbolSize: (v, p) => p.dataIndex === selDay ? 10 : 4 }]) }); } });
@@ -210,7 +215,9 @@
     const ranked = L.filter(p => Math.abs(val(p, 'other')) > 0).sort((a, b) => Math.abs(val(b, 'other')) - Math.abs(val(a, 'other')));
     const t5 = ranked.slice(0, 5), t5s = t5.reduce((s, p) => s + Math.abs(val(p, 'other')), 0) / (ranked.reduce((s, p) => s + Math.abs(val(p, 'other')), 0) || 1);
     const ob = op.querySelector('.bd');
-    ob.innerHTML = '<p class="lead">Необъяснённый остаток ' + K.d({ title: 'Прочее', unit: u.unit, fmt: u.fmts, list: L, val: p => val(p, 'other') }, oth == null ? NA : u.big(oth)) + ' — <b>' + (Math.abs(oth) / Math.abs(tot || 1) * 100).toFixed(1) + '%</b> от итога. ' +
+    // «прочее» не посчитано ни у одной позиции (прогон без PnL) — словами, без «0%» и пустой таблицы с «Итого 0.0» (#327, B1)
+    if (oth == null) { ob.innerHTML = '<p class="lead">Необъяснённый остаток ' + NA + ' — не посчитан: PnL нет ни у одной позиции.</p>'; return; }
+    ob.innerHTML = '<p class="lead">Необъяснённый остаток ' + K.d({ title: 'Прочее', unit: u.unit, fmt: u.fmts, list: L, val: p => val(p, 'other') }, oth == null ? NA : u.big(oth)) + ' — <b>' + (oth == null || tot == null ? '—' : (Math.abs(oth) / Math.abs(tot || 1) * 100).toFixed(1) + '%') + '</b> от итога. ' +
       'Пять позиций дают <b>' + Math.round(t5s * 100) + '%</b> модуля «прочего»: ' + t5.map(p => '<b data-card="' + p.id + '" style="cursor:pointer">' + esc(p.name) + '</b>').join(', ') + '. ' +
       'Частые причины: цена закрытия не совпала с моделью (неликвид, модельная цена), фиксинг флоатера, сделки внутри дня, нелинейность (выпуклость) при сдвиге &gt; 10 б.п.</p><div class="tb"></div>';
     ob.classList.add('flush'); ob.querySelector('.lead').style.padding = '10px 12px 0';

@@ -115,13 +115,15 @@
   // в валюте отчёта, отличной от рубля, суммы в тысячах мелкие: показываем с одним знаком после точки
   const KD = K.repr === 'RUB' ? 0 : 1;
   const sgn = (v, d) => (v > 0 ? '+' : '') + grp(v, d);
+  // масштаб (тыс, mm, bn) — после проверки на null: null / 1e6 = 0 дал бы «0.0» вместо «—» (#327, B1)
+  const sc = (fn, k) => (v, d) => v == null ? '—' : fn(v / k, d);
   const f = K.f = {
     n: grp, s: sgn,
-    k: v => grp(v / 1e3, KD),                     // тыс
-    ks: v => sgn(v / 1e3, KD),
-    mn: (v, d) => grp(v / 1e6, d == null ? 1 : d),
-    mns: (v, d) => sgn(v / 1e6, d == null ? 1 : d),
-    bn: (v, d) => grp(v / 1e9, d == null ? 2 : d),
+    k: v => sc(grp, 1e3)(v, KD),                  // тыс
+    ks: v => sc(sgn, 1e3)(v, KD),
+    mn: (v, d) => sc(grp, 1e6)(v, d == null ? 1 : d),
+    mns: (v, d) => sc(sgn, 1e6)(v, d == null ? 1 : d),
+    bn: (v, d) => sc(grp, 1e9)(v, d == null ? 2 : d),
     bp: v => v == null ? '—' : grp(v, 0),
     bps: v => v == null ? '—' : sgn(v, 0),
     pct: (v, d) => v == null ? '—' : grp(v, d == null ? 2 : d, '%'),
@@ -129,8 +131,8 @@
     px: v => v == null ? '—' : grp(v, 3),
     money: v => { if (v == null || !isFinite(v)) return '—'; const a = Math.abs(v); return a >= 1e9 ? grp(v / 1e9, 2, ' bn') : a >= 1e6 ? grp(v / 1e6, 1, ' mm') : a >= 1e3 ? grp(v / 1e3, 0, 'k') : grp(v, 0); },
     moneys: v => (v > 0 ? '+' : '') + f.money(v),
-    dv: v => grp(v / 1e3, KD),                    // DV01 в тыс ₽/бп
-    dvs: v => sgn(v / 1e3, KD),
+    dv: v => sc(grp, 1e3)(v, KD),                 // DV01 в тыс ₽/бп
+    dvs: v => sc(sgn, 1e3)(v, KD),
     date: s => s ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(2, 4) : '—',
     dshort: s => { if (!s) return '—'; const m = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']; return (+s.slice(8, 10)) + ' ' + m[+s.slice(5, 7) - 1]; },
     yrs: t => t == null ? '—' : t < 1 ? Math.round(t * 12) + 'м' : grp(t, 1) + 'г',
@@ -2785,7 +2787,7 @@
            ['вал.', K.d({ title: 'CS01 валютные', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy !== 'RUB'), val: 'cs01' })]], null, K.tips.cs01) +
         K.kpi('Кэрри / день', K.d({ title: 'Кэрри за день (без фондирования)', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }) + K.kpiUnit('тыс ₽'),
           [[K.hint('фондирование', K.tips.funding), K.d({ title: 'Фондирование за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'fundingDay', nullable: true })],
-           ['в год ≈', '<span class="' + f.cls(k.carryDay) + '">' + f.mn(k.carryDay * 365, 0) + '</span> <span class="u">mm ₽</span>']], null, K.tips.carry) +
+           ['в год ≈', '<span class="' + f.cls(k.carryDay) + '">' + f.mn(k.carryDay == null ? null : k.carryDay * 365, 0) + '</span> <span class="u">mm ₽</span>']], null, K.tips.carry) +
         K.kpi('Облигации MV', K.d({ title: 'MV облигаций', unit: 'bn ₽', fmt: v => f.bn(v, 1), list: L.filter(p => p.group !== 'DER'), val: 'mv', color: false }) + K.kpiUnit('bn ₽'),
           K.kpiCcyRows(M.ccys.reduce((o, c) => (o[c] = k.byCcy[c].mv, o), {}), (c, v) => f.bn(v, 1), 3, v => f.bn(v, 1))) +
         '<div class="k-kpi k-fxk"><div class="l">' + K.hint('ОВП', K.tips.fxMini) + '</div><div class="v">' + K.fxMini(L) + '</div><div class="s"><a class="go" href="c06-launchpad.html#fx" title="плитка «ОВП и курсы»: бонды и деривативы по валютам, курсы, PnL FX">подробно (C06) →</a></div></div>' +

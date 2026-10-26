@@ -160,7 +160,9 @@
       '<h2><span class="no">01</span> Итог дня <span class="sp"></span><span class="k-note">' + f.date(M.asOf) + ', ' + esc(M.cut.label) + ' · к закрытию ' + f.date(M.prevDate) + '</span></h2>' +
       '<div class="hl"><span class="big ' + f.cls(tot) + '">' + K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(tot, 1)) + ' <span style="font-size:18px;font-weight:500" class="mut">mm ₽</span></span>' +
       '<span class="sub">MTD <b>' + mln('PnL MTD', L, 'pnlMtd') + '</b>' + K.partial('mtd') + ' · YTD <b>' + mln('PnL YTD', L, 'pnlYtd', 0) + '</b>' + K.partial('ytd') + '</span></div>' +
-      '<p>За день ' + word(tot) + ' <b>' + f.mn(Math.abs(tot), 1) + ' mm ₽</b>. Главное: ' + parts.slice(0, 3).map(x => x.h).join(', ') + '.' +
+      // PnL не посчитан ни у одной позиции (k.pnl null) — словами, а не «заработали 0.0» (#327, B1)
+      (tot == null ? '<p>PnL за день не посчитан.' + (parts.length ? ' Главное: ' + parts.slice(0, 3).map(x => x.h).join(', ') + '.' : '')
+        : '<p>За день ' + word(tot) + ' <b>' + f.mn(Math.abs(tot), 1) + ' mm ₽</b>. Главное: ' + parts.slice(0, 3).map(x => x.h).join(', ') + '.') +
       (parts.length > 3 ? ' Остальное: ' + parts.slice(3).map(x => x.h).join(', ') + '.' : '') + '</p>' +
       '<p class="mut" style="font-size:13px">Риск на утро: DV01 по ставкам ' + dvx('DV01 ставки', L, 'dv01') + ', из них RUONIA ' + dvx('DV01 RUONIA', L, p => p.dv01ByCurve['RUB RUONIA']) +
       ', КС ' + dvx('DV01 КС', L, p => p.dv01ByCurve['RUB KEY']) + (M.ofzView === 'kbd' ? ', КБД ' + dvx('DV01 КБД', L, p => p.dv01ByCurve['RUB OFZ'])

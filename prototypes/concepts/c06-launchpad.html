@@ -212,13 +212,14 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         // точки null; кривой нет совсем — словами, без графика (B1: не посчитано — не 0); нет точки — разрыв на графике
         if (!today || today.every(v => v == null)) { K.noData(el, 'кривой ' + (isOfz ? 'ОФЗ (КБД)' : M.curve[mode].short) + ' нет в этом прогоне'); return; }
         const yest = K.yest(today, chg);
-        const riskId = isOfz ? 'RUB OFZ' : mode;
+        const riskId = isOfz ? 'RUB OFZ' : mode, noMv = K.noMoves(chg);  // сдвигов кривой нет в прогоне (#322): ни «изм.», ни «вчера» — словами
         const c = small(el, () => ({ grid: { left: 4, right: 4, top: 22, bottom: 2, containLabel: true }, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis' },
+          graphic: noMv ? [{ type: 'text', right: 8, top: 2, style: { text: 'сдвигов нет в прогоне', fill: css('--fg-3'), fontSize: 11 } }] : [],
           xAxis: { type: 'category', data: M.buckets }, yAxis: [{ type: 'value', scale: true, axisLabel: { formatter: v => f.pct(v, 1) } }, { type: 'value', splitLine: { show: false }, axisLabel: { formatter: v => f.n(v) + ' бп' } }],
           series: [{ name: 'изм., б.п.', type: 'bar', yAxisIndex: 1, data: chg, itemStyle: { color: css('--fg-3'), opacity: .45 }, barMaxWidth: 18 },
             { name: 'вчера', type: 'line', data: yest.map(v => v == null ? null : +v.toFixed(3)), showSymbol: false, lineStyle: { type: 'dashed', width: 1.2 }, color: css('--fg-3'), tooltip: { valueFormatter: v => f.pct(v) } },
-            { name: 'сегодня', type: 'line', data: today.map(v => v == null ? null : +v.toFixed(3)), symbolSize: 5, color: K.curveColors[riskId] || css('--accent'), tooltip: { valueFormatter: v => f.pct(v) } }] }));
-        c.on('click', pp => { const k = pp.dataIndex; K.drill({ title: 'Риск ' + (isOfz ? 'базис ОФЗ' : M.curve[mode].short) + ' · ' + M.buckets[k] + ' (изм. ' + chg[k] + ' бп)', unit: 'тыс ₽/бп', rows: K.list().map(p => ({ p, v: p.risk[riskId][k] })) }); });
+            { name: 'сегодня', type: 'line', data: today.map(v => v == null ? null : +v.toFixed(3)), symbolSize: 5, color: K.curveColors[riskId] || css('--accent'), tooltip: { valueFormatter: v => f.pct(v) } }].filter(s => !noMv || s.name === 'сегодня') }));
+        c.on('click', pp => { const k = pp.dataIndex; K.drill({ title: 'Риск ' + (isOfz ? 'базис ОФЗ' : M.curve[mode].short) + ' · ' + M.buckets[k] + (chg[k] == null ? ' (сдвига нет)' : ' (изм. ' + chg[k] + ' бп)'), unit: 'тыс ₽/бп', rows: K.list().map(p => ({ p, v: p.risk[riskId][k] })) }); });
       },
     },
     issuers: {
@@ -270,7 +271,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const lst = b => L.filter(p => p.book === b.id);
         if (mode === 'table') {
           bd.innerHTML = '<table class="k-tbl" data-vk="c06-carry-books" data-title="Кэрри и фондирование по книгам"><thead><tr><th>Книга</th><th class="n">' + K.hint('Кэрри/д, тыс ₽', K.tips.carry) + '</th><th class="n">' + K.hint('Фондир./д, тыс ₽', K.tips.funding) + '</th><th class="n">кэрри ≈ год, mm ₽</th><th class="n">DV01, тыс ₽/бп</th><th class="n">MV, mm ₽</th></tr></thead><tbody>' +
-            books.map(b => { const l = lst(b), cd = M.sum(l, 'carryDay'); return '<tr><td>' + esc(b.id) + ' <span class="mut3">' + esc(b.name) + '</span></td><td class="n">' + K.d({ title: 'Кэрри ' + b.id, unit: 'тыс ₽', fmt: f.k, list: l, val: 'carryDay' }) + '</td><td class="n">' + K.d({ title: 'Фондирование ' + b.id, unit: 'тыс ₽', fmt: f.k, list: l, val: 'fundingDay', nullable: true }) + '</td><td class="n mut">' + f.mn(cd * 365, 0) + '</td><td class="n">' + K.d({ title: 'DV01 ' + b.id, unit: 'тыс ₽/бп', list: l, val: 'dv01' }, null, '') + '</td><td class="n">' + K.d({ title: 'MV ' + b.id, unit: 'mm ₽', fmt: v => f.mn(v, 0), list: bonds(l), val: 'mv', color: false }) + '</td></tr>'; }).join('') + '</tbody></table>';
+            books.map(b => { const l = lst(b), cd = M.sum(l, 'carryDay'); return '<tr><td>' + esc(b.id) + ' <span class="mut3">' + esc(b.name) + '</span></td><td class="n">' + K.d({ title: 'Кэрри ' + b.id, unit: 'тыс ₽', fmt: f.k, list: l, val: 'carryDay' }) + '</td><td class="n">' + K.d({ title: 'Фондирование ' + b.id, unit: 'тыс ₽', fmt: f.k, list: l, val: 'fundingDay', nullable: true }) + '</td><td class="n mut">' + f.mn(cd == null ? null : cd * 365, 0) + '</td><td class="n">' + K.d({ title: 'DV01 ' + b.id, unit: 'тыс ₽/бп', list: l, val: 'dv01' }, null, '') + '</td><td class="n">' + K.d({ title: 'MV ' + b.id, unit: 'mm ₽', fmt: v => f.mn(v, 0), list: bonds(l), val: 'mv', color: false }) + '</td></tr>'; }).join('') + '</tbody></table>';
           K.tableToolsAll(bd);
           return;
         }

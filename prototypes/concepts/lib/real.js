@@ -502,7 +502,8 @@
     dv01Book: series(H.dv01Book, M.books.map(b => b.id), id => sumBy(p => p.book === id ? p.dv01 : 0)),
     mvType: series(H.mvType, M.typeRows.map(t => t.id), id => sumBy(p => p.group + '.' + p.kind === id ? (p.group === 'DER' ? Math.abs(p.notionalRub) : p.mv) : 0)),
     mvCcy: series(H.mvCcy, M.ccys, c => sumBy(p => p.ccy === c && p.group !== 'DER' ? p.mv : 0)),
-    pnl: series(H.pnl, ['carry', 'funding', 'rates', 'spread', 'fx', 'trading', 'other', 'total'], k => sumBy(p => p.pnl[k])),
+    // сегодня без истории: фактор, не посчитанный ни у одной позиции, — null, а не 0 (#327, B1)
+    pnl: series(H.pnl, ['carry', 'funding', 'rates', 'spread', 'fx', 'trading', 'other', 'total'], k => positions.some(p => p.pnl[k] != null) ? sumBy(p => p.pnl[k]) : null),
   };
   if (!H.cs01) M.hist.cs01[n - 1] = sumBy(p => p.cs01);
   // базис в истории — сводки прогонов (кривая «RUB OFZ» страниц: ofz_basis01 в прогоне 0.2.6+, ofzSpr01 до него);

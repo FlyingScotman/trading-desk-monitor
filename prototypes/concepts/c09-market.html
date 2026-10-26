@@ -119,7 +119,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
   if (!S.rt.some(k => GR.some(x => x[0] === k))) S.rt = GR.map(x => x[0]);
   if (BY_SEC) { const l = document.querySelector('#cRt'); if (l && l.previousElementSibling) l.previousElementSibling.textContent = 'сектор:'; }
   const save = () => { try { localStorage.setItem('c09-state', JSON.stringify(S)); } catch (e) { } };
-  const xOf = (o, our) => S.x === 'dur' ? (our ? ((o.cpn || {}).type === 'float' ? 0.15 : o.mdur) : o.dur) : o.tenor;
+  const xOf = (o, our) => S.x === 'dur' ? (our ? (K.cpnType(o) === 'float' ? 0.15 : o.mdur) : o.dur) : o.tenor;
   const secs = [...new Set(M.universeRub.map(b => b.sector))].sort((a, b) => a.localeCompare(b, 'ru'));
   const secSel = document.getElementById('cSec');
   secSel.innerHTML = '<option value="">все секторы</option>' + secs.map(s => '<option' + (s === S.sec ? ' selected' : '') + '>' + esc(s) + '</option>').join('');
@@ -139,7 +139,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
   const ym = K.chart(document.getElementById('ymap'), () => {
     const okU = b => (S.flt === 'all' || (S.flt === 'flt' ? b.flt : !b.flt)) && (!S.sec || b.sector === S.sec) && (b.isOfz || S.rt.includes(gOf(b)));
     const U = S.ours ? [] : M.universeRub.filter(okU);
-    const L = K.list().filter(p => p.group !== 'DER' && p.ccy === 'RUB' && p.kind !== 'IN' && (S.flt === 'all' || (S.flt === 'flt' ? (p.cpn || {}).type === 'float' : (p.cpn || {}).type === 'fix')) && (!S.sec || p.sector === S.sec || (S.sec === 'ОФЗ' && p.group === 'GOV')) && (p.group === 'GOV' || S.rt.includes(gOf(p))));
+    const L = K.list().filter(p => p.group !== 'DER' && p.ccy === 'RUB' && p.kind !== 'IN' && (S.flt === 'all' || (S.flt === 'flt' ? K.cpnType(p) === 'float' : K.cpnType(p) === 'fix')) && (!S.sec || p.sector === S.sec || (S.sec === 'ОФЗ' && p.group === 'GOV')) && (p.group === 'GOV' || S.rt.includes(gOf(p))));
     ourPts = L;
     const maxMv = Math.max(1, ...L.map(p => Math.abs(p.mv)));
     const curveX = M.pillars.filter(t => t <= 16);
@@ -279,7 +279,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
     'mv',
   ];
   K.table(document.getElementById('rv'), { viewKey: 'c09-rv',
-    rowsFn: () => K.list().filter(p => p.group === 'CORP' && p.ccy === 'RUB' && (p.cpn || {}).type === 'fix'), columns: K.cols(rvCols), sort: [['rv', -1]], stripe: r => K.issuerColor(r.issuer), maxHeight: '420px', footer: false,
+    rowsFn: () => K.list().filter(p => p.group === 'CORP' && p.ccy === 'RUB' && K.cpnType(p) === 'fix'), columns: K.cols(rvCols), sort: [['rv', -1]], stripe: r => K.issuerColor(r.issuer), maxHeight: '420px', footer: false,
   });
 
   // ---------- движения: день, неделя, месяц, 3 месяца, с начала года (история рынка), иначе — день прогона ----------

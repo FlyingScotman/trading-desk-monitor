@@ -79,6 +79,15 @@ t('#327: водопад — K.wfTip(null) «—», K.wfLabel(null) пустая;
   assert.strictEqual(K.missNote({ v: 5, n: 3, miss: 0 }), '');
 });
 
+t('#327: форматтеры сумм (тыс, mm, bn, DV01) на null — «—», а не «0.0»; числа — как раньше', () => {
+  const { K } = load({ real: true }), f = K.f;
+  for (const [n, fn] of Object.entries({ k: f.k, ks: f.ks, mn: f.mn, mns: f.mns, bn: f.bn, dv: f.dv, dvs: f.dvs })) {
+    assert.strictEqual(fn(null), '—', n + '(null)'); assert.strictEqual(fn(undefined), '—', n + '(undefined)');
+  }
+  assert.strictEqual(f.mns(null, 2), '—');
+  assert.strictEqual(f.mn(1.5e6, 1), '1.5'); assert.strictEqual(f.mns(2.5e6, 2), '+2.50'); assert.strictEqual(f.k(0), '0'); assert.strictEqual(f.bn(3e9, 1), '3.0');
+});
+
 t('#322: кривой нет в CURVE_MOVES — изменение null, «вчера» нет, Δ ОФЗ — Δ КБД прогона', () => {
   const { M, K } = load({ real: true, mutate: D => { delete D.CURVE_MOVES['RUB OFZ']; } });
   assert.ok(M.ofzChg.every(v => v === null), 'Δ КБД: ' + M.ofzChg);

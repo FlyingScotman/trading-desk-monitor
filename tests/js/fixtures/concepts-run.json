@@ -6952,10 +6952,10 @@
   {
    "id": 104,
    "book": "CORP_RUB",
-   "assetClass": "Акции",
-   "segment": "Корп",
-   "instrType": "EQUITY",
-   "name": "Эмитент 01 акция",
+   "assetClass": "Прочее",
+   "segment": "Прочее",
+   "instrType": "OTHER",
+   "name": "Эмитент 01 прочее-01",
    "isin": "RU000ATF0EQ1",
    "issuer": "Эмитент 01",
    "issuerGroup": "Группа 01",
@@ -6989,7 +6989,7 @@
     "convexity": 0,
     "spread": 0,
     "fx": 0,
-    "funding": null,
+    "funding": 0,
     "newTrades": 0,
     "other": 1250000,
     "explained": 1250000

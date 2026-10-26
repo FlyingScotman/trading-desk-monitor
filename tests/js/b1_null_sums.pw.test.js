@@ -122,6 +122,37 @@ test('B1 в браузере: #327, #322, #325', { skip: pw ? false : 'нет Pl
       assert.deepStrictEqual(await graphicTexts(pg, '#curveChart'), ['сдвигов нет в прогоне']);
       assert.deepStrictEqual(errors, []);
       await ctx.close();
+      // C06, плитка «Кривые»: только «сегодня», без пустых «изм.» и «вчера» в легенде, и надпись
+      ({ pg, ctx, errors } = await open(browser, 'c06-launchpad.html', { D }));
+      const sel = await pg.evaluate(() => { const t = [...document.querySelectorAll('.tile')].find(x => /Кривые/.test(x.querySelector('h3').textContent)); const c = t.querySelector('[_echarts_instance_]'); c.setAttribute('data-cv', '1'); return '[data-cv]'; });
+      ser = await series(pg, sel);
+      assert.deepStrictEqual(ser.map(x => x[0]), ['сегодня'], 'C06 Кривые: ' + ser.map(x => x[0]));
+      assert.deepStrictEqual(await graphicTexts(pg, sel), ['сдвигов нет в прогоне']);
+      assert.deepStrictEqual(errors, []);
+      await ctx.close();
+    });
+    await t.test('#327: прогон без PnL — ни одного «0.0» на месте непосчитанного значения: C01, C05, C06, C10, C12', async () => {
+      const D = JSON.parse(RUN); D.positions.forEach(p => { p.pnl = { available: false, reasonText: 'нет прошлой оценки' }; });
+      const ZERO = /(^|[^\d.,])[+(−-]?0\.0+\)?(?![\d])/;  // «0.0», «+0.00», «(0.0)» — не «10.0», не «0.05»
+      const zeros = txt => txt.split('\n').filter(l => ZERO.test(l));
+      const tile = (pg, title) => pg.locator('.tile', { has: pg.locator('h3', { hasText: title }) }).innerText();
+      const cases = [
+        ['c01-cockpit.html', {}, async pg => [await pg.locator('#hud').innerText()]],
+        ['c05-morning-brief.html', {}, async pg => { const s1 = await pg.locator('#s1').innerText(); assert.ok(s1.includes('PnL за день не посчитан'), s1); return [s1]; }],
+        ['c06-launchpad.html', { store: { 'c06-preset': 'rates', 'c06-modes': JSON.stringify({ 'rates.carry': 'table' }) } },
+          async pg => [await tile(pg, 'Ключевые цифры'), await tile(pg, 'Кэрри и фондирование'), await tile(pg, 'PnL дня: разложение')]],
+        ['c10-pnl-explain.html', {}, async pg => [await pg.locator('#page').innerText()]],
+        ['c10-pnl-explain.html', { store: { 'c10-mode': 'mtd' } }, async pg => [await pg.locator('#page').innerText()]],
+        ['c12-terminal.html', {}, async pg => [await pg.locator('body').innerText()]],
+      ];
+      for (const [file, o, get] of cases) {
+        const { pg, ctx, errors } = await open(browser, file, Object.assign({ D }, o));
+        const txt = (await get(pg)).join('\n');
+        assert.deepStrictEqual(zeros(txt), [], file + ' ' + JSON.stringify(o));
+        if (file !== 'c05-morning-brief.html') assert.ok(txt.includes('—'), file + ': «—» на месте PnL');
+        assert.deepStrictEqual(errors, [], file);
+        await ctx.close();
+      }
     });
     await t.test('#325: позиция без купона — C01–C17 и экраны, где читается тип купона, без ошибок', async () => {
       const no = JSON.parse(RUN).positions.find(p => p.instrType !== 'BOND' && p.instrType !== 'FX' && p.issuer && p.couponType == null);
