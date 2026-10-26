@@ -32,7 +32,8 @@ t('#263: smoke проверяет 390 px — scrollWidth равен innerWidth',
   const s = P('tools/smoke.js');
   assert.ok(/setViewportSize\(\{ width: 390/.test(s));
   assert.ok(s.includes('document.documentElement.scrollWidth, window.innerWidth') && s.includes("errs.push('390px'"));
-  assert.ok(s.includes("const TABS = '.k-tabs button, .presets [data-p]';"), 'обходит вкладки C01 и раскладки C06');
+  assert.ok(s.includes("const TABS = '.k-tabs button, .k-top .presets [data-p]';"), 'обходит вкладки C01 и раскладки C06');
+  assert.ok(s.includes(".k-top [data-a=\"view\"]") && s.includes("меню ⚙ за краем окна"), 'меню вида ⚙ на 390 px');
 });
 
 t('#263: узкий экран — шапка панели переносится, переключатель прокручивается внутри себя', () => {

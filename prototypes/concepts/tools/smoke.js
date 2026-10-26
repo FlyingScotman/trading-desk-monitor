@@ -45,13 +45,22 @@ if (!pages.length) pages = fs.readdirSync(dir).filter(f => /\.html$/.test(f));
       const wide = await pg.evaluate(() => [document.documentElement.scrollWidth, window.innerWidth]);
       if (wide[0] !== wide[1]) { errs.push('390px' + (tag ? ' «' + tag + '»' : '') + ': scrollWidth ' + wide[0] + ' ≠ innerWidth ' + wide[1]); await pg.screenshot({ path: path.join(out, name.replace('.html', '-390' + (tag ? '-' + errs.length : '') + '.png')) }); }
     };
-    const TABS = '.k-tabs button, .presets [data-p]';
+    const TABS = '.k-tabs button, .k-top .presets [data-p]';
     const nTabs = (await pg.$$(TABS)).length;
     if (!nTabs) await narrow('');
     for (let i = 0; i < nTabs; i++) {
       const tab = (await pg.$$(TABS))[i];  // вкладки перерисовываются после щелчка — каждый раз заново
       const tag = (await tab.textContent()).trim(); await tab.click(); await pg.waitForTimeout(500);
       await narrow(tag);
+    }
+    // меню вида ⚙ (#255) на 390 px — в пределах окна, страница не прокручивается вбок
+    const vb = await pg.$('.k-top [data-a="view"]');
+    if (vb) {
+      await vb.click(); await pg.waitForTimeout(200);
+      const m = await pg.evaluate(() => { const p = document.querySelector('.k-viewmenu'); return p && [Math.round(p.getBoundingClientRect().left), Math.round(p.getBoundingClientRect().right)]; });
+      if (!m) errs.push('390px: меню ⚙ не открылось');
+      else if (m[0] < 0 || m[1] > 390) errs.push('390px: меню ⚙ за краем окна ' + m.join('…'));
+      await narrow('меню ⚙'); await pg.keyboard.press('Escape');
     }
     console.log((errs.length ? 'FAIL ' : 'ok   ') + name + (dr ? ' drill' : ' -') + (row ? ' card' : ' -') + ' 390' + (nTabs ? '×' + nTabs : '') + (errs.length ? '\n   ' + errs.slice(0, 5).join('\n   ') : ''));
     if (errs.length) bad++;
