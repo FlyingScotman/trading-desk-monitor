@@ -11,7 +11,7 @@
 .ctl .lbl { color: var(--fg-2); font-size: 12px; }
 .ctl select { background: var(--bg); color: var(--fg); border: 1px solid var(--line-2); border-radius: 6px; padding: 3px 6px; font: inherit; }
 .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
-@media (max-width: 1150px) { .two { grid-template-columns: 1fr; } }
+@media (max-width: 1150px) { .two { grid-template-columns: minmax(0, 1fr); } }
 .chart { height: 300px; }
 .col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 #pCmp > .bd { max-height: 860px; }
@@ -208,7 +208,7 @@ tr.row.sel td { background: var(--accent-bg); }
         animation: false, grid: { left: 6, right: 10, top: 30, bottom: 4, containLabel: true }, legend: { top: 0, left: 0, type: 'scroll' },
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => v == null ? '—' : f.mns(v, 2) + ' mm ₽' },  // null: не посчитано (фондирование)
         xAxis: { type: 'category', data: I.map(i => f.dshort(DATES[i])) },
-        yAxis: [{ type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } }, { type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => f.mn(v, 0), color: css('--fg-3') } }],
+        yAxis: [{ type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => K.tick(v, 1e6) } }, { type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => K.tick(v, 1e6), color: css('--fg-3') } }],
         dataZoom: [{ type: 'inside' }],
         series: bars.concat([{ name: 'накопленный', type: 'line', yAxisIndex: 1, data: cum, showSymbol: false, lineStyle: { width: 2 }, color: css('--fg') }]),
       };

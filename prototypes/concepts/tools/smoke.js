@@ -1,5 +1,6 @@
 // Смоук-проверка концептов: открыть каждую страницу, собрать ошибки консоли, снять скриншот,
-// щёлкнуть первую кликабельную цифру (разбор) и первую строку позиции (карточка).
+// щёлкнуть первую кликабельную цифру (разбор) и первую строку позиции (карточка); на ширине 390 px страница
+// не прокручивается вбок (#263: scrollWidth = innerWidth).
 // node prototypes/concepts/tools/smoke.js [out_dir] [--base http://127.0.0.1:8199/concepts/] [page.html ...]
 // --base: the pages served by desk serve (real runs, lib/real.js) instead of the files (demo data)
 // --login USER:PASSWORD: sign in first (desk serve with sign-in on, backend api/auth.py); the pages share the session
@@ -36,7 +37,11 @@ if (!pages.length) pages = fs.readdirSync(dir).filter(f => /\.html$/.test(f));
     if (dr) { await dr.click(); await pg.waitForTimeout(300); await pg.screenshot({ path: path.join(out, name.replace('.html', '-drill.png')) }); await pg.keyboard.press('Escape'); }
     const row = await pg.$(base ? 'tr.row[data-id]' : 'tr.row[data-id^="P"]');  // на прогоне id позиции — «книга|бумага»
     if (row) { await row.click(); await pg.waitForTimeout(500); await pg.screenshot({ path: path.join(out, name.replace('.html', '-card.png')) }); await pg.keyboard.press('Escape'); }
-    console.log((errs.length ? 'FAIL ' : 'ok   ') + name + (dr ? ' drill' : ' -') + (row ? ' card' : ' -') + (errs.length ? '\n   ' + errs.slice(0, 5).join('\n   ') : ''));
+    // узкий экран (#263): на 390 px страница не прокручивается вбок — широкое содержимое прокручивается в своей плитке
+    await pg.setViewportSize({ width: 390, height: 800 }); await pg.waitForTimeout(400);
+    const wide = await pg.evaluate(() => [document.documentElement.scrollWidth, window.innerWidth]);
+    if (wide[0] !== wide[1]) { errs.push('390px: scrollWidth ' + wide[0] + ' ≠ innerWidth ' + wide[1]); await pg.screenshot({ path: path.join(out, name.replace('.html', '-390.png')) }); }
+    console.log((errs.length ? 'FAIL ' : 'ok   ') + name + (dr ? ' drill' : ' -') + (row ? ' card' : ' -') + ' 390' + (errs.length ? '\n   ' + errs.slice(0, 5).join('\n   ') : ''));
     if (errs.length) bad++;
     await pg.close();
   }

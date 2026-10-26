@@ -10,9 +10,9 @@
 .c13-strip { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
 .c13-main { display: grid; grid-template-columns: minmax(420px, 560px) minmax(0, 1fr); gap: 12px; align-items: start; }
 .c13-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
-@media (max-width: 1250px) { .c13-strip { grid-template-columns: 1fr 1fr; } .c13-strip > :first-child { grid-column: 1 / -1; } }
-@media (max-width: 1100px) { .c13-main, .c13-two { grid-template-columns: 1fr; } }
-@media (max-width: 720px) { .c13-strip { grid-template-columns: 1fr; } }
+@media (max-width: 1250px) { .c13-strip { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .c13-strip > :first-child { grid-column: 1 / -1; } }
+@media (max-width: 1100px) { .c13-main, .c13-two { grid-template-columns: minmax(0, 1fr); } }  /* minmax: колонка уже графика (#263) */
+@media (max-width: 720px) { .c13-strip { grid-template-columns: minmax(0, 1fr); } }
 .c13-list { position: sticky; top: 52px; }
 .k-tbl tr.sel td { background: var(--accent-bg) !important; }
 .k-tbl tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
@@ -63,10 +63,10 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   const KC = { cpn: '#4c9dff', put: '#e3b341', call: '#b48cff', mat: '#3fb67a' };
   const KN = { cpn: 'купон', put: 'пут-оферта', call: 'колл', mat: 'погашение' };
   const MEAS = {
-    mv: { t: 'MV', unit: 'mm ₽', val: p => p.mv, fmt: v => f.mn(v, 0), abs: true },
-    cs01: { t: 'CS01', unit: 'тыс ₽/бп', val: p => p.cs01, fmt: f.dv, abs: true },
-    dv01: { t: 'DV01', unit: 'тыс ₽/бп', val: p => p.dv01, fmt: f.dv, abs: true },
-    pnl: { t: 'PnL дня', unit: 'тыс ₽', val: p => p.pnl.total, fmt: f.k },
+    mv: { t: 'MV', unit: 'mm ₽', val: p => p.mv, fmt: v => f.mn(v, 0), sc: 1e6, abs: true },
+    cs01: { t: 'CS01', unit: 'тыс ₽/бп', val: p => p.cs01, fmt: f.dv, sc: 1e3, abs: true },
+    dv01: { t: 'DV01', unit: 'тыс ₽/бп', val: p => p.dv01, fmt: f.dv, sc: 1e3, abs: true },
+    pnl: { t: 'PnL дня', unit: 'тыс ₽', val: p => p.pnl.total, fmt: f.k, sc: 1e3 },
   };
   const st = { meas: 'mv', sel: null, curve: 'ytm', exMf: true };
   try { Object.assign(st, JSON.parse(localStorage.getItem('c13') || '{}')); } catch (e) { }
@@ -128,7 +128,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
       grid: { left: 6, right: 6, top: 12, bottom: 4, containLabel: true },
       tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: ps => { const x = top[ps[0].dataIndex]; return '<b>' + esc(x.full) + '</b><br>' + m.t + ': <b>' + m.fmt(x[st.meas]) + '</b> ' + m.unit + '<br>доля ' + Math.round(Math.abs(x[st.meas]) / tot * 100) + '% · накопленно ' + Math.round(cum[ps[0].dataIndex]) + '%'; } },
       xAxis: { type: 'category', data: top.map(x => x.name), axisLabel: { rotate: 35, fontSize: 10, interval: 0 } },
-      yAxis: [{ type: 'value', unit: m.unit, axisLabel: { formatter: x => m.fmt(x) } }, { type: 'value', max: 100, min: 0, splitLine: { show: false }, axisLabel: { formatter: '{value}%', color: K.css('--warn') } }],
+      yAxis: [{ type: 'value', unit: m.unit, axisLabel: { formatter: x => K.tick(x, m.sc) } }, { type: 'value', max: 100, min: 0, splitLine: { show: false }, axisLabel: { formatter: '{value}%', color: K.css('--warn') } }],
       series: [{ type: 'bar', barMaxWidth: 28, data: top.map(x => ({ value: m.abs ? Math.abs(x[st.meas]) : x[st.meas], itemStyle: { color: K.issuerColor(x.id), opacity: x.id === st.sel ? 1 : .75, borderColor: x.id === st.sel ? K.css('--fg') : 'transparent', borderWidth: 1.5 } })) },
         { type: 'line', yAxisIndex: 1, data: cum, symbolSize: 4, lineStyle: { type: 'dashed', width: 2, color: K.css('--warn') }, itemStyle: { color: K.css('--warn') } }],
     }));
@@ -142,7 +142,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     if (NOSEC) K.noData(document.getElementById('sector'), 'секторов эмитентов в статике хаба нет'); else {
     const sc = K.chart(document.getElementById('sector'), () => ({
       grid: { left: 6, right: 40, top: 6, bottom: 4, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: x => m.fmt(x) + ' ' + m.unit },
-      xAxis: { type: 'value', unit: m.unit, axisLabel: { formatter: x => m.fmt(x) } }, yAxis: { type: 'category', data: secK, axisLabel: { fontSize: 10.5 } },
+      xAxis: { type: 'value', unit: m.unit, axisLabel: { formatter: x => K.tick(x, m.sc) } }, yAxis: { type: 'category', data: secK, axisLabel: { fontSize: 10.5 } },
       series: [{ type: 'bar', barMaxWidth: 16, data: secK.map(k => sumBy(sec[k], m.val)), itemStyle: { color: K.css('--accent') }, label: { show: true, position: 'right', fontSize: 10, color: K.css('--fg-2'), formatter: p => m.fmt(p.value) } }],
     }));
     sc.on('click', pp => K.drill({ title: 'Сектор «' + secK[pp.dataIndex] + '» · ' + m.t, unit: m.unit, fmt: m.fmt, list: sec[secK[pp.dataIndex]], val: m.val, dim: 'issuer' }));
@@ -151,7 +151,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     if (NORAT) K.noData(document.getElementById('rating'), 'рейтингов в статике хаба нет'); else {
     const rc = K.chart(document.getElementById('rating'), () => ({
       grid: { left: 6, right: 6, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: x => m.fmt(x) + ' ' + m.unit },
-      xAxis: { type: 'category', data: ratK }, yAxis: { type: 'value', unit: m.unit, axisLabel: { formatter: x => m.fmt(x) } },
+      xAxis: { type: 'category', data: ratK }, yAxis: { type: 'value', unit: m.unit, axisLabel: { formatter: x => K.tick(x, m.sc) } },
       series: [{ type: 'bar', barMaxWidth: 30, data: ratK.map(r => ({ value: sumBy(rat[r], m.val), itemStyle: { color: (K.RATING_BUCKETS.find(b => b[0] === r) || [])[1] } })), label: { show: true, position: 'top', fontSize: 10, color: K.css('--fg-2'), formatter: p => m.fmt(p.value) } }],
     }));
     rc.on('click', pp => K.drill({ title: 'Рейтинг ' + ratK[pp.dataIndex] + ' · ' + m.t, unit: m.unit, fmt: m.fmt, list: rat[ratK[pp.dataIndex]], val: m.val, dim: 'issuer' }));
@@ -280,7 +280,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
       grid: { left: 6, right: 10, top: 28, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 },
       tooltip: { trigger: 'axis', valueFormatter: v => f.mns(v, 2) + ' mm ₽' },
       xAxis: { type: 'category', data: dates, axisLabel: { formatter: f.dshort } },
-      yAxis: [{ type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } }, { type: 'value', splitLine: { show: false }, axisLabel: { formatter: v => f.mn(v, 0), color: col } }],
+      yAxis: [{ type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => K.tick(v, 1e6) } }, { type: 'value', splitLine: { show: false }, axisLabel: { formatter: v => K.tick(v, 1e6), color: col } }],
       dataZoom: [{ type: 'inside' }],
       series: [{ name: 'за день', type: 'bar', data: daily.map(v => ({ value: v, itemStyle: { color: v >= 0 ? K.css('--pos') : K.css('--neg'), opacity: .55 } })) },
         { name: 'накопленный', type: 'line', yAxisIndex: 1, showSymbol: false, data: cum, lineStyle: { width: 2, color: col }, itemStyle: { color: col } }],

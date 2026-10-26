@@ -10,7 +10,7 @@
 html, body { height: 100%; }
 body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 .c3-bar { display: flex; gap: 8px 14px; align-items: center; flex-wrap: wrap; padding: 7px 14px; border-bottom: 1px solid var(--line); background: var(--bg); }
-.c3-bar .grp { display: inline-flex; gap: 6px; align-items: center; }
+.c3-bar .grp { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; max-width: 100%; }  /* узкий экран (#263): группа переносится */
 .c3-bar .lb { color: var(--fg-3); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
 .c3-bar .k-input { min-width: 260px; }
 .c3-bar .sp { flex: 1; }
@@ -24,7 +24,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 .c3-card { overflow: auto; min-height: 0; background: var(--panel); }
 @media (max-width: 1000px) {
   body { height: auto; overflow: auto; }
-  .c3-main { grid-template-columns: 1fr; }
+  .c3-main { grid-template-columns: minmax(0, 1fr); }
   .c3-tbl { max-height: 70vh; border-right: 0; border-bottom: 1px solid var(--line); }
   .c3-bar .k-input { min-width: 0; width: 100%; }
 }

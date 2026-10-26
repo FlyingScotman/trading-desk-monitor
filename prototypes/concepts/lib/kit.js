@@ -1171,7 +1171,19 @@
       if (x.classList && K.ACC_KEEP.some(c => x.classList.contains(c))) return true;
       const st = x.getAttribute && x.getAttribute('style');
       if (st && /(^|;)\s*color\s*:/.test(st)) return true;
-      if (st && /(^|;)\s*background\s*:/.test(st) && !/(^|;)\s*--k-heat\s*:\s*plain/.test(st)) return true;
+      if (st && /(^|;)\s*background\s*:/.test(st) && !HEAT_RE.test(st)) return true;
+      if (x.tagName === 'TD' || x.tagName === 'TH') break;
+    }
+    return false;
+  };
+  // ячейка тепловой карты по величине / риска (метка K.HEAT_PLAIN у элемента или его ячейки) — красный минус в ней
+  // получает класс k-heatneg (kit.css: цвет --neg-heat, #265); метку без фона ставит и строка «Итого» тепловой карты,
+  // чтобы красный в колонке был одного оттенка
+  const HEAT_RE = /(^|;)\s*--k-heat\s*:\s*plain/;
+  K.heatPlainOf = e => {
+    for (let x = e, i = 0; x && i < 4; x = x.parentElement, i++) {
+      const st = x.getAttribute && x.getAttribute('style');
+      if (st && HEAT_RE.test(st)) return true;
       if (x.tagName === 'TD' || x.tagName === 'TH') break;
     }
     return false;
@@ -1180,7 +1192,8 @@
   // смысловому цвету (K.accKeep); по ней CSV меняет скобки на минус (K.accMarkedToMinus), раскраска на неё не влияет
   const accMark = e => {
     const c = K.accClass(e.textContent);
-    e.classList.toggle('k-accn', c === 'k-accn' && !K.accKeep(e)); e.classList.toggle('k-accp', c === 'k-accp' && e.tagName === 'TD');
+    const neg = c === 'k-accn' && !K.accKeep(e);
+    e.classList.toggle('k-accn', neg); e.classList.toggle('k-heatneg', neg && K.heatPlainOf(e)); e.classList.toggle('k-accp', c === 'k-accp' && e.tagName === 'TD');
     const d = e.dataset; if (d && (c === 'k-accn') !== ('kneg' in d)) { if (c === 'k-accn') d.kneg = ''; else delete d.kneg; }
   };
   K.accMarkAll = root => { const r = root || document; if (r.matches && r.matches(K.ACC_SEL)) accMark(r); if (r.querySelectorAll) r.querySelectorAll(K.ACC_SEL).forEach(accMark); };
@@ -2394,10 +2407,11 @@
       let html = '<table class="k-tbl k-compact"><thead><tr><th>Валюта / тип</th><th class="n" title="' + esc(K.tips.dv01) + '"><span class="k-hint">DV01</span></th>' +
         curCols.map(c => '<th class="n" title="' + esc(K.curveTip(c.id) || c.name) + '">' + (ccys.length > 1 ? '<span class="mut3">' + c.ccy + '</span> ' : '') + esc(c.short) + '</th>').join('') +
         '<th class="n" title="' + esc(K.tips.cs01) + '"><span class="k-hint">CS01</span></th><th class="n">MV, mm ₽</th></tr></thead><tbody>';
-      // foot — строка «Итого» (липкая, #210): без полупрозрачного фона тепловой карты, иначе сквозь неё видны строки
+      // foot — строка «Итого» (липкая, #210): без полупрозрачного фона тепловой карты, иначе сквозь неё видны строки;
+      // метка K.HEAT_PLAIN без фона — красный в ней того же оттенка, что в ячейках карты (#265)
       const row = (label, list, lvl, color, ccy, foot) => {
         const dv = M.sum(list, 'dv01'), cs = M.sum(list, 'cs01'), mv = M.sum(list, p => p.group === 'DER' ? 0 : p.mv);
-        const heat = mode === 'heat' && !foot, cellStyle = v => mode === 'heat' ? (foot ? '' : K.heatRisk(v, allMax)) : mode === 'sign' ? 'color:' + (v < 0 ? 'var(--accent)' : 'var(--warn)') : '';
+        const heat = mode === 'heat' && !foot, cellStyle = v => mode === 'heat' ? (foot ? K.HEAT_PLAIN : K.heatRisk(v, allMax)) : mode === 'sign' ? 'color:' + (v < 0 ? 'var(--accent)' : 'var(--warn)') : '';
         const rowBg = mode === 'type' ? (color ? tint(color, 0.10) : ccy ? tint(K.ccyColor(ccy), 0.16) : '') : '';
         const lab = mode === 'type' && color ? '<span style="color:' + color + '">' + label + '</span>' : (color && mode !== 'type' ? '<b style="color:' + color + '">●</b> ' : '') + (mode === 'type' && color ? '' : label);
         return '<tr class="' + (lvl === 0 ? 'grp' : '') + '"' + (rowBg ? ' style="background:' + rowBg + '"' : '') + '><td style="padding-left:' + (6 + lvl * 12) + 'px">' + lab + ' <span class="mut3">' + list.length + '</span></td>' +
@@ -2437,6 +2451,8 @@
       let c = 0; const cum = tot.map(v => c += v);
       const max = Math.max(1, ...rows.flatMap(r => r.vals.map(Math.abs)));
       const st = v => mode === 'heat' ? K.heatRisk(v, max) : mode === 'sign' ? 'color:' + (v < 0 ? 'var(--accent)' : 'var(--warn)') : '';
+      // итоги тепловой карты — без фона, с меткой K.HEAT_PLAIN: красный того же оттенка, что в ячейках (#265)
+      const tn = mode === 'heat' ? '<td class="n" style="' + K.HEAT_PLAIN + '">' : '<td class="n">';
       const cell = (v, title, rowsFn) => '<td class="n" style="' + st(v) + '">' + (Math.abs(v) < 500 ? '<span class="mut3">·</span>' : K.d({ title, unit: 'тыс ₽/бп', rows: rowsFn() }, null, '')) + '</td>';
       const rowsOf = (r, k) => L.map(p => ({ p, v: r.id === 'CS01' ? (p.ccy === ccy ? (k == null ? p.cs01 : p.cs01b[k]) : 0) : (k == null ? p.dv01ByCurve[r.id] : p.risk[r.id][k]) }));
       const rateRows = (k, cumul) => L.map(p => ({ p, v: cs.filter(x => x.kind === 'rate').reduce((s, x) => s + (cumul ? p.risk[x.id].slice(0, k + 1).reduce((a, b) => a + b, 0) : p.risk[x.id][k]), 0) }));
@@ -2444,23 +2460,27 @@
         rows.map(r => {
           const col = K.curveColors[r.id], bg = mode === 'type' ? ' style="background:' + tint(col, 0.10) + '"' : '';
           return '<tr' + bg + '><td><b style="color:' + col + '">■</b> ' + K.hint(mode === 'type' ? '<span style="color:' + col + '">' + esc(r.label) + '</span>' : esc(r.label), K.curveTip(r.id)) + (r.id !== 'CS01' && M.curve[r.id].kind === 'basis' ? ' <span class="mut3">базис</span>' : '') + '</td>' +
-            '<td class="n"><b>' + K.d({ title: r.label + ' · всего', unit: 'тыс ₽/бп', rows: rowsOf(r) }, null, '') + '</b></td>' +
+            tn + '<b>' + K.d({ title: r.label + ' · всего', unit: 'тыс ₽/бп', rows: rowsOf(r) }, null, '') + '</b></td>' +
             r.vals.map((v, k) => cell(v, r.label + ' · ' + M.buckets[k], () => rowsOf(r, k))).join('') + '</tr>';
         }).join('') +
-        '</tbody><tfoot><tr><td>Σ ставки</td><td class="n">' + f.dv(tot.reduce((a, b) => a + b, 0)) + '</td>' + tot.map((v, k) => '<td class="n">' + K.d({ title: ccy + ' ставки · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: rateRows(k) }, null, '') + '</td>').join('') + '</tr>' +
-        '<tr><td class="mut">кумулятив</td><td></td>' + cum.map((v, k) => '<td class="n mut">' + K.d({ title: ccy + ' кумулятив до ' + M.buckets[k], unit: 'тыс ₽/бп', rows: rateRows(k, true) }, null, '') + '</td>').join('') + '</tr></tfoot></table></div>';
+        '</tbody><tfoot><tr><td>Σ ставки</td>' + tn + f.dv(tot.reduce((a, b) => a + b, 0)) + '</td>' + tot.map((v, k) => tn + K.d({ title: ccy + ' ставки · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: rateRows(k) }, null, '') + '</td>').join('') + '</tr>' +
+        '<tr><td class="mut">кумулятив</td><td></td>' + cum.map((v, k) => tn.replace('"n"', '"n mut"') + K.d({ title: ccy + ' кумулятив до ' + M.buckets[k], unit: 'тыс ₽/бп', rows: rateRows(k, true) }, null, '') + '</td>').join('') + '</tr></tfoot></table></div>';
       K.tableTools(el, { viewKey: opt.viewKey || 'buckets-' + ccy, title: 'Риск ' + ccy + ': кривая × бакет, тыс ₽/бп' });
     }
     draw(); K.live(el, 'filter', draw); K.live(el, 'theme', draw); K.live(el, 'riskcolor', draw);
     return { redraw: draw };
   };
 
-  // PnL-водопад: кэрри → фондирование → ставки → спред → FX → сделки → прочее → итог; столбцы кликабельны
+  // PnL-водопад: кэрри → фондирование → ставки → спред → FX → сделки → прочее → итог; столбцы кликабельны.
+  // В узком графике (плитка C06 на 1366 px, #261) на столбец меньше K.WF_SLOT px — подписи категорий в два ряда
+  // вперемешку (чётные выше, нечётные ниже), иначе соседние слова слипаются
+  K.WF_SLOT = 58;
   K.pnlWaterfall = function (el, opt) {
     const keys = K.PNL_FACTORS;
-    let L;
+    let L, stag = false;
+    const narrow = () => el.clientWidth > 0 && el.clientWidth / (keys.length + 1) < K.WF_SLOT;
     const c = K.chart(el, () => {
-      L = K.list();
+      L = K.list(); stag = narrow();
       const vals = keys.map(([k]) => M.sum(L, p => p.pnl[k]));
       // отрезки [от, до]: стек ECharts раскладывает отрицательные значения отдельно, поэтому рисуем прямоугольники сами
       let run = 0; const segs = vals.map(v => { const s = [run, run + v]; run += v; return s; });
@@ -2469,7 +2489,7 @@
       const lo = Math.min(0, ...segs.map(x => Math.min(x[0], x[1]))), hi = Math.max(0, ...segs.map(x => Math.max(x[0], x[1])));
       return {
         grid: { left: 6, right: 10, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'item', formatter: p => (keys[p.dataIndex] ? keys[p.dataIndex][1] : 'Итого') + ': <b>' + f.mns(p.dataIndex < vals.length ? vals[p.dataIndex] : run, 2) + '</b> mm ₽' },
-        xAxis: { type: 'category', data: keys.map(k => k[0] === 'funding' ? 'Фондир.' : k[1]).concat(['Итого']), axisLabel: { interval: 0, fontSize: 10 } }, yAxis: { type: 'value', unit: 'mm ₽', nameGap: 20, min: lo, max: hi, scale: false, axisLabel: { formatter: v => K.tick(v, 1e6), hideOverlap: true, showMinLabel: !lo, showMaxLabel: !hi } },
+        xAxis: { type: 'category', data: keys.map(k => k[0] === 'funding' ? 'Фондир.' : k[1]).concat(['Итого']), axisLabel: { interval: 0, fontSize: 10, formatter: (v, i) => stag && i % 2 ? '\n' + v : v } }, yAxis: { type: 'value', unit: 'mm ₽', nameGap: 20, min: lo, max: hi, scale: false, axisLabel: { formatter: v => K.tick(v, 1e6), hideOverlap: true, showMinLabel: !lo, showMaxLabel: !hi } },
         series: [{
           type: 'custom', data: segs.map((s, i) => [i, s[0], s[1]]),
           renderItem: (params, api) => {
@@ -2485,6 +2505,10 @@
     });
     c.on('click', pp => { const i = pp.dataIndex; if (i < keys.length) K.drill({ title: 'PnL · ' + keys[i][1], unit: 'тыс ₽', fmt: f.k, list: L, val: p => p.pnl[keys[i][0]] }); else K.drill({ title: 'PnL дня', unit: 'тыс ₽', fmt: f.k, list: L, val: p => p.pnl.total }); });
     K.live(el, 'filter', () => c.redraw());
+    if (typeof ResizeObserver === 'function') {
+      const ro = new ResizeObserver(() => { if (!el.isConnected) { ro.disconnect(); return; } if (narrow() !== stag) c.redraw(); });
+      ro.observe(el);
+    }
     return c;
   };
 
