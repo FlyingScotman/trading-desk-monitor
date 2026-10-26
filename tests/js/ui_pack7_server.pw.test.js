@@ -3,7 +3,7 @@
 //    C05, C06, C09, C12 — «сдвигов нет в прогоне», в тексте страниц ни «NaN», ни «null», ни «undefined»;
 //  - #336: IRS / XCCY / CDS — деривативы: C03 «тип → срок» и C04 «Тип инструмента» — группы «Деривативы · …», позиция
 //    OTHER — «Прочее · Прочее»; C01, C03, C04, C13 без ошибок.
-//   node --test tests/js/ui_pack7.pw.test.js
+//   node --test tests/js/ui_pack7_server.pw.test.js
 // Нужен Playwright (как b1_null_sums.pw.test.js); без него тесты пропускаются.
 'use strict';
 const test = require('node:test');

@@ -5,8 +5,8 @@
 //  - #336: вид позиции (kindOf) — как у бэкенда: IRS / XCCY / CDS старого tdm — деривативы (DER), не «Прочее»;
 //    позиция 104 фикстуры (OTHER) — «Прочее»; группа совпадает с группой таблицы «валюта × тип» (lib/instr.js);
 //    каждая пара «группа.вид» — в M.typeRows (иначе C01, C06, C11 её не показывают).
-// Браузерная часть (C05, C06, C09, C12: «сдвигов нет в прогоне») — ui_pack7.pw.test.js.
-//   node tests/js/ui_pack7.test.js
+// Браузерная часть (C05, C06, C09, C12: «сдвигов нет в прогоне») — ui_pack7_server.pw.test.js.
+//   node tests/js/ui_pack7_server.test.js
 'use strict';
 const fs = require('fs'), path = require('path'), vm = require('vm'), assert = require('assert');
 const { loadRun } = require('./fixtures/concepts_run');
