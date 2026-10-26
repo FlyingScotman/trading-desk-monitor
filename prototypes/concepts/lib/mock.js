@@ -921,7 +921,14 @@
   } });
 
   // ---------- вспомогательное ----------
-  M.sum = (arr, f) => arr.reduce((s, x) => s + (typeof f === 'function' ? f(x) : x[f]), 0);
+  // сумма с «не посчитано» — как lib/real.js (#327): все null — null, часть — сумма посчитанных; M.sumX — с признаком
+  M.sumX = (arr, f) => {
+    const g = typeof f === 'function' ? f : x => x[f];
+    let s = 0, n = 0;
+    arr.forEach(x => { const v = g(x); if (v != null && !Number.isNaN(v)) { s += v; n++; } });
+    return { v: n || !arr.length ? s : null, n, miss: arr.length - n };
+  };
+  M.sum = (arr, f) => M.sumX(arr, f).v;
   M.kpis = function (list) {
     list = list || positions;
     const S = f => M.sum(list, f);

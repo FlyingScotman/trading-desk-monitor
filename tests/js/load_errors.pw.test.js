@@ -290,6 +290,10 @@ test('#309 и #308 в браузере', { skip: pw ? false : 'нет Playwright
       delete D.CURVES['RUB RUONIA'];
       D.CURVES['RUB KEY'].pts = D.CURVES['RUB KEY'].pts.map(() => null);
       D.CURVES['RUB OFZ'].pts[3] = null;  // и одна пропущенная точка у КБД — разрыв, не падение
+      // #322: у старого прогона без кривой RUONIA нет и её сдвигов; у КБД пропущен один сдвиг — там null, а не 0
+      delete D.CURVE_MOVES['RUB RUONIA'];
+      D.CURVE_MOVES['RUB OFZ'][5] = null;
+      const MV = D.CURVE_MOVES, KBD = D.CURVES['RUB OFZ'].pts;
       const run = { status: 200, body: 'window.CONCEPTS_RUN = ' + JSON.stringify(D) + ';' };
       let { pg, ctx, errors } = await open(browser, 'c06-launchpad.html', { run });
       assert.ok((await look(pg)).text.includes('кривой RUONIA нет в этом прогоне'));
@@ -319,10 +323,21 @@ test('#309 и #308 в браузере', { skip: pw ? false : 'нет Playwright
         assert.ok(ruo.length && ruo.every(x => x[1].every(v => v == null)), file + ': RUONIA нет — и «вчера» нет');
         if (file.startsWith('c09')) {  // C09: «ОФЗ вчера» считается и без RUONIA (КБД − Δ ОФЗ); режимы «изм. дня» и «базис ОФЗ»
           const ofz = ser.find(x => x[0] === 'ОФЗ')[1], ofzY = ser.find(x => /^ОФЗ /.test(x[0]))[1];
-          assert.ok(ofzY.every((v, k) => (v == null) === (ofz[k] == null)), 'C09 ОФЗ вчера: ' + ofzY);
-          for (const mode of ['изм. дня', 'базис ОФЗ']) {
-            await pg.locator('#cCurve button', { hasText: mode }).click(); await pg.waitForTimeout(200);
+          // #322: значения, а не только места null: ОФЗ вчера = КБД − ΔКБД/100; нет точки КБД или её сдвига — null
+          ofzY.forEach((v, k) => {
+            if (KBD[k] == null || MV['RUB OFZ'][k] == null) assert.strictEqual(v, null, 'C09 ОФЗ вчера ' + k + ': ' + ofzY);
+            else assert.ok(Math.abs(v - (KBD[k] - MV['RUB OFZ'][k] / 100)) < 1e-9, 'C09 ОФЗ вчера ' + k + ': ' + v + ' vs ' + (KBD[k] - MV['RUB OFZ'][k] / 100));
+          });
+          // «изм. дня»: столбцы — сдвиги прогона; где сдвига нет (RUONIA целиком, КБД в одном бакете) — пропуск, а не 0
+          await pg.locator('#cCurve button', { hasText: 'изм. дня' }).click(); await pg.waitForTimeout(200);
+          const chg = await pg.evaluate(() => echarts.getInstanceByDom(document.getElementById('curves')).getOption().series.map(x => [x.name, x.data]));
+          const want = { 'ОФЗ': MV['RUB OFZ'], RUONIA: MV['RUB RUONIA'], 'КС': MV['RUB KEY'] };
+          assert.strictEqual(chg.length, 3, 'C09 изм. дня: ' + chg.map(x => x[0]));
+          for (const [name, d] of chg) {
+            const w = want[name.split(' ')[0]];
+            d.forEach((v, k) => assert.strictEqual(v, w && w[k] != null ? w[k] : null, 'C09 изм. дня ' + name + ' ' + k + ': ' + d));
           }
+          await pg.locator('#cCurve button', { hasText: 'базис ОФЗ' }).click(); await pg.waitForTimeout(200);
           const bas = await pg.evaluate(() => echarts.getInstanceByDom(document.getElementById('curves')).getOption().series
             .map(x => [x.name, x.data.map(v => v && typeof v === 'object' ? v.value : v)]));
           const today = bas.find(x => /базис/.test(x[0]))[1], yest = bas.find(x => x[0] === 'вчера')[1];

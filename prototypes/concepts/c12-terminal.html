@@ -326,7 +326,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
         const key = o.words.map(w => CURVES[w]).find(Boolean) || (o.ccy && CURVES[o.ccy.toLowerCase()]) || null;
         const ids = key ? [key] : ['RUB RUONIA', 'RUB KEY', 'OFZ'];
         const ser = id => {
-          if (id === 'OFZ') return { name: 'ОФЗ', pts: M.ofzCurve, chg: M.curve['RUB RUONIA'].chg.map((v, i) => v + M.curve['RUB OFZ'].chg[i]), risk: 'RUB OFZ', unit: '%' };
+          if (id === 'OFZ') return { name: 'ОФЗ', pts: M.ofzCurve, chg: K.ofzChg(), risk: 'RUB OFZ', unit: '%' };  // Δ КБД; нет сдвига — null (#322)
           const c = M.curve[id]; return { name: c.short, pts: c.pts, chg: c.chg, risk: id, unit: c.kind === 'basis' ? 'бп' : '%' };
         };
         const S = ids.map(ser);
@@ -335,7 +335,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
           xAxis: { type: 'category', data: M.buckets }, yAxis: [{ type: 'value', unit: S.every(s => s.unit === S[0].unit) ? (S[0].unit === 'бп' ? 'б.п.' : S[0].unit) : null, scale: true }, { type: 'value', splitLine: { show: false }, axisLabel: { formatter: v => f.n(v) + ' бп' } }],
           series: S.flatMap((s, i) => [
             { name: s.name, type: 'line', data: s.pts.map(v => v == null ? null : +v.toFixed(3)), symbolSize: 5, color: K.curveColors[s.risk] || K.PAL[i] },
-            { name: s.name + ' вчера', type: 'line', data: s.pts.map((v, k) => v == null ? null : +(v - s.chg[k] / (s.unit === 'бп' ? 1 : 100)).toFixed(3)), showSymbol: false, lineStyle: { type: 'dashed', width: 1 }, color: K.curveColors[s.risk] || K.PAL[i], opacity: .5 },
+            { name: s.name + ' вчера', type: 'line', data: K.yest(s.pts, s.chg, s.unit === 'бп' ? 1 : 100).map(v => v == null ? null : +v.toFixed(3)), showSymbol: false, lineStyle: { type: 'dashed', width: 1 }, color: K.curveColors[s.risk] || K.PAL[i], opacity: .5 },
           ]).concat(S.length === 1 ? [{ name: 'изм., бп', type: 'bar', yAxisIndex: 1, data: S[0].chg, itemStyle: { color: css('--fg-3'), opacity: .4 }, barMaxWidth: 16 }] : []) }));
         c.on('click', pp => { const s = S[Math.floor(pp.seriesIndex / 2)] || S[0], k = pp.dataIndex; K.drill({ title: 'Риск ' + s.name + ' · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: K.list().map(p => ({ p, v: p.risk[s.risk][k] })) }); });
         b.innerHTML = '<table class="k-tbl" data-vk="c12-curves" data-title="Кривые: уровень, изменение и наш риск"><thead><tr><th>Кривая</th>' + M.buckets.map(x => '<th class="n">' + x + '</th>').join('') + '</tr></thead><tbody>' +
@@ -343,6 +343,8 @@ body { font-family: var(--mono); font-size: 12.5px; }
             '<tr><td class="mut">наш риск</td>' + M.buckets.map((_, k) => '<td class="n">' + K.d({ title: 'Риск ' + s.name + ' · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: K.list().map(p => ({ p, v: p.risk[s.risk][k] })) }, null, '') + '</td>').join('') + '</tr>').join('') + '</tbody></table>' +
           // кривой без единой точки в прогоне нет (#308: старый прогон) — словами, а не пустой линией
           S.filter(s => s.pts.every(v => v == null)).map(s => '<div class="k-note" style="margin-top:6px;color:var(--warn)">кривой ' + esc(s.name) + ' нет в этом прогоне</div>').join('') +
+          // сдвигов кривой нет в прогоне (#322): «вчера» и изменения нет — словами, а не нулями
+          S.filter(s => s.pts.some(v => v != null) && K.noMoves(s.chg)).map(s => '<div class="k-note" style="margin-top:6px;color:var(--warn)">' + esc(s.name) + ': сдвигов нет в прогоне</div>').join('') +
           '<div class="k-note" style="margin-top:6px">щелчок по точке кривой — вклад позиций в риск этого бакета</div>';
         K.tableToolsAll(b);
         return S.map(s => s.name).join(' · ') + ': сегодня (сплошная) / вчера (пунктир)';

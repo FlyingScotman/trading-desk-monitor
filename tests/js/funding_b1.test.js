@@ -176,8 +176,9 @@ t('#168: итог фондирования по группе, где оно ни
   assert.ok(K.posCols.funding.nullable);
   const { M: M2, K: K2 } = load({ real: true });
   const html = K2.d(spec(M2.positions)); assert.ok(html.includes('data-dr') && !/>—</.test(html), html);
-  // без nullable — прежнее поведение (0), как у остальных мер
-  assert.ok(K.d({ title: 'x', fmt: K.f.k, list: M.positions, val: 'fundingDay' }).includes('data-dr'));
+  // без nullable — тоже «—» (M.sum → null, #327), но цифра остаётся кликабельной: разбор по позициям
+  const plain = K.d({ title: 'x', fmt: K.f.k, list: M.positions, val: 'fundingDay' });
+  assert.ok(plain.includes('data-dr') && plain.includes('—'), plain);
 });
 
 t('#253: C04 — шапка «итого» как строка «Итого»: мера, не посчитанная ни у одной позиции, — «—», а не 0', () => {
