@@ -33,7 +33,8 @@
  *  Закреплённый прогон (?run_id= / ?as_of= или выбор, запомненный на 12 часов) никогда не переключается сам: только
  *  полоса «Показать последний». В этом браузере выбор можно переопределить: localStorage 'desk.live.reaction' =
  *  'banner' | 'switch'.
- *  Страницы с прогоном (K.source 'real' или 'empty') подписываются сами после загрузки; страница со своей
+ *  Страницы с прогоном (K.source 'real' или 'empty'; пустое состояние монитора без kit.js — window.CONCEPTS_SOURCE
+ *  'empty', #319) подписываются сами после загрузки; страница со своей
  *  обработкой ленты (C14) ставит DESK_LIVE.manual = true до DOMContentLoaded.
  *
  * Бейдж прогона в шапке (#192, kit.js): каждая подписка сообщает странице о ленте событием окна 'desk:live' —
@@ -269,6 +270,9 @@
     return d.latest().then(lr => {
       const t = e ? L.target(e, lr, ctx) : lr && L.target({}, lr, ctx);
       if (!t) return 'none';
+      // перезагрузка — один раз на прогон в этой вкладке (switched — sessionStorage вкладки). Стойкое расхождение
+      // сервера («последний прогон» в статусе автопилота есть, а /concepts-run.js отвечает «прогона нет», #319) даёт
+      // одну перезагрузку в каждой новой вкладке, но не цикл: после неё сверка видит switched и ничего не делает
       if (L.decide(L.reaction(d.storage), ctx, t, d.switched()) === 'switch') { d.switched(t.run_id); d.reload(); return 'switch'; }
       if (!e) return 'none';  // сверка при загрузке полосу не показывает (закреплённый прогон сверку не делает)
       d.banner(t, ctx); return 'banner';
@@ -279,8 +283,9 @@
     let busy = Promise.resolve();
     // одно звено не должно остановить реакцию на следующие прогоны (ревью #191)
     const queue = e => { busy = busy.then(() => L.react(e, ctx, d)).catch(err => console.error(err)); };
-    // курсор ленты берётся после того, как страница получила прогон: прогон, опубликованный в это окно, ловит сверка
-    if (!ctx.pinned && ctx.source === 'real') queue(null);
+    // курсор ленты берётся после того, как страница получила прогон: прогон, опубликованный в это окно, ловит сверка;
+    // и у пустой страницы (#319): первый прогон, вышедший между ответом /concepts-run.js и подпиской, не пропускается
+    if (!ctx.pinned) queue(null);
     return L.subscribe({
       types: 'run.published',
       onEvents(list) {
@@ -289,11 +294,13 @@
       }
     });
   };
+  // источник — шапки kit.js, а без неё (пустое состояние монитора, #319: lib/real.js рисует полосу, kit.js не грузится) —
+  // window.CONCEPTS_SOURCE: вышел первый прогон — страница переходит на него
   function auto() {
-    const K = window.KIT, M = window.MOCK;
-    if (L.manual || !K || (K.source !== 'real' && K.source !== 'empty')) return;
+    const K = window.KIT, M = window.MOCK, src = K ? K.source : window.CONCEPTS_SOURCE;
+    if (L.manual || (src !== 'real' && src !== 'empty') || (!K && src !== 'empty')) return;
     const sel = window.CONCEPTS_SEL || {};
-    L.page = L.watchRuns({ source: K.source, runId: M && M.run && M.run.id, asOf: M && M.asOf, pinned: !!(sel.run_id || sel.as_of) });
+    L.page = L.watchRuns({ source: src, runId: src === 'real' && M && M.run && M.run.id, asOf: src === 'real' && M && M.asOf, pinned: !!(sel.run_id || sel.as_of) });
   }
 
   if (typeof window !== 'undefined') {

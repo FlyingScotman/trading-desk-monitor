@@ -312,6 +312,15 @@ test('реакция по шагам (L.react): переключение, пол
   assert.strictEqual(await L.react(null, real, deps({ run_id: '42' }, null)), 'none');
   assert.strictEqual(await L.react(null, real, deps(undefined, null)), 'none', 'статус не получен — ничего');
   assert.strictEqual(await L.react(null, real, deps({ run_id: '44' }, '44')), 'none', 'сверка полосу не показывает');
+  // пустая страница (#319): первый прогон вышел, пока она грузилась, — переход на него; прогонов всё ещё нет — ничего;
+  // сверка — у обоих источников, если прогон не выбран
+  const empty = { source: 'empty', pinned: false };
+  calls.splice(0);
+  assert.strictEqual(await L.react(null, empty, deps({ run_id: '1' }, null)), 'switch');
+  assert.deepStrictEqual(calls.splice(0), ['switched 1', 'reload']);
+  assert.strictEqual(await L.react(null, empty, deps(null, null)), 'none');
+  assert.strictEqual(await L.react(null, empty, deps({ run_id: '1' }, '1')), 'none', 'уже переключались: без петли');
+  assert.match(SRC, /if \(!ctx\.pinned\) queue\(null\);/);
   // ошибка в звене (banner упал): промис отклонён; watchRuns ловит его в .catch и ждёт следующего прогона
   const bad = Object.assign(deps({ run_id: '45' }, '45'), { banner: () => { throw new Error('boom'); } });
   await assert.rejects(L.react(e, real, bad), /boom/);

@@ -55,9 +55,12 @@
 (function () {
   'use strict';
   const D = window.CONCEPTS_RUN, X = window.DESK_EXTRAS || {};
-  if (!D && window.CONCEPTS_RUN_EMPTY) {  // в базе нет прогона (сервер ставит CONCEPTS_RUN_EMPTY = {reason, message}): демо-набор, шапка скажет об этом
+  if (!D && window.CONCEPTS_RUN_EMPTY) {  // прогона нет (сервер ставит CONCEPTS_RUN_EMPTY = {reason, message}): пустое состояние, не демо (#319)
     window.CONCEPTS_SOURCE = 'empty';
-    document.write('<script src="lib/mock.js"><\/script>');
+    // страницам, которым прогон не нужен (<html data-run="optional">: C14 «Статус дня», C15 «Остатки» — свои запросы к
+    // серверу), — демо-набор только как форма window.MOCK для kit.js; цифр демо в их шапке нет (kit.js, источник 'empty')
+    if (document.documentElement.getAttribute('data-run') === 'optional') document.write('<script src="lib/mock.js"><\/script>');
+    else noRun(window.CONCEPTS_RUN_EMPTY);
     return;
   }
   if (!D) { loadFailed(); return; }
@@ -711,48 +714,86 @@
     M.curves.forEach(c => k.byCurve[c.id] = S(p => p.dv01ByCurve[c.id]));
     return k;
   };
-  /* #309: сервер не отдал прогон — /concepts-run.js ответил 401, 5xx, не дошёл (сеть) или пришёл не тем (страница
-   * входа прокси и т. п.: ни CONCEPTS_RUN, ни CONCEPTS_RUN_EMPTY). Это не демо: демо-набор — только по выбору (?demo=1,
-   * файл). Сразу, синхронно — полоса «Данные не загрузились» (источник 'error') вместо монитора; остаток разметки
-   * страницы после этого скрипта уходит в скрытый <plaintext> (разбор HTML дальше идёт как текст), поэтому lib/live.js,
-   * kit.js и код страницы не выполняются и чужих цифр на ней нет (window.stop() не годится: Chrome тогда не доводит
-   * загрузку до load). Код ответа тегу скрипта не виден, поэтому потом, асинхронно (fetch с таймаутом AUTH_WAIT_MS),
-   * спрашивается /api/v1/auth/state: 401 или «вход включён, пользователя нет» — сессия кончилась: полоса «войдите
-   * снова» (источник 'auth') и переход на вход, как desk-auth.js; ошибка или таймаут — полоса остаётся как есть.
-   * Выход из полосы: «Повторить», «Последний прогон» (снимает выбор прогона: run_id / as_of и desk.run.v1 — если
-   * выбранный прогон стабильно не отдаётся, «Повторить» ведёт к той же ошибке), «Открыть тестовые данные», «◂ мониторы». */
-  function loadFailed() {
-    const AUTH_WAIT_MS = 3000;
-    window.CONCEPTS_SOURCE = 'error';
-    try { if (localStorage.getItem('concepts-theme') === 'light') document.documentElement.setAttribute('data-theme', 'light'); } catch (e) { }  // тема пользователя, как initTheme kit.js
-    const here = location.pathname + location.search + location.hash, toLogin = '/login.html?next=' + encodeURIComponent(here);
+  /* Полоса вместо монитора (#309, #319): тема пользователя (как initTheme kit.js), поля 16 px на узком экране. Остальная
+   * страница скрыта, а её разметка после этого скрипта уходит в скрытый <plaintext> (разбор HTML дальше идёт как
+   * текст), поэтому kit.js и код страницы не выполняются и чужих цифр на ней нет (window.stop() не годится: Chrome
+   * тогда не доводит загрузку до load). o: { source, cls, color, title, text, retry, latest, extra(esc, btn) }.
+   * «Последний прогон» снимает выбор прогона: run_id / as_of в адресе и desk.run.v1 (выбранный прогон не отдаётся
+   * или его нет — иначе по нему снова придёт то же). before — разметка перед <plaintext> (lib/live.js). */
+  function bar(o, before) {
+    try { if (localStorage.getItem('concepts-theme') === 'light') document.documentElement.setAttribute('data-theme', 'light'); } catch (e) { }
     const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-    const sel = window.CONCEPTS_SEL || {}, what = sel.run_id ? 'прогон #' + sel.run_id : sel.as_of ? 'прогон за ' + sel.as_of : 'прогон';
+    const sel = window.CONCEPTS_SEL || {};
     const url = drop => { const u = new URL(location.href); ['run_id', 'as_of', 'demo'].forEach(k => u.searchParams.delete(k)); if (!drop) u.searchParams.set('demo', '1'); return u.pathname + u.search + u.hash; };
     const box = document.createElement('div');
-    box.className = 'k-loadfail'; box.setAttribute('role', 'alert'); box.dataset.source = 'error';
-    box.style.cssText = 'box-sizing:border-box;max-width:640px;margin:48px auto;padding:16px 20px;border:1px solid var(--neg,#c0392b);border-radius:4px;' +
+    box.className = o.cls; box.setAttribute('role', o.source === 'error' ? 'alert' : 'status'); box.dataset.source = o.source;
+    box.style.cssText = 'box-sizing:border-box;max-width:640px;margin:48px auto;padding:16px 20px;border:1px solid ' + o.color + ';border-radius:4px;' +
       'background:var(--panel,#fff);color:var(--fg,#1b2129);font:14px/1.5 system-ui,"Segoe UI",sans-serif';
     const wrap = document.createElement('div'); wrap.style.cssText = 'padding:0 16px';  // 16 px по бокам на узком экране
     wrap.appendChild(box);
     const btn = 'display:inline-block;font:inherit;padding:3px 10px;margin:4px 8px 0 0;cursor:pointer';
-    box.innerHTML = '<b data-k="title" style="font-size:16px;color:var(--neg,#c0392b)">Данные не загрузились</b><p data-k="text">Сервер не отдал ' + esc(what) +
-      ' (/concepts-run.js): ошибка сервера или нет связи с ним. Цифр на экране нет: тестовые данные вместо прогона не подставляются, чтобы их не приняли за настоящие.</p>' +
-      '<div data-k="acts"><button type="button" data-a="retry" style="' + btn + '">Повторить</button>' +
-      (sel.run_id || sel.as_of ? '<a data-a="latest" href="' + esc(url(true)) + '" style="' + btn + '" title="Снять выбор прогона и открыть последний">Последний прогон</a>' : '') +
+    box.innerHTML = '<b data-k="title" style="font-size:16px;color:' + o.color + '">' + esc(o.title) + '</b><p data-k="text">' + esc(o.text) + '</p>' +
+      '<div data-k="acts">' + (o.retry ? '<button type="button" data-a="retry" style="' + btn + '">Повторить</button>' : '') +
+      (o.latest && (sel.run_id || sel.as_of) ? '<a data-a="latest" href="' + esc(url(true)) + '" style="' + btn + '" title="Снять выбор прогона и открыть последний">Последний прогон</a>' : '') +
+      (o.extra ? o.extra(esc, btn) : '') +
       '<a data-a="demo" href="' + esc(url(false)) + '" style="' + btn + '">Открыть тестовые данные</a>' +
       '<a data-a="index" href="index.html" style="' + btn + '">◂ мониторы</a></div>';
-    box.querySelector('[data-a=retry]').onclick = () => location.reload();
+    const retry = box.querySelector('[data-a=retry]');
+    if (retry) retry.onclick = () => location.reload();
     const latest = box.querySelector('[data-a=latest]');
-    // выбор прогона снять, затем открыть страницу заново: если прогон был выбран только в desk.run.v1, ссылка совпадает
-    // с текущим адресом, и с #… в нём браузер не перезагрузил бы страницу, а лишь перешёл к якорю
-    if (latest) latest.onclick = e => {
-      try { localStorage.removeItem('desk.run.v1'); } catch (err) { }
-      e.preventDefault();
-      if (latest.href === location.href) location.reload(); else location.assign(latest.href);
-    };
+    if (latest) {
+      const forget = () => { try { localStorage.removeItem('desk.run.v1'); } catch (err) { } };
+      // выбор прогона снять, затем открыть страницу заново: если прогон был выбран только в desk.run.v1, ссылка совпадает
+      // с текущим адресом, и с #… в нём браузер не перезагрузил бы страницу, а лишь перешёл к якорю. Ctrl / Cmd / Shift /
+      // Alt и не левая кнопка — новая вкладка или окно (#319): это делает браузер; desk.run.v1 снимается и для неё
+      latest.onclick = e => {
+        forget();
+        if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) return;
+        e.preventDefault();
+        if (latest.href === location.href) location.reload(); else location.assign(latest.href);
+      };
+      latest.addEventListener('auxclick', e => { if (e.button === 1) forget(); });  // средняя кнопка: click не приходит
+    }
     Array.from(document.body.children).forEach(n => { if (n.tagName !== 'SCRIPT') n.style.display = 'none'; });
     document.body.appendChild(wrap);
+    document.write((before || '') + '<plaintext hidden style="display:none">');  // конец: остальное — текст, не код (см. выше)
+    return { box, btn, esc };
+  }
+
+  /* #319: прогона нет — window.CONCEPTS_RUN_EMPTY {reason, message} (api/concepts_run.py: empty): no_runs — в базе нет
+   * ни одного опубликованного прогона, not_found — нет выбранного (?run_id= / ?as_of= или desk.run.v1). Монитор без
+   * прогона — пустое состояние (источник 'empty'), не демо-набор: тестовые цифры приняли бы за настоящие. Полоса той
+   * же формы, что «Данные не загрузились» (#309): причина, «Последний прогон» (not_found), «Статус дня» (C14: что пришло
+   * и что отклонено — работает и без прогона), «Открыть тестовые данные», «◂ мониторы». Живые обновления остаются
+   * (lib/live.js — до <plaintext>): вышел первый прогон — страница сама переходит на него (прогон не выбран) или
+   * показывает полосу «Доступен новый прогон» (выбран несуществующий). */
+  function noRun(E) {
+    const sel = window.CONCEPTS_SEL || {}, found = E.reason === 'not_found';
+    const title = !found ? 'Прогонов ещё нет' : sel.run_id ? 'Прогон #' + sel.run_id + ' не найден' : sel.as_of ? 'Прогона за ' + sel.as_of + ' нет' : 'Прогон не найден';
+    const text = (!found ? 'Запустите автопилот или загрузите отчёты (Настройки): монитор покажет первый прогон, как только он будет опубликован.'
+      : 'Сервер: ' + (E.message || 'прогон не найден') + '. Откройте последний прогон или выберите другой.') +
+      ' Цифр на экране нет: тестовые данные вместо прогона не подставляются, чтобы их не приняли за настоящие.';
+    const day = 'c14-day-status.html' + (found && sel.as_of ? '?on=' + encodeURIComponent(sel.as_of) : '');
+    bar({ source: 'empty', cls: 'k-norun', color: 'var(--warn,#b7791f)', title, text, latest: found,
+      extra: (esc, btn) => (found ? '' : '<a data-a="settings" href="../settings.html" style="' + btn + '" title="Автопилот и загрузка отчётов">Настройки</a>') + '<a data-a="day" href="' + esc(day) + '" style="' + btn + '" title="Что пришло за дату, что отклонено и почему">Статус дня</a>' },
+      '<script src="lib/live.js"><\/script>');
+    console.warn('concepts: ' + title + (E.message ? ' — ' + E.message : ''));
+  }
+
+  /* #309: сервер не отдал прогон — /concepts-run.js ответил 401, 5xx, не дошёл (сеть) или пришёл не тем (страница
+   * входа прокси и т. п.: ни CONCEPTS_RUN, ни CONCEPTS_RUN_EMPTY). Это не демо: демо-набор — только по выбору (?demo=1,
+   * файл). Сразу, синхронно — полоса «Данные не загрузились» (источник 'error') вместо монитора (bar выше). Код ответа
+   * тегу скрипта не виден, поэтому потом, асинхронно (fetch с таймаутом AUTH_WAIT_MS), спрашивается /api/v1/auth/state:
+   * 401 или «вход включён, пользователя нет» — сессия кончилась: полоса «войдите снова» (источник 'auth') и переход на
+   * вход, как desk-auth.js; ошибка или таймаут — полоса остаётся как есть. Выход из полосы: «Повторить», «Последний
+   * прогон», «Открыть тестовые данные», «◂ мониторы». */
+  function loadFailed() {
+    const AUTH_WAIT_MS = 3000;
+    window.CONCEPTS_SOURCE = 'error';
+    const here = location.pathname + location.search + location.hash, toLogin = '/login.html?next=' + encodeURIComponent(here);
+    const sel = window.CONCEPTS_SEL || {}, what = sel.run_id ? 'прогон #' + sel.run_id : sel.as_of ? 'прогон за ' + sel.as_of : 'прогон';
+    const { box, btn, esc } = bar({ source: 'error', cls: 'k-loadfail', color: 'var(--neg,#c0392b)', title: 'Данные не загрузились', retry: true, latest: true,
+      text: 'Сервер не отдал ' + what + ' (/concepts-run.js): ошибка сервера или нет связи с ним. Цифр на экране нет: тестовые данные вместо прогона не подставляются, чтобы их не приняли за настоящие.' });
     console.warn('concepts: данные не загрузились — ' + what);
     const loginNeeded = () => {
       window.CONCEPTS_SOURCE = 'auth'; box.dataset.source = 'auth';
@@ -768,6 +809,5 @@
         .then(a => { clearTimeout(timer); if (a && a.enabled && !a.user) loginNeeded(); })
         .catch(() => clearTimeout(timer));  // сбой или таймаут: остаётся «Данные не загрузились»
     } catch (e) { }
-    document.write('<plaintext hidden style="display:none">');  // конец: остальное — текст, не код (см. выше)
   }
 })();
