@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import threading
 import time
 
 import psycopg
@@ -92,20 +91,21 @@ def test_the_stream_sends_what_the_feed_pages_give_and_resumes_after_last_event_
 
 def test_from_now_a_new_run_arrives_while_the_stream_is_open(store_url, client):
     old = add(store_url)
-    later: list[int] = []
-
-    def publish() -> None:
-        time.sleep(0.15)
-        later.append(add(store_url, "run.published", run_id=9, dataset=None, source=None,
-                         detail={"run_type": "INTRADAY", "cut_type": "intraday"}))
-
-    t = threading.Thread(target=publish)
-    t.start()
+    # #282: the run is published once the greeting has come (the cursor is set), not after a fixed delay; the
+    # lifetime only bounds a stream that never gets it, the client leaves as soon as it has
+    client.app.state.events_stream = routes.StreamConfig(poll_s=0.02, keepalive_s=0.1, lifetime_s=30)
+    later, body = None, ""
     with client.stream("GET", "/api/v1/events/stream") as r:  # no cursor: from now, the old event is not resent
-        events, comments = parse(r.read().decode())
-    t.join()
+        for chunk in r.iter_text():  # one chunk per message the server sends
+            body += chunk
+            if later is None and "event: hello" in body:
+                later = add(store_url, "run.published", run_id=9, dataset=None, source=None,
+                            detail={"run_type": "INTRADAY", "cut_type": "intraday"})
+            elif later is not None and "event: run.published" in chunk:
+                break
+    events, comments = parse(body)
     assert f"hello after {old}" in comments
-    assert [(int(e["id"]), e["event"]) for e in events] == [(later[0], "run.published")]
+    assert [(int(e["id"]), e["event"]) for e in events] == [(later, "run.published")]
     assert events[0]["data"]["run_id"] == 9
 
 
@@ -144,6 +144,22 @@ class Spy:
         return n
 
 
+async def until(cond, timeout: float = 5) -> None:
+    """Wait for ``cond()`` (#282: the tests wait for what they need, not for a fixed time)."""
+    loop = asyncio.get_running_loop()
+    end = loop.time() + timeout
+    while not cond():
+        assert loop.time() < end, "timed out"
+        await asyncio.sleep(0.01)
+
+
+async def stopped(feed) -> None:
+    """Until the feed's reader has stopped (it does after its next read once no stream is open)."""
+    if feed.task is not None:
+        await asyncio.wait_for(asyncio.shield(feed.task), 5)
+    assert feed.task is None
+
+
 async def here() -> bool:
     return False
 
@@ -167,25 +183,27 @@ def test_open_streams_share_one_reader_and_hold_no_connection_between_reads(stor
             async for chunk in s:
                 got[i].append(chunk)
 
+        t0 = time.monotonic()
         tasks = [asyncio.create_task(read(i, s)) for i, s in enumerate(streams)]
+        await until(lambda: all(got))  # every stream has its greeting: its cursor is set before the run comes
         idle = []
         for _ in range(40):  # 0.4 s: about eight reads of the feed
             await asyncio.sleep(0.01)
             idle.append(spy.sample())
         await asyncio.to_thread(add, store_url, "run.published", run_id=3, dataset=None, source=None,
                                 detail={"run_type": "EOD"})
-        await asyncio.sleep(0.2)
+        await until(lambda: all(any("run.published" in c for c in g) for g in got))
         for t in tasks:
             t.cancel()  # the clients leave: the bodies are cancelled
         await asyncio.gather(*tasks, return_exceptions=True)
-        await asyncio.sleep(0.1)
-        return feed, got, idle
+        await stopped(feed)
+        return feed, got, idle, time.monotonic() - t0
 
-    feed, got, idle = asyncio.run(go())
+    feed, got, idle, took = asyncio.run(go())
     assert all(any(c.startswith("id: ") and "run.published" in c for c in g) for g in got)  # every stream got it
     assert spy.most <= 1  # one reader: one short connection at a time, whatever the number of streams
     assert idle.count(0) > len(idle) // 2  # between reads no connection is open
-    assert len(spy.cons) <= 6 + 0.8 / 0.05  # reads of one reader (and each start), not five readers (~60)
+    assert len(spy.cons) <= 6 + took / 0.05 + 2  # reads of one reader (and each start), not five readers
     assert all(c.closed for c in spy.cons)
     assert feed.users == 0 and feed.task is None  # the last stream gone, the reader stops
 
@@ -214,15 +232,15 @@ def test_from_now_after_the_reader_was_idle_starts_at_the_newest_event(store_url
         feed = routes.Feed(store_url, cfg)
         (hello,) = await first(routes.stream(feed, None, None, here, lambda: False), 1)
         assert hello_after(hello) == old
-        await asyncio.sleep(0.1)
-        assert feed.task is None  # no streams: the reader has stopped
+        await stopped(feed)  # no streams: the reader stops
         new = [await asyncio.to_thread(add, store_url) for _ in range(2)]
         # from now, not from before the idle spell: the greeting, then the next event, not 6 and 7 again
-        task = asyncio.create_task(first(routes.stream(feed, None, None, here, lambda: False), 2))
-        await asyncio.sleep(0.1)
-        later = await asyncio.to_thread(add, store_url)
-        hello, nxt = await asyncio.wait_for(task, 5)
+        agen = routes.stream(feed, None, None, here, lambda: False)
+        hello = await asyncio.wait_for(anext(agen), 5)
         assert hello_after(hello) == new[-1]
+        later = await asyncio.to_thread(add, store_url)  # after the greeting (#282: not after a fixed delay)
+        nxt = await asyncio.wait_for(anext(agen), 5)
+        await agen.aclose()
         assert nxt.startswith(f"id: {later}\n")
 
     asyncio.run(go())
@@ -244,11 +262,11 @@ def test_the_reader_logs_an_unexpected_error_and_goes_on(store_url, caplog):
 
         feed.read = flaky
         agen = routes.stream(feed, None, None, here, lambda: False)
-        task = asyncio.create_task(first(agen, 2))
-        await asyncio.sleep(0.1)  # the reader failed twice meanwhile
+        got = [await asyncio.wait_for(anext(agen), 5)]  # the greeting: the stream's cursor is set (#282)
         eid = await asyncio.to_thread(add, store_url, "run.published", run_id=8, dataset=None, source=None,
                                       detail={"run_type": "EOD"})
-        got = await asyncio.wait_for(task, 5)
+        got.append(await asyncio.wait_for(anext(agen), 5))  # only a read after both failures gets it
+        await agen.aclose()
         return got, eid, fails[0]
 
     got, eid, left = asyncio.run(go())
