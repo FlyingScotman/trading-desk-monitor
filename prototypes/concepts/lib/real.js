@@ -218,6 +218,7 @@
     { id: 'GOV.IN', group: 'GOV', kind: 'IN', label: 'ОФЗ-ИН' }, { id: 'GOV.SOVFX', group: 'GOV', kind: 'SOVFX', label: 'Минфин валютные (евробонды, замещающие)' },
     { id: 'SUB.FIX', group: 'SUB', kind: 'FIX', label: 'Суб. фикс' }, { id: 'SUB.FLT', group: 'SUB', kind: 'FLT', label: 'Суб. флоатеры' },
     { id: 'CORP.FIX', group: 'CORP', kind: 'FIX', label: 'Корп. фикс' }, { id: 'CORP.FLT', group: 'CORP', kind: 'FLT', label: 'Корп. флоатеры' },
+    { id: 'DER.IRS', group: 'DER', kind: 'IRS', label: 'IRS / OIS' }, { id: 'DER.XCCY', group: 'DER', kind: 'XCCY', label: 'XCCY' },
     { id: 'DER.OTC', group: 'DER', kind: 'OTC', label: 'OTC-деривативы (по отчёту)' }, { id: 'DER.FX', group: 'DER', kind: 'FX', label: 'Валюта / FX' },
     { id: 'OTH.OTH', group: 'OTH', kind: 'OTH', label: 'Прочее' },
   ];
@@ -231,9 +232,12 @@
   // группа продукта отчёта (api/concepts.product_group): поля x_* строки отчёта лежат в extra.reported.x (так их хранит
   // прогон и у оценённой, и у не оценённой позиции); плоское extra.reported.x_product_group — тоже принимается
   M.productGroup = rep => !rep || typeof rep !== 'object' ? null : rep.x_product_group || (rep.x && typeof rep.x === 'object' ? rep.x.x_product_group : null) || null;
+  // свопы старого tdm (instrType IRS / XCCY / CDS) — деривативы, как в api/concepts (LEGACY_KIND → группа DER), не «Прочее» (#336)
+  const LEGACY_DER = { IRS: 'IRS', XCCY: 'XCCY', CDS: 'OTC' };
   function kindOf(p) {  // api/concepts.kind_of
     if (p.instrType === 'FX') return ['DER', 'FX'];
     if (p.instrType === 'OTC') return ['DER', 'OTC'];
+    if (LEGACY_DER[p.instrType]) return ['DER', LEGACY_DER[p.instrType]];
     if (p.instrType && p.instrType !== 'BOND') return ['OTH', 'OTH'];
     if (!p.instrType && p.segment === 'Деривативы') return ['DER', 'OTC'];
     if (!p.instrType && (p.segment === 'FX')) return ['DER', 'FX'];
