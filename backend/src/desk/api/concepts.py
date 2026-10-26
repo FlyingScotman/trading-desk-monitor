@@ -825,6 +825,7 @@ INSTR_KINDS: tuple[tuple[str, str, str], ...] = (
     ("BOND_FUT", "DER", "Фьючерсы на облигации"), ("BOND_FWD", "DER", "Форварды на облигации"),
     ("FX_FUT", "DER", "Валютные фьючерсы"), ("FX_FWD", "DER", "FX форварды / NDF"),
     ("FX", "DER", "Валюта (спот, прочие FX)"), ("OCP", "DER", "Перенос ОВП"),
+    ("OTC", "DER", "Внебиржевые без группы продукта"),
     ("EQUITY", "OTH", "Акции"), ("BOND_NA", "OTH", "Облигации без класса (не сопоставлены)"),
     ("UNCLASSIFIED", "OTH", "Не классифицировано"),
 )
@@ -832,8 +833,11 @@ INSTR_KINDS: tuple[tuple[str, str, str], ...] = (
 classification: a bond by issuer type and coupon (``kind_of``, plus the static's class: subfederal / municipal,
 securitisation; the Russian Minfin's bonds by the issuer, ``summary.is_minfin``: in roubles the OFZ kinds, in a
 foreign currency ``MINFIN_FX`` -- its Eurobonds and replacement bonds, never a generic "sovereigns" kind, R39), a derivative or FX row by the adapter's product group (``PRODUCT_KIND``), else by the legacy tdm
-instrument type (``LEGACY_KIND``); what none of them names is ``UNCLASSIFIED`` (shown, never dropped). The group
-is ``kind_of``'s but for a legacy derivative (DER, not OTH) and an unmapped or unvalued bond (OTH, not CORP)."""
+instrument type (``LEGACY_KIND``); an OTC row whose product group the table does not know is ``OTC`` (DER, as
+``kind_of``'s DER OTC, TDM#345); what none of them names is ``UNCLASSIFIED`` (shown, never dropped). The group is
+``kind_of``'s for every ``instr_type`` (``tests/fixtures/instr_kinds.json`` checks the three classifications: this,
+``kind_of`` and ``lib/real.js`` / ``lib/instr.js``) but for an unmapped or unvalued bond (OTH, not CORP). A kind
+here may be named apart from ``kind_of``'s (``CCS`` is its ``XCCY``, ``CDS`` its ``OTC``): the table is finer."""
 KIND_GROUP = {k: g for k, g, _ in INSTR_KINDS}
 KIND_LABEL = {k: lab for k, _, lab in INSTR_KINDS}
 PRODUCT_KIND = {"irs": "IRS", "ccs": "CCS", "cds": "CDS", "trs": "TRS", "bond_future": "BOND_FUT",
@@ -915,6 +919,8 @@ def instr_kind(f: dict[str, Any], gov_issuers: frozenset[str] | set[str] = froze
     if it == "FX":
         ocp = f.get("ocp_transfer") or ex.get("ocp_transfer") or f.get("asset_class") == "Перенос ОВП"
         return "OCP" if ocp else "FX"
+    if it == "OTC":  # no product group the table knows: kind_of's DER OTC, not UNCLASSIFIED (TDM#345)
+        return "OTC"
     if it not in ("BOND", None):
         return "UNCLASSIFIED"
     if f.get("asset_class") == "Не сопоставлено":

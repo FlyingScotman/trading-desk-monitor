@@ -50,8 +50,9 @@ def der(pid, group, ccy, risk, fx_delta=None, it="OTC", quality="computed", **kw
         ("irs", "IRS", "OTC"), ("ccs", "CCS", "OTC"), ("cds", "CDS", "OTC"), ("trs", "TRS", "OTC"),
         ("bond_future", "BOND_FUT", "OTC"), ("bond_forward", "BOND_FWD", "OTC"), ("fx_future", "FX_FUT", "FX"),
         ("fx_ndf", "FX_FWD", "FX"), ("equity", "EQUITY", "OTHER"))],
-    ({"instr_type": "OTC"}, "UNCLASSIFIED"), ({"instr_type": "OTC", "extra": {"reported": {"x_product_group": "new"}}},
-                                              "UNCLASSIFIED"),
+    # an OTC row without a product group the table knows: DER, as kind_of's DER OTC (TDM#345), not UNCLASSIFIED
+    ({"instr_type": "OTC"}, "OTC"), ({"instr_type": "OTC", "extra": {"reported": {"x_product_group": "new"}}}, "OTC"),
+    ({"ccy": "RUB", "asset_class": "otc", "extra": {"reported": {}}}, "OTC"),
     ({"instr_type": "OTHER"}, "UNCLASSIFIED"), ({"instr_type": "FX"}, "FX"),
     ({"instr_type": "FX", "ocp_transfer": True}, "OCP"), ({"instr_type": "FX", "asset_class": "Перенос ОВП"}, "OCP"),
     ({"instr_type": "IRS"}, "IRS"), ({"instr_type": "XCCY"}, "CCS"), ({"instr_type": "CDS"}, "CDS"),  # legacy tdm
@@ -105,7 +106,7 @@ ITEMS = [
     der("SI", "fx_future", "USD", {"USD SOFR": {"3M": 30.0}, "RUB RUONIA": {"3M": -30.0}}, {"USD": -5e6}, it="FX"),
     der("CCS", "ccs", "USD", {"USD SOFR": {"3Y": 400.0}, "RUB RUONIA": {"3Y": -380.0}}, {"USD": 2e6}),
     der("FWD", "fx_ndf", "CNY", {}, {"CNY": 7e6}, it="FX", quality="reported_value"),  # no rate risk reported
-    der("TRS", None, "RUB", {"RUB RUONIA": {"1Y": 10.0}}),  # no product group: unclassified, kept
+    der("TRS", None, "RUB", {"RUB RUONIA": {"1Y": 10.0}}),  # no product group: OTC in DER (TDM#345), kept
     {"position_id": "NV", "fact": None, "input": {"ccy": "RUB", "asset_class": "otc",
                                                     "extra": {"reported": {"x_product_group": "irs"}}}},
 ]
@@ -142,7 +143,7 @@ def test_legs_each_currency_on_its_own_curves():
     assert usd[("kind", "DER", "FX_FUT")]["fx_delta_ccy"] == -5e6 and usd[("kind", "GOV", "MINFIN_FX")]["n_positions"] == 1
     assert usd[("ccy", None, None)]["fx_delta_ccy"] == pytest.approx(1e6 + 1e6 - 5e6 + 2e6)
     assert all(r["dv01_foreign_rub"] == 0 for r in t["rows"])
-    assert rub[("kind", "OTH", "UNCLASSIFIED")]["n_positions"] == 1  # shown, never dropped
+    assert rub[("kind", "DER", "OTC")]["n_positions"] == 1  # shown, never dropped; in DER, as kind_of (TDM#345)
 
 
 def test_position_attribution_keeps_foreign_curves_apart():
