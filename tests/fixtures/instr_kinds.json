@@ -1,0 +1,1035 @@
+{
+ "_comment": [
+  "Три классификации вида инструмента сверяются на этих случаях (TDM#345): api/concepts.instr_kind (table),",
+  "publish/summary.kind_of (kindOf: [группа, вид]), lib/real.js kindOf и lib/instr.js INSTR.kindOf (row: позиция в форме",
+  "сервера /concepts-run.js). Группа kindOf равна группе типа таблицы, кроме облигации без класса (bondNa: OTH, не CORP)",
+  "и OTC с группой продукта, которой таблица не знает (knownMismatch: #361, где показывать РЕПО, решает владелец):",
+  "таблица — UNCLASSIFIED (OTH), kind_of — DER.OTC. OTC без группы продукта (нет или пустая) — тип OTC (DER).",
+  "Вид таблицы подробнее вида kind_of: CCS таблицы это XCCY kind_of; CDS и OTC с группой продукта это его OTC.",
+  "У не оценённой позиции (unvalued) kind_of нет: fact это строка отчёта, row это то, что отдаёт сервер (concepts_run._not_valued).",
+  "instrTypes: полный список instr_type, каждый должен встретиться в cases.",
+  "Сверяют backend/tests/test_instr_kinds.py и tests/js/instr_kinds.test.js."
+ ],
+ "instrTypes": [
+  "BOND",
+  "FX",
+  "OTC",
+  "IRS",
+  "XCCY",
+  "CDS",
+  "OTHER",
+  null
+ ],
+ "cases": [
+  {
+   "name": "ОФЗ-ПД",
+   "fact": {
+    "instr_type": "BOND",
+    "segment": "Гос",
+    "asset_class": "ОФЗ-ПД",
+    "coupon_type": "fix",
+    "ccy": "RUB"
+   },
+   "row": {
+    "instrType": "BOND",
+    "segment": "Гос",
+    "assetClass": "ОФЗ-ПД",
+    "couponType": "fix",
+    "ccy": "RUB"
+   },
+   "kindOf": [
+    "GOV",
+    "PD"
+   ],
+   "table": "OFZ_PD"
+  },
+  {
+   "name": "ОФЗ-ПК",
+   "fact": {
+    "instr_type": "BOND",
+    "segment": "Гос",
+    "asset_class": "ОФЗ-ПК",
+    "coupon_type": "float",
+    "ccy": "RUB"
+   },
+   "row": {
+    "instrType": "BOND",
+    "segment": "Гос",
+    "assetClass": "ОФЗ-ПК",
+    "couponType": "float",
+    "ccy": "RUB"
+   },
+   "kindOf": [
+    "GOV",
+    "PK"
+   ],
+   "table": "OFZ_PK"
+  },
+  {
+   "name": "ОФЗ-ИН",
+   "fact": {
+    "instr_type": "BOND",
+    "segment": "Гос",
+    "asset_class": "ОФЗ-ИН",
+    "coupon_type": "fix",
+    "ccy": "RUB"
+   },
+   "row": {
+    "instrType": "BOND",
+    "segment": "Гос",
+    "assetClass": "ОФЗ-ИН",
+    "couponType": "fix",
+    "ccy": "RUB"
+   },
+   "kindOf": [
+    "GOV",
+    "IN"
+   ],
+   "table": "OFZ_IN"
+  },
+  {
+   "name": "Минфин валютные",
+   "fact": {
+    "instr_type": "BOND",
+    "segment": "Корп",
+    "asset_class": "sovereign_fx",
+    "coupon_type": "fix",
+    "ccy": "USD"
+   },
+   "row": {
+    "instrType": "BOND",
+    "segment": "Корп",
+    "assetClass": "sovereign_fx",
+    "couponType": "fix",
+    "ccy": "USD"
+   },
+   "kindOf": [
+    "GOV",
+    "SOVFX"
+   ],
+   "table": "MINFIN_FX"
+  },
+  {
+   "name": "иностранный суверен",
+   "fact": {
+    "instr_type": "BOND",
+    "segment": "Корп",
+    "asset_class": "foreign_sovereign",
+    "coupon_type": "fix",
+    "ccy": "USD"
+   },
+   "row": {
+    "instrType": "BOND",
+    "segment": "Корп",
+    "assetClass": "foreign_sovereign",
+    "couponType": "fix",
+    "ccy": "USD"
+   },
+   "kindOf": [
+    "CORP",
+    "FIX"
+   ],
+   "table": "CORP_FIX"
+  },
+  {
+   "name": "субфедеральные",
+   "fact": {
+    "instr_type": "BOND",
+    "segment": "Суб",
+    "asset_class": "Субфедеральные",
+    "coupon_type": "fix",
+    "ccy": "RUB"
+   },
+   "row": {
+    "instrType": "BOND",
+    "segment": "Суб",
+    "assetClass": "Субфедеральные",
+    "couponType": "fix",
+    "ccy": "RUB"
+   },
+   "kindOf": [
+    "SUB",
+    "FIX"
+   ],
+   "table": "SUBFED"
+  },
+  {
+   "name": "муниципальные",
+   "fact": {
+    "instr_type": "BOND",
+    "segment": "Суб",
+    "asset_class": "Муниципальные",
+    "coupon_type": "float",
+    "ccy": "RUB"
+   },
+   "row": {
+    "instrType": "BOND",
+    "segment": "Суб",
+    "assetClass": "Муниципальные",
+    "couponType": "float",
+    "ccy": "RUB"
+   },
+   "kindOf": [
+    "SUB",
+    "FLT"
+   ],
+   "table": "MUNI"
+  },
+  {
+   "name": "корп. фикс",
+   "fact": {
+    "instr_type": "BOND",
+    "segment": "Корп",
+    "asset_class": "Корп",
+    "coupon_type": "fix",
+    "ccy": "RUB"
+   },
+   "row": {
+    "instrType": "BOND",
+    "segment": "Корп",
+    "assetClass": "Корп",
+    "couponType": "fix",
+    "ccy": "RUB"
+   },
+   "kindOf": [
+    "CORP",
+    "FIX"
+   ],
+   "table": "CORP_FIX"
+  },
+  {
+   "name": "корп. флоатер",
+   "fact": {
+    "instr_type": "BOND",
+    "segment": "Корп",
+    "asset_class": "Корп",
+    "coupon_type": "float",
+    "ccy": "RUB"
+   },
+   "row": {
+    "instrType": "BOND",
+    "segment": "Корп",
+    "assetClass": "Корп",
+    "couponType": "float",
+    "ccy": "RUB"
+   },
+   "kindOf": [
+    "CORP",
+    "FLT"
+   ],
+   "table": "CORP_FLT"
+  },
+  {
+   "name": "секьюритизация",
+   "fact": {
+    "instr_type": "BOND",
+    "segment": "Секьюритизация",
+    "asset_class": "ИЦБ",
+    "coupon_type": "fix",
+    "ccy": "RUB"
+   },
+   "row": {
+    "instrType": "BOND",
+    "segment": "Секьюритизация",
+    "assetClass": "ИЦБ",
+    "couponType": "fix",
+    "ccy": "RUB"
+   },
+   "kindOf": [
+    "CORP",
+    "FIX"
+   ],
+   "table": "SECUR"
+  },
+  {
+   "name": "облигация не сопоставлена",
+   "fact": {
+    "instr_type": "BOND",
+    "segment": "Корп",
+    "asset_class": "Не сопоставлено",
+    "coupon_type": "fix",
+    "ccy": "RUB"
+   },
+   "row": {
+    "instrType": "BOND",
+    "segment": "Корп",
+    "assetClass": "Не сопоставлено",
+    "couponType": "fix",
+    "ccy": "RUB"
+   },
+   "kindOf": [
+    "CORP",
+    "FIX"
+   ],
+   "table": "BOND_NA",
+   "bondNa": true
+  },
+  {
+   "name": "облигация без instr_type",
+   "fact": {
+    "instr_type": null,
+    "segment": "Корп",
+    "asset_class": "Корп",
+    "coupon_type": "fix",
+    "ccy": "RUB"
+   },
+   "row": {
+    "instrType": null,
+    "segment": "Корп",
+    "assetClass": "Корп",
+    "couponType": "fix",
+    "ccy": "RUB"
+   },
+   "kindOf": [
+    "CORP",
+    "FIX"
+   ],
+   "table": "CORP_FIX"
+  },
+  {
+   "name": "FX",
+   "fact": {
+    "instr_type": "FX",
+    "segment": "FX",
+    "asset_class": "Валюта",
+    "ccy": "USD"
+   },
+   "row": {
+    "instrType": "FX",
+    "segment": "FX",
+    "assetClass": "Валюта",
+    "couponType": null,
+    "ccy": "USD"
+   },
+   "kindOf": [
+    "DER",
+    "FX"
+   ],
+   "table": "FX"
+  },
+  {
+   "name": "перенос ОВП",
+   "fact": {
+    "instr_type": "FX",
+    "segment": "FX",
+    "asset_class": "Перенос ОВП",
+    "ccy": "USD"
+   },
+   "row": {
+    "instrType": "FX",
+    "segment": "FX",
+    "assetClass": "Перенос ОВП",
+    "couponType": null,
+    "ccy": "USD"
+   },
+   "kindOf": [
+    "DER",
+    "FX"
+   ],
+   "table": "OCP"
+  },
+  {
+   "name": "FX, группа продукта fx_future",
+   "fact": {
+    "instr_type": "FX",
+    "segment": "FX",
+    "asset_class": "Валюта",
+    "ccy": "USD",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "fx_future"
+      }
+     }
+    }
+   },
+   "row": {
+    "instrType": "FX",
+    "segment": "FX",
+    "assetClass": "Валюта",
+    "couponType": null,
+    "ccy": "USD",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "fx_future"
+      }
+     }
+    }
+   },
+   "kindOf": [
+    "DER",
+    "FX"
+   ],
+   "table": "FX_FUT"
+  },
+  {
+   "name": "FX, группа продукта fx_ndf",
+   "fact": {
+    "instr_type": "FX",
+    "segment": "FX",
+    "asset_class": "Валюта",
+    "ccy": "USD",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "fx_ndf"
+      }
+     }
+    }
+   },
+   "row": {
+    "instrType": "FX",
+    "segment": "FX",
+    "assetClass": "Валюта",
+    "couponType": null,
+    "ccy": "USD",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "fx_ndf"
+      }
+     }
+    }
+   },
+   "kindOf": [
+    "DER",
+    "FX"
+   ],
+   "table": "FX_FWD"
+  },
+  {
+   "name": "OTC без группы продукта",
+   "fact": {
+    "instr_type": "OTC",
+    "segment": "Деривативы",
+    "asset_class": "OTC-деривативы",
+    "ccy": "RUB"
+   },
+   "row": {
+    "instrType": "OTC",
+    "segment": "Деривативы",
+    "assetClass": "OTC-деривативы",
+    "couponType": null,
+    "ccy": "RUB"
+   },
+   "kindOf": [
+    "DER",
+    "OTC"
+   ],
+   "table": "OTC"
+  },
+  {
+   "name": "OTC без группы продукта (пустая)",
+   "fact": {
+    "instr_type": "OTC",
+    "segment": "Деривативы",
+    "asset_class": "OTC-деривативы",
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": ""
+      }
+     }
+    }
+   },
+   "row": {
+    "instrType": "OTC",
+    "segment": "Деривативы",
+    "assetClass": "OTC-деривативы",
+    "couponType": null,
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": ""
+      }
+     }
+    }
+   },
+   "kindOf": [
+    "DER",
+    "OTC"
+   ],
+   "table": "OTC"
+  },
+  {
+   "name": "OTC, группа продукта таблице неизвестна: repo",
+   "fact": {
+    "instr_type": "OTC",
+    "segment": "Деривативы",
+    "asset_class": "OTC-деривативы",
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "repo"
+      }
+     }
+    }
+   },
+   "row": {
+    "instrType": "OTC",
+    "segment": "Деривативы",
+    "assetClass": "OTC-деривативы",
+    "couponType": null,
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "repo"
+      }
+     }
+    }
+   },
+   "kindOf": [
+    "DER",
+    "OTC"
+   ],
+   "table": "UNCLASSIFIED",
+   "knownMismatch": "#361"
+  },
+  {
+   "name": "OTC, группа продукта таблице неизвестна: new",
+   "fact": {
+    "instr_type": "OTC",
+    "segment": "Деривативы",
+    "asset_class": "OTC-деривативы",
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "new"
+      }
+     }
+    }
+   },
+   "row": {
+    "instrType": "OTC",
+    "segment": "Деривативы",
+    "assetClass": "OTC-деривативы",
+    "couponType": null,
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "new"
+      }
+     }
+    }
+   },
+   "kindOf": [
+    "DER",
+    "OTC"
+   ],
+   "table": "UNCLASSIFIED",
+   "knownMismatch": "#361"
+  },
+  {
+   "name": "OTC, группа продукта irs",
+   "fact": {
+    "instr_type": "OTC",
+    "segment": "Деривативы",
+    "asset_class": "OTC-деривативы",
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "irs"
+      }
+     }
+    }
+   },
+   "row": {
+    "instrType": "OTC",
+    "segment": "Деривативы",
+    "assetClass": "OTC-деривативы",
+    "couponType": null,
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "irs"
+      }
+     }
+    }
+   },
+   "kindOf": [
+    "DER",
+    "OTC"
+   ],
+   "table": "IRS"
+  },
+  {
+   "name": "OTC, группа продукта ccs",
+   "fact": {
+    "instr_type": "OTC",
+    "segment": "Деривативы",
+    "asset_class": "OTC-деривативы",
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "ccs"
+      }
+     }
+    }
+   },
+   "row": {
+    "instrType": "OTC",
+    "segment": "Деривативы",
+    "assetClass": "OTC-деривативы",
+    "couponType": null,
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "ccs"
+      }
+     }
+    }
+   },
+   "kindOf": [
+    "DER",
+    "OTC"
+   ],
+   "table": "CCS"
+  },
+  {
+   "name": "OTC, группа продукта cds",
+   "fact": {
+    "instr_type": "OTC",
+    "segment": "Деривативы",
+    "asset_class": "OTC-деривативы",
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "cds"
+      }
+     }
+    }
+   },
+   "row": {
+    "instrType": "OTC",
+    "segment": "Деривативы",
+    "assetClass": "OTC-деривативы",
+    "couponType": null,
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "cds"
+      }
+     }
+    }
+   },
+   "kindOf": [
+    "DER",
+    "OTC"
+   ],
+   "table": "CDS"
+  },
+  {
+   "name": "OTC, группа продукта trs",
+   "fact": {
+    "instr_type": "OTC",
+    "segment": "Деривативы",
+    "asset_class": "OTC-деривативы",
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "trs"
+      }
+     }
+    }
+   },
+   "row": {
+    "instrType": "OTC",
+    "segment": "Деривативы",
+    "assetClass": "OTC-деривативы",
+    "couponType": null,
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "trs"
+      }
+     }
+    }
+   },
+   "kindOf": [
+    "DER",
+    "OTC"
+   ],
+   "table": "TRS"
+  },
+  {
+   "name": "OTC, группа продукта bond_future",
+   "fact": {
+    "instr_type": "OTC",
+    "segment": "Деривативы",
+    "asset_class": "OTC-деривативы",
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "bond_future"
+      }
+     }
+    }
+   },
+   "row": {
+    "instrType": "OTC",
+    "segment": "Деривативы",
+    "assetClass": "OTC-деривативы",
+    "couponType": null,
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "bond_future"
+      }
+     }
+    }
+   },
+   "kindOf": [
+    "DER",
+    "OTC"
+   ],
+   "table": "BOND_FUT"
+  },
+  {
+   "name": "OTC, группа продукта bond_forward",
+   "fact": {
+    "instr_type": "OTC",
+    "segment": "Деривативы",
+    "asset_class": "OTC-деривативы",
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "bond_forward"
+      }
+     }
+    }
+   },
+   "row": {
+    "instrType": "OTC",
+    "segment": "Деривативы",
+    "assetClass": "OTC-деривативы",
+    "couponType": null,
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "bond_forward"
+      }
+     }
+    }
+   },
+   "kindOf": [
+    "DER",
+    "OTC"
+   ],
+   "table": "BOND_FWD"
+  },
+  {
+   "name": "своп старого tdm IRS",
+   "fact": {
+    "instr_type": "IRS",
+    "segment": "Деривативы",
+    "asset_class": "IRS",
+    "ccy": "RUB"
+   },
+   "row": {
+    "instrType": "IRS",
+    "segment": "Деривативы",
+    "assetClass": "IRS",
+    "couponType": null,
+    "ccy": "RUB"
+   },
+   "kindOf": [
+    "DER",
+    "IRS"
+   ],
+   "table": "IRS"
+  },
+  {
+   "name": "своп старого tdm XCCY",
+   "fact": {
+    "instr_type": "XCCY",
+    "segment": "Деривативы",
+    "asset_class": "XCCY",
+    "ccy": "USD"
+   },
+   "row": {
+    "instrType": "XCCY",
+    "segment": "Деривативы",
+    "assetClass": "XCCY",
+    "couponType": null,
+    "ccy": "USD"
+   },
+   "kindOf": [
+    "DER",
+    "XCCY"
+   ],
+   "table": "CCS"
+  },
+  {
+   "name": "своп старого tdm CDS",
+   "fact": {
+    "instr_type": "CDS",
+    "segment": "Деривативы",
+    "asset_class": "CDS",
+    "ccy": "RUB"
+   },
+   "row": {
+    "instrType": "CDS",
+    "segment": "Деривативы",
+    "assetClass": "CDS",
+    "couponType": null,
+    "ccy": "RUB"
+   },
+   "kindOf": [
+    "DER",
+    "OTC"
+   ],
+   "table": "CDS"
+  },
+  {
+   "name": "прочее",
+   "fact": {
+    "instr_type": "OTHER",
+    "segment": "Прочее",
+    "asset_class": "Прочее",
+    "ccy": "RUB"
+   },
+   "row": {
+    "instrType": "OTHER",
+    "segment": "Прочее",
+    "assetClass": "Прочее",
+    "couponType": null,
+    "ccy": "RUB"
+   },
+   "kindOf": [
+    "OTH",
+    "OTH"
+   ],
+   "table": "UNCLASSIFIED"
+  },
+  {
+   "name": "акции",
+   "fact": {
+    "instr_type": "OTHER",
+    "segment": "Прочее",
+    "asset_class": "Прочее",
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "equity"
+      }
+     }
+    }
+   },
+   "row": {
+    "instrType": "OTHER",
+    "segment": "Прочее",
+    "assetClass": "Прочее",
+    "couponType": null,
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "equity"
+      }
+     }
+    }
+   },
+   "kindOf": [
+    "OTH",
+    "OTH"
+   ],
+   "table": "EQUITY"
+  },
+  {
+   "name": "не оценена: OTC без группы продукта",
+   "fact": {
+    "ccy": "RUB",
+    "asset_class": "otc",
+    "extra": {
+     "reported": {
+      "asset_class": "otc"
+     }
+    }
+   },
+   "row": {
+    "assetClass": "OTC-деривативы",
+    "segment": "Деривативы",
+    "instrType": null,
+    "ccy": "RUB",
+    "notValued": true,
+    "extra": {
+     "reported": {
+      "asset_class": "otc"
+     }
+    }
+   },
+   "kindOf": null,
+   "table": "OTC",
+   "unvalued": true
+  },
+  {
+   "name": "не оценена: OTC, группа продукта irs",
+   "fact": {
+    "ccy": "RUB",
+    "asset_class": "otc",
+    "extra": {
+     "reported": {
+      "asset_class": "otc",
+      "x": {
+       "x_product_group": "irs"
+      }
+     }
+    }
+   },
+   "row": {
+    "assetClass": "OTC-деривативы",
+    "segment": "Деривативы",
+    "instrType": null,
+    "ccy": "RUB",
+    "notValued": true,
+    "extra": {
+     "reported": {
+      "asset_class": "otc",
+      "x": {
+       "x_product_group": "irs"
+      }
+     }
+    }
+   },
+   "kindOf": null,
+   "table": "IRS",
+   "unvalued": true
+  },
+  {
+   "name": "не оценена: OTC, группа продукта repo",
+   "fact": {
+    "ccy": "RUB",
+    "asset_class": "otc",
+    "extra": {
+     "reported": {
+      "asset_class": "otc",
+      "x": {
+       "x_product_group": "repo"
+      }
+     }
+    }
+   },
+   "row": {
+    "assetClass": "OTC-деривативы",
+    "segment": "Деривативы",
+    "instrType": null,
+    "ccy": "RUB",
+    "notValued": true,
+    "extra": {
+     "reported": {
+      "asset_class": "otc",
+      "x": {
+       "x_product_group": "repo"
+      }
+     }
+    }
+   },
+   "kindOf": null,
+   "table": "UNCLASSIFIED",
+   "unvalued": true
+  },
+  {
+   "name": "не оценена: FX",
+   "fact": {
+    "ccy": "USD",
+    "asset_class": "fx",
+    "extra": {
+     "reported": {
+      "asset_class": "fx",
+      "ccy": "USD"
+     }
+    }
+   },
+   "row": {
+    "assetClass": "Валюта",
+    "segment": "FX",
+    "instrType": null,
+    "ccy": "USD",
+    "notValued": true,
+    "extra": {
+     "reported": {
+      "asset_class": "fx",
+      "ccy": "USD"
+     }
+    }
+   },
+   "kindOf": null,
+   "table": "FX",
+   "unvalued": true
+  },
+  {
+   "name": "не оценена: прочее",
+   "fact": {
+    "ccy": "RUB",
+    "asset_class": "other",
+    "extra": {
+     "reported": {
+      "asset_class": "other"
+     }
+    }
+   },
+   "row": {
+    "assetClass": "Прочее",
+    "segment": "Прочее",
+    "instrType": null,
+    "ccy": "RUB",
+    "notValued": true,
+    "extra": {
+     "reported": {
+      "asset_class": "other"
+     }
+    }
+   },
+   "kindOf": null,
+   "table": "UNCLASSIFIED",
+   "unvalued": true
+  },
+  {
+   "name": "не оценена: облигация",
+   "fact": {
+    "ccy": "RUB",
+    "asset_class": "bond",
+    "extra": {
+     "reported": {
+      "asset_class": "bond"
+     }
+    }
+   },
+   "row": {
+    "assetClass": null,
+    "segment": null,
+    "instrType": null,
+    "ccy": "RUB",
+    "notValued": true,
+    "extra": {
+     "reported": {
+      "asset_class": "bond"
+     }
+    }
+   },
+   "kindOf": null,
+   "table": "BOND_NA",
+   "unvalued": true
+  }
+ ]
+}

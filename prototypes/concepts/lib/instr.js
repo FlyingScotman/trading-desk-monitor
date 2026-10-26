@@ -12,7 +12,10 @@
  *  - деривативы и FX — по группе продукта отчёта (x_product_group отчёта адаптера в extra.reported.x: irs, ccs, cds, trs,
  *    bond_future, bond_forward, fx_future, fx_ndf, equity), иначе по типу старого tdm (IRS, XCCY, CDS), в демо-наборе —
  *    по его типу (IRS / КС-своп / базис → IRS, FX форвард, XCCY → CCS); FX-строка без группы — «Валюта», перенос ОВП —
- *    свой тип; чего таблица не знает — «Не классифицировано» (видно, не выброшено).
+ *    свой тип; OTC-строка без группы продукта — «Внебиржевые без группы продукта» (DER, как kind_of: DER.OTC, #345),
+ *    с незнакомой группой (repo, новая) — «Не классифицировано» (известное расхождение с kind_of, #361); чего таблица не знает — «Не классифицировано» (видно, не выброшено). Группа типа совпадает с группой
+ *    kindOf lib/real.js (api/concepts.kind_of) для любого instrType, кроме этого случая: tests/fixtures/instr_kinds.json сверяет все три
+ *    классификации; имя типа таблицы может быть подробнее (CCS — это XCCY kind_of, CDS — его OTC).
  * Отнесение к валюте (INSTR.ATTRIBUTIONS) — для многовалютных типов (INSTR.CROSS_CCY: CCS, FX форварды, FX фьючерсы, FX):
  *  - «по ногам» (legs, по умолчанию, ПРЕДВАРИТЕЛЬНО — решает владелец): каждая мера в своей валюте — DV01 по кривой в
  *    валюте кривой, FX-дельта в своей валюте; позиция, номинал, MV, CS01 и базис ОФЗ — в валюте позиции. Тогда риск
@@ -42,6 +45,7 @@
     ['BOND_FUT', 'DER', 'Фьючерсы на облигации'], ['BOND_FWD', 'DER', 'Форварды на облигации'],
     ['FX_FUT', 'DER', 'Валютные фьючерсы'], ['FX_FWD', 'DER', 'FX форварды / NDF'],
     ['FX', 'DER', 'Валюта (спот, прочие FX)'], ['OCP', 'DER', 'Перенос ОВП'],
+    ['OTC', 'DER', 'Внебиржевые без группы продукта'],
     ['EQUITY', 'OTH', 'Акции'], ['BOND_NA', 'OTH', 'Облигации без класса (не сопоставлены)'],
     ['UNCLASSIFIED', 'OTH', 'Не классифицировано'],
   ];
@@ -53,7 +57,7 @@
   // короткие подписи для столбцов матрицы «валюта × тип» (R38); полная — I.label, в подсказке
   I.SHORT = { OFZ_PD: 'ОФЗ-ПД', OFZ_PK: 'ОФЗ-ПК', OFZ_IN: 'ОФЗ-ИН', MINFIN_FX: 'Минфин вал.', SUBFED: 'Субфед.', MUNI: 'Муницип.',
     CORP_FIX: 'Корп. фикс', CORP_FLT: 'Корп. флоат.', SECUR: 'ИЦБ / ABS', IRS: 'IRS / OIS', CCS: 'CCS', CDS: 'CDS', TRS: 'TRS',
-    BOND_FUT: 'Фьюч. обл.', BOND_FWD: 'Форв. обл.', FX_FUT: 'FX фьюч.', FX_FWD: 'FX форв. / NDF', FX: 'FX спот', OCP: 'Перенос ОВП',
+    BOND_FUT: 'Фьюч. обл.', BOND_FWD: 'Форв. обл.', FX_FUT: 'FX фьюч.', FX_FWD: 'FX форв. / NDF', FX: 'FX спот', OCP: 'Перенос ОВП', OTC: 'OTC прочие',
     EQUITY: 'Акции', BOND_NA: 'Без класса', UNCLASSIFIED: 'Не классиф.' };
   I.PRODUCT_KIND = { irs: 'IRS', ccs: 'CCS', cds: 'CDS', trs: 'TRS', bond_future: 'BOND_FUT', bond_forward: 'BOND_FWD', fx_future: 'FX_FUT', fx_ndf: 'FX_FWD', equity: 'EQUITY' };
   I.LEGACY_KIND = { IRS: 'IRS', XCCY: 'CCS', CDS: 'CDS' };
@@ -77,6 +81,9 @@
     if (p.group === 'DER' || p.group === 'OTH') {
       if (I.DEMO_KIND[p.kind]) return I.DEMO_KIND[p.kind];
       if (p.kind === 'FX') return p.ocp ? 'OCP' : 'FX';
+      // OTC без группы продукта — DER, как api/concepts (#345); с незнакомой группой (repo, новая) — «Не классифицировано»:
+      // где показывать РЕПО, решает владелец (#361)
+      if (p.kind === 'OTC' && !pg) return 'OTC';
       return 'UNCLASSIFIED';
     }
     if (p.notValued || p.assetClass === 'Не сопоставлено') return 'BOND_NA';
@@ -192,7 +199,7 @@
   if (!K || typeof document === 'undefined') return;
   const M = window.MOCK, f = K.f, esc = K.esc, h = K.h;
   const tint = (hex, a) => hex && hex[0] === '#' && hex.length === 7 ? hex + Math.round(a * 255).toString(16).padStart(2, '0') : 'transparent';
-  const KIND_COLOR = { OFZ_PD: 'PD', OFZ_PK: 'PK', OFZ_IN: 'IN', MINFIN_FX: 'SOVFX', CORP_FIX: 'FIX', CORP_FLT: 'FLT', IRS: 'IRS', CCS: 'XCCY', FX_FWD: 'FXF', FX: 'FX', UNCLASSIFIED: 'OTH', BOND_NA: 'OTH' };
+  const KIND_COLOR = { OFZ_PD: 'PD', OFZ_PK: 'PK', OFZ_IN: 'IN', MINFIN_FX: 'SOVFX', CORP_FIX: 'FIX', CORP_FLT: 'FLT', IRS: 'IRS', CCS: 'XCCY', FX_FWD: 'FXF', FX: 'FX', OTC: 'OTC', UNCLASSIFIED: 'OTH', BOND_NA: 'OTH' };
   I.color = kind => K.kindColor[KIND_COLOR[kind]] || K.PAL[I.order[kind] % K.PAL.length];
   const KEY = 'concepts-ccykind';
   I.state = { attribution: I.ATTRIBUTION_DEFAULT, units: 'own', measure: 'dv01', curve: null };

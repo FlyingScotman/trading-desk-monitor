@@ -225,7 +225,8 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
         ['Ср. спред (по MV)', f.bp(wavg(p => p.zspread)) + ' <small>б.п.</small>'],
         ['Ср. дюрация', f.n(wavg(p => p.mdur), 2)],
         ['Ср. срок до события', f.yrs(wavg(p => p.tenor))],
-        ['Ближайшее событие', (() => { const p = L.slice().sort((a, b) => a.event.date.localeCompare(b.event.date))[0]; return '<span data-card="' + p.id + '" class="dr">' + f.date(p.event.date) + '</span> <small>' + ({ put: 'пут', call: 'колл', mat: 'погаш.' }[p.event.kind]) + '</small>'; })()],
+        // позиции без даты события (#342) в «ближайшее» не попадают; дат нет ни у одной — «—»
+        ['Ближайшее событие', (() => { const p = L.filter(x => x.event.date).sort((a, b) => a.event.date.localeCompare(b.event.date))[0]; return !p ? '<span class="mut3">—</span>' : '<span data-card="' + p.id + '" class="dr">' + f.date(p.event.date) + '</span> <small>' + ({ put: 'пут', call: 'колл', mat: 'погаш.' }[p.event.kind]) + '</small>'; })()],
       ].map(([l, v]) => '<div><div class="l">' + l + '</div><div class="v">' + v + '</div></div>').join('') + '</div></div>';
     // кривая + риск
     const two = K.h('div', 'c13-two'); dash.appendChild(two);

@@ -89,7 +89,7 @@ t('R44: «на 1 бумагу» — риск на бумагу не меняет
 
 const UV = { total: 4, open: 3, closed: 1, fxMissing: ['OMR'], groups: [
   { key: 'swap_terms|IRS', cause: 'swap_terms', kind: 'IRS', kindLabel: 'Процентные свопы (IRS / OIS)', why: 'своп ждёт условий сделки (trade_terms)', todo: 'MV и DV01 отчёта — report_risk', closed: false, n: 2, mvRub: null, notionalRub: 150e6, noRate: [], ids: ['NV1', 'NV2'] },
-  { key: 'no_report_mv|UNCLASSIFIED', cause: 'no_report_mv', kind: 'UNCLASSIFIED', kindLabel: 'Не классифицировано', why: 'оценки нет: MV в отчёте нет', todo: 'report_risk', closed: false, n: 1, mvRub: null, notionalRub: null, noRate: ['OMR'], ids: ['NV3'] },
+  { key: 'no_report_mv|OTC', cause: 'no_report_mv', kind: 'OTC', kindLabel: 'Внебиржевые без группы продукта', why: 'оценки нет: MV в отчёте нет', todo: 'report_risk', closed: false, n: 1, mvRub: null, notionalRub: null, noRate: ['OMR'], ids: ['NV3'] },
   { key: 'closed|IRS', cause: 'closed', kind: 'IRS', kindLabel: 'Процентные свопы (IRS / OIS)', why: 'закрытая сделка или нулевой объём в отчёте', todo: 'не пропуск', closed: true, n: 1, mvRub: null, notionalRub: null, noRate: [], ids: ['NV4'] }] };
 function addUnvalued(D) {
   const base = D.positions[0];

@@ -144,22 +144,52 @@ def test_a_stream_far_behind_the_shared_window_reads_its_gap_itself(store_url, c
 class Spy:
     """``store.connect`` that remembers its connections, and how many were open at once (counted as each one opens,
     #338: not sampled in a window of time). A connection is listed before it is made: two that open together see
-    each other."""
+    each other. A connect that fails leaves no entry (#350): its error is raised as it is, not read later as a
+    connection left open."""
 
-    OPENING = SimpleNamespace(closed=False)
-
-    def __init__(self):
-        self.connect, self.cons, self.most = store.connect, [], 0
+    def __init__(self, connect=None):
+        self.connect, self.cons, self.most = connect or store.connect, [], 0
 
     def __call__(self, url: str):
-        slot = len(self.cons)
-        self.cons.append(self.OPENING)
+        opening = SimpleNamespace(closed=False)  # its own placeholder: found by identity, whatever opens beside it
+        self.cons.append(opening)
         self.most = max(self.most, self.open())
-        self.cons[slot] = c = self.connect(url)
+        try:
+            c = self.connect(url)
+        except BaseException:
+            del self.cons[self._slot(opening)]
+            raise
+        self.cons[self._slot(opening)] = c
         return c
+
+    def _slot(self, entry) -> int:
+        return next(i for i, c in enumerate(self.cons) if c is entry)
 
     def open(self) -> int:
         return sum(not c.closed for c in self.cons)
+
+
+def test_a_failed_connect_leaves_no_open_connection_in_the_spy():
+    """#350: the error of connect comes out as it is, and the spy holds no placeholder that reads as a leak."""
+    class Down(Exception):
+        pass
+
+    opened = SimpleNamespace(closed=False)
+    calls = iter([opened, Down("store is down")])
+
+    def connect(url):
+        x = next(calls)
+        if isinstance(x, Exception):
+            raise x
+        return x
+
+    spy = Spy(connect)
+    assert spy("u") is opened
+    with pytest.raises(Down, match="store is down"):
+        spy("u")
+    assert spy.cons == [opened] and spy.cons[0] is opened and spy.open() == 1 and spy.most == 2
+    opened.closed = True
+    assert spy.open() == 0
 
 
 async def until(cond, timeout: float = 5) -> None:
