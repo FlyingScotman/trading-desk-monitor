@@ -4,6 +4,7 @@
 //   node tests/js/ofz_view.test.js
 'use strict';
 const fs = require('fs'), path = require('path'), vm = require('vm'), assert = require('assert');
+const { loadRun } = require('./fixtures/concepts_run');
 const P = f => fs.readFileSync(path.join(__dirname, '..', '..', 'prototypes', f), 'utf8');
 let n = 0; const t = (name, f) => { f(); n++; console.log('ok', name); };
 const near = (a, b, msg) => assert.ok(Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b)), msg + ': ' + a + ' vs ' + b);
@@ -15,8 +16,8 @@ function load(view, scheme = 'kbd_par', more) {
     localStorage: { getItem: k => (k === 'concepts-ofz-view' ? view : null), setItem() {} } };
   ctx.window = ctx;
   vm.createContext(ctx);
-  vm.runInContext(P('data.js'), ctx);
-  const D = ctx.window.DESK;
+  loadRun(ctx);
+  const D = ctx.window.CONCEPTS_RUN;
   D.source.ofzScheme = scheme;
   const p = D.positions[0];  // ОФЗ-ПД демо-прогона: переводим на схему КБД
   p.risk = { 'RUB OFZ': KBD.slice() };

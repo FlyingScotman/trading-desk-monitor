@@ -533,7 +533,7 @@
     poll();
   }
   // ---------- #192: бейдж прогона — сколько прошло с публикации и что в него вошло ----------
-  // Публикация — source.publishedAt прогона (window.DESK, api/compat.py: run.completed_at); в демо — момент загрузки
+  // Публикация — source.publishedAt прогона (window.CONCEPTS_RUN, api/concepts_run.py: run.completed_at); в демо — момент загрузки
   // страницы минус 12 минут. Возраст перерисовывается раз в 30 с и при возврате на вкладку; часы — сервера
   // (сдвиг по now статуса автопилота). Новый прогон: событие 'desk:live' от lib/live.js (run.published), затем
   // сверка с latest_run статуса автопилота (R11: какой прогон «последний»).
@@ -835,15 +835,14 @@
     }
     return out;
   };
-  // список позиций группы: имя, книга, валюта, тип, причина (extra прогона); строка — карточка позиции
+  // список позиций группы: имя, книга, валюта, тип, причина (p.estReason — extra прогона, lib/real.js); строка — карточка позиции
   K.posList = function (title, ids, sub) {
     const o = drawer(); o.title = title;
-    const why = {}; ((window.DESK || {}).positions || []).forEach(d => { const e = d.extra || {}; why[d.id] = e.reason || e.not_exact_reason || (e.assumptions || []).join('; ') || ''; });
     const L = ids.map(id => M.pos[id]).filter(Boolean);
     o.el.querySelector('.t').textContent = title;
     o.el.querySelector('.st').textContent = L.length + ' поз.' + (sub ? ' · ' + sub : '');
     o.bd.innerHTML = '<table class="k-tbl"><thead><tr><th>Позиция</th><th>Книга</th><th>Ccy</th><th>Тип</th><th>Причина</th></tr></thead><tbody>' +
-      L.map(p => '<tr class="row" data-id="' + esc(p.id) + '"><td>' + esc(p.name) + ' <span class="mut3 mono">' + esc(p.isin || p.id) + '</span></td><td class="mut">' + esc(p.book) + '</td><td>' + (p.ccy ? K.ccyTag(p.ccy) : '') + '</td><td class="mut">' + esc(p.kindLabel || '') + '</td><td class="mut3" style="max-width:360px">' + esc(why[p.id] || '') + '</td></tr>').join('') + '</tbody></table>';
+      L.map(p => '<tr class="row" data-id="' + esc(p.id) + '"><td>' + esc(p.name) + ' <span class="mut3 mono">' + esc(p.isin || p.id) + '</span></td><td class="mut">' + esc(p.book) + '</td><td>' + (p.ccy ? K.ccyTag(p.ccy) : '') + '</td><td class="mut">' + esc(p.kindLabel || '') + '</td><td class="mut3" style="max-width:360px">' + esc(p.estReason || '') + '</td></tr>').join('') + '</tbody></table>';
     o.bd.querySelectorAll('tr.row').forEach(tr => tr.onclick = () => K.card(tr.dataset.id));
     return o;
   };

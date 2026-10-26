@@ -111,12 +111,14 @@
   if (C.ISO.test(st.horizon) && st.horizon <= M.asOf) st.horizon = '3M';
   let resp = null, err = null, ctrl = null, seq = 0, timer = null;
   const cache = new Map();
-  // заседания ЦБ для шагов КС: из ответов сервера (meetings — до горизонта, с датой вступления) и из M.cbr (весь
-  // календарь, если он есть: дата вступления — следующий рабочий день, как у сервера без даты хаба). window.DESK не
-  // читаем (его выводят, #107)
+  // заседания ЦБ для шагов КС: из ответов сервера (meetings — до горизонта, с датой вступления) и из M.cbr: весь
+  // календарь M.cbr.schedule ({date, effective, estimated}, concepts.cbr, #289); без него (демо) — даты M.cbr.meetings,
+  // дата вступления — следующий рабочий день, как у сервера без даты хаба
   const nextWd = d => { let x = M.util.addDays(d, 1); while ([0, 6].includes(new Date(x + 'T00:00:00').getDay())) x = M.util.addDays(x, 1); return x; };
   const est = new Set((M.cbr && M.cbr.estimated) || []);
-  const cbrList = () => ((M.cbr && M.cbr.meetings) || []).filter(d => C.ISO.test(d)).map(d => ({ date: d, effective: nextWd(d), estimated: est.has(d) }));
+  const cbrList = () => M.cbr && Array.isArray(M.cbr.schedule)
+    ? M.cbr.schedule.filter(m => m && C.ISO.test(m.date)).map(m => ({ date: m.date, effective: C.ISO.test(m.effective) ? m.effective : nextWd(m.date), estimated: !!m.estimated }))
+    : ((M.cbr && M.cbr.meetings) || []).filter(d => C.ISO.test(d)).map(d => ({ date: d, effective: nextWd(d), estimated: est.has(d) }));
   const known = () => C.meetingList([...cache.values()].map(r => r.meetings).concat([cbrList()]));
   // шаги сопоставляются заседаниям по порядку, как у сервера: его список (meetings последнего ответа), пока ответа нет — известные
   const stepList = () => resp && resp.meetings && resp.meetings.length ? C.meetingList([resp.meetings].concat(resp.meetings.some(m => m.inHorizon === false) ? [] : [known()])) : known();

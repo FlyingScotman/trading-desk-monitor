@@ -4,6 +4,7 @@
 //   node tests/js/fx_forward_ui.test.js
 'use strict';
 const fs = require('fs'), path = require('path'), vm = require('vm'), assert = require('assert');
+const { loadRun } = require('./fixtures/concepts_run');
 const P = f => fs.readFileSync(path.join(__dirname, '..', '..', 'prototypes', f), 'utf8');
 let n = 0; const t = (name, f) => { f(); n++; console.log('ok', name); };
 const near = (a, b, msg) => assert.ok(Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(a), Math.abs(b)), msg + ': ' + a + ' vs ' + b);
@@ -18,12 +19,12 @@ function ctxWith(src) {
   vm.runInContext(P('concepts/lib/instr.js'), ctx);
   return { M, I: ctx.window.INSTR };
 }
-// прогон (prototypes/data.js через lib/real.js) с FX-сделками форвардного вида: кросс USD/CNY без рубля и FX-своп на
+// прогон (tests/js/fixtures/concepts-run.json через lib/real.js) с FX-сделками форвардного вида: кросс USD/CNY без рубля и FX-своп на
 // implied-кривой юаня, которой нет в старом списке кривых кокпита
 function real(mutate) {
   return ctxWith(ctx => {
-    vm.runInContext(P('data.js'), ctx);
-    const D = ctx.window.DESK, b = D.positions.find(p => p.instrType === 'FX');
+    loadRun(ctx);
+    const D = ctx.window.CONCEPTS_RUN, b = D.positions.find(p => p.instrType === 'FX');
     D.CURVES['CNY FWD'] = { name: 'CNY implied (CETS)', ccy: 'CNY', kind: 'swap', pts: new Array(NB).fill(5.5) };
     D.positions.push(Object.assign({}, b, { id: 'X1', name: 'USD/CNY fwd 3M', instrType: 'FX', ccy: 'USD', notional: 10e6, mvRub: 1e6, dv01: 0,
       risk: { 'USD SOFR': at(0, -800), CNY: at(0, 790) }, fxDelta: { USD: 9.9e6, CNY: -70.5e6 },

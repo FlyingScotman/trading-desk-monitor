@@ -6,6 +6,7 @@
 //   node tests/js/funding_b1.test.js
 'use strict';
 const fs = require('fs'), path = require('path'), vm = require('vm'), assert = require('assert');
+const { loadRun } = require('./fixtures/concepts_run');
 const P = f => fs.readFileSync(path.join(__dirname, '..', '..', 'prototypes', f), 'utf8');
 let n = 0; const tests = [];
 const t = (name, f) => tests.push([name, f]);
@@ -27,14 +28,14 @@ function load(opts) {
   ctx.window = ctx;
   vm.createContext(ctx);
   if (opts.real) {
-    vm.runInContext(P('data.js'), ctx);
-    if (opts.mutate) opts.mutate(ctx.window.DESK);
-    if (opts.extras) ctx.window.DESK_EXTRAS = opts.extras(ctx.window.DESK);
+    loadRun(ctx);
+    if (opts.mutate) opts.mutate(ctx.window.CONCEPTS_RUN);
+    if (opts.extras) ctx.window.DESK_EXTRAS = opts.extras(ctx.window.CONCEPTS_RUN);
     vm.runInContext(P('concepts/lib/real.js'), ctx);
   } else vm.runInContext(P('concepts/lib/mock.js'), ctx);
   vm.runInContext(P('concepts/lib/instr.js'), ctx);
   vm.runInContext(P('concepts/lib/kit.js'), ctx);
-  return { M: ctx.window.MOCK, K: ctx.window.KIT, D: ctx.window.DESK };
+  return { M: ctx.window.MOCK, K: ctx.window.KIT, D: ctx.window.CONCEPTS_RUN };
 }
 const bond = D => D.positions.find(p => p.instrType === 'BOND' && p.pnl && p.pnl.funding);
 
