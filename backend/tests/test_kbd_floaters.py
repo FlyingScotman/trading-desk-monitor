@@ -193,6 +193,8 @@ def test_kbd_history_reads_the_last_dates_of_the_cache():
             return f"{cut}-{d}"
 
         def get(self, sid):
+            if sid == "eod_final-2026-10-13":  # an unreadable final: the preliminary of the date instead
+                raise SnapshotError("corrupt bundle")
             return type("M", (), {"data": {"zcyc_params": [{**zcyc, "trade_date": sid[-10:]}]}})()
 
     static = type("S", (), {"data": {"floater_formulas": [{"benchmark": "ZCYC", "fixing_offset": 2}]}})()

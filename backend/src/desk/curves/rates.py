@@ -323,7 +323,7 @@ def kbd_history(snapshots: Any, business_date: str, static: Snapshot) -> dict[da
     """The end-of-day KBD parameters of the cache's market snapshots of the last ``max fixing_offset +
     KBD_HISTORY_EXTRA_DAYS`` market dates before ``business_date`` (``eod_final``, else ``eod_preliminary``), for the
     KBD floaters' past fixings (``kbd_fixing_entries``); empty without a KBD floater in the static. ``snapshots``: a
-    ``SnapshotDir``. A snapshot that cannot be read is left out (a gap)."""
+    ``SnapshotDir``. A final that cannot be read gives way to the date's preliminary; neither is a gap."""
     offsets = [int(f["fixing_offset"]) for f in static.data.get("floater_formulas") or ()
                if f.get("benchmark") == "ZCYC" and f.get("fixing_offset") is not None]
     if not offsets:
@@ -342,7 +342,7 @@ def kbd_history(snapshots: Any, business_date: str, static: Snapshot) -> dict[da
                     z = snapshots.get(sid).data["zcyc_params"][0]
                     _KBD_PARAMS[sid] = zcyc_parameters(z["trade_date"], z["params"], sid)
                 except (SnapshotError, KeyError, IndexError, ValueError):
-                    break
+                    continue  # an unreadable final: the date's preliminary close, else a gap
                 while len(_KBD_PARAMS) > _KBD_PARAMS_SIZE:
                     del _KBD_PARAMS[next(iter(_KBD_PARAMS))]
             out[_KBD_PARAMS[sid].trade_date] = _KBD_PARAMS[sid]
