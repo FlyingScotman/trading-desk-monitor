@@ -44,6 +44,12 @@ if (!pages.length) pages = fs.readdirSync(dir).filter(f => /\.html$/.test(f));
     const narrow = async tag => {
       const wide = await pg.evaluate(() => [document.documentElement.scrollWidth, window.innerWidth]);
       if (wide[0] !== wide[1]) { errs.push('390px' + (tag ? ' «' + tag + '»' : '') + ': scrollWidth ' + wide[0] + ' ≠ innerWidth ' + wide[1]); await pg.screenshot({ path: path.join(out, name.replace('.html', '-390' + (tag ? '-' + errs.length : '') + '.png')) }); }
+      // переключатель (#272): все кнопки видны без прокрутки — переключатель не прокручивается внутри себя, кнопки в окне
+      const hid = await pg.evaluate(() => [...document.querySelectorAll('.k-seg')].filter(s => s.offsetParent).flatMap(s => {
+        const r = s.getBoundingClientRect();
+        return [...s.querySelectorAll('button')].filter(b => { const q = b.getBoundingClientRect(); return s.scrollWidth > s.clientWidth + 1 || q.right > Math.min(r.right, innerWidth) + 1 || q.left < Math.max(r.left, 0) - 1; }).map(b => b.textContent.trim());
+      }));
+      if (hid.length) errs.push('390px' + (tag ? ' «' + tag + '»' : '') + ': кнопки переключателя за краем: ' + hid.slice(0, 6).join(', '));
     };
     const TABS = '.k-tabs button, .k-top .presets [data-p]';
     const nTabs = (await pg.$$(TABS)).length;

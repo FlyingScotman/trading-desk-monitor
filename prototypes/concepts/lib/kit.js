@@ -135,6 +135,18 @@
     const x = v / (scale || 1), a = Math.abs(x), cap = a >= 10 ? 0 : a >= 1 ? 1 : a >= 0.1 ? 2 : 3;
     return grp(x, Math.min(cap, (String(+x.toFixed(6)).split('.')[1] || '').length));
   };
+  // подпись столбца PnL-водопада, mm (#272): знаков после точки столько, чтобы малый фактор не превращался в «+0.0»
+  // (от 1 mm — один, от 0.1 — два, меньше — три). Фактор без подписи, если он и с тремя знаками равен нулю (меньше 500
+  // в валюте отчёта) или подпись шире room — ширины столбца в px (K.labelWidth): иначе она слипается с соседней.
+  // total — «Итого»: подписан всегда, не больше двух знаков, как цифра PnL дня в KPI. Точное значение — K.wfTip
+  K.wfLabel = (v, room, total) => {
+    const x = (v || 0) / 1e6, a = Math.abs(x);
+    if (!total && a < 5e-4) return '';
+    const t = sgn(x, a >= 0.95 ? 1 : total || a >= 0.095 ? 2 : 3);
+    return !total && room && K.labelWidth(t, 11) > room ? '' : t;
+  };
+  // значение столбца водопада в подсказке, mm: без порога, от 1 mm — два знака, меньше — три
+  K.wfTip = v => { const x = (v || 0) / 1e6; return sgn(x, Math.abs(x) >= 0.95 ? 2 : 3); };
   // заседание ЦБ одной фразой: консенсус и ожидание кривой, если они есть в данных, иначе ставка и прошлое решение
   K.cbrLine = () => {
     const c = M.cbr || {}, n = c.next || {}, last = (c.past || [])[0];
@@ -1131,7 +1143,7 @@
           : { top: 0, left: 0, data: names.concat(['итог бакета', 'кумулятив']) },
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: ps => { const k = ps[0].dataIndex; return '<b>' + M.buckets[k] + '</b><br>' + ps.map(p => p.marker + p.seriesName + ': <b>' + f.dv(p.value) + '</b>').join('<br>') + '<br><span style="opacity:.6">тыс ₽/бп · щелчок — вклад позиций</span>'; } },
         xAxis: { type: 'category', data: M.buckets },
-        yAxis: [{ type: 'value', unit: 'тыс ₽/бп', axisLabel: { formatter: v => f.dv(v) } }, { type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => f.dv(v), color: css('--warn') } }],
+        yAxis: [{ type: 'value', unit: 'тыс ₽/бп', axisLabel: { formatter: v => K.tick(v, 1e3) } }, { type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => K.tick(v, 1e3), color: css('--warn') } }],
         series: ids.map((id, i) => ({ name: id === 'CS01' ? 'CS01' : M.curve[id].short, type: 'bar', stack: id !== 'CS01' && M.curve[id].kind === 'rate' ? 'r' : 'x' + i, barMaxWidth: 38, data: cur.data[i], itemStyle: { color: K.curveColors[id] } }))
           .concat([{ name: 'итог бакета', type: 'scatter', symbol: 'diamond', symbolSize: 11, data: cur.tot, itemStyle: { color: css('--fg'), borderColor: css('--bg'), borderWidth: 1 }, z: 5, label: { show: opts.labels !== false, position: 'top', formatter: p => Math.abs(p.value) < 500 ? '' : f.dv(p.value), color: css('--fg-2'), fontSize: 10 } },
           { name: 'кумулятив', type: 'line', yAxisIndex: opts.cumSameAxis ? 0 : 1, smooth: false, data: cur.cum, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2, type: 'dashed', color: css('--warn') }, itemStyle: { color: css('--warn') }, z: 4 }]),
@@ -2361,7 +2373,7 @@
     const cids = M.curves.filter(c => p.risk[c.id].some(v => Math.abs(v) > 1)).map(c => c.id);
     const rc = K.chart(o.bd.querySelector('.rchart'), () => ({
       grid: { left: 6, right: 10, top: 26, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis', valueFormatter: v => f.dv(v) },
-      xAxis: { type: 'category', data: M.buckets }, yAxis: { type: 'value', unit: 'тыс ₽/бп', axisLabel: { formatter: v => f.dv(v) } },
+      xAxis: { type: 'category', data: M.buckets }, yAxis: { type: 'value', unit: 'тыс ₽/бп', axisLabel: { formatter: v => K.tick(v, 1e3) } },
       series: cids.map(id => ({ name: M.curve[id].short, type: 'bar', stack: 'a', data: p.risk[id], itemStyle: { color: K.curveColors[id] } })).concat(p.cs01 ? [{ name: 'CS01', type: 'bar', data: p.cs01b, itemStyle: { color: K.curveColors.CS01 } }] : []),
     }));
     o.charts.push(rc);
@@ -2659,7 +2671,7 @@
       const cols = vals.map(v => v >= 0 ? css('--pos') : css('--neg')).concat([css('--accent')]);
       const lo = Math.min(0, ...segs.map(x => Math.min(x[0], x[1]))), hi = Math.max(0, ...segs.map(x => Math.max(x[0], x[1])));
       return {
-        grid: { left: 6, right: 10, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'item', formatter: p => (keys[p.dataIndex] ? keys[p.dataIndex][1] : 'Итого') + ': <b>' + f.mns(p.dataIndex < vals.length ? vals[p.dataIndex] : run, 2) + '</b> mm ₽' },
+        grid: { left: 6, right: 10, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'item', formatter: p => (keys[p.dataIndex] ? keys[p.dataIndex][1] : 'Итого') + ': <b>' + K.wfTip(p.dataIndex < vals.length ? vals[p.dataIndex] : run) + '</b> mm ₽' },
         xAxis: { type: 'category', data: cats, axisLabel: { interval: 0, fontSize: 10, formatter: (v, i) => stag && i % 2 ? '\n' + v : v } }, yAxis: { type: 'value', unit: 'mm ₽', nameGap: 20, min: lo, max: hi, scale: false, axisLabel: { formatter: v => K.tick(v, 1e6), hideOverlap: true, showMinLabel: !lo, showMaxLabel: !hi } },
         series: [{
           type: 'custom', data: segs.map((s, i) => [i, s[0], s[1]]),
@@ -2669,7 +2681,7 @@
             const v = i < vals.length ? vals[i] : run;
             return { type: 'group', children: [
               { type: 'rect', shape: { x: a[0] - w / 2, y: y0, width: w, height: hh }, style: { fill: cols[i] } },
-              { type: 'text', style: { x: a[0], y: y0 - 4, text: f.mns(v, 1), fill: css('--fg-2'), fontSize: 11, align: 'center', verticalAlign: 'bottom' } }] };
+              { type: 'text', style: { x: a[0], y: y0 - 4, text: K.wfLabel(v, api.size([1, 0])[0] - 1, i === vals.length), fill: css('--fg-2'), fontSize: 11, align: 'center', verticalAlign: 'bottom' } }] };
           },
         }],
       };

@@ -26,10 +26,10 @@ function real(mutate) {
     loadRun(ctx);
     const D = ctx.window.CONCEPTS_RUN, b = D.positions.find(p => p.instrType === 'FX');
     D.CURVES['CNY FWD'] = { name: 'CNY implied (CETS)', ccy: 'CNY', kind: 'swap', pts: new Array(NB).fill(5.5) };
-    D.positions.push(Object.assign({}, b, { id: 'X1', name: 'USD/CNY fwd 3M', instrType: 'FX', ccy: 'USD', notional: 10e6, mvRub: 1e6, dv01: 0,
+    D.positions.push(Object.assign({}, b, { id: 'X1', name: 'USD/CNY fwd 3M', instrType: 'FX', ccy: 'USD', notional: 10e6, mvRub: 1e6,
       risk: { 'USD SOFR': at(0, -800), CNY: at(0, 790) }, fxDelta: { USD: 9.9e6, CNY: -70.5e6 },
       extra: { legs: [{ leg: 'single', value_date: '2027-01-21', buy_ccy: 'USD', buy_amount: 10e6, sell_ccy: 'CNY', sell_amount: 71.2e6, contract_rate: 7.12, fwd_rate: 7.16, settlement: 'deliverable' }] } }));
-    D.positions.push(Object.assign({}, b, { id: 'X2', name: 'CNY/RUB swap TOM/1M', instrType: 'FX', ccy: 'CNY', notional: -300e6, mvRub: 2e6, dv01: 0,
+    D.positions.push(Object.assign({}, b, { id: 'X2', name: 'CNY/RUB swap TOM/1M', instrType: 'FX', ccy: 'CNY', notional: -300e6, mvRub: 2e6,
       risk: { 'CNY FWD': at(0, 2300), 'RUB RUONIA': at(0, -2330) }, fxDelta: { CNY: 1.4e6 },
       extra: { legs: [{ leg: 'near', value_date: '2026-10-15', buy_ccy: 'CNY', buy_amount: 300e6, sell_ccy: 'RUB', sell_amount: 3426e6, contract_rate: 11.42 },
         { leg: 'far', value_date: '2026-11-14', buy_ccy: 'RUB', buy_amount: 3459e6, sell_ccy: 'CNY', sell_amount: 300e6, contract_rate: 11.53, fixing_date: null }] } }));

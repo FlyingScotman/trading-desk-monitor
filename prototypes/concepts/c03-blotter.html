@@ -326,7 +326,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     if (!cur) return { series: [] };
     const p = cur, ids = M.curves.filter(c => p.risk[c.id].some(v => Math.abs(v) > 1)).map(c => c.id);
     return { grid: { left: 4, right: 8, top: 22, bottom: 2, containLabel: true }, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis', valueFormatter: v => f.dv(v) },
-      xAxis: { type: 'category', data: M.buckets }, yAxis: { type: 'value', unit: 'тыс ₽/бп', axisLabel: { formatter: v => f.dv(v) } },
+      xAxis: { type: 'category', data: M.buckets }, yAxis: { type: 'value', unit: 'тыс ₽/бп', axisLabel: { formatter: v => K.tick(v, 1e3) } },
       series: ids.map(id => ({ name: M.curve[id].short, type: 'bar', stack: M.curve[id].kind === 'rate' ? 'a' : 'b' + id, data: p.risk[id], itemStyle: { color: K.curveColors[id] } }))
         .concat(p.cs01 ? [{ name: 'CS01', type: 'bar', data: p.cs01b, itemStyle: { color: K.curveColors.CS01 } }] : []) };
   });

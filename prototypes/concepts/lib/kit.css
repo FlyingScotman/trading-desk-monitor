@@ -71,16 +71,22 @@ td.n.k-accp::after { content: ')'; visibility: hidden; } .mut { color: var(--fg-
 .k-btn.pri { background: var(--accent-2); border-color: var(--accent-2); color: #fff; }
 .k-kbd { font: 11px var(--mono); padding: 0 5px; border: 1px solid var(--line-2); border-bottom-width: 2px; border-radius: 4px; color: var(--fg-2); }
 
-/* сегментированный переключатель */
-.k-seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 6px; overflow: hidden; background: var(--panel); }
-.k-seg button { border: 0; background: none; padding: 3px 9px; font-size: 12px; cursor: pointer; color: var(--fg-2); border-right: 1px solid var(--line); }
+/* сегментированный переключатель (#272). Подпись кнопки не переносится внутри неё, переключатель не сжимается: если
+   шапке панели не хватает места, он уходит на следующую строку шапки (C17 на 721–800 px). Где переключатель шире
+   своего места, а родитель переносится (узкий экран — ниже, полоса матрицы рисков: плитка C06 на 1024 px), кнопки
+   переносятся на вторую строку и все видны без прокрутки; отрицательные поля прячут правую и нижнюю границу крайних
+   кнопок строки под рамку переключателя. В шапке плитки C06 (не переносится) переключатель в одну строку */
+.k-seg { display: inline-flex; flex: none; border: 1px solid var(--line-2); border-radius: 6px; overflow: hidden; background: var(--panel); }
+.k-seg button { border: 0; background: none; padding: 3px 9px; font-size: 12px; cursor: pointer; color: var(--fg-2); border-right: 1px solid var(--line); white-space: nowrap; }
+.k-rm-bar .k-seg { max-width: 100%; flex-wrap: wrap; }
+.k-rm-bar .k-seg button { flex: 1 1 auto; border-bottom: 1px solid var(--line); margin: 0 -1px -1px 0; }
 .k-seg button:last-child { border-right: 0; }
 .k-seg button.on { background: var(--accent-bg); color: var(--fg); box-shadow: inset 0 -2px 0 var(--accent); }
 .k-seg button:hover:not(.on) { background: var(--hover); }
 
 /* ---------- панели ---------- */
 .k-panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; min-width: 0; display: flex; flex-direction: column; }
-.k-panel > .hd { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); min-height: 38px; }
+.k-panel > .hd { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); min-height: 38px; }
 .k-panel > .hd h3 { margin: 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-2); white-space: nowrap; }
 .k-panel > .hd .sp { flex: 1; }
 .k-panel > .bd { padding: 10px 12px; min-height: 0; flex: 1; }
@@ -246,14 +252,14 @@ table.mini + .k-tbl-ctlbar-m { position: static; background: transparent; }
   .k-top .brand .tag, .k-top span.asof:not(.k-chip), .k-top .k-fresh { display: none; }
   .k-page { padding: 10px 10px 30px; }
   .k-kpi .v { font-size: 19px; }
-  /* узкий экран (#263): шапка панели переносится, переключатель шире панели прокручивается внутри себя, подписи
-     переносятся — вбок прокручивается плитка или её таблица, а не вся страница */
+  /* узкий экран (#263): шапка панели переносится, подписи переносятся — вбок прокручивается плитка или её таблица,
+     а не вся страница; переключатель шире панели — в две строки (выше, #272) */
   .k-panel > .hd { flex-wrap: wrap; }
   .k-panel > .hd > * { min-width: 0; max-width: 100%; }
   .k-panel > .hd h3 { white-space: normal; }  /* длинный заголовок (C01 «Валюта × тип») */
   .k-panel > .hd .k-note { white-space: normal; }
-  .k-seg { max-width: 100%; overflow-x: auto; }
-  .k-seg button { flex: none; }
+  .k-seg { max-width: 100%; flex-wrap: wrap; }
+  .k-seg button { flex: 1 1 auto; border-bottom: 1px solid var(--line); margin: 0 -1px -1px 0; }
 }
 
 /* компактные таблицы рисков: по ширине содержимого, плотные строки */
