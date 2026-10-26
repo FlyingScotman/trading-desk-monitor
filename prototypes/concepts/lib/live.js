@@ -33,7 +33,8 @@
  *  Закреплённый прогон (?run_id= / ?as_of= или выбор, запомненный на 12 часов) никогда не переключается сам: только
  *  полоса «Показать последний». В этом браузере выбор можно переопределить: localStorage 'desk.live.reaction' =
  *  'banner' | 'switch'.
- *  Страницы с прогоном (K.source 'real' или 'empty') подписываются сами после загрузки; страница со своей
+ *  Страницы с прогоном (K.source 'real' или 'empty'; пустое состояние монитора без kit.js — window.CONCEPTS_SOURCE
+ *  'empty', #319) подписываются сами после загрузки; страница со своей
  *  обработкой ленты (C14) ставит DESK_LIVE.manual = true до DOMContentLoaded.
  *
  * Бейдж прогона в шапке (#192, kit.js): каждая подписка сообщает странице о ленте событием окна 'desk:live' —
@@ -289,11 +290,13 @@
       }
     });
   };
+  // источник — шапки kit.js, а без неё (пустое состояние монитора, #319: lib/real.js рисует полосу, kit.js не грузится) —
+  // window.CONCEPTS_SOURCE: вышел первый прогон — страница переходит на него
   function auto() {
-    const K = window.KIT, M = window.MOCK;
-    if (L.manual || !K || (K.source !== 'real' && K.source !== 'empty')) return;
+    const K = window.KIT, M = window.MOCK, src = K ? K.source : window.CONCEPTS_SOURCE;
+    if (L.manual || (src !== 'real' && src !== 'empty') || (!K && src !== 'empty')) return;
     const sel = window.CONCEPTS_SEL || {};
-    L.page = L.watchRuns({ source: K.source, runId: M && M.run && M.run.id, asOf: M && M.asOf, pinned: !!(sel.run_id || sel.as_of) });
+    L.page = L.watchRuns({ source: src, runId: src === 'real' && M && M.run && M.run.id, asOf: src === 'real' && M && M.asOf, pinned: !!(sel.run_id || sel.as_of) });
   }
 
   if (typeof window !== 'undefined') {

@@ -2,6 +2,8 @@
 // сервера подменяются.
 //  - #309: /concepts-run.js ответил 401, 500 или не дошёл (сеть) — монитор не показывает демо-цифры: вместо него полоса
 //    «данные не загрузились» (источник 'error') или переход на вход (401 при включённом входе); демо — только ?demo=1;
+//  - #319: прогона нет (CONCEPTS_RUN_EMPTY: no_runs, not_found) — тоже не демо: пустое состояние с причиной (источник
+//    'empty'); C14 и C15 прогон не нужен, они работают; Ctrl / Shift-щелчок по «Последний прогон» — новая вкладка;
 //  - #308: у прогона нет кривой RUONIA, у КС точек нет (старый прогон) — C06 и C12 не падают, вместо графика — «нет».
 //   node --test tests/js/load_errors.pw.test.js
 // Нужен Playwright (глобальный dev-машины или NODE_PATH, как у tools/smoke.js); без него тесты пропускаются — в CI они
@@ -54,10 +56,13 @@ async function open(browser, file, { run, data, auth, store, viewport, query = '
   await pg.waitForTimeout(400);
   return { pg, ctx, errors };
 }
+// ответ /concepts-run.js без прогона (api/concepts_run.py: empty_script)
+const EMPTY = (reason, message) => 'window.CONCEPTS_RUN_EMPTY = ' + JSON.stringify({ reason, message }) + ';';
 // что видно на странице: источник, есть ли демо-набор/кит, полоса ошибки и текст страницы
 const look = pg => pg.evaluate(() => ({
   source: window.CONCEPTS_SOURCE, mock: !!window.MOCK, kit: !!window.KIT,
   fail: (document.querySelector('.k-loadfail') || {}).textContent || null,
+  norun: (document.querySelector('.k-norun') || {}).textContent || null,
   text: document.body.innerText
 }));
 
@@ -169,9 +174,89 @@ test('#309 и #308 в браузере', { skip: pw ? false : 'нет Playwright
       r = await open(browser, 'c01-cockpit.html');
       let s = await look(r.pg);
       assert.strictEqual(s.source, 'real'); assert.strictEqual(s.fail, null); assert.ok(s.kit); await r.ctx.close();
-      r = await open(browser, 'c01-cockpit.html', { run: { status: 200, body: 'window.CONCEPTS_RUN_EMPTY = {"reason":"no_runs","message":"нет опубликованных прогонов"};' } });
+      r = await open(browser, 'c01-cockpit.html', { run: { status: 200, body: EMPTY('no_runs', 'нет опубликованных прогонов') } });
       s = await look(r.pg);
-      assert.strictEqual(s.source, 'empty'); assert.strictEqual(s.fail, null); await r.ctx.close();
+      assert.strictEqual(s.source, 'empty'); assert.strictEqual(s.fail, null); assert.ok(s.norun); assert.strictEqual(s.mock, false); await r.ctx.close();
+    });
+    // #319: прогона нет — пустое состояние, не демо-набор. Мониторы — полоса с причиной и выходами, без цифр; C14 и C15
+    // (data-run="optional") прогон не нужен — работают своими запросами, в шапке нет даты, бейджа и заметок демо-набора
+    const OPTIONAL = ['c14-day-status.html', 'c15-cash.html'];
+    const emptyCases = [
+      { name: 'no_runs', body: EMPTY('no_runs', 'нет опубликованных прогонов'), query: '', title: 'Прогонов ещё нет', latest: null, day: 'c14-day-status.html' },
+      { name: 'not_found по run_id', body: EMPTY('not_found', 'прогон 999999 не найден'), query: '?run_id=999999', title: 'Прогон #999999 не найден', latest: true, day: 'c14-day-status.html', allow: /999999/g },
+      { name: 'not_found по as_of', body: EMPTY('not_found', 'нет опубликованных прогонов на 2000-01-01'), query: '?as_of=2000-01-01', title: 'Прогона за 2000-01-01 нет', latest: true, day: 'c14-day-status.html?on=2000-01-01', allow: /2000-01-01/g }
+    ];
+    for (const c of emptyCases) {
+      await t.test('#319 ' + c.name + ': на всех C-страницах — пустое состояние без демо-цифр', async () => {
+        for (const file of PAGES) {
+          const { pg, ctx, errors } = await open(browser, file, { run: { status: 200, body: c.body }, query: c.query });
+          const s = await look(pg);
+          assert.strictEqual(s.source, 'empty', file);
+          assert.strictEqual(s.fail, null, file);
+          if (OPTIONAL.includes(file)) {  // экран без прогона: kit.js есть, шапка — без даты, бейджа и заметок демо-набора
+            assert.ok(s.kit, file);
+            assert.strictEqual(s.norun, null, file);
+            const top = await pg.evaluate(() => ({ src: document.querySelector('.k-top [data-a=src]').textContent, badge: !!document.querySelector('.k-top [data-a=runage]'), notes: !!document.querySelector('.k-top [data-a=notes]'), text: document.querySelector('.k-top').innerText }));
+            assert.ok(/^прогон(ов нет| не найден)/.test(top.src), file + ': ' + top.src);
+            assert.ok(!top.badge && !top.notes, file + ': бейдж / заметки демо-набора');
+            assert.ok(!/\d\d\.\d\d|поз\.|книги|ОФЗ:|в RUB/.test(top.text), file + ': дата, фильтры или курсы демо-набора в шапке: ' + top.text);
+            await pg.evaluate(() => KIT.palette()); await pg.fill('.k-pal input', 'о');  // поиск: только экраны, без бумаг демо-набора
+            const kinds = await pg.$$eval('.k-pal .res .k', l => [...new Set(l.map(x => x.textContent))]);
+            assert.deepStrictEqual(kinds, ['экран'], file + ': поиск — ' + kinds);
+          } else {
+            assert.ok(s.norun && s.norun.includes(c.title), file + ': полоса — ' + s.norun);
+            assert.strictEqual(s.mock, false, file + ': демо-набор не загружен');
+            assert.strictEqual(s.kit, false, file + ': монитор не рисуется');
+            const rest = c.allow ? s.text.replace(c.allow, '') : s.text;
+            assert.ok(!/\d/.test(rest), file + ': на странице нет цифр: ' + s.text);
+            const href = a => pg.evaluate(a => { const e = document.querySelector('.k-norun [data-a=' + a + ']'); return e ? e.getAttribute('href') : null; }, a);
+            assert.strictEqual(await href('demo'), '/concepts/' + file + '?demo=1', file);
+            assert.strictEqual(await href('index'), 'index.html', file);
+            assert.strictEqual(await href('day'), c.day, file);
+            assert.strictEqual(await href('latest'), c.latest ? '/concepts/' + file : null, file);
+            assert.ok(await pg.evaluate(() => !!(window.DESK_LIVE && DESK_LIVE.page)), file + ': ждёт первого прогона (lib/live.js)');
+          }
+          assert.deepStrictEqual(errors, [], file);
+          await ctx.close();
+        }
+      });
+    }
+    await t.test('#319: not_found — «Последний прогон» снимает выбор и открывает последний; пустое состояние — в теме и на 390 px', async () => {
+      const saved = JSON.stringify({ sel: { run_id: '999999' }, at: Date.now() });
+      const run = u => u.searchParams.get('run_id') === '999999' ? { status: 200, body: EMPTY('not_found', 'прогон 999999 не найден') } : null;
+      const { pg, ctx } = await open(browser, 'c03-blotter.html#x', { run, store: { 'desk.run.v1': saved, 'concepts-theme': 'light' }, viewport: { width: 390, height: 800 } });
+      assert.ok((await look(pg)).norun.includes('Прогон #999999 не найден'));
+      assert.strictEqual(await pg.evaluate(() => document.documentElement.getAttribute('data-theme')), 'light');
+      const r = await pg.evaluate(() => { const b = document.querySelector('.k-norun').getBoundingClientRect(); return [b.left, innerWidth - b.right, document.documentElement.scrollWidth, innerWidth]; });
+      assert.ok(r[0] >= 16 && r[1] >= 16, 'поля ' + r);
+      assert.strictEqual(r[2], r[3], 'без прокрутки вбок');
+      await Promise.all([pg.waitForEvent('load'), pg.click('.k-norun [data-a=latest]')]);
+      await pg.waitForTimeout(300);
+      const s = await look(pg);
+      assert.strictEqual(s.source, 'real'); assert.strictEqual(s.norun, null);
+      assert.strictEqual(await pg.evaluate(() => localStorage.getItem('desk.run.v1')), null);
+      await ctx.close();
+    });
+    await t.test('#319: Ctrl / Shift-щелчок по «Последний прогон» — новая вкладка, эта не перезагружается', async () => {
+      const saved = JSON.stringify({ sel: { run_id: '7' }, at: Date.now() });
+      const cases = [[{ status: 500, body: '' }, '.k-loadfail'], [{ status: 200, body: EMPTY('not_found', 'прогон 7 не найден') }, '.k-norun']];
+      for (const [spec, sel] of cases) {
+        for (const mod of ['Control', 'Shift']) {
+          const run = u => u.searchParams.get('run_id') === '7' ? spec : null;  // прогон #7 не отдаётся, последний — да
+          const { pg, ctx } = await open(browser, 'c01-cockpit.html', { run, query: '?run_id=7', store: { 'desk.run.v1': saved } });
+          await pg.waitForLoadState('load'); await pg.evaluate(() => { window.__stay = 1; });
+          const opened = ctx.waitForEvent('page', { timeout: 20000 });
+          await pg.click(sel + ' [data-a=latest]', { modifiers: [mod] });
+          const np = await opened;
+          await np.waitForLoadState();
+          await pg.waitForTimeout(300);
+          assert.strictEqual(await pg.evaluate(() => window.__stay), 1, sel + ' ' + mod + ': вкладка не перезагрузилась');
+          assert.ok(/run_id=7/.test(pg.url()), sel + ' ' + mod + ': адрес вкладки тот же');
+          assert.ok(!/run_id/.test(np.url()), sel + ' ' + mod + ': новая вкладка — последний прогон: ' + np.url());
+          assert.strictEqual(await pg.evaluate(() => localStorage.getItem('desk.run.v1')), null, 'выбор снят и для новой вкладки');
+          await ctx.close();
+        }
+      }
     });
     await t.test('#308: прогон без кривой RUONIA и без точек КС — C05, C06, C09, C12 не падают, «вчера» без выдуманных точек', async () => {
       const D = JSON.parse(RUN);

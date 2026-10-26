@@ -524,7 +524,11 @@
     const s = K.source, L = runLabel();
     const html = L.market ? 'позиции <b>' + esc(L.date) + '</b> · рынок <b>' + esc(L.market) + '</b> · ' + esc(L.type) : '<b>' + esc(L.date) + '</b> · ' + esc(L.type);
     if (s === 'real') return '<span class="k-chip asof" data-a="src" title="Прогон из базы: ' + esc(M.cut.label) + (M.run.pnlBasis ? '; ' + esc(M.run.pnlBasis) : '') + '. Щелчок — выбрать другой">' + html + ' · #' + esc(M.run && M.run.id) + ' ▾</span>';
-    const t = s === 'empty' ? 'прогонов нет — тестовые данные' : s === 'demo' ? 'тестовые данные' : 'демо (файл)';
+    // прогона нет (#319): шапка страницы, которой прогон не нужен (C14, C15, lib/real.js) — без даты и бейджа демо-набора
+    const E = window.CONCEPTS_RUN_EMPTY || {};
+    if (s === 'empty') return '<span class="k-chip" data-a="src" style="border-color:var(--warn);color:var(--warn)" title="' + esc('Сервер: ' + (E.message || 'прогона нет') + '. Экран работает без прогона. Щелчок — выбрать прогон') + '">' +
+      (E.reason === 'not_found' ? 'прогон не найден' : 'прогонов нет') + ' ▾</span>';
+    const t = s === 'demo' ? 'тестовые данные' : 'демо (файл)';
     return '<span class="k-chip" data-a="src" style="border-color:var(--warn);color:var(--warn)" title="Вымышленный набор lib/mock.js">' + t + (s === 'file' ? '' : ' ▾') + '</span>' +
       '<span class="asof">' + html + '</span>';
   }
@@ -923,7 +927,7 @@
       (opt.extra || '') +
       '<span class="k-chip" data-a="ofzview" title="Как показан риск ОФЗ: «RUONIA + базис» — риск к котировкам OIS RUONIA и риск к базису КБД − RUONIA, два разных риска ядра (с 0.2.7); «КБД» — ОФЗ на своей кривой (par-риск КБД = базис)">ОФЗ: ' + K.OFZ_VIEWS[M.ofzView || 'basis'] + ' ▾</span>' +
       '<span class="k-chip" data-a="repr" title="' + esc('Валюта отчёта.\n' + K.REPR_NOTE.map(x => x[0][0].toUpperCase() + x[0].slice(1) + ': ' + x[1] + '.').join('\n')) + '">в ' + K.repr + ' ' + K.SYM[K.repr] + ' ▾</span>' +
-      srcChip() + runBadgeChip() + (M.notes && M.notes.length ? '<span class="k-chip" data-a="notes" title="Чего нет в данных прогона" style="border-color:var(--warn)">ⓘ ' + M.notes.length + '</span>' : '') +
+      srcChip() + (K.source === 'empty' ? '' : runBadgeChip()) + (K.source !== 'empty' && M.notes && M.notes.length ?'<span class="k-chip" data-a="notes" title="Чего нет в данных прогона" style="border-color:var(--warn)">ⓘ ' + M.notes.length + '</span>' : '') +
       '<button class="k-btn" data-a="search">Поиск <span class="k-kbd">Ctrl K</span></button>' +
       '<button class="k-btn" data-a="numfmt"></button>' +
       '<button class="k-btn" data-a="view" title="Вид: формат отрицательных чисел, когда прогон считается устаревшим" aria-haspopup="dialog">⚙</button>' +
@@ -947,6 +951,8 @@
     const rc = bar.querySelector('[data-a=repr]');
     rc.onclick = e => { e.stopPropagation(); const m = menu(rc, K.REPRS.map(c => ({ v: c, t: 'в ' + c + ' ' + K.SYM[c], sub: c === 'RUB' ? '' : 'курс ' + f.n(M.fx[c], 2) })), K.repr, v => { if (v !== K.repr) K.setRepr(v); });
       if (m) { const n = h('div', 'k-repr-note'); n.innerHTML = K.REPR_NOTE.map(x => '<div><b>' + esc(x[0]) + ':</b> ' + esc(x[1]) + '</div>').join(''); m.appendChild(n); } };
+    // прогона нет (#319, C14 / C15): фильтры книг, вид ОФЗ и валюта отчёта — по демо-набору (книги, курсы), не показываются
+    if (K.source === 'empty') ['.filters', '[data-a=ofzview]', '[data-a=repr]'].forEach(s => { bar.querySelector(s).style.display = 'none'; });
     return bar;
   };
 
@@ -2535,6 +2541,7 @@
       const m = s => words.every(w => s.includes(w));
       items = [];
       cmds.forEach(c => { if (!q || m(c.label.toLowerCase())) items.push({ k: 'экран', t: c.label, r: c.hint || '', run: c.run }); });
+      if (K.source === 'empty') { items = items.slice(0, 60); sel = 0; return paint(); }  // прогона нет (#319): только экраны, не демо-набор
       M.issuers.forEach(i => { const L = M.positions.filter(p => p.issuer === i.id); if (L.length && q && m((i.name + ' ' + i.short + ' ' + i.sector).toLowerCase())) items.push({ k: 'эмитент', t: i.name, r: L.length + ' поз · DV01 ' + f.dv(M.sum(L, 'dv01')), run: () => K.drill({ title: 'Эмитент ' + i.short, unit: 'mm ₽ MV', fmt: v => f.mn(v, 1), list: L, val: p => p.group === 'DER' ? p.notionalRub : p.mv }) }); });
       M.books.forEach(b => { if (q && m((b.id + ' ' + b.name + ' ' + b.desk).toLowerCase())) items.push({ k: 'книга', t: b.name + ' · ' + b.id, r: 'фильтр шапки', run: () => K.setFilter({ books: [b.id] }) }); });
       M.positions.forEach(p => { if (q && m(p.searchText)) items.push({ k: 'позиция', t: p.name, r: p.ccy + ' · ' + p.book + ' · DV01 ' + f.dv(p.dv01), run: () => K.card(p.id) }); });
