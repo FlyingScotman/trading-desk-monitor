@@ -36,6 +36,9 @@
  *  Страницы с прогоном (K.source 'real' или 'empty') подписываются сами после загрузки; страница со своей
  *  обработкой ленты (C14) ставит DESK_LIVE.manual = true до DOMContentLoaded.
  *
+ * Бейдж прогона в шапке (#192, kit.js): каждая подписка сообщает странице о ленте событием окна 'desk:live' —
+ * detail { kind: 'events', list } (новые события ленты, все типы, что пришли) и { kind: 'mode', mode }.
+ *
  * Чистые функции для тестов (tests/js/live_updates.test.js): newRun, target, decide, reaction, want, react.
  */
 (function () {
@@ -100,6 +103,13 @@
     return switched != null && String(switched) === String(e.run_id) ? 'banner' : 'switch';
   };
 
+  // событие окна для остальных частей страницы (бейдж прогона в шапке, #192)
+  L.emit = function (detail) {
+    try {
+      if (typeof window !== 'undefined' && window.dispatchEvent && typeof CustomEvent === 'function') window.dispatchEvent(new CustomEvent('desk:live', { detail }));
+    } catch (e) { }
+  };
+
   // ---------- подписка ----------
   L.subscribe = function (opt) {
     const base = opt.base == null ? '../' : opt.base, pollMs = opt.pollMs || 30e3, types = opt.types || '';
@@ -116,6 +126,7 @@
       if (m === mode) return;
       mode = m;
       if (lead && ch && !quiet) ch.postMessage({ kind: 'mode', mode: m });
+      L.emit({ kind: 'mode', mode: m });
       if (opt.onMode) opt.onMode(m);
     }
     // events — все события ленты (лидер и рассылка) или уже отобранные сервером (опрос без лидера): курсор идёт по
@@ -124,6 +135,7 @@
       const fresh = list.filter(e => cursor == null || e.id > cursor);
       if (!fresh.length) return;
       cursor = fresh[fresh.length - 1].id;
+      L.emit({ kind: 'events', list: fresh });
       if (lead && ch && !fromLeader) ch.postMessage({ kind: 'events', list: fresh });
       const mine = fresh.filter(e => L.want(e, types));
       if (mine.length) try { opt.onEvents(mine); } catch (err) { console.error(err); }

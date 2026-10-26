@@ -42,6 +42,11 @@ td.n.k-accp::after { content: ')'; visibility: hidden; } .mut { color: var(--fg-
 .k-top .asof b { color: var(--fg); font-weight: 600; }
 .k-top .k-fresh { color: var(--fg-3); font-size: 12px; white-space: nowrap; }
 .k-top .k-warnchip { border-color: var(--warn); color: var(--warn); text-decoration: none; white-space: normal; }
+/* бейдж прогона (#192): возраст публикации · что вошло; подсветка — устарел / есть новее */
+.k-top .k-runage .cv { color: var(--fg-3); border-left: 1px solid var(--line-2); padding-left: 6px; }
+.k-top .k-runage.stale { border-color: var(--warn); color: var(--warn); }
+.k-top .k-runage.newer { border-color: var(--accent); background: var(--accent-bg); }
+.k-top .k-runage.unknown { color: var(--fg-3); }
 .k-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--line-2); border-radius: 999px; background: var(--panel); cursor: pointer; font-size: 12px; white-space: nowrap; user-select: none; }
 .k-chip:hover { border-color: var(--accent); }
 .k-chip.on { background: var(--accent-bg); border-color: var(--accent); color: var(--fg); }
@@ -210,6 +215,7 @@ table.mini + .k-tbl-ctlbar-m { position: static; background: transparent; }
   .k-top { padding: 6px 10px; }
   .k-top .brand { white-space: normal; flex-wrap: wrap; }
   .k-top .brand .tag, .k-top span.asof:not(.k-chip), .k-top .k-fresh { display: none; }
+  .k-top .k-runage .cv { display: none; }
   .k-page { padding: 10px 10px 30px; }
   .k-kpi .v { font-size: 19px; }
 }
