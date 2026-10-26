@@ -208,13 +208,16 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const isOfz = mode === 'OFZ';
         const today = isOfz ? M.ofzCurve : M.curve[mode].pts;
         const chg = isOfz ? M.curve['RUB RUONIA'].chg.map((v, i) => v + K.basisCurve().chg[i]) : M.curve[mode].chg;
-        const yest = today.map((v, i) => v - chg[i] / 100);
+        // #308: у прогона может не быть кривой (старый прогон: нет RUONIA, у КС — только риск по дюрации) или части её точек —
+        // точки null; кривой нет совсем — словами, без графика (B1: не посчитано — не 0); нет точки — разрыв на графике
+        if (!today || today.every(v => v == null)) { K.noData(el, 'кривой ' + (isOfz ? 'ОФЗ (КБД)' : M.curve[mode].short) + ' нет в этом прогоне'); return; }
+        const yest = today.map((v, i) => v == null ? null : v - chg[i] / 100);
         const riskId = isOfz ? 'RUB OFZ' : mode;
         const c = small(el, () => ({ grid: { left: 4, right: 4, top: 22, bottom: 2, containLabel: true }, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis' },
           xAxis: { type: 'category', data: M.buckets }, yAxis: [{ type: 'value', scale: true, axisLabel: { formatter: v => f.pct(v, 1) } }, { type: 'value', splitLine: { show: false }, axisLabel: { formatter: v => f.n(v) + ' бп' } }],
           series: [{ name: 'изм., б.п.', type: 'bar', yAxisIndex: 1, data: chg, itemStyle: { color: css('--fg-3'), opacity: .45 }, barMaxWidth: 18 },
-            { name: 'вчера', type: 'line', data: yest.map(v => +v.toFixed(3)), showSymbol: false, lineStyle: { type: 'dashed', width: 1.2 }, color: css('--fg-3'), tooltip: { valueFormatter: v => f.pct(v) } },
-            { name: 'сегодня', type: 'line', data: today.map(v => +v.toFixed(3)), symbolSize: 5, color: K.curveColors[riskId] || css('--accent'), tooltip: { valueFormatter: v => f.pct(v) } }] }));
+            { name: 'вчера', type: 'line', data: yest.map(v => v == null ? null : +v.toFixed(3)), showSymbol: false, lineStyle: { type: 'dashed', width: 1.2 }, color: css('--fg-3'), tooltip: { valueFormatter: v => f.pct(v) } },
+            { name: 'сегодня', type: 'line', data: today.map(v => v == null ? null : +v.toFixed(3)), symbolSize: 5, color: K.curveColors[riskId] || css('--accent'), tooltip: { valueFormatter: v => f.pct(v) } }] }));
         c.on('click', pp => { const k = pp.dataIndex; K.drill({ title: 'Риск ' + (isOfz ? 'базис ОФЗ' : M.curve[mode].short) + ' · ' + M.buckets[k] + ' (изм. ' + chg[k] + ' бп)', unit: 'тыс ₽/бп', rows: K.list().map(p => ({ p, v: p.risk[riskId][k] })) }); });
       },
     },
