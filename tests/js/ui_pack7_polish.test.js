@@ -53,10 +53,22 @@ t('#329: K.barEnd — подпись отрицательного столбца
     return (Math.min(...vals) - lo) / (Math.max(hi, 0) - Math.min(lo, 0)) * area;
   };
   const lab = t => K.labelWidth(t, 10) + 7;
-  [[300, [-17.7, 18.9, 11.5]], [180, [-0.22, 0.23, 0.14]], [600, [-2645, -147]]].forEach(([W, vals]) => {
+  [[300, [-17.7, 18.9, 11.5]], [240, [-0.22, 0.23, 0.14]], [600, [-2645, -147]]].forEach(([W, vals]) => {
     const fmt = v => '(' + Math.abs(v) + ')', r = room(W, 200, vals, false, fmt);
     assert.ok(r >= lab(fmt(Math.min(...vals))), W + ' px: под «' + fmt(Math.min(...vals)) + '» ' + r.toFixed(1) + ' px');
   });
+  // узкий график (C06 при окне 1024, ~50 px под столбцы): под подписи — не больше K.BAR_FIT_MAX области, ось не
+  // раздувается; подписи, которым места нет, не рисуются (значение — в подсказке), остальные — как были
+  {
+    const vals = [-17.7, -16.2, 18.9, 2, -0.5], fmt = v => '(' + Math.abs(v) + ')';
+    const { gap, o } = fit(150, 200, vals, false, fmt), span = 18.9 + 17.7;
+    const axis = span * (1 + parseFloat(gap[0]) / 100 + parseFloat(gap[1]) / 100);
+    assert.ok(K.BAR_FIT_MAX === 0.4 && axis <= span / (1 - K.BAR_FIT_MAX) * 1.001, 'ось ' + axis.toFixed(1) + ' при данных ' + span.toFixed(1));
+    const shown = o.series[0].data.map(d => d.label.show !== false);
+    assert.ok(shown.includes(false) && shown.includes(true), JSON.stringify(shown));
+    o.series[0].data.forEach((d, i) => assert.strictEqual(d.value, vals[i]));  // значения на месте
+    assert.ok(shown[2] && !shown[0], 'длинный положительный подписан в поле grid, длинный отрицательный — нет');
+  }
   assert.ok(room(400, 200, [-4657, -359, -9, -16], true) >= 10 * 1.3 + 7, 'вертикальный бар: подпись снизу помещается');
   assert.strictEqual(JSON.stringify(fit(0, 0, [3, -1], false).gap), JSON.stringify(['25%', 0]), 'график скрыт — как раньше');
   const c06 = P('c06-launchpad.html'), c13 = P('c13-issuers.html'), kit = P('lib/kit.js');

@@ -1,12 +1,13 @@
 // Мониторы в браузере (Playwright, #329). Подпись столбца бара — у его конца (K.barEnd), и под неё есть место
 // (barFit у K.chart: отступ оси по ширине подписи, K.labelWidth): C06 «Топ вклад в PnL дня», «Концентрация по
 // эмитентам» (MV, CS01, DV01) и «Кэрри и фондирование по книгам», C13 «по секторам» и «по рейтингам» (вертикальный
-// бар) по всем мерам (MV, CS01, DV01, PnL дня) и разбор K.drill в виде «график» — при ширине окна 1280, 1600 и 390, в
-// RUB и USD, в тёмной и светлой теме. Геометрия — по элементам ECharts: прямоугольник столбца, его подпись и область
+// бар) по всем мерам (MV, CS01, DV01, PnL дня) и разбор K.drill в виде «график» — при ширине окна 1024, 1280, 1600 и
+// 390, в RUB и USD, в тёмной и светлой теме. Геометрия — по элементам ECharts: прямоугольник столбца, его подпись и область
 // столбцов (grid) после отрисовки. У отрицательного горизонтального столбца подпись целиком левее его левого края и не
 // заходит левее области столбцов (там подписи категорий); у положительного — правее правого края. У вертикального
 // бара: у отрицательного — ниже нижнего края и не ниже области столбцов, у положительного — выше верхнего. Подпись не
-// уходит за край графика. CSV C03: «Δ цены, % ном.» — число без «+» и без единицы (#110, #131) в любом формате
+// уходит за край графика. Ось не раздута ради подписей: размах оси не больше AXIS_MAX размахов данных (с нулём), а
+// столбцы занимают не меньше BARS_MIN области (в узкой плитке подпись, которой нет места, не рисуется). CSV C03: «Δ цены, % ном.» — число без «+» и без единицы (#110, #131) в любом формате
 // отрицательных. Ошибок консоли нет. Страницы открываются как файлы (file://), данные — демо-набор.
 //   node --test tests/js/ui_pack7_polish.pw.test.js
 // Снимки: UI_PACK7_POLISH_SHOTS=<папка> node --test tests/js/ui_pack7_polish.pw.test.js
@@ -45,6 +46,32 @@ const bars = (pg, root) => pg.evaluate(sel => {
   });
   return out;
 }, root);
+// графики с барами внутри root: размах оси значений и данных (с нулём), длина области столбцов и самих столбцов, px
+const axes = (pg, root) => pg.evaluate(sel => {
+  const out = [];
+  document.querySelectorAll(sel + '[_echarts_instance_], ' + sel + ' [_echarts_instance_]').forEach(el => {
+    const inst = echarts.getInstanceByDom(el), opt = inst && inst.getOption();
+    if (!opt || !el.clientWidth || !(opt.series || []).some(s => s.type === 'bar')) return;
+    const horiz = !!(opt.yAxis || [])[0] && opt.yAxis[0].type === 'category';
+    const ax = inst.getModel().getComponent(horiz ? 'xAxis' : 'yAxis').axis, ext = ax.scale.getExtent();
+    const gr = inst.getModel().getComponent('grid').coordinateSystem.getRect();
+    let lo = 0, hi = 0;
+    (opt.series || []).forEach((s, si) => {
+      if (s.type !== 'bar') return;
+      const data = inst.getModel().getSeriesByIndex(si).getData();
+      for (let i = 0; i < data.count(); i++) { const v = data.get(data.mapDimension(horiz ? 'x' : 'y'), i); if (isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } }
+    });
+    const len = horiz ? gr.width : gr.height, px = v => Math.abs(ax.dataToCoord(v) - ax.dataToCoord(0));
+    out.push({ el: el.id || el.parentElement.id || el.className, axis: ext[1] - ext[0], data: hi - lo, len, bars: px(lo) + px(hi) });
+  });
+  return out;
+}, root);
+const AXIS_MAX = 2.5, BARS_MIN = 0.35;
+const notBloated = (L, what) => L.filter(x => x.data > 0).forEach(x => {
+  const s = what + ' ' + x.el + ' ' + JSON.stringify(x);
+  assert.ok(x.axis <= x.data * AXIS_MAX, s + ': ось не раздута');
+  assert.ok(x.bars >= x.len * BARS_MIN, s + ': столбцам хватает места');
+});
 const E = 0.5;  // допуск, px
 const atEnd = (L, what, opt) => {
   opt = opt || {};
@@ -65,7 +92,7 @@ const atEnd = (L, what, opt) => {
   });
 };
 const settle = pg => pg.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 400)))));
-const SIZES = [[1280, 800], [1600, 1000], [390, 844]];
+const SIZES = [[1024, 768], [1280, 800], [1600, 1000], [390, 844]];
 
 for (const [w, h] of SIZES) for (const theme of ['dark', 'light']) for (const repr of ['RUB', 'USD']) {
   test('#329: подписи столбцов у конца и с местом — C06, C13, разбор; ' + w + ' px, ' + repr + ', тема ' + theme, { skip: !pw && 'нет Playwright' }, async () => {
@@ -90,8 +117,9 @@ for (const [w, h] of SIZES) for (const theme of ['dark', 'light']) for (const re
       for (const mode of ['mv', 'cs01', 'dv01']) {
         await open('c06-launchpad.html', () => window.KIT && document.querySelector('[_echarts_instance_]'), { 'c06-modes': JSON.stringify({ issuers: mode }) });
         const c06 = await bars(pg, 'body');
-        atEnd(c06, 'C06 (' + mode + ')', { neg: true });
-        assert.ok(c06.some(x => x.v < 0 && /^\(|^−|^-/.test(x.text)), 'C06: отрицательный вклад подписан');
+        atEnd(c06, 'C06 (' + mode + ')', { neg: w !== 1024 });  // в 1024 подписи, которым нет места, не рисуются
+        if (w !== 1024) assert.ok(c06.some(x => x.v < 0 && /^\(|^−|^-/.test(x.text)), 'C06: отрицательный вклад подписан');
+        notBloated(await axes(pg, 'body'), 'C06 (' + mode + ')');
         if (mode === 'mv') await shot('c06');
       }
 
@@ -100,6 +128,8 @@ for (const [w, h] of SIZES) for (const theme of ['dark', 'light']) for (const re
         await open('c13-issuers.html', () => window.KIT && document.querySelector('#sector[_echarts_instance_]') && document.querySelector('#rating[_echarts_instance_]'), { c13: JSON.stringify({ meas }) });
         atEnd(await bars(pg, '#sector'), 'C13 сектора, ' + meas, { vert: false, neg: meas !== 'mv' });
         atEnd(await bars(pg, '#rating'), 'C13 рейтинги, ' + meas, { vert: true });
+        notBloated(await axes(pg, '#sector'), 'C13 сектора, ' + meas);
+        notBloated(await axes(pg, '#rating'), 'C13 рейтинги, ' + meas);
         if (meas === 'dv01') await shot('c13');
       }
 
@@ -116,6 +146,7 @@ for (const [w, h] of SIZES) for (const theme of ['dark', 'light']) for (const re
       await pg.waitForFunction(() => document.querySelector('.k-drawer [_echarts_instance_]'));
       await settle(pg);
       atEnd(await bars(pg, '.k-drawer'), 'разбор', { vert: false, neg: true });
+      notBloated(await axes(pg, '.k-drawer'), 'разбор');
       await shot('drill');
       assert.deepStrictEqual(errors, []);
     } finally {

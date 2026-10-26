@@ -374,8 +374,11 @@
   // категорий). Подпись отрицательного столбца (K.barEnd) стоит за нулём — слева или снизу, где подписи категорий,
   // поэтому ось расширяется в эту сторону на ширину подписи; подпись положительного — в поле grid (right / top), ось
   // расширяется, только если она шире поля. Запас 30 % — на округление оси ECharts (конец оси уходит до деления, и
-  // пикселей на единицу становится меньше). Размер графика 0 (скрыт) — четверть размаха под отрицательные, как раньше.
-  // K.chart пересчитывает отступ при изменении размера графика
+  // пикселей на единицу становится меньше). Под подписи — не больше K.BAR_FIT_MAX (40 %) области: столбцы остаются
+  // читаемыми и в узкой плитке (C06 при окне 1024). Подпись, которой при этом места не хватило, не рисуется (label
+  // show: false у элемента) — значение остаётся в подсказке. Размер графика 0 (скрыт) — четверть размаха под
+  // отрицательные, как раньше. K.chart пересчитывает отступ при изменении размера графика
+  K.BAR_FIT_MAX = 0.4;
   K.barFit = (el, o) => {
     const one = a => (Array.isArray(a) ? (a.length === 1 ? a[0] : null) : a);
     const xa = one(o.xAxis), ya = one(o.yAxis);
@@ -386,19 +389,20 @@
     const catPx = (cat.axisLabel && cat.axisLabel.fontSize) || 12;
     const catW = Math.max(0, ...(cat.data || []).map(s => K.labelWidth(String(s && typeof s === 'object' ? s.value : s), catPx)));
     const room = vert ? n(el.clientHeight) - n(g.top) - n(g.bottom) - catPx * 1.3 - 8 : n(el.clientWidth) - n(g.left) - n(g.right) - catW - 8;
-    const need = [0, 0], vals = [];
+    const need = [0, 0], vals = [], items = [], pad = n(vert ? g.top : g.right);
     (o.series || []).forEach(s => {
       if (s.type !== 'bar') return;
       const lab = s.label || {}, px = lab.fontSize || 12;
-      (s.data || []).forEach(d => {
+      (s.data || []).forEach((d, i) => {
         const v = d != null && typeof d === 'object' ? d.value : d;
         if (v == null || !isFinite(v)) return;
         vals.push(+v);
-        if (!lab.show) return;
+        if (!lab.show || (d && d.label && d.label.show === false)) return;
         const t = K.htmlText(typeof lab.formatter === 'function' ? lab.formatter({ value: v, data: d }) : v);
         if (!t) return;
         const size = (vert ? px * 1.3 : K.labelWidth(t, px)) + 7;  // подпись и её отступ от столбца (5 px)
-        if (v < 0) need[0] = Math.max(need[0], size); else need[1] = Math.max(need[1], size - n(vert ? g.top : g.right));
+        items.push({ s, i, v: +v, size });
+        if (v < 0) need[0] = Math.max(need[0], size); else need[1] = Math.max(need[1], size - pad);
       });
     });
     if (!vals.length || !(need[0] > 0 || need[1] > 0)) return o;
@@ -406,9 +410,16 @@
     if (!(room > 40) || !(span > 0) || !(hi > lo)) { if (need[0] > 0) val.boundaryGap = ['25%', 0]; return o; }
     // доли области под подписи (с запасом), из них — запас по краям оси в единицах ряда и доля размаха данных
     let f = need.map(x => Math.max(0, x) * 1.3 / room);
-    const tot = f[0] + f[1]; if (tot > 0.8) f = f.map(x => x * 0.8 / tot);
-    const axis = (hi - lo) / (1 - f[0] - f[1]);
+    const tot = f[0] + f[1]; if (tot > K.BAR_FIT_MAX) f = f.map(x => x * K.BAR_FIT_MAX / tot);
+    const axis = (hi - lo) / (1 - f[0] - f[1]), a0 = lo - f[0] * axis, a1 = hi + f[1] * axis;
     val.boundaryGap = f.map(x => (x * axis / span * 100).toFixed(2) + '%');
+    // подпись, которой не хватило места до края оси (до округления ECharts: оно место только добавляет), — без подписи
+    items.forEach(({ s, i, v, size }) => {
+      const free = (v < 0 ? v - a0 : a1 - v) / axis * room + (v < 0 ? 0 : pad);
+      if (free >= size) return;
+      const d = s.data[i];
+      s.data[i] = d != null && typeof d === 'object' ? Object.assign({}, d, { label: Object.assign({}, d.label, { show: false }) }) : { value: d, label: { show: false } };
+    });
     return o;
   };
 
