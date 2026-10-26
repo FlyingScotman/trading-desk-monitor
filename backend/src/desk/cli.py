@@ -38,7 +38,7 @@ Defaults for the snapshot folder, the run store and the report folder come from
 earlier set, from ``desk inbox scan`` or ``desk load-positions``; ``--book FILE`` loads the file for the date
 first, an identical file adds nothing; each book's source and age is printed),
 attaches the day-over-day flash PnL when the folder has a snapshot of an earlier date (``--no-pnl``
-turns it off) and publishes the run into the store; ``--tdm`` also into the tdm SQLite store.
+turns it off) and publishes the run into the store.
 ``--books A,B`` values only those books, as a TEST run (never the default run of the date). A load
 covers the books of its file (``load-positions --books``: these); a covered book without rows is closed.
     desk demo-book --snapshots .devdata/snapshots --date 2026-10-15 --out examples/demo_book.csv
@@ -73,7 +73,7 @@ from .marketdata.bundle import SnapshotDir, SnapshotError, previous_market
 from .marketdata.hub import HubClient, HubError, hub_check
 from .orchestrator import EodContext, attach_pnl, prepare, value
 from .pnl import direct as direct_pnl
-from .publish import desk_run, tdm_run
+from .publish import desk_run
 from .publish import summary as run_summary
 from .report import validation
 from .settings import Settings, SettingsError, adapter_config_dir, load, mask_url
@@ -162,7 +162,7 @@ def cmd_eod(a: argparse.Namespace) -> int:
         _print_synced(cache.sync(client, Path(a.snapshots), dates, a.cut))
         _print_newest_static(client, Path(a.snapshots))
     eod_run(a.settings, a.date, snapshots=a.snapshots, book=a.book, books=a.books, run_type=run_type,
-            report_dir=a.report_dir, tdm=a.tdm, db=a.db, no_gamma=a.no_gamma, no_pnl=a.no_pnl)
+            report_dir=a.report_dir, no_gamma=a.no_gamma, no_pnl=a.no_pnl)
     return 0
 
 
@@ -196,8 +196,8 @@ def pnl_basis(ctx: EodContext, prev: tuple[str, str] | None) -> dict[str, Any]:
 
 def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, store_url: str | None = None,
             book: str | None = None, books: list[str] | None = None, run_type: str = "EOD",
-            report_dir: str | Path | None = None, tdm: bool = False, db: str | Path | None = None,
-            no_gamma: bool = False, no_pnl: bool = False, out: Callable[[str], None] = print,
+            report_dir: str | Path | None = None, no_gamma: bool = False, no_pnl: bool = False,
+            out: Callable[[str], None] = print,
             cut_type: str = "eod_final", market_snapshot_id: str | None = None,
             contexts: ContextCache | None = None, read_model: bool = True,
             on_close: tuple[str, str] | None = None) -> int | None:
@@ -336,9 +336,6 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             run_summary.ensure(con, [run_id])
         except psycopg.Error as e:  # the pages build it on first read
             out(f"WARN run summary not written: {type(e).__name__}: {e}")
-    if tdm:
-        tdm_id, status, warnings = tdm_run.publish(db or settings.db, ctx, positions, prev=prev, inputs=inputs)
-        out(f"tdm run {tdm_id}: {status}, {len(warnings)} warnings")
     out(f"done in {time.perf_counter() - t0:.1f} s")
     return run_id
 
@@ -1056,8 +1053,6 @@ def main(argv: list[str] | None = None) -> int:
                    "store for the date first; the load covers the file's books only, other books are kept")
     e.add_argument("--books", type=_list, help="value only these books (A,B): a TEST run")
     e.add_argument("--run-type", choices=("EOD", "TEST"), help="default EOD, TEST with --books")
-    e.add_argument("--tdm", action="store_true", help="also publish into the tdm SQLite store (DESK_DB)")
-    e.add_argument("--db", default=str(settings.db), help="tdm SQLite store (default: DESK_DB)")
     e.add_argument("--report-dir", default=settings.report_dir and str(settings.report_dir),
                    help="write the validation report of the whole universe here (default: DESK_REPORT_DIR)")
     e.add_argument("--no-gamma", action="store_true", help="skip the Hessian")

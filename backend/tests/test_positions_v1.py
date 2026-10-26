@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 from psycopg.rows import dict_row
 from rub_fixed_income import RISK_BUCKETS
+from run_checks import consistency, content
 
 from desk import store
 from desk.api import create_app
@@ -202,7 +203,7 @@ def test_subfederal_segment_is_published(ctx):
     assert (row["segment"], row["asset_class"]) == ("Суб", "Субфедеральные")
 
 
-def test_publish_api_and_compat(ctx, store_url, tmp_path):
+def test_publish_api_and_compat(ctx, store_url):
     rows = [("L1", "OFZ", "SU26238RMFS4", 10.0), ("B1", "CORP", None, None), ("B2", "CORP", None, 10.0),
             ("B3", "CORP", None, None), ("B4", "CORP", None, None), ("FX1", "TSY", None, None),
             ("FX2", "CORP", None, None), ("FX3", "CORP", None, None), ("O1", "CORP", None, None),
@@ -224,7 +225,7 @@ def test_publish_api_and_compat(ctx, store_url, tmp_path):
     with store.connect(store_url) as con:
         rid, status, warnings = desk_run.publish(con, ctx, positions, prev=None, inputs=inp)
     assert status == "complete" and any("B4" in w and "unmapped_instrument" in w for w in warnings)
-    tdm_run.publish(str(tmp_path / "tdm.db"), ctx, positions, prev=None, inputs=inp)  # the tdm path takes them too
+    assert consistency(content(ctx, positions, inputs=inp)) == []  # the run content hangs together
 
     c = TestClient(create_app(store_url))
     got = {p["position_id"]: p for p in c.get(f"/api/v1/runs/{rid}/positions").json()["positions"]}
@@ -308,7 +309,7 @@ def test_book_with_only_unvalued_positions_is_in_the_reference(ctx, store_url):
     assert [p["id"] for p in desk["positions"] if p["book"] == "DERONLY" and p.get("notValued")] == ["O1"]
 
 
-def test_books_from_the_store_and_risk_fields_round_trip(ctx, store_url, tmp_path):
+def test_books_from_the_store_and_risk_fields_round_trip(ctx, store_url):
     """The run's book reference is the store's book_rev (name, desk, entity, book_type), not the demo BOOKS; the
     demo books keep theirs. The new v1 fields survive the store (position_input) into the valuation."""
     d = date.fromisoformat(DATE)
@@ -353,9 +354,6 @@ def test_books_from_the_store_and_risk_fields_round_trip(ctx, store_url, tmp_pat
     assert (nv["name"], nv["ccy"], nv["maturity"], nv["segment"], nv["assetClass"]) == (
         "IRS 8", "USD", "2029-03-01", "Деривативы", "OTC-деривативы")
     assert nv["extra"]["reported"]["x"] == {"x_notional": "1000000", "x_kind": "IRS"} and nv["extra"]["reported"]["src"] == "L3"
-    # the legacy tdm store has no OTC type: the row is left out there with a WARN, nothing fails
-    _, st, warns = tdm_run.publish(str(tmp_path / "tdm.db"), ctx, positions, prev=None, inputs=inp)
-    assert st == "complete" and any("DER1|IRS-7" in w for w in warns)
 
 
 def test_book_rows_fallbacks():
