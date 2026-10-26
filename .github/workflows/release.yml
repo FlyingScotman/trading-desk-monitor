@@ -46,7 +46,7 @@ jobs:
         working-directory: backend
         run: |
           uv venv -p 3.12 .venv
-          uv pip install -p .venv -e ".[dev]" -e ..
+          uv pip install -p .venv -e ".[dev]"
       - name: The tag names the backend version
         run: backend/.venv/bin/python backend/tools/release_assets.py check-tag --tag "$TAG"
       - name: Lint and tests

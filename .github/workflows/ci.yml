@@ -20,11 +20,11 @@ jobs:
         with:
           node-version: 22
       - uses: astral-sh/setup-uv@v5
-      - name: Python 3.12 venv with the backend, the tdm package and dev tools
+      - name: Python 3.12 venv with the backend and dev tools
         working-directory: backend
         run: |
           uv venv -p 3.12 .venv
-          uv pip install -p .venv -e ".[dev]" -e ..
+          uv pip install -p .venv -e ".[dev]"
       - name: Lint
         run: backend/.venv/bin/ruff check backend
       - name: Backend tests (embedded PostgreSQL)

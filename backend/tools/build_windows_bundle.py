@@ -11,7 +11,7 @@ Needs uv, git, network to PyPI and GitHub, and a Python with pip (``python3.11 -
                   checked against the release's ``SHA256SUMS`` and cached (``--cache``); debug symbols and
                   Tk dropped. ``--no-python`` leaves it out: the .bat files then need ``py -3.11``
 * ``wheelhouse/`` win_amd64 / cp311 wheels with the exact pins of ``backend/uv.lock`` plus pgserver (the
-                  embedded store), wheels of desk-backend, trading-desk-monitor and rub-fixed-income-core (the
+                  embedded store), wheels of desk-backend and rub-fixed-income-core (the
                   commit pinned in ``[tool.uv.sources]``), ``requirements.txt``; proved complete for Windows by
                   an offline ``pip install --dry-run --platform win_amd64`` before zipping
 * ``app/``        ``deskctl.py`` (the launcher the .bat files call), ``prototypes/``, ``frontend/dist/``,
@@ -82,7 +82,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 # what the bundle needs from the repository; the rest (tests, docs, tools) stays at home
-INCLUDE = ("pyproject.toml", "tdm/", "backend/pyproject.toml", "backend/uv.lock", "backend/src/",
+INCLUDE = ("backend/pyproject.toml", "backend/uv.lock", "backend/src/",
            "backend/examples/test_book.csv", "backend/windows/", "prototypes/", "frontend/dist/",
            "docs/INSTALL_BACKEND_WINDOWS.md")
 BATS = ("start.bat", "stop.bat", "update_daily.bat", "desk.bat")
@@ -102,8 +102,7 @@ ADAPTER_DIR = "adapter/"
 ZIP_MIN_EPOCH = 315532800  # zip dates start in 1980
 # our pure-Python wheels: the paths whose last commit gives SOURCE_DATE_EPOCH (the wheel stays byte-identical
 # from release to release while they do not change)
-OURS = {"trading_desk_monitor": ("pyproject.toml", "tdm/"),
-        "desk_backend": ("backend/pyproject.toml", "backend/README.md", "backend/src/")}
+OURS = {"desk_backend": ("backend/pyproject.toml", "backend/README.md", "backend/src/")}
 _VERSION_KEY = re.compile(r"(\d+(?:\.\d+)*)-(\d{8})-[0-9a-f]{7,40}(?:-dirty(\d{12}))?")
 
 
@@ -716,21 +715,19 @@ def main() -> int:
         run(sys.executable, "-m", "pip", "download", "--no-deps", "--only-binary=:all:", *WIN,
             "-r", str(tmp / "win.txt"), "-d", str(wh), env=env)
 
-        # 2. our wheels, pure Python, reproducible: the root package, the backend, core at the pinned commit
+        # 2. our wheels, pure Python, reproducible: the backend, core at the pinned commit
         core_dir = tmp / "core"
-        builds = [(src, last_change(OURS["trading_desk_monitor"], epoch)),
-                  (src / "backend", last_change(OURS["desk_backend"], epoch)),
+        builds = [(src / "backend", last_change(OURS["desk_backend"], epoch)),
                   (core_dir, git_source(core_src["git"], core_src["rev"], core_dir))]
         built = [(d, e, build_wheel(d, wh, e, env)) for d, e in builds]
         if not a.no_repro_check:
             check_reproducible(built, env)
         ours = {p.name.split("-")[0]: p.name for p in wh.glob("*-py3-none-any.whl")}
-        for dist in ("desk_backend", "trading_desk_monitor", "rub_fixed_income_core"):
+        for dist in ("desk_backend", "rub_fixed_income_core"):
             assert dist in ours, f"{dist}: no pure-Python wheel built ({sorted(ours)})"
         core_whl = ours["rub_fixed_income_core"]
         assert core_whl.split("-")[1] == core_pin.split("==")[1], f"core wheel {core_whl} is not {core_pin}"
-        local = [f"desk-backend=={project['project']['version']}",
-                 f"trading-desk-monitor=={ours['trading_desk_monitor'].split('-')[1]}", core_pin]
+        local = [f"desk-backend=={project['project']['version']}", core_pin]
         (wh / "requirements.txt").write_text("\n".join(third + local) + "\n")
         n_req = len(third) + len(local)
         n_whl = len(list(wh.glob("*.whl")))
