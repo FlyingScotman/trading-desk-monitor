@@ -220,9 +220,35 @@ def test_position_flows_the_whole_schedule_beyond_the_calendars_horizon(desk, st
     assert len(j["flows"]) > len(stored)
     assert desk.get("/api/v1/positions/flows?id=nope").status_code == 404  # no such position
     # #288: no hub static is an answer, not an error — 200, no flows and why (the card says it in words)
-    monkeypatch.setattr(static_facts, "static_for", lambda *_a: None)
-    r = desk.get("/api/v1/positions/flows?id=P4")
-    assert r.status_code == 200 and r.json() == {"flows": [], "reason": "no_static"}
+    def why() -> str:
+        r = desk.get("/api/v1/positions/flows?id=P4")
+        assert r.status_code == 200 and r.json()["flows"] == []
+        return r.json()["reason"]
+
+    with monkeypatch.context() as m:
+        m.setattr(static_facts, "static_for", lambda *_a: None)
+        assert why() == "no_static"
+    with monkeypatch.context() as m:
+        m.setattr(static_facts, "schedule", lambda *_a: None)
+        assert why() == "no_schedule"
+
+    class Row:  # the run's rows are frozen: the position row as the query returns it
+        def __init__(self, row):
+            self.row = row
+
+        def execute(self, *_a):
+            return self
+
+        def fetchone(self):
+            return self.row
+
+    run = {"run_id": 1, "business_date": date.fromisoformat(DATE)}
+    pos = {"valued": True, "secid": RZD, "q": 4.0, "offer": None, "offer_kind": None}
+    assert concepts.position_flows(Row(None), run, "x", tmp_path) is None  # no such position: 404
+    assert concepts.position_flows(Row(dict(pos, valued=False, secid=None, q=None)), run, "x", tmp_path) == \
+        {"flows": [], "reason": "not_valued"}
+    assert concepts.position_flows(Row(dict(pos, secid=None)), run, "x", tmp_path) == {"flows": [], "reason": "not_bond"}
+    assert concepts.position_flows(Row(dict(pos, q=None)), run, "x", tmp_path) == {"flows": [], "reason": "not_bond"}
 
 
 def test_a_currency_curve_is_its_own_and_its_rate_published(desk, store_url):

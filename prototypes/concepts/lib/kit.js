@@ -296,6 +296,12 @@
     const pts = arr.map((v, i) => (i / (arr.length - 1) * w).toFixed(1) + ',' + (hgt - (v - mn) / r * (hgt - 2) - 1).toFixed(1)).join(' ');
     return '<svg class="spark" width="' + w + '" height="' + hgt + '"><polyline fill="none" stroke="' + (color || css('--accent')) + '" stroke-width="1.3" points="' + pts + '"/></svg>';
   };
+  // изменение ряда за окно спарклайна (последние n точек): последняя непустая точка минус первая непустая; меньше двух
+  // непустых точек — null, а не цена и не ложный ноль (#277: дни без оценки, позиция моложе окна)
+  K.sparkChange = (arr, n) => {
+    const a = (arr || []).slice(-n).filter(x => x != null && isFinite(x));
+    return a.length < 2 ? null : a[a.length - 1] - a[0];
+  };
 
   // ---------- тема ----------
   K.theme = () => document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
@@ -1710,7 +1716,8 @@
     opts = opts || {};
     const tx = c => c ? K.htmlText(c.innerHTML) : '';
     const hd = rowsOf(table.tHead), hr = hd.length ? hd[hd.length - 1] : null;
-    const skip = tr => tr.hidden || (tr.dataset && tr.dataset.csvSkip) || (tr.style && tr.style.display === 'none') || (tr.cells.length === 1 && /(^|\s)k-empty(\s|$)/.test(tr.cells[0].className || ''));
+    // скрытая строка с data-csv-keep — на экране её нет, в CSV есть (позиции свёрнутой группы блоттера C03, #277)
+    const skip = tr => (!(tr.dataset && tr.dataset.csvKeep) && (tr.hidden || (tr.style && tr.style.display === 'none'))) || (tr.dataset && tr.dataset.csvSkip) || (tr.cells.length === 1 && /(^|\s)k-empty(\s|$)/.test(tr.cells[0].className || ''));
     const body = [...table.tBodies].reduce((a, b) => a.concat(rowsOf(b)), []).concat(rowsOf(table.tFoot)).filter(tr => !skip(tr)).map(cellsOf);
     // подписи CSV у заголовка с data-csv="a|b": по одной на колонку экрана; лишние (больше, чем colspan) — колонки
     // CSV сразу за последней колонкой заголовка (#258: «Номинал, mm в вал.|Вал» — число и валюта по отдельности)
@@ -2482,18 +2489,19 @@
     if (M.posFlows) M.posFlows(p.id).then(x => {
       if (!el.isConnected || el.dataset.pos !== p.id) return;
       x = x || {};
-      el.innerHTML = x.flows ? K.flowsTable(p, x.flows) : K.flowsTable(p, own(), false, x.error || x.reason || null);
+      el.innerHTML = x.flows ? K.flowsTable(p, x.flows) : K.flowsTable(p, own(), false, x.error ? { error: x.error } : x.reason || null);
       K.cardTableTools(el, p);
     });
     el.dataset.pos = p.id;
   };
-  // why — почему нет всего графика выпуска (показаны потоки прогона или их тоже нет)
+  // why — почему нет всего графика выпуска (показаны потоки прогона или их тоже нет): текст причины или {error} — сбой
   K.flowsTable = function (p, cf, loading, why) {
+    const err = why && why.error;
     const offer = p.offer || p.yieldDate || null;
     const KIND = { cpn: 'купон', amort: 'амортизация', mat: 'погашение', put: 'пут-оферта', call: 'колл' };
-    if (!cf.length) return '<div class="k-empty">' + (loading ? 'загрузка потоков…' : 'потоков нет' + (why ? ': ' + esc(why) : '')) + '</div>';
+    if (!cf.length) return '<div class="k-empty">' + (loading ? 'загрузка потоков…' : err ? 'потоки не загружены: ' + esc(err) : 'потоков нет' + (why ? ': ' + esc(why) : '')) + '</div>';
     const sum = cf.reduce((s, c) => s + (c.kind === 'put' || c.kind === 'call' || c.amountRub == null ? 0 : c.amountRub), 0);
-    return (why ? '<div class="mut" style="font-size:11px;margin-bottom:4px">Весь график выпуска недоступен: ' + esc(why) + '. Показаны потоки прогона.</div>' : '') +
+    return (why ? '<div class="mut" style="font-size:11px;margin-bottom:4px">' + (err ? 'Весь график выпуска не загружен: ' + esc(err) : 'Весь график выпуска недоступен: ' + esc(why)) + '. Показаны потоки прогона.</div>' : '') +
       '<div class="mut3" style="font-size:11px;margin-bottom:4px">' + (loading ? 'загрузка всех потоков… · ' : '') + cf.length + ' потоков до ' + f.date(cf[cf.length - 1].date) +
       (offer ? ' · после оферты ' + f.date(offer) + ' — бледнее' : '') + ' · оферта — номинал к предъявлению, в сумму не входит</div>' +
       '<div style="max-height:360px;overflow:auto"><table class="k-tbl k-cflows"><thead><tr><th>Дата</th><th>Тип</th><th class="n">Сумма, ' + p.ccy + '</th><th class="n">≈ mm ₽</th></tr></thead><tbody>' +

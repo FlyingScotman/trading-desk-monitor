@@ -25,7 +25,7 @@ function el(tag) {
 function table(spec) {
   const Tb = el('table');
   const cell = (tag, c) => { const x = el(tag); if (typeof c === 'string') x.innerHTML = c; else { x.innerHTML = c.h || ''; x.className = c.cls || ''; x.colSpan = c.span || 1; if (c.csv != null) x.dataset.csv = c.csv; if (c.csvN) x.dataset.csvN = ''; } if (!x.colSpan) x.colSpan = 1; return x; };
-  const row = (tag, cells, o) => { const r = el('tr'); r.cells = cells.map(c => cell(tag, c)); r.cells.forEach(c => r.appendChild(c)); if (o) Object.assign(r.dataset, o.dataset || {}); return r; };
+  const row = (tag, cells, o) => { const r = el('tr'); r.cells = cells.map(c => cell(tag, c)); r.cells.forEach(c => r.appendChild(c)); if (o) { Object.assign(r.dataset, o.dataset || {}); if (o.hidden) r.hidden = true; } return r; };
   const sec = rows => rows ? { rows } : null;
   Tb.tHead = sec(spec.head.map(h => row('th', h)));
   Tb.tBodies = [sec(spec.body.map(b => Array.isArray(b) ? row('td', b) : row('td', b.cells, b.tr)))];
@@ -85,7 +85,7 @@ t('#276: ручная таблица C03 — «Спред» и «Вид спре
 
 t('#276: C14 и C15 перерисовываются при смене «(1) / −1», как C16 (#262); не поверх сообщения об ошибке', () => {
   for (const f of ['c14-day-status.html', 'c15-cash.html']) {
-    assert.ok(P('concepts/' + f).includes("K.on('numfmt', () => { if (doc && view.querySelector('.k-grid')) render(); });"), f);
+    assert.ok(P('concepts/' + f).includes("K.on('numfmt', () => { if (doc && (!on || doc.date === on) && view.querySelector('.k-grid')) render(); });"), f);
   }
   assert.ok(P('concepts/c16-ocp.html').includes("K.on('numfmt', () => { if (last) render(last); });"));
 });
@@ -112,6 +112,36 @@ t('#277: CSV C03 — строки групп не выгружаются, «Це
   assert.ok(c03.includes("(c.csvNum ? ' data-csv-n' : '')"), 'data-csv-n у ячейки');
 });
 
+t('#277: «Δ цены за 30д» — по окну спарклайна, первая и последняя непустые точки; меньше двух — null', () => {
+  const { K } = load();
+  const a = Array.from({ length: 40 }, (_, i) => 100 + i);  // окно — последние 30: 110…139
+  assert.strictEqual(K.sparkChange(a, 30), 29);
+  const g = a.slice(); g[10] = null; g[39] = null; g[38] = null;  // пустые на краях окна — берутся ближайшие непустые
+  assert.strictEqual(K.sparkChange(g, 30), 137 - 111);
+  const young = Array(30).fill(null).concat([98.4]);  // позиция моложе окна: одна точка — не «Δ = цене»
+  assert.strictEqual(K.sparkChange(young, 30), null);
+  assert.strictEqual(K.sparkChange(Array(31).fill(null), 30), null, 'пустой ряд — не ложный ноль');
+  assert.strictEqual(K.sparkChange([], 30), null);
+  assert.strictEqual(K.sparkChange(null, 30), null);
+  assert.strictEqual(K.sparkChange([null, 99, null, 98.5], 30), -0.5);
+  const c03 = P('concepts/c03-blotter.html');
+  assert.ok(c03.includes("val: r => r.price == null ? null : K.sparkChange(H(r.id).price, 30)") && c03.includes("fmt: (v, r) => v == null ? '<span class=\"mut3\">—</span>' : K.spark(H(r.id).price.slice(-30)"), 'C03: то же окно, что у спарклайна');
+});
+
+t('#277: CSV C03 — позиции свёрнутых групп идут в CSV (скрытые строки data-csv-keep)', () => {
+  const { K } = load();
+  // «Свернуть всё»: на экране только строки групп; позиции — скрытыми строками только для CSV
+  const hid = c => ({ cells: c, tr: { hidden: true, dataset: { csvKeep: '1' } } });
+  const grp = l => ({ cells: [{ h: '' }, { h: '▸' + l + ' 2', span: 2 }], tr: { dataset: { csvSkip: '1' } } });
+  const Tb = table({ head: [['', 'Бумага', { h: 'Спред', cls: 'n' }]],
+    body: [grp('RUB'), hid([{ h: '' }, 'А', { h: '(27)', cls: 'n' }]), hid([{ h: '' }, 'Б', { h: '139', cls: 'n' }]), grp('USD'), hid([{ h: '' }, 'В', { h: '5', cls: 'n' }]),
+      { cells: [{ h: '' }, 'скрытая без метки', { h: '1', cls: 'n' }], tr: { hidden: true } }] });
+  same(rowsCsv(K.tableCsv(Tb, {})), ['Бумага,Спред', 'А,-27', 'Б,139', 'В,5']);
+  const c03 = P('concepts/c03-blotter.html');
+  assert.ok(c03.includes(`if (hide) return '<tr class="csvrow" hidden data-csv-keep="1"><td class="stripe"></td>' + cells + '</tr>';`), 'скрытая строка позиции');
+  assert.ok(c03.includes('emit(sub, level + 1, p, t, col);') && c03.includes("if (hide) return emit(sub, level + 1, p, '', true);"), 'свёрнутая группа выгружает позиции, без вложенных строк групп');
+});
+
 t('#288: потоки карточки — графика выпуска нет: потоки прогона и причина, а без них «потоков нет: причина»', async () => {
   const { M, K } = load();
   const p = { id: 'PX', isin: 'RU000TEST001', name: 'Тест', ccy: 'RUB' };
@@ -119,8 +149,10 @@ t('#288: потоки карточки — графика выпуска нет:
   assert.strictEqual(K.flowsTable(p, [], false), '<div class="k-empty">потоков нет</div>');
   assert.strictEqual(K.flowsTable(p, [], true), '<div class="k-empty">загрузка потоков…</div>');
   const own = [{ date: '2027-03-15', pos: 'PX', kind: 'cpn', amount: 1000, amountRub: 1e6 }];
-  const h = K.flowsTable(p, own, false, 'график выпуска не загружен: 500');
-  assert.ok(h.startsWith('<div class="mut" style="font-size:11px;margin-bottom:4px">Весь график выпуска недоступен: график выпуска не загружен: 500. Показаны потоки прогона.</div>') && h.includes('k-cflows'));
+  const h = K.flowsTable(p, own, false, { error: 'ошибка сервера 500' });
+  assert.ok(h.startsWith('<div class="mut" style="font-size:11px;margin-bottom:4px">Весь график выпуска не загружен: ошибка сервера 500. Показаны потоки прогона.</div>') && h.includes('k-cflows'));
+  assert.strictEqual(K.flowsTable(p, [], false, { error: 'ошибка сервера 500' }), '<div class="k-empty">потоки не загружены: ошибка сервера 500</div>');
+  assert.ok(K.flowsTable(p, own, false, 'не облигация').includes('Весь график выпуска недоступен: не облигация. Показаны потоки прогона.'));
   // K.flows: ответ M.posFlows {flows, reason, error}
   const run = async (ans, cfs) => {
     M.cashflows = cfs; M.posFlows = () => Promise.resolve(ans);
@@ -129,13 +161,17 @@ t('#288: потоки карточки — графика выпуска нет:
   };
   const saved = [M.cashflows, M.posFlows];
   assert.strictEqual(await run({ flows: null, reason: 'не облигация' }, []), '<div class="k-empty">потоков нет: не облигация</div>');
-  assert.ok((await run({ flows: null, error: 'график выпуска не загружен: 502' }, own)).includes('Весь график выпуска недоступен: график выпуска не загружен: 502.'));
+  assert.ok((await run({ flows: null, error: 'ошибка сервера 502' }, own)).includes('Весь график выпуска не загружен: ошибка сервера 502.'));
+  assert.strictEqual(await run({ flows: null, error: 'нет связи с сервером' }, []), '<div class="k-empty">потоки не загружены: нет связи с сервером</div>');
   const full = await run({ flows: own.concat([{ date: '2028-03-15', pos: 'PX', kind: 'mat', amount: 1e5, amountRub: 1e8 }]) }, own);
   assert.ok(full.includes('2 потоков') && !full.includes('недоступен'));
   [M.cashflows, M.posFlows] = saved;
   // real.js: 404 — «нет данных», а не сбой; код причины сервера — словами
   const real = P('concepts/lib/real.js');
-  assert.ok(real.includes("if (r.status === 404) return { flows: null, reason:") && real.includes("if (!r.ok) return { flows: null, error:"));
+  assert.ok(real.includes("if (r.status === 404) return { flows: null, reason: 'сервер не нашёл позицию или её график выпуска' };"));
+  assert.ok(real.includes("if (!r.ok) { delete flowCache[id]; return { flows: null, error:") && real.includes("}).catch(e => { delete flowCache[id];"), 'сбой не запоминается');
+  // вид спреда флоатера без DM ядра — Z (в значении Z), с DM ядра — DM
+  assert.ok(real.includes("p.spreadLabel = p.zspread == null ? '' : flt && p.dmSource === 'core' ? 'DM' : 'Z';"));
   assert.ok(/no_static: 'нет статики хаба за дату прогона'/.test(real) && real.includes('FLOW_REASON[j && j.reason]'));
 });
 
