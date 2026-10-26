@@ -418,23 +418,29 @@ def position_flows(con, run: dict[str, Any], pid: str, snapshots: Path) -> dict[
     """A bond position's whole schedule after the run's date (``static_facts.schedule`` of the static snapshot the read
     model shows for the run, × the position's bonds): coupons, amortizations, maturity, and the put offers and calls
     on the face outstanding then, in the face currency, signed by the side. The position card shows it; the stored
-    ``extra.cashflows`` stop at 18 months and at the offer the bond is priced to. None: not a bond, or the static
-    or its bundle is missing (the card then shows the stored flows)."""
-    row = con.execute("SELECT fact->>'instrument_id' AS secid, (fact->'extra'->>'quantity_bonds')::float8 AS q,"
+    ``extra.cashflows`` stop at 18 months and at the offer the bond is priced to. None: no such position in the run.
+    No schedule is an answer, not an error (#288): empty ``flows`` and a ``reason`` — ``not_valued``, ``not_bond``,
+    ``no_static`` (the static or its bundle is missing) or ``no_schedule``; the card then shows the stored flows."""
+    row = con.execute("SELECT fact IS NOT NULL AS valued, fact->>'instrument_id' AS secid,"
+                      " (fact->'extra'->>'quantity_bonds')::float8 AS q,"
                       " fact->'extra'->>'offer_date' AS offer, fact->'extra'->>'offer_kind' AS offer_kind"
-                      " FROM run_position WHERE run_id = %s AND position_id = %s AND fact IS NOT NULL",
+                      " FROM run_position WHERE run_id = %s AND position_id = %s",
                       (run["run_id"], pid)).fetchone()
-    if row is None or not row["secid"] or row["q"] is None:
+    if row is None:
         return None
+    if not row["valued"]:
+        return {"flows": [], "reason": "not_valued"}
+    if not row["secid"] or row["q"] is None:
+        return {"flows": [], "reason": "not_bond"}
     st = static_facts.static_for(con, run["business_date"])
     if st is None:
-        return None
+        return {"flows": [], "reason": "no_static"}
     path = Path(snapshots) / f"{st['snapshot_id']}.json.gz"
     if not path.is_file() and st["snapshot_id"] not in static_facts._SCHEDULES:
-        return None
+        return {"flows": [], "reason": "no_static"}
     sch = static_facts.schedule(st["snapshot_id"], lambda: read_bundle(path), row["secid"], run["business_date"])
     if sch is None:
-        return None
+        return {"flows": [], "reason": "no_schedule"}
     q = row["q"]
     return {"staticDate": st["business_date"].isoformat(), "ccy": sch["ccy"], "maturity": sch["maturity"],
             "offer": row["offer"], "offerKind": row["offer_kind"],

@@ -296,6 +296,12 @@
     const pts = arr.map((v, i) => (i / (arr.length - 1) * w).toFixed(1) + ',' + (hgt - (v - mn) / r * (hgt - 2) - 1).toFixed(1)).join(' ');
     return '<svg class="spark" width="' + w + '" height="' + hgt + '"><polyline fill="none" stroke="' + (color || css('--accent')) + '" stroke-width="1.3" points="' + pts + '"/></svg>';
   };
+  // изменение ряда за окно спарклайна (последние n точек): последняя непустая точка минус первая непустая; меньше двух
+  // непустых точек — null, а не цена и не ложный ноль (#277: дни без оценки, позиция моложе окна)
+  K.sparkChange = (arr, n) => {
+    const a = (arr || []).slice(-n).filter(x => x != null && isFinite(x));
+    return a.length < 2 ? null : a[a.length - 1] - a[0];
+  };
 
   // ---------- тема ----------
   K.theme = () => document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
@@ -1446,6 +1452,8 @@
   //        groupable:[уровни] — группировка по желанию (переключатель «плоская / валюта → эмитент»); по умолчанию таблица плоская (R37),
   //        колонка: date:true — колонка-дата (в CSV дата из ISO-значения, без подписей экрана),
   //        csvFmt(v, r) — значение для CSV, если экранное fmt добавляет значки и метки (иначе — fmt),
+  //        csvExtra: [подписи] — колонки только для CSV сразу за этой (на экране и в раскладке их нет, #276):
+  //        csvFmt тогда отдаёт массив [значение колонки, значения дополнительных] («-27 Z» → -27 и Z),
   //        sumNeutral — итог без цвета знака (расхождение, а не прибыль/убыток), footCount(rows) — подпись числа строк «Итого»
   //        (например «7 из 9», когда итоги считаются не по всем строкам),
   //        viewKey — стабильный ключ раскладки латиницей, он же основа имени CSV (без него — страница + id, K.tableKey), title — название в CSV, fileName — основа имени файла CSV (латиницей)}
@@ -1636,9 +1644,14 @@
     function csv() {
       const C = cols().filter(c => K.htmlText(c.label)), q = K.csvLabel;  // без подписи — оформление (полоска доли)
       // «₽» в подписи — валюта отчёта: в разметке символ подменяет MutationObserver, в CSV — K.u (#105)
-      const head = C.map(c => { const l = K.htmlText(c.label), u = K.colUnit(c); return q(K.u(u ? l + ', ' + u : l)); });
-      // числа — с обычным минусом при любой настройке формата отрицательных (#153)
-      const line = r => C.map(c => { const v = val(c, r), t = K.htmlText(K.withNegFmt('minus', () => c.csvFmt ? c.csvFmt(v, r) : c.fmt ? c.fmt(v, r) : v)); return c.date ? K.csvDateCell(v, t, c.num) : K.csvCell(t, c.num, v); }).join(',');
+      const head = [].concat(...C.map(c => { const l = K.htmlText(c.label), u = K.colUnit(c); return [q(K.u(u ? l + ', ' + u : l))].concat((c.csvExtra || []).map(x => q(K.u(x)))); }));
+      // числа — с обычным минусом при любой настройке формата отрицательных (#153); значения колонок csvExtra —
+      // числом, если это число, иначе текстом (как дополнительные колонки ручных таблиц, K.tableCsv)
+      const line = r => [].concat(...C.map(c => {
+        const v = val(c, r), x = K.withNegFmt('minus', () => c.csvFmt ? c.csvFmt(v, r) : c.fmt ? c.fmt(v, r) : v);
+        const parts = Array.isArray(x) ? x : [x], t = K.htmlText(parts[0]);
+        return [c.date ? K.csvDateCell(v, t, c.num) : K.csvCell(t, c.num, v)].concat((c.csvExtra || []).map((_, j) => K.csvCell(K.htmlText(parts[j + 1] == null ? '' : parts[j + 1]), true)));
+      })).join(',');
       return K.csvBuild(K.u(K.csvTitle(opts)), head, shown.map(line));
     }
     const csvName = () => K.csvFileName(el, opts);
@@ -1703,7 +1716,8 @@
     opts = opts || {};
     const tx = c => c ? K.htmlText(c.innerHTML) : '';
     const hd = rowsOf(table.tHead), hr = hd.length ? hd[hd.length - 1] : null;
-    const skip = tr => tr.hidden || (tr.dataset && tr.dataset.csvSkip) || (tr.style && tr.style.display === 'none') || (tr.cells.length === 1 && /(^|\s)k-empty(\s|$)/.test(tr.cells[0].className || ''));
+    // скрытая строка с data-csv-keep — на экране её нет, в CSV есть (позиции свёрнутой группы блоттера C03, #277)
+    const skip = tr => (!(tr.dataset && tr.dataset.csvKeep) && (tr.hidden || (tr.style && tr.style.display === 'none'))) || (tr.dataset && tr.dataset.csvSkip) || (tr.cells.length === 1 && /(^|\s)k-empty(\s|$)/.test(tr.cells[0].className || ''));
     const body = [...table.tBodies].reduce((a, b) => a.concat(rowsOf(b)), []).concat(rowsOf(table.tFoot)).filter(tr => !skip(tr)).map(cellsOf);
     // подписи CSV у заголовка с data-csv="a|b": по одной на колонку экрана; лишние (больше, чем colspan) — колонки
     // CSV сразу за последней колонкой заголовка (#258: «Номинал, mm в вал.|Вал» — число и валюта по отдельности)
@@ -1722,11 +1736,12 @@
     for (let i = 0; i < n; i++) if ((head && head[i]) || extra[i] || body.some(r => tx(r[i]))) keep.push(i);
     // ячейка с data-csv="число|валюта" (K.csvv) — значения CSV вместо текста экрана («250mm RUB» → 250 и RUB, #258):
     // первое — в колонку ячейки (у числовой — числом, с data-date — датой), остальные — в дополнительные колонки
-    // заголовка (число — числом, остальное — текстом)
+    // заголовка (число — числом, остальное — текстом). data-csv-n — первое значение числом и у нечисловой ячейки
+    // (спарклайн «Цена 30д» на C03 → изменение цены за 30 дней, #277)
     const cellVals = (c, x) => {
       const d = (c && c.dataset) || {};
       if (d.csv == null) return [one(c)].concat(Array(x).fill(''));
-      const parts = String(d.csv).split('|'), num = /(^|\s)n(\s|$)/.test(c.className || '');
+      const parts = String(d.csv).split('|'), num = /(^|\s)n(\s|$)/.test(c.className || '') || d.csvN != null;
       return [d.date ? K.csvDateCell(d.date, parts[0], num) : K.csvCell(parts[0], num, d.v)].concat(Array.from({ length: x }, (_, j) => K.csvCell(parts[j + 1] || '', true)));
     };
     const one = c => {
@@ -2040,7 +2055,9 @@
     mv: { key: 'mv', label: 'MV, mm ₽', num: true, fmt: v => f.mn(v, 0), sum: true, unit: 'mm ₽', sumFmt: v => f.mn(v, 0) },
     price: { key: 'price', label: 'Цена', num: true, unit: '% ном.', fmt: v => f.px(v) },
     ytm: { key: 'ytm', label: 'Дох.', num: true, fmt: v => f.pct(v) },
-    spread: { key: 'zspread', label: 'Спред', num: true, unit: 'б.п.', fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : f.bp(v) + ' <span class="mut3">' + (r.spreadLabel || '') + '</span>', title: 'Z-спред к RUONIA (фикс) / дисконт-маржа (флоатер)' },
+    // в CSV — число, вид спреда (Z / DM) — своей колонкой «Вид спреда» за ним (#276)
+    spread: { key: 'zspread', label: 'Спред', num: true, unit: 'б.п.', fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : f.bp(v) + ' <span class="mut3">' + (r.spreadLabel || '') + '</span>', title: 'Z-спред к RUONIA (фикс) / дисконт-маржа (флоатер)',
+      csvExtra: ['Вид спреда'], csvFmt: (v, r) => v == null ? ['', ''] : [f.bp(v), r.spreadLabel || ''] },
     // Z-спред к кривой дисконтирования (RUONIA) у фикс-бумаг и флоатеров (у флоатера — купоны по прогнозу): сравнимы между собой (R32)
     zdisc: { key: 'zdisc', label: 'Z к RUONIA', num: true, unit: 'б.п.', val: r => r.zSpreadZ, fmt: v => v == null ? '<span class="mut3">—</span>' : f.bp(v), title: K.zdiscTip, tip: true },
     gspread: { key: 'gspread', label: 'G-спред', num: true, unit: 'б.п.', fmt: v => f.bp(v) },
@@ -2463,19 +2480,29 @@
 
   // все потоки позиции до погашения: на прогоне — график выпуска с сервера (M.posFlows), иначе потоки набора данных;
   // потоки после оферты, к которой оценена бумага, приглушены: они будут, если бумагу не предъявят
-  // K.flows(el, p): сразу — потоки набора данных, затем, когда сервер ответит, — весь график
+  // K.flows(el, p): сразу — потоки набора данных, затем, когда сервер ответит, — весь график; графика нет — потоки
+  // прогона и причина словами, сбой запроса — сообщение в карточке (M.posFlows: {flows, reason, error}, #288)
   K.flows = function (el, p) {
-    el.innerHTML = K.flowsTable(p, M.cashflows.filter(c => c.pos === p.id), !!M.posFlows);
+    const own = () => M.cashflows.filter(c => c.pos === p.id);
+    el.innerHTML = K.flowsTable(p, own(), !!M.posFlows);
     K.cardTableTools(el, p);
-    if (M.posFlows) M.posFlows(p.id).then(cf => { if (el.isConnected && el.dataset.pos === p.id) { el.innerHTML = K.flowsTable(p, cf || M.cashflows.filter(c => c.pos === p.id)); K.cardTableTools(el, p); } });
+    if (M.posFlows) M.posFlows(p.id).then(x => {
+      if (!el.isConnected || el.dataset.pos !== p.id) return;
+      x = x || {};
+      el.innerHTML = x.flows ? K.flowsTable(p, x.flows) : K.flowsTable(p, own(), false, x.error ? { error: x.error } : x.reason || null);
+      K.cardTableTools(el, p);
+    });
     el.dataset.pos = p.id;
   };
-  K.flowsTable = function (p, cf, loading) {
+  // why — почему нет всего графика выпуска (показаны потоки прогона или их тоже нет): текст причины или {error} — сбой
+  K.flowsTable = function (p, cf, loading, why) {
+    const err = why && why.error;
     const offer = p.offer || p.yieldDate || null;
     const KIND = { cpn: 'купон', amort: 'амортизация', mat: 'погашение', put: 'пут-оферта', call: 'колл' };
-    if (!cf.length) return '<div class="k-empty">' + (loading ? 'загрузка потоков…' : 'нет потоков') + '</div>';
+    if (!cf.length) return '<div class="k-empty">' + (loading ? 'загрузка потоков…' : err ? 'потоки не загружены: ' + esc(err) : 'потоков нет' + (why ? ': ' + esc(why) : '')) + '</div>';
     const sum = cf.reduce((s, c) => s + (c.kind === 'put' || c.kind === 'call' || c.amountRub == null ? 0 : c.amountRub), 0);
-    return '<div class="mut3" style="font-size:11px;margin-bottom:4px">' + (loading ? 'загрузка всех потоков… · ' : '') + cf.length + ' потоков до ' + f.date(cf[cf.length - 1].date) +
+    return (why ? '<div class="mut" style="font-size:11px;margin-bottom:4px">' + (err ? 'Весь график выпуска не загружен: ' + esc(err) : 'Весь график выпуска недоступен: ' + esc(why)) + '. Показаны потоки прогона.</div>' : '') +
+      '<div class="mut3" style="font-size:11px;margin-bottom:4px">' + (loading ? 'загрузка всех потоков… · ' : '') + cf.length + ' потоков до ' + f.date(cf[cf.length - 1].date) +
       (offer ? ' · после оферты ' + f.date(offer) + ' — бледнее' : '') + ' · оферта — номинал к предъявлению, в сумму не входит</div>' +
       '<div style="max-height:360px;overflow:auto"><table class="k-tbl k-cflows"><thead><tr><th>Дата</th><th>Тип</th><th class="n">Сумма, ' + p.ccy + '</th><th class="n">≈ mm ₽</th></tr></thead><tbody>' +
       cf.map(c => '<tr' + (offer && c.date > offer ? ' style="opacity:.55"' : '') + '><td data-date="' + esc(c.date) + '">' + f.date(c.date) + '</td><td>' + (c.amort ? 'амортизация' : KIND[c.kind] || c.kind) + (c.est ? ' <span class="mut3">прогноз</span>' : '') + '</td><td class="n">' + f.n(c.amount, 0) + '</td><td class="n">' + f.mn(c.amountRub, 1) + '</td></tr>').join('') +
