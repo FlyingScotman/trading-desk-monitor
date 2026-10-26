@@ -67,7 +67,7 @@ cd backend && .venv/bin/desk serve
 ```
 
 Then open:
-- http://127.0.0.1:8100/concepts/index.html for the monitors (the main set of screens, `prototypes/concepts/`) on the latest default run (the run chip in their header switches runs); the API is under `/api/v1` (`/docs` for the OpenAPI). The earlier prototype screens (Desk Monitor, Widget Board, Pivot Studio, Scenario & PnL Lab) are deprecated: no page links them, they open by direct URL (root `README.md`, «Устаревшие экраны»);
+- http://127.0.0.1:8100/concepts/index.html for the monitors (the main set of screens, `prototypes/concepts/`) on the latest default run (the run chip in their header switches runs); the API is under `/api/v1` (`/docs` for the OpenAPI). The earlier prototype screens Desk Monitor, Widget Board and Pivot Studio are removed (#292): until #313 their old addresses redirect to the monitors C01, C06 and C04, run selection kept (`REMOVED_SCREENS` in `api/app.py`). Only the deprecated Scenario & PnL Lab (`/scenario-lab.html`) still opens by direct URL, no page links it, until the decision on its scenarios (#107; root `README.md`, «Устаревшие экраны»);
 - http://127.0.0.1:8100/app/ for the Scenario Lab (slice S6): pick a run and a preset or move the sliders, read the Taylor estimate (≈), then "Посчитать точно" for the exact repricing and its residual;
 - `.devdata/reports/validation_<date>.html` for the comparison with MOEX analytics over the whole bond universe.
 

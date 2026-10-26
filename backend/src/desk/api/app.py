@@ -907,7 +907,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     # the removed early screens (#292): their old addresses (bookmarks) lead to the monitors that replace them, run
     # selection kept. For one release, then this goes too
     for old, new in REMOVED_SCREENS.items():
-        app.add_api_route(old, _redirect_to(new), methods=["GET"], include_in_schema=False)
+        app.add_api_route(old, _redirect_to(new), methods=["GET", "HEAD"], include_in_schema=False)
     static = Path(static_dir) if static_dir else static_root() / "prototypes"
     if static.is_dir():  # an installed wheel has no prototypes/
         app.mount("/", Revalidated(directory=static, html=True), name="static")

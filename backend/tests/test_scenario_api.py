@@ -218,6 +218,8 @@ def test_app_mount_and_openapi_is_current(store_url, tmp_path):
         assert r.status_code == 302 and r.headers["location"] == f"/concepts/{new}.html?run_id=5", old
         assert c.get(r.headers["location"]).status_code == 200, new
         assert c.get(f"/{old}.html", follow_redirects=False).headers["location"] == f"/concepts/{new}.html"
+        r = c.head(f"/{old}.html", follow_redirects=False)  # HEAD too, not the static files' 404
+        assert r.status_code == 302 and r.headers["location"] == f"/concepts/{new}.html", old
     committed = json.loads((REPO_ROOT / "frontend" / "openapi.json").read_text(encoding="utf-8"))
     assert committed == create_app("postgresql://unused").openapi(), \
         "frontend/openapi.json is stale: desk openapi --out ../frontend/openapi.json"
