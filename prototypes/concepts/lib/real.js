@@ -24,9 +24,11 @@
  *    прогоне до ядра 0.33 — Z-спред); G-спред — ядра (extra.g_spread_bp, определение MOEX), иначе MOEX;
  *  - CS01 и базис по бакетам срока — ядра (extra.spread_buckets: CS по бакетам пропорционально ставочному риску
  *    дисконтирования); в прогоне до ядра 0.33 — по двум соседним бакетам срока;
- *  - PnL: кэрри = carry + rolldown + funding (кэрри за вычетом фондирования, B1), ставки = rates + convexity, FX = fx,
- *    сделки = newTrades, прочее = other + reported; итог = explained. p.funding — фондирование позиции за период
- *    (null — не посчитано: не настроено или проблема), p.fundingInfo — extra.funding (состояние, строки, причина);
+ *  - PnL: кэрри = carry + rolldown (купонный доход и roll-down, без фондирования: #168), фондирование = funding (свой
+ *    фактор, B1), ставки = rates + convexity, FX = fx, сделки = newTrades, прочее = other + reported; итог = explained
+ *    (сумма факторов). p.carryDay / p.fundingDay — то же за день; p.funding (= p.pnl.funding) — фондирование позиции за
+ *    период (null — не посчитано: не настроено или проблема), p.fundRate — ставка фондирования, % (extra.funding.lines
+ *    rate_pct, по телу строк), p.fundingInfo — extra.funding (состояние, строки, причина);
  *    M.funding — фондирование прогона (D.fundingStatus: состояние, итоги по книгам и юрлицам, проблемы).
  * История позиции (M.posHistory) — синхронный запрос /api/v1/history/positions: первые две позиции по одной,
  * дальше сразу все (страницы C11, C13 просят историю всех позиций). Кроме цен рынка в ней номинал, DV01, CS01,
@@ -259,6 +261,14 @@
   const XP = X.positions || {};
   const camel = o => Object.fromEntries(Object.entries(o).map(([k, v]) => [k.replace(/_([a-z])/g, (_, c) => c.toUpperCase()), v]));
   const accrualDays = D.accrualDays || 1;
+  // ставка фондирования позиции, % (#168): rate_pct строк extra.funding (publish/funding_run.py: ставка последнего дня),
+  // средняя по модулю тела строки; нет строк (не фондируется, не посчитано) — null
+  const fundRateOf = x => {
+    const ls = ((x && x.lines) || []).filter(l => num(l.rate_pct) != null);
+    if (!ls.length) return null;
+    const w = ls.reduce((s, l) => s + Math.abs(num(l.body_ccy) || 0), 0);
+    return w ? ls.reduce((s, l) => s + num(l.rate_pct) * Math.abs(num(l.body_ccy) || 0), 0) / w : ls.reduce((s, l) => s + num(l.rate_pct), 0) / ls.length;
+  };
   const positions = D.positions.map(d => {
     const [group, kind] = kindOf(d), ex = d.extra || {}, q = ex.quote || {}, xp = XP[d.id] || {};
     const isBond = group !== 'DER' && group !== 'OTH';
@@ -325,7 +335,7 @@
     p.mdur = num(d.mdur); p.sprDur = num(d.sprDur);
     p.accrued = num(d.accrued) || 0;
     p.mv = num(d.mvRub); p.mvCcy = num(d.mv);
-    p.indexation = null; p.fundRate = null;
+    p.indexation = null; p.fundRate = fundRateOf(ex.funding);
     // риск по кривым
     p.risk = {}; M.curves.forEach(c => p.risk[c.id] = zeros());
     Object.entries(d.risk || {}).forEach(([c, arr]) => { const id = curveOf(c); arr.forEach((v, k) => p.risk[id][k] += v || 0); });
@@ -366,13 +376,14 @@
     // PnL
     const e = d.pnl || {};
     if (e.available === false || !d.pnl) {
-      p.pnl = { carry: null, rates: null, spread: null, fx: null, trading: null, other: null, total: null, available: false, reason: e.reasonText || null };
-      p.carryDay = null; p.rollDay = null;
+      p.pnl = { carry: null, funding: null, rates: null, spread: null, fx: null, trading: null, other: null, total: null, available: false, reason: e.reasonText || null };
+      p.carryDay = null; p.rollDay = null; p.fundingDay = null;
     } else {
       const z = v => v || 0;
-      p.pnl = { carry: z(e.carry) + z(e.rolldown) + z(e.funding), rates: z(e.rates) + z(e.convexity), spread: z(e.spread), fx: z(e.fx), trading: z(e.newTrades),
+      // кэрри — без фондирования (#168), фондирование — свой фактор: null (не посчитано) в сумме — 0, итог тот же
+      p.pnl = { carry: z(e.carry) + z(e.rolldown), funding: num(e.funding), rates: z(e.rates) + z(e.convexity), spread: z(e.spread), fx: z(e.fx), trading: z(e.newTrades),
         other: z(e.other) + z(e.reported), total: z(e.explained), available: true, method: e.methodText || e.method || null };
-      p.carryDay = (z(e.carry) + z(e.rolldown) + z(e.funding)) / accrualDays; p.rollDay = z(e.rolldown) / accrualDays;
+      p.carryDay = (z(e.carry) + z(e.rolldown)) / accrualDays; p.fundingDay = e.funding == null ? null : e.funding / accrualDays; p.rollDay = z(e.rolldown) / accrualDays;
     }
     p.funding = e.available === false || !d.pnl ? null : num(e.funding);  // null: не посчитано (не настроено, проблема)
     p.fundingInfo = ex.funding || null;
@@ -412,7 +423,7 @@
     dv01Book: series(H.dv01Book, M.books.map(b => b.id), id => sumBy(p => p.book === id ? p.dv01 : 0)),
     mvType: series(H.mvType, M.typeRows.map(t => t.id), id => sumBy(p => p.group + '.' + p.kind === id ? (p.group === 'DER' ? Math.abs(p.notionalRub) : p.mv) : 0)),
     mvCcy: series(H.mvCcy, M.ccys, c => sumBy(p => p.ccy === c && p.group !== 'DER' ? p.mv : 0)),
-    pnl: series(H.pnl, ['carry', 'rates', 'spread', 'fx', 'trading', 'other', 'total'], k => sumBy(p => p.pnl[k])),
+    pnl: series(H.pnl, ['carry', 'funding', 'rates', 'spread', 'fx', 'trading', 'other', 'total'], k => sumBy(p => p.pnl[k])),
   };
   if (!H.cs01) M.hist.cs01[n - 1] = sumBy(p => p.cs01);
   // базис в истории — сводки прогонов (кривая «RUB OFZ» страниц: ofz_basis01 в прогоне 0.2.6+, ofzSpr01 до него);
@@ -592,7 +603,7 @@
   M.kpis = function (list) {
     list = list || positions;
     const S = f => M.sum(list, f);
-    const k = { dv01: S('dv01'), cs01: S('cs01'), basis01: S('basis01'), ofzSpr01: S('ofzSpr01'), mvBonds: S(p => p.group === 'DER' ? 0 : p.mv), pnl: S(p => p.pnl.total), carryDay: S('carryDay'),
+    const k = { dv01: S('dv01'), cs01: S('cs01'), basis01: S('basis01'), ofzSpr01: S('ofzSpr01'), mvBonds: S(p => p.group === 'DER' ? 0 : p.mv), pnl: S(p => p.pnl.total), carryDay: S('carryDay'), fundingDay: S('fundingDay'),
       pnlMtd: S('pnlMtd'), pnlYtd: S('pnlYtd'), byCcy: {}, byCurve: {} };
     // по ногам (lib/instr.js): DV01 — по валюте кривой, FX-дельта — по своей валюте; MV — в валюте позиции
     const I = window.INSTR;

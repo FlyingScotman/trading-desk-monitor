@@ -106,7 +106,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   // ---------- колонки ----------
   const hist = {}; const H = id => hist[id] || (hist[id] = M.posHistory(id));
   const evName = { put: 'пут', call: 'колл', mat: 'погаш' };
-  const pnlCol = (key, label, k) => ({ label, num: true, val: r => r.pnl[k], fmt: v => '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.pnl[k], unit: 'тыс ₽', sfmt: f.k, title: 'тыс ₽' });
+  const pnlCol = (key, label, k, tip) => ({ label, num: true, val: r => r.pnl[k], fmt: v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.pnl[k], unit: 'тыс ₽', sfmt: f.k, title: tip ? 'тыс ₽. ' + tip : 'тыс ₽', tip: !!tip });
   const C = {
     name: { label: 'Бумага', val: r => r.name, fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? '<span class="k-tag sd" title="сделки сегодня">сд</span>' : '') },
     issuer: { label: 'Эмитент', filter: true, title: 'эмитент (у деривативов — контрагент)', val: r => r.issuerName, fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
@@ -138,9 +138,10 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     cs01: { label: 'CS01', neutral: true, num: true, val: r => r.cs01, fmt: v => v ? f.dv(v) : '<span class="mut3">·</span>', sum: r => r.cs01, unit: 'тыс ₽/бп', sfmt: f.dv, title: K.tips.cs01, tip: true },
     basis01: { label: 'Базис01', neutral: true, num: true, val: r => r.basis01, fmt: v => v ? f.dv(v) : '<span class="mut3">·</span>', sum: r => r.basis01, unit: 'тыс ₽/бп', sfmt: f.dv, title: K.tips.basis01, tip: true },
     ofzSpr01: { label: 'Спред к КБД01', neutral: true, num: true, val: r => r.ofzSpr01, fmt: v => v ? f.dv(v) : '<span class="mut3">·</span>', sum: r => r.ofzSpr01, unit: 'тыс ₽/бп', sfmt: f.dv, title: K.tips.ofzSpr01, tip: true },
-    fund: { label: 'Фонд.', num: true, val: r => r.fundRate, fmt: v => v == null ? '<span class="mut3">—</span>' : f.pct(v), title: 'ставка фондирования' },
-    carry: { label: 'Кэрри/д', num: true, val: r => r.carryDay, fmt: v => '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.carryDay, unit: 'тыс ₽', sfmt: f.k, title: 'тыс ₽ в день' },
-    pc: pnlCol('pc', 'Кэрри', 'carry'), pr: pnlCol('pr', 'Ставки', 'rates'), ps: pnlCol('ps', 'Спред', 'spread'), pf: pnlCol('pf', 'FX', 'fx'), pt: pnlCol('pt', 'Сделки', 'trading'), po: pnlCol('po', 'Прочее', 'other'),
+    fund: { label: 'Фонд.', num: true, val: r => r.fundRate, fmt: v => v == null ? '<span class="mut3">—</span>' : f.pct(v), title: 'ставка фондирования, % годовых' },
+    carry: { label: 'Кэрри/д', num: true, val: r => r.carryDay, fmt: v => '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.carryDay, unit: 'тыс ₽', sfmt: f.k, title: 'тыс ₽ в день. ' + K.tips.carry, tip: true },
+    funding: { label: 'Фондир./д', num: true, val: r => r.fundingDay, fmt: v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.fundingDay, unit: 'тыс ₽', sfmt: f.k, title: 'Фондирование, тыс ₽ в день. ' + K.tips.funding, tip: true },
+    pc: pnlCol('pc', 'Кэрри', 'carry', K.tips.carry), pfu: pnlCol('pfu', 'Фондирование', 'funding', K.tips.funding), pr: pnlCol('pr', 'Ставки', 'rates'), ps: pnlCol('ps', 'Спред', 'spread'), pf: pnlCol('pf', 'FX', 'fx'), pt: pnlCol('pt', 'Сделки', 'trading'), po: pnlCol('po', 'Прочее', 'other'),
     pnl: { label: 'PnL дня', num: true, val: r => r.pnl.total, fmt: v => '<b class="' + f.cls(v) + '">' + f.k(v) + '</b>', sum: r => r.pnl.total, unit: 'тыс ₽', sfmt: f.k, title: 'тыс ₽' },
     pnlMtd: { label: 'MTD', num: true, val: r => r.pnlMtd, fmt: v => '<span class="' + f.cls(v) + '">' + f.mn(v, 1) + '</span>', sum: r => r.pnlMtd, unit: 'mm ₽', sfmt: v => f.mn(v, 1), title: 'mm ₽' },
     pnlYtd: { label: 'YTD', num: true, val: r => r.pnlYtd, fmt: v => '<span class="' + f.cls(v) + '">' + f.mn(v, 1) + '</span>', sum: r => r.pnlYtd, unit: 'mm ₽', sfmt: v => f.mn(v, 1), title: 'mm ₽' },
@@ -151,11 +152,11 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   };
   const PRESETS = [
     ['base', 'Базовый', ['name', 'ccy', 'issuer', 'kind', 'book', 'coupon', 'offer', 'maturity', 'event', 'notional', 'price', 'ytm', 'spread', 'dv01', 'cs01', 'spark', 'isin']],
-    ['risk', 'Риск', ['name', 'ccy', 'issuer', 'kind', 'book', 'event', 'tenor', 'notional', 'mv', 'dur', 'dv01', 'cs01', 'basis01', 'ofzSpr01', 'carry']],
+    ['risk', 'Риск', ['name', 'ccy', 'issuer', 'kind', 'book', 'event', 'tenor', 'notional', 'mv', 'dur', 'dv01', 'cs01', 'basis01', 'ofzSpr01', 'carry', 'funding']],
     ['px', 'Цены и спреды', ['name', 'ccy', 'issuer', 'kind', 'coupon', 'event', 'price', 'chg', 'bidask', 'spark', 'ytm', 'spread', 'zdisc', 'gspread', 'dur']],
-    ['pnl', 'Кэрри и PnL', ['name', 'ccy', 'issuer', 'book', 'coupon', 'curCpn', 'fund', 'carry', 'pc', 'pr', 'ps', 'pf', 'pt', 'po', 'pnl', 'pnlMtd', 'pnlYtd']],
+    ['pnl', 'Кэрри и PnL', ['name', 'ccy', 'issuer', 'book', 'coupon', 'curCpn', 'fund', 'carry', 'funding', 'pc', 'pfu', 'pr', 'ps', 'pf', 'pt', 'po', 'pnl', 'pnlMtd', 'pnlYtd']],
     ['stat', 'Статика', ['name', 'isin', 'issuer', 'issuerFull', 'ccy', 'kind', 'rating', 'sector', 'coupon', 'offer', 'maturity', 'tenor', 'book', 'entity', 'desk']],
-    ['all', 'Всё', ['name', 'isin', 'ccy', 'issuer', 'kind', 'book', 'rating', 'coupon', 'curCpn', 'offer', 'maturity', 'event', 'tenor', 'notional', 'mv', 'price', 'chg', 'spark', 'ytm', 'spread', 'zdisc', 'gspread', 'dur', 'dv01', 'cs01', 'basis01', 'ofzSpr01', 'carry', 'pnl', 'pnlMtd', 'pnlYtd']],
+    ['all', 'Всё', ['name', 'isin', 'ccy', 'issuer', 'kind', 'book', 'rating', 'coupon', 'curCpn', 'offer', 'maturity', 'event', 'tenor', 'notional', 'mv', 'price', 'chg', 'spark', 'ytm', 'spread', 'zdisc', 'gspread', 'dur', 'dv01', 'cs01', 'basis01', 'ofzSpr01', 'carry', 'funding', 'pnl', 'pnlMtd', 'pnlYtd']],
   ];
   // валюта и эмитент — в каждом наборе колонок, и при группировке тоже (R37)
   const cols = () => (PRESETS.find(p => p[0] === st.preset) || PRESETS[0])[2].map(k => Object.assign({ key: k }, C[k]));
@@ -343,19 +344,21 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
       ['Мод. дюрация', p.mdur == null ? '—' : f.n(p.mdur, 2)], ['DV01', f.dv(p.dv01) + ' <small>тыс ₽/бп</small>', false, K.tips.dv01],
       ['CS01', f.dv(p.cs01) + ' <small>тыс ₽/бп</small>', false, K.tips.cs01], ['Базис ОФЗ01', p.basis01 ? f.dv(p.basis01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.basis01],
       ['Спред к КБД01', p.ofzSpr01 ? f.dv(p.ofzSpr01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.ofzSpr01],
-      ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽ · фонд. ' + f.pct(p.fundRate) + '</small>'], ['НКД', f.mn(p.accrued, 2) + ' <small>mm ₽</small>'],
+      ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽</small>', false, K.tips.carry],
+      ['Фондирование / день', K.fundingDayHtml(p) + ' <small>тыс ₽ · ставка ' + f.pct(p.fundRate) + '</small>', false, K.tips.funding], ['НКД', f.mn(p.accrued, 2) + ' <small>mm ₽</small>'],
     ] : [
       ['Номинал', f.mn(p.notional, 0) + ' <small>mm ' + p.ccy + '</small>'], ['MTM', f.mn(p.mv, 1) + ' <small>mm ₽</small>'],
       ['Ставка / курс', esc(p.couponFmt)], ['Срок', f.date(p.maturity) + ' <small>' + f.yrs(p.tenor) + '</small>'],
       ['DV01', f.dv(p.dv01) + ' <small>тыс ₽/бп</small>', false, K.tips.dv01], ['FX дельта', K.fxDeltaHtml(p), Object.values(INSTR.fxBy(p)).filter(v => v).length > 1],
-      ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽</small>'], ['Контрагент', esc(p.cpty || '—')],
+      ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽</small>', false, K.tips.carry],
+      ['Фондирование / день', K.fundingDayHtml(p) + ' <small>тыс ₽</small>', false, K.tips.funding], ['Контрагент', esc(p.cpty || '—')],
     ]).concat(K.curveRiskFields(p));  // у облигаций тоже (R32)
     $('.cd-fields').innerHTML = K.fieldsHtml(F) +
       (p.legs && p.legs.length ? '<div class="k-sec">Ноги сделки</div>' + K.legsHtml(p) : '');
     // PnL
-    const pn = p.pnl, parts = [['Кэрри', pn.carry], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx], ['Сделки', pn.trading], ['Прочее', pn.other]];
-    const mx = Math.max(1, ...parts.map(x => Math.abs(x[1])));
-    $('.cd-pnl').innerHTML = parts.map(([l, v]) => '<span class="mut">' + l + '</span>' + K.bar(v, mx) + '<span class="n ' + f.cls(v) + '">' + f.ks(v) + '</span>').join('') +
+    const pn = p.pnl, parts = K.PNL_FACTORS.map(([k, l]) => [l, pn[k], K.tips[k]]);
+    const mx = Math.max(1, ...parts.map(x => Math.abs(x[1] || 0)));
+    $('.cd-pnl').innerHTML = parts.map(([l, v, tip]) => '<span class="mut">' + K.hint(l, tip) + '</span>' + K.bar(v || 0, mx) + '<span class="n ' + f.cls(v) + '">' + (v == null ? '—' : f.ks(v)) + '</span>').join('') +
       '<span class="tot">Итого</span><span class="tot mut3" style="font-size:11px">MTD ' + f.mns(p.pnlMtd, 1) + ' mm ₽ · YTD ' + f.mns(p.pnlYtd, 1) + ' mm ₽</span><span class="n tot ' + f.cls(pn.total) + '">' + f.ks(pn.total) + '</span>';
     // история: режимы зависят от типа
     const segKey = isBond + '/' + isFloat;

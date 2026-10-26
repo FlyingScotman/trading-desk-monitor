@@ -33,18 +33,19 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
-VERSION = 5  # 2: a floater's discount margin (pos[9]); 3: the OFZ basis of the KBD scheme, the spread to the KBD;
+VERSION = 6  # 2: a floater's discount margin (pos[9]); 3: the OFZ basis of the KBD scheme, the spread to the KBD;
 # 4: an OFZ-IN's nominal proxy out of the run's basis (basisIn, TDM#173); 5: an OFZ's RUONIA risk apart from its basis
-# (ofzRuo, pos[11]; TDM#213)
+# (ofzRuo, pos[11]; TDM#213); 6: the funding its own factor, the carry without it (TDM#168)
 CURVE_MAP = {"RUB OFZ": "RUB RUONIA", "USD": "USD SOFR", "EUR": "EUR ESTR", "CNY": "CNY XCCY"}
 """A run's risk curve -> the concept pages' curve (``desk.api.concepts`` re-exports it; ``lib/real.js`` mirrors it).
 ``RUB OFZ`` (the KBD: a fixed-coupon OFZ's rates risk since 0.2.6, its basis in RUONIA + basis since 0.2.7, every bond's
 on a date without RUONIA OIS) is added to RUONIA: the pages' default «RUONIA + базис» view, where moving RUONIA moves the
 KBD with it (a row in RUONIA + basis: its ``RUB RUONIA`` plus ``RUB OFZ`` is its RUONIA risk, ``valuation.bonds.ofz_levels``)."""
-PNL = {"carry": ("carry", "rolldown", "funding"), "rates": ("rates", "convexity"), "spread": ("spread",),
+PNL = {"carry": ("carry", "rolldown"), "funding": ("funding",), "rates": ("rates", "convexity"), "spread": ("spread",),
        "fx": ("fx_gross", "fx_funding"), "trading": ("new_trades",), "other": ("other",)}
-"""The pages' PnL factors from the run's components (``compat.PNL_KEYS``): the carry is net of the position's funding
-(B1; a run before it has none, so its summary is unchanged)."""
+"""The pages' PnL factors from the run's components (``compat.PNL_KEYS``): the carry is the coupon income and the
+roll-down without the funding, the position's funding (B1) is its own factor (TDM#168: 0 in a run before B1). The
+factors sum to the day's total as before."""
 GOV_CLASSES = {"ОФЗ-ПД": "PD", "ОФЗ-АД": "PD", "ОФЗ-ПК": "PK", "ОФЗ-ИН": "IN"}
 
 ROWS_SQL = ("SELECT position_id, book_id, pv_rub, fact->'risk' AS risk, (fact->>'cs01')::float8 AS cs01,"

@@ -400,11 +400,13 @@
         w.forEach((x, k) => p.cs01b[k] += dv * x * 0.95);
       }
       p.fxDeltaBy = p.ccy === 'RUB' ? {} : { [p.ccy]: p.mvCcy };
-      // кэрри за день: купонный доход − фондирование
+      // кэрри за день — купонный доход без фондирования (#168); фондирование — отдельно: −MV × ставка (HTM — не
+      // фондируется в демо)
       const fundRate = p.ccy === 'RUB' ? M.indices['КС'] + 0.25 : p.ccy === 'CNY' ? M.indices['RUSFAR CNY'] + 0.4 : 5.0;
       p.fundRate = fundRate;
       const earn = p.cpn.type === 'fix' ? p.ytm : p.cpn.type === 'float' ? p.curCpn : p.ytm + M.indices['CPI г/г'];
-      p.carryDay = p.book === 'HTM' ? p.mv * earn / 100 / 365 * 0.3 : p.mv * (earn - fundRate) / 100 / 365;
+      p.carryDay = p.book === 'HTM' ? p.mv * earn / 100 / 365 * 0.3 : p.mv * earn / 100 / 365;
+      p.fundingDay = p.book === 'HTM' ? 0 : -p.mv * fundRate / 100 / 365;
       p.rollDay = p.cpn.type === 'fix' ? -p.mv * p.mdur * (r() - 0.35) * 0.5e-4 / 30 : 0;
       p.lastPrice = p.price;
       p.prevPrice = round(p.price - (r() - 0.55) * 0.6, 3);
@@ -433,7 +435,7 @@
       p.accrued = 0; p.price = null; p.ytm = p.rate; p.mdur = null;
       p.carryDay = p.kind === 'IRS' || p.kind === 'KSW' ? sgn * nrub * (p.rate - (p.kind === 'KSW' ? M.indices['КС'] : M.indices['RUONIA'])) / 100 / 365
         : p.kind === 'BAS' ? nrub * p.rate / 100 / 365 * 0.6 : -sgn * nrub * (M.indices['RUONIA'] - 5) / 100 / 365 * 0.15;
-      p.rollDay = 0; p.cs01b.fill(0);
+      p.rollDay = 0; p.fundingDay = 0; p.cs01b.fill(0);
       p.zspread = null; p.zSpreadZ = null; p.gspread = null;
     }
     p.fxDelta = p.fxDeltaBy[p.ccy] || 0;            // в валюте позиции; все валюты — p.fxDeltaBy
@@ -453,16 +455,17 @@
     p.spreadChgBp = sprMove;
     const spread = p.cs01 * sprMove;
     const fxp = Object.entries(p.fxDeltaBy).reduce((s, [c, a]) => s + a * M.fx[c] * M.fxChgPct[c] / 100, 0);
-    const carry = p.carryDay + p.rollDay;
+    const carry = p.carryDay + p.rollDay, funding = p.fundingDay;
     const other = (r() - 0.5) * Math.abs(p.mv || p.notionalRub * 0.01) * 0.0006;
     const traded = r() < 0.12;
     const trading = traded ? (r() - 0.4) * Math.abs(p.notionalRub) * 0.0004 : 0;
     p.tradedToday = traded;
     p.tradeToday = traded ? { qty: Math.round((r() - 0.5) * 0.3 * Math.abs(p.notional) / 1e6) * 1e6, price: p.price } : null;
-    p.pnl = { carry, rates, spread, fx: fxp, trading, other, total: carry + rates + spread + fxp + trading + other };
+    p.pnl = { carry, funding, rates, spread, fx: fxp, trading, other, total: carry + funding + rates + spread + fxp + trading + other };
+    p.funding = p.group === 'DER' || p.book === 'HTM' ? 0 : funding;  // за период (день), как p.funding прогона
     const scale = Math.abs(p.mv || p.notionalRub * 0.02);
-    p.pnlMtd = p.carryDay * 15 + p.pnl.total + (r() - 0.42) * scale * 0.004;
-    p.pnlYtd = p.carryDay * 200 + p.pnlMtd + (r() - 0.35) * scale * 0.025;
+    p.pnlMtd = (p.carryDay + p.fundingDay) * 15 + p.pnl.total + (r() - 0.42) * scale * 0.004;
+    p.pnlYtd = (p.carryDay + p.fundingDay) * 200 + p.pnlMtd + (r() - 0.35) * scale * 0.025;
     if (p.cpn && p.cpn.type === 'float') { p.ytmProxy = p.ytm; p.ytm = null; p.dm = p.zspread; }
     // портфель (колонка Portfolio отчёта): HTM-книга — HTM, часть торговых бумаг — AFS, остальное — торговый
     const bt = (M.books.find(b => b.id === p.book) || {}).type;
@@ -474,17 +477,17 @@
   });
   M.positions = positions;
   M.pos = Object.fromEntries(positions.map(p => [p.id, p]));
-  // ---------- фондирование (демо, B1): ставка фондирования × MV бумаг за день, в кэрри позиций (как carryDay) ----------
+  // ---------- фондирование (демо, B1): ставка фондирования × MV бумаг за день, отдельно от кэрри (p.fundingDay, #168) ----------
   (function () {
     const byBook = {}, byEntity = {}; let total = 0;
     positions.forEach(p => {
       if (p.group === 'DER' || p.fundRate == null || p.book === 'HTM') return;
-      const v = -p.mv * p.fundRate / 100 / 365, bk = M.book[p.book] || {};
+      const v = p.fundingDay, bk = M.book[p.book] || {};
       const b = byBook[p.book] || (byBook[p.book] = { total: 0, inPositions: 0, bookLevel: 0, problems: 0, base: 'mv_clean', writeOff: null });
       b.total += v; b.inPositions += v; total += v;
       byEntity[bk.entity || '—'] = (byEntity[bk.entity || '—'] || 0) + v;
     });
-    M.funding = { state: 'demo', text: 'демо-набор: ставка фондирования × MV, в кэрри позиций', period: null, total, inPositions: total,
+    M.funding = { state: 'demo', text: 'демо-набор: ставка фондирования × MV, в PnL позиций', period: null, total, inPositions: total,
       bookLevel: 0, byBook, byEntity, problems: [], provisional: [] };
   })();
 
@@ -542,11 +545,12 @@
     series.mvType = {}; M.typeRows.forEach(t => series.mvType[t.id] = walk('mv' + t.id, positions.filter(p => p.group + '.' + p.kind === t.id).reduce((s, p) => s + (p.group === 'DER' ? Math.abs(p.notionalRub) : p.mv), 0), 4e8, -0.03).map(v => Math.max(0, v)));
     series.mvCcy = {}; M.ccys.forEach(c => series.mvCcy[c] = walk('mvc' + c, positions.filter(p => p.ccy === c && p.group !== 'DER').reduce((s, p) => s + p.mv, 0), 6e8, -0.02).map(v => Math.max(0, v)));
     const pr = rng('pnlhist');
-    series.pnl = { carry: [], rates: [], spread: [], fx: [], trading: [], other: [] };
+    series.pnl = { carry: [], funding: [], rates: [], spread: [], fx: [], trading: [], other: [] };
     const tp = positions.reduce((a, p) => { Object.keys(series.pnl).forEach(k => a[k] = (a[k] || 0) + p.pnl[k]); return a; }, {});
     for (let i = 0; i < n; i++) {
       const last = i === n - 1;
       series.pnl.carry.push(last ? tp.carry : tp.carry * (0.8 + pr() * 0.4));
+      series.pnl.funding.push(last ? tp.funding : tp.funding * (0.95 + pr() * 0.1));
       series.pnl.rates.push(last ? tp.rates : (pr() - 0.5) * 30e6 + rndn() * 6e6);
       series.pnl.spread.push(last ? tp.spread : (pr() - 0.5) * 9e6);
       series.pnl.fx.push(last ? tp.fx : (pr() - 0.5) * 12e6);
@@ -739,7 +743,7 @@
     const k = {
       dv01: S('dv01'), cs01: S('cs01'), basis01: S('basis01'),
       mvBonds: S(p => p.group === 'DER' ? 0 : p.mv),
-      pnl: S(p => p.pnl.total), carryDay: S('carryDay'),
+      pnl: S(p => p.pnl.total), carryDay: S('carryDay'), fundingDay: S('fundingDay'),
       pnlMtd: S('pnlMtd'), pnlYtd: S('pnlYtd'),
       byCcy: {}, byCurve: {},
     };

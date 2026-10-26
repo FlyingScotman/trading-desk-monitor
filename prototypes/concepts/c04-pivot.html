@@ -60,8 +60,8 @@
   const MON = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
   const horizon = M.util.addMonths(M.asOf, 24).slice(0, 7);
   const idxOrder = arr => (a, b) => { const i = x => { const j = arr.indexOf(x); return j < 0 ? 999 : j; }; return i(a) - i(b) || String(a).localeCompare(String(b), 'ru'); };
-  const FACT = [['carry', 'Кэрри'], ['rates', 'Ставки'], ['spread', 'Спред'], ['fx', 'FX'], ['trading', 'Сделки'], ['other', 'Прочее']];
-  const FCOL = { carry: '#3fb67a', rates: '#4c9dff', spread: '#e3b341', fx: '#b48cff', trading: '#22c3d6', other: '#a0b4c8' };
+  const FACT = K.PNL_FACTORS;  // кэрри (без фондирования), фондирование (#168), ставки, спред, FX, сделки, прочее
+  const FCOL = K.PNL_COLORS;
   const nearestBucket = t => { let b = 0, d = 1e9; M.pillars.forEach((x, i) => { const e = Math.abs(Math.log((t || 0.01) / x)); if (e < d) { d = e; b = i; } }); return M.buckets[b]; };
   const DIMS = {
     none: { label: '—' },
@@ -100,7 +100,8 @@
     cs01: { label: 'CS01', unit: 'тыс ₽/бп', fmt: f.dv, kind: 'risk', parts: p => p.cs01b.map((v, k) => ({ curve: 'CS01', bucket: k, v })).filter(x => x.v) },
     mv: { label: 'MV облигаций', unit: 'mm ₽', fmt: v => f.mn(v, 0), kind: 'size', parts: one(p => p.group === 'DER' ? 0 : p.mv) },
     notional: { label: 'Номинал', unit: 'mm ₽', fmt: v => f.mn(v, 0), kind: 'size', parts: one(p => p.notionalRub) },
-    carry: { label: 'Кэрри / день', unit: 'тыс ₽', fmt: f.k, kind: 'pnl', parts: one(p => p.carryDay) },
+    carry: { label: 'Кэрри / день', unit: 'тыс ₽', fmt: f.k, kind: 'pnl', parts: one(p => p.carryDay) },  // без фондирования (#168)
+    funding: { label: 'Фондирование / день', unit: 'тыс ₽', fmt: f.k, kind: 'pnl', parts: one(p => p.fundingDay || 0) },
     pnl: { label: 'PnL дня', unit: 'тыс ₽', fmt: f.k, kind: 'pnl', parts: p => FACT.map(([k]) => ({ factor: k, v: p.pnl[k] })).filter(x => x.v) },
     pnlMtd: { label: 'PnL MTD', unit: 'mm ₽', fmt: v => f.mn(v, 1), kind: 'pnl', parts: one(p => p.pnlMtd) },
     count: { label: 'Кол-во позиций', unit: 'шт', fmt: v => f.n(v), kind: 'size', parts: one(() => 1) },

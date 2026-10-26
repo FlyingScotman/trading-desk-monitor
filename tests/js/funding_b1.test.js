@@ -1,7 +1,8 @@
 // Волна B1: фондирование в мониторах (prototypes/concepts/). На прогоне — D.fundingStatus и pnl.funding позиции
-// (api/compat.py) через lib/real.js: кэрри = carry + rolldown + funding (за вычетом фондирования), M.funding — итоги по
-// книгам и юрлицам и проблемы; «не настроено» / «не считалось» — словами (заметка в шапке, панель кокпита, строка
-// карточки), а не 0. В демо (lib/mock.js) — демо-фондирование в кэрри.
+// (api/compat.py) через lib/real.js: кэрри = carry + rolldown (без фондирования, #168), фондирование = funding — свой
+// фактор PnL (p.pnl.funding, p.fundingDay), сумма факторов = итог; M.funding — итоги по книгам и юрлицам и проблемы;
+// «не настроено» / «не считалось» — словами (заметка в шапке, панель кокпита, строка карточки), а не 0. В демо
+// (lib/mock.js) — демо-фондирование отдельным фактором.
 //   node tests/js/funding_b1.test.js
 'use strict';
 const fs = require('fs'), path = require('path'), vm = require('vm'), assert = require('assert');
@@ -30,6 +31,7 @@ function load(opts) {
     if (opts.mutate) opts.mutate(ctx.window.DESK);
     vm.runInContext(P('concepts/lib/real.js'), ctx);
   } else vm.runInContext(P('concepts/lib/mock.js'), ctx);
+  vm.runInContext(P('concepts/lib/instr.js'), ctx);
   vm.runInContext(P('concepts/lib/kit.js'), ctx);
   return { M: ctx.window.MOCK, K: ctx.window.KIT, D: ctx.window.DESK };
 }
@@ -56,22 +58,27 @@ t('не настроено: заметка, панель и карточка с�
   assert.ok(box.innerHTML.includes('не настроено') && !box.innerHTML.includes('<table'), box.innerHTML);
 });
 
-t('посчитано: кэрри за вычетом фондирования, строка карточки, книги и проблемы в панели', () => {
+t('посчитано: кэрри без фондирования, фондирование — свой фактор, строка карточки, книги и проблемы в панели', () => {
   let want;
   const { M, K } = load({ real: true, mutate: D => {
     const b = bond(D);
-    want = { id: b.id, carry: b.pnl.carry + b.pnl.rolldown + b.pnl.funding, funding: b.pnl.funding };
+    want = { id: b.id, carry: b.pnl.carry + b.pnl.rolldown, funding: b.pnl.funding, days: D.accrualDays || 1 };
     b.extra = Object.assign({}, b.extra, { funding: { state: 'funded', amount_rub: b.pnl.funding, in_pnl: true,
-      lines: [{ kind: 'POS', rate_expr: 'KEY_RATE + 100 bp', days: 3 }] } });
+      lines: [{ kind: 'POS', rate_expr: 'KEY_RATE + 100 bp', days: 3, rate_pct: 17.5, body_ccy: -3e8 },
+        { kind: 'POS', rate_expr: 'KEY_RATE + 100 bp', days: 3, rate_pct: 18.5, body_ccy: -1e8 }] } });
     D.fundingStatus = { state: 'computed', text: 'фондирование посчитано', period: { start: '2026-10-16', end: '2026-10-19', days: 3 },
       total: -1.5e6, inPositions: -1.2e6, bookLevel: -3e5, byEntity: { ENT1: -1e6, ENT2: -5e5 },
       byBook: { [b.book]: { total: -1.5e6, inPositions: -1.2e6, bookLevel: -3e5, problems: 1, base: 'mv_clean', writeOff: { periodicity: 'monthly', last: '2026-09-30', since_write_off: -9e6 } } },
       problems: [{ kind: 'HTM', ref: 'H1|X', book: 'H1', reason: 'нет purchase_accrued_ccy' }], provisional: ['fx_date'] };
   } });
   const p = M.pos[want.id];
-  near(p.pnl.carry, want.carry, 'кэрри = carry + rolldown + funding');
+  near(p.pnl.carry, want.carry, 'кэрри = carry + rolldown, без фондирования');
+  near(p.pnl.funding, want.funding, 'фондирование — свой фактор');
   near(p.funding, want.funding, 'фондирование позиции');
-  assert.ok(K.fundingLine(p).includes('KEY_RATE + 100 bp') && K.fundingLine(p).includes('в кэрри позиции'), K.fundingLine(p));
+  near(p.carryDay * want.days, want.carry, 'кэрри за день — без фондирования');
+  near(p.fundingDay * want.days, want.funding, 'фондирование за день');
+  near(p.fundRate, (17.5 * 3 + 18.5 * 1) / 4, 'ставка фондирования — rate_pct строк, средняя по телу, %');
+  assert.ok(K.fundingLine(p).includes('KEY_RATE + 100 bp') && K.fundingLine(p).includes('строкой «Фондирование» (не в кэрри)'), K.fundingLine(p));
   assert.strictEqual(M.funding.state, 'computed');
   assert.ok(M.notes.some(x => x.startsWith('Фондирование: проблем 1')), M.notes.join(' | '));
   const box = el(); K.fundingPanel(box);
@@ -79,15 +86,45 @@ t('посчитано: кэрри за вычетом фондирования, 
     assert.ok(box.innerHTML.includes(s), s + ': ' + box.innerHTML);
 });
 
-t('демо: фондирование в кэрри позиций, итог = сумме книг', () => {
+t('демо: фондирование отдельно от кэрри, итог = сумме книг и фондированию позиций', () => {
   const { M, K } = load();
   assert.strictEqual(M.funding.state, 'demo');
   near(M.funding.total, Object.values(M.funding.byBook).reduce((s, b) => s + b.total, 0), 'итог по книгам');
   assert.ok(M.funding.total < 0);
+  near(M.funding.total, M.positions.reduce((s, p) => s + (p.group === 'DER' || p.book === 'HTM' ? 0 : p.pnl.funding), 0), 'итог = фондированию позиций');
   const p = M.positions.find(x => x.fundRate != null && x.book !== 'HTM');
   assert.ok(K.fundingLine(p).includes('демо'), K.fundingLine(p));
   const box = el(); K.fundingPanel(box);
   assert.ok(box.innerHTML.includes('<table'), box.innerHTML);
+});
+
+// #168: кэрри без фондирования, фондирование — свой фактор; сумма факторов PnL по-прежнему равна итогу
+const factorSum = (K, p) => K.PNL_FACTORS.reduce((s, [k]) => s + (p.pnl[k] || 0), 0);
+t('#168: сумма факторов (кэрри, фондирование, ставки, …) = итог — прогон и демо; фондирование в истории отдельным рядом', () => {
+  for (const opts of [{ real: true }, {}]) {
+    const { M, K } = load(opts);
+    assert.strictEqual(K.PNL_FACTORS.map(x => x[0]).join(), 'carry,funding,rates,spread,fx,trading,other');
+    const ok = M.positions.filter(p => p.pnl.available !== false && p.pnl.total != null);
+    assert.ok(ok.length > 5);
+    ok.forEach(p => near(factorSum(K, p), p.pnl.total, (opts.real ? 'прогон ' : 'демо ') + p.id + ': сумма факторов = итог'));
+    assert.ok(ok.some(p => p.pnl.funding), 'есть позиции с фондированием');
+    assert.ok(Array.isArray(M.hist.pnl.funding) && M.hist.pnl.funding.length === M.hist.pnl.total.length, 'ряд funding в истории');
+    if (!opts.real) M.hist.pnl.total.forEach((v, i) => near(K.PNL_FACTORS.reduce((s, [k]) => s + M.hist.pnl[k][i], 0), v, 'история: сумма факторов = итог'));
+    assert.ok(K.posCols.funding && K.posCols.funding.key === 'fundingDay' && /без фондирования/.test(K.posCols.carry.title) && /roll-down/.test(K.tips.carry));
+    const k = M.kpis(); near(k.fundingDay, M.sum(M.positions, p => p.fundingDay || 0), 'KPI фондирования за день');
+  }
+});
+
+t('#168: фондирование не посчитано — фактор null («—»), кэрри и итог те же', () => {
+  let want;
+  const { M, K } = load({ real: true, mutate: D => {
+    const b = bond(D); want = { id: b.id, carry: b.pnl.carry + b.pnl.rolldown, total: b.pnl.explained }; b.pnl.funding = null;
+  } });
+  const p = M.pos[want.id];
+  assert.strictEqual(p.pnl.funding, null); assert.strictEqual(p.fundingDay, null); assert.strictEqual(p.funding, null);
+  near(p.pnl.carry, want.carry, 'кэрри'); near(p.pnl.total, want.total, 'итог');
+  assert.ok(K.posCols.funding.fmt(p.fundingDay).includes('—'));
+  assert.ok(K.fundingDayHtml(p).includes('—'));
 });
 
 for (const [name, f] of tests) { f(); n++; console.log('ok', name); }

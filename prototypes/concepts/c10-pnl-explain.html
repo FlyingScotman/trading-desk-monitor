@@ -47,18 +47,18 @@
   const M = MOCK, K = KIT, f = K.f, esc = K.esc, h = K.h;
   K.top({ title: 'C10 · PnL explain', tag: 'из чего сложился результат' });
   const page = document.getElementById('page');
-  const FAC = [['carry', 'Кэрри'], ['rates', 'Ставки'], ['spread', 'Спред'], ['fx', 'FX'], ['trading', 'Сделки'], ['other', 'Прочее']];
-  const FCOL = { carry: '#3fb67a', rates: '#4c9dff', spread: '#e3b341', fx: '#b48cff', trading: '#22c3d6', other: '#a0b4c8' };
+  const FAC = K.PNL_FACTORS;  // кэрри (без фондирования), фондирование (#168), ставки, спред, FX, сделки, прочее
+  const FCOL = K.PNL_COLORS;
   const DIMS = [['book', 'книга', p => p.book, p => p.book + ' · ' + p.bookName], ['ccy', 'валюта', p => p.ccy, p => p.ccy], ['kind', 'тип', p => p.group + '.' + p.kind, p => p.groupLabel + ' · ' + p.kindLabel], ['issuer', 'эмитент', p => p.issuerName, p => p.issuerName]];
   let mode = 'day', dim = 'book', selDay = M.histDates.length - 1;
   try { mode = localStorage.getItem('c10-mode') || 'day'; dim = localStorage.getItem('c10-dim') || 'book'; } catch (e) { }
 
-  // MTD-разложение (оценка): кэрри × дни месяца, сделки × 3, остаток — пропорционально факторам дня
+  // MTD-разложение (оценка): кэрри и фондирование × дни месяца, сделки × 3, остаток — пропорционально факторам дня
   const DAYS_MTD = 15, mtdCache = {};
   function mtd(p) {
     if (mtdCache[p.id]) return mtdCache[p.id];
-    const o = { carry: p.pnl.carry * DAYS_MTD, trading: p.pnl.trading * 3 };
-    const rest = p.pnlMtd - o.carry - o.trading, ks = ['rates', 'spread', 'fx', 'other'];
+    const o = { carry: p.pnl.carry * DAYS_MTD, funding: (p.pnl.funding || 0) * DAYS_MTD, trading: p.pnl.trading * 3 };
+    const rest = p.pnlMtd - o.carry - o.funding - o.trading, ks = ['rates', 'spread', 'fx', 'other'];
     const W = ks.reduce((s, k) => s + Math.abs(p.pnl[k]), 0);
     ks.forEach(k => o[k] = W ? rest * Math.abs(p.pnl[k]) / W : (k === 'other' ? rest : 0));
     return (mtdCache[p.id] = o);
@@ -76,7 +76,7 @@
 
     // ---------- панель управления + KPI ----------
     const ctl = h('div', 'bar2');
-    ctl.innerHTML = '<span class="mseg"></span><span class="k-note">' + (mode === 'day' ? 'день: ' + f.date(M.asOf) + ' к закрытию ' + f.date(M.prevDate) : 'MTD ≈ оценка: кэрри × ' + DAYS_MTD + ' дн., остаток по факторам дня') + '</span><span class="sp"></span><span class="k-note">щелчок по любой цифре — какие позиции дали вклад</span>';
+    ctl.innerHTML = '<span class="mseg"></span><span class="k-note">' + (mode === 'day' ? 'день: ' + f.date(M.asOf) + ' к закрытию ' + f.date(M.prevDate) : 'MTD ≈ оценка: кэрри и фондирование × ' + DAYS_MTD + ' дн., остаток по факторам дня') + '</span><span class="sp"></span><span class="k-note">щелчок по любой цифре — какие позиции дали вклад</span>';
     page.appendChild(ctl);
     K.seg(ctl.querySelector('.mseg'), [['day', 'день'], ['mtd', 'MTD']], mode, v => { mode = v; try { localStorage.setItem('c10-mode', v); } catch (e) { } render(); });
     const kp = h('div', 'k-kpis');
