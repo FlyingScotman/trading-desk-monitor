@@ -270,6 +270,8 @@
     { name: 'Si-12.26 фьючерс USD/RUB sell', kind: 'FXF', productGroup: 'fx_future', ccy: 'USD', curve: 'USD SOFR', curve2: 'RUB RUONIA', tenor: 0.15, notional: -20e6, rate: 84.60, book: 'FXB', cpty: 'MOEX' },
     { name: 'CCS USD/RUB 3Y', kind: 'XCCY', productGroup: 'ccs', ccy: 'USD', curve: 'USD SOFR', curve2: 'RUB RUONIA', tenor: 3, notional: 15e6, rate: 4.10, book: 'FXB', cpty: 'ВТБ' },
     // TRS по отчёту без риска: в таблице «валюта × тип» — «без риска», не ноль
+    // РЕПО на RUONIA (#201): оценено ядром из условий сделки (p.ratesCore), в данных прогона — строка OTC
+    { name: 'Обратное РЕПО 3M RUONIA+20', kind: 'OTC', productGroup: 'repo', ccy: 'RUB', curve: 'RUB RUONIA', tenor: 0.25, notional: 2000e6, rate: 14.52, book: 'RATES', cpty: 'Контрагент А' },
     { name: 'TRS корп. облигации 1Y (по отчёту)', kind: 'OTC', productGroup: 'trs', ccy: 'RUB', curve: 'RUB RUONIA', tenor: 1, notional: 1500e6, rate: 14.50, book: 'RATES', cpty: 'Газпромбанк' },
     // FX-сделки с двумя валютами риска: NDF (расчёт разницы в рублях), кросс без рубля (FX-дельта в двух валютах, риск
     // на двух иностранных кривых), FX-своп (две ноги, риск на implied-кривой юаня), CHF-форвард (своя кривая и валюта)
@@ -422,6 +424,10 @@
       if (p.kind === 'IRS' || p.kind === 'KSW') {
         // receiver: длинная ставка => DV01 < 0
         w.forEach((x, k) => p.risk[p.curve][k] += -sgn * nrub * ann * 1e-4 * x);
+      } else if (p.productGroup === 'repo') {
+        // обратное РЕПО (кредитор): PV ≈ первая часть плюс начисленные проценты, риск RUONIA — дисконтирование конечной
+        // суммы (≈ −сумма × срок × 1 б.п.: 2 000 mm × 3M ≈ −50 тыс ₽/бп)
+        w.forEach((x, k) => p.risk['RUB RUONIA'][k] += -sgn * nrub * p.tenor * 1e-4 * x);
       } else if (p.kind === 'BAS') {
         w.forEach((x, k) => { p.risk['RUB KEY'][k] += -nrub * ann * 1e-4 * x; p.risk['RUB RUONIA'][k] += nrub * ann * 1e-4 * x * 0.98; });
       } else if (p.kind === 'FXF' || p.kind === 'XCCY') {
@@ -429,6 +435,7 @@
         w.forEach((x, k) => { p.risk[p.curve][k] += -sgn * nrub * ann * 1e-4 * x; p.risk[p.curve2 || 'RUB RUONIA'][k] += sgn * nrub * ann * 1e-4 * x; });
       }
       p.mv = (rng(p.name + 'mv')() - 0.5) * nrub * 0.01;
+      if (p.productGroup === 'repo') p.mv = sgn * nrub * (1 + (M.indices.RUONIA + 0.2) / 100 * 14 / 365);  // 14 дней от первой части
       p.fxDeltaBy = (p.kind === 'FXF' || p.kind === 'XCCY') ? { [p.ccy]: p.notional } : {};
       if (p.kind === 'FXF' && p.productGroup !== 'fx_future') fxDeal(p);
       p.mvCcy = p.mv / M.fx[p.ccy];
@@ -477,6 +484,52 @@
   });
   M.positions = positions;
   M.pos = Object.fromEntries(positions.map(p => [p.id, p]));
+  // ---------- свопы и РЕПО, оценённые ядром (#201): та же форма, что lib/real.js собирает из extra.swaps / extra.repos /
+  // extra.index_fixings; одна сделка — с предварительными условиями (quality 'assumed'), у RUONIA — объявленный
+  // неопубликованный день и пропуск внутри истории ----------
+  (function () {
+    const prevBd = s => { let d = addDays(s, -1); while ([0, 6].includes(parse(d).getDay())) d = addDays(d, -1); return d; };
+    // пропуск — раньше старта демо-сделок: в истории он виден, но ни одна сделка его не читает (иначе ядро её отклонило бы)
+    const bd1 = prevBd(AS_OF), bd2 = prevBd(bd1), gap = '2026-02-13';
+    M.indexFixings = {
+      RUONIA: { id: 'RUONIA', latest: bd2, latestRate: M.indices.RUONIA, first: '2025-10-01', knownAt: AS_OF + 'T09:05:00Z', snapshotId: 'demo-fixings',
+        unpublished: [bd1], maxUnpublished: 1, missing: [gap] },
+      KEY_RATE: { id: 'KEY_RATE', latest: AS_OF, latestRate: M.indices['КС'], first: '2025-10-01', knownAt: AS_OF + 'T09:05:00Z', snapshotId: 'demo-fixings',
+        unpublished: [], maxUnpublished: 0, missing: [] },
+    };
+    const IDX = { IRS: 'RUONIA', KSW: 'KEY_RATE' };
+    let first = true;
+    M.derivParallelDemo = { state: 'computed', tolerance: { abs_rub: 10000, rel: 0.01, provisional: true }, totals: null, rows: [] };
+    positions.forEach(p => {
+      const repo = p.productGroup === 'repo';
+      if (!IDX[p.kind] && !repo) {
+        if (p.productGroup === 'ccs') M.derivParallelDemo.rows.push({ positionId: p.id, book: p.book, product: 'ccs', status: 'imported_only', used: 'imported',
+          computed: null, imported: p.mv, diff: null, over: null, reason: 'ccs_unsupported' });
+        return;
+      }
+      const r = rng(p.name + 'core'), idx = repo ? 'RUONIA' : IDX[p.kind], nrub = Math.abs(p.notionalRub);
+      const pv = p.mv, rep = pv - (r() - 0.5) * nrub * (repo ? 2e-5 : 4e-4);
+      const start = repo ? addDays(AS_OF, -14) : addMonths(AS_OF, r() < 0.5 ? 1 : -Math.round(r() * 6) - 1);  // форвардный старт — без фиксингов
+      const t = { kind: repo ? 'repo' : 'swap', tradeId: 'DEMO-' + p.id, product: repo ? 'repo' : (idx === 'RUONIA' ? 'ois' : 'irs'), index: idx,
+        side: repo ? 'reverse_repo' : (p.notional < 0 ? 'payer' : 'receiver'), notional: nrub, fixedRate: repo ? null : p.rate,
+        spreadBp: repo ? 20 : 0, parRate: repo ? null : round(p.rate + (r() - 0.5) * 0.6, 4), start, end: p.maturity, pv, reportedPv: rep, diff: pv - rep,
+        convention: repo ? null : (idx === 'RUONIA' ? 'rub_ruonia_ois_moex_v2' : 'rub_key_rate_swap_v1'), security: repo ? 'ОФЗ 26238' : null,
+        discountCurve: 'RUB RUONIA', projectionCurve: idx === 'RUONIA' ? 'RUB RUONIA' : 'RUB KEY', fixingId: start < AS_OF ? idx : null,
+        endAmount: repo ? round(nrub * (1 + (M.indices.RUONIA + 0.2) / 100 * 0.25), 2) : null };
+      const fixings = t.fixingId ? { [idx]: M.indexFixings[idx] } : {};
+      const assumptions = [];
+      if (first && !repo) { first = false; assumptions.push('конвенция свопа не задана в условиях: биржевая (' + t.convention + '), предварительно'); }
+      if (fixings.RUONIA) assumptions.push('RUONIA not yet published for ' + bd1 + ': the latest fixing of ' + bd2 + ' carried (declared, at most 1 business day)');
+      p.quality = assumptions.length ? 'assumed' : 'exact';
+      p.ratesCore = { trades: [t], fixings, product: t.product, pv, reportedPv: rep, pvDiff: pv - rep, provisional: p.quality === 'assumed', assumptions };
+      const over = Math.abs(pv - rep) > Math.max(1e4, 0.01 * Math.abs(rep));
+      M.derivParallelDemo.rows.push({ positionId: p.id, book: p.book, product: t.product, status: 'both', used: 'computed', computed: pv, imported: rep, diff: pv - rep, over, reason: null });
+    });
+    // РЕПО без даты окончания — по отчёту (ядро его не оценивает: дату окончания задаёт владелец)
+    M.derivParallelDemo.rows.push({ positionId: 'DEMO-REPO-OPEN', book: 'RATES', product: 'repo', status: 'imported_only', used: 'imported',
+      computed: null, imported: 1.8e5, diff: null, over: null, reason: 'repo_open' });
+  })();
+  M.derivParallel = () => M.derivParallelDemo;
   // ---------- фондирование (демо, B1): ставка фондирования × MV бумаг за день, отдельно от кэрри (p.fundingDay, #168) ----------
   (function () {
     const byBook = {}, byEntity = {}; let total = 0;

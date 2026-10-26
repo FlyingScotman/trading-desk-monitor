@@ -30,6 +30,10 @@
  *    период (null — не посчитано: не настроено или проблема), p.fundRate — ставка фондирования на конец периода, %
  *    (extra.funding.lines rate_pct, по телу строк в рублях), p.fundingInfo — extra.funding (состояние, строки, причина);
  *    M.funding — фондирование прогона (D.fundingStatus: состояние, итоги по книгам и юрлицам, проблемы).
+ *  - свопы и РЕПО, оценённые ядром (#201): p.ratesCore — сделки (extra.swaps / extra.repos), фиксинги (extra.index_fixings),
+ *    сверка с отчётом (reported_pv_rub / pv_diff_rub), provisional — quality 'assumed'; null — нет. M.indexFixings — фиксинги
+ *    прогона по индексу; M.derivParallel() — лениво, /api/v1/runs/{id}/derivatives (ядро и отчёт по позициям): state
+ *    'computed' / 'not_computed', 'unavailable' (status — код HTTP) — сервер не ответил; null — у прогона нет номера.
  * История позиции (M.posHistory) — синхронный запрос /api/v1/history/positions: первые две позиции по одной,
  * дальше сразу все (страницы C11, C13 просят историю всех позиций). Кроме цен рынка в ней номинал, DV01, CS01,
  * базис, MV и DV01 по кривым каждого прогона (M.histSource = 'runs': история риска — настоящая, не «номинал ×
@@ -270,6 +274,34 @@
     const wt = l => Math.abs(num(l.body_ccy) || 0) * (M.fx[l.ccy] || 1), w = ls.reduce((s, l) => s + wt(l), 0);
     return w ? ls.reduce((s, l) => s + num(l.rate_pct) * wt(l), 0) / w : ls.reduce((s, l) => s + num(l.rate_pct), 0) / ls.length;
   };
+  // свопы и РЕПО, оценённые ядром (#201; backend valuation/derivatives.py, tdm_run.direct_row): extra.swaps / extra.repos —
+  // условия и цифры ядра по каждой сделке (RUB), extra.index_fixings — какая история фиксингов прочитана (последний
+  // фиксинг, объявленные неопубликованные дни, пропуски внутри истории), extra.reported_pv_rub / pv_diff_rub — сверка с
+  // отчётом, extra.quality 'assumed' — условия предварительные (extra.assumptions). Прогон без этих полей — null
+  const isObj = v => v != null && typeof v === 'object' && !Array.isArray(v);
+  const strs = a => Array.isArray(a) ? a.filter(x => x != null).map(String) : [];
+  const fixingOf = (id, x) => ({ id, latest: x.latest || null, latestRate: num(x.latest_rate_pct), first: x.first || null, knownAt: x.known_at || null,
+    snapshotId: x.snapshot_id || null, unpublished: strs(x.unpublished_business_days), maxUnpublished: num(x.max_unpublished_business_days),
+    missing: strs(x.missing_business_days) });
+  function tradeOf(kind, s) {
+    const pv = num(s.pv_rub), rep = num(s.reported_pv_rub), repo = kind === 'repo';
+    return { kind, tradeId: s.trade_id == null ? null : String(s.trade_id), product: repo ? 'repo' : (s.product || null), index: s.index || null,
+      side: s.side || null, notional: repo ? num(s.start_amount_rub) : num(s.notional_rub), fixedRate: num(s.fixed_rate_pct), spreadBp: num(s.spread_bp),
+      parRate: repo ? null : num(s.par_rate_pct), start: s.start_date || null, end: (repo ? s.end_date : s.maturity_date) || null,
+      pv, reportedPv: rep, diff: pv != null && rep != null ? pv - rep : null, convention: s.convention || null, security: s.security || null,
+      discountCurve: s.discount_curve || null, projectionCurve: s.projection_curve || null, fixingId: s.fixing_id || null,
+      endAmount: repo ? num(s.end_amount_rub) : null };
+  }
+  function ratesCoreOf(ex, d) {
+    const sw = (Array.isArray(ex.swaps) ? ex.swaps : []).filter(isObj), rp = (Array.isArray(ex.repos) ? ex.repos : []).filter(isObj);
+    if (!sw.length && !rp.length) return null;
+    const fixings = {};
+    if (isObj(ex.index_fixings)) Object.entries(ex.index_fixings).forEach(([id, x]) => { if (isObj(x)) fixings[id] = fixingOf(id, x); });
+    const core = isObj(ex.core) ? ex.core : {};
+    return { trades: sw.map(s => tradeOf('swap', s)).concat(rp.map(s => tradeOf('repo', s))), fixings, product: core.product || null,
+      pv: num(d.mvRub), reportedPv: num(ex.reported_pv_rub), pvDiff: num(ex.pv_diff_rub),
+      provisional: ex.quality === 'assumed', assumptions: strs(ex.assumptions) };
+  }
   const positions = D.positions.map(d => {
     const [group, kind] = kindOf(d), ex = d.extra || {}, q = ex.quote || {}, xp = XP[d.id] || {};
     const isBond = group !== 'DER' && group !== 'OTH';
@@ -388,6 +420,7 @@
     }
     p.funding = e.available === false || !d.pnl ? null : num(e.funding);  // null: не посчитано (не настроено, проблема)
     p.fundingInfo = ex.funding || null;
+    p.ratesCore = ratesCoreOf(ex, d);  // свопы и РЕПО ядра (#201), null — нет
     p.pnlMtd = num(xp.pnlMtd); p.pnlYtd = num(xp.pnlYtd);
     p.spreadChgBp = num(xp.spreadChgBp);
     p.tradedToday = !!(xp.trade || d.newToday); p.tradeToday = xp.trade || null;
@@ -402,6 +435,42 @@
   M.defaultOrder = (a, b) => ((M.ccyOrder[a.ccy] ?? 99) - (M.ccyOrder[b.ccy] ?? 99)) || (groupOrder[a.group] - groupOrder[b.group]) ||
     (a.issuerName || '').localeCompare(b.issuerName || '', 'ru') || ((kindOrder[a.kind] || 0) - (kindOrder[b.kind] || 0)) || (a.tenor - b.tenor);
   positions.sort(M.defaultOrder);
+  // фиксинги индексов, прочитанные свопами и РЕПО прогона (#201): одна история на прогон, у позиций — та же; пропуски и
+  // объявленные неопубликованные дни — объединение по позициям. Пропуск внутри истории — заметка в шапке: позицию,
+  // которая его читает, ядро не оценивает, она остаётся по отчёту
+  M.indexFixings = {};
+  positions.forEach(p => Object.values((p.ratesCore || {}).fixings || {}).forEach(x => {
+    const o = M.indexFixings[x.id];
+    if (!o) { M.indexFixings[x.id] = Object.assign({}, x, { unpublished: x.unpublished.slice(), missing: x.missing.slice() }); return; }
+    if (x.latest && (!o.latest || x.latest > o.latest)) { o.latest = x.latest; o.latestRate = x.latestRate; }
+    x.unpublished.forEach(v => { if (!o.unpublished.includes(v)) o.unpublished.push(v); });
+    x.missing.forEach(v => { if (!o.missing.includes(v)) o.missing.push(v); });
+  }));
+  Object.values(M.indexFixings).forEach(x => { x.unpublished.sort(); x.missing.sort();
+    if (x.missing.length) M.notes.push('фиксинги ' + x.id + ': пропуски внутри истории (' + x.missing.join(', ') + ') — своп или РЕПО, который их читает, ядро не оценивает (по отчёту)'); });
+  // параллельный отчёт по деривативам (#201, TDM#49): GET /api/v1/runs/{id}/derivatives — оценка ядром и из отчёта по
+  // позициям, статус, расхождение и допуск. Лениво, один раз; state 'not_computed' — прогон до блока, 'unavailable' —
+  // сервер не ответил (status — код HTTP, 0 — нет связи); null — у прогона нет номера (запрашивать нечего)
+  let parCache;
+  M.derivParallel = function () {
+    if (parCache !== undefined) return parCache;
+    const id = (D.source || {}).runId;
+    if (id == null) return (parCache = null);
+    let status = 0, j = null;
+    try {
+      const x = new XMLHttpRequest(); x.open('GET', '../api/v1/runs/' + encodeURIComponent(id) + '/derivatives', false); x.send();
+      status = x.status; if (status === 200) j = JSON.parse(x.responseText);
+    } catch (e) { j = null; }
+    parCache = M.parseDerivParallel(j) || { state: 'unavailable', status, tolerance: null, totals: null, rows: [] };
+    return parCache;
+  };
+  M.parseDerivParallel = j => {
+    if (!isObj(j)) return null;
+    const rows = (Array.isArray(j.rows) ? j.rows : []).filter(isObj).map(r => ({ positionId: r.position_id == null ? null : String(r.position_id), book: r.book_id || null,
+      product: r.product || null, status: r.status || null, used: r.used || null, computed: num(r.computed_pv_rub), imported: num(r.imported_pv_rub),
+      diff: num(r.diff_rub), over: r.over == null ? null : !!r.over, reason: r.reason || null }));
+    return { state: j.state || null, tolerance: isObj(j.tolerance) ? j.tolerance : null, totals: isObj(j.totals) ? j.totals : null, rows };
+  };
   // не оценённые позиции — по причинам и типам (R45, api/coverage.py): разбор в панели «Чего нет в данных» (kit.js)
   M.unvalued = X.unvalued || null; M.approx = X.approx || null;
   const UV = M.unvalued;

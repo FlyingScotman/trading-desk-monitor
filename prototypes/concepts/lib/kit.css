@@ -243,3 +243,11 @@ table.k-tbl.k-compact { width: auto; font-size: 12px; }
 .k-alias-pop .hd { padding: 8px 10px; border-bottom: 1px solid var(--line); font-weight: 600; }
 .k-alias-pop .bd { padding: 6px 10px 8px; }
 .k-alias-pop .ft { margin-top: 6px; font-size: 11px; }
+/* свопы и РЕПО, оценённые ядром (#201, K.ratesCorePanel) */
+.k-rcstrip { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.k-rcfix { border: 1px solid var(--line); border-left: 3px solid var(--c, var(--pos)); border-radius: 6px; padding: 6px 10px; margin-bottom: 6px; background: var(--bg-2); line-height: 1.5; overflow-wrap: anywhere; }
+.k-rcfix.warn { --c: var(--warn); } .k-rcfix.bad { --c: var(--neg); }
+.k-rcfix .w { color: var(--warn); } .k-rcfix .b { color: var(--neg); }
+.k-tag.k-prov { border-color: var(--warn); color: var(--warn); cursor: help; margin-left: 6px; }
+.k-tag.k-carry { cursor: help; margin-left: 6px; }
+.k-rcsub { margin: 12px 0 4px; font-weight: 600; font-size: 12.5px; }
