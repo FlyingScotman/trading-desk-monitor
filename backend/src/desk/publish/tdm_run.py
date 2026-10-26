@@ -558,7 +558,7 @@ def ofz_basis(t: Any, v: BondValuation) -> dict[str, Any]:
     (``bonds.ofz_levels``), so ``risk["RUB RUONIA"]`` is the RUONIA risk minus the basis and its sum over the curves is
     ``ofz_ruonia01``. Without it (0.2.6, an OFZ on a fallback rung) the pages' RUONIA is the basis again (variant P).
     A KBD floater (``bonds.is_kbd_floater``, TDM#33) projects its coupons on the KBD and is discounted on RUONIA OIS:
-    core (core#90, commit 57fb6b7) values it in RUONIA + basis too: its basis is the projection's KBD par risk with
+    core (0.40, core#90) values it in RUONIA + basis too: its basis is the projection's KBD par risk with
     RUONIA held (``RUB OFZ``, to the bit the plain two-curve risk), its ``ofz_ruonia01`` RUONIA's quotes moving the
     discount and the projection's KBD with the basis held, the row in the scenarios' coordinates as an OFZ's. Empty
     for every other row."""

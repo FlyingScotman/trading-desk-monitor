@@ -16,6 +16,9 @@ jobs:
           BANNED_TERMS: ${{ secrets.BANNED_TERMS }}
           PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         run: bash tools/check_banned_terms.sh
+      - uses: actions/setup-node@v4  # Root tests run tests/js through tests/test_js.py: the same Node as the js job
+        with:
+          node-version: 22
       - uses: astral-sh/setup-uv@v5
       - name: Python 3.12 venv with the backend, the tdm package and dev tools
         working-directory: backend
@@ -29,3 +32,25 @@ jobs:
         run: .venv/bin/python -m pytest -q -p no:cacheprovider
       - name: Root tests
         run: backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests
+
+  js:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PLAYWRIGHT_VERSION: 1.56.1  # the version of the dev machine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: JS tests of the monitors (by glob; `node --test tests/js/` does not work on Node 22)
+        run: node --test tests/js/*.test.js
+      - name: Playwright with Chromium for the smoke (outside the repo, found through NODE_PATH)
+        run: |
+          npm install --prefix "$RUNNER_TEMP/pw" --no-save --no-audit --no-fund "playwright@$PLAYWRIGHT_VERSION"
+          # without --with-deps: the runner image already has Chrome's system libraries; the apt step of
+          # --with-deps hung on a slow mirror and timed the job out
+          "$RUNNER_TEMP/pw/node_modules/.bin/playwright" install chromium
+          echo "NODE_PATH=$RUNNER_TEMP/pw/node_modules" >> "$GITHUB_ENV"
+      - name: Smoke of the monitors (every concept page, fails on any console error)
+        run: node prototypes/concepts/tools/smoke.js "$RUNNER_TEMP/shots"
