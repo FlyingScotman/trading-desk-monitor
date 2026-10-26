@@ -760,8 +760,10 @@
             '<td class="n">' + (dim === 'pos' && x.p.mv == null ? '—' : f.mn(mvOf(x), 1)) + '</td>' +
             '<td class="n ' + f.cls(x.v) + '">' + fmt(x.v) + '</td><td>' + K.bar(x.v, max) + '</td><td class="n mut">' + Math.round(Math.abs(x.v) / absTot * 100) + '%</td><td class="n mut3">' + Math.round(cum / absTot * 100) + '%</td></tr>';
         }).join('') + '</tbody><tfoot><tr><td></td><td>Итого</td><td colspan="' + (dim === 'pos' ? 3 : 1) + '"></td><td class="n">' + f.mn(mvTot, 1) + '</td><td class="n ' + f.cls(tot) + '">' + fmt(tot) + '</td><td colspan="3"></td></tr></tfoot></table>';
-      // CSV разбора (#184): то, что на экране, — разрез и фильтр; полоска и столбик доли не выгружаются
-      K.tableTools(body, { viewKey: 'drill', title: spec.title + ' · ' + D[1] + (spec.unit ? ', ' + spec.unit : '') });
+      // CSV разбора (#184): то, что на экране, — разрез и фильтр. Колонки без заголовка (цветная полоска слева и
+      // столбик вклада) не выгружаются, «Доля» и «Накопл.» — выгружаются. Колонки у разрезов разные — ключ ширины
+      // свой у каждого разреза
+      K.tableTools(body, { viewKey: 'drill-' + dim, title: spec.title + ' · ' + D[1] + (spec.unit ? ', ' + spec.unit : '') });
       body.querySelectorAll('tr.row').forEach(tr => tr.onclick = () => {
         const x = g[tr.dataset.k];
         if (dim === 'pos') K.card(x.k); else K.drill(Object.assign({}, spec, { title: spec.title + ' · ' + x.label, rows: x.n, dim: 'pos' }));
@@ -1784,7 +1786,7 @@
     if (!rows.length) return '<div class="k-empty">нет риска ставок и спреда</div>';
     const ks = M.buckets.map((_, k) => k).filter(k => rows.some(r => Math.abs(r.vals[k]) >= 1));
     const cell = v => '<td class="n ' + (Math.abs(v) >= 1 ? f.cls(v) : '') + '">' + (Math.abs(v) >= 1 ? f.dv(v) : '<span class="mut3">·</span>') + '</td>';
-    return '<div class="k-tbl-wrap"><table class="k-tbl k-compact k-crisk"><thead><tr><th>Кривая</th><th class="n">Итого</th>' + ks.map(k => '<th class="n">' + M.buckets[k] + '</th>').join('') + '</tr></thead><tbody>' +
+    return '<div class="k-tbl-wrap k-fit"><table class="k-tbl k-compact k-crisk"><thead><tr><th>Кривая</th><th class="n">Итого</th>' + ks.map(k => '<th class="n">' + M.buckets[k] + '</th>').join('') + '</tr></thead><tbody>' +
       rows.map(r => '<tr' + (r.tot ? ' class="grp"' : '') + '><td>' + (r.tot ? '' : '<b style="color:' + K.curveColors[r.id] + '">■</b> ') + K.hint(esc(r.label), r.tot ? K.tips.dv01 : K.curveTip(r.id)) + '</td><td class="n"><b>' + f.dv(r.vals.reduce((a, b) => a + b, 0)) + '</b></td>' + ks.map(k => cell(r.vals[k])).join('') + '</tr>').join('') +
       '</tbody></table></div>';
   };

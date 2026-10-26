@@ -137,7 +137,7 @@
     const B = d.by_book || [];
     bp.querySelector('.bd').innerHTML = B.length ? '<table class="k-tbl" data-vk="c16-by-book" data-title="ОВП по книгам"><thead><tr><th>Книга</th><th>Валюта</th><th class="n">ОВП</th><th>Слагаемые</th></tr></thead><tbody>' +
       B.map(x => '<tr><td>' + scopeOf(x) + (outside.has(x.book_id + '|' + x.ccy) ? ' <span class="mut3" title="ни одна часть отчёта ОВП не покрывает книгу">вне отчёта</span>' : '') + '</td><td>' + esc(x.ccy) + '</td><td class="n">' + amt(x.total) + '</td>' +
-        '<td class="wrap mut">' + keys.filter(k => x.components[k]).map(k => esc(C[k]) + ' ' + f.s(x.components[k], 0)).join(' · ') + '</td></tr>').join('') + '</tbody></table>'
+        '<td class="wrap mut">' + keys.filter(k => x.components[k]).map(k => esc(C[k]) + ' <span class="k-num">' + f.s(x.components[k], 0) + '</span>').join(' · ') + '</td></tr>').join('') + '</tbody></table>'
       : '<div class="k-empty">Книг с валютной позицией нет</div>';
     two.appendChild(bp);
     view.appendChild(wrap);

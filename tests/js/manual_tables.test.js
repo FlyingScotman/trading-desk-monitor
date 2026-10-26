@@ -177,7 +177,7 @@ t('#183: дата оферты — в CSV датой Excel, вид оферты 
   same(fl.csv().split('\r\n').slice(2, 4), ['Вал,"Сумма, mm"', 'RUB,27.74']);
   // C08 «Оферты и коллы»: дата — data-date, вид — своя колонка
   assert.ok(/<th>Дата<\/th><th>Вид<\/th><th class="n">Дней<\/th>/.test(c08));
-  assert.ok(/<td data-date="' \+ p\.event\.date \+ '">' \+ f\.date\(p\.event\.date\) \+ '<\/td><td class="mut3">' \+ K\.offerKindText\(p\.event\.kind\) \+ '<\/td>/.test(c08));
+  assert.ok(/<td data-date="' \+ esc\(p\.event\.date\) \+ '">' \+ f\.date\(p\.event\.date\) \+ '<\/td><td class="mut3">' \+ K\.offerKindText\(p\.event\.kind\) \+ '<\/td>/.test(c08));
   // C03: «Вид оферты» рядом с «Офертой» в наборах колонок, дата — data-date
   const c03 = P('concepts/c03-blotter.html');
   assert.strictEqual((c03.match(/'offer', 'offerKind', 'maturity'/g) || []).length, 3);
@@ -206,7 +206,9 @@ t('#184: таблицы карточки позиции и разбора — CS
   const kit = P('concepts/lib/kit.js'), c03 = P('concepts/c03-blotter.html');
   assert.ok(/K\.cardTableTools\(o\.bd, p\);/.test(kit), 'полная карточка');
   assert.ok(/K\.cardTableTools\(card, p\);/.test(c03), 'карточка C03');
-  assert.ok(/K\.tableTools\(body, \{ viewKey: 'drill'/.test(kit), 'разбор');
+  assert.ok(/K\.tableTools\(body, \{ viewKey: 'drill-' \+ dim,/.test(kit), 'разбор: ключ ширины — свой у каждого разреза');
+  // C16 «ОВП по книгам»: число в тексте «Слагаемых» размечено k-num — его знак виден CSV в обоих режимах (#222)
+  assert.ok(/' <span class="k-num">' \+ f\.s\(x\.components\[k\], 0\) \+ '<\/span>'/.test(P('concepts/c16-ocp.html')));
 });
 
 t('#131 + #105: CSV ручной таблицы — единица второй строкой шапки через запятую, без повтора; валюта отчёта', () => {
@@ -336,7 +338,7 @@ t('#131: у всех таблиц мониторов есть CSV; ключи р
   const kit = fs.readFileSync(path.join(dir, 'lib', 'kit.js'), 'utf8');
   [...kit.matchAll(/K\.tableTools\([^;]*?viewKey: '([a-z0-9-]+)'/g)].forEach(m => add(m[1], 'kit.js'));
   [...kit.matchAll(/\['table\.[a-z-]+', '([a-z0-9-]+)'/g)].forEach(m => add(m[1], 'kit.js K.CARD_TABLES'));
-  assert.ok(['drill', 'card-legs', 'card-curve-risk', 'card-flows'].every(k => seen.has(k)), 'ключи kit.js найдены');
+  assert.ok(['drill-', 'card-legs', 'card-curve-risk', 'card-flows'].every(k => seen.has(k)), 'ключи kit.js найдены');
   const files = fs.readdirSync(dir).filter(f => /^c\d+.*\.html$/.test(f));
   files.forEach(f => {
     const src = fs.readFileSync(path.join(dir, f), 'utf8');
