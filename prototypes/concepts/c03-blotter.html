@@ -187,7 +187,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
   // ---------- данные ----------
   // колонка для сортировки строк и групп (KIT.rowCmp, KIT.groupKeys): значение и слагаемое итога группы
-  const colOf = k => C[k] ? { val: C[k].val, sum: C[k].sum || null, filter: C[k].filter, fltOrder: C[k].fltOrder, key: k } : null;
+  const colOf = k => C[k] ? { val: C[k].val, sum: C[k].sum || null, nullable: !!C[k].nullable, filter: C[k].filter, fltOrder: C[k].fltOrder, key: k } : null;
   let base = [];  // строки под поиском — для списка значений фильтра столбца
   function rows() {
     let L = K.list();
@@ -203,12 +203,11 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   const tbl = document.getElementById('tbl');
   let visible = [];
   function sumCell(c, list, title) {
-    if (!c.sum) return '<td></td>';
-    if (c.nullable && list.length && list.every(r => c.val(r) == null)) return '<td class="n"><span class="mut3" title="не посчитано">—</span></td>';  // #168
-    if (!list.length) return '<td></td>';
-    // ни одно слагаемое не посчитано (все null, #333, B1) — «—», а не «0»; посчитана часть — сумма посчитанных, как раньше
-    if (M.sum(list, c.sum) == null) return '<td class="n"><span class="mut3" title="не посчитано">—</span></td>';
-    const tot = list.reduce((s, r) => s + (c.sum(r) || 0), 0);
+    if (!c.sum || !list.length) return '<td></td>';
+    // ни одно слагаемое не посчитано (все null, #333, B1; nullable — #168) — «—», а не «0»; посчитана часть — сумма
+    // посчитанных. Общий расчёт K.groupTotal — им же сортируются группы (K.groupKeys, #347)
+    const tot = K.groupTotal(list, c.sum, c.nullable && c.val);
+    if (tot == null) return '<td class="n"><span class="mut3" title="не посчитано">—</span></td>';
     return '<td class="n">' + K.d({ title: title + ' · ' + c.label, unit: c.unit, fmt: c.sfmt, rows: list.map(p => ({ p, v: c.sum(p) })) }, c.sfmt(tot), c.neutral ? '' : null) + '</td>';
   }
   function render() {
