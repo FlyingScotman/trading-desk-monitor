@@ -1,4 +1,7 @@
-"""Запуск JS-тестов сценарного движка (нужен node; без него тест пропускается)."""
+"""Запуск всех JS-тестов `tests/js/*.test.js` одним проходом `node --test` (нужен node; без него тест пропускается).
+
+Файлы берутся по маске, а не списком: новый тест подключается сам (#235).
+"""
 import shutil
 import subprocess
 import unittest
@@ -8,107 +11,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 @unittest.skipUnless(shutil.which("node"), "node не установлен")
-class ScenarioEngineJs(unittest.TestCase):
-    def test_scenario_engine(self):
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "scenario_engine.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_bonds(self):
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "bonds.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_funding_carry(self):
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "funding_carry.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_desk_scope(self):
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "desk_scope.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_pnl_absence_and_curves_without_points(self):
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "pnl_r10.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_pnl_absence_on_board_pivot_and_lab(self):
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "pnl_r10_pages.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_ocp_net_of_the_funding_liability(self):
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "ocp_liability.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_coupon_display(self):
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "coupon_r16.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_ccy_kind_table(self):
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "ccy_kind.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_fx_forward_ui(self):
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "fx_forward_ui.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_ui1_hints_group_sort_card_risk(self):
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "ui1_batch.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_alias_ui(self):
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "alias_ui.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_history_points_and_coverage(self):  # R44, R45
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "history_coverage.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_header_status(self):  # #22: дата и тип данных, «следующее обновление», предупреждение без среза
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "header_status.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_run_badge(self):  # #192: бейдж прогона в шапке — возраст публикации, что вошло, событие desk:live
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "run_badge.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_backfill_indicator(self):  # #23, #163: «догрузка истории N из M · K не сходятся», подсказка с датами
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "backfill_indicator.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_desk_updater_browser_check(self):
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "desk_updater.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_desk_server_restart_and_network_section(self):
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "desk_server.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_batch2_columns_matrix_minfin_fx_tile(self):
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "batch2_ui.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_batch1_floater_dm_history(self):
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "batch1_dm.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_funding_b1_ui(self):
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "funding_b1.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_settings_forms(self):
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "settings_forms.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_table_view_and_export(self):  # #102, #110
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "table_view.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_ofz_risk_view(self):  # #32: «RUONIA + базис» / «КБД»
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "ofz_view.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_negative_number_format(self):  # #153: (1,234.5) красным / −1,234.5; CSV — с минусом
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "neg_format.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_units_and_currency_labels(self):  # #105: единицы и валюта в подписях, что меняет валюта отчёта
-        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "units_105.test.js")], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+class JsTests(unittest.TestCase):
+    def test_all_js_tests(self):
+        files = sorted(str(p) for p in (ROOT / "tests" / "js").glob("*.test.js"))
+        self.assertTrue(files, "нет tests/js/*.test.js")
+        r = subprocess.run(["node", "--test", *files], capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
+        self.assertEqual(r.returncode, 0, r.stdout[-20000:] + r.stderr[-5000:])
