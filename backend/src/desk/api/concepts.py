@@ -591,9 +591,6 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
                 s[k].append(last[j] if last else None)
             s["ofzSpr"].append(last[10] if last and len(last) > 10 else None)  # an OFZ's spread to the KBD (0.2.6)
             s["ofzRuo"].append(last[11] if last and len(last) > 11 else None)  # its RUONIA risk apart (0.2.7, TDM#213)
-            # the run's G-spread (core) and Z-spread to the KBD (TDM#232) on its dates, beside MOEX's spr / zspr
-            s["gRun"].append(last[12] if last and len(last) > 12 else None)
-            s["zKbd"].append(last[13] if last and len(last) > 13 else None)
             for c in last[8] if last else ():
                 cv.setdefault(c, [None] * i)
             for c, arr in cv.items():
@@ -715,11 +712,10 @@ def point_flag(h: tuple, book_date: str | None, d: date, valued: bool) -> list[s
     return ["minor", "; ".join(notes)] if notes else None
 
 
-OPTIONAL = ("zspr", "dm", "dmPx", "icpi", "ir", "bei", "cpi", "ofzSpr", "ofzRuo", "gRun", "zKbd")
+OPTIONAL = ("zspr", "dm", "dmPx", "icpi", "ir", "bei", "cpi", "ofzSpr", "ofzRuo")
 """Series of ``positions_history`` given only when the position has a value (``ofzSpr``: an OFZ's spread risk to the
 KBD, runs of 0.2.6 on; ``basis`` is its par-par basis then, its spread to RUONIA before; ``ofzRuo``: its RUONIA risk
-computed apart from the basis, runs of 0.2.7 on, TDM#213: what the «КБД» view takes off RUONIA, the basis before; ``gRun``
-and ``zKbd``: the run's G-spread, core's, and its Z-spread to the KBD, TDM#232, on the run dates): MOEX's Z-spread to the KBD, the desk's
+computed apart from the basis, runs of 0.2.7 on, TDM#213: what the «КБД» view takes off RUONIA, the basis before): MOEX's Z-spread to the KBD, the desk's
 discount margin of a floater (its run spread) and its estimate from the price on every date of the price history
 (``dm_from_price``), MOEX's linker analytics (contract 1.2), and for a linker CPI year on year as known on the date
 (R25)."""

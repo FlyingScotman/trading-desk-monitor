@@ -370,8 +370,6 @@
       p.zSpreadZ = p.cpn.type === 'linker' ? null : p.cpn.type === 'float' && p.ccy === 'RUB' && p.cpn.index === 'КС'
         ? Math.round(p.zspread + (curveAt('RUB KEY', Math.min(p.tenor, 3)) - curveAt('RUB RUONIA', Math.min(p.tenor, 3))) * 100) : p.zspread;
       p.spreadCurve = p.ccy === 'RUB' && p.zSpreadZ != null ? 'RUB RUONIA' : null;
-      // Z-спред к КБД (#232): у рублёвой бумаги — к кривой ОФЗ, как G-спред, но по всем потокам
-      p.zKbd = p.ccy === 'RUB' && p.zSpreadZ != null ? Math.round(p.zSpreadZ + (curveAt('RUB RUONIA', p.tenor) - curveAt('OFZ', p.tenor)) * 100) : null;
       p.dmSource = p.cpn.type === 'float' ? 'core' : null;
       p.accruedPct = round(p.curCpn / f * r(), 3);
       const dirty = (p.price + p.accruedPct) / 100 * (p.indexation || 1);
@@ -436,7 +434,7 @@
       p.carryDay = p.kind === 'IRS' || p.kind === 'KSW' ? sgn * nrub * (p.rate - (p.kind === 'KSW' ? M.indices['КС'] : M.indices['RUONIA'])) / 100 / 365
         : p.kind === 'BAS' ? nrub * p.rate / 100 / 365 * 0.6 : -sgn * nrub * (M.indices['RUONIA'] - 5) / 100 / 365 * 0.15;
       p.rollDay = 0; p.cs01b.fill(0);
-      p.zspread = null; p.zSpreadZ = null; p.gspread = null; p.zKbd = null;
+      p.zspread = null; p.zSpreadZ = null; p.gspread = null;
     }
     p.fxDelta = p.fxDeltaBy[p.ccy] || 0;            // в валюте позиции; все валюты — p.fxDeltaBy
     p.dv01ByCurve = {}; let tot = 0;
