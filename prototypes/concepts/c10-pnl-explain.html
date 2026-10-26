@@ -61,7 +61,9 @@
     const x = (v, m) => v == null ? null : v * m;
     const o = { carry: x(p.pnl.carry, DAYS_MTD), funding: x(p.pnl.funding, DAYS_MTD), trading: x(p.pnl.trading, 3) };
     const ks = ['rates', 'spread', 'fx', 'other'];
-    if (p.pnlMtd == null) ks.forEach(k => o[k] = null);
+    // PnL дня позиции не посчитан (available: false, #332) — разложить MTD не по чему: остаток и все факторы null,
+    // итог MTD (p.pnlMtd) остаётся
+    if (p.pnlMtd == null || p.pnl.available === false) ks.forEach(k => o[k] = null);
     else {
       const rest = p.pnlMtd - (o.carry || 0) - (o.funding || 0) - (o.trading || 0);
       const W = ks.reduce((s, k) => s + Math.abs(p.pnl[k] || 0), 0);
@@ -183,7 +185,10 @@
     const HP = M.hist.pnl, n = M.histDates.length;
     const monthStart = M.histDates.findIndex(d => d.slice(0, 7) === M.asOf.slice(0, 7));
     const hc = K.chart(hel, () => {
-      let c = 0; const cum = HP.total.map(v => (c += v));
+      // день не посчитан (null, #339) — накопленного за него нет: разрыв линии, в подсказке «—»; дальше сумма продолжается
+      let c = 0; const cum = HP.total.map(v => v == null ? null : (c += v));
+      // точка между двумя пропусками (или у края) — без отрезка линии: рисуем её значком, иначе её не видно
+      const lone = cum.map((v, i) => v != null && cum[i - 1] == null && cum[i + 1] == null);
       return {
         grid: { left: 6, right: 6, top: 28, bottom: 4, containLabel: true }, legend: { top: 0, left: 0, type: 'scroll' },
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => v == null ? '—' : f.mns(v, 2) },  // null: фактор не посчитан (фондирование до B1)
@@ -191,7 +196,7 @@
         yAxis: [{ type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => K.tick(v, 1e6) } }, { type: 'value', splitLine: { show: false }, axisLabel: { formatter: v => K.tick(v, 1e6), color: K.css('--warn') } }],
         dataZoom: [{ type: 'inside', start: mode === 'mtd' ? Math.max(0, (monthStart - 3) / n * 100) : 55 }],
         series: FAC.map(([k, t]) => ({ name: t, type: 'bar', stack: 'p', data: HP[k], color: FCOL[k], barMaxWidth: 14 }))
-          .concat([{ name: 'накопл.', type: 'line', yAxisIndex: 1, data: cum, showSymbol: false, color: K.css('--warn'), lineStyle: { width: 1.6 },
+          .concat([{ name: 'накопл.', type: 'line', yAxisIndex: 1, data: cum.map((v, i) => lone[i] ? { value: v, symbol: 'circle', symbolSize: 5 } : v), showSymbol: true, showAllSymbol: true, symbol: 'none', color: K.css('--warn'), lineStyle: { width: 1.6 },
             markArea: mode === 'mtd' && monthStart >= 0 ? { silent: true, itemStyle: { color: 'rgba(76,157,255,.08)' }, data: [[{ xAxis: M.histDates[monthStart] }, { xAxis: M.histDates[n - 1] }]] } : undefined },
           { name: 'итог дня', type: 'scatter', data: HP.total, symbolSize: (v, p) => p.dataIndex === selDay ? 10 : 4, color: K.css('--fg'), z: 5 }]),
       };
@@ -216,7 +221,8 @@
     const t5 = ranked.slice(0, 5), t5s = t5.reduce((s, p) => s + Math.abs(val(p, 'other')), 0) / (ranked.reduce((s, p) => s + Math.abs(val(p, 'other')), 0) || 1);
     const ob = op.querySelector('.bd');
     // «прочее» не посчитано ни у одной позиции (прогон без PnL) — словами, без «0%» и пустой таблицы с «Итого 0.0» (#327, B1)
-    if (oth == null) { ob.innerHTML = '<p class="lead">Необъяснённый остаток ' + NA + ' — не посчитан: PnL нет ни у одной позиции.</p>'; return; }
+    // MTD: итог MTD может быть, а разложить его не по чему — у позиций нет PnL дня или PnL MTD (#332)
+    if (oth == null) { ob.innerHTML = '<p class="lead">Необъяснённый остаток не посчитан: ' + (mode === 'day' ? 'PnL нет ни у одной позиции.' : 'MTD не разложен ни у одной позиции — у них нет PnL дня или PnL MTD.') + '</p>'; return; }
     ob.innerHTML = '<p class="lead">Необъяснённый остаток ' + K.d({ title: 'Прочее', unit: u.unit, fmt: u.fmts, list: L, val: p => val(p, 'other') }, oth == null ? NA : u.big(oth)) + ' — <b>' + (oth == null || tot == null ? '—' : (Math.abs(oth) / Math.abs(tot || 1) * 100).toFixed(1) + '%') + '</b> от итога. ' +
       'Пять позиций дают <b>' + Math.round(t5s * 100) + '%</b> модуля «прочего»: ' + t5.map(p => '<b data-card="' + p.id + '" style="cursor:pointer">' + esc(p.name) + '</b>').join(', ') + '. ' +
       'Частые причины: цена закрытия не совпала с моделью (неликвид, модельная цена), фиксинг флоатера, сделки внутри дня, нелинейность (выпуклость) при сдвиге &gt; 10 б.п.</p><div class="tb"></div>';
