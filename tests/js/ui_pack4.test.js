@@ -31,13 +31,15 @@ const PAGES = fs.readdirSync(DIR).filter(f => /^c\d\d-.*\.html$/.test(f));
 t('#263: smoke проверяет 390 px — scrollWidth равен innerWidth', () => {
   const s = P('tools/smoke.js');
   assert.ok(/setViewportSize\(\{ width: 390/.test(s));
-  assert.ok(s.includes('document.documentElement.scrollWidth, window.innerWidth') && s.includes("errs.push('390px:"));
+  assert.ok(s.includes('document.documentElement.scrollWidth, window.innerWidth') && s.includes("errs.push('390px'"));
+  assert.ok(s.includes("const TABS = '.k-tabs button, .presets [data-p]';"), 'обходит вкладки C01 и раскладки C06');
 });
 
 t('#263: узкий экран — шапка панели переносится, переключатель прокручивается внутри себя', () => {
   const css = P('lib/kit.css'), m = css.slice(css.indexOf('@media (max-width: 720px)'));
   const block = m.slice(0, m.indexOf('\n}\n'));
   assert.ok(/\.k-panel > \.hd \{ flex-wrap: wrap; \}/.test(block));
+  assert.ok(/\.k-panel > \.hd h3 \{ white-space: normal; \}/.test(block), 'длинный заголовок панели переносится');
   assert.ok(/\.k-seg \{ max-width: 100%; overflow-x: auto; \}/.test(block));
 });
 
@@ -63,7 +65,10 @@ t('#261: деления осей в mm — K.tick, без f.mn(v, 0)', () => {
 t('#261: водопад PnL — в узком графике подписи категорий в два ряда', () => {
   const kit = P('lib/kit.js');
   assert.ok(kit.includes("formatter: (v, i) => stag && i % 2 ? '\\n' + v : v"));
-  assert.ok(/K\.WF_SLOT = \d+;/.test(kit) && kit.includes('if (narrow() !== stag) c.redraw();'));
+  assert.ok(/K\.WF_AXIS = \d+; K\.WF_GAP = \d+;/.test(kit) && kit.includes('if (narrow() !== stag) c.redraw();'));
+  // ширина подписи без canvas — оценка по числу знаков
+  const { K } = load();
+  assert.ok(K.labelWidth('Фондир.', 10) > 30 && K.labelWidth('Фондир.', 10) < 50);
 });
 
 t('#265: красный тепловой карты — класс k-heatneg от kit.js, без селектора по тексту style', () => {

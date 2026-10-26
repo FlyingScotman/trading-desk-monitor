@@ -2472,13 +2472,22 @@
   };
 
   // PnL-водопад: кэрри → фондирование → ставки → спред → FX → сделки → прочее → итог; столбцы кликабельны.
-  // В узком графике (плитка C06 на 1366 px, #261) на столбец меньше K.WF_SLOT px — подписи категорий в два ряда
-  // вперемешку (чётные выше, нечётные ниже), иначе соседние слова слипаются
-  K.WF_SLOT = 58;
+  // Если самая длинная подпись категории (с зазором K.WF_GAP) не помещается в ширину столбца — ширина графика без
+  // K.WF_AXIS px под подписи оси, делённая на число столбцов (плитка C06 на 1366 px, #261), — подписи стоят в два ряда
+  // вперемешку (чётные выше, нечётные ниже), иначе соседние слова слипаются. Широкая плитка (1920 px) — в один ряд
+  K.WF_AXIS = 50; K.WF_GAP = 8;
+  let wfCtx = null;
+  K.labelWidth = (s, px) => {
+    try { if (!wfCtx) wfCtx = document.createElement('canvas').getContext('2d'); } catch (e) { }
+    if (!wfCtx || !wfCtx.measureText) return String(s).length * px * 0.6;
+    wfCtx.font = px + 'px system-ui, sans-serif'; return wfCtx.measureText(String(s)).width;
+  };
   K.pnlWaterfall = function (el, opt) {
     const keys = K.PNL_FACTORS;
+    const cats = keys.map(k => k[0] === 'funding' ? 'Фондир.' : k[1]).concat(['Итого']);
     let L, stag = false;
-    const narrow = () => el.clientWidth > 0 && el.clientWidth / (keys.length + 1) < K.WF_SLOT;
+    const need = () => Math.max(...cats.map(s => K.labelWidth(s, 10))) + K.WF_GAP;
+    const narrow = () => el.clientWidth > 0 && (el.clientWidth - K.WF_AXIS) / cats.length < need();
     const c = K.chart(el, () => {
       L = K.list(); stag = narrow();
       const vals = keys.map(([k]) => M.sum(L, p => p.pnl[k]));
@@ -2489,7 +2498,7 @@
       const lo = Math.min(0, ...segs.map(x => Math.min(x[0], x[1]))), hi = Math.max(0, ...segs.map(x => Math.max(x[0], x[1])));
       return {
         grid: { left: 6, right: 10, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'item', formatter: p => (keys[p.dataIndex] ? keys[p.dataIndex][1] : 'Итого') + ': <b>' + f.mns(p.dataIndex < vals.length ? vals[p.dataIndex] : run, 2) + '</b> mm ₽' },
-        xAxis: { type: 'category', data: keys.map(k => k[0] === 'funding' ? 'Фондир.' : k[1]).concat(['Итого']), axisLabel: { interval: 0, fontSize: 10, formatter: (v, i) => stag && i % 2 ? '\n' + v : v } }, yAxis: { type: 'value', unit: 'mm ₽', nameGap: 20, min: lo, max: hi, scale: false, axisLabel: { formatter: v => K.tick(v, 1e6), hideOverlap: true, showMinLabel: !lo, showMaxLabel: !hi } },
+        xAxis: { type: 'category', data: cats, axisLabel: { interval: 0, fontSize: 10, formatter: (v, i) => stag && i % 2 ? '\n' + v : v } }, yAxis: { type: 'value', unit: 'mm ₽', nameGap: 20, min: lo, max: hi, scale: false, axisLabel: { formatter: v => K.tick(v, 1e6), hideOverlap: true, showMinLabel: !lo, showMaxLabel: !hi } },
         series: [{
           type: 'custom', data: segs.map((s, i) => [i, s[0], s[1]]),
           renderItem: (params, api) => {

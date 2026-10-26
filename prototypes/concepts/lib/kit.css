@@ -243,6 +243,7 @@ table.mini + .k-tbl-ctlbar-m { position: static; background: transparent; }
      переносятся — вбок прокручивается плитка или её таблица, а не вся страница */
   .k-panel > .hd { flex-wrap: wrap; }
   .k-panel > .hd > * { min-width: 0; max-width: 100%; }
+  .k-panel > .hd h3 { white-space: normal; }  /* длинный заголовок (C01 «Валюта × тип») */
   .k-panel > .hd .k-note { white-space: normal; }
   .k-seg { max-width: 100%; overflow-x: auto; }
   .k-seg button { flex: none; }
