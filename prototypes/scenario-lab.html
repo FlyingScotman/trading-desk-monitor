@@ -491,7 +491,7 @@ input[type=date].dt{border:1px solid var(--line-strong);background:var(--surface
 <script>
 (function(){
 'use strict';
-DESK.scope.apply();  // фильтр Desk Monitor (юрлицо, деск, портфель, книги…): только его позиции (desk-scope.js)
+DESK.scope.apply();  // сохранённый фильтр (юрлицо, деск, портфель, книги…): только его позиции (desk-scope.js)
 const D = window.DESK, U = D.util, P = D.positions, BK = D.BUCKETS;
 const RAT = D.RATING_ORDER, BOOKK = Object.keys(D.BOOKS);
 // Грейды — слайдерами по шкале; «нет данных» (в хабе нет рейтинга) — не грейд: одна корзина «без рейтинга» после них.

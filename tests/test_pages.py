@@ -1,19 +1,22 @@
 """Страницы связаны: общая строка навигации (prototypes/desk-nav.js) на каждой странице, до загрузчика данных;
-фильтр Desk Monitor (desk-scope.js) — на остальных страницах с данными деска. python -m unittest discover -s tests"""
+сохранённый фильтр позиций (desk-scope.js) — у Scenario Lab. Ранние экраны удалены (#292), кроме Scenario Lab.
+python -m unittest discover -s tests"""
 import re
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PROTO = ROOT / "prototypes"
-PAGES = ["index.html", "desk-monitor.html", "widget-board.html", "pivot-studio.html", "scenario-lab.html", "settings.html",
-         "users.html"]
+PAGES = ["index.html", "scenario-lab.html", "settings.html", "users.html"]
 LOGIN = "login.html"  # открыт без входа: без строки и без сторонних скриптов (backend api/auth.py PUBLIC)
-DATA_PAGES = ["desk-monitor.html", "widget-board.html", "pivot-studio.html", "scenario-lab.html"]
-# Основной набор — мониторы (concepts/), «Сценарии (точно)» (app/) и Настройки; ранние экраны устарели (22.10.2026):
-# файлы остаются и открываются по прямому адресу, но интерфейс их не предлагает (README.md, «Устаревшие экраны»)
+DATA_PAGES = ["scenario-lab.html"]
+# Основной набор — мониторы (concepts/), «Сценарии (точно)» (app/) и Настройки. Ранние экраны устарели (22.10.2026):
+# Desk Monitor, Widget Board и Pivot Studio удалены (#292), их адреса сервер на один релиз ведёт на C01, C06 и C04
+# (backend api/app.py, REMOVED_SCREENS); Scenario Lab пока остаётся, открывается по прямому адресу, интерфейс его не
+# предлагает (README.md, «Устаревшие экраны»)
 MAIN = ["concepts/index.html", "app/", "settings.html"]
 DEPRECATED = DATA_PAGES
+REMOVED = ["desk-monitor.html", "widget-board.html", "pivot-studio.html"]
 
 
 def scripts(html):
@@ -90,15 +93,24 @@ class Pages(unittest.TestCase):
         for page in MAIN:
             self.assertIn(f'href="{page}"', (PROTO / "index.html").read_text(encoding="utf-8"), page)
 
+    def test_removed_screens_are_gone(self):
+        # #292: файлов нет (заплатка удаляет их по PATCH_DELETE.txt); страницы и скрипты на них не ссылаются
+        for page in REMOVED:
+            self.assertFalse((PROTO / page).exists(), page)
+        for f in [*PROTO.glob("*.html"), *PROTO.glob("*.js"), *(PROTO / "concepts").rglob("*.html"),
+                  *(PROTO / "concepts" / "lib").glob("*.js")]:
+            text = f.read_text(encoding="utf-8")
+            for page in REMOVED:
+                self.assertNotIn(page, text, f"{f.name}: {page}")
+
     def test_demo_badge_is_not_hard_coded(self):
         for name in PAGES:
             self.assertNotIn("Тестовые данные</span>", (PROTO / name).read_text(encoding="utf-8"), name)
 
-    def test_other_pages_apply_the_desk_monitor_filter(self):
+    def test_scenario_lab_applies_the_saved_filter(self):
         self.assertIn("desk-scope.js", (PROTO / "desk-loader.js").read_text(encoding="utf-8"))
         for name in DATA_PAGES:
-            html = (PROTO / name).read_text(encoding="utf-8")
-            self.assertEqual("DESK.scope.apply()" in html, name != "desk-monitor.html", name)  # у Desk Monitor свой фильтр
+            self.assertIn("DESK.scope.apply()", (PROTO / name).read_text(encoding="utf-8"), name)
 
     def test_settings_page_sections_and_forms(self):
         # R41: разделы с навигацией слева; ссылки других страниц (#up — desk-updater.js, #bf — kit.js) ведут в раздел.

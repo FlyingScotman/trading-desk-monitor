@@ -231,4 +231,4 @@ def test_desk_data_js_without_runs_gives_the_empty_state_not_the_demo(client):
     assert "Прогонов ещё нет" in empty and "settings.html" in empty and "api/v1/autopilot/status" in empty
     assert client.get("/desk-empty.js").status_code == 200
     assert_error(client.get("/api/v1/compat/desk"), 404, "not_found")
-    assert client.get("/desk-monitor.html").status_code == 200
+    assert client.get("/concepts/index.html").status_code == 200

@@ -21,19 +21,24 @@
 
 ### Устаревшие экраны
 
-С 22.10.2026 ранние экраны убраны из интерфейса: их нет в строке навигации, на главной и в мониторах. Файлы оставлены
-(и их тесты), страницы открываются по прямому адресу; не развиваются.
+С 22.10.2026 ранние экраны убраны из интерфейса: их нет в строке навигации, на главной и в мониторах.
 
-| Экран | Файл | Замена в мониторах |
-|---|---|---|
-| Desk Monitor | `prototypes/desk-monitor.html` | C01 Кокпит, C02 Лестница рисков, C03 Позиции, C10 PnL explain |
-| Widget Board | `prototypes/widget-board.html` | C06 Плиточная доска |
-| Pivot Studio | `prototypes/pivot-studio.html` | C04 Агрегатор |
-| Scenario & PnL Lab | `prototypes/scenario-lab.html` | C10 PnL explain; сценарии — «Сценарии (точно)» (`/app/`) |
+Desk Monitor, Widget Board и Pivot Studio удалены (#292, шаг 3 плана в #107). Их старые адреса `desk serve` на один
+релиз перенаправляет на мониторы, которые их заменили, с тем же выбором прогона (`?run_id=`); потом перенаправления
+тоже уберём (`REMOVED_SCREENS` в `backend/src/desk/api/app.py`).
 
-Фильтр Desk Monitor (юрлицо ∩ деск ∩ портфель ∩ книги ∩ сегмент ∩ валюта, `desk-scope.js`) действует только на этих
-экранах. Чего у мониторов пока нет: кэрри и фондирование на горизонте при траектории КС (Scenario & PnL Lab, Desk Monitor)
-и сценарии в браузере (≈) — по прямому адресу.
+| Экран | Был файл | Адрес ведёт на | Замена в мониторах |
+|---|---|---|---|
+| Desk Monitor | `prototypes/desk-monitor.html` | C01 | C01 Кокпит, C02 Лестница рисков, C03 Позиции, C10 PnL explain |
+| Widget Board | `prototypes/widget-board.html` | C06 | C06 Плиточная доска |
+| Pivot Studio | `prototypes/pivot-studio.html` | C04 | C04 Агрегатор |
+
+Scenario & PnL Lab (`prototypes/scenario-lab.html`) пока остаётся, открывается по прямому адресу и не развивается.
+Части его сценариев в мониторах и в «Сценариях (точно)» (`/app/`) нет: редактор FX-шока, спреды по рейтингу и
+сектору, исторические сценарии. Нужны ли они, решает владелец (#107); до его ответа остаются и файлы, без которых
+Scenario Lab не работает: `desk-loader.js`, `desk-util.js`, `desk-scope.js`, `desk-fallback.js`, `desk-empty.js`,
+демо-набор `data.js`. Фильтр позиций `desk-scope.js` применяет выбор, сохранённый ещё в Desk Monitor; снять его — ✕ в
+строке навигации.
 
 ## Быстрый старт
 
@@ -68,7 +73,7 @@ node --test tests/js/*.test.js                                                  
 
 ```
 prototypes/   страницы UI, desk-nav.js (строка навигации, общий прогон, автопилот), desk-loader.js (откуда брать данные),
-              desk-util.js (расчёты в браузере), desk-scope.js (фильтр Desk Monitor на других страницах), data.js (демо)
+              desk-util.js (расчёты в браузере), desk-scope.js, data.js (демо) — для устаревшего Scenario Lab
 backend/      бэкенд desk: рыночные данные, оценка через ядро, PnL, прогоны, API, сборка Windows
 frontend/     React-приложение «Сценарии (точно)» (/app/)
 contract/     private/v1 — входной контракт приватного адаптера; csv/ и bundle.schema.json — контракт 1.3 прототипа (устарел)

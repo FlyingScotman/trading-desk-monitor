@@ -209,9 +209,17 @@ def test_results_append_only_jobs_kept(store_url, book):
 def test_app_mount_and_openapi_is_current(store_url, tmp_path):
     (tmp_path / "index.html").write_text("<p>scenario lab</p>", encoding="utf-8")
     c = TestClient(create_app(store_url, app_dir=tmp_path))
-    assert "scenario lab" in c.get("/app/").text and c.get("/desk-monitor.html").status_code == 200
+    assert "scenario lab" in c.get("/app/").text and c.get("/scenario-lab.html").status_code == 200
     r = c.get("/app?run_id=5", follow_redirects=False)
     assert r.status_code == 307 and r.headers["location"] == "/app/?run_id=5"
+    # the removed early screens (#292): their addresses lead to the monitors for one release, run selection kept
+    for old, new in (("desk-monitor", "c01-cockpit"), ("widget-board", "c06-launchpad"), ("pivot-studio", "c04-pivot")):
+        r = c.get(f"/{old}.html?run_id=5", follow_redirects=False)
+        assert r.status_code == 302 and r.headers["location"] == f"/concepts/{new}.html?run_id=5", old
+        assert c.get(r.headers["location"]).status_code == 200, new
+        assert c.get(f"/{old}.html", follow_redirects=False).headers["location"] == f"/concepts/{new}.html"
+        r = c.head(f"/{old}.html", follow_redirects=False)  # HEAD too, not the static files' 404
+        assert r.status_code == 302 and r.headers["location"] == f"/concepts/{new}.html", old
     committed = json.loads((REPO_ROOT / "frontend" / "openapi.json").read_text(encoding="utf-8"))
     assert committed == create_app("postgresql://unused").openapi(), \
         "frontend/openapi.json is stale: desk openapi --out ../frontend/openapi.json"

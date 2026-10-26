@@ -1,6 +1,7 @@
-// R10 на Widget Board, Pivot Studio и Scenario Lab: суммы PnL пропускают позиции без PnL (null, не 0), «—» с причиной,
+// R10 в Scenario Lab и DESK.util: суммы PnL пропускают позиции без PnL (null, не 0), «—» с причиной,
 // если значения нет ни у одной позиции, «частично: N из M позиций» при неполном покрытии; официальный PnL до T+1 — «—».
-// Рейтинг «нет данных» — корзина «без рейтинга», а не грейд.
+// Рейтинг «нет данных» — корзина «без рейтинга», а не грейд. Проверки Widget Board и Pivot Studio удалены вместе
+// с экранами (#292).
 //   node tests/js/pnl_r10_pages.test.js
 // Страницы исполняются на заглушке DOM (querySelector возвращает один и тот же элемент на селектор) и ECharts.
 'use strict';
@@ -52,11 +53,9 @@ function fakeEl(name) {
   Object.defineProperty(el, 'firstChild', { get: () => el.querySelector(':first-child') });
   return el;
 }
-const OPTS = [];   // опции графиков последней страницы
-const chartStub = () => ({ setOption(o) { OPTS.push(o); }, on() {}, off() {}, resize() {}, dispose() {}, isDisposed: () => false, getWidth: () => 900, getHeight: () => 400,
+const chartStub = () => ({ setOption() {}, on() {}, off() {}, resize() {}, dispose() {}, isDisposed: () => false, getWidth: () => 900, getHeight: () => 400,
   getDom: () => fakeEl('chart'), getZr: () => ({ on() {} }), containPixel: () => false, convertFromPixel: () => [0, 0], dispatchAction() {}, group: null });
 function page(file, mutate, store) {
-  OPTS.length = 0;
   const errors = [], con = { log() {}, info() {}, warn() {}, error: (...a) => errors.push(a.map(String).join(' ')) };
   const doc = fakeEl('document'), ls = Object.assign({}, store || {});
   Object.assign(doc, { documentElement: fakeEl('html'), body: fakeEl('body'), activeElement: null, title: '',
@@ -77,14 +76,14 @@ function page(file, mutate, store) {
   vm.runInContext(P('desk-scope.js'), ctx);
   const html = P(file), start = html.lastIndexOf('<script>');
   vm.runInContext(html.slice(start + '<script>'.length, html.lastIndexOf('</script>')), ctx);
-  assert.deepStrictEqual(errors, [], file + ': ошибки в консоли');   // Widget Board ловит ошибку виджета и пишет её в консоль
+  assert.deepStrictEqual(errors, [], file + ': ошибки в консоли');
   return { $: s => doc.querySelector(s), D: ctx.DESK, ctx };
 }
 const ZERO = /(^|[^\d,])[+−]?0,0+(?!\d)/;   // «0,0», «+0,00» — ноль на месте отсутствующего PnL
 
 // ---------- desk-util ----------
 t('U.pnlSum: позиции без PnL и значения null пропускаются; ни одного значения — null, не 0', () => {
-  const { D } = page('pivot-studio.html', partial), U = D.util, ps = D.positions;
+  const { D } = page('scenario-lab.html', partial), U = D.util, ps = D.positions;
   const ok = ps.filter(U.pnlOk);
   assert.strictEqual(U.pnlSum(ps, p => p.pnl.explained), ok.reduce((s, p) => s + p.pnl.explained, 0));
   assert.strictEqual(U.pnlSum(ps.filter(p => !U.pnlOk(p)), p => p.pnl.explained), null);
@@ -99,94 +98,11 @@ t('U.pnlSum: позиции без PnL и значения null пропуска
 });
 
 t('рейтинг «нет данных» — «без рейтинга», не грейд', () => {
-  const { D } = page('pivot-studio.html', partial), U = D.util;
+  const { D } = page('scenario-lab.html', partial), U = D.util;
   assert.strictEqual(U.ratingLabel('нет данных'), 'без рейтинга');
   assert.strictEqual(U.ratingLabel(null), 'без рейтинга');
   assert.strictEqual(U.ratingLabel('AA'), 'AA');
   assert.ok(!U.isRated('нет данных') && U.isRated('BB'));
-});
-
-// ---------- Widget Board ----------
-function board(mutate, widgets) {
-  const st = { v: 1, active: 'b', boards: [{ id: 'b', name: 'R10', widgets: widgets.map((w, i) => Object.assign({ id: 'w' + i, w: 6, h: 2 }, w)) }] };
-  const pg = page('widget-board.html', mutate, { 'dwb.boards.v1': JSON.stringify(st) });
-  const grid = pg.$('#grid');
-  return widgets.map((w, i) => { const el = grid.querySelector(`.wg[data-id="w${i}"]`); return { body: el.querySelector('.wg-b').innerHTML, sub: el.querySelector('.wg-s').textContent }; });
-}
-const ALL = { book: 'all', segment: 'all', ccy: 'all' };
-t('Widget Board, прогон без PnL: KPI, водопад, watchlist, блоттер — «—» с причиной, не 0', () => {
-  const [kpi, wf, watch, blot, hist] = board(noPrev, [
-    { type: 'kpi', cfg: Object.assign({ metric: 'pnl' }, ALL) }, { type: 'explain', cfg: ALL },
-    { type: 'watch', cfg: { items: ['g:Самолёт', 'p:ОФЗ 26247'] } }, { type: 'blotter', cfg: Object.assign({ measure: 'mv', topN: '0' }, ALL) },
-    { type: 'history', cfg: { mode: 'cum' } }]);
-  assert.ok(kpi.body.includes('class="na" title="PnL не посчитан: ' + NO_PREV + '"'), kpi.body);
-  assert.ok(!ZERO.test(kpi.body.slice(0, kpi.body.indexOf('kpi-sp') + 1)), kpi.body);
-  assert.ok(wf.body.includes('PnL не посчитан') && wf.body.includes(NO_PREV) && wf.sub.startsWith('PnL не посчитан'), wf.body);
-  assert.strictEqual((watch.body.match(/class="na"/g) || []).length, 4, 'PnL и Δ спреда обеих строк — «—»: ' + watch.body);
-  assert.ok(blot.body.includes('title="PnL не посчитан: ' + NO_PREV + '"'), 'ячейка PnL блоттера — «—» с причиной');
-  assert.ok(hist.sub.includes('без PnL: 1 дн.'), hist.sub);
-});
-
-t('Widget Board, частично: «частично: N из M позиций», суммы — только по позициям с PnL, «По отчёту» в водопаде', () => {
-  let D;
-  const [kpi, wf] = board(x => { partial(x); D = x; }, [{ type: 'kpi', cfg: Object.assign({ metric: 'pnl' }, ALL) }, { type: 'explain', cfg: ALL }]);
-  const ok = D.positions.filter(D.util.pnlOk), want = ok.reduce((s, p) => s + p.pnl.explained, 0) + D.funding.filter(f => !f.pnl.inPosition).reduce((s, f) => s + f.pnl.carry, 0)
-    + Object.keys(D.fundingPnlByBook).reduce((s, b) => s + (D.fundingPnlByBook[b].fx || 0), 0);
-  const fmt = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(want / 1e6).replace(/ /g, ' ').replace('-', '−');
-  assert.ok(kpi.body.includes(fmt), fmt + ' в ' + kpi.body);
-  assert.ok(kpi.body.includes('частично: ' + ok.length + ' из ' + D.positions.length + ' позиций'), kpi.body);
-  assert.ok(wf.sub.includes('частично: ' + ok.length + ' из '), wf.sub);
-  const bars = OPTS.map(o => o.yAxis && o.yAxis.data).find(d => d && d.includes('Официальный PnL'));
-  assert.ok(bars && bars.includes('По отчёту'), 'PnL «по отчёту» — шагом водопада: ' + bars);
-});
-
-t('Widget Board, официальный ещё не пришёл: «офиц. — ожидается T+1», итог водопада — explain (ЦБ)', () => {
-  const [kpi, wf, blot] = board(awaitingOfficial, [{ type: 'kpi', cfg: Object.assign({ metric: 'pnl' }, ALL) }, { type: 'explain', cfg: ALL },
-    { type: 'blotter', cfg: Object.assign({ measure: 'pnl', topN: '5' }, ALL) }]);
-  assert.ok(kpi.body.includes('ожидается T+1') && !kpi.body.includes('необъясн.'), kpi.body);
-  assert.ok(wf.sub.includes('explain (ЦБ)') && wf.sub.includes('T+1'), wf.sub);
-  assert.ok(blot.body.includes('PnL флэш') && !blot.body.includes('class="na"'), 'до T+1 блоттер по флэшу, топ — только позиции с PnL');
-});
-
-// ---------- Pivot Studio ----------
-const VIEW = (measure, rows, col, filters) => JSON.stringify({ active: 'v', views: [{ id: 'v', pid: null, name: 'R10', measure, scen: 'keyhike', rows, col, viz: 'table',
-  filters: Object.assign({ book: [], segment: [], ccy: [], rating: [], assetClass: [] }, filters || {}), opts: { totals: true, sort: 'name', topN: 0, units: 'mln', hideZeros: true } }] });
-const pivot = (mutate, measure, rows, col, filters) => page('pivot-studio.html', mutate, { 'riskPivotStudio.views.v1': VIEW(measure, rows, col, filters) });
-
-t('Pivot Studio, прогон без PnL: итог, KPI и ячейки — «—» с причиной; строки не скрыты как нули', () => {
-  const { $ } = pivot(noPrev, 'pnl', ['book'], null);
-  assert.ok($('#grand').innerHTML.includes('class="na"') && $('#grand').innerHTML.includes(NO_PREV), $('#grand').innerHTML);
-  const tw = $('#pvWrap').innerHTML;
-  assert.ok(tw.includes('class="num na"') && !ZERO.test(tw.replace(/<[^>]+>/g, ' ')), 'ячейки — «—», не 0,00');
-  assert.ok($('#hints').innerHTML.includes(NO_PREV));
-  const k = $('#kpis').innerHTML;
-  assert.ok(k.slice(k.indexOf('PnL official')).includes('class="na"'), k);
-});
-
-t('Pivot Studio, частично: итог — по позициям с PnL, пометка «частично», ячейка без значений — «—»', () => {
-  const { $, D } = pivot(partial, 'pfund', ['book'], 'maturityBucket');
-  const ok = D.positions.filter(D.util.pnlOk);
-  assert.ok($('#grand').innerHTML.includes('частично: ' + ok.length + ' из ' + D.positions.length + ' позиций'), $('#grand').innerHTML);
-  const want = ok.reduce((s, p) => s + (p.pnl.funding || 0), 0) / 1e6;
-  assert.ok($('#grand').innerHTML.includes(new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(want).replace(/ /g, ' ').replace('-', '−')), $('#grand').innerHTML);
-  assert.ok($('#pvWrap').innerHTML.includes('<sup class="pm">*</sup>'), 'частичные ячейки помечены');
-  assert.ok($('#hints').innerHTML.includes('частично:') && $('#hints').innerHTML.includes(NO_CORE));
-});
-
-t('Pivot Studio, официальный и unexplained до T+1 — «—», а не 0', () => {
-  for (const m of ['pnloff', 'unexp']) {
-    const { $ } = pivot(awaitingOfficial, m, ['book'], null);
-    assert.ok($('#grand').innerHTML.includes('class="na"') && $('#grand').innerHTML.includes('T+1'), m + ': ' + $('#grand').innerHTML);
-    assert.ok(!ZERO.test($('#pvWrap').innerHTML.replace(/<[^>]+>/g, ' ')), m);
-  }
-});
-
-t('Pivot Studio: рейтинг «нет данных» — в корзине «без рейтинга»; старый фильтр «Без рейтинга» её находит', () => {
-  const { $, D } = pivot(partial, 'cs01', ['rating'], null, { rating: ['Без рейтинга'] });
-  const tw = $('#pvWrap').innerHTML;
-  assert.ok(tw.includes('>без рейтинга<') && !tw.includes('нет данных') && !tw.includes('Без рейтинга'), tw);
-  const cs = D.positions.filter(p => !D.util.isRated(p.rating)).reduce((s, p) => s + p.cs01, 0);
-  assert.ok(cs !== 0 && $('#grand').innerHTML.includes(new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(cs / 1e6).replace(/ /g, ' ').replace('-', '−')), $('#grand').innerHTML);
 });
 
 // ---------- Scenario Lab ----------

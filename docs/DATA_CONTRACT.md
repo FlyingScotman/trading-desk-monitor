@@ -702,7 +702,7 @@ attach_official_pnl(r"C:\tdm\data\tdm.sqlite", run_id=run.run_id)
 | Запрос | Ответ |
 |---|---|
 | `GET /` | стартовая страница: ссылки на 4 экрана и список последних прогонов со статусами и ошибками |
-| `GET /desk-monitor.html` и т.д. | страницы UI. Параметры `?as_of=YYYY-MM-DD`, `?run_id=N`, `?demo=1` |
+| `GET /desk-monitor.html` и т.д. | страницы UI. Параметры `?as_of=YYYY-MM-DD`, `?run_id=N`, `?demo=1` (история `tdm serve`: эти экраны удалены в #292, кроме `scenario-lab.html`) |
 | `GET /desk-data.js?as_of=&run_id=` | `window.DESK = {…}` — так данные получают страницы |
 | `GET /api/v1/desk?as_of=&run_id=` | тот же объект в JSON: можно забирать в Excel, Python, Power BI |
 | `GET /api/v1/runs?as_of=&status=complete\|failed\|loading\|all&limit=` | список прогонов |

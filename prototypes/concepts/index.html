@@ -70,7 +70,7 @@ kbd { font: 11px var(--mono); border: 1px solid var(--line); border-bottom-width
 </div>
 <script>
 // served by desk serve: the monitors run on the monitor's data; links to the home page and the settings
-// (the earlier screens, Desk Monitor and the rest, are deprecated and not linked: README.md, «Устаревшие экраны»)
+// (the deprecated Scenario Lab is not linked: README.md, «Устаревшие экраны»)
 (function () {
   if (!/^https?:$/.test(location.protocol) || /[?&]demo=1/.test(location.search)) return;
   fetch('../health/live', { cache: 'no-store' }).then(function (r) {
