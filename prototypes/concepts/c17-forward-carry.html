@@ -99,6 +99,7 @@
       'ОФЗ и флоатеры держат спред.',
   };
 
+  if (K.repr !== 'RUB') TIP.funding += '\nВ ' + K.repr + ': итог — рубли сервера по курсу монитора, строки позиций в ' + K.repr + ' — суммы сервера в своей валюте (курс прогона); возможна небольшая разница.';
   // ---------- состояние (запоминается в браузере) ----------
   const st = { horizon: '3M', ks: 'flat', spread: 'held', steps: {}, dim: 'none', show: 'all' };
   try { Object.assign(st, JSON.parse(localStorage.getItem('c17-state') || '{}')); } catch (e) { }
@@ -206,7 +207,7 @@
     if (!resp) return;
     const R = model(), fundOk = resp.fundingStatus === 'computed';
     // без общих фильтров — итоги сервера; с фильтрами — по строкам, по тому же правилу
-    const S = K.list().length === M.positions.length ? C.withServer(C.sums(R, fundOk), resp.totals, RK()) : C.sums(R, fundOk);
+    const S = C.noFilter(K.filter) ? C.withServer(C.sums(R, fundOk), resp.totals, RK()) : C.sums(R, fundOk);
     const pos = R.filter(r => !r.isCash);
     // баннер: фондирование не посчитано целиком или у части позиций с прогнозом
     if (!fundOk) ban.insertAdjacentHTML('beforeend', '<div class="c17-ban"><b>' + esc(C.FUNDING_STATUS[resp.fundingStatus] || resp.fundingStatus) + '.</b> ' + (resp.fundingText && resp.fundingText !== C.FUNDING_STATUS[resp.fundingStatus] ? esc(resp.fundingText) + '. ' : '') +
@@ -287,11 +288,11 @@
           { key: 'entity', label: 'Юрлицо', val: r => r.entity, filter: true, fmt: v => '<span class="mut">' + esc(entName(v)) + '</span>' },
           { key: 'kind', label: 'Тип', val: r => r.kindLabel, filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
           money('carry', 'Кэрри', r => r.carry, { title: TIP.carry, tip: true }),
-          money('funding', 'Фондирование', r => r.funding, { title: TIP.funding, tip: true, sum: r => !r.isCash && r.funding == null ? NaN : r.funding || 0,
+          money('funding', 'Фондирование', r => r.funding, { title: TIP.funding, tip: true, sum: C.colSum.funding,
             fmt: (v, r) => v != null ? '<span title="' + esc([r.fundingRate, C.FUNDING_SOURCE[r.fundingSource], r.fundingNote].filter(Boolean).join(' · ')) + '">' + f.mn(v, DIG) + '</span>'
               : '<span class="mut3" title="' + esc(r.fundingNote || '') + '">' + (r.fundingState === 'not_configured' ? 'не настроено' : r.fundingState === 'problem' ? '— ⚠' : '—') + '</span>' }),
           // нетто группы: «—», если у позиции с прогнозом нет фондирования (NaN → «—»); иначе кэрри + всё фондирование
-          money('net', 'Нетто', r => r.net, { title: TIP.net, tip: true, sum: r => !r.isCash && r.funding == null ? NaN : (r.carry || 0) + (r.funding || 0) }),
+          money('net', 'Нетто', r => r.net, { title: TIP.net, tip: true, sum: C.colSum.net }),
           { key: 'cdv', label: 'Кэрри/DV01', num: true, val: r => r.carryDv01, csvFmt: v => bp(v),
             fmt: (v, r) => bp(v) + (r.floater && r.covered ? ' <span class="k-tag" title="флоатер: кэрри / |CS01|">CS</span>' : ''), cls: v => v == null ? '' : f.cls(v), unit: 'б.п.', title: TIP.dv01, tip: true },
           { key: 'den', label: 'Знаменатель', val: r => r.covered ? r.denom : null, filter: true, fmt: v => v ? '<span class="mut">' + v + '</span>' : '<span class="mut3">—</span>', title: 'Знаменатель «Кэрри/DV01»: DV01 ставок, у флоатеров — CS01' },
@@ -322,7 +323,8 @@
     const np = panel('Допущения расчёта', '<span class="k-note">' + esc(resp.method || '') + '</span>');
     const notes = (resp.notes || []).slice();
     notes.unshift('На экране «Кэрри» — одна колонка (решение 26.10): полное изменение стоимости при кривых, перенесённых в горизонт; купон, pull и roll-down отдельно не показываются (в ответе API они есть). Фондирование — отдельно, нетто — их сумма.');
-    notes.push('Знаменатель «Кэрри/DV01» — риск позиций того же прогона (в ответе сервера его нет): DV01 ставок, у флоатеров — CS01; итог портфеля — по фиксам, флоатеры — отдельной строкой.');
+    if (K.repr !== 'RUB') notes.push('Валюта показа ' + K.repr + ': итоги — рубли сервера по курсу монитора, а строки позиций в ' + K.repr + ' — суммы сервера в своей валюте (inCcy, курс прогона). Если курсы различаются, итог колонки и сумма строк могут немного разойтись.');
+    notes.push('Знаменатель «Кэрри/DV01» — риск позиции из ответа сервера (dv01, cs01): DV01 ставок, у флоатеров — CS01; итог портфеля — по фиксам, флоатеры — отдельной строкой.');
     if ((resp.provisional || []).length) notes.push('Поля политики фондирования по умолчанию движка (предварительно): ' + resp.provisional.join(', '));
     if ((resp.fundingProblems || []).length) notes.push('Проблемы фондирования: ' + resp.fundingProblems.length + ' — ' + resp.fundingProblems.slice(0, 5).map(x => (x.ref || '') + ': ' + (x.reason || '')).join('; '));
     np.querySelector('.bd').innerHTML = '<ul class="c17-notes">' + notes.map(n => '<li>' + esc(n) + '</li>').join('') + '</ul>';

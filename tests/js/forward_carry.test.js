@@ -271,3 +271,48 @@ test('#297: null при частичном фондировании, inCcy в с
   assert.strictEqual(demo.totals.nNoCarryNoFunding, 0);
   assert.strictEqual(REAL.totals.nNoCarryNoFunding, 0);
 });
+
+test('итог колонок таблицы = итоги плиток: «Фондирование» = fundingTotal, «Нетто» по B1', () => {
+  const colTot = (rows, fn) => rows.reduce((a, r) => a + fn(r), 0);
+  // демо: у книги IC-BND позиции с прогнозом без фондирования — итог «Фондирования» число (= fundingTotal), нетто «—»
+  const d = M.forwardCarryDemo({});
+  const rows = model(d), S = C.sums(rows, true);
+  assert.ok(S.nFundingMissing > 0);
+  near(colTot(rows, C.colSum.funding), S.funding, 'итог колонки = S.funding');
+  near(S.funding, d.totals.fundingTotal, 'S.funding = fundingTotal сервера');
+  assert.ok(Number.isNaN(colTot(rows, C.colSum.net)) && S.net === null, 'нетто — «—»');
+  // золотой ответ: всё известно — оба итога числа
+  const rr = model(REAL), sr = C.sums(rr, true);
+  near(colTot(rr, C.colSum.funding), REAL.totals.fundingTotal, 'фондирование'); near(colTot(rr, C.colSum.net), REAL.totals.net, 'нетто');
+  // позиция без прогноза с null: итог «Фондирования» — «—» (NaN), как fundingTotal null
+  const d2 = JSON.parse(JSON.stringify(REAL));
+  Object.assign(d2.positions.find(p => p.positionId === 'D1|USD'), { funding: null, fundingState: 'problem' });
+  const r2 = model(d2);
+  assert.ok(Number.isNaN(colTot(r2, C.colSum.funding)) && C.sums(r2, true).funding === null);
+});
+
+test('нестрогий ответ сервера (main без nNoCarryNoFunding): строгое правило — на клиенте', () => {
+  const d = JSON.parse(JSON.stringify(REAL));
+  delete d.totals.nNoCarryNoFunding;
+  Object.values(d.byBook).forEach(g => delete g.nNoCarryNoFunding);
+  Object.assign(d.positions.find(p => p.positionId === 'D1|USD'), { funding: null, fundingState: 'problem' });
+  // сервер из main считает null нулём: fundingNoCarry 0, net — число
+  assert.ok(d.totals.net != null && d.totals.fundingNoCarry === 0);
+  const w = C.withServer(C.sums(model(d), true), d.totals, 1);
+  assert.strictEqual(w.nNoCarryNoFunding, 1);
+  assert.strictEqual(w.net, null); assert.strictEqual(w.fundingNoCarry, null); assert.strictEqual(w.funding, null);
+  near(w.netKnown, REAL.totals.netKnown, 'netKnown — частичная сумма');
+});
+
+test('позиций без прогноза нет — «позиции без прогноза» «—»; USD: итоги сервера и строки в пределах ε; noFilter', () => {
+  const rows = model(REAL).filter(r => r.covered || r.isCash);
+  const s = C.sums(rows, true);
+  assert.strictEqual(s.nNotCovered, 0); assert.strictEqual(s.fundingNoCarry, null);
+  near(s.funding, s.fundingCovered + s.fundingCash, 'всё фондирование без «без прогноза»');
+  // USD: суммы строк по inCcy и рубли сервера × курс демо — совпадают до ε (в демо курс прогона = курс монитора)
+  const d = M.forwardCarryDemo({}), k = 1 / M.fx.USD;
+  const ru = C.rows(d, { pos: M.pos, k, books: M.book, repr: 'USD' }).concat(C.cashRows(d, { k, books: M.book }));
+  const su = C.sums(ru, true), w = C.withServer(C.sums(ru, true), d.totals, k);
+  near(su.carry, w.carry, 'кэрри USD', 1e-9); near(su.fundingCovered, w.fundingCovered, 'фондирование USD', 1e-9);
+  assert.ok(C.noFilter({ entity: null, desk: null, books: [], ccy: null, portsOff: [] }) && !C.noFilter({ ccy: 'USD' }) && !C.noFilter({ books: ['OFZ'] }));
+});

@@ -187,6 +187,7 @@
       s.net = s.nFundingMissing || s.nNoCarryNoFunding || !s.nCovered ? null : s.carry + s.funding;
     }
     if (!s.nCovered && s.netKnown === 0) s.netKnown = null;
+    if (!s.nNotCovered) s.fundingNoCarry = null;  // позиций без прогноза нет — «—», как у сервера
     s.carryDv01 = C.perDv01(s.carryFix, s.nFix ? s.dv01 : null);
     s.carryCs01Flt = C.perDv01(s.carryFlt, s.nFlt ? s.cs01Flt : null);
     return s;
@@ -208,6 +209,18 @@
       funding: m(g.fundingTotal), net: m(g.net), netKnown: m(g.netKnown), nCovered: g.nCovered, nNotCovered: g.nNotCovered, nFundingMissing: g.nCoveredNoFunding,
       nNoCarryNoFunding: g.nNoCarryNoFunding == null ? s.nNoCarryNoFunding : g.nNoCarryNoFunding, server: true }) && C.strictNoCarry(s);
   };
+
+  // слагаемые итогов колонок таблицы (K.table: NaN → «—»), по тому же правилу, что C.sums и сервер:
+  //  - «Фондирование» = fundingTotal: «—» только если у позиции без прогноза фондирование null (nNoCarryNoFunding);
+  //    позиция с прогнозом без фондирования в fundingTotal не входит (у сервера funding — сумма известных);
+  //  - «Нетто»: «—», если фондирование null у любой позиции (B1 строгое); группа без позиций с прогнозом — «—»
+  //    (её строки все без нетто: nullable)
+  C.colSum = {
+    funding: r => !r.isCash && !r.covered && r.funding == null ? NaN : r.funding || 0,
+    net: r => !r.isCash && r.funding == null ? NaN : (r.carry || 0) + (r.funding || 0),
+  };
+  // общие фильтры шапки не заданы (K.filter): итоги — с сервера
+  C.noFilter = f => !f || (!f.entity && !f.desk && !(f.books && f.books.length) && !f.ccy && !(f.portsOff && f.portsOff.length));
 
   // фильтр строк без позиции в модели монитора и строк остатков: те же общие фильтры, что K.list (юрлицо, деск,
   // книги, валюта); books — {id: {entity, desk}}
