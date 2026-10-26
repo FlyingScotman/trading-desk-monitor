@@ -41,9 +41,9 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   <div class="k-panel">
     <div class="hd"><h3>Концентрация</h3><span class="sp"></span><span id="exmf"></span><span class="k-note">мера:</span><span id="meas"></span></div>
     <div class="bd"><div class="c13-strip">
-      <div><div class="k-note" id="paretoNote">топ-15 эмитентов и накопленная доля · щелчок — открыть эмитента</div><div id="pareto" class="chs"></div></div>
-      <div><div class="k-note">по секторам · щелчок — из чего</div><div id="sector" class="chs"></div></div>
-      <div><div class="k-note">по рейтингам · щелчок — из чего</div><div id="rating" class="chs"></div></div>
+      <div><div class="k-note">топ-15 эмитентов<span class="mu"></span> · накопленная доля, % · щелчок — открыть эмитента</div><div id="pareto" class="chs"></div></div>
+      <div><div class="k-note">по секторам<span class="mu"></span> · щелчок — из чего</div><div id="sector" class="chs"></div></div>
+      <div><div class="k-note">по рейтингам<span class="mu"></span> · щелчок — из чего</div><div id="rating" class="chs"></div></div>
     </div></div>
   </div>
   <div class="c13-main">
@@ -116,6 +116,8 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   function renderStrip() {
     stripCharts.forEach(c => c.dispose()); stripCharts = [];
     const m = MEAS[st.meas];
+    // единица меры — в подписи над графиком, а не у оси (#284): у оси она наезжала на деления и подписи столбцов
+    const unitOf = (id, on) => { const u = document.getElementById(id).previousElementSibling.querySelector('.mu'); if (u) u.textContent = on ? ', ' + K.u(m.unit) : ''; };
     const SRC = st.exMf ? ISS.filter(x => !M.isMinfin(x.id)) : ISS;
     const ex = document.getElementById('exmf');
     ex.innerHTML = '<span class="k-chip' + (st.exMf ? ' on' : '') + '">' + (st.exMf ? '☑' : '☐') + ' без Минфина</span>';
@@ -128,7 +130,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
       grid: { left: 6, right: 6, top: 12, bottom: 4, containLabel: true },
       tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: ps => { const x = top[ps[0].dataIndex]; return '<b>' + esc(x.full) + '</b><br>' + m.t + ': <b>' + m.fmt(x[st.meas]) + '</b> ' + m.unit + '<br>доля ' + Math.round(Math.abs(x[st.meas]) / tot * 100) + '% · накопленно ' + Math.round(cum[ps[0].dataIndex]) + '%'; } },
       xAxis: { type: 'category', data: top.map(x => x.name), axisLabel: { rotate: 35, fontSize: 10, interval: 0 } },
-      yAxis: [{ type: 'value', unit: m.unit, axisLabel: { formatter: x => K.tick(x, m.sc) } }, { type: 'value', max: 100, min: 0, splitLine: { show: false }, axisLabel: { formatter: '{value}%', color: K.css('--warn') } }],
+      yAxis: [{ type: 'value', axisLabel: { formatter: x => K.tick(x, m.sc) } }, { type: 'value', max: 100, min: 0, splitLine: { show: false }, axisLabel: { formatter: '{value}%', color: K.css('--warn') } }],
       series: [{ type: 'bar', barMaxWidth: 28, data: top.map(x => ({ value: m.abs ? Math.abs(x[st.meas]) : x[st.meas], itemStyle: { color: K.issuerColor(x.id), opacity: x.id === st.sel ? 1 : .75, borderColor: x.id === st.sel ? K.css('--fg') : 'transparent', borderWidth: 1.5 } })) },
         { type: 'line', yAxisIndex: 1, data: cum, symbolSize: 4, lineStyle: { type: 'dashed', width: 2, color: K.css('--warn') }, itemStyle: { color: K.css('--warn') } }],
     }));
@@ -138,11 +140,12 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     const L = SRC.flatMap(x => x.list);
     const agg = keyFn => { const g = {}; L.forEach(p => { const k = keyFn(p); (g[k] = g[k] || []).push(p); }); return g; };
     const NOSEC = K.dimMissing(L, 'sector'), NORAT = K.dimMissing(L, 'rating');
+    unitOf('pareto', true); unitOf('sector', !NOSEC); unitOf('rating', !NORAT);  // без данных — без единицы
     const sec = agg(p => p.sector), secK = Object.keys(sec).sort((a, b) => Math.abs(sumBy(sec[a], m.val)) - Math.abs(sumBy(sec[b], m.val)));
     if (NOSEC) K.noData(document.getElementById('sector'), 'секторов эмитентов в статике хаба нет'); else {
     const sc = K.chart(document.getElementById('sector'), () => ({
       grid: { left: 6, right: 40, top: 6, bottom: 4, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: x => m.fmt(x) + ' ' + m.unit },
-      xAxis: { type: 'value', unit: m.unit, axisLabel: { formatter: x => K.tick(x, m.sc) } }, yAxis: { type: 'category', data: secK, axisLabel: { fontSize: 10.5 } },
+      xAxis: { type: 'value', splitNumber: 3, axisLabel: { formatter: x => K.tick(x, m.sc), hideOverlap: true } }, yAxis: { type: 'category', data: secK, axisLabel: { fontSize: 10.5 } },
       series: [{ type: 'bar', barMaxWidth: 16, data: secK.map(k => sumBy(sec[k], m.val)), itemStyle: { color: K.css('--accent') }, label: { show: true, position: 'right', fontSize: 10, color: K.css('--fg-2'), formatter: p => m.fmt(p.value) } }],
     }));
     sc.on('click', pp => K.drill({ title: 'Сектор «' + secK[pp.dataIndex] + '» · ' + m.t, unit: m.unit, fmt: m.fmt, list: sec[secK[pp.dataIndex]], val: m.val, dim: 'issuer' }));
@@ -151,7 +154,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     if (NORAT) K.noData(document.getElementById('rating'), 'рейтингов в статике хаба нет'); else {
     const rc = K.chart(document.getElementById('rating'), () => ({
       grid: { left: 6, right: 6, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: x => m.fmt(x) + ' ' + m.unit },
-      xAxis: { type: 'category', data: ratK }, yAxis: { type: 'value', unit: m.unit, axisLabel: { formatter: x => K.tick(x, m.sc) } },
+      xAxis: { type: 'category', data: ratK }, yAxis: { type: 'value', axisLabel: { formatter: x => K.tick(x, m.sc) } },
       series: [{ type: 'bar', barMaxWidth: 30, data: ratK.map(r => ({ value: sumBy(rat[r], m.val), itemStyle: { color: (K.RATING_BUCKETS.find(b => b[0] === r) || [])[1] } })), label: { show: true, position: 'top', fontSize: 10, color: K.css('--fg-2'), formatter: p => m.fmt(p.value) } }],
     }));
     rc.on('click', pp => K.drill({ title: 'Рейтинг ' + ratK[pp.dataIndex] + ' · ' + m.t, unit: m.unit, fmt: m.fmt, list: rat[ratK[pp.dataIndex]], val: m.val, dim: 'issuer' }));

@@ -102,7 +102,9 @@ tr.row.sel td { background: var(--accent-bg); }
   function setCmp(i) { i = Math.max(0, Math.min(LAST - 1, i)); st.cmp = i; if (i < from()) { st.range = RANGES.find(r => r[1] >= N - i)?.[1] || 250; } save(); drawAll(); }
 
   // ---------- общий конструктор линейных графиков с отметкой даты сравнения ----------
+  // opts.tick — масштаб денежной оси: деления через K.tick (#272), подсказка — opts.fmt
   function series(el, getS, opts) {
+    const ax = opts.tick ? v => K.tick(v, opts.tick) : opts.fmt;
     const ch = K.chart(el, () => {
       const S = getS(), I = idxs();
       const mark = st.cmp >= from() ? { silent: true, symbol: 'none', label: { formatter: 'сравнение', color: css('--fg-3'), fontSize: 10 }, lineStyle: { color: css('--warn'), type: 'dashed' }, data: [{ xAxis: st.cmp - from() }] } : undefined;
@@ -110,7 +112,7 @@ tr.row.sel td { background: var(--accent-bg); }
         animation: false, grid: { left: 6, right: 10, top: 30, bottom: 4, containLabel: true }, legend: { top: 0, left: 0, type: 'scroll' },
         tooltip: { trigger: 'axis', valueFormatter: opts.fmt, axisPointer: { type: opts.bars ? 'shadow' : 'line' } },
         xAxis: { type: 'category', data: I.map(i => f.dshort(DATES[i])), boundaryGap: !!opts.bars },
-        yAxis: [{ type: 'value', unit: opts.unit, scale: !opts.stack, axisLabel: { formatter: opts.fmt } }].concat(opts.y2 ? [{ type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: opts.fmt, color: css('--fg-3') } }] : []),
+        yAxis: [{ type: 'value', unit: opts.unit, scale: !opts.stack, axisLabel: { formatter: ax } }].concat(opts.y2 ? [{ type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: ax, color: css('--fg-3') } }] : []),
         dataZoom: [{ type: 'inside' }],
         series: S.map((s, k) => Object.assign({ type: 'line', showSymbol: false, lineStyle: { width: 1.6 }, markLine: k === 0 ? mark : undefined }, opts.stack ? { stack: 'a', areaStyle: { opacity: .55 }, lineStyle: { width: 0.8 } } : {}, s)),
       };
@@ -132,7 +134,7 @@ tr.row.sel td { background: var(--accent-bg); }
   function drawRisk() {
     K.seg(pRisk.querySelector('.m'), RISKM, st.risk, v => { st.risk = v; save(); chRisk.redraw(); });
     let defs = [];
-    chRisk = series(pRisk.querySelector('.chart'), () => { const L = K.list(); defs = riskDefs(L); return defs.map(([n, fn, c]) => ({ name: n, data: agg(L, fn), color: c })); }, { fmt: v => f.dv(v), unit: 'тыс ₽/бп' });
+    chRisk = series(pRisk.querySelector('.chart'), () => { const L = K.list(); defs = riskDefs(L); return defs.map(([n, fn, c]) => ({ name: n, data: agg(L, fn), color: c })); }, { fmt: v => f.dv(v), tick: 1e3, unit: 'тыс ₽/бп' });
     chRisk.on('click', pp => {
       const i = idxs()[pp.dataIndex], d = defs[pp.seriesIndex]; if (!d) return;
       K.drill({ title: d[0] + ' на ' + f.date(DATES[i]), unit: 'тыс ₽/бп', rows: atRows(K.list(), d[1], i), note: REAL ? 'по прогону даты' : 'восстановлено по номиналам' });
@@ -152,7 +154,7 @@ tr.row.sel td { background: var(--accent-bg); }
   function drawMv() {
     K.seg(pMv.querySelector('.m'), MVM, st.mv, v => { st.mv = v; save(); chMv.redraw(); });
     let defs = [];
-    chMv = series(pMv.querySelector('.chart'), () => { const L = K.list(); defs = mvDefs(L); return defs.map(([n, fn, c]) => ({ name: n, data: agg(L, fn), color: c })); }, { fmt: v => f.bn(v, 1), unit: 'bn ₽', stack: true });
+    chMv = series(pMv.querySelector('.chart'), () => { const L = K.list(); defs = mvDefs(L); return defs.map(([n, fn, c]) => ({ name: n, data: agg(L, fn), color: c })); }, { fmt: v => f.bn(v, 1), tick: 1e9, unit: 'bn ₽', stack: true });
     chMv.on('click', pp => {
       const i = idxs()[pp.dataIndex], d = defs[pp.seriesIndex]; if (!d) return;
       K.drill({ title: 'MV · ' + d[0] + ' на ' + f.date(DATES[i]), unit: 'mm ₽', fmt: v => f.mn(v, 0), rows: atRows(K.list(), d[1], i), color: false });
