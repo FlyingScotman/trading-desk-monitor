@@ -41,7 +41,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   <div class="k-panel">
     <div class="hd"><h3>Концентрация</h3><span class="sp"></span><span id="exmf"></span><span class="k-note">мера:</span><span id="meas"></span></div>
     <div class="bd"><div class="c13-strip">
-      <div><div class="k-note">топ-15 эмитентов и накопленная доля<span class="mu"></span> · щелчок — открыть эмитента</div><div id="pareto" class="chs"></div></div>
+      <div><div class="k-note">топ-15 эмитентов<span class="mu"></span> · накопленная доля, % · щелчок — открыть эмитента</div><div id="pareto" class="chs"></div></div>
       <div><div class="k-note">по секторам<span class="mu"></span> · щелчок — из чего</div><div id="sector" class="chs"></div></div>
       <div><div class="k-note">по рейтингам<span class="mu"></span> · щелчок — из чего</div><div id="rating" class="chs"></div></div>
     </div></div>
@@ -117,7 +117,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     stripCharts.forEach(c => c.dispose()); stripCharts = [];
     const m = MEAS[st.meas];
     // единица меры — в подписи над графиком, а не у оси (#284): у оси она наезжала на деления и подписи столбцов
-    document.querySelectorAll('#pareto, #sector, #rating').forEach(e => { const u = e.previousElementSibling.querySelector('.mu'); if (u) u.textContent = ', ' + K.u(m.unit); });
+    const unitOf = (id, on) => { const u = document.getElementById(id).previousElementSibling.querySelector('.mu'); if (u) u.textContent = on ? ', ' + K.u(m.unit) : ''; };
     const SRC = st.exMf ? ISS.filter(x => !M.isMinfin(x.id)) : ISS;
     const ex = document.getElementById('exmf');
     ex.innerHTML = '<span class="k-chip' + (st.exMf ? ' on' : '') + '">' + (st.exMf ? '☑' : '☐') + ' без Минфина</span>';
@@ -140,6 +140,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     const L = SRC.flatMap(x => x.list);
     const agg = keyFn => { const g = {}; L.forEach(p => { const k = keyFn(p); (g[k] = g[k] || []).push(p); }); return g; };
     const NOSEC = K.dimMissing(L, 'sector'), NORAT = K.dimMissing(L, 'rating');
+    unitOf('pareto', true); unitOf('sector', !NOSEC); unitOf('rating', !NORAT);  // без данных — без единицы
     const sec = agg(p => p.sector), secK = Object.keys(sec).sort((a, b) => Math.abs(sumBy(sec[a], m.val)) - Math.abs(sumBy(sec[b], m.val)));
     if (NOSEC) K.noData(document.getElementById('sector'), 'секторов эмитентов в статике хаба нет'); else {
     const sc = K.chart(document.getElementById('sector'), () => ({

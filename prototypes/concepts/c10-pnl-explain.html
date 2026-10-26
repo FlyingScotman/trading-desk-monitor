@@ -94,10 +94,9 @@
       let run = 0; const data = vals.map((v, i) => { const a = run; run += v; return [i, Math.min(a, run), Math.max(a, run), v]; });
       data.push([vals.length, Math.min(0, run), Math.max(0, run), run]);
       const pos = K.css('--pos'), neg = K.css('--neg'), acc = K.css('--accent'), lab = K.css('--fg-2'), ln = K.css('--line-2');
-      const span = Math.max(...data.map(x => x[2])) - Math.min(...data.map(x => x[1]));  // размах: малые факторы без подписи (K.wfLabel)
       return {
         grid: { left: 6, right: 10, top: 22, bottom: 4, containLabel: true },
-        tooltip: { trigger: 'item', formatter: p => (FAC[p.dataIndex] ? FAC[p.dataIndex][1] : 'Итого') + ': <b>' + (K.wfLabel(p.value[3]) || '0') + '</b> mm ₽' },
+        tooltip: { trigger: 'item', formatter: p => (FAC[p.dataIndex] ? FAC[p.dataIndex][1] : 'Итого') + ': <b>' + K.wfTip(p.value[3]) + '</b> mm ₽' },
         xAxis: { type: 'category', data: FAC.map(x => x[0] === 'funding' ? 'Фондир.' : x[1]).concat(['Итого']), axisLabel: { interval: 0, fontSize: 10 } },
         yAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => K.tick(v, 1e6) } },
         series: [{
@@ -106,7 +105,7 @@
             const i = api.value(0), lo = api.coord([i, api.value(1)]), hi = api.coord([i, api.value(2)]), w = Math.min(52, api.size([1, 0])[0] * 0.6), v = api.value(3);
             const last = i === vals.length, col = last ? acc : v >= 0 ? pos : neg;
             const kids = [{ type: 'rect', shape: { x: lo[0] - w / 2, y: hi[1], width: w, height: Math.max(1, lo[1] - hi[1]) }, style: { fill: col } },
-              { type: 'text', style: { text: K.wfLabel(v, last ? 0 : span), x: lo[0], y: (v >= 0 || last ? hi[1] - 4 : lo[1] + 4), textAlign: 'center', textVerticalAlign: v >= 0 || last ? 'bottom' : 'top', fill: lab, fontSize: 11 } }];
+              { type: 'text', style: { text: K.wfLabel(v, api.size([1, 0])[0] - 1, last), x: lo[0], y: (v >= 0 || last ? hi[1] - 4 : lo[1] + 4), textAlign: 'center', textVerticalAlign: v >= 0 || last ? 'bottom' : 'top', fill: lab, fontSize: 11 } }];
             if (!last) { const nx = api.coord([i + 1, 0]); const yy = v >= 0 ? hi[1] : lo[1]; kids.push({ type: 'line', shape: { x1: lo[0] + w / 2, y1: yy, x2: nx[0] - w / 2, y2: yy }, style: { stroke: ln, lineDash: [3, 3] } }); }
             return { type: 'group', children: kids };
           },

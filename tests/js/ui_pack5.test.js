@@ -34,7 +34,7 @@ function load(repr) {
 }
 const PAGES = fs.readdirSync(DIR).filter(f => /^c\d\d-.*\.html$/.test(f));
 
-t('#272: подпись столбца водопада — без «+0.0»: малым факторам больше знаков, почти нулевые без подписи', () => {
+t('#272: подпись столбца водопада — без «+0.0»: малым факторам больше знаков; не помещается или почти ноль — без подписи', () => {
   for (const repr of ['RUB', 'USD']) {
     const { K } = load(repr);
     assert.strictEqual(K.wfLabel(1.24e6), '+1.2');
@@ -43,13 +43,26 @@ t('#272: подпись столбца водопада — без «+0.0»: м�
     assert.strictEqual(K.wfLabel(-6e3), '(0.006)');
     assert.strictEqual(K.wfLabel(200), '', 'меньше 500 — без подписи');
     assert.strictEqual(K.wfLabel(0), '');
-    assert.strictEqual(K.wfLabel(12e3, 0.8e6), '', 'меньше 3% размаха графика — без подписи');
-    assert.strictEqual(K.wfLabel(40e3, 0.8e6), '+0.040');
+    const w = K.labelWidth('+0.012', 11);
+    assert.strictEqual(K.wfLabel(12e3, w - 1), '', 'шире столбца — без подписи');
+    assert.strictEqual(K.wfLabel(12e3, w + 1), '+0.012', 'место есть — подписан');
     for (let v = -2e6; v <= 2e6; v += 777) assert.ok(!/^[+(]?0\.0+\)?$/.test(K.wfLabel(v)), repr + ' ' + v + ': ' + K.wfLabel(v));
   }
-  assert.ok(P('lib/kit.js').includes("text: K.wfLabel(v, i < vals.length ? hi - lo : 0)"), 'C06: водопад K.pnlWaterfall');
-  assert.ok(P('c10-pnl-explain.html').includes("text: K.wfLabel(v, last ? 0 : span)"), 'C10: свой водопад');
-  assert.ok(!/text: f\.mns\(v, 1\)/.test(P('lib/kit.js') + P('c10-pnl-explain.html')));
+});
+
+t('#272: «Итого» водопада подписан всегда; подсказка — точное значение без порога', () => {
+  const { K } = load('USD');
+  assert.strictEqual(K.wfLabel(200, 5, true), '+0.00', 'итого меньше 500 и в узком столбце — подписано');
+  assert.strictEqual(K.wfLabel(0, 0, true), '0.00');
+  assert.strictEqual(K.wfLabel(-94e3, 0, true), '(0.09)', 'не больше двух знаков, как PnL дня в KPI C10');
+  assert.strictEqual(K.wfLabel(-2.46e6, 0, true), '(2.5)');
+  assert.deepStrictEqual([K.wfTip(200), K.wfTip(-6e3), K.wfTip(0.35e6), K.wfTip(1.234e6), K.wfTip(0)], ['+0.000', '(0.006)', '+0.350', '+1.23', '0.000']);
+  const kit = P('lib/kit.js'), c10 = P('c10-pnl-explain.html');
+  assert.ok(kit.includes("text: K.wfLabel(v, api.size([1, 0])[0] - 1, i === vals.length)"), 'C06: водопад K.pnlWaterfall');
+  assert.ok(kit.includes("<b>' + K.wfTip(p.dataIndex < vals.length ? vals[p.dataIndex] : run) + '</b> mm ₽'"), 'C06: подсказка');
+  assert.ok(c10.includes("text: K.wfLabel(v, api.size([1, 0])[0] - 1, last)"), 'C10: свой водопад');
+  assert.ok(c10.includes("<b>' + K.wfTip(p.value[3]) + '</b> mm ₽'"), 'C10: подсказка');
+  assert.ok(!/text: f\.mns\(v, 1\)|K\.wfLabel\([^)]*\) \|\| '0'/.test(kit + c10));
 });
 
 t('#272: денежные оси (тыс/бп, bn) — K.tick, без f.dv и f.bn', () => {
@@ -65,18 +78,23 @@ t('#272: денежные оси (тыс/бп, bn) — K.tick, без f.dv и f.
   assert.deepStrictEqual([K.tick(500, 1e3), K.tick(-2500, 1e3), K.tick(0.6e9, 1e9), K.tick(20e3, 1e3)], ['0.5', '(2.5)', '0.6', '20']);
 });
 
-t('#272: смоук на 390 px проверяет, что кнопки переключателя видны без прокрутки', () => {
+t('#272: смоук на 390 px проверяет, что кнопки переключателя видны без прокрутки; переключатель переносится, а не сжимается', () => {
   const s = P('tools/smoke.js');
   assert.ok(s.includes("querySelectorAll('.k-seg')") && s.includes('s.scrollWidth > s.clientWidth + 1') && s.includes('кнопки переключателя за краем'));
-  const css = P('lib/kit.css'), m = css.slice(css.indexOf('@media (max-width: 720px)'));
-  const block = m.slice(0, m.indexOf('\n}\n'));
-  assert.ok(/\.k-seg button \{ flex: 1 1 auto;[^}]*margin: 0 -1px -1px 0; \}/.test(block), 'кнопки делят строку, крайние границы под рамкой');
+  const css = P('lib/kit.css'), m = css.slice(css.indexOf('@media (max-width: 720px)')), block = m.slice(0, m.indexOf('\n}\n'));
+  assert.ok(/\n\.k-seg \{ display: inline-flex; flex: none;/.test(css), 'переключатель не сжимается');
+  assert.ok(/\n\.k-seg button \{[^}]*white-space: nowrap; \}/.test(css), 'подпись кнопки в одну строку');
+  assert.ok(/\.k-seg \{ max-width: 100%; flex-wrap: wrap; \}/.test(block) && /\.k-seg button \{ flex: 1 1 auto;[^}]*margin: 0 -1px -1px 0; \}/.test(block), '390 px: в две строки, крайние границы под рамкой');
+  assert.ok(/\n\.k-rm-bar \.k-seg \{ max-width: 100%; flex-wrap: wrap; \}/.test(css), 'полоса матрицы рисков (C06 на 1024 px)');
+  assert.ok(/\n\.k-panel > \.hd \{ display: flex; flex-wrap: wrap;/.test(css), 'шапка панели переносится на любой ширине (C17 на 721–800 px)');
 });
 
-t('#284: C13 «Концентрация» — единица меры в подписи над графиком, у осей её нет', () => {
+t('#284: C13 «Концентрация» — единица меры в подписи над графиком, у осей её нет; без данных — без единицы', () => {
   const s = P('c13-issuers.html');
   assert.strictEqual((s.match(/<span class="mu"><\/span>/g) || []).length, 3, 'Парето, сектора, рейтинги');
-  assert.ok(s.includes("document.querySelectorAll('#pareto, #sector, #rating').forEach(e => { const u = e.previousElementSibling.querySelector('.mu'); if (u) u.textContent = ', ' + K.u(m.unit); });"));
+  assert.ok(s.includes('топ-15 эмитентов<span class="mu"></span> · накопленная доля, % ·'), 'Парето: единица у эмитентов, доля — в %');
+  assert.ok(s.includes("u.textContent = on ? ', ' + K.u(m.unit) : '';"));
+  assert.ok(s.includes("unitOf('pareto', true); unitOf('sector', !NOSEC); unitOf('rating', !NORAT);"));
   const strip = s.slice(s.indexOf('function renderStrip'), s.indexOf('stripCharts.push(rc)'));
   assert.ok(strip && !/type: 'value', unit: m\.unit/.test(strip), 'у осей полосы нет name');
   assert.ok(strip.includes("xAxis: { type: 'value', splitNumber: 3, axisLabel: { formatter: x => K.tick(x, m.sc), hideOverlap: true } }"), 'сектора: деления не слипаются');

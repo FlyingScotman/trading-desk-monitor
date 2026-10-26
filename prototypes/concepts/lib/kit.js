@@ -136,13 +136,17 @@
     return grp(x, Math.min(cap, (String(+x.toFixed(6)).split('.')[1] || '').length));
   };
   // подпись столбца PnL-водопада, mm (#272): знаков после точки столько, чтобы малый фактор не превращался в «+0.0»
-  // (от 1 mm — один, от 0.1 — два, меньше — три). Без подписи — фактор, который и с тремя знаками равен нулю (меньше
-  // 500 в валюте отчёта), и, если передан размах графика span, фактор меньше 3% размаха: его столбец едва виден, а
-  // подпись слипается с соседней. Значение такого фактора — в подсказке (K.wfLabel без span)
-  K.wfLabel = (v, span) => {
+  // (от 1 mm — один, от 0.1 — два, меньше — три). Фактор без подписи, если он и с тремя знаками равен нулю (меньше 500
+  // в валюте отчёта) или подпись шире room — ширины столбца в px (K.labelWidth): иначе она слипается с соседней.
+  // total — «Итого»: подписан всегда, не больше двух знаков, как цифра PnL дня в KPI. Точное значение — K.wfTip
+  K.wfLabel = (v, room, total) => {
     const x = (v || 0) / 1e6, a = Math.abs(x);
-    return a < 5e-4 || (span && Math.abs(v || 0) < 0.03 * span) ? '' : sgn(x, a >= 0.95 ? 1 : a >= 0.095 ? 2 : 3);
+    if (!total && a < 5e-4) return '';
+    const t = sgn(x, a >= 0.95 ? 1 : total || a >= 0.095 ? 2 : 3);
+    return !total && room && K.labelWidth(t, 11) > room ? '' : t;
   };
+  // значение столбца водопада в подсказке, mm: без порога, от 1 mm — два знака, меньше — три
+  K.wfTip = v => { const x = (v || 0) / 1e6; return sgn(x, Math.abs(x) >= 0.95 ? 2 : 3); };
   // заседание ЦБ одной фразой: консенсус и ожидание кривой, если они есть в данных, иначе ставка и прошлое решение
   K.cbrLine = () => {
     const c = M.cbr || {}, n = c.next || {}, last = (c.past || [])[0];
@@ -2640,7 +2644,7 @@
       const cols = vals.map(v => v >= 0 ? css('--pos') : css('--neg')).concat([css('--accent')]);
       const lo = Math.min(0, ...segs.map(x => Math.min(x[0], x[1]))), hi = Math.max(0, ...segs.map(x => Math.max(x[0], x[1])));
       return {
-        grid: { left: 6, right: 10, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'item', formatter: p => (keys[p.dataIndex] ? keys[p.dataIndex][1] : 'Итого') + ': <b>' + (K.wfLabel(p.dataIndex < vals.length ? vals[p.dataIndex] : run) || '0') + '</b> mm ₽' },
+        grid: { left: 6, right: 10, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'item', formatter: p => (keys[p.dataIndex] ? keys[p.dataIndex][1] : 'Итого') + ': <b>' + K.wfTip(p.dataIndex < vals.length ? vals[p.dataIndex] : run) + '</b> mm ₽' },
         xAxis: { type: 'category', data: cats, axisLabel: { interval: 0, fontSize: 10, formatter: (v, i) => stag && i % 2 ? '\n' + v : v } }, yAxis: { type: 'value', unit: 'mm ₽', nameGap: 20, min: lo, max: hi, scale: false, axisLabel: { formatter: v => K.tick(v, 1e6), hideOverlap: true, showMinLabel: !lo, showMaxLabel: !hi } },
         series: [{
           type: 'custom', data: segs.map((s, i) => [i, s[0], s[1]]),
@@ -2650,7 +2654,7 @@
             const v = i < vals.length ? vals[i] : run;
             return { type: 'group', children: [
               { type: 'rect', shape: { x: a[0] - w / 2, y: y0, width: w, height: hh }, style: { fill: cols[i] } },
-              { type: 'text', style: { x: a[0], y: y0 - 4, text: K.wfLabel(v, i < vals.length ? hi - lo : 0), fill: css('--fg-2'), fontSize: 11, align: 'center', verticalAlign: 'bottom' } }] };
+              { type: 'text', style: { x: a[0], y: y0 - 4, text: K.wfLabel(v, api.size([1, 0])[0] - 1, i === vals.length), fill: css('--fg-2'), fontSize: 11, align: 'center', verticalAlign: 'bottom' } }] };
           },
         }],
       };

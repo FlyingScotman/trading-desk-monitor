@@ -41,7 +41,7 @@ t('#263, #272: узкий экран — шапка панели перенос�
   const block = m.slice(0, m.indexOf('\n}\n'));
   assert.ok(/\.k-panel > \.hd \{ flex-wrap: wrap; \}/.test(block));
   assert.ok(/\.k-panel > \.hd h3 \{ white-space: normal; \}/.test(block), 'длинный заголовок панели переносится');
-  assert.ok(/\.k-seg \{ max-width: 100%; flex-wrap: wrap; \}/.test(block) && !/\.k-seg \{[^}]*overflow-x: auto/.test(block));
+  assert.ok(!/\.k-seg \{[^}]*overflow-x: auto/.test(block), 'переключатель не прокручивается: переносится (#272, ui_pack5)');
 });
 
 t('#263: одноколоночная сетка — minmax(0, 1fr): колонка не шире окна из-за графика или таблицы', () => {
