@@ -211,6 +211,10 @@ def test_unknown_days_and_old_runs_note(desk, store_url):
     ({"instr_type": "BOND", "segment": "Суб", "coupon_type": "float"}, ("SUB", "FLT")),
     ({"instr_type": "BOND", "segment": "Корп", "coupon_type": "zero"}, ("CORP", "FIX")),
     ({"instr_type": "OTC"}, ("DER", "OTC")), ({"instr_type": "FX"}, ("DER", "FX")), ({"instr_type": "OTHER"}, ("OTH", "OTH")),
+    # a legacy tdm swap is a derivative, as the risk table's group of it (TDM#336)
+    ({"instr_type": "IRS"}, ("DER", "IRS")), ({"instr_type": "XCCY"}, ("DER", "XCCY")), ({"instr_type": "CDS"}, ("DER", "OTC")),
 ])
 def test_kind_of(fact, want):
     assert concepts.kind_of(fact) == want
+    if fact["instr_type"] in ("IRS", "XCCY", "CDS", "FX"):  # the group is the risk table's (KIND_GROUP)
+        assert concepts.KIND_GROUP[concepts.instr_kind(fact)] == want[0]

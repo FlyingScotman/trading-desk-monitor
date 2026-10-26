@@ -4,6 +4,8 @@
 ``assemble`` is ``compat.assemble`` cut down to what ``lib/real.js`` reads, in the same shape and with the same values:
 the run's dates and PnL state (R10: ``pnlAvailable`` false with ``pnlReasonText``), the buckets, curves and their
 moves, the FX rates (market and CBR, their moves and the market rate's source, R26), the indices, issuers and books,
+but for a move the run does not have (no previous market, a bucket without a point, a rate without a previous one):
+null here, 0 in compat (TDM#334, B1),
 ``riskNotes`` (R14, R15), ``fundingStatus`` (B1), ``source`` (the run, its market slice R11, ``ofzScheme`` #32,
 ``curveUnits`` #171) and ``positions`` with the fields the pages read (``POSITION_KEYS``; a bond's terms in
 ``BOND_KEYS``, a position's PnL in ``PNL_KEYS_READ``). A position the run did not value is listed after the valued
@@ -75,6 +77,17 @@ def _prev_weekday(d: date) -> date:
 
 def _json(v: Any) -> Any:
     return v.isoformat() if isinstance(v, date) else float(v) if isinstance(v, Decimal) else v
+
+
+def _fx_move(r: dict[str, Any], moved: bool) -> float | None:
+    """A rate's move on the day, %: null without a previous market (``moved`` false) or without a rate on the
+    previous date (a run since R26 has the rate's ``rate_source`` and, given a previous rate, ``prev_rate``; the
+    publisher stores 0 then), never 0 for «unknown» (TDM#334, B1). The rouble's own move is 0."""
+    if r["ccy"] == "RUB":
+        return 0.0
+    if not moved or ("rate_source" in r and "prev_rate" not in r):
+        return None
+    return r.get("move_pct")
 
 
 def no_pnl(code: str) -> dict[str, Any]:
@@ -152,11 +165,14 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
     B = list(RISK_BUCKETS)
     bidx = {b: i for i, b in enumerate(B)}
 
+    # the day's moves: none without a previous market (the publisher stores 0 then), and a bucket without a point or
+    # its move null, never 0 (TDM#334, B1): the pages say «сдвигов нет в прогоне»
+    moved = run["prev_date"] is not None
     curves, moves = {}, {}
     for c in ref.get("curves", []):
-        pts, mv = [None] * len(B), [0.0] * len(B)
+        pts, mv = [None] * len(B), [None] * len(B)
         for p in c["points"]:
-            pts[bidx[p["bucket"]]], mv[bidx[p["bucket"]]] = p["rate"], p.get("move_bp") or 0
+            pts[bidx[p["bucket"]]], mv[bidx[p["bucket"]]] = p["rate"], p.get("move_bp") if moved else None
         curves[c["curve_id"]] = {"name": c["name"], "ccy": c["ccy"], "kind": c["kind"], "pts": pts}
         moves[c["curve_id"]] = mv
 
@@ -164,18 +180,18 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
                         " AND fact IS NOT NULL ORDER BY ord", (rid,)).fetchall()
     fxr = list({"RUB": RUB, **{r["ccy"]: r for r in ref.get("fx", [])}}.values())
     # a run that published only USD, EUR and CNY (before R27): another currency's rate is the one its bonds were
-    # valued at (``extra.fx_rate``), its move unknown (0)
+    # valued at (``extra.fx_rate``), its move unknown (null)
     have = {r["ccy"] for r in fxr}
     for r in prows:
         ccy, ex = r["fact"].get("ccy"), r["fact"].get("extra") or {}
         if ccy and ccy not in have and isinstance(ex, dict) and ex.get("fx_rate"):
             have.add(ccy)
-            fxr.append({"ccy": ccy, "rate": ex["fx_rate"], "rate_source": ex.get("fx_source"), "move_pct": 0.0})
+            fxr.append({"ccy": ccy, "rate": ex["fx_rate"], "rate_source": ex.get("fx_source"), "move_pct": None})
     fx = {r["ccy"]: r["rate"] for r in fxr}
-    fx_move = {r["ccy"]: r.get("move_pct") or 0 for r in fxr}
+    fx_move = {r["ccy"]: _fx_move(r, moved) for r in fxr}
     fx_cbr = {r["ccy"]: r["rate_cbr"] if r.get("rate_cbr") is not None else r["rate"] for r in fxr}
-    fx_cbr_move = {r["ccy"]: r["move_pct_cbr"] if r.get("move_pct_cbr") is not None
-                   else (fx_move[r["ccy"]] if r.get("rate_cbr") is None else 0.0) for r in fxr}
+    fx_cbr_move = {r["ccy"]: (r.get("move_pct_cbr") if moved or r["ccy"] == "RUB" else None)
+                   if r.get("rate_cbr") is not None else fx_move[r["ccy"]] for r in fxr}
     fx_source = {r["ccy"]: r.get("rate_source") for r in fxr if r["ccy"] != "RUB"}
     for cid, c in curves.items():  # a currency's curve published as RUB for want of its rate (before R27): its own
         if c["ccy"] == "RUB" and cid != "RUB" and cid in fx:
@@ -260,7 +276,7 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
     for c in dict.fromkeys(c for p in positions for c in p["risk"]):
         if c not in curves:  # a risk curve the run's reference lacks: shown without points, its risk never dropped
             curves[c] = {"name": c, "ccy": c.split()[0], "kind": "bond", "pts": [None] * len(B)}
-            moves[c] = [0.0] * len(B)
+            moves[c] = [None] * len(B)
 
     n_pnl = sum(p["pnl"]["available"] for p in positions)
     code = RUN_NO_PREV_MARKET if run["prev_date"] is None else RUN_NO_POSITION_PNL if not n_pnl else None
