@@ -101,8 +101,9 @@ t('#284: C13 «Концентрация» — единица меры в под�
 });
 
 t('#310: server-keys.json — ключи сервера по уровням, фикстура в них укладывается', () => {
-  assert.deepStrictEqual(Object.keys(SERVER_KEYS), ['top', 'source', 'position', 'pnl']);
-  Object.values(SERVER_KEYS).forEach(ks => assert.ok(ks.length && ks.every(k => typeof k === 'string')));
+  // вложенные уровни extra / curve и шаблоны id — #324 (ui_pack6.test.js)
+  assert.deepStrictEqual(Object.keys(SERVER_KEYS), ['top', 'source', 'position', 'pnl', 'extra', 'curve', 'ids']);
+  Object.entries(SERVER_KEYS).filter(([k]) => k !== 'ids').forEach(([, ks]) => assert.ok(ks.length && ks.every(k => typeof k === 'string')));
   assert.ok(SERVER_KEYS.position.includes('risk') && !SERVER_KEYS.position.includes('dv01'), 'DV01 позиции real.js считает из risk');
   const ctx = context();
   assert.deepStrictEqual(unknownKeys(loadRun(ctx)), []);

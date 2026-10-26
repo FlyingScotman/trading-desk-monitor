@@ -233,7 +233,7 @@
       grid: { left: 8, right: 30, top: C.length > 1 ? 30 : 10, bottom: 10, containLabel: true },
       legend: C.length > 1 ? { top: 0, left: 0, type: 'scroll' } : undefined,
       tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => A.meas.fmt(v) + ' ' + A.meas.unit },
-      xAxis: { type: 'value', unit: A.meas.unit, axisLabel: { formatter: v => A.meas.fmt(v) } },
+      xAxis: { type: 'value', unit: A.meas.unit, axisLabel: { formatter: K.tickOf(A.meas.fmt), hideOverlap: true } },
       yAxis: { type: 'category', data: Rr.map(r => { const s = label(r); return s.length > 38 ? s.slice(0, 37) + '…' : s; }) },
       series: C.map((c, i) => ({
         name: c === ALL ? A.meas.label : dimTxt(A.dc, c), type: 'bar', stack: 's', barMaxWidth: 22,

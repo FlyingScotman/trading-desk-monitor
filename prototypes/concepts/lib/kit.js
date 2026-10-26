@@ -302,17 +302,43 @@
   K.heatRisk = (v, max) => { if (!v || !max) return ''; const a = Math.min(1, Math.abs(v) / max), al = (0.07 + 0.37 * Math.pow(a, 0.7)).toFixed(3); return K.HEAT_PLAIN + 'background:rgba(' + (v < 0 ? '76,157,255' : '227,160,60') + ',' + al + ')'; };
   K.heatMono = (v, max, rgb) => { if (!v || !max) return ''; const a = Math.min(1, Math.abs(v) / max); return K.HEAT_PLAIN + 'background:rgba(' + (rgb || '76,157,255') + ',' + (0.06 + 0.38 * Math.pow(a, 0.7)).toFixed(3) + ')'; };
   K.bar = (v, max, one) => { if (!max) return ''; const w = Math.min(50, Math.abs(v) / max * 50); return one ? '<div class="k-bar one"><i class="a" style="left:0;width:' + (w * 2) + '%"></i></div>' : '<div class="k-bar"><i class="' + (v >= 0 ? 'p' : 'n') + '" style="' + (v >= 0 ? 'left:50%' : 'right:50%') + ';width:' + w + '%"></i></div>'; };
+  // спарклайн ряда: пропуск (null, не число) — разрыв линии (#326), а не точка NaN; меньше двух непустых точек — пусто
   K.spark = (arr, w, hgt, color) => {
-    w = w || 80; hgt = hgt || 22; const a = arr.filter(x => x != null); if (a.length < 2) return '';
+    w = w || 80; hgt = hgt || 22; arr = arr || [];
+    const ok = v => v != null && isFinite(v), a = arr.filter(ok); if (a.length < 2) return '';
     const mn = Math.min(...a), mx = Math.max(...a), r = mx - mn || 1;
-    const pts = arr.map((v, i) => (i / (arr.length - 1) * w).toFixed(1) + ',' + (hgt - (v - mn) / r * (hgt - 2) - 1).toFixed(1)).join(' ');
-    return '<svg class="spark" width="' + w + '" height="' + hgt + '"><polyline fill="none" stroke="' + (color || css('--accent')) + '" stroke-width="1.3" points="' + pts + '"/></svg>';
+    let d = '', pen = false;
+    arr.forEach((v, i) => {
+      if (!ok(v)) { pen = false; return; }
+      d += (pen ? 'L' : 'M') + (arr.length > 1 ? i / (arr.length - 1) * w : 0).toFixed(1) + ',' + (hgt - (v - mn) / r * (hgt - 2) - 1).toFixed(1);
+      pen = true;
+    });
+    return '<svg class="spark" width="' + w + '" height="' + hgt + '"><path fill="none" stroke="' + (color || css('--accent')) + '" stroke-width="1.3" d="' + d + '"/></svg>';
   };
   // изменение ряда за окно спарклайна (последние n точек): последняя непустая точка минус первая непустая; меньше двух
   // непустых точек — null, а не цена и не ложный ноль (#277: дни без оценки, позиция моложе окна)
   K.sparkChange = (arr, n) => {
     const a = (arr || []).slice(-n).filter(x => x != null && isFinite(x));
     return a.length < 2 ? null : a[a.length - 1] - a[0];
+  };
+  // раскрытые строки таблицы переживают перерисовку (#317): строки root с атрибутом attr и aria-expanded="true" до
+  // redraw() после неё раскрываются снова — щелчком, тем же обработчиком, что у пользователя
+  K.keepOpen = (root, attr, redraw) => {
+    const open = [...root.querySelectorAll('tr[' + attr + '][aria-expanded="true"]')].map(tr => tr.getAttribute(attr));
+    redraw();
+    open.forEach(id => { const tr = root.querySelector('tr[' + attr + '="' + CSS.escape(id) + '"]'); if (tr && tr.getAttribute('aria-expanded') !== 'true') tr.click(); });
+  };
+  // деления оси по формату меры (#321): fmt — форматтер значения в единицах ряда (f.k, f.dv, v => f.mn(v, 0), f.bn …),
+  // ось — K.tick с тем же масштабом, что у fmt: число знаков — по делению, а не по fmt, и в валюте отчёта, отличной от
+  // рубля, нет рядов «0 0 0». Масштаб — по fmt(1e9): 1e9 / число в подписи — степень десяти (тыс — 1e3, mm — 1e6, bn —
+  // 1e9, без масштаба — 1). Подпись не голое число (%, единица внутри, как у f.money, текст) или не степень десяти —
+  // деления как есть, через fmt
+  K.tickOf = fmt => {
+    let s = '';
+    try { s = String(fmt(1e9)).replace(/<[^>]*>/g, '').trim(); } catch (e) { return fmt; }
+    if (!/^\+?[\d,]+(\.\d+)?$/.test(s)) return fmt;
+    const lg = Math.log10(1e9 / parseFloat(s.replace(/[^\d.]/g, '')));
+    return isFinite(lg) && lg >= 0 && Math.abs(lg - Math.round(lg)) < 1e-9 ? v => K.tick(v, Math.pow(10, Math.round(lg))) : fmt;
   };
 
   // ---------- тема ----------
@@ -1030,7 +1056,7 @@
         const L = list.slice(0, 30).reverse();
         const c = K.chart(el, () => ({
           grid: { left: 10, right: 60, top: 10, bottom: 20, containLabel: true },
-          xAxis: { type: 'value', unit: spec.unit, axisLabel: { formatter: v => fmt(v) } }, yAxis: { type: 'category', data: L.map(x => x.label.length > 34 ? x.label.slice(0, 33) + '…' : x.label) },
+          xAxis: { type: 'value', unit: spec.unit, axisLabel: { formatter: K.tickOf(fmt), hideOverlap: true } }, yAxis: { type: 'category', data: L.map(x => x.label.length > 34 ? x.label.slice(0, 33) + '…' : x.label) },
           tooltip: { trigger: 'axis', valueFormatter: v => fmt(v) },
           series: [{ type: 'bar', data: L.map(x => ({ value: x.v, itemStyle: { color: dim === 'ccy' ? K.ccyColor(x.k) : dim === 'issuer' ? K.issuerColor(x.p.issuer) : (x.v >= 0 ? css('--pos') : css('--neg')) } })), label: { show: true, position: 'right', formatter: p => fmt(p.value), color: css('--fg-2'), fontSize: 11 } }],
         }));

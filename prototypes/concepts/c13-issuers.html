@@ -152,10 +152,11 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     stripCharts.push(sc); }
     const rat = agg(p => K.ratingBucket(p.rating)), ratK = K.RATING_BUCKETS.map(b => b[0]).filter(r => rat[r]);
     if (NORAT) K.noData(document.getElementById('rating'), 'рейтингов в статике хаба нет'); else {
+    // подпись столбца — у его конца: у отрицательного (CS01) — снизу, а не над нулём (#321)
     const rc = K.chart(document.getElementById('rating'), () => ({
       grid: { left: 6, right: 6, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: x => m.fmt(x) + ' ' + m.unit },
       xAxis: { type: 'category', data: ratK }, yAxis: { type: 'value', axisLabel: { formatter: x => K.tick(x, m.sc) } },
-      series: [{ type: 'bar', barMaxWidth: 30, data: ratK.map(r => ({ value: sumBy(rat[r], m.val), itemStyle: { color: (K.RATING_BUCKETS.find(b => b[0] === r) || [])[1] } })), label: { show: true, position: 'top', fontSize: 10, color: K.css('--fg-2'), formatter: p => m.fmt(p.value) } }],
+      series: [{ type: 'bar', barMaxWidth: 30, data: ratK.map(r => { const v = sumBy(rat[r], m.val); return { value: v, itemStyle: { color: (K.RATING_BUCKETS.find(b => b[0] === r) || [])[1] }, label: { position: v < 0 ? 'bottom' : 'top' } }; }), label: { show: true, position: 'top', fontSize: 10, color: K.css('--fg-2'), formatter: p => m.fmt(p.value) } }],
     }));
     rc.on('click', pp => K.drill({ title: 'Рейтинг ' + ratK[pp.dataIndex] + ' · ' + m.t, unit: m.unit, fmt: m.fmt, list: rat[ratK[pp.dataIndex]], val: m.val, dim: 'issuer' }));
     stripCharts.push(rc); }
