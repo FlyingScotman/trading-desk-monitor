@@ -2,8 +2,6 @@
 
 Desk Monitor (бэкенд `desk`: снапшоты рынка из хаба, отчёты банка через приватный адаптер, оценка книг через core, EOD-прогоны, Desk Monitor и Scenario Lab в браузере) приходит на рабочий компьютер **одним zip-архивом**. В архиве уже есть Python 3.11, все пакеты и встроенный PostgreSQL: ставить ничего не нужно, интернет для установки не нужен, права администратора не нужны. Архив распаковывается в любую папку, запускается двойным щелчком по `start.bat`, а дальше всё настраивается в браузере.
 
-Старый прототип `tdm` ставится по [`INSTALL_WINDOWS.md`](INSTALL_WINDOWS.md); эти установки независимы.
-
 ## 1. Что в архиве
 
 ```
@@ -44,7 +42,7 @@ python3.11 backend/tools/build_windows_bundle.py --adapter-zip ~/private/adapter
 
 Что делает скрипт:
 1. берёт точные версии зависимостей из `backend/uv.lock` плюс `pgserver` (встроенный PostgreSQL), разрешает их для Windows и скачивает колёса win_amd64 / CPython 3.11;
-2. собирает колёса `desk-backend`, `trading-desk-monitor` и `rub-fixed-income-core` (с GitHub, ровно тот коммит, что закреплён в `backend/pyproject.toml`);
+2. собирает два своих колеса: `desk-backend` и `rub-fixed-income-core` (ядро — с GitHub, ровно тот коммит, что закреплён в `backend/pyproject.toml`);
 3. **проверяет**, что `wheelhouse\` ставится на Windows / Python 3.11 без интернета (`pip install --dry-run --no-index --platform win_amd64` и `uv pip install --dry-run --python-platform x86_64-pc-windows-msvc`);
 4. скачивает Python (архив `install_only` для `x86_64-pc-windows-msvc`), сверяет его sha256 с файлом `SHA256SUMS` выпуска и кладёт в `python\` без отладочных символов и Tk;
 5. кладёт `app\`, `adapter\`, `.bat`-файлы (с переводами строк CRLF), `INSTALL.txt`, `VERSION`, `MANIFEST.sha256` и печатает путь, размер и sha256 архива.
