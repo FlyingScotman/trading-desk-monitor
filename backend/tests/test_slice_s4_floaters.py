@@ -108,10 +108,15 @@ def test_perpetual_is_valued_to_an_assumed_call(outs, secid, call, rate):
 
 def test_unsupported_benchmark_is_rejected_with_its_name(ctx):
     t = ctx.static.bonds[KEY]
+    cpi = dataclasses.replace(t, floater_formula={**t.floater_formula, "benchmark": "CPI", "benchmark_raw": "CPI"})
+    with pytest.raises(Rejected) as e:
+        fixed_schedule(cpi, ctx.business_date)
+    assert (e.value.reason, e.value.detail) == ("floater_benchmark_unsupported", "benchmark CPI (CPI)")
+    # a KBD floater (TDM#33) needs the terms of contract 1.4: its tenor and fixing rule
     zcyc = dataclasses.replace(t, floater_formula={**t.floater_formula, "benchmark": "ZCYC", "benchmark_raw": "ZR"})
     with pytest.raises(Rejected) as e:
         fixed_schedule(zcyc, ctx.business_date)
-    assert (e.value.reason, e.value.detail) == ("floater_benchmark_unsupported", "benchmark ZCYC (ZR)")
+    assert e.value.reason == "floater_formula_incomplete" and "KBD floater" in e.value.detail
 
 
 def test_floater_formula_fields_override_the_defaults(ctx):

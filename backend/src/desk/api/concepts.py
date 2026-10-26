@@ -600,16 +600,23 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
                 s["bench"].append(_rnd(bench(d, (yd - d).days / 365.25 if yd and yd > d else None), 4))
             else:
                 s["bench"].append(None)
+        dm_note = None
         if flt and anchors and f.get("ccy") in (None, "RUB"):
             hz = f.get("yield_date") or f.get("maturity")
             s["dmPx"] = dm_from_price(dates, s["price"], anchors, date.fromisoformat(hz) if hz else None,
                                       (f.get("coupon") or 0.0) / 100) or []
+            if not s["dmPx"]:
+                dm_note = "DM по цене не посчитан: нет даты погашения или оферты" if not hz else None
+        elif flt:
+            dm_note = dm_missing(f)
         for k in OPTIONAL:  # only when the bond has them: most series would be nulls
             if all(v is None for v in s[k]):
                 del s[k]
         out: dict[str, Any] = {k: (_thin(v) if k in ("cs01", "basis", "ofzSpr", "bench", "ytm") else v)
                                for k, v in s.items()}
         out["curves"] = {c: v for c, v in cv.items() if any(v)}
+        if dm_note:
+            out["dmNote"] = dm_note
         out["qty"], out["pt"] = qty, pts
         series[pid] = out
     at = [run_of.get(d) for d in dates]
@@ -624,6 +631,19 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
                     "истории цены: DM ближайшего прогона минус изменение чистой цены MOEX, делённое на спредовую "
                     "дюрацию прогона (CS01 на номинал, приведённую к сроку до оферты или погашения)"}
 
+
+
+def dm_missing(fact: dict[str, Any]) -> str:
+    """Why a floater has no DM history (TDM#33): the history of DM by price (``dm_from_price``) is anchored on core's DM
+    of at least one run, so a floater core never valued (a fallback rung, an unsupported formula) or a foreign one has
+    none; the card and C11 say so instead of an empty chart."""
+    ex = fact.get("extra") if isinstance(fact.get("extra"), dict) else {}
+    if fact.get("ccy") not in (None, "RUB"):
+        return "DM по цене считается только у рублёвых флоатеров"
+    why = ex.get("not_exact_reason")
+    q = QUALITY_TEXT.get(ex.get("quality") or "")
+    return ("DM нет: ни в одном прогоне истории флоатер не оценён ядром"
+            + (f" ({q}{'; ' + why if why else ''})" if q or why else ""))
 
 
 QUALITY_TEXT = {"market_value": "оценка по рыночной стоимости (без ядра)",
@@ -848,8 +868,9 @@ OFZ_VIEW_DEFAULT = "basis"
 when asked for by name."""
 OFZ_VIEW_APPROX = ("a run before 0.2.6: its OFZ were on RUONIA, their KBD risk in the «КБД» view is their basis to "
                    "RUONIA (ofz_spr01), moved off RUONIA")
-OFZ_VIEW_P = ("{n} OFZ without a computed RUONIA risk (a run of 0.2.6 or an OFZ off core): their RUONIA risk is their "
-              "KBD risk and the basis the same risk again (core basis_view, variant P)")
+OFZ_VIEW_P = ("{n} OFZ or KBD floaters without a computed RUONIA risk (a run of 0.2.6, an OFZ off core, a KBD floater's "
+              "coupons, TDM#33): their RUONIA risk is their KBD risk and the basis the same risk again (core basis_view, "
+              "variant P)")
 MISSING_TEXT = {"not_valued": "не оценена", "reported_no_risk": "оценена по отчёту, риска в отчёте нет",
                 "no_risk": "риск не посчитан"}
 GROUPS = ("GOV", "SUB", "CORP", "DER", "OTH")

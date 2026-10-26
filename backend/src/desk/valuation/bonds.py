@@ -81,6 +81,7 @@ from rub_fixed_income import (
     DayCount,
     ExerciseAssumption,
     FixedCouponLeg,
+    FixingDateRule,
     FloatingCouponLeg,
     FloatingCouponRule,
     Instrument,
@@ -102,7 +103,7 @@ from rub_fixed_income import (
 from rub_fixed_income import __version__ as CORE_VERSION
 from rub_fixed_income.dates import add_months
 
-from ..curves.rates import KEY_RATE_CURVE_ID, RUONIA_OIS_CURVE_ID
+from ..curves.rates import KEY_RATE_CURVE_ID, RUONIA_OIS_CURVE_ID, kbd_fixing_id
 from ..marketdata.adapter import (
     KBD_CURVE_ID,
     OFZ_CLASSES,
@@ -167,7 +168,12 @@ def discount_curve(market: MarketSnapshot) -> tuple[str, str | None]:
                           "risk on RUB OFZ, spread to the KBD")
 
 
-FLOATER_BENCHMARKS = ("KEY_RATE", "RUONIA", "RUONIA_3M", "RUONIA_INDEX")
+FLOATER_BENCHMARKS = ("KEY_RATE", "RUONIA", "RUONIA_3M", "RUONIA_INDEX", "ZCYC")
+KBD_FIXING_UNITS = {"zcyc_publication_days": "business_days", "business_days": "business_days",
+                    "calendar_days": "calendar_days"}
+"""A KBD floater's fixing offset unit (contract 1.4 ``fixing_offset_unit``) -> core's (``FixingDateRule.unit``): a day
+with an end-of-day ZCYC publication is a business day of the KBD's fixing calendar (``curves.rates.kbd_fixing_entries``,
+MOEX_STOCK), so the hub's ``zcyc_publication_days`` are core's business days."""
 OLD_OFZ_PK = ("SU29007RMFS0", "SU29008RMFS8", "SU29009RMFS6", "SU29010RMFS4")
 """Minfin's in-advance OFZ-PK: RUONIA mean over 6 months to the 2nd business day before the coupon start."""
 
@@ -220,6 +226,11 @@ def eligibility(terms: BondTerms) -> None:
             raise Rejected("floater_benchmark_unsupported", f"benchmark {f['benchmark']} ({f.get('benchmark_raw')})")
         if f.get("spread_bp") is None:
             raise Rejected("floater_formula_incomplete", f"{f['status']} formula without a spread")
+        if f["benchmark"] == "ZCYC" and (f.get("benchmark_tenor_years") is None or f.get("fixing_offset") is None
+                                         or f.get("fixing_offset_unit", "zcyc_publication_days") not in KBD_FIXING_UNITS):
+            raise Rejected("floater_formula_incomplete",
+                           f"KBD floater without its tenor or fixing rule (contract 1.4): tenor "
+                           f"{f.get('benchmark_tenor_years')}, offset {f.get('fixing_offset')} {f.get('fixing_offset_unit')}")
 
 
 
@@ -252,6 +263,8 @@ def floater_rule(terms: BondTerms) -> tuple[FloatingCouponRule, str, str, str]:
     f = terms.floater_formula
     assert f is not None
     bench, ofz = f["benchmark"], terms.bond_class == "ofz_pk"
+    if bench == "ZCYC":
+        return kbd_floater_rule(f)
     term = bench in ("RUONIA_3M", "RUONIA_INDEX")
     shift = 7 if term else int(f["lag_days"]) if f.get("lag_days") is not None and not ofz else 6
     averaging = f.get("averaging") or ("compounded" if term else "arithmetic")
@@ -273,6 +286,39 @@ def floater_rule(terms: BondTerms) -> tuple[FloatingCouponRule, str, str, str]:
     if bench == "KEY_RATE":
         return rule, "KEY_RATE", KEY_RATE_CURVE_ID, desc
     return rule, "RUONIA", RUONIA_OIS_CURVE_ID, desc
+
+
+def is_kbd_floater(terms: BondTerms) -> bool:
+    """A floater on the KBD (MOEX ``ZR_YLD_CRV``, the hub's benchmark ``ZCYC``): its coupons project on ``RUB OFZ``."""
+    f = terms.floater_formula
+    return terms.coupon_type == "floating" and f is not None and f.get("benchmark") == "ZCYC"
+
+
+def kbd_floater_rule(f: dict[str, Any]) -> tuple[FloatingCouponRule, str, str, str]:
+    """A KBD floater (MOEX ``ZR_YLD_CRV``, TDM#33) as the hub's contract 1.4 states it (``verify/zcycfloat`` of the hub):
+    rate = round(Y(T; d_fix), ``rate_rounding_decimals``) + margin, ``Y(T; d)`` the KBD's effective annual zero yield
+    at the constant maturity ``benchmark_tenor_years`` of day ``d``'s end-of-day publication, ``d_fix`` the
+    ``fixing_offset``-th publication day before the period start (``fixing_anchor`` ``accrual_start``): core's KBD index
+    (0.34, ``index="kbd"``, one fixing in advance on ACT/365F). The margin is the current ``spread_bp`` (the hub's
+    ``spread_schedule`` steps only at a put offer, the horizon of an open put). It projects on the KBD
+    (``KBD_CURVE_ID``, published ``RUB OFZ``: its par buckets) and is discounted like every corporate (RUONIA OIS +
+    Z): its coupon risk is the OFZ basis, its discount risk RUONIA's."""
+    tenor = float(f["benchmark_tenor_years"])
+    unit = KBD_FIXING_UNITS[f.get("fixing_offset_unit") or "zcyc_publication_days"]
+    margin = float(f["spread_bp"]) / 1e4
+    dec = f.get("rate_rounding_decimals")
+    floor, cap = (None if f.get(k) is None else float(f[k]) / 100 for k in ("floor_pct", "cap_pct"))
+    rule = FloatingCouponRule(
+        "kbd", "single_fixing", margin, DayCount.ACT_365_FIXED, DayCount.ACT_365_FIXED,
+        rate_rounding_decimals=2 if dec is None else int(dec), amount_rounding_decimals=2,
+        multiplier=float(f["multiplier"]) if f.get("multiplier") is not None else 1.0,
+        bounds=CouponRateBounds("coupon_rate", floor, cap) if floor is not None or cap is not None else None,
+        fixing_date=FixingDateRule("accrual_start", int(f["fixing_offset"]), unit),  # type: ignore[arg-type]
+        index_tenor_years=tenor)
+    desc = (f"KBD {tenor:g}Y {'+' if margin >= 0 else '-'} {abs(margin) * 1e4:g} bp, fixed {f['fixing_offset']} "
+            f"{unit.replace('_', ' ')} before the period, ACT/365F"
+            + (f", floor {_pct(floor)} cap {_pct(cap)}" if rule.bounds else ""))
+    return rule, kbd_fixing_id(tenor), KBD_CURVE_ID, desc
 
 
 INDEX_NAMES = {"KEY_RATE": "КС", "RUONIA": "RUONIA", "RUONIA_3M": "RUONIA 3M", "RUONIA_6M": "RUONIA 6M",

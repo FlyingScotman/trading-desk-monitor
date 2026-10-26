@@ -265,7 +265,38 @@ def fixing_entries(market: Snapshot, static: Snapshot,
             info["missing_business_days"] = [d.isoformat() for d in days if cal.is_business_day(d) and d not in have]
             info["unpublished_business_days"] = [d.isoformat() for d in history.unpublished_business_days]
         lineage[code] = info
-    return tuple(entries), lineage
+    kbd, kbd_lineage = kbd_fixing_entries(market, static, bd, cut)
+    if kbd:
+        lineage["KBD"] = kbd_lineage
+    return (*entries, *kbd), lineage
+
+
+def kbd_fixing_id(tenor_years: float) -> str:
+    """The fixing ID of the KBD at a constant maturity (core keeps one history per tenor): ``KBD_2Y``, ``KBD_0.5Y``."""
+    return f"KBD_{tenor_years:g}Y"
+
+
+def kbd_tenors(static: Snapshot) -> tuple[float, ...]:
+    """The constant maturities of the static's KBD floaters (contract 1.4 ``benchmark_tenor_years``), sorted."""
+    return tuple(sorted({float(f["benchmark_tenor_years"]) for f in static.data.get("floater_formulas") or ()
+                         if f.get("benchmark") == "ZCYC" and f.get("benchmark_tenor_years") is not None}))
+
+
+def kbd_fixing_entries(market: Snapshot, static: Snapshot, bd: date, cut: datetime
+                       ) -> tuple[tuple[FixingEntry, ...], dict[str, Any]]:
+    """One KBD history per tenor of the static's KBD floaters (TDM#33; core keeps the KBD index per constant maturity,
+    ``kbd_fixing_id``), on the ZCYC publication calendar (MOEX_STOCK: a day with an end-of-day ZCYC
+    is a trading day). Empty: the snapshot carries the day's ZCYC only, not its history, so a coupon whose fixing day
+    has passed must be published by MOEX (the running coupon of a floater fixed in advance always is); one that is not
+    is core's rejection and the bond goes to the fallback ladder, saying why."""
+    tenors = kbd_tenors(static)
+    if not tenors:
+        return (), {}
+    cal, _ = ar.calendar(static, "MOEX_STOCK")
+    out = tuple(FixingEntry(kbd_fixing_id(t), FixingHistory("kbd", bd, (), cal, market.id, 0, cut.isoformat(),
+                                                            tenor_years=t)) for t in tenors)
+    return out, {"tenors": list(tenors), "rows": 0, "calendar": cal.version,
+                 "note": "no ZCYC history in the snapshot: past fixings come from the published coupons"}
 
 
 # ---- what a run lacks (R14, R15): codes for the run log, the pages and the diagnostics
