@@ -108,7 +108,13 @@
   if (C.ISO.test(st.horizon) && st.horizon <= M.asOf) st.horizon = '3M';
   let resp = null, err = null, ctrl = null, seq = 0, timer = null;
   const cache = new Map();
-  const known = () => C.meetingList([((window.DESK || {}).CBR_MEETINGS) || []].concat([...cache.values()].map(r => r.meetings)));
+  // заседания ЦБ для шагов КС: из ответов сервера (meetings — до горизонта, с датой вступления) и из M.cbr (весь
+  // календарь, если он есть: дата вступления — следующий рабочий день, как у сервера без даты хаба). window.DESK не
+  // читаем (его выводят, #107)
+  const nextWd = d => { let x = M.util.addDays(d, 1); while ([0, 6].includes(new Date(x + 'T00:00:00').getDay())) x = M.util.addDays(x, 1); return x; };
+  const est = new Set((M.cbr && M.cbr.estimated) || []);
+  const cbrList = () => ((M.cbr && M.cbr.meetings) || []).filter(d => C.ISO.test(d)).map(d => ({ date: d, effective: nextWd(d), estimated: est.has(d) }));
+  const known = () => C.meetingList([...cache.values()].map(r => r.meetings).concat([cbrList()]));
   const params = () => ({ run: server && M.run ? M.run.id : null, horizon: st.horizon, ks: st.ks, spread: st.spread, steps: C.stepsFor(known(), st.steps, M.asOf) });
 
   // ---------- запрос: асинхронно, последний выигрывает ----------
@@ -151,13 +157,14 @@
     const el = ctl.querySelector('.hdate');
     if (el) el.textContent = resp ? 'до ' + f.date(resp.horizonDate) + ' · ' + resp.days + ' дн.' : '';
   }
-  // таблица «заседание → изменение, б.п.» (путь steps): заседания из данных (window.DESK.CBR_MEETINGS, ответы
-  // сервера), до горизонта; по умолчанию шаг 0
+  // таблица «заседание → изменение, б.п.» (путь steps): заседания из ответов сервера и M.cbr (known), до горизонта;
+  // по умолчанию шаг 0
   function drawSteps() {
     const box = document.getElementById('steps');
     if (st.ks !== 'steps') { box.innerHTML = ''; return; }
     const hdate = resp ? resp.horizonDate : null;
-    const ms = known().filter(m => m.effective > M.asOf && (!hdate || m.effective <= hdate));
+    const all = known().filter(m => m.effective > M.asOf), ms = all.filter(m => !hdate || m.effective <= hdate);
+    const beyond = hdate && all.some(m => m.effective > hdate);
     const path = resp && resp.ks === 'steps' ? resp.keyRatePath || [] : [];
     const ksAfter = m => { const x = path.find(p => p.date === m.effective); return x ? x.keyRatePct : null; };
     const ks0 = path.length ? path[0].keyRatePct : M.indices['КС'];
@@ -166,7 +173,7 @@
         '<td class="n"><input class="k-input" type="number" step="25" min="-2000" max="2000" data-m="' + esc(m.date) + '" value="' + (+st.steps[m.date] || 0) + '" aria-label="Изменение КС на заседании ' + esc(f.date(m.date)) + ', б.п."></td>' +
         '<td class="n">' + (ksAfter(m) != null ? f.n(ksAfter(m), 2) : '<span class="mut3">—</span>') + '</td></tr>').join('') +
       '</tbody></table></div><div class="k-note" style="margin-top:4px">КС сейчас ' + f.n(ks0, 2) + '%. Шаг — с даты вступления решения; RUONIA и рублёвые индексы идут за КС с сегодняшним спредом. ' +
-      'Путь КС меняет только фондирование. <span class="c17-link" data-a="zero">Обнулить шаги</span></div>'
+      'Путь КС меняет только фондирование. ' + (beyond ? '' : 'Заседания после горизонта не влияют на расчёт. ') + '<span class="c17-link" data-a="zero">Обнулить шаги</span></div>'
       : '<div class="k-note">До горизонта заседаний ЦБ нет' + (resp ? '' : ' (или их ещё нет в данных)') + ': путь КС = КС стоит.</div>';
     K.tableToolsAll(box);
     box.querySelectorAll('input[data-m]').forEach(i => i.oninput = () => { st.steps[i.dataset.m] = Math.max(-2000, Math.min(2000, +i.value || 0)); save(); later(); });
