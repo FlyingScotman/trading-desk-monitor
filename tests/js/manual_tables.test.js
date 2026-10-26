@@ -148,6 +148,19 @@ t('#131 + #153: CSV ручной таблицы — отрицательные �
   }
 });
 
+t('#222: метка отрицательного для CSV (data-kneg) не зависит от цвета; скобка во вложенном теге', () => {
+  const { K } = load(new Map());
+  // K.d() ставит neg отрицательному: красный уступает смысловому цвету (k-accn нет), а метка data-kneg есть
+  const cells = fm => fm === 'acc'
+    ? ['<span class="dr neg" data-kneg="">(1.5)</span>', 'итого <span class="dr" data-kneg=""><b>(2.5)</b> mm</span>', '<span class="dr pos">(3)</span> лот', '<span data-kneg="">((1))</span>']
+    : ['<span class="dr neg">−1.5</span>', 'итого <span class="dr"><b>−2.5</b> mm</span>', '<span class="dr pos">(3)</span> лот', '<span>((1))</span>'];
+  const csvOf = fm => { K.negFmt = fm; return K.tableCsv(table({ head: [['a', 'b', 'c', 'd']], body: [cells(fm)] }), {}).split('\r\n')[3]; };
+  assert.strictEqual(csvOf('acc'), '"=""-1.5""",итого -2.5 mm,(3) лот,((1))', 'без метки скобки — не минус; «((1))» — не число');
+  assert.strictEqual(csvOf('minus'), csvOf('acc'), 'одинаково в обоих режимах');
+  assert.strictEqual(K.accMarkedToMinus('<i data-kneg="">(1,234.5)</i> и <i data-kneg="">(7%)</i>'), '<i data-kneg="">-1,234.5</i> и <i data-kneg="">-7%</i>');
+  assert.strictEqual(K.accMarkedToMinus('<i data-knegx="">(1)</i>'), '<i data-knegx="">(1)</i>', 'похожий атрибут — не метка');
+});
+
 t('#131 + #105: CSV ручной таблицы — единица второй строкой шапки через запятую, без повтора; валюта отчёта', () => {
   const head = [['Книга', { h: 'DV01<span class="k-thu">тыс ₽/бп</span>', cls: 'n' }, { h: 'MV, mm ₽<span class="k-thu">mm ₽</span>', cls: 'n' }, { h: 'Итого, mm ₽', cls: 'n' }]];
   const body = [['A', { h: '1', cls: 'n' }, { h: '2', cls: 'n' }, { h: '3', cls: 'n' }]];

@@ -1001,7 +1001,13 @@
     }
     return false;
   };
-  const accMark = e => { const c = K.accClass(e.textContent); e.classList.toggle('k-accn', c === 'k-accn' && !K.accKeep(e)); e.classList.toggle('k-accp', c === 'k-accp' && e.tagName === 'TD'); };
+  // метка data-kneg (#222) — «число отформатировано как отрицательное, в скобках»: ставится и там, где красный уступил
+  // смысловому цвету (K.accKeep); по ней CSV меняет скобки на минус (K.accMarkedToMinus), раскраска на неё не влияет
+  const accMark = e => {
+    const c = K.accClass(e.textContent);
+    e.classList.toggle('k-accn', c === 'k-accn' && !K.accKeep(e)); e.classList.toggle('k-accp', c === 'k-accp' && e.tagName === 'TD');
+    const d = e.dataset; if (d && (c === 'k-accn') !== ('kneg' in d)) { if (c === 'k-accn') d.kneg = ''; else delete d.kneg; }
+  };
   K.accMarkAll = root => { const r = root || document; if (r.matches && r.matches(K.ACC_SEL)) accMark(r); if (r.querySelectorAll) r.querySelectorAll(K.ACC_SEL).forEach(accMark); };
   if (typeof MutationObserver === 'function' && typeof requestAnimationFrame === 'function') {
     // разметку меняют страницы и компоненты: новые узлы и узлы с изменённым текстом размечаются в следующем кадре
@@ -1381,7 +1387,24 @@
     const l = K.htmlText((th.innerHTML || '').replace(/<span class="k-thu">[\s\S]*?<\/span>/g, '')), u = m ? K.htmlText(m[1]) : '';
     return u && !l.includes(',') ? l + ', ' + u : l;
   };
-  K.accMarkedToMinus = html => String(html == null ? '' : html).replace(/(<[a-z]+\b[^>]*\bclass="[^"]*\bk-accn\b[^"]*"[^>]*>)\s*\((\d[\d,]*(?:\.\d+)?[^()<]*)\)/gi, '$1-$2');
+  // «(1.5)» → «-1.5» в элементе с меткой data-kneg (K.accMark, #222) или k-accn: скобка может стоять и во вложенном
+  // теге («<span data-kneg><b>(1.5)</b> mm</span>»); скобки без метки (текст, Bid/Ask «98.399 (0.28)») — как есть
+  const KNEG_OPEN = /<[a-z][a-z0-9]*\b(?:[^>"']|"[^"]*"|'[^']*')*?(?:\sdata-kneg\b|\sclass="[^"]*\bk-accn\b[^"]*")(?:[^>"']|"[^"]*"|'[^']*')*>/gi;
+  K.accMarkedToMinus = html => {
+    const s = String(html == null ? '' : html), tag = /^<[^>]*>/;
+    let out = '', i = 0, m;
+    KNEG_OPEN.lastIndex = 0;
+    while ((m = KNEG_OPEN.exec(s))) {
+      let j = m.index + m[0].length, t;
+      while ((t = /^\s+/.exec(s.slice(j)) || /^<[a-z][^>]*>/i.exec(s.slice(j)))) j += t[0].length;  // пробелы и вложенные открывающие теги
+      if (s[j] !== '(') continue;
+      let k = j + 1;
+      while (k < s.length && s[k] !== ')' && s[k] !== '(') k += s[k] === '<' && (t = tag.exec(s.slice(k))) ? t[0].length : 1;
+      if (s[k] !== ')' || !/^\d[\d,]*(?:\.\d+)?/.test(K.htmlText(s.slice(j + 1, k)))) continue;
+      out += s.slice(i, j) + '-' + s.slice(j + 1, k); i = k + 1; KNEG_OPEN.lastIndex = i;
+    }
+    return out + s.slice(i);
+  };
   K.accToMinus = t => String(t).replace(/^\((\d[\d,]*(?:\.\d+)?[^()]*)\)$/, '-$1').replace(/\((\d[\d,]*(?:\.\d+)?%?)\)/g, '-$1');
   K.tableCsv = (table, opts) => {
     opts = opts || {};
@@ -1407,8 +1430,8 @@
       // страницы): в режиме «(1)» число в скобках в числовой ячейке — отрицательное, как его пишет режим «−1»:
       // «(1.50 bn)» → «-1.50 bn», «94.58 (0.12%)» → «94.58 -0.12%», «(1,500.00)mm RUB» → «-1,500.00mm RUB»,
       // «(2,010)+5бп» → «-2,010+5бп», «124(1)бп» → «124-1бп» (сдвиг кривой под цифрой); CSV одинаков в обоих режимах
-      // В текстовой ячейке скобки — минус только там, где их поставил формат отрицательных: в элементе с меткой k-accn
-      // (её ставит раскраска K.accMarkAll); «98.399 (0.28)», «(2029)», «(3 поз.)» без метки остаются как есть
+      // В текстовой ячейке скобки — минус только там, где их поставил формат отрицательных: в элементе с меткой
+      // data-kneg (её ставит K.accMarkAll независимо от цвета, #222); «98.399 (0.28)», «(2029)», «(3 поз.)» — как есть
       const t = K.negFmt !== 'acc' ? tx(c) : num ? K.accToMinus(tx(c)) : K.htmlText(K.accMarkedToMinus(c.innerHTML));
       return d.date ? K.csvDateCell(d.date, t, num) : K.csvCell(t, num, d.v);
     };
