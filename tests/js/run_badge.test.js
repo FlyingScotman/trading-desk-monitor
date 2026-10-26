@@ -13,10 +13,11 @@ function el() {
     appendChild(c) { this.children.push(c); return c; }, append(...c) { this.children.push(...c); },
     querySelector() { return null; }, querySelectorAll() { return []; }, addEventListener() {}, setAttribute() {}, remove() {} };
 }
-function loadKit(withRun) {
+function loadKit(withRun, store) {  // store — содержимое localStorage браузера: { ключ: строка }
   const document = { addEventListener() {}, createElement: el, documentElement: el(), body: el(), querySelector() { return null; }, querySelectorAll() { return []; }, getElementById: () => el() };
   const ctx = { window: {}, document, URLSearchParams, console, location: { href: 'http://x/', search: '', hostname: '127.0.0.1', protocol: 'file:' }, setTimeout,
-    localStorage: { getItem() { return null; }, setItem() {} }, getComputedStyle: () => ({ getPropertyValue: () => '#888' }), MutationObserver: class { observe() {} } };
+    localStorage: { getItem: k => store && k in store ? store[k] : null, setItem(k, v) { if (store) store[k] = v; }, removeItem(k) { if (store) delete store[k]; } },
+    getComputedStyle: () => ({ getPropertyValue: () => '#888' }), MutationObserver: class { observe() {} } };
   ctx.window = ctx;
   vm.createContext(ctx);
   if (withRun) {  // прогон из базы: демо-прогон prototypes/data.js через lib/real.js
@@ -56,9 +57,10 @@ test('бейдж: возраст тикает от момента now; без в
 });
 
 test('устарел: в рабочие часы старше fresh_min, в любое время старше max_days; ночью и в выходные — нет', () => {
-  const pub = '2026-10-23T10:00:00+03:00';  // пятница
-  assert.strictEqual(K.runBadge({ publishedAt: pub }, msk('2026-10-23T11:29:00')).level, 'ok');
-  const s = K.runBadge({ publishedAt: pub }, msk('2026-10-23T11:31:00'));
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(K.runAge())), { fresh_min: 90, fresh_from: '10:15', fresh_to: '20:00', max_days: 3 });
+  const pub = '2026-10-23T10:30:00+03:00';  // пятница
+  assert.strictEqual(K.runBadge({ publishedAt: pub }, msk('2026-10-23T11:59:00')).level, 'ok');
+  const s = K.runBadge({ publishedAt: pub }, msk('2026-10-23T12:01:00'));
   assert.strictEqual(s.level, 'stale');
   assert.match(s.why, /в рабочие часы прогон старше 90 мин/);
   assert.strictEqual(K.runBadge({ publishedAt: '2026-10-23T19:00:00+03:00' }, msk('2026-10-23T23:30:00')).level, 'ok', 'вечером не подсвечиваем');
@@ -66,6 +68,83 @@ test('устарел: в рабочие часы старше fresh_min, в лю
   const old = K.runBadge({ publishedAt: '2026-10-19T19:00:00+03:00' }, msk('2026-10-25T14:00:00'));
   assert.strictEqual(old.level, 'stale');
   assert.match(old.why, /старше 3 дн/);
+});
+
+test('утро (#255): прогон до 10:15 — отсчёт от 10:15, «⚠» с 11:45, если нового прогона нет', () => {
+  const yest = '2026-10-22T19:00:00+03:00';  // четверг вечером; сейчас пятница
+  assert.strictEqual(K.runBadge({ publishedAt: yest }, msk('2026-10-23T10:00:00')).level, 'ok', 'до рабочего окна');
+  assert.strictEqual(K.runBadge({ publishedAt: yest }, msk('2026-10-23T10:16:00')).level, 'ok', 'в 10:15 — не сразу');
+  assert.strictEqual(K.runBadge({ publishedAt: yest }, msk('2026-10-23T11:44:00')).level, 'ok');
+  const s = K.runBadge({ publishedAt: yest }, msk('2026-10-23T11:46:00'));
+  assert.strictEqual(s.level, 'stale');
+  assert.strictEqual(s.why, 'с 10:15 МСК прошло больше 90 мин, а прогона после 10:15 нет');
+  // прогон сегодня до 10:15 — так же: отсчёт от 10:15
+  assert.strictEqual(K.runBadge({ publishedAt: '2026-10-23T09:00:00+03:00' }, msk('2026-10-23T11:44:00')).level, 'ok');
+  assert.strictEqual(K.runBadge({ publishedAt: '2026-10-23T09:00:00+03:00' }, msk('2026-10-23T11:46:00')).level, 'stale');
+  // прогон в 10:20 — отсчёт от публикации: «⚠» с 11:50
+  assert.strictEqual(K.runBadge({ publishedAt: '2026-10-23T10:20:00+03:00' }, msk('2026-10-23T11:49:00')).level, 'ok');
+  assert.match(K.runBadge({ publishedAt: '2026-10-23T10:20:00+03:00' }, msk('2026-10-23T11:51:00')).why, /в рабочие часы прогон старше 90 мин/);
+});
+
+test('настройка порогов (#255): меню вида, 0 выключает правило, неверное значение не сохраняется', () => {
+  const yest = '2026-10-22T19:00:00+03:00', fri = t => msk('2026-10-23T' + t);
+  try {
+    assert.strictEqual(K.setRunAge({ fresh_min: '30' }), true);  // строка поля ввода
+    assert.strictEqual(K.runAge().fresh_min, 30);
+    assert.strictEqual(K.runAge().max_days, 3, 'второй порог не тронут');
+    assert.strictEqual(K.runBadge({ publishedAt: yest }, fri('10:44:00')).level, 'ok');
+    assert.strictEqual(K.runBadge({ publishedAt: yest }, fri('10:46:00')).level, 'stale');
+    assert.match(K.runBadge({ publishedAt: yest }, fri('10:46:00')).why, /больше 30 мин/);
+    assert.strictEqual(K.setRunAge({ fresh_min: 0 }), true);
+    assert.strictEqual(K.runBadge({ publishedAt: yest }, fri('19:59:00')).level, 'ok', 'правило минут выключено');
+    const old = '2026-10-19T19:00:00+03:00', sun = msk('2026-10-25T14:00:00');
+    assert.match(K.runBadge({ publishedAt: old }, sun).why, /старше 3 дн/);
+    assert.strictEqual(K.setRunAge({ max_days: 7 }), true);
+    assert.strictEqual(K.runBadge({ publishedAt: old }, sun).level, 'ok', '6 дней < 7');
+    assert.strictEqual(K.setRunAge({ max_days: 0 }), true);
+    assert.strictEqual(K.runBadge({ publishedAt: '2026-01-01T10:00:00+03:00' }, sun).level, 'ok', 'правило дней выключено');
+    ['', ' ', '-5', '1.5', 'abc', 99999, null].forEach(v => assert.strictEqual(K.setRunAge({ fresh_min: v }), false, JSON.stringify(v)));
+    assert.strictEqual(K.setRunAge({ max_days: 400 }), false);
+    assert.deepStrictEqual([K.runAge().fresh_min, K.runAge().max_days], [0, 0], 'после неверного ввода — прежние');
+  } finally { K.viewStore.reset('ui:runage'); }
+  assert.deepStrictEqual([K.runAge().fresh_min, K.runAge().max_days], [90, 3]);
+});
+
+test('max_days — календарные дни по МСК, не 72 часа (#255)', () => {
+  const pub = '2026-10-22T09:00:00+03:00';  // четверг утром
+  assert.strictEqual(K.runBadge({ publishedAt: pub }, msk('2026-10-25T23:30:00')).level, 'ok', 'воскресенье: 3 дня, хотя прошло 86 ч');
+  assert.strictEqual(K.runBadge({ publishedAt: '2026-10-22T23:50:00+03:00' }, msk('2026-10-26T00:10:00')).level, 'stale', 'понедельник 00:10: 4 дня, хотя прошло 72 ч 20 мин');
+  assert.strictEqual(K.runBadge({ publishedAt: '2026-10-22T23:50:00+03:00' }, msk('2026-10-25T23:59:00')).level, 'ok');
+  // граница дня — по МСК, а не по UTC: 22.10 01:00 МСК = 21.10 22:00 UTC
+  assert.strictEqual(K.runBadge({ publishedAt: '2026-10-22T01:00:00+03:00' }, msk('2026-10-25T22:00:00')).level, 'ok');
+});
+
+test('setRunAge меняет только переданный порог и хранит только отличия от умолчания', () => {
+  const store = {}, KEY = 'tdm.view.v1:ui:runage';
+  const { K: K1 } = loadKit(null, store);
+  K1.setRunAge({ fresh_min: 45 });
+  assert.deepStrictEqual(JSON.parse(store[KEY]), { fresh_min: 45 }, 'дни не записаны');
+  K1.setRunAge({ max_days: 5 });
+  assert.deepStrictEqual(JSON.parse(store[KEY]), { fresh_min: 45, max_days: 5 }, 'минуты не тронуты');
+  K1.setRunAge({ fresh_min: '90' });
+  assert.deepStrictEqual(JSON.parse(store[KEY]), { max_days: 5 }, 'вернули умолчание — ключ убран');
+  K1.RUN_AGE.fresh_min = 60;  // умолчание сменили в новой версии — дошло, раз минуты не меняли
+  assert.strictEqual(K1.runAge().fresh_min, 60);
+  K1.setRunAge({ max_days: 3 });
+  assert.strictEqual(KEY in store, false, 'всё по умолчанию — записи нет');
+});
+
+test('настройка порогов хранится в localStorage (tdm.view.v1:ui:runage); испорченное значение — умолчание', () => {
+  const store = {};
+  const { K: K1 } = loadKit(null, store);
+  K1.setRunAge({ fresh_min: 45, max_days: 5 });
+  assert.deepStrictEqual(JSON.parse(store['tdm.view.v1:ui:runage']), { fresh_min: 45, max_days: 5 });
+  const { K: K2 } = loadKit(null, store);  // новая страница — тот же браузер
+  assert.deepStrictEqual([K2.runAge().fresh_min, K2.runAge().max_days], [45, 5]);
+  const { K: K3 } = loadKit(null, { 'tdm.view.v1:ui:runage': '{"fresh_min":-1,"max_days":"x"}' });
+  assert.deepStrictEqual([K3.runAge().fresh_min, K3.runAge().max_days], [90, 3]);
+  const { K: K4 } = loadKit(null, { 'tdm.view.v1:ui:runage': 'не JSON' });
+  assert.strictEqual(K4.runAge().fresh_min, 90);
 });
 
 test('праздник: автопилот назвал день нерабочим (not_business_day шага intraday) — не подсвечиваем', () => {

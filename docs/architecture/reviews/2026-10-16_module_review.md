@@ -127,7 +127,7 @@ Each finding is labelled with the module and a number, so tasks can cite it (for
 
 **Data gaps for a RUB fixed-income desk:**
 - No built RUONIA/KEY curves, and no rule for which end-of-day snapshot counts.
-- No repo by basket, no NCC haircuts, no Lombard list.
+- No repo by basket, no CCP (clearing) haircuts, no Lombard list.
 - No ratings: Cbonds returns 401.
 - No CDS.
 - No CPI.

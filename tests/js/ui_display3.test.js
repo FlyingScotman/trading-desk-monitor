@@ -82,7 +82,7 @@ t('#210, #224: липкие «Итого» — матрица прокручив
   assert.ok(!/^:has\(/m.test(css), ':has без области не делает колонкой любой контейнер');
   // «Итого» матрицы — без полупрозрачного фона тепловой карты (сквозь липкую строку не видны строки)
   const kit = P('lib/kit.js');
-  assert.ok(kit.includes("row('Итого', L, 0, null, null, true)") && kit.includes("mode === 'heat' ? (foot ? '' : K.heatRisk(v, allMax))"));
+  assert.ok(kit.includes("row('Итого', L, 0, null, null, true)") && kit.includes("mode === 'heat' ? (foot ? K.HEAT_PLAIN : K.heatRisk(v, allMax))"));
   // C06: ряды сетки — до отрисовки плиток; плитка «Концентрация» (fit) перерисовывается при изменении высоты
   const c06 = P('c06-launchpad.html');
   assert.ok(c06.indexOf("board.style.gridTemplateRows") < c06.indexOf("renderTile(t);\n      // плитка, содержимое"));
@@ -109,7 +109,7 @@ t('#216: красный на фоне heatMono / heatRisk — контраст �
       assert.ok(c >= 3, sel + ' ' + bg + ' ' + rgb + ': ' + c.toFixed(2));
     }));
   });
-  assert.ok(/\[style\*="--k-heat:plain"\] \.k-accn/.test(css) && css.includes('color: var(--neg-heat)'));
+  assert.ok(/\.k-accn\.k-heatneg/.test(css) && css.includes('color: var(--neg-heat)'));  // класс от kit.js (#265)
 });
 
 t('#236: контрагенты демо-деривативов — нейтральные названия, без реальных организаций', () => {

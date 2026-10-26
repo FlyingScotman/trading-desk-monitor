@@ -28,9 +28,10 @@ button { font: inherit; color: inherit; }
 /* бухгалтерский формат (#153, K.accClass): отрицательное «(1,234.5)» — красным; у неотрицательного числа в
    числовой ячейке — невидимая «)», цифры столбца стоят ровно под скобками */
 .k-accn, td.n.k-accn, .k-tbl td.n.k-accn { color: var(--neg); }
-/* красный на фоне тепловой карты по величине / риска (K.heatMono, K.heatRisk, метка --k-heat:plain, #216): светлее в
-   тёмной теме и темнее в светлой — контраст с самым плотным фоном (0.44) не ниже 3:1 */
-.k-accn[style*="--k-heat:plain"], [style*="--k-heat:plain"] .k-accn, .k-tbl td.n.k-accn[style*="--k-heat:plain"] { color: var(--neg-heat); }
+/* красный на тепловой карте по величине / риска (K.heatMono, K.heatRisk, #216): светлее в тёмной теме и темнее в
+   светлой — контраст с самым плотным фоном (0.44) и с фоном «Итого» не ниже 3:1. Класс k-heatneg ставит kit.js
+   (K.heatPlainOf, #265) — и в ячейках карты, и в строке «Итого» той же карты: красный в колонке одного оттенка */
+.k-accn.k-heatneg, .k-tbl td.n.k-accn.k-heatneg { color: var(--neg-heat); }
 td.n.k-accp::after { content: ')'; visibility: hidden; } .mut { color: var(--fg-2); } .mut3 { color: var(--fg-3); }
 .mono { font-family: var(--mono); }
 .hide { display: none !important; }
@@ -54,6 +55,13 @@ td.n.k-accp::after { content: ')'; visibility: hidden; } .mut { color: var(--fg-
 /* покрытие «N/M поз.» — только на широком экране: уже 1440 px шапка с ним переносится в третью строку (ревью #254);
    оно есть в подсказке и в панели */
 @media (max-width: 1440px) { .k-top .k-runage .cv { display: none; } }
+/* меню вида ⚙ (#255): поле порога — подпись слева, число и единица справа */
+.k-viewmenu .k-viewf { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+.k-viewmenu .k-viewf > span:first-child { flex: 1; min-width: 0; }
+.k-viewmenu .k-viewf input { flex: none; width: 64px; min-width: 0; }
+.k-viewmenu .k-viewf .mut3 { white-space: nowrap; min-width: 6.5em; }  /* «по умолч. 90» и «… 3» — поля на одной вертикали */
+.k-viewmenu .k-viewerr { color: var(--neg); white-space: normal; }
+.k-viewmenu .k-viewerr:empty { display: none; }
 .k-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--line-2); border-radius: 999px; background: var(--panel); cursor: pointer; font-size: 12px; white-space: nowrap; user-select: none; }
 .k-chip:hover { border-color: var(--accent); }
 .k-chip.on { background: var(--accent-bg); border-color: var(--accent); color: var(--fg); }
@@ -238,6 +246,14 @@ table.mini + .k-tbl-ctlbar-m { position: static; background: transparent; }
   .k-top .brand .tag, .k-top span.asof:not(.k-chip), .k-top .k-fresh { display: none; }
   .k-page { padding: 10px 10px 30px; }
   .k-kpi .v { font-size: 19px; }
+  /* узкий экран (#263): шапка панели переносится, переключатель шире панели прокручивается внутри себя, подписи
+     переносятся — вбок прокручивается плитка или её таблица, а не вся страница */
+  .k-panel > .hd { flex-wrap: wrap; }
+  .k-panel > .hd > * { min-width: 0; max-width: 100%; }
+  .k-panel > .hd h3 { white-space: normal; }  /* длинный заголовок (C01 «Валюта × тип») */
+  .k-panel > .hd .k-note { white-space: normal; }
+  .k-seg { max-width: 100%; overflow-x: auto; }
+  .k-seg button { flex: none; }
 }
 
 /* компактные таблицы рисков: по ширине содержимого, плотные строки */

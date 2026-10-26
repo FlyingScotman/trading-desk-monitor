@@ -4,7 +4,8 @@
 market snapshot (core's KBD curve, the RUONIA OIS and key-rate projection curves and the fixings
 the floaters need, built once per date), and the settlement calendar. ``value`` prices a list of
 (secid, quantity) requests through core ``value_portfolio`` and returns one ``Outcome`` per
-request: a valuation or a rejection with its reason. ``attach_pnl`` adds the day-over-day flash
+request: a valuation or a rejection with its reason; ``horizon`` carries the same requests to a later date through
+core ``horizon_portfolio`` (the forward carry, ``scenario.carry``). ``attach_pnl`` adds the day-over-day flash
 PnL against the valuations of the previous date (``desk.pnl.flash``; a foreign bond core values on its own curve is
 explained in its currency with the rate move in ``fx_gross``, one on the fallback ladder gets its carry at its yield,
 ``valuation.fallback.yield_pnl``, and its FX revaluation in ``fx_gross``, ``desk.pnl.direct.split_fx``). RUB bonds are discounted on RUONIA OIS (``valuation.bonds.discount_curve``;
@@ -25,6 +26,7 @@ from rub_fixed_income import (
     CurveEntry,
     DiscountCurve,
     MarketSnapshot,
+    PortfolioHorizonResult,
     PortfolioRiskResult,
     ShockedCurveCache,
     ZcycParameters,
@@ -43,11 +45,13 @@ from .pnl.flash import FlashCurves, FlashPnl, NoPnl, explain
 from .valuation.bonds import (
     OFZ_SCHEME,
     OFZ_SCHEME_P,
+    BondCarry,
     BondRequest,
     BondValuation,
     Rejected,
     bond_request,
     discount_curve,
+    horizon_bonds,
     settlement_date,
     value_bonds,
 )
@@ -352,27 +356,9 @@ def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: b
     all stays without a valuation. ``carried_spreads`` (from the desk store) are the model spreads of
     the latest earlier run: a model price reuses its bond's spread instead of the day's median.
     ``scenarios`` (core ``PortfolioScenario``) are repriced by core: ``core_result.scenarios``."""
-    pids = [str(i) for i in range(len(requests))] if position_ids is None else position_ids
-    if len(pids) != len(requests) or len(set(pids)) != len(pids):
-        raise ValueError("position_ids must be unique, one per request")
+    pids = _pids(requests, position_ids)
     index = {p: i for i, p in enumerate(pids)}
-    out: list[Outcome] = []
-    todo: list[BondRequest] = []
-    for pid, (secid, qty) in zip(pids, requests):
-        terms = ctx.static.bonds.get(secid)
-        if terms is None:
-            out.append(Outcome(secid, None, None, reason="not_in_static_snapshot"))
-            continue
-        quote = ctx.market.quote(terms)
-        o = Outcome(secid, terms, quote)
-        out.append(o)
-        try:
-            if quote is None:
-                raise Rejected("no_quote")
-            settle = settlement_date(quote.trade_date, terms.settle_lag_days, ctx.calendar, *ctx.calendar_window)
-            todo.append(bond_request(pid, terms, quote, settle, qty))
-        except Rejected as e:
-            o.reason, o.detail = e.reason, e.detail
+    out, todo = bond_requests(ctx, requests, pids)
     valued, results = value_bonds(ctx.risk_market, todo, second_order=second_order, cache=ctx.cache,
                                   scenarios=scenarios, foreign=foreign_bond_curves(ctx),
                                   quote_curve_risk=ctx.quote_curve_risk, ofz_basis=ctx.ofz_basis)
@@ -393,6 +379,69 @@ def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: b
                     log.warning("fallback ladder failed for %s, valued at par proxy", o.secid, exc_info=True)
                     o.valuation = par_proxy(ctx, o, qty, f"fallback ladder failed: {type(e).__name__}: {e}")
     return out
+
+
+@dataclass
+class CarryOutcome:
+    """One request of ``horizon``: its carry to the horizon by core, or why there is none."""
+
+    secid: str
+    carry: BondCarry | None = None
+    reason: str | None = None
+    detail: str = ""
+
+
+def bond_requests(ctx: EodContext, requests: list[tuple[str, float]], pids: list[str]
+                  ) -> tuple[list[Outcome], list[BondRequest]]:
+    """One ``Outcome`` per (secid, quantity) request (the bond's terms and quote, or the refusal before core) and the
+    ``BondRequest`` of each one the backend's checks pass (``value``, ``horizon``)."""
+    out: list[Outcome] = []
+    todo: list[BondRequest] = []
+    for pid, (secid, qty) in zip(pids, requests):
+        terms = ctx.static.bonds.get(secid)
+        if terms is None:
+            out.append(Outcome(secid, None, None, reason="not_in_static_snapshot"))
+            continue
+        quote = ctx.market.quote(terms)
+        o = Outcome(secid, terms, quote)
+        out.append(o)
+        try:
+            if quote is None:
+                raise Rejected("no_quote")
+            settle = settlement_date(quote.trade_date, terms.settle_lag_days, ctx.calendar, *ctx.calendar_window)
+            todo.append(bond_request(pid, terms, quote, settle, qty))
+        except Rejected as e:
+            o.reason, o.detail = e.reason, e.detail
+    return out, todo
+
+
+def _pids(requests: list, position_ids: list[str] | None) -> list[str]:
+    pids = [str(i) for i in range(len(requests))] if position_ids is None else position_ids
+    if len(pids) != len(requests) or len(set(pids)) != len(pids):
+        raise ValueError("position_ids must be unique, one per request")
+    return pids
+
+
+def horizon(ctx: EodContext, requests: list[tuple[str, float]], horizon_date: date, *,
+            position_ids: list[str] | None = None) -> tuple[list[CarryOutcome], PortfolioHorizonResult | None]:
+    """Carry and roll-down of (secid, quantity) ``requests`` from the context's date to ``horizon_date`` through core
+    ``horizon_portfolio`` (``valuation.bonds.horizon_bonds``) on the inputs ``value`` values them on: the same
+    backend checks, instruments, quotes, curves (``risk_market``) and policy. No fallback ladder: a bond core cannot
+    value has no carry, with its reason. ``position_ids`` as in ``value``. Returns one ``CarryOutcome`` per request
+    and the core result."""
+    pids = _pids(requests, position_ids)
+    pre, todo = bond_requests(ctx, requests, pids)
+    out = [CarryOutcome(o.secid, reason=o.reason, detail=o.detail) for o in pre]
+    carried, result = horizon_bonds(ctx.risk_market, todo, horizon_date, cache=ctx.cache, foreign=foreign_bond_curves(ctx),
+                                    quote_curve_risk=ctx.quote_curve_risk, ofz_basis=ctx.ofz_basis)
+    index = {p: i for i, p in enumerate(pids)}
+    for pid, v in carried.items():
+        o = out[index[pid]]
+        if isinstance(v, Rejected):
+            o.reason, o.detail = v.reason, v.detail
+        else:
+            o.carry = v
+    return out, result
 
 
 def foreign_bond_curves(ctx: EodContext) -> dict[str, tuple[str, ...]]:

@@ -403,12 +403,12 @@ def test_accrual_over_consecutive_runs_counts_each_day_once():
 def test_funding_liabilities_and_fx_revaluation():
     ps = [pos("U1", 1e4, ccy="USD", accrued=200.0), pos("R1"), pos("D", 5.0, book_type="DERIVS"),
           pos("O", 1e4, ccy="USD", settlement_ccy="RUB")]
-    liab, probs = funding_liabilities(ps, policy=POLICY)
-    assert [(x.position_id, x.ccy, x.amount) for x in liab] == [("U1", "USD", -1e4), ("R1", "RUB", -1e6),
+    liab, probs = funding_liabilities(ps, policy=POLICY)  # the dirty MV of the position as given (TDM#266)
+    assert [(x.position_id, x.ccy, x.amount) for x in liab] == [("U1", "USD", -10_200.0), ("R1", "RUB", -1e6),
                                                                  ("O", "USD", -1e4)]
     assert not probs
     pnl = liability_fx_pnl(liab, FX, FRI, MON)
-    assert pnl == {"U1": pytest.approx(-1e4 * 2.0), "R1": 0.0, "O": pytest.approx(-2e4)}
+    assert pnl == {"U1": pytest.approx(-10_200 * 2.0), "R1": 0.0, "O": pytest.approx(-2e4)}
     settle = replace(POLICY, out_of_currency=OutOfCurrency.SETTLEMENT_CCY)
     liab2, _ = funding_liabilities(ps, policy=settle, fx=FX, on=MON)
     assert liab2[-1].ccy == "RUB" and liab2[-1].amount == pytest.approx(-8.2e5)

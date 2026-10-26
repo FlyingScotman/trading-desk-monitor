@@ -12,7 +12,7 @@
 .strip .k-kpi.cbr { grid-column: span 2; }
 .mk-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 12px; align-items: start; }
 .mk-grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
-@media (max-width: 1150px) { .mk-grid, .mk-grid2 { grid-template-columns: 1fr; } .strip .k-kpi.cbr { grid-column: auto; } }
+@media (max-width: 1150px) { .mk-grid, .mk-grid2 { grid-template-columns: minmax(0, 1fr); } .strip .k-kpi.cbr { grid-column: auto; } }
 .side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 #ymap { height: 560px; }
 #fxmap { height: 300px; }

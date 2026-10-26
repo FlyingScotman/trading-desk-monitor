@@ -94,3 +94,64 @@ class FxTable:
             return 1.0
         s = self._series.get(ccy)
         return None if s is None else s.at(on, self.max_age_days)
+
+
+class HeldFx:
+    """``FxProvider`` of a forward period: every day after ``on`` at the rate in force on ``on`` (the forward carry
+    holds FX; a table's ``max_age_days`` would otherwise make the rates of later days none)."""
+
+    def __init__(self, table: FxProvider, on: date) -> None:
+        self.table, self.on = table, on
+
+    def rate(self, ccy: str, on: date) -> float | None:
+        return self.table.rate(ccy, min(on, self.on))
+
+
+class HeldRates:
+    """``RateIndexProvider`` of a forward period, ``flat``: every index on every day after ``on`` at its value in force
+    on ``on`` (a later row of the table, such as a key rate decided and not yet effective, is not used)."""
+
+    def __init__(self, table: RateIndexProvider, on: date) -> None:
+        self.table, self.on = table, on
+
+    def rate(self, index: str, on: date) -> float | None:
+        return self.table.rate(index, min(on, self.on))
+
+
+KEY_RATE = "KEY_RATE"
+
+
+def follows_key_rate(index: str) -> bool:
+    """A RUB money-market index that moves with the key rate (``KeyRatePath``): RUONIA and term RUONIA, the RUB RUSFAR
+    family (not ``RUSFARC*``, the CNY one), the CBR standing facilities. Any other index (SOFR, a CNY rate) is held."""
+    return (index.startswith(("RUONIA", "TERM_RUONIA", "CBR_"))
+            or (index.startswith("RUSFAR") and not index.startswith("RUSFARC")))
+
+
+class KeyRatePath(HeldRates):
+    """``RateIndexProvider`` of a forward period, ``steps``: the key rate in force on ``on`` moved by a step (decimal,
+    0.0025 = 25 bp) from each effective date of ``steps`` on, never below 0 (as the Scenario & PnL Lab's path), and every
+    index that ``follows_key_rate`` at its value on ``on`` plus the key rate's move since (today's spread to the key rate
+    held: an assumption). Other indices are held. ``path``: (effective date, key rate) after each step."""
+
+    def __init__(self, table: RateIndexProvider, on: date, steps: Iterable[tuple[date, float]]) -> None:
+        super().__init__(table, on)
+        self.ks0 = table.rate(KEY_RATE, on)
+        self.path: list[tuple[date, float]] = []
+        cur = self.ks0
+        for eff, step in sorted(steps):
+            if cur is not None and eff > on:
+                cur = max(0.0, cur + step)
+                self.path.append((eff, cur))
+        self._days = [d for d, _ in self.path]
+
+    def key_rate(self, on: date) -> float | None:
+        i = bisect_right(self._days, on)
+        return self.ks0 if not i else self.path[i - 1][1]
+
+    def rate(self, index: str, on: date) -> float | None:
+        base = super().rate(index, on)
+        if base is None or on <= self.on or not (index == KEY_RATE or follows_key_rate(index)):
+            return base
+        ks = self.key_rate(on)
+        return None if ks is None or self.ks0 is None else base + (ks - self.ks0)

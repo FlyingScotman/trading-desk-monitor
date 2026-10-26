@@ -14,7 +14,7 @@ Funding (B1, ``funding_run``): computed on the run's content before the run row 
 position has a problem). The book totals' ``pnl.funding`` sums it and ``pnl.total`` is net of it.
 
 FX liability (``fx_liability``, OQ-04, TDM#54): computed after funding on the same content; a foreign-currency bond's
-``fx_delta`` is then net of its currency funding liability (clean MV + the accrued paid at the purchase), the liability
+``fx_delta`` is then net of its currency OCP liability (its dirty MV at the last OCP transfer, TDM#266), the liability
 is ``fact.extra.fx_liability`` and the funding block's ``fx_liability``, its FX revaluation the ``fx_funding`` (and
 ``fx_funding_cbr``) of the position's PnL; the book totals' ``pnl.fx_funding`` sums it and ``pnl.total`` holds it.
 
