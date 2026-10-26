@@ -219,12 +219,13 @@ body { display: flex; flex-direction: column; overflow: hidden; }
       },
     },
     issuers: {
-      title: 'Концентрация по эмитентам', modes: [['mv', 'MV'], ['cs01', 'CS01'], ['dv01', 'DV01']],
+      title: 'Концентрация по эмитентам', modes: [['mv', 'MV'], ['cs01', 'CS01'], ['dv01', 'DV01']], fit: true,
       render(bd, mode) {
         const el = K.h('div', 'fill'); bd.appendChild(el);
         const val = { mv: p => p.mv, cs01: p => p.cs01, dv01: p => p.dv01 }[mode], fm = mode === 'mv' ? v => f.mn(v, 0) : f.dv;
         const g = {}; bonds(K.list()).filter(p => !M.isMinfin(p.issuer) || mode !== 'cs01').forEach(p => { (g[p.issuer] = g[p.issuer] || { id: p.issuer, name: p.issuerName, v: 0, L: [] }).v += val(p); g[p.issuer].L.push(p); });
-        // эмитентов — сколько помещается по высоте плитки (≈ 15 px на строку, #218): в низкой плитке подписи не слипаются
+        // эмитентов — сколько помещается по высоте плитки (≈ 15 px на строку, #218): в низкой плитке подписи не слипаются;
+        // плитка с fit перерисовывается при изменении своей высоты (ResizeObserver в build)
         const fit = Math.max(6, Math.min(14, Math.floor(((el.clientHeight || 300) - 30) / 15)));
         const R = Object.values(g).sort((a, b) => Math.abs(b.v) - Math.abs(a.v)).slice(0, fit).reverse();
         const c = small(el, () => ({ grid: { left: 4, right: 50, top: 4, bottom: 2, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: fm },
@@ -295,9 +296,12 @@ body { display: flex; flex-direction: column; overflow: hidden; }
   }
   function build() {
     if (maxed) unmax();
-    live.splice(0).forEach(t => t.charts.forEach(c => c.dispose()));
+    live.splice(0).forEach(t => { t.charts.forEach(c => c.dispose()); if (t.ro) t.ro.disconnect(); clearTimeout(t.roT); });
     board.innerHTML = '';
     const P = PRESETS[preset];
+    // ряды поровну на высоту экрана — до первой отрисовки плиток: им нужна их настоящая высота (#218)
+    const cells = P.tiles.reduce((s, x) => s + (x.endsWith(':2') ? 2 : 1), 0);
+    board.style.gridTemplateRows = 'repeat(' + Math.ceil(cells / 4) + ', minmax(0, 1fr))';
     P.tiles.forEach(spec => {
       const [id, span] = spec.split(':'), def = TILES[id];
       const mk = preset + '.' + id;
@@ -310,13 +314,20 @@ body { display: flex; flex-direction: column; overflow: hidden; }
       el.querySelector('.mx').onclick = () => maxed === t ? unmax() : max(t);
       live.push(t);
       renderTile(t);
+      // плитка, содержимое которой зависит от высоты (fit), перерисовывается после изменения размера окна или
+      // разворачивания — с задержкой 150 мс, когда высота перестала меняться
+      if (def.fit && typeof ResizeObserver === 'function') {
+        t.h = t.bd.clientHeight;
+        t.ro = new ResizeObserver(() => {
+          clearTimeout(t.roT);
+          t.roT = setTimeout(() => { const hh = t.bd.clientHeight; if (Math.abs(hh - t.h) >= 8 && live.includes(t)) { t.h = hh; renderTile(t); } }, 150);
+        });
+        t.ro.observe(t.bd);
+      }
     });
-    // ряды поровну на высоту экрана
-    const cells = P.tiles.reduce((s, x) => s + (x.endsWith(':2') ? 2 : 1), 0);
-    board.style.gridTemplateRows = 'repeat(' + Math.ceil(cells / 4) + ', minmax(0, 1fr))';
   }
-  function max(t) { if (maxed) unmax(); maxed = t; t.el.classList.add('max'); scrim = K.h('div', 'max-scrim'); scrim.onclick = unmax; document.body.appendChild(scrim); t.el.querySelector('.mx').textContent = '✕'; renderTile(t); }
-  function unmax() { if (!maxed) return; const t = maxed; t.el.classList.remove('max'); t.el.querySelector('.mx').textContent = '⤢'; maxed = null; if (scrim) { scrim.remove(); scrim = null; } renderTile(t); }
+  function max(t) { if (maxed) unmax(); maxed = t; t.el.classList.add('max'); scrim = K.h('div', 'max-scrim'); scrim.onclick = unmax; document.body.appendChild(scrim); t.el.querySelector('.mx').textContent = '✕'; }
+  function unmax() { if (!maxed) return; maxed.el.classList.remove('max'); maxed.el.querySelector('.mx').textContent = '⤢'; maxed = null; if (scrim) { scrim.remove(); scrim = null; } }
   // Esc: сначала закрываются панели разбора и карточки, потом свернётся плитка
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && maxed && !document.querySelector('.k-drawer') && !document.querySelector('.k-pal')) unmax(); }, true);
   K.onFilter(() => live.forEach(renderTile));

@@ -126,17 +126,17 @@
     cls: v => v > 0 ? 'pos' : v < 0 ? 'neg' : '',
   };
   // деление оси графика (#218): v / scale с тем числом знаков после точки, которое есть у самого деления (0.2 → «0.2»,
-  // 1 → «1»), но не больше, чем нужно по величине (от 10 — целые, от 1 — один знак, меньше — два): в валюте отчёта,
+  // 1 → «1»), но не больше, чем нужно по величине (от 10 — целые, от 1 — один, от 0.1 — два, меньше — три): в валюте отчёта,
   // отличной от рубля, мелкие деления не превращаются в ряд «0», а крайние деления (min/max оси) не тянут хвост знаков
   K.tick = (v, scale) => {
-    const x = v / (scale || 1), a = Math.abs(x), cap = a >= 10 ? 0 : a >= 1 ? 1 : 2;
+    const x = v / (scale || 1), a = Math.abs(x), cap = a >= 10 ? 0 : a >= 1 ? 1 : a >= 0.1 ? 2 : 3;
     return grp(x, Math.min(cap, (String(+x.toFixed(6)).split('.')[1] || '').length));
   };
   // заседание ЦБ одной фразой: консенсус и ожидание кривой, если они есть в данных, иначе ставка и прошлое решение
   K.cbrLine = () => {
     const c = M.cbr || {}, n = c.next || {}, last = (c.past || [])[0];
     const known = v => v && v !== '—' && v !== 'нет данных';
-    if (known(n.consensus) || known(n.priced)) return 'консенсус ' + K.esc(n.consensus) + ', в кривой ' + K.esc(n.priced) + '.';
+    if (known(n.consensus) || known(n.priced)) return ('консенсус ' + K.esc(n.consensus) + ', в кривой ' + K.esc(n.priced)).replace(/\.$/, '') + '.';  // «б.п.» в конце — без второй точки
     return (c.keyRate != null ? 'ключевая ' + f.pct(c.keyRate) : '') + (last ? ' (' + f.date(last.date) + ': ' + K.esc(last.decisionText || last.decision) + ')' : '') +
       '; консенсуса и ожиданий кривой в данных нет.';
   };
@@ -279,10 +279,11 @@
   };
   // риск (не «хорошо/плохо»): синий — длинная дюрация (DV01 < 0), янтарный — короткая (DV01 > 0)
   // K.heatRisk и K.heatMono (фон только по величине) — не смысловой цвет (#216): метка K.HEAT_PLAIN в style
-  // говорит K.accKeep, что бухгалтерский красный у отрицательного числа на таком фоне остаётся
+  // говорит K.accKeep, что бухгалтерский красный у отрицательного числа на таком фоне остаётся. Чтобы красный читался,
+  // фон не плотнее 0.44, а цвет цифры — --neg-heat (kit.css): контраст не ниже 3:1 в обеих темах
   K.HEAT_PLAIN = '--k-heat:plain;';
-  K.heatRisk = (v, max) => { if (!v || !max) return ''; const a = Math.min(1, Math.abs(v) / max), al = (0.07 + 0.6 * Math.pow(a, 0.7)).toFixed(3); return K.HEAT_PLAIN + 'background:rgba(' + (v < 0 ? '76,157,255' : '227,160,60') + ',' + al + ')'; };
-  K.heatMono = (v, max, rgb) => { if (!v || !max) return ''; const a = Math.min(1, Math.abs(v) / max); return K.HEAT_PLAIN + 'background:rgba(' + (rgb || '76,157,255') + ',' + (0.06 + 0.6 * Math.pow(a, 0.7)).toFixed(3) + ')'; };
+  K.heatRisk = (v, max) => { if (!v || !max) return ''; const a = Math.min(1, Math.abs(v) / max), al = (0.07 + 0.37 * Math.pow(a, 0.7)).toFixed(3); return K.HEAT_PLAIN + 'background:rgba(' + (v < 0 ? '76,157,255' : '227,160,60') + ',' + al + ')'; };
+  K.heatMono = (v, max, rgb) => { if (!v || !max) return ''; const a = Math.min(1, Math.abs(v) / max); return K.HEAT_PLAIN + 'background:rgba(' + (rgb || '76,157,255') + ',' + (0.06 + 0.38 * Math.pow(a, 0.7)).toFixed(3) + ')'; };
   K.bar = (v, max, one) => { if (!max) return ''; const w = Math.min(50, Math.abs(v) / max * 50); return one ? '<div class="k-bar one"><i class="a" style="left:0;width:' + (w * 2) + '%"></i></div>' : '<div class="k-bar"><i class="' + (v >= 0 ? 'p' : 'n') + '" style="' + (v >= 0 ? 'left:50%' : 'right:50%') + ';width:' + w + '%"></i></div>'; };
   K.spark = (arr, w, hgt, color) => {
     w = w || 80; hgt = hgt || 22; const a = arr.filter(x => x != null); if (a.length < 2) return '';
@@ -1218,7 +1219,7 @@
       shown = rows;
       const C = cols();
       const nf = Object.keys(st.filters).filter(k => st.filters[k]).length;
-      if (fltChip) { fltChip.style.display = nf ? '' : 'none'; fltChip.innerHTML = '<span class="x">✕</span> фильтры (' + nf + ')'; }
+      if (fltChip) { fltChip.style.display = nf ? '' : 'none'; fltChip.innerHTML = '<span class="x">✕</span> фильтры: ' + nf; }
       const head = '<thead><tr>' + (opts.stripe ? '<th class="stripe"></th>' : '') + C.map(c => { const si = st.sort.findIndex(s => s[0] === c.key); return '<th class="sortable ' + (c.num ? 'n' : '') + '" data-k="' + c.key + '" title="' + esc(c.title || '') + '"' + (c.w && !fixedW() ? ' style="width:' + c.w + '"' : '') + '>' + (c.tip ? '<span class="k-hint">' + c.label + '</span>' : c.label) + (si >= 0 ? '<span class="si">' + (st.sort[si][1] > 0 ? '▲' : '▼') + (st.sort.length > 1 ? si + 1 : '') + '</span>' : '') + K.fltIcon(c, st.filters) + (K.colUnit(c) ? '<span class="k-thu">' + esc(K.colUnit(c)) + '</span>' : '') + '<span class="k-rsz" data-rsz="' + esc(c.key) + '" title="ширина: тянуть · двойной щелчок — по содержимому"></span></th>'; }).join('') + '</tr></thead>';
       // заданные ширины: фиксированная раскладка по colgroup, таблица — шириной суммы колонок
       const cg = fixedW() ? '<colgroup>' + (opts.stripe ? '<col style="width:4px">' : '') + C.map(c => '<col data-k="' + esc(c.key) + '" style="width:' + (lay.w[c.key] || 100) + 'px">').join('') + '</colgroup>' : '';
@@ -1628,7 +1629,7 @@
     }
     const held = core;  // риск плиток — только оценённые ядром (строки «по отчёту» — подписью)
     const marks = [T.nProv ? '<span style="color:var(--warn)">предварительно ' + T.nProv + '</span>' : '', T.nCarry ? 'фикс. перенесён ' + T.nCarry : ''].filter(Boolean).join(' · ');
-    const repRisk = v => v ? '<br><span class="mut3">без строк по отчёту (в них ещё ' + f.dv(v) + ')</span>' : '';
+    const repRisk = v => v ? '<br><span class="mut3">без строк по отчёту; в них ещё ' + f.dv(v) + '</span>' : '';
     const top = h('div');
     top.innerHTML = K.rcFixingsHtml() + (pn ? '<div class="k-rcfix warn"><span class="w">⚠ ' + esc(pn) + '</span></div>' : '') + '<div class="k-rcstrip">' +
       K.kpi('Позиций', String(rows.length), 'ядром ' + core.length + (T.nRep ? ' · по отчёту ' + T.nRep : '') + (marks ? '<br>' + marks : '')) +
@@ -2182,19 +2183,20 @@
       M.curves.filter(x => !cols.includes(x) && used(x.id)).forEach(x => cols.push(x));
       const curCols = opt.curves ? cols.filter(c => opt.curves.includes(c.id)) : cols;
       const allMax = Math.max(1, ...M.typeRows.map(t => Math.abs(M.sum(L.filter(p => p.group + '.' + p.kind === t.id), 'dv01'))));
-      const cellStyle = v => mode === 'heat' ? K.heatRisk(v, allMax) : mode === 'sign' ? 'color:' + (v < 0 ? 'var(--accent)' : 'var(--warn)') : '';
       const num = (v, spec, bold) => Math.abs(v) < 500 ? '<span class="mut3">·</span>' : (bold ? '<b>' : '') + K.d(spec, null, '') + (bold ? '</b>' : '');
       let html = '<table class="k-tbl k-compact"><thead><tr><th>Валюта / тип</th><th class="n" title="' + esc(K.tips.dv01) + '"><span class="k-hint">DV01</span></th>' +
         curCols.map(c => '<th class="n" title="' + esc(K.curveTip(c.id) || c.name) + '">' + (ccys.length > 1 ? '<span class="mut3">' + c.ccy + '</span> ' : '') + esc(c.short) + '</th>').join('') +
         '<th class="n" title="' + esc(K.tips.cs01) + '"><span class="k-hint">CS01</span></th><th class="n">MV, mm ₽</th></tr></thead><tbody>';
-      const row = (label, list, lvl, color, ccy) => {
+      // foot — строка «Итого» (липкая, #210): без полупрозрачного фона тепловой карты, иначе сквозь неё видны строки
+      const row = (label, list, lvl, color, ccy, foot) => {
         const dv = M.sum(list, 'dv01'), cs = M.sum(list, 'cs01'), mv = M.sum(list, p => p.group === 'DER' ? 0 : p.mv);
+        const heat = mode === 'heat' && !foot, cellStyle = v => mode === 'heat' ? (foot ? '' : K.heatRisk(v, allMax)) : mode === 'sign' ? 'color:' + (v < 0 ? 'var(--accent)' : 'var(--warn)') : '';
         const rowBg = mode === 'type' ? (color ? tint(color, 0.10) : ccy ? tint(K.ccyColor(ccy), 0.16) : '') : '';
         const lab = mode === 'type' && color ? '<span style="color:' + color + '">' + label + '</span>' : (color && mode !== 'type' ? '<b style="color:' + color + '">●</b> ' : '') + (mode === 'type' && color ? '' : label);
         return '<tr class="' + (lvl === 0 ? 'grp' : '') + '"' + (rowBg ? ' style="background:' + rowBg + '"' : '') + '><td style="padding-left:' + (6 + lvl * 12) + 'px">' + lab + ' <span class="mut3">' + list.length + '</span></td>' +
           '<td class="n" style="' + cellStyle(dv) + '">' + num(dv, { title: label.replace(/<[^>]+>/g, '') + ' · DV01', unit: 'тыс ₽/бп', list, val: 'dv01' }, true) + '</td>' +
           curCols.map(c => { const v = M.sum(list, p => p.dv01ByCurve[c.id]); return '<td class="n" style="' + cellStyle(v) + '">' + num(v, { title: label.replace(/<[^>]+>/g, '') + ' · ' + c.short, unit: 'тыс ₽/бп', list, val: p => p.dv01ByCurve[c.id] }) + '</td>'; }).join('') +
-          '<td class="n" style="' + (mode === 'heat' ? K.heatMono(cs, allMax, '227,179,65') : cellStyle(cs)) + '">' + (cs ? num(cs, { title: label.replace(/<[^>]+>/g, '') + ' · CS01', unit: 'тыс ₽/бп', list, val: 'cs01' }) : '<span class="mut3">·</span>') + '</td>' +
+          '<td class="n" style="' + (heat ? K.heatMono(cs, allMax, '227,179,65') : cellStyle(cs)) + '">' + (cs ? num(cs, { title: label.replace(/<[^>]+>/g, '') + ' · CS01', unit: 'тыс ₽/бп', list, val: 'cs01' }) : '<span class="mut3">·</span>') + '</td>' +
           '<td class="n">' + (mv ? K.d({ title: label.replace(/<[^>]+>/g, '') + ' · MV', unit: 'mm ₽', fmt: v => f.mn(v, 0), list, val: p => p.group === 'DER' ? 0 : p.mv, color: false }) : '<span class="mut3">·</span>') + '</td></tr>';
       };
       ccys.forEach(c => {
@@ -2207,7 +2209,7 @@
           else kinds.forEach(t => html += row(M.groupLabel[g] + ' · ' + t.label, Lg.filter(p => p.kind === t.kind), 1, K.kindColor[t.kind]));
         });
       });
-      html += '</tbody><tfoot>' + row('Итого', L, 0).replace('<tr class="grp"', '<tr') + '</tfoot></table>';
+      html += '</tbody><tfoot>' + row('Итого', L, 0, null, null, true).replace('<tr class="grp"', '<tr') + '</tfoot></table>';
       box.innerHTML = html;
       K.tableTools(box, { viewKey: opt.viewKey || 'risk-matrix', title: 'Матрица рисков, тыс ₽/бп' });
     }
@@ -2260,7 +2262,7 @@
       const lo = Math.min(0, ...segs.map(x => Math.min(x[0], x[1]))), hi = Math.max(0, ...segs.map(x => Math.max(x[0], x[1])));
       return {
         grid: { left: 6, right: 10, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'item', formatter: p => (keys[p.dataIndex] ? keys[p.dataIndex][1] : 'Итого') + ': <b>' + f.mns(p.dataIndex < vals.length ? vals[p.dataIndex] : run, 2) + '</b> mm ₽' },
-        xAxis: { type: 'category', data: keys.map(k => k[0] === 'funding' ? 'Фондир.' : k[1]).concat(['Итого']), axisLabel: { interval: 0, fontSize: 10 } }, yAxis: { type: 'value', unit: 'mm ₽', nameGap: 20, min: lo, max: hi, scale: false, axisLabel: { formatter: v => K.tick(v, 1e6), hideOverlap: true } },
+        xAxis: { type: 'category', data: keys.map(k => k[0] === 'funding' ? 'Фондир.' : k[1]).concat(['Итого']), axisLabel: { interval: 0, fontSize: 10 } }, yAxis: { type: 'value', unit: 'mm ₽', nameGap: 20, min: lo, max: hi, scale: false, axisLabel: { formatter: v => K.tick(v, 1e6), hideOverlap: true, showMinLabel: !lo, showMaxLabel: !hi } },
         series: [{
           type: 'custom', data: segs.map((s, i) => [i, s[0], s[1]]),
           renderItem: (params, api) => {

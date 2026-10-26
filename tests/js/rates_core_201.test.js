@@ -218,7 +218,7 @@ t('ревью: итоги PV по строкам с обеими оценкам�
   assert.ok(out.includes('ещё по отчёту: 1 поз.') && out.includes('только ядро (отчёта нет): 1'), out.slice(0, 600));
   // плитки DV01 — только ядро; риск CCS подписан
   assert.strictEqual(T.ruo, 18000 - 40); assert.strictEqual(T.repRuo, 300000);
-  assert.ok(out.includes('без строк по отчёту (в них ещё 300)'));
+  assert.ok(out.includes('без строк по отчёту; в них ещё 300'));
   // «Итого» таблицы — те же суммы: ядро (1.50), отчёт (1.50), разница 0.00, DV01 RUONIA 18 (без CCS)
   const foot = (out.match(/<tfoot>[\s\S]*?<\/tfoot>/) || [''])[0];
   assert.ok(/>\(1\.50\)<\/td><td[^>]*>\(1\.50\)<\/td><td[^>]*>0\.00<\/td><td[^>]*>18<\/td>/.test(foot), foot);

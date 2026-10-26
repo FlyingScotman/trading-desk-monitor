@@ -2,7 +2,7 @@
 :root {
   --bg: #0d1117; --bg-2: #11161d; --panel: #161b22; --panel-2: #1c222b; --hover: #222a35;
   --fg: #e6edf3; --fg-2: #9aa7b4; --fg-3: #6b7785; --line: #262e38; --line-2: #33404d;
-  --accent: #4c9dff; --accent-2: #2f6fcf; --pos: #3fb67a; --neg: #f0645a; --warn: #e3b341;
+  --accent: #4c9dff; --accent-2: #2f6fcf; --pos: #3fb67a; --neg: #f0645a; --warn: #e3b341; --neg-heat: #ffb4ab;
   --pos-bg: rgba(63, 182, 122, .14); --neg-bg: rgba(240, 100, 90, .14); --accent-bg: rgba(76, 157, 255, .14);
   --rub: #4c9dff; --usd: #3fb67a; --eur: #b48cff; --cny: #f0645a; --chf: #e3b341;
   --shadow: 0 10px 40px rgba(0, 0, 0, .5);
@@ -12,7 +12,7 @@
 :root[data-theme="light"] {
   --bg: #f4f6f8; --bg-2: #eef1f4; --panel: #ffffff; --panel-2: #f7f9fb; --hover: #eef3f9;
   --fg: #17202a; --fg-2: #4f5d6b; --fg-3: #8794a1; --line: #e1e6ec; --line-2: #cfd7e0;
-  --accent: #1f6feb; --accent-2: #1557c0; --pos: #1a8a52; --neg: #cf3b30; --warn: #b7850a;
+  --accent: #1f6feb; --accent-2: #1557c0; --pos: #1a8a52; --neg: #cf3b30; --warn: #b7850a; --neg-heat: #a51d14;
   --pos-bg: rgba(26, 138, 82, .10); --neg-bg: rgba(207, 59, 48, .10); --accent-bg: rgba(31, 111, 235, .09);
   --rub: #1f6feb; --usd: #1a8a52; --eur: #8250df; --cny: #cf3b30; --chf: #b7850a;
   --shadow: 0 10px 40px rgba(20, 30, 40, .18);
@@ -28,6 +28,9 @@ button { font: inherit; color: inherit; }
 /* бухгалтерский формат (#153, K.accClass): отрицательное «(1,234.5)» — красным; у неотрицательного числа в
    числовой ячейке — невидимая «)», цифры столбца стоят ровно под скобками */
 .k-accn, td.n.k-accn, .k-tbl td.n.k-accn { color: var(--neg); }
+/* красный на фоне тепловой карты по величине / риска (K.heatMono, K.heatRisk, метка --k-heat:plain, #216): светлее в
+   тёмной теме и темнее в светлой — контраст с самым плотным фоном (0.44) не ниже 3:1 */
+.k-accn[style*="--k-heat:plain"], [style*="--k-heat:plain"] .k-accn, .k-tbl td.n.k-accn[style*="--k-heat:plain"] { color: var(--neg-heat); }
 td.n.k-accp::after { content: ')'; visibility: hidden; } .mut { color: var(--fg-2); } .mut3 { color: var(--fg-3); }
 .mono { font-family: var(--mono); }
 .hide { display: none !important; }
@@ -226,11 +229,11 @@ table.k-tbl.k-compact { width: auto; font-size: 12px; }
 .k-compact td.n, .k-compact th.n { min-width: 58px; }
 .k-rm-bar { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .k-rm { overflow: auto; }
-/* матрица в контейнере с ограниченной высотой (плитка C06, #210): контейнер — колонка, а .k-rm занимает остаток и
+/* матрица в плитке C06 (ограниченная высота, #210): тело плитки — колонка, а .k-rm занимает остаток и
    прокручивается сам — тогда липкая строка «Итого» прилипает к низу видимой части, а не прячется под прокруткой
    контейнера. Без ограничения высоты (C01) .k-rm растёт по содержимому, как раньше */
-:has(> .k-rm) { display: flex; flex-direction: column; }
-:has(> .k-rm) > .k-rm-bar { flex: none; }
+.tile > .tb:has(> .k-rm) { display: flex; flex-direction: column; }
+.tile > .tb:has(> .k-rm) > .k-rm-bar { flex: none; }
 .k-rm { flex: 0 1 auto; min-height: 0; }
 /* первые две колонки (название и итог) закреплены при горизонтальной прокрутке */
 .k-pin2 tr > :first-child { position: sticky; left: 0; z-index: 1; background: var(--panel); min-width: 120px; }
