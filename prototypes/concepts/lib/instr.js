@@ -279,7 +279,7 @@
         } else html = K.d({ title: plain(title) + ' · ' + ms.label + (curve ? ' ' + curve : ''), unit: unitTxt(c), fmt, rows: r.m[mm] || [], color: ms.id === 'mv' || ms.id === 'notional' ? false : undefined }, null);
         if (ms.risk && r.missing.length) html += '<sup class="mut" style="color:var(--warn)" title="' + esc('без риска ' + r.missing.length + ' поз.: ' + reasons(r.missing)) + '">*</sup>';
         if (opt.mark) html += opt.mark;
-        const heat = opt.total || ms.what === 'n' ? '' : (ms.risk || ms.id === 'basis' || ms.id === 'ofzSpr' ? K.heatRisk : K.heatMono)(v * (own ? ((M.toRepr && M.toRepr[c]) || 1) : 1), max);
+        const heat = ms.what === 'n' ? '' : opt.total ? K.HEAT_PLAIN : (ms.risk || ms.id === 'basis' || ms.id === 'ofzSpr' ? K.heatRisk : K.heatMono)(v * (own ? ((M.toRepr && M.toRepr[c]) || 1) : 1), max);
         return '<td class="n"' + (heat || opt.total ? ' style="' + heat + (opt.total ? ';font-weight:600' : '') + '"' : '') + '>' + html + '</td>';
       };
       // заголовок: группы типов (Минфин, Корпоративные, Деривативы…) и типы

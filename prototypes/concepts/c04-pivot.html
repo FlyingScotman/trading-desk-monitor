@@ -13,7 +13,7 @@
 .c4-presets .k-chip b { font-weight: 600; }
 .c4-presets .k-chip.on b { color: var(--accent); }
 .c4-ctrl { display: flex; gap: 8px 14px; flex-wrap: wrap; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--bg-2); }
-.c4-ctrl .grp { display: inline-flex; gap: 5px; align-items: center; }
+.c4-ctrl .grp { display: inline-flex; gap: 5px; align-items: center; flex-wrap: wrap; max-width: 100%; }  /* узкий экран (#263): группа переносится */
 .c4-ctrl .pick { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--panel); cursor: pointer; font-size: 12px; white-space: nowrap; }
 .c4-ctrl .pick:hover { border-color: var(--accent); }
 .c4-ctrl .pick.m { border-color: var(--accent); background: var(--accent-bg); font-weight: 600; }
@@ -180,7 +180,8 @@
     if (!a || (Math.abs(a.v) < 1e-9 && st.m !== 'count')) return '<td class="n zero ' + (cls || '') + '">·</td>';
     const meas = A.meas;
     let style = '';
-    if (heat) style = meas.kind === 'risk' ? K.heatRisk(a.v, max) : meas.kind === 'pnl' ? K.heat(a.v, max) : K.heatMono(a.v, max);
+    if (heat === 'tot') style = K.HEAT_PLAIN;  // итог тепловой карты: без фона, красный того же оттенка (#265)
+    else if (heat) style = meas.kind === 'risk' ? K.heatRisk(a.v, max) : meas.kind === 'pnl' ? K.heat(a.v, max) : K.heatMono(a.v, max);
     return '<td class="n ' + (cls || '') + '" style="' + style + '">' + K.d({ title, unit: meas.unit, fmt: meas.fmt, rows: drillRows(a) }, meas.fmt(a.v), meas.kind === 'pnl' ? null : '') + '</td>';
   }
 
@@ -203,7 +204,7 @@
     let body = '';
     A.r1.forEach(k1 => {
       const col = !!st.col[k1], p1 = A.rep.get(A.d1 + k1);
-      const rowCells = (k2, cls) => (A.dc === 'none' ? '' : C.map(c => cellHtml(A, A.get(k1, k2, c), title(A, k1, k2, c), heat, max)).join('')) + cellHtml(A, A.get(k1, k2, ALL), title(A, k1, k2, ALL), false, 1, 'tot');
+      const rowCells = (k2, cls) => (A.dc === 'none' ? '' : C.map(c => cellHtml(A, A.get(k1, k2, c), title(A, k1, k2, c), heat, max)).join('')) + cellHtml(A, A.get(k1, k2, ALL), title(A, k1, k2, ALL), heat && 'tot', 1, 'tot');
       const tv = (A.get(k1, ALL, ALL) || { v: 0 }).v;
       body += '<tr class="' + (A.d2 ? 'r1' : '') + '" data-k="' + esc(k1) + '"><td class="lbl">' + (A.d2 ? '<span class="tw">' + (col ? '▸' : '▾') + '</span>' : '') + dimLbl(A.d1, k1, p1) + (A.d2 ? ' <span class="mut3" style="font-weight:400">' + A.r2[k1].length + '</span>' : '') + '</td>' + rowCells(ALL) + '<td>' + K.bar(tv, totMax, A.meas.kind === 'size') + '</td></tr>';
       if (A.d2 && !col) A.r2[k1].forEach(k2 => {
@@ -211,7 +212,7 @@
         body += '<tr class="r2"><td class="lbl">' + dimLbl(A.d2, k2, A.rep.get(A.d2 + k2)) + '</td>' + rowCells(k2) + '<td>' + K.bar(v2, totMax, A.meas.kind === 'size') + '</td></tr>';
       });
     });
-    const foot = '<tfoot><tr><td>Итого</td>' + (A.dc === 'none' ? '' : C.map(c => cellHtml(A, A.get(ALL, ALL, c), title(A, ALL, ALL, c), false, 1)).join('')) + cellHtml(A, A.get(ALL, ALL, ALL), title(A, ALL, ALL, ALL), false, 1, 'tot') + '<td></td></tr></tfoot>';
+    const foot = '<tfoot><tr><td>Итого</td>' + (A.dc === 'none' ? '' : C.map(c => cellHtml(A, A.get(ALL, ALL, c), title(A, ALL, ALL, c), heat && 'tot', 1)).join('')) + cellHtml(A, A.get(ALL, ALL, ALL), title(A, ALL, ALL, ALL), heat && 'tot', 1, 'tot') + '<td></td></tr></tfoot>';
     out.innerHTML = '<div class="c4-view"><table class="k-tbl" data-vk="c04-pivot" data-title="Сводная таблица">' + head + '<tbody>' + (body || '<tr><td colspan="99" class="k-empty">пусто</td></tr>') + '</tbody>' + foot + '</table></div>';
     K.tableToolsAll(out);
     out.querySelectorAll('tr.r1').forEach(tr => tr.onclick = e => { if (e.target.closest('[data-dr]')) return; st.col[tr.dataset.k] = !st.col[tr.dataset.k]; render(); });
