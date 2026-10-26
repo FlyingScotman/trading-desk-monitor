@@ -9,10 +9,15 @@ in the run's publication.
   ``counterparty_id``), whether it is an NDF, its rate and value date;
 - the books in force with their ``ocp_to`` (the run's reference books over ``store.current_books``);
 - ``cash_balances`` in force on ``D`` (a stock, carried forward);
-- the bonds' FX delta is already net of their currency funding liability (``publish.fx_liability``, TDM#54), so the
-  ``funding`` component is off (``OcpPolicy.bond_funding_liability``). Only when it is on: the liability of the bonds
-  funded by their MV (``rules.funding.funding_liabilities`` on the adapter's ``funding_rules``, ``entities`` and
-  ``funding_policy`` in force on ``D``), for the rows not net of it yet. No funding rule: no liability, said in the notes;
+- the bonds' FX delta is already net of their currency OCP liability (``publish.fx_liability``, TDM#54, TDM#266: the
+  FX PnL since the last OCP transfer), so the ``funding`` component is off (``OcpPolicy.bond_funding_liability``).
+  Only when it is on: the liability of the bonds funded by their MV (``rules.funding.funding_liabilities`` on the
+  adapter's ``funding_rules``, ``entities`` and ``funding_policy`` in force on ``D``), for the rows not net of it yet;
+  without the previous day's rows here it is today's dirty MV (the bond's OCP 0, said in the notes). No funding rule:
+  no liability, said in the notes;
+- the day's OCP transfer deals of a book (``ocp_to``, DEC06) are their own component ``transfers``, never in the
+  bonds: the bond book's OCP = Σ of its bonds' FX PnL since the last transfer + the transfer deals (signed: a transfer
+  out is negative), counted once, ≈ the residual when the transfer matched;
 - the reported OCP: ``store.dataset_rows("ocp", D)`` (08 §10, a stock; a unit older than ``D`` is carried forward
   and its ``valid_date`` said). No unit: status ``no_report``, the derived OCP is still published.
 
@@ -108,12 +113,12 @@ def _liabilities(con: psycopg.Connection, on: date, known_at: Any, rows: list[di
     types, _ = entities_from_reference(entity_rows)
     positions = []
     for r in rows:
-        p, why = funding_run._position(r, books)
-        if p is None or p.ccy == pol.reporting_ccy:
+        p, _ = funding_run._position(r, books)
+        if p is None or p.ccy == pol.reporting_ccy or O._net_of_liability(r):  # net already: never twice
             continue
-        if why:
-            notes.append(f"{p.position_id}: НКД неизвестен, пассив фондирования — от грязной MV")
         positions.append(p)
+    if positions:
+        notes.append("пассив фондирования — грязная MV дня (без строк прошлого дня): ОВП облигаций с пассивом — 0")
     liabs, problems = F.funding_liabilities(positions, policy=pol, entities=types or None,
                                             fx=funding_run.fx_table([market]), on=on)
     notes += [f"{p.ref}: пассив фондирования не определён ({p.reason})" for p in problems]

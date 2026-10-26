@@ -625,9 +625,10 @@ const pnlSum = (list, f) => list.some(U.pnlOk) ? sum(list.filter(U.pnlOk), f) : 
 const liabNote = p => { const x = p.extra && p.extra.fx_liability;
   if (!x) return 'ОВП бумаги — её FX-дельта (грязная MV в валюте); валютного пассива в прогоне нет.';
   if (x.state !== 'computed') return 'Валютного пассива нет (' + (x.reason || x.state) + '): ОВП бумаги — грязная MV в валюте.';
-  return 'Валютный пассив ' + M(-x.amount_ccy,2) + ' млн ' + x.ccy + ' = чистая MV + НКД при покупке (' + (x.basis_text || '') + '; предварительно: по текущей чистой MV, а не по цене покупки). ОВП бумаги = грязная MV − пассив = ' + M(x.fx_delta_net,2,true) + ' млн ' + x.ccy + ': НКД после покупки и купоны — PnL.'; };
+  return 'Валютный ОВП-пассив ' + M(-x.amount_ccy,2) + ' млн ' + x.ccy + ' — ' + (x.reference_text || 'стоимость на последний перенос ОВП') + '; за стоимостью дня не следует (база фондирования — чистая MV дня, проценты в рублях). ОВП бумаги = грязная MV − пассив' + (x.coupons_ccy ? ' + купон дня' : '') + ' = ' + M(x.fx_delta_net,2,true) + ' млн ' + x.ccy + ': валютный PnL с прошлого переноса, вечерний перенос уводит его в деривативную книгу (предварительно: residual прошлых дней не накапливается).'; };
 // валютный пассив фондирования облигации (прогон монитора, extra.fx_liability, TDM#54): fxDelta позиции уже за его
-// вычетом (грязная MV − пассив); пассив = чистая MV + НКД при покупке. 0 — пассива нет (причина в extra.fx_liability).
+// вычетом (грязная MV − пассив + купон дня); пассив = грязная MV на прошлый перенос ОВП (прошлый рабочий день), за MV
+// дня не следует (TDM#266). 0 — пассива нет (причина в extra.fx_liability).
 const fxLiab = (p, c) => { const x = p.extra && p.extra.fx_liability; return x && x.state === 'computed' && x.ccy === c ? x.amount_ccy || 0 : 0; };
 // ОВП по слагаемым: облигации — грязная MV в валюте, «Фондирование» — валютный пассив (из позиции; у выгрузки tdm —
 // строки фондирования), «Перенос ОВП» — сделки переноса (у книги-источника и зеркальная у получателя: по деску в сумме 0).
@@ -715,7 +716,7 @@ function renderKpi(){
   <div class="kpi"><div class="kl"><span>CS01 итого</span><span></span></div>
     <div class="kv${nc(cs)}">${M(cs,2)}<small>млн ₽/б.п.</small></div>
     <div class="ks">${unfiltered() ? chg(cs,'cs01') : ''}<span title="Чувствительность ОФЗ к их спреду относительно кривой, на которой считан риск ставок">спред ОФЗ <span class="num${nc(ofz)}">${M(ofz,2)}</span></span>${spark(h.map(x => x.cs01), 66, 18)}</div></div>
-  <div class="kpi wide"><div class="kl"><span title="ОВП = облигации (грязная MV в валюте${S.withFunding ? ' − валютный пассив фондирования: чистая MV + НКД при покупке' : ''}) + деривативы и FX (FX-дельта) + сделки переноса ОВП. Облигация без пассива (фондирование не настроено, проблема) — по грязной MV.">ОВП ${S.withFunding ? 'с фондированием' : 'без фондирования'}</span><span>млн вал. · млн ₽ экв.</span></div>
+  <div class="kpi wide"><div class="kl"><span title="ОВП = облигации (грязная MV в валюте${S.withFunding ? ' − валютный пассив фондирования: грязная MV на прошлый перенос ОВП, то есть валютный PnL за день' : ''}) + деривативы и FX (FX-дельта) + сделки переноса ОВП. Облигация без пассива (фондирование не настроено, проблема) — по грязной MV.">ОВП ${S.withFunding ? 'с фондированием' : 'без фондирования'}</span><span>млн вал. · млн ₽ экв.</span></div>
     <div class="ocp">${CCYS.map(c => `<span>${c}</span><span class="num${nc(o[c].net)}">${M(o[c].net,1,true)}</span><span class="num muted">${num(o[c].net * D.FX[c] / 1e6,0,true)} млн ₽</span>`).join('')}</div></div>
   <div class="kpi"><div class="kl"><span>PnL дня</span><span>флэш · рынок</span></div>
     <div class="kv${nc(flash)}">${flash == null ? naHtml(pc.tip) : M(flash,1,true)}<small>млн ₽</small></div>

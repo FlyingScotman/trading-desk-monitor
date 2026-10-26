@@ -7,7 +7,8 @@
  *                           фильтр книг и портфелей (общий для всех мониторов), поиск, тема
  *  KIT.dataLabel(run), KIT.headerStatus(status, now) — тип данных прогона и состояние шапки по статусу автопилота
  *  KIT.runAgo(ms), KIT.runBadge(info, now), KIT.runCoverage() — бейдж прогона в шапке (#192): сколько прошло с публикации
- *                           (тикает сам; новый прогон — по ленте событий lib/live.js) и что вошло в прогон
+ *                           (тикает сам; новый прогон — по ленте событий lib/live.js) и что вошло в прогон;
+ *                           KIT.runAge(), KIT.setRunAge(patch) — пороги «⚠ устарел» (#255), меню вида ⚙ в шапке
  *  KIT.list()             — позиции после фильтра шапки; KIT.onFilter(fn) — перерисовка при смене фильтра
  *  KIT.d(spec)            — кликабельная цифра: spec = {title, list|rows, val, fmt, unit, v?}; щелчок раскрывает вклад
  *  KIT.drill(spec)        — открыть разбор вклада (позиции, группировка по эмитенту/книге/валюте/типу/бакету)
@@ -536,11 +537,38 @@
   // страницы минус 12 минут. Возраст перерисовывается раз в 30 с и при возврате на вкладку; часы — сервера
   // (сдвиг по now статуса автопилота). Новый прогон: событие 'desk:live' от lib/live.js (run.published), затем
   // сверка с latest_run статуса автопилота (R11: какой прогон «последний»).
-  // Подсветка: «есть прогон новее» (latest_run — не прогон на экране) или «устарел»: в рабочие часы (пн–пт,
+  // Подсветка: «есть прогон новее» (latest_run — не прогон на экране) или «устарел» (#255): в рабочем окне (пн–пт,
   // кроме дней, которые автопилот назвал нерабочими — причина not_business_day шага intraday, как в K.headerStatus;
-  // fresh_from–fresh_to МСК) старше fresh_min минут или в любое время старше max_days дней. Закреплённый прогон
-  // (?run_id= / ?as_of=) не подсвечивается: его выбрали сами; «есть новее» для него — только в подсказке и панели.
+  // fresh_from–fresh_to МСК) с более позднего из двух моментов — публикации прогона и fresh_from сегодня — прошло
+  // больше fresh_min минут (вчерашний прогон утром подсвечивается с 11:45, если сегодняшнего ещё нет — как автопилот,
+  // #156); в любое время — прогон старше max_days календарных дней. fresh_min и max_days — настройка в меню вида
+  // (K.runAge, K.setRunAge; 0 — правило выключено). Закреплённый прогон (?run_id= / ?as_of=) и демо не
+  // подсвечиваются: их выбрали сами; «есть новее» для закреплённого — только в подсказке и панели.
   K.RUN_AGE = { fresh_min: 90, fresh_from: '10:15', fresh_to: '20:00', max_days: 3 };
+  // настройка порогов — в слое вида (K.viewStore, ключ 'ui:runage', {fresh_min, max_days}); целое 0…предел, иначе — умолчание
+  const RUNAGE_KEY = 'ui:runage', RUNAGE_MAX = { fresh_min: 1440, max_days: 365 };
+  const runAgeOk = (k, v) => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= RUNAGE_MAX[k];
+  K.runAge = function () {
+    const a = Object.assign({}, K.RUN_AGE), s = K.viewStore ? K.viewStore.get(RUNAGE_KEY) : null;
+    if (s) Object.keys(RUNAGE_MAX).forEach(k => { if (runAgeOk(k, s[k])) a[k] = s[k]; });
+    return a;
+  };
+  // patch — {fresh_min?, max_days?}: числа или строки поля ввода; неверное значение не сохраняется → false.
+  // Меняется только переданный порог; хранится только то, что отличается от умолчания K.RUN_AGE (сменим умолчание —
+  // оно дойдёт и до тех, кто открывал меню, но этот порог не трогал)
+  K.setRunAge = function (patch) {
+    const s = (K.viewStore.get(RUNAGE_KEY)) || {}, v = {};
+    Object.keys(RUNAGE_MAX).forEach(k => { if (runAgeOk(k, s[k]) && s[k] !== K.RUN_AGE[k]) v[k] = s[k]; });
+    for (const k of Object.keys(patch || {})) {
+      if (!(k in RUNAGE_MAX)) continue;
+      const x = typeof patch[k] === 'string' && patch[k].trim() !== '' ? Number(patch[k]) : patch[k];
+      if (!runAgeOk(k, x)) return false;
+      if (x === K.RUN_AGE[k]) delete v[k]; else v[k] = x;
+    }
+    if (Object.keys(v).length) K.viewStore.set(RUNAGE_KEY, v); else K.viewStore.reset(RUNAGE_KEY);
+    fire('runage');
+    return true;
+  };
   K.runAgo = function (ms) {
     const m = Math.floor(Math.max(0, ms) / 60e3);
     if (m < 1) return 'только что';
@@ -553,7 +581,7 @@
   // info: { publishedAt, demo, pinned, newer: {run_id, text} | null, reason: причина шага intraday автопилота };
   // now — момент (по часам сервера) → { short, text (фраза целиком), level: 'ok' | 'stale' | 'newer' | 'unknown', why }
   K.runBadge = function (info, now) {
-    const a = K.RUN_AGE, t = info.publishedAt ? +new Date(info.publishedAt) : NaN;
+    const a = K.runAge(), t = info.publishedAt ? +new Date(info.publishedAt) : NaN;
     if (!isFinite(t)) return { short: '—', text: 'Время публикации прогона неизвестно', level: 'unknown', why: null };
     const ms = +new Date(now) - t, short = ms < 60e3 ? 'только что' : K.runAgo(ms) + ' назад';
     const r = { short, text: 'Прогон опубликован ' + short, level: 'ok', why: null };
@@ -565,8 +593,16 @@
     if (info.pinned || info.demo) return r;
     const m = msk(now), day = m.dow >= 1 && m.dow <= 5 && info.reason !== 'not_business_day' &&
       m.min >= hmMin(a.fresh_from) && m.min < hmMin(a.fresh_to);
-    if (ms > a.max_days * 864e5) { r.level = 'stale'; r.why = 'прогон старше ' + a.max_days + ' дн.'; }
-    else if (day && ms > a.fresh_min * 60e3) { r.level = 'stale'; r.why = 'в рабочие часы прогон старше ' + a.fresh_min + ' мин: новых срезов не публиковалось'; }
+    // начало рабочего окна сегодня (fresh_from МСК) — момент; отсчёт от него, если прогон опубликован раньше
+    const from = +new Date(m.iso + 'T' + minHm(hmMin(a.fresh_from)) + ':00Z') - MSK_MS, since = +new Date(now) - Math.max(t, from);
+    // календарные дни по МСК: опубликован 22.10 в любое время — 25.10 ему 3 дня, «старше 3» — с 26.10
+    const days = Math.round((Date.parse(m.iso) - Date.parse(msk(t).iso)) / 864e5);
+    if (a.max_days > 0 && days > a.max_days) { r.level = 'stale'; r.why = 'прогон старше ' + a.max_days + ' дн.'; }
+    else if (day && a.fresh_min > 0 && since > a.fresh_min * 60e3) {
+      r.level = 'stale';
+      r.why = t >= from ? 'в рабочие часы прогон старше ' + a.fresh_min + ' мин: новых срезов не публиковалось'
+        : 'с ' + a.fresh_from + ' МСК прошло больше ' + a.fresh_min + ' мин, а прогона после ' + a.fresh_from + ' нет';
+    }
     return r;
   };
   // что вошло в прогон — из данных прогона на странице (window.MOCK): позиции и их оценка, книги, PnL, фондирование,
@@ -655,6 +691,7 @@
     }
     runState.paint = paint;
     paint();
+    K.on('runage', paint);  // пороги поменяли в меню вида
     setInterval(paint, 30e3);
     if (runState.done) setTimeout(paint, runState.done - Date.now() + 50);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) paint(); });
@@ -674,6 +711,71 @@
       paint();
       if (runState.refresh) runState.refresh();
     });
+  }
+  // меню вида (⚙ рядом с «(1) / −1», #255): формат отрицательных чисел и пороги «⚠ устарел» бейджа прогона
+  // (K.setRunAge: поле меняется по Enter и при уходе с поля; неверное значение не сохраняется — в поле возвращается
+  // сохранённое, под полями — что не так). Клавиатура: при открытии фокус в панели, Tab и Shift+Tab ходят по кругу
+  // внутри неё, Esc закрывает и возвращает фокус на ⚙
+  function bindViewMenu(btn) {
+    if (!btn) return;
+    let panel = null;
+    btn.setAttribute('aria-label', 'Вид'); btn.setAttribute('aria-expanded', 'false');
+    const close = () => {
+      document.removeEventListener('keydown', onKey, true); document.removeEventListener('click', onDoc, true);
+      btn.setAttribute('aria-expanded', 'false');
+      if (!panel) return;
+      panel.remove(); if (openMenu === panel) openMenu = null; panel = null;
+    };
+    const focusables = () => [...panel.querySelectorAll('button, input')].filter(x => !x.disabled);
+    function onKey(e) {
+      if (!panel || !panel.isConnected) { close(); return; }  // панель закрыло другое меню шапки
+      if (e.key === 'Escape') { e.stopPropagation(); close(); btn.focus(); return; }
+      if (e.key !== 'Tab') return;
+      const fs = focusables(), i = fs.indexOf(document.activeElement);
+      if (!fs.length) return;
+      e.preventDefault();
+      fs[i < 0 ? (e.shiftKey ? fs.length - 1 : 0) : (i + (e.shiftKey ? -1 : 1) + fs.length) % fs.length].focus();
+    }
+    function onDoc(e) { if (panel && !panel.contains(e.target) && !btn.contains(e.target)) close(); }
+    const field = (k, label, unit) => '<label class="k-viewf"><span>' + esc(label) + '</span><input class="k-input" type="number" min="0" max="' +
+      RUNAGE_MAX[k] + '" step="1" inputmode="numeric" data-k="' + k + '"> <span class="mut3">' + unit + '</span></label>';
+    const UNIT = { fresh_min: 'мин', max_days: 'дн.' };
+    function open() {
+      if (openMenu) openMenu.remove();
+      const W = Math.min(340, innerWidth * 0.92), r = btn.getBoundingClientRect(), a = K.runAge();
+      panel = h('div', 'k-panel k-viewmenu');
+      panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', 'Вид');
+      panel.style.cssText = 'position:fixed;z-index:140;width:' + W + 'px;max-height:70vh;overflow:auto;box-shadow:var(--shadow);padding:10px 14px;font-size:12.5px';
+      panel.style.left = Math.max(8, Math.min(r.right - W, innerWidth - W - 10)) + 'px'; panel.style.top = (r.bottom + 4) + 'px';
+      panel.innerHTML = '<div class="k-sec" style="margin-top:0">Отрицательные числа</div><div data-x="neg"></div>' +
+        '<div class="k-sec">Бейдж прогона: «⚠ устарел»</div>' +
+        field('fresh_min', 'Прогон устарел через, мин', 'по умолч. ' + K.RUN_AGE.fresh_min) +
+        field('max_days', '…через, дней', 'по умолч. ' + K.RUN_AGE.max_days) +
+        '<div class="mut3" style="margin-top:6px;white-space:normal">Минуты — в рабочем окне пн–пт ' + K.RUN_AGE.fresh_from + '–' + K.RUN_AGE.fresh_to +
+        ' МСК, от публикации прогона или от ' + K.RUN_AGE.fresh_from + ', если прогон вчерашний. Дни — в любое время. 0 — правило выключено. ' +
+        'Закреплённый прогон и демо не подсвечиваются. Хранится в этом браузере.</div>';
+      const err = h('div', 'k-viewerr'); err.setAttribute('role', 'status');
+      panel.querySelectorAll('.k-viewf')[1].after(err);
+      K.seg(panel.querySelector('[data-x=neg]'), K.NEG_FMTS, K.negFmt, v => K.setNegFmt(v));
+      panel.querySelectorAll('input[data-k]').forEach(inp => {
+        const k = inp.dataset.k;
+        inp.value = a[k];
+        const apply = () => {
+          const typed = inp.value, ok = K.setRunAge({ [k]: typed });
+          inp.value = K.runAge()[k];  // сохранённое: после неверного ввода — прежнее
+          inp.style.borderColor = ok ? '' : 'var(--neg)'; inp.setAttribute('aria-invalid', ok ? 'false' : 'true');
+          if (!ok) { err.dataset.k = k; err.textContent = '«' + (typed || 'пусто') + '» не подходит: нужно целое от 0 до ' + RUNAGE_MAX[k] + '. Оставлено ' + inp.value + ' ' + UNIT[k]; }
+          else if (err.dataset.k === k) err.textContent = '';  // пояснение — про своё поле
+        };
+        inp.onchange = apply;
+        inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); apply(); } };
+      });
+      document.body.appendChild(panel); openMenu = panel; btn.setAttribute('aria-expanded', 'true');
+      document.addEventListener('keydown', onKey, true);
+      const first = focusables()[0]; if (first) first.focus();
+      setTimeout(() => { if (panel) document.addEventListener('click', onDoc, true); }, 0);
+    }
+    btn.onclick = e => { e.stopPropagation(); if (panel && panel.isConnected) close(); else { close(); open(); } };
   }
   // статус автопилота (freshness): latest_run — какой прогон «последний»; now — часы сервера
   function runBadgeStatus(s, reason) {
@@ -807,6 +909,7 @@
       srcChip() + runBadgeChip() + (M.notes && M.notes.length ? '<span class="k-chip" data-a="notes" title="Чего нет в данных прогона" style="border-color:var(--warn)">ⓘ ' + M.notes.length + '</span>' : '') +
       '<button class="k-btn" data-a="search">Поиск <span class="k-kbd">Ctrl K</span></button>' +
       '<button class="k-btn" data-a="numfmt"></button>' +
+      '<button class="k-btn" data-a="view" title="Вид: формат отрицательных чисел, когда прогон считается устаревшим" aria-haspopup="dialog">⚙</button>' +
       '<button class="k-btn" data-a="theme" title="Светлая / тёмная тема">◐</button>';
     document.body.prepend(bar);
     if (/^https?:$/.test(location.protocol) && !window.DESK_AUTH) document.head.appendChild(Object.assign(document.createElement('script'), { src: '../desk-auth.js' }));  // вход: пользователь, «Выйти», CSRF
@@ -819,6 +922,7 @@
       nb.title = 'Отрицательные числа: ' + (K.negFmt === 'acc' ? '(1,234.5) красным' : '−1,234.5') + '. Щелчок — ' + (K.negFmt === 'acc' ? 'со знаком минус' : 'в скобках (бухгалтерский формат)') + '; в CSV — всегда минус';
     };
     paintNeg(); nb.onclick = () => K.setNegFmt(K.negFmt === 'acc' ? 'minus' : 'acc'); K.on('numfmt', paintNeg);
+    bindViewMenu(bar.querySelector('[data-a=view]'));
     bindSrc(bar); bindRunBadge(bar);
     if (K.source === 'real') { freshness(bar); backfillChip(bar); }
     const oc = bar.querySelector('[data-a=ofzview]');
@@ -920,12 +1024,12 @@
       let cum = 0;
       // размер: у позиции — номинал в её валюте и MV, у группы — MV её позиций (у деривативов MV — их PV)
       const mvOf = x => x.n.reduce((s, r) => s + (r.p.mv || 0), 0), mvTot = list.reduce((s, x) => s + mvOf(x), 0);
-      body.innerHTML = '<table class="k-tbl"><thead><tr><th></th><th>' + (dim === 'pos' ? 'Позиция' : D[1][0].toUpperCase() + D[1].slice(1)) + '</th>' + (dim === 'pos' ? '<th>Книга</th><th>Ccy</th><th class="n" title="в валюте позиции">Номинал</th>' : '<th class="n">Позиций</th>') + '<th class="n">MV, mm ₽</th><th class="n">Вклад</th><th style="width:120px"></th><th class="n">Доля</th><th class="n">Накопл.</th></tr></thead><tbody>' +
+      body.innerHTML = '<table class="k-tbl"><thead><tr><th></th><th>' + (dim === 'pos' ? 'Позиция' : D[1][0].toUpperCase() + D[1].slice(1)) + '</th>' + (dim === 'pos' ? '<th>Книга</th><th>Ccy</th><th class="n" title="в валюте позиции" data-csv="Номинал, mm в вал.">Номинал</th>' : '<th class="n">Позиций</th>') + '<th class="n">MV, mm ₽</th><th class="n">Вклад</th><th style="width:120px"></th><th class="n">Доля</th><th class="n">Накопл.</th></tr></thead><tbody>' +
         list.map(x => {
           cum += Math.abs(x.v);
           const stripe = dim === 'issuer' || dim === 'pos' ? K.issuerColor(x.p.issuer) : dim === 'ccy' ? K.ccyColor(x.k) : 'transparent';
           return '<tr class="row" data-k="' + esc(x.k) + '"><td class="stripe" style="background:' + stripe + '"></td><td style="max-width:240px;overflow:hidden;text-overflow:ellipsis" title="' + esc(x.label + (dim === 'pos' ? ' · ' + x.p.issuerName : '')) + '">' + esc(x.label) + (dim === 'pos' ? ' <span class="mut3">' + esc(x.p.issuerName) + '</span>' : '') + '</td>' +
-            (dim === 'pos' ? '<td class="mut">' + esc(x.p.book) + '</td><td>' + K.ccyTag(x.p.ccy) + '</td><td class="n">' + f.mn(x.p.notional, 2) + '<span class="mut3">mm ' + esc(x.p.ccy) + '</span></td>' : '<td class="n mut">' + x.n.length + '</td>') +
+            (dim === 'pos' ? '<td class="mut">' + esc(x.p.book) + '</td><td>' + K.ccyTag(x.p.ccy) + '</td><td class="n"' + K.csvv(() => f.mn(x.p.notional, 2)) + '>' + f.mn(x.p.notional, 2) + '<span class="mut3">mm ' + esc(x.p.ccy) + '</span></td>' : '<td class="n mut">' + x.n.length + '</td>') +
             '<td class="n">' + (dim === 'pos' && x.p.mv == null ? '—' : f.mn(mvOf(x), 1)) + '</td>' +
             '<td class="n ' + f.cls(x.v) + '">' + fmt(x.v) + '</td><td>' + K.bar(x.v, max) + '</td><td class="n mut">' + Math.round(Math.abs(x.v) / absTot * 100) + '%</td><td class="n mut3">' + Math.round(cum / absTot * 100) + '%</td></tr>';
         }).join('') + '</tbody><tfoot><tr><td></td><td>Итого</td><td colspan="' + (dim === 'pos' ? 3 : 1) + '"></td><td class="n">' + f.mn(mvTot, 1) + '</td><td class="n ' + f.cls(tot) + '">' + fmt(tot) + '</td><td colspan="3"></td></tr></tfoot></table>';
@@ -1556,10 +1660,12 @@
     [...tr.cells].forEach(c => { out.push(c); for (let i = 1; i < (c.colSpan || 1); i++) out.push(null); });
     return out;
   };
-  // подпись колонки для CSV: единица второй строкой шапки (span.k-thu, #105) — через запятую, как у K.table
+  // подпись колонки для CSV: единица второй строкой шапки (span.k-thu, #105) — через запятую, как у K.table;
+  // значок фильтра (span.k-flt, «⏷») и метка сортировки (span.si, «▲1») — оформление, в CSV не идут (#258)
+  const TH_DECOR = /<span class="(?:k-flt|si)\b[^"]*"[^>]*>[\s\S]*?<\/span>/g;
   K.thText = th => {
-    const m = /<span class="k-thu">([\s\S]*?)<\/span>/.exec(th.innerHTML || '');
-    const l = K.htmlText((th.innerHTML || '').replace(/<span class="k-thu">[\s\S]*?<\/span>/g, '')), u = m ? K.htmlText(m[1]) : '';
+    const x = (th.innerHTML || '').replace(TH_DECOR, ''), m = /<span class="k-thu">([\s\S]*?)<\/span>/.exec(x);
+    const l = K.htmlText(x.replace(/<span class="k-thu">[\s\S]*?<\/span>/g, '')), u = m ? K.htmlText(m[1]) : '';
     return u && !l.includes(',') ? l + ', ' + u : l;
   };
   // «(1.5)» → «-1.5» в элементе с меткой data-kneg (K.accMark, #222) или k-accn: скобка может стоять и во вложенном
@@ -1587,17 +1693,30 @@
     const hd = rowsOf(table.tHead), hr = hd.length ? hd[hd.length - 1] : null;
     const skip = tr => tr.hidden || (tr.dataset && tr.dataset.csvSkip) || (tr.style && tr.style.display === 'none') || (tr.cells.length === 1 && /(^|\s)k-empty(\s|$)/.test(tr.cells[0].className || ''));
     const body = [...table.tBodies].reduce((a, b) => a.concat(rowsOf(b)), []).concat(rowsOf(table.tFoot)).filter(tr => !skip(tr)).map(cellsOf);
+    // подписи CSV у заголовка с data-csv="a|b": по одной на колонку экрана; лишние (больше, чем colspan) — колонки
+    // CSV сразу за последней колонкой заголовка (#258: «Номинал, mm в вал.|Вал» — число и валюта по отдельности)
     let head = null;
+    const extra = [];  // extra[i] — подписи колонок CSV, которые идут за колонкой экрана i
     if (hr) {
       head = [];
       [...hr.cells].forEach(c => {
         const span = c.colSpan || 1, parts = c.dataset && c.dataset.csv ? c.dataset.csv.split('|') : null;
         for (let i = 0; i < span; i++) head.push(parts ? parts[i] || '' : i ? '' : K.thText(c));
+        if (parts && parts.length > span) extra[head.length - 1] = parts.slice(span);
       });
     }
     const n = Math.max(head ? head.length : 0, ...body.map(r => r.length), 0);
     const keep = [];
-    for (let i = 0; i < n; i++) if ((head && head[i]) || body.some(r => tx(r[i]))) keep.push(i);
+    for (let i = 0; i < n; i++) if ((head && head[i]) || extra[i] || body.some(r => tx(r[i]))) keep.push(i);
+    // ячейка с data-csv="число|валюта" (K.csvv) — значения CSV вместо текста экрана («250mm RUB» → 250 и RUB, #258):
+    // первое — в колонку ячейки (у числовой — числом, с data-date — датой), остальные — в дополнительные колонки
+    // заголовка (число — числом, остальное — текстом)
+    const cellVals = (c, x) => {
+      const d = (c && c.dataset) || {};
+      if (d.csv == null) return [one(c)].concat(Array(x).fill(''));
+      const parts = String(d.csv).split('|'), num = /(^|\s)n(\s|$)/.test(c.className || '');
+      return [d.date ? K.csvDateCell(d.date, parts[0], num) : K.csvCell(parts[0], num, d.v)].concat(Array.from({ length: x }, (_, j) => K.csvCell(parts[j + 1] || '', true)));
+    };
     const one = c => {
       if (!c) return '';
       const num = /(^|\s)n(\s|$)/.test(c.className || ''), d = c.dataset || {};
@@ -1610,8 +1729,17 @@
       const t = K.negFmt !== 'acc' ? tx(c) : num ? K.accToMinus(tx(c)) : K.htmlText(K.accMarkedToMinus(c.innerHTML));
       return d.date ? K.csvDateCell(d.date, t, num) : K.csvCell(t, num, d.v);
     };
-    return K.csvBuild(K.u(K.csvTitle(opts)), head ? keep.map(i => K.csvLabel(K.u(head[i] || ''))) : null, body.map(r => keep.map(i => one(r[i])).join(',')));
+    const cols = i => [head[i] || ''].concat(extra[i] || []);
+    return K.csvBuild(K.u(K.csvTitle(opts)), head ? [].concat(...keep.map(cols)).map(l => K.csvLabel(K.u(l))) : null,
+      body.map(r => [].concat(...keep.map(i => cellVals(r[i], extra[i] ? extra[i].length : 0))).join(',')));
   };
+  // атрибут data-csv ячейки ручной таблицы (K.tableCsv, #258): fn() — значение или массив значений CSV; считается в
+  // формате «−1» с обычным минусом, так что CSV не зависит от формата отрицательных на экране. Значения соединяются
+  // через «|», поэтому «|» внутри значения разорвёт его на две колонки. Первое значение — колонка самой ячейки
+  // (data-date ячейки по-прежнему делает его датой), следующие — дополнительные колонки, которые объявляет заголовок
+  // (data-csv="a|b" у th: подписей больше, чем colspan). Значений больше, чем колонок у заголовка, — лишние
+  // отбрасываются; меньше — пустые ячейки
+  K.csvv = fn => ' data-csv="' + esc([].concat(K.withNegFmt('minus', fn)).join('|').replace(/−/g, '-')) + '"';
   K.tableTools = (t, opts) => {
     const table = t && (t.tagName === 'TABLE' ? t : t.querySelector('table'));
     if (!table) return null;
@@ -1895,7 +2023,8 @@
     offer: { key: 'offer', label: 'Оферта', date: true, fmt: v => v ? f.date(v) : '<span class="mut3">—</span>' },
     offerKind: { key: 'offerKind', label: 'Вид оферты', filter: r => K.offerKindText(r.offerKind) || '—', val: r => r.offer ? r.offerKind : null, fmt: v => v ? esc(K.offerKindText(v)) : '<span class="mut3">—</span>' },
     tenor: { key: 'tenor', label: 'Срок', num: true, fmt: v => f.yrs(v), title: 'до оферты, если есть, иначе до погашения' },
-    notional: { key: 'notional', label: 'Номинал', num: true, fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', title: 'в валюте бумаги' },
+    // в CSV — число в mm валюты бумаги («Номинал, mm в вал.», как в легенде единиц и на C11), валюта — в колонке «Вал» (#258)
+    notional: { key: 'notional', label: 'Номинал', num: true, unit: 'mm в вал.', fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', csvFmt: v => f.mn(v, 2), title: 'в валюте бумаги' },
     mv: { key: 'mv', label: 'MV, mm ₽', num: true, fmt: v => f.mn(v, 0), sum: true, unit: 'mm ₽', sumFmt: v => f.mn(v, 0) },
     price: { key: 'price', label: 'Цена', num: true, unit: '% ном.', fmt: v => f.px(v) },
     ytm: { key: 'ytm', label: 'Дох.', num: true, fmt: v => f.pct(v) },
@@ -1982,19 +2111,24 @@
   K.legsHtml = p => {
     const L = p.legs || [], any = k => L.some(l => l[k] != null && l[k] !== '');
     const LEG = { single: '—', near: 'ближняя', far: 'дальняя' }, SET = { deliverable: 'поставка', cash: 'расчётный (NDF)' };
-    const amt = (c, v) => v == null ? '—' : f.mn(v, 2) + ' <small>mm ' + esc(c || '') + '</small>';
-    const rate = v => v == null ? '—' : f.n(v, 4);
+    const amt = (c, v) => v == null ? '—' : f.mn(v, 2) + ' <small>mm ' + esc(c || '') + '</small>', amtCsv = v => v == null ? '' : f.mn(v, 2);
+    const rate = v => v == null ? '—' : f.n(v, 4), rateCsv = v => v == null ? '' : f.n(v, 4);
     const fwd = l => l.fwdRate != null ? l.fwdRate : l.forwardRate;
     const cols = [['Нога', l => esc(LEG[l.leg] || l.leg || '—')], ['Валютирование', l => l.valueDate ? f.date(l.valueDate) : '—', l => l.valueDate],
-      ['Покупка', l => amt(l.buyCcy, l.buyAmount)], ['Продажа', l => amt(l.sellCcy, l.sellAmount)],
-      ['Курс сделки', l => rate(l.contractRate) + (l.rateQuote ? ' <small>' + esc(l.rateQuote) + '</small>' : '')]]
+      // в CSV сумма — числом в mm валюты («Покупка, mm в вал.»), валюта — своей колонкой за ней; курс — числом,
+      // котировка (CNY/RUB) — своей колонкой; у расчёта и фиксинга подписи — тоже своими колонками (#258)
+      ['Покупка', l => amt(l.buyCcy, l.buyAmount), null, ['Покупка, mm в вал.', 'Вал покупки'], l => [amtCsv(l.buyAmount), l.buyCcy || '']],
+      ['Продажа', l => amt(l.sellCcy, l.sellAmount), null, ['Продажа, mm в вал.', 'Вал продажи'], l => [amtCsv(l.sellAmount), l.sellCcy || '']],
+      ['Курс сделки', l => rate(l.contractRate) + (l.rateQuote ? ' <small>' + esc(l.rateQuote) + '</small>' : ''), null, ['Курс сделки', 'Котировка'], l => [rateCsv(l.contractRate), l.rateQuote || '']]]
       .concat(L.some(l => fwd(l) != null) ? [['Форвард', l => rate(fwd(l))]] : [])
       .concat(any('points') ? [['Пойнты', l => l.points == null ? '—' : f.s(l.points, 4)]] : [])
-      .concat(any('settlement') ? [['Расчёт', l => esc(SET[l.settlement] || l.settlement || '—') + (l.settlementCcy ? ' <small>в ' + esc(l.settlementCcy) + '</small>' : '')]] : [])
-      .concat(any('fixingDate') ? [['Фиксинг', l => l.fixingDate ? f.date(l.fixingDate) + (l.fixingSource ? ' <small>' + esc(l.fixingSource) + '</small>' : '') + (l.fixingRate != null ? ' <small>' + rate(l.fixingRate) + '</small>' : '') : '—']] : [])
+      .concat(any('settlement') ? [['Расчёт', l => esc(SET[l.settlement] || l.settlement || '—') + (l.settlementCcy ? ' <small>в ' + esc(l.settlementCcy) + '</small>' : ''), null,
+        ['Расчёт', 'Вал расчёта'], l => [SET[l.settlement] || l.settlement || '', l.settlementCcy || '']]] : [])
+      .concat(any('fixingDate') ? [['Фиксинг', l => l.fixingDate ? f.date(l.fixingDate) + (l.fixingSource ? ' <small>' + esc(l.fixingSource) + '</small>' : '') + (l.fixingRate != null ? ' <small>' + rate(l.fixingRate) + '</small>' : '') : '—', l => l.fixingDate,
+        ['Фиксинг', 'Источник фиксинга', 'Курс фиксинга'], l => [l.fixingDate ? f.date(l.fixingDate) : '', l.fixingSource || '', rateCsv(l.fixingRate)]]] : [])
       .concat(any('paymentDate') ? [['Выплата', l => l.paymentDate ? f.date(l.paymentDate) : '—', l => l.paymentDate]] : []);
-    return '<div class="k-tbl-wrap"><table class="k-tbl k-compact k-legs"><thead><tr>' + cols.map(c => '<th' + (c[0] === 'Нога' || c[0] === 'Расчёт' ? '' : ' class="n"') + '>' + c[0] + '</th>').join('') + '</tr></thead><tbody>' +
-      L.map(l => '<tr>' + cols.map(c => '<td' + (c[0] === 'Нога' || c[0] === 'Расчёт' ? '' : ' class="n"') + (c[2] && c[2](l) ? ' data-date="' + esc(c[2](l)) + '"' : '') + '>' + c[1](l) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>';
+    return '<div class="k-tbl-wrap"><table class="k-tbl k-compact k-legs"><thead><tr>' + cols.map(c => '<th' + (c[0] === 'Нога' || c[0] === 'Расчёт' ? '' : ' class="n"') + (c[3] ? ' data-csv="' + esc(c[3].join('|')) + '"' : '') + '>' + c[0] + '</th>').join('') + '</tr></thead><tbody>' +
+      L.map(l => '<tr>' + cols.map(c => '<td' + (c[0] === 'Нога' || c[0] === 'Расчёт' ? '' : ' class="n"') + (c[2] && c[2](l) ? ' data-date="' + esc(c[2](l)) + '"' : '') + (c[4] ? K.csvv(() => c[4](l)) : '') + '>' + c[1](l) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>';
   };
 
   // ---------- карточка позиции ----------
@@ -2515,7 +2649,7 @@
   // Мини-таблица: валюта на строку — сумма в валюте (mm) и эквивалент в валюте отчёта, по |эквиваленту| по убыванию,
   // один формат (1 знак, разделитель тысяч, знак цветом); строки, которые округляются до 0.0 mm, — под «+N прочих».
   // Суммы — по ногам (INSTR.fxIn: ключи fx_delta прогона; вторая валюта кросса — в своей строке).
-  K.tips.fxMini = 'Открытая валютная позиция по валютам, mm в валюте и ≈ в валюте отчёта по курсу прогона. Слагаемые: облигации — грязная MV в валюте минус валютный пассив фондирования (чистая MV + НКД при покупке; предварительно — по текущей чистой MV), без пассива (фондирование не настроено, проблема) — вся грязная MV; деривативы и FX — FX-дельта по ногам (у кросса — обе валюты); сделки переноса ОВП — их сумма. Щелчок по цифре — из каких позиций';
+  K.tips.fxMini = 'Открытая валютная позиция по валютам, mm в валюте и ≈ в валюте отчёта по курсу прогона. Слагаемые: облигации — грязная MV в валюте минус валютный пассив фондирования (грязная MV на прошлый перенос ОВП, за стоимостью дня не следует) плюс купоны дня, то есть валютный PnL с прошлого переноса; вечерний перенос уводит его в деривативную книгу (предварительно: residual прошлых дней не накапливается), без пассива (фондирование не настроено, проблема) — вся грязная MV; деривативы и FX — FX-дельта по ногам (у кросса — обе валюты); сделки переноса ОВП — их сумма. Щелчок по цифре — из каких позиций';
   K.fxRows = L => K.fxCcys(L).map(c => { const v = M.sum(L, p => INSTR.fxIn(p, c)); return { c, v, eq: v * ((M.toRepr && M.toRepr[c]) || 1) }; })
     .sort((a, b) => (Math.abs(b.eq) - Math.abs(a.eq)) || a.c.localeCompare(b.c));
   K.FX_MINOR = 0.05e6;  // меньше — 0.0 mm: в «прочих»

@@ -50,8 +50,10 @@
   const STATE = { computed: ['сверено с отчётом', 'st-ok'], no_report: ['отчёта ОВП нет', 'st-warn'], failed: ['ошибка расчёта', 'st-bad'], not_computed: ['прогон до расчёта ОВП', 'st-none'] };
   const amt = v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.s(v, 0) + '</span>';
   const scopeOf = x => x.book_id ? esc(x.book_id) + ((M.book && M.book[x.book_id] && M.book[x.book_id].name && M.book[x.book_id].name !== x.book_id) ? ' <span class="mut3">' + esc(M.book[x.book_id].name) + '</span>' : '') : 'юрлицо ' + esc(x.entity);
+  let last = null;  // последний ответ: смена формата отрицательных перерисовывает его без нового запроса (#262)
   function panel(title, note) { const p = K.h('div', 'k-panel'); p.innerHTML = '<div class="hd"><h3>' + title + '</h3><span class="sp"></span>' + (note ? '<span class="k-note">' + note + '</span>' : '') + '</div><div class="bd"></div>'; return p; }
-  function msg(t) { view.innerHTML = '<div class="k-panel"><div class="c16-msg">' + t + '</div></div>'; }
+  // сообщение вместо данных (ошибка «обновить»): сохранённый ответ сбрасывается — смена формата не нарисует его поверх
+  function msg(t) { last = null; view.innerHTML = '<div class="k-panel"><div class="c16-msg">' + t + '</div></div>'; }
 
   function load() {
     if (!server) { render(DEMO); return; }
@@ -63,6 +65,7 @@
   }
 
   function render(d) {
+    last = d;
     const C = {}; (d.components || []).forEach(c => { C[c.key] = c.name; });
     const keys = (d.components || []).map(c => c.key);
     const inRep = new Set(((d.policy || {}).report_components) || keys);
@@ -172,6 +175,8 @@
   })();
 
   K.commands && K.commands([{ label: 'ОВП: обновить', run: load }]);
+  // формат отрицательных «(1) / −1» (#153): перерисовать в новом формате, как остальные мониторы (#262)
+  K.on('numfmt', () => { if (last) render(last); });
   load();
 })();
 </script>

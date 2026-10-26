@@ -199,7 +199,7 @@ class FundingProblemOut(BaseModel):
 
 
 class FxLiabilityPosition(BaseModel):
-    """A foreign-currency bond's currency funding liability (``publish.fx_liability``, OQ-04, TDM#54)."""
+    """A foreign-currency bond's currency OCP liability (``publish.fx_liability``, OQ-04, OQ-17, TDM#54, TDM#266)."""
 
     state: Literal["computed", "none", "problem", "not_configured", "invalid_config"] = Field(
         description="computed: its FX delta is net of the liability; otherwise the FX delta is the dirty MV and "
@@ -207,25 +207,29 @@ class FxLiabilityPosition(BaseModel):
     reason: str | None = None
     ccy: str | None = None
     amount_ccy: float | None = Field(None, description="The liability, signed (a long bond: negative)")
+    reference: Literal["prev_dirty_mv", "purchase_cost", "current_dirty_mv"] | None = Field(
+        None, description="What the liability is: the dirty MV of the previous business day (the last OCP transfer), "
+                          "the purchase cost (a position new on the day), today's dirty MV (no previous day: OCP 0)")
+    reference_mv_ccy: float | None = Field(None, description="That dirty MV (or cost) in the currency, signed")
+    reference_date: str | None = Field(None, description="The previous business day, for prev_dirty_mv")
+    reference_text: str | None = None
     clean_mv_ccy: float | None = None
-    purchase_accrued_ccy: float | None = Field(None, description="The accrued paid at the purchase in the liability "
-                                                                 "(funded at a zero rate); null on a dirty base")
-    purchase_accrued_basis: str | None = Field(None, description="report / estimated_from_purchase_date / "
-                                                                 "returned_by_coupon / unknown / dirty_base")
-    basis_text: str | None = None
     accrued_ccy: float | None = None
     dirty_mv_ccy: float | None = None
-    base: str | None = None
+    coupons_ccy: float | None = Field(None, description="Coupons received on the day in the currency, in the OCP")
+    base: str | None = Field(None, description="The funding base (the rate's body, DEC01); not the liability's")
     fx_delta_gross: float | None = Field(None, description="FX delta before the liability: the dirty MV")
-    fx_delta_net: float | None = Field(None, description="The published FX delta: dirty MV + liability")
-    fx_funding: float | None = Field(None, description="FX revaluation of the D-1 liability in the PnL, RUB")
+    fx_delta_net: float | None = Field(None, description="The published FX delta (OCP): dirty MV + liability + "
+                                                         "coupons of the day, the FX PnL since the last transfer")
+    fx_funding: float | None = Field(None, description="FX revaluation of the liability held over the day (the D-1 "
+                                                       "dirty MV) in the PnL, RUB")
     fx_funding_cbr: float | None = None
     note: str | None = None
 
 
 class FxLiability(BaseModel):
-    """The currency funding liability of the run's foreign-currency bonds; ``provisional``: what the rule takes until
-    the owner answers."""
+    """The currency OCP liability of the run's foreign-currency bonds; ``provisional``: what the rule takes until the
+    data has more (the residual of past days does not accumulate)."""
 
     status: str
     text: str
@@ -256,7 +260,7 @@ class RunFunding(BaseModel):
     lines: list[FundingLineOut]
     default_rate: dict[str, Any] | None = Field(default=None, description="The market default rate of the settings in "
                                                 "force (by currency), and how many lines and positions it funded")
-    fx_liability: FxLiability | None = Field(None, description="The bonds' currency funding liability (TDM#54); "
+    fx_liability: FxLiability | None = Field(None, description="The bonds' currency OCP liability (TDM#54, #266); "
                                                                "null for a run before it")
 
 
@@ -716,3 +720,109 @@ class BondHistory(BaseModel):
     curve: str | None
     spread_to_curve_note: str | None
     series: list[BondHistoryPoint]
+
+
+# ---- the forward carry (TDM#66, ``scenario.carry``): camelCase, as the concept pages' bodies
+CarryFundingState = Literal["funded", "not_funded", "problem", "not_configured", "not_valued"]
+CarrySource = Literal["adapter", "settings", "settings_override", "default", "contract", "none"]
+
+
+class CarryPosition(BaseModel):
+    """One position's carry to the horizon, RUB, signed. ``carry = coupon + pull + rolldown`` (core
+    ``horizon_portfolio``, the spread held, the curves static); null with ``code`` when there is no forecast."""
+
+    positionId: str
+    bookId: str
+    entity: str | None
+    secid: str | None
+    ccy: str | None
+    kind: str | None = Field(description="Instrument kind of the risk table (``concepts.instr_kind``)")
+    quality: str | None
+    carry: float | None = Field(description="The whole change of value to the horizon (coupons received + the "
+                                "change of the dirty price, the curves carried): coupon + pull + rolldown (core "
+                                "horizon_pnl_rub) + spreadRoll; the screen's one «Кэрри» column")
+    coupon: float | None = Field(description="Coupons received + the change of the accrued coupon to the horizon")
+    pull: float | None = Field(description="The rest of core's carry_rub: the clean price's drift on today's forwards "
+                               "at the held spread (the pull to par)")
+    rolldown: float | None = Field(description="Core's rolldown_rub: the curve keeping its shape")
+    funding: float | None = Field(description="Funding over (run date, horizon], RUB (negative: a cost); 0 when the "
+                                  "position is not funded on its MV, null when unknown or not configured")
+    net: float | None = Field(description="carry + funding; null while either is")
+    fundingState: CarryFundingState
+    fundingSource: CarrySource = Field(description="The rule that priced the funding (the line's rule_source, "
+                                       "TDM#237): adapter, settings, settings_override, default (the settings' "
+                                       "market default rate), contract (an HTM lot's own rate); none without a line")
+    fundingRate: str | None = None
+    fundingRuleId: str | None = Field(None, description="The rule's id (the line's rule_id)")
+    fundingNote: str | None = None
+    spreadRoll: float | None = Field(None, description="spread=curve: CS01 x spreadRollBp (first order), included in "
+                                     "carry; null when the spread is held (spreadCurve says why) or spread=held")
+    spreadRollBp: float | None = Field(None, description="The spread's roll along its peers' curve to the horizon, bp: "
+                                       "curve(tenor at the horizon) - curve(tenor now)")
+    spreadCurve: str | None = Field(None, description="spread=curve: the rating grade whose peer curve it rolled on "
+                                    "(«A (для A+)»: a neighbouring grade's), or why the spread is held: no_rating, "
+                                    "no_peer_curve, ofz_held, floater_held, not_rub, redeemed, no_cs01, no_quote, "
+                                    "not_covered")
+    carryMethod: Literal["core", "redeemed"] | None = Field(None, description="core: core's horizon_portfolio; "
+                                                            "redeemed: the bond's last flow is paid by the horizon, "
+                                                            "carried as cash (received - the start's dirty PV, no "
+                                                            "roll-down); null without a forecast")
+    code: str | None = Field(description="Why there is no carry forecast: the quality, not_a_bond, base_mismatch, "
+                             "core_<code>; null when covered")
+    detail: str | None = None
+
+
+class CarrySums(BaseModel):
+    carry: float | None
+    coupon: float | None
+    pull: float | None
+    rolldown: float | None
+    spreadRoll: float | None
+    funding: float | None = Field(description="All of the group's funding: its positions' and its lines without a "
+                                  "position (fundingBookLevel)")
+    fundingNoCarry: float | None = Field(description="The part of funding of positions without a carry forecast")
+    fundingBookLevel: float
+    net: float | None = Field(description="carry + funding; null while either is")
+    nPositions: int
+    nCovered: int
+    nNotCovered: int
+    nFunded: int
+    nFundingMissing: int
+
+
+class CarryMeeting(BaseModel):
+    date: date
+    effective: date
+    estimated: bool
+    stepBp: float = Field(description="The key-rate step applied from the effective date (0 with ks=flat)")
+
+
+class CarryOut(BaseModel):
+    """The forward carry of a run to a horizon (TDM#66, ``scenario.carry``): «Кэрри» (coupon, pull, roll-down) and
+    «Фондирование» apart, «Нетто» their sum (TDM#168), per position and by book, entity, currency and kind."""
+
+    method: str
+    runId: int
+    asOf: date
+    horizonDate: date
+    days: int
+    reportingCcy: str
+    ks: Literal["flat", "steps"]
+    spread: Literal["held", "curve"]
+    spreadCurves: list[dict[str, Any]] = Field(description="spread=curve: the peer curves by rating grade (grade, "
+                                               "issues, points [tenor years, median G-spread bp])")
+    meetings: list[CarryMeeting] = Field(description="The CBR meetings that take effect in (asOf, horizonDate]")
+    keyRatePath: list[dict[str, Any]] = Field(description="The key rate from each date on, %: the run date's, then "
+                                              "after each step (ks=steps)")
+    fundingStatus: Literal["computed", "not_configured", "invalid_config", "failed"]
+    fundingText: str
+    positions: list[CarryPosition]
+    totals: CarrySums
+    byBook: dict[str, CarrySums]
+    byEntity: dict[str, CarrySums]
+    byCcy: dict[str, CarrySums]
+    byKind: dict[str, CarrySums]
+    fundingBookLevel: list[dict[str, Any]] = Field(description="Funding lines without a position (cash balances)")
+    fundingProblems: list[dict[str, Any]]
+    provisional: list[str] = Field(description="Funding policy fields at the engine's provisional default")
+    notes: list[str] = Field(description="The assumptions of the forecast")

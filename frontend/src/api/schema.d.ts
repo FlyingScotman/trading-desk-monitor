@@ -510,6 +510,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/concepts/carry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Concepts Carry
+         * @description The forward carry of a run to a horizon (TDM#66, ``scenario.carry``): per position core's horizon carry (coupon, pull, roll-down; the spread held, the curves static) and the funding of the period apart (TDM#168), net their sum; totals by book, entity, currency and kind. Funding not configured: null, not 0
+         */
+        get: operations["concepts_carry_api_v1_concepts_carry_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/autopilot/status": {
         parameters: {
             query?: never;
@@ -1024,6 +1044,268 @@ export interface components {
             problems: number;
             write_off: components["schemas"]["FundingWriteOff"] | null;
         };
+        /** CarryMeeting */
+        CarryMeeting: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /**
+             * Effective
+             * Format: date
+             */
+            effective: string;
+            /** Estimated */
+            estimated: boolean;
+            /**
+             * Stepbp
+             * @description The key-rate step applied from the effective date (0 with ks=flat)
+             */
+            stepBp: number;
+        };
+        /**
+         * CarryOut
+         * @description The forward carry of a run to a horizon (TDM#66, ``scenario.carry``): «Кэрри» (coupon, pull, roll-down) and
+         *     «Фондирование» apart, «Нетто» their sum (TDM#168), per position and by book, entity, currency and kind.
+         */
+        CarryOut: {
+            /** Method */
+            method: string;
+            /** Runid */
+            runId: number;
+            /**
+             * Asof
+             * Format: date
+             */
+            asOf: string;
+            /**
+             * Horizondate
+             * Format: date
+             */
+            horizonDate: string;
+            /** Days */
+            days: number;
+            /** Reportingccy */
+            reportingCcy: string;
+            /**
+             * Ks
+             * @enum {string}
+             */
+            ks: "flat" | "steps";
+            /**
+             * Spread
+             * @enum {string}
+             */
+            spread: "held" | "curve";
+            /**
+             * Spreadcurves
+             * @description spread=curve: the peer curves by rating grade (grade, issues, points [tenor years, median G-spread bp])
+             */
+            spreadCurves: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Meetings
+             * @description The CBR meetings that take effect in (asOf, horizonDate]
+             */
+            meetings: components["schemas"]["CarryMeeting"][];
+            /**
+             * Keyratepath
+             * @description The key rate from each date on, %: the run date's, then after each step (ks=steps)
+             */
+            keyRatePath: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Fundingstatus
+             * @enum {string}
+             */
+            fundingStatus: "computed" | "not_configured" | "invalid_config" | "failed";
+            /** Fundingtext */
+            fundingText: string;
+            /** Positions */
+            positions: components["schemas"]["CarryPosition"][];
+            totals: components["schemas"]["CarrySums"];
+            /** Bybook */
+            byBook: {
+                [key: string]: components["schemas"]["CarrySums"];
+            };
+            /** Byentity */
+            byEntity: {
+                [key: string]: components["schemas"]["CarrySums"];
+            };
+            /** Byccy */
+            byCcy: {
+                [key: string]: components["schemas"]["CarrySums"];
+            };
+            /** Bykind */
+            byKind: {
+                [key: string]: components["schemas"]["CarrySums"];
+            };
+            /**
+             * Fundingbooklevel
+             * @description Funding lines without a position (cash balances)
+             */
+            fundingBookLevel: {
+                [key: string]: unknown;
+            }[];
+            /** Fundingproblems */
+            fundingProblems: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Provisional
+             * @description Funding policy fields at the engine's provisional default
+             */
+            provisional: string[];
+            /**
+             * Notes
+             * @description The assumptions of the forecast
+             */
+            notes: string[];
+        };
+        /**
+         * CarryPosition
+         * @description One position's carry to the horizon, RUB, signed. ``carry = coupon + pull + rolldown`` (core
+         *     ``horizon_portfolio``, the spread held, the curves static); null with ``code`` when there is no forecast.
+         */
+        CarryPosition: {
+            /** Positionid */
+            positionId: string;
+            /** Bookid */
+            bookId: string;
+            /** Entity */
+            entity: string | null;
+            /** Secid */
+            secid: string | null;
+            /** Ccy */
+            ccy: string | null;
+            /**
+             * Kind
+             * @description Instrument kind of the risk table (``concepts.instr_kind``)
+             */
+            kind: string | null;
+            /** Quality */
+            quality: string | null;
+            /**
+             * Carry
+             * @description The whole change of value to the horizon (coupons received + the change of the dirty price, the curves carried): coupon + pull + rolldown (core horizon_pnl_rub) + spreadRoll; the screen's one «Кэрри» column
+             */
+            carry: number | null;
+            /**
+             * Coupon
+             * @description Coupons received + the change of the accrued coupon to the horizon
+             */
+            coupon: number | null;
+            /**
+             * Pull
+             * @description The rest of core's carry_rub: the clean price's drift on today's forwards at the held spread (the pull to par)
+             */
+            pull: number | null;
+            /**
+             * Rolldown
+             * @description Core's rolldown_rub: the curve keeping its shape
+             */
+            rolldown: number | null;
+            /**
+             * Funding
+             * @description Funding over (run date, horizon], RUB (negative: a cost); 0 when the position is not funded on its MV, null when unknown or not configured
+             */
+            funding: number | null;
+            /**
+             * Net
+             * @description carry + funding; null while either is
+             */
+            net: number | null;
+            /**
+             * Fundingstate
+             * @enum {string}
+             */
+            fundingState: "funded" | "not_funded" | "problem" | "not_configured" | "not_valued";
+            /**
+             * Fundingsource
+             * @description The rule that priced the funding (the line's rule_source, TDM#237): adapter, settings, settings_override, default (the settings' market default rate), contract (an HTM lot's own rate); none without a line
+             * @enum {string}
+             */
+            fundingSource: "adapter" | "settings" | "settings_override" | "default" | "contract" | "none";
+            /** Fundingrate */
+            fundingRate?: string | null;
+            /**
+             * Fundingruleid
+             * @description The rule's id (the line's rule_id)
+             */
+            fundingRuleId?: string | null;
+            /** Fundingnote */
+            fundingNote?: string | null;
+            /**
+             * Spreadroll
+             * @description spread=curve: CS01 x spreadRollBp (first order), included in carry; null when the spread is held (spreadCurve says why) or spread=held
+             */
+            spreadRoll?: number | null;
+            /**
+             * Spreadrollbp
+             * @description The spread's roll along its peers' curve to the horizon, bp: curve(tenor at the horizon) - curve(tenor now)
+             */
+            spreadRollBp?: number | null;
+            /**
+             * Spreadcurve
+             * @description spread=curve: the rating grade whose peer curve it rolled on («A (для A+)»: a neighbouring grade's), or why the spread is held: no_rating, no_peer_curve, ofz_held, floater_held, not_rub, redeemed, no_cs01, no_quote, not_covered
+             */
+            spreadCurve?: string | null;
+            /**
+             * Carrymethod
+             * @description core: core's horizon_portfolio; redeemed: the bond's last flow is paid by the horizon, carried as cash (received - the start's dirty PV, no roll-down); null without a forecast
+             */
+            carryMethod?: ("core" | "redeemed") | null;
+            /**
+             * Code
+             * @description Why there is no carry forecast: the quality, not_a_bond, base_mismatch, core_<code>; null when covered
+             */
+            code: string | null;
+            /** Detail */
+            detail?: string | null;
+        };
+        /** CarrySums */
+        CarrySums: {
+            /** Carry */
+            carry: number | null;
+            /** Coupon */
+            coupon: number | null;
+            /** Pull */
+            pull: number | null;
+            /** Rolldown */
+            rolldown: number | null;
+            /** Spreadroll */
+            spreadRoll: number | null;
+            /**
+             * Funding
+             * @description All of the group's funding: its positions' and its lines without a position (fundingBookLevel)
+             */
+            funding: number | null;
+            /**
+             * Fundingnocarry
+             * @description The part of funding of positions without a carry forecast
+             */
+            fundingNoCarry: number | null;
+            /** Fundingbooklevel */
+            fundingBookLevel: number;
+            /**
+             * Net
+             * @description carry + funding; null while either is
+             */
+            net: number | null;
+            /** Npositions */
+            nPositions: number;
+            /** Ncovered */
+            nCovered: number;
+            /** Nnotcovered */
+            nNotCovered: number;
+            /** Nfunded */
+            nFunded: number;
+            /** Nfundingmissing */
+            nFundingMissing: number;
+        };
         /** ErrorOut */
         ErrorOut: {
             /**
@@ -1188,8 +1470,8 @@ export interface components {
         };
         /**
          * FxLiability
-         * @description The currency funding liability of the run's foreign-currency bonds; ``provisional``: what the rule takes until
-         *     the owner answers.
+         * @description The currency OCP liability of the run's foreign-currency bonds; ``provisional``: what the rule takes until the
+         *     data has more (the residual of past days does not accumulate).
          */
         FxLiability: {
             /** Status */
@@ -1216,7 +1498,7 @@ export interface components {
         };
         /**
          * FxLiabilityPosition
-         * @description A foreign-currency bond's currency funding liability (``publish.fx_liability``, OQ-04, TDM#54).
+         * @description A foreign-currency bond's currency OCP liability (``publish.fx_liability``, OQ-04, OQ-17, TDM#54, TDM#266).
          */
         FxLiabilityPosition: {
             /**
@@ -1234,25 +1516,38 @@ export interface components {
              * @description The liability, signed (a long bond: negative)
              */
             amount_ccy?: number | null;
+            /**
+             * Reference
+             * @description What the liability is: the dirty MV of the previous business day (the last OCP transfer), the purchase cost (a position new on the day), today's dirty MV (no previous day: OCP 0)
+             */
+            reference?: ("prev_dirty_mv" | "purchase_cost" | "current_dirty_mv") | null;
+            /**
+             * Reference Mv Ccy
+             * @description That dirty MV (or cost) in the currency, signed
+             */
+            reference_mv_ccy?: number | null;
+            /**
+             * Reference Date
+             * @description The previous business day, for prev_dirty_mv
+             */
+            reference_date?: string | null;
+            /** Reference Text */
+            reference_text?: string | null;
             /** Clean Mv Ccy */
             clean_mv_ccy?: number | null;
-            /**
-             * Purchase Accrued Ccy
-             * @description The accrued paid at the purchase in the liability (funded at a zero rate); null on a dirty base
-             */
-            purchase_accrued_ccy?: number | null;
-            /**
-             * Purchase Accrued Basis
-             * @description report / estimated_from_purchase_date / returned_by_coupon / unknown / dirty_base
-             */
-            purchase_accrued_basis?: string | null;
-            /** Basis Text */
-            basis_text?: string | null;
             /** Accrued Ccy */
             accrued_ccy?: number | null;
             /** Dirty Mv Ccy */
             dirty_mv_ccy?: number | null;
-            /** Base */
+            /**
+             * Coupons Ccy
+             * @description Coupons received on the day in the currency, in the OCP
+             */
+            coupons_ccy?: number | null;
+            /**
+             * Base
+             * @description The funding base (the rate's body, DEC01); not the liability's
+             */
             base?: string | null;
             /**
              * Fx Delta Gross
@@ -1261,12 +1556,12 @@ export interface components {
             fx_delta_gross?: number | null;
             /**
              * Fx Delta Net
-             * @description The published FX delta: dirty MV + liability
+             * @description The published FX delta (OCP): dirty MV + liability + coupons of the day, the FX PnL since the last transfer
              */
             fx_delta_net?: number | null;
             /**
              * Fx Funding
-             * @description FX revaluation of the D-1 liability in the PnL, RUB
+             * @description FX revaluation of the liability held over the day (the D-1 dirty MV) in the PnL, RUB
              */
             fx_funding?: number | null;
             /** Fx Funding Cbr */
@@ -2371,7 +2666,7 @@ export interface components {
             default_rate?: {
                 [key: string]: unknown;
             } | null;
-            /** @description The bonds' currency funding liability (TDM#54); null for a run before it */
+            /** @description The bonds' currency OCP liability (TDM#54, #266); null for a run before it */
             fx_liability?: components["schemas"]["FxLiability"] | null;
         };
         /** RunHeader */
@@ -4261,6 +4556,65 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    concepts_carry_api_v1_concepts_carry_get: {
+        parameters: {
+            query?: {
+                /** @description run_id; default: the run shown (as_of's, else the newest), as the concept pages */
+                run?: number | null;
+                as_of?: string | null;
+                /** @description 1M, 3M, 6M, 1Y (months after the run date) or an ISO date after it */
+                horizon?: string;
+                /** @description the key-rate path of the funding: flat (every index at the run date's value) or steps (a step per CBR meeting) */
+                ks?: "flat" | "steps";
+                /** @description ks=steps: bp per CBR meeting after the run date, comma-separated, in meeting order (missing: 0) */
+                steps?: string | null;
+                /** @description held: each bond's spread held; curve: it rolls along its rating grade's median G-spread curve (spreadRoll, in carry) */
+                spread?: "held" | "curve";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CarryOut"];
                 };
             };
             /** @description Not Found */
