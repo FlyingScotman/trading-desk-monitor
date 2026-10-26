@@ -207,15 +207,21 @@ test('нетто группы: нет позиций с прогнозом ил�
   const usd = C.sums(rows.filter(r => r.ccy === 'USD'), true);
   assert.strictEqual(usd.nCovered, 0); assert.strictEqual(usd.carry, null); assert.strictEqual(usd.net, null);
   assert.strictEqual(d.byCcy.USD.net, null);
-  // позиция без прогноза с фондированием null (problem): в списке для баннера, нетто — число (B1)
+  // позиция без прогноза с фондированием null (problem): в списке для баннера, нетто «—» (B1 строгое)
   const d2 = JSON.parse(JSON.stringify(M.forwardCarryDemo({})));
   d2.positions.forEach(p => { if (p.bookId === 'IC-BND') Object.assign(p, { funding: -1000, net: p.carry == null ? null : p.carry - 1000, fundingState: 'funded' }); });
   const nc = d2.positions.find(p => p.carry == null && p.funding != null);
   Object.assign(nc, { funding: null, fundingState: 'problem', fundingNote: 'нет правила для строки' });
   const s2 = C.sums(model(d2), true);
   assert.strictEqual(s2.nFundingMissing, 0); assert.strictEqual(s2.nFundingMissingNoCarry, 1);
-  assert.ok(s2.net != null, 'правило сервера B1: null-фондирование позиции без прогноза нетто не обнуляет (считается 0)');
-  near(s2.net, s2.carry + s2.fundingCovered + s2.fundingNoCarry + s2.fundingCash, 'тождество');
+  // B1 строгое (решение по #286): fundingNoCarry, «без прогноза кэрри», всё фондирование и нетто — null; netKnown — частичная сумма
+  assert.strictEqual(s2.net, null); assert.strictEqual(s2.fundingNoCarry, null); assert.strictEqual(s2.fundingRest, null); assert.strictEqual(s2.funding, null);
+  assert.ok(s2.netKnown != null);
+  near(s2.netKnown, model(d2).filter(r => r.covered && r.funding != null).reduce((a, r) => a + r.carry + r.funding, 0), 'netKnown');
+  // итоги сервера без счётчика таких позиций: строгое правило — по строкам на клиенте
+  const t2 = Object.assign({}, d2.totals, { fundingNoCarry: -5, fundingTotal: -10, net: 7 });
+  const w2 = C.withServer(C.sums(model(d2), true), t2, 1);
+  assert.strictEqual(w2.net, null); assert.strictEqual(w2.fundingNoCarry, null);
   assert.strictEqual(s2.fundingMissing.length, 1); assert.strictEqual(s2.fundingMissing[0].id, nc.positionId);
   // без пропусков: группы по книгам — как byBook сервера (демо считает его как assemble); с пропусками — нетто «—»
   const d3 = JSON.parse(JSON.stringify(M.forwardCarryDemo({ horizon: '6M' })));

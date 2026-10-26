@@ -185,9 +185,10 @@
     } else {
       s.fundingRest = s.fundingNoCarry + s.fundingCash;  // «фондирование без прогноза кэрри»
       s.funding = s.fundingCovered + s.fundingRest;
-      // нетто — правило сервера B1 (#297): «—», если в группе нет позиций с прогнозом или у позиции с прогнозом
-      // фондирования нет; фондирование null у позиции без прогноза считается 0 (её видно в баннере)
-      s.net = s.nFundingMissing || !s.nCovered ? null : s.carry + s.funding;
+      // нетто — правило B1, строгое (решение по #286): «—», если в группе нет позиций с прогнозом или у любой её
+      // позиции фондирования нет; у позиции без прогноза null — и «фондирование без прогноза кэрри» группы «—»
+      C.strictNoCarry(s);
+      s.net = s.nFundingMissing || s.nFundingMissingNoCarry || !s.nCovered ? null : s.carry + s.funding;
     }
     if (!s.nCovered && s.netKnown === 0) s.netKnown = null;
     s.carryDv01 = C.perDv01(s.carryFix, s.nFix ? s.dv01 : null);
@@ -197,12 +198,18 @@
 
   // итоги группы с сервера (новый формат, без клиентских фильтров): суммы — значения сервера в валюте показа;
   // кэрри/DV01 и списки для баннера остаются клиентскими (сервер суммирует DV01 всех позиций, включая флоатеры)
+  // позиция без прогноза с фондированием null: fundingNoCarry, «без прогноза кэрри», всё фондирование и нетто — null.
+  // Счётчик таких позиций сервер ещё не отдаёт (поле назовёт блок calc, #297) — считается здесь по строкам
+  C.strictNoCarry = s => {
+    if (s.nFundingMissingNoCarry) { s.fundingNoCarry = null; s.fundingRest = null; s.funding = null; s.net = null; }
+    return s;
+  };
   C.withServer = function (s, g, k) {
     if (!g || !('fundingTotal' in g)) return s;
     const m = v => v == null ? null : v * (k == null ? 1 : k);
     return Object.assign(s, { carry: m(g.carry), spreadRoll: m(g.spreadRoll), fundingCovered: m(g.funding), fundingNoCarry: m(g.fundingNoCarry),
       fundingCash: m(g.fundingBookLevel), fundingRest: g.fundingTotal == null ? null : m((g.fundingNoCarry || 0) + (g.fundingBookLevel || 0)),
-      funding: m(g.fundingTotal), net: m(g.net), netKnown: m(g.netKnown), nCovered: g.nCovered, nNotCovered: g.nNotCovered, nFundingMissing: g.nCoveredNoFunding, server: true });
+      funding: m(g.fundingTotal), net: m(g.net), netKnown: m(g.netKnown), nCovered: g.nCovered, nNotCovered: g.nNotCovered, nFundingMissing: g.nCoveredNoFunding, server: true }) && C.strictNoCarry(s);
   };
 
   // фильтр строк без позиции в модели монитора и строк остатков: те же общие фильтры, что K.list (юрлицо, деск,
