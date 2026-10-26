@@ -30,7 +30,8 @@
  *    M.funding — фондирование прогона (D.fundingStatus: состояние, итоги по книгам и юрлицам, проблемы).
  *  - свопы и РЕПО, оценённые ядром (#201): p.ratesCore — сделки (extra.swaps / extra.repos), фиксинги (extra.index_fixings),
  *    сверка с отчётом (reported_pv_rub / pv_diff_rub), provisional — quality 'assumed'; null — нет. M.indexFixings — фиксинги
- *    прогона по индексу; M.derivParallel() — лениво, /api/v1/runs/{id}/derivatives (ядро и отчёт по позициям), null — нет.
+ *    прогона по индексу; M.derivParallel() — лениво, /api/v1/runs/{id}/derivatives (ядро и отчёт по позициям): state
+ *    'computed' / 'not_computed', 'unavailable' (status — код HTTP) — сервер не ответил; null — у прогона нет номера.
  * История позиции (M.posHistory) — синхронный запрос /api/v1/history/positions: первые две позиции по одной,
  * дальше сразу все (страницы C11, C13 просят историю всех позиций). Кроме цен рынка в ней номинал, DV01, CS01,
  * базис, MV и DV01 по кривым каждого прогона (M.histSource = 'runs': история риска — настоящая, не «номинал ×

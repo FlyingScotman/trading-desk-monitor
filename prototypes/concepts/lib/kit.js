@@ -1132,7 +1132,8 @@
   //        groupable:[уровни] — группировка по желанию (переключатель «плоская / валюта → эмитент»); по умолчанию таблица плоская (R37),
   //        колонка: date:true — колонка-дата (в CSV дата из ISO-значения, без подписей экрана),
   //        csvFmt(v, r) — значение для CSV, если экранное fmt добавляет значки и метки (иначе — fmt),
-  //        sumNeutral — итог без цвета знака (расхождение, а не прибыль/убыток),
+  //        sumNeutral — итог без цвета знака (расхождение, а не прибыль/убыток), footCount(rows) — подпись числа строк «Итого»
+  //        (например «7 из 9», когда итоги считаются не по всем строкам),
   //        viewKey — стабильный ключ раскладки латиницей, он же основа имени CSV (без него — страница + id, K.tableKey), title — название в CSV, fileName — основа имени файла CSV (латиницей)}
   K.table = function (el, opts) {
     const st = { sort: opts.sort ? opts.sort.slice() : [], q: '', collapsed: {}, groupSort: false, filters: {}, grouped: false };
@@ -1202,7 +1203,7 @@
         const tot = list.reduce((s, r) => s + fn(r), 0);
         const fm = c.sumFmt || c.fmt || (v => f.n(v));
         if (c.drill !== false && list.length && list[0].searchText) return '<td class="n">' + K.d({ title: (c.drillTitle || c.label.replace(/<[^>]+>/g, '')), unit: c.unit, fmt: v => fm(v, {}), rows: list.map(p => ({ p, v: fn(p) })) }, fm(tot, {})) + '</td>';
-        return '<td class="n ' + (c.sumNeutral ? '' : f.cls(tot)) + '">' + fm(tot, {}) + '</td>';
+        return '<td class="n ' + (c.sumNeutral ? '" style="color:var(--fg)' : f.cls(tot)) + '">' + fm(tot, {}) + '</td>';
       };
       let body = '';
       const groups = opts.groupBy || (st.grouped && opts.groupable) || [];
@@ -1226,7 +1227,7 @@
         });
       }
       emit(rows, 0, '');
-      const foot = opts.footer === false ? '' : '<tfoot><tr>' + (opts.stripe ? '<td></td>' : '') + C.map((c, i) => i === li ? '<td>Итого <span class="mut3" style="font-weight:400">' + rows.length + '</span></td>' : sumCell(c, rows)).join('') + '</tr></tfoot>';
+      const foot = opts.footer === false ? '' : '<tfoot><tr>' + (opts.stripe ? '<td></td>' : '') + C.map((c, i) => i === li ? '<td>Итого <span class="mut3" style="font-weight:400">' + (opts.footCount ? esc(opts.footCount(rows)) : rows.length) + '</span></td>' : sumCell(c, rows)).join('') + '</tr></tfoot>';
       wrap.innerHTML = '<table class="k-tbl' + tw + '">' + cg + head + '<tbody>' + (body || '<tr><td colspan="' + nCols + '" class="k-empty">ничего не найдено</td></tr>') + '</tbody>' + foot + '</table>';
       wrap.querySelectorAll('th .k-flt').forEach(ic => ic.onclick = e => {
         e.stopPropagation();
@@ -1619,8 +1620,11 @@
     const coreOnly = k => r => r.src === 'ядро' ? r[k] || 0 : 0;
     const mcol = (key, label, title, sum) => ({ key, label, num: true, unit: 'mm ₽', sum: sum || true, title, fmt: v => rcMoney(v), cls: v => f.cls(v) });
     const dvcol = (key, label, title) => ({ key, label, num: true, unit: 'тыс ₽/бп', sum: coreOnly(key), title, fmt: v => f.dv(v), cls: v => f.cls(v) });
-    const diffStyle = (v, r) => r && r.over ? 'color:var(--warn);font-weight:600' : '';
-    K.table(pos, { viewKey: 'c02-rates-core', title: 'Свопы и РЕПО: оценка ядром и из отчёта', search: false, rows,
+    // разница — нейтральным цветом и в режиме «(1)» (K.accMark красит скобки по знаку): явный цвет ячейки
+    const diffStyle = (v, r) => r && r.over ? 'color:var(--warn);font-weight:600' : 'color:var(--fg)';
+    const posCount = rs => { const nb = rs.filter(r => r.diff != null).length, nc = rs.filter(r => r.src === 'ядро').length;
+      return nb === rs.length && nc === rs.length ? String(rs.length) : nb === nc ? nb + ' из ' + rs.length : 'PV ' + nb + ', DV01 ' + nc + ' из ' + rs.length; };
+    K.table(pos, { viewKey: 'c02-rates-core', title: 'Свопы и РЕПО: оценка ядром и из отчёта', search: false, rows, footCount: posCount,
       columns: [
         { key: 'name', label: 'Позиция', fmt: (v, r) => esc(v) + (r && r.flag ? K.rcProv(r.flag, r.assumptions) : ''), csvFmt: v => esc(v) },
         { key: 'book', label: 'Книга' },
@@ -1636,7 +1640,8 @@
         { key: 'src', label: 'Оценка', fmt: (v, r) => r && r.reason ? '<span class="mut" title="' + esc(r.reason) + '">по отчёту: ' + esc(K.rcReason(r.reason)) + '</span>' : esc(v || '') },
         { key: 'marks', label: 'Отметки', title: 'выше допуска; предварительно (условия с допущениями); фикс. перенесён (объявленный неопубликованный день)', fmt: v => v ? '<span class="mut">' + esc(v) + '</span>' : '' },
       ] });
-    K.table(trd, { viewKey: 'c02-rates-trades', title: 'Свопы и РЕПО: сделки', search: false, rows: trades,
+    const trdCount = rs => { const nb = rs.filter(r => r.pv != null && r.reportedPv != null).length; return nb === rs.length ? String(nb) : nb + ' из ' + rs.length; };
+    K.table(trd, { viewKey: 'c02-rates-trades', title: 'Свопы и РЕПО: сделки', search: false, rows: trades, footCount: trdCount,
       columns: [
         { key: 'tradeId', label: 'Сделка', fmt: (v, r) => esc(v || '—') + (r && r.flag ? K.rcProv(r.flag, r.assumptions) : ''), csvFmt: v => esc(v || '—') },
         { key: 'pos', label: 'Позиция' },
@@ -1650,8 +1655,8 @@
         { key: 'start', label: 'Начало', date: true, fmt: v => f.date(v) },
         { key: 'end', label: 'Окончание', date: true, fmt: v => f.date(v) },
         mcol('pv', 'Ядро', 'PV сделки по ядру, mm ₽; итог — по сделкам с обеими оценками', r => r.pv != null && r.reportedPv != null ? r.pv : 0),
-        { key: 'reportedPv', label: 'Отчёт', num: true, unit: 'mm ₽', sum: r => r.pv != null && r.reportedPv != null ? r.reportedPv : 0, title: 'PV сделки из отчёта (pv_rub условий сделки), mm ₽; итог — по сделкам с обеими оценками', fmt: v => rcMoney(v) },
-        { key: 'diff', label: 'Ядро − отчёт', num: true, unit: 'mm ₽', sum: true, sumNeutral: true, title: 'Разница PV ядра и отчёта по сделке, mm ₽ (расхождение оценок, не PnL)', fmt: v => rcMoney(v) },
+        { key: 'reportedPv', label: 'Отчёт', num: true, unit: 'mm ₽', sum: r => r.pv != null && r.reportedPv != null ? r.reportedPv : 0, title: 'PV сделки из отчёта (pv_rub условий сделки), mm ₽; итог — по сделкам с обеими оценками', fmt: v => rcMoney(v), cls: v => f.cls(v) },
+        { key: 'diff', label: 'Ядро − отчёт', num: true, unit: 'mm ₽', sum: true, sumNeutral: true, title: 'Разница PV ядра и отчёта по сделке, mm ₽ (расхождение оценок, не PnL)', fmt: v => rcMoney(v), style: () => 'color:var(--fg)' },
         { key: 'marks', label: 'Отметки', fmt: v => v ? '<span class="mut">' + esc(v) + '</span>' : '' },
       ] });
     return R;

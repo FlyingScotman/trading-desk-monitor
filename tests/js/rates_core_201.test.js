@@ -222,6 +222,12 @@ t('ревью: итоги PV по строкам с обеими оценкам�
   // «Итого» таблицы — те же суммы: ядро (1.50), отчёт (1.50), разница 0.00, DV01 RUONIA 18 (без CCS)
   const foot = (out.match(/<tfoot>[\s\S]*?<\/tfoot>/) || [''])[0];
   assert.ok(/>\(1\.50\)<\/td><td[^>]*>\(1\.50\)<\/td><td[^>]*>0\.00<\/td><td[^>]*>18<\/td>/.test(foot), foot);
+  // «Итого» говорит, по скольким строкам посчитан: PV — 2 строки с обеими оценками, DV01 — 3 строки ядра из 4
+  assert.ok(foot.includes('Итого <span class="mut3" style="font-weight:400">PV 2, DV01 3 из 4</span>'), foot);
+  const tfoot2 = (out.match(/<tfoot>[\s\S]*?<\/tfoot>/g) || [])[1] || '';
+  assert.ok(tfoot2.includes('>2 из 3</span>'), tfoot2);
+  // ячейки и итог разницы — явным нейтральным цветом (иначе «(1)» покрасил бы скобки красным)
+  assert.ok(/style="color:var\(--fg\)">\(0\.10\)/.test(out) && /style="color:var\(--fg\)">0\.00/.test(foot), 'нейтральный цвет');
   // разница — нейтральная: в итоге без класса знака
   assert.ok(!/class="n (pos|neg)"[^<]*>0\.00/.test(out));
 });
