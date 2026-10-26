@@ -326,3 +326,16 @@ def test_no_pnl_on_par_proxy_flag_on_model_price(ctx, exact):
     assert c.pnl.total == pytest.approx(Q * 1.0 + c.pnl.received_rub)
     assert c.pnl.extra()["flag"] == "price discovery: model -> market"
     assert "flag" not in run(mv0, mv).pnl.extra()
+
+
+@pytest.mark.parametrize("code", ["RUR", "SUR", "rur"])
+def test_a_bond_in_rur_or_sur_without_a_face_unit_is_rub(ctx, exact, code):
+    """TDM#250: the fallback ladder takes a bond's currency through ``bond_currency`` (RUR/SUR are RUB): a bond quoted in
+    MOEX's ``RUR`` or ``SUR`` without a face unit is valued in RUB at rate 1, not as a foreign bond without an FX
+    rate."""
+    o = exact[RZD]
+    t = replace(o.terms, currency=code, face_unit=None)
+    v = approximate(ctx, Outcome(o.secid, t, o.quote, reason="test"), Q, _fb(ctx))
+    ref = approximate(ctx, Outcome(o.secid, o.terms, o.quote, reason="test"), Q, _fb(ctx))
+    assert v is not None and v.quality == ref.quality and v.fx_rate is None
+    assert v.pv_rub == pytest.approx(ref.pv_rub, rel=1e-12)

@@ -42,6 +42,7 @@ from typing import Any
 from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
 
 from ..inbox.schema import load_schema, norm_ccy
+from ..marketdata.adapter import bond_currency, ccy_code
 from ..orchestrator import EodContext, Outcome
 from ..store import PositionInputs
 from . import derivatives as dv
@@ -95,8 +96,8 @@ def _bonds(ctx: EodContext, secid: str, qty: float | None, x: dict[str, Any]) ->
     t = ctx.static.bonds[secid]
     figures: list[tuple[str, float]] = [("quantity", qty)] if qty is not None else []
     notes = []
-    unit = t.face_unit or t.currency or "RUB"
-    if x.get("ccy") and x["ccy"] != unit and (x.get("face_amount_ccy") is not None
+    unit = bond_currency(t)
+    if x.get("ccy") and ccy_code(x["ccy"]) != unit and (x.get("face_amount_ccy") is not None
                                               or x.get("face_outstanding_ccy") is not None):
         notes.append(f"face amounts in {x['ccy']}, the bond's face is in {unit}: not used")
     else:

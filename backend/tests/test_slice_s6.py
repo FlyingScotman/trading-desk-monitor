@@ -359,3 +359,25 @@ def test_exact_context_takes_the_runs_curve_risk_unit(golden):
     snaps, _, run, *_ = golden
     assert not exact._context(snaps, run, None).quote_curve_risk
     assert exact._context(snaps, {**run, "quote_curve_risk": True}, None).quote_curve_risk
+
+
+def test_fx_shock_is_net_of_the_funding_liability_in_both_scenarios(golden):
+    """TDM#249: a bond funded in its currency has its FX delta net of the liability (#248); the Taylor shocks that net
+    delta and the exact repricing adds the liability's move to the bond's (``exact.liability_pnl``), so an FX shock
+    gives the same PnL in both. A RUB bond of the golden run is given a USD liability of 1000 and that net delta."""
+    import copy
+
+    snaps, _, run, rows, reference = golden
+    rows = copy.deepcopy(rows)
+    r = next(x for x in rows if x["quality"] in REPRICED and x["secid"] and x["secid"].startswith("RU"))
+    ex = r["fact"]["extra"]
+    ex.update(fx_rate=90.0, fx_liability={"state": "computed", "ccy": "USD", "amount_ccy": -1000.0})
+    r["fact"]["fx_delta"] = {"USD": -1000.0}
+    res = {p["position_id"]: p for p in reprice_run(snaps, run, rows, reference, {"fx": {"USD": 10}})["positions"]}
+    p = res[r["position_id"]]
+    assert p["taylor"]["fx"] == pytest.approx(-1000.0 * 90.0 * 10 / 100)
+    assert p["exact"] == pytest.approx(p["taylor"]["total"], abs=1e-6)  # the RUB bond itself does not move
+    assert exact.liability_pnl(r["fact"], {"fx": {"USD": 10}}) == pytest.approx(-9000.0)
+    assert exact.liability_pnl(r["fact"], {"fx": {"CNY": 10}}) == 0.0
+    ex["fx_liability"]["state"] = "none"
+    assert exact.liability_pnl(r["fact"], {"fx": {"USD": 10}}) == 0.0
