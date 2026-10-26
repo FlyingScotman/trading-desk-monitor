@@ -727,9 +727,23 @@ CarryFundingState = Literal["funded", "not_funded", "problem", "not_configured",
 CarrySource = Literal["adapter", "settings", "settings_override", "default", "contract", "none"]
 
 
+class CarryCcyAmounts(BaseModel):
+    """A position's amounts in its own currency (``CarryPosition.inCcy``): the RUB amounts at the run's rate
+    (``fxRate``, held to the horizon); the funding the lines' own interest when they are in that currency."""
+
+    carry: float | None
+    coupon: float | None
+    pull: float | None
+    rolldown: float | None
+    spreadRoll: float | None
+    funding: float | None
+    net: float | None
+
+
 class CarryPosition(BaseModel):
-    """One position's carry to the horizon, RUB, signed. ``carry = coupon + pull + rolldown`` (core
-    ``horizon_portfolio``, the spread held, the curves static); null with ``code`` when there is no forecast."""
+    """One position's carry to the horizon, RUB, signed (``inCcy``: in its currency).
+    ``carry = coupon + pull + rolldown`` (core ``horizon_portfolio``, the curves carried), ``+ spreadRoll`` with
+    spread=curve; null with ``code`` when there is no forecast."""
 
     positionId: str
     bookId: str
@@ -748,6 +762,14 @@ class CarryPosition(BaseModel):
     funding: float | None = Field(description="Funding over (run date, horizon], RUB (negative: a cost); 0 when the "
                                   "position is not funded on its MV, null when unknown or not configured")
     net: float | None = Field(description="carry + funding; null while either is")
+    dv01: float | None = Field(None, description="The run row's DV01, RUB per bp (as the monitor shows it); null "
+                               "for a position the run did not value")
+    cs01: float | None = Field(None, description="The run row's spread risk, RUB per bp: its CS01 (credit), else its "
+                               "OFZ spread risk (ofz_spr01); for a floater the spread is its DM's")
+    fxRate: float | None = Field(None, description="RUB per unit of ccy the run used (its mv_rub / mv; 1 for RUB), "
+                                 "held to the horizon: inCcy = the RUB amounts / fxRate")
+    inCcy: CarryCcyAmounts | None = Field(None, description="carry, coupon, pull, rolldown, spreadRoll, funding, net "
+                                          "in the position's currency (ccy), beside the RUB fields")
     fundingState: CarryFundingState
     fundingSource: CarrySource = Field(description="The rule that priced the funding (the line's rule_source, "
                                        "TDM#237): adapter, settings, settings_override, default (the settings' "
@@ -773,28 +795,43 @@ class CarryPosition(BaseModel):
 
 
 class CarrySums(BaseModel):
-    carry: float | None
+    """A group's sums, RUB. ``net = carry + funding + fundingNoCarry + fundingBookLevel`` (= ``carry +
+    fundingTotal``; a null part counts 0) whenever ``net`` is not null."""
+
+    carry: float | None = Field(description="Sum over the covered positions (coupon + pull + rolldown + spreadRoll)")
     coupon: float | None
     pull: float | None
     rolldown: float | None
     spreadRoll: float | None
-    funding: float | None = Field(description="All of the group's funding: its positions' and its lines without a "
-                                  "position (fundingBookLevel)")
-    fundingNoCarry: float | None = Field(description="The part of funding of positions without a carry forecast")
-    fundingBookLevel: float
-    net: float | None = Field(description="carry + funding; null while either is")
+    dv01: float | None = Field(None, description="Sum of the positions' DV01 (every position that has one)")
+    cs01: float | None = Field(None, description="Sum of the positions' cs01 (every position that has one)")
+    funding: float | None = Field(description="Funding of the covered positions (those with a carry forecast)")
+    fundingNoCarry: float | None = Field(description="Funding of the positions without a carry forecast")
+    fundingBookLevel: float | None = Field(description="Funding lines without a position (cash balances, an "
+                                           "entity's cash): a book, an entity, a currency and the total have them; "
+                                           "null while the funding is not computed")
+    fundingTotal: float | None = Field(None, description="funding + fundingNoCarry + fundingBookLevel; null while "
+                                       "the funding is not computed")
+    net: float | None = Field(description="carry + fundingTotal; null (rule B1) while the funding is not computed, "
+                              "nothing is covered or a covered position's funding is unknown (nCoveredNoFunding)")
+    netKnown: float | None = Field(None, description="Sum of carry + funding of the positions that have both: the "
+                                   "net of what is known when net is null")
     nPositions: int
     nCovered: int
     nNotCovered: int
     nFunded: int
     nFundingMissing: int
+    nCoveredNoFunding: int = Field(0, description="Covered positions whose funding is unknown (net is then null)")
 
 
 class CarryMeeting(BaseModel):
     date: date
     effective: date
     estimated: bool
-    stepBp: float = Field(description="The key-rate step applied from the effective date (0 with ks=flat)")
+    stepBp: float = Field(description="The key-rate step requested for this meeting, bp (the steps parameter maps to "
+                          "the meetings in this order; 0 with ks=flat or none given); applied from the effective "
+                          "date when inHorizon")
+    inHorizon: bool = Field(True, description="The meeting takes effect by the horizon (its step applies)")
 
 
 class CarryOut(BaseModel):
@@ -811,7 +848,9 @@ class CarryOut(BaseModel):
     spread: Literal["held", "curve"]
     spreadCurves: list[dict[str, Any]] = Field(description="spread=curve: the peer curves by rating grade (grade, "
                                                "issues, points [tenor years, median G-spread bp])")
-    meetings: list[CarryMeeting] = Field(description="The CBR meetings that take effect in (asOf, horizonDate]")
+    meetings: list[CarryMeeting] = Field(description="The CBR meetings that take effect within a year of asOf (or to "
+                                         "the horizon when later), in order; steps map to them in this order, those "
+                                         "with inHorizon false do not apply")
     keyRatePath: list[dict[str, Any]] = Field(description="The key rate from each date on, %: the run date's, then "
                                               "after each step (ks=steps)")
     fundingStatus: Literal["computed", "not_configured", "invalid_config", "failed"]
