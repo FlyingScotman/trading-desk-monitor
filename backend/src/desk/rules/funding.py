@@ -744,7 +744,8 @@ class _Engine:
         base = self._position_checks(p)
         if base is None:
             return
-        mv, ccy = (p.mv_clean + p.purchase_accrued if base is FundingBase.MV_CLEAN else p.mv_dirty), p.ccy
+        # the body: the clean (or dirty) MV; the accrued paid at the purchase is in the liability only, at a zero rate
+        mv, ccy = (p.mv_clean if base is FundingBase.MV_CLEAN else p.mv_dirty), p.ccy
         note = ""
         if self.policy.out_of_currency is OutOfCurrency.SETTLEMENT_CCY and p.settlement_ccy \
                 and p.settlement_ccy != p.ccy:

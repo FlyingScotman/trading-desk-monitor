@@ -308,7 +308,10 @@ def _fx_funding(con: psycopg.Connection, on: date, prev: MarketView | None, mark
                 terms: Mapping[str, Any], outcomes: Mapping[str, Any], pol: F.FundingPolicy,
                 entities: Mapping[str, F.EntityType] | None, per: Mapping[str, dict[str, Any]]
                 ) -> tuple[dict[str, tuple[float, float | None]], list[str]]:
-    """position_id -> (fx_funding, fx_funding_cbr) of the foreign bonds with a flash PnL, and the notes."""
+    """position_id -> (fx_funding, fx_funding_cbr) of the foreign bonds with a flash PnL, and the notes. The D-1
+    liability is computed from the previous default run's rows on the same rule, with the accrued paid at the purchase
+    taken from ``purchase_accrued_ccy`` and ``purchase_date`` of the **D report** (``inputs.extra``: the purchase is the
+    same position's) and the D terms' coupons, as of D-1."""
     with_pnl = [r["position_id"] for r in rows if r.get("pnl") and r["position_id"] in per]
     if not with_pnl or prev is None:
         return {}, []

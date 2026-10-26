@@ -25,6 +25,7 @@ from desk.pnl.flash import FlashPnl
 from desk.publish import desk_run, fx_liability, tdm_run
 from desk.rules import funding as F
 from desk.rules import ocp as O
+from desk.rules.rate_index import FixingTable, FxTable
 from desk.settings import Settings
 from desk.valuation.positions import merge, plan
 
@@ -249,3 +250,18 @@ def test_fx_funding_of_the_run_from_the_previous_rows(monkeypatch):
     o = SimpleNamespace(pnl=SimpleNamespace(fx_rates=(80.0, 80.4)))
     out, _ = fx_liability._fx_funding(None, ON, prev, cur, rows[:1], [], inputs, {}, {"T1|USD": o}, TRADING, None, per)
     assert out["T1|USD"][0] == pytest.approx(-1e6 * 0.4)  # the rates of the position's fx_gross
+
+
+def test_purchase_accrued_is_in_the_liability_not_in_the_funding_body():
+    """The rate accrues on the clean price (DEC01); the accrued paid at the purchase is funded at a zero rate: it is in
+    the currency liability only, never in the funding body (owner's rule of 26.10.2026)."""
+    rules = F.FundingRules((F.FundingRule(ccy="USD", book_type="TRADING", fixed_rate=0.0365),))
+    p = F.FundingPosition("P", "T1", "TRADING", "ENT1", "USD", 1e6, accrued=2e4, purchase_accrued=5e3)
+    period = F.AccrualPeriod(date(2026, 10, 14), ON)
+    res = F.compute_funding(period, rules, FixingTable({}), FxTable("RUB", {"USD": {ON: 80.0}}), positions=[p],
+                            previous_positions=[p], policy=TRADING)
+    (line,) = res.lines
+    assert line.days[-1].body == -1e6  # clean MV only
+    assert line.interest == pytest.approx(-1e6 * 0.0365 / 365)  # interest on the clean MV
+    (x,), _ = F.funding_liabilities([p], policy=TRADING)
+    assert x.amount == pytest.approx(-1_005_000)  # clean MV + the accrued paid at the purchase
