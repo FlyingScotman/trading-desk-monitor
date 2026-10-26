@@ -1,2 +1,2 @@
 ﻿as_of;deal_id;book_id;type;ccy;amount;rate_type;index_name;spread_bp;rate;start_date;maturity;counterparty_id;collateral
-2026-10-13;REPO-88812;OFZ;РЕПО с ЦК;RUB;-14500000000;float;RUSFAR O/N;0;14.28;2026-10-13;2026-10-14;NCC;ОФЗ-ПД
+2026-10-13;REPO-88812;OFZ;РЕПО с ЦК;RUB;-14500000000;float;RUSFAR O/N;0;14.28;2026-10-13;2026-10-14;CCP;ОФЗ-ПД

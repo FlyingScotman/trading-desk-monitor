@@ -106,8 +106,8 @@ DATASETS: List[Dataset] = [
         "counterparties", "ref_counterparty", "ref", ("counterparty_id",), 2, "Контрагенты",
         "Колонка «Контрагент» по OTC и фондированию, группировки в Pivot Studio.",
         "текущая версия", "справочник контрагентов",
-        [C("counterparty_id", "str", True, "код контрагента", "NCC"),
-         C("name", "str", True, "название", "НКЦ (клиринг)"),
+        [C("counterparty_id", "str", True, "код контрагента", "CCP"),
+         C("name", "str", True, "название", "ЦК (клиринг)"),
          C("type", "str", False, "ЦК / банк / биржа / казначейство", "ЦК"),
          C("issuer_id", "str", False, "если контрагент — эмитент из issuers", "")]),
     Dataset(
@@ -165,7 +165,7 @@ DATASETS: List[Dataset] = [
          C("reference_issuer_id", "str", False, "CDS: референс", ""),
          C("cds_spread_bp", "num", False, "CDS: контрактный спред, б.п.", ""),
          C("fx_rate", "num", False, "FX: курс сделки", ""),
-         C("counterparty_id", "str", False, "контрагент", "NCC"),
+         C("counterparty_id", "str", False, "контрагент", "CCP"),
          C("cleared", "bool", False, "через ЦК", "1"),
          C("purpose", "str", False, "*1.3:* OCP_TRANSFER — вечерняя передача ОВП из книги облигаций в книгу деривативов "
            "(fx_rate — курс ЦБ на завтра, maturity — T+1)", "")]),
@@ -232,7 +232,7 @@ DATASETS: List[Dataset] = [
          C("rate", "num", True, "эффективная ставка на дату, %", "14.28"),
          C("start_date", "date", False, "начало", "2026-10-13"),
          C("maturity", "date", True, "окончание", "2026-10-14"),
-         C("counterparty_id", "str", False, "контрагент", "NCC"),
+         C("counterparty_id", "str", False, "контрагент", "CCP"),
          C("collateral", "str", False, "обеспечение (ISIN или описание)", "ОФЗ-ПД")],
         date_col="as_of", replace_by=("as_of", "book_id")),
     Dataset(

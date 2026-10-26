@@ -7,7 +7,8 @@
  *                           фильтр книг и портфелей (общий для всех мониторов), поиск, тема
  *  KIT.dataLabel(run), KIT.headerStatus(status, now) — тип данных прогона и состояние шапки по статусу автопилота
  *  KIT.runAgo(ms), KIT.runBadge(info, now), KIT.runCoverage() — бейдж прогона в шапке (#192): сколько прошло с публикации
- *                           (тикает сам; новый прогон — по ленте событий lib/live.js) и что вошло в прогон
+ *                           (тикает сам; новый прогон — по ленте событий lib/live.js) и что вошло в прогон;
+ *                           KIT.runAge(), KIT.setRunAge(patch) — пороги «⚠ устарел» (#255), меню вида ⚙ в шапке
  *  KIT.list()             — позиции после фильтра шапки; KIT.onFilter(fn) — перерисовка при смене фильтра
  *  KIT.d(spec)            — кликабельная цифра: spec = {title, list|rows, val, fmt, unit, v?}; щелчок раскрывает вклад
  *  KIT.drill(spec)        — открыть разбор вклада (позиции, группировка по эмитенту/книге/валюте/типу/бакету)
@@ -536,11 +537,38 @@
   // страницы минус 12 минут. Возраст перерисовывается раз в 30 с и при возврате на вкладку; часы — сервера
   // (сдвиг по now статуса автопилота). Новый прогон: событие 'desk:live' от lib/live.js (run.published), затем
   // сверка с latest_run статуса автопилота (R11: какой прогон «последний»).
-  // Подсветка: «есть прогон новее» (latest_run — не прогон на экране) или «устарел»: в рабочие часы (пн–пт,
+  // Подсветка: «есть прогон новее» (latest_run — не прогон на экране) или «устарел» (#255): в рабочем окне (пн–пт,
   // кроме дней, которые автопилот назвал нерабочими — причина not_business_day шага intraday, как в K.headerStatus;
-  // fresh_from–fresh_to МСК) старше fresh_min минут или в любое время старше max_days дней. Закреплённый прогон
-  // (?run_id= / ?as_of=) не подсвечивается: его выбрали сами; «есть новее» для него — только в подсказке и панели.
+  // fresh_from–fresh_to МСК) с более позднего из двух моментов — публикации прогона и fresh_from сегодня — прошло
+  // больше fresh_min минут (вчерашний прогон утром подсвечивается с 11:45, если сегодняшнего ещё нет — как автопилот,
+  // #156); в любое время — прогон старше max_days календарных дней. fresh_min и max_days — настройка в меню вида
+  // (K.runAge, K.setRunAge; 0 — правило выключено). Закреплённый прогон (?run_id= / ?as_of=) и демо не
+  // подсвечиваются: их выбрали сами; «есть новее» для закреплённого — только в подсказке и панели.
   K.RUN_AGE = { fresh_min: 90, fresh_from: '10:15', fresh_to: '20:00', max_days: 3 };
+  // настройка порогов — в слое вида (K.viewStore, ключ 'ui:runage', {fresh_min, max_days}); целое 0…предел, иначе — умолчание
+  const RUNAGE_KEY = 'ui:runage', RUNAGE_MAX = { fresh_min: 1440, max_days: 365 };
+  const runAgeOk = (k, v) => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= RUNAGE_MAX[k];
+  K.runAge = function () {
+    const a = Object.assign({}, K.RUN_AGE), s = K.viewStore ? K.viewStore.get(RUNAGE_KEY) : null;
+    if (s) Object.keys(RUNAGE_MAX).forEach(k => { if (runAgeOk(k, s[k])) a[k] = s[k]; });
+    return a;
+  };
+  // patch — {fresh_min?, max_days?}: числа или строки поля ввода; неверное значение не сохраняется → false.
+  // Меняется только переданный порог; хранится только то, что отличается от умолчания K.RUN_AGE (сменим умолчание —
+  // оно дойдёт и до тех, кто открывал меню, но этот порог не трогал)
+  K.setRunAge = function (patch) {
+    const s = (K.viewStore.get(RUNAGE_KEY)) || {}, v = {};
+    Object.keys(RUNAGE_MAX).forEach(k => { if (runAgeOk(k, s[k]) && s[k] !== K.RUN_AGE[k]) v[k] = s[k]; });
+    for (const k of Object.keys(patch || {})) {
+      if (!(k in RUNAGE_MAX)) continue;
+      const x = typeof patch[k] === 'string' && patch[k].trim() !== '' ? Number(patch[k]) : patch[k];
+      if (!runAgeOk(k, x)) return false;
+      if (x === K.RUN_AGE[k]) delete v[k]; else v[k] = x;
+    }
+    if (Object.keys(v).length) K.viewStore.set(RUNAGE_KEY, v); else K.viewStore.reset(RUNAGE_KEY);
+    fire('runage');
+    return true;
+  };
   K.runAgo = function (ms) {
     const m = Math.floor(Math.max(0, ms) / 60e3);
     if (m < 1) return 'только что';
@@ -553,7 +581,7 @@
   // info: { publishedAt, demo, pinned, newer: {run_id, text} | null, reason: причина шага intraday автопилота };
   // now — момент (по часам сервера) → { short, text (фраза целиком), level: 'ok' | 'stale' | 'newer' | 'unknown', why }
   K.runBadge = function (info, now) {
-    const a = K.RUN_AGE, t = info.publishedAt ? +new Date(info.publishedAt) : NaN;
+    const a = K.runAge(), t = info.publishedAt ? +new Date(info.publishedAt) : NaN;
     if (!isFinite(t)) return { short: '—', text: 'Время публикации прогона неизвестно', level: 'unknown', why: null };
     const ms = +new Date(now) - t, short = ms < 60e3 ? 'только что' : K.runAgo(ms) + ' назад';
     const r = { short, text: 'Прогон опубликован ' + short, level: 'ok', why: null };
@@ -565,8 +593,16 @@
     if (info.pinned || info.demo) return r;
     const m = msk(now), day = m.dow >= 1 && m.dow <= 5 && info.reason !== 'not_business_day' &&
       m.min >= hmMin(a.fresh_from) && m.min < hmMin(a.fresh_to);
-    if (ms > a.max_days * 864e5) { r.level = 'stale'; r.why = 'прогон старше ' + a.max_days + ' дн.'; }
-    else if (day && ms > a.fresh_min * 60e3) { r.level = 'stale'; r.why = 'в рабочие часы прогон старше ' + a.fresh_min + ' мин: новых срезов не публиковалось'; }
+    // начало рабочего окна сегодня (fresh_from МСК) — момент; отсчёт от него, если прогон опубликован раньше
+    const from = +new Date(m.iso + 'T' + minHm(hmMin(a.fresh_from)) + ':00Z') - MSK_MS, since = +new Date(now) - Math.max(t, from);
+    // календарные дни по МСК: опубликован 22.10 в любое время — 25.10 ему 3 дня, «старше 3» — с 26.10
+    const days = Math.round((Date.parse(m.iso) - Date.parse(msk(t).iso)) / 864e5);
+    if (a.max_days > 0 && days > a.max_days) { r.level = 'stale'; r.why = 'прогон старше ' + a.max_days + ' дн.'; }
+    else if (day && a.fresh_min > 0 && since > a.fresh_min * 60e3) {
+      r.level = 'stale';
+      r.why = t >= from ? 'в рабочие часы прогон старше ' + a.fresh_min + ' мин: новых срезов не публиковалось'
+        : 'с ' + a.fresh_from + ' МСК прошло больше ' + a.fresh_min + ' мин, а прогона после ' + a.fresh_from + ' нет';
+    }
     return r;
   };
   // что вошло в прогон — из данных прогона на странице (window.MOCK): позиции и их оценка, книги, PnL, фондирование,
@@ -655,6 +691,7 @@
     }
     runState.paint = paint;
     paint();
+    K.on('runage', paint);  // пороги поменяли в меню вида
     setInterval(paint, 30e3);
     if (runState.done) setTimeout(paint, runState.done - Date.now() + 50);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) paint(); });
@@ -674,6 +711,71 @@
       paint();
       if (runState.refresh) runState.refresh();
     });
+  }
+  // меню вида (⚙ рядом с «(1) / −1», #255): формат отрицательных чисел и пороги «⚠ устарел» бейджа прогона
+  // (K.setRunAge: поле меняется по Enter и при уходе с поля; неверное значение не сохраняется — в поле возвращается
+  // сохранённое, под полями — что не так). Клавиатура: при открытии фокус в панели, Tab и Shift+Tab ходят по кругу
+  // внутри неё, Esc закрывает и возвращает фокус на ⚙
+  function bindViewMenu(btn) {
+    if (!btn) return;
+    let panel = null;
+    btn.setAttribute('aria-label', 'Вид'); btn.setAttribute('aria-expanded', 'false');
+    const close = () => {
+      document.removeEventListener('keydown', onKey, true); document.removeEventListener('click', onDoc, true);
+      btn.setAttribute('aria-expanded', 'false');
+      if (!panel) return;
+      panel.remove(); if (openMenu === panel) openMenu = null; panel = null;
+    };
+    const focusables = () => [...panel.querySelectorAll('button, input')].filter(x => !x.disabled);
+    function onKey(e) {
+      if (!panel || !panel.isConnected) { close(); return; }  // панель закрыло другое меню шапки
+      if (e.key === 'Escape') { e.stopPropagation(); close(); btn.focus(); return; }
+      if (e.key !== 'Tab') return;
+      const fs = focusables(), i = fs.indexOf(document.activeElement);
+      if (!fs.length) return;
+      e.preventDefault();
+      fs[i < 0 ? (e.shiftKey ? fs.length - 1 : 0) : (i + (e.shiftKey ? -1 : 1) + fs.length) % fs.length].focus();
+    }
+    function onDoc(e) { if (panel && !panel.contains(e.target) && !btn.contains(e.target)) close(); }
+    const field = (k, label, unit) => '<label class="k-viewf"><span>' + esc(label) + '</span><input class="k-input" type="number" min="0" max="' +
+      RUNAGE_MAX[k] + '" step="1" inputmode="numeric" data-k="' + k + '"> <span class="mut3">' + unit + '</span></label>';
+    const UNIT = { fresh_min: 'мин', max_days: 'дн.' };
+    function open() {
+      if (openMenu) openMenu.remove();
+      const W = Math.min(340, innerWidth * 0.92), r = btn.getBoundingClientRect(), a = K.runAge();
+      panel = h('div', 'k-panel k-viewmenu');
+      panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', 'Вид');
+      panel.style.cssText = 'position:fixed;z-index:140;width:' + W + 'px;max-height:70vh;overflow:auto;box-shadow:var(--shadow);padding:10px 14px;font-size:12.5px';
+      panel.style.left = Math.max(8, Math.min(r.right - W, innerWidth - W - 10)) + 'px'; panel.style.top = (r.bottom + 4) + 'px';
+      panel.innerHTML = '<div class="k-sec" style="margin-top:0">Отрицательные числа</div><div data-x="neg"></div>' +
+        '<div class="k-sec">Бейдж прогона: «⚠ устарел»</div>' +
+        field('fresh_min', 'Прогон устарел через, мин', 'по умолч. ' + K.RUN_AGE.fresh_min) +
+        field('max_days', '…через, дней', 'по умолч. ' + K.RUN_AGE.max_days) +
+        '<div class="mut3" style="margin-top:6px;white-space:normal">Минуты — в рабочем окне пн–пт ' + K.RUN_AGE.fresh_from + '–' + K.RUN_AGE.fresh_to +
+        ' МСК, от публикации прогона или от ' + K.RUN_AGE.fresh_from + ', если прогон вчерашний. Дни — в любое время. 0 — правило выключено. ' +
+        'Закреплённый прогон и демо не подсвечиваются. Хранится в этом браузере.</div>';
+      const err = h('div', 'k-viewerr'); err.setAttribute('role', 'status');
+      panel.querySelectorAll('.k-viewf')[1].after(err);
+      K.seg(panel.querySelector('[data-x=neg]'), K.NEG_FMTS, K.negFmt, v => K.setNegFmt(v));
+      panel.querySelectorAll('input[data-k]').forEach(inp => {
+        const k = inp.dataset.k;
+        inp.value = a[k];
+        const apply = () => {
+          const typed = inp.value, ok = K.setRunAge({ [k]: typed });
+          inp.value = K.runAge()[k];  // сохранённое: после неверного ввода — прежнее
+          inp.style.borderColor = ok ? '' : 'var(--neg)'; inp.setAttribute('aria-invalid', ok ? 'false' : 'true');
+          if (!ok) { err.dataset.k = k; err.textContent = '«' + (typed || 'пусто') + '» не подходит: нужно целое от 0 до ' + RUNAGE_MAX[k] + '. Оставлено ' + inp.value + ' ' + UNIT[k]; }
+          else if (err.dataset.k === k) err.textContent = '';  // пояснение — про своё поле
+        };
+        inp.onchange = apply;
+        inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); apply(); } };
+      });
+      document.body.appendChild(panel); openMenu = panel; btn.setAttribute('aria-expanded', 'true');
+      document.addEventListener('keydown', onKey, true);
+      const first = focusables()[0]; if (first) first.focus();
+      setTimeout(() => { if (panel) document.addEventListener('click', onDoc, true); }, 0);
+    }
+    btn.onclick = e => { e.stopPropagation(); if (panel && panel.isConnected) close(); else { close(); open(); } };
   }
   // статус автопилота (freshness): latest_run — какой прогон «последний»; now — часы сервера
   function runBadgeStatus(s, reason) {
@@ -807,6 +909,7 @@
       srcChip() + runBadgeChip() + (M.notes && M.notes.length ? '<span class="k-chip" data-a="notes" title="Чего нет в данных прогона" style="border-color:var(--warn)">ⓘ ' + M.notes.length + '</span>' : '') +
       '<button class="k-btn" data-a="search">Поиск <span class="k-kbd">Ctrl K</span></button>' +
       '<button class="k-btn" data-a="numfmt"></button>' +
+      '<button class="k-btn" data-a="view" title="Вид: формат отрицательных чисел, когда прогон считается устаревшим" aria-haspopup="dialog">⚙</button>' +
       '<button class="k-btn" data-a="theme" title="Светлая / тёмная тема">◐</button>';
     document.body.prepend(bar);
     if (/^https?:$/.test(location.protocol) && !window.DESK_AUTH) document.head.appendChild(Object.assign(document.createElement('script'), { src: '../desk-auth.js' }));  // вход: пользователь, «Выйти», CSRF
@@ -819,6 +922,7 @@
       nb.title = 'Отрицательные числа: ' + (K.negFmt === 'acc' ? '(1,234.5) красным' : '−1,234.5') + '. Щелчок — ' + (K.negFmt === 'acc' ? 'со знаком минус' : 'в скобках (бухгалтерский формат)') + '; в CSV — всегда минус';
     };
     paintNeg(); nb.onclick = () => K.setNegFmt(K.negFmt === 'acc' ? 'minus' : 'acc'); K.on('numfmt', paintNeg);
+    bindViewMenu(bar.querySelector('[data-a=view]'));
     bindSrc(bar); bindRunBadge(bar);
     if (K.source === 'real') { freshness(bar); backfillChip(bar); }
     const oc = bar.querySelector('[data-a=ofzview]');
