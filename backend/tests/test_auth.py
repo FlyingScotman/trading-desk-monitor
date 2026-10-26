@@ -199,7 +199,8 @@ def test_without_a_session_only_the_login_is_open(store_url):
     assert c.get("/login.html").status_code == 200
     s = c.get("/api/v1/auth/state").json()
     assert s["enabled"] and s["user"] is None and s["setup_needed"] and not s["setup_allowed"]
-    for path in ("/api/v1/runs", "/health/ready", "/desk-data.js", "/concepts-data.js", "/api/v1/settings",
+    for path in ("/api/v1/runs", "/health/ready", "/desk-data.js", "/concepts-data.js", "/concepts-run.js",
+                 "/api/v1/concepts/run", "/api/v1/settings",
                  "/concepts/index.html", "/app/", "/desk-nav.js", "/openapi.json"):
         r = c.get(path)
         assert r.status_code == 401 and r.json()["code"] == "unauthorized", path

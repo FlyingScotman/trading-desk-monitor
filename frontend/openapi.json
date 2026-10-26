@@ -2008,6 +2008,92 @@
         }
       }
     },
+    "/api/v1/concepts/run": {
+      "get": {
+        "summary": "Concepts Run Json",
+        "description": "The monitors' data of a run (``window.CONCEPTS_RUN``, ``/concepts-run.js``; TDM#289): the run's dates and PnL state, buckets, curves, FX, indices, issuers, books, risk notes, funding status, source and positions, as ``lib/real.js`` reads them. 404 without a run (``details.reason``: no_runs, not_found)",
+        "operationId": "concepts_run_json_api_v1_concepts_run_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "default: the run shown (as_of's, else the newest), as ``/concepts-run.js`` and the concept pages",
+              "title": "Run Id"
+            },
+            "description": "default: the run shown (as_of's, else the newest), as ``/concepts-run.js`` and the concept pages"
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As Of"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
     "/api/v1/concepts/carry": {
       "get": {
         "summary": "Concepts Carry",
