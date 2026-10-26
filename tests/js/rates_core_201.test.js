@@ -103,23 +103,27 @@ t('прогон: панель C02 — фиксинги, «предварител
   const box = el(), R = K.ratesCorePanel(box), out = html(box);
   assert.strictEqual(R.rows.length, 2); assert.strictEqual(R.trades.length, 2);
   assert.ok(out.includes('последний фиксинг 13.10.26') && out.includes('16.20%'), 'дата и значение последнего фиксинга RUONIA');
-  assert.ok(out.includes('не опубликован за 14.10.26'), 'объявленный неопубликованный день');
+  assert.ok(out.includes('не опубликован за 14.10.26') && out.includes('штатно'), 'объявленный неопубликованный день — нейтрально');
+  assert.ok(!/⚠ не опубликован/.test(out), 'перенос в пределах объявленного — без ⚠');
   assert.ok(out.includes('пропуски в истории: 04.05.26'), 'пропуск фиксинга');
-  assert.ok(out.includes('предварительно') && out.includes('not yet published'), 'пометка с подсказкой');
+  // единственное допущение S1 — перенос фиксинга: тихая метка «фикс. перенесён», подсказка по-русски
+  assert.ok(out.includes('фикс. перенесён') && out.includes('ещё не опубликован: перенесён последний (13.10.26)') && !out.includes('not yet published'), 'метка с подсказкой');
+  assert.ok(!out.includes('>предварительно<'), 'не «предварительно»');
   assert.ok(out.includes('DV01 RUONIA') && out.includes('DV01 КС'));
   assert.ok(out.includes('T-OIS-1') && out.includes('обратное РЕПО'));
   const s1 = R.rows.find(r => r.id === 'S1');
-  assert.deepStrictEqual([s1.ruo, s1.key, s1.prov, s1.src], [18000, 0, true, 'ядро']);
+  assert.deepStrictEqual([s1.ruo, s1.key, s1.flag, s1.src], [18000, 0, 'carry', 'ядро']);
   assert.ok(Math.abs(s1.diff - 1e5) < 1e-6);
   assert.strictEqual(R.rows.find(r => r.id === 'S2').key, -900);
   assert.ok(!/NaN|undefined/.test(out), 'без NaN/undefined');
 });
 
-t('прогон без extra.swaps (старый): нет данных словами, не падает; параллельного отчёта нет — null', () => {
+t('прогон без extra.swaps (старый): нет данных словами, не падает; /derivatives не ответил — «недоступен», не молча', () => {
   const { M, K, asked } = load({ real: true, mutate: runId });
   assert.ok(M.positions.every(p => p.ratesCore === null));
   assert.deepStrictEqual(Object.keys(M.indexFixings), []);
-  assert.strictEqual(M.derivParallel(), null, 'нет ответа /derivatives — null');
+  const par = M.derivParallel();
+  assert.deepStrictEqual([par.state, par.status, par.rows.length], ['unavailable', 404, 0], 'нет ответа /derivatives — состояние и код');
   assert.ok(asked.includes('../api/v1/runs/42/derivatives'), asked.join(' '));
   const box = el(); K.ratesCorePanel(box);
   assert.ok(box.innerHTML.includes('нет данных') && box.innerHTML.includes('extra.swaps'), box.innerHTML);
@@ -179,6 +183,96 @@ t('демо: та же форма — предварительная сделк�
   assert.ok(R.rows.some(r => r.src === 'по отчёту'));
   assert.ok(out.includes('предварительно') && out.includes('не опубликован') && out.includes('пропуски в истории'));
   assert.ok(!/NaN|undefined/.test(out));
+});
+
+// ревью PR #233: итоги по строкам с обеими оценками, CSV без значков, перенос фиксинга отдельно от допущений, риск
+// плиток без строк «по отчёту», нейтральная разница, состояние /derivatives, словарь причин, фильтр строк без позиции
+const findBtn = (e, text) => e.innerHTML === text && e.onclick ? e : e.children.map(c => findBtn(c, text)).find(Boolean) || null;
+function csvOf(K, box, n) {   // n-я таблица панели: CSV через «⤓ CSV»
+  let got = []; K.download = (name, text) => got.push(text);
+  const btns = []; (function walk(e) { if (e.innerHTML === '⤓ CSV' && e.onclick) btns.push(e); e.children.forEach(walk); })(box);
+  btns[n].onclick(); return got[0].replace(/^﻿/, '').split('\r\n');
+}
+// строка CSV в ячейки (кавычки с запятыми внутри)
+const cells = l => { const out = []; let cur = '', q = false; for (const ch of l) { if (ch === '"') q = !q; else if (ch === ',' && !q) { out.push(cur); cur = ''; } else cur += ch; } out.push(cur); return out; };
+const DER = { run_id: 42, state: 'computed', tolerance: { abs_rub: 10000, rel: 0.01, provisional: true }, rows: [
+  { position_id: 'S1', book_id: 'B', product: 'ois', status: 'both', used: 'computed', computed_pv_rub: 2.5e6, imported_pv_rub: 2.4e6, diff_rub: 1e5, over: true },
+  { position_id: 'C9', book_id: 'B', product: 'ccs', status: 'imported_only', used: 'imported', computed_pv_rub: null, imported_pv_rub: 3e5, reason: 'ccs_unsupported' }] };
+function withMore(D) {
+  withRates(D);
+  const b = D.positions.find(p => p.id === 'S1');
+  // предварительная (не только перенос фиксинга) и CCS по отчёту с риском RUONIA
+  D.positions.push(Object.assign({}, b, { id: 'S3', name: 'IRS КС 3Y', mvRub: -4e6, mv: -4e6, risk: { 'RUB KEY': at(4, 5000) },
+    extra: Object.assign({}, b.extra, { assumptions: ['swap convention from the exchange (provisional)'], swaps: [Object.assign({}, SWAP, { trade_id: 'T-IRS-3', index: 'KEY_RATE', pv_rub: -4e6, reported_pv_rub: -3.9e6 })],
+      index_fixings: {}, reported_pv_rub: -3.9e6, pv_diff_rub: -1e5 }) }));
+  D.positions.push(Object.assign({}, b, { id: 'C9', name: 'CCS USD/RUB', mvRub: 3e5, mv: 3e5, risk: { 'RUB RUONIA': at(2, 300000) }, extra: { valuation: 'reported', quality: 'reported_value' } }));
+}
+
+t('ревью: итоги PV по строкам с обеими оценками, строки «по отчёту» и их риск — отдельно', () => {
+  const { K } = load({ real: true, mutate: withMore, derivatives: DER });
+  const box = el(), R = K.ratesCorePanel(box), T = R.totals, out = html(box);
+  // S1 (2.5 / 2.4), S3 (−4 / −3.9); S2 — без отчёта, C9 — по отчёту
+  assert.ok(Math.abs(T.pv - (2.5e6 - 4e6)) < 1e-6 && Math.abs(T.rep - (2.4e6 - 3.9e6)) < 1e-6);
+  assert.ok(Math.abs(T.pv - T.rep - T.diff) < 1e-6, 'ядро − отчёт = разница');
+  assert.deepStrictEqual([T.nBoth, T.nCoreOnly, T.nRep, T.repPv, T.nOver], [2, 1, 1, 3e5, 1]);
+  assert.ok(out.includes('ещё по отчёту: 1 поз.') && out.includes('только ядро (отчёта нет): 1'), out.slice(0, 600));
+  // плитки DV01 — только ядро; риск CCS подписан
+  assert.strictEqual(T.ruo, 18000 - 40); assert.strictEqual(T.repRuo, 300000);
+  assert.ok(out.includes('без строк по отчёту (в них ещё 300)'));
+  // «Итого» таблицы — те же суммы: ядро (1.50), отчёт (1.50), разница 0.00, DV01 RUONIA 18 (без CCS)
+  const foot = (out.match(/<tfoot>[\s\S]*?<\/tfoot>/) || [''])[0];
+  assert.ok(/>\(1\.50\)<\/td><td[^>]*>\(1\.50\)<\/td><td[^>]*>0\.00<\/td><td[^>]*>18<\/td>/.test(foot), foot);
+  // разница — нейтральная: в итоге без класса знака
+  assert.ok(!/class="n (pos|neg)"[^<]*>0\.00/.test(out));
+});
+
+t('ревью: CSV — числа числами, имя без меток, отметки отдельной колонкой', () => {
+  const { K } = load({ real: true, mutate: withMore, derivatives: DER });
+  const box = el(); K.ratesCorePanel(box);
+  const csv = csvOf(K, box, 0), head = cells(csv[2]), col = name => head.findIndex(h => h.startsWith(name));
+  const row = cells(csv.find(l => l.startsWith('OIS RUONIA 2Y,')));
+  assert.strictEqual(row[0], 'OIS RUONIA 2Y', 'имя без «фикс. перенесён»');
+  assert.strictEqual(row[col('Ядро − отчёт')], '0.10', '«0.10 ⚠» — число без значка');
+  assert.strictEqual(row[col('Отметки')], 'выше допуска, фикс. перенесён');
+  const s3 = cells(csv.find(l => l.startsWith('IRS КС 3Y,')));
+  assert.deepStrictEqual([s3[0], s3[col('Ядро − отчёт')], s3[col('Отметки')]], ['IRS КС 3Y', '-0.10', 'предварительно']);
+  const trd = csvOf(K, box, 1);
+  assert.ok(trd.some(l => l.startsWith('T-OIS-1,')), trd.join('\n'));
+  // итог сделок: ядро и отчёт — по сделкам с обеими оценками (S1 2.5 / 2.4, S3 −4 / −3.9; РЕПО без отчёта — нет)
+  const tf = (html(box).match(/<tfoot>[\s\S]*?<\/tfoot>/g) || [])[1] || '';
+  assert.ok(/>\(1\.50\)<\/td><td[^>]*>\(1\.50\)<\/td><td[^>]*>0\.00<\/td>/.test(tf), tf);
+});
+
+t('ревью: перенос фиксинга и прочие допущения — раздельные счётчики; перенос сверх объявленного — ⚠', () => {
+  const { K, M } = load({ real: true, mutate: withMore, derivatives: DER });
+  const box = el(), R = K.ratesCorePanel(box), out = html(box);
+  assert.deepStrictEqual([R.totals.nProv, R.totals.nCarry], [1, 1]);
+  assert.ok(out.includes('предварительно 1') && out.includes('фикс. перенесён 1'));
+  assert.strictEqual(K.rcFlag({ provisional: true, assumptions: ['RUONIA not yet published for 2026-10-14: the latest fixing of 2026-10-13 carried', 'x'] }), 'prov');
+  assert.strictEqual(K.rcFlag({ provisional: false, assumptions: [] }), null);
+  M.indexFixings.RUONIA.unpublished = ['2026-10-13', '2026-10-14'];
+  assert.ok(/⚠ не опубликован за 13\.10\.26, 14\.10\.26.*больше, чем объявлено/.test(K.rcFixingsHtml()));
+});
+
+t('ревью: /derivatives не посчитан или недоступен — строкой; причины бэкенда — словами; строки без позиции — по книге фильтра', () => {
+  const { K } = load({ real: true, mutate: withRates, derivatives: { run_id: 42, state: 'not_computed', rows: [] } });
+  const box = el(); K.ratesCorePanel(box);
+  assert.ok(html(box).includes('не посчитан (прогон до него)'));
+  const { K: K2 } = load({ real: true, mutate: withRates });
+  const b2 = el(); K2.ratesCorePanel(b2);
+  assert.ok(html(b2).includes('недоступен (HTTP 404)'));
+  ['repo_index_unsupported', 'no_key_rate_curve', 'no_rub_curve', 'swap_dates_mismatch', 'swap_notional_mismatch', 'terms_mixed', 'not_valued']
+    .forEach(c => assert.ok(K.rcReason(c) !== c && /[а-я]/.test(K.rcReason(c)), c));
+  // демо: строка «открытое РЕПО» без позиции — видна при фильтре своей книги, скрыта при чужой
+  const { M: M3, K: K3 } = load();
+  const shown = books => { K3.filter.books = books; return K3.ratesCoreModel().rows.some(r => r.id === 'DEMO-REPO-OPEN'); };
+  assert.ok(shown(null), 'без фильтра');
+  assert.ok(shown(['RATES']), 'фильтр своей книги');
+  assert.ok(!shown(['FXB']), 'фильтр чужой книги');
+  K3.filter.books = null;
+  // демо: обратное РЕПО — PV кредитора положительный, около первой части; риск RUONIA отрицательный
+  const repo = M3.positions.find(p => p.ratesCore && p.ratesCore.trades[0].kind === 'repo');
+  assert.ok(repo.ratesCore.pv > 0.99 * repo.ratesCore.trades[0].notional && repo.dv01ByCurve['RUB RUONIA'] < 0);
 });
 
 t('C02: панель свопов и РЕПО — через K.ratesCorePanel и перерисовывается фильтром шапки', () => {

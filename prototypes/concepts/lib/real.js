@@ -436,12 +436,19 @@
   Object.values(M.indexFixings).forEach(x => { x.unpublished.sort(); x.missing.sort();
     if (x.missing.length) M.notes.push('фиксинги ' + x.id + ': пропуски внутри истории (' + x.missing.join(', ') + ') — своп или РЕПО, который их читает, ядро не оценивает (по отчёту)'); });
   // параллельный отчёт по деривативам (#201, TDM#49): GET /api/v1/runs/{id}/derivatives — оценка ядром и из отчёта по
-  // позициям, статус, расхождение и допуск. Лениво, один раз; null — нет ответа (прогон до блока: state not_computed)
+  // позициям, статус, расхождение и допуск. Лениво, один раз; state 'not_computed' — прогон до блока, 'unavailable' —
+  // сервер не ответил (status — код HTTP, 0 — нет связи); null — у прогона нет номера (запрашивать нечего)
   let parCache;
   M.derivParallel = function () {
     if (parCache !== undefined) return parCache;
     const id = (D.source || {}).runId;
-    parCache = id == null ? null : M.parseDerivParallel(getJson('../api/v1/runs/' + encodeURIComponent(id) + '/derivatives'));
+    if (id == null) return (parCache = null);
+    let status = 0, j = null;
+    try {
+      const x = new XMLHttpRequest(); x.open('GET', '../api/v1/runs/' + encodeURIComponent(id) + '/derivatives', false); x.send();
+      status = x.status; if (status === 200) j = JSON.parse(x.responseText);
+    } catch (e) { j = null; }
+    parCache = M.parseDerivParallel(j) || { state: 'unavailable', status, tolerance: null, totals: null, rows: [] };
     return parCache;
   };
   M.parseDerivParallel = j => {

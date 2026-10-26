@@ -423,8 +423,9 @@
         // receiver: длинная ставка => DV01 < 0
         w.forEach((x, k) => p.risk[p.curve][k] += -sgn * nrub * ann * 1e-4 * x);
       } else if (p.productGroup === 'repo') {
-        // плавающее РЕПО: ставка пересматривается каждый день — риск RUONIA мал (дисконтирование конечной суммы)
-        w.forEach((x, k) => p.risk['RUB RUONIA'][k] += -sgn * nrub * p.tenor * 1e-4 * x * 0.05);
+        // обратное РЕПО (кредитор): PV ≈ первая часть плюс начисленные проценты, риск RUONIA — дисконтирование конечной
+        // суммы (≈ −сумма × срок × 1 б.п.: 2 000 mm × 3M ≈ −50 тыс ₽/бп)
+        w.forEach((x, k) => p.risk['RUB RUONIA'][k] += -sgn * nrub * p.tenor * 1e-4 * x);
       } else if (p.kind === 'BAS') {
         w.forEach((x, k) => { p.risk['RUB KEY'][k] += -nrub * ann * 1e-4 * x; p.risk['RUB RUONIA'][k] += nrub * ann * 1e-4 * x * 0.98; });
       } else if (p.kind === 'FXF' || p.kind === 'XCCY') {
@@ -432,6 +433,7 @@
         w.forEach((x, k) => { p.risk[p.curve][k] += -sgn * nrub * ann * 1e-4 * x; p.risk[p.curve2 || 'RUB RUONIA'][k] += sgn * nrub * ann * 1e-4 * x; });
       }
       p.mv = (rng(p.name + 'mv')() - 0.5) * nrub * 0.01;
+      if (p.productGroup === 'repo') p.mv = sgn * nrub * (1 + (M.indices.RUONIA + 0.2) / 100 * 14 / 365);  // 14 дней от первой части
       p.fxDeltaBy = (p.kind === 'FXF' || p.kind === 'XCCY') ? { [p.ccy]: p.notional } : {};
       if (p.kind === 'FXF' && p.productGroup !== 'fx_future') fxDeal(p);
       p.mvCcy = p.mv / M.fx[p.ccy];
