@@ -48,7 +48,9 @@ jobs:
       - name: Playwright with Chromium for the smoke (outside the repo, found through NODE_PATH)
         run: |
           npm install --prefix "$RUNNER_TEMP/pw" --no-save --no-audit --no-fund "playwright@$PLAYWRIGHT_VERSION"
-          "$RUNNER_TEMP/pw/node_modules/.bin/playwright" install --with-deps chromium
+          # without --with-deps: the runner image already has Chrome's system libraries; the apt step of
+          # --with-deps hung on a slow mirror and timed the job out
+          "$RUNNER_TEMP/pw/node_modules/.bin/playwright" install chromium
           echo "NODE_PATH=$RUNNER_TEMP/pw/node_modules" >> "$GITHUB_ENV"
       - name: Smoke of the monitors (every concept page, fails on any console error)
         run: node prototypes/concepts/tools/smoke.js "$RUNNER_TEMP/shots"
