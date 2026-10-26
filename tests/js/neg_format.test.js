@@ -160,6 +160,22 @@ t('смысловой цвет страницы важнее бухгалтер�
   assert.ok(/(^|,\s*)\.k-accn\s*[,{]/m.test(P('concepts/lib/kit.css')));
 });
 
+t('фон по величине (K.heatMono) и фон риска (K.heatRisk) — не смысловой цвет: красный минус остаётся (#216)', () => {
+  const { K } = load(new Map());
+  const mk = (text, style, cls) => {
+    const c = new Set(['n'].concat(cls || []));
+    return { tagName: 'TD', textContent: text, parentElement: null, getAttribute: k => k === 'style' ? style || null : null,
+      classList: { toggle: (k, on) => on ? c.add(k) : c.delete(k), contains: k => c.has(k) }, has: k => c.has(k) };
+  };
+  const mono = mk('(4)', K.heatMono(-4, 10)), monoRgb = mk('(4)', K.heatMono(-4, 10, '227,179,65')), risk = mk('(4)', K.heatRisk(-4, 10));
+  const sign = mk('(4)', K.heat(-4, 10)), colored = mk('(4)', K.heatMono(-4, 10) + ';color:var(--warn)'), monoChg = mk('(4)', K.heatMono(-4, 10), ['chg-up']);
+  K.accMarkAll({ querySelectorAll: () => [mono, monoRgb, risk, sign, colored, monoChg] });
+  [mono, monoRgb, risk].forEach(e => assert.ok(e.has('k-accn'), 'фон по величине/риска — минус красным'));
+  [sign, colored, monoChg].forEach(e => assert.ok(!e.has('k-accn'), 'K.heat, цвет текста и класс изменения — смысловые'));
+  assert.ok(/^background:/.test(K.heat(-4, 10)), 'K.heat без метки');
+  assert.strictEqual(K.heatMono(0, 10), '', 'ноль — без фона');
+});
+
 t('CSV: всегда обычный минус, без скобок, при любой настройке', () => {
   const { K } = load(new Map());
   assert.strictEqual(K.csvNum('(1,234.5)'), '-1234.5');

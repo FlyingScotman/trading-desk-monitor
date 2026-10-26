@@ -271,7 +271,7 @@
       rows.map(r => '<tr><td class="lbl"><b style="color:' + K.issuerColor(r.id) + '">●</b> ' + esc(r.iss.short) + ' <span class="mut3">' + esc(r.iss.sector) + '</span></td><td class="mut">' + esc(r.iss.rating) + '</td><td>' + [...new Set(r.list.map(p => p.ccy))].sort((a, b) => M.ccyOrder[a] - M.ccyOrder[b]).map(K.ccyTag).join(' ') + '</td>' +
         r.vals.map((v, k) => '<td class="n" style="' + heat(v) + '">' + (Math.abs(v) < 300 ? '<span class="mut3">·</span>' : K.d({ title: r.iss.short + ' · ' + nm + ' · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: r.list.map(p => ({ p, v: val(p, k) })) }, null, '')) + '</td>').join('') +
         '<td class="n"><b>' + K.d({ title: r.iss.short + ' · ' + nm, unit: 'тыс ₽/бп', rows: r.list.map(p => ({ p, v: M.buckets.reduce((s, _, k) => s + val(p, k), 0) })) }, null, '') + '</b></td><td class="n mut">' + f.mn(M.sum(r.list, 'mv'), 0) + '</td></tr>').join('') +
-      '</tbody></table>' + (n > 18 ? '<div class="iss-more"><a href="#" id="issMore">' + (issAll ? 'показать первые 18' : 'показать всех (' + n + ')') + '</a></div>' : '');
+      '</tbody></table>' + (n > 18 ? '<div class="iss-more"><a href="#" id="issMore">' + (issAll ? 'показать первые 18' : 'показать всех ' + n) + '</a></div>' : '');
     K.tableToolsAll(bd);
     const a = bd.querySelector('#issMore'); if (a) a.onclick = e => { e.preventDefault(); issAll = !issAll; drawIssuers(); };
   }

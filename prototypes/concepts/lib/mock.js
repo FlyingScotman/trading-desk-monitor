@@ -255,34 +255,34 @@
     B({ isin: 'RU000A10' + (hash(name) % 9000 + 1000) + 'V' + (hash(name) % 9), name, issuer: iss, group: 'CORP', kind: 'FIX', ccy, book: book || 'FXCR', maturity: mat, offer: off, offerKind: offk, cpn: { type: 'fix', rate: c, freq: f }, notional: nom * 1e6, spreadBp: sp }));
   // деривативы
   const der = [
-    { name: 'IRS RUONIA 2Y pay', kind: 'IRS', ccy: 'RUB', curve: 'RUB RUONIA', tenor: 2, notional: -6000e6, rate: 12.95, book: 'RATES', cpty: 'НКЦ' },
-    { name: 'IRS RUONIA 3Y rec', kind: 'IRS', ccy: 'RUB', curve: 'RUB RUONIA', tenor: 3, notional: 3500e6, rate: 12.70, book: 'RATES', cpty: 'НКЦ' },
-    { name: 'IRS RUONIA 5Y pay', kind: 'IRS', ccy: 'RUB', curve: 'RUB RUONIA', tenor: 5, notional: -9000e6, rate: 12.40, book: 'RATES', cpty: 'НКЦ' },
-    { name: 'IRS RUONIA 10Y pay', kind: 'IRS', ccy: 'RUB', curve: 'RUB RUONIA', tenor: 10, notional: -2500e6, rate: 12.60, book: 'RATES', cpty: 'Сбербанк' },
-    { name: 'IRS КС 1Y rec', kind: 'KSW', ccy: 'RUB', curve: 'RUB KEY', tenor: 1, notional: 8000e6, rate: 13.80, book: 'RATES', cpty: 'НКЦ' },
-    { name: 'IRS КС 2Y pay', kind: 'KSW', ccy: 'RUB', curve: 'RUB KEY', tenor: 2, notional: -5000e6, rate: 13.10, book: 'RATES', cpty: 'ВТБ' },
-    { name: 'Базис КС/RUONIA 3Y', kind: 'BAS', ccy: 'RUB', curve: 'RUB KEY', curve2: 'RUB RUONIA', tenor: 3, notional: 4000e6, rate: 0.12, book: 'RATES', cpty: 'НКЦ' },
-    { name: 'USD/RUB fwd 3M sell', kind: 'FXF', ccy: 'USD', curve: 'USD SOFR', curve2: 'RUB RUONIA', tenor: 0.25, notional: -55e6, rate: 83.95, book: 'FXB', cpty: 'НКЦ' },
-    { name: 'CNY/RUB fwd 6M sell', kind: 'FXF', ccy: 'CNY', curve: 'CNY XCCY', curve2: 'RUB RUONIA', tenor: 0.5, notional: -700e6, rate: 12.05, book: 'FXB', cpty: 'НКЦ' },
-    { name: 'EUR/RUB fwd 1M sell', kind: 'FXF', ccy: 'EUR', curve: 'EUR ESTR', curve2: 'RUB RUONIA', tenor: 0.083, notional: -10e6, rate: 95.70, book: 'FXB', cpty: 'Газпромбанк' },
-    { name: 'XCCY CNY/RUB 2Y', kind: 'XCCY', ccy: 'CNY', curve: 'CNY XCCY', curve2: 'RUB RUONIA', tenor: 2, notional: -400e6, rate: 5.10, book: 'FXB', cpty: 'Газпромбанк' },
+    { name: 'IRS RUONIA 2Y pay', kind: 'IRS', ccy: 'RUB', curve: 'RUB RUONIA', tenor: 2, notional: -6000e6, rate: 12.95, book: 'RATES', cpty: 'ЦК (клиринг)' },
+    { name: 'IRS RUONIA 3Y rec', kind: 'IRS', ccy: 'RUB', curve: 'RUB RUONIA', tenor: 3, notional: 3500e6, rate: 12.70, book: 'RATES', cpty: 'ЦК (клиринг)' },
+    { name: 'IRS RUONIA 5Y pay', kind: 'IRS', ccy: 'RUB', curve: 'RUB RUONIA', tenor: 5, notional: -9000e6, rate: 12.40, book: 'RATES', cpty: 'ЦК (клиринг)' },
+    { name: 'IRS RUONIA 10Y pay', kind: 'IRS', ccy: 'RUB', curve: 'RUB RUONIA', tenor: 10, notional: -2500e6, rate: 12.60, book: 'RATES', cpty: 'Контрагент Б' },
+    { name: 'IRS КС 1Y rec', kind: 'KSW', ccy: 'RUB', curve: 'RUB KEY', tenor: 1, notional: 8000e6, rate: 13.80, book: 'RATES', cpty: 'ЦК (клиринг)' },
+    { name: 'IRS КС 2Y pay', kind: 'KSW', ccy: 'RUB', curve: 'RUB KEY', tenor: 2, notional: -5000e6, rate: 13.10, book: 'RATES', cpty: 'Контрагент В' },
+    { name: 'Базис КС/RUONIA 3Y', kind: 'BAS', ccy: 'RUB', curve: 'RUB KEY', curve2: 'RUB RUONIA', tenor: 3, notional: 4000e6, rate: 0.12, book: 'RATES', cpty: 'ЦК (клиринг)' },
+    { name: 'USD/RUB fwd 3M sell', kind: 'FXF', ccy: 'USD', curve: 'USD SOFR', curve2: 'RUB RUONIA', tenor: 0.25, notional: -55e6, rate: 83.95, book: 'FXB', cpty: 'ЦК (клиринг)' },
+    { name: 'CNY/RUB fwd 6M sell', kind: 'FXF', ccy: 'CNY', curve: 'CNY XCCY', curve2: 'RUB RUONIA', tenor: 0.5, notional: -700e6, rate: 12.05, book: 'FXB', cpty: 'ЦК (клиринг)' },
+    { name: 'EUR/RUB fwd 1M sell', kind: 'FXF', ccy: 'EUR', curve: 'EUR ESTR', curve2: 'RUB RUONIA', tenor: 0.083, notional: -10e6, rate: 95.70, book: 'FXB', cpty: 'Контрагент Г' },
+    { name: 'XCCY CNY/RUB 2Y', kind: 'XCCY', ccy: 'CNY', curve: 'CNY XCCY', curve2: 'RUB RUONIA', tenor: 2, notional: -400e6, rate: 5.10, book: 'FXB', cpty: 'Контрагент Г' },
     // группа продукта отчёта (x_product_group адаптера) — для типа инструмента таблицы «валюта × тип» (lib/instr.js)
-    { name: 'Si-12.26 фьючерс USD/RUB sell', kind: 'FXF', productGroup: 'fx_future', ccy: 'USD', curve: 'USD SOFR', curve2: 'RUB RUONIA', tenor: 0.15, notional: -20e6, rate: 84.60, book: 'FXB', cpty: 'MOEX' },
-    { name: 'CCS USD/RUB 3Y', kind: 'XCCY', productGroup: 'ccs', ccy: 'USD', curve: 'USD SOFR', curve2: 'RUB RUONIA', tenor: 3, notional: 15e6, rate: 4.10, book: 'FXB', cpty: 'ВТБ' },
+    { name: 'Si-12.26 фьючерс USD/RUB sell', kind: 'FXF', productGroup: 'fx_future', ccy: 'USD', curve: 'USD SOFR', curve2: 'RUB RUONIA', tenor: 0.15, notional: -20e6, rate: 84.60, book: 'FXB', cpty: 'Биржа' },
+    { name: 'CCS USD/RUB 3Y', kind: 'XCCY', productGroup: 'ccs', ccy: 'USD', curve: 'USD SOFR', curve2: 'RUB RUONIA', tenor: 3, notional: 15e6, rate: 4.10, book: 'FXB', cpty: 'Контрагент В' },
     // TRS по отчёту без риска: в таблице «валюта × тип» — «без риска», не ноль
     // РЕПО на RUONIA (#201): оценено ядром из условий сделки (p.ratesCore), в данных прогона — строка OTC
     { name: 'Обратное РЕПО 3M RUONIA+20', kind: 'OTC', productGroup: 'repo', ccy: 'RUB', curve: 'RUB RUONIA', tenor: 0.25, notional: 2000e6, rate: 14.52, book: 'RATES', cpty: 'Контрагент А' },
-    { name: 'TRS корп. облигации 1Y (по отчёту)', kind: 'OTC', productGroup: 'trs', ccy: 'RUB', curve: 'RUB RUONIA', tenor: 1, notional: 1500e6, rate: 14.50, book: 'RATES', cpty: 'Газпромбанк' },
+    { name: 'TRS корп. облигации 1Y (по отчёту)', kind: 'OTC', productGroup: 'trs', ccy: 'RUB', curve: 'RUB RUONIA', tenor: 1, notional: 1500e6, rate: 14.50, book: 'RATES', cpty: 'Контрагент Г' },
     // FX-сделки с двумя валютами риска: NDF (расчёт разницы в рублях), кросс без рубля (FX-дельта в двух валютах, риск
     // на двух иностранных кривых), FX-своп (две ноги, риск на implied-кривой юаня), CHF-форвард (своя кривая и валюта)
-    { name: 'NDF USD/RUB 6M buy (расчёт в RUB)', kind: 'FXF', productGroup: 'fx_ndf', ccy: 'USD', curve: 'USD SOFR', curve2: 'RUB RUONIA', tenor: 0.5, notional: 30e6, rate: 85.10, settle: 'cash', book: 'FXB', cpty: 'Сбербанк' },
-    { name: 'FX fwd USD/CNY 3M buy (кросс)', kind: 'FXF', ccy: 'USD', ccy2: 'CNY', curve: 'USD SOFR', curve2: 'CNY XCCY', tenor: 0.25, notional: 20e6, rate: 7.12, book: 'FXB', cpty: 'ВТБ' },
-    { name: 'FX swap CNY/RUB TOM/1M buy/sell', kind: 'FXF', ccy: 'CNY', curve: 'CNY FWD', curve2: 'RUB RUONIA', tenor: 0.083, notional: -300e6, rate: 11.53, near: 11.42, book: 'FXB', cpty: 'НКЦ' },
+    { name: 'NDF USD/RUB 6M buy (расчёт в RUB)', kind: 'FXF', productGroup: 'fx_ndf', ccy: 'USD', curve: 'USD SOFR', curve2: 'RUB RUONIA', tenor: 0.5, notional: 30e6, rate: 85.10, settle: 'cash', book: 'FXB', cpty: 'Контрагент Б' },
+    { name: 'FX fwd USD/CNY 3M buy (кросс)', kind: 'FXF', ccy: 'USD', ccy2: 'CNY', curve: 'USD SOFR', curve2: 'CNY XCCY', tenor: 0.25, notional: 20e6, rate: 7.12, book: 'FXB', cpty: 'Контрагент В' },
+    { name: 'FX swap CNY/RUB TOM/1M buy/sell', kind: 'FXF', ccy: 'CNY', curve: 'CNY FWD', curve2: 'RUB RUONIA', tenor: 0.083, notional: -300e6, rate: 11.53, near: 11.42, book: 'FXB', cpty: 'ЦК (клиринг)' },
     // мелкие кроссы: вторая валюта (GBP, AED) — остаток ОВП, в плитке ОВП свёрнут в «+N прочих» (R43); своей кривой
     // у GBP и AED в демо нет — дисконт по кривой первой валюты
-    { name: 'FX fwd EUR/GBP 1M buy (кросс)', kind: 'FXF', ccy: 'EUR', ccy2: 'GBP', curve: 'EUR ESTR', curve2: 'EUR ESTR', tenor: 0.083, notional: 40e3, rate: 0.8705, book: 'FXB', cpty: 'ВТБ' },
-    { name: 'FX fwd USD/AED 1M buy (кросс)', kind: 'FXF', ccy: 'USD', ccy2: 'AED', curve: 'USD SOFR', curve2: 'USD SOFR', tenor: 0.083, notional: 9e3, rate: 3.6725, book: 'FXB', cpty: 'ВТБ' },
-    { name: 'CHF/RUB fwd 6M buy', kind: 'FXF', ccy: 'CHF', curve: 'CHF SARON', curve2: 'RUB RUONIA', tenor: 0.5, notional: 8e6, rate: 107.90, book: 'FXB', cpty: 'Газпромбанк' },
+    { name: 'FX fwd EUR/GBP 1M buy (кросс)', kind: 'FXF', ccy: 'EUR', ccy2: 'GBP', curve: 'EUR ESTR', curve2: 'EUR ESTR', tenor: 0.083, notional: 40e3, rate: 0.8705, book: 'FXB', cpty: 'Контрагент В' },
+    { name: 'FX fwd USD/AED 1M buy (кросс)', kind: 'FXF', ccy: 'USD', ccy2: 'AED', curve: 'USD SOFR', curve2: 'USD SOFR', tenor: 0.083, notional: 9e3, rate: 3.6725, book: 'FXB', cpty: 'Контрагент В' },
+    { name: 'CHF/RUB fwd 6M buy', kind: 'FXF', ccy: 'CHF', curve: 'CHF SARON', curve2: 'RUB RUONIA', tenor: 0.5, notional: 8e6, rate: 107.90, book: 'FXB', cpty: 'Контрагент Г' },
   ];
   der.forEach(d => P.push(Object.assign({ isin: null, issuer: null, group: 'DER', maturity: addMonths(AS_OF, Math.round(d.tenor * 12)), spreadBp: 0, cpn: null }, d)));
 

@@ -141,6 +141,12 @@ body.k-col-moving, body.k-col-moving * { cursor: grabbing !important; user-selec
    внизу (как у K.table), а закреплённая строка «Итого» таблицы стоит над ней, а не под ней */
 .k-tbl-ctlbar-m { height: 24px; box-sizing: border-box; align-items: center; }
 table.k-tooled tfoot td { bottom: 24px; }
+/* подвал из нескольких строк («Итого» + «кумулятив», #224): липким делаем весь tfoot, а не каждую ячейку с bottom: 0 —
+   иначе строки ложатся друг на друга; закреплённые слева ячейки (.k-pin2) остаются липкими только по горизонтали */
+.k-tbl tfoot:has(> tr + tr) { position: sticky; bottom: 0; z-index: 2; }
+table.k-tooled tfoot:has(> tr + tr) { bottom: 24px; }
+.k-tbl tfoot:has(> tr + tr) td { position: static; bottom: auto; }
+.k-pin2 tfoot:has(> tr + tr) tr > :first-child, .k-pin2 tfoot:has(> tr + tr) tr > :nth-child(2) { position: sticky; bottom: auto; }
 /* короткие таблицы без «Итого» в тексте страницы (брифинг C05, списки C08) — строка просто под таблицей */
 table.mini + .k-tbl-ctlbar-m { position: static; background: transparent; }
 .k-tbtn { padding: 1px 7px; border: 1px solid var(--line); border-radius: 5px; background: transparent; color: var(--fg-3); cursor: pointer; font-size: 11px; line-height: 16px; }
@@ -220,6 +226,12 @@ table.k-tbl.k-compact { width: auto; font-size: 12px; }
 .k-compact td.n, .k-compact th.n { min-width: 58px; }
 .k-rm-bar { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .k-rm { overflow: auto; }
+/* матрица в контейнере с ограниченной высотой (плитка C06, #210): контейнер — колонка, а .k-rm занимает остаток и
+   прокручивается сам — тогда липкая строка «Итого» прилипает к низу видимой части, а не прячется под прокруткой
+   контейнера. Без ограничения высоты (C01) .k-rm растёт по содержимому, как раньше */
+:has(> .k-rm) { display: flex; flex-direction: column; }
+:has(> .k-rm) > .k-rm-bar { flex: none; }
+.k-rm { flex: 0 1 auto; min-height: 0; }
 /* первые две колонки (название и итог) закреплены при горизонтальной прокрутке */
 .k-pin2 tr > :first-child { position: sticky; left: 0; z-index: 1; background: var(--panel); min-width: 120px; }
 .k-pin2 tr > :nth-child(2) { position: sticky; left: 120px; z-index: 1; background: var(--panel); border-right: 1px solid var(--line-2); }

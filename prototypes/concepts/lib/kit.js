@@ -125,6 +125,13 @@
     yrs: t => t == null ? '—' : t < 1 ? Math.round(t * 12) + 'м' : grp(t, 1) + 'г',
     cls: v => v > 0 ? 'pos' : v < 0 ? 'neg' : '',
   };
+  // деление оси графика (#218): v / scale с тем числом знаков после точки, которое есть у самого деления (0.2 → «0.2»,
+  // 1 → «1»), но не больше, чем нужно по величине (от 10 — целые, от 1 — один знак, меньше — два): в валюте отчёта,
+  // отличной от рубля, мелкие деления не превращаются в ряд «0», а крайние деления (min/max оси) не тянут хвост знаков
+  K.tick = (v, scale) => {
+    const x = v / (scale || 1), a = Math.abs(x), cap = a >= 10 ? 0 : a >= 1 ? 1 : 2;
+    return grp(x, Math.min(cap, (String(+x.toFixed(6)).split('.')[1] || '').length));
+  };
   // заседание ЦБ одной фразой: консенсус и ожидание кривой, если они есть в данных, иначе ставка и прошлое решение
   K.cbrLine = () => {
     const c = M.cbr || {}, n = c.next || {}, last = (c.past || [])[0];
@@ -271,8 +278,11 @@
     return 'background:rgba(' + c + ',' + alpha + ')';
   };
   // риск (не «хорошо/плохо»): синий — длинная дюрация (DV01 < 0), янтарный — короткая (DV01 > 0)
-  K.heatRisk = (v, max) => { if (!v || !max) return ''; const a = Math.min(1, Math.abs(v) / max), al = (0.07 + 0.6 * Math.pow(a, 0.7)).toFixed(3); return 'background:rgba(' + (v < 0 ? '76,157,255' : '227,160,60') + ',' + al + ')'; };
-  K.heatMono = (v, max, rgb) => { if (!v || !max) return ''; const a = Math.min(1, Math.abs(v) / max); return 'background:rgba(' + (rgb || '76,157,255') + ',' + (0.06 + 0.6 * Math.pow(a, 0.7)).toFixed(3) + ')'; };
+  // K.heatRisk и K.heatMono (фон только по величине) — не смысловой цвет (#216): метка K.HEAT_PLAIN в style
+  // говорит K.accKeep, что бухгалтерский красный у отрицательного числа на таком фоне остаётся
+  K.HEAT_PLAIN = '--k-heat:plain;';
+  K.heatRisk = (v, max) => { if (!v || !max) return ''; const a = Math.min(1, Math.abs(v) / max), al = (0.07 + 0.6 * Math.pow(a, 0.7)).toFixed(3); return K.HEAT_PLAIN + 'background:rgba(' + (v < 0 ? '76,157,255' : '227,160,60') + ',' + al + ')'; };
+  K.heatMono = (v, max, rgb) => { if (!v || !max) return ''; const a = Math.min(1, Math.abs(v) / max); return K.HEAT_PLAIN + 'background:rgba(' + (rgb || '76,157,255') + ',' + (0.06 + 0.6 * Math.pow(a, 0.7)).toFixed(3) + ')'; };
   K.bar = (v, max, one) => { if (!max) return ''; const w = Math.min(50, Math.abs(v) / max * 50); return one ? '<div class="k-bar one"><i class="a" style="left:0;width:' + (w * 2) + '%"></i></div>' : '<div class="k-bar"><i class="' + (v >= 0 ? 'p' : 'n') + '" style="' + (v >= 0 ? 'left:50%' : 'right:50%') + ';width:' + w + '%"></i></div>'; };
   K.spark = (arr, w, hgt, color) => {
     w = w || 80; hgt = hgt || 22; const a = arr.filter(x => x != null); if (a.length < 2) return '';
@@ -323,7 +333,7 @@
     if (!chipsBox) return;
     const ent = M.entities;
     const desks = [...new Set(M.books.filter(b => !filt.entity || b.entity === filt.entity).map(b => b.desk))];
-    const lbl = filt.books && filt.books.length ? (filt.books.length === 1 ? M.book[filt.books[0]].name : filt.books.length + ' книг') : 'все книги (' + booksIn().length + ')';
+    const lbl = filt.books && filt.books.length ? (filt.books.length === 1 ? M.book[filt.books[0]].name : filt.books.length + ' книг') : 'все книги · ' + booksIn().length;
     // чип портфелей — когда адаптер их передал (x_portfolio); у прогона без колонки все позиции «без портфеля»
     const off = portsOff(), showPorts = PORTS.some(v => v !== '—');
     const plbl = !off.length ? 'все портфели' : off.length === 1 ? 'без ' + portName(off[0]) : 'портфели: ' + (PORTS.length - off.length) + ' из ' + PORTS.length;
@@ -987,14 +997,16 @@
     return '';
   };
   // смысловой цвет страницы важнее бухгалтерского красного (#103): классы знака и изменения (pos, neg, chg-up,
-  // chg-dn — у доходности рост красный, падение зелёное) и фон тепловой карты (K.heat в style) — у самого элемента
-  // или у его ячейки; такая цифра остаётся в скобках, но красной не становится
+  // chg-dn — у доходности рост красный, падение зелёное), цвет текста в style и фон тепловой карты по знаку (K.heat)
+  // — у самого элемента или у его ячейки; такая цифра остаётся в скобках, но красной не становится. Фон по величине
+  // (K.heatMono) и фон риска (K.heatRisk) помечены K.HEAT_PLAIN и смысловым не считаются (#216)
   K.ACC_KEEP = ['pos', 'neg', 'chg-up', 'chg-dn'];
   K.accKeep = e => {
     for (let x = e, i = 0; x && i < 4; x = x.parentElement, i++) {
       if (x.classList && K.ACC_KEEP.some(c => x.classList.contains(c))) return true;
       const st = x.getAttribute && x.getAttribute('style');
-      if (st && /(^|;)\s*(background|color)\s*:/.test(st)) return true;
+      if (st && /(^|;)\s*color\s*:/.test(st)) return true;
+      if (st && /(^|;)\s*background\s*:/.test(st) && !/(^|;)\s*--k-heat\s*:\s*plain/.test(st)) return true;
       if (x.tagName === 'TD' || x.tagName === 'TH') break;
     }
     return false;
@@ -2248,7 +2260,7 @@
       const lo = Math.min(0, ...segs.map(x => Math.min(x[0], x[1]))), hi = Math.max(0, ...segs.map(x => Math.max(x[0], x[1])));
       return {
         grid: { left: 6, right: 10, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'item', formatter: p => (keys[p.dataIndex] ? keys[p.dataIndex][1] : 'Итого') + ': <b>' + f.mns(p.dataIndex < vals.length ? vals[p.dataIndex] : run, 2) + '</b> mm ₽' },
-        xAxis: { type: 'category', data: keys.map(k => k[0] === 'funding' ? 'Фондир.' : k[1]).concat(['Итого']), axisLabel: { interval: 0, fontSize: 10 } }, yAxis: { type: 'value', unit: 'mm ₽', nameGap: 20, min: lo, max: hi, scale: false, axisLabel: { formatter: v => f.mn(v, 0) } },
+        xAxis: { type: 'category', data: keys.map(k => k[0] === 'funding' ? 'Фондир.' : k[1]).concat(['Итого']), axisLabel: { interval: 0, fontSize: 10 } }, yAxis: { type: 'value', unit: 'mm ₽', nameGap: 20, min: lo, max: hi, scale: false, axisLabel: { formatter: v => K.tick(v, 1e6), hideOverlap: true } },
         series: [{
           type: 'custom', data: segs.map((s, i) => [i, s[0], s[1]]),
           renderItem: (params, api) => {
@@ -2313,7 +2325,7 @@
     const t = e.target.closest && e.target.closest('[data-fxmore]');
     if (!t) return;
     const tb = t.closest('.k-fxm'); tb.classList.toggle('open');
-    t.firstChild.textContent = tb.classList.contains('open') ? 'свернуть прочие (' + t.dataset.fxmore + ')' : '+' + t.dataset.fxmore + ' прочих';
+    t.firstChild.textContent = tb.classList.contains('open') ? 'свернуть ' + t.dataset.fxmore + ' прочих' : '+' + t.dataset.fxmore + ' прочих';
   });
 
   // стандартная строка HUD: риск по валютам и кривым, PnL, кэрри, объём

@@ -155,7 +155,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
       emphasis: { itemStyle: { borderWidth: 3.5 } },
     });
     return {
-      grid: { left: 10, right: 20, top: 40, bottom: 10, containLabel: true },
+      grid: { left: 10, right: 20, top: 40, bottom: 30, containLabel: true },
       legend: { top: 4, right: 12, data: ['ОФЗ'].concat(GR.map(x => x[0])).concat(['кривая ОФЗ', 'RUONIA OIS', 'наши']) },
       tooltip: {
         trigger: 'item', formatter: pp => {
@@ -225,7 +225,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
     fxL = K.list().filter(p => p.group !== 'DER' && p.ccy === S.fx);
     const cid = M.curves.find(c => c.ccy === S.fx).id;
     return {
-      grid: { left: 8, right: 16, top: 36, bottom: 8, containLabel: true }, legend: { top: 2, right: 10, data: ['рынок', 'наши', M.curve[cid].short] },
+      grid: { left: 8, right: 16, top: 36, bottom: 28, containLabel: true }, legend: { top: 2, right: 10, data: ['рынок', 'наши', M.curve[cid].short] },
       tooltip: { formatter: pp => { if (pp.seriesName === 'наши') { const p = fxL[pp.data.i]; return '<b>' + esc(p.name) + '</b><br>дох. ' + f.pct(p.ytm) + ' · Z ' + f.bp(p.zspread) + ' б.п.<br>MV ' + f.mn(p.mv, 0) + ' mm ₽<br><span style="opacity:.6">щелчок — карточка</span>'; } const b = pp.data.b; return b ? '<b>' + esc(b.name) + '</b><br>' + esc(b.rating) + ' · купон ' + f.pct(b.cpn) + ' ' + b.freq + '<br>дох. ' + f.pct(b.ytm) + ' · ' + (b.put ? 'пут ' + f.date(b.put) : 'погаш. ' + f.date(b.maturity)) + '<br>в обращении ' + f.mn(b.outstanding, 0) + ' mm ' + b.ccy + (b.held ? '<br><b>в портфеле</b>' : '') : ''; } },
       xAxis: { type: 'value', name: 'срок, лет', nameLocation: 'middle', nameGap: 22, min: 0 }, yAxis: { type: 'value', name: 'дох., %', nameTextStyle: { align: 'left' }, scale: true },
       series: [

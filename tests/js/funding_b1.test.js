@@ -156,5 +156,13 @@ t('#168: итог фондирования по группе, где оно ни
   assert.ok(K.d({ title: 'x', fmt: K.f.k, list: M.positions, val: 'fundingDay' }).includes('data-dr'));
 });
 
+t('#253: C04 — шапка «итого» как строка «Итого»: мера, не посчитанная ни у одной позиции, — «—», а не 0', () => {
+  const c04 = P('concepts/c04-pivot.html');
+  // ячейка (и строка «Итого»): nul без посчитанных значений — «—»
+  assert.ok(c04.includes("if (a && a.nul && !a.n) return '<td class=\"n zero ' + (cls || '') + '\" title=\"не посчитано\">—</td>'"));
+  // шапка: то же условие для итога всей таблицы
+  assert.ok(/\(tot && !\(tot\.nul && !tot\.n\) \? K\.d\(/.test(c04), 'шапка C04 проверяет tot.nul && !tot.n');
+});
+
 for (const [name, f] of tests) { f(); n++; console.log('ok', name); }
 console.log(n + ' tests passed');
