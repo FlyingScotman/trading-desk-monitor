@@ -62,7 +62,11 @@ def report(usd):
     return [{"entity": "ENT1", "book_id": "D1", "ccy": "USD", "ocp_ccy": str(usd), "_set_id": 1, "_src": "L2"}]
 
 
-def run(report_rows, policy=O.PROVISIONAL_POLICY, units=UNITS):
+GROSS = O.OcpPolicy(bond_funding_liability=True)
+"""ROWS hold the bond gross (a run before TDM#54): its liability as the ``funding`` component."""
+
+
+def run(report_rows, policy=GROSS, units=UNITS):
     return O.compute_ocp(ROWS, BOOKS, ON, terms=TERMS, cash=CASH, liabilities=LIAB, report_rows=report_rows,
                          report_units=units, policy=policy)
 
@@ -175,11 +179,11 @@ def test_compat_transfers_in_tdm_shape():
 
 
 def test_provisional_conventions():
-    nominal = run(report(0), O.OcpPolicy(amount_basis=O.AmountBasis.NOMINAL))
+    nominal = run(report(0), O.OcpPolicy(amount_basis=O.AmountBasis.NOMINAL, bond_funding_liability=True))
     assert {x.position_id: x.amount for x in nominal.lines if x.component == "fx_legs"}["D1|FWD"] == 500_000
     no_ndf = run(report(0), O.OcpPolicy(include_ndf=False))
     assert "D1|NDF" not in no_ndf.per_position and any("NDF" in n for n in no_ndf.notes)
-    no_cash = run(report(0), O.OcpPolicy(cash_from_balances=False, bond_funding_liability=False))
+    no_cash = run(report(0), O.OcpPolicy(cash_from_balances=False))
     assert not any(x.key.startswith(("CASH|", "FUND|")) for x in no_cash.lines)
     window = run(report(0), O.OcpPolicy(settle_window_bd=0))
     assert window.per_position["D1|SPOT"]["component"] == "fx_legs"

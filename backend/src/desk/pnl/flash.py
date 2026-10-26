@@ -256,6 +256,12 @@ class FlashPnl:
     bond by nothing to first order (its RUONIA risk is its basis risk x the KBD's par move per OIS quote), not by its row's
     ``RUB RUONIA`` (RUONIA minus the basis: the scenarios' coordinates, ``valuation.bonds.ofz_levels``). None for every
     other bond."""
+    fx_funding: float = 0.0
+    """A foreign bond funded in its currency (OQ-04, TDM#54): the FX revaluation of its currency funding liability of
+    D-1 (``publish.fx_liability``: negative for a long when the rate rises), set by the run; ``fx_gross + fx_funding`` is
+    the bond's FX net of its funding. Outside ``explained`` and ``total`` (the position's MV change), as ``funding``."""
+    fx_funding_cbr: float | None = None
+    """The same at the CBR rates in force; None without them or without a liability."""
 
     @property
     def explained(self) -> float:
@@ -264,8 +270,9 @@ class FlashPnl:
     def as_tdm(self) -> dict[str, float]:
         """The ``pnl`` dict of a ``tdm`` position (writer PNL_COLS)."""
         return {"carry": self.carry, "rolldown": self.rolldown, "rates": self.rates, "spread": self.spread,
-                "convexity": 0.0, "other": self.other, "fx_gross": self.fx_gross, "fx_funding": 0.0, "new_trades": 0.0,
-                **({"fx_gross_cbr": self.fx_gross_cbr} if self.fx_gross_cbr is not None else {})}
+                "convexity": 0.0, "other": self.other, "fx_gross": self.fx_gross, "fx_funding": self.fx_funding,
+                "new_trades": 0.0, **({"fx_gross_cbr": self.fx_gross_cbr} if self.fx_gross_cbr is not None else {}),
+                **({"fx_funding_cbr": self.fx_funding_cbr} if self.fx_funding_cbr is not None else {})}
 
     def extra(self) -> dict[str, Any]:
         fx = {} if self.fx_rates is None else {

@@ -291,7 +291,8 @@ def funding_out(run_id: int, block: dict[str, Any] | None) -> RunFunding:
         books=[BookFunding(book_id=k, **{f: v.get(f) for f in BookFunding.model_fields if f != "book_id"})
                for k, v in sorted((b.get("by_book") or {}).items())],
         entities=b.get("by_entity") or {}, problems=b.get("problems") or [], notes=b.get("notes") or [],
-        provisional=(policy or {}).get("provisional") or [], policy=policy, lines=b.get("lines") or [])
+        provisional=(policy or {}).get("provisional") or [], policy=policy, lines=b.get("lines") or [],
+        fx_liability=b.get("fx_liability"))
 
 
 def ocp_out(run_id: int, block: dict[str, Any] | None) -> RunOcp:

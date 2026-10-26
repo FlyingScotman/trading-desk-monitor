@@ -73,7 +73,7 @@ from .. import __version__ as BACKEND_VERSION
 from ..curves import fx as fxcurves
 from ..curves import proxy, rates
 from ..marketdata import ratings
-from ..marketdata.adapter import MarketView
+from ..marketdata.adapter import MarketView, bond_currency
 from ..marketdata.bundle import SnapshotError
 from ..marketdata.static_facts import SECTOR_LABELS
 from ..orchestrator import EodContext, Outcome, market_rates
@@ -557,7 +557,7 @@ def ofz_basis(t: Any, v: BondValuation) -> dict[str, Any]:
     (``bonds.ofz_levels``), so ``risk["RUB RUONIA"]`` is the RUONIA risk minus the basis and its sum over the curves is
     ``ofz_ruonia01``. Without it (0.2.6, an OFZ on a fallback rung) the pages' RUONIA is the basis again (variant P).
     Empty for every other row."""
-    if t.bond_class not in OFZ_KBD_CLASSES or (t.face_unit or "RUB") != "RUB":
+    if t.bond_class not in OFZ_KBD_CLASSES or bond_currency(t) != "RUB":
         return {}
     out = {"ofz_basis01": math.fsum((v.risk().get(OFZ_CURVE) or {}).values()) + 0.0}
     if v.ofz_ruonia:
@@ -579,7 +579,7 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
     as_of = ctx.business_date
     spread_dur = -v.spread01_rub / v.pv_rub * 1e4 if v.pv_rub and v.spread01_rub else None
     sa = q.source_analytics if q else {}
-    ccy = t.face_unit or "RUB"
+    ccy = bond_currency(t)  # the face unit, else the currency (RUR, SUR: RUB), TDM#169
     fx = fx_rate(ctx, ccy) if ccy != "RUB" else None  # foreign face: amounts in RUB, notional and FX delta in ccy
     cpn = coupon_view(t, as_of, lambda code: (f[1] if (f := ctx.market.latest_fixing(code)) else None))
     if cpn.pct is None and v.current_coupon_pct is not None:
