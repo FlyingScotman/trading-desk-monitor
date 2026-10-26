@@ -2008,6 +2008,154 @@
         }
       }
     },
+    "/api/v1/concepts/carry": {
+      "get": {
+        "summary": "Concepts Carry",
+        "description": "The forward carry of a run to a horizon (TDM#66, ``scenario.carry``): per position core's horizon carry (coupon, pull, roll-down; the spread held, the curves static) and the funding of the period apart (TDM#168), net their sum; totals by book, entity, currency and kind. Funding not configured: null, not 0",
+        "operationId": "concepts_carry_api_v1_concepts_carry_get",
+        "parameters": [
+          {
+            "name": "run",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "run_id; default: the run shown (as_of's, else the newest), as the concept pages",
+              "title": "Run"
+            },
+            "description": "run_id; default: the run shown (as_of's, else the newest), as the concept pages"
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As Of"
+            }
+          },
+          {
+            "name": "horizon",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "1M, 3M, 6M, 1Y (months after the run date) or an ISO date after it",
+              "default": "3M",
+              "title": "Horizon"
+            },
+            "description": "1M, 3M, 6M, 1Y (months after the run date) or an ISO date after it"
+          },
+          {
+            "name": "ks",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "flat",
+                "steps"
+              ],
+              "type": "string",
+              "description": "the key-rate path of the funding: flat (every index at the run date's value) or steps (a step per CBR meeting)",
+              "default": "flat",
+              "title": "Ks"
+            },
+            "description": "the key-rate path of the funding: flat (every index at the run date's value) or steps (a step per CBR meeting)"
+          },
+          {
+            "name": "steps",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ks=steps: bp per CBR meeting after the run date, comma-separated, in meeting order (missing: 0)",
+              "title": "Steps"
+            },
+            "description": "ks=steps: bp per CBR meeting after the run date, comma-separated, in meeting order (missing: 0)"
+          },
+          {
+            "name": "spread",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "held",
+                "curve"
+              ],
+              "type": "string",
+              "description": "held: each bond's spread held; curve: it rolls along its rating grade's median G-spread curve (spreadRoll, in carry)",
+              "default": "held",
+              "title": "Spread"
+            },
+            "description": "held: each bond's spread held; curve: it rolls along its rating grade's median G-spread curve (spreadRoll, in carry)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarryOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
     "/api/v1/autopilot/status": {
       "get": {
         "tags": [
@@ -3487,6 +3635,653 @@
           "write_off"
         ],
         "title": "BookFunding"
+      },
+      "CarryMeeting": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date",
+            "title": "Date"
+          },
+          "effective": {
+            "type": "string",
+            "format": "date",
+            "title": "Effective"
+          },
+          "estimated": {
+            "type": "boolean",
+            "title": "Estimated"
+          },
+          "stepBp": {
+            "type": "number",
+            "title": "Stepbp",
+            "description": "The key-rate step applied from the effective date (0 with ks=flat)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "date",
+          "effective",
+          "estimated",
+          "stepBp"
+        ],
+        "title": "CarryMeeting"
+      },
+      "CarryOut": {
+        "properties": {
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "runId": {
+            "type": "integer",
+            "title": "Runid"
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date",
+            "title": "Asof"
+          },
+          "horizonDate": {
+            "type": "string",
+            "format": "date",
+            "title": "Horizondate"
+          },
+          "days": {
+            "type": "integer",
+            "title": "Days"
+          },
+          "reportingCcy": {
+            "type": "string",
+            "title": "Reportingccy"
+          },
+          "ks": {
+            "type": "string",
+            "enum": [
+              "flat",
+              "steps"
+            ],
+            "title": "Ks"
+          },
+          "spread": {
+            "type": "string",
+            "enum": [
+              "held",
+              "curve"
+            ],
+            "title": "Spread"
+          },
+          "spreadCurves": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Spreadcurves",
+            "description": "spread=curve: the peer curves by rating grade (grade, issues, points [tenor years, median G-spread bp])"
+          },
+          "meetings": {
+            "items": {
+              "$ref": "#/components/schemas/CarryMeeting"
+            },
+            "type": "array",
+            "title": "Meetings",
+            "description": "The CBR meetings that take effect in (asOf, horizonDate]"
+          },
+          "keyRatePath": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Keyratepath",
+            "description": "The key rate from each date on, %: the run date's, then after each step (ks=steps)"
+          },
+          "fundingStatus": {
+            "type": "string",
+            "enum": [
+              "computed",
+              "not_configured",
+              "invalid_config",
+              "failed"
+            ],
+            "title": "Fundingstatus"
+          },
+          "fundingText": {
+            "type": "string",
+            "title": "Fundingtext"
+          },
+          "positions": {
+            "items": {
+              "$ref": "#/components/schemas/CarryPosition"
+            },
+            "type": "array",
+            "title": "Positions"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/CarrySums"
+          },
+          "byBook": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CarrySums"
+            },
+            "type": "object",
+            "title": "Bybook"
+          },
+          "byEntity": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CarrySums"
+            },
+            "type": "object",
+            "title": "Byentity"
+          },
+          "byCcy": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CarrySums"
+            },
+            "type": "object",
+            "title": "Byccy"
+          },
+          "byKind": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CarrySums"
+            },
+            "type": "object",
+            "title": "Bykind"
+          },
+          "fundingBookLevel": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Fundingbooklevel",
+            "description": "Funding lines without a position (cash balances)"
+          },
+          "fundingProblems": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Fundingproblems"
+          },
+          "provisional": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Provisional",
+            "description": "Funding policy fields at the engine's provisional default"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes",
+            "description": "The assumptions of the forecast"
+          }
+        },
+        "type": "object",
+        "required": [
+          "method",
+          "runId",
+          "asOf",
+          "horizonDate",
+          "days",
+          "reportingCcy",
+          "ks",
+          "spread",
+          "spreadCurves",
+          "meetings",
+          "keyRatePath",
+          "fundingStatus",
+          "fundingText",
+          "positions",
+          "totals",
+          "byBook",
+          "byEntity",
+          "byCcy",
+          "byKind",
+          "fundingBookLevel",
+          "fundingProblems",
+          "provisional",
+          "notes"
+        ],
+        "title": "CarryOut",
+        "description": "The forward carry of a run to a horizon (TDM#66, ``scenario.carry``): «Кэрри» (coupon, pull, roll-down) and\n«Фондирование» apart, «Нетто» their sum (TDM#168), per position and by book, entity, currency and kind."
+      },
+      "CarryPosition": {
+        "properties": {
+          "positionId": {
+            "type": "string",
+            "title": "Positionid"
+          },
+          "bookId": {
+            "type": "string",
+            "title": "Bookid"
+          },
+          "entity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entity"
+          },
+          "secid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secid"
+          },
+          "ccy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ccy"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind",
+            "description": "Instrument kind of the risk table (``concepts.instr_kind``)"
+          },
+          "quality": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quality"
+          },
+          "carry": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Carry",
+            "description": "The whole change of value to the horizon (coupons received + the change of the dirty price, the curves carried): coupon + pull + rolldown (core horizon_pnl_rub) + spreadRoll; the screen's one «Кэрри» column"
+          },
+          "coupon": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coupon",
+            "description": "Coupons received + the change of the accrued coupon to the horizon"
+          },
+          "pull": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pull",
+            "description": "The rest of core's carry_rub: the clean price's drift on today's forwards at the held spread (the pull to par)"
+          },
+          "rolldown": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rolldown",
+            "description": "Core's rolldown_rub: the curve keeping its shape"
+          },
+          "funding": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Funding",
+            "description": "Funding over (run date, horizon], RUB (negative: a cost); 0 when the position is not funded on its MV, null when unknown or not configured"
+          },
+          "net": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net",
+            "description": "carry + funding; null while either is"
+          },
+          "fundingState": {
+            "type": "string",
+            "enum": [
+              "funded",
+              "not_funded",
+              "problem",
+              "not_configured",
+              "not_valued"
+            ],
+            "title": "Fundingstate"
+          },
+          "fundingSource": {
+            "type": "string",
+            "enum": [
+              "adapter",
+              "settings",
+              "settings_override",
+              "default",
+              "contract",
+              "none"
+            ],
+            "title": "Fundingsource",
+            "description": "The rule that priced the funding (the line's rule_source, TDM#237): adapter, settings, settings_override, default (the settings' market default rate), contract (an HTM lot's own rate); none without a line"
+          },
+          "fundingRate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fundingrate"
+          },
+          "fundingRuleId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fundingruleid",
+            "description": "The rule's id (the line's rule_id)"
+          },
+          "fundingNote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fundingnote"
+          },
+          "spreadRoll": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spreadroll",
+            "description": "spread=curve: CS01 x spreadRollBp (first order), included in carry; null when the spread is held (spreadCurve says why) or spread=held"
+          },
+          "spreadRollBp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spreadrollbp",
+            "description": "The spread's roll along its peers' curve to the horizon, bp: curve(tenor at the horizon) - curve(tenor now)"
+          },
+          "spreadCurve": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spreadcurve",
+            "description": "spread=curve: the rating grade whose peer curve it rolled on («A (для A+)»: a neighbouring grade's), or why the spread is held: no_rating, no_peer_curve, ofz_held, floater_held, not_rub, redeemed, no_cs01, no_quote, not_covered"
+          },
+          "carryMethod": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "core",
+                  "redeemed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Carrymethod",
+            "description": "core: core's horizon_portfolio; redeemed: the bond's last flow is paid by the horizon, carried as cash (received - the start's dirty PV, no roll-down); null without a forecast"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code",
+            "description": "Why there is no carry forecast: the quality, not_a_bond, base_mismatch, core_<code>; null when covered"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "positionId",
+          "bookId",
+          "entity",
+          "secid",
+          "ccy",
+          "kind",
+          "quality",
+          "carry",
+          "coupon",
+          "pull",
+          "rolldown",
+          "funding",
+          "net",
+          "fundingState",
+          "fundingSource",
+          "code"
+        ],
+        "title": "CarryPosition",
+        "description": "One position's carry to the horizon, RUB, signed. ``carry = coupon + pull + rolldown`` (core\n``horizon_portfolio``, the spread held, the curves static); null with ``code`` when there is no forecast."
+      },
+      "CarrySums": {
+        "properties": {
+          "carry": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Carry"
+          },
+          "coupon": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coupon"
+          },
+          "pull": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pull"
+          },
+          "rolldown": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rolldown"
+          },
+          "spreadRoll": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spreadroll"
+          },
+          "funding": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Funding",
+            "description": "All of the group's funding: its positions' and its lines without a position (fundingBookLevel)"
+          },
+          "fundingNoCarry": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fundingnocarry",
+            "description": "The part of funding of positions without a carry forecast"
+          },
+          "fundingBookLevel": {
+            "type": "number",
+            "title": "Fundingbooklevel"
+          },
+          "net": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net",
+            "description": "carry + funding; null while either is"
+          },
+          "nPositions": {
+            "type": "integer",
+            "title": "Npositions"
+          },
+          "nCovered": {
+            "type": "integer",
+            "title": "Ncovered"
+          },
+          "nNotCovered": {
+            "type": "integer",
+            "title": "Nnotcovered"
+          },
+          "nFunded": {
+            "type": "integer",
+            "title": "Nfunded"
+          },
+          "nFundingMissing": {
+            "type": "integer",
+            "title": "Nfundingmissing"
+          }
+        },
+        "type": "object",
+        "required": [
+          "carry",
+          "coupon",
+          "pull",
+          "rolldown",
+          "spreadRoll",
+          "funding",
+          "fundingNoCarry",
+          "fundingBookLevel",
+          "net",
+          "nPositions",
+          "nCovered",
+          "nNotCovered",
+          "nFunded",
+          "nFundingMissing"
+        ],
+        "title": "CarrySums"
       },
       "ErrorOut": {
         "properties": {
