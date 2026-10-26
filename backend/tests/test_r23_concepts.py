@@ -360,3 +360,47 @@ def test_serve_rebuilds_stale_summaries_ahead_newest_first(desk, store_url, monk
     assert TestClient(app).get("/api/v1/history/positions").status_code == 200
     assert extras(TestClient(app))["hist"]
     assert len(built) == n  # the first loads read the summaries, rebuild none
+
+
+@pytest.mark.parametrize("checked", [True, False], ids=["checked-ahead", "refused-on-write"])
+def test_prewarm_turns_off_on_a_store_that_cannot_be_written(desk, store_url, monkeypatch, checked):
+    """TDM#246, a read-only store: the first pass finds it (by the privilege check ahead, or the write refused) and
+    turns the prewarm off until a restart; no pass builds summaries again, and the bodies are built ahead as before."""
+    from psycopg.conninfo import make_conninfo
+
+    from desk.api.app import prewarm_summaries, warm_bodies
+
+    if not checked:  # past the check: the write itself is refused
+        monkeypatch.setattr(summary, "WRITABLE_SQL", "SELECT true")
+    monkeypatch.setattr(summary, "VERSION", summary.VERSION + 1)
+    app = create_app(make_conninfo(store_url, options="-c default_transaction_read_only=on"))
+    built = []
+    real = summary.build
+    monkeypatch.setattr(summary, "build", lambda rows: built.append(1) or real(rows))
+    assert prewarm_summaries(app) == 0 and app.state.prewarm_off
+    assert len(built) == (0 if checked else 1)
+    n = len(built)
+    assert prewarm_summaries(app) == 0 and len(built) == n  # off: nothing built
+    assert warm_bodies(app, summaries=True) == ["desk", "extras", "history", "calendar"]  # in memory, as before
+
+
+def test_prewarm_does_not_retry_a_run_that_fails_to_build(desk, store_url, monkeypatch):
+    """TDM#246: a run whose summary fails to build is skipped by the later passes (not left, no loop)."""
+    from desk.api.app import prewarm_summaries
+
+    with store.connect(store_url) as con:
+        ids = [r[0] for r in con.execute("SELECT run_id FROM run ORDER BY business_date, run_id")]
+    monkeypatch.setattr(summary, "VERSION", summary.VERSION + 1)
+    app = create_app(store_url)
+    real, calls = summary.ensure, []
+
+    def ensure(con, rids):
+        calls.extend(rids)
+        if rids == [ids[-1]]:
+            raise ValueError("Out of range float values are not JSON compliant")
+        return real(con, rids)
+
+    monkeypatch.setattr(summary, "ensure", ensure)
+    assert prewarm_summaries(app) == 0 and calls == ids[::-1]
+    assert app.state.prewarm_failed == {ids[-1]} and not app.state.prewarm_off
+    assert prewarm_summaries(app) == 0 and calls == ids[::-1]  # not tried again

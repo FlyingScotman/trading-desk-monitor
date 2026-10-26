@@ -238,15 +238,29 @@ STALE_SQL = (f"SELECT r.run_id FROM run r WHERE r.run_id IN ({CURRENT_RUNS}) AND
 newest first."""
 
 
-def prewarm(con: psycopg.Connection, budget_s: float, clock: Callable[[], float] = time.monotonic) -> tuple[int, int]:
+class NotWritable(Exception):
+    """The store cannot be written (no ``INSERT``/``UPDATE`` on ``run_summary``, a read-only transaction): ``prewarm``
+    stops, the pages build the summaries in memory on read (``concepts.summaries``)."""
+
+
+WRITABLE_SQL = ("SELECT has_table_privilege('run_summary', 'INSERT') AND has_table_privilege('run_summary', 'UPDATE')"
+                " AND current_setting('transaction_read_only') = 'off'")
+
+
+def prewarm(con: psycopg.Connection, budget_s: float, failed: set[int] | None = None,
+            clock: Callable[[], float] = time.monotonic) -> tuple[int, int]:
     """Rebuild the summaries a new ``VERSION`` left stale ahead of the pages (TDM#246): the runs shown (``STALE_SQL``),
     newest first, one by one for at most ``budget_s`` seconds (at least one run), so that the first page load after an
     upgrade does not rebuild a year of them (``serve`` calls it until none is left). Each summary is written on its own
     (``con`` writable, autocommit): a page reading meanwhile finds those done, and builds the rest itself; the two
-    writes of one run are the same row (``ensure``: an upsert). A run that fails to build is logged and skipped.
-    Returns (written, left)."""
+    writes of one run are the same row (``ensure``: an upsert). A store that cannot be written raises ``NotWritable``
+    before anything is built (or on the first write refused). A run that fails to build is logged, added to ``failed``
+    and skipped, here and in the later calls given the same set (the pages build it on read). Returns (written, left)."""
+    failed = set() if failed is None else failed
+    if not con.execute(WRITABLE_SQL).fetchone()[0]:
+        raise NotWritable("run_summary cannot be written")
     t0 = clock()
-    todo = [r for (r,) in con.execute(STALE_SQL, (VERSION,))]
+    todo = [r for (r,) in con.execute(STALE_SQL, (VERSION,)) if r not in failed]
     done = tried = 0
     for rid in todo:
         if tried and clock() - t0 >= budget_s:
@@ -254,6 +268,9 @@ def prewarm(con: psycopg.Connection, budget_s: float, clock: Callable[[], float]
         tried += 1
         try:
             done += ensure(con, [rid])
-        except Exception:  # one broken run never stops the others; the pages build it on read
+        except (psycopg.errors.InsufficientPrivilege, psycopg.errors.ReadOnlySqlTransaction) as e:
+            raise NotWritable(str(e)) from e
+        except Exception:  # one broken run never stops the others, nor is it built again every pass
             log.warning("run %s: summary not rebuilt", rid, exc_info=True)
+            failed.add(rid)
     return done, len(todo) - tried

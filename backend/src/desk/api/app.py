@@ -268,11 +268,20 @@ def prewarm_summaries(app: FastAPI, budget_s: float = PREWARM_S) -> int:
     """The runs' summaries a new ``publish.summary.VERSION`` left stale, rebuilt for at most ``budget_s`` seconds,
     newest first (``summary.prewarm``, TDM#246): ``serve``'s warm thread calls it at start (after an install) until
     none is left, so the first history page load (C11) reads them instead of rebuilding a year of runs. Returns how
-    many are left; 0 also when the store cannot be written (the pages build them on read, as before)."""
+    many are left. A store that cannot be written turns it off until the process restarts (0 from then on: the
+    bodies are built ahead and the pages build the summaries on read, as before); a run whose summary fails to build
+    is not tried again by this process (``app.state.prewarm_failed``)."""
     from ..publish import summary
 
+    if app.state.prewarm_off:
+        return 0
     with psycopg.connect(app.state.store_url, autocommit=True, connect_timeout=5) as w:
-        done, left = summary.prewarm(w, budget_s)
+        try:
+            done, left = summary.prewarm(w, budget_s, app.state.prewarm_failed)
+        except summary.NotWritable as e:
+            app.state.prewarm_off = True
+            log.info("run summaries not rebuilt ahead: the store cannot be written (%s)", e)
+            return 0
     if done:
         log.info("run summaries rebuilt ahead: %s (%s left)", done, left)
     return left
@@ -369,6 +378,8 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
             summary.ensure(w, ids)
 
     app.state.write_summaries = write_summaries
+    app.state.prewarm_off = False  # prewarm_summaries: the store cannot be written
+    app.state.prewarm_failed = set()  # prewarm_summaries: runs whose summary fails to build
     # window.DESK and the concept pages' series of a large book are megabytes of JSON: compressed on the wire
     app.add_middleware(GZipMiddleware, minimum_size=4096)
     authn.install(app, _error)  # sessions, roles, CSRF, audit; inside request_id (added after it)
