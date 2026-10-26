@@ -2113,6 +2113,8 @@
     const t = root && root.querySelector && root.querySelector(sel);
     if (t) K.tableTools(t, { viewKey: key, title: title + ': ' + K.htmlText(p.name), fileName: key + '_' + (p.isin || p.id) });
   });
+  // ссылка на прогнозное кэрри позиции (C17, #66): тот же прогон (run_id / as_of / demo из адреса)
+  K.carryLink = id => { const q = new URLSearchParams(); const u = new URLSearchParams(location.search); ['run_id', 'as_of', 'demo'].forEach(k => { if (u.get(k)) q.set(k, u.get(k)); }); q.set('pos', id); return 'c17-forward-carry.html?' + q.toString(); };
   K.card = function (id) {
     const p = M.pos[id]; if (!p) return;
     const o = drawer(true); o.title = p.name; o.charts = [];
@@ -2131,7 +2133,7 @@
       ['Ближайшее событие', f.date(p.event.date) + ' <small>' + ev + ', ' + f.yrs(p.tenor) + '</small>'], ['Погашение', f.date(p.maturity) + ' <small>' + f.yrs(p.yearsToMat) + '</small>'],
       ['DV01 ставки', K.d({ title: 'DV01 ' + p.name, unit: 'тыс ₽/бп', rows: [{ p, v: p.dv01 }] }, f.dv(p.dv01), '') + ' <small>тыс ₽/бп</small>', false, K.tips.dv01], ['CS01', f.dv(p.cs01) + ' <small>тыс ₽/бп</small>', false, K.tips.cs01],
       ['Базис ОФЗ01', p.basis01 ? f.dv(p.basis01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.basis01],
-      ['Спред к КБД01', p.ofzSpr01 ? f.dv(p.ofzSpr01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.ofzSpr01], ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽</small>', false, K.tips.carry],
+      ['Спред к КБД01', p.ofzSpr01 ? f.dv(p.ofzSpr01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.ofzSpr01], ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽ · <a href="' + K.carryLink(p.id) + '" title="C17: кэрри, фондирование и нетто позиции до горизонта">прогноз →</a></small>', false, K.tips.carry],
       ['Фондирование / день', K.fundingDayHtml(p) + ' <small>тыс ₽ · ставка ' + f.pct(p.fundRate) + '</small>', false, K.tips.funding + K.tips.fundRate],
       ['НКД', f.mn(p.accrued, 2) + ' <small>mm ₽</small>'], ['Рейтинг / сектор', '<span title="' + esc(K.ratingTip(p.rating, p.ratingInfo)) + '">' + esc(K.ratingText(p.rating, p.ratingInfo)) + '</span> <small>' + esc(p.sector) + '</small>'],
     ] : [
