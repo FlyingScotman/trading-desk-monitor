@@ -233,6 +233,7 @@
     try {
       if (id === undefined) return sessionStorage.getItem('desk.live.switched');
       sessionStorage.setItem('desk.live.switched', String(id));
+      sessionStorage.setItem('desk.live.switched.at', String(Date.now()));  // бейдж прогона: «✓ обновлено до #N» (#192)
     } catch (e) { return id === undefined ? null : undefined; }
   }
   let bar = null;

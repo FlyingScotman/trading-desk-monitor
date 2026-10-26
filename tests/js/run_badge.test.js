@@ -46,12 +46,13 @@ test('бейдж: возраст тикает от момента now; без в
   assert.strictEqual(K.runBadge({ publishedAt: pub }, msk('2026-10-23T11:00:30')).short, 'только что');
   const b = K.runBadge({ publishedAt: pub }, msk('2026-10-23T11:12:00'));
   assert.strictEqual(b.short, '12 мин назад');
-  assert.strictEqual(b.text, 'опубликован 12 мин назад');
+  assert.strictEqual(b.text, 'Прогон опубликован 12 мин назад');
   assert.strictEqual(b.level, 'ok');
   assert.strictEqual(K.runBadge({ publishedAt: pub }, msk('2026-10-23T11:40:00')).short, '40 мин назад');
   const u = K.runBadge({ publishedAt: null }, msk('2026-10-23T11:12:00'));
   assert.strictEqual(u.level, 'unknown');
   assert.strictEqual(u.short, '—');
+  assert.strictEqual(u.text, 'Время публикации прогона неизвестно');
 });
 
 test('устарел: в рабочие часы старше fresh_min, в любое время старше max_days; ночью и в выходные — нет', () => {
@@ -67,6 +68,13 @@ test('устарел: в рабочие часы старше fresh_min, в лю
   assert.match(old.why, /старше 3 дн/);
 });
 
+test('праздник: автопилот назвал день нерабочим (not_business_day шага intraday) — не подсвечиваем', () => {
+  const pub = '2026-11-04T09:00:00+03:00', now = msk('2026-11-04T12:00:00');  // среда, праздник
+  assert.strictEqual(K.runBadge({ publishedAt: pub }, now).level, 'stale');
+  assert.strictEqual(K.runBadge({ publishedAt: pub, reason: 'not_business_day' }, now).level, 'ok');
+  assert.strictEqual(K.runBadge({ publishedAt: pub, reason: 'no_cut_yet' }, now).level, 'stale');
+});
+
 test('закреплённый прогон и демо устаревшими не считаются', () => {
   const pub = '2026-10-19T10:00:00+03:00', now = msk('2026-10-23T12:00:00');
   assert.strictEqual(K.runBadge({ publishedAt: pub, pinned: true }, now).level, 'ok');
@@ -78,8 +86,22 @@ test('есть прогон новее: подсветка и текст, у з�
   const n = K.runBadge({ publishedAt: pub, newer: { run_id: 9, text: '23.10 11:30 · #9' } }, now);
   assert.strictEqual(n.level, 'newer');
   assert.strictEqual(n.why, 'есть прогон новее: 23.10 11:30 · #9');
-  assert.match(K.runBadge({ publishedAt: pub, pinned: true, newer: { run_id: 9 } }, now).why, /#9 \(этот выбран вручную\)/);
+  const pin = K.runBadge({ publishedAt: pub, pinned: true, newer: { run_id: 9 } }, now);
+  assert.strictEqual(pin.level, 'ok', 'закреплённый прогон — без «⟳»');
+  assert.match(pin.why, /#9 \(этот выбран вручную\)/);
   assert.strictEqual(K.runBadge({ publishedAt: pub, demo: true, newer: { run_id: 9 } }, now).level, 'ok');
+});
+
+test('часовой пояс браузера не влияет: весь файл ещё раз в America/New_York и Asia/Vladivostok', () => {
+  if (process.env.RUN_BADGE_TZ) {  // дочерний процесс: пояс действительно чужой
+    assert.strictEqual(Intl.DateTimeFormat().resolvedOptions().timeZone, process.env.TZ);
+    return;
+  }
+  const { execFileSync } = require('child_process');
+  for (const TZ of ['America/New_York', 'Asia/Vladivostok']) {
+    // упадёт хоть одна проверка — ненулевой код, execFileSync бросит ошибку с выводом
+    execFileSync(process.execPath, ['--test', __filename], { env: Object.assign({}, process.env, { TZ, RUN_BADGE_TZ: '1' }), encoding: 'utf8' });
+  }
 });
 
 test('что вошло: демо-набор — позиции, книги, PnL, рынок', () => {

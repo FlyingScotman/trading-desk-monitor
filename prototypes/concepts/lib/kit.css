@@ -47,6 +47,10 @@ td.n.k-accp::after { content: ')'; visibility: hidden; } .mut { color: var(--fg-
 .k-top .k-runage.stale { border-color: var(--warn); color: var(--warn); }
 .k-top .k-runage.newer { border-color: var(--accent); background: var(--accent-bg); }
 .k-top .k-runage.unknown { color: var(--fg-3); }
+.k-top .k-runage.done { border-color: var(--pos); color: var(--pos); }
+/* покрытие «N/M поз.» — только на широком экране: уже 1440 px шапка с ним переносится в третью строку (ревью #254);
+   оно есть в подсказке и в панели */
+@media (max-width: 1440px) { .k-top .k-runage .cv { display: none; } }
 .k-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--line-2); border-radius: 999px; background: var(--panel); cursor: pointer; font-size: 12px; white-space: nowrap; user-select: none; }
 .k-chip:hover { border-color: var(--accent); }
 .k-chip.on { background: var(--accent-bg); border-color: var(--accent); color: var(--fg); }
@@ -215,7 +219,6 @@ table.mini + .k-tbl-ctlbar-m { position: static; background: transparent; }
   .k-top { padding: 6px 10px; }
   .k-top .brand { white-space: normal; flex-wrap: wrap; }
   .k-top .brand .tag, .k-top span.asof:not(.k-chip), .k-top .k-fresh { display: none; }
-  .k-top .k-runage .cv { display: none; }
   .k-page { padding: 10px 10px 30px; }
   .k-kpi .v { font-size: 19px; }
 }

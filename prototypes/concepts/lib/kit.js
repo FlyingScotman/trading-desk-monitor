@@ -511,10 +511,11 @@
       nx.title = 'Когда автопилот спросит хаб о новом срезе (МСК); прогон появится через минуту-две после этого';
       wr.style.display = st.warn ? '' : 'none';
       if (st.warn) { wr.textContent = '⚠ ' + st.warn.text; wr.title = st.warn.title; }
+      return st;
     };
     let timer = null;
     const poll = () => { clearTimeout(timer); return fetch('../api/v1/autopilot/status', { cache: 'no-store' }).then(r => r.ok ? r.json() : null)
-      .then(j => { paint(j, j && j.now ? new Date(j.now) : new Date()); runBadgeStatus(j); }, () => paint(null, new Date()))
+      .then(j => { const st = paint(j, j && j.now ? new Date(j.now) : new Date()); runBadgeStatus(j, st.reason); }, () => paint(null, new Date()))
       .catch(() => { }).then(() => { timer = setTimeout(poll, 60e3); }); };
     runState.refresh = poll;  // #192: новый прогон по ленте — сверить сразу
     poll();
@@ -525,8 +526,9 @@
   // (сдвиг по now статуса автопилота). Новый прогон: событие 'desk:live' от lib/live.js (run.published), затем
   // сверка с latest_run статуса автопилота (R11: какой прогон «последний»).
   // Подсветка: «есть прогон новее» (latest_run — не прогон на экране) или «устарел»: в рабочие часы (пн–пт,
+  // кроме дней, которые автопилот назвал нерабочими — причина not_business_day шага intraday, как в K.headerStatus;
   // fresh_from–fresh_to МСК) старше fresh_min минут или в любое время старше max_days дней. Закреплённый прогон
-  // (?run_id= / ?as_of=) устаревшим не считается: его выбрали сами.
+  // (?run_id= / ?as_of=) не подсвечивается: его выбрали сами; «есть новее» для него — только в подсказке и панели.
   K.RUN_AGE = { fresh_min: 90, fresh_from: '10:15', fresh_to: '20:00', max_days: 3 };
   K.runAgo = function (ms) {
     const m = Math.floor(Math.max(0, ms) / 60e3);
@@ -537,20 +539,21 @@
     if (hh < 48) return hh + ' ч';
     return Math.floor(hh / 24) + ' дн.';
   };
-  // info: { publishedAt, demo, pinned, newer: {run_id, text} | null }; now — момент (по часам сервера)
-  // → { short, text, level: 'ok' | 'stale' | 'newer' | 'unknown', why }
+  // info: { publishedAt, demo, pinned, newer: {run_id, text} | null, reason: причина шага intraday автопилота };
+  // now — момент (по часам сервера) → { short, text (фраза целиком), level: 'ok' | 'stale' | 'newer' | 'unknown', why }
   K.runBadge = function (info, now) {
     const a = K.RUN_AGE, t = info.publishedAt ? +new Date(info.publishedAt) : NaN;
-    if (!isFinite(t)) return { short: '—', text: 'время публикации неизвестно', level: 'unknown', why: 'прогон без времени публикации' };
+    if (!isFinite(t)) return { short: '—', text: 'Время публикации прогона неизвестно', level: 'unknown', why: null };
     const ms = +new Date(now) - t, short = ms < 60e3 ? 'только что' : K.runAgo(ms) + ' назад';
-    const r = { short, text: 'опубликован ' + short, level: 'ok', why: null };
+    const r = { short, text: 'Прогон опубликован ' + short, level: 'ok', why: null };
     if (info.newer && !info.demo) {
-      r.level = 'newer';
+      r.level = info.pinned ? 'ok' : 'newer';
       r.why = 'есть прогон новее: ' + (info.newer.text || '#' + info.newer.run_id) + (info.pinned ? ' (этот выбран вручную)' : '');
       return r;
     }
     if (info.pinned || info.demo) return r;
-    const m = msk(now), day = m.dow >= 1 && m.dow <= 5 && m.min >= hmMin(a.fresh_from) && m.min < hmMin(a.fresh_to);
+    const m = msk(now), day = m.dow >= 1 && m.dow <= 5 && info.reason !== 'not_business_day' &&
+      m.min >= hmMin(a.fresh_from) && m.min < hmMin(a.fresh_to);
     if (ms > a.max_days * 864e5) { r.level = 'stale'; r.why = 'прогон старше ' + a.max_days + ' дн.'; }
     else if (day && ms > a.fresh_min * 60e3) { r.level = 'stale'; r.why = 'в рабочие часы прогон старше ' + a.fresh_min + ' мин: новых срезов не публиковалось'; }
     return r;
@@ -572,46 +575,81 @@
     return { short: val + '/' + ps.length + ' поз.', rows };
   };
   const DEMO_PUBLISHED = new Date(Date.now() - 12 * 60e3).toISOString();
-  const runState = { newer: null, skew: 0, live: null, refresh: null, paint: null };
+  const runState = { newer: null, skew: 0, live: null, refresh: null, paint: null, reason: null, done: null };
+  // без aria-live: возраст меняется каждые 30 с, скринридер зачитывал бы его (ревью #254)
   function runBadgeChip() {
-    return '<span class="k-chip k-runage" data-a="runage" role="status" aria-live="polite"><span class="ag"></span><span class="cv"></span></span>';
+    return '<span class="k-chip k-runage" data-a="runage" tabindex="0"><span class="ag"></span><span class="cv"></span></span>';
+  }
+  // «✓ обновлено до #N» — минуту после автоперехода на новый прогон (lib/live.js: sessionStorage desk.live.switched.at)
+  function switchedNow() {
+    try {
+      const id = sessionStorage.getItem('desk.live.switched'), at = +sessionStorage.getItem('desk.live.switched.at');
+      if (id == null || !M.run || String(id) !== String(M.run.id) || !(Date.now() - at < 60e3)) return null;
+      sessionStorage.removeItem('desk.live.switched.at');
+      return at;
+    } catch (e) { return null; }
   }
   function runInfo() {
     const sel = window.CONCEPTS_SEL || {}, real = K.source === 'real';
-    return { publishedAt: real ? M.run && M.run.publishedAt : DEMO_PUBLISHED, demo: !real, pinned: !!(sel.run_id || sel.as_of), newer: runState.newer };
+    return { publishedAt: real ? M.run && M.run.publishedAt : DEMO_PUBLISHED, demo: !real, pinned: !!(sel.run_id || sel.as_of), newer: runState.newer, reason: runState.reason };
   }
   const LIVE_TEXT = { sse: 'поток событий (SSE)', poll: 'опрос сервера', 'signed-out': 'стоят: войдите снова' };
   function bindRunBadge(bar) {
     const el = bar.querySelector('[data-a=runage]');
     if (!el) return;
     const cov = K.runCoverage();
+    let panel = null;
+    if (K.source === 'real') { const at = switchedNow(); if (at) runState.done = at + 60e3; }
     const paint = () => {
-      const b = K.runBadge(runInfo(), Date.now() + runState.skew);
-      el.className = 'k-chip k-runage ' + b.level;
-      el.querySelector('.ag').textContent = (b.level === 'newer' ? '⟳ ' : b.level === 'stale' ? '⚠ ' : '') + b.short;
+      const info = runInfo(), b = K.runBadge(info, Date.now() + runState.skew), done = runState.done && Date.now() < runState.done;
+      el.className = 'k-chip k-runage ' + (done && b.level === 'ok' ? 'done' : b.level);
+      el.querySelector('.ag').textContent = done && b.level === 'ok' ? '✓ обновлено до #' + M.run.id : (b.level === 'newer' ? '⟳ ' : b.level === 'stale' ? '⚠ ' : '') + b.short;
       el.querySelector('.cv').textContent = cov.short;
-      el.title = 'Прогон ' + b.text + (b.why ? '\n' + b.why : '') + '\nВошло: ' + cov.rows.map(r => r.k + ' — ' + r.v).join('; ') + '\nЩелчок — подробнее';
+      el.title = b.text + (b.why ? '\n' + b.why[0].toUpperCase() + b.why.slice(1) : '') + '\nВошло: ' + cov.rows.map(r => r.k + ' — ' + r.v).join('; ') + '\nЩелчок — подробнее';
+      if (panel) fillPanel(info, b);
     };
+    const row = (k, v, warn) => '<tr><td class="mut">' + esc(k) + '</td><td style="white-space:normal' + (warn ? ';color:var(--warn)' : '') + '">' + esc(v) + '</td></tr>';
+    function fillPanel(info, b) {
+      const pub = info.publishedAt ? msk(info.publishedAt) : null;
+      panel.innerHTML = '<div class="k-sec" style="margin-top:0">Прогон' + (K.source === 'real' && M.run ? ' #' + esc(M.run.id) : ' · тестовые данные') + '</div>' +
+        '<table class="k-tbl k-compact" style="width:100%"><tbody>' +
+        row('Опубликован', pub ? pub.hm + ' МСК ' + ddmm(pub.iso) + ' · ' + b.short + (info.demo ? ' (демо)' : '') : 'неизвестно') +
+        (b.why ? row(b.level === 'stale' ? 'Внимание' : 'Новее', b.why, b.level !== 'ok') : '') +
+        row('Живые обновления', info.demo ? 'нет (демо)' : LIVE_TEXT[runState.live] || 'подключаются', runState.live === 'signed-out') +
+        cov.rows.map(x => row(x.k, x.v, x.warn)).join('') + '</tbody></table>';
+    }
+    function closePanel() {
+      if (!panel) return;
+      panel.remove(); if (openMenu === panel) openMenu = null; panel = null;
+      document.removeEventListener('keydown', onKey, true); document.removeEventListener('click', onDoc, true);
+    }
+    function onKey(e) {
+      if (e.key !== 'Escape') return;
+      const live = panel && panel.isConnected;  // панель могло закрыть другое меню шапки
+      closePanel();
+      if (live) { e.stopPropagation(); el.focus(); }
+    }
+    function onDoc(e) { if (panel && !panel.contains(e.target) && !el.contains(e.target)) closePanel(); }
+    function openPanel() {
+      if (openMenu) openMenu.remove();
+      const info = runInfo(), b = K.runBadge(info, Date.now() + runState.skew);
+      const W = Math.min(380, innerWidth * 0.92), r = el.getBoundingClientRect();
+      panel = h('div', 'k-panel k-runpanel');
+      panel.style.cssText = 'position:fixed;z-index:140;width:' + W + 'px;max-height:70vh;overflow:auto;box-shadow:var(--shadow);padding:10px 14px;font-size:12.5px';
+      panel.style.left = Math.max(8, Math.min(r.left, innerWidth - W - 10)) + 'px'; panel.style.top = (r.bottom + 4) + 'px';
+      fillPanel(info, b);
+      document.body.appendChild(panel); openMenu = panel;
+      document.addEventListener('keydown', onKey, true);
+      setTimeout(() => { if (panel) document.addEventListener('click', onDoc, true); }, 0);
+    }
     runState.paint = paint;
     paint();
     setInterval(paint, 30e3);
+    if (runState.done) setTimeout(paint, runState.done - Date.now() + 50);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) paint(); });
-    el.onclick = e => {
-      e.stopPropagation(); if (openMenu) openMenu.remove();
-      const info = runInfo(), b = K.runBadge(info, Date.now() + runState.skew), m = h('div', 'k-panel');
-      const W = Math.min(380, innerWidth * 0.92), r = el.getBoundingClientRect(), pub = info.publishedAt ? msk(info.publishedAt) : null;
-      m.style.cssText = 'position:fixed;z-index:140;width:' + W + 'px;max-height:70vh;overflow:auto;box-shadow:var(--shadow);padding:10px 14px;font-size:12.5px';
-      m.style.left = Math.max(8, Math.min(r.left, innerWidth - W - 10)) + 'px'; m.style.top = (r.bottom + 4) + 'px';
-      const row = (k, v, warn) => '<tr><td class="mut">' + esc(k) + '</td><td style="white-space:normal' + (warn ? ';color:var(--warn)' : '') + '">' + esc(v) + '</td></tr>';
-      m.innerHTML = '<div class="k-sec" style="margin-top:0">Прогон' + (K.source === 'real' && M.run ? ' #' + esc(M.run.id) : ' · тестовые данные') + '</div>' +
-        '<table class="k-tbl k-compact" style="width:100%"><tbody>' +
-        row('Опубликован', (pub ? pub.hm + ' МСК ' + ddmm(pub.iso) + ' · ' : '') + b.short + (info.demo ? ' (демо)' : '')) +
-        (b.why ? row(b.level === 'newer' ? 'Новее' : 'Внимание', b.why, true) : '') +
-        row('Живые обновления', info.demo ? 'нет (демо)' : LIVE_TEXT[runState.live] || 'подключаются', runState.live === 'signed-out') +
-        cov.rows.map(x => row(x.k, x.v, x.warn)).join('') + '</tbody></table>';
-      document.body.appendChild(m); openMenu = m;
-      setTimeout(() => document.addEventListener('click', () => { if (openMenu === m) { m.remove(); openMenu = null; } }, { once: true }), 0);
-    };
+    // щелчок (и Enter / пробел с клавиатуры) — открыть панель, повторный — закрыть; Esc и щелчок мимо — закрыть
+    el.onclick = e => { e.stopPropagation(); if (panel && panel.isConnected) closePanel(); else { panel = null; openPanel(); } };
+    el.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); } };
     if (K.source !== 'real') return;
     // лента событий (lib/live.js): новый прогон — отметка сразу, затем сверка со статусом автопилота
     window.addEventListener('desk:live', ev => {
@@ -627,8 +665,9 @@
     });
   }
   // статус автопилота (freshness): latest_run — какой прогон «последний»; now — часы сервера
-  function runBadgeStatus(s) {
+  function runBadgeStatus(s, reason) {
     if (!s) return;
+    runState.reason = reason || null;
     if (s.now) runState.skew = +new Date(s.now) - Date.now();
     const lr = s.latest_run;
     if (lr !== undefined) runState.newer = lr && M.run && String(lr.run_id) !== String(M.run.id) ? { run_id: lr.run_id, text: (lr.label ? lr.label + ' · ' : '') + '#' + lr.run_id } : null;
