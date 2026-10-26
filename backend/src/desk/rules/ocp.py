@@ -17,15 +17,17 @@ reporting currency has no OCP), in one component (``COMPONENTS``):
   an NDF only with ``include_ndf``;
 - ``futures`` — an FX future valued by core (product ``fx_future``) at its FX delta;
 - ``bonds`` — a foreign-currency bond: its FX delta. A run since TDM#54 publishes it net of the bond's currency
-  funding liability (``publish.fx_liability``: the dirty MV in the currency less the clean MV and the accrued paid at
-  the purchase, OQ-04, DEC01, owner's rule of 26.10.2026; basis ``mv_net``): what the bond book keeps of FX before the
-  OCP transfer. A bond without a liability (funding not configured, a problem, a book not funded on its MV) keeps its
-  dirty MV (basis ``mv``);
+  OCP liability (``publish.fx_liability``, OQ-04, OQ-17, TDM#266; basis ``mv_net``): the dirty MV of today less the
+  dirty MV at the last OCP transfer (the previous business day) plus the day's coupons, in the currency: the FX PnL
+  since that transfer, what the bond book holds before today's transfer. A bond without a liability (funding not
+  configured, a problem, a book not funded on its MV) keeps its dirty MV (basis ``mv``);
 - ``funding`` — the currency funding liability as a component of its own (``funding.funding_liabilities``;
   ``bond_funding_liability``, off by default): only for rows published gross (a run before TDM#54). A row already net
   of its liability (``extra.fx_liability`` computed) never gets it again: the liability is subtracted once;
 - ``other`` — any other row with an FX delta (an OTC or other row in a foreign currency at the report's value);
-- ``transfers`` — an OCP transfer deal (``transfer_rule``): its amount, apart from the FX legs.
+- ``transfers`` — an OCP transfer deal (``transfer_rule``): its amount, apart from the FX legs. It is its own
+  component only, never in another one, so a bond book's OCP is Σ its bonds' FX deltas + its transfer deals (a
+  transfer out is negative): the day's transfer is counted once and the book keeps the residual.
 
 **Derived OCP** per (entity, book, currency) is the sum of its lines, per component.
 

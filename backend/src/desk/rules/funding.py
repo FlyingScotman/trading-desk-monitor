@@ -39,8 +39,8 @@ earns (body = +cash).
 A missing input (rule, fixing, FX rate, contract rate) is a ``FundingProblem`` and the line is left out,
 never a 0.
 
-**Also here:** ``funding_liabilities`` (the currency funding liability of the bond books, which offsets the
-FX delta of a foreign-currency bond, OCP-4), ``liability_fx_pnl``, ``write_off_dates`` / ``last_write_off``
+**Also here:** ``funding_liabilities`` (the currency OCP liability of the bond books, which offsets the
+FX delta of a foreign-currency bond up to the FX PnL since the last OCP transfer, OCP-4), ``liability_fx_pnl``, ``write_off_dates`` / ``last_write_off``
 (PnL write-off schedule) and ``total_by`` (accrual over several runs, counted once).
 """
 
@@ -461,10 +461,6 @@ class FundingPosition:
     bond_type: str | None = None
     settlement_ccy: str | None = None
     security_class: str | None = None
-    purchase_accrued: float = 0.0
-    """The accrued paid at the purchase and not returned by a coupon yet, in the position currency, signed as the
-    position. It is in the currency liability over a clean base (``funding_liabilities``: funded at a zero rate, owner's
-    rule of 26.10.2026), never in the funding body (the rate accrues on the clean price, DEC01)."""
 
     @property
     def mv_dirty(self) -> float:
@@ -823,7 +819,7 @@ class _Engine:
         base = self._position_checks(p)
         if base is None:
             return
-        # the body: the clean (or dirty) MV; the accrued paid at the purchase is in the liability only, at a zero rate
+        # the body: the clean (or dirty) MV of the day (DEC01); the currency OCP liability does not follow it
         mv, ccy = (p.mv_clean if base is FundingBase.MV_CLEAN else p.mv_dirty), p.ccy
         note = ""
         if self.policy.out_of_currency is OutOfCurrency.SETTLEMENT_CCY and p.settlement_ccy \
@@ -938,7 +934,7 @@ def compute_funding(period: AccrualPeriod, rules: FundingRules, rates: RateIndex
 # ---------------------------------------------------------------------------------------------- FX liability
 @dataclass(frozen=True)
 class FundingLiability:
-    """The funding of a position as a currency liability: -base in the funding currency."""
+    """The currency OCP liability of a position: - its dirty MV at the last OCP transfer, in the funding currency."""
 
     position_id: str
     book_id: str
@@ -950,12 +946,15 @@ class FundingLiability:
 def funding_liabilities(positions: Sequence[FundingPosition], *, policy: FundingPolicy = PROVISIONAL_POLICY,
                         entities: Mapping[str, EntityType | str] | None = None, fx: FxProvider | None = None,
                         on: date | None = None) -> tuple[tuple[FundingLiability, ...], tuple[FundingProblem, ...]]:
-    """The currency funding liability of every position funded by MV (OCP-4, OQ-04): a foreign-currency bond's FX
-    delta (its dirty MV in the currency) less this liability is what the bond book keeps of FX before the
-    evening OCP transfer. With a clean base the liability is the clean MV plus the accrued paid at the purchase
-    (``FundingPosition.purchase_accrued``, funded at a zero rate: owner's rule of 26.10.2026), so the bond keeps the
-    accrued earned since the purchase (and its coupons, outside the position); with a dirty base, the dirty MV.
-    ``fx`` and ``on`` are needed only to convert an out-of-currency bond funded in its settlement currency."""
+    """The currency OCP liability of every position funded by MV (OCP-4, OQ-04, OQ-17): ``-`` its dirty MV in the
+    funding currency, **as the position is given**. The caller passes each position as of its reference, the last OCP
+    transfer (``publish.fx_liability``: the previous business day's dirty MV), so that a foreign-currency bond's FX
+    delta (its dirty MV of today) less this liability is the FX PnL since then: the price move, the accrued earned
+    and the coupons create the bond book's OCP, and the daily transfer moves it to the derivatives book. The funding
+    *base* (the rate's body, clean or dirty MV of the day, DEC01) is ``compute_funding``'s: the liability does not
+    follow it. Which positions have a liability depends on the base (by MV: yes; cost, cash, none: no) and the entity
+    type (``other``: funded on its cash balance, no liability). ``fx`` and ``on`` are needed only to convert an
+    out-of-currency bond funded in its settlement currency."""
     types = None if entities is None else {k: EntityType(v) for k, v in entities.items()}
     out, problems = [], []
     for p in positions:
@@ -967,7 +966,7 @@ def funding_liabilities(positions: Sequence[FundingPosition], *, policy: Funding
             continue
         if t is EntityType.OTHER or base not in (FundingBase.MV_CLEAN, FundingBase.MV_DIRTY):
             continue
-        mv, ccy = (p.mv_clean + p.purchase_accrued if base is FundingBase.MV_CLEAN else p.mv_dirty), p.ccy
+        mv, ccy = p.mv_dirty, p.ccy
         if policy.out_of_currency is OutOfCurrency.SETTLEMENT_CCY and p.settlement_ccy and p.settlement_ccy != ccy:
             rates = [None if fx is None or on is None else 1.0 if c == policy.reporting_ccy else fx.rate(c, on)
                      for c in (ccy, p.settlement_ccy)]

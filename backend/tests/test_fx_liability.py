@@ -1,13 +1,15 @@
-"""The currency funding liability of foreign-currency bonds and their FX delta net of it (OQ-04, DEC01, owner's rule of
-26.10.2026; TDM#54, TDM#169), on synthetic rows and the golden fixtures' USD-face bond: the liability (clean MV + the
-accrued paid at the purchase), the accrued paid at the purchase from what the data has, the FX delta net of it, the OCP
-that subtracts it once, ``fx_funding`` of the flash PnL, the bond currency without ``face_unit``, and a run end to end
-(the row, the funding and OCP APIs, window.DESK)."""
+"""The currency OCP liability of foreign-currency bonds and their FX delta net of it (OQ-04, OQ-17, DEC01; TDM#54,
+TDM#169, TDM#266), on synthetic rows and the golden fixtures' USD-face bond: the liability (the dirty MV at the last
+OCP transfer: the previous business day's, else the purchase cost or today's), the coupons of the day, the FX delta
+net of it (the FX PnL since the transfer), the bond book's OCP after the day's transfer (the residual), the OCP that
+subtracts the liability once, ``fx_funding`` of the flash PnL, the funding body unchanged (DEC01), the bond currency
+without ``face_unit``, and a run end to end (the row, the funding and OCP APIs, window.DESK)."""
 
 from __future__ import annotations
 
 import dataclasses
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -43,58 +45,105 @@ def bond_row(pid="T1|USD", book="T1", mv=1_020_000.0, accrued=20_000.0, ccy="USD
             "extra": {"reported": {"accrued_ccy": accrued} if accrued is not None else {}}}
 
 
-def terms(*pay_dates, start=None):
-    return SimpleNamespace(coupons=tuple(SimpleNamespace(pay_date=d, start=start if i == 0 else None)
+def terms(*pay_dates, start=None, amount=None):
+    return SimpleNamespace(coupons=tuple(SimpleNamespace(pay_date=d, start=start if i == 0 else None,
+                                                         amount_per_bond=amount)
                                          for i, d in enumerate(pay_dates)))
 
 
-def test_engine_liability_is_clean_mv_plus_purchase_accrued():
-    p = F.FundingPosition("P", "T1", "TRADING", "ENT1", "USD", 1e6, accrued=2e4, purchase_accrued=5e3)
+D0 = date(2026, 10, 14)  # the previous business day of ON
+
+
+def prev_row(pid="T1|USD", mv=1_010_000.0, qty=None, ccy="USD"):
+    """The same position's row in the previous default run (of ``D0``)."""
+    return {"position_id": pid, "book_id": "T1", "instr_type": "BOND", "ccy": ccy, "mv": mv,
+            "extra": {"quantity_bonds": qty}}
+
+
+def net(rows, previous=None, coupons=None, extra=None, d0=D0, pol=TRADING):
+    return fx_liability.liabilities(rows, BOOKS, extra or {}, ON, pol, None, previous=previous, d0=d0, coupons=coupons)
+
+
+def test_engine_liability_is_the_dirty_mv_of_the_position_as_given():
+    """``funding_liabilities`` takes the position as of its reference (the last OCP transfer): - its dirty MV, on a
+    clean or a dirty funding base alike (the base is the funding body's, DEC01, not the OCP liability's)."""
+    p = F.FundingPosition("P", "T1", "TRADING", "ENT1", "USD", 1e6, accrued=2e4)
     (x,), _ = F.funding_liabilities([p], policy=TRADING)
-    assert x.amount == pytest.approx(-1_005_000)  # the bond keeps 15 000 of the accrued: earned since the purchase
+    assert x.amount == pytest.approx(-1_020_000)
     dirty = F.FundingPolicy(base_by_book_type={"TRADING": F.FundingBase.MV_DIRTY})
     (y,), _ = F.funding_liabilities([p], policy=dirty)
-    assert y.amount == pytest.approx(-1_020_000)  # a dirty base covers the whole accrued
-    (z,), _ = F.funding_liabilities([dataclasses.replace(p, purchase_accrued=0.0)], policy=TRADING)
-    assert z.amount == -1e6
+    assert y.amount == pytest.approx(-1_020_000)
+    assert F.funding_liabilities([dataclasses.replace(p, book_type="HTM")], policy=TRADING) == ((), ())  # cost base
 
 
-def test_purchase_accrued_from_what_the_data_has():
-    p = F.FundingPosition("P", "T1", "TRADING", "ENT1", "USD", 1e6, accrued=2e4)
-    t = terms(date(2026, 12, 1), start=date(2026, 9, 1))
-    assert fx_liability.purchase_accrued(p, {"purchase_accrued_ccy": "5000", "purchase_date": "2026-09-20"}, t, ON) \
-        == (5000.0, fx_liability.REPORT, "")
-    short = dataclasses.replace(p, mv_clean=-1e6, accrued=-2e4)
-    assert fx_liability.purchase_accrued(short, {"purchase_accrued_ccy": "5000"}, t, ON)[0] == -5000.0  # as the position
-    # a coupon paid after the purchase returned the accrued paid then
-    paid = terms(date(2026, 9, 1), date(2027, 3, 1), start=date(2026, 3, 1))
-    acc, basis, detail = fx_liability.purchase_accrued(p, {"purchase_accrued_ccy": "5000", "purchase_date": "2026-05-01"},
-                                                       paid, ON)
-    assert (acc, basis) == (0.0, fx_liability.RETURNED) and "2026-09-01" in detail
-    # no accrued in the report, a purchase date in the running period: linear share of today's accrued
-    acc, basis, _ = fx_liability.purchase_accrued(p, {"purchase_date": "2026-09-22"}, t, ON)
-    assert basis == fx_liability.ESTIMATED and acc == pytest.approx(2e4 * 21 / 44)
-    # nothing: 0, said
-    assert fx_liability.purchase_accrued(p, {}, t, ON)[:2] == (0.0, fx_liability.UNKNOWN)
-    assert fx_liability.purchase_accrued(p, {"purchase_date": "2026-09-22"}, None, ON)[:2] == (0.0, fx_liability.UNKNOWN)
+def test_reference_from_what_the_store_has():
+    row = dict(bond_row(), notional=1_000_000.0, extra={"quantity_bonds": 1000.0, "reported": {"accrued_ccy": 2e4}})
+    # the previous business day's row: its dirty MV (the last transfer)
+    assert fx_liability.reference(row, prev_row(), D0, True, {}, ON)[:2] == (1_010_000.0, fx_liability.PREV)
+    # the quantity changed: the D-1 dirty price on today's quantity, said
+    mv, kind, text = fx_liability.reference(row, prev_row(mv=505_000.0, qty=500.0), D0, True, {}, ON)
+    assert (mv, kind) == (pytest.approx(1_010_000.0), fx_liability.PREV) and "количество 500 → 1000" in text
+    # new on D, bought on D with a purchase price: the purchase cost (clean x face + the accrued paid)
+    x = {"purchase_date": ON.isoformat(), "purchase_price_pct": "99.5", "purchase_accrued_ccy": "1500"}
+    mv, kind, text = fx_liability.reference(row, None, D0, True, x, ON)
+    assert (mv, kind) == (pytest.approx(996_500.0), fx_liability.PURCHASE) and "не было" in text
+    short = dict(row, mv=-1_020_000.0, notional=-1_000_000.0)
+    assert fx_liability.reference(short, None, D0, True, x, ON)[0] == pytest.approx(-996_500.0)  # as the position
+    # bought before D-1, or no price, or no run of D-1, or no previous day: today's dirty MV (OCP 0), with the reason
+    old = dict(x, purchase_date="2026-10-01")
+    for args, why in (((None, D0, True, old), "позиции на 2026-10-14 не было"),
+                      ((None, D0, True, {"purchase_date": ON.isoformat()}), "не было"),
+                      ((None, D0, False, old), "нет прогона за 2026-10-14"),
+                      ((None, None, False, old), "нет предыдущего рабочего дня"),
+                      ((prev_row(ccy="EUR"), D0, True, {}), "в другой валюте")):
+        mv, kind, text = fx_liability.reference(row, *args, ON)
+        assert (mv, kind) == (1_020_000.0, fx_liability.CURRENT) and why in text and "ОВП 0" in text
+    # no previous day at all, bought on D: the purchase cost
+    assert fx_liability.reference(row, None, None, False, x, ON)[1] == fx_liability.PURCHASE
 
 
-def test_fx_delta_net_of_the_liability():
-    rows = [bond_row(), bond_row("T1|NOACC", accrued=None), bond_row("H1|USD", "H1"), bond_row("T1|RUB", ccy="RUB")]
-    extra = {"T1|USD": {"purchase_accrued_ccy": "5000", "purchase_date": "2026-09-20"}}
-    per = fx_liability.liabilities(rows, BOOKS, extra, {"T1|USD": terms(date(2026, 12, 1), start=date(2026, 9, 1))}, ON,
-                                   TRADING, None)
+def test_price_rise_gives_the_change_in_dirty_mv_as_ocp():
+    """A foreign bond whose price rose over the day: its OCP = the change of its dirty MV in the currency (+ the
+    coupon of the day); the liability does not follow the MV."""
+    per = net([bond_row(mv=1_020_000.0)], {"T1|USD": prev_row(mv=1_010_000.0)})
     x = per["T1|USD"]
-    assert x["state"] == "computed" and x["ccy"] == "USD"
-    assert x["amount_ccy"] == pytest.approx(-1_005_000) and x["clean_mv_ccy"] == pytest.approx(1e6)
-    assert x["fx_delta_gross"] == 1_020_000 and x["fx_delta_net"] == pytest.approx(15_000)  # accrued since purchase
-    assert x["purchase_accrued_basis"] == "report"
-    # accrued unknown: the liability on the dirty MV, said; an HTM book (cost base): no liability, said
-    assert per["T1|NOACC"]["fx_delta_net"] == pytest.approx(0) and "НКД неизвестен" in per["T1|NOACC"]["note"]
+    assert x["state"] == "computed" and x["reference"] == fx_liability.PREV and x["reference_date"] == "2026-10-14"
+    assert x["amount_ccy"] == pytest.approx(-1_010_000) and x["fx_delta_gross"] == 1_020_000
+    assert x["fx_delta_net"] == pytest.approx(10_000)  # the price move and the accrued growth: FX PnL in the OCP
+    # a coupon paid on the day: the dirty MV dropped by it, the cash is FX PnL too
+    per = net([bond_row(mv=995_000.0)], {"T1|USD": prev_row(mv=1_010_000.0)}, {"T1|USD": 25_000.0})
+    assert per["T1|USD"]["fx_delta_net"] == pytest.approx(10_000) and per["T1|USD"]["coupons_ccy"] == 25_000.0
+    # unchanged price: OCP 0 (yesterday's transfer took it all)
+    assert net([bond_row()], {"T1|USD": prev_row(mv=1_020_000.0)})["T1|USD"]["fx_delta_net"] == pytest.approx(0)
+    # no row of D-1 (no run): today's dirty MV, OCP 0, the coupon not counted
+    x = net([bond_row()], None, {"T1|USD": 25_000.0})["T1|USD"]
+    assert x["reference"] == fx_liability.CURRENT and x["fx_delta_net"] == pytest.approx(0) and x["coupons_ccy"] == 0
+
+
+def test_coupons_received_on_the_day():
+    row = dict(bond_row(), extra={"quantity_bonds": 1000.0})
+    fp = SimpleNamespace(fx_rates=(80.0, 81.0), ccy="USD", received_rub=81.0 * 25_000)
+    assert fx_liability.coupons_received(row, None, SimpleNamespace(pnl=fp), D0, ON) == (pytest.approx(25_000), "")
+    t = terms(ON, date(2027, 4, 15), amount=Decimal(25))
+    assert fx_liability.coupons_received(row, t, None, D0, ON) == (pytest.approx(25_000), "")
+    assert fx_liability.coupons_received(row, terms(date(2026, 10, 1), amount=Decimal(25)), None, D0, ON) == (0, "")
+    amount, why = fx_liability.coupons_received(row, terms(ON), None, D0, ON)
+    assert amount == 0 and "2026-10-15 без суммы" in why
+    amount, why = fx_liability.coupons_received(bond_row(), t, None, D0, ON)
+    assert amount == 0 and "количество бумаг неизвестно" in why
+    assert fx_liability.coupons_received(row, t, None, None, ON) == (0.0, "")  # no previous day: no window
+
+
+def test_fx_delta_net_of_the_liability_and_apply():
+    rows = [bond_row(), bond_row("H1|USD", "H1"), bond_row("T1|RUB", ccy="RUB")]
+    per = net(rows, {"T1|USD": prev_row(mv=1_005_000.0)})
+    x = per["T1|USD"]
+    assert x["state"] == "computed" and x["ccy"] == "USD" and x["fx_delta_net"] == pytest.approx(15_000)
+    assert x["clean_mv_ccy"] == pytest.approx(1e6) and x["base"] == "mv_clean"  # the funding base: as before
     assert per["H1|USD"]["state"] == "none" and "cost" in per["H1|USD"]["reason"]
     assert "T1|RUB" not in per  # a RUB bond has no OCP
     # a problem: no base for the book type
-    probs = fx_liability.liabilities([bond_row(book="X")], {"X": {"book_id": "X", "book_type": "OTHER"}}, {}, {}, ON,
+    probs = fx_liability.liabilities([bond_row(book="X")], {"X": {"book_id": "X", "book_type": "OTHER"}}, {}, ON,
                                      TRADING, None)
     assert probs["T1|USD"]["state"] == "problem"
 
@@ -104,7 +153,7 @@ def test_fx_delta_net_of_the_liability():
     ref, log = {"funding": {"status": "computed"}}, [("INFO", "last")]
     run.apply(content, ref, log, {"T1|USD": o})
     assert content[0]["fx_delta"] == {"USD": pytest.approx(15_000)} and content[0]["extra"]["fx_liability"] is x
-    assert content[2]["fx_delta"] == {"USD": 1_020_000}  # no liability: the dirty MV stays
+    assert content[1]["fx_delta"] == {"USD": 1_020_000}  # no liability: the dirty MV stays
     assert content[0]["pnl"]["fx_funding"] == -10_050.0 and content[0]["pnl"]["fx_funding_cbr"] == -9_000.0
     assert o.pnl.as_tdm()["fx_funding"] == -10_050.0 and o.pnl.as_tdm()["fx_funding_cbr"] == -9_000.0
     assert ref["funding"]["fx_liability"]["positions"] is per and log[-1] == ("INFO", "last")
@@ -113,15 +162,44 @@ def test_fx_delta_net_of_the_liability():
 def test_fx_funding_is_the_liability_times_the_rate_move():
     assert fx_liability.fx_funding(-1e6, (80.0, 81.5), (79.9, 81.0)) == (pytest.approx(-1.5e6), pytest.approx(-1.1e6))
     assert fx_liability.fx_funding(-1e6, None, (None, 81.0)) == (None, None)
-    # fx_gross + fx_funding: the bond's FX net of its funding (dirty 1 020 000, liability -1 005 000)
-    gross = 1_020_000 * (81.5 - 80.0)
-    assert gross + fx_liability.fx_funding(-1_005_000, (80.0, 81.5), (None, None))[0] == pytest.approx(15_000 * 1.5)
+    # fx_gross + fx_funding: the revaluation of yesterday's OCP, which the transfer moved out: 0 when the liability is
+    # the D-1 dirty MV the flash PnL's fx_gross revalues
+    gross = 1_010_000 * (81.5 - 80.0)
+    assert gross + fx_liability.fx_funding(-1_010_000, (80.0, 81.5), (None, None))[0] == pytest.approx(0)
     assert DirectPnl("m", ON, ON, 0.0, fx_funding=3.0).as_tdm()["fx_funding"] == 3.0
 
 
+def _transfer(pid, book, usd, to):
+    row = {"position_id": pid, "book_id": book, "instr_type": "FX", "fx_delta": {"USD": usd},
+           "extra": {"reported": {"asset_class": "fx", "value_date": "2026-10-16", "deal_id": pid}}}
+    return row, {"trade_id": pid, "book_id": book, "counterparty_id": to, "value_date": "2026-10-16"}
+
+
+def test_bond_book_ocp_after_the_transfer_is_the_residual():
+    """The bond book's OCP = Σ its bonds' FX PnL since the last transfer − the day's transfer, counted once: 0 when
+    the transfer matched, the residual when it did not."""
+    books = {**BOOKS, "T1": {**BOOKS["T1"], "ocp_to": "X1"},
+             "X1": {"book_id": "X1", "book_type": "DERIVS", "entity": "ENT1"}}
+    per = net([bond_row(mv=1_020_000.0)], {"T1|USD": prev_row(mv=1_010_000.0)}, {"T1|USD": 2_500.0})
+    bond = bond_row(mv=1_020_000.0)
+    fx_liability.RunFxLiability("computed", {}, per).apply([bond], {}, [])
+    assert bond["fx_delta"]["USD"] == pytest.approx(12_500)  # the day's FX PnL: price, accrued, coupon
+    for moved, left in ((12_500.0, 0.0), (12_000.0, 500.0)):
+        out, out_t = _transfer("T1|XFER", "T1", -moved, "X1")
+        into, into_t = _transfer("X1|XFER", "X1", moved, "T1")
+        for pol in (O.PROVISIONAL_POLICY, O.OcpPolicy(bond_funding_liability=True)):
+            r = O.compute_ocp([bond, out, into], books, ON, terms=[out_t, into_t], policy=pol,
+                              liabilities=[F.FundingLiability("T1|USD", "T1", "ENT1", "USD", per["T1|USD"]["amount_ccy"])])
+            t1 = O.derive(r.lines)[("ENT1", "T1", "USD")]
+            assert t1 == pytest.approx({"bonds": 12_500, "transfers": -moved})  # the liability and the transfer, once
+            assert sum(t1.values()) == pytest.approx(left)
+            t = {x["book_id"]: x for x in r.transfers}["T1"]
+            assert (t["before"], t["transferred"], t["after"]) == (pytest.approx(12_500), -moved, pytest.approx(left))
+            assert O.by_currency(r.lines)["USD"]["transfers"] == 0  # the desk keeps it: moved between books
+
+
 def test_ocp_subtracts_the_liability_once():
-    per = fx_liability.liabilities([bond_row()], BOOKS, {"T1|USD": {"purchase_accrued_ccy": "5000"}}, {}, ON,
-                                   TRADING, None)
+    per = net([bond_row()], {"T1|USD": prev_row(mv=1_005_000.0)})
     row = bond_row()
     fx_liability.RunFxLiability("computed", {}, per).apply([row], {}, [])
     liab = [F.FundingLiability("T1|USD", "T1", "ENT1", "USD", per["T1|USD"]["amount_ccy"])]
@@ -179,8 +257,13 @@ CFG = {
                          "index_code;spread_bp;fixed_rate_pct;day_count\n"
                          "trading_rub;;1;TRADING;;;RUB;;mv_clean;index_spread;KEY_RATE;100;;ACT/365\n",
 }
-POSITIONS = ("book_id;position_id;asset_class;source_instrument_id;isin;ccy;quantity;purchase_date;purchase_accrued_ccy\n"
-             f"T1;T1|USD;bond;SEC-USD;{USD_BOND};USD;1000;2026-10-01;1500\n")
+POSITIONS = ("book_id;position_id;asset_class;source_instrument_id;isin;ccy;quantity;purchase_date;purchase_price_pct;"
+             f"purchase_accrued_ccy\nT1;T1|USD;bond;SEC-USD;{USD_BOND};USD;1000;2026-10-15;99.5;1500\n")
+"""Bought on ``ON``; the run has no previous day: the liability is the purchase cost."""
+
+
+def _cost(fact):
+    return fact["notional"] * 99.5 / 100 + 1500
 
 
 @pytest.fixture(autouse=True)
@@ -223,17 +306,18 @@ def _publish(store_url, ctx, tmp_path, cfg_files):
 def test_run_publishes_the_bond_net_of_its_liability(store_url, ctx, tmp_path):
     fact, lin, log, rid = _publish(store_url, ctx, tmp_path, CFG)
     x = fact["extra"]["fx_liability"]
-    assert x["state"] == "computed" and x["ccy"] == "USD" and x["purchase_accrued_basis"] == "report"
-    assert x["amount_ccy"] == pytest.approx(-(x["clean_mv_ccy"] + 1500))
-    assert x["fx_delta_gross"] == pytest.approx(fact["mv"])
-    assert fact["fx_delta"]["USD"] == pytest.approx(x["accrued_ccy"] - 1500)  # the accrued earned since the purchase
+    assert x["state"] == "computed" and x["ccy"] == "USD" and x["reference"] == fx_liability.PURCHASE
+    assert x["amount_ccy"] == pytest.approx(-_cost(fact)) and x["fx_delta_gross"] == pytest.approx(fact["mv"])
+    assert fact["fx_delta"]["USD"] == pytest.approx(fact["mv"] - _cost(fact))  # the FX PnL since the purchase
     assert lin["fx_liability"]["status"] == "computed" and lin["fx_liability"]["positions"] == 1
-    assert any("валютный пассив фондирования: 1 из 1" in m and "предварительно" in m for m in log)
+    assert any("валютный ОВП-пассив: 1 из 1" in m and "предварительно: residual" in m for m in log)
 
     c = TestClient(create_app(store_url))
     fu = c.get(f"/api/v1/runs/{rid}/funding").json()["fx_liability"]
     assert fu["positions"]["T1|USD"]["fx_delta_net"] == pytest.approx(fact["fx_delta"]["USD"])
-    assert fu["provisional"] and "по текущей чистой MV" in fu["provisional"][0]
+    assert fu["positions"]["T1|USD"]["reference"] == "purchase_cost"
+    assert fu["provisional"] and "residual прошлых дней не накапливается" in fu["provisional"][0]
+    assert any("стоимость покупки" in n for n in fu["notes"])
     o = c.get(f"/api/v1/runs/{rid}/ocp").json()
     usd = o["by_ccy"]["USD"]["components"]
     assert usd == {"bonds": pytest.approx(fact["fx_delta"]["USD"])}  # no separate funding component: once
@@ -242,44 +326,60 @@ def test_run_publishes_the_bond_net_of_its_liability(store_url, ctx, tmp_path):
     assert p["fxDelta"] == {"USD": pytest.approx(fact["fx_delta"]["USD"])}  # the OCP tile sums the net figure
 
 
-def test_fx_funding_of_the_run_from_the_previous_rows(monkeypatch):
-    """``fx_funding`` of a bond with a flash PnL: the liability of the previous default run's row x the rate move (the
-    PnL's own rates when it has them, else the markets'), x the CBR move; a bond new on D gets 0 and a note."""
-    class View:
-        def __init__(self, d, mkt, cbr):
-            self.business_date, self._fx, self.fx_rates = d, {"moex_19": mkt, "cbr": cbr}, []
+class _View:
+    def __init__(self, d, mkt, cbr):
+        self.business_date, self._fx, self.fx_rates = d, {"moex_19": mkt, "cbr": cbr}, []
 
-        def fx(self, ccy):
-            return self._fx
+    def fx(self, ccy):
+        return self._fx
 
-    prev, cur = View(date(2026, 10, 14), 80.0, 79.0), View(ON, 81.0, 80.5)
-    old = bond_row(mv=1_018_000.0, accrued=18_000.0)
-    monkeypatch.setattr(fx_liability.funding_run, "_previous_rows", lambda con, d: (7, [old], {}))
+
+def test_run_liability_from_the_previous_rows(monkeypatch):
+    """The run of D on the previous default run's rows: the liability is the D-1 dirty MV, the OCP the change of the
+    dirty MV + the coupon of the flash PnL; ``fx_funding`` that liability x the rate move (the PnL's own rates when it
+    has them, else the markets'), x the CBR move; a bond new on D gets the fallback, ``fx_funding`` 0 and a note."""
+    prev, cur = _View(D0, 80.0, 79.0), _View(ON, 81.0, 80.5)
+    monkeypatch.setattr(fx_liability.funding_run, "_previous_rows",
+                        lambda con, d: (7, [prev_row(mv=1_010_000.0)], {}) if d == D0 else (None, [], {}))
     monkeypatch.setattr(fx_liability, "_books", lambda *a: BOOKS)
-    rows = [dict(bond_row(), pnl={"fx_gross": 1.0}), dict(bond_row("T1|NEW"), pnl={"fx_gross": 1.0})]
-    per = fx_liability.liabilities(rows, BOOKS, {}, {}, ON, TRADING, None)
+    monkeypatch.setattr(fx_liability, "resolve_policy",
+                        lambda *a: fx_liability._Policy(TRADING, None, "computed", ""))
+    rows = [dict(bond_row(mv=1_017_500.0), pnl={"fx_gross": 1.0}), dict(bond_row("T1|NEW"), pnl={"fx_gross": 1.0})]
+    o = SimpleNamespace(pnl=SimpleNamespace(fx_rates=(80.0, 80.4), ccy="USD", received_rub=80.4 * 2_500))
     inputs = SimpleNamespace(known_at=None, extra={})
-    out, notes = fx_liability._fx_funding(None, ON, prev, cur, rows, [], inputs, {}, {}, TRADING, None, per)
-    assert out["T1|USD"] == (pytest.approx(-1e6 * 1.0), pytest.approx(-1e6 * 1.5))  # liability of D-1: clean 1 000 000
-    assert out["T1|NEW"] == (0.0, None) and any("T1|NEW" in n for n in notes)
-    o = SimpleNamespace(pnl=SimpleNamespace(fx_rates=(80.0, 80.4)))
-    out, _ = fx_liability._fx_funding(None, ON, prev, cur, rows[:1], [], inputs, {}, {"T1|USD": o}, TRADING, None, per)
-    assert out["T1|USD"][0] == pytest.approx(-1e6 * 0.4)  # the rates of the position's fx_gross
+    res = fx_liability.compute(None, ON, prev, cur, rows, [], inputs, {}, {"T1|USD": o})
+    x, new = res.per_position["T1|USD"], res.per_position["T1|NEW"]
+    assert res.status == "computed" and x["reference"] == fx_liability.PREV
+    assert x["amount_ccy"] == pytest.approx(-1_010_000) and x["coupons_ccy"] == pytest.approx(2_500)
+    assert x["fx_delta_net"] == pytest.approx(10_000)  # 1 017 500 - 1 010 000 + 2 500
+    assert res.pnl["T1|USD"] == (pytest.approx(-1_010_000 * 0.4), pytest.approx(-1_010_000 * 1.5))  # the PnL's rates
+    assert new["reference"] == fx_liability.CURRENT and new["fx_delta_net"] == pytest.approx(0)
+    assert res.pnl["T1|NEW"] == (0.0, None)
+    assert any("T1|NEW" in n and "fx_funding — 0" in n for n in res.block["notes"])
+    # without the outcome's rates: the markets'
+    res = fx_liability.compute(None, ON, prev, cur, rows[:1], [], inputs, {}, {})
+    assert res.pnl["T1|USD"][0] == pytest.approx(-1_010_000 * 1.0)
+    # no run of D-1: today's dirty MV, said
+    res = fx_liability.compute(None, ON, _View(date(2026, 10, 13), 80.0, 79.0), cur, rows[:1], [], inputs, {}, {})
+    assert res.per_position["T1|USD"]["reference"] == fx_liability.CURRENT
+    assert any("нет прогона за 2026-10-13" in n for n in res.block["notes"])
 
 
 def test_purchase_accrued_is_in_the_liability_not_in_the_funding_body():
-    """The rate accrues on the clean price (DEC01); the accrued paid at the purchase is funded at a zero rate: it is in
-    the currency liability only, never in the funding body (owner's rule of 26.10.2026)."""
+    """The rate accrues on the clean price of the day (DEC01): the funding body is the clean MV, unchanged by the OCP
+    rule (TDM#266). The currency OCP liability is not that body: it is the dirty MV at the last transfer, which no
+    longer holds a separate accrued paid at the purchase."""
     rules = F.FundingRules((F.FundingRule(ccy="USD", book_type="TRADING", fixed_rate=0.0365),))
-    p = F.FundingPosition("P", "T1", "TRADING", "ENT1", "USD", 1e6, accrued=2e4, purchase_accrued=5e3)
+    p = F.FundingPosition("P", "T1", "TRADING", "ENT1", "USD", 1e6, accrued=2e4)
     period = F.AccrualPeriod(date(2026, 10, 14), ON)
     res = F.compute_funding(period, rules, FixingTable({}), FxTable("RUB", {"USD": {ON: 80.0}}), positions=[p],
                             previous_positions=[p], policy=TRADING)
     (line,) = res.lines
     assert line.days[-1].body == -1e6  # clean MV only
     assert line.interest == pytest.approx(-1e6 * 0.0365 / 365)  # interest on the clean MV
-    (x,), _ = F.funding_liabilities([p], policy=TRADING)
-    assert x.amount == pytest.approx(-1_005_000)  # clean MV + the accrued paid at the purchase
+    # the price rose over the day: the OCP liability stays at the D-1 dirty MV, the move is in the OCP
+    per = net([bond_row(mv=1_030_000.0)], {"T1|USD": prev_row(mv=1_020_000.0)})
+    assert per["T1|USD"]["amount_ccy"] == pytest.approx(-1_020_000) and per["T1|USD"]["fx_delta_net"] == 10_000
 
 
 # ---- #237: the liability takes the run's funding policy, the settings' and the default rate's included ---------------
@@ -289,12 +389,13 @@ NO_RULES = {k: v for k, v in CFG.items() if k != "funding_rules.csv"}
 
 def test_liability_without_adapter_rules_at_the_default_rate(store_url, ctx, tmp_path):
     """No adapter rule, the default settings (the market default rate on): funding is configured, the TRADING base is
-    DEC01's clean MV, so the bond's liability is computed (clean MV plus the purchase accrued), not "not configured"."""
+    DEC01's clean MV, so the bond's liability is computed (the purchase cost: bought on the day), not "not
+    configured"."""
     fact, lin, _, _ = _publish(store_url, ctx, tmp_path, NO_RULES)
     x = fact["extra"]["fx_liability"]
     assert lin["fx_liability"]["status"] == "computed" and x["state"] == "computed" and x["base"] == "mv_clean"
-    assert x["amount_ccy"] == pytest.approx(-(x["clean_mv_ccy"] + 1500))
-    assert fact["fx_delta"]["USD"] == pytest.approx(x["accrued_ccy"] - 1500)  # not the whole dirty MV
+    assert x["amount_ccy"] == pytest.approx(-_cost(fact))
+    assert fact["fx_delta"]["USD"] == pytest.approx(fact["mv"] - _cost(fact))  # not the whole dirty MV
 
 
 def test_liability_takes_the_settings_base(store_url, ctx, tmp_path, _home):
@@ -305,7 +406,7 @@ def test_liability_takes_the_settings_base(store_url, ctx, tmp_path, _home):
     fact, lin, _, _ = _publish(store_url, ctx, tmp_path, NO_RULES)
     x = fact["extra"]["fx_liability"]
     assert lin["fx_liability"]["status"] == "computed" and x["state"] == "computed" and x["base"] == "mv_dirty"
-    assert x["amount_ccy"] == pytest.approx(-x["dirty_mv_ccy"]) and fact["fx_delta"]["USD"] == pytest.approx(0)
+    assert x["amount_ccy"] == pytest.approx(-_cost(fact))  # the OCP liability does not depend on the funding base
 
 
 def test_liability_not_configured_only_without_any_rule_and_default(store_url, ctx, tmp_path, _home):
@@ -318,12 +419,12 @@ def test_liability_not_configured_only_without_any_rule_and_default(store_url, c
 
 def test_cny_bond_liability_from_the_shared_policy(store_url):
     """A CNY bond of a TRADING book, no adapter rule, the default settings (CNY at RUSFARCNY): the shared policy
-    (``funding_run.run_policy``) gives DEC01's clean base, the liability is the clean MV."""
+    (``funding_run.run_policy``) gives DEC01's clean base; without a previous day the liability is today's dirty MV."""
     from desk import funding_settings
     with store.connect(store_url) as con:
         rp = fx_liability.resolve_policy(con, ON, None, funding_settings.from_doc(None))
     assert rp.status == "computed" and rp.policy.base_by_book_type["TRADING"] is F.FundingBase.MV_CLEAN
-    per = fx_liability.liabilities([bond_row("T1|CNY", ccy="CNY")], BOOKS, {}, {}, ON, rp.policy, rp.entities)
+    per = fx_liability.liabilities([bond_row("T1|CNY", ccy="CNY")], BOOKS, {}, ON, rp.policy, rp.entities)
     x = per["T1|CNY"]
-    assert x["state"] == "computed" and x["ccy"] == "CNY"
-    assert x["amount_ccy"] == pytest.approx(-1_000_000.0) and x["clean_mv_ccy"] == pytest.approx(1_000_000.0)
+    assert x["state"] == "computed" and x["ccy"] == "CNY" and x["reference"] == fx_liability.CURRENT
+    assert x["amount_ccy"] == pytest.approx(-1_020_000.0) and x["clean_mv_ccy"] == pytest.approx(1_000_000.0)

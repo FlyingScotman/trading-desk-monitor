@@ -4,7 +4,8 @@
 // node prototypes/concepts/tools/smoke.js [out_dir] [--base http://127.0.0.1:8199/concepts/] [page.html ...]
 // --base: the pages served by desk serve (real runs, lib/real.js) instead of the files (demo data)
 // --login USER:PASSWORD: sign in first (desk serve with sign-in on, backend api/auth.py); the pages share the session
-const { chromium } = require('/opt/node22/lib/node_modules/playwright');
+// Playwright: the global install of the dev machine, otherwise a resolvable `playwright` (CI: NODE_PATH)
+const { chromium } = (() => { try { return require('/opt/node22/lib/node_modules/playwright'); } catch (e) { return require('playwright'); } })();
 const path = require('path'), fs = require('fs');
 const dir = path.resolve(__dirname, '..');
 const out = path.resolve(process.argv[2] || path.join(dir, '.shots'));

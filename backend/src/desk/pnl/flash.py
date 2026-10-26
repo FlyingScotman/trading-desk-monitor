@@ -257,9 +257,10 @@ class FlashPnl:
     ``RUB RUONIA`` (RUONIA minus the basis: the scenarios' coordinates, ``valuation.bonds.ofz_levels``). None for every
     other bond."""
     fx_funding: float = 0.0
-    """A foreign bond funded in its currency (OQ-04, TDM#54): the FX revaluation of its currency funding liability of
-    D-1 (``publish.fx_liability``: negative for a long when the rate rises), set by the run; ``fx_gross + fx_funding`` is
-    the bond's FX net of its funding. Outside ``explained`` and ``total`` (the position's MV change), as ``funding``."""
+    """A foreign bond funded in its currency (OQ-04, TDM#54, TDM#266): the FX revaluation of its currency OCP liability
+    held over the day, the D-1 dirty MV (``publish.fx_liability``: negative for a long when the rate rises), set by the
+    run; ``fx_gross + fx_funding`` is the bond's FX net of its funding: the revaluation of yesterday's OCP, ≈ 0 after
+    the transfer (the day's FX PnL is in the OCP). Outside ``explained`` and ``total`` (the position's MV change), as ``funding``."""
     fx_funding_cbr: float | None = None
     """The same at the CBR rates in force; None without them or without a liability."""
 

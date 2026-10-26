@@ -11813,7 +11813,7 @@
    "jtd": 0,
    "wal": null,
    "cpr": null,
-   "counterparty": "НКЦ (клиринг)",
+   "counterparty": "ЦК (клиринг)",
    "new_today": false,
    "risk": {
     "RUB RUONIA": {
@@ -11922,7 +11922,7 @@
    "jtd": 0,
    "wal": null,
    "cpr": null,
-   "counterparty": "НКЦ (клиринг)",
+   "counterparty": "ЦК (клиринг)",
    "new_today": false,
    "risk": {
     "RUB RUONIA": {
@@ -12042,7 +12042,7 @@
    "jtd": 0,
    "wal": null,
    "cpr": null,
-   "counterparty": "НКЦ (клиринг)",
+   "counterparty": "ЦК (клиринг)",
    "new_today": false,
    "risk": {
     "RUB RUONIA": {
@@ -12173,7 +12173,7 @@
    "jtd": 0,
    "wal": null,
    "cpr": null,
-   "counterparty": "НКЦ (клиринг)",
+   "counterparty": "ЦК (клиринг)",
    "new_today": false,
    "risk": {
     "RUB RUONIA": {
@@ -12315,7 +12315,7 @@
    "jtd": 0,
    "wal": null,
    "cpr": null,
-   "counterparty": "НКЦ (клиринг)",
+   "counterparty": "ЦК (клиринг)",
    "new_today": true,
    "risk": {
     "RUB RUONIA": {
@@ -12468,7 +12468,7 @@
    "jtd": 0,
    "wal": null,
    "cpr": null,
-   "counterparty": "НКЦ (клиринг)",
+   "counterparty": "ЦК (клиринг)",
    "new_today": false,
    "risk": {
     "RUB KEY": {
@@ -12566,7 +12566,7 @@
    "jtd": 0,
    "wal": null,
    "cpr": null,
-   "counterparty": "НКЦ (клиринг)",
+   "counterparty": "ЦК (клиринг)",
    "new_today": false,
    "risk": {
     "RUB KEY": {
@@ -12675,7 +12675,7 @@
    "jtd": 0,
    "wal": null,
    "cpr": null,
-   "counterparty": "НКЦ (клиринг)",
+   "counterparty": "ЦК (клиринг)",
    "new_today": false,
    "risk": {
     "RUB KEY": {
@@ -12795,7 +12795,7 @@
    "jtd": 0,
    "wal": null,
    "cpr": null,
-   "counterparty": "НКЦ (клиринг)",
+   "counterparty": "ЦК (клиринг)",
    "new_today": false,
    "risk": {
     "RUB KEY": {
@@ -13702,7 +13702,7 @@
    "jtd": 0,
    "wal": null,
    "cpr": null,
-   "counterparty": "Мосбиржа",
+   "counterparty": "Биржа",
    "new_today": false,
    "risk": {},
    "fx_delta": {
@@ -13759,7 +13759,7 @@
    "jtd": 0,
    "wal": null,
    "cpr": null,
-   "counterparty": "Мосбиржа",
+   "counterparty": "Биржа",
    "new_today": false,
    "risk": {},
    "fx_delta": {
@@ -13948,7 +13948,7 @@
    "jtd": 0,
    "wal": null,
    "cpr": null,
-   "counterparty": "Мосбиржа",
+   "counterparty": "Биржа",
    "new_today": true,
    "risk": {
     "USD SOFR": {
