@@ -6,14 +6,16 @@
  *  - по позиции carry (полное изменение стоимости при кривых, перенесённых в горизонт: купоны + изменение грязной
  *    цены; при spread=curve в него входит spreadRoll), funding (за период, null — не посчитано), net = carry + funding;
  *    без прогноза — carry null и code (причина);
- *  - totals / byBook / ...: funding группы — всё её фондирование: позиций с прогнозом, позиций без прогноза
- *    (fundingNoCarry) и строк без позиции (fundingBookLevel, остатки ДС); net = carry + funding.
- * На экране «Кэрри», «Фондирование», «Нетто» (решение владельца 26.10). Чтобы сумма складывалась на глазах, итог
- * делится так: Кэрри (позиции с прогнозом) + Фондирование (тех же позиций) + «фондирование без прогноза кэрри»
- * (позиции без прогноза и остатки ДС) = Нетто. Фондирование null не подменяется нулём: если у позиции с прогнозом
- * его нет, нетто группы — «—» (C.sums: net null, netPartial — сумма по тем, у кого есть).
- * Итоги считаются здесь по строкам, а не берутся из totals: экран режет позиции общими фильтрами (юрлицо, деск,
- * книга, валюта). Без фильтров они совпадают с totals сервера (тест).
+ *  - totals / byBook / ...: новый формат (#297) — funding только позиций с прогнозом, fundingNoCarry — позиций без
+ *    прогноза, fundingBookLevel — строк без позиции (остатки ДС), fundingTotal — их сумма; net = carry + fundingTotal,
+ *    null по правилу B1 (фондирование не посчитано, нет позиций с прогнозом или у позиции с прогнозом фондирование
+ *    null), netKnown — нетто позиций, у которых есть и кэрри, и фондирование. Старый формат (до #297): funding группы —
+ *    всё фондирование; поддерживается, пока #297 не в main.
+ * На экране «Кэрри», «Фондирование», «Нетто» (решение владельца 26.10). Сумма складывается на глазах: Кэрри
+ * (позиции с прогнозом) + Фондирование тех же позиций + «фондирование без прогноза кэрри» (позиции без прогноза
+ * и остатки ДС) = Нетто. Фондирование null не подменяется нулём.
+ * Итоги считаются здесь по строкам по тому же правилу, что у сервера: экран режет позиции общими фильтрами
+ * (юрлицо, деск, книга, валюта). Без фильтров страница берёт итоги сервера (C.withServer); они совпадают (тест).
  */
 (function (root) {
   'use strict';
@@ -84,7 +86,10 @@
   // ---------- строки ----------
   // opts: { pos: {id: позиция модели монитора (M.pos)}, k: множитель рубли → валюта показа, books: {id: книга},
   //         kindLabel: код → подпись }
-  // dv01 и cs01 — из модели монитора (того же прогона): в ответе сервера их нет; уже в валюте показа.
+  // Два формата ответа (пока #297 не в main): новый — у позиции dv01, cs01, fxRate, inCcy, у групп fundingTotal,
+  // netKnown, nCoveredNoFunding, а funding группы — только позиций с прогнозом (C.isNew); старый — без них.
+  // dv01 и cs01 — из ответа (рубли за б.п. → валюта показа), в старом формате — из модели монитора (того же прогона).
+  // opts.repr — валюта показа: позиция в этой же валюте берёт суммы из inCcy, а не пересчитывает рубли по курсу.
   // Знаменатель «кэрри на единицу риска» (решение по #66): у флоатера (p.cpn.type 'float' модели
   // монитора) основной риск спредовый — CS01, у остальных — DV01 ставок
   C.rows = function (resp, opts) {
@@ -94,10 +99,13 @@
     const m = v => v == null || !isFinite(v) ? null : v * k;
     return (resp.positions || []).map(x => {
       const p = P[x.positionId] || null, b = B[x.bookId] || {};
-      const carry = m(x.carry), funding = ok ? m(x.funding) : null;
-      const dv01 = p && p.dv01 != null && isFinite(p.dv01) ? p.dv01 : null;
-      const cs01 = p && p.cs01 != null && isFinite(p.cs01) ? p.cs01 : null;
-      const floater = C.isFloater(p);
+      const own = opts.repr && x.inCcy && x.ccy === opts.repr;  // в своей валюте: inCcy как есть
+      const pick = key => own ? (x.inCcy[key] == null || !isFinite(x.inCcy[key]) ? null : x.inCcy[key]) : m(x[key]);
+      const carry = pick('carry'), funding = ok ? pick('funding') : null;
+      const fin = v => v != null && isFinite(v) ? v : null;
+      const dv01 = 'dv01' in x ? m(x.dv01) : p ? fin(p.dv01) : null;
+      const cs01 = 'cs01' in x ? m(x.cs01) : p ? fin(p.cs01) : null;
+      const floater = p ? C.isFloater(p) : C.FLOAT_KINDS.includes(x.kind);
       const r = {
         id: x.positionId, p, name: p ? p.name : (x.secid || x.positionId), secid: x.secid, issuer: p ? p.issuer : null,
         book: x.bookId, bookName: p ? p.bookName : (b.name || x.bookId), entity: x.entity || (p && p.entity) || b.entity || '—',
@@ -106,8 +114,9 @@
         net: carry == null || funding == null ? null : carry + funding,
         fundingState: ok ? x.fundingState : (resp.fundingStatus === 'not_configured' ? 'not_configured' : x.fundingState),
         fundingSource: x.fundingSource, fundingRate: x.fundingRate || null, fundingRuleId: x.fundingRuleId || null, fundingNote: x.fundingNote || null,
-        spreadRoll: m(x.spreadRoll), spreadRollBp: x.spreadRollBp == null ? null : x.spreadRollBp, spreadCurve: x.spreadCurve || null,
+        spreadRoll: pick('spreadRoll'), spreadRollBp: x.spreadRollBp == null ? null : x.spreadRollBp, spreadCurve: x.spreadCurve || null,
         carryMethod: x.carryMethod || null, code: x.code || null, detail: x.detail || null, reason: C.reasonText(x.code),
+        fxRate: x.fxRate == null ? null : x.fxRate, inCcy: x.inCcy || null,
         dv01, cs01, floater, denom: floater ? 'CS01' : 'DV01', carryDv01: C.perDv01(carry, floater ? cs01 : dv01),
         raw: x,
       };
@@ -118,6 +127,8 @@
   // кэрри на единицу DV01, б.п.: на сколько б.п. ставки могут уйти против позиции за горизонт, пока переоценка не
   // съест кэрри (кэрри / |DV01|); DV01 ≈ 0 (флоатер без риска, своп с нулевым риском) — нет
   C.isFloater = p => !!(p && p.cpn && p.cpn.type === 'float');
+  C.FLOAT_KINDS = ['OFZ_PK', 'CORP_FLT'];  // позиции нет в модели монитора: флоатер по типу инструмента
+  C.isNew = resp => !!(resp && resp.totals && 'fundingTotal' in resp.totals);
   C.perDv01 = (carry, dv01) => carry == null || dv01 == null || Math.abs(dv01) < C.MIN_DEN ? null : carry / Math.abs(dv01);
 
   // строки фондирования без позиции (остатки ДС книги или юрлица): псевдострока таблицы, в валюте показа; в кэрри
@@ -148,7 +159,7 @@
   // funding сервера), null, если у позиции с прогнозом фондирования нет или оно не посчитано вовсе
   C.sums = function (rows, fundingOk) {
     const s = { n: 0, nCovered: 0, nNotCovered: 0, nFundingMissing: 0, nFundingMissingNoCarry: 0, carry: 0, fundingCovered: 0, fundingNoCarry: 0, fundingCash: 0,
-      spreadRoll: null, dv01: 0, carryFix: 0, nFix: 0, cs01Flt: 0, carryFlt: 0, nFlt: 0, netPartial: 0, notCovered: [], fundingMissing: [], nCash: 0 };
+      spreadRoll: null, dv01: 0, carryFix: 0, nFix: 0, cs01Flt: 0, carryFlt: 0, nFlt: 0, netKnown: 0, notCovered: [], fundingMissing: [], nCash: 0 };
     rows.forEach(r => {
       if (r.isCash) { s.nCash++; if (r.funding != null) s.fundingCash += r.funding; return; }
       s.n++;
@@ -161,7 +172,7 @@
           if (r.floater) { s.nFlt++; s.carryFlt += r.carry; s.cs01Flt += den; } else { s.nFix++; s.carryFix += r.carry; s.dv01 += den; }
         }
         if (r.spreadRoll != null) s.spreadRoll = (s.spreadRoll || 0) + r.spreadRoll;
-        if (r.funding != null) { s.fundingCovered += r.funding; s.netPartial += r.carry + r.funding; } else { s.nFundingMissing++; s.fundingMissing.push(r); }
+        if (r.funding != null) { s.fundingCovered += r.funding; s.netKnown += r.carry + r.funding; } else { s.nFundingMissing++; s.fundingMissing.push(r); }
       } else {
         s.nNotCovered++; s.notCovered.push(r);
         if (r.funding != null) s.fundingNoCarry += r.funding; else { s.nFundingMissingNoCarry++; s.fundingMissing.push(r); }
@@ -170,18 +181,28 @@
     s.fundingOk = !!fundingOk;
     if (!s.nCovered) s.carry = null;
     if (!fundingOk) {
-      ['fundingCovered', 'fundingNoCarry', 'fundingCash', 'fundingRest', 'funding', 'net', 'netPartial'].forEach(k => { s[k] = null; });
+      ['fundingCovered', 'fundingNoCarry', 'fundingCash', 'fundingRest', 'funding', 'net', 'netKnown'].forEach(k => { s[k] = null; });
     } else {
       s.fundingRest = s.fundingNoCarry + s.fundingCash;  // «фондирование без прогноза кэрри»
       s.funding = s.fundingCovered + s.fundingRest;
-      // нетто: «—», если у какой-нибудь позиции фондирования нет (с прогнозом или без) или в группе нет ни одной
-      // позиции с прогнозом (как сервер: net null, пока carry null)
-      s.net = s.nFundingMissing || s.nFundingMissingNoCarry || !s.nCovered ? null : s.carry + s.funding;
-      s.netPartial += s.fundingRest;
+      // нетто — правило сервера B1 (#297): «—», если в группе нет позиций с прогнозом или у позиции с прогнозом
+      // фондирования нет; фондирование null у позиции без прогноза считается 0 (её видно в баннере)
+      s.net = s.nFundingMissing || !s.nCovered ? null : s.carry + s.funding;
     }
+    if (!s.nCovered && s.netKnown === 0) s.netKnown = null;
     s.carryDv01 = C.perDv01(s.carryFix, s.nFix ? s.dv01 : null);
     s.carryCs01Flt = C.perDv01(s.carryFlt, s.nFlt ? s.cs01Flt : null);
     return s;
+  };
+
+  // итоги группы с сервера (новый формат, без клиентских фильтров): суммы — значения сервера в валюте показа;
+  // кэрри/DV01 и списки для баннера остаются клиентскими (сервер суммирует DV01 всех позиций, включая флоатеры)
+  C.withServer = function (s, g, k) {
+    if (!g || !('fundingTotal' in g)) return s;
+    const m = v => v == null ? null : v * (k == null ? 1 : k);
+    return Object.assign(s, { carry: m(g.carry), spreadRoll: m(g.spreadRoll), fundingCovered: m(g.funding), fundingNoCarry: m(g.fundingNoCarry),
+      fundingCash: m(g.fundingBookLevel), fundingRest: g.fundingTotal == null ? null : m((g.fundingNoCarry || 0) + (g.fundingBookLevel || 0)),
+      funding: m(g.fundingTotal), net: m(g.net), netKnown: m(g.netKnown), nCovered: g.nCovered, nNotCovered: g.nNotCovered, nFundingMissing: g.nCoveredNoFunding, server: true });
   };
 
   // фильтр строк без позиции в модели монитора и строк остатков: те же общие фильтры, что K.list (юрлицо, деск,
