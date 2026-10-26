@@ -301,7 +301,7 @@
   M.curves.forEach(c => { if (!K.curveColors[c.id]) K.curveColors[c.id] = K.PAL[(M.util && M.util.hash ? M.util.hash(c.id) : c.id.length) % K.PAL.length]; });
   const issuerIdx = {}; M.issuers.forEach((x, i) => issuerIdx[x.id] = i);
   K.issuerColor = id => id && issuerIdx[id] != null ? K.PAL[issuerIdx[id] % K.PAL.length] : '#7a8794';
-  K.kindColor = { PD: '#4c9dff', PK: '#22c3d6', IN: '#7f8cff', SOVFX: '#b48cff', FIX: '#3fb67a', FLT: '#e3b341', IRS: '#f0645a', KSW: '#ff8f3f', BAS: '#ef6fb0', FXF: '#a0b4c8', XCCY: '#c9a26b', OTC: '#f0645a', FX: '#a0b4c8', OTH: '#8a96a3' };
+  K.kindColor = { PD: '#4c9dff', PK: '#22c3d6', IN: '#7f8cff', SOVFX: '#b48cff', FIX: '#3fb67a', FLT: '#e3b341', IRS: '#f0645a', KSW: '#ff8f3f', BAS: '#ef6fb0', FXF: '#a0b4c8', XCCY: '#c9a26b', OTC: '#9bbf4a', FX: '#a0b4c8', OTH: '#8a96a3' };
   // фон ячейки тепловой карты: синий — короткий риск/убыток не важно; знак цвета задаётся pos/neg
   K.heat = (v, max, opt) => {
     if (!v || !max) return '';
@@ -2333,7 +2333,8 @@
     kind: { key: 'kind', label: 'Тип', filter: r => M.kindLabel[r.kind] || r.kind, fmt: (v, r) => '<span class="tagc" style="border-color:' + K.kindColor[v] + '55">' + esc(M.kindShort[v]) + '</span>' },
     book: { key: 'book', label: 'Книга', filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
     coupon: { key: 'couponFmt', label: 'Купон', fmt: v => '<span class="mono">' + esc(v || '—') + '</span>' },
-    event: { key: 'event', label: 'Событие', val: r => r.event.date, fmt: (v, r) => '<span class="mut3">' + ({ put: 'пут', call: 'колл', mat: 'погаш' }[r.event.kind]) + '</span> ' + f.date(r.event.date) },
+    // даты события нет (#342) — «—», без вида события
+    event: { key: 'event', label: 'Событие', val: r => r.event.date, fmt: (v, r) => r.event.date ? '<span class="mut3">' + ({ put: 'пут', call: 'колл', mat: 'погаш' }[r.event.kind]) + '</span> ' + f.date(r.event.date) : '<span class="mut3">—</span>' },
     maturity: { key: 'maturity', label: 'Погашение', fmt: v => f.date(v) },
     // дата оферты — колонкой-датой (в CSV — дата Excel), вид оферты — своей колонкой (#183)
     offer: { key: 'offer', label: 'Оферта', date: true, fmt: v => v ? f.date(v) : '<span class="mut3">—</span>' },
@@ -2575,14 +2576,14 @@
     K.aliasBind(te, p, () => { o.title = p.name; });
     o.el.querySelector('.st').innerHTML = esc(p.issuerFull) + (p.isin ? ' · <span class="mono">' + esc(p.isin) + '</span>' : '') + ' · ' + esc(p.book) + ' — ' + esc(p.bookName) + ' · ' + esc(p.groupLabel) + ' / ' + esc(p.kindLabel);
     const isBond = !!p.cpn;
-    const ev = { put: 'пут-оферта', call: 'колл-опцион', mat: 'погашение' }[p.event.kind];
+    const ev = { put: 'пут-оферта', call: 'колл-опцион', mat: 'погашение' }[p.event.kind] || 'даты нет';  // #342: без даты — не «погашение»
     const fields = (isBond ? [
       ['Номинал', f.mn(p.notional, 0) + ' <small>mm ' + p.ccy + '</small>'], ['MV', f.mn(p.mv, 1) + ' <small>mm ₽</small>'],
       ['Цена (bid/ask)', f.px(p.price) + ' <small>' + f.px(p.bid) + ' / ' + f.px(p.ask) + '</small>'], ['Изм. цены', p.prevPrice == null || p.price == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(p.price - p.prevPrice) + '">' + f.s(p.price - p.prevPrice, 3) + '</span>'],
-      p.cpn.type === 'float' ? ['Доходность', '<span class="mut3">—</span> <small>флоатер: смотрим DM</small>'] : ['Доходность', f.pct(p.ytm) + ' <small>к ' + (p.event.kind === 'mat' ? 'погаш.' : 'оферте') + '</small>'], ...K.spreadFields(p),
+      p.cpn.type === 'float' ? ['Доходность', '<span class="mut3">—</span> <small>флоатер: смотрим DM</small>'] : ['Доходность', f.pct(p.ytm) + ' <small>к ' + (p.event.kind === 'put' || p.event.kind === 'call' ? 'оферте' : 'погаш.') + '</small>'], ...K.spreadFields(p),
       ['G-спред к ОФЗ', f.bp(p.gspread) + ' <small>б.п.</small>'], ['Мод. дюрация', p.mdur == null ? '—' : f.n(p.mdur, 2)],
       ['Купон', '<span class="mono">' + esc(p.couponFmt) + '</span>'], ['Текущий купон', f.pct(p.curCpn) + (p.cpn.type === 'float' ? ' <small>прогноз</small>' : '')],
-      ['Ближайшее событие', f.date(p.event.date) + ' <small>' + ev + ', ' + f.yrs(p.tenor) + '</small>'], ['Погашение', f.date(p.maturity) + ' <small>' + f.yrs(p.yearsToMat) + '</small>'],
+      ['Ближайшее событие', p.event.date ? f.date(p.event.date) + ' <small>' + ev + ', ' + f.yrs(p.tenor) + '</small>' : '<span class="mut3">—</span> <small>' + ev + '</small>'], ['Погашение', f.date(p.maturity) + ' <small>' + f.yrs(p.yearsToMat) + '</small>'],
       ['DV01 ставки', K.d({ title: 'DV01 ' + p.name, unit: 'тыс ₽/бп', rows: [{ p, v: p.dv01 }] }, f.dv(p.dv01), '') + ' <small>тыс ₽/бп</small>', false, K.tips.dv01], ['CS01', f.dv(p.cs01) + ' <small>тыс ₽/бп</small>', false, K.tips.cs01],
       ['Базис ОФЗ01', p.basis01 ? f.dv(p.basis01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.basis01],
       ['Спред к КБД01', p.ofzSpr01 ? f.dv(p.ofzSpr01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.ofzSpr01], ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽ · <a href="' + K.carryLink(p.id) + '" title="C17: кэрри, фондирование и нетто позиции до горизонта">прогноз →</a></small>', false, K.tips.carry],

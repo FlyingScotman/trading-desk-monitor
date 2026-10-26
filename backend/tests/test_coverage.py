@@ -70,7 +70,7 @@ def test_unvalued_by_cause_and_kind(published):
     assert g["bond_derivative|BOND_FUT"]["n"] == 1
     assert g["repo|UNCLASSIFIED"]["why"].startswith("РЕПО") and g["repo|UNCLASSIFIED"]["notionalRub"] == pytest.approx(25e6)
     assert g["unmapped_instrument|BOND_NA"]["ids"] == ["D|XS"] and "ISIN" in g["unmapped_instrument|BOND_NA"]["todo"]
-    omr = g["no_report_mv|UNCLASSIFIED"]
+    omr = g["no_report_mv|OTC"]  # an OTC row without a product group: DER OTC (TDM#345)
     assert omr["ids"] == ["D|OMR"] and omr["noRate"] == [] and u["fxMissing"] == []  # the CBR rate is in the run now
     rate = next(x["rate"] for x in con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'fx'",
                                                (r["run_id"],)).fetchone()["data"] if x["ccy"] == "OMR")

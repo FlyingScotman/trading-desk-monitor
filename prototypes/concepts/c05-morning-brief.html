@@ -91,6 +91,8 @@
   const chgRange = c => { if (noCurve(c) || K.noMoves(c.chg)) return 'нет данных'; const a = c.chg.filter(x => x).map(v => Math.round(v * 10) / 10).filter(x => x); if (!a.length) return '0'; const mn = Math.min(...a), mx = Math.max(...a); const s = v => (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v); return mn === mx ? s(mn) : s(mn) + '…' + s(mx); };
   // сдвигов по кривой в прогоне нет (#332, B1) — средний сдвиг и бакет с наибольшим сдвигом null, а не 0 и первый бакет
   const avgChg = c => noCurve(c) || K.noMoves(c.chg) ? null : c.chg.reduce((a, v) => a + (v || 0), 0) / Math.max(1, c.chg.length);
+  // сдвиг кривой со своей единицей; без кривой — «нет данных», без сдвигов — «сдвигов нет в прогоне», оба без «б.п.» (#342)
+  const chgBp = c => noCurve(c) ? 'нет данных' : K.noMoves(c.chg) ? 'сдвигов нет в прогоне' : chgRange(c) + ' б.п.';
   const maxBucket = c => { if (noCurve(c) || K.noMoves(c.chg)) return null; let k = 0; c.chg.forEach((v, i) => { if (Math.abs(v || 0) > Math.abs(c.chg[k] || 0)) k = i; }); return M.buckets[k]; };
   const plural = (n, a, b, c) => { const m = n % 10, h = n % 100; return n + ' ' + (m === 1 && h !== 11 ? a : m >= 2 && m <= 4 && (h < 10 || h >= 20) ? b : c); };
   const daysTo = d => Math.round((M.util.parse(d) - M.util.parse(M.asOf)) / 864e5);
@@ -101,11 +103,14 @@
     const fix = k => { const x = MH && MH.indices && MH.indices[k]; const v = x && x.value != null ? x.value : M.indices[k];
       return v == null ? null : k + ' ' + f.pct(v) + (x && x.chgBp && x.chgBp[0] ? ' · ' + f.bps(x.chgBp[0]) + ' б.п.' : ''); };
     const c = M.curve['USD SOFR'], e = M.curve['EUR ESTR'], cn = M.curve['CNY XCCY'];
-    const cur = (cv, name) => (/прокси/.test(cv.name || '') ? esc(cv.name) : name) + ' ' + chgRange(cv) + ' б.п.';
+    // кривые без сдвигов в прогоне (CURVE_MOVES пуст) — одной фразой «… — сдвигов нет в прогоне», без «б.п.» (#342)
+    const still = [];
+    const cur = (cv, name) => { const nm = /прокси/.test(cv.name || '') ? esc(cv.name) : name; if (K.noMoves(cv.chg)) { still.push(nm); return null; } return nm + ' ' + chgRange(cv) + ' б.п.'; };
     const parts = [noCurve(c) ? (fix('SOFR') || 'SOFR нет данных') : cur(c, 'USD')];
     if (!noCurve(e)) parts.push(cur(e, 'EUR')); else if (fix('€STR')) parts.push(fix('€STR'));
-    parts.push(noCurve(cn) ? 'CNY нет данных' : 'CNY ' + chgRange(cn) + ' б.п.');
-    return parts.join(', ') + (noCurve(c) && noCurve(cn) ? ' (кривых USD/CNY в данных хаба нет' + (fix('SOFR') ? '; SOFR и €STR — фиксинги дня' : '') + ')' : '');
+    parts.push(noCurve(cn) ? 'CNY нет данных' : cur(cn, 'CNY'));
+    if (still.length) parts.push(still.join(', ') + ' — сдвигов нет в прогоне');
+    return parts.filter(Boolean).join(', ') + (noCurve(c) && noCurve(cn) ? ' (кривых USD/CNY в данных хаба нет' + (fix('SOFR') ? '; SOFR и €STR — фиксинги дня' : '') + ')' : '');
   }
 
   // ---------- фиксинги, курсы ЦБ и кривые за неделю, месяц, с начала года (история рынка хаба) ----------
@@ -148,10 +153,10 @@
     const parts = [];
     M.curves.filter(c => c.kind === 'rate').forEach(c => {
       const v = M.sum(L, p => ratePnl(p, c.id));
-      if (Math.abs(v) > 3e5) parts.push({ v, h: 'ставки ' + c.short + ' ' + mln('PnL от ' + c.short, L, p => ratePnl(p, c.id)) + ' <span class="mut">· ' + c.short + ' ' + chgRange(c) + ' б.п.</span>' });
+      if (Math.abs(v) > 3e5) parts.push({ v, h: 'ставки ' + c.short + ' ' + mln('PnL от ' + c.short, L, p => ratePnl(p, c.id)) + ' <span class="mut">· ' + c.short + ' ' + chgBp(c) + '</span>' });
     });
     const bas = M.ofzView === 'kbd' ? 0 : M.sum(L, p => ratePnl(p, 'RUB OFZ'));  // в виде «КБД» КБД — среди кривых ставок выше
-    if (Math.abs(bas) > 3e5) parts.push({ v: bas, h: 'базис ОФЗ ' + mln('PnL от базиса ОФЗ − RUONIA', L, p => ratePnl(p, 'RUB OFZ')) + ' <span class="mut">(ОФЗ шире RUONIA на ' + chgRange(M.curve['RUB OFZ']) + ' б.п.)</span>' });
+    if (Math.abs(bas) > 3e5) parts.push({ v: bas, h: 'базис ОФЗ ' + mln('PnL от базиса ОФЗ − RUONIA', L, p => ratePnl(p, 'RUB OFZ')) + ' <span class="mut">(' + (noCurve(M.curve['RUB OFZ']) ? 'кривой базиса ОФЗ в прогоне нет' : K.noMoves(M.curve['RUB OFZ'].chg) ? 'базис ОФЗ: сдвигов нет в прогоне' : 'ОФЗ шире RUONIA на ' + chgBp(M.curve['RUB OFZ'])) + ')</span>' });
     [['carry', 'кэрри'], ['funding', 'фондирование'], ['spread', 'кредитные спреды'], ['fx', 'курсы'], ['trading', 'сделки дня'], ['other', 'прочее']].forEach(([key, t]) => {
       const v = M.sum(L, p => p.pnl[key]); if (Math.abs(v) > 2e5) parts.push({ v, h: t + ' ' + mln('PnL · ' + t, L, p => p.pnl[key]) });
     });
@@ -266,6 +271,8 @@
     function mktSentence() {
       const r = M.curve['RUB RUONIA'], b = K.basisCurve(), a = avgChg(r), ab = avgChg(b);
       const head = noCurve(r) ? 'Ставки: кривой RUONIA OIS в прогоне нет' : a == null ? 'Ставки: RUONIA OIS — сдвигов нет в прогоне' : (a > 0.5 ? 'Ставки выросли' : a < -0.5 ? 'Ставки снизились' : 'Ставки почти не изменились') + ': RUONIA OIS ' + chgRange(r) + ' б.п.' + (Math.abs(a) > 0.5 ? ' (сильнее всего ' + maxBucket(r) + ')' : '');
+      // ни у одной кривой RUB сдвигов нет — одна фраза, без «нет данных» по каждой (#342)
+      if (!noCurve(r) && [r, M.curve['RUB KEY'], b].every(c => noCurve(c) || K.noMoves(c.chg))) return 'Ставки RUB: сдвигов нет в прогоне.';
       return head + ', КС-свопы ' + chgRange(M.curve['RUB KEY']) + ', базис ОФЗ ' + chgRange(b) + (ab > 0.5 ? ' — ОФЗ слабее свопов.' : ab < -0.5 ? ' — ОФЗ сильнее свопов.' : '.');
     }
     // курс PnL FX (R26): рыночный — курс шапки (MOEX 19:00, иначе 14:00 / CETS / ЦБ — источник рядом), курс ЦБ,

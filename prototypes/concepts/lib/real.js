@@ -362,10 +362,11 @@
     const yd = d.yieldDate && (!d.maturity || d.yieldDate < d.maturity) ? d.yieldDate : null;
     p.offer = ex.offer_date || yd || null;
     p.offerKind = p.offer ? (ex.offer_kind || (ex.horizon_kind === 'call' ? 'call' : 'put')) : null;
-    p.event = p.offer ? { date: p.offer, kind: p.offerKind } : { date: d.maturity || null, kind: 'mat' };
+    // даты события нет (бессрочная без колла, сделка без срока) — событие { date: null, kind: null }: «без даты» и «—»
+    // на всех экранах, не дата прогона и не «погашение» (B1, #342)
+    p.event = p.offer ? { date: p.offer, kind: p.offerKind } : d.maturity ? { date: d.maturity, kind: 'mat' } : { date: null, kind: null };
     p.yearsToMat = d.tenorY != null ? d.tenorY : yearsTo(d.maturity);
     p.tenor = p.event.date ? Math.max(0.01, yearsTo(p.event.date)) : (p.yearsToMat != null ? p.yearsToMat : 0);
-    if (p.event.date == null) p.event.date = M.asOf;  // бессрочная без колла: событие не определено
     // цены, доходности, спреды
     p.price = num(d.price); p.prevPrice = num(xp.prevPrice);
     p.bid = num(q.bid); p.ask = num(q.ask); p.volumeDay = num(q.value);

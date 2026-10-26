@@ -159,7 +159,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
       legend: { top: 4, right: 12, data: ['ОФЗ'].concat(GR.map(x => x[0])).concat(['кривая ОФЗ', 'RUONIA OIS', 'наши']) },
       tooltip: {
         trigger: 'item', formatter: pp => {
-          if (pp.seriesName === 'наши') { const p = L[pp.data.i]; return '<b>' + esc(p.name) + '</b> · ' + esc(K.ratingText(p.rating, p.ratingInfo)) + '<br>' + esc(p.couponFmt) + ' · ' + ({ put: 'пут', call: 'колл', mat: 'погаш.' }[p.event.kind]) + ' ' + f.date(p.event.date) + '<br>дох. ' + f.pct(p.ytm) + ' · G ' + f.bp(p.gspread) + ' · ' + p.spreadLabel + ' ' + f.bp(p.zspread) + ' б.п.<br>MV ' + f.mn(p.mv, 0) + ' mm ₽ · DV01 ' + f.dv(p.dv01) + '<br><span style="opacity:.6">щелчок — карточка</span>'; }
+          if (pp.seriesName === 'наши') { const p = L[pp.data.i]; return '<b>' + esc(p.name) + '</b> · ' + esc(K.ratingText(p.rating, p.ratingInfo)) + '<br>' + esc(p.couponFmt) + ' · ' + (p.event.date ? ({ put: 'пут', call: 'колл', mat: 'погаш.' }[p.event.kind]) + ' ' + f.date(p.event.date) : 'даты события нет') + '<br>дох. ' + f.pct(p.ytm) + ' · G ' + f.bp(p.gspread) + ' · ' + p.spreadLabel + ' ' + f.bp(p.zspread) + ' б.п.<br>MV ' + f.mn(p.mv, 0) + ' mm ₽ · DV01 ' + f.dv(p.dv01) + '<br><span style="opacity:.6">щелчок — карточка</span>'; }
           const b = pp.data.b; if (!b) return '';
           return '<b>' + esc(b.name) + '</b><br>' + esc(b.sector) + ' · ' + esc(K.ratingText(b.rating, b.ratingInfo)) + (b.flt ? ' · флоатер' : '') + '<br>дох. ' + f.pct(b.ytm) + ' · G ' + f.bp(b.spread) + ' б.п. · срок ' + f.yrs(b.tenor) + '<br>объём ' + f.bn(b.size, 1) + ' bn';
         },

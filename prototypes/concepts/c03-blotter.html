@@ -122,7 +122,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     offerKind: { label: 'Вид оферты', filter: r => K.offerKindText(r.offerKind) || '—', val: r => r.offer ? r.offerKind : null, fmt: v => v ? esc(K.offerKindText(v)) : '<span class="mut3">—</span>', title: 'пут — право держателя предъявить бумагу, колл — право эмитента погасить' },
     maturity: { label: 'Погашение', val: r => r.maturity, fmt: v => f.date(v) },
     event: { label: 'Ближайшее событие', val: r => r.event.date, title: 'оферта (пут/колл), если есть, иначе погашение',
-      fmt: (v, r) => '<span class="' + (r.group !== 'DER' && r.tenor < 0.25 ? 'ev-soon' : 'mut3') + '">' + evName[r.event.kind] + '</span> ' + f.date(r.event.date) + ' <span class="mut3">' + f.yrs(r.tenor) + '</span>' },
+      fmt: (v, r) => '<span class="' + (r.group !== 'DER' && r.tenor < 0.25 ? 'ev-soon' : 'mut3') + '">' + (r.event.date ? evName[r.event.kind] + '</span> ' + f.date(r.event.date) + ' <span class="mut3">' + f.yrs(r.tenor) + '</span>' : '—</span>') },
     tenor: { label: 'Срок', num: true, val: r => r.tenor, fmt: v => f.yrs(v), title: 'до оферты, если есть, иначе до погашения' },
     // в CSV — число в mm валюты бумаги (заголовок «Номинал, mm в вал.»), валюта — в колонке «Вал» (#258)
     notional: { label: 'Номинал', num: true, val: r => r.notional, fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', csvHead: 'Номинал, mm в вал.', csvFmt: v => f.mn(v, 2), title: 'в валюте бумаги' },
@@ -345,14 +345,14 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     if (p.issuer) $('.cd-hd [data-a=iss]').onclick = () => K.drill({ title: 'Эмитент ' + p.issuerName + ' · MV', unit: 'mm ₽', fmt: v => f.mn(v, 1), list: K.list().filter(x => x.issuer === p.issuer), val: x => x.group === 'DER' ? x.notionalRub : x.mv });
     $('.cd-hd [data-a=book]').onclick = () => K.drill({ title: 'Книга ' + p.book + ' · DV01', unit: 'тыс ₽/бп', list: M.positions.filter(x => x.book === p.book), val: 'dv01' });
     // событие
-    const evTxt = { put: 'Пут-оферта', call: 'Колл-опцион', mat: isBond ? 'Погашение' : 'Срок сделки' }[p.event.kind];
+    const evTxt = { put: 'Пут-оферта', call: 'Колл-опцион', mat: isBond ? 'Погашение' : 'Срок сделки' }[p.event.kind] || 'Даты события нет';  // #342
     const soon = isBond && p.tenor < 0.25;
-    $('.cd-ev-box').innerHTML = '<div class="cd-ev' + (soon ? ' soon' : '') + '"><span class="mut">' + evTxt + '</span><span class="big">' + f.date(p.event.date) + '</span><span class="mut">через ' + f.yrs(p.tenor) + '</span>' +
+    $('.cd-ev-box').innerHTML = '<div class="cd-ev' + (soon ? ' soon' : '') + '"><span class="mut">' + evTxt + '</span><span class="big">' + f.date(p.event.date) + '</span>' + (p.event.date ? '<span class="mut">через ' + f.yrs(p.tenor) + '</span>' : '') +
       (p.offer ? '<span class="sp" style="flex:1"></span><span class="mut3">погашение ' + f.date(p.maturity) + '</span>' : '') + '</div>';
     const F = (isBond ? [
       ['Номинал', f.mn(p.notional, 0) + ' <small>mm ' + p.ccy + '</small>'], ['MV', f.mn(p.mv, 1) + ' <small>mm ₽</small>'],
       ['Цена', f.px(p.price) + ' <small class="' + f.cls(p.price - p.prevPrice) + '">' + f.s(p.price - p.prevPrice, 2) + '</small>'], ['Bid / Ask', '<small>' + f.px(p.bid) + ' / ' + f.px(p.ask) + '</small>'],
-      ['Доходность', isFloat ? '<span class="mut3">—</span> <small>флоатер: смотрим DM</small>' : f.pct(p.ytm) + ' <small>к ' + (p.event.kind === 'mat' ? 'погаш.' : 'оферте') + '</small>'], ...K.spreadFields(p),
+      ['Доходность', isFloat ? '<span class="mut3">—</span> <small>флоатер: смотрим DM</small>' : f.pct(p.ytm) + ' <small>к ' + (p.event.kind === 'put' || p.event.kind === 'call' ? 'оферте' : 'погаш.') + '</small>'], ...K.spreadFields(p),
       ['G-спред к ОФЗ', f.bp(p.gspread) + ' <small>б.п.</small>'],
       ['Купон', '<span class="mono">' + esc(p.couponFmt) + '</span>'], ['Текущий купон', f.pct(p.curCpn) + (isFloat ? ' <small>прогноз</small>' : '')],
       ['Мод. дюрация', p.mdur == null ? '—' : f.n(p.mdur, 2)], ['DV01', f.dv(p.dv01) + ' <small>тыс ₽/бп</small>', false, K.tips.dv01],

@@ -303,8 +303,8 @@ test('B1 в браузере: #327, #322, #325', { skip: pw ? false : 'нет Pl
       const D = JSON.parse(RUN), no = D.positions.find(p => p.maturity == null);
       assert.ok(no, 'в фикстуре позиция без даты погашения');
       const { pg, ctx, errors } = await open(browser, 'c04-pivot.html', { D, hash: '#r=evmonth&c=none&m=count&v=table' });
-      // lib/real.js ставит такой позиции событие «сегодня» (M.asOf); страница не должна полагаться на это: дата события
-      // null (как в данных) — и перерисовка «Месяц события»
+      // дата события такой позиции — null (lib/real.js больше не подставляет M.asOf, #342); ещё позиции без даты — и
+      // перерисовка «Месяц события»
       // ещё 4 позиции без даты — группа больше большинства месяцев: «по величине» без правки она встала бы не в конец
       await pg.evaluate(id => { MOCK.positions.filter(p => p.id === id || p.event.date > '2029').slice(0, 5).forEach(p => { p.event.date = null; }); location.hash = '#r=evmonth&c=none&m=count&v=bars'; }, no.id);
       await pg.waitForTimeout(300);
@@ -318,6 +318,45 @@ test('B1 в браузере: #327, #322, #325', { skip: pw ? false : 'нет Pl
       await pg.evaluate(() => { location.hash = '#r=evmonth&c=none&m=count&v=table&rs=abs'; }); await pg.waitForTimeout(300);
       L = await labels();
       assert.strictEqual(L[L.length - 1], 'без даты', 'по величине: ' + L);
+      assert.deepStrictEqual(errors, []);
+      await ctx.close();
+    });
+    await t.test('#342: даты события нет — null без подстановки asOf: C04 «без даты» и «—», карточка, C03, C08, C09, C13', async () => {
+      const D = JSON.parse(RUN), no = D.positions.find(p => p.maturity == null);
+      // и облигация без даты погашения и без оферты (бессрочная без колла): у неё карточка с «Ближайшим событием»
+      const bd = D.positions.find(p => p.instrType === 'BOND' && p.issuer && !(p.extra || {}).offer_date);
+      bd.maturity = null; bd.yieldDate = null;
+      const { pg, ctx, errors } = await open(browser, 'c04-pivot.html', { D, hash: '#r=evmonth&c=none&m=count&v=table' });
+      const ev = await pg.evaluate(id => { const p = MOCK.positions.find(x => x.id === id); return { e: p.event, asOf: MOCK.asOf }; }, no.id);
+      assert.deepStrictEqual(ev.e, { date: null, kind: null }, 'событие без даты — null, не ' + ev.asOf);
+      const labels = () => pg.evaluate(() => [...document.querySelectorAll('#page table tbody tr, body table tbody tr')].map(tr => tr.cells[0].innerText.trim()).filter(Boolean));
+      const nNull = await pg.evaluate(() => MOCK.positions.filter(p => !p.event.date).length);
+      let L = await labels();
+      assert.strictEqual(L[L.length - 1], 'без даты', 'C04 «Месяц события»: без правки страницы — группа «без даты»: ' + L);
+      await pg.evaluate(() => { location.hash = '#r=evkind&c=none&m=count&v=table'; }); await pg.waitForTimeout(300);
+      L = await labels();
+      assert.strictEqual(L[L.length - 1], '—', 'C04 «Вид события»: без даты — «—», последней: ' + L);
+      const cnt = await pg.evaluate(() => { const tr = [...document.querySelectorAll('#page table tbody tr, body table tbody tr')].find(r => r.cells[0].innerText.trim() === '—'); return tr && tr.cells[1].innerText.trim(); });
+      assert.strictEqual(cnt, String(nNull), 'в «—» — все позиции без даты');
+      // карточка позиции: «Ближайшее событие» — «—», не дата прогона и не «погашение»
+      await pg.evaluate(id => KIT.card(id), bd.id); await pg.waitForTimeout(200);
+      const card = await pg.evaluate(() => { const l = [...document.querySelectorAll('.l')].find(x => x.innerText.trim() === 'Ближайшее событие'); return l && l.nextElementSibling.innerText; });
+      assert.ok(card != null && /^—/.test(card) && !/погашение/.test(card), 'карточка: ' + card);
+      assert.deepStrictEqual(errors, []);
+      await ctx.close();
+      for (const f of ['c03-blotter.html', 'c08-calendar.html', 'c09-market.html', 'c13-issuers.html']) {
+        const o = await open(browser, f, { D: JSON.parse(JSON.stringify(D)) });
+        assert.deepStrictEqual(o.errors, [], f);
+        await o.ctx.close();
+      }
+    });
+    await t.test('#342: C05 без сдвигов — «сдвигов нет в прогоне» одной фразой, без «б.п.» после неё', async () => {
+      const D = JSON.parse(RUN); D.CURVE_MOVES = {};
+      const { pg, ctx, errors } = await open(browser, 'c05-morning-brief.html', { D });
+      const txt = await pg.locator('body').innerText();
+      assert.ok(!/нет данных б\.п\.|в прогоне б\.п\./.test(txt), 'после «нет» — без единицы');
+      const s6 = await pg.locator('#s6 p').first().innerText();
+      assert.ok(/сдвигов нет в прогоне/.test(s6) && !/USD нет данных|CNY нет данных б/.test(s6), s6);
       assert.deepStrictEqual(errors, []);
       await ctx.close();
     });
