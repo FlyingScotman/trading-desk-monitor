@@ -83,7 +83,8 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
       const i = M.issuer[id];
       const o = { id, name: i.short, full: i.name, sector: i.sector, rating: i.rating, ratingInfo: i.ratingInfo, list, n: list.length,
         mv: sumBy(list, p => p.mv), cs01: sumBy(list, p => p.cs01), dv01: sumBy(list, p => p.dv01), basis01: sumBy(list, p => p.basis01),
-        pnl: sumBy(list, p => p.pnl.total), carry: sumBy(list, p => p.carryDay), funding: sumBy(list, p => p.fundingDay), mtd: sumBy(list, p => p.pnlMtd), ytd: sumBy(list, p => p.pnlYtd),
+        // PnL, кэрри, фондирование: ни у одной бумаги не посчитано — null («—»), а не 0 (B1, #333)
+        pnl: M.sum(list, p => p.pnl.total), carry: M.sum(list, p => p.carryDay), funding: M.sum(list, p => p.fundingDay), mtd: M.sum(list, 'pnlMtd'), ytd: M.sum(list, 'pnlYtd'),
         ccys: [...new Set(list.map(p => p.ccy))].sort((a, b) => M.ccyOrder[a] - M.ccyOrder[b]) };
       o.searchText = (o.name + ' ' + o.full + ' ' + o.sector + ' ' + o.rating + ' ' + o.ccys.join(' ')).toLowerCase();
       return o;

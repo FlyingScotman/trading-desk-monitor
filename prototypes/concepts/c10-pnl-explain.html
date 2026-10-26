@@ -61,7 +61,9 @@
     const x = (v, m) => v == null ? null : v * m;
     const o = { carry: x(p.pnl.carry, DAYS_MTD), funding: x(p.pnl.funding, DAYS_MTD), trading: x(p.pnl.trading, 3) };
     const ks = ['rates', 'spread', 'fx', 'other'];
-    if (p.pnlMtd == null) ks.forEach(k => o[k] = null);
+    // PnL дня позиции не посчитан (available: false, #332) — разложить MTD не по чему: остаток и все факторы null,
+    // итог MTD (p.pnlMtd) остаётся
+    if (p.pnlMtd == null || p.pnl.available === false) ks.forEach(k => o[k] = null);
     else {
       const rest = p.pnlMtd - (o.carry || 0) - (o.funding || 0) - (o.trading || 0);
       const W = ks.reduce((s, k) => s + Math.abs(p.pnl[k] || 0), 0);
@@ -183,7 +185,8 @@
     const HP = M.hist.pnl, n = M.histDates.length;
     const monthStart = M.histDates.findIndex(d => d.slice(0, 7) === M.asOf.slice(0, 7));
     const hc = K.chart(hel, () => {
-      let c = 0; const cum = HP.total.map(v => (c += v));
+      // день не посчитан (null, #339) — накопленного за него нет: разрыв линии, в подсказке «—»; дальше сумма продолжается
+      let c = 0; const cum = HP.total.map(v => v == null ? null : (c += v));
       return {
         grid: { left: 6, right: 6, top: 28, bottom: 4, containLabel: true }, legend: { top: 0, left: 0, type: 'scroll' },
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => v == null ? '—' : f.mns(v, 2) },  // null: фактор не посчитан (фондирование до B1)
