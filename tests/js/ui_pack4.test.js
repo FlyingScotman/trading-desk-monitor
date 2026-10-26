@@ -36,12 +36,12 @@ t('#263: smoke проверяет 390 px — scrollWidth равен innerWidth',
   assert.ok(s.includes(".k-top [data-a=\"view\"]") && s.includes("меню ⚙ за краем окна"), 'меню вида ⚙ на 390 px');
 });
 
-t('#263: узкий экран — шапка панели переносится, переключатель прокручивается внутри себя', () => {
+t('#263, #272: узкий экран — шапка панели переносится, переключатель — в две строки, без прокрутки внутри себя', () => {
   const css = P('lib/kit.css'), m = css.slice(css.indexOf('@media (max-width: 720px)'));
   const block = m.slice(0, m.indexOf('\n}\n'));
   assert.ok(/\.k-panel > \.hd \{ flex-wrap: wrap; \}/.test(block));
   assert.ok(/\.k-panel > \.hd h3 \{ white-space: normal; \}/.test(block), 'длинный заголовок панели переносится');
-  assert.ok(/\.k-seg \{ max-width: 100%; overflow-x: auto; \}/.test(block));
+  assert.ok(/\.k-seg \{ max-width: 100%; flex-wrap: wrap; \}/.test(block) && !/\.k-seg \{[^}]*overflow-x: auto/.test(block));
 });
 
 t('#263: одноколоночная сетка — minmax(0, 1fr): колонка не шире окна из-за графика или таблицы', () => {

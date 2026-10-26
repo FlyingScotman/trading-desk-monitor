@@ -246,14 +246,15 @@ table.mini + .k-tbl-ctlbar-m { position: static; background: transparent; }
   .k-top .brand .tag, .k-top span.asof:not(.k-chip), .k-top .k-fresh { display: none; }
   .k-page { padding: 10px 10px 30px; }
   .k-kpi .v { font-size: 19px; }
-  /* узкий экран (#263): шапка панели переносится, переключатель шире панели прокручивается внутри себя, подписи
-     переносятся — вбок прокручивается плитка или её таблица, а не вся страница */
+  /* узкий экран (#263): шапка панели переносится, подписи переносятся — вбок прокручивается плитка или её таблица,
+     а не вся страница. Переключатель шире панели переносится на вторую строку (#272): все кнопки видны без прокрутки;
+     отрицательные поля прячут правую и нижнюю границу крайних кнопок строки под рамку переключателя */
   .k-panel > .hd { flex-wrap: wrap; }
   .k-panel > .hd > * { min-width: 0; max-width: 100%; }
   .k-panel > .hd h3 { white-space: normal; }  /* длинный заголовок (C01 «Валюта × тип») */
   .k-panel > .hd .k-note { white-space: normal; }
-  .k-seg { max-width: 100%; overflow-x: auto; }
-  .k-seg button { flex: none; }
+  .k-seg { max-width: 100%; flex-wrap: wrap; }
+  .k-seg button { flex: 1 1 auto; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); margin: 0 -1px -1px 0; }
 }
 
 /* компактные таблицы рисков: по ширине содержимого, плотные строки */

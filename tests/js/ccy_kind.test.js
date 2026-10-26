@@ -104,7 +104,7 @@ t('в валюте строки: суммы валюты — в её едини�
 t('риска нет — «без риска» с причиной, не 0; FX-спот без процентного риска — не пропуск', () => {
   const { M, I } = load(D => {
     const x = D.positions.find(p => p.instrType === 'XCCY');
-    Object.assign(x, { instrType: 'OTC', risk: {}, dv01: 0, extra: { quality: 'reported_value', reported: { x: { x_product_group: 'ccs' } } } });
+    Object.assign(x, { instrType: 'OTC', risk: {}, extra: { quality: 'reported_value', reported: { x: { x_product_group: 'ccs' } } } });
     D.positions.push({ id: 'NV1', book: x.book, ccy: 'RUB', instrType: null, segment: 'Деривативы', notValued: true, risk: {}, fxDelta: {},
       extra: { quality: 'not_valued', reason: 'нет данных', reported: { x: { x_product_group: 'irs' } } }, pnl: { available: false } });
   });

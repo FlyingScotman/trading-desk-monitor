@@ -156,7 +156,7 @@
           legend: { top: 0, left: 0, type: 'scroll', data: rows.map(r => r.t.label).concat(['итог', 'кумулятив']) },
           tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.dv(v) },
           xAxis: { type: 'category', data: M.buckets },
-          yAxis: [{ type: 'value', unit: 'тыс ₽/бп', axisLabel: { formatter: v => f.dv(v) } }, { type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => f.dv(v), color: css('--warn') } }],
+          yAxis: [{ type: 'value', unit: 'тыс ₽/бп', axisLabel: { formatter: v => K.tick(v, 1e3) } }, { type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => K.tick(v, 1e3), color: css('--warn') } }],
           series: rows.map(r => ({ name: r.t.label, type: 'bar', stack: 's', barMaxWidth: 38, data: r.vals, itemStyle: { color: K.kindColor[r.t.kind] } }))
             .concat([{ name: 'итог', type: 'scatter', symbol: 'diamond', symbolSize: 11, data: tot, itemStyle: { color: css('--fg'), borderColor: css('--bg'), borderWidth: 1 }, z: 5, label: { show: true, position: 'top', formatter: p => f.dv(p.value), color: css('--fg-2'), fontSize: 10 } },
             { name: 'кумулятив', type: 'line', yAxisIndex: 1, data: cum, symbolSize: 4, lineStyle: { width: 2, type: 'dashed', color: css('--warn') }, itemStyle: { color: css('--warn') }, z: 4 }]),
@@ -209,7 +209,7 @@
         return {
           grid: { left: 8, right: 10, top: 34, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 },
           tooltip: { trigger: 'axis', valueFormatter: v => f.dv(v) },
-          xAxis: { type: 'category', data: M.buckets, boundaryGap: false }, yAxis: { type: 'value', unit: 'тыс ₽/бп', axisLabel: { formatter: v => f.dv(v) } },
+          xAxis: { type: 'category', data: M.buckets, boundaryGap: false }, yAxis: { type: 'value', unit: 'тыс ₽/бп', axisLabel: { formatter: v => K.tick(v, 1e3) } },
           series: cs.map((c, i) => ({ name: c.short + (c.kind === 'basis' ? ' (базис)' : ''), type: 'line', data: cum[i], symbolSize: 4, lineStyle: { width: 1.6, type: c.kind === 'basis' ? 'dotted' : 'solid' }, color: K.curveColors[c.id] }))
             .concat(cs.filter(c => c.kind === 'rate').length > 1 ? [{ name: 'Σ ставки', type: 'line', data: tot, symbolSize: 5, lineStyle: { width: 2.5 }, color: css('--fg'), areaStyle: { opacity: .08 } }] : []),
         };
