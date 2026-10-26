@@ -229,10 +229,12 @@ def calendar_body(con, run: dict[str, Any]) -> bytes:
     return _json_bytes(concepts.market_calendar(con, run["business_date"], held) or {"missing": True})
 
 
-def warm_bodies(app: FastAPI) -> list[str]:
+def warm_bodies(app: FastAPI, summaries: bool = True) -> list[str]:
     """Build the pages' bodies of the newest run shown (``/desk-data.js``, ``/concepts-data.js``, every position's
     history, the market calendar) into the cache when the store changed since they were built, so that the first page load after
-    a new run finds them ready (``serve`` runs it every ``WARM_S``). Returns the bodies built."""
+    a new run finds them ready (``serve`` runs it every ``WARM_S``). ``summaries=False``: the runs' summaries are still
+    being rebuilt (``prewarm_summaries``), the bodies that read them (``/concepts-data.js``, the history) wait for it.
+    Returns the bodies built."""
     cache: BodyCache = app.state.body_cache
     built = []
     with psycopg.connect(app.state.store_url, row_factory=dict_row, autocommit=True, connect_timeout=5,
@@ -241,10 +243,14 @@ def warm_bodies(app: FastAPI) -> list[str]:
         if run is None:
             return built
         writer = app.state.write_summaries
-        for key, build, extra in ((("desk", run["run_id"]), lambda: desk_body(con, run), DESK_FP_SQL),
-                                  (("extras", run["run_id"]), lambda: extras_body(con, run, writer), None),
-                                  (("history", run["run_id"], (), None), lambda: history_body(con, run, writer), None),
-                                  (("calendar", run["run_id"]), lambda: calendar_body(con, run), None)):
+        for key, build, extra, reads in ((("desk", run["run_id"]), lambda: desk_body(con, run), DESK_FP_SQL, False),
+                                         (("extras", run["run_id"]), lambda: extras_body(con, run, writer), None,
+                                          True),
+                                         (("history", run["run_id"], (), None), lambda: history_body(con, run, writer),
+                                          None, True),
+                                         (("calendar", run["run_id"]), lambda: calendar_body(con, run), None, False)):
+            if reads and not summaries:
+                continue
             fp = concepts.fingerprint(con) + (str(con.execute(extra).fetchone()) if extra else "")
             if cache.get(key, fp) is None:
                 cache.put(key, fp, build())
@@ -254,6 +260,22 @@ def warm_bodies(app: FastAPI) -> list[str]:
 
 WARM_S = 20.0
 """How often ``serve`` checks whether the concept pages' bodies need building again."""
+PREWARM_S = 5.0
+"""Seconds of runs' summaries rebuilt per pass of ``serve``'s warm thread (``prewarm_summaries``)."""
+
+
+def prewarm_summaries(app: FastAPI, budget_s: float = PREWARM_S) -> int:
+    """The runs' summaries a new ``publish.summary.VERSION`` left stale, rebuilt for at most ``budget_s`` seconds,
+    newest first (``summary.prewarm``, TDM#246): ``serve``'s warm thread calls it at start (after an install) until
+    none is left, so the first history page load (C11) reads them instead of rebuilding a year of runs. Returns how
+    many are left; 0 also when the store cannot be written (the pages build them on read, as before)."""
+    from ..publish import summary
+
+    with psycopg.connect(app.state.store_url, autocommit=True, connect_timeout=5) as w:
+        done, left = summary.prewarm(w, budget_s)
+    if done:
+        log.info("run summaries rebuilt ahead: %s (%s left)", done, left)
+    return left
 
 
 def _py_grouped(con, run_id: int, names: list[str], cols: list[str]) -> list[dict[str, Any]]:
@@ -876,12 +898,19 @@ def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir:
 
     def warm_loop() -> None:  # the concept pages' bodies ready before the first page asks (R23)
         while not server.should_exit:
+            left = 0
+            try:  # the summaries a new version left stale first, newest first, a pass at a time (TDM#246)
+                left = prewarm_summaries(app)
+            except Exception:
+                log.warning("run summaries not rebuilt ahead", exc_info=True)
             try:
-                built = warm_bodies(app)
+                built = warm_bodies(app, summaries=not left)
                 if built:
                     log.info("concept bodies built ahead: %s", ", ".join(built))
             except Exception:
                 log.warning("concept bodies not built ahead", exc_info=True)
+            if left:
+                continue  # the next pass at once
             for _ in range(int(WARM_S * 10)):
                 if server.should_exit:
                     break

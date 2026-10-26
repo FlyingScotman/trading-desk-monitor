@@ -331,3 +331,32 @@ def test_desk_data_js_cached_but_not_stored_by_the_browser(desk, store_url, monk
                     " FROM scenario_def)")
     desk.get("/desk-data.js")
     assert len(calls) == 2
+
+
+def test_serve_rebuilds_stale_summaries_ahead_newest_first(desk, store_url, monkeypatch):
+    """TDM#246: after a new ``summary.VERSION`` the warm thread rebuilds the runs' summaries, newest first, a pass at a
+    time, and holds back the bodies that read them; the first history load then rebuilds none."""
+    from desk.api.app import prewarm_summaries, warm_bodies
+
+    with store.connect(store_url) as con:
+        ids = [r[0] for r in con.execute("SELECT run_id FROM run ORDER BY business_date, run_id")]
+    monkeypatch.setattr(summary, "VERSION", summary.VERSION + 1)  # an upgrade: every summary stale
+    app = create_app(store_url)
+    built = []
+    real = summary.build
+    monkeypatch.setattr(summary, "build", lambda rows: built.append(rows[0]["position_id"]) or real(rows))
+    seen = []
+    real_ensure = summary.ensure
+    monkeypatch.setattr(summary, "ensure", lambda con, rids: seen.extend(rids) or real_ensure(con, rids))
+    assert prewarm_summaries(app, budget_s=0) == len(ids) - 1  # one run a pass at least, the newest
+    assert seen == [ids[-1]]
+    assert warm_bodies(app, summaries=False) == ["desk", "calendar"]  # the bodies reading summaries wait
+    assert prewarm_summaries(app) == 0 and seen == ids[::-1]
+    with store.connect(store_url) as con:
+        assert {r[0] for r in con.execute("SELECT run_id FROM run_summary WHERE version = %s",
+                                          (summary.VERSION,))} == set(ids)
+    assert prewarm_summaries(app) == 0 and seen == ids[::-1]  # nothing left
+    n = len(built)
+    assert TestClient(app).get("/api/v1/history/positions").status_code == 200
+    assert extras(TestClient(app))["hist"]
+    assert len(built) == n  # the first loads read the summaries, rebuild none

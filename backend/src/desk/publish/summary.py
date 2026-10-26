@@ -4,7 +4,8 @@ The desk's series over time (``desk.api.concepts``) sum every default run's posi
 basis, DV01 by book, MV by instrument type and currency, PnL by factor, and per position its face, DV01, CS01,
 basis, MV, risk by curve, PnL, price and spread. Read from ``run_position`` on every page load that is a query of
 hundreds of thousands of rows at a year of runs; a run never changes, so its sums are computed once
-(``ensure``: by ``desk eod`` right after the publication, by the API for a run of an older version on first read)
+(``ensure``: by ``desk eod`` right after the publication, by ``desk serve`` ahead for the runs an older version
+left stale, ``prewarm``, by the API for any still missing on first read)
 and the pages read one row per run.
 
 Per position (``pos``): ``[face, dv01, cs01, basis, mv, pnl, price, spread_bp, {curve: dv01}, dm_bp, ofz_spr, ofz_ruo]``
@@ -26,12 +27,18 @@ run with no OFZ on the KBD (before 0.2.6), whose KBD view takes the basis off RU
 from __future__ import annotations
 
 import json
+import logging
 import math
-from collections.abc import Iterable
+import time
+from collections.abc import Callable, Iterable
 from typing import Any
 
 import psycopg
 from psycopg.types.json import Jsonb
+
+from ..store import CURRENT_RUNS
+
+log = logging.getLogger("desk.publish.summary")
 
 VERSION = 6  # 2: a floater's discount margin (pos[9]); 3: the OFZ basis of the KBD scheme, the spread to the KBD;
 # 4: an OFZ-IN's nominal proxy out of the run's basis (basisIn, TDM#173); 5: an OFZ's RUONIA risk apart from its basis
@@ -223,3 +230,30 @@ def ensure(con: psycopg.Connection, run_ids: Iterable[int]) -> int:
                     " SET version = EXCLUDED.version, data = EXCLUDED.data, built_at = clock_timestamp()",
                     (rid, VERSION, Jsonb(data, dumps=lambda o: json.dumps(o, ensure_ascii=False, allow_nan=False))))
     return len(todo)
+
+
+STALE_SQL = (f"SELECT r.run_id FROM run r WHERE r.run_id IN ({CURRENT_RUNS}) AND NOT EXISTS (SELECT 1 FROM run_summary s"
+             " WHERE s.run_id = r.run_id AND s.version = %s) ORDER BY r.business_date DESC, r.run_id DESC")
+"""The runs shown (``store.CURRENT_RUNS``: the pages' series read these) without a summary of this ``VERSION``,
+newest first."""
+
+
+def prewarm(con: psycopg.Connection, budget_s: float, clock: Callable[[], float] = time.monotonic) -> tuple[int, int]:
+    """Rebuild the summaries a new ``VERSION`` left stale ahead of the pages (TDM#246): the runs shown (``STALE_SQL``),
+    newest first, one by one for at most ``budget_s`` seconds (at least one run), so that the first page load after an
+    upgrade does not rebuild a year of them (``serve`` calls it until none is left). Each summary is written on its own
+    (``con`` writable, autocommit): a page reading meanwhile finds those done, and builds the rest itself; the two
+    writes of one run are the same row (``ensure``: an upsert). A run that fails to build is logged and skipped.
+    Returns (written, left)."""
+    t0 = clock()
+    todo = [r for (r,) in con.execute(STALE_SQL, (VERSION,))]
+    done = tried = 0
+    for rid in todo:
+        if tried and clock() - t0 >= budget_s:
+            break
+        tried += 1
+        try:
+            done += ensure(con, [rid])
+        except Exception:  # one broken run never stops the others; the pages build it on read
+            log.warning("run %s: summary not rebuilt", rid, exc_info=True)
+    return done, len(todo) - tried
