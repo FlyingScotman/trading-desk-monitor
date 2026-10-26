@@ -199,7 +199,7 @@ class FundingProblemOut(BaseModel):
 
 
 class FxLiabilityPosition(BaseModel):
-    """A foreign-currency bond's currency funding liability (``publish.fx_liability``, OQ-04, TDM#54)."""
+    """A foreign-currency bond's currency OCP liability (``publish.fx_liability``, OQ-04, OQ-17, TDM#54, TDM#266)."""
 
     state: Literal["computed", "none", "problem", "not_configured", "invalid_config"] = Field(
         description="computed: its FX delta is net of the liability; otherwise the FX delta is the dirty MV and "
@@ -207,25 +207,29 @@ class FxLiabilityPosition(BaseModel):
     reason: str | None = None
     ccy: str | None = None
     amount_ccy: float | None = Field(None, description="The liability, signed (a long bond: negative)")
+    reference: Literal["prev_dirty_mv", "purchase_cost", "current_dirty_mv"] | None = Field(
+        None, description="What the liability is: the dirty MV of the previous business day (the last OCP transfer), "
+                          "the purchase cost (a position new on the day), today's dirty MV (no previous day: OCP 0)")
+    reference_mv_ccy: float | None = Field(None, description="That dirty MV (or cost) in the currency, signed")
+    reference_date: str | None = Field(None, description="The previous business day, for prev_dirty_mv")
+    reference_text: str | None = None
     clean_mv_ccy: float | None = None
-    purchase_accrued_ccy: float | None = Field(None, description="The accrued paid at the purchase in the liability "
-                                                                 "(funded at a zero rate); null on a dirty base")
-    purchase_accrued_basis: str | None = Field(None, description="report / estimated_from_purchase_date / "
-                                                                 "returned_by_coupon / unknown / dirty_base")
-    basis_text: str | None = None
     accrued_ccy: float | None = None
     dirty_mv_ccy: float | None = None
-    base: str | None = None
+    coupons_ccy: float | None = Field(None, description="Coupons received on the day in the currency, in the OCP")
+    base: str | None = Field(None, description="The funding base (the rate's body, DEC01); not the liability's")
     fx_delta_gross: float | None = Field(None, description="FX delta before the liability: the dirty MV")
-    fx_delta_net: float | None = Field(None, description="The published FX delta: dirty MV + liability")
-    fx_funding: float | None = Field(None, description="FX revaluation of the D-1 liability in the PnL, RUB")
+    fx_delta_net: float | None = Field(None, description="The published FX delta (OCP): dirty MV + liability + "
+                                                         "coupons of the day, the FX PnL since the last transfer")
+    fx_funding: float | None = Field(None, description="FX revaluation of the liability held over the day (the D-1 "
+                                                       "dirty MV) in the PnL, RUB")
     fx_funding_cbr: float | None = None
     note: str | None = None
 
 
 class FxLiability(BaseModel):
-    """The currency funding liability of the run's foreign-currency bonds; ``provisional``: what the rule takes until
-    the owner answers."""
+    """The currency OCP liability of the run's foreign-currency bonds; ``provisional``: what the rule takes until the
+    data has more (the residual of past days does not accumulate)."""
 
     status: str
     text: str
@@ -256,7 +260,7 @@ class RunFunding(BaseModel):
     lines: list[FundingLineOut]
     default_rate: dict[str, Any] | None = Field(default=None, description="The market default rate of the settings in "
                                                 "force (by currency), and how many lines and positions it funded")
-    fx_liability: FxLiability | None = Field(None, description="The bonds' currency funding liability (TDM#54); "
+    fx_liability: FxLiability | None = Field(None, description="The bonds' currency OCP liability (TDM#54, #266); "
                                                                "null for a run before it")
 
 

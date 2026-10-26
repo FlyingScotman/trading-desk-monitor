@@ -4669,7 +4669,7 @@
           "notes"
         ],
         "title": "FxLiability",
-        "description": "The currency funding liability of the run's foreign-currency bonds; ``provisional``: what the rule takes until\nthe owner answers."
+        "description": "The currency OCP liability of the run's foreign-currency bonds; ``provisional``: what the rule takes until the\ndata has more (the residual of past days does not accumulate)."
       },
       "FxLiabilityPosition": {
         "properties": {
@@ -4719,6 +4719,58 @@
             "title": "Amount Ccy",
             "description": "The liability, signed (a long bond: negative)"
           },
+          "reference": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "prev_dirty_mv",
+                  "purchase_cost",
+                  "current_dirty_mv"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference",
+            "description": "What the liability is: the dirty MV of the previous business day (the last OCP transfer), the purchase cost (a position new on the day), today's dirty MV (no previous day: OCP 0)"
+          },
+          "reference_mv_ccy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Mv Ccy",
+            "description": "That dirty MV (or cost) in the currency, signed"
+          },
+          "reference_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Date",
+            "description": "The previous business day, for prev_dirty_mv"
+          },
+          "reference_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Text"
+          },
           "clean_mv_ccy": {
             "anyOf": [
               {
@@ -4729,41 +4781,6 @@
               }
             ],
             "title": "Clean Mv Ccy"
-          },
-          "purchase_accrued_ccy": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Purchase Accrued Ccy",
-            "description": "The accrued paid at the purchase in the liability (funded at a zero rate); null on a dirty base"
-          },
-          "purchase_accrued_basis": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Purchase Accrued Basis",
-            "description": "report / estimated_from_purchase_date / returned_by_coupon / unknown / dirty_base"
-          },
-          "basis_text": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Basis Text"
           },
           "accrued_ccy": {
             "anyOf": [
@@ -4787,6 +4804,18 @@
             ],
             "title": "Dirty Mv Ccy"
           },
+          "coupons_ccy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coupons Ccy",
+            "description": "Coupons received on the day in the currency, in the OCP"
+          },
           "base": {
             "anyOf": [
               {
@@ -4796,7 +4825,8 @@
                 "type": "null"
               }
             ],
-            "title": "Base"
+            "title": "Base",
+            "description": "The funding base (the rate's body, DEC01); not the liability's"
           },
           "fx_delta_gross": {
             "anyOf": [
@@ -4820,7 +4850,7 @@
               }
             ],
             "title": "Fx Delta Net",
-            "description": "The published FX delta: dirty MV + liability"
+            "description": "The published FX delta (OCP): dirty MV + liability + coupons of the day, the FX PnL since the last transfer"
           },
           "fx_funding": {
             "anyOf": [
@@ -4832,7 +4862,7 @@
               }
             ],
             "title": "Fx Funding",
-            "description": "FX revaluation of the D-1 liability in the PnL, RUB"
+            "description": "FX revaluation of the liability held over the day (the D-1 dirty MV) in the PnL, RUB"
           },
           "fx_funding_cbr": {
             "anyOf": [
@@ -4862,7 +4892,7 @@
           "state"
         ],
         "title": "FxLiabilityPosition",
-        "description": "A foreign-currency bond's currency funding liability (``publish.fx_liability``, OQ-04, TDM#54)."
+        "description": "A foreign-currency bond's currency OCP liability (``publish.fx_liability``, OQ-04, OQ-17, TDM#54, TDM#266)."
       },
       "InstrumentAlias": {
         "properties": {
@@ -7491,7 +7521,7 @@
                 "type": "null"
               }
             ],
-            "description": "The bonds' currency funding liability (TDM#54); null for a run before it"
+            "description": "The bonds' currency OCP liability (TDM#54, #266); null for a run before it"
           }
         },
         "type": "object",
