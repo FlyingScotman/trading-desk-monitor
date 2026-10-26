@@ -270,6 +270,9 @@
     return d.latest().then(lr => {
       const t = e ? L.target(e, lr, ctx) : lr && L.target({}, lr, ctx);
       if (!t) return 'none';
+      // перезагрузка — один раз на прогон в этой вкладке (switched — sessionStorage вкладки). Стойкое расхождение
+      // сервера («последний прогон» в статусе автопилота есть, а /concepts-run.js отвечает «прогона нет», #319) даёт
+      // одну перезагрузку в каждой новой вкладке, но не цикл: после неё сверка видит switched и ничего не делает
       if (L.decide(L.reaction(d.storage), ctx, t, d.switched()) === 'switch') { d.switched(t.run_id); d.reload(); return 'switch'; }
       if (!e) return 'none';  // сверка при загрузке полосу не показывает (закреплённый прогон сверку не делает)
       d.banner(t, ctx); return 'banner';
