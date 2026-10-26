@@ -55,7 +55,7 @@ desk-store run (EOD and intraday; `desk_run.publish`): the adapter's `funding_ru
 private/1.3 `funding_policy` (HTM base, DEC01 timing, REPO policy, write-off; 08 §10), positions of the run and of the
 previous default run, HTM lots from the report's purchase fields (`purchase_accrued_ccy`, 1.3), `cash_balances`,
 the hub's fixings and CBR rates. Published: the run's `funding` block (`run_reference`), a position's
-`fact.extra.funding` and PnL component `funding` (the pages' carry is net of it), book totals, run log lines and
+`fact.extra.funding` and PnL component `funding` (the pages show it as its own factor next to the carry, which is without it: TDM#168), book totals, run log lines and
 problems, `/api/v1/runs/{id}/funding`, window.DESK `funding` / `fundingPnl` / `fundingPnlByBook` / `FUNDING_RULES` /
 `fundingStatus`, the C01 cockpit's funding panel and the position card. Without rules: "not configured", never 0.
 Not done, by decision: `fx_funding` and the funding liability in the FX delta stay 0 / absent until OQ-04; REPO deals

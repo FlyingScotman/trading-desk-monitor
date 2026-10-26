@@ -23,6 +23,8 @@
  *                           отчёт, риск по кривым RUONIA и КС, «предварительно» (quality assumed); нет данных — словами
  *  KIT.fundingLine(p), KIT.fundingPanel(el) — фондирование (B1): строка карточки позиции и панель кокпита по книгам,
  *                           юрлицам и проблемам; «не настроено» — словами, не 0
+ *  KIT.PNL_FACTORS, KIT.PNL_COLORS — факторы PnL в порядке показа: кэрри (купон/доход и roll-down, без фондирования),
+ *                           фондирование (отдельно, #168), ставки, спред, FX, сделки, прочее; сумма факторов — итог
  */
 (function () {
   'use strict';
@@ -43,9 +45,9 @@
   M.toRepr = {}; Object.keys(M.fx).forEach(c => M.toRepr[c] = M.fx[c] / M.fx[K.repr]);
   if (K.repr !== 'RUB') (function convert(k) {
     const sc = (o, keys) => keys.forEach(x => { if (o[x] != null) o[x] *= k; });
-    const arr = a => a && a.forEach((v, i) => a[i] = v * k);
+    const arr = a => a && a.forEach((v, i) => a[i] = v == null ? v : v * k);  // null (не посчитано) остаётся null
     M.positions.forEach(p => {
-      sc(p, ['mv', 'accrued', 'carryDay', 'rollDay', 'dv01', 'basis01', 'ofzSpr01', 'cs01', 'notionalRub', 'pnlMtd', 'pnlYtd', 'funding']);
+      sc(p, ['mv', 'accrued', 'carryDay', 'rollDay', 'fundingDay', 'dv01', 'basis01', 'ofzSpr01', 'cs01', 'notionalRub', 'pnlMtd', 'pnlYtd', 'funding']);
       arr(p.cs01b); arr(p.ofzSprb); Object.keys(p.risk).forEach(c => arr(p.risk[c])); Object.keys(p.dv01ByCurve).forEach(c => p.dv01ByCurve[c] *= k);
       Object.keys(p.pnl).forEach(x => { if (typeof p.pnl[x] === 'number') p.pnl[x] *= k; });  // null (нет PnL) остаётся null
     });
@@ -202,10 +204,22 @@
     kbd: 'Кривая ОФЗ (КБД MOEX): риск — +1 б.п. к par-доходности инструмента с годовым купоном на КБД по бакетам 1Y–20Y+ ' +
       '(1M–6M слиты в 1Y: ОФЗ там нет), кривая не перестраивается — локальный оверлей годовых нулевых ставок (ядро 0.37, rub_ofz_kbd_v3). ' +
       'Фикс-ОФЗ (ПД, АД, ИН) дисконтируются по КБД + своему Z-спреду. В виде «RUONIA + базис» он — базис ОФЗ (тот же риск), ' +
-      'а риск RUONIA посчитан отдельно (с 0.2.7): поэтому DV01 в двух видах отличается на доли процента.',
+      'а риск RUONIA посчитан отдельно (с 0.2.7): поэтому DV01 в двух видах отличается на доли процента. ' +
+      'КБД-флоатеры (#33): купоны проецируются по КБД — это их риск к базису ОФЗ; дисконт — RUONIA + Z. Риск RUONIA их проекции ' +
+      'ядро 0.39 отдельно не считает: в виде «RUONIA + базис» RUONIA = дисконт + проекция (приближение, вариант P; точный — с ядром 0.40).',
     cs01: 'CS01, тыс ₽/бп: +1 б.п. к кредитному Z-спреду к RUONIA (годовой, ACT/365F) разом по всем срокам, кривая стоит; ' +
       'у фикс-бумаг ≈ DV01 RUONIA (оба — к годовым ставкам).',
+    // кэрри и фондирование — разные строки (#168): кэрри без фондирования, фондирование — рядом, своей строкой
+    carry: 'Кэрри: купонный / процентный доход позиции и roll-down (скатывание по кривой) за период, без фондирования. ' +
+      'Фондирование — отдельная строка «Фондирование»; кэрри за вычетом фондирования = кэрри + фондирование.',
+    funding: 'Фондирование: стоимость фондирования позиции за период (тело × ставка фондирования по правилам книги), ' +
+      'обычно отрицательная. В кэрри не входит. «—» — не посчитано (не настроено или проблема), а не 0.',
+    fundRate: '\nСтавка — на конец периода (последний день), средняя по строкам фондирования с весом тела в рублях; ' +
+      'фондирование за день — среднее за период, поэтому «тело × ставка» может с ним не совпасть.',
   };
+  // факторы PnL в порядке показа (#168: фондирование — свой фактор после кэрри); сумма факторов позиции — её итог
+  K.PNL_FACTORS = [['carry', 'Кэрри'], ['funding', 'Фондирование'], ['rates', 'Ставки'], ['spread', 'Спред'], ['fx', 'FX'], ['trading', 'Сделки'], ['other', 'Прочее']];
+  K.PNL_COLORS = { carry: '#3fb67a', funding: '#d9667a', rates: '#4c9dff', spread: '#e3b341', fx: '#b48cff', trading: '#22c3d6', other: '#a0b4c8' };
   K.tips.dv01 = 'DV01 ставок, тыс ₽/бп: сумма бакетов по кривым ставок (RUONIA, КС, валютные), без базиса ОФЗ и CS01.\n' + K.tips.ruonia;
   K.tips.zdisc = 'Z-спред к кривой дисконтирования (RUONIA OIS; в день без неё — к КБД), б.п., годовой, ACT/365F (R32): у фикс-бумаги — ' +
     'обычный Z-спред, у флоатера — купоны по прогнозу своей кривой проекции (КС или RUONIA), дисконт по RUONIA + Z. Сравним у фиксов ' +
@@ -649,6 +663,9 @@
   // ---------- кликабельные цифры ----------
   const reg = []; K._reg = reg;
   K.d = function (spec, text, cls) {
+    // spec.nullable (#168, фондирование): ни одно значение не посчитано (все null) — «—», а не 0
+    if (spec.nullable && text == null && (spec.rows ? spec.rows.every(r => r.v == null) : spec.list && spec.list.every(p => (typeof spec.val === 'function' ? spec.val(p) : p[spec.val]) == null)))
+      return '<span class="mut3" title="не посчитано">—</span>';
     const id = reg.push(spec) - 1;
     const v = spec.v != null ? spec.v : spec.rows ? spec.rows.reduce((a, r) => a + (r.v || 0), 0) : (spec.list ? M.sum(spec.list, spec.val) : null);
     const t = text != null ? text : (spec.fmt || f.dv)(v);
@@ -1199,6 +1216,7 @@
       const cell = (c, r) => { const v = val(c, r); return '<td class="' + (c.num ? 'n ' : '') + (c.cls ? (typeof c.cls === 'function' ? c.cls(v, r) : c.cls) : '') + '"' + (c.style ? ' style="' + c.style(v, r) + '"' : '') + '>' + (c.fmt ? c.fmt(v, r) : esc(v)) + '</td>'; };
       const sumCell = (c, list) => {
         if (!c.sum) return '<td></td>';
+        if (c.nullable && list.every(r => val(c, r) == null)) return '<td class="n"><span class="mut3" title="не посчитано">—</span></td>';  // #168
         const fn = typeof c.sum === 'function' ? c.sum : r => val(c, r) || 0;
         const tot = list.reduce((s, r) => s + fn(r), 0);
         const fm = c.sumFmt || c.fmt || (v => f.n(v));
@@ -1689,7 +1707,8 @@
     cs01: { key: 'cs01', label: 'CS01', num: true, fmt: v => f.dv(v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽/бп', title: K.tips.cs01, tip: true },
     basis01: { key: 'basis01', label: 'Базис01', num: true, fmt: v => v ? f.dv(v) : '<span class="mut3">·</span>', sum: true, unit: 'тыс ₽/бп', title: K.tips.basis01, tip: true },
     ofzSpr01: { key: 'ofzSpr01', label: 'Спред к КБД01', num: true, fmt: v => v ? f.dv(v) : '<span class="mut3">·</span>', sum: true, unit: 'тыс ₽/бп', title: K.tips.ofzSpr01, tip: true },
-    carry: { key: 'carryDay', label: 'Кэрри/д', num: true, fmt: v => f.k(v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽', title: 'тыс ₽ в день' },
+    carry: { key: 'carryDay', label: 'Кэрри/д', num: true, fmt: v => f.k(v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽', title: 'тыс ₽ в день. ' + K.tips.carry, tip: true },
+    funding: { key: 'fundingDay', label: 'Фондир./д', num: true, nullable: true, fmt: v => v == null ? '<span class="mut3">—</span>' : f.k(v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽', title: 'Фондирование, тыс ₽ в день. ' + K.tips.funding, tip: true },
     pnl: { key: 'pnl', label: 'PnL дня', num: true, val: r => r.pnl.total, fmt: v => f.k(v), cls: v => f.cls(v), sum: r => r.pnl.total, unit: 'тыс ₽' },
     pnlMtd: { key: 'pnlMtd', label: 'PnL MTD', num: true, fmt: v => f.mn(v, 1), cls: v => f.cls(v), sum: true, unit: 'mm ₽', sumFmt: v => f.mn(v, 1) },
     rating: { key: 'rating', label: 'Рейтинг', filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
@@ -1787,6 +1806,8 @@
   K.fundingRuleSource = { adapter: 'правило адаптера', settings: 'правило настроек', settings_override: 'правило настроек (главнее адаптера)', default: 'рыночная ставка по умолчанию', contract: 'ставка договора' };
   const ruleText = l => l && l.rule_source && l.rule_source !== 'default' ? ' · <small class="mut">' + esc(K.fundingRuleSource[l.rule_source] || l.rule_source) + (l.rule_id ? ' ' + esc(l.rule_id) : '') + '</small>'
     : l && l.rule_source === 'default' ? ' <small style="color:var(--warn)" title="не трансфертная ставка: правил фондирования для позиции нет (настройки → Фондирование)">⚑</small>' : '';
+  // фондирование позиции за день (#168): отдельно от кэрри; null — не посчитано («—», а не 0)
+  K.fundingDayHtml = p => p.fundingDay == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(p.fundingDay) + '">' + f.k(p.fundingDay) + '</span>';
   K.fundingLine = function (p) {
     const F = M.funding || {}, x = p.fundingInfo;
     if (!x && !F.state) return '';
@@ -1794,23 +1815,23 @@
     let t;
     if (st === 'funded') {
       const l = (x.lines || [])[0] || {};
-      t = '<b class="' + f.cls(x.amount_rub) + '">' + f.ks(fromRub(x.amount_rub)) + '</b> тыс ₽ · ' + esc(l.rate_expr || '') + ruleText(l) + (l.days ? ' · ' + l.days + ' дн.' : '') + ' · ' + (x.in_pnl ? 'в кэрри позиции' : 'строкой книги (у позиции нет PnL)');
+      t = '<b class="' + f.cls(x.amount_rub) + '">' + f.ks(fromRub(x.amount_rub)) + '</b> тыс ₽ · ' + esc(l.rate_expr || '') + ruleText(l) + (l.days ? ' · ' + l.days + ' дн.' : '') + ' · ' + (x.in_pnl ? 'в PnL позиции строкой «Фондирование» (не в кэрри)' : 'строкой книги (у позиции нет PnL)');
     } else if (st === 'deferred' || st === 'not_funded') t = '0 · ' + esc(x.reason || '');
     else if (st === 'problem') t = '<span style="color:var(--warn)">не посчитано: ' + esc(x.reason || '') + '</span>';
-    else if (st === 'demo') t = 'демо: в кэрри по ставке ' + (p.fundRate != null ? f.pct(p.fundRate) : '—');
+    else if (st === 'demo') t = 'демо: в PnL строкой «Фондирование» по ставке ' + (p.fundRate != null ? f.pct(p.fundRate) : '—');
     else t = '<span style="color:var(--warn)">' + esc(K.fundingStateText[st] || st) + (F.text ? ' — ' + esc(F.text) : '') + '</span>';
     return '<div class="k-note" style="margin-top:6px">Фондирование за период: ' + t + '</div>';
   };
   K.fundingPanel = function (el) {
     const F = M.funding || { state: 'not_computed', text: 'нет данных о фондировании' };
     const head = '<div class="k-note" style="padding:8px 10px">' + (F.state === 'computed' || F.state === 'demo'
-      ? (F.period ? 'период ' + f.dshort(F.period.start) + ' → ' + f.dshort(F.period.end) + ' (' + F.period.days + ' дн.) · ' : '') + 'итог <b class="' + f.cls(F.total) + '">' + f.mns(F.total, 2) + '</b> mm ₽, в кэрри позиций ' + f.mns(F.inPositions, 2) + ', строками книг ' + f.mns(F.bookLevel, 2) + (F.provisional && F.provisional.length ? ' · по умолчанию (не решено): ' + esc(F.provisional.join(', ')) : '')
+      ? (F.period ? 'период ' + f.dshort(F.period.start) + ' → ' + f.dshort(F.period.end) + ' (' + F.period.days + ' дн.) · ' : '') + 'итог <b class="' + f.cls(F.total) + '">' + f.mns(F.total, 2) + '</b> mm ₽, в PnL позиций ' + f.mns(F.inPositions, 2) + ', строками книг ' + f.mns(F.bookLevel, 2) + (F.provisional && F.provisional.length ? ' · по умолчанию (не решено): ' + esc(F.provisional.join(', ')) : '')
       : '<span style="color:var(--warn)">Фондирование ' + esc(K.fundingStateText[F.state] || F.state) + (F.text ? ': ' + esc(F.text) : '') + '</span> — в PnL его нет, а не 0') + '</div>';
     const DR = F.defaultRate, drc = DR ? Object.entries(DR.by_ccy || {}).filter(([, v]) => v.expr) : [];
     const dflt = DR ? '<div class="k-note" style="padding:0 10px 8px">Рыночная ставка по умолчанию (не трансфертная; где нет правил адаптера и настроек): ' + (drc.length ? drc.map(([c, v]) => esc(c) + ' — ' + esc(String(v.expr).replace(' (' + (DR.label || '') + ')', ''))).join(', ') : 'выключена') + (DR.lines ? ' · строк по ней ' + DR.lines + (DR.positions ? ', позиций ' + DR.positions : '') : '') + ' · <a href="../settings.html#funding">настройки</a></div>' : '';
     const books = Object.entries(F.byBook || {}).sort((a, b) => (a[1].total || 0) - (b[1].total || 0));
     const wo = w => !w ? '—' : w.periodicity == null ? '<span style="color:var(--warn)">не задано</span>' : esc(w.periodicity) + (w.last ? ' · ' + f.dshort(w.last) + ': ' + f.mns(w.since_write_off, 2) : '');
-    const tbl = books.length ? '<div class="k-tbl-wrap"><table class="k-tbl k-compact"><thead><tr><th>Книга</th><th>Юрлицо</th><th>База</th><th class="n">Итого, mm ₽</th><th class="n">в кэрри позиций</th><th class="n">строками книги</th><th>Списание · с него</th><th class="n">Проблем</th></tr></thead><tbody>' +
+    const tbl = books.length ? '<div class="k-tbl-wrap"><table class="k-tbl k-compact"><thead><tr><th>Книга</th><th>Юрлицо</th><th>База</th><th class="n">Итого, mm ₽</th><th class="n">в PnL позиций</th><th class="n">строками книги</th><th>Списание · с него</th><th class="n">Проблем</th></tr></thead><tbody>' +
       books.map(([b, v]) => '<tr><td>' + esc((M.book[b] || {}).name || b) + '</td><td class="mut">' + esc((M.book[b] || {}).entity || '—') + '</td><td class="mut">' + esc(v.base || '—') + '</td><td class="n ' + f.cls(v.total) + '">' + f.mns(v.total, 2) + '</td><td class="n">' + f.mns(v.inPositions, 2) + '</td><td class="n">' + f.mns(v.bookLevel, 2) + '</td><td class="mut">' + wo(v.writeOff) + '</td><td class="n">' + (v.problems || '') + '</td></tr>').join('') + '</tbody></table></div>' : '';
     const ents = Object.entries(F.byEntity || {});
     const ent = ents.length > 1 ? '<div class="k-note" style="padding:6px 10px">по юрлицам: ' + ents.map(([e, v]) => esc(e) + ' ' + f.mns(v, 2)).join(' · ') + '</div>' : '';
@@ -1901,13 +1922,15 @@
       ['Ближайшее событие', f.date(p.event.date) + ' <small>' + ev + ', ' + f.yrs(p.tenor) + '</small>'], ['Погашение', f.date(p.maturity) + ' <small>' + f.yrs(p.yearsToMat) + '</small>'],
       ['DV01 ставки', K.d({ title: 'DV01 ' + p.name, unit: 'тыс ₽/бп', rows: [{ p, v: p.dv01 }] }, f.dv(p.dv01), '') + ' <small>тыс ₽/бп</small>', false, K.tips.dv01], ['CS01', f.dv(p.cs01) + ' <small>тыс ₽/бп</small>', false, K.tips.cs01],
       ['Базис ОФЗ01', p.basis01 ? f.dv(p.basis01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.basis01],
-      ['Спред к КБД01', p.ofzSpr01 ? f.dv(p.ofzSpr01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.ofzSpr01], ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽ (фонд. ' + f.pct(p.fundRate) + ')</small>'],
+      ['Спред к КБД01', p.ofzSpr01 ? f.dv(p.ofzSpr01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.ofzSpr01], ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽</small>', false, K.tips.carry],
+      ['Фондирование / день', K.fundingDayHtml(p) + ' <small>тыс ₽ · ставка ' + f.pct(p.fundRate) + '</small>', false, K.tips.funding + K.tips.fundRate],
       ['НКД', f.mn(p.accrued, 2) + ' <small>mm ₽</small>'], ['Рейтинг / сектор', '<span title="' + esc(K.ratingTip(p.rating, p.ratingInfo)) + '">' + esc(K.ratingText(p.rating, p.ratingInfo)) + '</span> <small>' + esc(p.sector) + '</small>'],
     ] : [
       ['Номинал', f.mn(p.notional, 0) + ' <small>mm ' + p.ccy + '</small>'], ['MTM', f.mn(p.mv, 1) + ' <small>mm ₽</small>'],
       ['Ставка / курс', esc(p.couponFmt)], ['Срок', f.date(p.maturity) + ' <small>' + f.yrs(p.tenor) + '</small>'],
       ['DV01', f.dv(p.dv01) + ' <small>тыс ₽/бп</small>', false, K.tips.dv01], ['FX дельта', K.fxDeltaHtml(p), Object.values(INSTR.fxBy(p)).filter(v => v).length > 1],
-      ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽</small>'], ['Контрагент', esc(p.cpty || '—')],
+      ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽</small>', false, K.tips.carry],
+      ['Фондирование / день', K.fundingDayHtml(p) + ' <small>тыс ₽</small>', false, K.tips.funding], ['Контрагент', esc(p.cpty || '—')],
     ]).concat(K.curveRiskFields(p));  // у облигаций тоже (R32)
     if (isBond && p.kind === 'IN' && M.posHistory) {  // линкер: последние ICPI / IR / BEI MOEX (контракт 1.2), если есть
       const LH = M.posHistory(p.id, { deep: true }), last = a => { for (let i = (a || []).length - 1; i >= 0; i--) if (a[i] != null) return a[i]; return null; };
@@ -1921,7 +1944,7 @@
       '<div class="k-sec">Параметры</div>' + K.fieldsHtml(fields) +
       (p.legs && p.legs.length ? '<div class="k-sec">Ноги сделки <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">' + p.legs.length + '</span></div>' + K.legsHtml(p) : '') +
       '<div class="k-sec">PnL <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽</span></div>' +
-      '<div class="k-fields">' + [['Итого день', pn.total], ['Кэрри', pn.carry], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx], ['Сделки', pn.trading], ['Прочее', pn.other], ['MTD', p.pnlMtd], ['YTD', p.pnlYtd]].map(([l, v]) => '<div><div class="l">' + l + '</div><div class="v ' + f.cls(v) + '">' + (Math.abs(v) >= 1e7 ? f.mns(v, 1) + ' <small>mm ₽</small>' : f.ks(v) + ' <small>тыс ₽</small>') + '</div></div>').join('') + '</div>' + K.fundingLine(p) +
+      '<div class="k-fields">' + [['Итого день', pn.total], ['Кэрри', pn.carry, K.tips.carry], ['Фондирование', pn.funding, K.tips.funding], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx], ['Сделки', pn.trading], ['Прочее', pn.other], ['MTD', p.pnlMtd], ['YTD', p.pnlYtd]].map(([l, v, tip]) => '<div><div class="l">' + K.hint(l, tip) + '</div><div class="v ' + f.cls(v) + '">' + (v == null ? '<span class="mut3">—</span>' : Math.abs(v) >= 1e7 ? f.mns(v, 1) + ' <small>mm ₽</small>' : f.ks(v) + ' <small>тыс ₽</small>') + '</div></div>').join('') + '</div>' + K.fundingLine(p) +
       '<div class="k-sec">История <span class="sp"></span><span class="hunit" style="margin-right:6px"></span><span class="hseg"></span></div><div class="hchart" style="height:230px"></div><div class="hnote mut3" style="font-size:11.5px;line-height:1.45;margin:4px 0 0"></div>' +
       '<div class="k-sec">Риск по бакетам <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽/бп</span></div><div class="rchart" style="height:200px"></div>' +
       '<div class="k-sec">Риск по кривым и срокам <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽/бп · подпись — как считается</span></div>' + K.curveRiskTable(p) +
@@ -1945,7 +1968,8 @@
         const tf = R.tooltip.formatter, at = Object.fromEntries(H.dates.map((d, i) => [d, i]));
         R.tooltip.formatter = ps => { const i = at[(ps[0] || {}).axisValue], v = i == null ? null : H.dmPx[i]; return tf(ps) + (v != null ? '<br>DM по цене (оценка): <b>' + f.n(v, 1) + '</b>' : ''); };
       }
-      hnote.innerHTML = R ? R.note + (isFloat && mode === 'dv01' ? '<div style="margin-top:3px">' + esc(K.tips.floaterDv01) + '</div>' : '') : '';
+      hnote.innerHTML = R ? R.note + (isFloat && mode === 'dv01' ? '<div style="margin-top:3px">' + esc(K.tips.floaterDv01) + '</div>' : '')
+        + (isFloat && mode === 'spread' && H.dmNote ? '<div style="margin-top:3px">' + esc(H.dmNote) + '</div>' : '') : '';  // #33: почему DM нет
       hunit.style.display = mode === 'dv01' && perBondOk ? '' : 'none';
       const S = R ? R.series : mode === 'price' ? [{ name: 'Цена', data: H.price }]
         : mode === 'yield' ? [{ name: 'Доходность', data: H.ytm }, { name: 'ОФЗ на сроке', data: H.bench, lineStyle: { type: 'dashed', width: 1 } }]
@@ -2219,9 +2243,9 @@
     return { redraw: draw };
   };
 
-  // PnL-водопад: кэрри → ставки → спред → FX → сделки → прочее → итог; столбцы кликабельны
+  // PnL-водопад: кэрри → фондирование → ставки → спред → FX → сделки → прочее → итог; столбцы кликабельны
   K.pnlWaterfall = function (el, opt) {
-    const keys = [['carry', 'Кэрри'], ['rates', 'Ставки'], ['spread', 'Спред'], ['fx', 'FX'], ['trading', 'Сделки'], ['other', 'Прочее']];
+    const keys = K.PNL_FACTORS;
     let L;
     const c = K.chart(el, () => {
       L = K.list();
@@ -2233,7 +2257,7 @@
       const lo = Math.min(0, ...segs.map(x => Math.min(x[0], x[1]))), hi = Math.max(0, ...segs.map(x => Math.max(x[0], x[1])));
       return {
         grid: { left: 6, right: 10, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'item', formatter: p => (keys[p.dataIndex] ? keys[p.dataIndex][1] : 'Итого') + ': <b>' + f.mns(p.dataIndex < vals.length ? vals[p.dataIndex] : run, 2) + '</b> mm ₽' },
-        xAxis: { type: 'category', data: keys.map(k => k[1]).concat(['Итого']) }, yAxis: { type: 'value', unit: 'mm ₽', nameGap: 20, min: lo, max: hi, scale: false, axisLabel: { formatter: v => f.mn(v, 0) } },
+        xAxis: { type: 'category', data: keys.map(k => k[0] === 'funding' ? 'Фондир.' : k[1]).concat(['Итого']), axisLabel: { interval: 0, fontSize: 10 } }, yAxis: { type: 'value', unit: 'mm ₽', nameGap: 20, min: lo, max: hi, scale: false, axisLabel: { formatter: v => f.mn(v, 0) } },
         series: [{
           type: 'custom', data: segs.map((s, i) => [i, s[0], s[1]]),
           renderItem: (params, api) => {
@@ -2277,7 +2301,7 @@
   // Мини-таблица: валюта на строку — сумма в валюте (mm) и эквивалент в валюте отчёта, по |эквиваленту| по убыванию,
   // один формат (1 знак, разделитель тысяч, знак цветом); строки, которые округляются до 0.0 mm, — под «+N прочих».
   // Суммы — по ногам (INSTR.fxIn: ключи fx_delta прогона; вторая валюта кросса — в своей строке).
-  K.tips.fxMini = 'Открытая валютная позиция по валютам (FX-дельта, по ногам: у кросса — обе валюты), mm в валюте и ≈ в валюте отчёта по курсу прогона; щелчок по цифре — из каких позиций';
+  K.tips.fxMini = 'Открытая валютная позиция по валютам, mm в валюте и ≈ в валюте отчёта по курсу прогона. Слагаемые: облигации — грязная MV в валюте минус валютный пассив фондирования (чистая MV + НКД при покупке; предварительно — по текущей чистой MV), без пассива (фондирование не настроено, проблема) — вся грязная MV; деривативы и FX — FX-дельта по ногам (у кросса — обе валюты); сделки переноса ОВП — их сумма. Щелчок по цифре — из каких позиций';
   K.fxRows = L => K.fxCcys(L).map(c => { const v = M.sum(L, p => INSTR.fxIn(p, c)); return { c, v, eq: v * ((M.toRepr && M.toRepr[c]) || 1) }; })
     .sort((a, b) => (Math.abs(b.eq) - Math.abs(a.eq)) || a.c.localeCompare(b.c));
   K.FX_MINOR = 0.05e6;  // меньше — 0.0 mm: в «прочих»
@@ -2321,8 +2345,9 @@
         K.kpi('CS01', K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }) + K.kpiUnit('тыс ₽/бп'),
           [['корп. RUB', K.d({ title: 'CS01 корп RUB', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === 'RUB'), val: 'cs01' })],
            ['вал.', K.d({ title: 'CS01 валютные', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy !== 'RUB'), val: 'cs01' })]], null, K.tips.cs01) +
-        K.kpi('Кэрри / день', K.d({ title: 'Кэрри за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }) + K.kpiUnit('тыс ₽'),
-          [['в год ≈', '<span class="' + f.cls(k.carryDay) + '">' + f.mn(k.carryDay * 365, 0) + '</span> <span class="u">mm ₽</span>']]) +
+        K.kpi('Кэрри / день', K.d({ title: 'Кэрри за день (без фондирования)', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }) + K.kpiUnit('тыс ₽'),
+          [[K.hint('фондирование', K.tips.funding), K.d({ title: 'Фондирование за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'fundingDay', nullable: true })],
+           ['в год ≈', '<span class="' + f.cls(k.carryDay) + '">' + f.mn(k.carryDay * 365, 0) + '</span> <span class="u">mm ₽</span>']], null, K.tips.carry) +
         K.kpi('Облигации MV', K.d({ title: 'MV облигаций', unit: 'bn ₽', fmt: v => f.bn(v, 1), list: L.filter(p => p.group !== 'DER'), val: 'mv', color: false }) + K.kpiUnit('bn ₽'),
           K.kpiCcyRows(M.ccys.reduce((o, c) => (o[c] = k.byCcy[c].mv, o), {}), (c, v) => f.bn(v, 1), 3, v => f.bn(v, 1))) +
         '<div class="k-kpi k-fxk"><div class="l">' + K.hint('ОВП', K.tips.fxMini) + '</div><div class="v">' + K.fxMini(L) + '</div><div class="s"><a class="go" href="c06-launchpad.html#fx" title="плитка «ОВП и курсы»: бонды и деривативы по валютам, курсы, PnL FX">подробно (C06) →</a></div></div>' +

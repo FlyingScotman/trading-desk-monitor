@@ -200,7 +200,7 @@ def test_funding_end_to_end_inbox_run_api(store_url, ctx, tmp_path):
     assert t["total"] == pytest.approx(sum(x["interest_rub"] for x in f["lines"]))
     assert t["total"] == pytest.approx(t["in_positions"] + t["book_level"])
 
-    # per position: in the flash PnL (carry net of funding), deferred, not funded
+    # per position: in the flash PnL (its own funding component: the total net of funding), deferred, not funded
     pos = {p["position_id"]: p for p in c.get(f"/api/v1/runs/{rid2}/positions").json()["positions"]}
     st = {k: p["fact"]["extra"]["funding"]["state"] for k, p in pos.items() if p["fact"]}
     assert st["T1|XR1"] == "deferred" and st["C1|26238"] == "not_funded" and st["D1|USD"] == "not_funded"
@@ -449,3 +449,38 @@ def test_cash_history_and_ledgers_fund_the_cash_books(store_url, ctx, tmp_path):
     assert len(probs) == 1 and probs[0][:2] == ("CASH", "C1|RUB")
     assert "расхождение" in probs[0][2] and "S1, S2" in probs[0][2] and "1,000,000.00 RUB" in probs[0][2]
     assert {b["book_id"]: b["problems"] for b in f["books"]}["C1"] == 1
+
+
+def test_summary_funding_its_own_factor_carry_without_it():
+    """TDM#168: the pages' carry is the coupon income and the roll-down without the funding, the funding its own
+    factor; the factors still sum to the day's total (the PnL net of funding). Funding not computed (a run before
+    B1, not configured, a problem) is None, not 0 (B1), in a position's factors and in the run's sum."""
+    from desk.publish import summary
+
+    q = {"carry": 1000.0, "rolldown": 50.0, "funding": -400.0, "rates": 300.0, "convexity": 5.0, "spread": -20.0,
+         "fx_gross": 10.0, "fx_funding": 0.0, "new_trades": 7.0, "other": 1.0}
+    p = summary.pnl_factors(q)
+    assert list(p) == ["carry", "funding", "rates", "spread", "fx", "trading", "other", "total"]
+    assert p["carry"] == pytest.approx(1050.0) and p["funding"] == pytest.approx(-400.0)
+    assert p["total"] == pytest.approx(sum(q.values()))  # the factors sum to the total, net of funding
+    assert p["total"] == pytest.approx(sum(v for k, v in p.items() if k != "total"))
+    before = summary.pnl_factors({k: v for k, v in q.items() if k != "funding"})  # a run before B1
+    assert before["funding"] is None and before["total"] == pytest.approx(p["total"] + 400.0)
+    assert before["total"] == pytest.approx(sum(v for k, v in before.items() if k != "total" and v is not None))
+    assert summary.pnl_factors({**q, "funding": None})["funding"] is None  # not configured / a problem: null
+    assert summary.pnl_factors({**q, "funding": 0.0})["funding"] == 0.0  # deferred / not funded: a real 0
+
+    def row(pid, pnl):
+        return {"position_id": pid, "book_id": "B", "pv_rub": 1e6, "risk": {}, "cs01": 0.0, "ofz": None,
+                "instr_type": "BOND", "segment": "Корп", "asset_class": None, "coupon_type": "fix", "ccy": "RUB",
+                "notional": 1e6, "notional_rub": 1e6, "price": 100.0, "spread_bp": 0.0, "dv01": None, "dm_bp": None,
+                "pnl": pnl, "ofz_basis": None, "quality": "exact"}
+
+    no_fund = {k: v for k, v in q.items() if k != "funding"}
+    s = summary.build([row("A", no_fund), row("B", no_fund)])  # no position's funding computed: the run's is null
+    assert s["pnl"]["funding"] is None and s["pnl"]["carry"] == pytest.approx(2100.0)
+    assert s["pnl"]["total"] == pytest.approx(2 * before["total"])
+    s = summary.build([row("A", q), row("B", no_fund)])  # one computed: the sum of those that have it
+    assert s["pnl"]["funding"] == pytest.approx(-400.0)
+    assert s["pnl"]["total"] == pytest.approx(sum(v for k, v in s["pnl"].items() if k != "total"))
+    assert summary.VERSION >= 6  # summaries of older versions are rebuilt with the funding factor

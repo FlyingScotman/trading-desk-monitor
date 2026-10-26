@@ -1,7 +1,7 @@
 """The open currency position (ОВП, OCP) from positions, its reconciliation with the reported OCP, and the OCP
 transfers (wave B2, TDM#59; ROADMAP §0 step 3). Generic mechanics only: which components the bank's OCP report
-holds, the amount basis, NDFs and the transfer convention are owner decisions (DEC06, OQ-11, OQ-04, DEC12) and
-the organization's answers live in the private adapter. Until they arrive, every such choice is a field of
+holds, the amount basis, NDFs and the transfer convention are owner decisions (DEC06, OQ-11, DEC12; OQ-04 is
+decided, TDM#54) and the organization's answers live in the private adapter. Until they arrive, every such choice is a field of
 ``OcpPolicy`` with a **provisional** default listed in ``OPEN_DECISIONS``; the run says which ones it took.
 
 **Lines.** Each published row of the run with an FX exposure gives one ``OcpLine`` per foreign currency (the
@@ -16,10 +16,14 @@ reporting currency has no OCP), in one component (``COMPONENTS``):
   ``extra.ocp_amount``; an FX row without terms and a later value date at its amount (basis ``notional``);
   an NDF only with ``include_ndf``;
 - ``futures`` — an FX future valued by core (product ``fx_future``) at its FX delta;
-- ``bonds`` — a foreign-currency bond: its FX delta (the dirty MV in the currency, ``tdm_run.position_row``);
-- ``funding`` — the currency funding liability of a bond funded by its MV in its own currency
-  (``funding.funding_liabilities``, OQ-04; ``bond_funding_liability``): negative for a long bond, so that bonds +
-  funding is what the bond book keeps of FX before the OCP transfer (the accrued and the revaluation above the base);
+- ``bonds`` — a foreign-currency bond: its FX delta. A run since TDM#54 publishes it net of the bond's currency
+  funding liability (``publish.fx_liability``: the dirty MV in the currency less the clean MV and the accrued paid at
+  the purchase, OQ-04, DEC01, owner's rule of 26.10.2026; basis ``mv_net``): what the bond book keeps of FX before the
+  OCP transfer. A bond without a liability (funding not configured, a problem, a book not funded on its MV) keeps its
+  dirty MV (basis ``mv``);
+- ``funding`` — the currency funding liability as a component of its own (``funding.funding_liabilities``;
+  ``bond_funding_liability``, off by default): only for rows published gross (a run before TDM#54). A row already net
+  of its liability (``extra.fx_liability`` computed) never gets it again: the liability is subtracted once;
 - ``other`` — any other row with an FX delta (an OTC or other row in a foreign currency at the report's value);
 - ``transfers`` — an OCP transfer deal (``transfer_rule``): its amount, apart from the FX legs.
 
@@ -92,7 +96,9 @@ class OcpPolicy:
     report_components: frozenset[str] = frozenset(COMPONENTS)
     cash_from_balances: bool = True
     settle_window_bd: int = 2
-    bond_funding_liability: bool = True
+    bond_funding_liability: bool = False
+    """The liability as the ``funding`` component. Off: the run's bond rows carry it already (``publish.fx_liability``,
+    TDM#54); a row net of it is skipped even when on (``compute_ocp``), so it is never subtracted twice."""
     transfer_rule: TransferRule = TransferRule.INTERNAL_COUNTERPARTY
     transfer_target: TransferTarget = TransferTarget.FULL
     tolerance_ccy: float = 1000.0
@@ -122,9 +128,6 @@ OPEN_DECISIONS: tuple[OpenDecision, ...] = (
                  "true", ("false: the positions' FX rows already hold the balances",)),
     OpenDecision("settle_window_bd", "TDM#36", "Up to which value date an FX row is cash to be settled, not a forward",
                  "2 business days (TOD, TOM, spot)", ("0", "1")),
-    OpenDecision("bond_funding_liability", "OQ-04, TDM#54", "Does a bond funded in its currency carry a currency "
-                 "liability in the OCP", "true (the owner's answer to OQ-04; base by the funding rules, DEC01)",
-                 ("false",)),
     OpenDecision("transfer_rule", "DEC06, TDM#60", "Which deals are OCP transfers",
                  "internal_counterparty (the deal's counterparty is the book's ocp_to)", ("none",)),
     OpenDecision("transfer_target", "DEC06, TDM#60", "What the evening transfer should move",
@@ -246,7 +249,7 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
         if policy.amount_basis is AmountBasis.NOMINAL:
             delta = _amounts(ex.get("ocp_amount"), policy)
     elif row.get("instr_type") == "BOND":
-        basis = "mv"
+        basis = "mv_net" if _net_of_liability(row) else "mv"
     else:
         basis = "notional" if ex.get("fx_delta_basis") else "amount"
     if not delta:
@@ -256,7 +259,8 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
     if ndf and not policy.include_ndf:
         return None, {}, basis, "NDF не входит в ОВП (include_ndf = false)"
     if row.get("instr_type") == "BOND":
-        return "bonds", delta, basis, ""
+        return "bonds", delta, basis, ("грязная MV за вычетом валютного пассива фондирования" if basis == "mv_net"
+                                       else "")
     if core:
         return ("futures" if "fx_future" in product else "fx_legs"), delta, basis, ""
     kind = str((ex.get("reported") or {}).get("asset_class") or "").lower()
@@ -266,6 +270,11 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
             return "cash", delta, "amount", ""
         return "fx_legs", delta, "notional", "без условий сделки: номинал, не PV"
     return "other", delta, basis, ""
+
+
+def _net_of_liability(row: Mapping[str, Any]) -> bool:
+    """The row's FX delta is net of its currency funding liability (``publish.fx_liability``)."""
+    return ((row.get("extra") or {}).get("fx_liability") or {}).get("state") == "computed"
 
 
 def position_lines(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[str, Any]],
@@ -494,6 +503,11 @@ def compute_ocp(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[s
     tb = terms_by_position(rows, terms)
     lines, per_pos, notes = position_lines(rows, books, tb, on, policy)
     cl, cash_notes = cash_lines(cash, policy)
-    lines += cl + liability_lines(liabilities, policy)
+    net = {r["position_id"] for r in rows if _net_of_liability(r)}
+    liabilities = list(liabilities)
+    if policy.bond_funding_liability and (twice := sorted(x.position_id for x in liabilities if x.position_id in net)):
+        notes.append("пассив фондирования уже вычтен из FX-дельты облигаций, второй раз не вычитается: "
+                     + ", ".join(twice))
+    lines += cl + liability_lines([x for x in liabilities if x.position_id not in net], policy)
     comps, outside = reconcile(lines, report_rows, report_units, books, policy)
     return OcpResult(lines, per_pos, comps, outside, transfers(lines, books, tb, policy), notes + cash_notes)

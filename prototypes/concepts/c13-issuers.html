@@ -83,7 +83,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
       const i = M.issuer[id];
       const o = { id, name: i.short, full: i.name, sector: i.sector, rating: i.rating, ratingInfo: i.ratingInfo, list, n: list.length,
         mv: sumBy(list, p => p.mv), cs01: sumBy(list, p => p.cs01), dv01: sumBy(list, p => p.dv01), basis01: sumBy(list, p => p.basis01),
-        pnl: sumBy(list, p => p.pnl.total), carry: sumBy(list, p => p.carryDay), mtd: sumBy(list, p => p.pnlMtd), ytd: sumBy(list, p => p.pnlYtd),
+        pnl: sumBy(list, p => p.pnl.total), carry: sumBy(list, p => p.carryDay), funding: sumBy(list, p => p.fundingDay), mtd: sumBy(list, p => p.pnlMtd), ytd: sumBy(list, p => p.pnlYtd),
         ccys: [...new Set(list.map(p => p.ccy))].sort((a, b) => M.ccyOrder[a] - M.ccyOrder[b]) };
       o.searchText = (o.name + ' ' + o.full + ' ' + o.sector + ' ' + o.rating + ' ' + o.ccys.join(' ')).toLowerCase();
       return o;
@@ -193,7 +193,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     if (!x) { dash.innerHTML = '<div class="k-panel"><div class="k-empty">нет эмитентов под фильтром</div></div>'; return; }
     const L = x.list, col = K.issuerColor(x.id), totMv = sumBy(ISS, i => i.mv);
     const wavg = (fn) => { const a = L.filter(p => fn(p) != null); const w = sumBy(a, p => Math.abs(p.mv)); return w ? sumBy(a, p => fn(p) * Math.abs(p.mv)) / w : null; };
-    const D = (title, val, fmt, unit, cls) => K.d({ title: x.name + ' · ' + title, unit, fmt, list: L, val }, null, cls);
+    const D = (title, val, fmt, unit, cls) => K.d({ title: x.name + ' · ' + title, unit, fmt, list: L, val, nullable: val === 'fundingDay' }, null, cls);
     const nFlt = L.filter(p => p.cpn && p.cpn.type === 'float').length;
     // шапка
     const hp = K.h('div', 'k-panel'); dash.appendChild(hp);
@@ -205,7 +205,8 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
         ['DV01 ставки', D('DV01', 'dv01', f.dv, 'тыс ₽/бп') + ' <small>тыс ₽/бп</small>'],
         ['Базис ОФЗ01', x.basis01 ? D('Базис ОФЗ01', 'basis01', f.dv, 'тыс ₽/бп') : '—'],
         ['PnL дня', D('PnL дня', p => p.pnl.total, f.k, 'тыс ₽') + ' <small>тыс ₽</small>'],
-        ['Кэрри / день', D('Кэрри', 'carryDay', f.k, 'тыс ₽') + ' <small>тыс ₽</small>'],
+        [K.hint('Кэрри / день', K.tips.carry), D('Кэрри', 'carryDay', f.k, 'тыс ₽') + ' <small>тыс ₽</small>'],
+        [K.hint('Фондирование / день', K.tips.funding), D('Фондирование', 'fundingDay', f.k, 'тыс ₽') + ' <small>тыс ₽</small>'],
         ['PnL MTD', D('PnL MTD', 'pnlMtd', v => f.mn(v, 1), 'mm ₽') + ' <small>mm ₽</small>'],
         ['PnL YTD', D('PnL YTD', 'pnlYtd', v => f.mn(v, 1), 'mm ₽') + ' <small>mm ₽</small>'],
         ['Ср. спред (по MV)', f.bp(wavg(p => p.zspread)) + ' <small>б.п.</small>'],
@@ -270,10 +271,10 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     ep.querySelector('.bd').innerHTML = ev.length ? '<table class="mini" data-vk="c13-issuer-events" data-title="События эмитента на год"><thead><tr><th>Дата</th><th>Событие</th><th>Бумага</th><th class="n">Сумма</th><th class="n">≈ mm ₽</th></tr></thead><tbody>' +
       ev.map(c => '<tr data-card="' + c.pos + '" class="' + (c.kind === 'put' ? 'put' : '') + '"><td data-date="' + c.date + '">' + f.date(c.date) + '</td><td><span class="kb" style="--c:' + KC[c.kind] + '">' + KN[c.kind] + '</span>' + (c.est ? ' <span class="mut3">прогноз</span>' : '') + '</td><td>' + esc(M.pos[c.pos].name) + '</td><td class="n">' + f.mn(c.amount, 1) + ' <span class="mut3">' + c.ccy + '</span></td><td class="n">' + f.mn(c.amountRub, 1) + '</td></tr>').join('') + '</tbody></table>' : '<div class="k-empty">нет событий</div>';
     K.tableToolsAll(ep.querySelector('.bd'));
-    const hp2 = panel('PnL эмитента за год', '<span class="k-note">оценка по ценам + кэрри, mm ₽</span>'); two2.appendChild(hp2);
+    const hp2 = panel('PnL эмитента за год', '<span class="k-note">оценка по ценам + кэрри + фондирование, mm ₽</span>'); two2.appendChild(hp2);
     const hel = K.h('div', 'ch'); hp2.querySelector('.bd').appendChild(hel);
     const Hs = L.map(p => ({ p, h: M.posHistory(p.id) })), dates = Hs[0].h.dates;
-    const daily = dates.map((_, i) => i === 0 ? 0 : sumBy(Hs, ({ p, h }) => { const n = h.notional[i - 1], fx = M.toRepr[p.ccy]; const dp = h.price[i] != null && h.price[i - 1] != null ? h.price[i] - h.price[i - 1] : 0; return n * dp / 100 * fx * (p.indexation || 1) + (p.notional ? p.carryDay * n / p.notional : 0); }));
+    const daily = dates.map((_, i) => i === 0 ? 0 : sumBy(Hs, ({ p, h }) => { const n = h.notional[i - 1], fx = M.toRepr[p.ccy]; const dp = h.price[i] != null && h.price[i - 1] != null ? h.price[i] - h.price[i - 1] : 0; return n * dp / 100 * fx * (p.indexation || 1) + (p.notional ? (p.carryDay + (p.fundingDay || 0)) * n / p.notional : 0); }));
     let cs = 0; const cum = daily.map(v => (cs += v));
     dashCharts.push(K.chart(hel, () => ({
       grid: { left: 6, right: 10, top: 28, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 },

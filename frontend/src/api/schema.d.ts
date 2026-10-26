@@ -1186,6 +1186,94 @@ export interface components {
              */
             since_write_off: number | null;
         };
+        /**
+         * FxLiability
+         * @description The currency funding liability of the run's foreign-currency bonds; ``provisional``: what the rule takes until
+         *     the owner answers.
+         */
+        FxLiability: {
+            /** Status */
+            status: string;
+            /** Text */
+            text: string;
+            /** Rule */
+            rule: string;
+            /** Provisional */
+            provisional: string[];
+            /**
+             * By Ccy
+             * @description Liabilities by currency, signed
+             */
+            by_ccy: {
+                [key: string]: number;
+            };
+            /** Positions */
+            positions: {
+                [key: string]: components["schemas"]["FxLiabilityPosition"];
+            };
+            /** Notes */
+            notes: string[];
+        };
+        /**
+         * FxLiabilityPosition
+         * @description A foreign-currency bond's currency funding liability (``publish.fx_liability``, OQ-04, TDM#54).
+         */
+        FxLiabilityPosition: {
+            /**
+             * State
+             * @description computed: its FX delta is net of the liability; otherwise the FX delta is the dirty MV and ``reason`` says why
+             * @enum {string}
+             */
+            state: "computed" | "none" | "problem" | "not_configured" | "invalid_config";
+            /** Reason */
+            reason?: string | null;
+            /** Ccy */
+            ccy?: string | null;
+            /**
+             * Amount Ccy
+             * @description The liability, signed (a long bond: negative)
+             */
+            amount_ccy?: number | null;
+            /** Clean Mv Ccy */
+            clean_mv_ccy?: number | null;
+            /**
+             * Purchase Accrued Ccy
+             * @description The accrued paid at the purchase in the liability (funded at a zero rate); null on a dirty base
+             */
+            purchase_accrued_ccy?: number | null;
+            /**
+             * Purchase Accrued Basis
+             * @description report / estimated_from_purchase_date / returned_by_coupon / unknown / dirty_base
+             */
+            purchase_accrued_basis?: string | null;
+            /** Basis Text */
+            basis_text?: string | null;
+            /** Accrued Ccy */
+            accrued_ccy?: number | null;
+            /** Dirty Mv Ccy */
+            dirty_mv_ccy?: number | null;
+            /** Base */
+            base?: string | null;
+            /**
+             * Fx Delta Gross
+             * @description FX delta before the liability: the dirty MV
+             */
+            fx_delta_gross?: number | null;
+            /**
+             * Fx Delta Net
+             * @description The published FX delta: dirty MV + liability
+             */
+            fx_delta_net?: number | null;
+            /**
+             * Fx Funding
+             * @description FX revaluation of the D-1 liability in the PnL, RUB
+             */
+            fx_funding?: number | null;
+            /** Fx Funding Cbr */
+            fx_funding_cbr?: number | null;
+            /** Note */
+            note?: string | null;
+        };
         /** InstrumentAlias */
         InstrumentAlias: {
             /** Isin */
@@ -2283,6 +2371,8 @@ export interface components {
             default_rate?: {
                 [key: string]: unknown;
             } | null;
+            /** @description The bonds' currency funding liability (TDM#54); null for a run before it */
+            fx_liability?: components["schemas"]["FxLiability"] | null;
         };
         /** RunHeader */
         RunHeader: {

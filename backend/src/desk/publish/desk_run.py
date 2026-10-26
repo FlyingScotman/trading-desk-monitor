@@ -13,7 +13,12 @@ Funding (B1, ``funding_run``): computed on the run's content before the run row 
 ``fact.extra.funding`` and the ``funding`` component of its PnL (absent, not 0, when funding is not configured or the
 position has a problem). The book totals' ``pnl.funding`` sums it and ``pnl.total`` is net of it.
 
-OCP (B2, ``ocp_run``, TDM#59): computed after funding on the same content; its block is the ``run_reference`` kind
+FX liability (``fx_liability``, OQ-04, TDM#54): computed after funding on the same content; a foreign-currency bond's
+``fx_delta`` is then net of its currency funding liability (clean MV + the accrued paid at the purchase), the liability
+is ``fact.extra.fx_liability`` and the funding block's ``fx_liability``, its FX revaluation the ``fx_funding`` (and
+``fx_funding_cbr``) of the position's PnL; the book totals' ``pnl.fx_funding`` sums it and ``pnl.total`` holds it.
+
+OCP (B2, ``ocp_run``, TDM#59): computed after the FX liability on the same content (the bonds net of it); its block is the ``run_reference`` kind
 ``ocp`` (the derived OCP by component, the reconciliation with the reported ``ocp``, the transfers), its summary
 lineage ``ocp``, its lines in the run log, a position's ``fact.extra.ocp`` (and ``extra.ocp_transfer``).
 """
@@ -38,12 +43,13 @@ from ..marketdata.adapter import MarketView
 from ..orchestrator import EodContext, Outcome
 from ..store import PositionInputs
 from ..valuation.fallback import CarriedSpread, used_model_spreads
-from . import derivatives_parallel, funding_run, ocp_run
+from . import derivatives_parallel, funding_run, fx_liability, ocp_run
 from .tdm_run import RunContent, git_sha, run_content
 
-PNL_KEYS = ("carry", "rolldown", "rates", "spread", "other", "fx_gross", "funding", "total")
+PNL_KEYS = ("carry", "rolldown", "rates", "spread", "other", "fx_gross", "fx_funding", "funding", "total")
 """Run totals per book: the components sum to ``total`` (a foreign-face bond's FX revaluation is in ``fx_gross``, the
-position's funding in ``funding``: ``total`` is net of funding)."""
+FX revaluation of its currency funding liability in ``fx_funding``, the position's funding in ``funding``: ``total`` is
+net of funding)."""
 
 
 def _finite(x: Any) -> Any:
@@ -101,6 +107,10 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
     funding = funding_run.compute(con, bd, prev, ctx.market, content.rows, content.reference["books"], inputs,
                                   {pid: o.terms for pid, _, o in positions if o.terms is not None})
     funding.apply(content.rows, content.reference, content.log)
+    by_pid = {pid: o for pid, _, o in positions}
+    liab = fx_liability.compute(con, bd, prev, ctx.market, content.rows, content.reference["books"], inputs,
+                                {pid: o.terms for pid, o in by_pid.items() if o.terms is not None}, by_pid)
+    liab.apply(content.rows, content.reference, content.log, by_pid)
     ocp = ocp_run.compute(con, bd, ctx.market, content.rows, content.reference, inputs)
     ocp.apply(content.rows, content.reference, content.log)
     try:  # a diagnostic: its failure is said in the run log, the run goes on without the block
@@ -114,6 +124,7 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
         if line:
             content.log.append(line)
     lineage["funding"] = funding.lineage()
+    lineage["fx_liability"] = liab.lineage()
     lineage["ocp"] = ocp.lineage()
     run_id = con.execute(
         "INSERT INTO run (run_type, business_date, prev_date, cut_type, supersedes_run_id, market_snapshot_id,"
@@ -173,8 +184,9 @@ def _write(cur: psycopg.Cursor, run_id: int, positions: list[tuple[str, str, Out
                         if fund is not None:
                             t["pnl"][k] = (t["pnl"][k] or 0.0) + fund
                         continue
-                    net = (fund or 0.0) if k == "total" else 0.0  # the total net of the position's funding
-                    t["pnl"][k] = (t["pnl"][k] or 0.0) + getattr(o.pnl, k) + net
+                    # the total net of the position's funding and with its liability's FX revaluation
+                    net = (fund or 0.0) + getattr(o.pnl, "fx_funding", 0.0) if k == "total" else 0.0
+                    t["pnl"][k] = (t["pnl"][k] or 0.0) + getattr(o.pnl, k, 0.0) + net
     cur.executemany("INSERT INTO run_position (run_id, position_id, ord, book_id, secid, quantity, quality, reason, pv_rub,"
                     " dv01_rub, cs01_rub, fact, pnl, no_pnl) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     rows)
