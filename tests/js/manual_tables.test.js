@@ -148,6 +148,69 @@ t('#131 + #153: CSV ручной таблицы — отрицательные �
   }
 });
 
+t('#222: метка отрицательного для CSV (data-kneg) не зависит от цвета; скобка во вложенном теге', () => {
+  const { K } = load(new Map());
+  // K.d() ставит neg отрицательному: красный уступает смысловому цвету (k-accn нет), а метка data-kneg есть
+  const cells = fm => fm === 'acc'
+    ? ['<span class="dr neg" data-kneg="">(1.5)</span>', 'итого <span class="dr" data-kneg=""><b>(2.5)</b> mm</span>', '<span class="dr pos">(3)</span> лот', '<span data-kneg="">((1))</span>']
+    : ['<span class="dr neg">−1.5</span>', 'итого <span class="dr"><b>−2.5</b> mm</span>', '<span class="dr pos">(3)</span> лот', '<span>((1))</span>'];
+  const csvOf = fm => { K.negFmt = fm; return K.tableCsv(table({ head: [['a', 'b', 'c', 'd']], body: [cells(fm)] }), {}).split('\r\n')[3]; };
+  assert.strictEqual(csvOf('acc'), '"=""-1.5""",итого -2.5 mm,(3) лот,((1))', 'без метки скобки — не минус; «((1))» — не число');
+  assert.strictEqual(csvOf('minus'), csvOf('acc'), 'одинаково в обоих режимах');
+  assert.strictEqual(K.accMarkedToMinus('<i data-kneg="">(1,234.5)</i> и <i data-kneg="">(7%)</i>'), '<i data-kneg="">-1,234.5</i> и <i data-kneg="">-7%</i>');
+  assert.strictEqual(K.accMarkedToMinus('<i data-knegx="">(1)</i>'), '<i data-knegx="">(1)</i>', 'похожий атрибут — не метка');
+});
+
+t('#183: дата оферты — в CSV датой Excel, вид оферты — своей колонкой; «Сумма» C08 — числом', () => {
+  const { K } = load(new Map());
+  assert.ok(K.posCols.offer.date, 'колонка «Оферта» — колонка-дата');
+  const rows = [{ id: 'a', offer: '2029-03-15', offerKind: 'put' }, { id: 'b', offer: '2030-01-31', offerKind: 'call' }, { id: 'c', offer: null, offerKind: null }];
+  const api = K.table(el(), { rows, search: false, viewKey: 'c99-offer', columns: K.cols(['offer', 'offerKind']) });
+  same(api.csv().split('\r\n').slice(2, 6), ['Оферта,Вид оферты', '03/15/2029,пут', '01/31/2030,колл', '—,—']);
+  assert.ok(!/['"]P['"]/.test(String(K.posCols.offer.fmt)), 'на экране дата без «P/C»');
+  // C08 «Все потоки по неделям»: сумма — число (mm в валюте выпуска), валюта — в колонке «Вал»
+  const c08 = P('concepts/c08-calendar.html');
+  const amt = /\{ key: 'amt', label: 'Сумма', num: true, unit: 'mm', fmt: \(v, r\) => (.*?), csvFmt: v => f\.mn\(v, 2\) \}/.exec(c08);
+  assert.ok(amt, 'C08: у «Суммы» — единица и csvFmt');
+  const fl = K.table(el(), { rows: [{ id: 'a', ccy: 'RUB', amt: 27.74e6 }], search: false, viewKey: 'c99-amt',
+    columns: [{ key: 'ccy', label: 'Вал', fmt: (v, r) => K.ccyTag(r.ccy) }, { key: 'amt', label: 'Сумма', num: true, unit: 'mm', fmt: (v, r) => K.f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', csvFmt: v => K.f.mn(v, 2) }] });
+  same(fl.csv().split('\r\n').slice(2, 4), ['Вал,"Сумма, mm"', 'RUB,27.74']);
+  // C08 «Оферты и коллы»: дата — data-date, вид — своя колонка
+  assert.ok(/<th>Дата<\/th><th>Вид<\/th><th class="n">Дней<\/th>/.test(c08));
+  assert.ok(/<td data-date="' \+ esc\(p\.event\.date\) \+ '">' \+ f\.date\(p\.event\.date\) \+ '<\/td><td class="mut3">' \+ K\.offerKindText\(p\.event\.kind\) \+ '<\/td>/.test(c08));
+  // C03: «Вид оферты» рядом с «Офертой» в наборах колонок, дата — data-date
+  const c03 = P('concepts/c03-blotter.html');
+  assert.strictEqual((c03.match(/'offer', 'offerKind', 'maturity'/g) || []).length, 3);
+  assert.ok(/\(c\.date && v \? ' data-date="' \+ esc\(v\) \+ '"' : ''\)/.test(c03));
+  const T = table({ head: [['Оферта', 'Вид оферты']], body: [[{ h: '15.03.29', date: '2029-03-15' }, 'пут']] });
+  assert.strictEqual(K.tableCsv(T, {}).split('\r\n')[3], '03/15/2029,пут');
+});
+
+t('#184: таблицы карточки позиции и разбора — CSV и ширина колонок', () => {
+  const { K } = load(new Map());
+  const p = { id: 'P1', isin: 'RU000TEST001', name: 'Тест 1', ccy: 'RUB' };
+  // потоки: класс для поиска, дата — data-date
+  const html = K.flowsTable(p, [{ date: '2027-03-15', kind: 'cpn', amount: 1000, amountRub: 1e6 }]);
+  assert.ok(/<table class="k-tbl k-cflows">/.test(html) && /<td data-date="2027-03-15">15\.03\.27<\/td>/.test(html));
+  const legs = K.legsHtml({ legs: [{ leg: 'near', valueDate: '2026-11-02', buyCcy: 'USD', buyAmount: 1e6, sellCcy: 'RUB', sellAmount: 9e7, contractRate: 90 }] });
+  assert.ok(/<table class="k-tbl k-compact k-legs">/.test(legs) && /data-date="2026-11-02"/.test(legs));
+  // K.cardTableTools: кнопки у каждой найденной таблицы карточки; имя файла — с ISIN, название — с именем позиции
+  const T = table({ head: [['Дата', 'Тип']], body: [[{ h: '15.03.27', date: '2027-03-15' }, 'купон']] });
+  const root = { querySelector: sel => sel === 'table.k-cflows' ? T : null };
+  K.cardTableTools(root, p);
+  assert.strictEqual(T.__kt.viewKey, 'table:card-flows');
+  assert.strictEqual(T.__kt.csvName(), 'tdm_card-flows_RU000TEST001_2026-10-21_run-demo.csv');
+  assert.ok(T.__kt.csv().startsWith('run_id,demo,as_of,10/21/2026,таблица,Потоки: Тест 1,строк,1'));
+  assert.strictEqual(T.__kt.csv().split('\r\n')[3], '03/15/2027,купон');
+  same(K.CARD_TABLES.map(x => x[1]), ['card-legs', 'card-curve-risk', 'card-flows']);
+  const kit = P('concepts/lib/kit.js'), c03 = P('concepts/c03-blotter.html');
+  assert.ok(/K\.cardTableTools\(o\.bd, p\);/.test(kit), 'полная карточка');
+  assert.ok(/K\.cardTableTools\(card, p\);/.test(c03), 'карточка C03');
+  assert.ok(/K\.tableTools\(body, \{ viewKey: 'drill-' \+ dim,/.test(kit), 'разбор: ключ ширины — свой у каждого разреза');
+  // C16 «ОВП по книгам»: число в тексте «Слагаемых» размечено k-num — его знак виден CSV в обоих режимах (#222)
+  assert.ok(/' <span class="k-num">' \+ f\.s\(x\.components\[k\], 0\) \+ '<\/span>'/.test(P('concepts/c16-ocp.html')));
+});
+
 t('#131 + #105: CSV ручной таблицы — единица второй строкой шапки через запятую, без повтора; валюта отчёта', () => {
   const head = [['Книга', { h: 'DV01<span class="k-thu">тыс ₽/бп</span>', cls: 'n' }, { h: 'MV, mm ₽<span class="k-thu">mm ₽</span>', cls: 'n' }, { h: 'Итого, mm ₽', cls: 'n' }]];
   const body = [['A', { h: '1', cls: 'n' }, { h: '2', cls: 'n' }, { h: '3', cls: 'n' }]];
@@ -234,6 +297,8 @@ t('#131: строка кнопок — сразу после таблицы в �
   const css = P('concepts/lib/kit.css');
   assert.ok(/\.k-tbl-ctlbar-m \{ height: 24px;/.test(css) && /table\.k-tooled tfoot td \{ bottom: 24px; \}/.test(css));
   assert.ok(/table\.mini \+ \.k-tbl-ctlbar-m \{ position: static;/.test(css));
+  // длинные mini-таблицы в прокрутке (C08 «Оферты и коллы», «Крупные погашения», C13 «События эмитента», #223) — строка закреплена
+  assert.ok(/\.k-panel > \.bd\.scroll > table\.mini \+ \.k-tbl-ctlbar-m, \.k-drawer > \.bd > table\.mini \+ \.k-tbl-ctlbar-m \{ position: sticky;/.test(css));
   assert.ok(!/^\.k-tbl-ctlbar-m \{[^}]*position/m.test(css), 'в прокручиваемом контейнере строка закреплена, как у K.table');
 });
 
@@ -267,8 +332,13 @@ t('#131: таблица с data-vk получает кнопки сама; уш�
 t('#131: у всех таблиц мониторов есть CSV; ключи раскладки уникальны среди K.table и ручных таблиц', () => {
   const dir = path.join(__dirname, '..', '..', 'prototypes', 'concepts'), seen = new Map();
   const add = (k, where) => { assert.ok(!seen.has(k), 'повтор ключа ' + k + ': ' + where + ' и ' + seen.get(k)); seen.set(k, where); };
-  // таблицы, которые CSV не нужен: справка команд терминала; eventsTable C08 не вызывается
-  const exempt = { 'c12-terminal.html': ['<table class="k-tbl help">'], 'c08-calendar.html': ['<table class="mini">'], 'c03-blotter.html': ['<table class="k-tbl">'] };
+  // таблицы, которые CSV не нужен: справка команд терминала
+  const exempt = { 'c12-terminal.html': ['<table class="k-tbl help">'], 'c03-blotter.html': ['<table class="k-tbl">'] };
+  // общие таблицы kit.js (#184: карточка позиции, разбор; панели) — ключи не совпадают с ключами страниц
+  const kit = fs.readFileSync(path.join(dir, 'lib', 'kit.js'), 'utf8');
+  [...kit.matchAll(/K\.tableTools\([^;]*?viewKey: '([a-z0-9-]+)'/g)].forEach(m => add(m[1], 'kit.js'));
+  [...kit.matchAll(/\['table\.[a-z-]+', '([a-z0-9-]+)'/g)].forEach(m => add(m[1], 'kit.js K.CARD_TABLES'));
+  assert.ok(['drill-', 'card-legs', 'card-curve-risk', 'card-flows'].every(k => seen.has(k)), 'ключи kit.js найдены');
   const files = fs.readdirSync(dir).filter(f => /^c\d+.*\.html$/.test(f));
   files.forEach(f => {
     const src = fs.readFileSync(path.join(dir, f), 'utf8');

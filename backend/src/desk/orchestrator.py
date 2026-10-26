@@ -251,7 +251,8 @@ def new_cache() -> ShockedCurveCache:
     return ShockedCurveCache()
 
 
-def with_rates(market: MarketView, static: StaticView, core: MarketSnapshot
+def with_rates(market: MarketView, static: StaticView, core: MarketSnapshot,
+               kbd_history: dict[date, ZcycParameters] | None = None
                ) -> tuple[MarketSnapshot, dict[str, Any], tuple[CurveEntry, ...], tuple[CurveEntry, ...]]:
     """``core`` plus the RUONIA OIS curve (built once), the key-rate projection off it and the RUONIA and
     key-rate fixings. An input that cannot be built is left out with its error in the lineage: the floaters
@@ -263,7 +264,8 @@ def with_rates(market: MarketView, static: StaticView, core: MarketSnapshot
     (``rates.input_notes``) and ``coverage``, the hub's own list of the present and missing quote-set series.
     ``curve_error`` keeps the first error message (the RUONIA one, else the key-rate one). The third element: the
     RUONIA OIS curve as its bootstrap request (``EodContext.quote_curves``), empty without it; the fourth: the key-rate
-    forward curve for key-rate swaps (``EodContext.swap_curves``), empty without the key-rate curve."""
+    forward curve for key-rate swaps (``EodContext.swap_curves``), empty without the key-rate curve. ``kbd_history``:
+    the KBD of earlier days for the KBD floaters' past fixings (``rates.kbd_history``, TDM#33)."""
     curves, lineage, fixings, swap_curves = list(core.curves), {}, (), ()
     status: dict[str, str] = {}
     lineage["coverage"] = rates.quote_set_coverage(market.snapshot)
@@ -290,7 +292,7 @@ def with_rates(market: MarketView, static: StaticView, core: MarketSnapshot
             lineage["key_rate_error"] = str(e)
             status["key_rate_swap"] = "missing" if isinstance(e, rates.QuoteSetMissing) else "error"
     try:
-        fixings, lineage["fixings"] = rates.fixing_entries(market.snapshot, static.snapshot)
+        fixings, lineage["fixings"] = rates.fixing_entries(market.snapshot, static.snapshot, kbd_history=kbd_history)
         status["fixings"] = "ok"
     except (SnapshotError, CoreRejection, ValueError) as e:
         lineage["fixings_error"] = str(e)
@@ -323,7 +325,8 @@ def prepare(snapshots: SnapshotDir, business_date: str, cut_type: str = "eod_fin
     market = MarketView(snap)
     assert snap.static_snapshot_id
     static = StaticView(snapshots.get(snap.static_snapshot_id))
-    core_market, rates_lineage, quote_curves, swap_curves = with_rates(market, static, market.core_market(static))
+    core_market, rates_lineage, quote_curves, swap_curves = with_rates(
+        market, static, market.core_market(static), rates.kbd_history(snapshots, business_date, static.snapshot))
     fx_options = fx_options or fxcurves.FxOptions()
     core_market, fx_market = fxcurves.with_fx(market, static, core_market, market_rates(market), fx_options)
     params = market.zcyc_parameters()

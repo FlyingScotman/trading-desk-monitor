@@ -117,7 +117,9 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     book: { label: 'Книга', filter: true, val: r => r.book, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
     coupon: { label: 'Купон', val: r => r.couponFmt, fmt: v => '<span class="mono">' + esc(v || '—') + '</span>', title: 'Q — квартальный, M — месячный, S — полугодовой, A — годовой' },
     curCpn: { label: 'Тек. купон', num: true, val: r => r.group === 'DER' ? null : r.curCpn, fmt: v => f.pct(v) },
-    offer: { label: 'Оферта', val: r => r.offer || null, fmt: (v, r) => v ? f.date(v) + ' <span class="mut3">' + (r.offerKind === 'put' ? 'P' : 'C') + '</span>' : '<span class="mut3">—</span>' },
+    // дата оферты — датой (data-date: в CSV дата Excel), вид оферты — своей колонкой (#183)
+    offer: { label: 'Оферта', date: true, val: r => r.offer || null, fmt: v => v ? f.date(v) : '<span class="mut3">—</span>' },
+    offerKind: { label: 'Вид оферты', filter: r => K.offerKindText(r.offerKind) || '—', val: r => r.offer ? r.offerKind : null, fmt: v => v ? esc(K.offerKindText(v)) : '<span class="mut3">—</span>', title: 'пут — право держателя предъявить бумагу, колл — право эмитента погасить' },
     maturity: { label: 'Погашение', val: r => r.maturity, fmt: v => f.date(v) },
     event: { label: 'Ближайшее событие', val: r => r.event.date, title: 'оферта (пут/колл), если есть, иначе погашение',
       fmt: (v, r) => '<span class="' + (r.group !== 'DER' && r.tenor < 0.25 ? 'ev-soon' : 'mut3') + '">' + evName[r.event.kind] + '</span> ' + f.date(r.event.date) + ' <span class="mut3">' + f.yrs(r.tenor) + '</span>' },
@@ -151,12 +153,12 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     desk: { label: 'Деск', filter: true, val: r => r.desk, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
   };
   const PRESETS = [
-    ['base', 'Базовый', ['name', 'ccy', 'issuer', 'kind', 'book', 'coupon', 'offer', 'maturity', 'event', 'notional', 'price', 'ytm', 'spread', 'dv01', 'cs01', 'spark', 'isin']],
+    ['base', 'Базовый', ['name', 'ccy', 'issuer', 'kind', 'book', 'coupon', 'offer', 'offerKind', 'maturity', 'event', 'notional', 'price', 'ytm', 'spread', 'dv01', 'cs01', 'spark', 'isin']],
     ['risk', 'Риск', ['name', 'ccy', 'issuer', 'kind', 'book', 'event', 'tenor', 'notional', 'mv', 'dur', 'dv01', 'cs01', 'basis01', 'ofzSpr01', 'carry', 'funding']],
     ['px', 'Цены и спреды', ['name', 'ccy', 'issuer', 'kind', 'coupon', 'event', 'price', 'chg', 'bidask', 'spark', 'ytm', 'spread', 'zdisc', 'gspread', 'dur']],
     ['pnl', 'Кэрри и PnL', ['name', 'ccy', 'issuer', 'book', 'coupon', 'curCpn', 'fund', 'carry', 'funding', 'pc', 'pfu', 'pr', 'ps', 'pf', 'pt', 'po', 'pnl', 'pnlMtd', 'pnlYtd']],
-    ['stat', 'Статика', ['name', 'isin', 'issuer', 'issuerFull', 'ccy', 'kind', 'rating', 'sector', 'coupon', 'offer', 'maturity', 'tenor', 'book', 'entity', 'desk']],
-    ['all', 'Всё', ['name', 'isin', 'ccy', 'issuer', 'kind', 'book', 'rating', 'coupon', 'curCpn', 'offer', 'maturity', 'event', 'tenor', 'notional', 'mv', 'price', 'chg', 'spark', 'ytm', 'spread', 'zdisc', 'gspread', 'dur', 'dv01', 'cs01', 'basis01', 'ofzSpr01', 'carry', 'funding', 'pnl', 'pnlMtd', 'pnlYtd']],
+    ['stat', 'Статика', ['name', 'isin', 'issuer', 'issuerFull', 'ccy', 'kind', 'rating', 'sector', 'coupon', 'offer', 'offerKind', 'maturity', 'tenor', 'book', 'entity', 'desk']],
+    ['all', 'Всё', ['name', 'isin', 'ccy', 'issuer', 'kind', 'book', 'rating', 'coupon', 'curCpn', 'offer', 'offerKind', 'maturity', 'event', 'tenor', 'notional', 'mv', 'price', 'chg', 'spark', 'ytm', 'spread', 'zdisc', 'gspread', 'dur', 'dv01', 'cs01', 'basis01', 'ofzSpr01', 'carry', 'funding', 'pnl', 'pnlMtd', 'pnlYtd']],
   ];
   // валюта и эмитент — в каждом наборе колонок, и при группировке тоже (R37)
   const cols = () => (PRESETS.find(p => p[0] === st.preset) || PRESETS[0])[2].map(k => Object.assign({ key: k }, C[k]));
@@ -214,7 +216,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     const leaf = r => {
       visible.push(r.id);
       return '<tr class="row' + (r.id === st.sel ? ' sel' : '') + '" data-id="' + r.id + '" style="--tint:' + tintOf(r) + '"><td class="stripe" style="background:' + colorOf(r) + '"></td>' +
-        CL.map(c => { const v = c.val(r); return '<td class="' + (c.num ? 'n' : '') + '">' + (c.fmt ? c.fmt(v, r) : esc(v)) + '</td>'; }).join('') + '</tr>';
+        CL.map(c => { const v = c.val(r); return '<td class="' + (c.num ? 'n' : '') + '"' + (c.date && v ? ' data-date="' + esc(v) + '"' : '') + '>' + (c.fmt ? c.fmt(v, r) : esc(v)) + '</td>'; }).join('') + '</tr>';
     };
     function emit(list, level, path, title) {
       if (level >= G.length) { list.forEach(r => body += leaf(r)); return; }
@@ -371,6 +373,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     }
     hChart.redraw(); rChart.redraw();
     $('.cd-rt').innerHTML = K.curveRiskTable(p);
+    K.cardTableTools(card, p);  // CSV и ширина таблиц карточки: ноги сделки, риск по кривым (#184)
     // потоки
     $('.cfs-t').style.display = isBond ? '' : 'none';
     if (isBond) K.flows($('.cd-cfs'), p); else $('.cd-cfs').innerHTML = '';

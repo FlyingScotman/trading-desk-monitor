@@ -33,6 +33,10 @@ class ScenarioEngineJs(unittest.TestCase):
         r = subprocess.run(["node", str(ROOT / "tests" / "js" / "pnl_r10_pages.test.js")], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
+    def test_ocp_net_of_the_funding_liability(self):
+        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "ocp_liability.test.js")], capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
     def test_coupon_display(self):
         r = subprocess.run(["node", str(ROOT / "tests" / "js" / "coupon_r16.test.js")], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -59,6 +63,10 @@ class ScenarioEngineJs(unittest.TestCase):
 
     def test_header_status(self):  # #22: дата и тип данных, «следующее обновление», предупреждение без среза
         r = subprocess.run(["node", str(ROOT / "tests" / "js" / "header_status.test.js")], capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_run_badge(self):  # #192: бейдж прогона в шапке — возраст публикации, что вошло, событие desk:live
+        r = subprocess.run(["node", str(ROOT / "tests" / "js" / "run_badge.test.js")], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     def test_backfill_indicator(self):  # #23, #163: «догрузка истории N из M · K не сходятся», подсказка с датами

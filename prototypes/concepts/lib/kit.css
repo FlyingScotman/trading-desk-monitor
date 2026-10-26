@@ -45,6 +45,15 @@ td.n.k-accp::after { content: ')'; visibility: hidden; } .mut { color: var(--fg-
 .k-top .asof b { color: var(--fg); font-weight: 600; }
 .k-top .k-fresh { color: var(--fg-3); font-size: 12px; white-space: nowrap; }
 .k-top .k-warnchip { border-color: var(--warn); color: var(--warn); text-decoration: none; white-space: normal; }
+/* бейдж прогона (#192): возраст публикации · что вошло; подсветка — устарел / есть новее */
+.k-top .k-runage .cv { color: var(--fg-3); border-left: 1px solid var(--line-2); padding-left: 6px; }
+.k-top .k-runage.stale { border-color: var(--warn); color: var(--warn); }
+.k-top .k-runage.newer { border-color: var(--accent); background: var(--accent-bg); }
+.k-top .k-runage.unknown { color: var(--fg-3); }
+.k-top .k-runage.done { border-color: var(--pos); color: var(--pos); }
+/* покрытие «N/M поз.» — только на широком экране: уже 1440 px шапка с ним переносится в третью строку (ревью #254);
+   оно есть в подсказке и в панели */
+@media (max-width: 1440px) { .k-top .k-runage .cv { display: none; } }
 .k-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--line-2); border-radius: 999px; background: var(--panel); cursor: pointer; font-size: 12px; white-space: nowrap; user-select: none; }
 .k-chip:hover { border-color: var(--accent); }
 .k-chip.on { background: var(--accent-bg); border-color: var(--accent); color: var(--fg); }
@@ -90,6 +99,8 @@ td.n.k-accp::after { content: ')'; visibility: hidden; } .mut { color: var(--fg-
 
 /* ---------- таблицы ---------- */
 .k-tbl-wrap { overflow: auto; position: relative; }
+/* узкая таблица (риск по кривым в карточке): обёртка по ширине таблицы, кнопка «⤓ CSV» — у её правого края */
+.k-tbl-wrap.k-fit { width: fit-content; max-width: 100%; }
 table.k-tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
 .k-tbl th { position: sticky; top: 0; z-index: 2; background: var(--panel-2); color: var(--fg-2); font-weight: 500; text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line-2); white-space: nowrap; user-select: none; }
 .k-tbl th.sortable { cursor: pointer; }
@@ -152,6 +163,9 @@ table.k-tooled tfoot:has(> tr + tr) { bottom: 24px; }
 .k-pin2 tfoot:has(> tr + tr) tr > :first-child, .k-pin2 tfoot:has(> tr + tr) tr > :nth-child(2) { position: sticky; bottom: auto; }
 /* короткие таблицы без «Итого» в тексте страницы (брифинг C05, списки C08) — строка просто под таблицей */
 table.mini + .k-tbl-ctlbar-m { position: static; background: transparent; }
+/* длинный список в прокрутке (панель .bd.scroll, выезжающая панель, #223): строка кнопок закреплена внизу видимой
+   части — её видно без прокрутки до конца списка */
+.k-panel > .bd.scroll > table.mini + .k-tbl-ctlbar-m, .k-drawer > .bd > table.mini + .k-tbl-ctlbar-m { position: sticky; background: var(--panel); }
 .k-tbtn { padding: 1px 7px; border: 1px solid var(--line); border-radius: 5px; background: transparent; color: var(--fg-3); cursor: pointer; font-size: 11px; line-height: 16px; }
 .k-tbtn:hover { color: var(--fg); border-color: var(--accent); }
 .k-input { background: var(--bg); border: 1px solid var(--line-2); border-radius: 6px; padding: 4px 8px; color: var(--fg); font: inherit; min-width: 160px; }
@@ -174,7 +188,10 @@ table.mini + .k-tbl-ctlbar-m { position: static; background: transparent; }
 .k-drawer > .hd .st { color: var(--fg-2); font-size: 12px; margin-top: 2px; }
 .k-drawer > .hd .sp { flex: 1; }
 .k-drawer > .hd .close { cursor: pointer; border: 0; background: none; color: var(--fg-2); font-size: 20px; line-height: 1; padding: 0 4px; }
-.k-drawer > .bd { overflow: auto; flex: 1; padding: 12px 16px; }
+.k-drawer > .bd { overflow: auto; flex: 1; padding: 12px 16px 0; }
+/* нижний отступ — после содержимого, а не отступом прокрутки: закреплённые «Итого» и строка кнопок стоят вплотную к
+   низу панели, под ними не просвечивают строки (#184) */
+.k-drawer > .bd::after { content: ""; display: block; height: 12px; }
 .k-crumbs { display: flex; gap: 4px; font-size: 12px; color: var(--fg-3); margin-bottom: 4px; flex-wrap: wrap; }
 .k-crumbs a { color: var(--fg-2); cursor: pointer; }
 .k-crumbs a:hover { color: var(--accent); }

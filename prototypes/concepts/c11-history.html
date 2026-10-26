@@ -289,7 +289,8 @@ tr.row.sel td { background: var(--accent-bg); }
       ] : []).concat(isB && (x.icpi || x.cpi) ? [  // линкер: ICPI MOEX и ИПЦ г/г, известный на дату (R25)
         ['ICPI', x.icpi ? f.n(lastOf(x.icpi), 4) : '—', x.icpi ? d(x.icpi[i0], lastOf(x.icpi), v => f.s(v, 4)) : '—'],
         ['ИПЦ г/г', x.cpi ? f.pct(lastOf(x.cpi)) : '—', x.cpi ? d(x.cpi[i0], lastOf(x.cpi), v => f.s(v * 100, 0) + ' бп') : '—'],
-      ] : []).map(([l, v, dd]) => '<div><div class="l">' + l + '</div><div class="v">' + v + '</div><div class="l">с ' + f.date(DATES[i0]) + ': ' + dd + '</div></div>').join('') + '</div><div class="chart" style="height:250px"></div>';
+      ] : []).map(([l, v, dd]) => '<div><div class="l">' + l + '</div><div class="v">' + v + '</div><div class="l">с ' + f.date(DATES[i0]) + ': ' + dd + '</div></div>').join('') + '</div><div class="chart" style="height:250px"></div>'
+      + (x.dmNote && st.pm === 'spr' ? '<div class="mut" style="margin-top:4px">' + esc(x.dmNote) + '</div>' : '');  // #33: почему у флоатера нет DM
     const inp = bd.querySelector('input');
     inp.onchange = () => { const q = K.list().find(z => z.name === inp.value) || K.list().find(z => z.searchText.includes(inp.value.toLowerCase())); if (q) { st.pos = q.id; save(); drawPos(); if (topTbl) topTbl.redraw(); } };
     // цена, доходность, спред — вся история бумаги (API истории хаба, с 2024), не только дни прогонов

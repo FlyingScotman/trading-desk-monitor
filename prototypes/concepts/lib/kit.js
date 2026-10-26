@@ -6,6 +6,8 @@
  *  KIT.top({title, tag})  — шапка: дата и тип данных, «следующее обновление» и предупреждение без среза дня (#22),
  *                           фильтр книг и портфелей (общий для всех мониторов), поиск, тема
  *  KIT.dataLabel(run), KIT.headerStatus(status, now) — тип данных прогона и состояние шапки по статусу автопилота
+ *  KIT.runAgo(ms), KIT.runBadge(info, now), KIT.runCoverage() — бейдж прогона в шапке (#192): сколько прошло с публикации
+ *                           (тикает сам; новый прогон — по ленте событий lib/live.js) и что вошло в прогон
  *  KIT.list()             — позиции после фильтра шапки; KIT.onFilter(fn) — перерисовка при смене фильтра
  *  KIT.d(spec)            — кликабельная цифра: spec = {title, list|rows, val, fmt, unit, v?}; щелчок раскрывает вклад
  *  KIT.drill(spec)        — открыть разбор вклада (позиции, группировка по эмитенту/книге/валюте/типу/бакету)
@@ -211,7 +213,9 @@
     kbd: 'Кривая ОФЗ (КБД MOEX): риск — +1 б.п. к par-доходности инструмента с годовым купоном на КБД по бакетам 1Y–20Y+ ' +
       '(1M–6M слиты в 1Y: ОФЗ там нет), кривая не перестраивается — локальный оверлей годовых нулевых ставок (ядро 0.37, rub_ofz_kbd_v3). ' +
       'Фикс-ОФЗ (ПД, АД, ИН) дисконтируются по КБД + своему Z-спреду. В виде «RUONIA + базис» он — базис ОФЗ (тот же риск), ' +
-      'а риск RUONIA посчитан отдельно (с 0.2.7): поэтому DV01 в двух видах отличается на доли процента.',
+      'а риск RUONIA посчитан отдельно (с 0.2.7): поэтому DV01 в двух видах отличается на доли процента. ' +
+      'КБД-флоатеры (#33): купоны проецируются по КБД — это их риск к базису ОФЗ; дисконт — RUONIA + Z. Риск RUONIA их проекции ' +
+      'ядро 0.39 отдельно не считает: в виде «RUONIA + базис» RUONIA = дисконт + проекция (приближение, вариант P; точный — с ядром 0.40).',
     cs01: 'CS01, тыс ₽/бп: +1 б.п. к кредитному Z-спреду к RUONIA (годовой, ACT/365F) разом по всем срокам, кривая стоит; ' +
       'у фикс-бумаг ≈ DV01 RUONIA (оба — к годовым ставкам).',
     // кэрри и фондирование — разные строки (#168): кэрри без фондирования, фондирование — рядом, своей строкой
@@ -518,11 +522,167 @@
       nx.title = 'Когда автопилот спросит хаб о новом срезе (МСК); прогон появится через минуту-две после этого';
       wr.style.display = st.warn ? '' : 'none';
       if (st.warn) { wr.textContent = '⚠ ' + st.warn.text; wr.title = st.warn.title; }
+      return st;
     };
-    const poll = () => fetch('../api/v1/autopilot/status', { cache: 'no-store' }).then(r => r.ok ? r.json() : null)
-      .then(j => paint(j, j && j.now ? new Date(j.now) : new Date()), () => paint(null, new Date()))
-      .catch(() => { }).then(() => setTimeout(poll, 60e3));
+    let timer = null;
+    const poll = () => { clearTimeout(timer); return fetch('../api/v1/autopilot/status', { cache: 'no-store' }).then(r => r.ok ? r.json() : null)
+      .then(j => { const st = paint(j, j && j.now ? new Date(j.now) : new Date()); runBadgeStatus(j, st.reason); }, () => paint(null, new Date()))
+      .catch(() => { }).then(() => { timer = setTimeout(poll, 60e3); }); };
+    runState.refresh = poll;  // #192: новый прогон по ленте — сверить сразу
     poll();
+  }
+  // ---------- #192: бейдж прогона — сколько прошло с публикации и что в него вошло ----------
+  // Публикация — source.publishedAt прогона (window.DESK, api/compat.py: run.completed_at); в демо — момент загрузки
+  // страницы минус 12 минут. Возраст перерисовывается раз в 30 с и при возврате на вкладку; часы — сервера
+  // (сдвиг по now статуса автопилота). Новый прогон: событие 'desk:live' от lib/live.js (run.published), затем
+  // сверка с latest_run статуса автопилота (R11: какой прогон «последний»).
+  // Подсветка: «есть прогон новее» (latest_run — не прогон на экране) или «устарел»: в рабочие часы (пн–пт,
+  // кроме дней, которые автопилот назвал нерабочими — причина not_business_day шага intraday, как в K.headerStatus;
+  // fresh_from–fresh_to МСК) старше fresh_min минут или в любое время старше max_days дней. Закреплённый прогон
+  // (?run_id= / ?as_of=) не подсвечивается: его выбрали сами; «есть новее» для него — только в подсказке и панели.
+  K.RUN_AGE = { fresh_min: 90, fresh_from: '10:15', fresh_to: '20:00', max_days: 3 };
+  K.runAgo = function (ms) {
+    const m = Math.floor(Math.max(0, ms) / 60e3);
+    if (m < 1) return 'только что';
+    if (m < 60) return m + ' мин';
+    const hh = Math.floor(m / 60);
+    if (hh < 6) return hh + ' ч' + (m % 60 ? ' ' + (m % 60) + ' мин' : '');
+    if (hh < 48) return hh + ' ч';
+    return Math.floor(hh / 24) + ' дн.';
+  };
+  // info: { publishedAt, demo, pinned, newer: {run_id, text} | null, reason: причина шага intraday автопилота };
+  // now — момент (по часам сервера) → { short, text (фраза целиком), level: 'ok' | 'stale' | 'newer' | 'unknown', why }
+  K.runBadge = function (info, now) {
+    const a = K.RUN_AGE, t = info.publishedAt ? +new Date(info.publishedAt) : NaN;
+    if (!isFinite(t)) return { short: '—', text: 'Время публикации прогона неизвестно', level: 'unknown', why: null };
+    const ms = +new Date(now) - t, short = ms < 60e3 ? 'только что' : K.runAgo(ms) + ' назад';
+    const r = { short, text: 'Прогон опубликован ' + short, level: 'ok', why: null };
+    if (info.newer && !info.demo) {
+      r.level = info.pinned ? 'ok' : 'newer';
+      r.why = 'есть прогон новее: ' + (info.newer.text || '#' + info.newer.run_id) + (info.pinned ? ' (этот выбран вручную)' : '');
+      return r;
+    }
+    if (info.pinned || info.demo) return r;
+    const m = msk(now), day = m.dow >= 1 && m.dow <= 5 && info.reason !== 'not_business_day' &&
+      m.min >= hmMin(a.fresh_from) && m.min < hmMin(a.fresh_to);
+    if (ms > a.max_days * 864e5) { r.level = 'stale'; r.why = 'прогон старше ' + a.max_days + ' дн.'; }
+    else if (day && ms > a.fresh_min * 60e3) { r.level = 'stale'; r.why = 'в рабочие часы прогон старше ' + a.fresh_min + ' мин: новых срезов не публиковалось'; }
+    return r;
+  };
+  // что вошло в прогон — из данных прогона на странице (window.MOCK): позиции и их оценка, книги, PnL, фондирование,
+  // рынок, замечания; → { short: «48/50 поз.», rows: [{k, v, warn}] }
+  K.runCoverage = function () {
+    const ps = M.positions || [], nv = ps.filter(p => p.notValued).length, val = ps.length - nv;
+    const pnl = ps.filter(p => !p.notValued && p.pnl && p.pnl.available !== false).length;
+    const books = new Set(ps.map(p => p.book).filter(Boolean)).size || (M.books || []).length;
+    const rows = [];
+    rows.push({ k: 'Позиции', v: val + ' из ' + ps.length + ' оценены' + (nv ? ', ' + nv + ' без оценки' : ''), warn: !!nv });
+    rows.push({ k: 'Книги', v: String(books) });
+    rows.push({ k: 'PnL', v: pnl ? 'у ' + pnl + ' из ' + val + ' оценённых' : 'нет', warn: pnl < val });
+    if (M.run && M.run.pnlBasis) rows.push({ k: 'База PnL', v: M.run.pnlBasis });
+    if (M.funding) rows.push({ k: 'Фондирование', v: M.funding.state === 'computed' ? 'посчитано' + (M.funding.problems && M.funding.problems.length ? ', проблем ' + M.funding.problems.length : '') : (M.funding.text || M.funding.state), warn: M.funding.state !== 'computed' && M.funding.state !== 'demo' });
+    rows.push({ k: 'Рынок', v: runLabel().text });
+    if (M.notes && M.notes.length) rows.push({ k: 'Чего нет', v: M.notes.length + ' замеч. (ⓘ в шапке)', warn: true });
+    return { short: val + '/' + ps.length + ' поз.', rows };
+  };
+  const DEMO_PUBLISHED = new Date(Date.now() - 12 * 60e3).toISOString();
+  const runState = { newer: null, skew: 0, live: null, refresh: null, paint: null, reason: null, done: null };
+  // без aria-live: возраст меняется каждые 30 с, скринридер зачитывал бы его (ревью #254)
+  function runBadgeChip() {
+    return '<span class="k-chip k-runage" data-a="runage" tabindex="0"><span class="ag"></span><span class="cv"></span></span>';
+  }
+  // «✓ обновлено до #N» — минуту после автоперехода на новый прогон (lib/live.js: sessionStorage desk.live.switched.at)
+  function switchedNow() {
+    try {
+      const id = sessionStorage.getItem('desk.live.switched'), at = +sessionStorage.getItem('desk.live.switched.at');
+      if (id == null || !M.run || String(id) !== String(M.run.id) || !(Date.now() - at < 60e3)) return null;
+      sessionStorage.removeItem('desk.live.switched.at');
+      return at;
+    } catch (e) { return null; }
+  }
+  function runInfo() {
+    const sel = window.CONCEPTS_SEL || {}, real = K.source === 'real';
+    return { publishedAt: real ? M.run && M.run.publishedAt : DEMO_PUBLISHED, demo: !real, pinned: !!(sel.run_id || sel.as_of), newer: runState.newer, reason: runState.reason };
+  }
+  const LIVE_TEXT = { sse: 'поток событий (SSE)', poll: 'опрос сервера', 'signed-out': 'стоят: войдите снова' };
+  function bindRunBadge(bar) {
+    const el = bar.querySelector('[data-a=runage]');
+    if (!el) return;
+    const cov = K.runCoverage();
+    let panel = null;
+    if (K.source === 'real') { const at = switchedNow(); if (at) runState.done = at + 60e3; }
+    const paint = () => {
+      const info = runInfo(), b = K.runBadge(info, Date.now() + runState.skew), done = runState.done && Date.now() < runState.done;
+      el.className = 'k-chip k-runage ' + (done && b.level === 'ok' ? 'done' : b.level);
+      el.querySelector('.ag').textContent = done && b.level === 'ok' ? '✓ обновлено до #' + M.run.id : (b.level === 'newer' ? '⟳ ' : b.level === 'stale' ? '⚠ ' : '') + b.short;
+      el.querySelector('.cv').textContent = cov.short;
+      el.title = b.text + (b.why ? '\n' + b.why[0].toUpperCase() + b.why.slice(1) : '') + '\nВошло: ' + cov.rows.map(r => r.k + ' — ' + r.v).join('; ') + '\nЩелчок — подробнее';
+      if (panel) fillPanel(info, b);
+    };
+    const row = (k, v, warn) => '<tr><td class="mut">' + esc(k) + '</td><td style="white-space:normal' + (warn ? ';color:var(--warn)' : '') + '">' + esc(v) + '</td></tr>';
+    function fillPanel(info, b) {
+      const pub = info.publishedAt ? msk(info.publishedAt) : null;
+      panel.innerHTML = '<div class="k-sec" style="margin-top:0">Прогон' + (K.source === 'real' && M.run ? ' #' + esc(M.run.id) : ' · тестовые данные') + '</div>' +
+        '<table class="k-tbl k-compact" style="width:100%"><tbody>' +
+        row('Опубликован', pub ? pub.hm + ' МСК ' + ddmm(pub.iso) + ' · ' + b.short + (info.demo ? ' (демо)' : '') : 'неизвестно') +
+        (b.why ? row(b.level === 'stale' ? 'Внимание' : 'Новее', b.why, b.level !== 'ok') : '') +
+        row('Живые обновления', info.demo ? 'нет (демо)' : LIVE_TEXT[runState.live] || 'подключаются', runState.live === 'signed-out') +
+        cov.rows.map(x => row(x.k, x.v, x.warn)).join('') + '</tbody></table>';
+    }
+    function closePanel() {
+      if (!panel) return;
+      panel.remove(); if (openMenu === panel) openMenu = null; panel = null;
+      document.removeEventListener('keydown', onKey, true); document.removeEventListener('click', onDoc, true);
+    }
+    function onKey(e) {
+      if (e.key !== 'Escape') return;
+      const live = panel && panel.isConnected;  // панель могло закрыть другое меню шапки
+      closePanel();
+      if (live) { e.stopPropagation(); el.focus(); }
+    }
+    function onDoc(e) { if (panel && !panel.contains(e.target) && !el.contains(e.target)) closePanel(); }
+    function openPanel() {
+      if (openMenu) openMenu.remove();
+      const info = runInfo(), b = K.runBadge(info, Date.now() + runState.skew);
+      const W = Math.min(380, innerWidth * 0.92), r = el.getBoundingClientRect();
+      panel = h('div', 'k-panel k-runpanel');
+      panel.style.cssText = 'position:fixed;z-index:140;width:' + W + 'px;max-height:70vh;overflow:auto;box-shadow:var(--shadow);padding:10px 14px;font-size:12.5px';
+      panel.style.left = Math.max(8, Math.min(r.left, innerWidth - W - 10)) + 'px'; panel.style.top = (r.bottom + 4) + 'px';
+      fillPanel(info, b);
+      document.body.appendChild(panel); openMenu = panel;
+      document.addEventListener('keydown', onKey, true);
+      setTimeout(() => { if (panel) document.addEventListener('click', onDoc, true); }, 0);
+    }
+    runState.paint = paint;
+    paint();
+    setInterval(paint, 30e3);
+    if (runState.done) setTimeout(paint, runState.done - Date.now() + 50);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) paint(); });
+    // щелчок (и Enter / пробел с клавиатуры) — открыть панель, повторный — закрыть; Esc и щелчок мимо — закрыть
+    el.onclick = e => { e.stopPropagation(); if (panel && panel.isConnected) closePanel(); else { panel = null; openPanel(); } };
+    el.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); } };
+    if (K.source !== 'real') return;
+    // лента событий (lib/live.js): новый прогон — отметка сразу, затем сверка со статусом автопилота
+    window.addEventListener('desk:live', ev => {
+      const d = ev.detail || {};
+      if (d.kind === 'mode') { runState.live = d.mode; return; }
+      const L = window.DESK_LIVE, ctx = { source: 'real', runId: M.run && M.run.id, asOf: M.asOf };
+      const runs = L ? (d.list || []).filter(x => L.newRun(x, ctx)) : [];
+      if (!runs.length) return;
+      const e = runs[runs.length - 1];
+      runState.newer = { run_id: e.run_id, text: e.text };
+      paint();
+      if (runState.refresh) runState.refresh();
+    });
+  }
+  // статус автопилота (freshness): latest_run — какой прогон «последний»; now — часы сервера
+  function runBadgeStatus(s, reason) {
+    if (!s) return;
+    runState.reason = reason || null;
+    if (s.now) runState.skew = +new Date(s.now) - Date.now();
+    const lr = s.latest_run;
+    if (lr !== undefined) runState.newer = lr && M.run && String(lr.run_id) !== String(M.run.id) ? { run_id: lr.run_id, text: (lr.label ? lr.label + ' · ' : '') + '#' + lr.run_id } : null;
+    if (runState.paint) runState.paint();
   }
   function go(sel) {  // как desk-nav.js: выбор в адресе и в localStorage (desk.run.v1), общий со страницами прогона
     try { if (Object.keys(sel).length) localStorage.setItem('desk.run.v1', JSON.stringify({ sel, at: Date.now() })); else localStorage.removeItem('desk.run.v1'); } catch (e) { }
@@ -644,7 +804,7 @@
       (opt.extra || '') +
       '<span class="k-chip" data-a="ofzview" title="Как показан риск ОФЗ: «RUONIA + базис» — риск к котировкам OIS RUONIA и риск к базису КБД − RUONIA, два разных риска ядра (с 0.2.7); «КБД» — ОФЗ на своей кривой (par-риск КБД = базис)">ОФЗ: ' + K.OFZ_VIEWS[M.ofzView || 'basis'] + ' ▾</span>' +
       '<span class="k-chip" data-a="repr" title="' + esc('Валюта отчёта.\n' + K.REPR_NOTE.map(x => x[0][0].toUpperCase() + x[0].slice(1) + ': ' + x[1] + '.').join('\n')) + '">в ' + K.repr + ' ' + K.SYM[K.repr] + ' ▾</span>' +
-      srcChip() + (M.notes && M.notes.length ? '<span class="k-chip" data-a="notes" title="Чего нет в данных прогона" style="border-color:var(--warn)">ⓘ ' + M.notes.length + '</span>' : '') +
+      srcChip() + runBadgeChip() + (M.notes && M.notes.length ? '<span class="k-chip" data-a="notes" title="Чего нет в данных прогона" style="border-color:var(--warn)">ⓘ ' + M.notes.length + '</span>' : '') +
       '<button class="k-btn" data-a="search">Поиск <span class="k-kbd">Ctrl K</span></button>' +
       '<button class="k-btn" data-a="numfmt"></button>' +
       '<button class="k-btn" data-a="theme" title="Светлая / тёмная тема">◐</button>';
@@ -659,7 +819,7 @@
       nb.title = 'Отрицательные числа: ' + (K.negFmt === 'acc' ? '(1,234.5) красным' : '−1,234.5') + '. Щелчок — ' + (K.negFmt === 'acc' ? 'со знаком минус' : 'в скобках (бухгалтерский формат)') + '; в CSV — всегда минус';
     };
     paintNeg(); nb.onclick = () => K.setNegFmt(K.negFmt === 'acc' ? 'minus' : 'acc'); K.on('numfmt', paintNeg);
-    bindSrc(bar);
+    bindSrc(bar); bindRunBadge(bar);
     if (K.source === 'real') { freshness(bar); backfillChip(bar); }
     const oc = bar.querySelector('[data-a=ofzview]');
     oc.onclick = e => { e.stopPropagation(); menu(oc, Object.keys(K.OFZ_VIEWS).map(v => ({ v, t: K.OFZ_VIEWS[v], sub: v === 'basis' ? 'по умолчанию' : '' })), M.ofzView || 'basis', v => { if (v !== (M.ofzView || 'basis')) K.setOfzView(v); }); };
@@ -769,6 +929,10 @@
             '<td class="n">' + (dim === 'pos' && x.p.mv == null ? '—' : f.mn(mvOf(x), 1)) + '</td>' +
             '<td class="n ' + f.cls(x.v) + '">' + fmt(x.v) + '</td><td>' + K.bar(x.v, max) + '</td><td class="n mut">' + Math.round(Math.abs(x.v) / absTot * 100) + '%</td><td class="n mut3">' + Math.round(cum / absTot * 100) + '%</td></tr>';
         }).join('') + '</tbody><tfoot><tr><td></td><td>Итого</td><td colspan="' + (dim === 'pos' ? 3 : 1) + '"></td><td class="n">' + f.mn(mvTot, 1) + '</td><td class="n ' + f.cls(tot) + '">' + fmt(tot) + '</td><td colspan="3"></td></tr></tfoot></table>';
+      // CSV разбора (#184): то, что на экране, — разрез и фильтр. Колонки без заголовка (цветная полоска слева и
+      // столбик вклада) не выгружаются, «Доля» и «Накопл.» — выгружаются. Колонки у разрезов разные — ключ ширины
+      // свой у каждого разреза
+      K.tableTools(body, { viewKey: 'drill-' + dim, title: spec.title + ' · ' + D[1] + (spec.unit ? ', ' + spec.unit : '') });
       body.querySelectorAll('tr.row').forEach(tr => tr.onclick = () => {
         const x = g[tr.dataset.k];
         if (dim === 'pos') K.card(x.k); else K.drill(Object.assign({}, spec, { title: spec.title + ' · ' + x.label, rows: x.n, dim: 'pos' }));
@@ -1012,7 +1176,13 @@
     }
     return false;
   };
-  const accMark = e => { const c = K.accClass(e.textContent); e.classList.toggle('k-accn', c === 'k-accn' && !K.accKeep(e)); e.classList.toggle('k-accp', c === 'k-accp' && e.tagName === 'TD'); };
+  // метка data-kneg (#222) — «число отформатировано как отрицательное, в скобках»: ставится и там, где красный уступил
+  // смысловому цвету (K.accKeep); по ней CSV меняет скобки на минус (K.accMarkedToMinus), раскраска на неё не влияет
+  const accMark = e => {
+    const c = K.accClass(e.textContent);
+    e.classList.toggle('k-accn', c === 'k-accn' && !K.accKeep(e)); e.classList.toggle('k-accp', c === 'k-accp' && e.tagName === 'TD');
+    const d = e.dataset; if (d && (c === 'k-accn') !== ('kneg' in d)) { if (c === 'k-accn') d.kneg = ''; else delete d.kneg; }
+  };
   K.accMarkAll = root => { const r = root || document; if (r.matches && r.matches(K.ACC_SEL)) accMark(r); if (r.querySelectorAll) r.querySelectorAll(K.ACC_SEL).forEach(accMark); };
   if (typeof MutationObserver === 'function' && typeof requestAnimationFrame === 'function') {
     // разметку меняют страницы и компоненты: новые узлы и узлы с изменённым текстом размечаются в следующем кадре
@@ -1392,7 +1562,24 @@
     const l = K.htmlText((th.innerHTML || '').replace(/<span class="k-thu">[\s\S]*?<\/span>/g, '')), u = m ? K.htmlText(m[1]) : '';
     return u && !l.includes(',') ? l + ', ' + u : l;
   };
-  K.accMarkedToMinus = html => String(html == null ? '' : html).replace(/(<[a-z]+\b[^>]*\bclass="[^"]*\bk-accn\b[^"]*"[^>]*>)\s*\((\d[\d,]*(?:\.\d+)?[^()<]*)\)/gi, '$1-$2');
+  // «(1.5)» → «-1.5» в элементе с меткой data-kneg (K.accMark, #222) или k-accn: скобка может стоять и во вложенном
+  // теге («<span data-kneg><b>(1.5)</b> mm</span>»); скобки без метки (текст, Bid/Ask «98.399 (0.28)») — как есть
+  const KNEG_OPEN = /<[a-z][a-z0-9]*\b(?:[^>"']|"[^"]*"|'[^']*')*?(?:\sdata-kneg\b|\sclass="[^"]*\bk-accn\b[^"]*")(?:[^>"']|"[^"]*"|'[^']*')*>/gi;
+  K.accMarkedToMinus = html => {
+    const s = String(html == null ? '' : html), tag = /^<[^>]*>/;
+    let out = '', i = 0, m;
+    KNEG_OPEN.lastIndex = 0;
+    while ((m = KNEG_OPEN.exec(s))) {
+      let j = m.index + m[0].length, t;
+      while ((t = /^\s+/.exec(s.slice(j)) || /^<[a-z][^>]*>/i.exec(s.slice(j)))) j += t[0].length;  // пробелы и вложенные открывающие теги
+      if (s[j] !== '(') continue;
+      let k = j + 1;
+      while (k < s.length && s[k] !== ')' && s[k] !== '(') k += s[k] === '<' && (t = tag.exec(s.slice(k))) ? t[0].length : 1;
+      if (s[k] !== ')' || !/^\d[\d,]*(?:\.\d+)?/.test(K.htmlText(s.slice(j + 1, k)))) continue;
+      out += s.slice(i, j) + '-' + s.slice(j + 1, k); i = k + 1; KNEG_OPEN.lastIndex = i;
+    }
+    return out + s.slice(i);
+  };
   K.accToMinus = t => String(t).replace(/^\((\d[\d,]*(?:\.\d+)?[^()]*)\)$/, '-$1').replace(/\((\d[\d,]*(?:\.\d+)?%?)\)/g, '-$1');
   K.tableCsv = (table, opts) => {
     opts = opts || {};
@@ -1418,8 +1605,8 @@
       // страницы): в режиме «(1)» число в скобках в числовой ячейке — отрицательное, как его пишет режим «−1»:
       // «(1.50 bn)» → «-1.50 bn», «94.58 (0.12%)» → «94.58 -0.12%», «(1,500.00)mm RUB» → «-1,500.00mm RUB»,
       // «(2,010)+5бп» → «-2,010+5бп», «124(1)бп» → «124-1бп» (сдвиг кривой под цифрой); CSV одинаков в обоих режимах
-      // В текстовой ячейке скобки — минус только там, где их поставил формат отрицательных: в элементе с меткой k-accn
-      // (её ставит раскраска K.accMarkAll); «98.399 (0.28)», «(2029)», «(3 поз.)» без метки остаются как есть
+      // В текстовой ячейке скобки — минус только там, где их поставил формат отрицательных: в элементе с меткой
+      // data-kneg (её ставит K.accMarkAll независимо от цвета, #222); «98.399 (0.28)», «(2029)», «(3 поз.)» — как есть
       const t = K.negFmt !== 'acc' ? tx(c) : num ? K.accToMinus(tx(c)) : K.htmlText(K.accMarkedToMinus(c.innerHTML));
       return d.date ? K.csvDateCell(d.date, t, num) : K.csvCell(t, num, d.v);
     };
@@ -1692,6 +1879,7 @@
   };
 
   // стандартные колонки позиций (концепты берут нужные по ключу)
+  K.offerKindText = k => ({ put: 'пут', call: 'колл' })[k] || k || '';
   K.posCols = {
     // валюта и эмитент — обычные столбцы (R37): сортировка и фильтр по значениям, как у остальных
     issuer: { key: 'issuerName', label: 'Эмитент', filter: true, title: 'эмитент (у деривативов — контрагент)', fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
@@ -1703,7 +1891,9 @@
     coupon: { key: 'couponFmt', label: 'Купон', fmt: v => '<span class="mono">' + esc(v || '—') + '</span>' },
     event: { key: 'event', label: 'Событие', val: r => r.event.date, fmt: (v, r) => '<span class="mut3">' + ({ put: 'пут', call: 'колл', mat: 'погаш' }[r.event.kind]) + '</span> ' + f.date(r.event.date) },
     maturity: { key: 'maturity', label: 'Погашение', fmt: v => f.date(v) },
-    offer: { key: 'offer', label: 'Оферта', fmt: (v, r) => v ? f.date(v) + ' <span class="mut3">' + (r.offerKind === 'put' ? 'P' : 'C') + '</span>' : '<span class="mut3">—</span>' },
+    // дата оферты — колонкой-датой (в CSV — дата Excel), вид оферты — своей колонкой (#183)
+    offer: { key: 'offer', label: 'Оферта', date: true, fmt: v => v ? f.date(v) : '<span class="mut3">—</span>' },
+    offerKind: { key: 'offerKind', label: 'Вид оферты', filter: r => K.offerKindText(r.offerKind) || '—', val: r => r.offer ? r.offerKind : null, fmt: v => v ? esc(K.offerKindText(v)) : '<span class="mut3">—</span>' },
     tenor: { key: 'tenor', label: 'Срок', num: true, fmt: v => f.yrs(v), title: 'до оферты, если есть, иначе до погашения' },
     notional: { key: 'notional', label: 'Номинал', num: true, fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', title: 'в валюте бумаги' },
     mv: { key: 'mv', label: 'MV, mm ₽', num: true, fmt: v => f.mn(v, 0), sum: true, unit: 'mm ₽', sumFmt: v => f.mn(v, 0) },
@@ -1767,7 +1957,7 @@
     if (!rows.length) return '<div class="k-empty">нет риска ставок и спреда</div>';
     const ks = M.buckets.map((_, k) => k).filter(k => rows.some(r => Math.abs(r.vals[k]) >= 1));
     const cell = v => '<td class="n ' + (Math.abs(v) >= 1 ? f.cls(v) : '') + '">' + (Math.abs(v) >= 1 ? f.dv(v) : '<span class="mut3">·</span>') + '</td>';
-    return '<div class="k-tbl-wrap"><table class="k-tbl k-compact k-crisk"><thead><tr><th>Кривая</th><th class="n">Итого</th>' + ks.map(k => '<th class="n">' + M.buckets[k] + '</th>').join('') + '</tr></thead><tbody>' +
+    return '<div class="k-tbl-wrap k-fit"><table class="k-tbl k-compact k-crisk"><thead><tr><th>Кривая</th><th class="n">Итого</th>' + ks.map(k => '<th class="n">' + M.buckets[k] + '</th>').join('') + '</tr></thead><tbody>' +
       rows.map(r => '<tr' + (r.tot ? ' class="grp"' : '') + '><td>' + (r.tot ? '' : '<b style="color:' + K.curveColors[r.id] + '">■</b> ') + K.hint(esc(r.label), r.tot ? K.tips.dv01 : K.curveTip(r.id)) + '</td><td class="n"><b>' + f.dv(r.vals.reduce((a, b) => a + b, 0)) + '</b></td>' + ks.map(k => cell(r.vals[k])).join('') + '</tr>').join('') +
       '</tbody></table></div>';
   };
@@ -1795,16 +1985,16 @@
     const amt = (c, v) => v == null ? '—' : f.mn(v, 2) + ' <small>mm ' + esc(c || '') + '</small>';
     const rate = v => v == null ? '—' : f.n(v, 4);
     const fwd = l => l.fwdRate != null ? l.fwdRate : l.forwardRate;
-    const cols = [['Нога', l => esc(LEG[l.leg] || l.leg || '—')], ['Валютирование', l => l.valueDate ? f.date(l.valueDate) : '—'],
+    const cols = [['Нога', l => esc(LEG[l.leg] || l.leg || '—')], ['Валютирование', l => l.valueDate ? f.date(l.valueDate) : '—', l => l.valueDate],
       ['Покупка', l => amt(l.buyCcy, l.buyAmount)], ['Продажа', l => amt(l.sellCcy, l.sellAmount)],
       ['Курс сделки', l => rate(l.contractRate) + (l.rateQuote ? ' <small>' + esc(l.rateQuote) + '</small>' : '')]]
       .concat(L.some(l => fwd(l) != null) ? [['Форвард', l => rate(fwd(l))]] : [])
       .concat(any('points') ? [['Пойнты', l => l.points == null ? '—' : f.s(l.points, 4)]] : [])
       .concat(any('settlement') ? [['Расчёт', l => esc(SET[l.settlement] || l.settlement || '—') + (l.settlementCcy ? ' <small>в ' + esc(l.settlementCcy) + '</small>' : '')]] : [])
       .concat(any('fixingDate') ? [['Фиксинг', l => l.fixingDate ? f.date(l.fixingDate) + (l.fixingSource ? ' <small>' + esc(l.fixingSource) + '</small>' : '') + (l.fixingRate != null ? ' <small>' + rate(l.fixingRate) + '</small>' : '') : '—']] : [])
-      .concat(any('paymentDate') ? [['Выплата', l => l.paymentDate ? f.date(l.paymentDate) : '—']] : []);
-    return '<div class="k-tbl-wrap"><table class="k-tbl k-compact"><thead><tr>' + cols.map(c => '<th' + (c[0] === 'Нога' || c[0] === 'Расчёт' ? '' : ' class="n"') + '>' + c[0] + '</th>').join('') + '</tr></thead><tbody>' +
-      L.map(l => '<tr>' + cols.map(c => '<td' + (c[0] === 'Нога' || c[0] === 'Расчёт' ? '' : ' class="n"') + '>' + c[1](l) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>';
+      .concat(any('paymentDate') ? [['Выплата', l => l.paymentDate ? f.date(l.paymentDate) : '—', l => l.paymentDate]] : []);
+    return '<div class="k-tbl-wrap"><table class="k-tbl k-compact k-legs"><thead><tr>' + cols.map(c => '<th' + (c[0] === 'Нога' || c[0] === 'Расчёт' ? '' : ' class="n"') + '>' + c[0] + '</th>').join('') + '</tr></thead><tbody>' +
+      L.map(l => '<tr>' + cols.map(c => '<td' + (c[0] === 'Нога' || c[0] === 'Расчёт' ? '' : ' class="n"') + (c[2] && c[2](l) ? ' data-date="' + esc(c[2](l)) + '"' : '') + '>' + c[1](l) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>';
   };
 
   // ---------- карточка позиции ----------
@@ -1909,6 +2099,14 @@
     return { series, tooltip, note };
   };
 
+  // таблицы карточки позиции (#184): ноги сделки, риск по кривым и срокам, потоки — «⤓ CSV» и ширина колонок, как у
+  // ручных таблиц мониторов (K.tableTools). Ключ раскладки — по виду таблицы (ширина общая для всех позиций, в полной
+  // карточке и в карточке C03), имя файла — с ISIN позиции (иначе с её номером), название в CSV — с именем позиции
+  K.CARD_TABLES = [['table.k-legs', 'card-legs', 'Ноги сделки'], ['table.k-crisk', 'card-curve-risk', 'Риск по кривым и срокам, тыс ₽/бп'], ['table.k-cflows', 'card-flows', 'Потоки']];
+  K.cardTableTools = (root, p) => K.CARD_TABLES.forEach(([sel, key, title]) => {
+    const t = root && root.querySelector && root.querySelector(sel);
+    if (t) K.tableTools(t, { viewKey: key, title: title + ': ' + K.htmlText(p.name), fileName: key + '_' + (p.isin || p.id) });
+  });
   K.card = function (id) {
     const p = M.pos[id]; if (!p) return;
     const o = drawer(true); o.title = p.name; o.charts = [];
@@ -1973,7 +2171,8 @@
         const tf = R.tooltip.formatter, at = Object.fromEntries(H.dates.map((d, i) => [d, i]));
         R.tooltip.formatter = ps => { const i = at[(ps[0] || {}).axisValue], v = i == null ? null : H.dmPx[i]; return tf(ps) + (v != null ? '<br>DM по цене (оценка): <b>' + f.n(v, 1) + '</b>' : ''); };
       }
-      hnote.innerHTML = R ? R.note + (isFloat && mode === 'dv01' ? '<div style="margin-top:3px">' + esc(K.tips.floaterDv01) + '</div>' : '') : '';
+      hnote.innerHTML = R ? R.note + (isFloat && mode === 'dv01' ? '<div style="margin-top:3px">' + esc(K.tips.floaterDv01) + '</div>' : '')
+        + (isFloat && mode === 'spread' && H.dmNote ? '<div style="margin-top:3px">' + esc(H.dmNote) + '</div>' : '') : '';  // #33: почему DM нет
       hunit.style.display = mode === 'dv01' && perBondOk ? '' : 'none';
       const S = R ? R.series : mode === 'price' ? [{ name: 'Цена', data: H.price }]
         : mode === 'yield' ? [{ name: 'Доходность', data: H.ytm }, { name: 'ОФЗ на сроке', data: H.bench, lineStyle: { type: 'dashed', width: 1 } }]
@@ -1995,6 +2194,7 @@
       series: cids.map(id => ({ name: M.curve[id].short, type: 'bar', stack: 'a', data: p.risk[id], itemStyle: { color: K.curveColors[id] } })).concat(p.cs01 ? [{ name: 'CS01', type: 'bar', data: p.cs01b, itemStyle: { color: K.curveColors.CS01 } }] : []),
     }));
     o.charts.push(rc);
+    K.cardTableTools(o.bd, p);
     if (isBond) {
       K.flows(o.bd.querySelector('.cfs'), p);
     }
@@ -2112,7 +2312,8 @@
   // K.flows(el, p): сразу — потоки набора данных, затем, когда сервер ответит, — весь график
   K.flows = function (el, p) {
     el.innerHTML = K.flowsTable(p, M.cashflows.filter(c => c.pos === p.id), !!M.posFlows);
-    if (M.posFlows) M.posFlows(p.id).then(cf => { if (el.isConnected && el.dataset.pos === p.id) el.innerHTML = K.flowsTable(p, cf || M.cashflows.filter(c => c.pos === p.id)); });
+    K.cardTableTools(el, p);
+    if (M.posFlows) M.posFlows(p.id).then(cf => { if (el.isConnected && el.dataset.pos === p.id) { el.innerHTML = K.flowsTable(p, cf || M.cashflows.filter(c => c.pos === p.id)); K.cardTableTools(el, p); } });
     el.dataset.pos = p.id;
   };
   K.flowsTable = function (p, cf, loading) {
@@ -2122,8 +2323,8 @@
     const sum = cf.reduce((s, c) => s + (c.kind === 'put' || c.kind === 'call' || c.amountRub == null ? 0 : c.amountRub), 0);
     return '<div class="mut3" style="font-size:11px;margin-bottom:4px">' + (loading ? 'загрузка всех потоков… · ' : '') + cf.length + ' потоков до ' + f.date(cf[cf.length - 1].date) +
       (offer ? ' · после оферты ' + f.date(offer) + ' — бледнее' : '') + ' · оферта — номинал к предъявлению, в сумму не входит</div>' +
-      '<div style="max-height:360px;overflow:auto"><table class="k-tbl"><thead><tr><th>Дата</th><th>Тип</th><th class="n">Сумма, ' + p.ccy + '</th><th class="n">≈ mm ₽</th></tr></thead><tbody>' +
-      cf.map(c => '<tr' + (offer && c.date > offer ? ' style="opacity:.55"' : '') + '><td>' + f.date(c.date) + '</td><td>' + (c.amort ? 'амортизация' : KIND[c.kind] || c.kind) + (c.est ? ' <span class="mut3">прогноз</span>' : '') + '</td><td class="n">' + f.n(c.amount, 0) + '</td><td class="n">' + f.mn(c.amountRub, 1) + '</td></tr>').join('') +
+      '<div style="max-height:360px;overflow:auto"><table class="k-tbl k-cflows"><thead><tr><th>Дата</th><th>Тип</th><th class="n">Сумма, ' + p.ccy + '</th><th class="n">≈ mm ₽</th></tr></thead><tbody>' +
+      cf.map(c => '<tr' + (offer && c.date > offer ? ' style="opacity:.55"' : '') + '><td data-date="' + esc(c.date) + '">' + f.date(c.date) + '</td><td>' + (c.amort ? 'амортизация' : KIND[c.kind] || c.kind) + (c.est ? ' <span class="mut3">прогноз</span>' : '') + '</td><td class="n">' + f.n(c.amount, 0) + '</td><td class="n">' + f.mn(c.amountRub, 1) + '</td></tr>').join('') +
       '</tbody><tfoot><tr><td></td><td>Итого без оферт</td><td></td><td class="n">' + f.mn(sum, 1) + '</td></tr></tfoot></table></div>';
   };
 
@@ -2306,7 +2507,7 @@
   // Мини-таблица: валюта на строку — сумма в валюте (mm) и эквивалент в валюте отчёта, по |эквиваленту| по убыванию,
   // один формат (1 знак, разделитель тысяч, знак цветом); строки, которые округляются до 0.0 mm, — под «+N прочих».
   // Суммы — по ногам (INSTR.fxIn: ключи fx_delta прогона; вторая валюта кросса — в своей строке).
-  K.tips.fxMini = 'Открытая валютная позиция по валютам (FX-дельта, по ногам: у кросса — обе валюты), mm в валюте и ≈ в валюте отчёта по курсу прогона; щелчок по цифре — из каких позиций';
+  K.tips.fxMini = 'Открытая валютная позиция по валютам, mm в валюте и ≈ в валюте отчёта по курсу прогона. Слагаемые: облигации — грязная MV в валюте минус валютный пассив фондирования (чистая MV + НКД при покупке; предварительно — по текущей чистой MV), без пассива (фондирование не настроено, проблема) — вся грязная MV; деривативы и FX — FX-дельта по ногам (у кросса — обе валюты); сделки переноса ОВП — их сумма. Щелчок по цифре — из каких позиций';
   K.fxRows = L => K.fxCcys(L).map(c => { const v = M.sum(L, p => INSTR.fxIn(p, c)); return { c, v, eq: v * ((M.toRepr && M.toRepr[c]) || 1) }; })
     .sort((a, b) => (Math.abs(b.eq) - Math.abs(a.eq)) || a.c.localeCompare(b.c));
   K.FX_MINOR = 0.05e6;  // меньше — 0.0 mm: в «прочих»
