@@ -89,8 +89,9 @@
   const noCurve = c => !c || c.pts.every(v => v == null);
   // нет сдвигов кривой в прогоне — тоже «нет данных», не «0» (#322)
   const chgRange = c => { if (noCurve(c) || K.noMoves(c.chg)) return 'нет данных'; const a = c.chg.filter(x => x).map(v => Math.round(v * 10) / 10).filter(x => x); if (!a.length) return '0'; const mn = Math.min(...a), mx = Math.max(...a); const s = v => (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v); return mn === mx ? s(mn) : s(mn) + '…' + s(mx); };
-  const avgChg = c => noCurve(c) ? 0 : c.chg.reduce((a, v) => a + (v || 0), 0) / Math.max(1, c.chg.length);
-  const maxBucket = c => { let k = 0; c.chg.forEach((v, i) => { if (Math.abs(v || 0) > Math.abs(c.chg[k] || 0)) k = i; }); return M.buckets[k]; };
+  // сдвигов по кривой в прогоне нет (#332, B1) — средний сдвиг и бакет с наибольшим сдвигом null, а не 0 и первый бакет
+  const avgChg = c => noCurve(c) || K.noMoves(c.chg) ? null : c.chg.reduce((a, v) => a + (v || 0), 0) / Math.max(1, c.chg.length);
+  const maxBucket = c => { if (noCurve(c) || K.noMoves(c.chg)) return null; let k = 0; c.chg.forEach((v, i) => { if (Math.abs(v || 0) > Math.abs(c.chg[k] || 0)) k = i; }); return M.buckets[k]; };
   const plural = (n, a, b, c) => { const m = n % 10, h = n % 100; return n + ' ' + (m === 1 && h !== 11 ? a : m >= 2 && m <= 4 && (h < 10 || h >= 20) ? b : c); };
   const daysTo = d => Math.round((M.util.parse(d) - M.util.parse(M.asOf)) / 864e5);
   const word = v => v >= 0 ? 'заработали' : 'потеряли';
@@ -264,7 +265,7 @@
     // фраза о ставках — по данным: направление по среднему сдвигу RUONIA OIS, бакет с наибольшим сдвигом, знак базиса
     function mktSentence() {
       const r = M.curve['RUB RUONIA'], b = K.basisCurve(), a = avgChg(r), ab = avgChg(b);
-      const head = noCurve(r) ? 'Ставки: кривой RUONIA OIS в прогоне нет' : (a > 0.5 ? 'Ставки выросли' : a < -0.5 ? 'Ставки снизились' : 'Ставки почти не изменились') + ': RUONIA OIS ' + chgRange(r) + ' б.п.' + (Math.abs(a) > 0.5 ? ' (сильнее всего ' + maxBucket(r) + ')' : '');
+      const head = noCurve(r) ? 'Ставки: кривой RUONIA OIS в прогоне нет' : a == null ? 'Ставки: RUONIA OIS — сдвигов нет в прогоне' : (a > 0.5 ? 'Ставки выросли' : a < -0.5 ? 'Ставки снизились' : 'Ставки почти не изменились') + ': RUONIA OIS ' + chgRange(r) + ' б.п.' + (Math.abs(a) > 0.5 ? ' (сильнее всего ' + maxBucket(r) + ')' : '');
       return head + ', КС-свопы ' + chgRange(M.curve['RUB KEY']) + ', базис ОФЗ ' + chgRange(b) + (ab > 0.5 ? ' — ОФЗ слабее свопов.' : ab < -0.5 ? ' — ОФЗ сильнее свопов.' : '.');
     }
     // курс PnL FX (R26): рыночный — курс шапки (MOEX 19:00, иначе 14:00 / CETS / ЦБ — источник рядом), курс ЦБ,
