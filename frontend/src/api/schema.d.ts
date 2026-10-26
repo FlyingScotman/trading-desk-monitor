@@ -1097,6 +1097,23 @@ export interface components {
             in_position: boolean;
             /** Note */
             note: string;
+            /**
+             * Rule Id
+             * @description The rule that gave the rate (of the last day); null: the line's contract rate
+             */
+            rule_id?: string | null;
+            /**
+             * Rule Source
+             * @description adapter, settings, settings_override, default (the market default rate of the settings), contract
+             * @default adapter
+             */
+            rule_source?: string;
+            /**
+             * Default Rate
+             * @description Funded at the market default rate («рыночная ставка по умолчанию»), not at a transfer rate
+             * @default false
+             */
+            default_rate?: boolean;
         };
         /** FundingPeriod */
         FundingPeriod: {
@@ -2214,8 +2231,9 @@ export interface components {
         };
         /**
          * RunFunding
-         * @description The run's funding (wave B1, ``publish.funding_run``). ``state`` not_configured: the adapter gave no funding
-         *     rules, nothing is funded and nothing is shown as 0; not_computed: a run before B1.
+         * @description The run's funding (wave B1, ``publish.funding_run``). ``state`` not_configured: no funding rule (adapter
+         *     or settings) and the market default rate off, nothing is funded and nothing is shown as 0; not_computed: a run
+         *     before B1.
          */
         RunFunding: {
             /** Run Id */
@@ -2258,6 +2276,13 @@ export interface components {
             } | null;
             /** Lines */
             lines: components["schemas"]["FundingLineOut"][];
+            /**
+             * Default Rate
+             * @description The market default rate of the settings in force (by currency), and how many lines and positions it funded
+             */
+            default_rate?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** RunHeader */
         RunHeader: {

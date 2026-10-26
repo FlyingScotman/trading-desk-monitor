@@ -3620,6 +3620,30 @@
           "note": {
             "type": "string",
             "title": "Note"
+          },
+          "rule_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Id",
+            "description": "The rule that gave the rate (of the last day); null: the line's contract rate"
+          },
+          "rule_source": {
+            "type": "string",
+            "title": "Rule Source",
+            "description": "adapter, settings, settings_override, default (the market default rate of the settings), contract",
+            "default": "adapter"
+          },
+          "default_rate": {
+            "type": "boolean",
+            "title": "Default Rate",
+            "description": "Funded at the market default rate («рыночная ставка по умолчанию»), not at a transfer rate",
+            "default": false
           }
         },
         "type": "object",
@@ -6399,6 +6423,19 @@
             },
             "type": "array",
             "title": "Lines"
+          },
+          "default_rate": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Rate",
+            "description": "The market default rate of the settings in force (by currency), and how many lines and positions it funded"
           }
         },
         "type": "object",
@@ -6418,7 +6455,7 @@
           "lines"
         ],
         "title": "RunFunding",
-        "description": "The run's funding (wave B1, ``publish.funding_run``). ``state`` not_configured: the adapter gave no funding\nrules, nothing is funded and nothing is shown as 0; not_computed: a run before B1."
+        "description": "The run's funding (wave B1, ``publish.funding_run``). ``state`` not_configured: no funding rule (adapter\nor settings) and the market default rate off, nothing is funded and nothing is shown as 0; not_computed: a run\nbefore B1."
       },
       "RunHeader": {
         "properties": {

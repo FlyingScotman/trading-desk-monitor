@@ -79,6 +79,29 @@ t('посчитано: кэрри за вычетом фондирования, 
     assert.ok(box.innerHTML.includes(s), s + ': ' + box.innerHTML);
 });
 
+t('рыночная ставка по умолчанию (#237): помечена в карточке и в панели кокпита, источник правила виден', () => {
+  let id, other;
+  const { M, K } = load({ real: true, mutate: D => {
+    const bs = D.positions.filter(p => p.instrType === 'BOND' && p.pnl && p.pnl.funding);
+    const b = bs[0]; id = b.id; other = bs[1] && bs[1].id;
+    b.extra = Object.assign({}, b.extra, { funding: { state: 'funded', amount_rub: b.pnl.funding, in_pnl: true, default_rate: true, rule_source: 'default',
+      lines: [{ kind: 'POS', rate_expr: 'RUONIA (рыночная ставка по умолчанию)', days: 1, rule_source: 'default', rule_id: 'default:RUB', default_rate: true }] } });
+    if (other) bs[1].extra = Object.assign({}, bs[1].extra, { funding: { state: 'funded', amount_rub: bs[1].pnl.funding, in_pnl: true, rule_source: 'settings_override',
+      lines: [{ kind: 'POS', rate_expr: '12.00% fixed', days: 1, rule_source: 'settings_override', rule_id: 's_t1' }] } });
+    D.fundingStatus = { state: 'computed', text: 'фондирование посчитано', period: { start: '2026-10-14', end: '2026-10-15', days: 1 },
+      total: -1e5, inPositions: -1e5, bookLevel: 0, byEntity: {}, byBook: {}, problems: [], provisional: [],
+      defaultRate: { label: 'рыночная ставка по умолчанию', enabled: true, lines: 3, positions: 2,
+        by_ccy: { RUB: { kind: 'ruonia', expr: 'RUONIA (рыночная ставка по умолчанию)' }, CNY: { kind: 'index_spread', expr: 'RUSFARCNY (рыночная ставка по умолчанию)' }, USD: { kind: 'none', expr: null } } } };
+  } });
+  const line = K.fundingLine(M.pos[id]);
+  assert.ok(line.includes('рыночная ставка по умолчанию') && line.includes('⚑'), line);
+  if (other) assert.ok(K.fundingLine(M.pos[other]).includes('правило настроек (главнее адаптера) s_t1'), K.fundingLine(M.pos[other]));
+  const box = el(); K.fundingPanel(box);
+  for (const s of ['Рыночная ставка по умолчанию', 'RUB — RUONIA', 'CNY — RUSFARCNY', 'строк по ней 3', 'settings.html#funding'])
+    assert.ok(box.innerHTML.includes(s), s + ': ' + box.innerHTML);
+  assert.ok(!box.innerHTML.includes('USD —'), box.innerHTML);
+});
+
 t('демо: фондирование в кэрри позиций, итог = сумме книг', () => {
   const { M, K } = load();
   assert.strictEqual(M.funding.state, 'demo');

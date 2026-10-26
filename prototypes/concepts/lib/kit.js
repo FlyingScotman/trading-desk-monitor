@@ -1610,6 +1610,10 @@
   // Не настроено / не посчитано — так и пишется, а не 0.
   K.fundingStateText = { computed: 'посчитано', not_configured: 'не настроено', invalid_config: 'ошибка настроек', failed: 'ошибка расчёта', not_computed: 'не считалось', demo: 'демо' };
   const fromRub = v => v == null ? null : v / (M.fx[K.repr] || 1);
+  // откуда ставка строки (#237): правило адаптера → правило настроек → рыночная ставка по умолчанию
+  K.fundingRuleSource = { adapter: 'правило адаптера', settings: 'правило настроек', settings_override: 'правило настроек (главнее адаптера)', default: 'рыночная ставка по умолчанию', contract: 'ставка договора' };
+  const ruleText = l => l && l.rule_source && l.rule_source !== 'default' ? ' · <small class="mut">' + esc(K.fundingRuleSource[l.rule_source] || l.rule_source) + (l.rule_id ? ' ' + esc(l.rule_id) : '') + '</small>'
+    : l && l.rule_source === 'default' ? ' <small style="color:var(--warn)" title="не трансфертная ставка: правил фондирования для позиции нет (настройки → Фондирование)">⚑</small>' : '';
   K.fundingLine = function (p) {
     const F = M.funding || {}, x = p.fundingInfo;
     if (!x && !F.state) return '';
@@ -1617,7 +1621,7 @@
     let t;
     if (st === 'funded') {
       const l = (x.lines || [])[0] || {};
-      t = '<b class="' + f.cls(x.amount_rub) + '">' + f.ks(fromRub(x.amount_rub)) + '</b> тыс ₽ · ' + esc(l.rate_expr || '') + (l.days ? ' · ' + l.days + ' дн.' : '') + ' · ' + (x.in_pnl ? 'в кэрри позиции' : 'строкой книги (у позиции нет PnL)');
+      t = '<b class="' + f.cls(x.amount_rub) + '">' + f.ks(fromRub(x.amount_rub)) + '</b> тыс ₽ · ' + esc(l.rate_expr || '') + ruleText(l) + (l.days ? ' · ' + l.days + ' дн.' : '') + ' · ' + (x.in_pnl ? 'в кэрри позиции' : 'строкой книги (у позиции нет PnL)');
     } else if (st === 'deferred' || st === 'not_funded') t = '0 · ' + esc(x.reason || '');
     else if (st === 'problem') t = '<span style="color:var(--warn)">не посчитано: ' + esc(x.reason || '') + '</span>';
     else if (st === 'demo') t = 'демо: в кэрри по ставке ' + (p.fundRate != null ? f.pct(p.fundRate) : '—');
@@ -1629,6 +1633,8 @@
     const head = '<div class="k-note" style="padding:8px 10px">' + (F.state === 'computed' || F.state === 'demo'
       ? (F.period ? 'период ' + f.dshort(F.period.start) + ' → ' + f.dshort(F.period.end) + ' (' + F.period.days + ' дн.) · ' : '') + 'итог <b class="' + f.cls(F.total) + '">' + f.mns(F.total, 2) + '</b> mm ₽, в кэрри позиций ' + f.mns(F.inPositions, 2) + ', строками книг ' + f.mns(F.bookLevel, 2) + (F.provisional && F.provisional.length ? ' · по умолчанию (не решено): ' + esc(F.provisional.join(', ')) : '')
       : '<span style="color:var(--warn)">Фондирование ' + esc(K.fundingStateText[F.state] || F.state) + (F.text ? ': ' + esc(F.text) : '') + '</span> — в PnL его нет, а не 0') + '</div>';
+    const DR = F.defaultRate, drc = DR ? Object.entries(DR.by_ccy || {}).filter(([, v]) => v.expr) : [];
+    const dflt = DR ? '<div class="k-note" style="padding:0 10px 8px">Рыночная ставка по умолчанию (не трансфертная; где нет правил адаптера и настроек): ' + (drc.length ? drc.map(([c, v]) => esc(c) + ' — ' + esc(String(v.expr).replace(' (' + (DR.label || '') + ')', ''))).join(', ') : 'выключена') + (DR.lines ? ' · строк по ней ' + DR.lines + (DR.positions ? ', позиций ' + DR.positions : '') : '') + ' · <a href="../settings.html#funding">настройки</a></div>' : '';
     const books = Object.entries(F.byBook || {}).sort((a, b) => (a[1].total || 0) - (b[1].total || 0));
     const wo = w => !w ? '—' : w.periodicity == null ? '<span style="color:var(--warn)">не задано</span>' : esc(w.periodicity) + (w.last ? ' · ' + f.dshort(w.last) + ': ' + f.mns(w.since_write_off, 2) : '');
     const tbl = books.length ? '<div class="k-tbl-wrap"><table class="k-tbl k-compact"><thead><tr><th>Книга</th><th>Юрлицо</th><th>База</th><th class="n">Итого, mm ₽</th><th class="n">в кэрри позиций</th><th class="n">строками книги</th><th>Списание · с него</th><th class="n">Проблем</th></tr></thead><tbody>' +
@@ -1637,7 +1643,7 @@
     const ent = ents.length > 1 ? '<div class="k-note" style="padding:6px 10px">по юрлицам: ' + ents.map(([e, v]) => esc(e) + ' ' + f.mns(v, 2)).join(' · ') + '</div>' : '';
     const pr = F.problems || [];
     const probs = pr.length ? '<div class="k-sec" style="margin:10px 10px 4px">Проблемы фондирования · ' + pr.length + '</div><ul class="k-note" style="margin:0 0 8px;padding-left:28px">' + pr.slice(0, 30).map(x => '<li>' + esc(x.kind + ' ' + x.ref + ': ' + x.reason) + '</li>').join('') + (pr.length > 30 ? '<li>ещё ' + (pr.length - 30) + '</li>' : '') + '</ul>' : '';
-    el.innerHTML = head + tbl + ent + probs;
+    el.innerHTML = head + dflt + tbl + ent + probs;
     K.tableTools(el, { viewKey: 'funding-books', title: 'Фондирование по книгам, mm ₽' });
   };
 

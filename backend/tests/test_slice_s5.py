@@ -16,6 +16,7 @@ from desk.marketdata.adapter import MarketView
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import Outcome, attach_pnl, prepare, value
 from desk.publish import desk_run, funding_run, tdm_run
+from desk.settings import update_settings_json
 from desk.valuation.fallback import CarriedSpread
 
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1"
@@ -64,7 +65,11 @@ def _publish(con, ctx, book, outs, prev, **kw):
     return inputs, positions, desk_run.publish(con, ctx, positions, prev=prev, inputs=inputs, **kw)
 
 
-def test_publish_into_the_store(con, ctx, book, run_inputs):
+def test_publish_into_the_store(con, ctx, book, run_inputs, tmp_path, monkeypatch):
+    # the market default rate off (#237): no rule anywhere, so funding is "not configured" (the default rate on:
+    # test_funding_run.test_default_rate_without_adapter_rules)
+    monkeypatch.setenv("DESK_HOME", str(tmp_path))
+    update_settings_json({"funding": {"default_rate": {"kind": "none"}, "default_rate_by_ccy": {}}}, tmp_path)
     outs, prev = run_inputs
     inputs, positions, (rid, status, warnings) = _publish(con, ctx, book, outs, prev)
     assert status == "complete"

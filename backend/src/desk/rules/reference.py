@@ -6,8 +6,9 @@ the adapter's settings and not from the engine's defaults.
 
 The two models differ in a few places; the conversion is explicit about each:
 
-- ``rate_kind`` ``contract`` (HTM: the purchase lot's own rate, ``HtmLot.contract_rate``) and ``none`` (not
-  funded) are not rates in ``FundingRules``: they are left out of it and only give the book type's base.
+- ``rate_kind`` ``contract`` (HTM: the purchase lot's own rate, ``HtmLot.contract_rate``) is a ``contract`` rule (so
+  it holds its place in the order adapter -> settings -> default, #237); ``none`` (not funded) is not a rate: it is
+  left out and only gives the book type's base.
 - ``basis`` is per rule in the contract and per book type in the engine (``FundingPolicy.base_by_book_type``):
   ``bases_from_reference`` takes it from the rules naming a book type, and a book type whose rules disagree is
   a ``ValueError`` (the engine cannot fund one book type on two bases). A rule without a book type (an entity's
@@ -23,7 +24,7 @@ The two models differ in a few places; the conversion is explicit about each:
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
@@ -41,10 +42,12 @@ from .funding import (
     FundingRules,
     FxDate,
     HtmBase,
+    LineKind,
     NewPosition,
     OutOfCurrency,
     Periodicity,
     RepoRate,
+    RuleTier,
     WriteOffDate,
 )
 
@@ -65,21 +68,29 @@ def _active(row: Mapping[str, Any]) -> bool:
     return row.get("active", True) is not False
 
 
-def _rule(row: Mapping[str, Any], valid_to: date | None) -> FundingRule | None:
+def _rule(row: Mapping[str, Any], valid_to: date | None, tier: int = RuleTier.ADAPTER) -> FundingRule | None:
     kind = row["rate_kind"]
-    if kind not in ("index_spread", "fixed"):
+    if kind not in ("index_spread", "fixed", "contract"):
         return None
     make = partial(FundingRule, ccy=row.get("ccy"), book_type=row.get("book_type"), entity=row.get("entity"),
                    book_id=row.get("book_id"), instrument_id=row.get("instrument_id"),
+                   security_class=row.get("security_class"),
+                   kind=LineKind(row["kind"]) if row.get("kind") else None,
                    valid_from=_date(row.get("valid_from")) or date.min, valid_to=valid_to,
-                   day_basis=DayBasis(row["day_count"]) if row.get("day_count") else None, note=row["rule_id"])
+                   day_basis=DayBasis(row["day_count"]) if row.get("day_count") else None, note=row["rule_id"],
+                   tier=tier)
+    if kind == "contract":
+        return make(contract=True)
     if kind == "fixed":
         return make(fixed_rate=_num(row["fixed_rate_pct"]) / 100)
     return make(index=row["index_code"], spread_bp=_num(row.get("spread_bp") or 0))
 
 
-def funding_rules_from_reference(rows: Iterable[Mapping[str, Any]]) -> FundingRules:
-    """``reference()["funding_rules"]`` rows (every revision, or the ones in force on a day) as ``FundingRules``."""
+def funding_rules_from_reference(rows: Iterable[Mapping[str, Any]],
+                                 tier: int | Callable[[Mapping[str, Any]], int] = RuleTier.ADAPTER) -> FundingRules:
+    """``reference()["funding_rules"]`` rows (every revision, or the ones in force on a day) as ``FundingRules``.
+    ``tier`` (``RuleTier``, or one per row): the adapter's rules by default; the settings' rules of the same shape
+    (``desk.funding_settings``) take theirs. A row may also name ``security_class`` and ``kind`` (settings only)."""
     by_id: dict[str, list[Mapping[str, Any]]] = {}
     for r in rows:
         by_id.setdefault(r["rule_id"], []).append(r)
@@ -90,7 +101,7 @@ def funding_rules_from_reference(rows: Iterable[Mapping[str, Any]]) -> FundingRu
             if not _active(r):
                 continue
             nxt = _date(revs[i + 1].get("valid_from")) if i + 1 < len(revs) else None
-            rule = _rule(r, nxt)
+            rule = _rule(r, nxt, tier(r) if callable(tier) else tier)
             if rule is not None:
                 rates.append(rule)
     return FundingRules(rates=tuple(rates))
