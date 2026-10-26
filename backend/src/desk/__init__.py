@@ -10,7 +10,7 @@ __version__ = "0.2.7"
 # buckets, coverage). A run records ``logic_version()`` in its lineage; the autopilot recomputes the latest positions
 # date once when its default run was made by another logic version; the backfill (desk.backfill, R23) recomputes the
 # older dates in the background.
-VALUATION_VERSION = 18  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
+VALUATION_VERSION = 19  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
 # 4: RUB bonds discounted on RUONIA OIS + Z-spread, flash PnL on the bond's own curves;
 # 5: a key-rate floater on a fallback rung books its projection on RUB KEY, the run log names missing rates inputs
 # 6: a bond's offer, its next 18 months of flows and the day's quote (G-spread, volume) in extra (concept pages)
@@ -37,6 +37,7 @@ VALUATION_VERSION = 18  # 2: risk per curve (R8); 3: static display fields (R9 D
 # 17: core 57fb6b7 (core#90): a KBD floater in RUONIA + basis, its RUONIA risk computed (extra.ofz_ruonia01), not variant P
 # 18: a foreign bond's OCP liability does not follow its MV (OQ-17, TDM#266): the D-1 dirty MV, so its FX delta is the
 # day's FX PnL (dirty MV change + coupons); fx_funding revalues the D-1 dirty MV
+# 19: a KBD floater's margin per period by the hub's spread_schedule (a step at a put or a call offer, TDM#252)
 
 
 def logic_version() -> str:
