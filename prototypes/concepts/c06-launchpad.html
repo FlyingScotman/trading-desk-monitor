@@ -131,7 +131,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const L = K.list(), rows = M.typeRows.filter(t => L.some(p => p.group + '.' + p.kind === t.id)).reverse();
         const lst = t => L.filter(p => p.group + '.' + p.kind === t.id);
         const c = small(el, () => ({ grid: { left: 4, right: 14, top: 22, bottom: 2, containLabel: true }, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.dv(v) },
-          xAxis: { type: 'value', unit: 'тыс ₽/бп', axisLabel: { formatter: v => f.dv(v) } }, yAxis: { type: 'category', data: rows.map(t => t.label), axisLabel: { fontSize: 10 } },
+          xAxis: { type: 'value', unit: 'тыс ₽/бп', axisLabel: { formatter: v => K.tick(v, 1e3) } }, yAxis: { type: 'category', data: rows.map(t => t.label), axisLabel: { fontSize: 10 } },
           series: [{ name: 'DV01', type: 'bar', data: rows.map(t => sumL(lst(t), 'dv01')), itemStyle: { color: css('--accent') } }, { name: 'CS01', type: 'bar', data: rows.map(t => sumL(lst(t), 'cs01')), itemStyle: { color: css('--warn') } }] }));
         c.on('click', pp => { const t = rows[pp.dataIndex]; K.drill({ title: t.label + ' · ' + pp.seriesName, unit: 'тыс ₽/бп', list: lst(t), val: pp.seriesIndex ? 'cs01' : 'dv01' }); });
       },
@@ -148,7 +148,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const el = K.h('div', 'fill'); bd.appendChild(el);
         const R = L.slice().reverse();
         const c = small(el, () => ({ grid: { left: 4, right: 46, top: 4, bottom: 2, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.mns(v, 2) + ' mm ₽' },
-          xAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } }, yAxis: { type: 'category', data: R.map(p => p.name.length > 22 ? p.name.slice(0, 21) + '…' : p.name), axisLabel: { fontSize: 10 } },
+          xAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => K.tick(v, 1e6), hideOverlap: true } }, yAxis: { type: 'category', data: R.map(p => p.name.length > 22 ? p.name.slice(0, 21) + '…' : p.name), axisLabel: { fontSize: 10 } },
           series: [{ type: 'bar', data: R.map(p => ({ value: p.pnl.total, itemStyle: { color: p.pnl.total >= 0 ? css('--pos') : css('--neg') } })), label: { show: true, position: 'right', fontSize: 10, color: css('--fg-2'), formatter: p => f.mns(p.value, 1) } }] }));
         c.on('click', pp => K.card(R[pp.dataIndex].id));
       },
@@ -161,7 +161,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const keys = K.PNL_FACTORS;
         const n = 30, xs = M.histDates.slice(-n);
         small(el, () => ({ grid, legend: { top: 0, left: 0, itemGap: 6, type: 'scroll' }, tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '—' : f.mns(v, 2) },
-          xAxis: { type: 'category', data: xs, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } },
+          xAxis: { type: 'category', data: xs, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => K.tick(v, 1e6) } },
           series: keys.map(([k, t]) => ({ name: t, type: 'bar', stack: 'p', data: M.hist.pnl[k].slice(-n), itemStyle: { color: K.PNL_COLORS[k] } })).concat([{ name: 'Итого', type: 'line', showSymbol: false, data: M.hist.pnl.total.slice(-n), color: css('--fg') }]) }));
       },
     },
@@ -195,7 +195,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const days = []; for (let d = M.util.addDays(M.asOf, 1); d <= end; d = M.util.addDays(d, 1)) days.push(d);
         const kinds = [['cpn', 'купоны', css('--accent')], ['put', 'оферты', css('--warn')], ['call', 'коллы', '#ff8f3f'], ['mat', 'погашения', css('--pos')]];
         const c = small(el, () => ({ grid, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.mn(v, 1) + ' mm ₽' },
-          xAxis: { type: 'category', data: days, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } },
+          xAxis: { type: 'category', data: days, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => K.tick(v, 1e6) } },
           series: kinds.map(([k, t, col]) => ({ name: t, type: 'bar', stack: 'e', itemStyle: { color: col }, data: days.map(d => M.sum(cf.filter(c => c.date === d && c.kind === k), 'amountRub')),
             markLine: k === 'cpn' && cbr.length ? { symbol: 'none', silent: true, lineStyle: { color: css('--neg'), type: 'dashed' }, label: { formatter: 'ЦБ', color: css('--neg') }, data: cbr.map(d => ({ xAxis: d })) } : undefined })) }));
         c.on('click', pp => { const d = days[pp.dataIndex], k = kinds[pp.seriesIndex][0]; const rows = cf.filter(x => x.date === d && x.kind === k).map(x => ({ p: M.pos[x.pos], v: x.amountRub })); if (rows.length) K.drill({ title: kinds[pp.seriesIndex][1] + ' ' + f.dshort(d), unit: 'mm ₽', fmt: v => f.mn(v, 1), rows }); });
@@ -219,15 +219,18 @@ body { display: flex; flex-direction: column; overflow: hidden; }
       },
     },
     issuers: {
-      title: 'Концентрация по эмитентам', modes: [['mv', 'MV'], ['cs01', 'CS01'], ['dv01', 'DV01']],
+      title: 'Концентрация по эмитентам', modes: [['mv', 'MV'], ['cs01', 'CS01'], ['dv01', 'DV01']], fit: true,
       render(bd, mode) {
         const el = K.h('div', 'fill'); bd.appendChild(el);
         const val = { mv: p => p.mv, cs01: p => p.cs01, dv01: p => p.dv01 }[mode], fm = mode === 'mv' ? v => f.mn(v, 0) : f.dv;
         const g = {}; bonds(K.list()).filter(p => !M.isMinfin(p.issuer) || mode !== 'cs01').forEach(p => { (g[p.issuer] = g[p.issuer] || { id: p.issuer, name: p.issuerName, v: 0, L: [] }).v += val(p); g[p.issuer].L.push(p); });
-        const R = Object.values(g).sort((a, b) => Math.abs(b.v) - Math.abs(a.v)).slice(0, 14).reverse();
+        // эмитентов — сколько помещается по высоте плитки (≈ 15 px на строку, #218): в низкой плитке подписи не слипаются;
+        // плитка с fit перерисовывается при изменении своей высоты (ResizeObserver в build)
+        const fit = Math.max(6, Math.min(14, Math.floor(((el.clientHeight || 300) - 30) / 15)));
+        const R = Object.values(g).sort((a, b) => Math.abs(b.v) - Math.abs(a.v)).slice(0, fit).reverse();
         const c = small(el, () => ({ grid: { left: 4, right: 50, top: 4, bottom: 2, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: fm },
-          xAxis: { type: 'value', unit: mode === 'mv' ? 'mm ₽' : 'тыс ₽/бп', axisLabel: { formatter: fm } }, yAxis: { type: 'category', data: R.map(x => x.name), axisLabel: { fontSize: 10 } },
-          series: [{ type: 'bar', data: R.map(x => ({ value: x.v, itemStyle: { color: K.issuerColor(x.id) } })), label: { show: true, position: 'right', fontSize: 10, color: css('--fg-2'), formatter: p => fm(p.value) } }] }));
+          xAxis: { type: 'value', unit: mode === 'mv' ? 'mm ₽' : 'тыс ₽/бп', axisLabel: { formatter: v => K.tick(v, mode === 'mv' ? 1e6 : 1e3), hideOverlap: true } }, yAxis: { type: 'category', data: R.map(x => x.name), axisLabel: { fontSize: 10 } },
+          series: [{ type: 'bar', data: R.map(x => ({ value: x.v, itemStyle: { color: K.issuerColor(x.id) } })), label: { show: true, position: 'right', fontSize: 10, color: css('--fg-2'), formatter: p => fm(p.value) }, labelLayout: { hideOverlap: true } }] }));
         c.on('click', pp => { const x = R[pp.dataIndex]; K.drill({ title: x.name + ' · ' + mode.toUpperCase(), unit: mode === 'mv' ? 'mm ₽' : 'тыс ₽/бп', fmt: fm, list: x.L, val }); });
       },
     },
@@ -252,7 +255,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         }
         const el = K.h('div', 'fill'); bd.appendChild(el);
         const c = small(el, () => ({ grid, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.mn(v, 1) + ' mm ₽' },
-          xAxis: { type: 'category', data: C }, yAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } },
+          xAxis: { type: 'category', data: C }, yAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => K.tick(v, 1e6) } },
           series: [['бонды', false, css('--accent')], ['деривативы', true, css('--warn')]].map(([n, der, col]) => ({ name: n, type: 'bar', stack: 'o', itemStyle: { color: col }, data: C.map(c => M.sum(part(c, der), p => INSTR.fxIn(p, c) * M.toRepr[c])) })) }));
         c.on('click', pp => { const cc = C[pp.dataIndex], der = pp.seriesIndex === 1; K.drill({ title: 'ОВП ' + cc + ' · ' + pp.seriesName, unit: 'mm ₽', fmt: v => f.mn(v, 1), list: part(cc, der), val: p => INSTR.fxIn(p, cc) * M.toRepr[cc] }); });
       },
@@ -273,7 +276,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         // кэрри (без фондирования) и фондирование — два столбца книги (#168)
         const SER = [['Кэрри', 'carryDay', K.PNL_COLORS.carry], ['Фондирование', 'fundingDay', K.PNL_COLORS.funding]];
         const c = small(el, () => ({ grid: { left: 4, right: 44, top: 20, bottom: 2, containLabel: true }, legend: { top: 0, left: 0, itemGap: 6 }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.k(v) + ' тыс ₽' },
-          xAxis: { type: 'value', unit: 'тыс ₽', axisLabel: { formatter: f.k } }, yAxis: { type: 'category', data: R.map(b => b.id), axisLabel: { fontSize: 10 } },
+          xAxis: { type: 'value', unit: 'тыс ₽', axisLabel: { formatter: v => K.tick(v, 1e3) } }, yAxis: { type: 'category', data: R.map(b => b.id), axisLabel: { fontSize: 10 } },
           series: SER.map(([name, key, col]) => ({ name, type: 'bar', itemStyle: { color: col }, data: R.map(b => M.sum(lst(b), key)), label: { show: R.length <= 8, position: 'right', fontSize: 10, color: css('--fg-2'), formatter: p => f.k(p.value) } })) }));
         c.on('click', pp => { const b = R[pp.dataIndex], s = SER[pp.seriesIndex] || SER[0]; K.drill({ title: s[0] + ' ' + b.name, unit: 'тыс ₽', fmt: f.k, list: lst(b), val: s[1] }); });
       },
@@ -293,9 +296,12 @@ body { display: flex; flex-direction: column; overflow: hidden; }
   }
   function build() {
     if (maxed) unmax();
-    live.splice(0).forEach(t => t.charts.forEach(c => c.dispose()));
+    live.splice(0).forEach(t => { t.charts.forEach(c => c.dispose()); if (t.ro) t.ro.disconnect(); clearTimeout(t.roT); });
     board.innerHTML = '';
     const P = PRESETS[preset];
+    // ряды поровну на высоту экрана — до первой отрисовки плиток: им нужна их настоящая высота (#218)
+    const cells = P.tiles.reduce((s, x) => s + (x.endsWith(':2') ? 2 : 1), 0);
+    board.style.gridTemplateRows = 'repeat(' + Math.ceil(cells / 4) + ', minmax(0, 1fr))';
     P.tiles.forEach(spec => {
       const [id, span] = spec.split(':'), def = TILES[id];
       const mk = preset + '.' + id;
@@ -308,10 +314,17 @@ body { display: flex; flex-direction: column; overflow: hidden; }
       el.querySelector('.mx').onclick = () => maxed === t ? unmax() : max(t);
       live.push(t);
       renderTile(t);
+      // плитка, содержимое которой зависит от высоты (fit), перерисовывается после изменения размера окна или
+      // разворачивания — с задержкой 150 мс, когда высота перестала меняться
+      if (def.fit && typeof ResizeObserver === 'function') {
+        t.h = t.bd.clientHeight;
+        t.ro = new ResizeObserver(() => {
+          clearTimeout(t.roT);
+          t.roT = setTimeout(() => { const hh = t.bd.clientHeight; if (Math.abs(hh - t.h) >= 8 && live.includes(t)) { t.h = hh; renderTile(t); } }, 150);
+        });
+        t.ro.observe(t.bd);
+      }
     });
-    // ряды поровну на высоту экрана
-    const cells = P.tiles.reduce((s, x) => s + (x.endsWith(':2') ? 2 : 1), 0);
-    board.style.gridTemplateRows = 'repeat(' + Math.ceil(cells / 4) + ', minmax(0, 1fr))';
   }
   function max(t) { if (maxed) unmax(); maxed = t; t.el.classList.add('max'); scrim = K.h('div', 'max-scrim'); scrim.onclick = unmax; document.body.appendChild(scrim); t.el.querySelector('.mx').textContent = '✕'; }
   function unmax() { if (!maxed) return; maxed.el.classList.remove('max'); maxed.el.querySelector('.mx').textContent = '⤢'; maxed = null; if (scrim) { scrim.remove(); scrim = null; } }

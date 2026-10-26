@@ -158,7 +158,7 @@
         formatter: pp => {
           const n = nodeById[pp.data && pp.data.id]; if (!n) return '';
           const p = n.pid ? M.pos[n.pid] : null;
-          return '<b>' + esc(n.path.join(' › ') || 'Портфель') + '</b><br>' + Z.t + ': <b>' + Z.fmt(n.value) + '</b> · ' + Math.round(n.value / (tree.value || 1) * 1000) / 10 + '%<br>' + C.t + ': <b>' + (pp.data.cv == null ? '—' : C.fmt(pp.data.cv)) + '</b>' + (C.abs ? ' (' + C.abs(n.list) + ')' : '') +
+          return '<b>' + esc(n.path.join(' › ') || 'Портфель') + '</b><br>' + Z.t + ': <b>' + Z.fmt(n.value) + '</b> · ' + Math.round(n.value / (tree.value || 1) * 1000) / 10 + '%<br>' + C.t + ': <b>' + (pp.data.cv == null ? '—' : C.fmt(pp.data.cv)) + '</b>' + (C.abs ? ' · ' + C.abs(n.list) : '') +
             (p ? '<br><span style="opacity:.7">' + esc(p.couponFmt || '') + ' · ' + esc(p.book) + ' · DV01 ' + f.dv(p.dv01) + ' · щелчок — карточка</span>' : '<br><span style="opacity:.7">' + n.list.length + ' поз · щелчок — приблизить</span>');
         },
       },

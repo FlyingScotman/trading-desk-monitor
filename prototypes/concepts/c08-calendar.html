@@ -109,6 +109,9 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
   const track = c => (charts.push(c), c);
   function panel(title, extra) { const p = K.h('div', 'k-panel'); p.innerHTML = '<div class="hd"><h3>' + title + '</h3><span class="sp"></span>' + (extra || '') + '</div><div class="bd"></div>'; return p; }
   const sumBy = (a, fn) => a.reduce((s, x) => s + fn(x), 0);
+  // порог «крупного» выпуска рублёвого рынка (10 bn ₽ в обращении) — в валюте отчёта, как и суммы рынка (#218): в
+  // рублях целым, в другой валюте с двумя знаками (≥ 0.12 bn $), а не округлённым до «0»
+  const bigLbl = () => { const C = M.marketCal; return '≥ ' + (C ? f.bn(C.bigRub, K.repr === 'RUB' ? 0 : 2) : '10') + ' bn ₽'; };
 
   // календарь-сетка: месяцы горизонта; день — точки по типам событий, фон — сумма, пут — рамка, ЦБ — метка
   function calendar(el, evs, o) {
@@ -195,7 +198,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     K.seg(bar.querySelector('.p'), [['auto', 'авто'], ['w', 'неделям'], ['m', 'месяцам']], st.per, v => { st.per = v; save(); render(); });
     const x = bar.querySelector('.x');
     if (st.mode === 'rub') {
-      x.innerHTML = '<span class="k-chip' + (st.big ? ' on' : '') + '">' + (st.big ? '☑' : '☐') + ' только крупные (≥ 10 bn в обращении)</span>';
+      x.innerHTML = '<span class="k-chip' + (st.big ? ' on' : '') + '">' + (st.big ? '☑' : '☐') + ' только крупные (' + bigLbl() + ' в обращении)</span>';
       x.firstChild.onclick = () => { st.big = !st.big; save(); render(); };
     } else if (st.mode === 'fx' && M.marketCal) {
       x.innerHTML = '<span class="lbl">валюта</span> <span class="cc"></span>';
@@ -213,7 +216,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     // крупнейшие — по рублёвому эквиваленту (x.val), а не по сумме в родной валюте
     const byCcy = (a, key) => ccys.reduce((o, c) => (o[c] = sumBy(a.filter(x => x.ccy === c), x => x[key]), o), {});
     const sub = a => K.kpiCcyRows(byCcy(a, 'amt'), (c, v) => f.mn(v, 1) + K.kpiUnit('mm ' + esc(c)), 3, v => f.mn(v, 1) + ' mm', byCcy(a, 'val'));
-    const nEv = a => ' <span class="mut3" title="событий в горизонте">(' + a.length + ')</span>';
+    const nEv = a => ' <span class="mut3" title="событий в горизонте">· ' + a.length + '</span>';
     const puts = byKind('put'), nextPut = puts[0];
     kpis.innerHTML = '<div class="k-kpis">' +
       K.kpi('Всего поступлений', K.d({ title: 'Все потоки до ' + f.date(e), unit: 'mm ₽', fmt: v => f.mn(v, 1), rows: rows(ev), color: false }) + K.kpiUnit('mm ₽'), ev.length + ' событий до ' + f.date(e)) +
@@ -362,7 +365,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
         '<div class="k-sec">Выпуски</div>' + flowsTable(j.rows, { fmt: v => f.bn(v, 2), unit, type: true });
       K.tableToolsAll(bd);
     };
-    const kp = (label, a, sub, q) => K.kpi(label, a.length ? '<span class="dr" data-q=\'' + JSON.stringify(q) + '\' data-t="' + esc(label.replace(/<[^>]+>/g, '').replace('● ', '').replace('■ ', '')) + '">' + fmt(sumBy(a, x => x.val)) + '</span> <span class="mut" style="font-size:11px">bn</span>' : '<span class="mut3">—</span>', sub);
+    const kp = (label, a, sub, q) => K.kpi(label, a.length ? '<span class="dr" data-q=\'' + JSON.stringify(q) + '\' data-t="' + esc(label.replace(/<[^>]+>/g, '').replace('● ', '').replace('■ ', '')) + '">' + fmt(sumBy(a, x => x.val)) + '</span> <span class="mut" style="font-size:11px">bn ₽</span>' : '<span class="mut3">—</span>', sub);
     const red1 = t => red.filter(x => x.type === t);
     kpis.innerHTML = '<div class="k-kpis">' +
       kp('<span style="color:' + KC.cpn + '">●</span> Купоны', cpn, sumBy(cpn, x => x.n) + ' выплат', { kind: 'cpn' }) +
@@ -402,12 +405,12 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
 
     const row2 = K.h('div', 'c8-row'); view.appendChild(row2);
     const pc = panel('Календарь: ' + whatLabel.toLowerCase()); row2.appendChild(pc);
-    calendar(pc.querySelector('.bd'), what, { fmt: v => f.bn(v, 0), unit: 'bn ₽', onDay: ds => open(whatLabel + ' ' + f.date(ds), { from: ds, to: ds, kind: whatKind }) });
+    calendar(pc.querySelector('.bd'), what, { fmt: v => f.bn(v, K.repr === 'RUB' ? 0 : 1), unit: 'bn ₽', onDay: ds => open(whatLabel + ' ' + f.date(ds), { from: ds, to: ds, kind: whatKind }) });
     // крупные погашения и оферты, по одному
-    const pb = panel('Крупные погашения и оферты', '<span class="k-note">выпуски ≥ ' + f.bn(C.bigRub, 0) + ' bn в обращении</span>'); row2.appendChild(pb);
+    const pb = panel('Крупные погашения и оферты', '<span class="k-note">выпуски ' + bigLbl() + ' в обращении</span>'); row2.appendChild(pb);
     pb.querySelector('.bd').classList.add('flush', 'scroll'); pb.querySelector('.bd').style.maxHeight = '520px';
     const bigList = C.rubBig.filter(x => inH(x.date));
-    pb.querySelector('.bd').innerHTML = bigList.length ? '<table class="mini" data-vk="c08-big-redemptions" data-title="Крупные погашения и оферты"><thead><tr><th>Дата</th><th>Событие</th><th>Выпуск</th><th>Тип</th><th class="n">Объём, bn</th></tr></thead><tbody>' +
+    pb.querySelector('.bd').innerHTML = bigList.length ? '<table class="mini" data-vk="c08-big-redemptions" data-title="Крупные погашения и оферты"><thead><tr><th>Дата</th><th>Событие</th><th>Выпуск</th><th>Тип</th><th class="n">Объём, bn ₽</th></tr></thead><tbody>' +
       bigList.map(x => '<tr' + (x.pos ? ' data-card="' + x.pos + '"' : '') + '><td data-date="' + x.date + '">' + f.date(x.date) + '</td><td><span class="kb" style="--c:' + KC[x.kind] + '">' + KN[x.kind] + '</span></td><td>' + esc(x.name) + (x.held ? ' <span class="held">в портфеле</span>' : '') + '</td><td><b style="color:' + TYPE_C[x.type] + '">■</b> ' + esc(TL[x.type] || x.type) + '</td><td class="n"><b>' + f.bn(x.amount, 1) + '</b></td></tr>').join('') + '</tbody></table>' +
       '<div class="k-note" style="padding:6px 10px">' + bigList.length + ' событий за горизонт; остальное — в агрегатах</div>' : '<div class="k-empty">в горизонте нет</div>';
   }

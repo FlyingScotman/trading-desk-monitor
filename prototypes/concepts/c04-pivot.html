@@ -320,7 +320,7 @@
     const meas = A.meas;
     const tot = A.get(ALL, ALL, ALL);
     document.getElementById('sum').innerHTML = esc(meas.label) + ' <span class="mut">по</span> ' + esc(DIMS[A.d1].label) + (A.d2 ? ' → ' + esc(DIMS[A.d2].label) : '') + (A.dc !== 'none' ? ' <span class="mut">×</span> ' + esc(DIMS[A.dc].label) : '') +
-      ' <span class="mut">· итого</span> ' + (tot ? K.d({ title: meas.label, unit: meas.unit, fmt: meas.fmt, rows: drillRows(tot) }, meas.fmt(tot.v), meas.kind === 'pnl' ? null : '') : '—') + ' <span class="mut">' + esc(meas.unit) + ' · ' + A.L.length + ' поз.</span>';
+      ' <span class="mut">· итого</span> ' + (tot && !(tot.nul && !tot.n) ? K.d({ title: meas.label, unit: meas.unit, fmt: meas.fmt, rows: drillRows(tot) }, meas.fmt(tot.v), meas.kind === 'pnl' ? null : '') : '—') + ' <span class="mut">' + esc(meas.unit) + ' · ' + A.L.length + ' поз.</span>';
     const used = [A.d1, A.d2, A.dc].filter(Boolean);
     const warn = [];
     if (used.includes('curve') && !['risk'].includes(meas.kind)) warn.push('«Кривая» раскладывает только меры риска — здесь всё в «—»');

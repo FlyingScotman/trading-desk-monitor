@@ -85,7 +85,7 @@
   const dvx = (title, list, val) => K.d({ title, unit: 'тыс ₽/бп', list, val }, null, '') + '&nbsp;тыс ₽/бп';
   // диапазон сдвига кривой по бакетам, б.п. (до 0.1); у кривой без точек (USD/CNY в прогоне без кривых хаба) — «нет данных»
   const noCurve = c => !c || c.pts.every(v => v == null);
-  const chgRange = c => { if (noCurve(c)) return 'нет данных'; const a = c.chg.filter(x => x).map(v => Math.round(v * 10) / 10).filter(x => x); if (!a.length) return '0'; const mn = Math.min(...a), mx = Math.max(...a); const s = v => (v > 0 ? '+' : '') + v; return mn === mx ? s(mn) : s(mn) + '…' + s(mx); };
+  const chgRange = c => { if (noCurve(c)) return 'нет данных'; const a = c.chg.filter(x => x).map(v => Math.round(v * 10) / 10).filter(x => x); if (!a.length) return '0'; const mn = Math.min(...a), mx = Math.max(...a); const s = v => (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v); return mn === mx ? s(mn) : s(mn) + '…' + s(mx); };
   const avgChg = c => noCurve(c) ? 0 : c.chg.reduce((a, v) => a + (v || 0), 0) / Math.max(1, c.chg.length);
   const maxBucket = c => { let k = 0; c.chg.forEach((v, i) => { if (Math.abs(v || 0) > Math.abs(c.chg[k] || 0)) k = i; }); return M.buckets[k]; };
   const plural = (n, a, b, c) => { const m = n % 10, h = n % 100; return n + ' ' + (m === 1 && h !== 11 ? a : m >= 2 && m <= 4 && (h < 10 || h >= 20) ? b : c); };
@@ -95,7 +95,7 @@
   // данных» (R25). Прокси-кривая UST par (не OIS) подписана как прокси.
   function fxRatesLine() {
     const fix = k => { const x = MH && MH.indices && MH.indices[k]; const v = x && x.value != null ? x.value : M.indices[k];
-      return v == null ? null : k + ' ' + f.pct(v) + (x && x.chgBp && x.chgBp[0] ? ' (' + f.bps(x.chgBp[0]) + ' б.п.)' : ''); };
+      return v == null ? null : k + ' ' + f.pct(v) + (x && x.chgBp && x.chgBp[0] ? ' · ' + f.bps(x.chgBp[0]) + ' б.п.' : ''); };
     const c = M.curve['USD SOFR'], e = M.curve['EUR ESTR'], cn = M.curve['CNY XCCY'];
     const cur = (cv, name) => (/прокси/.test(cv.name || '') ? esc(cv.name) : name) + ' ' + chgRange(cv) + ' б.п.';
     const parts = [noCurve(c) ? (fix('SOFR') || 'SOFR нет данных') : cur(c, 'USD')];
@@ -144,7 +144,7 @@
     const parts = [];
     M.curves.filter(c => c.kind === 'rate').forEach(c => {
       const v = M.sum(L, p => ratePnl(p, c.id));
-      if (Math.abs(v) > 3e5) parts.push({ v, h: 'ставки ' + c.short + ' ' + mln('PnL от ' + c.short, L, p => ratePnl(p, c.id)) + ' <span class="mut">(' + c.short + ' ' + chgRange(c) + ' б.п.)</span>' });
+      if (Math.abs(v) > 3e5) parts.push({ v, h: 'ставки ' + c.short + ' ' + mln('PnL от ' + c.short, L, p => ratePnl(p, c.id)) + ' <span class="mut">· ' + c.short + ' ' + chgRange(c) + ' б.п.</span>' });
     });
     const bas = M.ofzView === 'kbd' ? 0 : M.sum(L, p => ratePnl(p, 'RUB OFZ'));  // в виде «КБД» КБД — среди кривых ставок выше
     if (Math.abs(bas) > 3e5) parts.push({ v: bas, h: 'базис ОФЗ ' + mln('PnL от базиса ОФЗ − RUONIA', L, p => ratePnl(p, 'RUB OFZ')) + ' <span class="mut">(ОФЗ шире RUONIA на ' + chgRange(M.curve['RUB OFZ']) + ' б.п.)</span>' });
@@ -199,7 +199,7 @@
     const lst = (arr, vk, t) => '<table class="mini" data-vk="' + vk + '" data-title="' + t + '"><tbody>' + arr.map(p => '<tr data-card="' + p.id + '"><td style="width:4px;padding:0;background:' + K.issuerColor(p.issuer) + '"></td><td class="name">' + esc(p.name) + ' <span class="mut3">' + esc(p.book) + '</span><div class="why">' + why(p) + '</div></td><td class="n ' + f.cls(p.pnl.total) + '"><b>' + f.mns(p.pnl.total, 1) + '</b></td><td style="width:90px">' + K.bar(p.pnl.total, mx) + '</td></tr>').join('') + '</tbody></table>';
     const share = (top.concat(bot)).reduce((s, p) => s + Math.abs(p.pnl.total), 0) / Math.max(1, L.reduce((s, p) => s + Math.abs(p.pnl.total), 0));
     html += '<section id="s3"><h2><span class="no">03</span> Главные вклады <span class="sp"></span><span class="k-note">mm ₽ · щелчок — карточка позиции</span></h2>' +
-      '<p>Десять позиций ниже дают <b>' + Math.round(share * 100) + '%</b> всего оборота PnL (сумма модулей). Больше всех ' + (bot[0] ? 'потеряла <b data-card="' + bot[0].id + '" style="cursor:pointer">' + esc(bot[0].name) + '</b> (' + f.mns(bot[0].pnl.total, 1) + ' mm ₽)' : '') + (top[0] ? ', заработала <b data-card="' + top[0].id + '" style="cursor:pointer">' + esc(top[0].name) + '</b> (' + f.mns(top[0].pnl.total, 1) + ' mm ₽)' : '') + '. ' +
+      '<p>Десять позиций ниже дают <b>' + Math.round(share * 100) + '%</b> всего оборота PnL (сумма модулей). Больше всех ' + (bot[0] ? 'потеряла <b data-card="' + bot[0].id + '" style="cursor:pointer">' + esc(bot[0].name) + '</b>: ' + f.mns(bot[0].pnl.total, 1) + ' mm ₽' : '') + (top[0] ? ', заработала <b data-card="' + top[0].id + '" style="cursor:pointer">' + esc(top[0].name) + '</b>: ' + f.mns(top[0].pnl.total, 1) + ' mm ₽' : '') + '. ' +
       'Полный список — ' + K.d({ title: 'PnL дня по позициям', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, 'все ' + L.length + ' позиций', '') + '.</p>' +
       '<div class="two"><div><div class="cap neg">▼ Потери</div>' + lst(bot, 'c05-pnl-losers', 'Главные вклады: потери') + '</div><div><div class="cap pos">▲ Заработок</div>' + lst(top, 'c05-pnl-gainers', 'Главные вклады: заработок') + '</div></div></section>';
 
@@ -266,15 +266,15 @@
     // действующий на дату, — рядом; прогон до R26 считал PnL по курсу ЦБ — тогда сказано, что по нему
     const differs = (a, c) => a && a.rate[c] != null && (Math.abs(a.rate[c] - M.fx[c]) > 0.005 || Math.abs((a.chgPct[c] || 0) - (M.fxChgPct[c] || 0)) > 0.005);
     const fxPnlRate = c => (M.fxSource && M.fxSource[c] ? ', ' + esc(M.fxSource[c]) : '') +
-      (differs(M.fxPnl, c) ? '; PnL по курсу ' + M.fxPnl.label + ' ' + f.n(M.fxPnl.rate[c], 2) + ', ' + f.pcts(M.fxPnl.chgPct[c], 2)
-        : differs(M.fxCbr, c) ? '; ЦБ ' + f.n(M.fxCbr.rate[c], 2) + ', ' + f.pcts(M.fxCbr.chgPct[c], 2) : '');
+      (differs(M.fxPnl, c) ? ' · PnL по курсу ' + M.fxPnl.label + ' ' + f.n(M.fxPnl.rate[c], 2) + ', ' + f.pcts(M.fxPnl.chgPct[c], 2)
+        : differs(M.fxCbr, c) ? ' · ЦБ ' + f.n(M.fxCbr.rate[c], 2) + ', ' + f.pcts(M.fxCbr.chgPct[c], 2) : '');
     const mv = M.marketMovers.slice().sort((a, b) => b.chgBp - a.chgBp);
     const up = mv.slice(0, 6), dn = mv.slice(-6).reverse();
     const ccyFx = M.ccys.filter(c => c !== 'RUB');
     const mvT = (arr, vk, t) => '<table class="mini" data-vk="' + vk + '" data-title="' + t + '"><thead><tr><th>Выпуск</th><th>Рейт.</th><th class="n">Дох.</th><th class="n">Δ б.п.</th></tr></thead><tbody>' + arr.map(b => '<tr><td class="name">' + esc(b.name) + ' <span class="mut3">' + esc(b.sector) + '</span></td><td class="mut">' + esc(b.rating) + '</td><td class="n">' + f.pct(b.ytm) + '</td><td class="n ' + (b.chgBp > 0 ? 'chg-up' : 'chg-dn') + '"><b>' + f.bps(b.chgBp) + '</b></td></tr>').join('') + '</tbody></table>';
     html += '<section id="s6"><h2><span class="no">06</span> Рынок <span class="sp"></span><span class="k-note">изменения к закрытию ' + f.date(M.prevDate) + '</span></h2>' +
       '<p>' + mktSentence() + ' ' +
-      fxRatesLine() + '. Курсы: ' + ccyFx.map(c => c + ' ' + f.n(M.fx[c], 2) + ' (' + f.pcts(M.fxChgPct[c], 2) + fxPnlRate(c) + ', PnL ' + K.d({ title: 'FX PnL ' + c, unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L.filter(p => p.ccy === c), val: p => p.pnl.fx }) + ' mm)').join(', ') + '. ' +
+      fxRatesLine().replace(/\.$/, '') + '. Курсы: ' + ccyFx.map(c => c + ' ' + f.n(M.fx[c], 2) + ' · ' + f.pcts(M.fxChgPct[c], 2) + fxPnlRate(c) + ' · PnL ' + K.d({ title: 'FX PnL ' + c, unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L.filter(p => p.ccy === c), val: p => p.pnl.fx }) + ' mm').join('; ') + '. ' +
       'КС ' + f.pct(M.indices['КС']) + ', RUONIA ' + f.pct(M.indices['RUONIA']) + '.</p>' +
       '<div class="two"><div><div class="cap">Кривые RUB: сегодня, вчера и сдвиг</div><div class="chart" id="curveChart"></div></div>' +
       '<div><div class="cap">Корпоративный рынок: сильнее всего выросли доходности</div>' + mvT(up, 'c05-movers-up', 'Корпоративный рынок: рост доходностей') + '<div class="cap" style="margin-top:10px">…и снизились</div>' + mvT(dn, 'c05-movers-down', 'Корпоративный рынок: снижение доходностей') + '</div></div>' + marketHist() + '</section>';
