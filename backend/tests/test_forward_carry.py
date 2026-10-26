@@ -230,6 +230,9 @@ def test_forward_funding_flat_and_steps(store_url, ctx, tmp_path):
     assert t["netKnown"] == pytest.approx(math.fsum(p["net"] for p in covered))
     for g in [t, *(v for k in ("byBook", "byEntity", "byCcy", "byKind") for v in flat[k].values())]:
         # TDM#287: the identity of every group, the null parts 0
+        if g["nNoCarryNoFunding"]:  # strict B1: an unknown funding of a position without a forecast
+            assert g["fundingNoCarry"] is None and g["fundingTotal"] is None and g["net"] is None
+            continue
         parts = (g["funding"] or 0.0) + (g["fundingNoCarry"] or 0.0) + g["fundingBookLevel"]
         assert g["fundingTotal"] == pytest.approx(parts)
         if g["net"] is not None:
@@ -432,3 +435,25 @@ def test_group_net_with_partial_funding_and_amounts_in_ccy():
     assert a["fxRate"] == 90.0 and a["inCcy"] == pytest.approx({"carry": 10.0, "coupon": 800 / 90, "pull": 100 / 90,
                                                                "rolldown": 0.0, "spreadRoll": None,
                                                                "funding": -5.0, "net": 5.0})
+
+
+def test_group_net_is_null_when_a_position_without_carry_has_no_funding():
+    """Rule B1 applied strictly (coordinator, 26.10, #297): a position without a carry forecast whose funding is unknown
+    makes its group's fundingNoCarry, fundingTotal and net null (``nNoCarryNoFunding`` counts them); netKnown still
+    sums the positions with both; a position not funded by the rules (amount 0) is no unknown."""
+    run = {"run_id": 1, "business_date": DATE}
+    rub = {"ccy": "RUB", "mv": 1000.0, "mv_rub": 1000.0, "dv01": -1.0, "cs01": -1.0}
+    cs = [carry.PositionCarry("a", "B", "X", "exact", rub, carry=100.0, coupon=100.0, pull=0.0, rolldown=0.0),
+          carry.PositionCarry("b", "B", "Y", "market_value", rub, code="market_value"),
+          carry.PositionCarry("c", "C", "Z", "market_value", rub, code="market_value")]
+    funding = carry.ForwardFunding("computed", "", {
+        "a": {"state": "funded", "amount": -40.0, "amountCcy": -40.0, "source": "adapter"},
+        "b": {"state": "problem", "amount": None, "source": "none", "reason": "no rule"},
+        "c": {"state": "not_funded", "amount": 0.0, "amountCcy": 0.0, "source": "none", "reason": "not on MV"}})
+    out = carry.assemble(run, H1M, "flat", [], cs, funding, {"B": "E", "C": "E"}, lambda f: None, [], [])
+    b, c = out["byBook"]["B"], out["byBook"]["C"]
+    assert b["nNoCarryNoFunding"] == 1 and b["nCoveredNoFunding"] == 0
+    assert b["fundingNoCarry"] is None and b["fundingTotal"] is None and b["net"] is None
+    assert b["funding"] == pytest.approx(-40.0) and b["netKnown"] == pytest.approx(60.0)
+    assert c["nNoCarryNoFunding"] == 0 and c["fundingNoCarry"] == 0.0 and c["net"] is None  # nothing covered
+    assert out["totals"]["net"] is None and out["totals"]["nNoCarryNoFunding"] == 1
