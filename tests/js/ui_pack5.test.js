@@ -97,13 +97,13 @@ t('#284: C13 «Концентрация» — единица меры в под�
   assert.ok(s.includes("unitOf('pareto', true); unitOf('sector', !NOSEC); unitOf('rating', !NORAT);"));
   const strip = s.slice(s.indexOf('function renderStrip'), s.indexOf('stripCharts.push(rc)'));
   assert.ok(strip && !/type: 'value', unit: m\.unit/.test(strip), 'у осей полосы нет name');
-  assert.ok(strip.includes("xAxis: { type: 'value', splitNumber: 3, axisLabel: { formatter: x => K.tick(x, m.sc), hideOverlap: true } }"), 'сектора: деления не слипаются');
+  assert.ok(strip.includes("xAxis: { type: 'value', splitNumber: 3, axisLabel: { formatter: x => K.tick(x, m.sc), hideOverlap: true }, boundaryGap: K.barGap("),'сектора: деления не слипаются');
 });
 
 t('#310: server-keys.json — ключи сервера по уровням, фикстура в них укладывается', () => {
   // вложенные уровни extra / curve и шаблоны id — #324 (ui_pack6.test.js)
-  assert.deepStrictEqual(Object.keys(SERVER_KEYS), ['top', 'source', 'position', 'pnl', 'extra', 'curve', 'extraRead', 'ids']);
-  Object.entries(SERVER_KEYS).filter(([k]) => k !== 'ids').forEach(([, ks]) => assert.ok(ks.length && ks.every(k => typeof k === 'string')));
+  assert.deepStrictEqual(Object.keys(SERVER_KEYS), ['top', 'source', 'position', 'pnl', 'extra', 'curve', 'extraRead', 'extraNested', 'ids']);
+  Object.entries(SERVER_KEYS).filter(([k]) => k !== 'ids' && k !== 'extraNested').forEach(([, ks]) => assert.ok(ks.length && ks.every(k => typeof k === 'string')));
   assert.ok(SERVER_KEYS.position.includes('risk') && !SERVER_KEYS.position.includes('dv01'), 'DV01 позиции real.js считает из risk');
   const ctx = context();
   assert.deepStrictEqual(unknownKeys(loadRun(ctx)), []);

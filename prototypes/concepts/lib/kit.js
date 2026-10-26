@@ -363,6 +363,15 @@
     const lg = Math.log10(1e9 / parseFloat(s.replace(/[^\d.]/g, '')));
     return isFinite(lg) && lg >= 0 && Math.abs(lg - Math.round(lg)) < 1e-9 ? v => K.tick(v, Math.pow(10, Math.round(lg))) : fmt;
   };
+  // подпись столбца у его конца (#329): label элемента data бара. Подпись ряда с position 'right' ('top') ECharts ставит
+  // справа (сверху) от прямоугольника, а у отрицательного столбца это сторона нуля — подпись налезает на ось и на
+  // соседний положительный столбец. У отрицательного — 'left' (горизонтальный бар) или 'bottom' (вертикальный, vert).
+  // Применение: data: L.map(x => ({ value: x.v, label: K.barEnd(x.v) })) при label ряда { show: true, position: 'right' }
+  K.barEnd = (v, vert) => ({ position: v < 0 ? (vert ? 'bottom' : 'left') : (vert ? 'top' : 'right') });
+  // место под подпись отрицательного столбца горизонтального бара: boundaryGap оси значений. Подпись положительного —
+  // в правом поле grid, а слева от оси значений стоят подписи категорий, поэтому ось расширяется влево на четверть
+  // размаха (ECharts потом округляет её до делений), только если отрицательные есть
+  K.barGap = vals => [vals.some(v => v < 0) ? '25%' : 0, 0];
 
   // ---------- тема ----------
   K.theme = () => document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
@@ -1091,9 +1100,9 @@
         const L = list.slice(0, 30).reverse();
         const c = K.chart(el, () => ({
           grid: { left: 10, right: 60, top: 10, bottom: 20, containLabel: true },
-          xAxis: { type: 'value', unit: spec.unit, minInterval: spec.int ? 1 : 0, axisLabel: { formatter: axFmt, hideOverlap: true } }, yAxis: { type: 'category', data: L.map(x => x.label.length > 34 ? x.label.slice(0, 33) + '…' : x.label) },
+          xAxis: { type: 'value', unit: spec.unit, minInterval: spec.int ? 1 : 0, boundaryGap: K.barGap(L.map(x => x.v)), axisLabel: { formatter: axFmt, hideOverlap: true } }, yAxis: { type: 'category', data: L.map(x => x.label.length > 34 ? x.label.slice(0, 33) + '…' : x.label) },
           tooltip: { trigger: 'axis', valueFormatter: v => fmt(v) },
-          series: [{ type: 'bar', data: L.map(x => ({ value: x.v, itemStyle: { color: dim === 'ccy' ? K.ccyColor(x.k) : dim === 'issuer' ? K.issuerColor(x.p.issuer) : (x.v >= 0 ? css('--pos') : css('--neg')) } })), label: { show: true, position: 'right', formatter: p => fmt(p.value), color: css('--fg-2'), fontSize: 11 } }],
+          series: [{ type: 'bar', data: L.map(x => ({ value: x.v, itemStyle: { color: dim === 'ccy' ? K.ccyColor(x.k) : dim === 'issuer' ? K.issuerColor(x.p.issuer) : (x.v >= 0 ? css('--pos') : css('--neg')) }, label: K.barEnd(x.v) })), label: { show: true, position: 'right', formatter: p => fmt(p.value), color: css('--fg-2'), fontSize: 11 } }],
         }));
         c.on('click', pp => { const x = L[pp.dataIndex]; if (dim === 'pos') K.card(x.k); else K.drill(Object.assign({}, spec, { title: spec.title + ' · ' + x.label, rows: x.n, dim: 'pos' })); });
         o.charts = [c];

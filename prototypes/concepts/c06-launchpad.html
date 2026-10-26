@@ -148,8 +148,8 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const el = K.h('div', 'fill'); bd.appendChild(el);
         const R = L.slice().reverse();
         const c = small(el, () => ({ grid: { left: 4, right: 46, top: 4, bottom: 2, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => K.wfTip(v) + ' mm ₽' },
-          xAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => K.tick(v, 1e6), hideOverlap: true } }, yAxis: { type: 'category', data: R.map(p => p.name.length > 22 ? p.name.slice(0, 21) + '…' : p.name), axisLabel: { fontSize: 10 } },
-          series: [{ type: 'bar', data: R.map(p => ({ value: p.pnl.total, itemStyle: { color: p.pnl.total >= 0 ? css('--pos') : css('--neg') } })), label: { show: true, position: 'right', fontSize: 10, color: css('--fg-2'), formatter: p => K.wfLabel(p.value) } }] }));
+          xAxis: { type: 'value', unit: 'mm ₽', boundaryGap: K.barGap(R.map(p => p.pnl.total)), axisLabel: { formatter: v => K.tick(v, 1e6), hideOverlap: true } }, yAxis: { type: 'category', data: R.map(p => p.name.length > 22 ? p.name.slice(0, 21) + '…' : p.name), axisLabel: { fontSize: 10 } },
+          series: [{ type: 'bar', data: R.map(p => ({ value: p.pnl.total, itemStyle: { color: p.pnl.total >= 0 ? css('--pos') : css('--neg') }, label: K.barEnd(p.pnl.total) })), label: { show: true, position: 'right', fontSize: 10, color: css('--fg-2'), formatter: p => K.wfLabel(p.value) } }] }));
         c.on('click', pp => K.card(R[pp.dataIndex].id));
       },
     },
@@ -233,8 +233,8 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const fit = Math.max(6, Math.min(14, Math.floor(((el.clientHeight || 300) - 30) / 15)));
         const R = Object.values(g).sort((a, b) => Math.abs(b.v) - Math.abs(a.v)).slice(0, fit).reverse();
         const c = small(el, () => ({ grid: { left: 4, right: 50, top: 4, bottom: 2, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: fm },
-          xAxis: { type: 'value', unit: mode === 'mv' ? 'mm ₽' : 'тыс ₽/бп', axisLabel: { formatter: v => K.tick(v, mode === 'mv' ? 1e6 : 1e3), hideOverlap: true } }, yAxis: { type: 'category', data: R.map(x => x.name), axisLabel: { fontSize: 10 } },
-          series: [{ type: 'bar', data: R.map(x => ({ value: x.v, itemStyle: { color: K.issuerColor(x.id) } })), label: { show: true, position: 'right', fontSize: 10, color: css('--fg-2'), formatter: p => fm(p.value) }, labelLayout: { hideOverlap: true } }] }));
+          xAxis: { type: 'value', unit: mode === 'mv' ? 'mm ₽' : 'тыс ₽/бп', boundaryGap: K.barGap(R.map(x => x.v)), axisLabel: { formatter: v => K.tick(v, mode === 'mv' ? 1e6 : 1e3), hideOverlap: true } }, yAxis: { type: 'category', data: R.map(x => x.name), axisLabel: { fontSize: 10 } },
+          series: [{ type: 'bar', data: R.map(x => ({ value: x.v, itemStyle: { color: K.issuerColor(x.id) }, label: K.barEnd(x.v) })), label: { show: true, position: 'right', fontSize: 10, color: css('--fg-2'), formatter: p => fm(p.value) }, labelLayout: { hideOverlap: true } }] }));
         c.on('click', pp => { const x = R[pp.dataIndex]; K.drill({ title: x.name + ' · ' + mode.toUpperCase(), unit: mode === 'mv' ? 'mm ₽' : 'тыс ₽/бп', fmt: fm, list: x.L, val }); });
       },
     },
@@ -280,8 +280,8 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         // кэрри (без фондирования) и фондирование — два столбца книги (#168)
         const SER = [['Кэрри', 'carryDay', K.PNL_COLORS.carry], ['Фондирование', 'fundingDay', K.PNL_COLORS.funding]];
         const c = small(el, () => ({ grid: { left: 4, right: 44, top: 20, bottom: 2, containLabel: true }, legend: { top: 0, left: 0, itemGap: 6 }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.k(v) + ' тыс ₽' },
-          xAxis: { type: 'value', unit: 'тыс ₽', axisLabel: { formatter: v => K.tick(v, 1e3) } }, yAxis: { type: 'category', data: R.map(b => b.id), axisLabel: { fontSize: 10 } },
-          series: SER.map(([name, key, col]) => ({ name, type: 'bar', itemStyle: { color: col }, data: R.map(b => M.sum(lst(b), key)), label: { show: R.length <= 8, position: 'right', fontSize: 10, color: css('--fg-2'), formatter: p => f.k(p.value) } })) }));
+          xAxis: { type: 'value', unit: 'тыс ₽', boundaryGap: R.length <= 8 ? K.barGap(R.flatMap(b => SER.map(s => M.sum(lst(b), s[1]) || 0))) : [0, 0], axisLabel: { formatter: v => K.tick(v, 1e3) } }, yAxis: { type: 'category', data: R.map(b => b.id), axisLabel: { fontSize: 10 } },
+          series: SER.map(([name, key, col]) => ({ name, type: 'bar', itemStyle: { color: col }, data: R.map(b => { const v = M.sum(lst(b), key); return { value: v, label: K.barEnd(v) }; }), label: { show: R.length <= 8, position: 'right', fontSize: 10, color: css('--fg-2'), formatter: p => f.k(p.value) } })) }));
         c.on('click', pp => { const b = R[pp.dataIndex], s = SER[pp.seriesIndex] || SER[0]; K.drill({ title: s[0] + ' ' + b.name, unit: 'тыс ₽', fmt: f.k, list: lst(b), val: s[1] }); });
       },
     },

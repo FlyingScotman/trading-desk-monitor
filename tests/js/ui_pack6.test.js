@@ -5,7 +5,7 @@
 //   node tests/js/ui_pack6.test.js
 'use strict';
 const fs = require('fs'), path = require('path'), vm = require('vm'), assert = require('assert');
-const { loadRun, unknownKeys, SERVER_KEYS } = require('./fixtures/concepts_run');
+const { loadRun, unknownKeys, jsCode, SERVER_KEYS } = require('./fixtures/concepts_run');
 const DIR = path.join(__dirname, '..', '..', 'prototypes', 'concepts');
 const P = f => fs.readFileSync(path.join(DIR, f), 'utf8');
 let n = 0; const t = (name, f) => { f(); n++; console.log('ok', name); };
@@ -72,7 +72,7 @@ t('#321: K.tickOf — деления оси с масштабом формата
   const kit = P('lib/kit.js'), c04 = P('c04-pivot.html'), c08 = P('c08-calendar.html');
   // явный масштаб (ревью PR #328): разбор — spec.sc, C04 — meas.sc, C08 — o.sc; K.tickOf — запасной путь
   assert.ok(kit.includes("const sc = spec.sc != null ? spec.sc : spec.fmt ? null : 1e3, axFmt = sc != null ? v => K.tick(v, sc) : K.tickOf(fmt);") &&
-    kit.includes("xAxis: { type: 'value', unit: spec.unit, minInterval: spec.int ? 1 : 0, axisLabel: { formatter: axFmt, hideOverlap: true } }"), 'разбор');
+    kit.includes("xAxis: { type: 'value', unit: spec.unit, minInterval: spec.int ? 1 : 0, boundaryGap: K.barGap(L.map(x => x.v)), axisLabel: { formatter: axFmt, hideOverlap: true } }"), 'разбор');  // boundaryGap — #329
   assert.ok(c04.includes("minInterval: A.meas.int ? 1 : 0, axisLabel: { formatter: v => K.tick(v, A.meas.sc), hideOverlap: true }"), 'C04');
   const meas = c04.slice(c04.indexOf('const MEAS = {'), c04.indexOf('FACT.forEach(([k, t]) => MEAS['));
   const lines = meas.split('\n').filter(l => / fmt: /.test(l));
@@ -90,7 +90,7 @@ t('#321: K.tickOf — деления оси с масштабом формата
 
 t('#321: C13 — подпись отрицательного столбца рейтингов у его конца', () => {
   const s = P('c13-issuers.html');
-  assert.ok(s.includes("label: { position: v < 0 ? 'bottom' : 'top' }"));
+  assert.ok(s.includes("label: K.barEnd(v, true)"));  // общий помощник (#329)
 });
 
 t('#323: C06 — график вклада позиций подписан по правилу водопада, без «+0.0» в USD', () => {
@@ -122,12 +122,13 @@ t('#317: C03 — у «Δ цены» в CSV единица; C14/C16 — раск�
 t('#324: server-keys.json — вложенные уровни extra, curve и шаблоны id; фикстура в них укладывается', () => {
   assert.ok(SERVER_KEYS.extra.includes('legs') && SERVER_KEYS.extra.includes('funding') && SERVER_KEYS.extra.includes('reason'));
   assert.deepStrictEqual(SERVER_KEYS.curve, ['ccy', 'kind', 'name', 'pts']);
-  assert.deepStrictEqual(Object.keys(SERVER_KEYS.ids), ['curvePattern', 'curves', 'ccys']);
+  assert.deepStrictEqual(Object.keys(SERVER_KEYS.ids), ['curvePattern', 'curves', 'ccys', 'ccyPattern', 'curveKinds']);  // + #337
   assert.ok(SERVER_KEYS.ids.curves.includes('RUB OFZ') && SERVER_KEYS.ids.ccys.includes('USD'));
   assert.deepStrictEqual(unknownKeys(loadRun(context())), []);
   // контракт EXTRA_KEYS_READ (backend api/concepts_run.py, в файле — extraRead) равен тому, что lib/real.js читает из
-  // extra позиции: и ключ, который страница перестала читать, и ключ, которого нет в контракте, роняют тест
-  const real = P('lib/real.js'), read = new Set();
+  // extra позиции: и ключ, который страница перестала читать, и ключ, которого нет в контракте, роняют тест; ключ,
+  // упомянутый только в комментарии real.js, не считается прочитанным (jsCode, #337)
+  const real = jsCode(P('lib/real.js')), read = new Set();
   for (const m of real.matchAll(/\b(?:ex|extra|d\.extra)\.([a-z][a-z0-9_]*)/g)) read.add(m[1]);
   assert.ok(read.size > 10);
   assert.deepStrictEqual([...read].sort(), SERVER_KEYS.extraRead);
