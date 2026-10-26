@@ -364,7 +364,9 @@
     p.gspread = flt ? null : (num(ex.g_spread_bp) != null ? num(ex.g_spread_bp) : p.gspreadMoex);
     p.dm = flt ? (num(ex.dm_bp) != null ? num(ex.dm_bp) : p.zSpreadZ) : null;
     p.dmSource = flt ? (num(ex.dm_bp) != null ? 'core' : 'z') : null;  // 'z': DM ядра нет (прогон до ядра 0.33) — показан Z
-    p.zspread = flt ? p.dm : p.zSpreadZ; p.spreadLabel = flt ? 'DM' : (p.zspread != null ? 'Z' : '');
+    p.zspread = flt ? p.dm : p.zSpreadZ;
+    // вид спреда (колонка «Спред» и «Вид спреда» в CSV, #276): у флоатера без DM ядра в значении Z — и метка Z
+    p.spreadLabel = p.zspread == null ? '' : flt && p.dmSource === 'core' ? 'DM' : 'Z';
     // кривая, к которой Z-спред (spreadBp ядра — к кривой дисконтирования: RUONIA, в день без неё — КБД); у флоатера это
     // Z-спред к RUONIA с купонами по прогнозу (R32), сравнимый с Z фикс-бумаг; DM — к кривой проекции
     p.spreadCurve = d.spreadCurve || null;
@@ -616,14 +618,23 @@
   };
 
   // ---------- все потоки позиции (лениво, карточка): /api/v1/positions/flows — график выпуска из статики хаба до
-  // погашения × бумаги позиции, оферты внутри; null — не облигация или статики нет (карточка берёт потоки прогона) ----------
+  // погашения × бумаги позиции, оферты внутри. Промис {flows, reason, error}: flows — график; null — графика нет
+  // (карточка берёт потоки прогона), reason — почему его нет словами, error — сбой запроса (#288). «Графика нет» —
+  // ожидаемый ответ: сервер отдаёт 200 с пустым flows и кодом reason; 404 — нет позиции или прогона (у прежнего
+  // сервера — и нет графика). Сбой не запоминается: следующее открытие карточки спросит снова ----------
+  const FLOW_REASON = { not_bond: 'не облигация — у позиции нет графика выпуска', not_valued: 'позиция не оценена в прогоне',
+    no_static: 'нет статики хаба за дату прогона', no_schedule: 'в статике хаба нет графика этой бумаги', past: 'выплат после даты прогона нет' };
   const flowCache = {};
-  M.posFlows = function (id) {  // промис; повторно — из памяти
-    if (!flowCache[id]) flowCache[id] = fetch('../api/v1/positions/flows?' + runQ + '&id=' + encodeURIComponent(id)).then(r => r.ok ? r.json() : null).then(j => {
-      if (!j || !j.flows) return null;
-      const k = (M.toRepr && M.toRepr[j.ccy]) || M.fx[j.ccy] || 1;  // в валюту отчёта, как и всё на страницах
-      return j.flows.map(([date, kind, amount, est]) => ({ date, pos: id, kind, amort: kind === 'amort', ccy: j.ccy, amount, est, amountRub: amount == null ? null : amount * k }));
-    }).catch(() => null);
+  M.posFlows = function (id) {  // повторно — из памяти
+    if (!flowCache[id]) flowCache[id] = fetch('../api/v1/positions/flows?' + runQ + '&id=' + encodeURIComponent(id)).then(r => {
+      if (r.status === 404) return { flows: null, reason: 'сервер не нашёл позицию или её график выпуска' };
+      if (!r.ok) { delete flowCache[id]; return { flows: null, error: 'ошибка сервера ' + r.status + (r.statusText ? ' ' + r.statusText : '') }; }
+      return r.json().then(j => {
+        if (!j || !Array.isArray(j.flows) || !j.flows.length) return { flows: null, reason: FLOW_REASON[j && j.reason] || FLOW_REASON.past };
+        const k = (M.toRepr && M.toRepr[j.ccy]) || M.fx[j.ccy] || 1;  // в валюту отчёта, как и всё на страницах
+        return { flows: j.flows.map(([date, kind, amount, est]) => ({ date, pos: id, kind, amort: kind === 'amort', ccy: j.ccy, amount, est, amountRub: amount == null ? null : amount * k })) };
+      });
+    }).catch(e => { delete flowCache[id]; return { flows: null, error: 'нет связи с сервером' + (e && e.message ? ': ' + e.message : '') }; });
     return flowCache[id];
   };
 
