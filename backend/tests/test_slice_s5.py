@@ -156,16 +156,16 @@ def _cli_env(monkeypatch, tmp_path, store_url, book, name="book.csv"):
 
 def test_cli_eod_loads_values_and_publishes(store_url, tmp_path, monkeypatch, capsys, book):
     csv = _cli_env(monkeypatch, tmp_path, store_url, book)
-    args = ["eod", "--date", DATE, "--snapshots", str(FIX), "--book", str(csv), "--db", str(tmp_path / "tdm.sqlite")]
-    assert cli.main(args + ["--tdm"]) == 0
+    args = ["eod", "--date", DATE, "--snapshots", str(FIX), "--book", str(csv)]
+    assert cli.main(args) == 0
     assert cli.main(args + ["--books", "OFZ", "--run-type", "EOD"]) == 2  # a partial run is never the EOD run
     first = capsys.readouterr()
     assert "TEST run" in first.err
     assert cli.main(args + ["--books", "OFZ"]) == 0  # same file: no new position set; a TEST run
     assert cli.main(["db-migrate"]) == 0 and cli.main(["runs", "--date", DATE]) == 0
     out = first.out + capsys.readouterr().out
-    assert "OFZ rev 1 unchanged" in out and "desk run 1: complete" in out and "tdm run 1: complete" in out
-    assert "up to date" in out and "TEST" in out and (tmp_path / "tdm.sqlite").exists()
+    assert "OFZ rev 1 unchanged" in out and "desk run 1: complete" in out and "tdm run" not in out
+    assert "up to date" in out and "TEST" in out and not (tmp_path / "tdm.sqlite").exists()
     assert "PnL" not in out.split("up to date")[1]  # no previous date: no PnL, not "PnL 0"
     with store.connect(store_url) as con:
         assert con.execute("SELECT count(*) FROM position_set").fetchone()[0] == 2

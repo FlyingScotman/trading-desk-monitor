@@ -14,6 +14,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
+from run_checks import consistency, content
 
 from desk.inbox import static_index
 from desk.marketdata import cache
@@ -168,10 +169,11 @@ def test_frequency_from_the_schedule(ctx):
     assert row["coupon_freq"] == 12 and "coupon_freq_source" not in row["extra"]
 
 
-def test_tdm_store_gets_fix_or_float(ctx, tmp_path):
+def test_unknown_coupon_type_is_kept(ctx):
     o = value(ctx, [("RU000A10GCT1", 10.0)], position_ids=["P1"])[0]
-    _, status, _ = tdm_run.publish(str(tmp_path / "tdm.db"), ctx, [("P1", "CORP", o)], prev=None)
-    assert status == "complete"  # tdm's CHECK (fix, float) holds: "unknown" is written as fix
+    c = content(ctx, [("P1", "CORP", o)])
+    assert consistency(c) == []
+    assert c.rows[0]["coupon_type"] == "unknown"  # the hub's type (D5), not forced to fix/float
 
 
 # ---- D6: unmapped bonds

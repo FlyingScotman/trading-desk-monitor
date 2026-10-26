@@ -413,7 +413,7 @@ def _group() -> dict[str, Any]:
     return {**dict.fromkeys((*SUMS, "dv01", "cs01", "funding", "fundingNoCarry", "fundingBookLevel", "fundingTotal",
                              "net", "netKnown")),
             "nPositions": 0, "nCovered": 0, "nNotCovered": 0, "nFunded": 0, "nFundingMissing": 0,
-            "nCoveredNoFunding": 0}
+            "nCoveredNoFunding": 0, "nNoCarryNoFunding": 0}
 
 
 def _add(g: dict[str, Any], k: str, v: float | None) -> None:
@@ -424,11 +424,17 @@ def _add(g: dict[str, Any], k: str, v: float | None) -> None:
 def _close(g: dict[str, Any], funding_ok: bool) -> dict[str, Any]:
     """The group's funding total and net (``assemble``): ``fundingTotal = funding + fundingNoCarry +
     fundingBookLevel`` and ``net = carry + fundingTotal``, null (rule B1) while the funding is not computed, nothing is
-    covered or a covered position's funding is unknown; ``netKnown`` then still sums the positions with both."""
+    covered, a covered position's funding is unknown (``nCoveredNoFunding``) or a position without a carry forecast
+    has an unknown funding (``nNoCarryNoFunding``: then ``fundingNoCarry`` and ``fundingTotal`` are null too, the
+    owner's rule B1 applied strictly); ``netKnown`` still sums the positions with both."""
     if funding_ok:
         g["fundingBookLevel"] = g["fundingBookLevel"] or 0.0
-        g["fundingTotal"] = math.fsum(v or 0.0 for v in (g["funding"], g["fundingNoCarry"], g["fundingBookLevel"]))
-    if funding_ok and g["carry"] is not None and g["funding"] is not None and not g["nCoveredNoFunding"]:
+        if g["nNoCarryNoFunding"]:
+            g["fundingNoCarry"] = None
+        else:
+            g["fundingTotal"] = math.fsum(v or 0.0 for v in (g["funding"], g["fundingNoCarry"], g["fundingBookLevel"]))
+    if funding_ok and g["carry"] is not None and g["funding"] is not None and not g["nCoveredNoFunding"] \
+            and not g["nNoCarryNoFunding"]:
         g["net"] = g["carry"] + g["fundingTotal"]
     return g
 
@@ -500,6 +506,7 @@ def assemble(run: Mapping[str, Any], hdate: date, ks: str, used: Sequence[tuple[
             else:
                 g["nFundingMissing"] += 1
                 g["nCoveredNoFunding"] += c.carry is not None
+                g["nNoCarryNoFunding"] += c.carry is None and ok
     if ok:
         for x in funding.book_level:
             for g in (total, groups["book"][x["book"]], groups["entity"][x["entity"] or "—"],
