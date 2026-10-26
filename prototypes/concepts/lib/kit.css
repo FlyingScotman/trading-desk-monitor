@@ -143,6 +143,9 @@ body.k-col-moving, body.k-col-moving * { cursor: grabbing !important; user-selec
 table.k-tooled tfoot td { bottom: 24px; }
 /* короткие таблицы без «Итого» в тексте страницы (брифинг C05, списки C08) — строка просто под таблицей */
 table.mini + .k-tbl-ctlbar-m { position: static; background: transparent; }
+/* длинный список в прокрутке (панель .bd.scroll, выезжающая панель, #223): строка кнопок закреплена внизу видимой
+   части — её видно без прокрутки до конца списка */
+.k-panel > .bd.scroll > table.mini + .k-tbl-ctlbar-m, .k-drawer > .bd > table.mini + .k-tbl-ctlbar-m { position: sticky; background: var(--panel); }
 .k-tbtn { padding: 1px 7px; border: 1px solid var(--line); border-radius: 5px; background: transparent; color: var(--fg-3); cursor: pointer; font-size: 11px; line-height: 16px; }
 .k-tbtn:hover { color: var(--fg); border-color: var(--accent); }
 .k-input { background: var(--bg); border: 1px solid var(--line-2); border-radius: 6px; padding: 4px 8px; color: var(--fg); font: inherit; min-width: 160px; }

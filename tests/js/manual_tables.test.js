@@ -247,6 +247,8 @@ t('#131: строка кнопок — сразу после таблицы в �
   const css = P('concepts/lib/kit.css');
   assert.ok(/\.k-tbl-ctlbar-m \{ height: 24px;/.test(css) && /table\.k-tooled tfoot td \{ bottom: 24px; \}/.test(css));
   assert.ok(/table\.mini \+ \.k-tbl-ctlbar-m \{ position: static;/.test(css));
+  // длинные mini-таблицы в прокрутке (C08 «Оферты и коллы», «Крупные погашения», C13 «События эмитента», #223) — строка закреплена
+  assert.ok(/\.k-panel > \.bd\.scroll > table\.mini \+ \.k-tbl-ctlbar-m, \.k-drawer > \.bd > table\.mini \+ \.k-tbl-ctlbar-m \{ position: sticky;/.test(css));
   assert.ok(!/^\.k-tbl-ctlbar-m \{[^}]*position/m.test(css), 'в прокручиваемом контейнере строка закреплена, как у K.table');
 });
 
