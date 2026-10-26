@@ -128,7 +128,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     notional: { label: 'Номинал', num: true, val: r => r.notional, fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', csvHead: 'Номинал, mm в вал.', csvFmt: v => f.mn(v, 2), title: 'в валюте бумаги' },
     mv: { label: 'MV, mm ₽', neutral: true, num: true, val: r => r.mv, fmt: v => f.mn(v, 0), sum: r => r.mv, unit: 'mm ₽', sfmt: v => f.mn(v, 0) },
     price: { label: 'Цена', num: true, val: r => r.price, fmt: v => f.px(v) },
-    chg: { label: 'Δ цены', num: true, val: r => r.price == null ? null : r.price - r.prevPrice, fmt: v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.s(v, 2) + '</span>' },
+    chg: { label: 'Δ цены', num: true, val: r => r.price == null ? null : r.price - r.prevPrice, csvHead: 'Δ цены, % ном.', fmt: v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.s(v, 2) + '</span>' },
     bidask: { label: 'Bid / Ask', num: true, val: r => r.bid, fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : '<span class="mut">' + f.px(r.bid) + ' / ' + f.px(r.ask) + '</span>' },
     // в CSV — изменение цены за 30 дней числом (то же значение, что у сортировки, #277)
     spark: { label: 'Цена 30д', val: r => r.price == null ? null : K.sparkChange(H(r.id).price, 30), title: 'сортировка — по изменению за 30 дней (окно спарклайна)',

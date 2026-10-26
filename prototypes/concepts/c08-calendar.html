@@ -160,14 +160,15 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     return s;
   }
 
-  // столбцы по периодам, стек по сериям; щелчок — fn(индекс периода, индекс серии)
+  // столбцы по периодам, стек по сериям; щелчок — fn(индекс периода, индекс серии); o.sc — масштаб o.fmt для делений
+  // оси (K.tick, #321)
   function stackChart(el, cats, series, o) {
     const c = track(K.chart(el, () => ({
       grid: { left: 6, right: 10, top: 30, bottom: 4, containLabel: true },
       legend: { top: 0, left: 0 },
       tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: ps => { const t = sumBy(ps, p => p.value || 0); return '<b>' + ps[0].name + '</b> · ' + o.fmt(t) + ' ' + o.unit + '<br>' + ps.filter(p => p.value).map(p => p.marker + p.seriesName + ': <b>' + o.fmt(p.value) + '</b>').join('<br>') + '<br><span style="opacity:.6">щелчок — из чего</span>'; } },
       xAxis: { type: 'category', data: cats, axisLabel: { interval: 'auto', hideOverlap: true } },
-      yAxis: { type: 'value', unit: o.unit, axisLabel: { formatter: v => o.fmt(v) } },
+      yAxis: { type: 'value', unit: o.unit, axisLabel: { formatter: o.sc != null ? v => K.tick(v, o.sc) : K.tickOf(o.fmt) } },
       series: series.map(s => ({ name: s.name, type: 'bar', stack: 's', barMaxWidth: 34, data: s.vals, itemStyle: { color: s.color } })),
     })));
     c.on('click', pp => o.onClick(pp.dataIndex, pp.seriesIndex));
@@ -235,7 +236,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
       const keys = st.pfBy === 'kind' ? ['cpn', 'put', 'call', 'mat'].filter(k => ev.some(x => x.kind === k)) : ccys;
       const match = (x, k) => st.pfBy === 'kind' ? x.kind === k : x.ccy === k;
       const ser = keys.map(k => ({ name: st.pfBy === 'kind' ? KNP[k] : k, color: st.pfBy === 'kind' ? KC[k] : K.ccyColor(k), vals: cats.map(c => sumBy(ev.filter(x => pkey(x.date, P) === c && match(x, k)), x => x.val)) }));
-      const c = stackChart(el, cats.map(c => plabel(c, P)), ser, { fmt: v => f.mn(v, 0), unit: 'mm ₽', onClick: (i, s) => { const a = ev.filter(x => pkey(x.date, P) === cats[i] && match(x, keys[s])); K.drill({ title: ser[s].name + ' · ' + plabel(cats[i], P), unit: 'mm ₽', fmt: v => f.mn(v, 1), rows: rows(a) }); } });
+      const c = stackChart(el, cats.map(c => plabel(c, P)), ser, { fmt: v => f.mn(v, 0), sc: 1e6, unit: 'mm ₽', onClick: (i, s) => { const a = ev.filter(x => pkey(x.date, P) === cats[i] && match(x, keys[s])); K.drill({ title: ser[s].name + ' · ' + plabel(cats[i], P), unit: 'mm ₽', fmt: v => f.mn(v, 1), rows: rows(a) }); } });
       c._pf = true;
     };
     K.seg(ps.querySelector('.by'), [['kind', 'по типу'], ['ccy', 'по валюте']], st.pfBy, v => { st.pfBy = v; save(); draw(); });
@@ -305,7 +306,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     const ps = panel('Выплаты по ' + (P === 'w' ? 'неделям' : 'месяцам') + ', ' + unit); col.appendChild(ps);
     const el = K.h('div', 'chart'); ps.querySelector('.bd').appendChild(el);
     const ser = kinds.map(k => ({ name: KNP[k], color: KC[k], vals: cats.map(c => sumBy(ev.filter(x => pkey(x.date, P) === c && x.kind === k), x => x.val)) }));
-    stackChart(el, cats.map(c => plabel(c, P)), ser, { fmt, unit, onClick: (i, s) => open(ser[s].name + ' · ' + plabel(cats[i], P), Object.assign({ kind: kinds[s] }, prange(cats[i], P, e))) });
+    stackChart(el, cats.map(c => plabel(c, P)), ser, { fmt, sc: 1e6, unit, onClick: (i, s) => open(ser[s].name + ' · ' + plabel(cats[i], P), Object.assign({ kind: kinds[s] }, prange(cats[i], P, e))) });
     // кто платит больше всех (за горизонт, по месяцам выплат)
     const pi = panel('Кто платит больше всех, ' + unit); col.appendChild(pi);
     const el2 = K.h('div'); el2.style.height = '300px'; pi.querySelector('.bd').appendChild(el2);
@@ -314,7 +315,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     const top = Object.values(iss).sort((a, b) => (b.cpn + b.red) - (a.cpn + a.red)).slice(0, 12).reverse();
     const ci = track(K.chart(el2, () => ({
       grid: { left: 6, right: 16, top: 26, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.mn(v * 1e6, 0) + ' mm ' + ccy },
-      xAxis: { type: 'value', unit: 'mm ' + ccy, axisLabel: { formatter: v => f.n(v, 0) } }, yAxis: { type: 'category', data: top.map(x => x.n) },
+      xAxis: { type: 'value', unit: 'mm ' + ccy, axisLabel: { formatter: v => K.tick(v), hideOverlap: true } }, yAxis: { type: 'category', data: top.map(x => x.n) },
       series: [['cpn', 'Купоны'], ['red', 'Погашения, амортизации, оферты']].map(([k, nm]) => ({ name: nm, type: 'bar', stack: 'i', data: top.map(x => x[k] / 1e6), itemStyle: { color: k === 'cpn' ? KC.cpn : KC.mat } })),
     })));
     ci.on('click', pp => { const x = top[pp.dataIndex]; open(x.n + ' · выплаты до ' + f.date(e), { issuer: x.n }); });
@@ -381,7 +382,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     const el = K.h('div', 'chart'); el.style.height = '330px'; ps.querySelector('.bd').appendChild(el);
     K.seg(ps.querySelector('.by'), [['red', 'погашения + оферты'], ['cpn', 'купоны'], ['all', 'всё']], st.rubWhat, v => { st.rubWhat = v; save(); render(); });
     const ser = types.map(t => ({ name: TL[t], color: TYPE_C[t], vals: cats.map(c => sumBy(what.filter(x => x.type === t && pkey(x.date, P) === c), x => x.val)) }));
-    stackChart(el, cats.map(c => plabel(c, P)), ser, { fmt: v => f.bn(v, 0), unit, onClick: (i, s) => open(TL[types[s]] + ' · ' + plabel(cats[i], P), Object.assign({ type: types[s], kind: whatKind }, prange(cats[i], P, e))) });
+    stackChart(el, cats.map(c => plabel(c, P)), ser, { fmt: v => f.bn(v, 0), sc: 1e9, unit, onClick: (i, s) => open(TL[types[s]] + ' · ' + plabel(cats[i], P), Object.assign({ type: types[s], kind: whatKind }, prange(cats[i], P, e))) });
     // тепловая таблица тип × период
     const ph = panel(whatLabel + ': тип × ' + (P === 'w' ? 'неделя' : 'месяц')); row.appendChild(ph);
     ph.querySelector('.bd').classList.add('flush', 'scroll');

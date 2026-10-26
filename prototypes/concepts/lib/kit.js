@@ -302,17 +302,50 @@
   K.heatRisk = (v, max) => { if (!v || !max) return ''; const a = Math.min(1, Math.abs(v) / max), al = (0.07 + 0.37 * Math.pow(a, 0.7)).toFixed(3); return K.HEAT_PLAIN + 'background:rgba(' + (v < 0 ? '76,157,255' : '227,160,60') + ',' + al + ')'; };
   K.heatMono = (v, max, rgb) => { if (!v || !max) return ''; const a = Math.min(1, Math.abs(v) / max); return K.HEAT_PLAIN + 'background:rgba(' + (rgb || '76,157,255') + ',' + (0.06 + 0.38 * Math.pow(a, 0.7)).toFixed(3) + ')'; };
   K.bar = (v, max, one) => { if (!max) return ''; const w = Math.min(50, Math.abs(v) / max * 50); return one ? '<div class="k-bar one"><i class="a" style="left:0;width:' + (w * 2) + '%"></i></div>' : '<div class="k-bar"><i class="' + (v >= 0 ? 'p' : 'n') + '" style="' + (v >= 0 ? 'left:50%' : 'right:50%') + ';width:' + w + '%"></i></div>'; };
+  // спарклайн ряда: пропуск (null, не число) — разрыв линии (#326), а не точка NaN; одиночная точка между пропусками —
+  // точкой (второй путь: h0 с круглым концом, вдвое толще линии); меньше двух непустых точек во всём ряду — пусто
   K.spark = (arr, w, hgt, color) => {
-    w = w || 80; hgt = hgt || 22; const a = arr.filter(x => x != null); if (a.length < 2) return '';
+    w = w || 80; hgt = hgt || 22; arr = arr || [];
+    const ok = v => v != null && isFinite(v), a = arr.filter(ok); if (a.length < 2) return '';
     const mn = Math.min(...a), mx = Math.max(...a), r = mx - mn || 1;
-    const pts = arr.map((v, i) => (i / (arr.length - 1) * w).toFixed(1) + ',' + (hgt - (v - mn) / r * (hgt - 2) - 1).toFixed(1)).join(' ');
-    return '<svg class="spark" width="' + w + '" height="' + hgt + '"><polyline fill="none" stroke="' + (color || css('--accent')) + '" stroke-width="1.3" points="' + pts + '"/></svg>';
+    let d = '', dots = '', seg = '', run = 0;
+    const end = () => { if (run === 1) dots += seg + 'h0'; else d += seg; seg = ''; run = 0; };
+    arr.forEach((v, i) => {
+      if (!ok(v)) { end(); return; }
+      seg += (run ? 'L' : 'M') + (i / (arr.length - 1) * w).toFixed(1) + ',' + (hgt - (v - mn) / r * (hgt - 2) - 1).toFixed(1);
+      run++;
+    });
+    end();
+    const c = color || css('--accent');
+    return '<svg class="spark" width="' + w + '" height="' + hgt + '">' + (d ? '<path fill="none" stroke="' + c + '" stroke-width="1.3" stroke-linejoin="round" d="' + d + '"/>' : '') +
+      (dots ? '<path class="dots" fill="none" stroke="' + c + '" stroke-width="2.6" stroke-linecap="round" d="' + dots + '"/>' : '') + '</svg>';
   };
   // изменение ряда за окно спарклайна (последние n точек): последняя непустая точка минус первая непустая; меньше двух
   // непустых точек — null, а не цена и не ложный ноль (#277: дни без оценки, позиция моложе окна)
   K.sparkChange = (arr, n) => {
     const a = (arr || []).slice(-n).filter(x => x != null && isFinite(x));
     return a.length < 2 ? null : a[a.length - 1] - a[0];
+  };
+  // раскрытые строки таблицы переживают перерисовку (#317): строки root с атрибутом attr и aria-expanded="true" до
+  // redraw() после неё раскрываются снова — щелчком, тем же обработчиком, что у пользователя
+  K.keepOpen = (root, attr, redraw) => {
+    const open = [...root.querySelectorAll('tr[' + attr + '][aria-expanded="true"]')].map(tr => tr.getAttribute(attr));
+    redraw();
+    open.forEach(id => { const tr = root.querySelector('tr[' + attr + '="' + CSS.escape(id) + '"]'); if (tr && tr.getAttribute('aria-expanded') !== 'true') tr.click(); });
+  };
+  // деления оси по формату меры (#321) — запасной путь, когда масштаб не передан явно (spec.sc у K.drill, meas.sc у
+  // C04, o.sc у C08, m.sc у C13): fmt — форматтер значения в единицах ряда (f.k, f.dv, v => f.mn(v, 0), f.bn …), ось —
+  // K.tick с тем же масштабом, что у fmt. Масштаб — по одной точке fmt(1e9): 1e9 / число в подписи — степень десяти
+  // (тыс — 1e3, mm — 1e6, bn — 1e9, без масштаба — 1). ТРЕБОВАНИЕ: fmt линеен — делит на один и тот же масштаб при
+  // любой величине (f.k, f.dv, f.mn, f.mns, f.bn, f.n). Форматтер, который выбирает единицу по величине, сюда нельзя:
+  // передайте масштаб явно. Подпись не голое число (%, единица внутри, как у f.money, текст) или не степень десяти —
+  // деления как есть, через fmt
+  K.tickOf = fmt => {
+    let s = '';
+    try { s = String(fmt(1e9)).replace(/<[^>]*>/g, '').trim(); } catch (e) { return fmt; }
+    if (!/^\+?[\d,]+(\.\d+)?$/.test(s)) return fmt;
+    const lg = Math.log10(1e9 / parseFloat(s.replace(/[^\d.]/g, '')));
+    return isFinite(lg) && lg >= 0 && Math.abs(lg - Math.round(lg)) < 1e-9 ? v => K.tick(v, Math.pow(10, Math.round(lg))) : fmt;
   };
 
   // ---------- тема ----------
@@ -1010,6 +1043,10 @@
   K.drill = function (spec) {
     const o = drawer(); o.title = spec.title;
     const fmt = spec.fmt || f.dv;
+    // ось графика (#321): spec.sc — масштаб fmt (1e3 — тыс, 1e6 — mm, 1e9 — bn, 1 — без масштаба), как m.sc у C13;
+    // без sc и без fmt — DV01 в тыс (f.dv); без sc с fmt — масштаб по самому fmt (K.tickOf, запасной путь); spec.int —
+    // счётная мера: деления только целые
+    const sc = spec.sc != null ? spec.sc : spec.fmt ? null : 1e3, axFmt = sc != null ? v => K.tick(v, sc) : K.tickOf(fmt);
     // строки: [{p, v}] — из spec.rows или spec.list+val
     const rows = (spec.rows || spec.list.map(p => ({ p, v: typeof spec.val === 'function' ? spec.val(p) : p[spec.val] }))).filter(r => r.v && Math.abs(r.v) > 1e-9);
     const tot = rows.reduce((s, r) => s + r.v, 0);
@@ -1036,7 +1073,7 @@
         const L = list.slice(0, 30).reverse();
         const c = K.chart(el, () => ({
           grid: { left: 10, right: 60, top: 10, bottom: 20, containLabel: true },
-          xAxis: { type: 'value', unit: spec.unit, axisLabel: { formatter: v => fmt(v) } }, yAxis: { type: 'category', data: L.map(x => x.label.length > 34 ? x.label.slice(0, 33) + '…' : x.label) },
+          xAxis: { type: 'value', unit: spec.unit, minInterval: spec.int ? 1 : 0, axisLabel: { formatter: axFmt, hideOverlap: true } }, yAxis: { type: 'category', data: L.map(x => x.label.length > 34 ? x.label.slice(0, 33) + '…' : x.label) },
           tooltip: { trigger: 'axis', valueFormatter: v => fmt(v) },
           series: [{ type: 'bar', data: L.map(x => ({ value: x.v, itemStyle: { color: dim === 'ccy' ? K.ccyColor(x.k) : dim === 'issuer' ? K.issuerColor(x.p.issuer) : (x.v >= 0 ? css('--pos') : css('--neg')) } })), label: { show: true, position: 'right', formatter: p => fmt(p.value), color: css('--fg-2'), fontSize: 11 } }],
         }));

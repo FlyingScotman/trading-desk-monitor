@@ -277,7 +277,8 @@
   K.commands && K.commands([{ label: 'Статус дня: обновить', run: load }]);
   // формат отрицательных «(1) / −1» (#153): перерисовать в новом формате, как C16 (#262, #276)
   // не поверх сообщения об ошибке и не старой датой, пока грузится выбранная (pick уже сменил on)
-  K.on('numfmt', () => { if (doc && (!on || doc.date === on) && view.querySelector('.k-grid')) render(); });
+  // раскрытые строки файлов остаются раскрытыми (#317)
+  K.on('numfmt', () => { if (doc && (!on || doc.date === on) && view.querySelector('.k-grid')) K.keepOpen(view, 'data-f', render); });
   load();
 })();
 </script>

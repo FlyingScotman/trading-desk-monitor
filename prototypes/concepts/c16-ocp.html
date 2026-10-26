@@ -176,7 +176,8 @@
 
   K.commands && K.commands([{ label: 'ОВП: обновить', run: load }]);
   // формат отрицательных «(1) / −1» (#153): перерисовать в новом формате, как остальные мониторы (#262)
-  K.on('numfmt', () => { if (last) render(last); });
+  // раскрытые строки сверки остаются раскрытыми (#317)
+  K.on('numfmt', () => { if (last) K.keepOpen(view, 'data-r', () => render(last)); });
   load();
 })();
 </script>
