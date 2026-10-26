@@ -60,9 +60,12 @@ from typing import Any
 from rub_fixed_income import (
     RISK_BUCKETS,
     RISK_PILLARS,
+    BondMetricsInput,
     CoreRejection,
     CurveEntry,
     DiscountCurve,
+    InvalidTerms,
+    bond_metrics_batch,
     kbd_effective_yield,
     portfolio_result_to_json,
 )
@@ -86,6 +89,7 @@ from ..valuation.bonds import (
     OFZ_CURVE,
     OFZ_KBD_CLASSES,
     RISK_CURVES,
+    SPREAD_CONVENTION,
     BondValuation,
     coupon_view,
     implied_frequency,
@@ -532,15 +536,41 @@ def _quote_extra(q: Any, sa: dict[str, Any]) -> dict[str, Any]:
     return {"quote": {k: x for k, x in out.items() if x is not None}}
 
 
-def core_analytics(v: BondValuation) -> dict[str, Any]:
+def kbd_z_spreads(ctx: EodContext, valuations: Iterable[BondValuation]) -> dict[int, float]:
+    """``id(v)`` -> the Z-spread to the KBD (TDM#232) of every RUB bond core priced at the day's market price (``exact``
+    or ``assumed``: the rungs below carry no flows): the annual ACT/365F spread (``SPREAD_CONVENTION``) over the run's
+    KBD (``ctx.curve``) that reprices its dirty price on its flows to the horizon (a floater's projected), one core
+    ``bond_metrics_batch`` for all. An OFZ on the KBD gets its own ``z_spread_bp``; a corporate, whose Z is to RUONIA
+    OIS, its spread to the government curve. A bond the batch cannot solve has none."""
+    vs, ins = [], []
+    for v in valuations:
+        if v.cashflows and v.fx_rate is None and v.valuation_date >= ctx.curve.curve_date:
+            try:
+                ins.append(BondMetricsInput(v.valuation_date, v.dirty_rub, v.cashflows, v.secid))
+            except (ValueError, InvalidTerms):
+                continue
+            vs.append(v)
+    out: dict[int, float] = {}
+    if not vs:
+        return out
+    for v, m in zip(vs, bond_metrics_batch(ins, curve=ctx.curve, spread_convention=SPREAD_CONVENTION)):
+        if m.z_spread_bp is not None and math.isfinite(m.z_spread_bp):
+            out[id(v)] = m.z_spread_bp
+    return out
+
+
+def core_analytics(v: BondValuation, z_kbd_bp: float | None = None) -> dict[str, Any]:
     """Core 0.33's analytics of a valuation for ``extra`` (null fields left out): ``g_spread_bp`` (core's G-spread to
-    the KBD, MOEX's definition, beside MOEX's own in ``quote.gspread_bp``), ``dm_bp`` (a floater's discount margin over
-    its projection curve) and ``spread_buckets`` (``cs01`` or ``ofz_spr01`` by ``RISK_BUCKETS``: CS01 by tenor, an OFZ's
-    spread to its discount curve by tenor: the KBD's since 0.2.6, RUONIA's before, R18), which sum to the row's
-    ``cs01`` / ``ofz_spr01``."""
+    the KBD, MOEX's definition, beside MOEX's own in ``quote.gspread_bp``), ``z_kbd_bp`` (the Z-spread to the KBD,
+    ``kbd_z_spreads``, TDM#232, beside ``spread_bp``, the Z to the discount curve), ``dm_bp`` (a floater's discount
+    margin over its projection curve) and ``spread_buckets`` (``cs01`` or ``ofz_spr01`` by ``RISK_BUCKETS``: CS01 by
+    tenor, an OFZ's spread to its discount curve by tenor: the KBD's since 0.2.6, RUONIA's before, R18), which sum to
+    the row's ``cs01`` / ``ofz_spr01``."""
     out: dict[str, Any] = {}
     if v.g_spread_bp is not None and math.isfinite(v.g_spread_bp):
         out["g_spread_bp"] = v.g_spread_bp
+    if z_kbd_bp is not None:
+        out["z_kbd_bp"] = z_kbd_bp
     if v.discount_margin_bp is not None and math.isfinite(v.discount_margin_bp):
         out["dm_bp"] = v.discount_margin_bp
     if v.spread_buckets:
@@ -573,7 +603,7 @@ def _f(x: Any) -> float | None:
 
 
 def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
-                 x: dict[str, Any] | None = None) -> dict[str, Any]:
+                 x: dict[str, Any] | None = None, z_kbd_bp: float | None = None) -> dict[str, Any]:
     t, q, v = o.terms, o.quote, o.valuation
     assert t is not None and v is not None
     as_of = ctx.business_date
@@ -622,7 +652,8 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
             **({"lat_name": t.lat_name} if t.lat_name else {}),
             **({"issue_size": float(t.issue_size)} if t.issue_size is not None else {}),
             **({"rating": rating} if rating else {}),
-            "cashflows": cashflows(t, v, as_of, face_ccy, freq, cpn.pct), **_quote_extra(q, sa), **core_analytics(v),
+            "cashflows": cashflows(t, v, as_of, face_ccy, freq, cpn.pct), **_quote_extra(q, sa),
+            **core_analytics(v, z_kbd_bp),
             **ofz_basis(t, v),
             **({"coupon_freq_source": "schedule"} if freq and not t.coupon_frequency else {}),
             **({"not_exact_reason": o.reason} if o.reason else {}),
@@ -667,6 +698,8 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
     issuers: dict[str, dict[str, Any]] = {}
     rows, skipped, no_pnl, approx = [], [], [], []
     quality: Counter[str] = Counter()
+    z_kbd = kbd_z_spreads(ctx, [o.valuation for _, _, o in positions
+                                if o.terms is not None and isinstance(o.valuation, BondValuation)])
     for pid, book, o in positions:
         x = extra.get(pid)
         label = o.secid or (x and (x.get("source_instrument_id") or x.get("ccy"))) or "—"
@@ -692,7 +725,7 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
             no_pnl.append(f"{pid} {o.secid}: PnL {o.pnl.total:,.0f} ₽ с модельной ценой ({o.pnl.flag})")
         key, rec = _issuer_key(ctx, o)
         issuers[key] = rec
-        rows.append(position_row(ctx, book, pid, o, key, x))
+        rows.append(position_row(ctx, book, pid, o, key, x, z_kbd.get(id(o.valuation))))
     # every book of the run, also one whose positions are all unvalued (an OTC-only book): the Desk Monitor shows
     # only the positions of the reference books, so a book missing here would hide its rows from coverage
     used = list(dict.fromkeys([r["book_id"] for r in rows] + [book for _, book, _ in positions]))

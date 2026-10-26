@@ -21,7 +21,7 @@
  *    из instrType, assetClass, segment, productGroup (x_product_group отчёта: M.productGroup) и fxDeltaBy позиции;
  *  - срок — до оферты или колла, по которым считается доходность, иначе до погашения;
  *  - у флоатера доходности нет (ytm = null), спред — дисконт-маржа ядра (extra.dm_bp: спред к кривой проекции; в
- *    прогоне до ядра 0.33 — Z-спред); G-спред — ядра (extra.g_spread_bp, определение MOEX), иначе MOEX;
+ *    прогоне до ядра 0.33 — Z-спред); G-спред — ядра (extra.g_spread_bp, определение MOEX), иначе MOEX; Z к КБД — прогона (extra.z_kbd_bp, #232);
  *  - CS01 и базис по бакетам срока — ядра (extra.spread_buckets: CS по бакетам пропорционально ставочному риску
  *    дисконтирования); в прогоне до ядра 0.33 — по двум соседним бакетам срока;
  *  - PnL: кэрри = carry + rolldown + funding (кэрри за вычетом фондирования, B1), ставки = rates + convexity, FX = fx,
@@ -322,6 +322,9 @@
     // кривая, к которой Z-спред (spreadBp ядра — к кривой дисконтирования: RUONIA, в день без неё — КБД); у флоатера это
     // Z-спред к RUONIA с купонами по прогнозу (R32), сравнимый с Z фикс-бумаг; DM — к кривой проекции
     p.spreadCurve = d.spreadCurve || null;
+    // Z-спред к КБД (#232, extra.z_kbd_bp): у ОФЗ на КБД — тот же Z, у корпората — его спред к кривой ОФЗ по всем потокам
+    // (у флоатера — по прогнозу купонов); нет в прогоне до него и у бумаг, оценённых не по цене дня
+    p.zKbd = num(ex.z_kbd_bp);
     p.mdur = num(d.mdur); p.sprDur = num(d.sprDur);
     p.accrued = num(d.accrued) || 0;
     p.mv = num(d.mvRub); p.mvCcy = num(d.mv);
@@ -440,7 +443,7 @@
       return JSON.parse(x.responseText);
     } catch (e) { return null; }
   }
-  const OPT = ['zspr', 'dm', 'dmPx', 'icpi', 'ir', 'bei', 'cpi', 'ofzSpr', 'ofzRuo'];
+  const OPT = ['zspr', 'dm', 'dmPx', 'icpi', 'ir', 'bei', 'cpi', 'ofzSpr', 'ofzRuo', 'gRun', 'zKbd'];  // gRun, zKbd: G и Z к КБД прогона (#232)
   M.posHistory = function (id, opts) {
     if (opts && opts.deep) {
       if (!(id in deepCache)) { const j = fetchHist([id], '2000-01-01'); deepCache[id] = j && j.series && j.series[id] ? Object.assign({ dates: j.dates, runAt: j.runAt }, j.series[id]) : null; }

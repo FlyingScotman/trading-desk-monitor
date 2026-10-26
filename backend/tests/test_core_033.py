@@ -17,7 +17,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from rub_fixed_income import RISK_BUCKETS, OfferKind, kbd_effective_yield
+from rub_fixed_income import RISK_BUCKETS, OfferKind, kbd_effective_yield, solve_z_spread
 from test_pnl_compare import _rows
 
 from desk.marketdata.adapter import KBD_CURVE_ID, Offer, core_instrument, put_offers
@@ -82,6 +82,21 @@ def test_published_row_carries_core_analytics(ctx, outs):
     corp = rows[CORP]
     assert math.fsum(corp["extra"]["spread_buckets"].values()) == pytest.approx(corp["cs01"])
     assert "gspread_bp" in corp["extra"]["quote"]  # MOEX's G-spread stays beside core's
+
+
+def test_published_row_carries_the_z_spread_to_the_kbd(ctx, outs):
+    """TDM#232: every RUB bond priced at the day's price has its Z-spread to the KBD beside its Z to the discount curve:
+    an OFZ on the KBD its own Z, a corporate on RUONIA OIS its spread to the government curve, core's scalar solver's."""
+    c = tdm_run.run_content(ctx, [(f"P{i}", "MIXED", o) for i, o in enumerate(outs.values())], None, {})
+    rows = {r["instrument_id"]: r for r in c.rows}
+    assert rows[OFZ]["extra"]["z_kbd_bp"] == pytest.approx(outs[OFZ].valuation.z_spread_bp, abs=1e-3)
+    for s in (CORP, KEY, OFZ_PK):  # on RUONIA OIS: the Z to the KBD is another number (a floater on projected flows)
+        v = outs[s].valuation
+        z = solve_z_spread([(f.payment_date, f.amount) for f in v.cashflows], v.dirty_rub, ctx.curve,
+                           settlement_date=v.valuation_date, convention=bonds.SPREAD_CONVENTION) * 1e4
+        assert rows[s]["extra"]["z_kbd_bp"] == pytest.approx(z, abs=1e-6), s
+        assert abs(z - v.z_spread_bp) > 1.0
+    assert rows[CORP]["extra"]["z_kbd_bp"] > rows[CORP]["spread_bp"]  # the KBD lies under RUONIA OIS on the fixture
 
 
 def test_one_core_call_with_the_spread_kind_per_bond(outs):
