@@ -3795,6 +3795,256 @@
         ],
         "title": "FundingWriteOff"
       },
+      "FxLiability": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "rule": {
+            "type": "string",
+            "title": "Rule"
+          },
+          "provisional": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Provisional"
+          },
+          "by_ccy": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "By Ccy",
+            "description": "Liabilities by currency, signed"
+          },
+          "positions": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FxLiabilityPosition"
+            },
+            "type": "object",
+            "title": "Positions"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "text",
+          "rule",
+          "provisional",
+          "by_ccy",
+          "positions",
+          "notes"
+        ],
+        "title": "FxLiability",
+        "description": "The currency funding liability of the run's foreign-currency bonds; ``provisional``: what the rule takes until\nthe owner answers."
+      },
+      "FxLiabilityPosition": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "computed",
+              "none",
+              "problem",
+              "not_configured",
+              "invalid_config"
+            ],
+            "title": "State",
+            "description": "computed: its FX delta is net of the liability; otherwise the FX delta is the dirty MV and ``reason`` says why"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "ccy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ccy"
+          },
+          "amount_ccy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount Ccy",
+            "description": "The liability, signed (a long bond: negative)"
+          },
+          "clean_mv_ccy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clean Mv Ccy"
+          },
+          "purchase_accrued_ccy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purchase Accrued Ccy",
+            "description": "The accrued paid at the purchase in the liability (funded at a zero rate); null on a dirty base"
+          },
+          "purchase_accrued_basis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purchase Accrued Basis",
+            "description": "report / estimated_from_purchase_date / returned_by_coupon / unknown / dirty_base"
+          },
+          "basis_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Basis Text"
+          },
+          "accrued_ccy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accrued Ccy"
+          },
+          "dirty_mv_ccy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dirty Mv Ccy"
+          },
+          "base": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base"
+          },
+          "fx_delta_gross": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fx Delta Gross",
+            "description": "FX delta before the liability: the dirty MV"
+          },
+          "fx_delta_net": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fx Delta Net",
+            "description": "The published FX delta: dirty MV + liability"
+          },
+          "fx_funding": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fx Funding",
+            "description": "FX revaluation of the D-1 liability in the PnL, RUB"
+          },
+          "fx_funding_cbr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fx Funding Cbr"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "title": "FxLiabilityPosition",
+        "description": "A foreign-currency bond's currency funding liability (``publish.fx_liability``, OQ-04, TDM#54)."
+      },
       "InstrumentAlias": {
         "properties": {
           "isin": {
@@ -6399,6 +6649,17 @@
             },
             "type": "array",
             "title": "Lines"
+          },
+          "fx_liability": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FxLiability"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The bonds' currency funding liability (TDM#54); null for a run before it"
           }
         },
         "type": "object",

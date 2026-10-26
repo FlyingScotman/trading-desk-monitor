@@ -192,6 +192,44 @@ class FundingProblemOut(BaseModel):
     book_id: str | None
 
 
+class FxLiabilityPosition(BaseModel):
+    """A foreign-currency bond's currency funding liability (``publish.fx_liability``, OQ-04, TDM#54)."""
+
+    state: Literal["computed", "none", "problem", "not_configured", "invalid_config"] = Field(
+        description="computed: its FX delta is net of the liability; otherwise the FX delta is the dirty MV and "
+                    "``reason`` says why")
+    reason: str | None = None
+    ccy: str | None = None
+    amount_ccy: float | None = Field(None, description="The liability, signed (a long bond: negative)")
+    clean_mv_ccy: float | None = None
+    purchase_accrued_ccy: float | None = Field(None, description="The accrued paid at the purchase in the liability "
+                                                                 "(funded at a zero rate); null on a dirty base")
+    purchase_accrued_basis: str | None = Field(None, description="report / estimated_from_purchase_date / "
+                                                                 "returned_by_coupon / unknown / dirty_base")
+    basis_text: str | None = None
+    accrued_ccy: float | None = None
+    dirty_mv_ccy: float | None = None
+    base: str | None = None
+    fx_delta_gross: float | None = Field(None, description="FX delta before the liability: the dirty MV")
+    fx_delta_net: float | None = Field(None, description="The published FX delta: dirty MV + liability")
+    fx_funding: float | None = Field(None, description="FX revaluation of the D-1 liability in the PnL, RUB")
+    fx_funding_cbr: float | None = None
+    note: str | None = None
+
+
+class FxLiability(BaseModel):
+    """The currency funding liability of the run's foreign-currency bonds; ``provisional``: what the rule takes until
+    the owner answers."""
+
+    status: str
+    text: str
+    rule: str
+    provisional: list[str]
+    by_ccy: dict[str, float] = Field(description="Liabilities by currency, signed")
+    positions: dict[str, FxLiabilityPosition]
+    notes: list[str]
+
+
 class RunFunding(BaseModel):
     """The run's funding (wave B1, ``publish.funding_run``). ``state`` not_configured: the adapter gave no funding
     rules, nothing is funded and nothing is shown as 0; not_computed: a run before B1."""
@@ -209,6 +247,8 @@ class RunFunding(BaseModel):
     provisional: list[str] = Field(description="Policy fields at the engine's provisional default (OPEN_DECISIONS)")
     policy: dict[str, Any] | None = Field(description="The FundingPolicy applied, with the source of each field")
     lines: list[FundingLineOut]
+    fx_liability: FxLiability | None = Field(None, description="The bonds' currency funding liability (TDM#54); "
+                                                               "null for a run before it")
 
 
 class ParallelRow(BaseModel):

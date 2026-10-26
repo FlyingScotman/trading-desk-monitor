@@ -28,6 +28,7 @@ from datetime import date
 from typing import TYPE_CHECKING, Any
 
 from ..inbox.schema import norm_ccy
+from ..marketdata.adapter import bond_currency
 from ..valuation.fallback import SimplePnl, fx_rate, fx_rate_cbr
 from .flash import NoPnl
 from .reasons import CORE_FX_METHOD, FX_METHOD, REPORTED_METHOD
@@ -59,6 +60,9 @@ class DirectPnl:
     rates: float = 0.0
     spread: float = 0.0
     identity_error: float = 0.0
+    fx_funding: float = 0.0
+    """An unmapped foreign bond: the FX revaluation of its currency funding liability (``FlashPnl.fx_funding``)."""
+    fx_funding_cbr: float | None = None
 
     @property
     def explained(self) -> float:
@@ -66,8 +70,9 @@ class DirectPnl:
 
     def as_tdm(self) -> dict[str, float]:
         return {"carry": 0.0, "rolldown": 0.0, "rates": 0.0, "spread": 0.0, "convexity": 0.0, "other": self.other,
-                "fx_gross": self.fx_gross, "fx_funding": 0.0, "new_trades": 0.0,
-                **({"fx_gross_cbr": self.fx_gross_cbr} if self.fx_gross_cbr is not None else {})}
+                "fx_gross": self.fx_gross, "fx_funding": self.fx_funding, "new_trades": 0.0,
+                **({"fx_gross_cbr": self.fx_gross_cbr} if self.fx_gross_cbr is not None else {}),
+                **({"fx_funding_cbr": self.fx_funding_cbr} if self.fx_funding_cbr is not None else {})}
 
     def extra(self) -> dict[str, Any]:
         return {"method": self.method, "prev_date": self.prev_date.isoformat(), "total": self.total,
@@ -77,7 +82,7 @@ class DirectPnl:
 def split_fx(pnl: SimplePnl, prev: EodContext, ctx: EodContext, terms: BondTerms) -> SimplePnl:
     """``pnl`` with the FX revaluation of a foreign-face bond in ``fx_gross`` (out of ``other``); a RUB bond as is.
     Without a rate on either date the FX part stays in ``other``, said in the note."""
-    ccy = terms.face_unit or terms.currency or "RUB"
+    ccy = bond_currency(terms)
     if ccy == "RUB":
         return pnl
     r0, r1 = fx_rate(prev, ccy), fx_rate(ctx, ccy)

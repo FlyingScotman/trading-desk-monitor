@@ -9,9 +9,10 @@ in the run's publication.
   ``counterparty_id``), whether it is an NDF, its rate and value date;
 - the books in force with their ``ocp_to`` (the run's reference books over ``store.current_books``);
 - ``cash_balances`` in force on ``D`` (a stock, carried forward);
-- the currency funding liability of the bonds funded by their MV (``rules.funding.funding_liabilities`` on the
-  adapter's ``funding_rules``, ``entities`` and ``funding_policy`` in force on ``D``: the same policy as the run's
-  funding). No funding rule: no liability, said in the notes;
+- the bonds' FX delta is already net of their currency funding liability (``publish.fx_liability``, TDM#54), so the
+  ``funding`` component is off (``OcpPolicy.bond_funding_liability``). Only when it is on: the liability of the bonds
+  funded by their MV (``rules.funding.funding_liabilities`` on the adapter's ``funding_rules``, ``entities`` and
+  ``funding_policy`` in force on ``D``), for the rows not net of it yet. No funding rule: no liability, said in the notes;
 - the reported OCP: ``store.dataset_rows("ocp", D)`` (08 §10, a stock; a unit older than ``D`` is carried forward
   and its ``valid_date`` said). No unit: status ``no_report``, the derived OCP is still published.
 
