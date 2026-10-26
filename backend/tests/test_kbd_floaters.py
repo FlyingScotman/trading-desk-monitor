@@ -201,3 +201,72 @@ def test_kbd_history_reads_the_last_dates_of_the_cache():
     h = rates.kbd_history(Fake(), "2026-10-15", static)
     assert sorted(h) == [date(2026, 10, d) for d in (6, 7, 8, 9, 12, 13, 14)]  # 2 + 5 dates, the 14th preliminary
     assert rates.kbd_history(Fake(), "2026-10-15", type("S", (), {"data": {"floater_formulas": []}})()) == {}
+
+
+def _ctx_with(monkeypatch, terms: dict, history: bool = True):
+    """The fixture's KEY floater as a KBD floater with ``terms`` (over ``TERMS``) and, with ``history``, the 15.10 KBD
+    dated 07.10-14.10 as the cache's history."""
+    import dataclasses
+    from datetime import date, timedelta
+
+    from desk.curves import rates
+
+    snaps = SnapshotDir(FIX)
+    get, cache = snaps.get, {}
+    snaps.get = lambda i: cache.setdefault(i, get(i))  # type: ignore[method-assign]
+    market = snaps.market("2026-10-15", "eod_final")
+    static = snaps.get(market.static_snapshot_id)
+    next(f for f in static.data["floater_formulas"] if f["secid"] == KEY).update({**TERMS, **terms})
+    z = market.data["zcyc_params"][0]
+    base = rates.zcyc_parameters(z["trade_date"], z["params"])
+    days = [date(2026, 10, 15) - timedelta(days=i) for i in range(1, 9)]
+    hist = {d: dataclasses.replace(base, trade_date=d) for d in days if d.weekday() < 5} if history else {}
+    monkeypatch.setattr(rates, "kbd_history", lambda *a: hist)
+    return prepare(snaps, "2026-10-15")
+
+
+def test_calendar_days_fixing_on_a_weekend_takes_the_last_publication_before(monkeypatch):
+    """TDM#252: a fixing ``N`` calendar days before the period that falls on no ZCYC publication day takes the last one
+    before it, as the hub's ``verify/zcycfloat.fixing_date`` does: core's ``FixingDateRule`` in calendar days observes the
+    latest business day of the fixing calendar on or before (``observation_days`` business). The period from 19.10 (a
+    Monday) fixed 8 calendar days before falls on Sunday 11.10: core reads Friday 09.10 from the history, exactly."""
+    ctx = _ctx_with(monkeypatch, {"fixing_offset": 8, "fixing_offset_unit": "calendar_days"})
+    (o,) = value(ctx, [(KEY, 1000.0)], fallback=False)
+    assert o.valuation is not None and o.valuation.quality == "exact", o.detail
+    assert o.valuation.floater.instrument.coupon_leg.rule.fixing_date.unit == "calendar_days"
+    ctx_no = _ctx_with(monkeypatch, {"fixing_offset": 8, "fixing_offset_unit": "calendar_days"}, history=False)
+    (o_no,) = value(ctx_no, [(KEY, 1000.0)], fallback=False)
+    assert o_no.valuation is None and o_no.reason == "core_missing_market_data"  # Friday's fixing is what it needs
+
+
+def test_margin_steps_by_the_spread_schedule(monkeypatch):
+    """TDM#252: a margin step of the hub's ``spread_schedule`` (at a put or a call offer) applies from its period on
+    (``adapter.period_margin``, core ``FloatingCouponPeriod.margin``): +50 bp from the period of 18.12.2026 raises
+    each projected coupon from then on by face x 0.5 % x its accrual, the earlier ones unchanged."""
+    from datetime import date
+
+    from desk.marketdata.adapter import period_margin
+
+    step = [{"effective_from": "2024-01-01", "spread_bp": "175.0", "basis": "document"},
+            {"effective_from": "2026-12-18", "spread_bp": "225.0", "basis": "document"}]
+    flat = _ctx_with(monkeypatch, {})
+    (o0,) = value(flat, [(KEY, 1000.0)], fallback=False)
+    stepped = _ctx_with(monkeypatch, {"spread_schedule": step})
+    (o1,) = value(stepped, [(KEY, 1000.0)], fallback=False)
+    t = stepped.static.bonds[KEY]
+    assert period_margin(t, date(2026, 11, 18)) == pytest.approx(0.0175)
+    assert period_margin(t, date(2026, 12, 18)) == pytest.approx(0.0225)
+    assert period_margin(flat.static.bonds[KEY], date(2026, 12, 18)) is None
+    f0 = {c.payment_date: c.amount for c in o0.valuation.cashflows}
+    f1 = {c.payment_date: c.amount for c in o1.valuation.cashflows}
+    periods = {p.payment_date: p for p in o1.valuation.floater.instrument.coupon_leg.periods}
+    for d, a in f1.items():
+        p = periods.get(d)
+        if p is None or p.published_coupon_rub is not None:
+            continue  # the principal, a published coupon: as before
+        days = (p.accrual_end - p.accrual_start).days
+        extra = p.notional_rub * 0.005 * days / 365 if p.accrual_start >= date(2026, 12, 18) else 0.0
+        assert a - f0[d] == pytest.approx(extra, abs=1e-6), d
+    # the price is the market's: richer coupons at the same price are a wider spread
+    assert o1.valuation.pv_rub == pytest.approx(o0.valuation.pv_rub, rel=1e-9)
+    assert o1.valuation.z_spread_bp > o0.valuation.z_spread_bp + 1.0

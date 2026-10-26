@@ -312,13 +312,14 @@ def test_serve_builds_the_newest_runs_bodies_ahead(desk, store_url, monkeypatch)
     from desk.api.app import warm_bodies
 
     app = create_app(store_url)
-    assert warm_bodies(app) == ["desk", "run", "extras", "history", "calendar"]
+    assert warm_bodies(app) == ["desk", "run", "run-js", "extras", "history", "calendar"]
     assert warm_bodies(app) == []  # nothing changed
     calls = []
     monkeypatch.setattr(concepts, "extras", lambda *a, **kw: calls.append(1))
     assert TestClient(app).get("/concepts-data.js").status_code == 200 and not calls  # served from the cache
     monkeypatch.setattr(concepts_run, "assemble", lambda *a, **kw: calls.append(1))
     assert TestClient(app).get("/concepts-run.js").status_code == 200 and not calls
+    assert TestClient(app).get("/api/v1/concepts/run").status_code == 200 and not calls  # one build for both
 
 
 def test_desk_data_js_cached_but_not_stored_by_the_browser(desk, store_url, monkeypatch):
@@ -334,3 +335,76 @@ def test_desk_data_js_cached_but_not_stored_by_the_browser(desk, store_url, monk
                     " FROM scenario_def)")
     desk.get("/desk-data.js")
     assert len(calls) == 2
+
+
+def test_serve_rebuilds_stale_summaries_ahead_newest_first(desk, store_url, monkeypatch):
+    """TDM#246: after a new ``summary.VERSION`` the warm thread rebuilds the runs' summaries, newest first, a pass at a
+    time, and holds back the bodies that read them; the first history load then rebuilds none."""
+    from desk.api.app import prewarm_summaries, warm_bodies
+
+    with store.connect(store_url) as con:
+        ids = [r[0] for r in con.execute("SELECT run_id FROM run ORDER BY business_date, run_id")]
+    monkeypatch.setattr(summary, "VERSION", summary.VERSION + 1)  # an upgrade: every summary stale
+    app = create_app(store_url)
+    built = []
+    real = summary.build
+    monkeypatch.setattr(summary, "build", lambda rows: built.append(rows[0]["position_id"]) or real(rows))
+    seen = []
+    real_ensure = summary.ensure
+    monkeypatch.setattr(summary, "ensure", lambda con, rids: seen.extend(rids) or real_ensure(con, rids))
+    assert prewarm_summaries(app, budget_s=0) == len(ids) - 1  # one run a pass at least, the newest
+    assert seen == [ids[-1]]
+    assert warm_bodies(app, summaries=False) == ["desk", "run", "run-js", "calendar"]  # the bodies reading summaries wait
+    assert prewarm_summaries(app) == 0 and seen == ids[::-1]
+    with store.connect(store_url) as con:
+        assert {r[0] for r in con.execute("SELECT run_id FROM run_summary WHERE version = %s",
+                                          (summary.VERSION,))} == set(ids)
+    assert prewarm_summaries(app) == 0 and seen == ids[::-1]  # nothing left
+    n = len(built)
+    assert TestClient(app).get("/api/v1/history/positions").status_code == 200
+    assert extras(TestClient(app))["hist"]
+    assert len(built) == n  # the first loads read the summaries, rebuild none
+
+
+@pytest.mark.parametrize("checked", [True, False], ids=["checked-ahead", "refused-on-write"])
+def test_prewarm_turns_off_on_a_store_that_cannot_be_written(desk, store_url, monkeypatch, checked):
+    """TDM#246, a read-only store: the first pass finds it (by the privilege check ahead, or the write refused) and
+    turns the prewarm off until a restart; no pass builds summaries again, and the bodies are built ahead as before."""
+    from psycopg.conninfo import make_conninfo
+
+    from desk.api.app import prewarm_summaries, warm_bodies
+
+    if not checked:  # past the check: the write itself is refused
+        monkeypatch.setattr(summary, "WRITABLE_SQL", "SELECT true")
+    monkeypatch.setattr(summary, "VERSION", summary.VERSION + 1)
+    app = create_app(make_conninfo(store_url, options="-c default_transaction_read_only=on"))
+    built = []
+    real = summary.build
+    monkeypatch.setattr(summary, "build", lambda rows: built.append(1) or real(rows))
+    assert prewarm_summaries(app) == 0 and app.state.prewarm_off
+    assert len(built) == (0 if checked else 1)
+    n = len(built)
+    assert prewarm_summaries(app) == 0 and len(built) == n  # off: nothing built
+    assert warm_bodies(app, summaries=True) == ["desk", "run", "run-js", "extras", "history", "calendar"]  # in memory, as before
+
+
+def test_prewarm_does_not_retry_a_run_that_fails_to_build(desk, store_url, monkeypatch):
+    """TDM#246: a run whose summary fails to build is skipped by the later passes (not left, no loop)."""
+    from desk.api.app import prewarm_summaries
+
+    with store.connect(store_url) as con:
+        ids = [r[0] for r in con.execute("SELECT run_id FROM run ORDER BY business_date, run_id")]
+    monkeypatch.setattr(summary, "VERSION", summary.VERSION + 1)
+    app = create_app(store_url)
+    real, calls = summary.ensure, []
+
+    def ensure(con, rids):
+        calls.extend(rids)
+        if rids == [ids[-1]]:
+            raise ValueError("Out of range float values are not JSON compliant")
+        return real(con, rids)
+
+    monkeypatch.setattr(summary, "ensure", ensure)
+    assert prewarm_summaries(app) == 0 and calls == ids[::-1]
+    assert app.state.prewarm_failed == {ids[-1]} and not app.state.prewarm_off
+    assert prewarm_summaries(app) == 0 and calls == ids[::-1]  # not tried again

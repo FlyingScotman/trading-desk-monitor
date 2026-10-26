@@ -531,6 +531,19 @@ def settlement_currency(terms: BondTerms) -> str:
     return ccy_code(terms.currency) if terms.currency else bond_currency(terms)
 
 
+def period_margin(terms: BondTerms, start: date) -> float | None:
+    """A KBD floater's margin for the coupon period starting on ``start`` (TDM#252), decimal a year: the last step of the
+    hub's ``spread_schedule`` (contract 1.4) effective on or before the start, as the hub's ``verify/zcycfloat.spread_at``
+    reproduces MOEX's coupons with. The margin steps at a put or a call offer: a bond valued past a call to its
+    maturity projects the coupons after the call with their own margin (core's ``FloatingCouponPeriod.margin``). None
+    without a schedule or a step by then: the rule's margin (the current ``spread_bp``)."""
+    f = terms.floater_formula or {}
+    steps = [(date.fromisoformat(str(x["effective_from"])), float(x["spread_bp"]))
+             for x in f.get("spread_schedule") or () if x.get("effective_from") and x.get("spread_bp") is not None]
+    by = [x for x in steps if x[0] <= start]
+    return max(by)[1] / 1e4 if by else None
+
+
 def core_instrument(terms: BondTerms, after: date, horizon: date, offer: tuple[date, Decimal, str] | None = None, *,
                     coupons: tuple[Coupon, ...] | None = None,
                     floater: tuple[FloatingCouponRule, str, str] | None = None,
@@ -571,7 +584,8 @@ def core_instrument(terms: BondTerms, after: date, horizon: date, offer: tuple[d
                 start, end, c.pay_date, float(c.face or terms.face_value),  # type: ignore[arg-type]
                 float(c.amount_per_bond) if known else None,  # type: ignore[arg-type]
                 # the issuer's rate of a published coupon: a corporate accrues on it (core 0.33 accrued)
-                float(c.rate_pct) / 100 if known and c.rate_pct else None))
+                float(c.rate_pct) / 100 if known and c.rate_pct else None,
+                margin=period_margin(terms, start)))
             continue
         if start is None or c.amount_per_bond is None or (not ofz and c.rate_pct is None):
             raise InvalidTerms(f"coupon {c.no} on {c.pay_date}: start {c.start}, amount {c.amount_per_bond}, "

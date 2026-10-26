@@ -61,7 +61,7 @@ def assert_parity(c: TestClient, rid: int) -> dict:
     """``/api/v1/concepts/run`` of the run equals compat on what the pages read, has nothing else, and
     ``/concepts-run.js`` is the same document."""
     want = read(c.get(f"/api/v1/compat/desk?run_id={rid}").json())
-    r = c.get(f"/api/v1/concepts/run?run={rid}")
+    r = c.get(f"/api/v1/concepts/run?run_id={rid}")
     assert r.status_code == 200, r.text
     got = r.json()
     assert set(got) == TOP and set(got["source"]) <= SOURCE
@@ -138,13 +138,13 @@ def test_empty_state_demo_cache_and_warming(store_url, book, client):  # noqa: F
     assert "CONCEPTS_RUN" not in client.get("/concepts-run.js?demo=1").text
     e = client.get("/api/v1/concepts/run").json()
     assert e["code"] == "not_found" and e["details"] == {"reason": "no_runs"}
-    assert client.get("/api/v1/concepts/run?run=5").json()["details"] == {"reason": "not_found"}
-    assert client.get("/api/v1/concepts/run?run=x").status_code == 422
+    assert client.get("/api/v1/concepts/run?run_id=5").json()["details"] == {"reason": "not_found"}
+    assert client.get("/api/v1/concepts/run?run_id=x").status_code == 422
 
     rid = run(store_url, book)
     app = create_app(store_url)
-    assert "run" in warm_bodies(app)  # built before the first page load, as /desk-data.js
-    assert "run" not in warm_bodies(app)
+    assert {"run", "run-js"} <= set(warm_bodies(app))  # built before the first page load, as /desk-data.js
+    assert warm_bodies(app) == []
     c = TestClient(app)
     plain, gz = c.get("/concepts-run.js"), c.get("/concepts-run.js", headers={"Accept-Encoding": "gzip"})
     assert plain.headers["cache-control"] == "no-store" and gz.headers.get("content-encoding") == "gzip"

@@ -19,7 +19,7 @@ Each slice keeps whatever it built that matches the architecture. Where it takes
 | Architecture target | Slice 1 shortcut | Replaced in |
 |---|---|---|
 | Backend reads snapshots from the hub API (`/v1/snapshots`) | Reads bundle files that the hub's own builder produced from a copy of the seed database (`tools/devdata/build_dev_snapshots.sh`) | S3. The dev export stays as the offline fallback |
-| Desk Postgres store with run lineage (ADR-006) | The `tdm` SQLite store through its writer SDK (`tdm.writer.Run`); lineage goes into the run log and `lib_version` | **Replaced in S5** (`desk eod --tdm` still writes it for `tdm serve`) |
+| Desk Postgres store with run lineage (ADR-006) | The `tdm` SQLite store through its writer SDK (`tdm.writer.Run`); lineage goes into the run log and `lib_version` | **Replaced in S5**; `desk eod --tdm` removed in #294 |
 | Desk API v1 + React screens (05) | `tdm serve` and the existing Desk Monitor prototype through `window.DESK` | **API built in S5** (`desk serve`; the prototype reads `window.DESK` from the store through the compatibility adapter). **First React screen built in S6** (`/app/`, Scenario Lab); the other screens are still the prototypes through `window.DESK` |
 | KBD/ZCYC evaluator in core (delivered in core 0.11) | Backend module `desk.curves.kbd`, which builds a core `DiscountCurve` from the published ZCYC parameters | **Replaced in S4** (core `rub_ofz_kbd_v1`) |
 | Core's portfolio path: `value_portfolio` over `Instrument`/`MarketSnapshot`/`Position` (core 0.10–0.11) | The adapter builds `BondCashflow` totals and calls `BondRiskEngine` per position | **Replaced in S4**. The fallback rungs below core still reprice with `BondRiskEngine` |
@@ -354,7 +354,7 @@ The S1 comparison table above was measured with the T+1 valuation date. S2 moved
 **How to run it.** `desk eod` now attaches the flash PnL whenever the snapshot folder holds an earlier `eod_final` date; `--no-pnl` turns it off. Run the dates in order to get the history:
 
 ```bash
-cd backend && for d in 2026-10-12 2026-10-13 2026-10-14 2026-10-15; do .venv/bin/desk eod --snapshots ../.devdata/snapshots --date $d --book examples/demo_book.csv --db ../.devdata/tdm.sqlite; done
+cd backend && for d in 2026-10-12 2026-10-13 2026-10-14 2026-10-15; do .venv/bin/desk eod --snapshots ../.devdata/snapshots --date $d --book examples/demo_book.csv; done
 ```
 
 Each date takes about 2 s; the previous date is revalued on its own snapshot. The book is the same on both dates, so there are no trades of the day.

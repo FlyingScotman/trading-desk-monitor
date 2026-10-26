@@ -88,7 +88,7 @@ DIMS = {"book": "book_id", "quality": "quality", "asset_class": "fact->>'asset_c
         "segment": "fact->>'segment'", "issuer": "fact->>'issuer'", "ccy": "fact->>'ccy'"}
 PY_DIMS = {"instr_kind": concepts.instr_kind}
 """Dimensions computed from the fact (an unvalued position: null), not in the SQL: ``concepts.instr_kind``."""
-JS ="text/javascript; charset=utf-8"
+JS = "text/javascript; charset=utf-8"
 NO_STORE = {"Cache-Control": "no-store"}
 
 
@@ -218,13 +218,16 @@ def desk_body(con, run: dict[str, Any]) -> bytes:
 
 
 def run_body(con, run: dict[str, Any]) -> bytes:
-    """``/concepts-run.js``: ``window.CONCEPTS_RUN`` of the run (``concepts_run``, the monitors' data, TDM#289)."""
-    return concepts_run.script(concepts_run.assemble(con, run)).encode()
-
-
-def run_json_body(con, run: dict[str, Any]) -> bytes:
-    """``/api/v1/concepts/run``: the same as JSON."""
+    """``/api/v1/concepts/run``: the monitors' data of the run as JSON (``concepts_run``, TDM#289), built once per
+    run and store state (key ``run``)."""
     return _json_bytes(concepts_run.assemble(con, run))
+
+
+def run_script(cache: BodyCache, con, run: dict[str, Any]) -> bytes:
+    """``/concepts-run.js``: ``window.CONCEPTS_RUN`` = the cached JSON of ``run_body`` (not assembled again; key
+    ``run-js`` holds its own gzip)."""
+    body, _, _ = _body_cached(cache, con, ("run", run["run_id"]), lambda: run_body(con, run))
+    return concepts_run.SCRIPT_PREFIX + body + b";\n"
 
 
 def extras_body(con, run: dict[str, Any], writer: Any = None) -> bytes:
@@ -241,11 +244,13 @@ def calendar_body(con, run: dict[str, Any]) -> bytes:
     return _json_bytes(concepts.market_calendar(con, run["business_date"], held) or {"missing": True})
 
 
-def warm_bodies(app: FastAPI) -> list[str]:
-    """Build the pages' bodies of the newest run shown (``/desk-data.js``, ``/concepts-run.js``,
-    ``/concepts-data.js``, every position's history, the market calendar) into the cache when the store changed
-    since they were built, so that the first page load after a new run finds them ready
-    (``serve`` runs it every ``WARM_S``). Returns the bodies built."""
+def warm_bodies(app: FastAPI, summaries: bool = True) -> list[str]:
+    """Build the pages' bodies of the newest run shown (``/desk-data.js``, ``/api/v1/concepts/run`` and
+    ``/concepts-run.js`` made of it, ``/concepts-data.js``, every position's history, the market calendar) into the
+    cache when the store changed since they were built, so that the first page load after a new run finds them ready
+    (``serve`` runs it every ``WARM_S``). ``summaries=False``: the runs' summaries are still being rebuilt
+    (``prewarm_summaries``), the bodies that read them (``/concepts-data.js``, the history) wait for it.
+    Returns the bodies built."""
     cache: BodyCache = app.state.body_cache
     built = []
     with psycopg.connect(app.state.store_url, row_factory=dict_row, autocommit=True, connect_timeout=5,
@@ -254,11 +259,16 @@ def warm_bodies(app: FastAPI) -> list[str]:
         if run is None:
             return built
         writer = app.state.write_summaries
-        for key, build, extra in ((("desk", run["run_id"]), lambda: desk_body(con, run), DESK_FP_SQL),
-                                  (("run", run["run_id"]), lambda: run_body(con, run), None),
-                                  (("extras", run["run_id"]), lambda: extras_body(con, run, writer), None),
-                                  (("history", run["run_id"], (), None), lambda: history_body(con, run, writer), None),
-                                  (("calendar", run["run_id"]), lambda: calendar_body(con, run), None)):
+        for key, build, extra, reads in ((("desk", run["run_id"]), lambda: desk_body(con, run), DESK_FP_SQL, False),
+                                         (("run", run["run_id"]), lambda: run_body(con, run), None, False),
+                                         (("run-js", run["run_id"]), lambda: run_script(cache, con, run), None, False),
+                                         (("extras", run["run_id"]), lambda: extras_body(con, run, writer), None,
+                                          True),
+                                         (("history", run["run_id"], (), None), lambda: history_body(con, run, writer),
+                                          None, True),
+                                         (("calendar", run["run_id"]), lambda: calendar_body(con, run), None, False)):
+            if reads and not summaries:
+                continue
             fp = concepts.fingerprint(con) + (str(con.execute(extra).fetchone()) if extra else "")
             if cache.get(key, fp) is None:
                 cache.put(key, fp, build())
@@ -268,6 +278,31 @@ def warm_bodies(app: FastAPI) -> list[str]:
 
 WARM_S = 20.0
 """How often ``serve`` checks whether the concept pages' bodies need building again."""
+PREWARM_S = 5.0
+"""Seconds of runs' summaries rebuilt per pass of ``serve``'s warm thread (``prewarm_summaries``)."""
+
+
+def prewarm_summaries(app: FastAPI, budget_s: float = PREWARM_S) -> int:
+    """The runs' summaries a new ``publish.summary.VERSION`` left stale, rebuilt for at most ``budget_s`` seconds,
+    newest first (``summary.prewarm``, TDM#246): ``serve``'s warm thread calls it at start (after an install) until
+    none is left, so the first history page load (C11) reads them instead of rebuilding a year of runs. Returns how
+    many are left. A store that cannot be written turns it off until the process restarts (0 from then on: the
+    bodies are built ahead and the pages build the summaries on read, as before); a run whose summary fails to build
+    is not tried again by this process (``app.state.prewarm_failed``)."""
+    from ..publish import summary
+
+    if app.state.prewarm_off:
+        return 0
+    with psycopg.connect(app.state.store_url, autocommit=True, connect_timeout=5) as w:
+        try:
+            done, left = summary.prewarm(w, budget_s, app.state.prewarm_failed)
+        except summary.NotWritable as e:
+            app.state.prewarm_off = True
+            log.info("run summaries not rebuilt ahead: the store cannot be written (%s)", e)
+            return 0
+    if done:
+        log.info("run summaries rebuilt ahead: %s (%s left)", done, left)
+    return left
 
 
 def _py_grouped(con, run_id: int, names: list[str], cols: list[str]) -> list[dict[str, Any]]:
@@ -363,6 +398,8 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
             summary.ensure(w, ids)
 
     app.state.write_summaries = write_summaries
+    app.state.prewarm_off = False  # prewarm_summaries: the store cannot be written
+    app.state.prewarm_failed = set()  # prewarm_summaries: runs whose summary fails to build
     # window.DESK and the concept pages' series of a large book are megabytes of JSON: compressed on the wire
     app.add_middleware(GZipMiddleware, minimum_size=4096)
     authn.install(app, _error)  # sessions, roles, CSRF, audit; inside request_id (added after it)
@@ -679,14 +716,16 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
                         demo: str | None = None):
         """``window.CONCEPTS_RUN`` of the run shown (``concepts_run.assemble``; the run as ``/desk-data.js``
         picks it); no run: ``window.CONCEPTS_RUN_EMPTY`` (the empty state, never the demo). Only ``?demo=1`` asks
-        for the demo data set: nothing is set. Built once per run and store state (R23), no-store (R16)."""
+        for the demo data set: nothing is set. Made of ``/api/v1/concepts/run``'s cached JSON (``run_script``),
+        once per run and store state (R23), no-store (R16)."""
         if demo:
             return Response("/* demo requested: lib/mock.js */\n", media_type=JS, headers=NO_STORE)
         run = resolve_run(con, as_of, run_id)
         if run is None:
-            return Response(concepts_run.script(None, concepts_run.empty(as_of, run_id)), media_type=JS,
+            return Response(concepts_run.empty_script(concepts_run.empty(as_of, run_id)), media_type=JS,
                             headers=NO_STORE)
-        body, gz = cached_body(request, con, ("run", run["run_id"]), lambda: run_body(con, run))
+        cache = request.app.state.body_cache
+        body, gz = cached_body(request, con, ("run-js", run["run_id"]), lambda: run_script(cache, con, run))
         if "gzip" in request.headers.get("accept-encoding", ""):
             return Response(gz, media_type=JS, headers={**NO_STORE, "Content-Encoding": "gzip",
                                                         "Vary": "Accept-Encoding"})
@@ -699,15 +738,14 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
                          "(``details.reason``: no_runs, not_found)",
              responses={200: {"content": {"application/json": {"schema": {"type": "object"}}}}})
     def concepts_run_json(con: Con, request: Request,
-                          run: int | None = Query(None, description="run_id; default: the run shown (as_of's, else "
-                                                  "the newest), as the concept pages"),
+                          run_id: int | None = Query(None, description="default: the run shown (as_of's, else the "
+                                                     "newest), as ``/concepts-run.js`` and the concept pages"),
                           as_of: date | None = None) -> Response:
-        r = resolve_run(con, as_of, run)
+        r = resolve_run(con, as_of, run_id)
         if r is None:
-            e = concepts_run.empty(as_of, run)
+            e = concepts_run.empty(as_of, run_id)
             raise ApiError(404, "not_found", e["message"], {"reason": e["reason"]})
-        return cached_response(request, con, ("run-json", r["run_id"]), lambda: run_json_body(con, r),
-                               "application/json")
+        return cached_response(request, con, ("run", r["run_id"]), lambda: run_body(con, r), "application/json")
 
     # ---- concept pages (prototypes/concepts/, lib/real.js): their data beyond window.DESK
     @app.get("/concepts-data.js", include_in_schema=False)
@@ -977,12 +1015,19 @@ def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir:
 
     def warm_loop() -> None:  # the concept pages' bodies ready before the first page asks (R23)
         while not server.should_exit:
+            left = 0
+            try:  # the summaries a new version left stale first, newest first, a pass at a time (TDM#246)
+                left = prewarm_summaries(app)
+            except Exception:
+                log.warning("run summaries not rebuilt ahead", exc_info=True)
             try:
-                built = warm_bodies(app)
+                built = warm_bodies(app, summaries=not left)
                 if built:
                     log.info("concept bodies built ahead: %s", ", ".join(built))
             except Exception:
                 log.warning("concept bodies not built ahead", exc_info=True)
+            if left:
+                continue  # the next pass at once
             for _ in range(int(WARM_S * 10)):
                 if server.should_exit:
                     break

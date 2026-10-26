@@ -70,8 +70,9 @@ def _json(v: Any) -> Any:
     return v.isoformat() if isinstance(v, date) else float(v) if isinstance(v, Decimal) else v
 
 
-def no_pnl(code: str, detail: str | None = None) -> dict[str, Any]:
-    """A position's ``pnl`` without PnL (R10): every amount null, not 0, and why (``pnl.reasons``)."""
+def no_pnl(code: str) -> dict[str, Any]:
+    """A position's ``pnl`` without PnL (R10): every amount null, not 0, and why (``pnl.reasons``; the pages read
+    only its text, not compat's ``reasonDetail``)."""
     return {**dict.fromkeys(PNL_AMOUNTS), "available": False, "reasonText": no_pnl_text(code), "method": None,
             "methodText": None}
 
@@ -89,10 +90,11 @@ def _pnl(q: dict[str, Any]) -> dict[str, Any]:
             "methodText": METHOD_TEXT.get(method, method) if method else None}
 
 
-def _no_pnl_of(stored: dict[str, Any] | None, prev_date: date | None) -> tuple[str, str | None]:
+def _no_pnl_code(stored: dict[str, Any] | None, prev_date: date | None) -> str:
+    """Why a valued position has no PnL: run_position.no_pnl, else the run's own reason."""
     if stored:
-        return stored.get("reason") or "not_computed", stored.get("detail")
-    return (RUN_NO_PREV_MARKET, None) if prev_date is None else ("not_computed", None)
+        return stored.get("reason") or "not_computed"
+    return RUN_NO_PREV_MARKET if prev_date is None else "not_computed"
 
 
 def funding_status(block: dict[str, Any] | None) -> dict[str, Any]:
@@ -129,7 +131,7 @@ def _not_valued(r: dict[str, Any], books: dict[str, dict], x: dict[str, Any] | N
         "ccy": x.get("ccy"), "maturity": x.get("maturity_date") or x.get("value_date"), "tenorY": None,
         "notional": None, "notionalRub": None, "price": None, "mv": None, "mvRub": None, "cs01": 0.0, "ofzSpr01": 0.0,
         "risk": {}, "fxDelta": {}, "entity": books.get(r["book_id"], {}).get("entity", "—"), "portfolio": portfolio,
-        "newToday": False, "notValued": True, "pnl": no_pnl("not_valued", r["reason"]),
+        "newToday": False, "notValued": True, "pnl": no_pnl("not_valued"),
         "extra": {"quality": "not_valued", "valuation": "not_valued", "reason": r["reason"],
                   "quantity": r["quantity"], **({"reported": x} if x else {})},
     }
@@ -225,7 +227,7 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
             "fxDelta": {c: d for c, d in (p.get("fx_delta") or {}).items() if d},
             "counterparty": p.get("counterparty"), "newToday": bool(p.get("new_today")),
             "entity": books.get(p["book_id"], {}).get("entity", "—"), "portfolio": portfolio.get(pid),
-            "pnl": _pnl(q) if q else no_pnl(*_no_pnl_of(row["no_pnl"], run["prev_date"])),
+            "pnl": _pnl(q) if q else no_pnl(_no_pnl_code(row["no_pnl"], run["prev_date"])),
         }
         if p.get("accrual_only"):
             pos["accrualOnly"] = True
@@ -281,9 +283,11 @@ def empty(as_of: date | None, run_id: int | None) -> dict[str, str]:
     return {"reason": "not_found" if as_of or run_id else "no_runs", "message": msg}
 
 
-def script(data: dict[str, Any] | None, missing: dict[str, str] | None = None) -> str:
-    """``/concepts-run.js``: ``window.CONCEPTS_RUN`` of a run, else ``window.CONCEPTS_RUN_EMPTY``."""
-    if data is None:
-        return (f"/* {(missing or {}).get('message', '')}: empty state */\n"
-                f"window.CONCEPTS_RUN_EMPTY = {json.dumps(missing, ensure_ascii=False)};\n")
-    return "window.CONCEPTS_RUN = " + json.dumps(data, ensure_ascii=False, separators=(",", ":")) + ";\n"
+SCRIPT_PREFIX = b"window.CONCEPTS_RUN = "
+"""``/concepts-run.js`` is this, ``/api/v1/concepts/run``'s JSON body as it is (``app.run_script``) and ``;\\n``."""
+
+
+def empty_script(missing: dict[str, str]) -> str:
+    """``/concepts-run.js`` without a run: ``window.CONCEPTS_RUN_EMPTY`` (``empty``)."""
+    return (f"/* {missing['message']}: empty state */\n"
+            f"window.CONCEPTS_RUN_EMPTY = {json.dumps(missing, ensure_ascii=False, default=str)};\n")

@@ -3,9 +3,7 @@ position published with its quality."""
 
 from __future__ import annotations
 
-import json
 import math
-import sqlite3
 from collections import Counter
 from dataclasses import replace
 from datetime import timedelta
@@ -13,6 +11,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from run_checks import consistency, content, warnings
 from test_slice_s2 import shifted_prev
 
 import desk.orchestrator as orch
@@ -195,30 +194,26 @@ def test_simple_pnl_all_in_other(ctx, exact):
     assert p.extra()["method"] == "desk-flash-simple-v1"
 
 
-def test_every_position_published_with_quality(ctx, exact, tmp_path):
+def test_every_position_published_with_quality(ctx, exact):
     fb = _fb(ctx)
     outs = [replace(o) for o in exact.values()]
     for o in outs:
         if o.valuation is None:
             o.valuation = approximate(ctx, o, Q, fb)
-    db = tmp_path / "tdm.sqlite"
     positions = [(f"P{i}", "MIXED", o) for i, o in enumerate(outs)]
-    run_id, status, warnings = tdm_run.publish(str(db), ctx, positions, prev=None)
-    assert status == "complete"
-    con = sqlite3.connect(db)
-    rows = con.execute("SELECT extra_json, ytm, ccy FROM position WHERE run_id=?", (run_id,)).fetchall()
+    c = content(ctx, positions)
+    assert consistency(c) == []
+    rows = c.rows
     assert len(rows) == len(outs)
     want = Counter(o.valuation.quality for o in outs)  # floaters become exact or assumed once core prices them
-    assert Counter(json.loads(r[0])["quality"] for r in rows) == want and want["market_value"] >= 1
-    assert ("USD" in {r[2] for r in rows}) and con.execute(
-        "SELECT COUNT(*) FROM position_fx WHERE run_id=? AND ccy='USD'", (run_id,)).fetchone()[0] == 1
-    # every curve of the risk is a run curve (tdm requires it): the USD bond's on a USD curve without points
-    assert {r[0] for r in con.execute("SELECT DISTINCT curve_id FROM position_risk WHERE run_id=?", (run_id,))} \
-        <= {r[0] for r in con.execute("SELECT curve_id FROM run_curve WHERE run_id=?", (run_id,))} \
-        == {"RUB OFZ", "RUB RUONIA", "RUB KEY", "USD"}
-    assert all(not isinstance(r[1], float) or math.isfinite(r[1]) for r in rows)
-    assert sum("оценка market_value" in w for w in warnings) == want["market_value"]
-    log = [m for (m,) in con.execute("SELECT message FROM calc_run_log WHERE run_id=?", (run_id,))]
+    assert Counter(r["extra"]["quality"] for r in rows) == want and want["market_value"] >= 1
+    assert "USD" in {r["ccy"] for r in rows} and sum(bool((r.get("fx_delta") or {}).get("USD")) for r in rows) == 1
+    # every curve of the risk is a run curve: the USD bond's on a USD curve without points
+    assert {cid for r in rows for cid, bs in (r.get("risk") or {}).items() if any(bs.values())} \
+        <= {x["curve_id"] for x in c.reference["curves"]} == {"RUB OFZ", "RUB RUONIA", "RUB KEY", "USD"}
+    assert all(not isinstance(r["ytm"], float) or math.isfinite(r["ytm"]) for r in rows)
+    assert sum("оценка market_value" in w for w in warnings(c)) == want["market_value"]
+    log = [m for _, m in c.log]
     mv = f"market_value {want['market_value']}"
     assert any(m.startswith("качество оценки: exact ") and mv in m for m in log)
 
