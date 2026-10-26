@@ -209,7 +209,7 @@
     const kd = (title, val, tot) => {
       if (tot == null) return '<span class="mut3">—</span>';
       const rows = pos.filter(r => r.p && val(r) != null).map(r => ({ p: r.p, v: val(r) }));
-      return (rows.length ? K.d({ title, unit: 'mm ₽', fmt: v => f.mn(v, DIG), rows }, f.mn(tot, DIGB)) : f.mn(tot, DIGB)) + K.kpiUnit('mm ₽');
+      return (rows.length ? K.d({ title, unit: 'mm ₽', fmt: v => f.mn(v, DIG), rows }, f.mn(tot, DIGB), f.cls(tot)) : '<span class="' + f.cls(tot) + '">' + f.mn(tot, DIGB) + '</span>') + K.kpiUnit('mm ₽');
     };
     kp.innerHTML =
       K.kpi('Кэрри', kd('Кэрри до ' + f.date(resp.horizonDate), r => r.carry, S.carry), S.nCovered + ' поз. с прогнозом' + (S.nNotCovered ? ' · ' + S.nNotCovered + ' без' : ''), '', TIP.carry) +
