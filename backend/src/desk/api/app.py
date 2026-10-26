@@ -38,8 +38,9 @@ from ..scenario import carry, jobs
 from ..scenario.definition import definition_hash, normalize
 from ..scenario.taylor import risk_payload
 from ..settings import REPO_ROOT
+from ..store import CURRENT_RUNS, slice_label
 from . import auth as authn
-from . import compat, concepts
+from . import compat, concepts, concepts_run
 from .autopilot_routes import router as autopilot_router
 from .models import (
     COMPAT,
@@ -69,6 +70,7 @@ from .models import (
     ScenarioDefList,
     ScenarioJob,
 )
+from .runs import HEADER_SQL, PNL_KEYS, resolve_run
 
 log = logging.getLogger("desk.api")
 # the local fonts (prototypes/fonts/, #79): Python 3.11's table and a Windows registry may not know .woff2
@@ -82,14 +84,11 @@ def static_root() -> Path:
 
 
 REQUEST_ID = re.compile(r"[\w.:-]{1,128}")
-HEADER_SQL = (f"SELECT r.*, r.run_id IN ({compat.DEFAULT_RUNS}) AS is_default,"
-              f" r.run_id IN ({compat.CURRENT_RUNS}) AS is_current FROM run r")
 DIMS = {"book": "book_id", "quality": "quality", "asset_class": "fact->>'asset_class'",
         "segment": "fact->>'segment'", "issuer": "fact->>'issuer'", "ccy": "fact->>'ccy'"}
 PY_DIMS = {"instr_kind": concepts.instr_kind}
 """Dimensions computed from the fact (an unvalued position: null), not in the SQL: ``concepts.instr_kind``."""
-PNL_KEYS = compat.PNL_KEYS
-JS = "text/javascript; charset=utf-8"
+JS ="text/javascript; charset=utf-8"
 NO_STORE = {"Cache-Control": "no-store"}
 
 
@@ -185,8 +184,8 @@ def _error(request: Request, status: int, code: str, message: str, details: Any 
 def _header(row: dict[str, Any]) -> dict[str, Any]:
     basis = (row.get("lineage") or {}).get("pnl_basis") or {}
     return {**row, "as_of": row["business_date"], "published_at": row["completed_at"],
-            "label": compat.slice_label(row["business_date"], row["cut_type"], row.get("cut_ts"), row["run_type"],
-                                        (row.get("lineage") or {}).get("market_close")),
+            "label": slice_label(row["business_date"], row["cut_type"], row.get("cut_ts"), row["run_type"],
+                                 (row.get("lineage") or {}).get("market_close")),
             "pnl_basis": basis.get("label")}
 
 
@@ -218,6 +217,16 @@ def desk_body(con, run: dict[str, Any]) -> bytes:
             + ";\n").encode()
 
 
+def run_body(con, run: dict[str, Any]) -> bytes:
+    """``/concepts-run.js``: ``window.CONCEPTS_RUN`` of the run (``concepts_run``, the monitors' data, TDM#289)."""
+    return concepts_run.script(concepts_run.assemble(con, run)).encode()
+
+
+def run_json_body(con, run: dict[str, Any]) -> bytes:
+    """``/api/v1/concepts/run``: the same as JSON."""
+    return _json_bytes(concepts_run.assemble(con, run))
+
+
 def extras_body(con, run: dict[str, Any], writer: Any = None) -> bytes:
     return concepts.script(concepts.extras(con, run, writer)).encode()
 
@@ -233,18 +242,20 @@ def calendar_body(con, run: dict[str, Any]) -> bytes:
 
 
 def warm_bodies(app: FastAPI) -> list[str]:
-    """Build the pages' bodies of the newest run shown (``/desk-data.js``, ``/concepts-data.js``, every position's
-    history, the market calendar) into the cache when the store changed since they were built, so that the first page load after
-    a new run finds them ready (``serve`` runs it every ``WARM_S``). Returns the bodies built."""
+    """Build the pages' bodies of the newest run shown (``/desk-data.js``, ``/concepts-run.js``,
+    ``/concepts-data.js``, every position's history, the market calendar) into the cache when the store changed
+    since they were built, so that the first page load after a new run finds them ready
+    (``serve`` runs it every ``WARM_S``). Returns the bodies built."""
     cache: BodyCache = app.state.body_cache
     built = []
     with psycopg.connect(app.state.store_url, row_factory=dict_row, autocommit=True, connect_timeout=5,
                          options="-c default_transaction_read_only=on") as con:
-        run = compat.resolve_run(con)
+        run = resolve_run(con)
         if run is None:
             return built
         writer = app.state.write_summaries
         for key, build, extra in ((("desk", run["run_id"]), lambda: desk_body(con, run), DESK_FP_SQL),
+                                  (("run", run["run_id"]), lambda: run_body(con, run), None),
                                   (("extras", run["run_id"]), lambda: extras_body(con, run, writer), None),
                                   (("history", run["run_id"], (), None), lambda: history_body(con, run, writer), None),
                                   (("calendar", run["run_id"]), lambda: calendar_body(con, run), None)):
@@ -429,7 +440,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
              description="The run shown (R11): of business_date, its default run, otherwise its latest intraday "
                          "run; without business_date, the newest such run (today's intraday run when there is one)")
     def default_run(con: Con, business_date: date | None = None):
-        sql = HEADER_SQL + f" WHERE r.run_id IN ({compat.CURRENT_RUNS})"
+        sql = HEADER_SQL + f" WHERE r.run_id IN ({CURRENT_RUNS})"
         if business_date:
             row = con.execute(sql + " AND r.business_date = %s", (business_date,)).fetchone()
         else:
@@ -626,7 +637,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
     # ---- compatibility adapter (05 §4)
     def _compat(con, as_of: date | None, run_id: int | None) -> tuple[dict | None, str]:
-        run = compat.resolve_run(con, as_of, run_id)
+        run = resolve_run(con, as_of, run_id)
         if run is None:
             return None, (f"прогон {run_id} не найден" if run_id else
                           "нет опубликованных прогонов" + (f" на {as_of}" if as_of else ""))
@@ -639,7 +650,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         # ("no runs yet", the autopilot's progress), never the demo data set. Only ?demo=1 asks for data.js.
         if demo:
             return Response("/* demo requested: data.js */\n", media_type=JS, headers=NO_STORE)
-        run = compat.resolve_run(con, as_of, run_id)
+        run = resolve_run(con, as_of, run_id)
         if run is not None:  # built once per run and store state (R23); the browser still asks every time (R16)
             body, gz = cached_body(request, con, ("desk", run["run_id"]), lambda: desk_body(con, run), DESK_FP_SQL)
             if "gzip" in request.headers.get("accept-encoding", ""):
@@ -662,6 +673,42 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
             raise ApiError(404, "not_found", missing)
         return desk
 
+    # ---- the monitors' run (prototypes/concepts/, lib/real.js; TDM#289): window.DESK's successor
+    @app.get("/concepts-run.js", include_in_schema=False)
+    def concepts_run_js(con: Con, request: Request, as_of: date | None = None, run_id: int | None = None,
+                        demo: str | None = None):
+        """``window.CONCEPTS_RUN`` of the run shown (``concepts_run.assemble``; the run as ``/desk-data.js``
+        picks it); no run: ``window.CONCEPTS_RUN_EMPTY`` (the empty state, never the demo). Only ``?demo=1`` asks
+        for the demo data set: nothing is set. Built once per run and store state (R23), no-store (R16)."""
+        if demo:
+            return Response("/* demo requested: lib/mock.js */\n", media_type=JS, headers=NO_STORE)
+        run = resolve_run(con, as_of, run_id)
+        if run is None:
+            return Response(concepts_run.script(None, concepts_run.empty(as_of, run_id)), media_type=JS,
+                            headers=NO_STORE)
+        body, gz = cached_body(request, con, ("run", run["run_id"]), lambda: run_body(con, run))
+        if "gzip" in request.headers.get("accept-encoding", ""):
+            return Response(gz, media_type=JS, headers={**NO_STORE, "Content-Encoding": "gzip",
+                                                        "Vary": "Accept-Encoding"})
+        return Response(body, media_type=JS, headers=NO_STORE)
+
+    @app.get("/api/v1/concepts/run",
+             description="The monitors' data of a run (``window.CONCEPTS_RUN``, ``/concepts-run.js``; TDM#289): "
+                         "the run's dates and PnL state, buckets, curves, FX, indices, issuers, books, risk notes, "
+                         "funding status, source and positions, as ``lib/real.js`` reads them. 404 without a run "
+                         "(``details.reason``: no_runs, not_found)",
+             responses={200: {"content": {"application/json": {"schema": {"type": "object"}}}}})
+    def concepts_run_json(con: Con, request: Request,
+                          run: int | None = Query(None, description="run_id; default: the run shown (as_of's, else "
+                                                  "the newest), as the concept pages"),
+                          as_of: date | None = None) -> Response:
+        r = resolve_run(con, as_of, run)
+        if r is None:
+            e = concepts_run.empty(as_of, run)
+            raise ApiError(404, "not_found", e["message"], {"reason": e["reason"]})
+        return cached_response(request, con, ("run-json", r["run_id"]), lambda: run_json_body(con, r),
+                               "application/json")
+
     # ---- concept pages (prototypes/concepts/, lib/real.js): their data beyond window.DESK
     @app.get("/concepts-data.js", include_in_schema=False)
     def concepts_js(con: Con, request: Request, as_of: date | None = None, run_id: int | None = None,
@@ -669,7 +716,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         """``window.DESK_EXTRAS`` of the run ``/desk-data.js`` shows for the same parameters (``concepts.extras``);
         nothing without a run. The ETag is the body's hash: a new default run changes the series, a page reload then
         gets them, an unchanged run a 304."""
-        run = None if demo else compat.resolve_run(con, as_of, run_id)
+        run = None if demo else resolve_run(con, as_of, run_id)
         if run is None:
             return Response("/* no run: window.DESK_EXTRAS not set */\n", media_type=JS, headers=NO_STORE)
         return cached_response(request, con, ("extras", run["run_id"]), lambda: extras_body(con, run, write_summaries), JS)
@@ -697,7 +744,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         from ..marketdata.bundle import SnapshotDir, SnapshotError
         from ..settings import SettingsError, load
 
-        r = compat.resolve_run(con, as_of, run)
+        r = resolve_run(con, as_of, run)
         if r is None:
             raise ApiError(404, "not_found", f"run {run} not found" if run else "no runs")
         try:
@@ -729,7 +776,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
                           from_: Annotated[date | None, Query(alias="from")] = None) -> Response:
         """The run's positions' series on one date axis (``concepts.positions_history``): MOEX price, yield and
         G-spread, the KBD at the bond's term, face and DV01 by the default runs. For the concept pages' charts."""
-        run = compat.resolve_run(con, as_of, run_id)
+        run = resolve_run(con, as_of, run_id)
         if run is None:
             raise ApiError(404, "not_found", f"run {run_id} not found" if run_id else "no runs")
         wanted = [i for i in (ids or "").split(",") if i] or None
@@ -741,7 +788,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         """A bond position's whole schedule after the run's date (``concepts.position_flows``): the position card."""
         from ..settings import SettingsError, load
 
-        run = compat.resolve_run(con, as_of, run_id)
+        run = resolve_run(con, as_of, run_id)
         if run is None:
             raise ApiError(404, "not_found", f"run {run_id} not found" if run_id else "no runs")
         try:
@@ -762,7 +809,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
                         big: bool = False, limit: int = Query(concepts.FLOW_LIMIT, ge=1, le=5000)):
         """The market's payment calendar of the run's date (``concepts.market_calendar``: aggregates by day, type or
         currency and kind); with ``market`` the flows behind a cell, the largest first (``concepts.market_flows``)."""
-        run = compat.resolve_run(con, as_of, run_id)
+        run = resolve_run(con, as_of, run_id)
         if run is None:
             raise ApiError(404, "not_found", f"run {run_id} not found" if run_id else "no runs")
         if market is None:
