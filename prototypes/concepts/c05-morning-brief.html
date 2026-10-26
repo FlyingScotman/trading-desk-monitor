@@ -148,7 +148,7 @@
     });
     const bas = M.ofzView === 'kbd' ? 0 : M.sum(L, p => ratePnl(p, 'RUB OFZ'));  // в виде «КБД» КБД — среди кривых ставок выше
     if (Math.abs(bas) > 3e5) parts.push({ v: bas, h: 'базис ОФЗ ' + mln('PnL от базиса ОФЗ − RUONIA', L, p => ratePnl(p, 'RUB OFZ')) + ' <span class="mut">(ОФЗ шире RUONIA на ' + chgRange(M.curve['RUB OFZ']) + ' б.п.)</span>' });
-    [['carry', 'кэрри'], ['spread', 'кредитные спреды'], ['fx', 'курсы'], ['trading', 'сделки дня'], ['other', 'прочее']].forEach(([key, t]) => {
+    [['carry', 'кэрри'], ['funding', 'фондирование'], ['spread', 'кредитные спреды'], ['fx', 'курсы'], ['trading', 'сделки дня'], ['other', 'прочее']].forEach(([key, t]) => {
       const v = M.sum(L, p => p.pnl[key]); if (Math.abs(v) > 2e5) parts.push({ v, h: t + ' ' + mln('PnL · ' + t, L, p => p.pnl[key]) });
     });
     parts.sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
@@ -162,9 +162,10 @@
       '<p class="mut" style="font-size:13px">Риск на утро: DV01 по ставкам ' + dvx('DV01 ставки', L, 'dv01') + ', из них RUONIA ' + dvx('DV01 RUONIA', L, p => p.dv01ByCurve['RUB RUONIA']) +
       ', КС ' + dvx('DV01 КС', L, p => p.dv01ByCurve['RUB KEY']) + (M.ofzView === 'kbd' ? ', КБД ' + dvx('DV01 КБД', L, p => p.dv01ByCurve['RUB OFZ'])
         : '; базис ОФЗ ' + dvx('Базис ОФЗ − RUONIA', L, 'basis01')) + '; спред ОФЗ к КБД ' + dvx('Спред ОФЗ к КБД', L, 'ofzSpr01') + '; CS01 ' + dvx('CS01', L, 'cs01') +
-      '. Кэрри ' + K.d({ title: 'Кэрри за день', unit: 'тыс ₽', fmt: f.ks, list: L, val: 'carryDay' }) + '&nbsp;тыс ₽ в день.</p>' +
-      '<div class="factors">' + [['Кэрри', 'carry'], ['Ставки', 'rates'], ['Спред', 'spread'], ['FX', 'fx'], ['Сделки', 'trading'], ['Прочее', 'other']].map(([t, key]) =>
-        '<div class="factor"><div class="l">' + t + '</div><div class="v">' + K.d({ title: 'PnL · ' + t, unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl[key] }, null) + '</div></div>').join('') + '</div></section>';
+      '. ' + K.hint('Кэрри', K.tips.carry) + ' ' + K.d({ title: 'Кэрри за день (без фондирования)', unit: 'тыс ₽', fmt: f.ks, list: L, val: 'carryDay' }) + '&nbsp;тыс ₽ в день, ' +
+      K.hint('фондирование', K.tips.funding) + ' ' + K.d({ title: 'Фондирование за день', unit: 'тыс ₽', fmt: f.ks, list: L, val: 'fundingDay', nullable: true }) + '&nbsp;тыс ₽ в день.</p>' +
+      '<div class="factors">' + K.PNL_FACTORS.map(([key, t]) =>
+        '<div class="factor"><div class="l">' + K.hint(t, K.tips[key]) + '</div><div class="v">' + K.d({ title: 'PnL · ' + t, unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl[key] }, null) + '</div></div>').join('') + '</div></section>';
 
     // ---------- 02 что изменилось ----------
     const H = M.hist, n = M.histDates.length;
@@ -194,7 +195,7 @@
     const byPnl = L.slice().sort((a, b) => b.pnl.total - a.pnl.total);
     const top = byPnl.filter(p => p.pnl.total > 0).slice(0, 5), bot = byPnl.filter(p => p.pnl.total < 0).slice(-5).reverse();
     const mx = Math.max(1, ...top.concat(bot).map(p => Math.abs(p.pnl.total)));
-    const why = p => { const fs = [['кэрри', p.pnl.carry], ['ставки', p.pnl.rates], ['спред', p.pnl.spread], ['FX', p.pnl.fx], ['сделки', p.pnl.trading]].filter(x => Math.abs(x[1]) > 1e4).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 2); return fs.map(x => x[0] + ' <span class="k-num">' + f.mns(x[1], 1) + '</span>').join(', '); };
+    const why = p => { const fs = [['кэрри', p.pnl.carry], ['фондирование', p.pnl.funding || 0], ['ставки', p.pnl.rates], ['спред', p.pnl.spread], ['FX', p.pnl.fx], ['сделки', p.pnl.trading]].filter(x => Math.abs(x[1]) > 1e4).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 2); return fs.map(x => x[0] + ' <span class="k-num">' + f.mns(x[1], 1) + '</span>').join(', '); };
     const lst = (arr, vk, t) => '<table class="mini" data-vk="' + vk + '" data-title="' + t + '"><tbody>' + arr.map(p => '<tr data-card="' + p.id + '"><td style="width:4px;padding:0;background:' + K.issuerColor(p.issuer) + '"></td><td class="name">' + esc(p.name) + ' <span class="mut3">' + esc(p.book) + '</span><div class="why">' + why(p) + '</div></td><td class="n ' + f.cls(p.pnl.total) + '"><b>' + f.mns(p.pnl.total, 1) + '</b></td><td style="width:90px">' + K.bar(p.pnl.total, mx) + '</td></tr>').join('') + '</tbody></table>';
     const share = (top.concat(bot)).reduce((s, p) => s + Math.abs(p.pnl.total), 0) / Math.max(1, L.reduce((s, p) => s + Math.abs(p.pnl.total), 0));
     html += '<section id="s3"><h2><span class="no">03</span> Главные вклады <span class="sp"></span><span class="k-note">mm ₽ · щелчок — карточка позиции</span></h2>' +
@@ -247,8 +248,10 @@
     const moved = bonds.filter(p => Math.abs(p.spreadChgBp || 0) >= 5).sort((a, b) => Math.abs(b.spreadChgBp) - Math.abs(a.spreadChgBp));
     if (moved.length) alerts.push({ c: '', i: '⇅', h: 'Спред сдвинулся на 5+ б.п.: <b>' + moved.length + '</b> бумаг, PnL от спреда ' + K.d({ title: 'PnL спреда · сдвиг ≥ 5 б.п.', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: moved, val: p => p.pnl.spread }) + ' mm.' + '<div class="lst">' + moved.slice(0, 10).map(p => '<span data-card="' + p.id + '">' + esc(p.name) + ' <span class="' + (p.spreadChgBp > 0 ? 'chg-up' : 'chg-dn') + '">' + f.bps(p.spreadChgBp) + '</span></span>').join(' · ') + '</div>' });
     if (traded.length) alerts.push({ c: 'info', i: '✎', h: 'Сделки сегодня: <b>' + traded.length + '</b>, PnL сделок ' + K.d({ title: 'PnL сделок дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: traded, val: p => p.pnl.trading }) + ' mm.' + '<div class="lst">' + traded.map(p => '<span data-card="' + p.id + '">' + esc(p.name) + ' ' + (p.tradeToday.qty > 0 ? '+' : '') + f.mn(p.tradeToday.qty, 0) + '</span>').join(' · ') + '</div>' });
-    const neg = bonds.filter(p => p.carryDay < 0 && p.book !== 'HTM');
-    if (neg.length) alerts.push({ c: '', i: '₽', h: 'Отрицательное кэрри у <b>' + neg.length + '</b> бумаг: ' + K.d({ title: 'Отрицательное кэрри', unit: 'тыс ₽/день', fmt: f.ks, list: neg, val: 'carryDay' }) + ' тыс в день (фондирование дороже доходности).' });
+    // кэрри без фондирования (#168): «отрицательное» — кэрри минус фондирование, т. е. кэрри + фондирование (оно со знаком минус)
+    const netCarry = p => p.carryDay + (p.fundingDay || 0);
+    const neg = bonds.filter(p => p.fundingDay != null && netCarry(p) < 0 && p.book !== 'HTM');
+    if (neg.length) alerts.push({ c: '', i: '₽', h: 'Кэрри минус фондирование отрицательно у <b>' + neg.length + '</b> бумаг: ' + K.d({ title: 'Кэрри минус фондирование < 0', unit: 'тыс ₽/день', fmt: f.ks, list: neg, val: netCarry }) + ' тыс в день (фондирование дороже доходности).' });
     html += '<section id="s5"><h2><span class="no">05</span> Внимание <span class="sp"></span><span class="k-note">' + alerts.length + ' пунктов</span></h2><div class="alerts">' +
       alerts.map(a => '<div class="alert ' + a.c + '"><div class="ic">' + a.i + '</div><div>' + a.h + '</div></div>').join('') + '</div></section>';
 

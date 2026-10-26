@@ -36,7 +36,7 @@ earlier default runs' blocks), by entity, problems, notes, the policy with its s
 type is not funded on MV, an entity funded on its cash, not a bond) / ``problem`` / ``not_configured``) and the
 ``funding`` component of its flash PnL (``pnl_funding``): the line's interest in RUB, 0 for ``deferred`` and
 ``not_funded``, absent (null) for ``problem`` and ``not_configured``. The flash PnL's components then sum to the PnL net
-of funding (carry net of funding on the pages). A funding line of a position without a flash PnL, of a closed position,
+of funding (on the pages the carry is without it and the funding its own factor, TDM#168). A funding line of a position without a flash PnL, of a closed position,
 of cash or of an entity is a book-level line (``in_position`` false): the block's totals are ``in_positions`` +
 ``book_level``. The funding liability's FX revaluation (``fx_funding``) and the FX delta of the funding (OQ-04) are not
 published: they stay 0 / absent until OQ-04 is decided.

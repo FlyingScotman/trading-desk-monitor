@@ -12,6 +12,7 @@
 .side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .ctl { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .ctl .lbl { color: var(--fg-2); font-size: 12px; }
+.ctl .k-seg { flex-wrap: wrap; max-width: 100%; }  /* узкий экран: кнопки переносятся, без прокрутки страницы */
 #tree { height: 640px; }
 #sun { height: 360px; }
 #bub { height: 340px; }
@@ -88,7 +89,9 @@
     pnl: { t: 'PnL дня', div: true, unit: 'б.п. к MV', agg: L => { const b = M.sum(L, base); return b ? M.sum(L, p => p.pnl.total) / b * 1e4 : 0; }, fmt: v => f.s(v, 1) + ' б.п.', abs: L => f.mns(M.sum(L, p => p.pnl.total), 2) + ' mm ₽' },
     spr: { t: 'Δ спреда', div: true, inv: true, unit: 'б.п. (рост — красный)', agg: L => wavg(L.filter(p => p.group === 'CORP' || p.group === 'SUB'), p => p.spreadChgBp), fmt: v => f.s(v, 1) + ' б.п.' },
     ytm: { t: 'доходность', div: false, unit: '%', agg: L => wavg(L.filter(p => p.group !== 'DER' && p.kind !== 'IN'), p => p.ytm), fmt: v => f.pct(v) },
-    carry: { t: 'кэрри', div: true, unit: '% годовых к MV', agg: L => { const b = M.sum(L, base); return b ? M.sum(L, 'carryDay') * 365 / b * 100 : 0; }, fmt: v => f.pcts(v, 2), abs: L => f.ks(M.sum(L, 'carryDay')) + ' тыс ₽/д' },
+    carry: { t: 'кэрри', div: true, unit: '% годовых к MV, без фондирования', agg: L => { const b = M.sum(L, base); return b ? M.sum(L, 'carryDay') * 365 / b * 100 : 0; }, fmt: v => f.pcts(v, 2), abs: L => f.ks(M.sum(L, 'carryDay')) + ' тыс ₽/д' },
+    // фондирование: не посчитано ни у одной позиции узла — null («—», серый), а не 0
+    funding: { t: 'фондир.', div: true, unit: '% годовых к MV', agg: L => { const F = L.filter(p => p.fundingDay != null), b = M.sum(F, base); return F.length && b ? M.sum(F, 'fundingDay') * 365 / b * 100 : null; }, fmt: v => f.pcts(v, 2), abs: L => L.some(p => p.fundingDay != null) ? f.ks(M.sum(L, p => p.fundingDay || 0)) + ' тыс ₽/д' : '—' },
     tenor: { t: 'срок до события', div: false, unit: 'лет', agg: L => wavg(L, p => p.tenor), fmt: v => f.yrs(v) },
   };
   function wavg(L, fn) { const w = M.sum(L, base); return w ? L.reduce((s, p) => s + fn(p) * base(p), 0) / w : null; }
@@ -198,7 +201,7 @@
     const el = document.getElementById('members');
     K.table(el, { viewKey: 'c07-members',
       rows: n.list.slice().sort((a, b) => SIZES[S.size].v(b) - SIZES[S.size].v(a)), autoFilter: false, stripe: r => K.issuerColor(r.issuer), maxHeight: '360px',
-      columns: K.cols(['name', 'ccy', 'issuer', 'kind', 'book', 'tenor', 'ytm', 'spread', 'mv', 'dv01', 'cs01', 'carry', 'pnl']),
+      columns: K.cols(['name', 'ccy', 'issuer', 'kind', 'book', 'tenor', 'ytm', 'spread', 'mv', 'dv01', 'cs01', 'carry', 'funding', 'pnl']),
     });
   }
 

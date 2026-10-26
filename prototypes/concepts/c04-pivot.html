@@ -60,8 +60,8 @@
   const MON = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
   const horizon = M.util.addMonths(M.asOf, 24).slice(0, 7);
   const idxOrder = arr => (a, b) => { const i = x => { const j = arr.indexOf(x); return j < 0 ? 999 : j; }; return i(a) - i(b) || String(a).localeCompare(String(b), 'ru'); };
-  const FACT = [['carry', 'Кэрри'], ['rates', 'Ставки'], ['spread', 'Спред'], ['fx', 'FX'], ['trading', 'Сделки'], ['other', 'Прочее']];
-  const FCOL = { carry: '#3fb67a', rates: '#4c9dff', spread: '#e3b341', fx: '#b48cff', trading: '#22c3d6', other: '#a0b4c8' };
+  const FACT = K.PNL_FACTORS;  // кэрри (без фондирования), фондирование (#168), ставки, спред, FX, сделки, прочее
+  const FCOL = K.PNL_COLORS;
   const nearestBucket = t => { let b = 0, d = 1e9; M.pillars.forEach((x, i) => { const e = Math.abs(Math.log((t || 0.01) / x)); if (e < d) { d = e; b = i; } }); return M.buckets[b]; };
   const DIMS = {
     none: { label: '—' },
@@ -89,6 +89,8 @@
   const rateIds = M.curves.filter(c => c.kind === 'rate').map(c => c.id);
   const curveParts = ids => p => { const out = []; ids.forEach(id => p.risk[id].forEach((v, k) => { if (v) out.push({ curve: id, bucket: k, v }); })); return out; };
   const one = fn => p => [{ v: fn(p) }];
+  // фондирование (#168): настоящий 0 — «·», не посчитано ни у одной позиции ячейки — «—» (keep: ноль не отбрасывается)
+  const nulPart = (v, x) => [Object.assign(v == null ? { v: 0, keep: true, nul: true } : { v, keep: true }, x || {})];
   const MEAS = {
     dv01: { label: 'DV01 ставки', unit: 'тыс ₽/бп', fmt: f.dv, kind: 'risk', parts: curveParts(rateIds) },
     dvall: { label: M.ofzView === 'kbd' ? 'DV01 все кривые' : 'DV01 + базис ОФЗ', unit: 'тыс ₽/бп', fmt: f.dv, kind: 'risk', parts: curveParts(M.curves.map(c => c.id)) },
@@ -100,12 +102,13 @@
     cs01: { label: 'CS01', unit: 'тыс ₽/бп', fmt: f.dv, kind: 'risk', parts: p => p.cs01b.map((v, k) => ({ curve: 'CS01', bucket: k, v })).filter(x => x.v) },
     mv: { label: 'MV облигаций', unit: 'mm ₽', fmt: v => f.mn(v, 0), kind: 'size', parts: one(p => p.group === 'DER' ? 0 : p.mv) },
     notional: { label: 'Номинал', unit: 'mm ₽', fmt: v => f.mn(v, 0), kind: 'size', parts: one(p => p.notionalRub) },
-    carry: { label: 'Кэрри / день', unit: 'тыс ₽', fmt: f.k, kind: 'pnl', parts: one(p => p.carryDay) },
-    pnl: { label: 'PnL дня', unit: 'тыс ₽', fmt: f.k, kind: 'pnl', parts: p => FACT.map(([k]) => ({ factor: k, v: p.pnl[k] })).filter(x => x.v) },
+    carry: { label: 'Кэрри / день', unit: 'тыс ₽', fmt: f.k, kind: 'pnl', parts: one(p => p.carryDay) },  // без фондирования (#168)
+    funding: { label: 'Фондирование / день', unit: 'тыс ₽', fmt: f.k, kind: 'pnl', parts: p => nulPart(p.fundingDay) },
+    pnl: { label: 'PnL дня', unit: 'тыс ₽', fmt: f.k, kind: 'pnl', parts: p => FACT.map(([k]) => k === 'funding' ? nulPart(p.pnl[k], { factor: k })[0] : { factor: k, v: p.pnl[k] }).filter(x => x.keep || x.v) },
     pnlMtd: { label: 'PnL MTD', unit: 'mm ₽', fmt: v => f.mn(v, 1), kind: 'pnl', parts: one(p => p.pnlMtd) },
     count: { label: 'Кол-во позиций', unit: 'шт', fmt: v => f.n(v), kind: 'size', parts: one(() => 1) },
   };
-  FACT.forEach(([k, t]) => MEAS['pnl_' + k] = { label: 'PnL: ' + t, unit: 'тыс ₽', fmt: f.k, kind: 'pnl', parts: p => [{ factor: k, v: p.pnl[k] }] });
+  FACT.forEach(([k, t]) => MEAS['pnl_' + k] = { label: 'PnL: ' + t, unit: 'тыс ₽', fmt: f.k, kind: 'pnl', parts: p => k === 'funding' ? nulPart(p.pnl[k], { factor: k }) : [{ factor: k, v: p.pnl[k] }] });
 
   // ---------- пресеты ----------
   const PRESETS = [
@@ -154,15 +157,15 @@
     if (st.fg.length) L = L.filter(p => st.fg.includes(p.group));
     const meas = MEAS[st.m], [d1, d2] = st.r, dc = st.c;
     const cells = new Map(), rep = new Map(); // rep: ключ измерения → пример позиции (цвет эмитента)
-    const add = (k, p, v) => { let a = cells.get(k); if (!a) cells.set(k, a = { v: 0, pos: new Map() }); a.v += v; a.pos.set(p.id, (a.pos.get(p.id) || 0) + v); };
+    const add = (k, p, v, nul) => { let a = cells.get(k); if (!a) cells.set(k, a = { v: 0, pos: new Map(), n: 0, nul: 0 }); a.v += v; if (nul) a.nul++; else a.n++; a.pos.set(p.id, (a.pos.get(p.id) || 0) + v); };
     const keys = { r1: new Set(), r2: {}, c: new Set() };
     L.forEach(p => meas.parts(p).forEach(x => {
-      if (st.m !== 'count' && Math.abs(x.v) < 1e-9) return;
+      if (st.m !== 'count' && !x.keep && Math.abs(x.v) < 1e-9) return;
       const k1 = DIMS[d1].key(p, x), k2 = d2 ? DIMS[d2].key(p, x) : ALL, kc = dc !== 'none' ? DIMS[dc].key(p, x) : ALL;
       keys.r1.add(k1); (keys.r2[k1] = keys.r2[k1] || new Set()).add(k2); keys.c.add(kc);
       if (!rep.has(d1 + k1)) rep.set(d1 + k1, p); if (d2 && !rep.has(d2 + k2)) rep.set(d2 + k2, p); if (dc !== 'none' && !rep.has(dc + kc)) rep.set(dc + kc, p);
       // без 2-го уровня или колонок часть ключей совпадает — каждую ячейку пополняем один раз
-      new Set([[k1, k2, kc], [k1, k2, ALL], [k1, ALL, kc], [k1, ALL, ALL], [ALL, ALL, kc], [ALL, ALL, ALL]].map(t => t.join(SEP))).forEach(k => add(k, p, x.v));
+      new Set([[k1, k2, kc], [k1, k2, ALL], [k1, ALL, kc], [k1, ALL, ALL], [ALL, ALL, kc], [ALL, ALL, ALL]].map(t => t.join(SEP))).forEach(k => add(k, p, x.v, x.nul));
     }));
     const get = (a, b, c) => cells.get([a, b, c].join(SEP));
     const absOf = (a, b) => { const x = get(a, b, ALL); return x ? Math.abs(x.v) : 0; };
@@ -173,6 +176,7 @@
   }
   const drillRows = a => a ? [...a.pos].map(([id, v]) => ({ p: M.pos[id], v })) : [];
   function cellHtml(A, a, title, heat, max, cls) {
+    if (a && a.nul && !a.n) return '<td class="n zero ' + (cls || '') + '" title="не посчитано">—</td>';  // фондирование не посчитано (#168)
     if (!a || (Math.abs(a.v) < 1e-9 && st.m !== 'count')) return '<td class="n zero ' + (cls || '') + '">·</td>';
     const meas = A.meas;
     let style = '';
