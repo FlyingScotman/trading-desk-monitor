@@ -8,16 +8,15 @@ from __future__ import annotations
 
 import gzip
 import math
-import sqlite3
 from datetime import date
 from pathlib import Path
 
 import pytest
 from rub_fixed_income import kbd_zero_rate_bp
+from run_checks import consistency, content, warnings
 
 from desk.marketdata.bundle import SnapshotDir, SnapshotError, read_bundle
 from desk.orchestrator import check_against_standard_yields, prepare, value
-from desk.publish import tdm_run
 from desk.report import validation
 
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1"
@@ -84,12 +83,10 @@ def test_risk_is_consistent(outcomes):
     assert v.hessian and v.curve_convexity and v.curve_convexity > 0
 
 
-def test_publish_to_tdm(ctx, outcomes, tmp_path):
-    db = tmp_path / "tdm.sqlite"
+def test_run_content(ctx, outcomes):
     positions = [("P1", "OFZ", outcomes["SU26238RMFS4"]), ("P2", "OFZ", outcomes["SU52005RMFS4"])]
-    run_id, status, warnings = tdm_run.publish(str(db), ctx, positions, prev=None)
-    assert status == "complete"
-    con = sqlite3.connect(db)
-    assert con.execute("SELECT COUNT(*) FROM position WHERE run_id=?", (run_id,)).fetchone()[0] == 2
-    assert con.execute("SELECT COUNT(*) FROM position_gamma WHERE run_id=?", (run_id,)).fetchone()[0] > 0
-    assert any("SU52005RMFS4" in w for w in warnings)  # the market-value OFZ-IN is published and flagged
+    c = content(ctx, positions)
+    assert consistency(c) == []
+    assert len(c.rows) == 2
+    assert any(g for r in c.rows for _, _, g in r["gamma"])  # the Hessian is published
+    assert any("SU52005RMFS4" in w for w in warnings(c))  # the market-value OFZ-IN is published and flagged

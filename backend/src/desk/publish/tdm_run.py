@@ -1,8 +1,6 @@
-"""Write an EOD run into the ``tdm`` store through its writer SDK (``tdm.writer.Run``).
-
-The store and the Desk Monitor prototype then show it through ``tdm serve`` and
-``window.DESK``. This was the slice shortcut until the desk store of S5 (``desk_run``), which publishes
-the same ``run_content``; ``desk eod --tdm`` keeps writing here during the transition.
+"""The content of an EOD run (``run_content``): the position rows, the reference and the run log that the desk
+store publishes (``desk_run.publish``). The module name is historical: it once also wrote the run into the legacy
+``tdm`` SQLite store through its writer SDK; that path is gone (#294).
 Every valued position is written, also those on a fallback rung (``valuation.fallback``): its
 ``extra`` carries ``quality`` and ``assumptions``, and the run log counts the qualities and lists
 each non-exact position with its reasons as a WARN line (the prototype has no quality column).
@@ -54,7 +52,6 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
-from pathlib import Path
 from typing import Any
 
 from rub_fixed_income import (
@@ -64,12 +61,8 @@ from rub_fixed_income import (
     CurveEntry,
     DiscountCurve,
     kbd_effective_yield,
-    portfolio_result_to_json,
 )
-from rub_fixed_income import __version__ as CORE_VERSION
-from tdm.writer import Run
 
-from .. import __version__ as BACKEND_VERSION
 from ..curves import fx as fxcurves
 from ..curves import proxy, rates
 from ..marketdata import ratings
@@ -105,8 +98,7 @@ outside its known list (``Суб``) gets a chip of its own and is never filtered
 DIRECT_KIND = {"fx": ("FX", "Валюта", "FX"), "otc": ("OTC", "OTC-деривативы", "Деривативы"),
                "other": ("OTHER", "Прочее", "Прочее"), "bond": ("BOND", "Не сопоставлено", "Корп")}
 """asset_class of a direct row -> (instr_type, asset class, segment); an unknown one is treated as ``other``.
-``OTC`` and ``OTHER`` are desk-store types: the legacy tdm store has no such instrument type (``publish``)."""
-TDM_INSTR_TYPES = ("BOND", "IRS", "XCCY", "CDS", "FX")
+``OTC`` and ``OTHER`` are desk-store types (the legacy tdm store had no such instrument type)."""
 BOOKS = {
     "OFZ": {"book_id": "OFZ", "name": "ОФЗ (демо)", "desk": "Rates", "trader": None, "book_type": "TRADING",
             "entity": "Демо", "ocp_to": None},
@@ -130,7 +122,7 @@ INDICES = (("KEY_RATE", "КС"), ("RUONIA", "RUONIA"), ("SOFR", "SOFR"), ("ESTR"
 R25; absent from an older snapshot, then not published)."""
 COUPON_TYPES = {"fixed": "fix", "floating": "float"}
 """Hub coupon type -> the position's ``coupon_type``. The others (``zero``, ``indexed_face``, ``variable_known``,
-``unknown``) are kept as the hub names them (D5); the legacy tdm store knows only fix/float (``publish``)."""
+``unknown``) are kept as the hub names them (D5)."""
 
 _LEGAL_FORMS = re.compile(
     r"(?:публичное|непубличное|открытое|закрытое)?\s*акционерное\s+общество|общество\s+с\s+ограниченной\s+"
@@ -327,21 +319,6 @@ def _proxy_points(ctx: EodContext, prev: MarketView | None, ccy: str) -> tuple[s
 def risk_by_curve(v: BondValuation) -> dict[str, dict[str, float]]:
     """``v.risk()`` without the curves where every bucket is 0."""
     return {c: bs for c, bs in v.risk().items() if any(bs.values())}
-
-
-def store_core_results(db: str, outcomes: list[Outcome]) -> list[dict[str, str]]:
-    """Write each core result of the run, hash-verified, to ``<dir of db>/results/<result_sha256>.json``."""
-    out_dir = Path(db).resolve().parent / "results"
-    stored = []
-    for r in {o.core_result.result_sha256: o.core_result for o in outcomes if o.core_result}.values():
-        path = out_dir / f"{r.result_sha256}.json"
-        if not path.exists():  # content-addressed: an existing file holds the same bytes
-            out_dir.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(".tmp")
-            tmp.write_bytes(portfolio_result_to_json(r))  # raises unless schema and hash verify
-            tmp.replace(path)
-        stored.append({"result_sha256": r.result_sha256, "schema": r.schema_version, "path": str(path)})
-    return stored
 
 
 def row_currencies(rows: list[dict[str, Any]]) -> list[str]:
@@ -653,7 +630,7 @@ REFERENCE_KINDS = ("books", "issuers", "curves", "fx", "indices")
 
 @dataclass
 class RunContent:
-    """What a run publishes, in one format for both stores (tdm SQLite and the desk store)."""
+    """What a run publishes into the desk store."""
 
     rows: list[dict[str, Any]]
     """``position_row`` of each valued position, in book order."""
@@ -825,30 +802,3 @@ def fx_log(ctx: EodContext, positions: list[tuple[str, str, Outcome]]) -> list[t
         parts.append("нет входов: " + ", ".join(s["inputs_missing"]))
     return [("INFO", "FX-книга: " + "; ".join(parts))]
 
-
-def publish(db: str, ctx: EodContext, positions: list[tuple[str, str, Outcome]], *,
-            prev: MarketView | None, comment: str | None = None,
-            inputs: PositionInputs | None = None) -> tuple[int, str, list[str]]:
-    """positions: (position_id, book_id, outcome) of ``inputs``. Returns (run_id, status, warnings)."""
-    lineage = {**ctx.lineage(), "backend_version": BACKEND_VERSION, "backend_git_sha": git_sha(),
-               "core_version": CORE_VERSION,
-               "prev_market_snapshot_id": prev.snapshot.id if prev else None,
-               "core_results": store_core_results(db, [o for _, _, o in positions])}
-    c = run_content(ctx, positions, prev, lineage, inputs)
-    # the legacy tdm store knows the coupon types fix and float only (a CHECK): the others are written as fix
-    rows = [{**r, "coupon_type": "float" if r["coupon_type"] == "float" else "fix"} if r.get("coupon_type") else r
-            for r in c.rows if r["instr_type"] in TDM_INSTR_TYPES]
-    if len(rows) < len(c.rows):  # the desk store holds them; the legacy tdm store has no such instrument type
-        c.log.append(("WARN", "в tdm не записаны позиции без типа инструмента tdm (OTC/прочее): "
-                      + ", ".join(r["position_id"] for r in c.rows if r["instr_type"] not in TDM_INSTR_TYPES)))
-    with Run(db, as_of=ctx.business_date.isoformat(), run_type="EOD",
-             source=f"desk-backend {BACKEND_VERSION} (slice {'S2' if any(o.pnl for _, _, o in positions) else 'S1'})",
-             lib_version=f"rub-fixed-income-core {CORE_VERSION}",
-             market_snapshot=ctx.market.snapshot.id, comment=comment or json.dumps(lineage, ensure_ascii=False),
-             prev_date=prev.business_date.isoformat() if prev else None, jtd_recovery=0.0) as run:
-        for kind in REFERENCE_KINDS:
-            getattr(run, f"add_{kind}")(c.reference[kind])
-        run.add_positions(rows)
-        for level, message in c.log:
-            run.log(level, message)
-    return run.run_id, run.status, run.warnings

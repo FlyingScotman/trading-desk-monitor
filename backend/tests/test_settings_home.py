@@ -62,7 +62,7 @@ def test_desk_home_resolution(tmp_path: Path, monkeypatch) -> None:
 
 def test_layout_under_home(tmp_path: Path) -> None:
     s = load(env(tmp_path))
-    assert s.home == tmp_path and s.snapshot_cache == tmp_path / "snapshots" and s.db == tmp_path / "tdm.sqlite"
+    assert s.home == tmp_path and s.snapshot_cache == tmp_path / "snapshots" and not hasattr(s, "db")
     assert s.inbox_archive == tmp_path / "inbox-archive" and s.pg_dir == tmp_path / "pg"
     assert s.private_adapter_config == tmp_path / "adapter-config" and s.logs_dir == tmp_path / "logs"
     assert s.report_dir is None and s.autopilot is True and s.autopilot_sync_last == 5
@@ -86,11 +86,11 @@ def test_settings_json_values_and_precedence(tmp_path: Path) -> None:
         "inbox_poll_seconds": 30, "autopilot": False, "autopilot_sync_last": 3, "snapshot_drop": "drop",
         "unknown_key": {"kept": True}})
     (tmp_path / "file.env").write_text("DESK_HUB_URL=https://file.example\nDESK_HUB_TIMEOUT_S=99\n"
-                                       "DESK_INBOX_POLL_SECONDS=7\nDESK_DB=/file/db.sqlite\n", encoding="utf-8")
+                                       "DESK_INBOX_POLL_SECONDS=7\nDESK_REPORT_DIR=/file/reports\n", encoding="utf-8")
     e = {"DESK_HOME": str(tmp_path), "DESK_ENV_FILE": str(tmp_path / "file.env")}
     s = load(e)
     assert s.hub_url == "https://json.example" and s.hub_timeout_s == 12  # settings.json > env file
-    assert s.db == Path("/file/db.sqlite")  # env file > defaults
+    assert s.report_dir == Path("/file/reports")  # env file > defaults
     assert s.hub_ca_bundle == tmp_path / "ca.pem" and s.snapshot_drop == tmp_path / "drop"  # relative to home
     assert s.inbox_dirs == (tmp_path / "in", tmp_path / "sub" / "**")
     assert s.private_adapter == str(tmp_path / "adapters" / "tda") and s.private_adapter_config == tmp_path / "cfg"
