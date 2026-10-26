@@ -94,6 +94,28 @@ test('#334, #336 в браузере', { skip: pw ? false : 'нет Playwright' 
         assert.deepStrictEqual(errors, [], file); await ctx.close();
       }
     });
+    await t.test('#348: C13 — 6 CDS фикстуры у своих эмитентов, помечены «CDS», в CS01 эмитента', async () => {
+      const cds = JSON.parse(RUN).positions.filter(p => p.instrType === 'CDS');
+      assert.strictEqual(cds.length, 6);
+      for (const d of cds) {
+        const { pg, ctx, errors } = await open(browser, 'c13-issuers.html', { store: { c13: JSON.stringify({ sel: d.issuer }) } });
+        const bonds = pg.locator('.k-panel', { has: pg.locator('h3', { hasText: 'Наши бумаги эмитента' }) });
+        const row = bonds.locator('tr', { hasText: d.name }).filter({ has: pg.locator('.k-tag', { hasText: /^CDS$/ }) });
+        assert.ok(await row.count() >= 1, d.id + ' ' + d.issuer + ': строка CDS с пометкой в «Наших бумагах»');
+        const hd = await pg.locator('.ihd').innerText();
+        assert.ok(/CDS\s*\d/.test(hd), d.issuer + ': шапка эмитента — счётчик CDS: ' + hd);
+        // в списке эмитентов у строки эмитента «+N CDS»; CS01 эмитента — с CDS (как до #336)
+        const m = await pg.evaluate(iss => {
+          const L = MOCK.positions.filter(p => p.issuer === iss);
+          const tr = [...document.querySelectorAll('#list tr.sel')][0];
+          return { cs01: KIT.f.dv(L.reduce((s, p) => s + p.cs01, 0)), noCds: KIT.f.dv(L.filter(p => p.instrType !== 'CDS').reduce((s, p) => s + p.cs01, 0)),
+            row: tr ? tr.innerText : '', tag: tr ? (tr.querySelector('[data-cds]') || {}).textContent : null };
+        }, d.issuer);
+        assert.ok(m.tag && /^\+\d+ CDS$/.test(m.tag), d.issuer + ': ' + JSON.stringify(m));
+        assert.ok(m.row.includes(m.cs01) && m.cs01 !== m.noCds, d.issuer + ': CS01 с CDS: ' + JSON.stringify(m));
+        assert.deepStrictEqual(errors, [], d.issuer); await ctx.close();
+      }
+    });
   } finally {
     await browser.close();
   }
