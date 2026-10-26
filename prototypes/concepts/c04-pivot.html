@@ -77,7 +77,7 @@
     cpn: { label: 'Тип купона', key: p => p.group === 'DER' ? 'дериватив' : ({ fix: 'фикс', float: 'флоатер', linker: 'линкер' })[K.cpnType(p)] || 'без купона', order: idxOrder(['фикс', 'флоатер', 'линкер', 'дериватив', 'без купона']) },
     tenor: { label: 'Срок до события', key: p => K.tenorBucket(p.tenor), order: idxOrder(TBO) },
     // даты события нет (maturity: null, #332) — группа «без даты», последней
-    evmonth: { label: 'Месяц события', key: p => { if (!p.event || !p.event.date) return 'без даты'; const m = p.event.date.slice(0, 7); return m <= horizon ? m : 'позже'; }, txt: k => k === 'позже' ? 'позже 24 мес.' : k === 'без даты' ? k : MON[+k.slice(5) - 1] + ' ' + k.slice(2, 4), order: (a, b) => { const r = x => x === 'без даты' ? 2 : x === 'позже' ? 1 : 0; return r(a) - r(b) || a.localeCompare(b); } },
+    evmonth: { label: 'Месяц события', last: ['без даты'], key: p => { if (!p.event || !p.event.date) return 'без даты'; const m = p.event.date.slice(0, 7); return m <= horizon ? m : 'позже'; }, txt: k => k === 'позже' ? 'позже 24 мес.' : k === 'без даты' ? k : MON[+k.slice(5) - 1] + ' ' + k.slice(2, 4), order: (a, b) => { const r = x => x === 'без даты' ? 2 : x === 'позже' ? 1 : 0; return r(a) - r(b) || a.localeCompare(b); } },
     evkind: { label: 'Вид события', key: p => ({ put: 'пут-оферта', call: 'колл', mat: 'погашение' })[p.event.kind], order: idxOrder(['пут-оферта', 'колл', 'погашение']), color: k => ({ 'пут-оферта': '#e3b341', 'колл': '#b48cff', 'погашение': '#4c9dff' })[k] },
     curve: { label: 'Кривая', part: 'curve', key: (p, x) => x.curve || '—', txt: k => k === 'CS01' ? 'CS01 (спред)' : k === '—' ? '—' : M.curve[k].short, lbl: k => k === '—' ? '—' : '<b style="color:' + K.curveColors[k] + '">■</b> ' + esc(k === 'CS01' ? 'CS01 (спред)' : M.curve[k].short) + (k !== 'CS01' && M.curve[k].kind === 'basis' ? ' <span class="mut3" style="font-weight:400">базис</span>' : ''), order: idxOrder(M.curves.map(c => c.id).concat(['CS01', '—'])), color: k => K.curveColors[k] },
     bucket: { label: 'Бакет кривой', part: 'bucket', key: (p, x) => x.bucket != null ? M.buckets[x.bucket] : nearestBucket(p.tenor), order: idxOrder(M.buckets) },
@@ -171,9 +171,11 @@
     }));
     const get = (a, b, c) => cells.get([a, b, c].join(SEP));
     const absOf = (a, b) => { const x = get(a, b, ALL); return x ? Math.abs(x.v) : 0; };
-    let r1 = [...keys.r1]; r1.sort(st.rs === 'abs' ? (a, b) => absOf(b, ALL) - absOf(a, ALL) : (DIMS[d1].order || ((a, b) => String(a).localeCompare(String(b), 'ru'))));
-    const r2 = {}; r1.forEach(k => { const arr = [...(keys.r2[k] || [])]; arr.sort(st.rs === 'abs' ? (a, b) => absOf(k, b) - absOf(k, a) : (d2 && DIMS[d2].order) || ((a, b) => String(a).localeCompare(String(b), 'ru'))); r2[k] = arr; });
-    const cols = [...keys.c]; if (dc !== 'none') cols.sort(DIMS[dc].order || ((a, b) => String(a).localeCompare(String(b), 'ru')));
+    // группы из DIMS[d].last («без даты») — в конце при любой сортировке, и «по величине» тоже
+    const lastly = (d, cmp) => { const L = (d && DIMS[d] && DIMS[d].last) || []; return (a, b) => (L.includes(a) - L.includes(b)) || cmp(a, b); };
+    let r1 = [...keys.r1]; r1.sort(lastly(d1, st.rs === 'abs' ? (a, b) => absOf(b, ALL) - absOf(a, ALL) : (DIMS[d1].order || ((a, b) => String(a).localeCompare(String(b), 'ru')))));
+    const r2 = {}; r1.forEach(k => { const arr = [...(keys.r2[k] || [])]; arr.sort(lastly(d2, st.rs === 'abs' ? (a, b) => absOf(k, b) - absOf(k, a) : (d2 && DIMS[d2].order) || ((a, b) => String(a).localeCompare(String(b), 'ru')))); r2[k] = arr; });
+    const cols = [...keys.c]; if (dc !== 'none') cols.sort(lastly(dc, DIMS[dc].order || ((a, b) => String(a).localeCompare(String(b), 'ru'))));
     return { L, get, r1, r2, cols, rep, meas, d1, d2, dc };
   }
   const drillRows = a => a ? [...a.pos].map(([id, v]) => ({ p: M.pos[id], v })) : [];

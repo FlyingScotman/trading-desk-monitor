@@ -6,11 +6,14 @@
 //  - #325: позиция без купона (фикстура) — C01–C17 открываются без ошибок, и там, где читается тип купона: C03 по
 //    группам, C04 «Тип купона», C10 «Прочее» (MTD тоже), C13 «Наши бумаги эмитента» по группам;
 //  - #333: прогон без PnL — в столбцах PnL / кэрри / фондирования таблиц (строки, группы, «Итого») и в KPI PnL нет
-//    «0» любой точности («0», «0.0», «(0.00)»): C01, C03, C06, C07, C10, C12, C13; итоги групп K.table и заголовок
-//    разбора K.drill — «—»;
+//    «0» любой точности («0», «0.0», «(0.00)»): C01, C03, C06, C07, C10, C12, C13; в таблицах PnL по позициям (C01
+//    вкладка «PnL» и C03 набор «Кэрри и PnL», по валютам) все столбцы PnL, факторов, MTD и YTD — «—»; итоги групп
+//    K.table и заголовок разбора K.drill — «—»; Парето C13 по PnL — null;
 //  - #339: C10 «История PnL», ряд «накопл.» — за непосчитанный день null (разрыв), дальше сумма продолжается;
+//    точка между пропусками — значком;
 //  - #332: C10 MTD у позиции без PnL — факторы null, итог MTD остаётся; C05 без сдвигов — «сдвигов нет в прогоне», а
-//    не «почти не изменились»; C04 «Месяц события» с позицией без даты погашения — без ошибок, группа «без даты».
+//    не «почти не изменились»; C04 «Месяц события» с позицией без даты погашения — без ошибок, группа «без даты» последней
+//    и по порядку, и по величине.
 //   node --test tests/js/b1_null_sums.pw.test.js
 // Нужен Playwright (как load_errors.pw.test.js); без него тесты пропускаются.
 'use strict';
@@ -59,11 +62,13 @@ const noPnl = () => { const D = JSON.parse(RUN); D.positions.forEach(p => { p.pn
 // «0» любой точности на месте значения: «0», «0.0», «+0.00», «(0.0)», «0%» — не «10», не «0.05», не «—»
 const ZERO_ANY = /^[+(−-]?0(\.0+)?%?\)?$/;
 // ячейки столбцов PnL / кэрри / фондирования во всех таблицах страницы: [таблица, столбец, вид строки, текст]; номер
-// столбца — по последней строке заголовка, с учётом colspan
-const pnlCells = pg => pg.evaluate(() => [...document.querySelectorAll('table')].flatMap((tb, ti) => {
+// столбца — по последней строке заголовка, с учётом colspan. fac — ещё и столбцы факторов PnL, MTD и YTD (таблицы
+// PnL по позициям: C01 вкладка «PnL», C03 набор «Кэрри и PnL»)
+const FAC_HDR = '^(PnL|Кэрри|Фондир|Ставки|Спред|FX|Сделки|Прочее|MTD|YTD)';
+const pnlCells = (pg, fac) => pg.evaluate(fac => [...document.querySelectorAll('table')].flatMap((tb, ti) => {
   const hr = tb.tHead && tb.tHead.rows[tb.tHead.rows.length - 1]; if (!hr) return [];
   const hs = []; [...hr.cells].forEach(c => { for (let i = 0; i < (c.colSpan || 1); i++) hs.push(c.innerText.replace(/\s+/g, ' ').trim()); });
-  const idx = hs.map((t, i) => /PnL|кэрри|фондир/i.test(t) && !/%|год|дн\.|ставк/i.test(t) ? i : -1).filter(i => i >= 0);
+  const idx = hs.map((t, i) => (fac ? new RegExp(fac, 'i').test(t) : /PnL|кэрри|фондир/i.test(t) && !/%|год|дн\.|ставк/i.test(t)) ? i : -1).filter(i => i >= 0);
   if (!idx.length) return [];
   return [...tb.querySelectorAll('tbody tr, tfoot tr')].flatMap(tr => {
     const kind = tr.closest('tfoot') ? 'итог' : tr.classList.contains('grp') ? 'группа' : 'строка';
@@ -71,7 +76,7 @@ const pnlCells = pg => pg.evaluate(() => [...document.querySelectorAll('table')]
     for (const td of tr.cells) { if (idx.includes(pos)) out.push([ti, hs[pos], kind, td.innerText.trim()]); pos += td.colSpan || 1; }
     return out;
   });
-}));
+}), fac || null);
 const noFunding = () => { const D = JSON.parse(RUN); D.positions.forEach(p => { if (p.pnl) p.pnl.funding = null; }); return D; };
 
 test('B1 в браузере: #327, #322, #325', { skip: pw ? false : 'нет Playwright' }, async t => {
@@ -182,7 +187,11 @@ test('B1 в браузере: #327, #322, #325', { skip: pw ? false : 'нет Pl
       const D = noPnl();
       const cases = [
         ['c01-cockpit.html', {}],
+        // C01, вкладка «PnL»: «PnL по позициям» по валютам — факторы, итоги групп и «Итого» — «—»
+        ['c01-cockpit.html', { store: { 'c01-tab': 'pnl' }, fac: true, grpBtn: 'по валютам' }],
         ['c03-blotter.html', { store: { 'c03-state': JSON.stringify({ v: 2, grouping: 'ccy' }) } }],
+        // C03, набор «Кэрри и PnL» по валютам: свой sumCell (итоги групп и «Итого»)
+        ['c03-blotter.html', { store: { 'c03-state': JSON.stringify({ v: 2, preset: 'pnl', grouping: 'ccy' }) }, fac: true }],
         ['c06-launchpad.html', { store: { 'c06-preset': 'rates', 'c06-modes': JSON.stringify({ 'rates.carry': 'table' }) } }],
         ['c07-portfolio-map.html', {}],
         ['c10-pnl-explain.html', {}],
@@ -197,13 +206,20 @@ test('B1 в браузере: #327, #322, #325', { skip: pw ? false : 'нет Pl
           await pg.locator('.k-panel', { has: pg.locator('h3', { hasText: 'Наши бумаги эмитента' }) }).locator('.k-tbl-tools button').nth(1).click();
           await pg.waitForTimeout(200);
         }
-        const cells = await pnlCells(pg);
+        if (o.grpBtn) { await pg.locator('.k-tbl-tools button', { hasText: o.grpBtn }).first().click(); await pg.waitForTimeout(200); }
+        const cells = await pnlCells(pg, o.fac && FAC_HDR);
         const kpi = await pg.evaluate(() => [...document.querySelectorAll('.k-kpi')].map(k => [k.querySelector('.l') && k.querySelector('.l').innerText, k.querySelector('.v') && k.querySelector('.v').innerText.trim()]).filter(k => /PnL/i.test(k[0] || '')));
         const bad = cells.filter(c => ZERO_ANY.test(c[3])).concat(kpi.filter(k => ZERO_ANY.test(k[1])));
         assert.deepStrictEqual(bad, [], file + ' ' + JSON.stringify(o));
         if (/c07|c13/.test(file)) {  // «Итого» PnL — «—»
           const tot = cells.filter(c => c[2] === 'итог' && /^PnL/.test(c[1]));
           assert.ok(tot.length && tot.every(c => c[3] === '—'), file + ': Итого PnL: ' + JSON.stringify(tot));
+        }
+        if (o.fac) {  // все столбцы PnL, факторов, MTD и YTD — «—» в «Итого», в группах и в строках
+          const kinds = new Set(cells.map(c => c[2]));
+          assert.ok(kinds.has('итог') && kinds.has('группа') && cells.some(c => /^MTD|^Ставки/.test(c[1])), file + ': есть итог, группы и факторы: ' + [...kinds] + ' ' + [...new Set(cells.map(c => c[1]))]);
+          const notDash = cells.filter(c => c[3] !== '—');
+          assert.deepStrictEqual(notDash, [], file + ' ' + JSON.stringify(o));
         }
         if (o.grp) {
           const g = cells.filter(c => c[2] === 'группа' && /^PnL/.test(c[1]));
@@ -212,6 +228,13 @@ test('B1 в браузере: #327, #322, #325', { skip: pw ? false : 'нет Pl
         assert.deepStrictEqual(errors, [], file);
         await ctx.close();
       }
+    });
+    await t.test('#333: C13 Парето по «PnL дня» без PnL — столбцов и накопленной доли нет (null), а не 0%', async () => {
+      const { pg, ctx, errors } = await open(browser, 'c13-issuers.html', { D: noPnl(), store: { c13: JSON.stringify({ meas: 'pnl' }) } });
+      const ser = await series(pg, '#pareto');
+      assert.ok(ser.length === 2 && ser.every(x => x[2].length && x[2].every(v => v == null)), JSON.stringify(ser));
+      assert.deepStrictEqual(errors, []);
+      await ctx.close();
     });
     await t.test('#333: прогон без PnL — заголовок разбора K.drill «—», а не «0»', async () => {
       const { pg, ctx, errors } = await open(browser, 'c13-issuers.html', { D: noPnl() });
@@ -240,6 +263,16 @@ test('B1 в браузере: #327, #322, #325', { skip: pw ? false : 'нет Pl
       assert.deepStrictEqual(await hist(), [1e6, null, 3e6]);
       assert.deepStrictEqual(errors, []);
       await ctx.close();
+      // точка между двумя пропусками — значком (у линии с ней нет отрезка); у остальных точек значка нет
+      const X2 = { notes: [], histDates: ['2026-10-19', '2026-10-20', '2026-10-21', '2026-10-22', D.asOf], hist: { pnl: ser([1e6, 1e6, null, 2e6, null]) } };
+      ({ pg, ctx, errors } = await open(browser, 'c10-pnl-explain.html', { D, X: X2 }));
+      const sym = await pg.evaluate(() => { const ch = echarts.getInstanceByDom(document.querySelector('.hist-wrap .chart'));
+        const sr = ch.getOption().series.find(s => s.name === 'накопл.');
+        return sr.data.map(x => x && typeof x === 'object' && x.symbol ? x.symbol : sr.symbol); });
+      assert.deepStrictEqual(sym, ['none', 'none', 'none', 'circle', 'none'], 'значок только у одиночной точки: ' + sym);
+      assert.deepStrictEqual(await hist(), [1e6, 2e6, null, 4e6, null]);
+      assert.deepStrictEqual(errors, []);
+      await ctx.close();
     });
     await t.test('#332: C10 MTD — у позиции без PnL факторы null, итог MTD остаётся', async () => {
       const D = noPnl(), id = D.positions[0].id;
@@ -251,6 +284,8 @@ test('B1 в браузере: #327, #322, #325', { skip: pw ? false : 'нет Pl
       kpi.filter(k => /кэрри|фондир|ставк|спред|сделк|прочее/i.test(k[0])).forEach(k => assert.strictEqual(k[1], '—', JSON.stringify(k)));
       const cells = await pnlCells(pg);
       assert.deepStrictEqual(cells.filter(c => ZERO_ANY.test(c[3])), []);
+      const txt = await pg.locator('#page').innerText();
+      assert.ok(txt.includes('MTD не разложен') && !/— —/.test(txt), 'остаток MTD словами, без «— —»');
       const wf = (await series(pg, '.g2 .chart'))[0][2], nf = await pg.evaluate(() => KIT.PNL_FACTORS.length);
       assert.ok(wf.slice(0, nf).every(x => x[3] === null), 'водопад MTD: столбцы факторов — null: ' + JSON.stringify(wf));
       assert.deepStrictEqual(errors, []);
@@ -270,11 +305,19 @@ test('B1 в браузере: #327, #322, #325', { skip: pw ? false : 'нет Pl
       const { pg, ctx, errors } = await open(browser, 'c04-pivot.html', { D, hash: '#r=evmonth&c=none&m=count&v=table' });
       // lib/real.js ставит такой позиции событие «сегодня» (M.asOf); страница не должна полагаться на это: дата события
       // null (как в данных) — и перерисовка «Месяц события»
-      await pg.evaluate(id => { MOCK.positions.find(p => p.id === id).event.date = null; location.hash = '#r=evmonth&c=none&m=count&v=bars'; }, no.id);
+      // ещё 4 позиции без даты — группа больше большинства месяцев: «по величине» без правки она встала бы не в конец
+      await pg.evaluate(id => { MOCK.positions.filter(p => p.id === id || p.event.date > '2029').slice(0, 5).forEach(p => { p.event.date = null; }); location.hash = '#r=evmonth&c=none&m=count&v=bars'; }, no.id);
       await pg.waitForTimeout(300);
       await pg.evaluate(() => { location.hash = '#r=evmonth&c=none&m=count&v=table'; });
       await pg.waitForTimeout(300);
       assert.ok((await pg.locator('body').innerText()).includes('без даты'), 'C04: группа «без даты»');
+      // «без даты» — последней строкой и по порядку, и по величине 
+      const labels = () => pg.evaluate(() => [...document.querySelectorAll('#page table tbody tr, body table tbody tr')].map(tr => tr.cells[0].innerText.trim()).filter(Boolean));
+      let L = await labels();
+      assert.strictEqual(L[L.length - 1], 'без даты', 'по порядку: ' + L);
+      await pg.evaluate(() => { location.hash = '#r=evmonth&c=none&m=count&v=table&rs=abs'; }); await pg.waitForTimeout(300);
+      L = await labels();
+      assert.strictEqual(L[L.length - 1], 'без даты', 'по величине: ' + L);
       assert.deepStrictEqual(errors, []);
       await ctx.close();
     });
