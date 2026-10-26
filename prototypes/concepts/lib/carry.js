@@ -6,11 +6,12 @@
  *  - по позиции carry (полное изменение стоимости при кривых, перенесённых в горизонт: купоны + изменение грязной
  *    цены; при spread=curve в него входит spreadRoll), funding (за период, null — не посчитано), net = carry + funding;
  *    без прогноза — carry null и code (причина);
- *  - totals / byBook / ...: новый формат (#297) — funding только позиций с прогнозом, fundingNoCarry — позиций без
- *    прогноза, fundingBookLevel — строк без позиции (остатки ДС), fundingTotal — их сумма; net = carry + fundingTotal,
- *    null по правилу B1 (фондирование не посчитано, нет позиций с прогнозом или у позиции с прогнозом фондирование
- *    null), netKnown — нетто позиций, у которых есть и кэрри, и фондирование. Старый формат (до #297): funding группы —
- *    всё фондирование; поддерживается, пока #297 не в main.
+ *  - у позиции ещё dv01, cs01 (₽ за б.п.), fxRate и inCcy (суммы в валюте позиции), #297;
+ *  - totals / byBook / ...: funding — только позиций с прогнозом, fundingNoCarry — позиций без прогноза,
+ *    fundingBookLevel — строк без позиции (остатки ДС), fundingTotal — их сумма; net = carry + fundingTotal. Правило B1,
+ *    строгое: net null, если фондирование не посчитано, нет позиций с прогнозом или у любой позиции фондирование null
+ *    (nCoveredNoFunding — с прогнозом; nNoCarryNoFunding — без прогноза, тогда и fundingNoCarry, fundingTotal null);
+ *    позиция not_funded — 0, а не null. netKnown — нетто позиций, у которых есть и кэрри, и фондирование.
  * На экране «Кэрри», «Фондирование», «Нетто» (решение владельца 26.10). Сумма складывается на глазах: Кэрри
  * (позиции с прогнозом) + Фондирование тех же позиций + «фондирование без прогноза кэрри» (позиции без прогноза
  * и остатки ДС) = Нетто. Фондирование null не подменяется нулём.
@@ -86,9 +87,7 @@
   // ---------- строки ----------
   // opts: { pos: {id: позиция модели монитора (M.pos)}, k: множитель рубли → валюта показа, books: {id: книга},
   //         kindLabel: код → подпись }
-  // Два формата ответа (пока #297 не в main): новый — у позиции dv01, cs01, fxRate, inCcy, у групп fundingTotal,
-  // netKnown, nCoveredNoFunding, а funding группы — только позиций с прогнозом (C.isNew); старый — без них.
-  // dv01 и cs01 — из ответа (рубли за б.п. → валюта показа), в старом формате — из модели монитора (того же прогона).
+  // dv01 и cs01 — из ответа (рубли за б.п. → валюта показа).
   // opts.repr — валюта показа: позиция в этой же валюте берёт суммы из inCcy, а не пересчитывает рубли по курсу.
   // Знаменатель «кэрри на единицу риска» (решение по #66): у флоатера (p.cpn.type 'float' модели
   // монитора) основной риск спредовый — CS01, у остальных — DV01 ставок
@@ -102,9 +101,7 @@
       const own = opts.repr && x.inCcy && x.ccy === opts.repr;  // в своей валюте: inCcy как есть
       const pick = key => own ? (x.inCcy[key] == null || !isFinite(x.inCcy[key]) ? null : x.inCcy[key]) : m(x[key]);
       const carry = pick('carry'), funding = ok ? pick('funding') : null;
-      const fin = v => v != null && isFinite(v) ? v : null;
-      const dv01 = 'dv01' in x ? m(x.dv01) : p ? fin(p.dv01) : null;
-      const cs01 = 'cs01' in x ? m(x.cs01) : p ? fin(p.cs01) : null;
+      const dv01 = m(x.dv01), cs01 = m(x.cs01);
       const floater = p ? C.isFloater(p) : C.FLOAT_KINDS.includes(x.kind);
       const r = {
         id: x.positionId, p, name: p ? p.name : (x.secid || x.positionId), secid: x.secid, issuer: p ? p.issuer : null,
@@ -128,7 +125,6 @@
   // съест кэрри (кэрри / |DV01|); DV01 ≈ 0 (флоатер без риска, своп с нулевым риском) — нет
   C.isFloater = p => !!(p && p.cpn && p.cpn.type === 'float');
   C.FLOAT_KINDS = ['OFZ_PK', 'CORP_FLT'];  // позиции нет в модели монитора: флоатер по типу инструмента
-  C.isNew = resp => !!(resp && resp.totals && 'fundingTotal' in resp.totals);
   C.perDv01 = (carry, dv01) => carry == null || dv01 == null || Math.abs(dv01) < C.MIN_DEN ? null : carry / Math.abs(dv01);
 
   // строки фондирования без позиции (остатки ДС книги или юрлица): псевдострока таблицы, в валюте показа; в кэрри
@@ -158,7 +154,7 @@
   // без прогноза (fundingNoCarry) и остатки ДС (fundingCash); net = carry + fundingCovered + fundingRest (= carry +
   // funding сервера), null, если у позиции с прогнозом фондирования нет или оно не посчитано вовсе
   C.sums = function (rows, fundingOk) {
-    const s = { n: 0, nCovered: 0, nNotCovered: 0, nFundingMissing: 0, nFundingMissingNoCarry: 0, carry: 0, fundingCovered: 0, fundingNoCarry: 0, fundingCash: 0,
+    const s = { n: 0, nCovered: 0, nNotCovered: 0, nFundingMissing: 0, nNoCarryNoFunding: 0, carry: 0, fundingCovered: 0, fundingNoCarry: 0, fundingCash: 0,
       spreadRoll: null, dv01: 0, carryFix: 0, nFix: 0, cs01Flt: 0, carryFlt: 0, nFlt: 0, netKnown: 0, notCovered: [], fundingMissing: [], nCash: 0 };
     rows.forEach(r => {
       if (r.isCash) { s.nCash++; if (r.funding != null) s.fundingCash += r.funding; return; }
@@ -175,7 +171,7 @@
         if (r.funding != null) { s.fundingCovered += r.funding; s.netKnown += r.carry + r.funding; } else { s.nFundingMissing++; s.fundingMissing.push(r); }
       } else {
         s.nNotCovered++; s.notCovered.push(r);
-        if (r.funding != null) s.fundingNoCarry += r.funding; else { s.nFundingMissingNoCarry++; s.fundingMissing.push(r); }
+        if (r.funding != null) s.fundingNoCarry += r.funding; else { s.nNoCarryNoFunding++; s.fundingMissing.push(r); }
       }
     });
     s.fundingOk = !!fundingOk;
@@ -188,7 +184,7 @@
       // нетто — правило B1, строгое (решение по #286): «—», если в группе нет позиций с прогнозом или у любой её
       // позиции фондирования нет; у позиции без прогноза null — и «фондирование без прогноза кэрри» группы «—»
       C.strictNoCarry(s);
-      s.net = s.nFundingMissing || s.nFundingMissingNoCarry || !s.nCovered ? null : s.carry + s.funding;
+      s.net = s.nFundingMissing || s.nNoCarryNoFunding || !s.nCovered ? null : s.carry + s.funding;
     }
     if (!s.nCovered && s.netKnown === 0) s.netKnown = null;
     s.carryDv01 = C.perDv01(s.carryFix, s.nFix ? s.dv01 : null);
@@ -196,20 +192,21 @@
     return s;
   };
 
-  // итоги группы с сервера (новый формат, без клиентских фильтров): суммы — значения сервера в валюте показа;
+  // итоги группы с сервера (без клиентских фильтров): суммы — значения сервера в валюте показа;
   // кэрри/DV01 и списки для баннера остаются клиентскими (сервер суммирует DV01 всех позиций, включая флоатеры)
   // позиция без прогноза с фондированием null: fundingNoCarry, «без прогноза кэрри», всё фондирование и нетто — null.
-  // Счётчик таких позиций сервер ещё не отдаёт (поле назовёт блок calc, #297) — считается здесь по строкам
+  // (счётчик nNoCarryNoFunding — как у сервера; с фильтрами считается по строкам)
   C.strictNoCarry = s => {
-    if (s.nFundingMissingNoCarry) { s.fundingNoCarry = null; s.fundingRest = null; s.funding = null; s.net = null; }
+    if (s.nNoCarryNoFunding) { s.fundingNoCarry = null; s.fundingRest = null; s.funding = null; s.net = null; }
     return s;
   };
   C.withServer = function (s, g, k) {
-    if (!g || !('fundingTotal' in g)) return s;
+    if (!g) return s;
     const m = v => v == null ? null : v * (k == null ? 1 : k);
     return Object.assign(s, { carry: m(g.carry), spreadRoll: m(g.spreadRoll), fundingCovered: m(g.funding), fundingNoCarry: m(g.fundingNoCarry),
       fundingCash: m(g.fundingBookLevel), fundingRest: g.fundingTotal == null ? null : m((g.fundingNoCarry || 0) + (g.fundingBookLevel || 0)),
-      funding: m(g.fundingTotal), net: m(g.net), netKnown: m(g.netKnown), nCovered: g.nCovered, nNotCovered: g.nNotCovered, nFundingMissing: g.nCoveredNoFunding, server: true }) && C.strictNoCarry(s);
+      funding: m(g.fundingTotal), net: m(g.net), netKnown: m(g.netKnown), nCovered: g.nCovered, nNotCovered: g.nNotCovered, nFundingMissing: g.nCoveredNoFunding,
+      nNoCarryNoFunding: g.nNoCarryNoFunding == null ? s.nNoCarryNoFunding : g.nNoCarryNoFunding, server: true }) && C.strictNoCarry(s);
   };
 
   // фильтр строк без позиции в модели монитора и строк остатков: те же общие фильтры, что K.list (юрлицо, деск,

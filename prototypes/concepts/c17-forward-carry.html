@@ -205,7 +205,7 @@
     } else ban.innerHTML = '';
     if (!resp) return;
     const R = model(), fundOk = resp.fundingStatus === 'computed';
-    // без общих фильтров — итоги сервера (новый формат ответа); с фильтрами — по строкам, по тому же правилу
+    // без общих фильтров — итоги сервера; с фильтрами — по строкам, по тому же правилу
     const S = K.list().length === M.positions.length ? C.withServer(C.sums(R, fundOk), resp.totals, RK()) : C.sums(R, fundOk);
     const pos = R.filter(r => !r.isCash);
     // баннер: фондирование не посчитано целиком или у части позиций с прогнозом
@@ -215,7 +215,7 @@
       // позиции с прогнозом и без него: у любой фондирование null — нетто группы «—»
       const books = [...new Set(S.fundingMissing.map(r => r.book))];
       ban.insertAdjacentHTML('beforeend', '<div class="c17-ban"><b>Фондирование не посчитано у ' + S.fundingMissing.length + ' поз.</b>' +
-        (S.nFundingMissing && S.nFundingMissingNoCarry ? ' (' + S.nFundingMissing + ' с прогнозом кэрри, ' + S.nFundingMissingNoCarry + ' без)' : S.nFundingMissingNoCarry ? ' без прогноза кэрри' : ' с прогнозом кэрри') +
+        (S.nFundingMissing && S.nNoCarryNoFunding ? ' (' + S.nFundingMissing + ' с прогнозом кэрри, ' + S.nNoCarryNoFunding + ' без)' : S.nNoCarryNoFunding ? ' без прогноза кэрри' : ' с прогнозом кэрри') +
         ', книги ' + books.map(esc).join(', ') + ': ' +
         esc([...new Set(S.fundingMissing.map(r => r.fundingNote || C.FUNDING_STATE[r.fundingState] || r.fundingState))].join('; ')) +
         '. Нетто этих книг и итога — «—»; нетто позиций с кэрри и фондированием — ' + f.mn(S.netKnown, DIGB) + ' mm ₽.' + '</div>');
@@ -258,7 +258,7 @@
       line('Нетто', S.net, 'tot', TIP.net) +
       '</div><div class="side">' +
       (S.nNotCovered ? '<div><span class="c17-link" data-a="nc">' + S.nNotCovered + ' поз. без прогноза кэрри</span> — в кэрри не входят, их фондирование — в строке «без прогноза». Причины — в колонке «Оценка».</div>' : '<div>Прогноз есть у всех позиций.</div>') +
-      (fundOk && S.fundingMissing.length ? '<div style="margin-top:4px;color:var(--warn)">' + (S.nFundingMissing ? S.nFundingMissing + ' поз. с прогнозом без фондирования: нетто — «—».' : '') + (S.nFundingMissingNoCarry ? ' ' + S.nFundingMissingNoCarry + ' поз. без прогноза без фондирования: фондирование без прогноза и нетто — «—».' : '') + '</div>' : '') +
+      (fundOk && S.fundingMissing.length ? '<div style="margin-top:4px;color:var(--warn)">' + (S.nFundingMissing ? S.nFundingMissing + ' поз. с прогнозом без фондирования: нетто — «—».' : '') + (S.nNoCarryNoFunding ? ' ' + S.nNoCarryNoFunding + ' поз. без прогноза без фондирования: фондирование без прогноза и нетто — «—».' : '') + '</div>' : '') +
       '<div style="margin-top:4px">Прогон ' + (server ? '#' + esc(resp.runId) : 'демо') + ' на ' + f.date(resp.asOf) + ' → горизонт ' + f.date(resp.horizonDate) + ' (' + resp.days + ' дн.). Суммы — в ' + K.repr + ', пересчёт из рублей по курсу прогона.</div>' +
       '</div></div>';
     const ncl = sp.querySelector('[data-a=nc]');

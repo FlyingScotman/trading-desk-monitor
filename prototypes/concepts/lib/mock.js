@@ -485,7 +485,7 @@
   M.positions = positions;
   M.pos = Object.fromEntries(positions.map(p => [p.id, p]));
   // ---------- прогнозное кэрри (C17, #66): ответ GET /api/v1/concepts/carry той же формы (api/models.py CarryOut,
-  // формат #297: dv01, cs01, fxRate, inCcy у позиции; funding группы — позиций с прогнозом, fundingTotal, netKnown;
+  // формат #297: dv01, cs01, fxRate, inCcy у позиции; funding группы — позиций с прогнозом, fundingTotal, netKnown, B1 строгое;
   // заседания на год с inHorizon),
   // суммы в рублях — из рублёвых величин позиций, снятых здесь, до пересчёта в валюту отчёта (kit.js). Синтетика:
   // кэрри ≈ купон + pull + roll-down по кривой RUONIA, roll по спреду (spread=curve) — CS01 × сдвиг по кривой рейтинга;
@@ -577,21 +577,19 @@
       // итоги — как assemble сервера (scenario/carry.py)
       const SUMS = ['carry', 'coupon', 'pull', 'rolldown', 'spreadRoll'];
       const grp = () => Object.assign(Object.fromEntries(SUMS.concat(['dv01', 'cs01', 'funding', 'fundingNoCarry', 'fundingBookLevel', 'fundingTotal', 'net', 'netKnown']).map(k => [k, null])),
-        { nPositions: 0, nCovered: 0, nNotCovered: 0, nFunded: 0, nFundingMissing: 0, nCoveredNoFunding: 0 });
+        { nPositions: 0, nCovered: 0, nNotCovered: 0, nFunded: 0, nFundingMissing: 0, nCoveredNoFunding: 0, nNoCarryNoFunding: 0 });
       const add = (g, k, v) => { if (v != null) g[k] = (g[k] || 0) + v; };
-      // позиции без прогноза с фондированием null по группе (поле счётчика сервер ещё не назвал — в ответ не идёт)
-      const noCarryMissing = new Map();
       const G = { book: {}, entity: {}, ccy: {}, kind: {} }, tot = grp(), at = (d, k) => G[d][k] || (G[d][k] = grp());
       out.forEach(x => [tot, at('book', x.bookId), at('entity', x.entity || '—'), at('ccy', x.ccy || '—'), at('kind', x.kind || '—')].forEach(g => {
         g.nPositions++; g[x.carry != null ? 'nCovered' : 'nNotCovered']++; SUMS.forEach(k => add(g, k, x[k])); add(g, 'dv01', x.dv01); add(g, 'cs01', x.cs01);
         if (x.funding != null) { add(g, x.carry != null ? 'funding' : 'fundingNoCarry', x.funding); g.nFunded += x.fundingState === 'funded'; if (x.carry != null) add(g, 'netKnown', x.carry + x.funding); }
-        else { g.nFundingMissing++; g.nCoveredNoFunding += x.carry != null; if (x.carry == null) noCarryMissing.set(g, (noCarryMissing.get(g) || 0) + 1); }
+        else { g.nFundingMissing++; g.nCoveredNoFunding += x.carry != null; g.nNoCarryNoFunding += x.carry == null && !noFunding; }
       }));
       cash.forEach(c => [tot, at('book', c.book), at('entity', c.entity), at('ccy', c.ccy)].forEach(g => { g.fundingBookLevel = (g.fundingBookLevel || 0) + c.amount; }));
       // как _close сервера: fundingTotal = funding + fundingNoCarry + fundingBookLevel; net — правило B1, строгое: у позиции
       // без прогноза фондирование null — fundingNoCarry, fundingTotal и net группы null
       const close = g => {
-        const strict = noCarryMissing.get(g) || 0;
+        const strict = g.nNoCarryNoFunding;
         if (strict) g.fundingNoCarry = null;
         if (!noFunding && !strict) { g.fundingBookLevel = g.fundingBookLevel || 0; g.fundingTotal = (g.funding || 0) + (g.fundingNoCarry || 0) + g.fundingBookLevel; }
         if (!noFunding) g.fundingBookLevel = g.fundingBookLevel || 0;
