@@ -72,7 +72,7 @@ t('#321: K.tickOf — деления оси с масштабом формата
   const kit = P('lib/kit.js'), c04 = P('c04-pivot.html'), c08 = P('c08-calendar.html');
   // явный масштаб (ревью PR #328): разбор — spec.sc, C04 — meas.sc, C08 — o.sc; K.tickOf — запасной путь
   assert.ok(kit.includes("const sc = spec.sc != null ? spec.sc : spec.fmt ? null : 1e3, axFmt = sc != null ? v => K.tick(v, sc) : K.tickOf(fmt);") &&
-    kit.includes("xAxis: { type: 'value', unit: spec.unit, minInterval: spec.int ? 1 : 0, boundaryGap: K.barGap(L.map(x => x.v)), axisLabel: { formatter: axFmt, hideOverlap: true } }"), 'разбор');  // boundaryGap — #329
+    kit.includes("xAxis: { type: 'value', unit: spec.unit, minInterval: spec.int ? 1 : 0, axisLabel: { formatter: axFmt, hideOverlap: true } }"), 'разбор');
   assert.ok(c04.includes("minInterval: A.meas.int ? 1 : 0, axisLabel: { formatter: v => K.tick(v, A.meas.sc), hideOverlap: true }"), 'C04');
   const meas = c04.slice(c04.indexOf('const MEAS = {'), c04.indexOf('FACT.forEach(([k, t]) => MEAS['));
   const lines = meas.split('\n').filter(l => / fmt: /.test(l));

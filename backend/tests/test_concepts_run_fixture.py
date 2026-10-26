@@ -22,8 +22,9 @@ of ``CURVES`` matches ``ids.curvePattern``. The values have a fixed shape (``sha
 object. Checked here on the golden answers and the fixture, and in ``loadRun`` on what a test adds.
 
 TDM#337: an entry of ``CURVES`` has the currency of its id (``ccy`` is the id's first three letters; a currency's own
-curve, id the bare code, is in RUB when the run has no rate for it, ``tdm_run.curves_reference``) and a ``kind`` of
-``ids.curveKinds`` (``CURVE_KINDS``); the keys of ``FX`` and ``fxDelta`` and a position's ``ccy`` (or null: a
+curve, id the bare code, is in RUB when the run has no rate for it: ``tdm_run.curves_reference`` publishes it so,
+``concepts_run.assemble`` gives it back its currency when the rate is there, ``api/concepts_run.py:196-198``) and a
+``kind`` of ``ids.curveKinds`` (``CURVE_KINDS``); the keys of ``FX`` and ``fxDelta`` and a position's ``ccy`` (or null: a
 not-valued row may have none) match ``ids.ccyPattern``, a rate of ``FX`` is a finite number or null. The nested
 structures of ``extra`` the pages read (``extraNested``: ``EXTRA_NESTED_KEYS``, which holds the golden answers' keys)
 have known keys: ``funding`` an object, ``funding.lines[]`` and ``legs[]`` lists of objects. A curve id typed the same
@@ -85,7 +86,7 @@ def is_row(v, nb: int) -> bool:
 
 def is_ccy(x) -> bool:
     """A currency code."""
-    return isinstance(x, str) and re.match(CCY, x) is not None
+    return isinstance(x, str) and re.fullmatch(CCY, x) is not None
 
 
 def is_curve(cid: str, v, nb: int, fx: dict) -> bool:
@@ -124,7 +125,7 @@ def shape_errors(doc: dict, curves: set[str], ccys: set[str]) -> list[str]:
     """The ids and values of ``CURVES``, ``risk``, ``fxDelta`` and ``extra`` off the module's rules; ``curves`` and
     ``ccys`` are the known ids besides the document's own ``CURVES`` and ``FX``."""
     nb, fx = len(doc["BUCKETS"]), doc["FX"]
-    bad = [f"CURVES.{c}" for c, v in doc["CURVES"].items() if not re.match(CURVE_ID, c) or not is_curve(c, v, nb, fx)]
+    bad = [f"CURVES.{c}" for c, v in doc["CURVES"].items() if not re.fullmatch(CURVE_ID, c) or not is_curve(c, v, nb, fx)]
     bad += [f"FX.{c}" for c, v in fx.items() if not is_ccy(c) or not (v is None or is_num(v))]
     # a position's own currency may have no rate in FX (core values it, the page says «нет курса»)
     known_curves = curves | set(doc["CURVES"])
@@ -189,6 +190,8 @@ def test_shape_errors_catch_typos_337():
         (lambda d: d["CURVES"]["RUB OFZ"].update(kind="bonds"), "CURVES.RUB OFZ"),
         (lambda d: d["FX"].__setitem__("OMR", 1.0), "CURVES.OMR"),  # with a rate the currency's curve is in OMR
         (lambda d: d["FX"].__setitem__("usd", 80.0), "FX.usd"),
+        (lambda d: d["FX"].__setitem__("EUR\n", 90.0), "FX.EUR\n"),  # re.match с «$» такое пропускает
+        (lambda d: d["positions"][0].update(ccy="USD\n"), "ccy.P"),
         (lambda d: d["FX"].__setitem__("XXX", "abc"), "FX.XXX"),
         (lambda d: d["FX"].__setitem__("XXX", float("inf")), "FX.XXX"),
         (lambda d: d["FX"].__setitem__("XXX", True), "FX.XXX"),

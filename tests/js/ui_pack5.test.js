@@ -97,7 +97,7 @@ t('#284: C13 «Концентрация» — единица меры в под�
   assert.ok(s.includes("unitOf('pareto', true); unitOf('sector', !NOSEC); unitOf('rating', !NORAT);"));
   const strip = s.slice(s.indexOf('function renderStrip'), s.indexOf('stripCharts.push(rc)'));
   assert.ok(strip && !/type: 'value', unit: m\.unit/.test(strip), 'у осей полосы нет name');
-  assert.ok(strip.includes("xAxis: { type: 'value', splitNumber: 3, axisLabel: { formatter: x => K.tick(x, m.sc), hideOverlap: true }, boundaryGap: K.barGap("),'сектора: деления не слипаются');
+  assert.ok(strip.includes("xAxis: { type: 'value', splitNumber: 3, axisLabel: { formatter: x => K.tick(x, m.sc), hideOverlap: true } }"), 'сектора: деления не слипаются');
 });
 
 t('#310: server-keys.json — ключи сервера по уровням, фикстура в них укладывается', () => {

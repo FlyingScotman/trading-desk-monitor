@@ -36,9 +36,35 @@ t('#329: K.barEnd — подпись отрицательного столбца
   const K = ctx.window.KIT, pos = x => K.barEnd(x).position, vpos = x => K.barEnd(x, true).position;
   assert.deepStrictEqual([-1, 0, 1, null].map(pos), ['left', 'right', 'right', 'right']);
   assert.deepStrictEqual([-1, 0, 1, null].map(vpos), ['bottom', 'top', 'top', 'top']);
-  // место слева под подпись — только когда есть отрицательные
-  assert.strictEqual(JSON.stringify([[1, 2], [0, null], [3, -0.1], []].map(K.barGap)), JSON.stringify([[0, 0], [0, 0], ['25%', 0], [0, 0]]));
+  // K.barFit: отступ оси значений по размеру подписи. Подпись отрицательного столбца помещается между концом столбца и
+  // краем области (с запасом на округление оси), положительной хватает поля grid — оси не трогаем
+  const fit = (W, H, vals, vert, fmt) => {
+    const cat = { type: 'category', data: vals.map((_, i) => 'кат ' + i), axisLabel: { fontSize: 10 } }, val = { type: 'value' };
+    const o = { grid: { left: 4, right: 46, top: 18, bottom: 4 }, xAxis: vert ? cat : val, yAxis: vert ? val : cat,
+      series: [{ type: 'bar', data: vals.map(v => ({ value: v, label: K.barEnd(v, vert) })), label: { show: true, fontSize: 10, formatter: p => (fmt || String)(p.value) } }] };
+    return { gap: K.barFit({ clientWidth: W, clientHeight: H }, o)[vert ? 'yAxis' : 'xAxis'].boundaryGap, o };
+  };
+  assert.strictEqual(fit(300, 200, [1, 2, 3], false).gap, undefined, 'только положительные, подпись в поле grid');
+  // место под подпись отрицательного: px между концом самого длинного отрицательного столбца и краем оси
+  const room = (W, H, vals, vert, fmt) => {
+    const { gap } = fit(W, H, vals, vert, fmt), span = Math.max(...vals) - Math.min(...vals);
+    const lo = Math.min(...vals) - span * parseFloat(gap[0]) / 100, hi = Math.max(...vals) + span * parseFloat(gap[1]) / 100;
+    const area = vert ? H - 18 - 4 - 13 - 8 : W - 4 - 46 - K.labelWidth('кат 0', 10) - 8;
+    return (Math.min(...vals) - lo) / (Math.max(hi, 0) - Math.min(lo, 0)) * area;
+  };
+  const lab = t => K.labelWidth(t, 10) + 7;
+  [[300, [-17.7, 18.9, 11.5]], [180, [-0.22, 0.23, 0.14]], [600, [-2645, -147]]].forEach(([W, vals]) => {
+    const fmt = v => '(' + Math.abs(v) + ')', r = room(W, 200, vals, false, fmt);
+    assert.ok(r >= lab(fmt(Math.min(...vals))), W + ' px: под «' + fmt(Math.min(...vals)) + '» ' + r.toFixed(1) + ' px');
+  });
+  assert.ok(room(400, 200, [-4657, -359, -9, -16], true) >= 10 * 1.3 + 7, 'вертикальный бар: подпись снизу помещается');
+  assert.strictEqual(JSON.stringify(fit(0, 0, [3, -1], false).gap), JSON.stringify(['25%', 0]), 'график скрыт — как раньше');
   const c06 = P('c06-launchpad.html'), c13 = P('c13-issuers.html'), kit = P('lib/kit.js');
+  // barFit у всех графиков с K.barEnd: три плитки C06, сектора и рейтинги C13, разбор
+  assert.strictEqual((c06.match(/small\(el, \(\) => \(\{ barFit: true,/g) || []).length, 3, 'C06');
+  assert.strictEqual((c13.match(/\{\n {6}barFit: true, grid:/g) || []).length, 2, 'C13');
+  assert.ok(kit.includes('barFit: true, grid: { left: 10, right: 60'), 'разбор');
+  assert.ok(kit.includes("if (o.barFit) { delete o.barFit; fit = true; K.barFit(el, o); }"), 'K.chart');
   assert.ok(c06.includes("label: K.barEnd(p.pnl.total) }))"), 'C06 «Топ вклад в PnL дня»');
   assert.ok(c06.includes("label: K.barEnd(x.v) }))"), 'C06 концентрация по эмитентам');
   assert.ok(c06.includes("return { value: v, label: K.barEnd(v) }; })"), 'C06 кэрри и фондирование по книгам');

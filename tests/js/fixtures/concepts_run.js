@@ -51,7 +51,8 @@ function unknownKeys(D) {
   const curves = new Set(SERVER_KEYS.ids.curves.concat(BASE_CURVES, own(D.CURVES)));
   const ccys = new Set(SERVER_KEYS.ids.ccys.concat(own(D.FX), ps.map(p => p && p.ccy)));
   const isCcy = v => isStr(v) && CCY.test(v), fx = isObj(D.FX) ? D.FX : {};
-  // валюта кривой — валюта её id; кривая валюты (id — код) без курса в FX — в RUB (tdm_run.curves_reference)
+  // валюта кривой — валюта её id; кривая валюты (id — код) без курса в FX — в RUB (tdm_run.curves_reference;
+  // с курсом сервер возвращает ей валюту: api/concepts_run.py:196–198, assemble)
   const ownCcy = (id, c) => c.ccy === id.slice(0, 3) || (c.ccy === 'RUB' && CCY.test(id) && !(id in fx));
   // id-ключи (кривая, валюта): id известен и значение нужной формы
   const ids = (level, o, known, ok) => { if (isObj(o)) Object.entries(o).forEach(([k, v]) => { if (!known(k) || !ok(v)) bad.add(level + '.' + k); }); };

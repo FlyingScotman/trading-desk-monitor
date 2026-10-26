@@ -1,12 +1,15 @@
-// Мониторы в браузере (Playwright, #329). Подпись отрицательного столбца горизонтального бара — у конца столбца, а не
-// у нуля (K.barEnd): C06 «Топ вклад в PnL дня» (и остальные горизонтальные бары C06), C13 «по секторам» и разбор
-// K.drill в виде «график» — в RUB и USD, в тёмной и светлой теме. Геометрия — по элементам ECharts: прямоугольник
-// столбца и его подпись после отрисовки. У отрицательного горизонтального столбца подпись целиком левее его левого
-// края, у вертикального — ниже нижнего; подпись не заходит на подписи категорий (K.barGap) и не уходит за край
-// графика. CSV C03: «Δ цены, % ном.» — число без «+» и без единицы (#110, #131) в любом формате отрицательных. Ошибок
-// консоли нет. Страницы открываются как файлы (file://), данные — демо-набор.
+// Мониторы в браузере (Playwright, #329). Подпись столбца бара — у его конца (K.barEnd), и под неё есть место
+// (barFit у K.chart: отступ оси по ширине подписи, K.labelWidth): C06 «Топ вклад в PnL дня», «Концентрация по
+// эмитентам» (MV, CS01, DV01) и «Кэрри и фондирование по книгам», C13 «по секторам» и «по рейтингам» (вертикальный
+// бар) по всем мерам (MV, CS01, DV01, PnL дня) и разбор K.drill в виде «график» — при ширине окна 1280, 1600 и 390, в
+// RUB и USD, в тёмной и светлой теме. Геометрия — по элементам ECharts: прямоугольник столбца, его подпись и область
+// столбцов (grid) после отрисовки. У отрицательного горизонтального столбца подпись целиком левее его левого края и не
+// заходит левее области столбцов (там подписи категорий); у положительного — правее правого края. У вертикального
+// бара: у отрицательного — ниже нижнего края и не ниже области столбцов, у положительного — выше верхнего. Подпись не
+// уходит за край графика. CSV C03: «Δ цены, % ном.» — число без «+» и без единицы (#110, #131) в любом формате
+// отрицательных. Ошибок консоли нет. Страницы открываются как файлы (file://), данные — демо-набор.
 //   node --test tests/js/ui_pack7_polish.pw.test.js
-// Снимки: UI_PACK7_SHOTS=<папка> node --test tests/js/ui_pack7_polish.pw.test.js
+// Снимки: UI_PACK7_POLISH_SHOTS=<папка> node --test tests/js/ui_pack7_polish.pw.test.js
 // Нужен Playwright, который находит require('playwright') (NODE_PATH, как в CI); без него тест пропускается.
 'use strict';
 const test = require('node:test');
@@ -16,14 +19,14 @@ const { pathToFileURL } = require('url');
 
 const pw = (() => { try { return require('playwright'); } catch (e) { return null; } })();
 const PAGE = f => pathToFileURL(path.join(__dirname, '..', '..', 'prototypes', 'concepts', f)).href;
-const SHOTS = process.env.UI_PACK7_SHOTS;
+const SHOTS = process.env.UI_PACK7_POLISH_SHOTS;
 
-// отрицательные столбцы с подписью во всех барах внутри root: столбец и подпись в px графика
-const negBars = (pg, root) => pg.evaluate(sel => {
+// столбцы с подписью во всех барах внутри root: значение, столбец, подпись и область столбцов в px графика
+const bars = (pg, root) => pg.evaluate(sel => {
   const out = [];
   document.querySelectorAll(sel + '[_echarts_instance_], ' + sel + ' [_echarts_instance_]').forEach(el => {
     const inst = echarts.getInstanceByDom(el), opt = inst && inst.getOption();
-    if (!opt) return;
+    if (!opt || !el.clientWidth) return;
     const horiz = !!(opt.yAxis || [])[0] && opt.yAxis[0].type === 'category';
     const gr = inst.getModel().getComponent('grid').coordinateSystem.getRect();  // область столбцов, без подписей осей
     (opt.series || []).forEach((s, si) => {
@@ -31,7 +34,7 @@ const negBars = (pg, root) => pg.evaluate(sel => {
       const data = inst.getModel().getSeriesByIndex(si).getData();
       for (let i = 0; i < data.count(); i++) {
         const v = data.get(data.mapDimension(horiz ? 'x' : 'y'), i), g = data.getItemGraphicEl(i), tl = g && g.getTextContent();
-        if (!(v < 0) || !tl || tl.ignore || !tl.style || !tl.style.text) continue;
+        if (v == null || isNaN(v) || !tl || tl.ignore || !tl.style || !tl.style.text) continue;
         const r = g.getBoundingRect().clone(), t = tl.getBoundingRect().clone();
         r.applyTransform(g.getComputedTransform()); t.applyTransform(tl.getComputedTransform());
         out.push({ el: el.id || el.parentElement.id || el.className, v, horiz, text: tl.style.text, W: el.clientWidth, H: el.clientHeight,
@@ -42,59 +45,77 @@ const negBars = (pg, root) => pg.evaluate(sel => {
   });
   return out;
 }, root);
-const atEnd = (L, what) => {
-  assert.ok(L.length > 0, what + ': есть отрицательные столбцы с подписью');
+const E = 0.5;  // допуск, px
+const atEnd = (L, what, opt) => {
+  opt = opt || {};
+  assert.ok(L.length > 0, what + ': есть подписанные столбцы');
+  if (opt.neg) assert.ok(L.some(x => x.v < 0), what + ': есть отрицательные столбцы с подписью');
+  if (opt.vert != null) assert.ok(L.every(x => x.horiz === !opt.vert), what + ': ' + (opt.vert ? 'вертикальный' : 'горизонтальный') + ' бар');
   L.forEach(x => {
-    const s = what + ' ' + x.el + ' «' + x.text + '» ' + JSON.stringify({ bar: x.bar, lab: x.lab, grid: x.grid });
-    if (x.horiz) assert.ok(x.lab.r <= x.bar.l + 0.5, s + ': подпись левее конца столбца');
-    else assert.ok(x.lab.t >= x.bar.b - 0.5, s + ': подпись ниже конца столбца');
-    // и не заходит на подписи категорий (K.barGap: ось значений расширена влево)
-    if (x.horiz) assert.ok(x.lab.l >= x.grid.l - 0.5, s + ': подпись не на подписях категорий');
-    assert.ok(x.lab.l >= -0.5 && x.lab.r <= x.W + 0.5 && x.lab.t >= -0.5 && x.lab.b <= x.H + 0.5, s + ': подпись внутри графика');
+    const s = what + ' ' + x.el + ' «' + x.text + '» ' + JSON.stringify({ v: x.v, bar: x.bar, lab: x.lab, grid: x.grid });
+    if (x.horiz && x.v < 0) {
+      assert.ok(x.lab.r <= x.bar.l + E, s + ': подпись левее конца столбца');
+      assert.ok(x.lab.l >= x.grid.l - E, s + ': подпись не заходит на подписи категорий');
+    } else if (x.horiz) assert.ok(x.lab.l >= x.bar.r - E, s + ': подпись правее конца столбца');
+    else if (x.v < 0) {
+      assert.ok(x.lab.t >= x.bar.b - E, s + ': подпись ниже конца столбца');
+      assert.ok(x.lab.b <= x.grid.b + E, s + ': подпись не заходит на подписи категорий');
+    } else assert.ok(x.lab.b <= x.bar.t + E, s + ': подпись выше конца столбца');
+    assert.ok(x.lab.l >= -E && x.lab.r <= x.W + E && x.lab.t >= -E && x.lab.b <= x.H + E, s + ': подпись внутри графика');
   });
 };
 const settle = pg => pg.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 400)))));
+const SIZES = [[1280, 800], [1600, 1000], [390, 844]];
 
-for (const theme of ['dark', 'light']) for (const repr of ['RUB', 'USD']) {
-  test('#329: подпись отрицательного столбца у его конца — C06, C13 сектора, разбор; ' + repr + ', тема ' + theme, { skip: !pw && 'нет Playwright' }, async () => {
+for (const [w, h] of SIZES) for (const theme of ['dark', 'light']) for (const repr of ['RUB', 'USD']) {
+  test('#329: подписи столбцов у конца и с местом — C06, C13, разбор; ' + w + ' px, ' + repr + ', тема ' + theme, { skip: !pw && 'нет Playwright' }, async () => {
     const browser = await pw.chromium.launch();
     try {
-      const ctx = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
-      await ctx.addInitScript(([t, r]) => { try { localStorage.clear(); localStorage.setItem('concepts-theme', t); localStorage.setItem('concepts-repr', r); localStorage.setItem('c13', JSON.stringify({ meas: 'pnl' })); } catch (e) { } }, [theme, repr]);
+      const ctx = await browser.newContext({ viewport: { width: w, height: h } });
+      await ctx.addInitScript(([t, r]) => { try { if (!sessionStorage.getItem('init')) { sessionStorage.setItem('init', '1'); localStorage.clear(); localStorage.setItem('concepts-theme', t); localStorage.setItem('concepts-repr', r); } } catch (e) { } }, [theme, repr]);
       const pg = await ctx.newPage(), errors = [];
       pg.on('pageerror', e => errors.push('pageerror: ' + e.message));
       pg.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
-      const shot = async name => { if (SHOTS) await pg.screenshot({ path: path.join(SHOTS, name + '-' + repr + '-' + theme + '.png') }); };
+      const shot = async name => { if (SHOTS) await pg.screenshot({ path: path.join(SHOTS, name + '-' + w + '-' + repr + '-' + theme + '.png'), fullPage: w < 600 }); };
+      const open = async (file, ready, store) => {
+        await pg.goto(PAGE(file));
+        await pg.evaluate(s => Object.entries(s).forEach(([k, v]) => localStorage.setItem(k, v)), store || {});
+        await pg.reload();
+        await pg.waitForFunction(ready);
+        await settle(pg);
+        assert.strictEqual(await pg.evaluate(() => [KIT.theme(), KIT.repr].join()), theme + ',' + repr);
+      };
 
-      await pg.goto(PAGE('c06-launchpad.html'));
-      await pg.waitForFunction(() => window.KIT && document.querySelector('[_echarts_instance_]'));
-      await settle(pg);
-      assert.strictEqual(await pg.evaluate(() => [KIT.theme(), KIT.repr].join()), theme + ',' + repr);
-      const c06 = await negBars(pg, 'body');
-      atEnd(c06, 'C06');
-      assert.ok(c06.some(x => /^\(|^−|^-/.test(x.text)), 'C06: «Топ вклад в PnL дня» — отрицательный вклад подписан');
-      await shot('c06');
+      // C06: все плитки с барами; «Концентрация по эмитентам» — по каждой мере
+      for (const mode of ['mv', 'cs01', 'dv01']) {
+        await open('c06-launchpad.html', () => window.KIT && document.querySelector('[_echarts_instance_]'), { 'c06-modes': JSON.stringify({ issuers: mode }) });
+        const c06 = await bars(pg, 'body');
+        atEnd(c06, 'C06 (' + mode + ')', { neg: true });
+        assert.ok(c06.some(x => x.v < 0 && /^\(|^−|^-/.test(x.text)), 'C06: отрицательный вклад подписан');
+        if (mode === 'mv') await shot('c06');
+      }
 
-      await pg.goto(PAGE('c13-issuers.html'));
-      await pg.waitForFunction(() => window.KIT && document.querySelector('#sector[_echarts_instance_]'));
-      await settle(pg);
-      atEnd(await negBars(pg, '#sector'), 'C13 сектора');
-      await shot('c13');
+      // C13: сектора (горизонтальный бар) и рейтинги (вертикальный) — по каждой мере
+      for (const meas of ['mv', 'cs01', 'dv01', 'pnl']) {
+        await open('c13-issuers.html', () => window.KIT && document.querySelector('#sector[_echarts_instance_]') && document.querySelector('#rating[_echarts_instance_]'), { c13: JSON.stringify({ meas }) });
+        atEnd(await bars(pg, '#sector'), 'C13 сектора, ' + meas, { vert: false, neg: meas !== 'mv' });
+        atEnd(await bars(pg, '#rating'), 'C13 рейтинги, ' + meas, { vert: true });
+        if (meas === 'dv01') await shot('c13');
+      }
 
-      // разбор из столбца сектора с отрицательным PnL: вид «график»
-      const at = await pg.evaluate(() => {
-        const el = document.querySelector('#sector'), inst = echarts.getInstanceByDom(el);
-        const data = inst.getModel().getSeriesByIndex(0).getData(), box = el.getBoundingClientRect();
+      // разбор из столбца сектора с самым отрицательным PnL: вид «график»
+      await open('c13-issuers.html', () => window.KIT && document.querySelector('#sector[_echarts_instance_]'), { c13: JSON.stringify({ meas: 'pnl' }) });
+      // щелчок по столбцу — событие click графика (как щелчок мышью: обработчик страницы открывает разбор)
+      await pg.evaluate(() => {
+        const inst = echarts.getInstanceByDom(document.querySelector('#sector')), data = inst.getModel().getSeriesByIndex(0).getData();
         let i = 0; for (let k = 0; k < data.count(); k++) if (data.get(data.mapDimension('x'), k) < data.get(data.mapDimension('x'), i)) i = k;
-        const r = data.getItemGraphicEl(i).getBoundingRect().clone(); r.applyTransform(data.getItemGraphicEl(i).getComputedTransform());
-        return { x: box.left + r.x + r.width / 2, y: box.top + r.y + r.height / 2 };
+        inst.trigger('click', { componentType: 'series', seriesIndex: 0, dataIndex: i, value: data.get(data.mapDimension('x'), i) });
       });
-      await pg.mouse.click(at.x, at.y);
       await pg.waitForSelector('.k-drawer');
       await pg.click('.k-drawer button:has-text("график")');
       await pg.waitForFunction(() => document.querySelector('.k-drawer [_echarts_instance_]'));
       await settle(pg);
-      atEnd(await negBars(pg, '.k-drawer'), 'разбор');
+      atEnd(await bars(pg, '.k-drawer'), 'разбор', { vert: false, neg: true });
       await shot('drill');
       assert.deepStrictEqual(errors, []);
     } finally {
