@@ -2,7 +2,9 @@
  "_comment": [
   "Три классификации вида инструмента сверяются на этих случаях (TDM#345): api/concepts.instr_kind (table),",
   "publish/summary.kind_of (kindOf: [группа, вид]), lib/real.js kindOf и lib/instr.js INSTR.kindOf (row: позиция в форме",
-  "сервера /concepts-run.js). Группа kindOf равна группе типа таблицы, кроме облигации без класса (bondNa: OTH, не CORP).",
+  "сервера /concepts-run.js). Группа kindOf равна группе типа таблицы, кроме облигации без класса (bondNa: OTH, не CORP)",
+  "и OTC с группой продукта, которой таблица не знает (knownMismatch: #361, где показывать РЕПО, решает владелец):",
+  "таблица — UNCLASSIFIED (OTH), kind_of — DER.OTC. OTC без группы продукта (нет или пустая) — тип OTC (DER).",
   "Вид таблицы подробнее вида kind_of: CCS таблицы это XCCY kind_of; CDS и OTC с группой продукта это его OTC.",
   "У не оценённой позиции (unvalued) kind_of нет: fact это строка отчёта, row это то, что отдаёт сервер (concepts_run._not_valued).",
   "instrTypes: полный список instr_type, каждый должен встретиться в cases.",
@@ -418,7 +420,42 @@
    "table": "OTC"
   },
   {
-   "name": "OTC, группа продукта таблице неизвестна",
+   "name": "OTC без группы продукта (пустая)",
+   "fact": {
+    "instr_type": "OTC",
+    "segment": "Деривативы",
+    "asset_class": "OTC-деривативы",
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": ""
+      }
+     }
+    }
+   },
+   "row": {
+    "instrType": "OTC",
+    "segment": "Деривативы",
+    "assetClass": "OTC-деривативы",
+    "couponType": null,
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": ""
+      }
+     }
+    }
+   },
+   "kindOf": [
+    "DER",
+    "OTC"
+   ],
+   "table": "OTC"
+  },
+  {
+   "name": "OTC, группа продукта таблице неизвестна: repo",
    "fact": {
     "instr_type": "OTC",
     "segment": "Деривативы",
@@ -450,7 +487,44 @@
     "DER",
     "OTC"
    ],
-   "table": "OTC"
+   "table": "UNCLASSIFIED",
+   "knownMismatch": "#361"
+  },
+  {
+   "name": "OTC, группа продукта таблице неизвестна: new",
+   "fact": {
+    "instr_type": "OTC",
+    "segment": "Деривативы",
+    "asset_class": "OTC-деривативы",
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "new"
+      }
+     }
+    }
+   },
+   "row": {
+    "instrType": "OTC",
+    "segment": "Деривативы",
+    "assetClass": "OTC-деривативы",
+    "couponType": null,
+    "ccy": "RUB",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "new"
+      }
+     }
+    }
+   },
+   "kindOf": [
+    "DER",
+    "OTC"
+   ],
+   "table": "UNCLASSIFIED",
+   "knownMismatch": "#361"
   },
   {
    "name": "OTC, группа продукта irs",
@@ -839,6 +913,39 @@
    },
    "kindOf": null,
    "table": "IRS",
+   "unvalued": true
+  },
+  {
+   "name": "не оценена: OTC, группа продукта repo",
+   "fact": {
+    "ccy": "RUB",
+    "asset_class": "otc",
+    "extra": {
+     "reported": {
+      "asset_class": "otc",
+      "x": {
+       "x_product_group": "repo"
+      }
+     }
+    }
+   },
+   "row": {
+    "assetClass": "OTC-деривативы",
+    "segment": "Деривативы",
+    "instrType": null,
+    "ccy": "RUB",
+    "notValued": true,
+    "extra": {
+     "reported": {
+      "asset_class": "otc",
+      "x": {
+       "x_product_group": "repo"
+      }
+     }
+    }
+   },
+   "kindOf": null,
+   "table": "UNCLASSIFIED",
    "unvalued": true
   },
   {

@@ -2,8 +2,10 @@
 ``publish/summary.kind_of`` (the summaries' group and kind) and the monitors' ``lib/real.js`` ``kindOf`` /
 ``lib/instr.js`` ``INSTR.kindOf`` agree on every ``instr_type``. The cases are shared with the JS side
 (``tests/fixtures/instr_kinds.json``, checked again by ``tests/js/instr_kinds.test.js``): the group of ``kind_of`` is the
-group of the table's kind (but for an unmapped bond: BOND_NA, OTH), an OTC row without a product group the table
-knows is DER (``kind_of``'s DER OTC, the table's ``OTC``), never UNCLASSIFIED in OTH."""
+group of the table's kind (but for an unmapped bond: BOND_NA, OTH), an OTC row without any product group is DER
+(``kind_of``'s DER OTC, the table's ``OTC``), never UNCLASSIFIED in OTH. An OTC row with a product group the table
+does not know (``repo``, a new one) stays UNCLASSIFIED: a known difference with ``kind_of`` (``knownMismatch``) until
+the owner decides where REPO goes (TDM#361)."""
 import json
 from pathlib import Path
 
@@ -27,6 +29,11 @@ def test_the_three_classifications_agree(case):
     assert summary.kind_of(fact) == concepts.kind_of(fact) == tuple(case["kindOf"])
     if case.get("bondNa"):  # an unmapped bond: OTH in the table, its issuer's group in kind_of
         assert group == "OTH" and case["kindOf"][0] == "CORP"
+    elif case.get("knownMismatch"):
+        # an OTC row with a product group the table does not know (repo, a new one): UNCLASSIFIED in the table, DER OTC
+        # in kind_of -- a known difference until the owner decides where REPO goes (TDM#361)
+        assert case["knownMismatch"] == "#361" and fact["instr_type"] == "OTC"
+        assert (case["table"], group, tuple(case["kindOf"])) == ("UNCLASSIFIED", "OTH", ("DER", "OTC"))
     else:
         assert group == case["kindOf"][0], "the table's group is kind_of's"
 

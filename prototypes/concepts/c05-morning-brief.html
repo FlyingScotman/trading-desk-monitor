@@ -156,7 +156,7 @@
       if (Math.abs(v) > 3e5) parts.push({ v, h: 'ставки ' + c.short + ' ' + mln('PnL от ' + c.short, L, p => ratePnl(p, c.id)) + ' <span class="mut">· ' + c.short + ' ' + chgBp(c) + '</span>' });
     });
     const bas = M.ofzView === 'kbd' ? 0 : M.sum(L, p => ratePnl(p, 'RUB OFZ'));  // в виде «КБД» КБД — среди кривых ставок выше
-    if (Math.abs(bas) > 3e5) parts.push({ v: bas, h: 'базис ОФЗ ' + mln('PnL от базиса ОФЗ − RUONIA', L, p => ratePnl(p, 'RUB OFZ')) + ' <span class="mut">(' + (K.noMoves(M.curve['RUB OFZ'].chg) ? 'базис ОФЗ: сдвигов нет в прогоне' : 'ОФЗ шире RUONIA на ' + chgBp(M.curve['RUB OFZ'])) + ')</span>' });
+    if (Math.abs(bas) > 3e5) parts.push({ v: bas, h: 'базис ОФЗ ' + mln('PnL от базиса ОФЗ − RUONIA', L, p => ratePnl(p, 'RUB OFZ')) + ' <span class="mut">(' + (noCurve(M.curve['RUB OFZ']) ? 'кривой базиса ОФЗ в прогоне нет' : K.noMoves(M.curve['RUB OFZ'].chg) ? 'базис ОФЗ: сдвигов нет в прогоне' : 'ОФЗ шире RUONIA на ' + chgBp(M.curve['RUB OFZ'])) + ')</span>' });
     [['carry', 'кэрри'], ['funding', 'фондирование'], ['spread', 'кредитные спреды'], ['fx', 'курсы'], ['trading', 'сделки дня'], ['other', 'прочее']].forEach(([key, t]) => {
       const v = M.sum(L, p => p.pnl[key]); if (Math.abs(v) > 2e5) parts.push({ v, h: t + ' ' + mln('PnL · ' + t, L, p => p.pnl[key]) });
     });

@@ -50,8 +50,11 @@ def der(pid, group, ccy, risk, fx_delta=None, it="OTC", quality="computed", **kw
         ("irs", "IRS", "OTC"), ("ccs", "CCS", "OTC"), ("cds", "CDS", "OTC"), ("trs", "TRS", "OTC"),
         ("bond_future", "BOND_FUT", "OTC"), ("bond_forward", "BOND_FWD", "OTC"), ("fx_future", "FX_FUT", "FX"),
         ("fx_ndf", "FX_FWD", "FX"), ("equity", "EQUITY", "OTHER"))],
-    # an OTC row without a product group the table knows: DER, as kind_of's DER OTC (TDM#345), not UNCLASSIFIED
-    ({"instr_type": "OTC"}, "OTC"), ({"instr_type": "OTC", "extra": {"reported": {"x_product_group": "new"}}}, "OTC"),
+    # an OTC row without a product group: DER, as kind_of's DER OTC (TDM#345), not UNCLASSIFIED; one with a group the
+    # table does not know stays UNCLASSIFIED (where REPO goes is the owner's, TDM#361)
+    ({"instr_type": "OTC"}, "OTC"), ({"instr_type": "OTC", "extra": {"reported": {"x_product_group": "new"}}},
+                                     "UNCLASSIFIED"),
+    ({"instr_type": "OTC", "extra": {"reported": {"x": {"x_product_group": "repo"}}}}, "UNCLASSIFIED"),
     ({"ccy": "RUB", "asset_class": "otc", "extra": {"reported": {}}}, "OTC"),
     ({"instr_type": "OTHER"}, "UNCLASSIFIED"), ({"instr_type": "FX"}, "FX"),
     ({"instr_type": "FX", "ocp_transfer": True}, "OCP"), ({"instr_type": "FX", "asset_class": "Перенос ОВП"}, "OCP"),

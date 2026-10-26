@@ -833,10 +833,12 @@ INSTR_KINDS: tuple[tuple[str, str, str], ...] = (
 classification: a bond by issuer type and coupon (``kind_of``, plus the static's class: subfederal / municipal,
 securitisation; the Russian Minfin's bonds by the issuer, ``summary.is_minfin``: in roubles the OFZ kinds, in a
 foreign currency ``MINFIN_FX`` -- its Eurobonds and replacement bonds, never a generic "sovereigns" kind, R39), a derivative or FX row by the adapter's product group (``PRODUCT_KIND``), else by the legacy tdm
-instrument type (``LEGACY_KIND``); an OTC row whose product group the table does not know is ``OTC`` (DER, as
-``kind_of``'s DER OTC, TDM#345); what none of them names is ``UNCLASSIFIED`` (shown, never dropped). The group is
+instrument type (``LEGACY_KIND``); an OTC row without any product group is ``OTC`` (DER, as ``kind_of``'s DER OTC,
+TDM#345), one with a group the table does not know (``repo``, a new one) stays ``UNCLASSIFIED`` (OTH; kind_of's DER OTC:
+a known difference, the owner decides where REPO goes, TDM#361); what none of them names is ``UNCLASSIFIED`` (shown, never dropped). The group is
 ``kind_of``'s for every ``instr_type`` (``tests/fixtures/instr_kinds.json`` checks the three classifications: this,
-``kind_of`` and ``lib/real.js`` / ``lib/instr.js``) but for an unmapped or unvalued bond (OTH, not CORP). A kind
+``kind_of`` and ``lib/real.js`` / ``lib/instr.js``) but for an unmapped or unvalued bond (OTH, not CORP) and an OTC
+row with an unknown product group (TDM#361). A kind
 here may be named apart from ``kind_of``'s (``CCS`` is its ``XCCY``, ``CDS`` its ``OTC``): the table is finer."""
 KIND_GROUP = {k: g for k, g, _ in INSTR_KINDS}
 KIND_LABEL = {k: lab for k, _, lab in INSTR_KINDS}
@@ -919,8 +921,8 @@ def instr_kind(f: dict[str, Any], gov_issuers: frozenset[str] | set[str] = froze
     if it == "FX":
         ocp = f.get("ocp_transfer") or ex.get("ocp_transfer") or f.get("asset_class") == "Перенос ОВП"
         return "OCP" if ocp else "FX"
-    if it == "OTC":  # no product group the table knows: kind_of's DER OTC, not UNCLASSIFIED (TDM#345)
-        return "OTC"
+    if it == "OTC" and not pg:  # no product group at all: kind_of's DER OTC, not UNCLASSIFIED (TDM#345); a group the
+        return "OTC"  # table does not know (repo, a new one) stays UNCLASSIFIED: where REPO goes is the owner's (TDM#361)
     if it not in ("BOND", None):
         return "UNCLASSIFIED"
     if f.get("asset_class") == "Не сопоставлено":

@@ -1,8 +1,8 @@
 // Одно правило вида инструмента (#345): lib/real.js kindOf ([группа, вид], зеркало publish/summary.kind_of) и
 // lib/instr.js INSTR.kindOf (тип таблицы «валюта × тип», зеркало api/concepts.instr_kind) на общем списке случаев
 // tests/fixtures/instr_kinds.json — том же, что сверяет backend/tests/test_instr_kinds.py с Python. Группа kindOf
-// равна группе типа таблицы (кроме облигации без класса); OTC без известной группы продукта — DER (тип «OTC»), не
-// «Не классифицировано»; XCCY старого tdm — XCCY у kindOf и CCS в таблице (тот же вид, имя таблицы).
+// равна группе типа таблицы (кроме облигации без класса); OTC без группы продукта — DER (тип «OTC»), не
+// «Не классифицировано»; OTC с незнакомой группой (repo, новая) — «Не классифицировано», известное расхождение (#361); XCCY старого tdm — XCCY у kindOf и CCS в таблице (тот же вид, имя таблицы).
 //   node --test tests/js/instr_kinds.test.js
 'use strict';
 const fs = require('fs'), path = require('path'), vm = require('vm'), assert = require('assert');
@@ -36,6 +36,9 @@ test('#345: kindOf real.js и INSTR.kindOf — по правилу api/concepts 
     if (c.unvalued) return;
     assert.strictEqual(JSON.stringify([p.group, p.kind]), JSON.stringify(c.kindOf), c.name + ": kindOf");
     if (c.bondNa) assert.strictEqual(I.group[c.table], 'OTH', c.name);
+    // OTC с незнакомой группой продукта (repo, новая): таблица — «Не классифицировано», kindOf — DER.OTC; известное
+    // расхождение, пока владелец не решит, где показывать РЕПО (#361)
+    else if (c.knownMismatch) assert.ok(c.knownMismatch === '#361' && c.table === 'UNCLASSIFIED' && I.group[c.table] === 'OTH' && p.group === 'DER', c.name);
     else assert.strictEqual(I.group[c.table], c.kindOf[0], c.name + ': группа таблицы — группа kindOf');
   });
 });

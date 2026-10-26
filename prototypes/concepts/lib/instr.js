@@ -12,9 +12,9 @@
  *  - деривативы и FX — по группе продукта отчёта (x_product_group отчёта адаптера в extra.reported.x: irs, ccs, cds, trs,
  *    bond_future, bond_forward, fx_future, fx_ndf, equity), иначе по типу старого tdm (IRS, XCCY, CDS), в демо-наборе —
  *    по его типу (IRS / КС-своп / базис → IRS, FX форвард, XCCY → CCS); FX-строка без группы — «Валюта», перенос ОВП —
- *    свой тип; OTC-строка без известной группы продукта — «Внебиржевые без группы продукта» (DER, как kind_of: DER.OTC,
- *    #345); чего таблица не знает — «Не классифицировано» (видно, не выброшено). Группа типа совпадает с группой
- *    kindOf lib/real.js (api/concepts.kind_of) для любого instrType: tests/fixtures/instr_kinds.json сверяет все три
+ *    свой тип; OTC-строка без группы продукта — «Внебиржевые без группы продукта» (DER, как kind_of: DER.OTC, #345),
+ *    с незнакомой группой (repo, новая) — «Не классифицировано» (известное расхождение с kind_of, #361); чего таблица не знает — «Не классифицировано» (видно, не выброшено). Группа типа совпадает с группой
+ *    kindOf lib/real.js (api/concepts.kind_of) для любого instrType, кроме этого случая: tests/fixtures/instr_kinds.json сверяет все три
  *    классификации; имя типа таблицы может быть подробнее (CCS — это XCCY kind_of, CDS — его OTC).
  * Отнесение к валюте (INSTR.ATTRIBUTIONS) — для многовалютных типов (INSTR.CROSS_CCY: CCS, FX форварды, FX фьючерсы, FX):
  *  - «по ногам» (legs, по умолчанию, ПРЕДВАРИТЕЛЬНО — решает владелец): каждая мера в своей валюте — DV01 по кривой в
@@ -81,7 +81,9 @@
     if (p.group === 'DER' || p.group === 'OTH') {
       if (I.DEMO_KIND[p.kind]) return I.DEMO_KIND[p.kind];
       if (p.kind === 'FX') return p.ocp ? 'OCP' : 'FX';
-      if (p.kind === 'OTC') return 'OTC';  // OTC без известной группы продукта — DER, как api/concepts (#345)
+      // OTC без группы продукта — DER, как api/concepts (#345); с незнакомой группой (repo, новая) — «Не классифицировано»:
+      // где показывать РЕПО, решает владелец (#361)
+      if (p.kind === 'OTC' && !pg) return 'OTC';
       return 'UNCLASSIFIED';
     }
     if (p.notValued || p.assetClass === 'Не сопоставлено') return 'BOND_NA';
