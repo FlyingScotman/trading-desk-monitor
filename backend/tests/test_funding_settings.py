@@ -126,6 +126,30 @@ def test_htm_lot_contract_rate_rules_and_default():
     assert only(run(rules=FundingRules((general,)), htm_lots=[lot()])).rate_expr == "8.00% contract"
 
 
+def test_contract_rule_is_no_rate_for_a_cash_line():
+    """The adapter's HTM rule {book_type HTM, basis cost, rate_kind contract} (as in its example config) prices the HTM
+    lots only: the cash of an HTM book (here of an entity funded on its whole cash) takes the general rule or the
+    default rate, never "no contract" (review of #247)."""
+    adapter_htm = FundingRule(book_type="HTM", contract=True, note="a_htm")
+    cash = [CashBalance("H", "HTM", "OTH1", "RUB", 1e6)]
+    entities = {"E1": "main", "OTH1": "other"}
+    pol = replace(POLICY, entity_cash_rate_book_type=None)
+    by_default = run_d(rules=_all(_settings(), adapter=(adapter_htm,)), cash=cash, previous_cash=cash,
+                       entities=entities, policy=pol)
+    line = only(by_default)
+    assert not by_default.problems and line.kind is LineKind.ENTITY_CASH and line.default_rate
+    assert line.days[0].rate == pytest.approx(0.155)
+    general = FundingRule(ccy="RUB", fixed_rate=0.07, note="a_rub")
+    by_rule = run_d(rules=FundingRules((adapter_htm, general)), cash=cash, previous_cash=cash, entities=entities,
+                    policy=pol)
+    assert not by_rule.problems and only(by_rule).rule_id == "a_rub"
+    # the lots keep their contract rate under the same rules
+    lots = only(run_d(rules=FundingRules((adapter_htm, general)), htm_lots=[lot()]))
+    assert lots.rate_expr == "8.00% contract" and lots.rule_id == "a_htm"
+    assert FundingRules((adapter_htm,)).resolve(MON, **{**KW, "book_type": "HTM"}) is None
+    assert FundingRules((adapter_htm,)).resolve(MON, **{**KW, "book_type": "HTM"}, contracts=True).note == "a_htm"
+
+
 def test_repo_rule_in_the_settings():
     deal = RepoDeal("R1", "RP", "DERIVS", "E1", "RUB", 1e6, MON, None, contract_rate=0.2)
     pol = replace(POLICY, repo=RepoPolicy(RepoRate.CONTRACT))

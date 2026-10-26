@@ -413,13 +413,17 @@ class FundingRules:
 
     def resolve(self, on: date, *, ccy: str, book_type: str, entity: str, book_id: str,
                 instrument_id: str | None = None, security_class: str | None = None,
-                kind: LineKind | None = None, max_tier: int | None = None) -> FundingRule | None:
-        """The rule of a line on ``on`` (``FundingRule``); ``max_tier``: only rules of this tier or a lower one."""
+                kind: LineKind | None = None, max_tier: int | None = None,
+                contracts: bool = False) -> FundingRule | None:
+        """The rule of a line on ``on`` (``FundingRule``); ``max_tier``: only rules of this tier or a lower one;
+        ``contracts``: also ``contract`` rules (only a line with a contract rate of its own, an HTM lot or a REPO
+        deal, asks for them: for any other line such a rule is no rate and is skipped, as if absent)."""
         facts = {"ccy": ccy, "book_type": book_type, "entity": entity, "book_id": book_id,
                  "instrument_id": instrument_id, "security_class": security_class, "kind": kind}
         latest: dict[tuple[Any, ...], tuple[int, FundingRule]] = {}
         for i, r in enumerate(self.rates):
-            if not r.valid_on(on) or not r.matches(facts) or (max_tier is not None and r.tier > max_tier):
+            if not r.valid_on(on) or not r.matches(facts) or (max_tier is not None and r.tier > max_tier) \
+                    or (r.contract and not contracts):
                 continue
             k = r.selector
             if k not in latest or r.valid_from > latest[k][1].valid_from:
@@ -733,18 +737,23 @@ class _Engine:
                  ) -> RateOf:
         """The rate of a line that has a contract rate of its own (an HTM lot, a REPO deal) on each day: a rule of the
         adapter or the settings that ``own`` accepts (one naming the line's kind, say) and that is not ``contract``,
-        else the contract rate, else the market default rate (``RuleTier.DEFAULT``), else a problem."""
+        else the contract rate, else the market default rate (``RuleTier.DEFAULT``), else a problem. Rules ``own``
+        does not accept (a ruble rule of no book type for an HTM lot, say) do not take part: they cannot shadow one
+        it accepts, nor the contract rule that names the line's own rate."""
+        mine = FundingRules(tuple(r for r in self.rules.rates if r.tier < RuleTier.DEFAULT and (r.contract or own(r))))
+        defaults = FundingRules(tuple(r for r in self.rules.rates if r.tier == RuleTier.DEFAULT))
+
         def rate_of(day: date) -> tuple[float, str, DayBasis | None, FundingRule | None]:
             kw = {"ccy": ccy, "book_type": book_type, "entity": entity, "book_id": book_id,
                   "instrument_id": instrument_id, "kind": kind}
-            rule = self.rules.resolve(day, max_tier=RuleTier.SETTINGS, **kw)
-            if rule is not None and own(rule) and not rule.contract:
+            rule = mine.resolve(day, contracts=True, **kw)
+            if rule is not None and not rule.contract:
                 return self.rule_value(rule, day, None, ccy)
             if contract_rate is not None:
-                return contract_rate, f"{contract_rate:.2%} {label}", None, rule if rule is not None and rule.contract                     else None
-            if rule is None or not rule.contract:  # an explicit "contract" rule without a rate is a problem
-                default = self.rules.resolve(day, **kw)
-                if default is not None and default.tier == RuleTier.DEFAULT:
+                return contract_rate, f"{contract_rate:.2%} {label}", None, rule
+            if rule is None:  # an explicit "contract" rule without a rate is a problem
+                default = defaults.resolve(day, **kw)
+                if default is not None:
                     return self.rule_value(default, day, None, ccy)
             raise _Missing("no contract rate")
         return rate_of
