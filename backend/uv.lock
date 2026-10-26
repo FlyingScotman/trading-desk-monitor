@@ -301,7 +301,6 @@ dependencies = [
     { name = "fastapi" },
     { name = "psycopg", extra = ["binary"] },
     { name = "rub-fixed-income-core" },
-    { name = "trading-desk-monitor" },
     { name = "truststore" },
     { name = "uvicorn" },
 ]
@@ -325,7 +324,6 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "rub-fixed-income-core", git = "https://github.com/FlyingScotman/rub-fixed-income-core.git?rev=d6ed9bfcf1f09493ef498b403940b0a51a7c4dbd" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
-    { name = "trading-desk-monitor", editable = "../" },
     { name = "truststore", specifier = ">=0.10" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
@@ -966,11 +964,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/ad/eb/4e197bf26b023abaf
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f3/93/181df62699d9b5aca1d87e5cfda131dac87e3cdaebf668662f7206ca3470/starlette-1.9.0-py3-none-any.whl", hash = "sha256:fd3f159936e882d06c1108f84688f7cda2cf85fc6a592a50edbd175e882c2ddc", size = 80335, upload-time = "2026-10-18T15:50:31.526Z" },
 ]
-
-[[package]]
-name = "trading-desk-monitor"
-version = "0.1.0"
-source = { editable = "../" }
 
 [[package]]
 name = "truststore"

@@ -9,13 +9,10 @@ import json
 from datetime import date, timedelta
 from pathlib import Path
 
-import legacy_tdm
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from store_rows import insert_run
-from tdm.assemble import assemble, resolve_run
-from tdm.db import connect
 from test_slice_s2 import prev_outcome, shifted_prev
 
 from desk.api import create_app
@@ -258,7 +255,13 @@ def test_desk_data_js_without_runs_gives_the_empty_state_not_the_demo(client):
 def test_compat_parity_with_tdm_assemble(store_url, book, client, tmp_path, monkeypatch):
     """The same outcomes through legacy_tdm.publish (the tdm writer the backend dropped in #294) into a tdm store
     and through insert_run into the desk store, on the synthetic previous date of S2 and on the fixture date:
-    tdm.assemble.assemble on the first equals the compat adapter on the second, history included."""
+    tdm.assemble.assemble on the first equals the compat adapter on the second, history included. The ``tdm`` package
+    left the repository (#295): skipped without it; the test goes with compat (#293)."""
+    pytest.importorskip("tdm")
+    import legacy_tdm
+    from tdm.assemble import assemble, resolve_run
+    from tdm.db import connect
+
     home = tmp_path / "home"  # the market default rate off (#237): no funding at all, as tdm
     home.mkdir()
     monkeypatch.setenv("DESK_HOME", str(home))
