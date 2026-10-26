@@ -27,8 +27,8 @@
  *  - PnL: кэрри = carry + rolldown (купонный доход и roll-down, без фондирования: #168), фондирование = funding (свой
  *    фактор, B1), ставки = rates + convexity, FX = fx, сделки = newTrades, прочее = other + reported; итог = explained
  *    (сумма факторов). p.carryDay / p.fundingDay — то же за день; p.funding (= p.pnl.funding) — фондирование позиции за
- *    период (null — не посчитано: не настроено или проблема), p.fundRate — ставка фондирования, % (extra.funding.lines
- *    rate_pct, по телу строк), p.fundingInfo — extra.funding (состояние, строки, причина);
+ *    период (null — не посчитано: не настроено или проблема), p.fundRate — ставка фондирования на конец периода, %
+ *    (extra.funding.lines rate_pct, по телу строк в рублях), p.fundingInfo — extra.funding (состояние, строки, причина);
  *    M.funding — фондирование прогона (D.fundingStatus: состояние, итоги по книгам и юрлицам, проблемы).
  * История позиции (M.posHistory) — синхронный запрос /api/v1/history/positions: первые две позиции по одной,
  * дальше сразу все (страницы C11, C13 просят историю всех позиций). Кроме цен рынка в ней номинал, DV01, CS01,
@@ -262,12 +262,13 @@
   const camel = o => Object.fromEntries(Object.entries(o).map(([k, v]) => [k.replace(/_([a-z])/g, (_, c) => c.toUpperCase()), v]));
   const accrualDays = D.accrualDays || 1;
   // ставка фондирования позиции, % (#168): rate_pct строк extra.funding (publish/funding_run.py: ставка последнего дня),
-  // средняя по модулю тела строки; нет строк (не фондируется, не посчитано) — null
+  // на конец периода, средняя с весом модуля тела строки в рублях (body_ccy × курс ЦБ прогона: строки бывают в разных
+  // валютах); нет строк (не фондируется, не посчитано) — null
   const fundRateOf = x => {
     const ls = ((x && x.lines) || []).filter(l => num(l.rate_pct) != null);
     if (!ls.length) return null;
-    const w = ls.reduce((s, l) => s + Math.abs(num(l.body_ccy) || 0), 0);
-    return w ? ls.reduce((s, l) => s + num(l.rate_pct) * Math.abs(num(l.body_ccy) || 0), 0) / w : ls.reduce((s, l) => s + num(l.rate_pct), 0) / ls.length;
+    const wt = l => Math.abs(num(l.body_ccy) || 0) * (M.fx[l.ccy] || 1), w = ls.reduce((s, l) => s + wt(l), 0);
+    return w ? ls.reduce((s, l) => s + num(l.rate_pct) * wt(l), 0) / w : ls.reduce((s, l) => s + num(l.rate_pct), 0) / ls.length;
   };
   const positions = D.positions.map(d => {
     const [group, kind] = kindOf(d), ex = d.extra || {}, q = ex.quote || {}, xp = XP[d.id] || {};

@@ -44,8 +44,12 @@ KBD with it (a row in RUONIA + basis: its ``RUB RUONIA`` plus ``RUB OFZ`` is its
 PNL = {"carry": ("carry", "rolldown"), "funding": ("funding",), "rates": ("rates", "convexity"), "spread": ("spread",),
        "fx": ("fx_gross", "fx_funding"), "trading": ("new_trades",), "other": ("other",)}
 """The pages' PnL factors from the run's components (``compat.PNL_KEYS``): the carry is the coupon income and the
-roll-down without the funding, the position's funding (B1) is its own factor (TDM#168: 0 in a run before B1). The
-factors sum to the day's total as before."""
+roll-down without the funding, the position's funding (B1) is its own factor (TDM#168). The factors sum to the day's
+total as before. Funding not computed (a run before B1, not configured, a problem: no ``funding`` component) is None,
+not 0 (B1: said in words, never a free 0): ``NULLABLE``."""
+NULLABLE = frozenset({"funding"})
+"""Factors that are None, not 0, when none of their components is in the PnL; a run's sum of one is None when no
+position has it, else the sum of those that have it (the total counts it as 0, as the flash PnL does)."""
 GOV_CLASSES = {"ОФЗ-ПД": "PD", "ОФЗ-АД": "PD", "ОФЗ-ПК": "PK", "ОФЗ-ИН": "IN"}
 
 ROWS_SQL = ("SELECT position_id, book_id, pv_rub, fact->'risk' AS risk, (fact->>'cs01')::float8 AS cs01,"
@@ -104,11 +108,14 @@ def kind_of(f: dict[str, Any], gov_issuers: frozenset[str] | set[str] = frozense
     return "CORP", flt
 
 
-def pnl_factors(q: dict[str, Any] | None) -> dict[str, float] | None:
+def pnl_factors(q: dict[str, Any] | None) -> dict[str, float | None] | None:
     if not q:
         return None
-    out = {k: sum(q.get(c) or 0.0 for c in cs) for k, cs in PNL.items()}
-    out["total"] = sum(out.values())
+    out: dict[str, float | None] = {}
+    for k, cs in PNL.items():
+        vs = [q[c] for c in cs if q.get(c) is not None]
+        out[k] = None if k in NULLABLE and not vs else sum(vs, 0.0)
+    out["total"] = sum(v for v in out.values() if v is not None)
     return out
 
 
@@ -184,9 +191,10 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
             mv_ccy[c] = mv_ccy.get(c, 0.0) + (x["pv_rub"] or 0.0)
         p = pnl_factors(x["pnl"])
         if p:
-            pnl = pnl or dict.fromkeys(p, 0.0)
+            pnl = pnl or {kk: None if kk in NULLABLE else 0.0 for kk in p}
             for kk, v in p.items():
-                pnl[kk] += v
+                if v is not None:
+                    pnl[kk] = (pnl[kk] or 0.0) + v
         pos[x["position_id"]] = [_r(x["notional"], 2), _r(sum(curves.values()), 2), _r(x["cs01"], 2), _r(b, 2),
                                  _r(m, 0), _r(p["total"], 0) if p else None, _r(x["price"], 4),
                                  _r(x["spread_bp"], 2), {c: round(v, 2) for c, v in curves.items() if v},

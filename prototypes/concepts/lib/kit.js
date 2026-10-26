@@ -43,7 +43,7 @@
   M.toRepr = {}; Object.keys(M.fx).forEach(c => M.toRepr[c] = M.fx[c] / M.fx[K.repr]);
   if (K.repr !== 'RUB') (function convert(k) {
     const sc = (o, keys) => keys.forEach(x => { if (o[x] != null) o[x] *= k; });
-    const arr = a => a && a.forEach((v, i) => a[i] = v * k);
+    const arr = a => a && a.forEach((v, i) => a[i] = v == null ? v : v * k);  // null (не посчитано) остаётся null
     M.positions.forEach(p => {
       sc(p, ['mv', 'accrued', 'carryDay', 'rollDay', 'fundingDay', 'dv01', 'basis01', 'ofzSpr01', 'cs01', 'notionalRub', 'pnlMtd', 'pnlYtd', 'funding']);
       arr(p.cs01b); arr(p.ofzSprb); Object.keys(p.risk).forEach(c => arr(p.risk[c])); Object.keys(p.dv01ByCurve).forEach(c => p.dv01ByCurve[c] *= k);
@@ -210,6 +210,8 @@
       'Фондирование — отдельная строка «Фондирование»; кэрри за вычетом фондирования = кэрри + фондирование.',
     funding: 'Фондирование: стоимость фондирования позиции за период (тело × ставка фондирования по правилам книги), ' +
       'обычно отрицательная. В кэрри не входит. «—» — не посчитано (не настроено или проблема), а не 0.',
+    fundRate: '\nСтавка — на конец периода (последний день), средняя по строкам фондирования с весом тела в рублях; ' +
+      'фондирование за день — среднее за период, поэтому «тело × ставка» может с ним не совпасть.',
   };
   // факторы PnL в порядке показа (#168: фондирование — свой фактор после кэрри); сумма факторов позиции — её итог
   K.PNL_FACTORS = [['carry', 'Кэрри'], ['funding', 'Фондирование'], ['rates', 'Ставки'], ['spread', 'Спред'], ['fx', 'FX'], ['trading', 'Сделки'], ['other', 'Прочее']];
@@ -1736,7 +1738,7 @@
       ['DV01 ставки', K.d({ title: 'DV01 ' + p.name, unit: 'тыс ₽/бп', rows: [{ p, v: p.dv01 }] }, f.dv(p.dv01), '') + ' <small>тыс ₽/бп</small>', false, K.tips.dv01], ['CS01', f.dv(p.cs01) + ' <small>тыс ₽/бп</small>', false, K.tips.cs01],
       ['Базис ОФЗ01', p.basis01 ? f.dv(p.basis01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.basis01],
       ['Спред к КБД01', p.ofzSpr01 ? f.dv(p.ofzSpr01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.ofzSpr01], ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽</small>', false, K.tips.carry],
-      ['Фондирование / день', K.fundingDayHtml(p) + ' <small>тыс ₽ · ставка ' + f.pct(p.fundRate) + '</small>', false, K.tips.funding],
+      ['Фондирование / день', K.fundingDayHtml(p) + ' <small>тыс ₽ · ставка ' + f.pct(p.fundRate) + '</small>', false, K.tips.funding + K.tips.fundRate],
       ['НКД', f.mn(p.accrued, 2) + ' <small>mm ₽</small>'], ['Рейтинг / сектор', '<span title="' + esc(K.ratingTip(p.rating, p.ratingInfo)) + '">' + esc(K.ratingText(p.rating, p.ratingInfo)) + '</span> <small>' + esc(p.sector) + '</small>'],
     ] : [
       ['Номинал', f.mn(p.notional, 0) + ' <small>mm ' + p.ccy + '</small>'], ['MTM', f.mn(p.mv, 1) + ' <small>mm ₽</small>'],

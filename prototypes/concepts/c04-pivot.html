@@ -101,7 +101,7 @@
     mv: { label: 'MV облигаций', unit: 'mm ₽', fmt: v => f.mn(v, 0), kind: 'size', parts: one(p => p.group === 'DER' ? 0 : p.mv) },
     notional: { label: 'Номинал', unit: 'mm ₽', fmt: v => f.mn(v, 0), kind: 'size', parts: one(p => p.notionalRub) },
     carry: { label: 'Кэрри / день', unit: 'тыс ₽', fmt: f.k, kind: 'pnl', parts: one(p => p.carryDay) },  // без фондирования (#168)
-    funding: { label: 'Фондирование / день', unit: 'тыс ₽', fmt: f.k, kind: 'pnl', parts: one(p => p.fundingDay || 0) },
+    funding: { label: 'Фондирование / день', unit: 'тыс ₽', fmt: f.k, kind: 'pnl', parts: p => p.fundingDay == null ? [] : [{ v: p.fundingDay }] },  // не посчитано — нет вклада («—»), а не 0
     pnl: { label: 'PnL дня', unit: 'тыс ₽', fmt: f.k, kind: 'pnl', parts: p => FACT.map(([k]) => ({ factor: k, v: p.pnl[k] })).filter(x => x.v) },
     pnlMtd: { label: 'PnL MTD', unit: 'mm ₽', fmt: v => f.mn(v, 1), kind: 'pnl', parts: one(p => p.pnlMtd) },
     count: { label: 'Кол-во позиций', unit: 'шт', fmt: v => f.n(v), kind: 'size', parts: one(() => 1) },

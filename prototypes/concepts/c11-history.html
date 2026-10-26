@@ -206,7 +206,7 @@ tr.row.sel td { background: var(--accent-bg); }
         : [{ name: 'PnL дня', type: 'bar', data: I.map(i => ({ value: M.hist.pnl.total[hi(i)], itemStyle: { color: M.hist.pnl.total[hi(i)] >= 0 ? css('--pos') : css('--neg') } })) }];
       return {
         animation: false, grid: { left: 6, right: 10, top: 30, bottom: 4, containLabel: true }, legend: { top: 0, left: 0, type: 'scroll' },
-        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.mns(v, 2) + ' mm ₽' },
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => v == null ? '—' : f.mns(v, 2) + ' mm ₽' },  // null: не посчитано (фондирование)
         xAxis: { type: 'category', data: I.map(i => f.dshort(DATES[i])) },
         yAxis: [{ type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } }, { type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => f.mn(v, 0), color: css('--fg-3') } }],
         dataZoom: [{ type: 'inside' }],

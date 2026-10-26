@@ -138,7 +138,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     cs01: { label: 'CS01', neutral: true, num: true, val: r => r.cs01, fmt: v => v ? f.dv(v) : '<span class="mut3">·</span>', sum: r => r.cs01, unit: 'тыс ₽/бп', sfmt: f.dv, title: K.tips.cs01, tip: true },
     basis01: { label: 'Базис01', neutral: true, num: true, val: r => r.basis01, fmt: v => v ? f.dv(v) : '<span class="mut3">·</span>', sum: r => r.basis01, unit: 'тыс ₽/бп', sfmt: f.dv, title: K.tips.basis01, tip: true },
     ofzSpr01: { label: 'Спред к КБД01', neutral: true, num: true, val: r => r.ofzSpr01, fmt: v => v ? f.dv(v) : '<span class="mut3">·</span>', sum: r => r.ofzSpr01, unit: 'тыс ₽/бп', sfmt: f.dv, title: K.tips.ofzSpr01, tip: true },
-    fund: { label: 'Фонд.', num: true, val: r => r.fundRate, fmt: v => v == null ? '<span class="mut3">—</span>' : f.pct(v), title: 'ставка фондирования, % годовых' },
+    fund: { label: 'Фонд.', num: true, val: r => r.fundRate, fmt: v => v == null ? '<span class="mut3">—</span>' : f.pct(v), title: 'ставка фондирования, % годовых. ' + K.tips.fundRate.trim() },
     carry: { label: 'Кэрри/д', num: true, val: r => r.carryDay, fmt: v => '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.carryDay, unit: 'тыс ₽', sfmt: f.k, title: 'тыс ₽ в день. ' + K.tips.carry, tip: true },
     funding: { label: 'Фондир./д', num: true, val: r => r.fundingDay, fmt: v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.fundingDay, unit: 'тыс ₽', sfmt: f.k, title: 'Фондирование, тыс ₽ в день. ' + K.tips.funding, tip: true },
     pc: pnlCol('pc', 'Кэрри', 'carry', K.tips.carry), pfu: pnlCol('pfu', 'Фондирование', 'funding', K.tips.funding), pr: pnlCol('pr', 'Ставки', 'rates'), ps: pnlCol('ps', 'Спред', 'spread'), pf: pnlCol('pf', 'FX', 'fx'), pt: pnlCol('pt', 'Сделки', 'trading'), po: pnlCol('po', 'Прочее', 'other'),
@@ -345,7 +345,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
       ['CS01', f.dv(p.cs01) + ' <small>тыс ₽/бп</small>', false, K.tips.cs01], ['Базис ОФЗ01', p.basis01 ? f.dv(p.basis01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.basis01],
       ['Спред к КБД01', p.ofzSpr01 ? f.dv(p.ofzSpr01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.ofzSpr01],
       ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽</small>', false, K.tips.carry],
-      ['Фондирование / день', K.fundingDayHtml(p) + ' <small>тыс ₽ · ставка ' + f.pct(p.fundRate) + '</small>', false, K.tips.funding], ['НКД', f.mn(p.accrued, 2) + ' <small>mm ₽</small>'],
+      ['Фондирование / день', K.fundingDayHtml(p) + ' <small>тыс ₽ · ставка ' + f.pct(p.fundRate) + '</small>', false, K.tips.funding + K.tips.fundRate], ['НКД', f.mn(p.accrued, 2) + ' <small>mm ₽</small>'],
     ] : [
       ['Номинал', f.mn(p.notional, 0) + ' <small>mm ' + p.ccy + '</small>'], ['MTM', f.mn(p.mv, 1) + ' <small>mm ₽</small>'],
       ['Ставка / курс', esc(p.couponFmt)], ['Срок', f.date(p.maturity) + ' <small>' + f.yrs(p.tenor) + '</small>'],

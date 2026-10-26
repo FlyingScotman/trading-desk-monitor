@@ -263,7 +263,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
         let L = K.list(); if (o.ccy) L = L.filter(p => p.ccy === o.ccy);
         if (o.flags.hist) {
           const keys = K.PNL_FACTORS.map(x => x[0]), names = Object.fromEntries(K.PNL_FACTORS);
-          K.chart(ch(bd, 300), () => ({ grid: { left: 6, right: 10, top: 28, bottom: 4, containLabel: true }, legend: { top: 0 }, tooltip: { trigger: 'axis', valueFormatter: v => f.mns(v, 2) }, xAxis: { type: 'category', data: M.histDates, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } }, dataZoom: [{ type: 'inside', start: 50 }], series: keys.map(k => ({ name: names[k], type: 'bar', stack: 'p', data: M.hist.pnl[k] })).concat([{ name: 'Итого', type: 'line', data: M.hist.pnl.total, showSymbol: false, color: css('--fg') }]) }));
+          K.chart(ch(bd, 300), () => ({ grid: { left: 6, right: 10, top: 28, bottom: 4, containLabel: true }, legend: { top: 0 }, tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '—' : f.mns(v, 2) }, xAxis: { type: 'category', data: M.histDates, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } }, dataZoom: [{ type: 'inside', start: 50 }], series: keys.map(k => ({ name: names[k], type: 'bar', stack: 'p', data: M.hist.pnl[k], itemStyle: { color: K.PNL_COLORS[k] } })).concat([{ name: 'Итого', type: 'line', data: M.hist.pnl.total, showSymbol: false, color: css('--fg') }]) }));
           return 'PnL за 130 дней, mm ₽ (по всему деску)';
         }
         if (o.flags.top || o.n) {

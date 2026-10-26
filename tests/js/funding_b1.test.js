@@ -22,13 +22,14 @@ function load(opts) {
   const document = { addEventListener() {}, createElement: el, documentElement: el(), body: el(), querySelector() { return null; }, querySelectorAll() { return []; }, getElementById: () => el() };
   class XHR { open() {} send() { this.status = 404; } }
   const ctx = { window: {}, document, URLSearchParams, console, location: { href: 'http://x/', search: '', hostname: '127.0.0.1' }, setTimeout,
-    localStorage: { getItem() { return null; }, setItem() {} }, getComputedStyle: () => ({ getPropertyValue: () => '#888' }), MutationObserver: class { observe() {} },
+    localStorage: { getItem(k) { return k === 'concepts-repr' && opts.repr ? opts.repr : null; }, setItem() {} }, getComputedStyle: () => ({ getPropertyValue: () => '#888' }), MutationObserver: class { observe() {} },
     XMLHttpRequest: XHR };
   ctx.window = ctx;
   vm.createContext(ctx);
   if (opts.real) {
     vm.runInContext(P('data.js'), ctx);
     if (opts.mutate) opts.mutate(ctx.window.DESK);
+    if (opts.extras) ctx.window.DESK_EXTRAS = opts.extras(ctx.window.DESK);
     vm.runInContext(P('concepts/lib/real.js'), ctx);
   } else vm.runInContext(P('concepts/lib/mock.js'), ctx);
   vm.runInContext(P('concepts/lib/instr.js'), ctx);
@@ -125,6 +126,23 @@ t('#168: фондирование не посчитано — фактор null 
   near(p.pnl.carry, want.carry, 'кэрри'); near(p.pnl.total, want.total, 'итог');
   assert.ok(K.posCols.funding.fmt(p.fundingDay).includes('—'));
   assert.ok(K.fundingDayHtml(p).includes('—'));
+});
+
+t('#168: история — фондирование не посчитано (прогон до B1) — null («—»), а не 0, и в валюте отчёта тоже', () => {
+  const extras = D => {
+    const asOf = D.asOf || D.AS_OF || D.businessDate, d0 = '2026-01-05';
+    const pnl = { carry: [1e6, 2e6], funding: [null, -5e5], rates: [3e5, -1e5], spread: [0, 0], fx: [0, 0], trading: [0, 0], other: [0, 0] };
+    pnl.total = [1.3e6, 1.4e6];
+    return { hist: { pnl }, histDates: asOf ? [d0, asOf] : [d0, '2026-01-06'], histSource: 'runs' };
+  };
+  for (const repr of [null, 'USD']) {
+    const { M, K } = load({ real: true, extras, repr });
+    assert.strictEqual(K.repr, repr || 'RUB');
+    assert.strictEqual(M.hist.pnl.funding[0], null, (repr || 'RUB') + ': день без фондирования — null');
+    assert.ok(M.hist.pnl.funding[1] < 0 && M.hist.pnl.carry[0] > 0);
+    // сумма посчитанных факторов = итог и в дне без фондирования
+    [0, 1].forEach(i => near(K.PNL_FACTORS.reduce((s, [k]) => s + (M.hist.pnl[k][i] || 0), 0), M.hist.pnl.total[i], 'история: сумма факторов = итог'));
+  }
 });
 
 for (const [name, f] of tests) { f(); n++; console.log('ok', name); }

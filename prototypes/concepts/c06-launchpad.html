@@ -160,9 +160,9 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         if (mode === 'wf') { K.pnlWaterfall(el); return; }
         const keys = K.PNL_FACTORS;
         const n = 30, xs = M.histDates.slice(-n);
-        small(el, () => ({ grid, legend: { top: 0, left: 0, itemGap: 6, type: 'scroll' }, tooltip: { trigger: 'axis', valueFormatter: v => f.mns(v, 2) },
+        small(el, () => ({ grid, legend: { top: 0, left: 0, itemGap: 6, type: 'scroll' }, tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '—' : f.mns(v, 2) },
           xAxis: { type: 'category', data: xs, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => f.mn(v, 0) } },
-          series: keys.map(([k, t]) => ({ name: t, type: 'bar', stack: 'p', data: M.hist.pnl[k].slice(-n) })).concat([{ name: 'Итого', type: 'line', showSymbol: false, data: M.hist.pnl.total.slice(-n), color: css('--fg') }]) }));
+          series: keys.map(([k, t]) => ({ name: t, type: 'bar', stack: 'p', data: M.hist.pnl[k].slice(-n), itemStyle: { color: K.PNL_COLORS[k] } })).concat([{ name: 'Итого', type: 'line', showSymbol: false, data: M.hist.pnl.total.slice(-n), color: css('--fg') }]) }));
       },
     },
     blotter: {
