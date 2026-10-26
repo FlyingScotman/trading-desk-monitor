@@ -128,11 +128,13 @@ def test_moves_null_when_the_run_has_none(store_url, book):  # noqa: F811
     early = insert_run(store_url, dataclasses.replace(ctx, market=market), positions, None)
     rid = run(store_url, book)
     # the golden book has no currency: the rates as the publisher stores them (``tdm_run._fx_rows``) -- USD with a
-    # previous rate, CNY without one (its move stored as 0), the CBR's move unknown for CNY
+    # previous rate, CNY without one (its move stored as 0), the CBR's move unknown for CNY, EUR unmoved (a real 0)
     usd = {"ccy": "USD", "rate": 90.0, "rate_source": "MOEX 19:00", "move_pct": 0.5, "prev_rate": 89.55,
            "prev_rate_source": "MOEX 19:00", "rate_cbr": 90.1, "move_pct_cbr": 0.4, "rate_cbr_next": 90.2}
     cny = {"ccy": "CNY", "rate": 12.5, "rate_source": "MOEX 19:00", "move_pct": 0.0, "rate_cbr": 12.4,
            "move_pct_cbr": None, "rate_cbr_next": 12.4}
+    eur = {"ccy": "EUR", "rate": 100.0, "rate_source": "MOEX 19:00", "move_pct": 0.0, "prev_rate": 100.0,
+           "prev_rate_source": "MOEX 19:00", "rate_cbr": 100.1, "move_pct_cbr": 0.0, "rate_cbr_next": 100.1}
     with psycopg.connect(store_url, row_factory=dict_row) as con:
         stored = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'curves'", (early,)).fetchone()
         assert any(p.get("move_bp") == 0 for c in stored["data"] for p in c["points"])  # stored as 0
@@ -141,30 +143,46 @@ def test_moves_null_when_the_run_has_none(store_url, book):  # noqa: F811
         for r in (early, rid):
             con.execute("DELETE FROM run_reference WHERE run_id = %s AND kind = 'fx'", (r,))
             con.execute("INSERT INTO run_reference (run_id, kind, data) VALUES (%s, 'fx', %s)",
-                        (r, json.dumps([usd, cny])))
+                        (r, json.dumps([usd, cny, eur])))
     c = TestClient(create_app(store_url))
     no_prev = c.get(f"/api/v1/concepts/run?run_id={early}").json()
     assert no_prev["prevDate"] is None and no_prev["CURVE_MOVES"]
     assert all(v is None for mv in no_prev["CURVE_MOVES"].values() for v in mv)
-    assert no_prev["FX_MOVE_PCT"] == no_prev["FX_CBR_MOVE_PCT"] == {"RUB": 0, "USD": None, "CNY": None}
+    assert no_prev["FX_MOVE_PCT"] == no_prev["FX_CBR_MOVE_PCT"] == {"RUB": 0, "USD": None, "CNY": None, "EUR": None}
 
     got = c.get(f"/api/v1/concepts/run?run_id={rid}").json()
     assert got["prevDate"] is not None
     ofz = got["CURVE_MOVES"]["RUB OFZ"]
     assert all(v is not None for v in ofz), ofz  # the KBD's move, on the previous market's KBD
-    assert got["FX_MOVE_PCT"] == {"RUB": 0, "USD": 0.5, "CNY": None}
-    assert got["FX_CBR_MOVE_PCT"] == {"RUB": 0, "USD": 0.4, "CNY": None}
-    # the stored reference without one point's move
-    x = next(x for x in curves["data"] if x["points"])
+    # a real 0 stays 0, not null (a regression «x or None» fails here)
+    assert got["FX_MOVE_PCT"] == {"RUB": 0, "USD": 0.5, "CNY": None, "EUR": 0}
+    assert got["FX_CBR_MOVE_PCT"] == {"RUB": 0, "USD": 0.4, "CNY": None, "EUR": 0}
+    assert got["FX_MOVE_PCT"]["EUR"] is not None and got["FX_CBR_MOVE_PCT"]["EUR"] is not None
+    # the stored reference: one point without its move, the next one unmoved (move_bp 0); a position in a currency the
+    # reference lacks, its rate from ``extra.fx_rate`` (its move unknown), with risk on a curve the reference lacks
+    x = next(x for x in curves["data"] if len(x["points"]) > 1)
     del x["points"][0]["move_bp"]
-    bucket = x["points"][0]["bucket"]
-    with psycopg.connect(store_url) as con:
+    x["points"][1]["move_bp"] = 0.0
+    gone, zero = x["points"][0]["bucket"], x["points"][1]["bucket"]
+    with psycopg.connect(store_url, row_factory=dict_row) as con:
         con.execute("ALTER TABLE run_reference DISABLE TRIGGER USER")
+        con.execute("ALTER TABLE run_position DISABLE TRIGGER USER")
         con.execute("UPDATE run_reference SET data = %s WHERE run_id = %s AND kind = 'curves'",
                     (json.dumps(curves["data"]), rid))
+        pos = con.execute("SELECT position_id, fact FROM run_position WHERE run_id = %s AND fact IS NOT NULL"
+                          " ORDER BY ord LIMIT 1", (rid,)).fetchone()
+        fact = pos["fact"]
+        bk = next(iter(next(iter(fact["risk"].values()))))  # a bucket name of the fact's risk
+        fact.update(ccy="CHF", extra={**(fact.get("extra") or {}), "fx_rate": 95.5, "fx_source": "ЦБ"},
+                    risk={**fact["risk"], "GBP": {bk: 12.0}})
+        con.execute("UPDATE run_position SET fact = %s WHERE run_id = %s AND position_id = %s",
+                    (json.dumps(fact), rid, pos["position_id"]))
     got = TestClient(create_app(store_url)).get(f"/api/v1/concepts/run?run_id={rid}").json()
-    mv = got["CURVE_MOVES"][x["curve_id"]]
-    assert mv[got["BUCKETS"].index(bucket)] is None and any(v is not None for v in mv)
+    nb, mv = len(got["BUCKETS"]), got["CURVE_MOVES"][x["curve_id"]]
+    assert mv[got["BUCKETS"].index(gone)] is None
+    assert mv[got["BUCKETS"].index(zero)] == 0 and mv[got["BUCKETS"].index(zero)] is not None
+    assert got["FX"]["CHF"] == 95.5 and got["FX_MOVE_PCT"]["CHF"] is None  # the extra.fx_rate branch
+    assert got["CURVES"]["GBP"]["pts"] == [None] * nb and got["CURVE_MOVES"]["GBP"] == [None] * nb
 
 
 def test_parity_on_the_inbox_runs_with_funding(store_url, tmp_path):

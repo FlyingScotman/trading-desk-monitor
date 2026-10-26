@@ -293,7 +293,7 @@ def test_summaries_written_at_publication_and_rebuilt_when_missing(desk, store_u
     # pos[9]: a floater's DM (core 0.33); pos[10]: an OFZ's spread to the KBD (0.2.6); pos[11]: its RUONIA risk (0.2.7).
     # P1 is an OFZ on the KBD in RUONIA + basis (TDM#213): its basis (pos[3]) is its par DV01 on the KBD, its RUONIA risk
     # (pos[11]) is computed apart and is what the pages show on RUONIA (pos[8]), and it has a spread to the KBD
-    assert len(p1) == 12 and p1[9] is None and summary.VERSION == 6
+    assert len(p1) == 12 and p1[9] is None and summary.VERSION == 7
     assert rows["basisIn"] == 0.0  # no OFZ-IN in the golden book (TDM#173)
     assert p1[11] == pytest.approx(p1[1], abs=0.01) and p1[10] < 0
     assert p1[3] == pytest.approx(p1[1], rel=0.01)  # two computed risks, within a percent (10 bonds: rounded alike)

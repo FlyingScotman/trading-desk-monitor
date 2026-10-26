@@ -40,9 +40,10 @@ from ..store import CURRENT_RUNS
 
 log = logging.getLogger("desk.publish.summary")
 
-VERSION = 6  # 2: a floater's discount margin (pos[9]); 3: the OFZ basis of the KBD scheme, the spread to the KBD;
+VERSION = 7  # 2: a floater's discount margin (pos[9]); 3: the OFZ basis of the KBD scheme, the spread to the KBD;
 # 4: an OFZ-IN's nominal proxy out of the run's basis (basisIn, TDM#173); 5: an OFZ's RUONIA risk apart from its basis
-# (ofzRuo, pos[11]; TDM#213); 6: the funding its own factor, the carry without it (TDM#168)
+# (ofzRuo, pos[11]; TDM#213); 6: the funding its own factor, the carry without it (TDM#168); 7: a legacy tdm swap
+# (IRS / XCCY / CDS) in DER, not OTH.OTH (mvType, ``LEGACY_DER``; TDM#336)
 CURVE_MAP = {"RUB OFZ": "RUB RUONIA", "USD": "USD SOFR", "EUR": "EUR ESTR", "CNY": "CNY XCCY"}
 """A run's risk curve -> the concept pages' curve (``desk.api.concepts`` re-exports it; ``lib/real.js`` mirrors it).
 ``RUB OFZ`` (the KBD: a fixed-coupon OFZ's rates risk since 0.2.6, its basis in RUONIA + basis since 0.2.7, every bond's
@@ -100,8 +101,9 @@ LEGACY_DER = {"IRS": "IRS", "XCCY": "XCCY", "CDS": "OTC"}
 
 def kind_of(f: dict[str, Any], gov_issuers: frozenset[str] | set[str] = frozenset()) -> tuple[str, str]:
     """(group, kind) of a position's fact: GOV PD / PK / IN / SOVFX, SUB FIX / FLT, CORP FIX / FLT, DER OTC / FX /
-    IRS / XCCY (``LEGACY_DER``), OTH OTH. A floater is a bond whose coupon type is ``float``. The Minfin's bonds (``is_minfin``) are GOV: in
-    roubles an OFZ by its class, in a foreign currency SOVFX (the Minfin's Eurobonds and replacement bonds)."""
+    IRS / XCCY (``LEGACY_DER``), OTH OTH. A floater is a bond whose coupon type is ``float``. The Minfin's bonds
+    (``is_minfin``) are GOV: in roubles an OFZ by its class, in a foreign currency SOVFX (the Minfin's Eurobonds and
+    replacement bonds)."""
     it = f.get("instr_type")
     if it == "FX":
         return "DER", "FX"
