@@ -57,21 +57,37 @@ def test_kbd_floater_is_valued_by_core_projecting_on_the_kbd(ctx, out):
     assert v.g_spread_bp is None
 
 
-def test_kbd_floater_publishes_its_ofz_basis(ctx, out):
+def test_kbd_floater_publishes_its_ofz_basis_and_its_ruonia_risk(ctx, out):
+    """Core#90: a KBD floater on RUONIA OIS in RUONIA + basis, both computed. Its basis is the projection's KBD par
+    risk with RUONIA held, to the bit the plain two-curve run's (``ctx.ofz_basis`` off, variant P); its RUONIA risk
+    moves the discount and the projection's KBD by RUONIA's quotes, the basis held (``ofz_ruonia01``), close to variant
+    P's discount + projection but computed."""
+    import dataclasses
+
+    v = out.valuation
+    assert v.ofz_ruonia and v.curve_buckets["RUB OFZ"]
     row = tdm_run.run_content(ctx, [("P1", "B", out)], None, {}).rows[0]
     ex = row["extra"]
-    # the projection's KBD risk is its OFZ basis risk (variant P: no RUONIA risk of the projection apart in core 0.39)
     assert ex["ofz_basis01"] == pytest.approx(math.fsum(row["risk"]["RUB OFZ"].values()))
-    assert "ofz_ruonia01" not in ex and ex["dm_bp"] == out.valuation.discount_margin_bp
+    assert ex["ofz_ruonia01"] == pytest.approx(math.fsum(x for c in row["risk"].values() for x in c.values()))
+    assert ex["dm_bp"] == v.discount_margin_bp
+    (plain,) = value(dataclasses.replace(ctx, ofz_basis=False), [(KEY, 1000.0)], position_ids=["P1"], fallback=False)
+    p = plain.valuation
+    assert not p.ofz_ruonia  # variant P: the plain factors, KBD (projection) and RUONIA (discount)
+    for b in v.curve_buckets["RUB OFZ"]:
+        assert v.curve_buckets["RUB OFZ"][b] == pytest.approx(p.curve_buckets["RUB OFZ"][b], rel=1e-9, abs=1e-9), b
+    p_ruonia = math.fsum(x for c in p.curve_buckets.values() for x in c.values())
+    assert ex["ofz_ruonia01"] == pytest.approx(p_ruonia, rel=0.05)  # the same order, not the same number
+    assert ex["ofz_ruonia01"] != pytest.approx(p_ruonia, rel=1e-6)
     s = summary.build([{"position_id": "P1", "book_id": "B", "pv_rub": row["mv_rub"], "risk": row["risk"],
                         "cs01": row["cs01"], "ofz": row["ofz_spr01"], "instr_type": "BOND", "segment": row["segment"],
                         "asset_class": row["asset_class"], "coupon_type": row["coupon_type"], "ccy": "RUB",
                         "notional": row["notional"], "notional_rub": row["notional_rub"], "price": row["price"],
                         "spread_bp": row["spread_bp"], "dv01": row["dv01"], "dm_bp": ex["dm_bp"], "pnl": None,
-                        "ofz_basis": ex["ofz_basis01"], "quality": "exact", "ofz_ruo": None}])
-    # «RUONIA + базис»: RUONIA is the discount plus the projection, the basis the projection
-    assert s["basis"] == pytest.approx(ex["ofz_basis01"]) and s["cs01"] == pytest.approx(row["cs01"]) and row["cs01"] < 0
-    assert s["dv01"]["RUB RUONIA"] == pytest.approx(math.fsum(x for c in row["risk"].values() for x in c.values()))
+                        "ofz_basis": ex["ofz_basis01"], "quality": "exact", "ofz_ruo": ex["ofz_ruonia01"]}])
+    # «RUONIA + базис»: RUONIA its computed RUONIA risk, the basis the projection's KBD risk
+    assert s["basis"] == pytest.approx(ex["ofz_basis01"]) and s["ofzRuo"] == pytest.approx(ex["ofz_ruonia01"])
+    assert s["dv01"]["RUB RUONIA"] == pytest.approx(ex["ofz_ruonia01"])
 
 
 def test_kbd_floater_flash_pnl_reprojects_on_the_kbd(ctx, out):
@@ -86,8 +102,9 @@ def test_kbd_floater_flash_pnl_reprojects_on_the_kbd(ctx, out):
 
 @pytest.mark.parametrize("curve", ["RUB OFZ", "RUB RUONIA"])
 def test_kbd_floater_exact_scenario_moves_each_curve_as_its_risk(ctx, out, curve):
-    """A scenario on ``RUB OFZ`` reaches the KBD floater's projection (the unnamed shock, ``scenario.exact``), one on
-    ``RUB RUONIA`` its discount only: the repricing matches its risk on that curve to the first order."""
+    """A scenario on ``RUB OFZ`` moves the KBD floater's basis (``RUB OFZ - RUB RUONIA``, the projection), one on
+    ``RUB RUONIA`` moves RUONIA with the KBD's level held (in the scenarios' coordinates, ``bonds.ofz_levels``): the
+    repricing matches the row's risk on that curve to the first order."""
     from rub_fixed_income import RISK_BUCKETS
 
     from desk.scenario.exact import core_scenario, run_curves
@@ -176,6 +193,8 @@ def test_kbd_history_reads_the_last_dates_of_the_cache():
             return f"{cut}-{d}"
 
         def get(self, sid):
+            if sid == "eod_final-2026-10-13":  # an unreadable final: the preliminary of the date instead
+                raise SnapshotError("corrupt bundle")
             return type("M", (), {"data": {"zcyc_params": [{**zcyc, "trade_date": sid[-10:]}]}})()
 
     static = type("S", (), {"data": {"floater_formulas": [{"benchmark": "ZCYC", "fixing_offset": 2}]}})()

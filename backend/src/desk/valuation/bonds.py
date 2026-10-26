@@ -843,7 +843,11 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
     proxies = {c.curve_id for c in market.curves if c.spec_id.endswith("_par_proxy_v1")}
     if quote_curve_risk and any(isinstance(c.curve, ParYieldCurveRequest) for c in snap.curves):
         policy = replace(policy, quote_curve_risk=True)
-    if ofz_basis and on_kbd and disc == RUONIA_OIS_CURVE_ID and any(
+    # the view covers an OFZ on the KBD and a KBD floater on RUONIA OIS (core#90: projection on the KBD read as RUONIA
+    # + basis, TDM#33)
+    kbd_floaters = any(isinstance(i.coupon_leg, FloatingCouponLeg) and i.coupon_leg.projection_curve_id == KBD_CURVE_ID
+                       for i in instruments.values())
+    if ofz_basis and (on_kbd or kbd_floaters) and disc == RUONIA_OIS_CURVE_ID and any(
             c.curve_id == RUONIA_OIS_CURVE_ID and isinstance(c.curve, CurveBootstrapRequest) for c in snap.curves):
         policy = replace(policy, ofz_basis=OFZ_BASIS_IDS)
     policy = replace(policy, risk_method="analytic", second_order_method="analytic")

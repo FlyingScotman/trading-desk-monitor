@@ -29,7 +29,7 @@ desk = "desk.cli:main"
 # plain clone of this repository builds. Production pins a wheel built from that commit (06 §7).
 # To work on core and the backend together, override locally (not committed):
 #   uv pip install -e ../../rub-fixed-income-core
-rub-fixed-income-core = { git = "https://github.com/FlyingScotman/rub-fixed-income-core.git", rev = "ae5f40f57db44c771dca986b9e34a73d845a2fa6" }
+rub-fixed-income-core = { git = "https://github.com/FlyingScotman/rub-fixed-income-core.git", rev = "57fb6b7da7d4bc057a8bb4a65b0a110df181effe" }
 trading-desk-monitor = { path = "..", editable = true }
 
 [build-system]
