@@ -331,7 +331,7 @@ def test_api_status_and_run(tmp_path, store_url):
         assert st["message"] == "Не настроено: укажите маркет-дата сервер и папки с отчётами в Настройках"
         assert [(x["name"], x["status"]) for x in st["steps"]] == [("sync", "skipped"), ("scan", "skipped"),
                                                                     ("eod", "skipped"), ("morning", "skipped"),
-                                                                    ("backfill", "skipped")]
+                                                                    ("scenarios", "skipped"), ("backfill", "skipped")]
         assert st["steps"][2]["detail"] == "no positions in the store"
         r = c.post("/api/v1/autopilot/run")
         assert r.status_code == 202 and r.json() == {"queued": True}

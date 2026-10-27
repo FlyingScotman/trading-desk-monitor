@@ -62,14 +62,20 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    intraday cut's run deletes it the same way. While the inbox is still draining (as step 3, R22) it waits. No run
    when the cache lacks the previous business day's close, even with an older one: the issue asks for D-1's close;
    the ``intraday`` setting does not turn it off. Its status carries a ``reason`` (``MORNING_REASONS``).
-5. **history** (with the hub and ``history_days`` > 0): market history older than the cache for the bond charts,
+5. **scenarios** (TDM#71): the exact repricing of every active scenario (presets, historical, the desk's own) on
+   the newest default run, queued for the scenario worker of ``desk serve`` (``scenario.jobs.submit_all``): one job
+   per run and definition, so a cycle without a new default run or scenario queues nothing; a job that failed on the
+   run is not queued again (a scenario failing on its inputs runs once, not every cycle; a POST of it retries). The presets' comparison
+   reads them (``GET /api/v1/runs/{run_id}/scenario-results``). A scenario the run cannot reprice (a curve it does not
+   publish) is named in the detail; it is no error of the cycle.
+6. **history** (with the hub and ``history_days`` > 0): market history older than the cache for the bond charts,
    from the hub's history API when it serves the token (``desk.marketdata.hubhistory``: bonds from
    ``history_bonds_from``, KBD, curves, fixings and FX from ``history_rates_from``; ``hubhistory.BUDGET_S`` seconds a
    cycle, resumable), else ``HISTORY_PER_CYCLE`` of the ``history_days`` latest hub dates per cycle, newest first,
    into the store's tables without caching the bundles (the step's detail says why the API was not used); only
    after a sync that reached the hub and left no date for the next cycle, and after the EOD runs, so it never delays
    them. The lookback above does not apply: these dates feed no run.
-6. **backfill** (setting ``backfill``, R23; ``desk.backfill``): the default runs of the past business dates with
+7. **backfill** (setting ``backfill``, R23; ``desk.backfill``): the default runs of the past business dates with
    positions from ``backfill_from`` on: once per start date and adapter the inbox reads the older reports; then the
    dates whose run is missing or stale run, oldest first, for at most ``backfill_budget_s`` seconds a cycle, up to
    today: every date its plan calls stale, also inside the eod step's window (#23: an upgrade recomputes there only
@@ -77,7 +83,7 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    the eod step ran or failed (a date is not tried twice a cycle, nor again on inputs the eod step failed on). Last in the cycle, after the EOD, intraday and history steps, so the latest date never waits for it; not while the inbox
    backlog drains (R22). The hub's date list is read once per ``RECHECK_S``, less the dates the sync step cannot load
    (its ``problem_dates``): no run and no previous close on them until they load.
-7. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
+8. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
    ``progress`` ({"step": "sync"|"scan"|"eod"|"intraday"|"history"|"backfill", "done": int, "total": int|null, "detail": str})
    follow it live: hub dates fetched of those to fetch, report files done of those offered, EOD dates run of those
    to run, history dates loaded of those to load. ``latest_run`` is the newest run shown (``store.CURRENT_RUNS``:
@@ -120,6 +126,7 @@ from .marketdata import cache, history, hubhistory, static_facts
 from .marketdata.adapter import StaticView
 from .marketdata.bundle import SnapshotDir, SnapshotError, previous_market
 from .marketdata.hub import HubClient, HubError, HubUnavailable
+from .scenario import jobs as scenario_jobs
 from .settings import Settings, load
 
 log = logging.getLogger("desk.autopilot")
@@ -427,6 +434,7 @@ class Autopilot:
                 if hub and settings.hub_url:
                     steps.append(self._guard("intraday", lambda: self._intraday(settings, con, url, ran)))
                 steps.append(self._guard("morning", lambda: self._morning(settings, con, url, ran)))
+                steps.append(self._guard("scenarios", lambda: self._scenarios(con)))
                 if hub and settings.hub_url and int(getattr(settings, "history_days", 0) or 0) > 0:
                     steps.append(self._guard("history", lambda: self._history(settings, con)))
                 if getattr(settings, "backfill", True):
@@ -771,6 +779,20 @@ class Autopilot:
             except (psycopg.Error, SnapshotError, OSError) as e:
                 out = (out + "; " if out else "") + f"static facts not loaded: {type(e).__name__}: {e}"
         return out
+
+    def _scenarios(self, con: psycopg.Connection) -> tuple[str, str]:
+        """Queues the exact repricing of the active scenarios on the newest default run (step 5, TDM#71)."""
+        latest = scenario_jobs.latest_default_run(con)
+        if latest is None:
+            return "skipped", "no default run"
+        rid, day = latest
+        rep = scenario_jobs.submit_all(con, rid)
+        detail = f"run {rid} ({day}): {len(rep['queued'])} queued, {rep['reused']} already queued or done"
+        if rep["failed"]:  # failed on this run before: not queued again every cycle (the page's POST retries it)
+            detail += f"; failed before, not retried: {', '.join(rep['failed'])}"
+        if rep["invalid"]:
+            detail += "; not repriced: " + "; ".join(f"{k}: {v}" for k, v in rep["invalid"].items())
+        return "ok", detail
 
     def _history(self, settings: Settings, con: psycopg.Connection) -> tuple[str, str]:
         """Market history: from the hub's history API when it serves this token (``desk.marketdata.hubhistory``, R24:
