@@ -307,9 +307,13 @@ def test_lookback_skips_old_files_unhashed_and_ignores_old_report_dates_once(con
 def test_waiting_calendar_behind_the_lookback_becomes_terminal(con, tmp_path):
     inbox = tmp_path / "in"
     inbox.mkdir()
-    shutil.copy(PRIV / "positions_20261014.csv", inbox / "positions_20280110.csv")  # beyond the calendar
+    now = datetime(2028, 1, 10, 9, tzinfo=UTC)
+    f = inbox / "positions_20280110.csv"
+    shutil.copy(PRIV / "positions_20261014.csv", f)  # beyond the calendar
+    copied = (now - timedelta(hours=1)).timestamp()  # before the fixed now, whatever the wall clock says
+    os.utime(f, (copied, copied))
     s = cfg(tmp_path, inbox, inbox_lookback_days=10)
-    assert scan.scan(con, s).files == {"waiting_calendar": 1}
+    assert scan.scan(con, s, now=now).files == {"waiting_calendar": 1}
     later = datetime(2028, 3, 1, 9, tzinfo=UTC)  # the report date is now behind the lookback
     assert scan.scan(con, s, now=later).files == {"ignored_too_old": 1}
     assert scan.scan(con, s, now=later).files == {}  # terminal: not offered again
