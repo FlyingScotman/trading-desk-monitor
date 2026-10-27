@@ -144,6 +144,7 @@
   M.groupLabel = { GOV: 'Гос', CORP: 'Корп', DER: 'Деривативы', MM: 'Денежный рынок' };
   // сделка, а не бумага (деривативы и FX, РЕПО — денежный рынок, #361): как lib/real.js
   M.deal = p => p.group === 'DER' || p.group === 'MM';
+  M.dealName = p => p.group === 'MM' ? 'Денежный рынок и фондирование' : 'Деривативы';  // корзина «эмитента» сделки
   M.kindLabel = { PD: 'ОФЗ-ПД (фикс)', PK: 'ОФЗ-ПК (флоатер)', IN: 'ОФЗ-ИН (линкер)', SOVFX: 'Минфин валютные', FIX: 'Фикс', FLT: 'Флоатер', IRS: 'IRS / OIS', KSW: 'Своп на КС', BAS: 'Базис КС/RUONIA', FXF: 'FX форвард', XCCY: 'XCCY', OTC: 'OTC (по отчёту)', REPO: 'РЕПО' };
   M.kindShort = { PD: 'ПД', PK: 'ПК', IN: 'ИН', SOVFX: 'Минфин вал.', FIX: 'Фикс', FLT: 'Флоат', IRS: 'IRS', KSW: 'КС-своп', BAS: 'Базис', FXF: 'FX fwd', XCCY: 'XCCY', OTC: 'OTC', REPO: 'РЕПО' };
   // строки «типов» для сводной таблицы рисков (порядок — как владелец смотрит)
@@ -322,7 +323,7 @@
     const iss = p.issuer ? M.issuer[p.issuer] : null;
     p.issuerName = iss ? iss.short : (p.cpty || '—');
     p.issuerFull = iss ? iss.name : (p.cpty ? 'Контрагент: ' + p.cpty : '—');
-    p.sector = iss ? iss.sector : 'Деривативы';
+    p.sector = iss ? iss.sector : M.dealName(p);  // сделка: «Деривативы» или «Денежный рынок и фондирование» (РЕПО)
     p.rating = iss ? iss.rating : '—';
     p.bookName = M.book[p.book].name;
     p.entity = M.book[p.book].entity;

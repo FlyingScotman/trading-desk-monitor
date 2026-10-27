@@ -76,7 +76,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
   const VERBS = { risk: 'risk', риск: 'risk', r: 'risk', pos: 'pos', поз: 'pos', p: 'pos', позиции: 'pos', pnl: 'pnl', пнл: 'pnl', cal: 'cal', кал: 'cal', календарь: 'cal', card: 'card', карточка: 'card', кар: 'card', curve: 'curve', кривая: 'curve', кривые: 'curve', hud: 'hud', сводка: 'hud', help: 'help', помощь: 'help', '?': 'help', clear: 'clear', очистить: 'clear', cls: 'clear', book: 'book', книга: 'book' };
   const CURVES = { ruonia: 'RUB RUONIA', руония: 'RUB RUONIA', ks: 'RUB KEY', кс: 'RUB KEY', key: 'RUB KEY', ofz: 'OFZ', офз: 'OFZ', basis: 'RUB OFZ', базис: 'RUB OFZ', sofr: 'USD SOFR', usd: 'USD SOFR', estr: 'EUR ESTR', eur: 'EUR ESTR', cny: 'CNY XCCY' };
   const DIM_DEF = {
-    issuer: ['эмитент', p => p.group === 'DER' ? 'Деривативы' : p.issuerName],
+    issuer: ['эмитент', p => M.deal(p) ? M.dealName(p) : p.issuerName],
     book: ['книга', p => p.book + ' · ' + p.bookName],
     ccy: ['валюта', p => p.ccy],
     kind: ['тип', p => p.groupLabel + ' · ' + p.kindLabel],
@@ -92,7 +92,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
     ['risk cs01 by rating', 'кредитный риск в разрезе'],
     ['pos', 'все позиции: валюта → эмитент → флоатер/фикс → срок до оферты'],
     ['pos сбер', 'позиции по любому тексту: эмитент, ISIN, бумага, книга'],
-    ['pos float rub', 'фильтры: float/fix, ofz/corp/der, rub/usd/eur/cny, book OFZ'],
+    ['pos float rub', 'фильтры: float/fix, ofz/corp/der/repo, rub/usd/eur/cny, book OFZ'],
     ['pnl', 'PnL дня: водопад и итоги'],
     ['pnl by book', 'PnL по разрезу с разложением на факторы'],
     ['pnl top 10', 'крупнейшие вклады в PnL'],
@@ -185,6 +185,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
       else if (['corp', 'корп', 'корпоративные'].includes(t)) L = L.filter(p => p.group === 'CORP');
       else if (['sub', 'суб', 'субфед', 'субфедеральные'].includes(t)) L = L.filter(p => p.group === 'SUB');
       else if (['der', 'дер', 'swap', 'свопы', 'деривативы', 'irs'].includes(t)) L = L.filter(p => p.group === 'DER');
+      else if (['repo', 'репо', 'mm', 'фондирование'].includes(t)) L = L.filter(p => p.group === 'MM');  // РЕПО (#361)
       else if (['fx', 'валютные', 'вал'].includes(t)) L = L.filter(p => p.ccy !== 'RUB' && !M.deal(p));
       else if (['put', 'оферта', 'оферты', 'пут'].includes(t)) L = L.filter(p => p.offer);
       else if (M.book[t.toUpperCase()]) L = L.filter(p => p.book === t.toUpperCase());

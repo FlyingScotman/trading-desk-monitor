@@ -39,6 +39,8 @@
   M.groupLabel = Object.assign({ GOV: 'Гос', SUB: 'Суб', CORP: 'Корп', DER: 'Деривативы', MM: 'Денежный рынок', OTH: 'Прочее' }, M.groupLabel);
   // сделка, а не бумага (деривативы и FX, РЕПО): размер — номинал, в MV облигаций и потоках бумаг её нет (lib/real.js, lib/mock.js)
   M.deal = M.deal || (p => p.group === 'DER' || p.group === 'MM');
+  // корзина сделки в группировках по эмитенту: «Деривативы» или «Денежный рынок и фондирование» (РЕПО), не контрагент
+  M.dealName = M.dealName || (p => p.group === 'MM' ? 'Денежный рынок и фондирование' : 'Деривативы');
   // Минфин РФ: в демо — эмитент MINFIN, в прогоне — эмитент с флагом gov статики хаба
   M.isMinfin = M.isMinfin || (id => id === 'MINFIN' || !!(M.issuer && M.issuer[id] && M.issuer[id].gov));
 
@@ -2415,12 +2417,12 @@
   };
   K.cols = keys => keys.map(k => typeof k === 'string' ? Object.assign({}, K.posCols[k]) : k);
   // порядок эмитентов в группах: Минфин первым, деривативы последними, остальные по алфавиту
-  K.issuerOrder = (a, b) => { const r = x => x === 'Минфин' ? 0 : x === 'Деривативы' ? 2 : 1; return (r(a) - r(b)) || a.localeCompare(b, 'ru'); };
+  K.issuerOrder = (a, b) => { const r = x => x === 'Минфин' ? 0 : x === 'Деривативы' || x === 'Денежный рынок и фондирование' ? 2 : 1; return (r(a) - r(b)) || a.localeCompare(b, 'ru'); };
   // группировка «валюта → эмитент» — по желанию (opts.groupable таблиц, R37): по умолчанию таблицы позиций плоские,
   // валюта и эмитент в них — обычные столбцы
   K.defaultGroups = [
     { key: r => r.ccy, label: k => K.ccyTag(k) + ' ' + K.ccyName(k), order: (a, b) => M.ccyOrder[a] - M.ccyOrder[b], color: k => K.ccyColor(k), span: 1 },
-    { key: r => r.group === 'DER' ? 'Деривативы' : r.issuerName, label: (k, rows) => esc(k) + (rows[0].group === 'DER' ? ' <span class="mut3" style="font-weight:400">(по контрагентам)</span>' : ''), order: K.issuerOrder, color: (k, rows) => K.issuerColor(rows[0].issuer) },
+    { key: r => M.deal(r) ? M.dealName(r) : r.issuerName, label: (k, rows) => esc(k) + (M.deal(rows[0]) ? ' <span class="mut3" style="font-weight:400">(по контрагентам)</span>' : ''), order: K.issuerOrder, color: (k, rows) => K.issuerColor(rows[0].issuer) },
   ];
 
   // ---------- FX-дельта, риск по кривым, ноги FX-сделки (карточки C01–C13) ----------

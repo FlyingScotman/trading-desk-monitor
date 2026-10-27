@@ -72,10 +72,10 @@
   const save = () => { try { localStorage.setItem('c07-state', JSON.stringify(S)); } catch (e) { } };
 
   const GROUPS = {
-    ccy: { t: 'валюта → тип → эмитент', lv: [p => p.ccy, p => p.groupLabel + ' · ' + M.kindShort[p.kind], p => p.group === 'DER' ? 'Деривативы' : p.issuerName] },
-    book: { t: 'книга → эмитент', lv: [p => p.book + ' · ' + p.bookName, p => p.group === 'DER' ? 'Деривативы' : p.issuerName] },
-    sector: { t: 'сектор → эмитент', lv: [p => p.sector, p => p.group === 'DER' ? (p.cpty || 'Деривативы') : p.issuerName] },
-    rating: { t: 'рейтинг → эмитент', lv: [p => p.rating === '—' ? 'без рейтинга' : p.rating, p => p.group === 'DER' ? (p.cpty || 'Деривативы') : p.issuerName] },
+    ccy: { t: 'валюта → тип → эмитент', lv: [p => p.ccy, p => p.groupLabel + ' · ' + M.kindShort[p.kind], p => M.deal(p) ? M.dealName(p) : p.issuerName] },
+    book: { t: 'книга → эмитент', lv: [p => p.book + ' · ' + p.bookName, p => M.deal(p) ? M.dealName(p) : p.issuerName] },
+    sector: { t: 'сектор → эмитент', lv: [p => p.sector, p => M.deal(p) ? (p.group === 'DER' && p.cpty || M.dealName(p)) : p.issuerName] },
+    rating: { t: 'рейтинг → эмитент', lv: [p => p.rating === '—' ? 'без рейтинга' : p.rating, p => M.deal(p) ? (p.group === 'DER' && p.cpty || M.dealName(p)) : p.issuerName] },
   };
   const SIZES = {
     mv: { t: 'MV', v: p => M.deal(p) ? 0 : Math.abs(p.mv), fmt: v => f.mn(v, 0) + ' mm ₽' },
@@ -223,7 +223,7 @@
       return {
         name: F.name, id: id0, itemStyle: { color: F.color },
         children: [...byType.entries()].map(([k, Lt]) => {
-          const byIss = new Map(); Lt.forEach(p => { const kk = p.group === 'DER' ? (p.cpty || 'Деривативы') : p.issuerName; if (!byIss.has(kk)) byIss.set(kk, []); byIss.get(kk).push(p); });
+          const byIss = new Map(); Lt.forEach(p => { const kk = M.deal(p) ? (p.group === 'DER' && p.cpty || M.dealName(p)) : p.issuerName; if (!byIss.has(kk)) byIss.set(kk, []); byIss.get(kk).push(p); });
           const id1 = 's' + (uid++); sunLists[id1] = { title: F.name + ' · ' + k, list: Lt, val: F.v };
           return {
             name: k, id: id1, children: [...byIss.entries()].map(([kk, Li]) => { const id2 = 's' + (uid++); const sv = M.sum(Li, F.v); sunLists[id2] = { title: F.name + ' · ' + k + ' · ' + kk, list: Li, val: F.v }; return { name: kk, id: id2, value: Math.abs(sv) / 1e3, sv }; }),

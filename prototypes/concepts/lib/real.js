@@ -213,6 +213,8 @@
   M.groupLabel = { GOV: 'Гос', SUB: 'Суб', CORP: 'Корп', DER: 'Деривативы', MM: 'Денежный рынок', OTH: 'Прочее' };
   // сделка, а не бумага (деривативы и FX, РЕПО): размер — номинал, MV облигаций и потоки бумаг её не считают (#361)
   M.deal = p => p.group === 'DER' || p.group === 'MM';
+  // корзина сделки в группировках «эмитент» (ревью #371): деривативы — «Деривативы», РЕПО — своя группа MM, не контрагент
+  M.dealName = p => p.group === 'MM' ? 'Денежный рынок и фондирование' : 'Деривативы';
   M.kindLabel = { PD: 'ОФЗ-ПД (фикс)', PK: 'ОФЗ-ПК (флоатер)', IN: 'ОФЗ-ИН (линкер)', SOVFX: 'Минфин валютные', FIX: 'Фикс', FLT: 'Флоатер', OTC: 'OTC (по отчёту)', FX: 'Валюта / FX', OTH: 'Прочее', IRS: 'IRS / OIS', KSW: 'Своп на КС', BAS: 'Базис КС/RUONIA', FXF: 'FX форвард', XCCY: 'XCCY', REPO: 'РЕПО' };
   M.kindShort = { PD: 'ПД', PK: 'ПК', IN: 'ИН', SOVFX: 'Минфин вал.', FIX: 'Фикс', FLT: 'Флоат', OTC: 'OTC', FX: 'FX', OTH: 'Пр', IRS: 'IRS', KSW: 'КС-своп', BAS: 'Базис', FXF: 'FX fwd', XCCY: 'XCCY', REPO: 'РЕПО' };
   M.typeRows = [
@@ -344,9 +346,9 @@
     p.legs = Array.isArray(ex.legs) && ex.legs.length ? ex.legs.filter(l => l && typeof l === 'object').map(camel) : null;
     const b = M.book[d.book] || {};
     p.bookName = b.name || d.book; p.entity = b.entity || d.entity || '—'; p.desk = b.desk || '—';
-    p.issuerName = d.issuer || d.counterparty || (group === 'DER' ? 'Деривативы' : '—');
+    p.issuerName = d.issuer || d.counterparty || (M.deal({ group }) ? M.dealName({ group }) : '—');
     p.issuerFull = d.issuer || (d.counterparty ? 'Контрагент: ' + d.counterparty : p.issuerName);
-    p.sector = NO(d.sector) || (group === 'DER' ? 'Деривативы' : '—'); p.rating = NO(d.rating) || '—';
+    p.sector = NO(d.sector) || (M.deal({ group }) ? M.dealName({ group }) : '—'); p.rating = NO(d.rating) || '—';
     // причина неточной оценки (extra прогона): список «не оценены / оценены не ядром» (kit.js, K.posList)
     p.estReason = ex.reason || ex.not_exact_reason || (Array.isArray(ex.assumptions) ? ex.assumptions.join('; ') : '') || '';
     p.ratingInfo = d.ratingInfo || null; p.ratingAgency = (d.ratingInfo || {}).agency || null;  // рейтинг деска (R25)
