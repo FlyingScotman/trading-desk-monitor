@@ -505,7 +505,11 @@
     const own = !vert && !(val.min != null || val.max != null || val.interval != null || val.minInterval > 0);  // шаг не задан страницей
     const tickOf = (a0, a1, room) => (own ? K.tickEvery(a0, a1, room, vfm, val.axisLabel.fontSize || 12, val.splitNumber) : null);
     // концы оси, какими они будут на экране: горизонтальный бар — K.tickEvery, вертикальный — округление ECharts
-    const extOf = (a0, a1, room) => { const t = tickOf(a0, a1, room); return t ? [t.min, t.max] : K.niceExtent(a0, a1, val.splitNumber); };
+    const extOf = (a0, a1, room) => {
+      const t = tickOf(a0, a1, room), ex = t ? [t.min, t.max] : K.niceExtent(a0, a1, val.splitNumber);
+      // Явные концы страницы закреплены и в ECharts: подписи должны рассчитываться по той же оси (#357).
+      return [typeof val.min === 'number' ? val.min : ex[0], typeof val.max === 'number' ? val.max : ex[1]];
+    };
     const ticks = (a0, a1, room) => {
       const t = tickOf(a0, a1, room);
       if (!t) return;
@@ -602,11 +606,14 @@
     }
     if (P.f[0] > 0 || P.f[1] > 0) val.boundaryGap = P.f.map(x => (x * P.axis / span * 100).toFixed(2) + '%');
     ticks(P.a0, P.a1, P.room);
+    // Обводка внутренней подписи не выходит в соседнюю строку категорий (#357); размер шрифта сохраняется.
+    const tickHeight = g.containLabel ? (val.axisLabel.fontSize || 12) + (val.axisLabel.margin == null ? 8 : val.axisLabel.margin) : 0;
+    const rowHeight = (n(el.clientHeight) - n(g.top) - n(g.bottom) - tickHeight) / Math.max(1, catT.length);
     items.forEach(x => {
       if (P.out.has(x)) return;
       const { s, i, v, color } = x, d = s.data[i];
       const label = P.inside.has(x)
-        ? { show: true, position: vert ? (v < 0 ? 'insideBottom' : 'insideTop') : (v < 0 ? 'insideLeft' : 'insideRight'), color: K.inkOn(color), textBorderColor: color, textBorderWidth: 2 }
+        ? { show: true, position: vert ? (v < 0 ? 'insideBottom' : 'insideTop') : (v < 0 ? 'insideLeft' : 'insideRight'), color: K.inkOn(color), textBorderColor: color, textBorderWidth: vert ? 2 : Math.max(0, Math.min(2, rowHeight - (s.label.fontSize || 12))) }
         : { show: false };
       s.data[i] = d != null && typeof d === 'object' ? Object.assign({}, d, { label: Object.assign({}, d.label, label) }) : { value: d, label };
     });
