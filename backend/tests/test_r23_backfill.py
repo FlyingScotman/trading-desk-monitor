@@ -6,7 +6,8 @@ market shifted to five business days. Synthetic data only."""
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+import os
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -248,10 +249,14 @@ def test_autopilot_step_after_the_eod_step_within_its_budget(tmp_path, cache, st
 def test_inbox_reads_the_older_reports_once(tmp_path, store_url):
     inbox = tmp_path / "in"
     put(inbox, "positions_20261015.csv", "positions_20261017.csv")
+    now = datetime(2026, 10, 27, 9, tzinfo=UTC)
+    copied = (now - timedelta(hours=1)).timestamp()  # before the fixed now, whatever the wall clock says
+    for f in inbox.iterdir():
+        os.utime(f, (copied, copied))
     s = Settings(home=tmp_path / "home", snapshot_cache=FIX, inbox_dirs=(inbox,), inbox_archive=tmp_path / "archive",
                  private_adapter=GOOD, private_adapter_config=CONFIG, inbox_poll_seconds=0, inbox_lookback_days=1)
     with store.connect(store_url) as con:
-        r = scan.scan(con, s, now=datetime(2026, 10, 27, 9, tzinfo=UTC))
+        r = scan.scan(con, s, now=now)
         assert r.files == {"ignored_too_old": 2}, r.text()
         line = backfill.inbox(con, s, date(2026, 10, 1))
         assert line and "accepted" in line
