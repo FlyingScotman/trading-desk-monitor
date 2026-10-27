@@ -63,6 +63,8 @@ def seed_history(url, *, intraday_day=None, anchor_prev=None):
             con.execute("INSERT INTO run_reference VALUES (%s,'books',%s)", (rid, Jsonb([
                 {"book_id": b, "name": b, "entity": "Synthetic entity", "desk": "Example", "book_type": "TRADING"}
                 for b in ["DEMO-A", "DEMO-B"]])))
+            con.execute("INSERT INTO run_reference VALUES (%s,'fx',%s)", (rid, Jsonb([
+                {"ccy": "USD", "rate": 80.0, "rate_source": "synthetic", "rate_cbr": 80.0}])))
             sets = []
             for book in ["DEMO-A", "DEMO-B"]:
                 sid = con.execute("INSERT INTO position_set(book_id,valid_date,revision,source_name,"
