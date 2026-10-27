@@ -6720,6 +6720,18 @@
             ],
             "title": "Issuer"
           },
+          "issuer_group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issuer Group",
+            "description": "The issuer's group: the hub's group of the issuer, else its display name; null without an issuer (TDM#72)"
+          },
           "sector": {
             "anyOf": [
               {
