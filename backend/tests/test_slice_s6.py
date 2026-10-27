@@ -42,6 +42,11 @@ CASES = {
     "usd": {"curves": {"USD": [30, 30, 30, 25, 20, 20, 15, 15, 10, 10, 10]}, "fx": {"USD": 10}},
     # the KBD alone moves the fixed-coupon OFZ only (#32)
     "kbd": {"curves": {"RUB OFZ": 100}},
+    # the monitors' scenario editor (C18, TDM#363): FX per currency, the OFZ spread, all credit spreads, the
+    # multiplier, rating buckets with «без рейтинга» written under both keys (б/р, нет данных), sectors
+    "editor": {"fx": {"USD": 12.5, "CNY": -7}, "ofzSpread": 15, "spreads": {
+        "_all": 10, "_mult": 1.25, "rating": {"BB": 60, "б/р": 90, "нет данных": 90},
+        "sector": {"Лизинг": 20, "нет данных": 35}}},
 }
 
 
@@ -308,15 +313,23 @@ def _parity(golden) -> str:
          "pv_rub": 9_700.0, "fact": {"name": "Без спреда", "issuer": "АО Лизинг-Синт", "cs01": -3.25,
                                      "ofz_spr01": 0.0, "spread_bp": None, "gamma": [],
                                      "risk": {"RUB OFZ": {**risk["RUB OFZ"], "5Y": -3.0}}}},
+        {"position_id": "S04", "book_id": "CORP", "secid": "SYNTH-NR", "quantity": 10.0, "quality": "exact",
+         "pv_rub": 10_100.0, "fact": {"name": "Без рейтинга", "issuer": "ООО Нерейтинг", "cs01": -4.5,
+                                     "ofz_spr01": 0.0, "spread_bp": 520.0, "gamma": [],
+                                     "risk": {"RUB OFZ": {**risk["RUB OFZ"], "3Y": -4.0}}}},
     ]
     ref = {**reference, "issuers": [*reference["issuers"],
                                     {"issuer": "ООО Синтетик", "sector": "Девелопмент", "rating": None},
-                                    {"issuer": "АО Лизинг-Синт", "sector": "Лизинг", "rating": "BB"}]}
+                                    {"issuer": "АО Лизинг-Синт", "sector": "Лизинг", "rating": "BB"},
+                                    {"issuer": "ООО Нерейтинг", "sector": "нет данных", "rating": "б/р"}]}
     payload = _denoise(_sig(risk_payload(run, rows + synth, ref)))
     cases = []
     for name, d in CASES.items():
         norm = normalize(d, payload["curves"])
-        cases.append({"name": name, "definition": norm, "payload": payload, "expected": run_taylor(payload, norm)})
+        # raw: the definition as written (CASES), so the ports check their normalize against Python's, not only
+        # that a normalized form stays as it is (C18 lib/scenario.js, TDM#374)
+        cases.append({"name": name, "raw": d, "definition": norm, "payload": payload,
+                      "expected": run_taylor(payload, norm)})
     return json.dumps({"version": 1, "tolerance_rel": 1e-9, "cases": cases}, sort_keys=True, indent=1,
                       ensure_ascii=False, allow_nan=False) + "\n"
 
@@ -333,7 +346,7 @@ def test_parity_fixture_is_current(golden):
     assert {k: v for k, v in doc.items() if k != "cases"} == {k: v for k, v in new.items() if k != "cases"}, stale
     assert [c["name"] for c in doc["cases"]] == [c["name"] for c in new["cases"]], stale
     for c, n in zip(doc["cases"], new["cases"]):
-        assert c["definition"] == n["definition"], stale
+        assert c["raw"] == n["raw"] and c["definition"] == n["definition"], stale
         diff = _same(_denoise(c["payload"]), n["payload"], c["name"])
         assert not diff, stale + "\n" + "\n".join(diff[:20])
         diff = _same(c["expected"], run_taylor(c["payload"], c["definition"]), c["name"], doc["tolerance_rel"], 1e-12)
@@ -351,6 +364,9 @@ def test_parity_fixture_is_current(golden):
     sector = next(c for c in doc["cases"] if c["name"] == "sector")
     s02 = next(x for x in sector["expected"]["positions"] if x["position_id"] == "S02")
     assert s02["spread"] == pytest.approx(-21.5 * (0.5 * 412.25 + 300 + 40))
+    editor = {x["position_id"]: x for x in next(c for c in doc["cases"] if c["name"] == "editor")["expected"]["positions"]}
+    assert editor["S04"]["spread"] == pytest.approx(-4.5 * (10 + 0.25 * 520 + 35 + 90))  # «нет данных», «б/р»
+    assert editor["S03"]["spread"] == pytest.approx(-3.25 * (10 + 20 + 60))  # spread_bp null: _mult adds 0
 
 
 def test_exact_context_takes_the_runs_curve_risk_unit(golden):
