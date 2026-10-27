@@ -223,10 +223,10 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
       series: [{ name: 'базис ОФЗ − RUONIA', type: 'bar', data: B.pts.map(v => ({ value: v, itemStyle: { color: v >= 0 ? '#9b7bff' : K.css('--warn') }, label: K.barEnd(v, true) })), barMaxWidth: 22, label: { show: true, position: 'top', fontSize: 10, color: K.css('--fg-2'), formatter: p => f.bp(p.value) },
         labelLayout: p => {
           const v = B.pts[p.dataIndex], prev = yesterday[p.dataIndex];
-          if (!v || prev == null) return {};
+          if (v == null || prev == null) return {};
           // Маркер 4 px с обводкой занимает 6 px. Сдвигаем только пересекающую его подпись, оставляя 2 px (#357).
-          const end = v < 0 ? p.rect.y + p.rect.height : p.rect.y;
-          const markerY = end - (prev - v) * p.rect.height / Math.abs(v), height = p.labelRect.height;
+          const chart = echarts.getInstanceByDom(document.getElementById('curves'));
+          const end = chart.convertToPixel({ yAxisIndex: 0 }, v), markerY = chart.convertToPixel({ yAxisIndex: 0 }, prev), height = p.labelRect.height;
           // Исходная bar-end позиция, без сдвига предыдущего layout (resize вызывает его повторно).
           const labelY = v < 0 ? end + 5 : end - 5 - height;
           if (labelY + height <= markerY - 5 || labelY >= markerY + 5) return {};

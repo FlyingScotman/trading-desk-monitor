@@ -73,7 +73,13 @@ async function serveFixture(page) {
   });
 }
 
-for (const width of [1024, 390]) test(`#357 c09 negative extremes ${width}px`, { skip: !pw && 'Playwright unavailable' }, async () => {
+const basisCases = [
+  { name: 'negative extremes', pts: [-90, -80, -70, -60, -50, -40, -30, -20, -10, -5, -2], change: 4 },
+  { name: 'zero basis', pts: [-90, -80, -70, -60, -50, -40, -30, -20, -10, -2, 0], change: -4 },
+  { name: 'zero adjacent signs above', pts: [-90, -80, -70, -60, -50, -40, -30, -20, -1, 0, 1], change: -4 },
+  { name: 'zero adjacent signs below', pts: [-90, -80, -70, -60, -50, -40, -30, -20, -1, 0, 1], change: 4 },
+];
+for (const width of [1024, 390]) for (const scenario of basisCases) test(`#357 c09 ${scenario.name} ${width}px`, { skip: !pw && 'Playwright unavailable' }, async () => {
   const context = await browser.newContext({ viewport: { width, height: 768 } });
   try {
     await context.addInitScript(() => {
@@ -85,22 +91,25 @@ for (const width of [1024, 390]) test(`#357 c09 negative extremes ${width}px`, {
     page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
     await page.goto(PAGE('c09-market.html'));
     await page.waitForFunction(() => window.KIT && KIT.charts.length > 0);
-    await page.evaluate(() => {
-      const b = KIT.basisCurve(), pts = [-90, -80, -70, -60, -50, -40, -30, -20, -10, -5, -2];
-      KIT.basisCurve = () => ({ ...b, pts, chg: pts.map(() => 4) });
+    await page.evaluate(({ pts, change }) => {
+      const b = KIT.basisCurve();
+      KIT.basisCurve = () => ({ ...b, pts, chg: pts.map(() => change) });
       KIT.charts.find(c => c.raw.getDom().id === 'curves').redraw();
-    });
+    }, scenario);
     await page.waitForTimeout(500);
-    if (SHOTS) await page.screenshot({ path: path.join(SHOTS, `c09-negative-extremes-${width}.png`), fullPage: true });
+    if (SHOTS) await page.screenshot({ path: path.join(SHOTS, `c09-${scenario.name.replaceAll(' ', '-')}-${width}.png`), fullPage: true });
     const g = await geometry(page, 'c09');
     assert.equal(g.bars.length, 11);
     assert.equal(g.markers.filter(m => m.rect).length, 11);
+    assert.deepEqual(g.values, [scenario.pts, scenario.pts.map(v => v - scenario.change)], 'bar and yesterday values unchanged');
+    if (scenario.pts.includes(0)) assert.equal(g.bars.find(b => b.value === 0).text, '0', 'zero remains labelled');
     await page.evaluate(() => KIT.charts.find(c => c.raw.getDom().id === 'curves').redraw());
     await page.waitForTimeout(200);
     const again = await geometry(page, 'c09');
     assert.deepEqual(again.bars.map(b => b.label), g.bars.map(b => b.label), 'repeat layout keeps the same absolute positions');
     for (const bar of g.bars) {
-      assert.ok(bar.label, 'negative extreme remains labelled');
+      assert.ok(bar.label, 'basis value remains labelled');
+      assert.ok(bar.label.x >= -1 && bar.label.x + bar.label.width <= g.width + 1 && bar.label.y >= -1, 'label stays within chart');
       assert.ok(bar.label.y + bar.label.height <= g.grid.y + g.grid.height + 1, 'shifted label clears bottom axis');
       for (const marker of g.markers) assert.ok(!overlaps(bar.label, marker.rect, 1), JSON.stringify({ bar, marker }));
     }
