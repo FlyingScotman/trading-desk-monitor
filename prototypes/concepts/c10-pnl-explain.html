@@ -64,10 +64,9 @@
     const o = { carry: x(p.pnl.carry, DAYS_MTD), funding: x(p.pnl.funding, DAYS_MTD), trading: x(p.pnl.trading, 3) };
     const ks = ['rates', 'spread', 'fx', 'other'];
     // PnL дня позиции не посчитан (available: false, #332) — разложить MTD не по чему: остаток и все факторы null,
-    // итог MTD (p.pnlMtd) остаётся. PnL MTD нет — нет и его разложения: все факторы null (одна база с «Итого»
-    // водопада, K.wfTotals, ревью #372)
-    if (p.pnlMtd == null) Object.keys(o).concat(ks).forEach(k => o[k] = null);
-    else if (p.pnl.available === false) ks.forEach(k => o[k] = null);
+    // итог MTD (p.pnlMtd) остаётся. PnL MTD нет — оценки кэрри, фондирования и сделок MTD остаются, как раньше (до
+    // решения владельца по #373): тогда факторы водопада MTD и его «Итого» могут быть на разных базах позиций
+    if (p.pnlMtd == null || p.pnl.available === false) ks.forEach(k => o[k] = null);
     else {
       const rest = p.pnlMtd - (o.carry || 0) - (o.funding || 0) - (o.trading || 0);
       const W = ks.reduce((s, k) => s + Math.abs(p.pnl[k] || 0), 0);
