@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>C18 · Сценарии</title>
+<link rel="stylesheet" href="lib/kit.css">
+<style>
+.c18-ban { border: 1px solid var(--warn); border-left-width: 4px; background: color-mix(in srgb, var(--warn) 9%, transparent); border-radius: 6px; padding: 8px 12px; font-size: 12.5px; overflow-wrap: anywhere; margin-bottom: 8px; }
+.c18-ban.err { border-color: var(--neg); background: color-mix(in srgb, var(--neg) 8%, transparent); }
+.c18-ban b { color: var(--fg); }
+.c18-ctl { display: flex; gap: 8px 14px; align-items: center; flex-wrap: wrap; font-size: 12.5px; }
+.c18-ctl .lbl { color: var(--fg-2); font-size: 12px; }
+.c18-ctl select { min-width: 0; max-width: 100%; }
+.c18-ed { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px 20px; align-items: start; }
+@media (max-width: 1100px) { .c18-ed { grid-template-columns: minmax(0, 1fr); } }
+.c18-ed h4 { margin: 0 0 6px; font-size: 12.5px; font-weight: 600; color: var(--fg-2); }
+.c18-rows { display: grid; grid-template-columns: minmax(90px, auto) minmax(60px, 1fr) 76px auto; gap: 4px 10px; align-items: center; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.c18-rows .l { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.c18-rows input[type=range] { width: 100%; min-width: 0; margin: 0; accent-color: var(--accent); }
+.c18-rows input[type=number] { width: 76px; min-width: 0; text-align: right; padding: 2px 6px; }
+.c18-rows .side { color: var(--fg-2); font-size: 11.5px; white-space: nowrap; text-align: right; }
+.c18-rows .side b { color: var(--fg); font-weight: 500; }
+.c18-rows .hd { color: var(--fg-3); font-size: 11px; }
+.c18-rows .on .l, .c18-rows .l.on { color: var(--accent); }
+.c18-ed details { margin-top: 8px; }
+.c18-ed summary { cursor: pointer; font-size: 12.5px; color: var(--fg-2); margin-bottom: 4px; }
+.c18-base { font-size: 12px; color: var(--fg-2); margin-top: 8px; overflow-wrap: anywhere; }
+.c18-err { color: var(--neg); font-size: 12.5px; margin-top: 6px; }
+.c18-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+@media (max-width: 1100px) { .c18-two { grid-template-columns: minmax(0, 1fr); } }
+.c18-t { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.c18-t th, .c18-t td { padding: 3px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; text-align: left; }
+.c18-t th { color: var(--fg-2); font-weight: 500; background: var(--panel-2); }
+.c18-t .n { text-align: right; }
+.c18-t tr.sub td:first-child { padding-left: 24px; color: var(--fg-2); }
+.c18-t tr.tot td { font-weight: 650; border-top: 1px solid var(--line-2); }
+.c18-t td.nm { max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+.c18-t tr[data-card] { cursor: pointer; }
+.c18-t tr[data-card]:hover td { background: var(--hover); }
+.c18-notes { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--fg-2); }
+.c18-notes li { margin: 2px 0; overflow-wrap: anywhere; }
+.k-tbl th.c18-cur { color: var(--accent); }
+.k-tbl td sup, .c18-t td sup { line-height: 0; }
+.k-tbl th[data-k^="s:"] { cursor: pointer; }
+.c18-link { cursor: pointer; color: var(--accent); }
+@media (max-width: 720px) {
+  .k-panel > .hd { flex-wrap: wrap; }
+  .c18-rows { grid-template-columns: minmax(70px, auto) minmax(40px, 1fr) 68px; }
+  .c18-rows .side { grid-column: 1 / -1; text-align: left; margin: -2px 0 4px; }
+  .c18-rows .hd.side { display: none; }
+  .c18-rows input[type=number] { width: 68px; }
+  .k-tbl-tools .k-note { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="k-page" id="page">
+  <div id="ban"></div>
+  <div class="k-panel" id="edp"><div class="hd"><h3>Редактор сценария</h3><span class="sp"></span><span class="c18-ctl" id="ctl"></span></div><div class="bd" id="ed"><div class="k-empty">загрузка…</div></div></div>
+  <div id="body"></div>
+</div>
+<script src="../echarts.min.js"></script>
+<script src="lib/boot.js"></script>
+<script src="lib/kit.js"></script>
+<script src="lib/instr.js"></script>
+<script src="lib/scenario.js"></script>
+<script>
+(function () {
+  'use strict';
+  // C18 «Сценарии» (#363, шаг 1 переноса Scenario Lab, #72): редактор FX- и спред-шоков, итог по книгам, разложение,
+  // топ позиций по убытку и сравнение пресетов по книгам — всё по Тейлору на клиенте (lib/scenario.js, порт
+  // backend scenario/taylor.py). Данные: риск прогона GET ../api/v1/runs/{run_id}/risk и пресеты GET
+  // ../api/v1/scenario-defs (те же, что у /app/); в демо — из позиций lib/mock.js. Точные цифры — «Сценарии (точно)»
+  // (/app/), сравнение пресетов точно — шаг 2 (блок calc).
+  // Состояние редактора — в адресе (#s=…, ссылкой можно поделиться) и в localStorage (c18-state).
+  // Для тепловой карты (#364) и групп эмитентов (#365): window.C18 = {state, current()} — состояние и результат
+  // SCENARIO.evaluate текущего сценария (cells — кривая × бакет, rows — по позициям).
+  const M = MOCK, K = KIT, S = SCENARIO, f = K.f, esc = K.esc, h = K.h;
+  K.top({ title: 'C18 · Сценарии', tag: '≈ Тейлор: FX, спреды, пресеты по книгам' });
+  const server = K.source === 'real';
+  const RK = () => (M.toRepr && M.toRepr.RUB) || 1;  // рубли риска → валюта показа
+  const DIG = K.repr === 'RUB' ? 2 : 3, U = K.u('mm ₽');  // единица сумм: mm в валюте показа
+  const mn = v => v == null || !isFinite(v) ? '<span class="mut3">—</span>' : f.mn(v * RK(), DIG);
+  const mnc = v => v == null || !isFinite(v) ? '' : f.cls(v);
+  const cs = v => f.dv(v * RK());  // ₽/б.п. → тыс в валюте показа
+  const ED = 'ed';  // ключ редактора среди сценариев
+  const TIP = {
+    total: 'Изменение стоимости позиций при сценарии по Тейлору: первый порядок по чувствительностям прогона (DV01 по кривым и бакетам, CS01, FX-дельта) плюс второй порядок, если ядро его дало. ' +
+      'Позиции без нужной сценарию чувствительности не посчитаны (правило B1) и в сумму не входят.',
+    rates: 'Кривые: Σ DV01(кривая, бакет) × сдвиг кривой в бакете, б.п.',
+    spread: 'Спреды: CS01 × сдвиг собственного спреда. ОФЗ — спред ОФЗ; кредит — «все» + (множитель − 1) × спред бумаги + сектор + эмитент + рейтинг.',
+    fx: 'FX: FX-дельта позиции в рублях за 1 % × шок курса, %.',
+    convexity: 'Второй порядок (гамма ядра по ставкам, спредам и FX), где он есть в прогоне.',
+    mult: 'Множитель спредов: сдвиг = (множитель − 1) × текущий спред бумаги. У бумаги без спреда в прогоне — 0.',
+    none: 'Бумаги, у которых нет рейтинга (б/р) или рейтингов в данных нет вовсе: одна корзина, не грейд. Бумага без эмитента в справочнике в корзину не попадает.',
+  };
+
+  // ---------- состояние ----------
+  const st = { ed: S.emptyEditor(), view: ED };
+  try { const o = JSON.parse(localStorage.getItem('c18-state') || '{}'); if (o.ed) st.ed = S.cleanEditor(o.ed); if (o.view) st.view = String(o.view); } catch (e) { }
+  try { const m = /(?:^#|&)s=([^&]*)/.exec(location.hash); const e = m && S.decode(m[1]); if (e) st.ed = e; } catch (e) { }
+  function save() {
+    try { localStorage.setItem('c18-state', JSON.stringify({ ed: S.cleanEditor(st.ed), view: st.view })); } catch (e) { }
+    try { history.replaceState(null, '', location.pathname + location.search + '#s=' + S.encode(st.ed)); } catch (e) { }
+  }
+  let payload = null, presets = [], err = null, defsErr = null, B = null;
+  const info = id => M.pos[id] || null;
+  const presetOf = id => presets.find(p => String(p.scenario_id) === String(id)) || null;
+  const nameOf = id => id === ED ? 'Редактор' : (presetOf(id) || {}).name || String(id);
+
+  // ---------- загрузка ----------
+  function load() {
+    if (!server) {
+      payload = S.demoPayload(M, RK());
+      presets = S.DEMO_PRESETS.slice();
+      return Promise.resolve();
+    }
+    return Promise.all([
+      S.load(S.riskUrl(M.run.id)).then(j => { payload = j; }).catch(e => { err = e; }),
+      S.load(S.defsUrl()).then(j => { presets = (j && j.scenarios) || []; }).catch(e => { defsErr = e; }),
+    ]);
+  }
+
+  // ---------- B1: пометка неполного итога (#335) ----------
+  // acc: {n — посчитано, miss — не посчитано}. Здесь подключается общая пометка «· без N из M поз.» (#335, вариант а);
+  // пока — существующий механизм K.missNote, в узкой ячейке — значок с подсказкой
+  const missMark = (acc, short) => !acc || !acc.miss ? '' : short
+    ? ' <sup class="mut3" style="cursor:help" title="' + esc('не посчитано у ' + acc.miss + ' из ' + (acc.n + acc.miss) + ' поз. (правило B1)') + '">*</sup>'
+    : K.missNote(acc);
+  // итог группы: ни одна позиция не посчитана — «—» (null), а не 0
+  const accVal = (acc, k) => !acc ? null : acc.n === 0 && acc.miss > 0 ? null : acc[k];
+
+  // ---------- расчёт ----------
+  let cache = new Map();
+  function defOf(id) {
+    if (id === ED) return S.editorDef(st.ed, st.ed.base != null && presetOf(st.ed.base) ? presetOf(st.ed.base).definition : null);
+    const p = presetOf(id); return p ? p.definition : null;
+  }
+  function evalOf(id) {
+    if (cache.has(id)) return cache.get(id);
+    let out;
+    try {
+      const norm = S.normalize(defOf(id) || {}, payload.curves);
+      out = { norm, res: S.evaluate(payload, norm, { ids: K.list().map(p => p.id), info }) };
+    } catch (e) { out = { error: e }; }
+    cache.set(id, out); return out;
+  }
+  const allIds = () => [ED].concat(presets.map(p => String(p.scenario_id)));
+
+  // ---------- редактор ----------
+  const ctl = document.getElementById('ctl'), edEl = document.getElementById('ed');
+  function drawCtl() {
+    ctl.innerHTML = '<span class="lbl">Начать с</span><select class="k-input" data-a="base" aria-label="Начать редактор с пресета"><option value="">пустого сценария</option>' +
+      presets.map(p => '<option value="' + esc(p.scenario_id) + '"' + (String(st.ed.base) === String(p.scenario_id) ? ' selected' : '') + '>' + esc(p.name) + '</option>').join('') + '</select>' +
+      '<button class="k-btn" data-a="reset" title="Обнулить все шоки редактора">Сбросить</button>';
+    ctl.querySelector('[data-a=base]').onchange = e => {
+      const id = e.target.value, p = presetOf(id);
+      st.ed = p ? S.editorFrom(p.scenario_id, p.definition) : S.emptyEditor();
+      st.view = ED; save(); drawEditor(); recalc();
+    };
+    ctl.querySelector('[data-a=reset]').onclick = () => { st.ed = S.emptyEditor(); save(); drawCtl(); drawEditor(); recalc(); };
+  }
+  // строка редактора: подпись, ползунок, число, справа — чувствительность и эффект
+  const row = (key, label, v, o, side, tip) =>
+    '<div class="l' + (v && v !== (o.neutral || 0) ? ' on' : '') + '" title="' + esc(tip || label) + '">' + label + '</div>' +
+    '<input type="range" data-k="' + esc(key) + '" min="' + o.min + '" max="' + o.max + '" step="' + o.step + '" value="' + v + '" aria-label="' + esc(K.htmlText ? K.htmlText(label) : label) + '">' +
+    '<input class="k-input" type="number" data-k="' + esc(key) + '" min="' + (o.lo != null ? o.lo : -S.MAX_BP) + '" max="' + (o.hi != null ? o.hi : S.MAX_BP) + '" step="' + o.step + '" value="' + v + '" aria-label="' + esc((K.htmlText ? K.htmlText(label) : label) + ', ' + o.unit) + '">' +
+    '<div class="side" data-side="' + esc(key) + '">' + (side || '') + '</div>';
+  const BP = { min: -100, max: 600, step: 5, unit: 'б.п.' }, OFZ = { min: -100, max: 300, step: 5, unit: 'б.п.' }, FXR = { min: -40, max: 40, step: 0.5, lo: -99, hi: 1000, unit: '%' };
+  const rateTxt = (c, v) => v == null ? '—' : f.n(v, c === 'CNY' || c === 'HKD' ? 4 : 2);
+  const fxSide = c => { const pct = st.ed.fx[c] || 0, eff = (B.fxDelta[c] || 0) * pct; return 'курс <b>' + rateTxt(c, S.fxAfter(M.fx[c], pct)) + '</b> · ≈ <span class="' + mnc(eff) + '">' + mn(eff) + '</span>'; };
+  const csSide = (b, ds) => b ? 'CS01 ' + cs(b.cs01) + ' · ' + b.n + ' поз.' + (ds ? ' · ≈ <span class="' + mnc(b.cs01 * ds) + '">' + mn(b.cs01 * ds) + '</span>' : '') : '';
+  function drawEditor() {
+    if (!payload) { edEl.innerHTML = '<div class="k-empty">' + (err ? 'риск прогона не загружен' : 'загрузка…') + '</div>'; return; }
+    const keep = new Set(K.list().map(p => p.id));
+    B = S.buckets(payload, id => keep.has(id), K.ratingRank);
+    const e = st.ed;
+    const ccys = B.fxCcys.concat(Object.keys(e.fx).filter(c => !B.fxCcys.includes(c)));
+    const fxHtml = ccys.length ? '<div class="c18-rows"><div class="hd">валюта</div><div class="hd">шок, %</div><div class="hd"></div><div class="hd side">курс после · эффект, ' + U + '</div>' +
+      ccys.map(c => row('fx:' + c, K.ccyTag(c) + ' <span class="mut">' + rateTxt(c, M.fx[c]) + '</span>', e.fx[c] || 0, FXR, fxSide(c), c + ': курс ' + rateTxt(c, M.fx[c]) + ' ₽, шок в % к курсу')).join('') + '</div>'
+      : '<div class="k-note">В риске прогона нет FX-факторов: валютной дельты нет.</div>';
+    const rk = k => k === S.NONE ? 'без рейтинга' : k, sk = k => k === S.NO_DATA ? 'без сектора' : k;
+    const ratingRows = B.ratings.map(r => row('rating:' + r, esc(rk(r)), e.rating[r] || 0, BP, csSide(B.rating[r], e.rating[r]), r === S.NONE ? TIP.none : 'Кредитный спред бумаг с рейтингом ' + r)).join('');
+    const sectorRows = B.sectors.map(s => row('sector:' + s, esc(sk(s)), e.sector[s] || 0, BP, csSide(B.sector[s], e.sector[s]), 'Кредитный спред бумаг сектора «' + sk(s) + '»')).join('');
+    const nr = Object.keys(e.rating).length, ns = Object.keys(e.sector).length;
+    const base = e.base != null ? presetOf(e.base) : null, bd = base ? base.definition || {} : {};
+    const baseTxt = base ? 'Начат с пресета «' + esc(base.name) + '»: ' + ([bd.curves ? 'кривые ' + Object.keys(bd.curves).map(esc).join(', ') : '', bd.basis ? 'базис FX ' + Object.keys(bd.basis).map(esc).join(', ') + ' (в Тейлоре не учитывается)' : '',
+      bd.spreads && bd.spreads.issuer ? 'шоки эмитентов: ' + Object.keys(bd.spreads.issuer).length : ''].filter(Boolean).join('; ') || 'кривых в нём нет') + ' — берутся из пресета как есть; FX и спреды — из полей редактора.'
+      : 'Кривые в редакторе не двигаются; чтобы добавить сдвиг кривых, начните с пресета.';
+    edEl.innerHTML = '<div class="c18-ed"><div><h4>FX-шок</h4>' + fxHtml + '</div><div><h4>Шоки спредов, б.п.</h4><div class="c18-rows">' +
+      row('ofz', 'Спред ОФЗ', e.ofz, OFZ, B.ofzCs01 ? 'CS01 ' + cs(B.ofzCs01) + (e.ofz ? ' · ≈ <span class="' + mnc(B.ofzCs01 * e.ofz) + '">' + mn(B.ofzCs01 * e.ofz) + '</span>' : '') : 'нет ОФЗ со спредом', 'Спред ОФЗ (к RUONIA / КБД, как в прогоне)') +
+      row('all', 'Кредит, все', e.all, BP, 'CS01 ' + cs(B.creditCs01) + ' · ' + B.nCredit + ' поз.', 'Сдвиг всех кредитных спредов') +
+      row('mult', 'Множитель ×', e.mult, { min: 0.5, max: 3, step: 0.05, lo: 0.05, hi: 20, unit: 'раз', neutral: 1 }, '1 — без изменений', TIP.mult) +
+      '</div>' +
+      (B.ratings.length ? '<details' + (nr ? ' open' : '') + ' data-d="rating"><summary>По рейтингу' + (nr ? ' · задано: ' + nr : '') + '</summary><div class="c18-rows">' + ratingRows + '</div></details>' : '') +
+      (B.sectors.length ? '<details' + (ns ? ' open' : '') + ' data-d="sector"><summary>По сектору' + (ns ? ' · задано: ' + ns : '') + '</summary><div class="c18-rows">' + sectorRows + '</div></details>' : '') +
+      (!B.nCredit ? '<div class="k-note">Позиций с кредитным спредом на экране нет.</div>' : '') +
+      '</div></div><div class="c18-base">' + baseTxt + ' <span class="mut3">Состояние редактора — в адресе страницы (ссылкой можно поделиться).</span></div><div class="c18-err" id="ederr"></div>';
+    edEl.querySelectorAll('input[data-k]').forEach(inp => {
+      inp.oninput = () => {
+        const k = inp.dataset.k, v = +inp.value;
+        if (!isFinite(v)) return;
+        edEl.querySelectorAll('input[data-k="' + CSS.escape(k) + '"]').forEach(x => { if (x !== inp) x.value = v; });
+        set(k, v); paintSide(k); save(); later();
+      };
+    });
+  }
+  function set(k, v) {
+    const e = st.ed, i = k.indexOf(':'), kind = i < 0 ? k : k.slice(0, i), key = i < 0 ? null : k.slice(i + 1);
+    if (kind === 'ofz') e.ofz = v; else if (kind === 'all') e.all = v; else if (kind === 'mult') e.mult = v > 0 ? v : 1;
+    else { const m = e[kind]; if (v) m[key] = v; else delete m[key]; }
+  }
+  function paintSide(k) {
+    const el = edEl.querySelector('[data-side="' + CSS.escape(k) + '"]'), i = k.indexOf(':'), kind = i < 0 ? k : k.slice(0, i), key = k.slice(i + 1), e = st.ed;
+    if (el && kind === 'fx') el.innerHTML = fxSide(key);
+    if (el && kind === 'rating') el.innerHTML = csSide(B.rating[key], e.rating[key]);
+    if (el && kind === 'sector') el.innerHTML = csSide(B.sector[key], e.sector[key]);
+    if (el && kind === 'ofz') el.innerHTML = B.ofzCs01 ? 'CS01 ' + cs(B.ofzCs01) + (e.ofz ? ' · ≈ <span class="' + mnc(B.ofzCs01 * e.ofz) + '">' + mn(B.ofzCs01 * e.ofz) + '</span>' : '') : 'нет ОФЗ со спредом';
+    const lab = el && el.previousElementSibling && el.previousElementSibling.previousElementSibling && el.previousElementSibling.previousElementSibling.previousElementSibling;
+    if (lab && lab.classList.contains('l')) { const v = kind === 'fx' ? e.fx[key] : kind === 'rating' ? e.rating[key] : kind === 'sector' ? e.sector[key] : kind === 'mult' ? e.mult - 1 : e[kind]; lab.classList.toggle('on', !!v); }
+  }
+  let timer = null;
+  const later = () => { clearTimeout(timer); timer = setTimeout(recalc, 120); };
+  function recalc() { cache.delete(ED); render(); }
+
+  // ---------- тело ----------
+  const body = document.getElementById('body'), ban = document.getElementById('ban');
+  function panel(title, extra) { const p = h('div', 'k-panel'); p.innerHTML = '<div class="hd"><h3>' + title + '</h3><span class="sp"></span>' + (extra || '') + '</div><div class="bd"></div>'; return p; }
+  function banners() {
+    let b = '';
+    if (err) {
+      const why = err.status === 404 ? 'сервер не нашёл прогон (или эндпоинта нет на сервере)' : err.status === 401 || err.status === 403 ? 'нужно войти в монитор' : 'ошибка запроса';
+      b += '<div class="c18-ban err"><b>Риск прогона не загружен</b>: ' + esc(why) + '. <span class="mut">' + esc(err.text || err.message || '') + '</span></div>';
+    }
+    if (defsErr) b += '<div class="c18-ban"><b>Пресеты не загружены</b>: сравнение — только редактор. <span class="mut">' + esc(defsErr.text || defsErr.message || '') + '</span></div>';
+    ban.innerHTML = b;
+  }
+  function render() {
+    K.charts.slice().forEach(c => c.dispose());
+    banners();
+    if (!payload) { body.innerHTML = ''; return; }
+    const ids = allIds();
+    if (!ids.includes(st.view)) st.view = ED;
+    const cur = evalOf(st.view);
+    const ederr = document.getElementById('ederr');
+    const edv = evalOf(ED);
+    if (ederr) ederr.textContent = edv.error ? 'Сценарий редактора не принят: ' + edv.error.message : '';
+    body.innerHTML = '';
+    const wrap = h('div', 'k-grid'); body.appendChild(wrap);
+
+    // выбор сценария для разбора
+    const sp = panel('Разбор сценария', '<span class="c18-ctl"><select class="k-input" data-a="view" aria-label="Сценарий для разбора">' +
+      ids.map(id => '<option value="' + esc(id) + '"' + (id === st.view ? ' selected' : '') + '>' + esc(nameOf(id)) + '</option>').join('') + '</select></span>');
+    sp.querySelector('[data-a=view]').onchange = e => { st.view = e.target.value; save(); render(); };
+    wrap.appendChild(sp);
+    const sbd = sp.querySelector('.bd');
+    if (cur.error) { sbd.innerHTML = '<div class="c18-err">Сценарий не принят: ' + esc(cur.error.message) + '</div>'; }
+    else {
+      const R = cur.res, T = R.total, pre = presetOf(st.view);
+      const kpi = (label, k, tip) => K.kpi(label, '<span class="' + mnc(accVal(T, k)) + '">' + mn(accVal(T, k)) + '</span>' + K.kpiUnit(U), '', '', tip);
+      sbd.innerHTML = (pre && pre.description ? '<div class="k-note" style="margin-bottom:6px">' + esc(pre.description) + '</div>' : '') +
+        '<div class="k-kpis">' + K.kpi('Итог ≈', '<span class="' + mnc(accVal(T, 'total')) + '">' + mn(accVal(T, 'total')) + '</span>' + K.kpiUnit(U), T.n + ' поз.' + missMark(T), '', TIP.total) +
+        kpi('Кривые', 'rates', TIP.rates) + kpi('Спреды', 'spread', TIP.spread) + kpi('FX', 'fx', TIP.fx) + kpi('Второй порядок', 'convexity', TIP.convexity) + '</div>' +
+        (S.isEmpty(cur.norm) ? '<div class="k-note" style="margin-top:6px">Сценарий пустой: задайте шоки в редакторе или выберите пресет.</div>' : '') +
+        (R.approx ? '<div class="c18-ban" style="margin-top:8px">У ' + R.approx + ' поз. сдвиг больше ' + S.ACCURACY_BP + ' б.п.: приближение второго порядка ненадёжно, нужен точный расчёт' + (server ? ' (<a href="../app/">Сценарии (точно)</a>)' : '') + '.</div>' : '') +
+        (cur.norm.basis ? '<div class="k-note" style="margin-top:6px">Сдвиг FX-базиса (' + Object.keys(cur.norm.basis).map(esc).join(', ') + ') в Тейлоре не учитывается: только в точном расчёте.</div>' : '');
+      drawBooks(wrap, R);
+      const two = h('div', 'c18-two'); wrap.appendChild(two);
+      drawParts(two, R);
+      drawWorst(two, R);
+      if (R.missing.length) drawMissing(wrap, R);
+    }
+    drawCompare(wrap, ids);
+    drawNotes(wrap);
+    window.C18.result = cur.res || null;
+  }
+
+  // итог по книгам (K.table: сортировка, CSV)
+  function drawBooks(wrap, R) {
+    const p = panel('Итог по книгам', '<span class="k-note">' + U + ' · ≈ Тейлор</span>'); p.querySelector('.bd').classList.add('flush'); wrap.appendChild(p);
+    const rows = Object.keys(R.byBook).map(b => Object.assign({ book: b, name: (M.book[b] && M.book[b].name) || b }, R.byBook[b]));
+    const money = (key, label, tip) => ({ key, label, num: true, unit: U, title: tip, tip: !!tip, nullable: true, val: r => accVal(r, key) == null ? null : accVal(r, key) * RK(),
+      fmt: (v, r) => (v == null ? '<span class="mut3">—</span>' : f.mn(v, DIG)) + (key === 'total' ? missMark(r, true) : ''), cls: v => v == null ? '' : f.cls(v), sum: r => accVal(r, key) == null ? null : accVal(r, key) * RK(), sumFmt: v => f.mn(v, DIG) });
+    K.table(p.querySelector('.bd'), {
+      viewKey: 'c18-books', title: 'Сценарий «' + nameOf(st.view) + '» по книгам, ' + U, rows, search: false, sort: [['total', 1]],
+      // подпись «Итого» — текст (K.table экранирует): не посчитанные позиции — числом (#335 заменит общей пометкой)
+      footCount: L => { const n = L.reduce((a, r) => a + r.n, 0), miss = L.reduce((a, r) => a + r.miss, 0); return n + ' поз.' + (miss ? ' · не посчитано у ' + miss + ' из ' + (n + miss) : ''); },
+      columns: [
+        { key: 'book', label: 'Книга', val: r => r.book, fmt: (v, r) => esc(v) + (r.name !== v ? ' <span class="mut">' + esc(r.name) + '</span>' : ''), csvFmt: v => v },
+        money('rates', 'Кривые', TIP.rates), money('spread', 'Спреды', TIP.spread), money('fx', 'FX', TIP.fx), money('convexity', '2-й пор.', TIP.convexity), money('total', 'Итог', TIP.total),
+        { key: 'cnt', label: 'Позиций', num: true, val: r => r.n, fmt: (v, r) => v + (r.miss ? ' <span class="mut3">из ' + (r.n + r.miss) + '</span>' : ''), csvFmt: (v, r) => v + (r.miss ? ' из ' + (r.n + r.miss) : '') },
+      ],
+    });
+  }
+  // разложение по компонентам: кривые (по кривым), спреды (ОФЗ / кредит), FX (по валютам), второй порядок
+  function drawParts(wrap, R) {
+    const p = panel('Разложение по компонентам', '<span class="k-note">' + U + '</span>'); wrap.appendChild(p);
+    const T = R.total, line = (l, v, cls, tip) => '<tr class="' + (cls || '') + '"><td>' + K.hint(esc(l), tip) + '</td><td class="n ' + mnc(v) + '">' + mn(v) + '</td></tr>';
+    const curves = Object.keys(R.cells).map(c => [c, R.cells[c].reduce((a, v) => a + v, 0)]).filter(x => x[1]).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+    const ccys = Object.keys(R.fxBy).filter(c => R.fxBy[c]).sort();
+    p.querySelector('.bd').innerHTML = '<div style="overflow-x:auto"><table class="c18-t" data-vk="c18-parts" data-title="Разложение сценария «' + esc(nameOf(st.view)) + '», ' + esc(U) + '"><thead><tr><th>Компонента</th><th class="n">' + U + '</th></tr></thead><tbody>' +
+      line('Кривые', accVal(T, 'rates'), '', TIP.rates) + curves.map(([c, v]) => line(c, v, 'sub', c === 'RUB OFZ' ? 'КБД: у ОФЗ на RUONIA + базис — сдвиг базиса КБД − RUONIA' : c === 'RUB KEY' ? 'КС: проекция флоатеров на КС (базис КС − RUONIA)' : '')).join('') +
+      line('Спреды', accVal(T, 'spread'), '', TIP.spread) + (R.spreadOfz ? line('спред ОФЗ', R.spreadOfz, 'sub') : '') + (R.spreadCredit ? line('кредитные спреды', R.spreadCredit, 'sub') : '') +
+      line('FX', accVal(T, 'fx'), '', TIP.fx) + ccys.map(c => line(c, R.fxBy[c], 'sub')).join('') +
+      line('Второй порядок', accVal(T, 'convexity'), '', TIP.convexity) +
+      '<tr class="tot"><td>Итог' + missMark(T, true) + '</td><td class="n ' + mnc(accVal(T, 'total')) + '">' + mn(accVal(T, 'total')) + '</td></tr></tbody></table></div>' +
+      '<div class="k-note" style="margin-top:4px">Строки кривых и валют — первый порядок; второй порядок — отдельной строкой.</div>';
+    K.tableToolsAll(p);
+  }
+  // топ позиций по убытку
+  function drawWorst(wrap, R) {
+    const L = S.worst(R, 15), p = panel('Топ-15 позиций по убытку', '<span class="k-note">' + U + ' · щелчок — карточка</span>'); wrap.appendChild(p);
+    p.querySelector('.bd').classList.add('flush');
+    const mx = Math.max(1, ...L.map(r => Math.abs(r.parts.total)));
+    p.querySelector('.bd').innerHTML = L.length ? '<div style="overflow-x:auto"><table class="c18-t k-tbl" data-vk="c18-worst" data-title="Топ позиций по убытку: «' + esc(nameOf(st.view)) + '», ' + esc(U) + '"><thead><tr><th></th><th>Позиция</th><th>Книга</th><th class="n">Кривые</th><th class="n">Спреды</th><th class="n">FX</th><th class="n">2-й пор.</th><th class="n">Итог</th><th></th></tr></thead><tbody>' +
+      L.map(r => { const m = info(r.id) || {}, q = r.parts; return '<tr' + (M.pos[r.id] ? ' data-card="' + esc(r.id) + '"' : '') + '><td style="width:3px;padding:0;background:' + K.issuerColor(m.issuer) + '"></td><td class="nm" title="' + esc(m.name || r.id) + '">' + esc(m.name || r.id) + (m.ccy && m.ccy !== 'RUB' ? ' ' + K.ccyTag(m.ccy) : '') + '</td><td class="mut">' + esc(r.book) + '</td>' +
+        ['rates', 'spread', 'fx', 'convexity'].map(k => '<td class="n ' + mnc(q[k]) + '">' + mn(q[k]) + '</td>').join('') + '<td class="n ' + mnc(q.total) + '"><b>' + mn(q.total) + '</b></td><td style="width:70px">' + K.bar(q.total, mx) + '</td></tr>'; }).join('') + '</tbody></table></div>'
+      : '<div class="k-empty">Убыточных позиций в сценарии нет</div>';
+    K.tableToolsAll(p);
+  }
+  // позиции, не посчитанные в сценарии (B1)
+  function drawMissing(wrap, R) {
+    const p = panel('Не посчитано: ' + R.missing.length + ' поз.', '<span class="k-note">правило B1: в итоги не входят, это не 0</span>'); wrap.appendChild(p);
+    const L = R.missing.slice(0, 200);
+    p.querySelector('.bd').innerHTML = '<div style="overflow-x:auto;max-height:320px"><table class="c18-t" data-vk="c18-missing" data-title="Не посчитано в сценарии «' + esc(nameOf(st.view)) + '»"><thead><tr><th>Позиция</th><th>Книга</th><th>Почему</th></tr></thead><tbody>' +
+      L.map(r => { const m = info(r.id) || {}; return '<tr' + (M.pos[r.id] ? ' data-card="' + esc(r.id) + '"' : '') + '><td class="nm">' + esc(m.name || r.id) + '</td><td class="mut">' + esc(r.book) + '</td><td class="mut" style="white-space:normal">' + esc(r.why.text) + '</td></tr>'; }).join('') +
+      '</tbody></table></div>' + (R.missing.length > L.length ? '<div class="k-note">показаны первые ' + L.length + '</div>' : '');
+    K.tableToolsAll(p);
+  }
+  // сравнение по книгам: колонки — редактор и пресеты (Тейлор); щелчок по заголовку — разобрать этот сценарий
+  function drawCompare(wrap, ids) {
+    const p = panel('Сравнение сценариев по книгам', '<span class="k-note">' + U + ' · ≈ Тейлор · подсвечен сценарий разбора</span>'); wrap.appendChild(p);
+    p.querySelector('.bd').classList.add('flush');
+    const E = ids.map(id => [id, evalOf(id)]);
+    const books = [...new Set(E.flatMap(([, x]) => x.res ? Object.keys(x.res.byBook) : []))].sort();
+    const rows = books.map(b => ({ book: b, name: (M.book[b] && M.book[b].name) || b, by: Object.fromEntries(E.map(([id, x]) => [id, x.res ? x.res.byBook[b] || null : null])) }));
+    const col = ([id, x]) => ({ key: 's:' + id, label: esc(nameOf(id)), num: true, unit: U, title: (presetOf(id) || {}).description || (id === ED ? 'Сценарий редактора' : ''),
+      val: r => accVal(r.by[id], 'total') == null ? null : accVal(r.by[id], 'total') * RK(), nullable: true,
+      fmt: (v, r) => x.error ? '<span class="mut3" title="' + esc(x.error.message) + '">не принят</span>' : (v == null ? '<span class="mut3">—</span>' : f.mn(v, DIG)) + missMark(r.by[id], true),
+      cls: v => v == null ? '' : f.cls(v), sum: r => accVal(r.by[id], 'total') == null ? null : accVal(r.by[id], 'total') * RK(), sumFmt: v => f.mn(v, DIG) });
+    K.table(p.querySelector('.bd'), {
+      viewKey: 'c18-compare', title: 'Сценарии по книгам (Тейлор), ' + U, rows, search: false,
+      columns: [{ key: 'book', label: 'Книга', val: r => r.book, fmt: (v, r) => esc(v) + (r.name !== v ? ' <span class="mut">' + esc(r.name) + '</span>' : ''), csvFmt: v => v }].concat(E.map(col)),
+    });
+    // колонка сценария, который сейчас разобран выше, — подсвечена (и после сортировки: таблица перерисовывает шапку)
+    const paintCur = () => p.querySelectorAll('th[data-k^="s:"]').forEach(th => th.classList.toggle('c18-cur', th.dataset.k === 's:' + st.view));
+    paintCur();
+    new MutationObserver(paintCur).observe(p.querySelector('.bd'), { childList: true, subtree: true });
+  }
+  function drawNotes(wrap) {
+    const p = panel('Как считается'); wrap.appendChild(p);
+    const notes = [
+      'Тейлор на клиенте (lib/scenario.js) — порт backend scenario/taylor.py: те же факторы (IR|кривая|бакет, CS, FX|валюта) и суммы; сверка с Python — тестом на общей фикстуре.',
+      'Определение сценария — формат scenario/definition.py: curves, ofzSpread, spreads{_all,_mult,sector,issuer,rating}, fx, basis. «Без рейтинга» записывается под ключами «б/р» и «нет данных».',
+      'Правило B1: позиция без нужной сценарию чувствительности (не оценена, нет CS01 при шоке спреда, нет FX-дельты при шоке её валюты, нет ставочного риска при сдвиге кривых) не посчитана: в итоги не входит, число таких позиций — рядом с итогом.',
+      'Сравнение пресетов — по Тейлору; точные цифры по пресетам — следующий шаг (точная переоценка на сервере).',
+      'FX-базис (basis) в Тейлоре не учитывается. Переоценка фондирования валютных бумаг входит только в точный расчёт.',
+    ];
+    if (!server) notes.unshift('Демо: риск — из позиций lib/mock.js (без второго порядка), пресеты — набор демо.');
+    else notes.push('Точная переоценка одного сценария — экран «Сценарии (точно)» (/app/).');
+    if (K.repr !== 'RUB') notes.push('Суммы — в ' + K.repr + ': рубли риска по курсу прогона.');
+    p.querySelector('.bd').innerHTML = '<ul class="c18-notes">' + notes.map(n => '<li>' + esc(n) + '</li>').join('') + '</ul>' + (server ? '<div class="k-note" style="margin-top:4px"><a href="../app/">Сценарии (точно) →</a></div>' : '');
+  }
+
+  // для тепловой карты (#364) и групп эмитентов (#365): состояние и результат текущего сценария
+  window.C18 = { state: st, payload: () => payload, current: () => payload ? evalOf(st.view) : null, evaluate: evalOf, result: null };
+
+  drawEditor();
+  load().then(() => { drawCtl(); drawEditor(); render(); });
+  K.onFilter(() => { cache = new Map(); drawEditor(); render(); });
+  K.on('theme', render);
+  K.on('numfmt', () => { drawEditor(); render(); });
+  K.commands([{ label: 'Сценарии: сбросить редактор', run: () => { st.ed = S.emptyEditor(); save(); drawCtl(); drawEditor(); recalc(); } }]);
+})();
+</script>
+</body>
+</html>

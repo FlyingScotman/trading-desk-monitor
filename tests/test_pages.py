@@ -60,6 +60,17 @@ class Pages(unittest.TestCase):
         self.assertIn("['c16-ocp', 'C16', 'ОВП'", (PROTO / "concepts" / "index.html").read_text(encoding="utf-8"))
         self.assertTrue((PROTO / "concepts" / "thumbs" / "c16-ocp.jpg").is_file())
 
+    def test_scenarios_screen_reads_the_runs_risk_and_presets(self):
+        # C18 (#363): Тейлор на клиенте (lib/scenario.js) по риску прогона /api/v1/runs/{run_id}/risk и пресетам
+        # /api/v1/scenario-defs (те же, что у /app/); в галерее мониторов
+        src = (PROTO / "concepts" / "c18-scenarios.html").read_text(encoding="utf-8")
+        lib = (PROTO / "concepts" / "lib" / "scenario.js").read_text(encoding="utf-8")
+        self.assertIn("S.load(S.riskUrl(M.run.id))", src)
+        self.assertIn("'../api/v1/runs/' + encodeURIComponent(runId) + '/risk'", lib)
+        self.assertIn("'../api/v1/scenario-defs'", lib)
+        self.assertIn("['c18-scenarios', 'C18', 'Сценарии'", (PROTO / "concepts" / "index.html").read_text(encoding="utf-8"))
+        self.assertTrue((PROTO / "concepts" / "thumbs" / "c18-scenarios.jpg").is_file())
+
     def test_monitor_tables_sort_groups_like_ordinary_fields(self):
         # R31: группы таблиц (валюта → эмитент…) сортируются щелчком по столбцу, как обычные поля, — общим правилом
         # KIT.groupKeys; ни один монитор не упорядочивает группы только своим порядком уровня
