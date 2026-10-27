@@ -65,6 +65,7 @@ from .models import (
     RunList,
     RunOcp,
     RunPnl,
+    RunScenarioResults,
     RunStatus,
     RunType,
     ScenarioDefList,
@@ -677,6 +678,12 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         if not created:
             response.status_code = status.HTTP_200_OK
         return job
+
+    @app.get("/api/v1/runs/{run_id}/scenario-results", response_model=RunScenarioResults)
+    def run_scenario_results(con: Con, run_id: int):
+        if con.execute("SELECT 1 FROM run WHERE run_id = %s", (run_id,)).fetchone() is None:
+            raise ApiError(404, "not_found", f"run {run_id} not found")
+        return {"run_id": run_id, "method": jobs.METHOD, "scenarios": jobs.run_results(con, run_id)}
 
     @app.get("/api/v1/scenario-jobs/{job_id}", response_model=ScenarioJob, response_model_exclude_unset=True)
     def get_job(con: Con, job_id: int):
