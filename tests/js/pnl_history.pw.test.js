@@ -166,3 +166,96 @@ test('saved USD representation keeps history amounts and labels explicitly in RU
     assert.deepEqual(errors, []);
   } finally { await b.close(); }
 });
+
+test('historical membership menus, counters, cascade and unknown dimensions select real API slices', { skip: !pw || !process.env.PNL_HISTORY_DIMENSIONS_BASE, timeout: 45000 }, async () => {
+  const base = process.env.PNL_HISTORY_DIMENSIONS_BASE, b = await pw.chromium.launch();
+  const p = await b.newPage({ viewport: { width: 1280, height: 900 } }), errors = [];
+  p.on('pageerror', e => errors.push(e.message));
+  p.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
+  try {
+    const first = p.waitForResponse(isSummary);
+    await p.goto(base + '/concepts/c19-pnl-history.html');
+    let current = await (await first).json();
+    await p.waitForFunction(() => !document.querySelector('#result').hidden);
+    const menu = async kind => { await p.locator('[data-f=' + kind + ']').click(); return p.locator('.mi'); };
+    const change = async action => {
+      const response = p.waitForResponse(isSummary); await action(); current = await (await response).json();
+      const expected = await p.evaluate(v => KIT.f.n(v, 2), current.summary.total);
+      await p.waitForFunction(t => !document.querySelector('#result').hidden && document.querySelector('#total').textContent.includes(t), expected);
+      assert.equal(await p.locator('#positions [data-position]').count(), current.positions.length);
+    };
+    const pick = async (kind, label) => { const rows = await menu(kind); await change(() => rows.filter({ hasText: label }).click()); };
+    const desks = await (await menu('desk')).allTextContents();
+    for (const label of ['Earlier desk', 'Later desk', '—']) assert.ok(desks.some(t => t.includes(label)), 'missing historical option ' + label);
+    assert.match(desks.find(t => t.includes('Later desk')), /1 книг/); // one book, two entity memberships
+    await p.locator('#counts').click();
+    await pick('desk', 'Earlier desk');
+    assert.equal(current.summary.rowCount, 2);
+    let rows = await menu('books');
+    assert.equal(await rows.count(), 1); assert.match(await rows.first().innerText(), /2 поз/);
+    if (SHOTS) await p.screenshot({ path: path.join(SHOTS, 'pnl-history-earlier-desk-menu.png'), fullPage: true });
+    await change(() => rows.first().click()); await p.locator('#counts').click();
+    await pick('entity', 'Later entity');
+    assert.equal(current.summary.rowCount, 2);
+    assert.equal(await p.evaluate(() => KIT.filter.desk), null); // incompatible earlier desk cleared
+    assert.deepEqual(await p.evaluate(() => KIT.filter.books), ['DEMO-A']); // book still belongs to new entity
+    await pick('entity', 'Earlier entity');
+    rows = await menu('books');
+    assert.equal(await rows.count(), 1); assert.match(await rows.first().innerText(), /3 поз/); // distinct positions, no duplicate membership count
+    if (SHOTS) await p.screenshot({ path: path.join(SHOTS, 'pnl-history-earlier-entity-menu.png'), fullPage: true });
+    await p.locator('#counts').click();
+    const portfolios = await (await menu('ports')).allTextContents();
+    assert.match(portfolios.find(t => t.includes('Historical')), /1 поз/);
+    assert.match(portfolios.find(t => t.includes('Active')), /2 поз/);
+    await p.locator('#counts').click();
+    const entities = await (await menu('entity')).allTextContents();
+    assert.match(entities.find(t => t.includes('Earlier entity')), /1 книг/);
+    await p.locator('#counts').click();
+    await pick('desk', 'Later desk'); assert.equal(current.summary.rowCount, 3);
+    await pick('entity', '—');
+    assert.deepEqual(await p.evaluate(() => [KIT.filter.desk, KIT.filter.books]), [null, []]); // incompatible membership cleared
+    const expectedB = await (await p.request.get(base + '/api/v1/history/pnl?from=2026-10-01&to=2026-10-16&books=DEMO-B&catalogue=false')).json();
+    assert.deepEqual(current.summary, expectedB.summary);
+    assert.ok(current.summary.total < 0);
+    if (SHOTS) await p.screenshot({ path: path.join(SHOTS, 'pnl-history-unknown-entity.png'), fullPage: true });
+    await pick('desk', '—'); assert.deepEqual(current.summary, expectedB.summary);
+    rows = await menu('books'); assert.equal(await rows.count(), 1);
+    await change(() => rows.first().click()); await p.locator('#counts').click();
+    await change(() => p.locator('[data-f=reset]').click());
+    assert.equal(current.positions.length, 4);
+    assert.deepEqual(await p.evaluate(() => [KIT.filter.entity, KIT.filter.desk, KIT.filter.books]), [null, null, null]);
+    if (SHOTS) await p.screenshot({ path: path.join(SHOTS, 'pnl-history-dimension-menus.png'), fullPage: true });
+    assert.deepEqual(errors, []);
+  } finally { await b.close(); }
+});
+
+test('ordinary current-run KIT menus keep unique books, counts and cascade', { skip: !pw, timeout: 30000 }, async () => {
+  const b = await pw.chromium.launch(), p = await b.newPage({ viewport: { width: 1280, height: 900 } }), errors = [];
+  p.on('pageerror', e => errors.push(e.message));
+  p.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
+  try {
+    await p.goto(require('node:url').pathToFileURL(path.join(__dirname, '../../prototypes/concepts/c01-cockpit.html')).href);
+    const target = await p.evaluate(() => {
+      const b = MOCK.books.find(b => MOCK.positions.some(p => p.book === b.id));
+      return { ...b, entityName: MOCK.entities.find(e => e.id === b.entity).name,
+        entityCount: MOCK.books.filter(x => x.entity === b.entity).length,
+        bookCount: MOCK.books.filter(x => x.entity === b.entity && x.desk === b.desk).length,
+        positions: MOCK.positions.filter(p => p.book === b.id).map(p => p.id) };
+    });
+    await p.locator('[data-f=entity]').click();
+    const entity = p.locator('.mi').filter({ hasText: target.entityName });
+    assert.equal(await entity.count(), 1); assert.ok((await entity.innerText()).includes(target.entityCount + ' книг'));
+    await entity.click();
+    await p.locator('[data-f=desk]').click(); await p.locator('.mi').filter({ hasText: target.desk }).click();
+    await p.locator('[data-f=books]').click();
+    assert.equal(await p.locator('.mi').count(), target.bookCount);
+    const book = p.locator('.mi').filter({ hasText: target.id + ' ·' });
+    assert.equal(await book.count(), 1); assert.ok((await book.innerText()).includes(target.positions.length + ' поз'));
+    await book.click(); await p.locator('.brand span').first().click();
+    assert.deepEqual(await p.evaluate(() => KIT.list().map(p => p.id)), target.positions);
+    await p.locator('[data-f=reset]').click();
+    assert.deepEqual(await p.evaluate(() => [KIT.filter.entity, KIT.filter.desk, KIT.filter.books]), [null, null, null]);
+    assert.equal(await p.evaluate(() => KIT.list().length), await p.evaluate(() => MOCK.positions.length));
+    assert.deepEqual(errors, []);
+  } finally { await b.close(); }
+});

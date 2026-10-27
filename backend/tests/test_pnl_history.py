@@ -23,7 +23,7 @@ def components(carry=1000.125, other=200.255, funding=-20.375, **extra):
     return q
 
 
-def seed_history(url, *, intraday_day=None, anchor_prev=None):
+def seed_history(url, *, intraday_day=None, anchor_prev=None, book_references=None):
     """A missing close date, a closed holding, two books sharing an instrument, a reported PV difference."""
     ids = []
     with store.connect(url) as con:
@@ -60,9 +60,12 @@ def seed_history(url, *, intraday_day=None, anchor_prev=None):
                             "no_pnl) VALUES (%s,%s,%s,%s,'SYNTHETIC-1',1,'reported_value',%s,%s,%s)",
                             (rid, pid, i, book, Jsonb(fact), Jsonb(q) if q else None,
                              Jsonb({"reason": "no_prev_report"}) if q is None else None))
-            con.execute("INSERT INTO run_reference VALUES (%s,'books',%s)", (rid, Jsonb([
+            refs = [
                 {"book_id": b, "name": b, "entity": "Synthetic entity", "desk": "Example", "book_type": "TRADING"}
-                for b in ["DEMO-A", "DEMO-B"]])))
+                for b in ["DEMO-A", "DEMO-B"]]
+            if book_references is not None:
+                refs = book_references[day]
+            con.execute("INSERT INTO run_reference VALUES (%s,'books',%s)", (rid, Jsonb(refs)))
             con.execute("INSERT INTO run_reference VALUES (%s,'fx',%s)", (rid, Jsonb([
                 {"ccy": "USD", "rate": 80.0, "rate_source": "synthetic", "rate_cbr": 80.0}])))
             sets = []
@@ -86,6 +89,16 @@ def seed_history(url, *, intraday_day=None, anchor_prev=None):
         con.execute("INSERT INTO md_kbd (business_date,snapshot_id,known_at) VALUES"
                     " ('2026-10-14','synthetic-missing-day',now())")
     return ids
+
+
+def dimension_references():
+    """One book has three historical memberships; another has legacy absent dimensions."""
+    return {d: [{"book_id": "DEMO-A", "name": "DEMO-A", "entity": entity, "desk": desk},
+                {"book_id": "DEMO-B", "name": "DEMO-B", "desk": None}]
+            for d, entity, desk in [("2026-10-12", "Earlier entity", "Earlier desk"),
+                                    ("2026-10-13", "Earlier entity", "Later desk"),
+                                    ("2026-10-15", "Later entity", "Later desk"),
+                                    ("2026-10-16", "Later entity", "Later desk")]}
 
 
 @pytest.fixture
@@ -210,3 +223,24 @@ def test_selected_intraday_anchor_overlap(store_url, prev, overlap):
     else:
         assert "separateAnchor" not in a and len(a["runs"]) == 4
         assert a["days"][-1]["total"] is not None
+
+
+def test_historical_memberships_and_missing_dimensions(store_url):
+    seed_history(store_url, book_references=dimension_references())
+    c = TestClient(create_app(store_url))
+    all_, a, b = get(c), get(c, books="DEMO-A"), get(c, books="DEMO-B")
+    earlier = get(c, entity="Earlier entity", desk="Earlier desk")
+    later = get(c, entity="Earlier entity", desk="Later desk")
+    assert earlier["summary"]["rowCount"] == 2 and later["summary"]["rowCount"] == 3
+    assert {(r["entity"], r["desk"]) for r in all_["catalogue"] if r["book"] == "DEMO-A"} == {
+        ("Earlier entity", "Earlier desk"), ("Earlier entity", "Later desk"), ("Later entity", "Later desk")}
+    assert a["summary"]["total"] + b["summary"]["total"] == pytest.approx(all_["summary"]["total"])
+    for filters in [{"entity": "—"}, {"desk": "—"}, {"entity": "—", "desk": "—"}]:
+        missing = get(c, **filters)
+        assert missing["summary"] == b["summary"]  # unknown is a real slice, omitted means all
+        detail = get(c, **filters, position_book="DEMO-B", position_id="B", catalogue="false")
+        assert detail["summary"] == b["summary"] and len(detail["observations"]) == 4
+    assert all(r["entity"] == r["desk"] == "—" for r in all_["catalogue"] if r["book"] == "DEMO-B")
+    with store.connect(store_url) as con:
+        raw = con.execute("SELECT data FROM run_reference WHERE kind='books' ORDER BY run_id LIMIT 1").fetchone()[0]
+        assert "entity" not in raw[1] and raw[1]["desk"] is None  # no normalization writes to saved inputs

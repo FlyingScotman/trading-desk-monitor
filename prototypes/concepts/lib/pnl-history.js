@@ -29,11 +29,14 @@
     const books = new Map(), positions = new Map(), entities = new Map();
     rows.forEach(r => {
       const entity = r.entity || '—', desk = r.desk || '—';
-      books.set(r.book, { id: r.book, name: r.bookName || r.book, entity, desk });
+      books.set(JSON.stringify([r.book, entity, desk]), { id: r.book, name: r.bookName || r.book, entity, desk });
       entities.set(entity, { id: entity, name: entity });
-      positions.set(JSON.stringify([r.book, r.positionId, r.portfolio]), { book: r.book, portfolio: r.portfolio });
+      positions.set(JSON.stringify([r.book, r.positionId, entity, desk, r.portfolio]),
+        { id: r.positionId, book: r.book, entity, desk, portfolio: r.portfolio });
     });
-    return { books: [...books.values()], book: Object.fromEntries(books), entities: [...entities.values()], positions: [...positions.values()] };
+    const sorted = map => [...map].sort(([a], [b]) => a.localeCompare(b)).map(([, value]) => value);
+    const memberships = sorted(books);
+    return { books: memberships, book: Object.fromEntries(memberships.map(b => [b.id, b])), entities: sorted(entities), positions: sorted(positions) };
   }
   const api = { factors, loader, scope };
   if (typeof module === 'object' && module.exports) module.exports = api;

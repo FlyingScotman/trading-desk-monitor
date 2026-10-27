@@ -175,7 +175,8 @@ def summarize(rows: Iterable[dict[str, Any]], start: date, end: date, selected: 
 
 # Only the fields used by the report; never fetch full valuation facts (risk, flows, legs, etc.).
 DIMENSIONS = """SELECT p.run_id AS "runId", r.business_date AS date, p.position_id AS "positionId",
- p.book_id AS book, b.data->>'name' AS "bookName", b.data->>'entity' AS entity, b.data->>'desk' AS desk,
+ p.book_id AS book, b.data->>'name' AS "bookName", COALESCE(b.data->>'entity', '—') AS entity,
+ COALESCE(b.data->>'desk', '—') AS desk,
  i.x->>'x_portfolio' AS portfolio, COALESCE(p.fact->>'name', i.source_instrument_name, p.secid, p.position_id) AS name,
  COALESCE(p.fact->>'instrument_id', p.secid) AS instrument, COALESCE(p.fact->>'ccy', i.ccy) AS ccy,
  p.fact->>'asset_class' AS "assetClass", p.fact->>'issuer' AS issuer, p.no_pnl AS "noPnl"

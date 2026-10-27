@@ -29,3 +29,23 @@ test('historical filter catalogue preserves closed books, portfolios and safe id
   assert.equal(s.book.__proto__.id, '__proto__');
   assert.ok(s.positions.some(p => p.portfolio === 'Closed'));
 });
+
+test('historical book memberships are invariant under catalogue permutations', () => {
+  const rows = [
+    { book: 'A', positionId: 'one', entity: 'Earlier entity', desk: 'Earlier desk', portfolio: 'Active' },
+    { book: 'A', positionId: 'one', entity: 'Earlier entity', desk: 'Later desk', portfolio: 'Active' },
+    { book: 'A', positionId: 'one', entity: 'Later entity', desk: 'Later desk', portfolio: 'Active' },
+    { book: 'B', positionId: 'two', entity: null, desk: null, portfolio: 'Historical' },
+  ];
+  const permutations = a => a.length ? a.flatMap((r, i) => permutations(a.filter((_, j) => j !== i)).map(p => [r, ...p])) : [[]];
+  const expected = [
+    ['A', 'Earlier entity', 'Earlier desk'], ['A', 'Earlier entity', 'Later desk'],
+    ['A', 'Later entity', 'Later desk'], ['B', '—', '—'],
+  ].sort();
+  for (const permutation of permutations(rows)) {
+    const s = H.scope(permutation.concat(permutation[0]));
+    assert.deepEqual(s.books.map(b => [b.id, b.entity, b.desk]).sort(), expected);
+    assert.equal(s.positions.length, 4); // distinct position + historical membership; duplicate date row ignored
+    assert.ok(s.positions.some(p => p.id === 'two' && p.entity === '—' && p.desk === '—'));
+  }
+});
