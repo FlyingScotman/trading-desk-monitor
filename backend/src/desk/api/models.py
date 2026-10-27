@@ -592,6 +592,8 @@ class RiskPosition(BaseModel):
     name: str | None
     quality: str
     issuer: str | None
+    issuer_group: str | None = Field(None, description="The issuer's group: the hub's group of the issuer, else its "
+                                                        "display name; null without an issuer (TDM#72)")
     sector: str | None
     rating: str | None
     spread_kind: Literal["ofz", "credit"] | None

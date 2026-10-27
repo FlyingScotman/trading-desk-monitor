@@ -2259,6 +2259,11 @@ export interface components {
             quality: string;
             /** Issuer */
             issuer: string | null;
+            /**
+             * Issuer Group
+             * @description The issuer's group: the hub's group of the issuer, else its display name; null without an issuer (TDM#72)
+             */
+            issuer_group?: string | null;
             /** Sector */
             sector: string | null;
             /** Rating */

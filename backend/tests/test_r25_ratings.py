@@ -195,8 +195,10 @@ def test_scenario_rule_matches_the_bonds_own_rating():
     p = risk_payload({"run_id": 1, "business_date": DATE},
                 [{"position_id": f"P{i}", "book_id": "X", "secid": "S", "fact": f, "pv_rub": 1.0, "quality": "exact"}
                  for i, f in enumerate(facts)],
-                {"issuers": [{"issuer": "A", "rating": "AA"}, {"issuer": "B", "rating": "б/р"}], "curves": []})
+                {"issuers": [{"issuer": "A", "issuer_group": "G", "rating": "AA"}, {"issuer": "B", "rating": "б/р"}],
+                 "curves": []})
     assert [x["rating"] for x in p["positions"]] == ["AA-", "AA", "б/р"]
+    assert [x["issuer_group"] for x in p["positions"]] == ["G", "G", None]  # TDM#72: the issuers' reference
     assert [own_spread_shock(norm, x) for x in p["positions"]] == [50.0, 20.0, 300.0]
 
 
