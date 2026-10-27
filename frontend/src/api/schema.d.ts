@@ -2448,7 +2448,7 @@ export interface components {
              */
             level: "ccy" | "group" | "kind";
             /** Group */
-            group: ("GOV" | "SUB" | "CORP" | "DER" | "OTH") | null;
+            group: ("GOV" | "SUB" | "CORP" | "DER" | "MM" | "OTH") | null;
             /** Kind */
             kind: string | null;
             /** Label */

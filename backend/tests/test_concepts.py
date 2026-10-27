@@ -213,8 +213,34 @@ def test_unknown_days_and_old_runs_note(desk, store_url):
     ({"instr_type": "OTC"}, ("DER", "OTC")), ({"instr_type": "FX"}, ("DER", "FX")), ({"instr_type": "OTHER"}, ("OTH", "OTH")),
     # a legacy tdm swap is a derivative, as the risk table's group of it (TDM#336)
     ({"instr_type": "IRS"}, ("DER", "IRS")), ({"instr_type": "XCCY"}, ("DER", "XCCY")), ({"instr_type": "CDS"}, ("DER", "OTC")),
+    # a REPO is money market and funding, not a derivative (the owner's decision, TDM#361): the report's x_* nested
+    # (a valued fact) or flat (ROWS_SQL's extra)
+    ({"instr_type": "OTC", "extra": {"reported": {"x": {"x_product_group": "repo"}}}}, ("MM", "REPO")),
+    ({"instr_type": "OTC", "extra": {"reported": {"x_product_group": "repo"}}}, ("MM", "REPO")),
+    ({"instr_type": "OTC", "extra": {"reported": {"x_product_group": None}}}, ("DER", "OTC")),
 ])
 def test_kind_of(fact, want):
     assert concepts.kind_of(fact) == want
-    if fact["instr_type"] in ("IRS", "XCCY", "CDS", "FX"):  # the group is the risk table's (KIND_GROUP)
+    if fact["instr_type"] in ("IRS", "XCCY", "CDS", "FX") or want[0] == "MM":  # the group is the risk table's
         assert concepts.KIND_GROUP[concepts.instr_kind(fact)] == want[0]
+
+
+def test_the_summary_reads_a_repo_as_money_market(store_url):
+    """The summaries' rows (``summary.ROWS_SQL``) carry the report's product group, nested or flat: a REPO's notional is
+    in mvType MM.REPO, not DER.OTC (TDM#361; summary VERSION 8)."""
+    from psycopg.rows import dict_row
+
+    from desk.publish import summary
+
+    sql = summary.ROWS_SQL.split(" FROM run_position")[0].replace("SELECT position_id, book_id, pv_rub,", "SELECT")
+    with store.connect(store_url) as con:
+        con.row_factory = dict_row
+        rows = [con.execute(sql + " FROM (SELECT %s::jsonb AS fact, NULL::jsonb AS pnl) t", (json.dumps(f),)).fetchone()
+                for f in ({"instr_type": "OTC", "notional_rub": 5e8, "extra": {"reported": {"x": {"x_product_group": "repo"}}}},
+                          {"instr_type": "OTC", "notional_rub": 2e8, "extra": {"reported": {"x_product_group": "repo"}}},
+                          {"instr_type": "OTC", "notional_rub": 1e8, "extra": {"reported": {"x": {"x_product_group": "new"}}}},
+                          {"instr_type": "OTC", "notional_rub": 4e7})]
+    rows = [{"position_id": f"P{i}", "book_id": "B", "pv_rub": None, **r} for i, r in enumerate(rows)]
+    s = summary.build(rows)
+    assert s["mvType"] == {"MM.REPO": pytest.approx(7e8), "DER.OTC": pytest.approx(1.4e8)}
+    assert summary.VERSION >= 8  # summaries of older versions are rebuilt: a REPO of DER.OTC moves to MM.REPO

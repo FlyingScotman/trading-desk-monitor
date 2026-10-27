@@ -13,8 +13,10 @@
  *    bond_future, bond_forward, fx_future, fx_ndf, equity), иначе по типу старого tdm (IRS, XCCY, CDS), в демо-наборе —
  *    по его типу (IRS / КС-своп / базис → IRS, FX форвард, XCCY → CCS); FX-строка без группы — «Валюта», перенос ОВП —
  *    свой тип; OTC-строка без группы продукта — «Внебиржевые без группы продукта» (DER, как kind_of: DER.OTC, #345),
- *    с незнакомой группой (repo, новая) — «Не классифицировано» (известное расхождение с kind_of, #361); чего таблица не знает — «Не классифицировано» (видно, не выброшено). Группа типа совпадает с группой
- *    kindOf lib/real.js (api/concepts.kind_of) для любого instrType, кроме этого случая: tests/fixtures/instr_kinds.json сверяет все три
+ *    с незнакомой группой (новая) — «Не классифицировано» (известное расхождение с kind_of, #367); чего таблица не знает — «Не классифицировано» (видно, не выброшено);
+ *  - РЕПО (группа продукта repo, оценённое или нет) — свой тип «РЕПО» в группе «Денежный рынок и фондирование» (MM), вне
+ *    деривативов, как kind_of: MM.REPO (решение владельца, #361). Группа типа совпадает с группой
+ *    kindOf lib/real.js (api/concepts.kind_of) для любого instrType, кроме облигации без класса и незнакомой группы: tests/fixtures/instr_kinds.json сверяет все три
  *    классификации; имя типа таблицы может быть подробнее (CCS — это XCCY kind_of, CDS — его OTC).
  * Отнесение к валюте (INSTR.ATTRIBUTIONS) — для многовалютных типов (INSTR.CROSS_CCY: CCS, FX форварды, FX фьючерсы, FX):
  *  - «по ногам» (legs, по умолчанию, ПРЕДВАРИТЕЛЬНО — решает владелец): каждая мера в своей валюте — DV01 по кривой в
@@ -46,11 +48,12 @@
     ['FX_FUT', 'DER', 'Валютные фьючерсы'], ['FX_FWD', 'DER', 'FX форварды / NDF'],
     ['FX', 'DER', 'Валюта (спот, прочие FX)'], ['OCP', 'DER', 'Перенос ОВП'],
     ['OTC', 'DER', 'Внебиржевые без группы продукта'],
+    ['REPO', 'MM', 'РЕПО'],
     ['EQUITY', 'OTH', 'Акции'], ['BOND_NA', 'OTH', 'Облигации без класса (не сопоставлены)'],
     ['UNCLASSIFIED', 'OTH', 'Не классифицировано'],
   ];
-  I.GROUPS = ['GOV', 'SUB', 'CORP', 'DER', 'OTH'];
-  I.GROUP_LABEL = { GOV: 'Минфин', SUB: 'Субфедеральные и муниципальные', CORP: 'Корпоративные', DER: 'Деривативы и FX', OTH: 'Прочее' };
+  I.GROUPS = ['GOV', 'SUB', 'CORP', 'DER', 'MM', 'OTH'];
+  I.GROUP_LABEL = { GOV: 'Минфин', SUB: 'Субфедеральные и муниципальные', CORP: 'Корпоративные', DER: 'Деривативы и FX', MM: 'Денежный рынок и фондирование', OTH: 'Прочее' };
   I.group = Object.fromEntries(I.KINDS.map(k => [k[0], k[1]]));
   I.label = Object.fromEntries(I.KINDS.map(k => [k[0], k[2]]));
   I.order = Object.fromEntries(I.KINDS.map((k, i) => [k[0], i]));
@@ -58,8 +61,8 @@
   I.SHORT = { OFZ_PD: 'ОФЗ-ПД', OFZ_PK: 'ОФЗ-ПК', OFZ_IN: 'ОФЗ-ИН', MINFIN_FX: 'Минфин вал.', SUBFED: 'Субфед.', MUNI: 'Муницип.',
     CORP_FIX: 'Корп. фикс', CORP_FLT: 'Корп. флоат.', SECUR: 'ИЦБ / ABS', IRS: 'IRS / OIS', CCS: 'CCS', CDS: 'CDS', TRS: 'TRS',
     BOND_FUT: 'Фьюч. обл.', BOND_FWD: 'Форв. обл.', FX_FUT: 'FX фьюч.', FX_FWD: 'FX форв. / NDF', FX: 'FX спот', OCP: 'Перенос ОВП', OTC: 'OTC прочие',
-    EQUITY: 'Акции', BOND_NA: 'Без класса', UNCLASSIFIED: 'Не классиф.' };
-  I.PRODUCT_KIND = { irs: 'IRS', ccs: 'CCS', cds: 'CDS', trs: 'TRS', bond_future: 'BOND_FUT', bond_forward: 'BOND_FWD', fx_future: 'FX_FUT', fx_ndf: 'FX_FWD', equity: 'EQUITY' };
+    REPO: 'РЕПО', EQUITY: 'Акции', BOND_NA: 'Без класса', UNCLASSIFIED: 'Не классиф.' };
+  I.PRODUCT_KIND = { irs: 'IRS', ccs: 'CCS', cds: 'CDS', trs: 'TRS', bond_future: 'BOND_FUT', bond_forward: 'BOND_FWD', fx_future: 'FX_FUT', fx_ndf: 'FX_FWD', equity: 'EQUITY', repo: 'REPO' };
   I.LEGACY_KIND = { IRS: 'IRS', XCCY: 'CCS', CDS: 'CDS' };
   I.DEMO_KIND = { IRS: 'IRS', KSW: 'IRS', BAS: 'IRS', FXF: 'FX_FWD', XCCY: 'CCS' };
   I.BOND_KIND = { 'GOV.PD': 'OFZ_PD', 'GOV.PK': 'OFZ_PK', 'GOV.IN': 'OFZ_IN', 'GOV.SOVFX': 'MINFIN_FX', 'CORP.FIX': 'CORP_FIX', 'CORP.FLT': 'CORP_FLT' };
@@ -78,11 +81,12 @@
     const pg = p.productGroup;
     if (pg && I.PRODUCT_KIND[pg]) return I.PRODUCT_KIND[pg];
     if (p.instrType && I.LEGACY_KIND[p.instrType]) return I.LEGACY_KIND[p.instrType];
+    if (p.group === 'MM') return p.kind === 'REPO' ? 'REPO' : 'UNCLASSIFIED';
     if (p.group === 'DER' || p.group === 'OTH') {
       if (I.DEMO_KIND[p.kind]) return I.DEMO_KIND[p.kind];
       if (p.kind === 'FX') return p.ocp ? 'OCP' : 'FX';
-      // OTC без группы продукта — DER, как api/concepts (#345); с незнакомой группой (repo, новая) — «Не классифицировано»:
-      // где показывать РЕПО, решает владелец (#361)
+      // OTC без группы продукта — DER, как api/concepts (#345); с незнакомой группой (новая) — «Не классифицировано»
+      // (известное расхождение с kindOf, #367); РЕПО — выше, по группе продукта (#361)
       if (p.kind === 'OTC' && !pg) return 'OTC';
       return 'UNCLASSIFIED';
     }
@@ -199,7 +203,7 @@
   if (!K || typeof document === 'undefined') return;
   const M = window.MOCK, f = K.f, esc = K.esc, h = K.h;
   const tint = (hex, a) => hex && hex[0] === '#' && hex.length === 7 ? hex + Math.round(a * 255).toString(16).padStart(2, '0') : 'transparent';
-  const KIND_COLOR = { OFZ_PD: 'PD', OFZ_PK: 'PK', OFZ_IN: 'IN', MINFIN_FX: 'SOVFX', CORP_FIX: 'FIX', CORP_FLT: 'FLT', IRS: 'IRS', CCS: 'XCCY', FX_FWD: 'FXF', FX: 'FX', OTC: 'OTC', UNCLASSIFIED: 'OTH', BOND_NA: 'OTH' };
+  const KIND_COLOR = { OFZ_PD: 'PD', OFZ_PK: 'PK', OFZ_IN: 'IN', MINFIN_FX: 'SOVFX', CORP_FIX: 'FIX', CORP_FLT: 'FLT', IRS: 'IRS', CCS: 'XCCY', FX_FWD: 'FXF', FX: 'FX', OTC: 'OTC', REPO: 'REPO', UNCLASSIFIED: 'OTH', BOND_NA: 'OTH' };
   I.color = kind => K.kindColor[KIND_COLOR[kind]] || K.PAL[I.order[kind] % K.PAL.length];
   const KEY = 'concepts-ccykind';
   I.state = { attribution: I.ATTRIBUTION_DEFAULT, units: 'own', measure: 'dv01', curve: null };

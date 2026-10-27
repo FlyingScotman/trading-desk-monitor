@@ -50,7 +50,7 @@ from ..marketdata import static_facts
 from ..marketdata.bundle import read_bundle
 from ..marketdata.history import RUB_SETTLEMENT, curve_rate, curve_rates_by_day, kbd, latest_market_day
 from ..publish import summary
-from ..publish.summary import CURVE_MAP, GOV_CLASSES, PNL, is_minfin, kind_of  # noqa: F401 - the pages' names
+from ..publish.summary import CURVE_MAP, GOV_CLASSES, PNL, is_minfin, kind_of, product_group  # noqa: F401 - the pages' names
 from ..scenario.carry import meetings
 from ..store import DEFAULT_RUNS
 
@@ -826,6 +826,7 @@ INSTR_KINDS: tuple[tuple[str, str, str], ...] = (
     ("FX_FUT", "DER", "Валютные фьючерсы"), ("FX_FWD", "DER", "FX форварды / NDF"),
     ("FX", "DER", "Валюта (спот, прочие FX)"), ("OCP", "DER", "Перенос ОВП"),
     ("OTC", "DER", "Внебиржевые без группы продукта"),
+    ("REPO", "MM", "РЕПО"),
     ("EQUITY", "OTH", "Акции"), ("BOND_NA", "OTH", "Облигации без класса (не сопоставлены)"),
     ("UNCLASSIFIED", "OTH", "Не классифицировано"),
 )
@@ -833,17 +834,20 @@ INSTR_KINDS: tuple[tuple[str, str, str], ...] = (
 classification: a bond by issuer type and coupon (``kind_of``, plus the static's class: subfederal / municipal,
 securitisation; the Russian Minfin's bonds by the issuer, ``summary.is_minfin``: in roubles the OFZ kinds, in a
 foreign currency ``MINFIN_FX`` -- its Eurobonds and replacement bonds, never a generic "sovereigns" kind, R39), a derivative or FX row by the adapter's product group (``PRODUCT_KIND``), else by the legacy tdm
-instrument type (``LEGACY_KIND``); an OTC row without any product group is ``OTC`` (DER, as ``kind_of``'s DER OTC,
-TDM#345), one with a group the table does not know (``repo``, a new one) stays ``UNCLASSIFIED`` (OTH; kind_of's DER OTC:
-a known difference, the owner decides where REPO goes, TDM#361); what none of them names is ``UNCLASSIFIED`` (shown, never dropped). The group is
+instrument type (``LEGACY_KIND``); a REPO (product group ``repo``, valued or not) is ``REPO`` in the group MM, money
+market and funding, as ``kind_of``'s MM REPO (the owner's decision in TDM#361: funding, not a derivative); an OTC row
+without any product group is ``OTC`` (DER, as ``kind_of``'s DER OTC, TDM#345), one with a group the table does not know
+(a new one) stays ``UNCLASSIFIED`` (OTH; kind_of's DER OTC: a known difference, ``tests/fixtures/instr_kinds.json``
+``knownMismatch``); what none of them names is ``UNCLASSIFIED`` (shown, never dropped). The group is
 ``kind_of``'s for every ``instr_type`` (``tests/fixtures/instr_kinds.json`` checks the three classifications: this,
 ``kind_of`` and ``lib/real.js`` / ``lib/instr.js``) but for an unmapped or unvalued bond (OTH, not CORP) and an OTC
-row with an unknown product group (TDM#361). A kind
+row with an unknown product group. A kind
 here may be named apart from ``kind_of``'s (``CCS`` is its ``XCCY``, ``CDS`` its ``OTC``): the table is finer."""
 KIND_GROUP = {k: g for k, g, _ in INSTR_KINDS}
 KIND_LABEL = {k: lab for k, _, lab in INSTR_KINDS}
 PRODUCT_KIND = {"irs": "IRS", "ccs": "CCS", "cds": "CDS", "trs": "TRS", "bond_future": "BOND_FUT",
-                "bond_forward": "BOND_FWD", "fx_future": "FX_FUT", "fx_ndf": "FX_FWD", "equity": "EQUITY"}
+                "bond_forward": "BOND_FWD", "fx_future": "FX_FUT", "fx_ndf": "FX_FWD", "equity": "EQUITY",
+                "repo": "REPO"}
 """The private adapter's ``x_product_group`` (``extra.reported.x``, ``product_group``) -> kind. ``bond`` and ``bond_custom`` are bonds:
 classified by the bond's own fields."""
 LEGACY_KIND = {"IRS": "IRS", "XCCY": "CCS", "CDS": "CDS"}
@@ -889,18 +893,7 @@ OFZ_VIEW_P = ("{n} OFZ or KBD floaters without a computed RUONIA risk (a run of 
               " their RUONIA risk is their KBD risk and the basis the same risk again (core basis_view, variant P)")
 MISSING_TEXT = {"not_valued": "не оценена", "reported_no_risk": "оценена по отчёту, риска в отчёте нет",
                 "no_risk": "риск не посчитан"}
-GROUPS = ("GOV", "SUB", "CORP", "DER", "OTH")
-
-
-def product_group(rep: Any) -> str | None:
-    """The report's ``x_product_group`` of a position: a valued fact keeps the report's ``x_*`` fields under
-    ``extra.reported.x`` (``publish.tdm_run.reported`` of the stored row), an unvalued one's row has them flat."""
-    if not isinstance(rep, dict):
-        return None
-    pg = rep.get("x_product_group")
-    if pg is None and isinstance(rep.get("x"), dict):
-        pg = rep["x"].get("x_product_group")
-    return pg
+GROUPS = ("GOV", "SUB", "CORP", "DER", "MM", "OTH")
 
 
 def instr_kind(f: dict[str, Any], gov_issuers: frozenset[str] | set[str] = frozenset()) -> str:
@@ -922,7 +915,7 @@ def instr_kind(f: dict[str, Any], gov_issuers: frozenset[str] | set[str] = froze
         ocp = f.get("ocp_transfer") or ex.get("ocp_transfer") or f.get("asset_class") == "Перенос ОВП"
         return "OCP" if ocp else "FX"
     if it == "OTC" and not pg:  # no product group at all: kind_of's DER OTC, not UNCLASSIFIED (TDM#345); a group the
-        return "OTC"  # table does not know (repo, a new one) stays UNCLASSIFIED: where REPO goes is the owner's (TDM#361)
+        return "OTC"  # table does not know (a new one) stays UNCLASSIFIED (repo is REPO above, TDM#361)
     if it not in ("BOND", None):
         return "UNCLASSIFIED"
     if f.get("asset_class") == "Не сопоставлено":

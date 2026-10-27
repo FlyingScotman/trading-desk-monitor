@@ -3,9 +3,10 @@
 ``lib/instr.js`` ``INSTR.kindOf`` agree on every ``instr_type``. The cases are shared with the JS side
 (``tests/fixtures/instr_kinds.json``, checked again by ``tests/js/instr_kinds.test.js``): the group of ``kind_of`` is the
 group of the table's kind (but for an unmapped bond: BOND_NA, OTH), an OTC row without any product group is DER
-(``kind_of``'s DER OTC, the table's ``OTC``), never UNCLASSIFIED in OTH. An OTC row with a product group the table
-does not know (``repo``, a new one) stays UNCLASSIFIED: a known difference with ``kind_of`` (``knownMismatch``) until
-the owner decides where REPO goes (TDM#361)."""
+(``kind_of``'s DER OTC, the table's ``OTC``), never UNCLASSIFIED in OTH. A REPO (product group ``repo``, valued or
+not) is ``REPO`` in the group MM, money market and funding, both ways (the owner's decision in TDM#361). An OTC row with
+a product group the table does not know (a new one) stays UNCLASSIFIED: a known difference with ``kind_of``
+(``knownMismatch``, TDM#367)."""
 import json
 from pathlib import Path
 
@@ -30,9 +31,10 @@ def test_the_three_classifications_agree(case):
     if case.get("bondNa"):  # an unmapped bond: OTH in the table, its issuer's group in kind_of
         assert group == "OTH" and case["kindOf"][0] == "CORP"
     elif case.get("knownMismatch"):
-        # an OTC row with a product group the table does not know (repo, a new one): UNCLASSIFIED in the table, DER OTC
-        # in kind_of -- a known difference until the owner decides where REPO goes (TDM#361)
-        assert case["knownMismatch"] == "#361" and fact["instr_type"] == "OTC"
+        # an OTC row with a product group the table does not know (a new one): UNCLASSIFIED in the table, DER OTC in
+        # kind_of -- a known difference (TDM#367); a REPO is not one (MM both ways, TDM#361)
+        assert case["knownMismatch"] == "#367" and fact["instr_type"] == "OTC"
+        assert concepts.product_group(fact["extra"]["reported"]) not in summary.MONEY_MARKET
         assert (case["table"], group, tuple(case["kindOf"])) == ("UNCLASSIFIED", "OTH", ("DER", "OTC"))
     else:
         assert group == case["kindOf"][0], "the table's group is kind_of's"
@@ -44,7 +46,12 @@ def test_every_instr_type_and_product_group_is_a_case():
     assert set(concepts.LEGACY_KIND) | set(summary.LEGACY_DER) | {"BOND", "FX", "OTC"} <= seen
     pgs = {concepts.product_group((c["fact"].get("extra") or {}).get("reported")) for c in CASES}
     assert set(concepts.PRODUCT_KIND) <= pgs
-    assert {c["table"] for c in CASES} >= {"OTC", "UNCLASSIFIED", "CCS", "BOND_NA"}
+    assert {c["table"] for c in CASES} >= {"OTC", "UNCLASSIFIED", "CCS", "BOND_NA", "REPO"}
+    # a REPO is money market and funding both ways, valued or not (TDM#361)
+    assert {c["table"] for c in CASES if c.get("unvalued") and "repo" in c["name"]} == {"REPO"}
+    for pg, kind in summary.MONEY_MARKET.items():
+        assert concepts.PRODUCT_KIND[pg] == kind and concepts.KIND_GROUP[kind] == "MM"
+        assert summary.kind_of({"instr_type": "OTC", "extra": {"reported": {"x_product_group": pg}}}) == ("MM", kind)
     # every legacy swap is in DER both ways (TDM#336), its kind named apart: XCCY is the table's CCS
     for it, kind in concepts.LEGACY_KIND.items():
         assert concepts.KIND_GROUP[kind] == "DER" == summary.kind_of({"instr_type": it})[0]

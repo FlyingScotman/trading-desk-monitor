@@ -427,7 +427,7 @@ class RiskTableRow(BaseModel):
     (group) or an instrument kind (kind). DV01 is the block currency's own curves only."""
     ccy: str
     level: Literal["ccy", "group", "kind"]
-    group: Literal["GOV", "SUB", "CORP", "DER", "OTH"] | None
+    group: Literal["GOV", "SUB", "CORP", "DER", "MM", "OTH"] | None
     kind: str | None
     label: str | None
     n_positions: int = Field(description="positions of this currency (by the attribution rule)")

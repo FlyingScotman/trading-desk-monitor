@@ -237,7 +237,7 @@
         C('poth', 'Прочее', p => val(p, 'other')),
         { key: 'share', label: 'Доля |итога|', num: true, val: p => Math.abs(val(p, 'other')) / (Math.abs(val(p, 'total')) || 1), fmt: v => Math.round(v * 100) + '%', style: v => K.heatMono(Math.min(v, 1), 1, '227,179,65'), title: '|прочее| / |итог позиции|' },
         { key: 'bar', label: '', val: p => val(p, 'other'), fmt: v => K.bar(v, Math.abs(val(ranked[0], 'other'))), w: '110px' },
-        { key: 'why', label: 'Вероятная причина', val: p => p.group === 'DER' ? 'фиксинг / MTM контрагента' : K.cpnType(p) === 'float' ? 'фиксинг индекса' : p.tradedToday ? 'сделки внутри дня' : (p.volumeDay || 0) < 3e8 ? 'неликвид: цена ≠ модель' : 'выпуклость / модель', fmt: v => '<span class="mut">' + esc(v) + '</span>' },
+        { key: 'why', label: 'Вероятная причина', val: p => M.deal(p) ? 'фиксинг / MTM контрагента' : K.cpnType(p) === 'float' ? 'фиксинг индекса' : p.tradedToday ? 'сделки внутри дня' : (p.volumeDay || 0) < 3e8 ? 'неликвид: цена ≠ модель' : 'выпуклость / модель', fmt: v => '<span class="mut">' + esc(v) + '</span>' },
       ]),
     });
   }

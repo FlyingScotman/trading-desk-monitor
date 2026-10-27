@@ -103,7 +103,7 @@
     basis01: { label: M.ofzView === 'kbd' ? 'DV01 КБД (ОФЗ)' : 'Базис ОФЗ01', unit: 'тыс ₽/бп', fmt: f.dv, sc: 1e3, kind: 'risk', parts: curveParts(['RUB OFZ']) },
     ofzSpr01: { label: 'Спред ОФЗ к КБД01', unit: 'тыс ₽/бп', fmt: f.dv, sc: 1e3, kind: 'risk', parts: p => (p.ofzSprb || []).map((v, k) => ({ curve: 'RUB OFZ', bucket: k, v })).filter(x => x.v) },
     cs01: { label: 'CS01', unit: 'тыс ₽/бп', fmt: f.dv, sc: 1e3, kind: 'risk', parts: p => p.cs01b.map((v, k) => ({ curve: 'CS01', bucket: k, v })).filter(x => x.v) },
-    mv: { label: 'MV облигаций', unit: 'mm ₽', fmt: v => f.mn(v, 0), sc: 1e6, kind: 'size', parts: one(p => p.group === 'DER' ? 0 : p.mv) },
+    mv: { label: 'MV облигаций', unit: 'mm ₽', fmt: v => f.mn(v, 0), sc: 1e6, kind: 'size', parts: one(p => M.deal(p) ? 0 : p.mv) },
     notional: { label: 'Номинал', unit: 'mm ₽', fmt: v => f.mn(v, 0), sc: 1e6, kind: 'size', parts: one(p => p.notionalRub) },
     carry: { label: 'Кэрри / день', unit: 'тыс ₽', fmt: f.k, sc: 1e3, kind: 'pnl', parts: one(p => p.carryDay) },  // без фондирования (#168)
     funding: { label: 'Фондирование / день', unit: 'тыс ₽', fmt: f.k, sc: 1e3, kind: 'pnl', parts: p => nulPart(p.fundingDay) },

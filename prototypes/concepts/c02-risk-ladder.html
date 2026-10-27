@@ -228,7 +228,7 @@
       const heat = st.metric === 'cs01' ? v => K.heatMono(v, max, '227,179,65') : v => K.heatRisk(v, max);
       // итоги и строки групп карты — без фона, с меткой K.HEAT_PLAIN: красный того же оттенка, что в ячейках (#265)
       const tn = '<td class="n" style="' + K.HEAT_PLAIN + '">', tm = '<td class="n mut" style="' + K.HEAT_PLAIN + '">';
-      const groups = ['DER', 'GOV', 'SUB', 'CORP', 'OTH'];
+      const groups = ['DER', 'MM', 'GOV', 'SUB', 'CORP', 'OTH'];
       const tot = M.buckets.map((_, k) => rows.reduce((s, r) => s + r.vals[k], 0)); let c = 0; const cum = tot.map(v => c += v);
       let html = '<table class="k-tbl" data-vk="c02-heat-' + ccy + '" data-title="Риск по типам и срокам, ' + ccy + '"><thead><tr><th>Тип · ' + METN[st.metric] + '</th>' + M.buckets.map(b => '<th class="n">' + b + '</th>').join('') + '<th class="n">Итого</th><th>Профиль</th></tr></thead><tbody>';
       groups.forEach(g => {
@@ -264,7 +264,7 @@
     const P = document.getElementById('iss'), bd = P.querySelector('.bd'), L = K.list();
     const val = (p, k) => issMet === 'cs01' ? p.cs01b[k] : ALLRATE.reduce((s, id) => s + p.risk[id][k], 0);
     const g = {};
-    L.filter(p => p.group !== 'DER').forEach(p => { (g[p.issuer] = g[p.issuer] || []).push(p); });
+    L.filter(p => !M.deal(p)).forEach(p => { (g[p.issuer] = g[p.issuer] || []).push(p); });
     let rows = Object.keys(g).map(id => { const list = g[id]; const vals = M.buckets.map((_, k) => list.reduce((s, p) => s + val(p, k), 0)); return { id, iss: M.issuer[id], list, vals, tot: sumArr(vals) }; })
       .filter(r => Math.abs(r.tot) > 100).sort((a, b) => Math.abs(b.tot) - Math.abs(a.tot));
     const n = rows.length; if (!issAll) rows = rows.slice(0, 18);

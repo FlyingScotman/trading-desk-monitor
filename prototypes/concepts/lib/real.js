@@ -16,7 +16,7 @@
  *    иначе только риск); прочие кривые риска — своими строками со своей валютой (CNY implied, прокси, CHF…);
  *  - FX-дельта — по валютам (p.fxDeltaBy = fx_delta {ccy}); p.fxDelta — только в валюте позиции; ноги FX-сделки —
  *    p.legs (extra.legs); DV01 и ОВП по валюте — «по ногам» (lib/instr.js: INSTR.dv01In / INSTR.fxIn);
- *  - тип: GOV PD/PK/IN/SOVFX (Минфин: в рублях ОФЗ, в валюте — «Минфин валютные», по эмитенту — R39), SUB FIX/FLT, CORP FIX/FLT, DER OTC/FX, OTH (api/concepts.kind_of); тип инструмента
+ *  - тип: GOV PD/PK/IN/SOVFX (Минфин: в рублях ОФЗ, в валюте — «Минфин валютные», по эмитенту — R39), SUB FIX/FLT, CORP FIX/FLT, DER OTC/FX, MM REPO (#361), OTH (api/concepts.kind_of); тип инструмента
  *    таблицы «валюта × тип» (ОФЗ-ПД, свопы, фьючерсы… по группе продукта отчёта) — lib/instr.js (api/concepts.instr_kind)
  *    из instrType, assetClass, segment, productGroup (x_product_group отчёта: M.productGroup) и fxDeltaBy позиции;
  *  - срок — до оферты или колла, по которым считается доходность, иначе до погашения;
@@ -210,9 +210,11 @@
   M.issuer = Object.fromEntries(M.issuers.map(i => [i.id, i]));
 
   // ---------- классификация ----------
-  M.groupLabel = { GOV: 'Гос', SUB: 'Суб', CORP: 'Корп', DER: 'Деривативы', OTH: 'Прочее' };
-  M.kindLabel = { PD: 'ОФЗ-ПД (фикс)', PK: 'ОФЗ-ПК (флоатер)', IN: 'ОФЗ-ИН (линкер)', SOVFX: 'Минфин валютные', FIX: 'Фикс', FLT: 'Флоатер', OTC: 'OTC (по отчёту)', FX: 'Валюта / FX', OTH: 'Прочее', IRS: 'IRS / OIS', KSW: 'Своп на КС', BAS: 'Базис КС/RUONIA', FXF: 'FX форвард', XCCY: 'XCCY' };
-  M.kindShort = { PD: 'ПД', PK: 'ПК', IN: 'ИН', SOVFX: 'Минфин вал.', FIX: 'Фикс', FLT: 'Флоат', OTC: 'OTC', FX: 'FX', OTH: 'Пр', IRS: 'IRS', KSW: 'КС-своп', BAS: 'Базис', FXF: 'FX fwd', XCCY: 'XCCY' };
+  M.groupLabel = { GOV: 'Гос', SUB: 'Суб', CORP: 'Корп', DER: 'Деривативы', MM: 'Денежный рынок', OTH: 'Прочее' };
+  // сделка, а не бумага (деривативы и FX, РЕПО): размер — номинал, MV облигаций и потоки бумаг её не считают (#361)
+  M.deal = p => p.group === 'DER' || p.group === 'MM';
+  M.kindLabel = { PD: 'ОФЗ-ПД (фикс)', PK: 'ОФЗ-ПК (флоатер)', IN: 'ОФЗ-ИН (линкер)', SOVFX: 'Минфин валютные', FIX: 'Фикс', FLT: 'Флоатер', OTC: 'OTC (по отчёту)', FX: 'Валюта / FX', OTH: 'Прочее', IRS: 'IRS / OIS', KSW: 'Своп на КС', BAS: 'Базис КС/RUONIA', FXF: 'FX форвард', XCCY: 'XCCY', REPO: 'РЕПО' };
+  M.kindShort = { PD: 'ПД', PK: 'ПК', IN: 'ИН', SOVFX: 'Минфин вал.', FIX: 'Фикс', FLT: 'Флоат', OTC: 'OTC', FX: 'FX', OTH: 'Пр', IRS: 'IRS', KSW: 'КС-своп', BAS: 'Базис', FXF: 'FX fwd', XCCY: 'XCCY', REPO: 'РЕПО' };
   M.typeRows = [
     { id: 'GOV.PD', group: 'GOV', kind: 'PD', label: 'ОФЗ-ПД' }, { id: 'GOV.PK', group: 'GOV', kind: 'PK', label: 'ОФЗ-ПК (флоатеры)' },
     { id: 'GOV.IN', group: 'GOV', kind: 'IN', label: 'ОФЗ-ИН' }, { id: 'GOV.SOVFX', group: 'GOV', kind: 'SOVFX', label: 'Минфин валютные (евробонды, замещающие)' },
@@ -220,7 +222,7 @@
     { id: 'CORP.FIX', group: 'CORP', kind: 'FIX', label: 'Корп. фикс' }, { id: 'CORP.FLT', group: 'CORP', kind: 'FLT', label: 'Корп. флоатеры' },
     { id: 'DER.IRS', group: 'DER', kind: 'IRS', label: 'IRS / OIS' }, { id: 'DER.XCCY', group: 'DER', kind: 'XCCY', label: 'XCCY' },
     { id: 'DER.OTC', group: 'DER', kind: 'OTC', label: 'OTC-деривативы (по отчёту)' }, { id: 'DER.FX', group: 'DER', kind: 'FX', label: 'Валюта / FX' },
-    { id: 'OTH.OTH', group: 'OTH', kind: 'OTH', label: 'Прочее' },
+    { id: 'MM.REPO', group: 'MM', kind: 'REPO', label: 'РЕПО' }, { id: 'OTH.OTH', group: 'OTH', kind: 'OTH', label: 'Прочее' },
   ];
   const GOV = { 'ОФЗ-ПД': 'PD', 'ОФЗ-АД': 'PD', 'ОФЗ-ПК': 'PK', 'ОФЗ-ИН': 'IN' };
   // бумаги Минфина России (R39, api/concepts.is_minfin): по эмитенту, не по списку ISIN — флаг эмитента в справочнике
@@ -234,7 +236,12 @@
   M.productGroup = rep => !rep || typeof rep !== 'object' ? null : rep.x_product_group || (rep.x && typeof rep.x === 'object' ? rep.x.x_product_group : null) || null;
   // свопы старого tdm (instrType IRS / XCCY / CDS) — деривативы, как в api/concepts (LEGACY_KIND → группа DER), не «Прочее» (#336)
   const LEGACY_DER = { IRS: 'IRS', XCCY: 'XCCY', CDS: 'OTC' };
+  // РЕПО — денежный рынок и фондирование (MM), не дериватив (решение владельца, #361; summary.MONEY_MARKET): OTC-строка
+  // с группой продукта repo и не оценённое РЕПО (строка отчёта, instrType нет)
+  const MONEY_MARKET = { repo: 'REPO' };
   function kindOf(p) {  // api/concepts.kind_of
+    const mm = (p.instrType === 'OTC' || (!p.instrType && p.segment)) && MONEY_MARKET[M.productGroup((p.extra || {}).reported)];
+    if (mm) return ['MM', mm];
     if (p.instrType === 'FX') return ['DER', 'FX'];
     if (p.instrType === 'OTC') return ['DER', 'OTC'];
     if (LEGACY_DER[p.instrType]) return ['DER', LEGACY_DER[p.instrType]];
@@ -316,7 +323,7 @@
   }
   const positions = D.positions.map(d => {
     const [group, kind] = kindOf(d), ex = d.extra || {}, q = ex.quote || {}, xp = XP[d.id] || {};
-    const isBond = group !== 'DER' && group !== 'OTH';
+    const isBond = group !== 'DER' && group !== 'MM' && group !== 'OTH';
     const p = {
       id: d.id, isin: d.isin || null, exchName: d.name || d.id, issuer: d.issuer || null, group, kind, ccy: d.ccy || 'RUB', book: d.book,
       maturity: d.maturity || null, notional: num(d.notional) || 0, notionalRub: num(d.notionalRub) || 0, spreadBp: num(d.spreadBp),
@@ -508,8 +515,8 @@
     dv01: series(H.dv01, M.curves.map(c => c.id), id => sumBy(p => p.dv01ByCurve[id])),
     cs01: H.cs01 ? H.cs01.slice() : new Array(n).fill(0),
     dv01Book: series(H.dv01Book, M.books.map(b => b.id), id => sumBy(p => p.book === id ? p.dv01 : 0)),
-    mvType: series(H.mvType, M.typeRows.map(t => t.id), id => sumBy(p => p.group + '.' + p.kind === id ? (p.group === 'DER' ? Math.abs(p.notionalRub) : p.mv) : 0)),
-    mvCcy: series(H.mvCcy, M.ccys, c => sumBy(p => p.ccy === c && p.group !== 'DER' ? p.mv : 0)),
+    mvType: series(H.mvType, M.typeRows.map(t => t.id), id => sumBy(p => p.group + '.' + p.kind === id ? (M.deal(p) ? Math.abs(p.notionalRub) : p.mv) : 0)),
+    mvCcy: series(H.mvCcy, M.ccys, c => sumBy(p => p.ccy === c && !M.deal(p) ? p.mv : 0)),
     // сегодня без истории: фактор, не посчитанный ни у одной позиции, — null, а не 0 (#327, B1)
     pnl: series(H.pnl, ['carry', 'funding', 'rates', 'spread', 'fx', 'trading', 'other', 'total'], k => positions.some(p => p.pnl[k] != null) ? sumBy(p => p.pnl[k]) : null),
   };
@@ -556,7 +563,7 @@
     const p = M.pos[id], s = histCache[id];
     if (!s || !s.dates.length) {
       const c = {}; Object.keys(p.dv01ByCurve).forEach(id => { if (p.dv01ByCurve[id] && (id !== 'RUB OFZ' || M.ofzView === 'kbd')) c[id] = [p.dv01ByCurve[id]]; });  // ОФЗ-ИН: basis01 = 0
-      return { dates: [M.asOf], price: [p.price], ytm: [p.ytm], spr: [p.zspread], notional: [p.notional], dv01: [p.dv01], cs01: [p.cs01], basis: [p.basis01], mv: [p.group === 'DER' ? Math.abs(p.notionalRub) : p.mv], curves: c, bench: [p.ccy === 'RUB' ? curveAt('OFZ', p.tenor) : null], fromRuns: true };
+      return { dates: [M.asOf], price: [p.price], ytm: [p.ytm], spr: [p.zspread], notional: [p.notional], dv01: [p.dv01], cs01: [p.cs01], basis: [p.basis01], mv: [M.deal(p) ? Math.abs(p.notionalRub) : p.mv], curves: c, bench: [p.ccy === 'RUB' ? curveAt('OFZ', p.tenor) : null], fromRuns: true };
     }
     return conv(s, null, id);
   };
@@ -711,11 +718,11 @@
   M.kpis = function (list) {
     list = list || positions;
     const S = f => M.sum(list, f);
-    const k = { dv01: S('dv01'), cs01: S('cs01'), basis01: S('basis01'), ofzSpr01: S('ofzSpr01'), mvBonds: S(p => p.group === 'DER' ? 0 : p.mv), pnl: S(p => p.pnl.total), carryDay: S('carryDay'), fundingDay: S('fundingDay'),
+    const k = { dv01: S('dv01'), cs01: S('cs01'), basis01: S('basis01'), ofzSpr01: S('ofzSpr01'), mvBonds: S(p => M.deal(p) ? 0 : p.mv), pnl: S(p => p.pnl.total), carryDay: S('carryDay'), fundingDay: S('fundingDay'),
       pnlMtd: S('pnlMtd'), pnlYtd: S('pnlYtd'), byCcy: {}, byCurve: {} };
     // по ногам (lib/instr.js): DV01 — по валюте кривой, FX-дельта — по своей валюте; MV — в валюте позиции
     const I = window.INSTR;
-    M.ccys.forEach(c => k.byCcy[c] = { dv01: S(p => I.dv01In(p, c)), mv: S(p => p.ccy === c && p.group !== 'DER' ? p.mv : 0), fxDelta: S(p => I.fxIn(p, c)) });
+    M.ccys.forEach(c => k.byCcy[c] = { dv01: S(p => I.dv01In(p, c)), mv: S(p => p.ccy === c && !M.deal(p) ? p.mv : 0), fxDelta: S(p => I.fxIn(p, c)) });
     M.curves.forEach(c => k.byCurve[c.id] = S(p => p.dv01ByCurve[c.id]));
     return k;
   };

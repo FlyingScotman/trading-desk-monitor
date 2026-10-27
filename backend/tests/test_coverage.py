@@ -26,7 +26,7 @@ ROWS = [
     {"position_id": "D|BF", "asset_class": "otc", "source_instrument_id": "BF-1", "ccy": "RUB", "amount_ccy": "10",
      "x_product_group": "bond_future", "x_product": "FutureBond"},
     {"position_id": "D|REPO", "asset_class": "other", "source_instrument_id": "R-1", "ccy": "RUB",
-     "amount_ccy": "25000000", "x_product": "RepoTerm"},
+     "amount_ccy": "25000000", "x_product_group": "repo", "x_product": "RepoTerm"},  # REPO (MM), TDM#361
     {"position_id": "D|OMR", "asset_class": "otc", "source_instrument_id": "O-1", "ccy": "OMR", "amount_ccy": "1000"},
     {"position_id": "D|XS", "asset_class": "bond", "source_instrument_id": "XS999", "isin": "XS0000000999",
      "ccy": "RUB"},  # an ISIN the static does not know, no MV: not valued
@@ -68,7 +68,8 @@ def test_unvalued_by_cause_and_kind(published):
     assert swaps["reasons"] == {"no_reported_value": 2} and "report_risk" in swaps["todo"]
     assert g["closed|IRS"]["closed"] and g["closed|IRS"]["ids"] == ["D|IRS0"] and u["groups"][-1]["closed"]
     assert g["bond_derivative|BOND_FUT"]["n"] == 1
-    assert g["repo|UNCLASSIFIED"]["why"].startswith("РЕПО") and g["repo|UNCLASSIFIED"]["notionalRub"] == pytest.approx(25e6)
+    assert g["repo|REPO"]["why"].startswith("РЕПО") and g["repo|REPO"]["notionalRub"] == pytest.approx(25e6)
+    assert g["repo|REPO"]["kindLabel"] == "РЕПО"
     assert g["unmapped_instrument|BOND_NA"]["ids"] == ["D|XS"] and "ISIN" in g["unmapped_instrument|BOND_NA"]["todo"]
     omr = g["no_report_mv|OTC"]  # an OTC row without a product group: DER OTC (TDM#345)
     assert omr["ids"] == ["D|OMR"] and omr["noRate"] == [] and u["fxMissing"] == []  # the CBR rate is in the run now

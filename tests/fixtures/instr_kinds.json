@@ -3,10 +3,12 @@
   "Три классификации вида инструмента сверяются на этих случаях (TDM#345): api/concepts.instr_kind (table),",
   "publish/summary.kind_of (kindOf: [группа, вид]), lib/real.js kindOf и lib/instr.js INSTR.kindOf (row: позиция в форме",
   "сервера /concepts-run.js). Группа kindOf равна группе типа таблицы, кроме облигации без класса (bondNa: OTH, не CORP)",
-  "и OTC с группой продукта, которой таблица не знает (knownMismatch: #361, где показывать РЕПО, решает владелец):",
-  "таблица — UNCLASSIFIED (OTH), kind_of — DER.OTC. OTC без группы продукта (нет или пустая) — тип OTC (DER).",
+  "и OTC с группой продукта, которой таблица не знает (knownMismatch: #367): таблица — UNCLASSIFIED (OTH), kind_of — DER.OTC.",
+  "OTC без группы продукта (нет или пустая) — тип OTC (DER). РЕПО (группа продукта repo, оценённое или нет) — тип REPO",
+  "в группе MM «Денежный рынок и фондирование», kind_of — MM.REPO (решение владельца, TDM#361).",
   "Вид таблицы подробнее вида kind_of: CCS таблицы это XCCY kind_of; CDS и OTC с группой продукта это его OTC.",
-  "У не оценённой позиции (unvalued) kind_of нет: fact это строка отчёта, row это то, что отдаёт сервер (concepts_run._not_valued).",
+  "У не оценённой позиции (unvalued) kind_of нет: fact это строка отчёта, row это то, что отдаёт сервер (concepts_run._not_valued);",
+  "группа lib/real.js kindOf у неё — группа типа таблицы (кроме облигации).",
   "instrTypes: полный список instr_type, каждый должен встретиться в cases.",
   "Сверяют backend/tests/test_instr_kinds.py и tests/js/instr_kinds.test.js."
  ],
@@ -455,7 +457,7 @@
    "table": "OTC"
   },
   {
-   "name": "OTC, группа продукта таблице неизвестна: repo",
+   "name": "OTC, группа продукта repo (РЕПО)",
    "fact": {
     "instr_type": "OTC",
     "segment": "Деривативы",
@@ -484,11 +486,10 @@
     }
    },
    "kindOf": [
-    "DER",
-    "OTC"
+    "MM",
+    "REPO"
    ],
-   "table": "UNCLASSIFIED",
-   "knownMismatch": "#361"
+   "table": "REPO"
   },
   {
    "name": "OTC, группа продукта таблице неизвестна: new",
@@ -524,7 +525,7 @@
     "OTC"
    ],
    "table": "UNCLASSIFIED",
-   "knownMismatch": "#361"
+   "knownMismatch": "#367"
   },
   {
    "name": "OTC, группа продукта irs",
@@ -945,7 +946,40 @@
     }
    },
    "kindOf": null,
-   "table": "UNCLASSIFIED",
+   "table": "REPO",
+   "unvalued": true
+  },
+  {
+   "name": "не оценена: прочее, группа продукта repo",
+   "fact": {
+    "ccy": "RUB",
+    "asset_class": "other",
+    "extra": {
+     "reported": {
+      "asset_class": "other",
+      "x": {
+       "x_product_group": "repo"
+      }
+     }
+    }
+   },
+   "row": {
+    "assetClass": "Прочее",
+    "segment": "Прочее",
+    "instrType": null,
+    "ccy": "RUB",
+    "notValued": true,
+    "extra": {
+     "reported": {
+      "asset_class": "other",
+      "x": {
+       "x_product_group": "repo"
+      }
+     }
+    }
+   },
+   "kindOf": null,
+   "table": "REPO",
    "unvalued": true
   },
   {
