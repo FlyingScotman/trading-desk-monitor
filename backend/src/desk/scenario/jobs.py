@@ -31,9 +31,12 @@ def _cur(con: psycopg.Connection) -> psycopg.Cursor:
     return con.cursor(row_factory=dict_row)
 
 
-def submit(con: psycopg.Connection, base_run_id: int, definition: Mapping[str, Any]) -> tuple[dict, bool]:
-    """(job row with "result", created). Raises LookupError when the run is missing, ValueError when it is
-    not complete or the definition is invalid for it (DefinitionError)."""
+def submit(con: psycopg.Connection, base_run_id: int, definition: Mapping[str, Any], *,
+           retry_failed: bool = True) -> tuple[dict, bool]:
+    """(job row with "result", created). ``retry_failed`` False: a definition whose job failed on the run is not
+    queued again (the failed job is returned), so a scenario failing on its inputs runs once, not every cycle
+    (``submit_all``). Raises LookupError when the run is missing, ValueError when it is not complete or the definition
+    is invalid for it (DefinitionError)."""
     cur = _cur(con)
     run = cur.execute("SELECT status FROM run WHERE run_id = %s", (base_run_id,)).fetchone()
     if run is None:
@@ -44,6 +47,13 @@ def submit(con: psycopg.Connection, base_run_id: int, definition: Mapping[str, A
                       (base_run_id,)).fetchone()
     norm = normalize(definition, [c["curve_id"] for c in ref["data"]] if ref else [])
     h = definition_hash(norm)
+    if not retry_failed and (failed := cur.execute(
+            JOB_SQL + " WHERE j.base_run_id = %s AND j.definition_hash = %s AND j.method = %s AND j.core_version = %s"
+            " AND j.status = 'failed' ORDER BY j.job_id DESC LIMIT 1", (base_run_id, h, METHOD, CORE_VERSION)).fetchone()):
+        live = cur.execute(JOB_SQL + " WHERE j.base_run_id = %s AND j.definition_hash = %s AND j.method = %s"
+                           " AND j.core_version = %s AND j.status <> 'failed'",
+                           (base_run_id, h, METHOD, CORE_VERSION)).fetchone()
+        return live or failed, False
     for _ in range(2):  # the live job can fail between the conflict and the read: then insert again
         job = cur.execute(
             "INSERT INTO scenario_job (base_run_id, definition_hash, definition, method, core_version)"
@@ -81,16 +91,19 @@ def submit_all(con: psycopg.Connection, base_run_id: int) -> dict[str, Any]:
     when a page opens. ``submit`` keeps one job per run and definition, so a second call queues only the scenarios
     added or changed since. Returns ``queued`` (scenario IDs with a new job), ``reused`` (the count of those with a
     live or done job) and ``invalid`` (scenario ID -> why it cannot be repriced on this run, e.g. a curve the run does
-    not publish). Raises LookupError when the run is missing."""
-    out: dict[str, Any] = {"queued": [], "reused": 0, "invalid": {}}
+    not publish) and ``failed`` (scenario IDs whose job failed on this run: not queued again, the job's own POST
+    retries it). Raises LookupError when the run is missing."""
+    out: dict[str, Any] = {"queued": [], "reused": 0, "invalid": {}, "failed": []}
     for d in active_defs(con):
         try:
-            _, created = submit(con, base_run_id, d["definition"])
+            job, created = submit(con, base_run_id, d["definition"], retry_failed=False)
         except ValueError as e:  # DefinitionError, or a run that is not complete
             out["invalid"][d["scenario_id"]] = str(e)
             continue
         if created:
             out["queued"].append(d["scenario_id"])
+        elif job["status"] == "failed":
+            out["failed"].append(d["scenario_id"])
         else:
             out["reused"] += 1
     return out

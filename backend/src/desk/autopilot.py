@@ -64,7 +64,8 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    the ``intraday`` setting does not turn it off. Its status carries a ``reason`` (``MORNING_REASONS``).
 5. **scenarios** (TDM#71): the exact repricing of every active scenario (presets, historical, the desk's own) on
    the newest default run, queued for the scenario worker of ``desk serve`` (``scenario.jobs.submit_all``): one job
-   per run and definition, so a cycle without a new default run or scenario queues nothing. The presets' comparison
+   per run and definition, so a cycle without a new default run or scenario queues nothing; a job that failed on the
+   run is not queued again (a scenario failing on its inputs runs once, not every cycle; a POST of it retries). The presets' comparison
    reads them (``GET /api/v1/runs/{run_id}/scenario-results``). A scenario the run cannot reprice (a curve it does not
    publish) is named in the detail; it is no error of the cycle.
 6. **history** (with the hub and ``history_days`` > 0): market history older than the cache for the bond charts,
@@ -787,6 +788,8 @@ class Autopilot:
         rid, day = latest
         rep = scenario_jobs.submit_all(con, rid)
         detail = f"run {rid} ({day}): {len(rep['queued'])} queued, {rep['reused']} already queued or done"
+        if rep["failed"]:  # failed on this run before: not queued again every cycle (the page's POST retries it)
+            detail += f"; failed before, not retried: {', '.join(rep['failed'])}"
         if rep["invalid"]:
             detail += "; not repriced: " + "; ".join(f"{k}: {v}" for k, v in rep["invalid"].items())
         return "ok", detail

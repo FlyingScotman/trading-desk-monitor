@@ -126,7 +126,7 @@ def test_every_active_scenario_queued_once_per_run_and_its_results(store_url, bo
         assert first["queued"] == PRESETS and first["reused"] == 0
         assert list(first["invalid"]) == ["cnyonly"] and "not published by the run" in first["invalid"]["cnyonly"]
         again = jobs.submit_all(con, rid)
-        assert again == {"queued": [], "reused": len(PRESETS), "invalid": first["invalid"]}
+        assert again == {"queued": [], "reused": len(PRESETS), "invalid": first["invalid"], "failed": []}
         status, detail = Autopilot(settings_loader=lambda: None)._scenarios(con)  # the cycle's step: nothing new
         assert status == "ok" and detail.startswith(f"run {rid} (") and f"0 queued, {len(PRESETS)} already" in detail
         assert "not repriced: cnyonly: " in detail
@@ -148,16 +148,30 @@ def test_every_active_scenario_queued_once_per_run_and_its_results(store_url, bo
     assert_error(client.get("/api/v1/runs/999999/scenario-results"), 404, "not_found")
 
 
-def test_scenario_results_prefer_a_live_job_to_a_failed_one(store_url, book, client):
+def test_a_failed_scenario_is_not_queued_again_by_the_cycle(store_url, book, client):
+    """A scenario failing on the run runs once, not every cycle (review of #370): ``submit_all`` leaves it failed and
+    the autopilot's step names it; a POST of it retries, and the run's results then show the live job."""
     rid = run(store_url, book)
     par = client.get("/api/v1/scenario-defs").json()["scenarios"][0]
     with store.connect(store_url) as con:
         job, _ = jobs.submit(con, rid, par["definition"])
         assert jobs.run_once(con, SnapshotDir(FIX / "nothing-here")) == job["job_id"]  # failed: no snapshots
-        assert jobs.submit_all(con, rid)["queued"] == PRESETS  # the failed one queued again
+        rep = jobs.submit_all(con, rid)
+        assert rep["queued"] == PRESETS[1:] and rep["failed"] == [par["scenario_id"]]
+        n = con.execute("SELECT count(*) FROM scenario_job").fetchone()[0]
+        status, detail = Autopilot(settings_loader=lambda: None)._scenarios(con)
+        assert status == "ok" and f"failed before, not retried: {par['scenario_id']}" in detail
+        assert jobs.submit_all(con, rid)["failed"] == [par["scenario_id"]]
+        assert con.execute("SELECT count(*) FROM scenario_job").fetchone()[0] == n  # no new row
+    res = {s["scenario_id"]: s["job"] for s in client.get(f"/api/v1/runs/{rid}/scenario-results").json()["scenarios"]}
+    assert res[par["scenario_id"]]["status"] == "failed" and res[par["scenario_id"]]["job_id"] == job["job_id"]
+    r = client.post("/api/v1/scenario-jobs", json={"base_run_id": rid, "definition": par["definition"]})
+    assert r.status_code == 202 and r.json()["job_id"] > job["job_id"]  # the page's POST retries
+    with store.connect(store_url) as con:  # the live job now: the cycle reuses it
+        assert jobs.submit_all(con, rid)["failed"] == []
     got = next(s for s in client.get(f"/api/v1/runs/{rid}/scenario-results").json()["scenarios"]
                if s["scenario_id"] == par["scenario_id"])["job"]
-    assert got["status"] == "queued" and got["job_id"] > job["job_id"]
+    assert got["status"] == "queued" and got["job_id"] == r.json()["job_id"]  # live before failed
 
 
 def test_worker_runs_jobs_and_fails_orphans(store_url, book, client):
