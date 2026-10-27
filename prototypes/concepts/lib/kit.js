@@ -160,8 +160,39 @@
   // значение столбца водопада в подсказке, mm: без порога, от 1 mm — два знака, меньше — три
   K.wfTip = v => { if (v == null || !isFinite(v)) return '—'; const x = v / 1e6; return sgn(x, Math.abs(x) >= 0.95 ? 2 : 3); };  // не посчитано — «—» (#327)
   // столбец водопада без значения (#327): «—» на уровне нарастающего итога, вместо прямоугольника
-  // признак неполноты суммы (M.sumX, #327): посчитано не у всех позиций — «не посчитано у N из M позиций»
-  K.missNote = x => x && x.miss && x.n ? ' <span class="mut3">· не посчитано у ' + x.miss + ' из ' + (x.n + x.miss) + ' поз.</span>' : '';
+  // ---------- неполный итог (#335, решение владельца 27.10 — вариант «а») ----------
+  // Итог, посчитанный не у всех слагаемых, — число (сумма посчитанных) с пометкой «· без N из M поз.»; какие позиции
+  // не посчитаны — в подсказке пометки. Не посчитано ни одно (N = M) — «—», как и раньше (B1). Отдельное значение
+  // «не посчитано» — null и «—» (B1 не меняется). x — признак неполноты {v, n, miss, missed}: M.sumX (список или
+  // строки {p, v}), K.groupSum (итоги таблиц). Пометка — span.k-part: K.kpi переносит её под цифру, K.tableCsv
+  // выгружает число без неё, а пометку — отдельной колонкой «Неполный итог»
+  K.PART_NAMES = 12;  // сколько позиций назвать в подсказке, остальные — «и ещё K»
+  K.isPartial = x => !!(x && x.n > 0 && x.miss > 0);
+  K.partText = x => K.isPartial(x) ? 'без ' + x.miss + ' из ' + (x.n + x.miss) + ' поз.' : '';
+  const partName = x => { const p = x && x.p && typeof x.p === 'object' ? x.p : x; return p ? String(p.name || p.secid || p.id || '') : ''; };
+  K.partTip = x => {
+    if (!K.isPartial(x)) return '';
+    const names = [...new Set((x.missed || []).map(partName).filter(Boolean))], m = K.PART_NAMES;
+    return 'Итог по ' + x.n + ' поз. из ' + (x.n + x.miss) + '; не посчитано у ' + x.miss + (names.length ? ': ' + names.slice(0, m).join(', ') + (names.length > m ? ' и ещё ' + (names.length - m) : '') : '');
+  };
+  K.partNote = x => K.isPartial(x) ? ' <span class="k-part" title="' + esc(K.partTip(x)) + '">· ' + K.partText(x) + '</span>' : '';
+  // та же пометка в подсказке графика (ECharts, водопад): строкой ниже и список позиций
+  K.missNote = x => K.isPartial(x) ? '<br><span style="opacity:.75">· ' + K.partText(x) + '</span><br><span style="opacity:.75;font-size:11px;white-space:normal">' + esc(K.partTip(x)) + '</span>' : '';
+  // пометка в разметке (span.k-part, без вложенных тегов): вырезать — CSV, перенести под цифру — K.kpi
+  K.PART_RE = /\s*<span class="k-part"[\s\S]*?<\/span>/g;
+  K.partStrip = html => String(html == null ? '' : html).replace(K.PART_RE, '');
+  // «Итого» водопада PnL (#335): известный итог — сумма посчитанных итогов позиций (totX = M.sumX по итогу), а не сумма
+  // факторов. Часть итога, которую факторы не объясняют (у позиции итог есть, а разложения по факторам нет — C10 MTD,
+  // #332), — отдельный столбец «Не разложено» = итог − сумма факторов (от K.WF_UNEXP_MIN в валюте отчёта, иначе его
+  // нет). Итога нет ни у одной позиции — «Итого» = сумма факторов, как раньше; нет и факторов — null («—»)
+  K.WF_UNEXP_MIN = 500;
+  K.WF_UNEXP = 'Не разложено';
+  K.wfTotals = (vals, totX) => {
+    const any = vals.some(v => v != null), fs = vals.reduce((s, v) => s + (v || 0), 0);
+    if (!totX || totX.v == null) return { total: any ? fs : null, unexp: null };
+    const u = totX.v - fs;
+    return { total: totX.v, unexp: Math.abs(u) >= K.WF_UNEXP_MIN ? u : null };
+  };
   K.wfNull = (api, i, y, fill) => { const a = api.coord([i, y]); return { type: 'text', style: { x: a[0], y: a[1] - 4, text: '—', fill, fontSize: 11, align: 'center', verticalAlign: 'bottom' } }; };
   // заседание ЦБ одной фразой: консенсус и ожидание кривой, если они есть в данных, иначе ставка и прошлое решение
   K.cbrLine = () => {
@@ -1254,14 +1285,16 @@
   K.d = function (spec, text, cls) {
     // spec.nullable (#168, фондирование): ни одно значение не посчитано (все null) — «—», а не 0
     if (spec.nullable && text == null && (spec.rows ? spec.rows.every(r => r.v == null) : spec.list && spec.list.every(p => (typeof spec.val === 'function' ? spec.val(p) : p[spec.val]) == null)))
-      return '<span class="mut3" title="не посчитано">—</span>';
+      return '<span class="mut3" title="не посчитано">—</span>' + (spec.suffix || '');
     const id = reg.push(spec) - 1;
-    const v = spec.v != null ? spec.v : spec.rows ? M.sum(spec.rows, 'v') : (spec.list ? M.sum(spec.list, spec.val) : null);
+    const x = spec.v != null ? null : spec.rows ? M.sumX(spec.rows, 'v') : (spec.list ? M.sumX(spec.list, spec.val) : null);
+    const v = spec.v != null ? spec.v : x ? x.v : null;
     // сумма по строкам или списку, где ни одно значение не посчитано (M.sum → null, #327, #333), — «—», а не 0
-    // (разбор по щелчку остаётся); посчитана часть — сумма посчитанных, как раньше
+    // (разбор по щелчку остаётся); посчитана часть — сумма посчитанных и пометка «· без N из M поз.» (#335) после
+    // spec.suffix (единица: «12.3 mm ₽ · без 3 из 30 поз.»); spec.part === false — без пометки (её ставит вызывающий)
     if (text == null && v == null && (spec.rows || spec.list || []).length) text = '<span class="mut3" title="не посчитано">—</span>';
     const t = text != null ? text : (spec.fmt || f.dv)(v);
-    return '<span class="dr ' + (cls != null ? cls : (spec.color === false ? '' : f.cls(v))) + '" data-dr="' + id + '">' + t + '</span>';
+    return '<span class="dr ' + (cls != null ? cls : (spec.color === false ? '' : f.cls(v))) + '" data-dr="' + id + '">' + t + '</span>' + (spec.suffix || '') + (spec.part === false ? '' : K.partNote(x));
   };
   document.addEventListener('click', e => {
     const t = e.target.closest('[data-dr]');
@@ -1314,9 +1347,10 @@
     const all = spec.rows || spec.list.map(p => ({ p, v: typeof spec.val === 'function' ? spec.val(p) : p[spec.val] }));
     const rows = all.filter(r => r.v && Math.abs(r.v) > 1e-9);
     // ни одно значение не посчитано (все null, #333, B1) — итог «—», а не 0
-    const tot = all.length && M.sum(all, 'v') == null ? null : rows.reduce((s, r) => s + r.v, 0);
+    const allX = M.sumX(all, 'v'), tot = all.length && allX.v == null ? null : rows.reduce((s, r) => s + r.v, 0);
     const fmtTot = v => v == null ? '<span class="mut3" title="не посчитано">—</span>' : fmt(v);
-    o.el.querySelector('.t').innerHTML = esc(spec.title) + ' <span class="' + f.cls(tot) + '">' + fmtTot(tot) + '</span> <span class="mut" style="font-size:12px;font-weight:400">' + esc(spec.unit || '') + '</span>';
+    // посчитано не у всех — пометка «без N из M поз.» (#335)
+    o.el.querySelector('.t').innerHTML = esc(spec.title) + ' <span class="' + f.cls(tot) + '">' + fmtTot(tot) + '</span> <span class="mut" style="font-size:12px;font-weight:400">' + esc(spec.unit || '') + '</span>' + K.partNote(allX);
     o.el.querySelector('.st').textContent = rows.length + ' позиций дают вклад' + (spec.note ? ' · ' + spec.note : '');
     let dim = spec.dim || 'pos', q = '', view = 'table';
     const tools = h('div', '', ''); tools.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px';
@@ -1480,15 +1514,23 @@
 
   // ---------- сортировка строк и групп (R31) ----------
   // итог группы или таблицы по столбцу: сумма посчитанных слагаемых sum(r); ни одно не посчитано (все null, #333, B1)
-  // или у столбца nullable все значения nul(r) пусты (#168) — null, на экране «—». Слагаемое NaN — «итог не посчитан»
-  // (C17, CARRY.colSum: нетто позиции без фондирования, строгое B1) — тоже null при любых остальных. Один расчёт для
-  // ячейки итога (K.table, C03) и сортировки групп (K.groupKeys, #347)
-  K.groupTotal = (list, sum, nul) => {
-    if (nul && list.every(r => nul(r) == null)) return null;
-    let t = 0, n = 0;
-    for (const r of list) { const v = sum(r); if (Number.isNaN(v)) return null; if (v != null) { t += v; n++; } }
-    return n || !list.length ? t : null;
+  // или у столбца nullable все значения nul(r) пусты (#168) — null, на экране «—». Слагаемое null или NaN — «не
+  // посчитано»: итог — сумма остальных с пометкой «без N из M поз.» (#335; раньше NaN делал весь итог «—», C17).
+  // K.groupSum — итог и признак неполноты {v, n, miss, missed} (K.partNote); cnt(r) — какие строки считать позициями
+  // в «N из M» (C17: остатки ДС входят в сумму, но не в счёт). Один расчёт для ячейки итога (K.table, C03) и сортировки
+  // групп (K.groupKeys, #347): группа с частичной суммой сортируется по посчитанной части, группа «—» — в конце
+  K.groupSum = (list, sum, nul, cnt) => {
+    const P = cnt ? list.filter(cnt) : list;
+    if (nul && list.every(r => nul(r) == null)) return { v: null, n: 0, miss: P.length, missed: P };
+    let t = 0, n = 0; const missed = [];
+    for (const r of list) {
+      const v = sum(r), ok = v != null && !Number.isNaN(v);
+      if (ok) t += v;
+      if (!cnt || cnt(r)) { if (ok) n++; else missed.push(r); }
+    }
+    return { v: n || !P.length ? t : null, n, miss: missed.length, missed };
   };
+  K.groupTotal = (list, sum, nul, cnt) => K.groupSum(list, sum, nul, cnt).v;
   // значения: пустые — в конец при любом направлении, строки — по алфавиту, числа — по величине
   const cmpVal = (x, y) => typeof x === 'string' ? x.localeCompare(y, 'ru') : x - y;
   const cmpList = (A, B, sort) => {
@@ -1505,7 +1547,7 @@
   K.groupKeys = (keys, rowsOf, sort, col, order) => {
     if (!sort.length) return order ? keys.slice().sort(order) : keys.slice();
     const C = sort.map(([k]) => col(k));
-    const agg = new Map(keys.map(k => { const L = rowsOf(k); return [k, C.map(c => !c ? null : c.sum ? K.groupTotal(L, c.sum, c.nullable && c.val) : (L.length ? c.val(L[0]) : null))]; }));
+    const agg = new Map(keys.map(k => { const L = rowsOf(k); return [k, C.map(c => !c ? null : c.sum ? K.groupTotal(L, c.sum, c.nullable && c.val, c.cnt) : (L.length ? c.val(L[0]) : null))]; }));
     return keys.slice().sort((a, b) => cmpList(agg.get(a), agg.get(b), sort) || (order ? order(a, b) : 0));
   };
 
@@ -1598,7 +1640,8 @@
   K.ACC_SEL = 'td.n, .dr, .k-kpi .v, .k-fields .v, .k-num';
   K.accClass = text => {
     if (K.negFmt !== 'acc') return '';
-    const t = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+    // пометка неполного итога «· без N из M поз.» (#335) — не часть числа
+    const t = String(text == null ? '' : text).replace(/\s+/g, ' ').replace(/\s*· без \d+ из \d+ поз\.\s*$/, '').trim();
     if (/^\(\d[\d,]*(?:\.\d+)?[^()]*\)/.test(t)) return 'k-accn';
     if (/^\+?\d[\d,]*(?:\.\d+)?%?$/.test(t)) return 'k-accp';
     return '';
@@ -1789,7 +1832,8 @@
   //        csvExtra: [подписи] — колонки только для CSV сразу за этой (на экране и в раскладке их нет, #276):
   //        csvFmt тогда отдаёт массив [значение колонки, значения дополнительных] («-27 Z» → -27 и Z),
   //        sumNeutral — итог без цвета знака (расхождение, а не прибыль/убыток), footCount(rows) — подпись числа строк «Итого»
-  //        (например «7 из 9», когда итоги считаются не по всем строкам),
+  //        (например «7 из 9», когда итоги считаются не по всем строкам), partRow(r) — какие строки считать позициями в
+  //        пометке неполного итога «без N из M поз.» (#335; по умолчанию все),
   //        viewKey — стабильный ключ раскладки латиницей, он же основа имени CSV (без него — страница + id, K.tableKey), title — название в CSV, fileName — основа имени файла CSV (латиницей)}
   K.table = function (el, opts) {
     const st = { sort: opts.sort ? opts.sort.slice() : [], q: '', collapsed: {}, groupSort: false, filters: {}, grouped: false };
@@ -1834,7 +1878,7 @@
     };
     const val = (c, r) => c.val ? c.val(r) : r[c.key];
     // колонка для сортировки строк и групп: значение и, если у колонки есть итог, слагаемое суммы группы
-    const colOf = k => { const c = opts.columns.find(x => x.key === k); return c ? { val: r => val(c, r), sum: c.sum ? (typeof c.sum === 'function' ? c.sum : r => val(c, r)) : null, nullable: !!c.nullable, filter: c.filter, key: c.key } : null; };
+    const colOf = k => { const c = opts.columns.find(x => x.key === k); return c ? { val: r => val(c, r), sum: c.sum ? (typeof c.sum === 'function' ? c.sum : r => val(c, r)) : null, nullable: !!c.nullable, cnt: opts.partRow, filter: c.filter, key: c.key } : null; };
     function sorted(rows) {
       if (!st.sort.length) return rows;
       return rows.slice().sort(K.rowCmp(st.sort, colOf));
@@ -1857,12 +1901,13 @@
         if (!c.sum) return '<td></td>';
         const fn = typeof c.sum === 'function' ? c.sum : r => val(c, r);
         // ни одно слагаемое не посчитано (все null, #333, B1; nullable — #168) — итог и итог группы «—», а не 0;
-        // посчитана часть — сумма посчитанных. Тот же расчёт сортирует группы (K.groupKeys, #347)
-        const tot = K.groupTotal(list, fn, c.nullable && (r => val(c, r)));
+        // посчитана часть — сумма посчитанных с пометкой «без N из M поз.» (#335; opts.partRow — какие строки считать).
+        // Тот же расчёт сортирует группы (K.groupKeys, #347)
+        const x = K.groupSum(list, fn, c.nullable && (r => val(c, r)), opts.partRow), tot = x.v;
         if (tot == null) return '<td class="n"><span class="mut3" title="не посчитано">—</span></td>';
         const fm = c.sumFmt || c.fmt || (v => f.n(v));
-        if (c.drill !== false && list.length && list[0].searchText) return '<td class="n">' + K.d({ title: (c.drillTitle || c.label.replace(/<[^>]+>/g, '')), unit: c.unit, fmt: v => fm(v, {}), rows: list.map(p => ({ p, v: typeof c.sum === 'function' ? fn(p) : fn(p) || 0 })) }, fm(tot, {})) + '</td>';
-        return '<td class="n ' + (c.sumNeutral ? '" style="color:var(--fg)' : f.cls(tot)) + '">' + fm(tot, {}) + '</td>';
+        if (c.drill !== false && list.length && list[0].searchText) return '<td class="n">' + K.d({ title: (c.drillTitle || c.label.replace(/<[^>]+>/g, '')), unit: c.unit, fmt: v => fm(v, {}), part: false, rows: list.map(p => ({ p, v: typeof c.sum === 'function' ? fn(p) : fn(p) || 0 })) }, fm(tot, {})) + K.partNote(x) + '</td>';
+        return '<td class="n ' + (c.sumNeutral ? '" style="color:var(--fg)' : f.cls(tot)) + '">' + fm(tot, {}) + K.partNote(x) + '</td>';
       };
       let body = '';
       const groups = opts.groupBy || (st.grouped && opts.groupable) || [];
@@ -2050,7 +2095,9 @@
   K.accToMinus = t => String(t).replace(/^\((\d[\d,]*(?:\.\d+)?[^()]*)\)$/, '-$1').replace(/\((\d[\d,]*(?:\.\d+)?%?)\)/g, '-$1');
   K.tableCsv = (table, opts) => {
     opts = opts || {};
-    const tx = c => c ? K.htmlText(c.innerHTML) : '';
+    // пометка неполного итога (span.k-part, #335) — не часть числа: в ячейке остаётся число, пометка — в последней
+    // колонке «Неполный итог» («Фондирование: без 3 из 30 поз.»; колонка есть, только если в таблице есть пометки)
+    const tx = c => c ? K.htmlText(K.partStrip(c.innerHTML)) : '';
     const hd = rowsOf(table.tHead), hr = hd.length ? hd[hd.length - 1] : null;
     // скрытая строка с data-csv-keep — на экране её нет, в CSV есть (позиции свёрнутой группы блоттера C03, #277)
     const skip = tr => (!(tr.dataset && tr.dataset.csvKeep) && (tr.hidden || (tr.style && tr.style.display === 'none'))) || (tr.dataset && tr.dataset.csvSkip) || (tr.cells.length === 1 && /(^|\s)k-empty(\s|$)/.test(tr.cells[0].className || ''));
@@ -2089,12 +2136,15 @@
       // «(2,010)+5бп» → «-2,010+5бп», «124(1)бп» → «124-1бп» (сдвиг кривой под цифрой); CSV одинаков в обоих режимах
       // В текстовой ячейке скобки — минус только там, где их поставил формат отрицательных: в элементе с меткой
       // data-kneg (её ставит K.accMarkAll независимо от цвета, #222); «98.399 (0.28)», «(2029)», «(3 поз.)» — как есть
-      const t = K.negFmt !== 'acc' ? tx(c) : num ? K.accToMinus(tx(c)) : K.htmlText(K.accMarkedToMinus(c.innerHTML));
+      const t = K.negFmt !== 'acc' ? tx(c) : num ? K.accToMinus(tx(c)) : K.htmlText(K.accMarkedToMinus(K.partStrip(c.innerHTML)));
       return d.date ? K.csvDateCell(d.date, t, num) : K.csvCell(t, num, d.v);
     };
     const cols = i => [head[i] || ''].concat(extra[i] || []);
-    return K.csvBuild(K.u(K.csvTitle(opts)), head ? [].concat(...keep.map(cols)).map(l => K.csvLabel(K.u(l))) : null,
-      body.map(r => [].concat(...keep.map(i => cellVals(r[i], extra[i] ? extra[i].length : 0))).join(',')));
+    const partOf = (r, i) => { const m = r[i] && /<span class="k-part"[\s\S]*?<\/span>/.exec(r[i].innerHTML || ''); return m ? K.htmlText(m[0]).replace(/^·\s*/, '') : ''; };
+    const parts = body.map(r => keep.map(i => { const p = partOf(r, i); return p ? ((head && head[i]) || (i + 1) + '-я колонка') + ': ' + p : ''; }).filter(Boolean).join('; '));
+    const withPart = parts.some(Boolean);
+    return K.csvBuild(K.u(K.csvTitle(opts)), head ? [].concat(...keep.map(cols)).map(l => K.csvLabel(K.u(l))).concat(withPart ? [K.csvLabel('Неполный итог')] : []) : null,
+      body.map((r, j) => [].concat(...keep.map(i => cellVals(r[i], extra[i] ? extra[i].length : 0))).concat(withPart ? [K.csvCell(K.u(parts[j]))] : []).join(',')));
   };
   // атрибут data-csv ячейки ручной таблицы (K.tableCsv, #258): fn() — значение или массив значений CSV; считается в
   // формате «−1» с обычным минусом, так что CSV не зависит от формата отрицательных на экране. Значения соединяются
@@ -2325,6 +2375,9 @@
     el.append(top, pos, note, sub, trd);
     const bothOnly = k => r => r.pv != null && r.rep != null ? r[k] || 0 : 0;
     const coreOnly = k => r => r.src === 'ядро' ? r[k] || 0 : 0;
+    // разница — по строкам с обеими оценками, как PV ядра и отчёта: сколько их, пишет «Итого» (footCount); у строки
+    // без одной из оценок разницы нет по смыслу, а не «не посчитано» — пометки «без N из M» у итога нет (#335)
+    const diffSum = r => r.diff == null ? 0 : r.diff;
     const mcol = (key, label, title, sum) => ({ key, label, num: true, unit: 'mm ₽', sum: sum || true, title, fmt: v => rcMoney(v), cls: v => f.cls(v) });
     const dvcol = (key, label, title) => ({ key, label, num: true, unit: 'тыс ₽/бп', sum: coreOnly(key), title, fmt: v => f.dv(v), cls: v => f.cls(v) });
     // разница — нейтральным цветом и в режиме «(1)» (K.accMark красит скобки по знаку): явный цвет ячейки
@@ -2340,7 +2393,7 @@
         { key: 'maturity', label: 'Погашение', date: true, fmt: v => f.date(v) },
         mcol('pv', 'Ядро', 'PV ядра из условий сделки, mm ₽ (в валюте отчёта); итог — по строкам с обеими оценками', bothOnly('pv')),
         mcol('rep', 'Отчёт', 'PV из отчёта (mv_rub строки, иначе сумма pv_rub сделок), mm ₽; итог — по строкам с обеими оценками', bothOnly('rep')),
-        { key: 'diff', label: 'Ядро − отчёт', num: true, unit: 'mm ₽', sum: true, sumNeutral: true, title: 'Разница PV ядра и отчёта (расхождение оценок, не PnL); ⚠ — выше допуска параллельного отчёта',
+        { key: 'diff', label: 'Ядро − отчёт', num: true, unit: 'mm ₽', sum: diffSum, sumNeutral: true, title: 'Разница PV ядра и отчёта (расхождение оценок, не PnL); ⚠ — выше допуска параллельного отчёта',
           style: diffStyle, fmt: (v, r) => rcMoney(v) + (r && r.over ? ' <span title="выше допуска">⚠</span>' : ''), csvFmt: v => rcMoney(v) },
         dvcol('ruo', 'DV01 RUONIA', 'Риск по кривой «RUB RUONIA», тыс ₽/бп; итог — по строкам, оценённым ядром'),
         dvcol('key', 'DV01 КС', 'Риск по кривой «RUB KEY» (форвардная кривая КС), тыс ₽/бп; итог — по строкам, оценённым ядром'),
@@ -2363,7 +2416,7 @@
         { key: 'end', label: 'Окончание', date: true, fmt: v => f.date(v) },
         mcol('pv', 'Ядро', 'PV сделки по ядру, mm ₽; итог — по сделкам с обеими оценками', r => r.pv != null && r.reportedPv != null ? r.pv : 0),
         { key: 'reportedPv', label: 'Отчёт', num: true, unit: 'mm ₽', sum: r => r.pv != null && r.reportedPv != null ? r.reportedPv : 0, title: 'PV сделки из отчёта (pv_rub условий сделки), mm ₽; итог — по сделкам с обеими оценками', fmt: v => rcMoney(v), cls: v => f.cls(v) },
-        { key: 'diff', label: 'Ядро − отчёт', num: true, unit: 'mm ₽', sum: true, sumNeutral: true, title: 'Разница PV ядра и отчёта по сделке, mm ₽ (расхождение оценок, не PnL)', fmt: v => rcMoney(v), style: () => 'color:var(--fg)' },
+        { key: 'diff', label: 'Ядро − отчёт', num: true, unit: 'mm ₽', sum: diffSum, sumNeutral: true, title: 'Разница PV ядра и отчёта по сделке, mm ₽ (расхождение оценок, не PnL)', fmt: v => rcMoney(v), style: () => 'color:var(--fg)' },
         { key: 'marks', label: 'Отметки', fmt: v => v ? '<span class="mut">' + esc(v) + '</span>' : '' },
       ] });
     return R;
@@ -2983,23 +3036,27 @@
     wfCtx.font = px + 'px system-ui, sans-serif'; return wfCtx.measureText(String(s)).width;
   };
   K.pnlWaterfall = function (el, opt) {
-    const keys = K.PNL_FACTORS;
-    const cats = keys.map(k => k[0] === 'funding' ? 'Фондир.' : k[1]).concat(['Итого']);
-    let L, stag = false, sx = [];
+    let keys = K.PNL_FACTORS, cats = [];
+    let L, stag = false, sx = [], totX = null;
     const need = () => Math.max(...cats.map(s => K.labelWidth(s, 10))) + K.WF_GAP;
     const narrow = () => el.clientWidth > 0 && (el.clientWidth - K.WF_AXIS) / cats.length < need();
     const c = K.chart(el, () => {
-      L = K.list(); stag = narrow();
-      sx = keys.map(([k]) => M.sumX(L, p => p.pnl[k]));
-      const vals = sx.map(x => x.v);  // null — фактор не посчитан ни у одной позиции (#327)
+      L = K.list();
+      sx = K.PNL_FACTORS.map(([k]) => M.sumX(L, p => p.pnl[k])); totX = M.sumX(L, p => p.pnl.total);
+      // «Итого» — известный итог с пометкой неполноты, часть без разложения — «Не разложено» (#335, K.wfTotals)
+      const WT = K.wfTotals(sx.map(x => x.v), totX);
+      keys = K.PNL_FACTORS.concat(WT.unexp != null ? [['unexp', K.WF_UNEXP]] : []);
+      if (WT.unexp != null) sx = sx.concat([null]);
+      cats = keys.map(k => k[0] === 'funding' ? 'Фондир.' : k[1]).concat(['Итого']); stag = narrow();
+      const vals = sx.map((x, i) => x ? x.v : WT.unexp);  // null — фактор не посчитан ни у одной позиции (#327)
       // отрезки [от, до]: стек ECharts раскладывает отрицательные значения отдельно, поэтому рисуем прямоугольники сами
       let run = 0; const segs = vals.map(v => { const s = [run, run + (v || 0)]; run += v || 0; return s; });
-      if (vals.every(v => v == null)) run = null;  // ни один фактор не посчитан — и «Итого» нет
+      run = WT.total;  // ни один фактор и итог не посчитаны — «Итого» нет
       segs.push([0, run || 0]);
-      const cols = vals.map(v => v >= 0 ? css('--pos') : css('--neg')).concat([css('--accent')]);
+      const cols = vals.map((v, i) => keys[i][0] === 'unexp' ? css('--fg-3') : v >= 0 ? css('--pos') : css('--neg')).concat([css('--accent')]);
       const lo = Math.min(0, ...segs.map(x => Math.min(x[0], x[1]))), hi = Math.max(0, ...segs.map(x => Math.max(x[0], x[1])));
       return {
-        grid: { left: 6, right: 10, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'item', formatter: p => (keys[p.dataIndex] ? keys[p.dataIndex][1] : 'Итого') + ': <b>' + K.wfTip(p.dataIndex < vals.length ? vals[p.dataIndex] : run) + '</b> mm ₽' + K.missNote(sx[p.dataIndex]) },
+        grid: { left: 6, right: 10, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'item', formatter: p => (keys[p.dataIndex] ? keys[p.dataIndex][1] : 'Итого') + ': <b>' + K.wfTip(p.dataIndex < vals.length ? vals[p.dataIndex] : run) + '</b> mm ₽' + K.missNote(p.dataIndex < vals.length ? sx[p.dataIndex] : totX) },
         xAxis: { type: 'category', data: cats, axisLabel: { interval: 0, fontSize: 10, formatter: (v, i) => stag && i % 2 ? '\n' + v : v } }, yAxis: { type: 'value', unit: 'mm ₽', nameGap: 20, min: lo, max: hi, scale: false, axisLabel: { formatter: v => K.tick(v, 1e6), hideOverlap: true, showMinLabel: !lo, showMaxLabel: !hi } },
         series: [{
           type: 'custom', data: segs.map((s, i) => [i, s[0], s[1]]),
@@ -3015,7 +3072,7 @@
         }],
       };
     });
-    c.on('click', pp => { const i = pp.dataIndex; if (i < keys.length) K.drill({ title: 'PnL · ' + keys[i][1], unit: 'тыс ₽', fmt: f.k, list: L, val: p => p.pnl[keys[i][0]] }); else K.drill({ title: 'PnL дня', unit: 'тыс ₽', fmt: f.k, list: L, val: p => p.pnl.total }); });
+    c.on('click', pp => { const i = pp.dataIndex; if (i < keys.length && keys[i][0] === 'unexp') K.drill({ title: 'PnL · ' + K.WF_UNEXP, unit: 'тыс ₽', fmt: f.k, list: L, val: p => p.pnl.total == null ? null : p.pnl.total - K.PNL_FACTORS.reduce((s, [k]) => s + (p.pnl[k] || 0), 0) }); else if (i < keys.length) K.drill({ title: 'PnL · ' + keys[i][1], unit: 'тыс ₽', fmt: f.k, list: L, val: p => p.pnl[keys[i][0]] }); else K.drill({ title: 'PnL дня', unit: 'тыс ₽', fmt: f.k, list: L, val: p => p.pnl.total }); });
     K.live(el, 'filter', () => c.redraw());
     if (typeof ResizeObserver === 'function') {
       const ro = new ResizeObserver(() => { if (!el.isConnected) { ro.disconnect(); return; } if (narrow() !== stag) c.redraw(); });
@@ -3027,8 +3084,10 @@
   // KPI-плитка; spec — для разбора по щелчку. sub — строка или разбивка-массив [[подпись, значение], …] (B2-3, #103):
   // строки в стиле плитки ОВП — подпись слева, цифра справа, табличные цифры.
   K.kpiRows = rows => '<table class="k-kb"><tbody>' + rows.map(r => '<tr' + (r[2] ? ' title="' + esc(r[2]) + '"' : '') + '><td class="c">' + r[0] + '</td><td>' + r[1] + '</td></tr>').join('') + '</tbody></table>';
-  K.kpi = (label, valueHtml, sub, spark, tip) => '<div class="k-kpi"><div class="l">' + K.hint(label, tip) + '</div><div class="v">' + valueHtml + '</div><div class="s">' +
-    (Array.isArray(sub) ? (sub.length ? K.kpiRows(sub) : '<span class="mut3">—</span>') : (sub || '&nbsp;')) + '</div>' + (spark || '') + '</div>';
+  // Пометка неполного итога (span.k-part, #335) в цифре плитки — строкой под цифрой, после единицы
+  K.kpi = (label, valueHtml, sub, spark, tip) => { const parts = []; valueHtml = String(valueHtml).replace(K.PART_RE, m => { parts.push(m.trim()); return ''; });
+    return '<div class="k-kpi"><div class="l">' + K.hint(label, tip) + '</div><div class="v">' + valueHtml + (parts.length ? '<div class="k-parts">' + parts.join(' ') + '</div>' : '') + '</div><div class="s">' +
+    (Array.isArray(sub) ? (sub.length ? K.kpiRows(sub) : '<span class="mut3">—</span>') : (sub || '&nbsp;')) + '</div>' + (spark || '') + '</div>'; };
   K.kpiUnit = u => ' <span class="u">' + u + '</span>';
   // разбивка по валютам: не больше n строк (по умолчанию 3, #103). Валюты по |rank| (по умолчанию — по самим значениям;
   // для сумм в родных валютах передают рублёвый эквивалент), показываются значения vals. Если валют больше n —

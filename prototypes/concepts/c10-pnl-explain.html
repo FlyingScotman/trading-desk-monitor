@@ -90,33 +90,41 @@
     K.seg(ctl.querySelector('.mseg'), [['day', 'день'], ['mtd', 'MTD']], mode, v => { mode = v; try { localStorage.setItem('c10-mode', v); } catch (e) { } render(); });
     const kp = h('div', 'k-kpis');
     kp.innerHTML = K.kpi('PnL ' + (mode === 'day' ? 'дня' : 'MTD'), K.d({ title: 'PnL ' + (mode === 'day' ? 'дня' : 'MTD'), unit: u.unit, fmt: u.fmts, list: L, val: p => val(p, 'total') }, tot == null ? NA : u.big(tot)), L.length + ' позиций', mode === 'day' ? K.spark(M.hist.pnl.total.slice(-30), 70, 20) : '') +
-      // фактор не посчитан ни у одной позиции — «—» и «не посчитано»; у части — сумма посчитанных и сколько без него
-      FAC.map(([k, t]) => { const x = M.sumX(L, p => val(p, k)), v = x.v; return K.kpi('<b style="color:' + FCOL[k] + '">■</b> ' + t, K.d({ title: 'PnL · ' + t, unit: u.unit, fmt: u.fmts, list: L, val: p => val(p, k) }, v == null ? NA : u.big(v)),
-        v == null ? 'не посчитано' : (tot ? Math.round(v / Math.abs(tot) * 100) + '% от |итога|' : '') + (x.miss && x.n ? (tot ? ' · ' : '') + 'без ' + x.miss + ' из ' + L.length + ' поз.' : '')); }).join('');
+      // фактор не посчитан ни у одной позиции — «—» и «не посчитано»; у части — сумма посчитанных и пометка «без N из
+      // M поз.» под цифрой (K.d, #335)
+      FAC.map(([k, t]) => { const v = M.sum(L, p => val(p, k)); return K.kpi('<b style="color:' + FCOL[k] + '">■</b> ' + t, K.d({ title: 'PnL · ' + t, unit: u.unit, fmt: u.fmts, list: L, val: p => val(p, k) }, v == null ? NA : u.big(v)),
+        v == null ? 'не посчитано' : (tot ? Math.round(v / Math.abs(tot) * 100) + '% от |итога|' : '')); }).join('');
     page.appendChild(kp);
 
     // ---------- водопад + матрица ----------
     const g1 = h('div', 'g2'); page.appendChild(g1);
-    const pw = panel('Водопад', '<span class="k-note">mm ₽ · щелчок по столбцу</span>'); g1.appendChild(pw);
+    // «Итого» — известный итог (сумма посчитанных итогов позиций, пометка «без N из M поз.»), часть итога без разложения
+    // по факторам — столбец «Не разложено» (#335, K.wfTotals)
+    const sx = FAC.map(([k]) => M.sumX(L, p => val(p, k))), totX = M.sumX(L, p => val(p, 'total'));  // null — не посчитан ни у одной позиции (#327)
+    const WT = K.wfTotals(sx.map(x => x.v), totX);
+    const bars = FAC.map(([k, t], i) => ({ k, t, lab: k === 'funding' ? 'Фондир.' : t, v: sx[i].v, x: sx[i] }));
+    if (WT.unexp != null) bars.push({ k: 'unexp', t: K.WF_UNEXP, lab: K.WF_UNEXP, v: WT.unexp, x: null });
+    const vals = bars.map(b => b.v), runT = WT.total, NB = bars.length;
+    const unexpVal = p => { const t = val(p, 'total'); return t == null ? null : t - FAC.reduce((s, [k]) => s + (val(p, k) || 0), 0); };
+    const pw = panel('Водопад', '<span class="k-note">mm ₽ · щелчок по столбцу' + (K.isPartial(totX) ? ' · Итого' + K.partNote(totX) : '') + '</span>'); g1.appendChild(pw);
     const wel = h('div', 'chart'); pw.querySelector('.bd').appendChild(wel);
-    const sx = FAC.map(([k]) => M.sumX(L, p => val(p, k))), vals = sx.map(x => x.v);  // null — не посчитан ни у одной позиции (#327)
     // водопад через custom-серию: обычный стек ломается, когда столбец уходит ниже нуля
     const wc = K.chart(wel, () => {
       let run = 0; const data = vals.map((v, i) => { const a = run; run += v || 0; return [i, Math.min(a, run), Math.max(a, run), v]; });
-      const runT = vals.every(v => v == null) ? null : run;  // ни один фактор не посчитан — и «Итого» нет
-      data.push([vals.length, Math.min(0, run), Math.max(0, run), runT]);
-      const pos = K.css('--pos'), neg = K.css('--neg'), acc = K.css('--accent'), lab = K.css('--fg-2'), ln = K.css('--line-2');
+      data.push([NB, Math.min(0, runT || 0), Math.max(0, runT || 0), runT]);  // ни один фактор и итог не посчитаны — «Итого» нет
+      const pos = K.css('--pos'), neg = K.css('--neg'), acc = K.css('--accent'), lab = K.css('--fg-2'), ln = K.css('--line-2'), une = K.css('--fg-3');
       return {
         grid: { left: 6, right: 10, top: 22, bottom: 4, containLabel: true },
-        tooltip: { trigger: 'item', formatter: p => (FAC[p.dataIndex] ? FAC[p.dataIndex][1] : 'Итого') + ': <b>' + K.wfTip(p.value[3]) + '</b> mm ₽' + K.missNote(sx[p.dataIndex]) },
-        xAxis: { type: 'category', data: FAC.map(x => x[0] === 'funding' ? 'Фондир.' : x[1]).concat(['Итого']), axisLabel: { interval: 0, fontSize: 10 } },
+        tooltip: { trigger: 'item', formatter: p => (bars[p.dataIndex] ? bars[p.dataIndex].t : 'Итого') + ': <b>' + K.wfTip(p.value[3]) + '</b> mm ₽' +
+          (bars[p.dataIndex] && bars[p.dataIndex].k === 'unexp' ? '<br><span style="opacity:.75">итог минус сумма факторов: у позиций есть итог, а разложения нет</span>' : K.missNote(bars[p.dataIndex] ? bars[p.dataIndex].x : totX)) },
+        xAxis: { type: 'category', data: bars.map(b => b.lab).concat(['Итого']), axisLabel: { interval: 0, fontSize: 10 } },
         yAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => K.tick(v, 1e6) } },
         series: [{
           type: 'custom', data, encode: { x: 0, y: [1, 2] },
           renderItem: (params, api) => {
             const i = api.value(0), lo = api.coord([i, api.value(1)]), hi = api.coord([i, api.value(2)]), w = Math.min(52, api.size([1, 0])[0] * 0.6), v = api.value(3);
-            const last = i === vals.length, col = last ? acc : v >= 0 ? pos : neg;
-            if (i < vals.length ? vals[i] == null : runT == null) return { type: 'group', children: [K.wfNull(api, i, api.value(2), lab)] };  // не посчитано — «—», столбца нет
+            const last = i === NB, col = last ? acc : bars[i].k === 'unexp' ? une : v >= 0 ? pos : neg;
+            if (i < NB ? vals[i] == null : runT == null) return { type: 'group', children: [K.wfNull(api, i, api.value(2), lab)] };  // не посчитано — «—», столбца нет
             const kids = [{ type: 'rect', shape: { x: lo[0] - w / 2, y: hi[1], width: w, height: Math.max(1, lo[1] - hi[1]) }, style: { fill: col } },
               { type: 'text', style: { text: K.wfLabel(v, api.size([1, 0])[0] - 1, last), x: lo[0], y: (v >= 0 || last ? hi[1] - 4 : lo[1] + 4), textAlign: 'center', textVerticalAlign: v >= 0 || last ? 'bottom' : 'top', fill: lab, fontSize: 11 } }];
             if (!last) { const nx = api.coord([i + 1, 0]); const yy = v >= 0 ? hi[1] : lo[1]; kids.push({ type: 'line', shape: { x1: lo[0] + w / 2, y1: yy, x2: nx[0] - w / 2, y2: yy }, style: { stroke: ln, lineDash: [3, 3] } }); }
@@ -125,7 +133,7 @@
         }],
       };
     });
-    wc.on('click', pp => { const i = pp.dataIndex; const k = FAC[i] ? FAC[i][0] : 'total'; K.drill({ title: 'PnL · ' + (FAC[i] ? FAC[i][1] : 'итог'), unit: u.unit, fmt: u.fmts, list: L, val: p => val(p, k) }); });
+    wc.on('click', pp => { const b = bars[pp.dataIndex], k = b ? b.k : 'total'; K.drill({ title: 'PnL · ' + (b ? b.t : 'итог'), unit: u.unit, fmt: u.fmts, list: L, val: k === 'unexp' ? unexpVal : p => val(p, k) }); });
     // FX: по какому курсу посчитан (R26: рыночный MOEX 19:00, курс ЦБ рядом)
     const fxl = K.fxLine(M.ccys.filter(c => L.some(p => p.ccy === c)));
     if (fxl) { const n = h('div', 'k-note'); n.style.padding = '4px 10px'; n.innerHTML = fxl; pw.querySelector('.bd').appendChild(n); }

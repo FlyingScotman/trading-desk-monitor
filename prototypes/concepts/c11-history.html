@@ -169,24 +169,26 @@ tr.row.sel td { background: var(--accent-bg); }
     const sections = [
       ['Риск-факторы, тыс ₽/бп', [['DV01 ставки', V.dv01], ['CS01', V.cs01], ['Базис ОФЗ', V.basis]], f.dv, f.dvs, 'тыс ₽/бп'],
       ['Кривые, тыс ₽/бп', M.curves.filter(c => L.some(p => p.dv01ByCurve[c.id])).map(c => ['<b style="color:' + K.curveColors[c.id] + '">■</b> ' + esc(c.short), V.curve(c.id)]), f.dv, f.dvs, 'тыс ₽/бп'],
-      ['DV01 по книгам', M.books.filter(b => L.some(p => p.book === b.id && p.dv01)).map(b => [esc(b.id) + ' <span class="mut3">' + esc(b.name) + '</span>', (p, i) => p.book === b.id ? V.dv01(p, i) : 0]), f.dv, f.dvs, 'тыс ₽/бп'],
-      ['Объём по типам, mm ₽', M.typeRows.filter(t => t.group !== 'DER' && L.some(p => p.group + '.' + p.kind === t.id)).map(t => ['<b style="color:' + K.kindColor[t.kind] + '">●</b> ' + esc(t.label), (p, i) => p.group + '.' + p.kind === t.id ? V.mv(p, i) : 0]), v => f.mn(v, 0), v => f.mns(v, 0), 'mm ₽'],
-      ['Объём по валютам, mm ₽', M.ccys.filter(c => L.some(p => p.ccy === c && p.group !== 'DER')).map(c => [K.ccyTag(c), (p, i) => p.ccy === c ? V.mv(p, i) : 0]), v => f.mn(v, 0), v => f.mns(v, 0), 'mm ₽'],
-      ['Номинал деривативов, mm ₽', M.typeRows.filter(t => t.group === 'DER' && L.some(p => p.group + '.' + p.kind === t.id)).map(t => ['<b style="color:' + K.kindColor[t.kind] + '">●</b> ' + esc(t.label), (p, i) => p.group + '.' + p.kind === t.id ? V.notional(p, i) : 0]), v => f.mn(v, 0), v => f.mns(v, 0), 'mm ₽'],
+      // третий элемент — какие позиции входят в строку (а не 0 у остальных): итог не посчитан у части — пометка
+      // «без N из M поз.» считает только позиции строки (#335)
+      ['DV01 по книгам', M.books.filter(b => L.some(p => p.book === b.id && p.dv01)).map(b => [esc(b.id) + ' <span class="mut3">' + esc(b.name) + '</span>', V.dv01, p => p.book === b.id]), f.dv, f.dvs, 'тыс ₽/бп'],
+      ['Объём по типам, mm ₽', M.typeRows.filter(t => t.group !== 'DER' && L.some(p => p.group + '.' + p.kind === t.id)).map(t => ['<b style="color:' + K.kindColor[t.kind] + '">●</b> ' + esc(t.label), V.mv, p => p.group + '.' + p.kind === t.id]), v => f.mn(v, 0), v => f.mns(v, 0), 'mm ₽'],
+      ['Объём по валютам, mm ₽', M.ccys.filter(c => L.some(p => p.ccy === c && p.group !== 'DER')).map(c => [K.ccyTag(c), V.mv, p => p.ccy === c]), v => f.mn(v, 0), v => f.mns(v, 0), 'mm ₽'],
+      ['Номинал деривативов, mm ₽', M.typeRows.filter(t => t.group === 'DER' && L.some(p => p.group + '.' + p.kind === t.id)).map(t => ['<b style="color:' + K.kindColor[t.kind] + '">●</b> ' + esc(t.label), V.notional, p => p.group + '.' + p.kind === t.id]), v => f.mn(v, 0), v => f.mns(v, 0), 'mm ₽'],
     ];
     let html = '<table class="k-tbl cmp" data-vk="c11-compare" data-title="Сравнение с датой"><thead><tr><th></th><th class="n">' + f.date(DATES[i0]) + '</th><th class="n">Сегодня</th><th class="n">Δ</th><th class="n">Δ %</th><th style="width:110px"></th></tr></thead><tbody>';
     sections.forEach(([title, defs, fm, fms, unit]) => {
       if (!defs.length) return;
-      const vals = defs.map(([n, fn]) => { const a = M.sum(L, p => fn(p, i0)), b = M.sum(L, p => fn(p, LAST)); return { n, fn, a, b, d: b - a }; });
-      const mx = Math.max(1, ...vals.map(x => Math.abs(x.d)));
+      const vals = defs.map(([n, fn, sel]) => { const LL = sel ? L.filter(sel) : L, a = M.sum(LL, p => fn(p, i0)), b = M.sum(LL, p => fn(p, LAST)); return { n, fn, LL, a, b, d: a == null || b == null ? null : b - a }; });
+      const mx = Math.max(1, ...vals.map(x => Math.abs(x.d || 0)));
       html += '<tr class="sec"><td colspan="6">' + title + '</td></tr>';
       vals.forEach(x => {
         const pct = Math.abs(x.a) > 1 ? x.d / Math.abs(x.a) * 100 : null;
         html += '<tr><td class="lbl">' + x.n + '</td>' +
-          '<td class="n mut">' + K.d({ title: x.n.replace(/<[^>]+>/g, '').trim() + ' на ' + f.date(DATES[i0]), unit, fmt: fm, rows: atRows(L, x.fn, i0) }, null, '') + '</td>' +
-          '<td class="n">' + K.d({ title: x.n.replace(/<[^>]+>/g, '').trim() + ' сегодня', unit, fmt: fm, rows: atRows(L, x.fn, LAST) }, null, '') + '</td>' +
-          '<td class="n">' + (Math.abs(x.d) < 1 ? '<span class="mut3">·</span>' : K.d({ title: 'Δ ' + x.n.replace(/<[^>]+>/g, '').trim() + ' с ' + f.date(DATES[i0]), unit, fmt: fms, rows: L.map(p => ({ p, v: x.fn(p, LAST) - x.fn(p, i0) })) }, null, '')) + '</td>' +
-          '<td class="n mut">' + (pct == null || Math.abs(x.d) < 1 ? '' : f.pcts(pct, 0)) + '</td><td>' + K.bar(x.d, mx) + '</td></tr>';
+          '<td class="n mut">' + K.d({ title: x.n.replace(/<[^>]+>/g, '').trim() + ' на ' + f.date(DATES[i0]), unit, fmt: fm, rows: atRows(x.LL, x.fn, i0) }, null, '') + '</td>' +
+          '<td class="n">' + K.d({ title: x.n.replace(/<[^>]+>/g, '').trim() + ' сегодня', unit, fmt: fm, rows: atRows(x.LL, x.fn, LAST) }, null, '') + '</td>' +
+          '<td class="n">' + (x.d == null ? '<span class="mut3" title="не посчитано">—</span>' : Math.abs(x.d) < 1 ? '<span class="mut3">·</span>' : K.d({ title: 'Δ ' + x.n.replace(/<[^>]+>/g, '').trim() + ' с ' + f.date(DATES[i0]), unit, fmt: fms, rows: x.LL.map(p => { const a = x.fn(p, i0), b = x.fn(p, LAST); return { p, v: a == null || b == null ? null : b - a }; }) }, null, '')) + '</td>' +
+          '<td class="n mut">' + (pct == null || x.d == null || Math.abs(x.d) < 1 ? '' : f.pcts(pct, 0)) + '</td><td>' + (x.d == null ? '' : K.bar(x.d, mx)) + '</td></tr>';
       });
     });
     bd.innerHTML = html + '</tbody></table>';

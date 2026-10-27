@@ -4,7 +4,8 @@
 //  - #322: изменение кривой, которого нет в CURVE_MOVES, — null (lib/real.js chg), «вчера» по нему не строится (K.yest),
 //    Δ ОФЗ — Δ КБД прогона (K.ofzChg), «сдвигов нет» — K.noMoves;
 //  - #325: K.cpnType — тип купона или null у позиции без купона; в фикстуре есть такая позиция с эмитентом.
-//  - #333: K.d по строкам (rows), где ни одно значение не посчитано, — «—», а не «0»; часть посчитана — сумма посчитанных.
+//  - #333: K.d по строкам (rows), где ни одно значение не посчитано, — «—», а не «0»; часть посчитана — сумма посчитанных
+//    и пометка «· без N из M поз.» (#335; подробно — partial_sums_335.test.js).
 // Браузерная часть (страницы C01–C17) — b1_null_sums.pw.test.js.
 //   node tests/js/b1_null_sums.test.js
 'use strict';
@@ -46,8 +47,9 @@ t('#327: M.sum и M.sumX — null не превращается в 0 (прого
     const L = [{ a: 1, b: null }, { a: 2, b: null }, { a: null, b: null }];
     assert.strictEqual(M.sum(L, 'b'), null, who + ': ни одно не посчитано — null');
     assert.strictEqual(M.sum(L, 'a'), 3, who + ': часть посчитана — сумма посчитанных');
-    assert.deepStrictEqual(plain(M.sumX(L, 'a')), { v: 3, n: 2, miss: 1 }, who + ': признак неполноты');
-    assert.deepStrictEqual(plain(M.sumX(L, x => x.b)), { v: null, n: 0, miss: 3 }, who);
+    // #335: признак неполноты — и какие слагаемые не посчитаны (missed, для подсказки «без N из M поз.»)
+    assert.deepStrictEqual(plain(M.sumX(L, 'a')), { v: 3, n: 2, miss: 1, missed: [L[2]] }, who + ': признак неполноты');
+    assert.deepStrictEqual(plain(M.sumX(L, x => x.b)), { v: null, n: 0, miss: 3, missed: L }, who);
     assert.strictEqual(M.sum([], 'a'), 0, who + ': пустой список — 0');
     assert.strictEqual(M.sum([{ a: 0 }, { a: null }], 'a'), 0, who + ': посчитанный 0 — это 0, не null');
     assert.strictEqual(M.sum([{ a: undefined }, { a: NaN }], 'a'), null, who + ': undefined и NaN — тоже «не посчитано»');
@@ -72,8 +74,11 @@ t('#333: K.d по строкам (rows) — все null: «—», а не «0»;
   const p = M.positions[0];
   const html = K.d({ title: 'PnL', fmt: K.f.k, rows: [{ p, v: null }, { p, v: null }] });
   assert.ok(html.includes('—') && html.includes('data-dr') && !/>0</.test(html), html);
-  assert.ok(/>2<\/span>$/.test(K.d({ title: 'PnL', fmt: K.f.k, rows: [{ p, v: 2000 }, { p, v: null }] })), 'часть посчитана — 2');
-  assert.ok(/>0<\/span>$/.test(K.d({ title: 'PnL', fmt: K.f.k, rows: [{ p, v: 0 }, { p, v: null }] })), 'посчитанный 0 — это 0');
+  // часть посчитана — сумма посчитанных и пометка «без 1 из 2 поз.» (#335); пометка — после числа
+  const part = K.d({ title: 'PnL', fmt: K.f.k, rows: [{ p, v: 2000 }, { p, v: null }] });
+  assert.ok(/>2<\/span> <span class="k-part"[^>]*>· без 1 из 2 поз\.<\/span>$/.test(part), 'часть посчитана — 2: ' + part);
+  assert.ok(/>0<\/span> <span class="k-part"/.test(K.d({ title: 'PnL', fmt: K.f.k, rows: [{ p, v: 0 }, { p, v: null }] })), 'посчитанный 0 — это 0');
+  assert.ok(/>2<\/span>$/.test(K.d({ title: 'PnL', fmt: K.f.k, rows: [{ p, v: 2000 }, { p, v: null }], part: false })), 'part: false — без пометки');
   assert.ok(K.d({ title: 'PnL', fmt: K.f.k, rows: [{ p, v: null }] }, '1.5').includes('>1.5<'), 'текст задан — он и остаётся');
 });
 
@@ -85,7 +90,9 @@ t('#327: водопад — K.wfTip(null) «—», K.wfLabel(null) пустая;
   assert.strictEqual(K.wfLabel(null, 100, true), '', '«Итого» без значения — тоже без подписи');
   assert.strictEqual(K.wfTip(0), '0.000');
   assert.strictEqual(K.wfLabel(0, 5, true), '0.00', '«Итого», равное нулю, подписано');
-  assert.strictEqual(K.missNote({ v: 5, n: 2, miss: 1 }).includes('не посчитано у 1 из 3'), true);
+  // #335: пометка — «без N из M поз.» (раньше «не посчитано у N из M поз.»), в подсказке графика — и список позиций
+  assert.ok(K.missNote({ v: 5, n: 2, miss: 1, missed: [{ name: 'ОФЗ 26238' }] }).includes('без 1 из 3 поз.'));
+  assert.ok(K.missNote({ v: 5, n: 2, miss: 1, missed: [{ name: 'ОФЗ 26238' }] }).includes('ОФЗ 26238'));
   assert.strictEqual(K.missNote({ v: null, n: 0, miss: 3 }), '', 'не посчитано ни у одной — «—» и так');
   assert.strictEqual(K.missNote({ v: 5, n: 3, miss: 0 }), '');
 });

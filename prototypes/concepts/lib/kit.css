@@ -102,6 +102,10 @@ td.n.k-accp::after { content: ')'; visibility: hidden; } .mut { color: var(--fg-
 .k-kpi .s { font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .k-kpi .s .u { font-size: 10.5px; color: var(--fg-3); }
 .k-kpi .spark { position: absolute; right: 8px; bottom: 6px; opacity: .8; }
+/* неполный итог (#335): «· без N из M поз.» — число посчитано не у всех позиций; список — в подсказке */
+.k-part { font-size: 11px; font-weight: 400; color: var(--fg-3); letter-spacing: 0; white-space: nowrap; cursor: help; font-variant-numeric: tabular-nums; }
+.k-kpi .v .k-parts { font-size: 11px; line-height: 1.2; margin-top: 1px; }
+td .k-part { display: block; font-size: 10px; line-height: 1.15; }
 /* разбивка под главной цифрой (B2-3, #103): как мини-таблица ОВП — подпись слева, цифра справа */
 .k-kb { border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 12px; font-weight: 500; line-height: 1.35; margin-top: 2px; }
 .k-kb td { padding: 0; white-space: nowrap; text-align: right; }

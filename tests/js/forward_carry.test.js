@@ -272,23 +272,37 @@ test('#297: null при частичном фондировании, inCcy в с
   assert.strictEqual(REAL.totals.nNoCarryNoFunding, 0);
 });
 
-test('итог колонок таблицы = итоги плиток: «Фондирование» = fundingTotal, «Нетто» по B1', () => {
-  const colTot = (rows, fn) => rows.reduce((a, r) => a + fn(r), 0);
-  // демо: у книги IC-BND позиции с прогнозом без фондирования — итог «Фондирования» число (= fundingTotal), нетто «—»
+test('итог колонок таблицы = итоги плиток: неполный итог — сумма посчитанных и «без N из M поз.» (#335)', () => {
+  // C.partSum — как K.groupSum итога таблицы с partRow «не остатки ДС»: v — сумма посчитанных, miss — позиции без значения
+  const colTot = (rows, fn) => C.partSum(rows, fn);
+  // демо: у книги IC-BND позиции с прогнозом без фондирования — итог «Фондирования» = fundingTotal (сумма известных),
+  // теперь с пометкой; нетто — нетто остальных с пометкой (раньше «—», NaN; S.net сервера по-прежнему null)
   const d = M.forwardCarryDemo({});
   const rows = model(d), S = C.sums(rows, true);
   assert.ok(S.nFundingMissing > 0);
-  near(colTot(rows, C.colSum.funding), S.funding, 'итог колонки = S.funding');
+  const fx = colTot(rows, C.colSum.funding);
+  near(fx.v, S.funding, 'итог колонки = S.funding'); assert.strictEqual(fx.miss, S.fundingMissing.length);
   near(S.funding, d.totals.fundingTotal, 'S.funding = fundingTotal сервера');
-  assert.ok(Number.isNaN(colTot(rows, C.colSum.net)) && S.net === null, 'нетто — «—»');
-  // золотой ответ: всё известно — оба итога числа
-  const rr = model(REAL), sr = C.sums(rr, true);
-  near(colTot(rr, C.colSum.funding), REAL.totals.fundingTotal, 'фондирование'); near(colTot(rr, C.colSum.net), REAL.totals.net, 'нетто');
-  // позиция без прогноза с null: итог «Фондирования» — «—» (NaN), как fundingTotal null
+  const nx = colTot(rows, C.colSum.net);
+  assert.ok(S.net === null && Number.isFinite(nx.v) && nx.miss === S.fundingMissing.length, 'нетто — сумма посчитанных, S.net — null');
+  near(nx.v, S.carry - S.fundingMissing.reduce((a, r) => a + (r.carry || 0), 0) + S.funding, 'нетто посчитанных = кэрри и фондирование позиций с фондированием + остальное фондирование');
+  near(S.part.net.v, nx.v, 'S.part.net'); assert.strictEqual(S.part.net.n + S.part.net.miss, S.n, 'M — все позиции');
+  near(S.part.funding.v, fx.v, 'S.part.funding');
+  assert.strictEqual(S.part.carry.miss, S.nNotCovered, 'кэрри: без N — позиции без прогноза'); near(S.part.carry.v, S.carry, 'S.part.carry');
+  assert.ok(S.part.net.missed.every(r => r.book === 'IC-BND'), 'в подсказке — позиции без фондирования');
+  // золотой ответ: всё известно — оба итога числа, без пометки
+  const rr = model(REAL);
+  near(colTot(rr, C.colSum.funding).v, REAL.totals.fundingTotal, 'фондирование'); near(colTot(rr, C.colSum.net).v, REAL.totals.net, 'нетто');
+  assert.strictEqual(colTot(rr, C.colSum.net).miss, 0);
+  // позиция без прогноза с null: итог «Фондирования» — сумма остальных и «без 1», fundingTotal (S.funding) — null
   const d2 = JSON.parse(JSON.stringify(REAL));
   Object.assign(d2.positions.find(p => p.positionId === 'D1|USD'), { funding: null, fundingState: 'problem' });
-  const r2 = model(d2);
-  assert.ok(Number.isNaN(colTot(r2, C.colSum.funding)) && C.sums(r2, true).funding === null);
+  const r2 = model(d2), f2 = colTot(r2, C.colSum.funding);
+  assert.ok(Number.isFinite(f2.v) && f2.miss === 1 && C.sums(r2, true).funding === null);
+  near(C.sums(r2, true).part.funding.v, f2.v, 'S.part.funding');
+  // фондирование не настроено — фондирование и нетто не посчитаны ни у одной позиции: «—»
+  const S0 = C.sums(model(M.forwardCarryDemo({ funding: 'not_configured' })), false);
+  assert.strictEqual(S0.part.net.v, null); assert.strictEqual(S0.part.funding.v, null);
 });
 
 test('нестрогий ответ сервера (main без nNoCarryNoFunding): строгое правило — на клиенте', () => {

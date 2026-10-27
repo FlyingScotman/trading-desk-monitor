@@ -221,7 +221,7 @@
         (S.nFundingMissing && S.nNoCarryNoFunding ? ' (' + S.nFundingMissing + ' с прогнозом кэрри, ' + S.nNoCarryNoFunding + ' без)' : S.nNoCarryNoFunding ? ' без прогноза кэрри' : ' с прогнозом кэрри') +
         ', книги ' + books.map(esc).join(', ') + ': ' +
         esc([...new Set(S.fundingMissing.map(r => r.fundingNote || C.FUNDING_STATE[r.fundingState] || r.fundingState))].join('; ')) +
-        '. Нетто этих книг и итога — «—»; нетто позиций с кэрри и фондированием — ' + f.mn(S.netKnown, DIGB) + ' mm ₽.' + '</div>');
+        '. Фондирование и нетто этих книг и итога — по остальным позициям, с пометкой «без N из M поз.»; какие позиции не посчитаны — в подсказке пометки.' + '</div>');
     }
     body.innerHTML = '';
     const wrap = h('div', 'k-grid'); body.appendChild(wrap);
@@ -233,35 +233,40 @@
     // чтобы итог разбора сходился с плиткой
     const pseudo = r => ({ id: r.id, name: r.name, issuer: null, issuerName: r.isCash ? 'остатки ДС' : r.name, book: r.book, bookName: r.bookName, ccy: r.ccy,
       group: 'OTH', kind: r.kind, groupLabel: r.isCash ? 'Остатки ДС' : 'Прочее', kindLabel: r.kindLabel, tenor: 0, mv: null, notional: null, searchText: r.searchText });
-    const kd = (title, val, tot) => {
+    // x — неполный итог (S.part, #335): итог не посчитан у части позиций — сумма посчитанных и пометка «без N из M поз.»
+    // (K.kpi ставит её под цифру); не посчитан ни у одной — «—»
+    const kd = (title, val, tot, x) => {
+      if (tot == null && x) tot = x.v;
       if (tot == null) return '<span class="mut3">—</span>';
       const rows = R.filter(r => val(r) != null).map(r => ({ p: r.p || pseudo(r), v: val(r) }));
-      return (rows.length ? K.d({ title, unit: 'mm ₽', fmt: v => f.mn(v, DIG), rows }, f.mn(tot, DIGB), f.cls(tot)) : '<span class="' + f.cls(tot) + '">' + f.mn(tot, DIGB) + '</span>') + K.kpiUnit('mm ₽');
+      return (rows.length ? K.d({ title, unit: 'mm ₽', fmt: v => f.mn(v, DIG), rows, part: false }, f.mn(tot, DIGB), f.cls(tot)) : '<span class="' + f.cls(tot) + '">' + f.mn(tot, DIGB) + '</span>') + K.kpiUnit('mm ₽') + K.partNote(x);
     };
     kp.innerHTML =
-      K.kpi('Кэрри', kd('Кэрри до ' + f.date(resp.horizonDate), r => r.isCash ? null : r.carry, S.carry), S.nCovered + ' поз. с прогнозом' + (S.nNotCovered ? ' · ' + S.nNotCovered + ' без' : ''), '', TIP.carry) +
+      K.kpi('Кэрри', kd('Кэрри до ' + f.date(resp.horizonDate), r => r.isCash ? null : r.carry, S.carry, S.part.carry), S.nCovered + ' поз. с прогнозом', '', TIP.carry) +
       // всё фондирование группы (как итог колонки «Фондирование»): Кэрри + Фондирование = Нетто; разбивка — строками
-      K.kpi('Фондирование', !fundOk ? '<span class="mut3" title="' + esc(resp.fundingText || '') + '">не настроено</span>' : kd('Фондирование до ' + f.date(resp.horizonDate), r => r.funding, S.funding),
-        fundOk ? [['с прогнозом кэрри', S.nCovered ? f.mn(S.fundingCovered, DIGB) : '—'], ['без прогноза и остатки ДС', f.mn(S.fundingRest, DIGB), TIP.rest]].concat(S.fundingMissing.length ? [['не посчитано', S.fundingMissing.length + ' поз.']] : [])
+      K.kpi('Фондирование', !fundOk ? '<span class="mut3" title="' + esc(resp.fundingText || '') + '">не настроено</span>' : kd('Фондирование до ' + f.date(resp.horizonDate), r => r.funding, S.funding, S.part.funding),
+        fundOk ? [['с прогнозом кэрри', S.nCovered ? f.mn(S.fundingCovered, DIGB) : '—'], ['без прогноза и остатки ДС', f.mn(S.fundingRest != null ? S.fundingRest : S.part.fundingRest.v, DIGB), TIP.rest]]
           : esc(C.FUNDING_STATUS[resp.fundingStatus] || ''), '', TIP.funding) +
-      K.kpi('Нетто', kd('Нетто до ' + f.date(resp.horizonDate), r => r.carry == null && r.funding == null ? null : (r.carry || 0) + (r.funding || 0), S.net), S.net == null ? (!fundOk ? 'нет фондирования' : !S.nCovered ? 'нет позиций с прогнозом' : 'известно по позициям с фондированием: ' + f.mn(S.netKnown, DIGB)) : 'кэрри + фондирование', '', TIP.net) +
+      // нетто: не посчитано у части позиций (фондирование null) — нетто остальных с пометкой (#335; раньше «—», netKnown)
+      K.kpi('Нетто', kd('Нетто до ' + f.date(resp.horizonDate), C.colSum.net, S.net, S.part.net), S.net == null && S.part.net.v == null ? (!fundOk ? 'нет фондирования' : !S.nCovered ? 'нет позиций с прогнозом' : 'не посчитано') : 'кэрри + фондирование', '', TIP.net) +
       K.kpi('Кэрри / DV01', S.carryDv01 == null ? '<span class="mut3">—</span>' : f.n(S.carryDv01, 0) + K.kpiUnit('б.п.'),
         [['без флоатеров · DV01', f.dv(S.dv01) + ' <span class="u">тыс ₽/бп</span>'], ['флоатеры: Кэрри/CS01', S.carryCs01Flt == null ? '—' : f.n(S.carryCs01Flt, 0) + ' <span class="u">б.п.</span>', 'кэрри флоатеров / |CS01 флоатеров|']], '', TIP.dv01);
     wrap.appendChild(kp);
 
     // сумма на глазах
     const sp = panel('Итог до ' + f.date(resp.horizonDate), '<span class="k-note">mm ₽ · ' + (resp.ks === 'steps' ? 'КС по заседаниям' : 'КС стоит') + ' · ' + (resp.spread === 'curve' ? 'roll по спреду' : 'спред держится') + '</span>');
-    const line = (l, v, cls, tip) => '<div class="' + (cls || '') + '">' + K.hint(l, tip) + '</div><div class="n ' + (cls || '') + ' ' + (v == null ? '' : f.cls(v)) + '">' + (v == null ? '<span class="mut3">—</span>' : f.mn(v, DIG)) + '</div>';
+    // x — неполный итог строки (S.part, #335): «—» только если не посчитано ни у одной позиции
+    const line = (l, v, cls, tip, x) => { if (v == null && x) v = x.v; return '<div class="' + (cls || '') + '">' + K.hint(l, tip) + '</div><div class="n ' + (cls || '') + ' ' + (v == null ? '' : f.cls(v)) + '">' + (v == null ? '<span class="mut3">—</span>' : f.mn(v, DIG) + K.partNote(x)) + '</div>'; };
     sp.querySelector('.bd').innerHTML = '<div class="c17-sumwrap"><div class="c17-sum">' +
-      line('Кэрри', S.carry, '', TIP.carry) +
+      line('Кэрри', S.carry, '', TIP.carry, S.part.carry) +
       (resp.spread === 'curve' ? line('из них roll по спреду', S.spreadRoll || 0, 'sub', TIP.roll) : '<div class="sub">' + K.hint('из них roll по спреду', TIP.roll) + '</div><div class="n sub"><span class="mut3" title="спред держится: переключите «roll по спреду»">не учтён</span></div>') +
-      (fundOk ? line('Фондирование позиций с прогнозом', S.fundingCovered, '', TIP.funding) : '<div>' + K.hint('Фондирование', TIP.funding) + '</div><div class="n"><span class="mut3">не настроено</span></div>') +
-      (fundOk ? line('фондирование без прогноза кэрри', S.fundingRest, '', TIP.rest) +
-        line('позиции без прогноза', S.fundingNoCarry, 'sub') + line('остатки ДС', S.fundingCash, 'sub') : '') +
-      line('Нетто', S.net, 'tot', TIP.net) +
+      (fundOk ? line('Фондирование позиций с прогнозом', S.fundingCovered, '', TIP.funding, S.part.fundingCovered) : '<div>' + K.hint('Фондирование', TIP.funding) + '</div><div class="n"><span class="mut3">не настроено</span></div>') +
+      (fundOk ? line('фондирование без прогноза кэрри', S.fundingRest, '', TIP.rest, S.part.fundingRest) +
+        line('позиции без прогноза', S.fundingNoCarry, 'sub', '', S.part.fundingNoCarry) + line('остатки ДС', S.fundingCash, 'sub') : '') +
+      line('Нетто', S.net, 'tot', TIP.net, S.part.net) +
       '</div><div class="side">' +
       (S.nNotCovered ? '<div><span class="c17-link" data-a="nc">' + S.nNotCovered + ' поз. без прогноза кэрри</span> — в кэрри не входят, их фондирование — в строке «без прогноза». Причины — в колонке «Оценка».</div>' : '<div>Прогноз есть у всех позиций.</div>') +
-      (fundOk && S.fundingMissing.length ? '<div style="margin-top:4px;color:var(--warn)">' + (S.nFundingMissing ? S.nFundingMissing + ' поз. с прогнозом без фондирования: нетто — «—».' : '') + (S.nNoCarryNoFunding ? ' ' + S.nNoCarryNoFunding + ' поз. без прогноза без фондирования: фондирование без прогноза и нетто — «—».' : '') + '</div>' : '') +
+      (fundOk && S.fundingMissing.length ? '<div style="margin-top:4px;color:var(--warn)">' + (S.nFundingMissing ? S.nFundingMissing + ' поз. с прогнозом без фондирования: фондирование и нетто — без них.' : '') + (S.nNoCarryNoFunding ? ' ' + S.nNoCarryNoFunding + ' поз. без прогноза без фондирования: фондирование без прогноза и нетто — без них.' : '') + ' Пометка «без N из M поз.» у суммы, список — в её подсказке.</div>' : '') +
       '<div style="margin-top:4px">Прогон ' + (server ? '#' + esc(resp.runId) : 'демо') + ' на ' + f.date(resp.asOf) + ' → горизонт ' + f.date(resp.horizonDate) + ' (' + resp.days + ' дн.). Суммы — в ' + K.repr + ', пересчёт из рублей по курсу прогона.</div>' +
       '</div></div>';
     const ncl = sp.querySelector('[data-a=nc]');
@@ -283,17 +288,17 @@
       K.table(tp.querySelector('.bd'), {
         viewKey: 'c17-positions', title: 'Прогнозное кэрри до ' + resp.horizonDate + ', mm ₽', rowsFn, maxHeight: '620px',
         groupBy: G, stripe: r => r.isCash ? 'transparent' : K.issuerColor(r.issuer), rowCls: r => r.covered ? '' : 'c17-nc', sort: [['net', -1]],
-        footCount: rows => rows.filter(r => !r.isCash).length + ' поз.',
+        footCount: rows => rows.filter(r => !r.isCash).length + ' поз.', partRow: r => !r.isCash,  // остатки ДС — не позиции в «без N из M поз.» (#335)
         columns: [
           { key: 'name', label: 'Позиция', val: r => r.name, fmt: (v, r) => esc(v) + (r.ccy && r.ccy !== '—' ? ' ' + K.ccyTag(r.ccy) : ''), csvFmt: v => v, w: '220px' },
           { key: 'book', label: 'Книга', val: r => r.book, filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
           { key: 'entity', label: 'Юрлицо', val: r => r.entity, filter: true, fmt: v => '<span class="mut">' + esc(entName(v)) + '</span>' },
           { key: 'kind', label: 'Тип', val: r => r.kindLabel, filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
-          money('carry', 'Кэрри', r => r.carry, { title: TIP.carry, tip: true }),
+          money('carry', 'Кэрри', r => r.carry, { title: TIP.carry, tip: true, sum: C.colSum.carry }),
           money('funding', 'Фондирование', r => r.funding, { title: TIP.funding, tip: true, sum: C.colSum.funding,
             fmt: (v, r) => v != null ? '<span title="' + esc([r.fundingRate, C.FUNDING_SOURCE[r.fundingSource], r.fundingNote].filter(Boolean).join(' · ')) + '">' + f.mn(v, DIG) + '</span>'
               : '<span class="mut3" title="' + esc(r.fundingNote || '') + '">' + (r.fundingState === 'not_configured' ? 'не настроено' : r.fundingState === 'problem' ? '— ⚠' : '—') + '</span>' }),
-          // нетто группы: «—», если у позиции с прогнозом нет фондирования (NaN → «—»); иначе кэрри + всё фондирование
+          // нетто группы: кэрри + всё фондирование; у позиции без фондирования не посчитано — итог остальных с пометкой (#335)
           money('net', 'Нетто', r => r.net, { title: TIP.net, tip: true, sum: C.colSum.net }),
           { key: 'cdv', label: 'Кэрри/DV01', num: true, val: r => r.carryDv01, csvFmt: v => bp(v),
             fmt: (v, r) => bp(v) + (r.floater && r.covered ? ' <span class="k-tag" title="флоатер: кэрри / |CS01|">CS</span>' : ''), cls: v => v == null ? '' : f.cls(v), unit: 'б.п.', title: TIP.dv01, tip: true },

@@ -924,9 +924,9 @@
   // сумма с «не посчитано» — как lib/real.js (#327): все null — null, часть — сумма посчитанных; M.sumX — с признаком
   M.sumX = (arr, f) => {
     const g = typeof f === 'function' ? f : x => x[f];
-    let s = 0, n = 0;
-    arr.forEach(x => { const v = g(x); if (v != null && !Number.isNaN(v)) { s += v; n++; } });
-    return { v: n || !arr.length ? s : null, n, miss: arr.length - n };
+    let s = 0, n = 0; const missed = [];  // missed — что не посчитано (подсказка «без N из M поз.», #335)
+    arr.forEach(x => { const v = g(x); if (v != null && !Number.isNaN(v)) { s += v; n++; } else missed.push(x); });
+    return { v: n || !arr.length ? s : null, n, miss: arr.length - n, missed };
   };
   M.sum = (arr, f) => M.sumX(arr, f).v;
   M.kpis = function (list) {

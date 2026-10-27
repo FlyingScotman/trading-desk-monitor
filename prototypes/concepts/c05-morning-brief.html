@@ -83,8 +83,9 @@
   // ---------- помощники ----------
   const ratePnl = (p, cid) => p.risk[cid].reduce((s, v, k) => s + v * M.curve[cid].chg[k], 0);
   // mm ₽ со знаком, кликабельно
-  const mln = (title, list, val, d) => K.d({ title, unit: 'mm ₽', fmt: v => f.mns(v, d == null ? 1 : d), list, val }) + '&nbsp;mm ₽';
-  const dvx = (title, list, val) => K.d({ title, unit: 'тыс ₽/бп', list, val }, null, '') + '&nbsp;тыс ₽/бп';
+  // посчитано не у всех позиций — после единицы пометка «· без N из M поз.» (K.d, #335)
+  const mln = (title, list, val, d) => K.d({ title, unit: 'mm ₽', fmt: v => f.mns(v, d == null ? 1 : d), list, val, suffix: '&nbsp;mm ₽' });
+  const dvx = (title, list, val) => K.d({ title, unit: 'тыс ₽/бп', list, val, suffix: '&nbsp;тыс ₽/бп' }, null, '');
   // диапазон сдвига кривой по бакетам, б.п. (до 0.1); у кривой без точек (USD/CNY в прогоне без кривых хаба) — «нет данных»
   const noCurve = c => !c || c.pts.every(v => v == null);
   // нет сдвигов кривой в прогоне — тоже «нет данных», не «0» (#322)
@@ -161,20 +162,20 @@
       const v = M.sum(L, p => p.pnl[key]); if (Math.abs(v) > 2e5) parts.push({ v, h: t + ' ' + mln('PnL · ' + t, L, p => p.pnl[key]) });
     });
     parts.sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
-    const tot = k.pnl;
+    const tot = k.pnl, totX = M.sumX(L, p => p.pnl.total);  // итог посчитан не у всех — «потеряли 51.7 mm ₽ · без N из M поз.» (#335)
     html += '<section id="s1"><div class="toc">' + SECS.map(([id, t]) => '<a href="#' + id + '">' + t + '</a>').join('') + '</div>' +
       '<h2><span class="no">01</span> Итог дня <span class="sp"></span><span class="k-note">' + f.date(M.asOf) + ', ' + esc(M.cut.label) + ' · к закрытию ' + f.date(M.prevDate) + '</span></h2>' +
-      '<div class="hl"><span class="big ' + f.cls(tot) + '">' + K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(tot, 1)) + ' <span style="font-size:18px;font-weight:500" class="mut">mm ₽</span></span>' +
+      '<div class="hl"><span class="big ' + f.cls(tot) + '">' + K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total, suffix: ' <span style="font-size:18px;font-weight:500" class="mut">mm ₽</span>' }, f.mns(tot, 1)) + '</span>' +
       '<span class="sub">MTD <b>' + mln('PnL MTD', L, 'pnlMtd') + '</b>' + K.partial('mtd') + ' · YTD <b>' + mln('PnL YTD', L, 'pnlYtd', 0) + '</b>' + K.partial('ytd') + '</span></div>' +
       // PnL не посчитан ни у одной позиции (k.pnl null) — словами, а не «заработали 0.0» (#327, B1)
       (tot == null ? '<p>PnL за день не посчитан.' + (parts.length ? ' Главное: ' + parts.slice(0, 3).map(x => x.h).join(', ') + '.' : '')
-        : '<p>За день ' + word(tot) + ' <b>' + f.mn(Math.abs(tot), 1) + ' mm ₽</b>. Главное: ' + parts.slice(0, 3).map(x => x.h).join(', ') + '.') +
+        : '<p>За день ' + word(tot) + ' <b>' + f.mn(Math.abs(tot), 1) + ' mm ₽</b>' + K.partNote(totX) + '. Главное: ' + parts.slice(0, 3).map(x => x.h).join(', ') + '.') +
       (parts.length > 3 ? ' Остальное: ' + parts.slice(3).map(x => x.h).join(', ') + '.' : '') + '</p>' +
       '<p class="mut" style="font-size:13px">Риск на утро: DV01 по ставкам ' + dvx('DV01 ставки', L, 'dv01') + ', из них RUONIA ' + dvx('DV01 RUONIA', L, p => p.dv01ByCurve['RUB RUONIA']) +
       ', КС ' + dvx('DV01 КС', L, p => p.dv01ByCurve['RUB KEY']) + (M.ofzView === 'kbd' ? ', КБД ' + dvx('DV01 КБД', L, p => p.dv01ByCurve['RUB OFZ'])
         : '; базис ОФЗ ' + dvx('Базис ОФЗ − RUONIA', L, 'basis01')) + '; спред ОФЗ к КБД ' + dvx('Спред ОФЗ к КБД', L, 'ofzSpr01') + '; CS01 ' + dvx('CS01', L, 'cs01') +
-      '. ' + K.hint('Кэрри', K.tips.carry) + ' ' + K.d({ title: 'Кэрри за день (без фондирования)', unit: 'тыс ₽', fmt: f.ks, list: L, val: 'carryDay' }) + '&nbsp;тыс ₽ в день, ' +
-      K.hint('фондирование', K.tips.funding) + ' ' + K.d({ title: 'Фондирование за день', unit: 'тыс ₽', fmt: f.ks, list: L, val: 'fundingDay', nullable: true }) + '&nbsp;тыс ₽ в день.</p>' +
+      '. ' + K.hint('Кэрри', K.tips.carry) + ' ' + K.d({ title: 'Кэрри за день (без фондирования)', unit: 'тыс ₽', fmt: f.ks, list: L, val: 'carryDay', suffix: '&nbsp;тыс ₽ в день' }) + ', ' +
+      K.hint('фондирование', K.tips.funding) + ' ' + K.d({ title: 'Фондирование за день', unit: 'тыс ₽', fmt: f.ks, list: L, val: 'fundingDay', nullable: true, suffix: '&nbsp;тыс ₽ в день' }) + '.</p>' +
       '<div class="factors">' + K.PNL_FACTORS.map(([key, t]) =>
         '<div class="factor"><div class="l">' + K.hint(t, K.tips[key]) + '</div><div class="v">' + K.d({ title: 'PnL · ' + t, unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl[key] }, null) + '</div></div>').join('') + '</div></section>';
 
