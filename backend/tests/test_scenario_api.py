@@ -15,6 +15,7 @@ from test_api import FIX, assert_error, run
 
 from desk import store
 from desk.api import create_app
+from desk.autopilot import Autopilot
 from desk.marketdata.bundle import SnapshotDir
 from desk.scenario import jobs
 from desk.scenario.definition import RUB_CURVES, definition_hash, normalize
@@ -110,6 +111,53 @@ def test_job_end_to_end(store_url, book, client):
     assert failed["status"] == "failed" and failed["error"] and failed["result"] is None
     r3 = client.post("/api/v1/scenario-jobs", json={"base_run_id": rid, "definition": par})
     assert r3.status_code == 202 and r3.json()["job_id"] != j1["job_id"]
+
+
+def test_every_active_scenario_queued_once_per_run_and_its_results(store_url, book, client):
+    """TDM#71: the autopilot's scenarios step queues every active scenario on the newest default run once; the run's
+    scenario results list each with its latest job, the totals without the positions."""
+    old = run(store_url, book)
+    rid = run(store_url, book)
+    with store.connect(store_url) as con:
+        assert jobs.latest_default_run(con)[0] == rid
+        con.execute("INSERT INTO scenario_def (scenario_id, name, kind, ord, definition) VALUES"
+                    " ('cnyonly', 'CNY curve', 'custom', 10000, %s)", (json.dumps({"curves": {"CNY XCCY": 50}}),))
+        first = jobs.submit_all(con, rid)
+        assert first["queued"] == PRESETS and first["reused"] == 0
+        assert list(first["invalid"]) == ["cnyonly"] and "not published by the run" in first["invalid"]["cnyonly"]
+        again = jobs.submit_all(con, rid)
+        assert again == {"queued": [], "reused": len(PRESETS), "invalid": first["invalid"]}
+        status, detail = Autopilot(settings_loader=lambda: None)._scenarios(con)  # the cycle's step: nothing new
+        assert status == "ok" and detail.startswith(f"run {rid} (") and f"0 queued, {len(PRESETS)} already" in detail
+        assert "not repriced: cnyonly: " in detail
+        assert jobs.run_once(con, SnapshotDir(FIX)) is not None  # the first preset in order: par+100
+    body = client.get(f"/api/v1/runs/{rid}/scenario-results").json()
+    assert body["run_id"] == rid and body["method"] == jobs.METHOD
+    sc = {s["scenario_id"]: s for s in body["scenarios"]}
+    assert list(sc) == [*PRESETS, "cnyonly"] and sc["cnyonly"]["job"] is None
+    done = sc["par+100"]["job"]
+    assert done["status"] == "done" and set(done["totals"]) == {"_total", "OFZ", "CORP"}
+    assert set(done["coverage"]) == {"status", "n_positions", "n_exact"}  # no missing list
+    assert done["totals"]["_total"]["n_positions"] == done["coverage"]["n_positions"]
+    assert all(s["job"]["status"] == "queued" and s["job"]["totals"] is None for k, s in sc.items()
+               if k not in ("par+100", "cnyonly"))
+    defs = {d["scenario_id"]: d for d in client.get("/api/v1/scenario-defs").json()["scenarios"]}
+    assert all(s["definition_hash"] == defs[k]["definition_hash"] for k, s in sc.items() if k in defs)
+    # another run has none of them; a missing run is 404
+    assert all(s["job"] is None for s in client.get(f"/api/v1/runs/{old}/scenario-results").json()["scenarios"])
+    assert_error(client.get("/api/v1/runs/999999/scenario-results"), 404, "not_found")
+
+
+def test_scenario_results_prefer_a_live_job_to_a_failed_one(store_url, book, client):
+    rid = run(store_url, book)
+    par = client.get("/api/v1/scenario-defs").json()["scenarios"][0]
+    with store.connect(store_url) as con:
+        job, _ = jobs.submit(con, rid, par["definition"])
+        assert jobs.run_once(con, SnapshotDir(FIX / "nothing-here")) == job["job_id"]  # failed: no snapshots
+        assert jobs.submit_all(con, rid)["queued"] == PRESETS  # the failed one queued again
+    got = next(s for s in client.get(f"/api/v1/runs/{rid}/scenario-results").json()["scenarios"]
+               if s["scenario_id"] == par["scenario_id"])["job"]
+    assert got["status"] == "queued" and got["job_id"] > job["job_id"]
 
 
 def test_worker_runs_jobs_and_fails_orphans(store_url, book, client):
