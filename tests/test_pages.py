@@ -24,6 +24,15 @@ def scripts(html):
 
 
 class Pages(unittest.TestCase):
+    def test_monitor_catalog_matches_pages_without_duplicates(self):
+        catalog = (PROTO / "concepts" / "catalog.js").read_text(encoding="utf-8")
+        entries = re.findall(r"\['(c\d+-[^']+)'", catalog)
+        self.assertEqual(len(entries), len(set(entries)))
+        self.assertEqual(sorted(entries), sorted(f.stem for f in (PROTO / "concepts").glob("c*.html")))
+        gallery = (PROTO / "concepts" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('<script src="catalog.js"></script>', gallery)
+        self.assertIn("const C = window.DESK_MONITORS;", gallery)
+
     def test_every_page_has_the_nav_before_the_loader(self):
         self.assertEqual(sorted(p.name for p in PROTO.glob("*.html")), sorted([*PAGES, LOGIN]))
         self.assertEqual(scripts((PROTO / LOGIN).read_text(encoding="utf-8")), [])
@@ -57,7 +66,7 @@ class Pages(unittest.TestCase):
         src = (PROTO / "concepts" / "c16-ocp.html").read_text(encoding="utf-8")
         self.assertIn("'../api/v1/runs/' + encodeURIComponent(M.run.id) + '/ocp'", src)
         self.assertIn("const server = K.source === 'real'", src)
-        self.assertIn("['c16-ocp', 'C16', 'ОВП'", (PROTO / "concepts" / "index.html").read_text(encoding="utf-8"))
+        self.assertIn("['c16-ocp', 'C16', 'ОВП'", (PROTO / "concepts" / "catalog.js").read_text(encoding="utf-8"))
         self.assertTrue((PROTO / "concepts" / "thumbs" / "c16-ocp.jpg").is_file())
 
     def test_monitor_tables_sort_groups_like_ordinary_fields(self):
