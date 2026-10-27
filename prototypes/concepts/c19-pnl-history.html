@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>C19 · История PnL</title>
+<link rel="stylesheet" href="lib/kit.css">
+<style>
+.ctl { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
+.ctl label { display:flex; gap:6px; align-items:center; }
+.ctl input, .ctl select { background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:5px; padding:6px; min-width:0; max-width:100%; }
+.summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.summary .bd { font-size:24px; font-variant-numeric:tabular-nums; }
+.two { display:grid; grid-template-columns:minmax(280px, .8fr) minmax(0,1.5fr); gap:12px; }
+#chart { height:300px; }
+.k-panel, .bd { min-width:0; }
+.scroll { overflow:auto; max-height:410px; }
+#detail .scroll { max-height:500px; }
+#days td:last-child { white-space:normal; min-width:300px; }
+#components td:first-child { white-space:normal; min-width:150px; }
+#components .k-note { font-size:11px; }
+#coverage { line-height:1.6; }
+#result[hidden], #anchor[hidden] { display:none; }
+#result { display:flex; flex-direction:column; gap:12px; }
+#status { padding:12px 0; }
+#status:empty { display:none; }
+button.link { background:none; border:0; color:var(--accent); font:inherit; cursor:pointer; text-align:left; padding:0; }
+tr.active td { background:var(--accent-bg); }
+.k-top [data-a=repr], .k-top [data-a=ofzview] { display:none; }
+@media(max-width:1050px) { .two { grid-template-columns:minmax(0,1fr); } }
+@media(max-width:650px) { .summary { grid-template-columns:minmax(0,1fr); } .ctl label { flex-wrap:wrap; } }
+</style>
+</head>
+<body>
+<div class="k-page">
+  <div class="k-panel"><div class="bd ctl">
+    <label>С <input type="date" id="from"></label><label>По <input type="date" id="to"></label>
+    <label>Валюта позиции <select id="ccy" aria-label="Валюта позиции"></select></label>
+    <label>Тип <select id="assetClass" aria-label="Тип позиции"></select></label>
+    <label>Эмитент <select id="issuer" aria-label="Эмитент"></select></label>
+    <input type="search" id="search" placeholder="Позиция, инструмент, книга…" aria-label="Поиск по истории">
+    <button class="k-btn" id="reset">Сбросить все фильтры</button>
+    <span class="k-note">Все суммы в ₽ · даты включительно</span>
+  </div></div>
+  <div id="status" role="status" aria-live="polite"></div>
+  <div id="result" hidden>
+    <div class="summary">
+      <div class="k-panel"><div class="hd"><h3>Доступный итог периода</h3></div><div class="bd" id="total"></div></div>
+      <div class="k-panel"><div class="hd"><h3>Выбранные компоненты</h3></div><div class="bd" id="selected"></div></div>
+      <div class="k-panel"><div class="hd"><h3>Доступность</h3></div><div class="bd" id="counts"></div></div>
+    </div>
+    <div class="k-panel" id="anchor" hidden><div class="hd"><h3>Выбранный прогон — отдельно от периода</h3></div><div class="bd"><div id="anchorSummary"></div><div class="scroll" id="anchorPositions"></div></div></div>
+    <div class="k-panel"><div class="hd"><h3>PnL за период</h3><span class="sp"></span><span id="mode"></span></div><div class="bd"><div id="chart"></div><div id="otherStatus" class="k-note"></div><div class="k-note">Пропуск — нет доступного числа; линия не соединяет пропуски. Накопление складывает только доступные значения и остаётся частичным. Компоненты не подменяют полный итог.</div></div></div>
+    <div class="two">
+      <div class="k-panel"><div class="hd"><h3>Компоненты</h3><span class="sp"></span><button class="k-btn" id="allFactors">Все</button><button class="k-btn" id="noFactors">Снять</button></div><div class="bd flush scroll" id="components"></div></div>
+      <div class="k-panel"><div class="hd"><h3>Вклад позиций за период</h3><span class="sp"></span><span class="k-note">по модулю выбранного вклада · щелчок → дни</span></div><div class="bd flush scroll" id="positions"></div></div>
+    </div>
+    <div class="k-panel"><div class="hd"><h3>Книги за период</h3><span class="sp"></span><span class="k-note">щелчок → фильтр книги в шапке</span></div><div class="bd flush scroll" id="books"></div></div>
+    <div class="k-panel" id="detail"><div class="hd"><h3>Позиция по дням</h3><span class="sp"></span><span id="detailName"></span></div><div class="bd"><div id="positionChart" style="height:220px"></div><div class="scroll" id="days"></div></div></div>
+    <div class="k-panel"><div class="hd"><h3>Доступность и границы метода</h3></div><div class="bd" id="coverage"></div></div>
+  </div>
+</div>
+<script src="../echarts.min.js"></script>
+<script src="lib/boot.js"></script>
+<script src="lib/kit.js"></script>
+<script src="lib/instr.js"></script>
+<script src="lib/pnl-history.js"></script>
+<script src="lib/pnl-history-page.js"></script>
+</body>
+</html>
