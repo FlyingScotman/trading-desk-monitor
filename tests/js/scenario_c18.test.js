@@ -212,3 +212,11 @@ test('загрузка: ответ с ошибкой — Error со статус
   assert.deepStrictEqual(await S.load('x', { fetch: fake(200, '{"a":1}') }), { a: 1 });
   await assert.rejects(S.load('x', { fetch: fake(404, '{"error":{"message":"run 9 not found"}}') }), e => e.status === 404 && e.text === 'run 9 not found');
 });
+
+test('группа эмитента (#365): строки результата несут issuer_group риска прогона', () => {
+  const c = FIX.cases.find(x => x.name === 'editor');
+  assert.ok(c.payload.positions.every(p => 'issuer_group' in p), 'issuer_group в риске прогона (#366)');
+  const r = S.evaluate(clone(c.payload), S.normalize(c.definition));
+  const by = Object.fromEntries(c.payload.positions.map(p => [p.position_id, p.issuer_group]));
+  r.rows.filter(x => x.parts).forEach(x => assert.strictEqual(x.group, by[x.id] == null ? null : by[x.id], x.id));
+});

@@ -22,7 +22,8 @@
  *  - облигация без ставочного риска, когда сценарий двигает кривые.
  *
  * Для тепловой карты «кривая × бакет» (#364) и групп эмитентов (#365): S.evaluate отдаёт по каждой посчитанной позиции
- * её части и вклад по факторам первого порядка (S.factorParts), сумма по позициям — cells (кривая → 11 бакетов).
+ * её части, группу эмитента (group — issuer_group риска прогона, #366) и вклад по факторам первого порядка
+ * (S.factorParts); сумма по позициям — cells (кривая → 11 бакетов). #365 сворачивает rows по group.
  */
 (function (root) {
   'use strict';
@@ -220,7 +221,7 @@
       const t = T.positions[i], parts = { rates: t.rates, spread: t.spread, fx: t.fx, convexity: t.convexity, total: t.total };
       [bk, res.total].forEach(a => { S.PARTS.forEach(k => { a[k] += parts[k]; }); a.n++; });
       if (t.max_move_bp > S.ACCURACY_BP) res.approx++;
-      res.rows.push({ id, book, parts, why: null, maxMove: t.max_move_bp, second: t.second_order, spreadKind: p.spread_kind });
+      res.rows.push({ id, book, parts, why: null, maxMove: t.max_move_bp, second: t.second_order, spreadKind: p.spread_kind, group: p.issuer_group == null ? null : p.issuer_group });
       S.factorParts(payload, norm, p, base).forEach(([j, v]) => {
         if (!v) return;
         const f = F[j];
@@ -326,6 +327,7 @@
       run_id: null, business_date: M.asOf, buckets: S.BUCKETS.slice(), curves, factors,
       positions: valued.map((p, n) => ({
         position_id: p.id, book_id: p.book, secid: p.isin || null, name: p.name, quality: p.quality || null, issuer: p.issuer || null,
+        issuer_group: p.issuerGroup || iss(p.issuer).group || (p.issuer ? iss(p.issuer).name || p.issuer : null),
         sector: p.sector || iss(p.issuer).sector || null, rating: p.rating || iss(p.issuer).rating || null,
         spread_kind: p.ofzSpr01 ? 'ofz' : p.cs01 ? 'credit' : null, spread_bp: p.zspread != null ? p.zspread : null, pv_rub: p.mv != null ? p.mv / k : null,
         delta: Object.entries(firsts[n]).map(([f, x]) => [idx[f], x]).sort((a, b) => a[0] - b[0]), gamma: [],
