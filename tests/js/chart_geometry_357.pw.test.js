@@ -92,11 +92,14 @@ for (const width of [1024, 390]) for (const scenario of basisCases) test(`#357 c
     await page.goto(PAGE('c09-market.html'));
     await page.waitForFunction(() => window.KIT && KIT.charts.length > 0);
     await page.evaluate(({ pts, change }) => {
+      // Geometry assertions compare final layouts, not intermediate animation frames.
+      const base = KIT.chartBase;
+      KIT.chartBase = () => ({ ...base(), animation: false });
       const b = KIT.basisCurve();
       KIT.basisCurve = () => ({ ...b, pts, chg: pts.map(() => change) });
       KIT.charts.find(c => c.raw.getDom().id === 'curves').redraw();
     }, scenario);
-    await page.waitForTimeout(500);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     if (SHOTS) await page.screenshot({ path: path.join(SHOTS, `c09-${scenario.name.replaceAll(' ', '-')}-${width}.png`), fullPage: true });
     const g = await geometry(page, 'c09');
     assert.equal(g.bars.length, 11);
@@ -104,7 +107,7 @@ for (const width of [1024, 390]) for (const scenario of basisCases) test(`#357 c
     assert.deepEqual(g.values, [scenario.pts, scenario.pts.map(v => v - scenario.change)], 'bar and yesterday values unchanged');
     if (scenario.pts.includes(0)) assert.equal(g.bars.find(b => b.value === 0).text, '0', 'zero remains labelled');
     await page.evaluate(() => KIT.charts.find(c => c.raw.getDom().id === 'curves').redraw());
-    await page.waitForTimeout(200);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     const again = await geometry(page, 'c09');
     assert.deepEqual(again.bars.map(b => b.label), g.bars.map(b => b.label), 'repeat layout keeps the same absolute positions');
     for (const bar of g.bars) {
