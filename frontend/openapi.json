@@ -3,7 +3,7 @@
   "info": {
     "title": "Desk API",
     "description": "Desk API v1 (docs/architecture/05 §2)",
-    "version": "0.2.7"
+    "version": "0.2.8"
   },
   "paths": {
     "/api/v1/auth/state": {
@@ -6719,6 +6719,18 @@
               }
             ],
             "title": "Issuer"
+          },
+          "issuer_group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issuer Group",
+            "description": "The issuer's group: the hub's group of the issuer, else its display name; null without an issuer (TDM#72)"
           },
           "sector": {
             "anyOf": [
