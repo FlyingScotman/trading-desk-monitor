@@ -22,8 +22,11 @@ test('Тейлор: сверка с scenario/taylor.py на общей фикс�
   assert.ok(FIX.cases.length >= 10);
   assert.ok(FIX.cases.some(c => c.name === 'editor'), 'в фикстуре есть случай редактора C18');
   for (const c of FIX.cases) {
+    // сырое определение (CASES test_slice_s6.py) → нормализованное, как у Python; и нормализованное не меняется
+    assert.ok(c.raw, c.name + ': в фикстуре есть сырое определение');
+    assert.strictEqual(S.canon(S.normalize(c.raw, c.payload.curves)), S.canon(c.definition), c.name + ': normalize(raw) как у Python');
     const norm = S.normalize(c.definition, c.payload.curves);
-    assert.strictEqual(S.canon(norm), S.canon(c.definition), c.name + ': нормализованная форма как у Python');
+    assert.strictEqual(S.canon(norm), S.canon(c.definition), c.name + ': нормализованная форма не меняется');
     const got = S.runTaylor(clone(c.payload), norm);
     assert.strictEqual(got.positions.length, c.expected.positions.length);
     c.expected.positions.forEach((e, i) => {
@@ -171,6 +174,40 @@ test('корзины редактора: грейды по шкале, «без 
   assert.ok(!keep.rating._none, 'фильтр шапки: позиции вне экрана не входят');
 });
 
+test('корзины = к чему шок применяется (own_spread_shock): рейтинг и сектор null ни в какую корзину не входят', () => {
+  const p = clone(P);
+  p.positions.push({ position_id: 'nul', book_id: 'B', spread_kind: 'credit', spread_bp: 100, rating: null, sector: null, issuer: null, delta: [[3, -7]], gamma: [] });
+  p.positions.push({ position_id: 'nd', book_id: 'B', spread_kind: 'credit', spread_bp: 100, rating: 'нет данных', sector: 'constructor', issuer: 'Z', delta: [[3, -3]], gamma: [] });
+  const b = S.buckets(p);
+  assert.deepStrictEqual([b.nNoRating, b.nNoSector], [1, 2], 'сектор null — у cny и nul');
+  assert.deepStrictEqual(b.rating._none, { cs01: -23, n: 2 }, '«б/р» и «нет данных», без рейтинга null');
+  assert.ok(b.sectors.includes('constructor') && b.sector.constructor.n === 1, 'сектор с именем свойства объекта — обычная корзина');
+  // подпись ползунка = расчёт: CS01 корзины × шок = спредовая часть шока корзины по Тейлору
+  const ed = { rating: { _none: 50 }, sector: { constructor: 20 } };
+  const r = S.evaluate(p, S.normalize(S.editorDef(ed)));
+  const spreadOf = id => r.rows.find(x => x.id === id).parts.spread;
+  near(spreadOf('usd') + spreadOf('nd') + spreadOf('nul'), b.rating._none.cs01 * 50 + -3 * 20, 'эффект корзин');
+  assert.strictEqual(spreadOf('nul'), 0, 'рейтинг null: шок рейтинга не применяется, как в Python');
+});
+
+test('состояние из адреса и localStorage — чужие данные: ключи по форме и по белому списку', () => {
+  const evil = '<img src=x onerror=alert(1)>';
+  const e = S.cleanEditor({ base: evil, fx: { [evil]: 5, usd: 3, USD: 2, RUBX: 1, EUR: '4', CNY: {} }, rating: { [evil]: 10, 'BB+': 5, __proto__: { x: 1 } },
+    sector: { 'Лизинг': 7, 'a"b': 1, ['x'.repeat(200)]: 1 }, ofz: 'x', mult: 0 });
+  assert.deepStrictEqual(e.fx, { USD: 2, EUR: 4 });
+  assert.deepStrictEqual(Object.keys(e.rating), ['BB+']);
+  assert.deepStrictEqual(Object.keys(e.sector), ['Лизинг']);
+  assert.strictEqual(e.base, null);
+  assert.deepStrictEqual([e.ofz, e.mult], [0, 1]);
+  const hash = encodeURIComponent(JSON.stringify({ fx: { [evil]: 5, USD: 1 }, rating: { '__proto__': 3 }, sector: { 'Лизинг': 1, 'Нефть': 2 }, base: 'nope' }));
+  const d = S.decode(hash, { fx: ['USD'], rating: ['A'], sector: ['Лизинг'], base: ['credit'] });
+  assert.deepStrictEqual(d, { base: null, fx: { USD: 1 }, ofz: 0, all: 0, mult: 1, rating: {}, sector: { 'Лизинг': 1 } });
+  assert.strictEqual(Object.getPrototypeOf(S.decode(encodeURIComponent('{"rating":{"__proto__":{"polluted":1}}}')).rating), Object.prototype, 'прототип не подменяется');
+  assert.strictEqual(({}).polluted, undefined);
+  ['USD', 'CNY'].forEach(c => assert.ok(S.okCcy(c)));
+  ['usd', 'US', '<b>', 'USDT', ''].forEach(c => assert.ok(!S.okCcy(c), c));
+});
+
 test('демо: риск из позиций lib/mock.js той же формы, пресеты демо считаются', () => {
   const ctx = { document: { write() { } }, location: { protocol: 'file:' }, console, URLSearchParams };
   ctx.window = ctx;
@@ -180,6 +217,14 @@ test('демо: риск из позиций lib/mock.js той же формы,
   assert.ok(p.positions.length > 20 && p.factors.includes('CS') && p.factors.some(f => f.startsWith('FX|')) && p.factors.some(f => f.startsWith('IR|')));
   p.positions.forEach(x => x.delta.forEach(([i, d]) => assert.ok(i >= 0 && i < p.factors.length && isFinite(d) && d !== 0)));
   assert.ok(p.positions.some(x => x.spread_kind === 'ofz') && p.positions.some(x => x.spread_kind === 'credit'));
+  // рублёвые ОФЗ (ПД, ПК, ИН) — со спредом ОФЗ, как в прогоне (spread_kind 'ofz' в фикстуре Python): B1 их не выбрасывает
+  const ofz = M.positions.filter(x => x.group === 'GOV' && x.ccy === 'RUB' && !x.notValued);
+  assert.ok(ofz.some(x => x.kind === 'PK') && ofz.some(x => x.kind === 'IN'));
+  ofz.forEach(x => assert.strictEqual(p.positions.find(y => y.position_id === x.id).spread_kind, 'ofz', x.id + ' ' + x.kind));
+  S.DEMO_PRESETS.forEach(pr => {
+    const r = S.evaluate(p, S.normalize(pr.definition, p.curves), { ids: ofz.map(x => x.id), info: id => M.pos[id] });
+    assert.strictEqual(r.total.miss, 0, pr.scenario_id + ': ОФЗ посчитаны');
+  });
   // курс показа: payload в рублях при любой валюте показа
   const p2 = S.demoPayload(M, 0.5);
   near(p2.positions[0].delta[0][1], p.positions[0].delta[0][1] * 2, 'деление на курс показа');

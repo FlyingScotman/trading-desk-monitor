@@ -91,5 +91,66 @@ test('C18 в браузере', { skip: !pw && 'нет Playwright' }, async t =>
       assert.deepStrictEqual(errs, []);
       await ctx.close();
     });
+    // #374: состояние из ссылки и из localStorage — чужие данные. Ключ с разметкой отбрасывается, элементов не создаёт,
+    // скрипт не выполняется
+    const EVIL = '<img src=x onerror="window.__pwned=1">';
+    const evilState = { fx: { [EVIL]: 5, USD: 3 }, rating: { [EVIL]: 50 }, sector: { [EVIL]: 40 }, base: EVIL };
+    const noEvil = async (pg, how) => {
+      await pg.waitForTimeout(300);
+      const r = await pg.evaluate(() => ({ pwned: window.__pwned || null, imgs: document.querySelectorAll('img[src="x"]').length,
+        keys: [...document.querySelectorAll('[data-k]')].map(e => e.dataset.k).filter(k => /[<>]/.test(k)),
+        state: JSON.stringify(window.C18.state.ed), html: /onerror/.test(document.body.innerHTML) }));
+      assert.deepStrictEqual([r.pwned, r.imgs, r.keys, r.html], [null, 0, [], false], how + ': ' + JSON.stringify(r));
+      assert.ok(!/</.test(r.state) && /"USD":3/.test(r.state), how + ': ключ отброшен, остальное на месте: ' + r.state);
+    };
+    await t.test('#374: вредоносная ссылка #s=… не выполняет скрипт и не создаёт элементов', async () => {
+      const { pg, ctx, errs } = await open(1280, { hash: '#s=' + encodeURIComponent(JSON.stringify(evilState)) });
+      await noEvil(pg, 'адрес');
+      assert.deepStrictEqual(errs, []);
+      await ctx.close();
+    });
+    await t.test('#374: вредоносное состояние в localStorage не выполняет скрипт', async () => {
+      const ctx = await b.newContext({ viewport: { width: 390, height: 900 } });
+      await ctx.addInitScript(s => { try { localStorage.setItem('c18-state', s); } catch (e) { } }, JSON.stringify({ ed: evilState, view: EVIL }));
+      const pg = await ctx.newPage(), errs = [];
+      pg.on('pageerror', e => errs.push(e.message)); pg.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
+      await pg.goto(URL0);
+      await pg.waitForFunction(() => window.C18 && window.C18.result && document.querySelector('table.k-tbl tfoot'));
+      await noEvil(pg, 'localStorage');
+      assert.deepStrictEqual(errs, []);
+      await ctx.close();
+    });
+
+    // #374: шапка «Сравнения сценариев» с названиями сценариев видна в окне при прокрутке таблицы, таблица в панели
+    for (const w of [1280, 1024]) {
+      await t.test(`сравнение: шапка с названиями видна при прокрутке, ширина ${w}`, async () => {
+        const { pg, ctx, errs } = await open(w);
+        const g = await pg.evaluate(() => {
+          const p = document.querySelector('.c18-cmp'), wrap = p.querySelector('.k-tbl-wrap'), top = document.querySelector('.k-top').getBoundingClientRect().height;
+          p.scrollIntoView(); window.scrollBy(0, -(top + 10)); wrap.scrollTop = 300;
+          return { top, scrolled: wrap.scrollTop, ih: innerHeight, iw: innerWidth, wrapW: wrap.clientWidth, tableW: wrap.querySelector('table').offsetWidth,
+            names: SCENARIO.DEMO_PRESETS.map(x => x.name),
+            ths: [...p.querySelectorAll('th[data-k^="s:"]')].map(th => { const r = th.getBoundingClientRect(); return { t: r.top, b: r.bottom, l: r.left, r: r.right, txt: th.textContent }; }) };
+        });
+        assert.ok(g.scrolled > 0, 'таблица прокручивается внутри себя');
+        assert.ok(g.tableW <= g.wrapW + 1, `таблица в панели: ${g.tableW} > ${g.wrapW}`);
+        g.ths.forEach(th => assert.ok(th.t >= g.top - 1 && th.b <= g.ih && th.l >= 0 && th.r <= g.iw + 1, 'шапка в окне: ' + JSON.stringify(th)));
+        g.names.forEach(n => assert.ok(g.ths.some(th => th.txt.startsWith(n)), n));
+        assert.deepStrictEqual(errs, []);
+        await ctx.close();
+      });
+    }
+
+    await t.test('множитель: 0 и пусто не принимаются, после ухода из поля — значение состояния', async () => {
+      const { pg, ctx, errs } = await open(1280);
+      for (const v of ['0', '']) {
+        await pg.fill('input[type=number][data-k="mult"]', v);
+        await pg.locator('input[type=number][data-k="mult"]').blur();
+        const r = await pg.evaluate(() => ({ field: document.querySelector('input[type=number][data-k="mult"]').value, state: window.C18.state.ed.mult }));
+        assert.deepStrictEqual(r, { field: '1', state: 1 }, 'ввод ' + JSON.stringify(v));
+      }
+      assert.deepStrictEqual(errs, []);
+      await ctx.close();
+    });
   } finally { await b.close(); }
 });

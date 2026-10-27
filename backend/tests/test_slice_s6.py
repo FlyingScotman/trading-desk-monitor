@@ -326,7 +326,10 @@ def _parity(golden) -> str:
     cases = []
     for name, d in CASES.items():
         norm = normalize(d, payload["curves"])
-        cases.append({"name": name, "definition": norm, "payload": payload, "expected": run_taylor(payload, norm)})
+        # raw: the definition as written (CASES), so the ports check their normalize against Python's, not only
+        # that a normalized form stays as it is (C18 lib/scenario.js, TDM#374)
+        cases.append({"name": name, "raw": d, "definition": norm, "payload": payload,
+                      "expected": run_taylor(payload, norm)})
     return json.dumps({"version": 1, "tolerance_rel": 1e-9, "cases": cases}, sort_keys=True, indent=1,
                       ensure_ascii=False, allow_nan=False) + "\n"
 
@@ -343,7 +346,7 @@ def test_parity_fixture_is_current(golden):
     assert {k: v for k, v in doc.items() if k != "cases"} == {k: v for k, v in new.items() if k != "cases"}, stale
     assert [c["name"] for c in doc["cases"]] == [c["name"] for c in new["cases"]], stale
     for c, n in zip(doc["cases"], new["cases"]):
-        assert c["definition"] == n["definition"], stale
+        assert c["raw"] == n["raw"] and c["definition"] == n["definition"], stale
         diff = _same(_denoise(c["payload"]), n["payload"], c["name"])
         assert not diff, stale + "\n" + "\n".join(diff[:20])
         diff = _same(c["expected"], run_taylor(c["payload"], c["definition"]), c["name"], doc["tolerance_rel"], 1e-12)

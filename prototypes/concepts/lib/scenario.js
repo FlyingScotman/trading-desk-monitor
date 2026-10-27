@@ -42,6 +42,15 @@
   // приближение второго порядка надёжно примерно до ±500 б.п. по позиции (Scenario Lab, docs/SCENARIOS.md)
   S.ACCURACY_BP = 500;
 
+  // ---------- ключи из данных (имена кривых, секторов, рейтингов, валют, книг) ----------
+  // ключ из данных или из состояния в адресе может быть любой строкой, в том числе «__proto__»: запись — только своим
+  // свойством (put), чтение — только своего свойства (own), накопители — объекты без прототипа (dict)
+  const has = (o, k) => o != null && Object.prototype.hasOwnProperty.call(o, k);
+  const own = (o, k) => has(o, k) ? o[k] : undefined;
+  const put = (o, k, v) => { Object.defineProperty(o, k, { value: v, enumerable: true, writable: true, configurable: true }); return v; };
+  const dict = () => Object.create(null);
+  S.own = own;
+
   // ---------- определение (порт scenario/definition.py normalize) ----------
   const fin = x => typeof x === 'number' && isFinite(x);
   function num(x, what, limit) {
@@ -56,7 +65,7 @@
   }
   function rules(x, what) {
     const out = {};
-    Object.entries(map(x, what)).forEach(([k, v]) => { const n = num(v, what + '.' + k); if (n) out[k] = n; });
+    Object.entries(map(x, what)).forEach(([k, v]) => { const n = num(v, what + '.' + k); if (n) put(out, k, n); });
     return out;
   }
   const nonEmpty = o => Object.keys(o).length > 0;
@@ -70,7 +79,7 @@
       let vec = Array.isArray(v) ? v.slice() : new Array(S.BUCKETS.length).fill(v);
       if (vec.length !== S.BUCKETS.length) throw new Error('curves.' + cid + ': нужно ' + S.BUCKETS.length + ' бакетов, а не ' + vec.length);
       vec = vec.map(x => num(x, 'curves.' + cid));
-      if (vec.some(x => x)) shocked[cid] = vec;
+      if (vec.some(x => x)) put(shocked, cid, vec);
     });
     if (curves) {
       const unknown = Object.keys(shocked).filter(c => !curves.includes(c) && !S.RUB_CURVES.includes(c));
@@ -95,7 +104,7 @@
     const fx = {};
     Object.entries(map(defn.fx, 'fx')).forEach(([c, v]) => {
       if (num(v, 'fx.' + c, null) <= -100) throw new Error('fx.' + c + ': нужен сдвиг больше −100 %, а не ' + v);
-      if (v) fx[c] = v + 0;
+      if (v) put(fx, c, v + 0);
     });
     if (nonEmpty(fx)) out.fx = fx;
     const basis = rules(defn.basis, 'basis');
@@ -119,7 +128,7 @@
     const s = norm.spreads || {};
     let ds = s._all || 0;
     if (s._mult != null && p.spread_bp != null) ds += (s._mult - 1) * p.spread_bp;
-    S.SPREAD_RULES.forEach(k => { if (p[k] != null) ds += (s[k] && s[k][p[k]]) || 0; });
+    S.SPREAD_RULES.forEach(k => { if (p[k] != null) ds += own(s[k], p[k]) || 0; });
     return ds;
   };
 
@@ -138,14 +147,15 @@
   // вектор шока по факторам без CS (его ds у каждой позиции свой): IR — сдвиг кривой в бакете (нет кривой — 0), FX — %
   S.baseVector = function (payload, norm) {
     const curves = norm.curves || {}, fx = norm.fx || {};
-    return S.factors(payload).map(f => f.kind === 'IR' ? (curves[f.curve] ? curves[f.curve][f.bucket] : 0) : f.kind === 'FX' ? (fx[f.ccy] || 0) : 0);
+    return S.factors(payload).map(f => f.kind === 'IR' ? (own(curves, f.curve) ? own(curves, f.curve)[f.bucket] : 0) : f.kind === 'FX' ? (own(fx, f.ccy) || 0) : 0);
   };
   S.zero = () => ({ rates: 0, spread: 0, fx: 0, convexity: 0, total: 0 });
   S.runTaylor = function (payload, norm) {
     const F = S.factors(payload), kinds = F.map(f => f.kind), base = S.baseVector(payload, norm);
     let irMax = 0;
     kinds.forEach((k, i) => { if (k === 'IR' && Math.abs(base[i]) > irMax) irMax = Math.abs(base[i]); });
-    const out = [], totals = { _total: S.zero() };
+    const out = [], totals = dict();
+    totals._total = S.zero();
     payload.positions.forEach(p => {
       const ds = S.ownSpreadShock(norm, p);
       const x = kinds.map((k, i) => k === 'CS' ? ds : base[i]);
@@ -154,7 +164,7 @@
       p.gamma.forEach(([i, j, v]) => { conv += (i === j ? 0.5 : 1.0) * v * x[i] * x[j]; });
       const row = { rates, spread, fx: fxp, convexity: conv, total: rates + spread + fxp + conv };
       out.push(Object.assign({ position_id: p.position_id }, row, { second_order: p.gamma.length > 0, max_move_bp: Math.max(irMax, Math.abs(ds)) }));
-      [p.book_id, '_total'].forEach(b => { const t = totals[b] || (totals[b] = S.zero()); S.PARTS.forEach(k => { t[k] += row[k]; }); });
+      [p.book_id, '_total'].forEach(b => { const t = totals[b] || put(totals, b, S.zero()); S.PARTS.forEach(k => { t[k] += row[k]; }); });
     });
     return { positions: out, totals };
   };
@@ -210,12 +220,12 @@
     const byId = new Map(payload.positions.map((p, i) => [p.position_id, i]));
     const ids = opt.ids || payload.positions.map(p => p.position_id);
     const acc = () => Object.assign(S.zero(), { n: 0, miss: 0 });
-    const res = { rows: [], byBook: {}, total: acc(), cells: {}, byFactor: {}, spreadOfz: 0, spreadCredit: 0, fxBy: {}, missing: [], approx: 0 };
+    const res = { rows: [], byBook: dict(), total: acc(), cells: dict(), byFactor: dict(), spreadOfz: 0, spreadCredit: 0, fxBy: dict(), missing: [], approx: 0 };
     ids.forEach(id => {
       const i = byId.get(id), p = i == null ? null : payload.positions[i], m = info(id);
       const book = p ? p.book_id : (m && m.book) || '—';
       const why = S.missing(norm, p, m, F);
-      const bk = res.byBook[book] || (res.byBook[book] = acc());
+      const bk = res.byBook[book] || put(res.byBook, book, acc());
       if (why) { bk.miss++; res.total.miss++; const r = { id, book, parts: null, why }; res.rows.push(r); res.missing.push(r); return; }
       if (!p) { bk.n++; res.total.n++; res.rows.push({ id, book, parts: S.zero(), why: null, maxMove: 0, second: false }); return; }  // пустой сценарий
       const t = T.positions[i], parts = { rates: t.rates, spread: t.spread, fx: t.fx, convexity: t.convexity, total: t.total };
@@ -225,9 +235,9 @@
       S.factorParts(payload, norm, p, base).forEach(([j, v]) => {
         if (!v) return;
         const f = F[j];
-        res.byFactor[payload.factors[j]] = (res.byFactor[payload.factors[j]] || 0) + v;
-        if (f.kind === 'IR') (res.cells[f.curve] || (res.cells[f.curve] = new Array(S.BUCKETS.length).fill(0)))[f.bucket] += v;
-        else if (f.kind === 'FX') res.fxBy[f.ccy] = (res.fxBy[f.ccy] || 0) + v;
+        put(res.byFactor, payload.factors[j], (res.byFactor[payload.factors[j]] || 0) + v);
+        if (f.kind === 'IR') (res.cells[f.curve] || put(res.cells, f.curve, new Array(S.BUCKETS.length).fill(0)))[f.bucket] += v;
+        else if (f.kind === 'FX') put(res.fxBy, f.ccy, (res.fxBy[f.ccy] || 0) + v);
         else if (p.spread_kind === 'ofz') res.spreadOfz += v; else res.spreadCredit += v;
       });
     });
@@ -238,13 +248,33 @@
 
   // ---------- редактор ----------
   // состояние: base — пресет, с которого начат (его кривые, базис и правила по эмитентам берутся как есть),
-  // fx {валюта: %}, ofz, all — б.п., mult — множитель, rating {грейд | _none: б.п.}, sector {сектор: б.п.}
+  // fx {валюта: %}, ofz, all — б.п., mult — множитель, rating {грейд | _none: б.п.}, sector {сектор: б.п.}.
+  // Состояние приходит из адреса (#s=…) и из localStorage — это чужие данные: ключи проверяются по форме (валюта —
+  // три латинские заглавные, остальное — строка без разметки и управляющих символов), а когда риск прогона загружен —
+  // по белому списку (S.restrict: валюты из факторов FX, рейтинги и секторы позиций, пресеты сервера). Страница всё
+  // равно экранирует всё, что выводит.
   S.emptyEditor = () => ({ base: null, fx: {}, ofz: 0, all: 0, mult: 1, rating: {}, sector: {} });
-  const clean = o => { const r = {}; Object.keys(o || {}).forEach(k => { const v = +o[k]; if (isFinite(v) && v) r[k] = v; }); return r; };
-  S.cleanEditor = function (ed) {
-    const e = Object.assign(S.emptyEditor(), ed && typeof ed === 'object' ? ed : {});
-    const n = (v, d) => { v = +v; return isFinite(v) ? v : d; };
-    return { base: e.base == null ? null : String(e.base), fx: clean(e.fx), ofz: n(e.ofz, 0), all: n(e.all, 0), mult: n(e.mult, 1) > 0 ? n(e.mult, 1) : 1, rating: clean(e.rating), sector: clean(e.sector) };
+  S.CCY_RE = /^[A-Z]{3}$/;
+  S.okKey = k => typeof k === 'string' && k.length > 0 && k.length <= 120 && k !== '__proto__' && !/[<>"'&`\u0000-\u001f\u007f]/.test(k);
+  S.okCcy = k => S.CCY_RE.test(k);
+  const clean = (o, ok) => {
+    const r = {};
+    if (!o || typeof o !== 'object' || Array.isArray(o)) return r;
+    Object.keys(o).forEach(k => { const v = typeof o[k] === 'number' || typeof o[k] === 'string' ? +o[k] : NaN; if ((ok || S.okKey)(k) && isFinite(v) && v) put(r, k, v); });
+    return r;
+  };
+  // allow (необязательно): {fx, rating, sector, base} — списки допустимых ключей; ключ вне списка отбрасывается
+  S.cleanEditor = function (ed, allow) {
+    const e = ed && typeof ed === 'object' && !Array.isArray(ed) ? ed : {};
+    const n = (v, d) => { v = typeof v === 'number' || typeof v === 'string' ? +v : NaN; return isFinite(v) ? v : d; };
+    const base = (typeof e.base === 'string' || typeof e.base === 'number') && S.okKey(String(e.base)) && String(e.base).length <= 64 ? String(e.base) : null;
+    const out = { base, fx: clean(e.fx, S.okCcy), ofz: n(e.ofz, 0), all: n(e.all, 0), mult: n(e.mult, 1) > 0 ? n(e.mult, 1) : 1, rating: clean(e.rating), sector: clean(e.sector) };
+    return allow ? S.restrict(out, allow) : out;
+  };
+  S.restrict = function (ed, allow) {
+    const keep = (o, list) => { if (!list) return o; const r = {}; Object.keys(o).forEach(k => { if (list.includes(k)) put(r, k, o[k]); }); return r; };
+    return Object.assign({}, ed, { fx: keep(ed.fx, allow.fx), rating: keep(ed.rating, allow.rating), sector: keep(ed.sector, allow.sector),
+      base: ed.base != null && allow.base && !allow.base.includes(ed.base) ? null : ed.base });
   };
   // определение редактора (формат definition.py); preset — определение пресета base (или null)
   S.editorDef = function (ed, preset) {
@@ -258,7 +288,7 @@
     if (ed.all) sp._all = ed.all;
     if (ed.mult !== 1) sp._mult = ed.mult;
     const rating = {};
-    Object.keys(ed.rating).forEach(k => { if (k === S.NONE) S.UNRATED_KEYS.forEach(u => { rating[u] = ed.rating[k]; }); else rating[k] = ed.rating[k]; });
+    Object.keys(ed.rating).forEach(k => { if (k === S.NONE) S.UNRATED_KEYS.forEach(u => put(rating, u, ed.rating[k])); else put(rating, k, ed.rating[k]); });
     if (nonEmpty(rating)) sp.rating = rating;
     if (nonEmpty(ed.sector)) sp.sector = Object.assign({}, ed.sector);
     if (b.spreads && b.spreads.issuer && nonEmpty(b.spreads.issuer)) sp.issuer = Object.assign({}, b.spreads.issuer);
@@ -269,45 +299,55 @@
   S.editorFrom = function (id, def) {
     const ed = S.emptyEditor(), s = (def && def.spreads) || {};
     ed.base = id == null ? null : String(id);
-    ed.fx = clean(def && def.fx); ed.ofz = +(def && def.ofzSpread) || 0; ed.all = +s._all || 0; ed.mult = s._mult > 0 ? +s._mult : 1;
-    Object.keys(s.rating || {}).forEach(k => { if (S.UNRATED_KEYS.includes(k)) { if (s.rating[k]) ed.rating[S.NONE] = +s.rating[k]; } else ed.rating[k] = +s.rating[k]; });
-    ed.rating = clean(ed.rating); ed.sector = clean(s.sector);
+    ed.fx = clean(def && def.fx, () => true); ed.ofz = +(def && def.ofzSpread) || 0; ed.all = +s._all || 0; ed.mult = s._mult > 0 ? +s._mult : 1;
+    const r = {};
+    Object.keys(s.rating || {}).forEach(k => { if (S.UNRATED_KEYS.includes(k)) { if (s.rating[k]) put(r, S.NONE, +s.rating[k]); } else put(r, k, +s.rating[k]); });
+    ed.rating = clean(r, () => true); ed.sector = clean(s.sector, () => true);
     return ed;
   };
   // состояние в адресе (#s=…) и обратно; битое — null
   S.encode = ed => encodeURIComponent(JSON.stringify(S.cleanEditor(ed)));
-  S.decode = function (s) {
+  S.decode = function (s, allow) {
     if (!s) return null;
-    try { const o = JSON.parse(decodeURIComponent(s)); return o && typeof o === 'object' && !Array.isArray(o) ? S.cleanEditor(o) : null; } catch (e) { return null; }
+    try { const o = JSON.parse(decodeURIComponent(s)); return o && typeof o === 'object' && !Array.isArray(o) ? S.cleanEditor(o, allow) : null; } catch (e) { return null; }
   };
   S.fxAfter = (rate, pct) => rate == null || !isFinite(rate) ? null : rate * (1 + (+pct || 0) / 100);
 
-  // корзины редактора по позициям риска с кредитным спредом (на экране): грейды по шкале, «без рейтинга» последней;
-  // секторы по алфавиту, «нет данных» последним. CS01 корзины — сумма дельт CS, ₽/б.п.
+  // Корзины редактора по позициям риска с кредитным спредом (на экране), по тому же правилу, что own_spread_shock:
+  // шок рейтинга применяется к позиции, только если её рейтинг есть и совпадает с ключом. Грейды — по шкале, корзина
+  // «без рейтинга» (_none: рейтинг «б/р» или «нет данных», под этими ключами её шок и пишется) — последней; позиция с
+  // рейтингом null (нет эмитента в справочнике) ни в одну корзину не входит — шок рейтинга к ней не применяется
+  // (nNoRating). Секторы — по алфавиту, «нет данных» последним; сектор null — так же (nNoSector).
+  // CS01 корзины — сумма дельт CS, ₽/б.п.
   S.buckets = function (payload, keep, rank) {
     const F = S.factors(payload), cs = p => p.delta.reduce((a, [i, d]) => a + (F[i].kind === 'CS' ? d : 0), 0);
-    const rating = {}, sector = {}, ccy = {};
-    let ofz = 0, credit = 0, nCredit = 0;
+    const rating = dict(), sector = dict(), ccy = dict();
+    let ofz = 0, credit = 0, nCredit = 0, nNoRating = 0, nNoSector = 0;
+    const add = (m, k, v) => { const b = m[k] || put(m, k, { cs01: 0, n: 0 }); b.cs01 += v; b.n++; };
     payload.positions.forEach(p => {
       if (keep && !keep(p.position_id)) return;
-      p.delta.forEach(([i, d]) => { if (F[i].kind === 'FX') ccy[F[i].ccy] = (ccy[F[i].ccy] || 0) + d; });
+      p.delta.forEach(([i, d]) => { if (F[i].kind === 'FX') put(ccy, F[i].ccy, (ccy[F[i].ccy] || 0) + d); });
       if (p.spread_kind === 'ofz') { ofz += cs(p); return; }
       if (p.spread_kind !== 'credit') return;
-      const v = cs(p), r = p.rating == null || S.UNRATED_KEYS.includes(p.rating) || (rank && rank(p.rating) >= 99) ? S.NONE : p.rating;
+      const v = cs(p);
       credit += v; nCredit++;
-      (rating[r] = rating[r] || { cs01: 0, n: 0 }).cs01 += v; rating[r].n++;
-      const s = p.sector == null ? S.NO_DATA : p.sector;
-      (sector[s] = sector[s] || { cs01: 0, n: 0 }).cs01 += v; sector[s].n++;
+      if (p.rating == null) nNoRating++; else add(rating, S.UNRATED_KEYS.includes(p.rating) ? S.NONE : p.rating, v);
+      if (p.sector == null) nNoSector++; else add(sector, p.sector, v);
     });
     const rk = rank || (() => 0);
     const ratings = Object.keys(rating).sort((a, b) => (a === S.NONE) - (b === S.NONE) || rk(a) - rk(b) || a.localeCompare(b));
     const sectors = Object.keys(sector).sort((a, b) => (a === S.NO_DATA) - (b === S.NO_DATA) || a.localeCompare(b, 'ru'));
     const fxCcys = F.filter(f => f.kind === 'FX').map(f => f.ccy);
-    return { rating, sector, ratings, sectors, ofzCs01: ofz, creditCs01: credit, nCredit, fxDelta: ccy, fxCcys };
+    return { rating, sector, ratings, sectors, ofzCs01: ofz, creditCs01: credit, nCredit, nNoRating, nNoSector, fxDelta: ccy, fxCcys };
   };
+  // белый список ключей состояния редактора по риску прогона и пресетам
+  S.allowed = (B, presets) => ({ fx: B.fxCcys.filter(S.okCcy), rating: B.ratings.slice(), sector: B.sectors.slice(), base: (presets || []).map(p => String(p.scenario_id)) });
 
   // ---------- демо: риск прогона из позиций lib/mock.js ----------
   // k — курс показа (M.toRepr.RUB): суммы монитора делятся на него, чтобы payload был в рублях, как у сервера
+  // спред ОФЗ демо: у ОФЗ-ПК и ОФЗ-ИН в lib/mock.js ofzSpr01 = 0, их спред к RUONIA — базис (basis01, риск на
+  // RUB OFZ), как у ОФЗ-ПК в lib/real.js; в прогоне у рублёвых ОФЗ ofz_spr01 есть (spread_kind 'ofz' в фикстуре)
+  const ofzSpr = p => p.ofzSpr01 || (p.group === 'GOV' && p.ccy === 'RUB' && !p.cs01 ? p.basis01 || 0 : 0);
   S.demoPayload = function (M, k) {
     k = k || 1;
     const curves = [...new Set(M.curves.map(c => c.id).concat(S.RUB_CURVES))].sort();
@@ -315,7 +355,7 @@
     valued.forEach(p => {
       const d = {};
       Object.keys(p.risk || {}).forEach(c => (p.risk[c] || []).forEach((x, b) => { if (x) d['IR|' + c + '|' + S.BUCKETS[b]] = x / k; }));
-      const cs = (p.cs01 || p.ofzSpr01 || 0) / k;
+      const cs = (p.cs01 || ofzSpr(p) || 0) / k;
       if (cs) d.CS = cs;
       Object.keys(p.fxDeltaBy || {}).forEach(c => { const x = p.fxDeltaBy[c]; if (x && c !== 'RUB' && M.fx[c]) d['FX|' + c] = x * M.fx[c] / 100; });
       firsts.push(d); Object.keys(d).forEach(x => seen.add(x));
@@ -329,7 +369,7 @@
         position_id: p.id, book_id: p.book, secid: p.isin || null, name: p.name, quality: p.quality || null, issuer: p.issuer || null,
         issuer_group: p.issuerGroup || iss(p.issuer).group || (p.issuer ? iss(p.issuer).name || p.issuer : null),
         sector: p.sector || iss(p.issuer).sector || null, rating: p.rating || iss(p.issuer).rating || null,
-        spread_kind: p.ofzSpr01 ? 'ofz' : p.cs01 ? 'credit' : null, spread_bp: p.zspread != null ? p.zspread : null, pv_rub: p.mv != null ? p.mv / k : null,
+        spread_kind: ofzSpr(p) ? 'ofz' : p.cs01 ? 'credit' : null, spread_bp: p.zspread != null ? p.zspread : null, pv_rub: p.mv != null ? p.mv / k : null,
         delta: Object.entries(firsts[n]).map(([f, x]) => [idx[f], x]).sort((a, b) => a[0] - b[0]), gamma: [],
       })),
     };

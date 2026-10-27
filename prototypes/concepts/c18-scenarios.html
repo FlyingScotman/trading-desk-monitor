@@ -43,7 +43,7 @@
 .c18-notes li { margin: 2px 0; overflow-wrap: anywhere; }
 .k-tbl th.c18-cur { color: var(--accent); }
 .k-tbl td sup, .c18-t td sup { line-height: 0; }
-.k-tbl th[data-k^="s:"] { cursor: pointer; }
+.c18-cmp .k-tbl th[data-k^="s:"] { white-space: normal; min-width: 76px; max-width: 132px; vertical-align: bottom; line-height: 1.25; }
 .c18-link { cursor: pointer; color: var(--accent); }
 @media (max-width: 720px) {
   .k-panel > .hd { flex-wrap: wrap; }
@@ -73,7 +73,7 @@
   // топ позиций по убытку и сравнение пресетов по книгам — всё по Тейлору на клиенте (lib/scenario.js, порт
   // backend scenario/taylor.py). Данные: риск прогона GET ../api/v1/runs/{run_id}/risk и пресеты GET
   // ../api/v1/scenario-defs (те же, что у /app/); в демо — из позиций lib/mock.js. Точные цифры — «Сценарии (точно)»
-  // (/app/), сравнение пресетов точно — шаг 2 (блок calc).
+  // (/app/); точные итоги пресетов по книгам (/api/v1/runs/{run_id}/scenario-results, #370) экран подключит в #378.
   // Состояние редактора — в адресе (#s=…, ссылкой можно поделиться) и в localStorage (c18-state).
   // Для тепловой карты (#364) и групп эмитентов (#365): window.C18 = {state, current()} — состояние и результат
   // SCENARIO.evaluate текущего сценария (cells — кривая × бакет, rows — по позициям).
@@ -94,12 +94,14 @@
     fx: 'FX: FX-дельта позиции в рублях за 1 % × шок курса, %.',
     convexity: 'Второй порядок (гамма ядра по ставкам, спредам и FX), где он есть в прогоне.',
     mult: 'Множитель спредов: сдвиг = (множитель − 1) × текущий спред бумаги. У бумаги без спреда в прогоне — 0.',
-    none: 'Бумаги, у которых нет рейтинга (б/р) или рейтингов в данных нет вовсе: одна корзина, не грейд. Бумага без эмитента в справочнике в корзину не попадает.',
+    none: 'Бумаги с рейтингом «б/р» (у бумаги и эмитента рейтинга нет) или «нет данных» (рейтингов в данных нет): одна корзина, не грейд; шок пишется под обоими ключами. Бумага без эмитента в справочнике (рейтинг пуст) ни в какую корзину не входит: шок рейтинга к ней не применяется, как и в расчёте сервера.',
   };
 
   // ---------- состояние ----------
   const st = { ed: S.emptyEditor(), view: ED };
-  try { const o = JSON.parse(localStorage.getItem('c18-state') || '{}'); if (o.ed) st.ed = S.cleanEditor(o.ed); if (o.view) st.view = String(o.view); } catch (e) { }
+  // localStorage и адрес — чужие данные: ключи проверяются по форме здесь (S.cleanEditor) и по белому списку, когда
+  // риск прогона загружен (S.restrict в load); всё, что выводится, экранируется
+  try { const o = JSON.parse(localStorage.getItem('c18-state') || '{}'); if (o && o.ed) st.ed = S.cleanEditor(o.ed); if (o && typeof o.view === 'string' && S.okKey(o.view)) st.view = o.view; } catch (e) { }
   try { const m = /(?:^#|&)s=([^&]*)/.exec(location.hash); const e = m && S.decode(m[1]); if (e) st.ed = e; } catch (e) { }
   function save() {
     try { localStorage.setItem('c18-state', JSON.stringify({ ed: S.cleanEditor(st.ed), view: st.view })); } catch (e) { }
@@ -115,12 +117,21 @@
     if (!server) {
       payload = S.demoPayload(M, RK());
       presets = S.DEMO_PRESETS.slice();
-      return Promise.resolve();
+      return Promise.resolve().then(restrict);
     }
+    if (!M.run || M.run.id == null) { err = { message: 'у прогона на экране нет номера' }; return Promise.resolve(); }  // без запроса /runs/null/risk
     return Promise.all([
       S.load(S.riskUrl(M.run.id)).then(j => { payload = j; }).catch(e => { err = e; }),
-      S.load(S.defsUrl()).then(j => { presets = (j && j.scenarios) || []; }).catch(e => { defsErr = e; }),
-    ]);
+      S.load(S.defsUrl()).then(j => { presets = (j && Array.isArray(j.scenarios) ? j.scenarios : []).filter(p => p && p.scenario_id != null); }).catch(e => { defsErr = e; }),
+    ]).then(restrict);
+  }
+  // состояние из адреса и localStorage — только ключи, которые есть в данных: валюты (факторы FX, курсы монитора,
+  // FX пресетов), рейтинги и секторы позиций риска, пресеты сервера
+  function restrict() {
+    if (!payload) return;
+    const b = S.buckets(payload, null, K.ratingRank), a = S.allowed(b, presets);
+    a.fx = [...new Set(a.fx.concat(Object.keys(M.fx || {}), presets.flatMap(p => Object.keys((p.definition && p.definition.fx) || {}))))].filter(S.okCcy);
+    st.ed = S.restrict(st.ed, a);
   }
 
   // ---------- B1: пометка неполного итога (#335) ----------
@@ -128,7 +139,7 @@
   // пока — существующий механизм K.missNote, в узкой ячейке — значок с подсказкой
   const missMark = (acc, short) => !acc || !acc.miss ? '' : short
     ? ' <sup class="mut3" style="cursor:help" title="' + esc('не посчитано у ' + acc.miss + ' из ' + (acc.n + acc.miss) + ' поз. (правило B1)') + '">*</sup>'
-    : K.missNote(acc);
+    : acc.n ? K.missNote(acc) : ' <span class="mut3">· не посчитано ни у одной из ' + acc.miss + ' поз.</span>';  // K.missNote при n = 0 молчит
   // итог группы: ни одна позиция не посчитана — «—» (null), а не 0
   const accVal = (acc, k) => !acc ? null : acc.n === 0 && acc.miss > 0 ? null : acc[k];
 
@@ -170,20 +181,22 @@
     '<div class="side" data-side="' + esc(key) + '">' + (side || '') + '</div>';
   const BP = { min: -100, max: 600, step: 5, unit: 'б.п.' }, OFZ = { min: -100, max: 300, step: 5, unit: 'б.п.' }, FXR = { min: -40, max: 40, step: 0.5, lo: -99, hi: 1000, unit: '%' };
   const rateTxt = (c, v) => v == null ? '—' : f.n(v, c === 'CNY' || c === 'HKD' ? 4 : 2);
-  const fxSide = c => { const pct = st.ed.fx[c] || 0, eff = (B.fxDelta[c] || 0) * pct; return 'курс <b>' + rateTxt(c, S.fxAfter(M.fx[c], pct)) + '</b> · ≈ <span class="' + mnc(eff) + '">' + mn(eff) + '</span>'; };
+  const own = S.own;  // значение своего свойства: ключ из данных может совпасть с именем свойства объекта
+  const fxSide = c => { const pct = own(st.ed.fx, c) || 0, eff = (B.fxDelta[c] || 0) * pct; return 'курс <b>' + rateTxt(c, S.fxAfter(M.fx[c], pct)) + '</b> · ≈ <span class="' + mnc(eff) + '">' + mn(eff) + '</span>'; };
   const csSide = (b, ds) => b ? 'CS01 ' + cs(b.cs01) + ' · ' + b.n + ' поз.' + (ds ? ' · ≈ <span class="' + mnc(b.cs01 * ds) + '">' + mn(b.cs01 * ds) + '</span>' : '') : '';
   function drawEditor() {
     if (!payload) { edEl.innerHTML = '<div class="k-empty">' + (err ? 'риск прогона не загружен' : 'загрузка…') + '</div>'; return; }
     const keep = new Set(K.list().map(p => p.id));
     B = S.buckets(payload, id => keep.has(id), K.ratingRank);
     const e = st.ed;
-    const ccys = B.fxCcys.concat(Object.keys(e.fx).filter(c => !B.fxCcys.includes(c)));
+    // валюты — факторы FX риска и валюты, заданные в редакторе (ключи уже проверены: ^[A-Z]{3}$)
+    const ccys = B.fxCcys.filter(S.okCcy).concat(Object.keys(e.fx).filter(c => S.okCcy(c) && !B.fxCcys.includes(c)));
     const fxHtml = ccys.length ? '<div class="c18-rows"><div class="hd">валюта</div><div class="hd">шок, %</div><div class="hd"></div><div class="hd side">курс после · эффект, ' + U + '</div>' +
-      ccys.map(c => row('fx:' + c, K.ccyTag(c) + ' <span class="mut">' + rateTxt(c, M.fx[c]) + '</span>', e.fx[c] || 0, FXR, fxSide(c), c + ': курс ' + rateTxt(c, M.fx[c]) + ' ₽, шок в % к курсу')).join('') + '</div>'
+      ccys.map(c => row('fx:' + c, K.ccyTag(c) + ' <span class="mut">' + rateTxt(c, own(M.fx, c)) + '</span>', own(e.fx, c) || 0, FXR, fxSide(c), c + ': курс ' + rateTxt(c, M.fx[c]) + ' ₽, шок в % к курсу')).join('') + '</div>'
       : '<div class="k-note">В риске прогона нет FX-факторов: валютной дельты нет.</div>';
     const rk = k => k === S.NONE ? 'без рейтинга' : k, sk = k => k === S.NO_DATA ? 'без сектора' : k;
-    const ratingRows = B.ratings.map(r => row('rating:' + r, esc(rk(r)), e.rating[r] || 0, BP, csSide(B.rating[r], e.rating[r]), r === S.NONE ? TIP.none : 'Кредитный спред бумаг с рейтингом ' + r)).join('');
-    const sectorRows = B.sectors.map(s => row('sector:' + s, esc(sk(s)), e.sector[s] || 0, BP, csSide(B.sector[s], e.sector[s]), 'Кредитный спред бумаг сектора «' + sk(s) + '»')).join('');
+    const ratingRows = B.ratings.map(r => row('rating:' + r, esc(rk(r)), own(e.rating, r) || 0, BP, csSide(B.rating[r], own(e.rating, r)), r === S.NONE ? TIP.none : 'Кредитный спред бумаг с рейтингом ' + r)).join('');
+    const sectorRows = B.sectors.map(s => row('sector:' + s, esc(sk(s)), own(e.sector, s) || 0, BP, csSide(B.sector[s], own(e.sector, s)), 'Кредитный спред бумаг сектора «' + sk(s) + '»')).join('');
     const nr = Object.keys(e.rating).length, ns = Object.keys(e.sector).length;
     const base = e.base != null ? presetOf(e.base) : null, bd = base ? base.definition || {} : {};
     const baseTxt = base ? 'Начат с пресета «' + esc(base.name) + '»: ' + ([bd.curves ? 'кривые ' + Object.keys(bd.curves).map(esc).join(', ') : '', bd.basis ? 'базис FX ' + Object.keys(bd.basis).map(esc).join(', ') + ' (в Тейлоре не учитывается)' : '',
@@ -197,29 +210,38 @@
       (B.ratings.length ? '<details' + (nr ? ' open' : '') + ' data-d="rating"><summary>По рейтингу' + (nr ? ' · задано: ' + nr : '') + '</summary><div class="c18-rows">' + ratingRows + '</div></details>' : '') +
       (B.sectors.length ? '<details' + (ns ? ' open' : '') + ' data-d="sector"><summary>По сектору' + (ns ? ' · задано: ' + ns : '') + '</summary><div class="c18-rows">' + sectorRows + '</div></details>' : '') +
       (!B.nCredit ? '<div class="k-note">Позиций с кредитным спредом на экране нет.</div>' : '') +
+      (B.nNoRating || B.nNoSector ? '<div class="k-note">' + [B.nNoRating ? B.nNoRating + ' поз. без рейтинга в данных (нет эмитента в справочнике) — шок по рейтингу к ним не применяется' : '',
+        B.nNoSector ? B.nNoSector + ' поз. без сектора в данных — шок по сектору к ним не применяется' : ''].filter(Boolean).join('; ') + '.</div>' : '') +
       '</div></div><div class="c18-base">' + baseTxt + ' <span class="mut3">Состояние редактора — в адресе страницы (ссылкой можно поделиться).</span></div><div class="c18-err" id="ederr"></div>';
     edEl.querySelectorAll('input[data-k]').forEach(inp => {
       inp.oninput = () => {
         const k = inp.dataset.k, v = +inp.value;
-        if (!isFinite(v)) return;
+        if (inp.value === '' || !isFinite(v) || (k === 'mult' && !(v > 0))) { inp.setAttribute('aria-invalid', 'true'); return; }  // множитель > 0
+        inp.removeAttribute('aria-invalid');
         edEl.querySelectorAll('input[data-k="' + CSS.escape(k) + '"]').forEach(x => { if (x !== inp) x.value = v; });
         set(k, v); paintSide(k); save(); later();
       };
+      // поле оставили пустым или с недопустимым значением — показать то, что в состоянии
+      inp.onchange = () => { if (inp.getAttribute('aria-invalid')) { inp.removeAttribute('aria-invalid'); inp.value = value(inp.dataset.k); } };
     });
   }
   function set(k, v) {
     const e = st.ed, i = k.indexOf(':'), kind = i < 0 ? k : k.slice(0, i), key = i < 0 ? null : k.slice(i + 1);
     if (kind === 'ofz') e.ofz = v; else if (kind === 'all') e.all = v; else if (kind === 'mult') e.mult = v > 0 ? v : 1;
-    else { const m = e[kind]; if (v) m[key] = v; else delete m[key]; }
+    else if (['fx', 'rating', 'sector'].includes(kind) && (kind === 'fx' ? S.okCcy(key) : S.okKey(key))) { const m = e[kind]; if (v) m[key] = v; else delete m[key]; }
+  }
+  function value(k) {
+    const e = st.ed, i = k.indexOf(':'), kind = i < 0 ? k : k.slice(0, i), key = k.slice(i + 1);
+    return kind === 'ofz' ? e.ofz : kind === 'all' ? e.all : kind === 'mult' ? e.mult : own(e[kind], key) || 0;
   }
   function paintSide(k) {
     const el = edEl.querySelector('[data-side="' + CSS.escape(k) + '"]'), i = k.indexOf(':'), kind = i < 0 ? k : k.slice(0, i), key = k.slice(i + 1), e = st.ed;
     if (el && kind === 'fx') el.innerHTML = fxSide(key);
-    if (el && kind === 'rating') el.innerHTML = csSide(B.rating[key], e.rating[key]);
-    if (el && kind === 'sector') el.innerHTML = csSide(B.sector[key], e.sector[key]);
+    if (el && kind === 'rating') el.innerHTML = csSide(B.rating[key], own(e.rating, key));
+    if (el && kind === 'sector') el.innerHTML = csSide(B.sector[key], own(e.sector, key));
     if (el && kind === 'ofz') el.innerHTML = B.ofzCs01 ? 'CS01 ' + cs(B.ofzCs01) + (e.ofz ? ' · ≈ <span class="' + mnc(B.ofzCs01 * e.ofz) + '">' + mn(B.ofzCs01 * e.ofz) + '</span>' : '') : 'нет ОФЗ со спредом';
     const lab = el && el.previousElementSibling && el.previousElementSibling.previousElementSibling && el.previousElementSibling.previousElementSibling.previousElementSibling;
-    if (lab && lab.classList.contains('l')) { const v = kind === 'fx' ? e.fx[key] : kind === 'rating' ? e.rating[key] : kind === 'sector' ? e.sector[key] : kind === 'mult' ? e.mult - 1 : e[kind]; lab.classList.toggle('on', !!v); }
+    if (lab && lab.classList.contains('l')) { const v = kind === 'mult' ? e.mult - 1 : value(k); lab.classList.toggle('on', !!v); }
   }
   let timer = null;
   const later = () => { clearTimeout(timer); timer = setTimeout(recalc, 120); };
@@ -231,8 +253,10 @@
   function banners() {
     let b = '';
     if (err) {
-      const why = err.status === 404 ? 'сервер не нашёл прогон (или эндпоинта нет на сервере)' : err.status === 401 || err.status === 403 ? 'нужно войти в монитор' : 'ошибка запроса';
-      b += '<div class="c18-ban err"><b>Риск прогона не загружен</b>: ' + esc(why) + '. <span class="mut">' + esc(err.text || err.message || '') + '</span></div>';
+      const why = err.status === 404 ? 'сервер не нашёл прогон (или эндпоинта нет на сервере)' : err.status === 401 ? 'сессия кончилась' : err.status === 403 ? 'нет доступа' : err.status ? 'ошибка запроса' : 'запроса не было';
+      // 401: вход с возвратом сюда, как у /app/ и desk-auth.js (он и сам уводит на вход, если знает, что вход включён)
+      const login = err.status === 401 ? ' <a href="/login.html?next=' + esc(encodeURIComponent(location.pathname + location.search + location.hash)) + '">Войти →</a>' : '';
+      b += '<div class="c18-ban err"><b>Риск прогона не загружен</b>: ' + esc(why) + '. <span class="mut">' + esc(err.text || err.message || '') + '</span>' + login + '</div>';
     }
     if (defsErr) b += '<div class="c18-ban"><b>Пресеты не загружены</b>: сравнение — только редактор. <span class="mut">' + esc(defsErr.text || defsErr.message || '') + '</span></div>';
     ban.innerHTML = b;
@@ -329,25 +353,31 @@
       '</tbody></table></div>' + (R.missing.length > L.length ? '<div class="k-note">показаны первые ' + L.length + '</div>' : '');
     K.tableToolsAll(p);
   }
-  // сравнение по книгам: колонки — редактор и пресеты (Тейлор); щелчок по заголовку — разобрать этот сценарий
+  // сравнение по книгам: колонки — редактор и пресеты (Тейлор). Таблица прокручивается внутри себя (max-height),
+  // поэтому шапка с названиями сценариев держится наверху; названия переносятся, книга — кодом (название в подсказке)
+  let cmpObs = null;
+  const colKey = (id, i) => 's:' + (id === ED ? 'ed' : /^[\w+.\-]{1,64}$/.test(id) ? id : 'n' + i);  // ключ колонки — в атрибуте data-k
   function drawCompare(wrap, ids) {
     const p = panel('Сравнение сценариев по книгам', '<span class="k-note">' + U + ' · ≈ Тейлор · подсвечен сценарий разбора</span>'); wrap.appendChild(p);
-    p.querySelector('.bd').classList.add('flush');
+    p.classList.add('c18-cmp'); p.querySelector('.bd').classList.add('flush');
     const E = ids.map(id => [id, evalOf(id)]);
     const books = [...new Set(E.flatMap(([, x]) => x.res ? Object.keys(x.res.byBook) : []))].sort();
     const rows = books.map(b => ({ book: b, name: (M.book[b] && M.book[b].name) || b, by: Object.fromEntries(E.map(([id, x]) => [id, x.res ? x.res.byBook[b] || null : null])) }));
-    const col = ([id, x]) => ({ key: 's:' + id, label: esc(nameOf(id)), num: true, unit: U, title: (presetOf(id) || {}).description || (id === ED ? 'Сценарий редактора' : ''),
+    const col = ([id, x], i) => ({ key: colKey(id, i), label: esc(nameOf(id)), num: true, unit: U, title: (presetOf(id) || {}).description || (id === ED ? 'Сценарий редактора' : ''),
       val: r => accVal(r.by[id], 'total') == null ? null : accVal(r.by[id], 'total') * RK(), nullable: true,
       fmt: (v, r) => x.error ? '<span class="mut3" title="' + esc(x.error.message) + '">не принят</span>' : (v == null ? '<span class="mut3">—</span>' : f.mn(v, DIG)) + missMark(r.by[id], true),
       cls: v => v == null ? '' : f.cls(v), sum: r => accVal(r.by[id], 'total') == null ? null : accVal(r.by[id], 'total') * RK(), sumFmt: v => f.mn(v, DIG) });
     K.table(p.querySelector('.bd'), {
-      viewKey: 'c18-compare', title: 'Сценарии по книгам (Тейлор), ' + U, rows, search: false,
-      columns: [{ key: 'book', label: 'Книга', val: r => r.book, fmt: (v, r) => esc(v) + (r.name !== v ? ' <span class="mut">' + esc(r.name) + '</span>' : ''), csvFmt: v => v }].concat(E.map(col)),
+      viewKey: 'c18-compare', title: 'Сценарии по книгам (Тейлор), ' + U, rows, search: false, maxHeight: 'min(70vh, 640px)',
+      columns: [{ key: 'book', label: 'Книга', val: r => r.book, fmt: (v, r) => '<span title="' + esc(r.name) + '">' + esc(v) + '</span>', csvFmt: v => v }].concat(E.map(col)),
     });
     // колонка сценария, который сейчас разобран выше, — подсвечена (и после сортировки: таблица перерисовывает шапку)
-    const paintCur = () => p.querySelectorAll('th[data-k^="s:"]').forEach(th => th.classList.toggle('c18-cur', th.dataset.k === 's:' + st.view));
+    const curKey = colKey(st.view, ids.indexOf(st.view));
+    const paintCur = () => p.querySelectorAll('th[data-k^="s:"]').forEach(th => th.classList.toggle('c18-cur', th.dataset.k === curKey));
     paintCur();
-    new MutationObserver(paintCur).observe(p.querySelector('.bd'), { childList: true, subtree: true });
+    if (cmpObs) cmpObs.disconnect();  // один наблюдатель на страницу: прежняя таблица уже снята
+    cmpObs = new MutationObserver(paintCur);
+    cmpObs.observe(p.querySelector('.bd'), { childList: true, subtree: true });
   }
   function drawNotes(wrap) {
     const p = panel('Как считается'); wrap.appendChild(p);
@@ -355,7 +385,7 @@
       'Тейлор на клиенте (lib/scenario.js) — порт backend scenario/taylor.py: те же факторы (IR|кривая|бакет, CS, FX|валюта) и суммы; сверка с Python — тестом на общей фикстуре.',
       'Определение сценария — формат scenario/definition.py: curves, ofzSpread, spreads{_all,_mult,sector,issuer,rating}, fx, basis. «Без рейтинга» записывается под ключами «б/р» и «нет данных».',
       'Правило B1: позиция без нужной сценарию чувствительности (не оценена, нет CS01 при шоке спреда, нет FX-дельты при шоке её валюты, нет ставочного риска при сдвиге кривых) не посчитана: в итоги не входит, число таких позиций — рядом с итогом.',
-      'Сравнение пресетов — по Тейлору; точные цифры по пресетам — следующий шаг (точная переоценка на сервере).',
+      'Сравнение пресетов — по Тейлору. Точные итоги пресетов по книгам сервер уже считает после прогона (/api/v1/runs/{run_id}/scenario-results, #370); на этот экран их выводит задача #378.',
       'FX-базис (basis) в Тейлоре не учитывается. Переоценка фондирования валютных бумаг входит только в точный расчёт.',
     ];
     if (!server) notes.unshift('Демо: риск — из позиций lib/mock.js (без второго порядка), пресеты — набор демо.');
