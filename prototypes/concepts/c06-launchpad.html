@@ -147,8 +147,10 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         }
         const el = K.h('div', 'fill'); bd.appendChild(el);
         const R = L.slice().reverse();
+        // Компактная плитка: концы по данным, три подписанных деления; место под bar labels выбирает barFit (#357).
+        const values = R.map(p => p.pnl.total), extent = K.niceExtent(Math.min(0, ...values), Math.max(0, ...values), 5);
         const c = small(el, () => ({ barFit: true, grid: { left: 4, right: 46, top: 4, bottom: 2, containLabel: true }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => K.wfTip(v) + ' mm ₽' },
-          xAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => K.tick(v, 1e6), hideOverlap: true } }, yAxis: { type: 'category', data: R.map(p => p.name), axisLabel: { fontSize: 10 } },  // длинные имена сокращает barFit (#352)
+          xAxis: { type: 'value', unit: 'mm ₽', min: extent[0], max: extent[1], interval: extent[2], axisLabel: { formatter: v => v === 0 || v === extent[0] || v === extent[1] ? K.tick(v, 1e6) : '', hideOverlap: true, showMinLabel: true, showMaxLabel: true } }, yAxis: { type: 'category', data: R.map(p => p.name), axisLabel: { fontSize: 10 } },  // длинные имена сокращает barFit (#352)
           series: [{ type: 'bar', data: R.map(p => ({ value: p.pnl.total, itemStyle: { color: p.pnl.total >= 0 ? css('--pos') : css('--neg') }, label: K.barEnd(p.pnl.total) })), label: { show: true, position: 'right', fontSize: 10, color: css('--fg-2'), formatter: p => K.wfLabel(p.value) } }] }));
         c.on('click', pp => K.card(R[pp.dataIndex].id));
       },

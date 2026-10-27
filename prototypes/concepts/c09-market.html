@@ -217,10 +217,22 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
       });
     }
     // подпись столбца — у его конца (K.barEnd, у отрицательного — снизу), место под неё — barFit (#349)
+    const yesterday = K.yest(B.pts, B.chg, 1);
     return Object.assign(base, {
       barFit: true, tooltip: { trigger: 'axis', valueFormatter: v => f.bp(v) + ' б.п.' }, yAxis: { type: 'value', unit: 'б.п.' },
-      series: [{ name: 'базис ОФЗ − RUONIA', type: 'bar', data: B.pts.map(v => ({ value: v, itemStyle: { color: v >= 0 ? '#9b7bff' : K.css('--warn') }, label: K.barEnd(v, true) })), barMaxWidth: 22, label: { show: true, position: 'top', fontSize: 10, color: K.css('--fg-2'), formatter: p => f.bp(p.value) } },
-      { name: 'вчера', type: 'line', data: K.yest(B.pts, B.chg, 1), color: K.css('--fg-3'), lineStyle: { type: 'dotted' }, symbolSize: 4 }],
+      series: [{ name: 'базис ОФЗ − RUONIA', type: 'bar', data: B.pts.map(v => ({ value: v, itemStyle: { color: v >= 0 ? '#9b7bff' : K.css('--warn') }, label: K.barEnd(v, true) })), barMaxWidth: 22, label: { show: true, position: 'top', fontSize: 10, color: K.css('--fg-2'), formatter: p => f.bp(p.value) },
+        labelLayout: p => {
+          const v = B.pts[p.dataIndex], prev = yesterday[p.dataIndex];
+          if (v == null || prev == null) return {};
+          // Маркер 4 px с обводкой занимает 6 px. Сдвигаем только пересекающую его подпись, оставляя 2 px (#357).
+          const chart = echarts.getInstanceByDom(document.getElementById('curves'));
+          const end = chart.convertToPixel({ yAxisIndex: 0 }, v), markerY = chart.convertToPixel({ yAxisIndex: 0 }, prev), height = p.labelRect.height;
+          // Исходная bar-end позиция, без сдвига предыдущего layout (resize вызывает его повторно).
+          const labelY = v < 0 ? end + 5 : end - 5 - height;
+          if (labelY + height <= markerY - 5 || labelY >= markerY + 5) return {};
+          return { y: v < 0 ? markerY + 5 : markerY - 5, align: 'center', verticalAlign: v < 0 ? 'top' : 'bottom' };
+        } },
+      { name: 'вчера', type: 'line', data: yesterday, color: K.css('--fg-3'), lineStyle: { type: 'dotted' }, symbolSize: 4 }],
     });
   });
   const curveModes = [['lvl', 'уровни'], ['chg', MH && HC['RUB RUONIA'] ? 'изменение' : 'изм. дня'], ['basis', 'базис ОФЗ']].concat(HC['RUB RUONIA'] ? [['hist', 'динамика']] : []);
