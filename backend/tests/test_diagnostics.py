@@ -7,6 +7,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+from datetime import datetime, time
 
 import pytest
 import test_slice_s3
@@ -19,8 +20,12 @@ from desk.api import create_app
 from desk.autopilot import Autopilot
 from desk.diagnostics import Scrubber, signature
 from desk.inbox import scan
+from desk.inbox.timesem import MSK
 
 server, stub = test_slice_s3.server, test_slice_s3.stub  # the stub hub's fixtures
+# The export's clock, pinned to the fixture's day: the serve.log lines below are dated TODAY, and the logs section
+# keeps only the last LOG_DAYS days from `now` (the real clock would drop them a week later, #240-style).
+NOW = datetime.combine(TODAY, time(12, 0), MSK)
 SECTIONS = ("app", "clock", "settings", "autopilot", "hub", "snapshots", "static", "inbox", "positions", "runs",
             "logs", "db")
 
@@ -62,8 +67,8 @@ def diag_run(stub, tmp_path, store_url):
     assert st["state"] == "idle", st["steps"]
     s.logs_dir.mkdir(parents=True, exist_ok=True)
     (s.logs_dir / "serve.log").write_text(
-        "2026-10-19 10:00:00,123 INFO desk.api abc GET /api/v1/runs 200 3ms\n"
-        f"2026-10-19 10:00:01,456 ERROR desk.api read failed for RU000A0ZZZZ1 (RU000A1038V6) in "
+        f"{TODAY} 10:00:00,123 INFO desk.api abc GET /api/v1/runs 200 3ms\n"
+        f"{TODAY} 10:00:01,456 ERROR desk.api read failed for RU000A0ZZZZ1 (RU000A1038V6) in "
         f"{tmp_path / 'in' / 'positions_20261016.csv'}, {tmp_path / 'other' / 'x.txt'}: PnL 1,234,567 RUB for B1\n"
         "Traceback (most recent call last):\n"
         '  File "x.py", line 1, in <module>\n'
@@ -73,7 +78,7 @@ def diag_run(stub, tmp_path, store_url):
 
 def test_diagnostics_sections_and_no_private_data(diag_run, tmp_path, stub):
     s, ap = diag_run
-    doc = diagnostics.build(s, store_url=s.store_url, autopilot=ap, hub=True)
+    doc = diagnostics.build(s, store_url=s.store_url, autopilot=ap, hub=True, now=NOW)
     text = json.dumps(doc, ensure_ascii=False)
 
     assert doc["schema"] == "desk-diagnostics/1"
