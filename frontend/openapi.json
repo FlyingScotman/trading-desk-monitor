@@ -1863,6 +1863,65 @@
         }
       }
     },
+    "/api/v1/runs/{run_id}/scenario-results": {
+      "get": {
+        "summary": "Run Scenario Results",
+        "operationId": "run_scenario_results_api_v1_runs__run_id__scenario_results_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunScenarioResults"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
     "/api/v1/scenario-jobs/{job_id}": {
       "get": {
         "summary": "Get Job",
@@ -8273,6 +8332,196 @@
           "totals"
         ],
         "title": "RunPnl"
+      },
+      "RunScenario": {
+        "properties": {
+          "scenario_id": {
+            "type": "string",
+            "title": "Scenario Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "preset",
+              "historical",
+              "custom"
+            ],
+            "title": "Kind"
+          },
+          "definition_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Definition Hash",
+            "description": "null: a stored definition this code refuses"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunScenarioJob"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null: not queued on this run (yet) by this code and core"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scenario_id",
+          "name",
+          "kind",
+          "definition_hash",
+          "job"
+        ],
+        "title": "RunScenario"
+      },
+      "RunScenarioCoverage": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "complete",
+              "partial"
+            ],
+            "title": "Status"
+          },
+          "n_positions": {
+            "type": "integer",
+            "title": "N Positions"
+          },
+          "n_exact": {
+            "type": "integer",
+            "title": "N Exact"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "n_positions",
+          "n_exact"
+        ],
+        "title": "RunScenarioCoverage"
+      },
+      "RunScenarioJob": {
+        "properties": {
+          "job_id": {
+            "type": "integer",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "done",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Requested At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "totals": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/ResultTotals"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Totals",
+            "description": "Per book and _total; null until done"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunScenarioCoverage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "requested_at",
+          "finished_at",
+          "error",
+          "totals",
+          "coverage"
+        ],
+        "title": "RunScenarioJob",
+        "description": "A scenario's latest job on the run: its result's totals and coverage, without the positions (the job's own\n``GET /api/v1/scenario-jobs/{job_id}`` has them)."
+      },
+      "RunScenarioResults": {
+        "properties": {
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "scenarios": {
+            "items": {
+              "$ref": "#/components/schemas/RunScenario"
+            },
+            "type": "array",
+            "title": "Scenarios"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "method",
+          "scenarios"
+        ],
+        "title": "RunScenarioResults",
+        "description": "The exact repricing of every active scenario on a run (TDM#71): the autopilot queues them on the newest\ndefault run, the scenario worker of ``desk serve`` runs them one by one."
       },
       "ScenarioDefList": {
         "properties": {

@@ -17,8 +17,9 @@ from psycopg.types.json import Jsonb
 from rub_fixed_income import __version__ as CORE_VERSION
 
 from .. import __version__ as BACKEND_VERSION
+from .. import store
 from ..marketdata.bundle import SnapshotDir
-from .definition import definition_hash, normalize
+from .definition import DefinitionError, definition_hash, normalize
 from .exact import METHOD, reprice_run
 
 log = logging.getLogger("desk.scenario")
@@ -30,9 +31,12 @@ def _cur(con: psycopg.Connection) -> psycopg.Cursor:
     return con.cursor(row_factory=dict_row)
 
 
-def submit(con: psycopg.Connection, base_run_id: int, definition: Mapping[str, Any]) -> tuple[dict, bool]:
-    """(job row with "result", created). Raises LookupError when the run is missing, ValueError when it is
-    not complete or the definition is invalid for it (DefinitionError)."""
+def submit(con: psycopg.Connection, base_run_id: int, definition: Mapping[str, Any], *,
+           retry_failed: bool = True) -> tuple[dict, bool]:
+    """(job row with "result", created). ``retry_failed`` False: a definition whose job failed on the run is not
+    queued again (the failed job is returned), so a scenario failing on its inputs runs once, not every cycle
+    (``submit_all``). Raises LookupError when the run is missing, ValueError when it is not complete or the definition
+    is invalid for it (DefinitionError)."""
     cur = _cur(con)
     run = cur.execute("SELECT status FROM run WHERE run_id = %s", (base_run_id,)).fetchone()
     if run is None:
@@ -43,6 +47,13 @@ def submit(con: psycopg.Connection, base_run_id: int, definition: Mapping[str, A
                       (base_run_id,)).fetchone()
     norm = normalize(definition, [c["curve_id"] for c in ref["data"]] if ref else [])
     h = definition_hash(norm)
+    if not retry_failed and (failed := cur.execute(
+            JOB_SQL + " WHERE j.base_run_id = %s AND j.definition_hash = %s AND j.method = %s AND j.core_version = %s"
+            " AND j.status = 'failed' ORDER BY j.job_id DESC LIMIT 1", (base_run_id, h, METHOD, CORE_VERSION)).fetchone()):
+        live = cur.execute(JOB_SQL + " WHERE j.base_run_id = %s AND j.definition_hash = %s AND j.method = %s"
+                           " AND j.core_version = %s AND j.status <> 'failed'",
+                           (base_run_id, h, METHOD, CORE_VERSION)).fetchone()
+        return live or failed, False
     for _ in range(2):  # the live job can fail between the conflict and the read: then insert again
         job = cur.execute(
             "INSERT INTO scenario_job (base_run_id, definition_hash, definition, method, core_version)"
@@ -61,6 +72,66 @@ def submit(con: psycopg.Connection, base_run_id: int, definition: Mapping[str, A
 
 def get(con: psycopg.Connection, job_id: int) -> dict | None:
     return _cur(con).execute(JOB_SQL + " WHERE j.job_id = %s", (job_id,)).fetchone()
+
+
+def active_defs(con: psycopg.Connection) -> list[dict]:
+    """The active ``scenario_def`` rows in their order: what the pages list and ``submit_all`` reprices."""
+    return _cur(con).execute("SELECT scenario_id, name, kind, description, ord, definition FROM scenario_def"
+                             " WHERE active ORDER BY ord, scenario_id").fetchall()
+
+
+def latest_default_run(con: psycopg.Connection) -> tuple[int, Any] | None:
+    """(run_id, business_date) of the newest default run (``store.DEFAULT_RUNS``), None without one."""
+    return con.execute(f"SELECT run_id, business_date FROM run WHERE run_id IN ({store.DEFAULT_RUNS})"
+                       " ORDER BY business_date DESC LIMIT 1").fetchone()
+
+
+def submit_all(con: psycopg.Connection, base_run_id: int) -> dict[str, Any]:
+    """A job for every active scenario on the run (TDM#71): the exact figures of the presets' comparison are there
+    when a page opens. ``submit`` keeps one job per run and definition, so a second call queues only the scenarios
+    added or changed since. Returns ``queued`` (scenario IDs with a new job), ``reused`` (the count of those with a
+    live or done job) and ``invalid`` (scenario ID -> why it cannot be repriced on this run, e.g. a curve the run does
+    not publish) and ``failed`` (scenario IDs whose job failed on this run: not queued again, the job's own POST
+    retries it). Raises LookupError when the run is missing."""
+    out: dict[str, Any] = {"queued": [], "reused": 0, "invalid": {}, "failed": []}
+    for d in active_defs(con):
+        try:
+            job, created = submit(con, base_run_id, d["definition"], retry_failed=False)
+        except ValueError as e:  # DefinitionError, or a run that is not complete
+            out["invalid"][d["scenario_id"]] = str(e)
+            continue
+        if created:
+            out["queued"].append(d["scenario_id"])
+        elif job["status"] == "failed":
+            out["failed"].append(d["scenario_id"])
+        else:
+            out["reused"] += 1
+    return out
+
+
+def run_results(con: psycopg.Connection, base_run_id: int) -> list[dict]:
+    """Every active scenario with its latest job on the run by this code's method and core (TDM#71): a live or done
+    job before a failed one, the newest first; ``job`` null when none. The job carries the result's ``totals`` and its
+    ``coverage`` without the missing positions (``GET /api/v1/scenario-jobs/{id}`` has them): the comparison of the
+    presets by books needs only the totals."""
+    defs = active_defs(con)
+    hashes: dict[str, str | None] = {}
+    for d in defs:
+        try:
+            hashes[d["scenario_id"]] = definition_hash(normalize(d["definition"]))
+        except DefinitionError:  # a stored definition this code refuses: listed, without a job
+            hashes[d["scenario_id"]] = None
+    rows = _cur(con).execute(
+        "SELECT DISTINCT ON (j.definition_hash) j.definition_hash, j.job_id, j.status, j.requested_at,"
+        " j.finished_at, j.error, r.result->'totals' AS totals, (r.result->'coverage') - 'missing'::text AS coverage"
+        " FROM scenario_job j LEFT JOIN scenario_result r USING (job_id)"
+        " WHERE j.base_run_id = %s AND j.method = %s AND j.core_version = %s AND j.definition_hash = ANY(%s)"
+        " ORDER BY j.definition_hash, j.status <> 'failed' DESC, j.job_id DESC",
+        (base_run_id, METHOD, CORE_VERSION, [h for h in hashes.values() if h])).fetchall()
+    by_hash = {r.pop("definition_hash"): r for r in rows}
+    return [{"scenario_id": d["scenario_id"], "name": d["name"], "kind": d["kind"],
+             "definition_hash": hashes[d["scenario_id"]], "job": by_hash.get(hashes[d["scenario_id"]])}
+            for d in defs]
 
 
 def run_once(con: psycopg.Connection, snapshots: SnapshotDir, ctx_cache: dict | None = None) -> int | None:

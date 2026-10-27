@@ -473,6 +473,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/scenario-results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Run Scenario Results */
+        get: operations["run_scenario_results_api_v1_runs__run_id__scenario_results_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/scenario-jobs/{job_id}": {
         parameters: {
             query?: never;
@@ -2970,6 +2987,81 @@ export interface components {
                 [key: string]: components["schemas"]["PnlSums"];
             };
         };
+        /** RunScenario */
+        RunScenario: {
+            /** Scenario Id */
+            scenario_id: string;
+            /** Name */
+            name: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "preset" | "historical" | "custom";
+            /**
+             * Definition Hash
+             * @description null: a stored definition this code refuses
+             */
+            definition_hash: string | null;
+            /** @description null: not queued on this run (yet) by this code and core */
+            job: components["schemas"]["RunScenarioJob"] | null;
+        };
+        /** RunScenarioCoverage */
+        RunScenarioCoverage: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "complete" | "partial";
+            /** N Positions */
+            n_positions: number;
+            /** N Exact */
+            n_exact: number;
+        };
+        /**
+         * RunScenarioJob
+         * @description A scenario's latest job on the run: its result's totals and coverage, without the positions (the job's own
+         *     ``GET /api/v1/scenario-jobs/{job_id}`` has them).
+         */
+        RunScenarioJob: {
+            /** Job Id */
+            job_id: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "done" | "failed";
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Finished At */
+            finished_at: string | null;
+            /** Error */
+            error: string | null;
+            /**
+             * Totals
+             * @description Per book and _total; null until done
+             */
+            totals: {
+                [key: string]: components["schemas"]["ResultTotals"];
+            } | null;
+            coverage: components["schemas"]["RunScenarioCoverage"] | null;
+        };
+        /**
+         * RunScenarioResults
+         * @description The exact repricing of every active scenario on a run (TDM#71): the autopilot queues them on the newest
+         *     default run, the scenario worker of ``desk serve`` runs them one by one.
+         */
+        RunScenarioResults: {
+            /** Run Id */
+            run_id: number;
+            /** Method */
+            method: string;
+            /** Scenarios */
+            scenarios: components["schemas"]["RunScenario"][];
+        };
         /** ScenarioDefList */
         ScenarioDefList: {
             /** Scenarios */
@@ -4567,6 +4659,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ScenarioJob"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    run_scenario_results_api_v1_runs__run_id__scenario_results_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunScenarioResults"];
                 };
             };
             /** @description Not Found */

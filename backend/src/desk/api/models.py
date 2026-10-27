@@ -684,6 +684,42 @@ class ScenarioJob(BaseModel):
     result: ScenarioResult | None
 
 
+class RunScenarioCoverage(BaseModel):
+    status: Literal["complete", "partial"]
+    n_positions: int
+    n_exact: int
+
+
+class RunScenarioJob(BaseModel):
+    """A scenario's latest job on the run: its result's totals and coverage, without the positions (the job's own
+    ``GET /api/v1/scenario-jobs/{job_id}`` has them)."""
+
+    job_id: int
+    status: Literal["queued", "running", "done", "failed"]
+    requested_at: datetime
+    finished_at: datetime | None
+    error: str | None
+    totals: dict[str, ResultTotals] | None = Field(description="Per book and _total; null until done")
+    coverage: RunScenarioCoverage | None
+
+
+class RunScenario(BaseModel):
+    scenario_id: str
+    name: str
+    kind: Literal["preset", "historical", "custom"]
+    definition_hash: str | None = Field(description="null: a stored definition this code refuses")
+    job: RunScenarioJob | None = Field(description="null: not queued on this run (yet) by this code and core")
+
+
+class RunScenarioResults(BaseModel):
+    """The exact repricing of every active scenario on a run (TDM#71): the autopilot queues them on the newest
+    default run, the scenario worker of ``desk serve`` runs them one by one."""
+
+    run_id: int
+    method: str
+    scenarios: list[RunScenario]
+
+
 class BondHistoryPoint(BaseModel):
     date: date
     clean_price: float | None = Field(None, description="% of face; basis in price_basis")
