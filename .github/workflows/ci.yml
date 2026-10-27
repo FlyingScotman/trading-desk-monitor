@@ -52,6 +52,13 @@ jobs:
           # --with-deps hung on a slow mirror and timed the job out
           "$RUNNER_TEMP/pw/node_modules/.bin/playwright" install chromium
           echo "NODE_PATH=$RUNNER_TEMP/pw/node_modules" >> "$GITHUB_ENV"
+      - name: Fixed font for the browser tests (Inter, as on the dev machine; label widths depend on it)
+        run: |
+          # one small package instead of --with-deps; time-limited so a slow mirror cannot hang the job
+          timeout 300 sudo apt-get update -o Acquire::Retries=3
+          timeout 300 sudo apt-get install -y --no-install-recommends fonts-inter
+          echo "FONTCONFIG_FILE=$GITHUB_WORKSPACE/tests/js/fixtures/fonts.conf" >> "$GITHUB_ENV"
+          FONTCONFIG_FILE="$GITHUB_WORKSPACE/tests/js/fixtures/fonts.conf" fc-match system-ui | grep -q '"Inter"' || { echo "system-ui is not Inter"; exit 1; }
       - name: Smoke of the monitors (every concept page, fails on any console error)
         run: node prototypes/concepts/tools/smoke.js "$RUNNER_TEMP/shots"
       - name: Browser tests of the monitors (Playwright; skipped by the plain JS step without it)

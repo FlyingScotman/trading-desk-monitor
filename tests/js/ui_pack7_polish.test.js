@@ -42,13 +42,16 @@ t('#329: K.barEnd — подпись отрицательного столбца
     const cat = { type: 'category', data: vals.map((_, i) => 'кат ' + i), axisLabel: { fontSize: 10 } }, val = { type: 'value' };
     const o = { grid: { left: 4, right: 46, top: 18, bottom: 4 }, xAxis: vert ? cat : val, yAxis: vert ? val : cat,
       series: [{ type: 'bar', data: vals.map(v => ({ value: v, label: K.barEnd(v, vert) })), label: { show: true, fontSize: 10, formatter: p => (fmt || String)(p.value) } }] };
-    return { gap: K.barFit({ clientWidth: W, clientHeight: H }, o)[vert ? 'yAxis' : 'xAxis'].boundaryGap, o };
+    const ax = K.barFit({ clientWidth: W, clientHeight: H }, o)[vert ? 'yAxis' : 'xAxis'];
+    // концы оси: у горизонтального бара — деления K.valTicks (min / max, #351), у вертикального — запас boundaryGap
+    const span = Math.max(...vals) - Math.min(...vals);
+    const ext = ax.min != null ? [ax.min, ax.max] : ax.boundaryGap ? [Math.min(...vals) - span * parseFloat(ax.boundaryGap[0]) / 100, Math.max(...vals) + span * parseFloat(ax.boundaryGap[1]) / 100] : null;
+    return { gap: ax.boundaryGap, ext, o };
   };
   assert.strictEqual(fit(300, 200, [1, 2, 3], false).gap, undefined, 'только положительные, подпись в поле grid');
   // место под подпись отрицательного: px между концом самого длинного отрицательного столбца и краем оси
   const room = (W, H, vals, vert, fmt) => {
-    const { gap } = fit(W, H, vals, vert, fmt), span = Math.max(...vals) - Math.min(...vals);
-    const lo = Math.min(...vals) - span * parseFloat(gap[0]) / 100, hi = Math.max(...vals) + span * parseFloat(gap[1]) / 100;
+    const { ext } = fit(W, H, vals, vert, fmt), lo = ext[0], hi = ext[1];
     const area = vert ? H - 18 - 4 - 13 - 8 : W - 4 - 46 - K.labelWidth('кат 0', 10) - 8;
     return (Math.min(...vals) - lo) / (Math.max(hi, 0) - Math.min(lo, 0)) * area;
   };
@@ -58,16 +61,15 @@ t('#329: K.barEnd — подпись отрицательного столбца
     assert.ok(r >= lab(fmt(Math.min(...vals))), W + ' px: под «' + fmt(Math.min(...vals)) + '» ' + r.toFixed(1) + ' px');
   });
   // узкий график (C06 при окне 1024, ~50 px под столбцы): под подписи — не больше K.BAR_FIT_MAX области, ось не
-  // раздувается; подписи, которым места нет, не рисуются (значение — в подсказке), остальные — как были
+  // раздувается; подписи, которым места нет ни снаружи, ни внутри (#352), не рисуются (значение — в подсказке)
   {
     const vals = [-17.7, -16.2, 18.9, 2, -0.5], fmt = v => '(' + Math.abs(v) + ')';
-    const { gap, o } = fit(150, 200, vals, false, fmt), span = 18.9 + 17.7;
-    const axis = span * (1 + parseFloat(gap[0]) / 100 + parseFloat(gap[1]) / 100);
-    assert.ok(K.BAR_FIT_MAX === 0.4 && axis <= span / (1 - K.BAR_FIT_MAX) * 1.001, 'ось ' + axis.toFixed(1) + ' при данных ' + span.toFixed(1));
+    const { ext, o } = fit(150, 200, vals, false, fmt), span = 18.9 + 17.7, axis = ext[1] - ext[0];
+    assert.ok(K.BAR_FIT_MAX === 0.4 && axis <= span * 2.5, 'ось ' + axis.toFixed(1) + ' при данных ' + span.toFixed(1));
+    assert.ok(ext[0] <= -17.7 && ext[1] >= 18.9 && ext[0] < 0 && ext[1] > 0, JSON.stringify(ext));
     const shown = o.series[0].data.map(d => d.label.show !== false);
-    assert.ok(shown.includes(false) && shown.includes(true), JSON.stringify(shown));
     o.series[0].data.forEach((d, i) => assert.strictEqual(d.value, vals[i]));  // значения на месте
-    assert.ok(shown[2] && !shown[0], 'длинный положительный подписан в поле grid, длинный отрицательный — нет');
+    assert.ok(shown[2], 'длинный положительный подписан');
   }
   assert.ok(room(400, 200, [-4657, -359, -9, -16], true) >= 10 * 1.3 + 7, 'вертикальный бар: подпись снизу помещается');
   assert.strictEqual(JSON.stringify(fit(0, 0, [3, -1], false).gap), JSON.stringify(['25%', 0]), 'график скрыт — как раньше');

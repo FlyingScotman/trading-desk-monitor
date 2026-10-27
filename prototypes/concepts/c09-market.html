@@ -216,9 +216,10 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
         series: cs.map(([n, d, c]) => ({ name: n + ' ' + ({ '1D': 'за день', '1W': 'за неделю', '1M': 'за месяц', '3M': 'за 3 мес', YTD: 'с начала года' })[S.per], type: 'bar', data: d, color: c, barMaxWidth: 14 })),
       });
     }
+    // подпись столбца — у его конца (K.barEnd, у отрицательного — снизу), место под неё — barFit (#349)
     return Object.assign(base, {
-      tooltip: { trigger: 'axis', valueFormatter: v => f.bp(v) + ' б.п.' }, yAxis: { type: 'value', unit: 'б.п.' },
-      series: [{ name: 'базис ОФЗ − RUONIA', type: 'bar', data: B.pts.map(v => ({ value: v, itemStyle: { color: v >= 0 ? '#9b7bff' : K.css('--warn') } })), barMaxWidth: 22, label: { show: true, position: 'top', fontSize: 10, color: K.css('--fg-2') } },
+      barFit: true, tooltip: { trigger: 'axis', valueFormatter: v => f.bp(v) + ' б.п.' }, yAxis: { type: 'value', unit: 'б.п.' },
+      series: [{ name: 'базис ОФЗ − RUONIA', type: 'bar', data: B.pts.map(v => ({ value: v, itemStyle: { color: v >= 0 ? '#9b7bff' : K.css('--warn') }, label: K.barEnd(v, true) })), barMaxWidth: 22, label: { show: true, position: 'top', fontSize: 10, color: K.css('--fg-2'), formatter: p => f.bp(p.value) } },
       { name: 'вчера', type: 'line', data: K.yest(B.pts, B.chg, 1), color: K.css('--fg-3'), lineStyle: { type: 'dotted' }, symbolSize: 4 }],
     });
   });

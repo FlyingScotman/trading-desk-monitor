@@ -7,7 +7,8 @@
 // заходит левее области столбцов (там подписи категорий); у положительного — правее правого края. У вертикального
 // бара: у отрицательного — ниже нижнего края и не ниже области столбцов, у положительного — выше верхнего. Подпись не
 // уходит за край графика. Ось не раздута ради подписей: размах оси не больше AXIS_MAX размахов данных (с нулём), а
-// столбцы занимают не меньше BARS_MIN области (в узкой плитке подпись, которой нет места, не рисуется). CSV C03: «Δ цены, % ном.» — число без «+» и без единицы (#110, #131) в любом формате
+// столбцы занимают не меньше BARS_MIN области (в узкой плитке подпись, которой нет места снаружи, — внутри столбца, #352,
+// а нет места и там — не рисуется). CSV C03: «Δ цены, % ном.» — число без «+» и без единицы (#110, #131) в любом формате
 // отрицательных. Ошибок консоли нет. Страницы открываются как файлы (file://), данные — демо-набор.
 //   node --test tests/js/ui_pack7_polish.pw.test.js
 // Снимки: UI_PACK7_POLISH_SHOTS=<папка> node --test tests/js/ui_pack7_polish.pw.test.js
@@ -38,7 +39,8 @@ const bars = (pg, root) => pg.evaluate(sel => {
         if (v == null || isNaN(v) || !tl || tl.ignore || !tl.style || !tl.style.text) continue;
         const r = g.getBoundingRect().clone(), t = tl.getBoundingRect().clone();
         r.applyTransform(g.getComputedTransform()); t.applyTransform(tl.getComputedTransform());
-        out.push({ el: el.id || el.parentElement.id || el.className, v, horiz, text: tl.style.text, W: el.clientWidth, H: el.clientHeight,
+        const d = (s.data || [])[i], pos = (d && d.label && d.label.position) || (s.label && s.label.position) || null;
+        out.push({ el: el.id || el.parentElement.id || el.className, v, horiz, pos, text: tl.style.text, W: el.clientWidth, H: el.clientHeight,
           grid: { l: gr.x, r: gr.x + gr.width, t: gr.y, b: gr.y + gr.height },
           bar: { l: r.x, r: r.x + r.width, t: r.y, b: r.y + r.height }, lab: { l: t.x, r: t.x + t.width, t: t.y, b: t.y + t.height } });
       }
@@ -79,8 +81,12 @@ const atEnd = (L, what, opt) => {
   if (opt.neg) assert.ok(L.some(x => x.v < 0), what + ': есть отрицательные столбцы с подписью');
   if (opt.vert != null) assert.ok(L.every(x => x.horiz === !opt.vert), what + ': ' + (opt.vert ? 'вертикальный' : 'горизонтальный') + ' бар');
   L.forEach(x => {
-    const s = what + ' ' + x.el + ' «' + x.text + '» ' + JSON.stringify({ v: x.v, bar: x.bar, lab: x.lab, grid: x.grid });
-    if (x.horiz && x.v < 0) {
+    const s = what + ' ' + x.el + ' «' + x.text + '» ' + JSON.stringify({ v: x.v, pos: x.pos, bar: x.bar, lab: x.lab, grid: x.grid });
+    // подпись, которой снаружи нет места, — внутри столбца, у его конца (#352; подробно — ui_pack8_charts.pw.test.js)
+    if (/^inside/.test(x.pos || '')) {
+      if (x.horiz) assert.ok(x.lab.l >= x.bar.l - E && x.lab.r <= x.bar.r + E, s + ': подпись внутри столбца');
+      else assert.ok(x.lab.t >= x.bar.t - E && x.lab.b <= x.bar.b + E, s + ': подпись внутри столбца');
+    } else if (x.horiz && x.v < 0) {
       assert.ok(x.lab.r <= x.bar.l + E, s + ': подпись левее конца столбца');
       assert.ok(x.lab.l >= x.grid.l - E, s + ': подпись не заходит на подписи категорий');
     } else if (x.horiz) assert.ok(x.lab.l >= x.bar.r - E, s + ': подпись правее конца столбца');
