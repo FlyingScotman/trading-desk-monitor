@@ -72,26 +72,26 @@
   const save = () => { try { localStorage.setItem('c07-state', JSON.stringify(S)); } catch (e) { } };
 
   const GROUPS = {
-    ccy: { t: 'валюта → тип → эмитент', lv: [p => p.ccy, p => p.groupLabel + ' · ' + M.kindShort[p.kind], p => p.group === 'DER' ? 'Деривативы' : p.issuerName] },
-    book: { t: 'книга → эмитент', lv: [p => p.book + ' · ' + p.bookName, p => p.group === 'DER' ? 'Деривативы' : p.issuerName] },
-    sector: { t: 'сектор → эмитент', lv: [p => p.sector, p => p.group === 'DER' ? (p.cpty || 'Деривативы') : p.issuerName] },
-    rating: { t: 'рейтинг → эмитент', lv: [p => p.rating === '—' ? 'без рейтинга' : p.rating, p => p.group === 'DER' ? (p.cpty || 'Деривативы') : p.issuerName] },
+    ccy: { t: 'валюта → тип → эмитент', lv: [p => p.ccy, p => p.groupLabel + ' · ' + M.kindShort[p.kind], p => M.deal(p) ? M.dealName(p) : p.issuerName] },
+    book: { t: 'книга → эмитент', lv: [p => p.book + ' · ' + p.bookName, p => M.deal(p) ? M.dealName(p) : p.issuerName] },
+    sector: { t: 'сектор → эмитент', lv: [p => p.sector, p => M.deal(p) ? (p.group === 'DER' && p.cpty || M.dealName(p)) : p.issuerName] },
+    rating: { t: 'рейтинг → эмитент', lv: [p => p.rating === '—' ? 'без рейтинга' : p.rating, p => M.deal(p) ? (p.group === 'DER' && p.cpty || M.dealName(p)) : p.issuerName] },
   };
   const SIZES = {
-    mv: { t: 'MV', v: p => p.group === 'DER' ? 0 : Math.abs(p.mv), fmt: v => f.mn(v, 0) + ' mm ₽' },
+    mv: { t: 'MV', v: p => M.deal(p) ? 0 : Math.abs(p.mv), fmt: v => f.mn(v, 0) + ' mm ₽' },
     dv01: { t: '|DV01|', v: p => Math.abs(p.dv01) + Math.abs(p.basis01) * 0, fmt: v => f.dv(v) + ' тыс ₽/бп' },
     cs01: { t: '|CS01|', v: p => Math.abs(p.cs01), fmt: v => f.dv(v) + ' тыс ₽/бп' },
     notional: { t: 'номинал', v: p => Math.abs(p.notionalRub), fmt: v => f.mn(v, 0) + ' mm ₽' },
   };
   // база нормировки цвета: MV для облигаций, номинал для деривативов
-  const base = p => p.group === 'DER' ? Math.abs(p.notionalRub) * 0.02 : Math.abs(p.mv);
+  const base = p => M.deal(p) ? Math.abs(p.notionalRub) * 0.02 : Math.abs(p.mv);
   // сумма с единицей; не посчитана — «—» без единицы
   const unitOr = (v, fmt, u) => v == null ? '—' : fmt(v) + ' ' + u;
   // PnL и кэрри узла: не посчитаны ни у одной позиции — null («—», серый), а не 0 (B1, #333)
   const COLORS = {
     pnl: { t: 'PnL дня', div: true, unit: 'б.п. к MV', agg: L => { const b = M.sum(L, base), v = M.sum(L, p => p.pnl.total); return v == null ? null : b ? v / b * 1e4 : 0; }, fmt: v => f.s(v, 1) + ' б.п.', abs: L => unitOr(M.sum(L, p => p.pnl.total), v => f.mns(v, 2), 'mm ₽') },
     spr: { t: 'Δ спреда', div: true, inv: true, unit: 'б.п. (рост — красный)', agg: L => wavg(L.filter(p => p.group === 'CORP' || p.group === 'SUB'), p => p.spreadChgBp), fmt: v => f.s(v, 1) + ' б.п.' },
-    ytm: { t: 'доходность', div: false, unit: '%', agg: L => wavg(L.filter(p => p.group !== 'DER' && p.kind !== 'IN'), p => p.ytm), fmt: v => f.pct(v) },
+    ytm: { t: 'доходность', div: false, unit: '%', agg: L => wavg(L.filter(p => !M.deal(p) && p.kind !== 'IN'), p => p.ytm), fmt: v => f.pct(v) },
     carry: { t: 'кэрри', div: true, unit: '% годовых к MV, без фондирования', agg: L => { const b = M.sum(L, base), v = M.sum(L, 'carryDay'); return v == null ? null : b ? v * 365 / b * 100 : 0; }, fmt: v => f.pcts(v, 2), abs: L => unitOr(M.sum(L, 'carryDay'), f.ks, 'тыс ₽/д') },
     // фондирование: не посчитано ни у одной позиции узла — null («—», серый), а не 0
     funding: { t: 'фондир.', div: true, unit: '% годовых к MV', agg: L => { const F = L.filter(p => p.fundingDay != null), b = M.sum(F, base); return F.length && b ? M.sum(F, 'fundingDay') * 365 / b * 100 : null; }, fmt: v => f.pcts(v, 2), abs: L => L.some(p => p.fundingDay != null) ? f.ks(M.sum(L, p => p.fundingDay || 0)) + ' тыс ₽/д' : '—' },
@@ -223,7 +223,7 @@
       return {
         name: F.name, id: id0, itemStyle: { color: F.color },
         children: [...byType.entries()].map(([k, Lt]) => {
-          const byIss = new Map(); Lt.forEach(p => { const kk = p.group === 'DER' ? (p.cpty || 'Деривативы') : p.issuerName; if (!byIss.has(kk)) byIss.set(kk, []); byIss.get(kk).push(p); });
+          const byIss = new Map(); Lt.forEach(p => { const kk = M.deal(p) ? (p.group === 'DER' && p.cpty || M.dealName(p)) : p.issuerName; if (!byIss.has(kk)) byIss.set(kk, []); byIss.get(kk).push(p); });
           const id1 = 's' + (uid++); sunLists[id1] = { title: F.name + ' · ' + k, list: Lt, val: F.v };
           return {
             name: k, id: id1, children: [...byIss.entries()].map(([kk, Li]) => { const id2 = 's' + (uid++); const sv = M.sum(Li, F.v); sunLists[id2] = { title: F.name + ' · ' + k + ' · ' + kk, list: Li, val: F.v }; return { name: kk, id: id2, value: Math.abs(sv) / 1e3, sv }; }),
@@ -249,7 +249,7 @@
   let bubData = [];
   const bc = K.chart(bubEl, () => {
     // ОФЗ в рублях — не кредит (их спред к RUONIA — базис), на карту эмитентов не ставим
-    const L = K.list().filter(p => p.group !== 'DER' && p.zspread != null && !(p.ccy === 'RUB' && p.group === 'GOV') && (S.bubCcy === 'all' || (S.bubCcy === 'RUB' ? p.ccy === 'RUB' : p.ccy !== 'RUB')));
+    const L = K.list().filter(p => !M.deal(p) && p.zspread != null && !(p.ccy === 'RUB' && p.group === 'GOV') && (S.bubCcy === 'all' || (S.bubCcy === 'RUB' ? p.ccy === 'RUB' : p.ccy !== 'RUB')));
     const by = new Map(); L.forEach(p => { if (!by.has(p.issuer)) by.set(p.issuer, []); by.get(p.issuer).push(p); });
     bubData = [...by.entries()].map(([iss, Li]) => ({ iss, Li, name: M.issuer[iss].short, rating: M.issuer[iss].rating, t: wavg(Li, p => p.tenor), s: wavg(Li, p => p.zspread), mv: M.sum(Li, 'mv') }));
     const maxMv = Math.max(1, ...bubData.map(b => b.mv));

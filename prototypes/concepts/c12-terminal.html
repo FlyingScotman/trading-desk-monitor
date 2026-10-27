@@ -76,7 +76,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
   const VERBS = { risk: 'risk', риск: 'risk', r: 'risk', pos: 'pos', поз: 'pos', p: 'pos', позиции: 'pos', pnl: 'pnl', пнл: 'pnl', cal: 'cal', кал: 'cal', календарь: 'cal', card: 'card', карточка: 'card', кар: 'card', curve: 'curve', кривая: 'curve', кривые: 'curve', hud: 'hud', сводка: 'hud', help: 'help', помощь: 'help', '?': 'help', clear: 'clear', очистить: 'clear', cls: 'clear', book: 'book', книга: 'book' };
   const CURVES = { ruonia: 'RUB RUONIA', руония: 'RUB RUONIA', ks: 'RUB KEY', кс: 'RUB KEY', key: 'RUB KEY', ofz: 'OFZ', офз: 'OFZ', basis: 'RUB OFZ', базис: 'RUB OFZ', sofr: 'USD SOFR', usd: 'USD SOFR', estr: 'EUR ESTR', eur: 'EUR ESTR', cny: 'CNY XCCY' };
   const DIM_DEF = {
-    issuer: ['эмитент', p => p.group === 'DER' ? 'Деривативы' : p.issuerName],
+    issuer: ['эмитент', p => M.deal(p) ? M.dealName(p) : p.issuerName],
     book: ['книга', p => p.book + ' · ' + p.bookName],
     ccy: ['валюта', p => p.ccy],
     kind: ['тип', p => p.groupLabel + ' · ' + p.kindLabel],
@@ -92,7 +92,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
     ['risk cs01 by rating', 'кредитный риск в разрезе'],
     ['pos', 'все позиции: валюта → эмитент → флоатер/фикс → срок до оферты'],
     ['pos сбер', 'позиции по любому тексту: эмитент, ISIN, бумага, книга'],
-    ['pos float rub', 'фильтры: float/fix, ofz/corp/der, rub/usd/eur/cny, book OFZ'],
+    ['pos float rub', 'фильтры: float/fix, ofz/corp/der/repo, rub/usd/eur/cny, book OFZ'],
     ['pnl', 'PnL дня: водопад и итоги'],
     ['pnl by book', 'PnL по разрезу с разложением на факторы'],
     ['pnl top 10', 'крупнейшие вклады в PnL'],
@@ -170,7 +170,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
 
   // ---------- команды ----------
   const ch = (bd, hgt) => { const e = K.h('div', 'ch'); if (hgt) e.style.height = hgt + 'px'; bd.appendChild(e); return e; };
-  const sumLine = (L) => '<div class="sum"><span>позиций <b>' + L.length + '</b></span><span>DV01 <b>' + K.d({ title: 'DV01', unit: 'тыс ₽/бп', list: L, val: 'dv01' }, null, '') + '</b></span><span>CS01 <b>' + K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }, null, '') + '</b></span><span>MV <b>' + K.d({ title: 'MV', unit: 'mm ₽', fmt: v => f.mn(v, 0), list: L.filter(p => p.group !== 'DER'), val: 'mv', color: false }) + '</b> mm</span><span>PnL дня <b>' + K.d({ title: 'PnL дня', unit: 'тыс ₽', fmt: f.k, list: L, val: p => p.pnl.total }) + '</b> тыс</span><span>' + K.hint('кэрри', K.tips.carry) + ' <b>' + K.d({ title: 'Кэрри/день (без фондирования)', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }) + '</b> тыс/д</span><span>' + K.hint('фондирование', K.tips.funding) + ' <b>' + K.d({ title: 'Фондирование/день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'fundingDay', nullable: true }) + '</b> тыс/д</span></div>';
+  const sumLine = (L) => '<div class="sum"><span>позиций <b>' + L.length + '</b></span><span>DV01 <b>' + K.d({ title: 'DV01', unit: 'тыс ₽/бп', list: L, val: 'dv01' }, null, '') + '</b></span><span>CS01 <b>' + K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }, null, '') + '</b></span><span>MV <b>' + K.d({ title: 'MV', unit: 'mm ₽', fmt: v => f.mn(v, 0), list: L.filter(p => !M.deal(p)), val: 'mv', color: false }) + '</b> mm</span><span>PnL дня <b>' + K.d({ title: 'PnL дня', unit: 'тыс ₽', fmt: f.k, list: L, val: p => p.pnl.total }) + '</b> тыс</span><span>' + K.hint('кэрри', K.tips.carry) + ' <b>' + K.d({ title: 'Кэрри/день (без фондирования)', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }) + '</b> тыс/д</span><span>' + K.hint('фондирование', K.tips.funding) + ' <b>' + K.d({ title: 'Фондирование/день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'fundingDay', nullable: true }) + '</b> тыс/д</span></div>';
   const ccyCol = Object.assign({}, K.posCols.ccy, { fmt: (v, r) => K.ccyTag(r.ccy) });
   const ccyName = { RUB: 'рубли', USD: 'доллары', EUR: 'евро', CNY: 'юани' };
 
@@ -185,7 +185,8 @@ body { font-family: var(--mono); font-size: 12.5px; }
       else if (['corp', 'корп', 'корпоративные'].includes(t)) L = L.filter(p => p.group === 'CORP');
       else if (['sub', 'суб', 'субфед', 'субфедеральные'].includes(t)) L = L.filter(p => p.group === 'SUB');
       else if (['der', 'дер', 'swap', 'свопы', 'деривативы', 'irs'].includes(t)) L = L.filter(p => p.group === 'DER');
-      else if (['fx', 'валютные', 'вал'].includes(t)) L = L.filter(p => p.ccy !== 'RUB' && p.group !== 'DER');
+      else if (['repo', 'репо', 'mm', 'фондирование'].includes(t)) L = L.filter(p => p.group === 'MM');  // РЕПО (#361)
+      else if (['fx', 'валютные', 'вал'].includes(t)) L = L.filter(p => p.ccy !== 'RUB' && !M.deal(p));
       else if (['put', 'оферта', 'оферты', 'пут'].includes(t)) L = L.filter(p => p.offer);
       else if (M.book[t.toUpperCase()]) L = L.filter(p => p.book === t.toUpperCase());
       else w.push(t);
@@ -208,7 +209,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
   }
   const RISK_COLS = [
     { label: 'DV01', unit: 'тыс ₽/бп', val: 'dv01', neutral: 1 }, { label: 'RUONIA', unit: 'тыс ₽/бп', val: p => p.dv01ByCurve['RUB RUONIA'], neutral: 1 }, { label: 'КС', unit: 'тыс ₽/бп', val: p => p.dv01ByCurve['RUB KEY'], neutral: 1 },
-    { label: 'Базис ОФЗ', unit: 'тыс ₽/бп', val: 'basis01', neutral: 1 }, { label: 'CS01', unit: 'тыс ₽/бп', val: 'cs01', neutral: 1 }, { label: 'MV, mm ₽', unit: 'mm ₽', fmt: v => f.mn(v, 0), val: p => p.group === 'DER' ? 0 : p.mv, neutral: 1 },
+    { label: 'Базис ОФЗ', unit: 'тыс ₽/бп', val: 'basis01', neutral: 1 }, { label: 'CS01', unit: 'тыс ₽/бп', val: 'cs01', neutral: 1 }, { label: 'MV, mm ₽', unit: 'mm ₽', fmt: v => f.mn(v, 0), val: p => M.deal(p) ? 0 : p.mv, neutral: 1 },
   ];
   const PNL_COLS = [['total', 'Итого']].concat(K.PNL_FACTORS).map(([k, l]) => ({ label: l, unit: 'тыс ₽', fmt: f.k, val: p => p.pnl[k], nullable: k === 'funding' }));
 
@@ -298,7 +299,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
           return 'валютные бонды российских эмитентов · ' + days + ' дней · ' + ev.length + ' событий';
         }
         const ids = new Set(K.list().map(p => p.id));
-        const cf = M.cashflows.filter(c => c.date > M.asOf && c.date <= end && ids.has(c.pos) && M.pos[c.pos].group !== 'DER' && (!o.ccy || c.ccy === o.ccy));
+        const cf = M.cashflows.filter(c => c.date > M.asOf && c.date <= end && ids.has(c.pos) && !M.deal(M.pos[c.pos]) && (!o.ccy || c.ccy === o.ccy));
         const weeks = {}; cf.forEach(c => { const d = M.util.parse(c.date); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); const k = M.util.iso(d); (weeks[k] = weeks[k] || []).push(c); });
         const wk = Object.keys(weeks).sort();
         const hh = days <= 7 ? 190 : 300;

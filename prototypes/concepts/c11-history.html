@@ -73,7 +73,7 @@ tr.row.sel td { background: var(--accent-bg); }
     basis: (p, i) => H[p.id].basis ? at(H[p.id].basis, i) : p.basis01 * scale(p, i),
     curve: id => (p, i) => (M.curve[id] || {}).kind === 'basis' ? V.basis(p, i)
       : H[p.id].curves ? at(H[p.id].curves[id], i) : p.dv01ByCurve[id] * scale(p, i),
-    mv: (p, i) => p.group === 'DER' ? 0 : H[p.id].mv ? at(H[p.id].mv, i) : p.mv * scale(p, i) * pxr(p, i),
+    mv: (p, i) => M.deal(p) ? 0 : H[p.id].mv ? at(H[p.id].mv, i) : p.mv * scale(p, i) * pxr(p, i),
     notional: (p, i) => H[p.id].notional[i] * M.toRepr[p.ccy],
   };
   const SRC_NOTE = REAL ? 'риск, MV и номинал на каждую дату — из прогона этой даты (между прогонами — последний); работает с фильтром книг'
@@ -146,8 +146,8 @@ tr.row.sel td { background: var(--accent-bg); }
   const pMv = document.getElementById('pMv'); let chMv;
   const MVM = [['type', 'типы'], ['ccy', 'валюты'], ['book', 'книги']];
   function mvDefs(L) {
-    const B = L.filter(p => p.group !== 'DER');
-    if (st.mv === 'type') return M.typeRows.filter(t => t.group !== 'DER' && B.some(p => p.group + '.' + p.kind === t.id)).map(t => [t.label, (p, i) => p.group + '.' + p.kind === t.id ? V.mv(p, i) : 0, K.kindColor[t.kind]]);
+    const B = L.filter(p => !M.deal(p));
+    if (st.mv === 'type') return M.typeRows.filter(t => !M.deal(t) && B.some(p => p.group + '.' + p.kind === t.id)).map(t => [t.label, (p, i) => p.group + '.' + p.kind === t.id ? V.mv(p, i) : 0, K.kindColor[t.kind]]);
     if (st.mv === 'ccy') return M.ccys.filter(c => B.some(p => p.ccy === c)).map(c => [c, (p, i) => p.ccy === c ? V.mv(p, i) : 0, K.ccyColor(c)]);
     return M.books.filter(b => B.some(p => p.book === b.id)).map((b, k) => [b.id, (p, i) => p.book === b.id ? V.mv(p, i) : 0, K.PAL[k % K.PAL.length]]);
   }
@@ -170,9 +170,9 @@ tr.row.sel td { background: var(--accent-bg); }
       ['Риск-факторы, тыс ₽/бп', [['DV01 ставки', V.dv01], ['CS01', V.cs01], ['Базис ОФЗ', V.basis]], f.dv, f.dvs, 'тыс ₽/бп'],
       ['Кривые, тыс ₽/бп', M.curves.filter(c => L.some(p => p.dv01ByCurve[c.id])).map(c => ['<b style="color:' + K.curveColors[c.id] + '">■</b> ' + esc(c.short), V.curve(c.id)]), f.dv, f.dvs, 'тыс ₽/бп'],
       ['DV01 по книгам', M.books.filter(b => L.some(p => p.book === b.id && p.dv01)).map(b => [esc(b.id) + ' <span class="mut3">' + esc(b.name) + '</span>', (p, i) => p.book === b.id ? V.dv01(p, i) : 0]), f.dv, f.dvs, 'тыс ₽/бп'],
-      ['Объём по типам, mm ₽', M.typeRows.filter(t => t.group !== 'DER' && L.some(p => p.group + '.' + p.kind === t.id)).map(t => ['<b style="color:' + K.kindColor[t.kind] + '">●</b> ' + esc(t.label), (p, i) => p.group + '.' + p.kind === t.id ? V.mv(p, i) : 0]), v => f.mn(v, 0), v => f.mns(v, 0), 'mm ₽'],
-      ['Объём по валютам, mm ₽', M.ccys.filter(c => L.some(p => p.ccy === c && p.group !== 'DER')).map(c => [K.ccyTag(c), (p, i) => p.ccy === c ? V.mv(p, i) : 0]), v => f.mn(v, 0), v => f.mns(v, 0), 'mm ₽'],
-      ['Номинал деривативов, mm ₽', M.typeRows.filter(t => t.group === 'DER' && L.some(p => p.group + '.' + p.kind === t.id)).map(t => ['<b style="color:' + K.kindColor[t.kind] + '">●</b> ' + esc(t.label), (p, i) => p.group + '.' + p.kind === t.id ? V.notional(p, i) : 0]), v => f.mn(v, 0), v => f.mns(v, 0), 'mm ₽'],
+      ['Объём по типам, mm ₽', M.typeRows.filter(t => !M.deal(t) && L.some(p => p.group + '.' + p.kind === t.id)).map(t => ['<b style="color:' + K.kindColor[t.kind] + '">●</b> ' + esc(t.label), (p, i) => p.group + '.' + p.kind === t.id ? V.mv(p, i) : 0]), v => f.mn(v, 0), v => f.mns(v, 0), 'mm ₽'],
+      ['Объём по валютам, mm ₽', M.ccys.filter(c => L.some(p => p.ccy === c && !M.deal(p))).map(c => [K.ccyTag(c), (p, i) => p.ccy === c ? V.mv(p, i) : 0]), v => f.mn(v, 0), v => f.mns(v, 0), 'mm ₽'],
+      ['Номинал деривативов и РЕПО, mm ₽', M.typeRows.filter(t => M.deal(t) && L.some(p => p.group + '.' + p.kind === t.id)).map(t => ['<b style="color:' + K.kindColor[t.kind] + '">●</b> ' + esc(t.label), (p, i) => p.group + '.' + p.kind === t.id ? V.notional(p, i) : 0]), v => f.mn(v, 0), v => f.mns(v, 0), 'mm ₽'],
     ];
     let html = '<table class="k-tbl cmp" data-vk="c11-compare" data-title="Сравнение с датой"><thead><tr><th></th><th class="n">' + f.date(DATES[i0]) + '</th><th class="n">Сегодня</th><th class="n">Δ</th><th class="n">Δ %</th><th style="width:110px"></th></tr></thead><tbody>';
     sections.forEach(([title, defs, fm, fms, unit]) => {
@@ -235,7 +235,7 @@ tr.row.sel td { background: var(--accent-bg); }
         dNot: x.notional[LAST] - x.notional[i0], not0: x.notional[i0],
         dDv: V.dv01(p, LAST) - V.dv01(p, i0), dMv: V.mv(p, LAST) - V.mv(p, i0),
         // сегодня без закрытия MOEX (прогон внутри дня): доходность и цена — из прогона; нет значения — нет и разницы
-        dY: x.ytm[i0] != null && yLast(p, x) != null && p.group !== 'DER' ? (yLast(p, x) - x.ytm[i0]) * 100 : null,
+        dY: x.ytm[i0] != null && yLast(p, x) != null && !M.deal(p) ? (yLast(p, x) - x.ytm[i0]) * 100 : null,
         dS: x.spr[i0] != null && x.spr[LAST] != null ? x.spr[LAST] - x.spr[i0] : null,
         dP: x.price[i0] != null && pLast(p, x) != null ? pLast(p, x) - x.price[i0] : null,
       });
@@ -271,7 +271,7 @@ tr.row.sel td { background: var(--accent-bg); }
   function drawPos() {
     const P = document.getElementById('pPos'), bd = P.querySelector('.bd');
     if (!st.pos || !M.pos[st.pos]) st.pos = topRows().sort((a, b) => Math.abs(b.dDv) - Math.abs(a.dDv))[0]?.id || M.positions[0].id;
-    const p = M.pos[st.pos], x = H[p.id], isB = p.group !== 'DER';
+    const p = M.pos[st.pos], x = H[p.id], isB = !M.deal(p);
     const mets = isB ? PM : PM.slice(0, 2);
     if (!mets.some(m => m[0] === st.pm)) st.pm = 'notional';
     if (chPos) { chPos.dispose(); chPos = null; }

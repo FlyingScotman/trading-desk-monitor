@@ -77,7 +77,7 @@ def cause(code: str, kind: str, product: str | None, futures_by_ticker: bool | N
         if kind in ("BOND_FUT", "BOND_FWD"):
             return ("bond_derivative", "фьючерс / форвард на облигации: ядро их пока не оценивает, MV в отчёте нет",
                     REPORT_MV)
-        if product and "repo" in product.lower():
+        if kind == "REPO" or (product and "repo" in product.lower()):
             return ("repo", ("РЕПО ждёт условий сделки (trade_terms): ядро оценит его по ним (PV, риск ставок); "
                     "MV в отчёте нет"), "до условий сделки — " + REPORT_MV)
         return ("no_report_mv", "оценки нет: MV в отчёте нет", REPORT_MV)

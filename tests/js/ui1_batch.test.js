@@ -84,15 +84,15 @@ t('таблица: после щелчка по столбцу группы — 
     // эмитенты внутри валюты
     const rub = order(html()), i0 = rub.indexOf('g0:RUB'), i1 = rub.findIndex((x, i) => i > i0 && x.startsWith('g0:'));
     const iss = rub.slice(i0 + 1, i1 < 0 ? undefined : i1).filter(x => x.startsWith('g1:')).map(x => x.slice(3));
-    const tIss = k => dv(M.positions.filter(p => p.ccy === 'RUB' && (p.group === 'DER' ? 'Деривативы' : p.issuerName) === k));
+    const tIss = k => dv(M.positions.filter(p => p.ccy === 'RUB' && (M.deal(p) ? M.dealName(p) : p.issuerName) === k));  // сделки — корзина группы (#371)
     assert.ok(iss.length > 3);
     assert.deepStrictEqual(iss, iss.slice().sort((a, b) => d * (tIss(a) - tIss(b))), 'эмитенты по DV01 ' + d);
   }
   // текстовый столбец самой группы — по имени группы
   api.setSort([['issuerName', -1]]);
   const o = order(html()), i0 = o.indexOf('g0:RUB'), i1 = o.findIndex((x, i) => i > i0 && x.startsWith('g0:'));
-  // (у группы «Деривативы» поле «Эмитент» строк — контрагенты: она встаёт по своей первой строке)
-  const iss = o.slice(i0 + 1, i1).filter(x => x.startsWith('g1:') && x !== 'g1:Деривативы').map(x => x.slice(3));
+  // (у корзин сделок «Деривативы» и «Денежный рынок и фондирование» поле «Эмитент» строк — контрагенты: они встают по своей первой строке)
+  const iss = o.slice(i0 + 1, i1).filter(x => x.startsWith('g1:') && x !== 'g1:Деривативы' && x !== 'g1:Денежный рынок и фондирование').map(x => x.slice(3));
   assert.deepStrictEqual(iss, iss.slice().sort((a, b) => b.localeCompare(a, 'ru')), 'эмитенты по имени, обратный порядок');
   // сброс сортировки — порядок уровня (Минфин первым)
   api.setSort([]);

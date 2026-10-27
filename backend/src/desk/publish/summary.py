@@ -40,10 +40,11 @@ from ..store import CURRENT_RUNS
 
 log = logging.getLogger("desk.publish.summary")
 
-VERSION = 7  # 2: a floater's discount margin (pos[9]); 3: the OFZ basis of the KBD scheme, the spread to the KBD;
+VERSION = 8  # 2: a floater's discount margin (pos[9]); 3: the OFZ basis of the KBD scheme, the spread to the KBD;
 # 4: an OFZ-IN's nominal proxy out of the run's basis (basisIn, TDM#173); 5: an OFZ's RUONIA risk apart from its basis
 # (ofzRuo, pos[11]; TDM#213); 6: the funding its own factor, the carry without it (TDM#168); 7: a legacy tdm swap
-# (IRS / XCCY / CDS) in DER, not OTH.OTH (mvType, ``LEGACY_DER``; TDM#336)
+# (IRS / XCCY / CDS) in DER, not OTH.OTH (mvType, ``LEGACY_DER``; TDM#336); 8: an OTC row of the product group ``repo``
+# is MM.REPO (money market and funding), not DER.OTC (mvType; the owner's decision in TDM#361)
 CURVE_MAP = {"RUB OFZ": "RUB RUONIA", "USD": "USD SOFR", "EUR": "EUR ESTR", "CNY": "CNY XCCY"}
 """A run's risk curve -> the concept pages' curve (``desk.api.concepts`` re-exports it; ``lib/real.js`` mirrors it).
 ``RUB OFZ`` (the KBD: a fixed-coupon OFZ's rates risk since 0.2.6, its basis in RUONIA + basis since 0.2.7, every bond's
@@ -67,7 +68,9 @@ ROWS_SQL = ("SELECT position_id, book_id, pv_rub, fact->'risk' AS risk, (fact->>
             " (fact->>'price')::float8 AS price, (fact->>'spread_bp')::float8 AS spread_bp,"
             " (fact->>'dv01')::float8 AS dv01, (fact->'extra'->>'dm_bp')::float8 AS dm_bp, pnl,"
             " (fact->'extra'->>'ofz_basis01')::float8 AS ofz_basis, fact->'extra'->>'quality' AS quality,"
-            " (fact->'extra'->>'ofz_ruonia01')::float8 AS ofz_ruo"
+            " (fact->'extra'->>'ofz_ruonia01')::float8 AS ofz_ruo,"
+            " jsonb_build_object('reported', jsonb_build_object('x_product_group', COALESCE("
+            "fact->'extra'->'reported'->>'x_product_group', fact->'extra'->'reported'->'x'->>'x_product_group'))) AS extra"
             " FROM run_position WHERE run_id = %s AND fact IS NOT NULL")
 
 
@@ -97,18 +100,35 @@ def is_minfin(f: dict[str, Any], gov_issuers: frozenset[str] | set[str] = frozen
 LEGACY_DER = {"IRS": "IRS", "XCCY": "XCCY", "CDS": "OTC"}
 """A legacy tdm store's swap (``instr_type``) -> its kind in the group DER, as the risk table's group of it
 (``api.concepts.LEGACY_KIND``, TDM#336); ``lib/real.js`` mirrors it (``LEGACY_DER``)."""
+MONEY_MARKET = {"repo": "REPO"}
+"""An OTC row's product group (``product_group``) -> its kind in the group MM, money market and funding: a REPO is
+funding, not a derivative (the owner's decision in TDM#361, variant (b): its own kind, the risk table's ``REPO``);
+``lib/real.js`` mirrors it (``MONEY_MARKET``)."""
+
+
+def product_group(rep: Any) -> str | None:
+    """The report's ``x_product_group`` of a position: a valued fact keeps the report's ``x_*`` fields under
+    ``extra.reported.x`` (``publish.tdm_run.reported`` of the stored row), an unvalued one's row has them flat."""
+    if not isinstance(rep, dict):
+        return None
+    pg = rep.get("x_product_group")
+    if pg is None and isinstance(rep.get("x"), dict):
+        pg = rep["x"].get("x_product_group")
+    return pg
 
 
 def kind_of(f: dict[str, Any], gov_issuers: frozenset[str] | set[str] = frozenset()) -> tuple[str, str]:
     """(group, kind) of a position's fact: GOV PD / PK / IN / SOVFX, SUB FIX / FLT, CORP FIX / FLT, DER OTC / FX /
-    IRS / XCCY (``LEGACY_DER``), OTH OTH. A floater is a bond whose coupon type is ``float``. The Minfin's bonds
+    IRS / XCCY (``LEGACY_DER``), MM REPO (an OTC row of the product group ``repo``, ``MONEY_MARKET``), OTH OTH. A floater is a bond whose coupon type is ``float``. The Minfin's bonds
     (``is_minfin``) are GOV: in roubles an OFZ by its class, in a foreign currency SOVFX (the Minfin's Eurobonds and
     replacement bonds)."""
     it = f.get("instr_type")
     if it == "FX":
         return "DER", "FX"
     if it == "OTC":
-        return "DER", "OTC"
+        ex = f.get("extra") if isinstance(f.get("extra"), dict) else {}
+        mm = MONEY_MARKET.get(product_group(ex.get("reported")) or "")
+        return ("MM", mm) if mm else ("DER", "OTC")
     if it in LEGACY_DER:
         return "DER", LEGACY_DER[it]
     if it not in ("BOND", None):

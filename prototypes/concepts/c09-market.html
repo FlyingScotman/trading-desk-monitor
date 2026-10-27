@@ -139,7 +139,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
   const ym = K.chart(document.getElementById('ymap'), () => {
     const okU = b => (S.flt === 'all' || (S.flt === 'flt' ? b.flt : !b.flt)) && (!S.sec || b.sector === S.sec) && (b.isOfz || S.rt.includes(gOf(b)));
     const U = S.ours ? [] : M.universeRub.filter(okU);
-    const L = K.list().filter(p => p.group !== 'DER' && p.ccy === 'RUB' && p.kind !== 'IN' && (S.flt === 'all' || (S.flt === 'flt' ? K.cpnType(p) === 'float' : K.cpnType(p) === 'fix')) && (!S.sec || p.sector === S.sec || (S.sec === 'ОФЗ' && p.group === 'GOV')) && (p.group === 'GOV' || S.rt.includes(gOf(p))));
+    const L = K.list().filter(p => !M.deal(p) && p.ccy === 'RUB' && p.kind !== 'IN' && (S.flt === 'all' || (S.flt === 'flt' ? K.cpnType(p) === 'float' : K.cpnType(p) === 'fix')) && (!S.sec || p.sector === S.sec || (S.sec === 'ОФЗ' && p.group === 'GOV')) && (p.group === 'GOV' || S.rt.includes(gOf(p))));
     ourPts = L;
     const maxMv = Math.max(1, ...L.map(p => Math.abs(p.mv)));
     const curveX = M.pillars.filter(t => t <= 16);
@@ -231,7 +231,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
   let fxU = [], fxL = [];
   const fm = K.chart(document.getElementById('fxmap'), () => {
     fxU = M.universeFx.filter(b => b.ccy === S.fx);
-    fxL = K.list().filter(p => p.group !== 'DER' && p.ccy === S.fx);
+    fxL = K.list().filter(p => !M.deal(p) && p.ccy === S.fx);
     const cid = M.curves.find(c => c.ccy === S.fx).id;
     return {
       grid: { left: 8, right: 16, top: 36, bottom: 28, containLabel: true }, legend: { top: 2, right: 10, data: ['рынок', 'наши', M.curve[cid].short] },

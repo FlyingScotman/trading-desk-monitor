@@ -149,7 +149,7 @@
     let html = '';
 
     // ---------- 01 итог ----------
-    const bonds = L.filter(p => p.group !== 'DER');
+    const bonds = L.filter(p => !M.deal(p));
     const parts = [];
     M.curves.filter(c => c.kind === 'rate').forEach(c => {
       const v = M.sum(L, p => ratePnl(p, c.id));

@@ -99,7 +99,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
   // ---------- события ----------
   function pfEvents(e) {
     const L = new Set(K.list().map(p => p.id));
-    return M.cashflows.filter(c => c.date > M.asOf && c.date <= e && L.has(c.pos) && M.pos[c.pos].group !== 'DER').map((c, i) => {
+    return M.cashflows.filter(c => c.date > M.asOf && c.date <= e && L.has(c.pos) && !M.deal(M.pos[c.pos])).map((c, i) => {
       const p = M.pos[c.pos];
       return { id: 'e' + i, date: c.date, kind: c.kind, ccy: c.ccy, amt: c.amount, val: c.amountRub, name: p.name, issuerName: p.issuerName, issuer: p.issuer, pos: p.id, est: c.est, book: p.book, searchText: (p.searchText + ' ' + KN[c.kind]) };
     });

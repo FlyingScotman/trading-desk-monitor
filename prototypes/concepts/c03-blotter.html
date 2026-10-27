@@ -116,13 +116,13 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     kind: { label: 'Тип', val: r => r.group + r.kind, filter: r => M.kindLabel[r.kind] || r.kind, fmt: (v, r) => '<span class="tagc" style="border-color:' + K.kindColor[r.kind] + '66">' + esc(M.kindShort[r.kind]) + '</span>' },
     book: { label: 'Книга', filter: true, val: r => r.book, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
     coupon: { label: 'Купон', val: r => r.couponFmt, fmt: v => '<span class="mono">' + esc(v || '—') + '</span>', title: 'Q — квартальный, M — месячный, S — полугодовой, A — годовой' },
-    curCpn: { label: 'Тек. купон', num: true, val: r => r.group === 'DER' ? null : r.curCpn, fmt: v => f.pct(v) },
+    curCpn: { label: 'Тек. купон', num: true, val: r => M.deal(r) ? null : r.curCpn, fmt: v => f.pct(v) },
     // дата оферты — датой (data-date: в CSV дата Excel), вид оферты — своей колонкой (#183)
     offer: { label: 'Оферта', date: true, val: r => r.offer || null, fmt: v => v ? f.date(v) : '<span class="mut3">—</span>' },
     offerKind: { label: 'Вид оферты', filter: r => K.offerKindText(r.offerKind) || '—', val: r => r.offer ? r.offerKind : null, fmt: v => v ? esc(K.offerKindText(v)) : '<span class="mut3">—</span>', title: 'пут — право держателя предъявить бумагу, колл — право эмитента погасить' },
     maturity: { label: 'Погашение', val: r => r.maturity, fmt: v => f.date(v) },
     event: { label: 'Ближайшее событие', val: r => r.event.date, title: 'оферта (пут/колл), если есть, иначе погашение',
-      fmt: (v, r) => '<span class="' + (r.group !== 'DER' && r.tenor < 0.25 ? 'ev-soon' : 'mut3') + '">' + (r.event.date ? evName[r.event.kind] + '</span> ' + f.date(r.event.date) + ' <span class="mut3">' + f.yrs(r.tenor) + '</span>' : '—</span>') },
+      fmt: (v, r) => '<span class="' + (!M.deal(r) && r.tenor < 0.25 ? 'ev-soon' : 'mut3') + '">' + (r.event.date ? evName[r.event.kind] + '</span> ' + f.date(r.event.date) + ' <span class="mut3">' + f.yrs(r.tenor) + '</span>' : '—</span>') },
     tenor: { label: 'Срок', num: true, val: r => r.tenor, fmt: v => f.yrs(v), title: 'до оферты, если есть, иначе до погашения' },
     // в CSV — число в mm валюты бумаги (заголовок «Номинал, mm в вал.»), валюта — в колонке «Вал» (#258)
     notional: { label: 'Номинал', num: true, val: r => r.notional, fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', csvHead: 'Номинал, mm в вал.', csvFmt: v => f.mn(v, 2), title: 'в валюте бумаги' },
@@ -172,12 +172,12 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   const CCYN = { RUB: 'Рубли', USD: 'Доллары', EUR: 'Евро', CNY: 'Юани' };
   const TBO = ['< 6м', '6м–1г', '1–2г', '2–3г', '3–5г', '5–7г', '7–10г', '10г+'];
   // без купона (не облигация и не дериватив, #325) — по виду позиции
-  const fixFloat = r => { const t = K.cpnType(r); return r.group === 'DER' || !t ? M.kindShort[r.kind] || 'Прочее' : t === 'float' ? 'Флоатеры' : t === 'linker' ? 'Линкеры' : 'Фикс'; };
+  const fixFloat = r => { const t = K.cpnType(r); return M.deal(r) || !t ? M.kindShort[r.kind] || 'Прочее' : t === 'float' ? 'Флоатеры' : t === 'linker' ? 'Линкеры' : 'Фикс'; };
   const FFO = ['Фикс', 'Флоатеры', 'Линкеры'];
   const lvCcy = { key: r => r.ccy, label: k => K.ccyTag(k) + ' ' + CCYN[k], order: (a, b) => M.ccyOrder[a] - M.ccyOrder[b], color: k => K.ccyColor(k) };
   const GROUPS = {
     ccy: [lvCcy,
-      { key: r => r.group === 'DER' ? 'Деривативы' : r.issuerName, label: (k, rows) => esc(k) + (rows[0].group === 'DER' ? ' <span class="mut3" style="font-weight:400">по контрагентам</span>' : '') + (rows[0].rating && rows[0].rating !== '—' ? ' <span class="mut3" style="font-weight:400">' + esc(rows[0].rating) + '</span>' : ''), order: K.issuerOrder, color: (k, rows) => K.issuerColor(rows[0].issuer) },
+      { key: r => M.deal(r) ? M.dealName(r) : r.issuerName, label: (k, rows) => esc(k) + (M.deal(rows[0]) ? ' <span class="mut3" style="font-weight:400">по контрагентам</span>' : '') + (rows[0].rating && rows[0].rating !== '—' ? ' <span class="mut3" style="font-weight:400">' + esc(rows[0].rating) + '</span>' : ''), order: K.issuerOrder, color: (k, rows) => K.issuerColor(rows[0].issuer) },
       { key: fixFloat, label: k => '<span class="mut">' + esc(k) + '</span>', order: (a, b) => { const i = x => { const j = FFO.indexOf(x); return j < 0 ? 9 : j; }; return i(a) - i(b) || a.localeCompare(b, 'ru'); }, skipSingle: true }],
     book: [{ key: r => r.book, label: k => esc(M.book[k].name) + ' <span class="mut3" style="font-weight:400">' + esc(k + ' · ' + M.book[k].desk) + '</span>', order: (a, b) => M.books.findIndex(x => x.id === a) - M.books.findIndex(x => x.id === b) }, lvCcy],
     type: [{ key: r => r.group + '.' + r.kind, label: k => { const t = M.typeRows.find(x => x.id === k); return '<b style="color:' + K.kindColor[t.kind] + '">●</b> ' + esc(M.groupLabel[t.group] + ' · ' + t.label); }, order: (a, b) => M.typeRows.findIndex(x => x.id === a) - M.typeRows.findIndex(x => x.id === b) },
@@ -315,7 +315,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   let cur = null, hmode = 'yield', prevSeg = null;
   const hChart = K.chart($('.cd-h'), () => {
     if (!cur) return { series: [] };
-    const p = cur, h = H(p.id), isBond = p.group !== 'DER';
+    const p = cur, h = H(p.id), isBond = !M.deal(p);
     const m = isBond ? hmode : (hmode === 'dv01' ? 'dv01' : 'notional');
     const R = m === 'dv01' || m === 'notional' ? K.runSeries(h, m, { ccy: p.ccy, color: K.issuerColor(p.issuer) }) : null;  // R44: прогон даты, разрывы, маркеры
     const S = R ? R.series : m === 'price' ? [{ name: 'Цена', data: h.price }] : m === 'yield' ? [{ name: 'Доходность', data: h.ytm }, { name: 'ОФЗ на сроке', data: h.bench, lineStyle: { type: 'dashed', width: 1 } }]
@@ -342,7 +342,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
       '<div class="acts"><button class="k-btn pri" data-a="full">Открыть полностью ↗</button>' + (p.issuer ? '<button class="k-btn" data-a="iss">Все бумаги эмитента</button>' : '') + '<button class="k-btn" data-a="book">Книга ' + esc(p.book) + '</button></div>';
     $('.cd-hd [data-a=full]').onclick = () => K.card(p.id);
     K.aliasBind($('.cd-hd .t'), p);  // ✎ — алиас бумаги (R33): сохраняется по ISIN, имя меняется на всех экранах
-    if (p.issuer) $('.cd-hd [data-a=iss]').onclick = () => K.drill({ title: 'Эмитент ' + p.issuerName + ' · MV', unit: 'mm ₽', fmt: v => f.mn(v, 1), list: K.list().filter(x => x.issuer === p.issuer), val: x => x.group === 'DER' ? x.notionalRub : x.mv });
+    if (p.issuer) $('.cd-hd [data-a=iss]').onclick = () => K.drill({ title: 'Эмитент ' + p.issuerName + ' · MV', unit: 'mm ₽', fmt: v => f.mn(v, 1), list: K.list().filter(x => x.issuer === p.issuer), val: x => M.deal(x) ? x.notionalRub : x.mv });
     $('.cd-hd [data-a=book]').onclick = () => K.drill({ title: 'Книга ' + p.book + ' · DV01', unit: 'тыс ₽/бп', list: M.positions.filter(x => x.book === p.book), val: 'dv01' });
     // событие
     const evTxt = { put: 'Пут-оферта', call: 'Колл-опцион', mat: isBond ? 'Погашение' : 'Срок сделки' }[p.event.kind] || 'Даты события нет';  // #342

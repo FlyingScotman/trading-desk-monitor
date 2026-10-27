@@ -33,9 +33,14 @@
   'use strict';
   const M = window.MOCK;
   const K = window.KIT = {};
-  // группы бумаг в порядке показа: демо знает GOV/CORP/DER, прогон из базы — ещё SUB (субфедеральные) и OTH
-  K.GROUPS = ['GOV', 'SUB', 'CORP', 'DER', 'OTH'];
-  M.groupLabel = Object.assign({ GOV: 'Гос', SUB: 'Суб', CORP: 'Корп', DER: 'Деривативы', OTH: 'Прочее' }, M.groupLabel);
+  // группы бумаг в порядке показа: демо знает GOV/CORP/DER/MM, прогон из базы — ещё SUB (субфедеральные) и OTH;
+  // MM — денежный рынок и фондирование (РЕПО, #361)
+  K.GROUPS = ['GOV', 'SUB', 'CORP', 'DER', 'MM', 'OTH'];
+  M.groupLabel = Object.assign({ GOV: 'Гос', SUB: 'Суб', CORP: 'Корп', DER: 'Деривативы', MM: 'Денежный рынок', OTH: 'Прочее' }, M.groupLabel);
+  // сделка, а не бумага (деривативы и FX, РЕПО): размер — номинал, в MV облигаций и потоках бумаг её нет (lib/real.js, lib/mock.js)
+  M.deal = M.deal || (p => p.group === 'DER' || p.group === 'MM');
+  // корзина сделки в группировках по эмитенту: «Деривативы» или «Денежный рынок и фондирование» (РЕПО), не контрагент
+  M.dealName = M.dealName || (p => p.group === 'MM' ? 'Денежный рынок и фондирование' : 'Деривативы');
   // Минфин РФ: в демо — эмитент MINFIN, в прогоне — эмитент с флагом gov статики хаба
   M.isMinfin = M.isMinfin || (id => id === 'MINFIN' || !!(M.issuer && M.issuer[id] && M.issuer[id].gov));
 
@@ -301,7 +306,7 @@
   M.curves.forEach(c => { if (!K.curveColors[c.id]) K.curveColors[c.id] = K.PAL[(M.util && M.util.hash ? M.util.hash(c.id) : c.id.length) % K.PAL.length]; });
   const issuerIdx = {}; M.issuers.forEach((x, i) => issuerIdx[x.id] = i);
   K.issuerColor = id => id && issuerIdx[id] != null ? K.PAL[issuerIdx[id] % K.PAL.length] : '#7a8794';
-  K.kindColor = { PD: '#4c9dff', PK: '#22c3d6', IN: '#7f8cff', SOVFX: '#b48cff', FIX: '#3fb67a', FLT: '#e3b341', IRS: '#f0645a', KSW: '#ff8f3f', BAS: '#ef6fb0', FXF: '#a0b4c8', XCCY: '#c9a26b', OTC: '#9bbf4a', FX: '#a0b4c8', OTH: '#8a96a3' };
+  K.kindColor = { PD: '#4c9dff', PK: '#22c3d6', IN: '#7f8cff', SOVFX: '#b48cff', FIX: '#3fb67a', FLT: '#e3b341', IRS: '#f0645a', KSW: '#ff8f3f', BAS: '#ef6fb0', FXF: '#a0b4c8', XCCY: '#c9a26b', OTC: '#9bbf4a', FX: '#a0b4c8', REPO: '#1f9e89', OTH: '#8a96a3' };
   // фон ячейки тепловой карты: синий — короткий риск/убыток не важно; знак цвета задаётся pos/neg
   K.heat = (v, max, opt) => {
     if (!v || !max) return '';
@@ -2412,12 +2417,12 @@
   };
   K.cols = keys => keys.map(k => typeof k === 'string' ? Object.assign({}, K.posCols[k]) : k);
   // порядок эмитентов в группах: Минфин первым, деривативы последними, остальные по алфавиту
-  K.issuerOrder = (a, b) => { const r = x => x === 'Минфин' ? 0 : x === 'Деривативы' ? 2 : 1; return (r(a) - r(b)) || a.localeCompare(b, 'ru'); };
+  K.issuerOrder = (a, b) => { const r = x => x === 'Минфин' ? 0 : x === 'Деривативы' || x === 'Денежный рынок и фондирование' ? 2 : 1; return (r(a) - r(b)) || a.localeCompare(b, 'ru'); };
   // группировка «валюта → эмитент» — по желанию (opts.groupable таблиц, R37): по умолчанию таблицы позиций плоские,
   // валюта и эмитент в них — обычные столбцы
   K.defaultGroups = [
     { key: r => r.ccy, label: k => K.ccyTag(k) + ' ' + K.ccyName(k), order: (a, b) => M.ccyOrder[a] - M.ccyOrder[b], color: k => K.ccyColor(k), span: 1 },
-    { key: r => r.group === 'DER' ? 'Деривативы' : r.issuerName, label: (k, rows) => esc(k) + (rows[0].group === 'DER' ? ' <span class="mut3" style="font-weight:400">(по контрагентам)</span>' : ''), order: K.issuerOrder, color: (k, rows) => K.issuerColor(rows[0].issuer) },
+    { key: r => M.deal(r) ? M.dealName(r) : r.issuerName, label: (k, rows) => esc(k) + (M.deal(rows[0]) ? ' <span class="mut3" style="font-weight:400">(по контрагентам)</span>' : ''), order: K.issuerOrder, color: (k, rows) => K.issuerColor(rows[0].issuer) },
   ];
 
   // ---------- FX-дельта, риск по кривым, ноги FX-сделки (карточки C01–C13) ----------
@@ -2861,7 +2866,7 @@
       items = [];
       cmds.forEach(c => { if (!q || m(c.label.toLowerCase())) items.push({ k: 'экран', t: c.label, r: c.hint || '', run: c.run }); });
       if (K.source === 'empty') { items = items.slice(0, 60); sel = 0; return paint(); }  // прогона нет (#319): только экраны, не демо-набор
-      M.issuers.forEach(i => { const L = M.positions.filter(p => p.issuer === i.id); if (L.length && q && m((i.name + ' ' + i.short + ' ' + i.sector).toLowerCase())) items.push({ k: 'эмитент', t: i.name, r: L.length + ' поз · DV01 ' + f.dv(M.sum(L, 'dv01')), run: () => K.drill({ title: 'Эмитент ' + i.short, unit: 'mm ₽ MV', fmt: v => f.mn(v, 1), list: L, val: p => p.group === 'DER' ? p.notionalRub : p.mv }) }); });
+      M.issuers.forEach(i => { const L = M.positions.filter(p => p.issuer === i.id); if (L.length && q && m((i.name + ' ' + i.short + ' ' + i.sector).toLowerCase())) items.push({ k: 'эмитент', t: i.name, r: L.length + ' поз · DV01 ' + f.dv(M.sum(L, 'dv01')), run: () => K.drill({ title: 'Эмитент ' + i.short, unit: 'mm ₽ MV', fmt: v => f.mn(v, 1), list: L, val: p => M.deal(p) ? p.notionalRub : p.mv }) }); });
       M.books.forEach(b => { if (q && m((b.id + ' ' + b.name + ' ' + b.desk).toLowerCase())) items.push({ k: 'книга', t: b.name + ' · ' + b.id, r: 'фильтр шапки', run: () => K.setFilter({ books: [b.id] }) }); });
       M.positions.forEach(p => { if (q && m(p.searchText)) items.push({ k: 'позиция', t: p.name, r: p.ccy + ' · ' + p.book + ' · DV01 ' + f.dv(p.dv01), run: () => K.card(p.id) }); });
       items = items.slice(0, 60); sel = 0; paint();
@@ -2910,7 +2915,7 @@
       // foot — строка «Итого» (липкая, #210): без полупрозрачного фона тепловой карты, иначе сквозь неё видны строки;
       // метка K.HEAT_PLAIN без фона — красный в ней того же оттенка, что в ячейках карты (#265)
       const row = (label, list, lvl, color, ccy, foot) => {
-        const dv = M.sum(list, 'dv01'), cs = M.sum(list, 'cs01'), mv = M.sum(list, p => p.group === 'DER' ? 0 : p.mv);
+        const dv = M.sum(list, 'dv01'), cs = M.sum(list, 'cs01'), mv = M.sum(list, p => M.deal(p) ? 0 : p.mv);
         const heat = mode === 'heat' && !foot, cellStyle = v => mode === 'heat' ? (foot ? K.HEAT_PLAIN : K.heatRisk(v, allMax)) : mode === 'sign' ? 'color:' + (v < 0 ? 'var(--accent)' : 'var(--warn)') : '';
         const rowBg = mode === 'type' ? (color ? tint(color, 0.10) : ccy ? tint(K.ccyColor(ccy), 0.16) : '') : '';
         const lab = mode === 'type' && color ? '<span style="color:' + color + '">' + label + '</span>' : (color && mode !== 'type' ? '<b style="color:' + color + '">●</b> ' : '') + (mode === 'type' && color ? '' : label);
@@ -2918,7 +2923,7 @@
           '<td class="n" style="' + cellStyle(dv) + '">' + num(dv, { title: label.replace(/<[^>]+>/g, '') + ' · DV01', unit: 'тыс ₽/бп', list, val: 'dv01' }, true) + '</td>' +
           curCols.map(c => { const v = M.sum(list, p => p.dv01ByCurve[c.id]); return '<td class="n" style="' + cellStyle(v) + '">' + num(v, { title: label.replace(/<[^>]+>/g, '') + ' · ' + c.short, unit: 'тыс ₽/бп', list, val: p => p.dv01ByCurve[c.id] }) + '</td>'; }).join('') +
           '<td class="n" style="' + (heat ? K.heatMono(cs, allMax, '227,179,65') : cellStyle(cs)) + '">' + (cs ? num(cs, { title: label.replace(/<[^>]+>/g, '') + ' · CS01', unit: 'тыс ₽/бп', list, val: 'cs01' }) : '<span class="mut3">·</span>') + '</td>' +
-          '<td class="n">' + (mv ? K.d({ title: label.replace(/<[^>]+>/g, '') + ' · MV', unit: 'mm ₽', fmt: v => f.mn(v, 0), list, val: p => p.group === 'DER' ? 0 : p.mv, color: false }) : '<span class="mut3">·</span>') + '</td></tr>';
+          '<td class="n">' + (mv ? K.d({ title: label.replace(/<[^>]+>/g, '') + ' · MV', unit: 'mm ₽', fmt: v => f.mn(v, 0), list, val: p => M.deal(p) ? 0 : p.mv, color: false }) : '<span class="mut3">·</span>') + '</td></tr>';
       };
       ccys.forEach(c => {
         const Lc = L.filter(p => p.ccy === c);
@@ -3096,7 +3101,7 @@
         K.kpi('Кэрри / день', K.d({ title: 'Кэрри за день (без фондирования)', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }) + K.kpiUnit('тыс ₽'),
           [[K.hint('фондирование', K.tips.funding), K.d({ title: 'Фондирование за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'fundingDay', nullable: true })],
            ['в год ≈', '<span class="' + f.cls(k.carryDay) + '">' + f.mn(k.carryDay == null ? null : k.carryDay * 365, 0) + '</span> <span class="u">mm ₽</span>']], null, K.tips.carry) +
-        K.kpi('Облигации MV', K.d({ title: 'MV облигаций', unit: 'bn ₽', fmt: v => f.bn(v, 1), list: L.filter(p => p.group !== 'DER'), val: 'mv', color: false }) + K.kpiUnit('bn ₽'),
+        K.kpi('Облигации MV', K.d({ title: 'MV облигаций', unit: 'bn ₽', fmt: v => f.bn(v, 1), list: L.filter(p => !M.deal(p)), val: 'mv', color: false }) + K.kpiUnit('bn ₽'),
           K.kpiCcyRows(M.ccys.reduce((o, c) => (o[c] = k.byCcy[c].mv, o), {}), (c, v) => f.bn(v, 1), 3, v => f.bn(v, 1))) +
         '<div class="k-kpi k-fxk"><div class="l">' + K.hint('ОВП', K.tips.fxMini) + '</div><div class="v">' + K.fxMini(L) + '</div><div class="s"><a class="go" href="c06-launchpad.html#fx" title="плитка «ОВП и курсы»: бонды и деривативы по валютам, курсы, PnL FX">подробно (C06) →</a></div></div>' +
         '</div>';
