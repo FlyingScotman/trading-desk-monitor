@@ -130,7 +130,11 @@
   function restrict() {
     if (!payload) return;
     const b = S.buckets(payload, null, K.ratingRank), a = S.allowed(b, presets);
-    a.fx = [...new Set(a.fx.concat(Object.keys(M.fx || {}), presets.flatMap(p => Object.keys((p.definition && p.definition.fx) || {}))))].filter(S.okCcy);
+    a.fx = [...new Set(a.fx.concat(Object.keys(M.fx || {}), presets.flatMap(p => Object.keys((p.definition && p.definition.fx) || {}))))].filter(S.okKey);
+    // правила пресетов (сектор, рейтинг) — тоже законные ключи: «Начать с пресета» и ссылка на него ничего не теряют
+    const rules = k => presets.flatMap(p => Object.keys((p.definition && p.definition.spreads && p.definition.spreads[k]) || {}));
+    a.sector = [...new Set(a.sector.concat(rules('sector')))];
+    a.rating = [...new Set(a.rating.concat(rules('rating').map(r => S.UNRATED_KEYS.includes(r) ? S.NONE : r)))];
     st.ed = S.restrict(st.ed, a);
   }
 
@@ -189,8 +193,8 @@
     const keep = new Set(K.list().map(p => p.id));
     B = S.buckets(payload, id => keep.has(id), K.ratingRank);
     const e = st.ed;
-    // валюты — факторы FX риска и валюты, заданные в редакторе (ключи уже проверены: ^[A-Z]{3}$)
-    const ccys = B.fxCcys.filter(S.okCcy).concat(Object.keys(e.fx).filter(c => S.okCcy(c) && !B.fxCcys.includes(c)));
+    // валюты — факторы FX риска и валюты, заданные в редакторе (ключи прошли белый список S.restrict; вывод экранируется)
+    const ccys = B.fxCcys.filter(S.okKey).concat(Object.keys(e.fx).filter(c => S.okKey(c) && !B.fxCcys.includes(c)));
     const fxHtml = ccys.length ? '<div class="c18-rows"><div class="hd">валюта</div><div class="hd">шок, %</div><div class="hd"></div><div class="hd side">курс после · эффект, ' + U + '</div>' +
       ccys.map(c => row('fx:' + c, K.ccyTag(c) + ' <span class="mut">' + rateTxt(c, own(M.fx, c)) + '</span>', own(e.fx, c) || 0, FXR, fxSide(c), c + ': курс ' + rateTxt(c, M.fx[c]) + ' ₽, шок в % к курсу')).join('') + '</div>'
       : '<div class="k-note">В риске прогона нет FX-факторов: валютной дельты нет.</div>';
@@ -228,7 +232,7 @@
   function set(k, v) {
     const e = st.ed, i = k.indexOf(':'), kind = i < 0 ? k : k.slice(0, i), key = i < 0 ? null : k.slice(i + 1);
     if (kind === 'ofz') e.ofz = v; else if (kind === 'all') e.all = v; else if (kind === 'mult') e.mult = v > 0 ? v : 1;
-    else if (['fx', 'rating', 'sector'].includes(kind) && (kind === 'fx' ? S.okCcy(key) : S.okKey(key))) { const m = e[kind]; if (v) m[key] = v; else delete m[key]; }
+    else if (['fx', 'rating', 'sector'].includes(kind) && S.okKey(key)) { const m = e[kind]; if (v) m[key] = v; else delete m[key]; }
   }
   function value(k) {
     const e = st.ed, i = k.indexOf(':'), kind = i < 0 ? k : k.slice(0, i), key = k.slice(i + 1);
@@ -369,6 +373,7 @@
       cls: v => v == null ? '' : f.cls(v), sum: r => accVal(r.by[id], 'total') == null ? null : accVal(r.by[id], 'total') * RK(), sumFmt: v => f.mn(v, DIG) });
     K.table(p.querySelector('.bd'), {
       viewKey: 'c18-compare', title: 'Сценарии по книгам (Тейлор), ' + U, rows, search: false, maxHeight: 'min(70vh, 640px)',
+      footCount: L => L.length + ' кн. с позициями',  // книги фильтра без позиций в таблице не показаны
       columns: [{ key: 'book', label: 'Книга', val: r => r.book, fmt: (v, r) => '<span title="' + esc(r.name) + '">' + esc(v) + '</span>', csvFmt: v => v }].concat(E.map(col)),
     });
     // колонка сценария, который сейчас разобран выше, — подсвечена (и после сортировки: таблица перерисовывает шапку)

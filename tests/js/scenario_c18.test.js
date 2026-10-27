@@ -177,35 +177,56 @@ test('корзины редактора: грейды по шкале, «без 
 test('корзины = к чему шок применяется (own_spread_shock): рейтинг и сектор null ни в какую корзину не входят', () => {
   const p = clone(P);
   p.positions.push({ position_id: 'nul', book_id: 'B', spread_kind: 'credit', spread_bp: 100, rating: null, sector: null, issuer: null, delta: [[3, -7]], gamma: [] });
-  p.positions.push({ position_id: 'nd', book_id: 'B', spread_kind: 'credit', spread_bp: 100, rating: 'нет данных', sector: 'constructor', issuer: 'Z', delta: [[3, -3]], gamma: [] });
+  p.positions.push({ position_id: 'nd', book_id: 'B', spread_kind: 'credit', spread_bp: 100, rating: 'нет данных', sector: 'Машиностроение & транспорт', issuer: 'Z', delta: [[3, -3]], gamma: [] });
   const b = S.buckets(p);
   assert.deepStrictEqual([b.nNoRating, b.nNoSector], [1, 2], 'сектор null — у cny и nul');
   assert.deepStrictEqual(b.rating._none, { cs01: -23, n: 2 }, '«б/р» и «нет данных», без рейтинга null');
-  assert.ok(b.sectors.includes('constructor') && b.sector.constructor.n === 1, 'сектор с именем свойства объекта — обычная корзина');
+  assert.ok(b.sectors.includes('Машиностроение & транспорт') && b.sector['Машиностроение & транспорт'].n === 1);
+  // имя свойства объекта в данных: корзина своим свойством, без подмены прототипа
+  const pc = clone(p); pc.positions.push({ position_id: 'c', book_id: 'B', spread_kind: 'credit', spread_bp: 1, rating: '__proto__', sector: 'constructor', issuer: 'Z', delta: [[3, -1]], gamma: [] });
+  const bc = S.buckets(pc);
+  assert.ok(bc.sector.constructor.n === 1 && bc.rating.__proto__.n === 1 && Object.getPrototypeOf(bc.rating) === null);
   // подпись ползунка = расчёт: CS01 корзины × шок = спредовая часть шока корзины по Тейлору
-  const ed = { rating: { _none: 50 }, sector: { constructor: 20 } };
+  const ed = { rating: { _none: 50 }, sector: { 'Машиностроение & транспорт': 20 } };
   const r = S.evaluate(p, S.normalize(S.editorDef(ed)));
   const spreadOf = id => r.rows.find(x => x.id === id).parts.spread;
   near(spreadOf('usd') + spreadOf('nd') + spreadOf('nul'), b.rating._none.cs01 * 50 + -3 * 20, 'эффект корзин');
   assert.strictEqual(spreadOf('nul'), 0, 'рейтинг null: шок рейтинга не применяется, как в Python');
 });
 
-test('состояние из адреса и localStorage — чужие данные: ключи по форме и по белому списку', () => {
+test('состояние из адреса и localStorage — чужие данные: по форме — только длина, управляющие символы и имена свойств; остальное — белый список', () => {
   const evil = '<img src=x onerror=alert(1)>';
-  const e = S.cleanEditor({ base: evil, fx: { [evil]: 5, usd: 3, USD: 2, RUBX: 1, EUR: '4', CNY: {} }, rating: { [evil]: 10, 'BB+': 5, __proto__: { x: 1 } },
-    sector: { 'Лизинг': 7, 'a"b': 1, ['x'.repeat(200)]: 1 }, ofz: 'x', mult: 0 });
-  assert.deepStrictEqual(e.fx, { USD: 2, EUR: 4 });
+  const e = S.cleanEditor({ base: evil, fx: { [evil]: 5, USD: 2, EUR: '4', CNY: {}, ['x'.repeat(200)]: 1 }, rating: { 'BB+': 5, __proto__: { x: 1 }, constructor: 3, 'A\u0000': 1 },
+    sector: { 'Лизинг': 7, 'a"b': 1, ['x'.repeat(200)]: 1, prototype: 2, 'нефть\nгаз': 1 }, ofz: 'x', mult: 0 });
+  // форма: законные значения с разметкой или кавычками проходят (их отсекает белый список, а вывод экранируется)
+  assert.deepStrictEqual(e.fx, { [evil]: 5, USD: 2, EUR: 4 });
   assert.deepStrictEqual(Object.keys(e.rating), ['BB+']);
-  assert.deepStrictEqual(Object.keys(e.sector), ['Лизинг']);
-  assert.strictEqual(e.base, null);
+  assert.deepStrictEqual(Object.keys(e.sector), ['Лизинг', 'a"b']);
+  assert.strictEqual(e.base, evil);
   assert.deepStrictEqual([e.ofz, e.mult], [0, 1]);
+  // белый список (риск прогона загружен): вредоносный ключ отброшен
+  const allow = { fx: ['USD'], rating: ['A'], sector: ['Лизинг'], base: ['credit'] };
+  assert.deepStrictEqual(S.restrict(e, allow), { base: null, fx: { USD: 2 }, ofz: 0, all: 0, mult: 1, rating: {}, sector: { 'Лизинг': 7 } });
   const hash = encodeURIComponent(JSON.stringify({ fx: { [evil]: 5, USD: 1 }, rating: { '__proto__': 3 }, sector: { 'Лизинг': 1, 'Нефть': 2 }, base: 'nope' }));
-  const d = S.decode(hash, { fx: ['USD'], rating: ['A'], sector: ['Лизинг'], base: ['credit'] });
-  assert.deepStrictEqual(d, { base: null, fx: { USD: 1 }, ofz: 0, all: 0, mult: 1, rating: {}, sector: { 'Лизинг': 1 } });
+  assert.deepStrictEqual(S.decode(hash, allow), { base: null, fx: { USD: 1 }, ofz: 0, all: 0, mult: 1, rating: {}, sector: { 'Лизинг': 1 } });
   assert.strictEqual(Object.getPrototypeOf(S.decode(encodeURIComponent('{"rating":{"__proto__":{"polluted":1}}}')).rating), Object.prototype, 'прототип не подменяется');
   assert.strictEqual(({}).polluted, undefined);
-  ['USD', 'CNY'].forEach(c => assert.ok(S.okCcy(c)));
-  ['usd', 'US', '<b>', 'USDT', ''].forEach(c => assert.ok(!S.okCcy(c), c));
+  ['constructor', 'prototype', '__proto__', '', 'a\u0001'].forEach(k => assert.ok(!S.okKey(k), JSON.stringify(k)));
+  ['Машиностроение & транспорт', 'АО "Рога"', "O'Neil", 'CNH', 'XAU'].forEach(k => assert.ok(S.okKey(k), k));
+});
+
+test('«Начать с пресета» без потерь: сектор с «&» и кавычками, валюта не в форме ISO, «без рейтинга»', () => {
+  const def = { curves: { 'RUB OFZ': 50 }, fx: { USD: 10, CNH: 5 }, ofzSpread: 5,
+    spreads: { _all: 10, sector: { 'Машиностроение & транспорт': 40, 'АО "Рога" и <копыта>': 15 }, rating: { 'б/р': 30, 'нет данных': 30, 'BB-': 20 } } };
+  const ed = S.editorFrom('p1', def);
+  assert.deepStrictEqual(ed.fx, { USD: 10, CNH: 5 });
+  assert.deepStrictEqual(Object.keys(ed.sector).sort(), ['АО "Рога" и <копыта>', 'Машиностроение & транспорт'].sort());
+  assert.deepStrictEqual(ed.rating, { _none: 30, 'BB-': 20 });
+  const same = x => S.canon(S.normalize(S.editorDef(x, def)));
+  assert.strictEqual(same(ed), S.canon(S.normalize(def)), 'определение редактора = определение пресета');
+  // через адрес и белый список страницы (ключи пресетов — законные) — то же
+  const allow = { fx: ['USD', 'CNH'], rating: ['BB-', S.NONE], sector: Object.keys(def.spreads.sector), base: ['p1'] };
+  assert.strictEqual(same(S.decode(S.encode(ed), allow)), S.canon(S.normalize(def)));
 });
 
 test('демо: риск из позиций lib/mock.js той же формы, пресеты демо считаются', () => {

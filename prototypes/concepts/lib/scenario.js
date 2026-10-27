@@ -249,14 +249,16 @@
   // ---------- редактор ----------
   // состояние: base — пресет, с которого начат (его кривые, базис и правила по эмитентам берутся как есть),
   // fx {валюта: %}, ofz, all — б.п., mult — множитель, rating {грейд | _none: б.п.}, sector {сектор: б.п.}.
-  // Состояние приходит из адреса (#s=…) и из localStorage — это чужие данные: ключи проверяются по форме (валюта —
-  // три латинские заглавные, остальное — строка без разметки и управляющих символов), а когда риск прогона загружен —
-  // по белому списку (S.restrict: валюты из факторов FX, рейтинги и секторы позиций, пресеты сервера). Страница всё
-  // равно экранирует всё, что выводит.
+  // Состояние приходит из адреса (#s=…) и из localStorage — это чужие данные. По форме (S.okKey) отсекаются только
+  // пустые и длинные строки, управляющие символы и имена свойств объекта (__proto__, constructor, prototype): законные
+  // значения бывают с «&» и кавычками (сектор «Машиностроение & транспорт»). Остальное отсекает белый список, когда
+  // риск прогона загружен (S.restrict: валюты из факторов FX, курсов и пресетов, рейтинги и секторы позиций, пресеты
+  // сервера), а страница экранирует всё, что выводит.
   S.emptyEditor = () => ({ base: null, fx: {}, ofz: 0, all: 0, mult: 1, rating: {}, sector: {} });
   S.CCY_RE = /^[A-Z]{3}$/;
-  S.okKey = k => typeof k === 'string' && k.length > 0 && k.length <= 120 && k !== '__proto__' && !/[<>"'&`\u0000-\u001f\u007f]/.test(k);
-  S.okCcy = k => S.CCY_RE.test(k);
+  S.PROTO_KEYS = ['__proto__', 'constructor', 'prototype'];
+  S.okKey = k => typeof k === 'string' && k.length > 0 && k.length <= 120 && !S.PROTO_KEYS.includes(k) && !/[\u0000-\u001f\u007f]/.test(k);
+  S.okCcy = k => S.CCY_RE.test(k);  // код валюты по форме ISO (подсказка, не фильтр: валюты фильтрует S.restrict)
   const clean = (o, ok) => {
     const r = {};
     if (!o || typeof o !== 'object' || Array.isArray(o)) return r;
@@ -268,7 +270,7 @@
     const e = ed && typeof ed === 'object' && !Array.isArray(ed) ? ed : {};
     const n = (v, d) => { v = typeof v === 'number' || typeof v === 'string' ? +v : NaN; return isFinite(v) ? v : d; };
     const base = (typeof e.base === 'string' || typeof e.base === 'number') && S.okKey(String(e.base)) && String(e.base).length <= 64 ? String(e.base) : null;
-    const out = { base, fx: clean(e.fx, S.okCcy), ofz: n(e.ofz, 0), all: n(e.all, 0), mult: n(e.mult, 1) > 0 ? n(e.mult, 1) : 1, rating: clean(e.rating), sector: clean(e.sector) };
+    const out = { base, fx: clean(e.fx), ofz: n(e.ofz, 0), all: n(e.all, 0), mult: n(e.mult, 1) > 0 ? n(e.mult, 1) : 1, rating: clean(e.rating), sector: clean(e.sector) };
     return allow ? S.restrict(out, allow) : out;
   };
   S.restrict = function (ed, allow) {
@@ -299,10 +301,10 @@
   S.editorFrom = function (id, def) {
     const ed = S.emptyEditor(), s = (def && def.spreads) || {};
     ed.base = id == null ? null : String(id);
-    ed.fx = clean(def && def.fx, () => true); ed.ofz = +(def && def.ofzSpread) || 0; ed.all = +s._all || 0; ed.mult = s._mult > 0 ? +s._mult : 1;
+    ed.fx = clean(def && def.fx); ed.ofz = +(def && def.ofzSpread) || 0; ed.all = +s._all || 0; ed.mult = s._mult > 0 ? +s._mult : 1;
     const r = {};
     Object.keys(s.rating || {}).forEach(k => { if (S.UNRATED_KEYS.includes(k)) { if (s.rating[k]) put(r, S.NONE, +s.rating[k]); } else put(r, k, +s.rating[k]); });
-    ed.rating = clean(r, () => true); ed.sector = clean(s.sector, () => true);
+    ed.rating = clean(r); ed.sector = clean(s.sector);
     return ed;
   };
   // состояние в адресе (#s=…) и обратно; битое — null
@@ -341,7 +343,7 @@
     return { rating, sector, ratings, sectors, ofzCs01: ofz, creditCs01: credit, nCredit, nNoRating, nNoSector, fxDelta: ccy, fxCcys };
   };
   // белый список ключей состояния редактора по риску прогона и пресетам
-  S.allowed = (B, presets) => ({ fx: B.fxCcys.filter(S.okCcy), rating: B.ratings.slice(), sector: B.sectors.slice(), base: (presets || []).map(p => String(p.scenario_id)) });
+  S.allowed = (B, presets) => ({ fx: B.fxCcys.filter(S.okKey), rating: B.ratings.slice(), sector: B.sectors.slice(), base: (presets || []).map(p => String(p.scenario_id)) });
 
   // ---------- демо: риск прогона из позиций lib/mock.js ----------
   // k — курс показа (M.toRepr.RUB): суммы монитора делятся на него, чтобы payload был в рублях, как у сервера

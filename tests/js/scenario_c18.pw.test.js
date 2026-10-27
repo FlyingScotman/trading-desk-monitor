@@ -18,12 +18,17 @@ test('C18 в браузере', { skip: !pw && 'нет Playwright' }, async t =>
   const b = await pw.chromium.launch();
   const open = async (w, opts) => {
     opts = opts || {};
-    const ctx = await b.newContext({ viewport: { width: w, height: 900 }, colorScheme: opts.dark ? 'dark' : 'light' });
+    const ctx = await b.newContext({ viewport: { width: w, height: 900 } });
+    // тема монитора — из localStorage (concepts-theme), а не из colorScheme браузера: задаётся один раз на контекст,
+    // как в ui_pack8_charts.pw.test.js
+    const theme = opts.dark ? 'dark' : 'light';
+    await ctx.addInitScript(t => { try { if (!sessionStorage.getItem('init')) { sessionStorage.setItem('init', '1'); localStorage.setItem('concepts-theme', t); } } catch (e) { } }, theme);
     if (opts.noStorage) await ctx.addInitScript(() => { Object.defineProperty(window, 'localStorage', { get() { throw new Error('blocked'); } }); });
     const pg = await ctx.newPage(), errs = [];
     pg.on('pageerror', e => errs.push(e.message)); pg.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
     await pg.goto(URL0 + (opts.hash || ''));
     await pg.waitForFunction(() => window.C18 && window.C18.result && document.querySelector('table.k-tbl tfoot'));
+    if (!opts.noStorage) assert.strictEqual(await pg.evaluate(() => document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'), theme, 'тема страницы');
     return { pg, ctx, errs };
   };
   const kpiTotal = pg => pg.evaluate(() => document.querySelector('.k-kpis .k-kpi .v').textContent.trim());
@@ -136,6 +141,9 @@ test('C18 в браузере', { skip: !pw && 'нет Playwright' }, async t =>
         assert.ok(g.tableW <= g.wrapW + 1, `таблица в панели: ${g.tableW} > ${g.wrapW}`);
         g.ths.forEach(th => assert.ok(th.t >= g.top - 1 && th.b <= g.ih && th.l >= 0 && th.r <= g.iw + 1, 'шапка в окне: ' + JSON.stringify(th)));
         g.names.forEach(n => assert.ok(g.ths.some(th => th.txt.startsWith(n)), n));
+        // подвал: сколько книг с позициями (книга фильтра без позиций в таблице не показана)
+        const foot = await pg.evaluate(() => { const p = document.querySelector('.c18-cmp'); return { t: p.querySelector('tfoot td').textContent, n: p.querySelectorAll('tbody tr').length }; });
+        assert.ok(foot.t.includes(foot.n + ' кн. с позициями'), JSON.stringify(foot));
         assert.deepStrictEqual(errs, []);
         await ctx.close();
       });
