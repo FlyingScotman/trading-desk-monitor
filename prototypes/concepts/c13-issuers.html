@@ -206,7 +206,8 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     if (!x) { dash.innerHTML = '<div class="k-panel"><div class="k-empty">нет эмитентов под фильтром</div></div>'; return; }
     const L = x.list, col = K.issuerColor(x.id), totMv = sumBy(ISS, i => i.mv);
     const wavg = (fn) => { const a = L.filter(p => fn(p) != null); const w = sumBy(a, p => Math.abs(p.mv)); return w ? sumBy(a, p => fn(p) * Math.abs(p.mv)) / w : null; };
-    const D = (title, val, fmt, unit, cls) => K.d({ title: x.name + ' · ' + title, unit, fmt, list: L, val, nullable: val === 'fundingDay' }, null, cls);
+    // suf — единица сразу за числом, перед пометкой «без N из M поз.» (#335)
+    const D = (title, val, fmt, unit, cls, suf) => K.d({ title: x.name + ' · ' + title, unit, fmt, list: L, val, nullable: val === 'fundingDay', suffix: suf }, null, cls);
     const nFlt = L.filter(p => p.cpn && p.cpn.type === 'float').length;
     // шапка
     const hp = K.h('div', 'k-panel'); dash.appendChild(hp);
@@ -214,14 +215,14 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
       '<div class="k-tags">' + [...new Set(L.map(p => p.book))].map(b => '<span class="k-tag">' + esc(b) + '</span>').join('') + '</div></div>' +
       '<div class="k-fields" style="margin-top:10px">' + [
         ['MV', D('MV', 'mv', v => f.mn(v, 0), 'mm ₽', '') + ' <small>mm ₽ · ' + Math.round(x.mv / totMv * 100) + '% книги</small>'],
-        ['CS01', D('CS01', 'cs01', f.dv, 'тыс ₽/бп') + ' <small>тыс ₽/бп</small>'],
-        ['DV01 ставки', D('DV01', 'dv01', f.dv, 'тыс ₽/бп') + ' <small>тыс ₽/бп</small>'],
+        ['CS01', D('CS01', 'cs01', f.dv, 'тыс ₽/бп', undefined, ' <small>тыс ₽/бп</small>')],
+        ['DV01 ставки', D('DV01', 'dv01', f.dv, 'тыс ₽/бп', undefined, ' <small>тыс ₽/бп</small>')],
         ['Базис ОФЗ01', x.basis01 ? D('Базис ОФЗ01', 'basis01', f.dv, 'тыс ₽/бп') : '—'],
-        ['PnL дня', D('PnL дня', p => p.pnl.total, f.k, 'тыс ₽') + ' <small>тыс ₽</small>'],
-        [K.hint('Кэрри / день', K.tips.carry), D('Кэрри', 'carryDay', f.k, 'тыс ₽') + ' <small>тыс ₽</small>'],
-        [K.hint('Фондирование / день', K.tips.funding), D('Фондирование', 'fundingDay', f.k, 'тыс ₽') + ' <small>тыс ₽</small>'],
-        ['PnL MTD', D('PnL MTD', 'pnlMtd', v => f.mn(v, 1), 'mm ₽') + ' <small>mm ₽</small>'],
-        ['PnL YTD', D('PnL YTD', 'pnlYtd', v => f.mn(v, 1), 'mm ₽') + ' <small>mm ₽</small>'],
+        ['PnL дня', D('PnL дня', p => p.pnl.total, f.k, 'тыс ₽', undefined, ' <small>тыс ₽</small>')],
+        [K.hint('Кэрри / день', K.tips.carry), D('Кэрри', 'carryDay', f.k, 'тыс ₽', undefined, ' <small>тыс ₽</small>')],
+        [K.hint('Фондирование / день', K.tips.funding), D('Фондирование', 'fundingDay', f.k, 'тыс ₽', undefined, ' <small>тыс ₽</small>')],
+        ['PnL MTD', D('PnL MTD', 'pnlMtd', v => f.mn(v, 1), 'mm ₽', undefined, ' <small>mm ₽</small>')],
+        ['PnL YTD', D('PnL YTD', 'pnlYtd', v => f.mn(v, 1), 'mm ₽', undefined, ' <small>mm ₽</small>')],
         ['Ср. спред (по MV)', f.bp(wavg(p => p.zspread)) + ' <small>б.п.</small>'],
         ['Ср. дюрация', f.n(wavg(p => p.mdur), 2)],
         ['Ср. срок до события', f.yrs(wavg(p => p.tenor))],

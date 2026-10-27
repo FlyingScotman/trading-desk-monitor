@@ -90,9 +90,11 @@
   // ---------- меры: каждая позиция даёт «части» (кривая × бакет, фактор …) ----------
   const rateIds = M.curves.filter(c => c.kind === 'rate').map(c => c.id);
   const curveParts = ids => p => { const out = []; ids.forEach(id => p.risk[id].forEach((v, k) => { if (v) out.push({ curve: id, bucket: k, v }); })); return out; };
-  const one = fn => p => [{ v: fn(p) }];
-  // фондирование (#168): настоящий 0 — «·», не посчитано ни у одной позиции ячейки — «—» (keep: ноль не отбрасывается)
+  // фондирование (#168): настоящий 0 — «·», не посчитано ни у одной позиции ячейки — «—» (keep: ноль не отбрасывается).
+  // Часть nul — «у позиции не посчитано»: ячейка, где посчитана только часть позиций, — сумма посчитанных и пометка
+  // «без N из M поз.» (#335; позиции без значения ячейка помнит в miss, разбор получает их строками с null)
   const nulPart = (v, x) => [Object.assign(v == null ? { v: 0, keep: true, nul: true } : { v, keep: true }, x || {})];
+  const one = fn => p => { const v = fn(p); return v == null ? nulPart(null) : [{ v }]; };
   // sc — масштаб fmt для делений оси (K.tick, #321), int — счётная мера: деления только целые
   const MEAS = {
     dv01: { label: 'DV01 ставки', unit: 'тыс ₽/бп', fmt: f.dv, sc: 1e3, kind: 'risk', parts: curveParts(rateIds) },
@@ -107,11 +109,11 @@
     notional: { label: 'Номинал', unit: 'mm ₽', fmt: v => f.mn(v, 0), sc: 1e6, kind: 'size', parts: one(p => p.notionalRub) },
     carry: { label: 'Кэрри / день', unit: 'тыс ₽', fmt: f.k, sc: 1e3, kind: 'pnl', parts: one(p => p.carryDay) },  // без фондирования (#168)
     funding: { label: 'Фондирование / день', unit: 'тыс ₽', fmt: f.k, sc: 1e3, kind: 'pnl', parts: p => nulPart(p.fundingDay) },
-    pnl: { label: 'PnL дня', unit: 'тыс ₽', fmt: f.k, sc: 1e3, kind: 'pnl', parts: p => FACT.map(([k]) => k === 'funding' ? nulPart(p.pnl[k], { factor: k })[0] : { factor: k, v: p.pnl[k] }).filter(x => x.keep || x.v) },
+    pnl: { label: 'PnL дня', unit: 'тыс ₽', fmt: f.k, sc: 1e3, kind: 'pnl', parts: p => p.pnl.total == null ? FACT.map(([k]) => nulPart(null, { factor: k })[0]) : FACT.map(([k]) => k === 'funding' || p.pnl[k] == null ? nulPart(p.pnl[k], { factor: k })[0] : { factor: k, v: p.pnl[k] }) },  // нулевые факторы — в счёт позиций (aggregate, #335)
     pnlMtd: { label: 'PnL MTD', unit: 'mm ₽', fmt: v => f.mn(v, 1), sc: 1e6, kind: 'pnl', parts: one(p => p.pnlMtd) },
     count: { label: 'Кол-во позиций', unit: 'шт', fmt: v => f.n(v), sc: 1, int: true, kind: 'size', parts: one(() => 1) },
   };
-  FACT.forEach(([k, t]) => MEAS['pnl_' + k] = { label: 'PnL: ' + t, unit: 'тыс ₽', fmt: f.k, sc: 1e3, kind: 'pnl', parts: p => k === 'funding' ? nulPart(p.pnl[k], { factor: k }) : [{ factor: k, v: p.pnl[k] }] });
+  FACT.forEach(([k, t]) => MEAS['pnl_' + k] = { label: 'PnL: ' + t, unit: 'тыс ₽', fmt: f.k, sc: 1e3, kind: 'pnl', parts: p => k === 'funding' || p.pnl[k] == null ? nulPart(p.pnl[k], { factor: k }) : [{ factor: k, v: p.pnl[k] }] });
 
   // ---------- пресеты ----------
   const PRESETS = [
@@ -160,16 +162,25 @@
     if (st.fg.length) L = L.filter(p => st.fg.includes(p.group));
     const meas = MEAS[st.m], [d1, d2] = st.r, dc = st.c;
     const cells = new Map(), rep = new Map(); // rep: ключ измерения → пример позиции (цвет эмитента)
-    const add = (k, p, v, nul) => { let a = cells.get(k); if (!a) cells.set(k, a = { v: 0, pos: new Map(), n: 0, nul: 0 }); a.v += v; if (nul) a.nul++; else a.n++; a.pos.set(p.id, (a.pos.get(p.id) || 0) + v); };
+    const add = (k, p, v, nul) => { let a = cells.get(k); if (!a) cells.set(k, a = { v: 0, pos: new Map(), miss: new Map(), n: 0, nul: 0 }); a.v += v;
+      if (nul) { a.nul++; if (!a.pos.has(p.id)) a.miss.set(p.id, p); } else { a.n++; a.pos.set(p.id, (a.pos.get(p.id) || 0) + v); a.miss.delete(p.id); } };
     const keys = { r1: new Set(), r2: {}, c: new Set() };
+    // нулевая часть строк и колонок не создаёт, но позиция в уже существующей ячейке посчитана (0), а не «без» — для
+    // «без N из M поз.» (#335, ревью #372): её ячейки дополняются после обхода
+    const zeros = [];
     L.forEach(p => meas.parts(p).forEach(x => {
-      if (st.m !== 'count' && !x.keep && Math.abs(x.v) < 1e-9) return;
+      if (st.m !== 'count' && !x.keep && Math.abs(x.v) < 1e-9) {
+        const z1 = DIMS[d1].key(p, x), z2 = d2 ? DIMS[d2].key(p, x) : ALL, zc = dc !== 'none' ? DIMS[dc].key(p, x) : ALL;
+        zeros.push([p, [[z1, z2, zc], [z1, z2, ALL], [z1, ALL, zc], [z1, ALL, ALL], [ALL, ALL, zc], [ALL, ALL, ALL]].map(t => t.join(SEP))]);
+        return;
+      }
       const k1 = DIMS[d1].key(p, x), k2 = d2 ? DIMS[d2].key(p, x) : ALL, kc = dc !== 'none' ? DIMS[dc].key(p, x) : ALL;
       keys.r1.add(k1); (keys.r2[k1] = keys.r2[k1] || new Set()).add(k2); keys.c.add(kc);
       if (!rep.has(d1 + k1)) rep.set(d1 + k1, p); if (d2 && !rep.has(d2 + k2)) rep.set(d2 + k2, p); if (dc !== 'none' && !rep.has(dc + kc)) rep.set(dc + kc, p);
       // без 2-го уровня или колонок часть ключей совпадает — каждую ячейку пополняем один раз
       new Set([[k1, k2, kc], [k1, k2, ALL], [k1, ALL, kc], [k1, ALL, ALL], [ALL, ALL, kc], [ALL, ALL, ALL]].map(t => t.join(SEP))).forEach(k => add(k, p, x.v, x.nul));
     }));
+    zeros.forEach(([p, ks]) => new Set(ks).forEach(k => { if (cells.has(k)) add(k, p, 0, false); }));
     const get = (a, b, c) => cells.get([a, b, c].join(SEP));
     const absOf = (a, b) => { const x = get(a, b, ALL); return x ? Math.abs(x.v) : 0; };
     // группы из DIMS[d].last («без даты») — в конце при любой сортировке, и «по величине» тоже
@@ -179,7 +190,8 @@
     const cols = [...keys.c]; if (dc !== 'none') cols.sort(lastly(dc, DIMS[dc].order || ((a, b) => String(a).localeCompare(String(b), 'ru'))));
     return { L, get, r1, r2, cols, rep, meas, d1, d2, dc };
   }
-  const drillRows = a => a ? [...a.pos].map(([id, v]) => ({ p: M.pos[id], v })) : [];
+  // строки разбора: посчитанные позиции и позиции без значения (null) — K.d ставит по ним пометку «без N из M поз.» (#335)
+  const drillRows = a => a ? [...a.pos].map(([id, v]) => ({ p: M.pos[id], v })).concat([...a.miss.values()].map(p => ({ p, v: null }))) : [];
   function cellHtml(A, a, title, heat, max, cls) {
     if (a && a.nul && !a.n) return '<td class="n zero ' + (cls || '') + '" title="не посчитано">—</td>';  // фондирование не посчитано (#168)
     if (!a || (Math.abs(a.v) < 1e-9 && st.m !== 'count')) return '<td class="n zero ' + (cls || '') + '">·</td>';
@@ -326,7 +338,7 @@
     const meas = A.meas;
     const tot = A.get(ALL, ALL, ALL);
     document.getElementById('sum').innerHTML = esc(meas.label) + ' <span class="mut">по</span> ' + esc(DIMS[A.d1].label) + (A.d2 ? ' → ' + esc(DIMS[A.d2].label) : '') + (A.dc !== 'none' ? ' <span class="mut">×</span> ' + esc(DIMS[A.dc].label) : '') +
-      ' <span class="mut">· итого</span> ' + (tot && !(tot.nul && !tot.n) ? K.d({ title: meas.label, unit: meas.unit, fmt: meas.fmt, sc: meas.sc, int: meas.int, rows: drillRows(tot) }, meas.fmt(tot.v), meas.kind === 'pnl' ? null : '') : '—') + ' <span class="mut">' + esc(meas.unit) + ' · ' + A.L.length + ' поз.</span>';
+      ' <span class="mut">· итого</span> ' + (tot && !(tot.nul && !tot.n) ? K.d({ title: meas.label, unit: meas.unit, fmt: meas.fmt, sc: meas.sc, int: meas.int, rows: drillRows(tot), suffix: ' <span class="mut">' + esc(meas.unit) + '</span>' }, meas.fmt(tot.v), meas.kind === 'pnl' ? null : '') : '— <span class="mut">' + esc(meas.unit) + '</span>') + ' <span class="mut">· ' + A.L.length + ' поз.</span>';
     const used = [A.d1, A.d2, A.dc].filter(Boolean);
     const warn = [];
     if (used.includes('curve') && !['risk'].includes(meas.kind)) warn.push('«Кривая» раскладывает только меры риска — здесь всё в «—»');

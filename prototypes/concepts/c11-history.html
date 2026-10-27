@@ -65,6 +65,8 @@ tr.row.sel td { background: var(--accent-bg); }
   const DATES = H[M.positions[0].id].dates, N = DATES.length, LAST = N - 1;
   const scale = (p, i) => p.notional ? H[p.id].notional[i] / p.notional : 0;
   const pxr = (p, i) => p.price && H[p.id].price[i] != null ? H[p.id].price[i] / p.price : 1;
+  // риск, MV и CS01 из ряда истории: значения на дату нет — позиции на эту дату не было (0), а не «не посчитано»
+  // (пометки «без N из M» на них нет); номинал без истории (V.notional — NaN) — «не посчитано» (#335)
   const at = (a, i) => (a && a[i]) || 0;
   // показатели позиции на дату i (ряды истории — уже в валюте отчёта)
   const V = {
@@ -179,15 +181,19 @@ tr.row.sel td { background: var(--accent-bg); }
     let html = '<table class="k-tbl cmp" data-vk="c11-compare" data-title="Сравнение с датой"><thead><tr><th></th><th class="n">' + f.date(DATES[i0]) + '</th><th class="n">Сегодня</th><th class="n">Δ</th><th class="n">Δ %</th><th style="width:110px"></th></tr></thead><tbody>';
     sections.forEach(([title, defs, fm, fms, unit]) => {
       if (!defs.length) return;
-      const vals = defs.map(([n, fn, sel]) => { const LL = sel ? L.filter(sel) : L, a = M.sum(LL, p => fn(p, i0)), b = M.sum(LL, p => fn(p, LAST)); return { n, fn, LL, a, b, d: a == null || b == null ? null : b - a }; });
+      // Δ — сумма изменений по позициям, у которых есть оба значения (одна база, #335): полоска, «Δ %» и порог — по ней же;
+      // база «Δ %» — значение на дату у тех же позиций
+      const dOf = (fn, p) => { const a = fn(p, i0), b = fn(p, LAST); return a == null || b == null || Number.isNaN(a) || Number.isNaN(b) ? null : b - a; };
+      const vals = defs.map(([n, fn, sel]) => { const LL = sel ? L.filter(sel) : L, a = M.sum(LL, p => fn(p, i0)), b = M.sum(LL, p => fn(p, LAST)), d = M.sum(LL, p => dOf(fn, p));
+        return { n, fn, LL, a, b, d, a0: M.sum(LL.filter(p => dOf(fn, p) != null), p => fn(p, i0)) }; });
       const mx = Math.max(1, ...vals.map(x => Math.abs(x.d || 0)));
       html += '<tr class="sec"><td colspan="6">' + title + '</td></tr>';
       vals.forEach(x => {
-        const pct = Math.abs(x.a) > 1 ? x.d / Math.abs(x.a) * 100 : null;
+        const pct = x.d != null && Math.abs(x.a0) > 1 ? x.d / Math.abs(x.a0) * 100 : null;
         html += '<tr><td class="lbl">' + x.n + '</td>' +
           '<td class="n mut">' + K.d({ title: x.n.replace(/<[^>]+>/g, '').trim() + ' на ' + f.date(DATES[i0]), unit, fmt: fm, rows: atRows(x.LL, x.fn, i0) }, null, '') + '</td>' +
           '<td class="n">' + K.d({ title: x.n.replace(/<[^>]+>/g, '').trim() + ' сегодня', unit, fmt: fm, rows: atRows(x.LL, x.fn, LAST) }, null, '') + '</td>' +
-          '<td class="n">' + (x.d == null ? '<span class="mut3" title="не посчитано">—</span>' : Math.abs(x.d) < 1 ? '<span class="mut3">·</span>' : K.d({ title: 'Δ ' + x.n.replace(/<[^>]+>/g, '').trim() + ' с ' + f.date(DATES[i0]), unit, fmt: fms, rows: x.LL.map(p => { const a = x.fn(p, i0), b = x.fn(p, LAST); return { p, v: a == null || b == null ? null : b - a }; }) }, null, '')) + '</td>' +
+          '<td class="n">' + (x.d == null ? '<span class="mut3" title="не посчитано">—</span>' : Math.abs(x.d) < 1 ? '<span class="mut3">·</span>' : K.d({ title: 'Δ ' + x.n.replace(/<[^>]+>/g, '').trim() + ' с ' + f.date(DATES[i0]), unit, fmt: fms, rows: x.LL.map(p => ({ p, v: dOf(x.fn, p) })) }, null, '')) + '</td>' +
           '<td class="n mut">' + (pct == null || x.d == null || Math.abs(x.d) < 1 ? '' : f.pcts(pct, 0)) + '</td><td>' + (x.d == null ? '' : K.bar(x.d, mx)) + '</td></tr>';
       });
     });

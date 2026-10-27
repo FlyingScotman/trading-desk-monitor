@@ -290,6 +290,10 @@ test('итог колонок таблицы = итоги плиток: непо
   near(S.part.funding.v, fx.v, 'S.part.funding');
   assert.strictEqual(S.part.carry.miss, S.nNotCovered, 'кэрри: без N — позиции без прогноза'); near(S.part.carry.v, S.carry, 'S.part.carry');
   assert.ok(S.part.net.missed.every(r => r.book === 'IC-BND'), 'в подсказке — позиции без фондирования');
+  // ревью #372: «Итог до …» сходится с неполным нетто — кэрри + фондирование с прогнозом + без прогноза − кэрри позиций
+  // без фондирования (в «Кэрри» оно есть, в нетто — нет)
+  assert.ok(S.part.carryNoFunding > 0);
+  near(S.carry + S.part.fundingCovered.v + S.part.fundingRest.v - S.part.carryNoFunding, S.part.net.v, 'строки «Итог до …» = нетто');
   // золотой ответ: всё известно — оба итога числа, без пометки
   const rr = model(REAL);
   near(colTot(rr, C.colSum.funding).v, REAL.totals.fundingTotal, 'фондирование'); near(colTot(rr, C.colSum.net).v, REAL.totals.net, 'нетто');

@@ -184,7 +184,8 @@
   // «Итого» водопада PnL (#335): известный итог — сумма посчитанных итогов позиций (totX = M.sumX по итогу), а не сумма
   // факторов. Часть итога, которую факторы не объясняют (у позиции итог есть, а разложения по факторам нет — C10 MTD,
   // #332), — отдельный столбец «Не разложено» = итог − сумма факторов (от K.WF_UNEXP_MIN в валюте отчёта, иначе его
-  // нет). Итога нет ни у одной позиции — «Итого» = сумма факторов, как раньше; нет и факторов — null («—»)
+  // нет). Итога нет ни у одной позиции — «Итого» = сумма факторов, как раньше; нет и факторов — null («—»). Факторы и
+  // итог — на одной базе позиций: у позиции без итога факторов тоже нет (день: real.js; C10 MTD: mtd(), ревью #372)
   K.WF_UNEXP_MIN = 500;
   K.WF_UNEXP = 'Не разложено';
   K.wfTotals = (vals, totX) => {
@@ -1347,7 +1348,8 @@
     const all = spec.rows || spec.list.map(p => ({ p, v: typeof spec.val === 'function' ? spec.val(p) : p[spec.val] }));
     const rows = all.filter(r => r.v && Math.abs(r.v) > 1e-9);
     // ни одно значение не посчитано (все null, #333, B1) — итог «—», а не 0
-    const allX = M.sumX(all, 'v'), tot = all.length && allX.v == null ? null : rows.reduce((s, r) => s + r.v, 0);
+    // spec.partX — признак неполноты, посчитанный вызывающим (итог K.table с partRow: остатки ДС не в счёте позиций)
+    const allX = spec.partX || M.sumX(all, 'v'), tot = all.length && allX.v == null ? null : rows.reduce((s, r) => s + r.v, 0);
     const fmtTot = v => v == null ? '<span class="mut3" title="не посчитано">—</span>' : fmt(v);
     // посчитано не у всех — пометка «без N из M поз.» (#335)
     o.el.querySelector('.t').innerHTML = esc(spec.title) + ' <span class="' + f.cls(tot) + '">' + fmtTot(tot) + '</span> <span class="mut" style="font-size:12px;font-weight:400">' + esc(spec.unit || '') + '</span>' + K.partNote(allX);
@@ -1906,7 +1908,7 @@
         const x = K.groupSum(list, fn, c.nullable && (r => val(c, r)), opts.partRow), tot = x.v;
         if (tot == null) return '<td class="n"><span class="mut3" title="не посчитано">—</span></td>';
         const fm = c.sumFmt || c.fmt || (v => f.n(v));
-        if (c.drill !== false && list.length && list[0].searchText) return '<td class="n">' + K.d({ title: (c.drillTitle || c.label.replace(/<[^>]+>/g, '')), unit: c.unit, fmt: v => fm(v, {}), part: false, rows: list.map(p => ({ p, v: typeof c.sum === 'function' ? fn(p) : fn(p) || 0 })) }, fm(tot, {})) + K.partNote(x) + '</td>';
+        if (c.drill !== false && list.length && list[0].searchText) return '<td class="n">' + K.d({ title: (c.drillTitle || c.label.replace(/<[^>]+>/g, '')), unit: c.unit, fmt: v => fm(v, {}), part: false, partX: x, rows: list.map(p => ({ p, v: fn(p) })) }, fm(tot, {})) + K.partNote(x) + '</td>';
         return '<td class="n ' + (c.sumNeutral ? '" style="color:var(--fg)' : f.cls(tot)) + '">' + fm(tot, {}) + K.partNote(x) + '</td>';
       };
       let body = '';

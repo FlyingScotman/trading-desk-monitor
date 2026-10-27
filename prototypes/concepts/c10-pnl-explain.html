@@ -29,7 +29,9 @@
 .rc td small { display: block; font-size: 10px; color: var(--fg-3); font-weight: 400; line-height: 1.1; }
 .dayinfo { min-width: 200px; font-size: 12.5px; }
 .dayinfo .row { display: grid; grid-template-columns: 70px 1fr 70px; gap: 6px; align-items: center; padding: 2px 0; }
-.dayinfo .row .n { text-align: right; font-variant-numeric: tabular-nums; }
+.dayinfo .row .n { text-align: right; font-variant-numeric: tabular-nums; min-width: 0; }
+/* пометка неполного итога (#335) в узкой колонке разложения дня — строкой ниже и с переносом, без прокрутки вбок */
+.dayinfo .row .n .k-part { display: block; white-space: normal; line-height: 1.15; }
 .hist-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 12px; }
 @media (max-width: 900px) { .hist-wrap { grid-template-columns: minmax(0, 1fr); } }
 .lead { font-size: 13.5px; margin: 0 0 8px; color: var(--fg-2); }
@@ -62,8 +64,10 @@
     const o = { carry: x(p.pnl.carry, DAYS_MTD), funding: x(p.pnl.funding, DAYS_MTD), trading: x(p.pnl.trading, 3) };
     const ks = ['rates', 'spread', 'fx', 'other'];
     // PnL дня позиции не посчитан (available: false, #332) — разложить MTD не по чему: остаток и все факторы null,
-    // итог MTD (p.pnlMtd) остаётся
-    if (p.pnlMtd == null || p.pnl.available === false) ks.forEach(k => o[k] = null);
+    // итог MTD (p.pnlMtd) остаётся. PnL MTD нет — нет и его разложения: все факторы null (одна база с «Итого»
+    // водопада, K.wfTotals, ревью #372)
+    if (p.pnlMtd == null) Object.keys(o).concat(ks).forEach(k => o[k] = null);
+    else if (p.pnl.available === false) ks.forEach(k => o[k] = null);
     else {
       const rest = p.pnlMtd - (o.carry || 0) - (o.funding || 0) - (o.trading || 0);
       const W = ks.reduce((s, k) => s + Math.abs(p.pnl[k] || 0), 0);

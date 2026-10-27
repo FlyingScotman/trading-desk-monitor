@@ -196,6 +196,9 @@
     s.part = { carry: P(rows, C.colSum.carry), funding: P(rows, C.colSum.funding, !!fundingOk), net: P(rows, C.colSum.net, !!fundingOk && s.nCovered > 0),
       fundingCovered: P(rows.filter(r => !r.isCash && r.covered), C.colSum.funding, !!fundingOk), fundingRest: P(rows.filter(r => r.isCash || !r.covered), C.colSum.funding, !!fundingOk),
       fundingNoCarry: P(nc, C.colSum.funding, !!fundingOk) };
+    // кэрри позиций с прогнозом без фондирования: в «Кэрри» оно есть, в нетто — нет (их нетто не посчитано). На экране
+    // «Итог до …» вычитает его отдельной строкой, чтобы строки складывались в неполное нетто (ревью #372)
+    s.part.carryNoFunding = fundingOk ? rows.filter(r => !r.isCash && r.covered && r.funding == null).reduce((a, r) => a + (r.carry || 0), 0) : null;
     s.carryDv01 = C.perDv01(s.carryFix, s.nFix ? s.dv01 : null);
     s.carryCs01Flt = C.perDv01(s.carryFlt, s.nFlt ? s.cs01Flt : null);
     return s;

@@ -258,8 +258,8 @@
     const wide = bonds.filter(p => p.zspread != null && p.zspread >= 300).sort((a, b) => b.zspread - a.zspread);
     if (wide.length) alerts.push({ c: '', i: '↔', h: 'Широкие спреды (≥ 300 б.п.): <b>' + wide.length + '</b> бумаг, CS01 ' + K.d({ title: 'CS01 бумаг со спредом ≥ 300', unit: 'тыс ₽/бп', list: wide, val: 'cs01' }, null, '') + ' тыс ₽/бп.' + '<div class="lst">' + wide.map(p => '<span data-card="' + p.id + '">' + esc(p.name) + ' ' + Math.round(p.zspread) + '</span>').join(' · ') + '</div>' });
     const moved = bonds.filter(p => Math.abs(p.spreadChgBp || 0) >= 5).sort((a, b) => Math.abs(b.spreadChgBp) - Math.abs(a.spreadChgBp));
-    if (moved.length) alerts.push({ c: '', i: '⇅', h: 'Спред сдвинулся на 5+ б.п.: <b>' + moved.length + '</b> бумаг, PnL от спреда ' + K.d({ title: 'PnL спреда · сдвиг ≥ 5 б.п.', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: moved, val: p => p.pnl.spread }) + ' mm.' + '<div class="lst">' + moved.slice(0, 10).map(p => '<span data-card="' + p.id + '">' + esc(p.name) + ' <span class="' + (p.spreadChgBp > 0 ? 'chg-up' : 'chg-dn') + '">' + f.bps(p.spreadChgBp) + '</span></span>').join(' · ') + '</div>' });
-    if (traded.length) alerts.push({ c: 'info', i: '✎', h: 'Сделки сегодня: <b>' + traded.length + '</b>, PnL сделок ' + K.d({ title: 'PnL сделок дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: traded, val: p => p.pnl.trading }) + ' mm.' + '<div class="lst">' + traded.map(p => '<span data-card="' + p.id + '">' + esc(p.name) + ' ' + (p.tradeToday.qty > 0 ? '+' : '') + f.mn(p.tradeToday.qty, 0) + '</span>').join(' · ') + '</div>' });
+    if (moved.length) alerts.push({ c: '', i: '⇅', h: 'Спред сдвинулся на 5+ б.п.: <b>' + moved.length + '</b> бумаг, PnL от спреда ' + K.d({ title: 'PnL спреда · сдвиг ≥ 5 б.п.', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: moved, val: p => p.pnl.spread, suffix: ' mm' }) + '.' + '<div class="lst">' + moved.slice(0, 10).map(p => '<span data-card="' + p.id + '">' + esc(p.name) + ' <span class="' + (p.spreadChgBp > 0 ? 'chg-up' : 'chg-dn') + '">' + f.bps(p.spreadChgBp) + '</span></span>').join(' · ') + '</div>' });
+    if (traded.length) alerts.push({ c: 'info', i: '✎', h: 'Сделки сегодня: <b>' + traded.length + '</b>, PnL сделок ' + K.d({ title: 'PnL сделок дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: traded, val: p => p.pnl.trading, suffix: ' mm' }) + '.' + '<div class="lst">' + traded.map(p => '<span data-card="' + p.id + '">' + esc(p.name) + ' ' + (p.tradeToday.qty > 0 ? '+' : '') + f.mn(p.tradeToday.qty, 0) + '</span>').join(' · ') + '</div>' });
     // кэрри без фондирования (#168): «отрицательное» — кэрри минус фондирование, т. е. кэрри + фондирование (оно со знаком минус)
     const netCarry = p => p.carryDay + (p.fundingDay || 0);
     const neg = bonds.filter(p => p.fundingDay != null && netCarry(p) < 0 && p.book !== 'HTM');
@@ -288,12 +288,13 @@
     const mvT = (arr, vk, t) => '<table class="mini" data-vk="' + vk + '" data-title="' + t + '"><thead><tr><th>Выпуск</th><th>Рейт.</th><th class="n">Дох.</th><th class="n">Δ б.п.</th></tr></thead><tbody>' + arr.map(b => '<tr><td class="name">' + esc(b.name) + ' <span class="mut3">' + esc(b.sector) + '</span></td><td class="mut">' + esc(b.rating) + '</td><td class="n">' + f.pct(b.ytm) + '</td><td class="n ' + (b.chgBp > 0 ? 'chg-up' : 'chg-dn') + '"><b>' + f.bps(b.chgBp) + '</b></td></tr>').join('') + '</tbody></table>';
     html += '<section id="s6"><h2><span class="no">06</span> Рынок <span class="sp"></span><span class="k-note">изменения к закрытию ' + f.date(M.prevDate) + '</span></h2>' +
       '<p>' + mktSentence() + ' ' +
-      fxRatesLine().replace(/\.$/, '') + '. Курсы: ' + ccyFx.map(c => c + ' ' + f.n(M.fx[c], 2) + ' · ' + f.pcts(M.fxChgPct[c], 2) + fxPnlRate(c) + ' · PnL ' + K.d({ title: 'FX PnL ' + c, unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L.filter(p => p.ccy === c), val: p => p.pnl.fx }) + ' mm').join('; ') + '. ' +
+      fxRatesLine().replace(/\.$/, '') + '. Курсы: ' + ccyFx.map(c => c + ' ' + f.n(M.fx[c], 2) + ' · ' + f.pcts(M.fxChgPct[c], 2) + fxPnlRate(c) + ' · PnL ' + K.d({ title: 'FX PnL ' + c, unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L.filter(p => p.ccy === c), val: p => p.pnl.fx, suffix: ' mm' })).join('; ') + '. ' +
       'КС ' + f.pct(M.indices['КС']) + ', RUONIA ' + f.pct(M.indices['RUONIA']) + '.</p>' +
       '<div class="two"><div><div class="cap">Кривые RUB: сегодня, вчера и сдвиг</div><div class="chart" id="curveChart"></div></div>' +
       '<div><div class="cap">Корпоративный рынок: сильнее всего выросли доходности</div>' + mvT(up, 'c05-movers-up', 'Корпоративный рынок: рост доходностей') + '<div class="cap" style="margin-top:10px">…и снизились</div>' + mvT(dn, 'c05-movers-down', 'Корпоративный рынок: снижение доходностей') + '</div></div>' + marketHist() + '</section>';
 
-    root.innerHTML = html;
+    // пометка «· без N из M поз.» кончается точкой: точка конца фразы сразу за ней — лишняя («поз..», #335)
+    root.innerHTML = html.replace(/(<span class="k-part"[^>]*>[^<]*поз\.<\/span>)\./g, '$1');
     K.tableToolsAll(root);
 
     // кликабельные дни

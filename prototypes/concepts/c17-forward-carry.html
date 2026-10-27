@@ -93,6 +93,7 @@
       'У флоатеров знаменатель — CS01 (метка «CS»): их основной риск спредовый, ставочный DV01 мал. CS01 = 0 или нет — «—». ' +
       'Итог портфеля — по фиксам (сумма кэрри / |сумма DV01|, без флоатеров), флоатеры — отдельно: кэрри / |сумма CS01|; позиции без знаменателя (0 или нет) не входят ни в числитель, ни в знаменатель. ' +
       'Сумма DV01 (CS01) — со взаимозачётом: длинные и короткие позиции и хеджи гасят друг друга, поэтому у почти закрытого риска отношение может быть огромным.',
+    carryNoFunding: 'Кэрри позиций с прогнозом, у которых фондирование не посчитано: в «Кэрри» оно входит, а их нетто не посчитано, поэтому в «Нетто» его нет. Строка вычитает его, чтобы строки складывались в «Нетто».',
     rest: 'Фондирование позиций без прогноза кэрри (деривативы, валютные бумаги, оценки ниже точной) и строк без позиции (остатки ДС книг и юрлиц). ' +
       'Оно входит в нетто группы, а в колонку кэрри — нет.',
     roll: 'Roll по спреду: бумага сдвигается по кривой G-спредов бумаг того же рейтинга (как C09) к своему сроку на горизонте; CS01 × сдвиг. Уже входит в кэрри. ' +
@@ -245,10 +246,10 @@
       K.kpi('Кэрри', kd('Кэрри до ' + f.date(resp.horizonDate), r => r.isCash ? null : r.carry, S.carry, S.part.carry), S.nCovered + ' поз. с прогнозом', '', TIP.carry) +
       // всё фондирование группы (как итог колонки «Фондирование»): Кэрри + Фондирование = Нетто; разбивка — строками
       K.kpi('Фондирование', !fundOk ? '<span class="mut3" title="' + esc(resp.fundingText || '') + '">не настроено</span>' : kd('Фондирование до ' + f.date(resp.horizonDate), r => r.funding, S.funding, S.part.funding),
-        fundOk ? [['с прогнозом кэрри', S.nCovered ? f.mn(S.fundingCovered, DIGB) : '—'], ['без прогноза и остатки ДС', f.mn(S.fundingRest != null ? S.fundingRest : S.part.fundingRest.v, DIGB), TIP.rest]]
+        fundOk ? [['с прогнозом кэрри', S.nCovered ? f.mn(S.fundingCovered, DIGB) + K.partNote(S.part.fundingCovered) : '—'], ['без прогноза и остатки ДС', f.mn(S.fundingRest != null ? S.fundingRest : S.part.fundingRest.v, DIGB) + K.partNote(S.part.fundingRest), TIP.rest]]
           : esc(C.FUNDING_STATUS[resp.fundingStatus] || ''), '', TIP.funding) +
       // нетто: не посчитано у части позиций (фондирование null) — нетто остальных с пометкой (#335; раньше «—», netKnown)
-      K.kpi('Нетто', kd('Нетто до ' + f.date(resp.horizonDate), C.colSum.net, S.net, S.part.net), S.net == null && S.part.net.v == null ? (!fundOk ? 'нет фондирования' : !S.nCovered ? 'нет позиций с прогнозом' : 'не посчитано') : 'кэрри + фондирование', '', TIP.net) +
+      K.kpi('Нетто', kd('Нетто до ' + f.date(resp.horizonDate), C.colSum.net, S.net, S.part.net), S.net == null && S.part.net.v == null ? (!fundOk ? 'нет фондирования' : !S.nCovered ? 'нет позиций с прогнозом' : 'не посчитано') : K.isPartial(S.part.net) ? 'кэрри + фондирование позиций с фондированием' : 'кэрри + фондирование', '', TIP.net) +
       K.kpi('Кэрри / DV01', S.carryDv01 == null ? '<span class="mut3">—</span>' : f.n(S.carryDv01, 0) + K.kpiUnit('б.п.'),
         [['без флоатеров · DV01', f.dv(S.dv01) + ' <span class="u">тыс ₽/бп</span>'], ['флоатеры: Кэрри/CS01', S.carryCs01Flt == null ? '—' : f.n(S.carryCs01Flt, 0) + ' <span class="u">б.п.</span>', 'кэрри флоатеров / |CS01 флоатеров|']], '', TIP.dv01);
     wrap.appendChild(kp);
@@ -263,6 +264,9 @@
       (fundOk ? line('Фондирование позиций с прогнозом', S.fundingCovered, '', TIP.funding, S.part.fundingCovered) : '<div>' + K.hint('Фондирование', TIP.funding) + '</div><div class="n"><span class="mut3">не настроено</span></div>') +
       (fundOk ? line('фондирование без прогноза кэрри', S.fundingRest, '', TIP.rest, S.part.fundingRest) +
         line('позиции без прогноза', S.fundingNoCarry, 'sub', '', S.part.fundingNoCarry) + line('остатки ДС', S.fundingCash, 'sub') : '') +
+      // неполное нетто: кэрри позиций без фондирования есть в «Кэрри», но не в нетто — вычитаем строкой, чтобы сумма
+      // строк сходилась с «Нетто» (правило 26.10 «сумма складывается на глазах», ревью #372)
+      (S.net == null && K.isPartial(S.part.net) && S.part.carryNoFunding ? line('минус кэрри позиций без фондирования (не в нетто)', -S.part.carryNoFunding, '', TIP.carryNoFunding) : '') +
       line('Нетто', S.net, 'tot', TIP.net, S.part.net) +
       '</div><div class="side">' +
       (S.nNotCovered ? '<div><span class="c17-link" data-a="nc">' + S.nNotCovered + ' поз. без прогноза кэрри</span> — в кэрри не входят, их фондирование — в строке «без прогноза». Причины — в колонке «Оценка».</div>' : '<div>Прогноз есть у всех позиций.</div>') +

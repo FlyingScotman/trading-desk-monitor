@@ -19,8 +19,8 @@ const ORIGIN = 'http://desk.test';
 const TYPES = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png' };
 
 // D — прогон (объект) или ничего; X — window.DESK_EXTRAS; store — localStorage; demo — демо-набор из файла
-async function open(browser, file, { D, X, store, demo } = {}) {
-  const ctx = await browser.newContext({ viewport: { width: 1500, height: 1000 } }), pg = await ctx.newPage();
+async function open(browser, file, { D, X, store, demo, width, hash = '' } = {}) {
+  const ctx = await browser.newContext({ viewport: { width: width || 1500, height: 1000 } }), pg = await ctx.newPage();
   if (store) await ctx.addInitScript(s => { for (const k in s) localStorage.setItem(k, s[k]); }, store);
   const errors = [];
   pg.on('pageerror', e => errors.push('pageerror: ' + e.message));
@@ -36,7 +36,7 @@ async function open(browser, file, { D, X, store, demo } = {}) {
     if (!f.startsWith(ROOT) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) return route.fulfill({ status: 404, body: '' });
     return route.fulfill({ status: 200, contentType: TYPES[path.extname(f)] || 'application/octet-stream', body: fs.readFileSync(f) });
   });
-  await pg.goto(demo ? 'file://' + path.join(ROOT, 'concepts', file) : ORIGIN + '/concepts/' + file);
+  await pg.goto((demo ? 'file://' + path.join(ROOT, 'concepts', file) : ORIGIN + '/concepts/' + file) + hash);
   await pg.waitForTimeout(500);
   return { pg, ctx, errors };
 }
@@ -75,7 +75,8 @@ test('#335: неполные итоги — число и «без N из M по
     await t.test('C05: «потеряли … mm ₽ · без 52 из 104 поз.» и у главной цифры', async () => {
       const { pg, ctx, errors } = await open(browser, 'c05-morning-brief.html', { D: half() });
       const s1 = await pg.locator('#s1').innerText();
-      assert.ok(/За день (потеряли|заработали) [\d,.]+ mm ₽ · без 52 из 104 поз\./.test(s1), s1.slice(0, 400));
+      assert.ok(/За день (потеряли|заработали) [\d,.]+ mm ₽ · без 52 из 104 поз\. Главное/.test(s1), s1.slice(0, 400));
+      assert.ok(!/поз\.\./.test(await pg.locator('body').innerText()), 'без двух точек «поз..» (ревью #372)');
       const big = await pg.locator('#s1 .hl .big').innerText();
       assert.ok(big.includes('mm ₽') && big.includes(NOTE) && big.indexOf('mm ₽') < big.indexOf(NOTE), 'единица — до пометки: ' + big);
       assert.deepStrictEqual(errors, []);
@@ -141,8 +142,51 @@ test('#335: неполные итоги — число и «без N из M по
       const tot = await pg.evaluate(() => { const t = document.querySelector('.k-panel table.k-tbl'); const h = [...t.tHead.rows[0].cells].map(c => c.innerText.replace(/\s+/g, ' ').trim());
         const i = h.findIndex(x => /^Нетто/.test(x)); return t.tFoot.rows[0].cells[i - (t.tFoot.rows[0].cells.length < h.length ? h.length - t.tFoot.rows[0].cells.length : 0)].innerText; });
       assert.ok(/\d/.test(tot) && tot.includes('без ' + miss.length + ' из '), '«Итого» таблицы, Нетто: ' + tot);
+      // «Итог до …» складывается в неполное «Нетто»: кэрри + фондирование + без прогноза − кэрри позиций без фондирования
+      const num = t => { const m = /^\(?[\d,.]+\)?/.exec(t.trim()); return m ? (m[0].startsWith('(') ? -1 : 1) * +m[0].replace(/[(),]/g, '') : null; };
+      const L = await pg.evaluate(() => { const d = [...document.querySelectorAll('.c17-sum > div')]; const o = {}; for (let i = 0; i + 1 < d.length; i += 2) o[d[i].innerText.trim()] = d[i + 1].innerText; return o; });
+      const parts = ['Кэрри', 'Фондирование позиций с прогнозом', 'фондирование без прогноза кэрри', 'минус кэрри позиций без фондирования (не в нетто)'].map(k => num(L[k]));
+      assert.ok(parts.every(x => x != null), JSON.stringify(L));
+      assert.ok(Math.abs(parts.reduce((a, b) => a + b, 0) - num(L['Нетто'])) < 0.015, 'строки сходятся с «Нетто»: ' + JSON.stringify(L));
+      assert.ok(/кэрри \+ фондирование позиций с фондированием/.test(await pg.locator('.k-kpi', { hasText: 'Нетто' }).first().innerText()), 'подпись плитки «Нетто»');
+      const fk = await pg.locator('.k-kpi', { hasText: 'Фондирование' }).first().innerText();
+      assert.ok(/с прогнозом кэрри[\s\S]*· без \d+ из \d+ поз\./.test(fk), 'плитка «Фондирование»: ' + fk);
       const ban = await pg.locator('#ban').innerText();
       assert.ok(!/Нетто этих книг и итога — «—»/.test(ban), ban);
+      assert.deepStrictEqual(errors, []);
+      await ctx.close();
+    });
+    await t.test('ревью #372: без прокрутки вбок на 390, 1280 и 1500 px; единица — до пометки, а не после', async () => {
+      const mtdX = () => { const X = { notes: [], positions: {} }; JSON.parse(RUN).positions.forEach((p, i) => { if (i % 3) X.positions[p.id] = { pnlMtd: 1e6 * (i % 5 - 2) }; }); return X; };
+      const cases = [['c01-cockpit.html', {}], ['c01-cockpit.html', { store: { 'c01-tab': 'pnl' } }], ['c03-blotter.html', { store: { 'c03-state': JSON.stringify({ v: 2, preset: 'pnl', grouping: 'ccy' }) } }],
+        ['c04-pivot.html', { hash: '#p=pnl-book' }], ['c05-morning-brief.html', {}], ['c06-launchpad.html', {}], ['c07-portfolio-map.html', {}], ['c10-pnl-explain.html', {}],
+        ['c10-pnl-explain.html', { X: mtdX(), store: { 'c10-mode': 'mtd' } }], ['c12-terminal.html', {}], ['c13-issuers.html', {}], ['c17-forward-carry.html', { demo: true }]];
+      for (const width of [390, 1280, 1500]) for (const [file, o] of cases) {
+        const { pg, ctx, errors } = await open(browser, file, Object.assign({ D: half(), width }, o));
+        const w = await pg.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
+        assert.ok(w[0] <= w[1], width + ' ' + file + ' ' + JSON.stringify(o.store || o.hash || '') + ': прокрутка вбок ' + w);
+        // текст сразу за пометкой — не единица («· без 3 из 30 поз. тыс ₽»): единицу ставит suffix до пометки
+        const after = await pg.evaluate(() => [...document.querySelectorAll('.k-part')].map(e => { let n = e.nextSibling, t = ''; while (n && !t.trim()) { t = n.textContent || ''; n = n.nextSibling; } return t.trim(); })
+          .filter(t => /^(тыс|mm|bn|₽|\$|€|¥|б\.п|шт)/.test(t)));
+        assert.deepStrictEqual(after, [], width + ' ' + file + ': единица после пометки');
+        assert.deepStrictEqual(errors, [], width + ' ' + file);
+        await ctx.close();
+      }
+    });
+    await t.test('ревью #372: C04 сводная PnL — итог и ячейки с пометкой; разбор из «Итого» K.table (C07) — с пометкой в заголовке', async () => {
+      let { pg, ctx, errors } = await open(browser, 'c04-pivot.html', { D: half(), hash: '#p=pnl-book' });
+      const sum = await pg.locator('#sum').innerText();
+      assert.ok(/итого [(\d]/.test(sum) && sum.includes(NOTE) && sum.indexOf('тыс') < sum.indexOf(NOTE), 'итог сводной: ' + sum);
+      const foot = await pg.evaluate(() => [...document.querySelectorAll('#out tfoot .k-part')].map(e => e.innerText));
+      assert.ok(foot.length >= 2 && foot.every(x => x === '· без 52 из 104 поз.'), JSON.stringify(foot));
+      assert.deepStrictEqual(errors, []);
+      await ctx.close();
+      ({ pg, ctx, errors } = await open(browser, 'c07-portfolio-map.html', { D: half() }));
+      const cell = pg.locator('table.k-tbl tfoot td', { has: pg.locator('.k-part') }).first();
+      const note = await cell.locator('.k-part').innerText();
+      await cell.locator('[data-dr]').click(); await pg.waitForTimeout(200);
+      const t = await pg.locator('.k-drawer .t').last().innerText();
+      assert.ok(t.includes(note), 'заголовок разбора «' + t + '» — с пометкой ' + note);
       assert.deepStrictEqual(errors, []);
       await ctx.close();
     });
