@@ -700,12 +700,12 @@
   M.math = { priceFromYield, modDur };
   // сумма по списку с «не посчитано» (#327, B1; как nullable #168): null не превращается в 0. Ни одно значение не
   // посчитано — null (у пустого списка — 0); посчитана часть — сумма посчитанных. M.sumX — то же с признаком
-  // неполноты: { v, n — сколько посчитано, miss — сколько нет }
+  // неполноты: { v, n — сколько посчитано, miss — сколько нет, missed — какие }
   M.sumX = (arr, f) => {
     const g = typeof f === 'function' ? f : x => x[f];
-    let s = 0, n = 0;
-    arr.forEach(x => { const v = g(x); if (v != null && !Number.isNaN(v)) { s += v; n++; } });
-    return { v: n || !arr.length ? s : null, n, miss: arr.length - n };
+    let s = 0, n = 0; const missed = [];  // missed — что не посчитано (подсказка «без N из M поз.», #335)
+    arr.forEach(x => { const v = g(x); if (v != null && !Number.isNaN(v)) { s += v; n++; } else missed.push(x); });
+    return { v: n || !arr.length ? s : null, n, miss: arr.length - n, missed };
   };
   M.sum = (arr, f) => M.sumX(arr, f).v;
   M.kpis = function (list) {

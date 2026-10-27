@@ -12,6 +12,7 @@
  *    строгое: net null, если фондирование не посчитано, нет позиций с прогнозом или у любой позиции фондирование null
  *    (nCoveredNoFunding — с прогнозом; nNoCarryNoFunding — без прогноза, тогда и fundingNoCarry, fundingTotal null);
  *    позиция not_funded — 0, а не null. netKnown — нетто позиций, у которых есть и кэрри, и фондирование.
+ *    На экране вместо «—» — неполный итог (#335, вариант «а»): C.sums(...).part — сумма посчитанных и пометка «без N из M поз.».
  * На экране «Кэрри», «Фондирование», «Нетто» (решение владельца 26.10). Сумма складывается на глазах: Кэрри
  * (позиции с прогнозом) + Фондирование тех же позиций + «фондирование без прогноза кэрри» (позиции без прогноза
  * и остатки ДС) = Нетто. Фондирование null не подменяется нулём.
@@ -187,6 +188,17 @@
       s.net = s.nFundingMissing || s.nNoCarryNoFunding || !s.nCovered ? null : s.carry + s.funding;
     }
     if (!s.nCovered && s.netKnown === 0) s.netKnown = null;
+    // неполные итоги (#335, вариант «а»): сумма посчитанных и сколько позиций без значения — для пометки «без N из M
+    // поз.» на плитках, в «Итог до …» и в итогах таблицы. Без фондирования (не настроено) фондирование и нетто не
+    // посчитаны ни у одной позиции — v null; нетто без позиций с прогнозом — тоже null
+    const P = (L, fn, on) => on === false ? Object.assign(C.partSum(L, fn), { v: null }) : C.partSum(L, fn);
+    const nc = rows.filter(r => !r.isCash && !r.covered);
+    s.part = { carry: P(rows, C.colSum.carry), funding: P(rows, C.colSum.funding, !!fundingOk), net: P(rows, C.colSum.net, !!fundingOk && s.nCovered > 0),
+      fundingCovered: P(rows.filter(r => !r.isCash && r.covered), C.colSum.funding, !!fundingOk), fundingRest: P(rows.filter(r => r.isCash || !r.covered), C.colSum.funding, !!fundingOk),
+      fundingNoCarry: P(nc, C.colSum.funding, !!fundingOk) };
+    // кэрри позиций с прогнозом без фондирования: в «Кэрри» оно есть, в нетто — нет (их нетто не посчитано). На экране
+    // «Итог до …» вычитает его отдельной строкой, чтобы строки складывались в неполное нетто (ревью #372)
+    s.part.carryNoFunding = fundingOk ? rows.filter(r => !r.isCash && r.covered && r.funding == null).reduce((a, r) => a + (r.carry || 0), 0) : null;
     s.carryDv01 = C.perDv01(s.carryFix, s.nFix ? s.dv01 : null);
     s.carryCs01Flt = C.perDv01(s.carryFlt, s.nFlt ? s.cs01Flt : null);
     return s;
@@ -215,14 +227,25 @@
       nNoCarryNoFunding: g.nNoCarryNoFunding == null ? s.nNoCarryNoFunding : g.nNoCarryNoFunding, server: true }) && C.strictNoCarry(C.emptyNoCarry(s));
   };
 
-  // слагаемые итогов колонок таблицы (K.table: NaN → «—»), по тому же правилу, что C.sums и сервер:
-  //  - «Фондирование» = fundingTotal: «—» только если у позиции без прогноза фондирование null (nNoCarryNoFunding);
-  //    позиция с прогнозом без фондирования в fundingTotal не входит (у сервера funding — сумма известных);
-  //  - «Нетто»: «—», если фондирование null у любой позиции (B1 строгое); группа без позиций с прогнозом — «—»
-  //    (её строки все без нетто: nullable)
+  // слагаемые итогов колонок таблицы (K.table, K.groupSum) и неполных итогов (C.partSum): null — у позиции не
+  // посчитано. Итог — сумма посчитанных с пометкой «без N из M поз.» (#335, решение владельца 27.10 — вариант «а»;
+  // раньше NaN делал итог «Нетто» и «Фондирования» «—», строгое B1 по #286). Остатки ДС (isCash) входят в сумму
+  // фондирования и нетто, в счёт позиций — нет:
+  //  - «Кэрри»: позиция без прогноза — не посчитано;
+  //  - «Фондирование»: позиция с фондированием null — не посчитано (с прогнозом кэрри или без);
+  //  - «Нетто» = кэрри + фондирование: позиция с фондированием null — не посчитано; группа без позиций с прогнозом —
+  //    «—» (её строки все без нетто: nullable)
   C.colSum = {
-    funding: r => !r.isCash && !r.covered && r.funding == null ? NaN : r.funding || 0,
-    net: r => !r.isCash && r.funding == null ? NaN : (r.carry || 0) + (r.funding || 0),
+    carry: r => r.isCash ? null : r.carry,
+    funding: r => r.isCash ? r.funding || 0 : r.funding,
+    net: r => r.isCash ? r.funding || 0 : r.funding == null ? null : (r.carry || 0) + r.funding,
+  };
+  // сумма посчитанных fn(r) по строкам и признак неполноты {v, n, miss, missed} (как M.sumX, K.groupSum): n и miss — только
+  // позиции (остатки ДС — в сумме, не в счёте); ни у одной позиции не посчитано — v null
+  C.partSum = (rows, fn) => {
+    let v = 0, n = 0; const missed = [];
+    rows.forEach(r => { const x = fn(r), ok = x != null && !Number.isNaN(x); if (ok) v += x; if (!r.isCash) { if (ok) n++; else missed.push(r); } });
+    return { v: n || !missed.length ? v : null, n, miss: missed.length, missed };
   };
   // общие фильтры шапки не заданы (K.filter): итоги — с сервера
   C.noFilter = f => !f || (!f.entity && !f.desk && !(f.books && f.books.length) && !f.ccy && !(f.portsOff && f.portsOff.length));

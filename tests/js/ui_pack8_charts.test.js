@@ -225,31 +225,45 @@ t('#349: бары с подписью справа или сверху — то�
   assert.deepStrictEqual(found.sort(), ['c06-launchpad.html', 'c06-launchpad.html', 'c06-launchpad.html', 'c09-market.html', 'c13-issuers.html', 'c13-issuers.html', 'lib/kit.js']);
 });
 
-t('#347: K.groupTotal — «—» (null), если ни одно слагаемое не посчитано, есть NaN или nullable-столбец пуст', () => {
+t('#347, #335: K.groupTotal — «—» (null), если ни одно слагаемое не посчитано или nullable-столбец пуст; часть — сумма посчитанных', () => {
   const v = r => r.v;
   assert.strictEqual(K.groupTotal([{ v: null }, { v: null }], v), null);
   assert.strictEqual(K.groupTotal([{ v: null }, { v: 3 }, { v: -1 }], v), 2);
   assert.strictEqual(K.groupTotal([], v), 0);
   assert.strictEqual(K.groupTotal([{ v: NaN }], v), null);
-  // NaN — «итог не посчитан» (C17, CARRY.colSum), как и раньше в K.table: при любых остальных слагаемых
-  assert.strictEqual(K.groupTotal([{ v: 5 }, { v: NaN }, { v: 1 }], v), null);
+  // #335 (решение 27.10, вариант «а»): NaN — «не посчитано», как null; итог — сумма остальных (раньше NaN делал итог «—»)
+  assert.strictEqual(K.groupTotal([{ v: 5 }, { v: NaN }, { v: 1 }], v), 6);
   assert.strictEqual(K.groupTotal([{ v: 5, x: null }], v, r => r.x), null, 'nullable: все пусты');
   assert.strictEqual(K.groupTotal([{ v: 5, x: 1 }], v, r => r.x), 5);
 });
 
-t('#347: C17 в демо — итог «Нетто» «—» (позиции без фондирования), «Фондирование» — число', () => {
+t('#347, #335: C17 в демо — итог «Нетто» — нетто посчитанных с пометкой (позиции без фондирования), «Фондирование» — число', () => {
   const d = M.forwardCarryDemo({});
   const rows = CARRY.rows(d, { pos: M.pos, books: M.book }).concat(CARRY.cashRows(d, { books: M.book }));
   assert.ok(rows.length > 10);
-  assert.strictEqual(K.groupTotal(rows, CARRY.colSum.net, r => r.net), null, 'итог «Нетто» — «—»');
+  const cnt = r => !r.isCash, x = K.groupSum(rows, CARRY.colSum.net, r => r.net, cnt);
+  // #335: раньше «—» (строгое B1, NaN); теперь сумма посчитанных и «без N из M поз.», N — позиции без фондирования
+  assert.ok(Number.isFinite(x.v) && x.miss > 0 && x.miss === rows.filter(r => !r.isCash && r.funding == null).length, JSON.stringify({ v: x.v, n: x.n, miss: x.miss }));
+  assert.strictEqual(x.n + x.miss, rows.filter(cnt).length, 'M — позиции, без остатков ДС');
+  assert.ok(K.partNote(x).includes('без ' + x.miss + ' из ' + (x.n + x.miss) + ' поз.'));
   assert.ok(Number.isFinite(K.groupTotal(rows, CARRY.colSum.funding, r => r.funding)), 'итог «Фондирование» — число');
-  // группа «—» — последней при сортировке групп по нетто (книги)
-  const by = new Map(); rows.forEach(r => { if (!by.has(r.book)) by.set(r.book, []); by.get(r.book).push(r); });
-  const col = k => (k === 'net' ? { val: r => r.net, sum: CARRY.colSum.net, nullable: true } : null);
+  // сортировка групп по нетто: группа с частичной суммой — по посчитанной части, группа «—» — в конце. По книгам: у
+  // IC-BND фондирования нет ни у одной позиции — «—» (N = M); по валютам: в RUB — частичная сумма
+  const byKey = key => { const m = new Map(); rows.forEach(r => { if (!m.has(r[key])) m.set(r[key], []); m.get(r[key]).push(r); }); return m; };
+  assert.strictEqual(K.groupTotal(byKey('book').get('IC-BND'), CARRY.colSum.net, r => r.net, cnt), null, 'IC-BND — «—»');
+  const bb = byKey('book');
+  [1, -1].forEach(dir => { const tot = K.groupKeys([...bb.keys()], k => bb.get(k), [['net', dir]], k => (k === 'net' ? { val: r => r.net, sum: CARRY.colSum.net, nullable: true, cnt } : null)).map(k => K.groupTotal(bb.get(k), CARRY.colSum.net, r => r.net));
+    assert.strictEqual(tot[tot.length - 1], null, dir + ': книги — «—» последней: ' + JSON.stringify(tot)); });
+  const by = byKey('ccy');
+  const col = k => (k === 'net' ? { val: r => r.net, sum: CARRY.colSum.net, nullable: true, cnt } : null);
+  const partial = [...by.keys()].filter(k => K.isPartial(K.groupSum(by.get(k), CARRY.colSum.net, r => r.net, cnt)));
+  assert.ok(partial.length, 'в демо есть книга с частичным нетто');
   [1, -1].forEach(dir => {
     const keys = K.groupKeys([...by.keys()], k => by.get(k), [['net', dir]], col), tot = keys.map(k => K.groupTotal(by.get(k), CARRY.colSum.net, r => r.net));
-    const first = tot.findIndex(x => x == null);
-    assert.ok(first >= 0 && tot.slice(first).every(x => x == null), dir + ': ' + JSON.stringify(tot));
+    const first = tot.findIndex(x => x == null), known = first < 0 ? tot : tot.slice(0, first);
+    assert.ok(first < 0 || tot.slice(first).every(x => x == null), dir + ': «—» в конце: ' + JSON.stringify(tot));
+    assert.deepStrictEqual(known, known.slice().sort((a, b) => dir * (a - b)), dir + ': по посчитанной части: ' + JSON.stringify(tot));
+    partial.forEach(k => assert.ok(tot[keys.indexOf(k)] != null, k + ': частичная группа — с числом'));
   });
 });
 
@@ -271,9 +285,11 @@ t('#347: K.groupKeys — группа с итогом «—» последняя
 
 t('#347: K.table и C03 — один расчёт итога (K.groupTotal) для ячейки и сортировки групп, без «|| 0»', () => {
   const kit = P('lib/kit.js'), c03 = P('c03-blotter.html');
-  assert.ok(kit.includes("sum: c.sum ? (typeof c.sum === 'function' ? c.sum : r => val(c, r)) : null, nullable: !!c.nullable"), 'colOf K.table');
-  assert.ok(kit.includes('const tot = K.groupTotal(list, fn, c.nullable && (r => val(c, r)));'), 'sumCell K.table');
-  assert.ok(kit.includes('c.sum ? K.groupTotal(L, c.sum, c.nullable && c.val)'), 'K.groupKeys');
+  assert.ok(kit.includes("sum: c.sum ? (typeof c.sum === 'function' ? c.sum : r => val(c, r)) : null, nullable: !!c.nullable, cnt: opts.partRow"), 'colOf K.table');
+  // #335: K.groupSum — тот же итог (K.groupTotal = K.groupSum(...).v) и признак неполноты для пометки
+  assert.ok(kit.includes('const x = K.groupSum(list, fn, c.nullable && (r => val(c, r)), opts.partRow), tot = x.v;'), 'sumCell K.table');
+  assert.ok(kit.includes('K.groupTotal = (list, sum, nul, cnt) => K.groupSum(list, sum, nul, cnt).v;'), 'K.groupTotal');
+  assert.ok(kit.includes('c.sum ? K.groupTotal(L, c.sum, c.nullable && c.val, c.cnt)'), 'K.groupKeys');
   assert.ok(!/L\.reduce\(\(t, r\) => t \+ \(c\.sum\(r\) \|\| 0\)/.test(kit), 'старый расчёт групп убран');
   assert.ok(c03.includes('nullable: !!C[k].nullable') && c03.includes('const tot = K.groupTotal(list, c.sum, c.nullable && c.val);'), 'C03');
   assert.ok(!c03.includes('(c.sum(r) || 0)'), 'C03: копии расчёта нет');

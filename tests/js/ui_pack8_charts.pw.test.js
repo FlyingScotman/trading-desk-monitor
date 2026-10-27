@@ -11,7 +11,8 @@
 // - #352: подписи категорий горизонтальных баров различимы (разные категории — разные подписи, и в разборе по
 //   позициям — MV, PnL, DV01 — на 390), buy / sell / pay в сокращённой подписи остаются; при 1600 у подписей «Топ
 //   вклада» C06 сокращено не больше пояснения в скобках;
-// - #347: на C17 в демо итог «Нетто» таблицы позиций — «—» (у позиций с прогнозом нет фондирования, B1);
+// - #347, #335: на C17 в демо итог «Нетто» таблицы позиций — нетто посчитанных позиций с пометкой «без N из M поз.» (у
+//   позиций с прогнозом нет фондирования; до #335 — «—»);
 // - #349: на C09 подпись отрицательного столбца базиса — ниже его нижнего края и не ниже области столбцов,
 //   положительного — выше верхнего.
 // Ширины подписей зависят от шрифта: в CI шрифт закреплён (Inter, tests/js/fixtures/fonts.conf), проверки не
@@ -299,7 +300,8 @@ for (const [w, h] of SIZES) for (const theme of ['dark', 'light']) for (const re
       noOverlap(await texts(pg, '#curves'), 'C09 базис');
       await shot('c09');
 
-      // C17 (#347, B1): в демо у позиций с прогнозом нет фондирования — итог «Нетто» в таблице «—», а не число
+      // C17 (#347, #335): в демо у позиций с прогнозом нет фондирования — итог «Нетто» в таблице — число с пометкой
+      // «без N из M поз.» (вариант «а», решение владельца 27.10; до #335 — «—»)
       await open('c17-forward-carry.html', () => window.KIT && document.querySelector('table.k-tbl tfoot'));
       const foot = await pg.evaluate(() => {
         const t = [...document.querySelectorAll('table.k-tbl')].find(x => x.tFoot && [...x.tHead.rows[0].cells].some(c => c.textContent.trim().startsWith('Нетто')));
@@ -309,7 +311,7 @@ for (const [w, h] of SIZES) for (const theme of ['dark', 'light']) for (const re
         return { net: at('Нетто'), funding: at('Фондирование'), carry: at('Кэрри'), n: hc.length === fc.length };
       });
       assert.ok(foot && foot.n, 'C17: таблица позиций с итогом ' + JSON.stringify(foot));
-      assert.strictEqual(foot.net, '—', 'C17: итог «Нетто» ' + JSON.stringify(foot));
+      assert.ok(/\d/.test(foot.net) && /· без \d+ из \d+ поз\./.test(foot.net), 'C17: итог «Нетто» ' + JSON.stringify(foot));
       assert.ok(/\d/.test(foot.funding) && /\d/.test(foot.carry), 'C17: итоги «Кэрри» и «Фондирование» — числа ' + JSON.stringify(foot));
       assert.deepStrictEqual(errors, []);
     } finally {
