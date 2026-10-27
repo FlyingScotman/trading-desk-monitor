@@ -1,5 +1,5 @@
 // Мониторы (prototypes/concepts), пакет 8A: подпись столбца, которой нет места снаружи, — внутри столбца, контрастным
-// цветом (K.barFit, K.inkOn, #352); подписи категорий горизонтального бара не шире K.BAR_CAT_MAX, деления оси значений не
+// цветом (K.barFit, K.inkOn, #352); подписи категорий горизонтального бара сокращаются, только когда нужно, деления оси значений не
 // слипаются (hideOverlap, #351); C09 «базис ОФЗ − RUONIA» — подпись у конца столбца (K.barEnd), проверка ловит бары с
 // position 'right' и 'top' и многострочные описания (#349); группа с итогом «—» — последняя при любом направлении
 // сортировки (K.groupTotal, K.groupKeys, C03, #347). Геометрия в браузере — ui_pack8_charts.pw.test.js.
@@ -72,11 +72,18 @@ t('#352: K.barFit — подпись без места снаружи встаё
   });
   // крупнейшие по модулю подписаны (снаружи или внутри); спрятаны только короткие
   [-17.7, -16.2, 18.9, 15.2].forEach(v => assert.ok(by(v).show, v + ': ' + JSON.stringify(by(v))));
-  L.filter(x => !x.show).forEach(x => assert.ok(Math.abs(x.v) < 10, 'спрятан короткий ' + x.v));
-  assert.ok(L.some(x => !x.show), 'короткому столбцу места нет ни снаружи, ни внутри');
-  // место под подписи, ушедшие внутрь, не держим: ось уже, чем при «все снаружи» (K.BAR_FIT_MAX)
-  const o = fit(190, 200, vals, false, fmt, null, 4), gap = (o.xAxis.boundaryGap || ['0%', '0%']).map(parseFloat), span = 18.9 + 17.7;
-  assert.ok(span * (1 + (gap[0] + gap[1]) / 100) < span / (1 - K.BAR_FIT_MAX) - 1e-9, 'ось ' + gap);
+  // спрятана только подпись, которой нет места ни снаружи, ни внутри: по оси, какой она будет на экране (min / max),
+  // столбец короче подписи + K.BAR_IN_PAD. Узкий график (150 px) — такие есть
+  [190, 150].forEach(Wd => {
+    const o = fit(Wd, 200, vals, false, fmt, null, 4), room = Wd - 8 - K.labelWidth('кат 0', 10) - 8, ax = o.xAxis.max - o.xAxis.min;
+    assert.ok(o.xAxis.min <= -17.7 && o.xAxis.max >= 18.9, JSON.stringify([o.xAxis.min, o.xAxis.max]));
+    const hid = labs(o).filter(x => !x.show);
+    if (Wd === 150) assert.ok(hid.length > 0, 'на 150 px короткому столбцу места нет');
+    hid.forEach(x => assert.ok(Math.abs(x.v) / ax * room < K.labelWidth(fmt(x.v), 10) + K.BAR_IN_PAD, Wd + ' px: подпись ' + x.v + ' влезла бы внутрь'));
+  });
+  // место под подписи, ушедшие внутрь, не держим: ось уже, чем при «все снаружи» (K.BAR_FIT_MAX) с округлением
+  const o = fit(190, 200, vals, false, fmt, null, 4), span = 18.9 + 17.7;
+  assert.ok(o.xAxis.max - o.xAxis.min <= K.niceExtent(-17.7 - span * 0.4 / 0.6 * 0.5, 18.9 + span * 0.4 / 0.6 * 0.5)[1] - K.niceExtent(-17.7 - span * 0.4 / 0.6 * 0.5, 18.9 + span * 0.4 / 0.6 * 0.5)[0], 'ось ' + [o.xAxis.min, o.xAxis.max]);
   // вертикальный бар: внутрь — insideBottom у отрицательного
   const V = labs(fit(300, 100, [-40, -38, 3, 41], true, v => String(v), null, 4));
   assert.ok(V.some(x => /^inside/.test(x.pos || '')), JSON.stringify(V));
@@ -97,15 +104,21 @@ t('#352: подписи категорий обрезаются, только е
   const wide = fit(700, 200, vals, false, fmt, long);
   assert.strictEqual(wide.yAxis.axisLabel.formatter, undefined, 'широкий график — без обрезки');
   labs(wide).forEach(x => assert.ok(x.show && !/^inside/.test(x.pos), JSON.stringify(x)));
-  // узкая плитка: без обрезки подписям столбцов места нет — обрезаются до K.BAR_CAT_MAX, «…» в середине, различимы
+  // узкая плитка: без обрезки подписям столбцов места нет — сокращаются (не уже K.BAR_CAT_MAX ширины графика и не
+  // шире 90 % самой длинной), «…» в середине, различимы
   const o = fit(235, 200, vals, false, fmt, long), cap = Math.max(48, Math.round((235 - 4 - 46) * K.BAR_CAT_MAX));
+  const full = Math.max(...long.map(t => K.labelWidth(t, 10)));
   const fm = o.yAxis.axisLabel.formatter;
   assert.strictEqual(typeof fm, 'function', 'узкий график — обрезка');
   const shown = long.map((t, i) => fm(t, i));
-  shown.forEach((t, i) => assert.ok(K.labelWidth(t, 10) <= cap + 1e-9, t));
+  const top = Math.max(...shown.map(t => K.labelWidth(t, 10)));
+  assert.ok(top <= full * 0.9 + 1e-9 && top >= Math.min(cap, full) * 0.8, 'ширина подписей ' + top.toFixed(1) + ' (полная ' + full.toFixed(1) + ', предел ' + cap + ')');
   assert.strictEqual(new Set(shown).size, shown.length, 'обрезанные подписи различимы: ' + shown.join(' | '));
   assert.strictEqual(shown[4], 'XCCY', 'короткая — как есть');
-  assert.ok(shown[0].endsWith('buy (рынок)'.slice(-shown[0].split('…')[1].length)), 'хвост имени остаётся: ' + shown[0]);
+  // пояснение в скобках сокращается первым, направление сделки (buy / sell) остаётся
+  assert.ok(/buy/.test(shown[0]) && /sell/.test(shown[1]), 'buy / sell видны: ' + shown.join(' | '));
+  const P = K.fitLabels(['NDF USD/RUB 6M buy (расчёт в RUB)'], K.labelWidth('NDF USD/RUB 6M buy (ра…)', 10), 10)[0];
+  assert.strictEqual(P, 'NDF USD/RUB 6M buy (ра…)', P);
   // K.fitLabels: общие начало и конец — больше хвоста, пока подписи не станут различимы
   const L = ['Минфин РФ ОФЗ 26238', 'Минфин РФ ОФЗ 26248', 'Минфин РФ ОФЗ 26240', 'Газпром капитал ЗО27-1-Д', 'Газпром капитал ЗО27-2-Д'];
   [40, 60, 80].forEach(w => {
@@ -114,14 +127,21 @@ t('#352: подписи категорий обрезаются, только е
     F.forEach(t => assert.ok(K.labelWidth(t, 10) <= w && t.includes('…'), t));
   });
   assert.deepStrictEqual([...K.fitLabels(['ОФЗ', 'Сбер'], 80, 10)], ['ОФЗ', 'Сбер']);
+  // имена различаются в середине (разбор «по позициям», 390 px): видна различающаяся часть
+  const R = ['Россия-2042 USD (евробонд)', 'Россия-2043 USD (евробонд)', 'Россия-2047 USD (евробонд)', 'Минфин РФ ОФЗ 26238'];
+  [30, 45, 60, 80, 100].forEach(w => {
+    const F = K.fitLabels(R, w, 10);
+    assert.strictEqual(new Set(F).size, F.length, w + ' px: ' + F.join(' | '));
+    F.slice(0, 3).forEach((t, i) => assert.ok(t.includes(['2', '3', '7'][i]) && K.labelWidth(t, 10) <= Math.max(w, K.labelWidth('…' + R[i][10] + '…', 10)), w + ' px: ' + t));
+  });
 });
 
-t('#351: деления горизонтальной оси — шаг закреплён, подписи через равный шаг, ноль подписан', () => {
+t('#351: деления горизонтальной оси — шаг закреплён, подписи через равный шаг, ноль и обе стороны подписаны', () => {
   const fmt = v => '(' + Math.abs(v).toFixed(1) + ')', tick = v => (v < 0 ? '(' + Math.abs(v).toLocaleString('en-US') + ')' : v.toLocaleString('en-US'));
-  const cases = [[235, [-17.7, 18.9, 7, -3, 2]], [180, [-4000, 3000, 59, -200]], [390, [45317, 6477, 1735]], [220, [-0.22, 0.23, 0.14]], [600, [-2645, -147]]];
+  const cases = [[235, [-17.7, 18.9, 7, -3, 2]], [235, [-4658, 1500, 59, -200]], [260, [-4000, 3000, 59, -200]], [390, [45317, 6477, 1735]], [220, [-0.22, 0.23, 0.14]], [600, [-2645, -147]]];
   cases.forEach(([Wd, vals]) => {
     const o = { grid: { left: 4, right: 46, top: 18, bottom: 4 }, xAxis: { type: 'value', axisLabel: { formatter: tick } }, yAxis: { type: 'category', data: vals.map((_, i) => 'к' + i) },
-      series: [{ type: 'bar', data: vals.map(v => ({ value: v, label: K.barEnd(v) })), label: { show: Wd !== 180, fontSize: 10, formatter: p => fmt(p.value) } }] };
+      series: [{ type: 'bar', data: vals.map(v => ({ value: v, label: K.barEnd(v) })), label: { show: vals[0] !== -4000, fontSize: 10, formatter: p => fmt(p.value) } }] };
     K.barFit({ clientWidth: Wd, clientHeight: 200 }, o);
     const x = o.xAxis, s = Wd + ' ' + JSON.stringify(vals);
     assert.ok(x.interval > 0 && x.axisLabel.hideOverlap === true, s);
@@ -134,6 +154,9 @@ t('#351: деления горизонтальной оси — шаг закр�
     const lab = ticks.filter(v => x.axisLabel.formatter(v) !== '');
     assert.ok(lab.includes(0) && x.axisLabel.formatter(0) === '0', s + ': ноль подписан');
     assert.ok(lab.length >= 2, s + ': подписей ' + lab.join(','));
+    // ось по обе стороны нуля — подпись на каждой стороне (C06 «Кэрри» при 1024: не «0 6,000» при данных до −4 658)
+    if (x.min < 0) assert.ok(lab.some(v => v < 0), s + ': слева от нуля подписано ' + lab.join(','));
+    if (x.max > 0) assert.ok(lab.some(v => v > 0), s + ': справа от нуля подписано ' + lab.join(','));
     const d = lab.slice(1).map((v, i) => v - lab[i]);
     assert.ok(d.every(v => Math.abs(v - d[0]) < 1e-9 * Math.abs(d[0])), s + ': подписи через равный шаг ' + lab.join(','));
     // соседние подписи не ближе K.TICK_GAP px (ширина области — без подписей категорий)
