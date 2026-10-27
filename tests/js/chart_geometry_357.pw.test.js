@@ -109,6 +109,7 @@ for (const width of [1024, 390]) for (const scenario of basisCases) test(`#357 c
     assert.deepEqual(again.bars.map(b => b.label), g.bars.map(b => b.label), 'repeat layout keeps the same absolute positions');
     for (const bar of g.bars) {
       assert.ok(bar.label, 'basis value remains labelled');
+      assert.ok(Math.abs(bar.label.x + bar.label.width / 2 - bar.rect.x - bar.rect.width / 2) < 0.01, 'label stays horizontally centered on its bar');
       assert.ok(bar.label.x >= -1 && bar.label.x + bar.label.width <= g.width + 1 && bar.label.y >= -1, 'label stays within chart');
       assert.ok(bar.label.y + bar.label.height <= g.grid.y + g.grid.height + 1, 'shifted label clears bottom axis');
       for (const marker of g.markers) assert.ok(!overlaps(bar.label, marker.rect, 1), JSON.stringify({ bar, marker }));

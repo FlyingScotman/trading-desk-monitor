@@ -230,7 +230,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
           // Исходная bar-end позиция, без сдвига предыдущего layout (resize вызывает его повторно).
           const labelY = v < 0 ? end + 5 : end - 5 - height;
           if (labelY + height <= markerY - 5 || labelY >= markerY + 5) return {};
-          return { y: v < 0 ? markerY + 5 : markerY - 5, verticalAlign: v < 0 ? 'top' : 'bottom' };
+          return { y: v < 0 ? markerY + 5 : markerY - 5, align: 'center', verticalAlign: v < 0 ? 'top' : 'bottom' };
         } },
       { name: 'вчера', type: 'line', data: yesterday, color: K.css('--fg-3'), lineStyle: { type: 'dotted' }, symbolSize: 4 }],
     });
