@@ -643,24 +643,37 @@
   K.filter = filt;
   K.setFilter = (patch) => { Object.assign(filt, patch); try { localStorage.setItem('concepts-filter', JSON.stringify(filt)); } catch (e) { } fire('filter'); renderFilterChips(); };
   const portOf = p => p.portfolio || '—';
-  const PORTS = [...new Set(M.positions.map(portOf))].sort((a, b) => (a === '—') - (b === '—') || a.localeCompare(b, 'ru'));
+  let filterScope = M;
+  // A period report supplies its historical catalogue; ordinary monitors keep the current run's catalogue.
+  K.setFilterScope = scope => { filterScope = scope; renderFilterChips(); };
+  const portList = scope => [...new Set(scope.positions.map(portOf))].sort((a, b) => (a === '—') - (b === '—') || a.localeCompare(b, 'ru'));
+  const PORTS = portList(M);
   const portsOff = () => (filt.portsOff || []).filter(v => PORTS.includes(v));
   K.list = () => { const off = portsOff(); return M.positions.filter(p => (!filt.entity || p.entity === filt.entity) && (!filt.desk || p.desk === filt.desk) && (!filt.books || !filt.books.length || filt.books.includes(p.book)) && (!filt.ccy || p.ccy === filt.ccy) && (!off.length || !off.includes(portOf(p)))); };
   let chipsBox = null;
   // каскад: юрлицо → деск → книги; в каждом списке только варианты, совместимые с уже выбранным
-  const booksIn = () => M.books.filter(b => (!filt.entity || b.entity === filt.entity) && (!filt.desk || b.desk === filt.desk));
-  const nPos = {}, nPort = {}; M.positions.forEach(p => { nPos[p.book] = (nPos[p.book] || 0) + 1; nPort[portOf(p)] = (nPort[portOf(p)] || 0) + 1; });
+  const bookMemberships = (entity = filt.entity, desk = filt.desk) => filterScope.books.filter(b => (!entity || b.entity === entity) && (!desk || b.desk === desk));
+  const booksIn = () => [...new Map(bookMemberships().map(b => [b.id, b])).values()];
+  const bookCount = (entity, desk) => new Set(bookMemberships(entity, desk).map(b => b.id)).size;
   const portName = v => v === '—' ? 'без портфеля' : v;
   function renderFilterChips() {
     if (!chipsBox) return;
+    const M = filterScope, PORTS = portList(M), off = (filt.portsOff || []).filter(v => PORTS.includes(v));
+    const nPos = Object.create(null), nPort = Object.create(null), seenPos = new Set(), seenPort = new Set();
+    M.positions.forEach(p => {
+      if ((filt.entity && p.entity !== filt.entity) || (filt.desk && p.desk !== filt.desk)) return;
+      const id = JSON.stringify([p.book, p.id]), port = JSON.stringify([p.book, p.id, portOf(p)]);
+      if (!seenPos.has(id)) { nPos[p.book] = (nPos[p.book] || 0) + 1; seenPos.add(id); }
+      if (!seenPort.has(port)) { nPort[portOf(p)] = (nPort[portOf(p)] || 0) + 1; seenPort.add(port); }
+    });
     const ent = M.entities;
     const desks = [...new Set(M.books.filter(b => !filt.entity || b.entity === filt.entity).map(b => b.desk))];
-    const lbl = filt.books && filt.books.length ? (filt.books.length === 1 ? M.book[filt.books[0]].name : filt.books.length + ' книг') : 'все книги · ' + booksIn().length;
+    const lbl = filt.books && filt.books.length ? (filt.books.length === 1 ? (M.book[filt.books[0]]?.name || filt.books[0]) : filt.books.length + ' книг') : 'все книги · ' + booksIn().length;
     // чип портфелей — когда адаптер их передал (x_portfolio); у прогона без колонки все позиции «без портфеля»
-    const off = portsOff(), showPorts = PORTS.some(v => v !== '—');
+    const showPorts = PORTS.some(v => v !== '—');
     const plbl = !off.length ? 'все портфели' : off.length === 1 ? 'без ' + portName(off[0]) : 'портфели: ' + (PORTS.length - off.length) + ' из ' + PORTS.length;
     chipsBox.innerHTML =
-      '<span class="k-chip' + (filt.entity ? ' on' : '') + '" data-f="entity">' + (filt.entity ? esc(ent.find(e => e.id === filt.entity).name) : 'все юрлица') + ' ▾</span>' +
+      '<span class="k-chip' + (filt.entity ? ' on' : '') + '" data-f="entity">' + (filt.entity ? esc(ent.find(e => e.id === filt.entity)?.name || filt.entity) : 'все юрлица') + ' ▾</span>' +
       '<span class="k-chip' + (filt.desk ? ' on' : '') + '" data-f="desk">' + (filt.desk ? esc(filt.desk) : 'все дески') + ' ▾</span>' +
       '<span class="k-chip' + (filt.books && filt.books.length ? ' on' : '') + '" data-f="books">' + esc(lbl) + ' ▾</span>' +
       (showPorts ? '<span class="k-chip' + (off.length ? ' on' : '') + '" data-f="ports" title="Портфель — колонка Portfolio отчёта о позициях">' + esc(plbl) + ' ▾</span>' : '') +
@@ -676,9 +689,14 @@
         }, 'ports');
         return ev.stopPropagation();
       }
-      const items = k === 'entity' ? [{ v: null, t: 'все юрлица' }].concat(ent.map(e => ({ v: e.id, t: e.name, sub: M.books.filter(b => b.entity === e.id).length + ' книг' })))
-        : k === 'desk' ? [{ v: null, t: 'все дески' }].concat(desks.map(d => ({ v: d, t: d, sub: M.books.filter(b => b.desk === d && (!filt.entity || b.entity === filt.entity)).length + ' книг' })))
-          : booksIn().map(b => ({ v: b.id, t: b.name, sub: b.id + ' · ' + b.desk + (filt.entity ? '' : ' · ' + M.entities.find(e => e.id === b.entity).name) + ' · ' + (nPos[b.id] || 0) + ' поз', multi: true, empty: !nPos[b.id] }));
+      const items = k === 'entity' ? [{ v: null, t: 'все юрлица' }].concat(ent.map(e => ({ v: e.id, t: e.name, sub: bookCount(e.id, null) + ' книг' })))
+        : k === 'desk' ? [{ v: null, t: 'все дески' }].concat(desks.map(d => ({ v: d, t: d, sub: bookCount(filt.entity, d) + ' книг' })))
+          : booksIn().map(b => {
+            const memberships = bookMemberships().filter(x => x.id === b.id);
+            const desks = [...new Set(memberships.map(x => x.desk))].join(', ');
+            const entities = [...new Set(memberships.map(x => M.entities.find(e => e.id === x.entity).name))].join(', ');
+            return { v: b.id, t: b.name, sub: b.id + ' · ' + desks + (filt.entity ? '' : ' · ' + entities) + ' · ' + (nPos[b.id] || 0) + ' поз', multi: true, empty: !nPos[b.id] };
+          });
       menu(ch, items, k === 'books' ? (filt.books || []) : filt[k], v => {
         if (k === 'books') { const s = new Set(filt.books || []); s.has(v) ? s.delete(v) : s.add(v); K.setFilter({ books: [...s] }); }
         else {
