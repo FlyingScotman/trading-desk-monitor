@@ -1,6 +1,6 @@
 // Integration against the synthetic saved-run server seeded by test_pnl_history.seed_history.
 // PNL_HISTORY_BASE=http://127.0.0.1:<port> node --test tests/js/pnl_history.pw.test.js
-// No API replacement: delayed requests below still reach the real endpoint.
+// Main report scenarios use the real API; the cancellation scenario explicitly uses controlled tiny responses.
 'use strict';
 const test = require('node:test'), assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path');
 const pw = (() => { try { return require('playwright'); } catch (_) { return null; } })();
@@ -258,4 +258,146 @@ test('ordinary current-run KIT menus keep unique books, counts and cascade', { s
     assert.equal(await p.evaluate(() => KIT.list().length), await p.evaluate(() => MOCK.positions.length));
     assert.deepEqual(errors, []);
   } finally { await b.close(); }
+});
+
+test('period limit feedback matches API bound without sending invalid requests', { skip: !pw || !BASE, timeout: 30000 }, async () => {
+  const b = await pw.chromium.launch(), p = await b.newPage();
+  try {
+    await p.goto(BASE + '/concepts/c19-pnl-history.html');
+    await p.waitForSelector('#days tbody tr');
+    let requests = 0;
+    p.on('request', r => { if (r.url().includes('/api/v1/history/pnl?')) requests++; });
+    const setFrom = async value => { await p.locator('#from').fill(value); await p.locator('#from').dispatchEvent('change'); };
+    for (const start of ['2023-10-16', '0001-01-01']) {
+      await setFrom(start);
+      assert.match(await p.locator('#status').innerText(), /1096.*включительно/);
+      assert.equal(await p.locator('#result').isVisible(), false);
+    }
+    assert.equal(requests, 0);
+    for (const [start, size] of [['2023-10-17', 1096], ['2026-01-01', 289]]) {
+      const response = p.waitForResponse(isSummary); await setFrom(start);
+      const d = await (await response).json();
+      assert.equal(d.days.length, size);
+      assert.ok(d.days.some(x => x.date === '2026-10-14' && x.total === null));
+      await p.waitForSelector('#days tbody tr');
+      await p.waitForFunction(() => !document.querySelector('#result').hidden && document.querySelector('#status').textContent === '');
+    }
+    if (SHOTS) {
+      await setFrom('2023-10-16');
+      await p.screenshot({ path: path.join(SHOTS, 'pnl-history-period-limit.png'), fullPage: true });
+    }
+  } finally { await b.close(); }
+});
+
+test('nine-character search burst issues one summary and one detail request', { skip: !pw || !BASE, timeout: 30000 }, async t => {
+  const b = await pw.chromium.launch(), p = await b.newPage();
+  try {
+    await p.goto(BASE + '/concepts/c19-pnl-history.html');
+    await p.waitForSelector('#days tbody tr');
+    const queries = [];
+    p.on('request', r => { if (r.url().includes('/api/v1/history/pnl?')) queries.push(new URL(r.url()).searchParams); });
+    await p.locator('#search').pressSequentially('Synthetic', { delay: 25 });
+    await p.waitForTimeout(750);
+    await p.waitForSelector('#days tbody tr');
+    assert.equal(queries.filter(q => !q.has('position_id')).length, 1);
+    assert.equal(queries.filter(q => q.has('position_id')).length, 1);
+    assert.ok(queries.every(q => q.get('q') === 'Synthetic'));
+    assert.equal(await p.locator('#search').inputValue(), 'Synthetic');
+    assert.equal(await p.locator('#status').innerText(), '');
+    t.diagnostic(JSON.stringify({ characters: 9, summaryRequests: queries.filter(q => !q.has('position_id')).length,
+      detailRequests: queries.filter(q => q.has('position_id')).length, finalSearch: 'Synthetic' }));
+  } finally { await b.close(); }
+});
+
+test('main/detail fetch aborts superseded requests, keeps final selection and latest errors', { skip: !pw || !BASE, timeout: 30000 }, async t => {
+  const b = await pw.chromium.launch(), p = await b.newPage(), failures = [], errors = [];
+  p.on('requestfailed', r => { if (r.url().includes('/api/v1/history/pnl?')) failures.push({ url: r.url(), error: r.failure()?.errorText }); });
+  p.on('pageerror', e => errors.push(e.message));
+  await p.addInitScript(() => {
+    const original = window.fetch;
+    window.pnlSignals = [];
+    window.fetch = (input, options) => {
+      if (String(input).includes('/history/pnl?')) {
+        const record = { url: String(input), hasSignal: !!options?.signal, aborted: false };
+        window.pnlSignals.push(record);
+        options?.signal?.addEventListener('abort', () => { record.aborted = true; });
+      }
+      return original(input, options);
+    };
+  });
+  const held = [];
+  try {
+    const response = p.waitForResponse(isSummary);
+    await p.goto(BASE + '/concepts/c19-pnl-history.html');
+    const base = await (await response).json();
+    await p.waitForSelector('#days tbody tr');
+    const details = {};
+    for (const position of base.positions) {
+      const q = new URLSearchParams({ from: base.from, to: base.to, position_book: position.row.book, position_id: position.row.positionId });
+      details[position.row.positionId] = await (await p.request.get(BASE + '/api/v1/history/pnl?' + q)).json();
+    }
+    let holdDetail = false, detailFailure = false;
+    await p.route('**/api/v1/history/pnl?**', async route => {
+      const q = new URL(route.request().url()).searchParams;
+      const id = q.get('position_id'), search = q.get('q');
+      if ((!id && search === 'Synthetic A') || (id === 'CLOSED' && holdDetail)) {
+        await new Promise(resolve => held.push({ resolve, id, search }));
+      }
+      // Controlled tiny responses test client cancellation; production API is untouched.
+      try {
+        if (search === 'failure' || (id && detailFailure)) await route.fulfill({ status: 500, body: '{}' });
+        else await route.fulfill({ json: id ? details[id] : { ...base, summary: { ...base.summary,
+          total: search === 'Synthetic A' ? 1 : search === 'Synthetic B' ? 2 : 3 } } });
+      } catch (e) { if (!route.request().failure()) throw e; }
+    });
+    await p.locator('#search').fill('Synthetic A');
+    await p.waitForTimeout(500);
+    assert.ok(held.some(h => h.search === 'Synthetic A' && !h.id));
+    await p.locator('#search').fill('Synthetic B');
+    await p.waitForTimeout(500);
+    await p.waitForSelector('#days tbody tr');
+    let signals = await p.evaluate(() => window.pnlSignals);
+    assert.ok(signals.some(r => r.url.includes('q=Synthetic+A') && r.aborted));
+    assert.ok(signals.every(r => r.hasSignal));
+    held.splice(0).forEach(h => h.resolve());
+    await p.waitForTimeout(100);
+    assert.equal(await p.locator('#search').inputValue(), 'Synthetic B');
+    assert.equal(await p.locator('#status').innerText(), '');
+    assert.ok((await p.locator('#total').innerText()).includes(await p.evaluate(() => KIT.f.n(2, 2))));
+    holdDetail = true;
+    await p.locator('#positions [data-position]').filter({ hasText: 'Synthetic CLOSED' }).click();
+    await p.waitForTimeout(100);
+    assert.ok(held.some(h => h.id === 'CLOSED'));
+    await p.locator('#positions [data-position]').filter({ hasText: 'Synthetic B' }).click();
+    await p.waitForSelector('#days tbody tr');
+    signals = await p.evaluate(() => window.pnlSignals);
+    assert.ok(signals.some(r => r.url.includes('position_id=CLOSED') && r.aborted));
+    held.splice(0).forEach(h => h.resolve());
+    await p.waitForTimeout(100);
+    assert.match(await p.locator('#detailName').innerText(), /Synthetic B/);
+    assert.ok((await p.locator('#days').innerText()).includes('desk-flash-v1'));
+    const cancelledMain = failures.filter(r => r.url.includes('q=Synthetic+A') && r.error === 'net::ERR_ABORTED');
+    const cancelledDetail = failures.filter(r => r.url.includes('position_id=CLOSED') && r.error === 'net::ERR_ABORTED');
+    assert.equal(cancelledMain.length, 1);
+    assert.equal(cancelledDetail.length, 1);
+    await p.locator('#search').fill('failure');
+    await p.waitForFunction(() => document.querySelector('#status').textContent.includes('HTTP 500'));
+    assert.equal(await p.locator('#result').isVisible(), false);
+    await p.locator('#search').fill('Synthetic');
+    await p.waitForSelector('#days tbody tr');
+    await p.waitForFunction(() => !document.querySelector('#result').hidden && document.querySelector('#status').textContent === '');
+    assert.equal(await p.locator('#search').inputValue(), 'Synthetic');
+    assert.ok((await p.locator('#total').innerText()).includes(await p.evaluate(() => KIT.f.n(3, 2))));
+    detailFailure = true;
+    await p.locator('#positions [data-position]').filter({ hasText: 'Synthetic B' }).click();
+    await p.waitForFunction(() => document.querySelector('#days').textContent.includes('HTTP 500'));
+    detailFailure = false;
+    await p.locator('#positions [data-position]').filter({ hasText: 'Synthetic A' }).click();
+    await p.waitForSelector('#days tbody tr');
+    assert.match(await p.locator('#detailName').innerText(), /Synthetic A/);
+    t.diagnostic(JSON.stringify({ abortedMainRequests: cancelledMain.length, abortedDetailRequests: cancelledDetail.length,
+      transportError: 'net::ERR_ABORTED', finalSearch: 'Synthetic', finalPosition: 'Synthetic A', latestErrorsAndRecovery: true }));
+    assert.deepEqual(errors, []);
+    if (SHOTS) await p.screenshot({ path: path.join(SHOTS, 'pnl-history-search-final.png'), fullPage: true });
+  } finally { held.forEach(h => h.resolve()); await b.close(); }
 });

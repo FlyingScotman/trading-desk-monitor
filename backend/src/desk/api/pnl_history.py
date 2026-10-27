@@ -20,6 +20,7 @@ from .runs import PNL_KEYS, run_slice
 
 KEYS = (*PNL_KEYS, "reported")
 GROSS_KEYS = tuple(k for k in PNL_KEYS if k not in ("funding", "fx_funding"))
+MAX_PERIOD_DAYS = 1096
 
 
 def amounts(pnl: dict[str, Any] | None) -> dict[str, Any]:

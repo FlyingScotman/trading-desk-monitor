@@ -6,7 +6,7 @@
   K.top({ title: 'C19 · История PnL', tag: 'сохранённые результаты · RUB' });
   const keys = H.factors.map(f => f[0]), labels = Object.fromEntries(H.factors.map(f => [f[0], f[1]]));
   const st = { from: MOCK.asOf.slice(0, 7) + '-01', to: MOCK.asOf, components: keys.slice(), assetClass: '', issuer: '', q: '', mode: 'cumulative', position: null };
-  let data = null, detail = null, catalogue = [], cataloguePeriod = null, chart = null, positionChart = null;
+  let data = null, detail = null, catalogue = [], cataloguePeriod = null, chart = null, positionChart = null, searchTimer = null;
   const fmt = v => v == null ? '—' : K.f.n(v, 2), signed = v => '<span class="' + K.f.cls(v) + '">' + fmt(v) + '</span>';
   const partial = x => x.rowCount ? (x.rowCount + ' зап.' + (x.noTotal ? ' · без итога ' + x.noTotal : '') + (x.partialRows ? ' · неполных ' + x.partialRows : '')) : 'нет записей';
   function query(position) {
@@ -19,8 +19,8 @@
     if (position) { q.set('position_book', position.book); q.set('position_id', position.positionId); }
     return q;
   }
-  async function fetchReport(q) {
-    const r = await fetch('../api/v1/history/pnl?' + q, { cache: 'no-store' });
+  async function fetchReport(q, signal) {
+    const r = await fetch('../api/v1/history/pnl?' + q, { cache: 'no-store', signal });
     if (!r.ok) throw new Error(r.status === 401 ? 'Сессия закончилась. Войдите снова.' : 'История не загружена (HTTP ' + r.status + ').');
     return r.json();
   }
@@ -44,12 +44,16 @@
       draw();
     }
   });
+  function invalidateResults() {
+    load.invalidate(); detailLoad.invalidate(); data = detail = null; $('result').hidden = true;
+    if (chart) chart.dispose(); chart = null; disposePositionChart();
+  }
   function refresh() {
+    clearTimeout(searchTimer);
     if (K.source !== 'real') return;
-    if (!st.from || !st.to || st.from > st.to || st.to > MOCK.asOf) {
-      load.invalidate(); detailLoad.invalidate(); data = detail = null; $('result').hidden = true;
-      if (chart) chart.dispose(); chart = null; disposePositionChart();
-      $('status').textContent = 'Выберите начало ≤ конец ≤ дата выбранного прогона (' + MOCK.asOf + ').'; return;
+    const error = H.periodError(st.from, st.to, MOCK.asOf);
+    if (error) {
+      invalidateResults(); $('status').textContent = error; return;
     }
     load(query());
   }
@@ -67,7 +71,13 @@
   }
   $('ccy').onchange = () => K.setFilter({ ccy: $('ccy').value || null });
   for (const id of ['assetClass', 'issuer']) $(id).onchange = () => { st[id] = $(id).value; refresh(); };
-  $('search').oninput = () => { st.q = $('search').value; refresh(); };
+  $('search').oninput = () => {
+    st.q = $('search').value;
+    if (K.source !== 'real') return;
+    clearTimeout(searchTimer); invalidateResults();
+    $('status').textContent = 'Загружаю выбранный период и фильтры…';
+    searchTimer = setTimeout(refresh, 350);
+  };
   $('reset').onclick = () => { st.assetClass = st.issuer = st.q = ''; $('search').value = ''; fillOptions(); K.setFilter({ entity: null, desk: null, books: null, ccy: null, portsOff: null }); };
   $('allFactors').onclick = () => { st.components = keys.slice(); refresh(); };
   $('noFactors').onclick = () => { st.components = []; refresh(); };

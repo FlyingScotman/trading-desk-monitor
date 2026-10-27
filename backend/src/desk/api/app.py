@@ -838,10 +838,15 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
                              asset_class: str | None = None, issuer: str | None = None, q: str | None = None,
                              catalogue: bool = True, position_book: str | None = None,
                              position_id: str | None = None):
+        if from_ > to:
+            raise ApiError(422, "invalid_parameter", "Expected from <= to <= selected run date")
+        if (to - from_).days + 1 > pnl_history.MAX_PERIOD_DAYS:
+            raise ApiError(422, "invalid_parameter",
+                           f"Period must not exceed {pnl_history.MAX_PERIOD_DAYS} calendar days inclusive")
         run = resolve_run(con, as_of, run_id)
         if run is None:
             raise ApiError(404, "not_found", "No complete run for the selected history")
-        if from_ > to or to > run["business_date"]:
+        if to > run["business_date"]:
             raise ApiError(422, "invalid_parameter", "Expected from <= to <= selected run date")
         selected = list(dict.fromkeys(k for k in components.split(",") if k))
         if set(selected) - set(pnl_history.KEYS) or (position_id is None) != (position_book is None):

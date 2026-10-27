@@ -2,6 +2,34 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const H = require('../../prototypes/concepts/lib/pnl-history.js');
 
+test('period bound is inclusive, validates dates and preserves ordinary/leap years', () => {
+  const limit = /1096/;
+  assert.equal(H.periodError('2023-10-17', '2026-10-16', '2026-10-16'), null);
+  assert.match(H.periodError('2023-10-16', '2026-10-16', '2026-10-16'), limit);
+  assert.match(H.periodError('0001-01-01', '2026-10-16', '2026-10-16'), limit);
+  for (const [start, end] of [['2024-01-01', '2024-12-31'], ['2025-01-01', '2025-12-31'],
+    ['0001-01-01', '0001-01-02'], ['2024-02-29', '2024-02-29']]) assert.equal(H.periodError(start, end, '2026-10-16'), null);
+  for (const [start, end] of [['invalid', '2026-10-16'], ['', '2026-10-16'], ['0000-01-01', '0001-01-01'], ['2025-02-29', '2026-10-16'],
+    ['2026-10-17', '2026-10-16'], ['2026-10-16', '2026-10-17']]) assert.ok(H.periodError(start, end, '2026-10-16'));
+});
+
+test('loader aborts superseded main/detail transport and retains latest success/error guards', async () => {
+  const queue = [], states = [];
+  const load = H.loader((q, signal) => new Promise((resolve, reject) => queue.push({ q, signal, resolve, reject })), s => states.push(s));
+  const first = load('old'), second = load('new');
+  assert.equal(queue[0].signal.aborted, true);
+  assert.equal(queue[1].signal.aborted, false);
+  queue[0].reject(new DOMException('cancelled', 'AbortError'));
+  queue[1].resolve({ total: 2 }); await Promise.all([first, second]);
+  assert.deepEqual(states.at(-1), { data: { total: 2 } });
+  const detail = load('detail'); load.invalidate();
+  assert.equal(queue[2].signal.aborted, true);
+  queue[2].resolve({ stale: true }); await detail;
+  assert.deepEqual(states.at(-1), { loading: true });
+  const latest = load('error'); queue[3].reject(new Error('latest error')); await latest;
+  assert.equal(states.at(-1).error.message, 'latest error');
+});
+
 test('only newest response publishes; invalidation also suppresses stale detail and stale errors', async () => {
   const queue = [], states = [];
   const load = H.loader(q => new Promise((resolve, reject) => queue.push({ q, resolve, reject })), s => states.push(s));
