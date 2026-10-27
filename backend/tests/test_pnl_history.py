@@ -1,6 +1,7 @@
 """Saved history on synthetic positions only; precision, gaps, historical identity and filter parity."""
 from __future__ import annotations
 
+import importlib
 import math
 from datetime import date, timedelta
 
@@ -146,6 +147,53 @@ def get(client, **kw):
     assert response.status_code == 200, response.text
     assert response.headers["cache-control"] == "no-store"
     return response.json()
+
+
+@pytest.mark.parametrize("start,end", [
+    ("2023-10-16", "2026-10-16"),  # 1097 inclusive, includes leap day
+    ("0001-01-01", "2026-10-16"),
+    ("2026-10-16", "2026-10-15"),
+    ("invalid", "2026-10-16"),
+    ("2025-02-29", "2026-10-16"),
+])
+def test_invalid_period_rejected_before_run_resolution(history_client, monkeypatch, start, end):
+    c, _ = history_client
+    app_module = importlib.import_module("desk.api.app")
+
+    def heavy_path(*args, **kwargs):
+        pytest.fail("invalid period reached run resolution or report scan")
+
+    monkeypatch.setattr(app_module, "resolve_run", heavy_path)
+    monkeypatch.setattr(app_module.pnl_history, "report", heavy_path)
+    response = c.get('/api/v1/history/pnl', params={"from": start, "to": end})
+    assert response.status_code == 422
+    if start in {"2023-10-16", "0001-01-01"}:
+        assert "1096" in response.text
+
+
+def test_bounded_periods_leap_year_and_future(history_client, monkeypatch):
+    c, _ = history_client
+    app_module = importlib.import_module("desk.api.app")
+    calls = []
+
+    def bounded_report(con, run, start, end, *args):
+        calls.append((start, end))
+        return {"days": summarize(iter([]), start, end, ["carry"])["days"]}
+
+    monkeypatch.setattr(app_module.pnl_history, "report", bounded_report)
+    for start, end, size in [("2023-10-17", "2026-10-16", 1096),
+                             ("2024-01-01", "2024-12-31", 366),
+                             ("2025-01-01", "2025-12-31", 365),
+                             ("2024-02-29", "2024-02-29", 1),
+                             ("0001-01-01", "0001-01-02", 2)]:
+        response = c.get('/api/v1/history/pnl', params={"from": start, "to": end})
+        assert response.status_code == 200, response.text
+        days = response.json()["days"]
+        assert len(days) == size and days[0]["date"] == start and days[-1]["date"] == end
+        assert all(d["total"] is None and d["cumulative"] is None for d in days)
+    assert len(calls) == 5
+    response = c.get('/api/v1/history/pnl', params={"from": "2026-10-16", "to": "2026-10-17"})
+    assert response.status_code == 422 and len(calls) == 5
 
 
 def test_report_history_and_filters(history_client):
