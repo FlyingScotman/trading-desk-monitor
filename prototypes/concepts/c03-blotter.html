@@ -169,12 +169,11 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   const cols = () => (PRESETS.find(p => p[0] === st.preset) || PRESETS[0])[2].map(k => Object.assign({ key: k }, C[k]));
 
   // ---------- группировки ----------
-  const CCYN = { RUB: 'Рубли', USD: 'Доллары', EUR: 'Евро', CNY: 'Юани' };
   const TBO = ['< 6м', '6м–1г', '1–2г', '2–3г', '3–5г', '5–7г', '7–10г', '10г+'];
   // без купона (не облигация и не дериватив, #325) — по виду позиции
   const fixFloat = r => { const t = K.cpnType(r); return M.deal(r) || !t ? M.kindShort[r.kind] || 'Прочее' : t === 'float' ? 'Флоатеры' : t === 'linker' ? 'Линкеры' : 'Фикс'; };
   const FFO = ['Фикс', 'Флоатеры', 'Линкеры'];
-  const lvCcy = { key: r => r.ccy, label: k => K.ccyTag(k) + ' ' + CCYN[k], order: (a, b) => M.ccyOrder[a] - M.ccyOrder[b], color: k => K.ccyColor(k) };
+  const lvCcy = { key: r => r.ccy, label: k => K.ccyTag(k) + (K.ccyName(k) === k ? '' : ' ' + esc(K.ccyName(k))), order: (a, b) => M.ccyOrder[a] - M.ccyOrder[b], color: k => K.ccyColor(k) };
   const GROUPS = {
     ccy: [lvCcy,
       { key: r => M.deal(r) ? M.dealName(r) : r.issuerName, label: (k, rows) => esc(k) + (M.deal(rows[0]) ? ' <span class="mut3" style="font-weight:400">по контрагентам</span>' : '') + (rows[0].rating && rows[0].rating !== '—' ? ' <span class="mut3" style="font-weight:400">' + esc(rows[0].rating) + '</span>' : ''), order: K.issuerOrder, color: (k, rows) => K.issuerColor(rows[0].issuer) },

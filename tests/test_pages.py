@@ -57,7 +57,7 @@ class Pages(unittest.TestCase):
         src = (PROTO / "concepts" / "c16-ocp.html").read_text(encoding="utf-8")
         self.assertIn("'../api/v1/runs/' + encodeURIComponent(M.run.id) + '/ocp'", src)
         self.assertIn("const server = K.source === 'real'", src)
-        self.assertIn("['c16-ocp', 'C16', 'ОВП'", (PROTO / "concepts" / "index.html").read_text(encoding="utf-8"))
+        self.assertIn("['c16-ocp', 'C16', 'ОВП'", (PROTO / "concepts" / "catalog.js").read_text(encoding="utf-8"))
         self.assertTrue((PROTO / "concepts" / "thumbs" / "c16-ocp.jpg").is_file())
 
     def test_monitor_tables_sort_groups_like_ordinary_fields(self):

@@ -34,7 +34,7 @@
   // Основной набор — мониторы (concepts/). Устаревший scenario-lab.html в строке не показан, открывается только по
   // прямому адресу (README.md, «Устаревшие экраны»).
   var PAGES = [
-    ['concepts/index.html', 'Мониторы', '13 мониторов на реальных данных: кокпит, риски, позиции, PnL, календари, рынок, история'],
+    ['concepts/index.html', 'Мониторы', 'Мониторы на реальных данных: кокпит, риски, позиции, PnL, календари, рынок, история'],
     ['app/', 'Сценарии (точно)', 'Тейлор и точная переоценка на сервере'],
     ['settings.html', 'Настройки', 'Хаб, папки отчётов, адаптер, автопилот']
   ];
@@ -45,11 +45,15 @@
     PARAMS.forEach(function (k) { var v = u.searchParams.get(k); if (v) s[k] = v; });
     return s;
   }
-  function stored() {
+  function saved() {
     try {
-      var s = JSON.parse(localStorage.getItem(KEY) || 'null');
-      if (s && s.sel && Date.now() - s.at < TTL) return s.sel;
+      return JSON.parse(localStorage.getItem(KEY) || 'null');
     } catch (e) {}
+    return null;
+  }
+  function stored() {
+    var s = saved();
+    if (s && s.sel && Date.now() - s.at < TTL) return s.sel;
     return {};
   }
   function remember(sel) {
@@ -67,12 +71,16 @@
 
   var sel = http ? fromUrl() : {};
   if (http) {
-    if (Object.keys(sel).length) remember(sel);
-    else if (Object.keys(sel = stored()).length) history.replaceState(history.state, '', withSel(location.href, sel));
+    if (!Object.keys(sel).length && Object.keys(sel = stored()).length) history.replaceState(history.state, '', withSel(location.href, sel));
   }
   var pinned = Object.keys(sel).length > 0;
 
-  function href(page) { return http ? withSel(root + page, sel) : root + page; }
+  function href(page) {
+    var s = saved(), next = sel;
+    // Точный URL открывается как задан; внутренние переходы больше не несут истёкший сохранённый выбор.
+    if (s && s.sel && Date.now() - s.at >= TTL && PARAMS.every(function (k) { return sel[k] === s.sel[k]; })) next = {};
+    return http ? withSel(root + page, next) : root + page;
+  }
   function select(next) { remember(next); location.href = withSel(location.href, next); }
   window.DESK_NAV = { sel: sel, pinned: pinned, href: href, select: select };
 
@@ -141,15 +149,30 @@
 
   var nav = el('nav', { id: 'desk-nav', 'aria-label': 'Страницы деска' });
   var links = el('div', { 'class': 'dn-links' }), st = el('div', { 'class': 'dn-st' });
+  function bindLink(a, page) {
+    // Вкладка могла оставаться открытой до истечения TTL: проверяем снова в момент перехода.
+    ['click', 'auxclick'].forEach(function (event) { a.addEventListener(event, function () { a.href = href(page); }); });
+  }
   var home = el('a', { href: href('index.html'), 'class': 'dn-home', title: 'Главная: страницы и последние прогоны' }, 'TDM');
+  bindLink(home, 'index.html');
   if (here === 'index.html') home.setAttribute('aria-current', 'page');
   links.appendChild(home);
+  var monitors;
   PAGES.forEach(function (p) {
     if (p[0] === 'app/' && !http) return;  // React-приложение есть только на сервере
     var a = el('a', { href: href(p[0]), title: p[2] }, p[1]);
+    bindLink(a, p[0]);
+    if (p[0] === 'concepts/index.html') monitors = a;
     if (p[0] === here) a.setAttribute('aria-current', 'page');
     links.appendChild(a);
   });
+  var catalog = el('script', { src: root + 'concepts/catalog.js' });
+  catalog.onload = function () {
+    monitors.title = window.DESK_MONITORS.length + ' мониторов на реальных данных: кокпит, риски, позиции, PnL, календари, рынок, история';
+    var count = document.getElementById('monitor-count');
+    if (count) count.textContent = window.DESK_MONITORS.length;
+  };
+  document.head.appendChild(catalog);
   nav.appendChild(links);
   nav.appendChild(st);
 
