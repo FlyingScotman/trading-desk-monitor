@@ -40,7 +40,7 @@ from ..scenario.taylor import risk_payload
 from ..settings import REPO_ROOT
 from ..store import CURRENT_RUNS, slice_label
 from . import auth as authn
-from . import compat, concepts, concepts_run
+from . import compat, concepts, concepts_run, pnl_history
 from .autopilot_routes import router as autopilot_router
 from .models import (
     COMPAT,
@@ -827,6 +827,35 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
                                    "application/json", app.state.carry_cache)
         except SnapshotError as e:
             raise ApiError(404, "not_found", f"the run's snapshots are not in the cache: {e}") from None
+
+    @app.get("/api/v1/history/pnl", include_in_schema=False)
+    def position_pnl_history(con: Con, from_: Annotated[date, Query(alias="from")], to: date,
+                             run_id: int | None = None, as_of: date | None = None,
+                             components: str = ",".join(pnl_history.KEYS),
+                             books: Annotated[list[str] | None, Query()] = None,
+                             ports_off: Annotated[list[str] | None, Query()] = None,
+                             entity: str | None = None, desk: str | None = None, ccy: str | None = None,
+                             asset_class: str | None = None, issuer: str | None = None, q: str | None = None,
+                             catalogue: bool = True, position_book: str | None = None,
+                             position_id: str | None = None):
+        if from_ > to:
+            raise ApiError(422, "invalid_parameter", "Expected from <= to <= selected run date")
+        if (to - from_).days + 1 > pnl_history.MAX_PERIOD_DAYS:
+            raise ApiError(422, "invalid_parameter",
+                           f"Period must not exceed {pnl_history.MAX_PERIOD_DAYS} calendar days inclusive")
+        run = resolve_run(con, as_of, run_id)
+        if run is None:
+            raise ApiError(404, "not_found", "No complete run for the selected history")
+        if to > run["business_date"]:
+            raise ApiError(422, "invalid_parameter", "Expected from <= to <= selected run date")
+        selected = list(dict.fromkeys(k for k in components.split(",") if k))
+        if set(selected) - set(pnl_history.KEYS) or (position_id is None) != (position_book is None):
+            raise ApiError(422, "invalid_parameter", "Unknown component or incomplete position identity")
+        filters = {"books": books, "portsOff": ports_off, "entity": entity, "desk": desk, "ccy": ccy,
+                   "assetClass": asset_class, "issuer": issuer, "q": q}
+        position = (position_book, position_id) if position_id is not None else None
+        return JSONResponse(jsonable_encoder(pnl_history.report(con, run, from_, to, selected, filters,
+                                                               catalogue, position)), headers=NO_STORE)
 
     @app.get("/api/v1/history/positions", include_in_schema=False)
     def positions_history(con: Con, request: Request, run_id: int | None = None, as_of: date | None = None,

@@ -6,6 +6,7 @@ set -euo pipefail
 src="$(cd "$(dirname "$0")/.." && pwd)"; out="$1"
 rm -rf "$out"; mkdir -p "$out/lib" "$out/thumbs"
 cp "$src"/lib/*.js "$src"/lib/*.css "$out/lib/"; cp "$src"/thumbs/*.jpg "$out/thumbs/"
+cp "$src/catalog.js" "$out/catalog.js"
 cp "$src/../echarts.min.js" "$out/echarts.min.js"
 # the published gallery has no desk server: the pages load the demo data directly (lib/boot.js would ask the server)
 for f in "$src"/c*.html; do sed -e 's#\.\./echarts\.min\.js#echarts.min.js#' -e 's#lib/boot\.js#lib/mock.js#' "$f" > "$out/$(basename "$f")"; done
