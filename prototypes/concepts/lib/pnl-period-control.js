@@ -79,6 +79,7 @@
     const { K, P, prep } = ctx, f = K.f, esc = K.esc, Hm = P.heatmap(ck.unexplained, ck.thrAbs);
     if (!Hm.data.length) { el.outerHTML = '<div class="k-empty">нет данных: необъяснённое не сохранено ни в одной записи выборки</div>'; return; }
     const pos = new Map(prep.positions.map(p => [p.ref, p])), name = ref => { const p = pos.get(ref); return p ? (p.name || p.positionId) + ' · ' + p.book : ref.replace('|', ' · '); };
+    if (Hm.capped) el.insertAdjacentHTML('beforebegin', '<p class="hint" id="ckHeatCap" style="margin:0 0 4px">показаны ' + Hm.refs.length + ' из ' + Hm.total + ' позиций с наибольшим необъяснённым</p>');
     el.style.height = (Hm.refs.length * 22 + 110) + 'px';
     const c = K.chart(el, () => ({
       grid: { left: 8, right: 16, top: 10, bottom: 52, containLabel: true },

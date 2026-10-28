@@ -138,7 +138,7 @@
   // price / coupon: the attribution of P.attrDefs on the position's days; without the coupon of every day — «нет данных»
   function drawAttr(el, agg) {
     const { K, P } = cur.ctx, f = K.f, esc = K.esc;
-    if (!P.hasCoupon(agg)) { el.innerHTML = '<span class="mut">нет данных: нет разбивки купона (carry_coupon)' + (P.coverText(agg, 'carry_coupon') !== 'нет данных' ? ' — есть у ' + esc(P.coverText(agg, 'carry_coupon')) : '') + '. Без неё цена включала бы купон.</span>'; return; }
+    if (!P.hasCoupon(agg)) { el.innerHTML = '<span class="mut">нет данных: нет разбивки купона (carry_coupon)' + (P.splitCover(agg, ['carry_coupon']) !== 'нет данных' ? ' — есть у ' + esc(P.splitCover(agg, ['carry_coupon'])) + ' с кэрри' : '') + '. Без неё цена включала бы купон.</span>'; return; }
     const items = P.attrDefs().map(d => ({ d, v: d.v(agg) })).filter(x => x.v != null && Math.abs(x.v) >= 0.5), tot = items.reduce((s, x) => s + Math.abs(x.v), 0) || 1;
     const col = d => P.colour(K, d.color, d.shade), sw = d => '<span class="sw" style="background-color:' + col(d) + '"></span>';
     el.innerHTML = '<div class="attrbar">' + items.map(x => '<div title="' + esc(x.d.l + ': ' + f.mn(x.v, 2) + ' млн') + '" style="flex:' + (Math.abs(x.v) / tot).toFixed(4) + ';background-color:' + col(x.d) + (x.v < 0 ? ';background-image:repeating-linear-gradient(135deg,transparent 0 3px,rgba(0,0,0,.35) 3px 5px)' : '') + '"></div>').join('') + '</div>' +

@@ -63,8 +63,21 @@
     const w = cs.reduce((x, y) => (y.have / (y.rows || 1) < x.have / (x.rows || 1) ? y : x));
     return w.full ? '' : w.none ? 'нет данных' : w.have + ' из ' + w.rows + ' записей';
   }
-  const hasCoupon = a => coverage(a, 'carry_coupon').full;
-  const hasSplit = a => coverage(a, 'carry_coupon').full && coverage(a, 'carry_pull').full;
+  // the carry split (one rule for A–F): usable when every row with carry has it, i.e. m[part] − m.carry = 0 — a row
+  // without PnL has no carry and adds nothing to the total, so it does not blank the split of the others
+  const SPLIT = ['carry_coupon', 'carry_pull'];
+  function splitOk(a, keys) {
+    const cc = coverage(a, 'carry');
+    return cc.have > 0 && (keys || SPLIT).every(k => coverage(a, k).have === cc.have);
+  }
+  const hasCoupon = a => splitOk(a, ['carry_coupon']);
+  const hasSplit = a => splitOk(a, SPLIT);
+  // '' — the split is usable; 'нет данных'; 'N из M записей' — M rows with carry, N of them split (the least covered part)
+  function splitCover(a, keys) {
+    if (splitOk(a, keys)) return '';
+    const cc = coverage(a, 'carry'), have = Math.min(...(keys || SPLIT).map(k => coverage(a, k).have));
+    return !have || !cc.have ? 'нет данных' : Math.min(have, cc.have) + ' из ' + cc.have + ' записей';
+  }
 
   // Agg sum: totals and components — available sums, counts — plain sums
   function sumAggs(list) {
@@ -292,7 +305,7 @@
     const c = k => val(p, k), sp = hasSplit(p);  // a position's own split, whatever the selection has
     const gross = sumAvail([c('carry'), c('rolldown')]), net = sumAvail([c('carry'), c('rolldown'), c('funding')]);
     const pct = !isDeal(p), cy = pct ? annual(gross, p.pvAvg, p.calDays) : null;
-    const fr = !pct ? null : num(p.fundingRatePct) ? p.fundingRatePct : (c('funding') == null ? null : annual(-c('funding'), p.pvAvg, p.calDays));
+    const fr = pct && num(p.fundingRatePct) ? p.fundingRatePct : null;  // the server's rate or «—»: never estimated from funding / pv
     const mg = pct ? annual(net, p.pvAvg, p.calDays) : null;
     return { ref: p.ref, p, pv: num(p.pvAvg) ? p.pvAvg : null, coupon: sp ? c('carry_coupon') : null, pull: sp ? c('carry_pull') : null, carry: c('carry'), roll: c('rolldown'),
       gross, funding: c('funding'), net, cy, fr, mg: mg == null ? null : mg * 100 };
@@ -307,12 +320,14 @@
     const mg = annual(bNet, pv, days);
     return { coupon: prep.split ? c('carry_coupon') : null, pull: prep.split ? c('carry_pull') : null, carry: c('carry'), roll: c('rolldown'), funding: c('funding'), gross, net,
       pv, days, grossPct: annual(bGross, pv, days), fundingPct: annual(bsum('funding') == null ? null : -bsum('funding'), pv, days), marginBp: mg == null ? null : mg * 100,
-      cover: { coupon: coverText(s, 'carry_coupon'), pull: coverText(s, 'carry_pull'), funding: coverText(s, 'funding'), carry: coverText(s, ['carry', 'rolldown']) } };
+      cover: { coupon: splitCover(s, ['carry_coupon']), pull: splitCover(s, ['carry_pull']), split: splitCover(s), funding: coverText(s, 'funding'), carry: coverText(s, ['carry', 'rolldown']) } };
   }
-  // group of carry rows: sums (no % — the average of rates is not a sum); coupon / pull only when every row with carry
-  // has the split — otherwise a part of the carry would be missing from them, as on the tiles
-  const carryTotal = rows => Object.fromEntries(['pv', 'coupon', 'pull', 'carry', 'roll', 'gross', 'funding', 'net'].map(k => [k,
-    (k === 'coupon' || k === 'pull') && rows.some(r => r.carry != null && r[k] == null) ? null : sumAvail(rows.map(r => r[k]))]));
+  // group of carry rows: sums (no % — the average of rates is not a sum); coupon / pull only when the group's positions
+  // pass the split rule (hasSplit) — otherwise a part of the carry would be missing from them, as on the tiles
+  function carryTotal(rows) {
+    const sp = hasSplit(sumAggs(rows.map(r => r.p)));
+    return Object.fromEntries(['pv', 'coupon', 'pull', 'carry', 'roll', 'gross', 'funding', 'net'].map(k => [k, (k === 'coupon' || k === 'pull') && !sp ? null : sumAvail(rows.map(r => r[k]))]));
+  }
 
   // ---------- tiles of A ----------
   function tilesA(prep) {
@@ -428,10 +443,10 @@
   // the same instrument in other books of the selection (their histories are not merged)
   const otherBooks = (positions, p) => (p && p.instrument ? [...new Set(positions.filter(x => x.instrument === p.instrument && x.book !== p.book).map(x => x.book))].sort() : []);
   // columns of E's day table: the source keys with a value on some day (FX net as one); the carry split replaces the
-  // carry only when every day with carry has it; «Необъяснённое» always
+  // carry only when every day with carry has it (hasSplit); «Необъяснённое» always
   function dayColumns(days) {
     const has = k => days.some(d => { const v = srcVal(d, k); return v != null && Math.abs(v) >= 0.5; });
-    const split = days.some(d => val(d, 'carry') != null) && days.every(d => val(d, 'carry') == null || (val(d, 'carry_coupon') != null && val(d, 'carry_pull') != null));
+    const split = hasSplit(sumAggs(days));
     const keys = (split ? ['carry_coupon', 'carry_pull'] : ['carry']).concat(['rolldown', 'funding', 'rates', 'spread', 'convexity', 'fx', 'new_trades']).filter(has);
     keys.push('other');
     if (has('reported')) keys.push('reported');
@@ -460,15 +475,21 @@
     });
   }
   // heat map of F: unexplained (other) positions × days; the scale is capped at the threshold (above — full colour), at
-  // least 0.1 mn RUB; rows — positions by the largest |other| (largest on top: the y axis goes up)
-  function heatmap(un, thrAbs) {
+  // least 0.1 mn RUB; rows — positions by the largest |other| (largest on top: the y axis goes up), at most HEAT_ROWS of
+  // them (the canvas grows with the rows); total — positions before any cap: the server's refsTotal (it caps too), else
+  // the client's count; capped — fewer rows shown than total
+  const HEAT_ROWS = 60;
+  function heatmap(un, thrAbs, limit) {
     const dates = (un && un.dates) || [], refs = (un && un.refs) || [], cells = ((un && un.cells) || []).filter(c => num(c[2]));
-    const peak = refs.map(() => 0);
-    cells.forEach(([, y, v]) => { peak[y] = Math.max(peak[y], Math.abs(v)); });
-    const order = refs.map((r, i) => i).sort((a, b) => peak[a] - peak[b] || (refs[a] < refs[b] ? 1 : -1));  // bottom → top
+    const peak = refs.map(() => 0), lim = num(limit) && limit > 0 ? limit : HEAT_ROWS;
+    cells.forEach(([, y, v]) => { if (y in peak) peak[y] = Math.max(peak[y], Math.abs(v)); });
+    const top = (a, b) => peak[b] - peak[a] || (refs[a] < refs[b] ? -1 : 1);
+    const order = refs.map((r, i) => i).sort(top).slice(0, lim).reverse();  // bottom → top
     const at = new Map(order.map((y, i) => [y, i]));
-    const max = Math.max(0, ...peak), thr = num(thrAbs) && thrAbs > 0 ? thrAbs : max;
-    return { dates, refs: order.map(i => refs[i]), data: cells.map(([x, y, v]) => [x, at.get(y), v]), max, cap: Math.max(1e5, Math.min(max, thr)) };
+    const kept = cells.filter(c => at.has(c[1])), max = Math.max(0, ...order.map(y => peak[y])), thr = num(thrAbs) && thrAbs > 0 ? thrAbs : max;
+    const total = Math.max(num(un && un.refsTotal) ? un.refsTotal : refs.length, order.length);
+    return { dates, refs: order.map(i => refs[i]), data: kept.map(([x, y, v]) => [x, at.get(y), v]), max, cap: Math.max(1e5, Math.min(max, thr)),
+      total, capped: total > order.length };
   }
   // what a finding's value is (API TDM#407): an amount in RUB, a price, a share of the FX move, a quantity
   const VALUE_KIND = { recon: 'rub', unexpl: 'rub', fsign: 'rub', lin: 'rub', outlier: 'rub', stale: 'price', fxrev: 'share', life: 'qty' };
@@ -484,8 +505,8 @@
 
   const api = { COMPONENTS, BY_KEY, DERIVED, MODES, BT_MODES, COMPONENT_MODES, CARRY_MODES, PRESETS, GROUPS, NO_CURVE, NO_RATING, MIN_CONTRIB,
     colour, tint, signedBp, curveGrids, linearVsExact, curveSeries, curvePositions, LIN_WARN_PCT, LIN_WARN_ABS,
-    SEV, THR_DEFAULT, thrQuery, covers, findingsIndex, worstSev, positionList, otherBooks, dayColumns, dayRow, calendar, heatmap, VALUE_KIND, checkCards,
-    sumAvail, sumAll, val, srcVal, coverage, coverText, hasCoupon, hasSplit, sumAggs,
+    SEV, THR_DEFAULT, thrQuery, covers, findingsIndex, worstSev, positionList, otherBooks, dayColumns, dayRow, calendar, heatmap, HEAT_ROWS, VALUE_KIND, checkCards,
+    sumAvail, sumAll, val, srcVal, coverage, coverText, splitOk, splitCover, hasCoupon, hasSplit, sumAggs,
     addDays, dayDiff, presetRange, weekdays, autoGran, isoWeek, makeBuckets, bucketAggs, bucketHasMarket, periodDates, cumulate, calDays, perCalDay,
     prepare, componentRows, carryDefs, attrDefs, visibleRows, groupRows, rowsFor, chartRows, waterfallItems, contrib,
     matrix, sortMatrix, cellDays, isDeal, carryParts, carryPosition, carrySummary, carryTotal, annual, tilesA };

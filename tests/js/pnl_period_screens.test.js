@@ -154,6 +154,11 @@ test('E: day rows — inputs D−1 / D, Δ yield and Δ spread in bp, the interv
   const usd = P.dayColumns(FX.position['DEMO-B|USD-1'].days);
   assert.ok(usd.includes('fx'));
   assert.ok(!P.dayColumns(FX.position['DEMO-A|CORP-1'].days).includes('carry_coupon'), 'no split: carry whole');
+  // the split rule of A–C: a day without PnL does not drop it, a day with carry but no split does
+  const gap = clone(days); Object.keys(gap[1].c).forEach(k => { gap[1].c[k] = null; }); gap[1].total = null; gap[1].noPnl = { reason: 'no_price', detail: null };
+  assert.deepEqual(P.dayColumns(gap).slice(0, 2), ['carry_coupon', 'carry_pull'], 'a no-PnL day keeps the split');
+  const part = clone(days); part[1].c.carry_coupon = null;
+  assert.equal(P.dayColumns(part)[0], 'carry', 'a day with carry but no coupon: carry whole');
   const one = clone(days.slice(0, 2)); one[0].c.fx_gross = 5000; one[0].c.fx_funding = -4800;
   assert.equal(P.srcVal(one[0], 'fx'), 200);
 });
@@ -181,7 +186,26 @@ test('F: heat map — cells by position and day, the scale capped at the thresho
   assert.equal(P.heatmap(U, 10).cap, 1e5, 'at least 0.1 mn');
   // every cell keeps its value and lands on its position's row
   Hm.data.forEach(([x, y, v]) => { const src = U.cells.find(c => c[0] === x && U.refs[c[1]] === Hm.refs[y]); assert.ok(src && src[2] === v); });
-  assert.deepEqual(P.heatmap(null, 3e6), { dates: [], refs: [], data: [], max: 0, cap: 1e5 });
+  assert.equal(Hm.capped, false); assert.equal(Hm.total, U.refs.length);
+  assert.deepEqual(P.heatmap(null, 3e6), { dates: [], refs: [], data: [], max: 0, cap: 1e5, total: 0, capped: false });
+});
+
+test('F: heat map — at most 60 rows, the largest |other| kept; N from the server\'s refsTotal when sent', () => {
+  const n = 200, dates = ['2026-10-01', '2026-10-02'], refs = Array.from({ length: n }, (_, i) => 'DEMO-A|P' + String(i).padStart(3, '0'));
+  const cells = refs.flatMap((r, i) => [[0, i, (i + 1) * 1e4], [1, i, -(i + 1) * 5e3]]);
+  const Hm = P.heatmap({ dates, refs, cells }, 3e6);
+  assert.equal(P.HEAT_ROWS, 60);
+  assert.equal(Hm.refs.length, 60); assert.equal(Hm.total, n); assert.equal(Hm.capped, true);
+  assert.equal(Hm.refs.at(-1), refs[n - 1], 'the largest on top'); assert.equal(Hm.refs[0], refs[n - 60], 'the 60th largest at the bottom');
+  assert.equal(Hm.data.length, 120, 'cells of the dropped rows are dropped');
+  Hm.data.forEach(([x, y, v]) => { assert.ok(y >= 0 && y < 60); const i = refs.indexOf(Hm.refs[y]); assert.equal(v, cells.find(c => c[0] === x && c[1] === i)[2]); });
+  assert.equal(Hm.max, n * 1e4, 'the scale from the shown rows');
+  // the server capped its own list at 60 and says how many there were
+  const srv = P.heatmap({ dates, refs: refs.slice(140), cells: cells.filter(c => c[1] >= 140).map(([x, y, v]) => [x, y - 140, v]), refsTotal: 1500 }, 3e6);
+  assert.equal(srv.refs.length, 60); assert.equal(srv.total, 1500); assert.equal(srv.capped, true);
+  const few = P.heatmap({ dates, refs: refs.slice(0, 5), cells: cells.filter(c => c[1] < 5), refsTotal: 5 }, 3e6);
+  assert.equal(few.capped, false); assert.equal(few.refs.length, 5);
+  assert.equal(P.heatmap({ dates, refs, cells }, 3e6, 10).refs.length, 10, 'limit argument');
 });
 
 test('F: check cards — status, findings by severity; value kinds of the API', () => {
