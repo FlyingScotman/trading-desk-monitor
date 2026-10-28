@@ -1174,23 +1174,21 @@
      "ratesLinear": 225920,
      "grossCheck": 0,
      "inputs": {
-      "source": "previous_row",
-      "cleanPrev": 98,
-      "clean": 98.01921091666667,
-      "ytmPrev": 14,
+      "source": null,
+      "cleanPrev": null,
+      "clean": 98.0225,
+      "ytmPrev": null,
       "ytm": 13.997255578875542,
       "zPrev": 120,
       "z": 119.49706297786906,
-      "dv01Prev": 840000,
-      "dv01": 840000,
-      "cs01": 756000,
-      "quantityPrev": 1000,
+      "dv01Prev": null,
+      "dv01": -840000,
+      "cs01": -756000,
+      "quantityPrev": null,
       "quantity": 1000,
       "pv": 1200000000
      },
-     "events": [
-      "появление"
-     ]
+     "events": []
     },
     {
      "date": "2026-09-29",
@@ -1219,15 +1217,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 98,
-      "clean": 98.28310571953206,
-      "ytmPrev": 14,
+      "cleanPrev": 98.0225,
+      "clean": 98.2842,
+      "ytmPrev": 13.997255578875542,
       "ytm": 13.95955632814765,
-      "zPrev": 120,
+      "zPrev": 119.49706297786906,
       "z": 120.38323545455933,
-      "dv01Prev": 845496.8709061753,
-      "dv01": 845496.8709061753,
-      "cs01": 760947.1838155579,
+      "dv01Prev": -845497,
+      "dv01": -845497,
+      "cs01": -760947,
       "quantityPrev": 1000,
       "quantity": 1000,
       "pv": 1207852672.7231076
@@ -1261,15 +1259,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 98,
-      "clean": 97.90821349341338,
-      "ytmPrev": 14,
+      "cleanPrev": 98.2842,
+      "clean": 97.9093,
+      "ytmPrev": 13.95955632814765,
       "ytm": 14.013112358093261,
-      "zPrev": 120,
+      "zPrev": 120.38323545455933,
       "z": 119.74678912758827,
-      "dv01Prev": 850388.6126915717,
-      "dv01": 850388.6126915717,
-      "cs01": 765349.7514224146,
+      "dv01Prev": -850389,
+      "dv01": -850389,
+      "cs01": -765350,
       "quantityPrev": 1000,
       "quantity": 1000,
       "pv": 1214840875.2736738
@@ -1303,15 +1301,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 98,
-      "clean": 97.70598854221848,
-      "ytmPrev": 14,
+      "cleanPrev": 97.9093,
+      "clean": 97.7071,
+      "ytmPrev": 14.013112358093261,
       "ytm": 14.042001642227174,
-      "zPrev": 120,
+      "zPrev": 119.74678912758827,
       "z": 119.81953239440918,
-      "dv01Prev": 854136.7125447728,
-      "dv01": 854136.7125447728,
-      "cs01": 768723.0412902955,
+      "dv01Prev": -854137,
+      "dv01": -854137,
+      "cs01": -768723,
       "quantityPrev": 1000,
       "quantity": 1000,
       "pv": 1220195303.6353896
@@ -1345,15 +1343,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 98,
-      "clean": 98.01390282959298,
-      "ytmPrev": 14,
+      "cleanPrev": 97.7071,
+      "clean": 98.015,
+      "ytmPrev": 14.042001642227174,
       "ytm": 13.998013879299164,
-      "zPrev": 120,
+      "zPrev": 119.81953239440918,
       "z": 121.58230352401733,
-      "dv01Prev": 856328.5567429038,
-      "dv01": 856328.5567429038,
-      "cs01": 770695.7010686134,
+      "dv01Prev": -856329,
+      "dv01": -856329,
+      "cs01": -770696,
       "quantityPrev": 1000,
       "quantity": 1000,
       "pv": 1223326509.6327195
@@ -1387,15 +1385,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 98,
-      "clean": 97.89989221178053,
-      "ytmPrev": 14,
+      "cleanPrev": 98.015,
+      "clean": 97.9032,
+      "ytmPrev": 13.998013879299164,
       "ytm": 14.014301108360291,
-      "zPrev": 120,
+      "zPrev": 121.58230352401733,
       "z": 119.8858553469181,
-      "dv01Prev": 856722.8536902298,
-      "dv01": 856722.8536902298,
-      "cs01": 771050.5683212068,
+      "dv01Prev": -856723,
+      "dv01": -856723,
+      "cs01": -771051,
       "quantityPrev": 1000,
       "quantity": 1000,
       "pv": 1223889790.9860425
@@ -1428,16 +1426,16 @@
      "ratesLinear": 2544185,
      "grossCheck": 0,
      "inputs": {
-      "source": "previous_row",
-      "cleanPrev": 98,
-      "clean": 98.21247813359727,
-      "ytmPrev": 14,
+      "source": "prev",
+      "cleanPrev": 97.9032,
+      "clean": 98.2136,
+      "ytmPrev": 14.014301108360291,
       "ytm": 13.969645979642868,
-      "zPrev": 120,
+      "zPrev": 119.8858553469181,
       "z": 119.62889242172241,
-      "dv01Prev": 855276.1967706715,
-      "dv01": 855276.1967706715,
-      "cs01": 769748.5770936044,
+      "dv01Prev": -855276,
+      "dv01": -855276,
+      "cs01": -769748,
       "quantityPrev": 1000,
       "quantity": 1000,
       "pv": 1221823138.2438164
@@ -1470,16 +1468,16 @@
      "ratesLinear": -73222,
      "grossCheck": 0,
      "inputs": {
-      "source": "previous_row",
-      "cleanPrev": 98,
-      "clean": 97.99386242652128,
-      "ytmPrev": 14,
+      "source": "prev",
+      "cleanPrev": 98.2136,
+      "clean": 97.9961,
+      "ytmPrev": 13.969645979642868,
       "ytm": 14.0008767952919,
-      "zPrev": 120,
+      "zPrev": 119.62889242172241,
       "z": 120.33062890172005,
-      "dv01Prev": 852147.8428132038,
-      "dv01": 852147.8428132038,
-      "cs01": 766933.0585318834,
+      "dv01Prev": -852148,
+      "dv01": -852148,
+      "cs01": -766933,
       "quantityPrev": 1000,
       "quantity": 1000,
       "pv": 1217354061.1617198
@@ -1512,16 +1510,16 @@
      "ratesLinear": -2893184,
      "grossCheck": 0,
      "inputs": {
-      "source": "previous_row",
-      "cleanPrev": 98,
-      "clean": 97.75621048213031,
-      "ytmPrev": 14,
+      "source": "prev",
+      "cleanPrev": 97.9961,
+      "clean": 97.7573,
+      "ytmPrev": 14.0008767952919,
       "ytm": 14.034827074050904,
-      "zPrev": 120,
+      "zPrev": 120.33062890172005,
       "z": 119.03209745883942,
-      "dv01Prev": 847682.1801274817,
-      "dv01": 847682.1801274817,
-      "cs01": 762913.9621147335,
+      "dv01Prev": -847682,
+      "dv01": -847682,
+      "cs01": -762914,
       "quantityPrev": 1000,
       "quantity": 1000,
       "pv": 1210974543.0392594
@@ -1554,16 +1552,16 @@
      "ratesLinear": -4615368,
      "grossCheck": 0,
      "inputs": {
-      "source": "previous_row",
-      "cleanPrev": 98,
-      "clean": 97.60864132079926,
-      "ytmPrev": 14,
+      "source": "prev",
+      "cleanPrev": 97.7573,
+      "clean": 97.6119,
+      "ytmPrev": 14.034827074050904,
       "ytm": 14.055908378601075,
-      "zPrev": 120,
+      "zPrev": 119.03209745883942,
       "z": 120.49145865440369,
-      "dv01Prev": 842370.8161354059,
-      "dv01": 842370.8161354059,
-      "cs01": 758133.7345218654,
+      "dv01Prev": -842371,
+      "dv01": -842371,
+      "cs01": -758134,
       "quantityPrev": 1000,
       "quantity": 1000,
       "pv": 1203386880.1934369
@@ -1596,16 +1594,16 @@
      "ratesLinear": 1444882,
      "grossCheck": 0,
      "inputs": {
-      "source": "previous_row",
-      "cleanPrev": 98,
-      "clean": 98.12333415410335,
-      "ytmPrev": 14,
+      "source": "prev",
+      "cleanPrev": 97.6119,
+      "clean": 98.1244,
+      "ytmPrev": 14.055908378601075,
       "ytm": 13.982380838632583,
-      "zPrev": 120,
+      "zPrev": 120.49145865440369,
       "z": 120.33179023861885,
-      "dv01Prev": 836798.4582236919,
-      "dv01": 836798.4582236919,
-      "cs01": 753118.6124013227,
+      "dv01Prev": -836798,
+      "dv01": -836798,
+      "cs01": -753118,
       "quantityPrev": 1000,
       "quantity": 1000,
       "pv": 1195426368.8909883
@@ -1655,23 +1653,21 @@
      "ratesLinear": -76574,
      "grossCheck": 0,
      "inputs": {
-      "source": "previous_row",
-      "cleanPrev": 99,
-      "clean": 98.98078905898903,
-      "ytmPrev": 14.3,
+      "source": null,
+      "cleanPrev": null,
+      "clean": 98.9841,
+      "ytmPrev": null,
       "ytm": 14.297255578875543,
       "zPrev": 130,
       "z": 130.0085554420948,
-      "dv01Prev": -284712.23751492426,
-      "dv01": -284712.23751492426,
-      "cs01": -256241.01376343184,
-      "quantityPrev": 1001,
+      "dv01Prev": null,
+      "dv01": 284712,
+      "cs01": 256241,
+      "quantityPrev": null,
       "quantity": 1001,
       "pv": -406731767.8784632
      },
-     "events": [
-      "появление"
-     ]
+     "events": []
     },
     {
      "date": "2026-09-29",
@@ -1700,15 +1696,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 99,
-      "clean": 98.7168942246629,
-      "ytmPrev": 14.3,
+      "cleanPrev": 98.9841,
+      "clean": 98.718,
+      "ytmPrev": 14.297255578875543,
       "ytm": 14.259556328147651,
-      "zPrev": 130,
+      "zPrev": 130.0085554420948,
       "z": 129.9766839146614,
-      "dv01Prev": -285442.8522476346,
-      "dv01": -285442.8522476346,
-      "cs01": -256898.56702287117,
+      "dv01Prev": 285443,
+      "dv01": 285443,
+      "cs01": 256899,
       "quantityPrev": 1001,
       "quantity": 1001,
       "pv": -407775503.21090657
@@ -1742,15 +1738,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 99,
-      "clean": 99.09178645073058,
-      "ytmPrev": 14.3,
+      "cleanPrev": 98.718,
+      "clean": 99.0929,
+      "ytmPrev": 14.259556328147651,
       "ytm": 14.313112358093262,
-      "zPrev": 130,
+      "zPrev": 129.9766839146614,
       "z": 128.69309222325683,
-      "dv01Prev": -285574.28456341,
-      "dv01": -285574.28456341,
-      "cs01": -257016.85610706898,
+      "dv01Prev": 285574,
+      "dv01": 285574,
+      "cs01": 257017,
       "quantityPrev": 1001,
       "quantity": 1001,
       "pv": -407963263.6620142
@@ -1784,15 +1780,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 99,
-      "clean": 99.29401137427823,
-      "ytmPrev": 14.3,
+      "cleanPrev": 99.0929,
+      "clean": 99.2951,
+      "ytmPrev": 14.313112358093262,
       "ytm": 14.342001642227174,
-      "zPrev": 130,
+      "zPrev": 128.69309222325683,
       "z": 129.85829808935523,
-      "dv01Prev": -285092.0655902239,
-      "dv01": -285092.0655902239,
-      "cs01": -256582.8590312015,
+      "dv01Prev": 285092,
+      "dv01": 285092,
+      "cs01": 256583,
       "quantityPrev": 1001,
       "quantity": 1001,
       "pv": -407274379.4146055
@@ -1826,15 +1822,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 99,
-      "clean": 98.98609706038698,
-      "ytmPrev": 14.3,
+      "cleanPrev": 99.2951,
+      "clean": 98.9872,
+      "ytmPrev": 14.342001642227174,
       "ytm": 14.298013879299164,
-      "zPrev": 130,
+      "zPrev": 129.85829808935523,
       "z": 129.97888189181685,
-      "dv01Prev": -284049.28093773464,
-      "dv01": -284049.28093773464,
-      "cs01": -255644.35284396118,
+      "dv01Prev": 284049,
+      "dv01": 284049,
+      "cs01": 255644,
       "quantityPrev": 1001,
       "quantity": 1001,
       "pv": -405784687.0539066
@@ -1868,15 +1864,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 99,
-      "clean": 99.10010771960222,
-      "ytmPrev": 14.3,
+      "cleanPrev": 98.9872,
+      "clean": 99.1034,
+      "ytmPrev": 14.298013879299164,
       "ytm": 14.314301108360292,
-      "zPrev": 130,
+      "zPrev": 129.97888189181685,
       "z": 129.31651213439181,
-      "dv01Prev": -282560.72670916055,
-      "dv01": -282560.72670916055,
-      "cs01": -254304.6540382445,
+      "dv01Prev": 282561,
+      "dv01": 282561,
+      "cs01": 254305,
       "quantityPrev": 1001,
       "quantity": 1001,
       "pv": -403658181.01308644
@@ -1910,15 +1906,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 99,
-      "clean": 98.78752194808797,
-      "ytmPrev": 14.3,
+      "cleanPrev": 99.1034,
+      "clean": 98.7886,
+      "ytmPrev": 14.314301108360292,
       "ytm": 14.269645979642869,
-      "zPrev": 130,
+      "zPrev": 129.31651213439181,
       "z": 130.34097772836685,
-      "dv01Prev": -280790.27204513527,
-      "dv01": -280790.27204513527,
-      "cs01": -252711.24484062174,
+      "dv01Prev": 280790,
+      "dv01": 280790,
+      "cs01": 252711,
       "quantityPrev": 1001,
       "quantity": 1001,
       "pv": -401128960.06447893
@@ -1952,15 +1948,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 99,
-      "clean": 99.00613764276156,
-      "ytmPrev": 14.3,
+      "cleanPrev": 98.7886,
+      "clean": 99.0083,
+      "ytmPrev": 14.269645979642869,
       "ytm": 14.3008767952919,
-      "zPrev": 130,
+      "zPrev": 130.34097772836685,
       "z": 131.45641684532166,
-      "dv01Prev": -278932.8194078973,
-      "dv01": -278932.8194078973,
-      "cs01": -251039.53746710758,
+      "dv01Prev": 278933,
+      "dv01": 278933,
+      "cs01": 251040,
       "quantityPrev": 1001,
       "quantity": 1001,
       "pv": -398475456.2969961
@@ -1994,15 +1990,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 99,
-      "clean": 99.2437896228524,
-      "ytmPrev": 14.3,
+      "cleanPrev": 99.0083,
+      "clean": 99.2449,
+      "ytmPrev": 14.3008767952919,
       "ytm": 14.334827074050905,
-      "zPrev": 130,
+      "zPrev": 131.45641684532166,
       "z": 129.87097263336182,
-      "dv01Prev": -277192.8485279053,
-      "dv01": -277192.8485279053,
-      "cs01": -249473.56367511477,
+      "dv01Prev": 277193,
+      "dv01": 277193,
+      "cs01": 249474,
       "quantityPrev": 1001,
       "quantity": 1001,
       "pv": -395989783.61129326
@@ -2036,15 +2032,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 99,
-      "clean": 99.3913586236589,
-      "ytmPrev": 14.3,
+      "cleanPrev": 99.2449,
+      "clean": 99.3946,
+      "ytmPrev": 14.334827074050905,
       "ytm": 14.355908378601075,
-      "zPrev": 130,
+      "zPrev": 129.87097263336182,
       "z": 129.8808358311653,
-      "dv01Prev": -275761.9060262756,
-      "dv01": -275761.9060262756,
-      "cs01": -248185.71542364804,
+      "dv01Prev": 275762,
+      "dv01": 275762,
+      "cs01": 248186,
       "quantityPrev": 1001,
       "quantity": 1001,
       "pv": -393945580.03753656
@@ -2078,15 +2074,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 99,
-      "clean": 98.87666591696723,
-      "ytmPrev": 14.3,
+      "cleanPrev": 99.3946,
+      "clean": 98.8778,
+      "ytmPrev": 14.355908378601075,
       "ytm": 14.282380838632584,
-      "zPrev": 130,
+      "zPrev": 129.8808358311653,
       "z": 129.88801848888397,
-      "dv01Prev": -274797.5187928837,
-      "dv01": -274797.5187928837,
-      "cs01": -247317.76691359535,
+      "dv01Prev": 274798,
+      "dv01": 274798,
+      "cs01": 247318,
       "quantityPrev": 1001,
       "quantity": 1001,
       "pv": -392567883.9898339
@@ -2136,23 +2132,21 @@
      "ratesLinear": 32861,
      "grossCheck": 0,
      "inputs": {
-      "source": "previous_row",
-      "cleanPrev": 100,
-      "clean": 100.00548884678157,
-      "ytmPrev": 14.6,
+      "source": null,
+      "cleanPrev": null,
+      "clean": 100.0055,
+      "ytmPrev": null,
       "ytm": 14.597255578875542,
       "zPrev": 140,
       "z": 139.57545110583305,
-      "dv01Prev": 122182.31382438165,
-      "dv01": 122182.31382438165,
-      "cs01": 109964.0824419435,
-      "quantityPrev": 1002,
+      "dv01Prev": null,
+      "dv01": -122182,
+      "cs01": -109964,
+      "quantityPrev": null,
       "quantity": 1002,
       "pv": 610911569.1219082
      },
-     "events": [
-      "появление"
-     ]
+     "events": []
     },
     {
      "date": "2026-09-29",
@@ -2181,15 +2175,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 100,
-      "clean": 100.08088739598571,
-      "ytmPrev": 14.6,
+      "cleanPrev": 100.0055,
+      "clean": 100.0809,
+      "ytmPrev": 14.597255578875542,
       "ytm": 14.55955632814765,
-      "zPrev": 140,
+      "zPrev": 139.57545110583305,
       "z": 140.98888412117958,
-      "dv01Prev": 121735.40611617199,
-      "dv01": 121735.40611617199,
-      "cs01": 109561.8655045548,
+      "dv01Prev": -121735,
+      "dv01": -121735,
+      "cs01": -109561,
       "quantityPrev": 1002,
       "quantity": 1002,
       "pv": 608677030.5808599
@@ -2223,15 +2217,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 100,
-      "clean": 99.973775336416,
-      "ytmPrev": 14.6,
+      "cleanPrev": 100.0809,
+      "clean": 99.9738,
+      "ytmPrev": 14.55955632814765,
       "ytm": 14.613112358093261,
-      "zPrev": 140,
+      "zPrev": 140.98888412117958,
       "z": 140.83934688568115,
-      "dv01Prev": 121097.45430392594,
-      "dv01": 121097.45430392594,
-      "cs01": 108987.70887353335,
+      "dv01Prev": -121097,
+      "dv01": -121097,
+      "cs01": -108987,
       "quantityPrev": 1002,
       "quantity": 1002,
       "pv": 605487271.5196297
@@ -2265,15 +2259,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 100,
-      "clean": 99.91599675743203,
-      "ytmPrev": 14.6,
+      "cleanPrev": 99.9738,
+      "clean": 99.916,
+      "ytmPrev": 14.613112358093261,
       "ytm": 14.642001642227173,
-      "zPrev": 140,
+      "zPrev": 140.83934688568115,
       "z": 138.62927967309952,
-      "dv01Prev": 120338.6880193437,
-      "dv01": 120338.6880193437,
-      "cs01": 108304.81921740933,
+      "dv01Prev": -120339,
+      "dv01": -120339,
+      "cs01": -108305,
       "quantityPrev": 1002,
       "quantity": 1002,
       "pv": 601693440.0967184
@@ -2307,15 +2301,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 100,
-      "clean": 100.00397230655402,
-      "ytmPrev": 14.6,
+      "cleanPrev": 99.916,
+      "clean": 100.004,
+      "ytmPrev": 14.642001642227173,
       "ytm": 14.598013879299163,
-      "zPrev": 140,
+      "zPrev": 138.62927967309952,
       "z": 139.8107885979116,
-      "dv01Prev": 119542.63688909884,
-      "dv01": 119542.63688909884,
-      "cs01": 107588.37320018896,
+      "dv01Prev": -119543,
+      "dv01": -119543,
+      "cs01": -107589,
       "quantityPrev": 1002,
       "quantity": 1002,
       "pv": 597713184.4454942
@@ -2349,15 +2343,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 100,
-      "clean": 99.97139774694006,
-      "ytmPrev": 14.6,
+      "cleanPrev": 100.004,
+      "clean": 99.9714,
+      "ytmPrev": 14.598013879299163,
       "ytm": 14.61430110836029,
-      "zPrev": 140,
+      "zPrev": 139.8107885979116,
       "z": 139.91669008135796,
-      "dv01Prev": 118796.93508338797,
-      "dv01": 118796.93508338797,
-      "cs01": 106917.24157504918,
+      "dv01Prev": -118797,
+      "dv01": -118797,
+      "cs01": -106917,
       "quantityPrev": 1002,
       "quantity": 1002,
       "pv": 593984675.4169399
@@ -2391,15 +2385,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 100,
-      "clean": 100.06070804669109,
-      "ytmPrev": 14.6,
+      "cleanPrev": 99.9714,
+      "clean": 100.0607,
+      "ytmPrev": 14.61430110836029,
       "ytm": 14.569645979642868,
-      "zPrev": 140,
+      "zPrev": 139.91669008135796,
       "z": 139.90782645344734,
-      "dv01Prev": 118183.67401126097,
-      "dv01": 118183.67401126097,
-      "cs01": 106365.30661013488,
+      "dv01Prev": -118184,
+      "dv01": -118184,
+      "cs01": -106366,
       "quantityPrev": 1002,
       "quantity": 1002,
       "pv": 590918370.0563048
@@ -2433,20 +2427,23 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 100,
-      "clean": 99.99824641793668,
-      "ytmPrev": 14.6,
+      "cleanPrev": null,
+      "clean": 99.9982,
+      "ytmPrev": null,
       "ytm": 14.6008767952919,
-      "zPrev": 140,
+      "zPrev": 139.90782645344734,
       "z": 138.2778100334108,
-      "dv01Prev": 117770.36519695018,
-      "dv01": 117770.36519695018,
-      "cs01": 105993.32867725517,
-      "quantityPrev": 1002,
+      "dv01Prev": null,
+      "dv01": -117770,
+      "cs01": -105993,
+      "quantityPrev": 802,
       "quantity": 1002,
       "pv": 588851825.9847509
      },
-     "events": []
+     "events": [
+      "количество изменилось",
+      "оферта 08.10.2026"
+     ]
     },
     {
      "date": "2026-10-09",
@@ -2475,15 +2472,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 100,
-      "clean": 99.93034587335382,
-      "ytmPrev": 14.6,
+      "cleanPrev": 99.9982,
+      "clean": 99.9303,
+      "ytmPrev": 14.6008767952919,
       "ytm": 14.634827074050904,
-      "zPrev": 140,
+      "zPrev": 138.2778100334108,
       "z": 139.3544446527958,
-      "dv01Prev": 117602.50819896498,
-      "dv01": 117602.50819896498,
-      "cs01": 105842.25737906848,
+      "dv01Prev": -117603,
+      "dv01": -117603,
+      "cs01": -105843,
       "quantityPrev": 1002,
       "quantity": 1002,
       "pv": 588012540.9948249
@@ -2517,15 +2514,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 100,
-      "clean": 99.88818318959032,
-      "ytmPrev": 14.6,
+      "cleanPrev": 99.9303,
+      "clean": 99.8882,
+      "ytmPrev": 14.634827074050904,
       "ytm": 14.655908378601074,
-      "zPrev": 140,
+      "zPrev": 139.3544446527958,
       "z": 138.35614216327667,
-      "dv01Prev": 117698.58174080847,
-      "dv01": 117698.58174080847,
-      "cs01": 105928.72356672763,
+      "dv01Prev": -117699,
+      "dv01": -117699,
+      "cs01": -105929,
       "quantityPrev": 1002,
       "quantity": 1002,
       "pv": 588492908.7040423
@@ -2559,15 +2556,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 100,
-      "clean": 100.03523837478514,
-      "ytmPrev": 14.6,
+      "cleanPrev": 99.8882,
+      "clean": 100.0352,
+      "ytmPrev": 14.655908378601074,
       "ytm": 14.582380838632583,
-      "zPrev": 140,
+      "zPrev": 138.35614216327667,
       "z": 140.91545072197914,
-      "dv01Prev": 118048.00946023782,
-      "dv01": 118048.00946023782,
-      "cs01": 106243.20851421404,
+      "dv01Prev": -118048,
+      "dv01": -118048,
+      "cs01": -106243,
       "quantityPrev": 1002,
       "quantity": 1002,
       "pv": 590240047.3011891
@@ -2617,23 +2614,21 @@
      "ratesLinear": 10763,
      "grossCheck": 0,
      "inputs": {
-      "source": "previous_row",
-      "cleanPrev": 101,
-      "clean": 101.00365069627425,
-      "ytmPrev": 14.9,
+      "source": null,
+      "cleanPrev": null,
+      "clean": 101.0004,
+      "ytmPrev": null,
       "ytm": 14.881746049046518,
       "zPrev": 150,
       "z": 150.54694920778275,
-      "dv01Prev": 6016.934400967185,
-      "dv01": 6016.934400967185,
-      "cs01": 5415.240960870467,
-      "quantityPrev": 1003,
+      "dv01Prev": null,
+      "dv01": -6017,
+      "cs01": -5415,
+      "quantityPrev": null,
       "quantity": 1003,
       "pv": 300846720.0483592
      },
-     "events": [
-      "появление"
-     ]
+     "events": []
     },
     {
      "date": "2026-09-29",
@@ -2662,15 +2657,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 101,
-      "clean": 101.00416955835149,
-      "ytmPrev": 14.9,
+      "cleanPrev": 101.0004,
+      "clean": 101.0031,
+      "ytmPrev": 14.881746049046518,
       "ytm": 14.879152596004309,
-      "zPrev": 150,
+      "zPrev": 150.54694920778275,
       "z": 150.08685138821602,
-      "dv01Prev": 5977.131844454942,
-      "dv01": 5977.131844454942,
-      "cs01": 5379.418660009448,
+      "dv01Prev": -5977,
+      "dv01": -5977,
+      "cs01": -5379,
       "quantityPrev": 1003,
       "quantity": 1003,
       "pv": 298856592.2227471
@@ -2704,15 +2699,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 101,
-      "clean": 101.00701499579442,
-      "ytmPrev": 14.9,
+      "cleanPrev": 101.0031,
+      "clean": 101.0059,
+      "ytmPrev": 14.879152596004309,
       "ytm": 14.864925055325031,
-      "zPrev": 150,
+      "zPrev": 150.08685138821602,
       "z": 149.480898976326,
-      "dv01Prev": 5939.846754169399,
-      "dv01": 5939.846754169399,
-      "cs01": 5345.86207875246,
+      "dv01Prev": -5940,
+      "dv01": -5940,
+      "cs01": -5346,
       "quantityPrev": 1003,
       "quantity": 1003,
       "pv": 296992337.7084699
@@ -2746,15 +2741,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 101,
-      "clean": 100.99841094803008,
-      "ytmPrev": 14.9,
+      "cleanPrev": 101.0059,
+      "clean": 100.9973,
+      "ytmPrev": 14.864925055325031,
       "ytm": 14.907945189893246,
-      "zPrev": 150,
+      "zPrev": 149.480898976326,
       "z": 149.51615968346596,
-      "dv01Prev": 5909.183700563049,
-      "dv01": 5909.183700563049,
-      "cs01": 5318.265330506744,
+      "dv01Prev": -5909,
+      "dv01": -5909,
+      "cs01": -5318,
       "quantityPrev": 1003,
       "quantity": 1003,
       "pv": 295459185.0281524
@@ -2788,21 +2783,21 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 101,
-      "clean": 101.00003328511373,
-      "ytmPrev": 14.9,
+      "cleanPrev": 100.9973,
+      "clean": 100.9989,
+      "ytmPrev": 14.907945189893246,
       "ytm": 14.899834372222424,
-      "zPrev": 150,
+      "zPrev": 149.51615968346596,
       "z": 150.71054863929749,
-      "dv01Prev": 5888.518259847509,
-      "dv01": 5888.518259847509,
-      "cs01": 5299.666433862759,
+      "dv01Prev": -5889,
+      "dv01": -5889,
+      "cs01": -5300,
       "quantityPrev": 1003,
       "quantity": 1003,
       "pv": 294425912.99237543
      },
      "events": [
-      "исчезновение"
+      "позиции нет в прогоне 05.10.2026"
      ]
     }
    ]
@@ -2848,23 +2843,21 @@
      "ratesLinear": -322000,
      "grossCheck": 0,
      "inputs": {
-      "source": "previous_row",
-      "cleanPrev": 102,
-      "clean": 85.31896502208795,
-      "ytmPrev": 15.2,
-      "ytm": 15.181746049046517,
+      "source": null,
+      "cleanPrev": null,
+      "clean": null,
+      "ytmPrev": null,
+      "ytm": null,
       "zPrev": null,
       "z": null,
-      "dv01Prev": -180000,
-      "dv01": -180000,
+      "dv01Prev": null,
+      "dv01": 180000,
       "cs01": null,
-      "quantityPrev": 1004,
+      "quantityPrev": null,
       "quantity": 1004,
       "pv": 1969727.9001876828
      },
-     "events": [
-      "появление"
-     ]
+     "events": []
     },
     {
      "date": "2026-09-29",
@@ -2893,14 +2886,14 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 102,
-      "clean": 82.88213451461466,
-      "ytmPrev": 15.2,
-      "ytm": 15.179152596004307,
+      "cleanPrev": null,
+      "clean": null,
+      "ytmPrev": null,
+      "ytm": null,
       "zPrev": null,
       "z": null,
-      "dv01Prev": -180000,
-      "dv01": -180000,
+      "dv01Prev": 180000,
+      "dv01": 180000,
       "cs01": null,
       "quantityPrev": 1004,
       "quantity": 1004,
@@ -2935,14 +2928,14 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 102,
-      "clean": 69.78900332983426,
-      "ytmPrev": 15.2,
-      "ytm": 15.16492505532503,
+      "cleanPrev": null,
+      "clean": null,
+      "ytmPrev": null,
+      "ytm": null,
       "zPrev": null,
       "z": null,
-      "dv01Prev": -180000,
-      "dv01": -180000,
+      "dv01Prev": 180000,
+      "dv01": 180000,
       "cs01": null,
       "quantityPrev": 1004,
       "quantity": 1004,
@@ -2977,14 +2970,14 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 102,
-      "clean": 109.29047017651945,
-      "ytmPrev": 15.2,
-      "ytm": 15.207945189893245,
+      "cleanPrev": null,
+      "clean": null,
+      "ytmPrev": null,
+      "ytm": null,
       "zPrev": null,
       "z": null,
-      "dv01Prev": -180000,
-      "dv01": -180000,
+      "dv01Prev": 180000,
+      "dv01": 180000,
       "cs01": null,
       "quantityPrev": 1004,
       "quantity": 1004,
@@ -3019,14 +3012,14 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 102,
-      "clean": 101.84848537402891,
-      "ytmPrev": 15.2,
-      "ytm": 15.199834372222423,
+      "cleanPrev": null,
+      "clean": null,
+      "ytmPrev": null,
+      "ytm": null,
       "zPrev": null,
       "z": null,
-      "dv01Prev": -180000,
-      "dv01": -180000,
+      "dv01Prev": 180000,
+      "dv01": 180000,
       "cs01": null,
       "quantityPrev": 1004,
       "quantity": 1004,
@@ -3061,14 +3054,14 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 102,
-      "clean": 112.74394257411511,
-      "ytmPrev": 15.2,
-      "ytm": 15.211799680709838,
+      "cleanPrev": null,
+      "clean": null,
+      "ytmPrev": null,
+      "ytm": null,
       "zPrev": null,
       "z": null,
-      "dv01Prev": -180000,
-      "dv01": -180000,
+      "dv01Prev": 180000,
+      "dv01": 180000,
       "cs01": null,
       "quantityPrev": 1004,
       "quantity": 1004,
@@ -3103,14 +3096,14 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 102,
-      "clean": 130.87360465257598,
-      "ytmPrev": 15.2,
-      "ytm": 15.231902515411376,
+      "cleanPrev": null,
+      "clean": null,
+      "ytmPrev": null,
+      "ytm": null,
       "zPrev": null,
       "z": null,
-      "dv01Prev": -180000,
-      "dv01": -180000,
+      "dv01Prev": 180000,
+      "dv01": 180000,
       "cs01": null,
       "quantityPrev": 1004,
       "quantity": 1004,
@@ -3145,14 +3138,14 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 102,
-      "clean": 102.94610149521999,
-      "ytmPrev": 15.2,
-      "ytm": 15.201052303433418,
+      "cleanPrev": null,
+      "clean": null,
+      "ytmPrev": null,
+      "ytm": null,
       "zPrev": null,
       "z": null,
-      "dv01Prev": -180000,
-      "dv01": -180000,
+      "dv01Prev": 180000,
+      "dv01": 180000,
       "cs01": null,
       "quantityPrev": 1004,
       "quantity": 1004,
@@ -3187,14 +3180,14 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 102,
-      "clean": 85.147855015673,
-      "ytmPrev": 15.2,
-      "ytm": 15.18113529574871,
+      "cleanPrev": null,
+      "clean": null,
+      "ytmPrev": null,
+      "ytm": null,
       "zPrev": null,
       "z": null,
-      "dv01Prev": -180000,
-      "dv01": -180000,
+      "dv01Prev": 180000,
+      "dv01": 180000,
       "cs01": null,
       "quantityPrev": 1004,
       "quantity": 1004,
@@ -3229,14 +3222,14 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 102,
-      "clean": 58.04239119789413,
-      "ytmPrev": 15.2,
-      "ytm": 15.150516452810727,
+      "cleanPrev": null,
+      "clean": null,
+      "ytmPrev": null,
+      "ytm": null,
       "zPrev": null,
       "z": null,
-      "dv01Prev": -180000,
-      "dv01": -180000,
+      "dv01Prev": 180000,
+      "dv01": 180000,
       "cs01": null,
       "quantityPrev": 1004,
       "quantity": 1004,
@@ -3271,14 +3264,14 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 102,
-      "clean": 108.44055674372433,
-      "ytmPrev": 15.2,
-      "ytm": 15.20728030604124,
+      "cleanPrev": null,
+      "clean": null,
+      "ytmPrev": null,
+      "ytm": null,
       "zPrev": null,
       "z": null,
-      "dv01Prev": -180000,
-      "dv01": -180000,
+      "dv01Prev": 180000,
+      "dv01": 180000,
       "cs01": null,
       "quantityPrev": 1004,
       "quantity": 1004,
@@ -3329,23 +3322,21 @@
      "ratesLinear": 154251,
      "grossCheck": 0,
      "inputs": {
-      "source": "previous_row",
-      "cleanPrev": 103,
-      "clean": 103.04011917501605,
-      "ytmPrev": 15.5,
+      "source": null,
+      "cleanPrev": null,
+      "clean": 103.0368,
+      "ytmPrev": null,
       "ytm": 15.479940422177314,
       "zPrev": 170,
       "z": 170.24706366332248,
-      "dv01Prev": 78465.72116053899,
-      "dv01": 78465.72116053899,
-      "cs01": 70619.1490444851,
-      "quantityPrev": 1005,
+      "dv01Prev": null,
+      "dv01": -78466,
+      "cs01": -70619,
+      "quantityPrev": null,
       "quantity": 1005,
       "pv": 392328605.8026949
      },
-     "events": [
-      "появление"
-     ]
+     "events": []
     },
     {
      "date": "2026-09-29",
@@ -3374,15 +3365,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 103,
-      "clean": 102.9974632354974,
-      "ytmPrev": 15.5,
+      "cleanPrev": 103.0368,
+      "clean": 102.9964,
+      "ytmPrev": 15.479940422177314,
       "ytm": 15.50126837193966,
-      "zPrev": 170,
+      "zPrev": 170.24706366332248,
       "z": 170.10180369019508,
-      "dv01Prev": 78698.67297349188,
-      "dv01": 78698.67297349188,
-      "cs01": 70828.80567614269,
+      "dv01Prev": -78699,
+      "dv01": -78699,
+      "cs01": -70829,
       "quantityPrev": 1005,
       "quantity": 1005,
       "pv": 393493364.86745936
@@ -3416,15 +3407,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 103,
-      "clean": 103.00423421430533,
-      "ytmPrev": 15.5,
+      "cleanPrev": 102.9964,
+      "clean": 103.0031,
+      "ytmPrev": 15.50126837193966,
       "ytm": 15.497882868945599,
-      "zPrev": 170,
+      "zPrev": 170.10180369019508,
       "z": 170.19022837281227,
-      "dv01Prev": 79074.88281320911,
-      "dv01": 79074.88281320911,
-      "cs01": 71167.3945318882,
+      "dv01Prev": -79075,
+      "dv01": -79075,
+      "cs01": -71167,
       "quantityPrev": 1005,
       "quantity": 1005,
       "pv": 395374414.0660455
@@ -3458,15 +3449,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 103,
-      "clean": 103.04655290204636,
-      "ytmPrev": 15.5,
+      "cleanPrev": 103.0031,
+      "clean": 103.0455,
+      "ytmPrev": 15.497882868945599,
       "ytm": 15.476723520047962,
-      "zPrev": 170,
+      "zPrev": 170.19022837281227,
       "z": 169.84090918302536,
-      "dv01Prev": 79552.93520288172,
-      "dv01": 79552.93520288172,
-      "cs01": 71597.64168259356,
+      "dv01Prev": -79553,
+      "dv01": -79553,
+      "cs01": -71598,
       "quantityPrev": 1005,
       "quantity": 1005,
       "pv": 397764676.0144086
@@ -3500,15 +3491,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 103,
-      "clean": 102.97157449770869,
-      "ytmPrev": 15.5,
+      "cleanPrev": 103.0455,
+      "clean": 102.9705,
+      "ytmPrev": 15.476723520047962,
       "ytm": 15.51421268939972,
-      "zPrev": 170,
+      "zPrev": 169.84090918302536,
       "z": 170.49867022037506,
-      "dv01Prev": 80080.20321581149,
-      "dv01": 80080.20321581149,
-      "cs01": 72072.18289423034,
+      "dv01Prev": -80080,
+      "dv01": -80080,
+      "cs01": -72072,
       "quantityPrev": 1005,
       "quantity": 1005,
       "pv": 400401016.0790574
@@ -3542,15 +3533,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 103,
-      "clean": 102.99056286828886,
-      "ytmPrev": 15.5,
+      "cleanPrev": 102.9705,
+      "clean": 102.9873,
+      "ytmPrev": 15.51421268939972,
       "ytm": 15.50471853673458,
-      "zPrev": 170,
+      "zPrev": 170.49867022037506,
       "z": 170.8443112373352,
-      "dv01Prev": 80598.64196891396,
-      "dv01": 80598.64196891396,
-      "cs01": 72538.77777202257,
+      "dv01Prev": -80599,
+      "dv01": -80599,
+      "cs01": -72539,
       "quantityPrev": 1005,
       "quantity": 1005,
       "pv": 402993209.84456974
@@ -3584,15 +3575,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 103,
-      "clean": 102.99444351077908,
-      "ytmPrev": 15.5,
+      "cleanPrev": 102.9873,
+      "clean": 102.9933,
+      "ytmPrev": 15.50471853673458,
       "ytm": 15.502778204381466,
-      "zPrev": 170,
+      "zPrev": 170.8443112373352,
       "z": 170.92348900437355,
-      "dv01Prev": 81051.17855795007,
-      "dv01": 81051.17855795007,
-      "cs01": 72946.06070215507,
+      "dv01Prev": -81051,
+      "dv01": -81051,
+      "cs01": -72946,
       "quantityPrev": 1005,
       "quantity": 1005,
       "pv": 405255892.78975034
@@ -3626,15 +3617,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 103,
-      "clean": 103.01928269642428,
-      "ytmPrev": 15.5,
+      "cleanPrev": 102.9933,
+      "clean": 103.0171,
+      "ytmPrev": 15.502778204381466,
       "ytm": 15.490358704924583,
-      "zPrev": 170,
+      "zPrev": 170.92348900437355,
       "z": 170.99501046538353,
-      "dv01Prev": 81387.99499139011,
-      "dv01": 81387.99499139011,
-      "cs01": 73249.19549225109,
+      "dv01Prev": -81388,
+      "dv01": -81388,
+      "cs01": -73249,
       "quantityPrev": 1005,
       "quantity": 1005,
       "pv": 406939974.9569505
@@ -3665,18 +3656,18 @@
       "reported": null
      },
      "ratesLinear": -264361,
-     "grossCheck": 0,
+     "grossCheck": 4200,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 103,
-      "clean": 102.93386064855639,
-      "ytmPrev": 15.5,
+      "cleanPrev": 103.0171,
+      "clean": 102.9328,
+      "ytmPrev": 15.490358704924583,
       "ytm": 15.533069730997086,
-      "zPrev": 170,
+      "zPrev": 170.99501046538353,
       "z": 169.6454091630876,
-      "dv01Prev": 81572.01245917821,
-      "dv01": 81572.01245917821,
-      "cs01": 73414.81121326039,
+      "dv01Prev": -81572,
+      "dv01": -81572,
+      "cs01": -73415,
       "quantityPrev": 1005,
       "quantity": 1005,
       "pv": 407860062.295891
@@ -3710,15 +3701,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 103,
-      "clean": 102.98487404967386,
-      "ytmPrev": 15.5,
+      "cleanPrev": 102.9328,
+      "clean": 102.9816,
+      "ytmPrev": 15.533069730997086,
       "ytm": 15.507562997043133,
-      "zPrev": 170,
+      "zPrev": 169.6454091630876,
       "z": 171.08015158772469,
-      "dv01Prev": 81582.97319459742,
-      "dv01": 81582.97319459742,
-      "cs01": 73424.67587513768,
+      "dv01Prev": -81583,
+      "dv01": -81583,
+      "cs01": -73425,
       "quantityPrev": 1005,
       "quantity": 1005,
       "pv": 407914865.97298706
@@ -3752,15 +3743,15 @@
      "grossCheck": 0,
      "inputs": {
       "source": "previous_row",
-      "cleanPrev": 103,
-      "clean": 103.00139769664013,
-      "ytmPrev": 15.5,
+      "cleanPrev": 102.9816,
+      "clean": 103.0003,
+      "ytmPrev": 15.507562997043133,
       "ytm": 15.499301104745827,
-      "zPrev": 170,
+      "zPrev": 171.08015158772469,
       "z": 170.16673663258553,
-      "dv01Prev": 81419.67057295151,
-      "dv01": 81419.67057295151,
-      "cs01": 73277.70351565637,
+      "dv01Prev": -81420,
+      "dv01": -81420,
+      "cs01": -73278,
       "quantityPrev": 1005,
       "quantity": 1005,
       "pv": 407098352.86475754
@@ -3776,16 +3767,12 @@
   "firstRun": {
    "date": "2026-09-28",
    "runId": 1000,
-   "prevDate": "2026-09-25",
-   "cutType": "eod",
-   "slice": "EOD"
+   "prevDate": "2026-09-25"
   },
   "lastRun": {
    "date": "2026-10-13",
    "runId": 1010,
-   "prevDate": "2026-10-12",
-   "cutType": "eod",
-   "slice": "EOD"
+   "prevDate": "2026-10-12"
   },
   "buckets": [
    "1Y",
@@ -3860,62 +3847,104 @@
    }
   },
   "linearTotal": {
-   "RUB OFZ": null,
-   "RUB RUONIA": null
+   "RUB OFZ": -4593581,
+   "RUB RUONIA": -1420122,
+   "": -70887
   },
   "exact": {
    "RUB OFZ": -4687326,
-   "RUB RUONIA": -1449103
+   "RUB RUONIA": -1449103,
+   "": -72334
   },
   "coverage": {
    "rows": 60,
-   "linearRows": 0,
+   "linearRows": 60,
    "bucketRows": 0
   }
  },
  "checks": {
+  "from": "2026-09-28",
+  "to": "2026-10-13",
+  "anchorRunId": 1010,
+  "thrAbs": 3000000,
+  "thrPct": 0.25,
   "checks": [
    {
     "key": "recon",
-    "label": "Сходимость",
-    "status": "ok",
-    "count": 0,
-    "note": null
+    "label": "Сверка тождества",
+    "status": "findings",
+    "count": 1,
+    "note": "находок: 1; порог 1 000 RUB, строк: 60"
    },
    {
     "key": "unexpl",
     "label": "Необъяснённое",
     "status": "findings",
     "count": 1,
-    "note": null
+    "note": "находок: 1; порог 3 000 000 RUB и 25% объяснённого"
    },
    {
     "key": "stale",
-    "label": "Цена стоит",
+    "label": "Старая цена",
     "status": "no_data",
     "count": 0,
     "note": "нет чистой цены в части строк"
    },
    {
-    "key": "norun",
-    "label": "Пропуск прогона",
+    "key": "fsign",
+    "label": "Знак фондирования",
+    "status": "ok",
+    "count": 0,
+    "note": "строк с фондированием: 38"
+   },
+   {
+    "key": "lin",
+    "label": "Ставки: линейно и точно",
+    "status": "ok",
+    "count": 0,
+    "note": "допуск max(300 000 RUB, 5%)"
+   },
+   {
+    "key": "fxrev",
+    "label": "Скачок курса",
     "status": "findings",
     "count": 1,
-    "note": null
+    "note": "находок: 1; порог 2% туда и обратно; валюты: USD"
+   },
+   {
+    "key": "outlier",
+    "label": "Выброс по позиции",
+    "status": "findings",
+    "count": 1,
+    "note": "находок: 1; 7 MAD, позиций с 5+ днями: 5"
+   },
+   {
+    "key": "norun",
+    "label": "Нет прогона",
+    "status": "findings",
+    "count": 1,
+    "note": "находок: 1; рыночных дней: 12"
+   },
+   {
+    "key": "life",
+    "label": "Жизнь позиции",
+    "status": "findings",
+    "count": 2,
+    "note": "находок: 2; строк: 60"
    }
   ],
   "findings": [
    {
-    "sev": "warn",
-    "check": "unexpl",
+    "sev": "crit",
+    "check": "recon",
     "date": "2026-10-09",
     "dateTo": null,
-    "ref": "DEMO-A|CORP-1",
-    "book": "DEMO-A",
-    "positionId": "CORP-1",
-    "name": "Synthetic Corp 1",
-    "value": 1800000,
-    "text": "Необъяснённое выше порога"
+    "ref": "DEMO-B|USD-1",
+    "book": "DEMO-B",
+    "positionId": "USD-1",
+    "name": "Synthetic USD 1",
+    "value": 4200,
+    "text": "итог метода не равен сумме компонент"
    },
    {
     "sev": "warn",
@@ -3927,7 +3956,67 @@
     "positionId": null,
     "name": null,
     "value": null,
-    "text": "Рынок закрылся, прогона нет"
+    "text": "нет прогона на рыночный день"
+   },
+   {
+    "sev": "warn",
+    "check": "fxrev",
+    "date": "2026-10-08",
+    "dateTo": "2026-10-09",
+    "ref": null,
+    "book": null,
+    "positionId": null,
+    "name": "USD",
+    "value": 0.031,
+    "text": "курс USD сдвинулся и вернулся на следующий прогон"
+   },
+   {
+    "sev": "warn",
+    "check": "unexpl",
+    "date": "2026-10-09",
+    "dateTo": null,
+    "ref": "DEMO-A|CORP-1",
+    "book": "DEMO-A",
+    "positionId": "CORP-1",
+    "name": "Synthetic Corp 1",
+    "value": 1798125,
+    "text": "крупное необъяснённое относительно объяснённого"
+   },
+   {
+    "sev": "info",
+    "check": "life",
+    "date": "2026-10-02",
+    "dateTo": "2026-10-05",
+    "ref": "DEMO-A|CLOSED",
+    "book": "DEMO-A",
+    "positionId": "CLOSED",
+    "name": "Synthetic Closed",
+    "value": null,
+    "text": "позиция закрыта: нет с 05.10.2026"
+   },
+   {
+    "sev": "info",
+    "check": "life",
+    "date": "2026-10-08",
+    "dateTo": null,
+    "ref": "DEMO-A|CORP-1",
+    "book": "DEMO-A",
+    "positionId": "CORP-1",
+    "name": "Synthetic Corp 1",
+    "value": 800,
+    "text": "количество изменилось"
+   },
+   {
+    "sev": "info",
+    "check": "outlier",
+    "date": "2026-10-09",
+    "dateTo": null,
+    "ref": "DEMO-A|CORP-1",
+    "book": "DEMO-A",
+    "positionId": "CORP-1",
+    "name": "Synthetic Corp 1",
+    "value": 1324028,
+    "text": "итог дня далеко от обычного для позиции"
    }
   ],
   "coverage": {
@@ -3977,14 +4066,315 @@
     "2026-10-13"
    ],
    "refs": [
-    "DEMO-A|OFZ-1",
-    "DEMO-B|OFZ-1",
-    "DEMO-A|CORP-1",
     "DEMO-A|CLOSED",
+    "DEMO-A|CORP-1",
+    "DEMO-A|OFZ-1",
     "DEMO-B|IRS-1",
+    "DEMO-B|OFZ-1",
     "DEMO-B|USD-1"
    ],
-   "cells": []
+   "cells": [
+    [
+     0,
+     2,
+     70230
+    ],
+    [
+     1,
+     2,
+     15469
+    ],
+    [
+     2,
+     2,
+     54515
+    ],
+    [
+     3,
+     2,
+     174896
+    ],
+    [
+     4,
+     2,
+     -57419
+    ],
+    [
+     5,
+     2,
+     -46788
+    ],
+    [
+     6,
+     2,
+     215
+    ],
+    [
+     7,
+     2,
+     32627
+    ],
+    [
+     8,
+     2,
+     4181
+    ],
+    [
+     9,
+     2,
+     -74111
+    ],
+    [
+     10,
+     2,
+     13488
+    ],
+    [
+     0,
+     4,
+     42889
+    ],
+    [
+     1,
+     4,
+     -175
+    ],
+    [
+     2,
+     4,
+     -21449
+    ],
+    [
+     3,
+     4,
+     -16334
+    ],
+    [
+     4,
+     4,
+     -45930
+    ],
+    [
+     5,
+     4,
+     -24332
+    ],
+    [
+     6,
+     4,
+     -25997
+    ],
+    [
+     7,
+     4,
+     -13255
+    ],
+    [
+     8,
+     4,
+     45557
+    ],
+    [
+     9,
+     4,
+     10268
+    ],
+    [
+     10,
+     4,
+     -423
+    ],
+    [
+     0,
+     1,
+     -8607
+    ],
+    [
+     1,
+     1,
+     -6955
+    ],
+    [
+     2,
+     1,
+     16264
+    ],
+    [
+     3,
+     1,
+     -350
+    ],
+    [
+     4,
+     1,
+     -6746
+    ],
+    [
+     5,
+     1,
+     5302
+    ],
+    [
+     6,
+     1,
+     -18167
+    ],
+    [
+     7,
+     1,
+     -10944
+    ],
+    [
+     8,
+     1,
+     1798125
+    ],
+    [
+     9,
+     1,
+     15073
+    ],
+    [
+     10,
+     1,
+     19359
+    ],
+    [
+     0,
+     0,
+     -7
+    ],
+    [
+     1,
+     0,
+     -471
+    ],
+    [
+     2,
+     0,
+     -579
+    ],
+    [
+     3,
+     0,
+     -301
+    ],
+    [
+     4,
+     0,
+     -23
+    ],
+    [
+     0,
+     3,
+     31323
+    ],
+    [
+     1,
+     3,
+     -21476
+    ],
+    [
+     2,
+     3,
+     13060
+    ],
+    [
+     3,
+     3,
+     -17581
+    ],
+    [
+     4,
+     3,
+     14045
+    ],
+    [
+     5,
+     3,
+     -11891
+    ],
+    [
+     6,
+     3,
+     2103
+    ],
+    [
+     7,
+     3,
+     16417
+    ],
+    [
+     8,
+     3,
+     -16050
+    ],
+    [
+     9,
+     3,
+     13805
+    ],
+    [
+     10,
+     3,
+     -9395
+    ],
+    [
+     0,
+     5,
+     17649
+    ],
+    [
+     1,
+     5,
+     -3866
+    ],
+    [
+     2,
+     5,
+     9701
+    ],
+    [
+     3,
+     5,
+     -4054
+    ],
+    [
+     4,
+     5,
+     -10283
+    ],
+    [
+     5,
+     5,
+     9024
+    ],
+    [
+     6,
+     5,
+     1561
+    ],
+    [
+     7,
+     5,
+     -8691
+    ],
+    [
+     8,
+     5,
+     -18234
+    ],
+    [
+     9,
+     5,
+     19940
+    ],
+    [
+     10,
+     5,
+     746
+    ]
+   ]
   }
  }
 }

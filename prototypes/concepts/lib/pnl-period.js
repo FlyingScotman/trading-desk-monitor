@@ -324,7 +324,167 @@
       cover: { total: s.rows ? '' : 'нет данных', carry: coverText(s, ['carry', 'rolldown', 'funding']), market: coverText(s, ['rates', 'spread']), fx: coverText(s, ['fx_gross', 'fx_funding']), other: coverText(s, 'other') } };
   }
 
+  // ---------- colours (all screens) ----------
+  // a source colour: 'pnl:<KIT.PNL_COLORS key>' | 'pal:<KIT.PAL index>' | '--<kit token>'; shade < 1 — toward the panel
+  // (light) or the ink (dark). K — the kit (css, rgbOf, PNL_COLORS, PAL)
+  function colour(K, spec, shade) {
+    const s = String(spec || '--fg-2');
+    let c = s.startsWith('pnl:') ? K.PNL_COLORS[s.slice(4)] : s.startsWith('pal:') ? K.PAL[+s.slice(4)] : K.css(s);
+    if (!c) c = K.css('--fg-2');
+    if (shade == null || shade >= 1) return c;
+    const x = K.rgbOf(c), panel = K.rgbOf(K.css('--panel')) || [22, 27, 34];
+    if (!x) return c;
+    const dark = panel.reduce((a, b) => a + b, 0) < 384, y = dark ? K.rgbOf(K.css('--fg')) || [230, 237, 243] : panel, w = dark ? (1 - shade) * 0.7 : 1 - shade;
+    return 'rgb(' + x.map((v, i) => Math.round(v * (1 - w) + y[i] * w)).join(',') + ')';
+  }
+  // diverging tint of a table cell by sign and size (lighter than K.heat: figures stay readable); good — the sign that
+  // reads as green (+1: positive, −1: negative); rgb — [pos, neg]
+  function tint(v, max, good, rgb) {
+    if (!num(v) || !v || !max) return '';
+    const a = Math.min(1, Math.abs(v) / max), c = (good || 1) * v > 0 ? rgb[0] : rgb[1];
+    return 'background:rgba(' + c.join(',') + ',' + (0.07 + 0.36 * Math.pow(a, 0.8)).toFixed(3) + ')';
+  }
+
+  // ---------- D · Ставки по кривым (/curves) ----------
+  // a signed move in bp: «+12» / «−15» / «0» — not a gain or a loss, no accounting brackets; under 10 bp one decimal
+  function signedBp(v, d) {
+    if (!num(v)) return '—';
+    const dp = d == null ? (Math.abs(v) < 10 ? 1 : 0) : d, s = Math.abs(v).toFixed(dp).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return (/[1-9]/.test(s) ? (v > 0 ? '+' : '−') : '') + s.replace(/^(\d+)\.0+$/, '$1');
+  }
+  const cell = (src, id, b) => (src && src[id] && num(src[id][b]) ? src[id][b] : null);
+  const absMax = rows => Math.max(0, ...rows.flatMap(r => r.vals.filter(num).map(Math.abs)));
+  // three curve × term grids of a /curves answer: move (bp), mean DV01 (RUB / bp), linear rates PnL (RUB); Σ — DV01 and
+  // PnL only (a sum of moves means nothing); a curve without any value in a grid is not a row of it
+  function curveGrids(cv) {
+    const B = (cv && cv.buckets) || [], curves = (cv && cv.curves) || [];
+    const grid = (src, sum) => {
+      const rows = curves.map(c => { const vals = B.map(b => cell(src, c.id, b)); return { id: c.id, name: c.name || c.id, vals, sum: sum ? sumAvail(vals) : null }; })
+        .filter(r => r.vals.some(num));
+      return { rows, max: absMax(rows) };
+    };
+    const cov = (cv && cv.coverage) || { rows: 0, linearRows: 0, bucketRows: 0 };
+    return { buckets: B, move: grid(cv && cv.move, false), dv01: grid(cv && cv.dv01, true), linear: grid(cv && cv.linear, true), coverage: cov,
+      // linear by term is saved only by runs after TDM#406 (pnl.extra.rates_linear_curves); none — «нет данных», not zeros
+      linearCover: !cov.rows ? 'нет записей' : !cov.bucketRows ? 'нет данных' : cov.bucketRows < cov.rows ? cov.bucketRows + ' из ' + cov.rows + ' записей' : '' };
+  }
+  const LIN_WARN_PCT = 3, LIN_WARN_ABS = 1e6;
+  // linear (DV01 × move, Σ rates_linear) against exact (Σ rates) by discounting curve; '' — «кривая не указана».
+  // The warning: |diff| > 3 % of |linear| and > 1 mn RUB, only when every row has the linear estimate (otherwise rows
+  // without it would sit in the difference)
+  function linearVsExact(cv, name) {
+    const lt = (cv && cv.linearTotal) || {}, ex = (cv && cv.exact) || {}, cov = (cv && cv.coverage) || {}, full = cov.rows > 0 && cov.linearRows === cov.rows;
+    const ids = [...new Set(Object.keys(ex).concat(Object.keys(lt)))];
+    return ids.map(id => {
+      const lin = num(lt[id]) ? lt[id] : null, exact = num(ex[id]) ? ex[id] : null, diff = lin != null && exact != null ? exact - lin : null;
+      const pct = diff != null && lin ? diff / Math.abs(lin) * 100 : null;
+      return { id, name: name ? name(id) : id || NO_CURVE, linear: lin, exact, diff, pct, warn: full && diff != null && pct != null && Math.abs(diff) > LIN_WARN_ABS && Math.abs(pct) > LIN_WARN_PCT };
+    }).sort((a, b) => (a.id === '') - (b.id === '') || Math.abs(b.exact || 0) - Math.abs(a.exact || 0));
+  }
+  // cumulative rates PnL by curve on the date axis (days' ratesByCurve); a curve without a value in the period is left out
+  function curveSeries(prep) {
+    const byDate = new Map(prep.days.map(d => [d.date, d]));
+    return prep.curves.map(c => ({ id: c.id, name: c.name || c.id || NO_CURVE,
+      vals: prep.dates.map(d => (byDate.has(d) && byDate.get(d).ratesByCurve && num(byDate.get(d).ratesByCurve[c.id]) ? byDate.get(d).ratesByCurve[c.id] : null)) }))
+      .filter(s => s.vals.some(num)).map(s => Object.assign(s, { cum: cumulate(s.vals), total: sumAvail(s.vals) }));
+  }
+  // positions on each curve: their exact rates and their share of the curve's
+  function curvePositions(prep) {
+    const tot = {};
+    prep.positions.forEach(p => { const id = p.curve || '', v = val(p, 'rates'); if (v != null) tot[id] = (tot[id] || 0) + v; });
+    return prep.positions.filter(p => val(p, 'rates') != null).map(p => {
+      const id = p.curve || '', v = val(p, 'rates'), t = tot[id];
+      return { ref: p.ref, p, curve: id, rates: v, share: t ? v / Math.abs(t) * 100 : null };
+    }).sort((a, b) => (a.curve === '') - (b.curve === '') || (a.curve < b.curve ? -1 : a.curve > b.curve ? 1 : 0) || Math.abs(b.rates) - Math.abs(a.rates));
+  }
+
+  // ---------- E · Позиция (/position) and F · Контроль (/checks) ----------
+  const SEV = { crit: { icon: '●', label: 'критично', rank: 0 }, warn: { icon: '▲', label: 'внимание', rank: 1 }, info: { icon: '○', label: 'инфо', rank: 2 } };
+  // thresholds of F (state.ui): mn RUB and % of the explained → the query of /checks (RUB, share)
+  const THR_DEFAULT = { abs: 3, pct: 25 };
+  const thrQuery = ui => ({ thr_abs: String((num(ui && ui.thrAbs) ? ui.thrAbs : THR_DEFAULT.abs) * 1e6), thr_pct: String((num(ui && ui.thrPct) ? ui.thrPct : THR_DEFAULT.pct) / 100) });
+  // a finding covers its days [date, dateTo]
+  const covers = (x, d) => !!x.date && d >= x.date && d <= (x.dateTo || x.date);
+  // findings by position; currency findings (fxrev: ref null, the currency as name) — by currency; flagged — positions
+  // with a finding above «инфо»
+  function findingsIndex(findings) {
+    const byRef = new Map(), byCcy = new Map(), flagged = new Set();
+    const push = (m, k, x) => { if (!m.has(k)) m.set(k, []); m.get(k).push(x); };
+    (findings || []).forEach(x => {
+      if (x.ref) { push(byRef, x.ref, x); if (x.sev !== 'info') flagged.add(x.ref); }
+      else if (x.check === 'fxrev' && x.name) push(byCcy, x.name, x);
+    });
+    return { byRef, byCcy, flagged,
+      of: (ref, ccy) => (byRef.get(ref) || []).concat(ccy ? byCcy.get(ccy) || [] : []),
+      on: (ref, ccy, date) => (byRef.get(ref) || []).concat(ccy ? byCcy.get(ccy) || [] : []).filter(x => covers(x, date)) };
+  }
+  const worstSev = list => list.reduce((w, x) => (SEV[x.sev] && (!w || SEV[x.sev].rank < SEV[w].rank) ? x.sev : w), null);
+  // the list of E: positions of the selection by book, the largest period total first; flag — a finding above «инфо»
+  function positionList(positions, flagged) {
+    const m = new Map();
+    positions.forEach(p => { if (!m.has(p.book)) m.set(p.book, []); m.get(p.book).push({ ref: p.ref, p, total: num(p.total) ? p.total : null, flag: !!(flagged && flagged.has(p.ref)) }); });
+    return [...m.keys()].sort().map(book => ({ book, items: m.get(book).sort((a, b) => (a.total == null) - (b.total == null) || Math.abs(b.total || 0) - Math.abs(a.total || 0)) }));
+  }
+  // the same instrument in other books of the selection (their histories are not merged)
+  const otherBooks = (positions, p) => (p && p.instrument ? [...new Set(positions.filter(x => x.instrument === p.instrument && x.book !== p.book).map(x => x.book))].sort() : []);
+  // columns of E's day table: the source keys with a value on some day (FX net as one); the carry split replaces the
+  // carry only when every day with carry has it; «Необъяснённое» always
+  function dayColumns(days) {
+    const has = k => days.some(d => { const v = srcVal(d, k); return v != null && Math.abs(v) >= 0.5; });
+    const split = days.some(d => val(d, 'carry') != null) && days.every(d => val(d, 'carry') == null || (val(d, 'carry_coupon') != null && val(d, 'carry_pull') != null));
+    const keys = (split ? ['carry_coupon', 'carry_pull'] : ['carry']).concat(['rolldown', 'funding', 'rates', 'spread', 'convexity', 'fx', 'new_trades']).filter(has);
+    keys.push('other');
+    if (has('reported')) keys.push('reported');
+    return keys;
+  }
+  // one row of E's day table: inputs of D−1 and D, Δ yield and Δ spread in bp (null without both ends), the interval
+  const dDiff = (a, b, k) => (num(a) && num(b) ? (b - a) * k : null);
+  function dayRow(d) {
+    const i = d.inputs || {};
+    return { date: d.date, prevDate: d.prevDate, cal: d.prevDate ? dayDiff(d.prevDate, d.date) : null, src: i.source || null,
+      cleanPrev: num(i.cleanPrev) ? i.cleanPrev : null, clean: num(i.clean) ? i.clean : null, dy: dDiff(i.ytmPrev, i.ytm, 100), dz: dDiff(i.zPrev, i.z, 1),
+      dv01: num(i.dv01) ? i.dv01 : null, quantity: num(i.quantity) ? i.quantity : null, quantityPrev: num(i.quantityPrev) ? i.quantityPrev : null,
+      total: num(d.total) ? d.total : null, ratesLinear: num(d.ratesLinear) ? d.ratesLinear : null, gap: num(d.grossCheck) ? d.grossCheck : null,
+      events: d.events || [], noPnl: d.noPnl || null, day: d };
+  }
+
+  // calendar of F: market days and run days of the period — 'norun' (market day without a run), 'issue' (a finding above
+  // «инфо» other than the missing run itself covers the day), 'ok'; month — the first day of a new month
+  function calendar(ck) {
+    const cov = (ck && ck.coverage) || {}, missing = new Set(cov.missingRuns || []), runs = new Set(cov.runDates || []);
+    const dates = [...new Set((cov.marketDates || []).concat(cov.runDates || []))].sort();
+    const bad = ((ck && ck.findings) || []).filter(x => x.sev !== 'info' && x.check !== 'norun');
+    return dates.map((d, i) => {
+      const n = bad.filter(x => covers(x, d)).length;
+      return { date: d, state: missing.has(d) && !runs.has(d) ? 'norun' : n ? 'issue' : 'ok', n, month: i > 0 && d.slice(0, 7) !== dates[i - 1].slice(0, 7) };
+    });
+  }
+  // heat map of F: unexplained (other) positions × days; the scale is capped at the threshold (above — full colour), at
+  // least 0.1 mn RUB; rows — positions by the largest |other| (largest on top: the y axis goes up)
+  function heatmap(un, thrAbs) {
+    const dates = (un && un.dates) || [], refs = (un && un.refs) || [], cells = ((un && un.cells) || []).filter(c => num(c[2]));
+    const peak = refs.map(() => 0);
+    cells.forEach(([, y, v]) => { peak[y] = Math.max(peak[y], Math.abs(v)); });
+    const order = refs.map((r, i) => i).sort((a, b) => peak[a] - peak[b] || (refs[a] < refs[b] ? 1 : -1));  // bottom → top
+    const at = new Map(order.map((y, i) => [y, i]));
+    const max = Math.max(0, ...peak), thr = num(thrAbs) && thrAbs > 0 ? thrAbs : max;
+    return { dates, refs: order.map(i => refs[i]), data: cells.map(([x, y, v]) => [x, at.get(y), v]), max, cap: Math.max(1e5, Math.min(max, thr)) };
+  }
+  // what a finding's value is (API TDM#407): an amount in RUB, a price, a share of the FX move, a quantity
+  const VALUE_KIND = { recon: 'rub', unexpl: 'rub', fsign: 'rub', lin: 'rub', outlier: 'rub', stale: 'price', fxrev: 'share', life: 'qty' };
+  // check cards: status, findings by severity (worst first); the list of the page keeps the API order (sev, then date)
+  function checkCards(ck) {
+    const fs = (ck && ck.findings) || [];
+    return ((ck && ck.checks) || []).map(c => {
+      const own = fs.filter(x => x.check === c.key), by = {};
+      own.forEach(x => { by[x.sev] = (by[x.sev] || 0) + 1; });
+      return Object.assign({}, c, { n: own.length, bySev: Object.keys(SEV).filter(s => by[s]).map(s => [s, by[s]]), worst: worstSev(own) });
+    });
+  }
+
   const api = { COMPONENTS, BY_KEY, DERIVED, MODES, BT_MODES, COMPONENT_MODES, CARRY_MODES, PRESETS, GROUPS, NO_CURVE, NO_RATING, MIN_CONTRIB,
+    colour, tint, signedBp, curveGrids, linearVsExact, curveSeries, curvePositions, LIN_WARN_PCT, LIN_WARN_ABS,
+    SEV, THR_DEFAULT, thrQuery, covers, findingsIndex, worstSev, positionList, otherBooks, dayColumns, dayRow, calendar, heatmap, VALUE_KIND, checkCards,
     sumAvail, sumAll, val, srcVal, coverage, coverText, hasCoupon, hasSplit, sumAggs,
     addDays, dayDiff, presetRange, weekdays, autoGran, isoWeek, makeBuckets, bucketAggs, bucketHasMarket, periodDates, cumulate, calDays, perCalDay,
     prepare, componentRows, carryDefs, attrDefs, visibleRows, groupRows, rowsFor, chartRows, waterfallItems, contrib,

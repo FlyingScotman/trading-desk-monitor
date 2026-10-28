@@ -1,5 +1,5 @@
 // C19 «PnL за период» in the browser (Playwright; skipped without it).
-//  1. Without a server: the pages from the files, a run from tests/js/fixtures/concepts_run.js, /api/v1/history/pnl/*
+//  1. Without a server: the pages from the files, a run from tests/js/fixtures/concepts_run.js, /api/v1/history/pnl/* (screens A–F)
 //     answered from the synthetic tests/js/fixtures/pnl_period.json — screens A, B, C, the request parameters, the
 //     latest request winning (no stale result while loading), «—» for missing data, 390 px, both themes, no errors.
 //  2. With PNL_HISTORY_BASE=http://127.0.0.1:<port> (desk serve on a synthetic store, e.g. test_pnl_history.seed_history):
@@ -79,11 +79,13 @@ test('C19 «PnL за период» on the synthetic fixture: A, B, C, requests,
     assert.deepEqual((await wfNames(pg)).slice(0, -1).sort(), ['DEMO-A', 'DEMO-B']);
     assert.match(await pg.locator('#contribTitle').textContent(), /Итог/);
     assert.ok(!BAD.test(await pg.locator('#main').innerText()));
-    // a contributor opens E with the position (placeholder screen until TDM#409)
-    await pg.locator('#contrib [data-ref]').first().click();
+    // a contributor opens E with the position
+    const contributor = pg.locator('#contrib [data-ref]').first(), cref = await contributor.getAttribute('data-ref');
+    await contributor.click();
     await pg.waitForSelector('#tabs [data-tab=position].on');
     assert.equal(await pg.evaluate(() => location.hash), '#position');
-    assert.match(await pg.locator('#main').innerText(), /экран в работе/);
+    await pg.waitForSelector('#pDays table');
+    assert.equal(await pg.locator('#plist [aria-current=true]').getAttribute('data-ref'), cref);
     // B: a position cell asks /position for that position and shows its largest days
     await tab(pg, 'matrix');
     await pg.locator('#mt tbody tr:not(.grp) td.cell').first().click();
@@ -121,6 +123,130 @@ test('C19 «PnL за период» on the synthetic fixture: A, B, C, requests,
         }
       }
     }
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); }
+});
+
+test('C19 D, E, F on the synthetic fixture: requests, missing data, F → E on its day, themes, 390 px', { skip: pw ? false : 'нет Playwright', timeout: 120000 }, async () => {
+  const browser = await pw.chromium.launch();
+  try {
+    const { pg, ctx, errors, calls } = await open(browser);
+    const NO_SPLIT_FX = /FX актива|FX фондирования/;
+    const last = p => calls.filter(u => u.pathname.endsWith(p)).at(-1);
+    // D: /curves with the period and filters (no gran); move signed without brackets; linear by term not saved — «нет данных»
+    await tab(pg, 'curves');
+    await pg.waitForSelector('#cvLin table');
+    const cq = last('/curves').searchParams;
+    assert.equal(cq.get('from'), '2026-10-01'); assert.ok(cq.get('run_id')); assert.equal(cq.get('gran'), null);
+    const move = await pg.locator('table[data-vk=c19-period-curve-move] tbody tr').first().innerText();
+    assert.match(move, /−15/); assert.doesNotMatch(move, /\(/);
+    assert.match(await pg.locator('#cvBody .grids3').innerText(), /нет данных: линейный PnL по срокам[\s\S]*TDM#406/);
+    assert.equal(await pg.locator('#cvLin tbody tr').count(), 3);
+    const cum = await pg.evaluate(() => echarts.getInstanceByDom(document.getElementById('cvCum')).getOption().series.map(s => s.name));
+    assert.deepEqual(cum.sort(), ['RUONIA', 'ОФЗ', 'кривая не указана'].sort());
+    // E: /position of the opened position; ▲ from /checks; header; inputs D−1; a row marks the day on the charts
+    await pg.locator('#cvPos [data-ref="DEMO-A|OFZ-1"]').click();
+    await pg.waitForSelector('#pDays table');
+    const pq = last('/position').searchParams;
+    assert.equal(pq.get('position_book'), 'DEMO-A'); assert.equal(pq.get('position_id'), 'OFZ-1');
+    await pg.waitForSelector('#plist [data-ref="DEMO-A|CORP-1"] .sevtxt');
+    assert.equal(await pg.locator('#plist [data-ref="DEMO-A|OFZ-1"] .sevtxt').count(), 0);
+    assert.match(await pg.locator('#pHead').innerText(), /есть в другой книге: DEMO-B/);
+    const days = await pg.locator('#pDays').innerText();
+    assert.match(days, /по прогону D−1/); assert.match(days, /из расчёта/);
+    assert.ok((await pg.locator('#pAttr .attrbar div').count()) >= 2);
+    await pg.locator('#pDays tr[data-d="2026-10-06"]').click();
+    assert.equal(await pg.locator('#pDays tr.sel').getAttribute('data-d'), '2026-10-06');
+    const marks = await pg.evaluate(() => ['pCh', 'pPrice', 'pYld'].map(id => echarts.getInstanceByDom(document.getElementById(id)).getOption().series.flatMap(s => ((s.markLine || {}).data || []).map(m => m.xAxis))));
+    assert.deepEqual(marks, [['2026-10-06'], ['2026-10-06'], ['2026-10-06']]);
+    // a position without the coupon split: attribution «нет данных»; a swap: no price, no yield charts
+    await pg.locator('#plist [data-ref="DEMO-A|CORP-1"]').click();
+    await pg.waitForSelector('#pAttr');
+    assert.match(await pg.locator('#pAttr').innerText(), /нет данных: нет разбивки купона/);
+    await pg.locator('#plist [data-ref="DEMO-B|IRS-1"]').click();
+    await pg.waitForSelector('#pDays table');
+    assert.match(await pg.locator('#pBody').innerText(), /нет данных: у позиции нет чистой цены/);
+    // F: /checks with the default thresholds; cards filter the list; a new threshold asks again
+    await tab(pg, 'control');
+    await pg.waitForSelector('#ckList table');
+    const kq = last('/checks').searchParams;
+    assert.equal(kq.get('thr_abs'), '3000000'); assert.equal(kq.get('thr_pct'), '0.25');
+    assert.equal(await pg.locator('.check').count(), FX.checks.checks.length);
+    assert.match(await pg.locator('.check[data-k=stale]').innerText(), /нет данных/);
+    assert.equal(await pg.locator('#ckList tbody tr').count(), FX.checks.findings.length);
+    await pg.locator('.check[data-k=fxrev]').click();
+    assert.equal(await pg.locator('#ckList tbody tr').count(), 1);
+    assert.match(await pg.locator('#ckList').innerText(), /валюта USD/);
+    await pg.locator('#ckAll').click();
+    assert.equal(await pg.locator('#ckList tbody tr').count(), FX.checks.findings.length);
+    assert.equal(await pg.locator('#ckCal i.cal-norun').count(), 1);
+    await pg.locator('#thrAbs').fill('1.5'); await pg.locator('#thrAbs').dispatchEvent('change');
+    await pg.waitForSelector('#ckList table');
+    assert.equal(last('/checks').searchParams.get('thr_abs'), '1500000');
+    // a heat-map cell opens E on that position and day
+    const cellAt = await pg.evaluate(() => {
+      const el = document.getElementById('ckHeat'), c = echarts.getInstanceByDom(el), o = c.getOption(), y = o.yAxis[0].data.findIndex(n => n.startsWith('Synthetic Corp 1')), x = o.xAxis[0].data.indexOf('2026-10-09');
+      const [px, py] = c.convertToPixel({ seriesIndex: 0 }, [x, y]), r = el.getBoundingClientRect();
+      return [r.left + px, r.top + py];
+    });
+    await pg.mouse.click(cellAt[0], cellAt[1]);
+    await pg.waitForSelector('#tabs [data-tab=position].on');
+    await pg.waitForSelector('#pDays tr.sel');
+    assert.equal(await pg.locator('#plist [aria-current=true]').getAttribute('data-ref'), 'DEMO-A|CORP-1');
+    assert.equal(await pg.locator('#pDays tr.sel').getAttribute('data-d'), '2026-10-09');
+    assert.match(await pg.locator('#pDays tr.sel').innerText(), /Необъяснённое: /);
+    // a finding of a position opens E on its day
+    await tab(pg, 'control');
+    await pg.waitForSelector('#ckList table');
+    await pg.locator('#ckList [data-ref="DEMO-B|USD-1"]').first().click();
+    await pg.waitForSelector('#pDays tr.sel');
+    assert.equal(await pg.locator('#pDays tr.sel').getAttribute('data-d'), '2026-10-09');
+    assert.match(await pg.locator('#pDays tr.sel').getAttribute('class'), /critrow/);
+    // themes and widths: no page-wide scroll, no NaN / null / undefined, FX only net
+    for (const theme of ['dark', 'light']) {
+      await pg.evaluate(t => { if (KIT.theme() !== t) KIT.toggleTheme(); }, theme);
+      for (const width of [1440, 390]) {
+        await pg.setViewportSize({ width, height: 900 });
+        for (const key of ['curves', 'position', 'control']) {
+          await tab(pg, key); await pg.waitForSelector(key === 'curves' ? '#cvLin table' : key === 'position' ? '#pDays table' : '#ckList table'); await pg.waitForTimeout(150);
+          assert.equal(await pg.evaluate(() => document.documentElement.scrollWidth), width, key + ' ' + theme + ' ' + width);
+          const text = await pg.locator('#main').innerText();
+          assert.ok(!BAD.test(text), key + ' ' + theme + ' ' + width); assert.doesNotMatch(text, NO_SPLIT_FX, key);
+          if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await pg.screenshot({ path: path.join(SHOTS, `c19-${key}-${theme}-${width}.png`), fullPage: true }); }
+        }
+      }
+    }
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); }
+});
+
+test('C19 D, E, F: a held-back answer never shows for another slice; a failed request says so', { skip: pw ? false : 'нет Playwright', timeout: 60000 }, async () => {
+  const browser = await pw.chromium.launch();
+  try {
+    let release;
+    const gate = new Promise(r => { release = r; });
+    const { pg, ctx, errors } = await open(browser);
+    // /position of OFZ-1 is held back; the user moves on to CORP-1 before it arrives
+    await pg.route('**/api/v1/history/pnl/position?*', async route => {
+      const u = new URL(route.request().url()), ref = u.searchParams.get('position_book') + '|' + u.searchParams.get('position_id');
+      if (ref === 'DEMO-A|OFZ-1') await gate;
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(FX.position[ref]) }).catch(() => { });
+    });
+    await pg.route('**/api/v1/history/pnl/curves?*', route => route.fulfill({ status: 500, body: '' }));
+    await pg.evaluate(() => { location.hash = 'position'; });
+    await pg.waitForSelector('#plist [data-ref="DEMO-A|OFZ-1"]');
+    await pg.locator('#plist [data-ref="DEMO-A|OFZ-1"]').click();
+    await pg.waitForFunction(() => /Загружаю дни позиции/.test(document.getElementById('pBody').textContent));
+    assert.equal(await pg.locator('#pDays').count(), 0, 'no previous position while loading');
+    await pg.locator('#plist [data-ref="DEMO-A|CORP-1"]').click();
+    await pg.waitForSelector('#pDays table');
+    release(); await pg.waitForTimeout(400);
+    assert.match(await pg.locator('#pHead').innerText(), /Synthetic Corp 1/);
+    assert.equal(await pg.locator('#plist [aria-current=true]').getAttribute('data-ref'), 'DEMO-A|CORP-1');
+    await tab(pg, 'curves');
+    await pg.waitForFunction(() => /HTTP 500/.test(document.getElementById('cvBody').textContent));
     assert.deepEqual(errors, []);
     await ctx.close();
   } finally { await browser.close(); }
@@ -187,6 +313,15 @@ test('C19 on a served synthetic store renders A, B, C from the real /period', { 
     await pg.waitForSelector('.k-kpis');
     assert.ok((await pg.locator('.k-kpi').first().innerText()).includes(await mn(pg, d.summary.total)));
     for (const key of ['matrix', 'carry', 'decomp']) { await tab(pg, key); await pg.waitForSelector('.k-kpis, .k-empty'); assert.ok(!BAD.test(await pg.locator('#main').innerText()), key); }
+    // D, E, F on the real /curves, /position, /checks: drawn (a table or «нет данных»), no NaN / null, no console error
+    const READY = { curves: '#cvLin table, #cvBody .k-empty', position: '#pDays table, #pBody .k-empty', control: '#ckList table, #ckList .k-empty' };
+    for (const key of ['curves', 'position', 'control']) {
+      await tab(pg, key); await pg.waitForSelector(READY[key], { timeout: 15000 });
+      const text = await pg.locator('#main').innerText();
+      assert.ok(!BAD.test(text), key); assert.doesNotMatch(text, /FX актива|FX фондирования/, key);
+    }
+    const cell = pg.locator('#ckList [data-ref]').first();
+    if (await cell.count()) { const d = await cell.getAttribute('data-d'); await cell.click(); await pg.waitForSelector('#pDays tr.sel'); assert.equal(await pg.locator('#pDays tr.sel').getAttribute('data-d'), d); }
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });
