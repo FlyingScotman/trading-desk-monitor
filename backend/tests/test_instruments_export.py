@@ -61,7 +61,7 @@ def test_core_static_reasons_and_coupons(export):
     assert r["SU52005RMFS4"]["core_static"] == "face_indexed"
     assert r["RU000A10BRM5"]["core_static"] == "ok"  # USD face settled in RUB: in scope since core 0.34
     assert "currency_mismatch" in r["RU000A10BRM5"]["dq_flags"]
-    assert r["RU000A100GW5"]["core_assumptions"].startswith("perpetual: call assumed")
+    assert r["RU000A100GW5"]["core_assumptions"].startswith("perpetual: no call assumed")
     # a floater whose running period has an amount and no rate: the amount as a rate (D4)
     assert r["RU000A109XR1"]["core_static"] == "ok" and r["RU000A109XR1"]["mon_coupon_pct"] == 15.7558
     assert r["SU52005RMFS4"]["core_static"] == "face_indexed" and r["SU52005RMFS4"]["mon_coupon_pct"] == 2.5

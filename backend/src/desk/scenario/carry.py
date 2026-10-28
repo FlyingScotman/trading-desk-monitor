@@ -247,7 +247,8 @@ def spread_rolls(ctx: EodContext, carries: Sequence[PositionCarry], hdate: date,
         cs01 = (c.fact or {}).get("cs01")
         why = ("not_covered" if c.carry is None or terms is None else "redeemed" if c.method == "redeemed"
                else "ofz_held" if terms.bond_class in OFZ_CLASSES else "floater_held"
-               if terms.coupon_type == "floating" else "not_rub" if bond_currency(terms) != "RUB"
+               if terms.coupon_type == "floating" else "perpetual_held"
+               if terms.is_perpetual and terms.maturity_date is None else "not_rub" if bond_currency(terms) != "RUB"
                else "no_quote" if quote is None else None)
         if why is None:
             curve, why = spread_curve.curve_for(curves, grade_of(terms))

@@ -95,15 +95,22 @@ def value_one(ctx, terms, quote):
     return tuple(valued.values())
 
 
-@pytest.mark.parametrize("secid,call,rate", [(VTB, date(2031, 11, 18), "10"), (ALFA, date(2031, 12, 13), "15")])
-def test_perpetual_is_valued_to_an_assumed_call(outs, secid, call, rate):
+@pytest.mark.parametrize("secid,last,notes", [
+    (VTB, date(2027, 5, 18), ("perpetual: no call assumed", "future coupons assumed at 10 %")),
+    (ALFA, date(2029, 9, 13), ("perpetual: no call assumed",)),
+])
+def test_perpetual_is_valued_never_called(outs, secid, last, notes):
+    """TDM#35 (ORG_CONVENTIONS §4.1 «не отзовут», core BACKLOG #128): no call is assumed; core values the listed
+    coupons and then the last one for ever (``never_called``), with no redemption. Until 0.2.10 the bond was called
+    on an assumed date five years on (``PERPETUAL_CALL_YEARS``), with about half the duration."""
     o = outs[secid]
     v, row = o.valuation, next(p for p in o.core_result.positions if p.instrument_id == secid)
-    assert v.assumptions == (f"perpetual: call assumed {call.isoformat()}", f"future coupons assumed at {rate} %")
-    assert (v.horizon_kind, v.horizon_date, row.horizon) == ("call", call, "call")
-    assert row.exercise_assumption.startswith(f"exercise:to_call:{call.isoformat()}:coupons-")
-    assert v.cashflows[-1].payment_date == call and v.cashflows[-1].amount > float(o.terms.face_value)
-    assert 15 < v.ytm_pct < 30  # a deep-discount perpetual to five years, not to its next coupon
+    assert v.assumptions == notes
+    assert (v.horizon_kind, v.horizon_date, row.horizon) == ("perpetual", last, "perpetual")
+    assert row.exercise_assumption.startswith("exercise:never_called")
+    assert v.perpetual_tail is not None and v.perpetual_tail.anchor_date == last
+    assert v.cashflows[-1].payment_date == last and v.cashflows[-1].amount == v.perpetual_tail.amount  # no face
+    assert 10 < v.ytm_pct < 25 and v.modified_duration > 4  # the stream's yield and duration, not to a call
 
 
 def test_unsupported_benchmark_is_rejected_with_its_name(ctx):

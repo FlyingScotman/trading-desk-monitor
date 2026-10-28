@@ -821,7 +821,7 @@ class CarryPosition(BaseModel):
                                        "curve(tenor at the horizon) - curve(tenor now)")
     spreadCurve: str | None = Field(None, description="spread=curve: the rating grade whose peer curve it rolled on "
                                     "(«A (для A+)»: a neighbouring grade's), or why the spread is held: no_rating, "
-                                    "no_peer_curve, ofz_held, floater_held, not_rub, redeemed, no_cs01, no_quote, "
+                                    "no_peer_curve, ofz_held, floater_held, perpetual_held, not_rub, redeemed, no_cs01, no_quote, "
                                     "not_covered")
     carryMethod: Literal["core", "redeemed"] | None = Field(None, description="core: core's horizon_portfolio; "
                                                             "redeemed: the bond's last flow is paid by the horizon, "

@@ -1332,7 +1332,7 @@ export interface components {
             spreadRollBp?: number | null;
             /**
              * Spreadcurve
-             * @description spread=curve: the rating grade whose peer curve it rolled on («A (для A+)»: a neighbouring grade's), or why the spread is held: no_rating, no_peer_curve, ofz_held, floater_held, not_rub, redeemed, no_cs01, no_quote, not_covered
+             * @description spread=curve: the rating grade whose peer curve it rolled on («A (для A+)»: a neighbouring grade's), or why the spread is held: no_rating, no_peer_curve, ofz_held, floater_held, perpetual_held, not_rub, redeemed, no_cs01, no_quote, not_covered
              */
             spreadCurve?: string | null;
             /**

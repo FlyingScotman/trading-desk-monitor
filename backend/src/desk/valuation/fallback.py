@@ -61,7 +61,9 @@ from rub_fixed_income import (
     BondRiskEngine,
     BondRiskRequest,
     CoreRejection,
+    PerpetualTail,
     kbd_effective_yield,
+    perpetual_tail,
 )
 
 from ..curves.rates import KEY_RATE_CURVE_ID
@@ -246,20 +248,19 @@ def _accrued(t: BondTerms, d: date, face: float) -> tuple[float, str] | None:
     return None
 
 
-def _schedule(t: BondTerms, d: date) -> tuple[Any, tuple[BondCashflow, ...], Any] | None:
-    """Fixed-coupon schedule to the horizon (as ``valuation.bonds`` builds it), its flows and the
-    core instrument, or None. A call redeems at the horizon."""
+def _schedule(t: BondTerms, d: date) -> tuple[Any, tuple[BondCashflow, ...], Any, PerpetualTail | None] | None:
+    """Fixed-coupon schedule to the horizon (as ``valuation.bonds`` builds it), its flows, the core instrument and a
+    never-called perpetual's tail (core ``perpetual_tail``, TDM#35; None for a dated bond), or None."""
     try:
         s = fixed_schedule(t, d)
         if s.floater is not None:
             return None
-        call = s.horizon_kind == "call"
-        inst = core_instrument(t, d, s.horizon_date, None if call else s.offer, coupons=s.coupons,
-                               redeem_at_horizon=call)
+        inst = core_instrument(t, d, s.horizon_date, s.offer, coupons=s.coupons)
         flows = inst.cashflows(after=d, offer=inst.horizon("open_put", d)[1] if inst.offers else None)
+        tail = perpetual_tail(inst.coupon_leg.periods) if s.horizon_kind == "perpetual" else None  # type: ignore[union-attr]
     except (Rejected, CoreRejection):
         return None
-    return s, tuple(BondCashflow(f.payment_date, f.amount) for f in flows), inst
+    return s, tuple(BondCashflow(f.payment_date, f.amount) for f in flows), inst, tail
 
 
 def bond_discount(ctx: EodContext, terms: BondTerms) -> tuple[str, Any, str | None]:
@@ -274,11 +275,12 @@ def bond_discount(ctx: EodContext, terms: BondTerms) -> tuple[str, Any, str | No
 
 
 def _engine(ctx: EodContext, curve: Any, flows: tuple[BondCashflow, ...], kind: str, q: float, *,
-            spread_bp: float | None = None, dirty: float | None = None) -> tuple[BondRiskEngine, Any]:
+            spread_bp: float | None = None, dirty: float | None = None,
+            tail: PerpetualTail | None = None) -> tuple[BondRiskEngine, Any]:
     e = BondRiskEngine(BondRiskRequest(cashflows=flows, settlement_date=ctx.business_date, curve=curve,
                                        spread_convention=SPREAD_CONVENTION,
                                        spread_kind=kind,  # type: ignore[arg-type]
-                                       spread_bp=spread_bp, dirty_price_rub=dirty, quantity=q),
+                                       spread_bp=spread_bp, dirty_price_rub=dirty, quantity=q, perpetual_tail=tail),
                        curve_cache=ctx.cache)
     return e, e.risk(difference="central")
 
@@ -382,8 +384,10 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
     if sched is not None:
         why.extend(sched[0].assumptions)
     offer = next_offer(t, bd)
+    listed = [c.pay_date for c in t.coupons if c.pay_date > bd]
     horizon, hkind = ((offer[0], offer[2]) if offer else (t.maturity_date, "maturity") if t.maturity_date
-                      else (bd, "unknown"))
+                      else (sched[0].horizon_date if sched else listed[-1], "perpetual") if t.is_perpetual
+                      and (sched or listed) else (bd, "unknown"))  # a perpetual is never called (TDM#35)
     coupon, _ = current_period(t, bd)
     coupon_pct = coupon_view(t, bd).pct  # every rung shows the static coupon (D4): rate, amount, last known rate
     sa = ref.source_analytics if ref else {}
@@ -416,7 +420,7 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
         pv = q * dirty
         if sched is not None:
             try:
-                _, r = _engine(ctx, disc_curve, sched[1], kind, q, dirty=dirty)
+                _, r = _engine(ctx, disc_curve, sched[1], kind, q, dirty=dirty, tail=sched[3])
                 why.append(f"risk: {disc}, Z calibrated to this price on the fixed schedule"
                            + (f" ({disc_note})" if disc_note else ""))
                 bs = {b.bucket: b.dv01_rub for b in r.buckets}
@@ -473,13 +477,13 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
         # shortcut: a carried spread never refreshes from better information (new issuer peers, a market-wide
         # spread move) until the bond trades again, upgrade by moving it with its group's median change
         try:
-            priced = (_engine(ctx, disc_curve, sched[1], kind, q, spread_bp=c.z_spread_bp), c.z_spread_bp, c.source,
+            priced = (_engine(ctx, disc_curve, sched[1], kind, q, spread_bp=c.z_spread_bp, tail=sched[3]), c.z_spread_bp, c.source,
                       f"Z {c.z_spread_bp:.0f} bp carried from {c.business_date} ({c.source})")
         except (ValueError, RuntimeError) as err:
             why.append(f"carried Z {c.z_spread_bp:.0f} bp from {c.business_date} failed ({err}): the day's median")
     if sched is not None and priced is None and (med := fb.median_z(t, kind, disc_id)) is not None:
         try:
-            priced = _engine(ctx, disc_curve, sched[1], kind, q, spread_bp=med[0]), med[0], f"{med[1]} on {bd}", med[1]
+            priced = _engine(ctx, disc_curve, sched[1], kind, q, spread_bp=med[0], tail=sched[3]), med[0], f"{med[1]} on {bd}", med[1]
         except (ValueError, RuntimeError):
             pass
     if sched is not None and priced is not None:
