@@ -3,7 +3,7 @@
   "info": {
     "title": "Desk API",
     "description": "Desk API v1 (docs/architecture/05 §2)",
-    "version": "0.2.10"
+    "version": "0.2.11"
   },
   "paths": {
     "/api/v1/auth/state": {
