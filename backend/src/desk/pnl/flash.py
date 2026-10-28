@@ -108,7 +108,7 @@ from ..valuation.bonds import RISK_CURVES, SPREAD_CONVENTION, BondValuation, Flo
 
 log = logging.getLogger(__name__)
 
-METHOD ="desk-flash-exact-v2"
+METHOD = "desk-flash-exact-v2"
 """v2: on the bond's own curves (the RUONIA discount curve, a floater's projection curve reprojected); v1 repriced
 fixed flows on the KBD only."""
 METHOD_FX = "desk-flash-exact-fx-v1"
