@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-__version__ = "0.2.9"
+__version__ = "0.2.10"
 
 # Bumped by hand when a change makes a run compute something else from the same inputs (valuation, PnL, risk
 # buckets, coverage). A run records ``logic_version()`` in its lineage; the autopilot recomputes the latest positions
