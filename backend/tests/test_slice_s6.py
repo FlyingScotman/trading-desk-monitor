@@ -260,16 +260,20 @@ def _sig(x):
     return x
 
 
-GAMMA_EPS = 1e-8
-"""RUB/bp^2: a Hessian entry below it is numerical noise of core's second order (2^-35-sized entries that
-come and go between platforms), not risk (1e-8 x 500 bp x 500 bp = 2.5e-3 RUB); dropped from the payload."""
+GAMMA_EPS, GAMMA_REL = 1e-8, 1e-10
+"""RUB/bp^2: a Hessian entry below ``GAMMA_EPS``, or below ``GAMMA_REL`` x the position's largest entry, is numerical
+noise of core's second order (last-bit entries that come and go between platforms: 2^-35-sized on a small bond,
+2^-22 on a never-called perpetual of 10 mn face whose largest entry is ~1e5, TDM#35), not risk (1e-8 x 500 bp x
+500 bp = 2.5e-3 RUB); dropped from the payload."""
 RTOL, ATOL = 1e-6, 1e-8
 """How far a payload number may move between platforms (core's last bits, then ``_sig``)."""
 
 
 def _denoise(payload):
-    return {**payload, "positions": [{**p, "gamma": [g for g in p["gamma"] if abs(g[2]) >= GAMMA_EPS]}
-                                     for p in payload["positions"]]}
+    def keep(gamma):
+        eps = max(GAMMA_EPS, GAMMA_REL * max((abs(g[2]) for g in gamma), default=0.0))
+        return [g for g in gamma if abs(g[2]) >= eps]
+    return {**payload, "positions": [{**p, "gamma": keep(p["gamma"])} for p in payload["positions"]]}
 
 
 def _same(a, b, path="", rtol=RTOL, atol=ATOL) -> list[str]:
