@@ -24,6 +24,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from itertools import pairwise
 from typing import Any, Literal
 
 from rub_fixed_income import (
@@ -283,9 +284,20 @@ def kbd_fixing_id(tenor_years: float) -> str:
 
 
 def kbd_tenors(static: Snapshot) -> tuple[float, ...]:
-    """The constant maturities of the static's KBD floaters (contract 1.4 ``benchmark_tenor_years``), sorted."""
-    return tuple(sorted({float(f["benchmark_tenor_years"]) for f in static.data.get("floater_formulas") or ()
-                         if f.get("benchmark") == "ZCYC" and f.get("benchmark_tenor_years") is not None}))
+    """The constant maturities of the static's KBD floaters (contract 1.4 ``benchmark_tenor_years``), and the reset cycle
+    in whole years of a KBD formula without a tenor (a KBD-reset perpetual, ``valuation.bonds.kbd_reset``: its calls
+    that many years apart, TDM#383), sorted."""
+    formulas = [f for f in static.data.get("floater_formulas") or () if f.get("benchmark") == "ZCYC"]
+    tenors = {float(f["benchmark_tenor_years"]) for f in formulas if f.get("benchmark_tenor_years") is not None}
+    untenored = {f["secid"] for f in formulas if f.get("benchmark_tenor_years") is None}
+    calls: dict[str, list[date]] = {}
+    for o in static.data.get("offers") or ():
+        if o.get("secid") in untenored and o.get("type") == "call" and o.get("offer_date"):
+            calls.setdefault(o["secid"], []).append(date.fromisoformat(o["offer_date"]))
+    for ds in calls.values():
+        ds = sorted(set(ds))
+        tenors |= {float(round((b - a).days / 365.25)) for a, b in pairwise(ds)} - {0.0}
+    return tuple(sorted(tenors))
 
 
 def kbd_fixing_entries(market: Snapshot, static: Snapshot, bd: date, cut: datetime,

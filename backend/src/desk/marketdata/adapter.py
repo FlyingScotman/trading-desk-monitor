@@ -565,9 +565,15 @@ def period_margin(terms: BondTerms, start: date) -> float | None:
     return max(by)[1] / 1e4 if by else None
 
 
+def _reset_anchor(resets: tuple[date, ...], start: date) -> date | None:
+    on = [r for r in resets if r <= start + timedelta(days=10)]
+    return min(on[-1], start) if on else None
+
+
 def core_instrument(terms: BondTerms, after: date, horizon: date, offer: tuple[date, Decimal, str] | None = None, *,
                     coupons: tuple[Coupon, ...] | None = None,
-                    floater: tuple[FloatingCouponRule, str, str] | None = None) -> Instrument:
+                    floater: tuple[FloatingCouponRule, str, str] | None = None,
+                    resets: tuple[date, ...] = ()) -> Instrument:
     """Core terms of a bond valued after ``after`` (the trade date).
 
     Only what the valuation needs, so that gaps outside it cannot reject the bond: the coupons
@@ -585,7 +591,9 @@ def core_instrument(terms: BondTerms, after: date, horizon: date, offer: tuple[d
     (``floater`` = rule, fixing ID, projection curve ID) gets a ``FloatingCouponLeg``: coupons MOEX
     published (``known``/``current_published``, non-zero) are cash with their rate (``published_rate``), the others
     are projected; a corporate's accrues on the rate (``AccrualBasis.RATE_ACT_365``), an OFZ-PK's pro rata on the
-    amount (core 0.33 ``Instrument.accrued``).
+    amount (core 0.33 ``Instrument.accrued``). ``resets`` (a KBD-reset perpetual, TDM#383): each coupon not published
+    is fixed at the last reset on or before its start (core 0.41 ``FloatingCouponPeriod.fixing_anchor``; a reset a few
+    days after the start, a holiday shift, anchors on the start); a published one is cash and needs no fixing.
 
     ``settlement_lag_days`` is 0 (finding F9, core brief C2): the MOEX price and accrued are as of
     the trade date, so core must settle on it; at T+1 the Z-spread is off by 0.5-2.8 bp.
@@ -604,7 +612,7 @@ def core_instrument(terms: BondTerms, after: date, horizon: date, offer: tuple[d
                 float(c.amount_per_bond) if known else None,  # type: ignore[arg-type]
                 # the issuer's rate of a published coupon: a corporate accrues on it (core 0.33 accrued)
                 float(c.rate_pct) / 100 if known and c.rate_pct else None,
-                margin=period_margin(terms, start)))
+                margin=period_margin(terms, start), fixing_anchor=None if known else _reset_anchor(resets, start)))
             continue
         if start is None or c.amount_per_bond is None or (not ofz and c.rate_pct is None):
             raise InvalidTerms(f"coupon {c.no} on {c.pay_date}: start {c.start}, amount {c.amount_per_bond}, "

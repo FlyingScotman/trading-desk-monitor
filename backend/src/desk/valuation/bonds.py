@@ -71,6 +71,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
+from itertools import pairwise
 from typing import Any
 
 from rub_fixed_income import (
@@ -106,6 +107,7 @@ from rub_fixed_income import (
     ValuationPolicy,
     ZSpreadConvention,
     clean_price_pct_to_dirty_rub,
+    floating_perpetual_tail,
     horizon_portfolio,
     perpetual_tail,
     value_portfolio,
@@ -179,6 +181,10 @@ def discount_curve(market: MarketSnapshot) -> tuple[str, str | None]:
 
 
 FLOATER_BENCHMARKS = ("KEY_RATE", "RUONIA", "RUONIA_3M", "RUONIA_INDEX", "ZCYC")
+KBD_RESET_FIXING_OFFSET = 4
+"""ZCYC publication days before the reset a KBD-reset perpetual's coupon is fixed on when the hub's formula has no
+``fixing_offset`` (TDM#383): the curated value of the issuer's per-period KBD floaters (РЖД 001Б-04, 4 publication
+days); the offset only moves the forward's start by days."""
 KBD_FIXING_UNITS = {"zcyc_publication_days": "business_days", "business_days": "business_days",
                     "calendar_days": "calendar_days"}
 """A KBD floater's fixing offset unit (contract 1.4 ``fixing_offset_unit``) -> core's (``FixingDateRule.unit``): a day
@@ -207,6 +213,8 @@ class FixedSchedule:
     assumptions: tuple[str, ...] = ()
     floater: tuple[FloatingCouponRule, str, str] | None = None
     """Coupon rule, fixing ID and projection curve ID of a floater."""
+    resets: tuple[date, ...] = ()
+    """A KBD-reset perpetual's reset dates (``kbd_reset``): each coupon is fixed at the last one on or before it."""
 
 
 FOREIGN_BOND_CCYS = ("CNY", "USD", "EUR")
@@ -236,8 +244,9 @@ def eligibility(terms: BondTerms) -> None:
             raise Rejected("floater_benchmark_unsupported", f"benchmark {f['benchmark']} ({f.get('benchmark_raw')})")
         if f.get("spread_bp") is None:
             raise Rejected("floater_formula_incomplete", f"{f['status']} formula without a spread")
-        if f["benchmark"] == "ZCYC" and (f.get("benchmark_tenor_years") is None or f.get("fixing_offset") is None
-                                         or (f.get("fixing_offset_unit") or "zcyc_publication_days") not in KBD_FIXING_UNITS):
+        if f["benchmark"] == "ZCYC" and kbd_reset(terms) is None and (
+                f.get("benchmark_tenor_years") is None or f.get("fixing_offset") is None
+                or (f.get("fixing_offset_unit") or "zcyc_publication_days") not in KBD_FIXING_UNITS):
             raise Rejected("floater_formula_incomplete",
                            f"KBD floater without its tenor or fixing rule (contract 1.4): tenor "
                            f"{f.get('benchmark_tenor_years')}, offset {f.get('fixing_offset')} {f.get('fixing_offset_unit')}")
@@ -274,6 +283,13 @@ def floater_rule(terms: BondTerms) -> tuple[FloatingCouponRule, str, str, str]:
     assert f is not None
     bench, ofz = f["benchmark"], terms.bond_class == "ofz_pk"
     if bench == "ZCYC":
+        if (reset := kbd_reset(terms)) is not None:
+            years, resets = reset
+            rule, fixing_id, curve_id, desc = kbd_floater_rule(
+                {**f, "benchmark_tenor_years": years, "fixing_offset": KBD_RESET_FIXING_OFFSET,
+                 "fixing_offset_unit": "zcyc_publication_days"})
+            return rule, fixing_id, curve_id, (f"{desc}, reset every {years} years at the calls (last "
+                                               f"{resets[-1].isoformat()}; tenor and fixing assumed)")
         return kbd_floater_rule(f)
     term = bench in ("RUONIA_3M", "RUONIA_INDEX")
     shift = 7 if term else int(f["lag_days"]) if f.get("lag_days") is not None and not ofz else 6
@@ -302,6 +318,34 @@ def is_kbd_floater(terms: BondTerms) -> bool:
     """A floater on the KBD (MOEX ``ZR_YLD_CRV``, the hub's benchmark ``ZCYC``): its coupons project on ``RUB OFZ``."""
     f = terms.floater_formula
     return terms.coupon_type == "floating" and f is not None and f.get("benchmark") == "ZCYC"
+
+
+def kbd_reset(terms: BondTerms) -> tuple[int, tuple[date, ...]] | None:
+    """A KBD-reset perpetual (TDM#383, core BACKLOG #127): its coupon is fixed for N years at each call date to the
+    N-year KBD plus the margin (РЖД 001Б-01/-02, Газпром капитал 001Б-02/-03: 6.55 % for five years, then
+    17.26 % = KBD 5Y of June 2025 + 2.05 %). The hub's formula is ``ZCYC`` without a tenor or fixing (its fit per coupon
+    reproduces few coupons: the rate does not move between resets). Read from the terms: a perpetual with call dates
+    (past and scheduled) a whole number N of years apart, and one rate for every coupon listed from the last past call
+    to the next. Returns (N, the reset dates up to the next scheduled one), or None (a formula with its own tenor is
+    a floater fixed per period)."""
+    f = terms.floater_formula
+    if not terms.is_perpetual or f is None or f.get("benchmark") != "ZCYC" or f.get("benchmark_tenor_years") is not None:
+        return None
+    calls = sorted({o.date for o in terms.offers if o.type == "call" and o.date is not None
+                    and o.status in ("past", "scheduled")})
+    past = [d for d in calls if any(o.date == d and o.status == "past" for o in terms.offers)]
+    nxt = [d for d in calls if d not in past]
+    if not past or not nxt or len(calls) < 2:
+        return None
+    gaps = {round((b - a).days / 365.25) for a, b in pairwise(calls)}
+    if len(gaps) != 1 or (years := gaps.pop()) < 1 or any(abs((b - a).days - years * 365.25) > 31
+                                                         for a, b in pairwise(calls)):
+        return None
+    cycle = [c for c in terms.coupons if c.start is not None and past[-1] <= c.start and c.pay_date <= nxt[0]]
+    rates = {c.rate_pct for c in cycle}
+    if not cycle or len(rates) != 1 or None in rates:
+        return None
+    return years, tuple(d for d in calls if d <= nxt[0])
 
 
 def kbd_floater_rule(f: dict[str, Any]) -> tuple[FloatingCouponRule, str, str, str]:
@@ -533,10 +577,24 @@ def fixed_schedule(terms: BondTerms, settlement: date) -> FixedSchedule:
         total = sum((r.value_per_bond for r in future_reds), Decimal(0))  # type: ignore[misc]
         if abs(total - (face := face_on(terms, settlement))) > Decimal("0.01"):  # type: ignore[operator]
             raise Rejected("redemption_incomplete", f"future redemptions {total} vs face {face} on {settlement}")
-    floater = None
+    floater, resets = None, ()
     if terms.coupon_type == "floating":
         rule, fixing_id, curve_id, desc = floater_rule(terms)
         floater = (rule, fixing_id, curve_id)
+        if (reset := kbd_reset(terms)) is not None:
+            resets = reset[1]
+            # the running cycle's coupons are set at its reset (MOEX lists them projected): cash, not a projection
+            cycle = [c for c in coupons if c.status == "projected_by_moex" and c.start is not None
+                     and resets[-2] <= c.start and c.pay_date <= resets[-1]]
+            coupons = tuple(replace(c, status="known") if c in cycle else c for c in coupons)
+            if coupons[-1].pay_date <= resets[-1]:  # the next cycle's first coupon, for core to continue cycle by cycle
+                last = coupons[-1]
+                step = max(1, 12 // terms.coupon_frequency) if terms.coupon_frequency else 6
+                coupons += (Coupon(last.no + 1, last.pay_date, add_months(last.pay_date, step), None, None, None,
+                                   "unknown", last.face),)
+            if cycle:
+                notes.append(f"coupons to the reset {resets[-1].isoformat()} at {cycle[0].rate_pct:f} % "
+                             "(set at the last reset, MOEX)")
         if FORMULA_FLOATER_LABEL in terms.labels:  # TDM#401
             notes.append("floater by its formula: MOEX lists known coupons, the coming ones are not known")
         if terms.floater_formula["status"] != "curated":  # type: ignore[index]
@@ -544,7 +602,7 @@ def fixed_schedule(terms: BondTerms, settlement: date) -> FixedSchedule:
     filled = _fill_coupons(terms, coupons, settlement, horizon, notes)
     current = next((float(c.rate_pct) for c in filled if c.rate_pct is not None), None)
     return FixedSchedule(horizon, kind, offer, float(face_on(terms, settlement)), current, filled,  # type: ignore[arg-type]
-                         tuple(notes), floater)
+                         tuple(notes), floater, resets)
 
 
 def select_price(quote: BondQuote) -> tuple[str, float]:
@@ -689,6 +747,9 @@ class FloaterModel:
     offer: Offer | None
     horizon_date: date
     guard_bp: float | None
+    tail: PerpetualTail | None = None
+    """A never-called floating perpetual (TDM#35, core 0.41): ``instrument`` holds its leg continued as core values it
+    (``floating_perpetual_tail``, about 35 years) and this the projected tail after it."""
 
 
 @dataclass
@@ -710,7 +771,8 @@ class _Prepared:
 
 def _prepare(r: BondRequest, market: MarketSnapshot) -> _Prepared:
     s, after = r.schedule, r.quote.trade_date
-    inst = core_instrument(r.terms, after, s.horizon_date, s.offer, coupons=s.coupons, floater=s.floater)
+    inst = core_instrument(r.terms, after, s.horizon_date, s.offer, coupons=s.coupons, floater=s.floater,
+                           resets=s.resets)
     offer = None if not inst.offers else inst.horizon("open_put", after)[1]
     floating = isinstance(inst.coupon_leg, FloatingCouponLeg)  # not when no coupon is left to the horizon
     # cashflows to the horizon; a never-called perpetual's listed coupons, without its tail
@@ -1030,7 +1092,11 @@ def _valuation(prep: _Prepared, v: PositionValuation, quantity: float, guard: bo
     floater = None
     if isinstance(inst.coupon_leg, FloatingCouponLeg):
         offer = inst.horizon(v.horizon, v.settlement_date)[1] if v.horizon in ("confirmed_put", "open_put") else None
-        floater = FloaterModel(inst, offer, v.horizon_date, CAP_FLOOR_GUARD_BP if guard else None)
+        tail = None
+        if v.horizon == "perpetual":
+            leg, tail = floating_perpetual_tail(inst.coupon_leg, v.settlement_date)
+            inst = replace(inst, coupon_leg=leg)
+        floater = FloaterModel(inst, offer, v.horizon_date, CAP_FLOOR_GUARD_BP if guard else None, tail)
     first = v.factor_risk.first_order_by_factor()
     hess = v.factor_risk.hessian_by_factor() if v.factor_risk.has_second_order else {}
     ruonia: dict[str, float] = {}
@@ -1043,7 +1109,8 @@ def _valuation(prep: _Prepared, v: PositionValuation, quantity: float, guard: bo
             _, c, b = _factor(f).split("|")
             by_curve.setdefault(c, dict.fromkeys(RISK_BUCKETS, 0.0))[b] += x
     buckets = {b: math.fsum(bs[b] for bs in by_curve.values()) for b in RISK_BUCKETS}
-    if v.horizon_date != r.schedule.horizon_date:  # core's open_put chose another offer than rule F2 (not expected)
+    if v.horizon_date != r.schedule.horizon_date and v.horizon != "perpetual":  # core's open_put chose another offer
+        # than rule F2 (not expected); a floating perpetual's is its continued leg's end
         notes.append(f"horizon: core {v.horizon_date.isoformat()} ({v.horizon}), backend "
                      f"{r.schedule.horizon_date.isoformat()} ({r.schedule.horizon_kind})")
     out = BondValuation(

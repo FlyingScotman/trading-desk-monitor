@@ -39,7 +39,8 @@ VALUATION_VERSION = 20  # 2: risk per curve (R8); 3: static display fields (R9 D
 # day's FX PnL (dirty MV change + coupons); fx_funding revalues the D-1 dirty MV
 # 19: a KBD floater's margin per period by the hub's spread_schedule (a step at a put or a call offer, TDM#252)
 # 20: no call is the horizon (TDM#35): a perpetual never called (core never_called, its tail in the flash PnL and the
-# fallback), a callable to maturity; a «known coupons» bond with a key-rate/RUONIA formula valued as a floater (TDM#401)
+# fallback; core 0.41: floating and KBD-reset ones too, TDM#383), a callable to maturity; a «known coupons» bond with a
+# key-rate/RUONIA formula valued as a floater (TDM#401)
 
 
 def logic_version() -> str:

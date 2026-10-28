@@ -311,17 +311,19 @@ def _pv_floater(fl: FloaterModel, settlement: date, market: MarketSnapshot, curv
                 projection: DiscountCurve | None, spread_bp: float, spread_kind: str, quantity: float,
                 cache: ShockedCurveCache) -> float:
     """Position PV of a floater after ``settlement``: its principal, and its coupons projected on ``projection``
-    (None: ``curve`` projects and discounts) with the fixings of ``market``, as core values it."""
+    (None: ``curve`` projects and discounts) with the fixings of ``market``, as core values it; a never-called
+    floating perpetual's continued leg and tail (``FloaterModel.tail``, TDM#35)."""
     inst = fl.instrument
     principal = tuple(BondCashflow(f.payment_date, f.amount) for f in inst.cashflows(
         after=settlement, horizon=fl.horizon_date, offer=fl.offer))
-    if not any(f.amount > 0 for f in principal):
+    if fl.tail is None and not any(f.amount > 0 for f in principal):
         return 0.0
     leg = inst.floating_leg(market, horizon=fl.horizon_date, strike_guard_bp=fl.guard_bp)
     engine = BondRiskEngine(
         BondRiskRequest(cashflows=principal, settlement_date=settlement, curve=curve,
                         spread_convention=SPREAD_CONVENTION, spread_kind=spread_kind,  # type: ignore[arg-type]
-                        spread_bp=spread_bp, quantity=quantity, floating_leg=leg, projection_curve=projection),
+                        spread_bp=spread_bp, quantity=quantity, floating_leg=leg, projection_curve=projection,
+                        perpetual_tail=fl.tail),
         curve_cache=cache,
     )
     return engine.base_price_rub * quantity
