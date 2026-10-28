@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import socket
 import ssl
@@ -583,6 +584,9 @@ def test_the_watcher_finds_only_the_published_bytes(tmp_path):
     f = downloads.find_expected(tmp_path, name, len(z), sha(z))
     assert f.state == "found" and f.path.name == name.replace(".zip", "(2).zip")
     (tmp_path / f"x{name}").write_bytes(z)  # another name is never taken
+    # File writes can share an mtime tick; make the ordering fixture explicit.
+    os.utime(tmp_path / name, (1, 1))
+    os.utime(tmp_path / name.replace(".zip", "(2).zip"), (2, 2))
     assert [p.name for p in downloads.copies(tmp_path, name)] == [name.replace(".zip", "(2).zip"), name]
 
 
