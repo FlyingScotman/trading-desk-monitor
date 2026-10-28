@@ -94,6 +94,7 @@ def _effective(st: Settings) -> dict[str, Any]:
         "private_adapter_default": st.private_adapter_default,
         "private_adapter_config": str(st.private_adapter_config) if st.private_adapter_config else None,
         "private_adapter_sha256": st.private_adapter_sha256,
+        "acquisition_python": str(st.acquisition_python) if st.acquisition_python else None,
         "inbox_dirs": [str(d) for d in st.inbox_dirs], "inbox_archive": str(st.inbox_archive),
         "inbox_poll_seconds": st.inbox_poll_seconds, "adapter_check_timeout_s": st.adapter_check_timeout_s,
         "autopilot": st.autopilot,

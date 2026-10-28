@@ -82,6 +82,7 @@ PUBLIC = frozenset({"/health/live", LOGIN_PAGE, "/favicon.ico", "/api/v1/auth/st
 CSRF_EXEMPT = frozenset({"/api/v1/auth/login", "/api/v1/auth/setup"})
 """No session yet, so no token: these need JSON and a same-site ``Origin`` instead."""
 AUDITED = (("/api/v1/settings", "settings"), ("/api/v1/adapter", "adapter"), ("/api/v1/update", "update"),
+           ("/api/v1/acquisition", "acquisition"),
            ("/api/v1/scenario-jobs", "scenario_job"), ("/api/v1/autopilot/run", "autopilot_run"))
 """State-changing requests the middleware records (path prefix, action); users, logins and aliases record
 themselves, with their details."""

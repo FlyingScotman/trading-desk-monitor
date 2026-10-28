@@ -307,6 +307,9 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
             <label for="adapter_check_timeout_s">Проверка формы адаптером, секунд</label>
             <div><input class="inp mono num" id="adapter_check_timeout_s" data-key="adapter_check_timeout_s" inputmode="decimal" placeholder="60">
               <p class="hint">Пусто — 60. Сколько ждать адаптер, когда форма проверяет файл перед сохранением; сохранить можно и без проверки.</p></div>
+            <label for="acquisition_python">Python для получения данных</label>
+            <div><input class="inp mono" id="acquisition_python" data-key="acquisition_python" autocomplete="off">
+              <p class="hint">Полный путь к Python с библиотекой внутренней системы. Нужен только для запуска получения данных.</p></div>
           </div>
         </div>
       </div>
@@ -321,6 +324,21 @@ table.t{border-collapse:collapse;width:100%;font-size:12.5px}
         <div class="bd" style="padding-top:8px"><p class="hint" style="margin:0">Сервер просматривает эти папки и передаёт новые файлы адаптеру. Подпись — заметка для вас («Позиции», «PnL»).</p></div>
       </div>
       <div id="tabs-adapter"></div>
+      <div class="card" id="acquisition-card">
+        <div class="hd"><h2>Получить условия сделок</h2><button class="ibtn" id="acq-refresh" type="button">Обновить доступность</button></div>
+        <div class="bd">
+          <p class="hint">Запуск с этого компьютера. Сначала сохраните настройки подключения в форме адаптера и включите нужный источник. Остальные источники не меняются.</p>
+          <p class="hint">Будут получены условия выбранных книг, затем выполнен новый полный расчёт этой даты. Входные данные других книг не заменяются.</p>
+          <div class="form">
+            <label for="acq-date">Дата отчёта</label><div><input class="inp" type="date" id="acq-date"><p class="hint">Нужен существующий локальный отчёт именно этой даты, а также загруженные позиции и рынок. Другая дата автоматически не выбирается.</p></div>
+            <span>Состав сделок</span><div><button class="ibtn" id="acq-inspect" type="button">Найти отчёт и книги</button><div id="acq-scope" style="overflow-wrap:anywhere"></div></div>
+            <label for="acq-user">Логин внутренней системы</label><input class="inp" id="acq-user" autocomplete="off" spellcheck="false" maxlength="4096">
+            <label for="acq-password">Пароль</label><div><input class="inp" type="password" id="acq-password" autocomplete="new-password" maxlength="4096"><p class="hint">Логин и пароль передаются только этому запуску, в настройки не сохраняются. После отправки поля очищаются.</p></div>
+          </div>
+          <div class="row" style="margin-top:14px;flex-wrap:wrap"><button class="ibtn" id="acq-check" type="button">Проверить вход</button><button class="ibtn" id="acq-fetch" type="button" disabled>Получить и пересчитать</button><button class="ibtn" id="acq-cancel" type="button" disabled>Отменить</button></div>
+          <p id="acq-status" role="status" aria-live="polite"></p><div id="acq-result"></div>
+        </div>
+      </div>
       <div class="card" id="cf-card">
         <div class="hd"><h2>Другие файлы настроек</h2><span class="mut3">без формы — правятся как JSON</span></div>
         <div class="bd" id="cf-list"><p class="mut">Загрузка…</p></div>
@@ -777,7 +795,7 @@ show(location.hash);
 
 /* ---------- settings.json ---------- */
 const S = {data:null, dirs:[], dirty:false, adapter:null};
-const KEYS = ['hub_url','https_proxy','proxy_user','hub_transport','no_proxy','hub_ca_bundle','private_adapter','private_adapter_config','inbox_poll_seconds','adapter_check_timeout_s','autopilot_sync_last','inbox_lookback_days','history_days','history_bonds_from','history_rates_from','backfill_from','backfill_budget_s'];
+const KEYS = ['hub_url','https_proxy','proxy_user','hub_transport','no_proxy','hub_ca_bundle','private_adapter','private_adapter_config','acquisition_python','inbox_poll_seconds','adapter_check_timeout_s','autopilot_sync_last','inbox_lookback_days','history_days','history_bonds_from','history_rates_from','backfill_from','backfill_budget_s'];
 
 function setDirty(v){
   S.dirty = v;
@@ -870,6 +888,7 @@ const EFF = [
   ['https_proxy','Прокси'], ['proxy_user','Логин прокси'], ['proxy_password_set','Пароль прокси задан'], ['hub_transport','Способ подключения'], ['no_proxy','Без прокси для'], ['snapshot_cache','Срезы маркет-даты'], ['snapshot_drop','Папка ручной загрузки срезов'],
   ['store','Хранилище'], ['pg_dir','Встроенная PostgreSQL'], ['report_dir','Отчёты валидации'],
   ['private_adapter','Адаптер'], ['private_adapter_default','Адаптер из комплекта'], ['private_adapter_config','Папка настроек адаптера'], ['private_adapter_sha256','Закреплённый отпечаток адаптера'],
+  ['acquisition_python','Python для получения данных'],
   ['inbox_dirs','Папки с отчётами'], ['inbox_archive','Архив принятых файлов'], ['inbox_poll_seconds','Период опроса, сек'], ['adapter_check_timeout_s','Проверка формы адаптером, сек'],
   ['autopilot','Автообновление'], ['intraday','Расчёт внутри дня'], ['autopilot_sync_last','Загружать последних дат'],
   ['inbox_lookback_days','Брать отчёты не старше, дней'], ['history_days','История котировок, рабочих дней'],
@@ -1622,3 +1641,4 @@ function mountTabs(a, reload){
 })();
 </script>
 <script src="desk-backup.js"></script>
+<script src="desk-acquisition.js"></script>

@@ -44,6 +44,7 @@ class AdapterHandle:
     config_dir: str | None = None
     warnings: tuple[str, ...] = ()  # optional describe() keys of a bad shape, ignored (config_files, settings_tabs)
     inbox_dirs: tuple[str, ...] = ()  # passed to the adapter as ctx.inbox_dirs (08 §7)
+    package_dir: str | None = None  # package root actually fingerprinted; no helper capability for single modules
 
     @property
     def ok(self) -> bool:
@@ -287,5 +288,8 @@ def load_adapter(spec: str | None, config_dir: str | None, expected_sha256: str 
         why = f"bad_describe: {type(e).__name__}"
     if why:
         return fail(why, fingerprint=fp, describe=desc if isinstance(desc, dict) else {})
+    location = r.get("location") or {}
+    package_dir = str(Path(spec).expanduser().resolve()) if by_path else \
+        str(Path(location["path"][0]).resolve()) if location.get("path") else None
     return AdapterHandle(spec, desc["name"], desc["version"], fp, desc, None, config_dir,
-                         (*check_config_files(desc)[1], *check_settings_tabs(desc)[1]), inbox_dirs)
+                         (*check_config_files(desc)[1], *check_settings_tabs(desc)[1]), inbox_dirs, package_dir)
