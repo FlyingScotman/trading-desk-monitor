@@ -35,6 +35,11 @@ def read(path, hit, ctx):
     result = original_read(path, hit, ctx)
     if (Path(ctx.config_dir) / 'mode').read_text() == 'file_error':
         result['issues'].append({'severity':'error','code':'synthetic_file_error','message':'Synthetic rejection'})
+    if (Path(ctx.config_dir) / 'mode').read_text() in ('two_books', 'unit_error'):
+        result['scopes'].append({'book_id':'CORP'})
+        if (Path(ctx.config_dir) / 'mode').read_text() == 'unit_error':
+            result['issues'].append({'severity':'error','code':'synthetic_unit_error',
+                                     'scope':{'book_id':'CORP'},'message':'Synthetic rejection'})
     return result
 def describe():
     d = original()
@@ -81,7 +86,7 @@ else:
     prefix = 'positions_' if mode == 'wrong_dataset' else 'trade_terms_'
     named_day = '20261014' if mode == 'wrong_date' else day.replace('-', '')
     target = out / (prefix + named_day + '.csv')
-    book = 'CORP' if mode == 'wrong_book' else p['book'][0]
+    book = 'CORP' if mode == 'wrong_book' else 'OFZ' if mode in ('two_books', 'unit_error') else p['book'][0]
     with target.open('w', newline='') as f:
         writer = csv.writer(f, delimiter=';')
         writer.writerow(['trade_id','book_id','product_kind','trade_date','value_date','base_ccy','quote_ccy','side',
@@ -337,3 +342,39 @@ def test_manual_cli_eod_uses_same_cycle_lock(configured, monkeypatch):
     with CycleLock(configured.home):
         assert cli.cmd_eod(SimpleNamespace(settings=configured)) == 2
     assert not calls
+
+
+@pytest.mark.parametrize("reject", [False, True])
+def test_managed_two_book_validation_is_checked_before_any_unit_write(configured, store_url, cache, tmp_path, reject):  # noqa: F811
+    st = replace(configured, snapshot_cache=cache, store_url=store_url)
+    load(store_url, tmp_path, DAY.isoformat(), 10)
+    (st.private_adapter_config / "mode").write_text("unit_error" if reject else "two_books")
+    cli.eod_run(st, DAY.isoformat(), report_dir=None, out=lambda _: None)
+    with store.connect(store_url) as con:
+        before = store.positions_for(con, DAY).private_inputs_hash
+        old_run = store.default_runs(con, DAY)[DAY]["run_id"]
+        old_count = con.execute("SELECT count(*) FROM run").fetchone()[0]
+    params = fetch_fields(st)
+    params["book"] = ["CORP", "OFZ"]
+    service = aq.Acquisition(lambda: st, store_url)
+    try:
+        service.start(params)
+        result = wait(service)
+        with store.connect(store_url) as con:
+            inputs = store.positions_for(con, DAY)
+            sets = con.execute("SELECT scope FROM dataset_set WHERE dataset='trade_terms'").fetchall()
+            if reject:
+                assert result["code"] == "snapshot_not_accepted", result
+                assert sets == []
+                assert inputs.private_inputs_hash == before
+                assert store.default_runs(con, DAY)[DAY]["run_id"] == old_run
+                assert con.execute("SELECT count(*) FROM run").fetchone()[0] == old_count
+                assert con.execute("SELECT status FROM inbox_file_status ORDER BY status_id DESC LIMIT 1") \
+                    .fetchone()[0] == "rejected"
+            else:
+                assert result["code"] == "completed", result
+                assert {row[0]["book_id"] for row in sets} == {"CORP", "OFZ"}
+                assert result["run_id"] != old_run
+                assert result["private_inputs_hash"] == inputs.private_inputs_hash != before
+    finally:
+        service.close()

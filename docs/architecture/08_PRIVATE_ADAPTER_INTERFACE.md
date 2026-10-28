@@ -94,7 +94,9 @@ zeroization is not claimed. Status is in memory, not a persisted credential/job 
 
 Before fetch the requested date must have market data and positions for every selected book. The finished file
 goes through the existing scanner/reference/contract/store path with an exact source/date/book guard before
-unit writes. Source precedence, `covers=listed` and full-snapshot semantics remain unchanged. Acceptance requires
+unit writes. Source precedence, `covers=listed` and full-snapshot semantics remain unchanged. All units must pass
+validation before any managed acquisition unit is written: a scoped validation rejection blocks the entire
+acquisition file, while ordinary offline scans keep their existing partial-unit behavior. Acceptance requires
 the latest file attempt and all selected units accepted under the captured fingerprint, current terms sets for
 that exact date/source, then a new **full EOD for that date** using the existing cycle lock and fresh private
 inputs hash/lineage. Other dates, history/backfill and automatic source activation are not run. Other books'

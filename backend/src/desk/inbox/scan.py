@@ -692,7 +692,7 @@ class _Scan:
         c = check_read(decl, hit, raw, books=self.books, contract=self.h.describe["contract"])
         if self.expected is not None:
             source, day, books = self.expected
-            valid = (not c.file_error and hit["source"] == source and hit["report_date"] == day and vd.isoformat() == day
+            valid = (c.status == "accepted" and hit["source"] == source and hit["report_date"] == day and vd.isoformat() == day
                      and {u["scope"].get("book_id") for u in c.units} == books
                      and all(u["dataset"] == "trade_terms" and set(u["scope"]) == {"book_id"}
                              and u["report_date"] == day for u in c.units))
