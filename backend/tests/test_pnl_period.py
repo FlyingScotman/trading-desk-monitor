@@ -81,7 +81,7 @@ def flash(pid: str, k: int, day: str) -> dict | None:
     if pid == "A1":  # the TDM#406 keys
         extra.update(carry_coupon=q["carry"] - 300.0, carry_pull=300.0,
                      rates_linear_curves={CURVE: {"1Y": lin * 0.25, "5Y": lin * 0.75}},
-                     prev={"clean_pct": price(pid, k - 1, day), "accrued_rub": 1.0, "ytm_pct": 12.0 - 0.01 * (k - 1),
+                     prev={"clean_pct": price(pid, k - 1, day), "accrued_per_bond_rub": 1.0, "ytm_pct": 12.0 - 0.01 * (k - 1),
                            "dv01_rub": -4000.0, "cs01_rub": -100.0, "quantity": 10.0, "risk": {}})
     q["extra"] = extra
     return q

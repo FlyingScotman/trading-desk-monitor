@@ -244,3 +244,19 @@ API (TDM#407: `backend/src/desk/api/pnl_period.py`, `pnl_checks.py`). Поля �
 - **Решения по ставке** (`cbrMeetings`) — отметка на первой дате оси не раньше `effectiveDate`.
 - **Цвета** — семейства `KIT.PNL_COLORS` (кэрри, фондирование, ставки, спред, FX, сделки, прочее), как на других
   PnL-мониторах; «Разница PV по отчётам» и «Цена» — из `KIT.PAL`.
+
+## Что сохраняет flash (TDM#406)
+
+Сохранение в flash (TDM#406: `backend/src/desk/pnl/flash.py`, определения — в docstring модуля). Только методы
+`desk-flash-exact-*`; прямые и простые методы и прогоны до TDM#406 ключей не имеют (→ `null`).
+
+- `carry_coupon` — купонный доход за (D-1, D] по графику D-1: `q × (НКД(D) − НКД(D-1) + купоны, выплаченные внутри)`,
+  НКД на бумагу по инструменту ядра на датах оценки (флоатер — по фиксингам D-1); у валютной бумаги в её валюте ×
+  курс D, как `carry`. `carry_pull = carry − carry_coupon`. Также `received_coupon_rub` + `received_principal_rub` =
+  `received_rub`.
+- `rates_linear_curves: {кривая: {срок: руб}}` (кривые — как в `fact.risk`), сумма = `rates_linear`; срок без сдвига
+  не пишется. `curve_moves_bp: {кривая: {срок: б.п.}}` — использованные сдвиги. У ОФЗ в RUONIA + базис — только
+  `RUB OFZ`; `rates_linear_ruonia`/`rates_linear_basis` делят тот же итог по факторам, а не по срокам.
+- `prev: {clean_pct, accrued_per_bond_rub, dirty_per_bond_rub, ytm_pct, pv_rub, dv01_rub, cs01_rub, ofz_spr01_rub,
+  quantity, risk, ofz_ruonia_risk?}` — оценка D-1, от которой идут шаги, при количестве D. В копию PnL в `fact.extra.pnl`
+  эти ключи не попадают.

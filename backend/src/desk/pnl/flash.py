@@ -35,6 +35,35 @@ V1          the D dirty price                                                   
 - ``other`` is what the D-1 position does not explain at the D market: a changed schedule
   (an offer passed, a new coupon fixed) or a quote whose price and accrued disagree.
 
+Breakdowns kept in ``extra`` (TDM#406, the PnL period screen: docs/architecture/briefs/PNL_PERIOD.md); they split
+the components above and change none of them. Absent when not computable (a bond valued off core), never 0:
+
+==========================  ===========================================================================================
+Key                         Definition
+==========================  ===========================================================================================
+``carry_coupon``            the coupon income of (D-1, D] on the D-1 schedule: ``q x (AI(D) - AI(D-1) + coupons paid in
+                            (D-1, D])``, AI the accrued coupon per bond core computes at each valuation date on the D-1
+                            instrument (``Instrument.accrued``; a floater's on the D-1 fixings, as ``V_carry``); a
+                            foreign bond's in its currency x the D rate, as ``carry``. As the forward carry's coupon
+                            (``valuation.bonds.BondCarry``)
+``carry_pull``              ``carry - carry_coupon``: the clean value's drift at the held spread on the D-1 forwards
+                            (pull to par, the time value of the flows)
+``received_coupon_rub``,    ``received_rub`` split into the coupons and the principal (amortization, redemption) paid
+``received_principal_rub``  in (D-1, D]; the coupons are also in ``carry_coupon``
+``rates_linear_curves``     ``{published curve: {bucket: RUB}}``: the terms of ``rates_linear`` (D-1 bucket DV01 x that
+                            curve's move), a bucket without a move left out; they sum to ``rates_linear``. An OFZ in
+                            RUONIA + basis has only ``RUB OFZ`` (its basis risk x the KBD's par move): its
+                            ``rates_linear_ruonia`` and ``rates_linear_basis`` split the same total by factor, not by
+                            bucket
+``curve_moves_bp``          ``{published curve: {bucket: bp}}``: the moves those terms use, in the unit of the buckets
+                            (``FlashCurves.zero_move_bp``); an OFZ in RUONIA + basis also RUONIA's OIS par move
+``prev``                    the D-1 inputs the steps start from, at the quantity of D (the run revalues the D-1
+                            position with it): ``clean_pct``, ``accrued_per_bond_rub``, ``dirty_per_bond_rub``,
+                            ``ytm_pct``, ``pv_rub``, ``dv01_rub``, ``cs01_rub`` and ``ofz_spr01_rub`` (as the fact
+                            splits the spread risk), ``quantity``, ``risk`` (``{curve: {bucket: RUB}}`` as the fact
+                            stores it), ``ofz_ruonia_risk`` (an OFZ in RUONIA + basis). ``z0_bp`` is its Z-spread
+==========================  ===========================================================================================
+
 - A foreign bond core values on its own curve on both dates (CNY on XCCY; USD / EUR on the par-yield proxies with
   ``proxy_curves_for_risk``; batch 1, item 5) takes the same steps in its currency on that curve (its flows, PV and
   Z-spread are in it); each component is converted at the D market rate, and the rate move on the D-1 PV,
@@ -263,6 +292,24 @@ class FlashPnl:
     the transfer (the day's FX PnL is in the OCP). Outside ``explained`` and ``total`` (the position's MV change), as ``funding``."""
     fx_funding_cbr: float | None = None
     """The same at the CBR rates in force; None without them or without a liability."""
+    carry_coupon: float | None = None
+    """The coupon part of ``carry`` (module docstring, ``extra``); None without the D-1 instrument's accrued."""
+    received_coupon_rub: float | None = None
+    """The coupons of ``received_rub``; None without the D-1 coupon flows."""
+    rates_linear_curves: dict[str, dict[str, float]] | None = field(default=None, compare=False)
+    """``rates_linear`` by published curve and bucket."""
+    curve_moves_bp: dict[str, dict[str, float]] | None = field(default=None, compare=False)
+    """The moves of ``rates_linear_curves`` (and RUONIA's of ``rates_linear_ofz``) by published curve and bucket."""
+    prev_inputs: dict[str, Any] | None = field(default=None, compare=False)
+    """The D-1 inputs (``extra["prev"]``)."""
+
+    @property
+    def carry_pull(self) -> float | None:
+        return None if self.carry_coupon is None else self.carry - self.carry_coupon
+
+    @property
+    def received_principal_rub(self) -> float | None:
+        return None if self.received_coupon_rub is None else self.received_rub - self.received_coupon_rub
 
     @property
     def explained(self) -> float:
@@ -287,8 +334,39 @@ class FlashPnl:
             "identity_error": self.identity_error, "rates_linear": self.rates_linear,
             **({"rates_linear_ruonia": self.rates_linear_ofz[0], "rates_linear_basis": self.rates_linear_ofz[1]}
                if self.rates_linear_ofz is not None else {}),
-            "prev_price_basis": self.price_basis[0], **fx,
+            "prev_price_basis": self.price_basis[0], **fx, **self.breakdown(),
         }
+
+    def breakdown(self) -> dict[str, Any]:
+        """The keys of TDM#406 in ``extra`` (module docstring), JSON-safe: a pair whose value is not finite left out,
+        a non-finite number in a map null."""
+        out: dict[str, Any] = {}
+        for a, b, x, y in (("carry_coupon", "carry_pull", self.carry_coupon, self.carry_pull),
+                           ("received_coupon_rub", "received_principal_rub", self.received_coupon_rub,
+                            self.received_principal_rub)):
+            if _finite(x) is not None and _finite(y) is not None:
+                out[a], out[b] = x, y
+        for k, v in (("rates_linear_curves", self.rates_linear_curves), ("curve_moves_bp", self.curve_moves_bp),
+                     ("prev", self.prev_inputs)):
+            if v:
+                out[k] = _json_safe(v)
+        return out
+
+
+BREAKDOWN_KEYS = ("carry_coupon", "carry_pull", "received_coupon_rub", "received_principal_rub", "rates_linear_curves",
+                  "curve_moves_bp", "prev")
+"""The keys of ``FlashPnl.breakdown``: kept in the store's ``pnl.extra`` (``publish.desk_run``), which the PnL period
+API reads, not in the fact's copy of it (``publish.tdm_run.pnl_extra``), whose shape stays as it was."""
+
+
+def _finite(x: Any) -> float | None:
+    return float(x) if isinstance(x, int | float) and not isinstance(x, bool) and math.isfinite(x) else None
+
+
+def _json_safe(v: Any) -> Any:
+    if isinstance(v, dict):
+        return {k: _json_safe(x) for k, x in v.items()}
+    return v if isinstance(v, str) or v is None else _finite(v)
 
 
 def _pv(flows: tuple[BondCashflow, ...], settlement: date, curve: DiscountCurve, spread_bp: float,
@@ -323,6 +401,35 @@ def _pv_floater(fl: FloaterModel, settlement: date, market: MarketSnapshot, curv
         curve_cache=cache,
     )
     return engine.base_price_rub * quantity
+
+
+def _coupon_income(prev: BondValuation, fl: FloaterModel | None, curves: FlashCurves, s0: date, s1: date
+                   ) -> tuple[float | None, float | None]:
+    """The D-1 position's coupons paid in (s0, s1] and its coupon income over it (module docstring,
+    ``carry_coupon``), in the flows' currency; (None, None) without its coupon flows, its instrument or an accrued."""
+    flows, q = prev.cashflows, prev.quantity
+    if prev.instrument is None or len(prev.coupons) != len(flows):
+        return None, None
+    received = q * math.fsum(c for d, c in prev.coupons if s0 < d <= s1)
+    market = curves.market(True) if fl is not None else None  # the D-1 fixings, as V_carry
+    try:
+        a0, a1 = prev.instrument.accrued(s0, market), prev.instrument.accrued(s1, market)
+    except (ValueError, RuntimeError, ArithmeticError):  # an indexed leg (no CPI series), a floater core cannot
+        return received, None  # accrue: no split, the PnL itself as before
+    return received, q * (a1 - a0) + received
+
+
+def _prev_inputs(prev: BondValuation) -> dict[str, Any]:
+    """``extra["prev"]``: the D-1 valuation the steps start from, in the fact's fields (``publish.tdm_run``)."""
+    cs, kind = prev.spread01_rub, prev.spread_kind
+    return {
+        "clean_pct": prev.clean_pct, "accrued_per_bond_rub": prev.accrued_rub, "dirty_per_bond_rub": prev.dirty_rub,
+        "ytm_pct": prev.ytm_pct, "pv_rub": prev.pv_rub, "dv01_rub": prev.dv01_rub,
+        "cs01_rub": cs if kind == "credit" else 0.0, "ofz_spr01_rub": cs if kind == "ofz" else 0.0,
+        "quantity": prev.quantity,
+        "risk": {c: dict(bs) for c, bs in prev.risk().items() if any(bs.values())},
+        **({"ofz_ruonia_risk": dict(prev.ofz_ruonia)} if prev.ofz_ruonia else {}),
+    }
 
 
 def explain(prev: BondValuation, cur: BondValuation, curves: FlashCurves,
@@ -373,16 +480,24 @@ def explain(prev: BondValuation, cur: BondValuation, curves: FlashCurves,
     except (ValueError, RuntimeError, CoreRejection) as e:
         raise NoPnl("core_error", str(e)) from e
     linear, kbd = 0.0, RISK_CURVES[KBD_CURVE_ID]
+    terms: dict[str, dict[str, float]] = {}
+    moves: dict[str, dict[str, float]] = {}
     for c, bs in prev.risk().items():
         if prev.ofz_ruonia and c != kbd:  # an OFZ in RUONIA + basis: the KBD's own move is its first order (below)
             continue
         move = curves.zero_move_bp(PUBLISHED_TO_CORE.get(c, c))
         linear += sum(x * move.get(b, 0.0) for b, x in bs.items())
+        if used := [b for b in bs if b in move]:  # the same terms by bucket (TDM#406)
+            terms[c] = {b: bs[b] * move[b] for b in used}
+            moves[c] = {b: move[b] for b in used}
     ofz = None
     if prev.ofz_ruonia:  # RUONIA + basis: the day moved the KBD itself (dK), so B dK; RUONIA's part R dO, the rest basis
         d_ois = curves.zero_move_bp(RUONIA_OIS_CURVE_ID)
         ruonia = math.fsum(x * d_ois.get(b, 0.0) for b, x in prev.ofz_ruonia.items())
         ofz = (ruonia, linear - ruonia)
+        if used := [b for b in prev.ofz_ruonia if b in d_ois]:
+            moves[RISK_CURVES[RUONIA_OIS_CURVE_ID]] = {b: d_ois[b] for b in used}
+    coupon_received, coupon = _coupon_income(prev, fl, curves, s0, s1)
     v1 = q * cur.dirty_rub / f1 + received
     total = q * (cur.dirty_rub - prev.dirty_rub) + received * f1
     out = FlashPnl(
@@ -395,6 +510,9 @@ def explain(prev: BondValuation, cur: BondValuation, curves: FlashCurves,
         rates_linear=linear, price_basis=(prev.price_basis, cur.price_basis), rates_linear_ofz=ofz,
         fx_gross=v0 * (f1 - f0) if fx else 0.0,
         **({"ccy": ccy, "fx_delta_ccy": v0, "fx_rates": (f0, f1)} if fx else {}),
+        carry_coupon=None if coupon is None else coupon * f1,
+        received_coupon_rub=None if coupon_received is None else coupon_received * f1,
+        rates_linear_curves=terms or None, curve_moves_bp=moves or None, prev_inputs=_prev_inputs(prev),
     )
     err = out.explained - total
     object.__setattr__(out, "identity_error", err)
