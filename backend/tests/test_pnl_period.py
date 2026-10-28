@@ -103,10 +103,10 @@ def fact(pid: str, k: int, day: str) -> dict:
     return out
 
 
-def seed_period(url, *, intraday_anchor_prev: str | None = None) -> list[int]:
+def seed_period(url, *, intraday_anchor_prev: str | None = None, more=None) -> list[int]:
     """Two books, one instrument in both, a closed and a new position, a missing run date, a stale price, a
     funding sign error, an FX jump that reverts, a non-zero gross check, a row without PnL, the TDM#406 keys on
-    one position only."""
+    one position only. ``more(con, run_id, day)``: extra rows of a run, before it completes (rows then frozen)."""
     ids = []
     with store.connect(url) as con:
         for k, day in enumerate(DAYS):
@@ -149,6 +149,8 @@ def seed_period(url, *, intraday_anchor_prev: str | None = None) -> list[int]:
                                     "source_instrument_name,x) VALUES (%s,%s,%s,1,%s,%s,%s)",
                                     (sid, pid, INSTRUMENT[pid], "USD" if pid == "U1" else "RUB", "Synthetic " + pid,
                                      Jsonb({"x_portfolio": "Active"})))
+            if more is not None:
+                more(con, rid, day)
             if intraday_anchor_prev and day == DAYS[-1]:
                 con.execute("UPDATE run SET run_type='INTRADAY',cut_type='intraday',prev_date=%s WHERE run_id=%s",
                             (intraday_anchor_prev, rid))
