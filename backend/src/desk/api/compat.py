@@ -39,6 +39,7 @@ from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
 from ..marketdata import ratings
 from ..pnl.reasons import METHOD_TEXT, REPORTED_METHOD, RUN_NO_POSITION_PNL, RUN_NO_PREV_MARKET, no_pnl_text
 from ..publish.funding_run import NOT_COMPUTED, STATUS_TEXT
+from ..publish.summary import fx_net
 from ..scenario.carry import HORIZONS as carry_horizons
 from ..scenario.carry import meeting_rows, meetings
 from ..store import CURRENT_RUNS, DEFAULT_RUNS, slice_label  # noqa: F401 - re-exported, as before
@@ -121,10 +122,8 @@ def run_totals(rows) -> tuple[float | None, float | None, float, float]:
     for r in rows:
         if q := r["pnl"]:
             e = sum(q.get(k) or 0.0 for k in PNL_KEYS)  # tdm EXPLAINED_SQL, the same order
-            g, f = q.get("fx_gross") or 0.0, q.get("fx_funding") or 0.0
-            gc = q["fx_gross_cbr"] if q.get("fx_gross_cbr") is not None else g
-            fc = q["fx_funding_cbr"] if q.get("fx_funding_cbr") is not None else f
-            off.append(q["official"] if q.get("official") is not None else e + (gc + fc - g - f))
+            basis = (fx_net(q, cbr=True) or 0.0) - (fx_net(q) or 0.0)  # the net FX by the CBR rates - the market
+            off.append(q["official"] if q.get("official") is not None else e + basis)
             exp.append(e)
     facts = [r["fact"] for r in rows]  # SQLite SUM is compensated too
     return (math.fsum(off) if off else None, math.fsum(exp) if exp else None,
@@ -283,7 +282,10 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         explained = sum(comp.values())
         gross_cbr = q["fx_gross_cbr"] if q and q.get("fx_gross_cbr") is not None else comp["fx_gross"]
         fund_cbr = q["fx_funding_cbr"] if q and q.get("fx_funding_cbr") is not None else comp["fx_funding"]
-        fx_basis = (gross_cbr + fund_cbr) - (comp["fx_gross"] + comp["fx_funding"])
+        # the pages show FX only net (one source «FX (нетто ОВП)», summary.fx_net, TDM#414); fxGross / fxFunding stay
+        # in the API for the explain's arithmetic, no page shows them apart
+        fxn, fxn_cbr = (fx_net(q), fx_net(q, cbr=True)) if q else (None, None)
+        fx_basis = (fxn_cbr or 0.0) - (fxn or 0.0)
         explained_cbr = explained + fx_basis
         official = q.get("official") if q else None
         method = ((q or {}).get("extra") or {}).get("method")
@@ -316,11 +318,11 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
             "pnl": {
                 "carry": comp["carry"], "rolldown": comp["rolldown"], "rates": comp["rates"],
                 "spread": comp["spread"],
-                "fx": comp["fx_gross"] + comp["fx_funding"], "funding": q.get("funding"),
+                "fx": fxn, "funding": q.get("funding"),
                 "convexity": comp["convexity"], "newTrades": comp["new_trades"], "other": comp["other"] - reported,
                 "reported": reported,
                 "fxGross": comp["fx_gross"], "fxFunding": comp["fx_funding"], "fxGrossCbr": gross_cbr,
-                "fxFundingCbr": fund_cbr, "fxCbr": gross_cbr + fund_cbr, "explained": explained,
+                "fxFundingCbr": fund_cbr, "fxCbr": fxn_cbr, "explained": explained,
                 "explainedCbr": explained_cbr, "fxBasis": fx_basis,
                 "unexplained": 0.0 if official is None else official - explained_cbr, "official": official,
                 "breakNote": q.get("break_note"), "available": True, "reason": None, "reasonText": None,

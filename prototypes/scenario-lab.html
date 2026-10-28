@@ -574,8 +574,10 @@ function toScenario(ed){
 function shockOf(sc){ const m = {}; CK.forEach(c => { const v = sc.curves && sc.curves[c]; m[c] = v == null ? BK.map(() => 0) : Array.isArray(v) ? v : BK.map(() => v); }); return m; }
 function compute(sc){
   const r = U.runScenario(sc);
-  const comp = {rates:0, spread:0, fx:0, convexity:0, fxCross:0, fundFx:r.fundingFx};
-  const book = {}; BOOKK.forEach(b => book[b] = {rates:0, spread:0, fx:0, convexity:0, fxCross:0, fundFx:0, total:0});
+  // FX — один источник «FX (нетто ОВП)» (TDM#414): FX позиций (уже с разнесённым на них фондированием) и FX
+  // нераспределённого остатка фондирования книг — одной суммой, отдельной строки FX фондирования нет
+  const comp = {rates:0, spread:0, fx:U.fxNet(r.fundingFx) || 0, convexity:0, fxCross:0};
+  const book = {}; BOOKK.forEach(b => book[b] = {rates:0, spread:0, fx:0, convexity:0, fxCross:0, total:0});
   const grp = {};
   r.byPosition.forEach(x => {
     const p = posById[x.id], bk = book[p.book];
@@ -583,8 +585,8 @@ function compute(sc){
     bk.total += x.total;
     if (p.issuerGroup) { const g = grp[p.issuerGroup] || (grp[p.issuerGroup] = {rates:0, spread:0, fx:0, convexity:0, fxCross:0, total:0, n:0}); ['rates','spread','fx','convexity','fxCross','total'].forEach(k => g[k] += x[k]); g.n++; }
   });
-  // разнесённая на позиции FX-переоценка фондирования уже в позициях; здесь — нераспределённый остаток книг
-  Object.entries(r.fundingFxByBook || {}).forEach(([b, v]) => { if (book[b]) { book[b].fundFx += v; book[b].total += v; } });
+  // разнесённая на позиции FX-переоценка фондирования уже в позициях; здесь — нераспределённый остаток книг, в FX книги
+  Object.entries(r.fundingFxByBook || {}).forEach(([b, v]) => { if (book[b]) { book[b].fx += v; book[b].total += v; } });
   const sh = shockOf(sc), heat = {};
   CK.forEach(c => heat[c] = DV[c].map((dv, i) => dv * sh[c][i]));
   return {r, total: r.total, comp, book, grp, heat, shock: sh};
@@ -751,7 +753,7 @@ function renderFx(){
   $('#fx-box').innerHTML = FXC.map(c => {
     const v = S.ed.fx[c], rate = D.FX[c] * (1 + v / 100);
     return `<div class="row"><label for="fx-${c}" title="${c}/RUB">${c}/RUB <span class="muted mono">${num(rate, 2)}</span></label><input type="range" id="fx-${c}" data-fx="${c}" min="-40" max="40" step="1" value="${v}"><output class="num" for="fx-${c}">${snum(v)}%</output></div>`;
-  }).join('') + '<p class="note">Облигация шокируется вместе с телом своего фондирования (в валюте бумаги); FX остатков ДС книг деривативов — столбец «Фонд. FX».</p>';
+  }).join('') + '<p class="note">Облигация шокируется вместе с телом своего фондирования (в валюте бумаги); FX остатков ДС книг деривативов — в FX своей книги: FX показывается одной суммой, нетто ОВП.</p>';
 }
 $('#fx-box').addEventListener('input', e => { const c = e.target.dataset.fx; if (!c) return; S.ed.fx[c] = +e.target.value; const row = e.target.closest('.row'); row.querySelector('output').textContent = snum(S.ed.fx[c]) + '%'; row.querySelector('label span').textContent = num(D.FX[c] * (1 + S.ed.fx[c] / 100), 2); markDirty(); });
 function renderCredit(){
@@ -790,7 +792,7 @@ function renderBuilderAll(){ renderPresets(); renderTabs(); renderEditor(); rend
 // ---- результаты ----
 let rq = 0;
 function scheduleResults(){ if (rq) return; rq = requestAnimationFrame(() => { rq = 0; renderResults(); }); }
-const COMPS = [['rates','Rates'],['spread','Spread (кредит + ОФЗ)'],['fx','FX'],['convexity','Convexity'],['fxCross','FX cross'],['fundFx','Фонд. FX']];
+const COMPS = [['rates','Rates'],['spread','Spread (кредит + ОФЗ)'],['fx',U.FX_NET_LABEL],['convexity','Convexity'],['fxCross','FX cross']];
 function renderResults(){
   const sc = toScenario(S.ed), R = compute(sc); S.res = R;
   const loaded = allScen().find(s => s.id === S.loadedId);
@@ -833,12 +835,12 @@ function renderResults(){
 
   // by book
   const bmax = Math.max(1, ...BOOKK.map(b => Math.abs(R.book[b].total)));
-  let bt = `<thead><tr><th class="l">Книга</th><th>Rates</th><th>Spread</th><th>FX</th><th>Conv.</th><th>FX cross</th><th>Фонд. FX</th><th>Итого</th></tr></thead><tbody>`;
+  let bt = `<thead><tr><th class="l">Книга</th><th>Rates</th><th>Spread</th><th title="${esc(U.FX_NET_TIP)}">FX</th><th>Conv.</th><th>FX cross</th><th>Итого</th></tr></thead><tbody>`;
   BOOKK.slice().sort((a, b) => R.book[a].total - R.book[b].total).forEach(b => {
     const x = R.book[b];
-    bt += `<tr><td class="l" title="Деск ${esc(D.BOOKS[b].desk)}">${esc(D.BOOKS[b].name)}</td>${['rates','spread','fx','convexity','fxCross','fundFx'].map(k => `<td class="n${Math.abs(x[k]) < 5e3 ? ' z' : ''}">${Math.abs(x[k]) < 5e3 ? '·' : smln(x[k], 1)}</td>`).join('')}<td class="n"${heatStyle(x.total, bmax)}><b>${smln(x.total, 1)}</b></td></tr>`;
+    bt += `<tr><td class="l" title="Деск ${esc(D.BOOKS[b].desk)}">${esc(D.BOOKS[b].name)}</td>${['rates','spread','fx','convexity','fxCross'].map(k => `<td class="n${Math.abs(x[k]) < 5e3 ? ' z' : ''}">${Math.abs(x[k]) < 5e3 ? '·' : smln(x[k], 1)}</td>`).join('')}<td class="n"${heatStyle(x.total, bmax)}><b>${smln(x.total, 1)}</b></td></tr>`;
   });
-  bt += `<tr class="tot"><td class="l">Итого</td>${['rates','spread','fx','convexity','fxCross','fundFx'].map(k => `<td class="n">${smln(R.comp[k], 1)}</td>`).join('')}<td class="n">${smln(R.total, 1)}</td></tr></tbody>`;
+  bt += `<tr class="tot"><td class="l">Итого</td>${['rates','spread','fx','convexity','fxCross'].map(k => `<td class="n">${smln(R.comp[k], 1)}</td>`).join('')}<td class="n">${smln(R.total, 1)}</td></tr></tbody>`;
   $('#by-book').innerHTML = bt;
 
   // issuer groups
@@ -860,7 +862,6 @@ function renderCompare(R){
   const tmx = Math.max(1, ...cols.map(c => Math.abs(c.res.total)));
   let h = `<thead><tr><th class="l">Книга</th>${cols.map(c => `<th class="${c.id === '__ed' || (c.id === S.loadedId && !S.dirty) ? 'cur' : ''}">${c.id === '__ed' ? esc(c.name) : `<button data-load="${esc(c.id)}">${esc(c.name)}</button>`}</th>`).join('')}</tr></thead><tbody>`;
   BOOKK.forEach(b => { h += `<tr><td class="l">${esc(D.BOOKS[b].name)}</td>${cols.map(c => { const v = c.res.book[b].total; return `<td class="n"${heatStyle(v, mx)} data-tip="${T(D.BOOKS[b].name + ' · ' + c.name, [['PnL', smln(v) + ' млн ₽']])}">${Math.abs(v) < 5e3 ? '·' : smln(v, 0)}</td>`; }).join('')}</tr>`; });
-  h += `<tr><td class="l muted">в т.ч. фонд. FX</td>${cols.map(c => { const v = c.res.comp.fundFx; return `<td class="n z">${Math.abs(v) < 5e3 ? '·' : smln(v, 0)}</td>`; }).join('')}</tr>`;
   h += `<tr class="tot"><td class="l">Итого</td>${cols.map(c => `<td class="n"${heatStyle(c.res.total, tmx)}>${smln(c.res.total, 0)}</td>`).join('')}</tr></tbody>`;
   $('#cmp').innerHTML = h;
 }
@@ -883,7 +884,7 @@ document.addEventListener('click', e => {
 // без них компоненты не складываются во флэш
 const EXC_OPT = k => P.some(p => U.pnlOk(p) && Math.abs(p.pnl[k] || 0) > 1);
 const EXC = [['carry','Carry'],['rolldown','Rolldown'],['rates','Rates'],['spread','Spread'],['fx','FX'],['funding','Фондир.'],['convexity','Convexity'],['newTrades','Новые сделки']]
-  .concat(EXC_OPT('other') ? [['other','Прочее']] : [], EXC_OPT('reported') ? [['reported','По отчёту']] : [], [['fundCarry','Фонд. ДС carry'],['fundFx','Фонд. ДС FX']]);
+  .concat(EXC_OPT('other') ? [['other','Прочее']] : [], EXC_OPT('reported') ? [['reported','По отчёту']] : [], [['fundCarry','Фонд. ДС carry']]);
 const NUMK = EXC.map(x => x[0]).concat(['explained','fxBasis','official','unexplained']);
 const TODAY = D.history[D.history.length - 1].date;
 // R10: позиция без PnL — «—» с причиной, в суммы не входит; итоги — только по позициям с PnL, с пометкой «частично».
@@ -903,12 +904,13 @@ const TREE = (function(){
     const kids = P.filter(p => p.book === b).map(p => {
       const ok = U.pnlOk(p);
       const r = Object.assign({kind:'pos', key:'p' + p.id, name:p.name, sub:`${p.assetClass} · ${p.ccy}${p.newToday ? ' · новая сделка' : ''}`, note:ok ? p.pnl.breakNote : null, p, na: pnlWhy(p)}, zero());
-      if (ok) NUMK.filter(k => k !== 'fundCarry' && k !== 'fundFx').forEach(k => r[k] = p.pnl[k] || 0);
+      if (ok) NUMK.filter(k => k !== 'fundCarry').forEach(k => r[k] = p.pnl[k] || 0);
       return r;
     });
-    // фондирование уровня книги (остатки ДС, РЕПО); фондирование облигаций — в колонке «Фондир.» позиций
+    // фондирование уровня книги (остатки ДС, РЕПО); фондирование облигаций — в колонке «Фондир.» позиций; FX строки —
+    // в колонке FX: валютный PnL показывается одной суммой, нетто ОВП (TDM#414)
     const fl = D.funding.filter(f => f.book === b && !(f.pnl && f.pnl.inPosition));
-    if (fl.length) { const f = D.fundingPnlByBook[b], fc = f.fxCbr != null ? f.fxCbr : f.fx; const r = Object.assign({kind:'fund', key:'f' + b, name:`Фондирование книги (${fl.length} ${fl.length === 1 ? 'строка' : fl.length < 5 ? 'строки' : 'строк'})`, sub:[...new Set(fl.map(x => x.type))].join(', ')}, zero()); r.fundCarry = f.carry; r.fundFx = f.fx; r.explained = f.carry + f.fx; r.fxBasis = fc - f.fx; r.official = f.carry + fc; kids.push(r); }
+    if (fl.length) { const f = D.fundingPnlByBook[b], fc = f.fxCbr != null ? f.fxCbr : f.fx; const r = Object.assign({kind:'fund', key:'f' + b, name:`Фондирование книги (${fl.length} ${fl.length === 1 ? 'строка' : fl.length < 5 ? 'строки' : 'строк'})`, sub:[...new Set(fl.map(x => x.type))].join(', ')}, zero()); r.fundCarry = f.carry; r.fx = f.fx; r.explained = f.carry + f.fx; r.fxBasis = fc - f.fx; r.official = f.carry + fc; kids.push(r); }
     const bn = Object.assign({kind:'book', key:'b' + b, book:b, name:meta.name, sub:meta.trader, children:kids}, zero());
     kids.forEach(k => addTo(bn, k));
     let d = dmap[meta.desk]; if (!d) { d = dmap[meta.desk] = Object.assign({kind:'desk', key:'d' + meta.desk, name:meta.desk, children:[]}, zero()); desks.push(d); }
@@ -995,7 +997,7 @@ function renderWaterfall(){
     animation: !reduced, animationDuration: 300,
     grid:{left:56, right:12, top:24, bottom: narrow ? 64 : 34},
     tooltip: Object.assign({trigger:'item', formatter: p => { const it = items[p.dataIndex]; return `<b>${it.n}</b><br>${smln(it.v)} млн ₽` + (it.kind === 'step' ? `<br><span style="color:${col.fg2}">нарастающим: ${smln(it.e)} млн</span>` : ''); }}, ttStyle()),
-    xAxis:{type:'category', data: items.map(i => i.n), axisLine:{lineStyle:{color:col.line2}}, axisTick:{show:false}, axisLabel:Object.assign({}, bt, {color:col.fg2, interval:0, rotate: narrow ? 40 : 0, fontSize: narrow ? 9 : 10, formatter: v => narrow ? v : v.replace('Новые сделки', 'Новые\nсделки').replace('По отчёту', 'По\nотчёту').replace('Фонд. ДС carry', 'Фонд. ДС\ncarry').replace('Фонд. ДС FX', 'Фонд. ДС\nFX').replace('= Флэш', '=\nФлэш').replace('Курсы ЦБ', 'Курсы\nЦБ').replace('= Official', '=\nOfficial')})},
+    xAxis:{type:'category', data: items.map(i => i.n), axisLine:{lineStyle:{color:col.line2}}, axisTick:{show:false}, axisLabel:Object.assign({}, bt, {color:col.fg2, interval:0, rotate: narrow ? 40 : 0, fontSize: narrow ? 9 : 10, formatter: v => narrow ? v : v.replace('Новые сделки', 'Новые\nсделки').replace('По отчёту', 'По\nотчёту').replace('Фонд. ДС carry', 'Фонд. ДС\ncarry').replace('= Флэш', '=\nФлэш').replace('Курсы ЦБ', 'Курсы\nЦБ').replace('= Official', '=\nOfficial')})},
     yAxis:{type:'value', splitLine:{lineStyle:{color:col.line}}, axisLabel:Object.assign({}, bt, {formatter: v => num(v / 1e6, 0)})},
     series:[{type:'custom', data: items.map((it, i) => [i, it.s, it.e]), encode:{x:0, y:[1, 2]},
       renderItem: (params, api) => {
@@ -1077,7 +1079,7 @@ function renderHier(){
   });
   if (!rows) rows = `<tr><td class="l" colspan="${NCOL + 2}"><div class="empty"><b>Нет позиций с |unexplained| &gt; ${num(S.fltX, 1)} млн ₽</b>Снизьте порог фильтра.</div></td></tr>`;
   const t = TREE.tot;
-  wrap.innerHTML = `<table class="t hier"><thead><tr><th class="l">Позиция · млн ₽</th>${EXC.map(x => `<th>${x[1]}</th>`).join('')}<th>Флэш</th><th>Курсы ЦБ</th><th>Official</th><th>Unexpl.</th><th class="l">Статус</th></tr></thead><tbody>${rows}</tbody>
+  wrap.innerHTML = `<table class="t hier"><thead><tr><th class="l">Позиция · млн ₽</th>${EXC.map(x => `<th${x[0] === 'fx' ? ` title="${esc(U.FX_NET_TIP)}"` : ''}>${x[1]}</th>`).join('')}<th>Флэш</th><th>Курсы ЦБ</th><th>Official</th><th>Unexpl.</th><th class="l">Статус</th></tr></thead><tbody>${rows}</tbody>
     <tfoot><tr class="tot"><td class="l">Итого деск${t.cover.partial ? ' ' + U.pnlPartHtml(t.cover) : ''}</td>${cellsFor(t)}<td class="l">${rowChip(t, false)}</td></tr></tfoot></table>`;
 }
 $('#hier-wrap').addEventListener('click', e => { const b = e.target.closest('.tg'); if (!b || S.fltOn) return; const k = b.dataset.key; S.open.has(k) ? S.open.delete(k) : S.open.add(k); renderHier(); const nb = $(`#hier-wrap .tg[data-key="${k}"]`); if (nb) nb.focus(); });
