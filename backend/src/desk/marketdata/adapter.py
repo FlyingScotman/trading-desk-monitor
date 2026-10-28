@@ -162,6 +162,24 @@ class BondQuote:
 
 
 OFZ_CLASSES = ("ofz_pd", "ofz_ad", "ofz_pk", "ofz_in")
+FORMULA_FLOATER_BENCHMARKS = ("KEY_RATE", "RUONIA")
+FORMULA_FLOATER_LABEL = "floating_by_formula"
+"""``BondTerms.labels``: the hub's ``coupon_type`` was ``variable_known``/``unknown``, the monitor reads the bond as a
+floater on its formula (``formula_floater``)."""
+
+
+def formula_floater(coupon_type: str, formula: dict[str, Any] | None, coupons: list[Coupon], as_of: date) -> bool:
+    """A floater MOEX labels «known coupons» (TDM#401, Металлоинвест 002Р-03): the hub's ``coupon_type`` is
+    ``variable_known`` (``coupon_type_basis`` ``schedule``, from MOEX's «Фиксированный с известными купонами») or
+    ``unknown``, but it has a floater formula on the key rate or RUONIA with its spread and a coupon paid after ``as_of``
+    is not known. MOEX publishes such a coupon only after its period (an average over it) and counts the unknown ones as
+    zero in its yield (0.35 % on 28.10.2026 at a price of 98.6), so as listed the bond is either rejected
+    (``coupon_not_known``) or valued at its last coupon for ever, with a fixed bond's rate risk. The hub's facts stay as
+    they are; only the coupon type the monitor values it by changes, and ``FORMULA_FLOATER_LABEL`` says so. A
+    ``fixed`` bond with a formula keeps its type (its coupons are known up to its horizon)."""
+    return (coupon_type in ("variable_known", "unknown") and formula is not None
+            and formula.get("benchmark") in FORMULA_FLOATER_BENCHMARKS and formula.get("spread_bp") is not None
+            and any(c.pay_date > as_of and c.status == "unknown" for c in coupons))
 KBD_CURVE_ID = "RUB_KBD"
 KBD_SPEC = "rub_ofz_kbd_v3"
 """The KBD's core spec (core 0.37.0): the curve values as before; its risk buckets are par yields of annual-coupon
@@ -298,17 +316,20 @@ class StaticView:
         for i in d["instruments"]:
             sid = i["secid"]
             board = next((b for b in i.get("boards") or [] if b.get("is_primary")), None)
+            coupon_type, labels = i["coupon_type"], tuple(i.get("labels") or ())
+            if formula_floater(coupon_type, formulas.get(sid), coupons.get(sid, []), as_of):
+                coupon_type, labels = "floating", (*labels, FORMULA_FLOATER_LABEL)
             self.bonds[sid] = BondTerms(
                 secid=sid, isin=i.get("isin"), name=i["name"], short_name=i.get("short_name"),
                 bond_class=i["bond_class"], status=i["status"], issuer_id=i.get("issuer_id"),
                 currency=i.get("currency_id"), face_unit=i.get("face_unit"), face_value=_d(i.get("face_value")),
-                coupon_type=i["coupon_type"], coupon_frequency=i.get("coupon_frequency"),
+                coupon_type=coupon_type, coupon_frequency=i.get("coupon_frequency"),
                 maturity_date=_date(i.get("maturity_date")), is_perpetual=bool(i.get("is_perpetual")),
                 is_structured=bool(i.get("is_structured")), is_face_indexed=bool(i.get("is_face_indexed")),
                 is_fx_face=bool(i.get("is_fx_face")), is_amortizing=bool(i.get("is_amortizing")),
                 calendar=i.get("calendar") or "MOEX_STOCK", primary_board=i.get("primary_board"),
                 settle_lag_days=board.get("settle_lag_days") if board else None,
-                labels=tuple(i.get("labels") or ()),
+                labels=labels,
                 coupons=tuple(sorted(coupons.get(sid, ()), key=lambda c: c.no)),
                 redemptions=tuple(sorted(reds.get(sid, ()), key=lambda r: r.date)),
                 offers=tuple(offers.get(sid, ())),
@@ -546,8 +567,7 @@ def period_margin(terms: BondTerms, start: date) -> float | None:
 
 def core_instrument(terms: BondTerms, after: date, horizon: date, offer: tuple[date, Decimal, str] | None = None, *,
                     coupons: tuple[Coupon, ...] | None = None,
-                    floater: tuple[FloatingCouponRule, str, str] | None = None,
-                    redeem_at_horizon: bool = False) -> Instrument:
+                    floater: tuple[FloatingCouponRule, str, str] | None = None) -> Instrument:
     """Core terms of a bond valued after ``after`` (the trade date).
 
     Only what the valuation needs, so that gaps outside it cannot reject the bond: the coupons
@@ -555,10 +575,9 @@ def core_instrument(terms: BondTerms, after: date, horizon: date, offer: tuple[d
     assumed, default the snapshot's; the valuation layer has checked them), the redemptions after
     ``after`` (their sum, the current face, is ``initial_face``), and the offer the backend chose
     as horizon (F2 open-window rule in ``valuation.bonds``): a put with the earlier puts whose window has closed, each
-    with its window (``put_offers``), for core's ``open_put`` horizon to choose it (core 0.33). A call
-    needs an ``ExerciseAssumption`` in the valuation policy; a perpetual has no redemption and is
-    valued to its call that way. ``redeem_at_horizon`` redeems the face outstanding at ``horizon``
-    instead, without offers: a call core cannot exercise (a callable floater).
+    with its window (``put_offers``), for core's ``open_put`` horizon to choose it (core 0.33). A call is never the
+    horizon (TDM#35); a perpetual has no redemption and is valued never called (its ``ExerciseAssumption`` in the
+    valuation policy).
 
     Coupon legs per core CONSUMERS.md: OFZ accrue pro rata on the amount (Minfin), the others on
     the rate (MOEX); the snapshot publishes no day count, so those are ACT/365. A period ends at
@@ -604,17 +623,10 @@ def core_instrument(terms: BondTerms, after: date, horizon: date, offer: tuple[d
                else RateAccrualCouponLeg(tuple(periods), AccrualBasis.RATE_ACT_365))  # type: ignore[arg-type]
     reds = [(r.date, float(r.value_per_bond)) for r in terms.redemptions if r.date > after and r.value_per_bond]
     face = float(terms.face_value) if terms.is_perpetual else sum(a for _, a in reds)  # type: ignore[arg-type]
-    if redeem_at_horizon:
-        reds = [(d, a) for d, a in reds if d < horizon]
-        reds.append((horizon, face - sum(a for _, a in reds)))
     principal = PrincipalLeg(tuple(
         CoreRedemption(d, a, CashflowKind.MATURITY if i == len(reds) - 1 else CashflowKind.AMORTIZATION)
         for i, (d, a) in enumerate(reds)))
-    offers: tuple[CoreOffer, ...] = ()
-    if offer is not None and not redeem_at_horizon and offer[2] == "call":
-        offers = (CoreOffer(offer[0], OfferKind.CALL, True, float(offer[1])),)
-    elif offer is not None and not redeem_at_horizon:
-        offers = put_offers(terms, after, offer)
+    offers = put_offers(terms, after, offer) if offer is not None else ()
     return Instrument(
         terms.secid, ProductType.FLOATING_BOND if isinstance(leg, FloatingCouponLeg) else ProductType.FIXED_BOND,
         bond_currency(terms), face, leg, principal,

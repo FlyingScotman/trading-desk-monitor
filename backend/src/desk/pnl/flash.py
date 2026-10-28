@@ -62,6 +62,7 @@ from rub_fixed_income import (
     CoreRejection,
     DiscountCurve,
     MarketSnapshot,
+    PerpetualTail,
     ShockedCurveCache,
     ZcycParameters,
     kbd_discount_curve,
@@ -292,14 +293,15 @@ class FlashPnl:
 
 
 def _pv(flows: tuple[BondCashflow, ...], settlement: date, curve: DiscountCurve, spread_bp: float,
-        spread_kind: str, quantity: float, cache: ShockedCurveCache) -> float:
-    """Position PV of the flows after ``settlement``; 0 when none is left (redeemed in between)."""
-    if not any(f.payment_date > settlement and f.amount > 0 for f in flows):
+        spread_kind: str, quantity: float, cache: ShockedCurveCache, tail: PerpetualTail | None = None) -> float:
+    """Position PV of the flows after ``settlement`` and a never-called perpetual's ``tail`` (TDM#35); 0 when none
+    is left (redeemed in between)."""
+    if tail is None and not any(f.payment_date > settlement and f.amount > 0 for f in flows):
         return 0.0
     engine = BondRiskEngine(
         BondRiskRequest(cashflows=flows, settlement_date=settlement, curve=curve,
                         spread_convention=SPREAD_CONVENTION, spread_kind=spread_kind,  # type: ignore[arg-type]
-                        spread_bp=spread_bp, quantity=quantity),
+                        spread_bp=spread_bp, quantity=quantity, perpetual_tail=tail),
         curve_cache=cache,
     )
     return engine.base_price_rub * quantity
@@ -359,7 +361,7 @@ def explain(prev: BondValuation, cur: BondValuation, curves: FlashCurves,
 
     def pv(s: date, step: dict[str, DiscountCurve], z: float, on_d: bool) -> float:
         if fl is None:
-            return _pv(flows, s, step[disc], z, kind, q, cache)
+            return _pv(flows, s, step[disc], z, kind, q, cache, prev.perpetual_tail)
         return _pv_floater(fl, s, curves.market(not on_d), step[disc], step[proj] if two else None,  # type: ignore[index]
                            z, kind, q, cache)
 

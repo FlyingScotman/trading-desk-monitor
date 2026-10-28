@@ -56,7 +56,7 @@ def test_coverage_reasons(outcomes):
     q = {s: (o.valuation.quality if o.valuation else None, o.reason) for s, o in outcomes.items()}
     assert q["SU26238RMFS4"] == ("exact", None)  # OFZ-PD bullet
     assert q["SU29008RMFS8"] == ("assumed", None)  # OFZ-PK on an inferred formula (S4)
-    assert q["RU000A1034P7"] == ("assumed", None)  # perpetual to an assumed call (S4)
+    assert q["RU000A1034P7"] == ("assumed", None)  # perpetual, never called (TDM#35)
     assert q["SU52005RMFS4"] == ("market_value", "face_indexed")  # OFZ-IN: no CPI series yet
     # the owner's rule: every bond is valued, and every non-exact one says why
     assert all(o.valuation is not None for o in outcomes.values())

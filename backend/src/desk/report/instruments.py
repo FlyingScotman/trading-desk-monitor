@@ -306,7 +306,7 @@ def instrument_row(raw: dict[str, Any], t: BondTerms, view: StaticView, as_of: d
         "bond_class": t.bond_class, "mon_asset_class": MON_ASSET_CLASS.get(t.bond_class, t.bond_class),
         "mon_segment": MON_SEGMENT.get(t.bond_class, "Корп"),
         "sec_type": raw.get("sec_type"), "bond_type": raw.get("bond_type"), "bond_subtype": raw.get("bond_subtype"),
-        "coupon_details": raw.get("coupon_details"), "coupon_type": t.coupon_type,
+        "coupon_details": raw.get("coupon_details"), "coupon_type": raw.get("coupon_type"),
         "coupon_type_basis": raw.get("coupon_type_basis"), "mon_coupon_type": COUPON_TYPES.get(t.coupon_type, t.coupon_type),
         "coupon_frequency": t.coupon_frequency, "coupon_period_days": raw.get("coupon_period_days"),
         "implied_frequency": _implied_frequency(t), "coupons_total": len(t.coupons), "coupons_future": len(future),
@@ -355,7 +355,7 @@ def flags(row: dict[str, Any], t: BondTerms, raw: dict[str, Any], as_of: date, s
         out.append("class_unknown")
     if t.coupon_type == "unknown":
         out.append("coupon_type_unknown")
-    if t.coupon_type == "variable_known" and raw.get("coupon_type_basis") == "schedule" and (
+    if raw.get("coupon_type") == "variable_known" and raw.get("coupon_type_basis") == "schedule" and (
             raw.get("coupon_details") == "Фиксированный с известными купонами"
             or (raw.get("bond_type") or "").startswith("Облигация с фиксированным (известным)")):
         out.append("fixed_label_unknown_coupons")

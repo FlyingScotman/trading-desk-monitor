@@ -3,9 +3,9 @@
 Steps:
 
 1. ``bond_request``: decide whether the bond is in scope (``eligibility``), its horizon (the
-   next scheduled offer whose window is still open, rule F2, which core 0.33 applies itself: the puts go to core with
-   their exercise windows and the policy's ``open_put`` horizon chooses; a perpetual's assumed call), its coupons up to
-   it, and the price basis. A refusal is a ``Rejected`` with a stable reason code.
+   next scheduled put offer whose window is still open, rule F2, which core 0.33 applies itself: the puts go to core
+   with their exercise windows and the policy's ``open_put`` horizon chooses; no call is ever assumed exercised:
+   a perpetual without a put is valued as never called, TDM#35), its coupons up to it, and the price basis. A refusal is a ``Rejected`` with a stable reason code.
 2. ``value_bonds``: one ``value_portfolio`` call for every request of the run, the spread kind per bond in the
    policy (``spread_kinds``: OFZ spread for OFZ, credit spread for the rest). Core calibrates the Z-spread (annual,
    ACT/365F) to the dirty price, and computes bucket DV01, the CS01 or OFZ spread risk and its split by tenor bucket
@@ -43,8 +43,9 @@ its spread to RUONIA (``OFZ_SCHEME``).
   an amount but no rate (a corporate): the rate from the amount;
 - a coupon not known yet (``unknown``, or ``projected_by_moex`` on a fixed bond): at the last
   known rate, or MOEX's projection when no rate is known;
-- a perpetual: called on an assumed date (``perpetual_call``), coupons MOEX does not list at the
-  current rate;
+- a perpetual: never called (TDM#35, the owner's rule ORG_CONVENTIONS §4.1 «не отзовут», core BACKLOG #125-#128):
+  its listed coupons and then the last one for ever (core ``ExerciseAssumption.never_called``, ``PerpetualTail``),
+  ``perpetual: no call assumed``; a listed coupon not known yet at the last known rate;
 - a floater on an ``inferred`` formula: its family's default convention (``floater_rule``);
 - no MOEX accrued (an intraday cut, a gap): computed by core (``Instrument.accrued``) and flagged only where core's
   accrual is not exact: a coupon period the backend assumed or MOEX projected, or a floater's coupon not published yet
@@ -94,6 +95,7 @@ from rub_fixed_income import (
     Offer,
     OfzBasisIds,
     ParYieldCurveRequest,
+    PerpetualTail,
     PortfolioHorizonResult,
     PortfolioRiskResult,
     Position,
@@ -105,6 +107,7 @@ from rub_fixed_income import (
     ZSpreadConvention,
     clean_price_pct_to_dirty_rub,
     horizon_portfolio,
+    perpetual_tail,
     value_portfolio,
 )
 from rub_fixed_income import __version__ as CORE_VERSION
@@ -112,6 +115,7 @@ from rub_fixed_income.dates import add_months
 
 from ..curves.rates import KEY_RATE_CURVE_ID, RUONIA_OIS_CURVE_ID, kbd_fixing_id
 from ..marketdata.adapter import (
+    FORMULA_FLOATER_LABEL,
     KBD_CURVE_ID,
     OFZ_CLASSES,
     BondQuote,
@@ -131,7 +135,6 @@ SPREAD_CONVENTION = ZSpreadConvention()  # annual, ACT/365F: the desk default (c
 ACCRUED_TOLERANCE_RUB = 0.01
 CAP_FLOOR_GUARD_BP = 25.0
 """Floors and caps are priced at intrinsic value (core has no volatility) only this far from the strike."""
-PERPETUAL_CALL_YEARS = 5
 
 OFZ_CURVE, RUONIA_CURVE = "RUB OFZ", "RUB RUONIA"
 RISK_CURVES = {KBD_CURVE_ID: OFZ_CURVE, RUONIA_OIS_CURVE_ID: RUONIA_CURVE, KEY_RATE_CURVE_ID: "RUB KEY"}
@@ -195,7 +198,7 @@ class Rejected(Exception):
 @dataclass(frozen=True)
 class FixedSchedule:
     horizon_date: date
-    horizon_kind: str  # maturity | offer | call
+    horizon_kind: str  # maturity | offer | perpetual (never called: the last listed coupon, then core's tail)
     offer: tuple[date, Decimal, str] | None
     current_face: float
     current_coupon_pct: float | None
@@ -406,40 +409,33 @@ def implied_frequency(terms: BondTerms) -> int | None:
 
 def next_offer(terms: BondTerms, settlement: date) -> tuple[date, Decimal, str] | None:
     """Earliest scheduled offer after settlement and before maturity whose exercise window is
-    still open: a holder put (or an untyped offer) or an issuer call. MOEX analytics price to
-    the same date (``yield_date_type = OFFER``)."""
+    still open: a holder put (or an untyped offer). MOEX analytics price to the same date
+    (``yield_date_type = OFFER``). An issuer call is never the horizon (TDM#35, ORG_CONVENTIONS §4: a call is almost
+    never exercised): a callable runs to its maturity, a perpetual is never called."""
     cands = [o for o in terms.offers
-             if o.status == "scheduled" and o.type in ("put", "call", "unknown") and o.date is not None
+             if o.status == "scheduled" and o.type in ("put", "unknown") and o.date is not None
              and o.date > settlement and (terms.maturity_date is None or o.date < terms.maturity_date)
              and (o.window_end is None or o.window_end >= settlement)]
     if not cands:
         return None
     o = min(cands, key=lambda o: o.date)  # type: ignore[arg-type,return-value]
     price = o.price_pct if o.price_pct is not None else Decimal(100)
-    return o.date, price, ("call" if o.type == "call" else "offer")  # type: ignore[return-value]
+    return o.date, price, "offer"  # type: ignore[return-value]
 
 
-def perpetual_call(terms: BondTerms, after: date) -> tuple[date, tuple[Coupon, ...]]:
-    """The assumed call of a perpetual without a scheduled call, and its coupons extended to it.
-
-    DEC10 leaves exercise assumptions open and the snapshot has no call dates, so the default is
-    explicit: the first coupon date at least ``PERPETUAL_CALL_YEARS`` after ``after``, MOEX's listed
-    date or, past its schedule, the last listed one stepped by the coupon frequency. A call within
-    months would price a deep-discount perpetual (most trade at 60-90 %) at yields of thousands of
-    percent; five years matches the usual call cycle of Russian AT1 issues.
-    """
+def perpetual_coupons(terms: BondTerms, after: date) -> tuple[Coupon, ...]:
+    """The coupons of a never-called perpetual: MOEX's listed ones, with at least two paid after ``after`` (core's
+    ``perpetual_tail`` continues the last at the step of the last two): past the listed schedule one stepped by the
+    coupon frequency, ``unknown`` (``_fill_coupons`` assumes it at the last known rate)."""
     if not terms.coupons:
         raise Rejected("perpetual_no_schedule", "no coupon listed")
-    target = add_months(after, 12 * PERPETUAL_CALL_YEARS)
-    listed = next((c.pay_date for c in terms.coupons if c.pay_date >= target), None)
-    if listed is not None:
-        return listed, terms.coupons
-    last, extra = terms.coupons[-1], []
+    out = list(terms.coupons)
     step = max(1, 12 // terms.coupon_frequency) if terms.coupon_frequency else 6
-    while (prev := extra[-1] if extra else last).pay_date < target:
-        extra.append(Coupon(prev.no + 1, prev.pay_date, add_months(prev.pay_date, step), None, None, None, "unknown",
-                            last.face))
-    return extra[-1].pay_date, terms.coupons + tuple(extra)
+    while sum(c.pay_date > after for c in out) < 2:
+        prev = out[-1]
+        out.append(Coupon(prev.no + 1, prev.pay_date, add_months(prev.pay_date, step), None, None, None, "unknown",
+                          prev.face))
+    return tuple(out)
 
 
 def _amount(rate_pct: Decimal, face: Decimal, days: int) -> Decimal:
@@ -521,11 +517,12 @@ def fixed_schedule(terms: BondTerms, settlement: date) -> FixedSchedule:
     notes: list[str] = []
     offer, coupons = next_offer(terms, settlement), terms.coupons
     if terms.is_perpetual:
-        if offer is None:
-            call, coupons = perpetual_call(terms, settlement)
-            offer = (call, Decimal(100), "call")
-            notes.append(f"perpetual: call assumed {call.isoformat()}")
-        horizon, kind = offer[0], offer[2]
+        if offer is None:  # never called (TDM#35): the listed coupons, then core's tail of the last one
+            coupons = perpetual_coupons(terms, settlement)
+            horizon, kind = coupons[-1].pay_date, "perpetual"
+            notes.append("perpetual: no call assumed")
+        else:
+            horizon, kind = offer[0], offer[2]
     else:
         if terms.maturity_date is None or terms.maturity_date <= settlement:
             raise Rejected("matured")
@@ -540,10 +537,10 @@ def fixed_schedule(terms: BondTerms, settlement: date) -> FixedSchedule:
     if terms.coupon_type == "floating":
         rule, fixing_id, curve_id, desc = floater_rule(terms)
         floater = (rule, fixing_id, curve_id)
+        if FORMULA_FLOATER_LABEL in terms.labels:  # TDM#401
+            notes.append("floater by its formula: MOEX lists known coupons, the coming ones are not known")
         if terms.floater_formula["status"] != "curated":  # type: ignore[index]
             notes.append(f"formula {terms.floater_formula['status']}: {desc}")  # type: ignore[index]
-        if kind == "call":  # core has no callable floaters (callables.py)
-            notes.append(f"call {horizon.isoformat()} valued as the maturity")
     filled = _fill_coupons(terms, coupons, settlement, horizon, notes)
     current = next((float(c.rate_pct) for c in filled if c.rate_pct is not None), None)
     return FixedSchedule(horizon, kind, offer, float(face_on(terms, settlement)), current, filled,  # type: ignore[arg-type]
@@ -640,6 +637,9 @@ class BondValuation:
     date without RUONIA, ``discount_curve``); None for a value without a curve (a price or a report)."""
     floater: FloaterModel | None = field(default=None, repr=False, compare=False)
     """A floater's coupon model, for the flash PnL to reproject it on other curves (``pnl.flash``)."""
+    perpetual_tail: PerpetualTail | None = field(default=None, repr=False, compare=False)
+    """A never-called fixed-coupon perpetual (TDM#35): its coupons after ``cashflows``, for the flash PnL to reprice
+    with them (core ``BondRiskRequest.perpetual_tail``)."""
     g_spread_bp: float | None = None
     """Core's G-spread to the KBD (a RUB fixed-coupon bond; effective yield minus the KBD at the Macaulay duration,
     MOEX's ``GSPREADBP`` definition), whatever the discount curve; None for a floater and off core."""
@@ -703,33 +703,21 @@ class _Prepared:
     coupons: tuple[tuple[date, float], ...] = ()
     """The coupon part of ``flows`` by payment date (``horizon_bonds``: the coupon income of a bond redeemed before
     the horizon)."""
-
-
-def _split_assumed(inst: Instrument, s: FixedSchedule, after: date) -> tuple[Instrument, tuple]:
-    """A call's instrument without its trailing assumed coupons, which go to ``ExerciseAssumption.to_call``."""
-    leg = inst.coupon_leg
-    flows = [c for c in s.coupons if after < c.pay_date <= s.horizon_date]
-    n = next((i for i, c in enumerate(flows) if c.status == "assumed"), len(flows))
-    if not isinstance(leg, FixedCouponLeg | RateAccrualCouponLeg) or n == 0 or n == len(flows) \
-            or any(c.status != "assumed" for c in flows[n:]):
-        return inst, ()
-    known = FixedCouponLeg(leg.periods[:n]) if isinstance(leg, FixedCouponLeg) \
-        else RateAccrualCouponLeg(leg.periods[:n], leg.accrual_basis)  # type: ignore[arg-type]
-    return replace(inst, coupon_leg=known), leg.periods[n:]
+    tail: PerpetualTail | None = None
+    """A never-called fixed-coupon perpetual's coupons after ``flows`` (core ``perpetual_tail`` of its leg, as core
+    values it), for the flash PnL."""
 
 
 def _prepare(r: BondRequest, market: MarketSnapshot) -> _Prepared:
     s, after = r.schedule, r.quote.trade_date
-    call = s.horizon_kind == "call"
-    inst = core_instrument(r.terms, after, s.horizon_date, s.offer, coupons=s.coupons, floater=s.floater,
-                           redeem_at_horizon=call and s.floater is not None)
-    # Cashflows to the horizon: a call (or a perpetual's assumed one) redeems the face then.
-    flow_inst = core_instrument(r.terms, after, s.horizon_date, coupons=s.coupons, floater=s.floater,
-                                redeem_at_horizon=True) if call else inst
-    offer = None if call or not inst.offers else inst.horizon("open_put", after)[1]
+    inst = core_instrument(r.terms, after, s.horizon_date, s.offer, coupons=s.coupons, floater=s.floater)
+    offer = None if not inst.offers else inst.horizon("open_put", after)[1]
     floating = isinstance(inst.coupon_leg, FloatingCouponLeg)  # not when no coupon is left to the horizon
-    flows = flow_inst.cashflows(after=after, offer=offer, market=market if floating else None,
-                                strike_guard_bp=CAP_FLOOR_GUARD_BP)
+    # cashflows to the horizon; a never-called perpetual's listed coupons, without its tail
+    flows = inst.cashflows(after=after, offer=offer, market=market if floating else None,
+                           strike_guard_bp=CAP_FLOOR_GUARD_BP)
+    tail = perpetual_tail(inst.coupon_leg.periods) \
+        if s.horizon_kind == "perpetual" and isinstance(inst.coupon_leg, FixedCouponLeg | RateAccrualCouponLeg) else None
     accrued = inst.accrued(after, market if floating else None)
     notes = list(s.assumptions)
     moex = quote_accrued(r, market)
@@ -741,7 +729,7 @@ def _prepare(r: BondRequest, market: MarketSnapshot) -> _Prepared:
     elif abs(round(accrued - float(moex), 2)) > ACCRUED_TOLERANCE_RUB:
         notes.append(f"accrued mismatch vs MOEX {accrued - float(moex):+.2f} {ccy} (ours {accrued:.2f})")
     return _Prepared(r, inst, tuple(BondCashflow(f.payment_date, f.amount) for f in flows), notes, accrued,
-                     tuple((f.payment_date, f.coupon) for f in flows))
+                     tuple((f.payment_date, f.coupon) for f in flows), tail)
 
 
 def quote_accrued(r: BondRequest, market: MarketSnapshot) -> Decimal | None:
@@ -838,7 +826,7 @@ def core_call(market: MarketSnapshot, requests: list[BondRequest], *, second_ord
               foreign: dict[str, tuple[str, ...]] | None = None, quote_curve_risk: bool = False,
               ofz_basis: bool = True) -> CoreCall:
     """The core inputs of ``requests`` on ``market`` (see ``value_bonds`` for the parameters): the refusals before
-    core, the instruments (a call's trailing assumed coupons as its ``ExerciseAssumption``), the quotes, one position
+    core, the instruments (a perpetual's ``ExerciseAssumption``: never called), the quotes, one position
     per request and the policy (the spread kind per bond, the KBD for ``OFZ_KBD_CLASSES``, the foreign curves, the
     RUONIA + basis scheme when ``market`` holds the RUONIA OIS quotes)."""
     foreign = foreign or {}
@@ -855,16 +843,15 @@ def core_call(market: MarketSnapshot, requests: list[BondRequest], *, second_ord
         elif ccy != "RUB" and not any(x.currency == ccy for x in market.fx):
             out[r.position_id] = Rejected("no_fx_rate", f"{ccy} on {market.business_date}")
     reqs = [r for r in requests if r.position_id not in out]
-    instruments, quotes, positions, calls, ok, kinds = {}, {}, [], {}, {}, {}
+    instruments, quotes, positions, calls, ok, kinds = {}, {}, [], {}, {}, {}  # calls: the exercise assumptions
     on_kbd: set[str] = set()
     for r in reqs:
         s = r.schedule
         try:
             prep = ok.get(r.terms.secid) or _prepare(r, market)
             inst = prep.instrument
-            if s.horizon_kind == "call" and s.floater is None:
-                inst, assumed = _split_assumed(inst, s, r.quote.trade_date)
-                calls[inst.instrument_id] = ExerciseAssumption.to_call(s.horizon_date, assumed)
+            if s.horizon_kind == "perpetual":  # TDM#35: no call is exercised, the coupons run for ever
+                calls[inst.instrument_id] = ExerciseAssumption.never_called()
         except (CoreRejection, ValueError) as e:
             code = e.code.lower() if isinstance(e, CoreRejection) else "invalid_terms"
             out[r.position_id] = Rejected(f"core_{code}", str(e))
@@ -1069,7 +1056,7 @@ def _valuation(prep: _Prepared, v: PositionValuation, quantity: float, guard: bo
         z_spread_bp=v.spread_bp, spread_kind=v.spread_kind, dv01_rub=math.fsum(buckets.values()), buckets=buckets,
         spread01_rub=first["CS"], calculation_id=v.calculation_id, curve_buckets=by_curve, cashflows=prep.flows,
         quality="assumed" if notes else "exact", assumptions=tuple(notes), discount_curve_id=v.curve_id,
-        floater=floater, g_spread_bp=v.g_spread_bp, discount_margin_bp=v.discount_margin_bp,
+        floater=floater, perpetual_tail=prep.tail, g_spread_bp=v.g_spread_bp, discount_margin_bp=v.discount_margin_bp,
         spread_buckets=dict(zip(RISK_BUCKETS, v.spread_buckets_rub)) if v.spread_buckets_rub else {},
         fx_rate=(v.currency_amounts.currency, v.currency_amounts.rub_per_unit) if v.currency_amounts else None,
         ofz_ruonia=ruonia,
