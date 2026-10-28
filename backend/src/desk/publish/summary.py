@@ -50,13 +50,17 @@ CURVE_MAP = {"RUB OFZ": "RUB RUONIA", "USD": "USD SOFR", "EUR": "EUR ESTR", "CNY
 ``RUB OFZ`` (the KBD: a fixed-coupon OFZ's rates risk since 0.2.6, its basis in RUONIA + basis since 0.2.7, every bond's
 on a date without RUONIA OIS) is added to RUONIA: the pages' default «RUONIA + базис» view, where moving RUONIA moves the
 KBD with it (a row in RUONIA + basis: its ``RUB RUONIA`` plus ``RUB OFZ`` is its RUONIA risk, ``valuation.bonds.ofz_levels``)."""
+FX_PARTS = ("fx_gross", "fx_funding")
+"""The run's FX PnL components that the pages show only together, as one source «FX (нетто ОВП)»: the revaluation of the
+net open currency position, the asset's FX plus the FX of its currency funding (the owner's decision of 28.10.2026,
+TDM#414). Two large offsetting amounts say nothing: no page, text or export shows them apart (``fx_net``)."""
 PNL = {"carry": ("carry", "rolldown"), "funding": ("funding",), "rates": ("rates", "convexity"), "spread": ("spread",),
-       "fx": ("fx_gross", "fx_funding"), "trading": ("new_trades",), "other": ("other",)}
+       "fx": FX_PARTS, "trading": ("new_trades",), "other": ("other",)}
 """The pages' PnL factors from the run's components (``compat.PNL_KEYS``): the carry is the coupon income and the
 roll-down without the funding, the position's funding (B1) is its own factor (TDM#168). The factors sum to the day's
 total as before. Funding not computed (a run before B1, not configured, a problem: no ``funding`` component) is None,
 not 0 (B1: said in words, never a free 0): ``NULLABLE``."""
-NULLABLE = frozenset({"funding"})
+NULLABLE = frozenset({"funding", "fx"})
 """Factors that are None, not 0, when none of their components is in the PnL; a run's sum of one is None when no
 position has it, else the sum of those that have it (the total counts it as 0, as the flash PnL does)."""
 GOV_CLASSES = {"ОФЗ-ПД": "PD", "ОФЗ-АД": "PD", "ОФЗ-ПК": "PK", "ОФЗ-ИН": "IN"}
@@ -144,13 +148,30 @@ def kind_of(f: dict[str, Any], gov_issuers: frozenset[str] | set[str] = frozense
     return "CORP", flt
 
 
+def fx_net(q: dict[str, Any] | None, *, cbr: bool = False) -> float | None:
+    """A PnL's one FX source, «FX (нетто ОВП)» (``FX_PARTS``, TDM#414): ``fx_gross + fx_funding``; ``cbr``: by the CBR
+    rates, a part without its ``_cbr`` amount at the market one (as the official PnL counts it). None only when both
+    parts are missing; with one of them, that one (``fx_partial`` says so)."""
+    vs = [v for k in FX_PARTS if (v := _fx_part(q or {}, k, cbr)) is not None]
+    return sum(vs, 0.0) if vs else None
+
+
+def fx_partial(q: dict[str, Any] | None) -> bool:
+    """True when the PnL has only one of the two FX parts: its ``fx_net`` is that part, the row is incomplete."""
+    return sum(_fx_part(q or {}, k, False) is not None for k in FX_PARTS) == 1
+
+
+def _fx_part(q: dict[str, Any], k: str, cbr: bool) -> float | None:
+    return q[k + "_cbr"] if cbr and q.get(k + "_cbr") is not None else q.get(k)
+
+
 def pnl_factors(q: dict[str, Any] | None) -> dict[str, float | None] | None:
     if not q:
         return None
     out: dict[str, float | None] = {}
     for k, cs in PNL.items():
         vs = [q[c] for c in cs if q.get(c) is not None]
-        out[k] = None if k in NULLABLE and not vs else sum(vs, 0.0)
+        out[k] = fx_net(q) if cs is FX_PARTS else None if k in NULLABLE and not vs else sum(vs, 0.0)
     out["total"] = sum(v for v in out.values() if v is not None)
     return out
 
