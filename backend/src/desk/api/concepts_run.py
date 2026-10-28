@@ -28,6 +28,7 @@ from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
 from ..marketdata import ratings
 from ..pnl.reasons import METHOD_TEXT, REPORTED_METHOD, RUN_NO_POSITION_PNL, RUN_NO_PREV_MARKET, no_pnl_text
 from ..publish.funding_run import NOT_COMPUTED, STATUS_TEXT
+from ..publish.summary import fx_net
 from .runs import PNL_KEYS, risk_notes, run_slice
 
 RUB = {"ccy": "RUB", "rate": 1.0, "move_pct": 0.0, "rate_cbr": 1.0, "move_pct_cbr": 0.0}
@@ -120,7 +121,7 @@ def _pnl(q: dict[str, Any]) -> dict[str, Any]:
     method = (q.get("extra") or {}).get("method")
     reported = comp["other"] if method == REPORTED_METHOD else 0.0
     return {"carry": comp["carry"], "rolldown": comp["rolldown"], "rates": comp["rates"], "spread": comp["spread"],
-            "fx": comp["fx_gross"] + comp["fx_funding"], "funding": q.get("funding"), "convexity": comp["convexity"],
+            "fx": fx_net(q), "funding": q.get("funding"), "convexity": comp["convexity"],
             "newTrades": comp["new_trades"], "other": comp["other"] - reported, "reported": reported,
             "explained": sum(comp.values()), "available": True, "reasonText": None, "method": method,
             "methodText": METHOD_TEXT.get(method, method) if method else None}

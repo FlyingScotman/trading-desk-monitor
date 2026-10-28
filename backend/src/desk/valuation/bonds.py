@@ -723,6 +723,12 @@ class BondValuation:
     """An OFZ on the KBD valued in RUONIA + basis (``OFZ_BASIS_IDS``, TDM#213): its RUONIA risk by bucket, to RUONIA's
     OIS quotes with the basis held (core ``IR|RUB_RUONIA_OIS|*``); its basis risk is ``curve_buckets["RUB OFZ"]`` and
     ``curve_buckets["RUB RUONIA"]`` is the difference (``ofz_levels``). Empty for every other bond."""
+    coupons: tuple[tuple[date, float], ...] = ()
+    """The coupon part of ``cashflows`` per bond, by payment date, one per flow (``_Prepared.coupons``): the flash
+    PnL's split of what is received into coupons and principal (TDM#406); empty off core."""
+    instrument: Instrument | None = field(default=None, repr=False, compare=False)
+    """The core instrument the bond was valued with (``_Prepared.instrument``): the flash PnL reads its accrued coupon
+    on both valuation dates for the carry's coupon part (TDM#406); None off core."""
 
     @property
     def spread_curve(self) -> str | None:
@@ -1128,7 +1134,7 @@ def _valuation(prep: _Prepared, v: PositionValuation, quantity: float, guard: bo
         floater=floater, perpetual_tail=prep.tail, g_spread_bp=v.g_spread_bp, discount_margin_bp=v.discount_margin_bp,
         spread_buckets=dict(zip(RISK_BUCKETS, v.spread_buckets_rub)) if v.spread_buckets_rub else {},
         fx_rate=(v.currency_amounts.currency, v.currency_amounts.rub_per_unit) if v.currency_amounts else None,
-        ofz_ruonia=ruonia,
+        ofz_ruonia=ruonia, coupons=prep.coupons if len(prep.coupons) == len(prep.flows) else (), instrument=inst,
     )
     if v.factor_risk.has_second_order:
         # Core's full Hessian over its factors, renamed to the published curves; every curve is its own factor,

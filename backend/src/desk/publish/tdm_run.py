@@ -71,7 +71,7 @@ from ..marketdata.bundle import SnapshotError
 from ..marketdata.static_facts import SECTOR_LABELS
 from ..orchestrator import EodContext, Outcome, market_rates
 from ..pnl.direct import DirectPnl
-from ..pnl.flash import METHOD
+from ..pnl.flash import BREAKDOWN_KEYS, METHOD
 from ..pnl.reasons import CORE_FX_METHOD, FX_METHOD, NO_PNL_TEXT, REPORTED_METHOD, RUN_NO_PREV_MARKET
 from ..settings import REPO_ROOT
 from ..store import PositionInputs
@@ -316,6 +316,12 @@ def _proxy_points(ctx: EodContext, prev: MarketView | None, ccy: str) -> tuple[s
     return proxy.label(now[0]), pts
 
 
+def pnl_extra(pnl: Any) -> dict[str, Any]:
+    """The fact's copy of a PnL's ``extra``: without the flash breakdowns of TDM#406 (``pnl.flash.BREAKDOWN_KEYS``),
+    which the store keeps in ``run_position.pnl`` only."""
+    return {k: v for k, v in pnl.extra().items() if k not in BREAKDOWN_KEYS}
+
+
 def risk_by_curve(v: BondValuation) -> dict[str, dict[str, float]]:
     """``v.risk()`` without the curves where every bucket is 0."""
     return {c: bs for c, bs in v.risk().items() if any(bs.values())}
@@ -451,7 +457,7 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
             "valuation": ("computed" if core else "reported" if v.quality == "reported_value" else "approximated"),
             "quality": v.quality,
             "assumptions": why, "quantity_bonds": qty, **({"not_exact_reason": o.reason} if o.reason else {}),
-            **({"pnl": o.pnl.extra()} if o.pnl else {}),
+            **({"pnl": pnl_extra(o.pnl)} if o.pnl else {}),
             **({"fx_rate": rate} if ccy != "RUB" else {}), **v.extra, **reported(x),
             **({"fx_delta_basis": "notional (no trade terms: undiscounted)"} if fx and not core and delta else {}),
         },
@@ -609,7 +615,7 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
             **({"coupon_freq_source": "schedule"} if freq and not t.coupon_frequency else {}),
             **({"not_exact_reason": o.reason} if o.reason else {}),
             **({"fx_rate": fx[0], "fx_source": fx[1]} if fx else {}),
-            **({"pnl": o.pnl.extra()} if o.pnl else {}),
+            **({"pnl": pnl_extra(o.pnl)} if o.pnl else {}),
             **reported(x),
         },
     }

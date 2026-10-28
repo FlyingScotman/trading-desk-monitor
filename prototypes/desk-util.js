@@ -217,6 +217,20 @@
     return { convexity: conv, fxCross: cross, src, dyEff };
   }
 
+  // Валютный PnL — один источник «FX (нетто ОВП)» (решение владельца 28.10.2026, TDM#414): FX актива + FX его
+  // фондирования (переоценка нетто открытой валютной позиции). Части по отдельности страницы не показывают: две
+  // большие встречные суммы — шум. null — только если нет обеих частей; есть одна — она, и fxNetPartial = true
+  // (страница помечает строку неполной, как прочие неполные данные). Сервер считает так же: publish/summary.fx_net.
+  const isNum = v => typeof v === 'number' && isFinite(v);
+  function fxNet(...parts) {
+    const xs = parts.filter(isNum);
+    return xs.length ? xs.reduce((a, b) => a + b, 0) : null;
+  }
+  const fxNetPartial = (...parts) => { const k = parts.filter(isNum).length; return k > 0 && k < parts.length; };
+  const FX_NET_LABEL = 'FX (нетто ОВП)';
+  const FX_NET_TIP = 'FX (нетто ОВП): переоценка нетто открытой валютной позиции — FX актива вместе с FX его ' +
+    'валютного фондирования (и остатков ДС книг), одной суммой.';
+
   // Полная переоценка из расчётного сервиса (scenario_result) — только для неизменённых пресетов.
   const shockKey = sc => JSON.stringify([sc.curves || null, sc.fx || null, sc.spreads || null, sc.ofzSpread || 0]);
   function storedResult(sc, list) {
@@ -228,7 +242,7 @@
     const res = list.map(p => {
       const r = R.byPosition[p.id];
       if (!r) return Object.assign({ id: p.id }, zero);
-      return { id: p.id, rates: r.rates, spread: r.spread, fx: r.fxGross + r.fxFunding, fxGross: r.fxGross, fxFunding: r.fxFunding,
+      return { id: p.id, rates: r.rates, spread: r.spread, fx: fxNet(r.fxGross, r.fxFunding) || 0, fxGross: r.fxGross, fxFunding: r.fxFunding,
         convexity: r.convexity, fxCross: r.fxCross || 0, total: r.total };
     });
     const fundingFxByBook = {};
@@ -300,7 +314,7 @@
       if (sc.fx) Object.keys(p.fxDelta || {}).forEach(c => { fxGross += p.fxDelta[c] * FX[c] * (sc.fx[c] || 0) / 100; });
       const fxFunding = alloc.toPos[p.id] || 0;
       const so = secondOrder(p, curveShock, ds, fxShock, ratesByCurve, spread);
-      const fx = fxGross + fxFunding;
+      const fx = fxNet(fxGross, fxFunding);
       return { id: p.id, rates, spread, fx, fxGross, fxFunding, convexity: so.convexity, fxCross: so.fxCross, secondOrderSrc: so.src,
         dyEff: so.dyEff, total: rates + spread + fx + so.convexity + so.fxCross };
     });
@@ -620,7 +634,7 @@
       ksAvg: idxSeries('КС').reduce((a, b) => a + b, 0) / N, ksEnd: idxSeries('КС')[N - 1] };
   }
 
-  D.util = { sum, groupBy, bucketMatrix, netFx, runScenario, curveRate, hasPoints, pnlOk, pnlCover, pnlSum, pnlPartText, pnlNaHtml, pnlPartHtml,
+  D.util = { sum, groupBy, bucketMatrix, netFx, fxNet, fxNetPartial, FX_NET_LABEL, FX_NET_TIP, runScenario, curveRate, hasPoints, pnlOk, pnlCover, pnlSum, pnlPartText, pnlNaHtml, pnlPartHtml,
     NO_RATING, NOT_RATED, NO_RATING_LABEL, isRated, ratingLabel, ratingText, ratingTip, fundingFx, spreadShock, ownSpr01, ACCURACY_BP,
     runCarry, ksPath, carryEnd, indexAt, addDays, monthsAdd,
     baseCurve, yieldTenor, spreadTo, bondKey, bondRows, wavg, bondHistory, normHistory, couponView, couponText };

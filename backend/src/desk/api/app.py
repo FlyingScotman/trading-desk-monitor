@@ -40,7 +40,7 @@ from ..scenario.taylor import risk_payload
 from ..settings import REPO_ROOT
 from ..store import CURRENT_RUNS, slice_label
 from . import auth as authn
-from . import compat, concepts, concepts_run, pnl_history
+from . import compat, concepts, concepts_run, pnl_checks, pnl_history, pnl_period
 from .autopilot_routes import router as autopilot_router
 from .models import (
     COMPAT,
@@ -385,6 +385,32 @@ def db_rw(request: Request) -> Iterator[psycopg.Connection]:
 
 Con = Annotated[psycopg.Connection, Depends(db)]
 ConRW = Annotated[psycopg.Connection, Depends(db_rw)]
+
+
+def pnl_scope(con: Con, from_: Annotated[date, Query(alias="from")], to: date,
+              run_id: int | None = None, as_of: date | None = None,
+              books: Annotated[list[str] | None, Query()] = None,
+              ports_off: Annotated[list[str] | None, Query()] = None,
+              entity: str | None = None, desk: str | None = None, ccy: str | None = None,
+              asset_class: str | None = None, issuer: str | None = None, q: str | None = None) -> dict[str, Any]:
+    """Period, anchor and filters of the PnL period routes (TDM#407), validated as ``/api/v1/history/pnl``."""
+    if from_ > to:
+        raise ApiError(422, "invalid_parameter", "Expected from <= to <= selected run date")
+    if (to - from_).days + 1 > pnl_history.MAX_PERIOD_DAYS:
+        raise ApiError(422, "invalid_parameter",
+                       f"Period must not exceed {pnl_history.MAX_PERIOD_DAYS} calendar days inclusive")
+    run = resolve_run(con, as_of, run_id)
+    if run is None:
+        raise ApiError(404, "not_found", "No complete run for the selected history")
+    if to > run["business_date"]:
+        raise ApiError(422, "invalid_parameter", "Expected from <= to <= selected run date")
+    return {"run": run, "from": from_, "to": to,
+            "filters": {"books": books, "portsOff": ports_off, "entity": entity, "desk": desk, "ccy": ccy,
+                        "assetClass": asset_class, "issuer": issuer, "q": q}}
+
+
+PnlScope = Annotated[dict[str, Any], Depends(pnl_scope)]
+"""The validated period of a PnL period route."""
 
 
 def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | None = None,
@@ -856,6 +882,32 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         position = (position_book, position_id) if position_id is not None else None
         return JSONResponse(jsonable_encoder(pnl_history.report(con, run, from_, to, selected, filters,
                                                                catalogue, position)), headers=NO_STORE)
+
+    @app.get("/api/v1/history/pnl/period", include_in_schema=False)
+    def pnl_period_route(con: Con, scope: PnlScope, gran: Literal["day", "week", "month"], catalogue: bool = True):
+        """Components by day, position and bucket (docs/architecture/briefs/PNL_PERIOD.md)."""
+        return JSONResponse(jsonable_encoder(pnl_period.period(con, scope["run"], scope["from"], scope["to"], gran,
+                                                               scope["filters"], catalogue)), headers=NO_STORE)
+
+    @app.get("/api/v1/history/pnl/curves", include_in_schema=False)
+    def pnl_curves_route(con: Con, scope: PnlScope):
+        """Curve moves, mean DV01 and linear rates PnL by curve and term."""
+        return JSONResponse(jsonable_encoder(pnl_period.curves(con, scope["run"], scope["from"], scope["to"],
+                                                               scope["filters"])), headers=NO_STORE)
+
+    @app.get("/api/v1/history/pnl/position", include_in_schema=False)
+    def pnl_position_route(con: Con, scope: PnlScope, position_book: str, position_id: str):
+        """One position's days with the inputs of D and D-1; ``position`` null without rows in the slice."""
+        return JSONResponse(jsonable_encoder(pnl_period.position(con, scope["run"], scope["from"], scope["to"],
+                                                                 scope["filters"], position_book, position_id)),
+                            headers=NO_STORE)
+
+    @app.get("/api/v1/history/pnl/checks", include_in_schema=False)
+    def pnl_checks_route(con: Con, scope: PnlScope, thr_abs: Annotated[float, Query(ge=0)] = pnl_checks.THR_ABS,
+                         thr_pct: Annotated[float, Query(ge=0)] = pnl_checks.THR_PCT):
+        """Automatic checks of the period's saved PnL and their findings."""
+        return JSONResponse(jsonable_encoder(pnl_checks.checks(con, scope["run"], scope["from"], scope["to"],
+                                                               scope["filters"], thr_abs, thr_pct)), headers=NO_STORE)
 
     @app.get("/api/v1/history/positions", include_in_schema=False)
     def positions_history(con: Con, request: Request, run_id: int | None = None, as_of: date | None = None,
