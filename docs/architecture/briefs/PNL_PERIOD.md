@@ -165,3 +165,46 @@ PNL_PERIOD_SCREENS.curves = { render(main, ctx) { ... }, dispose() { ... } };
 
 Ограничения метода из нынешней C19 (не официальный PnL, сделки не восстанавливаются, фондирование уровня книги не
 входит и т. п.) остаются на экране одним сворачиваемым блоком.
+
+## Уточнения реализации
+
+API (TDM#407: `backend/src/desk/api/pnl_period.py`, `pnl_checks.py`). Поля контракта не менялись; ниже — как
+прочитаны неоднозначные места и что добавлено сверх контракта.
+
+- **Компоненты.** `c` и `m` всегда содержат все ключи, включая `carry_coupon`/`carry_pull` (`null`, пока не сохранены);
+  `keys` перечисляет разбивку кэрри, только если она есть хотя бы в одной строке выборки. `m` считает строки, где
+  компонента применима: как у `/history/pnl`, строка метода `desk-reported-v1` не считается пропуском `other`, а
+  строка flash — пропуском `reported`.
+- **Buckets.** `day` — календарные дни `[from, to]`; `key`: `2026-10-28` / `2026-W44` (ISO-неделя) / `2026-10`;
+  `label`: `28.10.2026` / `26.10–01.11.2026` / `окт 2026`; `from`/`to` обрезаны по периоду. `Pos.buckets[i]` — `null`,
+  если в bucket нет строки с итогом.
+- **Pos.** Атрибуты — по последней строке позиции; `kind`/`group` — `kind_of` (эмитенты `is_gov` из справочников
+  прогонов периода); `rating` — `fact.extra.rating.grade` (без отката на рейтинг эмитента); `pvAvg` — среднее
+  `run_position.pv_rub` по строкам, где он есть; `calDays` — Σ (дата − `prevDate`) по строкам с итогом (`prevDate` —
+  `pnl.extra.prev_date`, иначе прогона), `null` без таких строк; `fundingRatePct` — `rate_pct` линий
+  `fact.extra.funding.lines`, взвешенный по |`body_ccy`| × `days`.
+- **Сверх контракта в `/period`:** `cbrMeetings: [{date, effectiveDate, decision, ratePct, prevRatePct, estimated}]` —
+  решения `md_cbr_meeting`, вступающие в силу в периоде (для отметок экрана C; без данных — пустой список).
+  `separateAnchor` — `{run: {date, runId, prevDate, cutType, slice, …}, overlappingDates, summary, days, positions}`
+  в формах `Agg`/`Day`/`Pos`. `/curves`, `/position` и `/checks` отдельный якорь не учитывают (в `coverage.runDates`
+  проверок его дата есть).
+- **`/curves`.** `buckets` — сроки риска (порядок `RISK_BUCKETS`): из `fact.risk` выборки и точек кривых последнего
+  прогона. `curves` — кривые из `fact.risk`, `fact.spread_curve` и `rates_linear_curves`. `move` = ставка последнего
+  прогона − (ставка первого − его `move_bp`), bp; `null`, если у кривой нет точки. `dv01` — Σ `fact.risk` ÷ число
+  прогонов, где у выборки есть строки. `linearTotal`/`exact` — по `fact.spread_curve`, `""` — кривая не указана.
+  `firstRun`/`lastRun` — `{date, runId, prevDate}` или `null`.
+- **`/position`.** Фильтры выборки тоже применяются; нет строк — `200 {position: null, days: []}`. `previous_row` —
+  строка той же позиции только в непосредственно предыдущем прогоне периода; при другом количестве `cleanPrev`,
+  `ytmPrev`, `dv01Prev` — `null`, `quantityPrev` остаётся (по нему видно смену). `events` — строки: «позиция
+  появилась», «позиция снова в прогоне после …», «количество изменилось», «нет PnL: <reason>», «оферта ДД.ММ.ГГГГ»,
+  «погашение ДД.ММ.ГГГГ» (дата в (`prevDate`, `date`]), «позиции нет в прогоне ДД.ММ.ГГГГ».
+- **`/checks`.** В ответе также `from`, `to`, `anchorRunId`, `thrAbs`, `thrPct`. `sev`: `crit` — `recon`, `fsign`;
+  `warn` — `unexpl`, `stale`, `lin`, `fxrev`, `norun`; `info` — `outlier`, `life`. Находки отсортированы по `sev`,
+  затем по дате. `value`: `recon` — grossCheck, `unexpl` — other, `stale` — цена (у находки по `stale_price` — `null`),
+  `fsign` — funding, `lin` — rates − rates_linear, `fxrev` — доля сдвига курса, `outlier` — итог дня, `life` —
+  количество при его смене. `fxrev` — находка по валюте: `ref`/`book`/`positionId` — `null`, `name` — код валюты,
+  `date`/`dateTo` — день скачка и день возврата. `norun` — `ref` `null`; дата с одним внутридневным прогоном
+  подписана отдельно. `stale` даёт две находки: серия одинаковой цены (`date`…`dateTo`) и серия `stale_price`.
+  `fsign` смотрит строки с ненулевыми funding и pv. `outlier` — позиции с 5+ днями итога; при MAD = 0 не проверяется.
+  `life` дополнительно отмечает пропуск прогона внутри периода. `unexplained.cells` — строки, где `other` сохранён
+  (нули включены); `refs` — позиции с такими строками.

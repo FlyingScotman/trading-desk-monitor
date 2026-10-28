@@ -189,8 +189,14 @@ DIMENSIONS = """SELECT p.run_id AS "runId", r.business_date AS date, p.position_
  WHERE p.run_id = ANY(%(ids)s)"""
 
 
-def report(con, anchor: dict[str, Any], start: date, end: date, selected: list[str],
-           filters: dict[str, Any], catalogue: bool = True, position: tuple[str, str] | None = None) -> dict[str, Any]:
+BOOKS_SQL = ("WITH books AS MATERIALIZED (SELECT run_id, jsonb_array_elements(data) AS data FROM run_reference"
+             " WHERE run_id = ANY(%(ids)s) AND kind = 'books')")
+
+
+def period_runs(con, anchor: dict[str, Any], start: date, end: date) -> dict[str, Any]:
+    """The runs of a period: default EODs before the anchor, then the anchor on its date. ``separate``: an intraday
+    anchor whose PnL interval overlaps a default run's, reported apart (``overlapping``: those runs' dates);
+    ``intradayOnly``: earlier dates with only intraday runs, not daily closes. Shared by the period routes."""
     runs = con.execute(
         f"SELECT * FROM run WHERE run_id IN ({DEFAULT_RUNS}) AND business_date >= %s"
         " AND business_date <= %s AND business_date < %s ORDER BY business_date",
@@ -205,11 +211,20 @@ def report(con, anchor: dict[str, Any], start: date, end: date, selected: list[s
         (start, end, anchor["business_date"])) if r["business_date"] not in {r["business_date"] for r in runs}]
     if start <= anchor["business_date"] <= end:
         runs.append(anchor)
-    ids = [r["run_id"] for r in runs]
-    books_sql = ("WITH books AS MATERIALIZED (SELECT run_id, jsonb_array_elements(data) AS data FROM run_reference"
-                 " WHERE run_id = ANY(%(ids)s) AND kind = 'books')")
-    cte = books_sql + ", dimensions AS (" + DIMENSIONS + ") "
-    args: dict[str, Any] = {"ids": ids}
+    return {"runs": runs, "ids": [r["run_id"] for r in runs], "overlapping": overlapping, "separate": separate,
+            "intradayOnly": intraday_only}
+
+
+def run_rows(scope: dict[str, Any], anchor: dict[str, Any]) -> list[dict[str, Any]]:
+    """``runs`` of a response: the period's runs, without a separate anchor."""
+    return [{"date": r["business_date"], "runId": r["run_id"], "prevDate": r["prev_date"], **run_slice(r)}
+            for r in scope["runs"] if not scope["separate"] or r["run_id"] != anchor["run_id"]]
+
+
+def rows_query(filters: dict[str, Any], position: tuple[str, str] | None, columns: str) -> tuple[str, dict[str, Any]]:
+    """The filtered rows of the dimensions plus ``columns`` (projections of ``p``/``r``) on the same scan; args
+    without ``ids``. A second run_position join repeats work at year scale."""
+    args: dict[str, Any] = {}
     where = []
     for k in ("entity", "desk", "ccy", "assetClass", "issuer"):
         if filters.get(k):
@@ -228,10 +243,30 @@ def report(con, anchor: dict[str, Any], start: date, end: date, selected: list[s
     if position:
         where.extend(['d.book = %(position_book)s', 'd."positionId" = %(position_id)s'])
         args.update(position_book=position[0], position_id=position[1])
-    # Project PnL on the same scan as dimensions; a second run_position join repeats work at year scale.
-    projected = DIMENSIONS.replace('p.no_pnl AS "noPnl"', 'p.no_pnl AS "noPnl", p.pnl')
-    sql = books_sql + ", dimensions AS (" + projected + ") SELECT d.* FROM dimensions d" \
+    projected = DIMENSIONS.replace('p.no_pnl AS "noPnl"', 'p.no_pnl AS "noPnl", ' + columns)
+    sql = BOOKS_SQL + ", dimensions AS (" + projected + ") SELECT d.* FROM dimensions d" \
         + (" WHERE " + " AND ".join(where) if where else "")
+    return sql, args
+
+
+def catalogue_rows(con, ids: list[int]) -> list[dict[str, Any]]:
+    """Filter options of the period's runs, independent of the slice."""
+    return con.execute(BOOKS_SQL + ", dimensions AS (" + DIMENSIONS + ") "
+                       'SELECT DISTINCT book, "bookName", "positionId", portfolio, entity,'
+                       ' desk, ccy, "assetClass", issuer FROM dimensions', {"ids": ids}).fetchall()
+
+
+def market_dates(con, start: date, end: date) -> list[date]:
+    return [r["business_date"] for r in con.execute(
+        "SELECT business_date FROM md_kbd_day WHERE business_date BETWEEN %s AND %s ORDER BY 1", (start, end))]
+
+
+def report(con, anchor: dict[str, Any], start: date, end: date, selected: list[str],
+           filters: dict[str, Any], catalogue: bool = True, position: tuple[str, str] | None = None) -> dict[str, Any]:
+    scope = period_runs(con, anchor, start, end)
+    separate = scope["separate"]
+    sql, args = rows_query(filters, position, "p.pnl")
+    args["ids"] = scope["ids"]
     # Server cursor bounds backend memory; no raw bulk response and no cache subsystem.
     with con.transaction(), con.cursor(name="pnl_history_rows", row_factory=dict_row) as cursor:
         cursor.execute(sql + ' ORDER BY d.date, d.book, d."positionId"', args)
@@ -247,16 +282,11 @@ def report(con, anchor: dict[str, Any], start: date, end: date, selected: list[s
         out = summarize(period_rows(), start, end, selected, detail=position is not None)
     if separate:
         out["separateAnchor"] = {"run": {"date": anchor["business_date"], "prevDate": anchor["prev_date"],
-                                        **run_slice(anchor)}, "overlappingDates": overlapping,
+                                        **run_slice(anchor)}, "overlappingDates": scope["overlapping"],
                                  **summarize(anchor_rows, anchor["business_date"], anchor["business_date"], selected,
                                              detail=position is not None)}
     if catalogue:
-        out["catalogue"] = con.execute(cte + 'SELECT DISTINCT book, "bookName", "positionId", portfolio, entity,'
-                                      ' desk, ccy, "assetClass", issuer FROM dimensions', {"ids": ids}) \
-            .fetchall()
-    market = [r["business_date"] for r in con.execute(
-        "SELECT business_date FROM md_kbd_day WHERE business_date BETWEEN %s AND %s ORDER BY 1", (start, end))]
+        out["catalogue"] = catalogue_rows(con, scope["ids"])
     return {"from": start, "to": end, "anchorRunId": anchor["run_id"], "currency": "RUB",
-            "marketDates": market, "intradayOnlyDates": intraday_only,
-            "runs": [{"date": r["business_date"], "runId": r["run_id"], "prevDate": r["prev_date"],
-                      **run_slice(r)} for r in runs if not separate or r["run_id"] != anchor["run_id"]], **out}
+            "marketDates": market_dates(con, start, end), "intradayOnlyDates": scope["intradayOnly"],
+            "runs": run_rows(scope, anchor), **out}
