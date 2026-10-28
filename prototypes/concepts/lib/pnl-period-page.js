@@ -126,17 +126,8 @@
   const mn = v => f.mn(v, 1), mn2 = v => f.mn(v, 2);
   const NA = (why) => '<span class="mut3" title="' + esc(why || 'нет данных') + '">—</span>';
   const tdv = (v, why, cls) => '<td class="n' + (cls ? ' ' + cls : '') + '">' + (v == null ? NA(why) : mn(v)) + '</td>';
-  // source colours: KIT.PNL_COLORS families, KIT.PAL slots, kit tokens; shade < 1 — toward the panel (light) or the ink (dark)
-  function colour(spec, shade) {
-    const s = String(spec || '--fg-2');
-    let c = s.startsWith('pnl:') ? K.PNL_COLORS[s.slice(4)] : s.startsWith('pal:') ? K.PAL[+s.slice(4)] : K.css(s);
-    if (!c) c = K.css('--fg-2');
-    if (shade == null || shade >= 1) return c;
-    const x = K.rgbOf(c), panel = K.rgbOf(K.css('--panel')) || [22, 27, 34];
-    if (!x) return c;
-    const dark = panel.reduce((a, b) => a + b, 0) < 384, y = dark ? K.rgbOf(K.css('--fg')) || [230, 237, 243] : panel, w = dark ? (1 - shade) * 0.7 : 1 - shade;
-    return 'rgb(' + x.map((v, i) => Math.round(v * (1 - w) + y[i] * w)).join(',') + ')';
-  }
+  // source colours: KIT.PNL_COLORS families, KIT.PAL slots, kit tokens (P.colour, shared with D, E, F)
+  const colour = (spec, shade) => P.colour(K, spec, shade);
   const colOf = d => colour(d.color, d.shade);
   const sw = d => '<span class="sw' + (d.hatch ? ' hatch' : '') + '" style="background-color:' + colOf(d) + '"></span>';
   const lede = key => { const t = TABS.find(x => x[0] === key); return '<div class="lede"><h1>' + t[1] + ' · ' + t[2] + '</h1><p>' + esc(t[3]) + '</p></div>'; };
