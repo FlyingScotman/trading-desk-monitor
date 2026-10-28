@@ -384,8 +384,10 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
     if sched is not None:
         why.extend(sched[0].assumptions)
     offer = next_offer(t, bd)
+    listed = [c.pay_date for c in t.coupons if c.pay_date > bd]
     horizon, hkind = ((offer[0], offer[2]) if offer else (t.maturity_date, "maturity") if t.maturity_date
-                      else (bd, "unknown"))
+                      else (sched[0].horizon_date if sched else listed[-1], "perpetual") if t.is_perpetual
+                      and (sched or listed) else (bd, "unknown"))  # a perpetual is never called (TDM#35)
     coupon, _ = current_period(t, bd)
     coupon_pct = coupon_view(t, bd).pct  # every rung shows the static coupon (D4): rate, amount, last known rate
     sa = ref.source_analytics if ref else {}

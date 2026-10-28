@@ -343,7 +343,7 @@ def kbd_reset(terms: BondTerms) -> tuple[int, tuple[date, ...]] | None:
         return None
     cycle = [c for c in terms.coupons if c.start is not None and past[-1] <= c.start and c.pay_date <= nxt[0]]
     rates = {c.rate_pct for c in cycle}
-    if not cycle or len(rates) != 1 or None in rates:
+    if len(cycle) < 2 or len(rates) != 1 or None in rates:  # one coupon is no evidence of a rate held for N years
         return None
     return years, tuple(d for d in calls if d <= nxt[0])
 
@@ -595,6 +595,8 @@ def fixed_schedule(terms: BondTerms, settlement: date) -> FixedSchedule:
             if cycle:
                 notes.append(f"coupons to the reset {resets[-1].isoformat()} at {cycle[0].rate_pct:f} % "
                              "(set at the last reset, MOEX)")
+            if kind == "perpetual":  # the horizon takes the next cycle's first coupon: core anchors from it
+                horizon = coupons[-1].pay_date
         if FORMULA_FLOATER_LABEL in terms.labels:  # TDM#401
             notes.append("floater by its formula: MOEX lists known coupons, the coming ones are not known")
         if terms.floater_formula["status"] != "curated":  # type: ignore[index]

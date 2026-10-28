@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 from datetime import date, timedelta
 from decimal import Decimal
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -98,6 +99,13 @@ def test_kbd_reset_perpetual_has_kbd_rate_risk_beyond_the_reset(ctx):
     assert v.assumptions[:2] == ("perpetual: no call assumed",
                                  "coupons to the reset 2029-09-13 at 15.0 % (set at the last reset, MOEX)")
     assert "reset every 5 years at the calls" in v.assumptions[2]
+    # the leg core continues holds the next cycle's first coupon anchored on its reset (review of #412: without it
+    # core continued a floater fixed every period), and every later cycle is anchored once, 5 years apart
+    periods = v.floater.instrument.coupon_leg.periods
+    anchors = sorted({p.fixing_anchor for p in periods if p.fixing_anchor is not None})
+    assert anchors[0] == NEXT_RESET and len(anchors) >= 7
+    assert all(abs((b - a).days - 5 * 365.25) < 92 for a, b in pairwise(anchors))
+    assert all(p.fixing_anchor is None for p in periods if p.payment_date <= NEXT_RESET)  # the running cycle: cash
     kbd = v.risk()["RUB OFZ"]
     assert kbd["3Y"] < 0 < kbd["10Y"] and sum(kbd.values()) > 0
     assert sum(v.risk()["RUB RUONIA"].values()) < 0

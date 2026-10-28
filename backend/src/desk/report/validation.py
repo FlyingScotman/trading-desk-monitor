@@ -115,7 +115,7 @@ def _inputs(o: Outcome, basis: str, accrual: float | None) -> BondMetricsInput |
     """The bond at the MOEX price ``basis`` (``waprice``, ``close``) on its valuation's flows, settled T+1 with the
     MOEX accrued moved to that date by ``accrual``, as MOEX measures yields (see the module docstring)."""
     q, v = o.quote, o.valuation
-    if q is None or v is None or basis not in q.prices_pct or accrual is None or v.perpetual_tail is not None:
+    if q is None or v is None or basis not in q.prices_pct or accrual is None or v.horizon_kind == "perpetual":
         return None  # a never-called perpetual: its flows are the listed coupons without the tail (MOEX: to a call)
     dirty = float(q.prices_pct[basis]) * v.face_rub / 100.0 + v.accrued_rub + accrual
     flows = tuple(c for c in v.cashflows if c.payment_date > v.settlement)

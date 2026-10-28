@@ -353,7 +353,7 @@ def flags(row: dict[str, Any], t: BondTerms, raw: dict[str, Any], as_of: date, s
     floating = t.coupon_type == "floating"
     if t.bond_class == "unknown":
         out.append("class_unknown")
-    if t.coupon_type == "unknown":
+    if raw.get("coupon_type") == "unknown":  # the hub's type (a formula floater is read as floating, TDM#401)
         out.append("coupon_type_unknown")
     if raw.get("coupon_type") == "variable_known" and raw.get("coupon_type_basis") == "schedule" and (
             raw.get("coupon_details") == "Фиксированный с известными купонами"

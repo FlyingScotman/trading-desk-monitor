@@ -15,7 +15,8 @@ beyond.
 neighbouring grade's (one notch worse, then one better: ``spreadCurve`` says which), else none with a reason
 (``no_rating``, ``no_peer_curve``). The carry adds ``spreadRoll = CS01 x Δ`` (the run's ``cs01``, RUB per bp; first
 order). OFZ keep their spread to the KBD (no peer curve: ``ofz_held``), floaters their discount margin
-(``floater_held``), a bond redeemed by the horizon has nothing left to roll (``redeemed``).
+(``floater_held``), a never-called perpetual its spread (``perpetual_held``: no tenor to roll down, TDM#35), a bond
+redeemed by the horizon has nothing left to roll (``redeemed``).
 """
 
 from __future__ import annotations
@@ -38,8 +39,8 @@ MIN_BUCKET = 3
 """Peers a bucket needs to be a point of its grade's curve (a median of one or two issues is an issue's spread)."""
 YEAR_DAYS = 365.25
 """Tenor in years as C09 and ``api.concepts.universe`` count it."""
-HELD_REASONS = ("no_rating", "no_peer_curve", "ofz_held", "floater_held", "not_rub", "redeemed", "no_cs01",
-                "no_quote", "not_covered")
+HELD_REASONS = ("no_rating", "no_peer_curve", "ofz_held", "floater_held", "perpetual_held", "not_rub", "redeemed",
+                "no_cs01", "no_quote", "not_covered")
 
 
 @dataclass(frozen=True)

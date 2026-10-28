@@ -292,7 +292,8 @@ def kbd_tenors(static: Snapshot) -> tuple[float, ...]:
     untenored = {f["secid"] for f in formulas if f.get("benchmark_tenor_years") is None}
     calls: dict[str, list[date]] = {}
     for o in static.data.get("offers") or ():
-        if o.get("secid") in untenored and o.get("type") == "call" and o.get("offer_date"):
+        if o.get("secid") in untenored and o.get("type") == "call" and o.get("offer_date") \
+                and o.get("status") in ("past", "scheduled"):  # the calls valuation.bonds.kbd_reset reads
             calls.setdefault(o["secid"], []).append(date.fromisoformat(o["offer_date"]))
     for ds in calls.values():
         ds = sorted(set(ds))
