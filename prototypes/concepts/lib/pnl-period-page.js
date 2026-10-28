@@ -374,10 +374,11 @@
   SCREENS.carry = {
     render(main) {
       if (!prep.summary.rows) { main.innerHTML = lede('carry') + emptyNote(); return; }
-      const S = P.carrySummary(prep), noSplit = 'нет разбивки кэрри: ' + (S.cover.coupon || 'нет данных');
+      // the split covers every row with carry; rows without PnL (no carry) are counted as for the carry itself
+      const S = P.carrySummary(prep), noSplit = 'нет разбивки кэрри: ' + (S.cover.split || 'нет данных'), cc = P.coverText(prep.summary, 'carry'), ccov = cc ? ' · ' + cc : '';
       main.innerHTML = lede('carry') + '<div class="k-kpis">' +
-        kpi('Купон / НКД', S.coupon, prep.split ? 'начислено за период' : noSplit) +
-        kpi('Амортизация к номиналу', S.pull, prep.split ? 'дисконт / премия к номиналу' : noSplit) +
+        kpi('Купон / НКД', S.coupon, prep.split ? 'начислено за период' + ccov : noSplit) +
+        kpi('Амортизация к номиналу', S.pull, prep.split ? 'дисконт / премия к номиналу' + ccov : noSplit) +
         kpi('Roll-down', S.roll, 'скатывание по кривой') +
         kpi('Кэрри брутто', S.gross, S.grossPct == null ? '% годовых — нет данных' : f.n(S.grossPct, 2) + '% годовых на ср. pv') +
         kpi('Фондирование', S.funding, (S.fundingPct == null ? '% годовых — нет данных' : f.n(S.fundingPct, 2) + '% годовых') + (S.cover.funding ? ' · ' + S.cover.funding : '')) +
@@ -424,7 +425,7 @@
   function drawCarryTable(el) {
     const rows = prep.positions.map(p => P.carryPosition(p)), sc = st.csort;
     rows.sort((a, b) => (b[sc] == null) - (a[sc] == null) || (b[sc] || 0) - (a[sc] || 0));
-    const cellOf = (r, [k, , dp]) => (PCT.has(k) ? '<td class="n">' + (r[k] == null ? NA(r.p && P.isDeal(r.p) ? 'для сделок (PV ≈ 0) ставки в % не считаются' : 'нет данных') : f.n(r[k], dp)) + '</td>'
+    const cellOf = (r, [k, , dp]) => (PCT.has(k) ? '<td class="n">' + (r[k] == null ? NA(r.p && P.isDeal(r.p) ? 'для сделок (PV ≈ 0) ставки в % не считаются' : k === 'fr' ? 'нет ставки фондирования от сервера — не оцениваем' : 'нет данных') : f.n(r[k], dp)) + '</td>'
       : k === 'pv' ? '<td class="n">' + (r.pv == null ? NA() : f.mn(r.pv, 0)) + '</td>' : tdv(r[k], k === 'coupon' || k === 'pull' ? 'нет разбивки кэрри' : 'нет данных'));
     const head = '<tr><th class="stick">Позиция</th><th>Книга</th><th>Тип</th>' + CCOLS.map(c => '<th class="n sortable' + (c[0] === sc ? ' sorted' : '') + '" data-c="' + c[0] + '">' + c[1] + (c[0] === sc ? ' ↓' : '') + '</th>').join('') + '</tr>';
     const L = labels(), line = r => '<tr class="' + (r.net != null && r.net < 0 ? 'warnrow' : '') + '"><td class="stick"><button class="link" data-ref="' + esc(r.ref) + '">' + esc(r.p.name || r.p.positionId) + '</button>' + (r.p.closed ? ' <span class="mut3">закрыта</span>' : '') + '</td><td>' + esc(r.p.book) + '</td><td class="mut">' + esc(L.kind(r.p)) + '</td>' + CCOLS.map(c => cellOf(r, c)).join('') + '</tr>';
@@ -437,7 +438,7 @@
       m.forEach((list, name) => { body += sums('grp', name, list) + list.map(line).join(''); });
     }
     el.innerHTML = '<table class="k-tbl" data-vk="c19-period-carry" data-title="Кэрри по позициям, ' + UNIT + '"><thead>' + head + '</thead><tbody>' + body + '</tbody><tfoot>' + sums('', 'Итого', rows).replace('<tr class="">', '<tr>') + '</tfoot></table>' +
-      '<p class="hint" style="padding:0 12px">Полоса слева — отрицательное кэрри нетто. % годовых — на средний pv позиции за её календарные дни; фонд. % — ставка сервера, взвешенная по телу. Для сделок (деривативы, РЕПО) ставки в % не считаются: PV ≈ 0.</p>';
+      '<p class="hint" style="padding:0 12px">Полоса слева — отрицательное кэрри нетто. % годовых — на средний pv позиции за её календарные дни; фонд. % — ставка сервера, взвешенная по телу (нет ставки — «—», без оценки). Для сделок (деривативы, РЕПО) ставки в % не считаются: PV ≈ 0.</p>';
     el.querySelectorAll('th.sortable').forEach(th => th.onclick = () => { st.csort = th.dataset.c; renderScreen(); });
     el.querySelectorAll('[data-ref]').forEach(b => b.onclick = () => openPosition(b.dataset.ref));
   }

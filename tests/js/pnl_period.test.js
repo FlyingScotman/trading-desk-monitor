@@ -120,6 +120,42 @@ test('attribution: «нет данных» without the coupon split of every row
   assert.equal(attr[2].l, fx.l); assert.equal(attr[2].color, fx.color);
 });
 
+test('carry split rule (A–E): a row without PnL does not blank it; a row with carry but without the split does', () => {
+  // Agg level: m[part] − m.carry = 0 — every row with carry has the split
+  const a = { rows: 10, total: 9, c: { carry: 5, carry_coupon: 3, carry_pull: 2 }, m: { carry: 1, carry_coupon: 1, carry_pull: 1 } };
+  assert.equal(P.hasSplit(a), true); assert.equal(P.hasCoupon(a), true); assert.equal(P.splitCover(a), '');
+  const b = { rows: 10, total: 9, c: { carry: 5, carry_coupon: 3, carry_pull: 2 }, m: { carry: 1, carry_coupon: 2, carry_pull: 1 } };
+  assert.equal(P.hasSplit(b), false); assert.equal(P.hasCoupon(b), false); assert.equal(P.splitCover(b), '8 из 9 записей');
+  assert.equal(P.hasSplit({ rows: 3, c: { carry: null, carry_coupon: null }, m: { carry: 3, carry_coupon: 3 } }), false, 'no carry at all');
+  assert.equal(P.splitCover({ rows: 3, c: { carry: 1, carry_coupon: null, carry_pull: null }, m: { carry: 0, carry_coupon: 3, carry_pull: 3 } }), 'нет данных');
+  // a selection: the split positions plus a new position whose only day has no PnL (Agg.m counts it as missing everything)
+  const split = FX.period.positions.filter(x => P.hasSplit(x)), keys = Object.keys(FX.period.summary.c);
+  const fresh = Object.assign(JSON.parse(JSON.stringify(split[0])), { ref: 'DEMO-A|NEW-1', positionId: 'NEW-1', name: 'SYN-NEW-1', total: null, rows: 1, noTotal: 1, partialRows: 0,
+    grossCheck: null, grossCount: 0, c: Object.fromEntries(keys.map(k => [k, null])), m: Object.fromEntries(keys.map(k => [k, 1])), buckets: split[0].buckets.map(() => null), pvAvg: null, calDays: null });
+  const sel = positions => { const d = JSON.parse(JSON.stringify(FX.period)); d.positions = positions; d.summary = P.sumAggs(positions); return P.prepare(d); };
+  const ok = sel(split.concat([fresh])), s = ok.summary;
+  assert.ok(s.m.carry_coupon > 0 && s.m.carry_coupon === s.m.carry, 'the no-PnL row is missing carry and coupon alike');
+  assert.equal(ok.split, true); assert.equal(ok.coupon, true);
+  const attr = P.rowsFor('attr', ok, {});
+  attr.forEach(d => assert.ok(d.total != null, d.k + ' shown'));
+  near(P.sumAvail(attr.map(d => d.total)), s.total, 'price + coupon + FX + funding + trades = total');
+  near(attr[1].total, s.c.carry_coupon, 'coupon');
+  assert.equal(P.coverText(s, 'carry'), (s.rows - 1) + ' из ' + s.rows + ' записей', 'the coverage still counts the row without PnL');
+  const S = P.carrySummary(ok);
+  near(S.coupon, s.c.carry_coupon, 'C coupon tile'); near(S.pull, s.c.carry_pull, 'C pull tile'); assert.equal(S.cover.split, '');
+  assert.deepEqual(P.rowsFor('explain', ok, { carry: 'comp' }).slice(0, 2).map(d => d.k), ['carry_coupon', 'carry_pull'], 'B/A components split');
+  const rows = ok.positions.map(P.carryPosition);
+  near(P.carryTotal(rows).coupon, s.c.carry_coupon, 'C group coupon');
+  // the same selection plus one position with carry but no split: «нет данных»
+  const corp = FX.period.positions.find(x => x.ref === 'DEMO-A|CORP-1'), bad = sel(split.concat([fresh, corp]));
+  assert.equal(bad.split, false); assert.equal(bad.coupon, false);
+  P.rowsFor('attr', bad, {}).forEach(d => assert.equal(d.total, null, d.k + ' «нет данных»'));
+  const have = P.sumAvail(split.map(x => x.rows));
+  assert.equal(P.splitCover(bad.summary), have + ' из ' + (have + corp.rows) + ' записей');
+  assert.equal(P.carrySummary(bad).coupon, null);
+  assert.equal(P.carryTotal(bad.positions.map(P.carryPosition)).coupon, null);
+});
+
 test('groups from positions: type, book, currency, curve, rating, position; buckets by index', () => {
   const p = prep(), L = { kind: x => x.group + ' · ' + x.kind, curve: id => p.curveName(id) };
   const books = P.groupRows(p.positions, 'book', L, p.buckets.length);
@@ -192,6 +228,9 @@ test('carry: net = carry without roll-down + roll-down; gross = coupon + pull (o
   assert.equal(irs.cy, null); assert.equal(irs.fr, null); assert.equal(irs.mg, null); assert.equal(irs.funding, null);
   assert.equal(usd.funding, null); assert.equal(usd.fr, null); near(usd.net, usd.gross, 'USD net without funding');
   assert.equal(o.coupon, ofz.c.carry_coupon); assert.equal(o.fr, 16.5);
+  // no server rate: «—», never estimated from funding / pv
+  const noRate = P.carryPosition(Object.assign({}, ofz, { fundingRatePct: null }));
+  assert.equal(noRate.fr, null); assert.equal(noRate.funding, ofz.c.funding); assert.ok(noRate.mg != null);
   near(o.cy, (ofz.c.carry + ofz.c.rolldown) / ofz.pvAvg / (ofz.calDays / 365) * 100, 'carry % p.a.');
   assert.equal(P.carryPosition(pos(p, 'DEMO-A|CORP-1')).coupon, null);
   const T = P.carryTotal([o, usd]);
