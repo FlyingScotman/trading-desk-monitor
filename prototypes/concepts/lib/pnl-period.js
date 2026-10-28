@@ -460,15 +460,21 @@
     });
   }
   // heat map of F: unexplained (other) positions × days; the scale is capped at the threshold (above — full colour), at
-  // least 0.1 mn RUB; rows — positions by the largest |other| (largest on top: the y axis goes up)
-  function heatmap(un, thrAbs) {
+  // least 0.1 mn RUB; rows — positions by the largest |other| (largest on top: the y axis goes up), at most HEAT_ROWS of
+  // them (the canvas grows with the rows); total — positions before any cap: the server's refsTotal (it caps too), else
+  // the client's count; capped — fewer rows shown than total
+  const HEAT_ROWS = 60;
+  function heatmap(un, thrAbs, limit) {
     const dates = (un && un.dates) || [], refs = (un && un.refs) || [], cells = ((un && un.cells) || []).filter(c => num(c[2]));
-    const peak = refs.map(() => 0);
-    cells.forEach(([, y, v]) => { peak[y] = Math.max(peak[y], Math.abs(v)); });
-    const order = refs.map((r, i) => i).sort((a, b) => peak[a] - peak[b] || (refs[a] < refs[b] ? 1 : -1));  // bottom → top
+    const peak = refs.map(() => 0), lim = num(limit) && limit > 0 ? limit : HEAT_ROWS;
+    cells.forEach(([, y, v]) => { if (y in peak) peak[y] = Math.max(peak[y], Math.abs(v)); });
+    const top = (a, b) => peak[b] - peak[a] || (refs[a] < refs[b] ? -1 : 1);
+    const order = refs.map((r, i) => i).sort(top).slice(0, lim).reverse();  // bottom → top
     const at = new Map(order.map((y, i) => [y, i]));
-    const max = Math.max(0, ...peak), thr = num(thrAbs) && thrAbs > 0 ? thrAbs : max;
-    return { dates, refs: order.map(i => refs[i]), data: cells.map(([x, y, v]) => [x, at.get(y), v]), max, cap: Math.max(1e5, Math.min(max, thr)) };
+    const kept = cells.filter(c => at.has(c[1])), max = Math.max(0, ...order.map(y => peak[y])), thr = num(thrAbs) && thrAbs > 0 ? thrAbs : max;
+    const total = Math.max(num(un && un.refsTotal) ? un.refsTotal : refs.length, order.length);
+    return { dates, refs: order.map(i => refs[i]), data: kept.map(([x, y, v]) => [x, at.get(y), v]), max, cap: Math.max(1e5, Math.min(max, thr)),
+      total, capped: total > order.length };
   }
   // what a finding's value is (API TDM#407): an amount in RUB, a price, a share of the FX move, a quantity
   const VALUE_KIND = { recon: 'rub', unexpl: 'rub', fsign: 'rub', lin: 'rub', outlier: 'rub', stale: 'price', fxrev: 'share', life: 'qty' };
@@ -484,7 +490,7 @@
 
   const api = { COMPONENTS, BY_KEY, DERIVED, MODES, BT_MODES, COMPONENT_MODES, CARRY_MODES, PRESETS, GROUPS, NO_CURVE, NO_RATING, MIN_CONTRIB,
     colour, tint, signedBp, curveGrids, linearVsExact, curveSeries, curvePositions, LIN_WARN_PCT, LIN_WARN_ABS,
-    SEV, THR_DEFAULT, thrQuery, covers, findingsIndex, worstSev, positionList, otherBooks, dayColumns, dayRow, calendar, heatmap, VALUE_KIND, checkCards,
+    SEV, THR_DEFAULT, thrQuery, covers, findingsIndex, worstSev, positionList, otherBooks, dayColumns, dayRow, calendar, heatmap, HEAT_ROWS, VALUE_KIND, checkCards,
     sumAvail, sumAll, val, srcVal, coverage, coverText, hasCoupon, hasSplit, sumAggs,
     addDays, dayDiff, presetRange, weekdays, autoGran, isoWeek, makeBuckets, bucketAggs, bucketHasMarket, periodDates, cumulate, calDays, perCalDay,
     prepare, componentRows, carryDefs, attrDefs, visibleRows, groupRows, rowsFor, chartRows, waterfallItems, contrib,
