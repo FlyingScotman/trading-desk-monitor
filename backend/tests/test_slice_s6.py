@@ -276,6 +276,17 @@ def _denoise(payload):
     return {**payload, "positions": [{**p, "gamma": keep(p["gamma"])} for p in payload["positions"]]}
 
 
+def _same_payload(a, b, path="") -> list[str]:
+    """``_same``, a position's Hessian to ``GAMMA_REL`` x its largest entry absolute too: its last-bit noise is
+    absolute at that scale (±2^-22 on a never-called perpetual of 10 mn face, TDM#35), not relative to each entry."""
+    strip = {**a, "positions": [{**p, "gamma": None} for p in a["positions"]]}
+    out = _same(strip, {**b, "positions": [{**p, "gamma": None} for p in b["positions"]]}, path)
+    for i, (x, y) in enumerate(zip(a["positions"], b["positions"])):
+        scale = max((abs(g[2]) for g in x["gamma"] + y["gamma"]), default=0.0)
+        out += _same(x["gamma"], y["gamma"], f"{path}/positions[{i}]/gamma", atol=max(ATOL, GAMMA_REL * scale))
+    return out
+
+
 def _same(a, b, path="", rtol=RTOL, atol=ATOL) -> list[str]:
     """Structural comparison: same keys, lengths, strings and None; numbers to rtol/atol."""
     if isinstance(a, dict) and isinstance(b, dict):
@@ -338,7 +349,7 @@ def test_parity_fixture_is_current(golden):
     assert [c["name"] for c in doc["cases"]] == [c["name"] for c in new["cases"]], stale
     for c, n in zip(doc["cases"], new["cases"]):
         assert c["definition"] == n["definition"], stale
-        diff = _same(_denoise(c["payload"]), n["payload"], c["name"])
+        diff = _same_payload(_denoise(c["payload"]), n["payload"], c["name"])
         assert not diff, stale + "\n" + "\n".join(diff[:20])
         diff = _same(c["expected"], run_taylor(c["payload"], c["definition"]), c["name"], doc["tolerance_rel"], 1e-12)
         assert not diff, stale + "\n" + "\n".join(diff[:20])
