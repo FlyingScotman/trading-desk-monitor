@@ -259,12 +259,14 @@ def test_upgrade_leaves_older_dates_alone(tmp_path, monkeypatch):
 
     old = "0.0.9+v0+core0"
     default = {d14: {"run_id": 1, "market_snapshot_id": "m2026-10-14", "prev_market_snapshot_id": None,
-                     "position_set_ids": [1], "logic_version": old},
+                     "position_set_ids": [1], "logic_version": old, "private_inputs_hash": "unchanged"},
                d15: {"run_id": 2, "market_snapshot_id": "m2026-10-15", "prev_market_snapshot_id": "m2026-10-14",
-                     "position_set_ids": [2], "logic_version": None}}
+                     "position_set_ids": [2], "logic_version": None, "private_inputs_hash": "unchanged"}}
     monkeypatch.setattr(ap_mod, "SnapshotDir", Dir)
     monkeypatch.setattr(ap_mod.store, "position_dates", lambda con, since: [d14, d15])
     monkeypatch.setattr(ap_mod.store, "current_sets", lambda con, d: ([1] if d == d14 else [2], 1))
+    monkeypatch.setattr(ap_mod.store, "positions_for", lambda con, d:
+                        store.PositionInputs([], [], {}, datetime.now(UTC), "unchanged"))
     monkeypatch.setattr(ap_mod.store, "default_runs", lambda con, since: default)
     calls: list[str] = []
     monkeypatch.setattr(cli, "eod_run", lambda settings, d, **kw: calls.append(d) or len(calls) + 2)

@@ -1200,7 +1200,7 @@
   // j — GET /api/v1/backfill/status; null — индикатора нет.
   const dmy = iso => iso ? iso.slice(8, 10) + '.' + iso.slice(5, 7) + '.' + iso.slice(0, 4) : '';
   const BF_WHY = { 'no default run': 'нет прогона', 'positions changed': 'изменились позиции', 'market snapshot changed': 'исправлен рынок',
-    'previous snapshot changed': 'изменилось прошлое закрытие', 'program updated': 'обновилась программа' };
+    'previous snapshot changed': 'изменилось прошлое закрытие', 'private inputs changed': 'изменились условия сделок', 'program updated': 'обновилась программа' };
   K.backfillStatus = function (j) {
     if (!j) return null;
     const on = j.enabled !== false, todo = on ? j.todo || 0 : 0, seen = {}, lines = [];
