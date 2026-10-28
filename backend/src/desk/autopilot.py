@@ -966,14 +966,16 @@ class Autopilot:
             prev_cut = previous_market(sd, d)  # as cli.eod_run: the newest earlier close, its final preferred
             prev = sd.market_id(*prev_cut) if prev_cut else None
             run = runs.get(date.fromisoformat(d))
+            inputs_hash = store.positions_for(con, date.fromisoformat(d)).private_inputs_hash
             why = ("no default run" if run is None else "positions changed" if run["position_set_ids"] != ids
                    else "market snapshot changed" if run["market_snapshot_id"] != snap
                    else "previous snapshot changed" if run["prev_market_snapshot_id"] != prev
+                   else "private inputs changed" if run["private_inputs_hash"] != inputs_hash
                    else "program updated" if d == latest_valid and not same_logic(run.get("logic_version"), logic)
                    else None)
             if why is None:
                 continue
-            sig = (tuple(ids), snap, prev, logic)
+            sig = (tuple(ids), snap, prev, logic, inputs_hash)
             if self._failed_before(d, sig, store.slice_label(d, "eod_final")):
                 self._eod_tried.add(d)  # not the backfill's either this cycle (#23)
                 notes.append(f"{d} failed before on the same inputs, not retried")
