@@ -105,8 +105,7 @@ def _accrual_to_settlement(ctx: EodContext, o: Outcome) -> float | None:
             inst = v.floater.instrument
             return inst.accrued(v.settlement, ctx.core_market) - inst.accrued(v.valuation_date, ctx.core_market)
         sch = fixed_schedule(t, v.valuation_date)
-        inst = core_instrument(t, v.valuation_date, sch.horizon_date, sch.offer, coupons=sch.coupons,
-                               redeem_at_horizon=sch.horizon_kind == "call")
+        inst = core_instrument(t, v.valuation_date, sch.horizon_date, sch.offer, coupons=sch.coupons)
         return inst.accrued(v.settlement) - inst.accrued(v.valuation_date)
     except (CoreRejection, Rejected, ValueError):
         return None
@@ -116,8 +115,8 @@ def _inputs(o: Outcome, basis: str, accrual: float | None) -> BondMetricsInput |
     """The bond at the MOEX price ``basis`` (``waprice``, ``close``) on its valuation's flows, settled T+1 with the
     MOEX accrued moved to that date by ``accrual``, as MOEX measures yields (see the module docstring)."""
     q, v = o.quote, o.valuation
-    if q is None or v is None or basis not in q.prices_pct or accrual is None:
-        return None
+    if q is None or v is None or basis not in q.prices_pct or accrual is None or v.horizon_kind == "perpetual":
+        return None  # a never-called perpetual: its flows are the listed coupons without the tail (MOEX: to a call)
     dirty = float(q.prices_pct[basis]) * v.face_rub / 100.0 + v.accrued_rub + accrual
     flows = tuple(c for c in v.cashflows if c.payment_date > v.settlement)
     try:

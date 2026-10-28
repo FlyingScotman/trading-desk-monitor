@@ -81,7 +81,7 @@
     default: 'рыночная ставка по умолчанию', contract: 'ставка договора (HTM)', none: '' };
   C.FUNDING_STATUS = { computed: 'фондирование посчитано', not_configured: 'фондирование не настроено', invalid_config: 'настройки фондирования с ошибкой', failed: 'фондирование не посчитано' };
   C.SPREAD_HELD = { no_rating: 'нет рейтинга', no_peer_curve: 'нет кривой спредов своего и соседнего рейтинга', ofz_held: 'ОФЗ: спред к КБД держится',
-    floater_held: 'флоатер: DM держится', not_rub: 'не рубли', redeemed: 'погашается до горизонта', no_cs01: 'нет CS01', no_quote: 'нет котировки', not_covered: 'нет прогноза' };
+    floater_held: 'флоатер: DM держится', perpetual_held: 'бессрочная: спред держится', not_rub: 'не рубли', redeemed: 'погашается до горизонта', no_cs01: 'нет CS01', no_quote: 'нет котировки', not_covered: 'нет прогноза' };
   C.spreadText = s => !s ? '' : C.SPREAD_HELD[s] || 'по кривой ' + s;
 
   // ---------- строки ----------

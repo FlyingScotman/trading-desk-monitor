@@ -498,8 +498,8 @@ def cashflows(t: Any, v: BondValuation, as_of: date, face_ccy: float, freq: int 
     for r in t.redemptions:
         if as_of < r.date < v.horizon_date and r.date <= end and r.value_per_bond is not None:
             out.append([r.date.isoformat(), "amort", float(r.value_per_bond) * q, False])
-    if as_of < v.horizon_date <= as_of + timedelta(days=CASHFLOW_DAYS):
-        kind = {"offer": "put", "call": "call"}.get(v.horizon_kind, "mat")
+    if as_of < v.horizon_date <= as_of + timedelta(days=CASHFLOW_DAYS) and v.horizon_kind != "perpetual":
+        kind = {"offer": "put", "call": "call"}.get(v.horizon_kind, "mat")  # a never-called perpetual redeems nothing
         out.append([v.horizon_date.isoformat(), kind, face_ccy * q, False])
     return sorted(out, key=lambda x: x[0])
 
