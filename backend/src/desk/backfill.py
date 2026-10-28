@@ -17,7 +17,8 @@ upgrade recomputes only the latest date. Nothing ever computed an older date.
    A date's positions are ``store.positions_for`` of the date: per book the newest set valid on or before it, so a
    book whose report did not come that day is carried forward from its last report, as every run does; a date
    before the first report of every book has no positions and no run. A date needs a run when it has none, or its
-   default run read other position sets, another market snapshot (a hub correction), another previous close, or was
+   default run read other position sets or canonical private inputs, another market snapshot (a hub correction),
+   another previous close, or was
    made by another valuation or core version (``same_logic``: ``VALUATION_VERSION`` and the core version of
    ``logic_version()`` recompute the history; a new release or Windows bundle of the same computation does not). Otherwise it is skipped: nothing
    is computed twice.
@@ -30,7 +31,9 @@ upgrade recomputes only the latest date. Nothing ever computed an older date.
    nothing is the date's failure too. After its run a date is planned again (the same ``plan``): still stale (a
    reason that does not go away, e.g. a previous close the run picks differently from the plan), it is logged with
    the differing field and tried again next time; after ``MAX_ATTEMPTS`` runs it is a problem date, not tried again
-   on the same inputs (#23). An error of the store or the network stops the run (the next dates would hit it too)
+   on the same inputs (#23). A saved failed signature from before private input hashes were included is stale
+   once: after one retry the new signature suppresses unchanged failures again.
+   An error of the store or the network stops the run (the next dates would hit it too)
    and is not remembered as the date's failure; a date that hits one ``MAX_ATTEMPTS`` runs in a row no longer stops
    the queue: the run goes on past it, the date tried again every time.
 
@@ -204,11 +207,13 @@ def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: 
             pc = previous_market(sd, d)
             prev = sd.market_id(*pc) if pc else None
         run = runs.get(date.fromisoformat(d))
+        inputs_hash = store.positions_for(con, date.fromisoformat(d)).private_inputs_hash
         why = ("no default run" if run is None else "positions changed" if run["position_set_ids"] != ids
                else "market snapshot changed" if run["market_snapshot_id"] != snap
                else "previous snapshot changed" if prev is not None and run["prev_market_snapshot_id"] != prev
+               else "private inputs changed" if run["private_inputs_hash"] != inputs_hash
                else "program updated" if not same_logic(run.get("logic_version"), logic) else None)
-        sig = [ids, snap, prev, logic]
+        sig = [ids, snap, prev, logic, inputs_hash]
         if why is None:
             days.append(Day(d, "done", market_id=snap, cached=is_cached, prev_date=pd))
         elif failed.get(d) == sig:
@@ -261,14 +266,15 @@ def _attempt(problems: dict[str, Any], day: Day, kind: str, error: str) -> int:
 
 def _differs(con: psycopg.Connection, day: Day) -> str:
     """What of the date's default run differs from its plan (``Day.sig``: position sets, market snapshot, previous
-    snapshot, logic version), for the log of a date that does not converge."""
+    snapshot, logic version, private inputs hash), for the log of a date that does not converge."""
     run = store.default_runs(con, date.fromisoformat(day.date)).get(date.fromisoformat(day.date))
     if run is None:
         return "no default run"
-    ids, snap, prev, logic = day.sig
+    ids, snap, prev, logic, inputs_hash = day.sig
     have = {"position_set_ids": (run["position_set_ids"], ids), "market_snapshot_id": (run["market_snapshot_id"], snap),
             "prev_market_snapshot_id": (run["prev_market_snapshot_id"], prev),
-            "logic_version": (logic_key(run.get("logic_version")), logic_key(logic))}
+            "logic_version": (logic_key(run.get("logic_version")), logic_key(logic)),
+            "private_inputs_hash": (run["private_inputs_hash"], inputs_hash)}
     return "; ".join(f"{k}: run {a}, plan {b}" for k, (a, b) in have.items() if a != b) or "nothing"
 
 
