@@ -43,6 +43,69 @@ Setting `DESK_PRIVATE_ADAPTER` (environment, the settings page or `backend/.env`
 
 **Constraints on the adapter.** Python 3.11, standard library only. It must not import `desk` at run time (its tests may, for the conformance kit). No network access, no file writes, no state between calls. Within one inbox scan the backend reuses a few long-lived child processes for many calls (since 20.10.2026: the import and the instruments index are paid once, not per file), so module-level state survives between calls of a scan: it may hold caches keyed by what they cache (a file's path, size and modification time), never anything that changes the result of a call. Since 21.10.2026 (R22) every worker imports the adapter and loads the index before the first `match`, under the read timeout, so a slow import does not count against the match timeout; `match` calls of different workers run at the same time, and the files of a call that timed out or crashed are offered to `match` once more in smaller calls.
 
+### 2.1 Optional local acquisition (version 1)
+
+The read-only interface above is unchanged. A compatible private **package** may additionally describe
+`"acquisition": {"version": 1, "entry": "relative/helper.py", "source": "declared_source", "dataset": "trade_terms"}`.
+The source must declare only `trade_terms`, `end_of_day`, `full_snapshot`, scope `["book_id"]` and `covers=listed`;
+an acquisition capability cannot acquire authority over omitted books. The entry must resolve inside the
+effective fingerprinted package; absolute paths, traversal, escaping symlinks
+and missing helpers are rejected. This capability has its own version, independent of `private/1.4`. Older
+adapters and the reference reader remain valid readers and show acquisition unavailable. It is not a new
+network operation in `match`, `read` or `reference`.
+
+Settings provides an explicit local Python executable (`acquisition_python`, `DESK_ACQUISITION_PYTHON`). There
+is no guessed executable or module installation. Provider connection settings use its existing `config_files`
+and `settings_tabs`; credentials are excluded. The private helper's required source files are nested resources
+of the normal adapter package, so the existing fingerprint and private packaging cover them.
+
+`GET /api/v1/acquisition` returns availability and the current in-memory job. `POST .../start` accepts one manual
+`op=inspect|check|fetch`; `POST .../cancel` requests cancellation. Every route requires both the existing admin
+policy and actual loopback peer/Host. Forwarded peer headers are refused. POST requires a same scheme/host/port
+Origin and `application/x-www-form-urlencoded`; missing/null/foreign origins are refused, also with auth off.
+The existing session/CSRF rules still apply. A network admin cannot submit these credentials.
+
+HTTP and child stdin use standard UTF-8 form encoding, at most 65,536 bytes and 256 fields, each value at most
+4,096 characters. The child receives one request until EOF, never credentials in argv or environment. No JSON
+credential body or Pydantic input-error echo is used. `inspect` takes an explicit ISO `date`. It returns a bounded
+list of reports `{id, sha256, name, books, policy}`; policy states the existing status filter, excluded products
+and eligible counts/product labels per canonical book. A missing report, ambiguity or empty eligible scope
+must be explicit. The user chooses one report and books, without a hidden date, source activation or all-books
+default. `check` and `fetch` take transient `username`/`password`. `fetch` also takes the inspected `report`,
+`report_sha256`, `adapter_fingerprint` and repeated `book`; changed input/config/package requires a new inspection.
+
+The monitor adds trusted `adapter_root`, `config_dir`, repeated `inbox_dir`, and a unique managed `output_dir`
+to child stdin. The helper runs as `[configured_python, -I, -B, contained_entry]`, in its own process group, with
+only PATH, SYSTEMROOT, WINDIR, TEMP, TMP, USERPROFILE, LOCALAPPDATA, APPDATA and PROGRAMDATA inherited. Store/hub
+credentials and Python import overrides are not inherited. The provider reuses its existing acquisition and
+parser code, with no runtime dependency on `desk`.
+
+The result channel is one JSON object, at most 262,144 bytes. Successful `check` returns `complete/connected`;
+`inspect` returns `complete/scope_ready` and the requested date/reports. A completed `fetch` returns
+`complete|partial/acquired`, exact date/books and `{file, sha256}` for the atomically published file inside its
+managed folder. Failure returns a closed allowlisted `code`, never raw exception text, credentials or URLs.
+Library stdout/stderr must not become diagnostics; stderr is discarded and malformed/overflow stdout fails.
+The helper and exporter sanitize errors before writing any export log or bundle, too.
+
+Only one operation is active. Timeout is 30 minutes; cancellation, timeout and shutdown stop the local process
+tree. There is no invented remote logout or guarantee that an already sent remote request is undone. Credentials
+are cleared from UI fields after handoff and released by the backend after writing stdin; secure memory
+zeroization is not claimed. Status is in memory, not a persisted credential/job store.
+
+Before fetch the requested date must have market data and positions for every selected book. The finished file
+goes through the existing scanner/reference/contract/store path with an exact source/date/book guard before
+unit writes. Source precedence, `covers=listed` and full-snapshot semantics remain unchanged. Acceptance requires
+the latest file attempt and all selected units accepted under the captured fingerprint, current terms sets for
+that exact date/source, then a new **full EOD for that date** using the existing cycle lock and fresh private
+inputs hash/lineage. Other dates, history/backfill and automatic source activation are not run. Other books'
+inputs are preserved; the full EOD values them as usual. Manual CLI EOD uses that same cycle lock.
+
+Cancellation is accepted before ingestion; once ingestion/valuation starts the UI explicitly refuses cancellation.
+Success requires the completed run to contain the current private inputs hash. Partial acquisition or derivative
+rows using imported/missing/invalid values remain `partial`, with aggregate status/reason counts and a link to
+the new run. This proves data freshness, not real pricing acceptance. Errors after ingestion never claim rollback
+of accepted inputs or a fresh completed run. There is no polling acquisition scheduler or retry/fallback provider.
+
 ## 3 The module interface
 
 The package's top level exposes:

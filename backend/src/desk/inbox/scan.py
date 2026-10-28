@@ -241,9 +241,11 @@ def _key(report_date: date, report_ts: datetime | None, seq: int | None, generat
 
 class _Scan:
     def __init__(self, con: psycopg.Connection, settings: Settings, h: AdapterHandle, res: ScanResult,
-                 now: datetime, cutoff: date | None = None, progress: Progress | None = None) -> None:
+                 now: datetime, cutoff: date | None = None, progress: Progress | None = None,
+                 expected: tuple[str, str, frozenset[str]] | None = None) -> None:
         self.con, self.settings, self.h, self.res, self.now = con, settings, h, res, now
         self.cutoff, self._progress = cutoff, progress
+        self.expected = expected
         self.cache = settings.snapshot_cache
         self.archive = Path(settings.inbox_archive)
         self.archive.mkdir(parents=True, exist_ok=True)
@@ -688,6 +690,16 @@ class _Scan:
             self._status(o, f.kind, decl, error_type=f.type, error_frames=f.frames, **cols)
             return
         c = check_read(decl, hit, raw, books=self.books, contract=self.h.describe["contract"])
+        if self.expected is not None:
+            source, day, books = self.expected
+            valid = (not c.file_error and hit["source"] == source and hit["report_date"] == day and vd.isoformat() == day
+                     and {u["scope"].get("book_id") for u in c.units} == books
+                     and all(u["dataset"] == "trade_terms" and set(u["scope"]) == {"book_id"}
+                             and u["report_date"] == day for u in c.units))
+            if not valid:
+                # A managed producer may update only the requested stock scopes; reject before any unit writes.
+                self._status(o, "rejected", decl, error_code="acquisition_scope_mismatch", **cols)
+                return
         gen = c.meta.get("generated_at")
         issues = list(c.issues)
         if report_date_suspicious(hit["report_date"], decl["time_basis"], gen):
@@ -822,8 +834,10 @@ class _Scan:
 
 def _session(con: psycopg.Connection, settings: Settings, now: datetime | None,
              offers: Callable[[_Scan], list[Offer]], *, lookback: bool = False,
-             progress: Progress | None = None, since: date | None = None) -> ScanResult:
-    h = adapter(settings)
+             progress: Progress | None = None, since: date | None = None,
+             expected: tuple[str, str, frozenset[str]] | None = None,
+             handle: AdapterHandle | None = None) -> ScanResult:
+    h = handle if handle is not None else adapter(settings)
     res = ScanResult(adapter_line(h))
     if not h.ok:
         log.warning("inbox: adapter error %s: ingestion is off", h.error)
@@ -835,7 +849,7 @@ def _session(con: psycopg.Connection, settings: Settings, now: datetime | None,
         now = now or datetime.now(UTC)
         cutoff = since if since is not None else lookback_cutoff(settings, now.astimezone(MSK).date()) if lookback \
             else None
-        s = _Scan(con, settings, h, res, now, cutoff, progress)
+        s = _Scan(con, settings, h, res, now, cutoff, progress, expected)
         with runner.pooled(read_workers()):  # workers start on the first call: an idle scan starts none
             s.run(offers(s))
             s.refresh_books()
@@ -863,6 +877,18 @@ def scan(con: psycopg.Connection, settings: Settings, *, now: datetime | None = 
 
 last_scan: dict[str, Any] | None = None
 """The counts of this process's last ``scan`` (``reconcile`` shows them: the skipped files are not ledgered)."""
+
+
+def ingest_produced(con: psycopg.Connection, settings: Settings, path: Path, *, source: str,
+                    day: date, books: frozenset[str], handle: AdapterHandle) -> ScanResult:
+    """One atomically completed managed acquisition file, through the existing read/validation/store pipeline.
+
+    Unlike a folder scan this offers no unrelated unread/reoffer files. Its source/date/book stock scope is
+    checked before writes. The caller owns publication/containment and the ordinary cycle lock.
+    """
+    st = path.stat()
+    offer = Offer("", str(path), path.name, st.st_size, datetime.fromtimestamp(st.st_mtime, UTC), True)
+    return _session(con, settings, None, lambda _: [offer], expected=(source, day.isoformat(), books), handle=handle)
 
 
 def retry(con: psycopg.Connection, settings: Settings, statuses: tuple[str, ...] = (*REOFFER, "waiting_calendar"),

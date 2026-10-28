@@ -151,6 +151,16 @@ def _load(con: psycopg.Connection, path: Path, d: str, books: list[str] | None =
 
 
 def cmd_eod(a: argparse.Namespace) -> int:
+    from .autopilot import CycleLock
+
+    with CycleLock(a.settings.home) as held:
+        if not held:
+            print("calculation_busy: another calculation cycle is running", file=sys.stderr)
+            return 2
+        return _cmd_eod_locked(a)
+
+
+def _cmd_eod_locked(a: argparse.Namespace) -> int:
     if a.books and a.run_type == "EOD":
         print("desk eod: --books values part of the desk, a TEST run; it cannot be the EOD run of the date",
               file=sys.stderr)

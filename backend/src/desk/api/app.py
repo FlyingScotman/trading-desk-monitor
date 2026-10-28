@@ -16,6 +16,7 @@ import sys
 import time
 import uuid
 from collections.abc import Callable, Iterator
+from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -38,6 +39,7 @@ from ..scenario import carry, jobs
 from ..scenario.definition import definition_hash, normalize
 from ..scenario.taylor import risk_payload
 from ..settings import REPO_ROOT
+from ..settings import load as load_settings
 from ..store import CURRENT_RUNS, slice_label
 from . import auth as authn
 from . import compat, concepts, concepts_run, pnl_history
@@ -393,10 +395,23 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     ``adapter_status``: the private adapter's ``ok <name> <version> <fp>`` or ``error <reason>`` for
     ``/health/ready`` (``desk.inbox.scan.adapter_line``, loaded once per process); None: not reported.
     ``auth``: sign-in and roles (``desk.api.auth``); None: off, this computer only."""
+    from ..acquisition import Acquisition
+
+    acquisition = Acquisition(load_settings, store_url)
+
+    @asynccontextmanager
+    async def lifespan(app):
+        try:
+            yield
+        finally:
+            acquisition.close()
+
     app = FastAPI(title="Desk API", version=__version__, description="Desk API v1 (docs/architecture/05 §2)",
+                  lifespan=lifespan,
                   responses={404: {"model": ErrorOut}, 422: {"model": ErrorOut}, 503: {"model": ErrorOut}})
 
     app.state.store_url = store_url
+    app.state.acquisition = acquisition
     app.state.started_at = datetime.now(UTC)  # the diagnostics' uptime (R13)
     app.state.instance = uuid.uuid4().hex[:16]  # /health/live's X-Desk-Instance: the LAN self-check knows its server
     app.state.lan_probe = None  # desk.lan.probe_all once serve has started (the settings page's «Сеть»)
@@ -912,6 +927,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
             raise ApiError(404, "not_found", "no static snapshot facts in the store yet (after the next run)")
         return out
 
+    from .acquisition_routes import router as acquisition_router
     from .alias_routes import router as alias_router  # /api/v1/instruments/alias(es) (batch 1, item 3)
     from .backup_routes import router as backup_router  # /api/v1/backup: backups, restore drill (desk.backup)
     from .cash_routes import public as cash_router  # /api/v1/cash: balances and ledger breaks (B3, #61)
@@ -926,6 +942,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     app.include_router(settings_router, include_in_schema=False)  # local admin routes (/settings.html)
     app.include_router(update_router, include_in_schema=False)
     app.include_router(updater_router, include_in_schema=False)
+    app.include_router(acquisition_router, include_in_schema=False)
     app.include_router(diagnostics_router, include_in_schema=False)
     app.include_router(server_router, include_in_schema=False)
     app.include_router(daystatus_router, include_in_schema=False)

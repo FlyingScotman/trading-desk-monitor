@@ -138,6 +138,7 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "store_url": ("DESK_STORE_URL", "str"),
     "private_adapter": ("DESK_PRIVATE_ADAPTER", "adapter"),
     "private_adapter_config": ("DESK_PRIVATE_ADAPTER_CONFIG", "path"),
+    "acquisition_python": ("DESK_ACQUISITION_PYTHON", "path"),
     "inbox_dirs": ("DESK_INBOX_DIRS", "dirs"),
     "inbox_poll_seconds": ("DESK_INBOX_POLL_SECONDS", "num"),
     "adapter_check_timeout_s": ("DESK_ADAPTER_CHECK_TIMEOUT_S", "num"),
@@ -233,6 +234,7 @@ class Settings:
     private_adapter: str | None = None
     private_adapter_config: Path | None = None  # load() defaults it to <home>/adapter-config
     private_adapter_sha256: str | None = None
+    acquisition_python: Path | None = None  # explicit runtime for the local provider; never guessed
     inbox_dirs: tuple[Path, ...] = ()
     inbox_archive: Path = None  # type: ignore[assignment]  # None: <home>/inbox-archive
     inbox_poll_seconds: float = 60.0
@@ -682,6 +684,7 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         report_dir=_path(get("DESK_REPORT_DIR")),
         private_adapter=adapter,
         private_adapter_config=_path(get("DESK_PRIVATE_ADAPTER_CONFIG")) or home / ADAPTER_CONFIG_DIR,
+        acquisition_python=_path(get("DESK_ACQUISITION_PYTHON")),
         private_adapter_sha256=get("DESK_PRIVATE_ADAPTER_SHA256"),
         inbox_dirs=inbox_dirs,
         inbox_archive=_path(get("DESK_INBOX_ARCHIVE")) or defaults.inbox_archive,
