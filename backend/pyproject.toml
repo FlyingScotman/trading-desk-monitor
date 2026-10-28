@@ -28,7 +28,7 @@ desk = "desk.cli:main"
 # plain clone of this repository builds. Production pins a wheel built from that commit (06 §7).
 # To work on core and the backend together, override locally (not committed):
 #   uv pip install -e ../../rub-fixed-income-core
-rub-fixed-income-core = { git = "https://github.com/FlyingScotman/rub-fixed-income-core.git", rev = "6971de27fbd31e82e13a74dfe910c8ee9f543ed7" }
+rub-fixed-income-core = { git = "https://github.com/FlyingScotman/rub-fixed-income-core.git", rev = "cb97dc75b75b50758414c230852b54599b336911" }
 
 [build-system]
 requires = ["hatchling"]
