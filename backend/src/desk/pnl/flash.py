@@ -36,7 +36,8 @@ V1          the D dirty price                                                   
   (an offer passed, a new coupon fixed) or a quote whose price and accrued disagree.
 
 Breakdowns kept in ``extra`` (TDM#406, the PnL period screen: docs/architecture/briefs/PNL_PERIOD.md); they split
-the components above and change none of them. Absent when not computable (a bond valued off core), never 0:
+the components above and change none of them. Absent when not computable (a bond valued off core), never 0; nice to
+have, they never cost a PnL: any error computing them leaves them out (logged at debug), the components as before:
 
 ==========================  ===========================================================================================
 Key                         Definition
@@ -77,6 +78,7 @@ A position that is not priced on either date gets no PnL and a reason; it is nev
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -103,7 +105,9 @@ from ..curves.rates import RUONIA_OIS_CURVE_ID
 from ..marketdata.adapter import KBD_CURVE_ID
 from ..valuation.bonds import RISK_CURVES, SPREAD_CONVENTION, BondValuation, FloaterModel
 
-METHOD = "desk-flash-exact-v2"
+log = logging.getLogger(__name__)
+
+METHOD ="desk-flash-exact-v2"
 """v2: on the bond's own curves (the RUONIA discount curve, a floater's projection curve reprojected); v1 repriced
 fixed flows on the KBD only."""
 METHOD_FX = "desk-flash-exact-fx-v1"
@@ -339,7 +343,14 @@ class FlashPnl:
 
     def breakdown(self) -> dict[str, Any]:
         """The keys of TDM#406 in ``extra`` (module docstring), JSON-safe: a pair whose value is not finite left out,
-        a non-finite number in a map null."""
+        a non-finite number in a map null; an error leaves them all out (nice to have, never fails the run)."""
+        try:
+            return self._breakdown()
+        except Exception as e:  # noqa: BLE001 - the components are kept without the breakdowns
+            log.debug("flash PnL breakdown left out: %s: %s", type(e).__name__, e)
+            return {}
+
+    def _breakdown(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
         for a, b, x, y in (("carry_coupon", "carry_pull", self.carry_coupon, self.carry_pull),
                            ("received_coupon_rub", "received_principal_rub", self.received_coupon_rub,
@@ -406,21 +417,56 @@ def _pv_floater(fl: FloaterModel, settlement: date, market: MarketSnapshot, curv
 def _coupon_income(prev: BondValuation, fl: FloaterModel | None, curves: FlashCurves, s0: date, s1: date
                    ) -> tuple[float | None, float | None]:
     """The D-1 position's coupons paid in (s0, s1] and its coupon income over it (module docstring,
-    ``carry_coupon``), in the flows' currency; (None, None) without its coupon flows, its instrument or an accrued."""
-    flows, q = prev.cashflows, prev.quantity
-    if prev.instrument is None or len(prev.coupons) != len(flows):
-        return None, None
-    received = q * math.fsum(c for d, c in prev.coupons if s0 < d <= s1)
-    market = curves.market(True) if fl is not None else None  # the D-1 fixings, as V_carry
+    ``carry_coupon``), in the flows' currency; (None, None) without its coupon flows, its instrument or an accrued.
+    Any error is a missing breakdown, never a failed PnL (logged at debug)."""
     try:
+        flows, q = prev.cashflows, prev.quantity
+        if prev.instrument is None or len(prev.coupons) != len(flows):
+            return None, None
+        received = q * math.fsum(c for d, c in prev.coupons if s0 < d <= s1)
+    except Exception as e:  # noqa: BLE001 - nice to have: the PnL itself as before
+        log.debug("flash PnL received coupons left out: %s: %s", type(e).__name__, e)
+        return None, None
+    try:
+        market = curves.market(True) if fl is not None else None  # the D-1 fixings, as V_carry
         a0, a1 = prev.instrument.accrued(s0, market), prev.instrument.accrued(s1, market)
-    except (ValueError, RuntimeError, ArithmeticError):  # an indexed leg (no CPI series), a floater core cannot
-        return received, None  # accrue: no split, the PnL itself as before
-    return received, q * (a1 - a0) + received
+        return received, q * (a1 - a0) + received
+    except Exception as e:  # noqa: BLE001 - an indexed leg (no CPI series), a floater core cannot accrue, a bug:
+        log.debug("flash PnL carry split left out: %s: %s", type(e).__name__, e)  # no split, the PnL as before
+        return received, None
 
 
-def _prev_inputs(prev: BondValuation) -> dict[str, Any]:
-    """``extra["prev"]``: the D-1 valuation the steps start from, in the fact's fields (``publish.tdm_run``)."""
+def _linear_terms(used: list[tuple[str, dict[str, float], dict[str, float]]], ofz_ruonia: dict[str, float],
+                  d_ois: dict[str, float] | None) -> tuple[dict[str, dict[str, float]] | None,
+                                                       dict[str, dict[str, float]] | None]:
+    """``rates_linear_curves`` and ``curve_moves_bp`` from the (curve, D-1 bucket risk, move) of ``rates_linear``
+    (and RUONIA's OIS move of an OFZ in RUONIA + basis); (None, None) on any error (logged at debug)."""
+    try:
+        terms: dict[str, dict[str, float]] = {}
+        moves: dict[str, dict[str, float]] = {}
+        for c, bs, move in used:
+            if keep := [b for b in bs if b in move]:
+                terms[c] = {b: bs[b] * move[b] for b in keep}
+                moves[c] = {b: move[b] for b in keep}
+        if d_ois is not None and (keep := [b for b in ofz_ruonia if b in d_ois]):
+            moves[RISK_CURVES[RUONIA_OIS_CURVE_ID]] = {b: d_ois[b] for b in keep}
+        return terms or None, moves or None
+    except Exception as e:  # noqa: BLE001 - nice to have: the PnL itself as before
+        log.debug("flash PnL linear terms left out: %s: %s", type(e).__name__, e)
+        return None, None
+
+
+def _prev_inputs(prev: BondValuation) -> dict[str, Any] | None:
+    """``extra["prev"]``: the D-1 valuation the steps start from, in the fact's fields (``publish.tdm_run``); None on
+    any error (logged at debug), never a failed PnL."""
+    try:
+        return _prev_fields(prev)
+    except Exception as e:  # noqa: BLE001 - nice to have: the PnL itself as before
+        log.debug("flash PnL D-1 inputs left out: %s: %s", type(e).__name__, e)
+        return None
+
+
+def _prev_fields(prev: BondValuation) -> dict[str, Any]:
     cs, kind = prev.spread01_rub, prev.spread_kind
     return {
         "clean_pct": prev.clean_pct, "accrued_per_bond_rub": prev.accrued_rub, "dirty_per_bond_rub": prev.dirty_rub,
@@ -480,23 +526,19 @@ def explain(prev: BondValuation, cur: BondValuation, curves: FlashCurves,
     except (ValueError, RuntimeError, CoreRejection) as e:
         raise NoPnl("core_error", str(e)) from e
     linear, kbd = 0.0, RISK_CURVES[KBD_CURVE_ID]
-    terms: dict[str, dict[str, float]] = {}
-    moves: dict[str, dict[str, float]] = {}
+    used: list[tuple[str, dict[str, float], dict[str, float]]] = []  # the same terms by bucket (TDM#406)
     for c, bs in prev.risk().items():
         if prev.ofz_ruonia and c != kbd:  # an OFZ in RUONIA + basis: the KBD's own move is its first order (below)
             continue
         move = curves.zero_move_bp(PUBLISHED_TO_CORE.get(c, c))
         linear += sum(x * move.get(b, 0.0) for b, x in bs.items())
-        if used := [b for b in bs if b in move]:  # the same terms by bucket (TDM#406)
-            terms[c] = {b: bs[b] * move[b] for b in used}
-            moves[c] = {b: move[b] for b in used}
-    ofz = None
+        used.append((c, bs, move))
+    ofz, d_ois = None, None
     if prev.ofz_ruonia:  # RUONIA + basis: the day moved the KBD itself (dK), so B dK; RUONIA's part R dO, the rest basis
         d_ois = curves.zero_move_bp(RUONIA_OIS_CURVE_ID)
         ruonia = math.fsum(x * d_ois.get(b, 0.0) for b, x in prev.ofz_ruonia.items())
         ofz = (ruonia, linear - ruonia)
-        if used := [b for b in prev.ofz_ruonia if b in d_ois]:
-            moves[RISK_CURVES[RUONIA_OIS_CURVE_ID]] = {b: d_ois[b] for b in used}
+    terms, moves = _linear_terms(used, prev.ofz_ruonia, d_ois)
     coupon_received, coupon = _coupon_income(prev, fl, curves, s0, s1)
     v1 = q * cur.dirty_rub / f1 + received
     total = q * (cur.dirty_rub - prev.dirty_rub) + received * f1

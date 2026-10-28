@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import math
 from datetime import date, timedelta
 from pathlib import Path
@@ -26,6 +27,7 @@ from desk import store
 from desk.api import create_app
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import Outcome, prepare, value
+from desk.pnl import flash as flash_module
 from desk.pnl.direct import DirectPnl
 from desk.pnl.flash import BREAKDOWN_KEYS, FlashPnl, explain
 from desk.publish.tdm_run import risk_by_curve
@@ -209,3 +211,36 @@ def test_the_real_flash_run_exposes_them_through_the_period_api(store_url, book)
     prev = r["pnl"]["extra"]["prev"]
     assert d["inputs"]["source"] == "prev" and d["inputs"]["cleanPrev"] == prev["clean_pct"]
     assert d["inputs"]["dv01Prev"] == prev["dv01_rub"] and d["inputs"]["quantityPrev"] == prev["quantity"]
+
+
+class _AccruedFails:
+    """A D-1 instrument whose accrued raises an unexpected error (not a core rejection)."""
+
+    def accrued(self, *_args):
+        raise TypeError("synthetic: accrued unavailable")
+
+
+def test_a_failing_breakdown_never_fails_the_pnl(ctx, bonds, caplog, monkeypatch):
+    """The breakdowns are nice to have: any error leaves their keys out, the PnL and its numbers as without them."""
+    o = bonds["RU000A1034P7"]
+    d0 = ctx.business_date - timedelta(days=1)
+    f, p = flash(ctx, o, d0)
+    curves = flash_curves(shifted_prev(ctx, d0), ctx)
+    with caplog.at_level(logging.DEBUG, logger="desk.pnl.flash"):
+        g = explain(dataclasses.replace(p.valuation, instrument=_AccruedFails()), o.valuation, curves)
+    assert "TypeError" in caplog.text
+    assert g.as_tdm() == f.as_tdm() and g.total == f.total and g.carry == f.carry and g.carry_coupon is None
+    old = {k: v for k, v in f.extra().items() if k not in BREAKDOWN_KEYS}
+    ex = g.extra()
+    assert not {"carry_coupon", "carry_pull"} & set(ex)
+    assert {k: v for k, v in ex.items() if k not in BREAKDOWN_KEYS} == old
+    # the other helpers: an error is a missing key, never an exception
+    assert flash_module._prev_inputs(object()) is None
+    assert flash_module._linear_terms([("RUB RUONIA", {"1Y": "x"}, {"1Y": 1.0})], {}, None) == (None, None)
+
+    def boom(_v):
+        raise TypeError("synthetic")
+
+    monkeypatch.setattr(flash_module, "_json_safe", boom)
+    ex = f.extra()
+    assert not set(BREAKDOWN_KEYS) & set(ex) and {k: v for k, v in ex.items() if k not in BREAKDOWN_KEYS} == old
