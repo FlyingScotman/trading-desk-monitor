@@ -139,6 +139,7 @@
   "reported",
   "reported_pv_rub",
   "repos",
+  "risk_problem",
   "settlement",
   "short_name",
   "spread_buckets",
@@ -175,6 +176,7 @@
   "reported",
   "reported_pv_rub",
   "repos",
+  "risk_problem",
   "spread_buckets",
   "swaps"
  ],
