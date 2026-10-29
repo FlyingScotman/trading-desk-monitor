@@ -914,6 +914,9 @@ class Autopilot:
         if res["done"]:
             ran.append(f"история {len(res['done'])} дат")
             parts.append(f"ran {len(res['done'])} dates ({res['done'][0]}..{res['done'][-1]}) in {res['seconds']} s")
+        if res.get("stalled"):  # the store or the network, not the dates (#447)
+            parts.append(f"stopped on {res['stalled']['date']}: {res['stalled']['error']} (the {res['stalled']['source']},"
+                         " not the dates' data): next cycle")
         parts += [f"{d} failed ({e})" for d, e in res["failed"][:5]]
         if res["unconverged"]:
             parts.append(f"still stale after the run, tried again next cycle: {', '.join(res['unconverged'][:5])}")
