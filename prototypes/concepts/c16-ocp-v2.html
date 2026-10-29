@@ -7,396 +7,145 @@
 <title>C16 · ОВП — макет</title>
 <link rel="stylesheet" href="lib/kit.css">
 <style>
-.v2-bar { display: flex; gap: 8px 14px; align-items: center; flex-wrap: wrap; }
-.v2-bar .grp { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; min-width: 0; }
-.v2-bar .lbl { font-size: 11px; color: var(--fg-3); text-transform: uppercase; letter-spacing: .05em; }
-.v2-mock { border-style: dashed; border-color: var(--warn); }
-.v2-mock > .hd h3 { color: var(--warn); }
-.v2-badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12.5px; font-weight: 600; border: 1px solid var(--c); color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); white-space: nowrap; }
-.st-ok { --c: var(--pos); } .st-warn { --c: var(--warn); } .st-bad { --c: var(--neg); } .st-none { --c: var(--fg-3); }
-.v2-answer { display: flex; flex-direction: column; gap: 10px; }
-.v2-answer .say { font-size: 15px; line-height: 1.45; max-width: 980px; }
-.v2-answer .why { font-size: 12.5px; color: var(--fg-2); max-width: 980px; }
-.v2-answer .why b { color: var(--fg); font-weight: 600; }
-.v2-ccys { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: 8px; }
-.v2-ccy { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px 10px; background: var(--panel-2); min-width: 0; position: relative; overflow: hidden; }
-.v2-ccy::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--c, var(--line-2)); }
-.v2-ccy .l { display: flex; gap: 8px; align-items: baseline; font-size: 11px; color: var(--fg-2); text-transform: uppercase; letter-spacing: .05em; }
-.v2-ccy .l .sp { flex: 1; }
-.v2-ccy .l .st { text-transform: none; letter-spacing: 0; font-size: 11.5px; color: var(--c, var(--fg-3)); }
-.v2-ccy .v { font-size: 22px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.v2-ccy .v .u { font-size: 11px; font-weight: 500; color: var(--fg-2); }
-.v2-ccy .eq { font-size: 11.5px; color: var(--fg-3); font-variant-numeric: tabular-nums; }
-.v2-ccy .alt { font-size: 11.5px; color: var(--warn); margin-top: 2px; }
-.v2-share { display: flex; height: 6px; border-radius: 3px; overflow: hidden; margin: 8px 0 6px; background: var(--line); }
-.v2-share span { display: block; height: 100%; }
-.s-rep { background: var(--accent); } .s-out { background: var(--eur); } .s-der { background: var(--warn); }
-.v2-parts { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 8px; font-size: 12px; align-items: center; font-variant-numeric: tabular-nums; }
-.v2-parts .dot { width: 8px; height: 8px; border-radius: 2px; }
-.v2-parts .t { color: var(--fg-2); min-width: 0; line-height: 1.3; }
-.v2-legend { display: flex; gap: 6px 16px; flex-wrap: wrap; font-size: 12px; color: var(--fg-2); }
-.v2-legend span { display: inline-flex; gap: 6px; align-items: center; }
-.v2-legend .dot { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
-.v2-two { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 12px; align-items: start; }
-@media (max-width: 1200px) { .v2-two { grid-template-columns: minmax(0, 1fr); } }
-.k-tbl td.cell { cursor: pointer; }
-.k-tbl td.cell:hover { background: var(--hover); }
-.k-tbl td.cell.sel { box-shadow: inset 0 0 0 2px var(--accent); background: var(--accent-bg); }
-.k-tbl td.cell .src { display: block; font-size: 10.5px; color: var(--fg-3); line-height: 1.1; }
-.k-tbl td.cell .src i { font-style: normal; }
-.k-tbl td.cell .src .ok { color: var(--pos); } .k-tbl td.cell .src .bad { color: var(--neg); }
-.k-tbl tr.ent td { background: var(--bg-2); color: var(--fg-2); font-size: 11.5px; font-weight: 600; }
+.v2-strip { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--warn); }
+.v2-sum { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 190px), 1fr)); gap: 8px; }
+.v2-sum .k-kpi.tot { border-color: var(--accent); }
+.v2-sum .k-kpi .l .c { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: 0; }
+.v2-chart { height: 300px; }
 .k-tbl tr.tot td { font-weight: 650; border-top: 1px solid var(--line-2); background: var(--panel-2); }
-.k-tbl tr.over td { background: color-mix(in srgb, var(--neg) 8%, transparent); }
-.k-tbl tr.expl td { white-space: normal; font-size: 12.5px; color: var(--fg-2); padding: 6px 10px 10px; background: color-mix(in srgb, var(--neg) 4%, transparent); }
-.k-tbl tr.expl b { color: var(--fg); }
-.k-tbl td.wrap { white-space: normal; min-width: 180px; }
-.k-tbl tr.sum td { font-weight: 600; background: var(--panel-2); }
-.v2-formula { margin: 10px 0 2px; padding: 8px 10px; border-radius: 6px; background: var(--bg-2); font-size: 12.5px; line-height: 1.6; }
-.v2-formula .eq { font-variant-numeric: tabular-nums; }
-.v2-msg { padding: 14px 12px; color: var(--fg-2); font-size: 12.5px; line-height: 1.5; }
-.v2-msg ul { margin: 6px 0 0; padding-left: 18px; }
-.v2-q { margin: 0; padding-left: 22px; font-size: 13px; line-height: 1.55; }
-.v2-q li { margin-bottom: 6px; }
-.v2-q .mut { font-size: 12px; }
-.v2-menu { position: fixed; z-index: 140; min-width: 240px; max-height: 60vh; overflow: auto; box-shadow: var(--shadow); padding: 4px 0; }
-.v2-menu .tb { display: flex; gap: 6px; padding: 4px 8px 6px; border-bottom: 1px solid var(--line); }
-.v2-menu .eh { padding: 6px 12px 2px; font-size: 11px; color: var(--fg-3); text-transform: uppercase; letter-spacing: .05em; cursor: pointer; }
-.v2-menu .mi { padding: 5px 12px; cursor: pointer; white-space: nowrap; }
-.v2-menu .mi:hover, .v2-menu .eh:hover { background: var(--hover); }
-@media (max-width: 720px) { .v2-ccy .v { font-size: 19px; } .v2-answer .say { font-size: 14px; } }
 </style>
 </head>
 <body>
 <div class="k-page">
-  <div id="view"><div class="v2-msg">загрузка…</div></div>
+  <div id="view"></div>
 </div>
+<script src="../echarts.min.js"></script>
 <script src="lib/boot.js"></script>
 <script src="lib/kit.js"></script>
 <script>
 (function () {
   'use strict';
-  // МАКЕТ нового экрана «ОВП» (trading-desk-monitor#446, шаг 3): только для согласования с владельцем. Данные —
-  // вымышленные, встроены в страницу, запросов к серверу нет; боевой экран — c16-ocp.html. Что показывает:
-  //  - короткий ответ: ОВП по валютам на дату для выбранных книг, сверено с отчётом ОВП или нет и почему;
-  //  - книги × валюты: откуда цифра (отчёт ОВП, отчёт + слагаемые вне отчёта из позиций, из позиций);
-  //  - из чего складывается выбранная ячейка; сверка с отчётом и объяснение расхождения; перенос ОВП;
-  //  - выбор книг (как фильтр шапки) пересчитывает всё; три демо-состояния; вопросы владельцу.
-  // Публикуемая ОВП — как в бэкенде (desk/rules/ocp.py, TDM#416): где книгу покрывает отчёт — цифра отчёта плюс
-  // слагаемые, которых в отчёте нет; книги без отчёта и день без отчёта — из позиций.
-  const K = KIT, f = K.f, esc = K.esc, h = K.h;
-  const bar = K.top({ title: 'C16 · ОВП — макет', tag: 'макет на демо-данных для согласования (#446)' });
-  // фильтр шапки, вид ОФЗ и валюта отчёта относятся к демо-набору мониторов, не к макету: выбор книг — свой, ниже
-  ['.filters', '[data-a=ofzview]', '[data-a=repr]'].forEach(s => { const e = bar.querySelector(s); if (e) e.style.display = 'none'; });
+  // МАКЕТ экрана «ОВП» (trading-desk-monitor#446), вторая версия по замечаниям владельца: ОВП книг фильтра шапки по
+  // валютам — в валюте или в долларовом эквиваленте по выбранному курсу; общая ОВП в USD; книги × валюты; история по
+  // дням. Данные вымышленные, встроены в страницу, запросов к серверу нет; боевой экран — c16-ocp.html.
+  // Курсы — те, что прогон публикует (FX — рыночный: MOEX 19:00, иначе 14:00, иначе закрытие CETS, иначе ЦБ;
+  // FX_CBR — ЦБ, действующий на дату); в макете — демо-значения.
+  // Общая ОВП — большая из сумм длинных и коротких позиций по валютам в USD-эквиваленте (USD входит своей суммой).
+  const M = MOCK, K = KIT, f = K.f, esc = K.esc, h = K.h;
+  const bar = K.top({ title: 'C16 · ОВП — макет' });
+  ['[data-a=ofzview]', '[data-a=repr]'].forEach(s => { const e = bar.querySelector(s); if (e) e.style.display = 'none'; });
   const view = document.getElementById('view');
 
   // ---------- демо-данные (вымышленные) ----------
-  // дата — дата демо-набора шапки; прошлый и следующий рабочий день — для отчёта прошлого дня и валютирования переноса
   const bday = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); do d.setUTCDate(d.getUTCDate() + n); while (d.getUTCDay() === 0 || d.getUTCDay() === 6); return d.toISOString().slice(0, 10); };
-  const AS_OF = (window.MOCK && MOCK.asOf) || '2026-10-28', PREV = bday(AS_OF, -1), VALUE = bday(AS_OF, 1);
-  const ENT = { E1: 'Юрлицо 1', E2: 'Юрлицо 2' };
-  const BOOKS = [
-    { id: 'A', name: 'Книга A', entity: 'E1', what: 'облигации в валюте; ОВП переносит в книгу B' },
-    { id: 'B', name: 'Книга B', entity: 'E1', what: 'FX и деривативы; принимает перенос ОВП' },
-    { id: 'C', name: 'Книга C', entity: 'E1', what: 'опционы и FX-свопы' },
-    { id: 'D', name: 'Книга D', entity: 'E2', what: 'клиентский FX; в отчёт ОВП не входит' },
-  ];
-  const BOOK = Object.fromEntries(BOOKS.map(b => [b.id, b]));
+  const AS_OF = M.asOf || '2026-10-28', N = 66;
+  const DATES = []; for (let i = 0, d = AS_OF; i < N; i++, d = bday(d, -1)) DATES.unshift(d);
   const CCYS = ['USD', 'EUR', 'CNY'];
-  const RATE = { USD: 80, EUR: 90, CNY: 11 };  // вымышленные круглые курсы, ₽ за единицу
-  const COMP = [['cash', 'кэш и к расчёту'], ['fx_legs', 'PV валютных ног'], ['futures', 'фьючерсы'], ['options', 'опционы'], ['bonds', 'облигации'], ['transfers', 'перенос ОВП'], ['other', 'прочее']];
-  const CN = Object.fromEntries(COMP);
-  const IN_REPORT = new Set(['cash', 'fx_legs', 'futures', 'bonds', 'transfers']);  // что отчёт ОВП включает (настройка адаптера)
-  const TOL = 50e3;  // допуск сверки в единицах валюты
-  // ОВП из позиций по слагаемым, книга|валюта → {слагаемое: сумма в валюте}
-  const POS = {
-    'A|USD': { bonds: 5e6, transfers: -5e6 }, 'A|EUR': { bonds: 2e6, transfers: -1.8e6 },
-    'B|USD': { fx_legs: -3e6, futures: 1e6, transfers: 5e6, options: 0.5e6 }, 'B|EUR': { fx_legs: 1.5e6, transfers: 1.8e6 }, 'B|CNY': { futures: 20e6, cash: -5e6 },
-    'C|USD': { cash: -1e6, fx_legs: 2e6 }, 'C|EUR': { other: 0.3e6 }, 'C|CNY': { fx_legs: -10e6, options: 4e6 },
-    'D|USD': { cash: 2e6, fx_legs: -0.5e6 }, 'D|CNY': { cash: 8e6 },
+  // ОВП книги на дату, mm в валюте; книги — демо-набора шапки
+  const TODAY = {
+    'FXCR-USD': { USD: 12 }, 'FXCR-CNY': { CNY: 150 }, FXB: { CNY: -5 },
+    'FXB-SWAP': { USD: -8, EUR: 3, CNY: -60 }, 'FXB-FWD': { USD: -2.5, EUR: -1, CNY: 20 },
+    HTM: { EUR: 2 }, 'IC-BND': { USD: 1.5 }, 'AM-CNY': { CNY: 40 },
   };
-  // сделки переноса ОВП (курс и валютирование — из сделки)
-  const TRANSFERS = [
-    { from: 'A', to: 'B', ccy: 'USD', before: 5e6, moved: -5e6, rate: 80, vd: VALUE },
-    { from: 'A', to: 'B', ccy: 'EUR', before: 2e6, moved: -1.8e6, rate: 90, vd: VALUE },
-  ];
-  // отчёт ОВП по состояниям: строки по книгам юрлица 1; строки нет — ОВП 0 (полный срез)
-  const REP_OK = { 'A|USD': 0, 'A|EUR': 0.2e6, 'B|USD': 3e6, 'B|EUR': 3.3e6, 'B|CNY': 15.02e6, 'C|USD': 1e6, 'C|CNY': -10e6 };
-  const STATES = {
-    ok: { label: 'всё сверено', report: { date: AS_OF, entity: 'E1', rows: REP_OK } },
-    brk: { label: 'есть расхождение', report: { date: AS_OF, entity: 'E1', rows: Object.assign({}, REP_OK, { 'B|USD': -2e6 }) } },
-    none: { label: 'отчёта нет', report: null, last: PREV,
-      why: 'Отчёт ОВП за ' + f.date(AS_OF) + ' не прочитан: в папке входящих файла отчёта ОВП за эту дату нет. Последний прочитанный отчёт — за ' + f.date(PREV) + '; на ' + f.date(AS_OF) + ' он уже не действует (позиции за день изменились).' },
+  const RATES = {  // ₽ за единицу, по дням; источник — как в прогоне
+    market: { name: 'MOEX 19:00', title: 'рыночный курс: индикативный MOEX 19:00 (нет — 14:00, закрытие CETS, ЦБ)', base: { USD: 81.4, EUR: 94.6, CNY: 11.4 } },
+    cbr: { name: 'ЦБ', title: 'официальный курс ЦБ, действующий на дату', base: { USD: 81.2, EUR: 94.3, CNY: 11.38 } },
   };
-
-  // ---------- состояние макета ----------
-  const S = { state: 'ok', books: [], unit: 'ccy', scale: 'mm', sel: null };
-  (location.hash.match(/s=(ok|brk|none)/) || [])[1] && (S.state = location.hash.match(/s=(ok|brk|none)/)[1]);
-  const selBooks = () => (S.books.length ? BOOKS.filter(b => S.books.includes(b.id)) : BOOKS);
-
-  // ---------- расчёт: публикуемая ОВП, источники, сверка ----------
-  const sum = o => Object.values(o || {}).reduce((s, v) => s + v, 0);
-  function cellOf(st, b, c) {
-    const key = b.id + '|' + c, parts = POS[key] || {}, R = st.report;
-    const covered = !!(R && R.entity === b.entity);
-    const derived = sum(parts);
-    if (!covered) {
-      if (!POS[key]) return null;
-      return { key, b, c, parts, derived, pub: derived, src: 'derived', why: R ? 'книга в отчёт ОВП не входит' : 'отчёта ОВП за дату нет' };
-    }
-    const hasRow = key in R.rows;
-    if (!POS[key] && !hasRow) return null;
-    const rep = hasRow ? R.rows[key] : 0;
-    const inRep = Object.entries(parts).filter(([k]) => IN_REPORT.has(k)).reduce((s, [, v]) => s + v, 0);
-    const outside = Object.entries(parts).filter(([k]) => !IN_REPORT.has(k));
-    const out = outside.reduce((s, [, v]) => s + v, 0);
-    const brk = rep - inRep;
-    return { key, b, c, parts, derived, rep, hasRow, inRep, outside, out, brk, over: Math.abs(brk) > TOL, pub: rep + out, src: out ? 'report+' : 'report' };
-  }
-  // подсказка к расхождению: слагаемое, без которого (или с которым) сходится; знак наоборот
-  function explain(x) {
-    const near = v => Math.abs(v) <= TOL;
-    for (const [k, v] of Object.entries(x.parts)) {
-      if (IN_REPORT.has(k) && near(x.brk + v)) {
-        if (k === 'transfers') {
-          const t = TRANSFERS.find(t => (t.to === x.b.id || t.from === x.b.id) && t.ccy === x.c);
-          return 'Без слагаемого <b>«' + CN[k] + '»</b> (' + num(v, x.c) + ') сходится. Похоже, отчёт не учёл сделку переноса ОВП ' + (t && t.to === x.b.id ? 'от книги ' + esc(t.from) : 'в книгу ' + esc(t ? t.to : '—')) +
-            (t ? ' (валютирование ' + f.date(t.vd) + '): её могли отразить в отчёте следующим днём' : '') + '. Проверить: есть ли сделка переноса в отчёте ОВП за ' + f.date(AS_OF) + '.';
-        }
-        return 'Без слагаемого <b>«' + CN[k] + '»</b> (' + num(v, x.c) + ') сходится: отчёт, похоже, его не включает.';
-      }
-      if (!IN_REPORT.has(k) && near(x.brk - v)) return 'Со слагаемым <b>«' + CN[k] + '»</b> (' + num(v, x.c) + ') сходится: отчёт, похоже, его уже включает — тогда оно учтено дважды.';
-    }
-    if (near(x.rep + x.inRep)) return 'Сумма та же, знак наоборот: в отчёте, похоже, короткая позиция записана как длинная.';
-    return 'Ни одно слагаемое расхождение не объясняет: нужно сравнить сделки книги с отчётом.';
-  }
-  function model() {
-    const st = STATES[S.state], books = selBooks();
-    const cells = [];
-    books.forEach(b => CCYS.forEach(c => { const x = cellOf(st, b, c); if (x) cells.push(x); }));
-    const byCcy = {};
-    CCYS.forEach(c => {
-      const L = cells.filter(x => x.c === c);
-      if (!L.length) return;
-      const rep = L.filter(x => x.src !== 'derived').reduce((s, x) => s + x.rep, 0);
-      const out = L.filter(x => x.src !== 'derived').reduce((s, x) => s + x.out, 0);
-      const der = L.filter(x => x.src === 'derived').reduce((s, x) => s + x.pub, 0);
-      const outNames = [...new Set(L.filter(x => x.src !== 'derived').flatMap(x => x.outside.filter(([, v]) => v).map(([k]) => CN[k])))];
-      const derBooks = [...new Set(L.filter(x => x.src === 'derived').map(x => x.b.id))];
-      byCcy[c] = { total: rep + out + der, rep, out, der, outNames, derBooks, positions: L.reduce((s, x) => s + x.derived, 0),
-        breaks: L.filter(x => x.over), checked: L.filter(x => x.src !== 'derived').length };
+  let seed = 7; const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  const HIST = {};  // книга → валюта → [mm по дням]; случайное блуждание назад от сегодняшней цифры
+  Object.entries(TODAY).forEach(([b, o]) => {
+    HIST[b] = {};
+    Object.entries(o).forEach(([c, v]) => {
+      const a = new Array(N); a[N - 1] = v;
+      for (let i = N - 2; i >= 0; i--) a[i] = Math.round((a[i + 1] + v * 0.08 * (rnd() * 2 - 1)) * 10) / 10;
+      HIST[b][c] = a;
     });
-    return { st, books, cells, byCcy };
-  }
+  });
+  const rateOn = (src, c, i) => c === 'USD' ? RATES[src].base.USD * (1 + 0.003 * Math.sin(i / 4)) : RATES[src].base[c] * (1 + 0.004 * Math.sin(i / 5 + c.length + (c === 'CNY' ? 2 : 0)));
+  const toUsd = (v, c, i) => c === 'USD' ? v : v * rateOn(S.rate, c, i) / rateOn(S.rate, 'USD', i);
 
-  // ---------- формат ----------
-  const SC = () => S.scale === 'mm' ? [1e6, 2, 'mm'] : [1e3, 0, 'тыс'];
-  const conv = (v, c) => S.unit === 'rub' ? v * RATE[c] : v;
-  const unitOf = c => SC()[2] + ' ' + (S.unit === 'rub' ? '₽' : c);
-  const raw = (v, c) => f.s(conv(v, c) / SC()[0], SC()[1]);
-  const amt = (v, c) => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(Math.round(conv(v, c) / SC()[0] * 10 ** SC()[1])) + '">' + raw(v, c) + '</span>';
-  const num = (v, c) => raw(v, c) + ' ' + unitOf(c);
-  const rubMm = v => f.s(v / 1e6, 1) + ' mm ₽';
-  const bookList = ids => ids.map(id => esc(BOOK[id].name)).join(', ');
-  const SRC_T = { report: 'отчёт', 'report+': 'отчёт + поз.', derived: 'из позиций' };
+  // ---------- состояние ----------
+  const S = { data: 'ok', unit: 'ccy', rate: 'market', period: 22 };
+  if (/s=none/.test(location.hash)) S.data = 'none';
 
-  function panel(title, note, cls) { const p = h('div', 'k-panel' + (cls ? ' ' + cls : '')); p.innerHTML = '<div class="hd"><h3>' + title + '</h3><span class="sp"></span>' + (note ? '<span class="k-note">' + note + '</span>' : '') + '</div><div class="bd"></div>'; return p; }
+  // книги фильтра шапки (юрлицо, деск, книги), у которых есть ОВП; фильтр валюты шапки — валюты
+  const books = () => {
+    const F = K.filter;
+    return Object.keys(TODAY).map(id => M.book[id]).filter(b => b && (!F.entity || b.entity === F.entity) && (!F.desk || b.desk === F.desk) && (!F.books || !F.books.length || F.books.includes(b.id)));
+  };
+  const ccys = () => CCYS.filter(c => !K.filter.ccy || K.filter.ccy === c);
+  const gross = vals => { let l = 0, s = 0; vals.forEach(v => { if (v > 0) l += v; else s -= v; }); return Math.max(l, s); };  // большая из сумм длинных и коротких
+  const fmt = v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(Math.round(v * 10)) + '">' + f.s(v, 1) + '</span>';
+  const unitOf = c => 'mm ' + (S.unit === 'usd' ? 'USD' : c);
+  const shown = (v, c, i) => S.unit === 'usd' ? toUsd(v, c, i) : v;
 
-  // ---------- выбор книг (как фильтр книг шапки) ----------
-  let menuEl = null;
-  function closeMenu() { if (menuEl) { menuEl.remove(); menuEl = null; } }
-  function booksMenu(anchor) {
-    closeMenu();
-    const m = h('div', 'k-panel v2-menu'), r = anchor.getBoundingClientRect();
-    m.style.left = Math.max(4, Math.min(r.left, innerWidth - 260)) + 'px'; m.style.top = (r.bottom + 4) + 'px';
-    const on = id => S.books.includes(id);
-    m.innerHTML = '<div class="tb"><button class="k-btn" data-m="all">все книги</button><span class="sp" style="flex:1"></span><span class="mut3" style="font-size:11px;align-self:center">пусто — все книги</span></div>' +
-      Object.keys(ENT).map(e => '<div class="eh" data-ent="' + e + '" title="выбрать книги юрлица">' + esc(ENT[e]) + '</div>' +
-        BOOKS.filter(b => b.entity === e).map(b => '<div class="mi" data-b="' + b.id + '"><span style="width:16px;display:inline-block">' + (on(b.id) ? '☑' : '☐') + '</span>' + esc(b.name) + ' <span class="mut3" style="font-size:11px">' + esc(b.what) + '</span></div>').join('')).join('');
-    m.onclick = e => {
-      e.stopPropagation();
-      const t = e.target.closest('[data-b],[data-ent],[data-m]'); if (!t) return;
-      if (t.dataset.m) S.books = [];
-      else if (t.dataset.ent) S.books = BOOKS.filter(b => b.entity === t.dataset.ent).map(b => b.id);
-      else { const s = new Set(S.books); s.has(t.dataset.b) ? s.delete(t.dataset.b) : s.add(t.dataset.b); S.books = s.size === BOOKS.length ? [] : [...s]; }
-      S.sel = null; render(); booksMenu(view.querySelector('[data-a=books]'));
-    };
-    document.body.appendChild(m); menuEl = m;
-  }
-  document.addEventListener('click', closeMenu);
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenu(); });
+  function panel(title, cls) { const p = h('div', 'k-panel' + (cls ? ' ' + cls : '')); p.innerHTML = '<div class="hd"><h3>' + title + '</h3><span class="sp"></span><span class="m"></span></div><div class="bd"></div>'; return p; }
+  let chart = null;
 
-  // ---------- рисование ----------
   function render() {
-    const D = model(), st = D.st, R = st.report;
+    if (chart) { chart.dispose(); chart = null; }
+    const B = books(), C = ccys().filter(c => B.some(b => HIST[b.id][c])), today = S.data === 'ok', T = N - 1;
     view.innerHTML = '';
     const wrap = h('div', 'k-grid');
 
-    // полоса макета: демо-состояние, книги, единицы
-    const mp = panel('Макет · демо-данные', 'переключатели — чтобы показать варианты; цифры выдуманные', 'v2-mock');
-    const bl = S.books.length ? (S.books.length === 1 ? BOOK[S.books[0]].name : S.books.length + ' книги: ' + S.books.join(', ')) : 'все книги · ' + BOOKS.length;
-    mp.querySelector('.bd').innerHTML = '<div class="v2-bar"><span class="grp"><span class="lbl">демо-состояние</span><span data-s="state"></span></span>' +
-      '<span class="grp"><span class="lbl">книги</span><span class="k-chip' + (S.books.length ? ' on' : '') + '" data-a="books" tabindex="0">' + esc(bl) + ' ▾</span>' +
-      (S.books.length ? '<span class="k-chip" data-a="reset"><span class="x">✕</span> сбросить</span>' : '') + '</span>' +
-      '<span class="grp"><span class="lbl">единицы</span><span data-s="unit"></span><span data-s="scale"></span></span></div>';
-    K.seg(mp.querySelector('[data-s=state]'), Object.entries(STATES).map(([k, v]) => [k, v.label]), S.state, v => { S.state = v; S.sel = null; history.replaceState(null, '', '#s=' + v); render(); });
-    K.seg(mp.querySelector('[data-s=unit]'), [['ccy', 'в валюте'], ['rub', '≈ в рублях']], S.unit, v => { S.unit = v; render(); });
-    K.seg(mp.querySelector('[data-s=scale]'), [['mm', 'млн'], ['k', 'тыс.']], S.scale, v => { S.scale = v; render(); });
-    const bc = mp.querySelector('[data-a=books]');
-    bc.onclick = e => { e.stopPropagation(); menuEl ? closeMenu() : booksMenu(bc); };
-    bc.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); bc.click(); } };
-    const rs = mp.querySelector('[data-a=reset]'); if (rs) rs.onclick = e => { e.stopPropagation(); S.books = []; S.sel = null; render(); };
-    wrap.appendChild(mp);
+    const strip = h('div', 'v2-strip'); strip.innerHTML = '<span>макет · демо-данные</span><span class="m"></span>';
+    K.seg(strip.querySelector('.m'), [['ok', 'есть данные'], ['none', 'нет данных за день']], S.data, v => { S.data = v; history.replaceState(null, '', v === 'none' ? '#s=none' : '#'); render(); });
+    wrap.appendChild(strip);
 
-    // 1. короткий ответ
-    const covered = D.books.filter(b => R && R.entity === b.entity).map(b => b.id);
-    const outside = D.books.filter(b => !(R && R.entity === b.entity)).map(b => b.id);
-    const breaks = D.cells.filter(x => x.over);
-    const near = D.cells.filter(x => x.src !== 'derived' && !x.over && Math.abs(x.brk) >= 1);
-    let badge, say, why = '';
-    if (!R) {
-      badge = '<span class="v2-badge st-warn">не сверено: отчёта ОВП нет</span>';
-      say = 'ОВП посчитана из позиций. Сверить не с чем: <b>отчёта ОВП за ' + f.date(AS_OF) + ' нет</b>.';
-      why = '<b>Почему:</b> ' + esc(st.why) + ' <a href="c14-day-status.html">Статус дня (C14)</a> — какие файлы пришли за день.';
-    } else if (breaks.length) {
-      const x = breaks[0];
-      badge = '<span class="v2-badge st-bad">не сходится с отчётом</span>';
-      say = esc(x.b.name) + ', ' + x.c + ': в отчёте ОВП <b>' + num(x.rep, x.c) + '</b>, по позициям <b>' + num(x.inRep, x.c) + '</b> — разница <b class="neg">' + num(x.brk, x.c) + '</b>.' + (breaks.length > 1 ? ' Ещё расхождений: ' + (breaks.length - 1) + '.' : '');
-      why = '<b>Вероятная причина:</b> ' + explain(x) + ' На экране ОВП ' + esc(x.b.name.replace('Книга', 'книги')) + ' по ' + x.c + ' — по отчёту: ' + num(x.pub, x.c) + '.';
-    } else if (covered.length) {
-      badge = '<span class="v2-badge st-ok">сверено с отчётом ОВП</span>';
-      say = (covered.length === 1 ? esc(BOOK[covered[0]].name) + ': отчёт ОВП и позиции сходятся' : bookList(covered) + ': отчёт ОВП и позиции сходятся') + ' по всем валютам' + (near.length ? ' (в пределах допуска ' + f.n(TOL / 1e6, 2) + ' mm в валюте)' : '') + '.';
-    } else {
-      badge = '<span class="v2-badge st-none">сверять не с чем</span>';
-      say = (D.books.length === 1 ? esc(D.books[0].name) + ' в отчёт ОВП не входит' : 'Выбранные книги в отчёт ОВП не входят') + ' — ОВП посчитана из позиций.';
+    // итог: дата, общая ОВП в USD, валюты
+    const sp = panel('ОВП на ' + f.dshort(AS_OF));
+    const m = sp.querySelector('.m'); m.style.cssText = 'display:inline-flex;gap:6px;flex-wrap:wrap';
+    const u = h('span'), r = h('span'); m.append(u, r);
+    K.seg(u, [['ccy', 'в валюте'], ['usd', 'в USD']], S.unit, v => { S.unit = v; render(); });
+    const rs = K.seg(r, Object.entries(RATES).map(([k, x]) => [k, 'курс ' + x.name]), S.rate, v => { S.rate = v; render(); });
+    rs.querySelectorAll('button').forEach((b, i) => { b.title = Object.values(RATES)[i].title; });
+    const tot = c => B.reduce((s, b) => s + ((HIST[b.id][c] || [])[T] || 0), 0);
+    if (!today) sp.querySelector('.bd').innerHTML = '<div class="k-empty">Нет данных ОВП за ' + f.date(AS_OF) + '</div>';
+    else if (!B.length) sp.querySelector('.bd').innerHTML = '<div class="k-empty">У книг фильтра нет валютной позиции</div>';
+    else {
+      const usd = C.map(c => toUsd(tot(c), c, T));
+      sp.querySelector('.bd').innerHTML = '<div class="v2-sum">' +
+        '<div class="k-kpi tot" title="большая из сумм длинных и коротких позиций по валютам, USD-эквивалент"><div class="l">Общая ОВП</div><div class="v">' + f.n(gross(usd), 1) + ' <span class="u">mm USD</span></div><div class="s">&nbsp;</div></div>' +
+        C.map((c, k) => '<div class="k-kpi"><div class="l"><i class="c" style="background:' + K.ccyColor(c) + '"></i>' + c + '</div><div class="v">' + fmt(shown(tot(c), c, T)) + ' <span class="u">' + unitOf(c) + '</span></div><div class="s">' +
+          (c === 'USD' ? '&nbsp;' : S.unit === 'usd' ? f.s(tot(c), 1) + ' mm ' + c : '≈ ' + f.s(usd[k], 1) + ' mm USD') + '</div></div>').join('') + '</div>';
     }
-    if (R && outside.length) why += (why ? '<br>' : '') + bookList(outside) + ' в отчёт ОВП не ' + (outside.length > 1 ? 'входят' : 'входит') + ' — ОВП из позиций, без сверки.';
-    const ap = panel('ОВП на ' + f.dshort(AS_OF) + ' · ' + (S.books.length ? bookList(S.books) : 'все книги'), 'длинная позиция — плюс, короткая — минус');
-    const ccyTile = c => {
-      const x = D.byCcy[c];
-      if (!x) return '<div class="v2-ccy"><div class="l">' + c + '</div><div class="v mut3">—</div><div class="eq">позиции нет</div></div>';
-      const stC = x.breaks.length ? 'st-bad' : x.checked ? 'st-ok' : 'st-none';
-      const stT = x.breaks.length ? '✗ не сходится' : x.checked ? '✓ сверено' : 'без сверки';
-      const parts = [['s-rep', 'из отчёта ОВП', x.rep, x.checked], ['s-out', 'добавлено из позиций: ' + (x.outNames.join(', ') || '—'), x.out, x.out], ['s-der', (R ? 'книги без отчёта' : 'из позиций: отчёта нет') + (x.derBooks.length ? ' (' + x.derBooks.join(', ') + ')' : ''), x.der, x.derBooks.length]];
-      const tot = parts.reduce((s, p) => s + Math.abs(p[2]), 0) || 1;
-      return '<div class="v2-ccy ' + stC + '" data-ccy="' + c + '"><div class="l"><span>' + c + '</span><span class="sp"></span><span class="st">' + stT + '</span></div>' +
-        '<div class="v">' + amt(x.total, c) + ' <span class="u">' + unitOf(c) + '</span></div>' +
-        '<div class="eq">' + (S.unit === 'rub' ? 'в валюте ' + f.s(x.total / 1e6, 2) + ' mm ' + c : '≈ ' + rubMm(x.total * RATE[c])) + ' по курсу ' + f.n(RATE[c], 2) + '</div>' +
-        (x.breaks.length ? '<div class="alt">по позициям было бы ' + num(x.positions, c) + '</div>' : '') +
-        '<div class="v2-share" title="доля по модулю: отчёт / добавлено из позиций / книги без отчёта">' + parts.filter(p => p[2]).map(p => '<span class="' + p[0] + '" style="width:' + (Math.abs(p[2]) / tot * 100).toFixed(1) + '%"></span>').join('') + '</div>' +
-        '<div class="v2-parts">' + parts.filter(p => p[3]).map(p => '<span class="dot ' + p[0] + '"></span><span class="t" title="' + esc(p[1]) + '">' + esc(p[1]) + '</span><span>' + amt(p[2], c) + '</span>').join('') + '</div></div>';
-    };
-    // совокупная ОВП: большая из сумм длинных и коротких позиций по валютам, ≈ в рублях (как считать — вопрос владельцу)
-    const rub = CCYS.filter(c => D.byCcy[c]).map(c => D.byCcy[c].total * RATE[c]);
-    const lng = rub.filter(v => v > 0).reduce((s, v) => s + v, 0), sht = rub.filter(v => v < 0).reduce((s, v) => s + v, 0);
-    const agg = '<div class="v2-ccy"><div class="l"><span>совокупно ≈ ₽</span></div><div class="v">' + f.n(Math.max(lng, -sht) / 1e6, 1) + ' <span class="u">mm ₽</span></div>' +
-      '<div class="eq">большая из сумм: длинные ' + rubMm(lng) + ', короткие ' + rubMm(sht) + '</div><div class="eq" style="margin-top:6px">правило и лимит — вопрос 3 ниже</div></div>';
-    ap.querySelector('.bd').innerHTML = '<div class="v2-answer"><div>' + badge + '</div><div class="say">' + say + '</div>' + (why ? '<div class="why">' + why + '</div>' : '') +
-      '<div class="v2-ccys">' + CCYS.map(ccyTile).join('') + agg + '</div>' +
-      '<div class="v2-legend"><span><i class="dot s-rep"></i>из отчёта ОВП</span><span><i class="dot s-out"></i>добавлено из позиций: слагаемые, которых в отчёте нет</span><span><i class="dot s-der"></i>книги без отчёта — из позиций</span></div></div>';
-    wrap.appendChild(ap);
+    wrap.appendChild(sp);
 
-    // 2. книги × валюты  |  3. из чего складывается ячейка
-    const two = h('div', 'v2-two'); wrap.appendChild(two);
-    const bp = panel('По книгам и валютам', SC()[2] + (S.unit === 'rub' ? ' ₽' : ' в валюте') + ' · щелчок по ячейке — из чего складывается');
+    // книги × валюты
+    const bp = panel('По книгам');
     bp.querySelector('.bd').classList.add('flush', 'scroll');
-    if (!S.sel || !D.cells.some(x => x.key === S.sel)) S.sel = (breaks[0] || D.cells.slice().sort((a, b) => Object.keys(b.parts).length - Object.keys(a.parts).length)[0] || {}).key || null;
-    const cellHtml = (b, c) => {
-      const x = D.cells.find(x => x.b === b && x.c === c);
-      if (!x) return '<td class="n mut3">—</td>';
-      const mark = x.src === 'derived' ? '' : x.over ? ' <i class="bad" title="не сходится с отчётом">✗</i>' : ' <i class="ok" title="сверено с отчётом">✓</i>';
-      return '<td class="n cell' + (x.key === S.sel ? ' sel' : '') + '" data-cell="' + x.key + '" tabindex="0">' + amt(x.pub, c) + '<span class="src">' + SRC_T[x.src] + mark + '</span></td>';
-    };
-    const totRub = b => D.cells.filter(x => x.b === b).reduce((s, x) => s + x.pub * RATE[x.c], 0);
-    const ents = [...new Set(D.books.map(b => b.entity))];
-    bp.querySelector('.bd').innerHTML = '<table class="k-tbl" data-vk="c16v2-matrix" data-title="ОВП по книгам и валютам (макет)"><thead><tr><th>Книга</th>' + CCYS.map(c => '<th class="n">' + c + '<span class="k-thu">' + unitOf(c) + '</span></th>').join('') + '<th class="n">≈ нетто<span class="k-thu">mm ₽</span></th><th>Отчёт ОВП</th></tr></thead><tbody>' +
-      ents.map(e => '<tr class="ent"><td colspan="' + (CCYS.length + 3) + '">' + esc(ENT[e]) + (R && R.entity === e ? ' · отчёт ОВП по книгам' : R ? ' · отчёта ОВП нет' : '') + '</td></tr>' +
-        D.books.filter(b => b.entity === e).map(b => '<tr><td>' + esc(b.name) + '<span class="mut3" style="display:block;font-size:11px">' + esc(b.what) + '</span></td>' + CCYS.map(c => cellHtml(b, c)).join('') +
-          '<td class="n mut">' + f.s(totRub(b) / 1e6, 1) + '</td><td class="mut">' + (R && R.entity === b.entity ? 'за ' + f.date(R.date) : R ? 'не входит' : 'нет за ' + f.date(AS_OF)) + '</td></tr>').join('')).join('') +
-      '<tr class="tot"><td>Итого выбранные</td>' + CCYS.map(c => '<td class="n">' + (D.byCcy[c] ? amt(D.byCcy[c].total, c) : '<span class="mut3">—</span>') + '</td>').join('') +
-      '<td class="n">' + f.s(D.cells.reduce((s, x) => s + x.pub * RATE[x.c], 0) / 1e6, 1) + '</td><td></td></tr></tbody></table>' +
-      '<div class="k-note" style="padding:6px 10px">«отчёт» — цифра отчёта ОВП; «отчёт + поз.» — отчёт плюс слагаемые, которых в отчёте нет (из позиций); «из позиций» — книга без отчёта или отчёта за день нет. ✓ / ✗ — сверка с отчётом.</div>';
-    bp.querySelectorAll('[data-cell]').forEach(td => {
-      td.onclick = () => { S.sel = td.dataset.cell; render(); };
-      td.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); td.click(); } };
-    });
-    two.appendChild(bp);
+    if (today && B.length) {
+      const rows = B.map(b => { const v = C.map(c => (HIST[b.id][c] || [])[T]); return { b, v, g: gross(C.map((c, k) => v[k] == null ? 0 : toUsd(v[k], c, T))) }; }).sort((a, z) => z.g - a.g);
+      const cell = (v, c) => '<td class="n">' + (v == null ? '<span class="mut3">—</span>' : fmt(shown(v, c, T))) + '</td>';
+      bp.querySelector('.bd').innerHTML = '<table class="k-tbl" data-vk="c16v2-books" data-title="ОВП по книгам"><thead><tr><th>Книга</th>' +
+        C.map(c => '<th class="n">' + c + '<span class="k-thu">' + unitOf(c) + '</span></th>').join('') + '<th class="n" title="большая из сумм длинных и коротких, USD-эквивалент">Общая<span class="k-thu">mm USD</span></th></tr></thead><tbody>' +
+        rows.map(x => '<tr><td>' + esc(x.b.name) + '</td>' + x.v.map((v, k) => cell(v, C[k])).join('') + '<td class="n">' + f.n(x.g, 1) + '</td></tr>').join('') +
+        '<tr class="tot"><td>Итого</td>' + C.map(c => cell(tot(c), c)).join('') + '<td class="n">' + f.n(gross(C.map(c => toUsd(tot(c), c, T))), 1) + '</td></tr></tbody></table>';
+    } else bp.querySelector('.bd').innerHTML = '<div class="k-empty">' + (today ? 'Нет книг с ОВП' : 'Нет данных за ' + f.date(AS_OF)) + '</div>';
+    wrap.appendChild(bp);
 
-    const x = D.cells.find(x => x.key === S.sel);
-    const dp = panel(x ? 'Из чего складывается · ' + esc(x.b.name) + ' · ' + x.c : 'Из чего складывается', x ? unitOf(x.c) : '');
-    if (!x) dp.querySelector('.bd').innerHTML = '<div class="k-empty">Выберите ячейку слева</div>';
-    else {
-      const rows = COMP.filter(([k]) => x.parts[k]).map(([k, n]) => '<tr><td>' + esc(n) + '</td><td class="n">' + amt(x.parts[k], x.c) + '</td><td>' +
-        (x.src === 'derived' ? '<span class="mut">в ОВП из позиций</span>' : IN_REPORT.has(k) ? '<span class="mut">есть в отчёте — берём цифру отчёта</span>' : '<span style="color:var(--eur)">в отчёте нет — добавляем из позиций</span>') + '</td></tr>').join('');
-      let formula;
-      if (x.src === 'derived') formula = 'Отчёта по книге нет (' + esc(x.why) + '): <b>ОВП = сумма слагаемых из позиций = <span class="eq">' + num(x.pub, x.c) + '</span></b>.';
-      else {
-        const outT = x.outside.filter(([, v]) => v).map(([k, v]) => CN[k] + ' ' + raw(v, x.c)).join(' + ');
-        formula = 'Отчёт ОВП: <span class="eq">' + raw(x.rep, x.c) + '</span>' + (x.hasRow ? '' : ' <span class="mut3">(строки валюты в отчёте нет — 0)</span>') +
-          (outT ? ' + вне отчёта, из позиций: <span class="eq">' + esc(outT) + '</span>' : '') + ' = <b>ОВП <span class="eq">' + num(x.pub, x.c) + '</span></b>' +
-          '<br>Сверка: в отчёте <span class="eq">' + raw(x.rep, x.c) + '</span>, те же слагаемые по позициям <span class="eq">' + raw(x.inRep, x.c) + '</span> → разница <b class="' + (x.over ? 'neg' : '') + '">' + raw(x.brk, x.c) + '</b> ' +
-          (x.over ? '— <span style="color:var(--neg)">не сходится</span>' : Math.abs(x.brk) >= 1 ? '— в пределах допуска' : '— сходится');
-      }
-      dp.querySelector('.bd').classList.add('flush');
-      dp.querySelector('.bd').innerHTML = '<div style="overflow:auto"><table class="k-tbl" data-vk="c16v2-parts" data-title="Слагаемые ОВП (макет)"><thead><tr><th>Слагаемое</th><th class="n">Из позиций</th><th>Как входит в ОВП</th></tr></thead><tbody>' + rows +
-        '<tr class="sum"><td>Всего из позиций</td><td class="n">' + amt(x.derived, x.c) + '</td><td></td></tr></tbody></table></div>' +
-        '<div style="padding:0 12px 12px"><div class="v2-formula">' + formula + '</div>' + (x.over ? '<div class="why" style="margin-top:8px;font-size:12.5px;color:var(--fg-2)"><b style="color:var(--fg)">Объяснение:</b> ' + explain(x) + '</div>' : '') + '</div>';
-    }
-    two.appendChild(dp);
-
-    // 4. сверка с отчётом  |  5. перенос ОВП
-    const two2 = h('div', 'v2-two'); wrap.appendChild(two2);
-    const rp = panel('Сверка с отчётом ОВП', R ? 'разница = отчёт − те же слагаемые по позициям; допуск ' + f.n(TOL / 1e6, 2) + ' mm в валюте' : '');
-    const RC = D.cells.filter(x => x.src !== 'derived');
-    if (!R) rp.querySelector('.bd').innerHTML = '<div class="v2-msg"><b>Сверять не с чем:</b> отчёта ОВП за ' + f.date(AS_OF) + ' нет — причина выше, в ответе.' +
-      '<br><br>Почему так бывает:<ul><li>файла за дату нет в папке входящих;</li><li>файл есть, но имя не подошло под шаблон отчёта ОВП — он пропущен;</li><li>файл отклонён при чтении (формат, лист, колонки) — причина в Статусе дня;</li><li>прогон посчитан раньше, чем пришёл файл, — нужен пересчёт.</li></ul></div>';
-    else if (!RC.length) rp.querySelector('.bd').innerHTML = '<div class="k-empty">Выбранные книги в отчёт ОВП не входят — сверять не с чем</div>';
-    else {
-      rp.querySelector('.bd').classList.add('flush', 'scroll');
-      rp.querySelector('.bd').innerHTML = '<table class="k-tbl" data-vk="c16v2-recon" data-title="Сверка ОВП с отчётом (макет)"><thead><tr><th>Книга</th><th>Валюта</th><th class="n">Отчёт</th><th class="n">По позициям</th><th class="n">Разница</th><th>Итог</th></tr></thead><tbody>' +
-        RC.map(x => '<tr class="' + (x.over ? 'over' : '') + '"><td>' + esc(x.b.name) + '</td><td>' + x.c + '</td><td class="n">' + amt(x.rep, x.c) + '</td><td class="n">' + amt(x.inRep, x.c) + '</td><td class="n"><b>' + amt(x.brk, x.c) + '</b></td><td>' +
-          (x.over ? '<span style="color:var(--neg)">✗ не сходится</span>' : Math.abs(x.brk) >= 1 ? '<span class="pos">✓</span> <span class="mut">в пределах допуска</span>' : '<span class="pos">✓ сходится</span>') + '</td></tr>' +
-          (x.over ? '<tr class="expl" data-csv-skip="1"><td colspan="6">' + explain(x) + '</td></tr>' : '')).join('') + '</tbody></table>' +
-        '<div class="k-note" style="padding:6px 10px">По позициям — только слагаемые, которые есть в отчёте (' + esc([...IN_REPORT].map(k => CN[k]).join(', ')) + '); опционы и прочее в отчёт не входят и в сверке не участвуют.</div>';
-    }
-    two2.appendChild(rp);
-
-    const tp = panel('Перенос ОВП', 'сделки переноса дня: курс и валютирование — из сделки');
-    const T = TRANSFERS.filter(t => D.books.some(b => b.id === t.from || b.id === t.to));
-    if (!T.length) tp.querySelector('.bd').innerHTML = '<div class="k-empty">У выбранных книг переноса ОВП нет</div>';
-    else {
-      tp.querySelector('.bd').classList.add('flush', 'scroll');
-      const sel = new Set(D.books.map(b => b.id));
-      tp.querySelector('.bd').innerHTML = '<table class="k-tbl" data-vk="c16v2-transfers" data-title="Перенос ОВП (макет)"><thead><tr><th>Перенос</th><th class="n">До переноса</th><th class="n">Перенесено</th><th class="n">Осталось</th><th title="курс сделки переноса и дата валютирования">Курс · валют.</th></tr></thead><tbody>' +
-        T.map(t => { const after = t.before + t.moved, full = Math.abs(after) <= TOL; return '<tr><td>' + esc(BOOK[t.from].name) + ' → ' + t.to + ' · ' + t.ccy + '</td><td class="n">' + amt(t.before, t.ccy) + '</td><td class="n">' + amt(t.moved, t.ccy) + '</td>' +
-          '<td class="n"><b>' + amt(after, t.ccy) + '</b><span style="display:block;font-size:10.5px;line-height:1.1;color:var(' + (full ? '--pos' : '--warn') + ')">' + (full ? 'перенесено полностью' : 'перенесено не всё') + '</span></td><td>' + f.n(t.rate, 2) + ' · ' + f.date(t.vd) + '</td></tr>'; }).join('') + '</tbody></table>' +
-        (T.some(t => !sel.has(t.from) || !sel.has(t.to)) ? '<div class="k-note" style="padding:6px 10px">Выбрана только одна сторона переноса: вторая книга в итог не входит.</div>' : '') +
-        '<div class="k-note" style="padding:6px 10px">До переноса — ОВП облигаций книги (валютный PnL с прошлого переноса); перенос уводит её в книгу деривативов.</div>';
-    }
-    two2.appendChild(tp);
-
-    // 6. вопросы владельцу
-    const qp = panel('Вопросы владельцу', 'ответы — в issue #446', 'v2-mock');
-    qp.querySelector('.bd').innerHTML = '<ol class="v2-q">' + QUESTIONS.map(q => '<li>' + q[0] + (q[1] ? '<br><span class="mut">' + q[1] + '</span>' : '') + '</li>').join('') + '</ol>';
-    wrap.appendChild(qp);
-
+    // история по дням: столбцы по валютам (USD-эквивалент), линия — общая ОВП
+    const hp = panel('По дням');
+    K.seg(hp.querySelector('.m'), [[10, '2 нед'], [22, 'месяц'], [66, '3 мес']], S.period, v => { S.period = v; render(); });
+    hp.querySelector('.bd').innerHTML = '<div class="v2-chart"></div>';
+    wrap.appendChild(hp);
     view.appendChild(wrap);
     K.tableToolsAll(wrap);
+
+    const last = today ? N : N - 1, I = []; for (let i = Math.max(0, last - S.period); i < last; i++) I.push(i);
+    const day = (c, i) => B.reduce((s, b) => s + ((HIST[b.id][c] || [])[i] || 0), 0);
+    const css = K.css;
+    chart = K.chart(hp.querySelector('.v2-chart'), () => ({
+      animation: false, grid: { left: 6, right: 10, top: 30, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 },
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => v == null ? '—' : f.s(v, 1) + ' mm USD' },
+      xAxis: { type: 'category', data: I.map(i => f.dshort(DATES[i])) },
+      yAxis: { type: 'value', unit: 'mm USD', axisLabel: { formatter: v => K.tick(v, 1) } },
+      series: C.map(c => ({ name: c, type: 'bar', stack: 'o', barMaxWidth: 28, data: I.map(i => Math.round(toUsd(day(c, i), c, i) * 10) / 10), itemStyle: { color: K.ccyColor(c) } }))
+        .concat([{ name: 'общая', type: 'line', data: I.map(i => Math.round(gross(C.map(c => toUsd(day(c, i), c, i))) * 10) / 10), showSymbol: false, lineStyle: { width: 2 }, color: css('--fg') }]),
+    }));
   }
 
-  const QUESTIONS = [
-    ['Что важно видеть первым?', 'Сейчас наверху — ответ «сверено / не сверено и почему» и итог по валютам для выбранных книг; ниже — книги × валюты. Может быть, первой нужна таблица книг или только валюты с расхождением.'],
-    ['В каких единицах показывать ОВП?', 'В валюте (USD, EUR, CNY) или в рублях по курсу; млн или тыс.; сколько знаков. Если в рублях — по какому курсу: ЦБ на дату или курс прогона. Переключатель «единицы» в полосе макета показывает оба варианта.'],
-    ['Нужна ли совокупная ОВП в рублях и лимиты?', 'Плитка «совокупно» сейчас — большая из сумм длинных и коротких позиций. Так ли считать, и показывать ли рядом лимиты ОВП (по валюте и совокупный) и их использование.'],
-    ['Нужен ли разрез по датам расчётов?', 'Например: сегодня / завтра / спот / форварды по срокам — когда валюта придёт или уйдёт.'],
-    ['Нужна ли история ОВП по дням?', 'График по валютам за месяц, рядом цифра отчёта ОВП по дням; или достаточно «сегодня против вчера».'],
-    ['Отчёт ОВП только по юрлицу целиком', 'Если отчёт даёт одну цифру на юрлицо, а выбрана часть его книг: показывать по ним ОВП из позиций и писать, что сверка возможна только по юрлицу целиком? (Сейчас в макете отчёт — по книгам.)'],
-    ['Сверка и расхождения', 'Какой допуск считать «сходится» (в макете 0.05 mm в валюте); полезны ли объяснения вида «без слагаемого … сходится»; что ещё проверять первым при расхождении.'],
-    ['Перенос ОВП', 'Оставить таблицу переноса на этом экране или вынести; что важнее — «осталось после переноса» по книге или сами сделки переноса.'],
-  ];
-
-  K.commands && K.commands(Object.entries(STATES).map(([k, v]) => ({ label: 'Макет ОВП: ' + v.label, run: () => { S.state = k; S.sel = null; render(); } })));
-  // формат отрицательных «(1) / −1» (#153): перерисовать в новом формате
+  K.onFilter(render);
   K.on('numfmt', render);
   render();
 })();
