@@ -306,6 +306,31 @@ def test_launcher_rolls_back_a_network_change_that_does_not_start(tmp_path: Path
     assert restart.pending(home) is None and restart.last(home)["ok"] and "127.0.0.1:8200" in restart.last(home)["message"]
 
 
+@pytest.mark.parametrize("ok", [True, False])
+def test_the_launcher_drops_the_staged_change_before_it_records_the_outcome(tmp_path: Path, monkeypatch, ok: bool):
+    """TDM#451: the page reads the outcome, then the staged change (server_state); the launcher drops the change
+    first, so a confirmed or rolled back change is never shown as still pending."""
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {"DESK_HOME": str(home)}
+    (home / "settings.json").write_text(json.dumps({"port": 8200}))
+    restart.stage_network_change(home, {"port": 8100}, expect={"host": "127.0.0.1", "port": 8200, "https": False})
+    seen: list[bool] = []
+    write = deskctl._write_json
+
+    def spy(path: Path, doc: dict) -> None:
+        if path.name == "last.json":
+            seen.append(restart.pending(home) is None)
+        write(path, doc)
+
+    monkeypatch.setattr(deskctl, "_write_json", spy)
+    if ok:
+        deskctl.confirm_network(env, "http://127.0.0.1:8200/settings.html")
+    else:
+        assert deskctl.rollback_network(env, "сервер не запустился, код 3")
+    assert seen == [True] and restart.last(home)["ok"] is ok and restart.pending(home) is None
+
+
 STUB = """#!{python}
 import sys
 if sys.argv[1] == "db-migrate":
