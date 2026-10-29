@@ -135,14 +135,16 @@
     }
   }
 
-  // price / coupon: the attribution of P.attrDefs on the position's days; without the coupon of every day — «нет данных»
+  // price / coupon: the attribution of P.attrDefs on the position's days, the split per day (TDM#432): the carry of the
+  // days without it apart; «нет данных» only for an answer without carry_nosplit and a mixed split
   function drawAttr(el, agg) {
     const { K, P } = cur.ctx, f = K.f, esc = K.esc;
-    if (!P.hasCoupon(agg)) { el.innerHTML = '<span class="mut">нет данных: нет разбивки купона (carry_coupon)' + (P.splitCover(agg, ['carry_coupon']) !== 'нет данных' ? ' — есть у ' + esc(P.splitCover(agg, ['carry_coupon'])) + ' с кэрри' : '') + '. Без неё цена включала бы купон.</span>'; return; }
+    if (agg.total != null && P.attrDefs()[0].v(agg) == null) { el.innerHTML = '<span class="mut">нет данных: разбивка купона (carry_coupon) есть не у всех дней с кэрри, а кэрри дней без неё в ответе нет. Без неё цена включала бы купон.</span>'; return; }
     const items = P.attrDefs().map(d => ({ d, v: d.v(agg) })).filter(x => x.v != null && Math.abs(x.v) >= 0.5), tot = items.reduce((s, x) => s + Math.abs(x.v), 0) || 1;
+    const cover = P.splitCover(agg, ['carry_coupon']);
     const col = d => P.colour(K, d.color, d.shade), sw = d => '<span class="sw" style="background-color:' + col(d) + '"></span>';
     el.innerHTML = '<div class="attrbar">' + items.map(x => '<div title="' + esc(x.d.l + ': ' + f.mn(x.v, 2) + ' млн') + '" style="flex:' + (Math.abs(x.v) / tot).toFixed(4) + ';background-color:' + col(x.d) + (x.v < 0 ? ';background-image:repeating-linear-gradient(135deg,transparent 0 3px,rgba(0,0,0,.35) 3px 5px)' : '') + '"></div>').join('') + '</div>' +
-      '<div class="legendrow">' + items.map(x => '<span title="' + esc(x.d.d || '') + '">' + sw(x.d) + esc(x.d.l) + ' <b class="k-num">' + f.mn(x.v, 2) + '</b></span>').join('') + '<span class="mut3">ширина — доля по модулю, штриховка — отрицательный вклад</span></div>';
+      '<div class="legendrow">' + items.map(x => '<span title="' + esc(x.d.d || '') + '">' + sw(x.d) + esc(x.d.l) + ' <b class="k-num">' + f.mn(x.v, 2) + '</b></span>').join('') + '<span class="mut3">ширина — доля по модулю, штриховка — отрицательный вклад' + (cover === 'нет данных' ? ' · разбивки купона у позиции нет: кэрри целиком' : cover ? ' · разбивка купона у ' + esc(cover) + ' с кэрри' : '') + '</span></div>';
   }
 
   const markDay = () => { const ui = cur.ctx.state.ui; return ui.pday ? { symbol: 'none', silent: true, lineStyle: { color: cur.ctx.K.css('--accent'), width: 1.5, type: 'solid' }, label: { show: false }, data: [{ xAxis: ui.pday }] } : undefined; };
@@ -152,7 +154,7 @@
   }
   function drawPnl(el, agg, dates, byDate) {
     const { K, P, state } = cur.ctx, f = K.f, ui = state.ui;
-    const defs = P.componentRows('explain', { carry: 'comp', split: P.hasSplit(agg), keys: Object.keys(agg.c || {}) })
+    const defs = P.componentRows('explain', { carry: 'comp', split: P.anySplit(agg), keys: Object.keys(agg.c || {}) })
       .filter(d => d.k !== 'gap' && d.v(agg) != null && (Math.abs(d.v(agg)) > 1e3 || d.k === 'other'));
     const vals = fn => dates.map(x => (byDate.has(x) ? fn(byDate.get(x)) : null)), totals = vals(d => (d.total == null ? null : d.total));
     const col = d => P.colour(K, d.color, d.shade);
@@ -183,7 +185,7 @@
     })));
   }
 
-  const COL_LABEL = { carry_coupon: 'Купон', carry_pull: 'Аморт.', carry: 'Кэрри', rolldown: 'Roll', funding: 'Фонд.', rates: 'Ставки', spread: 'Спред', convexity: 'Выпукл.', fx: 'FX нетто', new_trades: 'Сделки', other: 'Необъясн.', reported: 'Разн. PV' };
+  const COL_LABEL = { carry_coupon: 'Купон', carry_pull: 'Аморт.', carry_nosplit: 'Без разб.', carry: 'Кэрри', rolldown: 'Roll', funding: 'Фонд.', rates: 'Ставки', spread: 'Спред', convexity: 'Выпукл.', fx: 'FX нетто', new_trades: 'Сделки', other: 'Необъясн.', reported: 'Разн. PV' };
   const SRC = { prev: ['из расчёта', 'Входы D−1, сохранённые расчётом (pnl.extra.prev)'], previous_row: ['по прогону D−1', 'Из строки той же позиции в предыдущем прогоне периода; при другом количестве поля D−1 не показываются'] };
   function drawDays(el, rows, I, ccy, NA, mn2) {
     const { K, P, state } = cur.ctx, f = K.f, esc = K.esc, ui = state.ui;

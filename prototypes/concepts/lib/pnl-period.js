@@ -7,11 +7,12 @@
     { key: 'carry', label: 'Кэрри', color: 'pnl:carry', d: 'Купон и амортизация к номиналу; выплаты купонов уже внутри.' },
     { key: 'carry_coupon', label: 'Купон / НКД', color: 'pnl:carry', d: 'Начисленный купон за интервал (разбивка кэрри, pnl.extra).' },
     { key: 'carry_pull', label: 'Амортизация к номиналу', color: 'pnl:carry', shade: 0.62, d: 'Приближение цены к номиналу со временем (разбивка кэрри, pnl.extra).' },
+    { key: 'carry_nosplit', label: 'Кэрри без разбивки купона', color: 'pnl:carry', shade: 0.82, d: 'Кэрри записей без разбивки на купон и амортизацию (методы flash-simple, flash-yield, пересчёт без даты): целиком.' },
     { key: 'rolldown', label: 'Roll-down', color: 'pnl:carry', shade: 0.36, d: 'Сохранённый эффект скатывания по кривой.' },
     { key: 'funding', label: 'Фондирование', color: 'pnl:funding', d: 'Только записанное в PnL позиций; фондирование уровня книги не входит.' },
-    { key: 'rates', label: 'Ставки', color: 'pnl:rates', d: 'Точная переоценка на сдвиге кривых; нелинейность уже внутри.' },
+    { key: 'rates', label: 'Ставки', color: 'pnl:rates', d: 'Точная переоценка на сдвиге кривых; нелинейность внутри. По рублёвым облигациям с линейной оценкой — «Ставки (линейно)» + «Выпуклость (ставки)».' },
     { key: 'spread', label: 'Кредитный спред', color: 'pnl:spread', d: 'Сохранённый эффект изменения спреда.' },
-    { key: 'convexity', label: 'Выпуклость', color: 'pnl:rates', shade: 0.5, d: 'В текущем flash равна 0: уже включена в точные ставки и спред.' },
+    { key: 'convexity', label: 'Выпуклость метода', color: 'pnl:rates', shade: 0.5, d: 'Отдельная выпуклость метода; во flash 0 (полная переоценка), поэтому при нуле не показывается: нелинейность ставок — «Выпуклость (ставки)».' },
     // FX only net (owner, 28.10.2026): the API keeps fx_gross and fx_funding apart, the page shows their sum
     { key: 'fx', label: 'FX (нетто ОВП)', color: 'pnl:fx', parts: ['fx_gross', 'fx_funding'], d: 'Переоценка валютного актива и валютного пассива вместе — нетто открытой валютной позиции.' },
     { key: 'new_trades', label: 'Сделки', color: 'pnl:trading', d: 'В текущем flash 0 — заглушка, не расчёт торгового результата.' },
@@ -24,12 +25,17 @@
     carryGross: { label: 'Кэрри брутто', color: 'pnl:carry', d: 'Кэрри + roll-down, до фондирования.' },
     carryBase: { label: 'Кэрри без roll-down', color: 'pnl:carry', d: 'Кэрри + фондирование.' },
     price: { label: 'Цена (чистая)', color: 'pal:9', d: 'Итог − купон − FX нетто − фондирование − сделки. Внутри — ставки, спред, roll-down, амортизация и необъяснённое.' },
+    // rates of RUB bonds with pnl.extra.rates_linear (API rates_linear, rates_exact_lin; foreign bonds stay whole until TDM#418)
+    ratesLin: { label: 'Ставки (линейно)', color: 'pnl:rates', d: 'Линейная оценка ставок (Σ DV01 × сдвиг кривой, pnl.extra.rates_linear) — по рублёвым облигациям, где она сохранена.' },
+    ratesCvx: { label: 'Выпуклость (ставки)', color: 'pnl:rates', shade: 0.5, d: 'Точная переоценка ставок минус линейная оценка у тех же записей: выпуклость и нелинейность по сдвигу кривой.' },
+    ratesRest: { label: 'Ставки (без линейной оценки)', color: 'pnl:rates', shade: 0.72, d: 'Точная переоценка ставок записей без линейной оценки — валютные облигации (до исправления единиц, TDM#418), деривативы, старые прогоны: целиком.' },
     gap: { label: 'Не сходится с итогом', color: '--neg', d: 'Итог минус сумма показанных компонент. Должно быть 0.' },
     total: { label: 'Итог', color: '--fg-2', d: 'Сумма сохранённых компонент (net-конвенция).' },
   };
   // Explain order; carry is replaced by the chosen carry view, carry_coupon / carry_pull belong to «Компоненты» and attribution.
   const EXPLAIN = ['rates', 'spread', 'convexity', 'fx', 'new_trades', 'other', 'reported'];
   const OPTIONAL = new Set(['reported']);  // method-specific: hidden when the selection has none
+  const HIDE_ZERO = new Set(['convexity']);  // flash: 0 by design (full repricing) — hidden while it is 0
   const MODES = [['explain', 'Explain'], ['curves', 'Explain по кривым'], ['attr', 'Атрибуция'], ['type', 'Типы'], ['book', 'Книги'], ['ccy', 'Валюты'], ['pos', 'Позиции']];
   const BT_MODES = MODES.slice(0, 6).concat([['rating', 'Рейтинг'], ['pos', 'Позиции']]);
   const COMPONENT_MODES = ['explain', 'curves', 'attr'];
@@ -72,6 +78,22 @@
   }
   const hasCoupon = a => splitOk(a, ['carry_coupon']);
   const hasSplit = a => splitOk(a, SPLIT);
+  // the split per row (TDM#432): the rows with it give coupon and pull-to-par, the rest keep their carry whole
+  // (API c.carry_nosplit) — one row without it no longer blanks the others
+  const anySplit = a => coverage(a, 'carry_coupon').have > 0;
+  // carry of the rows without the coupon split: 0 when every row with carry has it; an answer without carry_nosplit —
+  // the whole carry when no row has it, else unknown (null)
+  function noSplit(a) {
+    if (!coverage(a, 'carry').have) return null;
+    if (num(a.c.carry_nosplit)) return a.c.carry_nosplit;
+    if (splitOk(a, ['carry_coupon'])) return 0;
+    return coverage(a, 'carry_coupon').none ? val(a, 'carry') : null;
+  }
+  // linear rates coverage: '' — every row with rates has rates_linear; 'нет данных'; 'N из M записей' (M — rows with rates)
+  function linCover(a) {
+    const r = coverage(a, 'rates').have, l = coverage(a, 'rates_linear').have;
+    return !r || l >= r ? '' : !l ? 'нет данных' : l + ' из ' + r + ' записей';
+  }
   // '' — the split is usable; 'нет данных'; 'N из M записей' — M rows with carry, N of them split (the least covered part)
   function splitCover(a, keys) {
     if (splitOk(a, keys)) return '';
@@ -144,14 +166,32 @@
   const bucketAggs = (days, buckets) => buckets.map(b => sumAggs(days.filter(d => inBucket(b, d.date))));
   // a bucket without a run: null value plus a market date inside — «нет прогона»; no market date — not a trading period
   const bucketHasMarket = (b, marketDates) => marketDates.some(d => inBucket(b, d));
-  // x-axis of daily charts: market dates of the period and dates with rows
+  // x-axis of daily charts (TDM#434): working days, not calendar days — run dates and dates with rows plus market dates
+  // Mon–Fri (no market dates in the answer: every weekday); a weekend appears only with a run on it
+  const weekday = d => { const w = new Date(ms(d)).getUTCDay(); return w > 0 && w < 6; };
   function periodDates(period) {
-    const s = new Set((period.marketDates || []).filter(d => d >= period.from && d <= period.to));
+    const inP = d => d >= period.from && d <= period.to, s = new Set();
+    const market = (period.marketDates || []).filter(inP);
+    if (market.length) market.filter(weekday).forEach(d => s.add(d));
+    else if (isFinite(ms(period.from)) && isFinite(ms(period.to))) for (let d = period.from; d <= period.to; d = addDays(d, 1)) if (weekday(d)) s.add(d);
+    (period.runs || []).forEach(r => { if (inP(r.date)) s.add(r.date); });
     (period.days || []).forEach(d => s.add(d.date));
     return [...s].sort();
   }
-  // running sum over a series with gaps: a missing value is a gap, the sum goes on
-  function cumulate(vals) { let acc = 0; return vals.map(v => { if (!num(v)) return null; acc += v; return acc; }); }
+  // the axis' days: 'ok' — saved rows, 'norows' — a run without rows of the selection, 'norun' — a working day without
+  // a run; hold — the days a running sum carries over; text — «прогонов N из M рабочих дней»
+  function dayAxis(period, dates) {
+    const runs = new Set((period.runs || []).map(r => r.date)), rows = new Set((period.days || []).map(d => d.date));
+    const state = dates.map(d => (rows.has(d) ? 'ok' : runs.has(d) ? 'norows' : 'norun'));
+    const n = dates.filter(d => runs.has(d)).length;
+    return { state, hold: state.map(x => x !== 'ok'), runs: n, days: dates.length, text: 'прогонов ' + n + ' из ' + dates.length + ' рабочих дней' };
+  }
+  // running sum over a series with gaps: a missing value is a gap, the sum goes on; hold[i] — a day without saved rows
+  // (no run): the level carries over it, the next run covers the interval from the previous one
+  function cumulate(vals, hold) {
+    let acc = 0, any = false;
+    return vals.map((v, i) => { if (!num(v)) return hold && hold[i] && any ? acc : null; acc += v; any = true; return acc; });
+  }
   // sum of interval lengths (prevDate → date): what the saved days cover, in calendar days
   const calDays = days => days.reduce((s, d) => s + (d.prevDate ? Math.max(0, dayDiff(d.prevDate, d.date)) : 1), 0);
   const perCalDay = (day, v) => !num(v) ? null : v / Math.max(1, day.prevDate ? dayDiff(day.prevDate, day.date) : 1);
@@ -163,12 +203,23 @@
     const positions = (period.positions || []).map(p => Object.assign({}, p, { ratesByCurve: { [p.curve || '']: val(p, 'rates') } }));
     const summary = Object.assign({}, period.summary);
     if (!summary.ratesByCurve) summary.ratesByCurve = (sumAggs(days.length ? days : positions) || {}).ratesByCurve || {};
-    const buckets = period.buckets || [];
+    const dates = periodDates(period);
+    // days as columns (gran day): the working days of the axis, not every calendar day (TDM#434); the positions'
+    // buckets follow by index
+    let buckets = period.buckets || [];
+    if (period.gran === 'day') {
+      const on = new Set(dates), keep = buckets.map((b, i) => (on.has(b.from) ? i : -1)).filter(i => i >= 0);
+      if (keep.length < buckets.length) {
+        buckets = keep.map(i => buckets[i]);
+        positions.forEach(p => { if (p.buckets) p.buckets = keep.map(i => p.buckets[i]); });
+      }
+    }
     const curves = (period.curves || []).slice();
     const ids = new Set(curves.map(c => c.id));
     positions.forEach(p => { const id = p.curve || ''; if (!ids.has(id)) { ids.add(id); curves.push({ id, name: id || NO_CURVE }); } });
+    // split / coupon: some row of the selection has the split (per row, TDM#432)
     return { period, days, positions, summary, buckets, curves, keys: period.keys || COMPONENTS.flatMap(c => c.parts || [c.key]),
-      bucketAggs: bucketAggs(days, buckets), dates: periodDates(period), split: hasSplit(summary), coupon: hasCoupon(summary),
+      bucketAggs: bucketAggs(days, buckets), dates, axis: dayAxis(period, dates), split: anySplit(summary), coupon: anySplit(summary),
       curveName: id => (curves.find(c => c.id === id) || {}).name || id || NO_CURVE };
   }
 
@@ -177,22 +228,38 @@
   const comp = (key, extra) => Object.assign({ k: key, l: BY_KEY[key].label, color: BY_KEY[key].color, shade: BY_KEY[key].shade, hatch: BY_KEY[key].hatch, d: BY_KEY[key].d,
     parts: BY_KEY[key].parts || [key], v: a => srcVal(a, key) }, extra);
   const derived = (k, parts, v) => Object.assign({ k, l: DERIVED[k].label, color: DERIVED[k].color, d: DERIVED[k].d, parts, v });
-  // carry: 'net' — one bar; 'split' — gross and funding; 'comp' — coupon, pull-to-par (or carry whole), roll-down, funding
+  // the carry split per row: coupon and pull-to-par of the rows with it, the carry of the rest whole (hidden at 0);
+  // cover — «N из M записей» of the rows with carry that have the split
+  const splitDefs = () => [Object.assign(comp('carry_coupon'), { cover: a => splitCover(a, ['carry_coupon']) }), Object.assign(comp('carry_pull'), { cover: a => splitCover(a, ['carry_pull']) }),
+    Object.assign(comp('carry_nosplit'), { parts: ['carry'], v: noSplit, hideZero: true })];
+  // carry: 'net' — one bar; 'split' — gross and funding; 'comp' — coupon, pull-to-par, carry without the split (or carry
+  // whole when no row has it), roll-down, funding
   function carryDefs(carry, split) {
     if (carry === 'net') return [derived('carryNet', ['carry', 'rolldown', 'funding'], a => sumAvail(['carry', 'rolldown', 'funding'].map(k => val(a, k))))];
     if (carry === 'split') return [derived('carryGross', ['carry', 'rolldown'], a => sumAvail([val(a, 'carry'), val(a, 'rolldown')])), comp('funding')];
-    return (split ? [comp('carry_coupon'), comp('carry_pull')] : [comp('carry')]).concat([comp('rolldown'), comp('funding')]);
+    return (split ? splitDefs() : [comp('carry')]).concat([comp('rolldown'), comp('funding')]);
   }
   function attrDefs() {
-    // without the coupon split of every row the attribution is «нет данных» (the price would hold the coupon)
-    const gate = f => a => hasCoupon(a) ? f(a) : null;
+    // per row (TDM#432): the coupon of the rows with the split, the carry of the rows without it apart, so the price
+    // holds no coupon; only an answer without carry_nosplit and a mixed split is «нет данных»
+    const gate = f => a => (a && (!coverage(a, 'carry').have || noSplit(a) != null) ? f(a) : null);
     const z = (a, k) => val(a, k) || 0;  // a missing component is missing from the total too: the identity holds
     return [
-      derived('price', ['carry_coupon'], gate(a => a.total == null ? null : a.total - z(a, 'carry_coupon') - z(a, 'fx_gross') - z(a, 'fx_funding') - z(a, 'funding') - z(a, 'new_trades'))),
-      Object.assign(comp('carry_coupon'), { v: gate(a => val(a, 'carry_coupon')) }),
-      Object.assign(comp('fx'), { parts: ['carry_coupon', 'fx_gross', 'fx_funding'], v: gate(a => srcVal(a, 'fx')) }),
-      Object.assign(comp('funding'), { parts: ['carry_coupon', 'funding'], v: gate(a => val(a, 'funding')) }),
-      Object.assign(comp('new_trades'), { parts: ['carry_coupon', 'new_trades'], v: gate(a => val(a, 'new_trades')) }),
+      derived('price', ['carry_coupon'], gate(a => a.total == null ? null : a.total - z(a, 'carry_coupon') - (noSplit(a) || 0) - z(a, 'fx_gross') - z(a, 'fx_funding') - z(a, 'funding') - z(a, 'new_trades'))),
+      Object.assign(comp('carry_coupon'), { v: gate(a => val(a, 'carry_coupon')), cover: a => splitCover(a, ['carry_coupon']) }),
+      Object.assign(comp('carry_nosplit'), { parts: ['carry'], v: gate(noSplit), hideZero: true }),
+      Object.assign(comp('fx'), { parts: ['fx_gross', 'fx_funding'], v: gate(a => srcVal(a, 'fx')) }),
+      Object.assign(comp('funding'), { v: gate(a => val(a, 'funding')) }),
+      Object.assign(comp('new_trades'), { v: gate(a => val(a, 'new_trades')) }),
+    ];
+  }
+  // «Ставки» of the explain (TDM#435): linear and its convexity for the rows with rates_linear, the rest whole; Σ = rates
+  function ratesDefs() {
+    const lin = a => val(a, 'rates_linear'), ex = a => val(a, 'rates_exact_lin');
+    return [
+      Object.assign(derived('ratesLin', ['rates_linear'], lin), { cover: linCover }),
+      Object.assign(derived('ratesCvx', ['rates_linear'], a => (lin(a) == null || ex(a) == null ? null : ex(a) - lin(a))), { cover: linCover }),
+      Object.assign(derived('ratesRest', ['rates'], a => (val(a, 'rates') == null ? null : val(a, 'rates') - (ex(a) || 0))), { hideZero: true }),
     ];
   }
   // Explain (one rates bar or one per curve) and attribution; gap — total minus the shown rows
@@ -206,14 +273,17 @@
       if (k === 'rates' && mode === 'curves') (opt.curves || []).forEach((cv, i, all) => out.push({ k: 'rates:' + cv.id, l: 'Ставки · ' + (cv.name || cv.id || NO_CURVE), color: 'pnl:rates',
         shade: cv.id ? [1, 0.72, 0.52, 0.36, 0.26][i % 5] : 0.2, d: 'Точная переоценка позиций с кривой дисконтирования «' + (cv.name || cv.id || NO_CURVE) + '» — отнесение к одной кривой, а не разложение по кривым.',
         parts: ['rates'], curve: cv.id, v: a => a && a.ratesByCurve && num(a.ratesByCurve[cv.id]) ? a.ratesByCurve[cv.id] : null }));
+      else if (k === 'rates' && keys.has('rates_linear')) out.push(...ratesDefs());
       else out.push(comp(k));
     });
     const shown = out.slice();
     out.push(derived('gap', [], a => a == null || a.total == null ? null : a.total - (sumAvail(shown.map(d => d.v(a))) || 0)));
     return out;
   }
-  // drop what has nothing to say for this selection: the gap within 1000 RUB, method-specific rows without values
-  const visibleRows = (defs, summary) => defs.filter(d => d.k === 'gap' ? Math.abs(d.v(summary) || 0) > 1e3 : !(OPTIONAL.has(d.k) && d.v(summary) == null));
+  // drop what has nothing to say for this selection: the gap within 1000 RUB, method-specific rows without values, rows
+  // that are 0 by construction (method convexity of flash, carry without the split when every row has it)
+  const visibleRows = (defs, summary) => defs.filter(d => (d.k === 'gap' ? Math.abs(d.v(summary) || 0) > 1e3
+    : d.hideZero || HIDE_ZERO.has(d.k) ? Math.abs(d.v(summary) || 0) >= 0.5 : !(OPTIONAL.has(d.k) && d.v(summary) == null)));
 
   // groups of positions; the label of a type and of a curve comes from the page (labels: {kind(p), curve(id)})
   const GROUPS = {
@@ -224,7 +294,7 @@
     rating: { title: 'Рейтинг', key: p => p.rating || '', name: p => p.rating || NO_RATING },
     pos: { title: 'Позиция', key: p => p.ref, name: p => (p.name || p.positionId) + ' · ' + p.book },
   };
-  const byAbs = (a, b) => (b.v == null) - (a.v == null) || Math.abs(b.v || 0) - Math.abs(a.v || 0);
+  const byAbs = (a, b) => (a.v == null) - (b.v == null) || Math.abs(b.v || 0) - Math.abs(a.v || 0);  // nulls last (TDM#433)
   function groupBy(positions, mode, labels) {
     const g = GROUPS[mode], m = new Map();
     positions.forEach(p => { const k = g.key(p); if (!m.has(k)) m.set(k, { key: k, l: g.name(p, labels), positions: [] }); m.get(k).positions.push(p); });
@@ -258,21 +328,60 @@
     return defs.slice(0, 7).concat([{ k: 'rest', l: 'Остальные ' + rest.length, color: 'pal:13', total: sumAvail(rest.map(d => d.total)),
       buckets: rest[0].buckets.map((_, i) => sumAvail(rest.map(d => d.buckets[i]))), v: p => sumAvail(rest.map(d => d.v(p))), parts: [] }]);
   }
-  // waterfall: component rows in order; group rows by value, the middle of a long list folded
-  function waterfallItems(defs) {
-    let items = defs.map(d => ({ k: d.k, l: d.l, v: d.total, color: d.color, shade: d.shade, hatch: d.hatch, d: d.d, parts: d.parts }));
+  // waterfall: component rows in order; group rows by value, the middle of a long list folded, the groups without a
+  // value last as one «не посчитано: N поз.» (TDM#433); cover — the row's coverage on the selection (tooltip)
+  function waterfallItems(defs, summary) {
+    let items = defs.map(d => ({ k: d.k, l: d.l, v: d.total, color: d.color, shade: d.shade, hatch: d.hatch, d: d.d, parts: d.parts, cover: d.cover && summary ? d.cover(summary) : '' }));
     if (defs.length && defs[0].k.startsWith('g:')) {
-      items.sort((a, b) => (b.v == null) - (a.v == null) || (b.v || 0) - (a.v || 0));
+      const none = items.filter(x => x.v == null);
+      items = items.filter(x => x.v != null).sort((a, b) => b.v - a.v);
       if (items.length > 12) { const mid = items.slice(6, -5); items = items.slice(0, 6).concat([{ k: 'g:*', l: 'Остальные ' + mid.length, v: sumAvail(mid.map(x => x.v)), keys: mid.map(x => x.k) }], items.slice(-5)); }
+      if (none.length) items.push({ k: 'g:null', l: 'не посчитано: ' + none.length + ' поз.', v: null, keys: none.map(x => x.k), d: 'Нет итога за период: нет PnL или нет компонент.' });
     }
     return items;
   }
-  // who gave a row: positions that added and that subtracted the most, plus how many have no value
+  // why positions have no value of a row: no PnL (its reasons) or the methods that did not save the component
+  function nullReasons(list) {
+    const m = new Map(), add = t => m.set(t, (m.get(t) || 0) + 1);
+    list.forEach(({ p }) => {
+      const why = Object.keys(p.noPnlReasons || {}).sort();
+      if (p.total == null) add(why.length ? 'нет PnL: ' + why.map(r => r || 'причина не указана').join(', ') : 'нет итога');
+      else add('метод без этой компоненты' + (p.methods && p.methods.length ? ': ' + p.methods.join(', ') : ''));
+    });
+    return [...m].map(([text, n]) => ({ text, n })).sort((a, b) => b.n - a.n || (a.text < b.text ? -1 : 1));
+  }
+  // who gave a row over the period (the drill list): positions by |contribution| above MIN_CONTRIB (list, top), the
+  // rest of them counted and summed (more), smaller ones counted and summed (small); a zero is not a contribution; no
+  // value — missing, with the reasons (TDM#433). plus / minus — the largest of each sign
   function contrib(positions, def, top) {
-    const all = positions.map(p => ({ ref: p.ref, p, v: def.v(p) }));
-    const missing = all.filter(x => x.v == null && (!def.k.startsWith('g:') || def.k === 'g:*')).length;
-    const per = all.filter(x => x.v != null && Math.abs(x.v) > MIN_CONTRIB).sort((a, b) => b.v - a.v);
-    return { plus: per.filter(x => x.v > 0).slice(0, top || 7), minus: per.filter(x => x.v < 0).reverse().slice(0, top || 7), n: per.length, missing, total: sumAvail(all.map(x => x.v)) };
+    const all = positions.map(p => ({ ref: p.ref, p, v: def.v(p) })), nulls = all.filter(x => !num(x.v));
+    const big = all.filter(x => num(x.v) && Math.abs(x.v) > MIN_CONTRIB).sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
+    const small = all.filter(x => num(x.v) && x.v !== 0 && Math.abs(x.v) <= MIN_CONTRIB), list = big.slice(0, top || 20), rest = big.slice(list.length);
+    const bySign = s => big.filter(x => s * x.v > 0).sort((a, b) => s * (b.v - a.v)).slice(0, 7);
+    return { list, more: { n: rest.length, sum: sumAvail(rest.map(x => x.v)) }, small: { n: small.length, sum: sumAvail(small.map(x => x.v)) },
+      zero: all.filter(x => x.v === 0).length, plus: bySign(1), minus: bySign(-1), n: big.length, missing: nulls.length, why: nullReasons(nulls), total: sumAvail(all.map(x => x.v)) };
+  }
+  // the waterfall's bars split by groups of positions (TDM#431): a bar's share of a group — the row on the group's
+  // summed Agg; groups by Σ |share| over the bars, up to STACK_GROUPS plus «Остальные N»; what the groups do not sum to
+  // (the null rule) — a piece of its own, so a stack always sums to its bar
+  const STACK_GROUPS = 7;
+  function stackItems(items, defs, positions, mode, labels) {
+    const byK = new Map(defs.map(d => [d.k, d])), share = (g, it) => (byK.has(it.k) ? byK.get(it.k).v(g.agg) : null);
+    let groups = groupBy(positions, mode, labels).map(g => Object.assign(g, { agg: sumAggs(g.positions), keys: [g.key] }));
+    groups.forEach(g => { g.w = items.reduce((s, it) => s + Math.abs(share(g, it) || 0), 0); });
+    groups.sort((a, b) => b.w - a.w || (a.l < b.l ? -1 : 1));
+    if (groups.length > STACK_GROUPS + 1) {
+      const rest = groups.slice(STACK_GROUPS), ps = rest.flatMap(g => g.positions);
+      groups = groups.slice(0, STACK_GROUPS).concat([{ key: '*', l: 'Остальные ' + rest.length, positions: ps, agg: sumAggs(ps), keys: rest.map(g => g.key) }]);
+    }
+    groups.forEach((g, i) => { g.color = g.key === '*' ? 'pal:13' : 'pal:' + i; });
+    return { groups: groups.map(g => ({ key: g.key, l: g.l, color: g.color, keys: g.keys, n: g.positions.length })),
+      items: items.map(it => {
+        const pieces = groups.map(g => ({ g: g.key, l: g.l, color: g.color, v: share(g, it) })).filter(x => num(x.v) && Math.abs(x.v) >= 0.5);
+        const left = num(it.v) ? it.v - pieces.reduce((s, x) => s + x.v, 0) : null;
+        if (num(left) && Math.abs(left) >= 1) pieces.push({ g: '', l: 'не разнесено по группам', color: '--fg-3', v: left });
+        return Object.assign({}, it, { pieces });
+      }) };
   }
 
   // ---------- matrix ----------
@@ -292,22 +401,23 @@
 
   // ---------- carry ----------
   const isDeal = p => p.group === 'DER' || p.group === 'MM';
-  // net = carry without roll-down (carry + funding) + roll-down; gross = coupon + pull-to-par (or carry whole) + roll-down
-  function carryParts(mode, split) {
+  // net = carry without roll-down (carry + funding) + roll-down; gross = coupon + pull-to-par + carry without the split
+  // (per row; nosplit false — every row has it: no such part), or carry whole when no row has the split, + roll-down
+  function carryParts(mode, split, nosplit) {
     if (mode === 'net') return { parts: [derived('carryBase', ['carry', 'funding'], a => sumAvail([val(a, 'carry'), val(a, 'funding')])), comp('rolldown')],
       tot: derived('carryNet', ['carry', 'rolldown', 'funding'], a => sumAvail(['carry', 'rolldown', 'funding'].map(k => val(a, k)))) };
-    return { parts: (split ? [comp('carry_coupon'), comp('carry_pull')] : [comp('carry')]).concat([comp('rolldown')]),
+    return { parts: (split ? splitDefs().filter(d => nosplit !== false || d.k !== 'carry_nosplit') : [comp('carry')]).concat([comp('rolldown')]),
       tot: derived('carryGross', ['carry', 'rolldown'], a => sumAvail([val(a, 'carry'), val(a, 'rolldown')])) };
   }
   const annual = (v, pv, days) => (num(v) && num(pv) && Math.abs(pv) > 0 && days > 0 ? v / Math.abs(pv) / (days / 365) * 100 : null);
   // one position: pv avg., parts, gross / net, carry and funding % p.a., margin bp; deals (DER, MM) have no %: PV ≈ 0
   function carryPosition(p) {
-    const c = k => val(p, k), sp = hasSplit(p);  // a position's own split, whatever the selection has
+    const c = k => val(p, k);  // the position's own rows: coupon and pull of those with the split, the carry of the rest
     const gross = sumAvail([c('carry'), c('rolldown')]), net = sumAvail([c('carry'), c('rolldown'), c('funding')]);
     const pct = !isDeal(p), cy = pct ? annual(gross, p.pvAvg, p.calDays) : null;
     const fr = pct && num(p.fundingRatePct) ? p.fundingRatePct : null;  // the server's rate or «—»: never estimated from funding / pv
     const mg = pct ? annual(net, p.pvAvg, p.calDays) : null;
-    return { ref: p.ref, p, pv: num(p.pvAvg) ? p.pvAvg : null, coupon: sp ? c('carry_coupon') : null, pull: sp ? c('carry_pull') : null, carry: c('carry'), roll: c('rolldown'),
+    return { ref: p.ref, p, pv: num(p.pvAvg) ? p.pvAvg : null, coupon: c('carry_coupon'), pull: c('carry_pull'), nosplit: noSplit(p), carry: c('carry'), roll: c('rolldown'),
       gross, funding: c('funding'), net, cy, fr, mg: mg == null ? null : mg * 100 };
   }
   // tiles of C: sums of the selection and % p.a. on the average PV of the positions with a PV (not deals)
@@ -318,25 +428,26 @@
     const gross = sumAvail([c('carry'), c('rolldown')]), net = sumAvail([c('carry'), c('rolldown'), c('funding')]);
     const bGross = sumAvail([bsum('carry'), bsum('rolldown')]), bNet = sumAvail([bsum('carry'), bsum('rolldown'), bsum('funding')]);
     const mg = annual(bNet, pv, days);
-    return { coupon: prep.split ? c('carry_coupon') : null, pull: prep.split ? c('carry_pull') : null, carry: c('carry'), roll: c('rolldown'), funding: c('funding'), gross, net,
+    return { coupon: c('carry_coupon'), pull: c('carry_pull'), nosplit: noSplit(s), carry: c('carry'), roll: c('rolldown'), funding: c('funding'), gross, net,
       pv, days, grossPct: annual(bGross, pv, days), fundingPct: annual(bsum('funding') == null ? null : -bsum('funding'), pv, days), marginBp: mg == null ? null : mg * 100,
       cover: { coupon: splitCover(s, ['carry_coupon']), pull: splitCover(s, ['carry_pull']), split: splitCover(s), funding: coverText(s, 'funding'), carry: coverText(s, ['carry', 'rolldown']) } };
   }
-  // group of carry rows: sums (no % — the average of rates is not a sum); coupon / pull only when the group's positions
-  // pass the split rule (hasSplit) — otherwise a part of the carry would be missing from them, as on the tiles
+  // group of carry rows: sums (no % — the average of rates is not a sum); coupon and pull of the rows with the split
+  // plus the carry of the rest (nosplit) are the carry: no part is dropped
   function carryTotal(rows) {
-    const sp = hasSplit(sumAggs(rows.map(r => r.p)));
-    return Object.fromEntries(['pv', 'coupon', 'pull', 'carry', 'roll', 'gross', 'funding', 'net'].map(k => [k, (k === 'coupon' || k === 'pull') && !sp ? null : sumAvail(rows.map(r => r[k]))]));
+    return Object.fromEntries(['pv', 'coupon', 'pull', 'nosplit', 'carry', 'roll', 'gross', 'funding', 'net'].map(k => [k, sumAvail(rows.map(r => r[k]))]));
   }
 
   // ---------- tiles of A ----------
   function tilesA(prep) {
-    const s = prep.summary, c = k => val(s, k), absExpl = sumAvail(COMPONENTS.filter(x => !['other', 'reported', 'carry_coupon', 'carry_pull'].includes(x.key)).map(x => (srcVal(s, x.key) == null ? null : Math.abs(srcVal(s, x.key)))));
+    const s = prep.summary, c = k => val(s, k), absExpl = sumAvail(COMPONENTS.filter(x => !['other', 'reported', 'carry_coupon', 'carry_pull', 'carry_nosplit'].includes(x.key)).map(x => (srcVal(s, x.key) == null ? null : Math.abs(srcVal(s, x.key)))));
     const un = c('other');
+    const lin = c('rates_linear'), ex = c('rates_exact_lin');
     return { total: s.total, carryNet: sumAvail([c('carry'), c('rolldown'), c('funding')]), carryGross: sumAvail([c('carry'), c('rolldown')]), funding: c('funding'),
       market: sumAvail([c('rates'), c('spread')]), rates: c('rates'), spread: c('spread'), fx: srcVal(s, 'fx'),
+      ratesLin: lin, ratesCvx: lin == null || ex == null ? null : ex - lin,
       other: un, otherShare: un == null || !absExpl ? null : Math.abs(un) / absExpl * 100,
-      cover: { total: s.rows ? '' : 'нет данных', carry: coverText(s, ['carry', 'rolldown', 'funding']), market: coverText(s, ['rates', 'spread']), fx: coverText(s, ['fx_gross', 'fx_funding']), other: coverText(s, 'other') } };
+      cover: { total: s.rows ? '' : 'нет данных', carry: coverText(s, ['carry', 'rolldown', 'funding']), market: coverText(s, ['rates', 'spread']), fx: coverText(s, ['fx_gross', 'fx_funding']), other: coverText(s, 'other'), lin: linCover(s) } };
   }
 
   // ---------- colours (all screens) ----------
@@ -442,12 +553,12 @@
   }
   // the same instrument in other books of the selection (their histories are not merged)
   const otherBooks = (positions, p) => (p && p.instrument ? [...new Set(positions.filter(x => x.instrument === p.instrument && x.book !== p.book).map(x => x.book))].sort() : []);
-  // columns of E's day table: the source keys with a value on some day (FX net as one); the carry split replaces the
-  // carry only when every day with carry has it (hasSplit); «Необъяснённое» always
+  // columns of E's day table: the source keys with a value on some day (FX net as one); the carry split per day —
+  // coupon and pull of the days with it, the carry of the days without it apart; «Необъяснённое» always
   function dayColumns(days) {
     const has = k => days.some(d => { const v = srcVal(d, k); return v != null && Math.abs(v) >= 0.5; });
-    const split = hasSplit(sumAggs(days));
-    const keys = (split ? ['carry_coupon', 'carry_pull'] : ['carry']).concat(['rolldown', 'funding', 'rates', 'spread', 'convexity', 'fx', 'new_trades']).filter(has);
+    const split = anySplit(sumAggs(days));
+    const keys = (split ? ['carry_coupon', 'carry_pull', 'carry_nosplit'] : ['carry']).concat(['rolldown', 'funding', 'rates', 'spread', 'convexity', 'fx', 'new_trades']).filter(has);
     keys.push('other');
     if (has('reported')) keys.push('reported');
     return keys;
@@ -506,9 +617,9 @@
   const api = { COMPONENTS, BY_KEY, DERIVED, MODES, BT_MODES, COMPONENT_MODES, CARRY_MODES, PRESETS, GROUPS, NO_CURVE, NO_RATING, MIN_CONTRIB,
     colour, tint, signedBp, curveGrids, linearVsExact, curveSeries, curvePositions, LIN_WARN_PCT, LIN_WARN_ABS,
     SEV, THR_DEFAULT, thrQuery, covers, findingsIndex, worstSev, positionList, otherBooks, dayColumns, dayRow, calendar, heatmap, HEAT_ROWS, VALUE_KIND, checkCards,
-    sumAvail, sumAll, val, srcVal, coverage, coverText, splitOk, splitCover, hasCoupon, hasSplit, sumAggs,
-    addDays, dayDiff, presetRange, weekdays, autoGran, isoWeek, makeBuckets, bucketAggs, bucketHasMarket, periodDates, cumulate, calDays, perCalDay,
-    prepare, componentRows, carryDefs, attrDefs, visibleRows, groupRows, rowsFor, chartRows, waterfallItems, contrib,
+    sumAvail, sumAll, val, srcVal, coverage, coverText, splitOk, splitCover, hasCoupon, hasSplit, anySplit, noSplit, linCover, sumAggs,
+    addDays, dayDiff, presetRange, weekdays, autoGran, isoWeek, makeBuckets, bucketAggs, bucketHasMarket, periodDates, dayAxis, cumulate, calDays, perCalDay,
+    prepare, componentRows, carryDefs, attrDefs, ratesDefs, visibleRows, groupRows, rowsFor, chartRows, waterfallItems, contrib, nullReasons, stackItems, STACK_GROUPS,
     matrix, sortMatrix, cellDays, isDeal, carryParts, carryPosition, carrySummary, carryTotal, annual, tilesA };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PNL_PERIOD = api;

@@ -157,8 +157,10 @@ test('E: day rows — inputs D−1 / D, Δ yield and Δ spread in bp, the interv
   // the split rule of A–C: a day without PnL does not drop it, a day with carry but no split does
   const gap = clone(days); Object.keys(gap[1].c).forEach(k => { gap[1].c[k] = null; }); gap[1].total = null; gap[1].noPnl = { reason: 'no_price', detail: null };
   assert.deepEqual(P.dayColumns(gap).slice(0, 2), ['carry_coupon', 'carry_pull'], 'a no-PnL day keeps the split');
-  const part = clone(days); part[1].c.carry_coupon = null;
-  assert.equal(P.dayColumns(part)[0], 'carry', 'a day with carry but no coupon: carry whole');
+  // per day (TDM#432): a day with carry but no coupon keeps its carry apart, the others keep the split
+  const part = clone(days); part[1].c.carry_coupon = part[1].c.carry_pull = null; part[1].c.carry_nosplit = part[1].c.carry;
+  assert.deepEqual(P.dayColumns(part).slice(0, 3), ['carry_coupon', 'carry_pull', 'carry_nosplit']);
+  assert.ok(!P.dayColumns(days).includes('carry_nosplit'), 'every day split: no such column');
   const one = clone(days.slice(0, 2)); one[0].c.fx_gross = 5000; one[0].c.fx_funding = -4800;
   assert.equal(P.srcVal(one[0], 'fx'), 200);
 });

@@ -59,7 +59,8 @@ test('C19 «PnL за период» on the synthetic fixture: A, B, C, requests,
     assert.ok(q.get('run_id')); assert.equal(q.get('catalogue'), 'true');
     // A: tiles, waterfall, contributors, the table by periods
     assert.ok((await pg.locator('.k-kpi').first().innerText()).includes(await mn(pg, S.total)));
-    assert.deepEqual((await wfNames(pg)).slice(0, 2), ['Кэрри нетто', 'Ставки']);
+    assert.deepEqual((await wfNames(pg)).slice(0, 4), ['Кэрри нетто', 'Ставки (линейно)', 'Выпуклость (ставки)', 'Ставки (без линейной оценки)']);
+    assert.ok(!(await wfNames(pg)).includes('Выпуклость метода'), 'flash convexity 0: hidden');
     assert.equal((await wfNames(pg)).at(-1), 'Итог');
     // FX only net (owner, 28.10.2026): no asset / liability FX as separate sources anywhere on the page
     const NO_SPLIT_FX = /FX актива|FX фондирования|актив [(\d]/;
@@ -68,13 +69,15 @@ test('C19 «PnL за период» on the synthetic fixture: A, B, C, requests,
     assert.ok((await pg.locator('#bt tbody tr').count()) >= 7);
     assert.equal(await pg.locator('#bt thead th').count(), FX.period.buckets.length + 2);
     await pg.locator('#netA').uncheck();
-    assert.deepEqual((await wfNames(pg)).slice(0, 3), ['Кэрри брутто', 'Фондирование', 'Ставки']);
+    assert.deepEqual((await wfNames(pg)).slice(0, 3), ['Кэрри брутто', 'Фондирование', 'Ставки (линейно)']);
     await pg.locator('#lensSeg button', { hasText: 'Explain по кривым' }).click();
     assert.ok((await wfNames(pg)).includes('Ставки · кривая не указана'));
-    // attribution without the coupon split of every row — «—», not 0
+    // attribution per row (TDM#432): rows without the coupon split keep their carry apart, nothing blanks the rest
     await pg.locator('#btSeg button', { hasText: 'Атрибуция' }).click();
-    const attrCells = await pg.locator('#bt tbody td.n').allInnerTexts();
-    assert.ok(attrCells.length && attrCells.every(t => t.trim() === '—'), attrCells.join('|'));
+    const attrRows = await pg.locator('#bt tbody tr').allInnerTexts();
+    assert.deepEqual(attrRows.map(t => t.split('\t')[0].replace(/\s+\d+ из \d+ записей$/, '').trim()), ['Цена (чистая)', 'Купон / НКД', 'Кэрри без разбивки купона', 'FX (нетто ОВП)', 'Фондирование', 'Сделки']);
+    assert.match(attrRows[1], /\d+ из \d+ записей/);
+    assert.ok(attrRows.slice(0, 3).every(t => t.split('\t').slice(1).every(x => x.trim() !== '—')), attrRows.join('|'));
     await pg.locator('#lensSeg button', { hasText: 'Книги' }).click();
     assert.deepEqual((await wfNames(pg)).slice(0, -1).sort(), ['DEMO-A', 'DEMO-B']);
     assert.match(await pg.locator('#contribTitle').textContent(), /Итог/);
@@ -95,14 +98,16 @@ test('C19 «PnL за период» on the synthetic fixture: A, B, C, requests,
     await pg.locator('#mlSeg button', { hasText: 'Атрибуция' }).click();
     assert.ok((await pg.locator('#mt thead').innerText()).includes('Цена (чистая)'));
     for (const lens of ['Атрибуция', 'Explain']) { await pg.locator('#mlSeg button', { hasText: lens }).click(); assert.doesNotMatch(await pg.locator('#main').innerText(), NO_SPLIT_FX, lens); }
-    // C: no split in the selection — coupon «—» with its coverage; the swap has no funding % and no funding
+    // C: the split per row — coupon of the split rows with its coverage, the carry of the others on its own tile; the
+    // swap has no funding % and no funding
     await tab(pg, 'carry');
-    assert.match(await pg.locator('.k-kpi').first().innerText(), /—[\s\S]*нет разбивки кэрри: \d+ из \d+ записей/);
+    assert.match(await pg.locator('.k-kpi').first().innerText(), /\d[\s\S]*разбивка у \d+ из \d+ записей с кэрри/);
+    assert.match(await pg.locator('.k-kpis').innerText(), /Без разбивки купона/i);
     const irs = await pg.locator('#ct tr', { hasText: 'Synthetic IRS pay' }).innerText();
     assert.ok(irs.split('\t').filter(t => t.trim() === '—').length >= 4, irs);
     await pg.locator('#cm1 button', { hasText: 'Брутто' }).click();
     const names = await pg.evaluate(() => echarts.getInstanceByDom(document.getElementById('cc1')).getOption().series.map(s => s.name));
-    assert.deepEqual(names, ['Кэрри', 'Roll-down', 'Кэрри брутто']);
+    assert.deepEqual(names, ['Купон / НКД', 'Амортизация к номиналу', 'Кэрри без разбивки купона', 'Roll-down', 'Кэрри брутто']);
     // the rate decision of the fixture takes effect on 05.10: a mark on «Кэрри в день»
     const marks = await pg.evaluate(() => echarts.getInstanceByDom(document.getElementById('cc2')).getOption().series.flatMap(x => ((x.markLine || {}).data || []).map(m => m.xAxis)));
     assert.deepEqual(marks, ['2026-10-05']);
@@ -123,6 +128,89 @@ test('C19 «PnL за период» on the synthetic fixture: A, B, C, requests,
         }
       }
     }
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); }
+});
+
+// the fixture's period by calendar days (as the server's gran=day buckets): positions' buckets from their /position days
+function dayPeriod() {
+  const d = JSON.parse(JSON.stringify(FX.period)), B = [];
+  for (let t = Date.parse(d.from + 'T00:00:00Z'); t <= Date.parse(d.to + 'T00:00:00Z'); t += 864e5) { const x = new Date(t).toISOString().slice(0, 10); B.push({ key: x, label: x.slice(8, 10) + '.' + x.slice(5, 7) + '.' + x.slice(0, 4), from: x, to: x }); }
+  d.gran = 'day'; d.buckets = B;
+  d.positions.forEach(p => { const by = new Map(FX.position[p.ref].days.map(x => [x.date, x.total])); p.buckets = B.map(b => (by.has(b.from) ? by.get(b.from) : null)); });
+  return d;
+}
+
+test('C19 acceptance (TDM#431–#435): bars split by groups with a drill list, nulls last, per-row attribution, working-day axis', { skip: pw ? false : 'нет Playwright', timeout: 120000 }, async () => {
+  const browser = await pw.chromium.launch();
+  try {
+    const DAY = dayPeriod();
+    const { pg, ctx, errors } = await open(browser, { delay: async u => (u.searchParams.get('gran') === 'day' ? DAY : null) });
+    const wf = () => pg.evaluate(() => { const o = echarts.getInstanceByDom(document.getElementById('wf')).getOption(); return { names: o.xAxis[0].data, data: o.series[0].data }; });
+    // #431: «Разбивка столбцов» — each bar a stack of the currencies' shares; a piece opens the drill of its group
+    await pg.locator('#wfBreak').selectOption('ccy');
+    assert.match(await pg.locator('#wfLegend').innerText(), /Валюта:[\s\S]*RUB[\s\S]*USD/);
+    const at = await pg.evaluate(() => {
+      const el = document.getElementById('wf'), c = echarts.getInstanceByDom(el), row = c.getOption().series[0].data[0], r = el.getBoundingClientRect();
+      const [x, y] = c.convertToPixel({ seriesIndex: 0 }, [0, row[1] / 2]);  // inside the larger, negative piece of «Кэрри нетто»
+      return [r.left + x, r.top + y];
+    });
+    await pg.mouse.click(at[0], at[1]);
+    await pg.waitForFunction(() => /Кто дал: Кэрри нетто · RUB/.test(document.getElementById('contribTitle').textContent));
+    const drill = await pg.locator('#contrib').innerText();
+    assert.match(drill, /desk-flash-exact-v1/); assert.doesNotMatch(drill, /Synthetic USD/);
+    assert.match(drill, /не посчитано: 1 поз\. — нет PnL: no_prev_report/);
+    const vals = await pg.locator('#contrib .contrib > .n').allInnerTexts();
+    const abs = vals.map(t => Math.abs(parseFloat(t.replace(/[()]/g, '').replace(',', '.').replace('−', '-'))));
+    assert.ok(abs.every((v, i) => !i || abs[i - 1] >= v), vals.join('|'));
+    if (process.env.PNL_HISTORY_SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await pg.screenshot({ path: path.join(SHOTS, 'c19-A-breakdown-ccy.png'), fullPage: true }); }
+    // a mixed-sign bar keeps its total: the axis spans the stack, the label is the bar's net
+    await pg.locator('#wfBreak').selectOption('type');
+    assert.match(await pg.locator('#wfLegend').innerText(), /Тип:/);
+    // group lenses: the breakdown is off; a position without a value is last, «не посчитано: N поз.»
+    await pg.locator('#lensSeg button', { hasText: 'Позиции' }).click();
+    assert.equal(await pg.locator('#wfBreak').isDisabled(), true);
+    const pos = await wf();
+    assert.equal(pos.names.at(-2), 'не посчитано: 1 поз.'); assert.equal(pos.names.at(-1), 'Итог');
+    // #433: the drill opens E on the clicked position
+    await pg.locator('#lensSeg button', { hasText: 'Explain' }).first().click();
+    await pg.locator('#contrib [data-ref]').first().click();
+    await pg.waitForSelector('#tabs [data-tab=position].on');
+    await tab(pg, 'decomp');
+    // #435: rates of RUB bonds split into linear and convexity; the tile says so
+    assert.match(await pg.locator('.k-kpi').nth(2).innerText(), /линейно[\s\S]*выпукл\./);
+    // #434: by days — working days only, the day without a run marked and carried, the coverage in the header
+    await pg.locator('#granSeg button', { hasText: 'Дни' }).click();
+    await pg.waitForSelector('#ts');
+    assert.match(await pg.locator('#tsCov').innerText(), /прогонов 11 из 12 рабочих дней/);
+    const ts = await pg.evaluate(() => { const o = echarts.getInstanceByDom(document.getElementById('ts')).getOption(), tot = o.series.at(-1); return { x: o.xAxis[0].data, y: tot.data, area: (tot.markArea || {}).data || [] }; });
+    assert.ok(!ts.x.some(d => [0, 6].includes(new Date(d + 'T00:00:00Z').getUTCDay())), 'no weekends on the axis');
+    const i7 = ts.x.indexOf('2026-10-07');
+    assert.ok(i7 > 0 && ts.y[i7] === ts.y[i7 - 1], 'the level carries over the day without a run');
+    assert.deepEqual(ts.area.map(a => [a[0].xAxis, a[0].name]), [['2026-10-07', 'нет прогона']]);
+    assert.equal(await pg.locator('#bt thead th').count(), ts.x.length + 2, 'day columns: working days only');
+    assert.match(await pg.locator('#bt').innerText(), /нет прогона/);
+    if (process.env.PNL_HISTORY_SHOTS) await pg.screenshot({ path: path.join(SHOTS, 'c19-A-days-cumulative.png'), fullPage: true });
+    await pg.locator('#modeSeg button', { hasText: 'По периодам' }).click();
+    const per = await pg.evaluate(() => echarts.getInstanceByDom(document.getElementById('ts')).getOption().xAxis[0].data);
+    assert.ok(!per.some(l => ['03.10.2026', '04.10.2026', '11.10.2026'].includes(l)), per.join());
+    await pg.locator('#modeSeg button', { hasText: 'Накопленно' }).click();
+    // attribution of the bucket table and of B: per row, with the coverage of the coupon
+    await pg.locator('#btSeg button', { hasText: 'Атрибуция' }).click();
+    if (process.env.PNL_HISTORY_SHOTS) await pg.locator('#bt').screenshot({ path: path.join(SHOTS, 'c19-A-attribution-table.png') });
+    await tab(pg, 'matrix');
+    await pg.locator('#mlSeg button', { hasText: 'Атрибуция' }).click();
+    assert.match(await pg.locator('#mt thead').innerText(), /Кэрри без разбивки купона/);
+    if (process.env.PNL_HISTORY_SHOTS) await pg.screenshot({ path: path.join(SHOTS, 'c19-B-attribution.png'), fullPage: true });
+    await tab(pg, 'carry');
+    const cc1 = await pg.evaluate(() => { const o = echarts.getInstanceByDom(document.getElementById('cc1')).getOption(); return ((o.series.at(-1).markArea || {}).data || []).map(a => a[0].xAxis); });
+    assert.deepEqual(cc1, ['2026-10-07']);
+    // nulls last in the carry table (TDM#433): sort by carry % p.a., the deal (no %) at the bottom
+    await pg.locator('#ct th[data-c=cy]').click();
+    assert.match((await pg.locator('#ct tbody tr').allInnerTexts()).at(-1), /Synthetic IRS pay|Synthetic New 1/);
+    if (process.env.PNL_HISTORY_SHOTS) await pg.screenshot({ path: path.join(SHOTS, 'c19-C-carry.png'), fullPage: true });
+    assert.ok(!BAD.test(await pg.locator('#main').innerText()));
     assert.deepEqual(errors, []);
     await ctx.close();
   } finally { await browser.close(); }
@@ -160,10 +248,11 @@ test('C19 D, E, F on the synthetic fixture: requests, missing data, F → E on i
     assert.equal(await pg.locator('#pDays tr.sel').getAttribute('data-d'), '2026-10-06');
     const marks = await pg.evaluate(() => ['pCh', 'pPrice', 'pYld'].map(id => echarts.getInstanceByDom(document.getElementById(id)).getOption().series.flatMap(s => ((s.markLine || {}).data || []).map(m => m.xAxis))));
     assert.deepEqual(marks, [['2026-10-06'], ['2026-10-06'], ['2026-10-06']]);
-    // a position without the coupon split: attribution «нет данных»; a swap: no price, no yield charts
+    // a position without the coupon split: its carry apart in the attribution (TDM#432); a swap: no price, no yield charts
     await pg.locator('#plist [data-ref="DEMO-A|CORP-1"]').click();
-    await pg.waitForSelector('#pAttr');
-    assert.match(await pg.locator('#pAttr').innerText(), /нет данных: нет разбивки купона/);
+    await pg.waitForSelector('#pAttr .attrbar');
+    assert.match(await pg.locator('#pAttr').innerText(), /Кэрри без разбивки купона/);
+    assert.doesNotMatch(await pg.locator('#pAttr').innerText(), /нет данных/);
     await pg.locator('#plist [data-ref="DEMO-B|IRS-1"]').click();
     await pg.waitForSelector('#pDays table');
     assert.match(await pg.locator('#pBody').innerText(), /нет данных: у позиции нет чистой цены/);

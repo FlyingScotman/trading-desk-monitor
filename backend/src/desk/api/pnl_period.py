@@ -32,10 +32,17 @@ from .pnl_history import (
 from .runs import run_slice
 
 CARRY_SPLIT = ("carry_coupon", "carry_pull")
-COMPONENTS = (*KEYS, *CARRY_SPLIT)
-ORDER = ("carry", "carry_coupon", "carry_pull", "rolldown", "funding", "rates", "spread", "convexity", "fx_gross",
-         "fx_funding", "new_trades", "other", "reported")
-"""``keys``: the order shown; the carry split only when a row of the slice has it."""
+NOSPLIT = "carry_nosplit"
+"""Carry of the rows with carry but without ``carry_coupon`` (flash simple / yield, undated recompute): attribution and
+carry views split per row (TDM#432); never a missing component (``m`` stays 0), null when no such row."""
+RATES_SPLIT = ("rates_linear", "rates_exact_lin")
+"""``pnl.extra.rates_linear`` and the exact ``rates`` of the same rows, RUB bonds only (foreign ones stay whole in
+``rates`` until TDM#418): «Ставки (линейно)» and «Выпуклость (ставки)» = exact − linear (TDM#435)."""
+EXTRA_KEYS = (*CARRY_SPLIT, NOSPLIT, *RATES_SPLIT)
+COMPONENTS = (*KEYS, *EXTRA_KEYS)
+ORDER = ("carry", "carry_coupon", "carry_pull", NOSPLIT, "rolldown", "funding", "rates", *RATES_SPLIT, "spread",
+         "convexity", "fx_gross", "fx_funding", "new_trades", "other", "reported")
+"""``keys``: the order shown; the extra keys only when a row of the slice has them."""
 GRANS = ("day", "week", "month")
 MONTHS = ("янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
 DROP_EXTRA = "ARRAY['prev', 'rates_linear_curves', 'curve_moves_bp']"
@@ -60,15 +67,30 @@ def _num(v: Any) -> float | None:
     return float(v) if isinstance(v, int | float) and not isinstance(v, bool) else None
 
 
-def components(pnl: dict[str, Any] | None) -> tuple[dict[str, Any], dict[str, float | None]]:
-    """``amounts`` of a row and its components with the carry split of ``pnl.extra`` (null when not saved)."""
+def _rub_bond(r: dict[str, Any]) -> bool:
+    """A rouble bond as ``summary.kind_of`` reads it (``instr_type`` BOND or none, currency RUB or none)."""
+    return r.get("instrType") in ("BOND", None) and (r.get("ccy") or "RUB") == "RUB"
+
+
+def components(pnl: dict[str, Any] | None, row: dict[str, Any] | None = None
+               ) -> tuple[dict[str, Any], dict[str, float | None]]:
+    """``amounts`` of a row and its components with the carry split of ``pnl.extra`` (null when not saved), the carry
+    of a row without it (``NOSPLIT``) and, given the row, the linear rates of a RUB bond (``RATES_SPLIT``; a
+    ``position`` day has ``ratesLinear`` of its own)."""
     a = amounts(pnl)
     extra = (pnl or {}).get("extra") or {}
-    return a, {**a["components"], **{k: _num(extra.get(k)) for k in CARRY_SPLIT}}
+    comp = {**a["components"], **{k: _num(extra.get(k)) for k in CARRY_SPLIT}}
+    carry = _num(comp["carry"])
+    comp[NOSPLIT] = carry if carry is not None and comp["carry_coupon"] is None else None
+    if row is not None:
+        lin, rates = _num(extra.get("rates_linear")) if _rub_bond(row) else None, _num(comp["rates"])
+        comp.update(dict.fromkeys(RATES_SPLIT) if lin is None or rates is None else
+                    {"rates_linear": lin, "rates_exact_lin": rates})
+    return a, comp
 
 
 def keys_of(seen: set[str]) -> list[str]:
-    return [k for k in ORDER if k not in CARRY_SPLIT or k in seen]
+    return [k for k in ORDER if k not in EXTRA_KEYS or k in seen]
 
 
 class Agg:
@@ -89,7 +111,7 @@ class Agg:
         for k, v in comp.items():
             # as pnl_history.Aggregate: a reported row has no ``other`` and a flash row no ``reported`` by method
             applicable = (a["method"] == REPORTED_METHOD if k == "reported" else
-                          a["method"] != REPORTED_METHOD if k == "other" else True)
+                          a["method"] != REPORTED_METHOD if k == "other" else k != NOSPLIT)
             self.c[k].add(v)
             self.m[k] += applicable and v is None
 
@@ -168,12 +190,19 @@ class Position:
         self.rate, self.weight = Sum(), Sum()
         self.buckets: dict[int, Sum] = {}
         self.n = n_buckets
+        self.methods: dict[str, None] = {}
+        self.no_pnl: dict[str, int] = {}
 
     def add(self, r: dict[str, Any], a: dict[str, Any], comp: dict[str, float | None], d: date, i: int) -> None:
         self.row = r  # latest metadata; identity always (book, position)
         self.first = self.first or d
         self.last = d
         self.agg.add(a, comp)
+        if a["method"]:
+            self.methods[a["method"]] = None
+        if r.get("noPnl"):
+            why = str((r["noPnl"] or {}).get("reason") or "")
+            self.no_pnl[why] = self.no_pnl.get(why, 0) + 1
         self.pv.add(r.get("pv"))
         if a["total"] is not None:
             prev = _date(a["prevDate"]) or r.get("runPrevDate")
@@ -194,7 +223,7 @@ class Position:
                 "pvAvg": self.pv.value() / self.pv.n if self.pv.n else None, "calDays": self.cal_days,
                 "fundingRatePct": self.rate.value() / w if w else None,
                 "buckets": [self.buckets[i].value() if i in self.buckets else None for i in range(self.n)],
-                **self.agg.result()}
+                "methods": sorted(self.methods), "noPnlReasons": dict(self.no_pnl), **self.agg.result()}
 
 
 class Period:
@@ -208,8 +237,8 @@ class Period:
         self.seen: set[str] = set()
 
     def add(self, r: dict[str, Any]) -> None:
-        a, comp = components(r.get("pnl"))
-        self.seen.update(k for k in CARRY_SPLIT if comp[k] is not None)
+        a, comp = components(r.get("pnl"), r)
+        self.seen.update(k for k in EXTRA_KEYS if comp[k] is not None)
         d = r["date"]
         if d not in self.days:
             self.days[d] = ({"date": d, "prevDate": r.get("runPrevDate"), "runId": r["runId"]}, Agg(), {})
