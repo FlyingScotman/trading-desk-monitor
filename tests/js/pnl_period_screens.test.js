@@ -138,6 +138,18 @@ test('E: the list by book, the largest first; other books of the instrument; thr
   assert.deepEqual(P.thrQuery({ thrAbs: 1.5, thrPct: 10 }), { thr_abs: '1500000', thr_pct: '0.1' });
 });
 
+test('E: «с dd.mm» — the old report when D−1 carried it (TDM#440), else the previous run past a weekend', () => {
+  const rows = FX.position['DEMO-A|OFZ-1'].days.map(P.dayRow);
+  assert.ok(rows.every(r => r.reportFrom === null));
+  assert.equal(P.daySince(rows.find(x => x.date === '2026-10-06')), null, 'a day after the previous run: no mark');
+  assert.equal(P.daySince(rows.find(x => x.date === '2026-10-05')), null, 'Monday after Friday: no mark');
+  assert.deepEqual(P.daySince(rows.find(x => x.date === '2026-10-08')), { from: '2026-10-06', report: false });
+  const day = { date: '2026-10-08', prevDate: '2026-10-07', reportFrom: '2026-09-28', method: 'desk-reported-v1', c: { reported: 5 } };
+  assert.deepEqual(P.daySince(P.dayRow(day)), { from: '2026-09-28', report: true });
+  // the report of D−1 is its own (not older than the previous run): the run's interval as before
+  assert.equal(P.daySince(P.dayRow({ ...day, reportFrom: '2026-10-07' })), null);
+});
+
 test('E: day rows — inputs D−1 / D, Δ yield and Δ spread in bp, the interval; columns with values; FX net only', () => {
   const days = FX.position['DEMO-A|OFZ-1'].days, rows = days.map(P.dayRow), r = rows[3], d = days[3];
   assert.equal(r.src, 'previous_row');

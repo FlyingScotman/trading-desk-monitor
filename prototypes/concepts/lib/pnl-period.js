@@ -573,11 +573,19 @@
   const dDiff = (a, b, k) => (num(a) && num(b) ? (b - a) * k : null);
   function dayRow(d) {
     const i = d.inputs || {};
-    return { date: d.date, prevDate: d.prevDate, cal: d.prevDate ? dayDiff(d.prevDate, d.date) : null, src: i.source || null,
+    return { date: d.date, prevDate: d.prevDate, cal: d.prevDate ? dayDiff(d.prevDate, d.date) : null, src: i.source || null, reportFrom: d.reportFrom || null,
       cleanPrev: num(i.cleanPrev) ? i.cleanPrev : null, clean: num(i.clean) ? i.clean : null, dy: dDiff(i.ytmPrev, i.ytm, 100), dz: dDiff(i.zPrev, i.z, 1),
       dv01: num(i.dv01) ? i.dv01 : null, quantity: num(i.quantity) ? i.quantity : null, quantityPrev: num(i.quantityPrev) ? i.quantityPrev : null,
       total: num(d.total) ? d.total : null, ratesLinear: num(d.ratesLinear) ? d.ratesLinear : null, gap: num(d.grossCheck) ? d.grossCheck : null,
       events: d.events || [], noPnl: d.noPnl || null, day: d };
+  }
+  // «с dd.mm» of E's date cell: by the report, when D−1 carried an older report — the whole gap between the reports
+  // falls on the day (TDM#440); else the previous run, when the interval is longer than a day (a weekend before Monday
+  // is not marked); null — no mark
+  function daySince(r) {
+    if (r.reportFrom && (!r.prevDate || r.reportFrom < r.prevDate)) return { from: r.reportFrom, report: true };
+    const mon = new Date(r.date + 'T00:00:00Z').getUTCDay() === 1;
+    return r.cal > 1 && !(r.cal === 3 && mon) ? { from: r.prevDate, report: false } : null;
   }
 
   // calendar of F: market days and run days of the period — 'norun' (market day without a run), 'issue' (a finding above
@@ -622,7 +630,7 @@
 
   const api = { COMPONENTS, BY_KEY, DERIVED, MODES, BT_MODES, COMPONENT_MODES, CARRY_MODES, PRESETS, GROUPS, NO_CURVE, NO_RATING, MIN_CONTRIB,
     colour, tint, signedBp, curveGrids, linearVsExact, curveSeries, curvePositions, LIN_WARN_PCT, LIN_WARN_ABS,
-    SEV, THR_DEFAULT, thrQuery, covers, findingsIndex, worstSev, positionList, otherBooks, dayColumns, dayRow, calendar, heatmap, HEAT_ROWS, VALUE_KIND, checkCards,
+    SEV, THR_DEFAULT, thrQuery, covers, findingsIndex, worstSev, positionList, otherBooks, dayColumns, dayRow, daySince, calendar, heatmap, HEAT_ROWS, VALUE_KIND, checkCards,
     sumAvail, sumAll, val, srcVal, coverage, coverText, splitOk, splitCover, hasCoupon, hasSplit, anySplit, noSplit, linCover, sumAggs,
     addDays, dayDiff, presetRange, weekdays, autoGran, isoWeek, makeBuckets, bucketAggs, bucketHasMarket, periodDates, dayAxis, cumulate, calDays, perCalDay,
     prepare, componentRows, carryDefs, attrDefs, ratesDefs, visibleRows, groupRows, rowsFor, chartRows, waterfallItems, contrib, nullReasons, stackItems, STACK_GROUPS,
