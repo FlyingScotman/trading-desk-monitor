@@ -98,13 +98,13 @@ def _start(home: Path, kind: str, key: str, request: dict, work: Callable[[dict]
             log.exception("adapter job %s failed", key)
             j.update(state="failed", error=f"internal error ({type(e).__name__})", error_code="internal")
         finally:
+            # saved before a poll can see it finished: a restart right after keeps the result (TDM#470)
             with _lock:
-                if j["state"] == "running":
-                    j["state"] = "done"
-                j["finished_at"], j["seconds"] = _now(), round(time.monotonic() - t0, 1)
+                done = dict(j, state="done" if j["state"] == "running" else j["state"], finished_at=_now(),
+                            seconds=round(time.monotonic() - t0, 1))
+                _save(home, key, done)
+                j.update(done)
                 _running.pop(kind, None)
-                done = dict(j)
-            _save(home, key, done)
 
     threading.Thread(target=body, name=f"desk-adapter-{kind}", daemon=True).start()
     return dict(j)
