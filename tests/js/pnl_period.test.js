@@ -237,7 +237,7 @@ test('contributors: by |contribution|, small and zero ones counted, positions wi
   const p = prep(), fund = P.rowsFor('explain', p, { carry: 'split' }).find(d => d.k === 'funding');
   const C = P.contrib(p.positions, fund);
   assert.equal(C.missing, 3);  // the swap and the USD bond have no funding, the new bond no PnL
-  assert.deepEqual(C.why, [{ text: 'метод без этой компоненты: desk-flash-exact-v1', n: 1 }, { text: 'метод без этой компоненты: desk-flash-simple-v1', n: 1 }, { text: 'нет PnL: no_prev_report', n: 1 }]);
+  assert.deepEqual(C.why, [{ text: 'метод без этой компоненты: desk-flash-yield-v1', n: 1 }, { text: 'метод без этой компоненты: flash-v1', n: 1 }, { text: 'нет PnL: no_prev_report', n: 1 }]);
   assert.ok(C.minus.length && C.minus.every((x, i, a) => x.v < 0 && (!i || a[i - 1].v <= x.v)));
   assert.ok(C.list.every((x, i, a) => !i || Math.abs(a[i - 1].v) >= Math.abs(x.v)));
   near(C.total, p.summary.c.funding, 'Σ funding');

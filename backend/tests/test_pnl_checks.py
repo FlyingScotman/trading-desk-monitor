@@ -1,6 +1,7 @@
 """Checks of a period's saved PnL on synthetic history: each finds its planted case and says no_data without inputs."""
 from __future__ import annotations
 
+import math
 import tracemalloc
 from datetime import date, timedelta
 
@@ -12,6 +13,7 @@ from test_pnl_period import DAYS, MARKET, seed_period
 from desk.api import create_app
 from desk.api.pnl_checks import (
     HEAT_REFS,
+    UNEXPL_TOP,
     Scan,
     check_fsign,
     check_fxrev,
@@ -217,3 +219,77 @@ def test_scan_memory_does_not_grow_with_positions():
 
     small, large = peak(200), peak(2000)
     assert large < 1.5 * small, (small, large)
+
+
+MIXED = {"X1": ("desk-flash-exact-v2", "exact", 2e5), "X2": ("desk-flash-simple-v1", "model_price", -4e6),
+         "X3": ("desk-flash-yield-v1", "market_value", 3e5), "X4": ("desk-reported-v1", "reported_value", 1e6)}
+"""Positions with one calculation method each: method, valuation quality, ``other`` per run (X4's is ``reported``)."""
+
+
+@pytest.fixture
+def mixed_client(store_url):
+    """The planted history (method ``desk-flash-v1``: «другой метод») plus one position per method group; X2 has no
+    PnL on the first run."""
+
+    def more(con, rid, day):
+        for j, (pid, (method, quality, v)) in enumerate(MIXED.items()):
+            none = pid == "X2" and day == DAYS[0]
+            pnl = None if none else {"carry": 10.0, "other": v * (1 + DAYS.index(day) % 2),
+                                     "extra": {"method": method, "note": "synthetic " + method}}
+            con.execute(
+                "INSERT INTO run_position(run_id,position_id,ord,book_id,secid,quantity,quality,pv_rub,dv01_rub,"
+                "cs01_rub,fact,pnl,no_pnl) VALUES (%s,%s,%s,'DEMO-B','SYN-X',10,%s,1e6,-10,0,%s,%s,%s)",
+                (rid, pid, 200 + j, quality, Jsonb({"name": "Synthetic " + pid, "ccy": "RUB"}),
+                 Jsonb(pnl) if pnl else None,
+                 Jsonb({"reason": "not_priced_prev", "detail": "synthetic"}) if none else None))
+
+    seed_period(store_url, more=more)
+    return TestClient(create_app(store_url))
+
+
+def test_unexplained_by_method(mixed_client):
+    u = get(mixed_client)["unexplainedBy"]
+    # the split sums to the period's other + reported: by group, by method, by quality and by date
+    assert u["total"] == pytest.approx(u["other"] + u["reported"])
+    assert math.fsum(g["total"] for g in u["groups"]) == pytest.approx(u["total"])
+    assert math.fsum(m["total"] for m in u["methods"]) == pytest.approx(u["total"])
+    assert math.fsum(q["total"] for q in u["quality"]) == pytest.approx(u["total"])
+    assert math.fsum(v for s in u["byDate"].values() for v in s if v is not None) == pytest.approx(u["total"])
+    assert u["dates"] == DAYS and all(len(s) == len(DAYS) for s in u["byDate"].values())
+    groups = {g["key"]: g for g in u["groups"]}
+    assert list(groups) == ["exact", "simple", "yield", "reported", "other"]
+    assert groups["simple"]["label"] == "без разложения: нет потоков / модельная цена"
+    x2 = [i for i in range(len(DAYS)) if i]
+    assert groups["simple"]["total"] == pytest.approx(math.fsum(-4e6 * (1 + i % 2) for i in x2))
+    assert groups["simple"]["rows"] == len(DAYS) - 1
+    assert groups["reported"]["reported"] == pytest.approx(groups["reported"]["total"])
+    assert groups["reported"]["other"] is None and groups["exact"]["reported"] is None
+    assert u["reported"] == pytest.approx(math.fsum(1e6 * (1 + i % 2) for i in range(len(DAYS))))
+    by_method = {m["method"]: m for m in u["methods"]}
+    assert by_method["desk-flash-v1"]["group"] == "other"
+    assert by_method["desk-flash-simple-v1"]["quality"] == {"model_price": pytest.approx(groups["simple"]["total"])}
+    quality = {q["quality"]: q for q in u["quality"]}
+    assert quality["model_price"]["label"] == "модельная цена" and quality["exact"]["rows"] > 0
+    first = {k: s[0] for k, s in u["byDate"].items()}
+    assert first["simple"] is None and first["exact"] == pytest.approx(2e5)  # no PnL on the first run: none, not 0
+    top = u["top"]
+    assert top[0]["ref"] == "DEMO-B|X2" and top[0]["group"] == "simple"
+    assert top[0]["methods"] == ["desk-flash-simple-v1"] and top[0]["quality"] == ["model_price"]
+    assert top[0]["notes"] == ["synthetic desk-flash-simple-v1"]
+    assert top[0]["noPnl"] == [{"reason": "not_priced_prev", "text": "не оценена за предыдущий день", "days": 1}]
+    assert [abs(t["total"]) for t in top] == sorted((abs(t["total"]) for t in top), reverse=True)
+    assert u["topTotal"] == len(top) == 7 + len(MIXED)  # A1 B1 U1 F1 S1 C1 NEW1 and the four
+
+
+def test_unexplained_top_capped_and_empty():
+    days = [date(2026, 10, 1) + timedelta(days=i) for i in range(3)]
+    scan = Scan(list(range(3)), days)
+    for p in range(UNEXPL_TOP + 5):
+        scan.add([o(d, ref=f"B|P{p:02d}", run=i, pnl={"other": float(p + 1), "extra": {"method": "x"}})
+                  for i, d in enumerate(days)])
+    u = scan.result([], [])["unexplainedBy"]
+    assert len(u["top"]) == UNEXPL_TOP and u["topTotal"] == UNEXPL_TOP + 5
+    assert u["top"][0]["ref"] == f"B|P{UNEXPL_TOP + 4:02d}" and u["top"][-1]["ref"] == "B|P05"
+    assert u["total"] == pytest.approx(3 * math.fsum(range(1, UNEXPL_TOP + 6)))
+    none = evaluate([o(days[0], pnl=None)], [1], [days[0]], [days[0]], [(days[0], {})])["unexplainedBy"]
+    assert none["total"] is None and none["groups"] == [] and none["top"] == [] and none["rows"] == 0

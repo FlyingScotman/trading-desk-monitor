@@ -159,7 +159,7 @@ test('C19 acceptance (TDM#431–#435): bars split by groups with a drill list, n
     await pg.mouse.click(at[0], at[1]);
     await pg.waitForFunction(() => /Кто дал: Кэрри нетто · RUB/.test(document.getElementById('contribTitle').textContent));
     const drill = await pg.locator('#contrib').innerText();
-    assert.match(drill, /desk-flash-exact-v1/); assert.doesNotMatch(drill, /Synthetic USD/);
+    assert.match(drill, /desk-flash-exact-v2/); assert.doesNotMatch(drill, /Synthetic USD/);
     assert.match(drill, /не посчитано: 1 поз\. — нет PnL: no_prev_report/);
     const vals = await pg.locator('#contrib .contrib > .n').allInnerTexts();
     const abs = vals.map(t => Math.abs(parseFloat(t.replace(/[()]/g, '').replace(',', '.').replace('−', '-'))));
@@ -227,14 +227,28 @@ test('C19 D, E, F on the synthetic fixture: requests, missing data, F → E on i
     await pg.waitForSelector('#cvLin table');
     const cq = last('/curves').searchParams;
     assert.equal(cq.get('from'), '2026-10-01'); assert.ok(cq.get('run_id')); assert.equal(cq.get('gran'), null);
+    // factors by default (TDM#437): RUONIA, the OFZ basis, the KBD-only date with its coverage; rows without terms apart
+    const lin = await pg.locator('table[data-vk=c19-period-curve-linear-f]').innerText();
+    assert.match(lin, /RUONIA[\s\S]*Базис ОФЗ \(КБД − RUONIA\)[\s\S]*КБД \(нет RUONIA на дату\) · \d+ записей · 1 дата/);
+    assert.match(lin, /без сроков/);
+    assert.match(await pg.locator('table[data-vk=c19-period-curve-move-f] tbody tr').nth(1).innerText(), /^Базис ОФЗ/);
+    assert.equal(await pg.locator('#cvLin tbody tr').count(), 4);
+    const fcum = await pg.evaluate(() => echarts.getInstanceByDom(document.getElementById('cvCum')).getOption().series.map(s => s.name));
+    assert.deepEqual(fcum, ['RUONIA', 'Базис ОФЗ (КБД − RUONIA)', 'КБД (нет RUONIA на дату)', 'кривая не указана']);
+    assert.equal(await pg.locator('#cvPos [data-ref="DEMO-A|OFZ-1"]').count(), 3, 'an OFZ: RUONIA, basis and its KBD-only date');
+    // the curves as before, on request
+    await pg.locator('#cvView button', { hasText: 'Кривые' }).click();
+    await pg.waitForSelector('table[data-vk=c19-period-curve-move]');
     const move = await pg.locator('table[data-vk=c19-period-curve-move] tbody tr').first().innerText();
     assert.match(move, /−15/); assert.doesNotMatch(move, /\(/);
-    assert.match(await pg.locator('#cvBody .grids3').innerText(), /нет данных: линейный PnL по срокам[\s\S]*TDM#406/);
+    assert.match(await pg.locator('#cvBody .grids3').innerText(), /по \d+ из 60 записей/);
     assert.equal(await pg.locator('#cvLin tbody tr').count(), 3);
     const cum = await pg.evaluate(() => echarts.getInstanceByDom(document.getElementById('cvCum')).getOption().series.map(s => s.name));
     assert.deepEqual(cum.sort(), ['RUONIA', 'ОФЗ', 'кривая не указана'].sort());
+    await pg.locator('#cvView button', { hasText: 'Факторы' }).click();
+    await pg.waitForSelector('table[data-vk=c19-period-curve-move-f]');
     // E: /position of the opened position; ▲ from /checks; header; inputs D−1; a row marks the day on the charts
-    await pg.locator('#cvPos [data-ref="DEMO-A|OFZ-1"]').click();
+    await pg.locator('#cvPos [data-ref="DEMO-A|OFZ-1"]').first().click();
     await pg.waitForSelector('#pDays table');
     const pq = last('/position').searchParams;
     assert.equal(pq.get('position_book'), 'DEMO-A'); assert.equal(pq.get('position_id'), 'OFZ-1');
@@ -270,10 +284,20 @@ test('C19 D, E, F on the synthetic fixture: requests, missing data, F → E on i
     await pg.locator('#ckAll').click();
     assert.equal(await pg.locator('#ckList tbody tr').count(), FX.checks.findings.length);
     assert.equal(await pg.locator('#ckCal i.cal-norun').count(), 1);
+    // «Необъяснённое» by method (TDM#436): bars, daily columns by method, the top; sums with the period's other
+    const why = await pg.locator('#ckWhy').innerText();
+    assert.match(why, /остаток точного flash[\s\S]*без разложения: нет потоков \/ модельная цена[\s\S]*по доходности/);
+    assert.match(why, /Разбивка сходится с итогом/);
+    const wseries = await pg.evaluate(() => echarts.getInstanceByDom(document.getElementById('ckWhyDays')).getOption().series.map(s => [s.name, s.stack]));
+    assert.deepEqual(wseries.map(s => s[0]), FX.checks.unexplainedBy.groups.map(g => g.label));
+    assert.ok(wseries.every(s => s[1] === 'u'));
+    assert.equal(await pg.locator('#ckWhyTop tbody tr').count(), FX.checks.unexplainedBy.top.length);
+    assert.match(await pg.locator('#ckWhyTop').innerText(), /модельная цена/);
     await pg.locator('#thrAbs').fill('1.5'); await pg.locator('#thrAbs').dispatchEvent('change');
     await pg.waitForSelector('#ckList table');
     assert.equal(last('/checks').searchParams.get('thr_abs'), '1500000');
     // a heat-map cell opens E on that position and day
+    await pg.locator('#ckHeat').scrollIntoViewIfNeeded();
     const cellAt = await pg.evaluate(() => {
       const el = document.getElementById('ckHeat'), c = echarts.getInstanceByDom(el), o = c.getOption(), y = o.yAxis[0].data.findIndex(n => n.startsWith('Synthetic Corp 1')), x = o.xAxis[0].data.indexOf('2026-10-09');
       const [px, py] = c.convertToPixel({ seriesIndex: 0 }, [x, y]), r = el.getBoundingClientRect();
@@ -292,6 +316,14 @@ test('C19 D, E, F on the synthetic fixture: requests, missing data, F → E on i
     await pg.waitForSelector('#pDays tr.sel');
     assert.equal(await pg.locator('#pDays tr.sel').getAttribute('data-d'), '2026-10-09');
     assert.match(await pg.locator('#pDays tr.sel').getAttribute('class'), /critrow/);
+    // a position of the unexplained top opens E
+    await tab(pg, 'control');
+    await pg.waitForSelector('#ckWhyTop table');
+    const topRef = FX.checks.unexplainedBy.top[0].ref;
+    await pg.locator('#ckWhyTop [data-ref="' + topRef + '"]').click();
+    await pg.waitForSelector('#tabs [data-tab=position].on');
+    await pg.waitForSelector('#pDays table');
+    assert.equal(await pg.locator('#plist [aria-current=true]').getAttribute('data-ref'), topRef);
     // themes and widths: no page-wide scroll, no NaN / null / undefined, FX only net
     for (const theme of ['dark', 'light']) {
       await pg.evaluate(t => { if (KIT.theme() !== t) KIT.toggleTheme(); }, theme);

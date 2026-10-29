@@ -92,8 +92,19 @@ Pos = Agg + {ref, book, positionId, name, instrument, ccy, kind, group, curve, r
   linear: {curveId: {bucket: rub|null}},    // Σ pnl.extra.rates_linear_curves; null, пока не сохраняется
   linearTotal: {curveId: rub|null},         // Σ pnl.extra.rates_linear по позициям кривой
   exact:  {curveId: rub|null},              // Σ pnl.rates по позициям кривой
-  coverage: {rows, linearRows, bucketRows} }
+  coverage: {rows, linearRows, bucketRows},
+  // по факторам (TDM#437): factorId — "ruonia" | "basis" | "kbd" | id другой кривой | "" (кривая не указана)
+  factors: [{id, name}],
+  factorMove: {factorId: {bucket: bp|null}}, factorDv01: {factorId: {bucket: rub|null}},
+  factorLinear: {factorId: {bucket: rub|null}}, factorLinearRest: {factorId: rub|null},
+  factorLinearTotal: {factorId: rub|null}, factorExact: {factorId: rub|null},
+  factorCoverage: {factorId: {rows, linearRows, bucketRows, dates}} }
 ```
+
+Факторы ставок (TDM#437) вместо кривых «КБД» и «RUONIA»: «RUONIA» — позиции с дисконтированием по RUONIA OIS и
+RUONIA-часть ОФЗ; «Базис ОФЗ (КБД − RUONIA)» — ОФЗ в модели RUONIA + базис (TDM#213); «КБД (нет RUONIA на дату)» —
+строки на КБД без разбивки (дата без RUONIA OIS, а также прогоны до TDM#213); другие кривые (`RUB KEY`, валютные) —
+факторами под своим id. Сумма факторов равна сумме по кривым (линейной и точной).
 
 ## `GET /api/v1/history/pnl/position`
 
@@ -121,7 +132,14 @@ Pos = Agg + {ref, book, positionId, name, instrument, ccy, kind, group, curve, r
 { checks: [{key, label, status: "ok"|"findings"|"no_data", count, note}],
   findings: [{sev: "crit"|"warn"|"info", check, date, dateTo, ref, book, positionId, name, value, text}],
   coverage: {marketDates: [date], runDates: [date], missingRuns: [date]},
-  unexplained: {dates: [date], refs: [ref], cells: [[dateIdx, refIdx, value]]} }
+  unexplained: {dates: [date], refs: [ref], cells: [[dateIdx, refIdx, value]]},
+  unexplainedBy: {total, other, reported, rows,          // TDM#436: Σ other + reported периода
+                  groups: [{key, label, total, other, reported, rows}],
+                  methods: [{method, group, total, rows, quality: {quality: rub}}],
+                  quality: [{quality, label, total, rows}],
+                  dates: [date], byDate: {groupKey: [rub|null по dates]},
+                  top: [{ref, book, positionId, name, total, other, reported, rows, group, groupLabel,
+                         methods, quality, notes, noPnl: [{reason, text, days}]}], topTotal} }
 ```
 
 Проверки (`key`): `recon` (|grossCheck| > 1000 RUB), `unexpl` (|other| ≥ thr_abs и ≥ thr_pct × Σ|объяснённого|), `stale`
@@ -227,6 +245,32 @@ API (TDM#407: `backend/src/desk/api/pnl_period.py`, `pnl_checks.py`). Поля �
   `unexplained.cells` — строки, где `other` сохранён (нули включены); `refs` — не больше 60 позиций (`HEAT_REFS`) с
   наибольшим max |other| за период, по алфавиту; `refsTotal` (сверх контракта) — число позиций с такими строками до
   отсечения; `cells` и `dates` — только по оставленным. Строки читаются по позициям: в памяти одна позиция.
+- **`/curves` по факторам (TDM#437).** Строка ОФЗ в RUONIA + базис — та, где сохранены `rates_linear_ruonia` и
+  `rates_linear_basis`. Линейно по срокам: член RUONIA = `prev.ofz_ruonia_risk[b]` × `curve_moves_bp["RUB RUONIA"][b]`,
+  базис = член КБД (`rates_linear_curves["RUB OFZ"][b]`) − член RUONIA (срок без члена КБД — минус член RUONIA). Нет
+  риска или сдвига RUONIA, или члены RUONIA расходятся с `rates_linear_ruonia` больше чем на 1 RUB (`SPLIT_TOL_RUB`) —
+  строка идёт одной суммой без сроков: `rates_linear_ruonia` / `rates_linear_basis` → `factorLinearRest`. Строка без
+  `rates_linear_curves` — `rates_linear` целиком на фактор своей кривой, тоже в `factorLinearRest`. `factorLinearTotal`
+  = сроки + без сроков. Точно (`factorExact`): у ОФЗ RUONIA = `rates_linear_ruonia`, базис = `rates − rates_linear_ruonia`
+  (базисный член и вся нелинейность полной переоценки), у остальных `rates` целиком на фактор `fact.spread_curve`.
+  DV01: у строки ОФЗ с `extra.ofz_ruonia01` (риск в координатах сценариев: `RUB OFZ` — базис, `RUB RUONIA` — RUONIA минус
+  базис) RUONIA = сумма обеих кривых, базис = `RUB OFZ`, как вид «RUONIA + базис» страниц; иначе кривая → фактор.
+  Сдвиг: RUONIA — кривой RUONIA, базис — сдвиг КБД − сдвиг RUONIA, `kbd` — КБД. `factorCoverage[f]` — строки, давшие
+  фактору точное или линейное значение, из них с линейным, по срокам, и число дат.
+- **`/period` `ratesByFactor` (TDM#437, сверх контракта).** У `Day` и `Pos` (и в `separateAnchor`) — `rates` по
+  факторам по тому же правилу, что `factorExact`; сумма равна сумме `ratesByCurve`. `ratesByCurve` не менялся.
+- **`unexplainedBy` (TDM#436).** Σ `other` + `reported` строк периода (у строки есть одно из двух по методу) по группе
+  метода `pnl.extra.method` (`METHOD_GROUP`): `exact` — «остаток точного flash» (`desk-flash-exact-*`), `simple` — «без
+  разложения: нет потоков / модельная цена» (`desk-flash-simple-v1`), `yield` — «по доходности»
+  (`desk-flash-yield-v1`), `reported` — «по отчёту» (`desk-reported-v1`), `fx` — «FX-сделки: прочие эффекты»
+  (`desk-fx-spot-v1`, `desk-fx-core-v1`), `other` — другой код или нет метода; `groups` — в этом порядке, только
+  встретившиеся. Качество — `run_position.quality` даты D (`exact`, `assumed`, `market_value`, `stale_price`,
+  `model_price`, `par_proxy`, `reported_value`; качество D−1 не хранится, оно только в тексте `note` простого PnL).
+  `byDate[g][i]` — Σ группы на `dates[i]`, `null` без строк. `top` — не больше 30 позиций (`UNEXPL_TOP`) с наибольшим
+  |Σ| за период, по убыванию; `group` — группа с наибольшим |Σ| у позиции; `methods`, `quality` — до 8 кодов,
+  `notes` — до 3 разных `pnl.extra.note` (по 200 знаков), `noPnl` — причины дней без PnL позиции (до 5) с текстом
+  `NO_PNL_TEXT` и числом дней. Различных кодов метода и качества — не больше 40 (`UNEXPL_KEYS_CAP`), остальные — `…`.
+  Нет ни одной строки с `other` или `reported` — `total` `null`, списки пустые.
 
 ## Уточнения реализации (экран)
 
@@ -300,6 +344,13 @@ API (TDM#407: `backend/src/desk/api/pnl_period.py`, `pnl_checks.py`). Поля �
 - **Запросы.** Каждый экран — свой `PNL_HISTORY.loader` (последний запрос выигрывает, `dispose` его отменяет); ответы
   кешируются в `state.ui.cache` по строке запроса (период, фильтры, позиция, пороги), поэтому смена темы или вкладки не
   спрашивает снова. Пока идёт запрос, на месте данных — «Загружаю…», прежний ответ не показывается.
+- **D по факторам (TDM#437).** Вид по умолчанию — «Факторы» (переключатель «Факторы / Кривые», `state.ui.cvView`;
+  без `factors` в ответе — только кривые): три таблицы фактор × срок (`P.factorGrids`), у линейной — столбец «без
+  сроков» (`factorLinearRest`), Σ = `factorLinearTotal`; у строки «КБД (нет RUONIA на дату)» — покрытие «N записей · M
+  дат». Накопленный PnL — из `ratesByFactor` дней (`P.factorSeries`), линейная против точной — `P.factorLinVsExact`
+  (предупреждение — при полном линейном покрытии фактора), позиции — по строке на пару позиция × фактор
+  (`P.factorPositions`). Для «Explain по кривым» на A есть `P.factorRows(prep)` (строки `rates:f:<id>`, значения из
+  `ratesByFactor`) и `P.factorAgg(list)` — сумма `ratesByFactor` агрегатов (итог периода, bucket).
 - **D.** Сдвиг — bp со знаком («+12» / «−15», без бухгалтерских скобок); подсветка расходящаяся: зелёный — снижение
   ставок, длинный DV01 (< 0, DATA_CONTRACT), прибыль. Линейный PnL по срокам без `rates_linear_curves` — «нет данных» с
   покрытием `coverage.bucketRows`. Предупреждение «линейная против точной» — |разница| > 3 % линейной и > 1 млн RUB и
@@ -313,6 +364,10 @@ API (TDM#407: `backend/src/desk/api/pnl_period.py`, `pnl_checks.py`). Поля �
   0,1 млн; щелчок по клетке и по находке позиции открывает E на этот день. На карте не больше 60 позиций
   (`P.HEAT_ROWS`, наибольшие по |other|) с подписью «показаны 60 из N позиций с наибольшим необъяснённым»; N —
   `unexplained.refsTotal`, если сервер его отдаёт, иначе число позиций в ответе.
+- **F · Необъяснённое (TDM#436).** Блок «Необъяснённое: что внутри» после календаря (`P.unexplainedView`): полосы по
+  группам метода с числом записей и цветом группы (`P.UNEXPL_COLOR`), суммы по качеству оценки D, итог и проверка
+  «разбивка сходится с итогом»; столбцы по дням, сложенные по группам; таблица крупнейших позиций (метод, качество,
+  причина / примечание; щелчок — позиция на E). Нет `unexplainedBy` или `total` `null` — «нет данных».
 
 ## Что сохраняет flash (TDM#406)
 

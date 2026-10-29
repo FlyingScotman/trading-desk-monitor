@@ -1,6 +1,7 @@
 /* C19 «PnL за период», экран F · Контроль (TDM#409): /api/v1/history/pnl/checks — пороги необъяснённого, карточки
-   проверок со статусом (фильтр списка), календарь покрытия, тепловая карта необъяснённого «позиции × дни», список
-   находок; каждая находка по позиции и клетка карты открывают E на этот день. Missing values stay «—», never 0. */
+   проверок со статусом (фильтр списка), календарь покрытия, «Необъяснённое» по методу расчёта — столбцы, дни и
+   крупнейшие позиции (TDM#436, unexplainedBy), тепловая карта необъяснённого «позиции × дни», список находок; каждая
+   находка по позиции, клетка карты и строка крупнейших открывают E. Missing values stay «—», never 0. */
 (function () {
   'use strict';
   const SCREENS = window.PNL_PERIOD_SCREENS = window.PNL_PERIOD_SCREENS || {};
@@ -60,10 +61,12 @@
     const thr = 'порог ' + f.mn(ck.thrAbs, 1) + ' млн RUB и ' + f.n((ck.thrPct || 0) * 100, 0) + '% объяснённого';
     box.innerHTML = '<div class="checks">' + cards.map(card).join('') + '</div>' +
       '<div class="k-panel"><div class="hd"><h3>Покрытие по дням</h3><span class="sp"></span><span class="legendrow"><span><i class="cal-ok"></i>прогон без находок</span><span><i class="cal-issue"></i>есть находки</span><span><i class="cal-norun"></i>нет прогона</span></span></div><div class="bd"><div class="cal" id="ckCal"></div></div></div>' +
+      '<div id="ckWhy"></div>' +
       '<div class="k-panel"><div class="hd"><h3>Необъяснённое: позиции × дни</h3><span class="sp"></span><span class="hint">' + UNIT + ' · шкала до порога (' + esc(thr) + '), выше — насыщенный цвет · щелчок — позиция на этот день</span></div><div class="bd"><div class="ch" id="ckHeat"></div></div></div>' +
       '<div class="k-panel"><div class="hd"><h3 id="ckTitle"></h3><span class="sp"></span><span id="ckClr"></span></div><div class="bd flush tscroll" id="ckList"></div></div>';
     box.querySelectorAll('.check').forEach(b => b.onclick = () => { ui.chk = ui.chk === b.dataset.k ? null : b.dataset.k; draw(ctx, box, ck); });
     drawCalendar(ctx, box.querySelector('#ckCal'), ck);
+    drawWhy(ctx, box.querySelector('#ckWhy'), ck);
     drawHeat(ctx, box.querySelector('#ckHeat'), ck);
     drawList(ctx, box, ck, labels);
   }
@@ -117,5 +120,53 @@
         '<td>' + (x.date ? f.date(x.date) : NA()) + (x.dateTo && x.dateTo !== x.date ? '–' + f.date(x.dateTo) : '') + '</td><td>' + who(x) + '</td><td class="n">' + value(x) + '</td><td class="txt">' + esc(x.text || '') + '</td></tr>').join('') + '</tbody></table>'
       : '<p class="k-empty">' + (ui.chk ? 'У этой проверки находок нет.' : 'Находок нет.') + '</p>';
     el.querySelectorAll('[data-ref]').forEach(b => b.onclick = () => ctx.openPosition(b.dataset.ref, b.dataset.d || null));
+  }
+
+  // «Необъяснённое» (TDM#436): other + reported of the period by method group — bars, daily stacked columns coloured by
+  // method, the largest positions with method, valuation quality and reason; sums as /checks unexplainedBy gives them
+  function drawWhy(ctx, el, ck) {
+    const { K, P } = ctx, f = K.f, esc = K.esc, V = P.unexplainedView(ck);
+    const head = '<div class="hd"><h3>Необъяснённое: что внутри</h3><span class="sp"></span><span class="hint">' + UNIT + ' · «Необъяснённое / прочее» и «Разница PV по отчётам» за период по методу расчёта</span></div>';
+    if (!V) {
+      el.innerHTML = '<div class="k-panel">' + head + '<div class="bd k-empty">' + (ck && ck.unexplainedBy ? 'нет данных: необъяснённое и разница PV по отчётам не сохранены ни в одной записи выборки' : 'нет данных: сервер не отдаёт разбивку необъяснённого по методу') + '</div></div>';
+      return;
+    }
+    const col = g => P.colour(K, g.color), max = Math.max(1, ...V.groups.map(g => Math.abs(g.total || 0)));
+    const NA = why => '<span class="mut3" title="' + esc(why || 'нет данных') + '">—</span>';
+    const mn = v => (v == null ? NA() : f.mn(v, 2));
+    const bars = V.groups.map(g => '<span class="nm" title="' + esc(g.tip) + '"><span class="sw" style="background-color:' + col(g) + '"></span>' + esc(g.label) + ' <span class="mut3">· ' + g.rows + ' зап.</span></span>' +
+      '<span class="n">' + mn(g.total) + '</span><span class="bars' + (g.total < 0 ? ' l' : '') + '"><span class="bar" style="width:' + Math.max(2, Math.round(Math.abs(g.total || 0) / max * 92)) + 'px;background:' + col(g) + '"></span></span>').join('');
+    const qual = V.quality.length ? '<h4>по качеству оценки D</h4>' + V.quality.map(q => '<span class="nm">' + esc(q.label) + ' <span class="mut3">· ' + q.rows + ' зап.</span></span><span class="n">' + mn(q.total) + '</span><span></span>').join('') : '';
+    const sum = '<p class="hint" style="margin:8px 0 0">Итого ' + mn(V.total) + ' млн: необъяснённое ' + mn(V.other) + ', разница PV по отчётам ' + mn(V.reported) + '.' +
+      (V.gap != null && Math.abs(V.gap) >= 1 ? ' <span class="sevtxt warn">Разбивка не сходится с итогом на ' + esc(f.n(V.gap, 0)) + ' RUB.</span>' : ' Разбивка сходится с итогом.') + '</p>';
+    el.innerHTML = '<div class="k-panel">' + head + '<div class="bd"><div class="grid2e"><div><div class="contrib">' + bars + qual + '</div>' + sum + '</div><div class="ch short" id="ckWhyDays"></div></div></div>' +
+      '<div class="bd flush tscroll" id="ckWhyTop"></div></div>';
+    drawWhyDays(ctx, el.querySelector('#ckWhyDays'), V);
+    drawWhyTop(ctx, el.querySelector('#ckWhyTop'), V, NA);
+  }
+
+  function drawWhyDays(ctx, el, V) {
+    const { K, P } = ctx, f = K.f, esc = K.esc;
+    if (!V.dates.length) { el.outerHTML = '<div class="k-empty">нет дней с необъяснённым</div>'; return; }
+    const tip = ps => '<b>' + esc(f.date(ps[0].axisValue)) + '</b> · ' + UNIT + '<table>' + ps.filter(p => p.value != null).map(p => '<tr><td>' + p.marker + esc(p.seriesName) + '</td><td style="text-align:right;padding-left:14px;font-variant-numeric:tabular-nums">' + f.mn(p.value, 2) + '</td></tr>').join('') + '</table>';
+    charts.push(K.chart(el, () => ({
+      grid: { left: 8, right: 12, top: 30, bottom: 8, containLabel: true }, legend: { top: 0, type: 'scroll' }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: tip },
+      xAxis: { type: 'category', data: V.dates, axisTick: { show: false }, axisLabel: { formatter: d => d.slice(8, 10) + '.' + d.slice(5, 7), hideOverlap: true } },
+      yAxis: { type: 'value', axisLabel: { formatter: v => K.tick(v, 1e6) } },
+      series: V.series.map(s => ({ name: s.label, type: 'bar', stack: 'u', barMaxWidth: 26, color: P.colour(K, s.color), data: s.vals })),
+    })));
+  }
+
+  function drawWhyTop(ctx, el, V, NA) {
+    const { K } = ctx, f = K.f, esc = K.esc;
+    if (!V.top.length) { el.innerHTML = ''; return; }
+    const cut = s => (s.length > 70 ? s.slice(0, 69) + '…' : s);  // the full text in the cell's title
+    const reason = t => [...(t.noPnl || []).map(x => 'нет PnL: ' + x.text + (x.days > 1 ? ' (дней: ' + x.days + ')' : '')), ...(t.notes || [])];
+    el.innerHTML = '<table class="k-tbl" data-vk="c19-period-unexpl-top" data-title="Крупнейшие позиции по необъяснённому, ' + UNIT + '"><thead><tr><th class="stick">Позиция</th><th>Книга</th><th class="n">Необъяснённое + отчёты</th><th>Метод</th><th>Качество оценки</th><th>Причина / примечание</th></tr></thead><tbody>' +
+      V.top.map(t => '<tr><td class="stick"><button class="link" data-ref="' + esc(t.ref) + '" title="Открыть позицию (E)">' + esc(t.name || t.positionId) + '</button></td><td>' + esc(t.book) + '</td><td class="n">' + (t.total == null ? NA() : f.mn(t.total, 2)) + '</td>' +
+        '<td><span class="sw" style="background-color:' + ctx.P.colour(K, t.color) + '"></span>' + esc(t.groupLabel) + ' <span class="mut3">' + esc((t.methods || []).map(m => m || 'метод не указан').join(', ')) + '</span></td>' +
+        '<td>' + esc((t.quality || []).map(V.qualityLabel).join(', ')) + '</td><td class="txt" title="' + esc(reason(t).join(' · ')) + '">' + (reason(t).length ? esc(cut(reason(t).join(' · '))) : '<span class="mut3">—</span>') + '</td></tr>').join('') + '</tbody></table>' +
+      '<p class="hint" style="padding:0 12px">' + (V.topTotal > V.top.length ? 'Показаны ' + V.top.length + ' из ' + V.topTotal + ' позиций с наибольшим |необъяснённым| за период. ' : '') + 'Метод — с наибольшей суммой у позиции; щелчок — позиция на экране E.</p>';
+    el.querySelectorAll('[data-ref]').forEach(b => b.onclick = () => ctx.openPosition(b.dataset.ref));
   }
 })();
