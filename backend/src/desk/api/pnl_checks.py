@@ -34,7 +34,7 @@ from ..publish.summary import FX_PARTS, fx_net
 from ..valuation.fallback import METHOD as SIMPLE_METHOD
 from ..valuation.fallback import YIELD_METHOD
 from .pnl_history import Sum, amounts, market_dates, period_runs, rows_query
-from .pnl_period import TRIMMED_PNL
+from .pnl_period import TRIMMED_PNL, no_pnl_why
 from .runs import PNL_KEYS
 
 THR_ABS = 3e6
@@ -457,7 +457,7 @@ def _life(rows: list[Obs], index: dict[int, int], run_dates: list[date]) -> Part
         else:
             close("qty")
         if o["noPnl"]:
-            mark("nopnl", "нет PnL: " + str(o["noPnl"].get("reason") or "причина не указана"), o, None, adjacent)
+            mark("nopnl", "нет PnL: " + no_pnl_why(o["noPnl"]), o, None, adjacent)
         else:
             close("nopnl")
         nxt = rows[k + 1] if k + 1 < len(rows) else None

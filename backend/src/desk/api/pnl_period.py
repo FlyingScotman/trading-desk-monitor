@@ -18,7 +18,7 @@ from typing import Any
 from psycopg.rows import dict_row
 from rub_fixed_income import RISK_BUCKETS
 
-from ..pnl.reasons import REPORTED_METHOD, UNRECORDED
+from ..pnl.reasons import REPORTED_METHOD, UNRECORDED, no_pnl_reason_text
 from ..publish.summary import kind_of
 from .pnl_history import (
     KEYS,
@@ -168,6 +168,13 @@ def _date(v: Any) -> date | None:
         return date.fromisoformat(v) if isinstance(v, str) else None
     except ValueError:
         return None
+
+
+def no_pnl_why(stored: dict[str, Any] | None) -> str:
+    """The text of a stored ``run_position.no_pnl`` (``pnl.reasons.no_pnl_reason_text``: a change of discount curve
+    with its curves, TDM#31), not its bare code."""
+    code = (stored or {}).get("reason")
+    return no_pnl_reason_text(str(code), (stored or {}).get("detail")) if code else "причина не указана"
 
 
 def _kind_fact(r: dict[str, Any]) -> dict[str, Any]:
@@ -652,7 +659,7 @@ def position_days(rows: Iterable[dict[str, Any]], run_dates: list[date], gov: fr
         if previous is not None and previous["quantity"] != r["quantity"]:
             events.append("количество изменилось")
         if r.get("noPnl"):
-            events.append("нет PnL: " + str((r["noPnl"] or {}).get("reason") or "причина не указана"))
+            events.append("нет PnL: " + no_pnl_why(r["noPnl"]))
         for what, v in (("оферта", r.get("offerDate")), ("погашение", r.get("maturity"))):
             x = _date(v)
             if x is not None and prev_date is not None and prev_date < x <= d:
@@ -663,7 +670,8 @@ def position_days(rows: Iterable[dict[str, Any]], run_dates: list[date], gov: fr
         days.append({"date": d, "prevDate": prev_date, "runId": r["runId"], "method": a["method"], "note": a["note"],
                      "reason": a["reason"],
                      "reportFrom": _date(extra.get("report_from")),  # D-1 carried an older report (TDM#440)
-                     "noPnl": {"reason": no_pnl.get("reason"), "detail": no_pnl.get("detail")} if no_pnl else None,
+                     "noPnl": {"reason": no_pnl.get("reason"), "detail": no_pnl.get("detail"),
+                               "text": no_pnl_why(no_pnl)} if no_pnl else None,
                      "total": a["total"], "c": comp, "ratesLinear": _num(extra.get("rates_linear")),
                      "grossCheck": a["grossCheck"],
                      "inputs": {"source": source, "cleanPrev": cp, "clean": r.get("clean"), "ytmPrev": yp,

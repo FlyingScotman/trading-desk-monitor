@@ -24,6 +24,7 @@ NO_PNL_TEXT = {
     "par_proxy": "оценка по номиналу, нет цены",
     "quantity_changed": "количество изменилось: сделки дня не учитываются",
     "spread_kind_changed": "сменилась кривая спреда",
+    "discount_curve_changed": "смена кривой дисконтирования",
     "stale_quote": "котировка не обновилась с предыдущего дня",
     "core_error": "ошибка ядра при пересчёте",
     "identity_failed": "компоненты не сходятся с итогом",
@@ -107,7 +108,32 @@ def other_reason(code: str, detail: str = "", **fields: Any) -> dict[str, Any]:
     return {"code": code, "detail": detail, **{k: v for k, v in fields.items() if v is not None}}
 
 
+DISCOUNT_CURVE_CHANGED = "discount_curve_changed"
+"""``pnl.flash.explain``'s refusal of a bond discounted on another curve on D-1 than on D (detail ``"<D-1> -> <D>"``,
+the published curves): ``orchestrator.attach_pnl`` gives such a bond the simple PnL (``discount_curve_switch``) before
+the exact steps, so the code stays in the stored rows of the runs before it."""
+PROXY_CURVE, PROXIED_CURVE = "RUB OFZ", "RUB RUONIA"
+"""The curve a RUB bond is discounted on in a run without the RUONIA OIS curve (the KBD, ``valuation.bonds
+.discount_curve``) and the curve it stands in for (TDM#31)."""
+PROXY_CURVE_TEXT = f"на прокси-кривой {PROXY_CURVE}: кривой RUONIA за дату нет"
+"""The pages' marker of a row of ``extra.curve_proxy`` (``publish.tdm_run.curve_proxy``)."""
+
+
 def no_pnl_text(reason: str | None, detail: str | None = None) -> str:
     """The Russian text of a no-PnL code (the code itself when unknown), with the detail in brackets."""
     text = NO_PNL_TEXT.get(reason or "not_computed", reason or NO_PNL_TEXT["not_computed"])
     return f"{text} ({detail})" if detail else text
+
+
+def no_pnl_reason_text(reason: str | None, detail: str | None = None) -> str:
+    """The text the pages show for a position without PnL (TDM#31): ``no_pnl_text`` of the code without the detail
+    (the run log has it), except a change of discount curve, said with its curves («смена кривой дисконтирования:
+    вчера RUB RUONIA, сегодня RUB OFZ») and, when a date was on the KBD for want of RUONIA, which one."""
+    if reason == DISCOUNT_CURVE_CHANGED and detail and " -> " in detail:
+        was, now = (c.strip() for c in detail.split(" -> ", 1))
+        text = f"{NO_PNL_TEXT[reason]}: вчера {was}, сегодня {now}"
+        if {was, now} == {PROXY_CURVE, PROXIED_CURVE}:
+            text += (f" ({'сегодня' if now == PROXY_CURVE else 'вчера'} кривой RUONIA не было — бумага на прокси-кривой "
+                     f"{PROXY_CURVE}): спреды к разным кривым")
+        return text
+    return no_pnl_text(reason)

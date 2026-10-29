@@ -66,7 +66,7 @@ def test_planted_cases(checks_client):
                     ("DEMO-A|NEW1", "2026-10-12", "позиция появилась"),
                     ("DEMO-A|A1", "2026-10-12", "количество изменилось"),
                     ("DEMO-B|N1", "2026-10-13", "позиция появилась"),
-                    ("DEMO-B|N1", "2026-10-13", "нет PnL: no_prev_report"),
+                    ("DEMO-B|N1", "2026-10-13", "нет PnL: нет отчётной стоимости позиции за предыдущий день"),
                     ("DEMO-B|N1", "2026-10-13", "позиция закрыта: нет с 15.10.2026")}
     assert [f["sev"] for f in body["findings"]] == sorted((f["sev"] for f in body["findings"]),
                                                           key=["crit", "warn", "info"].index)
@@ -190,7 +190,8 @@ def test_heat_map_cap_and_folded_no_pnl(many_client):
     nopnl = [f for f in body["findings"] if f["check"] == "life" and f["ref"] == "DEMO-B|NP1"]
     assert sorted((f["date"], f["dateTo"] or "", f["text"]) for f in nopnl) == [
         (NO_PNL_DAYS[0], "", "позиция появилась"),
-        (NO_PNL_DAYS[0], NO_PNL_DAYS[-1], f"нет PnL: no_prev_report; дней подряд: {len(NO_PNL_DAYS)}"),
+        (NO_PNL_DAYS[0], NO_PNL_DAYS[-1],
+         f"нет PnL: нет отчётной стоимости позиции за предыдущий день; дней подряд: {len(NO_PNL_DAYS)}"),
         (NO_PNL_DAYS[-1], DAYS[8], "позиция закрыта: нет с 12.10.2026")]
 
 

@@ -405,6 +405,10 @@
     // кривая, к которой Z-спред (spreadBp ядра — к кривой дисконтирования: RUONIA, в день без неё — КБД); у флоатера это
     // Z-спред к RUONIA с купонами по прогнозу (R32), сравнимый с Z фикс-бумаг; DM — к кривой проекции
     p.spreadCurve = d.spreadCurve || null;
+    // прокси-кривая (#31, extra.curve_proxy прогона): в день без кривой RUONIA бумага на КБД (RUB OFZ) — пометка в
+    // таблицах и карточке (K.curveProxyTag, K.curveProxyNote); прогон без поля — пометки нет
+    const cp = ex.curve_proxy;
+    p.curveProxy = cp && typeof cp === 'object' ? String(cp.text || 'на прокси-кривой ' + (cp.curve || 'RUB OFZ') + ': кривой RUONIA за дату нет') : null;
     p.mdur = num(d.mdur); p.sprDur = num(d.sprDur);
     p.accrued = num(d.accrued) || 0;
     p.mv = num(d.mvRub); p.mvCcy = num(d.mv);
