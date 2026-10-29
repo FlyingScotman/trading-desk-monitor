@@ -264,14 +264,21 @@ def load_adapter(spec: str | None, config_dir: str | None, expected_sha256: str 
         except (OSError, ImportError, ValueError, TypeError):
             return None
 
-    # A package directory is fingerprinted before any of its code runs. A module name only after describe:
-    # the child reports the files it imported (its sys.path is not ours).
-    # shortcut: a module adapter's describe() runs before DESK_PRIVATE_ADAPTER_SHA256 is checked (in the
-    # stripped child, so it sees no secrets); upgrade if module adapters must be verified before import too.
+    # Fingerprinted before any adapter code runs when DESK_PRIVATE_ADAPTER_SHA256 is set: a package directory
+    # here, a module name where the child would import it from (its sys.path is not ours), found without
+    # importing. After describe a module is fingerprinted again from the files the child did import.
     by_path = runner.is_path_spec(spec)
     fp = fp_of() if by_path else None
     if by_path and fp is None:
         return fail("not_found: the adapter package cannot be located")
+    if not by_path and expected_sha256:
+        try:
+            resp = runner.call_locate(spec or None, timeout_s)
+        except AdapterFailure as f:
+            return fail(f"locate_{f.kind}: {f.type}")
+        fp = fp_of(resp["result"]) if resp.get("ok") else None
+        if fp is None:
+            return fail("not_found: the adapter module's files cannot be located")
     if fp and expected_sha256 and expected_sha256.lower() != fp:
         return fail("fingerprint_mismatch: DESK_PRIVATE_ADAPTER_SHA256 differs", fingerprint=fp)
     try:
