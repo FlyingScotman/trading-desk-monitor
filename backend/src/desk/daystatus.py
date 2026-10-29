@@ -599,9 +599,9 @@ def _last_scan() -> dict[str, Any] | None:
 
 
 def _reason(codes: list[dict[str, Any]], f: dict[str, Any]) -> str | None:
-    """A lost file's reason in a few words: its first error code's text (or the code), else its error code or the
-    exception type; None for a file read."""
-    if f["status"] not in LOST:
+    """Why a file was lost, or a part of it (``partially_accepted``: a scope unit rejected), in a few words: its first
+    error code's text (or the code), else its error code or the exception type; None for a file read whole."""
+    if f["status"] not in LOST and f["status"] != "partially_accepted":
         return None
     err = next((i for i in codes if i["severity"] == "error"), None)
     return (err["text"] or err["code"]) if err else f.get("error_code") or f.get("error_type")
@@ -675,7 +675,7 @@ def dataset_files(con: psycopg.Connection, settings: Settings, dataset: str, on:
                       "later": {"total": len(later), "by_status": counts(later),
                                 "first_date": _iso(min((day_of(f) for f in later), default=None))}},
             "latest": last, "unread": {"ignored": unread["ignored"], "too_old": unread["too_old"]},
-            "lookback_days": settings.inbox_lookback_days or None,
+            "lookback_days": settings.inbox_lookback_days or None, "autopilot": bool(settings.autopilot),
             "folders": {"count": len(report), "scanned": sum(1 for x in report if x[3] is not None),
                         "missing": sum(1 for x in report if x[3] is not None and not x[3].get("exists", True))},
             "last_scan": _last_scan(), "generated_at": datetime.now(UTC).isoformat()}
@@ -686,7 +686,7 @@ def _entries(settings: Settings, dirs: list[tuple[str, str, bool, Any]]) -> tupl
     folder in ``dirs``, resolved as the server resolves it (``~``, relative to the data folder); None: not scanned
     (``DESK_INBOX_DIRS`` overrides settings.json). And whether the environment overrides them."""
     from .inbox import scan
-    from .settings import SettingsError, _json_dirs, desk_home, env_overrides, read_settings_json
+    from .settings import SettingsError, desk_home, env_overrides, inbox_dir, read_settings_json
 
     home = settings.home or desk_home()
     try:
@@ -695,9 +695,10 @@ def _entries(settings: Settings, dirs: list[tuple[str, str, bool, Any]]) -> tupl
         raw = None
     out = []
     for e in raw if isinstance(raw, list) else []:
-        if not isinstance(e, dict) or not str(e.get("path") or "").strip():
+        d = inbox_dir(e, home) if isinstance(e, dict) else None
+        if d is None:
             continue
-        p, rec = scan.folder_of(_json_dirs([e], home)[0])
+        p, rec = scan.folder_of(d)
         i = next((i for i, (_, f, r, _) in enumerate(dirs)
                   if r == rec and os.path.normcase(f) == os.path.normcase(p)), None)
         out.append({"path": str(e["path"]), "recursive": bool(e.get("recursive")), "folder": i})
@@ -771,5 +772,6 @@ def folders(con: psycopg.Connection, settings: Settings) -> dict[str, Any]:
     return {"adapter": scan.adapter_line(h), "folders": res, "entries": entries, "from_env": from_env,
             "status_text": FILE_STATUS, "dataset_names": DATASET_NAMES,
             "lookback_days": settings.inbox_lookback_days or None, "poll_seconds": settings.inbox_poll_seconds,
+            "autopilot": bool(settings.autopilot),
             "last_scan": _last_scan(), "generated_at": datetime.now(UTC).isoformat()}
 

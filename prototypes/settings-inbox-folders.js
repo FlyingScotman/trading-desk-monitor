@@ -38,7 +38,7 @@
     if (!hit) return null;
     var f = hit.folder;
     if (!f) return { cls: 'mut3', html: doc.from_env ? 'не просматривается: папки заданы переменной окружения' : 'не просматривается' };
-    if (!f.scanned) return { cls: 'mut3', html: 'ещё не просматривалась', wait: true };
+    if (!f.scanned) return { cls: 'mut3', html: 'ещё не просматривалась' + (doc.autopilot === false ? ' — автообновление выключено' : ''), wait: true };
     if (f.exists === false) return { cls: 'bad', html: 'сервер не видит папку: нет доступа или на сервере у неё другой путь' };
     var names = doc.dataset_names || {}, parts = [], skipped = 0, why = [];
     Object.keys(f.skipped || {}).forEach(function (k) { if (f.skipped[k]) { skipped += f.skipped[k]; why.push(SKIP[k] || k); } });

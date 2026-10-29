@@ -3,9 +3,11 @@
  * говорит причину по журналу входящих — GET ../api/v1/inbox/datasets/{набор}?on=<дата прогона>
  * (desk/daystatus.dataset_files). Причины по порядку: отчёт уже в базе (прогон посчитан до него, TDM#181); адаптер не
  * загружен или не знает набора; последний файл отклонён или не прочитан (причина словами, коды — в подсказке);
- * отчёт есть только позже даты прогона; файлы старше окна загрузки; папки ещё не просматривались; сервер не видит
- * папку; файла нет — добавить папку в «Папки с отчётами» (папки монитора, не параметры адаптера). Второй строкой
- * мелко: имя файла · сколько файлов в папках не распознано · ссылки на C14 и (админу) на настройки.
+ * принят частично; отчёт есть только позже даты прогона; файлы старше окна загрузки; папка ещё не просматривалась
+ * (только что добавлена; автообновление выключено); сервер не видит папку; файлы пропущены (старые по дате
+ * изменения, слишком большие); файла нет — добавить папку в «Папки с отчётами» (папки монитора, не параметры
+ * адаптера). Второй строкой мелко: имя файла · сколько файлов в папках не распознано · ссылки на C14 и (админу) на
+ * настройки; сказать второй строке нечего — ссылки в конце первой.
  * Чистая функция над ответом: INBOX_WHY.view(x, opt) — {cls, html, title, sub}, INBOX_WHY.html(x, opt) — разметка
  * (tests/js/inbox_why.test.js).
  */
@@ -33,26 +35,33 @@
     else if (L && !L.after) {
       const day = at(L.valid_date || L.report_date);
       title = (L.issues || []).map(i => i.code + ' ×' + i.count).join(', ') || L.reason || '';
-      if (W.LOST[L.status]) { cls = 'bad'; html = rep + day + ' ' + W.LOST[L.status] + (L.status === 'rejected' && L.reason ? ': ' + esc(L.reason) : ''); }
+      const why = L.reason ? ': ' + esc(L.reason) : '';
+      if (W.LOST[L.status]) { cls = 'bad'; html = rep + day + ' ' + W.LOST[L.status] + (L.status === 'rejected' ? why : ''); }
+      else if (L.status === 'partially_accepted' || (L.units || {}).rejected) { cls = 'bad'; html = rep + day + ' принят частично' + why; }
       else if (L.status === 'waiting_calendar') html = rep + day + ' ждёт календарь с хаба';
       else html = rep + day + ': ' + esc(L.status_text || L.status);
     } else if (L) html = rep + ' есть только позже даты прогона — за ' + dm(L.valid_date || L.report_date);
     else if (U.too_old) html = 'Отчёты ' + name + ' в папках старше окна загрузки' + (x.lookback_days ? ' (' + x.lookback_days + ' дн.)' : '') + ' — не читались';
-    else if (!x.last_scan) html = 'Папки ещё не просматривались после запуска сервера';
-    else if (fo.missing) { cls = 'bad'; html = 'Сервер не видит папку с отчётами' + (fo.count > 1 ? ' (' + fo.missing + ' из ' + fo.count + ')' : ''); }
-    else { html = 'Файла отчёта ' + name + ' в папках нет — добавьте папку в ' + where; said = true; }
-    const sub = [];
+    else if (!x.last_scan || (fo.scanned || 0) < (fo.count || 0)) {  // папку только что добавили: скан до неё ещё не дошёл
+      html = (!x.last_scan || fo.count - (fo.scanned || 0) > 1 ? 'Папки ещё не просматривались' : 'Папка ещё не просматривалась') +
+        (x.autopilot === false ? ' — автообновление выключено' : '');
+    } else if (fo.missing) { cls = 'bad'; html = 'Сервер не видит папку с отчётами' + (fo.count > 1 ? ' (' + fo.missing + ' из ' + fo.count + ')' : ''); }
+    else if (SK.some(k => ((x.last_scan || {}).skipped || {})[k[0]])) {
+      html = 'Файлы в папках пропущены: ' + SK.filter(k => x.last_scan.skipped[k[0]]).map(k => k[1]).join(' и ');
+    } else { html = 'Файла отчёта ' + name + ' в папках нет — добавьте папку в ' + where; said = true; }
+    const sub = [], links = ['<a href="' + esc(opt.c14 || 'c14-day-status.html?on=' + encodeURIComponent(on || '')) + '">C14</a>'];
     if (L) sub.push('<span class="mono">' + esc(L.name) + '</span>');
     if (U.ignored) sub.push((L ? 'ещё ' : 'в папках ') + U.ignored + ' ' + plural(U.ignored, 'файл не распознан', 'файла не распознано', 'файлов не распознано'));
-    sub.push('<a href="' + esc(opt.c14 || 'c14-day-status.html?on=' + encodeURIComponent(on || '')) + '">C14</a>');
-    if (link && !said) sub.push('<a href="' + esc(opt.settings || W.SETTINGS) + '">Настройки</a>');
+    if (link && !said) links.push('<a href="' + esc(opt.settings || W.SETTINGS) + '">Настройки</a>');
+    if (sub.length) sub.push(...links); else html += ' · ' + links.join(' · ');  // одна строка, когда второй нечего сказать
     return { cls, html, title, sub };
   };
+  const SK = [['too_old', 'старые по дате изменения'], ['too_large', 'слишком большие']];
 
   W.html = function (x, opt) {
     const v = W.view(x, opt);
     return '<div data-why="' + esc(x.dataset) + '"><div style="color:var(--' + (v.cls === 'bad' ? 'neg' : 'warn') + ')"' + (v.title ? ' title="' + esc(v.title) + '"' : '') + '>' + v.html + '</div>' +
-      '<div class="mut3" style="font-size:12px;margin-top:2px">' + v.sub.join(' · ') + '</div></div>';
+      (v.sub.length ? '<div class="mut3" style="font-size:12px;margin-top:2px">' + v.sub.join(' · ') + '</div>' : '') + '</div>';
   };
 
   root.INBOX_WHY = W;

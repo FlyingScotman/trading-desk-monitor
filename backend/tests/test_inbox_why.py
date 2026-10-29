@@ -122,6 +122,31 @@ def test_a_file_declined_then_read_is_counted_once(con, tmp_path):
     assert daystatus.dataset_files(con, s, "ocp", D("2026-10-21"))["unread"]["ignored"] == 0
 
 
+def test_a_scan_that_finds_the_lock_taken_keeps_the_last_word(store_url, tmp_path):
+    """A second scan while another holds the lock (an adapter action, ``desk inbox scan`` in another process) lists
+    nothing: the folders stay scanned (review of #445)."""
+    inbox = tmp_path / "in"
+    _good(inbox)
+    s = cfg(tmp_path, inbox)
+    with store.connect(store_url) as con, store.connect(store_url) as other:
+        scan.scan(con, s)
+        before = scan.last_scan
+        other.execute("SELECT pg_advisory_lock(%s)", (scan.SCAN_LOCK,))
+        try:
+            assert scan.scan(con, s).busy
+        finally:
+            other.execute("SELECT pg_advisory_unlock(%s)", (scan.SCAN_LOCK,))
+        assert scan.last_scan is before
+        (f,) = [x for x in daystatus.folders(con, s)["folders"] if not x["output"]]
+        assert f["scanned"] is True and f["matched"] == 1
+        assert daystatus.dataset_files(con, s, "ocp", D("2026-10-21"))["folders"]["scanned"] == 1
+        # the adapter not loaded: nothing listed either
+        bad = cfg(tmp_path, inbox, private_adapter_sha256="0" * 64)
+        scan._handles.clear()
+        assert not scan.scan(con, bad).ok and scan.last_scan is before
+        assert daystatus.folders(con, s)["autopilot"] is True
+
+
 def test_too_old_files_count_for_their_source(con, tmp_path):
     inbox = tmp_path / "in"
     _csv(inbox / "ocp_20200115.csv", "entity;book_id;ccy;ocp_ccy\nENT1;D1;USD;1\n")

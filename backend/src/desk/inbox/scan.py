@@ -884,6 +884,8 @@ def scan(con: psycopg.Connection, settings: Settings, *, now: datetime | None = 
         return s.new_files() + s.known(lambda st, fp: (st in REOFFER and fp != s.h.fingerprint) or st in again,
                                        fresh=True, statuses=(*REOFFER, *again)) + s.transient()
     res = _session(con, settings, now, offers, lookback=True, progress=progress, since=since)
+    if not res.ok:  # another scan holds the lock, or no adapter: nothing listed, the previous scan's word stands
+        return res
     global last_scan
     last_scan = {"at": datetime.now(UTC).isoformat(), "files": dict(res.files), "skipped": dict(res.skipped),
                  "copies": dict(res.copies), "match": dict(res.match), "timings": dict(res.timings),
@@ -892,7 +894,8 @@ def scan(con: psycopg.Connection, settings: Settings, *, now: datetime | None = 
 
 
 last_scan: dict[str, Any] | None = None
-"""The counts of this process's last ``scan`` (``reconcile`` shows them: the skipped files are not ledgered); ``dirs``:
+"""The counts of this process's last ``scan`` that listed the folders (a scan finding the lock taken or the adapter
+not loaded leaves it; ``reconcile`` shows them: the skipped files are not ledgered); ``dirs``:
 per folder of ``Settings.scan_dirs`` (as ``str``) whether it was there, the files listed and those skipped
 (``daystatus.folders``: a folder not scanned yet, an empty one, one whose files are all too old)."""
 

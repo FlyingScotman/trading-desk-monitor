@@ -43,6 +43,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from .. import daystatus, store
 from ..settings import SettingsError, load
 from . import auth
+from .app import ApiError
 
 log = logging.getLogger(__name__)
 public = APIRouter()
@@ -103,7 +104,9 @@ def get_dataset_files(request: Request, dataset: str, on: str | None = None) -> 
     try:  # the settings page answers this user (an admin, or this computer with sign-in off): the page may link it
         auth.require_admin(request, ())
         doc["settings_link"] = True
-    except Exception:  # noqa: BLE001 - ApiError 401/403: a viewer, or another computer
+    except ApiError as e:  # 401/403: a viewer, another computer
+        if e.status not in (401, 403):
+            raise
         doc["settings_link"] = False
     return _json(doc)
 

@@ -45,6 +45,7 @@ t('сводка — одна строка без id источников; раз
 t('не просмотрена, не видна, пуста, всё пропущено, ничего не прочитано, из переменной окружения', () => {
   const w = F.view(F.find(DOC, 'd:\\OVP\\'), DOC);
   assert.strictEqual(w.html, 'ещё не просматривалась'); assert.strictEqual(w.wait, true);
+  assert.strictEqual(F.view(F.find(DOC, 'd:\\OVP\\'), { ...DOC, autopilot: false }).html, 'ещё не просматривалась — автообновление выключено');
   assert.ok(view(fold({ exists: false })).html.startsWith('сервер не видит папку'));
   const empty = fold({ files: 0, matched: 0, ignored: 0, lost: 0, listed: 0, sources: [], datasets: [] });
   assert.strictEqual(strip(view(empty).html), 'Папка пуста'); assert.strictEqual(view(empty).cls, 'warn');
