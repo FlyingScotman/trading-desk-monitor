@@ -21,6 +21,10 @@ is ``fact.extra.fx_liability`` and the funding block's ``fx_liability``, its FX 
 OCP (B2, ``ocp_run``, TDM#59): computed after the FX liability on the same content (the bonds net of it); its block is the ``run_reference`` kind
 ``ocp`` (the derived OCP by component, the reconciliation with the reported ``ocp``, the transfers), its summary
 lineage ``ocp``, its lines in the run log, a position's ``fact.extra.ocp`` (and ``extra.ocp_transfer``).
+
+Funding, the FX liability and the OCP each compute in a savepoint of their own (TDM#215): an SQL error inside one
+rolls back only its reads and leaves its block ``failed``; the run is still published, also inside a caller's
+transaction.
 """
 
 from __future__ import annotations

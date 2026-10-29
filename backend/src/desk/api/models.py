@@ -300,7 +300,7 @@ OcpState = Literal["computed", "no_report", "failed", "not_computed"]
 
 class OcpLineOut(BaseModel):
     key: str = Field(description="position_id, CASH|<book>|<ccy>|<account>, FUND|<position_id>")
-    component: str = Field(description="cash, fx_legs, futures, bonds, funding, other, transfers")
+    component: str = Field(description="cash, fx_legs, ndf, futures, options, bonds, funding, other, transfers")
     book_id: str
     entity: str
     ccy: str
@@ -332,6 +332,8 @@ class OcpComparison(BaseModel):
     hints: list[str] = Field(description="Which component (or sign) would close the break")
     set_id: int | None
     valid_date: date | None
+    scope: dict[str, str] = Field(default_factory=dict, description="The report unit's scope (entity, book_id)")
+    books: list[str] = Field(default_factory=list, description="The books the comparison sums (a run before v2: [])")
 
     model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
 
@@ -362,10 +364,57 @@ class OcpTransfer(BaseModel):
     deals: list[OcpTransferDeal]
 
 
+OcpSource = Literal["report", "derived", "derived_stale_report"]
+
+
+class OcpPublishedLine(BaseModel):
+    """One figure of the published OCP (``rules.ocp.published``, TDM#416): a report scope's report + the components
+    outside the report, or a derived OCP."""
+
+    entity: str
+    book_id: str | None = Field(description="None: an entity-level report unit (its books in ``books``)")
+    books: list[str] = Field(description="The books whose OCP the figure holds")
+    ccy: str
+    amount: float = Field(description="Signed, units of the currency: + long")
+    source: OcpSource = Field(description="report: the report + outside components; derived: from positions (no report "
+                                          "unit covers); derived_stale_report: from positions, the unit is too old")
+    components: list[str] = Field(description="The components outside the report added to it (source report)")
+    outside: dict[str, float] = Field(description="Their amounts")
+    reported: float | None = Field(description="The report's figure (an entity's less the books published apart)")
+    valid_date: date | None = Field(description="The report unit's date")
+
+
+class OcpPublishedCcy(BaseModel):
+    total: float
+    rate: float | None
+    total_rub: float | None
+    by_source: dict[str, float] = Field(description="source -> amount")
+
+
+class OcpPublished(BaseModel):
+    """The OCP the run publishes (TDM#416): the bank's report where a unit covers plus the components outside it,
+    derived elsewhere. ``basis`` None: a run before v2 of the block (the pages show the derived OCP)."""
+
+    basis: Literal["report_plus_outside", "derived"] | None = None
+    by_ccy: dict[str, OcpPublishedCcy] = Field(default_factory=dict)
+    by_book: list[OcpPublishedLine] = Field(default_factory=list)
+
+
+class OcpGap(BaseModel):
+    """What is missing for the published OCP to be trusted."""
+
+    code: Literal["no_report", "stale_report", "outside_without_terms", "books_outside_report", "outside_double_count"]
+    text: str
+    items: list[str] = Field(description="Scopes, books or position ids concerned (at most 50)")
+
+
 class RunOcp(BaseModel):
-    """The run's OCP (wave B2, TDM#59, ``publish.ocp_run``): derived from positions by component, reconciled with the
-    reported ``ocp`` and the OCP transfers. ``state`` no_report: no ``ocp`` unit in force (derived only);
-    not_computed: a run before B2. ``policy.provisional``: the conventions at a provisional default (TDM#60)."""
+    """The run's OCP (wave B2, TDM#59, ``publish.ocp_run``): the **published** OCP (TDM#416: the bank's report + the
+    components outside it, derived where no report unit covers) and its ``gaps``, the OCP derived from positions by
+    component, its reconciliation with the reported ``ocp`` and the OCP transfers. ``state`` no_report: no ``ocp``
+    unit in force (derived only); not_computed: a run before B2. ``policy.source``: where each convention came from
+    (the adapter's ``ocp_policy``, an owner decision, a provisional default); ``policy.provisional``: those neither
+    decided nor given (TDM#60, TDM#180)."""
 
     run_id: int
     state: OcpState
@@ -373,7 +422,10 @@ class RunOcp(BaseModel):
     as_of: date | None
     reporting_ccy: str
     components: list[dict[str, str]]
+    sources: list[dict[str, str]] = Field(default_factory=list, description="source key -> its name on the pages")
     policy: dict[str, Any] | None
+    published: OcpPublished = Field(default_factory=OcpPublished)
+    gaps: list[OcpGap] = Field(default_factory=list)
     by_ccy: dict[str, dict[str, Any]] = Field(description="The desk's derived OCP: components, total, rate, total_rub")
     by_book: list[dict[str, Any]]
     lines: list[OcpLineOut]

@@ -161,34 +161,39 @@ class Report:
         }
 
     def text(self) -> str:
-        j = self.to_json()
-        lines = [f"desk adapter check: backend {j['backend']}, SPI {j['spi']}, contract {j.get('contract')}",
-                 f"adapter {j.get('name')} {j.get('version')}, fingerprint {j.get('fingerprint')}",
-                 f"instruments: {j['instruments']}; calendar: {j['calendar']}"]
-        if self.load_error:
-            return "\n".join([*lines, f"load error: {self.load_error}", "result: FAIL"])
-        f = j["files"]
-        if j["reference"]:
-            lines.append("reference: " + ", ".join(f"{k} {v}" for k, v in j["reference"].items()))
-            lines += [f"    {i['severity']} {i['code']} {i['count']}" for i in j["reference_issues"]]
-        lines.append(f"files: {f['matched']} matched, {f['ignored']} ignored, {f['match_failed']} match_failed "
-                     f"(match {j['match_seconds']} s)")
-        for s in j["sources"]:
-            vd = s["valid_date"] or "waiting_calendar"
-            units = ", ".join(f"{v} {k}" for k, v in s["units"].items()) or "none"
-            share = "" if s["unmapped_share_pct"] is None else " (" + ", ".join(
-                f"{p}% of {c} notional" for c, p in s["unmapped_share_pct"].items()) + ")"
-            lines.append(f"{s['source']} {s['report_date']} -> {vd}: files {s['files']}, rows {s['rows']}, "
-                         f"units {units}, controls {'/'.join(s['controls']) or '-'}, unmapped {s['unmapped']}{share}"
-                         + (f", quantity only {s['quantity_only']}" if s["quantity_only"] else ""))
-            lines += [f"    {i['severity']} {i['code']} {i['count']}" for i in s["issues"]]
-        for kind, c in (("weekdays of report_date", j["weekdays"]["report_date"]),
-                        ("weekdays of valid_date", j["weekdays"]["valid_date"])):
-            lines.append(f"{kind}: " + ", ".join(f"{d} {c[d]}" for d in _WD if d in c))
-        lines += [f"note {k} {v}" for k, v in j["notes"].items()]
-        lines += [f"problem {k} {v}" for k, v in j["problems"].items()]
-        lines.append("result: " + ("OK" if self.ok else "FAIL"))
-        return "\n".join(lines)
+        return summary_text(self.to_json())
+
+
+def summary_text(j: dict) -> str:
+    """The printed summary of a report's ``to_json()`` (the CLI's output; the settings page builds it from the JSON
+    of a kit run in a child process, ``desk.adapter_jobs``)."""
+    lines = [f"desk adapter check: backend {j['backend']}, SPI {j['spi']}, contract {j.get('contract')}",
+             f"adapter {j.get('name')} {j.get('version')}, fingerprint {j.get('fingerprint')}",
+             f"instruments: {j['instruments']}; calendar: {j['calendar']}"]
+    if j.get("load_error"):
+        return "\n".join([*lines, f"load error: {j['load_error']}", "result: FAIL"])
+    f = j["files"]
+    if j["reference"]:
+        lines.append("reference: " + ", ".join(f"{k} {v}" for k, v in j["reference"].items()))
+        lines += [f"    {i['severity']} {i['code']} {i['count']}" for i in j["reference_issues"]]
+    lines.append(f"files: {f['matched']} matched, {f['ignored']} ignored, {f['match_failed']} match_failed "
+                 f"(match {j['match_seconds']} s)")
+    for s in j["sources"]:
+        vd = s["valid_date"] or "waiting_calendar"
+        units = ", ".join(f"{v} {k}" for k, v in s["units"].items()) or "none"
+        share = "" if s["unmapped_share_pct"] is None else " (" + ", ".join(
+            f"{p}% of {c} notional" for c, p in s["unmapped_share_pct"].items()) + ")"
+        lines.append(f"{s['source']} {s['report_date']} -> {vd}: files {s['files']}, rows {s['rows']}, "
+                     f"units {units}, controls {'/'.join(s['controls']) or '-'}, unmapped {s['unmapped']}{share}"
+                     + (f", quantity only {s['quantity_only']}" if s["quantity_only"] else ""))
+        lines += [f"    {i['severity']} {i['code']} {i['count']}" for i in s["issues"]]
+    for kind, c in (("weekdays of report_date", j["weekdays"]["report_date"]),
+                    ("weekdays of valid_date", j["weekdays"]["valid_date"])):
+        lines.append(f"{kind}: " + ", ".join(f"{d} {c[d]}" for d in _WD if d in c))
+    lines += [f"note {k} {v}" for k, v in j["notes"].items()]
+    lines += [f"problem {k} {v}" for k, v in j["problems"].items()]
+    lines.append("result: " + ("OK" if j["ok"] else "FAIL"))
+    return "\n".join(lines)
 
 
 def _instrument(row: dict, instruments: Instruments, on: str) -> dict | None:
@@ -213,8 +218,10 @@ def _notional(row: dict, rec: dict | None) -> tuple[str, Decimal] | None:
 
 def check(adapter_spec: str | None, dirs: list[str], *, stub_ctx: bool = False, snapshot_dir: str | None = None,
           config_dir: str | None = None, expected_sha256: str | None = None, match_timeout_s: float = 10.0,
-          read_timeout_s: float = 600.0) -> Report:
-    handle = load_adapter(adapter_spec, config_dir, expected_sha256, inbox_dirs=dirs)
+          read_timeout_s: float = 600.0, ctx_dirs: list[str] | None = None) -> Report:
+    """``ctx_dirs``: the adapter's ``ctx.inbox_dirs`` (08 §7), default the folders checked; the settings page passes the
+    inbox folders, so a check of the adapter's output folder does not hand the adapter its own outputs."""
+    handle = load_adapter(adapter_spec, config_dir, expected_sha256, inbox_dirs=dirs if ctx_dirs is None else ctx_dirs)
     desc = handle.describe
     spec = adapter_spec or runner.REFERENCE_ADAPTER  # a folder by its name only: the path can name the user
     report = Report({"adapter": Path(spec.rstrip("/\\")).name if runner.is_path_spec(spec) else spec,
@@ -364,9 +371,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--stub-ctx", action="store_true", help="every ctx.instruments lookup returns None")
     ap.add_argument("--snapshots", default=None, help="cached snapshot folder (instruments and calendar)")
     ap.add_argument("--config", default=None, help="the adapter's config folder (DESK_PRIVATE_ADAPTER_CONFIG)")
+    ap.add_argument("--sha256", default=None, help="the expected adapter fingerprint (DESK_PRIVATE_ADAPTER_SHA256)")
+    ap.add_argument("--match-timeout", type=float, default=10.0, help="seconds per match call (10)")
+    ap.add_argument("--read-timeout", type=float, default=600.0, help="seconds per read call (600)")
+    ap.add_argument("--inbox-dir", action="append", default=None,
+                    help="ctx.inbox_dirs of the adapter (repeatable; default: the --dir folders)")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
-    rep = check(a.adapter, a.dir, stub_ctx=a.stub_ctx, snapshot_dir=a.snapshots, config_dir=a.config)
+    rep = check(a.adapter, a.dir, stub_ctx=a.stub_ctx, snapshot_dir=a.snapshots, config_dir=a.config,
+                expected_sha256=a.sha256, match_timeout_s=a.match_timeout, read_timeout_s=a.read_timeout,
+                ctx_dirs=None if a.inbox_dir is None else [d for d in a.inbox_dir if d])
     print(json.dumps(rep.to_json(), indent=2, ensure_ascii=False) if a.json else rep.text())
     return 0 if rep.ok else 1
 

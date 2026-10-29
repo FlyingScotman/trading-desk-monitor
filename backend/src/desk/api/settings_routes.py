@@ -97,6 +97,10 @@ def _effective(st: Settings) -> dict[str, Any]:
         "acquisition_python": str(st.acquisition_python) if st.acquisition_python else None,
         "inbox_dirs": [str(d) for d in st.inbox_dirs], "inbox_archive": str(st.inbox_archive),
         "inbox_poll_seconds": st.inbox_poll_seconds, "adapter_check_timeout_s": st.adapter_check_timeout_s,
+        "adapter_match_timeout_s": st.adapter_match_timeout_s, "adapter_read_timeout_s": st.adapter_read_timeout_s,
+        "adapter_kit_timeout_s": st.adapter_kit_timeout_s, "adapter_status_timeout_s": st.adapter_status_timeout_s,
+        "adapter_action_timeout_s": st.adapter_action_timeout_s, "inbox_max_file_mb": st.inbox_max_file_mb,
+        "adapter_output_dir": str(st.adapter_output_dir),
         "autopilot": st.autopilot,
         "autopilot_sync_last": st.autopilot_sync_last, "intraday": st.intraday,
         "inbox_lookback_days": st.inbox_lookback_days,
@@ -262,7 +266,9 @@ def get_adapter() -> dict[str, Any]:
             "reference": st.private_adapter is None, "default": st.private_adapter_default, "name": h.name, "version": h.version,
             "fingerprint": h.fingerprint, "config_dir": str(cfg) if cfg else None,
             "describe": h.describe or None, "config_files": files, "settings_tabs": tabs,
-            "warnings": warnings + [w for w in h.warnings if w.startswith("settings_tabs")], "error": h.error}
+            "optional": list(h.optional), "actions": [a["id"] for a in h.actions],
+            "warnings": warnings + [w for w in h.warnings if w.startswith(("settings_tabs", "actions"))],
+            "error": h.error}
 
 
 def _config_path(st: Settings, name: str) -> Path:

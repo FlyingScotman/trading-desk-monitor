@@ -1,4 +1,4 @@
-# Canonical fixtures of private contract 1.2–1.4 (datasets beyond positions)
+# Canonical fixtures of private contract 1.2–1.5 (datasets beyond positions)
 
 Synthetic files in the canonical v1 CSV (`;`, UTF-8 with BOM, CRLF) for the reference adapter
 `desk.inbox.reference`. All `end_of_day`, so the date in the name is the business date and no calendar is
@@ -9,7 +9,8 @@ needed. No real data: books, entities, rates and amounts are invented.
 per book type and currency; `trading_rub` has two rows, the second from 2026-10-19 with a wider spread; `derivs_usd` and `ent2_cash_usd` fund the USD balances of the cash
 history, B3). `funding_policy.csv` (private/1.3): a firm-wide row (`htm_base` `cash_spent`, the DEC01 timing at the engine's
 neutral choices, REPO at the security's rate from 30 days at the contract rate, write-off on the last calendar
-day) and `TRADING` swept monthly.
+day) and `TRADING` swept monthly. `ocp_policy.csv` (private/1.5): an invented composition, the report holds the cash, the
+futures and the options, NDFs left out, published as the report plus the other components from positions; a revision from 2026-10-21 with a tolerance and a report age.
 
 | File | What it tests |
 |---|---|

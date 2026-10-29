@@ -31,6 +31,7 @@ from desk.inbox.spi import (
     DATASET_KEYS,
     HIT_KEYS,
     MULTI_DATE_DATASETS,
+    OCP_COMPONENTS,
     READ_KEYS,
     REFERENCE_KEYS,
     REFERENCE_KINDS,
@@ -467,6 +468,11 @@ POLICY_FIRM_WIDE = ("htm_base", "mv_base_date", "cash_base_date", "new_positions
 """``funding_policy`` fields of the firm-wide row (no ``book_type``); ``pnl_sweep`` is per book type (private/1.3)."""
 
 
+OCP_POLICY_FIELDS = ("report_components", "published", "amount_basis", "include_ndf", "cash_from_balances", "settle_window_bd",
+                     "tolerance_ccy", "report_max_age_days")
+"""``ocp_policy`` fields (private/1.5): checked for two rows in force on one ``valid_from`` with different values."""
+
+
 FUNDING_SELECTORS = ("instrument_id", "book_id", "entity", "book_type", "ccy")
 """Selectors of a funding rule, most specific first (08 §7 ``funding_rules``)."""
 
@@ -479,7 +485,8 @@ def check_reference_tables(result: Any) -> tuple[dict[str, list[dict] | None], l
     Cross-checks are warnings: a book or rule naming an entity the ``entities`` table lacks (``unknown_entity``), a
     rule naming an unknown book (``unknown_book``), two rules with equal selectors and ``valid_from``
     (``ambiguous_rule``), a ``funding_policy`` setting given twice with different values for the same book type and
-    ``valid_from`` (``ambiguous_policy``)."""
+    ``valid_from`` (``ambiguous_policy``), the same of an ``ocp_policy`` field, an ``ocp_policy.report_components``
+    naming an unknown component (``unknown_component``)."""
     books, issues = check_reference(result)
     tables: dict[str, list[dict] | None] = {"books": books}
     if books is None:
@@ -521,6 +528,28 @@ def check_reference_tables(result: Any) -> tuple[dict[str, list[dict] | None], l
         if len(values) > 1:  # the engine leaves such a setting at its default and says so (rules.reference)
             issues.append(_issue("warning", "ambiguous_policy", None, None,
                                  f"funding_policy: {f} set twice with different values on one valid_from"))
+    ocp: dict[tuple, set] = {}
+    for r in tables.get("ocp_policy") or []:
+        if r.get("active", True) is False:
+            continue
+        for f in OCP_POLICY_FIELDS:
+            if f in r:
+                v = r[f]
+                if f == "report_components":
+                    v = frozenset(c.strip().lower() for c in str(v).split(",") if c.strip())
+                    if v - set(OCP_COMPONENTS):  # the engine keeps its default for the field and says so
+                        issues.append(_issue("warning", "unknown_component", None, r.get("_src"),
+                                             "ocp_policy: report_components names a component the backend has not"))
+                elif f == "tolerance_ccy":
+                    v = amount(v)  # 1000 and 1000.0 are one tolerance
+                elif f in ("settle_window_bd", "report_max_age_days") and isinstance(v, int) and v < 0:
+                    issues.append(_issue("warning", "bad_policy_value", None, r.get("_src"),
+                                         f"ocp_policy: {f} is negative, the engine keeps its default"))
+                ocp.setdefault((r.get("valid_from"), f), set()).add(v)
+    for (_, f), values in ocp.items():
+        if len(values) > 1:
+            issues.append(_issue("warning", "ambiguous_policy", None, None,
+                                 f"ocp_policy: {f} set twice with different values on one valid_from"))
     return tables, issues
 
 

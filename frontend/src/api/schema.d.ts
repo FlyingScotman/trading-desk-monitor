@@ -323,10 +323,13 @@ export interface paths {
         };
         /**
          * Ocp
-         * @description The run's OCP (B2, TDM#59): derived from positions by component (cash and to be settled, PV of the FX
-         *     legs, futures, bonds, their funding liability, other, OCP transfers), reconciled per currency with the
-         *     reported ``ocp`` at the report's level, the breaks with their explanation and the transfers per book; state
-         *     ``no_report`` without a report in force, ``not_computed`` for a run before B2.
+         * @description The run's OCP (B2, TDM#59): the published OCP (TDM#416: the bank's OCP report + the components it does
+         *     not hold, derived from positions where no report unit covers; per currency and per book with the source of
+         *     each figure) and what it lacks (``gaps``); the OCP derived from positions by component (cash and to be
+         *     settled, PV of the FX legs, NDF, futures, options, bonds, their funding liability, other, OCP transfers),
+         *     reconciled per currency with the reported ``ocp`` at the report's level, the breaks with their explanation
+         *     and the transfers per book; state ``no_report`` without a report in force, ``not_computed`` for a run before
+         *     B2.
          */
         get: operations["ocp_api_v1_runs__run_id__ocp_get"];
         put?: never;
@@ -1836,6 +1839,36 @@ export interface components {
             set_id: number | null;
             /** Valid Date */
             valid_date: string | null;
+            /**
+             * Scope
+             * @description The report unit's scope (entity, book_id)
+             */
+            scope?: {
+                [key: string]: string;
+            };
+            /**
+             * Books
+             * @description The books the comparison sums (a run before v2: [])
+             */
+            books?: string[];
+        };
+        /**
+         * OcpGap
+         * @description What is missing for the published OCP to be trusted.
+         */
+        OcpGap: {
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "no_report" | "stale_report" | "outside_without_terms" | "books_outside_report" | "outside_double_count";
+            /** Text */
+            text: string;
+            /**
+             * Items
+             * @description Scopes, books or position ids concerned (at most 50)
+             */
+            items: string[];
         };
         /** OcpLineOut */
         OcpLineOut: {
@@ -1846,7 +1879,7 @@ export interface components {
             key: string;
             /**
              * Component
-             * @description cash, fx_legs, futures, bonds, funding, other, transfers
+             * @description cash, fx_legs, ndf, futures, options, bonds, funding, other, transfers
              */
             component: string;
             /** Book Id */
@@ -1869,6 +1902,91 @@ export interface components {
             basis: string;
             /** Note */
             note: string;
+        };
+        /**
+         * OcpPublished
+         * @description The OCP the run publishes (TDM#416): the bank's report where a unit covers plus the components outside it,
+         *     derived elsewhere. ``basis`` None: a run before v2 of the block (the pages show the derived OCP).
+         */
+        OcpPublished: {
+            /** Basis */
+            basis?: ("report_plus_outside" | "derived") | null;
+            /** By Ccy */
+            by_ccy?: {
+                [key: string]: components["schemas"]["OcpPublishedCcy"];
+            };
+            /** By Book */
+            by_book?: components["schemas"]["OcpPublishedLine"][];
+        };
+        /** OcpPublishedCcy */
+        OcpPublishedCcy: {
+            /** Total */
+            total: number;
+            /** Rate */
+            rate: number | null;
+            /** Total Rub */
+            total_rub: number | null;
+            /**
+             * By Source
+             * @description source -> amount
+             */
+            by_source: {
+                [key: string]: number;
+            };
+        };
+        /**
+         * OcpPublishedLine
+         * @description One figure of the published OCP (``rules.ocp.published``, TDM#416): a report scope's report + the components
+         *     outside the report, or a derived OCP.
+         */
+        OcpPublishedLine: {
+            /** Entity */
+            entity: string;
+            /**
+             * Book Id
+             * @description None: an entity-level report unit (its books in ``books``)
+             */
+            book_id: string | null;
+            /**
+             * Books
+             * @description The books whose OCP the figure holds
+             */
+            books: string[];
+            /** Ccy */
+            ccy: string;
+            /**
+             * Amount
+             * @description Signed, units of the currency: + long
+             */
+            amount: number;
+            /**
+             * Source
+             * @description report: the report + outside components; derived: from positions (no report unit covers); derived_stale_report: from positions, the unit is too old
+             * @enum {string}
+             */
+            source: "report" | "derived" | "derived_stale_report";
+            /**
+             * Components
+             * @description The components outside the report added to it (source report)
+             */
+            components: string[];
+            /**
+             * Outside
+             * @description Their amounts
+             */
+            outside: {
+                [key: string]: number;
+            };
+            /**
+             * Reported
+             * @description The report's figure (an entity's less the books published apart)
+             */
+            reported: number | null;
+            /**
+             * Valid Date
+             * @description The report unit's date
+             */
+            valid_date: string | null;
         };
         /** OcpTransfer */
         OcpTransfer: {
@@ -2907,9 +3025,12 @@ export interface components {
         };
         /**
          * RunOcp
-         * @description The run's OCP (wave B2, TDM#59, ``publish.ocp_run``): derived from positions by component, reconciled with the
-         *     reported ``ocp`` and the OCP transfers. ``state`` no_report: no ``ocp`` unit in force (derived only);
-         *     not_computed: a run before B2. ``policy.provisional``: the conventions at a provisional default (TDM#60).
+         * @description The run's OCP (wave B2, TDM#59, ``publish.ocp_run``): the **published** OCP (TDM#416: the bank's report + the
+         *     components outside it, derived where no report unit covers) and its ``gaps``, the OCP derived from positions by
+         *     component, its reconciliation with the reported ``ocp`` and the OCP transfers. ``state`` no_report: no ``ocp``
+         *     unit in force (derived only); not_computed: a run before B2. ``policy.source``: where each convention came from
+         *     (the adapter's ``ocp_policy``, an owner decision, a provisional default); ``policy.provisional``: those neither
+         *     decided nor given (TDM#60, TDM#180).
          */
         RunOcp: {
             /** Run Id */
@@ -2929,10 +3050,20 @@ export interface components {
             components: {
                 [key: string]: string;
             }[];
+            /**
+             * Sources
+             * @description source key -> its name on the pages
+             */
+            sources?: {
+                [key: string]: string;
+            }[];
             /** Policy */
             policy: {
                 [key: string]: unknown;
             } | null;
+            published?: components["schemas"]["OcpPublished"];
+            /** Gaps */
+            gaps?: components["schemas"]["OcpGap"][];
             /**
              * By Ccy
              * @description The desk's derived OCP: components, total, rate, total_rub

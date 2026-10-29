@@ -11,11 +11,14 @@ reporting currency has no OCP), in one component (``COMPONENTS``):
   balance of ``desk.cash`` per book and currency, a ledger break left out with a note) and the FX
   rows valued without core whose value date is none or within ``settle_window_bd`` business days (a balance, a
   TOD/TOM/spot deal not settled yet): the row's amount;
-- ``fx_legs`` — PV of the currency legs: an FX derivative valued by core from its terms (forward, swap, NDF,
+- ``fx_legs`` — PV of the deliverable currency legs: an FX derivative valued by core from its terms (forward, swap,
   cross) at its ``fx_delta`` (core's spot equivalent) or, with ``amount_basis`` ``nominal``, at its
   ``extra.ocp_amount``; an FX row without terms and a later value date at its amount (basis ``notional``);
-  an NDF only with ``include_ndf``;
-- ``futures`` — an FX future valued by core (product ``fx_future``) at its FX delta;
+- ``ndf`` — an NDF (core's ``fx_ndf``, the terms' ``ndf``, the report's product group ``fx_ndf``), amounted as the FX
+  legs; only with ``include_ndf``;
+- ``futures`` — an FX future (core's ``fx_future`` or the report's product group ``fx_future``) at its FX delta;
+- ``options`` — an FX option (``option`` in core's product or the product group), at its FX delta or, without core,
+  the report's amount;
 - ``bonds`` — a foreign-currency bond: its FX delta. A run since TDM#54 publishes it net of the bond's currency
   OCP liability (``publish.fx_liability``, OQ-04, OQ-17, TDM#266; basis ``mv_net``): the dirty MV of today less the
   dirty MV at the last OCP transfer (the previous business day) plus the day's coupons, in the currency: the FX PnL
@@ -42,6 +45,12 @@ the explained part of reported vs the full derived OCP; ``hints`` name a compone
 inclusion would close a break, and a sign flip. Derived OCP of books no report unit covers is listed apart
 (``outside_report``), never a break.
 
+**Published OCP** (owner, 28.10.2026, TDM#416, ``published``): where a usable report unit covers a book or an entity,
+the report's figure plus the components the report does not hold (``report_components``, from the adapter's
+``ocp_policy``), derived from positions; a unit older than ``report_max_age_days`` and a book no unit covers are
+derived. Overlapping units publish each book once. ``gaps`` say what is missing for it to be trusted, among them a
+component added from positions that the reconciliation says the report already holds (``outside_double_count``).
+
 **Transfers** (DEC06): a deal is an OCP transfer under ``TransferRule.INTERNAL_COUNTERPARTY`` when its trade terms
 name as ``counterparty_id`` the book's ``ocp_to`` or a book whose ``ocp_to`` is this book. Per book that has an
 ``ocp_to`` or a transfer deal, per currency: ``before`` (the book's derived OCP without the transfers),
@@ -62,15 +71,19 @@ from enum import Enum
 from itertools import combinations
 from typing import Any
 
-from .. import cash
 from .funding import FundingLiability, OpenDecision
 
-COMPONENTS = ("cash", "fx_legs", "futures", "bonds", "funding", "other", "transfers")
+COMPONENTS = ("cash", "fx_legs", "ndf", "futures", "options", "bonds", "funding", "other", "transfers")
 COMPONENT_TEXT = {
-    "cash": "кэш и к расчёту", "fx_legs": "PV валютных ног", "futures": "фьючерсы", "bonds": "облигации",
-    "funding": "пассив фондирования", "other": "прочее", "transfers": "перенос ОВП",
+    "cash": "кэш и к расчёту", "fx_legs": "PV валютных ног", "ndf": "NDF", "futures": "фьючерсы",
+    "options": "опционы", "bonds": "облигации", "funding": "пассив фондирования", "other": "прочее",
+    "transfers": "перенос ОВП",
 }
 """Component -> its name on the pages and in the run log."""
+
+REPORT, DERIVED, DERIVED_STALE = "report", "derived", "derived_stale_report"
+SOURCE_TEXT = {REPORT: "отчёт", DERIVED: "из позиций", DERIVED_STALE: "из позиций: отчёт устарел"}
+"""The source of a published OCP figure (``published``) -> its name on the pages."""
 
 
 class AmountBasis(str, Enum):
@@ -86,6 +99,11 @@ class TransferRule(str, Enum):
 class TransferTarget(str, Enum):
     FULL = "full"  # the transfer takes the book's whole OCP: expected = -before
     NONE = "none"  # no expectation: before, transferred and after only
+
+
+class PublishedBasis(str, Enum):
+    REPORT_PLUS_OUTSIDE = "report_plus_outside"  # the report where it covers + the components it does not hold
+    DERIVED = "derived"  # every figure from positions (before TDM#416): the report only reconciled
 
 
 @dataclass(frozen=True)
@@ -105,6 +123,12 @@ class OcpPolicy:
     transfer_target: TransferTarget = TransferTarget.FULL
     tolerance_ccy: float = 1000.0
     reporting_ccy: str = "RUB"
+    published: PublishedBasis = PublishedBasis.REPORT_PLUS_OUTSIDE
+    """What the run publishes as the OCP (owner, 28.10.2026, TDM#416; ``DECIDED``): the bank's report plus the
+    components outside it, derived where no report unit covers."""
+    report_max_age_days: int = 0
+    """A report unit carried forward from a ``valid_date`` more than this many calendar days before the run's date is
+    not published: its books fall back to the derived OCP (``derived_stale_report``)."""
 
     def __post_init__(self) -> None:
         bad = set(self.report_components) - set(COMPONENTS)
@@ -136,7 +160,16 @@ OPEN_DECISIONS: tuple[OpenDecision, ...] = (
                  "full (the book's whole OCP before the transfer)", ("none",)),
     OpenDecision("tolerance_ccy", "DEC12", "OCP break threshold, units of the currency",
                  "1000 (informational, not an approved limit)", ("any",)),
+    OpenDecision("report_max_age_days", "TDM#416", "How old a carried-forward OCP report may be and still be published",
+                 "0 (only the report of the date; an older one: the derived OCP, said)", ("any number of days",)),
 )
+
+DECIDED: dict[str, str] = {
+    "published": "OQ-18 (владелец, 28.10.2026, TDM#416)",
+    "bond_funding_liability": "OQ-04 (владелец, 23.10.2026, TDM#54)",
+}
+"""Policy fields an owner decision sets (``docs/program/DECISIONS.md``): never provisional, the private adapter's
+``ocp_policy`` may still give the organisation's own value."""
 
 
 @dataclass(frozen=True)
@@ -237,15 +270,36 @@ def _amounts(x: Mapping[str, Any] | None, policy: OcpPolicy) -> dict[str, float]
     return out
 
 
+def product_group(rep: Any) -> str:
+    """The report's ``x_product_group`` of a row (``extra.reported``, its ``x_*`` flat or under ``x``), lower case;
+    "" without one (as ``publish.summary.product_group``)."""
+    if not isinstance(rep, Mapping):
+        return ""
+    pg = rep.get("x_product_group")
+    if pg is None and isinstance(rep.get("x"), Mapping):
+        pg = rep["x"].get("x_product_group")
+    return str(pg or "").lower()
+
+
 def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[str, Any]],
              on: date, policy: OcpPolicy) -> tuple[str | None, dict[str, float], str, str]:
     """(component, amount per currency, basis, note) of a published row; component None: no OCP (a RUB row, an
-    NDF left out)."""
+    NDF left out). An NDF (core's ``fx_ndf``, the terms' ``ndf``, the report's product group ``fx_ndf``), an option
+    (``option`` in core's product or the product group) and an FX future (core's ``fx_future`` or the product group
+    ``fx_future``) are components of their own, so that the adapter's ``ocp_policy`` can place each inside or outside
+    the report on its own (TDM#416)."""
     ex = row.get("extra") or {}
+    rep = ex.get("reported") or {}
     delta = _amounts(row.get("fx_delta"), policy)
     core = ex.get("core") or {}
-    product = str(core.get("product") or "")
-    ndf = "fx_ndf" in product or any(_truthy(t.get("ndf")) for t in terms)
+    product, group = str(core.get("product") or "").lower(), product_group(rep)
+    ndf = "fx_ndf" in product or group == "fx_ndf" or any(_truthy(t.get("ndf")) for t in terms)
+    own = "options" if "option" in product or "option" in group else \
+        "futures" if "fx_future" in product or group == "fx_future" else None
+    kind = str(rep.get("asset_class") or "").lower()
+    fx_like = row.get("instr_type") == "FX" or kind == "fx"
+    vd = _day(rep.get("value_date"))
+    later = vd is not None and vd > add_business_days(on, policy.settle_window_bd)
     if core:
         basis = policy.amount_basis.value
         if policy.amount_basis is AmountBasis.NOMINAL:
@@ -253,7 +307,7 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
     elif row.get("instr_type") == "BOND":
         basis = "mv_net" if _net_of_liability(row) else "mv"
     else:
-        basis = "notional" if ex.get("fx_delta_basis") else "amount"
+        basis = "notional" if ex.get("fx_delta_basis") or (fx_like and later and (ndf or own)) else "amount"
     if not delta:
         return None, {}, basis, ""
     if is_transfer(row, terms, books, policy):
@@ -263,12 +317,15 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
     if row.get("instr_type") == "BOND":
         return "bonds", delta, basis, ("грязная MV за вычетом валютного пассива фондирования" if basis == "mv_net"
                                        else "")
+    note = "" if core or basis != "notional" else "без условий сделки: номинал, не PV"
+    if ndf:
+        return "ndf", delta, basis, note
+    if own:
+        return own, delta, basis, note
     if core:
-        return ("futures" if "fx_future" in product else "fx_legs"), delta, basis, ""
-    kind = str((ex.get("reported") or {}).get("asset_class") or "").lower()
-    if row.get("instr_type") == "FX" or kind == "fx":
-        vd = _day((ex.get("reported") or {}).get("value_date"))
-        if vd is None or vd <= add_business_days(on, policy.settle_window_bd):
+        return "fx_legs", delta, basis, ""
+    if fx_like:
+        if not later:
             return "cash", delta, "amount", ""
         return "fx_legs", delta, "notional", "без условий сделки: номинал, не PV"
     return "other", delta, basis, ""
@@ -306,6 +363,10 @@ def cash_lines(cash_rows: Iterable[Mapping[str, Any]], policy: OcpPolicy = PROVI
     *known* balance by ``desk.cash.compare`` (the same balance reported by several ledgers counts once: their common
     value). A balance whose ledgers disagree (``break``) has no known value: it is left out and said in the notes
     (conservative default of ``desk.cash``, never the larger, the smaller or the first ledger)."""
+    # here, not at the top: desk.cash -> store -> settings -> funding_settings -> rules.reference imports this module
+    # (a cycle when desk.settings is imported first)
+    from .. import cash
+
     if not policy.cash_from_balances:
         return [], []
     rows = [r for r in cash_rows if r.get("ccy") and r.get("ccy") != policy.reporting_ccy
@@ -404,12 +465,15 @@ def reconcile(lines: Sequence[OcpLine], report_rows: Sequence[Mapping[str, Any]]
             x["rate"] = _f(r.get("rate_rub_per_unit")) or x["rate"]
             if r.get("_src"):
                 x["src"].append(r["_src"])
+        at_of = {b: b if (book or b in named or (named and not entity_rows)) else None for b in books_in}
+        books_at: dict[str | None, set[str]] = defaultdict(set)
+        for b in books_in:
+            books_at[at_of[b]].add(b)
         parts_by: dict[tuple[str | None, str], dict[str, float]] = defaultdict(lambda: defaultdict(float))
         for (_, b, ccy), parts in derived.items():
             if b in books_in:
-                at = b if (book or b in named or (named and not entity_rows)) else None
                 for c, v in parts.items():
-                    parts_by[(at, ccy)][c] += v
+                    parts_by[(at_of[b], ccy)][c] += v
         for key in sorted(set(reported) | set(parts_by), key=lambda k: (str(k[0]), k[1])):
             b, ccy = key
             parts = {c: parts_by[key][c] for c in COMPONENTS if abs(parts_by[key].get(c, 0.0)) > 0}
@@ -425,13 +489,176 @@ def reconcile(lines: Sequence[OcpLine], report_rows: Sequence[Mapping[str, Any]]
                 "not_in_report": {c: v for c, v in parts.items() if c not in policy.report_components},
                 "break": brk, "over": over,
                 "hints": _hints(brk, rep["ocp_ccy"], in_report, parts, policy) if over else [],
-                "set_id": u.get("set_id"), "valid_date": u.get("valid_date"),
+                "set_id": u.get("set_id"), "valid_date": u.get("valid_date"), "scope": dict(scope),
+                "books": sorted(books_at.get(b, set()) | ({b} if b else set())),
             })
     outside = []
     for (e, b, ccy), parts in sorted(derived.items()):
         if b not in covered and abs(_sum(parts)) > 0:
             outside.append({"entity": e, "book_id": b, "ccy": ccy, "derived": _sum(parts), "components": parts})
     return out, outside
+
+
+def _stale(valid_date: Any, on: date, policy: OcpPolicy) -> bool:
+    """A report unit too old to publish: carried forward from more than ``report_max_age_days`` before ``on``."""
+    vd = _day(valid_date)
+    return vd is not None and (on - vd).days > policy.report_max_age_days
+
+
+def _outside(parts: Mapping[str, float], policy: OcpPolicy) -> dict[str, float]:
+    return {c: v for c, v in parts.items() if c not in policy.report_components and v}
+
+
+def published(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequence[Mapping[str, Any]],
+              lines: Sequence[OcpLine], on: date, policy: OcpPolicy = PROVISIONAL_POLICY
+              ) -> tuple[list[dict[str, Any]], list[str]]:
+    """The published OCP (owner, 28.10.2026, TDM#416): (lines, notes). A line per (entity, book or None for an
+    entity-level report unit, currency): ``amount``, ``source`` and ``components``, the components outside the report
+    added to it, with ``reported`` (the report's figure, or None) and ``books`` (the books whose OCP it holds).
+
+    - A report scope (a comparison of ``reconcile``) whose unit is usable: ``reported`` + the components the report
+      does not hold (``report_components``), ``source`` ``report``. A unit older than ``report_max_age_days``:
+      the scope's derived OCP, ``derived_stale_report``.
+    - Overlapping units (an entity unit and a unit of one of its books, TDM#214): each book is published once, by the
+      scope that wins it: a usable unit before a stale one, a book's own scope before the entity's, then the newer
+      ``valid_date`` and the later set. An entity-level figure is taken as the entity's total: the report figure of a
+      book another scope wins is subtracted from it (said in the notes).
+    - A book no report unit covers (``outside_report``): its derived OCP, ``derived``.
+    - ``published`` ``derived``: every line derived (the reconciliation is unchanged)."""
+    derived = derive(lines)
+    out: list[dict[str, Any]] = []
+    notes: list[str] = []
+
+    def line(entity: str, book: str | None, books: Iterable[str], ccy: str, amount: float, source: str,
+             reported: float | None = None, added: Mapping[str, float] | None = None,
+             valid_date: Any = None) -> None:
+        if ccy != policy.reporting_ccy and (amount or reported is not None):  # the reporting currency has no OCP
+            out.append({"entity": entity, "book_id": book, "books": sorted(books), "ccy": ccy, "amount": amount,
+                        "source": source, "components": [c for c in COMPONENTS if (added or {}).get(c)],
+                        "outside": {c: v for c, v in (added or {}).items() if v}, "reported": reported,
+                        "valid_date": valid_date})
+
+    if policy.published is PublishedBasis.DERIVED:
+        for (e, b, ccy), parts in sorted(derived.items()):
+            line(e, b, [b], ccy, _sum(parts), DERIVED)
+        return out, notes
+    # the scopes: (set_id, book or None) -> its comparisons per currency, its books, its unit's state
+    scopes: dict[tuple[Any, str | None], dict[str, Any]] = {}
+    for c in comparisons:
+        sc = scopes.setdefault((c.get("set_id"), c.get("book_id")), {
+            "entity": c["entity"], "book_id": c.get("book_id"), "books": set(), "by_ccy": {},
+            "stale": _stale(c.get("valid_date"), on, policy), "valid_date": c.get("valid_date"),
+            "set_id": c.get("set_id"), "scope": c.get("scope") or {}})
+        sc["books"] |= set(c.get("books") or ([c["book_id"]] if c.get("book_id") else []))
+        sc["by_ccy"][c["ccy"]] = c
+
+    def rank(key: tuple[Any, str | None]) -> tuple:
+        sc = scopes[key]
+        sid = sc["set_id"] if isinstance(sc["set_id"], int) else -1
+        return (not sc["stale"], sc["book_id"] is not None, _day(sc["valid_date"]) or date.min, sid)
+
+    winner: dict[str, tuple[Any, str | None]] = {}
+    for key, sc in scopes.items():
+        for b in sc["books"]:
+            if b not in winner or rank(key) > rank(winner[b]):
+                winner[b] = key
+    entity_of = {b: e for (e, b, _) in derived}
+    for key, sc in sorted(scopes.items(), key=lambda kv: (str(kv[0][1]), str(kv[0][0]))):
+        won = {b for b in sc["books"] if winner.get(b) == key}
+        lost = sc["books"] - won
+        if sc["book_id"] is not None and not won:
+            continue  # the book is published by another scope
+        ccys = set(sc["by_ccy"]) | {c for (_, b, c) in derived if b in won}
+        if not sc["stale"]:
+            ccys |= {c for b in lost if scopes[winner[b]]["book_id"] is not None for c in scopes[winner[b]]["by_ccy"]}
+        if sc["stale"]:
+            for ccy in sorted(ccys):
+                line(sc["entity"], sc["book_id"], won, ccy,
+                     math.fsum(_sum(derived.get((entity_of.get(b, sc["entity"]), b, ccy), {})) for b in won),
+                     DERIVED_STALE, valid_date=sc["valid_date"])
+            continue
+        if lost:
+            notes.append(f"часть отчёта ОВП по юрлицу {sc['entity']} считается итогом юрлица: ОВП книг "
+                         + ", ".join(sorted(lost)) + " взята из их части отчёта и из итога юрлица вычтена")
+        for ccy in sorted(ccys):
+            c = sc["by_ccy"].get(ccy)
+            reported = c["reported"] if c else 0.0
+            minus = math.fsum(scopes[winner[b]]["by_ccy"][ccy]["reported"] for b in lost
+                              if ccy in scopes[winner[b]]["by_ccy"] and scopes[winner[b]]["book_id"] is not None)
+            added: dict[str, float] = defaultdict(float)
+            for b in won:
+                for k, v in _outside(derived.get((entity_of.get(b, sc["entity"]), b, ccy), {}), policy).items():
+                    added[k] += v
+            line(sc["entity"], sc["book_id"], won, ccy, reported - minus + math.fsum(added.values()), REPORT,
+                 reported - minus if (c or minus) else None, added, sc["valid_date"])
+    for x in outside_report:
+        line(x["entity"], x["book_id"], [x["book_id"]], x["ccy"], x["derived"], DERIVED)
+    return out, notes
+
+
+def published_by_currency(lines: Iterable[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    """currency -> {total, by_source: {source: amount}} of the published lines."""
+    out: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    for x in lines:
+        out[x["ccy"]][x["source"]] += x["amount"]
+    return {c: {"total": math.fsum(v.values()), "by_source": dict(v)} for c, v in sorted(out.items())}
+
+
+def _scope_text(scope: Mapping[str, Any] | None) -> str:
+    s = scope or {}
+    return f"книга {s['book_id']}" if s.get("book_id") else f"юрлицо {s['entity']}" if s.get("entity") else "весь отчёт"
+
+
+GAP_LIST = 50
+
+
+def gaps(lines: Sequence[OcpLine], report_units: Sequence[Mapping[str, Any]],
+         outside_report: Sequence[Mapping[str, Any]], on: date, policy: OcpPolicy = PROVISIONAL_POLICY,
+         comparisons: Sequence[Mapping[str, Any]] = ()) -> list[dict[str, Any]]:
+    """What is missing for the published OCP to be trusted, each ``{code, text, items}``: no report unit in force
+    (``no_report``), a unit too old (``stale_report``), positions in components outside the report without trade terms
+    (``outside_without_terms``: their amount is a nominal, not a PV), books with an FX exposure outside every report
+    unit (``books_outside_report``), and a scope whose break a component outside the report would close
+    (``outside_double_count``: the report seems to hold it, so the published figure counts it twice; the composition
+    in the adapter's settings is likely wrong). Nothing under ``published`` ``derived``."""
+    if policy.published is PublishedBasis.DERIVED:
+        return []
+    out: list[dict[str, Any]] = []
+    if not report_units:
+        out.append({"code": "no_report", "items": [],
+                    "text": "отчёта ОВП на дату нет: публикуемая ОВП — из позиций"})
+    for u in report_units:
+        if _stale(u.get("valid_date"), on, policy):
+            vd = _day(u.get("valid_date"))
+            out.append({"code": "stale_report", "items": [_scope_text(u.get("scope"))],
+                        "text": f"отчёт ОВП ({_scope_text(u.get('scope'))}) от {vd:%d.%m.%Y}: старше "
+                                f"{policy.report_max_age_days} дн., ОВП его книг — из позиций" if vd else
+                                f"отчёт ОВП ({_scope_text(u.get('scope'))}) устарел: ОВП его книг — из позиций"})
+    no_terms = sorted({x.position_id for x in lines if x.position_id and x.component not in policy.report_components
+                       and x.basis in ("notional", "amount")})
+    if no_terms:
+        out.append({"code": "outside_without_terms", "items": no_terms[:GAP_LIST],
+                    "text": f"позиций вне отчёта ОВП без условий сделки: {len(no_terms)} (их сумма — номинал или "
+                            "сумма отчёта, не PV по условиям сделки)"})
+    twice = []
+    for c in comparisons:
+        if not c.get("over") or _stale(c.get("valid_date"), on, policy):
+            continue  # a stale unit is not published: nothing is added to it
+        for k, v in (c.get("not_in_report") or {}).items():
+            if abs(v) > policy.tolerance_ccy and abs(c["break"] - v) <= policy.tolerance_ccy:
+                twice.append(f"{_scope_text(c.get('scope') or {'book_id': c.get('book_id'), 'entity': c.get('entity')})}"
+                             f" {c['ccy']}: {COMPONENT_TEXT[k]}")
+    if twice:
+        out.append({"code": "outside_double_count", "items": twice[:GAP_LIST],
+                    "text": f"слагаемое вне отчёта, похоже, уже есть в отчёте ОВП: {len(twice)} ("
+                            + "; ".join(twice[:5]) + (", …" if len(twice) > 5 else "") + "): в публикуемой ОВП оно "
+                            "посчитано дважды — проверьте состав отчёта в настройках адаптера"})
+    books = sorted({str(x["book_id"]) for x in outside_report})
+    if report_units and books:
+        out.append({"code": "books_outside_report", "items": books[:GAP_LIST],
+                    "text": f"книг с валютной позицией вне отчёта ОВП: {len(books)} ({', '.join(books[:10])}"
+                            + (", …" if len(books) > 10 else "") + "): их ОВП — из позиций"})
+    return out
 
 
 def transfers(lines: Sequence[OcpLine], books: Mapping[str, Mapping[str, Any]],
@@ -495,13 +722,16 @@ class OcpResult:
     outside_report: list[dict[str, Any]] = field(default_factory=list)
     transfers: list[dict[str, Any]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    published: list[dict[str, Any]] = field(default_factory=list)
+    gaps: list[dict[str, Any]] = field(default_factory=list)
 
 
 def compute_ocp(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[str, Any]], on: date, *,
                 terms: Iterable[Mapping[str, Any]] = (), cash: Iterable[Mapping[str, Any]] = (),
                 liabilities: Iterable[FundingLiability] = (), report_rows: Sequence[Mapping[str, Any]] = (),
                 report_units: Sequence[Mapping[str, Any]] = (), policy: OcpPolicy = PROVISIONAL_POLICY) -> OcpResult:
-    """The whole OCP of a run: lines, per position, the reconciliation with the report and the transfers."""
+    """The whole OCP of a run: lines, per position, the reconciliation with the report, the transfers, the published
+    OCP and its gaps."""
     tb = terms_by_position(rows, terms)
     lines, per_pos, notes = position_lines(rows, books, tb, on, policy)
     cl, cash_notes = cash_lines(cash, policy)
@@ -512,4 +742,6 @@ def compute_ocp(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[s
                      + ", ".join(twice))
     lines += cl + liability_lines([x for x in liabilities if x.position_id not in net], policy)
     comps, outside = reconcile(lines, report_rows, report_units, books, policy)
-    return OcpResult(lines, per_pos, comps, outside, transfers(lines, books, tb, policy), notes + cash_notes)
+    pub, pub_notes = published(comps, outside, lines, on, policy)
+    return OcpResult(lines, per_pos, comps, outside, transfers(lines, books, tb, policy),
+                     notes + cash_notes + pub_notes, pub, gaps(lines, report_units, outside, on, policy, comps))

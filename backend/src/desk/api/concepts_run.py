@@ -6,7 +6,8 @@ the run's dates and PnL state (R10: ``pnlAvailable`` false with ``pnlReasonText`
 moves, the FX rates (market and CBR, their moves and the market rate's source, R26), the indices, issuers and books,
 but for a move the run does not have (no previous market, a bucket without a point, a rate without a previous one):
 null here, 0 in compat (TDM#334, B1),
-``riskNotes`` (R14, R15), ``fundingStatus`` (B1), ``source`` (the run, its market slice R11, ``ofzScheme`` #32,
+``riskNotes`` (R14, R15), ``fundingStatus`` (B1), ``OCP`` (the published OCP, TDM#416: ``ocp_status``; null without
+it), ``source`` (the run, its market slice R11, ``ofzScheme`` #32,
 ``curveUnits`` #171) and ``positions`` with the fields the pages read (``POSITION_KEYS``; a bond's terms in
 ``BOND_KEYS``, a position's PnL in ``PNL_KEYS_READ``). A position the run did not value is listed after the valued
 ones with ``notValued``, no PV and no risk, its reason in ``extra`` (as compat). What the tdm prototype's screens read
@@ -132,6 +133,32 @@ def _no_pnl_code(stored: dict[str, Any] | None, prev_date: date | None) -> str:
     if stored:
         return stored.get("reason") or "not_computed"
     return RUN_NO_PREV_MARKET if prev_date is None else "not_computed"
+
+
+def ocp_status(block: dict[str, Any] | None) -> dict[str, Any] | None:
+    """``OCP``: the run's published OCP (``publish.ocp_run`` block v2, TDM#416) as the pages read it: per currency the
+    total, its rate and RUB equivalent and the amounts per source; per book (``book`` null: an entity-level report
+    unit, ``books`` the books its figure holds) the amount, its source (``report``: the bank's report + the
+    components outside it, ``components``; ``derived``: from positions; ``derived_stale_report``: from positions, the
+    report too old), the notes and the ``gaps``. None for a run without it (before v2, failed): the pages show the sum of
+    the positions' FX delta, as before."""
+    pub = (block or {}).get("published") or {}
+    if not pub.get("basis"):
+        return None
+    return {
+        "asOf": block.get("as_of"), "state": block.get("status"), "text": block.get("text"), "basis": pub["basis"],
+        "byCcy": {c: {"total": x.get("total"), "rate": x.get("rate"), "totalRub": x.get("total_rub"),
+                      "bySource": x.get("by_source") or {}} for c, x in (pub.get("by_ccy") or {}).items()},
+        "byBook": [{"entity": x.get("entity"), "book": x.get("book_id"), "books": x.get("books") or [],
+                    "ccy": x.get("ccy"), "amount": x.get("amount"), "source": x.get("source"),
+                    "components": x.get("components") or [], "reported": x.get("reported")}
+                   for x in pub.get("by_book") or []],
+        "notes": block.get("notes") or [],
+        "gaps": [{"code": g.get("code"), "text": g.get("text"), "items": g.get("items") or []}
+                 for g in block.get("gaps") or []],
+        "sourceNames": {x["key"]: x["name"] for x in block.get("sources") or []},
+        "componentNames": {x["key"]: x["name"] for x in block.get("components") or []},
+    }
 
 
 def funding_status(block: dict[str, Any] | None) -> dict[str, Any]:
@@ -309,7 +336,7 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         "FX": fx, "FX_MOVE_PCT": fx_move, "FX_CBR": fx_cbr, "FX_CBR_MOVE_PCT": fx_cbr_move, "FX_SOURCE": fx_source,
         "INDICES": {r["index_name"]: r["value"] for r in ref.get("indices", [])},
         "ISSUERS": issuers, "BOOKS": books, "riskNotes": risk_notes(run),
-        "fundingStatus": funding_status(ref.get("funding")), "positions": positions,
+        "fundingStatus": funding_status(ref.get("funding")), "OCP": ocp_status(ref.get("ocp")), "positions": positions,
         "source": {"runId": rid, "runType": run["run_type"],
                    "publishedAt": completed.isoformat() if completed else None,
                    "ofzScheme": lineage.get("ofz_scheme"), "curveUnits": lineage.get("curve_units"),

@@ -28,6 +28,7 @@ from desk.inbox.spi import (
     contract_supported,
     source_datasets,
 )
+from desk.inbox.tools import check_actions
 
 DESCRIBE_TIMEOUT_S = 30.0
 CONFIG_NAME_RE = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,99}")  # a plain file name: no folder, no dot first
@@ -44,11 +45,17 @@ class AdapterHandle:
     config_dir: str | None = None
     warnings: tuple[str, ...] = ()  # optional describe() keys of a bad shape, ignored (config_files, settings_tabs)
     inbox_dirs: tuple[str, ...] = ()  # passed to the adapter as ctx.inbox_dirs (08 §7)
+    optional: tuple[str, ...] = ()  # the optional functions it has (08 §3: status, run_action)
     package_dir: str | None = None  # package root actually fingerprinted; no helper capability for single modules
 
     @property
     def ok(self) -> bool:
         return self.error is None
+
+    @property
+    def actions(self) -> list[dict]:
+        """The usable ``describe()["actions"]`` (08 §4; ``desk.inbox.tools.check_actions``)."""
+        return check_actions(self.describe, "run_action" in self.optional)[0]
 
     def source(self, source_id: str) -> dict | None:
         return next((s for s in self.describe.get("sources", []) if s.get("source") == source_id), None)
@@ -288,8 +295,11 @@ def load_adapter(spec: str | None, config_dir: str | None, expected_sha256: str 
         why = f"bad_describe: {type(e).__name__}"
     if why:
         return fail(why, fingerprint=fp, describe=desc if isinstance(desc, dict) else {})
+    optional = tuple(f for f in r.get("optional") or () if f in runner.OPTIONAL_FUNCTIONS)
     location = r.get("location") or {}
     package_dir = str(Path(spec).expanduser().resolve()) if by_path else \
         str(Path(location["path"][0]).resolve()) if location.get("path") else None
     return AdapterHandle(spec, desc["name"], desc["version"], fp, desc, None, config_dir,
-                         (*check_config_files(desc)[1], *check_settings_tabs(desc)[1]), inbox_dirs, package_dir)
+                         (*check_config_files(desc)[1], *check_settings_tabs(desc)[1],
+                          *check_actions(desc, "run_action" in optional)[1]), inbox_dirs,
+                         optional=optional, package_dir=package_dir)

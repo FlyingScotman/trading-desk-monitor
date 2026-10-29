@@ -365,4 +365,18 @@ def options() -> dict[str, Any]:
             "rate_kinds": list(RATE_KINDS), "bases": list(BASES), "line_kinds": list(LINE_KINDS),
             "day_counts": list(DAY_COUNTS), "selectors": list(SELECTORS), "policy_fields": list(POLICY_FIELDS),
             "security_classes": sorted(set(ASSET_CLASS.values())), "defaults": DEFAULTS, "hint": HINT,
-            "label": DEFAULT_RATE_LABEL, "reporting_ccy": REPORTING_CCY}
+            "label": DEFAULT_RATE_LABEL, "reporting_ccy": REPORTING_CCY, "policy_choices": policy_choices()}
+
+
+def policy_choices() -> dict[str, dict[str, Any]]:
+    """Per ``policy`` field what the form offers: ``{"kind": "enum", "values": [...]}`` (the convention's values),
+    ``{"kind": "int"}`` or ``{"kind": "str"}`` (a book type)."""
+    import enum
+
+    out: dict[str, dict[str, Any]] = {}
+    for k, (_, t) in POLICY_FIELDS.items():
+        if isinstance(t, type) and issubclass(t, enum.Enum):
+            out[k] = {"kind": "enum", "values": [e.value for e in t]}
+        else:
+            out[k] = {"kind": "int" if t is int else "str"}
+    return out

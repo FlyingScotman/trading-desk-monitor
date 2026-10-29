@@ -11,9 +11,11 @@
  *   SF.diff(a, b), SF.hunks  — построчное сравнение «было → станет» для предпросмотра перед сохранением;
  *   SF.unconfigured(doc, r)  — книги из недавних позиций, которых нет в books.json («не настроено»), SF.bookPrefill;
  *   SF.ruleGroups, SF.rateText, SF.fundingMatrix — история ставок фондирования и сводка «тип книги × валюта».
- * DOM-часть: new SF.Form({...}) — редактор одного файла (таблицы, правка строки в выезжающей панели, «Эксперт» — сырой
- * JSON, проверка на сервере с предпросмотром изменений, сохранение, история правок). Данные: /api/v1/adapter/settings/*,
- * /api/v1/adapter/config/* (settings_routes.py).
+ * DOM-часть: new SF.Editor({schema, data}) — поля по схеме любой глубины (группы, списки, таблицы, «ключ → значение»,
+ * перечисления с подписями, «по умолчанию», только чтение; TDM#421, tests/js/settings_editor.test.js), им же — параметры
+ * действий адаптера (settings-adapter.js); new SF.Form({...}) — редактор одного файла поверх него (таблицы, правка строки
+ * в выезжающей панели, сырой JSON — только «Для опытных», SF.advanced, проверка на сервере с предпросмотром изменений,
+ * сохранение, история правок). Данные: /api/v1/adapter/settings/*, /api/v1/adapter/config/* (settings_routes.py).
  */
 (function (root) {
   'use strict';
@@ -62,23 +64,91 @@
   function has(node, t) { return types(node).indexOf(t) >= 0; }
   function isObj(v) { return v !== null && typeof v === 'object' && !Array.isArray(v); }
 
+  SF.isComment = function (key) { return /^_/.test(key); };  // «_comment», «_note»: комментарии файла, форма их не трогает
+
+  // значения перечисления: enum или oneOf/anyOf из const (подпись — title); null — это «по умолчанию», не пункт списка
+  SF.enumOptions = function (node) {
+    node = node || {};
+    if (Array.isArray(node.enum)) return node.enum.filter(function (v) { return v !== null; }).map(function (v) { return { value: v, label: String(v) }; });
+    var opts = Array.isArray(node.oneOf) ? node.oneOf : node.anyOf;
+    if (Array.isArray(opts) && opts.length && opts.every(function (o) { return isObj(o) && 'const' in o; }))
+      return opts.filter(function (o) { return o.const !== null; }).map(function (o) {
+        return { value: o.const, label: o.title || String(o.const), titled: !!o.title, title: o.description || null };
+      });
+    return null;
+  };
+  // допустимые значения вместе с null (для проверки): enum или const всех ветвей oneOf/anyOf; иначе null
+  SF.enumValues = function (node) {
+    if (!isObj(node)) return null;
+    if (Array.isArray(node.enum)) return node.enum;
+    var opts = Array.isArray(node.oneOf) ? node.oneOf : node.anyOf;
+    if (Array.isArray(opts) && opts.length && opts.every(function (o) { return isObj(o) && 'const' in o; })) return opts.map(function (o) { return o.const; });
+    return null;
+  };
+  // схема значения ключа объекта без своего поля в properties: patternProperties (кроме комментариев «^_»),
+  // затем additionalProperties; null — такой ключ схема не принимает (additionalProperties: false)
+  SF.valueSchema = function (node, key) {
+    node = node || {};
+    var pats = isObj(node.patternProperties) ? node.patternProperties : {};
+    var hit = Object.keys(pats).filter(function (p) { var r = re(p); return r && r.test(key); })[0];
+    if (hit !== undefined) return pats[hit];
+    var ap = node.additionalProperties;
+    if (ap === false) return null;
+    return isObj(ap) ? ap : {};
+  };
+  // схема «ключ → значение» объекта, если он ею задаётся: additionalProperties-схема или patternProperties не для
+  // комментариев; у объекта без properties и без additionalProperties: false — любой ключ, значение — строка
+  SF.extraSchema = function (node) {
+    node = node || {};
+    if (isObj(node.additionalProperties)) return node.additionalProperties;
+    var pats = isObj(node.patternProperties) ? node.patternProperties : {};
+    var own = Object.keys(pats).filter(function (p) { return p !== '^_' && isObj(pats[p]) && Object.keys(pats[p]).length; });
+    if (own.length) return pats[own[0]];
+    if (!node.properties && node.additionalProperties !== false) return {};
+    return null;
+  };
+  // ключи «ключ → значение»: всё, кроме полей properties и комментариев
+  SF.mapKeys = function (obj, node) {
+    var props = (node && node.properties) || {};
+    return Object.keys(isObj(obj) ? obj : {}).filter(function (k) { return !(k in props) && !SF.isComment(k); });
+  };
+  // переименовать ключ, не меняя порядка ключей (файл читается человеком и сравнивается построчно)
+  SF.renameKey = function (obj, from, to) {
+    var out = {};
+    Object.keys(obj || {}).forEach(function (k) { out[k === from ? to : k] = obj[k]; });
+    return out;
+  };
+  // значение нового элемента списка или нового ключа: default схемы, пустой список/объект, пустая строка; null — «пока пусто»
+  SF.emptyValue = function (node) {
+    node = node || {};
+    if (node.default !== undefined) return SF.clone(node.default);
+    var k = SF.kind(node);
+    if (k === 'strlist' || k === 'table') return [];
+    if (k === 'object' || k === 'map' || k === 'codes') return {};
+    if (k === 'text') return '';
+    if (k === 'enum') { var o = SF.enumOptions(node); return o.length ? o[0].value : null; }
+    return null;
+  };
+
   // вид поля: как его показать и как разобрать ввод
   SF.kind = function (node) {
     node = node || {};
-    if (Array.isArray(node.enum)) return 'enum';
+    if (SF.enumOptions(node)) return 'enum';
+    if ('const' in node) return 'const';
     if (node.format === 'date') return 'date';
     if (has(node, 'boolean')) return 'bool';
     if (has(node, 'number') && has(node, 'string')) return 'amount';
     if (has(node, 'integer')) return 'integer';
     if (has(node, 'number')) return 'number';
-    if (has(node, 'array')) return node.items && has(node.items, 'object') ? 'table' : 'strlist';
-    if (has(node, 'object')) {
-      var ap = node.additionalProperties;
-      if (isObj(ap) && has(ap, 'array') && !node.properties) return 'codes';
+    if (has(node, 'array')) return node.items && (has(node.items, 'object') || (!types(node.items).length && node.items.properties)) ? 'table' : 'strlist';
+    if (has(node, 'object') || (!types(node).length && isObj(node.properties))) {
+      var ap = SF.extraSchema(node);
+      if (ap && !node.properties) return has(ap, 'array') && !(ap.items && has(ap.items, 'object')) ? 'codes' : 'map';
       return 'object';
     }
     return 'text';
   };
+  SF.SCALAR = { enum: 1, const: 1, date: 1, bool: 1, amount: 1, integer: 1, number: 1, text: 1 };
 
   // что рисовать в файле: таблицы (массивы объектов), группы полей (объекты), отдельные поля верхнего уровня
   SF.layout = function (schema) {
@@ -97,8 +167,14 @@
   SF.column = function (key, node, required) {
     node = node || {};
     return { key: key, title: node.title || key, description: node.description || '', kind: SF.kind(node), node: node,
-      required: !!required, enum: Array.isArray(node.enum) ? node.enum : null,
-      default: node.default, nullable: has(node, 'null') };
+      required: !!required, enum: Array.isArray(node.enum) ? node.enum : null, options: SF.enumOptions(node),
+      default: node.default, nullable: has(node, 'null'), readOnly: node.readOnly === true };
+  };
+  // подсказка в пустом поле: значение по умолчанию из схемы
+  SF.placeholder = function (col) {
+    if (col.default === undefined || col.default === null) return '';
+    var d = col.default, o = (col.options || []).filter(function (x) { return x.value === d; })[0];
+    return 'по умолчанию: ' + (o ? o.label : col.kind === 'bool' ? (d ? 'да' : 'нет') : Array.isArray(d) ? d.join(', ') : isObj(d) ? JSON.stringify(d) : String(d));
   };
 
   // столбцы таблицы по схеме элемента, в порядке схемы
@@ -111,6 +187,7 @@
   // L: {entities: [{value, label}], books: [...], currencies: [...], indices: [...]}
   SF.LIST_OF = { entity: 'entities', ocp_to: 'books', book_id: 'books', ccy: 'currencies', index_code: 'indices' };
   SF.optionsFor = function (col, L, table) {
+    if (col.options) return col.options;
     if (col.enum) return col.enum.filter(function (v) { return v !== null; }).map(function (v) { return { value: v, label: String(v) }; });
     var list = SF.LIST_OF[col.key];
     if (!list) return null;
@@ -153,7 +230,8 @@
       if (!isObj(node)) return;
       var ts = types(node);
       if (ts.length && !ts.some(function (t) { return isType(v, t); })) { add('error', badCode(node), path, 'field ' + nameOf(path) + ': wrong type'); return; }
-      if (Array.isArray(node.enum) && node.enum.indexOf(v) < 0) { add('error', 'bad_value', path, 'field ' + nameOf(path) + ': not one of the allowed values'); return; }
+      var allowed = SF.enumValues(node);
+      if ((allowed && allowed.indexOf(v) < 0) || ('const' in node && SF.canon(v) !== SF.canon(node.const))) { add('error', 'bad_value', path, 'field ' + nameOf(path) + ': not one of the allowed values'); return; }
       if (typeof v === 'string') {
         var p = typeof node.pattern === 'string' ? re(node.pattern) : null;
         if (typeof node.minLength === 'number' && v.length < node.minLength) add('error', 'bad_value', path, 'field ' + nameOf(path) + ': empty');
@@ -269,6 +347,9 @@
     if (col.kind === 'bool') return v === true ? 'да' : v === false ? 'нет' : String(v);
     if (col.kind === 'date') return SF.fmtDate(v);
     if (col.kind === 'codes') return SF.fmtCodes(v);
+    if (col.kind === 'enum') { var o = (col.options || []).filter(function (x) { return x.value === v; })[0]; return o && o.titled ? o.label : String(v); }
+    if (col.kind === 'map' && isObj(v)) return Object.keys(v).filter(function (k) { return !SF.isComment(k); }).map(function (k) { return k + ': ' + (Array.isArray(v[k]) ? v[k].join(', ') : isObj(v[k]) ? '{…}' : v[k]); }).join('; ');
+    if (Array.isArray(v) && v.some(isObj)) return v.length + ' ' + plural(v.length, 'строка', 'строки', 'строк');
     if (Array.isArray(v)) return v.join(', ');
     if (isObj(v)) return JSON.stringify(v);
     return String(v);
@@ -456,29 +537,43 @@
   SF.today = today;
   function when(s) { return s ? new Date(s).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' }) : ''; }
 
-  // поле ввода по виду; set(v) — undefined убирает ключ
-  SF.control = function (col, value, set, L, table) {
-    var opts = SF.optionsFor(col, L, table), id = 'sf-' + Math.random().toString(36).slice(2, 9);
+  // поле ввода по виду; set(v) — undefined убирает ключ. id — id элемента (по пути поля: фокус переживает перерисовку)
+  SF.control = function (col, value, set, L, table, id) {
+    var opts = SF.optionsFor(col, L, table), ro = !!col.readOnly;
+    id = id || 'sf-' + Math.random().toString(36).slice(2, 9);
     var el;
+    if (col.kind === 'const') {
+      el = h('span', { class: 'mono sf-const', id: id, title: 'задано схемой' }, JSON.stringify(col.node.const));
+      return el;
+    }
+    var dflt = col.default !== undefined && col.default !== null ? SF.placeholder(col).replace(/^по умолчанию: /, '') : null;
+    if (col.kind === 'bool' && col.nullable) {  // да / нет / «по умолчанию» (null и отсутствие — одно и то же)
+      var bs = h('select', { class: 'inp', id: id, disabled: ro },
+        h('option', { value: '' }, 'по умолчанию' + (dflt ? ' (' + dflt + ')' : '')), h('option', { value: 'true' }, 'да'), h('option', { value: 'false' }, 'нет'));
+      bs.value = value === true ? 'true' : value === false ? 'false' : '';
+      bs.addEventListener('change', function () { set(bs.value === '' ? undefined : bs.value === 'true'); });
+      return bs;
+    }
     if (col.kind === 'bool') {
       // без значения и без default в схеме — «как по умолчанию у адаптера»: не выдаём это за «нет»
       var def = col.default === true, unset = value === undefined && col.default === undefined, on = value === undefined ? def : value === true;
-      var cb = h('input', { type: 'checkbox', id: id, checked: on, onchange: function () { set(cb.checked === def && value === undefined && !unset ? undefined : cb.checked); } });
-      el = h('label', { class: 'tgl' }, cb, h('span', { class: 'tgl-s' + (unset ? ' unset' : '') }), h('span', { class: 'tgl-l' }, unset ? 'не задано — как у адаптера по умолчанию' : on ? 'да' : 'нет'));
+      var cb = h('input', { type: 'checkbox', id: id, checked: on, disabled: ro, onchange: function () { set(cb.checked === def && value === undefined && !unset ? undefined : cb.checked); } });
+      el = h('label', { class: 'tgl' + (ro ? ' ro' : '') }, cb, h('span', { class: 'tgl-s' + (unset ? ' unset' : '') }), h('span', { class: 'tgl-l' }, unset ? 'не задано — как у адаптера по умолчанию' : on ? 'да' : 'нет'));
       cb.addEventListener('change', function () { el.lastChild.textContent = cb.checked ? 'да' : 'нет'; el.children[1].className = 'tgl-s'; });
       el.dataset.input = id;
       return el;
     }
     if (opts) {
-      var sel = h('select', { class: 'inp', id: id });
-      sel.append(h('option', { value: '' }, col.required ? '— выберите —' : '—'));
-      var known = false;
+      var sel = h('select', { class: 'inp', id: id, disabled: ro });
+      sel.append(h('option', { value: '' }, dflt ? 'по умолчанию (' + dflt + ')' : col.nullable ? 'по умолчанию' : col.required ? '— выберите —' : '—'));
+      var known = false, enumLike = !!(col.options || col.enum);
       opts.forEach(function (o) {
         if (o.value === value) known = true;
-        sel.append(h('option', { value: String(o.value), title: o.title || null }, o.label && o.label !== String(o.value) ? o.value + ' — ' + o.label : String(o.value)));
+        sel.append(h('option', { value: String(o.value), title: o.title || (o.titled ? String(o.value) : null) },
+          o.titled ? o.label : o.label && o.label !== String(o.value) ? o.value + ' — ' + o.label : String(o.value)));
       });
       if (value != null && value !== '' && !known) sel.append(h('option', { value: String(value) }, value + ' (нет в списке)'));
-      if (!col.enum) sel.append(h('option', { value: '\u0000other' }, 'другое значение…'));
+      if (!enumLike) sel.append(h('option', { value: '\u0000other' }, 'другое значение…'));
       sel.value = value == null ? '' : String(value);
       sel.addEventListener('change', function () {
         if (sel.value === '\u0000other') {
@@ -490,23 +585,24 @@
           return;
         }
         var v = sel.value;
-        if (col.enum) { var hit = col.enum.filter(function (e) { return String(e) === v; }); set(v === '' ? undefined : hit.length ? hit[0] : v); }
+        if (enumLike) { var hit = opts.filter(function (e) { return String(e.value) === v; }); set(v === '' ? undefined : hit.length ? hit[0].value : v); }
         else set(v === '' ? undefined : v);
         value = v === '' ? undefined : v;
       });
       return sel;
     }
-    if (col.kind === 'strlist') {
-      var ta = h('textarea', { class: 'inp ta-s', id: id, rows: 3, spellcheck: 'false', placeholder: 'по одному в строке' });
+    if (col.kind === 'strlist') {  // запасной вид; в формах списки — построчный редактор (Editor.listEditor)
+      var ta = h('textarea', { class: 'inp ta-s', id: id, rows: 3, spellcheck: 'false', placeholder: 'по одному в строке', disabled: ro });
       ta.value = Array.isArray(value) ? value.join('\n') : '';
       ta.addEventListener('input', function () { var l = ta.value.split('\n').map(function (s) { return s.trim(); }).filter(Boolean); set(l.length ? l : undefined); });
       return ta;
     }
-    var attrs = { class: 'inp', id: id, autocomplete: 'off', spellcheck: 'false' };
+    var attrs = { class: 'inp', id: id, autocomplete: 'off', spellcheck: 'false', placeholder: SF.placeholder(col) || null, readonly: ro };
     if (col.kind === 'date') attrs.type = 'date';
-    if (col.kind === 'amount' || col.kind === 'number' || col.kind === 'integer') { attrs.inputmode = 'decimal'; attrs.class = 'inp mono num'; }
+    if (col.kind === 'amount' || col.kind === 'number' || col.kind === 'integer') { attrs.inputmode = col.kind === 'integer' ? 'numeric' : 'decimal'; attrs.class = 'inp mono num'; }
     if (col.kind === 'codes') { attrs.class = 'inp mono'; attrs.placeholder = 'источник: код, код; *: код'; }
     if (col.key === 'ccy') { attrs.class = 'inp mono'; attrs.maxlength = 3; }
+    if (col.node && typeof col.node.pattern === 'string' && col.kind === 'text') attrs.class = 'inp mono';
     el = h('input', attrs);
     el.value = col.kind === 'codes' ? SF.fmtCodes(value) : value == null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
     el.addEventListener('input', function () {
@@ -521,6 +617,235 @@
   };
 
   /*
+   * Редактор значения по JSON Schema — общий для файлов адаптера (Form), параметров его действий и форм монитора.
+   * Любая глубина: группы (объекты, сворачиваются), списки строк и чисел (строки с «+» и «×»), таблицы (массивы объектов:
+   * простые поля — в ячейках, остальное — «поля…» под строкой), «ключ → значение» (additionalProperties /
+   * patternProperties: источник → список шаблонов), перечисления (enum, oneOf из const с подписями), «по умолчанию» у
+   * полей с null, только чтение (readOnly). Ключи «_…» (комментарии) и ключи вне формы не трогаются: правится сам объект.
+   * opts: {schema, data, lists() -> L, tabId}
+   */
+  SF.Editor = function (opts) { this.initEditor(opts); };
+  var E = SF.Editor.prototype;
+  var uid = 0;
+  E.initEditor = function (opts) {
+    this.o = this.o || opts || {}; this.schema = this.schema || (opts && opts.schema) || { type: 'object', properties: {} };
+    if (this.data === undefined) this.data = opts && opts.data !== undefined ? opts.data : SF.empty(this.schema);
+    this.uid = 'sf' + (++uid); this.watchers = []; this.byPath = this.byPath || {};
+  };
+  E.validate = function () {
+    this.issues = this.data ? SF.validate(this.schema, this.data) : [];
+    this.index(this.issues);
+    return this.issues;
+  };
+  E.index = function (issues) {
+    var by = this.byPath = {};
+    (issues || []).forEach(function (i) { var k = SF.pathKey(i.path); (by[k] = by[k] || []).push(i); });
+  };
+  E.errors = function () { return (this.issues || []).filter(function (i) { return i.severity === 'error'; }); };
+  E.lists = function () { return this.o.lists ? this.o.lists() : {}; };
+  E.ctlId = function (path) { return this.uid + '-' + (path || []).join('.').replace(/[^A-Za-z0-9_.-]/g, function (c) { return '_' + c.charCodeAt(0).toString(36); }); };
+  // ошибки поля — под ним; обновляются после каждой проверки (refresh), без перерисовки полей (фокус остаётся)
+  E.errsBox = function (path, cell) {
+    var self = this, key = SF.pathKey(path), box = h('div', { class: 'errs' });
+    var show = function () {
+      if (box.isConnected === false) return false;  // перерисовано: наблюдатель больше не нужен
+      var iss = self.byPath[key] || [];
+      if (cell) cell.className = (cell.className || '').replace(/\s*\bbad\b/g, '') + (iss.length ? ' bad' : '');
+      box.textContent = '';
+      iss.forEach(function (i) { box.append(h('div', { class: i.severity === 'error' ? 'err' : 'warnmsg' }, SF.say(i, self.schema))); });
+      return true;
+    };
+    this.watchers.push(show);
+    show();
+    return box;
+  };
+  E.refresh = function () { this.watchers = this.watchers.filter(function (w) { return w() !== false; }); };
+
+  // поля объекта obj (сетка «подпись — поле»); группы и таблицы — во всю ширину
+  E.renderFields = function (cols, obj, onChange, base, depth) {
+    var self = this, grid = h('div', { class: 'sf-grid' });
+    cols.forEach(function (c) {
+      var path = (base || []).concat([c.key]);
+      if (c.kind === 'object' || c.kind === 'table') { grid.append(h('div', { class: 'sf-full' }, self.editor(c, obj, path, onChange, depth || 0))); return; }
+      var ed = self.editor(c, obj, path, onChange, depth || 0), scalar = SF.SCALAR[c.kind];
+      grid.append(h('label', { class: 'sf-l', for: scalar ? self.ctlId(path) : null, title: c.key }, c.title, c.required ? h('span', { class: 'req' }, ' *') : null,
+        c.readOnly ? h('span', { class: 'mut3' }, ' · только чтение') : null),
+        h('div', {}, ed, c.description ? h('div', { class: 'hint' }, c.description) : null));
+    });
+    return grid;
+  };
+  // значение holder[col.key] по его виду
+  E.editor = function (col, holder, path, onChange, depth) {
+    switch (col.kind) {
+      case 'object': return this.groupEditor(col, holder, path, onChange, depth || 0);
+      case 'map': case 'codes': return this.mapEditor(col, holder, path, onChange, depth || 0);
+      case 'strlist': return this.listEditor(col, holder, path, onChange);
+      case 'table': return this.tableEditor(col, holder, path, onChange, depth || 0);
+    }
+    return this.leaf(col, holder, path, onChange);
+  };
+  // простое поле; keep: пустой ввод — null, ключ остаётся (значение «ключ → значение»)
+  E.leaf = function (col, holder, path, onChange, keep) {
+    var cell = h('div', { class: 'sf-c' });
+    var ctl = SF.control(col, holder[col.key], function (v) {
+      if (v === undefined) { if (keep) holder[col.key] = null; else if (Array.isArray(holder)) holder[col.key] = ''; else delete holder[col.key]; }
+      else holder[col.key] = v;
+      onChange();
+    }, this.lists(), this.o.tabId || (this.tab && this.tab.id), this.ctlId(path));
+    cell.append(ctl, this.errsBox(path, cell));
+    return cell;
+  };
+  // группа полей (объект): сворачивается; пустая (без своих ключей) убирается из файла, а не пишется «{}»
+  E.groupEditor = function (col, holder, path, onChange, depth) {
+    var self = this, node = col.node, sub = isObj(holder[col.key]) ? holder[col.key] : {};
+    var subChange = function () {
+      if (Object.keys(sub).length || col.required) holder[col.key] = sub; else delete holder[col.key];
+      onChange();
+    };
+    var body = h('div', { class: 'sf-grp-bd' }, this.renderFields(SF.columns(node), sub, subChange, path, depth + 1));
+    if (isObj(node.additionalProperties)) body.append(this.mapBody(node, function () { return sub; }, function () { return sub; }, path, subChange, depth + 1, 'Другие ключи'));
+    var n = Object.keys(sub).filter(function (k) { return !SF.isComment(k); }).length;
+    return h('details', { class: 'sf-grp', open: depth < 2 || null },
+      h('summary', {}, h('b', {}, col.title), col.required ? h('span', { class: 'req' }, ' *') : null,
+        col.description ? h('span', { class: 'mut3' }, ' · ' + col.description) : null, h('span', { class: 'mut3 sf-cnt' }, n ? ' · задано полей: ' + n : ' · не задано')),
+      body, this.errsBox(path));
+  };
+  // «ключ → значение»: строки «ключ, значение (по схеме значения), ×» и добавление ключа
+  E.mapEditor = function (col, holder, path, onChange, depth) {
+    var get = function () { return isObj(holder[col.key]) ? holder[col.key] : null; };
+    var ensure = function () { if (!get()) holder[col.key] = {}; return holder[col.key]; };
+    var change = function () { var o = get(); if (o && !Object.keys(o).length && !col.required) delete holder[col.key]; onChange(); };
+    var wrap = this.mapBody(col.node, get, ensure, path, change, depth, null);
+    wrap.append(this.errsBox(path));
+    return wrap;
+  };
+  E.mapBody = function (node, get, ensure, path, onChange, depth, title) {
+    var self = this, wrap = h('div', { class: 'sf-map' }), names = isObj(node.propertyNames) ? node.propertyNames : {};
+    var keyOpts = Array.isArray(names.enum) ? names.enum : null, keyRe = typeof names.pattern === 'string' ? re(names.pattern) : null;
+    var draw = function (focusKey) {
+      wrap.textContent = '';
+      if (title) wrap.append(h('div', { class: 'sf-th sf-th-s' }, h('h5', {}, title)));
+      var o = get() || {}, keys = SF.mapKeys(o, node), tb = h('div', { class: 'sf-map-rows' });
+      keys.forEach(function (k) {
+        var vnode = SF.valueSchema(node, k) || {}, vcol = SF.column(k, vnode, false), kp = path.concat([k]);
+        var keyEl;
+        var rename = function (nk) {
+          nk = String(nk == null ? '' : nk).trim();
+          if (!nk || nk === k) { keyEl.value = k; return; }
+          if (nk in o) { keyEl.value = k; if (root.alert) root.alert('Ключ «' + nk + '» уже есть'); return; }
+          var holderObj = SF.renameKey(o, k, nk);
+          Object.keys(o).forEach(function (x) { delete o[x]; });
+          Object.keys(holderObj).forEach(function (x) { o[x] = holderObj[x]; });  // тот же объект: ссылки на него живы
+          onChange(); draw(nk);
+        };
+        if (keyOpts) {
+          keyEl = h('select', { class: 'inp mono sf-key', 'aria-label': 'ключ' }, keyOpts.map(function (x) { return h('option', { value: x, disabled: x !== k && x in o }, x === '*' ? '* (любой)' : x); }));
+          keyEl.value = k;
+          keyEl.addEventListener('change', function () { rename(keyEl.value); });
+        } else {
+          keyEl = h('input', { class: 'inp mono sf-key', value: k, 'aria-label': 'ключ', autocomplete: 'off', spellcheck: 'false' });
+          keyEl.addEventListener('change', function () { rename(keyEl.value); });
+        }
+        var val = SF.SCALAR[vcol.kind] ? self.leaf(vcol, o, kp, onChange, true) : self.editor(vcol, o, kp, onChange, depth + 1);
+        tb.append(h('div', { class: 'sf-map-row' + (SF.SCALAR[vcol.kind] ? '' : ' wide') }, h('div', { class: 'sf-map-k' }, keyEl, keyRe && !keyRe.test(k) ? h('div', { class: 'err' }, 'ключ не подходит под шаблон') : null),
+          h('div', { class: 'sf-map-v' }, val),
+          h('button', { class: 'x del', type: 'button', title: 'Убрать ключ «' + k + '»', 'aria-label': 'Убрать ключ', onclick: function () { delete o[k]; onChange(); draw(); } }, '×')));
+      });
+      if (!keys.length) tb.append(h('div', { class: 'mut3' }, 'Пусто.'));
+      wrap.append(tb);
+      var add, input;
+      var doAdd = function (nk) {
+        nk = String(nk == null ? '' : nk).trim();
+        if (!nk) return;
+        var cur = ensure();
+        if (nk in cur) { if (root.alert) root.alert('Ключ «' + nk + '» уже есть'); return; }
+        cur[nk] = SF.emptyValue(SF.valueSchema(node, nk) || {});
+        onChange(); draw(nk);
+      };
+      if (keyOpts) {
+        var free = keyOpts.filter(function (x) { return !(x in o); });
+        if (free.length) {
+          input = h('select', { class: 'inp mono sf-key', 'aria-label': 'новый ключ' }, free.map(function (x) { return h('option', { value: x }, x === '*' ? '* (любой)' : x); }));
+          add = h('button', { class: 'ibtn', type: 'button', onclick: function () { doAdd(input.value); } }, '+ Добавить');
+        }
+      } else {
+        input = h('input', { class: 'inp mono sf-key', placeholder: 'новый ключ', 'aria-label': 'новый ключ', autocomplete: 'off', spellcheck: 'false',
+          onkeydown: function (e) { if (e.key === 'Enter') { e.preventDefault(); doAdd(input.value); } } });
+        add = h('button', { class: 'ibtn', type: 'button', onclick: function () { doAdd(input.value); } }, '+ Добавить');
+      }
+      if (add) wrap.append(h('div', { class: 'row sf-map-add' }, input, add));
+      if (focusKey !== undefined) {
+        var f = wrap.querySelector('#' + self.ctlId(path.concat([focusKey])).replace(/\./g, '\\.'));
+        if (f && f.focus) f.focus();
+      }
+    };
+    draw();
+    return wrap;
+  };
+  // список строк или чисел: строка на значение, «×» убирает, «↑» поднимает, «+ Добавить»; пустой список убирается
+  E.listEditor = function (col, holder, path, onChange) {
+    var self = this, item = (col.node && col.node.items) || {}, wrap = h('div', { class: 'sf-list' });
+    var get = function () { return Array.isArray(holder[col.key]) ? holder[col.key] : null; };
+    var change = function () { var a = get(); if (a && !a.length && !col.required) delete holder[col.key]; onChange(); };
+    var draw = function (focus) {
+      wrap.textContent = '';
+      var a = get() || [];
+      a.forEach(function (v, i) {
+        var icol = SF.column(i, item, false), ip = path.concat([i]);
+        var cell = SF.SCALAR[icol.kind] ? self.leaf(icol, a, ip, change) : self.editor(icol, a, ip, change, 1);
+        var inp = cell.querySelector && cell.querySelector('input');
+        if (inp && icol.kind === 'text') inp.addEventListener('blur', function () { if (a[i] === '' || a[i] == null) { a.splice(i, 1); change(); draw(); } });
+        wrap.append(h('div', { class: 'sf-list-row' }, cell,
+          i ? h('button', { class: 'x', type: 'button', title: 'Выше', 'aria-label': 'Выше', onclick: function () { var t = a[i - 1]; a[i - 1] = a[i]; a[i] = t; change(); draw(i - 1); } }, '↑') : h('span', { class: 'x-sp' }),
+          h('button', { class: 'x del', type: 'button', title: 'Убрать', 'aria-label': 'Убрать', onclick: function () { a.splice(i, 1); change(); draw(); } }, '×')));
+      });
+      wrap.append(h('div', { class: 'row' }, h('button', { class: 'ibtn sf-add', type: 'button', disabled: !!col.readOnly, onclick: function () {
+        var arr = get(); if (!arr) { arr = holder[col.key] = []; }
+        arr.push(SF.emptyValue(item)); change(); draw(arr.length - 1);
+      } }, '+ Добавить'), a.length ? null : h('span', { class: 'mut3' }, SF.placeholder(col) || 'Список пуст.')));
+      wrap.append(self.errsBox(path));
+      if (focus !== undefined) { var f = wrap.querySelector('#' + self.ctlId(path.concat([focus])).replace(/\./g, '\\.')); if (f && f.focus) f.focus(); }
+    };
+    draw();
+    return wrap;
+  };
+  // таблица (массив объектов): простые поля — прямо в ячейках, остальные (списки, группы) — «поля…» под строкой
+  E.tableEditor = function (col, holder, path, onChange, depth) {
+    var self = this, item = col.node.items || {}, cols = SF.columns(item), wrap = h('div', { class: 'sf-subtable' });
+    var flat = cols.filter(function (c) { return SF.SCALAR[c.kind]; }), deep = cols.filter(function (c) { return !SF.SCALAR[c.kind]; });
+    var get = function () { return Array.isArray(holder[col.key]) ? holder[col.key] : null; };
+    var change = function () { var a = get(); if (a && !a.length && !col.required) delete holder[col.key]; onChange(); };
+    var open = {};
+    var draw = function () {
+      wrap.textContent = '';
+      var a = get() || [], tb = h('tbody');
+      a.forEach(function (r, i) {
+        if (!isObj(r)) { r = a[i] = {}; }
+        var tr = h('tr', {}, flat.map(function (c) { return h('td', {}, self.leaf(c, r, path.concat([i, c.key]), change)); }));
+        tr.append(h('td', { class: 'sf-rowacts' },
+          deep.length ? h('button', { class: 'ibtn', type: 'button', 'aria-expanded': open[i] ? 'true' : 'false', onclick: function () { open[i] = !open[i]; draw(); } }, open[i] ? 'поля ▴' : 'поля…') : null,
+          h('button', { class: 'x', type: 'button', title: 'Копия строки', onclick: function () { a.splice(i + 1, 0, SF.clone(r)); change(); draw(); } }, '⧉'),
+          h('button', { class: 'x del', type: 'button', title: 'Удалить строку', onclick: function () { a.splice(i, 1); change(); draw(); } }, '×')));
+        tb.append(tr);
+        if (deep.length && open[i]) tb.append(h('tr', { class: 'sf-deep' }, h('td', { colspan: flat.length + 1 }, self.renderFields(deep, r, change, path.concat([i]), depth + 1))));
+      });
+      if (!a.length) tb.append(h('tr', {}, h('td', { colspan: flat.length + 1, class: 'mut3' }, 'Строк нет.')));
+      wrap.append(h('div', { class: 'sf-th sf-th-s' }, h('h5', {}, col.title), col.required ? h('span', { class: 'req' }, '*') : null,
+        col.description ? h('span', { class: 'mut3' }, col.description) : null, h('span', { class: 'sp' }),
+        h('button', { class: 'ibtn', type: 'button', disabled: !!col.readOnly, onclick: function () { var arr = get() || (holder[col.key] = []); arr.push(SF.newRow(item)); open[arr.length - 1] = deep.length > 0 && !flat.length; change(); draw(); } }, '+ Добавить строку')),
+        h('div', { class: 'k-tbl-wrap' }, h('table', { class: 'k-tbl sf-t sf-t-in' },
+          h('thead', {}, h('tr', {}, flat.map(function (c) { return h('th', { title: c.description || c.key }, c.title, c.required ? h('span', { class: 'req' }, ' *') : null); }), h('th', {}))), tb)),
+        self.errsBox(path));
+    };
+    draw();
+    return wrap;
+  };
+  // ключи «ключ → значение» в корне файла или группы (схема с additionalProperties)
+  E.renderExtras = function (node, obj, onChange, base, title) {
+    return this.mapBody(node, function () { return obj; }, function () { return obj; }, base || [], onChange, 1, title);
+  };
+
+  /*
    * Редактор одного файла по вкладке адаптера.
    * opts: {el, tab: {id, title, file, help, schema}, entry (config_files: template), api(method, url, body),
    *        lists() -> L, recent() -> [{book_id, ...}], onChange(form), onSaved(form), showIssue(text)}
@@ -531,8 +856,11 @@
     this.data = null; this.orig = null; this.sha = null; this.exists = false; this.text = null;
     this.expert = false; this.rawText = ''; this.rawError = null;
     this.issues = []; this.check = null; this.loadError = null; this.parseError = null;
+    this.initEditor(opts);
   };
-  var F = SF.Form.prototype;
+  var F = SF.Form.prototype = Object.create(E);
+  F.constructor = SF.Form;
+  SF.advanced = false;  // «Для опытных» на странице: сырой JSON файла виден только тогда (и у файла, который не читается)
   F.url = function (p) { return '/api/v1/adapter/' + p; };
   F.load = function () {
     var self = this;
@@ -552,15 +880,7 @@
     if (this.expert && this.rawError) return this.rawText !== (this.text || '');
     return this.data != null && SF.canon(this.data) !== SF.canon(this.orig);
   };
-  F.validate = function () {
-    this.issues = this.data ? SF.validate(this.schema, this.data) : [];
-    this.byPath = {};
-    var self = this;
-    this.issues.forEach(function (i) { var k = SF.pathKey(i.path); (self.byPath[k] = self.byPath[k] || []).push(i); });
-    return this.issues;
-  };
-  F.errors = function () { return this.issues.filter(function (i) { return i.severity === 'error'; }); };
-  F.changed = function () { this.check = null; this.validate(); if (this.o.onChange) this.o.onChange(this); };
+  F.changed = function () { this.check = null; this.validate(); this.refresh(); if (this.o.onChange) this.o.onChange(this); };
   // замечания проверки сервера к строке таблицы (адаптер называет строку R<n>)
   F.adapterIssues = function () {
     var self = this;
@@ -582,8 +902,8 @@
         this.dirty() ? h('span', { class: 'badge warn' }, 'изменено') : null,
         this.errors().length ? h('span', { class: 'badge bad' }, 'ошибок: ' + this.errors().length) : null),
       h('div', { class: 'sf-acts' },
-        h('label', { class: 'chk', title: 'Сырой JSON файла — для того, чего нет в форме' },
-          h('input', { type: 'checkbox', checked: this.expert, onchange: function (e) { self.setExpert(e.target.checked); } }), 'Эксперт'),
+        SF.advanced || this.expert ? h('label', { class: 'chk', title: 'Сырой JSON файла (для опытных)' },
+          h('input', { type: 'checkbox', checked: this.expert, onchange: function (e) { self.setExpert(e.target.checked); } }), 'JSON') : null,
         h('button', { class: 'ibtn', type: 'button', onclick: function () { self.history(); } }, 'История'),
         h('button', { class: 'ibtn', type: 'button', disabled: !this.dirty(), onclick: function () { self.revert(); } }, 'Отменить'),
         h('button', { class: 'btn', type: 'button', disabled: !this.dirty() && this.exists, onclick: function () { self.review(); } }, 'Проверить и сохранить…')));
@@ -597,6 +917,7 @@
   F.render = function () {
     var el = this.o.el, self = this;
     el.textContent = '';
+    this.watchers = [];
     el.classList.add('sf');
     el.append(this.headEl());
     if (this.loadError) { el.append(h('div', { class: 'note err' }, 'Не удалось прочитать файл: ' + this.loadError)); return; }
@@ -611,6 +932,8 @@
     this.L.tables.forEach(function (t, n) { el.append(self.renderTable(t, n === 0)); });
     if (this.L.fields.length) el.append(this.renderFields(this.L.fields, this.data, function () { self.changed(); self.refreshHead(); }, null));
     this.L.objects.forEach(function (o) { el.append(self.renderObject(o)); });
+    if (isObj(this.schema.additionalProperties) || (!this.schema.properties && this.schema.additionalProperties !== false))
+      el.append(h('div', { class: 'sf-obj' }, this.renderExtras(this.schema, this.data, function () { self.changed(); self.refreshHead(); }, [], 'Ключи файла')));
     var rest = this.issues.filter(function (i) { return !i.path || i.path.length < 2; });
     if (rest.length) el.append(h('ul', { class: 'sf-issues' }, rest.map(function (i) { return self.issueLi(i); })));
   };
@@ -711,42 +1034,16 @@
       h('div', { class: 'k-tbl-wrap' }, t));
   };
 
-  F.renderFields = function (cols, obj, onChange, base) {
-    var self = this, grid = h('div', { class: 'sf-grid' });
-    cols.forEach(function (c) {
-      if (c.kind === 'object' || c.kind === 'table') return;
-      var path = (base || []).concat([c.key]), key = SF.pathKey(path), errs = h('div', { class: 'errs' }), cell;
-      var showErrors = function () {  // ошибки поля — сразу под ним (у полей группы; в карточке строки — когда ввод затих)
-        var iss = self.byPath[key] || [];
-        cell.className = 'sf-c' + (iss.length ? ' bad' : '');
-        errs.textContent = '';
-        iss.forEach(function (i) { errs.append(h('div', { class: 'err' }, SF.say(i, self.schema))); });
-      };
-      var ctl = SF.control(c, obj[c.key], function (v) {
-        if (v === undefined) delete obj[c.key]; else obj[c.key] = v;
-        onChange(); showErrors();
-      }, self.o.lists ? self.o.lists() : {}, self.tab.id);
-      cell = h('div', {}, ctl, c.description ? h('div', { class: 'hint' }, c.description) : null, errs);
-      showErrors();
-      grid.append(h('label', { class: 'sf-l', for: ctl.id || ctl.dataset.input || null, title: c.key }, c.title, c.required ? h('span', { class: 'req' }, ' *') : null), cell);
-    });
-    return grid;
-  };
   F.renderObject = function (o) {
-    // группа полей (объект верхнего уровня): пустой объект из файла убирается, а не пишется «{}»
+    // группа полей верхнего уровня (карточка): пустой объект из файла убирается, а не пишется «{}»; вложенные — группами
     var self = this, obj = isObj(this.data[o.key]) ? this.data[o.key] : {}, wrap = h('div', { class: 'sf-obj' });
     var onChange = function () {
       if (Object.keys(obj).length) self.data[o.key] = obj; else delete self.data[o.key];
       self.changed(); self.refreshHead();
     };
-    var cols = SF.columns(o.node), nested = function (c) { return c.kind === 'object' && c.node.properties; };
     wrap.append(h('div', { class: 'sf-th' }, h('h4', {}, o.title), o.node.description ? h('span', { class: 'mut3' }, o.node.description) : null));
-    wrap.append(this.renderFields(cols.filter(function (c) { return !nested(c); }), obj, onChange, [o.key]));
-    cols.filter(nested).forEach(function (c) {
-      var sub = isObj(obj[c.key]) ? obj[c.key] : {};
-      var subChange = function () { if (Object.keys(sub).length) obj[c.key] = sub; else delete obj[c.key]; onChange(); };
-      wrap.append(h('div', { class: 'sf-sub' }, h('div', { class: 'sf-th' }, h('h5', {}, c.title)), self.renderFields(SF.columns(c.node), sub, subChange, [o.key, c.key])));
-    });
+    wrap.append(this.renderFields(SF.columns(o.node), obj, onChange, [o.key], 1));
+    if (isObj(o.node.additionalProperties)) wrap.append(this.renderExtras(o.node, obj, onChange, [o.key], 'Другие ключи'));
     return wrap;
   };
 
@@ -774,11 +1071,10 @@
       full[t.key] = rows.map(function (r, j) { return j === i ? row : r; });
       return full;
     };
+    var check = function () { self.issues = SF.validate(self.schema, withRow()); self.index(self.issues); };
     var draw = function () {
       body.textContent = '';
-      self.issues = SF.validate(self.schema, withRow());
-      self.byPath = {};
-      self.issues.forEach(function (x) { var k = SF.pathKey(x.path); (self.byPath[k] = self.byPath[k] || []).push(x); });
+      check();
       var skip = row.rate_kind === 'fixed' ? { index_code: 1, spread_bp: 1 } : row.rate_kind === 'index_spread' ? { fixed_rate_pct: 1 }
         : row.rate_kind === 'none' || row.rate_kind === 'contract' ? { index_code: 1, spread_bp: 1, fixed_rate_pct: 1 } : {};
       body.append(self.renderFields(cols.filter(function (c) { return !skip[c.key] || row[c.key] !== undefined; }), row, later, [t.key, i]));
@@ -786,17 +1082,12 @@
       if (fromAdapter.length) body.append(h('div', { class: 'note warn', style: 'margin-top:10px' }, h('b', {}, 'Последняя проверка адаптером:'),
         h('ul', { class: 'sf-issues' }, fromAdapter.map(function (x) { return self.issueLi(x); }))));
     };
-    // ошибки под полями обновляются, когда ввод затих (фокус и курсор остаются), сразу — при смене вида ставки
+    // ошибки под полями обновляются, когда ввод затих (поля не перерисовываются: фокус и курсор остаются), карточка
+    // целиком — только при смене вида ставки (другие поля)
     function later() {
       clearTimeout(timer);
       if (row.rate_kind !== kind) { kind = row.rate_kind; draw(); return; }
-      timer = setTimeout(function () {
-        var a = document.activeElement, id = a && a.id, s = a && a.selectionStart;
-        if (!d.el.isConnected) return;
-        draw();
-        var b = id && document.getElementById(id);
-        if (b) { b.focus(); try { if (s != null) b.setSelectionRange(s, s); } catch (e) { /* select, date */ } }
-      }, 700);
+      timer = setTimeout(function () { if (d.el.isConnected) { check(); self.refresh(); } }, 400);
     }
     var keyCol = cols.length && cols[0].required ? cols[0].key : null;
     var done = false;
@@ -849,7 +1140,7 @@
     this.render();
   };
   F.renderRaw = function () {
-    var self = this, msg = h('div', { class: this.rawError ? 'err' : 'mut3' }, this.rawError || 'Изменения JSON сразу видны в форме (снимите «Эксперт»). Сохраняется через ту же проверку.');
+    var self = this, msg = h('div', { class: this.rawError ? 'err' : 'mut3' }, this.rawError || 'Изменения JSON сразу видны в форме (снимите «JSON»). Сохраняется через ту же проверку.');
     var ta = h('textarea', { class: 'ta', spellcheck: 'false', 'aria-label': this.file });
     ta.value = this.rawText;
     ta.addEventListener('input', function () {

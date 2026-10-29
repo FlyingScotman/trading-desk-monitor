@@ -8,10 +8,10 @@ from importlib.resources import files
 
 SPI_VERSION = 1
 SPI_MAJORS = frozenset({1})            # majors this backend can call (08 §9)
-CONTRACT_MAJOR, CONTRACT_MINOR = 1, 4  # private/1.4 (08 §9: 1.1 positions risk fields; 1.2 FUTURES books, ocp,
+CONTRACT_MAJOR, CONTRACT_MINOR = 1, 5  # private/1.5 (08 §9: 1.1 positions risk fields; 1.2 FUTURES books, ocp,
 #                                        cash_balances, pnl_official, trade_terms, reference entities and funding_rules;
 #                                        1.3 reference funding_policy, positions purchase_accrued_ccy; 1.4 trade_terms
-#                                        of swaps, REPO and HTM purchases)
+#                                        of swaps, REPO and HTM purchases; 1.5 reference ocp_policy)
 CONTRACT = f"private/{CONTRACT_MAJOR}.{CONTRACT_MINOR}"
 _CONTRACT_RE = re.compile(r"^private/([0-9]+)\.([0-9]+)$")
 
@@ -35,15 +35,19 @@ DATASET_KEYS: dict[str, tuple[str, ...]] = {
 }
 
 # §7, §10: the reference tables of reference(ctx); each has a schema file. ``books`` is required when a source
-# emits book_id, the others are optional (entities, funding_rules: 1.2; funding_policy: 1.3). A row is keyed by
-# REFERENCE_KEYS plus its valid_from (history).
-REFERENCE_KINDS = ("books", "entities", "funding_rules", "funding_policy")
+# emits book_id, the others are optional (entities, funding_rules: 1.2; funding_policy: 1.3; ocp_policy: 1.5). A row
+# is keyed by REFERENCE_KEYS plus its valid_from (history).
+REFERENCE_KINDS = ("books", "entities", "funding_rules", "funding_policy", "ocp_policy")
 REFERENCE_KEYS: dict[str, tuple[str, ...]] = {
     "books": ("book_id",),
     "entities": ("entity",),
     "funding_rules": ("rule_id",),
     "funding_policy": ("policy_id",),
+    "ocp_policy": ("policy_id",),
 }
+OCP_COMPONENTS = ("cash", "fx_legs", "ndf", "futures", "options", "bonds", "funding", "other", "transfers")
+"""The OCP components ``ocp_policy.report_components`` may name (08 §10, 1.5): ``desk.rules.ocp.COMPONENTS``, here so
+the validator needs only the standard library (a test keeps the two equal)."""
 
 TIME_BASES = frozenset({"start_of_day", "end_of_day", "intraday"})
 COMPLETENESS = frozenset({"full_snapshot", "increment"})

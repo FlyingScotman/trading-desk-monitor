@@ -30,6 +30,9 @@
  *    период (null — не посчитано: не настроено или проблема), p.fundRate — ставка фондирования на конец периода, %
  *    (extra.funding.lines rate_pct, по телу строк в рублях), p.fundingInfo — extra.funding (состояние, строки, причина);
  *    M.funding — фондирование прогона (D.fundingStatus: состояние, итоги по книгам и юрлицам, проблемы).
+ *  - ОВП (TDM#416): M.ocp — публикуемая ОВП прогона (D.OCP: по валютам и по книгам, источник каждой цифры — отчёт ОВП
+ *    банка + слагаемые вне отчёта или из позиций, чего не хватает — gaps); null — у прогона её нет (шапка и C06 — сумма
+ *    FX-дельт позиций). FX-дельта позиций (p.fxDeltaBy) и PnL FX от неё не зависят.
  *  - свопы и РЕПО, оценённые ядром (#201): p.ratesCore — сделки (extra.swaps / extra.repos), фиксинги (extra.index_fixings),
  *    сверка с отчётом (reported_pv_rub / pv_diff_rub), provisional — quality 'assumed'; null — нет. M.indexFixings — фиксинги
  *    прогона по индексу; M.derivParallel() — лениво, /api/v1/runs/{id}/derivatives (ядро и отчёт по позициям): state
@@ -105,6 +108,17 @@
     bookLevel: num(FS.bookLevel), byBook: FS.byBook || {}, byEntity: FS.byEntity || {}, problems: FS.problems || [], provisional: FS.provisional || [], defaultRate: FS.defaultRate || null };
   if (FS.state !== 'computed') M.notes.push('Фондирование: ' + (FS.text || FS.state));
   else if (M.funding.problems.length) M.notes.push('Фондирование: проблем ' + M.funding.problems.length + ' (кокпит, вкладка PnL)');
+  // публикуемая ОВП прогона (TDM#416, D.OCP, api/concepts_run.ocp_status): отчёт ОВП банка + слагаемые вне отчёта, по
+  // книгам без отчёта — из позиций. Шапка (K.fxMini), плитка C06 «ОВП и курсы» и C16 берут её; null — прогон без неё
+  // (до v2 блока ОВП, ошибка расчёта): сумма FX-дельт позиций, как раньше. Чего ей не хватает — заметка в шапке.
+  const OC = D.OCP;
+  M.ocp = OC && Array.isArray(OC.byBook) ? {
+    asOf: OC.asOf || null, state: OC.state, text: OC.text || '', basis: OC.basis,
+    byCcy: Object.fromEntries(Object.entries(OC.byCcy || {}).map(([c, x]) => [c, { total: num(x.total), rate: num(x.rate), totalRub: num(x.totalRub), bySource: x.bySource || {} }])),
+    byBook: OC.byBook.map(x => Object.assign({}, x, { amount: num(x.amount) || 0, reported: num(x.reported), books: x.books || [], components: x.components || [] })),
+    notes: OC.notes || [], gaps: OC.gaps || [], sourceNames: OC.sourceNames || {}, componentNames: OC.componentNames || {},
+  } : null;
+  if (M.ocp && M.ocp.gaps.length) M.notes.push('ОВП: ' + M.ocp.gaps[0].text + (M.ocp.gaps.length > 1 ? '; ещё ' + (M.ocp.gaps.length - 1) + ' (C16)' : ''));
 
   // ---------- валюты, курсы, индексы ----------
   const BASE_CCY = ['RUB', 'USD', 'EUR', 'CNY'];

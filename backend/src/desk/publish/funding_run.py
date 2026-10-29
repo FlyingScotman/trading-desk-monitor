@@ -53,6 +53,7 @@ from __future__ import annotations
 import math
 from collections import Counter, defaultdict
 from collections.abc import Iterable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
@@ -373,16 +374,24 @@ def _empty_block(status: str, text: str, period: F.AccrualPeriod | None, **kw: A
             "policy": None, "rules": [], "daily_by_book": {}, **kw}
 
 
+def savepoint(con: psycopg.Connection | None) -> AbstractContextManager[Any]:
+    """A savepoint (``con.transaction()``) around a block's computation (TDM#215): an SQL error inside rolls back only
+    the block's reads, never the run's transaction. No connection (a unit test of the computation): none."""
+    return con.transaction() if con is not None else nullcontext()
+
+
 def compute(con: psycopg.Connection, on: date, prev: MarketView | None, market: MarketView,
             content_rows: list[dict[str, Any]], run_books: list[dict[str, Any]], inputs: store.PositionInputs,
             terms: dict[str, Any] | None = None, settings: funding_settings.FundingSettings | None = None) -> RunFunding:
     """Funding of the run of ``on`` (see the module docstring). ``content_rows`` and ``run_books``:
     ``RunContent.rows`` and ``RunContent.reference["books"]``; ``terms``: position_id -> the bond's ``BondTerms``
     (an HTM lot's coupon date and maturity); ``settings``: the funding settings (default: the current ones,
-    ``funding_settings.load``)."""
+    ``funding_settings.load``). In a savepoint (TDM#215): an SQL error inside rolls back only its reads, so the run
+    still publishes, with the block ``failed``."""
     try:
         fs = settings if settings is not None else funding_settings.load()
-        return _compute(con, on, prev, market, content_rows, run_books, inputs, terms or {}, fs)
+        with savepoint(con):
+            return _compute(con, on, prev, market, content_rows, run_books, inputs, terms or {}, fs)
     except Exception as e:  # noqa: BLE001 - funding never fails the run; it says why it has none
         text = f"{STATUS_TEXT[FAILED]}: {type(e).__name__}: {e}"
         pids = {r["position_id"] for r in content_rows}

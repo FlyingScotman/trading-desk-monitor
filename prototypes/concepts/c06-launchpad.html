@@ -99,7 +99,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
             : 'базис ОФЗ ' + K.d({ title: 'Базис ОФЗ−RUONIA', unit: 'тыс ₽/бп', list: L, val: 'basis01' }, null, '')), sp(H.cs01, css('--warn'))) +
           cell(K.hint('Кэрри/день, тыс ₽', K.tips.carry), K.d({ title: 'Кэрри за день (без фондирования)', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }), K.hint('фондирование', K.tips.funding) + ' ' + K.d({ title: 'Фондирование за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'fundingDay', nullable: true }), sp(H.pnl.carry, css('--pos'))) +
           cell('Облигации MV, bn ₽', K.d({ title: 'MV облигаций', unit: 'bn ₽', fmt: v => f.bn(v, 1), list: bonds(L), val: 'mv', color: false }), M.ccys.map(c => c + ' ' + f.bn(k.byCcy[c].mv, 1)).join(' · ')) +
-          cell('ОВП <a class="mut3" href="#fx" data-fxgo title="плитка «ОВП и курсы»">→</a>', K.fxMini(L), '') +  // R43: валюта на строку, мелкие — в «прочих»
+          cell('ОВП <a class="mut3" href="#fx" data-fxgo title="плитка «ОВП и курсы»">→</a>', K.fxMini(L), K.ocpNote()) +  // R43: валюта на строку, мелкие — в «прочих»
           cell('КС · RUONIA', f.pct(M.indices['КС']) + ' <span class="mut" style="font-size:12px">' + f.pct(M.indices['RUONIA']) + '</span>', esc(M.cbr.next.label) + ' ' + f.dshort(M.cbr.next.date)) +
           cell('USD/RUB · CNY/RUB', f.n(M.fx.USD, 2) + ' <span class="mut" style="font-size:12px">' + f.n(M.fx.CNY, 2) + '</span>', '<span class="' + f.cls(M.fxChgPct.USD) + '">' + f.pcts(M.fxChgPct.USD, 2) + '</span> · <span class="' + f.cls(M.fxChgPct.CNY) + '">' + f.pcts(M.fxChgPct.CNY, 2) + '</span>') +
           '</div>';
@@ -243,19 +243,26 @@ body { display: flex; flex-direction: column; overflow: hidden; }
     fx: {
       title: 'ОВП и курсы', modes: [['table', 'таблица'], ['bars', 'бары']],
       render(bd, mode) {
-        // ОВП по ключам FX-дельты (fx_delta {ccy}), не по валюте позиции: вторая валюта кросса — в своей строке
-        const L = K.list(), C = K.fxCcys(L), fx = c => p => INSTR.fxIn(p, c);
+        // ОВП по ключам FX-дельты (fx_delta {ccy}), не по валюте позиции: вторая валюта кросса — в своей строке.
+        // Публикуемая ОВП прогона (TDM#416, K.ocpScope): столбец «ОВП» — отчёт ОВП + слагаемые вне отчёта (метка
+        // источника), бонды и деривативы — разбор FX-дельт позиций, «Σ FX-дельт» — их сумма; без неё — как раньше
+        const L = K.list(), S = K.ocpScope(), PUB = S ? Object.fromEntries(K.fxRows(L).map(r => [r.c, r])) : null, fx = c => p => INSTR.fxIn(p, c);
+        const C = [...new Set(K.fxCcys(L).concat(Object.keys(PUB || {})))];
         const part = (c, der) => L.filter(p => (M.deal(p)) === der && INSTR.fxIn(p, c));
+        const pubCell = c => { const r = PUB[c]; return r ? K.d({ title: 'ОВП ' + c + ' — позиции с FX-дельтой (разбор из позиций)', unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: L, val: fx(c), v: r.v }, f.mn(r.v, 1)) + ' <small class="mut3 k-ocpsrc" title="' + esc(K.ocpSrcTitle(r.src)) + '">' + esc(K.ocpSrcMark(r.src)) + '</small>' : '<span class="mut3" title="в публикуемой ОВП валюты нет">—</span>'; };
         if (mode === 'table') {
-          bd.innerHTML = '<table class="k-tbl" data-vk="c06-fx-position" data-title="ОВП по валютам"><thead><tr><th>Вал</th><th class="n">Курс</th><th class="n" title="Облигации: грязная MV в валюте минус валютный пассив фондирования (грязная MV на прошлый перенос ОВП) плюс купоны дня — валютный PnL с прошлого переноса; без пассива — вся грязная MV">Бонды</th><th class="n">Дерив.</th><th class="n">ОВП</th><th class="n" title="тыс ₽">PnL FX</th></tr></thead><tbody>' +
+          bd.innerHTML = '<table class="k-tbl" data-vk="c06-fx-position" data-title="ОВП по валютам"><thead><tr><th>Вал</th><th class="n">Курс</th><th class="n" title="Облигации: грязная MV в валюте минус валютный пассив фондирования (грязная MV на прошлый перенос ОВП) плюс купоны дня — валютный PnL с прошлого переноса; без пассива — вся грязная MV">Бонды</th><th class="n">Дерив.</th>' +
+            (S ? '<th class="n" title="Сумма FX-дельт позиций (бонды + деривативы)">Σ FX-дельт</th><th class="n" title="' + esc(K.tips.fxMiniPub) + '">ОВП</th>' : '<th class="n">ОВП</th>') + '<th class="n" title="тыс ₽">PnL FX</th></tr></thead><tbody>' +
             C.map(c => '<tr><td>' + K.ccyTag(c) + '</td><td class="n">' + f.n(M.fx[c], 2) + ' <span class="' + f.cls(M.fxChgPct[c]) + '" style="font-size:10.5px">' + f.pcts(M.fxChgPct[c], 2) + '</span></td>' +
               '<td class="n">' + K.d({ title: 'FX дельта бондов ' + c, unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: part(c, false), val: fx(c) }) + '</td>' +
               '<td class="n">' + K.d({ title: 'FX дельта деривативов ' + c, unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: part(c, true), val: fx(c) }) + '</td>' +
-              '<td class="n"><b>' + K.d({ title: 'ОВП ' + c, unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: L, val: fx(c) }) + '</b></td>' +
+              (S ? '<td class="n">' + K.d({ title: 'FX дельта позиций ' + c, unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: L, val: fx(c) }) + '</td><td class="n"><b>' + pubCell(c) + '</b></td>'
+                : '<td class="n"><b>' + K.d({ title: 'ОВП ' + c, unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: L, val: fx(c) }) + '</b></td>') +
               '<td class="n">' + K.d({ title: 'PnL FX ' + c, unit: 'тыс ₽', fmt: f.k, list: L.filter(p => p.ccy === c), val: p => p.pnl.fx }) + '</td></tr>').join('') +
             '</tbody></table><div class="k-note" style="padding:4px 8px">mm в валюте; PnL FX — тыс ₽' +
             (M.fxPnl ? '. ' + K.fxLine(C) : '') +
-            '. Бонды — грязная MV за вычетом валютного пассива (грязная MV на прошлый перенос ОВП): валютный PnL за день, его уводит перенос ОВП; деривативы — FX-дельта</div>';
+            '. Бонды — грязная MV за вычетом валютного пассива (грязная MV на прошлый перенос ОВП): валютный PnL за день, его уводит перенос ОВП; деривативы — FX-дельта' +
+            (S ? '. ОВП — публикуемая: отчёт ОВП банка и слагаемые вне отчёта из позиций, по книгам без отчёта — из позиций (<a href="c16-ocp.html">C16</a>)' + (S.notes.length ? '; ' + esc(S.notes.join('; ')) : '') : '') + '</div>';
           K.tableToolsAll(bd);
           return;
         }

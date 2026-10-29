@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "private/1.5/ocp_policy",
+  "title": "ocp_policy row (reference())",
+  "description": "Private input contract v1 (docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md §10). One row as the adapter emits it. An optional field may be absent or null (the same thing); the empty string is invalid everywhere. Raw firm values go in x_* keys; _src is the row's location in the report, without sheet names.",
+  "type": "object",
+  "required": [
+    "_src",
+    "policy_id"
+  ],
+  "properties": {
+    "_src": {
+      "$ref": "#/$defs/str"
+    },
+    "policy_id": {
+      "$ref": "#/$defs/str"
+    },
+    "valid_from": {
+      "$ref": "#/$defs/date"
+    },
+    "active": {
+      "type": "boolean",
+      "default": true
+    },
+    "report_components": {
+      "$ref": "#/$defs/str"
+    },
+    "published": {
+      "enum": [
+        "report_plus_outside",
+        "derived"
+      ]
+    },
+    "amount_basis": {
+      "enum": [
+        "spot_equivalent",
+        "nominal"
+      ]
+    },
+    "include_ndf": {
+      "type": "boolean"
+    },
+    "cash_from_balances": {
+      "type": "boolean"
+    },
+    "settle_window_bd": {
+      "$ref": "#/$defs/int"
+    },
+    "tolerance_ccy": {
+      "$ref": "#/$defs/amount"
+    },
+    "report_max_age_days": {
+      "$ref": "#/$defs/int"
+    }
+  },
+  "patternProperties": {
+    "^x_": {}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "str": {
+      "type": "string",
+      "minLength": 1
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "int": {
+      "type": [
+        "integer",
+        "string"
+      ],
+      "pattern": "^-?[0-9]+$",
+      "description": "an integer: a JSON integer or a string of digits; normalised to an integer"
+    },
+    "amount": {
+      "type": [
+        "number",
+        "string"
+      ],
+      "pattern": "^-?[0-9]+(\\.[0-9]+)?$",
+      "description": "a finite JSON number or a decimal string; no NaN, exponents in strings, separators or commas"
+    }
+  }
+}
