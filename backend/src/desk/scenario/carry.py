@@ -17,9 +17,10 @@ held, the curves are static (core's forwards realised for the carry, the shape h
 of core's ``carry_rub``: the clean price's drift on today's forwards at the held spread), ``rolldown`` (core's
 ``rolldown_rub``); ``carry = coupon + pull + rolldown`` (core's ``horizon_pnl_rub``). Covered: the run's positions core
 valued (quality ``exact`` / ``assumed``, with a secid) and the bonds on a price rung (``market_value`` /
-``stale_price``: carried at that price, ``fallback.at_last_price``, TDM#383), whose start PV core reproduces within
+``stale_price``: carried at that price, ``fallback.at_last_price``, TDM#383; ``model_price``: at the run's model price,
+its fact's ``price``, ``fallback.at_model_price``, TDM#441), whose start PV core reproduces within
 ``exact.BASE_TOLERANCE_RUB``. Every other position has no forecast (null, never 0) and a ``code``: its quality (a
-model or par price, a report value), core's refusal of a bond on a price rung, ``not_a_bond`` (a derivative: core's swap and REPO carry is not wired here yet),
+par price, a report value, a model price without its price), core's refusal of a bond on a price rung, ``not_a_bond`` (a derivative: core's swap and REPO carry is not wired here yet),
 ``base_mismatch``, or core's refusal (``core_<code>``). A bond whose last flow is paid by the horizon, which core does
 not carry, is carried as cash by the backend (``carryMethod`` ``redeemed``: what it receives to the horizon less its
 dirty value at the start; ``coupon`` the coupons received less the accrued bought, ``pull`` the rest, no roll-down).
@@ -77,9 +78,10 @@ from ..rules.reference import funding_rules_from_reference
 from . import spread_curve
 from .exact import BASE_TOLERANCE_RUB, REPRICED, _context
 
-CARRIED = (*REPRICED, "market_value", "stale_price")
+CARRIED = (*REPRICED, "market_value", "stale_price", "model_price")
 """The qualities a forward carry is computed for: core's, and a price rung's (``orchestrator.horizon`` carries a bond
-without a price of its own at that price, TDM#383; one core refuses keeps core's reason)."""
+without a price of its own at that price, TDM#383; a model price at the run's, TDM#441; one core refuses keeps core's
+reason)."""
 
 METHOD = "desk-forward-carry-v1"
 HORIZONS = (("1M", 1), ("3M", 3), ("6M", 6), ("1Y", 12))
@@ -205,9 +207,13 @@ def bond_carry(ctx: EodContext, rows: Sequence[Mapping[str, Any]], hdate: date) 
     ``quality``, ``pv_rub``, ``fact``) to ``hdate`` (see the module docstring): one per row, in order."""
     out = [PositionCarry(r["position_id"], r["book_id"], r.get("secid"), r.get("quality"), r.get("fact"))
            for r in rows]
-    todo = []
+    todo, models = [], {}
     for p, r in zip(out, rows):
-        if p.quality not in CARRIED or (p.quality not in REPRICED and p.secid is None):  # a price rung: bonds only
+        price = (r.get("fact") or {}).get("price")
+        if p.quality == "model_price" and isinstance(price, int | float) and math.isfinite(price):
+            models[p.position_id] = float(price)  # carried at the run's model price (TDM#441)
+        if p.quality not in CARRIED or (p.quality not in REPRICED and p.secid is None) \
+                or (p.quality == "model_price" and p.position_id not in models):  # a price rung: bonds at a price only
             p.code = p.quality or NOT_VALUED
         elif p.secid is None or r.get("quantity") is None:
             p.code = "not_a_bond"
@@ -216,7 +222,7 @@ def bond_carry(ctx: EodContext, rows: Sequence[Mapping[str, Any]], hdate: date) 
     if not todo:
         return out
     outs, _ = horizon(ctx, [(p.secid, float(r["quantity"])) for p, r in todo], hdate,
-                      position_ids=[p.position_id for p, _ in todo])
+                      position_ids=[p.position_id for p, _ in todo], model_prices=models)
     for (p, r), o in zip(todo, outs):
         c = o.carry
         if c is None:

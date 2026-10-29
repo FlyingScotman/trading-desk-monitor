@@ -28,6 +28,13 @@ price of ``market_value`` / ``stale_price`` instead, with that quality (``at_las
 projection, OFZ basis and a perpetual's tail, which no duration estimate has, core's accrued, and ``orchestrator.horizon``
 carries it from the same value. The rungs' own risk below is for the bonds core refuses.
 
+A model price is a question of the price's source, not of its attribution (the owner's decision of 29.10, TDM#441): a
+RUB bond on ``model_price`` for the same want of a price of its own is valued by core at the model's price in the same
+way (``at_model_price``): core's flows, risk and accrued, quality kept, the spread's source in the assumptions, carried
+by ``orchestrator.horizon`` at that price. The model is not circular: core's Z at the model's price must give back the
+Z the price was built from (``MODEL_Z_TOLERANCE_BP``; the price is the same engine's on the same curve, schedule and
+accrued), so a carried spread (``CarriedSpread``) is carried unchanged; else the ladder's own model price stays, said.
+
 Risk of the priced rungs: with a usable fixed schedule, core ``BondRiskEngine`` calibrated to the
 dirty price (bucket DV01 and spread risk on the discount curve, as for exact bonds: the KBD for ``OFZ_KBD_CLASSES``,
 ``bond_discount``). Otherwise a duration estimate: MOEX ``duration_days``, else the time to the horizon; DV01 =
@@ -41,9 +48,11 @@ estimate (DV01 in RUB per bp), booked on the currency's curve (``bonds.ccy_curve
 instead of RUONIA. MOEX publishes the accrued in the settlement currency (RUB for most replacement
 bonds) and the price in % of the foreign face.
 
-Flash PnL of a position not exact on either date: ``simple_pnl``, q * (dirty_D - dirty_D-1) +
-received, all in ``other``. No decomposition is faked: only a foreign-face bond priced on both dates gets its carry
-at its own yield (``yield_pnl``, batch 1 item 5), and its FX revaluation goes to ``fx_gross`` (``pnl.direct``).
+Flash PnL of a position not valued by core on either date (``by_core``; a rung core valued at its price takes the exact
+steps, ``pnl.flash``): ``simple_pnl``, q * (dirty_D - dirty_D-1) + received, all in ``other``, its reason in
+``other_reason`` (``orchestrator.attach_pnl``, ``pnl.reasons``). No decomposition is faked: only a foreign-face bond
+priced on both dates gets its carry at its own yield (``yield_pnl``, batch 1 item 5), and its FX revaluation goes to
+``fx_gross`` (``pnl.direct``).
 """
 
 from __future__ import annotations
@@ -83,6 +92,7 @@ from ..marketdata.adapter import (
     settlement_currency,
 )
 from ..pnl.flash import FlashPnl, NoPnl
+from ..pnl.reasons import YIELD_NO_CURVE, other_reason
 from .bonds import (
     OFZ_KBD_CLASSES,
     PRICE_BASIS_ORDER,
@@ -120,7 +130,18 @@ MIN_HORIZON_DAYS = 30
 METHOD = "desk-flash-simple-v1"
 QUALITIES = ("exact", "assumed", "market_value", "stale_price", "model_price", "par_proxy", "reported_value")
 RUNGS = QUALITIES[2:]
-"""The qualities without cashflows on the valuation: flash PnL by ``simple_pnl`` (``reported_value`` has none)."""
+"""The fallback rungs: flash PnL by ``simple_pnl`` (``reported_value`` has none) unless valued by core on both dates
+(``by_core``: at a price rung's or the model's price, ``at_last_price``, ``at_model_price``)."""
+MODEL_BASIS = "model"
+"""The price basis of a model price (``BondValuation.price_basis``; core's price observation at it)."""
+MODEL_Z_TOLERANCE_BP = 1e-3
+"""Core's Z at a model's price against the Z the price was built from (``at_model_price``): beyond it the ladder's own
+model price stays (the price would not be the spread's)."""
+
+
+def by_core(v: BondValuation) -> bool:
+    """Valued by core (its instrument and flows on the valuation): the exact path, or a fallback rung at its price."""
+    return v.instrument is not None and bool(v.cashflows)
 
 
 @dataclass(frozen=True)
@@ -291,6 +312,37 @@ def at_last_price(ctx: EodContext, position_id: str, outcome: Outcome, quantity:
     except Rejected:
         return None
     return req, quality, tuple(notes)
+
+
+def at_model_price(ctx: EodContext, position_id: str, outcome: Outcome, quantity: float, clean_pct: float
+                   ) -> BondRequest | None:
+    """A RUB bond the exact path refused only for want of a price of its own (``OWN_PRICE_MISSING``) as a request core
+    values exactly at the model's clean price ``clean_pct`` (``approximate``'s ``model_price``, or a stored run's,
+    ``orchestrator.horizon``), TDM#441: today's quote if any, else a quote of no price dated today, with no MOEX
+    accrued either way: the model's dirty price is core's PV on the bond's schedule, so its clean is that less core's
+    own accrued, which core then adds back. None: another refusal, a foreign face, terms core's request refuses.
+
+    Why: the model price had core's risk on its fixed schedule already, but no flows on the valuation, so its flash
+    PnL was the dirty price's move, all in ``other`` (``simple_pnl``), and it had no carry; the same bond at the same
+    price through core has its exact flash steps (``pnl.flash``) and core's carry."""
+    t = outcome.terms
+    if t is None or outcome.reason not in OWN_PRICE_MISSING or bond_currency(t) != "RUB":
+        return None
+    bd, q = ctx.business_date, outcome.quote
+    quote = (replace(q, accrued_per_bond=None) if q is not None and q.trade_date == bd
+             else BondQuote(t.secid, t.primary_board or "", bd, None, None, {}, None, {}))
+    try:
+        settle = settlement_date(bd, t.settle_lag_days, ctx.calendar, *ctx.calendar_window)
+        return bond_request(position_id, t, quote, settle, quantity, price=(MODEL_BASIS, clean_pct))
+    except Rejected:
+        return None
+
+
+def model_notes(model: BondValuation) -> tuple[str, ...]:
+    """The assumptions of a model price valued by core (``at_model_price``): why it is not exact and the model's spread
+    and its source, as the ladder said them, then ``valued by core at this price``."""
+    why = tuple(a for a in model.assumptions if a.startswith(("not exact: ", "model price: ")))
+    return (*why, "valued by core at this price")
 
 
 def _accrued(t: BondTerms, d: date, face: float) -> tuple[float, str] | None:
@@ -549,7 +601,7 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
                    + (f" ({disc_note})" if disc_note else ""))
         bs = {b.bucket: b.dv01_rub for b in r.buckets}
         mdur = -r.dv01_rub / r.pv_rub * 1e4 if r.pv_rub else math.nan
-        return make("model_price", price_basis="model", clean_pct=(dirty - acc) / face * 100,
+        return make("model_price", price_basis=MODEL_BASIS, clean_pct=(dirty - acc) / face * 100,
                     accrued_rub=acc, face_rub=face, dirty_rub=dirty, pv_rub=q * dirty, ytm_pct=math.nan,
                     macaulay_years=mdur, modified_duration=mdur, z_spread_bp=z, model_spread_source=source,
                     discount_curve_id=disc_id, buckets=bs, curve_buckets={disc: bs}, dv01_rub=r.dv01_rub,
@@ -598,17 +650,15 @@ def par_proxy(ctx: EodContext, outcome: Outcome, quantity: float, note: str) -> 
 
 @dataclass(frozen=True)
 class SimplePnl(FlashPnl):
-    """Flash PnL without decomposition: everything in ``other``."""
+    """Flash PnL without decomposition: everything in ``other`` (``flag``: a model price on either side)."""
 
     note: str = ""
-    flag: str = ""
-    """Set when a model price is on either side: the PnL is then partly price discovery, not a market move."""
     method: str = METHOD
     """``METHOD``, or ``YIELD_METHOD`` with a foreign bond's carry at its yield (``yield_pnl``)."""
 
     def extra(self) -> dict[str, Any]:
         return {"method": self.method, "prev_date": self.prev_date.isoformat(), "received_rub": self.received_rub,
-                "total": self.total, "note": self.note, **({"flag": self.flag} if self.flag else {})}
+                "total": self.total, "note": self.note, **self.tags()}
 
 
 def received_per_bond(t: BondTerms, d0: date, d1: date) -> float | None:
@@ -644,6 +694,7 @@ def yield_pnl(prev: BondValuation, cur: BondValuation, terms: BondTerms, prev_ct
     days = (cur.valuation_date - prev.valuation_date).days
     carry = pnl.v0 / r0[0] * ((1 + y / 100) ** (days / 365) - 1) * r1[0]
     return replace(pnl, carry=carry, other=pnl.other - carry, v_carry=pnl.v0 + carry, method=YIELD_METHOD,
+                   other_reason=other_reason(YIELD_NO_CURVE, f"no {ccy} curve: the yield move stays in other", ccy=ccy),
                    note=f"{pnl.note}; carry = PV D-1 {pnl.v0 / r0[0]:,.2f} {ccy} x ((1 + {y:g} %)^({days}/365) - 1) "
                         f"x {r1[0]:g} (no {ccy} curve: the yield move stays in other)")
 
