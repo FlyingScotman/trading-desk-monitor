@@ -10,6 +10,7 @@ fields used are projected, never the whole fact (cashflows, gamma); one server-c
 from __future__ import annotations
 
 import bisect
+import math
 from collections.abc import Iterable
 from datetime import date, timedelta
 from typing import Any
@@ -32,10 +33,17 @@ from .pnl_history import (
 from .runs import run_slice
 
 CARRY_SPLIT = ("carry_coupon", "carry_pull")
-COMPONENTS = (*KEYS, *CARRY_SPLIT)
-ORDER = ("carry", "carry_coupon", "carry_pull", "rolldown", "funding", "rates", "spread", "convexity", "fx_gross",
-         "fx_funding", "new_trades", "other", "reported")
-"""``keys``: the order shown; the carry split only when a row of the slice has it."""
+NOSPLIT = "carry_nosplit"
+"""Carry of the rows with carry but without ``carry_coupon`` (flash simple / yield, undated recompute): attribution and
+carry views split per row (TDM#432); never a missing component (``m`` stays 0), null when no such row."""
+RATES_SPLIT = ("rates_linear", "rates_exact_lin")
+"""``pnl.extra.rates_linear`` and the exact ``rates`` of the same rows, RUB bonds only (foreign ones stay whole in
+``rates`` until TDM#418): «Ставки (линейно)» and «Выпуклость (ставки)» = exact − linear (TDM#435)."""
+EXTRA_KEYS = (*CARRY_SPLIT, NOSPLIT, *RATES_SPLIT)
+COMPONENTS = (*KEYS, *EXTRA_KEYS)
+ORDER = ("carry", "carry_coupon", "carry_pull", NOSPLIT, "rolldown", "funding", "rates", *RATES_SPLIT, "spread",
+         "convexity", "fx_gross", "fx_funding", "new_trades", "other", "reported")
+"""``keys``: the order shown; the extra keys only when a row of the slice has them."""
 GRANS = ("day", "week", "month")
 MONTHS = ("янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
 DROP_EXTRA = "ARRAY['prev', 'rates_linear_curves', 'curve_moves_bp']"
@@ -49,7 +57,11 @@ TRIMMED_PNL = f"""((p.pnl - 'extra'::text) || jsonb_build_object('extra', (p.pnl
 PERIOD_COLUMNS = KIND_COLUMNS + f""", {TRIMMED_PNL}, p.pv_rub AS pv,
  p.fact->'extra'->'funding'->'lines' AS "fundingLines\""""
 CURVES_COLUMNS = """p.fact->>'spread_curve' AS curve, p.fact->'risk' AS risk, (p.pnl->>'rates')::float8 AS rates,
- (p.pnl->'extra'->>'rates_linear')::float8 AS "ratesLinear", p.pnl->'extra'->'rates_linear_curves' AS "linearCurves\""""
+ (p.pnl->'extra'->>'rates_linear')::float8 AS "ratesLinear", p.pnl->'extra'->'rates_linear_curves' AS "linearCurves",
+ (p.pnl->'extra'->>'rates_linear_ruonia')::float8 AS "linearRuonia",
+ (p.pnl->'extra'->>'rates_linear_basis')::float8 AS "linearBasis",
+ p.pnl->'extra'->'prev'->'ofz_ruonia_risk' AS "ruoniaRisk", p.pnl->'extra'->'curve_moves_bp' AS moves,
+ p.fact->'extra'->'ofz_ruonia01' IS NOT NULL AS "ofzRuonia\""""
 POSITION_COLUMNS = KIND_COLUMNS + """, p.pnl, p.pv_rub AS pv, p.dv01_rub AS dv01, p.cs01_rub AS cs01,
  p.quantity, (p.fact->>'price')::float8 AS clean, (p.fact->>'ytm')::float8 AS ytm, p.fact->>'maturity' AS maturity,
  p.fact->'extra'->>'offer_date' AS "offerDate", p.fact->'extra'->>'offer_kind' AS "offerKind\""""
@@ -60,15 +72,30 @@ def _num(v: Any) -> float | None:
     return float(v) if isinstance(v, int | float) and not isinstance(v, bool) else None
 
 
-def components(pnl: dict[str, Any] | None) -> tuple[dict[str, Any], dict[str, float | None]]:
-    """``amounts`` of a row and its components with the carry split of ``pnl.extra`` (null when not saved)."""
+def _rub_bond(r: dict[str, Any]) -> bool:
+    """A rouble bond as ``summary.kind_of`` reads it (``instr_type`` BOND or none, currency RUB or none)."""
+    return r.get("instrType") in ("BOND", None) and (r.get("ccy") or "RUB") == "RUB"
+
+
+def components(pnl: dict[str, Any] | None, row: dict[str, Any] | None = None
+               ) -> tuple[dict[str, Any], dict[str, float | None]]:
+    """``amounts`` of a row and its components with the carry split of ``pnl.extra`` (null when not saved), the carry
+    of a row without it (``NOSPLIT``) and, given the row, the linear rates of a RUB bond (``RATES_SPLIT``; a
+    ``position`` day has ``ratesLinear`` of its own)."""
     a = amounts(pnl)
     extra = (pnl or {}).get("extra") or {}
-    return a, {**a["components"], **{k: _num(extra.get(k)) for k in CARRY_SPLIT}}
+    comp = {**a["components"], **{k: _num(extra.get(k)) for k in CARRY_SPLIT}}
+    carry = _num(comp["carry"])
+    comp[NOSPLIT] = carry if carry is not None and comp["carry_coupon"] is None else None
+    if row is not None:
+        lin, rates = _num(extra.get("rates_linear")) if _rub_bond(row) else None, _num(comp["rates"])
+        comp.update(dict.fromkeys(RATES_SPLIT) if lin is None or rates is None else
+                    {"rates_linear": lin, "rates_exact_lin": rates})
+    return a, comp
 
 
 def keys_of(seen: set[str]) -> list[str]:
-    return [k for k in ORDER if k not in CARRY_SPLIT or k in seen]
+    return [k for k in ORDER if k not in EXTRA_KEYS or k in seen]
 
 
 class Agg:
@@ -89,7 +116,7 @@ class Agg:
         for k, v in comp.items():
             # as pnl_history.Aggregate: a reported row has no ``other`` and a flash row no ``reported`` by method
             applicable = (a["method"] == REPORTED_METHOD if k == "reported" else
-                          a["method"] != REPORTED_METHOD if k == "other" else True)
+                          a["method"] != REPORTED_METHOD if k == "other" else k != NOSPLIT)
             self.c[k].add(v)
             self.m[k] += applicable and v is None
 
@@ -168,12 +195,19 @@ class Position:
         self.rate, self.weight = Sum(), Sum()
         self.buckets: dict[int, Sum] = {}
         self.n = n_buckets
+        self.methods: dict[str, None] = {}
+        self.no_pnl: dict[str, int] = {}
 
     def add(self, r: dict[str, Any], a: dict[str, Any], comp: dict[str, float | None], d: date, i: int) -> None:
         self.row = r  # latest metadata; identity always (book, position)
         self.first = self.first or d
         self.last = d
         self.agg.add(a, comp)
+        if a["method"]:
+            self.methods[a["method"]] = None
+        if r.get("noPnl"):
+            why = str((r["noPnl"] or {}).get("reason") or "")
+            self.no_pnl[why] = self.no_pnl.get(why, 0) + 1
         self.pv.add(r.get("pv"))
         if a["total"] is not None:
             prev = _date(a["prevDate"]) or r.get("runPrevDate")
@@ -194,7 +228,7 @@ class Position:
                 "pvAvg": self.pv.value() / self.pv.n if self.pv.n else None, "calDays": self.cal_days,
                 "fundingRatePct": self.rate.value() / w if w else None,
                 "buckets": [self.buckets[i].value() if i in self.buckets else None for i in range(self.n)],
-                **self.agg.result()}
+                "methods": sorted(self.methods), "noPnlReasons": dict(self.no_pnl), **self.agg.result()}
 
 
 class Period:
@@ -206,10 +240,11 @@ class Period:
         self.days: dict[date, tuple[dict[str, Any], Agg, dict[str, Sum]]] = {}
         self.positions: dict[tuple[str, str], Position] = {}
         self.seen: set[str] = set()
+        self.factors: dict[Any, dict[str, Sum]] = {}  # ratesByFactor (TDM#437) by date and by (book, position)
 
     def add(self, r: dict[str, Any]) -> None:
-        a, comp = components(r.get("pnl"))
-        self.seen.update(k for k in CARRY_SPLIT if comp[k] is not None)
+        a, comp = components(r.get("pnl"), r)
+        self.seen.update(k for k in EXTRA_KEYS if comp[k] is not None)
         d = r["date"]
         if d not in self.days:
             self.days[d] = ({"date": d, "prevDate": r.get("runPrevDate"), "runId": r["runId"]}, Agg(), {})
@@ -220,16 +255,29 @@ class Period:
         if key not in self.positions:
             self.positions[key] = Position(len(self.buckets))
         self.positions[key].add(r, a, comp, d, bisect.bisect_right(self.edges, d) - 1)
+        self.add_factors((d, key), r, comp["rates"])
+
+    def add_factors(self, keys: tuple[Any, ...], r: dict[str, Any], rates: float | None) -> None:
+        extra = (r.get("pnl") or {}).get("extra") or {}
+        split = exact_factors(r.get("curve"), rates, _num(extra.get("rates_linear_ruonia")),
+                              _num(extra.get("rates_linear_basis")))
+        for k in keys:
+            for f, v in split.items():
+                self.factors.setdefault(k, {}).setdefault(f, Sum()).add(v)
+
+    def factors_of(self, key: Any) -> dict[str, float | None]:
+        return {f: s.value() for f, s in self.factors.get(key, {}).items()}
 
     def result(self, gov: frozenset[str], last_run: date | None) -> dict[str, Any]:
         total = Agg()
         for p in self.positions.values():
             total.merge(p.agg)
-        positions = sorted((p.result(gov, last_run) for p in self.positions.values()),
-                           key=lambda p: (p["book"], p["positionId"]))
+        positions = sorted(({**p.result(gov, last_run), "ratesByFactor": self.factors_of(k)}
+                            for k, p in self.positions.items()), key=lambda p: (p["book"], p["positionId"]))
         return {"keys": keys_of(self.seen), "buckets": self.buckets, "summary": total.result(),
-                "days": [{**meta, "ratesByCurve": {c: s.value() for c, s in curves.items()}, **agg.result()}
-                         for _d, (meta, agg, curves) in sorted(self.days.items())],
+                "days": [{**meta, "ratesByCurve": {c: s.value() for c, s in curves.items()},
+                          "ratesByFactor": self.factors_of(d), **agg.result()}
+                         for d, (meta, agg, curves) in sorted(self.days.items())],
                 "positions": positions}
 
 
@@ -319,6 +367,182 @@ def curve_move(first: dict[str, dict[str, Any]], last: dict[str, dict[str, Any]]
     return (b["rate"] - a["rate"]) * 100 + a["move_bp"]
 
 
+OFZ_CURVE, RUONIA_CURVE = "RUB OFZ", "RUB RUONIA"
+"""Published curves (``valuation.bonds.RISK_CURVES``): the KBD and the RUONIA OIS curve."""
+F_RUONIA, F_BASIS, F_KBD = "ruonia", "basis", "kbd"
+FACTOR_NAMES = {F_RUONIA: "RUONIA", F_BASIS: "Базис ОФЗ (КБД − RUONIA)", F_KBD: "КБД (нет RUONIA на дату)",
+                "": "кривая не указана"}
+"""Rate factors (TDM#437): RUONIA and the OFZ basis instead of the curves KBD and RUONIA. A row on the KBD without the
+RUONIA + basis split (a date without RUONIA OIS, a run before TDM#213) is ``kbd``; another curve (``RUB KEY``, a
+currency's) is a factor of its own, by its id; ``""`` — no curve."""
+SPLIT_TOL_RUB = 1.0
+"""RUONIA's terms by bucket must add up to the saved ``rates_linear_ruonia`` within this, else the row is not split
+by term."""
+
+
+def factor_of(curve: str | None) -> str:
+    """The factor of a curve outside the RUONIA + basis split."""
+    return F_RUONIA if curve == RUONIA_CURVE else F_KBD if curve == OFZ_CURVE else curve or ""
+
+
+def factor_order(ids: Iterable[str]) -> list[str]:
+    ids = set(ids)
+    fixed = [F_RUONIA, F_BASIS, F_KBD]
+    return [f for f in fixed if f in ids] + sorted(f for f in ids if f and f not in fixed) + [""] * ("" in ids)
+
+
+def exact_factors(curve: str | None, rates: float | None, ruonia: float | None,
+                  basis: float | None) -> dict[str, float | None]:
+    """``rates`` of a row by factor, summing to it: an OFZ in RUONIA + basis (``rates_linear_ruonia``/``_basis``
+    saved) — RUONIA its linear RUONIA term, the basis the rest (its basis term and the full repricing's second order);
+    any other row whole on its curve's factor."""
+    if ruonia is not None and basis is not None:
+        return {F_RUONIA: None if rates is None else ruonia, F_BASIS: None if rates is None else rates - ruonia}
+    return {factor_of(curve): rates}
+
+
+def _add_terms(out: dict[str, dict[str, float]], factor: str, bs: Any) -> None:
+    if isinstance(bs, dict):
+        dest = out.setdefault(factor, {})
+        for b, v in bs.items():
+            if (x := _num(v)) is not None:
+                dest[b] = dest.get(b, 0.0) + x
+
+
+def linear_factors(curve: str | None, linear: float | None, terms: Any, ruonia: float | None, basis: float | None,
+                   ruonia_risk: Any, moves: Any) -> tuple[dict[str, dict[str, float]] | None, dict[str, float]]:
+    """``rates_linear`` of a row by factor: by term (``rates_linear_curves``) where it can be, else one sum per factor
+    (the second value). An OFZ in RUONIA + basis: RUONIA's term per bucket is its D-1 RUONIA risk x RUONIA's OIS move
+    (``prev.ofz_ruonia_risk``, ``curve_moves_bp``), the basis's the KBD's term less it; without them, or when they do
+    not add up to its ``rates_linear_ruonia``, ``rates_linear_ruonia`` and ``rates_linear_basis`` whole."""
+    terms = terms if isinstance(terms, dict) else None
+    if ruonia is not None and basis is not None:
+        kbd = (terms or {}).get(OFZ_CURVE)
+        d_ois = moves.get(RUONIA_CURVE) if isinstance(moves, dict) else None
+        if isinstance(kbd, dict) and isinstance(ruonia_risk, dict) and isinstance(d_ois, dict):
+            ruo = {b: x * m for b, v in ruonia_risk.items()
+                   if (x := _num(v)) is not None and (m := _num(d_ois.get(b))) is not None}
+            if abs(math.fsum(ruo.values()) - ruonia) <= SPLIT_TOL_RUB:
+                out = {F_RUONIA: ruo, F_BASIS: {b: (_num(kbd.get(b)) or 0.0) - ruo.get(b, 0.0)
+                                                for b in [*kbd, *(b for b in ruo if b not in kbd)]}}
+                for c, bs in (terms or {}).items():
+                    if c != OFZ_CURVE:
+                        _add_terms(out, factor_of(c), bs)
+                return out, {}
+        return None, {F_RUONIA: ruonia, F_BASIS: basis}
+    if terms:
+        out: dict[str, dict[str, float]] = {}
+        for c, bs in terms.items():
+            _add_terms(out, factor_of(c), bs)
+        return out, {}
+    return None, ({factor_of(curve): linear} if linear is not None else {})
+
+
+def risk_factors(risk: Any, ofz_ruonia: bool) -> dict[str, dict[str, float]]:
+    """``fact.risk`` by factor. A row of an OFZ in RUONIA + basis (``extra.ofz_ruonia01``) publishes it in the
+    scenarios' coordinates (``RUB OFZ`` the basis risk, ``RUB RUONIA`` RUONIA's less it, ``publish.tdm_run``): RUONIA is
+    the sum of both, the basis ``RUB OFZ``, as the pages' «RUONIA + базис». Another row by its curves' factors."""
+    out: dict[str, dict[str, float]] = {}
+    if not isinstance(risk, dict):
+        return out
+    split = ofz_ruonia and isinstance(risk.get(OFZ_CURVE), dict)
+    for c, bs in risk.items():
+        if split and c in (OFZ_CURVE, RUONIA_CURVE):
+            _add_terms(out, F_RUONIA, bs)
+            if c == OFZ_CURVE:
+                _add_terms(out, F_BASIS, bs)
+        else:
+            _add_terms(out, factor_of(c), bs)
+    return out
+
+
+def factor_move(move: dict[str, dict[str, float | None]], factor: str, bucket: str) -> float | None:
+    """A factor's move, bp: RUONIA's curve, the basis KBD − RUONIA, ``kbd`` the KBD, another its curve."""
+    def at(c: str) -> float | None:
+        return (move.get(c) or {}).get(bucket)
+    if factor == F_BASIS:
+        k, o = at(OFZ_CURVE), at(RUONIA_CURVE)
+        return None if k is None or o is None else k - o
+    return at(RUONIA_CURVE if factor == F_RUONIA else OFZ_CURVE if factor == F_KBD else factor)
+
+
+class Factors:
+    """``/curves`` by factor (TDM#437): linear rates by term and whole, exact rates, DV01, coverage."""
+
+    def __init__(self) -> None:
+        self.linear: dict[tuple[str, str], Sum] = {}
+        self.rest: dict[str, Sum] = {}
+        self.exact: dict[str, Sum] = {}
+        self.dv01: dict[tuple[str, str], Sum] = {}
+        self.cover: dict[str, dict[str, Any]] = {}
+
+    def _cover(self, f: str) -> dict[str, Any]:
+        return self.cover.setdefault(f, {"rows": 0, "linearRows": 0, "bucketRows": 0, "dates": set()})
+
+    def add(self, r: dict[str, Any]) -> None:
+        curve, ruo, bas = r.get("curve"), _num(r.get("linearRuonia")), _num(r.get("linearBasis"))
+        by_term, whole = linear_factors(curve, _num(r.get("ratesLinear")), r.get("linearCurves"), ruo, bas,
+                                        r.get("ruoniaRisk"), r.get("moves"))
+        exact = exact_factors(curve, _num(r.get("rates")), ruo, bas)
+        touched: set[str] = set()
+        for f, v in exact.items():
+            self.exact.setdefault(f, Sum()).add(v)
+            if v is not None:
+                touched.add(f)
+        for f, bs in (by_term or {}).items():
+            c = self._cover(f)
+            c["bucketRows"] += 1
+            c["linearRows"] += 1
+            touched.add(f)
+            for b, v in bs.items():
+                self.linear.setdefault((f, b), Sum()).add(v)
+        for f, v in whole.items():
+            self.rest.setdefault(f, Sum()).add(v)
+            if v is not None:
+                self._cover(f)["linearRows"] += 1
+                touched.add(f)
+        for f in touched:
+            c = self._cover(f)
+            c["rows"] += 1
+            c["dates"].add(r["date"])
+        for f, bs in risk_factors(r.get("risk"), bool(r.get("ofzRuonia"))).items():
+            for b, v in bs.items():
+                self.dv01.setdefault((f, b), Sum()).add(v)
+
+    def buckets(self) -> set[str]:
+        return {b for _f, b in [*self.linear, *self.dv01]}
+
+    def ids(self) -> list[str]:
+        return factor_order({f for f, _b in self.linear} | set(self.rest) | {f for f, v in self.exact.items()
+                                                                             if v.n} | {f for f, _b in self.dv01})
+
+    def result(self, order: list[str], names: dict[str, str], move: dict[str, dict[str, float | None]],
+               runs: int) -> dict[str, Any]:
+        ids = self.ids()
+
+        def grid(src: dict[tuple[str, str], Sum], scale: float = 1.0) -> dict[str, dict[str, float | None]]:
+            return {f: {b: (v * scale if (v := src[(f, b)].value()) is not None else None) if (f, b) in src
+                        else None for b in order} for f in ids}
+
+        def total(f: str) -> float | None:
+            s = Sum()
+            for (g, _b), v in self.linear.items():
+                if g == f:
+                    s.merge(v)
+            if f in self.rest:
+                s.merge(self.rest[f])
+            return s.value()
+
+        return {"factors": [{"id": f, "name": FACTOR_NAMES.get(f) or names.get(f, f)} for f in ids],
+                "factorMove": {f: {b: factor_move(move, f, b) for b in order} for f in ids},
+                "factorDv01": grid(self.dv01, 1 / runs) if runs else {f: dict.fromkeys(order) for f in ids},
+                "factorLinear": grid(self.linear),
+                "factorLinearRest": {f: self.rest[f].value() if f in self.rest else None for f in ids},
+                "factorLinearTotal": {f: total(f) for f in ids},
+                "factorExact": {f: self.exact[f].value() if f in self.exact else None for f in ids},
+                "factorCoverage": {f: {**self._cover(f), "dates": len(self._cover(f)["dates"])} for f in ids}}
+
+
 def curves(con, anchor: dict[str, Any], start: date, end: date, filters: dict[str, Any]) -> dict[str, Any]:
     scope = period_runs(con, anchor, start, end)
     period_ids = {r["run_id"] for r in scope["runs"] if not scope["separate"] or r["run_id"] != anchor["run_id"]}
@@ -330,10 +554,12 @@ def curves(con, anchor: dict[str, Any], start: date, end: date, filters: dict[st
     seen_buckets: dict[str, None] = {}
     runs_with_rows: set[int] = set()
     rows = linear_rows = bucket_rows = 0
+    factors = Factors()
     for r in _scan(con, scope, filters, None, CURVES_COLUMNS, "pnl_curves_rows"):
         if r["runId"] not in period_ids:
             continue
         rows += 1
+        factors.add(r)
         runs_with_rows.add(r["runId"])
         own = r.get("curve") or ""
         if own:
@@ -359,6 +585,7 @@ def curves(con, anchor: dict[str, Any], start: date, end: date, filters: dict[st
     p0, p1 = (_points(con, first["run_id"]), _points(con, last["run_id"])) if first and last else ({}, {})
     for c in seen_curves:  # a curve's move at every pillar it has, not only where the slice has risk
         seen_buckets.update(dict.fromkeys(p1.get(c, {})))
+    seen_buckets.update(dict.fromkeys(sorted(factors.buckets() - set(seen_buckets))))
     order = [b for b in RISK_BUCKETS if b in seen_buckets] + [b for b in seen_buckets if b not in RISK_BUCKETS]
     names = curve_names(con, scope["ids"])
     ids = sorted(seen_curves)
@@ -371,14 +598,16 @@ def curves(con, anchor: dict[str, Any], start: date, end: date, filters: dict[st
     def run_ref(r: dict[str, Any] | None) -> dict[str, Any] | None:
         return {"date": r["business_date"], "runId": r["run_id"], "prevDate": r["prev_date"]} if r else None
 
+    move = {c: {b: curve_move(p0.get(c, {}), p1.get(c, {}), b) for b in order} for c in {*ids, OFZ_CURVE, RUONIA_CURVE}}
     return {"from": start, "to": end, "firstRun": run_ref(first), "lastRun": run_ref(last), "buckets": order,
             "curves": [{"id": c, "name": names.get(c, c)} for c in ids],
-            "move": {c: {b: curve_move(p0.get(c, {}), p1.get(c, {}), b) for b in order} for c in ids},
+            "move": {c: move[c] for c in ids},
             "dv01": grid(dv01, 1 / n) if n else {c: dict.fromkeys(order) for c in ids},
             "linear": grid(linear),
             "linearTotal": {c: s.value() for c, s in linear_total.items()},
             "exact": {c: s.value() for c, s in exact.items()},
-            "coverage": {"rows": rows, "linearRows": linear_rows, "bucketRows": bucket_rows}}
+            "coverage": {"rows": rows, "linearRows": linear_rows, "bucketRows": bucket_rows},
+            **factors.result(order, names, move, n)}
 
 
 def _fmt(d: date | None) -> str:
