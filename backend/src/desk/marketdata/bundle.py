@@ -212,3 +212,22 @@ def previous_market(snapshots: SnapshotDir, business_date: str) -> tuple[str, st
     found = [(d, -i, cut) for i, cut in enumerate(PREV_CUTS)
              if (d := snapshots.previous_market_date(business_date, cut))]
     return (max(found)[0], max(found)[2]) if found else None
+
+
+def previous_close(snapshots: SnapshotDir, business_date: str,
+                   hub: dict[str, str] | None = None) -> tuple[str, str, str] | None:
+    """(date, cut_type, market snapshot id) of the previous close of ``business_date``: the one rule of the
+    backfill's plan, the autopilot's eod and intraday steps and ``desk.cli.eod_run`` (#203). ``hub``: the hub's
+    ``eod_final`` closes (date: snapshot id, ``backfill.hub_rows``); None: the cache alone (``previous_market``).
+
+    The newest close before the date of the cache and the hub together; on one date an ``eod_final`` over an
+    ``eod_preliminary``, and of a final the hub lists, the hub's snapshot (a date the cache lacks, or holds under
+    another id: the backfill syncs it before the run, #439). Once synced, ``previous_market`` of the cache, which the
+    run reads, is that close: the plan and the run pick the same previous close, the hub's list and the cache
+    differing or not (a later ``eod_preliminary`` of the cache beats an older final of the hub, as in the run)."""
+    hub = {d: sid for d, sid in (hub or {}).items() if sid}  # a row without an id: the cache's
+    pc = previous_market(snapshots, business_date)
+    hd = max((d for d in hub if d < business_date), default=None)
+    if hd is not None and (pc is None or hd >= pc[0]):
+        return hd, "eod_final", hub[hd]
+    return (pc[0], pc[1], snapshots.market_id(*pc)) if pc else None

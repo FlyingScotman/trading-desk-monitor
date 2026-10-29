@@ -126,7 +126,7 @@ from .backfill import late_why, same_logic
 from .inbox.timesem import MSK
 from .marketdata import cache, history, hubhistory, static_facts
 from .marketdata.adapter import StaticView
-from .marketdata.bundle import SnapshotDir, SnapshotError, previous_market
+from .marketdata.bundle import SnapshotDir, SnapshotError, previous_close, previous_market
 from .marketdata.hub import HubClient, HubError, HubUnavailable
 from .scenario import jobs as scenario_jobs
 from .settings import Settings, load
@@ -968,8 +968,8 @@ class Autopilot:
             if not n:
                 continue
             snap = sd.market_id(d)
-            prev_cut = previous_market(sd, d)  # as cli.eod_run: the newest earlier close, its final preferred
-            prev = sd.market_id(*prev_cut) if prev_cut else None
+            pc = previous_close(sd, d)  # cli.eod_run's: the newest earlier close, its final preferred (#203)
+            prev = pc[2] if pc else None
             run = runs.get(date.fromisoformat(d))
             inputs_hash = store.positions_for(con, date.fromisoformat(d)).private_inputs_hash
             why = ("no default run" if run is None else "positions changed" if run["position_set_ids"] != ids
@@ -1105,8 +1105,8 @@ class Autopilot:
         if target is None and last is not None and sorted(last[3]) != ids:
             target = (last[1], "positions changed")
         sd = SnapshotDir(Path(settings.snapshot_cache))
-        prev_cut = previous_market(sd, today.isoformat())
-        prev_id = sd.market_id(*prev_cut) if prev_cut else None
+        pc = previous_close(sd, today.isoformat())  # cli.eod_run's (#203)
+        prev_id = pc[2] if pc else None
         if target is None and last is not None and last[4] != prev_id:
             target = (last[1], "previous close changed")  # the previous close arrived (or was corrected) after it
         when = "asked the hub" if asked else "next hub check in the next 10-minute slot"
