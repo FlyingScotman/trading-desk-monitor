@@ -6,8 +6,11 @@
  * папка, все файлы которой пропущены (старые по дате изменения, слишком большие).
  * Данные: GET /api/v1/inbox/folders (desk/daystatus.folders; только с этого компьютера или админу, как настройки).
  * Папку страницы сервер сопоставляет сам (entries: путь из settings.json → его папка, как сервер её раскрывает).
- * Встраивание: DeskInboxFolders.node(путь) — элемент под полем папки; DeskInboxFolders.load() — запросить и
- * заполнить все такие элементы (после загрузки и после сохранения настроек).
+ * Встраивание: DeskInboxFolders.node(путь) — элемент под полем папки; .retarget(элемент, путь) — путь в поле изменили
+ * до сохранения (сведения прежней папки не показываются); DeskInboxFolders.load() — запросить и заполнить все такие
+ * элементы (после загрузки и после сохранения настроек); .onLoad(fn) — fn после каждого ответа; .summary(пути) —
+ * для сводки настроек (#449): {missing: папок, которых сервер не видит, scanned: просмотренных, read: из скольких
+ * что-то прочитано}, null — данных ещё нет.
  * Чистая часть (DeskInboxFolders._test) проверяется tests/js/settings_inbox_folders.test.js.
  */
 (function (root) {
@@ -55,6 +58,18 @@
     }).join('');
     return { cls: f.datasets && f.datasets.length ? '' : 'warn', html: parts.join(' · '), more: more };
   };
+  F.count = function (doc, paths) {
+    if (!doc) return null;
+    var out = { missing: 0, scanned: 0, read: 0 };
+    (paths || []).forEach(function (p) {
+      var hit = F.find(doc, p), f = hit && hit.folder;
+      if (!f || !f.scanned) return;
+      out.scanned++;
+      if (f.exists === false) out.missing++;
+      else if ((f.datasets || []).length) out.read++;
+    });
+    return out;
+  };
   F.html = function (v) {
     if (!v) return '';
     return '<div' + (v.cls ? ' class="' + v.cls + '"' : '') + '>' + v.html + '</div>' +
@@ -77,10 +92,18 @@
   F.node = function (path) {
     style();
     var el = root.document.createElement('div');
-    el.className = 'dir-found'; el.dataset.foundDir = '1'; el.dataset.path = path || '';
+    el.className = 'dir-found'; el.dataset.foundDir = '1'; el.dataset.path = el.dataset.saved = path || '';
     fill(el);
     return el;
   };
+  F.retarget = function (el, path) {
+    el.dataset.path = path || '';
+    if (String(path || '').trim() === String(el.dataset.saved || '').trim()) fill(el);
+    else el.innerHTML = '';  // сведения прежней папки — не об этой; новая покажется после сохранения
+  };
+  var listeners = [];
+  F.onLoad = function (fn) { listeners.push(fn); };
+  F.summary = function (paths) { return F.count(data, paths); };
   // запросить и заполнить; папка ещё не просмотрена — ещё раз через период опроса сервера (не чаще 5 с, до MAX_POLLS раз)
   F.load = function (again) {
     if (timer) { root.clearTimeout(timer); timer = null; }
@@ -90,7 +113,11 @@
       return r.json();
     }).then(function (d) { data = d; error = null; }, function (e) { error = e.message; }).then(function () {
       var wait = false;
-      root.document.querySelectorAll('[data-found-dir]').forEach(function (el) { var v = fill(el); if (v && v.wait) wait = true; });
+      root.document.querySelectorAll('[data-found-dir]').forEach(function (el) {
+        if (el.dataset.path.trim() !== String(el.dataset.saved || '').trim()) return;  // путь изменён, ещё не сохранён
+        var v = fill(el); if (v && v.wait) wait = true;
+      });
+      listeners.forEach(function (fn) { try { fn(data); } catch (e) { /* сводка — не повод ломать папки */ } });
       if (wait && polls++ < MAX_POLLS) timer = root.setTimeout(function () { F.load(true); }, Math.max(5, data && data.poll_seconds != null ? data.poll_seconds : 30) * 1000);
     });
   };
