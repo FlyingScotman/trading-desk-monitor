@@ -468,3 +468,231 @@ def test_backfill_status_route_lists_the_hub_problem_dates(tmp_path, cache, stor
     assert client.get("/api/v1/backfill/status").json()["hub_problem_dates"] == []
     app.state.autopilot = Thread()
     assert client.get("/api/v1/backfill/status").json()["hub_problem_dates"] == [prob]
+
+
+def _near(iso: str, want: datetime, slack_s: float = 5) -> bool:
+    return abs((datetime.fromisoformat(iso) - want).total_seconds()) <= slack_s
+
+
+def _cycle(s: Settings, store_url: str, t: datetime, **kw) -> tuple[dict, dict]:
+    with store.connect(store_url) as con:
+        res = backfill.run(s, backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15), kw.pop("rows", None)),
+                           store_url=store_url, out=lambda line: None, now=t, **kw)
+        return res, backfill.status(con, s, today=date(2026, 10, 15))
+
+
+def test_the_same_network_error_on_every_date_is_a_stall_not_problem_dates(tmp_path, cache, store_url, monkeypatch):
+    """TDM#447: the network down for every date used to add one problem date a cycle («48 of M · K do not converge»,
+    K growing, nothing done). The same transient error on two dates in a row is the environment's: the dates' attempts
+    are not counted, the status says the backfill stands (cause, error, since, next attempt), a run tries the oldest
+    date and one not in the stall yet; once the network is back the dates run again."""
+    from desk.marketdata.hub import TransportError
+
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, cache, store_url)
+    real, tried, down = cli.eod_run, [], {"on": True}
+
+    def flaky(settings, d, **kw):
+        tried.append(d)
+        if down["on"]:
+            raise TransportError(f"bundle {d}: timed out after 30 s")
+        return real(settings, d, **kw)
+
+    monkeypatch.setattr(cli, "eod_run", flaky)
+    t0 = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
+    res, st = _cycle(s, store_url, t0)
+    assert tried == ["2026-10-12"] and res["stall"] is None and st["stall"] is None  # one date: maybe its own (#23)
+    probes = [["2026-10-12", "2026-10-13"], ["2026-10-12", "2026-10-14"], ["2026-10-12", "2026-10-15"],
+              ["2026-10-12"], ["2026-10-12"]]  # all four in the stall: only the oldest is tried
+    for i, want in enumerate(probes, 1):
+        tried.clear()
+        res, st = _cycle(s, store_url, t0 + timedelta(hours=i))
+        assert tried == want, (i, tried)
+        assert st["problem_dates"] == [] and st["failed"] == 0 and st["todo"] == 4 and st["done"] == 0, (i, st)
+        stall = st["stall"]
+        assert stall["cause"] == "network" and stall["phase"] == "run" and stall["error"] == \
+            f"TransportError: bundle {want[-1]}: timed out after 30 s"
+        assert _near(stall["since"], t0) and stall["dates"] == min(i + 1, 4) and stall["stops"] == i
+        wait = backfill.STALL_BACKOFF_S[min(i, len(backfill.STALL_BACKOFF_S)) - 1]
+        assert _near(stall["next_attempt"], t0 + timedelta(hours=i, seconds=wait))
+        assert res["stall"]["next_attempt"] == stall["next_attempt"] and not res["done"]
+    down["on"] = False
+    res, st = _cycle(s, store_url, t0 + timedelta(hours=6))
+    assert res["done"] == ["2026-10-12", *DATES[2:]] and res["stall"] is None
+    assert st["stall"] is None and st["problem_dates"] == [] and st["done"] == 4 and st["todo"] == 0
+
+
+def test_two_dates_failing_on_their_own_do_not_hold_the_queue(tmp_path, cache, store_url, monkeypatch):
+    """Review of TDM#447: 12.10 and 13.10 time out each on its own (big bundles through a slow proxy, say), 14.10 and
+    15.10 run. Their two errors in a row look like a stall; the next run tries a date outside it, which runs: the
+    stall is over, 12.10 failed on its own. The two become problem dates (``transient``), the queue goes on."""
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, cache, store_url)
+    real, tried = cli.eod_run, []
+
+    def flaky(settings, d, **kw):
+        tried.append(d)
+        if d in ("2026-10-12", "2026-10-13"):
+            raise TimeoutError(f"bundle {d}: timed out")
+        return real(settings, d, **kw)
+
+    monkeypatch.setattr(cli, "eod_run", flaky)
+    t0 = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
+    _cycle(s, store_url, t0)
+    res, st = _cycle(s, store_url, t0 + timedelta(hours=1))
+    assert st["stall"] is not None and st["stall"]["dates"] == 2  # as far as it can tell: the environment
+    tried.clear()
+    res, st = _cycle(s, store_url, t0 + timedelta(hours=2))
+    assert tried == ["2026-10-12", "2026-10-14", "2026-10-15"] and res["done"] == ["2026-10-14", "2026-10-15"]
+    assert st["stall"] is None
+    for i in range(3, 9):
+        tried.clear()
+        res, st = _cycle(s, store_url, t0 + timedelta(hours=i))
+        assert st["stall"] is None and res["stall"] is None, (i, st["stall"])
+        assert set(tried) == {"2026-10-12", "2026-10-13"}, (i, tried)
+    assert st["done"] == 2 and st["todo"] == 2
+    assert [(p["date"], p["kind"]) for p in st["problem_dates"]] == [("2026-10-12", "transient"),
+                                                                       ("2026-10-13", "transient")]
+
+
+def test_a_download_outage_is_not_ended_by_a_date_run_from_the_cache(tmp_path, cache, store_url, monkeypatch):
+    """TDM#447: the hub down (``HubUnavailable`` after its retries, the 502 of its last attempt) for the bundles to
+    download; a date already cached runs meanwhile, which says nothing of the downloads: the stall stands, the dates
+    that failed to download are not taken for their own trouble. Once the hub answers they download and run."""
+    import shutil
+
+    from desk.marketdata.bundle import SnapshotDir
+    from desk.marketdata.hub import HubUnavailable
+
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, cache, store_url)
+    rows = [(d, SnapshotDir(cache).market_id(d)) for d in reversed(DATES)]
+    ids, down, synced, hub = dict(rows), {"on": True}, [], tmp_path / "hub"
+    with store.connect(store_url) as con:  # 13.10 run before: 14.10 (from the cache) has its previous close cached
+        backfill.run(s, backfill.plan(con, s, date(2026, 10, 13), date(2026, 10, 13), rows), store_url=store_url,
+                     out=lambda line: None)
+    hub.mkdir()
+    for d in ("2026-10-12", "2026-10-15"):  # to download
+        shutil.move(cache / f"{ids[d]}.json.gz", hub / f"{ids[d]}.json.gz")
+
+    def sync(client, cache_dir, want):
+        synced.append(list(want))
+        if down["on"]:
+            raise HubUnavailable("hub.test unreachable after 3 attempts: 502 bad gateway", 502)
+        for d in want:
+            shutil.copy(hub / f"{ids[d]}.json.gz", cache_dir)
+
+    monkeypatch.setattr(backfill.cache, "sync", sync)
+    t0 = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
+    res, st = _cycle(s, store_url, t0, rows=rows, client=object())
+    assert not res["done"] and [d for d, _ in res["failed"]] == ["2026-10-12"] and synced == [["2026-10-12"]]
+    res, st = _cycle(s, store_url, t0 + timedelta(hours=1), rows=rows, client=object())
+    # 12.10 a second time, 14.10 from the cache runs (not the downloads), 15.10 fails to download: it stands
+    assert res["done"] == ["2026-10-14"] and res["stall"] is not None and [d for d, _ in res["failed"]] == [
+        "2026-10-12", "2026-10-15"]
+    assert st["stall"]["cause"] == "hub" and st["stall"]["status"] == 502 and st["stall"]["phase"] == "bundle"
+    assert st["problem_dates"] == [] and backfill.state(s)["problems"].keys() == {"2026-10-15"}  # 12.10 not its own
+    down["on"] = False
+    res, st = _cycle(s, store_url, t0 + timedelta(hours=2), rows=rows, client=object())
+    assert res["done"] == ["2026-10-12", "2026-10-15"] and st["stall"] is None and st["todo"] == 0
+
+
+def test_the_older_transient_problem_dates_go_and_an_old_stall_is_forgotten(tmp_path, cache, store_url, monkeypatch):
+    """TDM#447 after the upgrade: the transient problem dates the old program piled up go once the backfill stands
+    (none shown while it does); a stall on disk whose dates are no longer to run, or whose last error is old, is
+    forgotten: a new outage starts a new one (its since, its first wait)."""
+    from desk.marketdata.hub import TransportError
+
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, cache, store_url)
+    monkeypatch.setattr(cli, "eod_run", lambda settings, d, **kw: (_ for _ in ()).throw(TransportError(f"{d}: reset")))
+    with store.connect(store_url) as con:
+        p = backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15))
+    st = backfill.state(s)
+    st["problems"] = {d.date: {"kind": "transient", "why": d.why, "error": "TransportError: x", "attempts": 5,
+                               "sig": d.sig} for d in p.todo}
+    st["stall"] = {"key": "run:network:TransportError", "phase": "run", "dates": ["2026-09-01", "2026-09-02"],
+                   "since": "2026-09-01T00:00:00+00:00", "stops": 7, "cause": "network", "error": "old",
+                   "at": "2026-09-02T00:00:00+00:00", "next_attempt": "2026-09-02T01:00:00+00:00"}
+    backfill.save_state(s, st)
+    with store.connect(store_url) as con:
+        assert len(backfill.status(con, s, today=date(2026, 10, 15))["problem_dates"]) == 4
+        assert backfill.status(con, s, today=date(2026, 10, 15))["stall"] is None  # none of its dates to run
+    t0 = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
+    res, st = _cycle(s, store_url, t0)
+    assert st["stall"]["stops"] == 1 and _near(st["stall"]["since"], t0) and st["problem_dates"] == []
+    assert backfill.state(s)["problems"].keys() == {"2026-10-13"}  # the last one tried
+    state = backfill.state(s)
+    state["stall"]["at"] = (t0 - timedelta(days=2)).isoformat()
+    backfill.save_state(s, state)
+    res, st = _cycle(s, store_url, t0 + timedelta(hours=1))
+    assert res["stall"] is None and st["stall"] is None  # old: forgotten, 12.10 starts a new streak
+
+
+def test_stall_causes_and_keys():
+    import psycopg
+
+    from desk.marketdata.hub import HubError, HubUnavailable, TransportError
+
+    cases = [(psycopg.errors.QueryCanceled("canceling statement due to statement timeout"), "store_slow"),
+             (psycopg.OperationalError("connection to server failed"), "store"),
+             (HubUnavailable("hub.test unreachable after 3 attempts: 502", 502), "hub"),
+             (HubUnavailable("hub.test unreachable after 3 attempts: timed out"), "hub"),
+             (HubError("hub token not configured; set DESK_HUB_TOKEN_FILE (or DESK_HUB_TOKEN)"), "access"),
+             (HubError("token rejected by hub.test (401)", 401), "access"),
+             (HubError("hub address not configured; set DESK_HUB_URL"), "setup"),
+             (HubError("bundle: 407", 407), "proxy"), (TransportError("tunnel refused", 407), "proxy"),
+             (TransportError("timed out"), "network"), (TimeoutError(), "network"), (OSError("disk full"), "disk")]
+    for e, cause in cases:
+        assert backfill.transient(e) and backfill.stall_cause(e) == cause, (e, backfill.stall_cause(e))
+    assert backfill.stall_key(HubUnavailable("a", 502)) == backfill.stall_key(HubUnavailable("b", 502)) == \
+        "hub:HubUnavailable:502"
+    assert backfill.stall_key(HubUnavailable("a", 502)) != backfill.stall_key(HubUnavailable("a", 503))
+
+
+def test_autopilot_waits_while_the_backfill_stands(tmp_path, cache, store_url, monkeypatch):
+    """TDM#447: while the backfill stands the autopilot's step does not try the dates again before the stall's next
+    attempt and says why (status ``error``), unless the cycle is asked for (``trigger``); after the wait, the network
+    back, the dates run."""
+    import desk
+    from desk.inbox.timesem import MSK
+    from desk.marketdata.hub import TransportError
+
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, cache, store_url, backfill_from="2026-10-01")
+    monkeypatch.delenv("DESK_BUNDLE_VERSION", raising=False)
+    clock = [datetime(2026, 10, 20, 12, 0, tzinfo=MSK)]
+    ap = Autopilot(settings_loader=lambda: s, store_url=store_url, now=lambda: clock[0])
+    ap.run_cycle(hub=False)
+    assert default_dates(store_url) == DATES[1:]
+    real, tried, down = cli.eod_run, [], {"on": True}
+
+    def flaky(settings, d, **kw):
+        if d != "2026-10-12":  # the latest positions date: the eod step's after an upgrade, it runs
+            tried.append(d)
+            if down["on"]:
+                raise TransportError("proxy: connection reset")
+        return real(settings, d, **kw)
+
+    monkeypatch.setattr(cli, "eod_run", flaky)
+    monkeypatch.setattr(desk, "VALUATION_VERSION", desk.VALUATION_VERSION + 1)  # an upgrade: the past dates the backfill's
+
+    def step() -> dict:
+        return next(x for x in ap.run_cycle(hub=False)["steps"] if x["name"] == "backfill")
+
+    step()
+    assert tried == ["2026-10-13"], tried
+    b = step()  # 13.10 a second time, then 14.10: the same error, the environment's
+    assert b["status"] == "error" and "stands since" in b["detail"], b["detail"]
+    assert "next attempt 2026-10-20T12:10:0" in b["detail"], b["detail"]
+    tried.clear()
+    b = step()
+    assert tried == [] and b["status"] == "error" and "stands since" in b["detail"]  # waits
+    ap.trigger()  # a cycle asked for: no wait
+    b = step()
+    assert tried == ["2026-10-13", "2026-10-15"] and "stands since" in b["detail"], tried
+    clock[0] += timedelta(minutes=31)
+    down["on"] = False
+    b = step()
+    assert b["status"] == "ok" and "ran 3 dates (2026-10-13..2026-10-15)" in b["detail"], b["detail"]
+    assert default_dates(store_url) == DATES[1:]

@@ -2119,9 +2119,22 @@ function mountTabs(a, reload){
         ['Самый ранний расчёт', dd(s.oldest_run)],
         ['Старые отчёты прочитаны с', dd(s.inbox_scanned_from)],
       ];
+      // #447: одна и та же ошибка сети или базы на датах подряд — догрузка стоит (причина как в чипе шапки, время по МСК,
+      // ошибка — второй строкой); даты, которые не загружаются (сеть или база на одной дате, даты хаба)
+      const CAUSE = {network:'нет связи', proxy:'прокси не пропускает', access:'нет доступа к хабу (токен)', setup:'хаб не настроен',
+        hub:'хаб не отвечает', store:'база недоступна', store_slow:'база не успевает', disk:'ошибка диска'};
+      const msk = (t, o) => new Date(t).toLocaleString('ru-RU', Object.assign({timeZone:'Europe/Moscow'}, o));
+      const at = t => !t ? '—' : (msk(t, {dateStyle:'short'}) === msk(Date.now(), {dateStyle:'short'}) ? '' : msk(t, {day:'2-digit', month:'2-digit'}) + ' ')
+        + msk(t, {hour:'2-digit', minute:'2-digit'});
+      if (s.stall) rows.splice(4, 0, ['Догрузка стоит', 'с ' + at(s.stall.since) + ': ' + (CAUSE[s.stall.cause] || 'ошибка сети или базы') +
+        (s.stall.next_attempt ? '; следующая попытка ' + at(s.stall.next_attempt) : ''), s.stall.error]);
+      const nl = [...new Set([...(s.problem_dates || []).filter(p => p.kind === 'transient'), ...(s.hub_problem_dates || [])].map(p => p.date))].sort();
+      if (nl.length) rows.splice(s.stall ? 7 : 6, 0, ['Не загружаются', nl.length + ': ' + nl.slice(0, 20).map(dd).join(', ') + (nl.length > 20 ? ' …' : '') + ' — повтор по расписанию']);
       if (s.step) rows.push(['Последний цикл', s.step.status + ': ' + s.step.detail]);
       const tb = $('bf-rows'); tb.textContent = '';
-      rows.forEach(([k, v]) => { const tr = document.createElement('tr'); tr.innerHTML = '<td class="k"></td><td class="v" style="white-space:pre-wrap"></td>'; tr.children[0].textContent = k; tr.children[1].textContent = v; tb.append(tr); });
+      rows.forEach(([k, v, sub]) => { const tr = document.createElement('tr'); tr.innerHTML = '<td class="k"></td><td class="v" style="white-space:pre-wrap"></td>'; tr.children[0].textContent = k; tr.children[1].textContent = v;
+        if (sub) { const d = document.createElement('div'); d.className = 'hint'; d.textContent = sub; tr.children[1].append(d); }
+        tb.append(tr); });
       $('bf-msg').textContent = ''; $('bf-when').textContent = 'на ' + new Date().toLocaleTimeString('ru-RU');
     } catch (e) { $('bf-msg').textContent = 'не загрузилось: ' + e.message; }
   }

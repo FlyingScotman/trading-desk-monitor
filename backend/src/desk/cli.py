@@ -907,6 +907,10 @@ def cmd_backfill(a: argparse.Namespace) -> int:
             print(f"  {d} still stale after its run: tried again next time (#23)")
         for d in res["skipped"]:
             print(f"  {d} skipped: its bundle is not cached and the hub is off")
+        if res["stall"]:  # the same store or network error on two dates in a row: the next dates would hit it too
+            print(f"  stopped: {res['stall']['error']} on {len(res['stall']['dates'])} dates in a row "
+                  f"({res['stall']['cause']}, not the dates' data; TDM#447)")
+            break
         el = time.perf_counter() - t0
         print(f"[{i}/{len(p.todo)}] {day.date} done; {el:.0f} s, about {el / i * (len(p.todo) - i):.0f} s left")
     print(f"backfill: {done} dates run, {failed} failed, in {time.perf_counter() - t0:.0f} s")
