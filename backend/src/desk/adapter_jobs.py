@@ -63,7 +63,8 @@ def _file(home: Path, key: str) -> Path:
 def _save(home: Path, key: str, job: dict) -> None:
     try:
         atomic_write_text(_file(home, key), json.dumps(job, ensure_ascii=False, indent=1) + "\n")
-    except OSError as e:  # the result stays in memory; only a restart loses it
+    # the result stays in memory; only a restart loses it. A value JSON can't hold too: the job still ends (TDM#470)
+    except (OSError, TypeError, ValueError) as e:
         log.warning("adapter job %s: not saved (%s)", key, type(e).__name__)
 
 
